@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import type { ParentAgentReference } from '@/lib/trace/parent-agent';
 import AgentTraceView from '@/components/observe/AgentTraceView';
 import { copyText } from '@/lib/copy-text';
 import { useLocale } from '@/lib/client/locale-context';
@@ -11,6 +13,8 @@ import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trac
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
 interface SessionPayload {
+    taskId?: string;
+    parentAgent?: ParentAgentReference | null;
     interactions?: any[];
     langfuseTraceNodes?: LangfuseTraceNode[];
     error?: string;
@@ -305,7 +309,7 @@ function Pair({ label, value, valueColor }: { label: string; value: string; valu
 
 function Body({
     session,
-    loading,
+    loading: requestedLoading,
     locale,
     taskId,
     framework,
@@ -316,6 +320,8 @@ function Body({
     taskId?: string;
     framework?: string;
 }) {
+    const router = useRouter();
+    const loading = requestedLoading || Boolean(session && !session.error && session.taskId !== taskId);
     return (
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 20px' }}>
             {loading && (
@@ -335,6 +341,9 @@ function Body({
                     framework={framework}
                     langfuseTraceNodes={session.langfuseTraceNodes}
                     traceIdentity={taskId}
+                    rootSessionId={taskId}
+                    parentAgent={session.taskId === taskId ? session.parentAgent : null}
+                    onSubagentNavigate={id => router.push(`/trace?taskId=${encodeURIComponent(id)}`)}
                 />
             )}
             {!loading && session && !session.error && (!session.interactions || session.interactions.length === 0) && (!session.langfuseTraceNodes || session.langfuseTraceNodes.length === 0) && (

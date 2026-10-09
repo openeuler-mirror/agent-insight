@@ -26,6 +26,10 @@ const {
   usageFrom,
 } = require("../../shared/pi-trace-helpers.cjs");
 
+const { checkManifest } = require("../../shared/install-modules.cjs");
+
+const LOADED_BUILD_ID = readJsonIfExists(path.resolve(__dirname, "..", "installation.json")).buildId;
+
 const DEFAULT_ENDPOINT = "http://127.0.0.1:3000/api/ingest/otel/v1/traces";
 const DEFAULT_COLLABORATION_SESSIONS_ENDPOINT = "http://127.0.0.1:3000/api/ingest/collaborations/sessions";
 const DEFAULT_COLLABORATION_EVENTS_ENDPOINT = "http://127.0.0.1:3000/api/ingest/collaborations/events";
@@ -302,6 +306,11 @@ class PiTraceCollector {
   }
 
   startSession(sessionId, ctx) {
+    if (LOADED_BUILD_ID && this.config.configPath) {
+      atomicWriteJson(path.join(path.dirname(this.config.configPath), "runtime", `loaded-${process.pid}.json`), {
+        buildId: LOADED_BUILD_ID, pid: process.pid, nativeSessionId: String(sessionId), loadedAt: new Date().toISOString(),
+      }).catch(error => this.errors.push(error));
+    }
     // Pi 的 sessionId 在整个交互会话内保持不变；若多个 agent 任务共享同一
     // sessionId，服务端会把多任务事件聚合成一条 ExecutionRecord 并相互覆盖。
     // 这里保存基 sessionId，并在 beginAgent 时为每个任务派生独立子 sessionId。
@@ -796,8 +805,23 @@ async function selfCheck(options = {}) {
     eventsEndpoint: config.collaborationEventsEndpoint,
   });
   const relationshipStatus = await relationshipOutbox.status();
+  const installation = await checkManifest(path.dirname(config.configPath));
+  let observer = { ok: true, enabled: false };
+  if (config.goalPlusObserverEnabled) {
+    try {
+      const goal = readJsonIfExists(config.goalPlusObserverConfigPath);
+      const installed = await checkManifest(path.dirname(config.goalPlusObserverConfigPath));
+      observer = { enabled: true, buildId: installed.buildId, ok: installed.ok && goal.apiKey === config.apiKey
+        && goal.otlpEndpoint === config.endpoint && goal.collaborationSessionsEndpoint === config.collaborationSessionsEndpoint
+        && goal.collaborationEventsEndpoint === config.collaborationEventsEndpoint };
+    } catch (error) { observer = { enabled: true, ok: false, error: error.message }; }
+  }
   return {
-    ok: relationshipStatus.rejected === 0,
+    ok: relationshipStatus.rejected === 0 && observer.ok
+      && (!config.goalPlusObserverEnabled || installation.ok)
+      && [config.endpoint, config.collaborationSessionsEndpoint, config.collaborationEventsEndpoint].every(value => /^https?:\/\//.test(value)),
+    installation,
+    observer,
     checks: {
       configured: true,
       endpoint: /^https?:\/\//.test(config.endpoint),

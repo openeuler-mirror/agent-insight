@@ -997,3 +997,88 @@ test('Pi passive locator rejects symlink escape', async t => {
   fs.symlinkSync(outside, link);
   await assert.rejects(() => parsePiSession(root, { sourceId: 's', agentSessionId: 'a', sessionFile: path.relative(root, link) }), /non-symlink/);
 });
+
+for (const layout of ['nested', 'wrong-header', 'duplicate', 'partial-header', 'outside', 'symlink-directory', 'depth-limit'] as const) {
+  test(`Pi worker discovery handles ${layout} session evidence`, async t => {
+    if (layout === 'symlink-directory' && process.platform === 'win32') return t.skip('symlink permissions vary on Windows');
+    const { temporary, root } = await copiedFixture(t);
+    const metadataPath = path.join(root, 'runs/run_demo/agent_sessions/agent_001.json');
+    const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
+    delete metadata.session_handle.metadata.session_file;
+    const original = path.join(root, 'runs/run_demo/pi_sessions/agent_001.jsonl');
+    const bytes = await fsp.readFile(original);
+    const nested = path.join(root, 'host-sessions/pi/sessions/workspace/2026_pi-native-demo.jsonl');
+    await fsp.mkdir(path.dirname(nested), { recursive: true });
+    await fsp.rename(original, nested);
+    if (layout === 'wrong-header') await fsp.writeFile(nested, bytes.toString().replace('"id":"pi-native-demo"', '"id":"another-worker"'));
+    if (layout === 'duplicate') await fsp.writeFile(path.join(root, 'host-sessions/pi/other_pi-native-demo.jsonl'), bytes);
+    if (layout === 'partial-header') await fsp.writeFile(nested, '{"type":"session"');
+    if (layout === 'outside') {
+      const outside = path.join(temporary, 'outside.jsonl');
+      await fsp.writeFile(outside, bytes);
+      metadata.session_handle.metadata.session_file = outside;
+    }
+    if (layout === 'symlink-directory') {
+      const workspace = path.dirname(nested);
+      const outside = path.join(temporary, 'external-sessions');
+      await fsp.rename(workspace, outside);
+      await fsp.symlink(outside, workspace);
+      metadata.session_handle.metadata.session_file = nested;
+    }
+    if (layout === 'depth-limit') {
+      await fsp.mkdir(path.join(root, 'host-sessions/pi/a/b/c/d/e'), { recursive: true });
+    }
+    await fsp.writeFile(metadataPath, JSON.stringify(metadata));
+    const parsed = await parseGoalPlusRoot({ root, sourceId: 'gpsrc_fixture' });
+    assert.equal(parsed.coverage.workers, 1);
+    if (layout === 'nested') {
+      assert.equal(parsed.piSessions.length, 1);
+      assert.equal(parsed.relationships.length, 1);
+      assert.equal(parsed.piSessions[0].sessionFile, nested);
+      assert.equal(parsed.coverage.found, 1);
+      assert.deepEqual(parsed.diagnostics, []);
+    } else {
+      assert.equal(parsed.piSessions.length, 0);
+      assert.equal(parsed.relationships.length, 0);
+      const codes = { 'wrong-header': 'pi_session_identity_mismatch', duplicate: 'ambiguous_pi_session_file',
+        'partial-header': 'pi_session_pending', outside: 'invalid_pi_session_path',
+        'symlink-directory': 'invalid_pi_session_path', 'depth-limit': 'pi_session_scan_limit' };
+      assert.equal(parsed.diagnostics[0].code, codes[layout]);
+      if (layout === 'partial-header') {
+        assert.equal(parsed.coverage.pending, 1);
+        await fsp.writeFile(nested, bytes);
+        const retry = await parseGoalPlusRoot({ root, sourceId: 'gpsrc_fixture' });
+        assert.equal(retry.piSessions.length, 1);
+        assert.equal(retry.coverage.pending, 0);
+      }
+    }
+  });
+}
+
+test('a broken worker does not block a healthy worker and scan coverage recovers', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const metadataPath = path.join(root, 'runs/run_demo/agent_sessions/agent_001.json');
+  const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
+  metadata.agent_session_id = 'agent_002';
+  metadata.session_handle.external_id = 'pi-native-second';
+  metadata.session_handle.metadata.session_file = 'host-sessions/pi/missing.jsonl';
+  await fsp.writeFile(path.join(root, 'runs/run_demo/agent_sessions/agent_002.json'), JSON.stringify(metadata));
+  const config = { apiKey: 'synthetic', homeDir: temporary,
+    configPath: path.join(temporary, 'collector/config.json') };
+  const options = { upload: false, relationshipOutbox: { enqueueRelationships: async () => ({ queued: 0 }) },
+    nativeImporter: async () => ({ imported: 1, skipped: 0, appendedEvents: 0, unchangedEvents: 0, uploadedEvents: 0, diagnostics: [] }) };
+  const first = await scanSource({ root, sourceId: 'coverage' }, config, options);
+  assert.equal(first.health, 'WAITING');
+  assert.deepEqual(first.coverage, { workers: 2, supported: 2, found: 1, pending: 1, failed: 0 });
+  const statusPath = path.join(temporary, 'collector/runtime/scans.json');
+  const status = JSON.parse(await fsp.readFile(statusPath, 'utf8'));
+  status.coverage.incompleteSince = new Date(Date.now() - 60000).toISOString();
+  await fsp.writeFile(statusPath, JSON.stringify(status));
+  assert.equal((await scanSource({ root, sourceId: 'coverage' }, config, options)).health, 'PARTIAL');
+  const secondFile = path.join(root, 'host-sessions/pi/missing.jsonl');
+  await fsp.mkdir(path.dirname(secondFile), { recursive: true });
+  await fsp.writeFile(secondFile, '{"type":"session","id":"pi-native-second"}\n');
+  const recovered = await scanSource({ root, sourceId: 'coverage' }, config, options);
+  assert.equal(recovered.health, 'READY');
+  assert.equal(recovered.coverage.found, 2);
+});

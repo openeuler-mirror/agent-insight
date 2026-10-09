@@ -1,6 +1,8 @@
 'use client';
 
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
+import { selectedParentAgent, type ParentAgentReference } from '@/lib/trace/parent-agent';
+import { ParentAgentCard } from './ParentAgentCard';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
@@ -418,6 +420,7 @@ const defaultCtx: TraceCtxValue = {
 const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
+    parentAgent?: ParentAgentReference | null;
     interactions: RawInteraction[];
     framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
@@ -455,6 +458,7 @@ export default function AgentTraceView({
     loadInteraction,
     loadAllInteractions,
     onSubagentNavigate,
+    parentAgent,
     rootSessionId,
     rootExecutionId,
     traceIdentity,
@@ -1135,6 +1139,7 @@ export default function AgentTraceView({
                     ) : selectedAgentNode ? (
                         <AgentDetail
                             node={selectedAgentNode}
+                            parentAgent={selectedParentAgent(selectedAgentNode, tree, nodeMap, displayInteractions, rootSessionId, parentAgent)}
                             highlightEvent={null}
                             activeTab={activeDetailTab}
                             onTabChange={setActiveDetailTab}
@@ -2980,7 +2985,7 @@ function EmptyDetail() {
 // ─── AgentDetail (right panel) ────────────────────────────────────────────────
 function AgentDetail({
     node, highlightEvent, activeTab, onTabChange, eventTypeFilter, onEventTypeFilterChange,
-    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId
+    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId, parentAgent
 }: {
     node: AgentNode;
     highlightEvent: AgentEvent | null;
@@ -2994,6 +2999,7 @@ function AgentDetail({
     traceSkills: TraceSkillUsage[];
     currentUser?: string | null;
     rootExecutionId?: string;
+    parentAgent?: ParentAgentReference | null;
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
@@ -3069,7 +3075,7 @@ function AgentDetail({
             </div>
 
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.75rem 1rem' }}>
-                {activeTab === 'overview' && <OverviewTab node={node} status={status} onSelectChild={onSelectChild} />}
+                {activeTab === 'overview' && <OverviewTab node={node} status={status} onSelectChild={onSelectChild} parentAgent={parentAgent} />}
                 {activeTab === 'timeline' && (
                     <TimelineTab
                         events={visibleEvents}
@@ -3499,8 +3505,9 @@ function SkillUsageCard({ skill, currentUser }: { skill: TraceSkillUsage; curren
 }
 
 // ─── OverviewTab ──────────────────────────────────────────────────────────────
-function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status: NodeStatus; onSelectChild: (id: string) => void }) {
+function OverviewTab({ node, status, onSelectChild, parentAgent }: { node: AgentNode; status: NodeStatus; onSelectChild: (id: string) => void; parentAgent?: ParentAgentReference | null }) {
     const overviewCtx = React.useContext(TraceCtx);
+    const { locale } = useLocale();
     const stats = aggregateSubtreeStats(node);
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -3544,6 +3551,8 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
                     })}
                 </div>
             </div>
+
+            <ParentAgentCard parent={parentAgent ?? null} onNavigate={overviewCtx.onSubagentNavigate} locale={locale} />
 
             {node.children.length > 0 && (
                 <div>

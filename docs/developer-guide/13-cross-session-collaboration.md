@@ -81,6 +81,12 @@ MCTS collector 不增加关系 API 或 Prisma 模型，直接使用公开 bindin
 
 `full`、`structure`、`interactions` 和单条 interaction 读取使用一致投影。普通合并交互保留 `_collaboration` 源 Session/索引/版本，所有 Session 响应保留 `_payloadVersion`；前端拒绝刷新前发起或版本不匹配的异步加载结果。`source=raw` 绕过展示投影，读取仍验证当前用户。
 
+Session 的 `full` 与 `structure` 响应增加 `parentAgent`：无已声明 Goal Plus 父关系时为 `null`；`resolved` 包含 `taskId`、`executionId`、`agentName`、`framework`，其它状态为 `pending`、`ambiguous`、`unavailable`。仅向通过认证且拥有当前 Session 的用户返回父信息；`source=raw` 不提供关系导航。同一请求生成一次投影计划，同时用于主从正文投影与反向父查询；父摘要复用就绪性查询，不另行加载父正文，也不缓存进原生 Session 解析缓存。
+
+父查询使用 Goal Plus binding/event 声明及同用户唯一端点，保留完整 Pi `__taskN`。声明先参与冲突和环路检查，即使另一个声明父级正文尚未到达，也不能只选择当前已就绪的父级。重复同父声明去重，定位到具体 tool 的 anchor 是否明确不影响已确认父子关系的导航。`parentAgents` 与最终 `links` 同源，未知父绑定保持 pending；解析故障或安全上限触发返回 unavailable。原生 `Execution.parentExecutionId` 不写入。
+
+`AgentTraceView` 在独立 worker 根节点使用 `parentAgent`；在组合 Trace 中优先使用 `_collaboration.parent`，避免把并列展示用的虚拟根当成真实父 Agent。卡片不进入树或统计。Trace 页面和抽屉传入完整 taskId 与导航回调；切换详情会丢弃旧请求，等待父级的已结束 worker 也可轮询恢复，用户关闭自动刷新后停止详情轮询。
+
 ## 列表折叠与 pending
 
 Trace 列表显式请求协作 worker 折叠。默认“仅主 Agent”范围排除已经成功投影的普通协作成员，以及 Goal Plus `main → worker:*` 事件中已有 worker binding 的已声明子节点。“仅子 Agent”将这些 worker 与原生 `isSubagent=true` Execution 合并查询；“主 Agent + 子 Agent”保留全部记录。

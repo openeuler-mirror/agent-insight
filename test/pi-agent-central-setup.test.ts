@@ -183,8 +183,17 @@ test("Pi Node installer self-checks, reinstalls, and purges only the current-key
   })
   try {
     fs.mkdirSync(binDir, { recursive: true })
-    fs.writeFileSync(path.join(binDir, "pi.cmd"), `@echo off\r\necho %*>>"${logPath}"\r\nexit /b 0\r\n`)
-    fs.writeFileSync(path.join(binDir, "pi"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${logPath.replace(/\\/g, "/")}"\n`)
+    const stub = `
+      const fs = require('fs'), path = require('path');
+      fs.appendFileSync(${JSON.stringify(logPath)}, process.argv.slice(2).join(' ') + '\\n');
+      if (process.argv[2] === 'install') {
+        fs.mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+        fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), JSON.stringify({ packages: [process.argv[3]] }));
+      }
+    `
+    fs.writeFileSync(path.join(binDir, 'pi-stub.cjs'), stub)
+    fs.writeFileSync(path.join(binDir, "pi.cmd"), '@echo off\r\nnode "%~dp0pi-stub.cjs" %*\r\nexit /b %errorlevel%\r\n')
+    fs.writeFileSync(path.join(binDir, "pi"), `#!/bin/sh\nexec node "${path.join(binDir, 'pi-stub.cjs')}" "$@"\n`)
     fs.chmodSync(path.join(binDir, "pi"), 0o755)
 
     for (let attempt = 0; attempt < 2; attempt += 1) {

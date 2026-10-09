@@ -29,10 +29,12 @@ const {
   validateGoalPlusRoot,
 } = require("./lib/source-registry.cjs");
 
+const { checkManifest } = require("../shared/install-modules.cjs");
+
 const COLLECTOR_VERSION = "2.0.0";
 
 function watcherPaths(config) {
-  const runtimeDir = path.join(path.dirname(config.configPath), "runtime");
+  const runtimeDir = path.join(path.dirname(config.configPath || path.join(config.homeDir || os.homedir(), ".agent-insight", "collectors", "goal-plus", "config.json")), "runtime");
   return {
     runtimeDir,
     pidPath: path.join(runtimeDir, "watcher.json"),
@@ -109,6 +111,8 @@ async function watcherStatus(config) {
   const uploaderBlocked = ["invalid", "orphaned", "recovery-blocked"].includes(uploader.state);
   if (record && !running) await fsp.unlink(paths.pidPath).catch(() => undefined);
   return {
+    installation: await checkManifest(path.dirname(config.configPath)),
+    scans: await readScanStatus(config),
     configured: Boolean(config.apiKey),
     hosts: config.hosts || [],
     sourceCount: registry.sources.length,
@@ -426,6 +430,21 @@ async function resolveSources(selector, options) {
   return [await attachSource(root, options)];
 }
 
+async function readScanStatus(config) {
+  try {
+    return JSON.parse(await fsp.readFile(path.join(watcherPaths(config).runtimeDir, "scans.json"), "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+function sourceHealth(coverage, diagnostics, incompleteSince, rejected = 0) {
+  const degraded = coverage.failed > 0 || diagnostics.some(item => !["missing_pi_session_file", "pi_session_pending"].includes(item.code))
+    || rejected > 0 || (coverage.pending > 0 && incompleteSince && Date.now() - Date.parse(incompleteSince) >= 30000);
+  return degraded ? (coverage.found > 0 ? "PARTIAL" : "DEGRADED") : coverage.pending > 0 ? "WAITING" : "READY";
+}
+
 async function scanSource(source, config, options = {}) {
   if (!config.apiKey) throw new Error("Managed Goal Plus config apiKey is required for scanning");
   const scanStartedAt = new Date().toISOString();
@@ -448,7 +467,18 @@ async function scanSource(source, config, options = {}) {
   const relationshipUpload = options.upload === false
     ? { acquired: true, uploaded: 0, retried: 0, rejected: 0, deferred: 0 }
     : await relationshipOutbox.flushOnce();
+  const scans = await readScanStatus(config);
+  const previous = scans[source.sourceId];
+  const incomplete = parsed.coverage.pending > 0 || parsed.coverage.failed > 0;
+  const incompleteSince = incomplete ? previous?.incompleteSince || scanStartedAt : undefined;
+  const diagnostics = [...parsed.diagnostics, ...native.diagnostics];
+  const health = sourceHealth(parsed.coverage, diagnostics, incompleteSince, relationshipUpload.rejected);
+  scans[source.sourceId] = { scannedAt: scanStartedAt, health, coverage: parsed.coverage, incompleteSince, diagnostics,
+    relationshipUpload, nativeUploadStatus: native.uploadStatus };
+  await atomicWriteJson(path.join(watcherPaths(config).runtimeDir, "scans.json"), scans);
   return {
+    health,
+    coverage: parsed.coverage,
     sourceId: source.sourceId,
     scannedAt: scanStartedAt,
     piSessions: native.imported,
@@ -461,24 +491,28 @@ async function scanSource(source, config, options = {}) {
     relationshipUpload,
     nativeUploadEvents: native.uploadedEvents,
     nativeUploadStatus: native.uploadStatus,
-    diagnostics: [...parsed.diagnostics, ...native.diagnostics],
+    diagnostics,
   };
 }
 
 async function selfCheck(config) {
   const registry = await loadRegistry(config.registryPath || defaultRegistryPath(config.homeDir));
+  const scans = await readScanStatus(config);
   const sources = [];
   for (const source of registry.sources) {
     try {
       await validateGoalPlusRoot(source.root);
       const parsed = await parseGoalPlusRoot(source);
+      const health = sourceHealth(parsed.coverage, parsed.diagnostics, scans[source.sourceId]?.incompleteSince);
       const objectCounts = {};
       for (const snapshot of parsed.snapshots) objectCounts[snapshot.kind] = (objectCounts[snapshot.kind] || 0) + 1;
       sources.push({
         sourceId: source.sourceId,
-        ok: parsed.diagnostics.length === 0,
+        ok: health === "READY",
+        health,
         parserVersions: [...new Set(parsed.snapshots.map(snapshot => snapshot.version))].sort(),
         objectCounts,
+        coverage: parsed.coverage,
         piSessionCoverage: {
           referenced: parsed.piSessions.length,
           agentSessionObjects: objectCounts.agent_session || 0,
@@ -486,7 +520,7 @@ async function selfCheck(config) {
         diagnostics: parsed.diagnostics,
       });
     } catch (error) {
-      sources.push({ sourceId: source.sourceId, ok: false, error: error.message });
+      sources.push({ sourceId: source.sourceId, ok: false, health: "DEGRADED", error: error.message });
     }
   }
   let spoolWritable = false;
@@ -522,8 +556,13 @@ async function selfCheck(config) {
   const watcher = await watcherStatus(config);
   const activation = await readActivationStatus(config);
   const uploaderBlocked = ["invalid", "orphaned", "recovery-blocked"].includes(watcher.uploader?.state);
+  const failed = sources.some(source => ["PARTIAL", "DEGRADED"].includes(source.health));
+  const state = uploaderBlocked || spoolBacklog.relationshipRejected > 0 ? "DEGRADED"
+    : sources.length === 0 ? "DORMANT"
+    : failed ? (sources.some(source => source.coverage?.found > 0) ? "PARTIAL" : "DEGRADED")
+    : sources.some(source => source.health === "WAITING") ? "WAITING" : "READY";
   return {
-    ok: Boolean(config.apiKey) && spoolWritable && sources.length > 0
+    ok: Boolean(config.apiKey) && spoolWritable
       && sources.every(source => source.ok) && !uploaderBlocked
       && spoolBacklog.relationshipRejected === 0,
     configured: Boolean(config.apiKey),
@@ -537,6 +576,8 @@ async function selfCheck(config) {
     spoolBacklog,
     watcher,
     activation,
+    installation: await checkManifest(path.dirname(config.configPath)),
+    state,
     sources,
   };
 }
@@ -596,11 +637,19 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (options.command === "scan" || options.command === "watch") {
+    let previousSummary;
     const run = async () => {
       const sources = await resolveSources(options.values[0], registryOptions);
       const results = [];
       for (const source of sources) results.push(await scanSource(source, config, options));
-      process.stdout.write(`${JSON.stringify({ scannedAt: new Date().toISOString(), results }, null, 2)}\n`);
+      const summary = JSON.stringify(results.map(result => ({
+        sourceId: result.sourceId, health: result.health, coverage: result.coverage, diagnostics: result.diagnostics,
+        upload: result.nativeUploadStatus?.state, rejected: result.relationshipUpload?.rejected,
+      })));
+      if (options.command === "scan" || summary !== previousSummary || results.some(result => result.nativeAppendedEvents > 0 || result.relationshipUpload?.uploaded > 0)) {
+        process.stdout.write(`${JSON.stringify({ scannedAt: new Date().toISOString(), results }, null, 2)}\n`);
+      }
+      previousSummary = summary;
     };
     if (options.command === "scan") await run();
     else {
