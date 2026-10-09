@@ -74,20 +74,7 @@ function logErr(...args) {
 // ---------------------------------------------------------------- config
 
 function readMctsEnvFile() {
-  const envPath = path.join(getAgentInsightHome(), '.env')
-  let content
-  try {
-    content = fs.readFileSync(envPath, 'utf8')
-  } catch (error) {
-    if (error.code === 'ENOENT') return {}
-    throw error
-  }
-  const values = {}
-  for (const line of content.split(/\r?\n/)) {
-    const match = line.match(/^\s*(?:export\s+)?(AGENT_INSIGHT_MCTS_(?:REPO_DIR|PYTHON|TRACE_LAUNCHER))\s*=\s*(?:"([^"]*)"|'([^']*)'|([^#]*?))\s*(?:#.*)?$/)
-    if (match) values[match[1]] = match[2] ?? match[3] ?? match[4].trim()
-  }
-  return values
+  return mctsRuntime()?.readMctsEnvFile(getAgentInsightHome()) || {}
 }
 
 function loadConfig() {

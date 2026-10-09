@@ -13,74 +13,23 @@ description: "使用 Pi + MCTS 接入 Agent Insight，并创建、执行和查�
 - 执行机已安装 Git、Node.js 22.19.0+，MCTS 使用的 Python 3.11+ 环境中已安装 `datasets`。
 - 平台已导入 SWE-bench Benchmark 数据集，Benchmark 评测服务可用。
 
-确认平台地址、MCTS 仓库路径及执行机可访问的 xGovernor 地址。`127.0.0.1` 仅适用于 xGovernor 在执行机本机或已有本地转发的情况。模型和 E2B 凭据由 xGovernor 部署者配置，详见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。
+确认 MCTS 的 `testcases_union/config.env` 已配置可访问的 xGovernor，安装器会沿用这份配置。模型和 E2B 凭据由 xGovernor 部署者配置，详见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。
 
-## 2. 执行 curl 安装命令
+## 2. 一次命令完成接入
 
 1. 进入 **配置 → 客户端安装**，勾选 **MCTS (xGovernor)**；只接入 MCTS 时取消其他框架。
-2. 填写 **MCTS xGovernor 地址**，点击 Linux 命令区域的 **复制**。
-3. 在 MCTS 执行机的终端，以运行客户端的系统账户粘贴并执行整条命令，保留引号和末尾的 `| bash`。
-
-![客户端安装页面：勾选 MCTS、填写 xGovernor 地址并复制 Linux 安装命令](../../images/agent/evaluation/mcts/client-install.png)
-
-*图 1：安装入口。截图同时勾选了其他框架；API Key 已遮挡，请复制自己页面中的命令。*
-
-命令示例（实际使用页面复制的完整命令）：
+2. 填写执行机上的 **MCTS 仓库绝对路径**，例如 `/opt/MCTS`，复制 Linux 命令。
+3. 在 MCTS 执行机上，以运行客户端的系统账户执行完整命令。
 
 ```bash
-curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIKey>&yes=1&frameworks=mcts-xgovernor&mctsUpstream=http%3A%2F%2F127.0.0.1%3A8787" | bash
+curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIKey>&yes=1&frameworks=mcts-xgovernor" | AGENT_INSIGHT_MCTS_REPO_DIR='/opt/MCTS' bash
 ```
 
-安装器会安装 Trace 采集器并尝试注册常驻客户端，在执行机当前账户下生成 `~/.agent-insight/.env`。若提示“常驻客户端未注册”，按错误提示处理后重新安装；平台执行实验需要客户端在线。
+以页面生成的命令为准。安装器检查仓库、Python 和 `datasets`、xGovernor 连接，安装采集器，将路径保存到 `~/.agent-insight/.env`，最后注册并启动客户端。**无需再编辑配置或手动重启**；检查失败时先处理提示，再重新执行同一命令。
 
-## 3. 配置路径并重启客户端
+安装器复用 MCTS 的连接和凭据配置，不改动 MCTS 仓库。默认使用 `<仓库>/.venv/bin/python`；仓库外的解释器可由部署者预设 `AGENT_INSIGHT_MCTS_PYTHON`。正常安装不需要设置 `mctsTraceLauncher`。
 
-### 3.1 配置 `.env`
-
-打开执行机上的配置文件，保留原有内容：
-
-```bash
-vi ~/.agent-insight/.env
-```
-
-增加或更新这一行，将路径替换为自己的 MCTS 仓库目录：
-
-```dotenv
-AGENT_INSIGHT_MCTS_REPO_DIR=/opt/MCTS
-```
-
-默认使用 `<MCTS 仓库>/.venv/bin/python`，无需手动激活虚拟环境。只有使用自定义安装位置时，才需要增加：
-
-- `AGENT_INSIGHT_MCTS_PYTHON`：仓库外的 Python 解释器绝对路径。
-- `AGENT_INSIGHT_MCTS_TRACE_LAUNCHER`：自定义采集器启动文件路径；正常安装无需填写。
-
-若设置了 `AGENT_INSIGHT_HOME`，使用该目录下的 `.env`。
-
-### 3.2 保留采集代理地址
-
-请 MCTS 部署者确认 `testcases_union/config.env` 允许注入代理地址，不能直接覆盖成固定 URL：
-
-```bash
-export XGOVERNOR_BASE_URL="${XGOVERNOR_BASE_URL:-http://127.0.0.1:8787}"
-```
-
-将默认地址替换为实际 xGovernor 地址，保留原有 token 等配置。
-
-### 3.3 重启并确认在线
-
-按安装器输出的服务方式执行。系统级服务：
-
-```bash
-sudo systemctl restart agent-insight-client.service
-sudo systemctl status agent-insight-client.service --no-pager
-```
-
-用户级服务：
-
-```bash
-systemctl --user restart agent-insight-client.service
-systemctl --user status agent-insight-client.service --no-pager
-```
+## 3. 确认客户端在线
 
 进入 **配置 → 客户端配置**，确认执行机在线、服务健康，并显示 `pi-mcts`。
 

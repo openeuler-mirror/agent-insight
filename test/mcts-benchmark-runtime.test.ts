@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import test from 'node:test'
 import { inspectBenchmarkExecutionTargets } from '../src/lib/benchmark/execution-targets'
 import { listTraceGenerationPlatforms } from '../src/lib/engine/experiment/execution-targets'
@@ -10,6 +11,7 @@ import { parseCapabilities } from '../src/lib/reliability/client-registry'
 import { GET as listExperimentAgents } from '../src/app/api/experiments/agents/route'
 import { prisma, prismaRaw } from '../src/lib/storage/prisma'
 
+const require = createRequire(import.meta.url)
 const runtime = require('../services/executor/src/mcts-runtime.cjs')
 const { runProcess } = require('../services/executor/src/index.cjs')
 const client = require('../scripts/reliability-client.cjs')
@@ -185,6 +187,7 @@ test('pi-mcts runs through the proxy without a local Pi CLI, applies the selecte
     assert.equal(fs.readFileSync(path.join(f.workspace, 'hello.txt'), 'utf8'), 'after\n')
     assert.deepEqual(launches[0].args, [
       f.config.mctsTraceLauncher, '--strict', '--config', path.join(path.dirname(f.config.mctsTraceLauncher), 'config.json'),
+      '--upstream', 'http://127.0.0.1:8787',
       '--', 'bash', path.join(f.repoDir, 'testcases_union', 'run_union.sh'),
       '--mode', 'sweverified', '--runtime', 'pi', '--testbench', 'sweverified',
       '--instance-id', 'example__project-1', '--split', 'test', '--output-dir', f.runId,
