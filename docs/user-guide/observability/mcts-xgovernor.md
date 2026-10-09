@@ -29,49 +29,34 @@ Runtime 角色按可验证行为标记为 `solver-initial`、`solver-child`、`a
 
 ## 安装
 
-推荐从 Agent Insight 的“安装指导”页面安装：
+推荐从 Agent Insight 的“客户端安装”页面接入：只勾选 **MCTS (xGovernor)**，填写执行机上 MCTS 仓库的绝对路径，复制并执行 Linux 命令。Windows 请在 WSL 内执行。
 
-1. 只勾选 `MCTS (xGovernor)`；它是独立安装项，不会连带安装 Pi Agent、xiaoO 或 Goal Plus。
-2. 填写 MCTS 主机能够访问的 xGovernor 地址，默认是 `http://127.0.0.1:8787`。
-3. 在运行 MCTS 的 Linux/macOS 主机执行页面生成的命令。Windows 主机应在 WSL 内安装和运行。
+```bash
+curl -sSf "https://insight.example.com/api/ingest/setup?key=<your-api-key>&yes=1&frameworks=mcts-xgovernor" | AGENT_INSIGHT_MCTS_REPO_DIR='/opt/MCTS' bash
+```
 
-页面生成的命令会使用当前登录账号的 API Key 下载并校验专用安装包，然后创建：
+安装器先检查 MCTS 仓库、Python 3.11+、`datasets` 和现有 xGovernor 连接，再安装采集器、保存路径、注册并启动常驻客户端。无需安装后再改路径或重启。失败时按提示处理，再执行同一命令。只接入 MCTS 不会连带安装 Pi Agent、xiaoO 或 Goal Plus。
 
-- `~/.agent-insight/collectors/mcts-xgovernor-proxy/`：透明代理运行文件和权限为 `0600` 的配置；
-- `~/.local/bin/agent-insight-mcts-run`：包裹原 MCTS 命令的启动器。
+连接配置来自仓库中的 `testcases_union/config.env`。安装器在执行机的独立 Bash 子进程中读取配置，只提取 xGovernor 地址；不会打印 token 或修改该文件。模型、E2B 及 xGovernor 服务仍由部署者准备。
 
-安装器不会写入 MCTS 仓库。若 `~/.local/bin` 不在 PATH，可直接使用启动器的完整路径。
+安装结果：
 
-在 agent-insight 源码仓库内开发或排查安装器时，也可直接执行：
+- `~/.agent-insight/.env`：保存 `AGENT_INSIGHT_MCTS_REPO_DIR`，保留其他字段；设置了 `AGENT_INSIGHT_HOME` 时使用该目录。
+- `~/.agent-insight/collectors/mcts-xgovernor-proxy/`：采集运行文件和权限为 `0600` 的配置。
+- `~/.local/bin/agent-insight-mcts-run`：手动运行 MCTS 时使用的启动器。
+
+启动器每次运行读取仓库连接配置，创建临时代理。专用 Python 启动脚本在 `run_union.sh` 加载配置后恢复代理地址，因此 `config.env` 使用固定 URL 也无需修改。
+
+源码开发时可直接安装采集器（此命令不注册或启动常驻客户端）：
 
 ```bash
 AGENT_INSIGHT_API_KEY='<your-api-key>' \
-AGENT_INSIGHT_BASE_URL='http://127.0.0.1:3000' \
-AGENT_INSIGHT_MCTS_UPSTREAM_URL='http://127.0.0.1:8787' \
+AGENT_INSIGHT_BASE_URL='https://insight.example.com' \
+AGENT_INSIGHT_MCTS_REPO_DIR='/opt/MCTS' \
 node scripts/agent-trace-collectors/mcts-xgovernor-proxy/install.cjs
 ```
 
-`AGENT_INSIGHT_MCTS_UPSTREAM_URL` 是安装配置的唯一上游环境变量；未设置时使用默认回环地址，不读取旧安装变量。
-
-安装时的三个主要配置如下。安装器会保存到 `~/.agent-insight/collectors/mcts-xgovernor-proxy/config.json`，后续运行无需反复设置环境变量。
-
-| 安装变量 | 含义 |
-|---|---|
-| `AGENT_INSIGHT_BASE_URL` | 执行机能够访问的 Agent Insight 平台地址 |
-| `AGENT_INSIGHT_API_KEY` | 平台账号的 Trace 上报 API Key |
-| `AGENT_INSIGHT_MCTS_UPSTREAM_URL` | 执行机能够访问的真实 xGovernor 地址，例如同机的 `http://127.0.0.1:8787` |
-
-`AGENT_INSIGHT_API_KEY` 与 MCTS 的 `XGOVERNOR_API_TOKEN` 分别用于平台上报和 xGovernor 访问。跨机器连接时，按 MCTS README 选择 admin 端口的 SSH 转发或 tenant 端口，并保留与端口匹配的 token、Git 工作区配置。变更平台地址或账号时重新执行平台生成的安装命令，刷新上传地址与凭据。
-
-## 保留代理注入的连接地址
-
-检查 MCTS 仓库中的 `testcases_union/config.env`。如果它直接给 `XGOVERNOR_BASE_URL` 赋固定值，会覆盖启动器传入的代理地址。将这一项配置为保留已有环境值，并保留文件中的访问 token、模型和其他配置：
-
-```bash
-export XGOVERNOR_BASE_URL="${XGOVERNOR_BASE_URL:-http://127.0.0.1:8787}"
-```
-
-这里的默认地址换成用户原来的 xGovernor 地址。真实上游地址也应在采集器安装时填写；启动器读取采集配置后创建本次运行的临时代理，MCTS 使用注入值连接它。该调整只涉及部署配置文件。
+历史的独立采集器安装仍支持 `AGENT_INSIGHT_MCTS_UPSTREAM_URL`；配置了仓库路径时使用 MCTS 的连接配置，命令行 `--upstream` 可临时覆盖。`AGENT_INSIGHT_API_KEY` 用于平台上报，MCTS 的 `XGOVERNOR_API_TOKEN` 用于 xGovernor 访问，二者独立。
 
 ## 运行 MCTS
 
@@ -79,7 +64,6 @@ export XGOVERNOR_BASE_URL="${XGOVERNOR_BASE_URL:-http://127.0.0.1:8787}"
 
 ```bash
 cd /path/to/MCTS
-export PATH="$PWD/.venv/bin:$PATH"
 ~/.local/bin/agent-insight-mcts-run --strict -- \
   bash testcases_union/run_union.sh \
   --mode sweverified \
@@ -111,27 +95,17 @@ agent-insight-mcts-run --upstream http://127.0.0.1:8787 -- <原 MCTS 命令>
 
 ## 用于平台 Benchmark 实验
 
-采集器负责 Trace；平台下发 Benchmark Case 还需要兼容版本的常驻 Reliability Client。通过平台“客户端安装”页生成安装命令，在同一个执行账户下完成安装或更新，再在执行机的 `~/.agent-insight/.env` 中增加仓库路径：
+页面生成的一次安装命令已完成常驻客户端接入和仓库路径配置。无需单独安装客户端或重启；安装结束后到平台确认在线。
 
-```dotenv
-AGENT_INSIGHT_MCTS_REPO_DIR=/path/to/MCTS
-```
-
-客户端启动时读取该文件，读取位置不依赖工作目录。设置了 `AGENT_INSIGHT_HOME` 时，读取 `$AGENT_INSIGHT_HOME/.env`。路径填写该执行机上的绝对路径；修改配置后需要重启客户端。其他两项通常可以省略：
+下列配置仅用于自定义部署或维护，通常不需要填写：
 
 | `.env` 变量 | 默认值 | 兼容的 JSON 字段 |
 |---|---|---|
-| `AGENT_INSIGHT_MCTS_REPO_DIR` | 无，必填 | `mctsRepoDir` |
+| `AGENT_INSIGHT_MCTS_REPO_DIR` | 由安装命令保存 | `mctsRepoDir` |
 | `AGENT_INSIGHT_MCTS_PYTHON` | `<MCTS 仓库>/.venv/bin/python` | `mctsPython` |
 | `AGENT_INSIGHT_MCTS_TRACE_LAUNCHER` | `~/.agent-insight/collectors/mcts-xgovernor-proxy/run.cjs` | `mctsTraceLauncher` |
 
-`AGENT_INSIGHT_MCTS_PYTHON` 是解释器文件的绝对路径；`AGENT_INSIGHT_MCTS_TRACE_LAUNCHER` 是代理安装目录中 `run.cjs` 的绝对路径。`~/.local/bin/agent-insight-mcts-run` 是同一启动器的命令包装。配置优先级为：进程环境变量 → `.env` → `client/config.json` → 默认值，空值跳过。如果此前在 systemd 服务配置中设置了同名变量，需要移除或同步更新，否则它会覆盖 `.env`。客户端从 `.env` 只读取表中的三个 MCTS 配置项。
-
-更新 `.env` 后重启客户端即可，无需 `daemon-reload`。Linux systemd 系统服务可以执行：
-
-```bash
-sudo systemctl restart agent-insight-client.service
-```
+客户端从 `AGENT_INSIGHT_HOME/.env`（默认 `~/.agent-insight/.env`）只读取这三个 MCTS 项，优先级为进程环境变量 → `.env` → `client/config.json` → 默认值，空值跳过。已有 systemd 同名变量需保持一致；使用新路径时在页面重新生成并执行安装命令，即可自动更新和重启。
 
 在平台确认客户端在线且 `pi-mcts` 已就绪，再创建 SWE-bench Benchmark 实验，选择 `mcts-coordinator` Agent、`pi-mcts` 执行平台和平台默认模型，并设置足够长的 Agent 超时。模型沿用 MCTS/xGovernor 的部署配置。
 

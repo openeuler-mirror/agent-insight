@@ -3,6 +3,7 @@
 "use strict";
 
 const fsp = require("node:fs/promises");
+const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const net = require("node:net");
@@ -12,12 +13,18 @@ const { StringDecoder } = require("node:string_decoder");
 
 const { MctsProxyCore, FRAMEWORK } = require("./core.cjs");
 const { createGateway } = require("./gateway.cjs");
+const { installationMctsConfig, mctsPaths, mctsUpstream, proxyPythonScript } = require(
+  fs.existsSync(path.join(__dirname, "mcts-config.cjs"))
+    ? "./mcts-config.cjs" : "../../../services/executor/src/mcts-config.cjs"
+);
 const {
   DurableTraceUploader,
   DurableTraceWriter,
   apiKeyHash,
-} = require("../shared/trace-transport.cjs");
-const { DurableCollaborationOutbox } = require("../shared/collaboration-transport.cjs");
+} = require(fs.existsSync(path.join(__dirname, "shared", "trace-transport.cjs"))
+  ? "./shared/trace-transport.cjs" : "../shared/trace-transport.cjs");
+const { DurableCollaborationOutbox } = require(fs.existsSync(path.join(__dirname, "shared", "collaboration-transport.cjs"))
+  ? "./shared/collaboration-transport.cjs" : "../shared/collaboration-transport.cjs");
 
 const LIVENESS_INTERVAL_MS = 60_000;
 
@@ -53,6 +60,11 @@ async function loadConfig(args, env = process.env) {
     : path.join(os.homedir(), ".agent-insight");
   const configPath = args.configPath || path.join(agentInsightHome, "collectors", "mcts-xgovernor-proxy", "config.json");
   const file = await readConfig(configPath);
+  const mcts = installationMctsConfig(agentInsightHome, env);
+  const paths = mctsPaths({
+    mctsRepoDir: mcts.mctsRepoDir || file.mctsRepoDir,
+    mctsPython: mcts.mctsPython || file.mctsPython,
+  });
   const baseUrl = String(env.AGENT_INSIGHT_BASE_URL || file.baseUrl || "http://127.0.0.1:3000").replace(/\/+$/, "");
   const bool = (value, fallback) => value === undefined
     ? fallback
@@ -61,8 +73,10 @@ async function loadConfig(args, env = process.env) {
   return {
     agentInsightHome,
     configPath,
+    mctsRepoDir: paths.repoDir,
+    mctsPython: paths.python,
     apiKey: String(env.AGENT_INSIGHT_API_KEY || file.apiKey || "").trim(),
-    upstreamUrl: String(args.upstream || env.AGENT_INSIGHT_MCTS_UPSTREAM_URL || env.XGOVERNOR_BASE_URL || file.upstreamUrl || "http://127.0.0.1:8787").replace(/\/+$/, ""),
+    upstreamUrl: String(args.upstream || (paths.repoDir ? mctsUpstream(paths, env) : env.AGENT_INSIGHT_MCTS_UPSTREAM_URL || env.XGOVERNOR_BASE_URL || file.upstreamUrl || "http://127.0.0.1:8787")).replace(/\/+$/, ""),
     otlpEndpoint: env.AGENT_INSIGHT_OTLP_ENDPOINT || file.otlpEndpoint || `${baseUrl}/api/ingest/otel/v1/traces`,
     collaborationSessionsEndpoint: env.AGENT_INSIGHT_MCTS_COLLABORATION_SESSIONS_ENDPOINT || file.collaborationSessionsEndpoint || `${baseUrl}/api/ingest/collaborations/sessions`,
     collaborationEventsEndpoint: env.AGENT_INSIGHT_MCTS_COLLABORATION_EVENTS_ENDPOINT || file.collaborationEventsEndpoint || `${baseUrl}/api/ingest/collaborations/events`,
@@ -148,16 +162,30 @@ async function bounded(task, timeoutMs = 5_000) {
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const config = await loadConfig(args);
+  let pythonBin;
+  try {
+    if (config.mctsRepoDir) {
+      pythonBin = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-insight-mcts-python-"));
+      await fsp.writeFile(path.join(pythonBin, "python"), proxyPythonScript(config.mctsPython), { mode: 0o700 });
+    }
+    await runConfiguredCommand(args, config, pythonBin);
+  } finally {
+    if (pythonBin) await fsp.rm(pythonBin, { recursive: true, force: true });
+  }
+}
+
+async function runConfiguredCommand(args, config, pythonBin) {
+  const commandEnv = { ...process.env, ...(pythonBin ? { PATH: `${pythonBin}${path.delimiter}${process.env.PATH || ""}` } : {}) };
   if (!config.proxyEnabled) {
     process.stderr.write("Agent Insight MCTS observer disabled by configuration; running command directly.\n");
-    const result = await childResult(runChild(args.command, process.env));
+    const result = await childResult(runChild(args.command, commandEnv));
     process.exitCode = result.code ?? signalExitCode(result.signal);
     return;
   }
   if (!config.apiKey) {
     if (config.strict) throw new Error("AGENT_INSIGHT_API_KEY is required in strict mode");
     process.stderr.write("Agent Insight MCTS observer disabled: no API key; running command directly.\n");
-    const result = await childResult(runChild(args.command, process.env));
+    const result = await childResult(runChild(args.command, commandEnv));
     process.exitCode = result.code ?? signalExitCode(result.signal);
     return;
   }
@@ -197,7 +225,7 @@ async function main(argv = process.argv.slice(2)) {
   } catch (error) {
     if (config.strict) throw error;
     process.stderr.write(`Agent Insight MCTS observer unavailable (${error.message}); running command directly.\n`);
-    const result = await childResult(runChild(args.command, process.env));
+    const result = await childResult(runChild(args.command, commandEnv));
     process.exitCode = result.code ?? signalExitCode(result.signal);
     return;
   }
@@ -213,7 +241,7 @@ async function main(argv = process.argv.slice(2)) {
   }, 10_000);
   traceTimer.unref?.();
   relationshipTimer.unref?.();
-  const child = runChild(args.command, { ...process.env, XGOVERNOR_BASE_URL: gateway.url }, line => core.observeStdoutLine(line));
+  const child = runChild(args.command, { ...commandEnv, XGOVERNOR_BASE_URL: gateway.url, AGENT_INSIGHT_MCTS_PROXY_URL: gateway.url }, line => core.observeStdoutLine(line));
   const forward = signal => child.kill(signal);
   const onSighup = () => forward("SIGHUP");
   const onSigint = () => forward("SIGINT");

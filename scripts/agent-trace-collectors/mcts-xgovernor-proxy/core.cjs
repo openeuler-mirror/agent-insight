@@ -8,7 +8,8 @@ const {
   sha256,
   stableSpanId,
   stableTraceId,
-} = require("../shared/trace-transport.cjs");
+} = require(require("node:fs").existsSync(`${__dirname}/shared/trace-transport.cjs`)
+  ? "./shared/trace-transport.cjs" : "../shared/trace-transport.cjs");
 
 const FRAMEWORK = "mcts-xgovernor";
 const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;

@@ -21,6 +21,7 @@ const ENTRIES = [
   'mcts-xgovernor-proxy/core.cjs',
   'mcts-xgovernor-proxy/gateway.cjs',
   'mcts-xgovernor-proxy/install.cjs',
+  'mcts-xgovernor-proxy/mcts-config.cjs',
   'mcts-xgovernor-proxy/run.cjs',
   'shared/collaboration-transport.cjs',
   'shared/trace-transport.cjs',
@@ -98,7 +99,7 @@ test('setup commands install only the selected MCTS collector and preserve its u
     assert.match(generated, /mcts-xgovernor/);
     assert.match(generated, /MCTS_XGOVERNOR_UPSTREAM="http:\/\/127\.0\.0\.1:9876"/);
     assert.match(generated, /api\/ingest\/setup\/mcts-xgovernor/);
-    assert.match(generated, /agent-insight-mcts-run --strict -- bash run_union\.sh/);
+    assert.match(generated, name === 'main' ? /mcts-coordinator \/ pi-mcts/ : /agent-insight-mcts-run --strict -- bash run_union\.sh/);
     assert.doesNotMatch(generated, /SELECTED_FRAMEWORKS="pi-agent"/);
     assert.doesNotMatch(generated, /AUTO_ADDED_FRAMEWORKS="pi-agent"/);
     const syntax = spawnSync('bash', ['-n'], { input: generated, encoding: 'utf8' });

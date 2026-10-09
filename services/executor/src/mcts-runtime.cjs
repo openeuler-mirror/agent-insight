@@ -1,35 +1,25 @@
 'use strict'
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
-const { spawnSync } = require('node:child_process')
 const { BenchmarkExecutorError, runProcess } = require('./index.cjs')
 const { MCTS_SEARCH_OPTIONS_CAPABILITY, MCTS_RUNTIMES, normalizeAgentOptions, mctsOptionArgs } = require('./mcts-options.cjs')
+const { mctsPaths, checkMctsRepository, mctsUpstream, proxyPythonScript, readMctsEnvFile } = require('./mcts-config.cjs')
 
 const RUN_ID = /^erun_[0-9a-f]{32}$/
 const INSTANCE_ID = /^[A-Za-z0-9_.-]{1,200}$/
 const MAX_PATCH_BYTES = 10 * 1024 * 1024
-
-function mctsPaths(config) {
-  const repoDir = String(config.mctsRepoDir || '').trim()
-  const traceLauncher = String(config.mctsTraceLauncher || '').trim()
-  const python = String(config.mctsPython || '').trim()
-  return {
-    repoDir,
-    traceLauncher,
-    python: python || path.join(repoDir, '.venv', 'bin', 'python'),
-    entrypoint: path.join(repoDir, 'testcases_union', 'run_union.sh'),
-    configEnv: path.join(repoDir, 'testcases_union', 'config.env'),
-    main: path.join(repoDir, 'testcases_union', 'core', 'main.py'),
-  }
-}
 
 function probeMctsBenchmarkRuntime(config) {
   const paths = mctsPaths(config)
   if (!path.isAbsolute(paths.repoDir)) return { ready: false, reason: 'MCTS 仓库路径未配置' }
   if (!path.isAbsolute(paths.traceLauncher)) return { ready: false, reason: 'MCTS Trace 启动器路径未配置' }
   if (!path.isAbsolute(paths.python)) return { ready: false, reason: 'MCTS Python 路径必须是绝对路径' }
+  const collectorDir = path.dirname(paths.traceLauncher)
+  const transportDir = fs.existsSync(path.join(collectorDir, 'shared', 'trace-transport.cjs'))
+    ? path.join(collectorDir, 'shared') : path.join(collectorDir, '..', 'shared')
   for (const [target, label] of [
     [paths.entrypoint, 'MCTS 启动脚本'],
     [paths.configEnv, 'MCTS config.env'],
@@ -38,31 +28,15 @@ function probeMctsBenchmarkRuntime(config) {
     [paths.traceLauncher, 'MCTS Trace 启动器'],
     [path.join(path.dirname(paths.traceLauncher), 'core.cjs'), 'MCTS Trace 核心'],
     [path.join(path.dirname(paths.traceLauncher), 'gateway.cjs'), 'MCTS Trace 网关'],
-    [path.join(path.dirname(paths.traceLauncher), '..', 'shared', 'trace-transport.cjs'), 'Trace 上传组件'],
-    [path.join(path.dirname(paths.traceLauncher), '..', 'shared', 'collaboration-transport.cjs'), '协作关系上传组件'],
+    [path.join(transportDir, 'trace-transport.cjs'), 'Trace 上传组件'],
+    [path.join(transportDir, 'collaboration-transport.cjs'), '协作关系上传组件'],
   ]) {
     try {
       if (!fs.statSync(target).isFile()) return { ready: false, reason: `${label} 不存在` }
     } catch { return { ready: false, reason: `${label} 不存在` } }
   }
-  try {
-    if (!fs.readFileSync(paths.main, 'utf8').includes('--output-dir')) {
-      return { ready: false, reason: 'MCTS 未支持 --output-dir' }
-    }
-  } catch { return { ready: false, reason: 'MCTS 程序不可读' } }
-  const python = spawnSync(paths.python, ['-c', 'import sys, importlib.util; print(f"{sys.version_info.major}.{sys.version_info.minor}"); sys.exit(0 if importlib.util.find_spec("datasets") is not None else 42)'], {
-    encoding: 'utf8', timeout: 5_000,
-  })
-  if (python.error?.code === 'ETIMEDOUT') return { ready: false, reason: 'MCTS Python 环境检查超过 5 秒，请检查客户端负载后重试' }
-  if (python.error) return { ready: false, reason: `MCTS Python 无法启动（${python.error.code || '未知错误'}）` }
-  if (python.status === 42) return { ready: false, reason: 'MCTS Python 环境中未找到 datasets，请使用该环境的 Python 安装' }
-  if (python.status !== 0) return { ready: false, reason: `MCTS Python 环境检查失败（${python.signal || python.status}）` }
-  const pythonVersion = /^([0-9]+)\.([0-9]+)$/.exec(String(python.stdout || '').trim())
-  if (!pythonVersion) return { ready: false, reason: 'MCTS Python 版本检测结果不合法' }
-  if (Number(pythonVersion[1]) < 3
-    || (Number(pythonVersion[1]) === 3 && Number(pythonVersion[2]) < 11)) {
-    return { ready: false, reason: `MCTS Python 需要 3.11+，当前版本为 ${pythonVersion[0]}` }
-  }
+  try { checkMctsRepository(config) }
+  catch (error) { return { ready: false, reason: error.message } }
   const configPath = path.join(path.dirname(paths.traceLauncher), 'config.json')
   try {
     const traceConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'))
@@ -118,6 +92,9 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
   const readiness = probeMctsBenchmarkRuntime(config)
   if (!readiness.ready) throw new BenchmarkExecutorError('MCTS_RUNTIME_UNAVAILABLE', readiness.reason, 503)
   const paths = mctsPaths(config)
+  let upstream
+  try { upstream = mctsUpstream(paths) }
+  catch (error) { throw new BenchmarkExecutorError('MCTS_CONFIG_INVALID', error.message) }
   const outputDir = path.join(paths.repoDir, 'testcases_union', 'output', 'sweverified', runId)
   const observerHome = path.join(outputDir, '.agent-insight')
   const patchPath = path.join(outputDir, 'artifact.patch')
@@ -130,16 +107,18 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
   await fsp.mkdir(outputDir, { recursive: true })
   const interpreterBin = path.join(observerHome, 'bin')
   await fsp.mkdir(interpreterBin, { recursive: true })
-  const quotedPython = `'${paths.python.replace(/'/g, "'\\''")}'`
-  await fsp.writeFile(path.join(interpreterBin, 'python'), `#!/bin/sh\nexec ${quotedPython} "$@"\n`, { mode: 0o700 })
+  await fsp.writeFile(path.join(interpreterBin, 'python'), proxyPythonScript(paths.python), { mode: 0o700 })
   const env = {
     ...process.env,
     PATH: `${interpreterBin}${path.delimiter}${process.env.PATH || ''}`,
     AGENT_INSIGHT_HOME: observerHome,
+    AGENT_INSIGHT_MCTS_REPO_DIR: paths.repoDir,
+    AGENT_INSIGHT_MCTS_PYTHON: paths.python,
   }
   try {
     await processRunner(process.execPath, [
       paths.traceLauncher, '--strict', '--config', path.join(path.dirname(paths.traceLauncher), 'config.json'),
+      '--upstream', upstream,
       '--', 'bash', paths.entrypoint,
       '--mode', 'sweverified', '--runtime', runtime, '--testbench', 'sweverified', '--instance-id', instanceId,
       '--split', 'test', '--output-dir', runId,
@@ -183,5 +162,5 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
   }
 }
 
-module.exports = { mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask,
+module.exports = { mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask, readMctsEnvFile,
   agentOptionCapabilities: [MCTS_SEARCH_OPTIONS_CAPABILITY] }

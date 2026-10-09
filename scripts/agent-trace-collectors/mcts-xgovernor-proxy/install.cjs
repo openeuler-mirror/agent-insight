@@ -7,7 +7,12 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 
-const PACKAGE_FILES = ["core.cjs", "gateway.cjs", "run.cjs", "install.cjs"];
+const configModule = fs.existsSync(path.join(__dirname, "mcts-config.cjs"))
+  ? path.join(__dirname, "mcts-config.cjs")
+  : path.resolve(__dirname, "../../../services/executor/src/mcts-config.cjs");
+const { installationMctsConfig, checkMctsRepository, mctsUpstream, saveMctsRepoDir, shellQuote } = require(configModule);
+const { preflightUpstream } = require("./run.cjs");
+const PACKAGE_FILES = ["core.cjs", "gateway.cjs", "run.cjs", "install.cjs", "mcts-config.cjs"];
 const SHARED_FILES = ["trace-transport.cjs", "collaboration-transport.cjs"];
 const WRAPPER_MARKER = "# managed-by-agent-insight-mcts-xgovernor-proxy";
 
@@ -40,18 +45,27 @@ async function install(options) {
     ? path.resolve(process.env.AGENT_INSIGHT_HOME)
     : path.join(options.homeDir, ".agent-insight");
   const packageDir = path.join(agentInsightHome, "collectors", "mcts-xgovernor-proxy");
+  const mcts = installationMctsConfig(agentInsightHome);
+  let paths;
+  let upstreamUrl = process.env.AGENT_INSIGHT_MCTS_UPSTREAM_URL || "http://127.0.0.1:8787";
+  if (process.env.AGENT_INSIGHT_MCTS_REQUIRE_REPO === "1" || mcts.mctsRepoDir) {
+    paths = checkMctsRepository(mcts);
+    upstreamUrl = mctsUpstream(paths);
+    try { await preflightUpstream(upstreamUrl); }
+    catch { throw new Error("无法连接 MCTS config.env 配置的 xGovernor，请确认原有 MCTS 服务可用后重新执行安装命令"); }
+  }
   for (const relative of PACKAGE_FILES) {
-    await copyFile(path.join(options.sourceDir, relative), path.join(packageDir, relative), 0o700);
+    const source = relative === "mcts-config.cjs" && !fs.existsSync(path.join(options.sourceDir, relative))
+      ? configModule : path.join(options.sourceDir, relative);
+    await copyFile(source, path.join(packageDir, relative), 0o700);
   }
   for (const sharedFile of SHARED_FILES) {
     const sharedTarget = path.join(agentInsightHome, "collectors", "shared", sharedFile);
-    const sharedSource = path.resolve(options.sourceDir, "..", "shared", sharedFile);
-    if (fs.existsSync(sharedTarget)) {
-      const [incoming, current] = await Promise.all([fsp.readFile(sharedSource), fsp.readFile(sharedTarget)]);
-      if (!incoming.equals(current)) throw new Error(`Refusing to overwrite a different shared collector module at ${sharedTarget}`);
-    } else {
-      await copyFile(sharedSource, sharedTarget);
-    }
+    const privateSource = path.join(options.sourceDir, "shared", sharedFile);
+    const sharedSource = fs.existsSync(privateSource) ? privateSource : path.resolve(options.sourceDir, "..", "shared", sharedFile);
+    // Keep MCTS upgrades independent of transport versions used by other collectors.
+    await copyFile(sharedSource, path.join(packageDir, "shared", sharedFile));
+    if (!fs.existsSync(sharedTarget)) await copyFile(sharedSource, sharedTarget);
   }
 
   const configPath = path.join(packageDir, "config.json");
@@ -59,7 +73,8 @@ async function install(options) {
     version: 1,
     apiKey,
     baseUrl,
-    upstreamUrl: process.env.AGENT_INSIGHT_MCTS_UPSTREAM_URL || "http://127.0.0.1:8787",
+    upstreamUrl,
+    ...(paths ? { mctsRepoDir: paths.repoDir, mctsPython: paths.python } : {}),
     otlpEndpoint: process.env.AGENT_INSIGHT_OTLP_ENDPOINT || `${baseUrl}/api/ingest/otel/v1/traces`,
     collaborationSessionsEndpoint: process.env.AGENT_INSIGHT_MCTS_COLLABORATION_SESSIONS_ENDPOINT || `${baseUrl}/api/ingest/collaborations/sessions`,
     collaborationEventsEndpoint: process.env.AGENT_INSIGHT_MCTS_COLLABORATION_EVENTS_ENDPOINT || `${baseUrl}/api/ingest/collaborations/events`,
@@ -78,7 +93,8 @@ async function install(options) {
     throw new Error(`Refusing to replace unmanaged command wrapper at ${commandPath}`);
   }
   await fsp.mkdir(binDir, { recursive: true, mode: 0o700 });
-  await fsp.writeFile(commandPath, `#!/bin/sh\n${WRAPPER_MARKER}\nexec "${process.execPath}" "${path.join(packageDir, "run.cjs")}" "$@"\n`, { mode: 0o700 });
+  await fsp.writeFile(commandPath, `#!/bin/sh\n${WRAPPER_MARKER}\nexec ${shellQuote(process.execPath)} ${shellQuote(path.join(packageDir, "run.cjs"))} "$@"\n`, { mode: 0o700 });
+  if (paths) saveMctsRepoDir(agentInsightHome, paths.repoDir, mcts.mctsPython);
   return { packageDir, configPath, commandPath };
 }
 
