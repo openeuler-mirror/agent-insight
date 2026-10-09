@@ -3,6 +3,7 @@ import { link, lstat, open, opendir, realpath, rename, unlink, type FileHandle }
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { runtimeLockDirectory, runtimeOwner } from './ownership';
 const DAY = 86_400_000;
 const ACTIVE = 'agent-insight.log';
 const ARCHIVE = /^agent-insight\.log\.(\d{13})\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(raw|gz)$/;
@@ -38,6 +39,7 @@ async function readSmallJson(path: string): Promise<Record<string, unknown> | un
 
 async function acquire(directory: string, guard: RootGuard): Promise<(() => Promise<void>) | undefined> {
   await guard();
+  directory = runtimeLockDirectory(await realpath(directory));
   const path = join(directory, '.agent-insight-log-cleanup.lock');
   const owner: Owner = { pid: process.pid, host: hostname(), token: randomUUID() };
   const reaping = join(directory, '.agent-insight-log-cleanup.reaping');
@@ -110,10 +112,11 @@ export async function* cleanupLogs(options: LogCleanupOptions): AsyncGenerator<L
   const root = await lstat(directory).catch(() => undefined);
   if (!root?.isDirectory() || root.isSymbolicLink()) return;
   const canonicalRoot = await realpath(directory);
+  const runtimeId = runtimeOwner(directory)?.id;
   const guard: RootGuard = async () => {
     const current = await lstat(directory);
     if (!current.isDirectory() || current.ino !== root.ino || current.dev !== root.dev
-      || await realpath(directory) !== canonicalRoot) throw new Error('Log directory changed during cleanup');
+      || await realpath(directory) !== canonicalRoot || runtimeOwner(directory)?.id !== runtimeId) throw new Error('Log directory changed during cleanup');
   };
   if (options.dryRun) {
     const active = await lstat(join(directory, ACTIVE)).catch(() => undefined);

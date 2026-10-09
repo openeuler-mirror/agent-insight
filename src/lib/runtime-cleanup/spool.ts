@@ -132,7 +132,7 @@ export async function* cleanupSpool(options: {
   } catch { return; }
   const now = options.now ?? Date.now();
   const normalDays = options.normalDays ?? 7;
-  const abnormalDays = Math.max(normalDays, options.abnormalDays ?? 14);
+  const abnormalDays = Math.max(normalDays, options.abnormalDays ?? 7);
   if (!Number.isFinite(now) || normalDays < 1 || abnormalDays > 3650 || !await realDirectory(root)) return;
   for await (const candidate of candidates(root)) {
     if ('kind' in candidate) { yield candidate; continue; }

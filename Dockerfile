@@ -40,6 +40,7 @@ RUN DEV_DEPS="$(node -p "Object.entries(require('/app/node_modules/agent-insight
 RUN test -x /app/node_modules/.bin/opencode
 
 COPY scripts/docker-entrypoint.sh /usr/local/bin/agent-insight-entrypoint
+COPY scripts/container-runtime.py /usr/local/bin/agent-insight-container-runtime.py
 
 RUN chmod +x /usr/local/bin/agent-insight-entrypoint \
     && mkdir -p /data/agent-insight /app/source /app/node_modules/.prisma /app/node_modules/.cache \
