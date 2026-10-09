@@ -20,6 +20,7 @@ import {
   runAnswerMatch,
   transferChineseNumber,
   extractAllNumbers,
+  extractNumberOccurrences,
 } from '../src/lib/engine/experiment/similarity-answer-match-evaluator';
 
 const USER = 'test';
@@ -82,6 +83,47 @@ describe('从文本提取数值', () => {
     assert.deepStrictEqual(extractAllNumbers('3.14 与 42 和 四十二'), [3.14, 42, 42]);
     assert.deepStrictEqual(extractAllNumbers('1234.5 亿元'), [1234.5]);
     assert.deepStrictEqual(extractAllNumbers('营收大幅增长'), []);
+  });
+  it('阿拉伯数字后的量级词并入数值，单位写法不被拆', () => {
+    assert.deepStrictEqual(extractAllNumbers('1万'), [10000]);
+    assert.deepStrictEqual(extractAllNumbers('3.5亿'), [350000000]);
+    assert.deepStrictEqual(extractAllNumbers('3.5亿元'), [3.5]); // 亿元是单位，不拆成 3.5 万元
+    assert.deepStrictEqual(extractAllNumbers('5千元'), [5000]);
+    assert.deepStrictEqual(extractNumberOccurrences('3千米'), [{ value: 3, unit: '千米' }]);
+    assert.deepStrictEqual(extractNumberOccurrences('100万人'), [{ value: 1000000, unit: '人' }]);
+  });
+});
+
+describe('数值与单位提取', () => {
+  it('识别单位并归一化等价写法', () => {
+    assert.deepStrictEqual(extractNumberOccurrences('100℃'), [{ value: 100, unit: 'c' }]);
+    assert.deepStrictEqual(extractNumberOccurrences('100 °C'), [{ value: 100, unit: 'c' }]);
+    assert.deepStrictEqual(extractNumberOccurrences('100 摄氏度'), [{ value: 100, unit: 'c' }]);
+    assert.deepStrictEqual(extractNumberOccurrences('1234.5 亿元'), [{ value: 1234.5, unit: '亿元' }]);
+    assert.deepStrictEqual(extractNumberOccurrences('耗时 5 min'), [{ value: 5, unit: 'min' }]);
+  });
+  it('单位只出现在范围末尾时各数值共用该单位', () => {
+    assert.deepStrictEqual(extractNumberOccurrences('100-200℃'), [
+      { value: 100, unit: 'c' },
+      { value: 200, unit: 'c' },
+    ]);
+    assert.deepStrictEqual(extractNumberOccurrences('100℃-200℃'), [
+      { value: 100, unit: 'c' },
+      { value: 200, unit: 'c' },
+    ]);
+  });
+  it('范围连接符不当作负号，真正的负号保留', () => {
+    assert.deepStrictEqual(extractNumberOccurrences('范围 10-20'), [
+      { value: 10, unit: null },
+      { value: 20, unit: null },
+    ]);
+    assert.deepStrictEqual(extractNumberOccurrences('零下 -5℃'), [{ value: -5, unit: 'c' }]);
+  });
+  it('无单位或单位不可识别时为 null', () => {
+    assert.deepStrictEqual(extractNumberOccurrences('面积 15，周长 16'), [
+      { value: 15, unit: null },
+      { value: 16, unit: null },
+    ]);
   });
 });
 
@@ -221,11 +263,14 @@ describe('文本相似度评估器', () => {
 // ============ 客观答案匹配（三阶段混合） ============
 describe('客观答案匹配评估器', () => {
   it('用例 1：完全匹配——同义表述（回答 10，标准 十）→ 100', async () => {
-    injectSequence(JSON.stringify({ points: [{ type: 'number', text: '十' }] }));
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'number', text: '十' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'matched', reason: '回答的 10 即标准答案的十' }] }),
+    );
     const r = await runAnswerMatch(USER, simCtx('10', '十', '100 的平方根是多少？'));
     assert.strictEqual(r.score, 100);
     assert.strictEqual(r.points![0].status, 'covered');
-    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /代码层/);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /LLM 层语义判同/);
   });
 
   it('用例 2：格式不同但等价（3.14 vs 3.14159）→ 50（部分覆盖）', async () => {
@@ -234,6 +279,14 @@ describe('客观答案匹配评估器', () => {
     assert.strictEqual(r.score, 50);
     assert.strictEqual(r.points![0].status, 'partial');
     assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /截断/);
+  });
+
+  it('部分覆盖时 summary 不自称「与标准答案一致」', async () => {
+    injectSequence(JSON.stringify({ points: [{ type: 'number', text: '3.14159' }] }));
+    const r = await runAnswerMatch(USER, simCtx('3.14', '3.14159...', '圆周率前三位？'));
+    assert.strictEqual(r.verdict, 'fail');
+    assert.match(r.summary!, /部分覆盖/);
+    assert.doesNotMatch(r.summary!, /一致/);
   });
 
   it('用例 3：同义转述（LLM 层）→ 100', async () => {
@@ -310,7 +363,15 @@ describe('客观答案匹配评估器', () => {
   });
 
   it('用例 9：多个关键数值混合 → 100', async () => {
-    injectSequence(JSON.stringify({ points: [{ type: 'number', text: '15' }, { type: 'number', text: '16' }] }));
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'number', text: '15' }, { type: 'number', text: '16' }] }),
+      JSON.stringify({
+        judgments: [
+          { index: 1, result: 'matched', reason: '回答给出面积 15' },
+          { index: 2, result: 'matched', reason: '回答给出周长 16' },
+        ],
+      }),
+    );
     const r = await runAnswerMatch(USER, simCtx('面积 15，周长 16', '面积=15，周长=16', '长方形的长宽各为 5 和 3，面积和周长？'));
     assert.strictEqual(r.score, 100);
   });
@@ -406,6 +467,179 @@ describe('客观答案匹配评估器', () => {
     const r = await runAnswerMatch(USER, simCtx('A 结论、B 结论', 'A 结论、B 结论、C 结论', 'q'));
     assert.ok(r.score! <= 60);
     assert.ok(r.score! >= 55);
+  });
+
+  it('数值单位一致 → 代码层精确匹配（不调判同）', async () => {
+    injectSequence(JSON.stringify({ points: [{ type: 'number', text: '100℃' }] }));
+    const r = await runAnswerMatch(USER, simCtx('水的沸点是 100℃', '水的沸点是 100℃', '水的沸点是多少？'));
+    assert.strictEqual(r.score, 100);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /代码层精确匹配：回答包含数值 100℃/);
+  });
+
+  it('单位别名等价（℃ 与 摄氏度）→ 代码层命中', async () => {
+    injectSequence(JSON.stringify({ points: [{ type: 'number', text: '100 ℃' }] }));
+    const r = await runAnswerMatch(USER, simCtx('沸点为 100 摄氏度', '沸点为 100 ℃', '水的沸点是多少？'));
+    assert.strictEqual(r.score, 100);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /代码层/);
+  });
+
+  it('数值相同但单位不同 → 代码层不判覆盖，交 LLM（100℃ vs 100℉）', async () => {
+    const prompts: string[] = [];
+    setJudgeLlmCallerForTest(async (_u, req) => {
+      prompts.push(req.user);
+      return prompts.length === 1
+        ? JSON.stringify({ points: [{ type: 'number', text: '100℃' }] })
+        : JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答给的是华氏度，与标准答案的摄氏度不等价' }] });
+    });
+    const r = await runAnswerMatch(USER, simCtx('水的沸点是 100℉', '水的沸点是 100℃', '水的沸点是多少？'));
+    assert.strictEqual(prompts.length, 2); // 代码层未命中，走到判同
+    assert.strictEqual(r.score, 0);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /LLM 层/);
+  });
+
+  it('数值范围只命中第一个数值 → 代码层不判覆盖，交 LLM', async () => {
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'number', text: '100-200℃' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答只给出 100℃，缺少 200℃' }] }),
+    );
+    const r = await runAnswerMatch(USER, simCtx('反应温度 100℃', '反应温度 100-200℃', '反应温度范围？'));
+    assert.strictEqual(r.score, 0);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /LLM 层/);
+  });
+
+  it('数值范围全部命中 → 代码层精确匹配', async () => {
+    injectSequence(JSON.stringify({ points: [{ type: 'number', text: '100-200℃' }] }));
+    const r = await runAnswerMatch(USER, simCtx('反应温度 100℃ 到 200℃', '反应温度 100-200℃', '反应温度范围？'));
+    assert.strictEqual(r.score, 100);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /代码层精确匹配/);
+  });
+
+  it('数量级词换算后与等值数值命中（1亿吨 vs 100000000 吨）', async () => {
+    injectSequence(JSON.stringify({ points: [{ type: 'number', text: '1亿吨' }] }));
+    const r = await runAnswerMatch(USER, simCtx('产量为 100000000 吨', '产量为 1亿吨', '产量是多少？'));
+    assert.strictEqual(r.score, 100);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /代码层精确匹配/);
+  });
+
+  it('数量级词不再让错答拿满分（3.5亿 vs 3.5）', async () => {
+    const prompts: string[] = [];
+    setJudgeLlmCallerForTest(async (_u, req) => {
+      prompts.push(req.user);
+      return prompts.length === 1
+        ? JSON.stringify({ points: [{ type: 'number', text: '3.5亿' }] })
+        : JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答给的 3.5 与标准答案的 3.5 亿不在同一量级' }] });
+    });
+    const r = await runAnswerMatch(USER, simCtx('营收约 3.5', '营收 3.5亿', '营收是多少？'));
+    assert.strictEqual(prompts.length, 2); // 代码层对这一对不再判命中
+    assert.strictEqual(r.score, 0);
+  });
+
+  it('裸数值代码层命中不终判，交判同复核语境 → 0', async () => {
+    const prompts: string[] = [];
+    setJudgeLlmCallerForTest(async (_u, req) => {
+      prompts.push(req.user);
+      return prompts.length === 1
+        ? JSON.stringify({ points: [{ type: 'number', text: '3' }] })
+        : JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答中的 3 是分点序号，未给出所问数值' }] });
+    });
+    const r = await runAnswerMatch(USER, simCtx('以下 3 点说明这个问题：第一……', '答案是 3', '答案是几？'));
+    assert.strictEqual(prompts.length, 2); // 代码层虽命中，仍需判同确认语境
+    assert.strictEqual(r.score, 0);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /LLM 层/);
+  });
+
+  it('带单位的数值命中仍是代码层终判（不调判同）', async () => {
+    const prompts: string[] = [];
+    setJudgeLlmCallerForTest(async (_u, req) => {
+      prompts.push(req.user);
+      return prompts.length === 1
+        ? JSON.stringify({ points: [{ type: 'number', text: '100℃' }] })
+        : JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '不应走到判同' }] });
+    });
+    const r = await runAnswerMatch(USER, simCtx('水的沸点是 100℃', '水的沸点是 100℃', '水的沸点是多少？'));
+    assert.strictEqual(prompts.length, 1);
+    assert.strictEqual(r.score, 100);
+  });
+
+  it('整数前缀不是精度截断（25 vs 2）→ 未覆盖而非部分覆盖', async () => {
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'number', text: '25' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答给的是 2，不是 25' }] }),
+    );
+    const r = await runAnswerMatch(USER, simCtx('有 2 个', '有 25 个', '有多少个质数？'));
+    assert.strictEqual(r.points![0].status, 'missing');
+    assert.strictEqual(r.score, 0);
+  });
+
+  it('报告按标准答案的信息点顺序展开（代码层命中不重排）', async () => {
+    injectSequence(
+      JSON.stringify({ points: [
+        { type: 'conclusion', text: '结论 A' },
+        { type: 'number', text: '100℃' },
+        { type: 'term', text: 'BERT' },
+      ] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'matched', reason: '回答给出结论 A' }] }),
+    );
+    const r = await runAnswerMatch(USER, simCtx('结论 A，温度 100℃，模型是 BERT', '结论 A、100℃、BERT', 'q'));
+    assert.deepStrictEqual(r.points!.map((p) => p.label), [
+      '核心结论：结论 A',
+      '关键数值：100℃',
+      '专有名词：BERT',
+    ]);
+  });
+
+  it('单字母术语不再子串误命中（C 不命中 CPU）', async () => {
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'term', text: 'C' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答说的是 CPU 利用率，未提及 C 语言' }] }),
+    );
+    const r = await runAnswerMatch(USER, simCtx('CPU 利用率很高', 'C 语言', '哪种语言？'));
+    assert.strictEqual(r.score, 0);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /LLM 层/);
+  });
+
+  it('单字母术语按词边界命中（C 语言 → 代码层）', async () => {
+    injectSequence(JSON.stringify({ points: [{ type: 'term', text: 'C' }] }));
+    const r = await runAnswerMatch(USER, simCtx('C 是编译型语言', 'C', '哪种语言？'));
+    assert.strictEqual(r.score, 100);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /代码层精确匹配/);
+  });
+
+  it('术语命中要求词边界（art 不命中 start）', async () => {
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'term', text: 'art' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答中出现的是 start 一词' }] }),
+    );
+    const r = await runAnswerMatch(USER, simCtx('Please start over', 'art', 'q'));
+    assert.strictEqual(r.score, 0);
+    assert.match(((r.points![0].evidence as { md?: string } | undefined)?.md ?? ''), /LLM 层/);
+  });
+
+  it('单个汉字术语子串无法界定边界 → 交 LLM（判同后可恢复满分）', async () => {
+    let calls = 0;
+    setJudgeLlmCallerForTest(async () => {
+      calls += 1;
+      return calls === 1
+        ? JSON.stringify({ points: [{ type: 'term', text: '水' }] })
+        : JSON.stringify({ judgments: [{ index: 1, result: 'matched', reason: '回答明确指出这种液体是水' }] });
+    });
+    const r = await runAnswerMatch(USER, simCtx('这种液体是水', '水', 'q'));
+    assert.strictEqual(calls, 2); // 代码层未命中 → 走了判同
+    assert.strictEqual(r.score, 100);
+  });
+
+  it('提取阶段把用户问题一并传给 LLM', async () => {
+    const prompts: string[] = [];
+    setJudgeLlmCallerForTest(async (_u, req) => {
+      prompts.push(req.user);
+      return prompts.length === 1
+        ? JSON.stringify({ points: [{ type: 'conclusion', text: 'A 结论' }] })
+        : JSON.stringify({ judgments: [{ index: 1, result: 'matched', reason: '回答即该结论' }] });
+    });
+    await runAnswerMatch(USER, simCtx('A 结论', '标准答案正文（含背景说明）', '用户问题正文'));
+    assert.match(prompts[0], /【用户问题】/);
+    assert.match(prompts[0], /用户问题正文/);
+    assert.match(prompts[0], /标准答案正文/);
   });
 });
 

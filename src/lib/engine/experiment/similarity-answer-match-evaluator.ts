@@ -36,10 +36,10 @@ export const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, 
 // ── 1. 关键信息点提取 ────────────────────────────────────────────────────
 
 const ANSWER_MATCH_EXTRACT_SYSTEM = [
-  '你是一个客观答案评估器的关键信息点提取器。你的任务是从「标准答案」中提取回答该问题时必须覆盖的关键信息点。',
+  '你是一个客观答案评估器的关键信息点提取器。你的任务是从「标准答案」中提取回答「用户问题」时必须覆盖的关键信息点。',
   '',
   '【信息点类型】',
-  '- number（关键数值）：具体数字，如 42、3.14、2024 年、1234.5 亿元',
+  '- number（关键数值）：具体数字，如 42、3.14、2024 年、1234.5 亿元；数值带单位时必须连同单位一起提取',
   '- term（专有名词）：专有术语或名词，如 Transformer、BERT、Python、H2O',
   '- conclusion（核心结论）：核心结论性表述，如「X 大于 Y」「A 属于 B 类」',
   '- condition（必要条件）：必须满足的条件，如「温度不能超过 100℃」',
@@ -47,6 +47,7 @@ const ANSWER_MATCH_EXTRACT_SYSTEM = [
   '【提取规则】',
   '- 一个关键数值、专有名词、核心结论或必要条件提取为一个独立信息点',
   '- 一段话包含多个并列要点时拆成多个信息点（回答可能只命中其中部分）',
+  '- 只提取回答「用户问题」必须覆盖的信息点：标准答案中的背景介绍、补充说明、与问题无关的细节不要提取',
   '- 不要提取与回答问题无关的修饰性内容',
   '- 若标准答案没有可提取的信息点，points 输出空数组',
   '',
@@ -58,10 +59,13 @@ const ANSWER_MATCH_EXTRACT_SYSTEM = [
   'type 必须使用上述四个取值之一，不得自创。',
 ].join('\n');
 
-async function extractKeyPoints(user: string, reference: string): Promise<KeyPoint[]> {
+async function extractKeyPoints(user: string, question: string, reference: string): Promise<KeyPoint[]> {
   const text = await callJudgeLlm(user, {
     system: ANSWER_MATCH_EXTRACT_SYSTEM,
-    user: `【标准答案】\n\`\`\`\n${reference}\n\`\`\`\n`,
+    user: [
+      question ? `【用户问题】\n${question}` : '',
+      `【标准答案】\n\`\`\`\n${reference}\n\`\`\`\n`,
+    ].filter(Boolean).join('\n'),
     sessionTitle: 'exp-judge-preset-similarity-extract-keypoints',
   });
   const raw = extractJson(text) as Record<string, unknown>;
@@ -118,51 +122,193 @@ export function transferChineseNumber(s: string): number | null {
   return result > 0 ? result : null;
 }
 
-export function extractAllNumbers(text: string): number[] {
-  const out: number[] = [];
-  for (const m of text.match(/-?\d[\d,]*(?:\.\d+)?/g) ?? []) {
-    const n = parseFloat(m.replace(/,/g, ''));
-    if (Number.isFinite(n)) out.push(n);
+export interface NumberOccurrence {
+  value: number;
+  /** 归一化单位；无单位或单位不可识别时为 null。比对只认这个字段。 */
+  unit: string | null;
+}
+
+/** 同一单位的不同写法归一化到同一 key，避免 100℃ 与 100℉ 被当成等值。 */
+const UNIT_ALIASES: Record<string, string> = {
+  '°c': 'c', '℃': 'c', '摄氏': 'c', '摄氏度': 'c',
+  '°f': 'f', '℉': 'f', '华氏': 'f', '华氏度': 'f',
+  '%': '%', '％': '%',
+};
+
+/** 可识别的单位写法（按长度降序做最长匹配）。表外文本一律视为「无单位」，不参与比对。 */
+const CJK_UNITS = [
+  '摄氏度', '华氏度', '平方千米', '平方公里', '平方米', '立方米', '平方厘米', '立方厘米',
+  '公里', '千米', '分米', '厘米', '毫米', '微米', '纳米',
+  '千克', '公斤', '毫克', '毫升', '克', '吨', '升', '公顷', '亩',
+  '亿元', '万元', '亿美元', '美元', '元',
+  '小时', '分钟', '毫秒', '秒', '天', '年', '月', '日', '岁',
+  '米', '度', '分', '时', '个', '人', '次', '倍', '条', '件', '层', '台', '辆',
+].sort((a, b) => b.length - a.length);
+
+const LATIN_UNITS = new Set([
+  'km', 'dm', 'cm', 'mm', 'um', 'nm', 'kg', 'mg', 'ug', 'g', 't', 's', 'ms', 'min', 'h',
+  'l', 'ml', 'kb', 'mb', 'gb', 'tb', 'hz', 'khz', 'mhz', 'ghz', 'w', 'kw', 'mw',
+  'v', 'kv', 'mv', 'a', 'ma', 'pa', 'kpa', 'mpa', 'bar', 'mol', 'cal', 'kcal',
+  'px', 'dpi', 'fps', 'db', 'mah', 'wh', 'kwh',
+]);
+
+const DISPLAY_UNIT: Record<string, string> = { c: '℃', f: '℉' };
+
+const NUMERAL_RE_G = /-?\d[\d,]*(?:\.\d+)?|[零一二两三四五六七八九十百千万亿]+/g;
+
+function matchUnit(text: string): string | null {
+  const symbol = /^(°[cf]|[℃℉]|[%％])/i.exec(text);
+  if (symbol) return UNIT_ALIASES[symbol[1].toLowerCase()] ?? symbol[1].toLowerCase();
+  const latin = /^[A-Za-z]{1,6}/.exec(text);
+  if (latin && LATIN_UNITS.has(latin[0].toLowerCase())) return latin[0].toLowerCase();
+  for (const unit of CJK_UNITS) {
+    if (text.startsWith(unit)) return UNIT_ALIASES[unit] ?? unit;
   }
-  for (const m of text.match(/[零一二两三四五六七八九十百千万亿]+/g) ?? []) {
-    const n = transferChineseNumber(m);
-    if (n !== null) out.push(n);
+  return null;
+}
+
+/** 紧跟在数值/单位后面的一律按范围连接符处理（`100-200`、`100℃-200℃`），不当作负号。 */
+const RANGE_CONNECTOR_CONTEXT = /[\d℃℉%°A-Za-z\p{Script=Han}]/u;
+
+/** 紧跟阿拉伯数字的中文量级词（`3.5亿` → 3.5e8）；`万元`/`亿元` 是单位，不在此列。 */
+const MAGNITUDE: Record<string, number> = { 千: 1e3, 万: 1e4, 亿: 1e8 };
+
+function skipSpaces(text: string, from: number): number {
+  let i = from;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  return i;
+}
+
+/**
+ * 提取文本中所有数值及其单位。
+ * 紧跟阿拉伯数字的 千/万/亿 作为量级乘子并入数值；单位命中时优先按单位解析
+ * （`3.5亿元` 仍是 3.5 亿元，不会把 `亿` 拆成量级后变成 3.5 万元）。
+ * 若整段文本只出现一种单位（如「100-200℃」），则视为各数值共用该单位。
+ */
+export function extractNumberOccurrences(text: string): NumberOccurrence[] {
+  const out: NumberOccurrence[] = [];
+  let consumed = 0;
+  for (const m of text.matchAll(NUMERAL_RE_G)) {
+    let raw = m[0];
+    let start = m.index ?? 0;
+    if (start < consumed) continue;
+    const prev = text[start - 1];
+    if (raw.startsWith('-') && prev !== undefined && RANGE_CONNECTOR_CONTEXT.test(prev)) {
+      raw = raw.slice(1);
+      start += 1;
+    }
+    const isArabic = /^[-\d]/.test(raw);
+    let value = isArabic
+      ? parseFloat(raw.replace(/,/g, ''))
+      : transferChineseNumber(raw);
+    if (value === null || !Number.isFinite(value)) continue;
+    let cursor = skipSpaces(text, start + raw.length);
+    if (isArabic) {
+      const run = /^[千万亿]+/.exec(text.slice(cursor));
+      if (matchUnit(text.slice(cursor)) === null) {
+        if (run) {
+          for (const ch of run[0]) value *= MAGNITUDE[ch];
+          cursor = skipSpaces(text, cursor + run[0].length);
+          consumed = cursor;
+        }
+      } else if (run) {
+        // `千米`/`千克`/`万元` 的前缀量级字属于单位写法，不能再被当成独立数值（否则 3千米 会多出一个 1000）
+        consumed = cursor + run[0].length;
+      }
+    }
+    out.push({ value, unit: matchUnit(text.slice(cursor)) });
+  }
+  const units = new Set(out.map((o) => o.unit).filter((u): u is string => u !== null));
+  if (units.size === 1) {
+    const only = units.values().next().value as string;
+    for (const o of out) if (o.unit === null) o.unit = only;
   }
   return out;
 }
 
-function getExpectedNumber(text: string): number | null {
-  const nums = extractAllNumbers(text);
-  return nums.length ? nums[0] : null;
+export function extractAllNumbers(text: string): number[] {
+  return extractNumberOccurrences(text).map((o) => o.value);
 }
 
-function matchNumber(answer: string, expected: number): 'covered' | 'partial' | 'unmatched' {
-  const candidates = extractAllNumbers(answer);
-  if (candidates.some((n) => Math.abs(n - expected) < 1e-6)) return 'covered';
-  const expectedStr = String(expected);
-  if (candidates.some((n) => {
-    const s = String(n);
-    return s.length < expectedStr.length && expectedStr.startsWith(s);
-  })) return 'partial';
-  return 'unmatched';
+const formatNumberOccurrence = (o: NumberOccurrence) =>
+  `${o.value}${o.unit ? DISPLAY_UNIT[o.unit] ?? o.unit : ''}`;
+
+/**
+ * 只认小数位上的精度截断（`3.14` 之于 `3.14159`）。
+ * 整数前缀（`2` 之于 `25`、`1` 之于 `100`）是另一个数量级的错值，不能算部分覆盖。
+ */
+const isTruncationOf = (actual: number, expected: number) => {
+  const a = String(actual);
+  const e = String(expected);
+  return a.includes('.') && a.length < e.length && e.startsWith(a);
+};
+
+/** 信息点未写单位时不强制回答带单位；写了单位则回答必须给出同一单位。 */
+function unitCompatible(expected: string | null, actual: string | null): boolean {
+  return expected === null || expected === actual;
 }
 
+interface NumberMatchDetail {
+  truncated: Array<{ expected: NumberOccurrence; actual: NumberOccurrence }>;
+  /** 代码层未命中（数值缺失、单位不符或无法比对）的期望数值 */
+  missed: NumberOccurrence[];
+}
+
+/** 要求信息点里的每个数值都被命中，避免数值范围只核对到第一个数值。 */
+function matchNumberOccurrences(answer: NumberOccurrence[], expected: NumberOccurrence[]): NumberMatchDetail {
+  const detail: NumberMatchDetail = { truncated: [], missed: [] };
+  for (const e of expected) {
+    if (answer.some((a) => unitCompatible(e.unit, a.unit) && Math.abs(a.value - e.value) < 1e-6)) continue;
+    const truncated = answer.find((a) => unitCompatible(e.unit, a.unit) && isTruncationOf(a.value, e.value));
+    if (truncated) detail.truncated.push({ expected: e, actual: truncated });
+    else detail.missed.push(e);
+  }
+  return detail;
+}
+
+const HAN = /\p{Script=Han}/u;
+const LATIN_WORD = /[A-Za-z0-9]/;
+
+/** 去掉空白 / 连字符 / 下划线后小写：`Self-Attention` 与 `self attention` 等价。 */
+const normalizeTerm = (s: string) => s.replace(/[\s\-_]+/g, ' ').trim().toLowerCase();
+
+/**
+ * 专有名词命中：英文按词边界匹配（避免 `C` 命中 `CPU`），中文按子串匹配。
+ * 单个汉字没有词边界可依，交 LLM 判定而非直接判覆盖。
+ */
 function matchTerm(answer: string, term: string): 'covered' | 'unmatched' {
-  const a = answer.replace(/[\s\-_]/g, '').toLowerCase();
-  const t = term.replace(/[\s\-_]/g, '').toLowerCase();
+  const t = normalizeTerm(term);
   if (!t) return 'unmatched';
-  return a.includes(t) ? 'covered' : 'unmatched';
+  const a = normalizeTerm(answer);
+  if (!a) return 'unmatched';
+  if (HAN.test(t)) return t.length >= 2 && a.includes(t) ? 'covered' : 'unmatched';
+  let idx = a.indexOf(t);
+  while (idx !== -1) {
+    const before = idx === 0 ? undefined : a[idx - 1];
+    const after = a[idx + t.length];
+    if (!(before && LATIN_WORD.test(before)) && !(after && LATIN_WORD.test(after))) return 'covered';
+    idx = a.indexOf(t, idx + 1);
+  }
+  return 'unmatched';
 }
 
 function codeMatchPoint(answer: string, point: KeyPoint): { status: 'covered' | 'partial' | 'pending'; evidence: string } {
   if (point.type === 'number') {
-    const expected = getExpectedNumber(point.text);
-    if (expected !== null) {
-      const m = matchNumber(answer, expected);
-      if (m === 'covered') return { status: 'covered', evidence: `代码层精确匹配：回答包含数值 ${expected}` };
-      if (m === 'partial') {
-        const hit = extractAllNumbers(answer).find((n) => String(expected).startsWith(String(n)) && String(n).length < String(expected).length);
-        return { status: 'partial', evidence: `代码层部分匹配：回答数值 ${hit ?? '?'} 仅为标准数值 ${expected} 的截断，精度不足` };
+    const expected = extractNumberOccurrences(point.text);
+    if (expected.length) {
+      const detail = matchNumberOccurrences(extractNumberOccurrences(answer), expected);
+      const expectedText = expected.map(formatNumberOccurrence).join('、');
+      if (!detail.missed.length && !detail.truncated.length) {
+        // 未带单位的裸数值（如「3」）可能只是回答里的序号或无关数字，代码层命中不足以定档，交判同复核语境。
+        if (expected.some((e) => e.unit === null)) return { status: 'pending', evidence: '' };
+        return { status: 'covered', evidence: `代码层精确匹配：回答包含数值 ${expectedText}` };
+      }
+      if (!detail.missed.length) {
+        const first = detail.truncated[0];
+        return {
+          status: 'partial',
+          evidence: `代码层部分匹配：回答数值 ${formatNumberOccurrence(first.actual)} 仅为标准数值 ${formatNumberOccurrence(first.expected)} 的截断，精度不足`,
+        };
       }
     }
   } else if (point.type === 'term' && matchTerm(answer, point.text) === 'covered') {
@@ -178,6 +324,7 @@ const ANSWER_MATCH_JUDGE_SYSTEM = [
   '',
   '【判定规则】',
   '- 回答与信息点含义一致（含同义转述，如「A 比 B 大」vs「B 小于 A」、主动/被动语态变换、信息合并或拆分）→ matched',
+  '- 信息点含数值时必须同时核对数值与单位：数值相同但单位不同且不等价（如标准「100℃」对回答「100℉」）→ not_matched；回答未写出单位但语境能确定同一量纲时按 matched 处理，无法确定则 uncertain',
   '- 回答明确表达相反含义、或完全遗漏该信息 → not_matched',
   '- 无法确定是否覆盖 → uncertain',
   '',
@@ -288,7 +435,7 @@ export async function runAnswerMatch(user: string, ctx: FaithfulPresetContext): 
   const question = (ctx.caseInput ?? '').trim();
 
   // 1. 关键信息点提取
-  const keyPoints = await extractKeyPoints(user, reference);
+  const keyPoints = await extractKeyPoints(user, question, reference);
   if (!keyPoints.length) {
     return normalizeEvaluatorOutput({
       summary: '标准答案无可提取的关键信息点，无法评估——不记分。',
@@ -296,30 +443,34 @@ export async function runAnswerMatch(user: string, ctx: FaithfulPresetContext): 
     });
   }
 
-  // 2. 代码层精确匹配
-  const matched: MatchedPoint[] = [];
-  const pending: KeyPoint[] = [];
-  for (const p of keyPoints) {
+  // 2. 代码层精确匹配：能定档的按原序号落位，其余记下序号交判同
+  const results: Array<MatchedPoint | null> = keyPoints.map(() => null);
+  const pending: Array<{ point: KeyPoint; index: number }> = [];
+  keyPoints.forEach((p, index) => {
     const r = codeMatchPoint(answer, p);
-    if (r.status === 'covered') matched.push({ ...p, score: 100, status: 'covered', evidence: r.evidence });
-    else if (r.status === 'partial') matched.push({ ...p, score: 50, status: 'partial', evidence: r.evidence });
-    else pending.push(p);
-  }
+    if (r.status === 'covered') results[index] = { ...p, score: 100, status: 'covered', evidence: r.evidence };
+    else if (r.status === 'partial') results[index] = { ...p, score: 50, status: 'partial', evidence: r.evidence };
+    else pending.push({ point: p, index });
+  });
 
-  // 3. LLM 层语义判同（结果与 pending 下标一一对应）
+  // 3. LLM 层语义判同（judgments 与 pending 下标一一对应）
   if (pending.length) {
-    const judgments = await judgeRemainingPoints(user, question, answer, reference, pending);
-    pending.forEach((p, i) => {
+    const judgments = await judgeRemainingPoints(user, question, answer, reference, pending.map((x) => x.point));
+    pending.forEach(({ point, index }, i) => {
       const j = judgments[i];
-      if (j.result === 'matched') {
-        matched.push({ ...p, score: 100, status: 'covered', evidence: j.reason ? `LLM 层语义判同：${j.reason}` : 'LLM 层语义判同。' });
-      } else if (j.result === 'uncertain') {
-        matched.push({ ...p, score: 0, status: 'missing', evidence: j.reason ? `LLM 层判定不确定：${j.reason}` : 'LLM 层判定不确定。' });
-      } else {
-        matched.push({ ...p, score: 0, status: 'missing', evidence: j.reason ? `LLM 层判定不匹配：${j.reason}` : 'LLM 层判定不匹配。' });
-      }
+      const ok = j.result === 'matched';
+      const layer = ok ? 'LLM 层语义判同' : j.result === 'uncertain' ? 'LLM 层判定不确定' : 'LLM 层判定不匹配';
+      results[index] = {
+        ...point,
+        score: ok ? 100 : 0,
+        status: ok ? 'covered' : 'missing',
+        evidence: j.reason ? `${layer}：${j.reason}` : `${layer}。`,
+      };
     });
   }
+
+  // 报告按标准答案的信息点顺序展开，不按判定来源重排
+  const matched = results.filter((m): m is MatchedPoint => m !== null);
 
   // 4. 综合评分
   const { score, base } = computeAnswerMatchScore(matched);
@@ -328,9 +479,16 @@ export async function runAnswerMatch(user: string, ctx: FaithfulPresetContext): 
   const missing = matched.filter((m) => m.status === 'missing').map((m) => `${POINT_TYPE_LABEL[m.type] ?? m.type}「${m.text}」`);
   const verdict = score >= 80 ? 'pass' : score >= 60 ? 'warn' : 'fail';
 
-  const summary = missing.length === 0
-    ? `关键信息点 ${matched.length} 个全部覆盖（含 ${partialCount} 个部分覆盖）——答案与标准答案一致。`
-    : `关键信息点 ${matched.length} 个中覆盖 ${coveredCount + partialCount} 个（得分 ${score}），遗漏${missing.length ? `：${missing.slice(0, 2).join('、')}${missing.length > 2 ? ' 等' : ''}` : ''}。`;
+  // 部分覆盖只有 50 分，不能让 summary 说成「与标准答案一致」而与 verdict 打架。
+  const coverage = [
+    `${coveredCount} 个完全覆盖`,
+    partialCount ? `${partialCount} 个部分覆盖（精度不足）` : '',
+    missing.length ? `${missing.length} 个遗漏` : '',
+  ].filter(Boolean).join('、');
+  const summary = missing.length === 0 && partialCount === 0
+    ? `关键信息点 ${matched.length} 个全部覆盖——答案与标准答案一致。`
+    : `关键信息点 ${matched.length} 个：${coverage}（得分 ${score}）`
+      + (missing.length ? `，遗漏${missing.slice(0, 2).join('、')}${missing.length > 2 ? ' 等' : ''}。` : '。');
 
   const evidenceMd = [
     `综合评分：${score}/100（信息点覆盖基准 ${base}，扣分调整 ${score - base >= 0 ? '+' : ''}${score - base}）`,
