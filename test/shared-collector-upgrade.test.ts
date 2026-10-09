@@ -14,12 +14,15 @@ const oldTransport = fs.readFileSync('test/fixtures/collectors/trace-transport-p
 const currentTransport = fs.readFileSync(path.join(sharedSource, 'trace-transport.cjs'))
 const deployedTransport = fs.readFileSync('test/fixtures/collectors/trace-transport-pre-workbuddy.cjs')
 const deployedInstaller = fs.readFileSync('test/fixtures/collectors/install-modules-pre-workbuddy.cjs')
+const preReceiptInstaller = fs.readFileSync('test/fixtures/collectors/install-modules-pre-receipt.cjs')
 
 test('deployed upgrade fixtures match verified release fingerprints', () => {
   assert.equal(createHash('sha256').update(deployedTransport).digest('hex'),
     '9fda3fa4224105a48a6619f764c7bee04c1bdc0df32a74d880a295a1e5f03da6')
   assert.equal(createHash('sha256').update(deployedInstaller).digest('hex'),
     '8d54ec546990463477e30c9a20773f2b3c0c9845ee768ea7d8180286b8326e22')
+  assert.equal(createHash('sha256').update(preReceiptInstaller).digest('hex'),
+    '52e47d6e3a99a82c5638acad1eeab1194e307831592243d96c191fd6fec39a08')
 })
 
 for (const framework of ['pi-agent', 'codex', 'goal-plus']) {
@@ -56,6 +59,62 @@ for (const framework of ['pi-agent', 'codex', 'goal-plus']) {
     assert.equal(fs.readdirSync(target).filter(name => name.endsWith('.bak')).length, 2)
   })
 }
+
+for (const framework of ['pi-agent', 'codex', 'goal-plus']) {
+  test(`${framework}: migrate the pre-receipt installer and preserve existing data`, async t => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pre-receipt-upgrade-')))
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+    useIsolatedHome(t, home)
+    process.env.AGENT_INSIGHT_API_KEY = 'test-pre-receipt-upgrade-key'
+    const collectors = path.join(home, '.agent-insight', 'collectors')
+    const target = path.join(collectors, 'shared')
+    const packageDir = path.join(collectors, framework)
+    const spool = path.join(home, '.agent-insight', 'otel_data', framework, 'pending.json')
+    fs.mkdirSync(target, { recursive: true })
+    fs.mkdirSync(path.dirname(spool), { recursive: true })
+    fs.writeFileSync(spool, '{"pending":true}')
+    fs.writeFileSync(path.join(target, 'trace-transport.cjs'), currentTransport)
+    fs.writeFileSync(path.join(target, 'install-modules.cjs'), preReceiptInstaller)
+    assert.equal(fs.existsSync(path.join(target, 'installation.json')), false)
+    const installer = require(`../scripts/agent-trace-collectors/${framework}/install.cjs`)
+    const source = path.resolve('scripts/agent-trace-collectors', framework)
+    const run = () => framework === 'pi-agent'
+      ? installer.installFiles(source, packageDir, target)
+      : framework === 'codex'
+        ? installer.installCollectorFiles(source, packageDir)
+        : installer.install({ homeDir: home, sourceDir: source, skipVersionCheck: true })
+    await run()
+    assert.deepEqual(fs.readFileSync(path.join(target, 'install-modules.cjs')),
+      fs.readFileSync(path.join(sharedSource, 'install-modules.cjs')))
+    assert.deepEqual(fs.readFileSync(path.join(target, 'trace-transport.cjs')), currentTransport)
+    const backups = fs.readdirSync(target).filter(name => name.endsWith('.bak'))
+    assert.equal(backups.length, 1)
+    assert.ok(backups[0].startsWith('install-modules.cjs.'))
+    assert.deepEqual(fs.readFileSync(path.join(target, backups[0])), preReceiptInstaller)
+    assert.equal(fs.statSync(path.join(target, backups[0])).mode & 0o777, 0o600)
+    const manifest = fs.readFileSync(path.join(target, 'installation.json'))
+    const receipt = JSON.parse(manifest.toString())
+    assert.equal(receipt.sharedAbi, 1)
+    assert.equal(receipt.files['install-modules.cjs'],
+      createHash('sha256').update(fs.readFileSync(path.join(sharedSource, 'install-modules.cjs'))).digest('hex'))
+    await run()
+    assert.deepEqual(fs.readFileSync(path.join(target, 'installation.json')), manifest)
+    assert.equal(fs.readdirSync(target).filter(name => name.endsWith('.bak')).length, 1)
+    assert.equal(fs.readFileSync(spool, 'utf8'), '{"pending":true}')
+  })
+}
+
+test('a modified pre-receipt installer is rejected before shared writes', async t => {
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'pre-receipt-conflict-'))
+  t.after(() => fs.rmSync(target, { recursive: true, force: true }))
+  const modified = Buffer.concat([preReceiptInstaller, Buffer.from('\n// local edit\n')])
+  fs.writeFileSync(path.join(target, 'trace-transport.cjs'), currentTransport)
+  fs.writeFileSync(path.join(target, 'install-modules.cjs'), modified)
+  await assert.rejects(installSharedModules(sharedSource, target, ['trace-transport.cjs']), /Refusing to overwrite/)
+  assert.deepEqual(fs.readFileSync(path.join(target, 'install-modules.cjs')), modified)
+  assert.deepEqual(fs.readFileSync(path.join(target, 'trace-transport.cjs')), currentTransport)
+  assert.equal(fs.readdirSync(target).length, 2)
+})
 
 for (const framework of ['pi-agent', 'codex', 'goal-plus']) {
   for (const conflict of [false, true]) {

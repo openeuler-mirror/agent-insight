@@ -13,7 +13,10 @@ const UPGRADEABLE = {
     "9fda3fa4224105a48a6619f764c7bee04c1bdc0df32a74d880a295a1e5f03da6",
     "f550a10d49e564c9a088bb9a4f295a1a6c3cdb8bd889aa1589b3f1a30743be17",
   ]),
-  "install-modules.cjs": new Set(["8d54ec546990463477e30c9a20773f2b3c0c9845ee768ea7d8180286b8326e22"]),
+  "install-modules.cjs": new Set([
+    "8d54ec546990463477e30c9a20773f2b3c0c9845ee768ea7d8180286b8326e22",
+    "52e47d6e3a99a82c5638acad1eeab1194e307831592243d96c191fd6fec39a08",
+  ]),
 };
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
 
