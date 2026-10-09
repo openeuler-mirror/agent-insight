@@ -36,6 +36,7 @@ async function cleanup() {
 test('action whitelist rejects unknown actions', () => {
   assert.equal(isWhitelistedAction('APPLY_CLIENT_CONFIG'), true)
   assert.equal(isWhitelistedAction('RUN_EXPERIMENT_CASE'), true)
+  assert.equal(isWhitelistedAction('RUN_BENCHMARK_CASE'), true)
   assert.equal(isWhitelistedAction('RUN_SHELL'), false)
   assert.equal(isWhitelistedAction(''), false)
   assert.equal(isWhitelistedAction(null), false)
@@ -73,6 +74,11 @@ test('run action rejects free-form execution fields', () => {
       platform: 'opencode',
       model: 'qwen3-32b',
       input: 'do the thing',
+    }),
+  )
+  assert.doesNotThrow(() =>
+    assertPayloadSafe('RUN_BENCHMARK_CASE', {
+      request: { runId: 'erun_1', task: { schemaVersion: 'agent-task/v1' } },
     }),
   )
 })

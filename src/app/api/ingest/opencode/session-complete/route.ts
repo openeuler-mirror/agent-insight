@@ -1,5 +1,4 @@
 import { db } from '@/lib/storage/prisma';
-import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
@@ -25,8 +24,6 @@ export async function POST(request: Request) {
         const completedAt = body.completed_at ? new Date(body.completed_at) : new Date();
         const safeCompletedAt = Number.isNaN(completedAt.getTime()) ? new Date() : completedAt;
 
-        const autoWatchUser = username || existing?.user || undefined;
-
         if (existing) {
             if (username && existing.user && existing.user !== username) {
                 return NextResponse.json({ error: 'Session does not belong to authenticated user' }, { status: 403 });
@@ -38,7 +35,6 @@ export async function POST(request: Request) {
                 {
                     taskId,
                     user: username,
-                    startTime: safeCompletedAt,
                     endTime: safeCompletedAt,
                     interactions: JSON.stringify([]),
                     label: 'opencode',
@@ -49,8 +45,6 @@ export async function POST(request: Request) {
                 },
             );
         }
-
-        void triggerExperimentWatchForTask(autoWatchUser, taskId);
 
         return NextResponse.json({ success: true, task_id: taskId, endTime: safeCompletedAt.toISOString() });
     } catch (error) {

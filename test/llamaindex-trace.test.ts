@@ -523,7 +523,9 @@ test('rejects unauthenticated or explicitly invalid LlamaIndex OTLP credentials'
 
 test('registers LlamaIndex ahead of the generic OTLP fallback', () => {
   const events = normalizeLlamaIndexOtlpTraces(payload());
-  assert.equal(getOtelTraceAdapter(events).id, 'llamaindex');
+  const traceAdapter = getOtelTraceAdapter(events);
+  assert.ok(traceAdapter);
+  assert.equal(traceAdapter.id, 'llamaindex');
   assert.equal(resolveFrameworkId('llama-index'), 'llamaindex');
   const adapter = getAdapter('llamaindex');
   assert.equal(adapter.descriptor.onboard, 'plugin');

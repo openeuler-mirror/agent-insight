@@ -9,6 +9,7 @@ import {
   isSkillExperimentEvaluatorEligible,
   isSkillTriggerDataset,
 } from '@/lib/skill-workbench/experiment-policy';
+import { visibleWorkbenchCaseIds } from '@/lib/skill-workbench/experiment-service';
 
 test('三类实验使用独立且有上限的执行与评估并发策略', () => {
   assert.deepEqual(getSkillExperimentConcurrencyPolicy('use-case'), {
@@ -62,10 +63,27 @@ test('触发分析锁定专用评估器，其他实验排除专用评估器', ()
 
 test('用例分析默认不勾选评估器', () => {
   const wizard = fs.readFileSync(
-    path.join(process.cwd(), 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(process.cwd(), 'src/components/eval/ExperimentWizard.tsx'),
     'utf8',
   );
   const useCaseDefaults = wizard.match(/'use-case': \[(.*?)\],\n  'skill-ab':/s)?.[1];
   assert.ok(useCaseDefaults, '应保留用例分析评估器配置');
   assert.doesNotMatch(useCaseDefaults, /selected:\s*true/);
+});
+
+test('A/B 测试默认不勾选评估器', () => {
+  const wizard = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/eval/ExperimentWizard.tsx'),
+    'utf8',
+  );
+  const abDefaults = wizard.match(/'skill-ab': \[(.*?)\],\n};/s)?.[1];
+  assert.ok(abDefaults, '应保留 A/B 测试评估器配置');
+  assert.doesNotMatch(abDefaults, /selected:\s*true/);
+});
+
+test('Skill 实验列表的 Case 数排除结果页已删除的 Case', () => {
+  const deleted = new Set(['case-2']);
+  assert.deepEqual(visibleWorkbenchCaseIds(['case-1', 'case-2', 'case-3'], deleted), ['case-1', 'case-3']);
+  assert.deepEqual(visibleWorkbenchCaseIds([1, 2], new Set(['2'])), ['1']);
+  assert.equal(visibleWorkbenchCaseIds(undefined, deleted), null);
 });

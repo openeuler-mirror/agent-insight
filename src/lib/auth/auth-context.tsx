@@ -7,12 +7,13 @@ import type { LoginMode } from '@/lib/auth/login-mode';
 
 interface AuthContextType {
   user: string | null;
+  displayName: string | null;
   apiKey: string | null;
   authReady: boolean;
   loginMode: LoginMode | 'invalid' | null;
   loginModeReady: boolean;
   organizationLoginRedirectUrl: string;
-  login: (username: string, apiKey?: string) => void;
+  login: (username: string, apiKey?: string, displayName?: string) => void;
   logout: () => void;
 }
 
@@ -31,6 +32,7 @@ export function getSafeReturnTo(): string | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [loginMode, setLoginMode] = useState<LoginMode | 'invalid' | null>(null);
@@ -67,6 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem('user_id');
       localStorage.removeItem('api_key');
       setUser(null);
+      setDisplayName(null);
       setApiKey(null);
     };
 
@@ -116,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const nextUser = loginMode === 'organization'
           ? data?.displayName || data?.username
           : data?.username || storedUser;
+        const nextDisplayName = data?.displayName || nextUser;
         const nextApiKey = data?.apiKey;
         if (!nextUser || !nextApiKey) throw new Error('Authentication refresh response is incomplete');
         if (cancelled) return;
@@ -124,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('user_id', nextUser);
         localStorage.setItem('api_key', nextApiKey);
         setUser(nextUser);
+        setDisplayName(nextDisplayName);
         setApiKey(nextApiKey);
       } catch (err) {
         if (cancelled) return;
@@ -151,10 +156,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push('/login?' + params.toString());
   }, [authReady, idaasRegionError, pathname, router, user]);
 
-  const login = useCallback((username: string, key?: string) => {
+  const login = useCallback((username: string, key?: string, nextDisplayName?: string) => {
     setIdaasRegionError(null);
     localStorage.setItem('user_id', username);
     setUser(username);
+    setDisplayName(nextDisplayName || username);
     if (key) {
       localStorage.setItem('api_key', key);
       setApiKey(key);
@@ -172,6 +178,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('user_id');
     localStorage.removeItem('api_key');
     setUser(null);
+    setDisplayName(null);
     setApiKey(null);
     setAuthReady(true);
     router.push('/login');
@@ -180,6 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user,
+      displayName,
       apiKey,
       authReady,
       loginMode,

@@ -4,15 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
+import { isolatedHomeEnv } from './helpers/isolated-home';
 import { GET as setupGet } from '../src/app/api/ingest/setup/route';
 import { GET as autoSetupGet } from '../src/app/api/ingest/setup/auto/route';
 import { GET as collectorGet } from '../src/app/api/ingest/setup/qwencode-collector/[file]/route';
 
-function runNode(args: string[], env: NodeJS.ProcessEnv) {
+function runNode(args: string[], env: Partial<NodeJS.ProcessEnv> & { HOME: string }) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd: process.cwd(),
-      env: { ...process.env, ...env },
+      env: isolatedHomeEnv(env.HOME, env),
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });

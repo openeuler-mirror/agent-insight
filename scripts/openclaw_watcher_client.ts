@@ -1,4 +1,9 @@
 import chokidar from 'chokidar';
+function getAgentInsightHome() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => os.homedir()))
+}
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -224,7 +229,7 @@ class OpenClawParser {
 function loadSkillInsightConfig(): { apiKey: string; host: string } {
     const config: { apiKey: string; host: string } = { apiKey: '', host: '' };
     try {
-        for (const envPath of [path.join(os.homedir(), '.agent-insight', '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
+        for (const envPath of [path.join(getAgentInsightHome(), '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
             if (!fs.existsSync(envPath)) continue;
             const content = fs.readFileSync(envPath, 'utf-8');
             const apiKeyMatch = content.match(/AGENT_INSIGHT_API_KEY=(.*)/);

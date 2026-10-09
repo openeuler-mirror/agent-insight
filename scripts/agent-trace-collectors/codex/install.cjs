@@ -15,7 +15,8 @@ const {
   installOtelBlock,
   serializeHooksDocument,
 } = require("./config-core.cjs");
-const { sha256 } = require("../shared/trace-transport.cjs");
+const { sha256, getAgentInsightHome } = require("../shared/trace-transport.cjs");
+const { installSharedModules } = require("../shared/install-modules.cjs");
 
 const COLLECTOR_FILES = [
   "codex-trace-core.cjs",
@@ -122,20 +123,10 @@ async function copyFile(sourcePath, targetPath, mode = 0o600) {
 }
 
 async function installCollectorFiles(sourceDir, collectorDir) {
+  await installSharedModules(path.resolve(sourceDir, "..", "shared"),
+    path.resolve(collectorDir, "..", "shared"), ["trace-transport.cjs"]);
   for (const fileName of COLLECTOR_FILES) {
     await copyFile(path.join(sourceDir, fileName), path.join(collectorDir, fileName));
-  }
-  const sourceShared = path.resolve(sourceDir, "..", "shared", "trace-transport.cjs");
-  const targetShared = path.resolve(collectorDir, "..", "shared", "trace-transport.cjs");
-  try {
-    const current = await fsp.readFile(targetShared);
-    const incoming = await fsp.readFile(sourceShared);
-    if (!current.equals(incoming)) {
-      throw new Error(`Refusing to overwrite a different shared transport at ${targetShared}`);
-    }
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-    await copyFile(sourceShared, targetShared);
   }
 
   const extensionSource = path.join(sourceDir, "vscode-extension");
@@ -210,7 +201,7 @@ async function install(options) {
     .replace(/\/+$/, "");
   assertSupportedRuntime(options);
 
-  const agentInsightDir = path.join(options.homeDir, ".agent-insight");
+  const agentInsightDir = getAgentInsightHome(options.homeDir);
   const collectorDir = path.join(agentInsightDir, "collectors", "codex");
   const codexDir = path.join(options.homeDir, ".codex");
   const hooksPath = path.join(codexDir, "hooks.json");

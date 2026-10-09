@@ -6,6 +6,10 @@ import {
 } from '@/server/agent_datasets_storage';
 import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import {
+  decoratePublicBenchmarkDatasets,
+  isReadOnlyBenchmarkDataset,
+} from '@/lib/benchmark/public-dataset';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,15 +27,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
     }
 
+    const decorated = (await decoratePublicBenchmarkDatasets(user, [dataset]))[0];
     const view = searchParams.get('view');
     if (view === 'case') {
       const caseId = (searchParams.get('caseId') || '').trim();
       if (!caseId) return NextResponse.json({ error: 'caseId is required' }, { status: 400 });
-      const datasetCase = dataset.cases.find(item => item.id === caseId);
+      const datasetCase = decorated.cases.find(item => item.id === caseId);
       if (!datasetCase) return NextResponse.json({ error: 'dataset case not found' }, { status: 404 });
       return NextResponse.json(datasetCase);
     }
-    return NextResponse.json(view === 'items' ? buildAgentDatasetItemsView(dataset) : dataset);
+    return NextResponse.json(view === 'items' ? buildAgentDatasetItemsView(decorated) : decorated);
   } catch (error) {
     console.error('agent-datasets [id] GET error:', error);
     return NextResponse.json({ error: 'failed to load dataset' }, { status: 500 });
@@ -55,6 +60,12 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     if (isBuiltinReliabilityDataset(existing)) {
       return NextResponse.json(
         { error: '内置可靠性评测集不可删除' },
+        { status: 403 },
+      );
+    }
+    if (existing.datasetKind === 'benchmark' || await isReadOnlyBenchmarkDataset(user, idTrim)) {
+      return NextResponse.json(
+        { error: 'Benchmark 数据集由系统导入并维护，不可删除' },
         { status: 403 },
       );
     }

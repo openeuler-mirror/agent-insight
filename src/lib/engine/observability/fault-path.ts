@@ -59,7 +59,12 @@ export function toRawTraceInteractions(input: any[]): RawInteraction[] {
     const out: RawInteraction[] = [];
     for (const item of input) {
         if (!item) continue;
-        if (Array.isArray(item.requestMessages) || item.responseMessage) {
+        // 仅解包历史"传输包装层"：那种容器本身没有 role，只裹着 requestMessages/responseMessage。
+        // 真实消息一定带 role；带 role 的条目即便携带 requestMessages/responseMessage（本轮请求快照/
+        // 响应元数据，如 WorkBuddy/generic/qoder 等 OTel 适配器写入的 assistant 交互），也原样保留，
+        // 否则会把 assistant 正文、tool_calls、usage 全丢成一堆重复的 user 消息（见 workbuddy adapter）。
+        const isTransportWrapper = !item.role && (Array.isArray(item.requestMessages) || item.responseMessage);
+        if (isTransportWrapper) {
             for (const msg of item.requestMessages || []) {
                 if (msg) out.push(msg);
             }

@@ -345,6 +345,104 @@ function normalizedToolOutput(event: OtelTraceEvent): string {
   return (eventOutput(event) || '').replace(/\s+/g, ' ').trim();
 }
 
+function shellOutputPayload(event: OtelTraceEvent): string {
+  const output = eventOutput(event) || '';
+  const matches = [...output.matchAll(/(?:^|\r?\n)Output:\s*(?:\r?\n)?/gi)];
+  const last = matches.at(-1);
+  if (last?.index === undefined) return '';
+  return output.slice(last.index + last[0].length).trim();
+}
+
+function normalizedShellOutputPayload(event: OtelTraceEvent): string {
+  return shellOutputPayload(event).replace(/\s+/g, ' ').trim();
+}
+
+function stableShellOutputEvidence(payload: string): string {
+  const stable = payload.split('[TRUNCATED', 1)[0].replace(/\.{3}\s*$/, '').trim();
+  return stable.length > 160 ? stable.slice(0, 160) : stable;
+}
+
+function shellCommand(event: OtelTraceEvent): string {
+  const rawTool = (event as AnyObj).tool as AnyObj | undefined;
+  const value = attrs(event)['tool.arguments'] ?? rawTool?.arguments;
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return '';
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
+  const args = parsed as AnyObj;
+  return content(args.command ?? args.cmd)?.trim() || '';
+}
+
+interface ShellBatchRecord {
+  command: string;
+  output: string;
+}
+
+function shellBatchRecords(event: OtelTraceEvent): ShellBatchRecord[] {
+  const payload = shellOutputPayload(event);
+  if (!payload) return [];
+  const records: ShellBatchRecord[] = [];
+  for (const line of payload.split(/\r?\n/)) {
+    const candidate = line.trim();
+    if (!candidate.startsWith('{')) continue;
+    try {
+      const parsed = JSON.parse(candidate) as AnyObj;
+      const command = content(parsed.cmd ?? parsed.command)?.trim() || '';
+      const output = typeof parsed.output === 'string' ? parsed.output.replace(/\s+/g, ' ').trim() : '';
+      if (command && output) records.push({ command, output });
+    } catch {
+      // Labeled or truncated batches are handled by output containment below.
+    }
+  }
+  return records;
+}
+
+function toolIntervalsOverlap(left: OtelTraceEvent, right: OtelTraceEvent): boolean {
+  const leftStart = left.startTimeMs || 0;
+  const rightStart = right.startTimeMs || 0;
+  const leftEnd = eventEndMs(left);
+  const rightEnd = eventEndMs(right);
+  return Math.abs(leftStart - rightStart) <= 2_000 &&
+    Math.abs(leftEnd - rightEnd) <= 3_000 &&
+    Math.max(leftStart, rightStart) <= Math.min(leftEnd, rightEnd) + 1_000;
+}
+
+function otelShellBatchCoveredByHooks(otel: OtelTraceEvent, hooks: OtelTraceEvent[]): boolean {
+  if (toolFamily(otel) !== 'shell' || shellCommand(otel)) return false;
+  const candidates = hooks.filter((hook) =>
+    hook.sessionId === otel.sessionId &&
+    hook.parentSpanId === otel.parentSpanId &&
+    toolFamily(hook) === 'shell' &&
+    toolIntervalsOverlap(hook, otel));
+  if (candidates.length === 0) return false;
+
+  const records = shellBatchRecords(otel);
+  if (records.length > 0) {
+    const unmatchedHooks = [...candidates];
+    for (const record of records) {
+      const index = unmatchedHooks.findIndex((hook) =>
+        shellCommand(hook) === record.command &&
+        normalizedShellOutputPayload(hook) === record.output);
+      if (index < 0) return false;
+      unmatchedHooks.splice(index, 1);
+    }
+    return true;
+  }
+
+  if (candidates.length < 2) return false;
+  const otelPayload = normalizedShellOutputPayload(otel);
+  return candidates.every((hook) => {
+    const hookPayload = normalizedShellOutputPayload(hook);
+    const evidence = stableShellOutputEvidence(hookPayload);
+    return evidence.length >= 16 && otelPayload.includes(evidence);
+  });
+}
+
 function toolSource(event: OtelTraceEvent): string {
   return content(attrs(event)['codex.tool.source']) || '';
 }
@@ -365,17 +463,21 @@ function isHookOtelToolPair(left: OtelTraceEvent, right: OtelTraceEvent): boolea
   if (left.sessionId !== right.sessionId || left.parentSpanId !== right.parentSpanId) return false;
   if (toolFamily(left) !== toolFamily(right)) return false;
 
-  const leftStart = left.startTimeMs || 0;
-  const rightStart = right.startTimeMs || 0;
-  const leftEnd = eventEndMs(left);
-  const rightEnd = eventEndMs(right);
-  if (Math.abs(leftStart - rightStart) > 2_000 || Math.abs(leftEnd - rightEnd) > 3_000) return false;
-  if (Math.max(leftStart, rightStart) > Math.min(leftEnd, rightEnd) + 250) return false;
+  if (!toolIntervalsOverlap(left, right)) return false;
 
   const leftOutput = normalizedToolOutput(left);
   const rightOutput = normalizedToolOutput(right);
-  return Boolean(leftOutput && rightOutput &&
-    (leftOutput.includes(rightOutput) || rightOutput.includes(leftOutput)));
+  if (leftOutput && rightOutput &&
+    (leftOutput.includes(rightOutput) || rightOutput.includes(leftOutput))) return true;
+
+  if (toolFamily(left) !== 'shell') return false;
+  const leftPayload = normalizedShellOutputPayload(left);
+  const rightPayload = normalizedShellOutputPayload(right);
+  if (leftPayload && leftPayload === rightPayload) return true;
+  const leftEvidence = stableShellOutputEvidence(leftPayload);
+  const rightEvidence = stableShellOutputEvidence(rightPayload);
+  return Boolean(leftEvidence.length >= 16 && rightEvidence.length >= 16 &&
+    (leftPayload.includes(rightEvidence) || rightPayload.includes(leftEvidence)));
 }
 
 function mergeHookOtelTool(hook: OtelTraceEvent, otel: OtelTraceEvent): OtelTraceEvent {
@@ -446,10 +548,14 @@ export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTrac
   const otelTools = snapshots.filter((event) =>
     !hasToolSource(event, 'hook') && hasToolSource(event, 'otel') &&
     ['tool', 'mcp'].includes(semanticKind(event)));
+  const coveredOtelBatches = new Set(
+    otelTools.filter((otel) => otelShellBatchCoveredByHooks(otel, hookTools)),
+  );
+  const pairableOtelTools = otelTools.filter((otel) => !coveredOtelBatches.has(otel));
   const hookMatches = new Map<OtelTraceEvent, OtelTraceEvent[]>();
   const otelMatches = new Map<OtelTraceEvent, OtelTraceEvent[]>();
   for (const hook of hookTools) {
-    const matches = otelTools.filter((otel) => isHookOtelToolPair(hook, otel));
+    const matches = pairableOtelTools.filter((otel) => isHookOtelToolPair(hook, otel));
     hookMatches.set(hook, matches);
     for (const otel of matches) {
       const reverse = otelMatches.get(otel) || [];
@@ -472,7 +578,7 @@ export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTrac
     .flatMap((event) => {
       const merged = mergedHooks.get(event);
       if (merged) return [merged];
-      return mergedOtels.has(event) ? [] : [event];
+      return mergedOtels.has(event) || coveredOtelBatches.has(event) ? [] : [event];
     })
     .sort((left, right) =>
       (left.startTimeMs || 0) - (right.startTimeMs || 0) ||

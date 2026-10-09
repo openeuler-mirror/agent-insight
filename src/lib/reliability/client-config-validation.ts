@@ -9,6 +9,7 @@ export type BuiltinSchemaField = {
   key: string
   label: string
   type: SchemaFieldType
+  format?: 'http-url'
   min?: number
   max?: number
   required?: boolean
@@ -89,6 +90,22 @@ export function validateConfigValues(
 
     if (raw === '' || raw === null || raw === undefined) {
       if (field.required) fail('不能为空')
+      continue
+    }
+
+    if (field.format === 'http-url') {
+      if (typeof raw !== 'string') {
+        fail('必须是有效的 HTTP/HTTPS URL')
+        continue
+      }
+      try {
+        const url = new URL(raw)
+        if (!/^https?:\/\//i.test(raw) || !url.hostname || !['http:', 'https:'].includes(url.protocol)) {
+          fail('必须是有效的 HTTP/HTTPS URL')
+        }
+      } catch {
+        fail('必须是有效的 HTTP/HTTPS URL')
+      }
     }
   }
   return errors

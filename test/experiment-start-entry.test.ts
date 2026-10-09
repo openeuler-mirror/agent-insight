@@ -7,7 +7,7 @@ const root = process.cwd();
 
 test('全局实验详情是纯进度视图，并提供返回实验列表入口', () => {
   const detailPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/[id]/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
     'utf8',
   );
 
@@ -22,7 +22,7 @@ test('全局实验详情是纯进度视图，并提供返回实验列表入口',
 
 test('向导仅在 run 请求成功后进入详情，启动失败回滚临时实验', () => {
   const wizardPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentWizard.tsx'),
     'utf8',
   );
   const runRequest = wizardPage.indexOf('const runRes = await apiFetch');
@@ -56,10 +56,58 @@ test('生成 Trace 先进入 running，绑定完成后显式继续调度评估',
 
 test('实验详情展示 Trace 生成进度和失败 Case，失败 Trace 不显示为实际输出', () => {
   const detailPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/[id]/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
     'utf8',
   );
   assert.match(detailPage, /Trace 生成失败/);
   assert.match(detailPage, /已跳过评估且不计入综合得分/);
   assert.match(detailPage, /正在生成 Trace/);
+});
+
+test('Benchmark Case 明细表按 Presentation 展示列', () => {
+  const detailPage = fs.readFileSync(
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
+    'utf8',
+  );
+
+  assert.match(detailPage, /benchmarkPresentation\?\.caseTable\.columns/);
+  assert.match(detailPage, /benchmarkCaseColumns\.map/);
+  assert.match(detailPage, /benchmarkPresentationValue/);
+  assert.doesNotMatch(detailPage, />Instance ID</);
+});
+
+test('Benchmark 提交物已提交但 Evaluator 未完成时展示评测中', () => {
+  const detailPage = fs.readFileSync(
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
+    'utf8',
+  );
+
+  assert.match(detailPage, /isBenchmarkEvaluationInProgress\(c\.benchmark\)/);
+  assert.match(detailPage, /Benchmark 评测中…/);
+  assert.match(detailPage, /提交物已生成，等待执行器确认…/);
+  assert.match(detailPage, /c\.benchmark\.submissions/);
+  assert.doesNotMatch(detailPage, /c\.benchmark\.submission\b/);
+});
+
+test('Benchmark Case 使用 Run 状态，不被通用 Trace pending 覆盖', () => {
+  const detailRoute = fs.readFileSync(
+    path.join(root, 'src/app/api/experiments/[id]/route.ts'),
+    'utf8',
+  );
+
+  assert.match(detailRoute, /traceStatus: benchmarkRun \? benchmarkTraceStatus : traceState\?\.status \|\| null/);
+  assert.match(detailRoute, /traceError: benchmarkRun \? benchmarkRun\.failureMessage : traceState\?\.error \|\| null/);
+});
+
+test('Benchmark 文件使用完整通用列表，并按媒体类型决定是否预览', () => {
+  const artifactActions = fs.readFileSync(
+    path.join(root, 'src/components/eval/BenchmarkArtifactActions.tsx'),
+    'utf8',
+  );
+
+  assert.match(artifactActions, /presentBenchmarkArtifacts/);
+  assert.match(artifactActions, /canPreviewBenchmarkArtifact/);
+  assert.match(artifactActions, /submissionArtifacts/);
+  assert.match(artifactActions, /evidenceArtifacts/);
+  assert.doesNotMatch(artifactActions, /report\.json|test_output\.txt|run_instance\.log/);
 });

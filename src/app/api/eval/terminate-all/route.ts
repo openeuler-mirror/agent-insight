@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { markUserTerminated } from '@/server/user_termination_registry';
 import { abortTrajectoryEvalRunsForUser } from '@/server/trajectory_eval_run_registry';
 import { killOpencodeForUser } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
-import { abortBatchRunsForUser } from '@/app/api/debug/batch-tasks/[taskId]/route';
+import { abortBatchRunsForUser } from '@/server/batch_eval_run_registry';
 import { prismaRaw } from '@/lib/storage/prisma';
 
 /**

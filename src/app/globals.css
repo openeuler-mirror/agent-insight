@@ -955,6 +955,16 @@ tr:hover {
 .highlight-bad { color: var(--error); }
 .highlight-good { color: var(--success); }
 
+.experiment-baseline-trend-dot:focus { outline: none; }
+.experiment-baseline-trend-chart .recharts-wrapper:focus,
+.experiment-baseline-trend-chart .recharts-surface:focus {
+  outline: none !important;
+}
+.experiment-baseline-trend-dot:focus-visible {
+  stroke: var(--primary);
+  stroke-width: 4;
+}
+
 .tab-btn {
   background: transparent;
   border: none;

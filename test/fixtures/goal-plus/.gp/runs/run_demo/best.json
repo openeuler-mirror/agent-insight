@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "run_id": "run_demo",
+  "candidate_id": "candidate_001",
+  "iteration": 2,
+  "commit": "cccccccccccccccccccccccccccccccccccccccc",
+  "score": 0.92,
+  "metric_name": "quality",
+  "metric_direction": "maximize",
+  "artifact_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "workspace": "/home/example/private/worktree",
+  "changed_files": ["src/solver.ts"],
+  "updated_at": "2026-09-01T01:08:00Z"
+}

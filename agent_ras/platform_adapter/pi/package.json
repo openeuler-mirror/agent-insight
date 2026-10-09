@@ -1,0 +1,9 @@
+{
+  "name": "agent-insight-ras-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Insight RAS pi extension runtime dependencies (installed into ~/.pi/agent/extensions)",
+  "dependencies": {
+    "koffi": "^2.9.0"
+  }
+}

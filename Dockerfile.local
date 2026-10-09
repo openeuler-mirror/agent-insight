@@ -1,7 +1,7 @@
 FROM node:20-bookworm-slim AS builder
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
-    AGENT_INSIGHT_DATA_DIR=/tmp/agent-insight-build
+    AGENT_INSIGHT_HOME=/tmp/agent-insight-build
 
 WORKDIR /src
 
@@ -36,7 +36,7 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
-    AGENT_INSIGHT_DATA_DIR=/data/agent-insight \
+    AGENT_INSIGHT_HOME=/data/agent-insight \
     AGENT_INSIGHT_BUILD_ID=${LOCAL_BUILD_ID} \
     PATH=/app/node_modules/.bin:$PATH \
     OPENCODE_BIN=/app/node_modules/.bin/opencode

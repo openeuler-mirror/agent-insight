@@ -56,8 +56,10 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 **改完功能后，必须同步刷新对应指南。** `docs/` 下有两套面向读者的文档，功能变更只要波及它们就要连带更新，别让读者读到过期信息：
 
 - 改动影响**用户能感知的东西**（新功能 / 交互或流程变化 / 新增配置项 / 概念或术语调整）→ 更新 [`docs/user-guide/`](docs/user-guide/) 对应页。
-- 改动影响**架构 / 模块 / API 与契约 / 数据流 / 扩展方式** → 更新 [`docs/developer-guide/`](docs/developer-guide/) 对应页（先看 [`INDEX.md`](docs/developer-guide/INDEX.md) 找页；该指南带 provenance commit，更新后按其 “How to update” 把 commit 顺手推到当前 HEAD）。
+- 改动影响**架构 / 模块 / API 与契约 / 数据流 / 扩展方式** → 更新 [`docs/developer-guide/`](docs/developer-guide/) 对应页（可先看 [`INDEX.md`](docs/developer-guide/INDEX.md) 找页）。
 - 两边都影响就两边都改。判断口径很简单：**别人照旧文档去操作 / 理解会被带偏，就必须改。**
+
+**开发者指南索引保持稳定**：`docs/developer-guide/INDEX.md` 只维护目录导航和术语表。仅当指南页面增删、重命名、导航目标或术语本身变化时修改它；一般功能变更只更新对应指南页。不要在 INDEX 中记录 commit / 分支 / 日期、working-tree overlay 或逐次变更摘要。审查 MR 时按此规则检查 INDEX 的改动，不符合条件的改动请作者移回对应指南页。
 
 ## 5. 改动验证
 

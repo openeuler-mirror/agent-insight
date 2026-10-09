@@ -1,3 +1,4 @@
+import { createAgentRunError, sanitizeAgentDiagnostic, type AgentRunError } from '../../../../scripts/agent-run-diagnostics.cjs';
 import { randomUUID } from 'node:crypto';
 import { Agent, setGlobalDispatcher } from 'undici';
 
@@ -178,6 +179,8 @@ export interface RunGeneralAgentInput {
   handlers?: ChatHandlers;
   chatOptions?: ChatOptions;
   timeoutMs?: number;
+  /** 连续多久没有非心跳事件就中止底层 prompt；0 或未传表示不启用。 */
+  progressTimeoutMs?: number;
   /**
    * true: 这次调用起一个**独立** opencode 进程,跑完立刻杀 (per-task ephemeral)。
    *   避免跨任务 server 内存级软污染 (plugin 全局缓存 / provider runtime cache /
@@ -258,6 +261,11 @@ export interface RunGeneralAgentResult {
 export async function runGeneralAgent(
   input: RunGeneralAgentInput,
 ): Promise<RunGeneralAgentResult> {
+  const { experimentSignal } = await import('@/lib/engine/experiment/cancellation-context');
+  const cancellation = experimentSignal();
+  cancellation?.throwIfAborted();
+  if (cancellation) input = { ...input, chatOptions: { ...input.chatOptions,
+    signal: input.chatOptions?.signal ? AbortSignal.any([input.chatOptions.signal, cancellation]) : cancellation } };
   const user = String(input.user || '').trim();
   if (!user) throw new Error('user is required');
   // 把 query 里的 `~/` 展开成执行机绝对 HOME, 再交给 agent —— `~` 是 shell 语法糖, agent 用
@@ -465,20 +473,92 @@ async function runGeneralAgentWithClient(
       }
     : defaultOnQuestion;
 
+  const progressTimeoutMs = Math.max(0, Number(input.progressTimeoutMs) || 0);
+  const progressController = progressTimeoutMs > 0 ? new AbortController() : null;
+  const externalSignal = input.chatOptions?.signal;
+  let progressTimer: NodeJS.Timeout | null = null;
+  let progressTimedOut = false;
+  const clearProgressWatchdog = () => {
+    if (!progressTimer) return;
+    clearTimeout(progressTimer);
+    progressTimer = null;
+  };
+  const resetProgressWatchdog = () => {
+    if (!progressController || progressController.signal.aborted) return;
+    clearProgressWatchdog();
+    progressTimer = setTimeout(() => {
+      progressTimedOut = true;
+      progressController.abort(new Error(`general agent made no progress for ${progressTimeoutMs}ms`));
+    }, progressTimeoutMs);
+  };
+  const abortFromExternalSignal = () => {
+    if (!progressController?.signal.aborted) progressController?.abort(externalSignal?.reason);
+  };
+  if (progressController && externalSignal) {
+    if (externalSignal.aborted) abortFromExternalSignal();
+    else externalSignal.addEventListener('abort', abortFromExternalSignal, { once: true });
+  }
+
   const mergedHandlers: ChatHandlers = {
     ...callerHandlers,
     onPermission: wrapPermission,
     onQuestion: wrapQuestion,
+    onRawEvent: event => {
+      if (event.type !== 'server.connected' && event.type !== 'server.heartbeat') {
+        resetProgressWatchdog();
+      }
+      callerHandlers.onRawEvent?.(event);
+    },
   };
 
   const chatOptions: ChatOptions = {
     streamTimeoutMs: input.timeoutMs ?? 5 * 60 * 1000,
     idleTimeoutMs: 60_000,
     ...(input.chatOptions || {}),
+    ...(progressController ? { signal: progressController.signal } : {}),
   };
 
   console.log('[general-agent] calling client.chat, sessionId:', sessionId);
-  const result = await client.chat(sessionId, payload, mergedHandlers, chatOptions);
+  const executionStartedAt = new Date().toISOString();
+  resetProgressWatchdog();
+  const result = await (async () => {
+    try {
+      const response = await client.chat(sessionId, payload, mergedHandlers, chatOptions);
+      if (progressTimedOut) throw createAgentRunError('AGENT_TIMEOUT', `general agent made no progress for ${progressTimeoutMs}ms`);
+      return response;
+    } catch (error) {
+      const source = error as Partial<AgentRunError>;
+      const failure = createAgentRunError(
+        progressTimedOut ? 'AGENT_TIMEOUT' : source.code || 'MODEL_ERROR',
+        sanitizeAgentDiagnostic(error instanceof Error ? error.message : String(error)),
+        { ...source.runFacts, traceId: sessionId, startedAt: executionStartedAt, finishedAt: new Date().toISOString() },
+      );
+      if (input.recordTraceAs) {
+        try {
+          const { recordEvaluatorExecution } = await import('@/lib/engine/evaluation/evaluator-execution-recorder');
+          await recordEvaluatorExecution(client, {
+            taskId: sessionId, agentName: input.recordTraceAs, user, query,
+            skill: effectiveTraceSkill, skillVersion: skillMeta?.version ?? input.skillVersion,
+            failure, startedAt: executionStartedAt, completedAt: failure.runFacts?.finishedAt,
+          });
+        } catch (recordError) {
+          console.warn('[general-agent] failed to preserve failed Trace:', sanitizeAgentDiagnostic(recordError));
+        }
+      }
+      throw failure;
+    } finally {
+      clearProgressWatchdog();
+      externalSignal?.removeEventListener('abort', abortFromExternalSignal);
+    }
+  })();
+  if (progressTimedOut) {
+    throw new Error(`general agent made no progress for ${progressTimeoutMs}ms`);
+  }
+  if (externalSignal?.aborted) {
+    throw externalSignal.reason instanceof Error
+      ? externalSignal.reason
+      : new Error('general agent aborted');
+  }
   console.log('[general-agent] client.chat done:', {
     textLen: result.text.length,
     stats: result.stats,
@@ -501,6 +581,8 @@ async function runGeneralAgentWithClient(
         skill: effectiveTraceSkill,
         skillVersion: skillMeta?.version ?? input.skillVersion,
         fallbackOutput: result.text,
+        startedAt: executionStartedAt,
+        completedAt: new Date().toISOString(),
       });
     } catch (err) {
       console.warn(`[general-agent] recordTraceAs failed for session ${sessionId}:`, (err as Error)?.message || err);

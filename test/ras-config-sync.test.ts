@@ -369,9 +369,11 @@ test('defaultRasConfigFetch to closed loopback finishes within 5s', async () => 
   const { defaultRasConfigFetch, RAS_CONFIG_CURL_MAX_S } = await loadSyncMod()
   assert.ok(RAS_CONFIG_CURL_MAX_S <= 3)
   const srv = net.createServer()
-  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve))
-  const { port } = srv.address()
-  await new Promise((resolve, reject) => srv.close((err) => (err ? reject(err) : resolve())))
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve))
+  const address = srv.address()
+  assert.ok(address && typeof address === 'object')
+  const { port } = address
+  await new Promise<void>((resolve, reject) => srv.close((err) => (err ? reject(err) : resolve())))
   const url = `http://127.0.0.1:${port}/api/ingest/ras-config?platform=opencode`
   const started = Date.now()
   await assert.rejects(() => defaultRasConfigFetch(url, { method: 'GET' }))
@@ -385,9 +387,11 @@ test('defaultRasConfigFetch to closed loopback finishes within 5s', async () => 
 test('syncCapabilityConfigFromInsight fail-opens when loopback Insight is down', async () => {
   const { syncCapabilityConfigFromInsight } = await loadSyncMod()
   const srv = net.createServer()
-  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve))
-  const { port } = srv.address()
-  await new Promise((resolve, reject) => srv.close((err) => (err ? reject(err) : resolve())))
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve))
+  const address = srv.address()
+  assert.ok(address && typeof address === 'object')
+  const { port } = address
+  await new Promise<void>((resolve, reject) => srv.close((err) => (err ? reject(err) : resolve())))
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-sync-'))
   fs.writeFileSync(

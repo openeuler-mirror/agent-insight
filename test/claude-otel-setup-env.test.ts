@@ -24,21 +24,21 @@ test('Claude Code OTel setup preserves tool output sources in shell and PowerShe
       `${route} should default raw API bodies to file mode`,
     );
     assert.ok(
-      source.includes('mkdir -p "$HOME/.agent-insight/claude_raw_bodies"'),
+      source.includes('mkdir -p "$AGENT_INSIGHT_HOME/claude_raw_bodies"'),
       `${route} should create and use the shell raw body directory`,
     );
     assert.match(
       source,
-      /OTEL_LOG_RAW_API_BODIES="\\?\$\{AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-file:\$HOME\/\.agent-insight\/claude_raw_bodies\}"/,
+      /OTEL_LOG_RAW_API_BODIES="\\?\$\{AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-file:\$AGENT_INSIGHT_HOME\/claude_raw_bodies\}"/,
       `${route} should default the shell wrapper to raw body file mode`,
     );
     assert.ok(
-      source.includes('$rawBodyDir = Join-Path $env:USERPROFILE ".agent-insight\\\\claude_raw_bodies"') &&
+      source.includes('$rawBodyDir = Join-Path $env:AGENT_INSIGHT_HOME "claude_raw_bodies"') &&
         source.includes('AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES = "file:$rawBodyDir"'),
       `${route} should create and use the PowerShell raw body directory`,
     );
     assert.ok(
-      source.includes('grep -q "\\\\.agent-insight/claude_otel_env\\\\.sh"'),
+      source.includes('grep -Fq "$AGENT_INSIGHT_HOME/claude_otel_env.sh"'),
       `${route} should not let a legacy .skill-insight shell source block the new wrapper`,
     );
     assert.ok(
@@ -46,7 +46,7 @@ test('Claude Code OTel setup preserves tool output sources in shell and PowerShe
       `${route} should not use a broad shell source check`,
     );
     assert.ok(
-      source.includes('profileText.Contains(".agent-insight\\\\claude_otel_env.ps1")'),
+      source.includes('profileText.Contains($claudeOtelPath)'),
       `${route} should not let a legacy .skill-insight PowerShell source block the new wrapper`,
     );
     assert.ok(

@@ -33,6 +33,19 @@ import {
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { once } from 'node:events'
+import { createServer } from 'node:http'
+import { createRequire } from 'node:module'
+
+const daemon = createRequire(import.meta.url)('../scripts/reliability-client.cjs') as {
+  configTargetPath: (platform: string, scope: string) => string
+  executeAction: (
+    cfg: Record<string, unknown>,
+    frame: Record<string, unknown>,
+    sendStatus: (status: string, extra: { result?: Record<string, unknown> }) => Promise<void>,
+  ) => Promise<void>
+}
+const FAULT_MODE_SERVICE_URL = 'inference.fault_mode_classification_service_url'
 
 function getByPath(obj: unknown, pathKey: string): unknown {
   return pathKey.split('.').reduce<unknown>((acc, part) => {
@@ -152,6 +165,157 @@ async function cleanup() {
 }
 
 // ---------------------------------------------------------------- registration
+
+test('fault mode classification URL sync writes and clears the selected client platform file', async () => {
+  const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-classifier-cap-'))
+  const clientHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-classifier-client-'))
+  const runtimeHome = path.join(clientHome, 'ras')
+  const previousClientHome = process.env.AGENT_INSIGHT_HOME
+  const previousRasHome = process.env.AGENT_INSIGHT_RAS_HOME
+  process.env.AGENT_INSIGHT_HOME = clientHome
+  process.env.AGENT_INSIGHT_RAS_HOME = runtimeHome
+  resetCapabilityConfigStoreForTests(capDir)
+  const server = createServer((req, res) => {
+    void (async () => {
+      const configRef = decodeURIComponent((req.url || '').split('/').pop() || '')
+      const snapshot = await getConfigSnapshot({
+        clientId: String(req.headers['x-agent-insight-client-id']),
+        configRef,
+      })
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(snapshot))
+    })().catch((error: Error) => {
+      res.statusCode = 500
+      res.end(JSON.stringify({ error: error.message }))
+    })
+  })
+  try {
+    const client = await newClient()
+    const initial = await getClientConfigView(TEST_USER, client.clientId, 'opencode')
+    assert.equal(getByPath(initial.effectiveConfig, FAULT_MODE_SERVICE_URL), '')
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    assert.ok(address && typeof address !== 'string')
+    const cfg = {
+      insightBaseUrl: `http://127.0.0.1:${address.port}`,
+      clientId: client.clientId,
+      deviceCredential: client.deviceCredential,
+    }
+    const peerFile = daemon.configTargetPath('xiaoo', 'client')
+    const peerContents = JSON.stringify({ config: { inference: { fault_mode_classification_service_url: 'https://peer.example/classify' } } })
+    fs.mkdirSync(path.dirname(peerFile), { recursive: true })
+    fs.writeFileSync(peerFile, peerContents)
+    for (const url of ['https://classifier.example/v1/classify', '']) {
+      const synced = await putClientConfig({
+        user: TEST_USER,
+        clientId: client.clientId,
+        platform: 'opencode',
+        overrideDiff: url ? { [FAULT_MODE_SERVICE_URL]: url } : {},
+        sync: true,
+      })
+      assert.equal(synced.status, 'sync_notified')
+      const statuses: string[] = []
+      await daemon.executeAction(cfg, {
+        action: 'APPLY_CLIENT_CONFIG',
+        payload: { platform: 'opencode', configRef: synced.configRef, configVersion: synced.configVersion, checksum: synced.checksum },
+      }, async (status, extra) => {
+        statuses.push(status)
+        if (status === 'SUCCEEDED') {
+          assert.equal(extra.result?.state, 'WRITTEN')
+          await markDeliveryWritten({ clientId: client.clientId, configRef: String(extra.result?.configRef) })
+        }
+      })
+      assert.deepEqual(statuses, ['RUNNING', 'SUCCEEDED'])
+      const written = JSON.parse(fs.readFileSync(daemon.configTargetPath('opencode', 'client'), 'utf8'))
+      assert.equal(written.clientId, client.clientId)
+      assert.equal(written.platform, 'opencode')
+      assert.equal(written.configVersion, synced.configVersion)
+      assert.equal(getByPath(written.config, FAULT_MODE_SERVICE_URL), url)
+      assert.equal(getByPath(written.config, 'inference.faultModeClassificationServiceUrl'), undefined)
+      assert.equal((await getClientConfigView(TEST_USER, client.clientId, 'opencode')).delivery.status, 'written')
+    }
+    assert.equal(fs.existsSync(peerFile) ? fs.readFileSync(peerFile, 'utf8') : null, peerContents)
+  } finally {
+    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()))
+    if (previousClientHome === undefined) delete process.env.AGENT_INSIGHT_HOME
+    else process.env.AGENT_INSIGHT_HOME = previousClientHome
+    if (previousRasHome === undefined) delete process.env.AGENT_INSIGHT_RAS_HOME
+    else process.env.AGENT_INSIGHT_RAS_HOME = previousRasHome
+    resetCapabilityConfigStoreForTests()
+    fs.rmSync(capDir, { recursive: true, force: true })
+    fs.rmSync(clientHome, { recursive: true, force: true })
+    await cleanup()
+  }
+})
+
+test('invalid fault mode classification URL is rejected before configuration is saved', async () => {
+  try {
+    const client = await newClient()
+    await assert.rejects(putClientConfig({
+      user: TEST_USER,
+      clientId: client.clientId,
+      platform: 'opencode',
+      overrideDiff: { [FAULT_MODE_SERVICE_URL]: 'ftp://classifier.example' },
+      sync: true,
+    }), { code: 'CONFIG_FIELD_INVALID' })
+    const view = await getClientConfigView(TEST_USER, client.clientId, 'opencode')
+    assert.equal(view.revision, 0)
+    assert.deepEqual(view.overrideDiff, {})
+    assert.equal(view.delivery.configRef, null)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('saved camel-case classification URL is preserved and resaved with a snake-case key', async () => {
+  const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-classifier-rename-'))
+  resetCapabilityConfigStoreForTests(capDir)
+  try {
+    const client = await newClient()
+    const legacyKey = 'inference.faultModeClassificationServiceUrl'
+    const url = 'https://classifier.example/classify'
+    await prismaRaw.reliabilityClientConfig.create({
+      data: { clientId: client.clientId, user: TEST_USER, platform: 'opencode', overrideJson: JSON.stringify({ [legacyKey]: url }) },
+    })
+    const view = await getClientConfigView(TEST_USER, client.clientId, 'opencode')
+    assert.equal(getByPath(view.effectiveConfig, FAULT_MODE_SERVICE_URL), url)
+    assert.deepEqual(view.overrideDiff, { [FAULT_MODE_SERVICE_URL]: url })
+    assert.equal(view.fieldSources[FAULT_MODE_SERVICE_URL], 'client_override')
+    const synced = await putClientConfig({ user: TEST_USER, clientId: client.clientId, platform: 'opencode', sync: true })
+    const snapshot = await getConfigSnapshot({ clientId: client.clientId, configRef: synced.configRef! })
+    assert.equal(getByPath(snapshot.config, FAULT_MODE_SERVICE_URL), url)
+    assert.equal(getByPath(snapshot.config, legacyKey), undefined)
+    const saved = await prismaRaw.reliabilityClientConfig.findUniqueOrThrow({ where: { clientId_platform: { clientId: client.clientId, platform: 'opencode' } } })
+    assert.deepEqual(JSON.parse(saved.overrideJson), { [FAULT_MODE_SERVICE_URL]: url })
+    await deleteClientConfig({ user: TEST_USER, clientId: client.clientId, platform: 'opencode', path: legacyKey })
+    assert.equal(getByPath((await getClientConfigView(TEST_USER, client.clientId, 'opencode')).effectiveConfig, FAULT_MODE_SERVICE_URL), '')
+  } finally {
+    resetCapabilityConfigStoreForTests()
+    fs.rmSync(capDir, { recursive: true, force: true })
+    await cleanup()
+  }
+})
+
+test('camel-case URL submissions are validated and the snake-case key takes precedence', async () => {
+  try {
+    const client = await newClient()
+    const legacyKey = 'inference.faultModeClassificationServiceUrl'
+    await assert.rejects(putClientConfig({ user: TEST_USER, clientId: client.clientId, platform: 'opencode', overrideDiff: { [legacyKey]: 'ftp://classifier.example' } }), { code: 'CONFIG_FIELD_INVALID' })
+    for (const overrideDiff of [
+      { [legacyKey]: 'https://classifier.example/classify' },
+      { [legacyKey]: 'https://classifier.example/classify', [FAULT_MODE_SERVICE_URL]: '' },
+    ]) {
+      await putClientConfig({ user: TEST_USER, clientId: client.clientId, platform: 'opencode', overrideDiff })
+      const view = await getClientConfigView(TEST_USER, client.clientId, 'opencode')
+      const expected = overrideDiff[FAULT_MODE_SERVICE_URL] ?? overrideDiff[legacyKey]
+      assert.equal(getByPath(view.effectiveConfig, FAULT_MODE_SERVICE_URL), expected)
+      assert.deepEqual(view.overrideDiff, { [FAULT_MODE_SERVICE_URL]: expected })
+    }
+  } finally {
+    await cleanup()
+  }
+})
 
 test('install token is single-use and expires', async () => {
   try {

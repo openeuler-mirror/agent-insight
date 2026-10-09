@@ -1,13 +1,36 @@
-import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
-import { GET as listExperimentAgents } from '@/app/api/experiments/agents/route';
-import { GET as listExperimentTraces } from '@/app/api/experiments/traces/route';
-import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
-import { prisma } from '@/lib/storage/prisma';
+let prisma: typeof import('@/lib/storage/prisma')['prisma'];
+let listExperimentAgents: typeof import('@/app/api/experiments/agents/route')['GET'];
+let listExperimentTraces: typeof import('@/app/api/experiments/traces/route')['GET'];
+let createExperimentWatcher: typeof import('@/lib/engine/experiment/experiment-watch')['createExperimentWatcher'];
+let root: string;
+
+test.before(async () => {
+  root = mkdtempSync(path.join(os.tmpdir(), 'experiment-agent-ownership-'));
+  process.env.AGENT_INSIGHT_HOME = root;
+  delete process.env.AGENT_INSIGHT_DATA_DIR;
+  process.env.DATABASE_URL = `file:${path.join(root, 'test.db')}`;
+  writeFileSync(path.join(root, 'test.db'), '');
+  execFileSync(process.execPath, [
+    path.resolve('node_modules/prisma/build/index.js'), 'db', 'push', '--skip-generate',
+    '--schema', path.resolve('prisma/schema.prisma'),
+  ], { env: process.env, stdio: 'pipe', timeout: 60_000 });
+  ({ prisma } = await import('@/lib/storage/prisma'));
+  ({ GET: listExperimentAgents } = await import('@/app/api/experiments/agents/route'));
+  ({ GET: listExperimentTraces } = await import('@/app/api/experiments/traces/route'));
+  ({ createExperimentWatcher } = await import('@/lib/engine/experiment/experiment-watch'));
+});
+
+test.after(async () => {
+  await prisma?.$disconnect();
+  if (root) rmSync(root, { recursive: true, force: true });
+});
 
 const RUN_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const TEST_USER = `experiment-owner-${RUN_ID}`;
@@ -108,7 +131,9 @@ test('experiment candidates, traces, and watch mode exclude system-owned agents'
   assert.equal(systemTracesResponse.status, 200);
   assert.equal((await systemTracesResponse.json()).total, 0);
 
-  await triggerExperimentWatchForTask(TEST_USER, SYSTEM_TASK);
+  const watcher = createExperimentWatcher();
+  await watcher.scan();
+  await watcher.waitForIdle();
   assert.equal(
     await prisma.experimentCase.count({ where: { experimentId: watchExperiment.id } }),
     0,

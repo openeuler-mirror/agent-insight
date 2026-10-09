@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
+import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 interface ActiveGrayscaleRun {
@@ -162,7 +163,7 @@ export async function GET(req: NextRequest) {
                 activeRun: activeRuns().get(storeKey) || null,
             };
         });
-        return NextResponse.json(parsed);
+        return NextResponse.json((await Promise.all(parsed.map(visibleExperimentTask))).filter(Boolean));
     } catch (err) {
         console.error('[GRAYSCALE_TASKS_GET] Failed:', err);
         return NextResponse.json({ error: 'Failed to fetch tasks' }, { status: 500 });

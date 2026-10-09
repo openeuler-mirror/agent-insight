@@ -12,6 +12,9 @@ _PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
     "openjiuwen": {
         "supports_host_skill_judge": False,
     },
+    "pi": {
+        "supports_host_skill_judge": False,
+    },
     "xiaoo": {
         "supports_host_skill_judge": True,
     },

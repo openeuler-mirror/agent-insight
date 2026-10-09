@@ -2,8 +2,8 @@
 
 const fs = require('fs')
 const http = require('http')
-const os = require('os')
 const path = require('path')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
 function updateEnvFile(envPath, updates) {
   const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : ''
@@ -158,7 +158,8 @@ function requestLoginMode(port, host = 'localhost', timeoutMs = 5000) {
 }
 
 async function syncAdminApiKey(options = {}) {
-  const dataRoot = options.dataRoot || process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight')
+  const dataRoot = options.dataRoot
+    || getAgentInsightHome()
   const port = Number(options.port || process.env.PORT || 3000)
   const host = options.host || `http://localhost:${port}`
   const envPath = path.join(dataRoot, '.env')

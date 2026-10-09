@@ -61,6 +61,14 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 - 查看异常样本归因： [诊断分析](./diagnosis)
 - 将线上问题沉淀为回归验证： [评估与实验](../evaluation/index)
 
+## Goal Plus 接入
+
+Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；随 Pi 内置的只读观察器在确认真实 `/goal-plus` 启动后自动登记 `.gp`、导入 worker Trace 并上报主从关系，最终在主 Trace 下展示 worker。安装、自动激活、重试口径及卸载说明见 [Goal Plus 观测接入](goal-plus.md)。
+
+## MCTS xGovernor 接入
+
+MCTS 可通过外部启动器和本机透明 xGovernor 代理接入，无需修改 MCTS 源码。平台展示 coordinator、Runtime、标准化 LLM turn、工具活动和 checkpoint 派生关系；安装、运行、隐私边界及已知限制见 [MCTS xGovernor Trace 非侵入式接入](mcts-xgovernor.md)。
+
 ## Hermes 接入
 
 客户端安装页下发的普通交互版 setup 和 auto setup 都支持选择 Hermes。选择后脚本会从 Agent Insight 服务下载固定版本的轻量插件到 `$HERMES_HOME/plugins/agent_insight_hermes/`（未设置 `HERMES_HOME` 时默认为 `~/.hermes`），写入 `plugin.yaml` 与 `config.json`，然后启用 `agent_insight_hermes`。该插件只使用 Python 标准库，不需要访问 GitHub、探测 Hermes venv 或额外安装 OpenTelemetry Python 依赖。setup 不会启用、禁用或改写其他 Hermes 插件；上游 `hermes_otel` 可以继续用于 Langfuse 等独立目的。若两个插件都被配置为向同一个 Agent Insight 端点上报，同一轮对话可能产生重复 telemetry，需要由用户自行调整其中一个插件的 endpoint 或启用状态。
@@ -213,3 +221,13 @@ node scripts/qoder_work_setup.mjs uninstall --purge
 Codex 通过公开 Hook 与原生 OTel Logs 双通道采集，使用 loopback relay 合并为同一条 Trace；安装器接受 `>=0.145.0` 的可解析 Codex CLI 版本。可在安装指导中勾选 **Codex**，完成后启动 Codex、运行 `/hooks` 并信任 Agent Insight handlers。采集器不会读取 `transcript_path`，写入 spool 与上报前会递归脱敏 API Key、token、secret、password 等密钥赋值以及本地 Windows、UNC、`/Users/...`、`/home/...` 路径；Token 用量字段保留数值。VS Code、Cursor 与 Windsurf 可安装同一 VSIX，以公开 API 采集 FileEdit 和 Terminal 事件。
 
 仅在前两种精确来源都不可用时，才可在 `~/.agent-insight/config` 中显式设置 `AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS=1`，实验性地估算当前轮 transcript 中可见的用户消息、助手输出、工具参数和工具结果。Trace 详情以 `≈` 标识，并记录 `local_visible_transcript`、`visible_transcript` 和 `missing_context=true`。估算不包含客户端隐藏的 system prompt、Rules、Skill/MCP schema、内部推理与被压缩上下文，在真实 Agent 会话中可能严重低估，因此不能用于账单核对，也不会填充执行记录的精确 input/output Token 字段。CLI/Work 未提供 usage 时仍显示不可用，不启用该兜底。
+
+## WorkBuddy（Windows 桌面版）接入
+
+WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，不提供 Hook/插件扩展点、也无原生 OTel 上报。采集器是一个独立常驻进程，监听 WorkBuddy 落盘到 `~/.workbuddy/` 的本地数据（trace 文件 + SQLite 会话库），转换为标准 OTLP 后上传，与 WorkBuddy 完全解耦。
+
+在“安装指导”页勾选 **WorkBuddy** 并选择 **Windows**，把生成的 `irm ... | iex` 一行命令拷贝到 **Windows PowerShell** 执行。前提：已安装并至少打开过一次 WorkBuddy（需存在 `~/.workbuddy`）。**无需单独安装 Node.js**——采集器复用 WorkBuddy 自带的 Electron 运行时（`ELECTRON_RUN_AS_NODE=1`）。安装器把采集器落地到 `~/.agent-insight/packages/workbuddy`，注册登录自启动的计划任务 `AgentInsight-WorkBuddyCollector`（隐藏窗口启动器阻塞等待采集器，使任务状态正确显示 Running 且崩溃可被 `RestartOnFailure` 自动拉活），并立即启动一次；安装完成后打印可直接复制的免 Node 管理命令（启动/停止/状态/卸载，停止用 `schtasks /end`）。
+
+采集覆盖 Agent（内部名 `cli` 归一化为 `WorkBuddy`）、用户输入（取自 SDK 会话日志 D3 的 `userContent`，干净、未截断、逐轮——因为 trace 的 `generation.toolInput` 会被 WorkBuddy 截断在 ~100KB，长对话当前轮提问会丢失，故不以它为主）、LLM（逐轮 input/output/reasoning/cache 精确 Token 取自 trace 文件的 `generation.toolOutput`）、真实工具调用（Read/Write/Edit/Bash 等，**保留真实文件路径**，仅脱敏密钥/token/邮箱）。通过名为 `Agent` 的工具派发的子 Agent 本质也是一次工具调用，**按普通 TOOL 节点显示**（可查看派发参数与子 Agent 返回的报告），不单独渲染成子 Agent 节点。会话级“当前上下文占用/窗口上限”来自 SQLite，与逐轮 Token 分开呈现。WorkBuddy 内部的 `terminalTitleGenerator`/`contentAnalyzer` 等工具类 trace 会被跳过。重装采集器会自动停掉旧进程再起新的（热更新）。已知边界：子 Agent 的内部执行步骤由 WorkBuddy 在独立 worker 进程运行、未落盘到可关联的本地文件，因此无法展开其内部链路。
+
+详见 [WorkBuddy Trace Collector 接入指南](./workbuddy-trace-collector)。

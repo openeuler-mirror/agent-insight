@@ -193,8 +193,17 @@
 .dataTable {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 14px;
   min-width: 720px;
+}
+
+.itemsTable th:first-child {
+  width: 130px;
+}
+
+.itemsTable th:last-child {
+  width: 100px;
 }
 
 .dataTable thead tr {
@@ -225,6 +234,15 @@
 .dataTable td {
   padding: 11px 14px;
   vertical-align: top;
+  overflow: hidden;
+}
+
+.cellText {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .guidePanel {

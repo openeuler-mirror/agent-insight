@@ -1,10 +1,16 @@
 import type { NextConfig } from "next";
 import { config } from "dotenv";
-import os from "node:os";
 import path from "path";
+import { assertSupportedHomeEnv, getAgentInsightHome } from './scripts/agent-insight-home.cjs';
 
-config({ path: path.join(process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), ".agent-insight"), ".env") });
-config();
+const agentInsightHome = getAgentInsightHome();
+
+const managedEnv = config({ path: path.join(agentInsightHome, ".env") });
+assertSupportedHomeEnv(managedEnv.parsed || {});
+const projectEnv = config();
+assertSupportedHomeEnv(projectEnv.parsed || {});
+assertSupportedHomeEnv();
+process.env.AGENT_INSIGHT_HOME = agentInsightHome;
 
 const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_URL_PREFIX || '',
@@ -32,6 +38,16 @@ const nextConfig: NextConfig = {
       'tools/**',
       'docs/**',
       'data/**',
+    ],
+  },
+  // Next 16.1.4's webpack tracer misses several relative Next runtime
+  // dependencies, leaving an otherwise successful standalone build unable to boot.
+  outputFileTracingIncludes: {
+    '*': [
+      'node_modules/next/dist/server/mcp/**/*',
+      'node_modules/next/dist/next-devtools/**/*',
+      'node_modules/next/dist/lib/metadata/**/*',
+      'node_modules/next/dist/pages/**/*',
     ],
   },
   // git worktree 场景：cwd 在 <main>/.claude/worktrees/<id>，依赖装在主仓库 node_modules，

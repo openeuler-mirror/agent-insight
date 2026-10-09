@@ -6,15 +6,21 @@ Persist under ``~/.agent-insight/xiaoo-otel-buf/<native_id>.json``.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
+
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from otel_spans import SessionSpanBuffer
 from otlp_http import post_otlp_traces
 from session_ids import strip_platform_prefix
+
+if os.environ.get("AGENT_INSIGHT_DATA_DIR"):
+    raise RuntimeError("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +44,7 @@ _DONE_OUTCOMES = {
 
 
 def _insight_home() -> Path:
-    data = (os.environ.get("AGENT_INSIGHT_DATA_DIR") or "").strip()
+    data = os.path.expanduser(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or "")).strip()
     if data:
         return Path(data)
     return Path.home() / ".agent-insight"
@@ -176,6 +182,8 @@ def note_chat(session_id: str, payload: dict[str, Any]) -> None:
 
 
 def note_stream(session_id: str, text: str, *, channel: str = "llm_output") -> None:
+    if isinstance(text, str) and text.strip():
+        _note_run_activity(session_id)
     try:
         _touch(session_id, lambda buf: buf.on_assistant_text(text, channel=channel))
     except Exception as exc:
@@ -186,6 +194,8 @@ def note_tool(session_id: str, payload: dict[str, Any]) -> None:
     try:
         call = payload.get("call") or {}
         name = str(call.get("tool_name") or call.get("name") or "unknown")
+        if name.strip() and name != "unknown":
+            _note_run_activity(session_id)
         args = (
             call.get("input")
             if isinstance(call.get("input"), dict)
@@ -203,6 +213,27 @@ def note_tool(session_id: str, payload: dict[str, Any]) -> None:
         )
     except Exception as exc:
         logger.debug("otel note_tool skipped: %s", exc)
+
+
+def _note_run_activity(session_id: str) -> None:
+    directory = (os.environ.get("AGENT_INSIGHT_XIAOO_ACTIVITY_DIR") or "").strip()
+    native = strip_platform_prefix(session_id)
+    if not directory or not native:
+        return
+    # The executor owns this private per-run directory; receipts outlive buffer upload/deletion.
+    path = Path(directory) / f"{hashlib.sha256(native.encode('utf-8')).hexdigest()}.json"
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
+    try:
+        if path.exists():
+            return
+        tmp.write_text(json.dumps({
+            "sessionId": native,
+            "modelActivity": True,
+            "observedAtMs": time.time_ns() // 1_000_000,
+        }), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        logger.debug("run activity receipt skipped: %s", exc)
 
 
 def should_flush_lifecycle(payload: dict[str, Any]) -> bool:

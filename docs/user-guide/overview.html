@@ -498,7 +498,7 @@ graph TD
 
     <section id="start">
       <div class="section-head"><span class="section-num">03</span><h2>快速开始</h2></div>
-      <p class="lede">前置条件：Node.js ≥ 20；Python 3（仅 openGauss 模式需要）；可选 Docker。默认安装路径 <code>~/.agent-insight/</code>，可用 <code>AGENT_INSIGHT_DATA_DIR</code> 覆盖，SQLite 文件位于 <code>&lt;dataRoot&gt;/data/witty_insight.db</code>。</p>
+      <p class="lede">前置条件：Node.js ≥ 20；Python 3（仅 openGauss 模式需要）；可选 Docker。默认安装路径 <code>~/.agent-insight/</code>，可用 <code>AGENT_INSIGHT_HOME</code> 覆盖，SQLite 文件位于 <code>&lt;dataRoot&gt;/data/witty_insight.db</code>。</p>
 
       <div class="step">
         <div class="step-marker">1</div>
@@ -537,7 +537,7 @@ graph TD
           <thead><tr><th>变量名</th><th>用途</th><th>默认值</th><th>必需</th></tr></thead>
           <tbody>
             <tr><td class="mono">DATABASE_URL</td><td>Prisma datasource URL（SQLite 默认）</td><td class="mono">file:&lt;home&gt;/data/witty_insight.db</td><td><span class="pill pill-req">是</span></td></tr>
-            <tr><td class="mono">AGENT_INSIGHT_DATA_DIR</td><td>数据根目录覆盖</td><td class="mono">~/.agent-insight</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_HOME</td><td>数据根目录覆盖</td><td class="mono">~/.agent-insight</td><td><span class="pill pill-opt">否</span></td></tr>
             <tr><td class="mono">PORT</td><td>服务端口（CLI 与 next 共同使用）</td><td class="mono">3000</td><td><span class="pill pill-opt">否</span></td></tr>
             <tr><td class="mono">HOSTNAME</td><td>服务绑定地址</td><td class="mono">0.0.0.0</td><td><span class="pill pill-opt">否</span></td></tr>
             <tr><td class="mono">DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD</td><td>openGauss 切换（设置即用 PG）</td><td class="mono">—</td><td><span class="pill pill-opt">否*</span></td></tr>

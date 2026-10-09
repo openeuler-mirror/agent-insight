@@ -260,6 +260,8 @@ test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoi
     fs.writeFileSync(file, "{\"sessionId\":\"session-a\"}\n", "utf8")
 
     const calls: ExecutionRecord[] = []
+    const receiptTimes: number[] = []
+    const startedAt = Date.now()
     const source = makeSource(dir, file, {
       task_id: "session-a",
       user: "test-user",
@@ -270,7 +272,8 @@ test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoi
 
     startOtelSpoolConsumer({
       sources: [source],
-      saveExecution: async (data) => {
+      saveExecution: async (data, options) => {
+        receiptTimes.push(options?.receivedAt?.getTime() ?? 0)
         calls.push(data)
         return { success: true, record: data }
       },
@@ -284,7 +287,8 @@ test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoi
     })
     startOtelSpoolConsumer({
       sources: [source],
-      saveExecution: async (data) => {
+      saveExecution: async (data, options) => {
+        receiptTimes.push(options?.receivedAt?.getTime() ?? 0)
         calls.push(data)
         return { success: true, record: data }
       },
@@ -306,6 +310,9 @@ test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoi
 
     assert.equal(calls.filter((call) => call.skip_evaluation === true).length, 1)
     assert.equal(calls.filter((call) => call.force_judgment === true).length, 1)
+
+    assert.ok(receiptTimes[0] >= startedAt)
+    assert.equal(receiptTimes[1], receiptTimes[0], "background evaluation must retain the batch receipt time")
 
     const relPath = toCheckpointRelPath(dir, file)
     const checkpoint = loadCheckpoint(dir)

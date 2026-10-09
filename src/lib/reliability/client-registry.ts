@@ -17,6 +17,12 @@ export type ClientPlatformCapability = {
   runExperimentCase?: {
     version: number
     returnsTraceId: boolean
+    skillSnapshotVersion?: number
+  }
+  runBenchmarkCase?: {
+    version: number
+    returnsTraceId: boolean
+    agentOptionCapabilities?: string[]
   }
   actions?: string[]
 }
@@ -304,6 +310,18 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
                     ? Number(rec.runExperimentCase.version)
                     : 1,
                   returnsTraceId: rec.runExperimentCase.returnsTraceId === true,
+                  ...(Number(rec.runExperimentCase.skillSnapshotVersion) > 0 ? { skillSnapshotVersion: Number(rec.runExperimentCase.skillSnapshotVersion) } : {}),
+                }
+              : undefined,
+            runBenchmarkCase: rec.runBenchmarkCase
+              && typeof rec.runBenchmarkCase === 'object'
+              ? {
+                  version: Number.isFinite(Number(rec.runBenchmarkCase.version))
+                    ? Number(rec.runBenchmarkCase.version)
+                    : 1,
+                  returnsTraceId: rec.runBenchmarkCase.returnsTraceId === true,
+                  agentOptionCapabilities: Array.isArray(rec.runBenchmarkCase.agentOptionCapabilities)
+                    ? [...new Set(rec.runBenchmarkCase.agentOptionCapabilities.filter((item): item is string => typeof item === 'string'))] : [],
                 }
               : undefined,
             actions: Array.isArray(rec.actions) ? rec.actions.map((a) => String(a)) : undefined,

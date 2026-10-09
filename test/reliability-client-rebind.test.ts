@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { isolatedHomeEnv } from './helpers/isolated-home'
+import { createIsolatedDatabase } from './helpers/isolated-database'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -6,17 +8,22 @@ import test from 'node:test'
 import os from 'node:os'
 import path from 'node:path'
 
-import {
+import { createRequire } from 'node:module'
+
+const require_ = createRequire(import.meta.url)
+const database = createIsolatedDatabase()
+const {
   authenticateDevice,
   createInstallToken,
   deriveStatus,
   listClients,
   registerClient,
-} from '@/lib/reliability/client-registry'
-import { prismaRaw } from '@/lib/storage/prisma'
-import { createRequire } from 'node:module'
-
-const require_ = createRequire(import.meta.url)
+} = require_('../src/lib/reliability/client-registry') as typeof import('@/lib/reliability/client-registry')
+const { prismaRaw } = require_('../src/lib/storage/prisma') as typeof import('@/lib/storage/prisma')
+test.after(async () => {
+  await prismaRaw.$disconnect()
+  database.dispose()
+})
 
 const USER_A = `rebind-a-${process.pid}`
 const USER_B = `rebind-b-${process.pid}`
@@ -197,12 +204,10 @@ test('installer re-registers in a temporary HOME and does not send an old client
         '--no-start',
         '--no-fi',
       ], {
-        env: {
-          ...process.env,
-          HOME: tempHome,
+        env: isolatedHomeEnv(tempHome, {
           PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
           AGENT_INSIGHT_MACHINE_ID: 'machine-mock-rebind',
-        },
+        }),
       })
       let stdout = ''
       let stderr = ''

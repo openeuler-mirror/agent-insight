@@ -14,6 +14,34 @@ const LOOP_THRESHOLD = 'detectors.llm_thinking_loop.loop_repeat_threshold'
 const DETECTION_START = 'detectors.llm_thinking_loop.detection_start_chars'
 const WINDOW_MAX = 'detectors.llm_thinking_loop.window_max_chars'
 const SIM_THRESHOLD = 'detectors.llm_thinking_loop.similar_clause_sim_threshold'
+const FAULT_MODE_SERVICE_URL = 'inference.fault_mode_classification_service_url'
+
+test('fault mode classification service URL is optional and empty by default', () => {
+  const field = schema.sections.flatMap((section) => section.fields)
+    .find((item) => item.key === FAULT_MODE_SERVICE_URL)
+  assert.ok(field)
+  assert.equal(field.label, '故障检测推理服务 URL')
+  assert.equal(field.type, 'string')
+  assert.equal(field.required, false)
+  assert.equal(schema.defaults[FAULT_MODE_SERVICE_URL], '')
+  assert.deepEqual(validateConfigValues(schema, {}), [])
+  assert.deepEqual(validateConfigValues(schema, { [FAULT_MODE_SERVICE_URL]: '' }), [])
+})
+
+test('fault mode classification service URL accepts HTTP and HTTPS endpoints', () => {
+  for (const url of ['http://127.0.0.1:8000/classify', 'https://classifier.example/v1/classify']) {
+    assert.deepEqual(validateConfigValues(schema, { [FAULT_MODE_SERVICE_URL]: url }), [])
+  }
+})
+
+test('fault mode classification service URL rejects invalid addresses and non-text values', () => {
+  for (const url of ['not-a-url', '/classify', 'ftp://classifier.example', 'javascript:alert(1)', 'https://', 123, true, {}]) {
+    const errors = validateConfigValues(schema, { [FAULT_MODE_SERVICE_URL]: url })
+    assert.equal(errors.length, 1, JSON.stringify(url))
+    assert.equal(errors[0].key, FAULT_MODE_SERVICE_URL)
+    assert.match(errors[0].message, /HTTP|HTTPS/)
+  }
+})
 
 test('rejects values outside the schema range', () => {
   // catalog/yaml：similar_clause_sim_threshold ∈ [0,1]；越界值不得写入快照下发。

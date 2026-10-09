@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "swe-bench/case",
+  "type": "object",
+  "required": ["instance_id", "repo", "base_commit", "problem_statement", "patch", "test_patch", "FAIL_TO_PASS", "PASS_TO_PASS"],
+  "properties": {
+    "instance_id": { "type": "string", "minLength": 1, "x-agent-visibility": "public" },
+    "repo": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", "x-agent-visibility": "public" },
+    "base_commit": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$", "x-agent-visibility": "public" },
+    "problem_statement": { "type": "string", "minLength": 1, "x-agent-visibility": "public" },
+    "hints_text": { "type": "string", "x-agent-visibility": "public" },
+    "version": { "type": "string", "x-agent-visibility": "public" },
+    "patch": { "type": "string", "x-agent-visibility": "private" },
+    "test_patch": { "type": "string", "x-agent-visibility": "private" },
+    "FAIL_TO_PASS": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }], "x-agent-visibility": "private" },
+    "PASS_TO_PASS": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }], "x-agent-visibility": "private" },
+    "environment_setup_commit": { "type": "string", "x-agent-visibility": "private" },
+    "image": { "type": "string", "x-agent-visibility": "private" },
+    "eval_script": { "type": "string", "x-agent-visibility": "private" },
+    "eval_type": { "type": "string", "x-agent-visibility": "private" },
+    "log_parser": { "type": "string", "x-agent-visibility": "private" },
+    "created_at": { "type": "string", "x-agent-visibility": "private" },
+    "difficulty": { "type": "string", "x-agent-visibility": "private" }
+  },
+  "additionalProperties": false
+}

@@ -24,6 +24,7 @@ export type EvaluatorRequirement = 'reference' | 'dataset_input' | 'tool_catalog
 export interface EvaluatorMeta {
   category: EvaluatorCategory;
   requires: EvaluatorRequirement[];
+  executionBackend?: 'experiment' | 'benchmark-service';
 }
 
 /** 预置评估器元数据（id 与 preset-evaluators.ts 一一对应）。 */
@@ -33,11 +34,16 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
   // 轨迹质量：只看执行过程，不依赖预期输出
   'preset-agent-trace-quality': { category: 'traj', requires: [] },
+  'preset-agent-process-quality': { category: 'traj', requires: [] },
+  'preset-agent-step-efficiency': { category: 'traj', requires: [] },
   // 结果评测评估器（抽取自可靠性页；看结果 → res）。仅准确性依赖预期输出。
   'preset-result-accuracy': { category: 'res', requires: ['reference'] },
   'preset-result-answer': { category: 'res', requires: [] },
   'preset-result-faithfulness': { category: 'res', requires: [] },
   'preset-result-instruction': { category: 'res', requires: [] },
+  'preset-text-rouge': { category: 'res', requires: ['reference'] },
+  'preset-text-exact-match': { category: 'res', requires: ['reference'] },
+  'preset-text-entity-f1': { category: 'res', requires: ['reference'] },
   // 内容质量评估器：均不依赖预期输出
   'preset-content-insensitivity': { category: 'res', requires: [] },
   'preset-content-controversy': { category: 'res', requires: [] },
@@ -63,6 +69,8 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-ras-reliability-detection-recovery': { category: 'traj', requires: [] },
   'preset-agent-tool-success-rate': { category: 'traj', requires: [] },
   'preset-task-completion-no-ref': { category: 'res', requires: [] },
+  // 内容严谨性：只读最终输出；参考答案是可选依据，不做门控
+  'preset-rigor-content': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };
@@ -90,6 +98,11 @@ export function hasPresetMeta(id: string): boolean {
   return Object.prototype.hasOwnProperty.call(PRESET_META, id);
 }
 
+export function getPresetExecutionBackend(id: string): 'experiment' | 'benchmark-service' {
+  if (id.startsWith('benchmark:')) return 'benchmark-service';
+  return PRESET_META[id]?.executionBackend ?? 'experiment';
+}
+
 /** 自建 LLM 评估器：requires 由提示词占位符推导。 */
 function deriveCustomRequires(card: EvaluatorCard): EvaluatorRequirement[] {
   const requirements: EvaluatorRequirement[] = [];
@@ -100,6 +113,9 @@ function deriveCustomRequires(card: EvaluatorCard): EvaluatorRequirement[] {
 
 export function getEvaluatorMeta(card: EvaluatorCard): EvaluatorMeta {
   if (card.source === 'preset') {
+    if (card.id.startsWith('benchmark:')) {
+      return { category: 'res', requires: [], executionBackend: 'benchmark-service' };
+    }
     return PRESET_META[card.id] ?? { ...DEFAULT_META, category: card.category ?? 'res' };
   }
   return { category: card.category ?? 'res', requires: deriveCustomRequires(card) };
@@ -110,6 +126,7 @@ export function deriveEvaluatorTags(card: EvaluatorCard): string[] {
   const meta = getEvaluatorMeta(card);
   const tags: string[] = [];
   tags.push(card.source === 'preset' ? '预置' : '自建');
+  if (card.id.startsWith('benchmark:')) tags.push('Benchmark');
   tags.push(card.evaluatorType === 'LLM' ? 'LLM Judge' : '代码');
   tags.push(meta.category === 'res' ? '看结果' : '看轨迹');
   if (meta.requires.includes('reference')) tags.push('依赖预期输出');

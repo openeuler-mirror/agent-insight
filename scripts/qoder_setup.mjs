@@ -286,7 +286,7 @@ function startUploader(uploaderPath, spoolDir, host, apiKey) {
 export function installQoderCollector(options = {}) {
   const homeDir = options.homeDir || os.homedir()
   const projectDir = options.projectDir || process.cwd()
-  const insightDir = options.insightDir || path.join(homeDir, ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
   const sourceDir = options.sourceDir || path.dirname(fileURLToPath(import.meta.url))
   const scope = options.scope || "user"
   const product = normalizeProduct(options.product)
@@ -339,7 +339,7 @@ export function installQoderCollector(options = {}) {
 export function uninstallQoderCollector(options = {}) {
   const homeDir = options.homeDir || os.homedir()
   const projectDir = options.projectDir || process.cwd()
-  const insightDir = options.insightDir || path.join(homeDir, ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
   const scope = options.scope || "user"
   const product = normalizeProduct(options.product)
   const owner = normalizeOwner(options.owner, product)
@@ -396,6 +396,12 @@ export function uninstallQoderCollector(options = {}) {
     tokenUsageEnvironment,
     purged: Boolean(options.purge),
   }
+}
+
+function getAgentInsightHome(homeDir = os.homedir()) {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(homeDir, '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => homeDir))
 }
 
 function parseArgs(args) {

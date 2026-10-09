@@ -1,0 +1,1139 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Agent Insight × Goal Plus — 高保真交互原型</title>
+  <style>
+    :root {
+      --background: #ffffff;
+      --foreground: #18181b;
+      --card: #ffffff;
+      --card-strong: #fafafa;
+      --muted: #f4f4f5;
+      --muted-foreground: #71717a;
+      --border: #e4e4e7;
+      --border-strong: #d4d4d8;
+      --primary: #4f46e5;
+      --primary-soft: #eef2ff;
+      --primary-border: #c7d2fe;
+      --success: #16a34a;
+      --success-soft: #f0fdf4;
+      --warning: #d97706;
+      --warning-soft: #fffbeb;
+      --danger: #dc2626;
+      --danger-soft: #fef2f2;
+      --info: #0284c7;
+      --info-soft: #f0f9ff;
+      --sidebar: #fafafa;
+      --shadow: 0 1px 2px rgba(24, 24, 27, .04), 0 1px 3px rgba(24, 24, 27, .06);
+      --shadow-lg: 0 12px 36px rgba(24, 24, 27, .12);
+      --radius: 10px;
+      --sidebar-width: 220px;
+    }
+
+    html[data-theme="dark"] {
+      --background: #09090b;
+      --foreground: #fafafa;
+      --card: #18181b;
+      --card-strong: #111113;
+      --muted: #27272a;
+      --muted-foreground: #a1a1aa;
+      --border: #27272a;
+      --border-strong: #3f3f46;
+      --primary: #818cf8;
+      --primary-soft: rgba(99, 102, 241, .14);
+      --primary-border: rgba(129, 140, 248, .32);
+      --success: #4ade80;
+      --success-soft: rgba(34, 197, 94, .12);
+      --warning: #fbbf24;
+      --warning-soft: rgba(245, 158, 11, .12);
+      --danger: #f87171;
+      --danger-soft: rgba(239, 68, 68, .12);
+      --info: #38bdf8;
+      --info-soft: rgba(14, 165, 233, .12);
+      --sidebar: #111113;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+      --shadow-lg: 0 14px 40px rgba(0, 0, 0, .42);
+    }
+
+    * { box-sizing: border-box; }
+    html { height: 100%; scroll-behavior: smooth; }
+    body {
+      min-height: 100%;
+      margin: 0;
+      overflow-x: hidden;
+      background: var(--background);
+      color: var(--foreground);
+      font: 14px/1.45 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .app-shell { min-height: 100vh; }
+    .sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 40;
+      display: flex;
+      width: var(--sidebar-width);
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: var(--sidebar);
+      transition: transform .2s ease, width .2s ease;
+    }
+    .brand {
+      display: flex;
+      height: 56px;
+      align-items: center;
+      gap: 10px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand-mark {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 8px;
+      background: linear-gradient(145deg, #6366f1, #4338ca);
+      box-shadow: 0 4px 12px rgba(79, 70, 229, .25);
+      color: white;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: -.03em;
+    }
+    .brand-name { font-size: 14px; font-weight: 700; letter-spacing: -.02em; }
+    .preview-pill {
+      margin-left: auto;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 1px 6px;
+      color: var(--muted-foreground);
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .sidebar-scroll { flex: 1; overflow: auto; padding: 10px 10px 16px; }
+    .nav-section { margin-top: 14px; }
+    .nav-section:first-child { margin-top: 0; }
+    .nav-label {
+      padding: 0 9px 5px;
+      color: var(--muted-foreground);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+    }
+    .nav-item {
+      display: flex;
+      min-height: 34px;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      margin: 2px 0;
+      padding: 7px 9px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted-foreground);
+      text-align: left;
+      cursor: default;
+    }
+    .nav-item:hover { background: var(--muted); color: var(--foreground); }
+    .nav-item.active {
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-weight: 650;
+    }
+    .nav-item.child { padding-left: 31px; font-size: 13px; }
+    .nav-icon {
+      display: inline-grid;
+      width: 14px;
+      height: 14px;
+      place-items: center;
+      flex: 0 0 auto;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .nav-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .sidebar-footer {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border-top: 1px solid var(--border);
+    }
+    .user {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 8px;
+      padding: 5px;
+    }
+    .avatar {
+      display: grid;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--muted);
+      color: var(--muted-foreground);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .user-copy { min-width: 0; }
+    .user-name { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .user-role { color: var(--muted-foreground); font-size: 10px; }
+
+    .main { min-width: 0; min-height: 100vh; margin-left: var(--sidebar-width); overflow-x: hidden; transition: margin .2s ease; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      display: flex;
+      height: 56px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--background) 92%, transparent);
+      backdrop-filter: blur(12px);
+    }
+    .topbar-left, .topbar-right { display: flex; align-items: center; gap: 9px; }
+    .topbar-title { font-size: 13px; font-weight: 650; }
+    .breadcrumb { color: var(--muted-foreground); font-size: 12px; }
+    .icon-button {
+      display: inline-grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--card);
+      cursor: pointer;
+    }
+    .icon-button:hover { border-color: var(--border-strong); background: var(--muted); }
+    .menu-button { display: none; }
+    .environment {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 5px 9px;
+      color: var(--muted-foreground);
+      font-size: 11px;
+    }
+
+    .content { width: min(1440px, 100%); margin: 0 auto; padding: 22px 28px 40px; }
+    .page-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 5px;
+      color: var(--muted-foreground);
+      font-size: 11px;
+    }
+    .page-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+    h1 { margin: 0; font-size: 24px; font-weight: 720; letter-spacing: -.035em; }
+    .head-meta { display: flex; flex-wrap: wrap; gap: 7px 14px; margin-top: 7px; color: var(--muted-foreground); font-size: 11px; }
+    .head-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+    .button {
+      display: inline-flex;
+      min-height: 32px;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 6px 11px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--card);
+      color: var(--foreground);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .button:hover { border-color: var(--border-strong); background: var(--muted); }
+    .button.primary { border-color: var(--primary); background: var(--primary); color: white; }
+    .button.primary:hover { filter: brightness(.96); }
+    .button.ghost { border-color: transparent; background: transparent; color: var(--muted-foreground); }
+    .button.tiny { min-height: 27px; padding: 4px 8px; font-size: 11px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 7px;
+      background: var(--card);
+      color: var(--muted-foreground);
+      font-size: 10px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .badge.success { border-color: color-mix(in srgb, var(--success) 26%, var(--border)); background: var(--success-soft); color: var(--success); }
+    .badge.warning { border-color: color-mix(in srgb, var(--warning) 26%, var(--border)); background: var(--warning-soft); color: var(--warning); }
+    .badge.primary { border-color: var(--primary-border); background: var(--primary-soft); color: var(--primary); }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 15%, transparent); }
+
+    .sync-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 18px;
+      padding: 9px 12px;
+      border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border));
+      border-radius: 8px;
+      background: var(--success-soft);
+      color: var(--success);
+      font-size: 11px;
+    }
+    .sync-banner strong { color: var(--foreground); }
+    .sync-copy { display: flex; min-width: 0; align-items: center; gap: 8px; }
+    .sync-copy > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .metric {
+      min-width: 0;
+      padding: 12px 13px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .metric-label { display: flex; align-items: center; justify-content: space-between; color: var(--muted-foreground); font-size: 10px; }
+    .metric-value { margin-top: 7px; font-size: 20px; font-weight: 720; letter-spacing: -.035em; }
+    .metric-foot { margin-top: 1px; color: var(--muted-foreground); font-size: 9px; }
+    .metric-foot.good { color: var(--success); }
+
+    .tabs-wrap { margin-top: 18px; border-bottom: 1px solid var(--border); }
+    .tabs { display: flex; gap: 3px; overflow-x: auto; }
+    .tab {
+      position: relative;
+      min-height: 39px;
+      padding: 8px 11px;
+      border: 0;
+      background: transparent;
+      color: var(--muted-foreground);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .tab:hover { color: var(--foreground); }
+    .tab[aria-selected="true"] { color: var(--primary); }
+    .tab[aria-selected="true"]::after {
+      position: absolute;
+      right: 8px;
+      bottom: -1px;
+      left: 8px;
+      height: 2px;
+      border-radius: 2px 2px 0 0;
+      background: var(--primary);
+      content: "";
+    }
+    .tab-count { margin-left: 4px; color: inherit; font-size: 9px; opacity: .8; }
+    .tab-panel { padding-top: 16px; }
+    .tab-panel[hidden] { display: none; }
+
+    .grid { display: grid; gap: 12px; }
+    .grid.two-one { grid-template-columns: minmax(0, 1.7fr) minmax(290px, .9fr); }
+    .grid.equal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .card-header {
+      display: flex;
+      min-height: 49px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .card-title { font-size: 12px; font-weight: 700; }
+    .card-subtitle { margin-top: 2px; color: var(--muted-foreground); font-size: 10px; }
+    .card-body { padding: 14px; }
+
+    .lifecycle { position: relative; display: grid; grid-template-columns: repeat(5, minmax(90px, 1fr)); gap: 5px; padding-top: 8px; }
+    .lifecycle::before {
+      position: absolute;
+      top: 19px;
+      right: 10%;
+      left: 10%;
+      height: 1px;
+      background: var(--border-strong);
+      content: "";
+    }
+    .life-step { position: relative; z-index: 1; text-align: center; }
+    .life-dot {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      margin: 0 auto 8px;
+      border: 2px solid var(--success);
+      border-radius: 50%;
+      background: var(--card);
+      color: var(--success);
+      font-size: 9px;
+      font-weight: 800;
+    }
+    .life-name { font-size: 11px; font-weight: 650; }
+    .life-meta { margin-top: 2px; color: var(--muted-foreground); font-size: 9px; }
+    .life-role { margin-top: 6px; color: var(--muted-foreground); font-size: 9px; }
+
+    .selection {
+      padding: 13px;
+      border: 1px solid var(--primary-border);
+      border-radius: 9px;
+      background: var(--primary-soft);
+    }
+    .selection-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .candidate-name { font-size: 14px; font-weight: 720; }
+    .score { color: var(--primary); font-size: 22px; font-weight: 760; letter-spacing: -.04em; }
+    .score small { font-size: 10px; font-weight: 600; letter-spacing: normal; }
+    .reason-list { display: grid; gap: 7px; margin-top: 12px; }
+    .reason { display: grid; grid-template-columns: 12px 1fr auto; gap: 7px; align-items: center; font-size: 10px; }
+    .reason-mark { color: var(--success); font-weight: 900; }
+    .reason-value { color: var(--muted-foreground); }
+
+    .activity { width: 100%; border-collapse: collapse; }
+    .activity th, .activity td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; font-size: 10px; }
+    .activity th { background: var(--card-strong); color: var(--muted-foreground); font-weight: 600; }
+    .activity tbody tr:last-child td { border-bottom: 0; }
+    .activity td:first-child { width: 65px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: .94em; }
+
+    .candidate-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted-foreground); font-size: 10px; }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .legend-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--border-strong); }
+    .legend-dot.selected { background: var(--primary); }
+    .legend-dot.pass { background: var(--success); }
+
+    .lane-board { overflow-x: auto; }
+    .lane-grid { display: grid; min-width: 860px; grid-template-columns: 150px repeat(2, minmax(290px, 1fr)) 110px; }
+    .lane-cell { min-height: 48px; padding: 9px 10px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .lane-cell:nth-child(4n) { border-right: 0; }
+    .lane-head { background: var(--card-strong); color: var(--muted-foreground); font-size: 10px; font-weight: 650; }
+    .lane-row-label { display: flex; flex-direction: column; justify-content: center; background: var(--card-strong); }
+    .lane-row-label strong { font-size: 10px; }
+    .lane-row-label span { color: var(--muted-foreground); font-size: 9px; }
+    .iteration {
+      display: flex;
+      width: 100%;
+      min-height: 50px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 9px;
+      padding: 8px 9px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--card);
+      text-align: left;
+      cursor: pointer;
+    }
+    .iteration:hover { border-color: var(--primary-border); }
+    .iteration.active { border-color: var(--primary); background: var(--primary-soft); box-shadow: inset 3px 0 0 var(--primary); }
+    .iteration-title { display: block; font-size: 10px; font-weight: 700; }
+    .iteration-meta { display: block; margin-top: 2px; color: var(--muted-foreground); font-size: 9px; }
+    .iteration-score { font-size: 15px; font-weight: 750; font-variant-numeric: tabular-nums; }
+    .decision-cell { display: grid; place-items: center; color: var(--muted-foreground); font-size: 10px; text-align: center; }
+    .decision-cell.win { background: var(--success-soft); color: var(--success); font-weight: 700; }
+
+    .iteration-detail { display: grid; grid-template-columns: 1.35fr repeat(3, minmax(90px, .6fr)) auto; gap: 14px; align-items: center; }
+    .detail-title { font-size: 13px; font-weight: 700; }
+    .detail-copy { margin-top: 3px; color: var(--muted-foreground); font-size: 10px; }
+    .detail-stat span { display: block; color: var(--muted-foreground); font-size: 9px; }
+    .detail-stat strong { display: block; margin-top: 2px; font-size: 13px; }
+
+    .comparison-table { width: 100%; border-collapse: collapse; }
+    .comparison-table th, .comparison-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 10px; text-align: left; }
+    .comparison-table th { color: var(--muted-foreground); font-weight: 600; }
+    .comparison-table td:not(:first-child), .comparison-table th:not(:first-child) { text-align: right; }
+    .comparison-table tbody tr:last-child td { border-bottom: 0; }
+    .better { color: var(--success); font-weight: 700; }
+
+    .trace-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 620px; }
+    .trace-tree { border-right: 1px solid var(--border); background: var(--card-strong); }
+    .trace-tree-head { display: flex; min-height: 48px; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .trace-nodes { padding: 8px; }
+    .trace-node {
+      display: grid;
+      grid-template-columns: 18px 1fr auto;
+      gap: 7px;
+      align-items: center;
+      width: 100%;
+      margin: 2px 0;
+      padding: 7px 8px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .trace-node:hover { background: var(--muted); }
+    .trace-node.active { border-color: var(--primary-border); background: var(--primary-soft); }
+    .trace-node.level-1 { padding-left: 22px; }
+    .trace-node.level-2 { padding-left: 42px; }
+    .node-icon { display: grid; width: 17px; height: 17px; place-items: center; border-radius: 5px; background: var(--muted); color: var(--muted-foreground); font-size: 8px; font-weight: 800; }
+    .trace-node.active .node-icon { background: var(--primary); color: white; }
+    .node-name { display: block; overflow: hidden; font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .node-sub { display: block; color: var(--muted-foreground); font-size: 8px; }
+    .node-time { color: var(--muted-foreground); font-size: 9px; font-variant-numeric: tabular-nums; }
+
+    .trace-detail { min-width: 0; }
+    .trace-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 15px; border-bottom: 1px solid var(--border); }
+    .trace-summary-title { display: flex; align-items: center; gap: 8px; }
+    .trace-summary h2 { margin: 0; font-size: 14px; }
+    .trace-summary-meta { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted-foreground); font-size: 9px; }
+    .event-list { padding: 4px 15px 18px; }
+    .event-row { position: relative; display: grid; grid-template-columns: 68px 24px minmax(0, 1fr) auto; gap: 9px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+    .event-time { color: var(--muted-foreground); font: 9px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .event-icon { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 6px; background: var(--muted); color: var(--muted-foreground); font-size: 8px; font-weight: 800; }
+    .event-icon.llm { background: var(--primary-soft); color: var(--primary); }
+    .event-icon.tool { background: var(--info-soft); color: var(--info); }
+    .event-icon.ok { background: var(--success-soft); color: var(--success); }
+    .event-name { font-size: 10px; font-weight: 700; }
+    .event-copy { margin-top: 3px; color: var(--muted-foreground); font-size: 9px; }
+    .event-data { margin-top: 6px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-strong); color: var(--muted-foreground); font: 9px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .event-cost { color: var(--muted-foreground); font-size: 9px; text-align: right; white-space: nowrap; }
+
+    .quality-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .quality-card { display: flex; align-items: center; gap: 12px; padding: 13px; }
+    .ring {
+      --value: 100;
+      display: grid;
+      width: 46px;
+      height: 46px;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: conic-gradient(var(--success) calc(var(--value) * 1%), var(--muted) 0);
+    }
+    .ring::after { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: var(--card); color: var(--foreground); content: attr(data-label); font-size: 9px; font-weight: 750; }
+    .quality-name { font-size: 10px; font-weight: 700; }
+    .quality-note { margin-top: 2px; color: var(--muted-foreground); font-size: 9px; }
+    .coverage-row { display: grid; grid-template-columns: minmax(130px, .8fr) 1.8fr 70px 95px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 10px; }
+    .coverage-row:last-child { border-bottom: 0; }
+    .coverage-name { font-weight: 650; }
+    .bar { height: 6px; overflow: hidden; border-radius: 99px; background: var(--muted); }
+    .bar > i { display: block; height: 100%; border-radius: inherit; background: var(--success); }
+    .coverage-count { color: var(--muted-foreground); font-variant-numeric: tabular-nums; text-align: right; }
+    .coverage-status { text-align: right; }
+    .fidelity-list { display: grid; gap: 9px; }
+    .fidelity-item { display: grid; grid-template-columns: 105px 1fr auto; gap: 10px; align-items: center; padding-bottom: 9px; border-bottom: 1px solid var(--border); font-size: 10px; }
+    .fidelity-item:last-child { padding-bottom: 0; border-bottom: 0; }
+    .fidelity-label { color: var(--muted-foreground); }
+    .fidelity-copy { min-width: 0; }
+
+    .flow-canvas { overflow-x: auto; padding: 20px 16px 24px; background-image: radial-gradient(var(--border) .7px, transparent .7px); background-size: 14px 14px; }
+    .flow-grid { display: grid; min-width: 980px; grid-template-columns: 1fr 50px 1fr 50px 1fr 50px 1fr 50px 1fr; align-items: center; }
+    .flow-group-label { margin-bottom: 8px; color: var(--muted-foreground); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .flow-node { min-height: 96px; padding: 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); box-shadow: var(--shadow); }
+    .flow-node.primary-node { border-color: var(--primary-border); background: var(--primary-soft); }
+    .flow-node.success-node { border-color: color-mix(in srgb, var(--success) 28%, var(--border)); background: var(--success-soft); }
+    .flow-title { font-size: 11px; font-weight: 750; }
+    .flow-copy { margin-top: 5px; color: var(--muted-foreground); font-size: 9px; }
+    .flow-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .flow-arrow { color: var(--muted-foreground); font-size: 20px; text-align: center; }
+    .flow-split { display: grid; gap: 7px; }
+    .mini-node { padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); font-size: 9px; font-weight: 650; }
+
+    .provenance { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--border); }
+    .prov-cell { min-width: 0; padding: 9px 10px; background: var(--card); font-size: 9px; }
+    .prov-cell.head { background: var(--card-strong); color: var(--muted-foreground); font-weight: 650; }
+    .text-success { color: var(--success); }
+    .text-warning { color: var(--warning); }
+    .text-primary { color: var(--primary); }
+    .mt-12 { margin-top: 12px; }
+    .mt-16 { margin-top: 16px; }
+    .mobile-scrim { display: none; }
+
+    @media (max-width: 1180px) {
+      :root { --sidebar-width: 72px; }
+      .brand { justify-content: center; padding: 0; }
+      .brand-name, .preview-pill, .nav-label, .nav-item span:not(.nav-icon), .user-copy { display: none; }
+      .nav-item { justify-content: center; padding: 8px; }
+      .nav-item.child { padding-left: 8px; }
+      .sidebar-footer { grid-template-columns: 1fr; justify-items: center; }
+      .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .quality-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 850px) {
+      :root { --sidebar-width: 0px; }
+      .sidebar { width: 220px; transform: translateX(-100%); box-shadow: var(--shadow-lg); }
+      .sidebar.open { transform: translateX(0); }
+      .sidebar.open .brand { justify-content: flex-start; padding: 0 16px; }
+      .sidebar.open .brand-name, .sidebar.open .preview-pill, .sidebar.open .nav-label, .sidebar.open .nav-item span:not(.nav-icon), .sidebar.open .user-copy { display: initial; }
+      .sidebar.open .nav-item { justify-content: flex-start; padding: 7px 9px; }
+      .sidebar.open .nav-item.child { padding-left: 31px; }
+      .sidebar.open .sidebar-footer { grid-template-columns: 1fr auto; justify-items: initial; }
+      .mobile-scrim { position: fixed; inset: 0; z-index: 35; background: rgba(9, 9, 11, .42); }
+      .mobile-scrim.show { display: block; }
+      .menu-button { display: inline-grid; }
+      .topbar { padding: 0 14px; }
+      .content { padding: 18px 14px 32px; }
+      .page-head { flex-direction: column; }
+      .head-actions { width: 100%; }
+      .head-actions .button { min-width: 0; flex: 1; }
+      .grid.two-one, .grid.equal { grid-template-columns: 1fr; }
+      .iteration-detail { grid-template-columns: 1fr repeat(3, minmax(70px, .4fr)); }
+      .iteration-detail .button { grid-column: 1 / -1; }
+      .trace-layout { grid-template-columns: 1fr; }
+      .trace-tree { border-right: 0; border-bottom: 1px solid var(--border); }
+      .trace-nodes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .trace-node.level-1, .trace-node.level-2 { padding-left: 8px; }
+    }
+
+    @media (max-width: 560px) {
+      .environment, .breadcrumb { display: none; }
+      .page-title-row { align-items: flex-start; }
+      h1 { font-size: 21px; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .sync-banner { align-items: flex-start; flex-direction: column; }
+      .lifecycle { grid-template-columns: 1fr; gap: 11px; }
+      .lifecycle::before { top: 20px; bottom: 20px; left: 12px; width: 1px; height: auto; }
+      .life-step { display: grid; grid-template-columns: 25px 1fr; column-gap: 9px; text-align: left; }
+      .life-dot { grid-row: 1 / 4; margin: 0; }
+      .life-meta, .life-role { margin-top: 1px; }
+      .quality-grid { grid-template-columns: 1fr; }
+      .coverage-row { grid-template-columns: 1fr auto; }
+      .coverage-row .bar { grid-column: 1 / -1; grid-row: 2; }
+      .coverage-status { grid-column: 2; grid-row: 1; }
+      .coverage-count { display: none; }
+      .trace-nodes { grid-template-columns: 1fr; }
+      .trace-summary { align-items: flex-start; flex-direction: column; }
+      .event-row { grid-template-columns: 48px 22px minmax(0, 1fr); }
+      .event-cost { grid-column: 3; text-align: left; }
+      .iteration-detail { grid-template-columns: 1fr 1fr; }
+      .detail-stat { border-top: 1px solid var(--border); padding-top: 7px; }
+      .provenance { grid-template-columns: 120px minmax(160px, 1fr); overflow-x: auto; }
+      .prov-cell:nth-child(5n + 3), .prov-cell:nth-child(5n + 4), .prov-cell:nth-child(5n + 5) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Standalone design prototype: production implementation should bind these views to Agent Insight APIs. -->
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="主导航">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">AI</div>
+        <div class="brand-name">Agent Insight</div>
+        <span class="preview-pill">Design</span>
+      </div>
+      <div class="sidebar-scroll">
+        <div class="nav-section">
+          <div class="nav-label">工作台</div>
+          <div class="nav-item"><span class="nav-icon">⌂</span><span>概览</span></div>
+        </div>
+        <div class="nav-section">
+          <div class="nav-label">运行观测</div>
+          <div class="nav-item"><span class="nav-icon">◎</span><span>运行总览</span></div>
+          <div class="nav-item child"><span class="nav-icon"><i class="nav-dot"></i></span><span>链路追踪</span></div>
+          <div class="nav-item child active" aria-current="page"><span class="nav-icon"><i class="nav-dot"></i></span><span>Goal Plus</span></div>
+          <div class="nav-item child"><span class="nav-icon"><i class="nav-dot"></i></span><span>异常分析</span></div>
+        </div>
+        <div class="nav-section">
+          <div class="nav-label">评测中心</div>
+          <div class="nav-item"><span class="nav-icon">◇</span><span>评测实验</span></div>
+          <div class="nav-item"><span class="nav-icon">▥</span><span>数据集</span></div>
+        </div>
+        <div class="nav-section">
+          <div class="nav-label">持续优化</div>
+          <div class="nav-item"><span class="nav-icon">↗</span><span>质量监控</span></div>
+          <div class="nav-item"><span class="nav-icon">✦</span><span>优化洞察</span></div>
+        </div>
+        <div class="nav-section">
+          <div class="nav-label">系统配置</div>
+          <div class="nav-item"><span class="nav-icon">⚙</span><span>数据源</span></div>
+          <div class="nav-item"><span class="nav-icon">⌁</span><span>采集器</span></div>
+        </div>
+      </div>
+      <div class="sidebar-footer">
+        <div class="user">
+          <div class="avatar">QZ</div>
+          <div class="user-copy"><div class="user-name">qzh</div><div class="user-role">Workspace Admin</div></div>
+        </div>
+        <button class="icon-button" id="sideThemeButton" type="button" aria-label="切换深色主题">◐</button>
+      </div>
+    </aside>
+    <div class="mobile-scrim" id="mobileScrim"></div>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-button menu-button" id="menuButton" type="button" aria-label="打开导航">☰</button>
+          <span class="topbar-title">Goal Plus</span>
+          <span class="breadcrumb">/ 目标详情</span>
+        </div>
+        <div class="topbar-right">
+          <div class="environment"><span class="status-dot text-success"></span>Production · 已连接</div>
+          <button class="icon-button" id="themeButton" type="button" aria-label="切换深色主题">◐</button>
+          <button class="icon-button" type="button" aria-label="通知">◌</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="page-head" aria-labelledby="pageTitle">
+          <div>
+            <div class="eyebrow"><span>Goal Plus</span><span>›</span><span class="mono">goal_01K41T3G</span></div>
+            <div class="page-title-row">
+              <h1 id="pageTitle">优化推理服务 p95 延迟</h1>
+              <span class="badge success"><span class="status-dot"></span>已完成</span>
+              <span class="badge primary">数据完整</span>
+            </div>
+            <div class="head-meta">
+              <span>工作区：muyuan / inference-service</span>
+              <span>Goal Plus 0.4.0</span>
+              <span>开始于 09:42:18</span>
+              <span>更新于 10:30:30</span>
+            </div>
+          </div>
+          <div class="head-actions">
+            <button class="button" type="button">导出诊断包</button>
+            <button class="button primary" type="button" data-tab-target="trace">查看原生 Trace</button>
+          </div>
+        </section>
+
+        <div class="sync-banner">
+          <div class="sync-copy"><span class="status-dot"></span><span><strong>Goal Plus 数据已对齐。</strong> 语义快照、5 个原生 Execution 和 5 条强关联均已入库。</span></div>
+          <span>source <span class="mono">gpsrc_01K41P</span> · 8 秒前同步</span>
+        </div>
+
+        <section class="metrics" aria-label="目标指标">
+          <article class="metric"><div class="metric-label"><span>候选方案</span><span>◇</span></div><div class="metric-value">2</div><div class="metric-foot">Codex + Pi</div></article>
+          <article class="metric"><div class="metric-label"><span>优化迭代</span><span>↻</span></div><div class="metric-value">4</div><div class="metric-foot">全部完成</div></article>
+          <article class="metric"><div class="metric-label"><span>最终得分</span><span>↑</span></div><div class="metric-value">0.93</div><div class="metric-foot good">+0.22 相对基线</div></article>
+          <article class="metric"><div class="metric-label"><span>Token</span><span>T</span></div><div class="metric-value">128.4k</div><div class="metric-foot">输入 101.9k · 输出 26.5k</div></article>
+          <article class="metric"><div class="metric-label"><span>总耗时</span><span>◷</span></div><div class="metric-value">48m</div><div class="metric-foot">墙钟 48m 12s</div></article>
+          <article class="metric"><div class="metric-label"><span>估算成本</span><span>¥</span></div><div class="metric-value">$1.84</div><div class="metric-foot">跨 9 次模型调用</div></article>
+        </section>
+
+        <div class="tabs-wrap">
+          <div class="tabs" role="tablist" aria-label="Goal Plus 目标详情">
+            <button class="tab" id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true" data-tab="overview">概览</button>
+            <button class="tab" id="tab-candidates" role="tab" aria-controls="panel-candidates" aria-selected="false" data-tab="candidates">候选对比 <span class="tab-count">2</span></button>
+            <button class="tab" id="tab-trace" role="tab" aria-controls="panel-trace" aria-selected="false" data-tab="trace">原生 Trace <span class="tab-count">5</span></button>
+            <button class="tab" id="tab-quality" role="tab" aria-controls="panel-quality" aria-selected="false" data-tab="quality">数据质量 <span class="tab-count">100%</span></button>
+            <button class="tab" id="tab-flow" role="tab" aria-controls="panel-flow" aria-selected="false" data-tab="flow">数据流</button>
+          </div>
+        </div>
+
+        <section class="tab-panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+          <div class="grid two-one">
+            <article class="card">
+              <header class="card-header"><div><div class="card-title">目标执行生命周期</div><div class="card-subtitle">由 `.gp` 权威语义与原生 Execution 组合生成</div></div><span class="badge success">5 / 5 已关联</span></header>
+              <div class="card-body">
+                <div class="lifecycle">
+                  <div class="life-step"><div class="life-dot">✓</div><div class="life-name">目标创建</div><div class="life-meta">09:42:18</div><div class="life-role">Goal semantic</div></div>
+                  <div class="life-step"><div class="life-dot">✓</div><div class="life-name">主控规划</div><div class="life-meta">09:43:02</div><div class="life-role">Codex · main</div></div>
+                  <div class="life-step"><div class="life-dot">✓</div><div class="life-name">候选并行</div><div class="life-meta">09:48:11</div><div class="life-role">Codex + Pi</div></div>
+                  <div class="life-step"><div class="life-dot">✓</div><div class="life-name">终检决策</div><div class="life-meta">10:27:44</div><div class="life-role">Codex · checker</div></div>
+                  <div class="life-step"><div class="life-dot">✓</div><div class="life-name">结果固化</div><div class="life-meta">10:30:30</div><div class="life-role">Selection snapshot</div></div>
+                </div>
+                <div class="mt-16" style="padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--card-strong); color: var(--muted-foreground); font-size: 10px;">
+                  目标约束：不改变外部 API；p95 &lt; 180 ms；回归测试通过率 100%；峰值内存增幅 &lt; 5%。
+                </div>
+              </div>
+            </article>
+
+            <article class="card">
+              <header class="card-header"><div><div class="card-title">最终选择</div><div class="card-subtitle">final-checker 的可审计决策</div></div><span class="badge primary">Selected</span></header>
+              <div class="card-body">
+                <div class="selection">
+                  <div class="selection-top"><div><div class="candidate-name">候选 A · Codex</div><div class="card-subtitle">批处理 + 连接池热路径重构</div></div><div class="score">0.93 <small>/ 1.0</small></div></div>
+                  <div class="reason-list">
+                    <div class="reason"><span class="reason-mark">✓</span><span>p95 延迟</span><span class="reason-value">164 ms</span></div>
+                    <div class="reason"><span class="reason-mark">✓</span><span>回归测试</span><span class="reason-value">142 / 142</span></div>
+                    <div class="reason"><span class="reason-mark">✓</span><span>峰值内存</span><span class="reason-value">+2.1%</span></div>
+                  </div>
+                </div>
+                <button class="button mt-12" type="button" style="width:100%" data-open-trace="candidate-a">查看选择证据与原生 Trace</button>
+              </div>
+            </article>
+          </div>
+
+          <article class="card mt-12">
+            <header class="card-header"><div><div class="card-title">关键决策时间线</div><div class="card-subtitle">语义状态负责“为什么”，原生 trace 负责“怎么做”</div></div><button class="button tiny" type="button" data-tab-target="flow">查看数据来源</button></header>
+            <div style="overflow-x:auto">
+              <table class="activity">
+                <thead><tr><th>时间</th><th>阶段</th><th>决策 / 事件</th><th>来源</th><th>关联</th></tr></thead>
+                <tbody>
+                  <tr><td>09:43:02</td><td>规划</td><td>将目标拆为基线分析、热路径优化和回归验证</td><td><span class="badge">.gp run</span></td><td><span class="text-success">confirmed</span></td></tr>
+                  <tr><td>09:48:11</td><td>候选</td><td>并行启动 Codex 候选 A 与 Pi 候选 B</td><td><span class="badge">session snapshots</span></td><td><span class="text-success">2 / 2</span></td></tr>
+                  <tr><td>10:04:36</td><td>迭代</td><td>候选 A 针对连接池锁竞争进入第二轮</td><td><span class="badge">candidate revision 2</span></td><td><span class="text-success">confirmed</span></td></tr>
+                  <tr><td>10:27:44</td><td>终检</td><td>候选 A 在延迟、测试和资源约束上领先</td><td><span class="badge">final checker</span></td><td><span class="text-success">confirmed</span></td></tr>
+                  <tr><td>10:30:30</td><td>固化</td><td>选择 A，保留 B 的诊断结论作为替代证据</td><td><span class="badge">selection snapshot</span></td><td><span class="text-success">complete</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section class="tab-panel" id="panel-candidates" role="tabpanel" aria-labelledby="tab-candidates" hidden>
+          <div class="candidate-toolbar">
+            <div><div class="card-title">候选 × 迭代对比</div><div class="card-subtitle">点击任一迭代，查看其指标与原生 Execution</div></div>
+            <div class="legend"><span><i class="legend-dot selected"></i>当前选择</span><span><i class="legend-dot pass"></i>约束通过</span><span><i class="legend-dot"></i>未选择</span></div>
+          </div>
+          <article class="card lane-board">
+            <div class="lane-grid">
+              <div class="lane-cell lane-head">阶段</div><div class="lane-cell lane-head">候选 A · Codex</div><div class="lane-cell lane-head">候选 B · Pi</div><div class="lane-cell lane-head">决策</div>
+              <div class="lane-cell lane-row-label"><strong>Iteration 1</strong><span>基线与首轮实现</span></div>
+              <div class="lane-cell"><button class="iteration" type="button" data-candidate="候选 A · Codex" data-iteration="Iteration 1" data-score="0.84" data-duration="12m 08s" data-token="31.2k" data-trace-key="candidate-a" data-result="p95 191 ms；定位连接池锁竞争，测试 142/142。"><span><span class="iteration-title">批处理请求合并</span><span class="iteration-meta">p95 191 ms · 142 tests</span></span><span class="iteration-score">0.84</span></button></div>
+              <div class="lane-cell"><button class="iteration" type="button" data-candidate="候选 B · Pi" data-iteration="Iteration 1" data-score="0.80" data-duration="10m 41s" data-token="25.8k" data-trace-key="candidate-b" data-result="p95 202 ms；引入局部缓存，2 个压力测试波动。"><span><span class="iteration-title">局部结果缓存</span><span class="iteration-meta">p95 202 ms · 140 tests</span></span><span class="iteration-score">0.80</span></button></div>
+              <div class="lane-cell decision-cell">继续两组</div>
+              <div class="lane-cell lane-row-label"><strong>Iteration 2</strong><span>针对性优化</span></div>
+              <div class="lane-cell"><button class="iteration active" type="button" data-candidate="候选 A · Codex" data-iteration="Iteration 2" data-score="0.93" data-duration="13m 56s" data-token="36.4k" data-trace-key="candidate-a-i2" data-result="p95 164 ms；消除热路径锁竞争，回归测试全部通过。"><span><span class="iteration-title">连接池热路径重构</span><span class="iteration-meta">p95 164 ms · 142 tests</span></span><span class="iteration-score text-primary">0.93</span></button></div>
+              <div class="lane-cell"><button class="iteration" type="button" data-candidate="候选 B · Pi" data-iteration="Iteration 2" data-score="0.87" data-duration="9m 19s" data-token="22.1k" data-trace-key="candidate-b" data-result="p95 178 ms；缓存命中率改善，但峰值内存增加 5.8%。"><span><span class="iteration-title">缓存淘汰策略修正</span><span class="iteration-meta">p95 178 ms · memory +5.8%</span></span><span class="iteration-score">0.87</span></button></div>
+              <div class="lane-cell decision-cell win">选择 A<br>0.93</div>
+            </div>
+          </article>
+
+          <article class="card mt-12">
+            <div class="card-body iteration-detail" id="iterationDetail">
+              <div><div class="detail-title" id="iterationTitle">候选 A · Codex / Iteration 2</div><div class="detail-copy" id="iterationCopy">p95 164 ms；消除热路径锁竞争，回归测试全部通过。</div></div>
+              <div class="detail-stat"><span>综合得分</span><strong id="iterationScore">0.93</strong></div>
+              <div class="detail-stat"><span>执行耗时</span><strong id="iterationDuration">13m 56s</strong></div>
+              <div class="detail-stat"><span>Token</span><strong id="iterationToken">36.4k</strong></div>
+              <button class="button primary" id="iterationOpenTrace" type="button" data-open-trace="candidate-a-i2">打开 Execution</button>
+            </div>
+          </article>
+
+          <article class="card mt-12">
+            <header class="card-header"><div><div class="card-title">最终指标矩阵</div><div class="card-subtitle">选中值以绿色标记；质量约束来自 Goal Plus final checker</div></div></header>
+            <div style="overflow-x:auto">
+              <table class="comparison-table">
+                <thead><tr><th>指标</th><th>基线</th><th>候选 A</th><th>候选 B</th><th>约束</th></tr></thead>
+                <tbody>
+                  <tr><td>p50 延迟</td><td>92 ms</td><td class="better">61 ms</td><td>69 ms</td><td>观察项</td></tr>
+                  <tr><td>p95 延迟</td><td>241 ms</td><td class="better">164 ms</td><td>178 ms</td><td>&lt; 180 ms</td></tr>
+                  <tr><td>吞吐量</td><td>812 req/s</td><td class="better">1,084 req/s</td><td>1,012 req/s</td><td>&gt; 900 req/s</td></tr>
+                  <tr><td>回归测试</td><td>142 / 142</td><td class="better">142 / 142</td><td>142 / 142</td><td>100%</td></tr>
+                  <tr><td>峰值内存</td><td>1.00×</td><td class="better">1.021×</td><td class="text-warning">1.058×</td><td>&lt; 1.05×</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section class="tab-panel" id="panel-trace" role="tabpanel" aria-labelledby="tab-trace" hidden>
+          <article class="card">
+            <div class="trace-layout">
+              <aside class="trace-tree" aria-label="原生 Execution 树">
+                <div class="trace-tree-head"><div><div class="card-title">Execution 树</div><div class="card-subtitle">保留宿主原生父子关系</div></div><span class="badge success">5 linked</span></div>
+                <div class="trace-nodes">
+                  <button class="trace-node active" type="button" data-trace="main"><span class="node-icon">CX</span><span><span class="node-name">Goal controller</span><span class="node-sub">Codex · main</span></span><span class="node-time">48m</span></button>
+                  <button class="trace-node level-1" type="button" data-trace="candidate-a"><span class="node-icon">CX</span><span><span class="node-name">Candidate A</span><span class="node-sub">Codex · selected</span></span><span class="node-time">26m</span></button>
+                  <button class="trace-node level-2" type="button" data-trace="candidate-a-i2"><span class="node-icon">I2</span><span><span class="node-name">Iteration 2</span><span class="node-sub">native child trace</span></span><span class="node-time">13m</span></button>
+                  <button class="trace-node level-1" type="button" data-trace="candidate-b"><span class="node-icon">PI</span><span><span class="node-name">Candidate B</span><span class="node-sub">Pi · passive import</span></span><span class="node-time">20m</span></button>
+                  <button class="trace-node level-1" type="button" data-trace="checker"><span class="node-icon">CX</span><span><span class="node-name">Final checker</span><span class="node-sub">Codex · verifier</span></span><span class="node-time">2m</span></button>
+                </div>
+              </aside>
+              <div class="trace-detail">
+                <header class="trace-summary">
+                  <div><div class="trace-summary-title"><h2 id="traceTitle">Goal controller</h2><span class="badge success" id="traceStatus">完整</span></div><div class="card-subtitle" id="traceDescription">主控规划候选、汇总结果并触发 final checker。</div></div>
+                  <div class="trace-summary-meta"><span id="traceFramework">framework: codex</span><span id="traceDuration">48m 12s</span><span id="traceTokens">128.4k tokens</span><span id="traceFidelity">timing: exact</span></div>
+                </header>
+                <div class="event-list" id="eventList">
+                  <div class="event-row"><div class="event-time">09:42:18.041</div><div class="event-icon">U</div><div><div class="event-name">User · 创建优化目标</div><div class="event-copy">输入性能目标、约束和可接受验证条件。</div></div><div class="event-cost">semantic</div></div>
+                  <div class="event-row"><div class="event-time">09:43:02.118</div><div class="event-icon llm">LLM</div><div><div class="event-name">Model · 生成执行计划</div><div class="event-copy">拆分为基线确认、两条候选路径和统一终检。</div><div class="event-data">model=gpt-5.6-sol · input=8,142 · output=1,284 · finish=stop</div></div><div class="event-cost">9.4s<br>$0.12</div></div>
+                  <div class="event-row"><div class="event-time">09:47:52.889</div><div class="event-icon tool">TOOL</div><div><div class="event-name">Tool · 启动候选执行</div><div class="event-copy">为候选 A 创建 Codex task，为候选 B 创建隔离的 Pi session。</div><div class="event-data">candidate_a=thread_01K41T · candidate_b=pi_session_2a81 · parallel=true</div></div><div class="event-cost">218ms</div></div>
+                  <div class="event-row"><div class="event-time">10:26:58.374</div><div class="event-icon ok">✓</div><div><div class="event-name">Verifier · 候选结果已收敛</div><div class="event-copy">两组 required artifacts 和 benchmark 输出均已就绪。</div></div><div class="event-cost">4 / 4</div></div>
+                  <div class="event-row"><div class="event-time">10:30:30.006</div><div class="event-icon ok">✓</div><div><div class="event-name">Selection · 固化候选 A</div><div class="event-copy">写入 Goal Plus selection snapshot；关联 final-checker execution。</div></div><div class="event-cost">score 0.93</div></div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="tab-panel" id="panel-quality" role="tabpanel" aria-labelledby="tab-quality" hidden>
+          <div class="quality-grid">
+            <article class="card quality-card"><div class="ring" style="--value:100" data-label="100%"></div><div><div class="quality-name">语义覆盖</div><div class="quality-note">18 / 18 权威实体</div></div></article>
+            <article class="card quality-card"><div class="ring" style="--value:100" data-label="100%"></div><div><div class="quality-name">原生 Trace</div><div class="quality-note">5 / 5 executions</div></div></article>
+            <article class="card quality-card"><div class="ring" style="--value:100" data-label="100%"></div><div><div class="quality-name">关联覆盖</div><div class="quality-note">5 / 5 confirmed</div></div></article>
+            <article class="card quality-card"><div class="ring" style="--value:100" data-label="100%"></div><div><div class="quality-name">事件类别</div><div class="quality-note">7 / 7 required</div></div></article>
+          </div>
+
+          <div class="grid two-one mt-12">
+            <article class="card">
+              <header class="card-header"><div><div class="card-title">完整性证据</div><div class="card-subtitle">预期值来自 `.gp`，观测值来自 semantic 与 native 两条链路</div></div><span class="badge success">overall 100%</span></header>
+              <div class="card-body">
+                <div class="coverage-row"><div class="coverage-name">Goal / Run</div><div class="bar"><i style="width:100%"></i></div><div class="coverage-count">2 / 2</div><div class="coverage-status"><span class="badge success">Complete</span></div></div>
+                <div class="coverage-row"><div class="coverage-name">Candidates</div><div class="bar"><i style="width:100%"></i></div><div class="coverage-count">2 / 2</div><div class="coverage-status"><span class="badge success">Complete</span></div></div>
+                <div class="coverage-row"><div class="coverage-name">Iterations</div><div class="bar"><i style="width:100%"></i></div><div class="coverage-count">4 / 4</div><div class="coverage-status"><span class="badge success">Complete</span></div></div>
+                <div class="coverage-row"><div class="coverage-name">Native executions</div><div class="bar"><i style="width:100%"></i></div><div class="coverage-count">5 / 5</div><div class="coverage-status"><span class="badge success">Complete</span></div></div>
+                <div class="coverage-row"><div class="coverage-name">Selection / artifacts</div><div class="bar"><i style="width:100%"></i></div><div class="coverage-count">5 / 5</div><div class="coverage-status"><span class="badge success">Complete</span></div></div>
+              </div>
+            </article>
+
+            <article class="card">
+              <header class="card-header"><div><div class="card-title">保真度声明</div><div class="card-subtitle">“完整”不等于所有数据都来自 exact timing</div></div></header>
+              <div class="card-body fidelity-list">
+                <div class="fidelity-item"><span class="fidelity-label">Codex 时间</span><span class="fidelity-copy">hooks 原生时间戳</span><span class="badge success">Exact</span></div>
+                <div class="fidelity-item"><span class="fidelity-label">Pi 时间</span><span class="fidelity-copy">session 原生时间 + 2 条重建边界</span><span class="badge warning">Mixed</span></div>
+                <div class="fidelity-item"><span class="fidelity-label">内容策略</span><span class="fidelity-copy">prompt / output 最大 32 KiB</span><span class="badge primary">Bounded</span></div>
+                <div class="fidelity-item"><span class="fidelity-label">关联证据</span><span class="fidelity-copy">native ID 或 deterministic name</span><span class="badge success">Confirmed</span></div>
+                <div class="fidelity-item"><span class="fidelity-label">顺序</span><span class="fidelity-copy">Codex native；Pi native sequence</span><span class="badge success">Native</span></div>
+              </div>
+            </article>
+          </div>
+
+          <article class="card mt-12">
+            <header class="card-header"><div><div class="card-title">采集诊断</div><div class="card-subtitle">可用于判断“没有发生”和“发生但没有采到”</div></div><button class="button tiny" type="button" data-tab-target="flow">查看数据流</button></header>
+            <div style="overflow-x:auto">
+              <table class="activity">
+                <thead><tr><th>来源</th><th>最后检查点</th><th>Pending</th><th>Rejected</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="mono">.gp semantic snapshots</span></td><td>revision 27 · 10:30:38</td><td>0</td><td>0</td><td><span class="badge success">Healthy</span></td></tr>
+                  <tr><td><span class="mono">Codex hooks / OTLP</span></td><td>event 486 · 10:30:31</td><td>0</td><td>0</td><td><span class="badge success">Healthy</span></td></tr>
+                  <tr><td><span class="mono">Pi passive importer</span></td><td>offset 91842 · 10:26:51</td><td>0</td><td>0</td><td><span class="badge success">Healthy</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section class="tab-panel" id="panel-flow" role="tabpanel" aria-labelledby="tab-flow" hidden>
+          <article class="card">
+            <header class="card-header"><div><div class="card-title">本次目标的数据路径</div><div class="card-subtitle">从 Goal Plus 原始事实到 Agent Insight 可查询组合视图</div></div><span class="badge success">两条链路已汇合</span></header>
+            <div class="flow-canvas">
+              <div class="flow-grid">
+                <div><div class="flow-group-label">Goal Plus</div><div class="flow-node"><div class="flow-title">`.gp` durable state</div><div class="flow-copy">goal、run、2 candidates、4 iterations、selection 和 session references</div><div class="flow-tags"><span class="badge">revision 27</span><span class="badge success">valid</span></div></div></div>
+                <div class="flow-arrow">→</div>
+                <div><div class="flow-group-label">Local collector</div><div class="flow-split"><div class="mini-node text-primary">Semantic parser → snapshot spool</div><div class="mini-node text-primary">Pi importer → canonical events</div><div class="mini-node">Codex hooks → existing OTLP</div></div></div>
+                <div class="flow-arrow">→</div>
+                <div><div class="flow-group-label">Ingestion</div><div class="flow-split"><div class="mini-node">Goal Plus snapshot API</div><div class="mini-node">Existing OTLP API</div><div class="mini-node text-success">Idempotency ACK</div></div></div>
+                <div class="flow-arrow">→</div>
+                <div><div class="flow-group-label">Storage + link</div><div class="flow-node primary-node"><div class="flow-title">Domain + Execution tables</div><div class="flow-copy">以 5 条 confirmed links 连接，不修改 native parent tree</div><div class="flow-tags"><span class="badge primary">5 links</span><span class="badge">0 ambiguous</span></div></div></div>
+                <div class="flow-arrow">→</div>
+                <div><div class="flow-group-label">Agent Insight</div><div class="flow-node success-node"><div class="flow-title">Composite Goal Trace</div><div class="flow-copy">候选对比、原生事件、token、选择证据、完整性与 fidelity</div><div class="flow-tags"><span class="badge success">complete</span><span class="badge warning">Pi timing mixed</span></div></div></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card mt-12">
+            <header class="card-header"><div><div class="card-title">来源与关联证据</div><div class="card-subtitle">任何 composite 节点都可以追溯到语义文件和原生 Execution</div></div></header>
+            <div class="card-body">
+              <div class="provenance" role="table" aria-label="来源与关联证据">
+                <div class="prov-cell head">语义实体</div><div class="prov-cell head">原生执行</div><div class="prov-cell head">方法</div><div class="prov-cell head">证据</div><div class="prov-cell head">状态</div>
+                <div class="prov-cell">run / main</div><div class="prov-cell mono">exec_cx_01K41T</div><div class="prov-cell">native ID</div><div class="prov-cell mono">thread_id exact</div><div class="prov-cell text-success">confirmed</div>
+                <div class="prov-cell">candidate A</div><div class="prov-cell mono">exec_cx_01K41V</div><div class="prov-cell">native ID</div><div class="prov-cell mono">thread_id exact</div><div class="prov-cell text-success">confirmed</div>
+                <div class="prov-cell">candidate B</div><div class="prov-cell mono">exec_pi_2a81</div><div class="prov-cell">session ID</div><div class="prov-cell mono">pi_session exact</div><div class="prov-cell text-success">confirmed</div>
+                <div class="prov-cell">final checker</div><div class="prov-cell mono">exec_cx_01K420</div><div class="prov-cell">task name</div><div class="prov-cell mono">gp.final-checker.v1</div><div class="prov-cell text-success">confirmed</div>
+              </div>
+            </div>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const root = document.documentElement;
+      const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+      const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
+      const sidebar = document.getElementById('sidebar');
+      const scrim = document.getElementById('mobileScrim');
+
+      function activateTab(name, focus = false, updateHash = true) {
+        if (!tabs.some((tab) => tab.dataset.tab === name)) name = 'overview';
+        tabs.forEach((tab) => {
+          const active = tab.dataset.tab === name;
+          tab.setAttribute('aria-selected', String(active));
+          tab.tabIndex = active ? 0 : -1;
+          if (active && focus) tab.focus();
+        });
+        panels.forEach((panel) => { panel.hidden = panel.id !== `panel-${name}`; });
+        if (updateHash) history.replaceState(null, '', `#${name}`);
+      }
+
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => activateTab(tab.dataset.tab));
+        tab.addEventListener('keydown', (event) => {
+          if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : (index - 1 + tabs.length) % tabs.length;
+          activateTab(tabs[next].dataset.tab, true);
+        });
+      });
+
+      document.querySelectorAll('[data-tab-target]').forEach((button) => {
+        button.addEventListener('click', () => activateTab(button.dataset.tabTarget));
+      });
+
+      function toggleTheme() {
+        const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+        root.dataset.theme = next;
+        document.querySelectorAll('#themeButton, #sideThemeButton').forEach((button) => {
+          button.setAttribute('aria-label', next === 'dark' ? '切换浅色主题' : '切换深色主题');
+        });
+      }
+      document.getElementById('themeButton').addEventListener('click', toggleTheme);
+      document.getElementById('sideThemeButton').addEventListener('click', toggleTheme);
+
+      function setSidebar(open) {
+        sidebar.classList.toggle('open', open);
+        scrim.classList.toggle('show', open);
+        document.getElementById('menuButton').setAttribute('aria-expanded', String(open));
+      }
+      document.getElementById('menuButton').addEventListener('click', () => setSidebar(!sidebar.classList.contains('open')));
+      scrim.addEventListener('click', () => setSidebar(false));
+
+      const traceData = {
+        main: {
+          title: 'Goal controller', description: '主控规划候选、汇总结果并触发 final checker。', framework: 'framework: codex', duration: '48m 12s', tokens: '128.4k tokens', fidelity: 'timing: exact', status: '完整'
+        },
+        'candidate-a': {
+          title: 'Candidate A · Codex', description: '执行批处理与连接池热路径优化；最终被选中。', framework: 'framework: codex', duration: '26m 04s', tokens: '67.6k tokens', fidelity: 'timing: exact', status: '已选择'
+        },
+        'candidate-a-i2': {
+          title: 'Candidate A / Iteration 2', description: '消除连接池锁竞争并完成 142 项回归验证。', framework: 'framework: codex', duration: '13m 56s', tokens: '36.4k tokens', fidelity: 'timing: exact', status: '完整'
+        },
+        'candidate-b': {
+          title: 'Candidate B · Pi', description: '由 native Pi session 被动导入；语义完整，部分边界时间为重建值。', framework: 'framework: pi-agent', duration: '20m 00s', tokens: '47.9k tokens', fidelity: 'timing: mixed', status: '完整'
+        },
+        checker: {
+          title: 'Final checker', description: '统一复核性能、测试和资源约束并生成选择证据。', framework: 'framework: codex', duration: '2m 46s', tokens: '12.9k tokens', fidelity: 'timing: exact', status: '完整'
+        }
+      };
+
+      const traceEvents = {
+        main: [
+          ['09:42:18.041', 'U', '', 'User · 创建优化目标', '输入性能目标、约束和可接受验证条件。', '', 'semantic'],
+          ['09:43:02.118', 'LLM', 'llm', 'Model · 生成执行计划', '拆分为基线确认、两条候选路径和统一终检。', 'model=gpt-5.6-sol · input=8,142 · output=1,284 · finish=stop', '9.4s · $0.12'],
+          ['09:47:52.889', 'TOOL', 'tool', 'Tool · 启动候选执行', '为候选 A 创建 Codex task，为候选 B 创建隔离的 Pi session。', 'candidate_a=thread_01K41T · candidate_b=pi_session_2a81 · parallel=true', '218ms'],
+          ['10:26:58.374', '✓', 'ok', 'Verifier · 候选结果已收敛', '两组 required artifacts 和 benchmark 输出均已就绪。', '', '4 / 4'],
+          ['10:30:30.006', '✓', 'ok', 'Selection · 固化候选 A', '写入 Goal Plus selection snapshot；关联 final-checker execution。', '', 'score 0.93']
+        ],
+        'candidate-a': [
+          ['09:48:11.203', 'U', '', 'Task · 接收候选约束', '在不改变 API 的前提下降低 p95，并完成全量回归。', '', 'iteration 1'],
+          ['09:49:06.572', 'LLM', 'llm', 'Model · 分析性能基线', '识别批处理粒度和连接池锁竞争为主要热区。', 'model=gpt-5.6-sol · input=12,824 · output=2,043', '14.1s · $0.24'],
+          ['10:05:14.992', 'TOOL', 'tool', 'Tool · 应用热路径重构', '缩短锁持有区间，将连接状态移出串行路径。', 'files=3 · additions=84 · deletions=39', '1.8s'],
+          ['10:18:28.404', 'TOOL', 'tool', 'Tool · 运行 benchmark 与回归', 'p95 降至 164 ms，142 项测试全部通过。', 'p95=164ms · throughput=1084rps · tests=142/142', '8m 42s'],
+          ['10:21:58.108', '✓', 'ok', 'Candidate · 提交最终产物', '候选得分 0.93，约束均满足。', '', 'selected']
+        ],
+        'candidate-a-i2': [
+          ['10:04:36.021', 'U', '', 'Iteration · 针对锁竞争迭代', '保留首轮批处理优化，继续消除连接池串行瓶颈。', '', 'revision 2'],
+          ['10:05:14.992', 'TOOL', 'tool', 'Tool · 修改连接池热路径', '将健康检查与状态更新拆出关键区。', 'pool.ts · scheduler.ts · pool.test.ts', '1.8s'],
+          ['10:11:47.345', 'LLM', 'llm', 'Model · 检查并发安全性', '复核资源释放、失败回滚和请求取消路径。', 'input=9,218 · output=1,486 · finish=stop', '11.7s · $0.17'],
+          ['10:18:28.404', 'TOOL', 'tool', 'Tool · 验证结果', '性能和回归门禁同时通过。', 'p95=164ms · memory=1.021x · tests=142/142', '8m 42s'],
+          ['10:18:32.118', '✓', 'ok', 'Iteration · 完成', '写入候选 revision 2 和 artifact references。', '', 'score 0.93']
+        ],
+        'candidate-b': [
+          ['09:48:11.617', 'U', '', 'Pi session · 接收候选约束', 'Goal Plus 以 --no-extensions 启动隔离 worker。', '', 'native session'],
+          ['09:49:21.000', 'LLM', 'llm', 'Model · 选择局部缓存路径', '以低侵入缓存降低重复推理和序列化开销。', 'source=pi-session · input=10,406 · output=1,918', 'timing exact'],
+          ['10:08:07.000', 'TOOL', 'tool', 'Tool · 压测缓存实现', 'p95 达到 178 ms，但峰值内存增加 5.8%。', 'p95=178ms · memory=1.058x · tests=142/142', 'native sequence 88'],
+          ['10:26:51.000', '✓', 'ok', 'Passive importer · 会话导入完成', '92 条 native records 已转换为 canonical pi-agent events。', 'offset=91842 · rejected=0', 'timing mixed']
+        ],
+        checker: [
+          ['10:27:44.003', 'U', '', 'Verifier · 接收两组候选', '读取 benchmark、回归、资源和 artifact 证据。', '', '2 candidates'],
+          ['10:28:06.951', 'TOOL', 'tool', 'Tool · 校验约束', '候选 A 全部通过；候选 B 超出峰值内存约束。', 'A=pass · B=memory_failed', '906ms'],
+          ['10:29:22.480', 'LLM', 'llm', 'Model · 生成选择理由', '选择 A，并保留 B 的缓存诊断作为替代证据。', 'input=7,102 · output=1,109', '8.8s · $0.10'],
+          ['10:30:30.006', '✓', 'ok', 'Selection · 决策确认', '综合得分 0.93，选择证据写入 durable state。', '', 'confirmed']
+        ]
+      };
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+      }
+
+      function renderEvents(key) {
+        const events = traceEvents[key] || traceEvents.main;
+        document.getElementById('eventList').innerHTML = events.map((event) => `
+          <div class="event-row">
+            <div class="event-time">${escapeHtml(event[0])}</div>
+            <div class="event-icon ${escapeHtml(event[2])}">${escapeHtml(event[1])}</div>
+            <div>
+              <div class="event-name">${escapeHtml(event[3])}</div>
+              <div class="event-copy">${escapeHtml(event[4])}</div>
+              ${event[5] ? `<div class="event-data">${escapeHtml(event[5])}</div>` : ''}
+            </div>
+            <div class="event-cost">${escapeHtml(event[6])}</div>
+          </div>`).join('');
+      }
+
+      function selectTrace(key) {
+        const data = traceData[key] || traceData.main;
+        document.querySelectorAll('.trace-node').forEach((node) => node.classList.toggle('active', node.dataset.trace === key));
+        document.getElementById('traceTitle').textContent = data.title;
+        document.getElementById('traceDescription').textContent = data.description;
+        document.getElementById('traceFramework').textContent = data.framework;
+        document.getElementById('traceDuration').textContent = data.duration;
+        document.getElementById('traceTokens').textContent = data.tokens;
+        document.getElementById('traceFidelity').textContent = data.fidelity;
+        document.getElementById('traceStatus').textContent = data.status;
+        renderEvents(key);
+      }
+      document.querySelectorAll('.trace-node').forEach((node) => node.addEventListener('click', () => selectTrace(node.dataset.trace)));
+      document.querySelectorAll('[data-open-trace]').forEach((button) => {
+        button.addEventListener('click', () => {
+          activateTab('trace');
+          selectTrace(button.dataset.openTrace);
+        });
+      });
+
+      document.querySelectorAll('.iteration').forEach((button) => {
+        button.addEventListener('click', () => {
+          document.querySelectorAll('.iteration').forEach((item) => item.classList.remove('active'));
+          button.classList.add('active');
+          document.getElementById('iterationTitle').textContent = `${button.dataset.candidate} / ${button.dataset.iteration}`;
+          document.getElementById('iterationCopy').textContent = button.dataset.result;
+          document.getElementById('iterationScore').textContent = button.dataset.score;
+          document.getElementById('iterationDuration').textContent = button.dataset.duration;
+          document.getElementById('iterationToken').textContent = button.dataset.token;
+          document.getElementById('iterationOpenTrace').dataset.openTrace = button.dataset.traceKey;
+        });
+      });
+
+      const initialTab = location.hash.slice(1);
+      activateTab(initialTab || 'overview', false, false);
+    })();
+  </script>
+</body>
+</html>

@@ -7,9 +7,10 @@ const fs = require('fs')
 const os = require('os')
 
 const { sleep, isPortListening, findAvailablePort } = require('./utils.js')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
 function getPreferredHomeDataRoot() {
-  return path.join(os.homedir(), '.agent-insight')
+  return getAgentInsightHome()
 }
 
 function getLegacyHomeDataRoot() {

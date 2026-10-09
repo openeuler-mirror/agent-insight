@@ -57,7 +57,7 @@ if [ "$INSTALL_ACTRAIL" = "true" ]; then
             *) ACTRAIL_ALLOW_INSECURE=false ;;
         esac
 
-        ACTRAIL_INSIGHT_DIR="$HOME/.agent-insight/actrail"
+        ACTRAIL_INSIGHT_DIR="$AGENT_INSIGHT_HOME/actrail"
         ACTRAIL_OTEL_CONFIG="$ACTRAIL_INSIGHT_DIR/otel-http.config.toml"
         mkdir -p "$ACTRAIL_INSIGHT_DIR"
         chmod 0700 "$ACTRAIL_INSIGHT_DIR"

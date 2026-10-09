@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import CollectorConfig, _default_spool_root
+from .config import CollectorConfig, _default_home, _default_spool_root
 from .spool import Spool
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -17,7 +17,7 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 def _load_model_environment(environment: dict[str, str]) -> None:
     path = Path(
         environment.get("AGENT_INSIGHT_LLAMA_MODEL_ENV")
-        or (Path.home() / ".agent-insight" / "llamaindex.env")
+        or (_default_home() / "llamaindex.env")
     ).expanduser()
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -129,7 +129,7 @@ def _purge(args: argparse.Namespace) -> int:
         removed += 1
     model_env = Path(
         os.environ.get("AGENT_INSIGHT_LLAMA_MODEL_ENV")
-        or (Path.home() / ".agent-insight" / "llamaindex.env")
+        or (_default_home() / "llamaindex.env")
     ).expanduser()
     if (
         model_env.is_file()

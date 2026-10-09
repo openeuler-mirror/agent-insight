@@ -200,7 +200,7 @@ function stopQoderWorkUploaders(insightDir) {
 /** @param {any} options */
 export function installQoderWorkCollector(options = {}) {
   const homeDir = options.homeDir || os.homedir()
-  const insightDir = options.insightDir || path.join(homeDir, ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
   const sourceDir = options.sourceDir || path.dirname(fileURLToPath(import.meta.url))
   const qoderWorkHome = resolveQoderWorkHome(homeDir, options.qoderWorkHome)
   const installedConfig = readEnvFile(path.join(insightDir, "config"))
@@ -238,7 +238,7 @@ export function installQoderWorkCollector(options = {}) {
 /** @param {any} options */
 export function uninstallQoderWorkCollector(options = {}) {
   const homeDir = options.homeDir || os.homedir()
-  const insightDir = options.insightDir || path.join(homeDir, ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
   const qoderWorkHome = resolveQoderWorkHome(homeDir, options.qoderWorkHome)
   const settingsPath = path.join(qoderWorkHome, "settings.json")
   if (fs.existsSync(settingsPath)) {
@@ -302,4 +302,10 @@ if (import.meta.url === invokedPath) {
     process.stderr.write(`agent-insight-qoder-work-setup: ${error?.message || String(error)}\n`)
     process.exitCode = 1
   }
+}
+
+function getAgentInsightHome(homeDir = os.homedir()) {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(homeDir, '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => homeDir))
 }

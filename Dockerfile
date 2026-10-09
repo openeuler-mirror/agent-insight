@@ -6,7 +6,7 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
-    AGENT_INSIGHT_DATA_DIR=/data/agent-insight \
+    AGENT_INSIGHT_HOME=/data/agent-insight \
     PATH=/app/node_modules/.bin:$PATH \
     OPENCODE_BIN=/app/node_modules/.bin/opencode
 

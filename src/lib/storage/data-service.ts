@@ -1,3 +1,6 @@
+import type { Prisma } from '@prisma/client';
+import { aggregateExecutionList } from '@/lib/storage/execution-list-sql';
+import { selectComputedRecordPage, type ComputedRecordPageOptions } from '@/lib/storage/computed-record-page';
 import fs from 'fs';
 import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
@@ -41,6 +44,7 @@ import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { extractSkillsWithVersionsFromQwenPawSession, normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
 import type { FilterClause } from '@/lib/filters/types';
+import { goalPlusProjectedWorkerExecutionWhere } from '@/lib/ingest/collaboration/query';
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
@@ -61,6 +65,7 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'qwenpaw',
     'pi-agent',
     'deepseek-harness',
+    'trae',
 ]);
 
 export interface InvokedSkill {
@@ -75,6 +80,12 @@ export interface InvokedSkill {
 const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
+
+export function allowsSnapshotShrinkForFramework(framework: string | null | undefined): boolean {
+    const adapter = getAdapter(framework);
+    return adapter.capabilities?.allowSnapshotShrink === true
+        || (adapter.descriptor.id === 'jiuwenswarm' && process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true');
+}
 
 /** semver 如 "1.0.0"（skill frontmatter 常用格式）解析为整数主版本号；无法解析返回 null。 */
 function numericSemverMajor(value: unknown): number | null {
@@ -209,7 +220,7 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'langfuse-langgraph' || framework === 'codeagent' || framework === 'deepseek-harness') {
+    if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'pi-agent' || framework === 'langfuse-langgraph' || framework === 'codeagent' || framework === 'deepseek-harness') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
@@ -1187,6 +1198,7 @@ const EVALUATION_FILE = path.join(DATA_DIR, 'evaluation_result.json');
 const AUDIT_DATA_MUTATIONS = process.env.AUDIT_DATA_MUTATIONS === '1' || process.env.AUDIT_DATA_MUTATIONS === 'true';
 
 interface ReadRecordFilters {
+    excludedTaskIds?: string[];
     query?: string;
     taskId?: string;
     taskIds?: string[];
@@ -1199,6 +1211,8 @@ interface ReadRecordFilters {
     includeSubagents?: boolean;
     /** 只返回 sub-agent 行（不含 root），与 includeSubagents 互斥；优先级高于 includeSubagents */
     onlySubagents?: boolean;
+    /** Trace 列表把已关联的 Goal Plus worker 作为只读子 Agent 展示，而不是独立根行。 */
+    collapseGoalPlusWorkers?: boolean;
     /** 列出指定 root 下的所有 sub-agent */
     parentExecutionId?: string | null;
     /**
@@ -1214,6 +1228,13 @@ interface ReadRecordFilters {
     ownership?: 'user' | 'system';
     /** Trace 列表兼容 agentName 为空、名称仅存在于 observedAgents 的历史记录。 */
     observedAgentFallback?: boolean;
+}
+
+export function resolveExecutionSubagentFilter(filters?: ReadRecordFilters): boolean | undefined {
+    if (filters?.onlySubagents === true) return true;
+    if (filters?.includeSubagents === true || filters?.parentExecutionId !== undefined
+        || filters?.taskId || filters?.taskIds?.length) return undefined;
+    return false;
 }
 
 interface ReadRecordsOptions {
@@ -1233,6 +1254,8 @@ interface ReadRecordsOptions {
     sortDir?: 'asc' | 'desc';
     /** Trace 列表显式启用；其他 readRecordPage 调用方保持原有全量去重后分页语义。 */
     databasePagination?: boolean;
+    computedPage?: Pick<ComputedRecordPageOptions, 'status' | 'anomaly' | 'sortKey'>;
+    lifecycleNow?: number;
 }
 
 export interface ReadRecordPageStats {
@@ -1296,11 +1319,14 @@ export async function listObservedAgentNames(user?: string, observedAgentFallbac
         where.user = user;
     }
 
-    const records = await db.findExecutions(
-        where,
-        { timestamp: 'desc' },
-        { framework: true, agentName: true, observedAgents: true },
-    );
+    const records = process.env.DB_HOST
+        ? await db.findExecutions(where, { timestamp: 'desc' }, { agentName: true, observedAgents: true })
+        : await prismaRaw.execution.groupBy({
+            by: ['agentName', 'observedAgents'],
+            where,
+            _max: { timestamp: true },
+            orderBy: { _max: { timestamp: 'desc' } },
+        });
     const names: string[] = [];
     const seen = new Set<string>();
     for (const record of records) {
@@ -1391,7 +1417,7 @@ export async function listObservedFieldValues(
         }
     }
     if (!FACETABLE_COLUMNS.has(column)) return [];
-    const where: any = { isSubagent: false, [column]: { not: null } };
+    const where: any = { isSubagent: column === 'subagentType', [column]: { not: null } };
     if (user) where.user = user;
     try {
         const rows = await prismaRaw.execution.groupBy({
@@ -1447,7 +1473,7 @@ export const LIGHT_EXECUTION_SELECT: Record<string, boolean> = {
     id: true, taskId: true, query: true, framework: true, tokens: true, cost: true, latency: true,
     toolCallCount: true, llmCallCount: true, inputTokens: true, outputTokens: true, toolCallErrorCount: true,
     cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true, reasoningTokens: true,
-    timestamp: true, model: true, clientId: true, hostIp: true, hostName: true, observedIp: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
+    timestamp: true, lastIngestedAt: true, model: true, clientId: true, hostIp: true, hostName: true, observedIp: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
     isSkillCorrect: true, isAnswerCorrect: true, answerScore: true, skillScore: true, judgmentReason: true,
     failures: true, skillIssues: true, skillVersion: true, label: true, user: true, skillTriggerRate: true,
     parentExecutionId: true, rootExecutionId: true, agentSessionId: true, subagentType: true,
@@ -1835,14 +1861,7 @@ async function readRecordsInternal(
         where.user = user;
     }
 
-    // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
-    // 显式按 taskId / taskIds / parentExecutionId 查询时跳过该过滤，
-    // 让"按 sub-agent sessionID 直查"和"列出某 root 的所有子 agent"都能工作。
-    const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
-    // 按 skill 筛选时走 ExecutionSkill(agent 作用域):结果应精确命中真正用到该 skill 的那一层,
-    // 可能是 sub-agent 行,因此放开默认的 isSubagent=false 排除。
-    // skill 既可来自单值 filters.skill(旧路径 / ?skill= 深链),也可来自结构化过滤的
-    // `skill any of [...]` clause(左侧栏 facet 多选)。合并成一组 skillName 一次反查。
+    const subagentFilter = resolveExecutionSubagentFilter(filters);
     const skillNamesFromClauses = (filters?.clauses ?? [])
         .filter((c) => c.column === 'skill' && (c.operator === 'any of' || c.operator === '='))
         .flatMap((c) => (Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []))
@@ -1852,15 +1871,27 @@ async function readRecordsInternal(
         ...skillNamesFromClauses,
     ]));
     const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
-    if (filters?.onlySubagents === true) {
-        where.isSubagent = true;
-    } else if (
-        filters?.includeSubagents !== true &&
-        filters?.parentExecutionId === undefined &&
-        !hasExplicitTaskIdFilter &&
-        !skillFilterActive
-    ) {
+    const collapseGoalPlusWorkers = filters?.collapseGoalPlusWorkers === true && !process.env.DB_HOST;
+    const projectedGoalPlusWorkerWhere = collapseGoalPlusWorkers
+        ? await goalPlusProjectedWorkerExecutionWhere(filters?.showAllUsers ? undefined : user)
+        : null;
+    if (subagentFilter === true) {
+        if (projectedGoalPlusWorkerWhere) {
+            where.AND = [
+                ...(Array.isArray(where.AND) ? where.AND : []),
+                { OR: [{ isSubagent: true }, projectedGoalPlusWorkerWhere] },
+            ];
+        } else {
+            where.isSubagent = true;
+        }
+    } else if (subagentFilter === false) {
         where.isSubagent = false;
+        if (projectedGoalPlusWorkerWhere) {
+            where.AND = [
+                ...(Array.isArray(where.AND) ? where.AND : []),
+                { NOT: projectedGoalPlusWorkerWhere },
+            ];
+        }
     }
 
     if (filters?.parentExecutionId !== undefined) {
@@ -1961,6 +1992,10 @@ async function readRecordsInternal(
         }
     }
 
+    if (filters?.excludedTaskIds?.length) {
+        where.AND = [...((where.AND as any[]) ?? []), { OR: [{ taskId: null }, { taskId: { notIn: filters.excludedTaskIds } }] }];
+    }
+
     const sortKey = options?.sortKey ?? 'timestamp';
     const sortDir = options?.sortDir ?? 'desc';
     const orderBy = [{ [sortKey]: sortDir }, { id: sortDir }];
@@ -1968,20 +2003,36 @@ async function readRecordsInternal(
     let paged: any[] = [];
     let byTaskId = new Map<string, any[]>();
     let keepIds = new Set<string>();
+    let computedStats: ReadRecordPageStats | undefined;
 
-    if (pageSize > 0 && options?.databasePagination === true && !process.env.DB_HOST) {
+    if (pageSize > 0 && options?.databasePagination === true && options.computedPage && !process.env.DB_HOST) {
+        const selected = await selectComputedRecordPage(where, {
+            ...options.computedPage, sortDir, page, pageSize, lifecycleNow: options.lifecycleNow,
+        });
+        total = selected.total;
+        computedStats = selected.stats;
+        const rows = selected.ids.length ? await prismaRaw.execution.findMany({
+            where: { id: { in: selected.ids } }, select: LIGHT_EXECUTION_SELECT as any,
+        }) : [];
+        const byId = new Map<string, any>(rows.map((row: any) => [row.id, row]));
+        paged = selected.ids.map(id => byId.get(id)).filter(Boolean);
+    } else if (pageSize > 0 && options?.databasePagination === true && !process.env.DB_HOST) {
         // SQLite/Prisma 主路径：过滤、排序、分页都在数据库中完成。列表后续的标签、状态、
         // 评测补充只处理当前页，避免“全量 hydrate 后再 slice”的假分页。
-        [total, paged] = await prismaRaw.$transaction([
-            prismaRaw.execution.count({ where }),
-            prismaRaw.execution.findMany({
+        const [stats, rows] = await prismaRaw.$transaction(async transaction => {
+            const stats = await aggregateExecutionList(where, { lifecycleNow: options.lifecycleNow }, transaction);
+            const rows = await transaction.execution.findMany({
                 where,
                 orderBy,
                 skip: (page - 1) * pageSize,
                 take: pageSize,
                 select: LIGHT_EXECUTION_SELECT as any,
-            }),
-        ]);
+            });
+            return [stats, rows] as const;
+        });
+        total = stats.total;
+        computedStats = stats;
+        paged = rows;
     } else {
         // OpenGauss 适配器和非分页旧调用保持原行为；本次不扩展其它页面/数据库适配层。
         const records = await db.findExecutions(
@@ -1992,7 +2043,7 @@ async function readRecordsInternal(
         const dedup = selectKeepIdsByTaskId(records);
         keepIds = dedup.keepIds;
         byTaskId = dedup.byTaskId;
-        const filtered = records.filter((r: any) => !r.taskId || keepIds.has(r.id));
+        const filtered = records.filter((r: any) => (!r.taskId || keepIds.has(r.id)) && !filters?.excludedTaskIds?.includes(r.taskId));
         total = filtered.length;
         paged = pageSize > 0
             ? filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
@@ -2039,24 +2090,10 @@ async function readRecordsInternal(
         out.push(...normalizedBatch);
     }
     let stats: ReadRecordPageStats;
-    if (pageSize > 0 && !process.env.DB_HOST) {
-        const aggregate = await prismaRaw.execution.aggregate({
-            where,
-            _avg: { latency: true },
-            _sum: { toolCallCount: true, toolCallErrorCount: true },
-        });
-        const totalTools = aggregate._sum.toolCallCount ?? 0;
-        const totalToolErrors = aggregate._sum.toolCallErrorCount ?? 0;
-        stats = {
-            total,
-            // 当前生命周期读路径只产出 running/success；failed 保留在 API enrichment 后兼容计算。
-            failedCount: 0,
-            // Execution.latency 已是毫秒，不再 ×1000（见 issue-159-codex-fixed.md Bug 10）
-            avgLatencyMs: (aggregate._avg.latency ?? 0),
-            toolErrorRate: totalTools > 0
-                ? Math.round((totalToolErrors / totalTools) * 1000) / 10
-                : 0,
-        };
+    if (computedStats) {
+        stats = computedStats;
+    } else if (pageSize > 0 && !process.env.DB_HOST) {
+        stats = { ...await aggregateExecutionList(where, { lifecycleNow: options?.lifecycleNow }), total };
     } else {
         const totalTools = out.reduce((sum, item) => sum + (item.tool_call_count ?? 0), 0);
         const totalToolErrors = out.reduce((sum, item) => sum + (item.tool_call_error_count ?? 0), 0);
@@ -2277,7 +2314,8 @@ async function normalizeLegacyCodexSessionHistory(
     });
 }
 
-export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
+export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
+    const receivedAt = options?.receivedAt === null ? null : options?.receivedAt ?? new Date();
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
 
@@ -2497,10 +2535,9 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 // snapshot-replace 防退化护栏：上游或服务端聚合层每批都重新形成「当前会话快照」后整条
                 // 覆盖，正常情况下 incoming 是越来越全的快照。但若 span spool 在极端下仍残缺（历史 span
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
-                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。Qoder 的完整 turn
-                // 快照允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
-                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true'
-                    || targetRecord.complete_session_snapshot === true;
+                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。只有适配器声明完整快照
+                // 能力的框架允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
+                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
                     let existingInteractions = existingSession?.interactions
@@ -2513,7 +2550,9 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                         console.warn(
                             `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
                             `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
-                            `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`,
+                            (storageAdapter.descriptor.id === 'jiuwenswarm'
+                                ? `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`
+                                : `当前框架未声明允许快照缩小。`),
                         );
                         return { success: true, record: targetRecord };
                     }
@@ -2820,6 +2859,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
         ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession, storedAgentName, observedAgentOptions))
         : null;
+    const previousReceivedAt = dbRecord?.lastIngestedAt ? new Date(dbRecord.lastIngestedAt).getTime() : 0;
+    const lastIngestedAt = receivedAt ? new Date(Math.max(previousReceivedAt, receivedAt.getTime())) : dbRecord?.lastIngestedAt ?? null;
     await db.upsertExecution({
         where: { id: recordId },
         create: {
@@ -2831,6 +2872,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cost: targetRecord.cost,
             latency: targetRecord.latency,
             timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
+            lastIngestedAt,
             finalResult: targetRecord.final_result,
             skill: targetRecord.skill,
             skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
@@ -2873,6 +2915,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cost: targetRecord.cost,
             latency: targetRecord.latency,
             timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
+            lastIngestedAt,
             finalResult: targetRecord.final_result,
             skill: targetRecord.skill,
             skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
@@ -2964,6 +3007,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
+                lastIngestedAt,
                 parentTaskId: targetRecord.task_id,
                 parentFramework: targetRecord.framework,
                 parentUser: targetRecord.user,
@@ -3063,7 +3107,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         if (hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
         }
-        if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true) {
+        if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true && !hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });
         }
     }
@@ -3089,11 +3133,30 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    if (targetRecord.user) {
+        try {
+            const { relinkGoalPlusForExecution } = await import('@/lib/ingest/goal-plus/correlate');
+            await relinkGoalPlusForExecution(targetRecord.user);
+        } catch (e) {
+            console.warn(`[Data-Service] Goal Plus relink failed for ${recordId}:`, e);
+        }
+        try {
+            const { resolveCollaborationEndpointsForExecution } = await import('@/lib/ingest/collaboration/resolve');
+            await resolveCollaborationEndpointsForExecution(targetRecord.user, [
+                targetRecord.task_id || '',
+                targetRecord.agent_session_id || '',
+            ]);
+        } catch (e) {
+            console.warn(`[Data-Service] collaboration relink failed for ${recordId}:`, e);
+        }
+    }
+
     return { success: true, record: targetRecord };
 }
 
 interface DeriveSubagentArgs {
     parentExecutionId: string;
+    lastIngestedAt?: Date | null;
     parentTaskId: string;
     parentFramework?: string | null;
     parentUser?: string | null;
@@ -3367,6 +3430,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             const observedAgentOptions = undefined;
         const baseFields = {
             taskId: sessionId,
+            ...(args.lastIngestedAt !== undefined ? { lastIngestedAt: args.lastIngestedAt } : {}),
             framework: parentFramework,
             timestamp,
             agentName: storedAgentName,

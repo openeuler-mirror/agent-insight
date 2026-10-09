@@ -127,7 +127,7 @@ export function deriveOpencodeExecutionFields(interactions: AnyObj[]) {
     agentName: agentName || undefined,
     final_result: finalResult || undefined,
     tokens: Math.round(totalTokens),
-    latency: totalLatencyMs / 1000,
+    latency: totalLatencyMs,
     input_tokens: Math.round(totalInputTokens),
     output_tokens: Math.round(totalOutputTokens),
     tool_call_count: toolCallCount,

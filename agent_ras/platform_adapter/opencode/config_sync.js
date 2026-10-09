@@ -150,7 +150,7 @@ export function mergeCapabilityIntoLocalRasConfig(localConfig, body, syncMeta, p
 export function resolveRasHome() {
   return (
     process.env.AGENT_INSIGHT_RAS_HOME ||
-    join(homedir(), ".agent-insight", "ras")
+    join((process.env.AGENT_INSIGHT_HOME || join(homedir(), ".agent-insight")).replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => homedir()), "ras")
   )
 }
 

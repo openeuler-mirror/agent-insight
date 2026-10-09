@@ -38,7 +38,7 @@ export async function GET(req: Request) {
     const limit = Math.min(Number(q.get('limit')) || 50, 50);
     const offset = Math.max(Number(q.get('offset')) || 0, 0);
 
-    const where: Record<string, unknown> = { user: username };
+    const where: Record<string, unknown> = { user: username, deletedAt: null };
     // 只列作评测后端的实验（scope 非空）；用户手建的单组实验(scope='')不进评测任务列表
     if (scope) where.scope = scope;
     else where.scope = excludeGrayscale ? { notIn: ['', 'grayscale-ab'] } : { not: '' };
@@ -63,7 +63,7 @@ export async function GET(req: Request) {
     let extra: typeof rows = [];
     if (includeRunId && !rows.some((r: { id: string }) => r.id === includeRunId)) {
       extra = await prisma.experiment.findMany({
-        where: { id: includeRunId, user: username },
+        where: { id: includeRunId, user: username, deletedAt: null },
         select: {
           id: true, name: true, scope: true, skillName: true, skillVersion: true,
           agentName: true, evaluatorIdsJson: true, createdAt: true,

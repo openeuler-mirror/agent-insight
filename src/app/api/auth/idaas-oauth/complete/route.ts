@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
   const response = NextResponse.json({
     username: user.username,
     apiKey: user.apiKey,
+    displayName: user.externalAccount || user.username,
   });
   response.headers.set('Cache-Control', 'no-store');
   clearLoginCookie(response, path, secure);

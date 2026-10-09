@@ -241,10 +241,28 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 
 宿主上传生命周期：`fire_push_*` 注册 per-session pending handle；平台在异常与全部 `action_result` 入队后调用内部 `flush(timeout_ms)`，以 HTTP 2xx 作为 ack。flush 只等待调用时的 pending 快照，返回 `attempted/acked/failed/pending/timed_out`；并发 flush 各自使用本地快照结算，不会互相消费回执。未 flush 的完成回执按 session 最多保留 256 条，避免长驻宿主无界增长。超时不得取消上传或向 Agent 主流程抛错。OpenCode 的主 flush 点是 `onActions` 末尾，idle/bye 仅兜底，`reset` 不清理 pending。该有界 drain 保证正常短生命周期结束；SIGKILL/断电保证需另建持久化 outbox。
 
+## Goal Plus Pi 被动导入属性
+
+Goal Plus 以 `--no-extensions -e goal-plus.ts` 启动的 Pi worker 不运行 Agent Insight Pi Extension。Goal Plus collector 因此只读 `.gp` 内由 agent-session metadata 明确指向的 native session，将其转换为现有 Pi canonical event 并上报 `/api/ingest/otel/v1/traces`。它不引入新的 OTel adapter。
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `session.id` | string | 固定为 `goal-plus:<sourceId>:<agentSessionId>`，continuation 后不变 |
+| `goal_plus.source_id` | string | collector 随机生成并持久化的 source 标识 |
+| `goal_plus.run_id` | string | Goal Plus run ID（可获得时） |
+| `goal_plus.candidate_id` | string | candidate ID（可获得时） |
+| `goal_plus.agent_session_id` | string | Goal Plus agent session ID |
+| `goal_plus.role` | string | candidate worker 等编排角色 |
+| `goal_plus.import_mode` | string | 固定为 `passive_pi_session` |
+| `goal_plus.timing_fidelity` | string | 当前为 `derived` |
+
+LLM、Tool、MCP 和 Skill 仍使用本页既有 canonical 属性；读取 `SKILL.md` 的 Pi `read` 调用会同时保留 Tool span，并产生 automatic Skill span。语义快照端点 `/api/ingest/goal-plus/v1/snapshots` 是版本化 JSON 旁路，不是 OTLP，详见 [Goal Plus 开发者契约](12-goal-plus-observability.md)。
+
 ## 版本记录
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.5 | 2026-09-03 | 新增 Goal Plus Pi native session 被动导入属性，并说明语义快照旁路边界 |
 | 1.4 | 2026-08-17 | `delivery_anchor.message_id` 必须为平台分配；OpenCode 已认证 uploader 支持直连公网 IP 与服务端同机上报，并明确直连、代理、容器、私网部署矩阵 |
 | 1.3 | 2026-08-14 | RAS 旁路上传增加 per-session receipt、正常退出前 bounded flush，并明确 GIL/线程生命周期 |
 | 1.2 | 2026-07-31 | RAS 契约收紧：仅 flat+必填 deliveryId；移除 witty.* / rasEventId / 深路径 rewrite / 正文兜底 |

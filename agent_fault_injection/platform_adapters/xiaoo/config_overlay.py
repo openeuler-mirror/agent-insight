@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -42,46 +43,6 @@ def _looks_like_fi_overlay(path: Path) -> bool:
     return "agent-fi-xiaoo-" in str(path)
 
 
-def _parse_simple_toml_section(text: str, section: str) -> dict[str, Any]:
-    """Minimal TOML section reader for [llm] / string-ish values (no deps)."""
-
-    lines = text.splitlines()
-    in_section = False
-    values: dict[str, Any] = {}
-    section_header = f"[{section}]"
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_section = stripped == section_header
-            continue
-        if not in_section:
-            continue
-        match = re.match(
-            r'^([A-Za-z0-9_]+)\s*=\s*(.+)$',
-            stripped,
-        )
-        if not match:
-            continue
-        key, raw = match.group(1), match.group(2).strip()
-        if raw.startswith('"') and raw.endswith('"'):
-            values[key] = raw[1:-1]
-        elif raw.startswith("'") and raw.endswith("'"):
-            values[key] = raw[1:-1]
-        elif raw.lower() in {"true", "false"}:
-            values[key] = raw.lower() == "true"
-        else:
-            try:
-                values[key] = int(raw)
-            except ValueError:
-                try:
-                    values[key] = float(raw)
-                except ValueError:
-                    values[key] = raw
-    return values
-
-
 def load_user_llm_config(path: Path | None = None) -> dict[str, Any]:
     config_path = path or default_user_config_path()
     if not config_path.is_file():
@@ -90,7 +51,11 @@ def load_user_llm_config(path: Path | None = None) -> dict[str, Any]:
         text = config_path.read_text(encoding="utf-8")
     except OSError:
         return {}
-    return _parse_simple_toml_section(text, "llm")
+    try:
+        values = tomllib.loads(text).get("llm", {})
+    except tomllib.TOMLDecodeError:
+        raise ValueError("xiaoo config.toml 不是合法 TOML，请检查本机配置") from None
+    return dict(values) if isinstance(values, dict) else {}
 
 
 def _toml_escape(value: str) -> str:

@@ -115,7 +115,7 @@ test("AC20: uploadAll 上传完整会话到 /api/ingest/upload（URL/header/载�
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     writeSessionSpool(spoolDir)
     const engine = new UploadEngine(new SpoolReader(spoolDir), () => {}, makeConfig())
@@ -150,7 +150,7 @@ test("AC22: 会话内容不变时重复扫描不重复上传（checkpoint 去重
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     const file = writeSessionSpool(spoolDir)
     const engine = new UploadEngine(new SpoolReader(spoolDir), () => {}, makeConfig())
@@ -175,7 +175,7 @@ test("AC22: 会话新增事件后重新上传并更新 checkpoint", async (t) =>
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     writeSessionSpool(spoolDir)
     const engine = new UploadEngine(new SpoolReader(spoolDir), () => {}, makeConfig())
@@ -209,7 +209,7 @@ test("AC5/AC14/AC15/AC16: 上传载荷包含 model/tokens/latency 与模型切�
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     writeSessionSpool(spoolDir, [
       JSON.stringify({ t: "2026-01-01T00:00:01.500Z", kind: "llm.call", sessionID: "sess1", trace_id: "llm_1", payload: { model: "gpt-4o", provider: "openai", promptTokens: 100, completionTokens: 50, tokens: 150, totalTokens: 150, latencyMs: 2000 } }),
@@ -247,7 +247,7 @@ test("AC5/AC14: llm.call 无 model 时回退到配置 modelName（真实链路�
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     // llm.call 与 stop.sh 真实输出一致：无 model/provider 字段
     writeSessionSpool(spoolDir, [
@@ -269,7 +269,7 @@ test("AC5/AC14: llm.call 无 model 且未配置时 model 为空（对齐真实 D
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     writeSessionSpool(spoolDir, [
       JSON.stringify({ t: "2026-01-01T00:00:01.500Z", kind: "llm.call", sessionID: "sess1", trace_id: "llm_1", payload: { promptTokens: 37, completionTokens: 75, tokens: 112, totalTokens: 112, estimated: true } }),
@@ -297,7 +297,7 @@ test("AC23: 上传失败后重试，成功即写 checkpoint", async (t) => {
     // 第 1 次 500，第 2 次成功 → 验证重试路径
     return attempts === 1 ? { ok: false, status: 500 } : { ok: true, status: 200 }
   })
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     writeSessionSpool(spoolDir)
     const engine = new UploadEngine(new SpoolReader(spoolDir), () => {}, makeConfig({ retryBaseDelayMs: 1 }))
@@ -318,7 +318,7 @@ test("AC23: 重试全部失败时不写 checkpoint，数据保留待下次上传
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: false, status: 503 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     writeSessionSpool(spoolDir)
     const engine = new UploadEngine(new SpoolReader(spoolDir), () => {}, makeConfig({ maxRetries: 3, retryBaseDelayMs: 1 }))
@@ -339,7 +339,7 @@ test("中断会话: 无 response 时工具仍进入上传载荷（合成 interru
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     const file = path.join(spoolDir, "trae-otel-interrupt.jsonl")
     const now = Date.now()
@@ -371,7 +371,7 @@ test("中断会话: 多轮场景（第一轮完成 + 第二轮中断）两轮工
   const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
-  cleanup(t, tmpHome, spoolDir, origHome, calls)
+  cleanup(t, tmpHome, spoolDir, origHome)
   try {
     const file = path.join(spoolDir, "trae-otel-interrupt2.jsonl")
     const now = Date.now()

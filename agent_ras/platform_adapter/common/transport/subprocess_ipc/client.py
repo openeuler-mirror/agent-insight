@@ -28,7 +28,7 @@ def default_sock_path() -> Path:
         return Path(override)
     home = (os.environ.get(_ENV_HOME) or "").strip()
     if not home:
-        home = str(Path.home() / ".agent-insight" / "ras")
+        home = str(Path(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or str(Path.home() / ".agent-insight"))).expanduser() / "ras")
     return Path(home) / "ras_embed.sock"
 
 
@@ -92,7 +92,7 @@ def _runtime_pythonpath_entries() -> list[str]:
     """Resolve install-ras runtime roots so the subprocess IPC worker imports."""
 
     home = (os.environ.get(_ENV_HOME) or "").strip() or str(
-        Path.home() / ".agent-insight" / "ras"
+        Path(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or str(Path.home() / ".agent-insight"))).expanduser() / "ras"
     )
     entries: list[str] = []
     marker = Path(home) / "install.json"

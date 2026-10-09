@@ -26,3 +26,22 @@ test('DATABASE_URL 归一:已是绝对路径 / 非 file: → 原样返回', () =
     assert.equal(resolveDefaultDatabaseUrl(abs), abs);
     assert.equal(resolveDefaultDatabaseUrl('postgresql://h:5432/db'), 'postgresql://h:5432/db');
 });
+
+test('AGENT_INSIGHT_HOME 展开 HOME，非空旧变量必须报错', () => {
+    const previousHome = process.env.AGENT_INSIGHT_HOME;
+    const previousLegacy = process.env.AGENT_INSIGHT_DATA_DIR;
+    try {
+        process.env.AGENT_INSIGHT_HOME = '$HOME/custom-agent-insight';
+        delete process.env.AGENT_INSIGHT_DATA_DIR;
+        assert.equal(getAgentInsightHome(), path.join(os.homedir(), 'custom-agent-insight'));
+        process.env.AGENT_INSIGHT_DATA_DIR = '/tmp/legacy-agent-insight';
+        assert.throws(() => getAgentInsightHome(), /AGENT_INSIGHT_DATA_DIR is no longer supported/);
+        delete process.env.AGENT_INSIGHT_HOME;
+        assert.throws(() => getAgentInsightHome(), /AGENT_INSIGHT_DATA_DIR is no longer supported/);
+    } finally {
+        if (previousHome == null) delete process.env.AGENT_INSIGHT_HOME;
+        else process.env.AGENT_INSIGHT_HOME = previousHome;
+        if (previousLegacy == null) delete process.env.AGENT_INSIGHT_DATA_DIR;
+        else process.env.AGENT_INSIGHT_DATA_DIR = previousLegacy;
+    }
+});

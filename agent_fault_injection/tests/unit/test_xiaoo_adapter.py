@@ -16,6 +16,7 @@ from agent_fault_injection.pipeline.models import RunArtifacts, RunRequest
 from agent_fault_injection.platform_adapters.registry import PlatformAdapterRegistry
 from agent_fault_injection.platform_adapters.xiaoo import XiaoOAdapter
 from agent_fault_injection.platform_adapters.xiaoo import config_overlay
+from agent_fault_injection.platform_adapters.xiaoo.catalog import list_xiaoo_models
 from agent_fault_injection.platform_adapters.xiaoo.hooker import fi_eval_hook
 from agent_fault_injection.platform_adapters.xiaoo.mapper import XiaoOTrajectoryMapper
 
@@ -53,6 +54,36 @@ class XiaoORegistryTests(unittest.TestCase):
 
 
 class XiaoOConfigOverlayTests(unittest.TestCase):
+    def test_catalog_parses_toml_comments_and_quoted_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "config.toml"
+            config_path.write_text(
+                '[llm] # current model\n'
+                'provider = "deepseek" # provider choices\n'
+                "model = 'deepseek-v4-flash' # current model\n"
+                'api_key_env = "DEEPSEEK_API_KEY" # credential name\n'
+                'api_base = "https://example.test/v1#fragment" # keep hash\n'
+                'max_tokens = 128_000 # valid TOML number\n'
+                '[trace] # next section\n'
+                'provider = "must-not-overwrite-llm"\n',
+                encoding="utf-8",
+            )
+            catalog = list_xiaoo_models(config_path=config_path)
+            self.assertEqual(catalog["default"], "deepseek/deepseek-v4-flash")
+            llm = config_overlay.load_user_llm_config(config_path)
+            self.assertEqual(llm["api_key_env"], "DEEPSEEK_API_KEY")
+            self.assertEqual(llm["api_base"], "https://example.test/v1#fragment")
+            self.assertEqual(llm["max_tokens"], 128000)
+
+    def test_invalid_toml_does_not_publish_bogus_models_or_secret_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "config.toml"
+            config_path.write_text('[llm]\nprovider = "secret-without-end-quote\n', encoding="utf-8")
+            with self.assertRaises(ValueError) as raised:
+                list_xiaoo_models(config_path=config_path)
+            self.assertIn("TOML", str(raised.exception))
+            self.assertNotIn("secret-without-end-quote", str(raised.exception))
+
     def test_prepare_overlay_rewrites_plugin_command(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

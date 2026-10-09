@@ -440,26 +440,61 @@ def _reserve_loopback_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _wait_for_process_group_exit(
+    process: subprocess.Popen[Any],
+    *,
+    timeout: float,
+) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        process.poll()
+        if not _process_group_exists(process.pid):
+            return True
+        time.sleep(0.05)
+    process.poll()
+    return not _process_group_exists(process.pid)
+
+
 def _stop_process_tree(process: subprocess.Popen[Any]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        if os.name == "posix":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
+    if os.name != "posix":
+        if process.poll() is not None:
+            return
+        try:
             process.terminate()
-        process.wait(timeout=2.0)
-        return
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    try:
-        if os.name == "posix":
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
+            process.wait(timeout=2.0)
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        try:
             process.kill()
-        process.wait(timeout=2.0)
-    except (OSError, subprocess.TimeoutExpired):
+            process.wait(timeout=2.0)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return
+
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
         pass
+    if _wait_for_process_group_exit(process, timeout=2.0):
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        return
+    _wait_for_process_group_exit(process, timeout=2.0)
 
 
 def _list_agents_via_server(

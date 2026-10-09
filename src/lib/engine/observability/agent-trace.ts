@@ -36,7 +36,6 @@ export interface ToolCall {
     timing?: { started_at?: number; completed_at?: number };
     output?: any;
     result?: any;
-    skill?: { name?: string; version?: number | string | null };
     trace_split_parallel_task?: boolean;
 }
 
@@ -53,6 +52,7 @@ export interface InteractionPart {
 }
 
 export interface RawInteraction {
+    _payloadVersion?: string;
     role: InteractionRole;
     content?: string;
     timestamp?: number | string;
@@ -102,6 +102,15 @@ export interface RawInteraction {
     trace_output?: unknown;
     trace_status?: string;
     trace_synthetic?: boolean;
+    /** Read-only cross-session projection metadata. Never persisted back to the native trace. */
+    trace_relation?: {
+        sourceType: string;
+        relationKind?: string;
+        eventId: string;
+        description: string;
+        anchorState: string;
+        role?: string;
+    };
     status?: string;
     error?: string | { message?: string };
     error_summary?: string;
@@ -140,6 +149,8 @@ export interface AgentEvent {
     summary?: string;
     /** Token usage attached to this event (only meaningful for llm/task) */
     usage?: InteractionUsage;
+    /** Provenance for a virtual cross-session relation rendered as a task row. */
+    relation?: RawInteraction['trace_relation'];
 }
 
 export interface AgentNodeStats {
@@ -188,6 +199,8 @@ export interface AgentNode {
     systemPrompts?: SystemPromptEntry[];
     /** Hook 注入的 additionalContext(collected from role="hook_context" interactions) */
     hookContexts?: HookContextEntry[];
+    /** Provenance inherited from the collaboration relation that attached this node. */
+    relation?: RawInteraction['trace_relation'];
     /** Compaction boundaries inside this slice, chronological. LLM calls whose
      *  interactionIndex is greater than `compactions[k].interactionIndex` saw
      *  the summary of compaction k (and not the original prior context). */
@@ -283,6 +296,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         parallelCount: number;
         /** Original parent interaction index, used for stable FIFO matching. */
         parentInteractionIndex: number;
+        relation?: RawInteraction['trace_relation'];
     }
 
     /** Pending task spawns waiting for their first subagent interaction */
@@ -297,6 +311,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             spawnEvents: [ev],
             parallelCount: 1,
             parentInteractionIndex,
+            relation: ev.relation,
         });
     }
 
@@ -403,7 +418,8 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             continue;
         }
 
-        const isSub = (it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
+        const isProjectedSubUser = it.role === 'user' && !!it.trace_relation;
+        const isSub = (isProjectedSubUser || it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
         const sid = isSub ? (it.subagent_session_id as string) : 'TOP';
         const agentName = it.agent || (isSub ? (it.subagent_name || 'Subagent') : rootAgentName);
 
@@ -429,6 +445,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
                     (host as AgentNode).parallelCallCount = claim.parallelCount;
                 }
                 parent.children.push(host);
+                host.relation = claim.relation;
                 sessionToNode.set(sid, host); // rebind: subsequent same-sid interactions extend this newest slice
                 for (const spawnEvent of claim.spawnEvents) {
                     spawnEvent.spawnedChildId = host.id;
@@ -591,68 +608,11 @@ function makeNode(init: {
 }
 
 function finalizeStats(node: AgentNode): void {
-    for (const c of node.children) finalizeStats(c);
-    let start = Number.isFinite(node.startedAt) ? (node.startedAt as number) : undefined;
-    let end = Number.isFinite(node.endedAt) ? (node.endedAt as number) : undefined;
-    for (const c of node.children) {
-        if (Number.isFinite(c.startedAt) && (start == null || (c.startedAt as number) < start)) {
-            start = c.startedAt as number;
-        }
-        if (Number.isFinite(c.endedAt) && (end == null || (c.endedAt as number) > end)) {
-            end = c.endedAt as number;
-        }
-    }
-    node.startedAt = start;
-    node.endedAt = end;
-    if (start != null && end != null) {
-        const duration = end - start;
+    if (Number.isFinite(node.startedAt) && Number.isFinite(node.endedAt)) {
+        const duration = (node.endedAt as number) - (node.startedAt as number);
         node.stats.durationMs = duration >= 0 ? duration : undefined;
     }
-}
-
-export interface TraceTimelineBounds {
-    start?: number;
-    end?: number;
-    durationMs?: number;
-}
-
-export function resolveTraceTimelineBounds(
-    root: AgentNode | null | undefined,
-    executionDurationMs?: number,
-): TraceTimelineBounds | null {
-    if (!root) return null;
-    let start: number | undefined;
-    let end: number | undefined;
-
-    walkTree(root, node => {
-        if (Number.isFinite(node.startedAt) && (start == null || (node.startedAt as number) < start)) {
-            start = node.startedAt as number;
-        }
-        if (Number.isFinite(node.endedAt) && (end == null || (node.endedAt as number) > end)) {
-            end = node.endedAt as number;
-        }
-        for (const event of node.events) {
-            if (Number.isFinite(event.startedAt) && (start == null || (event.startedAt as number) < start)) {
-                start = event.startedAt as number;
-            }
-            if (Number.isFinite(event.completedAt) && (end == null || (event.completedAt as number) > end)) {
-                end = event.completedAt as number;
-            }
-        }
-    });
-
-    if (start == null) return null;
-    if (end == null && executionDurationMs != null && Number.isFinite(executionDurationMs) && executionDurationMs > 0) {
-        end = start + executionDurationMs;
-    }
-    if (end == null || end < start) {
-        end = start;
-    }
-    return {
-        start,
-        end,
-        durationMs: end - start,
-    };
+    for (const c of node.children) finalizeStats(c);
 }
 
 function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
@@ -795,6 +755,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,
             completedAt: toMsTimestamp(tc.timing?.completed_at),
             summary: summarizeToolCall(displayName, eventArgs),
+            relation: it.trace_relation,
         };
         (ev as any)._toolCallId = tc.id;
         (ev as any).splitParallelTask = !!tc.trace_split_parallel_task;

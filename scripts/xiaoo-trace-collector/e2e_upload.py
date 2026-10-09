@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import json
 import os
+
 import sys
 import time
 import uuid
 from pathlib import Path
 from urllib import request
 
+
+if os.environ.get("AGENT_INSIGHT_DATA_DIR"):
+    raise RuntimeError("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
 
 def _collector_root() -> Path:
     override = (os.environ.get("AGENT_INSIGHT_XIAOO_TRACE_HOME") or "").strip()
@@ -25,7 +29,7 @@ def _collector_root() -> Path:
     here = Path(__file__).resolve().parent
     if (here / "otel_trace.py").is_file():
         return here
-    data = (os.environ.get("AGENT_INSIGHT_DATA_DIR") or "").strip()
+    data = os.path.expanduser(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or "")).strip()
     home = Path(data) if data else Path.home() / ".agent-insight"
     return home / "xiaoo-trace-collector"
 

@@ -10,6 +10,7 @@ import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eva
 import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
 import { EvalTaskPicker } from '@/components/eval/EvalTaskPicker';
+import { DeleteExperimentButton, PendingExperimentCancellations } from '@/components/eval/DeleteExperimentButton';
 import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
 import { useBatchEvalResults } from '@/components/eval/useBatchEvalResults';
 import type { FindingItem, FindingGroup } from '@/components/evaluation';
@@ -115,6 +116,7 @@ interface BatchEvalTask {
     taskName: string;
     createdAt: string;
     configJson?: {
+        evalExperimentId?: string;
         datasetIds?: string[];
         skillId?: string;
         versionId?: string;
@@ -143,7 +145,9 @@ import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/
 // 评测走 /api/experiments/eval-traces → 实验引擎，引擎认全部已登记的预置评估器，
 // 这里不做能力过滤。默认勾选哪几个见 DEFAULT_SELECTED_PRESET_IDS。
 const BUILT_IN_EVALUATORS = [
-    ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
+    ...presetEvaluators
+        .filter(e => e.status === 'ready')
+        .map(e => ({ id: e.id, name: e.name }))
 ];
 
 
@@ -1616,6 +1620,7 @@ export function BatchEvaluation({
 
     return (
         <>
+            {user && <PendingExperimentCancellations user={user} />}
             {/* ─────────── ① 配置 ─────────── */}
             <SectionShell
                 num={1}
@@ -2287,7 +2292,20 @@ export function BatchEvaluation({
                     locale={locale}
                     emptyHint={'还没启动评测。在 ① 配置块勾选 case → 点「▶ 启动」。'}
                     onRetry={rec => retryCase(rec.id, false)}
+                    allowRunningDelete={Boolean(currentTask?.configJson?.evalExperimentId)}
                     onDelete={async rec => {
+                        const experimentId = currentTask?.configJson?.evalExperimentId;
+                        if (experimentId && user) {
+                            if (!window.confirm('停止并删除本次实验中的这个 Case？源数据集保留。')) return;
+                            try {
+                                const response = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/cases/${encodeURIComponent(`dataset:${rec.id}`)}?user=${encodeURIComponent(user)}`, { method: 'DELETE' });
+                                const result = await response.json();
+                                if (!response.ok) throw new Error(result.error || '删除失败');
+                                setCaseStates((states) => { const next = { ...states }; delete next[rec.id]; return next; });
+                                window.dispatchEvent(new Event('experiment-cancellation-updated'));
+                            } catch (error) { alert(error instanceof Error ? error.message : '删除失败'); }
+                            return;
+                        }
                         const stt = caseStates[rec.id]?.status;
                         if (stt === 'running' || stt === 'executed' || stt === 'evaluating') {
                             alert(locale === 'zh' ? '评测/执行进行中，无法删除' : 'In progress, cannot delete');
@@ -2620,6 +2638,10 @@ export function BatchEvaluation({
                                         {t.configJson?.taskDescription && (
                                             <div className="d-history-item-query">{t.configJson.taskDescription}</div>
                                         )}
+                                        {user && t.configJson?.evalExperimentId && <DeleteExperimentButton user={user} experimentId={t.configJson.evalExperimentId} onDeleted={() => {
+                                            setTaskHistory((tasks) => tasks.filter((task) => task.id !== t.id));
+                                            if (currentTask?.id === t.id) { setCurrentTask(null); setCaseStates({}); }
+                                        }} />}
                                     </div>
                                 ))}
                             </div>

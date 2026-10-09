@@ -34,6 +34,10 @@ import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { fileURLToPath } from "node:url";
 import { extractCoreOutput } from "./core-output";
 import { MirroredDeltaGuard } from "./stream-event-dedupe";
+import {
+  classifyAgentExitFailure, createAgentRunError, extractStructuredAgentError,
+  sanitizeAgentDiagnostic, type AgentRunError,
+} from "../../../../../scripts/agent-run-diagnostics.cjs";
 
 // =============================================================================
 // 类型定义
@@ -851,6 +855,24 @@ export class AgentInsight {
     // 用 Set 跟踪而不是单一 boolean。
     const assistantStartedEmitted = new Set<string>();
     let finished = false;
+    const startedAt = new Date().toISOString();
+    const failureController = new AbortController();
+    const executionSignal = signal ? AbortSignal.any([signal, failureController.signal]) : failureController.signal;
+    let executionFailure: AgentRunError | null = null;
+    const failExecution = (code: string, message: string) => {
+      if (executionFailure) return;
+      executionFailure = createAgentRunError(code, sanitizeAgentDiagnostic(message), { traceId: sessionId, startedAt });
+      finished = true;
+      failureController.abort();
+      onError?.(executionFailure);
+    };
+    const captureModelError = (value: unknown) => {
+      const diagnostic = extractStructuredAgentError(value);
+      if (!diagnostic) return;
+      const classified = classifyAgentExitFailure({ platform: 'opencode', diagnostic, structured: true });
+      failExecution(classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR',
+        `opencode 会话报告模型错误: ${sanitizeAgentDiagnostic(diagnostic)}`);
+    };
     let promptResponseText = "";
     let hasNonHeartbeatEvent = false;
     let fallbackEmitTimer: NodeJS.Timeout | null = null;
@@ -921,7 +943,7 @@ export class AgentInsight {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         this.log("warn", "chat.idle.timeout", { sessionId, idleTimeoutMs });
-        finished = true;
+        failExecution("AGENT_TIMEOUT", `opencode 连续 ${idleTimeoutMs}ms 没有事件响应`);
         const fn = (stream as any)?.return;
         if (typeof fn === "function") void fn.call(stream, undefined);
       }, idleTimeoutMs);
@@ -991,23 +1013,26 @@ export class AgentInsight {
       (payload as { directory?: string } | undefined)?.directory ||
       this.directoryForSession(sessionId) ||
       undefined;
+    const safetyTimer = setTimeout(() => {
+      failExecution("AGENT_TIMEOUT", `opencode 执行超过 ${streamTimeoutMs}ms`);
+    }, streamTimeoutMs);
     const subPromise = (async () => {
       let onAbort: (() => void) | null = null;
       try {
         const eventResult = await this.client.event.subscribe({
           query: subscribeDirectory ? { directory: subscribeDirectory } : undefined,
+          signal: executionSignal,
         });
         stream = eventResult.stream as any;
 
         onAbort = () => {
+          finished = true;
           const fn = (stream as any)?.return;
           if (typeof fn === "function") void fn.call(stream, undefined);
           this.log("warn", "chat.event.aborted", { sessionId });
         };
-        if (signal) {
-          if (signal.aborted) onAbort();
-          else signal.addEventListener("abort", onAbort, { once: true });
-        }
+        if (executionSignal.aborted) onAbort();
+        else executionSignal.addEventListener("abort", onAbort, { once: true });
 
         resolveReady();
         resetIdleTimer();
@@ -1469,8 +1494,7 @@ export class AgentInsight {
                     info,
                     error: info.error,
                   });
-                  onError?.(new Error(info.error.message || "模型执行出错"));
-                  finished = true;
+                  if (!isSubagent) captureModelError({ error: info.error });
                   break;
                 }
 
@@ -1604,8 +1628,7 @@ export class AgentInsight {
                 };
                 onSession?.(errorEvent);
                 onSessionError?.(errorEvent);
-                onError?.(new Error(err?.message || JSON.stringify(err) || "session 错误"));
-                finished = true;
+                captureModelError({ type: "session.error", error: err || "session 错误" });
               }
               break;
             }
@@ -1734,10 +1757,10 @@ export class AgentInsight {
         }
       } catch (err) {
         rejectReady(err);
-        if (!isAbortError(err)) throw err;
+        if (!isAbortError(err)) failExecution("MODEL_ERROR", (err as Error)?.message || String(err));
       } finally {
         if (idleTimer) clearTimeout(idleTimer);
-        if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+        if (onAbort) executionSignal.removeEventListener("abort", onAbort);
         this.log("info", "chat.event.consume.done", {
           sessionId,
           eventCount,
@@ -1750,6 +1773,8 @@ export class AgentInsight {
       }
     })();
 
+    void subPromise.catch(() => {});
+
     // -------------------- 发送 prompt --------------------
     let response: any;
     try {
@@ -1758,12 +1783,14 @@ export class AgentInsight {
       // 没传 signal 时，sendPrompt 会一直挂到 opencode server 把"完整对话 + 善后 LLM 调用
       // (SessionSummary.summarize)"全部跑完才返回；caller 端 watchdog 触发的 abort 没法
       // 让它提前回收，导致 chat() 卡住、上层流不关、前端转圈。
-      response = await this.sendPrompt(sessionId, payload, { signal });
+      response = await this.sendPrompt(sessionId, payload, {
+        signal: executionSignal,
+      });
     } catch (err) {
       const fn = (stream as any)?.return;
       if (typeof fn === "function") void fn.call(stream, undefined);
-      // signal abort 是预期路径（caller 通过 watchdog 主动收尾），不算 error；不要往 caller 抛。
-      if (isAbortError(err) || (signal && signal.aborted)) {
+
+      if (executionFailure || isAbortError(err) || (signal && signal.aborted)) {
         this.log("warn", "chat.sendPrompt.aborted", { sessionId });
         finished = true;
       } else {
@@ -1771,14 +1798,14 @@ export class AgentInsight {
           sessionId,
           error: (err as Error)?.message || String(err),
         });
-        onError?.(err as Error);
-        throw err;
+        failExecution('MODEL_ERROR', (err as Error)?.message || String(err));
       }
     }
 
     assistantMsgId =
       response?.info?.id || response?.message?.id || assistantMsgId;
-    promptResponseText = extractTextFromPromptResponse(response);
+    captureModelError(response);
+    promptResponseText = executionFailure ? "" : extractTextFromPromptResponse(response);
 
     // 兜底：若短时间内未收到 text delta，再用 prompt 同步返回的文本补一刀。
     // 通过延迟避免与首批 SSE 增量事件竞态导致“一次性整段输出”。
@@ -1823,21 +1850,27 @@ export class AgentInsight {
     }
 
     // -------------------- 等待事件循环结束 --------------------
-    const safetyTimer = setTimeout(() => {
-      this.log("warn", "chat.stream.timeout", { sessionId, streamTimeoutMs });
-      const fn = (stream as any)?.return;
-      if (typeof fn === "function") void fn.call(stream, undefined);
-    }, streamTimeoutMs);
 
     try {
-      await subPromise;
+      await Promise.race([subPromise, new Promise<void>(resolve => {
+        if (executionSignal.aborted) resolve();
+        else executionSignal.addEventListener("abort", () => resolve(), { once: true });
+      })]);
     } finally {
       clearTimeout(safetyTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       if (fallbackEmitTimer) clearTimeout(fallbackEmitTimer);
       if (heartbeatOnlyCloseTimer) clearTimeout(heartbeatOnlyCloseTimer);
       clearFallbackChunkTimer();
       onDone?.();
     }
+
+    if (executionFailure) {
+      const failure = executionFailure as AgentRunError;
+      failure.runFacts = { ...failure.runFacts, finishedAt: new Date().toISOString() };
+      throw failure;
+    }
+    if (signal?.aborted) throw createAgentRunError('EXECUTION_CANCELLED', 'opencode 执行已中止', { traceId: sessionId, startedAt, finishedAt: new Date().toISOString() });
 
     const fullText =
       (assistantMsgId ? textAcc.get(assistantMsgId) : undefined) || promptResponseText || "";
@@ -1847,6 +1880,14 @@ export class AgentInsight {
     // 也不把过程旁白喂给 judge。
     const msgs = [...textAcc.values()];
     const transcriptText = extractCoreOutput(msgs, { fallback: fullText });
+    const responseHasActivity = Array.isArray(response?.parts) && response.parts.some((part: any) =>
+      part?.type === 'tool' || (part?.type === 'reasoning' && typeof part.text === 'string' && part.text.trim()),
+    );
+    if (!payload.noReply && !transcriptText.trim() && toolCallCount === 0 && !responseHasActivity && ![...reasoningAcc.values()].some(text => text.trim())) {
+      throw createAgentRunError('MODEL_NO_RESPONSE', 'opencode 会话已结束，但未观察到任何模型输出或工具调用', {
+        traceId: sessionId, startedAt, finishedAt: new Date().toISOString(),
+      });
+    }
 
     this.log("info", "chat.done", {
       sessionId,

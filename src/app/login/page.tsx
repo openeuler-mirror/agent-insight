@@ -82,7 +82,7 @@ export default function LoginPage() {
       .then(async res => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || 'IDaaS login failed');
-        login(data.username, data.apiKey);
+        login(data.username, data.apiKey, data.displayName);
       })
       .catch(() => {
         setError(t('login.identityLoginFailed'));

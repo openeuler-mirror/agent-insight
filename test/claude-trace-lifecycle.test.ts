@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
     hasAssistantOutput,
     inferQuietWindowTraceCompletedAt,
-} from '@/app/api/observe/data/route';
+} from '@/lib/trace/lifecycle';
 import { aggregateClaudeOtelEvents } from '@/lib/ingest/claude-otel/aggregator';
 
 // 白名单是**显式清单**，不从 QUIET_WINDOW_INFERRED_FRAMEWORKS 反推——否则改了实现

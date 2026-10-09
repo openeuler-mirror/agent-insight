@@ -1,8 +1,8 @@
 export const CODEAGENT_UNIX_SETUP_BLOCK = `# 6.6 Configure CodeAgent OpenTelemetry wrapper
 if [ "$INSTALL_CODEAGENT" = "true" ]; then
-    CODEAGENT_WRAPPER_DIR="$HOME/.agent-insight/bin"
+    CODEAGENT_WRAPPER_DIR="$AGENT_INSIGHT_HOME/bin"
     CODEAGENT_WRAPPER_PATH="$CODEAGENT_WRAPPER_DIR/codeagent"
-    CODEAGENT_REAL_BIN_FILE="$HOME/.agent-insight/codeagent_real_bin"
+    CODEAGENT_REAL_BIN_FILE="$AGENT_INSIGHT_HOME/codeagent_real_bin"
     mkdir -p "$CODEAGENT_WRAPPER_DIR"
 
     _ai_codeagent_clean_path=""
@@ -21,10 +21,10 @@ if [ "$INSTALL_CODEAGENT" = "true" ]; then
         echo "⚠️  CodeAgent executable not found. Install CodeAgent, then rerun setup."
     fi
 
-    cat > "$CODEAGENT_WRAPPER_PATH" << 'CODEAGENT_WRAPPER_EOF'
+    agent_insight_write_script > "$CODEAGENT_WRAPPER_PATH" << 'CODEAGENT_WRAPPER_EOF'
 #!/usr/bin/env bash
 # Agent-Insight CodeAgent executable wrapper
-_agent_insight_dir="$HOME/.agent-insight"
+_agent_insight_dir="$AGENT_INSIGHT_HOME"
 _wrapper_dir="$_agent_insight_dir/bin"
 _clean_path=""
 IFS=':' read -r -a _path_entries <<< "\${PATH:-}"
@@ -66,10 +66,10 @@ exec env \\
 CODEAGENT_WRAPPER_EOF
     chmod 0755 "$CODEAGENT_WRAPPER_PATH"
 
-    cat > "$HOME/.agent-insight/codeagent_otel_env.sh" << 'CODEAGENT_OTEL_EOF'
+    agent_insight_write_script > "$AGENT_INSIGHT_HOME/codeagent_otel_env.sh" << 'CODEAGENT_OTEL_EOF'
 # Agent-Insight CodeAgent OpenTelemetry integration
 unalias codeagent 2>/dev/null || true
-_agent_insight_codeagent_bin="$HOME/.agent-insight/bin"
+_agent_insight_codeagent_bin="$AGENT_INSIGHT_HOME/bin"
 case ":\${PATH:-}:" in
   *":$_agent_insight_codeagent_bin:"*) ;;
   *) export PATH="$_agent_insight_codeagent_bin\${PATH:+:$PATH}" ;;
@@ -78,20 +78,20 @@ unset _agent_insight_codeagent_bin
 CODEAGENT_OTEL_EOF
     SHELL_RC="$HOME/.zshrc"
     [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
-    if [ -f "$SHELL_RC" ] && ! grep -q "\\.agent-insight/codeagent_otel_env\\.sh" "$SHELL_RC"; then
+    if [ -f "$SHELL_RC" ] && ! grep -Fq "$AGENT_INSIGHT_HOME/codeagent_otel_env.sh" "$SHELL_RC"; then
         echo "" >> "$SHELL_RC"
         echo "# Agent-Insight CodeAgent OTel" >> "$SHELL_RC"
-        echo "source \\"$HOME/.agent-insight/codeagent_otel_env.sh\\"" >> "$SHELL_RC"
+        echo "source \\"$AGENT_INSIGHT_HOME/codeagent_otel_env.sh\\"" >> "$SHELL_RC"
     fi
     echo "✅ CodeAgent OTel wrapper installed at $CODEAGENT_WRAPPER_PATH"
-    echo "   Restart your terminal or run: source $HOME/.agent-insight/codeagent_otel_env.sh"
+    echo "   Restart your terminal or run: source $AGENT_INSIGHT_HOME/codeagent_otel_env.sh"
     echo "   Then use the original command in terminals or scripts: codeagent"
     echo "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."
 fi`;
 
 export const CODEAGENT_WINDOWS_SETUP_BLOCK = `# 6.6a Configure CodeAgent OpenTelemetry wrapper
 if ($INSTALL_CODEAGENT) {
-    $codeAgentInsightDir = Join-Path $env:USERPROFILE ".agent-insight"
+    $codeAgentInsightDir = $env:AGENT_INSIGHT_HOME
     $codeAgentBinDir = Join-Path $codeAgentInsightDir "bin"
     $codeAgentCmdPath = Join-Path $codeAgentBinDir "codeagent.cmd"
     $codeAgentWrapperPath = Join-Path $codeAgentBinDir "codeagent-wrapper.ps1"
@@ -116,7 +116,8 @@ if ($INSTALL_CODEAGENT) {
     }
 
     $codeAgentWrapperScript = @'
-$agentInsightDir = Join-Path $env:USERPROFILE ".agent-insight"
+$env:AGENT_INSIGHT_HOME = Split-Path -Parent $PSScriptRoot
+$agentInsightDir = $env:AGENT_INSIGHT_HOME
 $wrapperDir = Join-Path $agentInsightDir "bin"
 $wrapperCmdPath = Join-Path $wrapperDir "codeagent.cmd"
 $recordedBinFile = Join-Path $agentInsightDir "codeagent_real_bin"
@@ -188,10 +189,11 @@ exit /b %ERRORLEVEL%
     }
 
     $codeAgentOtelScript = @'
+$env:AGENT_INSIGHT_HOME = $PSScriptRoot
 # Agent-Insight CodeAgent OpenTelemetry integration
 Remove-Item Alias:codeagent -Force -ErrorAction SilentlyContinue
 Remove-Item Function:Invoke-AgentInsightCodeAgent -Force -ErrorAction SilentlyContinue
-$_agentInsightCodeAgentBin = Join-Path (Join-Path $env:USERPROFILE ".agent-insight") "bin"
+$_agentInsightCodeAgentBin = Join-Path ($env:AGENT_INSIGHT_HOME) "bin"
 $_agentInsightCodeAgentBinNormalized = $_agentInsightCodeAgentBin.TrimEnd([IO.Path]::DirectorySeparatorChar)
 $_agentInsightCodeAgentPathEntries = @(($env:PATH -split ";") | Where-Object {
     $_ -and $_.Trim().TrimEnd([IO.Path]::DirectorySeparatorChar) -ine $_agentInsightCodeAgentBinNormalized

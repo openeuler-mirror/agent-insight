@@ -8,6 +8,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import AdmZip from "adm-zip"
+import { isolatedHomeEnv } from './helpers/isolated-home'
 
 import { GET as getInstaller } from "@/app/api/ingest/setup/pi-agent/route"
 import { GET as getAsset } from "@/app/api/ingest/setup/pi-agent/assets/[asset]/route"
@@ -16,12 +17,21 @@ const require = createRequire(import.meta.url)
 const { isSupportedPiVersion } = require("../scripts/agent-trace-collectors/pi-agent/install.cjs")
 
 const BUNDLE_ENTRIES = [
+  "goal-plus/goal-plus-collector.cjs",
+  "goal-plus/install.cjs",
+  "goal-plus/lib/gp-snapshot-parser.cjs",
+  "goal-plus/lib/pi-native-parser.cjs",
+  "goal-plus/lib/source-registry.cjs",
+  "goal-plus/uninstall.cjs",
   "pi-agent/extensions/pi-agent-insight.ts",
   "pi-agent/install.cjs",
   "pi-agent/lib/pi-trace-core.cjs",
   "pi-agent/package.json",
   "pi-agent/scripts/self-check.cjs",
   "pi-agent/scripts/uninstall.cjs",
+  "shared/collaboration-transport.cjs",
+  "shared/install-modules.cjs",
+  "shared/pi-trace-helpers.cjs",
   "shared/trace-transport.cjs",
 ]
 
@@ -125,6 +135,51 @@ test("Pi setup serves one complete bundle whose SHA-256 matches the bootstrap", 
   assert.equal(prototypeAsset.status, 404)
 })
 
+test("Pi installer writes one identity and endpoint set for main and Goal Plus traces", (t) => {
+  if (process.platform === "win32") return t.skip("Unix launcher fixture is not used on Windows")
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-pi-install-"))
+  const homeDir = path.join(tempDir, "user")
+  const agentInsightHome = path.join(tempDir, "agent-insight")
+  const binDir = path.join(tempDir, "bin")
+  const piPath = path.join(binDir, "pi")
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.writeFileSync(piPath, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'pi 0.82.1'; fi",
+    `if [ "$1" = "install" ]; then node -e 'const f=require("fs"),p=require("path"); f.mkdirSync(process.env.PI_CODING_AGENT_DIR,{recursive:true}); f.writeFileSync(p.join(process.env.PI_CODING_AGENT_DIR,"settings.json"),JSON.stringify({packages:[process.argv[1]]}));' "$2"; fi`,
+    "exit 0",
+    "",
+  ].join("\n"), { mode: 0o700 })
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }))
+
+  const sourceDir = path.join(process.cwd(), "scripts", "agent-trace-collectors", "pi-agent")
+  const result = spawnSync(process.execPath, [
+    path.join(sourceDir, "install.cjs"),
+    "--home", homeDir,
+    "--source-dir", sourceDir,
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      AGENT_INSIGHT_API_KEY: "same-account-key",
+      AGENT_INSIGHT_BASE_URL: "https://insight.example",
+      AGENT_INSIGHT_HOME: agentInsightHome,
+      AGENT_INSIGHT_PI_ENDPOINT: "https://insight.example/main-traces",
+      AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT: "https://insight.example/sessions",
+      AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT: "https://insight.example/events",
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+    },
+  })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+
+  const piConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json"), "utf8"))
+  const goalPlusConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "goal-plus", "config.json"), "utf8"))
+  assert.equal(goalPlusConfig.apiKey, piConfig.apiKey)
+  assert.equal(goalPlusConfig.otlpEndpoint, piConfig.endpoint)
+  assert.equal(goalPlusConfig.collaborationSessionsEndpoint, piConfig.collaborationSessionsEndpoint)
+  assert.equal(goalPlusConfig.collaborationEventsEndpoint, piConfig.collaborationEventsEndpoint)
+})
+
 test("PowerShell bootstrap rejects a tampered Pi bundle before installation", async (t) => {
   const bundleResponse = await getAsset(
     new Request("https://insight.example/assets/pi-agent-bundle.zip"),
@@ -208,9 +263,17 @@ test("PowerShell bootstrap installs a valid Pi bundle end to end", async (t) => 
   const agentInsightHome = path.join(tempDir, "agent-insight")
   const binDir = path.join(tempDir, "bin")
   fs.mkdirSync(binDir, { recursive: true })
+  fs.writeFileSync(path.join(binDir, "pi-stub.cjs"), `
+    const fs = require('fs'), path = require('path');
+    if (process.argv[2] === '--version') console.log('pi 0.82.1');
+    if (process.argv[2] === 'install') {
+      fs.mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+      fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), JSON.stringify({ packages: [process.argv[3]] }));
+    }
+  `)
   fs.writeFileSync(
     path.join(binDir, "pi.cmd"),
-    "@echo off\r\nif \"%1\"==\"--version\" echo pi 0.82.1\r\nexit /b 0\r\n",
+    '@echo off\r\nnode "%~dp0pi-stub.cjs" %*\r\nexit /b %errorlevel%\r\n',
   )
   const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
     const encodedInstaller = Buffer.from(installer, "utf16le").toString("base64")
@@ -238,6 +301,15 @@ test("PowerShell bootstrap installs a valid Pi bundle end to end", async (t) => 
   assert.match(result.output, /collector installed/)
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "pi-agent", "extensions", "pi-agent-insight.ts")), true)
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json")), true)
+  assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "goal-plus", "goal-plus-collector.cjs")), true)
+  const piConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json"), "utf8"))
+  assert.equal(piConfig.goalPlusObserverEnabled, true)
+  const goalPlusConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "goal-plus", "config.json"), "utf8"))
+  assert.equal(goalPlusConfig.managedBy, "pi-agent")
+  assert.equal(goalPlusConfig.apiKey, piConfig.apiKey)
+  assert.equal(goalPlusConfig.otlpEndpoint, piConfig.endpoint)
+  assert.equal(goalPlusConfig.collaborationSessionsEndpoint, piConfig.collaborationSessionsEndpoint)
+  assert.equal(goalPlusConfig.collaborationEventsEndpoint, piConfig.collaborationEventsEndpoint)
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "shared", "trace-transport.cjs")), true)
 })
 
@@ -295,3 +367,59 @@ test("uninstall source scopes deletion to Pi paths and requires purge-all confir
   assert.match(source, /--yes/)
   assert.doesNotMatch(source, /opencode|claude|hermes|codex/)
 })
+
+for (const failure of ['registration', 'verification'] as const) {
+  test(`Pi upgrade restores installed files, config and registration after ${failure} failure`, t => {
+    if (process.platform === 'win32') return t.skip('Unix executable fixture');
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-rollback-'));
+    t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+    const home = path.join(temporary, 'home');
+    const bin = path.join(temporary, 'bin');
+    const source = path.join(temporary, 'source');
+    fs.mkdirSync(bin, { recursive: true });
+    for (const name of ['pi-agent', 'goal-plus', 'shared']) {
+      fs.cpSync(path.resolve('scripts/agent-trace-collectors', name), path.join(source, name), { recursive: true });
+    }
+    fs.writeFileSync(path.join(bin, 'pi'), `#!/usr/bin/env node
+const fs=require('fs'),path=require('path');
+const [action,packageDir]=process.argv.slice(2);
+if(action==='--version') console.log('pi 0.84.2');
+if(action==='install') {
+ const directory=process.env.PI_CODING_AGENT_DIR;
+ fs.mkdirSync(directory,{recursive:true});
+ fs.writeFileSync(path.join(directory,'settings.json'),JSON.stringify({packages:process.env.FAIL_MODE==='verification'?[]:[packageDir]}));
+ if(process.env.FAIL_MODE==='registration') process.exit(7);
+}
+`, { mode: 0o700 });
+    const env = isolatedHomeEnv(home, { PI_CODING_AGENT_DIR: path.join(home, '.pi/agent'),
+      AGENT_INSIGHT_API_KEY: 'synthetic-install', AGENT_INSIGHT_BASE_URL: 'http://127.0.0.1:39999',
+      PATH: `${bin}${path.delimiter}${process.env.PATH}` });
+    const installer = path.join(source, 'pi-agent/install.cjs');
+    const run = (extra: Record<string, string> = {}) => spawnSync(process.execPath, [installer, '--home', home], {
+      env: { ...env, ...extra }, encoding: 'utf8',
+    });
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    const collectors = path.join(home, '.agent-insight/collectors');
+    const originals = [
+      path.join(collectors, 'pi-agent/lib/pi-trace-core.cjs'),
+      path.join(collectors, 'pi-agent/config.json'),
+      path.join(collectors, 'pi-agent/installation.json'),
+      path.join(collectors, 'goal-plus/config.json'),
+      path.join(collectors, 'shared/installation.json'),
+      path.join(home, '.pi/agent/settings.json'),
+    ].map(file => ({ file, bytes: fs.readFileSync(file) }));
+    const pending = path.join(collectors, 'goal-plus/sources.json');
+    fs.writeFileSync(pending, '{"version":1,"sources":[]}');
+    fs.appendFileSync(path.join(source, 'pi-agent/lib/pi-trace-core.cjs'), '\n// next compatible package\n');
+    const failed = run({ FAIL_MODE: failure, AGENT_INSIGHT_API_KEY: 'changed-account' });
+    assert.equal(failed.status, 1, failed.stdout);
+    assert.match(failed.stderr, failure === 'registration' ? /failed/ : /registration verification failed/);
+    for (const { file, bytes } of originals) assert.deepEqual(fs.readFileSync(file), bytes, file);
+    assert.equal(fs.readFileSync(pending, 'utf8'), '{"version":1,"sources":[]}');
+    const retried = run();
+    assert.equal(retried.status, 0, retried.stderr);
+    assert.match(retried.stdout, /Restart Pi/);
+    assert.match(fs.readFileSync(originals[0].file, 'utf8'), /next compatible package/);
+  });
+}

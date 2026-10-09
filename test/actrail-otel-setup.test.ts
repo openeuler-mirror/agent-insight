@@ -4,6 +4,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { isolatedHomeEnv } from './helpers/isolated-home';
+import { SETUP_BASH_HOME } from '@/lib/ingest/setup/home';
 
 import { GET as getSetup } from '@/app/api/ingest/setup/route';
 import { GET as getAutoSetup } from '@/app/api/ingest/setup/auto/route';
@@ -92,11 +94,9 @@ test('AcTrail Unix setup writes a full authenticated config and persistently loa
   chmodSync(actraild, 0o755);
   chmodSync(sudo, 0o755);
 
-  const run = spawnSync('bash', ['-c', ACTRAIL_UNIX_SETUP_BLOCK], {
+  const run = spawnSync('bash', ['-c', SETUP_BASH_HOME + ACTRAIL_UNIX_SETUP_BLOCK], {
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOME: homeDir,
+    env: isolatedHomeEnv(homeDir, {
       PATH: `${binDir}:${process.env.PATH ?? ''}`,
       INSTALL_ACTRAIL: 'true',
       FINAL_HOST: 'https://collector.example/base',
@@ -104,7 +104,7 @@ test('AcTrail Unix setup writes a full authenticated config and persistently loa
       ACTRAIL_OPERATOR_CONFIG: operatorConfig,
       ACTRAIL_PLUGIN_DIR: pluginRoot,
       ACTRAIL_TEST_LOG: commandLog,
-    },
+    }),
   });
 
   assert.equal(run.status, 0, run.stderr);

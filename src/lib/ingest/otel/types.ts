@@ -34,6 +34,8 @@ export type OtelTraceEvent = {
 export type OtelTraceAppendResult = {
   events: OtelTraceEvent[];
   dirtySessionIds: string[];
+  deduplicatedEvents: number;
+  rejectedEvents: number;
 };
 
 export type OtelTraceAggregationResult =
@@ -47,5 +49,6 @@ export type OtelTraceAggregationResult =
     sessionId: string;
     record: null;
     eventCount: number;
-    disposition: 'retry-later';
+    disposition: 'retry-later' | 'discard';
+    reason?: 'aggregation-limit';
   };
