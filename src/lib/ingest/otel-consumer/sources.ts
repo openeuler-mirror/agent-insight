@@ -42,6 +42,7 @@ export type SpoolAggregationResult =
 export type SpoolSource = {
   id: string;
   spoolDir: () => string;
+  fileName?: 'logs.jsonl' | 'traces.jsonl' | 'events.jsonl';
   listFiles: () => string[];
   /** 只列某一天的文件。有它才能做"当天每 tick 扫、历史低频扫"的分层发现。 */
   listFilesForDay?: (day: string) => string[];
@@ -63,6 +64,7 @@ export function listSources(): SpoolSource[] {
   return [
     {
       id: 'deepseek-harness-otel-logs',
+      fileName: 'events.jsonl',
       spoolDir: getDeepSeekHarnessOtelSpoolDir,
       listFiles: () => listDeepSeekHarnessOtelSpoolFiles(getDeepSeekHarnessOtelSpoolDir()),
       listFilesForDay: (day) => listDeepSeekHarnessOtelSpoolFilesForDay(day, getDeepSeekHarnessOtelSpoolDir()),
@@ -72,6 +74,7 @@ export function listSources(): SpoolSource[] {
     },
     {
       id: 'codeagent-otel-logs',
+      fileName: 'logs.jsonl',
       spoolDir: getCodeAgentOtelSpoolDir,
       listFiles: () => listCodeAgentOtelSpoolFiles(getCodeAgentOtelSpoolDir()),
       listFilesForDay: (day) => listClaudeOtelSpoolFilesForDay(day, getCodeAgentOtelSpoolDir()),
@@ -81,6 +84,7 @@ export function listSources(): SpoolSource[] {
     },
     {
       id: 'claude-otel-logs',
+      fileName: 'logs.jsonl',
       spoolDir: getClaudeOtelSpoolDir,
       listFiles: () => listClaudeOtelSpoolFiles(getClaudeOtelSpoolDir()),
       listFilesForDay: (day) => listClaudeOtelSpoolFilesForDay(day, getClaudeOtelSpoolDir()),
@@ -90,6 +94,7 @@ export function listSources(): SpoolSource[] {
     },
     {
       id: 'actrail-otel-traces',
+      fileName: 'traces.jsonl',
       spoolDir: getActrailOtelTraceSpoolDir,
       listFiles: () => listOtelTraceSpoolFiles(getActrailOtelTraceSpoolDir()),
       listFilesForDay: (day) => listOtelTraceSpoolFilesForDay(day, getActrailOtelTraceSpoolDir()),
@@ -99,6 +104,7 @@ export function listSources(): SpoolSource[] {
     },
     {
       id: 'otel-traces',
+      fileName: 'traces.jsonl',
       spoolDir: getOtelTraceSpoolDir,
       listFiles: () => listOtelTraceSpoolFiles(getOtelTraceSpoolDir()),
       listFilesForDay: (day) => listOtelTraceSpoolFilesForDay(day, getOtelTraceSpoolDir()),

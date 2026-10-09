@@ -212,7 +212,7 @@ test('pi-mcts accepts a client configured Python outside the repository', async 
       throw new Error('stop after launch')
     }))
     assert.ok(actualEnv?.PATH.startsWith(path.join(f.outputDir, '.agent-insight', 'bin')))
-    const invokedPython = spawnSync('python', ['-c', 'import datasets'], { env: actualEnv, encoding: 'utf8' })
+    const invokedPython = spawnSync('python', ['-c', 'import datasets'], { env: { ...process.env, ...actualEnv }, encoding: 'utf8' })
     assert.equal(invokedPython.status, 0, invokedPython.stderr)
     assert.equal(invokedPython.stdout.trim(), '3.11')
     assert.equal(actualEnv?.MCTS_PYTHON, undefined)

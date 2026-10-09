@@ -7,6 +7,8 @@ import { appendJsonlBySession, appendOtelTraceEvents, listJsonlSpoolFiles } from
 import type { OtelTraceEvent } from '@/lib/ingest/claude-otel/types';
 import { forgetOtelSpoolFile, getOtelSpoolConsumerForTest, startOtelSpoolConsumer, stopOtelSpoolConsumer } from '@/lib/ingest/otel-consumer/consumer';
 import type { SpoolSource } from '@/lib/ingest/otel-consumer/sources';
+import { getFileCursor, toCheckpointRelPath } from '@/lib/ingest/otel-consumer/checkpoint';
+import type { ExecutionRecord } from '@/lib/storage/data-service';
 import { appendJiuwenSpans, readJiuwenSessionIndex } from '@/lib/ingest/otel/jiuwen/spool';
 import { markSpoolPurged, readSpoolState, trySpoolMaintenance } from '@/lib/runtime-cleanup/spool-state';
 
@@ -56,7 +58,7 @@ test('consumer protects an awaited save and confirms only its received generatio
   try {
     appendJsonlBySession(root, 'logs.jsonl', [{ sessionId: 'session' }]);
     startOtelSpoolConsumer({ sources: [source(root, 'session')], seedOnStart: false,
-      shortMs: 1, tickMs: 10000, longMs: 100000, maxWaitMs: 100000, log: () => {}, warn: () => {},
+      shortMs: 100000, tickMs: 10000, longMs: 1, maxWaitMs: 1, log: () => {}, warn: () => {},
       saveExecution: async record => { entered = true; await waiting; return { success: true, record }; },
     });
     await waitFor(() => entered);
@@ -95,22 +97,55 @@ test('consumer records successful persistence and skips late snapshots after pur
   try {
     appendJsonlBySession(root, 'logs.jsonl', [{ sessionId: 'session' }]);
     const options = { sources: [source(root, 'session')], seedOnStart: false,
-      shortMs: 1, tickMs: 10000, longMs: 100000, maxWaitMs: 100000, log: () => {}, warn: () => {},
+      shortMs: 1, tickMs: 5, longMs: 20, maxWaitMs: 40, log: () => {}, warn: () => {},
       saveExecution: async (record: any) => { saves++; return { success: true, record }; },
     };
     startOtelSpoolConsumer(options);
     await waitFor(() => readSpoolState(root, 'session')?.status === 'success');
+    const initialSaves = saves;
+    assert.ok(initialSaves > 0);
     stopOtelSpoolConsumer();
     markSpoolPurged(root, 'session');
     appendJsonlBySession(root, 'logs.jsonl', [{ sessionId: 'session', late: true }]);
     startOtelSpoolConsumer(options);
     await waitFor(() => getOtelSpoolConsumerForTest()?.pendingFiles.size === 0);
-    assert.equal(saves, 1);
+    assert.equal(saves, initialSaves);
     assert.ok(readSpoolState(root, 'session')?.purgedAt);
   } finally { stopOtelSpoolConsumer(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('deleted abandoned spool releases parked consumer bookkeeping', async () => {
+test('fast saves remain visible and replayable across restart until evaluated confirms cleanup eligibility', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-fast-replay-'));
+  stopOtelSpoolConsumer();
+  let fastSaved = false;
+  let evaluatedSaved = false;
+  try {
+    appendJsonlBySession(root, 'logs.jsonl', [{ sessionId: 'session' }]);
+    const file = listJsonlSpoolFiles(root)[0];
+    const relPath = toCheckpointRelPath(root, file);
+    const options = {
+      sources: [source(root, 'session')], seedOnStart: false, tickMs: 5,
+      log: () => {}, warn: () => {},
+      saveExecution: async (record: ExecutionRecord) => {
+        fastSaved ||= record.skip_evaluation === true;
+        evaluatedSaved ||= record.force_judgment === true;
+        return { success: true, record };
+      },
+    };
+    startOtelSpoolConsumer({ ...options, shortMs: 1, longMs: 100000, maxWaitMs: 100000 });
+    await waitFor(() => fastSaved);
+    assert.equal(evaluatedSaved, false);
+    assert.equal(getFileCursor(root, relPath).bytes, 0);
+    assert.equal(readSpoolState(root, 'session')?.status, 'unknown');
+    stopOtelSpoolConsumer();
+
+    startOtelSpoolConsumer({ ...options, shortMs: 100000, longMs: 1, maxWaitMs: 1 });
+    await waitFor(() => evaluatedSaved && readSpoolState(root, 'session')?.status === 'success');
+    assert.equal(getFileCursor(root, relPath).bytes, fs.statSync(file).size);
+  } finally { stopOtelSpoolConsumer(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('deleted abandoned spool releases deferred consumer bookkeeping', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-forget-'));
   stopOtelSpoolConsumer();
   try {
@@ -119,12 +154,15 @@ test('deleted abandoned spool releases parked consumer bookkeeping', async () =>
       shortMs: 1, tickMs: 10000, longMs: 100000, maxWaitMs: 100000, parkAfter: 1,
       log: () => {}, warn: () => {}, saveExecution: async record => ({ success: false, record }),
     });
-    await waitFor(() => !!getOtelSpoolConsumerForTest()?.sessions.get('session')?.parked);
+    await waitFor(() => getOtelSpoolConsumerForTest()?.deferredFiles.size === 1);
     assert.equal(readSpoolState(root, 'session')?.status, 'unknown');
+    assert.equal(getOtelSpoolConsumerForTest()?.pendingFiles.size, 0);
+    assert.equal(getOtelSpoolConsumerForTest()?.sessions.size, 0);
     const file = listJsonlSpoolFiles(root)[0];
     const canonicalFile = fs.realpathSync(file);
     fs.unlinkSync(file);
     forgetOtelSpoolFile(root, canonicalFile);
+    assert.equal(getOtelSpoolConsumerForTest()?.deferredFiles.size, 0);
     assert.equal(getOtelSpoolConsumerForTest()?.pendingFiles.size, 0);
     assert.equal(getOtelSpoolConsumerForTest()?.sessions.size, 0);
   } finally { stopOtelSpoolConsumer(); fs.rmSync(root, { recursive: true, force: true }); }

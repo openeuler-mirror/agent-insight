@@ -87,14 +87,16 @@ flowchart TD
 
 ## 后端流水线：接入（agent run → Execution 记录）
 
-接收缓存回收由 `runtime-cleanup` 后台扫描器负责。默认正常 7 天策略需要明确结束和成功持久化记录；异常、未处理或失活记录默认按最后实际接收时间保留 14 天。扫描和聚合重试不刷新接收时间。历史文件能确认会话归属和安全目录时，以 mtime 作为接收时间的保守替代，按异常保留期回收；所有权不明、超出有限读取预算而不能核实的超大历史文件跳过。消费者与清理操作必须协调，不能用 EOF checkpoint 或 `.processed` 名称代替落库成功凭据；迟到数据在已清理会话中保留原始缓存，并禁止以缺少历史内容的聚合结果覆盖原 Trace。
+接收缓存回收由 `runtime-cleanup` 后台扫描器负责。默认正常 7 天策略需要明确结束和成功持久化记录；异常、未处理或失活记录默认按最后实际接收时间保留 7 天。扫描和聚合重试不刷新接收时间，仍有新上报的会话所需的跨日期片段继续保留。历史文件能确认会话归属和安全目录时，以 mtime 作为接收时间的保守替代，按异常保留期回收；所有权不明、超出有限读取预算而不能核实的超大历史文件跳过。消费者与清理操作必须协调，不能用 EOF checkpoint 或 `.processed` 名称代替落库成功凭据；迟到数据在已清理会话中保留原始缓存，并禁止以缺少历史内容的聚合结果覆盖原 Trace。
 
 `readCleanupConfig` 在调度器启动时读取配置并保留代码兜底值，`.env.example` 只作为部署模板。`createCleanupSweep` 将日志保留天数、轮转时间 / 大小、总量目标、临时 HOME 期限及接收缓存期限传给对应扫描器；调度器使用同一配置中的启动延迟、轮次间隔、分批操作数 / 时间 / 读取预算。数值非法或低于下限时回退默认，超过上限时截断；异常期限至少等于正常期限，日志总量目标至少等于单文件轮转阈值。改动实际环境配置后需重启。日志清理只使用文件元信息和小型控制文件，执行 rename / unlink，不读取日志正文或生成压缩文件；旧 `.gz` 归档继续按相同期限和容量规则回收。
 
 扫描来源来自 OTel consumer registry，另包含 Jiuwen spool；每个来源单独隔离失败并交替推进。已清理会话的小型身份元数据和去重索引继续保留，仍随会话数量增长；有限读取、分片与过期策略针对大内容缓存，不能解释为所有磁盘占用固定上限。接收状态与轻量清理记录用于文件回收，不删除 Session / Execution / 评测 / 诊断数据，也不运行数据库归档或 VACUUM。日志扫描只处理登记的应用日志名称，容量回收每次保留最多 256 个最旧候选，再逐个复查删除；1 GiB 为每轮软目标，轮次之间活动日志可能超出目标。1 MiB 为每片内容读取预算，少量锁与状态元数据读取另计。过期进程锁恢复用独占 `.reaping` 标记串行化，恢复中崩溃会保留该标记并拒绝自动抢占，需人工核查后处理。临时目录仅匹配平台 `.opencode-runtime/<user>/isolated-home-*`，同时验证同主机服务 PID 与子进程组已退出，跳过符号链接目标和未知所有权目录。
 
 
-源码生产启动在确认端口释放后，通过 `scripts/stop-orphan-trace-consumer.cjs` 检查共享 Trace spool 的 `consumer-owner.lock`。只有锁指向本项目 `.next/standalone`、且该进程已不监听端口时才终止残留进程；Linux 已退出但尚未回收的僵尸进程只清除其遗留的消费锁。其他归属或无法核实时启动失败。新服务随后取得消费锁，按原 checkpoint 处理积压文件。
+源码生产启动在确认端口释放后，通过 `scripts/stop-orphan-trace-consumer.cjs` 检查共享 Trace spool 的 `consumer-owner.lock`。只有锁指向本项目 `.next/standalone`、且该进程已不监听端口时才终止残留进程；Linux 已退出但尚未回收的僵尸进程只清除其遗留的消费锁。其他归属或无法核实时启动失败。新服务随后取得消费锁，默认以 `AGENT_INSIGHT_OTEL_CONSUMER_START_MODE=live` 处理本次启动后新收到的数据；设为 `resume` 才按原 checkpoint 补处理积压。
+
+`live` 的截止点在每次消费者启动时确定，以服务端接收时间识别新输入，不按客户端 span 时间截断。静止历史不主动触发聚合；旧会话有新上报时，仍聚合它尚存的完整历史。启动不逐文件重置 checkpoint、不全量读取历史 JSONL；新接收通知与后台分批发现负责唤醒会话。普通进程重启同样建立新截止点，因此尚未完成且没有后续上报的历史不会自动恢复；需要恢复时应显式配置 `resume`，且原始缓存必须仍存在。
 
 Trae IDE 通过 VS Code 插件内置的 Hook 系统采集运行数据：Hook 脚本监听 session-start、pre-tool-use、post-tool-use、prompt-submit、stop、subagent-detect 等生命周期事件，将事件序列化为 JSONL 写入本地 spool 目录；插件内的 `UploadEngine` 按 checkpoint 增量消费 spool 文件，经内容截断后 POST 到 `/api/ingest/upload`。服务端通过 `traeAdapter` (`FrameworkAdapter`) 的 `extractSkills` 从 TRAE 特有 interaction 格式中提取 Skill 调用，再经 `saveExecutionRecord` 统一落库。
 
@@ -199,6 +201,8 @@ Logs 经由 `POST /api/ingest/otel/v1/logs`。普通 Claude/CodeAgent 路径继�
 后台 `OtelSpoolConsumer`（`startOtelSpoolConsumer` / `runOtelSpoolConsumerTick`）按 checkpoint 增量消费 spool：
 - **短 debounce**（`OTEL_CONSUMER_SHORT_MS`，默认 3s）：有数据时快速落库
 - **长 debounce**（`OTEL_CONSUMER_LONG_MS`，默认 30s）：静默后触发评估
+
+消费者默认最多跟踪 20,000 个内存会话（`AGENT_INSIGHT_OTEL_CONSUMER_MAX_SESSIONS`）。快速落库让 Trace 提前可见；磁盘 checkpoint 和清理所用的成功凭据在 evaluated 阶段保存成功后才确认，明确可丢弃或已清理的记录也可确认游标。维护锁暂时占用、聚合返回 `retry-later` 或连续失败时，未完成文件保留原始内容和磁盘重放位置，按 `AGENT_INSIGHT_OTEL_CONSUMER_PARKED_RETRY_MS`（默认 5 分钟）延后重放并释放内存名额；已快速落库但评估阶段失败的会话也遵循这一规则。重启或重试可能再次保存已快速落库的快照，按原任务身份更新记录。文件有新追加时可提前重试；源与文件轮转接纳，避免异常旧文件长期占满队列。尚未达到停放阈值的写库失败会重新调度。容量告警每分钟最多输出一条汇总；该告警表示接收缓存暂未消费，不表示数据库已有 Trace 被删除。
 
 消费流程先由 OTel adapter registry 根据 AcTrail 标识或 `service.name` 选中 AcTrail、OpenClaw 等 trace adapter，再调用 framework adapter 完成 skill 抽取和存储归一化，最后依次执行 `buildAgentCallTree`（构建 Span 树）、`deriveSubagentExecutions`（拆分父子 Execution）、`saveExecutionRecord`（持久化到 Prisma）。AcTrail adapter 以完整请求正文恢复真实用户问题，以带类型的 Span Link 绑定工具结果和子 Agent 请求，并把逻辑 Agent 工具投影为现有 `task` 调用，使后续树构建与子 Execution 拆分无需增加专用 UI。OpenClaw 聚合按 `traceId + spanId` 去重，同一批 span 重传不会重复累计 Token、工具调用或扁平 tool block。
 
