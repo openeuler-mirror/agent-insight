@@ -155,6 +155,34 @@ systemd manager 可用；普通用户若遇到历史系统级服务，会先退�
 > **Note**
 > 未安装 Python 或故障注入组件的主机同样可以正常上线，只是「故障注入能力」显示为不可用，不影响配置下发与观测。
 
+### 客户端配置与故障检测推理服务
+
+在「客户端配置」页选择客户端与平台后，可填写 **故障检测推理服务 URL**。
+该字段非必填，默认留空；填写时必须使用有效的 `http://` 或 `https://` 完整地址。
+
+点击 **保存并通知同步** 后，在线的常驻客户端会拉取配置快照，原子写入
+`~/.agent-insight/ras/<platform>/client-config.json`，服务端与常驻客户端无需重启。
+客户端故障检测程序可从文件的 `config.inference.fault_mode_classification_service_url` 读取地址：
+
+```json
+{
+  "config": {
+    "inference": {
+      "fault_mode_classification_service_url": "https://classifier.example/classify"
+    }
+  }
+}
+```
+
+留空表示未配置；清空后再次保存同步，会将文件中的地址更新为空字符串。
+各客户端与平台分别保存该字段。自定义 `AGENT_INSIGHT_HOME` 时，文件位于该目录下的
+`ras/<platform>/client-config.json`。
+此前使用旧驼峰字段名保存的地址会自动保留；重新保存同步后，客户端文件使用新的蛇形字段名。
+
+**仅保存** 只保存服务端配置，不触发客户端写入。**本地已写入** 表示客户端落盘完成；
+该 URL 供故障检测程序读取，落盘不代表已发起或完成推理调用。客户端离线时配置仍会保存，
+待其在线后再次点击保存同步。
+
 ### 安装命令区
 
 安装命令区通常包含：
