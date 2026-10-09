@@ -114,7 +114,22 @@ function buildSectionsAndDefaults(): {
   sections: BuiltinSchemaSection[]
 } {
   const defaults = yamlFlatDefaults()
+  defaults['inference.fault_mode_classification_service_url'] = ''
   const sections: BuiltinSchemaSection[] = [
+    {
+      key: 'inference',
+      title: '故障检测推理服务',
+      description: '可选，保存同步后供客户端故障检测程序读取。',
+      fields: [
+        {
+          key: 'inference.fault_mode_classification_service_url',
+          label: '故障检测推理服务 URL',
+          type: 'string',
+          format: 'http-url',
+          required: false,
+        },
+      ],
+    },
     {
       key: 'enabled',
       title: '启用 Agent RAS',
@@ -314,4 +329,3 @@ export function flatConfigToCapabilityBody(flat: Record<string, unknown>): {
     recovery: { notify_user_on_warning: notify },
   }
 }
-

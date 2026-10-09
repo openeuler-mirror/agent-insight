@@ -431,8 +431,11 @@ export default function AccessClientConfigPage() {
   const buildOverrideDiff = (): Record<string, unknown> => {
     if (!schema) return {}
     const diff: Record<string, unknown> = {}
+    const urlFields = new Set(schema.sections.flatMap((section) => section.fields)
+      .filter((field) => field.format === 'http-url').map((field) => field.key))
     for (const [key, defVal] of Object.entries(schema.defaults || {})) {
-      const cur = draft[key]
+      const raw = draft[key]
+      const cur = urlFields.has(key) && typeof raw === 'string' ? raw.trim() : raw
       if (cur === undefined) continue
       if (JSON.stringify(cur) !== JSON.stringify(defVal)) diff[key] = cur
     }
@@ -840,9 +843,14 @@ export default function AccessClientConfigPage() {
                           const value = draft[field.key]
                           const fieldError = fieldErrors.find((e) => e.key === field.key)
                           return (
-                            <label key={field.key} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
+                            <label key={field.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center' }}>
                               <span style={{ fontSize: 13 }}>
                                 {field.label}
+                                {field.required === false && (
+                                  <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--muted-foreground)' }}>
+                                    {isZh ? '可选' : 'Optional'}
+                                  </span>
+                                )}
                                 <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--muted-foreground)' }}>
                                   {source === 'client_override' ? (isZh ? '客户端覆盖' : 'override') : (isZh ? '平台默认' : 'builtin')}
                                 </span>
@@ -856,15 +864,20 @@ export default function AccessClientConfigPage() {
                               ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
                                   <input
-                                    type="number"
+                                    type={field.format === 'http-url' ? 'url' : field.type === 'string' ? 'text' : 'number'}
                                     // 受控值保持字符串：type=number 的受控输入用宽松比较，
                                     // 若这里回写数字，"03333" == 3333 会让 React 跳过 DOM 更新，
                                     // 界面停在带前导零的旧文本，与实际状态不一致。
                                     value={value === null || value === undefined ? '' : String(value)}
                                     min={field.min}
                                     max={field.max}
+                                    placeholder={field.format === 'http-url' ? 'https://classifier.example/classify' : undefined}
                                     onChange={(e) => setField(field.key, e.target.value)}
                                     onBlur={(e) => {
+                                      if (field.type === 'string') {
+                                        if (field.format === 'http-url') setField(field.key, e.target.value.trim())
+                                        return
+                                      }
                                       // 失焦才归一：编辑途中允许空串和 "0" 开头的中间态。
                                       const raw = e.target.value.trim()
                                       if (raw === '') return
@@ -872,7 +885,7 @@ export default function AccessClientConfigPage() {
                                       if (Number.isFinite(num)) setField(field.key, num)
                                     }}
                                     style={{
-                                      width: 120,
+                                      width: field.type === 'string' ? 'min(320px, 35vw)' : 120,
                                       border: `1px solid ${fieldError ? 'var(--color-danger, #dc2626)' : 'var(--border)'}`,
                                       borderRadius: 8,
                                       padding: '6px 8px',
