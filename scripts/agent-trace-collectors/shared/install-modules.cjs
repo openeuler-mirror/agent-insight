@@ -5,9 +5,13 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 
-// Only the unmodified pre-AGENT_INSIGHT_HOME release may be migrated automatically.
+// Only verified, unmodified released modules may be migrated automatically.
 const UPGRADEABLE = {
-  "trace-transport.cjs": new Set(["9fd0637399b14ac69810e20e3ec2e8d2aedbb58236b09871d7c158313e26e128"]),
+  "trace-transport.cjs": new Set([
+    "9fd0637399b14ac69810e20e3ec2e8d2aedbb58236b09871d7c158313e26e128",
+    "9fda3fa4224105a48a6619f764c7bee04c1bdc0df32a74d880a295a1e5f03da6",
+  ]),
+  "install-modules.cjs": new Set(["8d54ec546990463477e30c9a20773f2b3c0c9845ee768ea7d8180286b8326e22"]),
 };
 
 async function readRegularFile(file) {

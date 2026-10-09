@@ -8,6 +8,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import AdmZip from "adm-zip"
+import { isolatedHomeEnv } from './helpers/isolated-home'
 
 import { GET as getInstaller } from "@/app/api/ingest/setup/pi-agent/route"
 import { GET as getAsset } from "@/app/api/ingest/setup/pi-agent/assets/[asset]/route"
@@ -151,14 +152,20 @@ test("Pi installer writes one identity and endpoint set for main and Goal Plus t
   t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }))
 
   const sourceDir = path.join(process.cwd(), "scripts", "agent-trace-collectors", "pi-agent")
-  const result = spawnSync(process.execPath, [
+  const sharedDir = path.join(agentInsightHome, "collectors", "shared")
+  fs.mkdirSync(sharedDir, { recursive: true })
+  for (const name of ["trace-transport", "install-modules"]) {
+    fs.copyFileSync(path.join(process.cwd(), "test", "fixtures", "collectors", `${name}-pre-workbuddy.cjs`),
+      path.join(sharedDir, `${name}.cjs`))
+  }
+  const invoke = () => spawnSync(process.execPath, [
     path.join(sourceDir, "install.cjs"),
     "--home", homeDir,
     "--source-dir", sourceDir,
   ], {
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...isolatedHomeEnv(tempDir),
       AGENT_INSIGHT_API_KEY: "same-account-key",
       AGENT_INSIGHT_BASE_URL: "https://insight.example",
       AGENT_INSIGHT_HOME: agentInsightHome,
@@ -168,6 +175,7 @@ test("Pi installer writes one identity and endpoint set for main and Goal Plus t
       PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
     },
   })
+  const result = invoke()
   assert.equal(result.status, 0, result.stderr || result.stdout)
 
   const piConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json"), "utf8"))
@@ -176,6 +184,12 @@ test("Pi installer writes one identity and endpoint set for main and Goal Plus t
   assert.equal(goalPlusConfig.otlpEndpoint, piConfig.endpoint)
   assert.equal(goalPlusConfig.collaborationSessionsEndpoint, piConfig.collaborationSessionsEndpoint)
   assert.equal(goalPlusConfig.collaborationEventsEndpoint, piConfig.collaborationEventsEndpoint)
+  const backups = fs.readdirSync(sharedDir).filter(name => name.endsWith('.bak'))
+  assert.equal(backups.length, 2)
+  const reinstalled = invoke()
+  assert.equal(reinstalled.status, 0, reinstalled.stderr || reinstalled.stdout)
+  assert.equal(fs.readdirSync(sharedDir).filter(name => name.endsWith('.bak')).length, 2)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json"), "utf8")), piConfig)
 })
 
 test("PowerShell bootstrap rejects a tampered Pi bundle before installation", async (t) => {
