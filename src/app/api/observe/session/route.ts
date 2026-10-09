@@ -160,8 +160,12 @@ export async function GET(request: Request) {
         const { username } = await resolveUser(request);
         if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         const rawInteraction = searchParams.get('source') === 'raw';
-        const reportedInteractions = !rawInteraction && username && username === session.user
-            ? await collaborationTraceProjection.interactions(username, taskId, loadParsedSession) : null;
+        const relationPlan = !rawInteraction && username && username === session.user
+            ? await collaborationTraceProjection.plan(username) : null;
+        const parentAgent = relationPlan?.unavailable ? { state: 'unavailable' }
+            : relationPlan?.parentAgents?.[taskId] ?? null;
+        const reportedInteractions = relationPlan && username
+            ? await collaborationTraceProjection.interactions(username, taskId, loadParsedSession, relationPlan) : null;
         const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
         const displayInteractions = withTracePayloadVersions(reportedInteractions || collaborationProjection?.interactions || interactions);
 
@@ -187,6 +191,7 @@ export async function GET(request: Request) {
                 interactionCount: displayInteractions.length,
                 interactions: toTraceStructureInteractions(displayInteractions),
                 execution: executionSummary,
+                parentAgent,
                 ...(collaborationProjection ? {
                     collaborationProjection: {
                         sourceType: collaborationProjection.sourceType,
@@ -236,6 +241,7 @@ export async function GET(request: Request) {
             user: session.user,
             startTime: session.startTime.getTime(),
             interactions: displayInteractions,
+            parentAgent,
             ...(collaborationProjection ? {
                 collaborationProjection: {
                     sourceType: collaborationProjection.sourceType,

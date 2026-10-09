@@ -2,9 +2,16 @@ import { createHash } from 'node:crypto';
 import { CollaborationService } from './service';
 import { collaborationLog, failureDetails } from './log';
 import type { Anchor } from './resolve';
+import type { ParentAgentReference } from '@/lib/trace/parent-agent';
 
 export interface TraceLink { parent: string; child: string; anchor: Anchor; sequential?: boolean; order?: string; independent?: boolean }
-export interface CollaborationProjectionPlan { hiddenChildren: string[]; pendingChildren: string[]; links: TraceLink[] }
+export interface CollaborationProjectionPlan {
+    hiddenChildren: string[];
+    pendingChildren: string[];
+    links: TraceLink[];
+    parentAgents?: Record<string, ParentAgentReference>;
+    unavailable?: boolean;
+}
 
 export function resolveTraceForest(links: TraceLink[]): TraceLink[] {
     const parents = new Map<string, Set<string>>();
@@ -61,6 +68,8 @@ export class CollaborationProjection {
                 'SELECT "collaborationId" FROM "Collaboration" WHERE "user"=? AND "id" IN (SELECT "collaborationDbId" FROM "CollaborationEvent" WHERE "sourceType"=\'reported\') ORDER BY "collaborationId" LIMIT 201', [user]);
             if (groups.length > 200) throw new ProjectionLimitError('协作组超过 200，保留原列表');
             const claimedGoalPlusChildren = new Set<string>();
+            const declaredLinks: TraceLink[] = [];
+            const missingParents = new Set<string>();
             const inputs: Array<{ collaborationId: string; ids: Map<string, string>; goalPlus: boolean }> = [];
             for (const group of groups) {
                 const snapshot = await this.service.store.snapshot(user, group.collaborationId, 0, 1);
@@ -74,7 +83,12 @@ export class CollaborationProjection {
                         try { event = JSON.parse(row.bodyJson); } catch { continue; }
                         if (event.fromSessionId !== 'main' || !event.toSessionId?.startsWith('worker:')) continue;
                         const child = ids.get(event.toSessionId);
-                        if (child) claimedGoalPlusChildren.add(child);
+                        if (child) {
+                            claimedGoalPlusChildren.add(child);
+                            const parent = ids.get(event.fromSessionId);
+                            if (parent) declaredLinks.push({ parent, child, anchor: { status: 'not_provided', message: '' } });
+                            else missingParents.add(child);
+                        }
                     }
                 }
                 inputs.push({ collaborationId: group.collaborationId, ids, goalPlus });
@@ -84,6 +98,7 @@ export class CollaborationProjection {
             const unavailable = new Set<string>();
             const sizes = new Map<string, number>();
             const ready = new Map<string, boolean>();
+            const summaries = new Map<string, { id: string; agentName: string | null; subagentName: string | null; framework: string | null }>();
             try {
                 for (const input of inputs) {
                     const graph = await this.service.graph(user, input.collaborationId, 0, 2000);
@@ -93,10 +108,11 @@ export class CollaborationProjection {
                     for (const id of new Set(ids.values())) {
                         if (!sizes.has(id)) {
                             if (sizes.size >= 200) throw new ProjectionLimitError('Trace 投影超过 200 个 Session');
-                            const rows = await this.service.store.sql.rows<{ bytes: number; embedded: string | null; isSubagent: boolean | number }>(
-                                'SELECT LENGTH(s."interactions") AS bytes, s."langfuseTraceNodes" AS embedded, e."isSubagent" FROM "Session" s JOIN "Execution" e ON e."taskId"=s."taskId" AND e."user"=s."user" WHERE s."user"=? AND s."taskId"=? LIMIT 2', [user, id]);
+                            const rows = await this.service.store.sql.rows<{ bytes: number; embedded: string | null; isSubagent: boolean | number; id: string; agentName: string | null; subagentName: string | null; framework: string | null }>(
+                                'SELECT LENGTH(s."interactions") AS bytes, s."langfuseTraceNodes" AS embedded, e."isSubagent", e."id", e."agentName", e."subagentName", e."framework" FROM "Session" s JOIN "Execution" e ON e."taskId"=s."taskId" AND e."user"=s."user" WHERE s."user"=? AND s."taskId"=? LIMIT 2', [user, id]);
                             sizes.set(id, Number(rows[0]?.bytes ?? 0));
                             ready.set(id, rows.length === 1 && Boolean(rows[0].bytes && rows[0].bytes > 2 && !rows[0].isSubagent && (!rows[0].embedded || rows[0].embedded === '[]')));
+                            if (rows.length === 1) summaries.set(id, rows[0]);
                         }
                         if (!input.goalPlus && !ready.get(id)) unavailable.add(id);
                     }
@@ -140,7 +156,7 @@ export class CollaborationProjection {
                 if (error instanceof ProjectionLimitError) throw error;
                 const hiddenChildren = [...claimedGoalPlusChildren];
                 collaborationLog.warn('Trace 合并查询失败，已声明 Goal Plus worker 继续隐藏', { user, stage: 'projection', hiddenChildren: hiddenChildren.length, ...failureDetails(error) });
-                return { hiddenChildren, pendingChildren: hiddenChildren, links: [] };
+                return { hiddenChildren, pendingChildren: hiddenChildren, links: [], unavailable: true };
             }
             // Generic relationships hide children only when the whole component is mergeable.
             let changed = true;
@@ -150,24 +166,38 @@ export class CollaborationProjection {
                     for (const id of [parent, child]) if (!unavailable.has(id)) { unavailable.add(id); changed = true; }
                 }
             }
+            const safeDeclarations = resolveTraceForest([...strictLinks, ...declaredLinks]);
+            const safeChildren = new Set(safeDeclarations.map(link => link.child));
             const resolved = resolveTraceForest([...strictLinks, ...independentLinks])
-                .filter(link => link.independent || (!unavailable.has(link.parent) && !unavailable.has(link.child)));
+                .filter(link => link.independent
+                    ? safeChildren.has(link.child) && !missingParents.has(link.child)
+                    : !unavailable.has(link.parent) && !unavailable.has(link.child));
+            const parentAgents: Record<string, ParentAgentReference> = Object.create(null);
+            for (const child of claimedGoalPlusChildren) {
+                const declared = declaredLinks.some(link => link.child === child);
+                const relation = resolved.find(link => link.independent && link.child === child);
+                const parent = relation && summaries.get(relation.parent);
+                parentAgents[child] = declared && !safeChildren.has(child) ? { state: 'ambiguous' }
+                    : relation && parent ? { state: 'resolved', taskId: relation.parent, executionId: parent.id,
+                        agentName: parent.agentName || parent.subagentName || parent.framework || 'Agent', framework: parent.framework }
+                    : { state: 'pending' };
+            }
             const hiddenChildren = [...new Set([...claimedGoalPlusChildren, ...resolved.map(link => link.child)])];
             const mergedChildren = new Set(resolved.filter(link => link.independent).map(link => link.child));
             const pendingChildren = [...claimedGoalPlusChildren].filter(child => !mergedChildren.has(child));
             const reportedRelations = strictLinks.length + independentLinks.length;
             if (reportedRelations || hiddenChildren.length) collaborationLog.info('Trace 合并关系已计算', { user, stage: 'projection', reportedRelations, hiddenChildren: hiddenChildren.length, pendingChildren: pendingChildren.length, mergedChildren: resolved.length, retainedRelations: reportedRelations - resolved.length });
-            return { hiddenChildren, pendingChildren, links: resolved };
+            return { hiddenChildren, pendingChildren, links: resolved, parentAgents };
         } catch (error) {
             collaborationLog.warn('Trace 合并查询失败，保留原始列表', { user, stage: 'projection', ...(error instanceof ProjectionLimitError ? { causeCode: 'PROJECTION_LIMIT', reason: error.message } : failureDetails(error)) });
-            return { hiddenChildren: [], pendingChildren: [], links: [] };
+            return { hiddenChildren: [], pendingChildren: [], links: [], unavailable: true };
         }
     }
     async links(user: string): Promise<TraceLink[]> {
         return (await this.plan(user)).links;
     }
-    async interactions(user: string, root: string, load: (id: string) => Promise<{ session: { user?: string | null }; interactions: any[]; langfuseTraceNodes?: any[] } | null>) {
-        const links = await this.links(user);
+    async interactions(user: string, root: string, load: (id: string) => Promise<{ session: { user?: string | null }; interactions: any[]; langfuseTraceNodes?: any[] } | null>, plan?: CollaborationProjectionPlan) {
+        const links = plan?.links ?? await this.links(user);
         const members = new Map<string, TraceLink | null>([[root, null]]);
         for (let changed = true; changed;) {
             changed = false;

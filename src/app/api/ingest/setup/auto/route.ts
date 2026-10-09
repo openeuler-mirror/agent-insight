@@ -785,8 +785,8 @@ if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     export AGENT_INSIGHT_API_KEY
     export AGENT_INSIGHT_BASE_URL
     PI_INSTALLER="$(mktemp)"
-    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -o "$PI_INSTALLER"
-    if ! sh "$PI_INSTALLER"; then rm -f "$PI_INSTALLER"; exit 1; fi
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -o "$PI_INSTALLER" || { echo "❌ Pi collector installer download failed" >&2; exit 1; }
+    if ! sh "$PI_INSTALLER"; then echo "❌ Pi / Goal Plus collector installation failed; resident-client success does not mean Trace setup succeeded. Preserve .agent-insight and review the error above." >&2; rm -f "$PI_INSTALLER"; exit 1; fi
     PI_AGENT_SETUP_OK=true
     rm -f "$PI_INSTALLER"
 fi
@@ -1889,6 +1889,9 @@ function generatePowerShellScript(
         '        & $piInstaller',
         '        if ($LASTEXITCODE -ne 0) { throw "Pi Agent collector installer failed with exit code $LASTEXITCODE." }',
         '        $PI_AGENT_SETUP_OK = $true',
+        '    } catch {',
+        '        Write-Error "Pi / Goal Plus collector installation failed: $_"',
+        '        exit 1',
         '    } finally {',
         '        Remove-Item -LiteralPath $piInstaller -Force -ErrorAction SilentlyContinue',
         '    }',

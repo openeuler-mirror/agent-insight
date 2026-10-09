@@ -50,6 +50,7 @@ test('detail refresh updates timeout metadata independently of the pending sessi
     const updates: unknown[] = [];
     const refresh = evaluate<(silent: boolean) => void>(callback.getText(ast), {
         taskId: 'trace-timeout', apiKey: 'test-key', sessionRef: { current: {} },
+        sessionRequestRef: { current: 0 },
         setLoading() {}, setSession() {}, setSecondsSinceRefresh() {},
         onExecutionRefresh: (value: unknown) => updates.push(value),
         apiFetch: (url: string, options: RequestInit) => {
@@ -75,7 +76,10 @@ test('detail refresh updates timeout metadata independently of the pending sessi
 test('running and timed-out detail traces refresh only while visible and remove their listeners', () => {
     const node = find(n => ts.isCallExpression(n) && n.expression.getText(ast) === 'useEffect'
         && n.arguments[0]?.getText(ast).includes('!autoRefresh')) as ts.CallExpression;
-    for (const status of ['running', 'timed_out', 'success', 'failed']) {
+    for (const [status, waitingForParent] of [
+        ['running', false], ['timed_out', false], ['success', false], ['failed', false],
+        ['success', true], ['failed', true],
+    ] as const) {
         const intervals: Array<() => void> = [];
         const listeners = new Map<string, () => void>();
         const visibility = { visibilityState: 'hidden' };
@@ -91,6 +95,7 @@ test('running and timed-out detail traces refresh only while visible and remove 
         };
         const run = evaluate<() => (() => void) | undefined>(node.arguments[0].getText(ast), {
             autoRefresh: true, execStatus: status, refreshIntervalSec: 5,
+            waitingForParent,
             fetchSession: () => { requests++; },
             window: timer, ...timer,
             document: {
@@ -103,7 +108,7 @@ test('running and timed-out detail traces refresh only while visible and remove 
             },
         });
         const cleanup = run();
-        if (status === 'success' || status === 'failed') {
+        if (!waitingForParent && (status === 'success' || status === 'failed')) {
             assert.equal(intervals.length, 0);
             continue;
         }
@@ -119,4 +124,24 @@ test('running and timed-out detail traces refresh only while visible and remove 
         assert.equal(cleared, true);
         assert.equal(listeners.size, 0);
     }
+});
+
+test('late session and parent metadata responses cannot replace a newly selected trace', async () => {
+    const node = find(n => ts.isVariableDeclaration(n) && n.name.getText(ast) === 'fetchSession') as ts.VariableDeclaration;
+    const callback = (node.initializer as ts.CallExpression).arguments[0];
+    const pending: Array<(value: unknown) => void> = [];
+    const updates: unknown[] = [];
+    const sessionRequestRef = { current: 0 };
+    const refresh = evaluate<(silent: boolean) => void>(callback.getText(ast), {
+        taskId: 'old-worker', apiKey: 'test-key', sessionRef: { current: {} }, sessionRequestRef,
+        setLoading: (value: unknown) => updates.push(value), setSession: (value: unknown) => updates.push(value),
+        setSecondsSinceRefresh: (value: unknown) => updates.push(value), setAutoRefresh: (value: unknown) => updates.push(value),
+        onExecutionRefresh: (value: unknown) => updates.push(value),
+        apiFetch: () => new Promise(resolve => pending.push(resolve)),
+    });
+    refresh(true);
+    sessionRequestRef.current += 1;
+    for (const resolve of pending) resolve({ ok: true, json: async () => ({ taskId: 'old-worker', parentAgent: { state: 'resolved', taskId: 'old-parent' } }) });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(updates, []);
 });

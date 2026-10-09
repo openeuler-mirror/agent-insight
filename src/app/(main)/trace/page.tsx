@@ -1466,6 +1466,7 @@ function TraceDetailView({
     const [rasMarkers, setRasMarkers] = useState<any[]>([]);
 
     const sessionRef = useRef<any | null>(null);
+    const sessionRequestRef = useRef(0);
     useEffect(() => { sessionRef.current = session; }, [session]);
 
     useEffect(() => {
@@ -1489,23 +1490,34 @@ function TraceDetailView({
 
     const fetchSession = useCallback((silent = false) => {
         if (!taskId) return;
+        const requestId = ++sessionRequestRef.current;
         const isInitial = !sessionRef.current;
         if (!silent && isInitial) setLoading(true);
         apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskId)}&fields=light&includeTags=1&includeEvaluations=0&skipAutoEvalReady=1`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(response => response.ok ? response.json() : null)
-            .then(records => { if (Array.isArray(records) && records[0]) onExecutionRefresh(records[0]); })
+            .then(records => { if (requestId === sessionRequestRef.current && Array.isArray(records) && records[0]) onExecutionRefresh(records[0]); })
             .catch(() => {});
         apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
-            .then(j => { setSession(j); setSecondsSinceRefresh(0); })
-            .catch(() => { if (!silent && isInitial) setSession({ error: 'Network error' }); })
-            .finally(() => { if (!silent && isInitial) setLoading(false); });
+            .then(j => {
+                if (requestId !== sessionRequestRef.current) return;
+                const wasWaiting = ['pending', 'unavailable'].includes(sessionRef.current?.parentAgent?.state);
+                if (!wasWaiting && ['pending', 'unavailable'].includes(j.parentAgent?.state)) setAutoRefresh(true);
+                setSession(j);
+                setSecondsSinceRefresh(0);
+            })
+            .catch(() => { if (requestId === sessionRequestRef.current && !silent && isInitial) setSession({ error: 'Network error' }); })
+            .finally(() => { if (requestId === sessionRequestRef.current) setLoading(false); });
     }, [taskId, apiKey, onExecutionRefresh]);
+
+    useEffect(() => () => { sessionRequestRef.current += 1; }, [taskId]);
 
     useEffect(() => { fetchSession(false); }, [fetchSession]);
 
+    const waitingForParent = session?.parentAgent?.state === 'pending' || session?.parentAgent?.state === 'unavailable';
+
     useEffect(() => {
-        if (!autoRefresh || (execStatus !== 'running' && execStatus !== 'timed_out')) return;
+        if (!autoRefresh || (!waitingForParent && execStatus !== 'running' && execStatus !== 'timed_out')) return;
         const refreshWhenVisible = () => {
             if (document.visibilityState === 'visible') fetchSession(true);
         };
@@ -1515,7 +1527,7 @@ function TraceDetailView({
             window.clearInterval(id);
             document.removeEventListener('visibilitychange', refreshWhenVisible);
         };
-    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus]);
+    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus, waitingForParent]);
 
     useEffect(() => {
         const id = setInterval(() => setSecondsSinceRefresh(s => s + 1), 1000);
@@ -1768,6 +1780,9 @@ function TraceDetailView({
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
+                        parentAgent={session?.taskId === taskId ? session.parentAgent : null}
+                        rootSessionId={taskId}
+                        traceIdentity={taskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
                         rasMarkers={rasMarkers}
                     />

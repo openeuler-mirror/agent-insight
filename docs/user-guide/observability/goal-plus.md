@@ -46,7 +46,11 @@ Pi collector 只在实际执行 `/goal-plus` 或 `/goal-plus-with-final-check` �
 
 在“安装指导”中只勾选 **Pi Agent**，执行生成的一键接入命令。安装器会配置 Pi 原生采集器，并在其安装包中放入 Agent Insight 自有的 Goal Plus worker/关系观察器；不会安装或修改 Goal Plus 本体。两套采集器始终写入同一份当前账号凭据和上报端点；重新接入或切换账号时，安装器会覆盖旧的 Goal Plus 采集配置并重启已有 watcher，避免主 Trace 与 worker Trace 分属不同用户。
 
-此时观察器状态为 `DORMANT`，不会扫描 home 目录，也不会启动 watcher：
+重新安装会升级采集器，不需要删除 `~/.agent-insight`。安装器识别已核验的历史共享模块，并通过 `installation.json` 中的文件哈希识别后续受管升级。共享模块或已有清单的包存在无法识别的本地修改时，会在更新前拒绝覆盖；请保留现场，根据错误中的文件路径检查冲突，不要清空数据库或 spool。Pi 注册或安装后检查失败时，会恢复本次涉及的代码、配置和注册文件；强制终止进程或断电不属于自动恢复范围。
+
+“常驻客户端安装完成”与“Pi 采集器安装完成”是不同步骤。Pi 安装失败时命令返回非零状态；只有 Pi 与 Goal Plus 观察器文件和配置检查通过才报告成功。成功后重启 Pi，让新会话加载新版扩展。Pi 安装目录的 `runtime/loaded-<pid>.json` 记录该进程实际加载的构建和 native session；记录可能来自已退出进程，需要结合 PID 判断，不能只看磁盘文件更新就认定旧会话已重载。
+
+首次安装且没有已登记 source 时，观察器状态为 `DORMANT`，不会扫描 home 目录，也不会启动 watcher：
 
 1. 普通 Pi 任务只采集 Pi 主 Trace。
 2. 用户在 Pi 中执行 `/goal-plus` 或 `/goal-plus-with-final-check`。
@@ -63,6 +67,8 @@ Goal Plus worker 的关系事件和 worker binding 到达后，链路追踪的�
 主 binding、主 Trace 与某个 worker Trace 都可唯一解析后，打开 Pi 主 Trace 会在原生交互之后增加该 worker 对应的“Goal Plus 编排” `TASK → 子 Agent` 子树。每个 worker 独立进入详情：已经上报正文的 worker 会在主任务运行期间随页面刷新出现，尚未上报首批正文的 worker 保持等待，不会阻塞其他 worker。列表隐藏和详情合并采用两个阶段：前者只确认“这是 Goal Plus worker”，后者确认当前 worker 的完整、安全主从关系；缺主 Trace 时不会把 worker 错误挂入其他 Trace。
 
 这个子树是只读查询投影：不会改写 Execution 的原生父子关系，也不会把 worker 内容复制回主 Session。关系证据只说明 worker 属于本次 Goal Plus 编排；没有精确调用位置时，不会按时间猜测它对应主 Trace 中的某个工具调用。
+
+打开 worker 的独立 Trace 后，右侧概览显示“父 Agent”及 **Trace** 按钮，可返回直接父 Trace；通过链接直接进入或使用 Trace 抽屉也支持。父信息来自同一份已校验的协作关系，无需重新安装采集器或补采数据。父 Trace 晚到时先显示“等待父 Trace”，自动刷新后恢复入口；多父级冲突、自环或循环关系不会生成可点击入口。父卡片不计入 worker 的调用与 Token 统计。
 
 数据可能按以下顺序逐步出现：
 
@@ -81,6 +87,14 @@ Goal Plus worker 的关系事件和 worker binding 到达后，链路追踪的�
 node "$HOME/.agent-insight/collectors/goal-plus/goal-plus-collector.cjs" self-check
 node "$HOME/.agent-insight/collectors/goal-plus/goal-plus-collector.cjs" status
 ```
+
+`status` 的 `installation` 显示安装构建与文件完整性，`scans` 按 source 显示最近扫描结果。扫描状态与观察器是否启动分开：
+
+- `READY`：本轮发现的 Pi worker 均已定位日志，且没有已知解析或上传拒绝错误；不等于服务端已经完成展示。
+- `WAITING`：日志尚未出现或 header 正在写入，后续扫描会重试。
+- `PARTIAL` / `DEGRADED`：部分或全部 worker 无法采集；连续缺失超过 30 秒也会进入该状态。查看 `coverage` 和 `diagnostics` 定位原因。
+
+`coverage` 包含 worker 总数、支持数、找到日志数、等待数和失败数。采集器同时支持 `host-sessions/pi/` 的平铺日志及其 `sessions/<工作区>/` 嵌套日志，并验证文件 header 中的 session ID。重复文件、身份冲突、越界路径会明确报错，不猜测关联。单个 worker 失败不阻塞其他 worker。
 
 重点检查：
 

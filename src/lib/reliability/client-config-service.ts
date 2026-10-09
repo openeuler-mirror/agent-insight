@@ -69,6 +69,8 @@ export type ConfigDelivery = {
 }
 
 const SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const FAULT_MODE_SERVICE_URL = 'inference.fault_mode_classification_service_url'
+const LEGACY_FAULT_MODE_SERVICE_URL = 'inference.faultModeClassificationServiceUrl'
 
 function newId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${randomBytes(5).toString('hex')}`
@@ -149,10 +151,21 @@ async function getOrInitConfig(user: string, clientId: string, platform: Reliabi
   })
 }
 
+function normalizeOverride(override: Record<string, unknown>): Record<string, unknown> {
+  const normalized = { ...override }
+  if (Object.prototype.hasOwnProperty.call(normalized, LEGACY_FAULT_MODE_SERVICE_URL)) {
+    if (!Object.prototype.hasOwnProperty.call(normalized, FAULT_MODE_SERVICE_URL)) {
+      normalized[FAULT_MODE_SERVICE_URL] = normalized[LEGACY_FAULT_MODE_SERVICE_URL]
+    }
+    delete normalized[LEGACY_FAULT_MODE_SERVICE_URL]
+  }
+  return normalized
+}
+
 function parseOverride(json: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(json || '{}')
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? normalizeOverride(parsed) : {}
   } catch {
     return {}
   }
@@ -389,17 +402,18 @@ export async function putClientConfig(input: {
 
   // 服务端是底线：页面的 min/max 只是 HTML 属性，拦不住直接调 API，
   // 越界值会一路写进快照、下发到 RAS。与前端共用同一个校验器（需求文档 §5.1）。
-  const fieldErrors = validateConfigValues(schema, input.overrideDiff || {})
+  const submittedOverride =
+    input.overrideDiff && typeof input.overrideDiff === 'object' && !Array.isArray(input.overrideDiff)
+      ? normalizeOverride(input.overrideDiff)
+      : undefined
+  const fieldErrors = validateConfigValues(schema, submittedOverride || {})
   if (fieldErrors.length) {
     throw new ReliabilityError('CONFIG_FIELD_INVALID', '配置字段不合法', 400, {
       fields: fieldErrors,
     })
   }
 
-  const nextOverride =
-    input.overrideDiff && typeof input.overrideDiff === 'object' && !Array.isArray(input.overrideDiff)
-      ? { ...input.overrideDiff }
-      : parseOverride(cfg.overrideJson)
+  const nextOverride = submittedOverride || parseOverride(cfg.overrideJson)
 
   const updated = await prisma.reliabilityClientConfig.update({
     where: { clientId_platform: { clientId: input.clientId, platform } },
@@ -469,7 +483,8 @@ export async function deleteClientConfig(input: {
   const platform = requirePlatform(input.platform)
   await requireOwnedClient(input.user, input.clientId)
   const cfg = await getOrInitConfig(input.user, input.clientId, platform)
-  const nextOverride = deleteOverridePath(parseOverride(cfg.overrideJson), input.path)
+  const path = input.path === LEGACY_FAULT_MODE_SERVICE_URL ? FAULT_MODE_SERVICE_URL : input.path
+  const nextOverride = deleteOverridePath(parseOverride(cfg.overrideJson), path)
   return putClientConfig({
     user: input.user,
     clientId: input.clientId,
