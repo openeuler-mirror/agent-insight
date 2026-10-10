@@ -49,7 +49,7 @@ function listHarness() {
     const scope: Record<string, any> = {
         user: 'reader', apiKey: null, agentScopeFilter: 'root', skillFilter: 'all',
         selectedUserTagIds: [], search: '', clauses: [], clausesRaw: '',
-        frameworkFilter: 'all', agentFilter: 'all', ownershipFilter: 'user',
+        frameworkFilter: 'all', sourceFilter: 'all', agentFilter: 'all', ownershipFilter: 'user',
         anomalyFilter: 'all', reliabilityAnomalyFilter: 'all', timeFilter: 'all',
         sortKey: 'timestamp', sortDir: 'desc', page: 1, pageSize: 20,
         listFilterKey: 'filters', listRequestKey: 'page-1',

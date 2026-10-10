@@ -66,11 +66,12 @@ function transport(context: TestContext) {
 }
 
 async function integrationScope() {
-    const state = { frameworks: [] as string[], agents: [] as string[], suggestions: [] as unknown[], values: [] as FacetValue[], facet: [] as FacetValue[], loaded: false };
+    const state = { frameworks: [] as string[], sourceKinds: [] as string[], agents: [] as string[], suggestions: [] as unknown[], values: [] as FacetValue[], facet: [] as FacetValue[], loaded: false };
     const scope = {
         user: 'facet-reader', apiFetch, BAR_COLUMNS, FACETED,
         loadTraceFacetValues: fs.existsSync(helperUrl) ? await facetLoader() : undefined,
         setFrameworks: (value: string[]) => { state.frameworks = value; },
+        setSourceKinds: (value: string[]) => { state.sourceKinds = value; },
         setAgentNames: (value: string[]) => { state.agents = value; },
         setSuggestions: (value: unknown[]) => { state.suggestions = value; },
         setValues: (value: FacetValue[]) => { state.values = value; },

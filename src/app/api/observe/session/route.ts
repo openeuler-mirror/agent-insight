@@ -153,11 +153,12 @@ async function loadTraceThread(traceThreadId: string | null | undefined, user: s
     };
 }
 
-async function loadParsedSession(taskId: string, user: string): Promise<ParsedSession | null> {
+async function loadParsedSession(taskId: string, user?: string): Promise<ParsedSession | null> {
     const session = await db.findSessionByTaskId(taskId);
-    if (!session || session.user !== user) return null;
+    if (!session || (user !== undefined && session.user !== user)) return null;
 
-    const executions = await db.findExecutions({ taskId, user }, { timestamp: 'desc' }, {
+    const owner = user ?? session.user ?? '';
+    const executions = await db.findExecutions({ taskId, user: owner }, { timestamp: 'desc' }, {
         id: true,
         framework: true,
         latency: true,
@@ -258,12 +259,11 @@ export async function GET(request: Request) {
     if (!taskId) {
         return NextResponse.json({ error: 'Missing taskId' }, { status: 400 });
     }
-    if (!user) {
-        return NextResponse.json({ error: 'Missing user' }, { status: 400 });
-    }
 
     try {
-        const parsed = await loadParsedSession(taskId, user);
+        // user 参数可选：显式提供时做归属校验（防止跨用户读取）；未提供时由
+        // resolveUser 的 API key 校验兜底（username 与 session.user 不符即 403）。
+        const parsed = await loadParsedSession(taskId, user || undefined);
         if (!parsed) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
@@ -276,7 +276,7 @@ export async function GET(request: Request) {
         const parentAgent = relationPlan?.unavailable ? { state: 'unavailable' }
             : relationPlan?.parentAgents?.[taskId] ?? null;
         const reportedInteractions = relationPlan && username
-            ? await collaborationTraceProjection.interactions(username, taskId, (id: string) => loadParsedSession(id, username), relationPlan) : null;
+            ? await collaborationTraceProjection.interactions(username, taskId, (id: string) => loadParsedSession(id, username || undefined), relationPlan) : null;
         const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
         const displayInteractions = withTracePayloadVersions(reportedInteractions || collaborationProjection?.interactions || interactions);
 
