@@ -173,7 +173,7 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
     const executionRow = executions?.[0];
     const framework = executionRow?.framework;
     const thread = executionRow
-        ? await loadTraceThread(executionRow.traceThreadId, user, executionRow.id)
+        ? await loadTraceThread(executionRow.traceThreadId, owner, executionRow.id)
         : undefined;
     const signature = sessionSignature(session, framework, executionRow, thread);
     const cached = parsedSessionCache.get(taskId);
