@@ -57,6 +57,14 @@ DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh --port 3100
 `$AGENT_INSIGHT_HOME/otel_data/traces/consumer-checkpoint.json` 是否持续更新。
 源码部署的 `scripts/start.sh` 会在端口释放后清理同一项目中已失去监听端口、却仍占有 Trace 消费锁的旧服务进程；Linux 旧进程处于僵尸状态时会清理其遗留锁。锁属于其他项目或仍在监听的服务时，启动会停止并提示处理，避免静默丢失消费能力。
 
+### 为什么 `infra-poller` 反复报错？
+
+这是推理基础设施指标采集日志。例如 `/metrics` 返回 HTTP 404，表示该抓取地址不可用，应检查指标源的采集地址或网关路由；它本身不能证明 Trace 上报失败。
+
+自动采集对每个源的连续相同错误限频：首次失败立即输出 `[infra-poller] source error:`，持续相同错误每 60 秒最多输出一次；错误内容变化时立即输出。本源抓取及保存成功后输出一次 `source recovered:`，未到采集时间、停用或删除源不会被当作恢复。查询指标源等整轮异常使用 `tick error:`，同样限频，恢复时输出 `tick recovered:`。
+
+日志详情为单行 JSON，`consecutiveFailures` 表示本次连续失败次数，`suppressed` 表示自上次打印后省略的重复日志数；错误变化时会附带 `previousError`。采集仍按原频率执行，日志条数不再等于失败次数。较早版本使用 `polled ..., failed ...` 的多行格式。
+
 ### 为什么持续出现 `deferring spool files at session capacity`？
 
 这表示消费者已达到内存会话上限（默认 20,000），新的缓存文件正在等待处理。它不代表数据库最多只能存 20,000 条 Trace，也不表示这些文件被删除。当前版本会保留未完成文件的磁盘重放位置，将暂时受锁阻塞或反复失败的工作延后重试，并让出内存名额；容量告警每分钟最多汇总一次。
