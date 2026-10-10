@@ -16,6 +16,44 @@ export interface PollResult {
 // 每源上次拉取时刻（内存态），用于按每源 scrapeIntervalMs 控制定时拉取节奏。
 const lastPollAt = new Map<string, number>();
 
+const FAILURE_LOG_INTERVAL_MS = 60_000;
+type FailureLog = {
+  error: string;
+  firstFailedAt: number;
+  lastLoggedAt: number;
+  consecutiveFailures: number;
+  suppressed: number;
+};
+
+function logFailure(logs: Map<string, FailureLog>, key: string, error: string, nowMs: number, endpoint?: string): void {
+  const previous = logs.get(key);
+  if (previous && previous.error === error && nowMs - previous.lastLoggedAt < FAILURE_LOG_INTERVAL_MS) {
+    previous.consecutiveFailures += 1;
+    previous.suppressed += 1;
+    return;
+  }
+  const next: FailureLog = {
+    error, firstFailedAt: previous?.firstFailedAt ?? nowMs, lastLoggedAt: nowMs,
+    consecutiveFailures: (previous?.consecutiveFailures ?? 0) + 1, suppressed: 0,
+  };
+  logs.set(key, next);
+  console.warn(endpoint ? '[infra-poller] source error:' : '[infra-poller] tick error:', JSON.stringify({
+    endpoint, error, consecutiveFailures: next.consecutiveFailures,
+    suppressed: previous?.suppressed ?? 0,
+    previousError: previous && previous.error !== error ? previous.error : undefined,
+  }));
+}
+
+function logRecovery(logs: Map<string, FailureLog>, key: string, nowMs: number, endpoint?: string): void {
+  const previous = logs.get(key);
+  if (!previous) return;
+  logs.delete(key);
+  console.log(endpoint ? '[infra-poller] source recovered:' : '[infra-poller] tick recovered:', JSON.stringify({
+    endpoint, previousError: previous.error, consecutiveFailures: previous.consecutiveFailures,
+    suppressed: previous.suppressed, durationMs: nowMs - previous.firstFailedAt,
+  }));
+}
+
 /** 拉一轮启用的 pull 源（可用 endpoints 限定子集）；返回成功/失败计数。 */
 export async function pollOnce(
   opts: { fetchImpl?: typeof fetch; tsMs?: number; endpoints?: string[] } = {},
@@ -54,10 +92,21 @@ export async function pollOnce(
 export async function pollDue(
   opts: { nowMs?: number; fetchImpl?: typeof fetch; endpoints?: string[] } = {},
 ): Promise<PollResult> {
+  return runPollDue(opts);
+}
+
+async function runPollDue(
+  opts: { nowMs?: number; fetchImpl?: typeof fetch; endpoints?: string[] },
+  failureLogs?: Map<string, FailureLog>,
+): Promise<PollResult> {
   const { nowMs = Date.now(), fetchImpl, endpoints } = opts;
   const sources = await prismaRaw.infraSource.findMany({
     where: { enabled: true, kind: 'pull', ...(endpoints ? { endpoint: { in: endpoints } } : {}) },
   });
+  if (failureLogs) {
+    const activeIds = new Set(sources.map(source => source.id));
+    for (const id of failureLogs.keys()) if (!activeIds.has(id)) failureLogs.delete(id);
+  }
 
   let polled = 0;
   let failed = 0;
@@ -80,17 +129,18 @@ export async function pollDue(
       });
       for (const s of samples) await saveSample(src.id, s);
       polled += 1;
+      if (failureLogs) logRecovery(failureLogs, src.id, nowMs, src.endpoint);
     } catch (e) {
       failed += 1;
-      errors.push({ endpoint: src.endpoint, error: e instanceof Error ? e.message : String(e) });
+      const error = e instanceof Error ? e.message : String(e);
+      errors.push({ endpoint: src.endpoint, error });
+      if (failureLogs) logFailure(failureLogs, src.id, error, nowMs, src.endpoint);
     }
   }
   return { polled, failed, skipped, errors };
 }
 
 // ---- 自动定时拉取 --------------------------------------------------------
-// 单一全局 tick：每 intervalMs 调一次 pollOnce（pollOnce 内部只抓启用的 pull 源；
-// 无源时是廉价空转）。设 INFRA_POLL_INTERVAL_MS<=0 可关闭自动拉取。
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let tickInFlight = false;
@@ -105,14 +155,14 @@ export function startInfraPoller(opts: { intervalMs?: number } = {}): void {
     console.log('[infra-poller] 自动拉取已关闭（INFRA_POLL_BASE_MS<=0）');
     return;
   }
+  const sourceFailureLogs = new Map<string, FailureLog>();
+  const tickFailureLogs = new Map<string, FailureLog>();
   pollTimer = setInterval(() => {
     if (tickInFlight) return; // 上一轮没结束就跳过，避免堆叠
     tickInFlight = true;
-    pollDue()
-      .then((r) => {
-        if (r.failed > 0) console.warn(`[infra-poller] polled ${r.polled}, failed ${r.failed}`, r.errors);
-      })
-      .catch((e) => console.warn('[infra-poller] tick error:', e instanceof Error ? e.message : e))
+    runPollDue({}, sourceFailureLogs)
+      .then(() => logRecovery(tickFailureLogs, 'tick', Date.now()))
+      .catch((e) => logFailure(tickFailureLogs, 'tick', e instanceof Error ? e.message : String(e), Date.now()))
       .finally(() => {
         tickInFlight = false;
       });

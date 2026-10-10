@@ -212,6 +212,12 @@ OpenClaw watcher 直接将完整 record 上报到 `POST /api/ingest/upload`。�
 
 OTLP 属性契约详见 [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)。
 
+### 推理基础设施自动采集日志
+
+`src/lib/infra/poller.ts` 的自动定时器按源的 `scrapeIntervalMs` 抓取并保存指标；日志限频不改变采集节奏、落库流程或 `PollResult` 返回值。失败状态按源 ID 保存在当前定时器的内存中，首次失败、错误文本变化立即输出，连续相同错误间隔至少 60 秒才再次输出。本源所有样本保存成功后输出一次恢复日志；未到采集时间不改变失败状态，停用或删除源仅清除其状态，重启定时器重新计数。
+
+`source error:` / `source recovered:` 和整轮异常的 `tick error:` / `tick recovered:` 均使用 `[infra-poller]` 前缀及单行 JSON。`consecutiveFailures` 累计本次连续失败，`suppressed` 记录自上次输出以来省略的重复失败日志数；错误变化时 `previousError` 指明被替换的错误。整轮查询异常单独限频，不会用其他源成功代替故障源恢复。手动 `pollOnce` / `pollDue` 保持原有结果返回行为。
+
 ## 后端流水线：评测（Config → Execution → Decision）
 数据集 `Config` 提供真值；将执行记录进行匹配并评分；结果转化为 `Evaluation` + `SkillIssue` 行。
 
