@@ -303,6 +303,7 @@ export async function dispatchBenchmarkRun(runId: string): Promise<void> {
     if (
       request.runId !== runId
       || request.requestDigest !== outbox.requestDigest
+      || !outbox.run.clientId
     ) {
       await markDispatchFailed(runId, {
         code: 'DISPATCH_REQUEST_INVALID',

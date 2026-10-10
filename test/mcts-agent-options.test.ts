@@ -21,17 +21,19 @@ test('MCTS parameter fields render the seven controls, explicit zero and validat
   assert.match(markup, /恢复默认/)
 })
 
-test('MCTS form uses declared capabilities across runtimes and requires a SWE-bench dataset', () => {
+test('MCTS form uses declared capabilities across runtimes and benchmark datasets', () => {
   const inputs = mctsOptionsToInputs({ mcts: MCTS_QUICK_OPTIONS })
   assert.equal(inputs.tokenFuseLimit, '0')
   for (const platform of ['pi-mcts', 'xiao-mcts', 'another-mcts']) {
-    const state = mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, inputs, 'pi-mcts', 'swe-bench')
-    assert.equal(state.active, true)
-    assert.deepEqual(state.agentOptions, { mcts: MCTS_QUICK_OPTIONS })
-    assert.equal(state.error, null)
-    assert.deepEqual(mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, {}, platform, 'swe-bench').agentOptions,
-      { mcts: MCTS_DEFAULT_OPTIONS })
-    for (const benchmark of [undefined, '', 'another-benchmark']) {
+    for (const benchmark of ['swe-bench', 'another-benchmark']) {
+      const state = mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, inputs, 'pi-mcts', benchmark)
+      assert.equal(state.active, true)
+      assert.deepEqual(state.agentOptions, { mcts: MCTS_QUICK_OPTIONS })
+      assert.equal(state.error, null)
+      assert.deepEqual(mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, {}, platform, benchmark).agentOptions,
+        { mcts: MCTS_DEFAULT_OPTIONS })
+    }
+    for (const benchmark of [undefined, '', '  ']) {
       assert.deepEqual(mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, inputs, platform, benchmark),
         { active: false, error: null })
     }
@@ -40,6 +42,25 @@ test('MCTS form uses declared capabilities across runtimes and requires a SWE-be
   assert.match(mctsOptionsState({ platform: 'pi-mcts' }, inputs, 'pi-mcts', 'swe-bench').error!, /升级客户端/)
   assert.match(mctsOptionsState({ platform: 'pi-mcts', agentOptionCapabilities: [capability] }, { branching: '1.5' }, '', 'swe-bench').error!, /正安全整数/)
   assert.equal(summarizeMctsOptions({ mcts: { tokenFuseLimit: 0 } }), 'Token 熔断阈值：关闭')
+})
+
+test('other benchmarks retain MCTS capability checks and parameter validation', () => {
+  const inputs = mctsOptionsToInputs({ mcts: MCTS_QUICK_OPTIONS })
+  const benchmark = 'another-benchmark'
+  const target = { platform: 'pi-mcts', agentOptionCapabilities: [capability] }
+  assert.deepEqual(mctsOptionsState(null, inputs, target.platform, benchmark), { active: false, error: null })
+  assert.deepEqual(mctsOptionsState({ platform: 'opencode' }, inputs, target.platform, benchmark),
+    { active: false, error: null })
+  const unsupported = mctsOptionsState({ platform: target.platform }, inputs, target.platform, benchmark)
+  assert.equal(unsupported.active, true)
+  assert.match(unsupported.error!, /升级客户端/)
+  assert.equal(unsupported.agentOptions, undefined)
+  assert.deepEqual(mctsOptionsState({ platform: target.platform }, {}, target.platform, benchmark),
+    { active: false, error: null })
+  const invalid = mctsOptionsState(target, { ...inputs, branching: '1.5' }, target.platform, benchmark)
+  assert.equal(invalid.active, true)
+  assert.match(invalid.error!, /正安全整数/)
+  assert.equal(invalid.agentOptions, undefined)
 })
 
 test('MCTS defaults are visible, frozen in options and required after an input is cleared', () => {

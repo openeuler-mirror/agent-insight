@@ -72,6 +72,7 @@ interface ExperimentDetail {
     traceAttemptStatus?: string | null;
     caseValues?: Record<string, unknown> | null;
     benchmark?: {
+      submissionSource?: string;
       adapterKey: string;
       displayName: string;
       presentation: BenchmarkPresentation | null;
@@ -636,7 +637,7 @@ export function ExperimentCaseDetail({
                 {inputSummary.length > 60 ? `${inputSummary.slice(0, 60)}…` : inputSummary || '—'}
               </span>
               <span style={{ flex: 1 }} />
-              {isBenchmark && (
+              {isBenchmark && caseRow?.benchmark?.submissionSource !== 'imported' && (
                 <button
                   type="button"
                   disabled={Boolean(retryingId)}

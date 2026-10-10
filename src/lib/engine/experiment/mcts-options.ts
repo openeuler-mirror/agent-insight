@@ -14,7 +14,7 @@ export function mctsOptionsToInputs(value: unknown): MctsOptionInputs {
 
 export function mctsOptionsState(target: { platform: string; agentOptionCapabilities?: string[] } | null,
   inputs: MctsOptionInputs, configuredPlatform: string, benchmarkKey: string | undefined): { active: boolean; agentOptions?: AgentOptions; error: string | null } {
-  if (benchmarkKey !== 'swe-bench') return { active: false, error: null }
+  if (!benchmarkKey?.trim()) return { active: false, error: null }
   const supported = Boolean(target?.agentOptionCapabilities?.includes(MCTS_SEARCH_OPTIONS_CAPABILITY))
   const filled = Object.values(inputs).some(value => Boolean(value?.trim()))
   const active = supported || Boolean(target && filled && target.platform === configuredPlatform)

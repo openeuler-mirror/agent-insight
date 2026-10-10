@@ -44,6 +44,7 @@ export function inspectBenchmarkExecutionTargets(
   client: ReliabilityClient,
   manifest: BenchmarkManifest,
 ): BenchmarkExecutionTarget[] {
+  if (manifest.supportsAgentExecution === false) return []
   const capabilities = parseCapabilities(client.capabilitiesJson)
   const status = deriveStatus(client)
   const serviceHealth = deriveServiceHealth(client)

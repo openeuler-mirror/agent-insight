@@ -43,6 +43,81 @@ export function benchmarkArtifactAbsolutePath(storagePath: string): string {
   return storedArtifactPath(storagePath)
 }
 
+type StoredSubmissionRun = {
+  id: string
+  submissionSource: string
+  taskEnvelopeJson: string | null
+  submissionContractJson: string | null
+  publicPayloadJson: string | null
+  privatePayloadJson: string | null
+  artifacts: Array<{ id: string; name: string; mediaType: string; sha256: string; sizeBytes: number; storagePath: string }>
+  adapterKey: string
+}
+
+async function readValidatedSubmission(run: StoredSubmissionRun) {
+  const imported = run.submissionSource === 'imported'
+  const task = imported ? undefined : parseJson<AgentTaskEnvelope>(run.taskEnvelopeJson, 'RUN_TASK_MISSING')
+  const publicPayload = parseJson<JsonValue>(run.publicPayloadJson, 'RUN_PUBLIC_PAYLOAD_MISSING')
+  const privatePayload = parseJson<JsonValue>(run.privatePayloadJson, 'RUN_PRIVATE_PAYLOAD_MISSING')
+  const adapter = getBenchmarkAdapter(run.adapterKey)
+  const currentContract = canonicalJson(adapter.manifest.requiredArtifacts as unknown as JsonValue)
+  const legacyZsoftImportContract = run.adapterKey === 'zsoft-l1'
+    ? canonicalJson(adapter.manifest.requiredArtifacts.map(item => ({ ...item, collector: 'imported-submission/v1' })) as unknown as JsonValue)
+    : undefined
+  if (imported && run.submissionContractJson !== currentContract && run.submissionContractJson !== legacyZsoftImportContract) {
+    throw new BenchmarkProtocolError('SUBMISSION_CONTRACT_CHANGED', '提交契约已变更，请重新导入 PoC', 409)
+  }
+  const artifactReaders: ReadonlySubmissionArtifact[] = run.artifacts.map((artifact: {
+    id: string
+    name: string
+    mediaType: string
+    sha256: string
+    sizeBytes: number
+    storagePath: string
+  }) => {
+    const descriptor: ArtifactDescriptor = {
+      artifactId: artifact.id,
+      executionRunId: run.id,
+      name: artifact.name,
+      mediaType: artifact.mediaType,
+      sha256: artifact.sha256 as `sha256:${string}`,
+      sizeBytes: artifact.sizeBytes,
+    }
+    let cached: Uint8Array | undefined
+    return {
+      descriptor,
+      async readBytes() {
+        if (!cached) {
+          try { cached = new Uint8Array(await fs.readFile(storedArtifactPath(artifact.storagePath))) }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+            throw new BenchmarkProtocolError('ARTIFACT_CONTENT_MISSING', '提交物文件不存在', 409)
+          }
+        }
+        return cached
+      },
+    }
+  })
+  try {
+    await adapter.validateSubmission(task
+      ? { task, artifacts: artifactReaders }
+      : { submission: { runId: run.id, publicPayload, privatePayload }, artifacts: artifactReaders })
+  } catch (error) {
+    if (error instanceof BenchmarkProtocolError) {
+      throw new BenchmarkProtocolError(
+        error.code,
+        error.message,
+        error.httpStatus,
+        error.retryable,
+        { ...error.details, phase: 'submission-validation' },
+      )
+    }
+    throw error
+  }
+
+  return { task, publicPayload, privatePayload, adapter, artifactReaders }
+}
+
 export async function prepareBenchmarkEvaluation(
   executionRunId: string,
   options: { forceNewAttempt?: boolean; retryOfEvaluationId?: string } = {},
@@ -74,49 +149,7 @@ export async function prepareBenchmarkEvaluation(
   if (!binding || binding.adapterKey !== run.adapterKey) {
     throw new BenchmarkProtocolError('BENCHMARK_EVALUATION_SNAPSHOT_MISSING', '实验评测快照不存在或 Adapter 不一致', 409)
   }
-  const task = parseJson<AgentTaskEnvelope>(run.taskEnvelopeJson, 'RUN_TASK_MISSING')
-  const publicPayload = parseJson<JsonValue>(run.publicPayloadJson, 'RUN_PUBLIC_PAYLOAD_MISSING')
-  const privatePayload = parseJson<JsonValue>(run.privatePayloadJson, 'RUN_PRIVATE_PAYLOAD_MISSING')
-  const adapter = getBenchmarkAdapter(run.adapterKey)
-  const artifactReaders: ReadonlySubmissionArtifact[] = run.artifacts.map((artifact: {
-    id: string
-    name: string
-    mediaType: string
-    sha256: string
-    sizeBytes: number
-    storagePath: string
-  }) => {
-    const descriptor: ArtifactDescriptor = {
-      artifactId: artifact.id,
-      executionRunId: run.id,
-      name: artifact.name,
-      mediaType: artifact.mediaType,
-      sha256: artifact.sha256 as `sha256:${string}`,
-      sizeBytes: artifact.sizeBytes,
-    }
-    let cached: Uint8Array | undefined
-    return {
-      descriptor,
-      async readBytes() {
-        if (!cached) cached = new Uint8Array(await fs.readFile(storedArtifactPath(artifact.storagePath)))
-        return cached
-      },
-    }
-  })
-  try {
-    await adapter.validateSubmission({ task, artifacts: artifactReaders })
-  } catch (error) {
-    if (error instanceof BenchmarkProtocolError) {
-      throw new BenchmarkProtocolError(
-        error.code,
-        error.message,
-        error.httpStatus,
-        error.retryable,
-        { ...error.details, phase: 'submission-validation' },
-      )
-    }
-    throw error
-  }
+  const { task, publicPayload, privatePayload, adapter, artifactReaders } = await readValidatedSubmission(run)
 
   const evaluationRunId = `veval_${randomUUID().replaceAll('-', '')}`
   const defaults = adapter.manifest.evaluation
@@ -136,7 +169,7 @@ export async function prepareBenchmarkEvaluation(
       timeoutSeconds: defaults.defaultTimeoutSeconds,
       cpu: defaults.defaultResources.cpu,
       memoryMiB: defaults.defaultResources.memoryMiB,
-      agentModel: task.agentConfig.model || `${task.agentConfig.platform}/${task.agentConfig.agent}`,
+      agentModel: task ? task.agentConfig.model || `${task.agentConfig.platform}/${task.agentConfig.agent}` : undefined,
     },
   })
   const configuredPlatformBaseUrl = String(binding.callbackOrigin || '').trim()
@@ -250,7 +283,7 @@ export async function retryBenchmarkEvaluation(input: {
     orderBy: { createdAt: 'desc' },
     include: {
       evaluations: { orderBy: { attemptNo: 'desc' }, take: 1 },
-      artifacts: { select: { name: true } },
+      artifacts: true,
     },
   })
   const requiredNames = run
@@ -271,6 +304,8 @@ export async function retryBenchmarkEvaluation(input: {
       409,
     )
   }
+
+  await readValidatedSubmission(run)
 
   const lockKey = `${input.experimentId}:${result.caseId}`
   lock.add(lockKey)

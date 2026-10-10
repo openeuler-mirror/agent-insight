@@ -1,0 +1,10 @@
+key: zsoft-l1
+runtime: oci-container
+requiresPrebuiltRuntime: true
+imageRepository: agent-insight-benchmark-runtime-zsoft-l1
+dockerfile: ./Dockerfile
+entrypoint: ./entrypoint.py
+containerEntrypoint: /opt/agent-insight/zsoft/entrypoint.py
+command: python3
+network: deny
+resources: { cpu: 4, memoryMiB: 8192, timeoutSeconds: 900 }

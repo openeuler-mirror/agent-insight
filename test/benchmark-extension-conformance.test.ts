@@ -20,7 +20,7 @@ test('benchmark package catalog is reproducible and registers SWE-bench without 
   generator.generate(repositoryRoot)
   const first = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json']
     .map((name) => fs.readFileSync(path.join(generatedDir, name), 'utf8'))
-  assert.deepEqual(generator.generate(repositoryRoot), ['swe-bench'])
+  assert.deepEqual(generator.generate(repositoryRoot), ['swe-bench', 'zsoft-l1'])
   const second = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json']
     .map((name) => fs.readFileSync(path.join(generatedDir, name), 'utf8'))
   assert.deepEqual(second, first)
@@ -42,7 +42,7 @@ test('benchmark package catalog is reproducible and registers SWE-bench without 
     fs.readFileSync(path.join(generatedDir, 'dataset-loaders.ts'), 'utf8'),
     /sweBenchDatasetLoader/,
   )
-  assert.deepEqual(listBenchmarkAdapters().map((item) => item.adapterKey), ['swe-bench'])
+  assert.deepEqual(listBenchmarkAdapters().map((item) => item.adapterKey), ['swe-bench', 'zsoft-l1'])
   const evaluatorCatalog = require('../generated/benchmark-catalog/evaluators.cjs').generatedEvaluatorDescriptors
   assert.equal(evaluatorCatalog[0].runtime, 'oci-container')
   assert.match(evaluatorCatalog[0].image, /^agent-insight-benchmark-runtime-swe-bench:artifact-[0-9a-f]{64}$/)

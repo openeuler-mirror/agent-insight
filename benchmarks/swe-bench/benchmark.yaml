@@ -13,6 +13,7 @@ schemas:
   case: ./schemas/case.schema.json
   rawResult: ./schemas/result.schema.json
 executor:
+  gitSourcePolicy: ./executor/git-source-policy.cjs
   requiredCapabilities:
     - git-workspace/v1
     - git-patch/v1

@@ -250,6 +250,9 @@ async function prepareOciRuntime(descriptor, options = {}) {
     throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_INVALID', 'Evaluator OCI Runtime 描述不合法', 500)
   }
   if (await inspectOciRuntime(descriptor, options)) return
+  if (descriptor.requiresPrebuiltRuntime) {
+    throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_IMAGE_NOT_FOUND', '该 Evaluator 需要预先构建与 Catalog 摘要匹配的 Runtime 镜像', 503, false)
+  }
   const { recordManagedImage } = require('./service-control.cjs')
   const dataDir = process.env.EVALUATOR_DATA_DIR
   let ownership
@@ -385,6 +388,9 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
 
   async checkReady(runtime) {
     if (this.descriptor.runtime === 'oci-container' && !await inspectOciRuntime(this.descriptor)) {
+      if (this.descriptor.requiresPrebuiltRuntime) {
+        return { ready: false, formalEligible: false, reason: '需要预先构建与 Catalog 摘要匹配的 Runtime 镜像' }
+      }
       return {
         ready: true,
         formalEligible: true,

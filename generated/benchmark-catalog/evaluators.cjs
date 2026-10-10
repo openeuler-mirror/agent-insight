@@ -96,6 +96,72 @@ const generatedEvaluatorDescriptors = [
       },
       "additionalProperties": false
     }
+  },
+  {
+    "key": "zsoft-l1",
+    "benchmarkKey": "zsoft-l1",
+    "runtime": "oci-container",
+    "requiresPrebuiltRuntime": true,
+    "command": "python3",
+    "entrypoint": "/opt/agent-insight/zsoft/entrypoint.py",
+    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-55650977087da9d6ff2bd3b8d06538cea8f9e04b3b3ed26e822dcc4b04f87a6d",
+    "dockerfile": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/Dockerfile"),
+    "artifactDigest": "sha256:55650977087da9d6ff2bd3b8d06538cea8f9e04b3b3ed26e822dcc4b04f87a6d",
+    "network": "deny",
+    "resources": {
+      "cpu": 4,
+      "memoryMiB": 8192,
+      "timeoutSeconds": 900
+    },
+    "requiredArtifacts": [
+      {
+        "name": "poc",
+        "mediaType": "application/octet-stream",
+        "collector": "single-file/v1",
+        "maxBytes": 1048576
+      }
+    ],
+    "rawResultSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "taskId",
+        "submissionSha256",
+        "bundleDigest",
+        "taskDigest",
+        "status",
+        "success"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"
+        },
+        "submissionSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "bundleDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "taskDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "invalid_submission",
+            "infrastructure_error"
+          ]
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
   }
 ]
 

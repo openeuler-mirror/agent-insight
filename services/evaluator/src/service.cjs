@@ -156,40 +156,41 @@ function errorResponse(res, error) {
   })
 }
 
-function removeLabeledContainers(evaluationId) {
-  return new Promise((resolve) => {
-    const query = spawn('docker', [
-      'ps', '-aq', '--filter', `label=agent-insight.evaluation-id=${evaluationId}`,
-    ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
-    let output = ''
-    let errorOutput = ''
-    query.stdout.on('data', (chunk) => { output += String(chunk) })
-    query.stderr.on('data', (chunk) => { errorOutput += String(chunk) })
-    query.on('error', (error) => resolve({ status: 'failed', errors: [error.message] }))
-    query.on('close', (code) => {
-      if (code !== 0) {
-        return resolve({
-          status: 'failed',
-          errors: [(errorOutput || `docker ps exited with ${code}`).trim().slice(-2000)],
-        })
-      }
-      const ids = output.split(/\s+/).filter(Boolean)
-      if (!ids.length) return resolve({ status: 'succeeded', removedContainerIds: [] })
-      const cleanup = spawn('docker', ['rm', '-f', ...ids], {
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let cleanupError = ''
-      cleanup.stderr.on('data', (chunk) => { cleanupError += String(chunk) })
-      cleanup.on('error', (error) => resolve({ status: 'failed', errors: [error.message] }))
-      cleanup.on('close', (cleanupCode) => resolve(cleanupCode === 0
-        ? { status: 'succeeded', removedContainerIds: ids }
-        : {
-            status: 'failed',
-            errors: [(cleanupError || `docker rm exited with ${cleanupCode}`).trim().slice(-2000)],
-          }))
+function cleanupDockerCommand(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('docker', args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000)
+    timer.unref?.()
+    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
+    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    child.on('error', (error) => { clearTimeout(timer); reject(error) })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) resolve(stdout)
+      else reject(new Error((stderr || `docker cleanup exited with ${code}`).trim().slice(-2000)))
     })
   })
+}
+
+async function removeLabeledContainers(evaluationId, commandRunner = cleanupDockerCommand) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(String(evaluationId))) return { status: 'failed', errors: ['Invalid evaluation ID'] }
+  const filters = ['--filter', `label=agent-insight.evaluation-id=${evaluationId}`]
+  try {
+    const ids = (await commandRunner(['ps', '-aq', ...filters])).split(/\s+/).filter(Boolean)
+    if (ids.some((id) => !/^[0-9a-f]{12,64}$/.test(id))) throw new Error('Invalid container ID')
+    if (ids.length) await commandRunner(['rm', '-f', ...ids])
+    const networkFilters = [...filters, '--filter', 'label=agent-insight.role=zsoft-task']
+    const networks = (await commandRunner(['network', 'ls', '-q', ...networkFilters])).split(/\s+/).filter(Boolean)
+    if (networks.some((id) => !/^[0-9a-f]{12,64}$/.test(id))) throw new Error('Invalid network ID')
+    if (networks.length) await commandRunner(['network', 'rm', ...networks])
+    if ((await commandRunner(['ps', '-aq', ...filters])).trim()
+      || (await commandRunner(['network', 'ls', '-q', ...networkFilters])).trim()) throw new Error('Evaluation resources remain after cleanup')
+    return { status: 'succeeded', removedContainerIds: ids, removedNetworkIds: networks }
+  } catch (error) {
+    return { status: 'failed', errors: [error.message] }
+  }
 }
 
 function normalizeArchitecture(value) {

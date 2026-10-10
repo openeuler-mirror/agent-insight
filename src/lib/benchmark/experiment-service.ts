@@ -113,6 +113,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', 'Benchmark 数据集不存在或未就绪', 404)
   }
   const adapter = getBenchmarkAdapter(dataset.adapterKey)
+  if (adapter.manifest.supportsAgentExecution === false) {
+    throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_ONLY', '该 Benchmark 当前请通过导入 PoC 创建实验', 409)
+  }
   const catalogInputs = new Map<string, string>()
   try {
     const catalogCases = JSON.parse(dataset.agentEvalDataset.casesJson) as Array<{

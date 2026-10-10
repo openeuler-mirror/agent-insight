@@ -47,8 +47,25 @@ function installRuntime() {
   if (!fs.existsSync(executorSrc)) {
     fail(`缺少执行器运行时: ${executorSrc}`, '制品不完整；请重新执行安装命令。')
   }
+  const executorCatalogPath = path.join('generated', 'benchmark-catalog', 'executors.cjs')
+  const executorCatalog = path.join(PACKAGE_ROOT, executorCatalogPath)
+  if (!fs.existsSync(executorCatalog)) {
+    fail(`缺少执行器注册表: ${executorCatalog}`, '制品不完整；请重新执行安装命令。')
+  }
+  const { generatedExecutorPackageFiles } = require(executorCatalog)
+  const executorPackageFiles = [executorCatalogPath, ...generatedExecutorPackageFiles]
+  for (const relativePath of executorPackageFiles) {
+    if (!fs.existsSync(path.join(PACKAGE_ROOT, relativePath))) {
+      fail(`缺少执行器接入包文件: ${relativePath}`, '制品不完整；请重新执行安装命令。')
+    }
+  }
   fs.rmSync(executorDest, { recursive: true, force: true })
   fs.cpSync(executorSrc, executorDest, { recursive: true })
+  for (const relativePath of executorPackageFiles) {
+    const target = path.join(executorDest, relativePath)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(path.join(PACKAGE_ROOT, relativePath), target)
+  }
   // 配置合并要用 OpenCode 插件自己的 config_sync.js（复用它保证两条写入路径
   // 结构一致）。运行时被搬到 RUNTIME_DIR 后相对路径失效，故与主脚本放在一起。
   const syncSrc = path.join(

@@ -166,6 +166,7 @@ export async function GET(
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
     const benchmarkRunByCase = new Map<string, {
+      submissionSource: string;
       status: string;
       failureCode: string | null;
       failureMessage: string | null;
@@ -600,7 +601,7 @@ export async function GET(
       preset: experiment.preset,
       skillContext: parseJsonValue(experiment.skillContextJson),
       configSnapshot: experiment.scope === 'benchmark' ? null : configSnapshot,
-      executionConcurrency: experiment.scope === 'benchmark'
+      executionConcurrency: configSnapshot?.submissionSource === 'imported' ? null : experiment.scope === 'benchmark'
         ? Number((configSnapshot?.runConfig as Record<string, unknown> | undefined)?.executionConcurrency) || 1
         : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
           ? Number(configSnapshot.executionConcurrency) || 1 : null,
@@ -705,6 +706,7 @@ export async function GET(
           traceAttemptStatus: traceState?.attemptStatus || null,
           ...(benchmarkRun ? {
             benchmark: {
+              submissionSource: benchmarkRun.submissionSource,
               adapterKey: benchmarkAdapterKey,
               displayName: benchmarkManifest?.displayName || benchmarkAdapterKey,
               presentation: benchmarkManifest?.presentation || null,

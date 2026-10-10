@@ -1,0 +1,57 @@
+key: zsoft-l1
+displayName: ZSoft L1
+protocols:
+  agentTask: agent-task/v1
+  evaluation: benchmark-evaluation/v1
+implementation:
+  adapter: ./adapter/index.ts
+  adapterExport: zsoftL1Adapter
+  evaluator: ./evaluator/evaluator.yaml
+schemas:
+  case: ./schemas/case.schema.json
+  rawResult: ./schemas/result.schema.json
+executor:
+  supported: true
+  requiredCapabilities: [public-bundle-workspace/v1, single-file/v1]
+  defaultTimeoutSeconds: 900
+submission:
+  artifacts:
+    - name: poc
+      mediaType: application/octet-stream
+      collector: single-file/v1
+      maxBytes: 1048576
+evaluation:
+  evaluatorKey: zsoft-l1
+  defaultTimeoutSeconds: 900
+  resources: { cpu: 4, memoryMiB: 8192 }
+result:
+  primaryMetric: { key: success, aggregation: boolean-rate }
+dataset:
+  profiles:
+    - key: l1
+      displayName: ZSoft L1
+      acceptedExtensions: [.json, .jsonl]
+presentation:
+  evaluator:
+    displayName: ZSoft L1 Official Judge
+    description: 在自有评测服务中验证单文件 PoC。
+    runMode: Official Judge
+    outputDescription: 输出官方 success、提交有效性和基础设施状态。
+  caseTable:
+    searchPaths: [externalCaseId, values.title]
+    searchPlaceholder: 搜索 Task ID 或题目
+    columns:
+      - { path: input, label: 任务, type: text }
+      - { path: externalCaseId, label: Task ID, type: code }
+      - { path: values.submissionKind, label: 提交类型, type: text }
+  result:
+    primaryMetric:
+      path: primaryMetric.value
+      label: Success
+      aggregateLabel: Success Rate
+      type: boolean
+      trueLabel: 成功
+      falseLabel: 未成功
+  artifacts:
+    - { source: submission, name: poc, label: PoC, order: 10 }
+    - { source: evidence, kind: official-report, label: 评测报告, order: 20 }

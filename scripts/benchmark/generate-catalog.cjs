@@ -276,15 +276,30 @@ function loadPackage(packageDir) {
     }
   })
   const requiredCapabilities = source.executor?.requiredCapabilities
-  if (!Array.isArray(requiredCapabilities) || !requiredCapabilities.length) fail(`${key} 缺少执行器能力声明`)
+  if (!Array.isArray(requiredCapabilities) || (!requiredCapabilities.length && source.executor?.supported !== false)) fail(`${key} 缺少执行器能力声明`)
   const normalizedCapabilities = requiredCapabilities.map((item, index) => (
     string(item, `requiredCapabilities[${index}]`, /^[a-z0-9][a-z0-9._/-]{0,127}$/)
   ))
   if (new Set(normalizedCapabilities).size !== normalizedCapabilities.length) {
     fail(`${key} 的执行器能力声明重复`)
   }
+  const gitSourcePolicyPath = source.executor?.gitSourcePolicy == null
+    ? null
+    : resolveInside(packageDir, source.executor.gitSourcePolicy, 'executor.gitSourcePolicy')
+  if (gitSourcePolicyPath && (source.executor?.supported === false || !normalizedCapabilities.includes('git-workspace/v1'))) {
+    fail(`${key} 的 Git 来源策略需要 git-workspace/v1 执行能力`)
+  }
+  if (gitSourcePolicyPath && path.extname(gitSourcePolicyPath) !== '.cjs') {
+    fail(`${key} 的 executor.gitSourcePolicy 必须是 CommonJS .cjs 模块`)
+  }
+  const executorFiles = gitSourcePolicyPath ? listFiles(path.dirname(gitSourcePolicyPath)) : []
+  for (const filePath of executorFiles) {
+    if (!fs.realpathSync(filePath).startsWith(`${fs.realpathSync(packageDir)}${path.sep}`)) {
+      fail(`${key} 的执行器文件越出接入包：${filePath}`)
+    }
+  }
   for (const artifact of normalizedArtifacts) {
-    if (!normalizedCapabilities.includes(artifact.collector)) {
+    if (source.executor?.supported !== false && !normalizedCapabilities.includes(artifact.collector)) {
       fail(`${key} 的 Artifact collector 未列入 requiredCapabilities：${artifact.collector}`)
     }
   }
@@ -319,6 +334,7 @@ function loadPackage(packageDir) {
     ...(datasetLoaderPath ? [datasetLoaderPath] : []),
     caseSchemaPath,
     resultSchemaPath,
+    ...executorFiles,
     ...evaluatorFiles,
   ]
   return {
@@ -328,9 +344,12 @@ function loadPackage(packageDir) {
     adapterExport,
     datasetLoaderPath,
     datasetLoaderExport,
+    gitSourcePolicyPath,
+    executorFiles,
     manifest: {
       adapterKey: key,
       displayName: string(source.displayName, 'displayName'),
+      ...(source.executor?.supported === false ? { supportsAgentExecution: false } : {}),
       protocols: {
         agentTask: string(source.protocols?.agentTask, 'protocols.agentTask'),
         evaluation: string(source.protocols?.evaluation, 'protocols.evaluation'),
@@ -360,6 +379,7 @@ function loadPackage(packageDir) {
       key: evaluator.key,
       benchmarkKey: key,
       runtime: evaluator.runtime,
+      ...(evaluator.requiresPrebuiltRuntime === true ? { requiresPrebuiltRuntime: true } : {}),
       command: string(evaluator.command, 'evaluator.command'),
       entrypoint: containerEntrypoint || entrypoint,
       ...(imageProvider ? { imageProvider } : {}),
@@ -478,10 +498,28 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     'module.exports = { generatedEvaluatorDescriptors }',
     '',
   ].join('\n')
+  const policyPackages = packages.filter(item => item.gitSourcePolicyPath)
+  const executorSource = [
+    "'use strict'",
+    '',
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '',
+    "const path = require('node:path')",
+    '',
+    'const generatedGitSourcePolicyDescriptors = [',
+    ...policyPackages.map(item => `  { benchmarkKey: ${JSON.stringify(item.key)}, modulePath: path.resolve(__dirname, ${JSON.stringify(toImportPath(outputDir, item.gitSourcePolicyPath))}) },`),
+    ']',
+    '',
+    `const generatedExecutorPackageFiles = ${JSON.stringify([...new Set(policyPackages.flatMap(item => item.executorFiles.map(filePath => path.relative(rootDir, filePath).replaceAll(path.sep, '/'))))].sort(), null, 2)}`,
+    '',
+    'module.exports = { generatedGitSourcePolicyDescriptors, generatedExecutorPackageFiles }',
+    '',
+  ].join('\n')
   fs.writeFileSync(path.join(outputDir, 'manifests.ts'), manifestSource)
   fs.writeFileSync(path.join(outputDir, 'adapters.ts'), adaptersSource)
   fs.writeFileSync(path.join(outputDir, 'dataset-loaders.ts'), loadersSource)
   fs.writeFileSync(path.join(outputDir, 'evaluators.cjs'), evaluatorSource)
+  fs.writeFileSync(path.join(outputDir, 'executors.cjs'), executorSource)
   fs.writeFileSync(path.join(outputDir, 'catalog-lock.json'), `${JSON.stringify({
     notice: 'AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
     packages: packages.map((item) => ({ key: item.key, digest: item.packageDigest, evaluatorDigest: item.evaluator.artifactDigest })),

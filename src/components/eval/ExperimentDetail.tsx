@@ -77,6 +77,7 @@ interface ExperimentDetail {
     traceAttemptStatus: string | null;
     caseValues?: Record<string, unknown> | null;
     benchmark?: {
+      submissionSource?: string;
       adapterKey: string;
       displayName: string;
       externalCaseId: string;
@@ -469,7 +470,7 @@ export function ExperimentDetail({
               }}>
                 {status.label}
               </span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
+              <span><span style={{ color: 'var(--foreground-muted)' }}>{detail.reusableConfig?.traceSource === 'import' ? '提交来源：' : '待评测 Agent：'}</span>{detail.agentName || '—'}</span>
               {detail.reusableConfig?.traceSource === 'generate' && detail.reusableConfig.executionTarget && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
@@ -844,7 +845,7 @@ export function ExperimentDetail({
                                 ...c, evaluatorIds: detail.evaluatorIds, results: detail.results.filter((row) => row.caseId === c.id),
                               })}
                               onDeleted={(experimentDeleted) => experimentDeleted ? router.replace('/experiments') : load(true)} />}
-                            {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
+                            {c.benchmark?.submissionSource !== 'imported' && (c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
                                 disabled={!!retryingCaseId}

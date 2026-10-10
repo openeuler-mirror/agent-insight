@@ -150,6 +150,10 @@ export async function GET(req: Request) {
         status,
         watchMode: r.watchMode,
         scope: r.scope,
+        submissionSource: (() => {
+          try { return JSON.parse(r.configSnapshotJson || '{}').submissionSource === 'imported' ? 'imported' : 'agent'; }
+          catch { return 'agent'; }
+        })(),
         skillName: r.skillName,
         skillVersion: r.skillVersion,
         preset: r.preset,
