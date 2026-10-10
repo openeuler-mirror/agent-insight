@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isolateTestDatabase } from './helpers/isolated-test-db';
-isolateTestDatabase('framework-agent-identity-persist');
 import { listObservedAgentNames, saveExecutionRecord } from '@/lib/storage/data-service';
 import { prismaRaw } from '@/lib/storage/prisma';
 
