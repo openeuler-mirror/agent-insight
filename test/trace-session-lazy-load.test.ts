@@ -139,6 +139,8 @@ test('trace thread event keys are stable within a source and isolated across own
     assert.notEqual(alice, scopeTraceThreadEventKey('bob', 'codex', 'thread-1', 'compaction:window-2'));
     assert.notEqual(alice, scopeTraceThreadEventKey('alice', 'pi-agent', 'thread-1', 'compaction:window-2'));
     assert.notEqual(alice, scopeTraceThreadEventKey('alice', 'codex', 'thread-2', 'compaction:window-2'));
+});
+
 test('lazy trace structure preserves a Goal Plus projected worker subtree and provenance', () => {
     const projection = composeCollaborationTrace(
         [{ role: 'user', agent: 'Goal Plus 主 Agent', content: '开始优化', timestamp: 1000 }],
