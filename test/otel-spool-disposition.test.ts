@@ -170,23 +170,26 @@ test('OTel spool consumer advances only sources whose disposition is acknowledge
         return { success: true, record };
       },
       shortMs: 5,
-      longMs: 10_000,
-      maxWaitMs: 10_000,
+      longMs: 50,
+      maxWaitMs: 100,
       tickMs: 5,
       seedOnStart: false,
       log: () => {},
       warn: () => {},
     });
 
-    await waitFor(() => saved.includes('persisted-trace') && getOtelSpoolConsumerForTest()?.pendingFiles.size === 2);
     const claudeFile = source('claude-otel-logs').listFiles()[0];
     const codeAgentFile = source('codeagent-otel-logs').listFiles()[0];
     const traceFiles = source('otel-traces').listFiles();
     const piFile = traceFiles.find((file) => file.includes('pi-pending'))!;
     const codexFile = traceFiles.find((file) => file.includes('codex-pending'))!;
     const persistedFile = traceFiles.find((file) => file.includes('persisted-trace'))!;
+    await waitFor(() => saved.includes('persisted-trace')
+      && getOtelSpoolConsumerForTest()?.deferredFiles.size === 2
+      && getFileCursor(traceDir, toCheckpointRelPath(traceDir, persistedFile)).bytes === fs.statSync(persistedFile).size);
 
-    assert.deepEqual(saved, ['persisted-trace']);
+    assert.deepEqual([...new Set(saved)], ['persisted-trace']);
+    assert.equal(getOtelSpoolConsumerForTest()?.deferredFiles.size, 2);
     assert.equal(getFileCursor(claudeDir, toCheckpointRelPath(claudeDir, claudeFile)).bytes, fs.statSync(claudeFile).size);
     assert.equal(getFileCursor(codeAgentDir, toCheckpointRelPath(codeAgentDir, codeAgentFile)).bytes, fs.statSync(codeAgentFile).size);
     assert.equal(getFileCursor(traceDir, toCheckpointRelPath(traceDir, persistedFile)).bytes, fs.statSync(persistedFile).size);

@@ -40,8 +40,10 @@
 
 Pi Agent、Codex、Goal Plus 的 ZIP 分发均包含 `shared/install-modules.cjs`。
 安装器在写入框架文件、配置和 hooks 前预检全部共享依赖：内容相同则复用，不存在则安装；
-只有摘要列入已知旧版白名单的文件才允许升级。目前白名单仅覆盖根目录环境变量迁移前的
-`trace-transport.cjs`。升级保留权限为 `0600` 的随机命名 `.bak`，使用同目录临时文件加 rename 替换。
+已有 `installation.json` 时，允许升级与凭据一致且 `sharedAbi` 兼容的文件；没有凭据的旧安装仅允许升级摘要列入白名单的文件。名单覆盖根目录环境变量迁移前的
+`trace-transport.cjs`、`1447495e` 发布版本中的原版上传模块和 `install-modules.cjs`，
+以及 `544df1cb` 中尚未生成升级凭据的原版安装器（SHA-256 `52e47d6e…fec39a08`）。支持同时升级上传模块与升级器自身，迁移成功后生成共享文件指纹及 ABI 凭据；重复安装复用凭据，避免已经安装过采集器的机器被版本差异阻塞。
+升级保留权限为 `0600` 的随机命名 `.bak`，使用同目录临时文件加 rename 替换。
 未知内容或符号链接报错，不能把“不同文件”直接当作可覆盖的旧版本。
 后续共享模块变更须核验并登记兼容旧版摘要、更新三个分发包及升级回归测试，不能仅测试全新安装。
 
@@ -316,7 +318,9 @@ export OTEL_SERVICE_NAME=new-framework
 
 两个入口必须同步维护：`setup/route.ts` 由“安装指导”页面给出的 `curl .../api/ingest/setup | bash`（Windows 为 PowerShell）触发；`setup/auto/route.ts` 由本地制作并安装的 Agent Insight npm 包在执行 `npx agent-insight install` 时触发。验证新采集器时要分别覆盖两条路径。本地 npm 包只用于验证，不上传 npm 仓库。框架选择列表采用追加式兼容策略：只能在现有条目末尾增加新框架，不得删除、重命名、改值或调整已有框架顺序。
 
-MCTS 使用独立的 `mcts-xgovernor` 安装 profile，不是 Goal Plus 的宿主依赖：profile 解析不能自动加入 Pi Agent 或 xiaoO。安装页仅在选中该项时发送 `mctsUpstream`；普通 setup 与 auto setup 的 Unix 脚本都必须下载 `/api/ingest/setup/mcts-xgovernor` 并输出透明启动器用法。专用 route 分发固定白名单的确定性 ZIP，bootstrap 校验 SHA-256 后才执行安装器。原生 PowerShell 不安装该代理，而是明确要求在 WSL 中执行 Linux 安装命令。
+MCTS 使用独立的 `mcts-xgovernor` 安装 profile，不是 Goal Plus 的宿主依赖：profile 解析不能自动加入 Pi Agent 或 xiaoO。安装页只要求 MCTS 仓库路径，通过 `AGENT_INSIGHT_MCTS_REPO_DIR` 传给安装脚本；连接地址由执行机读取仓库配置。普通 setup 与 auto setup 的 Unix 脚本都必须下载 `/api/ingest/setup/mcts-xgovernor` 并输出透明启动器用法。专用 route 分发固定白名单的确定性 ZIP，bootstrap 校验 SHA-256 后才执行安装器。原生 PowerShell 不安装该代理，而是明确要求在 WSL 中执行 Linux 安装命令。
+
+MCTS ZIP 使用 `runtimePackageRoot()` 定位平台源码，优先读取启动器提供的 `AGENT_INSIGHT_PACKAGE_ROOT`，不能固定使用 standalone 进程的 cwd。Next 的 `outputFileTracingIncludes` 同时为安装脚本和 ZIP 路由包含采集器、共享传输模块及 `services/executor/src/mcts-config.cjs`，使独立 standalone 部署也能生成完整安装包。升级这类文件后须重新构建并重启平台服务。
 
 添加新框架的接入引导逻辑：
 

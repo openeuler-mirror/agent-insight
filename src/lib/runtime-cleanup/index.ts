@@ -25,7 +25,10 @@ export function createCleanupSweep(config: ReturnType<typeof readCleanupConfig>)
   return roundRobin([
     guarded('logs', async function* () {
       const { cleanupLogs } = await import('./logs');
-      yield* cleanupLogs({ directory: process.env.AGENT_INSIGHT_LOG_DIR || '/var/log/agent-insight', now, dryRun: config.dryRun,
+      const { cleanupRetiredRuns } = await import('./retired-runs');
+      const directory = process.env.AGENT_INSIGHT_LOG_DIR || '/var/log/agent-insight';
+      yield* cleanupRetiredRuns({ directory, dryRun: config.dryRun });
+      yield* cleanupLogs({ directory, now, dryRun: config.dryRun,
         retentionDays: config.logRetentionDays, rotateAfterMs: config.logRotateMs,
         maxFileBytes: config.logMaxFileBytes, maxTotalBytes: config.logMaxTotalBytes });
     }),
@@ -37,17 +40,23 @@ export function createCleanupSweep(config: ReturnType<typeof readCleanupConfig>)
     }),
     guarded('spool', async function* () {
       const { cleanupSpool } = await import('./spool');
+      const { cleanupRetiredRuns } = await import('./retired-runs');
+      const { join } = await import('node:path');
       const { listSources } = await import('@/lib/ingest/otel-consumer/sources');
       const { forgetOtelSpoolFile } = await import('@/lib/ingest/otel-consumer/consumer');
       const { getJiuwenSpoolDir } = await import('@/lib/ingest/otel/jiuwen/spool');
       const sources = listSources();
       const sweeps = sources.map(source => guarded(`spool-${source.id}`, async function* () {
         const root = source.spoolDir();
+        yield* cleanupRetiredRuns({ directory: root, dryRun: config.dryRun });
+        yield* cleanupRetiredRuns({ directory: join(root, '.retention-v1'), dryRun: config.dryRun });
         yield* cleanupSpool({ root, now, normalDays: config.normalDays, abnormalDays: config.abnormalDays, dryRun: config.dryRun,
           onDelete: file => forgetOtelSpoolFile(root, file) });
       }));
       sweeps.push(guarded('spool-jiuwen', async function* () {
-        yield* cleanupSpool({ root: getJiuwenSpoolDir(), now, normalDays: config.normalDays, abnormalDays: config.abnormalDays, dryRun: config.dryRun });
+        const root = getJiuwenSpoolDir();
+        yield* cleanupRetiredRuns({ directory: join(root, '.retention-v1'), dryRun: config.dryRun });
+        yield* cleanupSpool({ root, now, normalDays: config.normalDays, abnormalDays: config.abnormalDays, dryRun: config.dryRun });
       }));
       yield* roundRobin(sweeps);
     }),
@@ -58,17 +67,10 @@ export function startRuntimeCleanup(): Controller | undefined {
   if (globalState[KEY]) return globalState[KEY];
   try {
     const config = readCleanupConfig();
-    const fresh = () => ({ scanned: 0, deleted: 0, rotated: 0, skipped: 0, freedBytes: 0, readBytes: 0 });
-    let counts = fresh();
     const controller = startCleanupScheduler({
       config,
-      createSweep: () => { counts = fresh(); return createCleanupSweep(config); },
-      onEvent: event => {
-        counts[event.kind]++;
-        if (event.kind === 'deleted') counts.freedBytes += event.bytes || 0;
-        counts.readBytes += event.scannedBytes || 0;
-      },
-      onComplete: () => console.info('[runtime-cleanup] sweep complete', { ...counts, dryRun: config.dryRun }),
+      createSweep: () => createCleanupSweep(config),
+      onStatus: ({ phase, ...details }) => console.info(`[runtime-cleanup] ${phase}`, details),
       onError: error => warn('scheduler', error),
     });
     globalState[KEY] = controller;

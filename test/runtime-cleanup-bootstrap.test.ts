@@ -10,12 +10,13 @@ test('startup registers one unref timer without starting cleanup work', async t 
   let calls = 0
   let delay = 0
   let unref = 0
+  const messages: unknown[][] = []
   t.mock.method(globalThis, 'setTimeout', (_fn: () => void, wait: number) => {
     calls++; delay = wait
     return { unref: () => { unref++ } }
   })
   t.mock.method(globalThis, 'clearTimeout', () => {})
-  t.mock.method(console, 'info', () => assert.fail('startup must not run a sweep'))
+  t.mock.method(console, 'info', (...args: unknown[]) => { messages.push(args) })
   const previous = process.env.AGENT_INSIGHT_CLEANUP_ENABLED
   delete process.env.AGENT_INSIGHT_CLEANUP_ENABLED
   const first = startRuntimeCleanup()
@@ -23,6 +24,9 @@ test('startup registers one unref timer without starting cleanup work', async t 
   assert.equal(calls, 1)
   assert.equal(delay, 60_000)
   assert.equal(unref, 1)
+  assert.deepEqual(messages, [['[runtime-cleanup] scheduled', {
+    dryRun: false, startupDelayMs: 60_000, intervalMs: 3_600_000, normalDays: 7, abnormalDays: 7,
+  }]])
   await first?.stop()
   delete globalState[key]
   if (previous === undefined) delete process.env.AGENT_INSIGHT_CLEANUP_ENABLED
@@ -32,10 +36,12 @@ test('startup registers one unref timer without starting cleanup work', async t 
 test('disabled cleanup registers no timer', async t => {
   const globalState = globalThis as unknown as Record<symbol, unknown>
   delete globalState[key]
-  t.mock.method(globalThis, 'setTimeout', () => assert.fail('disabled cleanup must not schedule'))
+  let scheduled = 0
+  t.mock.method(globalThis, 'setTimeout', () => { scheduled++; return { unref: () => {} } })
   const previous = process.env.AGENT_INSIGHT_CLEANUP_ENABLED
   process.env.AGENT_INSIGHT_CLEANUP_ENABLED = '0'
   const controller = startRuntimeCleanup()
+  assert.equal(scheduled, 0, 'disabled cleanup must not schedule')
   await controller?.stop()
   delete globalState[key]
   if (previous === undefined) delete process.env.AGENT_INSIGHT_CLEANUP_ENABLED

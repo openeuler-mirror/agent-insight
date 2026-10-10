@@ -3,10 +3,13 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { runtimePackageRoot } from '@/lib/runtime/package-root';
+
 const BUNDLE_FILES = [
   ['mcts-xgovernor-proxy/core.cjs', ['mcts-xgovernor-proxy', 'core.cjs']],
   ['mcts-xgovernor-proxy/gateway.cjs', ['mcts-xgovernor-proxy', 'gateway.cjs']],
   ['mcts-xgovernor-proxy/install.cjs', ['mcts-xgovernor-proxy', 'install.cjs']],
+  ['mcts-xgovernor-proxy/mcts-config.cjs', ['..', '..', 'services', 'executor', 'src', 'mcts-config.cjs']],
   ['mcts-xgovernor-proxy/run.cjs', ['mcts-xgovernor-proxy', 'run.cjs']],
   ['shared/collaboration-transport.cjs', ['shared', 'collaboration-transport.cjs']],
   ['shared/trace-transport.cjs', ['shared', 'trace-transport.cjs']],
@@ -15,7 +18,7 @@ const BUNDLE_FILES = [
 const ZIP_TIMESTAMP = new Date(1980, 0, 1, 0, 0, 0);
 let cached: { root: string; sourceDigest: string; buffer: Buffer; sha256: string } | undefined;
 
-export function mctsXgovernorCollectorBundle(root = process.cwd()) {
+export function mctsXgovernorCollectorBundle(root = runtimePackageRoot()) {
   const collectorRoot = path.join(root, 'scripts', 'agent-trace-collectors');
   const sources = BUNDLE_FILES.map(([archivePath, sourceParts]) => {
     const sourcePath = path.join(collectorRoot, ...sourceParts);

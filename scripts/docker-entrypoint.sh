@@ -19,6 +19,9 @@ AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 RESOLVED_AGENT_INSIGHT_HOME="$AGENT_INSIGHT_HOME"
 PROCESS_DATABASE_URL_IS_SET="${DATABASE_URL+x}"
 PROCESS_DATABASE_URL="${DATABASE_URL:-}"
+PROCESS_RUNTIME_OWNER="${AGENT_INSIGHT_RUNTIME_OWNER:-}"
+PROCESS_LOG_DIR_IS_SET="${AGENT_INSIGHT_LOG_DIR+x}"
+PROCESS_LOG_DIR="${AGENT_INSIGHT_LOG_DIR:-}"
 : "${OPENCODE_BIN:=/app/node_modules/.bin/opencode}"
 # 源码模式:指向挂载进来的源码目录。为空(默认)时完全走镜像里烤好的 agent-insight npm 包。
 # 注意它必须由容器环境变量传入,这里读不到 $AGENT_INSIGHT_HOME/.env 里的配置。
@@ -91,16 +94,11 @@ prepare_source_workdir() {
   ' "$SOURCE_WORKDIR/package.json"
 }
 
-if [ -n "$AGENT_INSIGHT_SOURCE_DIR" ]; then
-  echo "Source directory: $AGENT_INSIGHT_SOURCE_DIR"
-  prepare_source_workdir
-  PACKAGE_ROOT="$SOURCE_WORKDIR"
-fi
-
 mkdir -p "$AGENT_INSIGHT_STORAGE_DIR"
 
-if [ ! -f "$ENV_FILE" ] && [ -f "$PACKAGE_ROOT/.env.example" ]; then
-  cp "$PACKAGE_ROOT/.env.example" "$ENV_FILE"
+ENV_TEMPLATE_ROOT="${AGENT_INSIGHT_SOURCE_DIR:-$PACKAGE_ROOT}"
+if [ ! -f "$ENV_FILE" ] && [ -f "$ENV_TEMPLATE_ROOT/.env.example" ]; then
+  cp "$ENV_TEMPLATE_ROOT/.env.example" "$ENV_FILE"
   chmod 600 "$ENV_FILE" 2>/dev/null || true
 fi
 
@@ -125,12 +123,33 @@ export PATH="/app/node_modules/.bin:$PATH"
 
 [ "$PROCESS_DATABASE_URL_IS_SET" != x ] || export DATABASE_URL="$PROCESS_DATABASE_URL"
 
+if [ "$PROCESS_LOG_DIR_IS_SET" = x ]; then
+  AGENT_INSIGHT_LOG_DIR="${PROCESS_LOG_DIR:-$AGENT_INSIGHT_HOME/logs}"
+else
+  # 已复制的旧模板仍写着 /var/log；容器默认应落到持久挂载中，显式 Docker 环境值除外。
+  case "${AGENT_INSIGHT_LOG_DIR:-}" in
+    ""|"/var/log/agent-insight") AGENT_INSIGHT_LOG_DIR="$AGENT_INSIGHT_HOME/logs" ;;
+  esac
+fi
+export AGENT_INSIGHT_LOG_DIR
+
 if [ -x "$OPENCODE_BIN" ]; then
   export OPENCODE_BIN
   echo "Using opencode binary: $OPENCODE_BIN"
 else
   echo "Error: opencode binary not found at $OPENCODE_BIN" >&2
   exit 1
+fi
+
+if [ "${1:-}" != "--runtime-owned" ]; then
+  exec python3 /usr/local/bin/agent-insight-container-runtime.py "$AGENT_INSIGHT_HOME" /bin/sh "$0" --runtime-owned
+fi
+export AGENT_INSIGHT_RUNTIME_OWNER="$PROCESS_RUNTIME_OWNER"
+
+if [ -n "$AGENT_INSIGHT_SOURCE_DIR" ]; then
+  echo "Source directory: $AGENT_INSIGHT_SOURCE_DIR"
+  prepare_source_workdir
+  PACKAGE_ROOT="$SOURCE_WORKDIR"
 fi
 
 case "${DATABASE_URL:-}" in

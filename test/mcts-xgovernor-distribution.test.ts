@@ -13,14 +13,19 @@ import { GET as getAsset } from '@/app/api/ingest/setup/mcts-xgovernor/assets/[a
 import { GET as getInstaller } from '@/app/api/ingest/setup/mcts-xgovernor/route';
 import { GET as getSetup } from '@/app/api/ingest/setup/route';
 import { parseFrameworks, resolveInstallProfile } from '@/lib/ingest/setup/install-profile';
+import nextConfig from '../next.config';
 
 const require = createRequire(import.meta.url);
+const picomatch = require('next/dist/compiled/picomatch');
+const glob = require('next/dist/compiled/glob');
 const { install } = require('../scripts/agent-trace-collectors/mcts-xgovernor-proxy/install.cjs');
+const repositoryRoot = path.resolve(process.cwd());
 
 const ENTRIES = [
   'mcts-xgovernor-proxy/core.cjs',
   'mcts-xgovernor-proxy/gateway.cjs',
   'mcts-xgovernor-proxy/install.cjs',
+  'mcts-xgovernor-proxy/mcts-config.cjs',
   'mcts-xgovernor-proxy/run.cjs',
   'shared/collaboration-transport.cjs',
   'shared/trace-transport.cjs',
@@ -45,6 +50,74 @@ test('MCTS setup serves a checksum-pinned self-contained bundle', async () => {
   assert.equal(response.status, 200);
   assert.equal(createHash('sha256').update(buffer).digest('hex'), expected);
   assert.deepEqual(new AdmZip(buffer).getEntries().map(entry => entry.entryName).sort(), ENTRIES);
+});
+
+test('MCTS installer and asset use the package root from a standalone cwd', async t => {
+  const previousRoot = process.env.AGENT_INSIGHT_PACKAGE_ROOT;
+  const previousCwd = process.cwd();
+  const standalone = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcts-standalone-'));
+  t.after(async () => {
+    process.chdir(previousCwd);
+    if (previousRoot === undefined) delete process.env.AGENT_INSIGHT_PACKAGE_ROOT;
+    else process.env.AGENT_INSIGHT_PACKAGE_ROOT = previousRoot;
+    await fsp.rm(standalone, { recursive: true, force: true });
+  });
+  process.env.AGENT_INSIGHT_PACKAGE_ROOT = repositoryRoot;
+  process.chdir(standalone);
+
+  const installer = await getInstaller(new Request('https://insight.example/api/ingest/setup/mcts-xgovernor'));
+  assert.equal(installer.status, 200);
+  const expected = /EXPECTED_SHA256='([a-f0-9]{64})'/.exec(await installer.text())?.[1];
+  assert.ok(expected);
+  const asset = await getAsset(new Request('https://insight.example/asset'), {
+    params: Promise.resolve({ asset: 'mcts-xgovernor-collector.zip' }),
+  });
+  assert.equal(asset.status, 200);
+  const buffer = Buffer.from(await asset.arrayBuffer());
+  assert.equal(createHash('sha256').update(buffer).digest('hex'), expected);
+  const archive = new AdmZip(buffer);
+  assert.deepEqual(archive.getEntries().map(entry => entry.entryName).sort(), ENTRIES);
+  assert.deepEqual(archive.readFile('mcts-xgovernor-proxy/mcts-config.cjs'),
+    await fsp.readFile(path.join(repositoryRoot, 'services/executor/src/mcts-config.cjs')));
+});
+
+test('standalone tracing includes the complete MCTS bundle for both routes', async t => {
+  const previousRoot = process.env.AGENT_INSIGHT_PACKAGE_ROOT;
+  const previousCwd = process.cwd();
+  const standalone = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcts-traced-'));
+  t.after(async () => {
+    process.chdir(previousCwd);
+    if (previousRoot === undefined) delete process.env.AGENT_INSIGHT_PACKAGE_ROOT;
+    else process.env.AGENT_INSIGHT_PACKAGE_ROOT = previousRoot;
+    await fsp.rm(standalone, { recursive: true, force: true });
+  });
+
+  for (const [index, route] of ['/api/ingest/setup/mcts-xgovernor', '/api/ingest/setup/mcts-xgovernor/assets/[asset]'].entries()) {
+    const deployment = path.join(standalone, String(index));
+    const traced = new Set<string>();
+    for (const [pattern, includes] of Object.entries(nextConfig.outputFileTracingIncludes || {})) {
+      if (!picomatch(pattern, { dot: true, contains: true })(route)) continue;
+      for (const include of includes) {
+        for (const file of glob.sync(include, { cwd: repositoryRoot, nodir: true })) traced.add(file);
+      }
+    }
+    for (const file of traced) {
+      if (!file.startsWith('scripts/') && !file.startsWith('services/')) continue;
+      const target = path.join(deployment, file);
+      await fsp.mkdir(path.dirname(target), { recursive: true });
+      await fsp.copyFile(path.join(repositoryRoot, file), target);
+    }
+    delete process.env.AGENT_INSIGHT_PACKAGE_ROOT;
+    process.chdir(deployment);
+    const installer = await getInstaller(new Request('https://insight.example/api/ingest/setup/mcts-xgovernor'));
+    assert.equal(installer.status, 200, route);
+    const asset = await getAsset(new Request('https://insight.example/asset'), {
+      params: Promise.resolve({ asset: 'mcts-xgovernor-collector.zip' }),
+    });
+    assert.equal(asset.status, 200, route);
+    assert.deepEqual(new AdmZip(Buffer.from(await asset.arrayBuffer())).getEntries()
+      .map(entry => entry.entryName).sort(), ENTRIES);
+  }
 });
 
 test('MCTS setup rejects Windows and unknown assets', async () => {
@@ -98,7 +171,7 @@ test('setup commands install only the selected MCTS collector and preserve its u
     assert.match(generated, /mcts-xgovernor/);
     assert.match(generated, /MCTS_XGOVERNOR_UPSTREAM="http:\/\/127\.0\.0\.1:9876"/);
     assert.match(generated, /api\/ingest\/setup\/mcts-xgovernor/);
-    assert.match(generated, /agent-insight-mcts-run --strict -- bash run_union\.sh/);
+    assert.match(generated, name === 'main' ? /mcts-coordinator \/ pi-mcts/ : /agent-insight-mcts-run --strict -- bash run_union\.sh/);
     assert.doesNotMatch(generated, /SELECTED_FRAMEWORKS="pi-agent"/);
     assert.doesNotMatch(generated, /AUTO_ADDED_FRAMEWORKS="pi-agent"/);
     const syntax = spawnSync('bash', ['-n'], { input: generated, encoding: 'utf8' });

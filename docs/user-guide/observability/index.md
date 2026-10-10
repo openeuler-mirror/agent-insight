@@ -65,6 +65,8 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 
 Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；随 Pi 内置的只读观察器在确认真实 `/goal-plus` 启动后自动登记 `.gp`、导入 worker Trace 并上报主从关系，最终在主 Trace 下展示 worker。安装、自动激活、重试口径及卸载说明见 [Goal Plus 观测接入](goal-plus.md)。
 
+升级 Pi Agent、Codex 或 Goal Plus 时，重新执行页面生成的安装命令即可。已识别的原版旧上传模块和共享安装器会自动备份并升级，包括尚无升级凭据的旧安装；已有采集数据保留。若提示 `Refusing to overwrite a different shared collector module`，更新并重新部署平台安装器后重试。仍然报错时保留原文件，交由部署者核对版本或本地修改，避免影响其他采集器。
+
 ## MCTS xGovernor 接入
 
 MCTS 可通过外部启动器和本机透明 xGovernor 代理接入，无需修改 MCTS 源码。平台展示 coordinator、Runtime、标准化 LLM turn、工具活动和 checkpoint 派生关系；安装、运行、隐私边界及已知限制见 [MCTS xGovernor Trace 非侵入式接入](mcts-xgovernor.md)。

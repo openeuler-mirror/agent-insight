@@ -3,15 +3,18 @@ import test from 'node:test';
 import { cleanupEligibility, DAY_MS, readCleanupConfig } from '@/lib/runtime-cleanup/policy';
 import { roundRobin, runCleanupSlice, startCleanupScheduler } from '@/lib/runtime-cleanup/scheduler';
 
-test('cleanup uses last receive time, success 7d and abnormal 14d; activity wins', () => {
+test('cleanup defaults to seven idle days for every status; newer completion and activity win', () => {
   const now = 100 * DAY_MS;
   const state = { status: 'success' as const, completedAt: now - 8 * DAY_MS, lastReceivedAt: now - 8 * DAY_MS };
   assert.equal(cleanupEligibility(state, now).eligible, true);
   assert.equal(cleanupEligibility({ ...state, lastReceivedAt: now - DAY_MS }, now).eligible, false);
-  assert.equal(cleanupEligibility({ ...state, status: 'failed' }, now).eligible, false);
-  assert.equal(cleanupEligibility({ ...state, status: 'failed', lastReceivedAt: now - 14 * DAY_MS }, now).eligible, true);
-  assert.equal(cleanupEligibility({ status: 'running', lastReceivedAt: now - 13 * DAY_MS }, now).eligible, false);
-  assert.equal(cleanupEligibility({ status: 'running', lastReceivedAt: now - 14 * DAY_MS }, now).reason, 'inactive');
+  assert.equal(cleanupEligibility({ ...state, status: 'failed' }, now).eligible, true);
+  assert.equal(cleanupEligibility({ ...state, completedAt: now - DAY_MS }, now).eligible, false);
+  assert.equal(readCleanupConfig({}).abnormalDays, 7);
+  assert.equal(cleanupEligibility({ ...state, status: 'failed', lastReceivedAt: now - 7 * DAY_MS }, now).eligible, true);
+  assert.equal(cleanupEligibility({ status: 'running', lastReceivedAt: now - 6 * DAY_MS }, now).eligible, false);
+  assert.equal(cleanupEligibility({ status: 'running', lastReceivedAt: now - 7 * DAY_MS }, now).reason, 'inactive');
+  assert.equal(cleanupEligibility({ ...state, status: 'failed' }, now, 7, 14).eligible, false);
   assert.equal(cleanupEligibility({ ...state, busy: true }, now).eligible, false);
   assert.equal(cleanupEligibility({ ...state, lastReceivedAt: NaN }, now).eligible, false);
 });

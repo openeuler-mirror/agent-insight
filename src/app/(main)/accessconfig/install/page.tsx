@@ -23,6 +23,8 @@ import {
 } from '@/lib/ingest/setup/install-profile';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
+import { Input } from '@/components/ui/input';
+import { isMctsRepoPath, mctsInstallCommand } from '@/lib/ingest/setup/mcts-install';
 
 /**
  * 客户端安装指导页。
@@ -45,7 +47,7 @@ export default function AccessInstallPage() {
     const [linuxCmd, setLinuxCmd] = useState('');
     const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
-    const [mctsUpstream, setMctsUpstream] = useState('http://127.0.0.1:8787');
+    const [mctsRepoDir, setMctsRepoDir] = useState('');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
     const installProfile = resolveInstallProfile(
@@ -70,16 +72,16 @@ export default function AccessInstallPage() {
                 frameworks.length ? `yes=1` : '',
                 frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
                 frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
-                frameworks.includes('mcts-xgovernor')
-                    ? `mctsUpstream=${encodeURIComponent(mctsUpstream.trim())}`
-                    : '',
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
-            setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
+            const url = `${baseUrl}${setupUrl}${suffix}`;
+            setLinuxCmd(frameworks.includes('mcts-xgovernor')
+                ? mctsInstallCommand(url, mctsRepoDir)
+                : `curl -sSf "${url}" | bash`);
             setWindowsCmd(`Invoke-Expression (Invoke-RestMethod -Uri "${baseUrl}${setupUrl}${suffix}" -Headers @{'x-platform'='windows'})`);
         }, 0);
         return () => window.clearTimeout(timer);
-    }, [apiKey, authReady, frameworks, mctsUpstream]);
+    }, [apiKey, authReady, frameworks, mctsRepoDir]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -202,9 +204,9 @@ export default function AccessInstallPage() {
                             />
 
                             {frameworks.includes('mcts-xgovernor') && (
-                                <MctsUpstreamField
-                                    value={mctsUpstream}
-                                    onChange={setMctsUpstream}
+                                <MctsRepoField
+                                    value={mctsRepoDir}
+                                    onChange={setMctsRepoDir}
                                     locale={locale}
                                 />
                             )}
@@ -212,14 +214,18 @@ export default function AccessInstallPage() {
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Linux"
-                                hint={isZh ? '使用 Agent 所在 Linux 环境的 bash / zsh 终端' : 'Use a bash / zsh shell on the Linux Agent host'}
+                                hint={frameworks.includes('mcts-xgovernor')
+                                    ? (isZh ? '在 MCTS 执行机执行，自动完成配置、安装和客户端启动。Windows 请使用 WSL。' : 'Run on the MCTS host to configure, install and start the client. Use WSL on Windows.')
+                                    : (isZh ? '使用 Agent 所在 Linux 环境的 bash / zsh 终端' : 'Use a bash / zsh shell on the Linux Agent host')}
                                 cmd={linuxCmd}
+                                unavailableMessage={frameworks.includes('mcts-xgovernor') && !isMctsRepoPath(mctsRepoDir)
+                                    ? (isZh ? '请填写 MCTS 仓库的绝对路径' : 'Enter the absolute MCTS repository path') : undefined}
                                 copied={copied === 'linux'}
                                 onCopy={() => handleCopy(linuxCmd, 'linux')}
                                 locale={locale}
                             />
 
-                            <CommandCard
+                            {!frameworks.includes('mcts-xgovernor') && <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Windows (PowerShell)"
                                 hint={isZh ? '在 Windows PowerShell 中运行' : 'Run in Windows PowerShell'}
@@ -227,7 +233,7 @@ export default function AccessInstallPage() {
                                 copied={copied === 'windows'}
                                 onCopy={() => handleCopy(windowsCmd, 'windows')}
                                 locale={locale}
-                            />
+                            />}
 
                             <div style={{ ...sectionHeading, marginTop: 8 }}>
                                 <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
@@ -306,7 +312,7 @@ export default function AccessInstallPage() {
     );
 }
 
-function MctsUpstreamField({
+function MctsRepoField({
     value, onChange, locale,
 }: {
     value: string;
@@ -316,21 +322,23 @@ function MctsUpstreamField({
     const isZh = locale === 'zh';
     return (
         <article style={commandCard}>
-            <label htmlFor="mcts-xgovernor-upstream" style={configLabel}>
-                {isZh ? 'MCTS xGovernor 地址' : 'MCTS xGovernor upstream'}
+            <label htmlFor="mcts-repo-dir" style={configLabel}>
+                {isZh ? 'MCTS 仓库路径 *' : 'MCTS repository path *'}
             </label>
-            <input
-                id="mcts-xgovernor-upstream"
-                type="url"
+            <Input
+                id="mcts-repo-dir"
+                type="text"
+                required
+                aria-invalid={value.length > 0 && !isMctsRepoPath(value)}
                 value={value}
                 onChange={event => onChange(event.target.value)}
-                placeholder="http://127.0.0.1:8787"
+                placeholder="/opt/MCTS"
                 style={configInput}
             />
             <div style={langfuseNote}>
                 {isZh
-                    ? '该地址由执行 MCTS 的 Linux 主机访问。安装完成后，必须使用 agent-insight-mcts-run 包裹原命令。'
-                    : 'This address is resolved on the Linux MCTS host. After installation, run the original command through agent-insight-mcts-run.'}
+                    ? '填写执行机上的绝对路径。连接配置沿用该仓库的 testcases_union/config.env。'
+                    : 'Enter the absolute path on the execution host. Connection settings are read from testcases_union/config.env in this repository.'}
             </div>
         </article>
     );
@@ -390,7 +398,7 @@ function FrameworkPicker({
 }
 
 function CommandCard({
-    icon, label, hint, cmd, copied, onCopy, locale,
+    icon, label, hint, cmd, copied, onCopy, locale, unavailableMessage,
 }: {
     icon: React.ReactNode;
     label: string;
@@ -399,6 +407,7 @@ function CommandCard({
     copied: boolean;
     onCopy: () => void;
     locale: string;
+    unavailableMessage?: string;
 }) {
     const isZh = locale === 'zh';
     return (
@@ -424,7 +433,7 @@ function CommandCard({
             </header>
             <div style={commandBox}>
                 <code style={commandCode}>
-                    {cmd || (isZh ? '加载中…' : 'Loading…')}
+                    {cmd || unavailableMessage || (isZh ? '加载中…' : 'Loading…')}
                 </code>
             </div>
         </article>

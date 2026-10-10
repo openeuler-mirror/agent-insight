@@ -43,6 +43,12 @@ const nextConfig: NextConfig = {
   // Next 16.1.4's webpack tracer misses several relative Next runtime
   // dependencies, leaving an otherwise successful standalone build unable to boot.
   outputFileTracingIncludes: {
+    '/api/ingest/setup/mcts-xgovernor{,/**}': [
+      'scripts/agent-trace-collectors/mcts-xgovernor-proxy/*.cjs',
+      'scripts/agent-trace-collectors/shared/collaboration-transport.cjs',
+      'scripts/agent-trace-collectors/shared/trace-transport.cjs',
+      'services/executor/src/mcts-config.cjs',
+    ],
     '*': [
       'node_modules/next/dist/server/mcp/**/*',
       'node_modules/next/dist/next-devtools/**/*',
