@@ -5,6 +5,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { SkillWorkspaceTabs } from '@/components/skills/SkillWorkspaceTabs';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { waitForExperimentTasksTerminal } from '@/lib/client/experiment-eval-polling';
@@ -20,7 +21,7 @@ import { calculateAbScoring, type AbScoringResult } from '@/lib/skill-analysis/a
 import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
 import { formatPValueLabel, welchTTestPValue } from '@/lib/skill-analysis/ab-significance';
 import { BatchEvaluation } from './_batch/page';
-import { GrayscaleEvaluation } from './grayscale/page';
+import { GrayscaleEvaluation } from '@/components/eval/GrayscaleEvaluation';
 import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
 import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
@@ -1567,6 +1568,7 @@ function SkillAnalysisPage() {
                 title={title}
                 showDefaultActions={false}
             />
+            <SkillWorkspaceTabs />
 
             <main className="sa-main">
                 {/* view === 'batch' DetailHeader 分支已删——'batch' 视图整体下线，
@@ -1632,7 +1634,9 @@ function SkillAnalysisPage() {
                         selectedDatasetIds={caseDatasetIds}
                         onSelectedDatasetIdsChange={handleCaseDatasetIdsChange}
                         evaluatorOptions={[
-                            ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name })),
+                            ...presetEvaluators
+                                .filter(e => e.status === 'ready')
+                                .map(e => ({ id: e.id, name: e.name })),
                             ...caseUserEvaluators,
                         ]}
                         selectedEvaluatorIds={caseEvaluatorIds}

@@ -1,4 +1,9 @@
 import * as vscode from 'vscode'
+function getAgentInsightHome() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => os.homedir()))
+}
 import { UploadEngine } from './uploader/upload-engine'
 import { SpoolReader } from './uploader/spool'
 import * as path from 'path'
@@ -40,7 +45,7 @@ function getConfig(): TraeConfig {
   // Runtime fallback: read from .env if settings are empty
   if (!host || !apiKey) {
     try {
-      const envFile = path.join(os.homedir(), '.agent-insight', '.env')
+      const envFile = path.join(getAgentInsightHome(), '.env')
       if (fs.existsSync(envFile)) {
         const envText = fs.readFileSync(envFile, 'utf8')
         if (!host) {
@@ -72,7 +77,7 @@ function getConfig(): TraeConfig {
   }
 }
 function getEnvFilePath(): string {
-  return path.join(os.homedir(), '.agent-insight', '.env')
+  return path.join(getAgentInsightHome(), '.env')
 }
 
 function readEnvValue(key: string): string | null {
@@ -197,7 +202,7 @@ function stopEnvWatcher() {
 function startSpoolWatcher() {
   try {
     const cfg = getConfig()
-    const spoolDir = cfg.spoolDir || path.join(os.homedir(), '.agent-insight', 'otel_data', 'trae')
+    const spoolDir = cfg.spoolDir || path.join(getAgentInsightHome(), 'otel_data', 'trae')
     
     if (!fs.existsSync(spoolDir)) {
       fs.mkdirSync(spoolDir, { recursive: true })
@@ -242,7 +247,7 @@ function stopSpoolWatcher() {
 function cleanupOnUninstall() {
   try {
     const cfg = getConfig()
-    const spoolDir = cfg.spoolDir || path.join(os.homedir(), '.agent-insight', 'otel_data', 'trae')
+    const spoolDir = cfg.spoolDir || path.join(getAgentInsightHome(), 'otel_data', 'trae')
     
     // AC22: 先尝试上传所有未上传的数据
     flushSpool().catch(() => {})
@@ -265,7 +270,7 @@ function cleanupOnUninstall() {
     }
     
     // 清理 hooks 目录
-    const hooksDir = path.join(os.homedir(), '.agent-insight', 'trae-hooks')
+    const hooksDir = path.join(getAgentInsightHome(), 'trae-hooks')
     if (fs.existsSync(hooksDir)) {
       try {
         fs.rmSync(hooksDir, { recursive: true, force: true })
@@ -274,7 +279,7 @@ function cleanupOnUninstall() {
     }
     
     // 清理 checkpoint 文件
-    const checkpointFile = path.join(os.homedir(), '.agent-insight', 'trae_uploader_checkpoint.json')
+    const checkpointFile = path.join(getAgentInsightHome(), 'trae_uploader_checkpoint.json')
     if (fs.existsSync(checkpointFile)) {
       fs.unlinkSync(checkpointFile)
       log('checkpoint file cleaned up')
@@ -409,7 +414,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   let autoConfigured = false
   try {
-    const envFile = path.join(os.homedir(), '.agent-insight', '.env')
+    const envFile = path.join(getAgentInsightHome(), '.env')
     if (fs.existsSync(envFile)) {
       const envText = fs.readFileSync(envFile, 'utf8')
       const cfg = vscode.workspace.getConfiguration('agentInsight.trae')
@@ -462,7 +467,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('agent-insight-trae.openSpoolDir', async () => {
       const cfg = getConfig()
-      const dir = cfg.spoolDir || path.join(os.homedir(), '.agent-insight', 'otel_data', 'trae')
+      const dir = cfg.spoolDir || path.join(getAgentInsightHome(), 'otel_data', 'trae')
       try {
         await vscode.env.clipboard.writeText(dir)
         vscode.window.showInformationMessage('Spool \u76ee\u5f55: ' + dir + '\n(\u8def\u5f84\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f)')
@@ -524,7 +529,7 @@ export function activate(context: vscode.ExtensionContext) {
           sessionID: 'all',
           payload: { reason: 'extension-deactivate', pid: process.pid }
         }) + '\n'
-        const dir = getConfig().spoolDir || path.join(os.homedir(), '.agent-insight', 'otel_data', 'trae')
+        const dir = getConfig().spoolDir || path.join(getAgentInsightHome(), 'otel_data', 'trae')
         fs.mkdirSync(dir, { recursive: true })
         fs.appendFileSync(path.join(dir, 'plugin-shutdown.jsonl'), entry, 'utf8')
       } catch {}

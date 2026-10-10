@@ -1,12 +1,16 @@
 'use client';
 
-import React, { ReactNode, useEffect, useMemo, useState } from 'react';
+import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
+import { selectedParentAgent, type ParentAgentReference } from '@/lib/trace/parent-agent';
+import { ParentAgentCard } from './ParentAgentCard';
+import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
 import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { TermPopover } from '@/components/text/TermPopover';
 import { SmartViewer, SmartViewerConfigProvider } from '@/components/SmartViewer';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
@@ -20,7 +24,6 @@ import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/obse
 import {
     AgentEvent,
     AgentNode,
-    buildAgentCallTree,
     findNode,
     firstMeaningfulLine,
     formatDuration,
@@ -29,6 +32,18 @@ import {
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
 import {
+    applyRasRecoveryTree,
+    alignInteractionsToRasAnchors,
+} from '@/lib/ingest/ras/recovery-tree';
+import type { RasTraceMarker } from '@/lib/ingest/ras/trace-markers';
+import { rasEventKindBadgeLabel } from '@/lib/ingest/ras/normalize';
+import {
+    RasNodeBadge,
+    RasReliabilityDetails,
+    findEventAnomaliesForMarkers,
+} from '@/components/observe/RasReliabilityDetails';
+import {
+    actrailPromptHistoryCount,
     buildLangfuseAgentTrace,
     langfusePromptHistoryCount,
 } from '@/lib/engine/observability/langfuse-agent-trace';
@@ -43,6 +58,11 @@ import {
 } from '@/lib/shared/interaction-utils';
 
 const SLOW_MS = 60_000;
+const EMPTY_RAS_MARKERS: RasTraceMarker[] = [];
+
+function sameStringSet(left: Set<string>, right: Set<string>): boolean {
+    return left.size === right.size && [...left].every(key => right.has(key));
+}
 
 type NodeStatus = 'error' | 'slow' | 'ok';
 
@@ -67,6 +87,7 @@ const KIND_META: Record<string, { label: string; chip: string; bar: string; text
     skill: { label: 'SKILL', ...SPAN_KIND_CLASSES.skill },
     llm:   { label: 'LLM',   ...SPAN_KIND_CLASSES.llm },
     user:  { label: 'USER',  ...SPAN_KIND_CLASSES.user },
+    ras:   { label: 'RAS',   ...SPAN_KIND_CLASSES.ras },
 };
 
 /** Exact token count, down to the unit. The left-hand span tree keeps the
@@ -80,6 +101,7 @@ function exactTokens(n: number): string {
 
 // Single source of truth for span-type chips (replaces the legacy inline-styled span badges).
 function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs' | 'sm'; className?: string }) {
+    const { locale } = useLocale();
     const meta = KIND_META[kind] ?? KIND_META.tool;
     const sizing = size === 'sm' ? 'h-5 px-1.5 text-xs' : 'h-4 px-1 text-[10px]';
     return (
@@ -91,7 +113,28 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
                 className,
             )}
         >
-            {meta.label}
+            {kind === 'ras' ? rasEventKindBadgeLabel(locale) : meta.label}
+        </span>
+    );
+}
+
+function CollaborationRelationBadge({ relation }: { relation: NonNullable<RawInteraction['trace_relation']> }) {
+    const { locale } = useLocale();
+    const isConfirmed = relation.anchorState === 'confirmed';
+    const label = relation.sourceType === 'goal-plus-semantic'
+        ? (locale === 'zh' ? 'Goal Plus 编排' : 'Goal Plus orchestration')
+        : isConfirmed
+            ? (locale === 'zh' ? '已确认关联' : 'Confirmed relation')
+            : (locale === 'zh' ? '跨会话关联' : 'Cross-session relation');
+    const title = isConfirmed
+        ? relation.description
+        : `${relation.description} · ${locale === 'zh' ? '未推断具体启动调用位置' : 'Exact spawn call was not inferred'}`;
+    return (
+        <span
+            title={title}
+            className="ml-1.5 inline-flex h-4 items-center rounded-sm border border-border bg-background-tertiary px-1 text-[10px] font-medium text-foreground-muted align-middle"
+        >
+            {label}
         </span>
     );
 }
@@ -339,6 +382,14 @@ interface SpanInfo {
     parentKeys: string[];
 }
 
+interface RasSpanInfo {
+    key: string;
+    label: string;
+    severity: string;
+    marker?: RasTraceMarker;
+    parentKeys: string[];
+}
+
 interface TraceCtxValue {
     framework?: string;
     searchQuery: string;
@@ -352,20 +403,24 @@ interface TraceCtxValue {
     topNDuration: SpanInfo[];
     topNTokens: SpanInfo[];
     slowNodesList: SpanInfo[];
+    rasNodeList: RasSpanInfo[];
     /** sub-agent 节点上"打开独立 trace"按钮的点击回调；未注入则不渲染按钮 */
     onSubagentNavigate?: (sessionId: string) => void;
+    findEventAnomalies?: (event: AgentEvent) => RasTraceMarker[];
 }
 
 const defaultCtx: TraceCtxValue = {
     searchQuery: '', matchedKeys: new Set(), activeMatchKey: null,
     treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false,
     onJumpToKey: () => {},
-    topNDuration: [], topNTokens: [], slowNodesList: [],
+    topNDuration: [], topNTokens: [], slowNodesList: [], rasNodeList: [],
     onSubagentNavigate: undefined,
+    findEventAnomalies: undefined,
 };
 const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
+    parentAgent?: ParentAgentReference | null;
     interactions: RawInteraction[];
     framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
@@ -389,6 +444,10 @@ export interface AgentTraceViewProps {
     rootSessionId?: string;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
+    /** 跨增量刷新保持树交互状态的稳定 Trace 标识。 */
+    traceIdentity?: string;
+    /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
+    rasMarkers?: RasTraceMarker[];
 }
 
 export default function AgentTraceView({
@@ -399,16 +458,24 @@ export default function AgentTraceView({
     loadInteraction,
     loadAllInteractions,
     onSubagentNavigate,
+    parentAgent,
     rootSessionId,
     rootExecutionId,
+    traceIdentity,
+    rasMarkers = EMPTY_RAS_MARKERS,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
-    const { t: tt } = useLocale();
+    const { locale, t: tt } = useLocale();
     const [interactions, setInteractions] = useState<RawInteraction[]>(sourceInteractions);
     const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
-    const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+    const stableTraceIdentity = traceIdentity ?? rootExecutionId;
+    const previousTraceIdentityRef = React.useRef(stableTraceIdentity);
+    const sourceInteractionsRef = React.useRef(sourceInteractions);
+    sourceInteractionsRef.current = sourceInteractions;
+    const treeIdentityInitializedRef = React.useRef(false);
+    const previousTreeIdentityRef = React.useRef(stableTraceIdentity);
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
     const sameTraceReloadRef = React.useRef(false);
     const langfuseProjection = useMemo(
@@ -417,8 +484,9 @@ export default function AgentTraceView({
     );
 
     useEffect(() => {
-        const traceChanged = previousRootExecutionIdRef.current !== rootExecutionId;
-        previousRootExecutionIdRef.current = rootExecutionId;
+        const traceChanged = previousTraceIdentityRef.current !== stableTraceIdentity;
+        previousTraceIdentityRef.current = stableTraceIdentity;
+        if (traceChanged) sameTraceReloadRef.current = false;
         fullLoadPromiseRef.current = null;
         setInteractionLoadError(null);
         setFullInteractionLoadError(null);
@@ -426,23 +494,28 @@ export default function AgentTraceView({
             if (traceChanged) return sourceInteractions;
             return sourceInteractions.map((item, index) => {
                 const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
-                return loaded && !loaded._payloadDeferred ? loaded : item;
+                const incoming = item as RawInteraction & { _payloadDeferred?: boolean };
+                return incoming._payloadDeferred && loaded && !loaded._payloadDeferred
+                    && sameCollaborationSource(incoming, loaded)
+                    && incoming._payloadVersion && incoming._payloadVersion === loaded._payloadVersion ? loaded : item;
             });
         });
-    }, [sourceInteractions, rootExecutionId]);
+    }, [sourceInteractions, stableTraceIdentity]);
 
     const ensureInteractionLoaded = React.useCallback(async (index: number) => {
         if (langfuseProjection) return;
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
         if (!current?._payloadDeferred || !loadInteraction) return;
-        const requestedTraceId = previousRootExecutionIdRef.current;
+        const requestedTraceId = previousTraceIdentityRef.current;
+        const requestedSource = sourceInteractionsRef.current;
         setInteractionLoadError(null);
         try {
             const loaded = await loadInteraction(index);
-            if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            if (previousTraceIdentityRef.current !== requestedTraceId || sourceInteractionsRef.current !== requestedSource
+                || !current._payloadVersion || loaded._payloadVersion !== current._payloadVersion) return;
             // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
             sameTraceReloadRef.current = true;
-            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
+            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index && sameCollaborationSource(item, current) ? { ...loaded, ...(collaborationSource(current) ? { _collaboration: collaborationSource(current) } : {}) } : item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
         }
@@ -455,20 +528,24 @@ export default function AgentTraceView({
             return interactions;
         }
         if (!fullLoadPromiseRef.current) {
-            const requestedTraceId = previousRootExecutionIdRef.current;
+            const requestedTraceId = previousTraceIdentityRef.current;
+            const requestedSource = sourceInteractionsRef.current;
             setFullInteractionLoadError(null);
             let promise: Promise<RawInteraction[]>;
             promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId && sourceInteractionsRef.current === requestedSource
+                        && loaded.length === requestedSource.length
+                        && loaded.every((item, index) => item._payloadVersion && item._payloadVersion === requestedSource[index]._payloadVersion)) {
                         // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
                         sameTraceReloadRef.current = true;
                         setInteractions(loaded);
+                        return loaded;
                     }
-                    return loaded;
+                    return sourceInteractionsRef.current;
                 })
                 .catch(error => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId) {
                         setFullInteractionLoadError(error instanceof Error ? error.message : 'Failed to load full trace');
                     }
                     return interactions;
@@ -482,10 +559,14 @@ export default function AgentTraceView({
     }, [interactions, langfuseProjection, loadAllInteractions]);
 
     const displayInteractions = langfuseProjection?.interactions || interactions;
-    const tree = useMemo(
-        () => langfuseProjection?.tree || buildAgentCallTree(interactions || []),
-        [interactions, langfuseProjection],
-    );
+    const tree = useMemo(() => {
+        const aligned = rasMarkers.length
+            ? alignInteractionsToRasAnchors(displayInteractions || [], rasMarkers)
+            : (displayInteractions || [])
+        const base = langfuseProjection?.tree || buildCollaborationTraceTree(aligned)
+        if (!base) return base
+        return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers, locale) : base
+    }, [interactions, langfuseProjection, displayInteractions, rasMarkers, locale]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(displayInteractions || []), [displayInteractions]);
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
@@ -537,18 +618,22 @@ export default function AgentTraceView({
     // tree 由 interactions 派生，为同一条 trace 补数据（懒加载单条 / 补全全部）也会产生新的
     // interactions 数组 → 新 tree 对象。若无条件跟着 tree 重置，首次点击 span 触发懒加载后
     // 会被弹回根 Agent，必须点第二次才留得住（手动展开的节点同样会被清掉）。
-    // 这里只跳过「同一条 trace 补数据」这一种已知来源，其余 tree 变化（换 trace、自动刷新、
-    // langfuse 投影变化）一律照旧重置 —— TraceDrawer / TrajectoryTraceView 不传 rootExecutionId，
-    // 不能用它作为 trace 身份来判定。
+    // 同一条 trace 的懒加载或实时增量刷新只补数据，不应清掉用户当前的选择和展开状态。
     useEffect(() => {
         if (!tree) return;
-        if (sameTraceReloadRef.current) {
+        const sameStableTrace = treeIdentityInitializedRef.current
+            && Boolean(stableTraceIdentity)
+            && previousTreeIdentityRef.current === stableTraceIdentity;
+        previousTreeIdentityRef.current = stableTraceIdentity;
+        treeIdentityInitializedRef.current = true;
+        if (sameTraceReloadRef.current || sameStableTrace) {
             sameTraceReloadRef.current = false;
             return;
         }
-        setSelectedKey(agentKey(tree.id));
-        setExpandedKeys(defaultExpandedKeys);
-    }, [tree, defaultExpandedKeys]);
+        const rootKey = agentKey(tree.id);
+        setSelectedKey(current => current === rootKey ? current : rootKey);
+        setExpandedKeys(current => sameStringSet(current, defaultExpandedKeys) ? current : defaultExpandedKeys);
+    }, [tree, defaultExpandedKeys, stableTraceIdentity]);
 
     const totalStats = useMemo(() => {
         if (!tree) return null;
@@ -582,9 +667,11 @@ export default function AgentTraceView({
             return { selectedAgentNode: node, selectedEvent: null };
         }
         if (selectedKey.startsWith('e:')) {
-            const parts = selectedKey.slice(2).split(':');
-            const nodeId = parts[0];
-            const evIdx = parseInt(parts[1], 10);
+            // 合并 Trace 的节点 id 自带冒号（`<taskId>:<nX>`），事件序号固定在最末一段，只能从右侧切分。
+            const body = selectedKey.slice(2);
+            const splitAt = body.lastIndexOf(':');
+            const nodeId = splitAt < 0 ? body : body.slice(0, splitAt);
+            const evIdx = splitAt < 0 ? NaN : parseInt(body.slice(splitAt + 1), 10);
             const node = nodeMap.get(nodeId) || tree;
             const ev = node.events[evIdx] || null;
             return { selectedAgentNode: node, selectedEvent: ev };
@@ -667,9 +754,11 @@ export default function AgentTraceView({
     };
 
     // ── Flat span list for search + TopN ────────────────────────────────────
-    const allSpans = useMemo<SpanInfo[]>(() => {
-        if (!tree) return [];
+    const { allSpans, rasNodeList } = useMemo<{ allSpans: SpanInfo[]; rasNodeList: RasSpanInfo[] }>(() => {
+        if (!tree) return { allSpans: [], rasNodeList: [] };
         const spans: SpanInfo[] = [];
+        const rasList: RasSpanInfo[] = [];
+        const markerById = new Map(rasMarkers.map(m => [m.id, m]));
         const visit = (node: AgentNode, parentKeys: string[]) => {
             const aKey = agentKey(node.id);
             spans.push({
@@ -694,8 +783,8 @@ export default function AgentTraceView({
                     return;
                 }
                 const evKey = eventKey(node.id, idx);
-                const dur = childNode
-                    ? childNode.stats.durationMs ?? undefined
+                const dur = ev.kind === 'task'
+                    ? childNode?.stats.durationMs
                     : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
                 const tok = ev.usage?.total || 0;
                 const label = ev.kind === 'task' && ev.spawnedChildId
@@ -711,6 +800,18 @@ export default function AgentTraceView({
                     ].filter(Boolean).join(' ').toLowerCase(),
                     parentKeys: eventParents,
                 });
+                if (ev.kind === 'ras') {
+                    const marker = (ev.args && typeof ev.args === 'object' && ev.args.rasMarkerId)
+                        ? markerById.get(ev.args.rasMarkerId)
+                        : undefined;
+                    rasList.push({
+                        key: evKey,
+                        label: label || ev.name || 'RAS',
+                        severity: marker?.severity || (ev.args && typeof ev.args === 'object' ? ev.args.severity : undefined) || 'low',
+                        marker,
+                        parentKeys: eventParents,
+                    });
+                }
                 const childParents = [...eventParents, evKey];
                 entry.children.forEach(child => visitEvent(child, childParents));
                 if (childNode) {
@@ -722,8 +823,8 @@ export default function AgentTraceView({
             node.children.filter(child => !handledChildIds.has(child.id)).forEach(child => visit(child, myParents));
         };
         visit(tree, []);
-        return spans;
-    }, [tree, nodeMap]);
+        return { allSpans: spans, rasNodeList: rasList };
+    }, [tree, nodeMap, rasMarkers]);
 
     const searchMatches = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
@@ -789,12 +890,18 @@ export default function AgentTraceView({
         }, 80);
     };
 
+    const findEventAnomalies = useCallback(
+        (event: AgentEvent) => findEventAnomaliesForMarkers(event, rasMarkers),
+        [rasMarkers],
+    );
+
     const ctxValue: TraceCtxValue = {
         framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
-        onJumpToKey, topNDuration, topNTokens, slowNodesList,
+        onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
         onSubagentNavigate,
+        findEventAnomalies,
     };
 
     const hasActiveFilters = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0 || slowOnly;
@@ -851,18 +958,23 @@ export default function AgentTraceView({
                         'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
                         !(showFilters || hasActiveFilters) && 'border-b border-border',
                     )}>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={toggleExpandAll}
-                            aria-pressed={isAllExpanded}
-                            className="h-7 border border-border rounded-md text-xs px-2 gap-1 shrink-0"
+                        <TermPopover
+                            term={isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
+                            body={isAllExpanded ? tt('traceTree.collapseAllHint') : tt('traceTree.expandAllHint')}
                         >
-                            {isAllExpanded
-                                ? <ChevronsDownUp className="size-3.5" />
-                                : <ChevronsUpDown className="size-3.5" />}
-                            {isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
-                        </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={toggleExpandAll}
+                                aria-pressed={isAllExpanded}
+                                className="h-7 border border-border rounded-md text-xs px-2 gap-1 shrink-0"
+                            >
+                                {isAllExpanded
+                                    ? <ChevronsDownUp className="size-3.5" />
+                                    : <ChevronsUpDown className="size-3.5" />}
+                                {isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
+                            </Button>
+                        </TermPopover>
 
                         {/* Global search bar */}
                         <div className="flex-1 min-w-[120px] flex items-center gap-1 px-2 py-0.5 rounded-md border border-border bg-background-secondary focus-within:border-primary transition-colors">
@@ -897,7 +1009,7 @@ export default function AgentTraceView({
                             )}
                         </div>
 
-                        {/* Slow / anomaly filter */}
+                        {/* Slow node filter */}
                         <Button
                             variant={slowOnly ? 'default' : 'outline'}
                             size="sm"
@@ -945,12 +1057,13 @@ export default function AgentTraceView({
                                 { value: 'user', label: 'User' },
                             ]} onChange={setTreeKindFilter} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
-                            <FilterPill label={tt('traceTree.filterDuration')} value={String(minDurationMs)} options={[
+                            <FilterPill label={tt('traceTree.filterDuration')} value={String(slowOnly ? SLOW_MS : minDurationMs)} disabled={slowOnly} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
                                 { value: '1000', label: '>1s' },
                                 { value: '5000', label: '>5s' },
                                 { value: '10000', label: '>10s' },
                                 { value: '30000', label: '>30s' },
+                                { value: String(SLOW_MS), label: '>60s' },
                             ]} onChange={v => setMinDurationMs(Number(v))} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterToken')} value={String(minTokenK)} options={[
@@ -1026,6 +1139,7 @@ export default function AgentTraceView({
                     ) : selectedAgentNode ? (
                         <AgentDetail
                             node={selectedAgentNode}
+                            parentAgent={selectedParentAgent(selectedAgentNode, tree, nodeMap, displayInteractions, rootSessionId, parentAgent)}
                             highlightEvent={null}
                             activeTab={activeDetailTab}
                             onTabChange={setActiveDetailTab}
@@ -1051,11 +1165,12 @@ export default function AgentTraceView({
 }
 
 // ─── FilterPill ──────────────────────────────────────────────────────────────
-function FilterPill({ label, value, options, onChange }: {
+function FilterPill({ label, value, options, onChange, disabled = false }: {
     label: string;
     value: string;
     options: { value: string; label: string; accentClass?: string }[];
     onChange: (v: string) => void;
+    disabled?: boolean;
 }) {
     return (
         <div className="flex items-center gap-1.5">
@@ -1066,6 +1181,8 @@ function FilterPill({ label, value, options, onChange }: {
                     return (
                         <button
                             key={o.value}
+                            disabled={disabled}
+                            aria-pressed={isActive}
                             onClick={() => onChange(o.value)}
                             className={cn(
                                 'px-2 py-0.5 text-xs whitespace-nowrap transition-colors',
@@ -1191,7 +1308,8 @@ function UnifiedSpanTree({
 
     const events = node.events;
     const eventTree = buildAgentEventTree(events);
-    const hasContent = events.length > 0;
+    const unanchoredChildren = node.children.filter(child => !events.some(event => event.spawnedChildId === child.id));
+    const hasContent = events.length > 0 || unanchoredChildren.length > 0;
 
     const isSearchMatch = searchQuery ? matchedKeys.has(aKey) : false;
     const isActiveMatch = activeMatchKey === aKey;
@@ -1229,13 +1347,13 @@ function UnifiedSpanTree({
 
         const hasChildren = entry.children.length > 0 || !!childNode;
         const isEvExpanded = hasChildren && expandedKeys.has(evKey);
-        const evDur = childNode
-            ? childNode.stats.durationMs
+        const evDur = ev.kind === 'task'
+            ? childNode?.stats.durationMs
             : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
         const evTok = ev.usage?.total || 0;
         const evIsSlow = (evDur ?? 0) > SLOW_MS;
         if (treeKindFilter !== 'all' && ev.kind !== treeKindFilter) return null;
-        if (minDurationMs > 0 && (evDur == null || evDur < minDurationMs)) return null;
+        if (minDurationMs > 0 && (evDur == null || evDur <= minDurationMs)) return null;
         if (minTokenK > 0 && evTok < minTokenK * 1000) return null;
         if (ctxSlowOnly && !evIsSlow) return null;
         if (searchQuery && !matchedKeys.has(evKey)) return null;
@@ -1335,6 +1453,7 @@ function UnifiedSpanTree({
                             ×{node.parallelCallCount}
                         </span>
                     )}
+                    {node.relation && <CollaborationRelationBadge relation={node.relation} />}
                     {depth > 0 && node.sessionId && ctx.onSubagentNavigate && (
                         <button
                             type="button"
@@ -1374,6 +1493,11 @@ function UnifiedSpanTree({
                     )}
                 />
 
+                {(node as AgentNode & { collaborationLabel?: string }).collaborationLabel && (
+                    <span className="text-xs text-foreground-muted" title={(node as any).collaborationReason}>
+                        {(node as any).collaborationLabel}
+                    </span>
+                )}
                 {/* Metrics */}
                 <span className={cn(
                     'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
@@ -1395,9 +1519,16 @@ function UnifiedSpanTree({
                     {eventTree.map((entry, entryIndex) => renderEventEntry(
                         entry,
                         depth + 1,
-                        entryIndex === eventTree.length - 1,
+                        entryIndex === eventTree.length - 1 && unanchoredChildren.length === 0,
                         depth === 0 ? [] : [...prefixBits, !isLast],
                     ))}
+                    {unanchoredChildren.map((child, index) => <UnifiedSpanTree
+                        key={child.id} node={child} nodeMap={nodeMap} expandedKeys={expandedKeys}
+                        onToggleKey={onToggleKey} selectedKey={selectedKey} onSelect={onSelect}
+                        totalStart={totalStart} totalDuration={totalDuration} depth={depth + 1}
+                        isLast={index === unanchoredChildren.length - 1}
+                        prefixBits={depth === 0 ? [] : [...prefixBits, !isLast]}
+                    />)}
                 </div>
             )}
         </div>
@@ -1417,10 +1548,12 @@ function UnifiedEventRow({
     totalStart?: number; totalDuration?: number;
 }) {
     const km = KIND_META[event.kind] ?? KIND_META.tool;
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const evAnomalyHits = findEventAnomalies?.(event) ?? [];
 
     // Duration: for task events, use child agent duration
-    const spanDurationMs = event.kind === 'task' && childNode
-        ? childNode.stats.durationMs
+    const spanDurationMs = event.kind === 'task'
+        ? childNode?.stats.durationMs
         : (event.startedAt != null && event.completedAt != null)
             ? event.completedAt - event.startedAt
             : undefined;
@@ -1506,6 +1639,10 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
+                {event.kind === 'task' && event.relation && <CollaborationRelationBadge relation={event.relation} />}
+                {evAnomalyHits.length > 0 && (
+                    <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
+                )}
                 {secondaryLabel && (
                     <span className="ml-1.5 text-xs text-foreground-muted">{secondaryLabel}</span>
                 )}
@@ -1647,7 +1784,7 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
                     </Button>
                 </DialogHeader>
                 <div className="overflow-auto flex-1">
-                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme="light" />
+                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme="light" fullContent />
                 </div>
             </DialogContent>
         </Dialog>
@@ -1891,7 +2028,7 @@ function buildLlmPromptSnapshot(
     event: AgentEvent,
     node: AgentNode,
     interactions: RawInteraction[],
-    useLangfuseRequestMessages: boolean,
+    reportedRequestMessagesSource: 'langfuse' | 'actrail' | null,
 ): LlmPromptSnapshot {
     const eventIdx = event.interactionIndex;
     const previousLlmEvents = node.events
@@ -1899,18 +2036,20 @@ function buildLlmPromptSnapshot(
         .sort((a, b) => a.interactionIndex - b.interactionIndex);
     const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
     const requestMessages = event.interaction.requestMessages;
-    if (useLangfuseRequestMessages && Array.isArray(requestMessages) && requestMessages.length > 0) {
+    if (reportedRequestMessagesSource && Array.isArray(requestMessages) && requestMessages.length > 0) {
         const previousRequest = Array.isArray(prevEvent?.interaction.requestMessages)
             ? prevEvent.interaction.requestMessages
             : [];
         return {
             inputMessages: promptMessagesFromRequest(requestMessages),
-            repeatedPrefixCount: langfusePromptHistoryCount(
-                requestMessages,
-                previousRequest,
-                typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
-                prevEvent?.interaction.tool_calls || [],
-            ),
+            repeatedPrefixCount: reportedRequestMessagesSource === 'actrail'
+                ? actrailPromptHistoryCount(requestMessages)
+                : langfusePromptHistoryCount(
+                    requestMessages,
+                    previousRequest,
+                    typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
+                    prevEvent?.interaction.tool_calls || [],
+                ),
             activeCompaction: null,
             foldedOriginalRaw: null,
             foldedOriginalCount: 0,
@@ -1972,7 +2111,7 @@ function DisclosureBar({ icon, label, sub, meta, text, tone = 'normal', defaultO
                 <span className="text-xs font-semibold shrink-0">{label}</span>
                 {sub && <span className="min-w-0 flex-1 truncate font-mono text-[11px] font-normal text-foreground-muted">{sub}</span>}
                 {meta && <span className={cn('text-[10px] text-foreground-muted tabular-nums shrink-0', !sub && 'ml-auto')}>{meta}</span>}
-                <ChevronDown className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', !meta && !sub && 'ml-auto', open && 'rotate-180')} />
+                <ChevronRight className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', !meta && !sub && 'ml-auto', open && 'rotate-90')} />
             </button>
             {open && (
                 <div className="bg-transparent">
@@ -2074,7 +2213,7 @@ function ToolCallList({ calls, modalTitle }: {
                 <WrenchIcon className="size-3.5 text-foreground-muted shrink-0" aria-hidden />
                 <span className="text-xs font-semibold">Tool calls</span>
                 <span className="ml-auto text-[10px] text-foreground-muted tabular-nums shrink-0">{calls.length}</span>
-                <ChevronDown className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', open && 'rotate-180')} />
+                <ChevronRight className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', open && 'rotate-90')} />
             </button>
             {open && (
                 <div className="flex flex-wrap gap-1 bg-transparent py-2 pl-10 pr-3">
@@ -2569,9 +2708,10 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
 }
 
 function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
+    const { locale } = useLocale();
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
-    const dur = (event.startedAt != null && event.completedAt != null)
-        ? formatDuration(event.completedAt - event.startedAt) : null;
     const startClock = formatClockMs(event.startedAt);
     const endClock = formatClockMs(event.completedAt);
     const title = event.name || firstMeaningfulLine(event.summary) || km.label;
@@ -2579,10 +2719,17 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
     const spawnedChild = event.kind === 'task' && event.spawnedChildId
         ? node.children.find(c => c.id === event.spawnedChildId)
         : undefined;
+    const durationMs = event.kind === 'task'
+        ? spawnedChild?.stats.durationMs
+        : (event.startedAt != null && event.completedAt != null)
+            ? event.completedAt - event.startedAt
+            : undefined;
+    const dur = durationMs == null ? null : formatDuration(durationMs);
 
     const responseText =
         event.kind === 'llm' ? (event.interaction?.content || event.summary || '')
         : event.kind === 'user' ? (event.summary || event.interaction?.content || '')
+        : event.kind === 'ras' ? (event.summary || event.interaction?.content || '')
         : '';
 
     const argsStr = event.args !== undefined
@@ -2613,7 +2760,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                     {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
                     {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
                     {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
-                    <span style={{ opacity: 0.6 }}>from: {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
+                    <span style={{ opacity: 0.6 }}>{locale === 'zh' ? '来源：' : 'from: '}{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
                     {event.toolStatus && !hasError && (
                         <span className="inline-flex items-center gap-1 text-success font-semibold">
                             <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
@@ -2625,6 +2772,25 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
 
             {/* Body — all sections use CompactSection for consistent truncated-preview + modal pattern */}
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.875rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                <RasReliabilityDetails markers={eventAnomalies} />
+
+                {event.relation && (
+                    <div className="rounded-md border border-border bg-background-secondary p-3 text-xs text-foreground-secondary">
+                        <div className="mb-1 font-semibold text-foreground">
+                            {event.relation.sourceType === 'goal-plus-semantic'
+                                ? (locale === 'zh' ? 'Goal Plus 编排关系' : 'Goal Plus orchestration relation')
+                                : (locale === 'zh' ? '跨 Session 关系' : 'Cross-session relation')}
+                        </div>
+                        <div>{event.relation.description}</div>
+                        {event.relation.anchorState !== 'confirmed' && (
+                            <div className="mt-1 text-foreground-muted">
+                                {locale === 'zh'
+                                    ? '该节点来自只读关系投影，未改写原生 Trace，也未推断具体启动调用位置。'
+                                    : 'This node is a read-only relation projection; the native trace and exact spawn position were not changed.'}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (
@@ -2718,7 +2884,14 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
 
     const snapshot = useMemo(
-        () => buildLlmPromptSnapshot(event, node, interactions, framework === 'langfuse-langgraph'),
+        () => buildLlmPromptSnapshot(
+            event,
+            node,
+            interactions,
+            framework === 'actrail'
+                ? 'actrail'
+                : framework === 'langfuse-langgraph' ? 'langfuse' : null,
+        ),
         [event, node, interactions, framework],
     );
 
@@ -2812,7 +2985,7 @@ function EmptyDetail() {
 // ─── AgentDetail (right panel) ────────────────────────────────────────────────
 function AgentDetail({
     node, highlightEvent, activeTab, onTabChange, eventTypeFilter, onEventTypeFilterChange,
-    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId
+    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId, parentAgent
 }: {
     node: AgentNode;
     highlightEvent: AgentEvent | null;
@@ -2826,6 +2999,7 @@ function AgentDetail({
     traceSkills: TraceSkillUsage[];
     currentUser?: string | null;
     rootExecutionId?: string;
+    parentAgent?: ParentAgentReference | null;
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
@@ -2901,7 +3075,7 @@ function AgentDetail({
             </div>
 
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.75rem 1rem' }}>
-                {activeTab === 'overview' && <OverviewTab node={node} status={status} onSelectChild={onSelectChild} />}
+                {activeTab === 'overview' && <OverviewTab node={node} status={status} onSelectChild={onSelectChild} parentAgent={parentAgent} />}
                 {activeTab === 'timeline' && (
                     <TimelineTab
                         events={visibleEvents}
@@ -3331,8 +3505,9 @@ function SkillUsageCard({ skill, currentUser }: { skill: TraceSkillUsage; curren
 }
 
 // ─── OverviewTab ──────────────────────────────────────────────────────────────
-function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status: NodeStatus; onSelectChild: (id: string) => void }) {
+function OverviewTab({ node, status, onSelectChild, parentAgent }: { node: AgentNode; status: NodeStatus; onSelectChild: (id: string) => void; parentAgent?: ParentAgentReference | null }) {
     const overviewCtx = React.useContext(TraceCtx);
+    const { locale } = useLocale();
     const stats = aggregateSubtreeStats(node);
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -3376,6 +3551,8 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
                     })}
                 </div>
             </div>
+
+            <ParentAgentCard parent={parentAgent ?? null} onNavigate={overviewCtx.onSubagentNavigate} locale={locale} />
 
             {node.children.length > 0 && (
                 <div>
@@ -3436,15 +3613,17 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
 
 // ─── TopNPanel ────────────────────────────────────────────────────────────────
 function TopNPanel() {
-    const { topNDuration, topNTokens, slowNodesList, onJumpToKey } = React.useContext(TraceCtx);
-    const [tab, setTab] = useState<'duration' | 'tokens' | 'slow'>('duration');
+    const { topNDuration, topNTokens, slowNodesList, rasNodeList, onJumpToKey } = React.useContext(TraceCtx);
+    const { locale } = useLocale();
+    const [tab, setTab] = useState<'duration' | 'tokens' | 'slow' | 'ras'>('duration');
 
-    if (topNDuration.length === 0 && topNTokens.length === 0 && slowNodesList.length === 0) return null;
+    if (topNDuration.length === 0 && topNTokens.length === 0 && slowNodesList.length === 0 && rasNodeList.length === 0) return null;
 
-    const tabs: { id: 'duration' | 'tokens' | 'slow'; icon: string; label: string; count: number }[] = [
+    const tabs: { id: 'duration' | 'tokens' | 'slow' | 'ras'; icon: string; label: string; count: number }[] = [
         { id: 'duration', icon: '⏱', label: '耗时 Top 5', count: topNDuration.length },
         { id: 'tokens',   icon: '💬', label: 'Token Top 5', count: topNTokens.length },
-        { id: 'slow',     icon: '⚠', label: '异常节点', count: slowNodesList.length },
+        { id: 'slow',     icon: '⚠', label: '慢节点', count: slowNodesList.length },
+        { id: 'ras',      icon: '🛡', label: '故障节点', count: rasNodeList.length },
     ];
 
     const items = tab === 'duration' ? topNDuration : tab === 'tokens' ? topNTokens : slowNodesList;
@@ -3463,7 +3642,7 @@ function TopNPanel() {
                             cursor: 'pointer', fontWeight: tab === t.id ? 600 : 400, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
                         }}>
                             <span>{t.icon}</span>
-                            <span style={{ display: 'none' }}>{t.label}</span>
+                            <span style={{ whiteSpace: 'nowrap' }}>{t.label}</span>
                             <span style={{ fontSize: '0.5rem', padding: '0 3px', borderRadius: 6, background: tab === t.id ? 'var(--primary-subtle)' : 'var(--background-tertiary)', color: tab === t.id ? 'var(--primary)' : 'var(--foreground-muted)', minWidth: 14, textAlign: 'center' }}>
                                 {t.count}
                             </span>
@@ -3472,9 +3651,28 @@ function TopNPanel() {
                 </div>
                 {/* Items */}
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    {items.length === 0 ? (
+                    {tab !== 'ras' && items.length === 0 ? (
                         <div className="p-3 text-sm text-foreground-muted text-center italic">No data</div>
-                    ) : items.map((span, i) => {
+                    ) : tab === 'ras' && rasNodeList.length === 0 ? (
+                        <div className="p-3 text-sm text-foreground-muted text-center italic">No data</div>
+                    ) : tab === 'ras' ? rasNodeList.map((ras, i) => {
+                        return (
+                            <div
+                                key={ras.key}
+                                onClick={() => onJumpToKey(ras.key)}
+                                className={cn(
+                                    'flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors hover:bg-background-secondary',
+                                    i < rasNodeList.length - 1 && 'border-b border-border',
+                                )}
+                            >
+                                <span className="text-xs text-foreground-muted tabular-nums w-3 shrink-0 text-right">{i + 1}</span>
+                                {ras.marker && <RasNodeBadge markers={[ras.marker]} compact className="shrink-0" />}
+                                {!ras.marker && <span className="inline-flex items-center rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 text-foreground-muted">{rasEventKindBadgeLabel(locale)}</span>}
+                                <span className="flex-1 text-xs text-foreground truncate">{ras.label}</span>
+                                <span className="text-xs text-primary shrink-0">→</span>
+                            </div>
+                        );
+                    }) : items.map((span, i) => {
                         const metric = tab === 'tokens'
                             ? (span.tokens ? exactTokens(span.tokens) : '-')
                             : (span.durationMs ? formatDuration(span.durationMs) : '-');
@@ -3634,6 +3832,8 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
     node: AgentNode; interactions: RawInteraction[];
 }) {
     const [modalOpen, setModalOpen] = useState(false);
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const meta = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null) ? formatDuration(event.completedAt - event.startedAt) : null;
     const time = event.startedAt != null ? new Date(event.startedAt).toLocaleTimeString() : '';
@@ -3667,6 +3867,9 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
                     <div className="text-sm text-foreground line-clamp-2 break-words leading-snug">
                         {summaryText}
                     </div>
+                    {eventAnomalies.length > 0 && (
+                        <RasNodeBadge markers={eventAnomalies} className="mt-1" />
+                    )}
                     <div className="text-xs text-foreground-muted mt-0.5 flex flex-wrap gap-2 items-center">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}
@@ -3828,6 +4031,8 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
     dur: string | null; time: string; onClose: () => void;
     node: AgentNode; interactions: RawInteraction[];
 }) {
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const title = event.name || event.summary?.slice(0, 60) || km.label;
 
@@ -3844,6 +4049,7 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                     </div>
                 </DialogHeader>
                 <div className="overflow-auto p-4 flex flex-col gap-4">
+                    <RasReliabilityDetails markers={eventAnomalies} />
                     {event.kind === 'llm' && (
                         <LLMEventBody
                             event={event}
@@ -3853,8 +4059,8 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                         />
                     )}
                     {event.kind === 'user' && (event.summary || event.interaction?.content) && <ModalSection label="Message"><LLMContent text={event.summary || event.interaction?.content || ''} /></ModalSection>}
-                    {event.kind !== 'llm' && event.args !== undefined && <ModalSection label="Input"><ModalCodeBlock value={event.args} /></ModalSection>}
-                    {event.kind !== 'llm' && event.output !== undefined && event.output !== null && <ModalSection label="Output"><ModalCodeBlock value={event.output} /></ModalSection>}
+                    {event.kind !== 'llm' && event.kind !== 'ras' && event.args !== undefined && <ModalSection label="Input"><ModalCodeBlock value={event.args} /></ModalSection>}
+                    {event.kind !== 'llm' && event.kind !== 'ras' && event.output !== undefined && event.output !== null && <ModalSection label="Output"><ModalCodeBlock value={event.output} /></ModalSection>}
                     {event.spawnedChildId && <div className="text-sm text-primary">Sub-agent spawned — click in the tree to jump.</div>}
                 </div>
             </DialogContent>
@@ -3921,7 +4127,7 @@ function ModalCodeBlock({ value }: { value: unknown }) {
     return (
         <SmartViewer
             text={text}
-            toolbar={false}
+            toolbar
             maxHeight={560}
             theme="light"
         />

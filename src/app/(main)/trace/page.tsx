@@ -37,6 +37,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
+import { loadTraceFacetValues } from '@/lib/client/trace-facets';
 import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
 
@@ -133,15 +134,19 @@ interface Execution {
     model?: string;
     label?: string;
     is_evaluating?: boolean;
-    trace_status?: 'running' | 'success' | 'failed' | string | null;
-    traceStatus?: 'running' | 'success' | 'failed' | string | null;
+    trace_status?: 'running' | 'success' | 'failed' | 'timed_out' | string | null;
+    traceStatus?: 'running' | 'success' | 'failed' | 'timed_out' | string | null;
     trace_completed_at?: string | null;
     traceCompletedAt?: string | null;
     trace_status_reason?: string | null;
     traceStatusReason?: string | null;
+    anomalyStatus?: 'normal' | 'abnormal' | 'detecting' | 'unknown' | string | null;
+    anomaly_status?: 'normal' | 'abnormal' | 'detecting' | 'unknown' | string | null;
+    anomalyCount?: number | null;
     judgment_reason?: string;
     failures?: any[];
     agentOwnership?: string | null;
+    observedIp?: string | null;
     user?: string | null;
     userTags?: TraceUserTag[];
 }
@@ -171,17 +176,20 @@ type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
+const TRACE_LIST_REFRESH_MS = 5_000;
 
-type TraceColumnKey = 'traceId' | 'agent' | 'status' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
+type TraceColumnKey = 'traceId' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
 type ResizableColKey = TraceColumnKey;
 
-const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'status', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
+const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'ip', 'status', 'anomaly', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
     traceId:    130,
     task:       280,
     agent:      170,
+    ip:         160,
     status:     110,
+    anomaly:    110,
     userTags:   220,
     systemTags: 220,
     tokens:     110,
@@ -192,7 +200,9 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
     traceId:    90,
     task:       280,
     agent:      100,
+    ip:         120,
     status:     80,
+    anomaly:    80,
     userTags:   150,
     systemTags: 140,
     tokens:     70,
@@ -202,7 +212,9 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
 const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
     traceId: true,
     agent: true,
+    ip: false,
     status: true,
+    anomaly: true,
     userTags: true,
     systemTags: false,
     task: true,
@@ -213,7 +225,7 @@ const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
 const MAX_COLUMN_WIDTH = 640;
 const MAX_TASK_COLUMN_WIDTH = 1600;
 const COL_WIDTHS_STORAGE_KEY = 'trace.columnWidths.v1';
-const COL_VISIBILITY_STORAGE_KEY = 'trace.columnVisibility.v1';
+const COL_VISIBILITY_STORAGE_KEY = 'trace.columnVisibility.v2';
 function getInvokedSkillNames(execution: Execution): string[] {
     const invoked = Array.isArray(execution.invoked_skills)
         ? execution.invoked_skills
@@ -226,7 +238,7 @@ function getInvokedSkillNames(execution: Execution): string[] {
     return Array.from(names);
 }
 
-type ExecutionStatus = 'running' | 'success' | 'failed' | 'interrupted';
+type ExecutionStatus = 'running' | 'success' | 'failed' | 'interrupted' | 'timed_out';
 
 function getExecStatus(e: Execution): ExecutionStatus {
     const executionStatus = String(e.executionStatus ?? e.execution_status ?? '').trim().toLowerCase();
@@ -236,7 +248,7 @@ function getExecStatus(e: Execution): ExecutionStatus {
     if (executionStatus === 'in_progress') return 'running';
     const status = String(e.trace_status ?? e.traceStatus ?? '').trim().toLowerCase();
     if (status === 'interrupted') return 'interrupted';
-    if (status === 'running' || status === 'success' || status === 'failed') return status;
+    if (status === 'running' || status === 'success' || status === 'failed' || status === 'timed_out') return status;
     return e.trace_completed_at || e.traceCompletedAt ? 'success' : 'running';
 }
 
@@ -250,6 +262,47 @@ function getExecutionSourceLabel(sourceKind: string): string {
     if (sourceKind === 'ide') return 'IDE';
     if (sourceKind === 'app_server') return 'App Server';
     return sourceKind || 'Unknown';
+}
+
+function ReliabilityAnomalyChip({
+    executionId,
+    locale,
+}: {
+    executionId: string
+    locale: 'zh' | 'en'
+}) {
+    const [status, setStatus] = useState<string | null>(null)
+    useEffect(() => {
+        const id = executionId.trim()
+        if (!id) return
+        let cancelled = false
+        void apiFetch(`/api/observe/executions/${encodeURIComponent(id)}/reliability`)
+            .then(async (res) => {
+                if (!res.ok) return null
+                return res.json()
+            })
+            .then((data) => {
+                if (cancelled || !data) return
+                setStatus(String(data.anomalyStatus || 'unknown'))
+            })
+            .catch(() => {
+                if (!cancelled) setStatus(null)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [executionId])
+    if (status !== 'abnormal' && status !== 'detecting') return null
+    return (
+        <StatusBadge
+            status={status === 'detecting' ? 'running' : 'error'}
+            label={
+                status === 'detecting'
+                    ? (locale === 'zh' ? '检测中' : 'Detecting')
+                    : (locale === 'zh' ? '有异常' : 'Abnormal')
+            }
+        />
+    )
 }
 
 function getFrameworkLabel(framework?: string | null): string {
@@ -477,7 +530,7 @@ export default function TracePage() {
 }
 
 function TracePageContent() {
-    const { user } = useAuth();
+    const { user, apiKey } = useAuth();
     const { t, locale } = useLocale();
     const [data, setData] = useState<Execution[]>([]);
     const [total, setTotal] = useState(0);
@@ -499,10 +552,32 @@ function TracePageContent() {
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState<TraceImportResult | null>(null);
     const [reloadKey, setReloadKey] = useState(0);
+    const listRequestPendingRef = useRef(false);
+
+    useEffect(() => {
+        if (!user) return;
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible' && !listRequestPendingRef.current) {
+                setReloadKey(value => value + 1);
+            }
+        };
+        const timer = window.setInterval(refreshWhenVisible, TRACE_LIST_REFRESH_MS);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
+    }, [user]);
+
+    const handleExecutionRefresh = useCallback((latest: Execution) => {
+        setSelectedExecution(previous => previous?.task_id === latest.task_id ? latest : previous);
+        setData(previous => previous.map(item => item.upload_id === latest.upload_id ? latest : item));
+    }, []);
 
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', parseAsString.withDefault('all'));
+    const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', parseAsString.withDefault('all'));
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', parseAsString.withDefault('all'));
     const [sourceFilter, setSourceFilter] = useQueryState('source', parseAsString.withDefault('all'));
     const [agentFilter, setAgentFilter] = useQueryState('agent', parseAsString.withDefault('all'));
@@ -557,10 +632,8 @@ function TracePageContent() {
             return;
         }
         Promise.all([
-            apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=framework`)
-                .then(r => r.ok ? r.json() : []),
-            apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=sourceKind`)
-                .then(r => r.ok ? r.json() : []),
+            loadTraceFacetValues(user, 'framework').catch(() => []),
+            loadTraceFacetValues(user, 'sourceKind').catch(() => []),
             apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&summary=agents&databasePagination=1`)
                 .then(r => r.ok ? r.json() : { agents: [] }),
         ]).then(([frameworkRows, sourceRows, agentRows]) => {
@@ -615,7 +688,9 @@ function TracePageContent() {
     const columnLabels = useMemo<Record<TraceColumnKey, string>>(() => ({
         traceId: t('tracePage.columnTraceId'),
         agent: t('tracePage.columnAgent'),
+        ip: t('tracePage.columnIp'),
         status: t('tracePage.columnStatus'),
+        anomaly: t('tracePage.columnAnomaly'),
         userTags: t('tracePage.columnUserTags'),
         systemTags: t('tracePage.columnSystemTags'),
         task: t('tracePage.columnTask'),
@@ -650,7 +725,7 @@ function TracePageContent() {
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
-        setTaskIdParam(id);
+        void setTaskIdParam(id, { history: id ? 'push' : 'replace' });
         if (id) reportTraceDetailView(id);
     }, [setTaskIdParam, reportTraceDetailView]);
 
@@ -689,7 +764,14 @@ function TracePageContent() {
         sortDir,
         pageSize,
     ]);
+    const listRequestKey = useMemo(() => JSON.stringify([
+        user,
+        listFilterKey,
+        reliabilityAnomalyFilter,
+        page,
+    ]), [listFilterKey, page, reliabilityAnomalyFilter, user]);
     const previousListFilterKeyRef = useRef(listFilterKey);
+    const previousListRequestKeyRef = useRef<string | null>(null);
     useEffect(() => {
         if (!taskIdParam) {
             if (selectedExecution) setSelectedExecution(null);
@@ -698,6 +780,7 @@ function TracePageContent() {
         }
         const exec = data.find(e => e.task_id === taskIdParam || e.upload_id === taskIdParam);
         if (exec) {
+            fetchGuardRef.current = null;
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }
@@ -734,7 +817,11 @@ function TracePageContent() {
             return;
         }
         if (!user) return;
-        setLoading(true);
+        const controller = new AbortController();
+        listRequestPendingRef.current = true;
+        const silentRefresh = previousListRequestKeyRef.current === listRequestKey;
+        previousListRequestKeyRef.current = listRequestKey;
+        if (!silentRefresh) setLoading(true);
         const scopeParam = agentScopeFilter === 'subagent'
             ? '&onlySubagents=1'
             : agentScopeFilter === 'all'
@@ -750,7 +837,7 @@ function TracePageContent() {
         const sourceParam = sourceFilter !== 'all' ? `&sourceKind=${encodeURIComponent(sourceFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${sourceParam}${agentParam}${ownershipParam}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${sourceParam}${agentParam}${ownershipParam}`, { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -766,15 +853,27 @@ function TracePageContent() {
             })
             .catch(() => {
                 if (listRequestIdRef.current !== requestId) return;
-                setData([]);
-                setTotal(0);
-                setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
+                if (!silentRefresh) {
+                    setData([]);
+                    setTotal(0);
+                    setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
+                }
             })
             .finally(() => {
-                if (listRequestIdRef.current === requestId) setLoading(false);
+                if (listRequestIdRef.current !== requestId) return;
+                listRequestPendingRef.current = false;
+                setLoading(false);
             });
+        return () => {
+            controller.abort();
+            if (listRequestIdRef.current === requestId) {
+                listRequestIdRef.current += 1;
+                listRequestPendingRef.current = false;
+            }
+        };
     }, [
         user,
+        apiKey,
         agentScopeFilter,
         skillFilter,
         selectedUserTagIds,
@@ -785,6 +884,7 @@ function TracePageContent() {
         agentFilter,
         ownershipFilter,
         anomalyFilter,
+        reliabilityAnomalyFilter,
         timeFilter,
         sortKey,
         sortDir,
@@ -792,6 +892,7 @@ function TracePageContent() {
         pageSize,
         reloadKey,
         listFilterKey,
+        listRequestKey,
         setPage,
     ]);
 
@@ -887,7 +988,7 @@ function TracePageContent() {
     }, [page, totalPages, setPage]);
 
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || selectedUserTagIds.length > 0
-        || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
+        || anomalyFilter !== 'all' || reliabilityAnomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
         || sourceFilter !== 'all'
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
@@ -897,6 +998,7 @@ function TracePageContent() {
         setSkillFilter('all');
         updateUserTagFilters([]);
         setAnomalyFilter('all');
+        setReliabilityAnomalyFilter('all');
         setTimeFilter('all');
         setFrameworkFilter('all');
         setSourceFilter('all');
@@ -917,6 +1019,13 @@ function TracePageContent() {
         { value: 'success', label: t('tracePage.statusSuccess') },
         { value: 'failed', label: t('tracePage.statusFailed') },
         { value: 'interrupted', label: locale === 'zh' ? '已中断' : 'Interrupted' },
+        { value: 'timed_out', label: t('tracePage.statusTimedOut') },
+    ];
+    const reliabilityAnomalyOptions: SelectOption[] = [
+        { value: 'all', label: t('common.all') },
+        { value: 'abnormal', label: locale === 'zh' ? '有异常' : 'Abnormal' },
+        { value: 'detecting', label: locale === 'zh' ? '检测中' : 'Detecting' },
+        { value: 'normal', label: locale === 'zh' ? '无异常' : 'No anomaly' },
     ];
     const timeOptions: SelectOption[] = [
         { value: 'all', label: t('common.allTime') },
@@ -944,6 +1053,7 @@ function TracePageContent() {
                 title={<Term id="trace" label={t('nav.trace')} />}
                 actions={!selectedExecution ? (
                     <>
+                        <Button variant="outline" size="sm" asChild><Link href="/observe/collaborations">协作图</Link></Button>
                         <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
                         <Button variant="outline" size="sm" disabled={!user || importing} onClick={() => importInputRef.current?.click()}>
                             <Download className="size-3.5" aria-hidden />
@@ -956,7 +1066,9 @@ function TracePageContent() {
             <PageContainer>
                 {selectedExecution ? (
                     <TraceDetailView
+                        key={selectedExecution.task_id || selectedExecution.upload_id}
                         execution={selectedExecution}
+                        onExecutionRefresh={handleExecutionRefresh}
                         onBack={() => handleSelectExecution(null)}
                         availableTags={availableTags}
                         onTagsChanged={handleTraceTagsChanged}
@@ -1017,6 +1129,13 @@ function TracePageContent() {
                                 active={anomalyFilter !== 'all'}
                             />
                             <Select
+                                label={locale === 'zh' ? '可靠性异常' : 'Reliability'}
+                                value={reliabilityAnomalyFilter}
+                                onChange={setReliabilityAnomalyFilter}
+                                options={reliabilityAnomalyOptions}
+                                active={reliabilityAnomalyFilter !== 'all'}
+                            />
+                            <Select
                                 label={t('tracePage.filterTime')}
                                 value={timeFilter}
                                 onChange={setTimeFilter}
@@ -1061,7 +1180,7 @@ function TracePageContent() {
                                 active={agentScopeFilter !== 'root'}
                             />
                             {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto h-7 gap-1 text-xs text-foreground-muted">
+                                <Button variant="ghost" size="sm" onClick={resetFilters} className="h-7 gap-1 text-xs text-foreground-muted">
                                     <XIcon className="size-3" />
                                     {t('tracePage.resetFilters')}
                                 </Button>
@@ -1191,7 +1310,9 @@ function TracePageContent() {
                                                 <col style={{ width: taskWidthCustomized ? widths.task : undefined }} />
                                             )}
                                             {columnVisibility.agent && <col style={{ width: widths.agent }} />}
+                                            {columnVisibility.ip && <col style={{ width: widths.ip }} />}
                                             {columnVisibility.status && <col style={{ width: widths.status }} />}
+                                            {columnVisibility.anomaly && <col style={{ width: widths.anomaly }} />}
                                             {columnVisibility.userTags && <col style={{ width: widths.userTags }} />}
                                             {columnVisibility.systemTags && <col style={{ width: widths.systemTags }} />}
                                             {columnVisibility.tokens && <col style={{ width: widths.tokens }} />}
@@ -1223,10 +1344,20 @@ function TracePageContent() {
                                                         <Term id="agent" label={t('tracePage.columnAgent')} />
                                                     </SortableTh>
                                                 )}
+                                                {columnVisibility.ip && (
+                                                    <Th colKey="ip" currentWidth={widths.ip} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnIp')}
+                                                    </Th>
+                                                )}
                                                 {columnVisibility.status && (
                                                     <SortableTh sortKey="status" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="status" currentWidth={widths.status} onResize={setColumnWidth}>
                                                         <Term id="chain-status" label={t('tracePage.columnStatus')} />
                                                     </SortableTh>
+                                                )}
+                                                {columnVisibility.anomaly && (
+                                                    <Th colKey="anomaly" currentWidth={widths.anomaly} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnAnomaly')}
+                                                    </Th>
                                                 )}
                                                 {columnVisibility.userTags && <Th colKey="userTags" currentWidth={widths.userTags} onResize={setColumnWidth}>{t('tracePage.columnUserTags')}</Th>}
                                                 {columnVisibility.systemTags && <Th colKey="systemTags" currentWidth={widths.systemTags} onResize={setColumnWidth}>{t('tracePage.columnSystemTags')}</Th>}
@@ -1323,7 +1454,7 @@ function TracePageContent() {
                         <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
                             const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
                             setImportResult(null);
-                            if (targetId) void setTaskIdParam(targetId);
+                            if (targetId) void setTaskIdParam(targetId, { history: 'push' });
                         }}>
                             {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
                         </Button>
@@ -1336,19 +1467,21 @@ function TracePageContent() {
 
 function TraceDetailView({
     execution,
+    onExecutionRefresh,
     onBack,
     availableTags,
     onTagsChanged,
     onTagCreated,
 }: {
     execution: Execution;
+    onExecutionRefresh: (execution: Execution) => void;
     onBack: () => void;
     availableTags: TraceUserTag[];
     onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
     onTagCreated: (tag: TraceUserTag) => void;
 }) {
     const { t, locale } = useLocale();
-    const { user } = useAuth();
+    const { user, apiKey } = useAuth();
     const router = useRouter();
     const searchParams = useSearchParams();
     const [session, setSession] = useState<any | null>(null);
@@ -1382,32 +1515,75 @@ function TraceDetailView({
     }, [parentExecutionId, navigateToTaskId]);
 
     const execStatus = getExecStatus(execution);
-    const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running');
+    const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running' || execStatus === 'timed_out');
     const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
     const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
+    const [rasMarkers, setRasMarkers] = useState<any[]>([]);
 
     const sessionRef = useRef<any | null>(null);
+    const sessionRequestRef = useRef(0);
     useEffect(() => { sessionRef.current = session; }, [session]);
+
+    useEffect(() => {
+        const executionId = String(execution.upload_id || '').trim();
+        if (!executionId) {
+            setRasMarkers([]);
+            return;
+        }
+        let cancelled = false;
+        apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/reliability?locale=${locale === 'zh' ? 'zh' : 'en'}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (cancelled) return;
+                setRasMarkers(Array.isArray(data?.markers) ? data.markers : []);
+            })
+            .catch(() => {
+                if (!cancelled) setRasMarkers([]);
+            });
+        return () => { cancelled = true; };
+    }, [execution.upload_id, locale]);
 
     const fetchSession = useCallback((silent = false) => {
         if (!taskId) return;
+        const requestId = ++sessionRequestRef.current;
         const isInitial = !sessionRef.current;
         if (!silent && isInitial) setLoading(true);
         if (!user) return;
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}&view=structure`)
+        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskId)}&fields=light&includeTags=1&includeEvaluations=0&skipAutoEvalReady=1`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+            .then(response => response.ok ? response.json() : null)
+            .then(records => { if (requestId === sessionRequestRef.current && Array.isArray(records) && records[0]) onExecutionRefresh(records[0]); })
+            .catch(() => {});
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
-            .then(j => { setSession(j); setSecondsSinceRefresh(0); })
-            .catch(() => { if (!silent && isInitial) setSession({ error: 'Network error' }); })
-            .finally(() => { if (!silent && isInitial) setLoading(false); });
-    }, [taskId, user]);
+            .then(j => {
+                if (requestId !== sessionRequestRef.current) return;
+                const wasWaiting = ['pending', 'unavailable'].includes(sessionRef.current?.parentAgent?.state);
+                if (!wasWaiting && ['pending', 'unavailable'].includes(j.parentAgent?.state)) setAutoRefresh(true);
+                setSession(j);
+                setSecondsSinceRefresh(0);
+            })
+            .catch(() => { if (requestId === sessionRequestRef.current && !silent && isInitial) setSession({ error: 'Network error' }); })
+            .finally(() => { if (requestId === sessionRequestRef.current) setLoading(false); });
+    }, [taskId, user, apiKey, onExecutionRefresh]);
+
+    useEffect(() => () => { sessionRequestRef.current += 1; }, [taskId]);
 
     useEffect(() => { fetchSession(false); }, [fetchSession]);
 
+    const waitingForParent = session?.parentAgent?.state === 'pending' || session?.parentAgent?.state === 'unavailable';
+
     useEffect(() => {
-        if (!autoRefresh || execStatus !== 'running') return;
-        const id = setInterval(() => fetchSession(true), refreshIntervalSec * 1000);
-        return () => clearInterval(id);
-    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus]);
+        if (!autoRefresh || (!waitingForParent && execStatus !== 'running' && execStatus !== 'timed_out')) return;
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible') fetchSession(true);
+        };
+        const id = window.setInterval(refreshWhenVisible, refreshIntervalSec * 1000);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            window.clearInterval(id);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
+    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus, waitingForParent]);
 
     useEffect(() => {
         const id = setInterval(() => setSecondsSinceRefresh(s => s + 1), 1000);
@@ -1415,20 +1591,24 @@ function TraceDetailView({
     }, []);
 
     const loadInteraction = useCallback(async (index: number) => {
+        const source = sessionRef.current?.interactions?.[index]?._collaboration;
+        const sourceTaskId = source?.taskId ?? taskId;
+        const sourceIndex = source?.index ?? index;
         const response = await apiFetch(
-            `/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user || '')}&view=interaction&index=${index}`,
+            `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&user=${encodeURIComponent(user || '')}&view=interaction&index=${sourceIndex}${source ? "&source=raw" : ""}`,
+            { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} },
         );
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
         return body?.interaction;
-    }, [taskId, user]);
+    }, [taskId, user, apiKey]);
 
     const loadFullInteractions = useCallback(async () => {
-        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user || '')}&view=interactions`);
+        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user || '')}&view=interactions`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
         return Array.isArray(body?.interactions) ? body.interactions : [];
-    }, [taskId, user]);
+    }, [taskId, user, apiKey]);
 
     const { framework } = execution;
     // The list row may be a partial snapshot captured while a streaming trace is
@@ -1445,7 +1625,7 @@ function TraceDetailView({
         ? latestExecution.cost
         : execution.cost;
     const executionSource = getExecutionSource(execution);
-    const isRunning = execStatus === 'running';
+    const isRunning = execStatus === 'running' || execStatus === 'timed_out';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
     const downloadSessionJson = async () => {
@@ -1511,13 +1691,19 @@ function TraceDetailView({
                 )}
                 <IdChip value={taskId} head={8} tail={6} />
                 <StatusBadge
-                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : execStatus === 'interrupted' ? 'cancelled' : 'success'}
+                    title={execStatus === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined}
+                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : execStatus === 'interrupted' ? 'cancelled' : execStatus === 'timed_out' ? 'warning' : 'success'}
                     label={
                         execStatus === 'running' ? t('tracePage.statusRunning')
+                        : execStatus === 'timed_out' ? t('tracePage.statusTimedOut')
                         : execStatus === 'failed' ? t('tracePage.statusFailed')
                         : execStatus === 'interrupted' ? (locale === 'zh' ? '已中断' : 'Interrupted')
                         : t('tracePage.statusNormal')
                     }
+                />
+                <ReliabilityAnomalyChip
+                    executionId={String(execution.upload_id || '')}
+                    locale={locale === 'zh' ? 'zh' : 'en'}
                 />
                 {framework && <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(framework)}</Tag>}
                 {executionSource && <Tag variant="framework" icon={Layers}>{getExecutionSourceLabel(executionSource)}</Tag>}
@@ -1592,6 +1778,7 @@ function TraceDetailView({
                         <Database className="size-3.5" aria-hidden />
                         {locale === 'zh' ? '加入评测集' : 'Add to dataset'}
                     </Button>
+                    <Button variant="outline" size="sm" asChild className="h-7 text-xs"><Link href={`/observe/collaborations?traceTaskId=${encodeURIComponent(taskId)}`}>调用关系图</Link></Button>
                     <Button variant="default" size="sm" asChild className="h-7 text-xs">
                         <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
                     </Button>
@@ -1658,7 +1845,11 @@ function TraceDetailView({
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
+                        parentAgent={session?.taskId === taskId ? session.parentAgent : null}
+                        rootSessionId={taskId}
+                        traceIdentity={taskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
+                        rasMarkers={rasMarkers}
                     />
                 ) : (
                     <div className="rounded-md border border-card-border bg-card">
@@ -1819,9 +2010,10 @@ function SortableTh({
         >
             <span className="inline-flex items-center gap-1">
                 {children}
-                <span className={cn('text-[10px]', active ? 'opacity-100' : 'opacity-40')}>
-                    {active ? (dir === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
-                </span>
+                <svg aria-hidden="true" viewBox="0 0 12 16" className="h-4 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m3 6 3-3 3 3" className={active && dir === 'asc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                    <path d="m3 10 3 3 3-3" className={active && dir === 'desc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                </svg>
             </span>
             {resizable && <ResizeHandle colKey={colKey} currentWidth={currentWidth} onResize={onResize} />}
         </th>
@@ -1855,8 +2047,9 @@ function Row({
     const skillCount = getInvokedSkillNames(e).length;
     const agentCount = new Set((e.agents ?? []).filter(Boolean)).size;
     const isMultiAgent = agentCount > 1;
-    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : status === 'interrupted' ? 'cancelled' : 'success';
+    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : status === 'interrupted' ? 'cancelled' : status === 'timed_out' ? 'warning' : 'success';
     const statusLabel = status === 'running' ? t('tracePage.statusRunning')
+        : status === 'timed_out' ? t('tracePage.statusTimedOut')
         : status === 'failed' ? t('tracePage.statusFailed')
         : status === 'interrupted' ? (locale === 'zh' ? '已中断' : 'Interrupted')
         : t('tracePage.statusSuccess');
@@ -1885,7 +2078,7 @@ function Row({
             </Td>
             {columnVisibility.traceId && (
                 <Td>
-                    <IdChip value={id} head={6} tail={4} />
+                    <IdChip value={id} adaptive />
                 </Td>
             )}
             {columnVisibility.task && (
@@ -1907,9 +2100,33 @@ function Row({
                     )}
                 </Td>
             )}
+            {columnVisibility.ip && (
+                <Td>
+                    <span className="text-xs text-foreground-secondary font-mono whitespace-nowrap" title={e.observedIp || undefined}>
+                        {e.observedIp || '—'}
+                    </span>
+                </Td>
+            )}
             {columnVisibility.status && (
                 <Td>
-                    <StatusBadge status={statusKind} label={statusLabel} />
+                    <StatusBadge status={statusKind} label={statusLabel} title={status === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined} />
+                </Td>
+            )}
+            {columnVisibility.anomaly && (
+                <Td>
+                    {(() => {
+                        const anomaly = String(e.anomalyStatus ?? e.anomaly_status ?? '');
+                        if (anomaly === 'abnormal') {
+                            return <StatusBadge status="error" label={locale === 'zh' ? '有异常' : 'Abnormal'} />;
+                        }
+                        if (anomaly === 'detecting') {
+                            return <StatusBadge status="running" label={locale === 'zh' ? '检测中' : 'Detecting'} />;
+                        }
+                        if (anomaly === 'normal') {
+                            return <StatusBadge status="success" label={locale === 'zh' ? '无异常' : 'No anomaly'} />;
+                        }
+                        return <span className="text-xs text-foreground-muted">—</span>;
+                    })()}
                 </Td>
             )}
             {columnVisibility.userTags && (

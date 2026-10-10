@@ -11,6 +11,7 @@ export const codexAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     subagentTree: true,
+    allowSnapshotShrink: true,
   },
   // Codex relay re-aggregates every execution from its complete durable spool.
   // Merging snapshots duplicates child turns and can corrupt their ownership.

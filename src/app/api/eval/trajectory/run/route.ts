@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
-import { findAgentDataset, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
+import {
+    cacheLiveRootCausesForDatasetCase,
+    findAgentDataset,
+    type AgentDatasetRecord,
+    type DatasetCase,
+} from '@/server/agent_datasets_storage';
 import { canReuseRootCauseCache, type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import {
     evaluateTrajectoryViaOpencode,
@@ -108,8 +113,8 @@ function generateRunId(): string {
     return `trun_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const CUSTOM_EVALUATOR_VARIABLE_RE = /\{\{\s*(input|output|reference_output|trajectory)\s*\}\}/g;
-type CustomEvaluatorVariable = 'input' | 'output' | 'reference_output' | 'trajectory';
+const CUSTOM_EVALUATOR_VARIABLE_RE = /\{\{\s*(input|dataset_input|output|reference_output|trajectory)\s*\}\}/g;
+type CustomEvaluatorVariable = 'input' | 'dataset_input' | 'output' | 'reference_output' | 'trajectory';
 
 function normalizeMatchText(value: string | null | undefined): string {
     return String(value || '').trim().replace(/\s+/g, ' ');
@@ -373,6 +378,7 @@ async function evaluateTaskCompletionAgainstExpected(
     actualOutput: string,
     precomputedRootCauses?: RootCauseItem[],
     precomputedRootCauseSource?: 'dataset-cache' | 'none',
+    onLiveRootCausesExtracted?: TaskCompletionEvalInput['onLiveRootCausesExtracted'],
     traceSummaryText?: string,
     skillContext?: TaskCompletionEvalInput['skillContext'],
     skillAttributionMode?: TaskCompletionEvalInput['skillAttributionMode'],
@@ -387,6 +393,7 @@ async function evaluateTaskCompletionAgainstExpected(
             actualOutput,
             precomputedRootCauses,
             precomputedRootCauseSource,
+            onLiveRootCausesExtracted,
             traceSummaryText,
             skillContext,
             skillAttributionMode,
@@ -508,7 +515,12 @@ async function persistResultJudgment(
 async function findMatchingDatasetCaseForTrace(
     user: string,
     traceQuery: string,
-    options: { requireExpectedOutput?: boolean; includeAllDatasetKinds?: boolean; allowedDatasetIds?: string[] } = {},
+    options: {
+        requireExpectedOutput?: boolean;
+        includeAllDatasetKinds?: boolean;
+        allowedDatasetIds?: string[];
+        allowSemanticMatch?: boolean;
+    } = {},
 ): Promise<MatchedDatasetCase> {
     const result = await matchAgentDatasetCase({
         user,
@@ -516,6 +528,7 @@ async function findMatchingDatasetCaseForTrace(
         requireExpectedOutput: options.requireExpectedOutput,
         includeAllDatasetKinds: options.includeAllDatasetKinds,
         allowedDatasetIds: options.allowedDatasetIds,
+        allowSemanticMatch: options.allowSemanticMatch,
     });
     if (result.reason === 'empty-input') {
         throw new StagedEvaluationError(
@@ -1153,7 +1166,17 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
             ])
             .filter(Boolean),
     );
+    const customVarsByEvaluator = new Map(
+        customEvaluatorBundles.map(item => [
+            item.evaluatorId,
+            collectCustomEvaluatorVariables([
+                item.bundle?.config.systemPrompt || '',
+                item.bundle?.config.userPrompt || '',
+            ]),
+        ]),
+    );
     const needsCustomReferenceOutput = requestedCustomVars.has('reference_output');
+    const needsCustomDatasetInput = requestedCustomVars.has('dataset_input');
     const needsCustomOutput = requestedCustomVars.has('output');
     const needsCustomTrajectory = requestedCustomVars.has('trajectory');
 
@@ -1333,14 +1356,15 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
             }
         }
     } else if (hasCustomEvaluators) {
-        // 自建评估器不强求数据集匹配。{{input}} 来自本次任务输入；
-        // 只有 prompt 实际用了 {{reference_output}} 时，才匹配数据集取预期输出。
-        if (needsCustomReferenceOutput) {
+        // 自建评估器不强求数据集匹配。{{input}} 来自本次任务输入；只有提示词实际用了
+        // {{reference_output}} 或 {{dataset_input}} 时才绑定数据集 case。
+        if (needsCustomReferenceOutput || needsCustomDatasetInput) {
             try {
                 const matched = await findMatchingDatasetCaseForTrace(user, traceQuery, {
-                    requireExpectedOutput: true,
+                    requireExpectedOutput: needsCustomReferenceOutput && !needsCustomDatasetInput,
                     includeAllDatasetKinds: true,
                     allowedDatasetIds: rowAllowedDatasetIds,
+                    allowSemanticMatch: !needsCustomDatasetInput,
                 });
                 caseEntry = matched.caseEntry;
                 matchedDatasetMeta = { id: matched.dataset.id, name: matched.dataset.name };
@@ -1353,12 +1377,18 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
                     },
                 });
             } catch (e) {
-                if (e instanceof StagedEvaluationError) throw e;
-                throw new StagedEvaluationError(
-                    'no-evaluable-case',
-                    `${NO_EVALUABLE_CASE_PREFIX} 自定义评估器需要 reference_output，但 trace 输入未匹配到带预期结果的数据集 case`,
-                    e,
-                );
+                if (needsCustomDatasetInput && e instanceof StagedEvaluationError && e.stage === 'no-evaluable-case') {
+                    caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '', rootCauses: [] };
+                    matchKind = 'fallback';
+                } else if (e instanceof StagedEvaluationError) {
+                    throw e;
+                } else {
+                    throw new StagedEvaluationError(
+                        'no-evaluable-case',
+                        `${NO_EVALUABLE_CASE_PREFIX} 自定义评估器需要数据集字段，但 trace 输入未匹配到可用的数据集 case`,
+                        e,
+                    );
+                }
             }
         } else {
             caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '', rootCauses: [] };
@@ -1374,22 +1404,47 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
             `${NO_EVALUABLE_CASE_PREFIX} 已匹配到 case，但该 case 缺少预期结果 expectedOutput，无法执行结果评测`,
         );
     }
-    if (hasCustomEvaluators && needsCustomReferenceOutput && !normalizeMatchText(caseEntry.expectedOutput)) {
-        throw new StagedEvaluationError(
-            'no-evaluable-case',
-            `${NO_EVALUABLE_CASE_PREFIX} 自定义评估器需要 reference_output，但未找到可用的预期结果 expectedOutput`,
-        );
-    }
+    const hasDeterministicDatasetInputMatch = Boolean(
+        caseEntry.id
+        && normalizeMatchText(caseEntry.input)
+        && normalizeMatchText(traceQuery).includes(normalizeMatchText(caseEntry.input)),
+    );
 
     const cachedRootCausesUsable = Boolean(
         caseEntry?.rootCauseMeta
         && canReuseRootCauseCache(caseEntry.expectedOutput, caseEntry.rootCauseMeta),
     );
-    const precomputedRootCauses = cachedRootCausesUsable && caseEntry?.rootCauseMeta?.status === 'ready'
+    const cachedReadyRootCausesUsable = Boolean(
+        cachedRootCausesUsable
+        && caseEntry?.rootCauseMeta?.status === 'ready'
+        && (caseEntry.rootCauses?.length || 0) > 0,
+    );
+    const precomputedRootCauses = cachedReadyRootCausesUsable
         ? caseEntry.rootCauses || []
         : undefined;
     const precomputedRootCauseSource = cachedRootCausesUsable
-        ? (caseEntry?.rootCauseMeta?.status === 'empty' ? 'none' : caseEntry?.rootCauseMeta?.status === 'ready' ? 'dataset-cache' : undefined)
+        ? (caseEntry?.rootCauseMeta?.status === 'empty' ? 'none' : cachedReadyRootCausesUsable ? 'dataset-cache' : undefined)
+        : undefined;
+    const liveRootCauseCacheTarget = matchedDatasetMeta?.id && caseEntry.id
+        ? {
+            datasetId: matchedDatasetMeta.id,
+            caseId: caseEntry.id,
+            expectedOutput: caseEntry.expectedOutput,
+        }
+        : null;
+    const onLiveRootCausesExtracted = liveRootCauseCacheTarget
+        ? async (rootCauses: RootCauseItem[]) => {
+            const status = await cacheLiveRootCausesForDatasetCase({
+                user,
+                ...liveRootCauseCacheTarget,
+                rootCauses,
+            });
+            if (status === 'stale' || status === 'conflict') {
+                console.warn(
+                    `[trajectory/run] skipped live root cause cache write (${status}) for ${liveRootCauseCacheTarget.datasetId}/${liveRootCauseCacheTarget.caseId}`,
+                );
+            }
+        }
         : undefined;
 
     const taskInputForEvaluation = traceQuery || caseEntry.input || '';
@@ -1622,6 +1677,7 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
                     resultActualOutput,
                     precomputedRootCauses,
                     precomputedRootCauseSource,
+                    onLiveRootCausesExtracted,
                     traceSummaryForResultEvaluation,
                     taskCompletionSkillContext,
                     resultSkillMode,
@@ -1770,10 +1826,29 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
         })() : '';
 
         const customResults: Array<Awaited<ReturnType<typeof runCustomLlmEvaluator>>> = await Promise.all(
-            customEvaluatorIds.map(evaluatorId =>
-                runCustomLlmEvaluator(user, evaluatorId, {
+            customEvaluatorIds.map(async evaluatorId => {
+                const evaluatorVars = customVarsByEvaluator.get(evaluatorId) || new Set<CustomEvaluatorVariable>();
+                const bundle = customEvaluatorBundles.find(item => item.evaluatorId === evaluatorId)?.bundle;
+                const unavailableReason = evaluatorVars.has('dataset_input') && !hasDeterministicDatasetInputMatch
+                    ? '不适用：实际任务输入未匹配到可用的数据集输入。'
+                    : evaluatorVars.has('reference_output') && !normalizeMatchText(caseEntry!.expectedOutput)
+                        ? '不适用：匹配的数据集 case 未提供预期输出。'
+                        : '';
+                if (unavailableReason) {
+                    return {
+                        evaluatorId,
+                        evaluatorName: bundle?.name || evaluatorId,
+                        score: null,
+                        reason: unavailableReason,
+                        rawResponse: '',
+                        model: bundle?.config.model || '',
+                        durationMs: 0,
+                    };
+                }
+                return runCustomLlmEvaluator(user, evaluatorId, {
                     caseInput: taskInputForEvaluation,
-                    expectedOutput: needsCustomReferenceOutput ? caseEntry!.expectedOutput : '',
+                    datasetInput: evaluatorVars.has('dataset_input') ? caseEntry!.input : '',
+                    expectedOutput: evaluatorVars.has('reference_output') ? caseEntry!.expectedOutput : '',
                     actualOutput: actualOutputForCustom,
                     traceText: traceTextForCustom,
                 }, evalSkillName, evalSkillVersion).catch(e => ({
@@ -1785,8 +1860,8 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
                     model: '',
                     durationMs: 0,
                     error: `运行异常：${(e as Error)?.message || String(e)}`,
-                })),
-            ),
+                }));
+            }),
         );
 
         const byId: Record<string, unknown> = {};
@@ -2008,7 +2083,7 @@ async function derivePointsAfterDone(
 }
 
 /** 并发执行（concurrency=RUN_CONCURRENCY），失败的行单独标 failed，不影响其他 */
-export async function runEvaluations(user: string, evaluatorRunId: string, resultIds: string[]) {
+async function runEvaluations(user: string, evaluatorRunId: string, resultIds: string[]) {
     const startedAt = Date.now();
     console.log(`[trajectory-eval] run ${evaluatorRunId} started: ${resultIds.length} traces, concurrency=${RUN_CONCURRENCY}`);
 

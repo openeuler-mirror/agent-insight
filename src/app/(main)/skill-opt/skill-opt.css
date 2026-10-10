@@ -810,6 +810,7 @@
     background: var(--primary);
     color: var(--primary-foreground);
     margin-left: auto;
+    width: fit-content;
     max-width: 78%;
 }
 /* agent 气泡：宽一点容纳 inline-block 工具/思考块。max-width 比 user 大，
@@ -1029,6 +1030,17 @@
     padding-left: 10px;
 }
 
+.skopt-middle .input-status {
+    border-top: 1px solid var(--border);
+    padding: 8px 20px 0;
+    background: var(--background);
+    color: var(--foreground-muted);
+    font-size: 12px;
+}
+.skopt-middle .input-status.error {
+    color: var(--error);
+}
+
 .skopt-middle .input-bar {
     border-top: 1px solid var(--border);
     padding: 14px 20px;
@@ -1067,6 +1079,10 @@
     transition: background 0.15s;
 }
 .skopt-middle .input-bar button:hover { background: var(--primary-hover); }
+.skopt-middle .input-bar button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
 
 /* ── Right: diff viewer (collapsible) ─────────────────────── */
 /* 打开时宽度走 --skopt-right-w（用户拖动 / localStorage 恢复），关闭时 0。 */

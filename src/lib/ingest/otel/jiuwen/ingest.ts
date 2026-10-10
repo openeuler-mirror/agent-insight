@@ -41,8 +41,10 @@ import {
   appendJiuwenSpans,
   readJiuwenSessionIndex,
   readJiuwenSpansForKeys,
-  pruneJiuwenSpool,
+  getJiuwenSpoolDir,
 } from './spool';
+import { acquireSpoolUse, readSpoolState, recordSpoolPersistence } from '@/lib/runtime-cleanup/spool-state';
+import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
 
 function coalesceIntervalMs(): number {
   const raw = Number(process.env.AGENT_INSIGHT_JIUWEN_COALESCE_MS);
@@ -54,36 +56,61 @@ function coalesceIntervalMs(): number {
  *  Re-resolves the session index at flush time so a deferred flush picks up any
  *  sibling traces / markers that arrived while it was queued. */
 async function flushGroupByKey(key: string, user?: string): Promise<string | null> {
-  const { sessionToKeys, multiTraceSessions, keyToSession } = readJiuwenSessionIndex();
+  const spoolRoot = getJiuwenSpoolDir();
+  const release = acquireSpoolUse(spoolRoot);
+  if (!release) throw new Error('Telemetry spool maintenance in progress; retry aggregation');
+  try {
+    const { sessionToKeys, multiTraceSessions, keyToSession } = readJiuwenSessionIndex();
 
-  // Stitch sibling traces only when the session is a genuine multi-trace (team /
-  // fan-out) run; otherwise this trace stands alone (single agent — never merge
-  // separate invocations that happen to share the hard-coded session id).
-  const sess = keyToSession.get(key);
-  const stitched = !!sess && multiTraceSessions.has(sess);
-  const groupKeys = stitched
-    ? Array.from(sessionToKeys.get(sess!) ?? new Set([key]))
-    : [key];
+    // Stitch sibling traces only when the session is a genuine multi-trace (team /
+    // fan-out) run; otherwise this trace stands alone (single agent — never merge
+    // separate invocations that happen to share the hard-coded session id).
+    const sess = keyToSession.get(key);
+    const stitched = !!sess && multiTraceSessions.has(sess);
+    const groupKeys = stitched
+      ? Array.from(sessionToKeys.get(sess!) ?? new Set([key]))
+      : [key];
 
-  const all = readJiuwenSpansForKeys(groupKeys);
-  const record = aggregateJiuwenOtlpFromSpans(all, { user });
-  if (!record?.task_id) return null;
-  await saveExecutionRecord(record);
+    const receipts = groupKeys.map(bucketKey => ({ bucketKey, state: readSpoolState(spoolRoot, bucketKey) }));
+    const groupReceipt = stitched ? readSpoolState(spoolRoot, `session:${sess}`) : undefined;
+    if (receipts.some(receipt => receipt.state?.purgedAt)
+      || groupReceipt?.purgedAt) return null;
 
-  // 多 trace（team / fan-out）聚合落库后，清理此前被误判为单 agent 而单独存的孤儿：
-  // 早到批次在 team/task 标记到达前会以 jiuwen-<traceId> 存一条，待该 trace 并入本
-  // session（sess_…）后这条需删除，否则界面重复出现、且首轮 llm/token 被计两遍。
-  // groupKeys 即本 session 的全部 trace id，孤儿 task_id 必为 jiuwen-<key>，可精确定位。
-  // 注意：只删 DB 里的孤儿记录，不删桶文件——那些 span 仍是本 session 的数据。
-  if (stitched) {
-    for (const k of groupKeys) {
-      const orphanTaskId = `jiuwen-${k}`;
-      if (orphanTaskId !== record.task_id) {
-        await deleteExecutionsByTaskId(orphanTaskId, 'jiuwenswarm');
+    const all = readJiuwenSpansForKeys(groupKeys);
+    const record = aggregateJiuwenOtlpFromSpans(all, { user });
+    if (!record?.task_id) return null;
+    const saved = await saveExecutionRecord(record);
+    if (!saved.success) throw new Error('execution persistence returned success=false');
+    const lifecycle = getTraceLifecycle(record.trace_completed_at, record);
+    if (stitched && groupReceipt?.generation) {
+      receipts.push({ bucketKey: `session:${sess}`, state: groupReceipt });
+    }
+    for (const { bucketKey, state } of receipts) {
+      if (!state?.generation) continue;
+      recordSpoolPersistence(spoolRoot, bucketKey, state.generation, {
+        taskId: record.task_id,
+        completedAt: lifecycle.traceCompletedAt ? Date.parse(lifecycle.traceCompletedAt) : undefined,
+        failed: lifecycle.traceStatus === 'failed',
+      });
+    }
+
+    // 多 trace（team / fan-out）聚合落库后，清理此前被误判为单 agent 而单独存的孤儿：
+    // 早到批次在 team/task 标记到达前会以 jiuwen-<traceId> 存一条，待该 trace 并入本
+    // session（sess_…）后这条需删除，否则界面重复出现、且首轮 llm/token 被计两遍。
+    // groupKeys 即本 session 的全部 trace id，孤儿 task_id 必为 jiuwen-<key>，可精确定位。
+    // 注意：只删 DB 里的孤儿记录，不删桶文件——那些 span 仍是本 session 的数据。
+    if (stitched) {
+      for (const k of groupKeys) {
+        const orphanTaskId = `jiuwen-${k}`;
+        if (orphanTaskId !== record.task_id) {
+          await deleteExecutionsByTaskId(orphanTaskId, 'jiuwenswarm');
+        }
       }
     }
+    return record.task_id;
+  } finally {
+    release();
   }
-  return record.task_id;
 }
 
 const coalescer = new JiuwenBatchCoalescer(
@@ -134,9 +161,6 @@ export async function ingestJiuwenOtlp(
       saved.push(stitched ? sess! : `jiuwen-${key}`);
     }
   }
-
-  // 4) Opportunistic spool retention (throttled to ~once/30min per process).
-  pruneJiuwenSpool();
 
   return { received: spans.length, sessions: saved };
 }

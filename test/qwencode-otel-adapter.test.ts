@@ -171,7 +171,9 @@ test('QwenCode adapter aggregates an agent span and its tool span', () => {
     }),
   ];
 
-  assert.equal(getOtelTraceAdapter(events).id, 'qwencode');
+  const traceAdapter = getOtelTraceAdapter(events);
+  assert.ok(traceAdapter);
+  assert.equal(traceAdapter.id, 'qwencode');
   const record = aggregateOtelTraceEvents('qwen-session', events);
 
   assert.ok(record);
@@ -262,7 +264,9 @@ test('QwenCode adapter aggregates Qwen native OTLP GenAI spans', () => {
 
   const record = aggregateOtelTraceEvents('qwen-session', events);
   assert.ok(record);
-  assert.equal(getOtelTraceAdapter(events).id, 'qwencode');
+  const traceAdapter = getOtelTraceAdapter(events);
+  assert.ok(traceAdapter);
+  assert.equal(traceAdapter.id, 'qwencode');
   assert.equal(record.query, 'Read package.json');
   assert.equal(record.model, 'qwen3-coder');
   assert.equal(record.tokens, 23);

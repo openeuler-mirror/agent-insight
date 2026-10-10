@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { apiFetch } from '@/lib/client/api';
+import { loadTraceFacetValues } from '@/lib/client/trace-facets';
 import { resolveTraceColumn } from '@/lib/filters/trace-columns';
 import type { FilterClause, FilterColumn } from '@/lib/filters/types';
 
@@ -116,8 +116,7 @@ function SelectBody({
   useEffect(() => {
     // 侧栏 select 段的列都在 FACETED 内(有 facet 端点);loaded 在异步回调里置位,避免 set-state-in-effect。
     let alive = true;
-    apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=${encodeURIComponent(col.column)}`)
-      .then((r) => r.json())
+    loadTraceFacetValues(user, col.column)
       .then((rows) => alive && setValues(Array.isArray(rows) ? rows : []))
       .catch(() => alive && setValues([]))
       .finally(() => alive && setLoaded(true));

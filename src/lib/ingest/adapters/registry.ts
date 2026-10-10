@@ -3,6 +3,7 @@ import { actrailAdapter } from "./actrail"
 import { claudeAdapter } from "./claude"
 import { codeagentAdapter } from "./codeagent"
 import { codexAdapter } from "./codex"
+import { deepSeekHarnessAdapter } from './deepseek-harness'
 import { hermesAdapter } from "./hermes"
 import { jiuwenAdapter } from "./jiuwen"
 import { langfuseLangGraphAdapter } from "./langfuse-langgraph"
@@ -12,6 +13,7 @@ import { opencodeAdapter } from "./opencode"
 import { piAgentAdapter } from "./pi-agent"
 import { qoderAdapter } from "./qoder"
 import { qwencodeAdapter } from "./qwencode"
+import { mctsXgovernorAdapter } from './mcts-xgovernor'
 import type { FrameworkAdapter, FrameworkDescriptor } from "./types"
 
 const adapters = [
@@ -22,6 +24,7 @@ const adapters = [
   openclawAdapter,
   hermesAdapter,
   codexAdapter,
+  deepSeekHarnessAdapter,
   jiuwenAdapter,
   langfuseLangGraphAdapter,
   llamaIndexAdapter,
@@ -29,6 +32,7 @@ const adapters = [
   traeAdapter,
   actrailAdapter,
   piAgentAdapter,
+  mctsXgovernorAdapter,
 ] as const
 
 const fallbackAdapter: FrameworkAdapter = {

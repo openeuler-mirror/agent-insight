@@ -9,6 +9,7 @@ import {
   type AgentDataset,
   type DatasetCase,
   type DatasetField,
+  coerceDatasetKind,
   defaultDatasetSchemaFields,
   defaultFieldsForKind,
   schemaColumnTags,
@@ -17,6 +18,7 @@ import {
 } from '@/lib/agent-dataset-model';
 import { parseBatchFromFileContent, readFileAsText } from '@/lib/dataset-batch-import';
 import { useAuth } from '@/lib/auth/auth-context';
+import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 
 interface DatasetDraft {
   id?: string;
@@ -33,6 +35,8 @@ type AgentDatasetListItem = Omit<AgentDataset, 'cases'> & {
   caseCount: number;
   cases?: DatasetCase[];
 };
+
+const DATASETS_PER_PAGE = 12;
 
 const emptyDraft: DatasetDraft = {
   name: '',
@@ -51,7 +55,7 @@ function toDraft(dataset: AgentDataset): DatasetDraft {
     description: dataset.description || '',
     targetAgent: dataset.targetAgent || '',
     tagsText: (dataset.tags || []).join(', '),
-    datasetKind: dataset.datasetKind === 'trajectory' ? 'trajectory' : 'ideal_output',
+    datasetKind: coerceDatasetKind(dataset.datasetKind),
     fields: dataset.fields || [],
     cases: (dataset.cases || []).map(item => ({
       ...item,
@@ -95,6 +99,12 @@ function datasetPrimaryStatLine(item: AgentDatasetListItem): { label: string; va
   const n = item.caseCount;
   if (item.datasetKind === 'trajectory') {
     return { label: '轨迹样例', value: String(n) };
+  }
+  if (item.datasetKind === 'reliability') {
+    return { label: '可靠性样例', value: String(n) };
+  }
+  if (item.datasetKind === 'benchmark') {
+    return { label: 'Benchmark Case', value: String(n) };
   }
   return { label: '评测数据', value: String(n) };
 }
@@ -234,7 +244,9 @@ export default function AgentDatasetCenter() {
   const [datasets, setDatasets] = useState<AgentDatasetListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [kindFilter, setKindFilter] = useState<'all' | DatasetKind>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<DatasetDraft>(emptyDraft);
@@ -242,6 +254,7 @@ export default function AgentDatasetCenter() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
+  const listTopRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [tableActionError, setTableActionError] = useState('');
 
@@ -310,17 +323,37 @@ export default function AgentDatasetCenter() {
 
   const filteredDatasets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return datasets;
-    return datasets.filter(
-      d =>
+    return datasets.filter((d) => {
+      if (kindFilter !== 'all' && d.datasetKind !== kindFilter) return false;
+      if (!q) return true;
+      return (
         d.name.toLowerCase().includes(q) ||
         (d.description || '').toLowerCase().includes(q) ||
-        (d.targetAgent || '').toLowerCase().includes(q),
-    );
-  }, [datasets, searchQuery]);
+        (d.targetAgent || '').toLowerCase().includes(q)
+      );
+    });
+  }, [datasets, searchQuery, kindFilter]);
+  const pageCount = Math.max(1, Math.ceil(filteredDatasets.length / DATASETS_PER_PAGE));
+  const currentPage = Math.min(page, pageCount);
+  const pageDatasets = filteredDatasets.slice(
+    (currentPage - 1) * DATASETS_PER_PAGE,
+    currentPage * DATASETS_PER_PAGE,
+  );
+  const goToPage = (nextPage: number) => {
+    setPage(nextPage);
+    listTopRef.current?.scrollIntoView({ block: 'start' });
+  };
 
   const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
     if (!user) return;
+    if (dataset.readOnly || dataset.datasetKind === 'benchmark') {
+      setTableActionError('Benchmark 数据集由系统导入并维护，只能查看和发起评测');
+      return;
+    }
+    if (isBuiltinReliabilityDataset(dataset)) {
+      setTableActionError('内置可靠性评测集由系统维护，不可编辑');
+      return;
+    }
     setError('');
     const res = await apiFetch(`/api/agent-datasets/${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`);
     const detail = await res.json();
@@ -345,9 +378,9 @@ export default function AgentDatasetCenter() {
   };
 
   const openImport = () => {
-    setCreateMenuOpen(false);
     setTableActionError('');
     fileInputRef.current?.click();
+    setCreateMenuOpen(false);
   };
 
   const handleFileChosen = async (file: File | null) => {
@@ -395,6 +428,14 @@ export default function AgentDatasetCenter() {
 
   const handleDeleteDataset = async (item: AgentDatasetListItem) => {
     if (!user) return;
+    if (item.readOnly || item.datasetKind === 'benchmark') {
+      setTableActionError('Benchmark 数据集由系统导入并维护，不可删除');
+      return;
+    }
+    if (isBuiltinReliabilityDataset(item)) {
+      setTableActionError('内置可靠性评测集不可删除');
+      return;
+    }
     if (!globalThis.confirm(`确定删除评测集「${item.name}」？删除后不可恢复。`)) return;
     setTableActionError('');
     try {
@@ -405,6 +446,7 @@ export default function AgentDatasetCenter() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || '删除失败');
       if (editorOpen && draft.id === item.id) closeEditor();
+      setPage(1);
       await loadDatasets({ isRefresh: true });
     } catch (e) {
       setTableActionError(e instanceof Error ? e.message : '删除失败');
@@ -455,6 +497,7 @@ export default function AgentDatasetCenter() {
 
       const newId = result.dataset?.id as string | undefined;
 
+      setPage(1);
       const datasetsNext = await loadDatasets({ isRefresh: true });
       if (creating && newId) {
         setCreating(false);
@@ -502,6 +545,7 @@ export default function AgentDatasetCenter() {
       ) : null}
 
       <div
+        ref={listTopRef}
         style={{
           display: 'flex',
           flexWrap: 'wrap',
@@ -513,7 +557,10 @@ export default function AgentDatasetCenter() {
         <input
           type="search"
           value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
+          onChange={e => {
+            setSearchQuery(e.target.value);
+            setPage(1);
+          }}
           placeholder="搜索名称"
           aria-label="搜索评测集名称"
           style={{
@@ -529,11 +576,39 @@ export default function AgentDatasetCenter() {
             fontSize: 13,
           }}
         />
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {([
+            ['all', '全部'],
+            ['ideal_output', '理想输出'],
+            ['trajectory', '轨迹'],
+            ['reliability', '可靠性'],
+            ['benchmark', 'Benchmark'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className="ai-btn-s"
+              onClick={() => {
+                setKindFilter(key);
+                setPage(1);
+              }}
+              style={{
+                opacity: kindFilter === key ? 1 : 0.7,
+                borderColor: kindFilter === key ? 'var(--primary)' : undefined,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div style={{ flex: '1 1 auto' }} />
         <button
           type="button"
           className="ai-btn-s"
-          onClick={() => void loadDatasets({ isRefresh: true })}
+          onClick={() => {
+            setPage(1);
+            void loadDatasets({ isRefresh: true });
+          }}
           disabled={refreshing}
           title={refreshing ? '刷新列表' : `刷新列表（共 ${datasets.length} 个评测集）`}
         >
@@ -588,20 +663,20 @@ export default function AgentDatasetCenter() {
                 </span>
                 导入本地文件
               </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json,.csv,application/json,text/csv"
-                style={{ display: 'none' }}
-                onChange={e => {
-                  const f = e.target.files?.[0] ?? null;
-                  void handleFileChosen(f);
-                  // 同一文件二次选择也能触发 change
-                  e.target.value = '';
-                }}
-              />
             </div>
           )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.csv,application/json,text/csv"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const f = e.target.files?.[0] ?? null;
+              void handleFileChosen(f);
+              // 同一文件二次选择也能触发 change
+              e.target.value = '';
+            }}
+          />
         </div>
       </div>
 
@@ -630,14 +705,9 @@ export default function AgentDatasetCenter() {
           无匹配结果，请调整搜索关键词。
         </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 340px), 1fr))',
-            gap: 14,
-          }}
-        >
-          {filteredDatasets.map(item => {
+        <>
+        <div className="grid grid-cols-1 gap-[14px] md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {pageDatasets.map(item => {
             const stat = datasetPrimaryStatLine(item);
             const status = datasetCardStatus(item);
             const badgeBg =
@@ -702,6 +772,12 @@ export default function AgentDatasetCenter() {
                       {truncateText(item.name, 42)}
                     </h2>
                     <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: item.datasetKind === 'reliability' || item.datasetKind === 'benchmark' ? 'color-mix(in srgb, var(--primary) 12%, transparent)' : 'var(--background-secondary)', color: 'var(--foreground-muted)', border: '1px solid var(--border)' }}>
+                        {item.datasetKind === 'benchmark'
+                          ? `Benchmark · ${item.shared ? '平台共享' : '系统导入'}${item.benchmark?.status === 'archived' ? ' · 已归档' : ''}`
+                          : item.datasetKind === 'reliability' ? '可靠性' : item.datasetKind === 'trajectory' ? '轨迹' : '理想输出'}
+                        {item.name.includes('内置') ? ' · 内置' : ''}
+                      </span>
                       {schemaColumnTags(item).map(field => (
                         <span
                           key={field}
@@ -799,11 +875,13 @@ export default function AgentDatasetCenter() {
                       stopActionPropagation(event);
                       openEditorForDataset(item);
                     }}
-                    title="编辑数据集信息"
+                    disabled={isBuiltinReliabilityDataset(item) || item.readOnly || item.datasetKind === 'benchmark'}
+                    title={item.datasetKind === 'benchmark' ? '系统导入的 Benchmark 数据集不可编辑' : isBuiltinReliabilityDataset(item) ? '内置可靠性评测集不可编辑' : '编辑数据集信息'}
                   >
                     <Pencil size={14} aria-hidden />
                     编辑信息
                   </button>
+                  {!isBuiltinReliabilityDataset(item) && !item.readOnly && item.datasetKind !== 'benchmark' && (
                   <button
                     type="button"
                     className="ai-dataset-action ai-dataset-action--danger"
@@ -817,6 +895,7 @@ export default function AgentDatasetCenter() {
                     <Trash2 size={14} aria-hidden />
                     删除
                   </button>
+                  )}
                   <div style={{ flex: 1, minWidth: 8 }} />
                   <button
                     type="button"
@@ -824,21 +903,21 @@ export default function AgentDatasetCenter() {
                     style={datasetActionPrimaryStyle}
                     onClick={event => {
                       stopActionPropagation(event);
-                      if (item.datasetKind === 'trajectory') {
-                        // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入参考答案）
-                        router.push('/experiments/new');
+                      if (item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' || item.datasetKind === 'benchmark') {
+                        // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入预期输出）
+                        router.push(`/experiments/new?datasetId=${encodeURIComponent(item.id)}`);
                       } else {
                         // 非轨迹评测集暂时仍引导到评估器目录页选评估器
                         router.push('/metrics');
                       }
                     }}
                     title={
-                      item.datasetKind === 'trajectory'
-                        ? '使用轨迹评估器（opencode）发起评测'
+                      item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' || item.datasetKind === 'benchmark'
+                        ? '使用实验向导发起评测'
                         : '前往评估器目录选择评估器'
                     }
                   >
-                    {item.datasetKind === 'trajectory' ? (
+                    {item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' || item.datasetKind === 'benchmark' ? (
                       <PlayCircle size={14} aria-hidden />
                     ) : (
                       <ClipboardList size={14} aria-hidden />
@@ -850,6 +929,13 @@ export default function AgentDatasetCenter() {
             );
           })}
         </div>
+        <nav aria-label="数据集分页" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 16, color: 'var(--foreground-muted)', fontSize: 12 }}>
+          <span>显示 {(currentPage - 1) * DATASETS_PER_PAGE + 1}–{Math.min(currentPage * DATASETS_PER_PAGE, filteredDatasets.length)} / 共 {filteredDatasets.length} 个</span>
+          <button type="button" className="ai-btn-s" disabled={currentPage === 1} style={{ opacity: currentPage === 1 ? 0.45 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }} onClick={() => goToPage(currentPage - 1)}>上一页</button>
+          <span aria-live="polite">{currentPage} / {pageCount} 页</span>
+          <button type="button" className="ai-btn-s" disabled={currentPage === pageCount} style={{ opacity: currentPage === pageCount ? 0.45 : 1, cursor: currentPage === pageCount ? 'not-allowed' : 'pointer' }} onClick={() => goToPage(currentPage + 1)}>下一页</button>
+        </nav>
+        </>
       )}
 
       {editorOpen && (
@@ -963,7 +1049,7 @@ export default function AgentDatasetCenter() {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
                   gap: 10,
                 }}
               >
@@ -1005,6 +1091,25 @@ export default function AgentDatasetCenter() {
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>轨迹评测集</div>
                   <div style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>Agent 运行轨迹评测</div>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => selectDatasetKind('reliability')}
+                  style={{
+                    textAlign: 'left',
+                    padding: '12px 14px',
+                    borderRadius: 10,
+                    border:
+                      draft.datasetKind === 'reliability'
+                        ? '2px solid var(--primary)'
+                        : '1px solid var(--border)',
+                    background: 'var(--background-secondary)',
+                    cursor: 'pointer',
+                    color: 'var(--foreground)',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>可靠性评测集</div>
+                  <div style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>含故障注入类型字段</div>
+                </button>
               </div>
             </div>
 
@@ -1013,7 +1118,7 @@ export default function AgentDatasetCenter() {
                 默认数据项
               </div>
               <div className="ai-section-hint" style={{ marginBottom: 10 }}>
-                配置列说明：理想输出场景默认 input、reference_output；轨迹场景额外增加 trajectory 文本字段。
+                配置列说明：理想输出默认 input、reference_output（预期输出）；轨迹额外 trajectory；可靠性额外必填 fault_injection_type。
               </div>
               <DefaultFieldsTable fields={defaultFieldsForKind(draft.datasetKind)} />
             </div>

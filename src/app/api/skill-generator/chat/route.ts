@@ -5,76 +5,14 @@ import path from 'path';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
+import { createBlockMirror } from '@/lib/chat/block-mirror';
+import { createStreamCheckpointWriter } from '@/lib/chat/stream-checkpoint';
+import {
+    beginWorkbenchGenerationRun,
+    finishWorkbenchGenerationRun,
+} from '@/lib/skill-workbench/generation-service';
 
 export const dynamic = 'force-dynamic';
-
-/**
- * Mirrors every emitted SSE event into a server-side `blocks` array so the
- * full UI state (thinking / tool_call / tool_result / download blocks) can be
- * persisted to SkillGeneratorMessage.blocks and restored on page reload.
- *
- * The shape mirrors the frontend `Block` union in src/app/(main)/skill-generator/
- * page.tsx — keep them in sync if either side adds a new block kind.
- */
-function createBlockMirror(controller: ReadableStreamDefaultController, encoder: TextEncoder) {
-    const blocks: any[] = [];
-    const send = (mode: string, payload: any) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode, payload })}\n\n`));
-
-        if (mode === 'text') {
-            const tail = blocks[blocks.length - 1];
-            if (tail && tail.kind === 'text') tail.text += payload;
-            else blocks.push({ kind: 'text', id: `text_${blocks.length}`, text: payload });
-        } else if (mode === 'thinking') {
-            const { id, delta, done } = payload || {};
-            if (!id) return;
-            const idx = blocks.findIndex((b: any) => b.kind === 'thinking' && b.id === id);
-            if (idx === -1) blocks.push({ kind: 'thinking', id, text: delta || '', done: !!done });
-            else {
-                if (delta) blocks[idx].text += delta;
-                if (done) blocks[idx].done = true;
-            }
-        } else if (mode === 'tool_call') {
-            const { id, name, args, status } = payload || {};
-            if (!id) return;
-            blocks.push({ kind: 'tool', id, name, args, status: status || 'running' });
-        } else if (mode === 'tool_result') {
-            const { id, status, summary, error, finalArgs } = payload || {};
-            if (!id) return;
-            const idx = blocks.findIndex((b: any) => b.kind === 'tool' && b.id === id);
-            if (idx !== -1) {
-                if (status) blocks[idx].status = status;
-                if (summary) blocks[idx].summary = summary;
-                if (error) blocks[idx].error = error;
-                // start phase 时 args 通常是空 {}，end phase bridge 会带上完整 input；
-                // 用它覆盖 block.args 让 TodoBlock 等下游 args 依赖的渲染能正常工作。
-                if (finalArgs && typeof finalArgs === 'object') {
-                    blocks[idx].args = finalArgs;
-                }
-            }
-        } else if (mode === 'download') {
-            const { id, skillName, fileCount, sizeBytes } = payload || {};
-            if (!id) return;
-            blocks.push({ kind: 'download', id, skillName, fileCount, sizeBytes });
-        } else if (mode === 'question') {
-            // agent 提问 → 持久化为可恢复的 question block（pending 状态）
-            const { id, question, choices } = payload || {};
-            if (!id) return;
-            blocks.push({ kind: 'question', id, question: question || '', choices, status: 'pending' });
-        } else if (mode === 'question_answered') {
-            // 答复回来 / 超时 / 跳过 → 更新对应 question block 的状态
-            const { id, status, answer } = payload || {};
-            if (!id) return;
-            const idx = blocks.findIndex((b: any) => b.kind === 'question' && b.id === id);
-            if (idx !== -1) {
-                if (status) blocks[idx].status = status;
-                if (answer !== undefined) blocks[idx].answer = answer;
-            }
-        }
-        // 'vfs_patch' / 'done' / 'error' are runtime-only and not persisted.
-    };
-    return { send, getBlocks: () => blocks };
-}
 
 function readMockDirectory(dirPath: string, rootPath: string, result: Record<string, any> = {}) {
     const items = fs.readdirSync(dirPath);
@@ -92,45 +30,79 @@ function readMockDirectory(dirPath: string, rootPath: string, result: Record<str
     return result;
 }
 
+function blockText(blocks: any[]) {
+    return blocks.filter((block) => block.kind === 'text').map((block) => String(block.text || '')).join('');
+}
+
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { message, user, threadId, files, modelId, webSearchEnabled, mock = true } = body;
+        const { message, user, threadId, files, modelId, webSearchEnabled, mock = true, runId } = body;
 
         if (!message || !user || !threadId) {
             return new Response(JSON.stringify({ error: "Missing required fields" }), { status: 400 });
         }
 
-        // 1. Save user message to DB
-        await (prismaRaw as any).skillGeneratorMessage.create({
-            data: {
-                sessionId: threadId,
-                role: 'user',
-                content: message
-            }
+        const workbenchRun = await beginWorkbenchGenerationRun({
+            user,
+            generatorSessionId: threadId,
+            runId: typeof runId === 'string' && runId.trim() ? runId.trim() : `${threadId}:${Date.now()}`,
         });
-
-        // 用户消息已被接受 = 一次有效使用。首条算"发起生成"，后续算"继续对话"；
-        // 流式 token 不在这里计（每次 POST 只走一遍）。
-        if (isUsageEnabled()) {
-            const priorUserMessages = await (prismaRaw as any).skillGeneratorMessage.count({
-                where: { sessionId: threadId, role: 'user' },
-            });
-            recordUsageEvent({
-                user,
-                featureKey: 'skill-generator',
-                eventKey: priorUserMessages <= 1 ? 'skill.generate.run' : 'skill.generate.message',
+        if (workbenchRun?.kind === 'busy') {
+            return new Response(JSON.stringify({ error: '当前会话已有生成任务正在执行', taskId: workbenchRun.taskId }), {
+                status: 409,
+                headers: { 'Content-Type': 'application/json' },
             });
         }
 
-        // 1.5 Auto-update title if it's still 'New Chat'
-        const session = await (prismaRaw as any).skillGeneratorSession.findUnique({ where: { id: threadId } });
-        if (session && (session.title === 'New Chat' || !session.title)) {
-            const newTitle = message.length > 30 ? message.substring(0, 27) + '...' : message;
-            await (prismaRaw as any).skillGeneratorSession.update({
-                where: { id: threadId },
-                data: { title: newTitle }
+        let agentMessage: { id: string };
+        try {
+            // 1. Save user message to DB
+            await (prismaRaw as any).skillGeneratorMessage.create({
+                data: {
+                    sessionId: threadId,
+                    role: 'user',
+                    content: message
+                }
             });
+
+            // 用户消息已被接受 = 一次有效使用。首条算"发起生成"，后续算"继续对话"；
+            // 流式 token 不在这里计（每次 POST 只走一遍）。
+            if (isUsageEnabled()) {
+                const priorUserMessages = await (prismaRaw as any).skillGeneratorMessage.count({
+                    where: { sessionId: threadId, role: 'user' },
+                });
+                recordUsageEvent({
+                    user,
+                    featureKey: 'skill-generator',
+                    eventKey: priorUserMessages <= 1 ? 'skill.generate.run' : 'skill.generate.message',
+                });
+            }
+
+            // 1.5 Auto-update title if it's still 'New Chat'
+            const session = await (prismaRaw as any).skillGeneratorSession.findUnique({ where: { id: threadId } });
+            if (session && (session.title === 'New Chat' || !session.title)) {
+                const newTitle = message.length > 30 ? message.substring(0, 27) + '...' : message;
+                await (prismaRaw as any).skillGeneratorSession.update({
+                    where: { id: threadId },
+                    data: { title: newTitle }
+                });
+            }
+
+            agentMessage = await (prismaRaw as any).skillGeneratorMessage.create({
+                data: { sessionId: threadId, role: 'agent', content: '', blocks: '[]' },
+                select: { id: true },
+            });
+        } catch (error) {
+            if (workbenchRun) {
+                await finishWorkbenchGenerationRun({
+                    user,
+                    workbenchSessionId: workbenchRun.workbenchSessionId,
+                    taskId: workbenchRun.taskId,
+                    error: error instanceof Error ? error.message : String(error),
+                }).catch(() => undefined);
+            }
+            throw error;
         }
 
         const encoder = new TextEncoder();
@@ -138,11 +110,35 @@ export async function POST(req: NextRequest) {
         if (mock) {
             const readable = new ReadableStream({
                 async start(controller) {
-                    const { send, getBlocks } = createBlockMirror(controller, encoder);
+                    const mirror = createBlockMirror(controller, encoder);
 
                     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
                     let agentContent = '';
                     let blockSeq = 0;
+                    let liveFiles: Record<string, any> = { ...(files || {}) };
+                    const checkpoint = createStreamCheckpointWriter({
+                        capture: () => ({
+                            content: blockText(mirror.getBlocks()) || agentContent,
+                            blocks: JSON.stringify(mirror.getBlocks()),
+                            files: JSON.stringify(liveFiles),
+                        }),
+                        persist: (snapshot) => (prismaRaw as any).$transaction([
+                            (prismaRaw as any).skillGeneratorMessage.update({
+                                where: { id: agentMessage.id },
+                                data: { content: snapshot.content, blocks: snapshot.blocks },
+                            }),
+                            (prismaRaw as any).skillGeneratorSession.update({
+                                where: { id: threadId },
+                                data: { files: snapshot.files },
+                            }),
+                        ]),
+                        onError: (error) => console.warn('[skill-generator/chat] checkpoint failed:', error),
+                    });
+                    const send = (mode: string, payload: any) => {
+                        if (mode === 'vfs_patch' && payload?.files) liveFiles = payload.files;
+                        mirror.send(mode, payload);
+                        checkpoint.schedule();
+                    };
                     const nextId = (prefix: string) => `${prefix}_${Date.now()}_${++blockSeq}`;
 
                     // ── Phase 1: thinking — analyze user intent ─────────────
@@ -163,7 +159,7 @@ export async function POST(req: NextRequest) {
 
                     // ── Phase 3: walk mock dir and emit tool_call/tool_result per file ──
                     const mockSourceDir = path.join(process.cwd(), 'src/mock/skills/vmcore-analysis-generate');
-                    const mockFilesState: Record<string, any> = { ...files };
+                    const mockFilesState = liveFiles;
 
                     const emitWriteFile = async (relativePath: string, content: string) => {
                         const toolId = nextId('tool');
@@ -236,22 +232,24 @@ export async function POST(req: NextRequest) {
                     });
                     send("done", { reason: 'completed' });
 
-                    // 2. Save agent response (text + structured blocks) and final VFS.
-                    //    blocks let us restore thinking/tool/download UI on reload.
-                    await (prismaRaw as any).skillGeneratorMessage.create({
-                        data: {
-                            sessionId: threadId,
-                            role: 'agent',
-                            content: agentContent,
-                            blocks: JSON.stringify(getBlocks()),
-                        }
-                    });
-                    await (prismaRaw as any).skillGeneratorSession.update({
-                        where: { id: threadId },
-                        data: { files: JSON.stringify(mockFilesState) }
-                    });
+                    liveFiles = mockFilesState;
+                    let checkpointError: string | null = null;
+                    try {
+                        await checkpoint.flush();
+                    } catch (error) {
+                        checkpointError = error instanceof Error ? error.message : String(error);
+                    }
 
-                    controller.close();
+                    if (workbenchRun) {
+                        await finishWorkbenchGenerationRun({
+                            user,
+                            workbenchSessionId: workbenchRun.workbenchSessionId,
+                            taskId: workbenchRun.taskId,
+                            error: checkpointError,
+                        });
+                    }
+
+                    try { controller.close(); } catch { /* client disconnected */ }
                 }
             });
 
@@ -263,10 +261,33 @@ export async function POST(req: NextRequest) {
             async start(controller) {
                 // 复用 createBlockMirror：把发出的事件同步累积成 blocks[]，最后 JSON.stringify 入库。
                 // 这样 page.tsx 通过 hydrateMessages 在历史 session 上能 1:1 还原 thinking/tool/download UI。
-                const { send, getBlocks } = createBlockMirror(controller, encoder);
+                const mirror = createBlockMirror(controller, encoder);
                 let agentText = '';
-                let finalFiles: any = {};
+                let finalFiles: any = { ...(files || {}) };
                 let chatErr: Error | null = null;
+                const checkpoint = createStreamCheckpointWriter({
+                    capture: () => ({
+                        content: blockText(mirror.getBlocks()) || agentText || (chatErr ? `[运行中断] ${chatErr.message}` : ''),
+                        blocks: JSON.stringify(mirror.getBlocks()),
+                        files: JSON.stringify(finalFiles),
+                    }),
+                    persist: (snapshot) => (prismaRaw as any).$transaction([
+                        (prismaRaw as any).skillGeneratorMessage.update({
+                            where: { id: agentMessage.id },
+                            data: { content: snapshot.content, blocks: snapshot.blocks },
+                        }),
+                        (prismaRaw as any).skillGeneratorSession.update({
+                            where: { id: threadId },
+                            data: { files: snapshot.files },
+                        }),
+                    ]),
+                    onError: (error) => console.warn('[skill-generator/chat] checkpoint failed:', error),
+                });
+                const send = (mode: string, payload: any) => {
+                    if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
+                    mirror.send(mode, payload);
+                    checkpoint.schedule();
+                };
                 try {
                     const r = await streamSkillGeneratorOpencode({
                         user,
@@ -283,33 +304,21 @@ export async function POST(req: NextRequest) {
                     try { send('error', chatErr.message); } catch { /* controller closed */ }
                 }
 
-                // 即使 chat 中途 throw（如上游 fetch failed），也要把已经收到的 blocks 落库——
-                // 否则 30min 跑出来的 thinking/tool_call/question 全丢，用户看不到任何记录。
-                // agentText 没值时，从 blocks 里聚合 text kind 兜底，保证 message.content 不为空。
                 try {
-                    const blocks = getBlocks();
-                    let content = agentText;
-                    if (!content && blocks.length) {
-                        content = blocks.filter((b: any) => b.kind === 'text').map((b: any) => b.text).join('');
-                    }
-                    if (chatErr && !content) content = `[运行中断] ${chatErr.message}`;
-                    await (prismaRaw as any).skillGeneratorMessage.create({
-                        data: {
-                            sessionId: threadId,
-                            role: 'agent',
-                            content,
-                            blocks: JSON.stringify(blocks),
-                        }
-                    });
-                    await (prismaRaw as any).skillGeneratorSession.update({
-                        where: { id: threadId },
-                        data: { files: JSON.stringify(finalFiles) }
-                    });
+                    await checkpoint.flush();
                 } catch (saveErr) {
                     console.error('[skill-generator/chat] persist agent message failed:', saveErr);
-                } finally {
-                    try { controller.close(); } catch { /* already closed */ }
+                    chatErr ||= saveErr instanceof Error ? saveErr : new Error(String(saveErr));
                 }
+                if (workbenchRun) {
+                    await finishWorkbenchGenerationRun({
+                        user,
+                        workbenchSessionId: workbenchRun.workbenchSessionId,
+                        taskId: workbenchRun.taskId,
+                        error: chatErr?.message || null,
+                    });
+                }
+                try { controller.close(); } catch { /* already closed */ }
             }
         });
 

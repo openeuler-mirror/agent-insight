@@ -2,8 +2,8 @@
 
 const fs = require('fs')
 const http = require('http')
-const os = require('os')
 const path = require('path')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
 function updateEnvFile(envPath, updates) {
   const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : ''
@@ -47,7 +47,25 @@ function updateEnvFile(envPath, updates) {
   fs.writeFileSync(envPath, output.join('\n').replace(/\n?$/, '\n'), 'utf8')
 }
 
-function requestAdminApiKey(port, host = 'localhost') {
+function readEnvValue(envPath, targetKey) {
+  if (!fs.existsSync(envPath)) return ''
+  const content = fs.readFileSync(envPath, 'utf8')
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+    if (!match || match[1] !== targetKey) continue
+    let value = match[2].trim()
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+    return value
+  }
+  return ''
+}
+
+function requestAdminApiKey(port, host = 'localhost', timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({ username: 'admin' })
     const req = http.request(
@@ -86,44 +104,113 @@ function requestAdminApiKey(port, host = 'localhost') {
       },
     )
 
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`admin API key request timed out after ${timeoutMs}ms`))
+    })
     req.on('error', reject)
     req.write(postData)
     req.end()
   })
 }
 
+function requestLoginMode(port, host = 'localhost', timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: host,
+        port,
+        path: '/api/eval/config/status?check_login=true',
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      },
+      (res) => {
+        let data = ''
+        res.on('data', (chunk) => {
+          data += chunk
+        })
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`login mode request returned ${res.statusCode}: ${data}`))
+            return
+          }
+
+          try {
+            const result = JSON.parse(data)
+            const loginMode = result.login_mode || (result.org_mode ? 'organization' : 'standalone')
+            if (!['standalone', 'organization', 'idaas_oauth'].includes(loginMode)) {
+              reject(new Error(`login mode response returned unsupported mode: ${loginMode}`))
+              return
+            }
+            resolve(loginMode)
+          } catch (error) {
+            reject(new Error(`failed to parse login mode response: ${error.message}`))
+          }
+        })
+      },
+    )
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`login mode request timed out after ${timeoutMs}ms`))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 async function syncAdminApiKey(options = {}) {
-  const dataRoot = options.dataRoot || process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight')
+  const dataRoot = options.dataRoot
+    || getAgentInsightHome()
   const port = Number(options.port || process.env.PORT || 3000)
   const host = options.host || `http://localhost:${port}`
   const envPath = path.join(dataRoot, '.env')
   const keyFilePath = path.join(dataRoot, '.admin_api_key')
-
-  // keyless 共享账号模式：配了 AGENT_INSIGHT_DEFAULT_INGEST_USER 就【不】注入 admin key，
-  // 反而清空 AGENT_INSIGHT_API_KEY —— 让本机客户端（opencode 等）以「无 key」上报、归到默认账号。
-  // 否则每次 dev 重启都会把 admin key 写回，冲掉 keyless 配置（AGENT_INSIGHT_HOST 仍同步）。
+  const requestTimeoutMs = Number(options.requestTimeoutMs || process.env.AGENT_INSIGHT_STARTUP_REQUEST_TIMEOUT_MS || 5000)
+  const resolveLoginMode = options.requestLoginMode || requestLoginMode
+  const loginMode = await resolveLoginMode(port, 'localhost', requestTimeoutMs)
+  // keyless 共享账号模式会清空客户端 key，让上报归到显式默认账号。
+  // 普通模式仅在 key 缺失时用 admin 初始化；安装指导写入的邮箱用户 key 必须保留。
   const defaultIngestUser = (process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER || '').trim()
   if (defaultIngestUser) {
     updateEnvFile(envPath, {
       AGENT_INSIGHT_HOST: host,
       AGENT_INSIGHT_API_KEY: '',
     })
-    return { apiKey: '', username: null, envPath, keyFilePath, skipped: true, defaultIngestUser }
+    return { apiKey: '', username: null, envPath, keyFilePath, skipped: true, defaultIngestUser, loginMode }
   }
 
-  const result = await requestAdminApiKey(port)
+  const existingClientApiKey = readEnvValue(envPath, 'AGENT_INSIGHT_API_KEY')
+  if (loginMode === 'idaas_oauth') {
+    updateEnvFile(envPath, { AGENT_INSIGHT_HOST: host })
+    return {
+      apiKey: '',
+      clientApiKey: existingClientApiKey,
+      preservedClientApiKey: Boolean(existingClientApiKey),
+      username: null,
+      envPath,
+      keyFilePath,
+      skipped: true,
+      loginMode,
+    }
+  }
+  const requestApiKey = options.requestApiKey || requestAdminApiKey
+  const result = await requestApiKey(port, 'localhost', requestTimeoutMs)
   fs.mkdirSync(dataRoot, { recursive: true })
   fs.writeFileSync(keyFilePath, result.apiKey, 'utf8')
-  updateEnvFile(envPath, {
+  const envUpdates = {
     AGENT_INSIGHT_HOST: host,
-    AGENT_INSIGHT_API_KEY: result.apiKey,
-  })
-
+  }
+  if (!existingClientApiKey) {
+    envUpdates.AGENT_INSIGHT_API_KEY = result.apiKey
+  }
+  updateEnvFile(envPath, envUpdates)
   return {
     apiKey: result.apiKey,
+    clientApiKey: existingClientApiKey || result.apiKey,
+    preservedClientApiKey: Boolean(existingClientApiKey),
     username: result.username,
     envPath,
     keyFilePath,
+    loginMode,
   }
 }
 
@@ -132,13 +219,26 @@ async function main() {
   const host = process.argv[3] || `http://localhost:${port}`
   const result = await syncAdminApiKey({ port, host })
   if (result.skipped) {
+    if (result.loginMode === 'idaas_oauth') {
+      console.log('✓ IDaaS OAuth 模式：服务已就绪，跳过 admin API key 同步')
+      console.log(
+        result.preservedClientApiKey
+          ? `  已保留 ${result.envPath} 中现有的 AGENT_INSIGHT_API_KEY`
+          : `  ${result.envPath} 中尚无客户端 API key，首次登录后可从安装指导获取`,
+      )
+      return
+    }
     console.log(`✓ keyless 模式：检测到 AGENT_INSIGHT_DEFAULT_INGEST_USER=${result.defaultIngestUser}`)
     console.log(`  已清空 ${result.envPath} 的 AGENT_INSIGHT_API_KEY（本机客户端以无 key 上报，归到默认账号），未同步 admin key`)
     return
   }
   console.log(`✓ Admin API key synced for ${result.username || 'admin'}`)
   console.log(`  API Key saved to: ${result.keyFilePath}`)
-  console.log(`  Client env updated: ${result.envPath}`)
+  if (result.preservedClientApiKey) {
+    console.log(`  Client API key preserved: ${result.envPath}`)
+  } else {
+    console.log(`  Client env initialized: ${result.envPath}`)
+  }
 }
 
 if (require.main === module) {
@@ -150,6 +250,8 @@ if (require.main === module) {
 
 module.exports = {
   updateEnvFile,
+  readEnvValue,
   requestAdminApiKey,
+  requestLoginMode,
   syncAdminApiKey,
 }

@@ -9,10 +9,15 @@ import {
   TOOL_UTILIZATION_PRESET_ID,
   runToolUtilizationPreset,
 } from './agent-tool-utilization-evaluator';
+import {
+  TOOL_SUCCESS_RATE_PRESET_ID,
+  runToolSuccessRatePreset,
+} from './agent-tool-success-rate-evaluator';
 
 export const AGENT_TOOL_PRESET_IDS = [
   TOOL_UTILIZATION_PRESET_ID,
   TOOL_SELECTION_PRESET_ID,
+  TOOL_SUCCESS_RATE_PRESET_ID,
 ] as const;
 
 export type AgentToolPresetId = (typeof AGENT_TOOL_PRESET_IDS)[number];
@@ -31,5 +36,7 @@ export async function runAgentToolPreset(
       return runToolUtilizationPreset(user, ctx);
     case TOOL_SELECTION_PRESET_ID:
       return runToolSelectionPreset(user, ctx);
+    case TOOL_SUCCESS_RATE_PRESET_ID:
+      return runToolSuccessRatePreset(user, ctx);
   }
 }

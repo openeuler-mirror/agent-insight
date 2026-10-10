@@ -21,9 +21,14 @@
 
 | evaluatorId | 走哪个实现 |
 |---|---|
-| `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
+| `preset-agent-task-completion` | `experiment/faithful-preset-evaluators.ts` |
+| `preset-agent-step-efficiency` / `preset-agent-process-quality` | `experiment/agent-trajectory-preset-evaluators.ts` → 复用 canonical `facts → judge → assessment` |
+| `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` → 保留既有 opencode 轨迹评分 |
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
+| `preset-fluency-text` / `preset-hallucination-text` | `experiment/fluency-preset-evaluators.ts` / `experiment/hallucination-preset-evaluators.ts`（run-experiment 直接分发） |
+| `preset-rigor-content` | `experiment/rigor-preset-evaluators.ts` |
+| `preset-text-*` | `experiment/text-preset-evaluators.ts` |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -101,7 +106,7 @@ EvalPoint = {
 **归一化 `normalizeEvaluatorOutput()` 的行为**（务必知道，否则会被"吞字段"坑到）：
 
 - `score` 越界 clamp 到 [0,100]；非数值丢弃。
-- **0-1 量纲自动放大**：`score ∈ (0,1]` 且非整数时 ×100。所以要给 100 分必须显式写 `100`，写 `1` 会被当成 1 分。
+- **0-1 量纲自动放大**：`score ∈ (0,1]` 时 ×100，因此历史评估器输出 `0.85` 与 `1` 会分别归一化为 85 分与 100 分。
 - `verdict` 容忍英文别名与中文说法（`passed`/`达成`/`partial`/`未通过`…），**未识别的值直接丢弃**而不报错。
 - `summary` 压平换行并截断到 200 字（超出补 `…`）。
 - 非法评分点逐条丢弃，不会让整次评估失败。
@@ -171,13 +176,12 @@ LLM 不擅长"回归"。自由打分的表现是：分数扎堆（总在 70-90�
 
 代码侧再做一次**吸附**兜底（`opencode-trajectory-evaluator.ts` 的 `snap3()`），把模型漂移的连续值吸到最近一档。
 
-> ⚠️ **档位是给模型看的，别把它当卡片总分直接上报。** `normalizeEvaluatorOutput` 的 0-1 放大只对**非整数**生效（`eval-output.ts` 的 `coerceScore`），所以上报 `1.0` 会被记成 **1 分**而不是 100 分——`0.5`→50、`0.0`→0 都对，唯独满分这一档静默塌掉，还会照常进综合均分。
-> **正确做法：档位在评估器内部用，上报前自己乘 100**（或直接用 0-100 的档位值）。见 §6.1。
+> ⚠️ **档位是给模型看的，新增评估器仍应直接上报 0-100。** `normalizeEvaluatorOutput` 会为历史兼容把 `(0,1]` 自动放大，因此 `0.5`→50、`1`→100；这也意味着 0-100 新量纲无法表达 1 分，确需极低分时应使用 0 或大于 1 的数值。见 §6.1。
 
 ```ts
-// ✗ 三档判断直接当分数上报：满分变 1 分
+// 兼容写法：历史 0-1 档位会由平台自动放大
 return normalizeEvaluatorOutput({ score: snap3(toolChoice) });
-// ✓ 自己折算到 0-100
+// 推荐写法：新增评估器显式折算到 0-100
 return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 ```
 
@@ -302,7 +306,7 @@ async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promi
 
 | 组 | 表面上共用一个文件 | 实际共享了什么 |
 |---|---|---|
-| `faithful-preset-evaluators.ts` | 2 个评估器 | 几乎没有。`runFaithfulPreset` 只是 `if/else` 转发到两个**完全独立**的实现，各自跑各自的 opencode agent；只共用 `coverageToStatus` / `stepsToAnchors` 两个 20 行小工具。它们在一起的真正原因是「都是遗留 opencode 评估器的适配层」——实现历史，不是逻辑复用 |
+| `faithful-preset-evaluators.ts` | 2 个评估器 | 保留 `preset-agent-task-completion` 与 `preset-agent-trace-quality` 的既有 opencode 适配；它们不与新的 canonical 轨迹评估器共享运行时 |
 | `result-preset-evaluators.ts` | 4 个评估器 | 共享 `result-metric-evaluator.ts` 的指标分发与结构化模型传输；这个文件本身只负责 ID→metric 映射、实验输入适配和统一输出映射 |
 
 #### 唯一硬约束：接分发时「一批只加一行」
@@ -391,6 +395,53 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 
 **归属判断必须写成显式 id 清单，不要从卡片派生**（`FAITHFUL_PRESET_IDS` / `RESULT_PRESET_IDS` 就是范例）。写成 `match: id => MY_CARDS.some(c => c.id === id)` 看着更 DRY，但会让「卡登记了、实现没接」这个错误静默消失——那正是 §4.1 第 ⑤ 步守卫要抓的东西。
 
+### 4.5 Issue #168 轨迹评估器的 canonical 边界
+
+`preset-agent-process-quality` 与 `preset-agent-step-efficiency` 共用一套 canonical 轨迹能力，由实验评测链路执行；它们的卡片可在通用实验和三个既有 Skill 评测选择器中按统一的 `status === 'ready'` 规则展示。原 `preset-agent-trace-quality` 仍由 faithful/opencode runner 实现，并继续服务旧 `/eval/trajectory` 入口；不要为复用而把两个语义不同的质量评估器合并。
+
+需求背景、冻结契约与逐项实施计划分别见 [Phase 1 需求分析](../design/agent-trajectory-evaluation/phase1-requirements-analysis.md)、[Phase 2 需求设计](../design/agent-trajectory-evaluation/phase2-requirements-design.md)、[Phase 3 开发计划](../design/agent-trajectory-evaluation/phase3-development-plan.md)。
+
+#### canonical 模块分工
+
+- `src/lib/engine/evaluation/agent-trajectory-facts.ts`
+  - 从 `buildAgentCallTree()` / `walkTree()` 提取可见步骤，跳过 `ras` 事件，生成稳定 `step-N` 索引。
+  - 只在这里做摘要、指纹和确定性候选；参数/输出/文本摘要单字段上限 500 字，完整 Prompt payload 超过 120,000 字符直接抛 `TrajectoryPromptTooLargeError`。
+- `src/lib/engine/evaluation/agent-trajectory-judge.ts`
+  - 只负责编排：`facts -> prompt -> 注入的 JudgeLlmCaller -> JSON parse`，首次契约错误时在同一次 canonical invocation 内追加至多一次安全 repair。
+  - Judge 是离散裁决器，只返回 `met | partial | missing`、问题代码、步骤索引和建议；Judge 不得返回分数、权重、封顶或持久化字段。
+  - 每次 canonical invocation 最多执行 2 次逻辑 `callJudge`（首次调用 + 至多一次 repair）；这不是底层网络请求的硬上限，SDK retry 和 direct→opencode fallback 仍属于传输层。
+- `src/lib/engine/evaluation/agent-trajectory-assessment.ts`
+  - 固化两个 rubric：效率 `agent-step-efficiency/1.0.0`，执行过程质量 `agent-process-quality/1.0.0`。
+  - 在代码侧完成严格 schema 校验、事实锚定、问题去重、维度封顶和总分封顶。
+  - grounding 是硬契约：不存在的步骤、对不上 `toolName` 的问题、没命中确定性候选的 code 都会被丢弃；若某个非 `met` 维度因此失去全部证据，则抛 `JudgeOutputParseError`，不生成兜底分。
+
+#### 新实验评估器与旧轨迹评估器的边界
+
+- `src/lib/engine/experiment/agent-trajectory-preset-evaluators.ts`
+  - 只做实验适配：把 canonical assessment 投影成 `EvaluatorOutput`。
+  - 只认领 `preset-agent-step-efficiency` 与 `preset-agent-process-quality`，两者均不进入 `legacy-trajectory`。
+- `src/lib/engine/experiment/faithful-preset-evaluators.ts`
+  - 继续认领 `preset-agent-task-completion` 与 `preset-agent-trace-quality`；旧质量卡仍调用 `runTrajectoryQuality()` 与 opencode evaluator。
+- `src/lib/engine/evaluation/trajectory-evaluator.ts` 与旧 API
+  - 保持既有 `TrajectoryEvalResult` 契约和旧质量评分行为，不调用新六维 canonical 能力。
+- canonical repair 边界
+  - attempt 1 只有在已经收到输出但契约解析/校验失败时才进入 repair；首次纯 transport 失败不伪装成契约错误，继续走既有 SDK retry、direct→opencode fallback 和实验行级超时分类。
+  - attempt 2 的任何失败统一转为 `AgentTrajectoryContractExhaustedError`。该错误不是 `JudgeOutputParseError`，因此不会触发行级自动重试，防止一次坏输出被放大成多轮 Judge 调用。
+- `src/lib/engine/agent-debug/skills-analysis.ts`
+  - 继续走 `evaluateTrajectoryViaOpencode()` 的旧关键动作诊断链路，不复用新的六维质量总分。
+
+#### 入口边界与测试清单
+
+- `src/lib/evaluators/registry.ts` 只为 `preset-agent-process-quality` 增加现有格式的运行元数据，不扩展公共卡片或 registry 类型。
+- 实验执行引擎由 canonical runner 唯一认领新 ID；单次、批量和灰度三个 Skill 页面继续统一按 `status === 'ready'` 展示，不增加按 ID 特殊隐藏；旧 `/api/eval/trajectory/run` 白名单保持不变。
+- `preset-agent-trace-quality` 的卡片、faithful runner、旧 API 和消费者不得随新评估器修改。
+- 这组评估器至少维护以下定向测试：
+  - `test/agent-trajectory-facts.test.ts`
+  - `test/agent-trajectory-assessment.test.ts`
+  - `test/agent-trajectory-preset-evaluators.test.ts`
+  - `test/evaluator-surface.test.ts`
+  - `test/preset-registry-consistency.test.ts`
+
 ---
 
 ## 5. 新增自建 LLM 评估器（无需改代码）
@@ -400,6 +451,7 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 - 占位符：`{{query}}`、`{{actual_output}}`、`{{reference_output}}`、`{{trace_summary}}`。
 - **`requires` 自动推导**：提示词里用到 `{{reference_output}}` → 自动标记依赖参考数据，向导 ④ 步随之门控。
 - 可选填「评分点清单」：填了就按清单逐条判定（等价于 §3.2 的分解），留空则自由模式。**建议填**。
+- 输出分值统一使用 **0-100**；运行时仍兼容历史 0-1 量纲（如 `0.85` 自动折算为 `85`，`1` 自动折算为 `100`）。
 
 ### 5.1 铁律：提示词里不许写死验收用例的原句
 
@@ -447,6 +499,8 @@ const issueSchema = z.preprocess(
 | `severity` / `rating` 是未知枚举值（含中文「高」「严重」） | 落到默认档 = 高危静默降级成轻微，且无任何提示 |
 | 非安全档却没给 quote / reason / suggestion | 违反「有分必有据」（§7） |
 
+上表是通用自建/专项评估器的默认约定。Issue #168 的 canonical 轨迹评估器采用 §4.5 的更窄边界：首次 `JudgeOutputParseError` 只触发 canonical 内部一次安全 repair；repair 再失败会转成不可行级重试的 `AgentTrajectoryContractExhaustedError`。
+
 **判据一句话：「模型没判」和「模型判为无风险」是两件事。** 前者必须 failed，不许兜底成中间分。
 
 ### 6.3 禁止兜底分：没判出来就 failed，不许编一个中间值
@@ -474,10 +528,11 @@ score -= SEVERITY_WEIGHT[f.severity] ?? 0.1;
 
 ### 6.6 前端呈现约定
 
-Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的评分点表是「评分点 / 得分 / 证据」三列：
+Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的评分点表是「评分点 / 得分 / 证据与建议」三列：
 
 - **得分列显示 `—`** 只应有一种含义：**该点不参与计分**（无从判定）。任何"未达标"都必须给 0，不能留空。
-- **证据**用 markdown，`EvidenceBlock` 自动识别 md/json 并默认折叠。层级明细（如完整性下挂的每条关键动作覆盖）**写进证据 md**，不要另造嵌套行结构——统一走同一套渲染更一致。
+- **证据与建议**共用右栏和同一个折叠内容块。所有内容块的折叠预览统一以「证据：」开头，展开后先显示「证据」Markdown 小节；建议非空时再追加「Skill 改进建议」小节，不再渲染独立标签或第二个折叠栏。层级明细（如完整性下挂的每条关键动作覆盖）**写进证据 md**，不要另造嵌套行结构。
+- 轨迹质量评分流只产完整性、工具选择和冗余度；当关键动作部分覆盖、缺失或完整性不足时，实验适配层另行调用 `skill-suggestion-agent` 深读完整 Trace，并把非空建议作为 Markdown 挂到「完整性」评分点。建议不参与轨迹分，但通过 `skillAttributable + suggestion` 继续进入 Skill 优化闭环。该实验适配层为评分保留 5 分钟阶段预算，为建议生成配置每次 7 分钟、最多尝试 2 次（含首次），并将该评估器的行级保护上限设为 20 分钟；建议两次失败时返回空建议，不影响已经得到的轨迹分。其他调用 `skill-suggestion-agent` 的入口继续使用默认的每次 5 分钟、最多尝试 3 次。
 - 状态 chip 与得分**同时给**：chip 表达定性（已覆盖/部分/未覆盖），分数表达定量，两者不矛盾。
 
 ---
@@ -505,7 +560,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 - [ ] 有分必有据：不存在"给了分但证据为空"的评分点
 - [ ] 每个评分点 `status` 与 `score` **同时给**（§6.6）
 - [ ] 评分点分值与总分公式**互相解释得通**：单点罚满时总分应落到对应位置，别出现「唯一命中项 0 分、卡片总分 5 分」这种对不上的情况
-- [ ] 满分没有被 0-1 放大坑掉（§3.3）：上报 `1` 会被记成 1 分
+- [ ] 分值已按 0-100 上报；若兼容输出 0-1，确认 `1` 会归一化为 100 分（§3.3）
 
 **注册与口径**
 
@@ -526,8 +581,10 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 
 | 评估器 | 评分点来自 | 覆盖的维度 |
 |---|---|---|
-| 任务完成度 `preset-agent-task-completion` | 参考答案 | 关键观点覆盖率（召回） |
-| 轨迹质量 `preset-agent-trace-quality` | 执行轨迹 | 完整性（关键动作覆盖）· 工具选择 · 冗余度 |
+| 任务完成度 `preset-agent-task-completion` | 预期输出 | 关键观点覆盖率（召回） |
+| 轨迹质量 `preset-agent-trace-quality` | 执行轨迹 / Skill | 完整性 · 工具选择 · 冗余度（既有 opencode 口径） |
+| 执行过程质量 `preset-agent-process-quality` | 执行轨迹 | 目标对齐 · 规划完整性 · 推理连贯性 · 异常处理 · 路径稳健性 · 信息利用 |
+| 步骤效率 `preset-agent-step-efficiency` | 执行轨迹 | 步骤必要性 · 路径绕行 · 成本效率 · 步骤密度 · 重试效率 |
 | 结果准确性 `preset-result-accuracy` | 实际输出主张 | 对参考判对错（精确） |
 | 答案质量 `preset-result-answer` | 最终答案 | 相关性 · 完整性 · 连贯性 |
 | 忠实度 `preset-result-faithfulness` | 实际输出主张 | 对 trace 证据判有据（防脑补） |
@@ -536,11 +593,24 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
 | 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
 | 创造性 `preset-creativity-expression` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采与修辞（5 维 1-3 档锚定，独立成族） |
+| 文本 AI 味 `preset-text-ai-flavor` | Agent 输出 | 模板化开篇 · 模板化结尾 · 机械连接词 · 泛化人物名称 · 空洞总结 · 过度礼貌（6 维扣分制） |
+| 文本格式 `preset-text-format` | Agent 输出 | 序号连续性 · 引用标记 · 列表层级 · 标点 · 排版 · 表格 · 特殊格式（7 维扣分制） |
+| 文本语种一致性 `preset-text-language-consistency` | 用户问题与 Agent 输出 | 主语言匹配（关键维度）· 非必要混杂 · 代码切换理由 · 双语场景处理（3 个普通维度，4 维扣分制） |
+| 文本简洁性 `preset-text-conciseness` | 用户问题与 Agent 输出 | 表达效率 · 套话精简 · 主需求聚焦 · 信息完整（0.3/0.2/0.3/0.2 加权） |
+| 文本流畅度 `preset-fluency-text` | Agent 输出 | 语句通顺度 · 重复与冗余 · 断句与节奏 · 语义连贯性 · 语言自然度（5 维扣分制；连续出现的中度问题第 4 处起扣分加倍，连续前 3 处不翻倍；严重问题不参与加倍，按原档扣分） |
+| 文本幻觉检测 `preset-hallucination-text` | 用户问题与最终答案（±检索上下文） | 实体幻觉 · 数值幻觉 · 引用与文献幻觉 · 逻辑与事实幻觉 + 幻觉严重程度与占比（5 维独立评分点，占比加权 5/15/30；catastrophic 判 0；无法核验时按 light 处理） |
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
 | Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
 
 回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
+
+文本 AI 味与创造性的边界：创造性评价观点的新颖性、视角和修辞表现；文本 AI 味只评价固定套话、机械连接、泛化示例和空洞收束等风格信号，不因文本缺少创意而扣分。文本简洁性与答案质量的边界：简洁性只扣冗余、偏题扩写和必要信息缺失，不重新评价答案事实是否正确。语种一致性只评价语言匹配和无理由切换；格式评估器只评价可读的结构与标记规范，均不承担内容安全判断。
+| 内容严谨性 `preset-rigor-content` | Agent 输出（参考答案可选） | 事实准确性 · 数值精确性 · 逻辑正确性 · 操作建议正确性 · 误导性表述（5 维扣分制 + 严重问题封顶） |
+回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
+
+内容严谨性与结果准确性的边界：结果准确性对照参考答案判对错，内容严谨性面向无参考答案场景，依据评审模型知识与代码审计判定确凿错误，参考答案存在时仅作可选依据。与答案质量的边界：答案质量评相关性、完整性与连贯性，不判内容真伪；内容严谨性只判真伪，不评表达。危险命令只按是否给出风险提示计入操作建议正确性，内容主题的安全性交安全专项评估器；误导性表述只扣与事实共识冲突的过度绝对断言，纯语言形式的绝对化交争议性评估器。
+
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 
@@ -549,3 +619,5 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 歧视 / 冒犯 / 刻板印象 | 种族·性别·年龄·地域·宗教·残疾·职业阶层 这一整片经常被反复切分。切法不同不代表不重叠——它们评的是同一件事。 |
 | 人身攻击 / 骚扰 / 霸凌 | 与「冒犯性」天然交叠，边界要在台账里写明谁负责。 |
 | 政治社会敏感 / 争议性 | 与「歧视」和「有害性」三方交叠。 |
+| 幻觉 / 无依据内容 | 忠实度（`preset-result-faithfulness`）评「主张对 trace 执行证据的有据性」，无证据不评；幻觉检测（`preset-hallucination-text`）评「内容真实性」（实体/数值/引用/逻辑四类），无证据照评、输出类型分类与占比。有 trace 时可能对同一段内容分别判「证据未覆盖」与「内容不真实」——口径不同（有据性审计 vs 真实性审计），允许并存；默认不勾选，避免类目均分被双重拉低。 |
+| 语言表达质量 | 答案质量（`preset-result-answer`）的连贯性是「相关性·完整性·连贯性」三子分之一（完整性视角）；流畅度（`preset-fluency-text`）全面评语言表达质量（5 维，含翻译腔/书面化/断句节奏等答案质量不覆盖的维度）。边界：答案质量管「答没答到、答全、连贯」，流畅度管「读起来顺不顺」。 |

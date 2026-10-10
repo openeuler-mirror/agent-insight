@@ -2,21 +2,7 @@
 
 > Agent-Insight（`@witty-ai/skill-insight`）是一个框架无关、自托管的平台，用于**观测**、**评测**和**优化** AI Agent 及其 Skill。
 > 技术栈：Next.js 16（App Router）+ React 19 + TypeScript + Prisma + Tailwind，内部 Agent 使用 LangChain/LangGraph + deepagents，trace 接入使用 OpenTelemetry。受众：开发者与 LLM 编码 Agent。
-> 于 2026-06-04 通过静态分析生成（515 个 TS 文件、2551 个函数、890 个类型、16004 条调用边）。请先阅读本 INDEX，再按需加载所需文件。
-
-## Source commit (provenance)
-本指南反映**截至下方 commit 的**仓库状态。更新文档时，请与此 commit 做 diff，仅查看自那之后发生的变更，并重新生成受影响的页面。
-
-| Field | Value |
-|---|---|
-| Commit | `ae6f92eab4e8c39a84383f53772693a13bbe53f1` (`ae6f92ea`) |
-| Branch | `local-integration/codex-full` |
-| Date | 2026-08-18T18:32:53+08:00 |
-| Author | duanzhoutao |
-| Subject | `fix(integration): restore trace duration metric` |
-
-**如何更新：** `git diff ae6f92ea HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
-
+> 本页用于查找开发者指南和常用术语；按需阅读对应页面。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -28,12 +14,19 @@
 - [06-frontend.md](06-frontend.md)：前端框架、路由、组件关系。
 - [07-conventions-and-extension.md](07-conventions-and-extension.md)：约定以及如何新增代码；关键实现入口。
 - [08-design-system.md](08-design-system.md)：视觉设计语言、设计令牌、排版、控件尺寸、UI/UX 审计与漂移检测。机器可读的令牌：[design-tokens.json](design-tokens.json)。
-- [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范。
+- [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范；含 RAS 旁路 ingest（非 OTLP）说明。
 - [10-evaluator-development.md](10-evaluator-development.md)：新增/改造评测中心评估器。含打分方法论（禁止自由打分、分解+确定性汇总、三档锚定、精确率/召回率/有据性三轴）与工程接入（契约、注册元数据、canonical 影响面、坑位）。
 - [11-usage-analytics.md](11-usage-analytics.md)：平台用量统计（管理员专用）。有效使用口径注册表、有界队列与故障隔离约束、双数据库存储契约、新增统计事件的方法。
+- [12-goal-plus-observability.md](12-goal-plus-observability.md)：重构后 Goal Plus 的 Pi 主绑定、worker OTLP、关系 outbox 与主从 Trace 展示契约。
+- [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 绑定/关系事件、端点解析、查询 API 与 reported Goal Plus 投影。
+- [MCTS xGovernor 方案设计](../design/mcts-trace-observability/phase2-requirements-design.md)：非侵入式透明代理、Runtime/checkpoint ledger、OTLP 与跨 Session 关系采集契约。
+- [benchmark/README.md](benchmark/README.md)：自定义 Benchmark 的客户入口、需求发现、统一接入开发规范和[整体服务安装指南](benchmark/service-deployment-guide.md)。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。
+- 仓根 [`agent_ras/`](../../agent_ras/)：环内可靠性同进程真源（OpenCode L3 inproc）；统一安装入口见 [`scripts/install-ras.js`](../../scripts/install-ras.js)。
+- 仓根 [`agent_fault_injection/`](../../agent_fault_injection/)：故障注入引擎（注入+采集）；文档 [`docs/agent-fault-injection/`](../agent-fault-injection/README.md)；UI `/agent-ras/fault-injection/tasks`（目录 `/faults`），BFF `/api/fault-injection`。
+- Agent RAS 文档统一入口：[`docs/agent-ras/`](../agent-ras/README.md)（[designs](../agent-ras/designs/) / [guides](../agent-ras/guides/)）。
 
 ## Quick lookup
 | 我想要... | 前往 |
@@ -43,6 +36,8 @@
 | 查找哪个文件实现了 X | [03-file-map.md](03-file-map.md) |
 | 调用或扩展某个引擎 API / 类型 | [04-api-and-contracts.md](04-api-and-contracts.md) |
 | 端到端跟踪接入 / 评测流程 | [05-data-and-control-flow.md](05-data-and-control-flow.md) |
+| 接入新的 Benchmark | [Benchmark 文档关系与开发指南](benchmark/README.md) · [07-conventions-and-extension.md](07-conventions-and-extension.md) |
+| 部署 Benchmark 整体服务 | [Benchmark 整体服务安装指南](benchmark/service-deployment-guide.md) |
 | 新增 API 路由或页面 | [01-architecture.md](01-architecture.md) · [07-conventions-and-extension.md](07-conventions-and-extension.md) |
 | 为页面设置样式 / 使用正确的颜色、间距或组件 | [08-design-system.md](08-design-system.md) |
 | 遵循项目的模式 | [07-conventions-and-extension.md](07-conventions-and-extension.md) |
@@ -61,4 +56,5 @@
 - **Config (dataset config)**：某个查询的标准答案记录——预期 Skill、标准答案、根因、关键动作（Prisma `Config`、`ConfigItem`）。
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。
 - **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（包括 OpenCode、Claude、OpenClaw、AcTrail）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
+- **Collaboration trace**：独立于原生 Execution 树的跨 Session 关系覆盖层；事件正文不可变，端点到 Execution 的关联可随 Trace 到达重算。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。

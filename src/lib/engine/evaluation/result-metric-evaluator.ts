@@ -106,7 +106,7 @@ async function invokeStructured<S extends z.ZodTypeAny>(
     top_p: 1,
     seed: 42,
     messages,
-  });
+  }, { signal: (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal() });
   const content = response.choices?.[0]?.message?.content?.trim();
   if (!content) throw new Error('评测模型返回空内容');
   return schema.parse(parseJson(content));

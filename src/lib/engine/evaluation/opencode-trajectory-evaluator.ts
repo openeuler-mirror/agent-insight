@@ -511,7 +511,7 @@ async function evaluateTrajectoryDirect(
     const response = await model.invoke([
         new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
         new HumanMessage(buildDirectUserMessage(input)),
-    ]);
+    ], { signal: (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal() });
     const content = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
@@ -563,7 +563,7 @@ async function evaluateTrajectoryDirectAndRecord(
     const response = await model.invoke([
         new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
         new HumanMessage(userMsg),
-    ]);
+    ], { signal: (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal() });
     const completedAt = new Date();
     const assistantText = typeof response.content === 'string'
         ? response.content
@@ -683,6 +683,7 @@ export async function evaluateTrajectoryViaOpencode(
      try {
        return await evaluateTrajectoryDirectAndRecord(input, directConfig, user);
      } catch (directErr) {
+       (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal()?.throwIfAborted();
        if (directErr instanceof TrajectoryEvalConfigError) throw directErr;
        console.warn(
          '[opencode-trajectory-eval] direct LLM path failed, falling back to opencode transport:',
@@ -756,11 +757,13 @@ export async function evaluateTrajectoryViaOpencode(
         // serverUrl 由外层 runWithEphemeralOpencodeServer 注入 —— per-task 新进程,跑完自动杀
         insight = new AgentInsight({
             baseURL: serverUrl,
+            directory: '/tmp',
             logLevel: 'warn',
         });
 
         const sessionResp = await insight.createSession({
             title: `${EVALUATOR_AGENT_NAME}-${input.caseId}-${Date.now()}`,
+            directory: '/tmp',
         });
         const sessionId = String(sessionResp?.id || sessionResp?.ID || '');
         if (!sessionId) {

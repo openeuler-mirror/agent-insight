@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RAS Trace 异常事件展示 · 方案 A（已采纳）</title>
+  <style>
+    :root {
+      --background: #ffffff;
+      --foreground: #18181B;
+      --card-bg: #ffffff;
+      --card-border: #E4E4E7;
+      --foreground-secondary: #52525B;
+      --foreground-muted: #71717A;
+      --background-secondary: #F4F4F5;
+      --primary: #4F46E5;
+      --primary-hover: #4338CA;
+      --primary-subtle: #EEF2FF;
+      --primary-subtle-border: #C7D2FE;
+      --success: #16A34A;
+      --success-subtle: #F0FDF4;
+      --success-subtle-border: #BBF7D0;
+      --warning: #D97706;
+      --warning-subtle: #FFFBEB;
+      --warning-subtle-border: #FDE68A;
+      --error: #DC2626;
+      --error-subtle: #FEF2F2;
+      --error-subtle-border: #FECACA;
+      --border: #E4E4E7;
+      --border-dark: #D4D4D8;
+      --sidebar-bg: #FAFAFA;
+      --sidebar-border: #E4E4E7;
+      --sidebar-active-bg: #EEF2FF;
+      --sidebar-active-fg: #4F46E5;
+      --radius: 0.5rem;
+      --radius-sm: 0.375rem;
+      --font-sans: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--foreground);
+      background: var(--background);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .app { display: grid; grid-template-columns: 220px 1fr; height: 100vh; }
+    .sidebar {
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--sidebar-border);
+      padding: 16px 12px;
+    }
+    .brand { font-size: 13px; font-weight: 600; padding: 8px 10px 16px; }
+    .nav-section {
+      font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--foreground-muted); padding: 12px 10px 6px;
+    }
+    .nav-item {
+      padding: 7px 10px; border-radius: var(--radius-sm);
+      color: var(--foreground-secondary); font-size: 12px;
+    }
+    .nav-item.active {
+      background: var(--sidebar-active-bg); color: var(--sidebar-active-fg); font-weight: 500;
+    }
+
+    .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .topbar {
+      height: 48px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px; padding: 0 24px; flex-shrink: 0;
+    }
+    .topbar-back {
+      display: inline-flex; align-items: center; gap: 4px; border: none;
+      background: transparent; color: var(--foreground-muted); font-size: 12px;
+      cursor: pointer; padding: 4px 8px; border-radius: var(--radius-sm); margin-left: -8px;
+    }
+    .topbar-back:hover { background: var(--background-secondary); color: var(--foreground); }
+    .vsep { width: 1px; height: 20px; background: var(--border); }
+    .id-chip {
+      font-family: var(--font-mono); font-size: 11px; color: var(--foreground-secondary);
+      background: var(--background-secondary); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 2px 8px;
+    }
+
+    .page {
+      flex: 1; min-height: 0; overflow: auto; padding: 24px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+
+    .proto-banner {
+      position: sticky; top: 0; z-index: 40; background: #09090B; color: #FAFAFA;
+      padding: 10px 24px; display: flex; align-items: center; gap: 16px;
+      flex-wrap: wrap; font-size: 12px;
+    }
+    .proto-banner .hint { color: #A1A1AA; }
+    .scheme-tabs {
+      display: flex; gap: 4px; margin-left: auto; background: #18181B;
+      padding: 3px; border-radius: var(--radius-sm); border: 1px solid #27272A;
+    }
+    .scheme-tab {
+      border: none; background: transparent; color: #A1A1AA; font-size: 11px;
+      font-weight: 500; padding: 5px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+    }
+    .scheme-tab:hover { color: #FAFAFA; }
+    .scheme-tab.active { background: var(--primary); color: white; }
+    .adopt-tag {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+      background: #16A34A; color: white; padding: 1px 5px; border-radius: 3px; margin-left: 4px;
+    }
+
+    h2.section-title {
+      font-size: 12px; font-weight: 600; color: var(--foreground); margin: 0 0 12px;
+    }
+    h2.section-title .count {
+      margin-left: 8px; font-weight: 400; font-size: 11px;
+      color: var(--foreground-muted); font-variant-numeric: tabular-nums;
+    }
+
+    .badge {
+      display: inline-flex; align-items: center; border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0 6px; height: 20px; font-size: 11px;
+      color: var(--foreground-secondary); background: var(--card-bg); white-space: nowrap;
+    }
+    .badge.mono { font-family: var(--font-mono); font-size: 10px; }
+    .badge.secondary { background: var(--background-secondary); }
+
+    .status {
+      display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px;
+      border-radius: var(--radius-sm); border: 1px solid; font-size: 11px;
+      font-weight: 500; white-space: nowrap;
+    }
+    .status.error { background: var(--error-subtle); color: var(--error); border-color: var(--error-subtle-border); }
+    .status.warning { background: var(--warning-subtle); color: var(--warning); border-color: var(--warning-subtle-border); }
+    .status.muted { background: var(--background-secondary); color: var(--foreground-secondary); border-color: var(--border); }
+    .status.success { background: var(--success-subtle); color: var(--success); border-color: var(--success-subtle-border); }
+    .status svg { width: 12px; height: 12px; flex-shrink: 0; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+      border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--card-bg);
+      color: var(--foreground-secondary); font-size: 12px; font-weight: 500; cursor: pointer;
+    }
+    .btn:hover { background: var(--background-secondary); color: var(--foreground); }
+    .btn.ghost { border-color: transparent; background: transparent; }
+    .btn.primary { background: var(--primary); border-color: var(--primary); color: white; }
+
+    .card {
+      border: 1px solid var(--card-border); background: var(--card-bg);
+      border-radius: var(--radius); padding: 12px;
+    }
+    .card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .card-time { font-size: 11px; color: var(--foreground-muted); }
+    .card-summary { font-size: 12px; color: var(--foreground-secondary); line-height: 1.55; margin: 0; }
+    .action-block {
+      margin-top: 8px; border: 1px solid var(--border); background: var(--background-secondary);
+      border-radius: var(--radius); padding: 8px 10px; font-size: 11px; color: var(--foreground-secondary);
+    }
+    .action-block .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .action-block pre {
+      margin: 6px 0 0; font-family: var(--font-sans); font-size: 12px;
+      white-space: pre-wrap; word-break: break-word; max-height: 80px; overflow: auto;
+    }
+
+    .current-events { display: flex; flex-direction: column; gap: 8px; }
+    .separator { height: 1px; background: var(--border); border: none; margin: 0; }
+
+    /* ===== Scheme A strip ===== */
+    .ras-strip {
+      border: 1px solid var(--card-border); background: var(--card-bg);
+      border-radius: var(--radius); overflow: hidden; flex-shrink: 0;
+    }
+    .ras-strip-header {
+      display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+      min-height: 40px; cursor: pointer; user-select: none;
+    }
+    .ras-strip-header:hover { background: var(--background-secondary); }
+    .ras-strip-header .title {
+      font-size: 12px; font-weight: 600; color: var(--foreground);
+      display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+    }
+    .ras-strip-header .title svg { width: 14px; height: 14px; color: var(--error); }
+    .severity-chips {
+      display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; flex-wrap: wrap;
+    }
+    .chip {
+      display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px;
+      border-radius: 999px; border: 1px solid var(--border); background: var(--background-secondary);
+      font-size: 11px; color: var(--foreground-secondary); cursor: pointer;
+    }
+    .chip:hover { border-color: var(--border-dark); }
+    .chip.active {
+      background: var(--primary-subtle); border-color: var(--primary-subtle-border);
+      color: var(--primary); font-weight: 500;
+    }
+    .chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .chip .dot.critical, .chip .dot.high { background: var(--error); }
+    .chip .dot.medium { background: var(--warning); }
+    .chip .dot.low { background: var(--foreground-muted); }
+    .chip .n { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .ras-strip-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; }
+    .chevron {
+      width: 16px; height: 16px; color: var(--foreground-muted); transition: transform .15s ease;
+    }
+    .ras-strip.open .chevron { transform: rotate(180deg); }
+    .ras-strip-body {
+      display: none; border-top: 1px solid var(--border); max-height: 280px;
+      overflow: auto; padding: 6px; background: var(--background-secondary);
+    }
+    .ras-strip.open .ras-strip-body { display: block; }
+
+    /* ===== One-line fault row ===== */
+    .fault-row {
+      display: grid;
+      grid-template-columns: minmax(96px, auto) auto minmax(0, 1fr) auto auto auto;
+      gap: 8px 10px;
+      align-items: center;
+      padding: 8px 10px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      margin-bottom: 4px;
+      min-height: 36px;
+    }
+    .fault-row:last-child { margin-bottom: 0; }
+    .fault-row:hover { border-color: var(--border-dark); }
+    .fault-row.active {
+      border-color: var(--primary-subtle-border);
+      background: var(--primary-subtle);
+    }
+    .fault-row.hidden { display: none; }
+    .fault-row .kind-cell { font-weight: 500; }
+    .fault-row .summary-cell {
+      font-size: 12px; color: var(--foreground-secondary);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+    }
+    .ops-cell {
+      display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; justify-content: flex-end;
+    }
+    .op-tag {
+      display: inline-flex; align-items: center; height: 18px; padding: 0 6px;
+      border-radius: 3px; border: 1px solid var(--border); background: var(--background-secondary);
+      font-family: var(--font-mono); font-size: 10px; color: var(--foreground-secondary);
+      white-space: nowrap;
+    }
+    .op-tag.abort {
+      border-color: var(--warning-subtle-border);
+      background: var(--warning-subtle);
+      color: var(--warning);
+    }
+    .op-tag.recover {
+      border-color: var(--primary-subtle-border);
+      background: var(--primary-subtle);
+      color: var(--primary);
+    }
+    .outcome-cell { justify-self: end; }
+    .time-cell {
+      font-size: 11px; color: var(--foreground-muted); font-variant-numeric: tabular-nums;
+      white-space: nowrap; justify-self: end;
+    }
+
+    .list-colhead {
+      display: grid;
+      grid-template-columns: minmax(96px, auto) auto minmax(0, 1fr) auto auto auto;
+      gap: 8px 10px;
+      padding: 4px 10px 6px;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--foreground-muted);
+    }
+
+    /* Trace mock */
+    .trace-panel {
+      flex: 1; min-height: 360px; border: 1px solid var(--card-border);
+      background: var(--card-bg); border-radius: var(--radius);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .trace-stats {
+      display: flex; gap: 16px; padding: 10px 14px; border-bottom: 1px solid var(--border);
+      font-size: 11px; color: var(--foreground-muted); flex-wrap: wrap;
+    }
+    .trace-stats strong {
+      display: block; font-size: 13px; color: var(--foreground); font-variant-numeric: tabular-nums;
+    }
+    .trace-stats .ras-stat strong { color: var(--error); }
+    .trace-body { flex: 1; display: grid; grid-template-columns: 62% 38%; min-height: 0; }
+    .trace-tree { border-right: 1px solid var(--border); overflow: auto; padding: 8px 0; }
+    .trace-toolbar {
+      display: flex; gap: 6px; padding: 6px 12px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap;
+    }
+    .tree-colhead {
+      display: grid; grid-template-columns: 1fr 64px 72px 64px; gap: 8px;
+      padding: 6px 12px; font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.04em; color: var(--foreground-muted); border-bottom: 1px solid var(--border);
+    }
+    .span-row {
+      display: grid; grid-template-columns: 1fr 64px 72px 64px; gap: 8px; align-items: center;
+      padding: 5px 12px; font-size: 12px; cursor: pointer; border-left: 2px solid transparent;
+    }
+    .span-row:hover { background: var(--background-secondary); }
+    .span-row.hl { background: var(--error-subtle); border-left-color: var(--error); }
+    .span-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .span-label .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .indent-1 { padding-left: 24px; }
+    .indent-2 { padding-left: 40px; }
+    .kind {
+      display: inline-flex; align-items: center; height: 16px; padding: 0 4px;
+      border-radius: 3px; border: 1px solid; font-size: 10px; font-weight: 700;
+      letter-spacing: 0.04em; flex-shrink: 0;
+    }
+    .kind.agent { background: #EEF2FF; color: #4338CA; border-color: #C7D2FE; }
+    .kind.llm { background: #F0FDF4; color: #15803D; border-color: #BBF7D0; }
+    .kind.tool { background: #FFFBEB; color: #92400E; border-color: #FDE68A; }
+    .kind.ras { background: var(--error-subtle); color: var(--error); border-color: var(--error-subtle-border); }
+    .kind.user { background: var(--background-secondary); color: var(--foreground-secondary); border-color: var(--border); }
+    .ras-inline {
+      display: inline-flex; align-items: center; gap: 3px; max-width: 180px; height: 18px;
+      padding: 0 6px; border-radius: 3px; border: 1px solid var(--error-subtle-border);
+      background: var(--error-subtle); color: var(--error); font-size: 10px; font-weight: 600;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .metric { font-family: var(--font-mono); font-size: 11px; color: var(--foreground-muted); text-align: right; }
+    .gantt { height: 6px; background: var(--background-secondary); border-radius: 3px; overflow: hidden; }
+    .gantt > i { display: block; height: 100%; background: var(--primary); border-radius: 3px; opacity: .55; }
+    .gantt.ras > i { background: var(--error); opacity: .7; }
+    .trace-detail { overflow: auto; padding: 14px; background: var(--background); }
+    .trace-detail h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; }
+    .detail-placeholder {
+      color: var(--foreground-muted); font-size: 12px; padding: 24px 8px; text-align: center;
+    }
+    .ras-detail-card {
+      border: 1px solid var(--error-subtle-border); background: var(--error-subtle);
+      border-radius: var(--radius); padding: 12px;
+    }
+    .ras-detail-card .inner {
+      background: var(--card-bg); border: 1px solid var(--error-subtle-border);
+      border-radius: var(--radius-sm); padding: 10px; margin-top: 8px;
+    }
+
+    .viewport-hint {
+      display: none; align-items: center; gap: 8px; padding: 8px 12px;
+      border-radius: var(--radius-sm); background: var(--warning-subtle);
+      border: 1px solid var(--warning-subtle-border); color: #92400E; font-size: 11px;
+    }
+    .viewport-hint.show { display: flex; }
+
+    .note-panel {
+      border: 1px dashed var(--border-dark); border-radius: var(--radius);
+      padding: 12px 14px; background: var(--background-secondary);
+      font-size: 12px; color: var(--foreground-secondary); line-height: 1.55;
+    }
+    .note-panel strong { color: var(--foreground); }
+    .note-panel ul { margin: 6px 0 0; padding-left: 18px; }
+    .note-panel li + li { margin-top: 2px; }
+    .note-panel code {
+      font-family: var(--font-mono); font-size: 11px;
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 3px; padding: 0 4px;
+    }
+
+    [data-scheme] { display: none; }
+    [data-scheme].visible { display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; }
+
+    @media (max-width: 1100px) {
+      .fault-row, .list-colhead {
+        grid-template-columns: minmax(88px, auto) auto minmax(0, 1fr) auto;
+      }
+      .fault-row .ops-cell { grid-column: 1 / -1; justify-content: flex-start; }
+      .list-colhead span:nth-child(4) { display: none; }
+    }
+    @media (max-width: 960px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .trace-body { grid-template-columns: 1fr; }
+      .trace-tree { border-right: none; border-bottom: 1px solid var(--border); max-height: 280px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="proto-banner">
+    <strong>高保真原型</strong>
+    <span class="hint">方案 A 已采纳 · 单故障单行（恢复/中断并入同行）· 未改业务代码</span>
+    <div class="scheme-tabs" role="tablist">
+      <button class="scheme-tab" data-goto="current" type="button">当前方案（对比）</button>
+      <button class="scheme-tab active" data-goto="a" type="button">方案 A · 折叠条 + 单行<span class="adopt-tag">已采纳</span></button>
+    </div>
+  </div>
+
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">Agent Insight</div>
+      <div class="nav-section">AgentRAS 可靠性</div>
+      <div class="nav-item">可靠性能力</div>
+      <div class="nav-item active">可靠性观测</div>
+      <div class="nav-section">观测</div>
+      <div class="nav-item">链路追踪</div>
+      <div class="nav-item">Sessions</div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="topbar-back" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          返回列表
+        </button>
+        <div class="vsep"></div>
+        <span class="id-chip">task_a1b2…f9e8</span>
+      </header>
+
+      <div class="page">
+        <div id="viewport-hint" class="viewport-hint">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span>对比：同一「思考死循环」被拆成检测 / 恢复 / 中断多张卡片，链路被挤出首屏。</span>
+        </div>
+
+        <!-- CURRENT: multi-card explosion -->
+        <section data-scheme="current">
+          <div class="note-panel">
+            <strong>当前问题</strong>：同一故障生命周期被拆成多张高卡片（检测 + 各恢复动作各自占块），例如「思考死循环」会变成 3 张卡。事件一多，链路追踪被推到首屏外。
+          </div>
+          <div>
+            <h2 class="section-title">RAS 可靠性异常事件<span class="count" id="count-current">0</span></h2>
+            <div class="current-events" id="current-list"></div>
+          </div>
+          <hr class="separator" />
+          <div>
+            <h2 class="section-title">完整链路追踪</h2>
+            <div class="trace-panel" id="trace-current"></div>
+          </div>
+        </section>
+
+        <!-- SCHEME A -->
+        <section data-scheme="a" class="visible">
+          <div class="note-panel">
+            <strong>方案 A（已采纳）· 折叠摘要条 + 单故障单行</strong>
+            <ul>
+              <li>默认收起 ~40px；展开后列表 <code>max-height</code> 内滚，不侵占主视口</li>
+              <li><strong>聚合单位 = 一次故障检测（anomalyKind）</strong>：思考死循环的恢复、中断等操作并入<strong>同一行</strong>，用操作标签展示</li>
+              <li>行内只保留：类型 · 严重度 · 摘要（单行截断）· 操作标签 · 结果 · 时间</li>
+              <li>完整摘要与动作详情放到右侧链路详情面板（点选行联动）</li>
+            </ul>
+          </div>
+
+          <div class="ras-strip" id="strip-a">
+            <div class="ras-strip-header" id="strip-a-toggle" role="button" tabindex="0" aria-expanded="true">
+              <div class="title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                RAS 异常
+                <span id="count-a" style="font-weight:400;color:var(--foreground-muted);font-size:11px">0</span>
+              </div>
+              <div class="severity-chips" id="chips-a"></div>
+              <div class="ras-strip-actions">
+                <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+            <div class="ras-strip-body" id="list-a"></div>
+          </div>
+
+          <div>
+            <h2 class="section-title">完整链路追踪</h2>
+            <div class="trace-panel" id="trace-a"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * FAULTS = 一次故障检测（anomaly）为聚合单位。
+     * ops[] 挂在同一故障上，列表只渲染一行。
+     */
+    const FAULTS = [
+      {
+        id: 'f1', kind: 'llm_thinking_dead_loop', kindLabel: '思考死循环',
+        severity: 'critical', ts: '2026-08-07 15:42:11',
+        summary: '检测到 thinking token 占比异常升高且输出无进展，触发环路熔断。',
+        ops: [
+          { type: 'break_loop', label: 'break_loop', role: 'recover', ok: true, message: '强制结束当前思考段，要求输出中间结论。' },
+          { type: 'abort_stream', label: 'abort_stream', role: 'abort', ok: true, message: '中断当前流式输出，清理未完成段。' },
+        ],
+        outcome: 'success',
+        spanId: 'ras-1',
+      },
+      {
+        id: 'f2', kind: 'repeat_tool_call', kindLabel: '工具重复调用',
+        severity: 'high', ts: '2026-08-07 15:43:02',
+        summary: '同一工具参数连续调用 4 次且结果无变化。',
+        ops: [
+          { type: 'nudge_diversify', label: 'nudge_diversify', role: 'recover', ok: true, message: '提示更换工具或调整参数。' },
+        ],
+        outcome: 'success',
+        spanId: 'ras-2',
+      },
+      {
+        id: 'f3', kind: 'tool_call_loop', kindLabel: '工具调用循环',
+        severity: 'high', ts: '2026-08-07 15:44:10',
+        summary: '工具 A→B→A 形成环，超过阈值阈值。',
+        ops: [
+          { type: 'break_tool_loop', label: 'break_tool_loop', role: 'recover', ok: false, message: '投递失败：channel=hook 超时。' },
+          { type: 'abort_stream', label: 'abort_stream', role: 'abort', ok: true, message: '降级中断当前 turn。' },
+        ],
+        outcome: 'failed',
+        spanId: 'ras-3',
+      },
+      {
+        id: 'f4', kind: 'llm_thinking_loop', kindLabel: '思考循环',
+        severity: 'medium', ts: '2026-08-07 15:45:40',
+        summary: '连续多轮仅产出思考文本，无 tool / 无最终回答。',
+        ops: [
+          { type: 'force_act', label: 'force_act', role: 'recover', ok: true, message: '要求立刻给出可执行下一步。' },
+        ],
+        outcome: 'success',
+        spanId: 'ras-4',
+      },
+      {
+        id: 'f5', kind: 'memory_noise', kindLabel: '记忆噪声干扰',
+        severity: 'low', ts: '2026-08-07 15:46:22',
+        summary: '检索记忆与当前任务主题相似度 < 0.2。',
+        ops: [],
+        outcome: 'none',
+        spanId: 'ras-5',
+      },
+    ];
+
+    /** 当前方案对比：把同一故障拆成多张「伪事件」卡片 */
+    function explodeCurrentCards() {
+      const cards = [];
+      for (const f of FAULTS) {
+        cards.push({
+          kind: 'anomaly',
+          kindLabel: f.kindLabel,
+          severity: f.severity,
+          ts: f.ts,
+          summary: f.summary,
+          actionLabel: null,
+          message: null,
+          ok: null,
+        });
+        for (const op of f.ops) {
+          cards.push({
+            kind: 'action',
+            kindLabel: f.kindLabel,
+            severity: f.severity,
+            ts: f.ts,
+            summary: null,
+            actionLabel: op.label,
+            message: op.message,
+            ok: op.ok,
+            role: op.role,
+          });
+        }
+      }
+      return cards;
+    }
+
+    const SEV_ORDER = ['critical', 'high', 'medium', 'low'];
+    const SEV_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
+    const SEV_STATUS = { critical: 'error', high: 'error', medium: 'warning', low: 'muted' };
+    const OUTCOME_LABEL = {
+      success: { text: '恢复成功', cls: 'success' },
+      failed: { text: '恢复失败', cls: 'error' },
+      none: { text: '未恢复', cls: 'muted' },
+    };
+
+    let selectedId = null;
+    let filterSev = 'all';
+    let stripAOpen = true;
+
+    function iconX() {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>`;
+    }
+    function iconAlert() {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+    }
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function statusBadge(sev) {
+      const cls = SEV_STATUS[sev];
+      const icon = (sev === 'critical' || sev === 'high') ? iconX() : iconAlert();
+      return `<span class="status ${cls}">${icon}${SEV_LABEL[sev]}</span>`;
+    }
+    function outcomeBadge(outcome) {
+      const o = OUTCOME_LABEL[outcome] || OUTCOME_LABEL.none;
+      return `<span class="status ${o.cls}">${o.text}</span>`;
+    }
+
+    function severityCounts() {
+      const c = { critical: 0, high: 0, medium: 0, low: 0 };
+      FAULTS.forEach(e => c[e.severity]++);
+      return c;
+    }
+
+    function renderChips(containerId) {
+      const el = document.getElementById(containerId);
+      const c = severityCounts();
+      const parts = SEV_ORDER.filter(k => c[k] > 0).map(k => `
+        <button type="button" class="chip${filterSev === k ? ' active' : ''}" data-sev="${k}">
+          <span class="dot ${k}"></span>${SEV_LABEL[k]} <span class="n">${c[k]}</span>
+        </button>`).join('');
+      el.innerHTML = `
+        <button type="button" class="chip${filterSev === 'all' ? ' active' : ''}" data-sev="all">
+          全部 <span class="n">${FAULTS.length}</span>
+        </button>${parts}`;
+      el.querySelectorAll('.chip').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          filterSev = btn.dataset.sev;
+          selectedId = null;
+          refreshAll();
+        });
+      });
+    }
+
+    function renderCurrent() {
+      const cards = explodeCurrentCards();
+      document.getElementById('count-current').textContent = String(cards.length);
+      const list = document.getElementById('current-list');
+      list.innerHTML = cards.map(card => {
+        if (card.kind === 'anomaly') {
+          return `
+            <div class="card">
+              <div class="card-meta">
+                <span class="badge">${card.kindLabel}</span>
+                ${statusBadge(card.severity)}
+                <span class="badge secondary">检测</span>
+                <span class="card-time">${card.ts}</span>
+              </div>
+              <p class="card-summary">${escapeHtml(card.summary)}</p>
+            </div>`;
+        }
+        const roleLabel = card.role === 'abort' ? '中断操作' : 'RAS恢复操作';
+        return `
+          <div class="card">
+            <div class="card-meta">
+              <span class="badge">${card.kindLabel}</span>
+              <span class="badge mono secondary">${card.actionLabel}</span>
+              <span class="badge secondary">${roleLabel}</span>
+              <span class="status ${card.ok ? 'success' : 'error'}">${card.ok ? '成功' : '失败'}</span>
+              <span class="card-time">${card.ts}</span>
+            </div>
+            <div class="action-block"><pre>${escapeHtml(card.message || '')}</pre></div>
+          </div>`;
+      }).join('');
+    }
+
+    function opsHtml(fault) {
+      if (!fault.ops.length) {
+        return `<span class="op-tag" style="opacity:.6">无操作</span>`;
+      }
+      return fault.ops.map(op =>
+        `<span class="op-tag ${op.role === 'abort' ? 'abort' : 'recover'}" title="${escapeHtml(op.message || '')}">${escapeHtml(op.label)}</span>`
+      ).join('');
+    }
+
+    function renderListA() {
+      document.getElementById('count-a').textContent = String(FAULTS.length);
+      const list = document.getElementById('list-a');
+      list.innerHTML = `
+        <div class="list-colhead">
+          <span>故障类型</span><span>严重度</span><span>摘要</span><span>操作</span><span>结果</span><span>时间</span>
+        </div>
+        ${FAULTS.map(f => `
+          <div class="fault-row${selectedId === f.id ? ' active' : ''}${filterSev !== 'all' && filterSev !== f.severity ? ' hidden' : ''}" data-id="${f.id}">
+            <div class="kind-cell"><span class="badge">${f.kindLabel}</span></div>
+            <div>${statusBadge(f.severity)}</div>
+            <div class="summary-cell" title="${escapeHtml(f.summary)}">${escapeHtml(f.summary)}</div>
+            <div class="ops-cell">${opsHtml(f)}</div>
+            <div class="outcome-cell">${outcomeBadge(f.outcome)}</div>
+            <div class="time-cell">${f.ts.split(' ')[1]}</div>
+          </div>
+        `).join('')}`;
+      list.querySelectorAll('.fault-row').forEach(row => {
+        row.addEventListener('click', () => {
+          selectedId = row.dataset.id;
+          refreshAll();
+          scrollTraceHighlight('trace-a');
+        });
+      });
+    }
+
+    function detailOps(fault) {
+      if (!fault.ops.length) return '<p class="card-summary" style="margin-top:8px">无恢复 / 中断操作</p>';
+      return fault.ops.map(op => `
+        <div class="action-block">
+          <div class="row">
+            <span class="badge mono secondary">${escapeHtml(op.label)}</span>
+            <span class="badge secondary">${op.role === 'abort' ? '中断' : '恢复'}</span>
+            <span class="status ${op.ok ? 'success' : 'error'}">${op.ok ? '成功' : '失败'}</span>
+          </div>
+          ${op.message ? `<pre>${escapeHtml(op.message)}</pre>` : ''}
+        </div>
+      `).join('');
+    }
+
+    function renderTraceDetail(id) {
+      const f = FAULTS.find(e => e.id === id);
+      if (!f) return '';
+      return `
+        <h4 style="color:var(--error);display:flex;align-items:center;gap:6px">${iconAlert()} RAS Events</h4>
+        <div class="ras-detail-card">
+          <div style="font-size:12px;font-weight:600;color:var(--error)">可靠性异常 · 一次故障</div>
+          <div class="inner">
+            <div class="card-meta">
+              <span class="ras-inline">${iconAlert()} RAS · ${f.kindLabel}</span>
+              ${statusBadge(f.severity)}
+              ${outcomeBadge(f.outcome)}
+              <span class="card-time">${f.ts}</span>
+            </div>
+            <p class="card-summary" style="margin-top:8px">${escapeHtml(f.summary)}</p>
+            <div style="margin-top:10px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--foreground-muted)">操作（同属本故障）</div>
+            ${detailOps(f)}
+          </div>
+        </div>`;
+    }
+
+    function buildTraceHtml(panelId) {
+      const hl = selectedId ? FAULTS.find(e => e.id === selectedId)?.spanId : null;
+      const rasRows = FAULTS.map((f, i) => {
+        const isHl = hl === f.spanId;
+        const opHint = f.ops.length
+          ? ` · ${f.ops.map(o => o.label).join(', ')}`
+          : '';
+        return `
+          <div class="span-row indent-2${isHl ? ' hl' : ''}" data-span="${f.spanId}" data-ev="${f.id}">
+            <div class="span-label">
+              <span class="kind ras">RAS</span>
+              <span class="ras-inline" title="${escapeHtml(f.kindLabel + opHint)}">${iconAlert()} ${f.kindLabel}</span>
+            </div>
+            <div class="gantt ras"><i style="width:${24 + i * 10}%"></i></div>
+            <div class="metric">${(0.5 + i * 0.4).toFixed(1)}s</div>
+            <div class="metric">—</div>
+          </div>`;
+      }).join('');
+
+      return `
+        <div class="trace-stats">
+          <div><strong>1</strong>AGENTS</div>
+          <div><strong>3</strong>TASK</div>
+          <div><strong>6</strong>TOOL</div>
+          <div><strong>5</strong>LLM</div>
+          <div class="ras-stat"><strong>${FAULTS.length}</strong>RAS EVENTS</div>
+          <div><strong>42.1k</strong>TOKENS</div>
+        </div>
+        <div class="trace-toolbar">
+          <button class="btn ghost" type="button">全展开</button>
+          <button class="btn ghost" type="button">搜索</button>
+          <button class="btn ghost" type="button">慢请求</button>
+          <button class="btn" type="button">仅异常</button>
+        </div>
+        <div class="trace-body">
+          <div class="trace-tree">
+            <div class="tree-colhead"><span>Span</span><span>Share</span><span>Duration</span><span>Tokens</span></div>
+            <div class="span-row">
+              <div class="span-label"><span class="kind agent">AGENT</span><span class="name">root · witty-session</span></div>
+              <div class="gantt"><i style="width:100%"></i></div>
+              <div class="metric">128s</div>
+              <div class="metric">42.1k</div>
+            </div>
+            <div class="span-row indent-1">
+              <div class="span-label"><span class="kind user">USER</span><span class="name">帮我排查线上超时…</span></div>
+              <div class="gantt"><i style="width:8%"></i></div>
+              <div class="metric">0.2s</div>
+              <div class="metric">1.2k</div>
+            </div>
+            <div class="span-row indent-1">
+              <div class="span-label"><span class="kind llm">LLM</span><span class="name">claude-sonnet · turn 1</span></div>
+              <div class="gantt"><i style="width:35%"></i></div>
+              <div class="metric">12.4s</div>
+              <div class="metric">8.6k</div>
+            </div>
+            ${rasRows.slice(0, 2)}
+            <div class="span-row indent-1">
+              <div class="span-label"><span class="kind tool">TOOL</span><span class="name">bash · curl health</span></div>
+              <div class="gantt"><i style="width:18%"></i></div>
+              <div class="metric">3.1s</div>
+              <div class="metric">—</div>
+            </div>
+            <div class="span-row indent-1">
+              <div class="span-label"><span class="kind llm">LLM</span><span class="name">claude-sonnet · turn 2</span></div>
+              <div class="gantt"><i style="width:42%"></i></div>
+              <div class="metric">18.0s</div>
+              <div class="metric">11.2k</div>
+            </div>
+            ${rasRows.slice(2)}
+          </div>
+          <div class="trace-detail">
+            ${selectedId ? renderTraceDetail(selectedId) : '<div class="detail-placeholder">选择故障行或链路中的 RAS 节点查看详情</div>'}
+          </div>
+        </div>`;
+    }
+
+    function renderTraces() {
+      ['trace-current', 'trace-a'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = buildTraceHtml(id);
+        el.querySelectorAll('.span-row[data-ev]').forEach(row => {
+          row.addEventListener('click', () => {
+            selectedId = row.dataset.ev;
+            refreshAll();
+          });
+        });
+      });
+    }
+
+    function scrollTraceHighlight(panelId) {
+      document.getElementById(panelId)?.querySelector('.span-row.hl')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function refreshAll() {
+      renderChips('chips-a');
+      renderListA();
+      renderTraces();
+      const strip = document.getElementById('strip-a');
+      strip.classList.toggle('open', stripAOpen);
+      document.getElementById('strip-a-toggle').setAttribute('aria-expanded', String(stripAOpen));
+    }
+
+    function setScheme(name) {
+      document.querySelectorAll('[data-scheme]').forEach(s => {
+        s.classList.toggle('visible', s.dataset.scheme === name);
+      });
+      document.querySelectorAll('.scheme-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.goto === name);
+      });
+      document.getElementById('viewport-hint').classList.toggle('show', name === 'current');
+      document.querySelector('.page').scrollTop = 0;
+    }
+
+    renderCurrent();
+    refreshAll();
+    const initial = new URLSearchParams(location.search).get('scheme') || 'a';
+    setScheme(['current', 'a'].includes(initial) ? initial : 'a');
+
+    document.querySelectorAll('.scheme-tab').forEach(tab => {
+      tab.addEventListener('click', () => setScheme(tab.dataset.goto));
+    });
+    document.getElementById('strip-a-toggle').addEventListener('click', () => {
+      stripAOpen = !stripAOpen;
+      refreshAll();
+    });
+    document.getElementById('strip-a-toggle').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        stripAOpen = !stripAOpen;
+        refreshAll();
+      }
+    });
+  </script>
+</body>
+</html>

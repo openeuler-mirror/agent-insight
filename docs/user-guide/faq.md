@@ -13,6 +13,33 @@ description: "高频问题集中解答"
 
 ## 接入与登录
 
+### 怎样单次使用另一个数据库或端口启动？
+
+源码部署可在启动命令前设置 `DATABASE_URL`，并通过 `--port` 设置本次监听端口。
+这些值只对本次进程生效，并优先于 `$AGENT_INSIGHT_HOME/.env`。SQLite 请使用绝对路径，例如：
+
+```bash
+DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh --port 3100
+```
+
+端口必须是 1 到 65535 的整数；未设置时为 3000。该命令会停止并替换目标端口上的旧服务。
+同一个源码目录的不同端口实例不能并行执行 `start.sh`：它们共用 `.next` 和 `server.log`，重建会破坏
+仍在运行的旧实例。需要并行测试时，请使用独立 Git worktree，并为它设置独立的
+`AGENT_INSIGHT_HOME`、`DATABASE_URL` 和 `PORT`。
+
+启动会在停止旧服务和清理 `.next` 之前预检绝对 SQLite 路径：父目录必须已经存在且当前用户
+可进入、可写；已有数据库文件必须为当前用户可读写的普通文件。检查失败会输出目标路径、
+当前用户和修复建议，不会继续构建。脚本不会自动创建自定义父目录，以免 root 用户因拼写错误
+在错误位置创建目录。
+
+### 为什么服务有响应，但打开页面显示 Internal Server Error？
+
+先检查 `server.log`。如果出现 `client reference manifest ... does not exist` 或
+缺失 `.next/server/pages/500.html`，属于构建产物不完整，不代表数据库损坏。
+不要在同一源码目录的服务运行期间执行 `npm run build` 或清理 `.next`，这会使旧进程失去页面文件。
+本地源码部署可使用 `bash scripts/start.sh` 停旧服务、完整构建后再启动；启动会检查页面清单，
+并要求首页、数据集和故障页面不返回 HTTP 错误。失败时先查看日志，不要删除数据库。
+
 ### 为什么我已经完成接入，但链路追踪里还是没有数据？
 
 优先按下面顺序检查：
@@ -24,6 +51,31 @@ description: "高频问题集中解答"
 5. 服务端地址和网络连通性是否正常
 
 如果你最近切换过账号，尤其要注意是否复制了旧的 API Key。
+
+如果客户端已得到 Trace ID，但列表仍没有记录，可检查 `server.log` 是否出现
+`[OTelConsumer] spool is owned by another process`，以及
+`$AGENT_INSIGHT_HOME/otel_data/traces/consumer-checkpoint.json` 是否持续更新。
+源码部署的 `scripts/start.sh` 会在端口释放后清理同一项目中已失去监听端口、却仍占有 Trace 消费锁的旧服务进程；Linux 旧进程处于僵尸状态时会清理其遗留锁。锁属于其他项目或仍在监听的服务时，启动会停止并提示处理，避免静默丢失消费能力。
+
+### 为什么 `infra-poller` 反复报错？
+
+这是推理基础设施指标采集日志。例如 `/metrics` 返回 HTTP 404，表示该抓取地址不可用，应检查指标源的采集地址或网关路由；它本身不能证明 Trace 上报失败。
+
+自动采集对每个源的连续相同错误限频：首次失败立即输出 `[infra-poller] source error:`，持续相同错误每 60 秒最多输出一次；错误内容变化时立即输出。本源抓取及保存成功后输出一次 `source recovered:`，未到采集时间、停用或删除源不会被当作恢复。查询指标源等整轮异常使用 `tick error:`，同样限频，恢复时输出 `tick recovered:`。
+
+日志详情为单行 JSON，`consecutiveFailures` 表示本次连续失败次数，`suppressed` 表示自上次打印后省略的重复日志数；错误变化时会附带 `previousError`。采集仍按原频率执行，日志条数不再等于失败次数。较早版本使用 `polled ..., failed ...` 的多行格式。
+
+### 为什么持续出现 `deferring spool files at session capacity`？
+
+这表示消费者已达到内存会话上限（默认 20,000），新的缓存文件正在等待处理。它不代表数据库最多只能存 20,000 条 Trace，也不表示这些文件被删除。当前版本会保留未完成文件的磁盘重放位置，将暂时受锁阻塞或反复失败的工作延后重试，并让出内存名额；容量告警每分钟最多汇总一次。
+
+Trace 会先快速落库展示，最终阶段保存成功后才确认消费进度。若长时间仍有积压，应结合 `session processing failed`、`stalled dispatch` 和数据库错误排查，不要仅调大上限或删除原始缓存。旧版本存在跳过会话后漏排重试的问题，可出现上限持续占满；需要恢复历史积压时，可显式选择下面的 `resume` 启动策略。
+
+### 重新部署会立即处理全部历史 OTel 积压吗？
+
+默认 `AGENT_INSIGHT_OTEL_CONSUMER_START_MODE=live`，每次服务启动后，仅由新收到的数据触发处理，静止的历史积压不再主动聚合或写库。时间依据是服务端接收时间，不是客户端 Trace 开始时间。旧会话继续上报时，会读取该会话仍保留的历史片段，保持上下文完整；已经入库的 Trace 不会因切换策略被删除。
+
+`live` 同样作用于普通服务重启：部署前已接收但尚未入库、且没有后续上报的内容不会自动恢复，缓存到期后会被删除。需要从原有消费进度补处理历史时，在实际配置中设置 `AGENT_INSIGHT_OTEL_CONSUMER_START_MODE=resume` 并重启；只能恢复仍保留的缓存。修改 `.env.example` 不会覆盖已有部署的 `.env`。
 
 ### 为什么数据跑到别的账号或别的 Workspace 了？
 
@@ -73,7 +125,7 @@ description: "高频问题集中解答"
 
 最常见路径是先 Trace，后诊断。
 
-## 评测中心
+## 评估与实验
 
 ### 为什么我的评测结果很奇怪？
 
@@ -87,7 +139,7 @@ description: "高频问题集中解答"
 
 - [评测数据集](./evaluation/datasets)
 - [评估器](./evaluation/evaluators)
-- [结果分析](./evaluation/analyze-results)
+- [实验详情与 Case 结果](./evaluation/experiments#查看实验详情)
 
 ### 第一次评测应该准备多少样本？
 
@@ -123,10 +175,10 @@ description: "高频问题集中解答"
 
 ### 为什么我的 Skill 总是误触发或不触发？
 
-优先去 [Skills 评测总览](./skills/evaluation/overview) 看：
+优先在 [Skill 评估与实验](./skills/evaluation/overview) 中检查：
 
 - 触发分析结果
-- 静态合规是否存在结构性问题
+- 静态质量评估是否存在结构性问题
 - 是否有边界样本覆盖不足
 
 ### 生成出来的 Skill 可以直接长期使用吗？
@@ -137,8 +189,8 @@ description: "高频问题集中解答"
 
 1. 先生成初稿
 2. 确认结构与边界
-3. 进入分析页看效果
-4. 再进入优化，形成更稳定版本
+3. 发布后在 Skill 实验中验证效果
+4. 根据证据进入优化会话生成候选版本
 
 ## 使用建议
 
@@ -148,8 +200,8 @@ description: "高频问题集中解答"
 
 - 想先接入平台： [5 分钟上手](./quickstart)
 - 想看真实执行： [运行观测](./observability/index)
-- 想做离线验证： [评测中心](./evaluation/index)
-- 想沉淀和优化能力： [Skills 能力](./skills/index)
+- 想做离线验证： [评估与实验](./evaluation/index)
+- 想沉淀和优化能力： [Skill 工作台](./skills/index)
 
 ### 为什么文档里经常强调“先看真实样本，再做评测”？
 
@@ -158,6 +210,57 @@ description: "高频问题集中解答"
 `真实运行问题 → Trace → 数据集 → 评测 → 优化`
 
 如果跳过真实样本，后面的评测很容易变成脱离业务的“空跑”。
+
+## 服务端自动清理
+
+### 自动清理会删除平台里的 Trace 吗？
+
+不会。自动清理仅回收运行日志、原始接收缓存、能够确认失效的临时 HOME 和旧容器运行留下的锁元数据；Trace、评测、诊断、实验、Skill、用户附件和业务工作区继续保留。下面的数据库归档脚本是单独的人工操作，不由自动清理调用。
+
+| 内容 | 默认处理方式 |
+| --- | --- |
+| 明确正常结束且已完整落库的原始接收缓存 | 从结束时间和最后实际接收时间中较晚者起保留 7 天 |
+| 失败、未处理或长期无活动的接收缓存 | 从最后实际接收起保留 7 天；持续上报会延后到期 |
+| 应用日志 `agent-insight.log` | 达到 50 MiB 或 1 天时轮转为普通文件；归档保留 14 天，超期或超过 1 GiB 总量软目标时删除最旧的整份日志；轮次之间可能超过目标 |
+| OpenCode 临时 HOME | 创建超过 24 小时，且登记的服务进程和子进程组均已退出，或确认由独占同一运行根的上次容器运行遗留后回收 |
+
+服务端扫描、重试不会刷新缓存的最后接收时间。消费中的文件和仍有新上报的会话所需的跨日期片段会跳过，不会凭日期目录或 `.processed` 后缀直接删除。历史缓存能够确认所属会话和安全目录时，以文件最后修改时间作为接收时间的保守替代，按 7 天规则回收；所有权不明或无法在读取预算内核实的超大历史文件保留。无法证明失效的临时目录也会跳过，因此首次升级不保证立即清空所有历史残留。
+
+异常缓存到期删除后，未入库内容将无法完整重放恢复；数据库中已有的业务记录不受影响。用于标识已清理会话的小型元数据和去重索引继续保留，因此它们仍会随会话数量增长；本机制主要控制原始大内容的历史积累，并非限制所有磁盘占用。清理后的迟到上报保留原始缓存，避免将缺少历史内容的新聚合快照覆盖原 Trace。
+
+日志清理只检查文件时间、大小和少量锁 / 状态元数据，不读取日志正文、不压缩。旧版混合接收缓存及 Jiuwen 桶文件可能需要分块读取，以确认它们关联的会话是否仍在活动；单纯删除文件本身不需要读取内容。
+
+### 怎样修改清理阈值？
+
+在实际配置 `$AGENT_INSIGHT_HOME/.env`（默认 `~/.agent-insight/.env`）中修改后重启平台。`.env.example` 是参考模板，不会自动加载；各项默认值、单位和允许范围均有独立注释。例如：
+
+```dotenv
+AGENT_INSIGHT_OTEL_SPOOL_RETENTION_DAYS=7
+AGENT_INSIGHT_CLEANUP_ABNORMAL_DAYS=7
+AGENT_INSIGHT_CLEANUP_LOG_RETENTION_DAYS=14
+AGENT_INSIGHT_CLEANUP_LOG_ROTATE_HOURS=24
+AGENT_INSIGHT_CLEANUP_LOG_MAX_FILE_BYTES=52428800
+AGENT_INSIGHT_CLEANUP_LOG_MAX_TOTAL_BYTES=1073741824
+AGENT_INSIGHT_CLEANUP_TEMP_RETENTION_HOURS=24
+```
+
+启动延迟、整轮间隔、批间暂停、每批操作数 / 时间 / 读取预算也可配置。空值、非法值或低于下限时回退代码默认值，超过上限时取上限；异常缓存保留期不会小于正常保留期，日志总量目标不会小于单文件轮转阈值。当前启动脚本与直接运行 Node.js 的配置覆盖顺序不同，常规部署以修改实际 `.env` 并重启为准。模板中的执行客户端和 Evaluator 项为注释示例，需在对应进程配置。升级不会改写已有 `.env`；如果旧配置仍为 `AGENT_INSIGHT_CLEANUP_ABNORMAL_DAYS=14`，实际仍保留 14 天，需要改为 `7` 才采用新的默认期限。
+
+### 启动时清理会拖慢服务吗？
+
+启动时只注册后台计时器，默认 **60 秒后**才开始扫描，不等待清理完成。每片最多处理 **100 步、50 毫秒或 1 MiB 内容读取量**，然后休息 **5 秒**；完整扫描结束后每小时再运行。预算在异步操作结束后检查，单次磁盘操作延迟可能超过 50 毫秒；少量锁和状态元数据读取会产生额外开销。清理异常只记录摘要，不作为服务启动失败条件。
+
+`AGENT_INSIGHT_CLEANUP_ENABLED=0` 可关闭自动清理；`AGENT_INSIGHT_CLEANUP_DRY_RUN=1` 只扫描、不删除或轮转。其他时间和资源预算见仓库 `.env.example`，修改后重启服务生效。启动时输出 `[runtime-cleanup] scheduled`，其中包含实际保留天数和启动延迟；关闭时输出 `disabled`。每轮开始输出 `sweep start`，长轮次在批次边界每分钟最多输出一次 `sweep progress`，结束输出 `sweep complete`。进度与完成日志包含 `durationMs`（含批间暂停）、`deleted`（删除事件数）、`freedBytes`（释放字节）、`skipped` 及 `skipReasons`（如仍在使用、尚未到期）。`scanned` 为扫描步骤数，不等于文件数。分类处理失败单独记录，不逐个文件刷日志。原生进程部署或容器运行根以外的目录仍采用保守锁判断：若恢复过程被强制中断并留下 `.reaping` 文件，管理员应先确认相关进程已退出、检查文件所属目录，再处理遗留恢复标记。
+
+### Docker 挂载和重启会影响清理吗？
+
+同一 `AGENT_INSIGHT_HOME` 同时只允许一个服务容器使用。入口通过内核文件锁守住运行根，第二个容器会明确报错退出；原容器退出后，内核释放锁，新容器使用新的运行代次。主机名变化、PID 复用和上次残留的维护锁不会再阻塞本次上报或清理。不要手工删除运行根下的 `.runtime-owner.lock`。
+
+启动时只获取固定大小的锁并生成新代次，不扫描历史文件。旧运行代次的 `.runtime-owners/<代次 UUID>` 目录由后台按现有资源预算回收，当前代次和业务状态继续保留。运行根以外的自定义 spool、日志路径不受这把独占锁保护，仍按原来的保守规则处理，不能据此判断其他容器已经退出。
+
+Docker 默认把应用日志写到 `$AGENT_INSIGHT_HOME/logs`，随现有运行根挂载持久化。实际 `.env` 中的空值和旧模板默认 `/var/log/agent-insight` 都按该默认目录解析，其他自定义路径保持不变；显式 Docker 环境变量 `AGENT_INSIGHT_LOG_DIR` 优先于 `.env`，需要继续使用 `/var/log/agent-insight` 时可通过该环境变量指定。自定义目录需具备相应挂载和写入权限。Docker 自身收集的标准输出日志由 Docker 配置轮转。
+
+升级时须更新镜像内的入口脚本。即使使用源码只读挂载模式，仅更新宿主机源码也不会替换镜像内的 entrypoint，需要重新构建并更新镜像。
 
 ## 数据归档与恢复
 
@@ -272,5 +375,5 @@ bash scripts/db_archive.sh import \
 - 想先跑通接入： [5 分钟上手](./quickstart)
 - 想正式纳管 Agent： [Agent 管理](./agent-management)
 - 想排查真实问题： [运行观测](./observability/index)
-- 想建立回归验证： [评测中心](./evaluation/index)
-- 想管理和优化 Skill： [Skills 能力](./skills/index)
+- 想建立回归验证： [评估与实验](./evaluation/index)
+- 想管理和优化 Skill： [Skill 工作台](./skills/index)

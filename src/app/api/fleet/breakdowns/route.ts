@@ -1,4 +1,4 @@
-// 舰队监控大盘 · 排行 / 分布 / per-object 聚合端点（③可靠性 ④模型 ⑤工具 ⑥Agent ⑦编排）。
+// 舰队监控大盘 · 排行 / 分布 / per-object 聚合端点（④性能 ⑤模型 ⑥工具 ⑦Agent ⑧编排）。
 //
 // 只覆盖「当前数据够算」的 T0 面板（口径见 src/lib/fleet/agg.ts）：
 //  - per-tool 延迟/失败热点、模型 per-call 耗时/TTFT/箱线、send_message 协作网络 等需补埋点，
@@ -60,7 +60,7 @@ export async function GET(req: Request) {
                 toolCallCount: true, toolCallErrorCount: true, llmCallCount: true, failures: true,
                 inputTokens: true, outputTokens: true, tokens: true,
                 cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true,
-                model: true, agentName: true, observedAgents: true,
+                model: true, framework: true, agentName: true, observedAgents: true,
                 rootExecutionId: true, isSubagent: true, query: true, callStats: true,
             },
         })) as (FleetRow & { id: string })[];
@@ -79,23 +79,7 @@ export async function GET(req: Request) {
             total: rootRows.length,
         };
 
-        // ── ③ 可靠性 ─────────────────────────────────────────────
-        // 失败热点 Agent（错误率 = 失败/总，root trace 维度）
-        const agentAgg = new Map<string, { total: number; fail: number }>();
-        for (const r of rootRows) {
-            const name = r.agentName?.trim() || '(未命名)';
-            const a = agentAgg.get(name) || { total: 0, fail: 0 };
-            a.total++; if (!isSuccess(r)) a.fail++;
-            agentAgg.set(name, a);
-        }
-        const failAgents = topN(
-            [...agentAgg].map(([name, a]) => ({
-                name, total: a.total, fail: a.fail,
-                errorRate: a.total ? Math.round((a.fail / a.total) * 1000) / 10 : 0,
-            })),
-            (x) => x.errorRate * 1000 + x.total, 10,
-        );
-
+        // ── ④ 性能 ───────────────────────────────────────────────
         // 端到端时延分布（对数桶）+ 窗口级 P50/P95（前端在直方图上画标线）
         const latHist = LAT_LABELS.map((label, i) => ({
             label,
@@ -136,6 +120,7 @@ export async function GET(req: Request) {
             .map((r) => ({
                 taskId: r.taskId || r.id,
                 agent: r.agentName || '—',
+                platform: r.framework || 'unknown',
                 query: (r.query || '').slice(0, 48),
                 latency: Math.round((r.latency ?? 0) * 100) / 100,
                 tokens: r.tokens ?? ((r.inputTokens ?? 0) + (r.outputTokens ?? 0)),
@@ -146,17 +131,7 @@ export async function GET(req: Request) {
                 ts: r.timestamp.toISOString(),
             }));
 
-        // 失败原因分类（两组口径分开：tool=工具硬错误规则归类；judge=failures 慢路径判定类目）
-        const errAgg = new Map<string, number>();
-        for (const s of statsById.values()) {
-            for (const [label, cnt] of Object.entries(s.errTypes)) errAgg.set(label, (errAgg.get(label) ?? 0) + cnt);
-        }
-        const errTypes = {
-            tool: topN([...errAgg].filter(([k]) => !k.startsWith('judge:')).map(([label, count]) => ({ label, count })), (x) => x.count, 10),
-            judge: topN([...errAgg].filter(([k]) => k.startsWith('judge:')).map(([label, count]) => ({ label: label.slice(6), count })), (x) => x.count, 10),
-        };
-
-        // ── ④ 模型 ───────────────────────────────────────────────
+        // ── ⑤ 模型 ───────────────────────────────────────────────
         const modelAgg = new Map<string, { calls: number; input: number; output: number }>();
         for (const r of rows) {
             const m = r.model?.trim(); if (!m) continue;
@@ -238,7 +213,7 @@ export async function GET(req: Request) {
             (x) => x.calls, 10,
         );
 
-        // ── ⑤ 工具趋势（量/成功率=Execution 列；均耗时=callStats 摘要按桶合并）──────
+        // ── ⑥ 工具趋势（量/成功率=Execution 列；均耗时=callStats 摘要按桶合并）──────
         const toolBuckets = assignBuckets(rows, starts, plan.step);
         // 按桶累加摘要里某组（llm/tool）的 sumMs 与有效次数
         const bucketGroupTotals = (inb: (FleetRow & { id: string })[], pick: (s: CallStats) => Record<string, CallBucketStat>) => {
@@ -262,7 +237,7 @@ export async function GET(req: Request) {
             };
         });
 
-        // ── ④b 模型按桶趋势：均耗时 + Token 输出速率（Σoutput ÷ Σ模型耗时）─────────
+        // ── ⑤b 模型按桶趋势：均耗时 + Token 输出速率（Σoutput ÷ Σ模型耗时）─────────
         const modelTrend = starts.map((start, i) => {
             const inb = toolBuckets[i];
             const m = bucketGroupTotals(inb, (s) => s.llm);
@@ -274,7 +249,7 @@ export async function GET(req: Request) {
             };
         });
 
-        // ── ⑥ Agent ──────────────────────────────────────────────
+        // ── ⑦ Agent ──────────────────────────────────────────────
         // 平均执行工具数 / 模型数趋势（分母 = 当桶 root trace 数）
         const rootBuckets = assignBuckets(rootRows, starts, plan.step);
         const agentTrend = starts.map((start, i) => {
@@ -339,7 +314,7 @@ export async function GET(req: Request) {
         for (const s of skillRows) skillAgg.set(s.skillName, (skillAgg.get(s.skillName) ?? 0) + 1);
         const skillRank = topN([...skillAgg].map(([skill, calls]) => ({ skill, calls })), (x) => x.calls, 10);
 
-        // ── ⑦ 编排复杂度分布 ─────────────────────────────────────
+        // ── ⑧ 编排复杂度分布 ─────────────────────────────────────
         const cxHist = CX_LABELS.map((label) => ({ label, count: 0 }));
         for (const r of rootRows) {
             const c = agentCountOf(r);
@@ -347,7 +322,7 @@ export async function GET(req: Request) {
             cxHist[Math.max(0, idx)].count++;
         }
 
-        // ── ⑦ 全局协作网络（spawn/派发口径）───────────────────────
+        // ── ⑧ 全局协作网络（spawn/派发口径）───────────────────────
         // send_message 点对点消息网络四框架均无源；改用 buildAgentCallTree 还原的
         // parent→child 派发关系跨 trace 聚合：节点=Agent(度=中心度)，边权=派发次数。
         const collabSessions = await prisma.session.findMany({
@@ -394,7 +369,7 @@ export async function GET(req: Request) {
         return NextResponse.json({
             window,
             granularity: plan.gran,
-            reliability: { failAgents, latHist, latP50, latP95, ctxHist, errTypes, slowTraces },
+            performance: { latHist, latP50, latP95, ctxHist, slowTraces },
             model: {
                 callRank: modelCallRank, tokenComp: modelTokenComp, costRank: modelCostRank,
                 latRank: modelLatRank, box: modelBox, trend: modelTrend,

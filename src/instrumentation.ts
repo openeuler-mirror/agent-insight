@@ -11,5 +11,8 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     const { setupNodeRuntime } = await import('./instrumentation-node');
     await setupNodeRuntime();
+    void import('./lib/runtime-cleanup')
+      .then(({ startRuntimeCleanup }) => { startRuntimeCleanup(); })
+      .catch(() => { console.warn('[instrumentation] runtime cleanup registration failed'); });
   }
 }

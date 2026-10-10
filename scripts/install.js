@@ -7,9 +7,10 @@ const fs = require('fs')
 const os = require('os')
 
 const { sleep, isPortListening, findAvailablePort } = require('./utils.js')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
 function getPreferredHomeDataRoot() {
-  return path.join(os.homedir(), '.agent-insight')
+  return getAgentInsightHome()
 }
 
 function getLegacyHomeDataRoot() {
@@ -258,7 +259,7 @@ async function run(options = {}) {
     console.log(`\n   ❌ 获取 API Key 失败: ${error.message}\n`)
   }
 
-  console.log('🔌 【步骤 4/5】安装插件组件...')
+  console.log('🔌 【步骤 4/5】安装 Agent 接入组件...')
   try {
     if (!apiKey) {
       throw new Error('没有可用的 API Key，跳过自动配置')

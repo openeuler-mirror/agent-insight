@@ -48,7 +48,7 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 
 两个层级：
 
-- **必须写设计文档**：涉及数据模型变更（Prisma schema）或新增 API 路由。落到 [`docs/design/<topic>/`](docs/design/)（按 `phase1 需求分析 / phase2 需求设计 / phase3 开发计划` 组织），并在 [需求清单](docs/design/README.md) 追加一行，对齐后再动手。
+- **必须写设计文档**：涉及数据模型变更（Prisma schema）或新增 API 路由。落到 [`docs/design/<topic>/`](docs/design/)（按 `phase1 需求分析 / phase2 需求设计 / phase3 开发计划` 组织），并在 [需求清单](docs/design/README.md) 追加一行，对齐后再动手。**Agent RAS 相关需求**写到 [`docs/agent-ras/designs/features/`](docs/agent-ras/designs/features/)（扁平 `*.md`），并在 [`docs/agent-ras/README.md`](docs/agent-ras/README.md) 与全仓 [需求清单](docs/design/README.md) 同步登记。
 - **先讲思路对齐**（不一定写文档）：实现路径有多种合理选择、跨多个模块、需要引入新抽象、或自己感到"这事不止改几行"—— 先简述方案 + 列 trade-off，等用户确认再写代码。用户也会主动说"这是大需求"作为信号。
 
 小改动（bug fix、文案、单文件局部调整）直接动手，事后说明即可。
@@ -56,8 +56,10 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 **改完功能后，必须同步刷新对应指南。** `docs/` 下有两套面向读者的文档，功能变更只要波及它们就要连带更新，别让读者读到过期信息：
 
 - 改动影响**用户能感知的东西**（新功能 / 交互或流程变化 / 新增配置项 / 概念或术语调整）→ 更新 [`docs/user-guide/`](docs/user-guide/) 对应页。
-- 改动影响**架构 / 模块 / API 与契约 / 数据流 / 扩展方式** → 更新 [`docs/developer-guide/`](docs/developer-guide/) 对应页（先看 [`INDEX.md`](docs/developer-guide/INDEX.md) 找页；该指南带 provenance commit，更新后按其 “How to update” 把 commit 顺手推到当前 HEAD）。
+- 改动影响**架构 / 模块 / API 与契约 / 数据流 / 扩展方式** → 更新 [`docs/developer-guide/`](docs/developer-guide/) 对应页（可先看 [`INDEX.md`](docs/developer-guide/INDEX.md) 找页）。
 - 两边都影响就两边都改。判断口径很简单：**别人照旧文档去操作 / 理解会被带偏，就必须改。**
+
+**开发者指南索引保持稳定**：`docs/developer-guide/INDEX.md` 只维护目录导航和术语表。仅当指南页面增删、重命名、导航目标或术语本身变化时修改它；一般功能变更只更新对应指南页。不要在 INDEX 中记录 commit / 分支 / 日期、working-tree overlay 或逐次变更摘要。审查 MR 时按此规则检查 INDEX 的改动，不符合条件的改动请作者移回对应指南页。
 
 ## 5. 改动验证
 
@@ -93,6 +95,8 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 
 - `skills/` —— 内置 Skill 定义，每个 skill 一个子目录，含 `SKILL.md`。
 - `docs/developer-guide/` —— 面向开发者 / LLM 的架构与契约指南（入口 [`INDEX.md`](docs/developer-guide/INDEX.md)）；`docs/user-guide/` —— 面向使用者的操作指南；`docs/design/` —— 需求 / 设计文档（见 [需求清单](docs/design/README.md)）。
+- `docs/agent-ras/` —— Agent RAS 文档统一入口（`designs/` 架构与特性、`guides/` 使用指导）；源码在仓根 `agent_ras/`。
+- `docs/agent-fault-injection/` —— 故障注入文档；源码在仓根 `agent_fault_injection/`。
 - `features/` —— 单 feature 的设计草稿（比 plan 更轻量）。
 - `scripts/develop_start.sh` —— 验证流程要用，不要换别的方式启 dev server。
 
@@ -107,7 +111,7 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 未经用户授权不要：
 
 - 推送到任何远端、创建/合并 PR、关闭 issue。
-- 修改 CI、`package.json` 的 scripts、`.env*`。
+- 修改 CI、`package.json` 的 scripts、除 `.env.example` 外的 `.env*`；`.env.example` 可随功能配置契约同步修改，但只允许提交通用变量名、说明以及空值或虚构示例，禁止写入真实密钥、内部域名、账号或其他部署敏感信息。
 - 升级/降级依赖、删除依赖。
 - 删除文件、目录、分支。
 - 改 git config。

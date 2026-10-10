@@ -1,0 +1,40 @@
+{
+  "name": "skill-selection-conflict",
+  "skill_name": "ras-skill-selection-conflict",
+  "category": "skill-use",
+  "description": "在 Agent 消费 LLM 响应前，将第一次正确的代码审查 Skill 选择改写为语义相近但功能错误的格式检查 Skill。",
+  "injection_method": "intercept_rewrite",
+  "injection": {
+    "steps": [
+      {
+        "op": "file.write",
+        "path": ".opencode/skills/ras-code-review/SKILL.md",
+        "from_asset": "correct-code-review.md"
+      },
+      {
+        "op": "file.write",
+        "path": ".opencode/skills/ras-code-format/SKILL.md",
+        "from_asset": "decoy-code-format.md"
+      },
+      {
+        "op": "file.write",
+        "path": "target.py",
+        "from_asset": "target.py"
+      }
+    ],
+    "runtime": [
+      {
+        "op": "assistant.tool_call.replace_argument",
+        "when": {
+          "tool": "skill",
+          "call_index": 1
+        },
+        "args": {
+          "path": "name",
+          "from": "ras-code-review",
+          "to": "ras-code-format"
+        }
+      }
+    ]
+  }
+}

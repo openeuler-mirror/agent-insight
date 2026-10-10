@@ -53,6 +53,7 @@ export default function EvaluatorDetailModal({
   const router = useRouter();
   const meta = getEvaluatorMeta(card);
   const tags = deriveEvaluatorTags(card);
+  const isBenchmarkService = meta.executionBackend === 'benchmark-service';
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -63,9 +64,16 @@ export default function EvaluatorDetailModal({
   }, [onClose]);
 
   const pointLabels = (card.pointsDef ?? []).map(p => p.label).filter(Boolean);
-  const outputText = card.evaluatorType === 'LLM'
+  const outputText = isBenchmarkService
+    ? card.outputDescription || card.mappedMetrics.join(' / ') || '输出由 Benchmark Adapter 归一化'
+    : card.evaluatorType === 'LLM'
     ? `score 0-100 + 评分点（${pointLabels.length > 0 ? `${pointLabels.join(' / ')}，逐条强制给分` : 'Judge 自行提取'}）+ 判断依据（Markdown）`
     : 'score 0-100 + 证据（JSON）——具体证据构成见描述。';
+  const requirementText = [
+    meta.requires.includes('reference') ? '每条 case 均需预期输出' : '',
+    meta.requires.includes('dataset_input') ? '实际任务输入需确定性匹配数据集输入' : '',
+    meta.requires.includes('tool_catalog') ? '每条 case 均需显式 Tool/Skill 目录' : '',
+  ].filter(Boolean).join('；');
 
   return (
     <div
@@ -103,7 +111,7 @@ export default function EvaluatorDetailModal({
               {card.name}
             </h2>
             <span className={`ai-badge ${card.source === 'preset' ? 'ai-badge-b' : 'ai-badge-g'}`}>
-              {card.source === 'preset' ? '预置' : '自建'}
+              {isBenchmarkService ? 'Benchmark 接入包' : card.source === 'preset' ? '预置' : '自建'}
             </span>
           </div>
           <button type="button" className="ai-btn-s" aria-label="关闭" onClick={onClose}>
@@ -136,10 +144,14 @@ export default function EvaluatorDetailModal({
         </DetailSection>
 
         <DetailSection title="前置条件">
-          {meta.requires.includes('reference')
-            ? '需已标注参考答案——能否在实验中使用，取决于实验第 ② 步圈选的 trace 是否满足标注覆盖，第 ④ 步自动校验门控。'
-            : '无——任意已圈选的 trace 均可评，不依赖参考数据。'}
+          {isBenchmarkService
+            ? card.runtimeNote || '仅适用于对应的 Benchmark 数据集，由系统自动绑定，不接受普通 Trace 手工选择。'
+            : requirementText
+            ? `${requirementText}。实验第 ④ 步会对全部已选 case 自动校验门控。`
+            : '无——任意已圈选的 trace 均可评。'}
         </DetailSection>
+
+        <DetailSection title="运行方式">{card.runMode || '—'}</DetailSection>
 
         <DetailSection title="输出">
           <code style={{ fontSize: 12, fontFamily: 'var(--font-mono, ui-monospace, monospace)', color: 'var(--foreground)' }}>
@@ -148,12 +160,16 @@ export default function EvaluatorDetailModal({
         </DetailSection>
 
         <DetailSection title="结果呈现位置">
-          {`Trace 评测详情 · 「${meta.category === 'res' ? '结果评测' : '轨迹评测'}」板块（类目为注册时元数据，运行时不可变更）`}
+          {isBenchmarkService
+            ? 'Benchmark Case 详情 · 「结果评测」板块'
+            : `Trace 评测详情 · 「${meta.category === 'res' ? '结果评测' : '轨迹评测'}」板块（类目为注册时元数据，运行时不可变更）`}
         </DetailSection>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap', marginTop: 4 }}>
           <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
-            能否勾选以实验 ④ 步的校验为准（按已圈选 trace 检查前置条件）
+            {isBenchmarkService
+              ? '选择 Benchmark 数据集后自动勾选且不可取消。'
+              : '能否勾选以实验 ④ 步的校验为准（按已圈选 trace 检查前置条件）'}
           </span>
           <div style={{ display: 'flex', gap: 8 }}>
             {card.source === 'custom' ? (

@@ -20,6 +20,7 @@ import { resolveUser, canAccessSkill } from '@/lib/auth/auth';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { getActiveConfig, getUserSettings } from '@/lib/storage/server-config';
 import { aggregateSkillIssues } from '@/lib/engine/skill-issues';
+import { syncCompletedSkillExperimentIssues } from '@/lib/engine/experiment/sync-skill-issues';
 import { runMergeOperator, type MergeIssueInput } from '@/lib/engine/skill-opt/merge-operator';
 import { loadSkillVersionSnapshot } from '@/lib/engine/skill-opt/version-snapshot';
 
@@ -112,23 +113,6 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // 幂等：该会话已有 plan 直接返回（running/draft/confirmed/… 原样回，前端据 status 决定是否轮询）。
-    // 例外：failed 或"卡死的 running"（超 STALE_RUNNING_MS 没收尾，多半进程中途挂了）→ 删旧重跑。
-    const existing = await (prismaRaw as any).skillOptPlan.findUnique({
-      where: { sessionId },
-      include: { items: { orderBy: { rank: 'asc' } } },
-    });
-    if (existing) {
-      const staleRunning =
-        existing.status === 'running' &&
-        Date.now() - new Date(existing.createdAt).getTime() > STALE_RUNNING_MS;
-      if (existing.status === 'failed' || staleRunning) {
-        await (prismaRaw as any).skillOptPlan.delete({ where: { id: existing.id } }).catch(() => {});
-      } else {
-        return NextResponse.json({ plan: serializePlan(existing), reused: true });
-      }
-    }
-
     // session 必须存在且 skill/version 对得上（防串会话写 plan）
     const session = await (prismaRaw as any).skillOptSession.findUnique({
       where: { id: sessionId },
@@ -147,6 +131,56 @@ export async function POST(req: NextRequest) {
     const { allowed } = await canAccessSkill(skill.id, user);
     if (!allowed) return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
 
+    // 统一实验引擎把 Skill 改进建议保存在 ExperimentEvalResult.pointsJson；归并前先把
+    // 已完成的用例/触发实验幂等同步到 Evaluation + SkillIssue，兼容迁移前后的历史数据。
+    await syncCompletedSkillExperimentIssues({ user: user!, skillName, skillVersion: baseVersion });
+
+    // 聚合未解决 issues
+    const agg = await aggregateSkillIssues({
+      prisma: prismaRaw as any,
+      skillId: skill.id,
+      version: baseVersion,
+      user,
+      includeResolved: false,
+    });
+
+    // 幂等：运行中的计划原样复用。已结束运行的计划若出现新的未覆盖 issue，则重建，
+    // 让同一 Skill 版本后续新增的实验建议能够进入下一轮，而不是永远复用旧计划。
+    const existing = await (prismaRaw as any).skillOptPlan.findUnique({
+      where: { sessionId },
+      include: { items: { orderBy: { rank: 'asc' } } },
+    });
+    if (existing) {
+      const staleRunning =
+        existing.status === 'running' &&
+        Date.now() - new Date(existing.createdAt).getTime() > STALE_RUNNING_MS;
+      const coveredIssueIds = new Set<string>();
+      for (const item of existing.items) {
+        for (const issueId of safeParse<string[]>(item.sourceIssueIds, [])) coveredIssueIds.add(issueId);
+      }
+      const hasNewIssues = agg.issues.some((issue) => !coveredIssueIds.has(issue.id));
+      const refreshAppliedPlan = existing.status === 'applied' && hasNewIssues;
+      const hasActiveOptimization = existing.status === 'confirmed' && hasNewIssues
+        ? await (prismaRaw as any).skillWorkbenchTask.count({
+          where: {
+            type: 'optimization',
+            status: { in: ['pending', 'running'] },
+            session: { optSessionId: sessionId },
+          },
+        }) > 0
+        : false;
+      const refreshFinishedConfirmedPlan = existing.status === 'confirmed' && hasNewIssues && !hasActiveOptimization;
+      if (existing.status === 'failed' || staleRunning || refreshAppliedPlan || refreshFinishedConfirmedPlan) {
+        await (prismaRaw as any).skillOptPlan.delete({ where: { id: existing.id } }).catch(() => {});
+      } else {
+        return NextResponse.json({ plan: serializePlan(existing), reused: true });
+      }
+    }
+
+    if (agg.issues.length === 0) {
+      return NextResponse.json({ plan: null, reason: 'no unresolved issues' });
+    }
+
     // 模型配置：body.modelId 显式指定优化器模型（与"测量模型"解耦，便于对照实验）；
     // 不传则回退 active config。没配模型直接拦（与静态评估同款约束）。
     const modelId = typeof body?.modelId === 'string' ? body.modelId.trim() : '';
@@ -158,18 +192,6 @@ export async function POST(req: NextRequest) {
     if (!config) config = await getActiveConfig(user);
     if (!config) {
       return NextResponse.json({ error: '未配置可用的 LLM，请先到「配置」页设置模型' }, { status: 400 });
-    }
-
-    // 聚合未解决 issues
-    const agg = await aggregateSkillIssues({
-      prisma: prismaRaw as any,
-      skillId: skill.id,
-      version: baseVersion,
-      user,
-      includeResolved: false,
-    });
-    if (agg.issues.length === 0) {
-      return NextResponse.json({ plan: null, reason: 'no unresolved issues' });
     }
 
     // baseVersion 文件快照（锚点校验 + prompt 上下文）

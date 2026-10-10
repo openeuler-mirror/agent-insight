@@ -23,6 +23,29 @@ export interface ResultRowLike {
 
 export type CategoryOf = (evaluatorId: string) => EvaluatorCategory;
 
+export type SettledExperimentStatus = 'done' | 'partial' | 'failed';
+
+/** 全部结果行终态后，按成功/失败组合收敛实验状态。 */
+export function deriveSettledExperimentStatus(
+  rows: Array<{ status: string }>,
+): SettledExperimentStatus | null {
+  if (!rows.length) return null;
+  if (rows.some((row) => row.status === 'pending' || row.status === 'running')) return null;
+  const anyDone = rows.some((row) => row.status === 'done');
+  const anyNotDone = rows.some((row) => row.status !== 'done');
+  if (anyDone && anyNotDone) return 'partial';
+  return anyDone ? 'done' : 'failed';
+}
+
+/** 读取历史终态时按结果行纠正旧版“有成功即 done”的状态。 */
+export function normalizeTerminalExperimentStatus(
+  storedStatus: string,
+  rows: Array<{ status: string }>,
+): string {
+  if (!['done', 'partial', 'failed'].includes(storedStatus)) return storedStatus;
+  return deriveSettledExperimentStatus(rows) ?? storedStatus;
+}
+
 /** 生效分：人工修正分优先，回落机器分；都没有 → null。 */
 export function effectiveScore(row: ResultRowLike): number | null {
   if (typeof row.humanScore === 'number') return row.humanScore;
@@ -47,6 +70,16 @@ function toScored(rows: ResultRowLike[]): Array<{ score: number }> {
 /** 综合均分：所有有分行均分；无有分行 → null。 */
 export function overallAverage(rows: ResultRowLike[]): number | null {
   return averageScore(toScored(rows));
+}
+
+/** 实验级综合分只在实验终态（完成或部分完成）后发布，运行中不暴露部分均分。 */
+export function publishedOverallAverage(
+  experimentStatus: string,
+  rows: ResultRowLike[],
+): number | null {
+  return experimentStatus === 'done' || experimentStatus === 'partial'
+    ? overallAverage(rows)
+    : null;
 }
 
 export interface EvaluatorBreakdownRow {
@@ -99,13 +132,45 @@ export interface CaseScore {
   adjusted: number;
 }
 
-/** 单 case 综合/结果/轨迹得分（rows 需已按 caseId 过滤）。 */
-export function caseScore(rows: ResultRowLike[], categoryOf: CategoryOf): CaseScore {
+/** 已选评估器都有一条终态结果时，Case 才能发布综合得分。 */
+export function areExpectedEvaluationsSettled(
+  rows: ResultRowLike[],
+  expectedEvaluatorIds: string[],
+): boolean {
+  const expected = Array.from(new Set(expectedEvaluatorIds.map(String).filter(Boolean)));
+  if (!expected.length) return false;
+  return expected.every((evaluatorId) => rows.some(
+    (row) => row.evaluatorId === evaluatorId && (row.status === 'done' || row.status === 'failed'),
+  ));
+}
+
+/**
+ * 单 case 综合/结果/轨迹得分（rows 需已按 caseId 过滤）。
+ * 结果分和轨迹分分别等待该类全部已选评估器终态；综合得分等待全部
+ * 已选评估器终态。未选评估器不构成等待条件。
+ */
+export function caseScore(
+  rows: ResultRowLike[],
+  categoryOf: CategoryOf,
+  expectedEvaluatorIds: string[],
+): CaseScore {
   const scored = scoredRows(rows);
+  const expectedResultEvaluatorIds = expectedEvaluatorIds.filter(
+    (evaluatorId) => categoryOf(evaluatorId) === 'res',
+  );
+  const expectedTrajectoryEvaluatorIds = expectedEvaluatorIds.filter(
+    (evaluatorId) => categoryOf(evaluatorId) === 'traj',
+  );
   return {
-    overall: averageScore(toScored(rows)),
-    res: averageScore(toScored(rows.filter((r) => categoryOf(r.evaluatorId) === 'res'))),
-    traj: averageScore(toScored(rows.filter((r) => categoryOf(r.evaluatorId) === 'traj'))),
+    overall: areExpectedEvaluationsSettled(rows, expectedEvaluatorIds)
+      ? averageScore(toScored(rows))
+      : null,
+    res: areExpectedEvaluationsSettled(rows, expectedResultEvaluatorIds)
+      ? averageScore(toScored(rows.filter((r) => categoryOf(r.evaluatorId) === 'res')))
+      : null,
+    traj: areExpectedEvaluationsSettled(rows, expectedTrajectoryEvaluatorIds)
+      ? averageScore(toScored(rows.filter((r) => categoryOf(r.evaluatorId) === 'traj')))
+      : null,
     failed: rows.filter((r) => r.status === 'failed').length,
     adjusted: scored.filter(isHumanAdjusted).length,
   };

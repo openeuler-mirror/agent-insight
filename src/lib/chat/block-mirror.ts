@@ -1,3 +1,5 @@
+import { settleProcessBlocks } from './process-block-state';
+
 /**
  * 流式 SSE 事件 → 持久化 Block[] 镜像。
  *
@@ -20,8 +22,15 @@ export function createBlockMirror(
   encoder: TextEncoder,
 ) {
   const blocks: any[] = [];
+  let clientConnected = true;
   const send = (mode: string, payload: any) => {
-    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode, payload })}\n\n`));
+    if (clientConnected) {
+      try {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode, payload })}\n\n`));
+      } catch {
+        clientConnected = false;
+      }
+    }
 
     if (mode === 'text') {
       const tail = blocks[blocks.length - 1];
@@ -81,8 +90,38 @@ export function createBlockMirror(
         if (status) blocks[idx].status = status;
         if (answer !== undefined) blocks[idx].answer = answer;
       }
+    } else if (mode === 'optimization_meta') {
+      const { recordId, taskId, runId } = payload || {};
+      if (!recordId && !taskId && !runId) return;
+      const id = `optimization-${runId || recordId || taskId}`;
+      const idx = blocks.findIndex((b: any) => b.kind === 'optimization_meta' && b.id === id);
+      const next = { kind: 'optimization_meta', id, runId, recordId, taskId };
+      if (idx === -1) blocks.push(next);
+      else blocks[idx] = next;
+    } else if (mode === 'optimization_plan') {
+      const { id, sourceCount, items } = payload || {};
+      if (!id) return;
+      const idx = blocks.findIndex((b: any) => b.kind === 'optimization_plan' && b.id === id);
+      const next = { kind: 'optimization_plan', id, sourceCount: Number(sourceCount) || 0, items: Array.isArray(items) ? items : [] };
+      if (idx === -1) blocks.push(next);
+      else blocks[idx] = next;
+    } else if (mode === 'verify_progress') {
+      const idx = blocks.findIndex((b: any) => b.kind === 'verification' && b.id === 'self-verify');
+      const next = { kind: 'verification', id: 'self-verify', status: 'running', text: String(payload?.message || '') };
+      if (idx === -1) blocks.push(next);
+      else blocks[idx] = { ...blocks[idx], ...next };
+    } else if (mode === 'verify_ok') {
+      const idx = blocks.findIndex((b: any) => b.kind === 'verification' && b.id === 'self-verify');
+      const next = { kind: 'verification', id: 'self-verify', status: 'ok', text: '结构门、脚本真值门与行为门已完成', detail: payload || {} };
+      if (idx === -1) blocks.push(next);
+      else blocks[idx] = { ...blocks[idx], ...next };
+    } else if (mode === 'warning') {
+      blocks.push({ kind: 'warning', id: `warning_${blocks.length}`, text: String(payload?.message || payload || '') });
+    } else if (mode === 'done' || mode === 'error') {
+      const settled = settleProcessBlocks(blocks, mode === 'done' ? 'complete' : 'error');
+      blocks.splice(0, blocks.length, ...settled);
     }
-    // 'vfs_patch' / 'done' / 'error' 是运行时事件，不入持久化数组。
+    // 'vfs_patch' 是运行时事件，不入持久化数组。
   };
   return { send, getBlocks: () => blocks };
 }

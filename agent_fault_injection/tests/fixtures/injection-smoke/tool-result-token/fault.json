@@ -1,0 +1,28 @@
+{
+  "name": "tool-result-token",
+  "skill_name": "ras-tool-result-corruption",
+  "category": "tool_result_tamper",
+  "description": "[smoke] 工具结果篡改挂点探针：RAS_TOOL_OK→RAS_TOOL_FAULT。非产品故障。",
+  "injection_method": "tool_result_tamper",
+  "injection": {
+    "steps": [
+      {
+        "op": "file.write",
+        "path": "probe.txt",
+        "from_asset": "probe.txt"
+      }
+    ],
+    "runtime": [
+      {
+        "op": "tool_result.replace_text",
+        "when": {
+          "tool": "read|file_read|Read"
+        },
+        "args": {
+          "from": "RAS_TOOL_OK",
+          "to": "RAS_TOOL_FAULT"
+        }
+      }
+    ]
+  }
+}

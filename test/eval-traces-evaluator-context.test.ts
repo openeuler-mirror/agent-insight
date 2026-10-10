@@ -4,6 +4,7 @@ process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insigh
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { ExperimentEvalResult } from '@prisma/client';
 import { POST as evaluateTraces } from '@/app/api/experiments/eval-traces/route';
 import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
 import { setFaithfulPresetRunnerForTest } from '@/lib/engine/experiment/faithful-preset-evaluators';
@@ -124,9 +125,15 @@ test('eval-traces 批量提交立即预创建全部 case/result，后台完成�
   assert.equal(initialRows.length, 6);
   assert.ok(initialRows.every((row: { status: string }) => row.status === 'pending' || row.status === 'running'));
 
+  // 行先落 done，再 settleExperimentStatus 写实验终态；两者之间有短暂窗口，不能只等行。
   await waitFor(async () => {
-    const rows = await prisma.experimentEvalResult.findMany({ where: { experimentId: experiment!.id } });
-    return rows.length === 6 && rows.every((row: { status: string }) => row.status === 'done');
+    const [rows, settled] = await Promise.all([
+      prisma.experimentEvalResult.findMany({ where: { experimentId: experiment!.id } }),
+      prisma.experiment.findUnique({ where: { id: experiment!.id }, select: { status: true } }),
+    ]);
+    return rows.length === 6
+      && rows.every((row: { status: string }) => row.status === 'done')
+      && settled?.status === 'done';
   });
   const settled = await prisma.experiment.findUnique({ where: { id: experiment!.id } });
   assert.equal(settled!.status, 'done');
@@ -257,7 +264,7 @@ test('并行提交多个评测任务时共用同一个行级并发上限', async
   release();
 
   await waitFor(async () => {
-    const rows = await prisma.experimentEvalResult.findMany({
+    const rows: ExperimentEvalResult[] = await prisma.experimentEvalResult.findMany({
       where: { experimentId: { in: [firstExperiment.experimentId, secondExperiment.experimentId] } },
     });
     return rows.length === 6 && rows.every((row) => row.status === 'done');

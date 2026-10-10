@@ -48,6 +48,7 @@ function runSessionStart(tmpHome: string, tmpInsight: string, stateFile: string,
   const inputFile = path.join(os.tmpdir(), `trae-iso-input-${Math.random().toString(36).slice(2)}.json`)
   fs.writeFileSync(envFile, `
 export HOME=${tmpHome}
+export AGENT_INSIGHT_HOME=${tmpInsight}
 export AGENT_INSIGHT_DIR=${tmpInsight}
 export AGENT_INSIGHT_API_KEY=${apiKey}
 export TRAE_SUBAGENT_STATE_FILE=${stateFile}

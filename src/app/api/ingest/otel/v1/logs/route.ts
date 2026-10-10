@@ -4,8 +4,20 @@ import { appendCodeAgentOtelEvents } from '@/lib/ingest/codeagent-otel/spool';
 import { isCodeAgentOtelEvent } from '@/lib/ingest/codeagent-otel/detect';
 import { appendOtelTraceEvents } from '@/lib/ingest/otel/spool';
 import { qwenSkillLogToOtelEvent } from '@/lib/ingest/otel/adapters/qwencode';
+import { appendDeepSeekHarnessOtelEvents } from '@/lib/ingest/deepseek-harness-otel/spool';
+import { partitionDeepSeekHarnessOtlpLogs } from '@/lib/ingest/deepseek-harness-otel/detect';
+import { normalizeDeepSeekHarnessOtlpLogs } from '@/lib/ingest/deepseek-harness-otel/otlp-json';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
+import { gunzipSync } from 'node:zlib';
+
+async function readOtlpJson(req: Request): Promise<any> {
+  const contentEncoding = String(req.headers.get('content-encoding') || '').trim().toLowerCase();
+  if (!contentEncoding || contentEncoding === 'identity') return req.json();
+  if (contentEncoding !== 'gzip') throw new Error(`Unsupported Content-Encoding: ${contentEncoding}`);
+  const compressed = Buffer.from(await req.arrayBuffer());
+  return JSON.parse(gunzipSync(compressed).toString('utf8'));
+}
 
 export async function POST(req: Request) {
   try {
@@ -25,9 +37,23 @@ export async function POST(req: Request) {
       );
     }
 
-    const body = await req.json();
+    const body = await readOtlpJson(req);
     const receivedAt = new Date().toISOString();
-    const events = normalizeOtlpLogs(body, { receivedAt, authenticatedUser });
+    const harnessPartition = partitionDeepSeekHarnessOtlpLogs(body);
+    if (harnessPartition.harnessResourceCount > 0 && !authenticatedUser) {
+      return NextResponse.json(
+        { status: 'error', error: 'DeepSeek Harness telemetry requires a valid x-witty-api-key.' },
+        { status: 401 },
+      );
+    }
+    const harnessEvents = normalizeDeepSeekHarnessOtlpLogs(harnessPartition.harnessBody, {
+      receivedAt,
+      authenticatedUser,
+    });
+    const harnessResult = appendDeepSeekHarnessOtelEvents(harnessEvents);
+    const events = harnessPartition.hasRemainingResources
+      ? normalizeOtlpLogs(harnessPartition.remainingBody, { receivedAt, authenticatedUser })
+      : [];
     const isQwenLog = (event: (typeof events)[number]) => {
       const serviceName = String(event.resource?.['service.name'] || '').toLowerCase();
       return serviceName === 'qwencode'
@@ -49,11 +75,12 @@ export async function POST(req: Request) {
       ...codeAgentResult.dirtySessionIds,
       ...otherResult.dirtySessionIds,
       ...qwenResult.dirtySessionIds,
+      ...harnessResult.dirtySessionIds,
     ]));
 
     return NextResponse.json({
       status: 'accepted',
-      received: events.length,
+      received: events.length + harnessEvents.length,
       sessions: dirtySessionIds,
       frameworks: {
         codeagent: {
@@ -68,6 +95,10 @@ export async function POST(req: Request) {
           received: qwenLogEvents.length,
           skills: qwenSkillEvents.length,
           sessions: qwenResult.dirtySessionIds,
+        },
+        'deepseek-harness': {
+          received: harnessEvents.length,
+          sessions: harnessResult.dirtySessionIds,
         },
       },
     });

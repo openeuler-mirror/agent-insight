@@ -32,6 +32,7 @@
 | `engine/skill-issues/index.ts` | skill-issues | `IssueWithPrevalence`、`AggregateResult`（普遍度聚合） |
 | `engine/skill-issues/static-evaluator/index.ts` | skill-issues | `runStaticEvaluation`；`RunArgs`、`RunResult` |
 | `engine/skill-issues/static-evaluator/{linter,llm-evaluator,content-loader}.ts` | skill-issues | 静态合规扫描 |
+| `skill-workbench/*` | skill-workbench | Skill/版本资产导航、过程会话、生成/优化适配、候选根目录归一化、静态阻断自动 repair、快照评估、统一实验、A/B Case 配对聚合、跨会话优化记录、同源复测与发布；生成快照沿用旧生成发布门禁，上传与优化保留各自规则 |
 | `engine/agent-debug/types.ts` | agent-debug | `AgentDebugReportPayload`、`AgentDebugIssue`、`AgentDebugRootCause`、`DebugTurn` |
 | `engine/agent-debug/runner.ts` / `trace-adapter.ts`；`skills/agent-debug-diagnosis/scripts/{agentdebug_static,agentdebug_inspect,agentdebug_validate,detector_runner}.py` | agent-debug | 调试报告生成 |
 | `engine/observability/agent-trace.ts` | observability | `buildAgentCallTree`、`walkTree`、`findNode`、`formatTokens`；`AgentNode`、`AgentEvent`、`ToolCall` |
@@ -42,6 +43,8 @@
 ## lib — storage / ingest / auth / shared
 | File | Area | Key symbols |
 |---|---|---|
+| `benchmark/{adapter-base,adapter-registry,dataset-admin-service,dataset-loader-registry,dataset-ownership,dataset-service,public-dataset,experiment-service,experiment-lifecycle,orchestrator,scheduler,execution-targets,run-callback-service,detail-status,failure-presentation,evaluation-preparation-service,evaluator-target,evaluator-runtime-config,evaluation-scheduler,evaluation-callback-service,evaluation-continuation-service,experiment-result-service}.ts` | benchmark | 五方法 `AbstractBenchmarkAdapter`、Catalog 驱动的 Adapter/Loader、共享数据集、执行目标、实验与 Run 编排、执行/评测回调、watchdog、持久化 continuation、Raw Result、统一结果投影、固定分母聚合和安全证据读取 |
+| `../../packages/benchmark-protocol/src/{contracts,errors,json-schema,executor-contracts,evaluation-contracts,evaluator-contracts}.ts` / `../../benchmarks/swe-bench/{benchmark.yaml,adapter,dataset,evaluator,schemas,smoke}` / `../../services/{executor,evaluator}` / `../../scripts/{evaluator.sh,evaluator-doctor.sh,configure-evaluator-target.js}` / `../../scripts/benchmark/{generate-catalog.cjs,build-evaluator-runtime.cjs,load_official_swebench_dataset.py}` / `../../generated/benchmark-catalog/*` | benchmark protocol / package / services | Agent/评测信封、Manifest/Schema、声明式执行器能力、通用 Controller 与统一文件 Evaluator Entrypoint、按需 OCI Runtime、Linux/macOS 一键部署与 Doctor/Gold Smoke、构建期三端 Catalog、官方 Python loader 与 SWE-bench Harness 实例 |
 | `storage/data-service.ts` | storage | `saveExecutionRecord`、`extractInvokedSkillsFromSessionInteractions`、`readRecords`、`readConfig`、`findBestRoutingConfig`、`findBestOutcomeConfig`、`deriveSubagentExecutions`；`ExecutionRecord`、`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`、`ConfigItem` |
 | `trace-tags.ts` | storage | `listTraceTags`、`createTraceTag`、`updateTraceTag`、`deleteTraceTag`、`getExecutionTraceTags`、`addExecutionTraceTags`、`replaceExecutionTraceTags`、`removeExecutionTraceTag`、`getTraceTagsByExecutionIds` |
 | `storage/db-interface.ts` | storage | `getDatabaseAdapter`；`DatabaseAdapter`、`OpenGaussAdapter.query` |
@@ -53,6 +56,8 @@
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
 | `ingest/claude-otel/` / `ingest/codeagent-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
 | `ingest/otel/langfuse.ts` / `ingest/otel/adapters/{langfuse-langgraph,langfuse-trace}.ts` | ingest | Langfuse Python SDK / LangGraph OTLP 归属转换；现有 interactions 投影与无损 `LangfuseTraceNode` 投影并行生成 |
+| `ingest/ras/{normalize,store,delivery-link,trace-markers,sort-traces,catalog-engine,fault-mode-catalog,fault-mode-label-store,capability-config,capability-config-store}.ts` | ingest / observe | RAS 环内事件归一化与落库；delivery 关联、详情 marker、列表排序；**catalog-engine** 拉 Python 能力目录；`fault-mode-catalog` 仅 fixture；能力配置校验与用户级持久化 |
+| `ingest/setup-package.ts` | ingest setup | 生成 bash 内嵌 `install_agent_insight_ras`：本地 checkout → `GET /api/ingest/setup/bundle?name=ras` → `npm pack` 三级回退；`AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` 可覆盖 npm 兜底 |
 | `engine/observability/langfuse-agent-trace.ts` | engine | Langfuse 可见 observation → 原 Agent Trace 节点/事件模型；不含业务节点名称规则 |
 | `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
 | `ingest/otel/{llamaindex,adapters/llamaindex}.ts` / `scripts/llamaindex_extension/` / `docs/user-guide/observability/llamaindex-trace-collector.md` | ingest | LlamaIndex OTLP 识别与 Agent/Tool/LLM/RAG/Workflow 聚合；复用官方 `llama-index-observability-otel` Handler 基类、隔离 TracerProvider、持久 spool 与异步上传；用户指南是安装 ZIP 中 `README.md` 的唯一内容源 |
@@ -98,17 +103,21 @@
 | `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader}.tsx` | 应用外壳 |
 | `ui/*` | 可复用基础组件（button、card、dialog、select 等）—— 复用它们，不要自行实现 |
 | `feedback/{EmptyState,ErrorState,StatusBadge}.tsx` | 标准状态组件 |
+| `skill-workbench/*` | `/skills` 工作台的资产/版本选择器、会话外壳、生成/优化对话、文件详情、静态评估、统一实验和跨会话优化记录视图 |
 
 ## API routes (`src/app/api/`) — grouped
 | Group | Route files (under `api/`) | Purpose |
 |---|---|---|
-| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含共享的 `setup/codeagent-setup.ts`、`setup/hermes-plugin` 与 `setup/llamaindex-collector`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据；下发客户端安装脚本、跨平台 CodeAgent PATH 包装器、Hermes 插件源码与 LlamaIndex 直接部署归档 |
+| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/ras-events`、`ingest/ras-config`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `setup/bundle` 白名单 tar 下发 ras/client 制品、共享的 `setup/codeagent-setup.ts`、`setup/hermes-plugin` 与 `setup/llamaindex-collector`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据（含 RAS 旁路与能力配置拉取）；下发客户端安装脚本、RAS/常驻客户端源码 bundle、跨平台 CodeAgent PATH 包装器、Hermes 插件源码与 LlamaIndex 直接部署归档 |
 | agent | `agent/{run,respond,stream}` | 驱动内部的通用 agent |
 | skills | `skills`、`skills/[id]/*`、`skills/by-name/*`、`skills/{publish,upload,automation/*,sync-enterprise,logs}` | skill 增删改查、版本、发布、企业同步 |
 | skill-eval | `skill-eval/trigger/[skillName]/*` | 触发评测集/评测运行 |
 | skill-opt | `skill-opt/{chat,sessions/*}` | skill 优化对话 + 历史 |
 | skill-generator | `skill-generator/{chat,sessions/*,files/*,attachments,download/*}` | skill 生成 playground 后端 |
+| skill-workbench | `skill-workbench/{sessions/*,skills/[name]/*}` | 会话、工作快照、快照/正式评估、三类实验、触发数据集、候选复测和按来源发布；Skill 对外 key 使用 name |
+| skill-management | `skill-management/skills` | 管理中心服务端搜索、筛选和分页；传入精确 `name + version` 时返回正式版本文件快照 |
 | eval | `eval/{config/*,evaluation,rejudge,settings,trajectory/*}` | 数据集配置、评测运行、轨迹评测 |
+| experiments / benchmark | `experiments`、`experiments/[id]/run`、`benchmark/v1/execution-targets`、`benchmark/v1/artifacts`、`benchmark/v1/artifacts/[artifactId]/content`、`benchmark/v1/runs/[runId]/{progress,complete}`、`benchmark/v1/evaluations/[evaluationId]/{progress,artifacts,complete}`、`benchmark/v1/experiments/[experimentId]`、`benchmark/v1/evaluations/[evaluationId]/artifacts/[artifactId]/content` | 普通与 Benchmark 统一实验生命周期；Benchmark 内部分支冻结 Run，经常驻客户端控制通道下发 Agent 任务，再下发不可变 EvaluationJob、接收并归一化原生结果，并按用户返回固定分母聚合与受控 Artifact 内容 |
 | debug | `debug/{batch-tasks/*,grayscale-tasks/*,execute/*,history/*}` | 批量与灰度（A/B）执行编排 |
 | observe | `observe/{data,session,task-stats,infra/*,executions/[executionId]/*,version-analysis/*}` | Observability data, infra observation, execution analysis, Trace tag binding, and version-analysis aggregation |
 | tags | `tags`、`tags/[id]` | Trace 用户标签定义 CRUD（版本标签 / 业务标签） |

@@ -1,0 +1,90 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { getSelectedReportingChannels } from '@/lib/ingest/framework-reporting-channels';
+
+test('OpenCode 只展示 JSON 会话快照入口', () => {
+    assert.deepEqual(getSelectedReportingChannels(['opencode']), [
+        {
+            id: 'json-snapshot',
+            endpoint: '/api/ingest/upload',
+            labelZh: 'JSON 会话快照',
+            labelEn: 'JSON session snapshot',
+            frameworks: ['opencode'],
+        },
+    ]);
+});
+
+test('多选框架按通道去重并保留每个通道对应的框架', () => {
+    const channels = getSelectedReportingChannels(['claude', 'openclaw', 'trae']);
+
+    assert.deepEqual(channels.map(channel => ({
+        id: channel.id,
+        endpoint: channel.endpoint,
+        frameworks: channel.frameworks,
+    })), [
+        {
+            id: 'otlp-logs',
+            endpoint: '/api/ingest/otel/v1/logs',
+            frameworks: ['claude', 'openclaw'],
+        },
+        {
+            id: 'otlp-traces',
+            endpoint: '/api/ingest/otel/v1/traces',
+            frameworks: ['openclaw'],
+        },
+        {
+            id: 'json-snapshot',
+            endpoint: '/api/ingest/upload',
+            frameworks: ['trae'],
+        },
+    ]);
+});
+
+test('重复、空白和未知框架不会产生重复或虚假的通道', () => {
+    assert.deepEqual(getSelectedReportingChannels([' QWENCODE ', 'qwencode']), [
+        {
+            id: 'otlp-logs',
+            endpoint: '/api/ingest/otel/v1/logs',
+            labelZh: 'OTLP Logs',
+            labelEn: 'OTLP Logs',
+            frameworks: ['qwencode'],
+        },
+        {
+            id: 'otlp-traces',
+            endpoint: '/api/ingest/otel/v1/traces',
+            labelZh: 'OTLP Traces',
+            labelEn: 'OTLP Traces',
+            frameworks: ['qwencode'],
+        },
+    ]);
+    assert.deepEqual(getSelectedReportingChannels(['', 'unknown']), []);
+});
+
+test('Goal Plus 展示 worker Trace 与跨 Session 关系通道', () => {
+    assert.deepEqual(getSelectedReportingChannels(['goal-plus']).map(channel => ({
+        id: channel.id,
+        endpoint: channel.endpoint,
+    })), [
+        { id: 'otlp-traces', endpoint: '/api/ingest/otel/v1/traces' },
+        { id: 'collaboration-sessions', endpoint: '/api/ingest/collaborations/sessions' },
+        { id: 'collaboration-events', endpoint: '/api/ingest/collaborations/events' },
+    ]);
+});
+
+test('Pi Agent 展示主 Trace 与主 Session 绑定通道', () => {
+    assert.deepEqual(getSelectedReportingChannels(['pi-agent']).map(channel => ({
+        id: channel.id,
+        endpoint: channel.endpoint,
+    })), [
+        { id: 'otlp-traces', endpoint: '/api/ingest/otel/v1/traces' },
+        { id: 'collaboration-sessions', endpoint: '/api/ingest/collaborations/sessions' },
+    ]);
+});
+
+test('MCTS xGovernor 展示 Trace 与 Runtime 关系通道', () => {
+    assert.deepEqual(getSelectedReportingChannels(['mcts-xgovernor']).map(channel => channel.id), [
+        'otlp-traces',
+        'collaboration-sessions',
+        'collaboration-events',
+    ]);
+});

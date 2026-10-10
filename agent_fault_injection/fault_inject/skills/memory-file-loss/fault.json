@@ -1,0 +1,27 @@
+{
+  "name": "memory-file-loss",
+  "skill_name": "ras-memory-file-loss",
+  "category": "memory",
+  "description": "文件层记忆丢失：播种 MEMORY.md 后删除全文或关键约束段。",
+  "injection_method": "file_tamper",
+  "injection": {
+    "steps": [
+      {
+        "op": "file.write",
+        "path": "MEMORY.md",
+        "from_asset": "MEMORY.md"
+      },
+      {
+        "op": "file.delete",
+        "path": "MEMORY.md",
+        "when_submode": "1"
+      },
+      {
+        "op": "file.delete_section",
+        "path": "MEMORY.md",
+        "heading": "## 约束",
+        "when_submode": "2"
+      }
+    ]
+  }
+}

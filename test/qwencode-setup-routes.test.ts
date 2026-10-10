@@ -4,15 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
+import { isolatedHomeEnv } from './helpers/isolated-home';
 import { GET as setupGet } from '../src/app/api/ingest/setup/route';
 import { GET as autoSetupGet } from '../src/app/api/ingest/setup/auto/route';
 import { GET as collectorGet } from '../src/app/api/ingest/setup/qwencode-collector/[file]/route';
 
-function runNode(args: string[], env: NodeJS.ProcessEnv) {
+function runNode(args: string[], env: Partial<NodeJS.ProcessEnv> & { HOME: string }) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd: process.cwd(),
-      env: { ...process.env, ...env },
+      env: isolatedHomeEnv(env.HOME, env),
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -70,7 +71,7 @@ test('the curl setup script accepts Qwen Code as a preselected framework and ins
 });
 
 test('the Unix setup script configures Qwen native telemetry after credentials exist', async () => {
-  const response = await setupGet(new Request('https://collector.example/api/ingest/setup?frameworks=qwencode&key=test-key', {
+  const response = await setupGet(new Request('https://collector.example/api/ingest/setup?frameworks=qwencode&key=test-key&nokey=1', {
     headers: {
       host: 'collector.example:4318',
       'x-forwarded-proto': 'https',

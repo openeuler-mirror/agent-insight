@@ -2,11 +2,11 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { MANIFEST, checkManifest, installSharedModules, prepareSharedModules, validatePackage, withFileRollback, writeManifest } = require("../shared/install-modules.cjs");
 
 const PACKAGE_FILES = [
   ["package.json"],
@@ -87,30 +87,17 @@ async function copyFile(source, target, mode = 0o600) {
 }
 
 async function installFiles(sourceDir, packageDir, sharedDir) {
+  await installSharedModules(path.resolve(sourceDir, "..", "shared"), sharedDir,
+    ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]);
   for (const parts of PACKAGE_FILES) {
     const mode = parts[0] === "scripts" ? 0o700 : 0o600;
     await copyFile(path.join(sourceDir, ...parts), path.join(packageDir, ...parts), mode);
   }
-
-  const incomingPath = path.resolve(sourceDir, "..", "shared", "trace-transport.cjs");
-  const targetPath = path.join(sharedDir, "trace-transport.cjs");
-  if (fs.existsSync(targetPath)) {
-    const [incoming, current] = await Promise.all([
-      fsp.readFile(incomingPath),
-      fsp.readFile(targetPath),
-    ]);
-    if (!incoming.equals(current)) {
-      throw new Error(`Refusing to overwrite a different shared transport at ${targetPath}`);
-    }
-  } else {
-    await copyFile(incomingPath, targetPath);
-  }
 }
 
-async function install(options) {
+async function installPackage(options) {
   const apiKey = String(process.env.AGENT_INSIGHT_API_KEY || "").trim();
   if (!apiKey) throw new Error("AGENT_INSIGHT_API_KEY is required");
-  assertSupportedRuntime(options.skipVersionCheck);
 
   const baseUrl = String(process.env.AGENT_INSIGHT_BASE_URL || "http://127.0.0.1:3000")
     .trim()
@@ -121,7 +108,28 @@ async function install(options) {
   const collectorsDir = path.join(agentInsightHome, "collectors");
   const packageDir = path.join(collectorsDir, "pi-agent");
   const sharedDir = path.join(collectorsDir, "shared");
+  const endpoint = process.env.AGENT_INSIGHT_PI_ENDPOINT ||
+    `${baseUrl}/api/ingest/otel/v1/traces`;
+  const collaborationSessionsEndpoint = process.env.AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT
+    || `${baseUrl}/api/ingest/collaborations/sessions`;
+  const collaborationEventsEndpoint = process.env.AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT
+    || `${baseUrl}/api/ingest/collaborations/events`;
   await installFiles(options.sourceDir, packageDir, sharedDir);
+  const goalPlusSourceDir = path.resolve(options.sourceDir, "..", "goal-plus");
+  const { install: installGoalPlusObserver } = require(path.join(goalPlusSourceDir, "install.cjs"));
+  const goalPlusObserver = await installGoalPlusObserver({
+    homeDir: options.homeDir,
+    sourceDir: goalPlusSourceDir,
+    skipVersionCheck: true,
+    createWrapper: false,
+    managedBy: "pi-agent",
+    deferWatcher: true,
+    apiKey,
+    baseUrl,
+    otlpEndpoint: endpoint,
+    collaborationSessionsEndpoint,
+    collaborationEventsEndpoint,
+  });
 
   const configPath = path.join(packageDir, "config.json");
   const tempPath = `${configPath}.${process.pid}.tmp`;
@@ -129,8 +137,11 @@ async function install(options) {
     version: 1,
     enabled: true,
     apiKey,
-    endpoint: process.env.AGENT_INSIGHT_PI_ENDPOINT ||
-      `${baseUrl}/api/ingest/otel/v1/traces`,
+    endpoint,
+    collaborationSessionsEndpoint,
+    collaborationEventsEndpoint,
+    goalPlusObserverEnabled: goalPlusObserver.observerEnabled,
+    goalPlusObserverConfigPath: goalPlusObserver.configPath,
     uploadIntervalMs: 300000,
     shutdownTimeoutMs: 2200,
   };
@@ -139,12 +150,21 @@ async function install(options) {
   await fsp.rename(tempPath, configPath);
   await fsp.chmod(configPath, 0o600).catch(() => {});
 
+  const registrationEnv = { ...process.env, PI_CODING_AGENT_DIR: options.piAgentDir };
   spawnSync(piCommand(), ["remove", packageDir], {
+    env: registrationEnv,
     encoding: "utf8",
     windowsHide: true,
     shell: process.platform === "win32",
   });
-  run(piCommand(), ["install", packageDir]);
+  run(piCommand(), ["install", packageDir], { env: registrationEnv });
+  const settings = JSON.parse(await fsp.readFile(path.join(options.piAgentDir, "settings.json"), "utf8"));
+  if (!settings.packages?.some(entry => {
+    const source = typeof entry === "string" ? entry : entry?.source;
+    return typeof source === "string" && path.resolve(options.piAgentDir, source) === packageDir;
+  })) throw new Error("Pi registration verification failed: installed collector package is not registered");
+  const manifest = await writeManifest(packageDir, PACKAGE_FILES.map(parts => parts.join("/")));
+  if (!(await checkManifest(packageDir)).ok) throw new Error("Pi installed files failed verification");
   run(process.execPath, [path.join(packageDir, "scripts", "self-check.cjs")], {
     env: {
       ...process.env,
@@ -152,13 +172,72 @@ async function install(options) {
       AGENT_INSIGHT_USER_HOME: options.homeDir,
     },
   });
-  return { packageDir, agentInsightHome };
+  const goalConfig = JSON.parse(await fsp.readFile(goalPlusObserver.configPath, "utf8"));
+  if (goalConfig.apiKey !== config.apiKey || goalConfig.otlpEndpoint !== config.endpoint
+    || goalConfig.collaborationSessionsEndpoint !== config.collaborationSessionsEndpoint
+    || goalConfig.collaborationEventsEndpoint !== config.collaborationEventsEndpoint
+    || config.goalPlusObserverEnabled !== true) throw new Error("Pi / Goal Plus configuration verification failed");
+  return { packageDir, agentInsightHome, goalPlusObserver, buildId: manifest.buildId };
+}
+
+async function install(options) {
+  assertSupportedRuntime(options.skipVersionCheck);
+  const home = process.env.AGENT_INSIGHT_HOME
+    ? path.resolve(process.env.AGENT_INSIGHT_HOME) : path.join(options.homeDir, ".agent-insight");
+  const collectors = path.join(home, "collectors");
+  const sharedDir = path.join(collectors, "shared");
+  const packageDir = path.join(collectors, "pi-agent");
+  const goalDir = path.join(collectors, "goal-plus");
+  const goalSource = path.resolve(options.sourceDir, "..", "goal-plus");
+  const goalFiles = require(path.join(goalSource, "install.cjs")).PACKAGE_FILES;
+  const piFiles = PACKAGE_FILES.map(parts => parts.join("/"));
+  const shared = await prepareSharedModules(path.resolve(options.sourceDir, "..", "shared"), sharedDir,
+    ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]);
+  await validatePackage(options.sourceDir, packageDir, piFiles);
+  await validatePackage(goalSource, goalDir, goalFiles);
+  // Load the complete incoming dependency graph before changing the installed files.
+  run(process.execPath, ["-e", "require(process.argv[1]); require(process.argv[2])",
+    path.join(options.sourceDir, "lib", "pi-trace-core.cjs"), path.join(goalSource, "goal-plus-collector.cjs")]);
+  const piAgentDir = path.resolve(process.env.PI_CODING_AGENT_DIR || path.join(options.homeDir, ".pi", "agent"));
+  const files = [
+    ...piFiles.map(name => path.join(packageDir, name)), path.join(packageDir, "config.json"), path.join(packageDir, MANIFEST),
+    ...goalFiles.map(name => path.join(goalDir, name)), path.join(goalDir, "config.json"), path.join(goalDir, MANIFEST),
+    ...shared.plans.map(item => item.target), path.join(sharedDir, MANIFEST), path.join(piAgentDir, "settings.json"),
+  ];
+  const lifecycle = require(path.join(goalSource, "goal-plus-collector.cjs"));
+  const lifecycleOptions = { homeDir: options.homeDir, configPath: path.join(goalDir, "config.json") };
+  const previous = await lifecycle.watcherStatus(lifecycleOptions);
+  try {
+    return await withFileRollback(files, async () => {
+      await lifecycle.stopWatcher(lifecycleOptions);
+      try {
+        const result = await installPackage({ ...options, piAgentDir });
+        const installed = require(path.join(goalDir, "goal-plus-collector.cjs"));
+        result.goalPlusObserver.watcher = await installed.ensureWatcher(await installed.loadConfig(lifecycleOptions));
+        result.goalPlusObserver.observerStatus = result.goalPlusObserver.watcher.ensured ? "active" : "dormant";
+        return result;
+      } catch (error) {
+        await lifecycle.stopWatcher(lifecycleOptions);
+        throw error;
+      }
+    });
+  } catch (error) {
+    if (previous.running) {
+      try {
+        const restored = require(path.join(goalDir, "goal-plus-collector.cjs"));
+        await restored.ensureWatcher(await restored.loadConfig(lifecycleOptions));
+      } catch (restoreError) { throw new Error(`${error.message}; watcher restore failed: ${restoreError.message}`); }
+    }
+    throw error;
+  }
 }
 
 async function main() {
   const result = await install(parseArgs(process.argv.slice(2)));
   process.stdout.write([
     `Pi Agent collector installed at ${result.packageDir}`,
+    `Goal Plus observer installed (${result.goalPlusObserver.observerStatus}). Build: ${result.buildId}`,
+    "Restart Pi to load this collector build; installation does not reload existing sessions.",
     `Spool data is isolated under ${path.join(result.agentInsightHome, "otel_data", "pi-agent", "<api-key-hash>")}`,
   ].join("\n") + "\n");
 }

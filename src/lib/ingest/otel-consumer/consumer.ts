@@ -1,4 +1,7 @@
 import path from 'node:path';
+import { LiveSpoolDiscovery } from './live-discovery';
+import { subscribeSpoolReceipts } from './live-input';
+import fs from 'node:fs';
 import { guardAttribution } from '@/lib/ingest/claude-otel/attribution-guard';
 import { currentSpoolDay, readNewLinesSince, type SpoolCursor } from '@/lib/ingest/claude-otel/spool';
 import { saveExecutionRecord, type ExecutionRecord } from '@/lib/storage/data-service';
@@ -8,13 +11,14 @@ import {
   seedToEof,
   toCheckpointRelPath,
 } from './checkpoint';
-import { compactProcessedSpoolFiles } from './retention';
+import { acquireSpoolUse, readSpoolState, recordSpoolPersistence } from '@/lib/runtime-cleanup/spool-state';
+import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
 import { listSources, type SpoolAggregationResult, type SpoolSource } from './sources';
 import { acquireConsumerProcessLocks, type ConsumerProcessLocks } from './process-lock';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type IntervalHandle = ReturnType<typeof setInterval>;
-type SaveExecution = (data: ExecutionRecord) => Promise<{ success: boolean; record: ExecutionRecord }>;
+type SaveExecution = (data: ExecutionRecord, options?: { receivedAt?: Date }) => Promise<{ success: boolean; record: ExecutionRecord }>;
 
 type PendingFile = {
   source: SpoolSource;
@@ -22,7 +26,9 @@ type PendingFile = {
   relPath: string;
   nextCursor: SpoolCursor;
   sessions: Set<string>;
+  versions: Map<string, number>;
   done: Set<string>;
+  deferred: Set<string>;
 };
 
 type AggregateSnapshot = {
@@ -38,6 +44,7 @@ type SessionState = {
   failures: number;
   parked: boolean;
   parkedAt?: number;
+  parkedMode?: 'fast' | 'evaluated';
   /** 到点时刻。取代原来的三个 per-session timer——调度统一由中央 dispatcher 决定。 */
   fastDueAt?: number;
   evaluatedDueAt?: number;
@@ -56,6 +63,8 @@ type FileListCache = {
   fullScanAt: number;
 };
 
+type DeferredFile = { retryAt: number; signature: string };
+
 export type OtelSpoolConsumerState = {
   interval?: IntervalHandle;
   stopped: boolean;
@@ -65,6 +74,10 @@ export type OtelSpoolConsumerState = {
   pendingFiles: Map<string, PendingFile>;
   sessions: Map<string, SessionState>;
   fileLists: Map<string, FileListCache>;
+  deferredFiles: Map<string, DeferredFile>;
+  scanOffsets: Map<string, number>;
+  sourceOffset: number;
+  lastCapacityWarnAt?: number;
   processLocks: ConsumerProcessLocks;
   saveExecution: SaveExecution;
   shortMs: number;
@@ -74,6 +87,10 @@ export type OtelSpoolConsumerState = {
   parkAfter: number;
   retentionDays: number;
   seedOnStart: boolean;
+  startMode: 'live' | 'resume';
+  cutoff: number;
+  liveDiscovery?: LiveSpoolDiscovery;
+  unsubscribeReceipts?: () => void;
   aggCooldownFactor: number;
   aggCooldownCapMs: number;
   aggGlobalFactor: number;
@@ -112,6 +129,7 @@ export type OtelSpoolConsumerOptions = {
   parkAfter?: number;
   retentionDays?: number;
   seedOnStart?: boolean;
+  startMode?: 'live' | 'resume';
   aggCooldownFactor?: number;
   aggCooldownCapMs?: number;
   aggGlobalFactor?: number;
@@ -144,7 +162,11 @@ function createState(
   sources: SpoolSource[],
   processLocks: ConsumerProcessLocks,
 ): OtelSpoolConsumerState {
+  const rawMode = options.startMode ?? (options.seedOnStart !== undefined ? 'resume' : process.env.AGENT_INSIGHT_OTEL_CONSUMER_START_MODE);
+  if (rawMode && rawMode !== 'live' && rawMode !== 'resume') (options.warn || console.warn)('[OTelConsumer] invalid start mode, using live', { startMode: rawMode });
   return {
+    startMode: rawMode === 'resume' ? 'resume' : 'live',
+    cutoff: Date.now(),
     stopped: false,
     ticking: false,
     sources,
@@ -152,6 +174,9 @@ function createState(
     pendingFiles: new Map(),
     sessions: new Map(),
     fileLists: new Map(),
+    deferredFiles: new Map(),
+    scanOffsets: new Map(),
+    sourceOffset: 0,
     processLocks,
     saveExecution: wrapSaveExecutionWithAttributionGuard(options.saveExecution || saveExecutionRecord, options.log || console.log),
     shortMs: options.shortMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_SHORT_MS', 3000),
@@ -160,7 +185,7 @@ function createState(
     tickMs: options.tickMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_TICK_MS', 1000),
     parkAfter: options.parkAfter ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_PARK_AFTER', 3),
     retentionDays: options.retentionDays ?? envNumber('AGENT_INSIGHT_OTEL_SPOOL_RETENTION_DAYS', 7),
-    seedOnStart: options.seedOnStart ?? true,
+    seedOnStart: options.seedOnStart ?? false,
     // 聚合冷却:下一轮聚合至少要等 上轮耗时×factor(封顶 cap)。上轮聚合花 5s → 至少歇 50s,
     // 把"活跃大 session 每来一批数据就全量重聚合"的 CPU 占比压到 ~1/factor 以内。
     aggCooldownFactor: options.aggCooldownFactor ?? envNumber('AGENT_INSIGHT_OTEL_AGG_COOLDOWN_FACTOR', 10),
@@ -199,7 +224,7 @@ function wrapSaveExecutionWithAttributionGuard(
   inner: SaveExecution,
   log: (...args: any[]) => void,
 ): SaveExecution {
-  return async (data) => {
+  return async (data, options) => {
     // Qoder uploads carry server-stamped credential provenance. In a
     // single-user installation the valid API key commonly belongs to `admin`,
     // which the generic guard otherwise treats as an internal service owner.
@@ -224,7 +249,7 @@ function wrapSaveExecutionWithAttributionGuard(
       return { success: true, record: data };
     }
 
-    return inner(data);
+    return inner(data, options);
   };
 }
 
@@ -250,6 +275,7 @@ function getSession(state: OtelSpoolConsumerState, sessionId: string): SessionSt
  * 原实现只增不删,长跑进程里 sessions 无界增长;现在还要缓存聚合快照,更不能留着。
  */
 function evictIdleSession(state: OtelSpoolConsumerState, session: SessionState): void {
+  if (state.sessions.get(session.sessionId) !== session || state.activeSessionId === session.sessionId) return;
   if (session.pendingFileKeys.size > 0) return;
   if (session.fastDueAt !== undefined || session.evaluatedDueAt !== undefined || session.maxDueAt !== undefined) return;
   if (session.parked) return;
@@ -270,13 +296,15 @@ function scheduleSession(state: OtelSpoolConsumerState, sessionId: string, sourc
   if (session.maxDueAt === undefined) session.maxDueAt = now + state.maxWaitMs;
 }
 
-function markSourceDone(state: OtelSpoolConsumerState, sessionId: string, sourceId: string): void {
+function markSourceDone(state: OtelSpoolConsumerState, sessionId: string, sourceId: string, covered: Map<PendingFile, number>): void {
   const session = state.sessions.get(sessionId);
   if (!session) return;
 
   for (const fileKey of Array.from(session.pendingFileKeys)) {
     const pending = state.pendingFiles.get(fileKey);
     if (!pending || pending.source.id !== sourceId) continue;
+    // A save may await while the scanner receives another generation of this session.
+    if (!covered.has(pending) || covered.get(pending) !== pending.versions.get(sessionId)) continue;
     pending.done.add(sessionId);
     if ([...pending.sessions].every((sid) => pending.done.has(sid))) {
       saveFileCursor(pending.spoolDir, pending.relPath, pending.nextCursor);
@@ -290,11 +318,70 @@ function markSourceDone(state: OtelSpoolConsumerState, sessionId: string, source
         // 处理完后 sessions 长期停在 420 不降)。
         evictIdleSession(state, other);
       }
+    } else if ([...pending.sessions].every(sid => pending.done.has(sid) || pending.deferred.has(sid))) {
+      deferPendingFile(state, fileKey, pending);
     }
   }
 }
 
-function handleSessionFailure(state: OtelSpoolConsumerState, sessionId: string, err: unknown): void {
+function fileSignature(file: string): string {
+  try {
+    const info = fs.statSync(file);
+    return `${info.ino}:${info.size}:${info.mtimeMs}`;
+  } catch { return ''; }
+}
+
+function deferPendingFile(state: OtelSpoolConsumerState, fileKey: string, pending: PendingFile): void {
+  const sourceId = pending.source.id;
+  state.deferredFiles.delete(fileKey);
+  while (state.deferredFiles.size >= state.maxTrackedSessions) {
+    state.deferredFiles.delete(state.deferredFiles.keys().next().value!);
+  }
+  state.deferredFiles.set(fileKey, {
+    retryAt: Date.now() + state.parkedRetryMs,
+    signature: fileSignature(path.join(pending.spoolDir, pending.relPath)),
+  });
+  state.liveDiscovery?.rewind(pending.spoolDir, path.join(pending.spoolDir, pending.relPath));
+  // Keep the durable cursor unchanged: an evicted pending file must replay after its backoff.
+  state.pendingFiles.delete(fileKey);
+  for (const sessionId of pending.sessions) {
+    const affected = state.sessions.get(sessionId);
+    if (!affected) continue;
+    affected.pendingFileKeys.delete(fileKey);
+    const hasSourceFiles = [...affected.pendingFileKeys].some(key => state.pendingFiles.get(key)?.source.id === sourceId);
+    if (!hasSourceFiles && !pending.done.has(sessionId)) affected.sourceIds.delete(sourceId);
+    affected.lastAggregate = undefined;
+    if (affected.pendingFileKeys.size === 0 && affected.sourceIds.size === 0) {
+      affected.fastDueAt = undefined;
+      affected.evaluatedDueAt = undefined;
+      affected.maxDueAt = undefined;
+      affected.parked = false;
+    }
+    evictIdleSession(state, affected);
+  }
+}
+
+function deferSource(state: OtelSpoolConsumerState, session: SessionState, sourceId: string): boolean {
+  let foundPending = false;
+  for (const fileKey of Array.from(session.pendingFileKeys)) {
+    const pending = state.pendingFiles.get(fileKey);
+    if (!pending || pending.source.id !== sourceId) continue;
+    foundPending = true;
+    pending.deferred.add(session.sessionId);
+    if ([...pending.sessions].every(sid => pending.done.has(sid) || pending.deferred.has(sid))) {
+      deferPendingFile(state, fileKey, pending);
+    }
+  }
+  return foundPending;
+}
+
+function scheduleRetry(session: SessionState, mode: 'fast' | 'evaluated', delayMs: number): void {
+  const retryAt = Date.now() + delayMs;
+  if (mode === 'evaluated') session.evaluatedDueAt = retryAt;
+  else session.fastDueAt = retryAt;
+}
+
+function handleSessionFailure(state: OtelSpoolConsumerState, sessionId: string, err: unknown, mode: 'fast' | 'evaluated' = 'fast'): void {
   const session = getSession(state, sessionId);
   session.failures += 1;
   state.warn('[OTelConsumer] session processing failed', {
@@ -305,10 +392,14 @@ function handleSessionFailure(state: OtelSpoolConsumerState, sessionId: string, 
   if (session.failures >= state.parkAfter) {
     session.parked = true;
     session.parkedAt = Date.now();
+    session.parkedMode = mode;
     session.fastDueAt = undefined;
     session.evaluatedDueAt = undefined;
     session.maxDueAt = undefined;
     state.warn('[OTelConsumer] parked poisoned session', { sessionId, failures: session.failures });
+    for (const sourceId of Array.from(session.sourceIds)) deferSource(state, session, sourceId);
+  } else {
+    scheduleRetry(session, mode, Math.max(state.shortMs, state.tickMs));
   }
 }
 
@@ -385,7 +476,8 @@ function pickJob(state: OtelSpoolConsumerState, now: number): { job: Job | null;
       session.parked = false;
       session.parkedAt = undefined;
       session.failures = 0;
-      session.fastDueAt = now;
+      scheduleRetry(session, session.parkedMode || 'fast', 0);
+      session.parkedMode = undefined;
     }
 
     const fastAt = session.fastDueAt;
@@ -485,7 +577,7 @@ async function pumpDispatch(state: OtelSpoolConsumerState): Promise<void> {
   try {
     await runJob(state, session, mode);
   } catch (err) {
-    handleSessionFailure(state, session.sessionId, err);
+    handleSessionFailure(state, session.sessionId, err, mode);
   } finally {
     finishAggregateRound(state, session, startedAt);
     state.dispatching = false;
@@ -517,19 +609,40 @@ function aggregateForSession(
 
 async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode: 'fast' | 'evaluated'): Promise<void> {
   for (const sourceId of Array.from(session.sourceIds)) {
-    if (session.parked) break;
+    if (session.parked || state.sessions.get(session.sessionId) !== session) break;
+    if (!session.sourceIds.has(sourceId)) continue;
     const source = state.sourcesById.get(sourceId);
     if (!source) continue;
+    const spoolDir = source.spoolDir();
+    const release = acquireSpoolUse(spoolDir);
+    if (!release) {
+      if (!deferSource(state, session, sourceId)) scheduleRetry(session, mode, state.parkedRetryMs);
+      continue;
+    }
     try {
+      const covered = new Map<PendingFile, number>();
+      for (const fileKey of session.pendingFileKeys) {
+        const pending = state.pendingFiles.get(fileKey);
+        if (pending?.source.id === sourceId) covered.set(pending, pending.versions.get(session.sessionId)!);
+      }
+      const receipt = readSpoolState(spoolDir, session.sessionId);
+      if (receipt?.purgedAt) {
+        markSourceDone(state, session.sessionId, sourceId, covered);
+        session.sourceIds.delete(sourceId);
+        session.lastAggregate = undefined;
+        continue;
+      }
       const result = aggregateForSession(state, session, source);
       if (result.disposition === 'retry-later') {
         session.failures = 0;
+        session.lastAggregate = undefined;
+        if (!deferSource(state, session, sourceId)) scheduleRetry(session, mode, state.parkedRetryMs);
         continue;
       }
 
       if (result.disposition === 'discard') {
         session.failures = 0;
-        markSourceDone(state, session.sessionId, sourceId);
+        markSourceDone(state, session.sessionId, sourceId, covered);
         session.sourceIds.delete(sourceId);
         if (session.pendingFileKeys.size === 0) {
           session.fastDueAt = undefined;
@@ -540,33 +653,45 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
         continue;
       }
 
+      const record = result.record;
+      if (!record) throw new Error('Telemetry aggregation returned no execution record');
+      const recordPersistence = () => {
+        if (!receipt?.generation) return;
+        const lifecycle = getTraceLifecycle(record.trace_completed_at, record);
+        recordSpoolPersistence(spoolDir, session.sessionId, receipt.generation, {
+          taskId: record.task_id,
+          completedAt: lifecycle.traceCompletedAt ? Date.parse(lifecycle.traceCompletedAt) : undefined,
+          failed: lifecycle.traceStatus === 'failed',
+        });
+      };
       if (mode === 'fast') {
         const saved = await state.saveExecution({
-          ...result.record,
+          ...record,
           skip_evaluation: source.defaultSkipEvaluation(),
-        });
+        }, { receivedAt: new Date(session.lastDataAt) });
         if (!saved.success) throw new Error('execution persistence returned success=false');
         session.failures = 0;
-        markSourceDone(state, session.sessionId, sourceId);
+        // Keep the replay cursor until evaluated succeeds, so its failures can release capacity safely.
       } else {
         const saved = await state.saveExecution({
-          ...result.record,
+          ...record,
           skip_evaluation: false,
           skip_internal_judgment: true,
           force_judgment: true,
-        });
+        }, { receivedAt: new Date(session.lastDataAt) });
         if (!saved.success) throw new Error('execution persistence returned success=false');
+        recordPersistence();
         session.failures = 0;
-        // 存量积压场景下 fast 和 evaluated 会同时到点，dispatcher 直接跑 evaluated 跳过 fast，
-        // 所以这里必须也推进文件归属簿记 —— 否则 pendingFiles 永远不减、checkpoint 游标永不推进，
-        // 那些 spool 文件每次重启都要重读，retention 也永远归档不掉（实测 backlog 卡在 520 不动）。
-        markSourceDone(state, session.sessionId, sourceId);
+        // evaluated 完成后才确认重放游标；积压时它也可能直接替代 fast。
+        markSourceDone(state, session.sessionId, sourceId, covered);
         session.lastAggregate = undefined;
 
       }
     } catch (err) {
-      handleSessionFailure(state, session.sessionId, err);
+      handleSessionFailure(state, session.sessionId, err, mode);
       if (session.parked) break;
+    } finally {
+      release();
     }
   }
 }
@@ -592,19 +717,64 @@ function sourceFiles(state: OtelSpoolConsumerState, source: SpoolSource): string
   return files;
 }
 
+function admitLiveFile(state: OtelSpoolConsumerState, source: SpoolSource, file: string, sessionId: string, bytes: number, receivedAt: number): boolean {
+  if (state.stopped) return false;
+  const spoolDir = source.spoolDir();
+  const relPath = toCheckpointRelPath(spoolDir, file);
+  const fileKey = `${source.id}:${relPath}`;
+  const deferred = state.deferredFiles.get(fileKey);
+  if (deferred && deferred.retryAt > Date.now() && deferred.signature === fileSignature(file)) return false;
+  state.deferredFiles.delete(fileKey);
+  let pending = state.pendingFiles.get(fileKey);
+  if (pending && pending.nextCursor.bytes >= bytes && pending.sessions.has(sessionId)) return true;
+  if (!state.sessions.has(sessionId) && state.sessions.size >= state.maxTrackedSessions) {
+    if (state.lastCapacityWarnAt === undefined || Date.now() - state.lastCapacityWarnAt >= 60000) {
+      state.lastCapacityWarnAt = Date.now();
+      state.warn('[OTelConsumer] deferring spool files at session capacity', { source: source.id, file: relPath, sessions: state.sessions.size, limit: state.maxTrackedSessions });
+    }
+    return false;
+  }
+  if (!pending) {
+    pending = { source, spoolDir, relPath, nextCursor: { bytes }, sessions: new Set(), versions: new Map(), done: new Set(), deferred: new Set() };
+    state.pendingFiles.set(fileKey, pending);
+  }
+  pending.nextCursor = { bytes: Math.max(pending.nextCursor.bytes, bytes) };
+  pending.sessions.add(sessionId);
+  pending.versions.set(sessionId, (pending.versions.get(sessionId) || 0) + 1);
+  pending.done.delete(sessionId);
+  pending.deferred.delete(sessionId);
+  scheduleSession(state, sessionId, source, fileKey, true);
+  state.sessions.get(sessionId)!.lastDataAt = receivedAt;
+  return true;
+}
+
 export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): Promise<void> {
   if (state.stopped || state.ticking) return;
   state.ticking = true;
   let discovered = 0;
   let parseErrors = 0;
+  let capacityDeferred = 0;
+  let capacitySample: { source: string; file: string; incoming: number } | undefined;
 
   try {
-    for (const source of state.sources) {
+    if (state.liveDiscovery) {
+      await state.liveDiscovery.tick();
+      if (state.stopped) return;
+    } else for (let sourceIndex = 0; sourceIndex < state.sources.length; sourceIndex++) {
+      const source = state.sources[(state.sourceOffset + sourceIndex) % state.sources.length];
       const spoolDir = source.spoolDir();
       const files = sourceFiles(state, source);
-      for (const file of files) {
+      const offset = (state.scanOffsets.get(source.id) || 0) % Math.max(1, files.length);
+      for (let index = 0; index < files.length; index++) {
+        const fileIndex = (offset + index) % files.length;
+        const file = files[fileIndex];
         const relPath = toCheckpointRelPath(spoolDir, file);
         const fileKey = `${source.id}:${relPath}`;
+        const deferred = state.deferredFiles.get(fileKey);
+        if (deferred) {
+          if (deferred.retryAt > Date.now() && deferred.signature === fileSignature(file)) continue;
+          state.deferredFiles.delete(fileKey);
+        }
         const inflight = state.pendingFiles.get(fileKey);
         // 活跃文件优先用内存读位增量读。磁盘 cursor 只在聚合完成后推进,若每 tick 都
         // 从磁盘位重读,聚合冷却期间会反复 parse 整段未落盘 backlog(大会话 = 每秒
@@ -640,13 +810,8 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
           && state.sessions.size > 0
           && state.sessions.size + newSessionCount > state.maxTrackedSessions
         ) {
-          state.warn('[OTelConsumer] deferring spool file at session capacity', {
-            source: source.id,
-            file: relPath,
-            sessions: state.sessions.size,
-            incoming: newSessionCount,
-            limit: state.maxTrackedSessions,
-          });
+          capacityDeferred += 1;
+          capacitySample ??= { source: source.id, file: relPath, incoming: newSessionCount };
           continue;
         }
         let pending = inflight;
@@ -658,7 +823,9 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
             relPath,
             nextCursor: read.nextCursor,
             sessions: new Set(),
+            versions: new Map(),
             done: new Set(),
+            deferred: new Set(),
           };
           state.pendingFiles.set(fileKey, pending);
           resetTimers = true;
@@ -672,28 +839,28 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
             pending.sessions.add(sessionId);
             resetTimers = true;
           }
+          pending.versions.set(sessionId, (pending.versions.get(sessionId) || 0) + 1);
+          pending.deferred.delete(sessionId);
+          pending.done.delete(sessionId);
           discovered += 1;
           scheduleSession(state, sessionId, source, fileKey, resetTimers);
         }
-      }
-      try {
-        const retention = compactProcessedSpoolFiles(spoolDir, files, state.retentionDays);
-        if (retention.archived > 0) {
-          state.log('[OTelConsumer] retention archived processed spool files', {
-            source: source.id,
-            archived: retention.archived,
-          });
-          state.fileLists.delete(source.id);
-        }
-      } catch (err) {
-        state.warn('[OTelConsumer] retention failed', {
-          source: source.id,
-          message: (err as Error)?.message || String(err),
-        });
+        state.scanOffsets.set(source.id, (fileIndex + 1) % files.length);
       }
     }
   } finally {
+    state.sourceOffset = (state.sourceOffset + 1) % Math.max(1, state.sources.length);
     state.ticking = false;
+  }
+
+  if (capacityDeferred > 0 && (state.lastCapacityWarnAt === undefined || Date.now() - state.lastCapacityWarnAt >= 60000)) {
+    state.lastCapacityWarnAt = Date.now();
+    state.warn('[OTelConsumer] deferring spool files at session capacity', {
+      ...capacitySample,
+      deferredFiles: capacityDeferred,
+      sessions: state.sessions.size,
+      limit: state.maxTrackedSessions,
+    });
   }
 
   void pumpDispatch(state);
@@ -738,7 +905,12 @@ export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): 
   }
   const state = createState(options, sources, processLocks);
 
-  if (state.seedOnStart) {
+  if (state.startMode === 'live') {
+    state.liveDiscovery = new LiveSpoolDiscovery(state.sources, state.cutoff, state.maxTrackedSessions,
+      (candidate, sessionId, bytes, receivedAt) => admitLiveFile(state, candidate.source, candidate.file, sessionId, bytes, receivedAt),
+      Date.now, state.warn);
+    state.unsubscribeReceipts = subscribeSpoolReceipts(notice => state.liveDiscovery?.receive(notice));
+  } else if (state.seedOnStart) {
     for (const source of state.sources) {
       try {
         seedToEof(source.spoolDir(), source.listFiles());
@@ -756,13 +928,15 @@ export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): 
   }, state.tickMs);
   globalThis.__otelSpoolConsumer = state;
   void runOtelSpoolConsumerTick(state);
-  state.log('[OTelConsumer] started', { sources: state.sources.map((source) => source.id) });
+  state.log('[OTelConsumer] started', { sources: state.sources.map((source) => source.id), startMode: state.startMode, cutoff: new Date(state.cutoff).toISOString() });
 }
 
 export function stopOtelSpoolConsumer(): void {
   const state = globalThis.__otelSpoolConsumer;
   if (!state) return;
   state.stopped = true;
+  state.unsubscribeReceipts?.();
+  state.liveDiscovery?.stop();
   if (state.interval) clearInterval(state.interval);
   if (state.dispatchTimer) clearTimeout(state.dispatchTimer);
   state.processLocks.release();
@@ -771,4 +945,37 @@ export function stopOtelSpoolConsumer(): void {
 
 export function getOtelSpoolConsumerForTest(): OtelSpoolConsumerState | undefined {
   return globalThis.__otelSpoolConsumer;
+}
+
+export function forgetOtelSpoolFile(spoolDir: string, file: string): void {
+  const state = globalThis.__otelSpoolConsumer;
+  if (!state) return;
+  const canonical = (directory: string) => {
+    try { return fs.realpathSync(directory); } catch { return path.resolve(directory); }
+  };
+  state.liveDiscovery?.rewind(spoolDir, file);
+  const root = canonical(spoolDir);
+  const canonicalFile = path.join(canonical(path.dirname(file)), path.basename(file));
+  for (const source of state.sources) {
+    if (canonical(source.spoolDir()) !== root) continue;
+    state.fileLists.delete(source.id);
+    const fileKey = `${source.id}:${toCheckpointRelPath(root, canonicalFile)}`;
+    state.deferredFiles.delete(fileKey);
+    const pending = state.pendingFiles.get(fileKey);
+    if (!pending) continue;
+    state.pendingFiles.delete(fileKey);
+    for (const sessionId of pending.sessions) {
+      const session = state.sessions.get(sessionId);
+      if (!session) continue;
+      session.pendingFileKeys.delete(fileKey);
+      session.lastAggregate = undefined;
+      if (session.pendingFileKeys.size === 0) {
+        session.fastDueAt = undefined;
+        session.evaluatedDueAt = undefined;
+        session.maxDueAt = undefined;
+        session.parked = false;
+        evictIdleSession(state, session);
+      }
+    }
+  }
 }

@@ -16,6 +16,8 @@ export interface DatabaseAdapter {
     // User operations
     findUserByApiKey(apiKey: string): Promise<any>;
     findUserByUsername(username: string): Promise<any>;
+    findUserByExternalAccount(externalAccount: string): Promise<any>;
+    updateUserExternalAccount(username: string, externalAccount: string): Promise<any>;
     createUser(data: any): Promise<any>;
 
     // Skill operations
@@ -114,6 +116,17 @@ class PrismaAdapter implements DatabaseAdapter {
     
     async findUserByUsername(username: string) {
         return this.client.user.findUnique({ where: { username } });
+    }
+
+    async findUserByExternalAccount(externalAccount: string) {
+        return this.client.user.findUnique({ where: { externalAccount } });
+    }
+
+    async updateUserExternalAccount(username: string, externalAccount: string) {
+        return this.client.user.update({
+            where: { username },
+            data: { externalAccount },
+        });
     }
 
     async createUser(data: any) {
@@ -440,6 +453,19 @@ class OpenGaussAdapter implements DatabaseAdapter {
     
     async findUserByUsername(username: string) {
         const res = await this.query('SELECT * FROM "User" WHERE username = $1', [username]);
+        return res.rows[0] || null;
+    }
+
+    async findUserByExternalAccount(externalAccount: string) {
+        const res = await this.query('SELECT * FROM "User" WHERE "externalAccount" = $1', [externalAccount]);
+        return res.rows[0] || null;
+    }
+
+    async updateUserExternalAccount(username: string, externalAccount: string) {
+        const res = await this.query(
+            'UPDATE "User" SET "externalAccount" = $2 WHERE username = $1 RETURNING *',
+            [username, externalAccount],
+        );
         return res.rows[0] || null;
     }
 

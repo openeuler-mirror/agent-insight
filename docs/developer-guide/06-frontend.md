@@ -9,16 +9,18 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 |---|---|---|
 | `/` | `Home` (`src/app/page.tsx`) | 落地页 / 重定向 |
 | `/login` | `LoginPage` (`src/app/login/page.tsx`) | 邮箱登录 |
-| `/(main)/dashboard` | `DashboardPage` (`(main)/dashboard/page.tsx`) | 概览：健康度、趋势、告警、agents |
+| `/(main)/dashboard` | `DashboardPage` (`(main)/dashboard/page.tsx`) | 概览：健康度、趋势、RAS 可靠性、性能、模型/工具/Agent/编排监控 |
+| `/(main)/quickstart` | `QuickstartPage` (`(main)/quickstart/page.tsx`) | 五阶段推荐使用路径与现有模块入口 |
 | `/(main)/agents` | `AgentsPage` (`(main)/agents/page.tsx`) | 已注册/已观测的 agents |
-| `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；列表由服务端过滤、排序和数据库分页，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集 |
+| `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；SQLite 列表在数据库执行普通与计算字段的过滤、排序、分页及统计，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集 |
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
-| `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；列表读取不含 cases 的摘要视图，编辑和详情再按需加载完整记录；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值 |
+| `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；列表读取不含 cases 的摘要视图，编辑和详情再按需加载完整记录；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值；本地导入的隐藏文件控件常驻页面，菜单关闭不会中断文件选择 |
 | `/(main)/eval`, `/(main)/eval/run/[runId]`, `/(main)/eval/trajectory/*` | `EvalPage`, `RunDetailPage`, `TrajectoryDetailPage`/`TrajectoryTracePage` | 评测运行与轨迹视图 |
 | `/(main)/skill-eval`, `/(main)/skill-eval/grayscale`, `/(main)/skill-eval/trigger/[skillName]`, `/(main)/skill-eval/_batch` | `SkillAnalysisPage`, `GrayscalePage`, `SkillEvalTriggerPage`, `BatchEvaluation` | Skill 分析：静态、A/B、触发、批量 |
 | `/(main)/skill-generator` | `PlaygroundPage` (`(main)/skill-generator/page.tsx`) | Skill 生成 playground |
 | `/(main)/skill-opt`, `/(main)/skill-opt/[name]/[version]` | `SkillOptListPage`, `SkillOptimizePage` | Skill 优化 + 历史 |
-| `/(main)/skill-history`, `/(main)/skill-release`, `/(main)/skills` | `SkillHistoryPage`, `SkillReleasePage`, `SkillsPage` | Skill 生命周期 |
+| `/(main)/skills`, `/(main)/skill-workbench` | `SkillsPage`, `SkillWorkbenchPreviewPage` | 正式 Skill 对话工作台与兼容别名 |
+| `/(main)/config/skills` | `SkillsPage` management mode | Skill 管理中心；复用旧资产管理主体，隐藏旧顶部页签 |
 | `/(main)/metrics`, `/(main)/metrics/evaluators/[id]` | `MetricsPage`, `CustomEvaluatorDetailPage` | 指标与自定义评测器 |
 | `/(main)/modelconfig`, `/(main)/modelconfig/registry`, `/(main)/modelconfig/web-search` | `ModelConfigPage`, `ModelRegistryPage`, `WebSearchConfigPage` | 模型注册表与搜索配置 |
 | `/(main)/accessconfig`, `/(main)/accessconfig/{install,health,channels,webhooks}` | `AccessConfigPage`, `AccessInstallPage`, … | 客户端安装 / 接入访问 |
@@ -27,69 +29,89 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 
 API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-file-map.md](03-file-map.md#api-routes-srcappapi--grouped)。
 
+仪表盘按页签懒加载数据。`/api/fleet/trends` 提供常驻健康总览和系统趋势；`/api/fleet/reliability` 将窗口内 root Execution 与 `RasAnomalyEvent` 按 taskId 关联，支持 `platform` / `agent` 筛选并返回 RAS KPI、趋势、恢复结果、最高 severity 分布、故障模式、Agent 聚合和近期故障 Trace。无 RAS anomaly 的 Trace 按无故障统计；只有 recoveryOutcome=success 才算已恢复。接口同时返回单独标注来源的 Execution/Judge 失败补充，不把它们并入 RAS KPI。`/api/fleet/breakdowns` 的 `performance` 字段只承载端到端时延、上下文峰值和慢 Trace，其余 model/tool/agent/orchestration 契约保持不变。
+
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 
 ## 导航信息架构（功能模块）
-侧边栏是产品的**功能模块入口**，权威定义在 `src/components/shell/AppSidebar.tsx`（`GROUPS = [AGENT_GROUP, CONFIG_GROUP]`），显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。两个一级分组、若干可折叠子树：
+侧边栏是产品的**功能模块入口**。语义配置的权威定义在 `src/components/shell/sidebar-navigation.ts`，`AppSidebar.tsx` 只负责渲染，显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。当前结构为统一模块树：
 
 ```
-AGENT WORKSPACE  (nav.groupAgentWorkspace)
-├─ 概览                 → /dashboard
-├─ Agent 管理           → /agents
-├─ 运行观测 (groupObserve)
-│  ├─ 链路追踪           → /trace   (matchPrefixes: /trace, /details)
-│  ├─ 版本分析           → /version-analysis
-│  ├─ 智能诊断           → /fault
-│  ├─ 质量监控           → /quality
-│  └─ 推理 Infra         → /infra
-├─ 评测中心 (evalCenter)
-│  ├─ 评测数据集         → /dataset
-│  ├─ 评估器             → /metrics
-│  ├─ 评测执行           → /eval
-│  └─ (记忆评估 → /memory) 代码注释掉，未暴露
-└─ Skills 能力 (groupSkills)
-   ├─ Skills Hub        → /skills   (matchPrefixes: /skills, /skill-history, /skill-detail)
-   ├─ Skills 生成        → /skill-generator
-   ├─ Skills 评测        → /skill-eval
-   └─ Skills 优化        → /skill-opt
-
-配置  (nav.configGroup)
-├─ 模型注册             → /modelconfig/registry
-├─ 联网搜索             → /modelconfig/web-search
-├─ 版本管理             → /version-management
-└─ 安装指导             → /accessconfig/install
-   (接入通道/Webhook/健康检查 → /accessconfig/{channels,webhooks,health}) 代码注释掉，"后端能力未稳定"
+仪表盘                         → /dashboard
+快速开始                       → /quickstart
+运行观测 (groupObserve)
+├─ Agent 概览                  → /agents
+├─ 链路追踪                     → /trace
+├─ 版本分析                     → /version-analysis
+└─ 推理基础设施                 → /infra
+评估与实验 (evalCenter)
+├─ 实验                         → /experiments
+├─ 评测数据集                   → /dataset
+└─ 评估器                       → /metrics
+诊断分析                       → /fault
+持续优化 (groupSkills)
+└─ Skill 工作台                → /skills
+配置 (configGroup)
+├─ Skill 管理中心              → /config/skills
+├─ 模型注册                     → /modelconfig/registry
+├─ 联网搜索                     → /modelconfig/web-search
+└─ 客户端安装                   → /accessconfig/install
 ```
+
+Skill 在持续优化分组中只有一个正式入口，进入统一对话工作台。旧 `SkillWorkspaceTabs` 和 `/skill-generator`、`/skill-eval`、`/skill-opt` 页面继续保留兼容；带 `openSkillId` 的旧 `/skills` 深链接仍进入管理模式。
+
+版本能力在侧边栏中只有“版本分析”一个入口。`VersionWorkspaceTabs` 在 `/version-analysis` 与 `/version-management` 顶部提供“版本分析 / 版本管理”页签；进入管理页签时，侧边栏仍保持“版本分析”激活。
 
 **显示名 ↔ 路由的非直觉映射**（改导航或写文档时易踩坑）：
 
 | 侧边栏显示名 | 实际路由 | 备注 |
 |---|---|---|
-| 智能诊断 | `/fault` | 故障诊断页，非独立 `/diagnosis` |
+| 诊断分析 | `/fault` | 复用既有智能诊断页，非独立 `/diagnosis` |
 | 评估器 | `/metrics` | 评测器中心（`MetricsPage` + `metrics/evaluators/[id]`） |
-| Skills Hub | `/skills` | Skill 目录 |
-| 安装指导 | `/accessconfig/install` | 客户端接入分发 |
+| Skill | `/skills` | 对话工作台；会话固定 Skill、推进工作版本，右侧选择器可旁路浏览其他资产 |
+| Skill 管理中心 | `/config/skills` | 原 SkillHub 资产列表与版本管理 |
+| 客户端安装 | `/accessconfig/install` | 客户端接入分发 |
 
 **导航可达性矩阵**——磁盘存在的页面分三类：
 
 | 状态 | 路由 | 说明 |
 |---|---|---|
-| ✅ 导航可达 | `/dashboard` `/agents` `/trace` `/fault` `/quality` `/dataset` `/metrics` `/eval` `/skills` `/skill-generator` `/skill-eval` `/skill-opt` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 侧边栏直达；`/quality` 的 `QualityPage` 展示过程、成本和错误三维运行质量 |
-| 🔁 间接可达 | `/skill-history` `/skill-detail`（经 Skills Hub）、`/details`（经链路追踪）、`/eval/run/[runId]`、`/skill-opt/[name]/[version]` 等子路由 | 由父页面跳转，无独立 nav 项 |
-| 🚫 存在但未挂导航 | `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | nav 中注释或未引用；多为半成品/已下线，源码保留 |
+| ✅ 侧边栏直达 | `/dashboard` `/quickstart` `/agents` `/trace` `/version-analysis` `/infra` `/experiments` `/dataset` `/metrics` `/fault` `/skills` `/config/skills` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | `/version-analysis` 是版本能力统一入口；`/skills` 为工作台，`/config/skills` 为长期资产管理 |
+| 🔁 页签或页面内可达 | `/version-management`、`/skill-generator` `/skill-eval` `/skill-opt`、`/skill-history` `/skill-detail`、`/details`、`/skill-opt/[name]/[version]` 等子路由 | 由版本/Skill 页签或父页面跳转，无独立 nav 项 |
+| 🚫 存在但未挂导航 | `/skill-workbench` `/quality` `/eval` `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | `/skill-workbench` 是 `/skills` 的兼容别名；其余源码保留，但当前信息架构不提供侧边栏入口 |
 
-> 折叠状态：`AppSidebar` 默认展开 `['skills','eval-center','observe']` 三棵子树（`useState` 初值），并在路由命中时自动展开对应祖先。
+> 折叠状态：`AppSidebar` 默认展开运行观测、评估与实验、持续优化和配置，并在路由命中时自动展开对应祖先。
 
 ## 组件组织
 组件按功能与可复用基础组件进行分组（`src/components/`）：
+
+Benchmark 评估器目录由服务端 `app/(main)/metrics/page.tsx` 遍历 `listBenchmarkAdapters()`，通过 `benchmark-evaluator-cards.ts` 只投影 Manifest Presentation 的卡片展示字段，再传给客户端 `MetricsPageClient` 与 `EvaluatorsCenter`；不把完整 Case Schema 传到浏览器。目录展示所有已安装接入包，与数据集是否导入无关；实验向导复用同一卡片转换函数。`benchmark:<evaluatorKey>` 仍只随对应 Benchmark 数据集自动绑定，普通 Trace 实验不能单独选择；目录中的“已接入”不表示独立评测服务在线。同一 `evaluatorKey` 重复会显式报错。`EvaluatorsCenter` 对预置与自建列表分别维护页码，筛选后每页最多显示 6 张卡片；筛选变化、刷新和创建时回到第一页，结果数缩小时渲染页码自动收敛到末页。
+
+`AgentDatasetCenter` 对已加载的摘要先按名称和类型筛选，再每页显示最多 12 张卡片；宽屏固定 4 列、最多 3 行，窄屏响应式减少列数。搜索、类型切换、刷新、保存与删除回到第一页；异步数据变化导致页码越界时按末页渲染。列表底部显示范围和上一页／下一页，翻页滚回列表顶部。保持现有摘要 API，不新增服务端分页协议。
+
+全局实验默认名称由 `engine/experiment/experiment-name.ts` 统一生成。“同配置实验”的服务端复制和“复用评测配置”的客户端向导都使用当前时间生成新名称，不继承原实验名称；配置复用与来源关联保持原流程。列表和详情对带旧复用后缀的存量名称，按实验 `createdAt` 投影标准标题，不改写数据库中的原名称。
+
+`ExperimentRenameButton` 复用同一 `PATCH /api/experiments/:id` 名称更新契约，在普通实验与 Skill 实验的列表、详情入口使用；保存成功后各视图更新本地名称，下一次列表或详情读取以数据库值为准。重命名不触发评测重跑。
+
 - **应用外壳** — `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader,providers}.tsx`。页面在 `<PageContainer>` 内渲染（左对齐、全幅——不要手写居中）。
 - **评测** — `eval/*`（`Dashboard`、`SkillEvaluation`、`TrajectoryEvalCenter`、`EvaluationRunDetailView`、`ExecutionRecordsTable`、`EvaluatorFindingsView`）以及 `evaluation/*`（`EvaluationContent`、`EvaluationFindings`）。
-- **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。筛选栏的用户标签下拉支持版本/业务标签混合多选，按类型及名称前缀聚类；前缀作为无框行标题，标签以可换行的胶囊横向排列。多个标签使用 AND 语义并写入 `tagIds` URL 参数。Version Analysis page: `app/(main)/version-analysis/page.tsx`; Version Management page: `app/(main)/version-management/page.tsx`。
-- **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`）、`skill-generator/*`。
-- **数据集 / 评测器** — `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx`。
-- **实验向导** — `app/(main)/experiments/new/page.tsx` 第 ① 步的待评测 Agent 只展示用户归属 Agent；第 ② 步通过 `/api/experiments/traces` 服务端分页选择该用户 Agent 的 root Trace。搜索同时匹配 `Execution.id`、`taskId` 与 `query`，时间支持预设窗口和自定义起止时间，用户标签多选使用 AND 语义。筛选栏下方的独立已选区读取跨页 `selected` Map，支持单条移除和全部清空；筛选状态不清空跨页已选 case，跨页全选沿用当前筛选参数并受 500 条上限保护。这些筛选不持久化为监听模式规则；监听运行时仍会拒绝系统归属 Agent 的新 Trace。
+- **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard,VersionWorkspaceTabs}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。筛选栏的用户标签下拉支持版本/业务标签混合多选，按类型及名称前缀聚类；前缀作为无框行标题，标签以可换行的胶囊横向排列。多个标签使用 AND 语义并写入 `tagIds` URL 参数。`version-workspace-navigation.ts` 定义版本分析与版本管理两个页签的路由归属；页面分别位于 `app/(main)/version-analysis/page.tsx` 与 `app/(main)/version-management/page.tsx`。
+  - 列表保留可见页面的五秒静默刷新、Goal Plus worker 折叠和多选标签；当前请求未结束时跳过自动刷新，切换筛选/分页或卸载时通过 `AbortController` 取消旧请求。请求序号拦截迟到响应，最新请求完成后统一释放加载状态，避免慢请求被轮询替换后一直显示骨架。后台刷新失败保留已有记录。Trace 列表内详情并行请求 Session 与轻量 Execution 元数据，状态更新不等待大正文，执行中/超时继续轮询，成功/失败停止。重复父子 Trace 导航会释放旧 fetch guard。
+  - Trace 页面、顶部搜索栏与筛选侧栏通过 `src/lib/client/trace-facets.ts` 共享同一用户、同一字段正在进行的筛选项请求，统一读取 JSON 后分发给各调用方。请求成功或失败后即释放，不缓存已完成结果；后续打开筛选仍重新取数，各组件继续独立处理卸载与失败。列表请求和全局 `apiFetch` 不参与这一去重。
+  - 列表点击详情与导入后的“打开 Trace”仅在这两类导航动作上给 `setTaskIdParam` 指定 `history: 'push'`，保留列表 URL 中的筛选和分页，支持浏览器后退/前进。页面内“返回列表”和无效 `taskId` 清理继续使用 `replace`；筛选参数与全局 `NuqsAdapter` 的默认历史策略不变。父子 Trace 之间继续通过 `router.push` 导航。
+  - Trace ID 使用 `IdChip` 的自适应宽度模式；可排序表头使用统一双三角图标。子 Agent 展开/收起复用 `TermPopover` 提示，根 Agent 保持展开；`slowOnly` 使用严格 `duration > 60000` 的事件筛选，锁定耗时选择但保留 Agent 层级上下文。
+  - `ContentModal` 为 `SmartViewer` 启用 `fullContent`，展开弹窗 JSON 全部层级并显示完整长字符串和大数组，普通内联预览保持限长；时间线 `ModalCodeBlock` 给输入/输出提供复制动作。共享 `copy-text.ts` 优先 Clipboard API，回退 textarea 放在当前聚焦的 dialog/alertdialog 内，兼容焦点锁；清理后恢复原焦点。
+- **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`、`SkillWorkspaceTabs`）、`skill-generator/*`；`skill-workspace-navigation.ts` 定义四个页签的路由归属。
+- **Skill 工作台** — `skill-workbench/*` 通过 `/api/skill-workbench` 与 `/api/skill-management` BFF 编排旧引擎。`SkillWorkbenchShell` 把顶部 `Skill + version` 作为右栏资产上下文，详情、正式评估、实验和优化记录都跟随版本切换；正式评估和实验不要求或创建过程会话，顶部切换也不会改变左侧过程会话。生成/优化会话只保存过程，未发布草稿仍由 `sessionId` 隔离；当前过程会话同时写入 `/skills?sessionId=...`，初始化、历史选择、新建以及浏览器前进后退都以该参数为准，无效 ID 不回退最近会话。同一过程会话进入优化后，`OptimizationConversation` 在原单滚动区内先投影 `GenerationHistory`，再展示各轮优化消息与原位结果卡，不创建第二个输入框或嵌套滚动区；发布导致 `source` 变更也不会隐藏生成消息。`GenerationConversation` 与 `OptimizationConversation` 复用 `ConversationProcessDisclosure` 渲染思考和工具过程：状态行默认折叠，展开后分别显示完整思考文本或限高可滚动的命令结果，运行、成功和失败状态只使用共享设计令牌。左侧 Copilot 宽度由可拖拽分隔条控制并写入浏览器本地存储；历史会话由带文字的顶部按钮控制，并以临时浮层覆盖在对话区上方，不参与布局宽度计算；点击遮罩、选择会话、新建对话或按 `Escape` 后收起。历史列表使用独立滚动容器，消息块对任意长文本强制断行。生成完成会选中草稿并打开详情，发布后再切换为正式资产。生成/优化 SSE 只是发起页的低延迟投影；服务端为当前 Agent 消息串行合并 checkpoint，最终 flush 完成后才提交任务终态。其他页面通过同源通知快速发现任务，并以 1 秒运行轮询、4 秒空闲轮询从服务端追赶，同源通知不承载正文且不是数据真源。优化候选发布或放弃后会广播 `optimization-record-changed`，旁观页立即从服务端重载会话、记录与版本目录；空闲轮询还会比较记录的 `id/status/publishedVersion/updatedAt` 指纹作为漏通知兜底。优化流首次收到 `verify_progress` 或 `verify_ok` 时，会串行持久化任务第 3 步“执行质量校验”，使刷新页和旁观页使用与发起页相同的阶段真值。固定“Skill 优化”动作先调用 `/api/skill-opt/plan` 聚合全部未解决问题，再把 `planId` 交给旧优化 bridge；归并计划、编辑范围保护、结构/脚本真值/行为三层自验证和 repair 事件都会投影并持久化到 `OptimizationConversation`。每次优化运行先创建稳定 `runId/taskId/recordId`，并把同一个不可见 `optimization_meta` block 写入触发它的用户消息和对应 Agent 消息；时间线只按这组结构化标识在每轮问题下原位渲染进度、候选摘要和操作按钮，不再按创建时间推测。缺少标识的存量记录独立标为“未关联的历史优化记录”。候选随后执行快照静态质量规则；界面将优化执行失败、候选质量未通过和候选已发布分开显示，避免跨轮状态混淆。`OptimizationRecordsPanel` 使用记录列表 + 报告详情布局，以 `vN → vN+1` 展示顶部所选基线版本的记录、Monaco 行级 diff、来源会话、阻断问题以及修复、放弃和发布动作；质量规则通过后可从左侧卡片或右侧报告直接发布下一版本，Skill 实验不再提供新建候选复测入口。发布确认使用站内模态框；发布后工作台切换到新正式版本，同时创建新基线的优化会话并复制可见消息历史，旧优化会话及旧 plan 保留为审计边界。`StaticEvaluationPanel` 将评估器执行状态与质量门禁状态分开显示；`ExperimentPanel` 内嵌同一 `ExperimentWizard`，Skill 实验按当前用户、Skill 与版本过滤；创建页与 `SkillExperimentResult` 都通过 `useEvaluatorLookup` 使用评估器注册表中的 canonical 名称，冻结快照只保存稳定 ID，存量快照展示时同样按注册表解析。A/B 结果由 `ab-comparison.ts` 按 Case 交集配对聚合，只有两侧均有综合分的 Case 才进入组均分、胜负统计和逐评估器双色分解；单侧结果归入未配对。`SkillExperimentResult` 对 A/B 展示双组综合分和胜负筛选的配对表；运行中只显示固定进度与单条明细，顶部双组均分、评估器聚合条和胜负结论保持占位，全部执行和结果行收敛后再一次发布。表格每侧只聚合综合、结果、轨迹三类得分，长文本默认两行截断并可点击展开，明细容器同时提供横向与纵向滚动，数据集顶层 `expectedOutput` 会映射为参考输出。A/B 每侧的详情入口通过执行 taskId 映射回 backing `ExperimentCase`，复用标准 `ExperimentCaseDetail`，重试则复用灰度任务的单侧重评能力；重评期间保留上一版稳定分。触发分析与用例分析继续使用带纵向滚动的单组详情。所有详情始终留在工作台右侧；全局实验仍保留原路由与导航。样式仅使用共享令牌。
+- **Skill 会话与资产上下文** — 会话固定 `skillName`，并在本会话发布成功后推进 `workVersion`；历史任务仍记录各轮精确基线。历史浮层直接展示 `skillName + workVersion`，长名称复用 `TruncateText` 做单行省略与完整名称提示。顶部 `Skill + version` 控制右栏四个页签，即使与会话版本不一致也可查看和运行正式评估、实验并查看该基线的优化记录。左侧空会话的管理中心入口通过 session context BFF 完成首次绑定；点击历史会话、生成或优化入口会恢复/切换到其精确工作版本。
+- **数据集 / 评测器** — `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx`。可靠性数据集详情在“数据项”旁显示“故障模式说明”页签；`fault-mode-guide.ts` 按当前数据项中的 `fault_injection_type + submode` 分组，结合 `/api/reliability/fault-modes` 的逻辑摘要、子模式说明和注入方式渲染四列表格，目录缺失时回退 Case 快照。逻辑说明独立维护在 `src/lib/reliability/fault-mode-copy.ts`，不修改或参与解析 `SKILL.md`。非可靠性数据集不显示该页签。内置可靠性数据集显示“只读”标记，禁用信息编辑、新增字段、批量导入、单条增删改；公开 PATCH 同时执行服务端只读校验。受控导入的 Benchmark 数据集使用 `datasetKind=benchmark`、`readOnly=true` 和系统 owner 接入同一列表/数据项页，所有用户共享读取且浏览器只取得公开 Case。业务列严格按冻结的 `dataset.fields` 顺序渲染，`path/format/truncate/width` 与实验向导共用 `src/lib/benchmark/presentation.ts`，不再推断 SWE-bench 字段；评估器卡片则根据数据集携带的 Manifest Presentation 动态生成。
+- **实验向导与生成重试** — `app/(main)/experiments/new/page.tsx` 使用“实验设计 → Trace 来源 → 预期答案 → 评估器与执行”四步结构。第 ① 步的 Agent 来自 `/api/experiments/agents`：用户归属历史 Trace Agent 与在线客户端可执行 Agent 按名称合并，xiaoo 特例将 Trace 展示身份 `xiaoo` 与原生执行 ID `defaultagent` 合为一个候选；普通生成 target 还必须声明可返回 Trace ID。停留在该步时每 10 秒刷新候选，窗口重新聚焦时立即刷新，刷新失败保留上一版列表与当前选择。Skill 触发分析只展示当前 Skill 的触发数据集，用例分析与 A/B 展示全部非触发数据集并标注跨 Skill 来源。第 ② 步在 `existing` / `generate` 间切换：已有 Trace 路径继续通过 `/api/experiments/traces` 服务端分页；生成路径从 Agent target 选择 `workerId + platform + host`，并使用 target 的原生 `agent` 下发执行，模型只读取该 target 上报的列表，Case 使用独立 `selectedGenerated` Map，并将每条数据集 Case 的 input 作为 Agent 用户输入。第 ③ 步为已有 Trace 导入数据集标注时，以“规范化后的 Trace 输入包含数据集输入”为命中条件；多条命中优先最长输入，并同时回填预期答案和 Tool/Skill 上下文。生成路径会直接带入所选数据集的这些字段，可靠性数据集额外带入 FI 元数据。Benchmark 数据集强制单组与 `generate`，target 必须支持当前数据集的 Adapter，Case 表格、搜索和参考契约按 Manifest 的 Presentation 渲染；第四步根据独立 `evaluatorKey` 动态选择 `benchmark:<evaluatorKey>`，评估器名称、描述、运行方式和输出说明均来自 Presentation，并禁用所有 `requires reference` 的普通/自建评估器。“开始实验”串行完成 create 与 run，run body 通过 `fiOrchestrate` 显式区分 FI 与通用 Trace 生成，成功后才进入详情。详情页在自动重试期间显示当前 Attempt 次数；最终 Trace 失败与评估失败共用 Case 操作列的“重试”按钮，由 Case 级 API 决定重新生成还是重评。筛选不持久化为监听规则，监听运行时仍会拒绝系统归属 Agent 的新 Trace。
+- **实验结果** — `app/(main)/experiments/page.tsx` 展示 API 返回的 `overallScore`。列表与详情的实验级综合分通过 `detail-agg.ts::publishedOverallAverage` 在实验 `done` 后一次发布，运行中保持占位；Case 综合分等待该 Case 的全部已选评估器进入终态，结果分和轨迹分也分别等待本类全部已选评估器进入终态，未选类目不阻塞并保持占位。RAS 与通用评估器最终都按评估成功且有分的评估器生效总分（`humanScore ?? score`）求平均。列表行的“同配置实验”从服务端冻结快照复制后直接运行，“复用评测配置”通过 `reuseFrom` 进入向导并读取安全 `reusableConfig`。Trace 评测详情把机器/人工生效分标记为“总分”，并对旧、新 RAS 与轨迹质量 evaluator id 隐藏卡级结构化 evidence 摘要，只保留评分点证据与建议；`ExperimentBaselineTrend` 在评估器分解与 Case 明细之间渲染最多 50 次同基线折线，默认显示最近 10 次，历史超过 10 次时提供最多 10/20/50 次的离散选择，并通过 `Brush` 在该上限内缩放或平移时间窗口。普通实验显示综合得分，Benchmark 显示 Adapter 主指标，聚合名称直接取 `aggregateLabel`；节点通过鼠标或键盘选择，底部摘要跟随选中点展示日期、Agent、模型、指标和环比，历史点另提供实验详情入口。Benchmark Case 明细复用 `caseTable.columns`，主指标按 `trueLabel/falseLabel/format/precision/unit` 格式化；提交物状态只显示通用数量和名称。Case 详情直接渲染归一化评分点的 `label/value/total/format`，不从 Evidence 猜测计数；`BenchmarkArtifactActions` 完整展示 `submissions[]` 与 `evidenceArtifacts[]`，按 `source+name`、`source+kind` 匹配可选标签和顺序，未匹配文件保留原名。文本、JSON、Diff、图片和 PDF 可按媒体类型预览，其余文件仍可下载。未选择轨迹评估器时显示空状态。详情页是纯状态/结果视图；`draft` 只作为 create → run 的内部瞬时状态，列表 API 不返回它，启动失败时创建页通过 draft-only DELETE 补偿回滚。运行中的实验通过轮询自动刷新进度。
+- **文本评估器配置** — 第 ④ 步的 Exact Match/Entity F1 卡片通过 `components/eval/TextEvaluatorConfigDialog.tsx` 编辑实验级运行参数。弹窗只维护草稿，点击保存后写入 `ExperimentWizard` 状态，最终随创建请求提交；同配置克隆复制 `evaluatorConfigsJson`，复用向导从 `reusableConfig` 恢复配置。`ExperimentWizard`、`ExperimentDetail` 与 `ExperimentCaseDetail` 复用 `summarizeEvaluatorRunConfig()`，避免三处配置文案漂移。
 - **聊天 / agent UI** — `thread/*`、`chat/*`、`ai-elements/*`，通过 `src/providers/{Stream,Thread}.tsx` 中的 assistant-ui providers 接线。
 - **基础组件（复用，不要重建）** — `ui/*`（button、card、dialog、select、switch……）、`feedback/{EmptyState,ErrorState,StatusBadge}.tsx`、`text/*`（`MetricValue`、`RelativeTime`、`TruncateText`）、`SmartViewer/*`。
+
+`Select` 基于 Radix DropdownMenu。放在 `Dialog` 内时传入 `modal={false}`；`DialogContent` 会识别带 `data-slot="dropdown-menu-content"` 的 Portal 内容并阻止将其误判为外部交互，避免选择或重复点击下拉框时关闭外层弹窗。
 
 组件关系（典型组合）：
 ```mermaid
@@ -108,7 +130,7 @@ flowchart TD
 ## i18n、主题、状态
 - **语言**：`src/locales/{en,zh}.ts` + `LocaleContext`（`lib/client/locale-context.tsx`，`useLocale().t(key)`）。产品为双语（中文/英文）。
 - **主题**：`lib/client/theme-context.tsx`（`useTheme`、`useThemeColors`）；令牌在 `src/app/globals.css` 中一次性定义（`:root` + `[data-theme='dark']`）。
-- **认证**：`lib/auth/auth-context.tsx`（`useAuth`）；API key 存储于客户端，经由 `apiFetch` 发送。
+- **认证**：`lib/auth/auth-context.tsx`（`useAuth`）统一消费服务端 `login_mode`，区分本地登录、历史组织集成和 IDaaS OAuth 登录；IDaaS callback 由 `/callback`（兼容 `/api/auth/idaas-oauth/callback`）完成；可选地区限制先按 UUID 查询人员信息并失败关闭，放行后才映射本地用户。API Key 恢复也会复查地区，并把人员响应中的 `w3Account` 作为通用 `externalAccount` 绑定到 UUID 用户。`AuthProvider.user` 保留 UUID 供业务 API 使用，独立 `displayName` 只供侧边栏显示，缺失时回退 UUID；登录页分别展示地区不可用与地区校验失败。侧边栏在三种登录模式下均渲染通用退出入口；退出仅清除浏览器本地认证状态，不调用 IDaaS 单点登出。
 
 ## 构建与开发
 - **开发**：`npm run dev`（或 `bash scripts/restart_dev.sh`——项目规范的开发启动方式）。端口 3000。

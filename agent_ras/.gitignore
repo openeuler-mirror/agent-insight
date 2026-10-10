@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+
+# Runtime / local
+logs/
+*.log
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Node (if adapter installs locally)
+node_modules/

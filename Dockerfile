@@ -6,7 +6,7 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
-    AGENT_INSIGHT_DATA_DIR=/data/agent-insight \
+    AGENT_INSIGHT_HOME=/data/agent-insight \
     PATH=/app/node_modules/.bin:$PATH \
     OPENCODE_BIN=/app/node_modules/.bin/opencode
 
@@ -40,6 +40,7 @@ RUN DEV_DEPS="$(node -p "Object.entries(require('/app/node_modules/agent-insight
 RUN test -x /app/node_modules/.bin/opencode
 
 COPY scripts/docker-entrypoint.sh /usr/local/bin/agent-insight-entrypoint
+COPY scripts/container-runtime.py /usr/local/bin/agent-insight-container-runtime.py
 
 RUN chmod +x /usr/local/bin/agent-insight-entrypoint \
     && mkdir -p /data/agent-insight /app/source /app/node_modules/.prisma /app/node_modules/.cache \

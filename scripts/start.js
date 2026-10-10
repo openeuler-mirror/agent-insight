@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn, execSync } = require('child_process')
+const { spawn, spawnSync, execSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 
@@ -14,6 +14,13 @@ const {
   getDataRoot
 } = require('./utils.js')
 const { syncAdminApiKey } = require('./sync_admin_api_key.js')
+const { resolveStartupDatabaseUrl } = require('./agent-insight-home.cjs')
+const { syncGeneratedPrismaClient } = require('./sync-prisma-client.js')
+const {
+  readCurrentRuntime,
+  resolveBootstrapPython,
+  verifyManagedPython,
+} = require('./lib/fi-python-runtime.js')
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
@@ -46,6 +53,30 @@ function loadEnvFile(envPath) {
   return env
 }
 
+function ensureGoalPlusWatcher({ dataRoot, packageRoot = PACKAGE_ROOT }) {
+  const collectorPath = path.join(packageRoot, 'scripts', 'agent-trace-collectors', 'goal-plus', 'goal-plus-collector.cjs')
+  const configPath = path.join(dataRoot, 'collectors', 'goal-plus', 'config.json')
+  if (!fs.existsSync(configPath) || !fs.existsSync(collectorPath)) return null
+
+  const rawInterval = Number(process.env.AGENT_INSIGHT_GOAL_PLUS_INTERVAL_MS || 5000)
+  const intervalMs = Number.isFinite(rawInterval) && rawInterval >= 1000 ? Math.floor(rawInterval) : 5000
+  const child = spawnSync(process.execPath, [
+    collectorPath,
+    'ensure',
+    '--config',
+    configPath,
+    '--interval-ms',
+    String(intervalMs),
+  ], { encoding: 'utf8', env: process.env })
+  if (child.error) throw child.error
+  if (child.status !== 0) throw new Error((child.stderr || child.stdout || `exit ${child.status}`).trim())
+  try {
+    return JSON.parse(child.stdout)
+  } catch {
+    throw new Error(`Goal Plus watcher returned an invalid status: ${child.stdout.trim()}`)
+  }
+}
+
 let spawnedProc = null
 
 function cleanup() {
@@ -71,6 +102,10 @@ process.on('SIGTERM', () => {
 async function run(options) {
   const port = getPort(options)
   const dataRoot = getDataRoot()
+  const fileEnv = loadEnvFile(path.join(dataRoot, '.env'))
+  const dbUrl = resolveStartupDatabaseUrl(fileEnv, process.env, dataRoot)
+  const dbPath = dbUrl.startsWith('file:') ? dbUrl.slice(5) : dbUrl
+  process.env.AGENT_INSIGHT_HOME = dataRoot
 
   console.log('=== Starting Agent-Insight Service ===\n')
 
@@ -86,12 +121,11 @@ async function run(options) {
     process.exit(1)
   }
 
-  const dbPath = path.join(dataRoot, 'data', 'witty_insight.db')
-  const dbUrl = `file:${dbPath}`
   process.env.DATABASE_URL = dbUrl
+  const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
+  const standaloneDir = path.dirname(standaloneServer)
 
   const envPath = path.join(dataRoot, '.env')
-  const fileEnv = loadEnvFile(envPath)
 
   if (fileEnv.DB_HOST) {
     console.log('OpenGauss configuration detected (DB_HOST=' + fileEnv.DB_HOST + ')')
@@ -129,20 +163,28 @@ async function run(options) {
   }
 
   try {
-    console.log('Syncing database schema...')
-    await runCommand('npx prisma db push', {
-      cwd: PACKAGE_ROOT,
-      env: { ...process.env, DATABASE_URL: dbUrl }
-    })
-    console.log('✓ Database schema synced')
-    console.log()
-
     console.log('Generating Prisma client...')
     await runCommand('npx prisma generate', {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, DATABASE_URL: dbUrl }
     })
+    syncGeneratedPrismaClient(
+      PACKAGE_ROOT,
+      fs.existsSync(standaloneServer) ? standaloneDir : undefined
+    )
     console.log('✓ Prisma client generated')
+    console.log()
+
+    console.log('Syncing database schema...')
+    await runCommand('node scripts/prepare-ras-sqlite-schema.js', {
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
+    await runCommand('npx prisma db push', {
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
+    console.log('✓ Database schema synced')
     console.log()
   } catch (error) {
     console.error('❌ Database initialization failed:', error.message)
@@ -157,29 +199,91 @@ async function run(options) {
     process.exit(1)
   }
 
-  const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
   const isStandalone = fs.existsSync(standaloneServer)
   const nextDir = path.join(PACKAGE_ROOT, '.next')
   const isProduction = fs.existsSync(nextDir) && fs.existsSync(path.join(nextDir, 'BUILD_ID'))
+
+  // Next standalone 不会自动带上 browser 静态资源；缺了就会 404 → 前端 Application error。
+  if (isStandalone) {
+    const standaloneRoot = path.join(PACKAGE_ROOT, '.next', 'standalone')
+    const staticSrc = path.join(PACKAGE_ROOT, '.next', 'static')
+    const staticDest = path.join(standaloneRoot, '.next', 'static')
+    const publicSrc = path.join(PACKAGE_ROOT, 'public')
+    const publicDest = path.join(standaloneRoot, 'public')
+    fs.mkdirSync(path.join(standaloneRoot, '.next'), { recursive: true })
+    if (fs.existsSync(staticSrc)) {
+      fs.rmSync(staticDest, { recursive: true, force: true })
+      fs.cpSync(staticSrc, staticDest, { recursive: true })
+      console.log('✓ Synced .next/static → standalone')
+    } else {
+      console.warn('⚠️  Missing .next/static; UI chunks will 404 until you run npm run build')
+    }
+    if (fs.existsSync(publicSrc)) {
+      fs.rmSync(publicDest, { recursive: true, force: true })
+      fs.cpSync(publicSrc, publicDest, { recursive: true })
+      console.log('✓ Synced public → standalone')
+    }
+  }
 
   console.log(`Starting server on port ${port}...`)
 
   const logPath = path.join(dataRoot, 'server.log')
 
+  // WSS 控制通道要接管 upgrade 事件，Next 的 Route Handler 做不到，
+  // 因此 standalone 下由 control-server.js 承载 Next + WSS。
+  const dispatchPort = Number(process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT || port + 1)
+
+  const runtimeEnv = { ...fileEnv, ...process.env }
+  const currentFiRuntime = readCurrentRuntime()
+  const managedFiPython = currentFiRuntime?.python
+    && verifyManagedPython(currentFiRuntime.python)
+    ? currentFiRuntime
+    : null
+  const fiPython = managedFiPython || resolveBootstrapPython({
+    env: runtimeEnv,
+    requiredImports: ['yaml'],
+  })
+  const rasPython = resolveBootstrapPython({
+    env: runtimeEnv,
+    requiredImports: ['pydantic'],
+  })
+  if (fiPython) {
+    runtimeEnv.AGENT_INSIGHT_FI_PYTHON =
+      runtimeEnv.AGENT_INSIGHT_FI_PYTHON || fiPython.python || fiPython.executable
+    console.log(`FI Python runtime: ${runtimeEnv.AGENT_INSIGHT_FI_PYTHON}`)
+  } else {
+    console.warn('⚠️  Python 3.11+ with PyYAML not found; fault injection is unavailable')
+  }
+  if (rasPython) {
+    runtimeEnv.AGENT_INSIGHT_RAS_PYTHON =
+      runtimeEnv.AGENT_INSIGHT_RAS_PYTHON || rasPython.executable
+    console.log(`RAS Python runtime: ${rasPython.executable} (${rasPython.versionText})`)
+  } else {
+    console.warn('⚠️  Python 3.11+ with pydantic not found; RAS config catalog is unavailable')
+  }
+
   const env = {
-    ...process.env,
-    ...fileEnv,
+    ...runtimeEnv,
     DATABASE_URL: dbUrl,
     PORT: port.toString(),
-    HOSTNAME: '0.0.0.0'
+    HOSTNAME: '0.0.0.0',
+    AGENT_INSIGHT_PACKAGE_ROOT: PACKAGE_ROOT,
+    AGENT_INSIGHT_RAS_DISPATCH_PORT: dispatchPort.toString()
   }
 
   let command, args
 
   if (isStandalone) {
-    console.log('Mode: production (standalone)')
-    command = 'node'
-    args = [standaloneServer]
+    const controlServer = path.join(PACKAGE_ROOT, 'scripts', 'control-server.js')
+    if (fs.existsSync(controlServer)) {
+      console.log('Mode: production (standalone + control channel)')
+      command = 'node'
+      args = [controlServer]
+    } else {
+      console.log('Mode: production (standalone)')
+      command = 'node'
+      args = [standaloneServer]
+    }
   } else if (isProduction) {
     console.log('Mode: production')
     command = 'npm'
@@ -234,10 +338,28 @@ async function run(options) {
       console.log(`  Log: ${logPath}`)
       console.log(`  URL: http://localhost:${port}`)
       try {
-        await syncAdminApiKey({ port, dataRoot, host: `http://localhost:${port}` })
-        console.log('✓ Admin API key synced to client env')
+        const syncResult = await syncAdminApiKey({ port, dataRoot, host: `http://localhost:${port}` })
+        console.log(
+          syncResult.preservedClientApiKey
+            ? '✓ Admin API key saved; existing client identity preserved'
+            : '✓ Admin API key synced to client env',
+        )
       } catch (error) {
         console.log('⚠️  Failed to sync admin API key:', error.message)
+      }
+      try {
+        const watcher = ensureGoalPlusWatcher({ dataRoot })
+        if (watcher?.ensured) {
+          console.log(watcher.alreadyRunning
+            ? `✓ Goal Plus watcher already running (PID ${watcher.pid})`
+            : `✓ Goal Plus watcher started (PID ${watcher.pid})`)
+        } else if (watcher?.reason === 'no_sources') {
+          console.log('ℹ️  Goal Plus watcher not started: no .gp source is attached')
+        } else if (watcher?.reason === 'not_configured') {
+          console.log('ℹ️  Goal Plus watcher not started: collector API key is not configured')
+        }
+      } catch (error) {
+        console.log('⚠️  Goal Plus watcher could not be started; Agent Insight remains available:', error.message)
       }
       return
     }
@@ -247,4 +369,4 @@ async function run(options) {
   process.exit(1)
 }
 
-module.exports = { run }
+module.exports = { ensureGoalPlusWatcher, resolveStartupDatabaseUrl, run }

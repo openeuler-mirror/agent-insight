@@ -130,7 +130,7 @@ async function callLlm(
   }
 }
 
-interface ParsedDim {
+export interface ParsedDim {
   dimension: string;
   score: number;
   justification: string;
@@ -140,6 +140,57 @@ interface ParsedDim {
     evidence?: string;
     suggestedFix?: string;
   }>;
+}
+
+function dimensionCompleteness(dimension: ParsedDim): number {
+  const validScore = dimension.score >= 1 && dimension.score <= 5 ? 10_000 : 0;
+  const supportedIssues = dimension.issues.reduce((total, issue) => (
+    total
+    + (issue.evidence?.trim().length || 0)
+    + (issue.suggestedFix?.trim().length || 0)
+  ), 0);
+  return validScore + dimension.justification.trim().length + supportedIssues;
+}
+
+export function normalizeLlmDimensions(rawDimensions: unknown[], defaultDimensionName: string): ParsedDim[] {
+  const normalized = rawDimensions.map((raw) => {
+    const d = raw as Record<string, unknown>;
+    const rawScore = Number(d?.score);
+    const score = Number.isFinite(rawScore) && rawScore >= 1 && rawScore <= 5 ? rawScore : 0;
+    return {
+      dimension: typeof d?.dimension === 'string' && d.dimension.trim()
+        ? d.dimension.trim()
+        : defaultDimensionName,
+      score,
+      justification: typeof d?.justification === 'string' ? d.justification.trim() : '',
+      issues: Array.isArray(d?.issues)
+        ? d.issues
+            .filter((issue: unknown) => {
+              const item = issue as Record<string, unknown>;
+              return typeof item?.summary === 'string' && item.summary.trim();
+            })
+            .map((issue: unknown) => {
+              const item = issue as Record<string, unknown>;
+              return {
+                summary: String(item.summary).trim(),
+                severity: typeof item?.severity === 'string' ? item.severity : undefined,
+                evidence: typeof item?.evidence === 'string' ? item.evidence.trim() : undefined,
+                suggestedFix: typeof item?.suggestedFix === 'string' ? item.suggestedFix.trim() : undefined,
+              };
+            })
+        : [],
+    } satisfies ParsedDim;
+  });
+
+  const byDimension = new Map<string, ParsedDim>();
+  for (const dimension of normalized) {
+    if (dimension.score === 0 && dimension.issues.length === 0) continue;
+    const existing = byDimension.get(dimension.dimension);
+    if (!existing || dimensionCompleteness(dimension) > dimensionCompleteness(existing)) {
+      byDimension.set(dimension.dimension, dimension);
+    }
+  }
+  return [...byDimension.values()];
 }
 
 function parseDimensions(raw: string, defaultDimensionName: string): {
@@ -154,28 +205,16 @@ function parseDimensions(raw: string, defaultDimensionName: string): {
   }
   const comment = typeof parsed?.overall_comment === 'string' ? parsed.overall_comment : '';
   const detail = Array.isArray(parsed?.detailed_evaluation) ? parsed.detailed_evaluation : [];
-  const dims: ParsedDim[] = detail.map((d: any) => ({
-    dimension: typeof d?.dimension === 'string' ? d.dimension : defaultDimensionName,
-    score: Number(d?.score) || 0,
-    justification: typeof d?.justification === 'string' ? d.justification : '',
-    issues: Array.isArray(d?.issues)
-      ? d.issues
-          .filter((i: any) => typeof i?.summary === 'string' && i.summary.trim())
-          .map((i: any) => ({
-            summary: String(i.summary),
-            severity: typeof i?.severity === 'string' ? i.severity : undefined,
-            evidence: typeof i?.evidence === 'string' ? i.evidence : undefined,
-            suggestedFix: typeof i?.suggestedFix === 'string' ? i.suggestedFix : undefined,
-          }))
-      : [],
-  }));
+  const dims = normalizeLlmDimensions(detail, defaultDimensionName);
   return { comment, dims };
 }
 
-function dimsToIssues(dims: ParsedDim[], section: 'meta' | 'robustness' | 'security'): LlmIssueDraft[] {
+export function llmDimensionsToIssues(dims: ParsedDim[], section: 'meta' | 'robustness' | 'security'): LlmIssueDraft[] {
   const out: LlmIssueDraft[] = [];
   for (const d of dims) {
-    const fallbackSev = severityFromScore(d.score);
+    const validScore = d.score >= 1 && d.score <= 5;
+    const fallbackSev = validScore ? severityFromScore(d.score) : null;
+    if (!validScore && d.issues.length === 0) continue;
     if (fallbackSev === null && d.issues.length === 0) continue;
 
     if (d.issues.length === 0) {
@@ -194,7 +233,9 @@ function dimsToIssues(dims: ParsedDim[], section: 'meta' | 'robustness' | 'secur
     }
 
     for (const it of d.issues) {
-      const sev = normalizeSeverity(it.severity, fallbackSev || 'medium');
+      const requestedSeverity = normalizeSeverity(it.severity, fallbackSev || 'medium');
+      const supported = Boolean(it.evidence?.trim() || d.justification.trim());
+      const sev = requestedSeverity === 'high' && !supported ? 'medium' : requestedSeverity;
       out.push({
         ruleId: `dim:${section}:${d.dimension}:${hash6(it.summary)}`,
         dimension: d.dimension,
@@ -371,7 +412,7 @@ export async function runLlmStaticEvaluation(args: {
   function parsedToResult(parsed: { comment: string; dims: ParsedDim[] }, section: 'meta' | 'robustness' | 'security'): ChunkResult {
     const ds: Record<string, number> = {};
     for (const d of parsed.dims) if (d.score) ds[d.dimension] = d.score;
-    return { comment: parsed.comment, dimensionScores: ds, issues: dimsToIssues(parsed.dims, section) };
+    return { comment: parsed.comment, dimensionScores: ds, issues: llmDimensionsToIssues(parsed.dims, section) };
   }
 
   const evalMeta = async (): Promise<ChunkResult> => {

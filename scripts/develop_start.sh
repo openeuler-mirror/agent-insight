@@ -6,9 +6,24 @@
 # Navigate to the project root directory
 cd "$(dirname "$0")/.."
 
-AGENT_INSIGHT_HOME="${AGENT_INSIGHT_DATA_DIR:-$HOME/.agent-insight}"
+PROCESS_DATABASE_URL_IS_SET="${DATABASE_URL+x}"
+PROCESS_DATABASE_URL="${DATABASE_URL:-}"
+
+if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+  echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
+  exit 1
+fi
+AGENT_INSIGHT_HOME="${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}"
+case "$AGENT_INSIGHT_HOME" in
+  '~'|'$HOME'|'${HOME}') AGENT_INSIGHT_HOME="$HOME" ;;
+  '~/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\~/}" ;;
+  '$HOME/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\$HOME/}" ;;
+  '${HOME}/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\$\{HOME\}/}" ;;
+esac
+case "$AGENT_INSIGHT_HOME" in /*) ;; *) AGENT_INSIGHT_HOME="$PWD/$AGENT_INSIGHT_HOME" ;; esac
+RESOLVED_AGENT_INSIGHT_HOME="$AGENT_INSIGHT_HOME"
 AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
-AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME/data"
+AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 DEFAULT_DATABASE_URL='file:../data/witty_insight.db'
 
 load_agent_insight_env() {
@@ -18,10 +33,43 @@ load_agent_insight_env() {
     set +a
   fi
 
+  AGENT_INSIGHT_HOME="$RESOLVED_AGENT_INSIGHT_HOME"
+  AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
+  export AGENT_INSIGHT_HOME
+  export AGENT_INSIGHT_STORAGE_DIR
+if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+  echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
+  exit 1
+fi
+  [ "$PROCESS_DATABASE_URL_IS_SET" != x ] || export DATABASE_URL="$PROCESS_DATABASE_URL"
+
   if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "$DEFAULT_DATABASE_URL" ]; then
-    export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+    export DATABASE_URL="file:$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
   elif [[ "$DATABASE_URL" == file:\~* ]]; then
     export DATABASE_URL="file:$HOME${DATABASE_URL#file:\~}"
+  fi
+}
+
+ensure_goal_plus_watcher() {
+  local collector_source="$(pwd)/scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs"
+  local collector_config="$AGENT_INSIGHT_HOME/collectors/goal-plus/config.json"
+  local interval_ms="${AGENT_INSIGHT_GOAL_PLUS_INTERVAL_MS:-5000}"
+  local result=""
+
+  if [ ! -f "$collector_config" ]; then
+    return 0
+  fi
+  if [ ! -f "$collector_source" ]; then
+    echo "⚠️  Goal Plus watcher was not checked: collector source is missing at $collector_source"
+    return 0
+  fi
+
+  echo "Ensuring Goal Plus watcher is running..."
+  if result=$(node "$collector_source" ensure --config "$collector_config" --interval-ms "$interval_ms" 2>&1); then
+    echo "$result"
+  else
+    echo "⚠️  Goal Plus watcher could not be started; Agent Insight remains available."
+    echo "$result"
   fi
 }
 
@@ -34,15 +82,16 @@ if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
     echo "# >>> 本文件由 scripts/develop_start.sh 于 $(date '+%Y-%m-%d %H:%M:%S') 从 .env.example 自动生成 <<<"
     echo "# 这是 agent-insight 当前生效的环境配置；要改配置请直接编辑本文件。"
     echo "# 项目根目录的 .env.example 只是模板，改它不会影响已生成的本文件。"
-    echo "# 注意：AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY 每次启动会被 sync_admin_api_key.js 自动同步覆盖。"
+    echo "# 注意：启动会同步 AGENT_INSIGHT_HOST；AGENT_INSIGHT_API_KEY 仅在缺失时初始化，安装指导注册的用户 Key 会保留。"
     echo "#"
     cat .env.example
   } > "$AGENT_INSIGHT_ENV_FILE"
+  chmod 600 "$AGENT_INSIGHT_ENV_FILE" 2>/dev/null || true
 fi
 
-if [ ! -d "$AGENT_INSIGHT_DATA_DIR" ]; then
-  echo "Creating data directory at $AGENT_INSIGHT_DATA_DIR..."
-  mkdir -p "$AGENT_INSIGHT_DATA_DIR"
+if [ ! -d "$AGENT_INSIGHT_STORAGE_DIR" ]; then
+  echo "Creating data directory at $AGENT_INSIGHT_STORAGE_DIR..."
+  mkdir -p "$AGENT_INSIGHT_STORAGE_DIR"
 fi
 
 echo "=== Restart Script (DEV MODE) Started ==="
@@ -162,7 +211,7 @@ if [ -z "$DB_HOST" ] && command -v sqlite3 >/dev/null 2>&1; then
   # 默认 DATABASE_URL 写在 ~/.agent-insight/.env；默认相对值会在加载时解析到用户数据目录。
   DB_PATH=$(printf '%s' "${DATABASE_URL:-}" | sed -E 's/^"//; s/"$//; s|^file:||')
   if [ -z "$DB_PATH" ]; then
-    DB_PATH="$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+    DB_PATH="$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
   fi
   if [ -f "$DB_PATH" ]; then
     # 召回 → 触发：把历史 Execution.skillRecallRate 改名成 skillTriggerRate。
@@ -217,8 +266,14 @@ if [ -z "$DB_HOST" ] && command -v sqlite3 >/dev/null 2>&1; then
 fi
 
 echo "Syncing database schema..."
-# 走 db_push.sh 而不是直接 npx：它对「整型列加宽 Int→BigInt」这一类无损变更放行，
-# 其余破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
+if [[ "${DATABASE_URL:-}" == file:* ]]; then
+  if ! node scripts/prepare-ras-sqlite-schema.js; then
+    echo "  ⛔ Agent RAS SQLite schema 预检失败，已停止启动以避免重复事件被错误合并。"
+    exit 1
+  fi
+fi
+# 走 db_push.sh 而不是直接 npx：它只对脚本内精确列出的无损变更放行，
+# 其余潜在破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
 if ! sh scripts/db_push.sh; then
   echo ""
   echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
@@ -260,22 +315,33 @@ set +a
 NODE_OPTIONS="--max-old-space-size=4096" nohup npm run dev > server.log 2>&1 &
 NEW_PID=$!
 
-echo "Server started successfully."
+echo "Server process started."
 echo "PID: $NEW_PID"
 echo "Log file: server.log"
-echo "Syncing admin API key to $AGENT_INSIGHT_ENV_FILE..."
-# Server 刚 spawn 出来时还没监听端口 / API 路由没按需编译完，前几次请求必然失败。
-# sync_admin_api_key.js 每次失败都会往 stderr 打 "⚠️ Failed to sync admin API key:"，
-# 在重试期间把它静默丢弃（2>/dev/null），否则启动日志会出现"先报错又成功"的迷惑输出。
-# 只有最后一次（第 20 次）才放行 stderr，让真正起不来时的错误原因可见，
-# 再补一行人类可读的总结。
-for i in {1..20}; do
-  if [ "$i" = "20" ]; then
-    node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT" && break
-    echo "⚠️  Admin API key sync failed after waiting for server startup."
-  else
-    node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT" 2>/dev/null && break
-    sleep 1
+echo "Waiting for the API to become ready and syncing the admin API key..."
+STARTUP_TIMEOUT_SECONDS="${AGENT_INSIGHT_STARTUP_TIMEOUT_SECONDS:-600}"
+STARTUP_DEADLINE=$((SECONDS + STARTUP_TIMEOUT_SECONDS))
+SERVER_READY=false
+while [ "$SECONDS" -lt "$STARTUP_DEADLINE" ]; do
+  if ! kill -0 "$NEW_PID" 2>/dev/null; then
+    echo "⛔ Server process exited before becoming ready. Check server.log."
+    tail -n 40 server.log 2>/dev/null || true
+    exit 1
   fi
+  if node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT" 2>/dev/null; then
+    SERVER_READY=true
+    break
+  fi
+  sleep 2
 done
+
+if [ "$SERVER_READY" != "true" ]; then
+  echo "⛔ Server API did not become ready within ${STARTUP_TIMEOUT_SECONDS}s."
+  echo "   Check server.log, then rerun bash scripts/develop_start.sh."
+  tail -n 40 server.log 2>/dev/null || true
+  exit 1
+fi
+
+echo "Server is ready."
+ensure_goal_plus_watcher
 echo "-----------------------------------"

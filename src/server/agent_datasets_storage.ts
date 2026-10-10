@@ -13,6 +13,7 @@ import {
 } from '@/lib/dataset-case-root-causes';
 import { extractRootCausesFromExpected } from '@/lib/engine/evaluation/root-cause-extractor';
 import { resolveAgentInsightDataPath } from '@/lib/env';
+import { SYSTEM_BENCHMARK_DATASET_OWNER } from '@/lib/benchmark/dataset-ownership';
 
 const DATA_DIR = resolveAgentInsightDataPath();
 const LEGACY_FILE = path.join(DATA_DIR, 'agent_datasets.json');
@@ -30,7 +31,7 @@ function warnFileBackendOnce() {
   }
 }
 
-export type DatasetKind = 'ideal_output' | 'trajectory';
+export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
 
 /**
  * Case 来源标记。'user' = 用户手填 / 手编辑（默认）；'skill-gen-draft' = skill 生成
@@ -39,12 +40,19 @@ export type DatasetKind = 'ideal_output' | 'trajectory';
 export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
 
 export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+export type DatasetFieldDisplayType = 'text' | 'code' | 'number' | 'boolean';
+export type DatasetFieldFormat = 'plain' | 'percentage' | 'bytes' | 'duration-ms' | 'date-time';
 
 export interface DatasetField {
   id: string;
   key: string;
   label: string;
   type: DatasetFieldType;
+  path?: string;
+  displayType?: DatasetFieldDisplayType;
+  width?: number;
+  format?: DatasetFieldFormat;
+  truncate?: number;
   description?: string;
   system?: boolean;
 }
@@ -166,7 +174,10 @@ function ensureLegacyDir() {
 }
 
 export function normalizeDatasetKind(value: unknown): DatasetKind {
-  return value === 'trajectory' ? 'trajectory' : 'ideal_output';
+  if (value === 'trajectory') return 'trajectory';
+  if (value === 'reliability') return 'reliability';
+  if (value === 'benchmark') return 'benchmark';
+  return 'ideal_output';
 }
 
 export function normalizeTags(value: unknown): string[] {
@@ -192,10 +203,33 @@ function normalizeValues(value: unknown): Record<string, unknown> {
 }
 
 export function defaultDatasetFields(kind: DatasetKind): DatasetField[] {
+  if (kind === 'benchmark') {
+    return [
+      { id: 'input', key: 'input', path: 'input', label: '输入', type: 'text', displayType: 'text', system: true },
+      {
+        id: 'externalCaseId',
+        key: 'externalCaseId',
+        path: 'externalCaseId',
+        label: 'Case ID',
+        type: 'text',
+        displayType: 'code',
+        system: true,
+      },
+    ];
+  }
   const fields: DatasetField[] = [
     { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
-    { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
   ];
+  if (kind === 'reliability') {
+    fields.push({
+      id: 'fault_injection_type',
+      key: 'fault_injection_type',
+      label: '故障注入类型',
+      type: 'text',
+      system: true,
+    });
+  }
+  fields.push({ id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true });
   if (kind === 'trajectory') {
     fields.push({ id: 'trajectory', key: 'trajectory', label: '轨迹', type: 'json', system: true });
   }
@@ -203,7 +237,8 @@ export function defaultDatasetFields(kind: DatasetKind): DatasetField[] {
 }
 
 export function normalizeFields(value: unknown, kind: DatasetKind): DatasetField[] {
-  if (!Array.isArray(value) || value.length === 0) return defaultDatasetFields(kind);
+  const defaults = defaultDatasetFields(kind);
+  if (!Array.isArray(value) || value.length === 0) return defaults;
   const seen = new Set<string>();
   const fields = value.flatMap((item): DatasetField[] => {
     if (!item || typeof item !== 'object') return [];
@@ -215,16 +250,40 @@ export function normalizeFields(value: unknown, kind: DatasetKind): DatasetField
     const type: DatasetFieldType = ['number', 'boolean', 'json'].includes(rawType)
       ? rawType as DatasetFieldType
       : 'text';
+    const rawDisplayType = String(obj.displayType || '');
+    const displayType: DatasetFieldDisplayType | undefined = ['text', 'code', 'number', 'boolean'].includes(rawDisplayType)
+      ? rawDisplayType as DatasetFieldDisplayType
+      : undefined;
+    const rawFormat = String(obj.format || '');
+    const format: DatasetFieldFormat | undefined = ['plain', 'percentage', 'bytes', 'duration-ms', 'date-time'].includes(rawFormat)
+      ? rawFormat as DatasetFieldFormat
+      : undefined;
+    const width = Number(obj.width);
+    const truncate = Number(obj.truncate);
     return [{
       id: String(obj.id || key).trim() || key,
       key,
       label: String(obj.label || key).trim() || key,
       type,
+      path: String(obj.path || '').trim() || undefined,
+      displayType,
+      width: Number.isFinite(width) && width > 0 ? width : undefined,
+      format,
+      truncate: Number.isInteger(truncate) && truncate > 0 ? truncate : undefined,
       description: String(obj.description || '').trim() || undefined,
       system: Boolean(obj.system),
     }];
   });
-  return fields.length > 0 ? fields : defaultDatasetFields(kind);
+  if (kind === 'reliability') {
+    // 可靠性集强制保留系统字段，避免客户端漏传导致门控失效。
+    for (const required of defaults.filter((field) => field.system)) {
+      if (!seen.has(required.key)) {
+        fields.unshift(required);
+        seen.add(required.key);
+      }
+    }
+  }
+  return fields.length > 0 ? fields : defaults;
 }
 
 export function validateDatasetFieldKeysForWrite(value: unknown): string | null {
@@ -333,19 +392,59 @@ export function normalizeCases(value: unknown): DatasetCase[] {
 export interface CaseValidationError {
   caseIndex: number;
   caseId: string;
-  field: 'input' | 'expectedOutput' | 'trajectory';
-  code: 'required';
+  field: 'input' | 'expectedOutput' | 'trajectory' | 'fault_injection_type';
+  code: 'required' | 'unknown_fault_mode';
   message: string;
 }
 
-/** 数据集只负责保存结构化样本；具体评测所需字段由评测执行入口校验。 */
+function faultInjectionTypeOf(item: DatasetCase): string {
+  const fromValues = item.values?.fault_injection_type;
+  if (typeof fromValues === 'string' && fromValues.trim()) return fromValues.trim();
+  if (fromValues != null && String(fromValues).trim()) return String(fromValues).trim();
+  return '';
+}
+
+/** 数据集只负责保存结构化样本；可靠性 kind 额外校验 fault_injection_type。 */
 export function validateCasesForKind(
   cases: DatasetCase[],
   kind: DatasetKind,
+  options?: { allowedFaultModeIds?: ReadonlySet<string> },
 ): CaseValidationError[] {
-  void cases;
-  void kind;
-  return [];
+  if (kind !== 'reliability') return [];
+  const allowed = options?.allowedFaultModeIds;
+  const errors: CaseValidationError[] = [];
+  cases.forEach((item, caseIndex) => {
+    const faultType = faultInjectionTypeOf(item);
+    if (!faultType) {
+      errors.push({
+        caseIndex,
+        caseId: item.id,
+        field: 'fault_injection_type',
+        code: 'required',
+        message: 'reliability case requires fault_injection_type',
+      });
+      return;
+    }
+    if (allowed && !allowed.has(faultType)) {
+      errors.push({
+        caseIndex,
+        caseId: item.id,
+        field: 'fault_injection_type',
+        code: 'unknown_fault_mode',
+        message: `unknown fault_injection_type: ${faultType}`,
+      });
+    }
+    if (!String(item.input || '').trim()) {
+      errors.push({
+        caseIndex,
+        caseId: item.id,
+        field: 'input',
+        code: 'required',
+        message: 'reliability case requires input',
+      });
+    }
+  });
+  return errors;
 }
 
 function normalizeStoredDataset(raw: Record<string, unknown>): AgentDatasetRecord {
@@ -548,23 +647,41 @@ export async function readAllAgentDatasets(): Promise<AgentDatasetRecord[]> {
   return readLegacyFileSync();
 }
 
+function agentDatasetVisibilityWhere(user: string) {
+  const normalized = user.trim();
+  return normalized === SYSTEM_BENCHMARK_DATASET_OWNER
+    ? { user: SYSTEM_BENCHMARK_DATASET_OWNER }
+    : {
+        OR: [
+          { user: normalized },
+          { user: SYSTEM_BENCHMARK_DATASET_OWNER, datasetKind: 'benchmark' },
+        ],
+      };
+}
+
+function canReadAgentDataset(user: string, item: Pick<AgentDatasetRecord, 'user' | 'datasetKind'>): boolean {
+  const normalized = user.trim();
+  return item.user === normalized
+    || (item.user === SYSTEM_BENCHMARK_DATASET_OWNER && item.datasetKind === 'benchmark');
+}
+
 export async function readUserAgentDatasets(user: string): Promise<AgentDatasetRecord[]> {
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { user },
+      where: agentDatasetVisibilityWhere(user),
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(recordFromDbRow);
   }
   warnFileBackendOnce();
-  return readLegacyFileSync().filter(item => item.user === user);
+  return readLegacyFileSync().filter(item => canReadAgentDataset(user, item));
 }
 
 async function ensureAgentDatasetProjectionsForUser(prisma: PrismaClient, user: string): Promise<void> {
   const pending = await prisma.agentEvalDataset.findMany({
-    where: { user, projectionReady: false },
+    where: { ...agentDatasetVisibilityWhere(user), projectionReady: false },
     select: { id: true, casesJson: true, updatedAt: true },
   });
   for (const row of pending) {
@@ -587,7 +704,7 @@ export async function readAgentDatasetSummaries(
     await migrateLegacyJsonIfNeeded(prisma);
     await ensureAgentDatasetProjectionsForUser(prisma, user);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { user, ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      where: { ...agentDatasetVisibilityWhere(user), ...(targetSkill !== undefined ? { targetSkill } : {}) },
       select: {
         id: true, user: true, name: true, description: true, targetAgent: true,
         targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
@@ -599,7 +716,7 @@ export async function readAgentDatasetSummaries(
   }
   warnFileBackendOnce();
   return readLegacyFileSync()
-    .filter(item => item.user === user && (targetSkill === undefined || item.targetSkill === targetSkill))
+    .filter(item => canReadAgentDataset(user, item) && (targetSkill === undefined || item.targetSkill === targetSkill))
     .map(({ cases, ...item }) => ({ ...item, caseCount: cases.length }));
 }
 
@@ -612,7 +729,7 @@ export async function readAgentDatasetReferences(
     await migrateLegacyJsonIfNeeded(prisma);
     await ensureAgentDatasetProjectionsForUser(prisma, user);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { user, ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      where: { ...agentDatasetVisibilityWhere(user), ...(targetSkill !== undefined ? { targetSkill } : {}) },
       select: {
         id: true, user: true, name: true, description: true, targetAgent: true,
         targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
@@ -637,7 +754,7 @@ export async function readAgentDatasetReferences(
   }
   warnFileBackendOnce();
   return readLegacyFileSync()
-    .filter(item => item.user === user && (targetSkill === undefined || item.targetSkill === targetSkill))
+    .filter(item => canReadAgentDataset(user, item) && (targetSkill === undefined || item.targetSkill === targetSkill))
     .map(item => ({
       ...item,
       caseCount: item.cases.length,
@@ -652,12 +769,12 @@ export async function findAgentDataset(user: string, id: string): Promise<AgentD
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     const row = await prisma.agentEvalDataset.findFirst({
-      where: { id, user },
+      where: { id, ...agentDatasetVisibilityWhere(user) },
     });
     return row ? recordFromDbRow(row) : null;
   }
   warnFileBackendOnce();
-  return readLegacyFileSync().find(d => d.id === id && d.user === user) ?? null;
+  return readLegacyFileSync().find(d => d.id === id && canReadAgentDataset(user, d)) ?? null;
 }
 
 export async function createAgentDatasetRecord(record: AgentDatasetRecord): Promise<void> {
@@ -757,6 +874,100 @@ function buildRootCauseReadyMeta(expectedOutput: string, nowIso: string): Datase
   };
 }
 
+export type DatasetCaseRootCauseCacheWriteStatus =
+  | 'updated'
+  | 'already-cached'
+  | 'stale'
+  | 'not-found'
+  | 'conflict';
+
+export function prepareLiveRootCauseCacheWrite(
+  dataset: AgentDatasetRecord,
+  caseId: string,
+  expectedOutput: string,
+  rootCauses: RootCauseItem[],
+  now: Date,
+): { status: DatasetCaseRootCauseCacheWriteStatus; cases?: DatasetCase[] } {
+  const caseIndex = dataset.cases.findIndex(item => item.id === caseId);
+  if (caseIndex < 0) return { status: 'not-found' };
+
+  const currentCase = dataset.cases[caseIndex];
+  if (currentCase.expectedOutput !== expectedOutput) return { status: 'stale' };
+  if (
+    canReuseRootCauseCache(currentCase.expectedOutput, currentCase.rootCauseMeta)
+    && currentCase.rootCauseMeta?.status !== 'failed'
+    && (
+      currentCase.rootCauseMeta?.status === 'empty'
+      || normalizeRootCauseItems(currentCase.rootCauses).length > 0
+    )
+  ) {
+    return { status: 'already-cached' };
+  }
+
+  const cases = dataset.cases.map((item, index) => index === caseIndex
+    ? {
+        ...item,
+        rootCauses: normalizeRootCauseItems(rootCauses),
+        rootCauseMeta: buildRootCauseReadyMeta(expectedOutput, now.toISOString()),
+      }
+    : item);
+  return { status: 'updated', cases };
+}
+
+export async function cacheLiveRootCausesForDatasetCase(options: {
+  user: string;
+  datasetId: string;
+  caseId: string;
+  expectedOutput: string;
+  rootCauses: RootCauseItem[];
+  now?: Date;
+}): Promise<DatasetCaseRootCauseCacheWriteStatus> {
+  const { user, datasetId, caseId, expectedOutput, rootCauses, now = new Date() } = options;
+  const prisma = tryGetPrisma();
+  if (prisma) {
+    await migrateLegacyJsonIfNeeded(prisma);
+    const row = await prisma.agentEvalDataset.findFirst({ where: { id: datasetId, user } });
+    if (!row) return 'not-found';
+
+    const prepared = prepareLiveRootCauseCacheWrite(
+      recordFromDbRow(row),
+      caseId,
+      expectedOutput,
+      rootCauses,
+      now,
+    );
+    if (!prepared.cases) return prepared.status;
+
+    const projection = buildAgentDatasetProjection(prepared.cases);
+    const result = await prisma.agentEvalDataset.updateMany({
+      where: { id: datasetId, user, updatedAt: row.updatedAt },
+      data: {
+        casesJson: JSON.stringify(prepared.cases),
+        ...projection,
+        projectionReady: true,
+        updatedAt: row.updatedAt,
+      },
+    });
+    return result.count > 0 ? 'updated' : 'conflict';
+  }
+
+  warnFileBackendOnce();
+  const datasets = readLegacyFileSync();
+  const datasetIndex = datasets.findIndex(item => item.id === datasetId && item.user === user);
+  if (datasetIndex < 0) return 'not-found';
+  const prepared = prepareLiveRootCauseCacheWrite(
+    datasets[datasetIndex],
+    caseId,
+    expectedOutput,
+    rootCauses,
+    now,
+  );
+  if (!prepared.cases) return prepared.status;
+  datasets[datasetIndex] = { ...datasets[datasetIndex], cases: prepared.cases };
+  writeLegacyFileSync(datasets);
+  return 'updated';
+}
+
 export interface PrepareDatasetCasesOptions {
   nextCases: DatasetCase[];
   previousCases?: DatasetCase[];
@@ -826,6 +1037,15 @@ export async function prepareDatasetCasesForPersistence(
       continue;
     }
 
+    if (prevCase && !expectedOutputChanged && !shouldRetryFailed) {
+      cases.push({
+        ...nextCase,
+        rootCauses: normalizeRootCauseItems(prevCase.rootCauses),
+        rootCauseMeta: prevCase.rootCauseMeta,
+      });
+      continue;
+    }
+
     try {
       const rootCauses = normalizeRootCauseItems(
         await extractor(nextCase.input, nextCase.expectedOutput, user),
@@ -864,13 +1084,13 @@ export async function findAgentDatasetsByTargetSkill(
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { user, targetSkill },
+      where: { ...agentDatasetVisibilityWhere(user), targetSkill },
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(recordFromDbRow);
   }
   warnFileBackendOnce();
-  return readLegacyFileSync().filter(d => d.user === user && (d.targetSkill ?? '') === targetSkill);
+  return readLegacyFileSync().filter(d => canReadAgentDataset(user, d) && (d.targetSkill ?? '') === targetSkill);
 }
 
 export async function deleteAgentDataset(user: string, id: string): Promise<boolean> {

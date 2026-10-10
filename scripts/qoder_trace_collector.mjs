@@ -1413,7 +1413,7 @@ export function detectQoderProduct(event, options = {}) {
   if (explicit) return normalizeQoderProduct(explicit)
   const transcriptPath = firstString(event?.transcript_path)
   if (transcriptPath && /[\\/]\.qoderwork(?:cn)?[\\/]/i.test(transcriptPath)) return "work"
-  const markers = options.jetbrainsMarkers || readJetBrainsMarkers(options.insightDir || path.join(os.homedir(), ".agent-insight"), options.nowMs)
+  const markers = options.jetbrainsMarkers || readJetBrainsMarkers(options.insightDir || getAgentInsightHome(), options.nowMs)
   if (markers.some((marker) => jetBrainsLogContainsSession(marker, firstString(event?.session_id)))) return "jetbrains"
   const markerPids = options.jetbrainsMarkerPids || markers.map((marker) => marker.pid)
   if (markerPids.length) {
@@ -1484,7 +1484,7 @@ function mergeSessionEventDirectories(targetDir, sourceDirs) {
 
 export async function collectQoderHook(event, options = {}) {
   const homeDir = options.homeDir || os.homedir()
-  const insightDir = options.insightDir || path.join(homeDir, ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
   const config = { ...parseEnvFile(path.join(insightDir, "config")), ...process.env, ...options.env }
   const apiKeyHash = stableHex([config.AGENT_INSIGHT_API_KEY || "anonymous"], 16)
   const product = detectQoderProduct(event, {
@@ -1572,7 +1572,7 @@ export async function collectQoderHook(event, options = {}) {
 
 export async function flushQoderProduct(options = {}) {
   const homeDir = options.homeDir || os.homedir()
-  const insightDir = options.insightDir || path.join(homeDir, ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
   const config = { ...parseEnvFile(path.join(insightDir, "config")), ...process.env, ...options.env }
   const product = normalizeQoderProduct(options.product)
   const apiKeyHash = stableHex([config.AGENT_INSIGHT_API_KEY || "anonymous"], 16)
@@ -1658,4 +1658,10 @@ if (import.meta.url === invokedPath) {
     process.stderr.write(`agent-insight-qoder: ${error?.message || String(error)}\n`)
     process.exitCode = process.argv.includes("--flush") ? 1 : 0
   })
+}
+
+function getAgentInsightHome(homeDir = os.homedir()) {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(homeDir, '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => homeDir))
 }

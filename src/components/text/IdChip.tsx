@@ -13,11 +13,12 @@ interface IdChipProps {
   head?: number;
   tail?: number;
   copy?: boolean;
+  adaptive?: boolean;
   className?: string;
   onClick?: () => void;
 }
 
-export function IdChip({ value, head = 6, tail = 4, copy = true, className, onClick }: IdChipProps) {
+export function IdChip({ value, head = 6, tail = 4, copy = true, adaptive = false, className, onClick }: IdChipProps) {
   const [copied, setCopied] = React.useState(false);
   if (!value) return <span className="text-foreground-muted">—</span>;
   const truncated = value.length > head + tail + 1
@@ -45,17 +46,18 @@ export function IdChip({ value, head = 6, tail = 4, copy = true, className, onCl
             onClick={onClick}
             className={cn(
               'inline-flex items-center gap-1 font-mono text-xs text-foreground tabular-nums',
+              adaptive && 'max-w-full min-w-0',
               onClick && 'cursor-pointer hover:text-primary',
               className,
             )}
           >
-            <span>{truncated}</span>
+            <span className={adaptive ? 'min-w-0 truncate' : undefined}>{adaptive ? value : truncated}</span>
             {copy && (
               <button
                 type="button"
                 onClick={doCopy}
                 aria-label="Copy ID"
-                className="text-foreground-muted hover:text-foreground p-0.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="shrink-0 text-foreground-muted hover:text-foreground p-0.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
               </button>

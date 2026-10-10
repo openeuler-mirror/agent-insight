@@ -75,6 +75,7 @@ export function summarizeTrace(interactions: any[], opts: SummarizeOptions = {})
         depth = Math.max(depth, n.depth);
         tokens += n.stats.totalTokens;
         for (const ev of n.events) {
+            if (ev.kind === 'ras') continue;
             if (ev.kind === 'llm') llm++;
             else if (ev.kind === 'tool') toolCalls++;
             else if (ev.kind === 'skill') skillCalls++;

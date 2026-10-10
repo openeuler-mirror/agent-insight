@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runtimeLockDirectory } from '@/lib/runtime-cleanup/ownership';
 
 const LOCK_FILE = 'consumer-owner.lock';
 const INCOMPLETE_LOCK_GRACE_MS = 30_000;
@@ -56,7 +57,7 @@ function removeStaleLock(lockPath: string): boolean {
 
 function acquireOne(spoolDir: string): { path: string; release: () => void } | null {
   fs.mkdirSync(spoolDir, { recursive: true });
-  const lockPath = path.join(spoolDir, LOCK_FILE);
+  const lockPath = path.join(runtimeLockDirectory(fs.realpathSync(spoolDir)), LOCK_FILE);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const owner: LockOwner = {

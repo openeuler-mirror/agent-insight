@@ -26,12 +26,13 @@ import type {
   DebugTurn,
 } from './types';
 
-export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.5';
+export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.6';
 
 const AGENT_DEBUG_SKILL_NAME = 'agent-debug-diagnosis';
 const FAULT_DIAGNOSIS_AGENT_NAME = 'fault-diagnosis-agent';
 const AGENT_DEBUG_STATIC_REPORT_REL_PATH = '.agent-insight/agent-debug-static.json';
 const AGENT_DEBUG_FINAL_REPORT_REL_PATH = '.agent-insight/agent-debug-final.json';
+const AGENT_DEBUG_REPORT_READY = 'AGENT_DEBUG_REPORT_READY';
 
 interface ExecutionLike {
   id?: string;
@@ -84,6 +85,7 @@ export async function runAgentDebugDiagnosis(args: {
 
   const workspaceTag = `agent-debug-${executionId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}`;
   const workspaceDir = ensureSessionWorkspace(args.user, workspaceTag);
+  fs.rmSync(path.join(workspaceDir, AGENT_DEBUG_FINAL_REPORT_REL_PATH), { force: true });
   const traceBundle = ensureTraceBundle({ workspaceDir, executionId, interactions });
   const mounted = mountFileBasedSkillResources(AGENT_DEBUG_SKILL_NAME, workspaceDir);
   const skillPrompt = loadFileBasedSkillPrompt(AGENT_DEBUG_SKILL_NAME);
@@ -95,7 +97,7 @@ export async function runAgentDebugDiagnosis(args: {
     turns,
     traceBundle,
   });
-  const result = await runGeneralAgent({
+  await runGeneralAgent({
     user: args.user,
     query: buildAgentQuery({
       execution: args.execution,
@@ -113,13 +115,14 @@ export async function runAgentDebugDiagnosis(args: {
     tagSkill: AGENT_DEBUG_SKILL_NAME,
     interactionPolicy: 'auto-allow',
     agent: 'build',
-    timeoutMs: Number(process.env.AGENT_DEBUG_AGENT_TIMEOUT_MS || 110_000),
+    timeoutMs: Number(process.env.AGENT_DEBUG_AGENT_TIMEOUT_MS || 45 * 60_000),
+    progressTimeoutMs: Number(process.env.AGENT_DEBUG_AGENT_PROGRESS_TIMEOUT_MS || 10 * 60_000),
     modelOptions: { temperature: 0, maxTokens: 6000 },
   });
 
-  const parsed = parseAgentDebugSkillOutput(result.output) || readAgentDebugFinalReport(workspaceDir);
+  const parsed = readAgentDebugFinalReport(workspaceDir);
   if (!parsed) {
-    throw new Error('AgentDebug diagnosis skill did not return a valid JSON report.');
+    throw new Error(`AgentDebug diagnosis skill did not create a valid report file: ${AGENT_DEBUG_FINAL_REPORT_REL_PATH}`);
   }
 
   const stepRecords = normalizeStepRecords(parsed.stepRecords, turns);
@@ -156,10 +159,6 @@ export async function runAgentDebugDiagnosis(args: {
       durationMs: Date.now() - startedAt,
     },
   };
-}
-
-export function parseAgentDebugSkillOutput(output: string): Record<string, unknown> | null {
-  return parseJsonObject(output);
 }
 
 function readAgentDebugFinalReport(workspaceDir: string): Record<string, unknown> | null {
@@ -221,7 +220,7 @@ function buildSystemPrompt(skillPrompt: string, mountPath: string | null): strin
     '你是 Agent Insight 的智能故障诊断 Agent。当前任务是使用 agent-debug-diagnosis Skill 生成结构化认知根因报告。',
     '必须严格遵循下方 Skill 及其 references。AgentDebug 的拆分、Phase 1、Phase 2、taxonomy 和输出协议都以 Skill 文件为准。',
     '如果 Skill 要求读取 references 或执行 scripts，必须先完成这些步骤后再诊断。',
-    '最终回答只能输出一个 JSON 对象。',
+    `最终报告以 ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} 为唯一真源；校验通过后最终回答只输出 ${AGENT_DEBUG_REPORT_READY}。`,
     '允许执行挂载 skill 下的只读/分析脚本；不要修改用户项目文件，不要重新执行用户任务。',
     mountPath ? `Skill 资源已挂载在 ${mountPath}，其中包含 SKILL.md 和 references/ 诊断规程。` : '',
     '',
@@ -254,8 +253,8 @@ function buildAgentQuery(args: {
     `- 五模块主诊断完成后先写入冻结 core 报告：.agent-insight/agent-debug-core.json`,
     `- 必须由当前 Agent 运行专项诊断器：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/detector_runner.py run-all --mode one_click --input ${args.inputRelPath} --output .agent-insight/agent-debug-detectors.json`,
     `- 返回前必须运行无损校验：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_validate.py --input ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} --static ${AGENT_DEBUG_STATIC_REPORT_REL_PATH} --core .agent-insight/agent-debug-core.json --detectors .agent-insight/agent-debug-detectors.json`,
-    `- 最终回复仍必须是 ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} 的完整 JSON 对象，不要只回复摘要或诊断完成说明。`,
-    '- 按 agent-debug-diagnosis Skill 输出严格 JSON。',
+    `- ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} 是唯一报告真源；校验通过后最终回复只能是 ${AGENT_DEBUG_REPORT_READY}，不得回显报告 JSON、摘要或额外说明。`,
+    '- 按 agent-debug-diagnosis Skill 把严格 JSON 写入最终报告文件。',
     '- Memory / Reflection / Planning / Action 都允许留白；空模块不是错误。',
     '- Action 必须基于真实 tool call；不要从 Action 失败倒推 Planning 一定错误。',
     '- 不使用候选窗口；必须基于输入文件中的全部 turns 运行拆分、静态检测和 Phase 1 分析。',

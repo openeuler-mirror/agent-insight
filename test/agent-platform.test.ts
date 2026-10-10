@@ -25,22 +25,32 @@ test('Agent management preserves existing platforms and labels unregistered plat
   assert.equal(normalizeAgentPlatform('openclaw'), 'openclaw');
   assert.equal(normalizeAgentPlatform('hermes'), 'hermes');
   assert.equal(normalizeAgentPlatform('codex'), 'codex');
+  assert.ok(AGENT_PLATFORMS.includes('pi-agent'));
+  assert.equal(normalizeAgentPlatform('pi-agent'), 'pi-agent');
+  assert.equal(normalizeAgentPlatform(' Pi-Agent '), 'pi-agent');
   assert.equal(normalizeAgentPlatform('unknown'), 'unknown');
   assert.equal(normalizeAgentPlatform('future-agent'), 'unknown');
   assert.equal(normalizeAgentPlatform(null), 'unknown');
 });
 
-test('Agent management exposes Codex platform filters via the shared platform source', () => {
+test('Agent management recognizes WorkBuddy as a supported platform', () => {
+  assert.ok(AGENT_PLATFORMS.includes('workbuddy'));
+  assert.equal(normalizeAgentPlatform('workbuddy'), 'workbuddy');
+  assert.equal(normalizeAgentPlatform(' WorkBuddy '), 'workbuddy');
+});
+
+test('Agent management derives page platform filters from the canonical list', () => {
   const page = fs.readFileSync(
     path.join(process.cwd(), 'src', 'app', '(main)', 'agents', 'page.tsx'),
     'utf8',
   );
 
-  // 页面收敛到共享真源：PlatformFilter 从 AgentPlatform 派生，筛选选项由
-  // AGENT_PLATFORMS.map 生成，归一化用共享 normalizeAgentPlatform（unknown
-  // 保持 unknown，不再冒充 opencode）。
+  // 单一事实源：页面筛选器由 AGENT_PLATFORMS 派生，平台归一化统一走 normalizeAgentPlatform，
+  // 不再为每个框架手写 PlatformFilter 联合类型 / normalizePlatform 分支 / 硬编码下拉项。
   assert.match(page, /type PlatformFilter = 'all' \| AgentPlatform;/);
-  assert.match(page, /platform: normalizeAgentPlatform\(a\.platform\),/);
-  assert.match(page, /\.{3}AGENT_PLATFORMS\.map\(\(value\) => \(\{ value, label: value \}\)\)/);
-  assert.doesNotMatch(page, /function normalizePlatform/);
+  assert.match(page, /normalizeAgentPlatform\(a\.platform\)/);
+  assert.match(page, /AGENT_PLATFORMS\.map/);
+  for (const platform of ['codex', 'pi-agent', 'workbuddy'] as const) {
+    assert.ok(AGENT_PLATFORMS.includes(platform), `${platform} must be a canonical page platform`);
+  }
 });

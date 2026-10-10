@@ -1,0 +1,28 @@
+# coding: utf-8
+"""Example RECOVERY_PLUGIN template (copy to recovery/<domain>.py).
+
+Strategy overrides and user-facing copy live in the **same** file —
+do not add a separate recovery/messages/ tree.
+"""
+from __future__ import annotations
+
+from detectors.types import RecoveryPlugin
+from recovery.engine import RecoveryAction
+
+# RECOVERY_PLUGIN = RecoveryPlugin(
+#     id="example_domain",
+#     kind_overrides={
+#         "example_kind": [
+#             RecoveryAction.OBSERVE_ONLY,
+#             RecoveryAction.INJECT_STEERING,
+#         ],
+#     },
+#     stream_kinds=(),  # kinds that use mid-stream suppress path
+#     anchor="llm",
+#     messages={
+#         "cn": {"steer_default": "...", "notice_default": "..."},
+#         "en": {"steer_default": "...", "notice_default": "..."},
+#     },
+# )
+
+__all__: list[str] = []

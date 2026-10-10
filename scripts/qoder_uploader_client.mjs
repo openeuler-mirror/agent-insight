@@ -112,7 +112,7 @@ export function resolveTraceEndpoint(host) {
 
 export async function uploadPending(options = {}) {
   const homeDir = options.homeDir || os.homedir()
-  const insightDir = options.insightDir || path.join(homeDir, ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
   const config = { ...parseEnvFile(path.join(insightDir, "config")), ...process.env, ...options.env }
   const spoolDir = options.spoolDir || config.AGENT_INSIGHT_QODER_SPOOL_DIR
   const endpoint = options.endpoint || resolveTraceEndpoint(config.AGENT_INSIGHT_HOST)
@@ -207,7 +207,7 @@ async function main() {
     return
   }
   const homeDir = os.homedir()
-  const insightDir = path.join(homeDir, ".agent-insight")
+  const insightDir = getAgentInsightHome(homeDir)
   const config = { ...parseEnvFile(path.join(insightDir, "config")), ...process.env }
   const spoolDir = config.AGENT_INSIGHT_QODER_SPOOL_DIR
   if (!spoolDir) throw new Error("AGENT_INSIGHT_QODER_SPOOL_DIR is not configured")
@@ -272,4 +272,10 @@ if (import.meta.url === invokedPath) {
     process.stderr.write(`agent-insight-qoder-uploader: ${error?.message || String(error)}\n`)
     process.exitCode = 1
   })
+}
+
+function getAgentInsightHome(homeDir = os.homedir()) {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(homeDir, '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => homeDir))
 }

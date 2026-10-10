@@ -3,7 +3,7 @@
 // 解析失败重试用尽→failed+errorMessage / 单项 retry 成功 / 实验终态流转 / 防重入。
 // 落仓库 data/witty_insight.db（同 experiments-api.test.ts：钉住 DATABASE_URL）。
 import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -20,7 +20,11 @@ import {
   ensureEvalExperiment,
   addEvalExperimentCase,
   evaluateEvalExperimentCase,
+  settleExperimentStatus,
 } from '@/lib/engine/experiment/run-experiment';
+import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
+import { createAgentDatasetRecord, findAgentDataset } from '@/server/agent_datasets_storage';
+import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 
 const TEST_USER = `exp-engine-${Date.now()}`;
 
@@ -30,6 +34,7 @@ experimentEngineConfig.retryDelaysMs = [0, 0];
 // 通用 judge 路径（parse/retry/失败）由自建 LLM 评估器承接——预置 task-completion/
 // trace-quality 现走忠实版（原 opencode 逻辑），不经 judge-llm。
 const CUSTOM_LLM_ID = 'custom-engine-test-judge';
+const CUSTOM_DATASET_INPUT_ID = 'custom-engine-dataset-input';
 
 const VALID_JUDGE_JSON = JSON.stringify({
   score: 88,
@@ -62,6 +67,8 @@ async function createExperiment(
   evaluatorIds: string[],
   referenceOutput: string | null = 'ref answer',
   evaluatorContextJson: string | null = null,
+  evaluatorConfigsJson: string = '{}',
+  datasetInput: string | null = null,
 ): Promise<{ experimentId: string; caseId: string }> {
   const exp = await prisma.experiment.create({
     data: {
@@ -70,11 +77,13 @@ async function createExperiment(
       type: 'single',
       agentName: 'engine-test-agent',
       evaluatorIdsJson: JSON.stringify(evaluatorIds),
+      evaluatorConfigsJson,
       status: 'draft',
       cases: {
         create: [{
           executionId,
           input: '请回答问题 X',
+          datasetInput,
           actualOutput: '答案是 42',
           referenceOutput,
           evaluatorContextJson,
@@ -88,17 +97,27 @@ async function createExperiment(
 
 async function cleanup() {
   await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  await prisma.session.deleteMany({ where: { user: TEST_USER } });
   await prisma.execution.deleteMany({ where: { user: TEST_USER } });
   await prisma.customEvaluatorList.deleteMany({ where: { user: TEST_USER } });
+  await prisma.agentEvalDataset.deleteMany({ where: { user: TEST_USER } });
 }
 
 test.before(async () => {
-  await writeUserCustomEvaluators(TEST_USER, [{
-    id: CUSTOM_LLM_ID, name: 'engine-test-judge', description: '', evaluatorType: 'LLM',
-    source: 'custom', targetTypes: [], objectives: [], scenarios: [], runMode: '', scoreRange: '',
-    popularity: 0, mappedMetrics: [], status: 'ready', category: 'res',
-    llmConfig: { model: 'engine-test', systemPrompt: '评估 {{output}} 对照 {{reference_output}}' },
-  }]);
+  await writeUserCustomEvaluators(TEST_USER, [
+    {
+      id: CUSTOM_LLM_ID, name: 'engine-test-judge', description: '', evaluatorType: 'LLM',
+      source: 'custom', targetTypes: [], objectives: [], scenarios: [], runMode: '', scoreRange: '',
+      popularity: 0, mappedMetrics: [], status: 'ready', category: 'res',
+      llmConfig: { model: 'engine-test', systemPrompt: '评估 {{output}} 对照 {{reference_output}}' },
+    },
+    {
+      id: CUSTOM_DATASET_INPUT_ID, name: 'engine-dataset-input', description: '', evaluatorType: 'LLM',
+      source: 'custom', targetTypes: [], objectives: [], scenarios: [], runMode: '', scoreRange: '',
+      popularity: 0, mappedMetrics: [], status: 'ready', category: 'res',
+      llmConfig: { model: 'engine-test', systemPrompt: '只评估数据集任务：{{dataset_input}}；实际输入：{{input}}' },
+    },
+  ]);
 });
 
 test.after(async () => {
@@ -150,6 +169,138 @@ test('engine: 忠实版预置 + 自建 LLM 两行成功落库，实验终态 don
   setFaithfulPresetRunnerForTest(null);
 });
 
+test('engine: 普通实验实时提取写回数据项，下一次评测复用缓存', async () => {
+  const datasetId = `dataset-${TEST_USER}`;
+  const datasetCaseId = 'case-live-cache';
+  await createAgentDatasetRecord({
+    id: datasetId,
+    user: TEST_USER,
+    name: '实时缓存测试集',
+    description: '',
+    targetAgent: '',
+    targetSkill: '',
+    tags: [],
+    fields: [],
+    datasetKind: 'ideal_output',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    cases: [{
+      id: datasetCaseId,
+      input: '请回答问题 X',
+      expectedOutput: 'ref answer',
+      evaluationFocus: '',
+      tags: [],
+      trajectory: '',
+    }],
+  });
+
+  const runBoundExperiment = async (
+    runner: Parameters<typeof setFaithfulPresetRunnerForTest>[0],
+  ) => {
+    setFaithfulPresetRunnerForTest(runner);
+    const executionId = await createExecution();
+    const created = await createExperiment(executionId, ['preset-agent-task-completion']);
+    await prisma.experimentCase.update({
+      where: { id: created.caseId },
+      data: {
+        caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding(null, {
+          datasetId,
+          caseId: datasetCaseId,
+        })),
+      },
+    });
+    const run = await startExperimentRun(created.experimentId, TEST_USER);
+    await run!.completion;
+  };
+
+  await runBoundExperiment(async (_id, _user, ctx) => {
+    assert.equal(ctx.precomputedRootCauseSource, undefined);
+    assert.equal(typeof ctx.onLiveRootCausesExtracted, 'function');
+    await ctx.onLiveRootCausesExtracted?.([{ content: '实时提取观点', weight: 2 }]);
+    return { score: 80, points: [], evidence: { md: '首次实时提取' } };
+  });
+
+  const written = await findAgentDataset(TEST_USER, datasetId);
+  assert.deepEqual(written?.cases[0].rootCauses, [{ content: '实时提取观点', weight: 2 }]);
+  assert.equal(written?.cases[0].rootCauseMeta?.status, 'ready');
+
+  await runBoundExperiment(async (_id, _user, ctx) => {
+    assert.equal(ctx.precomputedRootCauseSource, 'dataset-cache');
+    assert.deepEqual(ctx.precomputedRootCauses, [{ content: '实时提取观点', weight: 2 }]);
+    assert.equal(ctx.onLiveRootCausesExtracted, undefined);
+    return { score: 80, points: [], evidence: { md: '复用缓存' } };
+  });
+  setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 持久化的文本评估器配置会传入 Code 评分器', async () => {
+  const executionId = await createExecution();
+  const evaluatorConfigsJson = JSON.stringify({
+    schemaVersion: 1,
+    configs: {
+      'preset-text-exact-match': {
+        caseSensitive: false,
+        punctuationInsensitive: true,
+        whitespaceNormalization: true,
+        widthNormalization: true,
+        multiCandidateScoring: 'any',
+      },
+    },
+  });
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-text-exact-match'],
+    '答案是 42！',
+    null,
+    evaluatorConfigsJson,
+  );
+
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirst({ where: { experimentId } });
+  assert.equal(row?.status, 'done');
+  assert.equal(row?.score, 100);
+  const evidence = JSON.parse(row!.evidenceJson!);
+  assert.equal(evidence.json.config.punctuationInsensitive, true);
+  assert.equal(evidence.json.config.caseSensitive, false);
+});
+
+test('engine: dataset_input 命中时注入快照，缺少匹配时直接不计分且不调用 Judge', async () => {
+  const prompts: string[] = [];
+  setJudgeLlmCallerForTest(async (_user, request) => {
+    prompts.push(request.system);
+    return VALID_JUDGE_JSON;
+  });
+
+  const matchedExecutionId = await createExecution();
+  const matched = await createExperiment(
+    matchedExecutionId,
+    [CUSTOM_DATASET_INPUT_ID],
+    null,
+    null,
+    '{}',
+    '回答问题 X',
+  );
+  const matchedRun = await startExperimentRun(matched.experimentId, TEST_USER);
+  await matchedRun!.completion;
+  const matchedRow = await prisma.experimentEvalResult.findFirst({ where: { experimentId: matched.experimentId } });
+  assert.equal(matchedRow!.status, 'done');
+  assert.equal(matchedRow!.score, 88);
+  assert.match(prompts[0], /只评估数据集任务：回答问题 X/);
+  assert.match(prompts[0], /实际输入：请回答问题 X/);
+
+  const unmatchedExecutionId = await createExecution();
+  const unmatched = await createExperiment(unmatchedExecutionId, [CUSTOM_DATASET_INPUT_ID], null);
+  const unmatchedRun = await startExperimentRun(unmatched.experimentId, TEST_USER);
+  await unmatchedRun!.completion;
+  const unmatchedRow = await prisma.experimentEvalResult.findFirst({ where: { experimentId: unmatched.experimentId } });
+  assert.equal(unmatchedRow!.status, 'done');
+  assert.equal(unmatchedRow!.score, null);
+  assert.match(unmatchedRow!.summary || '', /不适用/);
+  assert.equal(prompts.length, 1);
+});
+
 test('engine: judge 输出非法 JSON → 重试用尽 → failed + errorMessage，全失败实验终态 failed', async () => {
   let calls = 0;
   setJudgeLlmCallerForTest(async () => { calls++; return '这不是 JSON，judge 抽风了'; });
@@ -183,6 +334,37 @@ test('engine: judge 输出非法 JSON → 重试用尽 → failed + errorMessage
   assert.equal(retried!.errorMessage, null);
   const exp2 = await prisma.experiment.findUnique({ where: { id: experimentId } });
   assert.equal(exp2!.status, 'done');
+});
+
+test('engine: 成功与失败结果并存时实验终态为 partial', async () => {
+  const executionId = await createExecution();
+  const { experimentId, caseId } = await createExperiment(
+    executionId,
+    [CUSTOM_LLM_ID, CUSTOM_DATASET_INPUT_ID],
+  );
+  await prisma.experimentEvalResult.createMany({
+    data: [
+      {
+        experimentId,
+        caseId,
+        evaluatorId: CUSTOM_LLM_ID,
+        status: 'done',
+        score: 100,
+      },
+      {
+        experimentId,
+        caseId,
+        evaluatorId: CUSTOM_DATASET_INPUT_ID,
+        status: 'failed',
+        errorMessage: '评估器执行失败',
+      },
+    ],
+  });
+
+  await settleExperimentStatus(experimentId);
+
+  const experiment = await prisma.experiment.findUnique({ where: { id: experimentId } });
+  assert.equal(experiment!.status, 'partial');
 });
 
 test('engine: 非可重试异常不重试；同实验 running 时重复触发直接返回', async () => {
@@ -264,6 +446,113 @@ test('engine: 预置 task-completion/trace-quality 走忠实版通道，归因�
   setFaithfulPresetRunnerForTest(null);
 });
 
+test('engine: 步骤效率预置评估器走 canonical trajectory runner', async () => {
+  const executionId = await createExecution();
+  const execution = await prisma.execution.findUniqueOrThrow({ where: { id: executionId } });
+  await prisma.session.create({
+    data: {
+      taskId: execution.taskId,
+      user: TEST_USER,
+      endTime: new Date(),
+      interactions: JSON.stringify([
+        { role: 'user', content: '请直接回答。' },
+        { role: 'assistant', content: '直接答案。' },
+      ]),
+    },
+  });
+  setJudgeLlmCallerForTest(async (_user, request) => {
+    const prompt = JSON.parse(request.user) as { rubric: { kind: string } };
+    assert.equal(prompt.rubric.kind, 'step-efficiency');
+    return JSON.stringify({
+      summary: '执行路径直接且有效。',
+      dimensions: [
+        'step_necessity',
+        'path_detour',
+        'cost_efficiency',
+        'step_density',
+        'retry_efficiency',
+      ].map(dimension => ({
+        dimension,
+        verdict: 'met',
+        reason: '满足要求。',
+        suggestion: '',
+      })),
+      issues: [],
+    });
+  });
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-agent-step-efficiency'],
+  );
+
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirstOrThrow({ where: { experimentId } });
+  assert.equal(row.status, 'done');
+  assert.equal(row.score, 100);
+  assert.equal(JSON.parse(row.pointsJson!).length, 5);
+  assert.equal(
+    JSON.parse(row.evidenceJson!).json.rubricVersion,
+    'agent-step-efficiency/1.0.0',
+  );
+  setJudgeLlmCallerForTest(null);
+});
+
+test('engine: 执行过程质量使用独立 ID 和六维 rubric', async () => {
+  const executionId = await createExecution();
+  const execution = await prisma.execution.findUniqueOrThrow({ where: { id: executionId } });
+  await prisma.session.create({
+    data: {
+      taskId: execution.taskId,
+      user: TEST_USER,
+      endTime: new Date(),
+      interactions: JSON.stringify([
+        { role: 'user', content: '执行关键动作。' },
+        { role: 'assistant', content: '动作已执行。' },
+      ]),
+    },
+  });
+  setJudgeLlmCallerForTest(async (_user, request) => {
+    const prompt = JSON.parse(request.user) as { rubric: { kind: string } };
+    assert.equal(prompt.rubric.kind, 'process-quality');
+    return JSON.stringify({
+      summary: '执行过程完整且证据一致。',
+      dimensions: [
+        'goal_alignment',
+        'planning_completeness',
+        'reasoning_coherence',
+        'exception_handling',
+        'path_robustness',
+        'information_utilization',
+      ].map(dimension => ({
+        dimension,
+        verdict: 'met',
+        reason: '满足要求。',
+        suggestion: '',
+      })),
+      issues: [],
+    });
+  });
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-agent-process-quality'],
+  );
+
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirstOrThrow({ where: { experimentId } });
+  assert.equal(row.status, 'done');
+  assert.equal(row.score, 100);
+  assert.equal(JSON.parse(row.pointsJson!).length, 6);
+  assert.equal(
+    JSON.parse(row.evidenceJson!).json.rubricVersion,
+    'agent-process-quality/1.0.0',
+  );
+  setJudgeLlmCallerForTest(null);
+});
+
 test('engine: 专项预置通道读取 evaluatorContextJson 并落库 0 分', async () => {
   let seenContext: unknown = null;
   setJudgeLlmCallerForTest(async (_user, request) => {
@@ -337,4 +626,106 @@ test('engine: skill 评测接入——ensure/add/evaluate 单 case 走实验后�
   assert.equal(JSON.parse(stored!.pointsJson!)[0].label, '目标达成');
 
   setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 批量评测延迟结算，子集重试不重置已成功评估器', async () => {
+  const calls = new Map<string, number>();
+  let preparedExperimentId = '';
+  let minimumPreparedRowCount = Number.POSITIVE_INFINITY;
+  setFaithfulPresetRunnerForTest(async (evaluatorId) => {
+    calls.set(evaluatorId, (calls.get(evaluatorId) || 0) + 1);
+    if (preparedExperimentId) {
+      const prepared = await prisma.experimentEvalResult.count({
+        where: { experimentId: preparedExperimentId },
+      });
+      minimumPreparedRowCount = Math.min(minimumPreparedRowCount, prepared);
+    }
+    const score = evaluatorId === 'preset-agent-task-completion' ? 78 : 86;
+    return {
+      score,
+      points: [{ label: evaluatorId, score, evidence: { md: '稳定结果' } }],
+      evidence: { md: '稳定结果' },
+    };
+  });
+  const executionId = await createExecution();
+  const evaluatorIds = ['preset-agent-task-completion', 'preset-agent-trace-quality'];
+  const experimentId = await ensureEvalExperiment({
+    user: TEST_USER,
+    name: '批量结算与子集重试',
+    evaluatorIds,
+  });
+  preparedExperimentId = experimentId;
+  const caseId = await addEvalExperimentCase(experimentId, {
+    executionId,
+    input: '分析日志',
+    actualOutput: '分析结果',
+    referenceOutput: '参考结果',
+  });
+  await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } });
+
+  await evaluateEvalExperimentCase(experimentId, caseId, TEST_USER, { settleExperiment: false });
+  assert.equal(minimumPreparedRowCount, evaluatorIds.length);
+  assert.equal((await prisma.experiment.findUnique({ where: { id: experimentId } }))!.status, 'running');
+  const stableResult = await prisma.experimentEvalResult.findUnique({
+    where: { caseId_evaluatorId: { caseId, evaluatorId: 'preset-agent-task-completion' } },
+  });
+  assert.equal(stableResult!.score, 78);
+
+  await prisma.experimentEvalResult.update({
+    where: { caseId_evaluatorId: { caseId, evaluatorId: 'preset-agent-trace-quality' } },
+    data: { status: 'failed', score: null, errorMessage: '临时失败' },
+  });
+  await evaluateEvalExperimentCase(experimentId, caseId, TEST_USER, {
+    evaluatorIds: ['preset-agent-trace-quality'],
+    settleExperiment: false,
+  });
+
+  const resultAfterRetry = await prisma.experimentEvalResult.findUnique({
+    where: { caseId_evaluatorId: { caseId, evaluatorId: 'preset-agent-task-completion' } },
+  });
+  assert.equal(resultAfterRetry!.score, 78);
+  assert.equal(resultAfterRetry!.attempts, stableResult!.attempts);
+  assert.equal(calls.get('preset-agent-task-completion'), 1);
+  assert.equal(calls.get('preset-agent-trace-quality'), 2);
+
+  await settleExperimentStatus(experimentId);
+  assert.equal((await prisma.experiment.findUnique({ where: { id: experimentId } }))!.status, 'done');
+  setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 已有 Trace 的触发分析使用真实 Skill 命中事实确定性计分', async () => {
+  const skillName = 'engine-trigger-skill';
+  const executionId = await createExecution({ skill: null });
+  await prisma.executionSkill.create({
+    data: { executionId, skillName, skillVersion: 1, user: TEST_USER, isPrimary: true },
+  });
+  const experiment = await prisma.experiment.create({
+    data: {
+      user: TEST_USER,
+      name: '已有 Trace 触发分析',
+      agentName: 'engine-test-agent',
+      evaluatorIdsJson: JSON.stringify([SKILL_TRIGGER_ANALYZER_EVALUATOR_ID]),
+      scope: 'skill-workbench',
+      skillName,
+      skillVersion: 1,
+      preset: 'trigger',
+      cases: {
+        create: [{
+          executionId,
+          input: '应命中当前 Skill',
+          actualOutput: '历史 Trace',
+          caseValuesJson: JSON.stringify({ should_trigger: true }),
+        }],
+      },
+    },
+  });
+
+  const start = await startExperimentRun(experiment.id, TEST_USER);
+  await start!.completion;
+  const result = await prisma.experimentEvalResult.findFirst({ where: { experimentId: experiment.id } });
+  assert.equal(result!.evaluatorId, SKILL_TRIGGER_ANALYZER_EVALUATOR_ID);
+  assert.equal(result!.status, 'done');
+  assert.equal(result!.score, 100);
+  assert.equal(result!.summary, '实际触发结果与预期标注一致。');
+  assert.equal(JSON.parse(result!.pointsJson!)[0].label, '触发准确率');
 });

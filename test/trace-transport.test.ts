@@ -47,7 +47,7 @@ test("transport derives stable API-key-isolated paths and identifiers", () => {
   assert.throws(() => transport.collectorStateDir("codex", "key", "relative-home"))
 })
 
-test("transport redacts recursively before Unicode code-point truncation", () => {
+test("transport redacts recursively and only truncates content with an explicit limit", () => {
   const redacted = transport.redactValue({
     api_key: "secret-value",
     nested: {
@@ -100,9 +100,40 @@ test("transport redacts recursively before Unicode code-point truncation", () =>
   assert.match(privateText, /\[LOCAL_PATH\]/)
   assert.doesNotMatch(privateText, /alice|private-value|plain-secret|C:\\Users|\/home\/alice|wsl\.localhost/)
   const unicode = "🙂".repeat(2001)
+  assert.equal(transport.safeContent(unicode), unicode)
   const truncated = transport.truncateCodePoints(unicode, 2000)
   assert.equal(Array.from(truncated.slice(0, 4000)).length, 2000)
   assert.match(truncated, /\[TRUNCATED original_chars=2001\]$/)
+})
+
+test("writer preserves full content by default and OTLP conversion does not truncate twice", async (t) => {
+  const dir = await tempDir(t)
+  const output = "完整结果🙂".repeat(700)
+  assert.ok(Array.from(output).length > 2000)
+
+  const writer = new transport.DurableTraceWriter({
+    framework: "pi-agent",
+    apiKey: "test-key",
+    stateDir: path.join(dir, "full"),
+  })
+  const preserved = await writer.append(event({ output }))
+  assert.equal(preserved.output, output)
+
+  const limitedWriter = new transport.DurableTraceWriter({
+    framework: "pi-agent",
+    apiKey: "test-key",
+    stateDir: path.join(dir, "limited"),
+    maxContentChars: 2000,
+  })
+  const limited = await limitedWriter.append(event({ output }))
+  assert.match(limited.output, /\[TRUNCATED original_chars=3500\]$/)
+
+  const payload = transport.canonicalEventsToOtlp([limited], { framework: "pi-agent" })
+  const attrs = Object.fromEntries(payload.resourceSpans[0].scopeSpans[0].spans[0].attributes.map((item: {
+    key: string
+    value: Record<string, unknown>
+  }) => [item.key, Object.values(item.value)[0]]))
+  assert.equal(attrs["output.value"], limited.output)
 })
 
 test("JSONL cursor consumes only complete lines and leaves a torn tail", async (t) => {
@@ -119,6 +150,19 @@ test("JSONL cursor consumes only complete lines and leaves a torn tail", async (
   await fsp.appendFile(file, "}\n", "utf8")
   const finalBatch = await transport.readJsonlBatch(file, batch.nextOffset)
   assert.deepEqual(finalBatch.events, [{ id: 3 }])
+})
+
+test("JSONL cursor uploads one complete record larger than the batch byte target", async (t) => {
+  const dir = await tempDir(t)
+  const file = path.join(dir, "events.jsonl")
+  const content = "完整内容".repeat(80_000)
+  await transport.appendJsonl(file, { id: "oversized", content })
+
+  const batch = await transport.readJsonlBatch(file, 0, { maxBytes: 64 * 1024 })
+  assert.equal(batch.events.length, 1)
+  assert.equal(batch.events[0].content, content)
+  assert.equal(batch.nextOffset, (await fsp.stat(file)).size)
+  assert.equal(batch.tornTailBytes, 0)
 })
 
 test("atomic checkpoint replacement preserves the latest valid document", async (t) => {
@@ -151,6 +195,73 @@ test("process lock prevents concurrent uploaders and verifies ownership on relea
   assert.equal(await transport.releaseProcessLock({ ...first, token: "wrong" }), false)
   assert.equal(await transport.releaseProcessLock(first), true)
   assert.ok(await transport.acquireProcessLock(lockPath))
+})
+
+test("process lock recovers an old empty legacy lock without leaving candidate files", async (t) => {
+  const dir = await tempDir(t)
+  const lockPath = path.join(dir, "uploader.lock")
+  await fsp.writeFile(lockPath, "")
+  const old = new Date(Date.now() - 60_000)
+  await fsp.utimes(lockPath, old, old)
+
+  const before = await transport.inspectProcessLock(lockPath)
+  assert.equal(before.state, "invalid")
+  assert.equal(before.reason, "empty-lock")
+  const lock = await transport.acquireProcessLock(lockPath)
+  assert.ok(lock)
+  assert.equal((await transport.inspectProcessLock(lockPath)).state, "held-local")
+  assert.deepEqual(
+    (await fsp.readdir(dir)).filter((name) => name.includes(".candidate") || name.endsWith(".recovery")),
+    [],
+  )
+  assert.equal(await transport.releaseProcessLock(lock), true)
+})
+
+test("process lock does not steal a fresh incomplete lock", async (t) => {
+  const dir = await tempDir(t)
+  const lockPath = path.join(dir, "uploader.lock")
+  await fsp.writeFile(lockPath, "")
+
+  assert.equal(await transport.acquireProcessLock(lockPath), null)
+  const status = await transport.inspectProcessLock(lockPath)
+  assert.equal(status.state, "invalid")
+  assert.equal(status.recoverable, true)
+})
+
+test("concurrent recovery of an orphaned lock has one owner", async (t) => {
+  const dir = await tempDir(t)
+  const lockPath = path.join(dir, "uploader.lock")
+  await fsp.writeFile(lockPath, `${JSON.stringify({
+    version: 1,
+    pid: 2_147_483_647,
+    host: os.hostname(),
+    startedAt: new Date(0).toISOString(),
+    token: "dead-owner",
+  })}\n`)
+
+  const attempts = await Promise.all(Array.from({ length: 8 }, () =>
+    transport.acquireProcessLock(lockPath, { invalidLockGraceMs: 0 })))
+  const owners = attempts.filter(Boolean)
+  assert.equal(owners.length, 1)
+  assert.equal((await transport.inspectProcessLock(lockPath)).state, "held-local")
+  assert.equal(await transport.releaseProcessLock(owners[0]), true)
+})
+
+test("process lock fails closed for an owner on another host", async (t) => {
+  const dir = await tempDir(t)
+  const lockPath = path.join(dir, "uploader.lock")
+  await fsp.writeFile(lockPath, `${JSON.stringify({
+    version: 1,
+    pid: 2_147_483_647,
+    host: "different-host.invalid",
+    startedAt: new Date(0).toISOString(),
+    token: "foreign-owner",
+  })}\n`)
+
+  assert.equal(await transport.acquireProcessLock(lockPath, { invalidLockGraceMs: 0 }), null)
+  const status = await transport.inspectProcessLock(lockPath)
+  assert.equal(status.state, "held-foreign")
+  assert.equal(status.recoverable, false)
 })
 
 test("OTLP builder maps canonical Pi semantics and usage", () => {
@@ -216,6 +327,71 @@ test("uploader advances checkpoint only after a 2xx response and replays without
   const replay = await uploader.flushOnce()
   assert.equal(replay.uploadedEvents, 0)
   assert.equal(bodies.length, 2)
+})
+
+test("Goal Plus uploader can prioritize the newest partition with a bounded flush", async (t) => {
+  const dir = await tempDir(t)
+  await transport.appendJsonl(path.join(dir, "2026-09-09", "events.jsonl"), event({
+    eventId: "old",
+    spanId: "1".repeat(16),
+  }))
+  await transport.appendJsonl(path.join(dir, "2026-09-10", "events.jsonl"), event({
+    eventId: "new",
+    spanId: "2".repeat(16),
+  }))
+  const uploaded: string[] = []
+  const uploader = new transport.DurableTraceUploader({
+    framework: "pi-agent",
+    apiKey: "test-key",
+    endpoint: "http://127.0.0.1/otel",
+    stateDir: dir,
+    maxEvents: 1,
+    maxBatchesPerFlush: 1,
+    fileOrder: "newest-first",
+    fetch: async (_url: string, init: { body: string }) => {
+      const payload = JSON.parse(init.body)
+      const attrs = payload.resourceSpans[0].scopeSpans[0].spans[0].attributes
+      uploaded.push(attrs.find((item: { key: string }) => item.key === "agent.insight.event_id").value.stringValue)
+      return new Response("", { status: 200 })
+    },
+  })
+
+  const first = await uploader.flushOnce()
+  assert.deepEqual(uploaded, ["new"])
+  assert.equal(first.uploadedBatches, 1)
+  assert.equal(first.deferred, true)
+  await uploader.flushOnce()
+  assert.deepEqual(uploaded, ["new", "old"])
+})
+
+test("standalone uploaders retain oldest-first unbounded defaults", async (t) => {
+  const dir = await tempDir(t)
+  await transport.appendJsonl(path.join(dir, "2026-09-09", "events.jsonl"), event({
+    eventId: "old",
+    spanId: "1".repeat(16),
+  }))
+  await transport.appendJsonl(path.join(dir, "2026-09-10", "events.jsonl"), event({
+    eventId: "new",
+    spanId: "2".repeat(16),
+  }))
+  const uploaded: string[] = []
+  const uploader = new transport.DurableTraceUploader({
+    framework: "pi-agent",
+    apiKey: "test-key",
+    endpoint: "http://127.0.0.1/otel",
+    stateDir: dir,
+    maxEvents: 1,
+    fetch: async (_url: string, init: { body: string }) => {
+      const payload = JSON.parse(init.body)
+      const attrs = payload.resourceSpans[0].scopeSpans[0].spans[0].attributes
+      uploaded.push(attrs.find((item: { key: string }) => item.key === "agent.insight.event_id").value.stringValue)
+      return new Response("", { status: 200 })
+    },
+  })
+
+  const result = await uploader.flushOnce()
+  assert.deepEqual(uploaded, ["old", "new"])
+  assert.equal(result.deferred, false)
 })
 
 test("backoff is exponential, bounded, and deterministic with injected jitter", () => {

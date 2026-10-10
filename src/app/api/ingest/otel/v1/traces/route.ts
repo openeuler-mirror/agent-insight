@@ -1,8 +1,9 @@
 import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
 import { isLlamaIndexOtlpTraceBody } from '@/lib/ingest/otel/llamaindex';
-import { appendOtelTraceEvents } from '@/lib/ingest/otel/spool';
+import { appendOtelTraceEvents, getActrailOtelTraceSpoolDir } from '@/lib/ingest/otel/spool';
 import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
 import { isLangfuseOtlpTraceBody } from '@/lib/ingest/otel/langfuse';
+import { isActrailOtlpTraceBody } from '@/lib/ingest/otel/actrail';
 import { jiuwenServiceName } from '@/lib/ingest/otel/jiuwen/aggregate';
 import { ingestJiuwenOtlp } from '@/lib/ingest/otel/jiuwen/ingest';
 import { partitionCodeAgentOtlpPayload } from '@/lib/ingest/codeagent-otel/detect';
@@ -80,7 +81,7 @@ export async function POST(req: Request) {
   try {
     const apiKey = req.headers.get('x-witty-api-key');
     let authenticatedUser: string | undefined;
-    let hasInvalidApiKey = false;
+    const hasInvalidApiKey = false;
 
     if (apiKey) {
       const userRecord = await db.findUserByApiKey(apiKey);
@@ -150,6 +151,7 @@ export async function POST(req: Request) {
       });
     }
 
+    const actrailPayload = isActrailOtlpTraceBody(body);
     const receivedAt = new Date().toISOString();
     const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser })
       .map(isolateQwenCodeOtelEvent);
@@ -176,21 +178,31 @@ export async function POST(req: Request) {
         rejectedEvents: rejectedQwenEvents.length,
       });
     }
-    const { dirtySessionIds } = appendOtelTraceEvents(acceptedEvents);
+    const appendResult = appendOtelTraceEvents(
+      acceptedEvents,
+      actrailPayload ? getActrailOtelTraceSpoolDir() : undefined,
+    );
+    const rejectedForIdentityLimit = appendResult.rejectedEvents;
     return NextResponse.json({
-      status: 'accepted',
-      received: acceptedEvents.length,
-      sessions: dirtySessionIds,
-      ...(rejectedQwenEvents.length ? {
+      status: rejectedForIdentityLimit > 0 ? 'partial' : 'accepted',
+      received: acceptedEvents.length - rejectedForIdentityLimit,
+      persisted: appendResult.events.length,
+      deduplicated: appendResult.deduplicatedEvents,
+      sessions: appendResult.dirtySessionIds,
+      ...(rejectedQwenEvents.length || rejectedForIdentityLimit > 0 ? {
         rejected: {
-          qwencode: {
+          ...(rejectedQwenEvents.length ? { qwencode: {
             events: rejectedQwenEvents.length,
             reason: 'invalid-api-key',
-          },
+          } } : {}),
+          ...(rejectedForIdentityLimit > 0 ? { spool: {
+            events: rejectedForIdentityLimit,
+            reason: 'goal-plus-session-identity-limit',
+          } } : {}),
         },
       } : {}),
       ...ignoredCodeAgentSpans(codeAgentPartition.codeAgentResourceCount),
-    });
+    }, rejectedForIdentityLimit > 0 ? { status: 413 } : undefined);
   } catch (err: any) {
     console.error('[OTel] Trace ingest handler error:', err);
     return NextResponse.json(

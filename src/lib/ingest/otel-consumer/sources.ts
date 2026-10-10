@@ -2,6 +2,7 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import { aggregateClaudeOtelSession } from '@/lib/ingest/claude-otel/aggregator';
 import { aggregateCodeAgentOtelSession } from '@/lib/ingest/codeagent-otel/aggregator';
 import { aggregateOtelTraceSession } from '@/lib/ingest/otel/aggregate';
+import { aggregateDeepSeekHarnessOtelSession } from '@/lib/ingest/deepseek-harness-otel/aggregator';
 import {
   getClaudeOtelSpoolDir,
   listClaudeOtelSpoolFiles,
@@ -13,7 +14,16 @@ import {
   getCodeAgentOtelSpoolDir,
   listCodeAgentOtelSpoolFiles,
 } from '@/lib/ingest/codeagent-otel/spool';
-import { getOtelTraceSpoolDir, listOtelTraceSpoolFiles } from '@/lib/ingest/otel/spool';
+import {
+  getActrailOtelTraceSpoolDir,
+  getOtelTraceSpoolDir,
+  listOtelTraceSpoolFiles,
+} from '@/lib/ingest/otel/spool';
+import {
+  getDeepSeekHarnessOtelSpoolDir,
+  listDeepSeekHarnessOtelSpoolFiles,
+  listDeepSeekHarnessOtelSpoolFilesForDay,
+} from '@/lib/ingest/deepseek-harness-otel/spool';
 
 export type SpoolAggregationResult =
   | {
@@ -32,6 +42,7 @@ export type SpoolAggregationResult =
 export type SpoolSource = {
   id: string;
   spoolDir: () => string;
+  fileName?: 'logs.jsonl' | 'traces.jsonl' | 'events.jsonl';
   listFiles: () => string[];
   /** 只列某一天的文件。有它才能做"当天每 tick 扫、历史低频扫"的分层发现。 */
   listFilesForDay?: (day: string) => string[];
@@ -52,7 +63,18 @@ function codeAgentDefaultSkipEvaluation(): boolean {
 export function listSources(): SpoolSource[] {
   return [
     {
+      id: 'deepseek-harness-otel-logs',
+      fileName: 'events.jsonl',
+      spoolDir: getDeepSeekHarnessOtelSpoolDir,
+      listFiles: () => listDeepSeekHarnessOtelSpoolFiles(getDeepSeekHarnessOtelSpoolDir()),
+      listFilesForDay: (day) => listDeepSeekHarnessOtelSpoolFilesForDay(day, getDeepSeekHarnessOtelSpoolDir()),
+      aggregate: aggregateDeepSeekHarnessOtelSession,
+      statSession: (sessionId) => statSessionSpool(getDeepSeekHarnessOtelSpoolDir(), 'events.jsonl', sessionId),
+      defaultSkipEvaluation: () => true,
+    },
+    {
       id: 'codeagent-otel-logs',
+      fileName: 'logs.jsonl',
       spoolDir: getCodeAgentOtelSpoolDir,
       listFiles: () => listCodeAgentOtelSpoolFiles(getCodeAgentOtelSpoolDir()),
       listFilesForDay: (day) => listClaudeOtelSpoolFilesForDay(day, getCodeAgentOtelSpoolDir()),
@@ -62,6 +84,7 @@ export function listSources(): SpoolSource[] {
     },
     {
       id: 'claude-otel-logs',
+      fileName: 'logs.jsonl',
       spoolDir: getClaudeOtelSpoolDir,
       listFiles: () => listClaudeOtelSpoolFiles(getClaudeOtelSpoolDir()),
       listFilesForDay: (day) => listClaudeOtelSpoolFilesForDay(day, getClaudeOtelSpoolDir()),
@@ -70,7 +93,18 @@ export function listSources(): SpoolSource[] {
       defaultSkipEvaluation,
     },
     {
+      id: 'actrail-otel-traces',
+      fileName: 'traces.jsonl',
+      spoolDir: getActrailOtelTraceSpoolDir,
+      listFiles: () => listOtelTraceSpoolFiles(getActrailOtelTraceSpoolDir()),
+      listFilesForDay: (day) => listOtelTraceSpoolFilesForDay(day, getActrailOtelTraceSpoolDir()),
+      aggregate: (sessionId) => aggregateOtelTraceSession(sessionId, getActrailOtelTraceSpoolDir()),
+      statSession: (sessionId) => statSessionSpool(getActrailOtelTraceSpoolDir(), 'traces.jsonl', sessionId),
+      defaultSkipEvaluation: () => true,
+    },
+    {
       id: 'otel-traces',
+      fileName: 'traces.jsonl',
       spoolDir: getOtelTraceSpoolDir,
       listFiles: () => listOtelTraceSpoolFiles(getOtelTraceSpoolDir()),
       listFilesForDay: (day) => listOtelTraceSpoolFilesForDay(day, getOtelTraceSpoolDir()),

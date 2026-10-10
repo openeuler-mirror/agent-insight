@@ -64,6 +64,8 @@ function facts(inputs: Array<string | { kind: 'tool' | 'skill'; name: string }>)
       args: { value: stepIndex },
       result: { ok: true },
       status: 'completed',
+      errorMessage: null,
+      errorCode: null,
       interactionIndex: stepIndex,
     };
   });
@@ -74,7 +76,13 @@ function facts(inputs: Array<string | { kind: 'tool' | 'skill'; name: string }>)
   const calledCatalogCapabilities = [...new Map(calls.map((call) => [call.canonicalKey, {
     kind: call.kind, name: call.name, canonicalKey: call.canonicalKey,
   }])).values()];
-  return { calls, countsByCapability, calledCatalogCapabilities, unknownCalledCapabilities: [] };
+  return {
+    calls,
+    countsByCapability,
+    calledCatalogCapabilities,
+    unknownCalledCapabilities: [],
+    usage: { totalTokens: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, llmCallCount: 0, toolCallCount: 0, failedTurnTokens: 0, failedToolDurationMs: 0 },
+  };
 }
 
 const selectionDimensions = (): SelectionJudgeResult['dimensions'] => [
@@ -175,6 +183,27 @@ describe('Tool/Skill 上下文与轨迹事实', () => {
     assert.equal(extracted.calls[2].status, 'error');
     assert.equal(extracted.countsByCapability['tool:get_weather'], 2);
     assert.equal(extracted.calls.some((call) => call.name === 'task'), false);
+  });
+
+  it('混合成功失败 interaction：失败 Token 按回合计量，失败耗时按工具自身 timing 计量', () => {
+    const interactions = [{
+      role: 'assistant' as const,
+      usage: { total: 1200 },
+      tool_calls: [
+        { id: 'ok', name: 'search', arguments: '{}', state: 'completed', timing: { started_at: 10_000_000_000, completed_at: 10_000_000_200 } },
+        { id: 'bad', name: 'read', arguments: '{}', state: 'error', timing: { started_at: 10_000_000_200, completed_at: 10_000_000_400 } },
+        { id: 'bad2', name: 'read', arguments: '{}', state: 'error', timing: { started_at: 10_000_000_400, completed_at: 10_000_000_600 } },
+      ],
+    }];
+    const extracted = extractToolTraceFacts(interactions, [
+      { kind: 'tool', name: 'search' },
+      { kind: 'tool', name: 'read' },
+    ]);
+
+    // 回合级 Token：整个 interaction 的 usage.total 归入失败回合消耗（含成功调用），口径明确为「回合」
+    assert.equal(extracted.usage.failedTurnTokens, 1200);
+    // 工具级耗时：只有两次 error 调用的 timing 跨度累加（200+200=400ms），成功调用不计
+    assert.equal(extracted.usage.failedToolDurationMs, 400);
   });
 });
 

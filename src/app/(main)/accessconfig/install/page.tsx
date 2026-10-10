@@ -3,13 +3,10 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import {
     Terminal,
-    SquareTerminal,
     Key,
     Copy,
     Check,
     Info,
-    BookOpen,
-    ExternalLink,
     CircleCheck,
     Cloud,
     UserCircle,
@@ -18,9 +15,16 @@ import {
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
-import { apiFetch, getApiUrl } from '@/lib/client/api';
+import { getApiUrl } from '@/lib/client/api';
+import { getSelectedReportingChannels } from '@/lib/ingest/framework-reporting-channels';
+import {
+    FRAMEWORK_OPTIONS,
+    resolveInstallProfile,
+} from '@/lib/ingest/setup/install-profile';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
+import { Input } from '@/components/ui/input';
+import { isMctsRepoPath, mctsInstallCommand } from '@/lib/ingest/setup/mcts-install';
 
 /**
  * 客户端安装指导页。
@@ -29,60 +33,13 @@ import { Term } from '@/components/text/Term';
  * introRow(描述)、双列网格(主区 + 300px sidebar)、panelCard、lucide 图标统一。
  */
 
-/**
- * 可勾选的采集端框架。value 必须与 /api/ingest/setup 的白名单一致——
- * 勾选结果以 ?frameworks=a,b 传给脚本，脚本据此跳过终端内的交互选择。
- */
-const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
-    { value: 'opencode', label: 'OpenCode' },
-    { value: 'claude', label: 'Claude Code' },
-    { value: 'codeagent', label: 'CodeAgent' },
-    { value: 'openclaw', label: 'OpenClaw' },
-    { value: 'hermes', label: 'Hermes' },
-    { value: 'jiuwen', label: 'JiuwenSwarm' },
-    { value: 'llamaindex', label: 'LlamaIndex' },
-    { value: 'qoder', label: 'Qoder CN product family' },
-    { value: 'trae', label: 'Trae IDE' },
-    { value: 'actrail', label: 'AcTrail' },
-    { value: 'pi-agent', label: 'Pi Agent' },
-    { value: 'qwencode', label: 'Qwen Code' },
-    { value: 'codex', label: 'Codex' },
-];
+const FRAMEWORK_LABELS = new Map(FRAMEWORK_OPTIONS.map(option => [option.value, option.label]));
 
 export default function AccessInstallPage() {
     const { t, locale } = useLocale();
-    const { user, apiKey: ctxApiKey } = useAuth();
+    const { user, apiKey, authReady } = useAuth();
     const isZh = locale === 'zh';
-    const [apiKey, setApiKey] = useState<string | null>(ctxApiKey);
     const [copied, setCopied] = useState<string | null>(null);
-
-    useEffect(() => {
-        // 优先级:auth context > 后端按当前登录 user 查 > localStorage fallback
-        //
-        // 为啥不再优先用 localStorage:之前是 localStorage > ctxApiKey > 后端,
-        // 导致切换账号后页面仍显示旧账号的 key(localStorage 不会跟着登录态变)。
-        // 用户混淆"我登录的是 A 但页面显示 B 的 key",而且采集端配的也是错的 key,
-        // 上报到的是 B 的 trace 名下,A 用户看不到。
-        if (ctxApiKey) {
-            setApiKey(ctxApiKey);
-            return;
-        }
-        if (!user) {
-            // 没登录态时只能用 localStorage 兜底(比如直接拷贝链接访问)
-            const stored = typeof window !== 'undefined' ? localStorage.getItem('api_key') : null;
-            if (stored) setApiKey(stored);
-            return;
-        }
-        // 有登录 user 但 ctx 暂时没 key —— 主动按 user 拉,确保跟当前账号匹配
-        apiFetch('/api/auth/apikey', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: user }),
-        })
-            .then(r => (r.ok ? r.json() : null))
-            .then(d => d?.apiKey && setApiKey(d.apiKey))
-            .catch(() => {});
-    }, [user, ctxApiKey]);
 
     // 用 useState + useEffect 而不是 useMemo + typeof window 检查:
     // useMemo 同步跑——server 端返回空、client 首次渲染返回实际命令,触发 hydration mismatch。
@@ -90,25 +47,41 @@ export default function AccessInstallPage() {
     const [linuxCmd, setLinuxCmd] = useState('');
     const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
+    const [mctsRepoDir, setMctsRepoDir] = useState('');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
+    const installProfile = resolveInstallProfile(
+        FRAMEWORK_OPTIONS.filter(option => frameworks.includes(option.value)),
+    );
+    const effectiveFrameworks = installProfile.effectiveFrameworks.map(option => option.value);
     useEffect(() => {
-        const protocol = window.location.protocol;
-        const h = window.location.host;
-        const baseUrl = `${protocol}//${h}`;
-        const setupUrl = getApiUrl('/api/ingest/setup');
-        // 逗号在 query 里合法，不编码——命令行里可读性更好。
-        const query = [
-            apiKey ? `key=${encodeURIComponent(apiKey)}` : '',
-            frameworks.length ? `yes=1` : '',
-            frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
-            frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
-        ].filter(Boolean).join('&');
-        const suffix = query ? `?${query}` : '';
-        setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
-        setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
-        setHost(baseUrl);
-    }, [apiKey, frameworks]);
+        const timer = window.setTimeout(() => {
+            const protocol = window.location.protocol;
+            const h = window.location.host;
+            const baseUrl = `${protocol}//${h}`;
+            setHost(baseUrl);
+            if (!authReady || !apiKey) {
+                setLinuxCmd('');
+                setWindowsCmd('');
+                return;
+            }
+            const setupUrl = getApiUrl('/api/ingest/setup');
+            // 逗号在 query 里合法，不编码——命令行里可读性更好。
+            const query = [
+                `key=${encodeURIComponent(apiKey)}`,
+                frameworks.length ? `yes=1` : '',
+                frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
+                frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
+            ].filter(Boolean).join('&');
+            const suffix = query ? `?${query}` : '';
+            const url = `${baseUrl}${setupUrl}${suffix}`;
+            setLinuxCmd(frameworks.includes('mcts-xgovernor')
+                ? mctsInstallCommand(url, mctsRepoDir)
+                : `curl -sSf "${url}" | bash`);
+            setWindowsCmd(`Invoke-Expression (Invoke-RestMethod -Uri "${baseUrl}${setupUrl}${suffix}" -Headers @{'x-platform'='windows'})`);
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [apiKey, authReady, frameworks, mctsRepoDir]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -152,7 +125,7 @@ export default function AccessInstallPage() {
         // 复制失败时静默——不打扰用户;按钮没变绿,他自然会再点一下或者手动复制
     };
 
-    const keyReady = !!apiKey;
+    const keyReady = authReady && !!apiKey;
     const langfuseUser = user || (isZh ? '<你的用户名>' : '<your-username>');
     const langfuseSecret = apiKey || (isZh ? '<你的 Agent Insight API Key>' : '<your Agent Insight API key>');
     const langfuseHost = host ? `${host}${getApiUrl('')}` : 'http://localhost:3000';
@@ -217,7 +190,9 @@ export default function AccessInstallPage() {
                                 <span style={countPill}>{frameworks.length}</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? '先勾选框架,再按系统二选一' : 'Pick your frameworks, then your OS'}
+                                    {isZh
+                                        ? '先勾选框架,再在目标 Agent 主机执行对应系统的命令 —— 同时完成本机纳管'
+                                        : 'Pick frameworks, then run the matching command on the target Agent host — also registers this host'}
                                 </span>
                             </div>
 
@@ -228,25 +203,37 @@ export default function AccessInstallPage() {
                                 locale={locale}
                             />
 
+                            {frameworks.includes('mcts-xgovernor') && (
+                                <MctsRepoField
+                                    value={mctsRepoDir}
+                                    onChange={setMctsRepoDir}
+                                    locale={locale}
+                                />
+                            )}
+
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
-                                label="Linux / macOS"
-                                hint={isZh ? '运行 bash / zsh 的终端' : 'bash / zsh shells'}
+                                label="Linux"
+                                hint={frameworks.includes('mcts-xgovernor')
+                                    ? (isZh ? '在 MCTS 执行机执行，自动完成配置、安装和客户端启动。Windows 请使用 WSL。' : 'Run on the MCTS host to configure, install and start the client. Use WSL on Windows.')
+                                    : (isZh ? '使用 Agent 所在 Linux 环境的 bash / zsh 终端' : 'Use a bash / zsh shell on the Linux Agent host')}
                                 cmd={linuxCmd}
+                                unavailableMessage={frameworks.includes('mcts-xgovernor') && !isMctsRepoPath(mctsRepoDir)
+                                    ? (isZh ? '请填写 MCTS 仓库的绝对路径' : 'Enter the absolute MCTS repository path') : undefined}
                                 copied={copied === 'linux'}
                                 onCopy={() => handleCopy(linuxCmd, 'linux')}
                                 locale={locale}
                             />
 
-                            <CommandCard
-                                icon={<SquareTerminal size={14} strokeWidth={2.2} />}
+                            {!frameworks.includes('mcts-xgovernor') && <CommandCard
+                                icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Windows (PowerShell)"
-                                hint={isZh ? '以管理员身份运行 PowerShell' : 'Run PowerShell as administrator'}
+                                hint={isZh ? '在 Windows PowerShell 中运行' : 'Run in Windows PowerShell'}
                                 cmd={windowsCmd}
                                 copied={copied === 'windows'}
                                 onCopy={() => handleCopy(windowsCmd, 'windows')}
                                 locale={locale}
-                            />
+                            />}
 
                             <div style={{ ...sectionHeading, marginTop: 8 }}>
                                 <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
@@ -296,8 +283,8 @@ export default function AccessInstallPage() {
                                 <div style={hintIcon}><Info size={16} /></div>
                                 <div style={{ flex: 1, fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
                                     <b style={{ color: 'var(--foreground)', fontWeight: 600 }}>{isZh ? '提示' : 'Tip'}</b> · {isZh
-                                        ? '若 API Key 切换了账号没刷新,请先退出并重新登录平台再复制 —— 客户端使用错误的 Key 上报时,trace 会落到原账号名下而非当前账号。'
-                                        : 'If you switched accounts but the API key did not refresh, log out and log back in before copying — a stale key sends traces to the old account.'}
+                                        ? '页面会先向服务端刷新并验证当前登录身份；验证完成前不会生成可复制的安装命令。切换平台地址或重建服务后，请重新打开本页并执行新命令。'
+                                        : 'This page refreshes and verifies the current server identity before generating a copyable command. After changing hosts or rebuilding the service, reopen this page and run a fresh command.'}
                                 </div>
                             </div>
                         </div>
@@ -314,9 +301,9 @@ export default function AccessInstallPage() {
                                 host={host}
                                 user={user}
                                 keyReady={keyReady}
+                                frameworks={effectiveFrameworks}
                                 locale={locale}
                             />
-                            <DocsPanel locale={locale} />
                         </aside>
                     </div>
                 </div>
@@ -325,12 +312,44 @@ export default function AccessInstallPage() {
     );
 }
 
+function MctsRepoField({
+    value, onChange, locale,
+}: {
+    value: string;
+    onChange: (value: string) => void;
+    locale: string;
+}) {
+    const isZh = locale === 'zh';
+    return (
+        <article style={commandCard}>
+            <label htmlFor="mcts-repo-dir" style={configLabel}>
+                {isZh ? 'MCTS 仓库路径 *' : 'MCTS repository path *'}
+            </label>
+            <Input
+                id="mcts-repo-dir"
+                type="text"
+                required
+                aria-invalid={value.length > 0 && !isMctsRepoPath(value)}
+                value={value}
+                onChange={event => onChange(event.target.value)}
+                placeholder="/opt/MCTS"
+                style={configInput}
+            />
+            <div style={langfuseNote}>
+                {isZh
+                    ? '填写执行机上的绝对路径。连接配置沿用该仓库的 testcases_union/config.env。'
+                    : 'Enter the absolute path on the execution host. Connection settings are read from testcases_union/config.env in this repository.'}
+            </div>
+        </article>
+    );
+}
+
 /* ====================== Sub-components ====================== */
 
 function FrameworkPicker({
     options, selected, onToggle, locale,
 }: {
-    options: { value: string; label: string }[];
+    options: readonly { value: string; label: string }[];
     selected: string[];
     onToggle: (value: string) => void;
     locale: string;
@@ -379,7 +398,7 @@ function FrameworkPicker({
 }
 
 function CommandCard({
-    icon, label, hint, cmd, copied, onCopy, locale,
+    icon, label, hint, cmd, copied, onCopy, locale, unavailableMessage,
 }: {
     icon: React.ReactNode;
     label: string;
@@ -388,6 +407,7 @@ function CommandCard({
     copied: boolean;
     onCopy: () => void;
     locale: string;
+    unavailableMessage?: string;
 }) {
     const isZh = locale === 'zh';
     return (
@@ -413,7 +433,7 @@ function CommandCard({
             </header>
             <div style={commandBox}>
                 <code style={commandCode}>
-                    {cmd || (isZh ? '加载中…' : 'Loading…')}
+                    {cmd || unavailableMessage || (isZh ? '加载中…' : 'Loading…')}
                 </code>
             </div>
         </article>
@@ -451,8 +471,8 @@ function ApiKeyPanel({
                 )}
                 <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 10, lineHeight: 1.6 }}>
                     {isZh
-                        ? '脚本运行时提示输入 API Key —— 粘贴上方值即可。'
-                        : 'Paste this when the script prompts for an API key.'}
+                        ? '左侧命令已包含当前账号的 API Key，复制后即可执行。'
+                        : 'The command includes your current API key and is ready to copy and run.'}
                 </div>
             </div>
         </section>
@@ -460,14 +480,16 @@ function ApiKeyPanel({
 }
 
 function ConnectionPanel({
-    host, user, keyReady, locale,
+    host, user, keyReady, frameworks, locale,
 }: {
     host: string;
     user: string | null;
     keyReady: boolean;
+    frameworks: string[];
     locale: string;
 }) {
     const isZh = locale === 'zh';
+    const reportingChannels = getSelectedReportingChannels(frameworks);
     return (
         <section style={panelCard}>
             <header style={panelHeader}>
@@ -492,18 +514,35 @@ function ConnectionPanel({
                         ? (isZh ? '已绑定' : 'Ready')
                         : (isZh ? '加载中' : 'Loading')}
                 />
-                <KvRow
-                    label={isZh ? '上报路径' : 'Ingest'}
-                    value="/api/ingest/v1/*"
-                    mono
-                />
-                <KvRow
-                    label={isZh ? 'OTEL 上报' : 'OTEL trace'}
-                    value="/api/public/otel/v1/traces"
-                    mono
-                    ellipsis
-                />
             </ul>
+            <div style={channelSectionHeader}>
+                <span>{isZh ? '当前上报通道' : 'Active reporting channels'}</span>
+                <span style={countPill}>{reportingChannels.length}</span>
+            </div>
+            {reportingChannels.length === 0 ? (
+                <div style={emptyChannelText}>
+                    {isZh ? '将在终端中选择框架。' : 'Choose frameworks in the terminal.'}
+                </div>
+            ) : (
+                <div style={channelList}>
+                    {reportingChannels.map(channel => (
+                        <div key={channel.id} style={channelItem}>
+                            <div style={channelLabel}>{isZh ? channel.labelZh : channel.labelEn}</div>
+                            <code style={channelEndpoint}>{channel.endpoint}</code>
+                            <div style={channelFrameworks}>
+                                {channel.frameworks.map(framework => FRAMEWORK_LABELS.get(framework) || framework).join(' · ')}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+            {reportingChannels.length > 0 && (
+                <div style={channelStatusNote}>
+                    {isZh
+                        ? '已受理不等于已可见，平台仍需异步聚合。'
+                        : 'Accepted data still requires asynchronous aggregation before it becomes visible.'}
+                </div>
+            )}
         </section>
     );
 }
@@ -540,6 +579,10 @@ function LangfuseEnvCard({
                     {envText}
                 </code>
             </div>
+            <div style={langfuseEndpointRow}>
+                <span>{isZh ? 'Langfuse 兼容入口' : 'Langfuse-compatible endpoint'}</span>
+                <code style={langfuseEndpointCode}>/api/public/otel/v1/traces</code>
+            </div>
             <div style={langfuseNote}>
                 {isZh
                     ? '这些以 LANGFUSE_ 开头的变量由 LangChain / LangGraph 的追踪回调读取,填好即可、无需改代码。PUBLIC_KEY 填当前 Agent Insight 用户名,SECRET_KEY 填该用户的 Agent Insight API Key;两者不对应时平台会拒绝上报。'
@@ -549,36 +592,12 @@ function LangfuseEnvCard({
     );
 }
 
-function DocsPanel({ locale }: { locale: string }) {
-    const isZh = locale === 'zh';
-    const links = isZh ? [
-        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
-        { label: '客户端高级配置', href: '#' },
-        { label: '常见接入问题排查', href: '#' },
-    ] : [
-        { label: 'User manual', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
-        { label: 'Advanced client configuration', href: '#' },
-        { label: 'Troubleshooting installation', href: '#' },
-    ];
-    return (
-        <section style={panelCard}>
-            <header style={panelHeader}>
-                <BookOpen size={13} strokeWidth={2.2} style={{ color: 'var(--foreground-secondary)' }} />
-                <span>{isZh ? '相关文档' : 'Related Docs'}</span>
-            </header>
-            <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
-                {links.map(l => (
-                    <li key={l.label}>
-                        <a href={l.href} target="_blank" rel="noopener noreferrer" style={docLink}>
-                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.label}</span>
-                            <ExternalLink size={12} strokeWidth={2} style={{ color: 'var(--foreground-muted)', flexShrink: 0 }} />
-                        </a>
-                    </li>
-                ))}
-            </ul>
-        </section>
-    );
-}
+/**
+ * 常驻客户端安装（IF-N01/N02）。
+ *
+ * 与上方的 Trace 采集器安装是两件事：这里装的是独立常驻服务，由 systemd / launchd 守护，
+ * 不随 Agent 平台启停，负责配置下发与双向控制通道。
+ */
 
 function KvRow({
     label, value, mono, bold, ellipsis, icon,
@@ -752,16 +771,91 @@ const panelKv: CSSProperties = {
     listStyle: 'none',
 };
 
-const docLink: CSSProperties = {
+const channelSectionHeader: CSSProperties = {
     display: 'flex',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 8,
-    padding: '7px 8px',
-    fontSize: 12.5,
+    paddingTop: 2,
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--foreground)',
+};
+
+const channelList: CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+};
+
+const channelItem: CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: '9px 10px',
+    background: 'var(--background-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    minWidth: 0,
+};
+
+const channelLabel: CSSProperties = {
+    fontSize: 11.5,
+    fontWeight: 600,
     color: 'var(--foreground-secondary)',
-    textDecoration: 'none',
-    borderRadius: 6,
-    transition: 'background .1s',
+};
+
+const channelEndpoint: CSSProperties = {
+    fontSize: 11,
+    lineHeight: 1.45,
+    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    color: 'var(--foreground)',
+    overflowWrap: 'anywhere',
+};
+
+const channelFrameworks: CSSProperties = {
+    fontSize: 10.5,
+    lineHeight: 1.45,
+    color: 'var(--foreground-muted)',
+    overflowWrap: 'anywhere',
+};
+
+const emptyChannelText: CSSProperties = {
+    padding: '10px',
+    border: '1px dashed var(--border)',
+    borderRadius: 8,
+    background: 'var(--background-secondary)',
+    fontSize: 11.5,
+    lineHeight: 1.5,
+    color: 'var(--foreground-muted)',
+};
+
+const channelStatusNote: CSSProperties = {
+    fontSize: 10.5,
+    lineHeight: 1.5,
+    color: 'var(--foreground-muted)',
+};
+
+const langfuseEndpointRow: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: '8px 10px',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: 'var(--background-secondary)',
+    fontSize: 11.5,
+    color: 'var(--foreground-secondary)',
+};
+
+const langfuseEndpointCode: CSSProperties = {
+    minWidth: 0,
+    fontSize: 11,
+    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    color: 'var(--foreground)',
+    overflowWrap: 'anywhere',
+    textAlign: 'right',
 };
 
 const commandCard: CSSProperties = {
@@ -778,6 +872,24 @@ const commandCardHeader: CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 12,
+};
+
+const configLabel: CSSProperties = {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: 'var(--foreground)',
+};
+
+const configInput: CSSProperties = {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '9px 11px',
+    color: 'var(--foreground)',
+    background: 'var(--background-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    fontSize: 12,
 };
 
 const commandIconBox: CSSProperties = {

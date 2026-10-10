@@ -13,7 +13,7 @@ const {
   serializeHooksDocument,
   uninstallOtelBlock,
 } = require("./config-core.cjs");
-const { apiKeyHash } = require("../shared/trace-transport.cjs");
+const { apiKeyHash, getAgentInsightHome } = require("../shared/trace-transport.cjs");
 
 const EXTENSION_ID = "openeuler.agent-insight-codex-trace";
 
@@ -36,7 +36,7 @@ function parseArgs(argv) {
 }
 
 function expectedCollectorDir(homeDir = os.homedir()) {
-  return path.resolve(homeDir, ".agent-insight", "collectors", "codex");
+  return path.resolve(getAgentInsightHome(homeDir), "collectors", "codex");
 }
 
 function assertManagedPath(candidate, homeDir = os.homedir()) {
@@ -55,8 +55,7 @@ async function stopRelay(collectorDir) {
   const config = await readJson(path.join(collectorDir, "config.json")).catch(() => undefined);
   if (!config?.apiKey) return false;
   const stateDir = path.join(
-    config.homeDir || os.homedir(),
-    ".agent-insight",
+    getAgentInsightHome(config.homeDir || os.homedir()),
     "otel_data",
     "codex",
     apiKeyHash(config.apiKey),
@@ -131,8 +130,7 @@ async function uninstall(options, homeDir = os.homedir()) {
   let purgedPath;
   if (options.purge) {
     const namespaceRoot = path.resolve(
-      config.homeDir || homeDir,
-      ".agent-insight",
+      getAgentInsightHome(config.homeDir || homeDir),
       "otel_data",
       "codex",
     );

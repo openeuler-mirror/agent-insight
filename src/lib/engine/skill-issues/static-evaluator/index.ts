@@ -74,7 +74,7 @@ const L1_DIMENSION_TO_L2_NAME: Record<string, string> = {
  *
  * 仅在 L2 跑成功后调用——L1 不单独评分，纯 L1 的命中只产出 issue，不产出分数。
  */
-function mergeL1FloorWithL2Scores(
+export function mergeL1FloorWithL2Scores(
   diagnoses: LinterDiagnosis[],
   l2Scores: Record<string, number>,
 ): Record<string, number> {

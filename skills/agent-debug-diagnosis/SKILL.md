@@ -28,7 +28,7 @@ description: >
   -> 写入并冻结 core 报告
   -> 同一个 Agent 调用 Skill-local 专项诊断器
   -> 同一个 Agent 富化、语义查重与关联
-  -> 校验无损约束并返回完整最终报告
+  -> 写入并校验完整最终报告文件，再返回完成标记
 ```
 
 项目后端只负责挂载 Skill、准备输入与 trace 资料包、启动 Agent、存储和流式转发。诊断器运行、通用富化、查重关联和最终报告生成都由执行该 Skill 的同一个 Agent 完成；确定性脚本负责发现诊断器、产出结构化事实和校验最终结果。
@@ -99,7 +99,7 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 
 ## 一键诊断不可违反的规则
 
-- 最终回答只能是一个 JSON 对象，不能有 Markdown 代码块，不能有额外解释。
+- `.agent-insight/agent-debug-final.json` 是唯一报告真源；校验通过后最终回答只能是 `AGENT_DEBUG_REPORT_READY`，不得回显报告 JSON、摘要或额外说明。
 - 所有自然语言报告字段必须用中文；枚举值保留英文。
 - Action 必须来自真实工具调用或明确动作标签，不能由 LLM 编造。
 - 用户界面永远关联左侧真实 trace 节点；不要把内部诊断 step/turn 当作用户可见位置。
@@ -142,11 +142,11 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 10. 运行 `detector_runner.py run-all --mode one_click`，读取 `.agent-insight/agent-debug-detectors.json`；诊断器失败必须保留 `errors`，不得伪造结果。
 11. 当前 Agent 基于真实 trace 样本富化专项结果的说明文字，不得改变 `facts`、`anchors`、`details` 中的计数、区间、比例和锚点。
 12. 按 `08-detector-reconciliation.md` 直接生成完整最终报告：重复结果写入 core finding 的 `supplementalEvidence`；不重复结果写入 `detectorFindings`；仅相关结果可设置 `relatedFindingId`。
-13. 写入 `.agent-insight/agent-debug-final.json`，同时传入 `--static`、`--core`、`--detectors` 校验；修正错误后返回该完整 JSON。
+13. 写入 `.agent-insight/agent-debug-final.json`，同时传入 `--static`、`--core`、`--detectors` 校验；修正错误并确认校验通过后，只返回 `AGENT_DEBUG_REPORT_READY`。
 
 ## 一键诊断输出要求
 
-必须返回这些顶层字段：
+最终报告文件必须包含这些顶层字段：
 
 - `triage`
 - `stepRecords`

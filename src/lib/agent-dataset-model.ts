@@ -3,13 +3,24 @@ import type {
   DatasetCaseRootCauseMeta,
   RootCauseItem,
 } from './dataset-case-root-causes';
+import type {
+  BenchmarkPresentation,
+  BenchmarkPresentationColumn,
+  BenchmarkPresentationFormat,
+} from '../../packages/benchmark-protocol/src/contracts';
 
-export type DatasetKind = 'ideal_output' | 'trajectory';
+export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
+
+export function coerceDatasetKind(value: unknown): DatasetKind {
+  if (value === 'trajectory' || value === 'reliability' || value === 'benchmark') return value;
+  return 'ideal_output';
+}
 
 /** Case 来源；'user' = 用户手填，'skill-gen-draft' = skill 生成时自动起草。 */
 export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
 
 export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+export type DatasetFieldDisplayType = BenchmarkPresentationColumn['type'];
 export type TraceBackflowArtifactSource = 'input' | 'output' | 'trace' | 'none';
 
 export function defaultTraceBackflowSourceForField(key: string): TraceBackflowArtifactSource {
@@ -49,6 +60,11 @@ export interface DatasetField {
   key: string;
   label: string;
   type: DatasetFieldType;
+  path?: string;
+  displayType?: DatasetFieldDisplayType;
+  width?: number;
+  format?: BenchmarkPresentationFormat;
+  truncate?: number;
   description?: string;
   system?: boolean;
 }
@@ -90,6 +106,29 @@ export interface DatasetCase {
   rootCauseMeta?: DatasetCaseRootCauseMeta;
 }
 
+export function hasMeaningfulDatasetCaseValue(
+  datasetCase: DatasetCase,
+  fields: readonly DatasetField[],
+): boolean {
+  return fields.some(field => {
+    const value = datasetCase.values && Object.hasOwn(datasetCase.values, field.key)
+      ? datasetCase.values[field.key]
+      : field.key === 'input'
+        ? datasetCase.input
+        : field.key === 'reference_output'
+          ? datasetCase.expectedOutput
+          : field.key === 'trajectory' || field.key === 'trace'
+            ? datasetCase.trajectory
+            : undefined;
+
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value).length > 0;
+    return true;
+  });
+}
+
 export interface AgentDataset {
   id: string;
   name: string;
@@ -103,6 +142,16 @@ export interface AgentDataset {
   cases: DatasetCase[];
   createdAt: string;
   updatedAt: string;
+  readOnly?: boolean;
+  shared?: boolean;
+  benchmark?: {
+    adapterKey: string;
+    evaluatorKey: string;
+    displayName: string;
+    status: string;
+    profileKey?: string;
+    presentation?: BenchmarkPresentation;
+  };
 }
 
 export const EVALUATOR_CATALOG_FIELD_KEYS = ['available_tools', 'available_skills'] as const;
@@ -145,10 +194,33 @@ export function createEvaluatorCatalogField(
 }
 
 export function defaultDatasetSchemaFields(kind: DatasetKind): DatasetField[] {
+  if (kind === 'benchmark') {
+    return [
+      { id: 'input', key: 'input', path: 'input', label: '输入', type: 'text', displayType: 'text', system: true },
+      {
+        id: 'externalCaseId',
+        key: 'externalCaseId',
+        path: 'externalCaseId',
+        label: 'Case ID',
+        type: 'text',
+        displayType: 'code',
+        system: true,
+      },
+    ];
+  }
   const fields: DatasetField[] = [
     { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
-    { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
   ];
+  if (kind === 'reliability') {
+    fields.push({
+      id: 'fault_injection_type',
+      key: 'fault_injection_type',
+      label: '故障注入类型',
+      type: 'text',
+      system: true,
+    });
+  }
+  fields.push({ id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true });
   if (kind === 'trajectory') {
     fields.push({ id: 'trajectory', key: 'trajectory', label: '轨迹', type: 'json', system: true });
   }
@@ -181,10 +253,17 @@ export const TRAJECTORY_PLACEHOLDER = `{
   "root_step": { }
 }`;
 
-export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'>): string[] {
-  return dataset.datasetKind === 'trajectory'
-    ? ['input', 'reference_output', 'trajectory']
-    : ['input', 'reference_output'];
+export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'> & Partial<Pick<AgentDataset, 'fields'>>): string[] {
+  if (dataset.datasetKind === 'benchmark') {
+    return (dataset.fields || []).map(field => field.label || field.key).filter(Boolean);
+  }
+  if (dataset.datasetKind === 'trajectory') {
+    return ['input', 'reference_output', 'trajectory'];
+  }
+  if (dataset.datasetKind === 'reliability') {
+    return ['input', 'fault_injection_type', 'reference_output'];
+  }
+  return ['input', 'reference_output'];
 }
 
 /** 轨迹列占位示例（纯文本，可按需填写） */
@@ -223,20 +302,34 @@ export interface DatasetDefaultFieldDef {
 
 /** 两种场景下的默认列配置 */
 export function defaultFieldsForKind(kind: DatasetKind): DatasetDefaultFieldDef[] {
+  if (kind === 'benchmark') {
+    return [
+      { key: 'input', dataType: 'String', required: '是', description: '公开任务输入' },
+      { key: 'externalCaseId', dataType: 'String', required: '是', description: 'Benchmark Case 标识' },
+    ];
+  }
   const base: DatasetDefaultFieldDef[] = [
     {
       key: 'input',
       dataType: 'String',
-      required: '否',
+      required: kind === 'reliability' ? '是' : '否',
       description: '作为输入投递给评测对象',
     },
-    {
-      key: 'reference_output',
-      dataType: 'String',
-      required: '否',
-      description: '预期理想输出，可作为评估时的参考标准',
-    },
   ];
+  if (kind === 'reliability') {
+    base.push({
+      key: 'fault_injection_type',
+      dataType: 'String',
+      required: '是',
+      description: '故障模式 id（须来自 GET /api/reliability/fault-modes）',
+    });
+  }
+  base.push({
+    key: 'reference_output',
+    dataType: 'String',
+    required: '否',
+    description: '预期理想输出，可作为评估时的参考标准',
+  });
   if (kind === 'trajectory') {
     base.push({
       key: 'trajectory',

@@ -10,7 +10,7 @@ export const actrailAdapter: FrameworkAdapter = {
   },
   capabilities: {
     skills: true,
-    subagentTree: false,
+    subagentTree: true,
   },
   sessionMergeStrategy: 'snapshot-replace',
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,

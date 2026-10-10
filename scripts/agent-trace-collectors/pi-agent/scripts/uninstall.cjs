@@ -17,6 +17,7 @@ const homeDir = os.homedir();
 const expectedPackageDir = path.resolve(homeDir, ".agent-insight", "collectors", "pi-agent");
 const packageDir = path.resolve(__dirname, "..");
 const piSpoolRoot = path.resolve(homeDir, ".agent-insight", "otel_data", "pi-agent");
+const goalPlusPackageDir = path.resolve(homeDir, ".agent-insight", "collectors", "goal-plus");
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -28,7 +29,11 @@ function piCommand() {
 }
 
 function assertExactPath(actual, expected, label) {
-  if (path.resolve(actual) !== path.resolve(expected)) {
+  const canonical = value => {
+    try { return fs.realpathSync.native(path.resolve(value)); }
+    catch { return path.resolve(value); }
+  };
+  if (canonical(actual) !== canonical(expected)) {
     fail(`Refusing to remove unexpected ${label} path: ${actual}`);
   }
 }
@@ -63,5 +68,23 @@ if (purgeAll) {
   fs.rmSync(piSpoolRoot, { recursive: true, force: true });
 }
 
+const goalPlusConfigPath = path.join(goalPlusPackageDir, "config.json");
+if (fs.existsSync(goalPlusConfigPath)) {
+  const goalPlusConfig = JSON.parse(fs.readFileSync(goalPlusConfigPath, "utf8"));
+  if (goalPlusConfig.managedBy === "pi-agent") {
+    const stopResult = spawnSync(process.execPath, [
+      path.join(goalPlusPackageDir, "goal-plus-collector.cjs"),
+      "stop",
+      "--config",
+      goalPlusConfigPath,
+      "--home",
+      homeDir,
+    ], { encoding: "utf8", windowsHide: true });
+    if (stopResult.error || stopResult.status !== 0) {
+      fail(`Cannot stop the Pi-managed Goal Plus observer: ${String(stopResult.stderr || stopResult.error?.message || "unknown error").trim()}`);
+    }
+  }
+}
+
 fs.rmSync(packageDir, { recursive: true, force: true });
-process.stdout.write("Pi Agent collector removed. Shared transport and non-Pi collector data were not modified.\n");
+process.stdout.write("Pi Agent collector removed. Its bundled Goal Plus observer was stopped; shared transport and collected data were preserved.\n");

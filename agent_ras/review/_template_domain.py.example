@@ -1,0 +1,12 @@
+# coding: utf-8
+"""Example REVIEW_PLUGIN template (copy to review/<domain>.py)."""
+from __future__ import annotations
+
+from detectors.types import ReviewPlugin
+
+# REVIEW_PLUGIN = ReviewPlugin(
+#     id="example_domain",  # same domain_id as DETECTOR_PLUGIN
+#     review_skill="example-review",  # → review/skills/<id>/SKILL.md
+# )
+
+__all__: list[str] = []

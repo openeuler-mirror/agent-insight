@@ -69,4 +69,28 @@ test('trajectory evaluator stays single-agent and forbids subagents', () => {
   assert.doesNotMatch(source, /name:\s*'completeness-checker'/);
   assert.doesNotMatch(source, /name:\s*'tool-choice-judge'/);
   assert.doesNotMatch(source, /name:\s*'attribution-locator'/);
+  assert.match(source, /new AgentInsight\(\{[\s\S]*?directory:\s*'\/tmp'/);
+  assert.match(source, /createSession\(\{[\s\S]*?directory:\s*'\/tmp'/);
+});
+
+test('OpenCode 评估器创建 Session 时都绑定确定的工作目录', () => {
+  const fixedDirectoryEvaluators = [
+    'src/lib/engine/experiment/judge-llm.ts',
+    'src/lib/engine/evaluation/custom-llm-evaluator.ts',
+    'src/lib/engine/evaluation/opencode-task-completion-evaluator.ts',
+    'src/lib/engine/evaluation/opencode-trajectory-evaluator.ts',
+  ];
+  for (const relativePath of fixedDirectoryEvaluators) {
+    const source = fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+    assert.match(source, /createSession\(\{[\s\S]*?directory:\s*'\/tmp'/, relativePath);
+  }
+
+  const suggestionAgent = fs.readFileSync(
+    path.join(process.cwd(), 'src/lib/engine/evaluation/skill-suggestion-agent.ts'),
+    'utf8',
+  );
+  assert.match(
+    suggestionAgent,
+    /createSession\(\{[\s\S]*?directory:\s*args\.workspaceDir/,
+  );
 });

@@ -150,6 +150,9 @@ export default function SkillOptimizePage() {
     // 当前活跃会话 id —— 持久化在 SkillOptSession 里。chat 路由用它作为 threadId
     // （workspace 复用 + opencode session 复用）；空字符串表示还没拿到 session 列表。
     const [currentSessionId, setCurrentSessionId] = useState<string>('');
+    const [sessionLoading, setSessionLoading] = useState(true);
+    const [sessionError, setSessionError] = useState<string | null>(null);
+    const optimizationReady = Boolean(currentSessionId) && Boolean(baselineFiles) && !baselineLoading;
     // 当前 (skill, baseVersion) 范围内的会话列表（按 updatedAt 倒序）
     interface SessionLite {
         id: string;
@@ -364,26 +367,22 @@ export default function SkillOptimizePage() {
     const fetchSessions = useCallback(async (): Promise<SessionLite[]> => {
         if (!user || !skill) return [];
         const url = `/api/skill-opt/sessions?user=${encodeURIComponent(user)}&skillName=${encodeURIComponent(skill.name)}&baseVersion=${baseVersion}`;
-        try {
-            const res = await fetch(url);
-            const data = await res.json();
-            const list: SessionLite[] = (data?.sessions || []).map((s: any) => {
-                const iters = s.iterations || [];
-                const maxDraft = iters.reduce((m: number, it: any) => Math.max(m, it.draftNumber || 0), 0);
-                return {
-                    id: s.id,
-                    title: s.title || '新对话',
-                    updatedAt: s.updatedAt,
-                    iterationCount: iters.length,
-                    latestDraftNumber: maxDraft,
-                };
-            });
-            setSessions(list);
-            return list;
-        } catch (err) {
-            console.warn('[skill-opt] fetchSessions failed:', err);
-            return [];
-        }
+        const res = await fetch(url);
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.error || `加载优化会话失败（HTTP ${res.status}）`);
+        const list: SessionLite[] = (data?.sessions || []).map((s: any) => {
+            const iters = s.iterations || [];
+            const maxDraft = iters.reduce((m: number, it: any) => Math.max(m, it.draftNumber || 0), 0);
+            return {
+                id: s.id,
+                title: s.title || '新对话',
+                updatedAt: s.updatedAt,
+                iterationCount: iters.length,
+                latestDraftNumber: maxDraft,
+            };
+        });
+        setSessions(list);
+        return list;
     }, [user, skill, baseVersion]);
 
     /**
@@ -403,16 +402,20 @@ export default function SkillOptimizePage() {
                     title: '新对话',
                 }),
             });
-            const data = await res.json();
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.error || `创建优化会话失败（HTTP ${res.status}）`);
             if (data?.session?.id) {
                 applySessionDetail(data.session);
                 setCurrentSessionId(data.session.id);
+                setSessionError(null);
                 setIsHistoryOpen(false);
                 await fetchSessions();
                 return data.session.id as string;
             }
+            throw new Error('创建优化会话失败：响应中缺少会话 ID');
         } catch (err) {
             console.warn('[skill-opt] handleNewChat failed:', err);
+            setSessionError(err instanceof Error ? err.message : '创建优化会话失败，请稍后重试');
         }
         return null;
     }, [user, skill, baseVersion, applySessionDetail, fetchSessions]);
@@ -423,14 +426,20 @@ export default function SkillOptimizePage() {
     const switchSession = useCallback(async (sessionId: string) => {
         try {
             const res = await fetch(`/api/skill-opt/sessions/${sessionId}`);
-            const data = await res.json();
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.error || `加载优化会话失败（HTTP ${res.status}）`);
             if (data?.session) {
                 applySessionDetail(data.session);
                 setCurrentSessionId(sessionId);
+                setSessionError(null);
                 setIsHistoryOpen(false);
+                return true;
             }
+            throw new Error('加载优化会话失败：响应中缺少会话数据');
         } catch (err) {
             console.warn('[skill-opt] switchSession failed:', err);
+            setSessionError(err instanceof Error ? err.message : '加载优化会话失败，请稍后重试');
+            return false;
         }
     }, [applySessionDetail]);
 
@@ -452,6 +461,7 @@ export default function SkillOptimizePage() {
             }
         } catch (err) {
             console.warn('[skill-opt] deleteSession failed:', err);
+            setSessionError(err instanceof Error ? err.message : '删除优化会话失败，请稍后重试');
         }
     }, [currentSessionId, fetchSessions, switchSession, handleNewChat]);
 
@@ -462,13 +472,25 @@ export default function SkillOptimizePage() {
     useEffect(() => {
         if (!user || !skill) return;
         let cancelled = false;
+        setCurrentSessionId('');
+        setSessionLoading(true);
+        setSessionError(null);
         (async () => {
-            const list = await fetchSessions();
-            if (cancelled) return;
-            if (list.length > 0) {
-                await switchSession(list[0].id);
-            } else {
-                await handleNewChat();
+            try {
+                const list = await fetchSessions();
+                if (cancelled) return;
+                if (list.length > 0) {
+                    await switchSession(list[0].id);
+                } else {
+                    await handleNewChat();
+                }
+            } catch (err) {
+                console.warn('[skill-opt] initialize session failed:', err);
+                if (!cancelled) {
+                    setSessionError(err instanceof Error ? err.message : '优化会话初始化失败，请稍后刷新');
+                }
+            } finally {
+                if (!cancelled) setSessionLoading(false);
             }
         })();
         return () => { cancelled = true; };
@@ -544,17 +566,20 @@ export default function SkillOptimizePage() {
 
     const startOptimize = async (opts?: { planId?: string; planSourceIssueIds?: string[]; feedbackText?: string }) => {
         if (!skill || optimizing) return;
-        if (!opts?.planId && checkedIssueIds.size === 0 && !input.trim()) return;
+        const userInputText = opts?.feedbackText ?? input.trim();
+        if (!opts?.planId && checkedIssueIds.size === 0 && !userInputText) return;
         // session 还没创建好（页面进入 → fetchSessions → handleNewChat 那个链路还在跑）就不发请求
         if (!currentSessionId) {
             console.warn('[skill-opt] startOptimize called before session ready');
+            setSessionError('优化会话尚未就绪，请稍后重试');
             return;
         }
+        if (!baselineFiles || baselineLoading) return;
+        setSessionError(null);
 
         const checked = issues.filter(i => checkedIssueIds.has(i.id));
         // plan 模式（一键优化）：resolve / 已优化标记用 plan 的源 issue id；手动模式用勾选的。
         const resolveIds = opts?.planSourceIssueIds ?? checked.map(i => i.id);
-        const userInputText = opts?.feedbackText ?? input.trim();
 
         // 1) push 用户消息 + 一个空 agent turn（streaming=true）
         //    后续所有 thinking / text / tool 事件都作为 block 追加到这个 turn 里
@@ -1012,9 +1037,9 @@ export default function SkillOptimizePage() {
     }, [currentSessionId]);
 
     const sendMessage = () => {
-        if (!input.trim()) return;
-        setChat(c => [...c, { kind: 'user', id: safeUUID(), text: input.trim() }]);
-        setInput('');
+        const message = input.trim();
+        if (!message || optimizing || merging || !optimizationReady) return;
+        void startOptimize({ feedbackText: message });
     };
 
     if (!skill) {
@@ -1218,6 +1243,7 @@ export default function SkillOptimizePage() {
                                 || merging
                                 || baselineLoading
                                 || !baselineFiles
+                                || !optimizationReady
                             }
                             onClick={startOneClickOptimize}
                             title="自动合并全部优化点（去重 / 冲突消解 / 分核心·长尾），再一键执行"
@@ -1235,6 +1261,7 @@ export default function SkillOptimizePage() {
                                 || merging
                                 || baselineLoading
                                 || !baselineFiles
+                                || !optimizationReady
                             }
                             onClick={() => startOptimize()}
                             title={
@@ -1343,6 +1370,15 @@ export default function SkillOptimizePage() {
                             );
                         })}
                     </div>
+                    {sessionLoading && !sessionError && (
+                        <div className="input-status">正在准备优化会话…</div>
+                    )}
+                    {sessionError && (
+                        <div className="input-status error" role="alert">{sessionError}</div>
+                    )}
+                    {baselineError && (
+                        <div className="input-status error" role="alert">base 版本加载失败：{baselineError}</div>
+                    )}
                     <div className="input-bar">
                         <textarea
                             value={input}
@@ -1356,7 +1392,12 @@ export default function SkillOptimizePage() {
                             }}
                             placeholder="补充优化诉求，Enter 发送 / Shift+Enter 换行"
                         />
-                        <button onClick={sendMessage}>发送</button>
+                        <button
+                            disabled={!input.trim() || optimizing || merging || !optimizationReady}
+                            onClick={sendMessage}
+                        >
+                            {optimizing ? '优化中…' : '发送'}
+                        </button>
                     </div>
                 </main>
 
@@ -1451,4 +1492,3 @@ export default function SkillOptimizePage() {
         </>
     );
 }
-

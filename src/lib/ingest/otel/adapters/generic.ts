@@ -37,9 +37,24 @@ function eventModel(event: OtelTraceEvent): string | undefined {
 }
 
 function isAgentContainer(event: OtelTraceEvent): boolean {
+  if (event.kind === 'agent') return true;
   const attrs = event.attributes || {};
   const kind = String(attrs['openinference.span.kind'] || attrs['traceloop.span.kind'] || attrs['span.kind'] || '').toUpperCase();
   return kind === 'AGENT' || String(event.name || '').toLowerCase() === 'agent';
+}
+
+function explicitTraceLifecycle(events: OtelTraceEvent[]): { startedAt: Date; completedAt: Date } | undefined {
+  const terminal = events.find((event) => (
+    isAgentContainer(event)
+    && (event.attributes?.['agent.insight.trace.completed'] === true
+      || event.attributes?.['agent.insight.trace.completed'] === 'true')
+  ));
+  if (!terminal) return undefined;
+  const startedAt = terminal.startTimeMs || Date.parse(terminal.receivedAt) || Date.now();
+  return {
+    startedAt: new Date(startedAt),
+    completedAt: new Date(startedAt + Math.max(0, terminal.latencyMs || 0)),
+  };
 }
 
 function toIso(value: number): string {
@@ -138,6 +153,7 @@ export function aggregateGenericOtelTraceEvents(sessionId: string, events: OtelT
   const lastContent = [...interactions].reverse().find((interaction) => interaction?.content);
   const firstEvent = ordered[0];
   const modelEvent = ordered.find((event) => eventModel(event));
+  const traceLifecycle = explicitTraceLifecycle(ordered);
 
   return {
     task_id: sessionId,
@@ -148,6 +164,8 @@ export function aggregateGenericOtelTraceEvents(sessionId: string, events: OtelT
     latency,
     final_result: lastContent?.content || '',
     timestamp: new Date(firstEvent.startTimeMs || Date.parse(firstEvent.receivedAt) || Date.now()),
+    trace_started_at: traceLifecycle?.startedAt,
+    trace_completed_at: traceLifecycle?.completedAt,
     label: firstEvent.serviceName || 'unknown-service',
     user: firstEvent.user || 'anonymous',
     interactions,

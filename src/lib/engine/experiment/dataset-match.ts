@@ -5,9 +5,9 @@
  *   利用率与选择合理性评估器取得“本次任务可用的能力目录”。available_tools 是上下文
  *   的入口字段且允许显式空数组，available_skills 可选；Agent/子 Agent 不在该目录中。
  *
- * 两类数据独立匹配、独立判断是否覆盖已有值，也可以只有其中一类。匹配口径刻意保守：
- * 输入文本 trim 后全等才算命中，不做模糊或相似度匹配，避免把其他任务的参考答案或能力
- * 目录写入当前 case。默认保护已有标注；调用方只有显式传 overwrite 才会覆盖。
+ * 两类数据独立匹配、独立判断是否覆盖已有值，也可以只有其中一类。Trace 输入包含数据集
+ * 输入即命中；多条数据集输入同时命中时优先取更长、更具体的一条。默认保护已有标注；
+ * 调用方只有显式传 overwrite 才会覆盖。
  */
 import {
   contextFromAvailableCatalogFields,
@@ -43,12 +43,36 @@ export interface DatasetMatchResult {
   unmatched: number;
   contextMatched: number;
   contextSkipped: number;
+  /** case key → 确定性命中的数据集输入；即使该数据项没有预期输出也会记录。 */
+  datasetInputUpdates?: Record<string, string>;
+  datasetInputMatched?: number;
 }
 
-const norm = (s: string | null | undefined) => (s ?? '').trim();
+const norm = (s: string | null | undefined) => (s ?? '').trim().replace(/\s+/g, ' ');
+
+/** Trace 输入包含数据集输入即命中；多条命中时取最长输入，同长度保持数据集原顺序。 */
+export function findBestDatasetInputMatch<T extends { input?: string | null }>(
+  traceInput: string | null | undefined,
+  datasetCases: readonly T[],
+): T | undefined {
+  const normalizedTraceInput = norm(traceInput);
+  if (!normalizedTraceInput) return undefined;
+
+  let best: T | undefined;
+  let bestLength = -1;
+  for (const datasetCase of datasetCases) {
+    const datasetInput = norm(datasetCase.input);
+    if (!datasetInput || !normalizedTraceInput.includes(datasetInput)) continue;
+    if (datasetInput.length > bestLength) {
+      best = datasetCase;
+      bestLength = datasetInput.length;
+    }
+  }
+  return best;
+}
 
 /**
- * 按输入精确匹配回填参考输出。
+ * Trace 输入包含数据集输入时回填参考输出。
  * @param overwrite 为 true 时覆盖已标注的 case（默认 false=跳过）
  */
 export function matchDatasetCases(
@@ -84,16 +108,28 @@ export function matchDatasetCases(
   const result: DatasetMatchResult = {
     updates: {}, contextUpdates: {}, matched: 0, skipped: 0, unmatched: 0,
     contextMatched: 0, contextSkipped: 0,
+    datasetInputUpdates: {}, datasetInputMatched: 0,
   };
+  const allInputs = datasetCases.map((item) => ({ input: norm(item.input) })).filter((item) => item.input);
+  const referenceInputs = Array.from(referenceByInput.keys()).map(input => ({ input }));
+  const contextInputs = Array.from(contextByInput.keys()).map(input => ({ input }));
   for (const c of cases) {
     const inputKey = norm(c.input);
-    const expected = referenceByInput.get(inputKey);
-    const catalogFields = contextByInput.get(inputKey);
-    if (expected === undefined && catalogFields === undefined) {
+    const matchedReference = findBestDatasetInputMatch(inputKey, referenceInputs);
+    const matchedContext = findBestDatasetInputMatch(inputKey, contextInputs);
+    const matchedDatasetInput = matchedReference || findBestDatasetInputMatch(inputKey, allInputs);
+    const expected = matchedReference ? referenceByInput.get(matchedReference.input) : undefined;
+    const catalogFields = matchedContext ? contextByInput.get(matchedContext.input) : undefined;
+    if (expected === undefined && catalogFields === undefined && !matchedDatasetInput) {
       result.unmatched++;
       continue;
     }
     let supplied = false;
+    if (matchedDatasetInput) {
+      supplied = true;
+      result.datasetInputUpdates![c.key] = matchedDatasetInput.input;
+      result.datasetInputMatched = (result.datasetInputMatched ?? 0) + 1;
+    }
     if (expected) {
       supplied = true;
       if (norm(c.referenceOutput) && !overwrite) {
@@ -126,6 +162,7 @@ export function matchDatasetCases(
 /** 导入结果的人话摘要（UI toast 用）。 */
 export function describeMatchResult(r: DatasetMatchResult): string {
   const parts = [`已回填 ${r.matched} 条`];
+  if (r.datasetInputMatched) parts.push(`匹配 ${r.datasetInputMatched} 条数据集输入`);
   if (r.contextMatched) parts.push(`导入 ${r.contextMatched} 条 Tool/Skill 目录`);
   if (r.skipped) parts.push(`跳过 ${r.skipped} 条已标注`);
   if (r.contextSkipped) parts.push(`跳过 ${r.contextSkipped} 条已有工具目录`);

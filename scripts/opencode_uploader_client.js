@@ -1,12 +1,15 @@
 import http from "node:http"
 import https from "node:https"
+import { randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { URL } from "node:url"
 
 function getPreferredInsightDir() {
-  return path.join(os.homedir(), ".agent-insight")
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), ".agent-insight")
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => os.homedir()))
 }
 
 function getLegacyInsightDir() {
@@ -15,6 +18,7 @@ function getLegacyInsightDir() {
 
 function getExistingInsightDir() {
   const preferred = getPreferredInsightDir()
+  if (process.env.AGENT_INSIGHT_HOME) return preferred
   const legacy = getLegacyInsightDir()
   if (fs.existsSync(preferred)) return preferred
   if (fs.existsSync(legacy)) return legacy
@@ -102,6 +106,78 @@ function safeMkdirp(dir) {
   try {
     fs.mkdirSync(dir, { recursive: true })
   } catch {}
+}
+
+function isValidClientId(value) {
+  return typeof value === "string" && /^cli_[A-Za-z0-9][A-Za-z0-9._-]{7,123}$/.test(value)
+}
+
+function readClientIdentity(file) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"))
+    return isValidClientId(value?.clientId) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function ensureClientIdentity(options = {}) {
+  const dataDir = options.dataDir || getPreferredInsightDir()
+  const registeredFile = options.registeredClientFile || path.join(dataDir, "client", "config.json")
+  const registered = readClientIdentity(registeredFile)
+  if (registered) return registered
+  const file = path.join(dataDir, "client.json")
+  if (fs.existsSync(file)) return readClientIdentity(file)
+
+  safeMkdirp(dataDir)
+  const identity = {
+    schemaVersion: 1,
+    clientId: `cli_${(options.randomUUID || randomUUID)()}`,
+    hostname: String(options.hostname || os.hostname() || "").trim() || null,
+    createdAt: (options.now || (() => new Date()))().toISOString(),
+  }
+  try {
+    fs.writeFileSync(file, `${JSON.stringify(identity, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    })
+    return identity
+  } catch (error) {
+    if (error?.code === "EEXIST") return readClientIdentity(file)
+    return null
+  }
+}
+
+function normalizeServiceBaseUrl(value) {
+  try {
+    const raw = String(value || "").trim()
+    if (!raw) return null
+    const url = new URL(raw.match(/^https?:\/\//i) ? raw : `http://${raw}`)
+    const pathname = url.pathname.replace(/\/+$/, "")
+    return `${url.origin.toLowerCase()}${pathname}`
+  } catch {
+    return null
+  }
+}
+
+function clientIdentityForHost(clientIdentity, host) {
+  if (!clientIdentity?.deviceCredential) return clientIdentity
+  const registeredBaseUrl = normalizeServiceBaseUrl(clientIdentity.insightBaseUrl)
+  const targetBaseUrl = normalizeServiceBaseUrl(host)
+  if (registeredBaseUrl && targetBaseUrl && registeredBaseUrl === targetBaseUrl) return clientIdentity
+  return { ...clientIdentity, deviceCredential: null }
+}
+
+function pickReportedIp(networkInterfaces = os.networkInterfaces()) {
+  for (const entries of Object.values(networkInterfaces || {})) {
+    for (const entry of entries || []) {
+      const isV4 = entry.family === "IPv4" || entry.family === 4
+      const address = String(entry.address || "").trim()
+      if (isV4 && !entry.internal && address && !address.startsWith("127.")) return address
+    }
+  }
+  return null
 }
 
 function appendUploaderLog(message) {
@@ -299,6 +375,85 @@ function listJsonlFiles(spoolDir) {
   return out
 }
 
+function selectJsonlFiles(spoolDir, spoolFile) {
+  const candidate = String(spoolFile || "").trim()
+  if (!candidate) return listJsonlFiles(spoolDir)
+  const resolvedDir = path.resolve(spoolDir)
+  const resolvedFile = path.resolve(candidate)
+  if (
+    !resolvedFile.startsWith(`${resolvedDir}${path.sep}`)
+    || !resolvedFile.endsWith(".jsonl")
+    || !fs.existsSync(resolvedFile)
+  ) return listJsonlFiles(spoolDir)
+  return [resolvedFile]
+}
+
+function selectedSpoolMtime(spoolDir, spoolFile) {
+  const files = selectJsonlFiles(spoolDir, spoolFile)
+  if (files.length === 1 && String(spoolFile || "").trim()) {
+    try { return fs.statSync(files[0]).mtimeMs } catch { return 0 }
+  }
+  return newestSpoolMtime(spoolDir)
+}
+
+const SESSION_RECORD_MARKERS = [
+  '"sessionID":"ses_',
+  '"sessionId":"ses_',
+  '"session_id":"ses_',
+  '"trace_id":"ses_',
+]
+
+function fileContainsAnyText(file, needles) {
+  const terms = needles
+    .filter((needle) => typeof needle === "string" && needle.length > 0)
+    .map((needle) => Buffer.from(needle))
+  if (!terms.length) return false
+
+  const maxNeedleBytes = Math.max(...terms.map((needle) => needle.length))
+  const chunk = Buffer.allocUnsafe(64 * 1024)
+  let carry = Buffer.alloc(0)
+  let fd
+  try {
+    fd = fs.openSync(file, "r")
+    while (true) {
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null)
+      if (bytesRead <= 0) break
+      const haystack = carry.length
+        ? Buffer.concat([carry, chunk.subarray(0, bytesRead)])
+        : chunk.subarray(0, bytesRead)
+      if (terms.some((needle) => haystack.indexOf(needle) >= 0)) return true
+      const carryBytes = Math.min(Math.max(maxNeedleBytes - 1, 0), haystack.length)
+      carry = carryBytes > 0 ? Buffer.from(haystack.subarray(haystack.length - carryBytes)) : Buffer.alloc(0)
+    }
+  } catch {
+    return false
+  } finally {
+    if (typeof fd === "number") {
+      try { fs.closeSync(fd) } catch {}
+    }
+  }
+  return false
+}
+
+function selectJsonlFilesForUpload(files, options = {}) {
+  const forceSessions = Array.from(options.forceSessions || []).filter(Boolean)
+  const lastScanMtime = Number(options.lastScanMtime) || 0
+  const needles = forceSessions.length
+    ? forceSessions.map((sessionId) => JSON.stringify(sessionId))
+    : SESSION_RECORD_MARKERS
+
+  return files.filter((file) => {
+    if (!forceSessions.length && lastScanMtime > 0) {
+      try {
+        if (fs.statSync(file).mtimeMs <= lastScanMtime) return false
+      } catch {
+        return false
+      }
+    }
+    return fileContainsAnyText(file, needles)
+  })
+}
+
 // Returns the newest mtime (ms) across all .jsonl files in the spool dir, or 0 if none.
 // Used as a fast-skip gate: if no file has been touched since the last scan, the
 // uploader can exit immediately without parsing any data.
@@ -365,7 +520,13 @@ function shouldSkipProxy(targetHostname) {
   return segments.some((s) => s === "*" || targetHostname.toLowerCase().endsWith(s))
 }
 
-function getRequestOptions(targetUrl, apiKey, bodyLength) {
+/**
+ * @param {URL} targetUrl
+ * @param {string | null | undefined} apiKey
+ * @param {number} bodyLength
+ * @param {{clientId?: string, deviceCredential?: string} | null} clientIdentity
+ */
+function getRequestOptions(targetUrl, apiKey, bodyLength, clientIdentity = null) {
   const protocol = targetUrl.protocol
   const proxy =
     (protocol === "https:"
@@ -374,6 +535,7 @@ function getRequestOptions(targetUrl, apiKey, bodyLength) {
     process.env.all_proxy ||
     process.env.ALL_PROXY
 
+  /** @type {Record<string, string | number>} */
   const headers = {
     "Content-Type": "application/json",
     "Content-Length": bodyLength,
@@ -382,13 +544,17 @@ function getRequestOptions(targetUrl, apiKey, bodyLength) {
   // AGENT_INSIGHT_DEFAULT_INGEST_USER 归属。若强行带上空/undefined 值，服务端会把它
   // 当成一把无效 key → 401，反而上不去。
   if (apiKey) headers["x-witty-api-key"] = apiKey
+  if (clientIdentity?.deviceCredential && isValidClientId(clientIdentity?.clientId)) {
+    headers.Authorization = `Bearer ${clientIdentity.deviceCredential}`
+    headers["x-agent-insight-client-id"] = clientIdentity.clientId
+  }
   const options = {
     hostname: targetUrl.hostname,
     port: targetUrl.port || (protocol === "https:" ? 443 : 80),
     path: (() => {
       const base = targetUrl.pathname === "/" ? "" : targetUrl.pathname.replace(/\/$/, "")
-      if (base.endsWith("/api")) return base + "/upload"
-      return base + "/api/upload"
+      if (base.endsWith("/api")) return base + "/ingest/upload"
+      return base + "/api/ingest/upload"
     })(),
     method: "POST",
     headers,
@@ -412,7 +578,7 @@ function getRequestOptions(targetUrl, apiKey, bodyLength) {
   return options
 }
 
-function postJson(host, apiKey, payload) {
+function postJson(host, apiKey, payload, clientIdentity = null) {
   return new Promise((resolve) => {
     let targetUrl
     try {
@@ -423,7 +589,7 @@ function postJson(host, apiKey, payload) {
     }
 
     const body = Buffer.from(JSON.stringify(payload))
-    const options = getRequestOptions(targetUrl, apiKey, body.length)
+    const options = getRequestOptions(targetUrl, apiKey, body.length, clientIdentity)
     const reqModule = targetUrl.protocol === "https:" ? https : http
     appendUploaderLog(
       `postJson.request host=${targetUrl.origin} path=${options.path} task_id=${payload?.task_id || "(none)"} bodyBytes=${body.length}`,
@@ -484,6 +650,8 @@ function buildState(records) {
   const msgInfo = new Map()
   const msgParts = new Map()
   const partText = new Map()
+  const partDeltas = new Map()
+  const seenDeltaEventIds = new Set()
   const userTextByMsg = new Map()
   const sysPrompts = new Map()
   const cliCompletedSessions = new Set()
@@ -638,9 +806,27 @@ function buildState(records) {
       }
       continue
     }
+
+    if (t === "message.part.delta") {
+      const props = ev?.properties || {}
+      const mid = props.messageID
+      const sid = props.sessionID || r.sessionID
+      const pid = props.partID
+      const field = typeof props.field === "string" && props.field ? props.field : "text"
+      const delta = typeof props.delta === "string" ? props.delta : ""
+      if (!sid || !mid || !pid || !delta) continue
+      const eventId = typeof ev?.id === "string" ? ev.id : ""
+      if (eventId && seenDeltaEventIds.has(eventId)) continue
+      if (eventId) seenDeltaEventIds.add(eventId)
+      ensureSession(sid).messageIDs.add(mid)
+      recordSessionPid(sid, r)
+      const key = `${mid}:${pid}:${field}`
+      partDeltas.set(key, `${partDeltas.get(key) || ""}${delta}`)
+      continue
+    }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
 }
 
 // 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
@@ -721,21 +907,32 @@ function isSignatureUnchanged(prevSig, nextSig) {
 // Join all text-type parts of a message into one string. Prefers the
 // streamed-complete text (text.complete hook) over the partial captured on
 // message.part.updated. Shared by user and assistant message rendering.
-function collectTextPartContent(parts, mid, partText) {
+function resolvePartField(part, mid, partText, partDeltas, field = "text") {
+  const key = `${mid}:${part.id}`
+  const completed = field === "text" ? partText.get(key) : undefined
+  if (typeof completed === "string" && completed) return completed
+
+  const snapshot = typeof part?.[field] === "string" ? part[field] : ""
+  const streamed = partDeltas.get(`${key}:${field}`) || ""
+  if (!streamed) return snapshot
+  if (!snapshot) return streamed
+  if (snapshot === streamed || snapshot.includes(streamed)) return snapshot
+  if (streamed.includes(snapshot)) return streamed
+  return streamed.length >= snapshot.length ? streamed : snapshot
+}
+
+function collectTextPartContent(parts, mid, partText, partDeltas) {
   const buf = []
   for (const p of parts || []) {
     if ((p?.type || "").toLowerCase() !== "text") continue
-    const key = `${mid}:${p.id}`
-    const streamed = partText.get(key)
-    const fallback = typeof p?.text === "string" ? p.text : ""
-    const out = typeof streamed === "string" && streamed ? streamed : fallback
+    const out = resolvePartField(p, mid, partText, partDeltas)
     if (out) buf.push(out)
   }
   return buf.join("")
 }
 
 function buildMessagesForSession(state, sid) {
-  const { msgInfo, msgParts, partText, userTextByMsg } = state
+  const { msgInfo, msgParts, partText, partDeltas, userTextByMsg } = state
   const messages = []
 
   for (const [mid, info] of msgInfo.entries()) {
@@ -755,11 +952,11 @@ function buildMessagesForSession(state, sid) {
       //   - info.system (last-ditch fallback) is now null on user messages —
       //     and was the system prompt, not the query, anyway.
       // With both broken the query uploaded empty. Keep them only as fallbacks.
-      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText)
+      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
       if (!content) content = userTextByMsg.get(mid) || ""
       if (!content && typeof info?.system === "string") content = info.system
     } else {
-      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText)
+      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
     }
 
     const tool_calls = []
@@ -800,12 +997,12 @@ function buildMessagesForSession(state, sid) {
     const partsOut = rawParts.length
       ? rawParts.map((p) => {
           const { messageID: _mid, sessionID: _sid, ...rest } = p || {}
-          // For text parts, prefer the streamed-complete text from text.complete
-          // hook over whatever partial we captured on message.part.updated.
-          if ((rest?.type || "").toLowerCase() === "text") {
-            const key = `${mid}:${rest.id}`
-            const finalText = partText.get(key)
-            if (typeof finalText === "string" && finalText) rest.text = finalText
+          // For text and reasoning parts, preserve deltas when interruption
+          // prevents OpenCode from emitting a final part snapshot.
+          const partType = (rest?.type || "").toLowerCase()
+          if (partType === "text" || partType === "reasoning") {
+            const resolvedText = resolvePartField(rest, mid, partText, partDeltas)
+            if (resolvedText) rest.text = resolvedText
           }
           return rest
         })
@@ -814,6 +1011,7 @@ function buildMessagesForSession(state, sid) {
     const m = {
       role,
       content,
+      messageID: mid,
       parts: partsOut,
       tool_calls: tool_calls.length ? tool_calls : undefined,
       usage: u,
@@ -1017,7 +1215,21 @@ async function main() {
     appendUploaderLog(`main.keyless no api key — uploading anyway (server attributes via AGENT_INSIGHT_DEFAULT_INGEST_USER)`)
   }
 
+  const registeredClientIdentity = ensureClientIdentity()
+  const clientIdentity = clientIdentityForHost(registeredClientIdentity, host)
+  if (registeredClientIdentity?.deviceCredential && !clientIdentity?.deviceCredential) {
+    appendUploaderLog(
+      `main.clientCredentialSkipped registeredHost=${registeredClientIdentity.insightBaseUrl || "(missing)"} targetHost=${host}`,
+    )
+  }
+  const reportedIp = pickReportedIp()
+  appendUploaderLog(
+    `main.client clientId=${clientIdentity?.clientId || "(missing)"} ` +
+    `hostname=${os.hostname() || "(missing)"} reportedIp=${reportedIp || "(missing)"}`,
+  )
+
   const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
+  const spoolFile = process.env.AGENT_INSIGHT_UPLOADER_SPOOL_FILE || ""
   // 账号级隔离: spool / checkpoint 都按 API key 分目录(setup 写入 per-account 路径),
   // 否则同一台机器切账号会复用机器级 spool/checkpoint, 把历史 trace 错误归到当前 key。
   // 旧 .env 没有这两个变量时回退到机器级路径, 保持向后兼容。
@@ -1047,7 +1259,7 @@ async function main() {
   // Fast-skip gate: if no spool file has been touched since the last scan, exit
   // immediately without reading/parsing any data. This keeps the polling daemon
   // cheap (~5ms) when opencode is idle. Force=1 bypasses for manual debugging.
-  const newestMtime = newestSpoolMtime(spoolDir)
+  const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
   const lastScanMtime = ckpt.__lastScanMtime || 0
   if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
     appendUploaderLog(
@@ -1083,8 +1295,13 @@ async function main() {
     } catch {}
   })
 
-  const files = listJsonlFiles(spoolDir)
-  appendUploaderLog(`main.scan files=${files.length} newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`)
+  const candidateFiles = selectJsonlFiles(spoolDir, spoolFile)
+  const files = selectJsonlFilesForUpload(candidateFiles, { forceSessions, lastScanMtime })
+  appendUploaderLog(
+    `main.scan files=${files.length}/${candidateFiles.length} ` +
+    `mode=${spoolFile ? "spool-file" : forceSessions.size ? "force-session" : "changed-session-files"} ` +
+    `newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`,
+  )
 
   // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
   // "Maximum call stack size exceeded"——args 数量受调用栈限制。
@@ -1140,6 +1357,11 @@ async function main() {
       task_id: rootSid,
       query,
       framework: "opencode",
+      ...(clientIdentity?.clientId ? { client_id: clientIdentity.clientId } : {}),
+      host: {
+        hostname: os.hostname() || clientIdentity?.hostname || undefined,
+        ...(reportedIp ? { reported_ip: reportedIp } : {}),
+      },
       model: derived.model,
       tokens: derived.tokens,
       latency: derived.latency,
@@ -1209,7 +1431,7 @@ async function main() {
       continue
     }
 
-    const res = await postJson(host, apiKey, payload)
+    const res = await postJson(host, apiKey, payload, clientIdentity)
     if (res.ok) {
       ckpt[rootSid] = sig
       saveCheckpoint(checkpointFile, ckpt)
@@ -1234,6 +1456,10 @@ export {
   buildMessagesForSession,
   buildSignature,
   buildState,
+  ensureClientIdentity,
+  clientIdentityForHost,
+  isValidClientId,
+  pickReportedIp,
   getRequestOptions,
   findShadowedEnvKeys,
   describeShadowedEnv,
@@ -1246,6 +1472,8 @@ export {
   extractTaskChildSessionId,
   getSessionInfoFromEvent,
   mergeGraph,
+  selectJsonlFiles,
+  selectJsonlFilesForUpload,
 }
 
 if (process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN !== "1") {

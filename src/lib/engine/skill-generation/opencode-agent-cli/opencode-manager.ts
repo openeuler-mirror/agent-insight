@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -6,10 +6,11 @@ import os from 'node:os'
 import path from 'node:path'
 // @ts-ignore
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk'
-import { resolveAgentInsightDataPath } from '@/lib/env'
+import { resolveAgentInsightDataPath, getAgentInsightHome } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'
 import { isModelConnectionReady } from '@/lib/shared/model-connection'
 import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
+import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -122,6 +123,7 @@ function healthcheck(url: string): Promise<{ status: number }> {
         res.on('end', () => resolve({ status: res.statusCode || 0 }))
       },
     )
+    req.setTimeout(2000, () => req.destroy(new Error('healthcheck timeout')))
     req.on('error', reject)
     req.end()
   })
@@ -472,7 +474,7 @@ async function buildIsolatedOpencodeConfig(user: string): Promise<{
   const fallback: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     provider: {
-      deepseek: { options: {}, models: { 'deepseek-reasoner': {}, 'deepseek-chat': {} } },
+      deepseek: { options: {}, models: { 'deepseek-v4-flash': {}, 'deepseek-v4-pro': {} } },
     },
     plugin: [],
     permission: OPENCODE_CONFIG_PERMISSION,
@@ -533,6 +535,9 @@ export async function prepareIsolatedHome(
   fs.mkdirSync(path.join(root, '.opencode', 'skills'), { recursive: true })
   fs.mkdirSync(path.join(root, '.claude', 'skills'), { recursive: true })
   fs.mkdirSync(path.join(root, '.agents', 'skills'), { recursive: true })
+  try { await markTemporaryHome(root) } catch (error) {
+    console.warn('[isolated-home] ownership marker unavailable; automatic cleanup will skip this directory:', error)
+  }
 
   // Symlink user 真实的 trace 上报 plugin (~/.opencode/plugins/Witty-Skill-Insight.ts)
   // 到隔离 HOME 下的 .opencode/plugins/, 保留 trace 上报链路。
@@ -640,7 +645,7 @@ function processGroupExists(pgid: number): boolean {
 // 解决: spawn 即把 pgid+属主pid 落盘; 干净退场即删记录; 新 server 启动时 sweep 一遍, 把"属主已死"
 // 的进程组 SIGKILL 掉。这样无论上一代怎么死, 下一代启动都能兜底回收, 不依赖将死进程执行任何代码。
 const OPENCODE_PGID_REGISTRY_DIR = path.join(
-  process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight'),
+  getAgentInsightHome(),
   'opencode-pgids',
 )
 
@@ -887,6 +892,10 @@ async function buildPluginUploadEnvOverride(user: string): Promise<Record<string
   return overrides
 }
 
+export function buildServerConfigHash(baseConfigHash: string, pluginUploadApiKey?: string): string {
+  return baseConfigHash + '|upload:' + (pluginUploadApiKey || 'no-key')
+}
+
 async function startServerForUser(
   user: string,
   opts: {
@@ -912,7 +921,7 @@ async function startServerForUser(
   // 把 plugin upload 用的 apiKey 也算进 hash —— user 在 UI 改 apiKey 后老实例
   // 会继续用旧 key 上报数据,被 /api/ingest/upload 401 reject,数据丢失。新 hash
   // 触发 ensureOpencodeServer 重启实例,新进程拿新 apiKey。
-  const configHash = baseConfigHash + '|upload:' + (pluginUploadEnv.AGENT_INSIGHT_API_KEY || 'no-key')
+  const configHash = buildServerConfigHash(baseConfigHash, pluginUploadEnv.AGENT_INSIGHT_API_KEY)
 
   const proc = spawn(
     binary,
@@ -988,6 +997,12 @@ async function startServerForUser(
     console.error(`[opencode:${user}] failed to spawn server:`, err.message)
   })
 
+  if (homeOverride && typeof proc.pid === 'number') {
+    try { await markTemporaryHome(homeOverride, proc.pid) } catch (error) {
+      console.warn('[isolated-home] child ownership unavailable; automatic cleanup will skip this directory:', error)
+    }
+  }
+
   // 等 server ready,失败时杀掉进程
   try {
     await waitForServer(port)
@@ -1029,8 +1044,9 @@ export async function ensureOpencodeServer(
     // 此时先 graceful-then-forceful 干掉老实例（含真二进制），下面走 spawn 新的。
     let nextHash: string | null = null
     try {
-      const { configHash } = await buildIsolatedOpencodeConfig(userKey)
-      nextHash = configHash
+      const { configHash: baseConfigHash } = await buildIsolatedOpencodeConfig(userKey)
+      const pluginUploadEnv = await buildPluginUploadEnvOverride(userKey)
+      nextHash = buildServerConfigHash(baseConfigHash, pluginUploadEnv.AGENT_INSIGHT_API_KEY)
     } catch {
       /* ignore，按现有实例继续用 */
     }
@@ -1211,6 +1227,9 @@ export async function runWithEphemeralOpencodeServer<T>(
   const userKey = opts.user || ANONYMOUS_USER_KEY
   const verbose = opts.verbose ?? false
   const telemetryEnabled = opts.telemetryEnabled ?? !opts.isolateHome
+  const { experimentSignal, markExperimentCleanupUnconfirmed } = await import('@/lib/engine/experiment/cancellation-context')
+  const cancellation = experimentSignal()
+  cancellation?.throwIfAborted()
   // 准备隔离 HOME (如启用), 拿 cleanup 在 finally 里调
   let homeCleanup: (() => Promise<void>) | null = null
   let homeOverride: string | undefined = undefined
@@ -1222,17 +1241,26 @@ export async function runWithEphemeralOpencodeServer<T>(
   // 注意: 直接调内部 startServerForUser 不走 cache, 也不写 state.servers。
   // 多个 ephemeral 调用并发时各自起独立进程,互不复用,自然隔离。
   const inst = await startServerForUser(userKey, { verbose, homeOverride, telemetryEnabled })
+  const cancel = () => { void terminateOpencodeProcess(inst.process, 'experiment cancellation').catch(() => {}) }
+  cancellation?.addEventListener('abort', cancel, { once: true })
+  if (cancellation?.aborted) cancel()
   try {
+    cancellation?.throwIfAborted()
     return await fn(inst.baseUrl)
   } finally {
+    cancellation?.removeEventListener('abort', cancel)
     try {
       await terminateOpencodeProcess(inst.process, `ephemeral cleanup for ${userKey}`)
     } catch (cleanupErr) {
+      markExperimentCleanupUnconfirmed()
       // cleanup 失败不应该掩盖 fn 的真错误,只 warn 不抛
       console.warn(
         `[opencode] ephemeral cleanup for ${userKey} failed:`,
         cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
       )
+    }
+    if (typeof inst.process.pid === 'number' && processGroupExists(inst.process.pid)) {
+      markExperimentCleanupUnconfirmed()
     }
     // 隔离 HOME 临时目录在 server 死透之后清, 避免 server 还在引用文件被 unlink
     if (homeCleanup) {

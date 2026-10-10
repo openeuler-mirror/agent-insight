@@ -7,15 +7,17 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { apiFetch } from '@/lib/client/api';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { legacyPresetEvaluators, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { deriveEvaluatorTags, getEvaluatorMeta, type EvaluatorCategory } from '@/lib/evaluators/registry';
 
 export interface EvaluatorLookup {
   nameOf: (evaluatorId: string) => string;
   tagsOf: (evaluatorId: string) => string[];
   categoryOf: (evaluatorId: string) => EvaluatorCategory;
-  /** 是否依赖参考数据（新增 case 时据此提示"不标注会不记分"）；找不到卡片按 false。 */
+  /** 是否依赖预期输出（新增 case 时据此提示"不标注会不记分"）；找不到卡片按 false。 */
   requiresReference: (evaluatorId: string) => boolean;
+  /** 是否依赖确定性匹配的数据集输入快照。 */
+  requiresDatasetInput: (evaluatorId: string) => boolean;
 }
 
 export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLookup {
@@ -36,7 +38,7 @@ export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLo
 
   return useMemo(() => {
     const byId = new Map<string, EvaluatorCard>();
-    for (const card of presetEvaluators) byId.set(card.id, card);
+    for (const card of [...presetEvaluators, ...legacyPresetEvaluators]) byId.set(card.id, card);
     for (const card of customCards) byId.set(card.id, card);
     return {
       nameOf: (id: string) => byId.get(id)?.name || id,
@@ -51,6 +53,10 @@ export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLo
       requiresReference: (id: string) => {
         const card = byId.get(id);
         return card ? getEvaluatorMeta(card).requires.includes('reference') : false;
+      },
+      requiresDatasetInput: (id: string) => {
+        const card = byId.get(id);
+        return card ? getEvaluatorMeta(card).requires.includes('dataset_input') : false;
       },
     };
   }, [customCards]);

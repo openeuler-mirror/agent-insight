@@ -34,7 +34,7 @@ test("opencode: deriveOpencodeExecutionFields is deterministic and prefers top-l
   assert.equal(fields.llm_call_count, 2)
   assert.equal(fields.tool_call_count, 3)
   assert.equal(fields.tool_call_error_count, 2)
-  assert.equal(fields.latency, 3)
+  assert.equal(fields.latency, 3000)
 
   const fields2 = deriveOpencodeExecutionFields(interactions as any[])
   assert.deepEqual(fields2, fields)

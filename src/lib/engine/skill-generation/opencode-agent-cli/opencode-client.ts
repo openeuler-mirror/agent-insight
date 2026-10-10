@@ -33,6 +33,11 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { fileURLToPath } from "node:url";
 import { extractCoreOutput } from "./core-output";
+import { MirroredDeltaGuard } from "./stream-event-dedupe";
+import {
+  classifyAgentExitFailure, createAgentRunError, extractStructuredAgentError,
+  sanitizeAgentDiagnostic, type AgentRunError,
+} from "../../../../../scripts/agent-run-diagnostics.cjs";
 
 // =============================================================================
 // 类型定义
@@ -335,9 +340,13 @@ function extractTextFromPromptResponse(response: unknown): string {
 async function tryGetChildSessionIDs(
   client: OpencodeClient,
   sessionId: string,
+  directory?: string,
 ): Promise<string[]> {
   try {
-    const result = await client.session.children({ path: { id: sessionId } });
+    const result = await client.session.children({
+      path: { id: sessionId },
+      query: directory ? { directory } : undefined,
+    });
     const data = unwrapData<any[]>(result);
     if (!Array.isArray(data)) return [];
     return data.map((s) => String(s?.id ?? "")).filter(Boolean);
@@ -353,6 +362,7 @@ async function tryGetChildSessionIDs(
 export class AgentInsight {
   private readonly client: OpencodeClient;
   private readonly defaultDirectory?: string;
+  private readonly sessionDirectories = new Map<string, string>();
   private readonly logLevel: LogLevel;
   /** 保存 baseURL 是为了 raw fetch /question/{id}/reply——v1 SDK 的 OpencodeClient
    *  没有 question 命名空间（只有 v2 SDK 才有），不能走 client 方法，得自己拼 URL。*/
@@ -412,6 +422,7 @@ export class AgentInsight {
   private async respondQuestion(
     requestID: string,
     answers: any[] | null,
+    sessionID?: string,
   ): Promise<void> {
     if (!requestID) return;
     const isReply = Array.isArray(answers) && answers.length > 0;
@@ -419,8 +430,9 @@ export class AgentInsight {
       ? `/question/${encodeURIComponent(requestID)}/reply`
       : `/question/${encodeURIComponent(requestID)}/reject`;
     // directory 是 query 参数（v2 SDK schema），有就带上，让 server 能定位 workspace。
-    const url = this.defaultDirectory
-      ? `${this.baseURL}${path}?directory=${encodeURIComponent(this.defaultDirectory)}`
+    const directory = sessionID ? this.directoryForSession(sessionID) : this.defaultDirectory;
+    const url = directory
+      ? `${this.baseURL}${path}?directory=${encodeURIComponent(directory)}`
       : `${this.baseURL}${path}`;
 
     // opencode 的 reply schema 是 **array-of-arrays**：
@@ -485,8 +497,9 @@ export class AgentInsight {
   ): Promise<void> {
     if (!sessionID || !permissionID) return;
     const path = `/session/${encodeURIComponent(sessionID)}/permissions/${encodeURIComponent(permissionID)}`;
-    const url = this.defaultDirectory
-      ? `${this.baseURL}${path}?directory=${encodeURIComponent(this.defaultDirectory)}`
+    const directory = this.directoryForSession(sessionID);
+    const url = directory
+      ? `${this.baseURL}${path}?directory=${encodeURIComponent(directory)}`
       : `${this.baseURL}${path}`;
     try {
       const res = await fetch(url, {
@@ -539,6 +552,10 @@ export class AgentInsight {
 
   // --------------------------- Session ---------------------------
 
+  private directoryForSession(sessionId: string): string | undefined {
+    return this.sessionDirectories.get(sessionId) || this.defaultDirectory;
+  }
+
   async listSessions() {
     const result = await this.client.session.list({
       query: this.defaultDirectory ? { directory: this.defaultDirectory } : undefined,
@@ -562,7 +579,10 @@ export class AgentInsight {
         ...(permission ? { permission } : {}),
       }
     });
-    return unwrapData<Record<string, unknown>>(result);
+    const session = unwrapData<Record<string, unknown>>(result);
+    const sessionId = String(session?.id ?? session?.ID ?? "");
+    if (sessionId && sessionDirectory) this.sessionDirectories.set(sessionId, sessionDirectory);
+    return session;
   }
 
   async getSession(sessionId: string) {
@@ -570,32 +590,48 @@ export class AgentInsight {
     return unwrapData<Record<string, unknown>>(
       await this.client.session.get({
         path: { id: sessionId },
-        query: this.defaultDirectory ? { directory: this.defaultDirectory } : undefined,
+        query: this.directoryForSession(sessionId)
+          ? { directory: this.directoryForSession(sessionId) }
+          : undefined,
       }),
     );
   }
 
   async deleteSession(sessionId: string) {
     assertNonEmptyString(sessionId, "sessionId");
-    return unwrapData<boolean>(
+    const result = unwrapData<boolean>(
       await this.client.session.delete({
         path: { id: sessionId },
-        query: this.defaultDirectory ? { directory: this.defaultDirectory } : undefined,
+        query: this.directoryForSession(sessionId)
+          ? { directory: this.directoryForSession(sessionId) }
+          : undefined,
       }),
     );
+    this.sessionDirectories.delete(sessionId);
+    return result;
   }
 
   async abortSession(sessionId: string) {
     assertNonEmptyString(sessionId, "sessionId");
     return unwrapData<boolean>(
-      await this.client.session.abort({ path: { id: sessionId } }),
+      await this.client.session.abort({
+        path: { id: sessionId },
+        query: this.directoryForSession(sessionId)
+          ? { directory: this.directoryForSession(sessionId) }
+          : undefined,
+      }),
     );
   }
 
   async listMessages(sessionId: string) {
     assertNonEmptyString(sessionId, "sessionId");
     return unwrapData<any[]>(
-      await this.client.session.messages({ path: { id: sessionId } }),
+      await this.client.session.messages({
+        path: { id: sessionId },
+        query: this.directoryForSession(sessionId)
+          ? { directory: this.directoryForSession(sessionId) }
+          : undefined,
+      }),
     );
   }
 
@@ -623,6 +659,8 @@ export class AgentInsight {
       format,
       ...rest
     } = payload;
+    const sessionDirectory = directory || this.directoryForSession(sessionId);
+    if (sessionDirectory) this.sessionDirectories.set(sessionId, sessionDirectory);
 
     const resolvedAgent =
       typeof agent === "string" && agent.trim() ? agent.trim() : "build";
@@ -647,7 +685,7 @@ export class AgentInsight {
       parts: [{ type: "text" as const, text }],
       ...(system ? { system } : {}),
       ...(permission ? { permission } : {}),
-      ...(directory ? { directory } : {}),
+      ...(sessionDirectory ? { directory: sessionDirectory } : {}),
       ...(noReply ? { noReply: true } : {}),
       ...(format ? { format } : {}),
       ...rest,
@@ -661,17 +699,13 @@ export class AgentInsight {
       textLength: text.length,
       hasSystem: Boolean(system),
       hasPermission: Array.isArray(permission) && permission.length > 0,
-      directory: directory || this.defaultDirectory || null,
+      directory: sessionDirectory || null,
       hasFormat: Boolean(format),
     });
 
     const result = await this.client.session.prompt({
       path: { id: sessionId },
-      query: directory
-        ? { directory }
-        : this.defaultDirectory
-          ? { directory: this.defaultDirectory }
-          : undefined,
+      query: sessionDirectory ? { directory: sessionDirectory } : undefined,
       body: body as any,
       // 透传 AbortSignal 到底层 fetch：opencode 的 session.prompt HTTP 请求会一直挂到
       // 整段对话（含 SessionSummary.summarize 之类的"善后" LLM 调用）结束才返回。
@@ -707,14 +741,21 @@ export class AgentInsight {
     if (sessionId) {
       allowed.add(sessionId);
       if (includeChildren) {
-        for (const id of await tryGetChildSessionIDs(this.client, sessionId)) {
+        for (const id of await tryGetChildSessionIDs(
+          this.client,
+          sessionId,
+          this.directoryForSession(sessionId),
+        )) {
           allowed.add(id);
         }
       }
     }
 
+    const subscribeDirectory = sessionId
+      ? this.directoryForSession(sessionId)
+      : this.defaultDirectory;
     const eventResult = await this.client.event.subscribe({
-      query: this.defaultDirectory ? { directory: this.defaultDirectory } : undefined,
+      query: subscribeDirectory ? { directory: subscribeDirectory } : undefined,
     });
     const stream = eventResult.stream;
     const onAbort = () => {
@@ -814,6 +855,24 @@ export class AgentInsight {
     // 用 Set 跟踪而不是单一 boolean。
     const assistantStartedEmitted = new Set<string>();
     let finished = false;
+    const startedAt = new Date().toISOString();
+    const failureController = new AbortController();
+    const executionSignal = signal ? AbortSignal.any([signal, failureController.signal]) : failureController.signal;
+    let executionFailure: AgentRunError | null = null;
+    const failExecution = (code: string, message: string) => {
+      if (executionFailure) return;
+      executionFailure = createAgentRunError(code, sanitizeAgentDiagnostic(message), { traceId: sessionId, startedAt });
+      finished = true;
+      failureController.abort();
+      onError?.(executionFailure);
+    };
+    const captureModelError = (value: unknown) => {
+      const diagnostic = extractStructuredAgentError(value);
+      if (!diagnostic) return;
+      const classified = classifyAgentExitFailure({ platform: 'opencode', diagnostic, structured: true });
+      failExecution(classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR',
+        `opencode 会话报告模型错误: ${sanitizeAgentDiagnostic(diagnostic)}`);
+    };
     let promptResponseText = "";
     let hasNonHeartbeatEvent = false;
     let fallbackEmitTimer: NodeJS.Timeout | null = null;
@@ -825,6 +884,8 @@ export class AgentInsight {
     const reasoningAcc = new Map<string, string>();
     const textPartAcc = new Map<string, string>();
     const reasoningPartAcc = new Map<string, string>();
+    const textDeltaGuard = new MirroredDeltaGuard();
+    const reasoningDeltaGuard = new MirroredDeltaGuard();
     // 工具状态机：partID → 上一次状态，防止重复 start
     const toolStatusSeen = new Map<string, string>();
     const toolInputAcc = new Map<string, string>();
@@ -848,7 +909,11 @@ export class AgentInsight {
       string,
       { agent?: string; description?: string; prompt?: string; parentID: string }
     >();
-    for (const cid of await tryGetChildSessionIDs(this.client, sessionId)) {
+    for (const cid of await tryGetChildSessionIDs(
+      this.client,
+      sessionId,
+      this.directoryForSession(sessionId),
+    )) {
       allowedSessionIDs.add(cid);
     }
 
@@ -878,7 +943,7 @@ export class AgentInsight {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         this.log("warn", "chat.idle.timeout", { sessionId, idleTimeoutMs });
-        finished = true;
+        failExecution("AGENT_TIMEOUT", `opencode 连续 ${idleTimeoutMs}ms 没有事件响应`);
         const fn = (stream as any)?.return;
         if (typeof fn === "function") void fn.call(stream, undefined);
       }, idleTimeoutMs);
@@ -889,7 +954,7 @@ export class AgentInsight {
       agent: payload?.agent || "build",
       providerID: payload?.model?.providerID,
       modelID: payload?.model?.modelID,
-      directory: payload?.directory || this.defaultDirectory || null,
+      directory: payload?.directory || this.directoryForSession(sessionId) || null,
       streamTimeoutMs,
       idleTimeoutMs,
     });
@@ -946,25 +1011,28 @@ export class AgentInsight {
     // directory（payload.directory），退到客户端默认 directory。
     const subscribeDirectory =
       (payload as { directory?: string } | undefined)?.directory ||
-      this.defaultDirectory ||
+      this.directoryForSession(sessionId) ||
       undefined;
+    const safetyTimer = setTimeout(() => {
+      failExecution("AGENT_TIMEOUT", `opencode 执行超过 ${streamTimeoutMs}ms`);
+    }, streamTimeoutMs);
     const subPromise = (async () => {
       let onAbort: (() => void) | null = null;
       try {
         const eventResult = await this.client.event.subscribe({
           query: subscribeDirectory ? { directory: subscribeDirectory } : undefined,
+          signal: executionSignal,
         });
         stream = eventResult.stream as any;
 
         onAbort = () => {
+          finished = true;
           const fn = (stream as any)?.return;
           if (typeof fn === "function") void fn.call(stream, undefined);
           this.log("warn", "chat.event.aborted", { sessionId });
         };
-        if (signal) {
-          if (signal.aborted) onAbort();
-          else signal.addEventListener("abort", onAbort, { once: true });
-        }
+        if (executionSignal.aborted) onAbort();
+        else executionSignal.addEventListener("abort", onAbort, { once: true });
 
         resolveReady();
         resetIdleTimer();
@@ -1030,6 +1098,9 @@ export class AgentInsight {
                       : part.text;
                 textAcc.set(pMessage, part.text);
                 if (typeof pId === "string" && pId) textPartAcc.set(pId, part.text);
+                if (typeof evt.properties?.delta === "string" && incomingDelta) {
+                  textDeltaGuard.remember(`${pMessage}:${pId || 'text'}`, evt.properties.delta);
+                }
 
                 if (incomingDelta) {
                   textDeltaCount += 1;
@@ -1068,6 +1139,9 @@ export class AgentInsight {
                       : part.text;
                 reasoningAcc.set(pMessage, part.text);
                 if (typeof pId === "string" && pId) reasoningPartAcc.set(pId, part.text);
+                if (typeof evt.properties?.delta === "string" && delta) {
+                  reasoningDeltaGuard.remember(`${pMessage}:${pId || 'reasoning'}`, evt.properties.delta);
+                }
 
                 if (isSubagent) {
                   onSubagent?.({
@@ -1222,6 +1296,7 @@ export class AgentInsight {
                 typeof partID === "string" && partID.length > 0 && reasoningPartAcc.has(partID);
 
               if (field === "text" && !isReasoningPart) {
+                if (textDeltaGuard.consume(`${messageID}:${partID || 'text'}`, delta)) break;
                 const messageFullText = (textAcc.get(messageID) ?? "") + delta;
                 textAcc.set(messageID, messageFullText);
                 textDeltaCount += 1;
@@ -1252,6 +1327,7 @@ export class AgentInsight {
                   });
                 }
               } else if (field === "reasoning" || isReasoningPart) {
+                if (reasoningDeltaGuard.consume(`${messageID}:${partID || 'reasoning'}`, delta)) break;
                 const messageFullText = (reasoningAcc.get(messageID) ?? "") + delta;
                 reasoningAcc.set(messageID, messageFullText);
                 const partFullText =
@@ -1418,8 +1494,7 @@ export class AgentInsight {
                     info,
                     error: info.error,
                   });
-                  onError?.(new Error(info.error.message || "模型执行出错"));
-                  finished = true;
+                  if (!isSubagent) captureModelError({ error: info.error });
                   break;
                 }
 
@@ -1553,8 +1628,7 @@ export class AgentInsight {
                 };
                 onSession?.(errorEvent);
                 onSessionError?.(errorEvent);
-                onError?.(new Error(err?.message || JSON.stringify(err) || "session 错误"));
-                finished = true;
+                captureModelError({ type: "session.error", error: err || "session 错误" });
               }
               break;
             }
@@ -1578,7 +1652,7 @@ export class AgentInsight {
                 // string[]（单问题/兼容老前端）或 null（跳过）。respondQuestion 会按 schema
                 // 把 string[] 自动包成 [[...]]，前端 QuestionBlock 多问题模式直接传 string[][]。
                 const answers = Array.isArray(reply) && reply.length > 0 ? reply : null;
-                await this.respondQuestion(ev.id, answers);
+                await this.respondQuestion(ev.id, answers, ev.sessionID || sessionId);
               } catch (e) {
                 this.log("error", "chat.question.reply.failed", {
                   error: (e as Error).message,
@@ -1593,10 +1667,11 @@ export class AgentInsight {
             case "permission.updated":
             case "permission.asked": {
               const p = (evt.properties || {}) as Record<string, any>;
-              if (!p.id || !p.sessionID) break;
+              const permissionSessionID = p.sessionID || p.sessionId || evtSession || sessionId;
+              if (!p.id || !permissionSessionID) break;
               const ev: PermissionAskEvent = {
                 id: p.id,
-                sessionID: p.sessionID || p.sessionId,
+                sessionID: permissionSessionID,
                 messageID: p.messageID || p.messageId,
                 callID: p.callID || p.callId,
                 title: p.title,
@@ -1682,10 +1757,10 @@ export class AgentInsight {
         }
       } catch (err) {
         rejectReady(err);
-        if (!isAbortError(err)) throw err;
+        if (!isAbortError(err)) failExecution("MODEL_ERROR", (err as Error)?.message || String(err));
       } finally {
         if (idleTimer) clearTimeout(idleTimer);
-        if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+        if (onAbort) executionSignal.removeEventListener("abort", onAbort);
         this.log("info", "chat.event.consume.done", {
           sessionId,
           eventCount,
@@ -1698,6 +1773,8 @@ export class AgentInsight {
       }
     })();
 
+    void subPromise.catch(() => {});
+
     // -------------------- 发送 prompt --------------------
     let response: any;
     try {
@@ -1706,12 +1783,14 @@ export class AgentInsight {
       // 没传 signal 时，sendPrompt 会一直挂到 opencode server 把"完整对话 + 善后 LLM 调用
       // (SessionSummary.summarize)"全部跑完才返回；caller 端 watchdog 触发的 abort 没法
       // 让它提前回收，导致 chat() 卡住、上层流不关、前端转圈。
-      response = await this.sendPrompt(sessionId, payload, { signal });
+      response = await this.sendPrompt(sessionId, payload, {
+        signal: executionSignal,
+      });
     } catch (err) {
       const fn = (stream as any)?.return;
       if (typeof fn === "function") void fn.call(stream, undefined);
-      // signal abort 是预期路径（caller 通过 watchdog 主动收尾），不算 error；不要往 caller 抛。
-      if (isAbortError(err) || (signal && signal.aborted)) {
+
+      if (executionFailure || isAbortError(err) || (signal && signal.aborted)) {
         this.log("warn", "chat.sendPrompt.aborted", { sessionId });
         finished = true;
       } else {
@@ -1719,14 +1798,14 @@ export class AgentInsight {
           sessionId,
           error: (err as Error)?.message || String(err),
         });
-        onError?.(err as Error);
-        throw err;
+        failExecution('MODEL_ERROR', (err as Error)?.message || String(err));
       }
     }
 
     assistantMsgId =
       response?.info?.id || response?.message?.id || assistantMsgId;
-    promptResponseText = extractTextFromPromptResponse(response);
+    captureModelError(response);
+    promptResponseText = executionFailure ? "" : extractTextFromPromptResponse(response);
 
     // 兜底：若短时间内未收到 text delta，再用 prompt 同步返回的文本补一刀。
     // 通过延迟避免与首批 SSE 增量事件竞态导致“一次性整段输出”。
@@ -1771,21 +1850,27 @@ export class AgentInsight {
     }
 
     // -------------------- 等待事件循环结束 --------------------
-    const safetyTimer = setTimeout(() => {
-      this.log("warn", "chat.stream.timeout", { sessionId, streamTimeoutMs });
-      const fn = (stream as any)?.return;
-      if (typeof fn === "function") void fn.call(stream, undefined);
-    }, streamTimeoutMs);
 
     try {
-      await subPromise;
+      await Promise.race([subPromise, new Promise<void>(resolve => {
+        if (executionSignal.aborted) resolve();
+        else executionSignal.addEventListener("abort", () => resolve(), { once: true });
+      })]);
     } finally {
       clearTimeout(safetyTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       if (fallbackEmitTimer) clearTimeout(fallbackEmitTimer);
       if (heartbeatOnlyCloseTimer) clearTimeout(heartbeatOnlyCloseTimer);
       clearFallbackChunkTimer();
       onDone?.();
     }
+
+    if (executionFailure) {
+      const failure = executionFailure as AgentRunError;
+      failure.runFacts = { ...failure.runFacts, finishedAt: new Date().toISOString() };
+      throw failure;
+    }
+    if (signal?.aborted) throw createAgentRunError('EXECUTION_CANCELLED', 'opencode 执行已中止', { traceId: sessionId, startedAt, finishedAt: new Date().toISOString() });
 
     const fullText =
       (assistantMsgId ? textAcc.get(assistantMsgId) : undefined) || promptResponseText || "";
@@ -1795,6 +1880,14 @@ export class AgentInsight {
     // 也不把过程旁白喂给 judge。
     const msgs = [...textAcc.values()];
     const transcriptText = extractCoreOutput(msgs, { fallback: fullText });
+    const responseHasActivity = Array.isArray(response?.parts) && response.parts.some((part: any) =>
+      part?.type === 'tool' || (part?.type === 'reasoning' && typeof part.text === 'string' && part.text.trim()),
+    );
+    if (!payload.noReply && !transcriptText.trim() && toolCallCount === 0 && !responseHasActivity && ![...reasoningAcc.values()].some(text => text.trim())) {
+      throw createAgentRunError('MODEL_NO_RESPONSE', 'opencode 会话已结束，但未观察到任何模型输出或工具调用', {
+        traceId: sessionId, startedAt, finishedAt: new Date().toISOString(),
+      });
+    }
 
     this.log("info", "chat.done", {
       sessionId,

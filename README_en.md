@@ -157,7 +157,19 @@ After optimization, the Skill will be automatically loaded into OpenCode's Skill
 
 ## Documentation
 
-Detailed usage guides in [docs/guide](docs/guide/) directory.
+Full documentation lives in the [`docs/`](docs/) directory, which mainly includes:
+
+| Path | Description |
+|:---|:---|
+| [`docs/user-guide/`](docs/user-guide/) | User guide: quickstart, example walkthrough, core concepts, FAQ |
+| [`docs/developer-guide/`](docs/developer-guide/) | Developer guide: architecture, modules, API, conventions |
+| [`docs/agent-ras/`](docs/agent-ras/) | Agent RAS in-loop reliability: anomaly detection + auto-recovery design and usage |
+| [`docs/agent-fault-injection/`](docs/agent-fault-injection/) | Agent fault injection: injection + collection engine design and usage |
+| [`docs/snippets/`](docs/snippets/) | Reusable doc snippets: SDK install, environment setup |
+| [`docs/qa.md`](docs/qa.md) | Platform Q&A: concepts, install, integration, Skill, evaluation, observability, architecture, troubleshooting |
+| [`docs/skill-generation-principle-and-pipeline.md`](docs/skill-generation-principle-and-pipeline.md) | Skill generation principle, pipeline and capability boundary |
+
+> New users can start with the [built-in example walkthrough](docs/user-guide/example-walkthrough.md) — run the full "diagnosis → Skill generation → evaluation → optimization" loop with zero config using the built-in example you get on registration.
 
 ## Contributing
 

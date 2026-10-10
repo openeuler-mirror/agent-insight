@@ -107,9 +107,9 @@ test("backlog 越过阈值进排空模式：此时不再限流，积压能排空
         await wait(20)
         return { success: true, record: data }
       },
-      shortMs: 10,
-      longMs: 100000,
-      maxWaitMs: 100000,
+      shortMs: 100000,
+      longMs: 10,
+      maxWaitMs: 20,
       tickMs: 5,
       aggCooldownFactor: 1,
       aggCooldownCapMs: 100000,

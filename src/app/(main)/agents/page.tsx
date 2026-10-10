@@ -18,7 +18,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
-import { normalizeAgentPlatform, AGENT_PLATFORMS, type AgentPlatform } from '@/lib/engine/observability/agent-platform';
+import { AGENT_PLATFORMS, normalizeAgentPlatform, type AgentPlatform } from '@/lib/engine/observability/agent-platform';
+import { getPlatformLabel } from '@/lib/ingest/ras/platform-label';
 
 type AgentOwnership = 'system' | 'user';
 type AgentLayer = 'main' | 'subagent';
@@ -655,7 +656,7 @@ function AgentsPageInner() {
     const filterOptions = {
         platforms: [
             { value: 'all', label: t('nav.filterDefaultOption') },
-            ...AGENT_PLATFORMS.map((value) => ({ value, label: value })),
+            ...AGENT_PLATFORMS.map((p) => ({ value: p, label: getPlatformLabel(p) })),
         ],
         executionTimes: [
             { value: 'all', label: t('nav.filterDefaultOption') },

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
+import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export async function GET(req: NextRequest) {
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
             caseStatesJson: JSON.parse(t.caseStatesJson || '{}'),
             traceEvalStatesJson: JSON.parse(t.traceEvalStatesJson || '{}'),
         }));
-        return NextResponse.json(parsed);
+        return NextResponse.json((await Promise.all(parsed.map(visibleExperimentTask))).filter(Boolean));
     } catch (err) {
         console.error('[BATCH_TASKS_GET] Failed:', err);
         return NextResponse.json({ error: 'Failed to fetch tasks' }, { status: 500 });

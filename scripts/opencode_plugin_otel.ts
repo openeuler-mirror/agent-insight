@@ -5,7 +5,9 @@ import crypto from "node:crypto"
 import { spawn } from "node:child_process"
 
 function getPreferredInsightDir() {
-  return path.join(os.homedir(), ".agent-insight")
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), ".agent-insight")
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => os.homedir()))
 }
 
 function getLegacyInsightDir() {
@@ -14,6 +16,7 @@ function getLegacyInsightDir() {
 
 function getExistingInsightDir() {
   const preferred = getPreferredInsightDir()
+  if (process.env.AGENT_INSIGHT_HOME) return preferred
   const legacy = getLegacyInsightDir()
   if (fs.existsSync(preferred)) return preferred
   if (fs.existsSync(legacy)) return legacy
@@ -289,6 +292,15 @@ export function computeHeartbeatDecision(args: {
   return args.now - since >= args.heartbeatMs ? "kick" : "none"
 }
 
+export function getSessionEventUploadMode(
+  type: string,
+  status: string,
+): "force" | "none" {
+  return type === "session.idle" || (type === "session.updated" && status === "idle")
+    ? "force"
+    : "none"
+}
+
 export type UploaderRuntime = {
   cmd: string
   argsPrefix: string[]
@@ -463,6 +475,7 @@ export default async function WittySkillInsightOtelPlugin() {
         windowsHide: true,
         env: {
           ...process.env,
+          AGENT_INSIGHT_UPLOADER_SPOOL_FILE: outFile,
           ...(force ? { AGENT_INSIGHT_UPLOADER_FORCE: "1" } : {}),
           // 强推限定到本 session：FORCE 是进程级开关，不限定的话 uploader 会把
           // spool 里保留期内的所有历史会话一并重传。
@@ -679,14 +692,14 @@ export default async function WittySkillInsightOtelPlugin() {
           const status = String(
             event?.properties?.info?.status || event?.properties?.status || ""
           ).toLowerCase()
-          const isIdle = type === "session.idle" || (type === "session.updated" && status === "idle")
-          if (isIdle) {
+          const sessionEventUploadMode = getSessionEventUploadMode(type, status)
+          if (sessionEventUploadMode === "force") {
             const sid = sessionID ? String(sessionID) : ""
             appendLogLine(
               pluginLogPath,
               `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
             )
-            kickUploader(sid, false, `event:${type}`)
+            kickUploader(sid, true, `event:${type}`)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
             // 只在有事件流入时才评估，会话真正空闲下来不会白跑。

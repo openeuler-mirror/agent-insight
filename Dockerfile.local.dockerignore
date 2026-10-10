@@ -10,7 +10,12 @@ workspace
 .claude
 .codex
 .agents
-docs
+docs/*
+!docs/user-guide
+docs/user-guide/*
+!docs/user-guide/observability
+docs/user-guide/observability/*
+!docs/user-guide/observability/llamaindex-trace-collector.md
 features
 skillbench
 tools

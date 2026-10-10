@@ -45,7 +45,7 @@ function assertGeneratedScriptSyntax(script: string, platform: "windows" | "unix
 }
 
 async function setupScript(platform: "windows" | "unix"): Promise<string> {
-  const response = await getSetup(new Request("http://localhost/api/ingest/setup?yes=1&frameworks=qoder&key=test-key", {
+  const response = await getSetup(new Request("http://localhost/api/ingest/setup?yes=1&nokey=1&frameworks=qoder&key=test-key", {
     headers: { "x-platform": platform, host: "localhost:3000" },
   }))
   assert.equal(response.status, 200)
@@ -297,20 +297,22 @@ test("install guide appends Qoder to the existing framework choices", () => {
   assert.notEqual(end, -1, "install guide framework choices must terminate")
   const options = [...source.slice(start, end).matchAll(/value: '([^']+)'/g)].map((match) => match[1])
 
-assert.deepEqual(options, [
-  "opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen",
-  "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode",
-])
+  assert.deepEqual(options, [
+    "opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen",
+    "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex",
+    "deepseek-harness", "workbuddy",
+  ])
 })
 
 test("curl setup appends Qoder without changing existing framework entries", async () => {
   for (const platform of ["unix", "windows"] as const) {
     const script = await setupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
-  assert.deepEqual(frameworkValues(script), [
-  "opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen",
-  "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode",
-  ])
+    assert.deepEqual(frameworkValues(script), [
+      "opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen",
+      "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
+      "deepseek-harness", "workbuddy",
+    ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
     assert.match(script, /qoder_token_usage_env\.mjs/)
@@ -337,9 +339,10 @@ test("local npm auto setup appends Qoder without changing existing framework ent
     const script = await autoSetupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
     assert.deepEqual(frameworkValues(script), [
-    "opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen",
-    "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode",
-  ])
+      "opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen",
+      "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
+      "deepseek-harness", "workbuddy",
+    ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
     assert.match(script, /qoder_token_usage_env\.mjs/)

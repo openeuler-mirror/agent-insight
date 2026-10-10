@@ -1,12 +1,8 @@
 import { config } from 'dotenv';
-import os from 'node:os';
 import path from 'node:path';
+import { assertSupportedHomeEnv, getAgentInsightHome, resolveDatabaseUrl } from '../../scripts/agent-insight-home.cjs';
 
-const DEFAULT_DATABASE_URL = 'file:../data/witty_insight.db';
-
-export function getAgentInsightHome(): string {
-  return process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight');
-}
+export { getAgentInsightHome };
 
 export function getAgentInsightDataDir(): string {
   return path.join(getAgentInsightHome(), 'data');
@@ -56,23 +52,17 @@ export function getAgentInsightEnvPath(): string {
  *   4) 其它(已是绝对路径 / 自定义 / 非 file:)→ 原样返回。
  */
 export function resolveDefaultDatabaseUrl(databaseUrl: string | undefined): string {
-  const homeDbUrl = `file:${resolveAgentInsightDataPath('witty_insight.db')}`;
-
-  if (!databaseUrl || !databaseUrl.trim()) return homeDbUrl;                 // 1
-  if (databaseUrl === DEFAULT_DATABASE_URL) return homeDbUrl;               // 2
-
-  const m = databaseUrl.match(/^file:(~(?:\/.*)?)$/);                       // 3: file:~ 或 file:~/...
-  if (m) {
-    const expanded = path.join(os.homedir(), m[1].slice(1)); // 去掉开头的 ~
-    return `file:${expanded}`;
-  }
-
-  return databaseUrl;                                                       // 4
+  return resolveDatabaseUrl(databaseUrl);
 }
 
 export function loadAgentInsightEnv(): void {
-  config({ path: getAgentInsightEnvPath() });
-  config();
+  const root = getAgentInsightHome();
+  const managedEnv = config({ path: path.join(root, '.env') });
+  assertSupportedHomeEnv(managedEnv.parsed || {});
+  const projectEnv = config();
+  assertSupportedHomeEnv(projectEnv.parsed || {});
+  assertSupportedHomeEnv();
+  process.env.AGENT_INSIGHT_HOME = root;
 
   // 总会拿到一个绝对路径(含未设置时的默认),让 server / 脚本 / 任意入口都一致地落到同一个库。
   process.env.DATABASE_URL = resolveDefaultDatabaseUrl(process.env.DATABASE_URL);

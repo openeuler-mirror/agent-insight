@@ -7,7 +7,7 @@
 
 # --- Load TRAE-specific config from .env as fallback ---
 _load_trae_env() {
-  local env_file="${HOME}/.agent-insight/.env"
+  local env_file="${AGENT_INSIGHT_HOME:-${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}}/.env"
   [ -f "$env_file" ] || return 0
   while IFS='=' read -r key value || [ -n "$key" ]; do
     key="$(echo "$key" | tr -d ' ')"
@@ -24,8 +24,8 @@ _load_trae_env
 # ============================================================================
 # --- Spool Directory ---
 get_spool_base() {
-  local insight_dir="${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}"
-  local api_key="${AGENT_INSIGHT_API_KEY:-}"; [ -z "$api_key" ] && [ -f "$HOME/.agent-insight/.env" ] && api_key=$(grep AGENT_INSIGHT_API_KEY "$HOME/.agent-insight/.env" | head -1 | cut -d= -f2 | tr -d "'")
+  local insight_dir="${AGENT_INSIGHT_HOME:-${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}}"
+  local api_key="${AGENT_INSIGHT_API_KEY:-}"; [ -z "$api_key" ] && [ -f "${AGENT_INSIGHT_HOME:-${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}}/.env" ] && api_key=$(grep AGENT_INSIGHT_API_KEY "${AGENT_INSIGHT_HOME:-${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}}/.env" | head -1 | cut -d= -f2 | tr -d "'")
   local key_hash=""
   if [ -n "$api_key" ]; then
     key_hash=$(echo -n "$api_key" | sha256sum 2>/dev/null | cut -c1-16 || echo "")
@@ -279,7 +279,7 @@ debug_raw_input() {
   local raw_input="$1"
   local hook_name="${2:-unknown}"
   local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
-  local debug_base="${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}/otel_data/trae/_debug_raw"
+  local debug_base="${AGENT_INSIGHT_HOME:-${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}}/otel_data/trae/_debug_raw"
   local debug_file="$debug_base/$(date -u +%Y-%m-%d).jsonl"
   mkdir -p "$(dirname "$debug_file")" 2>/dev/null
   # 写入一行 JSON：元数据 + 原始输入

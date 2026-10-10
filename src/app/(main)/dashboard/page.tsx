@@ -1,8 +1,8 @@
 'use client';
 
 // 仪表盘 · 舰队监控大盘。
-// 结构（对齐《监控大盘需求文档》REQ-FW）：健康总览 KPI 常驻 + 6 维度页签 + 懒加载 + 告警角标。
-// 数据全部来自真实 Execution 聚合（/api/fleet/trends + /api/fleet/breakdowns）。
+// 结构（对齐《监控大盘需求文档》REQ-FW）：健康总览 KPI 常驻 + 7 维度页签 + 懒加载 + 告警角标。
+// 可靠性来自 RAS 链路事件聚合（/api/fleet/reliability），其余来自真实 Execution 聚合。
 // 口径见 src/lib/fleet/agg.ts / 《视图数据计算口径说明》；硬错误口径，软错误(judge)未叠加。
 // 缺埋点的面板（per-tool 延迟、TTFT、箱线、self-time、协作网络）以占位卡诚实标注。
 
@@ -41,13 +41,11 @@ interface TrendsResp {
     kpi: { current: Kpi; previous: Kpi }; buckets: Bucket[];
 }
 interface BreakdownsResp {
-    reliability: {
-        failAgents: { name: string; total: number; fail: number; errorRate: number }[];
+    performance: {
         latHist: { label: string; count: number }[];
         latP50: number; latP95: number;
         ctxHist: { label: string; count: number }[];
-        errTypes: { tool: { label: string; count: number }[]; judge: { label: string; count: number }[] };
-        slowTraces: { taskId: string; agent: string; query: string; latency: number; tokens: number; agents: number; llmCalls: number; avgLlmMs: number | null; ok: boolean; ts: string }[];
+        slowTraces: { taskId: string; agent: string; platform: string; query: string; latency: number; tokens: number; agents: number; llmCalls: number; avgLlmMs: number | null; ok: boolean; ts: string }[];
     };
     model: {
         callRank: { model: string; calls: number }[];
@@ -80,11 +78,27 @@ interface BreakdownsResp {
     };
     flags: Record<string, boolean>;
 }
+interface ReliabilityResp {
+    filters: { platforms: string[]; agents: string[] };
+    kpi: { totalTraces: number; faultTraces: number; faultRate: number; recoveredTraces: number; recoveryRate: number; unrecoveredTraces: number };
+    trend: { label: string; faults: number; recovered: number }[];
+    recovery: { recovered: number; unrecovered: number };
+    severity: { key: string; label: string; count: number }[];
+    modes: { kind: string; total: number; recovered: number; unrecovered: number }[];
+    agents: { name: string; platform: string; traces: number; faults: number; faultRate: number; recoveryRate: number }[];
+    failureSupplement: {
+        failAgents: { name: string; total: number; fail: number; errorRate: number }[];
+        errTypes: { tool: { label: string; count: number }[]; judge: { label: string; count: number }[] };
+        callStatsCoverage: { withStats: number; total: number };
+    };
+    recentFaultTraces: { taskId: string; executionId: string; agent: string; platform: string; faultMode: string; recoveryStatus: "recovered" | "unrecovered"; ts: string }[];
+}
 
-type TabKey = 'trends' | 'reliability' | 'model' | 'tool' | 'agent' | 'orchestration';
+type TabKey = "trends" | "reliability" | "performance" | "model" | "tool" | "agent" | "orchestration";
 const TABS: { key: TabKey; label: string }[] = [
     { key: 'trends', label: '系统趋势' },
-    { key: 'reliability', label: '可靠性与性能' },
+    { key: 'reliability', label: '可靠性' },
+    { key: 'performance', label: '性能' },
     { key: 'model', label: '模型监控' },
     { key: 'tool', label: '工具监控' },
     { key: 'agent', label: 'Agent 监控' },
@@ -108,51 +122,76 @@ export default function DashboardPage() {
     const [tab, setTab] = useState<TabKey>('trends');
     const [trends, setTrends] = useState<TrendsResp | null>(null);
     const [bd, setBd] = useState<BreakdownsResp | null>(null);
+    const [reliability, setReliability] = useState<ReliabilityResp | null>(null);
     const [tErr, setTErr] = useState<string | null>(null);
     const [bErr, setBErr] = useState<string | null>(null);
+    const [rErr, setRErr] = useState<string | null>(null);
     const [bLoading, setBLoading] = useState(false);
+    const [rLoading, setRLoading] = useState(false);
+    const [platformFilter, setPlatformFilter] = useState("all");
+    const [agentFilter, setAgentFilter] = useState("all");
     const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
 
-    // 系统趋势 + KPI：随窗口即时加载。作用域=当前登录用户（带 ?user=）。
     useEffect(() => {
-        if (!user) return; // 等登录用户就绪再取，避免误查全库
+        if (!user) return;
         let live = true;
-        setTrends(null); setTErr(null); setBd(null); // 窗口/用户变→清空 breakdowns，按需重取
+        setTrends(null); setTErr(null); setBd(null); setReliability(null);
+        setPlatformFilter("all"); setAgentFilter("all");
         apiFetch(`/api/fleet/trends?window=${win}&user=${encodeURIComponent(user)}`)
             .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
             .then((d) => { if (live) setTrends(d); })
-            .catch((e) => { if (live) setTErr(e.message || '取数失败'); });
+            .catch((e) => { if (live) setTErr(e.message || "取数失败"); });
         return () => { live = false; };
     }, [win, user]);
 
-    // breakdowns：懒加载——首次切到非「系统趋势」页签时才取，之后缓存。
-    // 注意：deps 不能含 bLoading——否则 setBLoading(true) 会触发本 effect cleanup(live=false)
-    // 把 in-flight 请求的结果丢弃，导致永远卡「加载中」。
     useEffect(() => {
-        if (tab === 'trends' || bd || !user) return;
+        if (tab === "trends" || tab === "reliability" || bd || !user) return;
         let live = true;
         setBLoading(true); setBErr(null);
         apiFetch(`/api/fleet/breakdowns?window=${win}&user=${encodeURIComponent(user)}`)
             .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
             .then((d) => { if (live) setBd(d); })
-            .catch((e) => { if (live) setBErr(e.message || '取数失败'); })
+            .catch((e) => { if (live) setBErr(e.message || "取数失败"); })
             .finally(() => { if (live) setBLoading(false); });
         return () => { live = false; };
     }, [tab, win, bd, user]);
 
-    // 30s 静默自动刷新：成功才覆盖旧数据（不清空、不闪 loading）；breakdowns 只在已加载过时跟随刷新。
+    useEffect(() => {
+        if (tab !== "reliability" || !user) return;
+        let live = true;
+        const params = new URLSearchParams({ window: win, user });
+        if (platformFilter !== "all") params.set("platform", platformFilter);
+        if (agentFilter !== "all") params.set("agent", agentFilter);
+        setRLoading(true); setRErr(null);
+        apiFetch(`/api/fleet/reliability?${params.toString()}`)
+            .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+            .then((d) => { if (live) setReliability(d); })
+            .catch((e) => { if (live) setRErr(e.message || "取数失败"); })
+            .finally(() => { if (live) setRLoading(false); });
+        return () => { live = false; };
+    }, [tab, win, user, platformFilter, agentFilter]);
+
     const refreshRef = React.useRef<() => void>(() => { });
     refreshRef.current = () => {
         if (!user) return;
         apiFetch(`/api/fleet/trends?window=${win}&user=${encodeURIComponent(user)}`)
             .then((r) => (r.ok ? r.json() : null))
             .then((d) => { if (d) setTrends(d); })
-            .catch(() => { /* 静默刷新失败不打扰，下一轮再试 */ });
+            .catch(() => { });
         if (bd) {
             apiFetch(`/api/fleet/breakdowns?window=${win}&user=${encodeURIComponent(user)}`)
                 .then((r) => (r.ok ? r.json() : null))
                 .then((d) => { if (d) setBd(d); })
-                .catch(() => { /* 同上 */ });
+                .catch(() => { });
+        }
+        if (reliability) {
+            const params = new URLSearchParams({ window: win, user });
+            if (platformFilter !== "all") params.set("platform", platformFilter);
+            if (agentFilter !== "all") params.set("agent", agentFilter);
+            apiFetch(`/api/fleet/reliability?${params.toString()}`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => { if (d) setReliability(d); })
+                .catch(() => { });
         }
     };
     useEffect(() => {
@@ -160,10 +199,9 @@ export default function DashboardPage() {
         return () => clearInterval(id);
     }, []);
 
-    const threshold = trends?.errorThreshold ?? 5;
     const badges: Partial<Record<TabKey, boolean>> = {
-        trends: !!trends?.buckets.some((b) => b.errorRate > threshold),
-        reliability: !!bd?.reliability.failAgents.some((a) => a.errorRate >= threshold),
+        trends: !!trends?.buckets.some((b) => b.errorRate > (trends?.errorThreshold ?? 5)),
+        reliability: (reliability?.kpi.faultTraces ?? 0) > 0,
     };
 
     return (
@@ -214,21 +252,33 @@ export default function DashboardPage() {
                                         borderBottom: active ? '2px solid var(--primary)' : '2px solid transparent', marginBottom: -1,
                                     }}>
                                         {tb.label}
-                                        {badges[tb.key] && <span title={tb.key === 'trends' ? '告警：部分时段错误率超过 5% 阈值' : '告警：存在失败热点 Agent 错误率 ≥ 5% 阈值'} style={{ position: 'absolute', top: 6, right: 4, width: 6, height: 6, borderRadius: '50%', background: 'var(--error)', cursor: 'help' }} />}
+                                        {badges[tb.key] && <span title={tb.key === 'trends' ? '告警：部分时段错误率超过阈值' : '告警：窗口内存在 RAS 故障 trace'} style={{ position: 'absolute', top: 6, right: 4, width: 6, height: 6, borderRadius: '50%', background: 'var(--error)', cursor: 'help' }} />}
                                     </button>
                                 );
                             })}
                         </div>
 
                         {/* 页签内容（懒加载 + 缓存） */}
-                        {tab === 'trends' && <TrendsTab data={trends} />}
-                        {tab !== 'trends' && (
+                        {tab === "trends" && <TrendsTab data={trends} />}
+                        {tab === "reliability" && (
+                            rErr ? <ErrBox msg={rErr} />
+                                : rLoading && !reliability ? <Placeholder text="加载中…" />
+                                    : reliability ? <ReliabilityTab
+                                        data={reliability}
+                                        platform={platformFilter}
+                                        agent={agentFilter}
+                                        onPlatformChange={(value) => { setPlatformFilter(value); setAgentFilter("all"); }}
+                                        onAgentChange={setAgentFilter}
+                                        onAgentClick={setSelectedAgent}
+                                    /> : <Placeholder text="暂无数据" />
+                        )}
+                        {tab !== "trends" && tab !== "reliability" && (
                             bErr ? <ErrBox msg={bErr} />
                                 : bLoading || !bd ? <Placeholder text="加载中…" />
-                                    : tab === 'reliability' ? <ReliabilityTab bd={bd} onAgentClick={setSelectedAgent} />
-                                        : tab === 'model' ? <ModelTab bd={bd} trends={trends} />
-                                            : tab === 'tool' ? <ToolTab bd={bd} />
-                                                : tab === 'agent' ? <AgentTab bd={bd} onAgentClick={setSelectedAgent} />
+                                    : tab === "performance" ? <PerformanceTab bd={bd} />
+                                        : tab === "model" ? <ModelTab bd={bd} trends={trends} />
+                                            : tab === "tool" ? <ToolTab bd={bd} />
+                                                : tab === "agent" ? <AgentTab bd={bd} onAgentClick={setSelectedAgent} />
                                                     : <OrchestrationTab bd={bd} onAgentClick={setSelectedAgent} />
                         )}
                     </>
@@ -375,50 +425,297 @@ function TrendsTab({ data }: { data: TrendsResp }) {
     );
 }
 
-// ═══ 页签：③ 可靠性与性能 ═════════════════════════════════════════════════════
-// 时延值 → 所在直方图桶 label（与后端 LAT_EDGES 对齐），供 P50/P95 标线定位。
-const LAT_MARK_EDGES: [number, string][] = [[2, '0-2s'], [5, '2-5s'], [10, '5-10s'], [20, '10-20s'], [40, '20-40s'], [60, '40-60s'], [Infinity, '60s+']];
-const latBucketOf = (v: number) => LAT_MARK_EDGES.find(([edge]) => v < edge)?.[1] ?? '60s+';
-function ReliabilityTab({ bd, onAgentClick }: { bd: BreakdownsResp; onAgentClick: (name: string) => void }) {
-    const r = bd.reliability;
+// ═══ 页签：③ 可靠性 ═════════════════════════════════════════════════════════
+function ReliabilityTab({
+    data, platform, agent, onPlatformChange, onAgentChange, onAgentClick,
+}: {
+    data: ReliabilityResp;
+    platform: string;
+    agent: string;
+    onPlatformChange: (value: string) => void;
+    onAgentChange: (value: string) => void;
+    onAgentClick: (name: string) => void;
+}) {
+    const c = useThemeColors();
+    const supplement = data.failureSupplement;
+    const failureReasons = [
+        ...supplement.errTypes.tool.map((item) => ({ name: item.label, value: item.count })),
+        ...supplement.errTypes.judge.map((item) => ({ name: `判定:${item.label}`, value: item.count })),
+    ];
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <section style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)", borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "var(--foreground)" }}>可靠性</div>
+                    <div style={{ fontSize: 11, color: "var(--foreground-muted)", marginTop: 3 }}>数据源：链路跟踪中的 RAS anomaly / action_result 事件；无异常（含 unknown）按无故障计。</div>
+                </div>
+                <span style={{ flex: 1 }} />
+                <ReliabilitySelect label="平台" value={platform} options={data.filters.platforms} onChange={onPlatformChange} />
+                <ReliabilitySelect label="Agent" value={agent} options={data.filters.agents} onChange={onAgentChange} />
+            </section>
+
+            <ReliabilityKpis data={data} />
+
+            <Grid>
+                <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14 }}>
+                    <Panel title="故障与恢复趋势" hint="故障按首次 anomaly 时间；恢复按成功 action_result 时间">
+                        <ResponsiveContainer width="100%" height={CHART_H}>
+                            <LineChart data={data.trend} margin={mgn}>
+                                <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                                <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                                <YAxis width={52} stroke={c.fgMuted} tick={ax} allowDecimals={false} />
+                                <Tooltip contentStyle={tipStyle} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                                <Line type="monotone" dataKey="faults" name="故障 Trace" stroke={c.error} strokeWidth={2} dot={{ r: 2 }} />
+                                <Line type="monotone" dataKey="recovered" name="已恢复" stroke={c.success} strokeWidth={2} dot={{ r: 2 }} />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </Panel>
+                    <Panel title="故障处置分布" hint="仅统计存在 RAS 故障的 Trace；恢复失败、未知或无恢复结果均计未恢复">
+                        <RecoveryShare recovery={data.recovery} />
+                    </Panel>
+                </div>
+
+                <Panel title="故障级别占比" hint="每条 Trace 取最高 severity；无故障为正常，故障无 severity 为未标注" wide>
+                    <SeverityShare rows={data.severity} />
+                </Panel>
+
+                <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14 }}>
+                    <Panel title="故障模式" hint="RAS anomaly_kind · 同一 Trace 可命中多个模式">
+                        <ReliabilityModeChart rows={data.modes} />
+                    </Panel>
+                    <Panel title="Agent 可靠性" hint="按平台 + Agent 聚合；故障率降序">
+                        <ReliabilityAgentTable rows={data.agents} onAgentClick={onAgentClick} />
+                    </Panel>
+                </div>
+
+                <div style={{ gridColumn: "1 / -1", padding: "4px 2px 0" }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: "var(--foreground)" }}>执行失败补充</div>
+                    <div style={{ fontSize: 10.5, color: "var(--foreground-muted)", marginTop: 3 }}>下面两张图根据执行错误和结果判定汇总，用于辅助定位失败集中在哪些智能体、主要由哪些原因引起；这些数据不参与上方可靠性指标计算。</div>
+                </div>
+                <Panel title="失败热点 · Agent" hint="数据源：Execution · 错误率 TOP10（失败/总 Trace）">
+                    <HBar data={supplement.failAgents.map((item) => ({ name: item.name, value: item.errorRate }))} color="var(--error)" unit="%" onClick={onAgentClick} />
+                </Panel>
+                <Panel
+                    title="失败原因分类"
+                    info="工具硬错误按 callStats 的 error/error_type 规则归类；判定类目来自 failures.failure_type。两者可能重叠。"
+                    hint={`数据源：Execution callStats / Judge failures · 摘要覆盖 ${supplement.callStatsCoverage.withStats}/${supplement.callStatsCoverage.total} Trace`}
+                >
+                    {failureReasons.length ? <HBar data={failureReasons} color="var(--error)" /> : <Placeholder text="窗口内无失败记录" />}
+                </Panel>
+                <Panel title="近期故障 Trace" hint="按最新 RAS 事件时间降序 TOP20" wide>
+                    <RecentFaultTable rows={data.recentFaultTraces} />
+                </Panel>
+            </Grid>
+        </div>
+    );
+}
+
+function ReliabilitySelect({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+    return (
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--foreground-muted)" }}>
+            {label}
+            <select value={value} onChange={(event) => onChange(event.target.value)} style={{ minWidth: 130, border: "1px solid var(--border)", borderRadius: 7, background: "var(--background)", color: "var(--foreground-secondary)", padding: "6px 9px", fontSize: 11.5 }}>
+                <option value="all">全部</option>
+                {options.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+        </label>
+    );
+}
+
+function ReliabilityKpis({ data }: { data: ReliabilityResp }) {
+    const cards = [
+        { label: "Trace 总数", value: fmtInt(data.kpi.totalTraces), tone: "var(--foreground)" },
+        { label: "故障 Trace", value: fmtInt(data.kpi.faultTraces), tone: "var(--error)" },
+        { label: "故障率", value: fmtPct(data.kpi.faultRate), tone: "var(--error)" },
+        { label: "已恢复", value: fmtInt(data.kpi.recoveredTraces), tone: "var(--success)" },
+        { label: "恢复率", value: fmtPct(data.kpi.recoveryRate), tone: "var(--success)" },
+        { label: "未恢复", value: fmtInt(data.kpi.unrecoveredTraces), tone: "var(--warning)" },
+    ];
+    return (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+            {cards.map((card) => (
+                <div key={card.label} style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)", borderRadius: 10, padding: "12px 14px" }}>
+                    <div style={{ fontSize: 11, color: "var(--foreground-muted)" }}>{card.label}</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: card.tone, fontFamily: "var(--font-mono, monospace)", marginTop: 7 }}>{card.value}</div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function RecoveryShare({ recovery }: { recovery: ReliabilityResp["recovery"] }) {
+    const total = recovery.recovered + recovery.unrecovered;
+    if (!total) return <Placeholder text="窗口内无 RAS 故障" />;
+    const rows = [
+        { label: "已恢复", count: recovery.recovered, color: "var(--success)" },
+        { label: "未恢复", count: recovery.unrecovered, color: "var(--error)" },
+    ];
+    const radius = 65;
+    const circumference = 2 * Math.PI * radius;
+    let offset = 0;
+    const segments = rows.map((row) => {
+        const length = (row.count / total) * circumference;
+        const dashOffset = -offset;
+        offset += length;
+        return { ...row, length, dashOffset };
+    });
+
+    return (
+        <div style={{ minHeight: CHART_H, display: "flex", alignItems: "center", justifyContent: "space-evenly", gap: 18, flexWrap: "wrap", padding: "8px 12px" }}>
+            <svg viewBox="0 0 180 180" width="180" height="180" role="img" aria-label={`故障处置分布，共 ${total} 条故障调用链`} style={{ flex: "0 0 180px" }}>
+                <circle cx="90" cy="90" r={radius} fill="none" stroke="var(--border)" strokeWidth="22" />
+                {segments.filter((row) => row.count > 0).map((row) => (
+                    <circle
+                        key={row.label}
+                        cx="90"
+                        cy="90"
+                        r={radius}
+                        fill="none"
+                        stroke={row.color}
+                        strokeWidth="22"
+                        strokeDasharray={`${row.length} ${Math.max(circumference - row.length, 0.001)}`}
+                        strokeDashoffset={row.dashOffset}
+                        transform="rotate(-90 90 90)"
+                    >
+                        <title>{row.label}：{row.count} 条</title>
+                    </circle>
+                ))}
+                <text x="90" y="83" textAnchor="middle" fill="var(--foreground-muted)" fontSize="11">故障链</text>
+                <text x="90" y="109" textAnchor="middle" fill="var(--foreground)" fontSize="24" fontWeight="800">{total}</text>
+            </svg>
+
+            <div style={{ display: "flex", flex: "1 1 130px", maxWidth: 190, minWidth: 130, flexDirection: "column", gap: 14 }}>
+                {rows.map((row) => (
+                    <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 3, background: row.color, flexShrink: 0 }} />
+                        <span style={{ color: "var(--foreground-secondary)" }}>{row.label}</span>
+                        <strong style={{ marginLeft: "auto", color: "var(--foreground)", fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap" }}>
+                            {row.count} · {Math.round((row.count / total) * 1000) / 10}%
+                        </strong>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function SeverityShare({ rows }: { rows: ReliabilityResp["severity"] }) {
+    const total = rows.reduce((sum, row) => sum + row.count, 0);
+    const colors: Record<string, string> = {
+        critical: "var(--error)", high: "var(--warning)", medium: "var(--primary)",
+        low: "var(--success)", normal: "var(--foreground-muted)", unlabeled: "var(--border-dark)",
+    };
+    if (!total) return <Placeholder text="暂无 Trace" />;
+    return (
+        <div style={{ minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "center", gap: 18, padding: "8px 12px 12px" }}>
+            <div style={{ height: 24, borderRadius: 6, overflow: "hidden", display: "flex", background: "var(--border)" }}>
+                {rows.filter((row) => row.count > 0).map((row) => (
+                    <div key={row.key} title={`${row.label}：${row.count}（${Math.round((row.count / total) * 1000) / 10}%）`} style={{ width: `${(row.count / total) * 100}%`, background: colors[row.key], minWidth: 2 }} />
+                ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "nowrap", overflowX: "auto" }}>
+                {rows.map((row) => (
+                    <div key={row.key} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, flexShrink: 0 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 2, background: colors[row.key], flexShrink: 0 }} />
+                        <span style={{ color: "var(--foreground-secondary)" }}>{row.label}</span>
+                        <span style={{ marginLeft: 4, color: "var(--foreground-muted)", fontFamily: "var(--font-mono, monospace)" }}>{row.count} · {Math.round((row.count / total) * 1000) / 10}%</span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function ReliabilityModeChart({ rows }: { rows: ReliabilityResp["modes"] }) {
+    const c = useThemeColors();
+    if (!rows.length) return <Placeholder text="窗口内无 RAS 故障" />;
+    return (
+        <ResponsiveContainer width="100%" height={CHART_H}>
+            <BarChart layout="vertical" data={rows} margin={{ top: 4, right: 18, bottom: 4, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={c.border} horizontal={false} />
+                <XAxis type="number" stroke={c.fgMuted} tick={ax} allowDecimals={false} />
+                <YAxis type="category" dataKey="kind" stroke={c.fgMuted} tick={{ fontSize: 10 }} width={118} />
+                <Tooltip contentStyle={tipStyle} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                <Bar dataKey="recovered" name="已恢复" stackId="r" fill={c.success} barSize={14} isAnimationActive={false} />
+                <Bar dataKey="unrecovered" name="未恢复" stackId="r" fill={c.error} barSize={14} isAnimationActive={false} radius={[0, 3, 3, 0]} />
+            </BarChart>
+        </ResponsiveContainer>
+    );
+}
+
+function ReliabilityAgentTable({ rows, onAgentClick }: { rows: ReliabilityResp["agents"]; onAgentClick: (name: string) => void }) {
+    if (!rows.length) return <Placeholder text="暂无数据" />;
+    const th: React.CSSProperties = { textAlign: "left", padding: "7px 10px", color: "var(--foreground-muted)", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" };
+    const td: React.CSSProperties = { padding: "7px 10px", borderBottom: "1px solid var(--border)", color: "var(--foreground-secondary)" };
+    return (
+        <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead><tr><th style={th}>Agent</th><th style={th}>平台</th><th style={th}>Trace</th><th style={th}>故障</th><th style={th}>故障率</th><th style={th}>恢复率</th><th style={th}>操作</th></tr></thead>
+                <tbody>{rows.map((row) => (
+                    <tr key={`${row.platform}:${row.name}`}>
+                        <td style={td}>{row.name}</td><td style={td}>{row.platform}</td>
+                        <td style={td}>{fmtInt(row.traces)}</td><td style={td}>{fmtInt(row.faults)}</td>
+                        <td style={{ ...td, color: row.faultRate > 0 ? "var(--error)" : "var(--success)" }}>{fmtPct(row.faultRate)}</td>
+                        <td style={{ ...td, color: row.recoveryRate === 100 ? "var(--success)" : "var(--warning)" }}>{row.faults ? fmtPct(row.recoveryRate) : "—"}</td>
+                        <td style={td}><button onClick={() => onAgentClick(row.name)} style={{ border: "none", background: "transparent", color: "var(--primary)", cursor: "pointer", padding: 0 }}>查看</button></td>
+                    </tr>
+                ))}</tbody>
+            </table>
+        </div>
+    );
+}
+
+function RecentFaultTable({ rows }: { rows: ReliabilityResp["recentFaultTraces"] }) {
+    if (!rows.length) return <Placeholder text="窗口内无 RAS 故障 Trace" />;
+    const th: React.CSSProperties = { textAlign: "left", padding: "7px 10px", color: "var(--foreground-muted)", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" };
+    const td: React.CSSProperties = { padding: "7px 10px", borderBottom: "1px solid var(--border)", color: "var(--foreground-secondary)" };
+    const fmtTs = (iso: string) => new Date(iso).toLocaleString();
+    return (
+        <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead><tr><th style={th}>Trace</th><th style={th}>Agent</th><th style={th}>平台</th><th style={th}>故障模式</th><th style={th}>处置结果</th><th style={th}>时间</th><th style={th}>操作</th></tr></thead>
+                <tbody>{rows.map((row) => (
+                    <tr key={row.executionId}>
+                        <td style={{ ...td, fontFamily: "var(--font-mono, monospace)" }}>{row.taskId.slice(0, 12)}…</td>
+                        <td style={td}>{row.agent}</td><td style={td}>{row.platform}</td><td style={td}>{row.faultMode}</td>
+                        <td style={{ ...td, color: row.recoveryStatus === "recovered" ? "var(--success)" : "var(--warning)", fontWeight: 600 }}>{row.recoveryStatus === "recovered" ? "已恢复" : "未恢复"}</td>
+                        <td style={{ ...td, color: "var(--foreground-muted)", whiteSpace: "nowrap" }}>{fmtTs(row.ts)}</td>
+                        <td style={td}><a href={getApiUrl(`/trace?taskId=${encodeURIComponent(row.taskId)}`)} style={{ color: "var(--primary)", textDecoration: "none" }}>查看链路 →</a></td>
+                    </tr>
+                ))}</tbody>
+            </table>
+        </div>
+    );
+}
+
+// ═══ 页签：④ 性能 ═══════════════════════════════════════════════════════════
+const LAT_MARK_EDGES: [number, string][] = [[2, "0-2s"], [5, "2-5s"], [10, "5-10s"], [20, "10-20s"], [40, "20-40s"], [60, "40-60s"], [Infinity, "60s+"]];
+const latBucketOf = (value: number) => LAT_MARK_EDGES.find(([edge]) => value < edge)?.[1] ?? "60s+";
+function PerformanceTab({ bd }: { bd: BreakdownsResp }) {
+    const performance = bd.performance;
     return (
         <Grid>
-            <Panel title="失败热点 · Agent" hint="错误率 TOP10（失败/总调用）· 点击下钻">
-                <HBar data={r.failAgents.map((a) => ({ name: a.name, value: a.errorRate }))} color="var(--error)" unit="%" onClick={onAgentClick} />
-            </Panel>
-            <Panel title="端到端时延分布" hint={`per-trace 对数桶（秒）· 标线 P50=${r.latP50}s / P95=${r.latP95}s`}>
-                <Histogram data={r.latHist} color="var(--warning)" marks={[
-                    { label: latBucketOf(r.latP50), text: 'P50', color: 'var(--primary)' },
-                    { label: latBucketOf(r.latP95), text: 'P95', color: 'var(--error)' },
+            <Panel title="端到端时延分布" hint={`per-trace 对数桶（秒）· 标线 P50=${performance.latP50}s / P95=${performance.latP95}s`}>
+                <Histogram data={performance.latHist} color="var(--warning)" marks={[
+                    { label: latBucketOf(performance.latP50), text: "P50", color: "var(--primary)" },
+                    { label: latBucketOf(performance.latP95), text: "P95", color: "var(--error)" },
                 ]} />
             </Panel>
             <Panel
                 title="单次调用上下文峰值分布"
-                info="每条 trace 取其所有 Execution 行 maxSingleCallTokens（单次模型调用的 input+output+cache 总 token，即该次调用的上下文占用）的最大值后分桶。逼近模型上下文窗口 = 截断/失败风险。无该埋点的 trace 不计入。"
+                info="每条 trace 取所有 Execution 行 maxSingleCallTokens 的最大值后分桶。无该埋点的 trace 不计入。"
                 hint="trace 级 max(maxSingleCallTokens) 分桶"
             >
-                <Histogram data={r.ctxHist} color={TEAL} />
+                <Histogram data={performance.ctxHist} color={TEAL} />
             </Panel>
-            <Panel
-                title="失败原因分类"
-                info="两组口径：工具硬错误按 error/error_type 文本规则归类（timeout/网络/权限/上下文超限/限流等，规则集中在 call-stats.ts）；「判定:」前缀为 judge 慢路径对 trace 的失败判定类目（failures.failure_type），与工具硬错误来源不同，可能与之重叠。"
-                hint={`工具错误规则归类 + judge 判定 · 摘要覆盖 ${bd.callStatsCoverage.withStats}/${bd.callStatsCoverage.total} trace`}
-            >
-                {(r.errTypes.tool.length || r.errTypes.judge.length)
-                    ? <HBar data={[
-                        ...r.errTypes.tool.map((x) => ({ name: x.label, value: x.count })),
-                        ...r.errTypes.judge.map((x) => ({ name: `判定:${x.label}`, value: x.count })),
-                    ]} color="var(--error)" />
-                    : <Placeholder text="窗口内无失败记录" />}
-            </Panel>
-            <Panel title="慢 Trace 排行" hint="按端到端耗时降序 TOP20（点击进链路）· 复杂任务耗时多属正常，模型调用少而时延高才异常" wide>
-                <SlowTable rows={r.slowTraces} />
+            <Panel title="慢 Trace 排行" hint="按端到端耗时降序 TOP20（点击进链路）" wide>
+                <SlowTable rows={performance.slowTraces} />
             </Panel>
         </Grid>
     );
 }
 
-// ═══ 页签：④ 模型监控 ════════════════════════════════════════════════════════
+// ═══ 页签：⑤ 模型监控 ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 function ModelTab({ bd, trends }: { bd: BreakdownsResp; trends: TrendsResp }) {
     const c = useThemeColors();
     const m = bd.model;
@@ -605,7 +902,7 @@ function BoxPlot({ data }: { data: BreakdownsResp['model']['box'] }) {
     );
 }
 
-// ═══ 页签：⑤ 工具监控 ════════════════════════════════════════════════════════
+// ═══ 页签：⑥ 工具监控 ════════════════════════════════════════════════════════
 function ToolTab({ bd }: { bd: BreakdownsResp }) {
     const c = useThemeColors();
     const t = bd.tool.trend;
@@ -689,7 +986,7 @@ function ToolRankTable({ rows }: { rows: BreakdownsResp['tool']['rank'] }) {
     );
 }
 
-// ═══ 页签：⑥ Agent 监控 ══════════════════════════════════════════════════════
+// ═══ 页签：⑦ Agent 监控 ══════════════════════════════════════════════════════
 function AgentTab({ bd, onAgentClick }: { bd: BreakdownsResp; onAgentClick: (name: string) => void }) {
     const c = useThemeColors();
     const a = bd.agent;
@@ -745,7 +1042,7 @@ function AgentTab({ bd, onAgentClick }: { bd: BreakdownsResp; onAgentClick: (nam
     );
 }
 
-// ═══ 页签：⑦ 多智能体编排 ════════════════════════════════════════════════════
+// ═══ 页签：⑧ 多智能体编排 ════════════════════════════════════════════════════
 function OrchestrationTab({ bd, onAgentClick }: { bd: BreakdownsResp; onAgentClick: (name: string) => void }) {
     const col = bd.orchestration.collab;
     return (
@@ -940,7 +1237,7 @@ function Histogram({ data, color, marks, height }: {
         </ResponsiveContainer>
     );
 }
-function SlowTable({ rows }: { rows: BreakdownsResp['reliability']['slowTraces'] }) {
+function SlowTable({ rows }: { rows: BreakdownsResp['performance']['slowTraces'] }) {
     if (!rows.length) return <Placeholder text="暂无数据" />;
     const th: React.CSSProperties = { textAlign: 'left', padding: '7px 10px', color: 'var(--foreground-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
     const td: React.CSSProperties = { padding: '7px 10px', borderBottom: '1px solid var(--border)', color: 'var(--foreground-secondary)' };
@@ -953,7 +1250,7 @@ function SlowTable({ rows }: { rows: BreakdownsResp['reliability']['slowTraces']
         <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
                 <thead><tr>
-                    <th style={th}>Trace</th><th style={th}>Agent</th><th style={th}>任务 (query)</th>
+                    <th style={th}>Trace</th><th style={th}>Agent</th><th style={th}>平台</th><th style={th}>任务 (query)</th>
                     <th style={{ ...th, textAlign: 'right' }}>时延(s)</th>
                     <th style={{ ...th, textAlign: 'right' }}>模型调用</th>
                     <th style={{ ...th, textAlign: 'right' }}>模型调用均耗时 <Info text="= Σ模型调用耗时 ÷ 有效调用次数（callStats 摘要，纯模型推理口径，不含工具与等待）。复杂任务调用多、均值不高属正常；均值高（>5s/次 标红）= 单次模型调用异常慢（超长上下文/限流重试/慢模型），值得点进链路排查。" /></th>
@@ -966,6 +1263,7 @@ function SlowTable({ rows }: { rows: BreakdownsResp['reliability']['slowTraces']
                         <tr key={i}>
                             <td style={td}><a href={getApiUrl(`/trace?taskId=${encodeURIComponent(r.taskId)}`)} style={{ color: 'var(--primary)', textDecoration: 'none', fontFamily: 'var(--font-mono, monospace)' }}>{r.taskId.slice(0, 12)}…</a></td>
                             <td style={td}>{r.agent}</td>
+                            <td style={td}>{r.platform}</td>
                             <td style={{ ...td, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.query}>{r.query || '—'}</td>
                             <td style={{ ...num, color: 'var(--warning)' }}>{r.latency}</td>
                             <td style={num}>{r.llmCalls || '—'}</td>

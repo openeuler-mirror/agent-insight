@@ -1,0 +1,46 @@
+# coding: utf-8
+"""Example DETECTOR_PLUGIN template (copy to detectors/<domain>.py).
+
+Files starting with ``_`` are skipped by DomainLoader — rename when enabling.
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from agents.ras_agents import RASAgents
+    from detectors.base import Detector
+    from detectors.types import DetectorPlugin
+
+
+class ExampleDomainConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    threshold: int = Field(default=5, ge=1)
+
+
+def _build(cfg: ExampleDomainConfig, agents: "RASAgents") -> "Detector | None":
+    del agents
+    if not cfg.enabled:
+        return None
+    del cfg
+    return None
+
+
+# Uncomment when using as a real domain module:
+# from detectors.types import DetectorPlugin
+# DETECTOR_PLUGIN = DetectorPlugin(
+#     id="example_domain",
+#     kinds=("example_kind",),
+#     kind_to_domain={"example_kind": "example_domain"},
+#     config_model=ExampleDomainConfig,
+#     factory=_build,
+#     detection_skill="example-detection",
+#     anchor="llm",
+#     priority=100,
+# )
+
+__all__ = ["ExampleDomainConfig"]
