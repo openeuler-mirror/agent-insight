@@ -12,13 +12,13 @@ import * as os from "os"
 //   - 多 Agent 拆分：interactions 里的 TASK + subagent turn 派生子 Execution 行，
 //     parentExecutionId/rootExecutionId/isSubagent 正确（AC33 服务端侧）
 //
-// 环境处理：本地 ~/.agent-insight/.env 的 AGENT_INSIGHT_DATA_DIR 会让默认库解析
-// 到嵌套空库（data/data/witty_insight.db），因此这里显式固定 DATABASE_URL 到
-// 与服务一致的真库，并在模块加载前设置（动态 import 保证）。表不存在时自动 skip。
+// 环境处理：回归隔离（2026-08-19 规则「回归隔离、深度可见」）——普通回归一律写隔离
+// 临时库（复制官方库 schema），不写官方共享库；隔离库在模块加载前固定（动态 import
+// 保证，helper 先于任何 prisma/data-service 模块设置 DATABASE_URL）。表不存在时自动 skip。
 // ============================================================================
 
-// 必须在任何 prisma / data-service 模块加载前固定库地址
-process.env.DATABASE_URL = `file:${path.join(os.homedir(), ".agent-insight", "data", "witty_insight.db")}`
+import { isolateTestDatabase } from "./helpers/isolated-test-db"
+isolateTestDatabase("trae-server-conversion")
 delete process.env.AGENT_INSIGHT_DATA_DIR
 
 type SaveResult = { record: any }

@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { isolateTestDatabase } from './helpers/isolated-test-db';
+isolateTestDatabase('infra-registry');
 import { deriveCandidates, probeEndpoint } from '@/lib/infra/registry';
 import { pollOnce } from '@/lib/infra/poller';
 import { ensureSource, querySamples } from '@/lib/infra/store';

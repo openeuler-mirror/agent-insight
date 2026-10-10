@@ -5,6 +5,8 @@ import path from "node:path"
 import test from "node:test"
 
 import otlpRoot from "@opentelemetry/otlp-transformer/build/src/generated/root"
+import { isolateTestDatabase } from "./helpers/isolated-test-db"
+isolateTestDatabase("otel-protobuf-decode")
 import { POST as postOtlpTraces } from "@/app/api/ingest/otel/v1/traces/route"
 import { POST as postLangfusePublicTraces } from "@/app/api/public/otel/v1/traces/route"
 import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
