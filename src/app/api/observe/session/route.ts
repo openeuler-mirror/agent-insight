@@ -26,6 +26,12 @@ type ParsedSession = {
         cost: number | null;
         timestamp: Date | null;
     };
+    executionSummary?: {
+        latency: number | null;
+        tokens: number | null;
+        cost: number | null;
+        timestamp: Date | null;
+    };
     thread?: TraceThreadDto;
     interactions: any[];
     langfuseTraceNodes: LangfuseTraceNode[];

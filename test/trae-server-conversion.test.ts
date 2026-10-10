@@ -13,10 +13,6 @@ import * as os from "os"
 //   - 多 Agent 拆分：interactions 里的 TASK + subagent turn 派生子 Execution 行，
 //     parentExecutionId/rootExecutionId/isSubagent 正确（AC33 服务端侧）
 //
-
-import { isolateTestDatabase } from "./helpers/isolated-test-db"
-isolateTestDatabase("trae-server-conversion")
-=======
 // 使用当前 Prisma schema 初始化私有数据库，避免依赖或修改用户常用库。
 // ============================================================================
 
