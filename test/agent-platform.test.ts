@@ -20,6 +20,12 @@ test('Agent management recognizes Qwen Code as a supported platform', () => {
   assert.equal(normalizeAgentPlatform(' QWENCODE '), 'qwencode');
 });
 
+test('Agent management recognizes QwenPaw as a supported platform', () => {
+  assert.ok(AGENT_PLATFORMS.includes('qwenpaw'));
+  assert.equal(normalizeAgentPlatform('qwenpaw'), 'qwenpaw');
+  assert.equal(normalizeAgentPlatform(' QWENPAW '), 'qwenpaw');
+});
+
 test('Agent management preserves existing platforms and labels unregistered platforms as unknown', () => {
   assert.equal(normalizeAgentPlatform('opencode'), 'opencode');
   assert.equal(normalizeAgentPlatform('openclaw'), 'openclaw');
@@ -50,7 +56,7 @@ test('Agent management derives page platform filters from the canonical list', (
   assert.match(page, /type PlatformFilter = 'all' \| AgentPlatform;/);
   assert.match(page, /normalizeAgentPlatform\(a\.platform\)/);
   assert.match(page, /AGENT_PLATFORMS\.map/);
-  for (const platform of ['codex', 'pi-agent', 'workbuddy'] as const) {
+  for (const platform of ['codex', 'pi-agent', 'qwenpaw', 'workbuddy'] as const) {
     assert.ok(AGENT_PLATFORMS.includes(platform), `${platform} must be a canonical page platform`);
   }
 });

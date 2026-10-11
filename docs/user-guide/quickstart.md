@@ -356,6 +356,13 @@ Pi Agent、Codex 和 Goal Plus 共用采集传输模块。重新安装时，已�
 
 OTLP Logs 上报到 `/api/ingest/otel/v1/logs`，Traces 上报到 `/api/ingest/otel/v1/traces`；AcTrail 默认使用 OTLP/HTTP Protobuf。安装脚本末尾也会输出一份可手动复制的纯配置环境变量块。旧版 watcher 仅作为兼容方式保留；同一 OpenClaw 实例只能选择 OTel 或 watcher 其中一种，避免重复 Trace。
 
+如果使用 **QwenPaw**，在安装指导中勾选 QwenPaw 并执行对应系统的一行命令。脚本会下载
+`agent-insight-qwenpaw` collector zip，安装 Python 包，并把 `agent-insight-qwenpaw` 插件注册到
+QwenPaw plugins 目录。安装后必须重启 QwenPaw；新建对话时会在链路追踪中生成一条 Trace，同一
+对话继续提问会追加新的 USER 和 LLM/Tool 调用，新建对话才新增 Trace。详情页中的子 Agent 会按
+`AGENT -> TASK -> AGENT` 树展示。完整说明见
+[QwenPaw Trace Collector 接入指南](./observability/qwenpaw-trace-collector)。
+
 
 ---
 

@@ -222,6 +222,7 @@ const frameworks = [
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
     { name: 'DeepSeek Harness', value: 'deepseek-harness' },
+    { name: 'QwenPaw', value: 'qwenpaw' },
     { name: 'MCTS (xGovernor)', value: 'mcts-xgovernor' },
     { name: 'WorkBuddy', value: 'workbuddy' }
 ];
@@ -311,6 +312,7 @@ INSTALL_ACTRAIL=false
 INSTALL_CODEX=false
 INSTALL_QWENCODE=false
 INSTALL_DEEPSEEK_HARNESS=false
+INSTALL_QWENPAW=false
 INSTALL_MCTS_XGOVERNOR=false
 DEEPSEEK_HARNESS_SETUP_OK=false
 MCTS_XGOVERNOR_SETUP_OK=false
@@ -361,6 +363,9 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
     INSTALL_DEEPSEEK_HARNESS=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"qwenpaw"* ]]; then
+    INSTALL_QWENPAW=true
+fi
 if [[ ",$SELECTED_FRAMEWORKS," == *",mcts-xgovernor,"* ]]; then
     INSTALL_MCTS_XGOVERNOR=true
 fi
@@ -369,7 +374,7 @@ if [[ "$SELECTED_FRAMEWORKS" == *"workbuddy"* ]]; then
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -772,6 +777,23 @@ if [ "$INSTALL_CODEX" = "true" ]; then
     rm -f "$CODEX_INSTALLER"
 fi
 
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "⏬ Installing QwenPaw AgentInsight collector..."
+    if command -v python3 >/dev/null 2>&1; then QWENPAW_PYTHON="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then QWENPAW_PYTHON="$(command -v python)"; else echo "❌ Python 3.11+ is required for the QwenPaw collector."; exit 1; fi
+    if ! "$QWENPAW_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"; then echo "❌ $QWENPAW_PYTHON must be Python 3.11 or newer."; exit 1; fi
+    QWENPAW_ROOT="$AGENT_INSIGHT_HOME/collectors/qwenpaw"
+    QWENPAW_ARCHIVE="$QWENPAW_ROOT/agent-insight-qwenpaw.zip"
+    QWENPAW_SOURCE_DIR="$QWENPAW_ROOT/current"
+    rm -rf "$QWENPAW_SOURCE_DIR"
+    mkdir -p "$QWENPAW_ROOT" "$QWENPAW_SOURCE_DIR"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qwenpaw-collector" -o "$QWENPAW_ARCHIVE"
+    "$QWENPAW_PYTHON" -m zipfile -e "$QWENPAW_ARCHIVE" "$QWENPAW_SOURCE_DIR"
+    "$QWENPAW_PYTHON" -m pip install --disable-pip-version-check --upgrade "$QWENPAW_SOURCE_DIR"
+    "$QWENPAW_PYTHON" -m qwenpaw_insight.cli install --host "$AGENT_INSIGHT_HOST" --api-key "$AGENT_INSIGHT_API_KEY"
+    echo "QwenPaw collector installed (source: $QWENPAW_SOURCE_DIR, spool: $AGENT_INSIGHT_HOME/otel_data/qwenpaw)"
+    echo "   Restart QwenPaw; the plugin is loaded by QwenPaw hooks."
+fi
+
 if [ "$LLAMAINDEX_READY" = "true" ]; then
     if ! PYTHONPATH="$LLAMAINDEX_SOURCE_DIR\${PYTHONPATH:+:$PYTHONPATH}" AGENT_INSIGHT_API_KEY="$AGENT_INSIGHT_API_KEY" "$LLAMAINDEX_PYTHON" -m agent_insight_llamaindex.cli configure --endpoint "$AGENT_INSIGHT_HOST"; then
         echo "❌ Unable to configure the LlamaIndex collector."
@@ -1161,6 +1183,9 @@ fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  ✅ Codex Collector: ~/.agent-insight/collectors/codex"
 fi
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "  ✅ QwenPaw Collector: bundled hook plugin (spool $AGENT_INSIGHT_HOME/otel_data/qwenpaw)"
+fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  ✅ DeepSeek Harness observability: headless + web profiles"
 fi
@@ -1208,6 +1233,9 @@ if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
 fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  8. Start Codex, run /hooks, and trust the Agent Insight handlers"
+fi
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "  9. Restart QwenPaw, then run a conversation"
 fi
 if [ "$MCTS_XGOVERNOR_SETUP_OK" = "true" ]; then
     echo "  9. Run MCTS through the proxy: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]"
@@ -1336,6 +1364,7 @@ function generatePowerShellScript(
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
         '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },"',
+        '    "    { name: \'QwenPaw\', value: \'qwenpaw\' },"',
         '    "    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },"',
         '    "    { name: \'WorkBuddy\', value: \'workbuddy\' }"',
         '    "];"',
@@ -1426,6 +1455,7 @@ function generatePowerShellScript(
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
+        '$INSTALL_QWENPAW = $false',
         '$INSTALL_WORKBUDDY = $false',
         '$INSTALL_MCTS_XGOVERNOR = $false',
         '$MCTS_XGOVERNOR_SETUP_OK = $false',
@@ -1476,6 +1506,9 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
         '    $INSTALL_DEEPSEEK_HARNESS = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "qwenpaw") {',
+        '    $INSTALL_QWENPAW = $true',
+        '}',
         'if ($SELECTED_FRAMEWORKS -match "workbuddy") {',
         '    $INSTALL_WORKBUDDY = $true',
         '}',
@@ -1484,7 +1517,7 @@ function generatePowerShellScript(
         '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_WORKBUDDY -and -not $INSTALL_MCTS_XGOVERNOR) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_QWENPAW -and -not $INSTALL_WORKBUDDY -and -not $INSTALL_MCTS_XGOVERNOR) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1867,6 +1900,27 @@ function generatePowerShellScript(
         '    } finally {',
         '        Remove-Item -LiteralPath $codexInstaller -Force -ErrorAction SilentlyContinue',
         '    }',
+        '}',
+        '',
+        'if ($INSTALL_QWENPAW) {',
+        '    Write-Host "⏬ Installing QwenPaw AgentInsight collector..."',
+        '    $qwenpawPython = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1).Source',
+        '    if (-not $qwenpawPython) { throw "Python 3.11+ is required for the QwenPaw collector." }',
+        '    & $qwenpawPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"',
+        '    if ($LASTEXITCODE -ne 0) { throw "$qwenpawPython must be Python 3.11 or newer." }',
+        '    $qwenpawRoot = Join-Path $env:AGENT_INSIGHT_HOME "collectors\\qwenpaw"',
+        '    $qwenpawArchive = Join-Path $qwenpawRoot "agent-insight-qwenpaw.zip"',
+        '    $qwenpawSourceDir = Join-Path $qwenpawRoot "current"',
+        '    Remove-Item $qwenpawSourceDir -Recurse -Force -ErrorAction SilentlyContinue',
+        '    New-Item -ItemType Directory -Path $qwenpawRoot, $qwenpawSourceDir -Force | Out-Null',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qwenpaw-collector" -OutFile $qwenpawArchive',
+        '    & $qwenpawPython -m zipfile -e $qwenpawArchive $qwenpawSourceDir',
+        '    & $qwenpawPython -m pip install --disable-pip-version-check --upgrade $qwenpawSourceDir',
+        '    if ($LASTEXITCODE -ne 0) { throw "Unable to install the QwenPaw collector package." }',
+        '    & $qwenpawPython -m qwenpaw_insight.cli install --host $AGENT_INSIGHT_HOST --api-key $AGENT_INSIGHT_API_KEY',
+        '    if ($LASTEXITCODE -ne 0) { throw "Unable to configure the QwenPaw collector plugin." }',
+        '    Write-Host "QwenPaw collector installed (source: $qwenpawSourceDir, spool: $env:AGENT_INSIGHT_HOME\\otel_data\\qwenpaw)"',
+        '    Write-Host "   Restart QwenPaw; the plugin is loaded by QwenPaw hooks."',
         '}',
         '',
         'if ($LLAMAINDEX_READY) {',
@@ -2271,6 +2325,7 @@ function generatePowerShellScript(
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK) { Write-Host "  ⚠️  Goal Plus worker and relationship collector: not installed" }',
         'if ($AUTO_ADDED_FRAMEWORKS) { Write-Host "  ℹ️  Trace collectors configured for Goal Plus: $AUTO_ADDED_FRAMEWORKS" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:AGENT_INSIGHT_HOME\\collectors\\codex" }',
+        'if ($INSTALL_QWENPAW) { Write-Host "  ✅ QwenPaw Collector: bundled hook plugin (spool $env:AGENT_INSIGHT_HOME\\otel_data\\qwenpaw)" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2313,6 +2368,7 @@ function generatePowerShellScript(
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
         'if ($INSTALL_WORKBUDDY) { Write-Host "  9. Open WorkBuddy and start a conversation; traces auto-collect (task: schtasks /query /tn AgentInsight-WorkBuddyCollector)" }',
         'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  9. In WSL run: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]" }',
+        'if ($INSTALL_QWENPAW) { Write-Host "  9. Restart QwenPaw, then run a conversation" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS) { Write-Host "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "      Worker relationship collection: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
         'Write-Host "------------------------------------------------"',

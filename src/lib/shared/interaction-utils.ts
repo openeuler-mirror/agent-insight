@@ -177,6 +177,35 @@ export function extractSkillsWithVersionsFromToolInteractions(interactions: any[
   return skills
 }
 
+export function extractSkillsWithVersionsFromQwenPawSession(interactions: any[]): InvokedSkill[] {
+  const seen = new Set<string>()
+  const skills: InvokedSkill[] = []
+
+  const collectFromMsg = (msg: any) => {
+    if (!msg) return
+    const calls = msg.tool_calls || msg.toolCalls || []
+    for (const tc of calls) {
+      const skillMeta = tc?.skill
+      const toolName = String(tc?.function?.name ?? tc?.name ?? "")
+      const rawName = skillMeta?.name ?? (toolName.toLowerCase().startsWith("skill.") ? toolName.slice("skill.".length) : null)
+      if (rawName == null || !String(rawName).trim()) continue
+      const name = String(rawName).trim().replace(/^['"]+|['"]+$/g, "")
+      if (!SKILL_NAME_PATTERN.test(name) || seen.has(name)) continue
+      seen.add(name)
+      const rawVersion = skillMeta?.version
+      const version = rawVersion != null ? Number(rawVersion) : null
+      skills.push({ name, version: version !== null && !Number.isNaN(version) ? version : null })
+    }
+  }
+
+  for (const interaction of interactions) {
+    collectFromMsg(interaction)
+    collectFromMsg(interaction.responseMessage)
+    for (const message of interaction.requestMessages || []) collectFromMsg(message)
+  }
+  return skills
+}
+
 export function extractSkillsWithVersionsFromHermesSession(interactions: any[]): InvokedSkill[] {
   const seen = new Set<string>()
   const skills: InvokedSkill[] = []
