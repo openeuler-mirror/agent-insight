@@ -145,3 +145,59 @@ test('TASK rows use child duration and leave unresolved coordination events with
     assert.equal(linked, 44_000);
     assert.equal(regular, 250);
 });
+
+function eventDetailMarkup(status: string, output: string, exitCode?: number, reason?: string, kind: 'tool' | 'skill' = 'tool') {
+    const SpanErrorBlock = functionValue<React.ComponentType>('SpanErrorBlock', {
+        React, useState: React.useState, useLocale: () => ({ locale: 'zh' }),
+        copyText: async () => {},
+    });
+    const EventDetailPanel = functionValue<React.ComponentType<Record<string, unknown>>>('EventDetailPanel', {
+        React, useLocale: () => ({ locale: 'zh' }), TraceCtx: React.createContext({}),
+        isErrorToolStatus: functionValue('isErrorToolStatus', {}),
+        KIND_META: { tool: { label: 'TOOL' }, skill: { label: 'SKILL' } }, formatClockMs: () => null,
+        firstMeaningfulLine: (value: string) => value, formatDuration: () => '',
+        KindBadge: () => null, CopyableId: () => null, RasReliabilityDetails: () => null,
+        getAgentNodeDisplayLabel: () => 'Default', SpanErrorBlock,
+        CompactSection: ({ label, raw }: { label: string; raw: string }) => React.createElement('section', { 'data-section': label }, raw),
+        EmptyDetail: () => null,
+    });
+    return renderToStaticMarkup(React.createElement(EventDetailPanel, {
+        event: { kind, name: kind === 'skill' ? 'docx' : 'execute_shell_command', toolStatus: status,
+            toolExitCode: exitCode, toolError: reason, output, args: { command: 'node doc.js' } },
+        node: { agentName: 'Default', children: [] }, interactions: [],
+    }));
+}
+
+test('failed tool details retain a separate Output section and explain the exit code', () => {
+    const html = eventDetailMarkup('error', 'partial file content\nError: Cannot find module docx', 1, 'tool exited with code 1');
+    assert.match(html, /退出码[\s\S]*1/);
+    assert.match(html, /data-section="Output"/);
+    assert.match(html, /partial file content/);
+    assert.doesNotMatch(html, /toolStatus:/);
+});
+
+test('successful tool output containing error words does not render a failure block', () => {
+    const html = eventDetailMarkup('success', 'Skill instructions: how to handle Error messages');
+    assert.match(html, /data-section="Output"/);
+    assert.doesNotMatch(html, /执行失败/);
+});
+
+test('successful Skill instructions remain in Output without a failure block', () => {
+    const html = eventDetailMarkup('success', '# DOCX creation\nReport missing dependencies as errors.', undefined, undefined, 'skill');
+    assert.match(html, /data-section="Output"/);
+    assert.match(html, /DOCX creation/);
+    assert.doesNotMatch(html, /执行失败/);
+});
+
+test('legacy failed tool output remains inspectable without structured error metadata', () => {
+    const html = eventDetailMarkup('error', 'legacy error and partial result');
+    assert.match(html, /执行失败/);
+    assert.match(html, /data-section="Output"/);
+    assert.match(html, /legacy error and partial result/);
+});
+
+test('cancelled and denied tool calls are not shown as successful', () => {
+    assert.match(eventDetailMarkup('cancelled', 'partial result'), /执行已中断/);
+    assert.match(eventDetailMarkup('interrupted', 'partial result'), /执行已中断/);
+    assert.match(eventDetailMarkup('denied', 'Permission denied'), /调用被拒绝/);
+});

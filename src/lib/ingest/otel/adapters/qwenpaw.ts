@@ -419,6 +419,22 @@ function makeSystemInteraction(args: {
   }
 }
 
+const TOOL_FAILURE_STATUSES = new Set(['error', 'failed', 'denied', 'interrupted', 'cancelled'])
+
+function hasNonZeroExitCode(event: OtelTraceEvent): boolean {
+  const value = attr(event, 'tool.exit_code')
+  if (value === undefined || value === null || value === '') return false
+  const exitCode = Number(value)
+  return Number.isFinite(exitCode) && exitCode !== 0
+}
+
+function isFailedToolEvent(event: OtelTraceEvent): boolean {
+  const status = String(attr(event, 'tool.status', 'tool.outcome') || '').toLowerCase()
+  return TOOL_FAILURE_STATUSES.has(status) ||
+    attr(event, 'error.message', 'exception.message') !== undefined ||
+    hasNonZeroExitCode(event)
+}
+
 function buildToolCall(event: OtelTraceEvent): AnyObj {
   const attrs = event.attributes || {}
   const created = event.startTimeMs || Date.parse(event.receivedAt) || Date.now()
@@ -427,8 +443,7 @@ function buildToolCall(event: OtelTraceEvent): AnyObj {
     attr(event, 'tool.output', 'tool.result', 'mcp.result', 'skill.output'),
     attrs['output.value'],
   )
-  const status = String(attr(event, 'tool.status', 'tool.outcome') || 'success').toLowerCase()
-  const state = status === 'error' || status === 'failed' ? 'error' : 'success'
+  const state = isFailedToolEvent(event) ? 'error' : 'success'
   const rawName = String(attr(event, 'tool.name') || event.name || 'tool').replace(/^tool\./, '')
   const name = isSkillSpan(event)
     ? `skill.${String(attr(event, 'skill.name') || rawName).replace(/^skill\./, '')}`
@@ -468,6 +483,8 @@ function buildToolCall(event: OtelTraceEvent): AnyObj {
   if (attr(event, 'tool.exit_code') !== undefined) {
     call.exit_code = attr(event, 'tool.exit_code')
   }
+  const errorMessage = firstContent(attr(event, 'error.message', 'exception.message'))
+  if (errorMessage) call.error = errorMessage
   return call
 }
 
@@ -834,10 +851,7 @@ export function aggregateQwenPawTraceEvents(
     agentName: rootAgentName,
     llm_call_count: llmEvents.length,
     tool_call_count: toolEvents.length,
-    tool_call_error_count: toolEvents.filter((event) => {
-      const status = String(attr(event, 'tool.status', 'tool.outcome') || '').toLowerCase()
-      return status === 'error' || status === 'failed' || attr(event, 'error.message') !== undefined
-    }).length,
+    tool_call_error_count: toolEvents.filter(isFailedToolEvent).length,
     input_tokens: usage.input_tokens,
     output_tokens: usage.output_tokens,
     reasoning_tokens: usage.reasoning_tokens || undefined,

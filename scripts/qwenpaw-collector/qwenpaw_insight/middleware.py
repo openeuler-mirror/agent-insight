@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, AsyncGenerator, Callable
@@ -32,6 +33,33 @@ class AgentInsightToolMiddleware(_MiddlewareBase):
             return None
         match = re.search(r"\bexit\s+code\s+(-?\d+)\b", str(output), re.IGNORECASE)
         return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _exit_code(value: Any) -> int | None:
+        """Normalize structured exit codes supplied by different QwenPaw versions."""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _response_status(response: Any) -> str:
+        """Use ToolResponse.state first, with legacy status as a fallback."""
+        value = getattr(response, "state", None)
+        if value is None:
+            value = getattr(response, "status", None)
+        value = getattr(value, "value", value)
+        normalized = str(value or "success").strip().lower()
+        if normalized.startswith("toolresultstate."):
+            normalized = normalized.rsplit(".", 1)[-1]
+        return {
+            "ok": "success",
+            "completed": "success",
+            "failure": "failed",
+            "canceled": "cancelled",
+        }.get(normalized, normalized)
 
     @staticmethod
     def _json_obj(value: Any) -> dict[str, Any]:
@@ -111,7 +139,7 @@ class AgentInsightToolMiddleware(_MiddlewareBase):
             kind = "subagent"
         elif tool_name.startswith("mcp__"):
             kind = "mcp"
-        elif tool_name.startswith(("shell", "bash", "cmd", "powershell")):
+        elif tool_name.lower() == "execute_shell_command" or tool_name.startswith(("shell", "bash", "cmd", "powershell")):
             kind = "shell"
         elif tool_name.startswith(("read_file", "write_file", "edit_file", "search_files", "file")):
             kind = "file"
@@ -135,18 +163,27 @@ class AgentInsightToolMiddleware(_MiddlewareBase):
                 extra=extra,
             )
         final_response = None
-        error: BaseException | None = None
+        error: Exception | str | None = None
+        terminal_status: str | None = None
         try:
             async for event in next_handler():
                 if type(event).__name__ == "ToolResponse":
                     final_response = event
                 yield event
-        except BaseException as exc:  # noqa: BLE001
+        except GeneratorExit:
+            # Closing an async generator after consuming the final ToolResponse
+            # is normal QwenPaw control flow, not a tool failure.
+            raise
+        except asyncio.CancelledError:
+            terminal_status = "cancelled"
+            raise
+        except Exception as exc:
             error = exc
+            terminal_status = "error"
             raise
         finally:
             output = None
-            status = "success"
+            status = terminal_status or "interrupted"
             exit_code = None
             if final_response is not None:
                 content = getattr(final_response, "content", None)
@@ -157,18 +194,22 @@ class AgentInsightToolMiddleware(_MiddlewareBase):
                     )
                 else:
                     output = content
-                state = getattr(final_response, "state", None)
-                status = str(getattr(final_response, "status", None) or state or "success")
-                exit_code = getattr(final_response, "exit_code", None)
+                status = self._response_status(final_response)
+                exit_code = self._exit_code(getattr(final_response, "exit_code", None))
                 metadata = getattr(final_response, "metadata", None) or {}
                 if exit_code is None and isinstance(metadata, dict):
-                    exit_code = metadata.get("exit_code")
+                    exit_code = self._exit_code(metadata.get("exit_code"))
                 if exit_code is None and kind == "shell":
                     exit_code = self._legacy_shell_exit_code(output)
                 if getattr(final_response, "error", None):
                     error = error or str(getattr(final_response, "error"))
                 if str(status).lower() in ("error", "failed", "denied", "interrupted") and error is None:
                     error = f"tool state: {status}"
+                if kind == "shell" and exit_code is not None and exit_code != 0:
+                    status = "error"
+                    error = error or f"tool exited with code {exit_code}"
+            if error is not None:
+                status = "error"
             if kind == "skill":
                 self._collector.finish_skill(
                     span_id,

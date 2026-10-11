@@ -33,9 +33,16 @@ export interface ToolCall {
     name?: string;
     arguments?: string;
     state?: string;
+    exit_code?: number | string;
+    error?: string | { message?: string };
     timing?: { started_at?: number; completed_at?: number };
     output?: any;
     result?: any;
+    skill?: {
+        name?: string;
+        version?: string | number | null;
+        trigger?: string | null;
+    };
     trace_split_parallel_task?: boolean;
 }
 
@@ -136,6 +143,8 @@ export interface AgentEvent {
     treeHidden?: boolean;
     /** Adapter-provided tool state, for example success/error/completed. */
     toolStatus?: string;
+    toolExitCode?: number;
+    toolError?: string;
     /** ms since epoch */
     startedAt?: number;
     completedAt?: number;
@@ -608,11 +617,64 @@ function makeNode(init: {
 }
 
 function finalizeStats(node: AgentNode): void {
-    if (Number.isFinite(node.startedAt) && Number.isFinite(node.endedAt)) {
-        const duration = (node.endedAt as number) - (node.startedAt as number);
+    for (const child of node.children) finalizeStats(child);
+
+    let start = Number.isFinite(node.startedAt) ? (node.startedAt as number) : undefined;
+    let end = Number.isFinite(node.endedAt) ? (node.endedAt as number) : undefined;
+    for (const child of node.children) {
+        if (Number.isFinite(child.startedAt) && (start == null || (child.startedAt as number) < start)) {
+            start = child.startedAt as number;
+        }
+        if (Number.isFinite(child.endedAt) && (end == null || (child.endedAt as number) > end)) {
+            end = child.endedAt as number;
+        }
+    }
+    node.startedAt = start;
+    node.endedAt = end;
+    if (start != null && end != null) {
+        const duration = end - start;
         node.stats.durationMs = duration >= 0 ? duration : undefined;
     }
-    for (const c of node.children) finalizeStats(c);
+}
+
+export interface TraceTimelineBounds {
+    start?: number;
+    end?: number;
+    durationMs?: number;
+}
+
+export function resolveTraceTimelineBounds(
+    root: AgentNode | null | undefined,
+    executionDurationMs?: number,
+): TraceTimelineBounds | null {
+    if (!root) return null;
+
+    let start: number | undefined;
+    let end: number | undefined;
+    walkTree(root, node => {
+        if (Number.isFinite(node.startedAt) && (start == null || (node.startedAt as number) < start)) {
+            start = node.startedAt as number;
+        }
+        if (Number.isFinite(node.endedAt) && (end == null || (node.endedAt as number) > end)) {
+            end = node.endedAt as number;
+        }
+        for (const event of node.events) {
+            if (Number.isFinite(event.startedAt) && (start == null || (event.startedAt as number) < start)) {
+                start = event.startedAt as number;
+            }
+            if (Number.isFinite(event.completedAt) && (end == null || (event.completedAt as number) > end)) {
+                end = event.completedAt as number;
+            }
+        }
+    });
+
+    if (start == null) return null;
+    if (end == null && typeof executionDurationMs === 'number' && Number.isFinite(executionDurationMs) && executionDurationMs > 0) {
+        end = start + executionDurationMs;
+    }
+    if (end == null || end < start) end = start;
+
+    return { start, end, durationMs: end - start };
 }
 
 function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
@@ -743,6 +805,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
                 version: skillMeta.version ?? null,
             }
             : args;
+        const exitCode = tc.exit_code != null && tc.exit_code !== '' ? Number(tc.exit_code) : undefined;
         const ev: AgentEvent = {
             kind,
             name: displayName,
@@ -750,6 +813,8 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             output: tc.output ?? tc.result,
             toolCallId: tc.id,
             toolStatus: tc.state,
+            toolExitCode: exitCode !== undefined && Number.isFinite(exitCode) ? exitCode : undefined,
+            toolError: typeof tc.error === 'string' ? tc.error : tc.error?.message,
             interaction: it,
             interactionIndex: idx,
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,

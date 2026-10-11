@@ -8,6 +8,7 @@ hooks/patches so the package can be unit-tested standalone.
 from __future__ import annotations
 
 import threading
+import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -543,9 +544,7 @@ class Collector:
             if parent_turn_id:
                 turn_id = parent_turn_id
             else:
-                turn_index = int(state.get("turn_index") or 0) + 1
-                state["turn_index"] = turn_index
-                turn_id = f"{root_id}:{session_id}:turn:{turn_index}"
+                turn_id = f"{root_id}:{session_id}:turn:{uuid.uuid4().hex}"
             state["turn_id"] = turn_id
             state["trace_key"] = self._trace_key(root_id, turn_id)
             if model:
@@ -806,9 +805,12 @@ class Collector:
         if not span_id:
             return
         text, truncated, original_chars = self._safe_text(output)
+        normalized_status = str(status or "success").strip().lower() or "success"
+        if error and normalized_status in ("success", "ok", "completed"):
+            normalized_status = "error"
         attrs: dict[str, Any] = {
             "tool.output": text,
-            "tool.status": status,
+            "tool.status": normalized_status,
             "agent.insight.content.truncated": truncated,
             "qwenpaw.tool_output_chars": original_chars,
         }
@@ -822,8 +824,8 @@ class Collector:
                     attrs[key] = text
                 else:
                     attrs[key] = sanitize_value(value) if value is not None else None
-        if error or status in ("error", "failed"):
-            self._finish(span_id, attrs, error=error or f"tool failed: {status}")
+        if error or normalized_status in ("error", "failed", "denied", "interrupted", "cancelled"):
+            self._finish(span_id, attrs, error=error or f"tool failed: {normalized_status}")
         else:
             self._finish(span_id, attrs)
 
@@ -994,10 +996,8 @@ class Collector:
         with self.lock:
             state = self.sessions.get(session_id)
             if state is None:
-                self.flush()
                 return
             if state.get("end_marker_submitted"):
-                self.flush()
                 return
             if is_subagent is None:
                 is_subagent = bool(state.get("parent_session_id")) or bool(
@@ -1006,7 +1006,6 @@ class Collector:
             if is_subagent:
                 # Sub-agent spans already belong to the parent trace; only the
                 # root request carries the explicit completion marker.
-                self.flush()
                 return
             state["end_marker_submitted"] = True
 
@@ -1020,4 +1019,3 @@ class Collector:
             attrs["error.message"] = str(error)
         span_id = self._new("qwenpaw.session.end", session_id, None, attrs)
         self._finish(span_id, attrs, error=error)
-        self.flush()

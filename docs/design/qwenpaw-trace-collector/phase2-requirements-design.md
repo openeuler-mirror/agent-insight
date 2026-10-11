@@ -75,13 +75,14 @@ Trace ID 由 `root_session_id + qwenpaw.turn_id` 稳定派生：
 traceId = stable_hex("agent-insight:qwenpaw:trace:" + root_session_id + ":" + qwenpaw.turn_id, 32)
 ```
 
-同一根会话下每轮请求生成新的 `qwenpaw.turn_id`，格式为：
+同一根会话下每轮请求生成跨进程唯一的 `qwenpaw.turn_id`，格式为：
 
 ```text
-<root_session_id>:<session_id>:turn:<turn_index>
+<root_session_id>:<session_id>:turn:<uuid4>
 ```
 
-根 Agent、LLM、Tool、Skill 和子 Agent 在同一轮内共享同一个 `qwenpaw.trace_key`。每轮开始时
+根 Agent、LLM、Tool、Skill 和子 Agent 在同一轮内共享同一个 `qwenpaw.trace_key`。根请求生成 UUID，
+子 Agent 继承父请求的 turn；每轮开始时
 只重置本轮 token、ReAct step、输出和结束标记，不清除对话身份、父子关系或 Agent 名称。服务端
 Adapter 以 `qwenpaw.turn_id` 去重 USER；历史数据没有 turn id 时使用 USER 文本做兼容去重。
 
@@ -185,7 +186,7 @@ QwenPaw 的自动标题生成会调用 LLM，但它不是用户对话的根任�
 上传策略：
 
 - span 结束后编码为 OTLP delta payload 并写入本地 spool；
-- 后台线程定时扫描，并在 session end、进程退出时执行有界 flush；
+- 后台线程定时扫描；仅在进程退出时执行有界 flush，session end 只负责可靠落盘并由后台继续发送；
 - HTTP 2xx 后写入 `.sent` 标记，避免重复上传；
 - 网络错误、408、429、5xx 使用指数退避重试；
 - 401/403 等认证问题保留数据并写日志，等待用户修复配置。

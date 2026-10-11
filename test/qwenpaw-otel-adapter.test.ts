@@ -633,12 +633,90 @@ test('qwenpaw adapter: keeps subagent, skill and mcp spans associated', () => {
   assert.ok(calls.some((call: any) => call.function?.name === 'task'))
   assert.ok(calls.some((call: any) => call.function?.name === 'skill.docx'))
   assert.ok(calls.some((call: any) => call.mcp?.server_name === 'github'))
+  const skillCall = calls.find((call: any) => call.function?.name === 'skill.docx')
+  assert.deepEqual(skillCall?.skill, { name: 'docx', version: '1.2', trigger: 'slash' })
   const tree = buildAgentCallTree(record.interactions as any[])
   assert.ok(tree)
   assert.equal(tree.agentName, 'assistant')
   assert.equal(tree.children[0]?.sessionId, 'sub-1234')
   assert.equal(tree.children[0]?.agentName, 'worker')
   assert.equal(tree.children[0]?.events.filter((event) => event.kind === 'llm').length, 1)
+  const skillEvent = tree.children[0]?.events.find((event) => event.kind === 'skill')
+  assert.equal(skillEvent?.name, 'docx')
+  assert.deepEqual(skillEvent?.args, { input: 'make doc', name: 'docx', version: '1.2' })
+})
+
+test('qwenpaw adapter: error metadata makes a successful-looking tool call fail consistently', () => {
+  const record = aggregateOtelTraceEvents('session-a', [
+    qwenpawEvent({
+      spanId: 'tool-error',
+      name: 'tool.read_file',
+      kind: 'tool',
+      attributes: {
+        'agent.insight.framework': 'qwenpaw',
+        'gen_ai.span.kind': 'TOOL',
+        'qwenpaw.session_id': 'session-a',
+        'qwenpaw.root_session_id': 'session-a',
+        'tool.name': 'read_file',
+        'tool.status': 'success',
+        'error.message': 'file missing',
+      },
+    }),
+  ])
+
+  assert.ok(record)
+  assert.equal(record.tool_call_error_count, 1)
+  const calls = record.interactions?.flatMap((interaction: any) => interaction.tool_calls || []) || []
+  assert.equal(calls[0]?.state, 'error')
+  assert.equal(calls[0]?.error, 'file missing')
+  const tree = buildAgentCallTree(record.interactions as any[])
+  assert.equal(tree?.events.find((event) => event.kind === 'tool')?.toolError, 'file missing')
+})
+
+test('qwenpaw adapter: nonzero exit code fails while output alone does not', () => {
+  const record = aggregateOtelTraceEvents('session-a', [
+    qwenpawEvent({
+      spanId: 'tool-output-only',
+      name: 'tool.write_file',
+      kind: 'tool',
+      attributes: {
+        'agent.insight.framework': 'qwenpaw',
+        'gen_ai.span.kind': 'TOOL',
+        'qwenpaw.session_id': 'session-a',
+        'qwenpaw.root_session_id': 'session-a',
+        'tool.name': 'write_file',
+        'tool.status': 'success',
+        'tool.output': 'written',
+      },
+    }),
+    qwenpawEvent({
+      spanId: 'tool-exit-one',
+      name: 'tool.execute_shell_command',
+      kind: 'tool',
+      startTimeMs: 1100,
+      attributes: {
+        'agent.insight.framework': 'qwenpaw',
+        'gen_ai.span.kind': 'TOOL',
+        'qwenpaw.session_id': 'session-a',
+        'qwenpaw.root_session_id': 'session-a',
+        'tool.name': 'execute_shell_command',
+        'tool.status': 'success',
+        'tool.exit_code': 1,
+        'tool.output': 'Command failed with exit code 1.',
+      },
+    }),
+  ])
+
+  assert.ok(record)
+  assert.equal(record.tool_call_error_count, 1)
+  const calls = record.interactions?.flatMap((interaction: any) => interaction.tool_calls || []) || []
+  assert.equal(calls.find((call: any) => call.id === 'tool-output-only')?.state, 'success')
+  assert.equal(calls.find((call: any) => call.id === 'tool-exit-one')?.state, 'error')
+  const tree = buildAgentCallTree(record.interactions as any[])
+  const failedEvent = tree?.events.find((event) => event.toolCallId === 'tool-exit-one')
+  assert.equal(failedEvent?.toolStatus, 'error')
+  assert.equal(failedEvent?.toolExitCode, 1)
+  assert.equal(failedEvent?.output, 'Command failed with exit code 1.')
 })
 
 test('qwenpaw adapter: a synthetic subagent span still preserves the agent node without a fake llm row', () => {

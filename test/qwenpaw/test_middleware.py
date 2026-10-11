@@ -54,7 +54,64 @@ async def _run(middleware: AgentInsightToolMiddleware, tool_call: object, respon
         pass
 
 
+async def _run_until_response_then_close(
+    middleware: AgentInsightToolMiddleware,
+    tool_call: object,
+    response: object,
+) -> None:
+    """Mirror QwenPaw consuming the final response then closing the stream."""
+    async def handler():
+        yield response
+
+    stream = middleware.on_acting(None, {"tool_call": tool_call}, handler)
+    await anext(stream)
+    await stream.aclose()
+
+
+async def _run_error(middleware: AgentInsightToolMiddleware, tool_call: object) -> None:
+    async def handler():
+        raise RuntimeError("file missing")
+        yield None
+
+    async for _item in middleware.on_acting(None, {"tool_call": tool_call}, handler):
+        pass
+
+
+async def _run_response_then_error(middleware: AgentInsightToolMiddleware, tool_call: object) -> None:
+    async def handler():
+        yield ToolResponse(state="success", content=[{"text": "partial output"}])
+        raise RuntimeError("upload failed")
+
+    async for _item in middleware.on_acting(None, {"tool_call": tool_call}, handler):
+        pass
+
+
+async def _run_cancelled(middleware: AgentInsightToolMiddleware, tool_call: object) -> None:
+    async def handler():
+        raise asyncio.CancelledError()
+        yield None
+
+    async for _item in middleware.on_acting(None, {"tool_call": tool_call}, handler):
+        pass
+
+
 class MiddlewareTest(unittest.TestCase):
+    def test_closing_after_successful_response_is_not_an_error(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        asyncio.run(
+            _run_until_response_then_close(
+                middleware,
+                _tool_call("Skill", {"skill": "docx"}),
+                ToolResponse(state="success", content=[{"text": "real output"}]),
+            ),
+        )
+
+        finish = [call for call in collector.calls if call[0] == "finish_skill"][0][1]
+        self.assertEqual(finish["status"], "success")
+        self.assertEqual(finish["output"], "real output")
+        self.assertIsNone(finish["error"])
+
     def test_tool_state_and_exit_code(self):
         collector = _FakeCollector()
         middleware = AgentInsightToolMiddleware(collector)
@@ -70,6 +127,37 @@ class MiddlewareTest(unittest.TestCase):
         self.assertEqual(finish["exit_code"], 1)
         self.assertIsNotNone(finish["error"])
 
+    def test_exception_without_response_forces_failed_tool_span(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        with self.assertRaisesRegex(RuntimeError, "file missing"):
+            asyncio.run(_run_error(middleware, _tool_call("read_file", {"path": "missing.txt"})))
+
+        finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+        self.assertEqual(finish["status"], "error")
+        self.assertIn("file missing", str(finish["error"]))
+
+    def test_exception_after_successful_response_overrides_success(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        with self.assertRaisesRegex(RuntimeError, "upload failed"):
+            asyncio.run(_run_response_then_error(middleware, _tool_call("write_file", {})))
+
+        finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+        self.assertEqual(finish["status"], "error")
+        self.assertEqual(finish["output"], "partial output")
+        self.assertIn("upload failed", str(finish["error"]))
+
+    def test_cancelled_execution_is_not_recorded_as_success(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(_run_cancelled(middleware, _tool_call("read_file", {})))
+
+        finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+        self.assertEqual(finish["status"], "cancelled")
+        self.assertIsNone(finish["error"])
+
     def test_shell_exit_code_is_read_from_legacy_text_response(self):
         """Older QwenPaw releases returned the exit code only in content."""
         collector = _FakeCollector()
@@ -77,7 +165,7 @@ class MiddlewareTest(unittest.TestCase):
         asyncio.run(
             _run(
                 middleware,
-                _tool_call("shell", {"command": "false"}),
+                _tool_call("execute_shell_command", {"command": "false"}),
                 ToolResponse(
                     state="success",
                     content=[{"text": "Command failed with exit code 17."}],
@@ -86,6 +174,8 @@ class MiddlewareTest(unittest.TestCase):
         )
         finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
         self.assertEqual(finish["exit_code"], 17)
+        self.assertEqual(finish["status"], "error")
+        self.assertIn("code 17", str(finish["error"]))
 
     def test_skill_tool_uses_skill_span(self):
         collector = _FakeCollector()

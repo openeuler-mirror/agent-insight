@@ -1,11 +1,35 @@
+import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from qwenpaw_insight import __version__ as qwenpaw_version
 from qwenpaw_insight.collector import COLLECTOR_VERSION, Collector
 from qwenpaw_insight.config import CollectorConfig
+
+
+class _RecordingExporter:
+    def __init__(self) -> None:
+        self.payloads: list[tuple[str, dict]] = []
+        self.flush_calls: list[float] = []
+        self.closed = False
+
+    def submit(self, item_id: str, payload: dict) -> None:
+        self.payloads.append((item_id, payload))
+
+    def flush(self, timeout: float = 3.0) -> None:
+        self.flush_calls.append(timeout)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _SlowFlushExporter(_RecordingExporter):
+    def flush(self, timeout: float = 3.0) -> None:
+        self.flush_calls.append(timeout)
+        time.sleep(0.2)
 
 
 def _spool_attributes(collector: Collector) -> list[dict]:
@@ -60,6 +84,14 @@ class CollectorTest(unittest.TestCase):
 
     def _values(self, attrs: dict) -> dict:
         return {key: self._unwrap(value) for key, value in attrs.items()}
+
+    def _agent_span_from(self, exporter: _RecordingExporter) -> tuple[dict, dict]:
+        for _, payload in exporter.payloads:
+            for span in payload["resourceSpans"][0]["scopeSpans"][0]["spans"]:
+                attrs = self._values({item["key"]: item["value"] for item in span["attributes"]})
+                if attrs.get("gen_ai.span.kind") == "AGENT":
+                    return span, attrs
+        self.fail("collector did not submit an agent span")
 
     def test_agent_llm_tool_flow(self):
         agent_span = self.collector.start_agent(
@@ -281,6 +313,75 @@ class CollectorTest(unittest.TestCase):
         self.assertNotEqual(agents[0]["qwenpaw.turn_id"], agents[1]["qwenpaw.turn_id"])
         self.assertNotEqual(agents[0]["qwenpaw.trace_key"], agents[1]["qwenpaw.trace_key"])
         self.assertEqual([int(v["llm.token_count.total"]) for v in agents], [3, 4])
+
+    def test_turn_identity_is_unique_after_collector_restart_and_inherited_by_subagent(self):
+        first_exporter = _RecordingExporter()
+        first = Collector(self.config, exporter=first_exporter)
+        first.start_agent(session_id="persistent-chat", root_session_id="persistent-chat", query="before restart")
+        first.register_subagent_relation("child-session", "persistent-chat")
+        first.start_agent(
+            session_id="child-session",
+            root_session_id="persistent-chat",
+            query="sub task",
+            is_subagent=True,
+        )
+        first.finish_agent_for_session("child-session")
+        first.finish_agent_for_session("persistent-chat", output="before restart answer")
+        first.on_session_end("persistent-chat")
+
+        first_agent_span, first_agent = self._agent_span_from(first_exporter)
+        first_child_span = next(
+            span
+            for _, payload in first_exporter.payloads
+            for span in payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
+            if self._values({item["key"]: item["value"] for item in span["attributes"]}).get("qwenpaw.session_id") == "child-session"
+        )
+        first_child = self._values({item["key"]: item["value"] for item in first_child_span["attributes"]})
+
+        second_exporter = _RecordingExporter()
+        second = Collector(self.config, exporter=second_exporter)
+        second.start_agent(session_id="persistent-chat", root_session_id="persistent-chat", query="after restart")
+        second.finish_agent_for_session("persistent-chat", output="after restart answer")
+        second.on_session_end("persistent-chat")
+        second_agent_span, second_agent = self._agent_span_from(second_exporter)
+
+        self.assertEqual(first_agent["qwenpaw.turn_id"], first_child["qwenpaw.turn_id"])
+        self.assertEqual(first_agent["qwenpaw.trace_key"], first_child["qwenpaw.trace_key"])
+        self.assertNotEqual(first_agent["qwenpaw.turn_id"], second_agent["qwenpaw.turn_id"])
+        self.assertNotEqual(first_agent["qwenpaw.trace_key"], second_agent["qwenpaw.trace_key"])
+        self.assertNotEqual(first_agent_span["traceId"], second_agent_span["traceId"])
+
+    def test_session_end_does_not_wait_for_exporter_flush(self):
+        exporter = _SlowFlushExporter()
+        collector = Collector(self.config, exporter=exporter)
+        collector.start_agent(session_id="session-a", root_session_id="session-a", query="hello")
+        collector.finish_agent_for_session("session-a", output="done")
+
+        async def finish_request() -> float:
+            started = time.monotonic()
+            collector.on_session_end("session-a")
+            return time.monotonic() - started
+
+        elapsed = asyncio.run(finish_request())
+        self.assertLess(elapsed, 0.1)
+        self.assertEqual(exporter.flush_calls, [])
+
+    def test_close_keeps_bounded_flush_for_process_shutdown(self):
+        exporter = _RecordingExporter()
+        collector = Collector(self.config, exporter=exporter)
+        collector.close()
+        self.assertEqual(exporter.flush_calls, [5.0])
+        self.assertTrue(exporter.closed)
+
+    def test_error_never_emits_successful_tool_status(self):
+        self.collector.start_agent(session_id="session-a", root_session_id="session-a", query="hello")
+        span_id = self.collector.start_tool(tool_name="read_file", tool_input="missing.txt")
+        self.collector.finish_tool(span_id, status="success", error="file missing")
+
+        values = [self._values(attrs) for attrs in _spool_attributes(self.collector)]
+        tool = next(value for value in values if value.get("tool.name") == "read_file")
+        self.assertEqual(tool["tool.status"], "error")
+        self.assertEqual(tool["error.message"], "file missing")
 
     def test_llm_only_placeholder_session_is_orphaned(self):
         """Fallback LLM-only capture must not create guessed QwenPaw traces."""

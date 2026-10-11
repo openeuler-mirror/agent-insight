@@ -2603,7 +2603,7 @@ function HierarchicalSpanSnapshot({
 // ─── EventDetailPanel (right panel – event selected) ─────────────────────────
 /** 工具/技能调用是否失败。判定口径与 faithfulness-evaluator 的 status 归类一致。 */
 function isErrorToolStatus(status?: string): boolean {
-    return /error|fail|cancel/i.test(status ?? '');
+    return /error|fail|cancel|denied|interrupted/i.test(status ?? '');
 }
 
 /** 毫秒级时钟。span 详情用,便于与后端日志、Infra 曲线对时。 */
@@ -2635,16 +2635,21 @@ function CopyableId({ label, value }: { label: string; value: string }) {
     );
 }
 
-/** 失败 span 的错误区块。数据源为 event.toolStatus + 工具输出(错误正文通常就在 output 里)。 */
-function SpanErrorBlock({ status, text }: { status?: string; text: string | null }) {
+function SpanErrorBlock({ status, reason, exitCode }: { status?: string; reason?: string; exitCode?: number }) {
+    const { locale } = useLocale();
     const [copied, setCopied] = useState(false);
-    const body = (text ?? '').trim();
+    const body = (reason ?? '').trim();
+    const label = /cancel|interrupted/i.test(status ?? '')
+        ? (locale === 'zh' ? '执行已中断' : 'Execution interrupted')
+        : /denied/i.test(status ?? '')
+            ? (locale === 'zh' ? '调用被拒绝' : 'Call denied')
+            : (locale === 'zh' ? '执行失败' : 'Execution failed');
     return (
         <div className="rounded-md border border-error-border bg-error-subtle overflow-hidden">
             <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-error-border">
                 <span className="size-1.5 rounded-full bg-error shrink-0" />
-                <span className="text-xs font-bold text-error">执行失败</span>
-                {status && <span className="font-mono text-[0.625rem] text-error/75">toolStatus: {status}</span>}
+                <span className="text-xs font-bold text-error">{label}</span>
+                {exitCode !== undefined && <span className="font-mono text-[0.625rem] text-error/75">{locale === 'zh' ? '退出码' : 'Exit code'}: {exitCode}</span>}
                 <span className="flex-1" />
                 {body && (
                     <button
@@ -2666,7 +2671,9 @@ function SpanErrorBlock({ status, text }: { status?: string; text: string | null
             {body ? (
                 <pre className="m-0 px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-words text-error max-h-72 overflow-auto">{body}</pre>
             ) : (
-                <div className="px-2.5 py-2 text-xs text-error/80 italic">调用被标记为失败,但未记录错误正文。</div>
+                <div className="px-2.5 py-2 text-xs text-error/80">
+                    {locale === 'zh' ? '返回内容见下方 Output。' : 'See Output below for the returned content.'}
+                </div>
             )}
         </div>
     );
@@ -2819,10 +2826,9 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                 {/* ── Tool / Skill ── */}
                 {(event.kind === 'tool' || event.kind === 'skill') && (
                     <>
-                        {/* 失败时错误正文置顶;此时 output 就是错误信息,不再重复渲染 Output */}
-                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
+                        {hasError && <SpanErrorBlock status={event.toolStatus} reason={event.toolError} exitCode={event.toolExitCode} />}
                         <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
-                        {!hasError && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
+                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
                         {!hasError && argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
                 )}
@@ -2830,8 +2836,9 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                 {/* ── Task spawn ── */}
                 {event.kind === 'task' && event.spawnedChildId && (
                     <>
-                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
+                        {hasError && <SpanErrorBlock status={event.toolStatus} reason={event.toolError} exitCode={event.toolExitCode} />}
                         <CompactSection label="派生指令" raw={argsStr} modalTitle={`${title} — 派生指令`} />
+                        {outputStr !== null && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
                         {spawnedChild ? (
                             <SpawnedChildSummary child={spawnedChild} onSelectChild={onSelectChild} />
                         ) : (
@@ -2845,9 +2852,9 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                 {/* ── Captured task / chain observation ── */}
                 {((event.kind === 'task' && !event.spawnedChildId) || event.kind === 'chain') && (
                     <>
-                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
+                        {hasError && <SpanErrorBlock status={event.toolStatus} reason={event.toolError} exitCode={event.toolExitCode} />}
                         <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
-                        {!hasError && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
+                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
                         {!hasError && argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
                 )}
