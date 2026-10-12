@@ -11,6 +11,7 @@ import { db } from '@/lib/storage/prisma'
 import { isModelConnectionReady } from '@/lib/shared/model-connection'
 import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
 import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
+import { runtimePackageRoot } from '@/lib/runtime/package-root'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -154,17 +155,17 @@ async function waitForServer(
 /**
  * 解析 opencode 二进制的实际路径。优先级：
  *  1. OPENCODE_BIN 环境变量（部署侧覆盖，例如 /opt/opencode/bin/opencode）
- *  2. 项目 node_modules/.bin/opencode（来自 opencode-ai npm 包，服务自包含部署的首选）
+ *  2. 项目根目录 node_modules/.bin/opencode（standalone 下通过 AGENT_INSIGHT_PACKAGE_ROOT 定位）
  *  3. 直接 PATH 上的 opencode（dev 环境用全局 npm 装的那个）
  *
  * 部署生产环境时建议在 package.json 加 `opencode-ai` 依赖，让方案 2 生效，
  * 这样不依赖部署机器上有 opencode 命令。
  */
-function resolveOpencodeBinary(): string {
+export function resolveOpencodeBinary(): string {
   if (process.env.OPENCODE_BIN && fs.existsSync(process.env.OPENCODE_BIN)) {
     return process.env.OPENCODE_BIN
   }
-  const localBin = path.join(process.cwd(), 'node_modules', '.bin', 'opencode')
+  const localBin = path.join(runtimePackageRoot(), 'node_modules', '.bin', 'opencode')
   if (fs.existsSync(localBin)) return localBin
   return 'opencode'
 }
