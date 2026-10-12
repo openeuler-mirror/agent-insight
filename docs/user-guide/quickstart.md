@@ -172,6 +172,19 @@ docker compose logs -f agent-insight   # 看到 "Building from source..." 到构
 
 注意用 `restart` 而不是 `up -d`：容器配置没变时 `up -d` 什么都不做，不会触发重新构建。只有改了 `package.json` 依赖、需要连镜像一起重建时才用 `docker compose up -d --build`。
 
+离线服务器也可以通过源码 ZIP 更新。更新脚本的帮助、进度与错误提示使用英文，避免服务器终端中文乱码。先把现有 Compose 的源码挂载改为 `${SOURCE_RELEASE:?SOURCE_RELEASE is required}:/src:ro`，保留 `AGENT_INSIGHT_SOURCE_DIR=/src` 和原有数据挂载。将 `scripts/update-source.sh` 放到服务器，修改顶部 `DEFAULT_COMPOSE_FILE`（默认 `/srv/agent-insight/compose.yml`），然后执行：
+
+```bash
+bash update-source.sh --zip /path/to/agent-insight.zip
+# 临时覆盖 Compose 路径；RELEASES_DIR 可覆盖解压目录（默认 /srv/agent-insight/releases）
+RELEASES_DIR=/srv/agent-insight/releases bash update-source.sh \
+  --zip /path/to/agent-insight.zip --compose /srv/agent-insight/compose.yml
+```
+
+脚本需要宿主机安装 Bash、Python 3 和 Docker Compose v2，并具有解压目录和 Docker 的操作权限。它会解压到新的版本目录，自动识别网页 ZIP 的外层目录，导出 `SOURCE_RELEASE`，然后执行与手动更新相同的 `docker compose -f <配置文件> up -d --force-recreate --pull never --no-build`。它不额外校验 Compose 的源码挂载，也不等待健康检查；命令返回后应用可能仍在构建，请查看日志并检查页面与业务功能。Compose 中的源码挂载仍需引用 `SOURCE_RELEASE`；若路径写死，导出的变量不会改变挂载位置。使用管理原容器的同一份 Compose 和项目名（自定义项目名可通过 `COMPOSE_PROJECT_NAME` 传入）。脚本不拉取或构建镜像，不清理旧版本目录。失败时保留源码并输出错误；不会自动备份或回滚数据库。脚本内导出的 `SOURCE_RELEASE` 不会保存到调用者的终端，后续单独执行 Compose 时需先设置脚本输出的源码路径。
+
+ZIP 更新前请备份数据库，并确认新分支的依赖、数据库 schema 和升级逻辑兼容现有部署。依赖变更仍需更新镜像。入口脚本会执行数据库准备脚本和 schema 同步，即使本次 schema 文件没变，也不能把 ZIP 更新视为绝不会修改数据库；修改源码中的 `docker-entrypoint.sh` 也不会替换镜像已安装的入口脚本。
+
 需要了解的行为：
 
 - **不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致**，容器直接运行镜像里打好的 `agent-insight` npm 包。
