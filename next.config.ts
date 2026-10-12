@@ -124,4 +124,15 @@ const nextConfig: NextConfig = {
   },
 };
 
+// Docker source builds share /app/node_modules through an absolute symlink.
+// Tracing that alias into standalone can copy files back into the image dependencies.
+if (process.env.AGENT_INSIGHT_SOURCE_DIR && path.resolve('.') === '/app/source') {
+  nextConfig.turbopack = { ...nextConfig.turbopack, root: '/app' };
+  const excludes = nextConfig.outputFileTracingExcludes || {};
+  nextConfig.outputFileTracingExcludes = {
+    ...excludes,
+    '*': [...(excludes['*'] || []), 'node_modules', 'node_modules/**'],
+  };
+}
+
 export default nextConfig;

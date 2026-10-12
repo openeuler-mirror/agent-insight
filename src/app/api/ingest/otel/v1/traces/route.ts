@@ -2,6 +2,7 @@ import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
 import { isLlamaIndexOtlpTraceBody } from '@/lib/ingest/otel/llamaindex';
 import { appendOtelTraceEvents, getActrailOtelTraceSpoolDir } from '@/lib/ingest/otel/spool';
 import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
+import { beginOtelTraceRequest } from '@/lib/ingest/otel/diagnostics';
 import { isLangfuseOtlpTraceBody } from '@/lib/ingest/otel/langfuse';
 import { isActrailOtlpTraceBody } from '@/lib/ingest/otel/actrail';
 import { jiuwenServiceName } from '@/lib/ingest/otel/jiuwen/aggregate';
@@ -43,34 +44,22 @@ function langfuseCredentialsFromRequest(req: Request): LangfuseCredentials {
   };
 }
 
-async function authenticateLangfuseCredentials(req: Request): Promise<string | undefined> {
+async function authenticateLangfuseCredentials(req: Request) {
   const credentials = langfuseCredentialsFromRequest(req);
   if (!credentials.publicKey || !credentials.secretKey) {
-    console.warn('[OTel] Rejected Langfuse trace ingest: missing public or secret key', {
-      source: credentials.source,
-      publicKey: credentials.publicKey || undefined,
-    });
-    return undefined;
+    return { reason: 'missing-langfuse-credentials' } as const;
   }
 
   const userRecord = await db.findUserByUsername(credentials.publicKey);
   if (!userRecord) {
-    console.warn('[OTel] Rejected Langfuse trace ingest: unknown public key', {
-      source: credentials.source,
-      publicKey: credentials.publicKey,
-    });
-    return undefined;
+    return { reason: 'unknown-langfuse-user' } as const;
   }
 
   if (userRecord.apiKey !== credentials.secretKey) {
-    console.warn('[OTel] Rejected Langfuse trace ingest: secret key does not match public key', {
-      source: credentials.source,
-      publicKey: credentials.publicKey,
-    });
-    return undefined;
+    return { reason: 'langfuse-secret-mismatch' } as const;
   }
 
-  return userRecord.username;
+  return { user: userRecord.username } as const;
 }
 
 function ignoredCodeAgentSpans(resourceSpans: number): Record<string, any> {
@@ -78,79 +67,91 @@ function ignoredCodeAgentSpans(resourceSpans: number): Record<string, any> {
 }
 
 export async function POST(req: Request) {
+  const diagnostic = beginOtelTraceRequest(req);
+  const respond = (body: unknown, status: number, result: Parameters<typeof diagnostic.finish>[1]) => {
+    const response = NextResponse.json(body, { status });
+    diagnostic.finish(status, result);
+    return response;
+  };
   try {
     const apiKey = req.headers.get('x-witty-api-key');
     let authenticatedUser: string | undefined;
     const hasInvalidApiKey = false;
 
     if (apiKey) {
+      diagnostic.stage('api-key-auth');
       const userRecord = await db.findUserByApiKey(apiKey);
       if (userRecord) {
         authenticatedUser = userRecord.username;
-        console.log(`[OTel] Authenticated User: ${authenticatedUser}`);
+        diagnostic.authenticated();
       } else {
         // Never echo credentials into application logs. An explicitly supplied
         // key is an authentication attempt, so a mismatch must not fall back to
         // resource-level user attribution.
-        console.warn('[OTel] Rejected trace ingest: invalid x-witty-api-key');
-        return NextResponse.json(
+        return respond(
           { error: 'Invalid x-witty-api-key' },
-          { status: 401 },
+          401, { reason: 'invalid-api-key' },
         );
       }
     }
 
     let body;
+    diagnostic.stage('decode');
     try {
       body = await decodeOtlpRequest(req, 'traces');
     } catch (err) {
       if (err instanceof OtlpDecodeError) {
-        return NextResponse.json({ error: err.message }, { status: err.status });
+        return respond({ error: err.message }, err.status, { reason: 'decode-failed' });
       }
-      console.error('[OTel] Failed to decode request body:', err);
-      return NextResponse.json({ error: 'Invalid Payload' }, { status: 400 });
+      return respond({ error: 'Invalid Payload' }, 400, { reason: 'decode-failed', error: err });
     }
+    diagnostic.decoded(body);
+    diagnostic.stage('partition');
     const codeAgentPartition = partitionCodeAgentOtlpPayload(body, 'traces');
     if (codeAgentPartition.codeAgentResourceCount > 0 && !codeAgentPartition.hasRemainingResources) {
-      return NextResponse.json({
+      return respond({
         status: 'accepted',
         framework: 'codeagent',
         ignored: true,
         ignoredResourceSpans: codeAgentPartition.codeAgentResourceCount,
         received: 0,
         sessions: [],
-      });
+      }, 200, { reason: 'ignored-codeagent' });
     }
     body = codeAgentPartition.remainingBody;
 
     if (!authenticatedUser && isLangfuseOtlpTraceBody(body)) {
-      authenticatedUser = await authenticateLangfuseCredentials(req);
+      diagnostic.stage('langfuse-auth');
+      const auth = await authenticateLangfuseCredentials(req);
+      authenticatedUser = auth.user;
       if (!authenticatedUser) {
-        return NextResponse.json({ error: 'Invalid Langfuse credentials' }, { status: 401 });
+        return respond({ error: 'Invalid Langfuse credentials' }, 401, { reason: auth.reason || 'unknown-langfuse-user' });
       }
-      console.log('[OTel] Langfuse Authenticated User:', authenticatedUser);
+      diagnostic.authenticated();
     }
 
     // The managed LlamaIndex collector always receives an Agent Insight API
     // key during configuration. Do not let an unauthenticated client choose an
     // arbitrary owner through OTLP resource.user.id.
     if (!authenticatedUser && isLlamaIndexOtlpTraceBody(body)) {
-      console.warn('[OTel] Rejected LlamaIndex trace ingest: missing x-witty-api-key');
-      return NextResponse.json({ error: 'Missing x-witty-api-key' }, { status: 401 });
+      diagnostic.stage('api-key-auth');
+      return respond({ error: 'Missing x-witty-api-key' }, 401, { reason: 'missing-api-key' });
     }
 
     // Jiuwen 的结构 span 需要走自包含的 raw-span 聚合路径。
     if (jiuwenServiceName(body) === 'jiuwenswarm') {
+      diagnostic.stage('jiuwen');
       const { received, sessions } = await ingestJiuwenOtlp(body, { user: authenticatedUser });
-      return NextResponse.json({
+      return respond({
         status: 'accepted',
         framework: 'jiuwenswarm',
         received,
         sessions,
         ...ignoredCodeAgentSpans(codeAgentPartition.codeAgentResourceCount),
-      });
+      }, 200, { reason: 'accepted' });
     }
 
+    diagnostic.stage('normalize');
     const actrailPayload = isActrailOtlpTraceBody(body);
     const receivedAt = new Date().toISOString();
     const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser })
@@ -163,27 +164,22 @@ export async function POST(req: Request) {
       : events;
 
     if (rejectedQwenEvents.length && acceptedEvents.length === 0) {
-      console.warn('[OTel] Rejected Qwen Code trace ingest: invalid API key');
-      return NextResponse.json(
+      return respond(
         {
           error: 'Invalid API key',
           detail: 'The x-witty-api-key does not match a configured user.',
           hint: 'Update AGENT_INSIGHT_API_KEY to the API key shown for the intended Agent Insight user.',
         },
-        { status: 401 },
+        401, { reason: 'invalid-api-key', rejected: rejectedQwenEvents.length },
       );
     }
-    if (rejectedQwenEvents.length) {
-      console.warn('[OTel] Rejected Qwen Code events from a mixed trace batch: invalid API key', {
-        rejectedEvents: rejectedQwenEvents.length,
-      });
-    }
+    diagnostic.stage('spool');
     const appendResult = appendOtelTraceEvents(
       acceptedEvents,
       actrailPayload ? getActrailOtelTraceSpoolDir() : undefined,
     );
     const rejectedForIdentityLimit = appendResult.rejectedEvents;
-    return NextResponse.json({
+    return respond({
       status: rejectedForIdentityLimit > 0 ? 'partial' : 'accepted',
       received: acceptedEvents.length - rejectedForIdentityLimit,
       persisted: appendResult.events.length,
@@ -202,18 +198,21 @@ export async function POST(req: Request) {
         },
       } : {}),
       ...ignoredCodeAgentSpans(codeAgentPartition.codeAgentResourceCount),
-    }, rejectedForIdentityLimit > 0 ? { status: 413 } : undefined);
+    }, rejectedForIdentityLimit > 0 ? 413 : 200, {
+      reason: rejectedForIdentityLimit > 0 ? 'spool-identity-limit' : 'accepted',
+      spooled: appendResult.events.length,
+      deduplicated: appendResult.deduplicatedEvents,
+      rejected: rejectedForIdentityLimit + rejectedQwenEvents.length,
+    });
   } catch (err: any) {
-    console.error('[OTel] Trace ingest handler error:', err);
-    return NextResponse.json(
+    return respond(
       { status: 'error', message: err?.message || 'Failed to accept OTLP traces' },
-      { status: 500 },
+      500, { reason: 'handler-error', error: err },
     );
   }
 }
 
-export async function OPTIONS(req: Request) {
-  console.log('[OTel] Received OPTIONS Request. Headers:', JSON.stringify(Object.fromEntries(req.headers.entries())));
+export async function OPTIONS(_req: Request) {
   return new NextResponse(null, {
     status: 204,
     headers: {
