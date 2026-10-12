@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import { BenchmarkProtocolError } from './errors'
+import { validatePublicBundleSpec } from '../../../services/executor/src/public-bundle.cjs'
 import { normalizeAgentOptions, type AgentOptions } from '../../../services/executor/src/mcts-options.cjs'
 export type { AgentOptions } from '../../../services/executor/src/mcts-options.cjs'
 
@@ -98,6 +99,7 @@ export interface BenchmarkDatasetLoader {
 export type BenchmarkManifest = {
   adapterKey: string
   displayName: string
+  supportsAgentExecution?: boolean
   protocols: {
     agentTask: 'agent-task/v1'
     evaluation: 'benchmark-evaluation/v1'
@@ -153,6 +155,12 @@ export type AgentTaskEnvelope = {
     provider: 'git'
     repository: string
     revision: string
+  } | {
+    provider: 'public-bundle'
+    taskId: string
+    digest: string
+    repository?: never
+    revision?: never
   }
   policy: {
     workspaceWrite: 'allow'
@@ -272,6 +280,10 @@ export function validateTaskEnvelope(
   if (canonicalJson(task.task.benchmarkPayload).length > 256 * 1024) {
     throw new BenchmarkProtocolError('TASK_PAYLOAD_TOO_LARGE', '任务公开数据超过 256 KiB')
   }
+  if (task.workspace.provider === 'public-bundle') {
+    try { validatePublicBundleSpec(task.workspace) }
+    catch { throw new BenchmarkProtocolError('TASK_WORKSPACE_INVALID', '公开任务包契约不合法') }
+  } else if (task.workspace.provider === 'git') {
   let repository: URL
   try {
     repository = new URL(task.workspace.repository)
@@ -290,6 +302,9 @@ export function validateTaskEnvelope(
   }
   if (!/^[0-9a-f]{40}$/i.test(task.workspace.revision)) {
     throw new BenchmarkProtocolError('TASK_REVISION_INVALID', '仓库 revision 必须是 40 位 commit SHA')
+  }
+  } else {
+    throw new BenchmarkProtocolError('TASK_WORKSPACE_INVALID', '工作区类型不受支持')
   }
   const expectedArtifacts = canonicalJson(manifest.requiredArtifacts as unknown as JsonValue)
   const actualArtifacts = canonicalJson(task.submission.requiredArtifacts as unknown as JsonValue)

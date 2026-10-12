@@ -697,3 +697,34 @@ SWE-bench 是当前完整参考实例：
 参考它的目录和生命周期，不要复制它的 `model.patch`、Resolved、FAIL_TO_PASS、镜像或 Evidence 业务语义。新的 Benchmark 必须使用自己的实例代码表达这些差异。
 
 客户侧的自然语言协作方式见[《自定义 Benchmark 接入指南》](./custom-benchmark-onboarding-guide.md)，三份文档的使用顺序见[《Benchmark 文档关系与开发指南》](./README.md)。
+
+### ZSoft 接入前的本机验证
+
+`scripts/benchmark/zsoft-preflight.py` 与 `scripts/benchmark/zsoft-validate.py` 用于接入前的环境和原生判题验证；它们尚未注册平台 Benchmark，也不运行 MCTS、模型或 E2B。ZSoft 源码和 Python 依赖应使用独立目录与虚拟环境。需要 Docker Compose；内核题还需宿主编译工具、libelf/OpenSSL 开发文件及锁定源码。没有 `/dev/kvm` 时使用 TCG，实际能否满足判题超时必须由对照验证确认。
+
+在 Linux 评测机设置自己的源码、虚拟环境与输出路径后执行：
+
+```bash
+python3 scripts/benchmark/zsoft-preflight.py \
+  --mcts-root "$MCTS_ROOT" --work-root "$VALIDATION_ROOT" \
+  --bench-root "$ZSOFT_ROOT" --zsoft-bin "$ZSOFT_BIN" \
+  --run-container-smoke --output "$VALIDATION_ROOT/preflight.json"
+
+python3 scripts/benchmark/zsoft-validate.py \
+  --bench-root "$ZSOFT_ROOT" --binary "$ZSOFT_BIN" \
+  --framework-revision "$ZSOFT_REVISION" \
+  --output-dir "$VALIDATION_ROOT/p0"
+
+python3 scripts/benchmark/zsoft-validate.py \
+  --bench-root "$ZSOFT_ROOT" --binary "$ZSOFT_BIN" \
+  --framework-revision "$ZSOFT_REVISION" \
+  --output-dir "$VALIDATION_ROOT/p1" --prepare \
+  --task libxml2-002-relaxng-pushcdata-oob \
+  --task linux-rxrpc-024-add-key-roundup-oob
+```
+
+`ZSOFT_REVISION` 必须为所部署框架的完整提交哈希；脚本记录此值，部署者仍需核对源码来源。正式源码先由上游 `zsoft-poc fetch-sources --task-id TASK_ID` 缓存。若 Compose 安装在独立目录，需要将相应 `DOCKER_CONFIG` 传给上述命令，并将 ZSoft 虚拟环境的 `bin` 加入 `PATH`，供题目子进程导入框架。
+
+不带 `--task` 时只做 P0：冻结 30 道正式题的 manifest、source lock 和控制提交摘要，调用上游导出器逐题检查公开文件清单与内容，不执行判题。`inventory.json` 不代表全部源码缓存已通过上游 `validate --strict`。带 `--task` 后运行 P1；`--prepare` 会按上游逻辑构建镜像及内核资产，需预留磁盘和编译时间。输出目录必须不存在，避免覆盖先前证据；同一题不要并发 prepare。
+
+P1 通过要求 reference 为 `completed/success=true`、negative 为 `completed/success=false`，两者均保留 `submission_kind=final` 的完整私有记录，并检查本次新增 Compose 容器和网络是否清理。基础设施故障不能当作 negative 通过。结果、命令日志、镜像 ID 和内核资产摘要写入输出目录；这些私有验证记录不能交给执行 Agent。验证期间应避免其他任务并发创建 Compose 资源，以免剩余资源检查受到干扰。
