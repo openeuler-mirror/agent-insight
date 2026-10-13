@@ -213,12 +213,6 @@ Skills 步骤核验区用于判断当前 Trace 是否覆盖对应 Skill 的关�
 
 这类问题通常没有明确报错，但表现为回答偏离预期、关键步骤遗漏、Skill 触发不稳定或工具调用顺序不合理。此类场景下，智能诊断更重要的价值在于解释"为何当前行为更像问题源头"，而不仅是指出最终结果不正确。
 
-## 诊断无法启动
-
-如果 AgentDebug 提示 `opencode server did not become ready within 30s`，先检查后端日志。若同时出现 `spawn opencode ENOENT`，说明后端未找到 opencode 可执行文件。
-
-源码部署通过 `scripts/start.sh` 启动时，会自动从项目根目录的 `node_modules/.bin/opencode` 查找程序。自行启动 `.next/standalone/server.js` 时，应将 `AGENT_INSIGHT_PACKAGE_ROOT` 设置为安装依赖的项目根目录，或用 `OPENCODE_BIN` 指定 opencode 的绝对路径。设置后需重启后端，再重新运行诊断；仅刷新页面不会生效。
-
 ## 常见误区
 
 - 跳过原始 Trace，只阅读诊断文字
