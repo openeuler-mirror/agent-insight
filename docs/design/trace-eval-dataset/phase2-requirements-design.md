@@ -381,6 +381,10 @@ flowchart TD
 
 ### 5.2 调度、发布与恢复
 
+Node 启动钩子结束时用 `setImmediate` 异步加载并启动 Manager，不等待目录检查、任务恢复或 Worker 就绪。后台初始化与首个请求共用进程级初始化状态，区分初始化中、就绪和失败；并发调用只运行一次初始化。失败后解除本次退出监听并等待 30 秒，后续访问才可重试，不按请求创建 Worker。
+
+现有生成相关接口先检查就绪：未就绪立即返回 `503 FEATURE_INITIALIZING`、`Retry-After: 2`；失败返回 `503 FEATURE_UNAVAILABLE`、`Retry-After: 30`，两者都带 `Cache-Control: no-store`。不新增状态接口或数据库字段。配置页分别按 2 秒/30 秒重新加载，等待时保留输入并禁用生成，失败时提供“重新加载”；切换条件或关闭窗口取消旧请求和定时器。进度页将服务准备状态与任务失败分开，恢复后继续读取进度；提交遇到服务重启时保留原 requestId 并重新检查就绪，避免重试新建重复任务。
+
 Manager 为进程单例，任务根目录锁包含进程身份，限制同一目录的多个调度器。4 个长期复用 Worker 各持独立 Prisma 客户端，每线程一次一个作业；最多 20 个 queued/running/deleting 作业，按创建时间、ID FIFO 领取。第 5 个可排队，同 owner 不另设三个任务上限。
 
 tick 每秒执行，租约长度 30 秒、按 tick 续租；Worker 每 5 秒发心跳。启动时 running 回 queued 并推进 epoch，处理孤儿目录后恢复；线程就绪有 30 秒期限，失联线程终止后重建对应槽位。恢复重试两次，间隔 1 秒/5 秒，耗尽后失败。消息匹配 jobId/epoch/incarnationId，旧线程消息不改变新任务。
@@ -426,7 +430,7 @@ React 组件保留已收到统计到本次关闭，后续 null 不抹掉当前�
 | `GET /deletions/:deletionId` | 返回 deleting/deleted/cleanup_failed，按 owner 隔离 |
 | 现有列表/详情/编辑/导入/评测 | 服务端拒绝未就绪数据项操作/评测，生成中拒绝编辑；已发布保持双字段约束 |
 
-典型错误：401 UNAUTHENTICATED；404 NOT_FOUND；400 INVALID_CONFIG（数据项校验可 422）；422 SOURCE_NOT_AVAILABLE；409 IDEMPOTENCY_CONFLICT / DATASET_NOT_READY / ALREADY_COMPLETED；410 REQUEST_EXPIRED；429 QUEUE_LIMIT；503 FEATURE_UNAVAILABLE。删除中用 409 DATASET_DELETING 并附 details.deletionId。
+典型错误：401 UNAUTHENTICATED；404 NOT_FOUND；400 INVALID_CONFIG（数据项校验可 422）；422 SOURCE_NOT_AVAILABLE；409 IDEMPOTENCY_CONFLICT / DATASET_NOT_READY / ALREADY_COMPLETED；410 REQUEST_EXPIRED；429 QUEUE_LIMIT；503 FEATURE_INITIALIZING / FEATURE_UNAVAILABLE。删除中用 409 DATASET_DELETING 并附 details.deletionId。
 
 任务内无有效问答记 NO_VALID_SAMPLES，冻结结果损坏记 SOURCE_CORRUPT，读取/保存等异常映射 RESOURCE_UNAVAILABLE；线程恢复耗尽有 WORKER_RECOVERY_EXHAUSTED。清理状态单独处理，不把网络断连写成生成失败。
 
@@ -434,7 +438,7 @@ React 组件保留已收到统计到本次关闭，后续 null 不抹掉当前�
 
 新字段对旧数据集可空，只有 generationSource=trace 使用本契约。保存生成数据项时维护 values、input/expectedOutput 别名和 referenceCasesJson；本来源不调用模型观点提取，其他来源保持原逻辑。实验创建或已有 Trace 评测配对冻结所选案例，避免后续删集改变历史输入。
 
-Worker 由 [build-trace-dataset-worker.cjs](../../../scripts/build-trace-dataset-worker.cjs)生成，Next 配置接入构建及 standalone 文件追踪，[instrumentation-node.ts](../../../src/instrumentation-node.ts)启动调度器。部署需 SQLite、可写数据目录及常驻 Node Worker；JSON 后端不支持此功能。
+Worker 由 [build-trace-dataset-worker.cjs](../../../scripts/build-trace-dataset-worker.cjs)生成，Next 配置接入构建及 standalone 文件追踪，[instrumentation-node.ts](../../../src/instrumentation-node.ts)在主启动流程返回后后台初始化调度器。部署需 SQLite、可写数据目录及常驻 Node Worker；JSON 后端不支持此功能。
 
 重启恢复依赖持久任务、租约和来源封存，不承诺采样计算检查点恢复。多目录实例必须隔离数据库/数据目录；仅改变监听端口不能绕过同一任务目录的锁。
 

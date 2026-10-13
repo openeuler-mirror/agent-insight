@@ -22,6 +22,9 @@ export async function guardTraceDataset(request: Request, id: string, user: stri
 }
 export function generationErrorResponse(error: unknown) {
   if (error instanceof SyntaxError) return NextResponse.json({ error: { code: 'INVALID_CONFIG', message: '请求必须为有效 JSON' } }, { status: 400 });
-  if (error instanceof GenerationError) return NextResponse.json({ error: { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) } }, { status: error.status });
+  if (error instanceof GenerationError) return NextResponse.json({ error: { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) } }, {
+    status: error.status,
+    headers: error.code === 'FEATURE_INITIALIZING' || error.code === 'FEATURE_UNAVAILABLE' ? { 'Retry-After': error.code === 'FEATURE_INITIALIZING' ? '2' : '30', 'Cache-Control': 'no-store' } : undefined,
+  });
   return NextResponse.json({ error: { code: 'RESOURCE_UNAVAILABLE', message: '服务暂时不可用，请稍后重试' } }, { status: 500 });
 }

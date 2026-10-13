@@ -335,16 +335,36 @@ export class TraceDatasetManager {
     if (lock?.instanceId === this.instanceId) await fs.unlink(lockPath);
   }
 }
-const globalManager = globalThis as typeof globalThis & { traceDatasetManager?: TraceDatasetManager };
-export async function getTraceDatasetManager() {
-  const client = db.getClient();
-  if (!(client instanceof PrismaClient) || !process.env.DATABASE_URL?.startsWith('file:')) throw new GenerationError('FEATURE_UNAVAILABLE', '基于 Trace 生成需要 SQLite 与常驻 Node Worker', 503);
-  if (!globalManager.traceDatasetManager) {
-    globalManager.traceDatasetManager = new TraceDatasetManager(client, path.join(resolveAgentInsightDataPath(), 'trace-datasets'), process.env.DATABASE_URL, path.join(process.cwd(), 'generated/trace-datasets/worker.cjs'));
+type Startup = { ready: boolean; pending?: Promise<void>; error?: GenerationError; retryAt: number };
+const globalManager = globalThis as typeof globalThis & { traceDatasetManager?: TraceDatasetManager; traceDatasetStartup?: Startup };
+export function startTraceDatasetManager() {
+  const state = globalManager.traceDatasetStartup ??= { ready: false, retryAt: 0 };
+  if (state.ready || state.pending || Date.now() < state.retryAt) return;
+  state.error = undefined;
+  state.pending = Promise.resolve().then(async () => {
+    const client = db.getClient();
+    if (!(client instanceof PrismaClient) || !process.env.DATABASE_URL?.startsWith('file:')) throw new GenerationError('FEATURE_UNAVAILABLE', '基于 Trace 生成需要 SQLite 与常驻 Node Worker', 503);
+    if (!globalManager.traceDatasetManager) {
+      globalManager.traceDatasetManager = new TraceDatasetManager(client, path.join(resolveAgentInsightDataPath(), 'trace-datasets'), process.env.DATABASE_URL, path.join(process.cwd(), 'generated/trace-datasets/worker.cjs'));
+    }
     const manager = globalManager.traceDatasetManager;
-    process.once('SIGTERM', () => { void manager.close(); });
-    process.once('SIGINT', () => { void manager.close(); });
-  }
-  try { await globalManager.traceDatasetManager.start(); } catch { globalManager.traceDatasetManager = undefined; throw new GenerationError('FEATURE_UNAVAILABLE', '后台生成服务不可用，请检查数据库升级、Worker 与任务目录', 503); }
-  return globalManager.traceDatasetManager;
+    const close = () => { void manager.close().catch(() => {}); };
+    process.once('SIGTERM', close);
+    process.once('SIGINT', close);
+    try { await manager.start(); }
+    catch (error) { process.removeListener('SIGTERM', close); process.removeListener('SIGINT', close); throw error; }
+    state.ready = true;
+  }).catch(error => {
+    globalManager.traceDatasetManager = undefined;
+    state.error = error instanceof GenerationError ? error : new GenerationError('FEATURE_UNAVAILABLE', '后台生成服务初始化失败，请稍后重试；若持续失败，请联系管理员检查数据库、Worker 与任务目录', 503);
+    state.retryAt = Date.now() + 30000;
+    console.warn('[trace-datasets] initialization failed:', error instanceof Error ? error.message : 'unknown error');
+  }).finally(() => { state.pending = undefined; });
+}
+export async function getTraceDatasetManager() {
+  startTraceDatasetManager();
+  const state = globalManager.traceDatasetStartup!;
+  if (state.ready && globalManager.traceDatasetManager) return globalManager.traceDatasetManager;
+  if (state.error) throw state.error;
+  throw new GenerationError('FEATURE_INITIALIZING', '评测集生成服务正在初始化，请稍候', 503);
 }

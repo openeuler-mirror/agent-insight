@@ -47,6 +47,8 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
   const optionsScope = JSON.stringify([platform, days, apiKey]);
   const [loadedScope, setLoadedScope] = useState('');
   const [loading, setLoading] = useState(false);
+  const [serviceState, setServiceState] = useState<'checking' | 'initializing' | 'ready' | 'unavailable'>('checking');
+  const [optionsAttempt, setOptionsAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState('');
@@ -76,7 +78,10 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
     setClosing(true); setBusy(true); setError('');
     try {
       const response = await apiFetch(`/api/agent-datasets/${id}/generation`, { method: 'DELETE' });
-      if (!response.ok && response.status !== 404) throw new Error(errorText(await response.json(), '清理筛选明细失败，请重试'));
+      if (!response.ok && response.status !== 404) {
+        const data = await response.json();
+        if (!['FEATURE_INITIALIZING', 'FEATURE_UNAVAILABLE'].includes(data.error?.code)) throw new Error(errorText(data, '清理筛选明细失败，请重试'));
+      }
       currentId.current = undefined;
       onClose();
     } catch (e) { setError(e instanceof Error ? e.message : '关闭失败，请重试'); }
@@ -95,20 +100,35 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
   useEffect(() => {
     if (id || !apiKey) return;
     const controller = new AbortController();
-    setLoading(true); setError('');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setLoading(true); setError(''); setLoadedScope(''); setServiceState('checking');
     const to = new Date(), from = new Date(to.getTime() - Number(days) * 86400000);
     const params = new URLSearchParams({ from: from.toISOString(), to: to.toISOString(), ...(platform ? { platform } : {}) });
-    void apiFetch(`/api/agent-datasets/generation-options?${params}`, { signal: controller.signal }).then(async response => {
-      const data = await response.json();
-      if (!response.ok) throw new Error(errorText(data, '加载 Agent 失败'));
-      if (controller.signal.aborted) return;
-      setOptions(data);
-      setLoadedScope(optionsScope);
-      setAgentKey(current => data.agents.some((a: { agentKey: string }) => a.agentKey === current) ? current : '');
-      if (platform && !data.platforms.some((p: { id: string }) => p.id === platform)) setPlatform('');
-    }).catch(e => { if (!controller.signal.aborted) { setError(e.message); setLoadedScope(''); setAgentKey(''); } }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [id, platform, days, apiKey, optionsScope]);
+    const load = async () => {
+      try {
+        const response = await apiFetch(`/api/agent-datasets/generation-options?${params}`, { signal: controller.signal });
+        const data = await response.json();
+        if (controller.signal.aborted) return;
+        if (response.status === 503 && ['FEATURE_INITIALIZING', 'FEATURE_UNAVAILABLE'].includes(data.error?.code)) {
+          const initializing = data.error.code === 'FEATURE_INITIALIZING';
+          setServiceState(initializing ? 'initializing' : 'unavailable');
+          setLoading(initializing); setError(initializing ? '' : errorText(data, '生成服务暂时不可用'));
+          timer = setTimeout(() => { void load(); }, initializing ? 2000 : 30000);
+          return;
+        }
+        if (!response.ok) throw new Error(errorText(data, '加载 Agent 失败'));
+        setServiceState('ready'); setLoading(false); setError('');
+        setOptions(data);
+        setLoadedScope(optionsScope);
+        setAgentKey(current => data.agents.some((a: { agentKey: string }) => a.agentKey === current) ? current : '');
+        if (platform && !data.platforms.some((p: { id: string }) => p.id === platform)) setPlatform('');
+      } catch (e) {
+        if (!controller.signal.aborted) { setError(e instanceof Error ? e.message : '加载 Agent 失败'); setLoadedScope(''); setLoading(false); setServiceState('checking'); }
+      }
+    };
+    void load();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [id, platform, days, apiKey, optionsScope, optionsAttempt]);
   useEffect(() => {
     if (!id || busy) return;
     let stopped = false, timer: ReturnType<typeof setTimeout>;
@@ -116,11 +136,19 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
       try {
         const response = await apiFetch(`/api/agent-datasets/${id}/generation`);
         const data = await response.json();
+        if (stopped) return;
+        if (response.status === 503 && ['FEATURE_INITIALIZING', 'FEATURE_UNAVAILABLE'].includes(data.error?.code)) {
+          const initializing = data.error.code === 'FEATURE_INITIALIZING';
+          setServiceState(initializing ? 'initializing' : 'unavailable');
+          setError(initializing ? '' : errorText(data, '生成服务暂时不可用'));
+          timer = setTimeout(poll, initializing ? 2000 : 30000); return;
+        }
         if (response.status === 409 && data.error?.code === 'DATASET_DELETING') {
           const deletionResponse = await apiFetch(`/api/agent-datasets/deletions/${data.error.details.deletionId}`);
           const deletion = await deletionResponse.json();
           if (!deletionResponse.ok) throw new Error(errorText(deletion, '读取清理状态失败'));
           if (stopped) return;
+          setServiceState('ready');
           setExternalDeleting(deletion.status === 'deleting'); setCleanupFailed(deletion.status === 'cleanup_failed');
           if (deletion.status === 'deleted') { finishCleanup.current(); return; }
           setError(deletion.status === 'cleanup_failed' ? '清理失败，请重试取消或返回' : '');
@@ -129,6 +157,7 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
         if (response.status === 404) { finishCleanup.current(); return; }
         if (!response.ok) throw new Error(errorText(data, '读取进度失败'));
         if (stopped) return;
+        setServiceState('ready');
         setProgress(previous => ({ ...data, summary: data.summary ?? previous?.summary ?? null })); setError('');
         if (data.status !== 'generating') changeRef.current();
         if (data.status === 'generating') timer = setTimeout(poll, 1000);
@@ -149,6 +178,10 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
       if (oldId.current) { await cleanTraceDataset(oldId.current, user); oldId.current = undefined; changeRef.current(); }
       const response = await apiFetch('/api/agent-datasets/trace-generation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pending.current.config) });
       const data = await response.json();
+      if (response.status === 503 && ['FEATURE_INITIALIZING', 'FEATURE_UNAVAILABLE'].includes(data.error?.code)) {
+        setLoadedScope(''); setOptionsAttempt(attempt => attempt + 1);
+        return;
+      }
       if (!response.ok) throw new Error(errorText(data, '创建任务失败'));
       setId(data.datasetId); setProgress(null); changeRef.current();
     } catch (e) { setError(e instanceof Error ? e.message : '创建任务失败'); } finally { setBusy(false); }
@@ -162,7 +195,7 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
       finishCleanup.current();
     } catch (e) { setError(e instanceof Error ? e.message : '清理失败'); } finally { setBusy(false); }
   };
-  const optionsReady = loadedScope === optionsScope && !loading;
+  const optionsReady = serviceState === 'ready' && loadedScope === optionsScope && !loading;
   const agents = optionsReady ? options.agents : [];
   const valid = Boolean(apiKey && user && name.trim() && name.trim().length <= 50 && platform && agents.some(a => a.agentKey === agentKey) && Number.isInteger(Number(limit)) && Number(limit) >= 1 && Number(limit) <= 500 && optionsReady);
   const stopping = (busy && !closing) || externalDeleting;
@@ -174,13 +207,15 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
       <header className={styles.header}><h2 id="trace-dataset-title" className="ai-section-title">{id ? '生成评测集' : '基于 Trace 生成评测集'}</h2></header>
       <div className={styles.body}>
       {!apiKey && <p role="alert" style={{ color: 'var(--error)' }}>请重新登录以获取有效凭据</p>}
+      {serviceState === 'initializing' && <p role="status" style={{ color: 'var(--foreground-secondary)', marginTop: 12 }}>评测集生成服务正在初始化，完成后将自动恢复，请稍候…</p>}
       {error && <p role="alert" style={{ color: 'var(--error)', marginTop: 12 }}>{error}</p>}
+      {!id && error && !optionsReady && <button type="button" className="ai-btn-s" disabled={busy || loading} onClick={() => setOptionsAttempt(attempt => attempt + 1)}>重新加载</button>}
       {!id ? <form onSubmit={e => { e.preventDefault(); void submit(); }} style={{ display: 'grid', gap: 16, marginTop: 20 }}>
         <label>名称 <RequiredMark /><input aria-label="名称" required maxLength={50} style={inputStyle} value={name} onChange={e => setName(e.target.value)} /></label>
         <label>描述<textarea aria-label="描述" maxLength={200} style={inputStyle} value={description} onChange={e => setDescription(e.target.value)} /></label>
         <div className={styles.formGrid}>
-          <label>Agent 平台 <RequiredMark /><select aria-label="Agent 平台" required style={inputStyle} value={platform} disabled={busy} onChange={e => { setPlatform(e.target.value); setAgentKey(''); }}><option value="">请选择平台</option>{options.platforms.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
-          <label>Agent <RequiredMark /><select aria-label="Agent" required style={inputStyle} value={optionsReady ? agentKey : ''} disabled={!optionsReady || !platform || busy} onChange={e => setAgentKey(e.target.value)}><option value="">{loading ? '加载中…' : error && !optionsReady ? '加载失败，请重新选择平台或时间' : platform && optionsReady && !agents.length ? '所选时间内没有 Trace' : '请选择 Agent'}</option>{agents.map(a => <option key={a.agentKey} value={a.agentKey}>{a.name}（{a.traceCount} 条 Trace）</option>)}</select></label>
+          <label>Agent 平台 <RequiredMark /><select aria-label="Agent 平台" required style={inputStyle} value={platform} disabled={busy || serviceState !== 'ready'} onChange={e => { setPlatform(e.target.value); setAgentKey(''); }}><option value="">请选择平台</option>{options.platforms.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
+          <label>Agent <RequiredMark /><select aria-label="Agent" required style={inputStyle} value={optionsReady ? agentKey : ''} disabled={!optionsReady || !platform || busy} onChange={e => setAgentKey(e.target.value)}><option value="">{serviceState === 'initializing' ? '服务正在初始化…' : loading ? '加载中…' : error && !optionsReady ? '加载失败，请重新加载' : platform && optionsReady && !agents.length ? '所选时间内没有 Trace' : '请选择 Agent'}</option>{agents.map(a => <option key={a.agentKey} value={a.agentKey}>{a.name}（{a.traceCount} 条 Trace）</option>)}</select></label>
           <label>时间范围<select aria-label="时间范围" style={inputStyle} value={days} disabled={busy} onChange={e => { setDays(e.target.value); setAgentKey(''); }}><option value="1">最近24小时</option><option value="7">最近7天</option><option value="30">最近30天</option></select></label>
           <label>生成条数上限 <RequiredMark /><input aria-label="生成条数上限" type="number" min={1} max={500} step={1} required value={limit} style={inputStyle} onChange={e => setLimit(e.target.value)} /></label>
         </div>
@@ -213,9 +248,9 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
           })}</ul><p className={styles.tip}>同一条 Trace 可同时保留有效轮次、跳过其他轮次；各原因涉及的 Trace 数可能重叠。</p></>}
         </section> : (published || failed) && <p className={styles.tip}>筛选明细未持久保存，当前已不可用；如需查看，请重新生成。</p>}
         <footer className={styles.footer}>
-          <button className="ai-btn-s" disabled={busy || externalDeleting || (!cleanupFailed && !progress?.canCancel)} onClick={() => void cleanup(false)}>取消</button>
-          {progress?.canReturn && <button className="ai-btn-s" disabled={busy || externalDeleting} onClick={() => void cleanup(true)}>返回</button>}
-          <button className="ai-btn-p" disabled={busy || externalDeleting || !progress?.canFinish} onClick={() => void close()}>完成</button>
+          <button className="ai-btn-s" disabled={serviceState !== 'ready' || busy || externalDeleting || (!cleanupFailed && !progress?.canCancel)} onClick={() => void cleanup(false)}>取消</button>
+          {progress?.canReturn && <button className="ai-btn-s" disabled={serviceState !== 'ready' || busy || externalDeleting} onClick={() => void cleanup(true)}>返回</button>}
+          <button className="ai-btn-p" disabled={serviceState !== 'ready' || busy || externalDeleting || !progress?.canFinish} onClick={() => void close()}>完成</button>
         </footer>
       </div>}
       </div>

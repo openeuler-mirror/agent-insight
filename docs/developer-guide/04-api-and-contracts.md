@@ -372,6 +372,8 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 | `DELETE /api/agent-datasets/:id` | Trace 来源任何状态均走停止与清理；202提供deletionId，重复完成删除可204 |
 | `GET /api/agent-datasets/deletions/:deletionId` | 按归属返回deleting/deleted/cleanup_failed |
 
+生成服务在主服务启动流程返回后后台初始化。依赖 Manager 的接口初始化期间快速返回 `503 FEATURE_INITIALIZING`（`Retry-After: 2`），失败返回 `503 FEATURE_UNAVAILABLE`（`Retry-After: 30`）；均设置 `Cache-Control: no-store`，不提前接受新建任务。并发请求共用初始化，失败后 30 秒才允许重新尝试。配置窗口自动重查、禁用生成并保留输入；进度窗口遇到该状态继续等待，不将其记作任务失败。客户端重试提交保留原 requestId。
+
 普通错误为 `{error:{code,message}}`；删除中的进度409使用 `error.details.deletionId`。同一创建请求返回原任务，配置冲突409，删除后重放410。首次接受窗口为UUID时间未超前5分钟且未满24小时；持久时间水位防止回拨复活。
 
 `generationSource=trace` 固定为ideal_output与双字段，后端不接受额外业务列。内部同步input/expectedOutput别名和values，并原子更新referenceCasesJson/caseCount；NFC/LF之外不trim正文。生成及后续新增、编辑、导入跳过关键观点模型提取，不写伪造的派生缓存。此来源应通过显式caseId绑定评测；自动按输入寻找第一条答案的旧匹配器不纳入Trace生成集，避免同输入回答变体串用。旧单条Trace回流入口不向此来源追加可变字段，改用详情页双字段导入。

@@ -484,7 +484,7 @@ flowchart LR
 
 Trace 生成特性的生产采样方案称为**智能采样**，生产策略由 `sampling/production.ts` 固定为 `trace-coverage-v6.35`。效果验收以当前需求分析和最终对比报告为准，不使用研究脚本中的历史默认版本或已取消门槛。
 
-`TraceDatasetManager` 是进程级单例，任务根目录锁限制同一数据目录只运行一个服务调度器。启动恢复持久队列；4个长期复用Worker各自使用独立Prisma客户端，FIFO领取，实例最多接受20个未完成作业。SQLite使用WAL，写事务冲突有界重试。Worker构建入口为`scripts/build-trace-dataset-worker.cjs`，Next配置在开发/构建阶段生成`generated/trace-datasets/worker.cjs`，standalone追踪规则将其纳入产物。
+`TraceDatasetManager` 是进程级单例，任务根目录锁限制同一数据目录只运行一个服务调度器。主服务启动钩子返回后，通过 `setImmediate` 后台初始化；启动调用不等待恢复队列或 Worker 就绪。初始化状态与首个请求共享，未就绪接口快速返回 `503 FEATURE_INITIALIZING`，失败后进入 30 秒重试冷却。初始化时恢复持久队列；4个长期复用Worker各自使用独立Prisma客户端，FIFO领取，实例最多接受20个未完成作业。SQLite使用WAL，写事务冲突有界重试。Worker构建入口为`scripts/build-trace-dataset-worker.cjs`，Next配置在开发/构建阶段生成`generated/trace-datasets/worker.cjs`，standalone追踪规则将其纳入产物。
 
 数据流：固定绝对时间与Agent身份 → 分页固定成员清单及正文摘要 → 两次完整哈希校验并原子保存来源 → sealed → 双字段去重及输入组共享签名 → 智能采样 v6.35（全局预算覆盖优化、参考回答选择与回填）→ 单事务发布所有案例、投影和状态。来源与中间文件按owner哈希/job UUID隔离；成功或失败事务同时持久化cleanupPending。成功任务在临时目录清理后，以事务写入 succeeded 操作回执并删除任务记录；失败任务仅清理临时文件和清除标记，保留失败原因与配置。调度器兼容旧版成功任务，清理失败或事务中断则保留记录并重试。已发布数据集独立提供终态进度和删除能力，回执保证重复请求不重建。保存已发布数据集允许成功任务已删除，或关联任务仍为 succeeded；生成中与 deleting 仍禁止写入，案例修改同步维护评测投影。
 
