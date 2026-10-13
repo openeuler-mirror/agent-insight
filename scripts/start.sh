@@ -4,16 +4,28 @@
 # set -x
 
 # Navigate to the project root directory
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
+clock_ms() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    local now="${EPOCHREALTIME/./}"
+    echo "$((10#$now / 1000))"
+  else
+    echo "$((SECONDS * 1000))"
+  fi
+}
+START_MILLISECONDS=$(clock_ms)
 
 BENCHMARK_KEY=""
 START_PORT=""
+FORCE_REBUILD=""
 
 start_usage() {
   cat <<'EOF'
-Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--port PORT] [--benchmark KEY]
+Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--port PORT] [--benchmark KEY] [--force-rebuild]
 
-Builds and starts Agent Insight. Benchmark selection precedence is CLI,
+Reuses a verified unchanged build; otherwise rebuilds with cache preserved.
+--force-rebuild always rebuilds, keeping the incremental cache.
+Benchmark selection precedence is CLI,
 AGENT_INSIGHT_BENCHMARK from the process environment, then ~/.agent-insight/.env.
 When the selected KEY is swe-bench, the first start also downloads, verifies,
 and imports SWE-bench Verified with its official loader.
@@ -27,6 +39,10 @@ start_fail() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --force-rebuild)
+      FORCE_REBUILD="--force-rebuild"
+      shift
+      ;;
     --benchmark)
       [ "$#" -ge 2 ] || start_fail '--benchmark 缺少参数值'
       [ -z "$BENCHMARK_KEY" ] || start_fail '--benchmark 只能指定一次'
@@ -258,6 +274,42 @@ else
   echo "Using custom database configuration."
 fi
 
+STAGE_MILLISECONDS=$START_MILLISECONDS
+CURRENT_STAGE="configuration"
+print_elapsed() {
+  local elapsed=$(($(clock_ms) - $2))
+  printf '[timing] %s: %d.%03ds%s\n' "$1" "$((elapsed / 1000))" "$((elapsed % 1000))" "${3:-}"
+}
+stage_done() {
+  print_elapsed "$CURRENT_STAGE" "$STAGE_MILLISECONDS"
+}
+stage_begin() {
+  CURRENT_STAGE="$1"
+  STAGE_MILLISECONDS=$(clock_ms)
+  echo "[stage] $CURRENT_STAGE"
+}
+finish_timing() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    print_elapsed "$CURRENT_STAGE failed" "$STAGE_MILLISECONDS" >&2
+  fi
+  print_elapsed "total" "$START_MILLISECONDS" " (exit=$rc)"
+}
+trap finish_timing EXIT
+stage_done
+
+stage_begin "startup lock"
+mkdir -p .next/cache/agent-insight || exit 1
+if command -v flock >/dev/null 2>&1; then
+  exec 9>.next/cache/agent-insight/start.lock
+  if ! flock -n 9; then
+    echo "Another start.sh is running in this directory; retry after it finishes." >&2
+    exit 1
+  fi
+fi
+stage_done
+
+stage_begin "OpenGauss initialization"
 if [ -n "$DB_HOST" ]; then
   echo "OpenGauss configuration detected (DB_HOST=$DB_HOST)."
   echo "Initializing OpenGauss database with project schema..."
@@ -278,6 +330,9 @@ if [ -n "$DB_HOST" ]; then
 else
   echo "No OpenGauss configuration (DB_HOST) found. Skipping OpenGauss init."
 fi
+
+stage_done
+stage_begin "stop old service and release port"
 
 # 1. Try finding PID specifically
 PIDS=$(find_pid_on_port $PLATFORM_PORT)
@@ -331,10 +386,11 @@ if ! node scripts/stop-orphan-trace-consumer.cjs "$AGENT_INSIGHT_HOME" "$(pwd)";
   exit 1
 fi
 
+stage_done
+
 # 4. Build
 echo "-----------------------------------"
-echo "Clearing Next.js build cache (.next)..."
-rm -rf .next
+stage_begin "database schema sync"
 
 echo "Syncing database schema..."
 if [[ "${DATABASE_URL:-}" == file:* ]]; then
@@ -345,7 +401,7 @@ if [[ "${DATABASE_URL:-}" == file:* ]]; then
 fi
 # 走 db_push.sh 而不是直接 npx：它只对脚本内精确列出的无损变更放行，
 # 其余潜在破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
-if ! sh scripts/db_push.sh; then
+if ! sh scripts/db_push.sh --skip-generate; then
   echo ""
   echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
   echo "     直接启动 server 会让运行时撞到 schema/code 不一致。"
@@ -353,15 +409,18 @@ if ! sh scripts/db_push.sh; then
   exit 1
 fi
 
-echo "Generating Prisma client..."
-if ! npx prisma generate; then
-  echo ""
-  echo "  ⛔ prisma generate 失败 —— Prisma Client 没更新，但 schema 已同步。"
-  echo "     启动 server 会用旧 client 查新表，所有数据 API 都可能挂。"
-  echo "     退出脚本。修好后重新跑 bash scripts/start.sh。"
-  exit 1
+stage_done
+stage_begin "Prisma Client check/generate"
+if node scripts/start-build-state.cjs prisma-check; then
+  echo "Prisma Client unchanged; skipping generation."
+else
+  echo "Generating Prisma client..."
+  npx prisma generate || exit 1
+  node scripts/start-build-state.cjs prisma-record || exit 1
 fi
+stage_done
 
+stage_begin "benchmark preparation"
 if [ "$BENCHMARK_KEY" = "swe-bench" ]; then
   echo "Preparing SWE-bench Verified dataset..."
   if ! npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts; then
@@ -372,36 +431,45 @@ if [ "$BENCHMARK_KEY" = "swe-bench" ]; then
   fi
 fi
 
-echo "Building project..."
-# Limit Node memory to 2GB to prevent OOM kills on small servers
-# Next 16 Turbopack may trace the mutable .git/refs/codex tree into standalone and
-# then fail when Codex rotates a capture between tracing and copying.
-NODE_OPTIONS="--max-old-space-size=2048" npm run build -- --webpack
-if [ $? -ne 0 ]; then
-    echo "Build failed! Aborting."
-    exit 1
+stage_done
+stage_begin "build fingerprint and artifact check"
+# Prebuild generates these files; prepare them before fingerprinting as well.
+node scripts/benchmark/generate-catalog.cjs || exit 1
+node scripts/start-build-state.cjs check $FORCE_REBUILD
+BUILD_STATUS=$?
+[ "$BUILD_STATUS" -le 1 ] || exit "$BUILD_STATUS"
+stage_done
+
+if [ "$BUILD_STATUS" -eq 1 ]; then
+  stage_begin "Next.js build (cache retained)"
+  node scripts/start-build-state.cjs prepare || exit 1
+  NODE_OPTIONS="--max-old-space-size=2048" npm run build -- --webpack || exit 1
+  stage_done
+else
+  echo "Build unchanged and complete; skipping Next.js build."
 fi
 
-echo "Preparing standalone runtime (static + public)..."
+stage_begin "standalone preparation and verification"
 STANDALONE_SERVER=$(find .next/standalone -maxdepth 2 -name server.js | head -n 1)
 if [ -z "$STANDALONE_SERVER" ]; then
-  echo "  ⛔ 找不到 .next/standalone/**/server.js —— next build 未产出 standalone。"
-  echo "     output:standalone 下不能再用 next start，必须 node .next/standalone/server.js。"
+  echo "Missing standalone server.js; refusing to start."
   exit 1
 fi
 STANDALONE_DIR=$(dirname "$STANDALONE_SERVER")
-mkdir -p "$STANDALONE_DIR/.next/static" "$STANDALONE_DIR/public"
-# 与 docker-entrypoint 一致：静态资源不在 tracing 产物里，启动前必须拷入。
-# 不要跑 prepare-npm-package.js：它会 prune 掉 agent_ras/ 等运行时目录。
-cp -a .next/static/. "$STANDALONE_DIR/.next/static/"
-cp -a public/. "$STANDALONE_DIR/public/"
-if ! node scripts/verify-standalone.cjs "$STANDALONE_DIR"; then
-  echo "Build artifacts are incomplete; refusing to start."
-  exit 1
+if [ "$BUILD_STATUS" -eq 1 ]; then
+  mkdir -p "$STANDALONE_DIR/.next/static" "$STANDALONE_DIR/public" || exit 1
+  cp -a .next/static/. "$STANDALONE_DIR/.next/static/" || exit 1
+  cp -a public/. "$STANDALONE_DIR/public/" || exit 1
 fi
+node scripts/verify-standalone.cjs "$STANDALONE_DIR" || exit 1
+if [ "$BUILD_STATUS" -eq 1 ]; then
+  node scripts/start-build-state.cjs record || exit 1
+fi
+stage_done
 
 # 5. Start
 echo "-----------------------------------"
+stage_begin "start service and page health checks"
 echo "Starting server (standalone)..."
 
 # One last check before start
@@ -423,14 +491,14 @@ if command -v setsid >/dev/null 2>&1; then
   NEW_PID=$(
     cd "$STANDALONE_DIR" || exit 1
     setsid env HOSTNAME=0.0.0.0 PORT="$PLATFORM_PORT" NODE_OPTIONS="--max-old-space-size=6144" \
-      node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
+      node ./server.js 9>&- >> "$LOG_FILE" 2>&1 < /dev/null &
     echo $!
   )
 else
   NEW_PID=$(
     cd "$STANDALONE_DIR" || exit 1
     nohup env HOSTNAME=0.0.0.0 PORT="$PLATFORM_PORT" NODE_OPTIONS="--max-old-space-size=6144" \
-      node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
+      node ./server.js 9>&- >> "$LOG_FILE" 2>&1 < /dev/null &
     echo $!
   )
 fi
@@ -456,10 +524,13 @@ if [ "$READY" -ne 1 ]; then
   exit 1
 fi
 
+stage_done
 echo "Server started successfully."
 echo "PID: ${NEW_PID:-$(find_pid_on_port $PLATFORM_PORT | tr '\n' ' ')}"
 echo "Standalone: $STANDALONE_DIR/server.js"
 echo "Log file: server.log"
 echo "URL: http://localhost:$PLATFORM_PORT"
+stage_begin "Goal Plus watcher"
 ensure_goal_plus_watcher
+stage_done
 echo "-----------------------------------"
