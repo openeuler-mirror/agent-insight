@@ -38,7 +38,7 @@ export function normalizeDatasetCaseMatchText(value: string | null | undefined):
 
 export async function loadUserAgentDatasets(user: string): Promise<AgentDatasetRecord[]> {
   if (!user.trim()) return [];
-  return readUserAgentDatasets(user);
+  return readUserAgentDatasets(user, false);
 }
 
 export function hashAgentDatasetScope(datasets: AgentDatasetRecord[]): string {
@@ -77,6 +77,7 @@ export async function matchAgentDatasetCase(input: MatchDatasetCaseInput): Promi
   const includeAllDatasetKinds = input.includeAllDatasetKinds === true;
   const datasets = (input.datasets ?? await loadUserAgentDatasets(input.user))
     .filter(dataset => dataset.user === input.user)
+    .filter(dataset => dataset.generationSource !== 'trace')
     .filter(dataset => allowedDatasetIds.size === 0 || allowedDatasetIds.has(dataset.id))
     .filter(dataset => includeAllDatasetKinds || requireExpectedOutput || dataset.datasetKind === 'trajectory');
 

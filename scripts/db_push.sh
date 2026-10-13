@@ -19,6 +19,9 @@
 # 报错退出，把这个脚雷拆掉。
 set -eu
 
+# 用户要求撤销旧版派生统计；仅移除该列，其他破坏性 schema 变更仍由下方护栏拦截。
+node scripts/trace-datasets/remove-legacy-summary.cjs
+
 if output=$(npx prisma db push < /dev/null 2>&1); then
   printf '%s\n' "$output"
   exit 0

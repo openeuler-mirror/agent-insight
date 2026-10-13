@@ -479,3 +479,26 @@ flowchart LR
 
 实现入口为 `src/lib/trace-transfer.ts`（Bundle 校验、排序与 ID 重映射）和 `src/lib/trace-transfer-service.ts`（所有权、完整树查询、持久化与失败清理）。Session 的 `interactions` 随树迁移；Langfuse Session 同时迁移完整 `langfuseTraceNodes`，冲突重映射只改其中的 `subagentSessionId`，保留 OTel trace/span 父子标识。导入目标 user 始终取当前请求身份，不信任 Bundle 中的来源用户。任一节点写入或 Skill 重算失败时，服务会清理本次已创建的 Session 与 Execution，避免保留可见的半棵树。
 <!-- Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics. -->
+
+### Trace 数据集生成与清理
+
+Trace 生成特性的生产采样方案称为**智能采样**，生产策略由 `sampling/production.ts` 固定为 `trace-coverage-v6.35`。效果验收以当前需求分析和最终对比报告为准，不使用研究脚本中的历史默认版本或已取消门槛。
+
+`TraceDatasetManager` 是进程级单例，任务根目录锁限制同一数据目录只运行一个服务调度器。启动恢复持久队列；4个长期复用Worker各自使用独立Prisma客户端，FIFO领取，实例最多接受20个未完成作业。SQLite使用WAL，写事务冲突有界重试。Worker构建入口为`scripts/build-trace-dataset-worker.cjs`，Next配置在开发/构建阶段生成`generated/trace-datasets/worker.cjs`，standalone追踪规则将其纳入产物。
+
+数据流：固定绝对时间与Agent身份 → 分页固定成员清单及正文摘要 → 两次完整哈希校验并原子保存来源 → sealed → 双字段去重及输入组共享签名 → 智能采样 v6.35（全局预算覆盖优化、参考回答选择与回填）→ 单事务发布所有案例、投影和状态。来源与中间文件按owner哈希/job UUID隔离；成功或失败事务同时持久化cleanupPending。成功任务在临时目录清理后，以事务写入 succeeded 操作回执并删除任务记录；失败任务仅清理临时文件和清除标记，保留失败原因与配置。调度器兼容旧版成功任务，清理失败或事务中断则保留记录并重试。已发布数据集独立提供终态进度和删除能力，回执保证重复请求不重建。保存已发布数据集允许成功任务已删除，或关联任务仍为 succeeded；生成中与 deleting 仍禁止写入，案例修改同步维护评测投影。
+
+取消先增加leaseEpoch并置deleting，再通知对应Worker协作停止；5秒内未停止才终止该线程，确认退出后重建对应槽位。迟到消息必须匹配jobId/epoch/incarnationId，发布也校验租约。删除等待文件清理后才原子删除任务与数据集并写无正文回执；清理失败保留deleting供恢复。原始Execution/Session不在清理范围。实验创建复制所选caseId对应的输入与参考答案，显式轨迹配对在评测记录中冻结案例，避免删除原集损坏评测。
+
+采样计算会分块让出线程事件循环，以响应取消与心跳。来源读取通过SQLite JSON投影分页提取必要事件字段，不将巨型工具正文传入JavaScript；完整原文哈希分段扫描。最终casesJson/referenceCasesJson仍由现有Prisma接口物化；这不是无限大小或全链路恒定内存保证，资源不足须明确失败，不以样本大小静默过滤。
+
+Trace 评测集在生成阶段仅做结构提取，不改采集/入库，不验证语义独立性。source-reader 只读当前 owner 的 Execution/Session，不再读取原始 OTEL spool，不要求原始请求 messages。来源摘要覆盖执行、会话元数据及完整 interactions；冻结前后变化照旧排除。trace-analysis 按已落库消息顺序以 user 划分轮次，检查已知 traceId 冲突、子 Agent 消息和跨轮响应时间重叠；单轮归一器定位排除思考/工具调用后的最终回答，检查截断、非文本输入、失败/未完成响应和后续工具活动。Execution.query 只校验首轮，finalResult 只校验末轮，不能把整会话的最后回答套到每轮。数字毫秒及 ISO 消息时间均投影为 ISO。
+
+新任务冻结 stored-interactions-v4；不产生 CONTEXT_UNCONFIRMED/HISTORY/INPUT_LOSS 原因。旧 unit/units[] 已封存来源仍按冻结结果恢复，历史原因保留展示兼容；未捕获旧来源摘要不一致时按 SOURCE_CHANGED 跳过，需重新生成使用新规则。统计从冻结结果重算，经 Worker IPC 传给本次窗口的临时中转区，GET 轮询续期 60 秒，关闭窗口以 DELETE generation 释放；释放或过期后不因迟到 IPC/重读重新建立缓存。窗口已收到的数据只保留在组件状态，不写数据库、configJson 或额外统计文件；任务原有冻结/取消/清理机制保持。
+
+智能采样的生产策略由 `sampling/production.ts` 的 `PRODUCTION_POLICY` 指定为 `trace-coverage-v6.35`，Manager 冻结该策略，Worker 复用 `evidenceSampleSteps` 的 V635 分支。输入词项/签名共享，候选回答按问答键仅在 Worker 内存中保留，用于词项共识、长度与重复片段校准；不新增 Trace 字段、持久特征缓存或模型调用。缺少必要特征或未知版本明确拒绝。已保存 v4/v5 的任务按旧算法恢复；底层 `sampling/index.ts` 的 `POLICY` 保留为 v4 研究基线，不是生产默认。预算不可行时保留 v6.35 原有 v4 回退。
+
+
+效果验证与生产执行分开：`prepare-v635-confirmation.py` 固定来源及算法指纹，并将文本与人工评分分离；`run-v635-confirmation.ts` 完成选样后，`audit-v635-confirmation.ts` 才读取评分。`verify-v635-source-isolation.py` 检查新旧来源及输入词项近重复。研究用签名缓存不进入产品存储，标签不进入生产选择函数。
+
+当前开发池与五个新来源的适用效果均值目标通过；独立统计确认、全平台真实 Trace、完整浏览器操作链路和生产压力验证仍有缺口。五源只与同池随机采样比较。冻结实验附件中的历史默认、旧门槛和通过字段不作为现行结论，见[最终对比报告](../design/trace-eval-dataset/eight-datasets-comparison-report.md)与[开发计划](../design/trace-eval-dataset/phase3-development-plan.md)。仓库保留指定指标与审计摘要，不包含全部原始数据及逐轮运行产物；重放历史脚本需另行准备其要求的数据与附件。

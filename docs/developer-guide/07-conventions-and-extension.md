@@ -151,3 +151,15 @@
 | `getProxyConfig` | `src/lib/ingest/proxy-config.ts` | 12 |
 | `buildAgentCallTree` | `src/lib/engine/observability/agent-trace.ts` | 6 |
 | `runGeneralAgent` | `src/lib/engine/general-agent/runner.ts` | 9 |
+
+### 扩展 Trace 生成来源与策略
+
+平台目录合并ingest适配器注册表与安装平台目录，复用framework别名归一。RegisteredAgent ID优先；历史记录使用平台、精确Agent名称与clientId派生稳定键。目录只暴露当前owner有Execution的平台，窗口内计数单独计算。新增采集器需验证存储后的完整单任务输入、最终回答、终态和所选Agent归属；只有目录可见不等于原始格式已验收。
+
+内容处理边界为`src/server/trace-datasets/content-processor.ts`，当前identity-v1。替换处理器须升级版本并重冻去重/签名向量；不能在采样后改变正文。行为缺失不补造false、无工具或工具转换；部分观测只贡献有证据的维度，时延和token不参与选样。
+
+策略、签名和测试分别位于`src/lib/trace-datasets/sampling/`、`test/trace-datasets-*.test.ts`。修改签名、排序、任务归类或行为比例都必须提升策略版本并重新跑确定性、误差及性能验证。默认行为比例0.20是经过逻辑验证的启发式保留比例，不代表已证明最优；公开聊天数据不包含真实行为，不能用它们宣称行为收益。
+
+增量SQL见`prisma/trace-dataset-generation.sql`；正常部署仍由既有安全db-push流程同步schema。新列可空，旧记录不回填Trace状态。回退前应排空运行、删除和待清理任务，保留新增列和回执；不要用旧代码把未发布占位当普通空数据集。
+
+扩展 Trace 多轮提取应在生成时复用已有 Execution/Session 的角色、消息顺序、关联标识、工具事件和终态做结构检查；不得新增采集字段或持久证据存储。当前不验证上下文语义独立性，不将多轮/历史消息/缺少原始请求作为排除条件，不调用模型或通过关键词猜测独立性。新增结构原因同步 EXCLUSION_REASONS 和用户指南，覆盖逐轮配对、无原始 spool、部分保留/全排除、跨用户隔离与临时明细生命周期。

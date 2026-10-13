@@ -1,3 +1,4 @@
+import { normalizeTraceCases } from '@/lib/trace-datasets/contracts';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
@@ -77,6 +78,8 @@ export interface DatasetCase {
 }
 
 export interface AgentDatasetRecord {
+  generationSource?: string | null;
+  generationStatus?: string | null;
   id: string;
   user: string;
   name: string;
@@ -146,11 +149,11 @@ export function buildAgentDatasetItemsView(dataset: AgentDatasetRecord): AgentDa
   };
 }
 
-export function buildAgentDatasetProjection(cases: DatasetCase[]): {
+export function buildAgentDatasetProjection(cases: DatasetCase[], trace = false): {
   caseCount: number;
   referenceCasesJson: string;
 } {
-  const normalized = normalizeCases(cases);
+  const normalized = trace ? normalizeTraceCases(cases) : normalizeCases(cases);
   return {
     caseCount: normalized.length,
     referenceCasesJson: JSON.stringify(normalized.map(item => ({
@@ -471,6 +474,8 @@ function recordFromDbRow(row: {
   description: string;
   targetAgent: string;
   targetSkill?: string;
+  generationSource?: string | null;
+  generationStatus?: string | null;
   tagsJson: string;
   fieldsJson: string;
   casesJson: string;
@@ -498,6 +503,8 @@ function recordFromDbRow(row: {
   }
   return {
     id: row.id,
+    generationSource: row.generationSource,
+    generationStatus: row.generationStatus,
     user: row.user,
     name: row.name,
     description: row.description,
@@ -505,7 +512,7 @@ function recordFromDbRow(row: {
     targetSkill: row.targetSkill ?? '',
     tags: normalizeTags(tags),
     fields: normalizeFields(fieldsRaw, normalizeDatasetKind(row.datasetKind)),
-    cases: normalizeCases(casesRaw),
+    cases: row.generationSource === 'trace' ? normalizeTraceCases(casesRaw) : normalizeCases(casesRaw),
     datasetKind: normalizeDatasetKind(row.datasetKind),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -519,6 +526,8 @@ function summaryFromDbRow(row: {
   description: string;
   targetAgent: string;
   targetSkill?: string;
+  generationSource?: string | null;
+  generationStatus?: string | null;
   tagsJson: string;
   fieldsJson: string;
   datasetKind: string;
@@ -532,6 +541,8 @@ function summaryFromDbRow(row: {
   try { fields = JSON.parse(row.fieldsJson || '[]'); } catch { fields = []; }
   return {
     id: row.id,
+    generationSource: row.generationSource,
+    generationStatus: row.generationStatus,
     user: row.user,
     name: row.name,
     description: row.description,
@@ -665,12 +676,12 @@ function canReadAgentDataset(user: string, item: Pick<AgentDatasetRecord, 'user'
     || (item.user === SYSTEM_BENCHMARK_DATASET_OWNER && item.datasetKind === 'benchmark');
 }
 
-export async function readUserAgentDatasets(user: string): Promise<AgentDatasetRecord[]> {
+export async function readUserAgentDatasets(user: string, includeTrace = true): Promise<AgentDatasetRecord[]> {
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: agentDatasetVisibilityWhere(user),
+      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}) },
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(recordFromDbRow);
@@ -681,7 +692,7 @@ export async function readUserAgentDatasets(user: string): Promise<AgentDatasetR
 
 async function ensureAgentDatasetProjectionsForUser(prisma: PrismaClient, user: string): Promise<void> {
   const pending = await prisma.agentEvalDataset.findMany({
-    where: { ...agentDatasetVisibilityWhere(user), projectionReady: false },
+    where: { ...agentDatasetVisibilityWhere(user), projectionReady: false, generationSource: null },
     select: { id: true, casesJson: true, updatedAt: true },
   });
   for (const row of pending) {
@@ -698,17 +709,18 @@ async function ensureAgentDatasetProjectionsForUser(prisma: PrismaClient, user: 
 export async function readAgentDatasetSummaries(
   user: string,
   targetSkill?: string,
+  includeTrace = true,
 ): Promise<AgentDatasetSummary[]> {
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     await ensureAgentDatasetProjectionsForUser(prisma, user);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { ...agentDatasetVisibilityWhere(user), ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}), ...(targetSkill !== undefined ? { targetSkill } : {}) },
       select: {
         id: true, user: true, name: true, description: true, targetAgent: true,
         targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
-        caseCount: true, createdAt: true, updatedAt: true,
+        generationSource: true, generationStatus: true, caseCount: true, createdAt: true, updatedAt: true,
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -723,17 +735,18 @@ export async function readAgentDatasetSummaries(
 export async function readAgentDatasetReferences(
   user: string,
   targetSkill?: string,
+  includeTrace = true,
 ): Promise<AgentDatasetReference[]> {
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     await ensureAgentDatasetProjectionsForUser(prisma, user);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { ...agentDatasetVisibilityWhere(user), ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}), ...(targetSkill !== undefined ? { targetSkill } : {}) },
       select: {
         id: true, user: true, name: true, description: true, targetAgent: true,
         targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
-        caseCount: true, referenceCasesJson: true, createdAt: true, updatedAt: true,
+        generationSource: true, generationStatus: true, caseCount: true, referenceCasesJson: true, createdAt: true, updatedAt: true,
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -812,9 +825,9 @@ export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Pro
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
-    const projection = buildAgentDatasetProjection(updated.cases);
+    const projection = buildAgentDatasetProjection(updated.cases, updated.generationSource === 'trace');
     const res = await prisma.agentEvalDataset.updateMany({
-      where: { id: updated.id, user: updated.user },
+      where: { id: updated.id, user: updated.user, ...(updated.generationSource === 'trace' ? { generationStatus: 'published', OR: [{ generationJob: { is: null } }, { generationJob: { is: { status: 'succeeded' } } }] } : {}) },
       data: {
         name: updated.name,
         description: updated.description,

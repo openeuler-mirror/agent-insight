@@ -18,6 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 基于 Trace 生成评测数据集 | [需求分析](trace-eval-dataset/phase1-requirements-analysis.md) · [需求设计](trace-eval-dataset/phase2-requirements-design.md) · [开发计划](trace-eval-dataset/phase3-development-plan.md) · [最终对比报告](trace-eval-dataset/eight-datasets-comparison-report.md) | 平台/Agent 单选；生成时逐轮提取、问答精确去重与智能采样；直接发布理想输出集；进度、取消、失败重试与清理；明细仅本次窗口保留 | Feature / Evaluation | 2026-10-13 | 🟨 生产策略 v6.35，兼容旧 v4/v5 任务；开发池与五个新来源的现行效果均值目标通过；独立统计、完整平台、生产压力与全仓回归仍待验收 | —（待补） |
 | MCTS 执行 Trace 非侵入式接入 | [mcts-trace-observability](mcts-trace-observability/) | 不修改 MCTS 代码，由独立安装的外部启动器和透明 xGovernor 观测网关采集精确 Runtime Trace 与 checkpoint 血缘；MCTS node/score/final tree 仅按 stdout 权威边界独立展示 | Feature / Observability | 2026-09-23 | 🟡 核心实现、独立安装分发与自动化测试完成；待真实 MCTS golden path 和浏览器验收 | —（待补） |
 | 实验删除与评测服务停止清理 | [experiment-cancellation](experiment-cancellation/phase1-requirements.md) | 实验及 Case 定向停止和逻辑删除、立即停服、离线镜像清理，保留共享资源及未确认取消记录 | Feature | 2026-09-23 | 🟡 工作区实现，专项通过，待全量与部署验收 | — |
 | Trace 无上报超时 | [trace-inactivity-timeout](trace-inactivity-timeout/) | 所有 Agent 采集的未结束 Trace 连续十分钟无上报后显示超时，新上报恢复执行中，列表和详情自动刷新 | Bugfix | 2026-09-15 | ✅ 830 已验收，master 专项自动化验证通过 | [#301](https://atomgit.com/openeuler/agent-insight/issues/301) |

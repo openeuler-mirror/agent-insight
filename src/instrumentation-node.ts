@@ -16,6 +16,11 @@ import { spawn } from 'child_process';
 import { getAgentInsightHome } from '@/lib/env';
 
 export async function setupNodeRuntime(): Promise<void> {
+  try {
+    const { getTraceDatasetManager } = await import('@/server/trace-datasets/manager');
+    await getTraceDatasetManager();
+  } catch { console.warn('[trace-datasets] generation unavailable'); }
+
   const { startExperimentCancellationWatchdog } = await import('@/lib/engine/experiment/cancellation-service');
   startExperimentCancellationWatchdog();
   // 注册内置系统 Agent（skill-generator-agent 等）。失败不阻塞启动——惰性注册作为兜底。

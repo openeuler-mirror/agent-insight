@@ -12,6 +12,10 @@ assertSupportedHomeEnv(projectEnv.parsed || {});
 assertSupportedHomeEnv();
 process.env.AGENT_INSIGHT_HOME = agentInsightHome;
 
+if (process.env.NODE_ENV !== 'production' || process.argv.some(arg => arg === 'build')) {
+  require('./scripts/build-trace-dataset-worker.cjs').buildTraceDatasetWorker();
+}
+
 const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_URL_PREFIX || '',
   output: 'standalone',
@@ -50,6 +54,7 @@ const nextConfig: NextConfig = {
       'services/executor/src/mcts-config.cjs',
     ],
     '*': [
+      'generated/trace-datasets/worker.cjs',
       'node_modules/next/dist/server/mcp/**/*',
       'node_modules/next/dist/next-devtools/**/*',
       'node_modules/next/dist/lib/metadata/**/*',
