@@ -19,7 +19,12 @@
 # 报错退出，把这个脚雷拆掉。
 set -eu
 
-if output=$(npx prisma db push < /dev/null 2>&1); then
+case "$#:$*" in
+  0:|1:--skip-generate) ;;
+  *) echo "Usage: sh scripts/db_push.sh [--skip-generate]" >&2; exit 1 ;;
+esac
+
+if output=$(npx prisma db push "$@" < /dev/null 2>&1); then
   printf '%s\n' "$output"
   exit 0
 fi
@@ -31,7 +36,7 @@ allowed=$((widenings + external_account_unique))
 
 if [ "$warnings" -gt 0 ] && [ "$warnings" = "$allowed" ]; then
   echo "  [db push] 待应用的变更仅包含无损白名单项（Int→BigInt: ${widenings}，User.externalAccount 唯一约束: ${external_account_unique}），放行。"
-  npx prisma db push --accept-data-loss < /dev/null
+  npx prisma db push "$@" --accept-data-loss < /dev/null
   exit 0
 fi
 

@@ -25,19 +25,37 @@ DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh --port 3100
 端口必须是 1 到 65535 的整数；未设置时为 3000。该命令会停止并替换目标端口上的旧服务。
 同一个源码目录的不同端口实例不能并行执行 `start.sh`：它们共用 `.next` 和 `server.log`，重建会破坏
 仍在运行的旧实例。需要并行测试时，请使用独立 Git worktree，并为它设置独立的
-`AGENT_INSIGHT_HOME`、`DATABASE_URL` 和 `PORT`。
+`AGENT_INSIGHT_HOME`、`DATABASE_URL` 和 `AGENT_INSIGHT_PORT`。
 
 启动会在停止旧服务和清理 `.next` 之前预检绝对 SQLite 路径：父目录必须已经存在且当前用户
 可进入、可写；已有数据库文件必须为当前用户可读写的普通文件。检查失败会输出目标路径、
 当前用户和修复建议，不会继续构建。脚本不会自动创建自定义父目录，以免 root 用户因拼写错误
 在错误位置创建目录。
 
+### 源码部署每次重启都需要重新构建吗？
+
+执行 `bash scripts/start.sh` 时，如果上次成功构建的文件完整，且源码、已安装依赖和构建配置未变化，
+就复用构建并重启服务。首次使用此判断机制、输入变化或构建文件缺失、损坏时会自动重建。
+数据库结构同步和页面健康检查仍会执行；Prisma Client 未变化且完整时跳过重复生成。
+
+需要强制重建时执行：
+
+```bash
+bash scripts/start.sh --force-rebuild
+# 可以与现有参数组合
+bash scripts/start.sh --port 3100 --force-rebuild
+```
+
+重建会保留 `.next/cache` 加速编译，包括强制重建。启动输出中的 `[build]` 说明复用或重建的原因，
+`[stage]` 和 `[timing]` 分别显示当前阶段、阶段耗时和总耗时，失败时也会显示失败阶段。
+启动日志输出到终端，运行中的服务日志仍在 `server.log`。
+
 ### 为什么服务有响应，但打开页面显示 Internal Server Error？
 
 先检查 `server.log`。如果出现 `client reference manifest ... does not exist` 或
 缺失 `.next/server/pages/500.html`，属于构建产物不完整，不代表数据库损坏。
 不要在同一源码目录的服务运行期间执行 `npm run build` 或清理 `.next`，这会使旧进程失去页面文件。
-本地源码部署可使用 `bash scripts/start.sh` 停旧服务、完整构建后再启动；启动会检查页面清单，
+本地源码部署可使用 `bash scripts/start.sh` 停旧服务，检查并复用有效构建，必要时重新构建；启动会检查页面清单，
 并要求首页、数据集和故障页面不返回 HTTP 错误。失败时先查看日志，不要删除数据库。
 
 ### 为什么我已经完成接入，但链路追踪里还是没有数据？
