@@ -26,7 +26,7 @@ HOST_OS=$2
 TEST_BACKEND=$3
 TEST_DESKTOP_OS=$5
 EVALUATOR_ENV=()
-if [ "$4" != default ]; then EVALUATOR_ENV=("IMAGE_POOL_ENABLED=$4"); fi
+if [ "$4" != default ]; then POOL_ENABLED=$4; fi
 evaluator_image_pool_mounts
 printf '<%s>\\n' "\${POOL_ARGS[@]}"
 evaluator_image_pool_env
@@ -35,7 +35,7 @@ evaluator_image_pool_env
     const result = run('darwin', backend)
     assert.equal(result.status, 0, result.stderr)
     assert.match(result.stdout, /IMAGE_POOL_DISK_MODE=desktop-mac/)
-    assert.match(result.stdout, /IMAGE_POOL_ENABLED=true/)
+    assert.match(result.stdout, /agent-insight\.image-pool=true/)
     assert.match(result.stdout, /src=\/Users\/test\/space probe,dst=\/host-mac-space,readonly/)
     assert.match(result.stdout, /IMAGE_POOL_HOST_DISK_PATH=\/host-mac-space/)
     assert.equal(result.stdout.includes('src=/var/lib/desktop-containerd'), backend !== 'classic')
@@ -46,7 +46,7 @@ evaluator_image_pool_env
   assert.doesNotMatch(linux.stdout, /host-mac-space|host-containerd/)
   const disabled = run('darwin', 'snapshotter', 'false', 'Colima')
   assert.equal(disabled.status, 0, disabled.stderr)
-  assert.match(disabled.stdout, /IMAGE_POOL_ENABLED=false/)
+  assert.match(disabled.stdout, /agent-insight\.image-pool=false/)
   assert.doesNotMatch(disabled.stdout, /--mount|IMAGE_POOL_DISK_MODE/)
   assert.notEqual(run('darwin', 'snapshotter', 'true', 'Colima').status, 0)
 })

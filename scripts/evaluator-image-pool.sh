@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 
 evaluator_image_pool_mounts() {
-  POOL_ENABLED=true
-  POOL_MAC_DISK_PATH=
+  POOL_ENABLED=${POOL_ENABLED:-true}
+  POOL_MAC_DISK_PATH=${POOL_MAC_DISK_PATH:-}
   POOL_MODE=linux
   POOL_CONTAINERD=false
   if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
     for evaluator_env in "${EVALUATOR_ENV[@]}"; do
       case "$evaluator_env" in
-        IMAGE_POOL_ENABLED=*) POOL_ENABLED=${evaluator_env#*=}; POOL_ENABLED=${POOL_ENABLED:-true} ;;
-        IMAGE_POOL_MAC_DISK_PATH=*) POOL_MAC_DISK_PATH=${evaluator_env#*=} ;;
         IMAGE_POOL_DISK_MODE=*|IMAGE_POOL_DISK_PATH=*|IMAGE_POOL_HOST_DISK_PATH=*|IMAGE_POOL_CONTAINERD_PATH=*)
           fail '镜像池内部磁盘配置由启动脚本检测，不接受 --evaluator-env 覆盖' ;;
       esac
     done
   fi
-  case "$POOL_ENABLED" in true|false) ;; *) fail 'IMAGE_POOL_ENABLED 必须为 true 或 false' ;; esac
+  case "$POOL_ENABLED" in true|false) ;; *) fail 'imagePool.enabled 必须为 true 或 false' ;; esac
   POOL_ARGS=(--label "agent-insight.image-pool=$POOL_ENABLED")
   [ "$POOL_ENABLED" = true ] || return 0
   POOL_DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}')
@@ -60,16 +58,15 @@ evaluator_image_pool_mac_path() {
     POOL_MAC_DISK_PATH="$EVALUATOR_MANAGEMENT_HOME/space-probe"
     mkdir -p "$POOL_MAC_DISK_PATH"
   fi
-  [ -d "$POOL_MAC_DISK_PATH" ] || fail 'IMAGE_POOL_MAC_DISK_PATH 必须是已存在的 Docker 可共享目录'
+  [ -d "$POOL_MAC_DISK_PATH" ] || fail 'imagePool.macDiskPath 必须是已存在的 Docker 可共享目录'
   POOL_MAC_DISK_PATH=$(CDPATH= cd -- "$POOL_MAC_DISK_PATH" && pwd -P)
-  case "$POOL_MAC_DISK_PATH" in *','*|*$'\n'*) fail 'IMAGE_POOL_MAC_DISK_PATH 包含不支持的字符' ;; esac
+  case "$POOL_MAC_DISK_PATH" in *','*|*$'\n'*) fail 'imagePool.macDiskPath 包含不支持的字符' ;; esac
   host_device=$(stat -L -f '%d' "$POOL_MAC_DISK_PATH") || fail '无法读取 Mac 探测目录的文件系统'
   image_device=$(stat -L -f '%d' "$disk_image") || fail '无法读取 Docker.raw 的文件系统'
-  [ "$host_device" = "$image_device" ] || fail 'Mac 探测目录与 Docker.raw 不在同一文件系统；请通过 --evaluator-env IMAGE_POOL_MAC_DISK_PATH=目录 指定同盘的空共享目录'
+  [ "$host_device" = "$image_device" ] || fail 'Mac 探测目录与 Docker.raw 不在同一文件系统；请在 config/evaluator.local.yaml 的 imagePool.macDiskPath 指定同盘的空共享目录'
 }
 
 evaluator_image_pool_env() {
-  printf 'IMAGE_POOL_ENABLED=%s\n' "$POOL_ENABLED"
   [ "$POOL_ENABLED" = true ] || return 0
   printf 'IMAGE_POOL_DISK_MODE=%s\nIMAGE_POOL_DISK_PATH=/host-docker\n' "$POOL_MODE"
   if [ "$POOL_MODE" = desktop-mac ]; then

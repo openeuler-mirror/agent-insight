@@ -72,19 +72,19 @@ process.exit(Number(process.env.BOOTSTRAP_TEST_STATUS))
   assert.ok(bootstrapStart > 0 && buildStart > bootstrapStart)
   const startupStep = source.slice(bootstrapStart, buildStart) + 'echo "Building project..."\n'
   const cases = [
-    { error: 'curl 执行失败：curl: (28) Operation timed out', reason: '下载超时', advice: 'SWE_BENCH_DATASET_SOURCE' },
-    { error: 'curl 执行失败：curl: (7) Failed to connect', reason: '下载失败', advice: 'SWE_BENCH_DATASET_SOURCE' },
-    { output: '下载SWE-bench 官方源码：https://example.test/archive', error: 'curl 执行失败：curl: (28) Timeout', reason: '下载超时', advice: 'SWE_BENCH_SOURCE_ARCHIVE_SOURCE' },
+    { error: 'curl 执行失败：curl: (28) Operation timed out', reason: '下载超时', advice: 'dataset.source' },
+    { error: 'curl 执行失败：curl: (7) Failed to connect', reason: '下载失败', advice: 'dataset.source' },
+    { output: '下载SWE-bench 官方源码：https://example.test/archive', error: 'curl 执行失败：curl: (28) Timeout', reason: '下载超时', advice: 'loader.sourceArchive' },
     { error: 'SWE-bench Verified 数据集哈希校验失败：期望 pinned，实际 invalid', reason: '文件哈希校验失败', advice: '官方版本' },
     { error: 'SWE-bench Verified 数据集本机文件不存在或不是普通文件：/missing', reason: '本机来源文件不可用', advice: '指定的文件' },
-    { error: '无法创建 Python 虚拟环境，可能缺少 python3-venv，请安装后重试。', reason: 'Python 环境准备或加载失败', advice: 'SWE_BENCH_PYTHON' },
+    { error: '无法创建 Python 虚拟环境，可能缺少 python3-venv，请安装后重试。', reason: 'Python 环境准备或加载失败', advice: 'loader.python' },
     { output: '复用 SWE-bench Python 环境：/home/.venv/bin/python', error: 'PrismaClientKnownRequestError: database is locked', reason: '自动准备或数据库导入失败', advice: '具体错误' },
   ]
   try {
     const env = {
       ...process.env,
       AGENT_INSIGHT_HOME: managedHome,
-      AGENT_INSIGHT_BENCHMARK: '',
+      AGENT_INSIGHT_CONFIG_DIR: path.join(testDir, 'config'),
       PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
     }
     for (const failure of cases) {
@@ -182,49 +182,29 @@ test('start.sh explains an inaccessible custom SQLite target before destructive 
   }
 })
 
-test('SWE-bench bootstrap uses managed paths unless advanced overrides are set', async () => {
+test('SWE-bench bootstrap reads project configuration and retains managed cache paths', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swe-bootstrap-config-'))
   const previousHome = process.env.AGENT_INSIGHT_HOME
-  const previousLegacyHome = process.env.AGENT_INSIGHT_DATA_DIR
-  const previousDataset = process.env.SWE_BENCH_DATASET_PATH
-  const previousDatasetUrl = process.env.SWE_BENCH_DATASET_URL
-  const previousSourceUrl = process.env.SWE_BENCH_SOURCE_ARCHIVE_URL
-  const previousDatasetSource = process.env.SWE_BENCH_DATASET_SOURCE
-  const previousArchiveSource = process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE
-  const previousPython = process.env.SWE_BENCH_PYTHON
-  const managedHome = path.resolve('/tmp/agent-insight-benchmark-bootstrap-test')
-  process.env.AGENT_INSIGHT_HOME = managedHome
-  delete process.env.AGENT_INSIGHT_DATA_DIR
-  delete process.env.SWE_BENCH_DATASET_PATH
-  delete process.env.SWE_BENCH_DATASET_SOURCE
-  delete process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE
-  process.env.SWE_BENCH_DATASET_URL = 'http://mirror.example.test/swe-bench/test.parquet'
-  process.env.SWE_BENCH_SOURCE_ARCHIVE_URL = 'http://mirror.example.test/swe-bench/source.tar.gz'
-  delete process.env.SWE_BENCH_PYTHON
+  const previousConfig = process.env.AGENT_INSIGHT_CONFIG_DIR
+  process.env.AGENT_INSIGHT_HOME = root
+  process.env.AGENT_INSIGHT_CONFIG_DIR = path.join(root, 'config')
+  fs.mkdirSync(process.env.AGENT_INSIGHT_CONFIG_DIR)
+  fs.writeFileSync(path.join(process.env.AGENT_INSIGHT_CONFIG_DIR, 'platform.local.yaml'), JSON.stringify({ benchmarks: {
+    'swe-bench': { dataset: { source: 'http://mirror.example.test/test.parquet' }, loader: { sourceArchive: 'http://mirror.example.test/source.tar.gz' } },
+  } }))
   try {
-    const provisioner = await import('../scripts/benchmark/ensure-swe-bench-dataset')
-    const paths = provisioner.resolveSweBenchProvisionPaths()
-    assert.equal(paths.datasetPath, path.join(managedHome, 'data', 'imports', 'swe-bench-verified', 'test.parquet'))
-    assert.equal(paths.pythonPath, path.join(managedHome, 'vendor', 'SWE-bench', '.venv', 'bin', 'python'))
-    assert.match(paths.sourceArchivePath, new RegExp(provisioner.SWE_BENCH_SOURCE_COMMIT))
+    const { resolveSweBenchProvisionPaths } = await import('../scripts/benchmark/ensure-swe-bench-dataset')
+    const paths = resolveSweBenchProvisionPaths()
+    assert.equal(paths.datasetPath, path.join(root, 'data/imports/swe-bench-verified/test.parquet'))
+    assert.equal(paths.pythonPath, path.join(root, 'vendor/SWE-bench/.venv/bin/python'))
+    assert.equal(paths.datasetSource, 'http://mirror.example.test/test.parquet')
+    assert.equal(paths.sourceArchiveSource, 'http://mirror.example.test/source.tar.gz')
     assert.equal(paths.customPythonPath, false)
-    assert.equal(paths.datasetSource, process.env.SWE_BENCH_DATASET_URL)
-    assert.equal(paths.sourceArchiveSource, process.env.SWE_BENCH_SOURCE_ARCHIVE_URL)
   } finally {
-    if (previousHome == null) delete process.env.AGENT_INSIGHT_HOME
+    if (previousHome === undefined) delete process.env.AGENT_INSIGHT_HOME
     else process.env.AGENT_INSIGHT_HOME = previousHome
-    if (previousLegacyHome == null) delete process.env.AGENT_INSIGHT_DATA_DIR
-    else process.env.AGENT_INSIGHT_DATA_DIR = previousLegacyHome
-    if (previousDataset == null) delete process.env.SWE_BENCH_DATASET_PATH
-    else process.env.SWE_BENCH_DATASET_PATH = previousDataset
-    if (previousDatasetUrl == null) delete process.env.SWE_BENCH_DATASET_URL
-    else process.env.SWE_BENCH_DATASET_URL = previousDatasetUrl
-    if (previousSourceUrl == null) delete process.env.SWE_BENCH_SOURCE_ARCHIVE_URL
-    else process.env.SWE_BENCH_SOURCE_ARCHIVE_URL = previousSourceUrl
-    if (previousDatasetSource == null) delete process.env.SWE_BENCH_DATASET_SOURCE
-    else process.env.SWE_BENCH_DATASET_SOURCE = previousDatasetSource
-    if (previousArchiveSource == null) delete process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE
-    else process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE = previousArchiveSource
-    if (previousPython == null) delete process.env.SWE_BENCH_PYTHON
-    else process.env.SWE_BENCH_PYTHON = previousPython
+    if (previousConfig === undefined) delete process.env.AGENT_INSIGHT_CONFIG_DIR
+    else process.env.AGENT_INSIGHT_CONFIG_DIR = previousConfig
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })

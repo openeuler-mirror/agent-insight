@@ -65,9 +65,7 @@ load_agent_insight_env() {
   local name
   local overrides=()
   # 保留启动环境的显式空值，使其也能覆盖 .env。
-  for name in AGENT_INSIGHT_PORT DATABASE_URL \
-    SWE_BENCH_DATASET_SOURCE SWE_BENCH_SOURCE_ARCHIVE_SOURCE SWE_BENCH_DATASET_PATH \
-    SWE_BENCH_DATASET_URL SWE_BENCH_SOURCE_ARCHIVE_URL SWE_BENCH_PYTHON; do
+  for name in AGENT_INSIGHT_PORT DATABASE_URL AGENT_INSIGHT_CONFIG_DIR; do
     if [ "${!name+x}" = x ]; then
       overrides+=("$name=${!name}")
     fi

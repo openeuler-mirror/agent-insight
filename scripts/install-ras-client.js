@@ -49,6 +49,11 @@ function installRuntime() {
   }
   fs.rmSync(executorDest, { recursive: true, force: true })
   fs.cpSync(executorSrc, executorDest, { recursive: true })
+  const configRuntime = path.join(PACKAGE_ROOT, 'packages', 'project-config')
+  if (!fs.existsSync(configRuntime)) fail(`缺少配置加载器: ${configRuntime}`, '制品不完整；请重新执行安装命令。')
+  fs.cpSync(configRuntime, path.join(RUNTIME_DIR, 'packages', 'project-config'), { recursive: true })
+  fs.mkdirSync(path.join(RUNTIME_DIR, 'config'), { recursive: true })
+  fs.copyFileSync(path.join(PACKAGE_ROOT, 'config', 'executor.yaml'), path.join(RUNTIME_DIR, 'config', 'executor.yaml'))
   // 配置合并要用 OpenCode 插件自己的 config_sync.js（复用它保证两条写入路径
   // 结构一致）。运行时被搬到 RUNTIME_DIR 后相对路径失效，故与主脚本放在一起。
   const syncSrc = path.join(

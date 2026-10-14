@@ -94,6 +94,11 @@ AGENT_INSIGHT_PORT=3000
 
 旧变量 `PORT` 不再支持。
 
+Benchmark 业务配置按进程分开：平台读取项目 `config/platform.yaml`，评测读取 `config/evaluator.yaml`，执行客户端读取 `config/executor.yaml`。各自的 `*.local.yaml` 深度覆盖项目默认文件，未指定字段使用程序默认值；数组整体替换，`null` 恢复默认。配置文件不设 `version` 字段，未知字段和错误类型会明确报错。相对路径按所在配置文件目录解析；Evaluator Python 使用容器内命令名或绝对路径。
+
+本机覆盖文件不提交 Git。`AGENT_INSIGHT_CONFIG_DIR` 可选择其他配置目录；默认由安装根定位，不依赖当前工作目录。业务环境变量不参与覆盖，残留变量会提示迁移。端口、数据库连接、密钥、运行目录及服务通信地址仍保留环境配置，通信地址现有的热更新机制保持不变。
+
+
 ### 3.3 启动与验证
 
 ```bash
@@ -120,13 +125,13 @@ bash scripts/start.sh --port 3100
 
 ### 4.2 随服务启动自动安装
 
-启动 Agent Insight 时默认准备 SWE-bench Verified，无需设置启用开关：
+启动 Agent Insight 时，`config/platform.yaml` 的 `benchmarks.swe-bench.dataset.autoImport` 默认 `true`：
 
 ```bash
 bash scripts/start.sh
 ```
 
-首次启动会下载、校验并导入 500 条 Case。后续启动先检查当前数据库，已存在完整、可用的数据集时跳过下载和导入。`AGENT_INSIGHT_BENCHMARK` 不再控制此行为，`scripts/start.sh` 不再接受 `--benchmark` 参数。
+首次启动会下载、校验并导入 500 条 Case。后续启动先检查当前数据库，已存在完整、可用的数据集时跳过下载和导入。将 `autoImport` 设置为 `false` 可跳过启动自动导入，但不影响已有数据集和管理员手动导入。`AGENT_INSIGHT_BENCHMARK` 不再控制此行为，`scripts/start.sh` 不再接受 `--benchmark` 参数。
 
 准备或导入失败只输出简短警告，继续构建和启动服务；SWE-bench Verified 相关实验暂不可用。终端根据失败原因提示内网或本机来源、文件校验、Python 环境等处理方式，详细输出写入 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），每次启动覆盖该日志。当前仍同步等待本次准备结束，再继续启动；数据库初始化或构建失败仍会停止启动。
 
@@ -138,23 +143,21 @@ npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts
 
 独立导入失败时返回非零退出码，便于管理员检查结果。
 
-如需使用内网文件或本机文件，可增加：
+如需内网或离线来源，在项目 `config/platform.local.yaml` 中配置：
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE=/srv/datasets/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=/srv/datasets/source.tar.gz
+```yaml
+benchmarks:
+  swe-bench:
+    dataset:
+      source: /srv/datasets/test.parquet
+    loader:
+      sourceArchive: https://mirror.example.com/swe-bench/source.tar.gz
+      python: /srv/python/bin/python
 ```
 
-两个配置也可以填写 HTTP/HTTPS 下载地址。
+数据与归档来源均支持 HTTP(S) 地址或本机文件，`null` 使用官方默认来源。本机与下载文件均校验固定官方 SHA-256，不覆盖校验失败的本机文件。完全离线时，`loader.python` 应指向已安装官方 Loader 的 Python，否则首次创建环境仍需要可用的 pip 软件源。导入完成后原始数据文件可以删除；数据库中没有已安装数据集时才需要重新提供。
 
-本机文件与下载文件均校验固定官方版本的 SHA-256；校验失败时不会覆盖本机文件。完全离线时还需设置 `SWE_BENCH_PYTHON`，指向已安装官方 SWE-bench Loader 的 Python 可执行文件；否则首次创建 Python 环境仍需要可用的 pip 软件源。
-
-例如使用内网文件服务：
-
-```dotenv
-SWE_BENCH_DATASET_SOURCE=https://mirror.example.com/swe-bench/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=https://mirror.example.com/swe-bench/source.tar.gz
-```
+旧的数据来源、Python 和路径/URL环境变量不再生效。导入配置错误与下载/导入错误一样只警告，不阻止平台启动。
 
 ### 4.3 其他 Benchmark
 
@@ -206,7 +209,7 @@ bash scripts/evaluator.sh start \
 | `--platform-base-url URL` | Evaluator 回访 Agent Insight 的地址 |
 | `--port PORT` | Evaluator 对外端口，默认 `3001` |
 | `--bind-address ADDRESS` | Evaluator 监听地址，默认 `0.0.0.0` |
-| `--evaluator-env NAME=VALUE` | 传入 Evaluator 环境变量 |
+| `--evaluator-env NAME=VALUE` | 传入环境参数；业务配置改用 `config/evaluator.local.yaml` |
 
 验证 Evaluator：
 
@@ -219,28 +222,20 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 
 ### 5.3 可选：跨 Benchmark 共享镜像池
 
-镜像池默认开启，无需额外参数。同一 Docker daemon 上的不同 Benchmark 和用户共享一个镜像池。
+镜像池和提前准备默认开启，同一 Docker daemon 上的不同 Benchmark 和用户共享镜像池。策略在评测机项目 `config/evaluator.local.yaml` 设置，例如关闭预取：
 
-关闭镜像池：
-
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url <agent-insight-url> \
-  --evaluator-env IMAGE_POOL_ENABLED=false
+```yaml
+imagePool:
+  prefetchEnabled: false
 ```
 
-镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。
+关闭整个镜像池时设置 `imagePool.enabled: false`。`maxPulls` 默认 2，开启预取时至少为 2；`reserveRatio` 默认 0.3，`highWatermark` 默认 0.9，`waitSeconds` 默认 600。Mac 同盘共享目录通过 `imagePool.macDiskPath` 配置；磁盘挂载事实仍由脚本自动检测。
 
-提前准备镜像默认开启，无需增加启动参数；默认的 `IMAGE_POOL_MAX_PULLS=2` 为按需拉取保留容量，开启预取时不能设为 1。平台通过 `/health` 发现预取状态，无需配置额外令牌。Evaluator 端口应只允许 Agent Insight 平台访问。需要关闭预取时，在 Evaluator 启动命令中增加：
+修改后重新执行 `bash scripts/evaluator.sh start`，按 5.1/5.2 节补充通信地址与端口参数。启动脚本在 Controller 镜像内校验配置，不要求宿主安装 Node.js；配置无效时不会停止旧服务。校验后的 JSON 快照传给 Controller 和 Benchmark Runtime，禁止用 `--evaluator-env` 覆盖快照。
 
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url http://host.docker.internal:3000 \
-  --bind-address 127.0.0.1 \
-  --evaluator-env IMAGE_POOL_PREFETCH_ENABLED=false
-```
+SWE-bench 镜像来源、架构、非官方许可、代理和镜像仓库在 `benchmarks.swe-bench.images` 配置，Python 在 `benchmarks.swe-bench.python`，Docker SDK 超时和连接池在 `benchmarks.swe-bench.docker`。`verifiedMirrorRepositories: null` 使用内置仓库，`[]` 关闭额外镜像仓库；Epoch 仅允许显式许可的 ARM64 冒烟。
 
-分机部署时按 5.1 节替换地址和绑定参数。预取窗口及空间不足的处理见[并发调度方案](../../../评测服务文档/benchmark并发执行与评测调度方案.md#51-镜像准备)。
+镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。平台通过 `/health` 发现预取状态，无需额外令牌。Evaluator 端口应只允许平台访问。
 
 ### 5.4 评测并发与 Case 数量上限
 
@@ -248,29 +243,18 @@ bash scripts/evaluator.sh start \
 
 | 配置 | 设置位置 | 默认值 | 含义 |
 |---|---|---:|---|
-| `EVALUATOR_MAX_CONCURRENCY` | Evaluator 启动参数 `--evaluator-env` 或启动进程环境 | 1 | 评测服务同时运行的 Case 数 |
-| `AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER` | 平台机 `~/.agent-insight/.env` | 留空，跟随 Evaluator 总并发 | 单用户跨实验同时评测的 Case 数量上限 |
-| `AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS` | 平台机 `~/.agent-insight/.env` | 256 | 全平台执行中或尚未完成评测的 Benchmark Case 数量上限 |
-| `AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER` | 平台机 `~/.agent-insight/.env` | 128 | 每个用户执行中或尚未完成评测的 Benchmark Case 数量上限 |
+| `maxConcurrency` | `config/evaluator.local.yaml` | 1 | Evaluator 同时运行的 Case 数 |
+| `benchmarks.scheduling.maxEvaluationConcurrencyPerUser` | `config/platform.local.yaml` | `null`，跟随 Evaluator 总并发 | 单用户跨实验评测并发 |
+| `benchmarks.scheduling.maxPendingEvaluations` | `config/platform.local.yaml` | 256 | 全平台执行中或待评测 Case 上限 |
+| `benchmarks.scheduling.maxPendingEvaluationsPerUser` | `config/platform.local.yaml` | 128 | 每用户执行中或待评测 Case 上限 |
 
-表中四项均可省略或留空，分别按默认值生效；显式设置时须为正整数。Evaluator 启动脚本只会从评测机的 `~/.agent-insight/.env` 读取对外端口；评测并发须通过 `--evaluator-env` 或启动进程环境传入。
+显式并发和数量上限须为正整数。比如将 Evaluator 总并发设为 2，在评测机 `config/evaluator.local.yaml` 写入：
 
-例如，设置评测总并发为 2，单用户额度留空。在平台机的 `~/.agent-insight/.env` 中加入或修改以下行，保留其他设置：
-
-```dotenv
-AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER=
-AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS=
-AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER=
+```yaml
+maxConcurrency: 2
 ```
 
-重启 Agent Insight 使配置生效。在 Evaluator 机器运行（以下为本机部署示例；分机部署按 5.1 节替换地址和绑定参数）：
-
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url http://host.docker.internal:3000 \
-  --bind-address 127.0.0.1 \
-  --evaluator-env EVALUATOR_MAX_CONCURRENCY=2
-```
+平台侧未覆盖时保持默认值。修改平台配置后重启平台；修改评测配置后重新运行 Evaluator 启动命令。旧并发/待评测上限环境变量不再生效。
 
 启动后验证：
 
@@ -330,24 +314,15 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 
 ### 7.1 配置 SWE-bench Case 源码来源（可选）
 
-在 Agent 执行机上创建或编辑配置文件：
+在 Agent 执行机项目的 `config/executor.local.yaml` 配置；安装版常驻客户端对应目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/`。安装升级会更新默认文件、保留 local 文件，也可由 `AGENT_INSIGHT_CONFIG_DIR` 指定配置目录。
 
-```bash
-mkdir -p "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}"
-vi "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/.env"
+```yaml
+benchmarks:
+  swe-bench:
+    gitSource: /srv/swe-git
 ```
 
-使用本地缓存目录：
-
-```dotenv
-SWE_BENCH_GIT_SOURCE=/srv/swe-git
-```
-
-使用指定的 Git 服务：
-
-```dotenv
-SWE_BENCH_GIT_SOURCE=https://git.example.com
-```
+`gitSource` 也可填写 `https://git.example.com`；`null` 使用默认 Gitee → GitHub 来源，不持久缓存。旧 `SWE_BENCH_GIT_SOURCE` 不再生效，发现残留配置会提示迁移。
 
 | 配置值 | 行为 |
 |---|---|

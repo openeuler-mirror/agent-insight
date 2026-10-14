@@ -41,6 +41,8 @@ const BUNDLES: Record<string, string[]> = {
     'scripts/lib/fi-python-runtime.js',
     'scripts/fi-worker.js',
     'services/executor/src',
+    'packages/project-config',
+    'config/executor.yaml',
     'agent_ras/platform_adapter/opencode/config_sync.js',
     'agent_fault_injection',
   ],

@@ -51,16 +51,15 @@ RUN set -eu; \
 WORKDIR /app
 
 COPY services/evaluator/src/evaluator-registry.cjs ./services/evaluator/src/evaluator-registry.cjs
+COPY packages/project-config ./packages/project-config
+COPY config/evaluator.yaml ./config/evaluator.yaml
 COPY benchmarks/swe-bench ./benchmarks/swe-bench
 
 ENV EVALUATOR_LISTEN_HOST=0.0.0.0 \
     EVALUATOR_DATA_DIR=/data \
     EVALUATOR_SOURCE_REVISION=$EVALUATOR_SOURCE_REVISION \
     EVALUATOR_SOURCE_DIRTY=$EVALUATOR_SOURCE_DIRTY \
-    SWE_BENCH_PYTHON=/opt/swebench-venv/bin/python \
-    SWE_BENCH_IMAGE_SOURCE=official \
-    SWE_BENCH_IMAGE_ARCH=auto \
-    SWE_BENCH_ALLOW_NON_OFFICIAL=false
+    PATH=/opt/swebench-venv/bin:$PATH
 
 VOLUME ["/data"]
 CMD ["node", "benchmarks/swe-bench/evaluator/entrypoint.cjs", "doctor"]

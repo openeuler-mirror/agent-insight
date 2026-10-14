@@ -20,7 +20,7 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 
 ## 管理员导入 Benchmark 数据集
 
-SWE-bench Verified 默认随 Agent Insight 服务启动自动准备和导入，无需设置启用开关，直接执行：
+SWE-bench Verified 默认随 Agent Insight 服务启动自动准备和导入。配置位于项目 `config/platform.yaml`，本机覆盖写入 `config/platform.local.yaml`；没有版本字段。`benchmarks.swe-bench.dataset.autoImport` 默认 `true`，设置为 `false` 只跳过启动时自动导入，已有数据集与管理员手动导入仍可使用。直接执行：
 
 ```bash
 bash scripts/start.sh
@@ -30,23 +30,23 @@ bash scripts/start.sh
 
 准备或导入失败会显示简短警告，继续启动服务；SWE-bench Verified 相关实验暂不可用。详细错误记录在 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），下次启动自动重试。修复后也可在项目根目录运行 `npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts` 单独重试。
 
-网络受限时，可在 `~/.agent-insight/.env` 中设置内网镜像地址：
+网络受限时，可在平台项目的 `config/platform.local.yaml` 中设置内网镜像地址或本机文件：
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE=http://intranet.example/swe-bench/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=http://intranet.example/swe-bench/source.tar.gz
+```yaml
+benchmarks:
+  swe-bench:
+    dataset:
+      source: /srv/datasets/test.parquet
+    loader:
+      sourceArchive: /srv/datasets/source.tar.gz
+      python: /srv/python/bin/python
 ```
 
-这两项也可以直接填写本机文件路径：
+`source` 和 `sourceArchive` 均支持 HTTP(S) 下载地址。路径是平台所在机器上的路径，相对路径按配置文件目录解析；推荐使用绝对路径。`null` 使用默认官方来源或自动创建 Python 环境。完全离线时，`loader.python` 必须指向已安装官方 Loader 的 Python 可执行文件，否则首次安装依赖仍需要可用的 pip 软件源。
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE="/srv/datasets/test.parquet"
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE="/srv/datasets/source.tar.gz"
-```
+本机文件与下载文件均按固定官方 SHA-256 校验，校验失败不会覆盖本机文件。成功导入后，后续运行从数据库读取数据，不依赖原始 Parquet；更换或清空数据库后重新导入需要再次提供数据文件。
 
-路径是 Agent Insight 服务所在机器上的路径，推荐使用绝对路径。本机文件与下载文件均按固定的官方 SHA-256 校验；本机文件缺失或校验失败会停止准备，不覆盖原文件。两项留空时使用官方来源，已安装的数据集和可用的受管缓存优先复用。Python 依赖首次安装仍需要可用的 pip 软件源，或通过 `SWE_BENCH_PYTHON` 指定已有环境。
-
-旧的 `SWE_BENCH_DATASET_PATH`、`SWE_BENCH_DATASET_URL` 和 `SWE_BENCH_SOURCE_ARCHIVE_URL` 暂时兼容；新变量存在时优先使用新变量，显式留空表示使用官方来源。
+旧 `AGENT_INSIGHT_BENCHMARK`、`SWE_BENCH_DATASET_SOURCE`、`SWE_BENCH_SOURCE_ARCHIVE_SOURCE`、`SWE_BENCH_PYTHON` 及旧路径/URL变量均不再控制导入，发现残留变量会提示迁移至配置文件。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 

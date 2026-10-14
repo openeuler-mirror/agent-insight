@@ -1,0 +1,12 @@
+benchmarks:
+  swe-bench:
+    dataset:
+      autoImport: true
+      source: null
+    loader:
+      sourceArchive: null
+      python: null
+  scheduling:
+    maxPendingEvaluations: 256
+    maxPendingEvaluationsPerUser: 128
+    maxEvaluationConcurrencyPerUser: null

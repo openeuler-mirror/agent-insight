@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { createIsolatedDatabase } from './helpers/isolated-database'
 
 const database = createIsolatedDatabase()
@@ -9,7 +12,10 @@ test.after(async () => { await prisma.$disconnect(); database.dispose() })
 
 test('concurrent dispatchers respect service capacity and per-user quota across experiments', async () => {
   const posted: string[] = []
-  process.env.AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER = '1'
+  const previousConfigDir = process.env.AGENT_INSIGHT_CONFIG_DIR
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-quota-config-'))
+  process.env.AGENT_INSIGHT_CONFIG_DIR = configDir
+  fs.writeFileSync(path.join(configDir, 'platform.local.yaml'), JSON.stringify({ benchmarks: { scheduling: { maxEvaluationConcurrencyPerUser: 1 } } }))
   scheduler.setEvaluatorTargetResolverForTest({ resolve: (evaluatorKey) => ({ targetKey: 'test', baseUrl: 'http://evaluator.test', evaluatorKey }) })
   scheduler.setBenchmarkEvaluationDispatchFetchForTest(async (input, init) => {
     if (String(input).endsWith('/health')) return new Response(JSON.stringify({ status: 'healthy', busy: false,
@@ -59,6 +65,8 @@ test('concurrent dispatchers respect service capacity and per-user quota across 
     await prisma.experiment.deleteMany({ where: { name: { startsWith: 'quota-' } } })
     scheduler.setBenchmarkEvaluationDispatchFetchForTest()
     scheduler.setEvaluatorTargetResolverForTest()
-    delete process.env.AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER
+    if (previousConfigDir === undefined) delete process.env.AGENT_INSIGHT_CONFIG_DIR
+    else process.env.AGENT_INSIGHT_CONFIG_DIR = previousConfigDir
+    fs.rmSync(configDir, { recursive: true, force: true })
   }
 })

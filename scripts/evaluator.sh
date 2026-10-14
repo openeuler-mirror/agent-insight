@@ -28,6 +28,8 @@ Defaults: --bind-address 0.0.0.0 --port 3001.
 Port precedence: --port > AGENT_INSIGHT_EVALUATOR_PORT in process environment
 > $AGENT_INSIGHT_HOME/.env (default: $HOME/.agent-insight/.env) > 3001.
 The container always listens on 8080. Legacy PORT is not supported.
+Business settings come from config/evaluator.yaml and config/evaluator.local.yaml.
+AGENT_INSIGHT_CONFIG_DIR can select another configuration directory.
 The command always builds the generic Controller image. Benchmark runtimes are resolved
 from the generated Catalog only when an evaluation task requires them.
 It does not pull source code, register with Agent Insight, or preload Benchmark runtimes.
@@ -256,15 +258,30 @@ case "$PLATFORM_BASE_URL" in
   *) fail '--platform-base-url 必须是 HTTP(S) URL' ;;
 esac
 if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
+  RETAINED_EVALUATOR_ENV=()
   for evaluator_env in "${EVALUATOR_ENV[@]}"; do
     printf '%s' "$evaluator_env" | LC_ALL=C grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=.*$' \
       || fail '--evaluator-env 必须是 NAME=VALUE'
     case "$evaluator_env" in
+      AGENT_INSIGHT_EVALUATOR_CONFIG_JSON=*|EVALUATOR_RUNTIME_ENV_NAMES=*)
+        fail '配置快照由启动脚本生成，不接受 --evaluator-env 覆盖' ;;
       PORT=*|EVALUATOR_PORT=*|AGENT_INSIGHT_PORT=*|AGENT_INSIGHT_EVALUATOR_PORT=*)
         fail '端口不能通过 --evaluator-env 设置；请使用 --port 或 AGENT_INSIGHT_EVALUATOR_PORT' ;;
+      SWE_BENCH_*=*|SWEBENCH_*=*|EVALUATOR_MAX_CONCURRENCY=*|IMAGE_POOL_ENABLED=*|IMAGE_POOL_PREFETCH_ENABLED=*|IMAGE_POOL_RESERVE_RATIO=*|IMAGE_POOL_HIGH_WATERMARK=*|IMAGE_POOL_MAX_PULLS=*|IMAGE_POOL_WAIT_SECONDS=*|IMAGE_POOL_MAC_DISK_PATH=*)
+        printf '警告：%s 已迁移至 config/evaluator.local.yaml，不再生效。\n' "${evaluator_env%%=*}" >&2
+        continue ;;
     esac
+    RETAINED_EVALUATOR_ENV+=("$evaluator_env")
   done
+  EVALUATOR_ENV=()
+  if [ "${#RETAINED_EVALUATOR_ENV[@]}" -gt 0 ]; then EVALUATOR_ENV=("${RETAINED_EVALUATOR_ENV[@]}"); fi
 fi
+
+for legacy_name in EVALUATOR_MAX_CONCURRENCY SWE_BENCH_PYTHON SWE_BENCH_IMAGE_SOURCE SWE_BENCH_IMAGE_ARCH SWE_BENCH_ALLOW_NON_OFFICIAL SWE_BENCH_IMAGE_PROXY_PREFIX SWE_BENCH_VERIFIED_MIRROR_REPOS SWEBENCH_DOCKER_TIMEOUT SWEBENCH_DOCKER_POOL_SIZE IMAGE_POOL_ENABLED IMAGE_POOL_PREFETCH_ENABLED IMAGE_POOL_RESERVE_RATIO IMAGE_POOL_HIGH_WATERMARK IMAGE_POOL_MAX_PULLS IMAGE_POOL_WAIT_SECONDS IMAGE_POOL_MAC_DISK_PATH; do
+  if [ "${!legacy_name+x}" = x ]; then
+    printf '警告：%s 已迁移至 config/evaluator.local.yaml，不再生效。\n' "$legacy_name" >&2
+  fi
+done
 
 for command_name in git docker df; do
   command -v "$command_name" >/dev/null 2>&1 || fail "宿主缺少命令：$command_name"
@@ -320,8 +337,6 @@ case "$SOCKET_URL" in
 esac
 [ -S "$DOCKER_SOCKET" ] || fail "Docker Socket 不存在或不是 Unix Socket：$DOCKER_SOCKET"
 
-evaluator_image_pool_mounts
-
 SHORT_REVISION=$(printf '%s' "$SOURCE_REVISION" | cut -c1-12)
 DIRTY_SUFFIX=
 if [ "$SOURCE_DIRTY" = true ]; then DIRTY_SUFFIX=-dirty; fi
@@ -343,6 +358,19 @@ fi
 IMAGE_ID=$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}')
 [ -n "$IMAGE_ID" ] || fail '无法读取 Controller image ID'
 
+PROJECT_CONFIG_DIR=${AGENT_INSIGHT_CONFIG_DIR:-$REPOSITORY_ROOT/config}
+PROJECT_CONFIG_DIR=$(CDPATH= cd -- "$PROJECT_CONFIG_DIR" && pwd) || fail '配置目录不存在'
+PROJECT_CONFIG_OUTPUT=$(docker run --rm --pull never --network none --read-only \
+  --mount "type=bind,src=$PROJECT_CONFIG_DIR,dst=/project-config,readonly" \
+  --entrypoint node "$IMAGE_ID" /app/packages/project-config/index.cjs evaluator /project-config "$PROJECT_CONFIG_DIR" --deployment) \
+  || fail 'Evaluator 配置无效，未停止旧服务；请检查 config/evaluator.yaml 和本地覆盖文件'
+PROJECT_CONFIG_LINES=()
+while IFS= read -r config_line; do PROJECT_CONFIG_LINES+=("$config_line"); done <<< "$PROJECT_CONFIG_OUTPUT"
+PROJECT_CONFIG_JSON=${PROJECT_CONFIG_LINES[0]}
+POOL_ENABLED=${PROJECT_CONFIG_LINES[1]}
+POOL_MAC_DISK_PATH=${PROJECT_CONFIG_LINES[2]:-}
+evaluator_image_pool_mounts
+
 EVALUATOR_HOME=${AGENT_INSIGHT_EVALUATOR_HOME:-$HOME/.agent-insight/evaluator}
 CONFIG_FILE=$EVALUATOR_HOME/evaluator.env
 mkdir -p "$EVALUATOR_HOME"
@@ -356,7 +384,7 @@ trap 'rm -f "$TEMP_CONFIG"; rmdir "$EVALUATOR_MANAGEMENT_LOCK"' EXIT
   printf 'EVALUATOR_DATA_DIR=/data\n'
   printf 'EVALUATOR_CONTROLLER_CONTAINER_ID=%s\n' "$CONTAINER_NAME"
   printf 'EVALUATOR_INSTANCE_ID=%s\n' "$CONTAINER_NAME"
-  printf 'EVALUATOR_MAX_CONCURRENCY=%s\n' "${EVALUATOR_MAX_CONCURRENCY:-1}"
+  printf 'AGENT_INSIGHT_EVALUATOR_CONFIG_JSON=%s\n' "$PROJECT_CONFIG_JSON"
   printf 'EVALUATOR_AGENT_INSIGHT_BASE_URL=%s\n' "$PLATFORM_BASE_URL"
   if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
     runtime_env_names=

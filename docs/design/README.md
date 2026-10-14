@@ -18,6 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| Benchmark 业务配置文件 | [benchmark-runtime-config](benchmark-runtime-config/phase1-requirements-analysis.md) | 平台、Evaluator 与执行客户端按进程使用项目 YAML 配置及本地覆盖，迁移 SWE-bench 与调度业务环境变量 | Refactor | 2026-10-14 | ✅ 已实现，专项测试通过；未运行真实 Docker 部署及浏览器验收 | — |
 | MCTS 执行 Trace 非侵入式接入 | [mcts-trace-observability](mcts-trace-observability/) | 不修改 MCTS 代码，由独立安装的外部启动器和透明 xGovernor 观测网关采集精确 Runtime Trace 与 checkpoint 血缘；MCTS node/score/final tree 仅按 stdout 权威边界独立展示 | Feature / Observability | 2026-09-23 | 🟡 核心实现、独立安装分发与自动化测试完成；待真实 MCTS golden path 和浏览器验收 | —（待补） |
 | 实验删除与评测服务停止清理 | [experiment-cancellation](experiment-cancellation/phase1-requirements.md) | 实验及 Case 定向停止和逻辑删除、立即停服、离线镜像清理，保留共享资源及未确认取消记录 | Feature | 2026-09-23 | 🟡 工作区实现，专项通过，待全量与部署验收 | — |
 | Trace 无上报超时 | [trace-inactivity-timeout](trace-inactivity-timeout/) | 所有 Agent 采集的未结束 Trace 连续十分钟无上报后显示超时，新上报恢复执行中，列表和详情自动刷新 | Bugfix | 2026-09-15 | ✅ 830 已验收，master 专项自动化验证通过 | [#301](https://atomgit.com/openeuler/agent-insight/issues/301) |
