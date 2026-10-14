@@ -86,13 +86,11 @@ npm ci
 
 ```dotenv
 AGENT_INSIGHT_PORT=3000
-AGENT_INSIGHT_BENCHMARK=swe-bench
 ```
 
 | 配置 | 含义 |
 |---|---|
 | `AGENT_INSIGHT_PORT` | Agent Insight 对外端口 |
-| `AGENT_INSIGHT_BENCHMARK=swe-bench` | 启动时自动准备 SWE-bench Verified 数据集 |
 
 旧变量 `PORT` 不再支持。
 
@@ -104,16 +102,15 @@ bash scripts/start.sh
 curl -I http://127.0.0.1:3000
 ```
 
-单次指定端口或 Benchmark：
+单次指定端口：
 
 ```bash
-bash scripts/start.sh --port 3100 --benchmark swe-bench
+bash scripts/start.sh --port 3100
 ```
 
 | 参数 | 含义 |
 |---|---|
 | `--port` | 本次启动使用的 Agent Insight 端口 |
-| `--benchmark swe-bench` | 本次启动自动准备 SWE-bench Verified |
 
 ## 4. 安装 Benchmark 数据集
 
@@ -123,19 +120,23 @@ bash scripts/start.sh --port 3100 --benchmark swe-bench
 
 ### 4.2 随服务启动自动安装
 
-在 `~/.agent-insight/.env` 中设置：
-
-```dotenv
-AGENT_INSIGHT_BENCHMARK=swe-bench
-```
-
-然后启动 Agent Insight：
+启动 Agent Insight 时默认准备 SWE-bench Verified，无需设置启用开关：
 
 ```bash
 bash scripts/start.sh
 ```
 
-首次启动会下载并导入数据集，后续启动会复用已安装的数据集。
+首次启动会下载、校验并导入 500 条 Case。后续启动先检查当前数据库，已存在完整、可用的数据集时跳过下载和导入。`AGENT_INSIGHT_BENCHMARK` 不再控制此行为，`scripts/start.sh` 不再接受 `--benchmark` 参数。
+
+准备或导入失败只输出简短警告，继续构建和启动服务；SWE-bench Verified 相关实验暂不可用。终端根据失败原因提示内网或本机来源、文件校验、Python 环境等处理方式，详细输出写入 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），每次启动覆盖该日志。当前仍同步等待本次准备结束，再继续启动；数据库初始化或构建失败仍会停止启动。
+
+下次启动会自动重试。也可在修复后从项目根目录单独重试，无需重启已运行的服务：
+
+```bash
+npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts
+```
+
+独立导入失败时返回非零退出码，便于管理员检查结果。
 
 如需使用内网文件或本机文件，可增加：
 
@@ -145,6 +146,8 @@ SWE_BENCH_SOURCE_ARCHIVE_SOURCE=/srv/datasets/source.tar.gz
 ```
 
 两个配置也可以填写 HTTP/HTTPS 下载地址。
+
+本机文件与下载文件均校验固定官方版本的 SHA-256；校验失败时不会覆盖本机文件。完全离线时还需设置 `SWE_BENCH_PYTHON`，指向已安装官方 SWE-bench Loader 的 Python 可执行文件；否则首次创建 Python 环境仍需要可用的 pip 软件源。
 
 例如使用内网文件服务：
 

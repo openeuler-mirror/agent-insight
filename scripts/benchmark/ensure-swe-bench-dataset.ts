@@ -325,7 +325,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   void main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error))
+    console.error(error)
     process.exitCode = 1
   })
 }
