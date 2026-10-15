@@ -3,65 +3,33 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-test('左侧导航遵循新的一级模块与现有页面映射', async () => {
+test('客户分支只显示仪表盘、链路追踪和客户端安装，管理员保持相同入口', async () => {
     const { getSidebarNavigation, isSidebarItemActive } = await import(
         '../src/components/shell/sidebar-navigation'
     );
 
-    const navigation = getSidebarNavigation(false);
-    assert.deepEqual(
-        navigation.map(item => item.key),
-        ['dashboard', 'quickstart', 'observe', 'evaluation', 'diagnosis', 'continuous-optimization', 'config'],
-    );
+    for (const showUsage of [false, true]) {
+        const navigation = getSidebarNavigation(showUsage);
+        assert.deepEqual(
+            navigation.map(item => [item.key, item.href, item.labelKey]),
+            [
+                ['dashboard', '/dashboard', 'nav.dashboard'],
+                ['trace', '/trace', 'nav.trace'],
+                ['access-install', '/accessconfig/install', 'nav.accessInstall'],
+            ],
+        );
+        assert.ok(navigation.every(item => !item.children?.length));
 
-    const quickstartItem = navigation.find(item => item.key === 'quickstart');
-    assert.equal(quickstartItem?.href, '/quickstart');
-    assert.equal(isSidebarItemActive(quickstartItem!, '/quickstart'), true);
+        const traceItem = navigation.find(item => item.key === 'trace')!;
+        assert.equal(isSidebarItemActive(traceItem, '/trace'), true);
+        assert.equal(isSidebarItemActive(traceItem, '/details/example'), true);
+        assert.equal(isSidebarItemActive(traceItem, '/insight/details/example', '/insight'), true);
+        assert.equal(isSidebarItemActive(traceItem, '/trace-other'), false);
 
-    assert.deepEqual(
-        navigation.find(item => item.key === 'observe')?.children?.map(item => item.key),
-        ['agents', 'trace', 'version-analysis', 'infra'],
-    );
-    assert.deepEqual(
-        navigation.find(item => item.key === 'evaluation')?.children?.map(item => item.key),
-        ['experiments', 'dataset', 'metrics'],
-    );
-    assert.deepEqual(
-        navigation.find(item => item.key === 'continuous-optimization')?.children?.map(item => item.key),
-        ['skill'],
-    );
-    assert.deepEqual(
-        navigation.find(item => item.key === 'config')?.children?.map(item => item.key),
-        ['skill-management', 'model-registry', 'web-search', 'access-install', 'access-client'],
-    );
-
-    const skillItem = navigation
-        .find(item => item.key === 'continuous-optimization')
-        ?.children?.find(item => item.key === 'skill');
-    assert.ok(skillItem);
-    assert.equal(isSidebarItemActive(skillItem, '/skill-generator'), true);
-    assert.equal(isSidebarItemActive(skillItem, '/skill-eval/trigger/demo'), true);
-    assert.equal(isSidebarItemActive(skillItem, '/skill-opt/demo/v1'), true);
-
-    const traceItem = navigation
-        .find(item => item.key === 'observe')
-        ?.children?.find(item => item.key === 'trace');
-    assert.ok(traceItem);
-    assert.equal(isSidebarItemActive(traceItem, '/details'), true);
-
-    const versionAnalysisItem = navigation
-        .find(item => item.key === 'observe')
-        ?.children?.find(item => item.key === 'version-analysis');
-    assert.ok(versionAnalysisItem);
-    assert.equal(versionAnalysisItem.href, '/version-analysis');
-    assert.equal(isSidebarItemActive(versionAnalysisItem, '/version-analysis'), true);
-    assert.equal(isSidebarItemActive(versionAnalysisItem, '/version-management'), true);
-
-    const navigationForAdmin = getSidebarNavigation(true);
-    assert.deepEqual(
-        navigationForAdmin.find(item => item.key === 'config')?.children?.map(item => item.key),
-        ['skill-management', 'model-registry', 'web-search', 'access-install', 'access-client', 'usage'],
-    );
+        const installItem = navigation.find(item => item.key === 'access-install')!;
+        assert.equal(isSidebarItemActive(installItem, '/accessconfig/install'), true);
+        assert.equal(isSidebarItemActive(installItem, '/accessconfig/client'), false);
+    }
 });
 
 test('版本分析工作区通过页签承载分析与管理两个子能力', async () => {

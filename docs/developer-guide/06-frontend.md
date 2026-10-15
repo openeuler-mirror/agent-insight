@@ -34,53 +34,25 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 
 ## 导航信息架构（功能模块）
-侧边栏是产品的**功能模块入口**。语义配置的权威定义在 `src/components/shell/sidebar-navigation.ts`，`AppSidebar.tsx` 只负责渲染，显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。当前结构为统一模块树：
+侧边栏配置的权威定义在 `src/components/shell/sidebar-navigation.ts`，`AppSidebar.tsx` 负责渲染，显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。客户分支只展示以下三个一级入口，普通用户与管理员一致：
 
-```
+```text
 仪表盘                         → /dashboard
-快速开始                       → /quickstart
-运行观测 (groupObserve)
-├─ Agent 概览                  → /agents
-├─ 链路追踪                     → /trace
-├─ 版本分析                     → /version-analysis
-└─ 推理基础设施                 → /infra
-评估与实验 (evalCenter)
-├─ 实验                         → /experiments
-├─ 评测数据集                   → /dataset
-└─ 评估器                       → /metrics
-诊断分析                       → /fault
-持续优化 (groupSkills)
-└─ Skill 工作台                → /skills
-配置 (configGroup)
-├─ Skill 管理中心              → /config/skills
-├─ 模型注册                     → /modelconfig/registry
-├─ 联网搜索                     → /modelconfig/web-search
-└─ 客户端安装                   → /accessconfig/install
+链路追踪                       → /trace
+客户端安装                     → /accessconfig/install
 ```
 
-Skill 在持续优化分组中只有一个正式入口，进入统一对话工作台。旧 `SkillWorkspaceTabs` 和 `/skill-generator`、`/skill-eval`、`/skill-opt` 页面继续保留兼容；带 `openSkillId` 的旧 `/skills` 深链接仍进入管理模式。
+`getSidebarNavigation` 保留完整模块定义，在返回前将菜单平铺并按 `dashboard`、`trace`、`access-install` 白名单过滤。新增菜单默认隐藏，管理员的使用统计入口也不例外。恢复完整菜单时直接返回完整 `navigation` 即可，无需恢复页面或 API。
 
-版本能力在侧边栏中只有“版本分析”一个入口。`VersionWorkspaceTabs` 在 `/version-analysis` 与 `/version-management` 顶部提供“版本分析 / 版本管理”页签；进入管理页签时，侧边栏仍保持“版本分析”激活。
-
-**显示名 ↔ 路由的非直觉映射**（改导航或写文档时易踩坑）：
-
-| 侧边栏显示名 | 实际路由 | 备注 |
-|---|---|---|
-| 诊断分析 | `/fault` | 复用既有智能诊断页，非独立 `/diagnosis` |
-| 评估器 | `/metrics` | 评测器中心（`MetricsPage` + `metrics/evaluators/[id]`） |
-| Skill | `/skills` | 对话工作台；会话固定 Skill、推进工作版本，右侧选择器可旁路浏览其他资产 |
-| Skill 管理中心 | `/config/skills` | 原 SkillHub 资产列表与版本管理 |
-| 客户端安装 | `/accessconfig/install` | 客户端接入分发 |
-
-**导航可达性矩阵**——磁盘存在的页面分三类：
+本次是导航显示范围调整，不是路由访问控制；其他页面、API 和页内功能继续保留。`/trace` 和 `/details` 及其子路径均激活“链路追踪”，部署路径前缀仍按原规则剥离。
 
 | 状态 | 路由 | 说明 |
 |---|---|---|
-| ✅ 侧边栏直达 | `/dashboard` `/quickstart` `/agents` `/trace` `/version-analysis` `/infra` `/experiments` `/dataset` `/metrics` `/fault` `/skills` `/config/skills` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | `/version-analysis` 是版本能力统一入口；`/skills` 为工作台，`/config/skills` 为长期资产管理 |
-| 🔁 页签或页面内可达 | `/version-management`、`/skill-generator` `/skill-eval` `/skill-opt`、`/skill-history` `/skill-detail`、`/details`、`/skill-opt/[name]/[version]` 等子路由 | 由版本/Skill 页签或父页面跳转，无独立 nav 项 |
-| 🚫 存在但未挂导航 | `/skill-workbench` `/quality` `/eval` `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | `/skill-workbench` 是 `/skills` 的兼容别名；其余源码保留，但当前信息架构不提供侧边栏入口 |
+| 侧边栏直达 | `/dashboard`、`/trace`、`/accessconfig/install` | 三个入口直接平铺，不显示分组标题 |
+| 详情页 | `/details` 等子路由 | 保留 Trace 详情导航与高亮 |
+| 暂时隐藏菜单 | `/quickstart`、`/agents`、`/version-analysis`、`/infra`、`/experiments`、`/dataset`、`/metrics`、`/fault`、`/skills`、`/config/skills`、`/modelconfig/registry`、`/modelconfig/web-search`、`/accessconfig/client`、`/usage` | 原菜单定义与功能代码保留 |
 
-> 折叠状态：`AppSidebar` 默认展开运行观测、评估与实验、持续优化和配置，并在路由命中时自动展开对应祖先。
+版本工作区仍通过 `VersionWorkspaceTabs` 在 `/version-analysis` 与 `/version-management` 间切换。Skill 工作台仍位于 `/skills`，`/config/skills` 保留资产管理；旧 `SkillWorkspaceTabs`、`/skill-generator`、`/skill-eval`、`/skill-opt` 及带 `openSkillId` 的深链接继续兼容。
 
 ## 组件组织
 组件按功能与可复用基础组件进行分组（`src/components/`）：

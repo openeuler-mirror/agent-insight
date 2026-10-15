@@ -126,7 +126,7 @@ const USAGE_ITEM: SidebarNavItem = {
 };
 
 export function getSidebarNavigation(showUsage: boolean): SidebarNavItem[] {
-    return [
+    const navigation: SidebarNavItem[] = [
         DASHBOARD_ITEM,
         QUICKSTART_ITEM,
         OBSERVE_ITEM,
@@ -140,6 +140,11 @@ export function getSidebarNavigation(showUsage: boolean): SidebarNavItem[] {
             children: showUsage ? [...CONFIG_CHILDREN, USAGE_ITEM] : CONFIG_CHILDREN,
         },
     ];
+
+    // 客户分支暂时收敛菜单，保留完整定义以便恢复。
+    return navigation
+        .flatMap(item => item.children ?? [item])
+        .filter(item => ['dashboard', 'trace', 'access-install'].includes(item.key));
 }
 
 function normalizePath(pathname: string, basePath = ''): string {
