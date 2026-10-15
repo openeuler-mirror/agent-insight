@@ -162,6 +162,34 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 详情页承担“还原过程”和“定位原因”两类工作，适合对单条 Trace 做完整复盘。
 
+Qoder / OpenCode 链路顶部的 **推理分析** 对应整条链路；选中 LLM 后，右侧详情及时间线详情弹窗中的同名入口对应单次模型调用。经过统一入口时展示可复制的 **模型调用 ID**；一次 LLM 重试可包含多个 ID，整体入口汇总全部 ID。Qoder 无法确定失败尝试属于哪个 LLM 时，整体入口单独列出 **未确定所属 LLM 的调用 ID**，不会把它挂到某个子 Agent。历史数据仍展示原生请求/响应标识。当前第三方页面地址尚未配置，外部打开按钮暂不可用。
+
+### 配置本地统一推理入口
+
+在 Agent 所在机器使用 Node.js 启动仓库中的 `scripts/inference_gateway.mjs`。网关与已安装采集器使用同一 `AGENT_INSIGHT_HOME` 和采集账号。以下配置只包含示例地址，可保存为 `inference-gateway.json`：
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 18080,
+  "timeoutMs": 300000,
+  "routes": [
+    { "basePath": "/qoder/v1", "agent": "qoder", "protocol": "openai", "upstreamBaseUrl": "https://inference.example.com/v1" },
+    { "basePath": "/opencode/v1", "agent": "opencode", "protocol": "openai", "upstreamBaseUrl": "https://inference.example.com/v1" }
+  ]
+}
+```
+
+```bash
+node scripts/inference_gateway.mjs ./inference-gateway.json
+```
+
+Qoder 自定义模型的 Base URL 填 `http://127.0.0.1:18080/qoder/v1`；OpenCode 对应 Provider 的 `options.baseURL` 填 `http://127.0.0.1:18080/opencode/v1`。主 Agent、子 Agent 和辅助模型若使用不同 Provider，都需要指向入口。保持模型名和协议与实际推理服务一致。Qoder CLI 自定义模型能力依版本和账号的 `/model` 向导而定，不能假设所有内置模型支持改地址。
+
+模型 API Key 默认原样透传。若希望由入口统一提供模型认证，在对应 route 增加 `"apiKeyEnv": "INFERENCE_API_KEY"`，并在启动进程的环境中提供该变量；不要把密钥写入示例配置。`AGENT_INSIGHT_API_KEY` 是平台采集账号凭据，与模型 API Key 不同。
+
+推理服务按固定请求头 `X-Agent-Insight-Call-Id` 建立索引，即可供后续整体与单次分析页面使用。该入口目前限同机部署，不提供中央网关、远程关联记录同步或自动改写 Agent 配置。运行时关联文件保存在 `AGENT_INSIGHT_HOME/inference-gateway`，完成采集上传之前应保留。
+
 从列表点击进入详情，或在导入成功后点击“打开 Trace”，均可用浏览器后退返回原列表，保留原来的筛选条件和页码；浏览器前进可重新打开详情。详情顶部的“返回列表”始终打开当前筛选下的列表，通过分享链接直接进入详情时也可使用。
 
 Goal Plus worker 的概览在 Token 消耗下方显示“父 Agent”，点击 **Trace** 可打开直接父 Agent 的 Trace；浏览器后退可回到 worker。直接打开 worker 链接、从主 Trace 的子 Agent 卡片进入，或在 Trace 抽屉查看时，都支持该入口。在主 Trace 内选中 worker，也会显示其逻辑父 Agent。父卡片只提供名称、框架和导航，不改变 worker 的调用树、耗时或 Token 统计。

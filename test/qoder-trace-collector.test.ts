@@ -315,6 +315,101 @@ test("Qoder collector builds deterministic OTLP snapshots with LLM, tool, errors
   assert.match(serialized, /<redacted>/)
 })
 
+test("Qoder message correlation survives streaming, OTLP aggregation, serialization and final LLM nodes", () => {
+  const keys: string[] = []
+  for (const sessionId of [SESSION_ID, "another-qoder-session"]) {
+    const capture = JSON.parse(JSON.stringify(sampleCapture()).replaceAll(SESSION_ID, sessionId))
+    const assistant = capture.transcriptRecords[1]
+    capture.transcriptRecords.splice(1, 0, {
+      ...assistant,
+      uuid: "stream-thinking-fragment",
+      message: { ...assistant.message, content: [{ type: "thinking", thinking: "checking" }] },
+    })
+    const payload = buildQoderOtlpPayload(capture)
+    const events = normalizeOtlpTraces(payload)
+    const llmEvents = events.filter((event) => event.attributes["qoder.span.type"] === "llm")
+    assert.deepEqual(llmEvents.map((event) => event.attributes["qoder.llm.message_id"]), ["message-1", "message-2"])
+    assert.deepEqual(llmEvents.map((event) => event.attributes["qoder.llm.request_id"]), ["llm-request-1", "llm-request-2"])
+    const record = aggregateOtelTraceEvents(sessionId, events)!
+    assert.equal(record.task_id, sessionId)
+    const persisted = JSON.parse(JSON.stringify(record.interactions))
+    const normalized = normalizeInteractions(persisted)
+    assert.equal(normalized[0].responseMessage.messageID, "message-2")
+    const tree = buildAgentCallTree(persisted)!
+    const nodes = tree.events.filter((event) => event.kind === "llm")
+    assert.deepEqual(nodes.map((event) => event.interaction.messageID), ["message-1", "message-2"])
+    keys.push(...nodes.map((event) => JSON.stringify([record.task_id, event.interaction.messageID])))
+  }
+  assert.equal(new Set(keys).size, 4)
+})
+
+test("Qoder message correlation prefers native request identity over nearby timestamps", () => {
+  const capture = sampleCapture() as any
+  const first = capture.transcriptRecords[1]
+  const second = capture.transcriptRecords[3]
+  first.timestamp = "2026-07-21T12:00:04.000Z"
+  first.requestTokenAnchor = { requestId: "llm-request-1" }
+  first.message.content = [{ type: "text", text: "first call" }]
+  second.timestamp = "2026-07-21T12:00:01.000Z"
+  second.message.usage = { request_id: "llm-request-2" }
+  second.message.content = [{ type: "text", text: "second call" }]
+  const events = normalizeOtlpTraces(buildQoderOtlpPayload(capture))
+  const firstCall = events.find((event) => event.attributes["qoder.llm.request_id"] === "llm-request-1")!
+  const secondCall = events.find((event) => event.attributes["qoder.llm.request_id"] === "llm-request-2")!
+  assert.equal(firstCall.attributes["output.value"], "first call")
+  assert.equal(secondCall.attributes["output.value"], "second call")
+  assert.equal(firstCall.attributes["qoder.llm.message_id"], "message-1")
+  assert.equal(secondCall.attributes["qoder.llm.message_id"], "message-2")
+})
+
+test("Qoder message correlation preserves request anchors from later stream fragments", () => {
+  const capture = sampleCapture() as any
+  const first = capture.transcriptRecords[1]
+  const second = capture.transcriptRecords[3]
+  first.timestamp = "2026-07-21T12:00:04.000Z"
+  second.timestamp = "2026-07-21T12:00:01.000Z"
+  second.requestTokenAnchor = { requestId: "llm-request-2" }
+  capture.transcriptRecords.splice(2, 0, {
+    ...first,
+    uuid: "later-stream-fragment",
+    requestTokenAnchor: { requestId: "llm-request-1" },
+    message: { ...first.message, content: [] },
+  })
+  const events = normalizeOtlpTraces(buildQoderOtlpPayload(capture))
+  const firstCall = events.find((event) => event.attributes["qoder.llm.request_id"] === "llm-request-1")!
+  assert.equal(firstCall.attributes["qoder.llm.message_id"], "message-1")
+  assert.equal(events.filter((event) => event.attributes["qoder.llm.message_id"] === "message-1").length, 1)
+})
+
+test("Qoder message correlation does not synthesize response IDs for missing or legacy messages", () => {
+  const capture = sampleCapture() as any
+  for (const record of capture.transcriptRecords) {
+    if (record.type === "assistant") delete record.message.id
+  }
+  const events = normalizeOtlpTraces(buildQoderOtlpPayload(capture))
+  const llmEvents = events.filter((event) => event.attributes["qoder.span.type"] === "llm")
+  assert.equal(llmEvents.length, 2)
+  assert.ok(llmEvents.every((event) => !("qoder.llm.message_id" in event.attributes)))
+  const record = aggregateOtelTraceEvents(SESSION_ID, events)!
+  const tree = buildAgentCallTree(record.interactions as never[])!
+  const nodes = tree.events.filter((event) => event.kind === "llm")
+  assert.equal(nodes.length, 2)
+  assert.ok(nodes.every((event) => !("messageID" in event.interaction)))
+})
+
+test("Qoder message correlation never assigns a known different request's message to diagnostics", () => {
+  const capture = sampleCapture() as any
+  capture.transcriptRecords[1].requestTokenAnchor = { requestId: "unmatched-request" }
+  capture.transcriptRecords[1].message.content = [{ type: "text", text: "unmatched response" }]
+  const events = normalizeOtlpTraces(buildQoderOtlpPayload(capture))
+  const unmatchedDiagnostic = events.find((event) => event.attributes["qoder.llm.request_id"] === "llm-request-1")!
+  assert.equal(unmatchedDiagnostic.attributes["output.value"], "")
+  assert.equal(unmatchedDiagnostic.attributes["qoder.llm.message_id"], undefined)
+  const record = aggregateOtelTraceEvents(SESSION_ID, events)!
+  const nodes = buildAgentCallTree(record.interactions as never[])!.events.filter((event) => event.kind === "llm")
+  assert.equal(nodes.filter((event) => event.interaction.messageID === "message-1").length, 1)
+})
+
 test("Qoder collector keeps authenticated ownership while retaining the API key hash for spool isolation", () => {
   const accountHash = "0123456789abcdef"
   const payload = buildQoderOtlpPayload({
@@ -3075,5 +3170,70 @@ test("AC31 and AC32 uninstall clean only Qoder state and all four products reins
     uninstallQoderWorkCollector({ homeDir: root, insightDir, qoderWorkHome: workHome, purge: true })
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+for (const discovery of ["hooks", "transcript"]) test(`Qoder child transcripts retain concurrent LLM ownership through final nodes (${discovery})`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-child-llm-"))
+  try {
+    const capture = sampleCapture() as any
+    const transcriptPath = path.join(root, "projects", "repo", `${SESSION_ID}.jsonl`)
+    const childDir = path.join(path.dirname(transcriptPath), SESSION_ID, "subagents")
+    fs.mkdirSync(childDir, { recursive: true })
+    capture.transcriptRecords[1].message.content = ["worker-a", "worker-b"].map((agentId, index) => ({ type: "tool_use", id: `spawn-${index}`, name: "Agent", input: { subagent_type: "worker", prompt: agentId } }))
+    capture.transcriptRecords.splice(2, 1, ...["worker-a", "worker-b"].map((agentId, index) => ({ type: "user", sessionId: SESSION_ID, timestamp: "2026-07-21T12:00:04.000Z", message: { content: [{ type: "tool_result", tool_use_id: `spawn-${index}`, content: agentId }] }, toolUseResult: { agentId, agentType: "worker", transcriptPath: path.join(childDir, `agent-${agentId}.jsonl`) } })))
+    fs.writeFileSync(transcriptPath, capture.transcriptRecords.map((row: unknown) => JSON.stringify(row)).join("\n"))
+    const options = { homeDir: root, qoderHome: root, insightDir: path.join(root, "insight"), disableUploadKick: true }
+    for (const [index, agentId] of ["worker-a", "worker-b"].entries()) {
+      const childPath = path.join(childDir, `agent-${agentId}.jsonl`)
+      const rows = [
+        { type: "user", sessionId: SESSION_ID, agentId, timestamp: "2026-07-21T12:00:02.000Z", message: { content: "child prompt" } },
+        ...[0, 1].map(turn => ({ type: "assistant", sessionId: SESSION_ID, agentId, timestamp: `2026-07-21T12:00:0${3 + turn}.000Z`, requestTokenAnchor: { requestId: `request-${agentId}-${turn}` }, message: { id: `response-${agentId}-${turn}`, model: "probe", content: [{ type: "text", text: `${agentId}-${turn}` }] } })),
+      ]
+      fs.writeFileSync(childPath, [...rows, { ...rows[1], agentId: "other-agent" }, { ...rows[1], sessionId: "other-session" }].map(row => JSON.stringify(row)).join("\n"))
+      const event = { session_id: SESSION_ID, transcript_path: transcriptPath, agent_id: agentId, agent_type: "worker", agent_transcript_path: childPath }
+      // Repeated stop notifications and a tool-result reference must not duplicate calls.
+      if (discovery === "hooks") await collectQoderHook({ ...event, hook_event_name: "SubagentStop" }, options)
+      if (discovery === "hooks") await collectQoderHook({ ...event, hook_event_name: "SubagentStop" }, options)
+      if (discovery === "hooks") await collectQoderHook({ session_id: SESSION_ID, transcript_path: transcriptPath, hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: `spawn-${index}`, tool_response: { agentId, transcriptPath: childPath } }, options)
+    }
+    await collectQoderHook({ session_id: SESSION_ID, hook_event_name: "SubagentStop", agent_id: "missing", agent_transcript_path: path.join(childDir, "missing.jsonl") }, options)
+    const result = await collectQoderHook({ session_id: SESSION_ID, hook_event_name: "Stop", transcript_path: transcriptPath }, options)
+    const events = normalizeOtlpTraces(JSON.parse(fs.readFileSync(result.pendingFile!, "utf8")))
+    const record = aggregateOtelTraceEvents(SESSION_ID, events)!
+    const tree = buildAgentCallTree(JSON.parse(JSON.stringify(record.interactions)))!
+    assert.equal(tree.events.filter(e => e.kind === "llm").length, 2)
+    for (const agentId of ["worker-a", "worker-b"]) {
+      const child = tree.children.find(c => c.sessionId === agentId)!
+      assert.ok(child, agentId)
+      const llms = child.events.filter(e => e.kind === "llm")
+      assert.deepEqual(llms.map(e => e.interaction.messageID), [`response-${agentId}-0`, `response-${agentId}-1`])
+      assert.ok(llms.every(e => e.interaction.inference_session_id === SESSION_ID && e.interaction.inference_response_id === e.interaction.messageID))
+      const childSpan = events.find(e => e.attributes["qoder.span.type"] === "subagent" && e.attributes["qoder.subagent.session_id"] === agentId)!
+      assert.ok(events.filter(e => e.attributes["qoder.span.type"] === "llm" && e.attributes["qoder.subagent.session_id"] === agentId).every(e => e.parentSpanId === childSpan.spanId))
+    }
+    assert.equal(events.filter(e => e.attributes["qoder.llm.message_id"]).length, 6)
+    assert.equal(record.query, capture.transcriptRecords[0].message.content)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test("Qoder synthetic errors retain content but never become inference response IDs", () => {
+  for (const marker of [{ isApiErrorMessage: true }, { message: { model: "<synthetic>" } }]) {
+    const capture = sampleCapture() as any
+    const original = capture.transcriptRecords[3]
+    capture.diagnosticRecords = []
+    capture.transcriptRecords = [capture.transcriptRecords[0], { ...original, ...marker, message: { ...original.message, ...marker.message, id: "local-error-id", content: [{ type: "text", text: "Request failed" }] } }]
+    const events = normalizeOtlpTraces(buildQoderOtlpPayload(capture))
+    const llm = events.find(e => e.attributes["qoder.span.type"] === "llm")!
+    assert.equal(llm.attributes["qoder.llm.message_id"], undefined)
+    assert.equal(llm.attributes["qoder.llm.synthetic"], true)
+    // Older collectors may still send a local message ID; ingestion must reject it too.
+    llm.attributes["qoder.llm.message_id"] = "local-error-id"
+    const record = aggregateOtelTraceEvents(SESSION_ID, events)!
+    const event = buildAgentCallTree(record.interactions as never[])!.events.find(e => e.kind === "llm")!
+    assert.equal(event.interaction.messageID, undefined)
+    assert.equal(event.interaction.inference_response_id, undefined)
+    assert.equal(event.interaction.inference_response_unavailable, true)
+    assert.equal(event.interaction.content, "Request failed")
   }
 })

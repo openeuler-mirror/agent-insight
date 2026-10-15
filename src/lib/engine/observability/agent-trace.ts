@@ -94,8 +94,29 @@ export interface RawInteraction {
     finish?: string;
     variant?: string | null;
     parts?: InteractionPart[];
-    /** Platform message id (OpenCode / RAS delivery anchor alignment). */
+    /** Source message id (OpenCode / RAS anchors, Qoder model response correlation). */
     messageID?: string;
+    inference_response_id?: string;
+    inference_response_unavailable?: boolean;
+    inference_request_id?: string;
+    inference_session_id?: string;
+    inference_call_ids?: string[];
+    inference_unassigned_calls?: Array<{
+        call_id: string;
+        status_code?: number;
+        state?: string;
+        started_at?: string;
+        completed_at?: string;
+        reason?: string;
+    }>;
+    inference_attempts?: Array<{
+        request_id: string;
+        attempt_id: string;
+        call_id?: string;
+        started_at?: string;
+        status_code?: number;
+        error_type?: string;
+    }>;
     trace_kind?: 'chain' | string;
     trace_name?: string;
     trace_args?: unknown;

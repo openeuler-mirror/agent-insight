@@ -380,7 +380,96 @@ export function formatUploaderRuntimeForLog(runtime: UploaderRuntime | null): {
   }
 }
 
-export default async function WittySkillInsightOtelPlugin() {
+export function createInferenceCorrelation(context: any, record: (event: any) => void, transport: any = globalThis) {
+  const emit = (sessionID: string, kind: string, payload: any) => {
+    try { record({ t: nowIso(), kind, sessionID, payload }) } catch {}
+  }
+  const observeFetch = () => {
+    const key = Symbol.for("agent-insight.opencode.inference-fetch.v1")
+    try {
+      if (transport[key]) return transport[key]
+      if (typeof transport.fetch !== "function") return undefined
+      const state = { requests: new Map<string, { sessionID: string, messageID: string, emit: typeof emit }>() }
+      const wrapped = new Proxy(transport.fetch, {
+        apply(target, receiver, args) {
+          let attempt: { headers: Headers, binding: any, payload: any } | undefined
+          try {
+            const [request, init] = args
+            const headers = new Headers(init?.headers ?? (request instanceof Request ? request.headers : undefined))
+            const requestId = headers.get("x-agent-insight-request-id")
+            const binding = requestId ? state.requests.get(requestId) : undefined
+            if (binding && headers.get("x-agent-insight-session-id") === binding.sessionID
+              && headers.get("x-agent-insight-message-id") === binding.messageID) {
+              const attemptId = crypto.randomUUID()
+              headers.set("x-agent-insight-attempt-id", attemptId)
+              attempt = { headers, binding, payload: {
+                messageID: binding.messageID, request_id: requestId, attempt_id: attemptId, started_at: nowIso(),
+              } }
+            }
+          } catch {}
+          if (!attempt) return Reflect.apply(target, receiver, args)
+          const { headers, binding, payload } = attempt
+          binding.emit(binding.sessionID, "llm.attempt", payload)
+          return (async () => {
+            try {
+              const response = await Reflect.apply(target, receiver, [args[0], { ...args[1], headers }]) as Response
+              const callId = response.headers.get("x-agent-insight-call-id")
+              binding.emit(binding.sessionID, "llm.attempt", { ...payload, status_code: response.status,
+                ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(callId || "") ? { call_id: callId } : {}),
+              })
+              return response
+            } catch (error) {
+              binding.emit(binding.sessionID, "llm.attempt", { ...payload, error_type: error instanceof Error ? error.name : "Error" })
+              throw error
+            }
+          })()
+        },
+      })
+      // Leave provider options intact: OpenCode loads auth and provider fetches after config hooks.
+      transport.fetch = wrapped
+      Object.defineProperty(transport, key, { value: state })
+      return state
+    } catch { return undefined }
+  }
+  return {
+    headers: async (input: any, output: any) => {
+      const sessionID = input?.sessionID
+      if (!sessionID || !input?.message?.id || !context?.client?.session?.messages) return
+      try {
+        const result = await context.client.session.messages({
+          path: { id: sessionID }, query: { limit: 20 }, signal: AbortSignal.timeout(1000),
+        })
+        const candidates = (Array.isArray(result?.data) ? result.data : []).map((row: any) => row.info).filter((info: any) =>
+          info?.role === "assistant" && info.sessionID === sessionID && info.parentID === input.message.id
+          && info.agent === input.agent && info.providerID === input.model?.providerID
+          && info.modelID === (input.model?.id ?? input.model?.modelID) && !info.time?.completed)
+        if (candidates.length !== 1 || !candidates[0].id) {
+          emit(sessionID, "llm.correlation.unbound", { reason: "no-unique-assistant" })
+          return
+        }
+        const messageID = candidates[0].id
+        // Processor retries reuse the assistant message; transport attempts get their own ID.
+        const requestId = `oc_${sha256Hex(JSON.stringify([sessionID, messageID])).slice(0, 32)}`
+        output.headers ??= {}
+        output.headers["x-agent-insight-session-id"] = sessionID
+        output.headers["x-agent-insight-message-id"] = messageID
+        output.headers["x-agent-insight-request-id"] = requestId
+        const observer = observeFetch()
+        if (observer) {
+          observer.requests.delete(requestId)
+          observer.requests.set(requestId, { sessionID, messageID, emit })
+          if (observer.requests.size > 4096) observer.requests.delete(observer.requests.keys().next().value)
+        }
+        emit(sessionID, "llm.request", { messageID, request_id: requestId })
+      } catch {
+        emit(sessionID, "llm.correlation.unbound", { reason: "message-lookup-failed" })
+      }
+    },
+    configure: observeFetch,
+  }
+}
+
+export default async function WittySkillInsightOtelPlugin(context: any = {}) {
   const env = loadSkillInsightEnv()
   const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
   if (!enabled) return {}
@@ -391,6 +480,7 @@ export default async function WittySkillInsightOtelPlugin() {
   const maxEventString = asInt(env.AGENT_INSIGHT_MAX_EVENT_STRING, 20000)
   const outFile = buildOutFile(spoolDir)
   const writer = createWriter(outFile)
+  const inference = createInferenceCorrelation(context, writer.enqueue)
 
   const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
   const uploaderCooldownMs = asInt(env.AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS, 15000)
@@ -614,11 +704,13 @@ export default async function WittySkillInsightOtelPlugin() {
 
   return {
     config: async (cfg: any) => {
+      inference.configure()
       try {
         const redacted = redactJson(cfg || {})
         writer.enqueue({ t: nowIso(), kind: "event", payload: { type: "config.redacted", config: truncateJson(redacted, 2000) } })
       } catch {}
     },
+    "chat.headers": inference.headers,
     "experimental.chat.system.transform": async (input: any, output: any) => {
       try {
         recordSession(input?.sessionID)

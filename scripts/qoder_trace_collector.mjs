@@ -382,29 +382,44 @@ function closestAssistant(records, targetMs, claimed) {
   return undefined
 }
 
+function assistantRequestId(record) {
+  return firstString(record?.requestTokenAnchor?.requestId, record?.message?.usage?.request_id)
+}
+
+function assistantForModelPair(records, pair, claimed) {
+  const requestId = firstString(pair?.response?.request_id, pair?.start?.request_id)
+  const exact = requestId && records.find((record) => !claimed.has(record) && assistantRequestId(record) === requestId)
+  if (exact) {
+    claimed.add(exact)
+    return exact
+  }
+  return closestAssistant(records.filter((record) => !assistantRequestId(record)), pair.endMs, claimed)
+}
+
 function mergeAssistantRecords(records) {
   const merged = []
   const byMessageId = new Map()
   let fallbackTurn = 0
-  let activeFallbackKey
-  let lastUserTimestamp
+  const activeFallbackKeys = new Map()
+  const lastUserTimestamps = new Map()
   for (const [recordIndex, record] of (Array.isArray(records) ? records : []).entries()) {
+    const owner = firstString(record?.agentId, "root")
     if (record?.type === "user") {
-      lastUserTimestamp = record.timestamp
-      activeFallbackKey = undefined
+      lastUserTimestamps.set(owner, record.timestamp)
+      activeFallbackKeys.delete(owner)
       continue
     }
     if (record?.type !== "assistant") continue
     const message = asObject(record?.message)
     const messageId = firstString(message.id)
-    if (!messageId && !activeFallbackKey) activeFallbackKey = `turn:${fallbackTurn++}`
-    const key = messageId ? `message:${messageId}` : activeFallbackKey
+    if (!messageId && !activeFallbackKeys.has(owner)) activeFallbackKeys.set(owner, `turn:${fallbackTurn++}`)
+    const key = JSON.stringify([owner, messageId ? `message:${messageId}` : activeFallbackKeys.get(owner)])
     const content = Array.isArray(message.content) ? message.content : message.content == null ? [] : [message.content]
     const existing = byMessageId.get(key)
     if (!existing) {
       const copy = {
         ...record,
-        _qoderTurnStartTimestamp: lastUserTimestamp,
+        _qoderTurnStartTimestamp: lastUserTimestamps.get(owner),
         _qoderTranscriptIndexes: [recordIndex],
         message: { ...message, content: [...content] },
       }
@@ -413,6 +428,7 @@ function mergeAssistantRecords(records) {
       continue
     }
     existing.message = { ...existing.message, ...message, content: [...existing.message.content, ...content] }
+    if (firstString(record?.requestTokenAnchor?.requestId)) existing.requestTokenAnchor = record.requestTokenAnchor
     existing._qoderTranscriptIndexes.push(recordIndex)
     if (toMs(record?.timestamp) >= toMs(existing.timestamp)) existing.timestamp = record.timestamp
   }
@@ -552,6 +568,7 @@ export function buildQoderOtlpPayload({
   diagnosticRecords = [],
   localTokenUsage = [],
   expertAgents = [],
+  inferenceCalls = [],
   product,
   accountHash,
   estimateVisibleTokens = false,
@@ -566,14 +583,15 @@ export function buildQoderOtlpPayload({
 
   const allTranscript = (Array.isArray(transcriptRecords) ? transcriptRecords : []).filter((record) => record?.sessionId === sessionId || !record?.sessionId)
   const promptCapturedMs = toMs(prompt?.capturedAt)
-  const allSkillCommands = allTranscript
+  const rootTranscript = allTranscript.filter((record) => !record?.agentId)
+  const allSkillCommands = rootTranscript
     .map((record) => ({ record, command: skillSlashCommand(record) }))
     .filter((item) => item.command)
   const skillCommands = promptCapturedMs
     ? allSkillCommands.filter((item) => Math.abs(item.command.timestampMs - promptCapturedMs) <= 10_000)
     : allSkillCommands.slice(-1)
   const primarySkillCommand = skillCommands.at(-1)?.command
-  const allUserRecords = allTranscript.filter((record) => record?.type === "user" && typeof record?.message?.content === "string" && record?.origin?.kind !== "hook")
+  const allUserRecords = rootTranscript.filter((record) => record?.type === "user" && typeof record?.message?.content === "string" && record?.origin?.kind !== "hook")
   const promptText = firstString(prompt?.event?.prompt)
   const currentUser = [...allUserRecords].reverse().find((record) => !promptText || record.message.content === promptText)
     || [...allUserRecords].reverse()[0]
@@ -584,7 +602,7 @@ export function buildQoderOtlpPayload({
   const transcript = currentTurnStartMs
     ? allTranscript.filter((record) => toMs(record?.timestamp, currentTurnStartMs) >= currentTurnStartMs)
     : allTranscript
-  const userRecords = transcript.filter((record) => record?.type === "user" && typeof record?.message?.content === "string" && record?.origin?.kind !== "hook")
+  const userRecords = transcript.filter((record) => !record?.agentId && record?.type === "user" && typeof record?.message?.content === "string" && record?.origin?.kind !== "hook")
   // Qoder writes one transcript row per streamed content block. Rows from the
   // same model response share message.id and must be treated as one LLM turn;
   // otherwise later tool/text blocks create duplicate zero-duration spans.
@@ -595,7 +613,8 @@ export function buildQoderOtlpPayload({
     primarySkillCommand ? `/${primarySkillCommand.name}` : undefined,
     "Qoder session",
   )
-  const finalResult = firstString(stop?.event?.last_assistant_message, messageText([...assistantRecords].reverse()[0]?.message?.content), "")
+  const rootAssistants = assistantRecords.filter((record) => !record?.agentId)
+  const finalResult = firstString(stop?.event?.last_assistant_message, messageText(rootAssistants.at(-1)?.message?.content), "")
   const startMs = toMs(prompt?.capturedAt, toMs([...userRecords].reverse()[0]?.timestamp, Date.now()))
   const endMs = toMs(stop?.capturedAt, toMs([...assistantRecords].reverse()[0]?.timestamp, startMs))
   const snapshotId = stableHex([sessionId, stop?.capturedAt, stop?.event?.parent_request_set_id, finalResult], 16)
@@ -691,7 +710,9 @@ export function buildQoderOtlpPayload({
     const localUsage = explicitLocalUsage || (record ? localUsageByAssistant.get(record) : undefined)
     const requestId = firstString(pair?.response?.request_id, localUsage?.requestId, record?.message?.id, record?.uuid, `llm-${index}`)
     const spanIdentity = firstString(pair?.response?.request_id, localUsage?.messageId, record?.message?.id, record?.uuid, `llm-${index}`)
-    const llmSpanId = stableHex([sessionId, snapshotId, "llm", spanIdentity], 16)
+    const ownerId = firstString(record?.agentId)
+    const synthetic = record?.isApiErrorMessage === true || record?.message?.model === "<synthetic>"
+    const llmSpanId = stableHex([sessionId, snapshotId, "llm", ...(ownerId ? [ownerId] : []), spanIdentity], 16)
     const llmStart = pair?.startMs ?? localStartMs ?? toMs(record?._qoderTurnStartTimestamp, toMs(record?.timestamp, startMs))
     const llmEnd = pair?.endMs ?? (Number(localUsage?.timestampMs) || toMs(record?.timestamp, llmStart))
     const responseData = asObject(pair?.response?.data)
@@ -724,11 +745,15 @@ export function buildQoderOtlpPayload({
       name: `qoder.llm.${model}`,
       startMs: llmStart,
       endMs: llmEnd,
+      error: synthetic,
       attrs: {
         ...common,
         "openinference.span.kind": "LLM",
         "qoder.span.type": "llm",
         "qoder.llm.request_id": requestId,
+        "qoder.llm.message_id": synthetic ? undefined : firstString(record?.message?.id),
+        "qoder.llm.synthetic": synthetic || undefined,
+        "qoder.subagent.session_id": ownerId,
         "qoder.llm.turn_id": firstString(pair?.response?.turn_id),
         "qoder.token_usage.available": exactUsageAvailable,
         "qoder.token_usage.estimated": estimatedUsageAvailable,
@@ -763,7 +788,7 @@ export function buildQoderOtlpPayload({
 
   if (modelPairs.length) {
     modelPairs.forEach((pair, index) => {
-      const record = closestAssistant(assistantRecords, pair.endMs, claimedAssistants)
+      const record = assistantForModelPair(assistantRecords, pair, claimedAssistants)
       appendLlmSpan({ record, pair, index })
     })
   } else if (currentLocalUsage.length) {
@@ -925,6 +950,7 @@ export function buildQoderOtlpPayload({
     const response = asObject(event.tool_response)
     const spawnedSubagent = spawnedSubagents.get(id)
     const ownerSubagentId = toolOwnerIdentity(event, sessionId)
+      || firstString(transcriptTool.record?.agentId)
       || (spawnedSubagent ? undefined : inferSpawnOwner(input, toolStart))
     const mcpTool = mcpToolIdentity(event, toolName, input)
     const connectorTool = connectorToolIdentity(mcpTool)
@@ -1145,6 +1171,36 @@ export function buildQoderOtlpPayload({
       },
     }))
   }
+
+  for (const [record, llmSpanId] of assistantSpanByRecord) {
+    const ownerId = firstString(record?.agentId)
+    if (!ownerId) continue
+    const llm = spans.find((span) => span.spanId === llmSpanId)
+    const owner = spans.find((span) => span.spanId === subagentSpanIds.get(ownerId))
+    if (!llm || !owner) continue
+    llm.parentSpanId = owner.spanId
+    llm.attributes.push(...owner.attributes.filter(({ key }) =>
+      ["qoder.subagent.name", "qoder.subagent.type", "qoder.subagent.parent_session_id", "qoder.expert.name", "qoder.expert.role"].includes(key)))
+  }
+
+  const calls = inferenceCalls.filter(call => call?.agent === "qoder" && call.session_id === sessionId
+    && /^[a-f0-9-]{36}$/.test(call.call_id || "")
+    && (!currentTurnStartMs || Date.parse(call.started_at) >= currentTurnStartMs)
+    && Date.parse(call.started_at) <= endMs)
+  const unassigned = []
+  for (const call of calls) {
+    const matching = call.response_id && spans.filter(span => span.attributes.some(attr =>
+      attr.key === "qoder.llm.message_id" && attr.value.stringValue === call.response_id))
+    const uniqueResponse = inferenceCalls.filter(other => other.session_id === sessionId && other.response_id === call.response_id).length === 1
+    if (matching?.length === 1 && uniqueResponse) {
+      matching[0].attributes.push(...attributes({ "agent_insight.inference.call_ids": [call.call_id] }))
+    } else {
+      unassigned.push({ call_id: call.call_id, status_code: call.status_code, state: call.state,
+        started_at: call.started_at, completed_at: call.completed_at,
+        reason: call.response_id ? "ambiguous_or_missing_response" : "missing_response_id" })
+    }
+  }
+  if (unassigned.length) spans[0].attributes.push(...attributes({ "agent_insight.inference.unassigned_calls": unassigned }))
 
   const payloadCapturedAt = firstString(capturedAt, stop?.capturedAt, new Date(endMs).toISOString())
   return {
@@ -1482,6 +1538,43 @@ function mergeSessionEventDirectories(targetDir, sourceDirs) {
   }
 }
 
+function readQoderSubagentTranscripts(transcriptPath, sessionId, hookEvents, transcriptRecords) {
+  if (!transcriptPath || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return []
+  let directory
+  try { directory = fs.realpathSync(path.join(path.dirname(transcriptPath), sessionId, "subagents")) } catch { return [] }
+  const records = []
+  const visited = new Set()
+  const references = []
+  for (const { event } of normalizeHookEntries(hookEvents)) {
+    if (event?.session_id !== sessionId) continue
+    const result = asObject(event?.tool_response)
+    references.push([event.agent_id, event.agent_transcript_path], [result.agentId, result.transcriptPath])
+  }
+  const appendResultReferences = (source) => {
+    for (const record of source) {
+      if (record?.sessionId !== sessionId) continue
+      const result = asObject(record?.toolUseResult)
+      references.push([result.agentId, result.transcriptPath])
+    }
+  }
+  // Async hooks can arrive after Stop; completed Agent results already hold the child path.
+  appendResultReferences(transcriptRecords)
+  for (const [agentId, file] of references) {
+    if (typeof agentId !== "string" || typeof file !== "string") continue
+    try {
+      const resolved = fs.realpathSync(file)
+      if (path.dirname(resolved) !== directory || visited.has(resolved)) continue
+      const childRecords = parseJsonLines(fs.readFileSync(resolved, "utf8"))
+        .filter((record) => record?.sessionId === sessionId && record?.agentId === agentId)
+      if (!childRecords.length) continue
+      visited.add(resolved)
+      records.push(...childRecords)
+      appendResultReferences(childRecords)
+    } catch {}
+  }
+  return records
+}
+
 export async function collectQoderHook(event, options = {}) {
   const homeDir = options.homeDir || os.homedir()
   const insightDir = options.insightDir || getAgentInsightHome(homeDir)
@@ -1532,14 +1625,17 @@ export async function collectQoderHook(event, options = {}) {
       homeDir,
       databasePath: config.AGENT_INSIGHT_QODER_TOKEN_DB,
     })
+    transcriptRecords.push(...readQoderSubagentTranscripts(transcriptPath, sessionId, hookEvents, transcriptRecords))
     transcriptRecords = normalizeQoderTranscriptRecords(transcriptRecords, sessionId, localTokenUsage)
     const expertAgents = readQoderExpertAgents(qoderHome, transcriptPath, sessionId, transcriptRecords)
+    const inferenceDir = path.join(insightDir, "inference-gateway", apiKeyHash, "qoder", stableHex([sessionId], 64))
     const payload = buildQoderOtlpPayload({
       hookEvents,
       transcriptRecords,
       diagnosticRecords,
       localTokenUsage,
       expertAgents,
+      inferenceCalls: readJsonFiles(inferenceDir),
       product,
       accountHash: apiKeyHash,
       estimateVisibleTokens: ["1", "true", "yes", "on"].includes(String(config.AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS || "").trim().toLowerCase()),

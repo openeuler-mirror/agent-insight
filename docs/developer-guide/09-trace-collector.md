@@ -446,6 +446,24 @@ AC29 使用 `node scripts/qoder_memory_soak.mjs` 对统一 spool 下当前运行
 
 AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和同一 traceId 中同时包含根 Agent、普通 Subagent、Quest goal/step、专家 Agent、Skill、普通 Tool 和 LLM 调用。Quest 会话中如果存在该 session 的 Experts cache，采集器以实际专家记录为准补充 Expert 标记，不要求顶层 mode 必须切换为 `experts`，且不会把没有专家输出或通知证据的普通 Subagent 误标为 Expert。测试还会将该 OTLP snapshot 交给服务端 Qoder Adapter，校验 `ExecutionRecord` 同时保留 Quest、Expert、Subagent、Skill、Tool、LLM 结构、Token 汇总以及完整父子关系。
 
+模型响应关联字段沿以下路径保留，不改变现有 trace/span ID：
+
+| Qoder 来源 | OTLP / 平台字段 | 含义 |
+|---|---|---|
+| Hook `session_id` | `qoder.session.id` / `ExecutionRecord.task_id` | 会话，定位整条 Trace |
+| transcript `message.id` | `qoder.llm.message_id` / LLM interaction `messageID`、`inference_response_id` | 真实模型响应 ID；语义字段用于跨框架协作链路的推理关联 |
+| diagnostics `request_id` | `qoder.llm.request_id` | Qoder 请求标识，沿用旧的来源及兜底规则，不当作模型响应 ID |
+
+流式 transcript 分片按所属 Agent 和 `message.id` 合并。diagnostics 优先通过 transcript 的 `requestTokenAnchor.requestId` 或 `message.usage.request_id` 精确配对；只有不含原生请求 ID 的旧消息才允许按时间回退，禁止把显式属于另一个请求的消息配给当前调用。缺少 `message.id` 时不生成 `qoder.llm.message_id` / `messageID`，也不以 record UUID、SQLite 消息 ID、请求 ID 或 span ID 冒充。
+
+普通子 Agent 的 transcript 从 `SubagentStop.agent_transcript_path`、`PostToolUse.tool_response.transcriptPath` 或根/子 transcript 的 `toolUseResult.transcriptPath` 发现；最后一种来源允许已完成 Agent 的异步 Hook 晚于根 Stop 落盘。只读取当前会话 `subagents` 目录内、记录 `sessionId` 与 `agentId` 匹配的文件，并对重复引用去重。子 LLM 使用对应 Agent span 作为父级，`qoder.subagent.session_id` 保留子 Agent ID；`inference_session_id` 始终保留模型请求实际发送的根 `session-id`，二者不可混用。
+
+`isApiErrorMessage: true` 或 `message.model: "<synthetic>"` 表示本地合成错误消息：保留错误内容与 LLM 事件，设置 `qoder.llm.synthetic` / `inference_response_unavailable`，不导出 `messageID` / `inference_response_id`。服务端也屏蔽带 synthetic 标记或 `<synthetic>` 模型的旧采集数据。已用 Qoder CN CLI 1.1.70 的本地模拟网关验证两个子 Agent 并发、503 后成功及三次 503 耗尽，经过真实 uploader、OTLP handler、consumer、SQLite 和最终 LLM 节点核对。失败 HTTP 尝试的响应头 ID 未出现在 transcript 中，因此仍不能逐次关联失败尝试；根任务结束后继续运行的后台子 Agent 不在本次实测范围。
+
+对已确认原样保留响应 ID 的自定义模型端点，网关可记录 `(session-id, response.id)`，与平台 `(task_id, interaction.messageID)` 关联。要求每次响应 ID 唯一、同一次流式响应各分片 ID 一致；无响应的失败尝试和重试级关联还需独立请求标识。此字段保留不证明任意 Qoder 产品、模型协议或上游服务均满足这些约束。
+
+Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `InferenceAnalysisButton`，由 `src/lib/trace/inference-analysis.ts` 组织关联信息。优先使用统一 `inference_call_ids`，整体入口还包含 `inference_unassigned_calls`；缺少统一字段的历史数据仍展示 `inference_response_id` / `inference_request_id` 与 OpenCode `inference_attempts`。旧 Qoder `messageID` 仅在本 Trace 来源可确认且非合成错误时回退，不能按根 framework 解释其他协作 Trace 的消息 ID。第三方 URL 暂未配置，外部打开按钮禁用。
+
 实现与测试入口：
 
 - `scripts/qoder_trace_collector.mjs`：Hook、脱敏、截断、transcript/diagnostics 合并和 OTLP snapshot。
@@ -457,3 +475,38 @@ AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和
 - `integrations/qoder-jetbrains/`：JetBrains Plugin SDK 插件、状态栏、设置、IDE marker 和动态卸载清理。
 - `src/lib/ingest/otel/adapters/qoder.ts`：服务端 Qoder OTLP 聚合。
 - `test/qoder-trace-collector.test.ts` / `test/qoder-desktop-extension.test.ts` / `test/qoder-performance.test.ts`：确定性、账号/产品隔离、重试、Skill/MCP/连接器、最新版 snapshot、多层 Subagent、安装卸载、四端启动预算和首 Token 开销验证。
+
+## 十、OpenCode 模型请求关联
+
+`scripts/opencode_plugin_otel.ts` 的 `chat.headers` 使用插件 SDK 查询当前会话消息，仅在 session、用户 parentID、agent、provider、model 均匹配且唯一的未结束 assistant 存在时绑定。查询限时 1 秒，缺失、歧义或查询失败只记录 `llm.correlation.unbound`，不阻止模型调用，也不按时间或最近消息猜测归属。`input.message.id` 是用户消息 ID，不能直接作 LLM 调用 ID。
+
+| 模型请求头 | 最终 LLM interaction 字段 | 语义 |
+|---|---|---|
+| `x-agent-insight-request-id` | `inference_request_id` | 根据当前 session 与 assistant message ID 生成的稳定逻辑调用标识，processor 重试复用 |
+| `x-agent-insight-session-id` | `inference_session_id` | 实际发起请求的会话；子 Agent 不替换成根 `task_id` |
+| `x-agent-insight-message-id` | `messageID` | assistant 消息 ID |
+| `x-agent-insight-attempt-id` | `inference_attempts[].attempt_id` | 每次实际 fetch 独立生成，SDK 内部重试也各自记录 |
+
+插件在进程中为现有 `globalThis.fetch` 安装一次 Proxy，仅处理已登记且 session、message、request 三个 ID 都匹配的请求；最多保留最近 4096 个逻辑调用的登记。重复插件实例共享同一代理，每次 fetch 只生成一个 attempt ID。代理保留 fetch 属性、请求正文、signal、响应和异常，无关联请求直接使用原参数调用原 fetch。不会写入 provider 的 `options.fetch`，避免覆盖 OpenCode 在配置阶段之后加载的 OAuth 鉴权或协议处理逻辑。
+
+逻辑调用以 `llm.request` 写入 spool；HTTP 尝试以 `llm.attempt` 写入开始记录及收到的状态码或异常类型。HTTP 200 不是流式响应完整结束的证明。绕过全局 fetch 的特殊传输、覆盖代理且不调用原 fetch 的插件，以及登记被淘汰后的请求，只保留逻辑关联，不能据此声称已采集完整 attempt。
+
+`scripts/opencode_uploader_client.js` 按 `(sessionID, assistant messageID)` 关联原始事件，按 attempt ID 合并开始/结果和重复记录；冲突的逻辑请求 ID 不附到节点。`mergeGraph` 保留子会话身份，原有上传处理器、Session JSON 存储及 `buildAgentCallTree` 原样保留新增字段。历史记录没有关联信息时保持缺失，不填造 ID。
+
+回归入口为 `test/opencode-inference-correlation.test.ts`。已使用 OpenCode 1.18.29 与自定义 OpenAI-compatible Chat Completions SSE 网关验证同会话连续两次调用、两个子 Agent 并发、503 自动重试；实际 uploader → HTTP → 上传处理器 → SQLite 读回 → 最终 LLM 节点及重复上报均保留一致标识。原生 LLM runtime、其他 provider 特殊传输和后续插件覆写 headers/fetch 的组合不在本次实测范围。
+
+## 十一、统一推理转发入口
+
+`scripts/inference_gateway.mjs` 是独立本地 Node.js HTTP 转发进程。Agent 的自定义模型 Base URL 指向配置的 `basePath`，入口将后缀拼接到固定 `upstreamBaseUrl`。一条路由对应一种原生协议：OpenAI 的 `/chat/completions`、`/responses`，或 Anthropic 的 `/messages`；另支持 `/models` GET。不同协议不互相转换，不修改模型名或提示词。CLI 只监听 loopback；中央网关和跨机器关联记录同步尚未实现。
+
+对每次模型 POST，入口生成 UUID v4，覆盖并发送 `X-Agent-Insight-Call-Id`，同值通过响应头返回。推理服务只需要将此头绑定到收到的推理记录；整条链路用 ID 集合查询，单 LLM 用其 ID 集合查询。客户端重试分别生成 ID，入口本身不重试。不把 HTTP 200 当作模型流完整结束，journal 独立记录 `completed` / `cancelled` / `stream_error` / `transport_error` / `timeout`。没有到达推理服务的请求不会存在远端推理记录。
+
+转发保留正文、SSE、状态码、认证与协议头，去除 hop-by-hop 头和 Agent 特定关联头；推理服务只接收统一关联头。上游为静态配置，禁止客户端指定 URL，不跟随重定向且移除 Location。默认透传模型认证，`apiKeyEnv` 可指定上游密钥环境变量名。关联记录不保存请求正文、模型输出或认证字段。
+
+网关与采集器必须使用同一 `AGENT_INSIGHT_HOME` 和采集账号。网关账号优先级为显式参数、进程 `AGENT_INSIGHT_API_KEY`、本地 `config`、本地 `.env`、anonymous。记录目录为 `inference-gateway/<account-hash>/<agent>/<session-hash>/<call-id>.json`，先原子保存开始记录再请求上游，随后原子更新结果；目录权限 700、文件 600。journal 是本地关联依据，至少保留到采集与上传结束，当前不自动清理。
+
+- Qoder collector 按当前 turn 范围读取本地记录，用原生 `session-id` 与成功 JSON/SSE 中的 response ID 唯一匹配 LLM。重复响应 ID、多节点歧义、没有响应 ID 的失败请求均不猜测归属。未匹配尝试通过根 Span 的 `agent_insight.inference.unassigned_calls` 进入 system 元数据，整体入口可查询，具体原生 LLM 不冒领。合成错误消息仍无推理响应 ID。
+- OpenCode 插件从响应头保留 `call_id`；uploader 另从 journal 按 session/message/request/attempt 精确回填，覆盖响应头前取消。没有合法消息锚点时保留 Trace 级未归属记录。账号级 revision 与内容签名保证迟到的关联字段可以重新上报已经结束的 Trace。子会话保留实际 session，重试 ID 集合归入同一逻辑 LLM。
+- 统一节点字段为 `inference_call_ids: string[]`，原生 request/response/attempt 字段不改义。前端优先使用统一 ID，因此不要求推理服务理解不同 Agent 的身份结构。
+
+回归入口：`test/inference-gateway.test.ts`、`test/opencode-inference-correlation.test.ts`、`test/inference-analysis.test.ts`。真实 CLI 验收须比较推理服务实际收到的头、网关 journal、采集上传、SQLite 读回及最终节点；单测支持某协议不等于该协议在真实 Agent 上已验收。

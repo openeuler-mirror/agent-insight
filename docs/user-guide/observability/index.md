@@ -24,6 +24,8 @@ description: "Agent 概览、链路追踪与推理基础设施总览"
 
 链路追踪是运行观测的主入口，用于查看一次执行从入口到结束的完整 Trace。适合完成样本筛选、过程还原与关键节点定位，是多数分析动作的起点。
 
+Qoder 与 OpenCode 的详情顶部提供整条链路的 **推理分析** 入口；选中某次 LLM 调用后，右侧详情或时间线详情弹窗也有独立入口。经过统一转发入口时，点击可复制该范围的模型调用 ID 集合；Qoder 未能确定所属 LLM 的失败尝试单独列在整体入口。历史数据仍展示原生关联标识。当前尚未配置第三方分析页面地址，**打开推理分析** 按钮暂不可用。接入步骤见[配置本地统一推理入口](./view-traces.md#配置本地统一推理入口)。
+
 对应文档： [链路追踪](./view-traces)
 
 ### Agent 概览
@@ -60,6 +62,14 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 - 查看单次执行细节： [链路追踪](./view-traces)
 - 查看异常样本归因： [诊断分析](./diagnosis)
 - 将线上问题沉淀为回归验证： [评估与实验](../evaluation/index)
+
+## OpenCode 推理日志关联
+
+升级 OpenCode 采集插件和 uploader，并重启 OpenCode 后，采集器会在模型请求头中附加 `x-agent-insight-request-id`，最终 LLM 原始交互的 `inference_request_id` 保留同一个值。自建模型网关应记录并向推理服务透传该请求头。`x-agent-insight-session-id` 是当前主会话或子 Agent 会话，`x-agent-insight-message-id` 对应节点的 assistant `messageID`。
+
+对于经过全局 fetch 的模型请求，还会附加独立的 `x-agent-insight-attempt-id`，并保存在节点的 `inference_attempts` 中。一次调用遇到 503 后重试，逻辑请求 ID 不变，两个 attempt ID 不同；HTTP 状态码只表示收到的响应状态，不代表流式生成已完整结束。采集插件保留 provider 原有的鉴权和请求转换逻辑；绕过全局 fetch 的特殊传输只保证逻辑调用关联，不能用来统计完整的 HTTP 重试次数。
+
+此链路已用 OpenCode 1.18.29、自定义 OpenAI-compatible Chat Completions SSE 网关验证同会话多次调用、两个子 Agent 并发及 503 自动重试。插件无法唯一确定对应 assistant 消息时不附加关联 ID；历史数据也不会自动补出这些字段。原生 LLM runtime、其他 provider 的特殊传输及插件覆写请求头的组合需分别确认。OpenCode 自带的 `x-opencode-request` 是用户消息标识，不能替代这里的逐次调用关联 ID。
 
 ## Goal Plus 接入
 
@@ -154,6 +164,10 @@ integrations/qoder-desktop/build-vsix.sh
 一键安装后，在 Qoder CN Desktop 的 Extensions 面板选择 **Install from VSIX**，安装 `~/.agent-insight/packages/qoder/agent-insight-qoder-desktop.vsix`；从源码单独构建时则选择 `integrations/qoder-desktop/build/distributions/agent-insight-qoder-desktop-<version>.vsix`。安装后状态栏出现 `Agent Insight`，Settings 中出现 `Agent Insight Qoder CN Collector`。点击状态栏可配置服务地址和 API Key；API Key 写入扩展 SecretStorage，同时同步给本机采集进程。扩展把用户级 Hook 写入 `~/.qoder-cn/settings.json`，读取 `~/.qoder-cn/cache/projects/.../conversation-history/` 会话记录，并在 Windows 上只读查询 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db` 的精确 Token。通过 `/skill-name` 手动触发的 Skill 会从 Qoder CN transcript 的 slash-command 元数据还原，在 Trace 中显示 Skill 名称、版本、触发方式、参数和结果。扩展停用或 Qoder CN Desktop 退出时，会把尚未结束的活动会话生成最后一份 snapshot，并等待一次强制上传；网络失败时 pending 文件仍保留在 spool，下一次启动继续重试。卸载监视器只清理 Desktop owner 与 `qoder/desktop` spool；CLI、JetBrains、Work 不受影响。
 
 ### Qoder CN CLI
+
+需要与推理分析服务统一关联时，使用[本地统一推理入口](./view-traces.md#配置本地统一推理入口)：服务读取 `X-Agent-Insight-Call-Id`，平台成功 LLM 节点保留同一 ID；没有真实响应 ID 的失败尝试保留在整体 Trace 的未归属列表。以下是未经过统一入口时的原生关联方式。
+
+使用自建模型网关关联推理日志时，可用请求头 `session-id` 对应平台 Trace 的 `taskId`，再用响应体 `id` 对应 LLM 原始交互中的 `messageID`。采集器从 Qoder transcript 的 `message.id` 保留该值，组合 `(taskId, messageID)` 定位一次有响应的模型调用。网关需保证每次响应 ID 唯一、流式分片 ID 一致；不能用响应头 `x-request-id` 或 Qoder 内部 `request_id` 替代。此路径已用 Qoder CN CLI 1.1.70 的 OpenAI-compatible Chat Completions 流式响应验证，普通子 Agent 的成功响应也会进入各自的 LLM 节点，使用同一个根 `session-id` 关联。503 后重试成功时可关联最终成功响应；连续失败产生的本地错误消息仍展示，但不会被当作推理服务响应。失败 HTTP 尝试没有可用响应 ID，不能据此逐次跳转。其他协议和根任务结束后继续运行的后台子 Agent 尚未验证。升级采集器和服务端后，新采集数据才具备此字段；旧记录缺少时保持为空。
 
 在源码目录执行以下命令，把采集器安装到当前用户的 Qoder 配置；`--scope=local` 可改为仅当前项目生效，`--scope=project` 可写入项目共享配置。一个安装实例只选择一种 scope。
 

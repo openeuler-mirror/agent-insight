@@ -1,6 +1,6 @@
 import http from "node:http"
 import https from "node:https"
-import { randomUUID } from "node:crypto"
+import { randomUUID, createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
@@ -654,6 +654,7 @@ function buildState(records) {
   const seenDeltaEventIds = new Set()
   const userTextByMsg = new Map()
   const sysPrompts = new Map()
+  const inferenceByMessage = new Map()
   const cliCompletedSessions = new Set()
   const sessionPids = new Map()
   const sessionIdleAt = new Map()
@@ -691,6 +692,27 @@ function buildState(records) {
     const kind = r?.kind
     const recordSid = typeof r?.sessionID === "string" ? r.sessionID : ""
     if (recordSid) sessionRecordCounts.set(recordSid, (sessionRecordCounts.get(recordSid) || 0) + 1)
+    if (kind === "llm.request" || kind === "llm.attempt") {
+      const payload = r.payload || {}
+      if (!recordSid || !payload.messageID || !payload.request_id) continue
+      const key = JSON.stringify([recordSid, payload.messageID])
+      const current = inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
+      current.requestIds.add(payload.request_id)
+      if (kind === "llm.attempt" && payload.attempt_id) {
+        const previous = current.attempts.get(payload.attempt_id) || {}
+        current.attempts.set(payload.attempt_id, {
+          ...previous,
+          attempt_id: payload.attempt_id,
+          request_id: payload.request_id,
+          ...(payload.started_at ? { started_at: payload.started_at } : {}),
+          ...(payload.status_code ? { status_code: payload.status_code } : {}),
+          ...(payload.error_type ? { error_type: payload.error_type } : {}),
+          ...(payload.call_id ? { call_id: payload.call_id } : {}),
+        })
+      }
+      inferenceByMessage.set(key, current)
+      continue
+    }
     if (kind === "plugin.shutdown") {
       const sid = r.sessionID
       if (sid) {
@@ -826,7 +848,7 @@ function buildState(records) {
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
 }
 
 // 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
@@ -898,6 +920,7 @@ function isRoundCompleted({ finalResult, idleMs, lastTs }) {
 function isSignatureUnchanged(prevSig, nextSig) {
   if (!prevSig) return false
   if (prevSig === nextSig) return true
+  if (String(prevSig).includes('|inference=') || String(nextSig).includes('|inference=')) return false
   const prev = String(prevSig).split("|")
   if (prev.length >= 8) return false
   const next = String(nextSig).split("|")
@@ -1035,11 +1058,56 @@ function buildMessagesForSession(state, sid) {
       finish: info?.finish,
       variant: info?.variant,
     }
+    const inference = state.inferenceByMessage?.get(JSON.stringify([sid, mid]))
+    if (role === "assistant" && inference?.requestIds.size === 1) {
+      m.inference_request_id = [...inference.requestIds][0]
+      m.inference_session_id = sid
+      m.inference_attempts = [...inference.attempts.values()]
+      const callIds = [...new Set(m.inference_attempts.map(attempt => attempt.call_id).filter(Boolean))]
+      if (callIds.length) m.inference_call_ids = callIds
+    }
     messages.push(m)
   }
 
   messages.sort((a, b) => (toMsTimestamp(a.timeInfo?.created) || 0) - (toMsTimestamp(b.timeInfo?.created) || 0))
   return messages
+}
+
+function inferenceGatewayDirectory(insightDir, apiKey) {
+  const account = createHash('sha256').update(apiKey || 'anonymous').digest('hex').slice(0, 16)
+  return path.join(insightDir, 'inference-gateway', account, 'opencode')
+}
+
+function applyInferenceGatewayRecords(state, insightDir, apiKey) {
+  const root = inferenceGatewayDirectory(insightDir, apiKey)
+  state.inferenceUnassigned = new Map()
+  for (const sid of state.sessions.keys()) {
+    const dir = path.join(root, createHash('sha256').update(sid).digest('hex'))
+    let files
+    try { files = fs.readdirSync(dir).filter(name => name.endsWith('.json')).sort() } catch { continue }
+    for (const file of files) {
+      let call
+      try { call = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) } catch { continue }
+      if (call.agent !== 'opencode' || call.session_id !== sid || !/^[a-f0-9-]{36}$/.test(call.call_id || '')) continue
+      const info = state.msgInfo.get(call.message_id)
+      const expected = 'oc_' + createHash('sha256').update(JSON.stringify([sid, call.message_id])).digest('hex').slice(0, 32)
+      if (info?.role === 'assistant' && info.sessionID === sid && call.request_id === expected && call.attempt_id) {
+        const key = JSON.stringify([sid, call.message_id])
+        const current = state.inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
+        current.requestIds.add(call.request_id)
+        const previous = current.attempts.get(call.attempt_id)
+        const attemptKey = previous?.call_id && previous.call_id !== call.call_id ? `${call.attempt_id}:${call.call_id}` : call.attempt_id
+        current.attempts.set(attemptKey, { ...current.attempts.get(attemptKey), request_id: call.request_id,
+          attempt_id: call.attempt_id, call_id: call.call_id, started_at: call.started_at,
+          status_code: call.status_code, error_type: call.error_type, state: call.state })
+        state.inferenceByMessage.set(key, current)
+      } else {
+        const unassigned = state.inferenceUnassigned.get(sid) || []
+        unassigned.push({ call_id: call.call_id, state: call.state, status_code: call.status_code, reason: 'missing_message_anchor' })
+        state.inferenceUnassigned.set(sid, unassigned)
+      }
+    }
+  }
 }
 
 function mergeGraph(state, rootSid) {
@@ -1051,6 +1119,9 @@ function mergeGraph(state, rootSid) {
     const sid = stack.pop()
     if (!sid || seen.has(sid)) continue
     seen.add(sid)
+    const unassigned = state.inferenceUnassigned?.get(sid)
+    if (unassigned?.length) merged.push({ role: 'system', content: '', inference_session_id: sid,
+      inference_unassigned_calls: unassigned, ...(sid !== rootSid ? { subagent_session_id: sid } : {}) })
 
     // Build per-session system prompt entries (one entry per distinct sha256).
     // Each becomes a synthetic role="system" message at the head of the session's
@@ -1260,8 +1331,11 @@ async function main() {
   // immediately without reading/parsing any data. This keeps the polling daemon
   // cheap (~5ms) when opencode is idle. Force=1 bypasses for manual debugging.
   const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
+  let gatewayRevision = ''
+  try { gatewayRevision = fs.readFileSync(path.join(inferenceGatewayDirectory(getPreferredInsightDir(), apiKey), 'updated'), 'utf8') } catch {}
+  const gatewayChanged = Boolean(gatewayRevision && gatewayRevision !== ckpt.__inferenceGatewayRevision)
   const lastScanMtime = ckpt.__lastScanMtime || 0
-  if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
+  if (!gatewayChanged && newestMtime > 0 && newestMtime <= lastScanMtime && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
     appendUploaderLog(
       `main.fastSkip newestMtime=${newestMtime} lastScanMtime=${lastScanMtime} spoolDir=${spoolDir}`,
     )
@@ -1295,8 +1369,8 @@ async function main() {
     } catch {}
   })
 
-  const candidateFiles = selectJsonlFiles(spoolDir, spoolFile)
-  const files = selectJsonlFilesForUpload(candidateFiles, { forceSessions, lastScanMtime })
+  const candidateFiles = selectJsonlFiles(spoolDir, gatewayChanged ? '' : spoolFile)
+  const files = gatewayChanged ? candidateFiles : selectJsonlFilesForUpload(candidateFiles, { forceSessions, lastScanMtime })
   appendUploaderLog(
     `main.scan files=${files.length}/${candidateFiles.length} ` +
     `mode=${spoolFile ? "spool-file" : forceSessions.size ? "force-session" : "changed-session-files"} ` +
@@ -1315,6 +1389,7 @@ async function main() {
   appendUploaderLog(`main.records total=${allRecords.length}`)
 
   const state = buildState(allRecords)
+  applyInferenceGatewayRecords(state, getPreferredInsightDir(), apiKey)
 
   const roots = []
   for (const sid of state.sessions.keys()) {
@@ -1322,6 +1397,7 @@ async function main() {
   }
   appendUploaderLog(`main.sessions total=${state.sessions.size} roots=${roots.length}`)
 
+  let uploadFailed = false
   for (const rootSid of roots) {
     if (deletedSessionIds.has(rootSid)) {
       appendUploaderLog(`session.skip deleted task_id=${rootSid}`)
@@ -1384,7 +1460,7 @@ async function main() {
     }
 
     const lastAssistant = String(payload.final_result || "")
-    const sig = buildSignature({
+    let sig = buildSignature({
       interactionCount: interactions.length,
       finalResultLength: lastAssistant.length,
       lastTs,
@@ -1398,6 +1474,10 @@ async function main() {
       // trace_completed_at，服务端会再跑一整轮 LLM 分析。
       completed: Boolean(payload.trace_completed_at) || Boolean(payload.opencode_cli_completed),
     })
+    const inferenceSnapshot = interactions.filter(m => m.inference_call_ids?.length || m.inference_unassigned_calls?.length)
+      .map(m => ({ session: m.inference_session_id, message: m.messageID, calls: m.inference_call_ids,
+        attempts: m.inference_attempts, unassigned: m.inference_unassigned_calls }))
+    if (inferenceSnapshot.length) sig += '|inference=' + createHash('sha256').update(stableStringify(inferenceSnapshot)).digest('hex')
     appendUploaderLog(
       `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
       `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
@@ -1437,6 +1517,7 @@ async function main() {
       saveCheckpoint(checkpointFile, ckpt)
       appendUploaderLog(`session.uploaded task_id=${rootSid} status=${res.status} sig=${sig}`)
     } else {
+      uploadFailed = true
       appendUploaderLog(
         `session.uploadFailed task_id=${rootSid} status=${res.status} body=${String(res.body || "").slice(0, 1000) || "(empty)"}`,
       )
@@ -1445,14 +1526,16 @@ async function main() {
 
   // Record that we've scanned up to this mtime. Next invocation will short-circuit
   // unless a JSONL file has been modified after this point.
-  if (newestMtime > 0) {
+  if (!uploadFailed && newestMtime > 0) {
     ckpt.__lastScanMtime = newestMtime
+    if (gatewayRevision) ckpt.__inferenceGatewayRevision = gatewayRevision
     saveCheckpoint(checkpointFile, ckpt)
     appendUploaderLog(`main.checkpointUpdated lastScanMtime=${newestMtime}`)
   }
 }
 
 export {
+  applyInferenceGatewayRecords,
   buildMessagesForSession,
   buildSignature,
   buildState,

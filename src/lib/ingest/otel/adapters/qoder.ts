@@ -287,6 +287,17 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
       traceId: event.traceId,
       agent: agentName,
     };
+    const synthetic = attrs['qoder.llm.synthetic'] === true || attrs['qoder.llm.synthetic'] === 'true'
+      || interaction.model === '<synthetic>';
+    const messageId = firstText(attrs['qoder.llm.message_id']);
+    if (messageId && !synthetic) {
+      interaction.messageID = messageId;
+      interaction.inference_response_id = messageId;
+    }
+    if (synthetic) interaction.inference_response_unavailable = true;
+    interaction.inference_session_id = firstText(attrs['qoder.session.id'], rootAttrs['qoder.session.id']);
+    const callIds = parseJson(attrs['agent_insight.inference.call_ids']);
+    if (!synthetic && Array.isArray(callIds)) interaction.inference_call_ids = callIds.filter(id => typeof id === 'string');
     const input = firstText(attrs['input.value']);
     if (input) interaction.requestMessages = [{ role: 'user', content: input }];
     if (subagentSessionId) {
@@ -340,8 +351,8 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     : toolEvents;
   const attachCall = (event: OtelTraceEvent, call: AnyObj) => {
     const ownerSubagentId = firstText(event.attributes?.['qoder.subagent.session_id']);
-    const host = (ownerSubagentId ? subagentBySessionId.get(ownerSubagentId) : undefined) ||
-      (event.parentSpanId ? assistantBySpanId.get(event.parentSpanId) : undefined) ||
+    const host = (event.parentSpanId ? assistantBySpanId.get(event.parentSpanId) : undefined) ||
+      (ownerSubagentId ? subagentBySessionId.get(ownerSubagentId) : undefined) ||
       [...interactions].reverse().find((interaction) => {
         if (interaction.role !== 'assistant' && interaction.role !== 'subagent') return false;
         return Date.parse(String(interaction.timestamp || '')) <= (event.startTimeMs || Number.POSITIVE_INFINITY);
@@ -402,7 +413,13 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     // spool-isolation key and must never replace the real Agent Insight user.
     user: root.user || 'anonymous',
     authenticated_ingest: ordered.some((event) => event.authenticatedUser === true),
-    interactions,
+    interactions: (() => {
+      const unassigned = parseJson(rootAttrs['agent_insight.inference.unassigned_calls']);
+      if (Array.isArray(unassigned) && unassigned.length) interactions.push({
+        role: 'system', content: '', inference_session_id: sessionId, inference_unassigned_calls: unassigned,
+      });
+      return interactions;
+    })(),
     qoder_quest: questEvents.length ? {
       mode: firstText(rootAttrs['qoder.session.mode'], questEvents[0]?.attributes?.['qoder.quest.mode']),
       goals: questEvents.filter((event) => event.attributes?.['qoder.quest.kind'] === 'goal').map((event) => ({
