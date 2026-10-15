@@ -20,7 +20,7 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 
 ## 管理员导入 Benchmark 数据集
 
-SWE-bench Verified 默认随 Agent Insight 服务启动自动准备和导入。配置位于项目 `config/platform.yaml`，本机覆盖写入 `config/platform.local.yaml`；没有版本字段。`benchmarks.swe-bench.dataset.autoImport` 默认 `true`，设置为 `false` 只跳过启动时自动导入，已有数据集与管理员手动导入仍可使用。直接执行：
+SWE-bench Verified 默认随 Agent Insight 服务启动自动准备和导入。配置位于项目 `config/benchmark/platform.yaml`，本机覆盖写入 `config/benchmark/platform.local.yaml`；没有版本字段。`benchmarks.swe-bench.dataset.autoImport` 默认 `true`，设置为 `false` 只跳过启动时自动导入，已有数据集与管理员手动导入仍可使用。直接执行：
 
 ```bash
 bash scripts/start.sh
@@ -30,7 +30,7 @@ bash scripts/start.sh
 
 准备或导入失败会显示简短警告，继续启动服务；SWE-bench Verified 相关实验暂不可用。详细错误记录在 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），下次启动自动重试。修复后也可在项目根目录运行 `npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts` 单独重试。
 
-网络受限时，可在平台项目的 `config/platform.local.yaml` 中设置内网镜像地址或本机文件：
+网络受限时，可在平台项目的 `config/benchmark/platform.local.yaml` 中设置内网镜像地址或本机文件：
 
 ```yaml
 benchmarks:

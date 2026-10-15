@@ -122,7 +122,7 @@ function warnLegacy(scope, env = process.env, warn = console.warn) {
     const key = `${scope}:${name}`
     if (env[name] !== undefined && !warned.has(key)) {
       warned.add(key)
-      warn(`⚠ ${name} 已迁移至 config/${scope}.local.yaml 的 ${field}，不再生效。`)
+      warn(`⚠ ${name} 已迁移至 config/benchmark/${scope}.local.yaml 的 ${field}，不再生效。`)
     }
   }
 }
@@ -159,7 +159,7 @@ function loadProjectConfig(scope, options = {}) {
   } else {
     const root = options.root || env.AGENT_INSIGHT_PACKAGE_ROOT || path.resolve(__dirname, '../..')
     const configuredDir = options.configDir || env.AGENT_INSIGHT_CONFIG_DIR
-    const directory = configuredDir ? path.resolve(root, configuredDir) : path.join(root, 'config')
+    const directory = configuredDir ? path.resolve(root, configuredDir) : path.join(root, 'config', 'benchmark')
     for (const suffix of ['', '.local']) {
       const filePath = path.resolve(directory, `${scope}${suffix}.yaml`)
       let text
@@ -175,10 +175,10 @@ function loadProjectConfig(scope, options = {}) {
   if (scope === 'evaluator') {
     const images = config.benchmarks['swe-bench'].images
     if (images.source === 'epoch' && (!images.allowNonOfficial || images.arch === 'x86_64')) {
-      throw new Error('config/evaluator.yaml: benchmarks.swe-bench.images.source=epoch 需要允许非官方镜像且使用 ARM64')
+      throw new Error('config/benchmark/evaluator.yaml: benchmarks.swe-bench.images.source=epoch 需要允许非官方镜像且使用 ARM64')
     }
     if (config.imagePool.enabled && config.imagePool.prefetchEnabled && config.imagePool.maxPulls < 2) {
-      throw new Error('config/evaluator.yaml: imagePool.maxPulls 开启预取时至少为 2')
+      throw new Error('config/benchmark/evaluator.yaml: imagePool.maxPulls 开启预取时至少为 2')
     }
   }
   return config

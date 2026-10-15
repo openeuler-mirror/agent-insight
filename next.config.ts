@@ -24,10 +24,7 @@ const nextConfig: NextConfig = {
   // 1GB+ of local logs, bloating the npm package non-deterministically per machine).
   outputFileTracingExcludes: {
     '*': [
-      'packages/project-config/**',
-      'config/platform.yaml',
-      'config/evaluator.yaml',
-      'config/executor.yaml',
+      'config/**/*.local.yaml',
       '.git/**',
       'tmp/**',
       '*.tar',
@@ -54,6 +51,10 @@ const nextConfig: NextConfig = {
       'services/executor/src/mcts-config.cjs',
     ],
     '*': [
+      'packages/project-config/**',
+      'config/benchmark/platform.yaml',
+      'config/benchmark/evaluator.yaml',
+      'config/benchmark/executor.yaml',
       'node_modules/next/dist/server/mcp/**/*',
       'node_modules/next/dist/next-devtools/**/*',
       'node_modules/next/dist/lib/metadata/**/*',

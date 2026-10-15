@@ -52,7 +52,7 @@ WORKDIR /app
 
 COPY services/evaluator/src/evaluator-registry.cjs ./services/evaluator/src/evaluator-registry.cjs
 COPY packages/project-config ./packages/project-config
-COPY config/evaluator.yaml ./config/evaluator.yaml
+COPY config/benchmark/evaluator.yaml ./config/benchmark/evaluator.yaml
 COPY benchmarks/swe-bench ./benchmarks/swe-bench
 
 ENV EVALUATOR_LISTEN_HOST=0.0.0.0 \

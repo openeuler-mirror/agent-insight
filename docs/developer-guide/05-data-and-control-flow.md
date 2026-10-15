@@ -49,7 +49,7 @@ evaluator.sh images {list|purge} → 管理容器 → 数据卷内 manager.sock
 
 Benchmark 在同一事务中领取 pending Case、校验实验执行额度，以及全平台和每用户执行中或尚未完成评测的 Case 数量上限。执行器提交终态后释放执行额度并补位，评测独立持久化到 Evaluation/Outbox。平台按评测服务地址及用户预留名额，Controller 再通过串行化接收和持久化 accepted 状态防止同时请求超卖。接收未知保留名额，用同一 Run 和摘要重试；资源等待不触发 queued 的 300 秒失败。
 
-镜像候选从持久化 Case 状态生成，全服务准备窗口最多为 `config/evaluator.yaml` 的 `maxConcurrency + 1`。平台通过现有 `POST /api/v1/evaluations` 的 `prepare-images` 操作下发全量 `windows`（含 Case ID），Controller 原子替换窗口并保存全局 revision，拒绝迟到消息，重启后重新对账。镜像按需就绪后才接收评测，正式任务硬保护与准备窗口软保护分开管理。
+镜像候选从持久化 Case 状态生成，全服务准备窗口最多为 `config/benchmark/evaluator.yaml` 的 `maxConcurrency + 1`。平台通过现有 `POST /api/v1/evaluations` 的 `prepare-images` 操作下发全量 `windows`（含 Case ID），Controller 原子替换窗口并保存全局 revision，拒绝迟到消息，重启后重新对账。镜像按需就绪后才接收评测，正式任务硬保护与准备窗口软保护分开管理。
 
 客户端为普通 Case 隔离临时目录，Benchmark 继续使用每 Run 的工作区。活动进程与取消上下文按 Run 管理，长轮询收取命令不再等待普通 Case 完成。`components.concurrent-execution/v1.ready` 用于拒绝将大于 1 的并发下发到旧客户端；Skill/FI 保留原有互斥。
 

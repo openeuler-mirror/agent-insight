@@ -30,7 +30,7 @@ WORKDIR /app
 
 COPY services/evaluator ./services/evaluator
 COPY packages/project-config ./packages/project-config
-COPY config/evaluator.yaml ./config/evaluator.yaml
+COPY config/benchmark/evaluator.yaml ./config/benchmark/evaluator.yaml
 COPY benchmarks ./benchmarks
 COPY generated/benchmark-catalog/evaluators.cjs ./generated/benchmark-catalog/evaluators.cjs
 

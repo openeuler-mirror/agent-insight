@@ -23,7 +23,7 @@ const clientFiles = [
   'scripts/fi-worker.js',
   'packages/project-config/index.cjs',
   'packages/project-config/yaml.cjs',
-  'config/executor.yaml',
+  'config/benchmark/executor.yaml',
   'services/executor/src/index.cjs',
   'services/executor/src/mcts-options.cjs',
   'services/executor/src/mcts-config.cjs',

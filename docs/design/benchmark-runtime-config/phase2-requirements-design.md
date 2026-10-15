@@ -1,6 +1,6 @@
 # Benchmark 业务配置文件：需求设计
 
-`config/platform.yaml` 管理数据准备和平台调度，`config/evaluator.yaml` 管理评测并发、SWE-bench 运行配置与镜像池，`config/executor.yaml` 管理 Case Git 来源。
+`config/benchmark/platform.yaml` 管理数据准备和平台调度，`config/benchmark/evaluator.yaml` 管理评测并发、SWE-bench 运行配置与镜像池，`config/benchmark/executor.yaml` 管理 Case Git 来源。
 
 加载顺序为程序默认值、项目 YAML、同目录 `*.local.yaml`。对象深度覆盖，数组整体替换；可为空的字段通过 `null` 恢复默认语义。本地覆盖不提交 Git。相对路径按声明文件目录解析；Evaluator Python 是容器内命令或绝对路径。
 

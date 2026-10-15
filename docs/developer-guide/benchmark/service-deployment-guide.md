@@ -94,9 +94,9 @@ AGENT_INSIGHT_PORT=3000
 
 旧变量 `PORT` 不再支持。
 
-Benchmark 业务配置按进程分开：平台读取项目 `config/platform.yaml`，评测读取 `config/evaluator.yaml`，执行客户端读取 `config/executor.yaml`。各自的 `*.local.yaml` 深度覆盖项目默认文件，未指定字段使用程序默认值；数组整体替换，`null` 恢复默认。配置文件不设 `version` 字段，未知字段和错误类型会明确报错。相对路径按所在配置文件目录解析；Evaluator Python 使用容器内命令名或绝对路径。
+Benchmark 业务配置按进程分开：平台读取项目 `config/benchmark/platform.yaml`，评测读取 `config/benchmark/evaluator.yaml`，执行客户端读取 `config/benchmark/executor.yaml`。各自的 `*.local.yaml` 深度覆盖项目默认文件，未指定字段使用程序默认值；数组整体替换，`null` 恢复默认。配置文件不设 `version` 字段，未知字段和错误类型会明确报错。相对路径按所在配置文件目录解析；Evaluator Python 使用容器内命令名或绝对路径。
 
-本机覆盖文件不提交 Git。`AGENT_INSIGHT_CONFIG_DIR` 可选择其他配置目录；默认由安装根定位，不依赖当前工作目录。业务环境变量不参与覆盖，残留变量会提示迁移。端口、数据库连接、密钥、运行目录及服务通信地址仍保留环境配置，通信地址现有的热更新机制保持不变。
+本机覆盖文件不提交 Git。默认从安装根下的 `config/benchmark/` 加载，不依赖当前工作目录；`AGENT_INSIGHT_CONFIG_DIR` 可指定直接包含这三个 YAML 文件的其他目录，不会再自动追加子目录。业务环境变量不参与覆盖，残留变量会提示迁移。端口、数据库连接、密钥、运行目录及服务通信地址仍保留环境配置，通信地址现有的热更新机制保持不变。
 
 
 ### 3.3 启动与验证
@@ -125,7 +125,7 @@ bash scripts/start.sh --port 3100
 
 ### 4.2 随服务启动自动安装
 
-启动 Agent Insight 时，`config/platform.yaml` 的 `benchmarks.swe-bench.dataset.autoImport` 默认 `true`：
+启动 Agent Insight 时，`config/benchmark/platform.yaml` 的 `benchmarks.swe-bench.dataset.autoImport` 默认 `true`：
 
 ```bash
 bash scripts/start.sh
@@ -143,7 +143,7 @@ npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts
 
 独立导入失败时返回非零退出码，便于管理员检查结果。
 
-如需内网或离线来源，在项目 `config/platform.local.yaml` 中配置：
+如需内网或离线来源，在项目 `config/benchmark/platform.local.yaml` 中配置：
 
 ```yaml
 benchmarks:
@@ -209,7 +209,7 @@ bash scripts/evaluator.sh start \
 | `--platform-base-url URL` | Evaluator 回访 Agent Insight 的地址 |
 | `--port PORT` | Evaluator 对外端口，默认 `3001` |
 | `--bind-address ADDRESS` | Evaluator 监听地址，默认 `0.0.0.0` |
-| `--evaluator-env NAME=VALUE` | 传入环境参数；业务配置改用 `config/evaluator.local.yaml` |
+| `--evaluator-env NAME=VALUE` | 传入环境参数；业务配置改用 `config/benchmark/evaluator.local.yaml` |
 
 验证 Evaluator：
 
@@ -222,7 +222,7 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 
 ### 5.3 可选：跨 Benchmark 共享镜像池
 
-镜像池和提前准备默认开启，同一 Docker daemon 上的不同 Benchmark 和用户共享镜像池。策略在评测机项目 `config/evaluator.local.yaml` 设置，例如关闭预取：
+镜像池和提前准备默认开启，同一 Docker daemon 上的不同 Benchmark 和用户共享镜像池。策略在评测机项目 `config/benchmark/evaluator.local.yaml` 设置，例如关闭预取：
 
 ```yaml
 imagePool:
@@ -243,12 +243,12 @@ SWE-bench 镜像来源、架构、非官方许可、代理和镜像仓库在 `be
 
 | 配置 | 设置位置 | 默认值 | 含义 |
 |---|---|---:|---|
-| `maxConcurrency` | `config/evaluator.local.yaml` | 1 | Evaluator 同时运行的 Case 数 |
-| `benchmarks.scheduling.maxEvaluationConcurrencyPerUser` | `config/platform.local.yaml` | `null`，跟随 Evaluator 总并发 | 单用户跨实验评测并发 |
-| `benchmarks.scheduling.maxPendingEvaluations` | `config/platform.local.yaml` | 256 | 全平台执行中或待评测 Case 上限 |
-| `benchmarks.scheduling.maxPendingEvaluationsPerUser` | `config/platform.local.yaml` | 128 | 每用户执行中或待评测 Case 上限 |
+| `maxConcurrency` | `config/benchmark/evaluator.local.yaml` | 1 | Evaluator 同时运行的 Case 数 |
+| `benchmarks.scheduling.maxEvaluationConcurrencyPerUser` | `config/benchmark/platform.local.yaml` | `null`，跟随 Evaluator 总并发 | 单用户跨实验评测并发 |
+| `benchmarks.scheduling.maxPendingEvaluations` | `config/benchmark/platform.local.yaml` | 256 | 全平台执行中或待评测 Case 上限 |
+| `benchmarks.scheduling.maxPendingEvaluationsPerUser` | `config/benchmark/platform.local.yaml` | 128 | 每用户执行中或待评测 Case 上限 |
 
-显式并发和数量上限须为正整数。比如将 Evaluator 总并发设为 2，在评测机 `config/evaluator.local.yaml` 写入：
+显式并发和数量上限须为正整数。比如将 Evaluator 总并发设为 2，在评测机 `config/benchmark/evaluator.local.yaml` 写入：
 
 ```yaml
 maxConcurrency: 2
@@ -314,7 +314,7 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 
 ### 7.1 配置 SWE-bench Case 源码来源（可选）
 
-在 Agent 执行机项目的 `config/executor.local.yaml` 配置；安装版常驻客户端对应目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/`。安装升级会更新默认文件、保留 local 文件，也可由 `AGENT_INSIGHT_CONFIG_DIR` 指定配置目录。
+在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；安装版常驻客户端对应目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`。安装升级会更新默认文件、保留 local 文件；旧目录下的 `config/executor.local.yaml` 会在新目录尚无覆盖文件时迁移，并保留原相对 Git 路径的实际位置。也可由 `AGENT_INSIGHT_CONFIG_DIR` 指定配置目录。
 
 ```yaml
 benchmarks:

@@ -42,7 +42,7 @@ const BUNDLES: Record<string, string[]> = {
     'scripts/fi-worker.js',
     'services/executor/src',
     'packages/project-config',
-    'config/executor.yaml',
+    'config/benchmark/executor.yaml',
     'agent_ras/platform_adapter/opencode/config_sync.js',
     'agent_fault_injection',
   ],

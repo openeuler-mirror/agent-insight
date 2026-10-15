@@ -193,10 +193,10 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   copyDirIfMissing(scriptsDir, standaloneScriptsDir, 'Scripts')
   const configurationRuntime = path.join(packageRoot, 'packages', 'project-config')
   copyDirIfMissing(configurationRuntime, path.join(standaloneDir, 'packages', 'project-config'), 'Project configuration runtime')
-  fs.mkdirSync(path.join(standaloneDir, 'config'), { recursive: true })
+  fs.mkdirSync(path.join(standaloneDir, 'config', 'benchmark'), { recursive: true })
   for (const scope of ['platform', 'evaluator', 'executor']) {
-    const source = path.join(packageRoot, 'config', `${scope}.yaml`)
-    if (fs.existsSync(source)) fs.copyFileSync(source, path.join(standaloneDir, 'config', `${scope}.yaml`))
+    const source = path.join(packageRoot, 'config', 'benchmark', `${scope}.yaml`)
+    if (fs.existsSync(source)) fs.copyFileSync(source, path.join(standaloneDir, 'config', 'benchmark', `${scope}.yaml`))
   }
   copyLlamaIndexCollector(packageRoot, standaloneDir)
 

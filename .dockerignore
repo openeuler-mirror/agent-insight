@@ -15,6 +15,7 @@
 !packages/project-config/
 !packages/project-config/**
 !config/
-!config/platform.yaml
-!config/evaluator.yaml
-!config/executor.yaml
+!config/benchmark/
+!config/benchmark/platform.yaml
+!config/benchmark/evaluator.yaml
+!config/benchmark/executor.yaml

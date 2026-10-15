@@ -28,7 +28,7 @@ Defaults: --bind-address 0.0.0.0 --port 3001.
 Port precedence: --port > AGENT_INSIGHT_EVALUATOR_PORT in process environment
 > $AGENT_INSIGHT_HOME/.env (default: $HOME/.agent-insight/.env) > 3001.
 The container always listens on 8080. Legacy PORT is not supported.
-Business settings come from config/evaluator.yaml and config/evaluator.local.yaml.
+Business settings come from config/benchmark/evaluator.yaml and config/benchmark/evaluator.local.yaml.
 AGENT_INSIGHT_CONFIG_DIR can select another configuration directory.
 The command always builds the generic Controller image. Benchmark runtimes are resolved
 from the generated Catalog only when an evaluation task requires them.
@@ -268,7 +268,7 @@ if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
       PORT=*|EVALUATOR_PORT=*|AGENT_INSIGHT_PORT=*|AGENT_INSIGHT_EVALUATOR_PORT=*)
         fail '端口不能通过 --evaluator-env 设置；请使用 --port 或 AGENT_INSIGHT_EVALUATOR_PORT' ;;
       SWE_BENCH_*=*|SWEBENCH_*=*|EVALUATOR_MAX_CONCURRENCY=*|IMAGE_POOL_ENABLED=*|IMAGE_POOL_PREFETCH_ENABLED=*|IMAGE_POOL_RESERVE_RATIO=*|IMAGE_POOL_HIGH_WATERMARK=*|IMAGE_POOL_MAX_PULLS=*|IMAGE_POOL_WAIT_SECONDS=*|IMAGE_POOL_MAC_DISK_PATH=*)
-        printf '警告：%s 已迁移至 config/evaluator.local.yaml，不再生效。\n' "${evaluator_env%%=*}" >&2
+        printf '警告：%s 已迁移至 config/benchmark/evaluator.local.yaml，不再生效。\n' "${evaluator_env%%=*}" >&2
         continue ;;
     esac
     RETAINED_EVALUATOR_ENV+=("$evaluator_env")
@@ -279,7 +279,7 @@ fi
 
 for legacy_name in EVALUATOR_MAX_CONCURRENCY SWE_BENCH_PYTHON SWE_BENCH_IMAGE_SOURCE SWE_BENCH_IMAGE_ARCH SWE_BENCH_ALLOW_NON_OFFICIAL SWE_BENCH_IMAGE_PROXY_PREFIX SWE_BENCH_VERIFIED_MIRROR_REPOS SWEBENCH_DOCKER_TIMEOUT SWEBENCH_DOCKER_POOL_SIZE IMAGE_POOL_ENABLED IMAGE_POOL_PREFETCH_ENABLED IMAGE_POOL_RESERVE_RATIO IMAGE_POOL_HIGH_WATERMARK IMAGE_POOL_MAX_PULLS IMAGE_POOL_WAIT_SECONDS IMAGE_POOL_MAC_DISK_PATH; do
   if [ "${!legacy_name+x}" = x ]; then
-    printf '警告：%s 已迁移至 config/evaluator.local.yaml，不再生效。\n' "$legacy_name" >&2
+    printf '警告：%s 已迁移至 config/benchmark/evaluator.local.yaml，不再生效。\n' "$legacy_name" >&2
   fi
 done
 
@@ -358,12 +358,12 @@ fi
 IMAGE_ID=$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}')
 [ -n "$IMAGE_ID" ] || fail '无法读取 Controller image ID'
 
-PROJECT_CONFIG_DIR=${AGENT_INSIGHT_CONFIG_DIR:-$REPOSITORY_ROOT/config}
+PROJECT_CONFIG_DIR=${AGENT_INSIGHT_CONFIG_DIR:-$REPOSITORY_ROOT/config/benchmark}
 PROJECT_CONFIG_DIR=$(CDPATH= cd -- "$PROJECT_CONFIG_DIR" && pwd) || fail '配置目录不存在'
 PROJECT_CONFIG_OUTPUT=$(docker run --rm --pull never --network none --read-only \
   --mount "type=bind,src=$PROJECT_CONFIG_DIR,dst=/project-config,readonly" \
   --entrypoint node "$IMAGE_ID" /app/packages/project-config/index.cjs evaluator /project-config "$PROJECT_CONFIG_DIR" --deployment) \
-  || fail 'Evaluator 配置无效，未停止旧服务；请检查 config/evaluator.yaml 和本地覆盖文件'
+  || fail 'Evaluator 配置无效，未停止旧服务；请检查 config/benchmark/evaluator.yaml 和本地覆盖文件'
 PROJECT_CONFIG_LINES=()
 while IFS= read -r config_line; do PROJECT_CONFIG_LINES+=("$config_line"); done <<< "$PROJECT_CONFIG_OUTPUT"
 PROJECT_CONFIG_JSON=${PROJECT_CONFIG_LINES[0]}

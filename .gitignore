@@ -35,7 +35,7 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env.local
 .env
-/config/*.local.yaml
+/config/**/*.local.yaml
 
 # custom model config (copy from custom-models.example.json)
 custom-models.json

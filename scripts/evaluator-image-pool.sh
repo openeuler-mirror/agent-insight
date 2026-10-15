@@ -63,7 +63,7 @@ evaluator_image_pool_mac_path() {
   case "$POOL_MAC_DISK_PATH" in *','*|*$'\n'*) fail 'imagePool.macDiskPath 包含不支持的字符' ;; esac
   host_device=$(stat -L -f '%d' "$POOL_MAC_DISK_PATH") || fail '无法读取 Mac 探测目录的文件系统'
   image_device=$(stat -L -f '%d' "$disk_image") || fail '无法读取 Docker.raw 的文件系统'
-  [ "$host_device" = "$image_device" ] || fail 'Mac 探测目录与 Docker.raw 不在同一文件系统；请在 config/evaluator.local.yaml 的 imagePool.macDiskPath 指定同盘的空共享目录'
+  [ "$host_device" = "$image_device" ] || fail 'Mac 探测目录与 Docker.raw 不在同一文件系统；请在 config/benchmark/evaluator.local.yaml 的 imagePool.macDiskPath 指定同盘的空共享目录'
 }
 
 evaluator_image_pool_env() {

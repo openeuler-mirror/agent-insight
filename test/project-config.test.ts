@@ -10,8 +10,8 @@ const require = createRequire(import.meta.url)
 
 function fixture(t: any) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'project-config-'))
-  const configDir = path.join(root, 'config')
-  fs.mkdirSync(configDir)
+  const configDir = path.join(root, 'config', 'benchmark')
+  fs.mkdirSync(configDir, { recursive: true })
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const write = (name: string, value: unknown) => fs.writeFileSync(path.join(configDir, name), typeof value === 'string' ? value : JSON.stringify(value))
   return { root, configDir, write, options: { configDir, env: {} } }
@@ -26,6 +26,8 @@ test('defaults, scoped files and local overrides need no version field', (t) => 
   assert.equal(platform.benchmarks.scheduling.maxPendingEvaluations, 50)
   assert.equal(platform.benchmarks.scheduling.maxPendingEvaluationsPerUser, 128)
   assert.equal(platform.benchmarks['swe-bench'].dataset.autoImport, false)
+  assert.deepEqual(loadProjectConfig('platform', { root: f.root, env: {} }), platform)
+  assert.equal(loadProjectConfig('evaluator', { root: f.root, env: {} }).maxConcurrency, 3)
   assert.equal(loadProjectConfig('evaluator', f.options).maxConcurrency, 3)
   assert.equal(loadProjectConfig('executor', f.options).benchmarks['swe-bench'].gitSource, null)
   f.write('platform.local.yaml', { version: 1 })
@@ -36,7 +38,7 @@ test('configuration resolves paths by the declaring file and distinguishes null 
   const f = fixture(t)
   f.write('platform.local.yaml', { benchmarks: { 'swe-bench': { dataset: { source: '../datasets/test.parquet' }, loader: { sourceArchive: 'https://mirror.example/archive.tar.gz', python: '~/python/bin/python' } } } })
   const platform = loadProjectConfig('platform', f.options).benchmarks['swe-bench']
-  assert.equal(platform.dataset.source, path.join(f.root, 'datasets/test.parquet'))
+  assert.equal(platform.dataset.source, path.join(f.root, 'config/datasets/test.parquet'))
   assert.equal(platform.loader.sourceArchive, 'https://mirror.example/archive.tar.gz')
   assert.equal(platform.loader.python, path.join(os.homedir(), 'python/bin/python'))
   f.write('evaluator.yaml', { benchmarks: { 'swe-bench': { images: { verifiedMirrorRepositories: ['registry.example/swe'] } } } })
@@ -81,15 +83,15 @@ test('Evaluator deployment produces a validated snapshot with host paths and no 
   const runtime = path.join(f.root, 'packages', 'project-config')
   fs.cpSync(path.resolve('packages/project-config'), runtime, { recursive: true })
   f.write('evaluator.local.yaml', { maxConcurrency: 4, imagePool: { macDiskPath: '../probe' }, benchmarks: { 'swe-bench': { docker: { requestTimeoutSeconds: 99 } } } })
-  const cli = spawnSync(process.execPath, [path.join(runtime, 'index.cjs'), 'evaluator', f.configDir, '/host/project/config', '--deployment'], { encoding: 'utf8', env: {} })
+  const cli = spawnSync(process.execPath, [path.join(runtime, 'index.cjs'), 'evaluator', f.configDir, '/host/project/config/benchmark', '--deployment'], { encoding: 'utf8', env: {} })
   assert.equal(cli.status, 0, cli.stderr)
   const lines = cli.stdout.trim().split('\n')
   assert.equal(lines[1], 'true')
-  assert.equal(lines[2], '/host/project/probe')
+  assert.equal(lines[2], '/host/project/config/probe')
   const snapshot = loadProjectConfig('evaluator', { configDir: '/missing', env: { AGENT_INSIGHT_EVALUATOR_CONFIG_JSON: lines[0] } })
   assert.equal(snapshot.maxConcurrency, 4)
   assert.equal(snapshot.benchmarks['swe-bench'].docker.requestTimeoutSeconds, 99)
-  assert.equal(snapshot.imagePool.macDiskPath, '/host/project/probe')
+  assert.equal(snapshot.imagePool.macDiskPath, '/host/project/config/probe')
 })
 
 test('disabled or invalid auto-import configuration never starts the importer or prevents startup', (t) => {
@@ -118,7 +120,7 @@ test('installed client runtime loads its own executor configuration and retains 
     const path = require('node:path');
     const installer = require('./scripts/install-ras-client.js');
     installer.installRuntime();
-    const local = path.join(installer.RUNTIME_DIR, 'config/executor.local.yaml');
+    const local = path.join(installer.RUNTIME_DIR, 'config/benchmark/executor.local.yaml');
     fs.writeFileSync(local, JSON.stringify({benchmarks:{'swe-bench':{gitSource:'https://git.example.com'}}}));
     installer.installRuntime();
     const {SweBenchGitSourcePolicy} = require(path.join(installer.RUNTIME_DIR, 'executor/benchmarks/swe-bench.cjs'));
@@ -131,7 +133,44 @@ test('installed client runtime loads its own executor configuration and retains 
   delete env.AGENT_INSIGHT_PACKAGE_ROOT
   const child = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8', env })
   assert.equal(child.status, 0, child.stderr)
-  assert.ok(fs.existsSync(path.join(clientHome, 'client/runtime/config/executor.local.yaml')))
+  assert.ok(fs.existsSync(path.join(clientHome, 'client/runtime/config/benchmark/executor.local.yaml')))
+})
+
+test('custom configuration directory directly contains scoped files without an extra benchmark suffix', (t) => {
+  const f = fixture(t)
+  const customDir = path.join(f.root, 'deployment-config')
+  fs.mkdirSync(customDir)
+  fs.writeFileSync(path.join(customDir, 'platform.yaml'), 'benchmarks:\n  swe-bench:\n    dataset:\n      autoImport: false\n')
+  const config = loadProjectConfig('platform', { root: f.root, env: { AGENT_INSIGHT_CONFIG_DIR: customDir } })
+  assert.equal(config.benchmarks['swe-bench'].dataset.autoImport, false)
+})
+
+test('client upgrade migrates legacy local Git paths without overriding a newer local file', (t) => {
+  const f = fixture(t)
+  const env = { ...process.env, AGENT_INSIGHT_HOME: path.join(f.root, 'home') }
+  delete env.AGENT_INSIGHT_CONFIG_DIR
+  delete env.AGENT_INSIGHT_PACKAGE_ROOT
+  const child = spawnSync(process.execPath, ['-e', `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const assert = require('node:assert/strict');
+    const installer = require('./scripts/install-ras-client.js');
+    const legacyDir = path.join(installer.RUNTIME_DIR, 'config');
+    fs.mkdirSync(legacyDir, {recursive:true});
+    const legacyLocal = path.join(legacyDir, 'executor.local.yaml');
+    const legacyText = 'benchmarks:\\n  swe-bench:\\n    gitSource: ../git-cache\\n';
+    fs.writeFileSync(legacyLocal, legacyText);
+    installer.installRuntime();
+    const {loadProjectConfig} = require(path.join(installer.RUNTIME_DIR, 'packages/project-config/index.cjs'));
+    const options = {root:installer.RUNTIME_DIR,env:{}};
+    assert.equal(loadProjectConfig('executor', options).benchmarks['swe-bench'].gitSource, path.join(installer.RUNTIME_DIR,'git-cache'));
+    assert.equal(fs.readFileSync(legacyLocal,'utf8'),legacyText);
+    const currentLocal = path.join(legacyDir,'benchmark/executor.local.yaml');
+    fs.writeFileSync(currentLocal,'benchmarks:\\n  swe-bench:\\n    gitSource: https://new.example/git\\n');
+    installer.installRuntime();
+    assert.equal(loadProjectConfig('executor', options).benchmarks['swe-bench'].gitSource,'https://new.example/git');
+  `], { env, encoding: 'utf8' })
+  assert.equal(child.status, 0, child.stderr)
 })
 
 test('Controller and SWE-bench Evaluator consume the same validated deployment snapshot', (t) => {
