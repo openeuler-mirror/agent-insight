@@ -164,31 +164,26 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 Qoder / OpenCode 链路顶部的 **推理分析** 对应整条链路；选中 LLM 后，右侧详情及时间线详情弹窗中的同名入口对应单次模型调用。经过统一入口时展示可复制的 **模型调用 ID**；一次 LLM 重试可包含多个 ID，整体入口汇总全部 ID。Qoder 无法确定失败尝试属于哪个 LLM 时，整体入口单独列出 **未确定所属 LLM 的调用 ID**，不会把它挂到某个子 Agent。历史数据仍展示原生请求/响应标识。当前第三方页面地址尚未配置，外部打开按钮暂不可用。
 
-### 配置本地统一推理入口
+### 自动接入本地统一推理入口
 
-在 Agent 所在机器使用 Node.js 启动仓库中的 `scripts/inference_gateway.mjs`。网关与已安装采集器使用同一 `AGENT_INSIGHT_HOME` 和采集账号。以下配置只包含示例地址，可保存为 `inference-gateway.json`：
+在“客户端安装”中选择 Qoder 或 OpenCode，执行 Linux/macOS 的 curl 安装命令即可。安装器先启动并检查本机转发进程，再备份配置、改写已识别 Provider 的模型地址。继续使用原来的模型名、Provider 名和 API Key；在已托管的模型之间切换，无需手动填写转发地址。
 
-```json
-{
-  "host": "127.0.0.1",
-  "port": 18080,
-  "timeoutMs": 300000,
-  "routes": [
-    { "basePath": "/qoder/v1", "agent": "qoder", "protocol": "openai", "upstreamBaseUrl": "https://inference.example.com/v1" },
-    { "basePath": "/opencode/v1", "agent": "opencode", "protocol": "openai", "upstreamBaseUrl": "https://inference.example.com/v1" }
-  ]
-}
-```
+目前自动接入覆盖 Qoder CN CLI 的自定义 OpenAI-compatible Provider，以及 OpenCode 的 OpenAI-compatible、OpenAI、Anthropic 显式 Base URL。Qoder CLI 通过受管 `qoderclicn` 启动入口在原进程读配置前同步；`qodercn` 的 CLI 分支也会经过它。OpenCode 由插件处理最终合并配置，项目配置和环境内联配置中新增的 Provider 也在模型加载前处理。API Key 仍按原模型协议传给原上游，`AGENT_INSIGHT_API_KEY` 只用于平台采集账号。
+
+- **切换模型**：已托管 Provider 下的模型、主 Agent / 子 Agent / 辅助模型均使用同一入口，每次实际 HTTP 请求生成新的调用 ID。
+- **新增或修改 Provider**：后台同步已登记的配置文件。OpenCode 在重新加载配置时同步；Qoder 运行中通过 `/model` 新增或修改 Provider 后，需重新启动 CLI，确保新地址在首次请求前接入。后台轮询不保证运行中的下一次请求没有绕过窗口。
+- **升级 Qoder**：后台会重新绑定同目录下由 Qoder 升级器替换的版本链接。升级后应重新运行安装命令并重启 CLI，确认启动器仍受管；绕过受管命令直接运行版本二进制不在自动接入范围。
+- **恢复**：先结束正在运行的 Agent 会话，再执行以下一条命令。恢复地址完成后关闭转发进程，保留模型、Provider、权限等后续修改；用户已经自行修改的地址和启动入口不会被覆盖。恢复后重新启动 Agent。
 
 ```bash
-node scripts/inference_gateway.mjs ./inference-gateway.json
+sh "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/restore_inference_proxy.sh"
 ```
 
-Qoder 自定义模型的 Base URL 填 `http://127.0.0.1:18080/qoder/v1`；OpenCode 对应 Provider 的 `options.baseURL` 填 `http://127.0.0.1:18080/opencode/v1`。主 Agent、子 Agent 和辅助模型若使用不同 Provider，都需要指向入口。保持模型名和协议与实际推理服务一致。Qoder CLI 自定义模型能力依版本和账号的 `/model` 向导而定，不能假设所有内置模型支持改地址。
+首次原文件字节备份保存在 `AGENT_INSIGHT_HOME/inference-proxy/backups`，重复安装不会覆盖，文件权限为 600。备份可能包含原配置中的模型密钥，只保留在本机。同步和恢复遇到无效配置或备份损坏会明确失败，请先修复文件再重试；不要手动删除备份或状态文件。
 
-模型 API Key 默认原样透传。若希望由入口统一提供模型认证，在对应 route 增加 `"apiKeyEnv": "INFERENCE_API_KEY"`，并在启动进程的环境中提供该变量；不要把密钥写入示例配置。`AGENT_INSIGHT_API_KEY` 是平台采集账号凭据，与模型 API Key 不同。
+推理服务统一读取 `X-Agent-Insight-Call-Id` 并为它建立索引；503 等失败请求也已携带 ID。整条 Trace 汇总调用 ID，成功模型调用对应具体 LLM；Qoder 无法精确归属的失败尝试留在整条 Trace。推理分析页面 URL 仍待对接。
 
-推理服务按固定请求头 `X-Agent-Insight-Call-Id` 建立索引，即可供后续整体与单次分析页面使用。该入口目前限同机部署，不提供中央网关、远程关联记录同步或自动改写 Agent 配置。运行时关联文件保存在 `AGENT_INSIGHT_HOME/inference-gateway`，完成采集上传之前应保留。
+此自动流程限 Unix CLI 与上述显式模型地址，未覆盖 Qoder 内置账号模型、IDE 私有模型设置、OpenCode 未识别协议或 Windows 自动代理。独立手动入口 `node scripts/inference_gateway.mjs <config.json>` 仍可用；同机采集器和入口必须使用同一 `AGENT_INSIGHT_HOME` 与平台账号。关联文件位于 `inference-gateway`，完成采集上传前应保留。没有部署中央网关或跨机器同步。
 
 从列表点击进入详情，或在导入成功后点击“打开 Trace”，均可用浏览器后退返回原列表，保留原来的筛选条件和页码；浏览器前进可重新打开详情。详情顶部的“返回列表”始终打开当前筛选下的列表，通过分享链接直接进入详情时也可使用。
 

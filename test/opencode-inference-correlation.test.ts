@@ -1,10 +1,167 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import test, { type TestContext } from "node:test"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import http from "node:http"
+import { spawn } from "node:child_process"
+import { pathToFileURL } from "node:url"
+import crypto from "node:crypto"
 import * as plugin from "../scripts/opencode_plugin_otel"
 import { buildAgentCallTree } from "../src/lib/engine/observability/agent-trace"
 
 process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = "1"
 const uploaderPromise = import("../scripts/opencode_uploader_client.js")
+
+function proxyHookFixture(t: TestContext, installed = true) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "opencode proxy #"))
+  const insightDir = path.join(home, ".agent-insight")
+  const directory = path.join(home, "project")
+  fs.mkdirSync(path.join(directory, ".git"), { recursive: true })
+  const runtimeDir = path.join(insightDir, "inference-runtime")
+  if (installed) {
+    fs.mkdirSync(runtimeDir, { recursive: true })
+    for (const file of ["inference_proxy.mjs", "inference_config.mjs", "inference_gateway.mjs"]) {
+      fs.copyFileSync(path.resolve("scripts", file), path.join(runtimeDir, file))
+    }
+  }
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  return { home, insightDir, directory }
+}
+
+async function runProxyConfigHook(fixture: ReturnType<typeof proxyHookFixture>, requestAfterConfigFailure?: string) {
+  const pluginUrl = pathToFileURL(path.resolve("scripts/opencode_plugin_otel.ts")).href
+  const script = `
+    const imported = await import(${JSON.stringify(pluginUrl)})
+    const initialize = imported.default?.default ?? imported.default
+    const hooks = await initialize({ directory: ${JSON.stringify(fixture.directory)} })
+    const originalFetch = async () => new Response('original')
+    const cfg = { provider: { gateway: { npm: '@ai-sdk/openai-compatible', options: {
+      baseURL: 'https://upstream.invalid/v1', apiKey: 'fixture-secret', fetch: originalFetch,
+    } } } }
+    if (${JSON.stringify(requestAfterConfigFailure)} !== undefined) {
+      let configError = '', requestError = ''
+      try { await hooks.config(cfg) } catch (error) { configError = error.message }
+      try { await fetch(${JSON.stringify(requestAfterConfigFailure)}, { method: 'POST', body: '{}' }) }
+      catch (error) { requestError = error.message }
+      process.stdout.write(JSON.stringify({ configError, requestError }))
+      process.exit(0)
+    }
+    await hooks.config(cfg)
+    process.stdout.write(JSON.stringify({
+      baseURL: cfg.provider.gateway.options.baseURL,
+      apiKey: cfg.provider.gateway.options.apiKey,
+      fetchPreserved: cfg.provider.gateway.options.fetch === originalFetch,
+      correlationAvailable: typeof hooks['chat.headers'] === 'function',
+    }))
+  `
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, HOME: fixture.home, AGENT_INSIGHT_HOME: fixture.insightDir,
+    XDG_CONFIG_HOME: path.join(fixture.home, ".config"), OPENCODE_CONFIG: "", OPENCODE_CONFIG_DIR: "",
+    OPENCODE_DISABLE_PROJECT_CONFIG: "false", AGENT_INSIGHT_API_KEY: "", AGENT_INSIGHT_HOST: "",
+    AGENT_INSIGHT_OPENCODE_OTEL_ENABLE: "true", AGENT_INSIGHT_OPENCODE_HEARTBEAT_MS: "0",
+    AGENT_INSIGHT_OPENCODE_SPOOL_DIR: path.join(fixture.home, "spool"),
+    AGENT_INSIGHT_OPENCODE_UPLOADER: path.join(fixture.home, "absent-uploader.js"),
+  }
+  delete env.AGENT_INSIGHT_DATA_DIR
+  return new Promise<{ code: number | null, stdout: string, stderr: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+      cwd: process.cwd(), env, timeout: 10_000, stdio: ["ignore", "pipe", "pipe"],
+    })
+    let stdout = "", stderr = ""
+    child.stdout.on("data", data => { stdout += data })
+    child.stderr.on("data", data => { stderr += data })
+    child.on("error", reject)
+    child.on("close", code => resolve({ code, stdout, stderr }))
+  })
+}
+
+test("OpenCode config hook keeps collection and provider options when proxy runtime is absent or disabled", async t => {
+  for (const installed of [false, true]) {
+    const fixture = proxyHookFixture(t, installed)
+    const result = await runProxyConfigHook(fixture)
+    assert.equal(result.code, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), {
+      baseURL: "https://upstream.invalid/v1", apiKey: "fixture-secret", fetchPreserved: true, correlationAvailable: true,
+    })
+    assert.equal(fs.existsSync(path.join(fixture.insightDir, "inference-proxy")), false)
+  }
+})
+
+test("OpenCode config hook loads the installed proxy before requests and passes the project directory", async t => {
+  const fixture = proxyHookFixture(t)
+  const token = "fixture-control-token"
+  const server = http.createServer((req, res) => {
+    assert.equal(req.url, "/_agent_insight/health")
+    assert.equal(req.headers["x-agent-insight-control"], token)
+    res.setHeader("content-type", "application/json")
+    res.end(JSON.stringify({ instance: token }))
+  })
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) })
+  const root = path.join(fixture.insightDir, "inference-proxy")
+  fs.mkdirSync(root, { recursive: true })
+  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  fs.writeFileSync(path.join(root, "runtime.json"), JSON.stringify({ origin, token, accountHash: crypto.createHash('sha256').update('anonymous').digest('hex').slice(0, 16), runtimePath: fs.realpathSync(path.join(fixture.insightDir, 'inference-runtime/inference_proxy.mjs')) }))
+  fs.writeFileSync(path.join(root, "installation.json"), JSON.stringify({ enabled: true, agents: ["opencode"], files: [], launchers: [] }))
+  const projectConfig = path.join(fixture.directory, "opencode.json")
+  fs.writeFileSync(projectConfig, JSON.stringify({ provider: { project: { npm: "@ai-sdk/openai-compatible", options: { baseURL: "https://project.invalid/v1" } } } }))
+  const result = await runProxyConfigHook(fixture)
+  assert.equal(result.code, 0, result.stderr)
+  const output = JSON.parse(result.stdout)
+  assert.ok(output.baseURL.startsWith(origin + "/managed/opencode/"), output.baseURL)
+  assert.equal(output.apiKey, "fixture-secret")
+  assert.equal(output.fetchPreserved, true)
+  assert.equal(output.correlationAvailable, true)
+  assert.ok(JSON.parse(fs.readFileSync(projectConfig, "utf8")).provider.project.options.baseURL.startsWith(origin + "/managed/opencode/"))
+})
+
+test("OpenCode config hook rejects installed proxy failures instead of allowing direct inference", async t => {
+  const fixture = proxyHookFixture(t)
+  const root = path.join(fixture.insightDir, "inference-proxy")
+  fs.mkdirSync(root, { recursive: true })
+  fs.writeFileSync(path.join(root, "installation.json"), "invalid-installation-json")
+  const result = await runProxyConfigHook(fixture)
+  assert.notEqual(result.code, 0)
+  assert.match(result.stderr, /Agent Insight OpenCode inference proxy configuration failed/)
+  assert.equal(result.stdout, "")
+})
+
+test("OpenCode blocks model requests when the host swallows a managed config failure", async t => {
+  let requests = 0
+  const server = http.createServer((_req, res) => { requests++; res.end('{}') })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) })
+  const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/chat/completions`
+  for (const runtimePresent of [true, false]) {
+    const fixture = proxyHookFixture(t, runtimePresent)
+    const root = path.join(fixture.insightDir, 'inference-proxy')
+    fs.mkdirSync(root, { recursive: true })
+    fs.writeFileSync(path.join(root, 'installation.json'), JSON.stringify({ enabled: true, agents: ['opencode'] }))
+    if (runtimePresent) {
+      fs.writeFileSync(path.join(fixture.insightDir, 'inference-runtime/inference_proxy.mjs'),
+        "export function prepareOpenCodeConfig() { throw new Error('fixture-secret must never escape') }")
+    }
+    const result = await runProxyConfigHook(fixture, endpoint)
+    assert.equal(result.code, 0, result.stderr)
+    const output = JSON.parse(result.stdout)
+    assert.match(output.configError, /Agent Insight OpenCode inference proxy configuration failed/)
+    assert.match(output.requestError, /inference proxy.*blocked/i)
+    assert.doesNotMatch(JSON.stringify(output), /fixture-secret/)
+    assert.equal(requests, 0, 'a swallowed config error must not permit direct model inference')
+  }
+})
+
+test("OpenCode skips a broken runtime when proxy management is disabled", async t => {
+  const fixture = proxyHookFixture(t)
+  const root = path.join(fixture.insightDir, 'inference-proxy')
+  fs.mkdirSync(root, { recursive: true })
+  fs.writeFileSync(path.join(root, 'installation.json'), JSON.stringify({ enabled: false, agents: ['opencode'] }))
+  fs.writeFileSync(path.join(fixture.insightDir, 'inference-runtime/inference_proxy.mjs'), "throw new Error('disabled runtime must not load')")
+  const result = await runProxyConfigHook(fixture)
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).baseURL, 'https://upstream.invalid/v1')
+})
 
 const assistant = (sessionID: string, id: string, parentID = "msg_user") => ({
   id, sessionID, parentID, role: "assistant", agent: "build",
@@ -20,6 +177,25 @@ function create(messages: (id: string) => any[], records: any[], transport: any 
     client: { session: { messages: async ({ path }: any) => ({ data: messages(path.id) }) } },
   }, (record: any) => records.push(record), transport)
 }
+
+test("OpenCode observer blocks model POST requests without bindings and can recover after successful configuration", async () => {
+  const sent: unknown[][] = []
+  const transport = { fetch: (...args: unknown[]) => { sent.push(args); return Promise.resolve(new Response('{}')) } }
+  const capture = create(() => [], [], transport)
+  capture.configure()
+  capture.setBlocked(true)
+  for (const endpoint of ['chat/completions', 'responses', 'messages']) {
+    const url = `https://inference.invalid/v1/${endpoint}?feature=1`
+    await assert.rejects(transport.fetch(url, { method: 'POST' }), /inference proxy.*blocked/i)
+    await assert.rejects(transport.fetch(new Request(url, { method: 'POST' })), /inference proxy.*blocked/i)
+  }
+  assert.equal(sent.length, 0)
+  await transport.fetch('https://inference.invalid/v1/models', { method: 'GET' })
+  await transport.fetch('https://inference.invalid/v1/messages', { method: 'GET' })
+  capture.setBlocked(false)
+  await transport.fetch('https://inference.invalid/v1/messages', { method: 'POST' })
+  assert.equal(sent.length, 3)
+})
 
 test("OpenCode correlation separates calls sharing a user message and concurrent child sessions", async () => {
   const records: any[] = []

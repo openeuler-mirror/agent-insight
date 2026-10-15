@@ -501,7 +501,7 @@ Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `Inferen
 
 对每次模型 POST，入口生成 UUID v4，覆盖并发送 `X-Agent-Insight-Call-Id`，同值通过响应头返回。推理服务只需要将此头绑定到收到的推理记录；整条链路用 ID 集合查询，单 LLM 用其 ID 集合查询。客户端重试分别生成 ID，入口本身不重试。不把 HTTP 200 当作模型流完整结束，journal 独立记录 `completed` / `cancelled` / `stream_error` / `transport_error` / `timeout`。没有到达推理服务的请求不会存在远端推理记录。
 
-转发保留正文、SSE、状态码、认证与协议头，去除 hop-by-hop 头和 Agent 特定关联头；推理服务只接收统一关联头。上游为静态配置，禁止客户端指定 URL，不跟随重定向且移除 Location。默认透传模型认证，`apiKeyEnv` 可指定上游密钥环境变量名。关联记录不保存请求正文、模型输出或认证字段。
+转发保留正文、SSE、状态码、认证与协议头，去除 hop-by-hop 头和 Agent 特定关联头；推理服务只接收统一关联头。上游来自显式配置或本机受管配置状态，禁止请求方指定任意 URL，不跟随重定向且移除 Location。默认透传模型认证，`apiKeyEnv` 可指定上游密钥环境变量名。关联记录不保存请求正文、模型输出或认证字段。
 
 网关与采集器必须使用同一 `AGENT_INSIGHT_HOME` 和采集账号。网关账号优先级为显式参数、进程 `AGENT_INSIGHT_API_KEY`、本地 `config`、本地 `.env`、anonymous。记录目录为 `inference-gateway/<account-hash>/<agent>/<session-hash>/<call-id>.json`，先原子保存开始记录再请求上游，随后原子更新结果；目录权限 700、文件 600。journal 是本地关联依据，至少保留到采集与上传结束，当前不自动清理。
 
@@ -510,3 +510,21 @@ Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `Inferen
 - 统一节点字段为 `inference_call_ids: string[]`，原生 request/response/attempt 字段不改义。前端优先使用统一 ID，因此不要求推理服务理解不同 Agent 的身份结构。
 
 回归入口：`test/inference-gateway.test.ts`、`test/opencode-inference-correlation.test.ts`、`test/inference-analysis.test.ts`。真实 CLI 验收须比较推理服务实际收到的头、网关 journal、采集上传、SQLite 读回及最终节点；单测支持某协议不等于该协议在真实 Agent 上已验收。
+
+### curl 安装与配置托管
+
+Unix setup 选择 `qoder` / `opencode` 时，从现有 `?component=` 白名单下载 `inference_gateway.mjs`、`inference_config.mjs`、`inference_proxy.mjs`。组件全部下载及语法检查通过后，以版本目录和原子链接发布到 `inference-runtime`，随后执行 `install`。未新增平台路由或数据库表；PowerShell 采集流程未增加自动代理。
+
+`inference_proxy.mjs` 管理 loopback 动态端口、健康检查、单实例文件锁和后台同步。配置改写前必须通过带随机 token 的本地健康检查；控制 token 和运行状态仅落本机 0600 文件，模型请求不能通过 URL 指定上游。重启优先使用原端口，不能绑定时不把配置改到不可用端口。`inference_gateway.mjs` 每次请求读取已发布的路由，仍先持久化 call ID，再发送上游。历史路由保留，避免切换配置后中断已经读取旧地址的会话。
+
+`inference_config.mjs` 解析 JSON/JSONC 的字符串范围，只替换地址字段，保持注释、换行、认证和模型等字段原样。Qoder 使用 `providers.<id>.baseUrl`；OpenCode 使用 `provider.<id>.options.baseURL`，根据已识别 SDK 确定协议。首次字节备份以原子方式发布且不覆盖，清单保存备份 SHA-256、字段原值和受管值；恢复前检查完整性。写入前检查原文未并发变化，失败回滚已改文件而不覆盖并发写入。
+
+OpenCode 插件的 `config` 钩子先 await `prepareOpenCodeConfig`，再安装现有身份采集包装器；只改模型地址，不替换认证或 provider fetch。运行时配置快照只记录 Provider 的 SDK 和地址，避免另存已合并密钥。未安装或已恢复停用时保持原采集行为；安装状态启用时，运行文件缺失、导入或配置处理失败都会阻断模型 POST。OpenCode 1.18.29 会吞掉 config 钩子的异常，因此先安装 fetch 保护再处理配置；不能只依靠抛错防止静默直连。Provider 配置来源仍按 OpenCode 原合并规则，未改变用户的模型选择。
+
+Qoder CLI 通过原命令入口的受管启动器在读取配置前处理 `--config-dir`、`QODERCN_CONFIG_DIR`、`--cwd`、`--setting-sources` 和 `--settings`。内联 settings 写入本机 0600 的受管临时配置。原二进制、参数和信号转发保留，恢复只撤销仍是我方写入内容的启动器。后台识别 Qoder 升级器在同目录创建的版本符号链接后重新绑定；升级与修复之间存在窗口，安装验证不等于所有未来版本自动兼容。
+
+Qoder 1.1.70 的 ConfigChange 是文件变化通知，并不构成模型请求前屏障，`/model` 自写配置还会被原生监控器跳过。故明确要求运行中新增或修改 Provider 后重启 CLI；不能把一秒轮询宣称为零绕过保证。内置账号模型、IDE 私有 Provider 配置和 Windows 自动代理不在此范围。
+
+恢复入口为 `restore_inference_proxy.sh`：先持有独占锁暂停同步，再按字段恢复仍为受管值的地址，保留新增模型、Provider 和用户自改地址；全部配置恢复成功后还原自有启动器、停用同步并停服务。配置错误时保持安装状态启用并保留网关用于已有会话，等待修复后重新恢复。恢复前应结束现有 Agent 会话，随后重启使内存中的地址也恢复。原备份与关联日志不删除。
+
+回归入口：`test/inference-config.test.ts`、`test/inference-proxy.test.ts`、`test/inference-proxy-setup.test.ts` 及原 `test/inference-gateway.test.ts` / `test/opencode-inference-correlation.test.ts`。安装专项实际执行 Bash 下载、发布、CLI 安装和恢复；真实 Agent 验收另以隔离配置及模拟推理服务验证，不启动开发页面。

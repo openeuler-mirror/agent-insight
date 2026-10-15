@@ -3,6 +3,7 @@ import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
 import { spawn } from "node:child_process"
+import { pathToFileURL } from "node:url"
 
 function getPreferredInsightDir() {
   if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
@@ -389,9 +390,19 @@ export function createInferenceCorrelation(context: any, record: (event: any) =>
     try {
       if (transport[key]) return transport[key]
       if (typeof transport.fetch !== "function") return undefined
-      const state = { requests: new Map<string, { sessionID: string, messageID: string, emit: typeof emit }>() }
+      const state = { blocked: false, requests: new Map<string, { sessionID: string, messageID: string, emit: typeof emit }>() }
       const wrapped = new Proxy(transport.fetch, {
         apply(target, receiver, args) {
+          if (state.blocked) {
+            try {
+              const [request, init] = args
+              const method = String(init?.method ?? (request instanceof Request ? request.method : "GET")).toUpperCase()
+              const pathname = new URL(request instanceof Request ? request.url : String(request)).pathname
+              if (method === "POST" && /\/(?:chat\/completions|responses|messages)\/?$/.test(pathname)) {
+                return Promise.reject(new Error("Agent Insight OpenCode inference proxy: model requests are blocked after configuration failed. Reinstall or restore the inference proxy."))
+              }
+            } catch {}
+          }
           let attempt: { headers: Headers, binding: any, payload: any } | undefined
           try {
             const [request, init] = args
@@ -466,6 +477,10 @@ export function createInferenceCorrelation(context: any, record: (event: any) =>
       }
     },
     configure: observeFetch,
+    setBlocked: (blocked: boolean) => {
+      const observer = observeFetch()
+      if (observer) observer.blocked = blocked
+    },
   }
 }
 
@@ -705,6 +720,25 @@ export default async function WittySkillInsightOtelPlugin(context: any = {}) {
   return {
     config: async (cfg: any) => {
       inference.configure()
+      const insightDir = getExistingInsightDir()
+      const proxyRuntime = path.join(insightDir, "inference-runtime", "inference_proxy.mjs")
+      try {
+        let installation: { enabled?: boolean, agents?: string[] } | undefined
+        try {
+          installation = JSON.parse(fs.readFileSync(path.join(insightDir, "inference-proxy", "installation.json"), "utf8"))
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
+        }
+        if (installation?.enabled && installation.agents?.includes("opencode")) {
+          inference.setBlocked(true)
+          const { prepareOpenCodeConfig } = await import(pathToFileURL(proxyRuntime).href)
+          await prepareOpenCodeConfig(cfg, { insightDir, cwd: context.directory || process.cwd() })
+        }
+        inference.setBlocked(false)
+      } catch {
+        inference.setBlocked(true)
+        throw new Error("Agent Insight OpenCode inference proxy configuration failed; model requests are blocked. Reinstall or restore the inference proxy.")
+      }
       try {
         const redacted = redactJson(cfg || {})
         writer.enqueue({ t: nowIso(), kind: "event", payload: { type: "config.redacted", config: truncateJson(redacted, 2000) } })

@@ -64,7 +64,7 @@ export function createInferenceGateway(config, options = {}) {
   const account = hash((options.apiKey ?? env.AGENT_INSIGHT_API_KEY ?? installedKey) || 'anonymous').slice(0, 16)
   const timeoutMs = Number(config.timeoutMs ?? 300000)
   if (!(timeoutMs > 0 && Number.isFinite(timeoutMs))) throw new Error('Invalid timeoutMs')
-  const routes = (config.routes || []).map(route => {
+  const compileRoutes = input => (input || []).map(route => {
     const upstream = new URL(route.upstreamBaseUrl)
     if (!['http:', 'https:'].includes(upstream.protocol) || upstream.username || upstream.password || upstream.search || upstream.hash) throw new Error('Invalid upstreamBaseUrl')
     if (!/^\/[a-zA-Z0-9/_-]+$/.test(route.basePath) || route.basePath.endsWith('/') || route.basePath.includes('//')) throw new Error('Invalid basePath')
@@ -76,8 +76,12 @@ export function createInferenceGateway(config, options = {}) {
     }
     return { ...route, upstream, auth }
   }).sort((a, b) => b.basePath.length - a.basePath.length)
-  if (!routes.length || new Set(routes.map(r => r.basePath)).size !== routes.length) throw new Error('Configure unique gateway routes')
+  let routes = compileRoutes(config.routes)
+  if ((!routes.length && !options.getRoutes) || new Set(routes.map(r => r.basePath)).size !== routes.length) throw new Error('Configure unique gateway routes')
   return http.createServer((req, res) => {
+    if (options.getRoutes) {
+      try { routes = compileRoutes(options.getRoutes()) } catch { res.writeHead(503); res.end(); req.resume(); return }
+    }
     const pathname = String(req.url || '').split('?')[0]
     const route = routes.find(r => pathname.startsWith(r.basePath + '/'))
     const suffix = route ? pathname.slice(route.basePath.length) : ''

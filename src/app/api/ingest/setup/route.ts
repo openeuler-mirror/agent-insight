@@ -14,6 +14,7 @@ import {
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from './actrail-setup';
 import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+import { INFERENCE_PROXY_UNIX_SETUP_BLOCK } from './inference-proxy-setup';
 import {
     FRAMEWORK_OPTIONS,
     parseFrameworks,
@@ -26,6 +27,9 @@ const QODER_SETUP_COMPONENTS = new Set([
     'qoder_trace_collector.mjs',
     'qoder_uploader_client.mjs',
     'qoder_work_setup.mjs',
+    'inference_gateway.mjs',
+    'inference_config.mjs',
+    'inference_proxy.mjs',
 ]);
 
 async function serveQoderSetupComponent(component: string): Promise<NextResponse> {
@@ -1021,6 +1025,8 @@ function generateBashScript(
         '        echo "Warning: Qoder CN collector installation did not complete; review the errors above."',
         '    fi',
         'fi',
+        '',
+        INFERENCE_PROXY_UNIX_SETUP_BLOCK,
         '',
         '# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist',
         'if [ "$INSTALL_QWENCODE" = "true" ]; then',
