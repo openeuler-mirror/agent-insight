@@ -4,8 +4,6 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 
-import { isolateTestDatabase } from './helpers/isolated-test-db';
-isolateTestDatabase('vllm-otlp-route');
 import { POST } from '@/app/api/ingest/otel/v1/metrics/route';
 import { encodeOtlpMetricsProto } from '@/lib/ingest/vllm/otlp-proto';
 import { prismaRaw } from '@/lib/storage/prisma';

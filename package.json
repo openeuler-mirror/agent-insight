@@ -71,7 +71,7 @@
     "prebuild": "node scripts/benchmark/generate-catalog.cjs",
     "build": "next build",
     "prepack": "node scripts/benchmark/generate-catalog.cjs && node scripts/prepare-npm-package.js",
-    "start": "node .next/standalone/server.js",
+    "start": "node scripts/start-standalone.cjs",
     "lint": "eslint",
     "pretest": "node scripts/benchmark/generate-catalog.cjs",
     "test": "tsc --noEmit -p scripts/trae-collector/tsconfig.json && node --import tsx --test \"test/**/*.test.ts\"",

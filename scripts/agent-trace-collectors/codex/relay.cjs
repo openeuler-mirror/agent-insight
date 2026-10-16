@@ -198,7 +198,7 @@ async function createRelay(options = {}) {
     homeDir: config.homeDir,
     sessionsDir: options.desktopSessionsDir || config.desktopSessionsDir,
     stateDir,
-    backfillAfterMs: options.desktopRolloutBackfillAfterMs ?? config.desktopRolloutBackfillAfterMs,
+    backfillAfterMs: options.desktopRolloutBackfillAfterMs || config.desktopRolloutBackfillAfterMs || undefined,
     onEvents: async (events) => {
       for (const event of events) await core.processLifecycleEvent(event);
       await writer.flush();

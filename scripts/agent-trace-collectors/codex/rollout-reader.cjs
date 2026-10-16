@@ -71,6 +71,9 @@ function sourceEvent(base, eventType, record, extra = {}) {
     timestampMs: extra.timestampMs || timestampOf(record),
     sequence: extra.sequence,
     inputKind: extra.inputKind,
+    // 446-8：终态事件的状态字段是事件顶层契约（reducer 读 event.status），
+    // 只放 payload 会在组装层丢失，失败任务会被回退成 completed。
+    status: extra.status,
     payload: redactValue(extra.payload || {}),
     provenance: { direct: true, confidence: "direct" },
   };
@@ -281,7 +284,10 @@ function createDesktopRolloutReader(options = {}) {
   const onEvents = options.onEvents || (async () => undefined);
   // 回填窗口：文件名里的 rollout 起始时间早于该时刻的历史文件直接跳过（标记
   // 已消费到 EOF），避免首次启用 ingress 时一次性回灌全部历史会话。
-  const backfillCutoffMs = Number(options.backfillAfterMs) > 0 ? Number(options.backfillAfterMs) : undefined;
+  // 446-3：显式 backfillAfterMs（>0）优先；缺省/非正数不再解释为「无截止」，
+  // 而是首次启用时把边界持久化进 checkpoint（state.backfillBoundaryMs），
+  // 此后沿用——旧配置升级也不会回灌启用前的历史。
+  const explicitBackfillAfterMs = Number(options.backfillAfterMs) > 0 ? Number(options.backfillAfterMs) : undefined;
   const state = { version: 1, files: {}, unknownRecords: 0 };
 
   function rolloutStartMs(filePath) {
@@ -295,16 +301,50 @@ function createDesktopRolloutReader(options = {}) {
     if (!enabled) return;
     const stored = await readCheckpoint(checkpointPath);
     if (stored.version === 1 && stored.files) Object.assign(state, stored);
+    if (explicitBackfillAfterMs === undefined && !Number.isFinite(state.backfillBoundaryMs)) {
+      state.backfillBoundaryMs = Date.now();
+      await atomicWriteJson(checkpointPath, state);
+    }
+  }
+
+  function backfillCutoffMs() {
+    return explicitBackfillAfterMs ?? (Number.isFinite(state.backfillBoundaryMs) ? state.backfillBoundaryMs : undefined);
+  }
+
+  // 446-7：跳过历史回填文件时仍读取文件头部的 session_meta，保留 thread 归属
+  // 与分类——用户恢复旧会话继续对话时，EOF 之后的新增记录才能正确归属。
+  async function readSkippedMetadata(filePath) {
+    const batch = await readJsonlBatch(filePath, 0, { maxEvents: 100, maxBytes: 512 * 1024 })
+      .catch(() => ({ events: [] }));
+    for (const record of batch.events || []) {
+      const type = recordType(record);
+      if (type !== "session_meta" && type !== "sessionMeta") continue;
+      const meta = sessionMeta(record) || payloadOf(record);
+      const sourceThreadId = text(meta.id || meta.session_id || meta.sessionId);
+      if (!sourceThreadId) break;
+      return { sourceThreadId, sourceKind: classifyRolloutMetadata(meta).sourceKind };
+    }
+    return {};
   }
 
   async function scanFile(filePath) {
     if (!enabled) return { events: 0, skipped: true };
     const relative = path.relative(sessionsDir, filePath).replaceAll(path.sep, "/");
-    if (backfillCutoffMs !== undefined && !state.files[relative]) {
+    const cutoff = backfillCutoffMs();
+    if (cutoff !== undefined && !state.files[relative]) {
       const startedAt = rolloutStartMs(filePath);
-      if (startedAt !== undefined && startedAt < backfillCutoffMs) {
+      if (startedAt !== undefined && startedAt < cutoff) {
         const stat = await fsp.stat(filePath).catch(() => undefined);
-        state.files[relative] = { bytes: stat?.size || 0, skippedBackfill: true };
+        const metadata = await readSkippedMetadata(filePath);
+        state.files[relative] = {
+          bytes: stat?.size || 0,
+          skippedBackfill: true,
+          sourceThreadId: metadata.sourceThreadId,
+          sourceKind: metadata.sourceKind,
+        };
+        // 446-7：跳过决策必须立即持久化，否则只有被跳过文件时 checkpoint 不落盘，
+        // 下一次扫描无法恢复归属元数据。
+        await atomicWriteJson(checkpointPath, state);
         return { events: 0, skipped: true, backfilled: false };
       }
     }

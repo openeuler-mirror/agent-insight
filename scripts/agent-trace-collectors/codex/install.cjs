@@ -250,6 +250,11 @@ async function install(options) {
     homeDir: options.homeDir,
     desktopRolloutIngress: options.desktopRolloutIngress,
     desktopRolloutScanIntervalMs: 10_000,
+    // 446-3：Desktop rollout 的回填边界取安装时刻；重装/升级保留既有边界，
+    // 保证「不回填启用（安装）前的历史」对旧配置升级同样成立。
+    desktopRolloutBackfillAfterMs: Number(priorConfig?.desktopRolloutBackfillAfterMs) > 0
+      ? Number(priorConfig.desktopRolloutBackfillAfterMs)
+      : Date.now(),
   };
   await atomicWriteFile(configPath, `${JSON.stringify(collectorConfig, null, 2)}\n`);
   const extensionInstall = options.installEditors
