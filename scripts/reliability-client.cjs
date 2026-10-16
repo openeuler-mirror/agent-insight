@@ -814,6 +814,12 @@ function mergePiRuntimeCapability(platforms, runtime) {
   return [...platforms.filter(platform => platform.id !== 'pi-agent'), capability]
 }
 
+function agentRuntimeOptions() {
+  const candidates = [path.join(__dirname, 'packages', 'agent-runtime', 'loader.cjs'),
+    path.join(__dirname, '..', 'packages', 'agent-runtime', 'loader.cjs')]
+  return require(candidates.find(candidate => fs.existsSync(candidate)))
+}
+
 function buildCapabilities(cfg, opts) {
   const fi = opts?.probe || getProbe(cfg, opts)
   const runtimeByPlatform = new Map()
@@ -865,8 +871,7 @@ function buildCapabilities(cfg, opts) {
     platforms = platforms.filter(platform => platform.id !== 'pi-mcts')
     platforms.push({
       id: 'pi-mcts', models: [], agents: ['pi-mcts'],
-      runBenchmarkCase: { version: 1, returnsTraceId: true,
-        agentOptionCapabilities: mcts?.agentOptionCapabilities || [] },
+      runBenchmarkCase: { version: 1, returnsTraceId: true },
       actions: ['RUN_BENCHMARK_CASE'],
     })
   }
@@ -879,13 +884,16 @@ function buildCapabilities(cfg, opts) {
   for (const platform of platforms) {
     if (platform.id === 'pi-mcts') {
       components['agent-runtime/pi-mcts/v1'] = { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
-      for (const capability of mcts?.agentOptionCapabilities || []) components[capability] = { ready: mctsProbe.ready }
       continue
     }
     const runtime = runtimeFor(platform.id)
     components[`agent-runtime/${platform.id}/v1`] = {
       ready: platform.runExperimentCase?.returnsTraceId === true && runtime.ready,
     }
+  }
+  const definitions = agentRuntimeOptions().loadRuntimeDefinitions().map(item => item.descriptor)
+  for (const platform of platforms) {
+    platform.parameterDefinitions = definitions.filter(definition => definition.targets.some(target => target.platform === platform.id))
   }
   return {
     platforms,
@@ -1624,6 +1632,8 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     literalInput: triggerRouting,
     correlation,
   })
+  const { args: runtimeArgs, agentOptions: effectiveAgentOptions } = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
+  invocation.args.push(...runtimeArgs)
   const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
   const eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env) : null
   if (eventChannel) {
@@ -1918,6 +1928,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       const finishedAt = new Date().toISOString()
       const runFacts = {
         state: 'AGENT_EXITED',
+        ...(effectiveAgentOptions ? { agentOptions: effectiveAgentOptions } : {}),
         ...(traceId ? { traceId } : {}),
         exitCode: code,
         signal: signal || undefined,

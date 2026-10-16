@@ -132,7 +132,8 @@ export async function POST(
             generateTrace: {
               workerId: target.workerId,
               platform: target.platform,
-              agent: snapshot.agentName,
+              agent: target.agent || snapshot.agentName,
+              agentOptions: target.agentOptions,
               model: target.model || null,
               timeoutSeconds: Number(target.timeoutSeconds) || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
             },
@@ -163,12 +164,16 @@ export async function POST(
         select: { agentName: true },
       });
       const agent = String(generateTrace?.agent || experiment?.agentName || '').trim();
-      await assertTraceGenerationTarget({ user: username, workerId, platform, agent });
+      const snapshot = frozen?.configSnapshotJson ? JSON.parse(frozen.configSnapshotJson) : {};
+      const savedTarget = snapshot.executionTarget;
+      const savedOptions = savedTarget?.workerId === workerId && savedTarget?.platform === platform && savedTarget?.agent === agent
+        ? savedTarget.agentOptions : undefined;
+      const resolvedOptions = await assertTraceGenerationTarget({ user: username, workerId, platform, agent,
+        agentOptions: generateTrace?.agentOptions ?? savedOptions });
       const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
         ? generateTrace.timeoutSeconds
         : DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
 
-      const snapshot = frozen?.configSnapshotJson ? JSON.parse(frozen.configSnapshotJson) : {};
       let executionConcurrency: number;
       try { executionConcurrency = currentExperiment.scope === 'skill-workbench' ? 1 : parseExecutionConcurrency(snapshot.executionConcurrency); }
       catch { return NextResponse.json({ error: '执行并发必须为正整数' }, { status: 400 }); }
@@ -178,7 +183,10 @@ export async function POST(
       }
       const started = await prisma.experiment.updateMany({
         where: { id, user: username, deletedAt: null, status: { notIn: ['running', 'cancelled'] } },
-        data: { status: 'running' },
+        data: { status: 'running', configSnapshotJson: JSON.stringify({ ...snapshot,
+          executionTarget: { ...savedTarget, workerId, platform, agent,
+            model: generateTrace?.model ?? null, timeoutSeconds,
+            agentOptions: resolvedOptions.agentOptions, agentParameterDefinition: resolvedOptions.definition } }) },
       });
       if (!started.count) return NextResponse.json({ status: 'running', alreadyRunning: true });
       recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
@@ -190,6 +198,7 @@ export async function POST(
             workerId,
             platform,
             agent,
+            agentOptions: resolvedOptions.agentOptions,
             model: generateTrace?.model != null ? String(generateTrace.model) : null,
             timeoutSeconds,
             cases,

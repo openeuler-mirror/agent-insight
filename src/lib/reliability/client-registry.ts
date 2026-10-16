@@ -1,3 +1,4 @@
+import { validateDefinition, type RuntimeDefinition } from '../../../packages/agent-runtime/index.cjs'
 /**
  * 客户端注册与设备凭证（IF-N01/N04/N06/N15）。
  * 令牌与凭证只保存哈希；明文只在创建时返回一次。
@@ -22,8 +23,8 @@ export type ClientPlatformCapability = {
   runBenchmarkCase?: {
     version: number
     returnsTraceId: boolean
-    agentOptionCapabilities?: string[]
   }
+  parameterDefinitions?: RuntimeDefinition[]
   actions?: string[]
 }
 
@@ -320,10 +321,9 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
                     ? Number(rec.runBenchmarkCase.version)
                     : 1,
                   returnsTraceId: rec.runBenchmarkCase.returnsTraceId === true,
-                  agentOptionCapabilities: Array.isArray(rec.runBenchmarkCase.agentOptionCapabilities)
-                    ? [...new Set(rec.runBenchmarkCase.agentOptionCapabilities.filter((item): item is string => typeof item === 'string'))] : [],
                 }
               : undefined,
+            parameterDefinitions: Array.isArray(rec.parameterDefinitions) ? rec.parameterDefinitions.map(validateDefinition) : [],
             actions: Array.isArray(rec.actions) ? rec.actions.map((a) => String(a)) : undefined,
           }
         })

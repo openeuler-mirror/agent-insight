@@ -52,6 +52,12 @@ function installRuntime() {
   const configRuntime = path.join(PACKAGE_ROOT, 'packages', 'project-config')
   if (!fs.existsSync(configRuntime)) fail(`缺少配置加载器: ${configRuntime}`, '制品不完整；请重新执行安装命令。')
   fs.cpSync(configRuntime, path.join(RUNTIME_DIR, 'packages', 'project-config'), { recursive: true })
+  for (const [source, destination] of [['packages/agent-runtime', 'packages/agent-runtime'], ['services/executor/runtimes', 'executor/runtimes']]) {
+    const input = path.join(PACKAGE_ROOT, source)
+    if (!fs.existsSync(input)) fail(`缺少 Runtime 参数定义: ${input}`, '制品不完整；请重新执行安装命令。')
+    fs.cpSync(input, path.join(RUNTIME_DIR, destination), { recursive: true })
+  }
+
   fs.mkdirSync(path.join(RUNTIME_DIR, 'config', 'benchmark'), { recursive: true })
   fs.copyFileSync(path.join(PACKAGE_ROOT, 'config', 'benchmark', 'executor.yaml'), path.join(RUNTIME_DIR, 'config', 'benchmark', 'executor.yaml'))
   const previousConfigDir = path.join(RUNTIME_DIR, 'config')

@@ -40,6 +40,19 @@ function gitSource(value, filePath) {
   return source(value, filePath)
 }
 
+function runtimeOverrides(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return Object.entries(value).every(([key, runtime]) => {
+    if (!/^[a-z][a-z0-9-]*$/.test(key) || !runtime || typeof runtime !== 'object' || Array.isArray(runtime)) return false
+    if (Object.keys(runtime).some(key => key !== 'defaults')) return false
+    if (runtime.defaults === undefined) return true
+    if (!runtime.defaults || typeof runtime.defaults !== 'object' || Array.isArray(runtime.defaults)) return false
+    return Object.entries(runtime.defaults).every(([key, item]) => /^[A-Za-z][A-Za-z0-9_-]*$/.test(key)
+      && !['__proto__', 'prototype', 'constructor'].includes(key)
+      && (item === null || ['string', 'boolean'].includes(typeof item) || (typeof item === 'number' && Number.isFinite(item))))
+  })
+}
+
 const schemas = {
   platform: {
     benchmarks: {
@@ -79,7 +92,10 @@ const schemas = {
       macDiskPath: leaf(null, nullableString, resolvePath),
     },
   },
-  executor: { benchmarks: { 'swe-bench': { gitSource: leaf(null, nullableString, gitSource) } } },
+  executor: {
+    benchmarks: { 'swe-bench': { gitSource: leaf(null, nullableString, gitSource) } },
+    runtimes: leaf({}, runtimeOverrides),
+  },
 }
 
 const legacySettings = {
@@ -141,7 +157,11 @@ function apply(target, schema, values, filePath, prefix = '') {
     if ('defaultValue' in rule) {
       try {
         if (!rule.valid(value)) throw new Error('类型或取值不合法')
-        target[key] = rule.normalize ? rule.normalize(value, filePath) : structuredClone(value)
+        if (field === 'runtimes') {
+          for (const [runtimeKey, runtime] of Object.entries(value)) {
+            target[key][runtimeKey] = { defaults: { ...target[key][runtimeKey]?.defaults, ...structuredClone(runtime.defaults || {}) } }
+          }
+        } else target[key] = rule.normalize ? rule.normalize(value, filePath) : structuredClone(value)
       } catch (error) {
         throw new Error(`${filePath}: ${field} ${error.message}`)
       }

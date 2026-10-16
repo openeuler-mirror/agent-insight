@@ -39,7 +39,7 @@ const listEffect = effectContaining('paginated=1&databasePagination=1');
 const timerEffect = effectContaining('TRACE_LIST_REFRESH_MS');
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 
-function listHarness() {
+function listHarness(initialFiltersReady = true) {
     let loading = true;
     let records: unknown[] = [];
     let reloadKey = 0;
@@ -47,7 +47,7 @@ function listHarness() {
     let cleanup: (() => void) | undefined;
     const pending: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void; signal?: AbortSignal }> = [];
     const scope: Record<string, any> = {
-        user: 'reader', apiKey: null, agentScopeFilter: 'root', skillFilter: 'all',
+        user: 'reader', apiKey: null, filtersReady: initialFiltersReady, agentScopeFilter: 'root', skillFilter: 'all',
         selectedUserTagIds: [], search: '', clauses: [], clausesRaw: '',
         frameworkFilter: 'all', agentFilter: 'all', ownershipFilter: 'user',
         anomalyFilter: 'all', reliabilityAnomalyFilter: 'all', timeFilter: 'all',
@@ -83,6 +83,7 @@ function listHarness() {
             if (previous !== reloadKey) render();
         },
         reload: render,
+        restoreFilters: () => { scope.filtersReady = true; render(); },
         changePage: () => { scope.page = 2; scope.listRequestKey = 'page-2'; render(); },
         resolve: async (index: number, id: string) => {
             pending[index].resolve({ json: async () => ({ records: [{ task_id: id }], total: 1 }) });
@@ -92,6 +93,14 @@ function listHarness() {
         unmount: () => cleanup?.(),
     };
 }
+
+test('Trace list waits for remembered filters instead of requesting default results first', () => {
+    const h = listHarness(false);
+    assert.equal(h.pending.length, 0);
+    h.restoreFilters();
+    assert.equal(h.pending.length, 1);
+    h.unmount();
+});
 
 test('slow initial Trace request survives repeated polling ticks and releases the skeleton', async () => {
     const h = listHarness();

@@ -52,6 +52,8 @@ const nextConfig: NextConfig = {
     ],
     '*': [
       'packages/project-config/**',
+      'packages/agent-runtime/**',
+      'services/executor/runtimes/**',
       'config/benchmark/platform.yaml',
       'config/benchmark/evaluator.yaml',
       'config/benchmark/executor.yaml',

@@ -1,3 +1,4 @@
+import type { RuntimeDefinition } from '../../../../../packages/agent-runtime/index.cjs';
 // 实验向导 ① 步：候选 Agent 下拉 —— distinct Execution.agentName（root trace），按出现次数降序。
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
@@ -50,7 +51,7 @@ export async function GET(req: Request) {
       supportsBenchmark: boolean;
       benchmarkKeys: string[];
       benchmarkUnavailableReason: string | null;
-      agentOptionCapabilities: string[];
+      parameterDefinitions: RuntimeDefinition[];
     };
     type Candidate = {
       name: string;
@@ -74,7 +75,7 @@ export async function GET(req: Request) {
       byName.set(name, current);
     }
     const attachTarget = (
-      target: (typeof faultInjectionTargets)[number],
+      target: (typeof faultInjectionTargets)[number] & { parameterDefinitions?: RuntimeDefinition[] },
       capability: 'generic' | 'fault-injection' | 'benchmark',
     ) => {
       const name = canonicalExperimentAgentName(target.platform, target.agent);
@@ -90,6 +91,7 @@ export async function GET(req: Request) {
         item.workerId === target.workerId && item.platform === target.platform);
       if (existing) {
         existing.supportsGenericTrace ||= capability === 'generic';
+        if (capability === 'generic') existing.parameterDefinitions = target.parameterDefinitions || [];
         if (capability === 'generic') existing.supportsTriggerRouting = Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting);
         existing.supportsFaultInjection ||= capability === 'fault-injection';
         const models = new Map(existing.models.map((model) => [model.id, model]));
@@ -104,7 +106,7 @@ export async function GET(req: Request) {
           supportsBenchmark: false,
           benchmarkKeys: [],
           benchmarkUnavailableReason: '该执行目标未上报 Benchmark 所需能力',
-          agentOptionCapabilities: [],
+          parameterDefinitions: target.parameterDefinitions || [],
         });
       }
       byName.set(name, current);
@@ -130,6 +132,7 @@ export async function GET(req: Request) {
             ...target.models.map((id) => ({ id, label: id })),
           ],
           lastSeenAt: target.lastSeenAt.toISOString(),
+          parameterDefinitions: target.parameterDefinitions,
         }, 'benchmark');
       }
     }
@@ -145,9 +148,7 @@ export async function GET(req: Request) {
           if (benchmark.ready && !target.benchmarkKeys.includes(benchmark.adapterKey)) {
             target.benchmarkKeys.push(benchmark.adapterKey);
           }
-          if (benchmark.ready) target.agentOptionCapabilities = Array.from(new Set([
-            ...target.agentOptionCapabilities, ...benchmark.agentOptionCapabilities,
-          ]));
+          if (benchmark.ready) target.parameterDefinitions = benchmark.parameterDefinitions;
         }
         target.supportsBenchmark = target.benchmarkKeys.length > 0;
         target.benchmarkUnavailableReason = target.supportsBenchmark
@@ -178,7 +179,7 @@ export async function GET(req: Request) {
           supportsBenchmark: target.supportsBenchmark,
           benchmarkKeys: target.benchmarkKeys,
           benchmarkUnavailableReason: target.benchmarkUnavailableReason,
-          agentOptionCapabilities: target.agentOptionCapabilities,
+          parameterDefinitions: target.parameterDefinitions,
         })),
       }));
 

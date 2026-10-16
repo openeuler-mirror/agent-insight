@@ -15,7 +15,7 @@ import { EvalComments, filterComments, type EvalCommentRow } from '@/components/
 import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTrend';
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
-import { MCTS_OPTION_FIELDS } from '@/lib/engine/experiment/mcts-options';
+import type { AgentOptions, RuntimeDefinition } from '@/lib/engine/experiment/runtime-options';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -53,7 +53,8 @@ interface ExperimentDetail {
   status: string;
   scope?: string;
   executionConcurrency?: number | null;
-  executionAgentOptions?: { mcts?: Record<string, number> } | null;
+  executionAgentOptions?: AgentOptions | null;
+  executionParameterDefinition?: RuntimeDefinition | null;
   reusableConfig?: {
     traceSource?: string | null;
     executionTarget?: { model?: string | null; timeoutSeconds?: number | null } | null;
@@ -365,8 +366,8 @@ export function ExperimentDetail({
   const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || DEFAULT_BENCHMARK_CASE_COLUMNS;
   const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
-  const mctsParameters = detail?.scope === 'benchmark' ? detail.executionAgentOptions?.mcts : undefined;
-  const mctsParameterFields = MCTS_OPTION_FIELDS.filter((field) => mctsParameters?.[field.key] !== undefined);
+  const runtimeParameters = detail?.executionAgentOptions?.values;
+  const runtimeParameterFields = detail?.executionParameterDefinition?.parameters.filter(field => runtimeParameters?.[field.key] !== undefined) || [];
   const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
   // 服务端页码越界（如减小每页条数后当前页超出）时回夹到末页
   useEffect(() => {
@@ -506,14 +507,14 @@ export function ExperimentDetail({
                 </span>
               )}
               </div>
-              {mctsParameterFields.length > 0 && (
+              {runtimeParameterFields.length > 0 && (
                 <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 border-t border-[var(--border)] pt-3">
-                  <span className="font-semibold">MCTS 搜索参数</span>
+                  <span className="font-semibold">{detail.executionParameterDefinition?.displayName} 运行参数</span>
                   <dl className="flex flex-wrap gap-x-5 gap-y-2">
-                    {mctsParameterFields.map((field) => (
+                    {runtimeParameterFields.map((field) => (
                       <div key={field.key} className="flex">
                         <dt className="text-[var(--foreground-muted)]">{field.label}：</dt>
-                        <dd>{field.key === 'tokenFuseLimit' && mctsParameters![field.key] === 0 ? '关闭（0）' : mctsParameters![field.key]}</dd>
+                        <dd>{String(runtimeParameters![field.key])}</dd>
                       </div>
                     ))}
                   </dl>

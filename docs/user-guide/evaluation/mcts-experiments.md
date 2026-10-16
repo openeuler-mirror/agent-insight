@@ -59,6 +59,8 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 
 首次联调可选择一条 Case、并发设为 `1`，点击 **填入联调参数**；正式实验使用默认搜索参数或按需调整。
 
+参数区由源码中的 `services/executor/runtimes/mcts/runtime.yaml` 定义生成；安装到常驻客户端后，定义位于 `$AGENT_INSIGHT_HOME/client/runtime/executor/runtimes/mcts/runtime.yaml`。字段和预设不再写在前端。管理员可通过 `config/benchmark/executor.local.yaml` 的 `runtimes.mcts.defaults` 覆盖默认值；以页面当前显示为准。“恢复默认”恢复该执行机上报的默认值。修改配置后重启客户端并刷新页面；若复用实验提示定义已变化，请恢复默认后重新确认。实验详情使用创建时的参数快照；旧格式参数不再展示或复用。升级时需同时更新平台和执行客户端。
+
 - **Agent 单次执行上限**按每个 Case 计时：`900` 秒为 15 分钟，`1800` 秒为 30 分钟。达到上限会中断执行。
 - **执行并发**控制同时运行的 Case 数；**分支数**控制一个 Case 内的搜索。
 - **Token 熔断阈值**为 `0` 时关闭 Token 熔断，执行超时仍然生效。

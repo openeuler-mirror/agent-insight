@@ -193,6 +193,9 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   copyDirIfMissing(scriptsDir, standaloneScriptsDir, 'Scripts')
   const configurationRuntime = path.join(packageRoot, 'packages', 'project-config')
   copyDirIfMissing(configurationRuntime, path.join(standaloneDir, 'packages', 'project-config'), 'Project configuration runtime')
+  for (const directory of ['packages/agent-runtime', 'services/executor/runtimes']) {
+    copyDirIfMissing(path.join(packageRoot, directory), path.join(standaloneDir, directory), directory)
+  }
   fs.mkdirSync(path.join(standaloneDir, 'config', 'benchmark'), { recursive: true })
   for (const scope of ['platform', 'evaluator', 'executor']) {
     const source = path.join(packageRoot, 'config', 'benchmark', `${scope}.yaml`)

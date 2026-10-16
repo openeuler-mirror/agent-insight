@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 
 import { BenchmarkProtocolError } from './errors'
-import { normalizeAgentOptions, type AgentOptions } from '../../../services/executor/src/mcts-options.cjs'
-export type { AgentOptions } from '../../../services/executor/src/mcts-options.cjs'
+import { normalizeAgentOptions, type AgentOptions } from '../../agent-runtime/index.cjs'
+export type { AgentOptions } from '../../agent-runtime/index.cjs'
 
 export function normalizeBenchmarkAgentOptions(value: unknown): AgentOptions | undefined {
   try { return normalizeAgentOptions(value) }

@@ -1,3 +1,4 @@
+import { normalizeAgentOptions, validateDefinition } from '../../../../../packages/agent-runtime/index.cjs';
 // 实验详情：实验元信息 + 服务端聚合（整体均分 overall / 评估器分解 breakdown /
 // 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
 // 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
@@ -131,10 +132,15 @@ export async function GET(
       try { benchmarkManifest = getBenchmarkAdapter(benchmarkAdapterKey).manifest; } catch { benchmarkManifest = null; }
     }
     const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
-    const savedAgentOptions = asRecord(asRecord(configSnapshot?.runConfig)?.agentOptions);
-    const savedMctsOptions = asRecord(savedAgentOptions?.mcts);
-    const executionAgentOptions = experiment.scope === 'benchmark' && benchmarkAdapterKey === 'swe-bench'
-      && savedMctsOptions && Object.keys(savedMctsOptions).length > 0 ? savedAgentOptions : null;
+    const executionConfig = asRecord(configSnapshot?.runConfig) || asRecord(configSnapshot?.executionTarget);
+    let executionAgentOptions = null;
+    let executionParameterDefinition = null;
+    if (executionConfig?.agentParameterDefinition) {
+      try {
+        executionParameterDefinition = validateDefinition(executionConfig.agentParameterDefinition);
+        executionAgentOptions = normalizeAgentOptions(executionConfig.agentOptions, executionParameterDefinition) || null;
+      } catch { executionParameterDefinition = null; }
+    }
     const baselineTrendPromise = ['', 'benchmark'].includes(experiment.scope)
       ? getExperimentBaselineTrend({ experimentId: experiment.id, user: experiment.user }).catch((error) => {
           console.error('[Experiment baseline trend]', error);
@@ -605,6 +611,7 @@ export async function GET(
         : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
           ? Number(configSnapshot.executionConcurrency) || 1 : null,
       executionAgentOptions,
+      executionParameterDefinition,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
@@ -630,11 +637,12 @@ export async function GET(
           ? {
               workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,
               platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
-              agentOptions: (configSnapshot.runConfig as Record<string, unknown>).agentOptions || null,
+              agent: String((configSnapshot.runConfig as Record<string, unknown>).agent || ''),
+              agentOptions: executionAgentOptions,
               model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
               timeoutSeconds: Number((configSnapshot.runConfig as Record<string, unknown>).timeoutSeconds) || null,
             }
-          : configSnapshot?.executionTarget || null,
+          : configSnapshot?.executionTarget ? { ...asRecord(configSnapshot.executionTarget), agentOptions: executionAgentOptions } : null,
       },
       cases: pagedCases.map((c) => {
         const traceState = traceStateByCase.get(c.id);

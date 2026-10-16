@@ -23,7 +23,7 @@ export type EvaluatorConfig = {
   }
   imagePool: { enabled: boolean; prefetchEnabled: boolean; reserveRatio: number; highWatermark: number; maxPulls: number; waitSeconds: number; macDiskPath: string | null }
 }
-export type ExecutorConfig = { benchmarks: { 'swe-bench': { gitSource: string | null } } }
+export type ExecutorConfig = { benchmarks: { 'swe-bench': { gitSource: string | null } }; runtimes: Record<string, { defaults?: Record<string, string | number | boolean | null> }> }
 type Options = { root?: string; configDir?: string; env?: NodeJS.ProcessEnv; warn?: (message: string) => void }
 export function loadProjectConfig(scope: 'platform', options?: Options): PlatformConfig
 export function loadProjectConfig(scope: 'evaluator', options?: Options): EvaluatorConfig

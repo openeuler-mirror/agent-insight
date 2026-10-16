@@ -28,6 +28,7 @@
     "benchmarks/",
     "packages/benchmark-protocol/",
     "packages/project-config/",
+    "packages/agent-runtime/",
     "config/benchmark/platform.yaml",
     "config/benchmark/evaluator.yaml",
     "config/benchmark/executor.yaml",

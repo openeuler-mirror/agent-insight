@@ -9,8 +9,9 @@ import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
-import { MctsOptionsFields } from '@/components/eval/MctsOptionsFields';
-import { mctsOptionsState, mctsOptionsToInputs, summarizeMctsOptions, type MctsOptionInputs } from '@/lib/engine/experiment/mcts-options';
+import { Button } from '@/components/ui/button';
+import { RuntimeOptionsFields } from '@/components/eval/RuntimeOptionsFields';
+import { runtimeOptionsState, readSavedOptions, summarizeOptions, type RuntimeOptionInputs, type RuntimeDefinition, type AgentOptions } from '@/lib/engine/experiment/runtime-options';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -80,7 +81,7 @@ interface AgentTargetOption {
   supportsBenchmark: boolean;
   benchmarkKeys: string[];
   benchmarkUnavailableReason: string | null;
-  agentOptionCapabilities?: string[];
+  parameterDefinitions?: RuntimeDefinition[];
 }
 
 interface AgentOption {
@@ -529,8 +530,9 @@ export function ExperimentWizard({
     String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
   );
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
-  const [mctsInputs, setMctsInputs] = useState<MctsOptionInputs>(() => mctsOptionsToInputs(undefined));
-  const [mctsOptionsPlatform, setMctsOptionsPlatform] = useState('');
+  const [runtimeInputs, setRuntimeInputs] = useState<RuntimeOptionInputs>({});
+  const [runtimeOptionsTarget, setRuntimeOptionsTarget] = useState('');
+  const [restoredRuntimeOptions, setRestoredRuntimeOptions] = useState<AgentOptions>();
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
@@ -648,8 +650,9 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
-  const mctsState = mctsOptionsState(isBenchmarkDataset && traceMode === 'generate' ? selectedTarget : null,
-    mctsInputs, mctsOptionsPlatform, selectedDataset?.benchmark?.adapterKey);
+  const runtimeTargetKey = selectedTarget ? `${selectedTarget.workerId}::${selectedTarget.platform}::${selectedTarget.agent}` : '';
+  const runtimeState = runtimeOptionsState(!isReliabilityDataset && traceMode === 'generate' ? selectedTarget : null,
+    runtimeInputs, runtimeOptionsTarget, runtimeTargetKey, restoredRuntimeOptions);
   const generationCases = useMemo(
     () => generationCasesFromDataset(selectedDataset),
     [selectedDataset],
@@ -851,8 +854,10 @@ export function ExperimentWizard({
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
-      setMctsInputs(mctsOptionsToInputs(restoredTarget.agentOptions));
-      setMctsOptionsPlatform(restoredTarget.agentOptions ? platform : '');
+      const savedOptions = readSavedOptions(restoredTarget.agentOptions);
+      setRestoredRuntimeOptions(savedOptions);
+      setRuntimeInputs(Object.fromEntries(Object.entries(savedOptions?.values || {}).map(([key, value]) => [key, String(value)])));
+      setRuntimeOptionsTarget(savedOptions && workerId && platform ? `${workerId}::${platform}::${String(restoredTarget.agent || restoredAgentName)}` : '');
       const runtime = sourceSnapshot.runtime && typeof sourceSnapshot.runtime === 'object'
         ? sourceSnapshot.runtime as Record<string, unknown> : {};
       const restoredTimeoutSeconds = skillContext
@@ -1456,7 +1461,7 @@ export function ExperimentWizard({
       if (agentTimeoutRequired && !agentTimeoutValid) {
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
       }
-      if (mctsState.error) throw new Error(mctsState.error);
+      if (runtimeState.error) throw new Error(runtimeState.error);
       const casesPayload = selectedList.map((c) => ({
         executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
@@ -1530,11 +1535,13 @@ export function ExperimentWizard({
               platform: selectedTarget.platform,
               agent: selectedTarget.agent,
               model: genModel || null,
+              ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
             } : null,
             traceGenerationTarget: traceMode === 'generate' && selectedTarget ? {
               host: selectedTarget.host,
               platform: selectedTarget.platform,
               model: genModel || null,
+              ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
             } : null,
             agentTimeoutSeconds,
           }),
@@ -1583,7 +1590,7 @@ export function ExperimentWizard({
             platform: selectedTarget.platform,
             agent: selectedTarget.agent,
             model: genModel || null,
-            ...(mctsState.agentOptions ? { agentOptions: mctsState.agentOptions } : {}),
+            ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
           } : undefined,
           agentTimeoutSeconds,
           ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
@@ -1615,6 +1622,7 @@ export function ExperimentWizard({
                 agent: selectedTarget.agent,
                 model: genModel || null,
                 timeoutSeconds: agentTimeoutSeconds,
+                ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
               } : null,
               fiOrchestrate: isReliabilityDataset,
               ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
@@ -1669,6 +1677,7 @@ export function ExperimentWizard({
               agent: selectedTarget.agent,
               model: genModel || null,
               timeoutSeconds: agentTimeoutSeconds,
+              ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
             },
           }
         : {};
@@ -1718,7 +1727,7 @@ export function ExperimentWizard({
     ? generateAvailable && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
     : (watchMode || selected.size >= 1);
   const step2Valid = expType === 'llm'
-    || (step2SelectionValid && !mctsState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
+    || (step2SelectionValid && !runtimeState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -2157,8 +2166,12 @@ export function ExperimentWizard({
                     onChange={setAgentTimeoutInput}
                   />
               </div>
-              {mctsState.active && <MctsOptionsFields value={mctsInputs} error={mctsState.error}
-                onChange={value => { setMctsInputs(value); setMctsOptionsPlatform(selectedTarget?.platform || ''); }} />}
+              {runtimeState.active && runtimeState.definition && <RuntimeOptionsFields definition={runtimeState.definition} value={runtimeState.inputs} error={runtimeState.error}
+                onChange={value => { setRuntimeInputs(value); setRuntimeOptionsTarget(runtimeTargetKey); setRestoredRuntimeOptions(undefined); }} />}
+              {!runtimeState.active && runtimeState.error && <div className="mb-4 flex items-center gap-2">
+                <p className="text-sm text-error" role="alert">{runtimeState.error}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => { setRestoredRuntimeOptions(undefined); setRuntimeInputs({}); }}>清除已保存参数</Button>
+              </div>}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case</div>
                 <span style={{ flex: 1 }} />
@@ -3148,7 +3161,7 @@ export function ExperimentWizard({
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
-                  ...(mctsState.active ? [['MCTS 搜索参数', summarizeMctsOptions(mctsState.agentOptions)]] : []),
+                  ...(runtimeState.active ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
                     skillPreset === 'skill-ab'

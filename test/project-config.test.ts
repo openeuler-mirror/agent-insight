@@ -161,6 +161,14 @@ test('client upgrade migrates legacy local Git paths without overriding a newer 
     const legacyText = 'benchmarks:\\n  swe-bench:\\n    gitSource: ../git-cache\\n';
     fs.writeFileSync(legacyLocal, legacyText);
     installer.installRuntime();
+    assert.equal(fs.existsSync(path.join(installer.RUNTIME_DIR, 'executor/runtimes/mcts/runtime.yaml')), true);
+    assert.equal(fs.existsSync(path.join(installer.RUNTIME_DIR, 'runtimes')), false);
+    const runtimeOptions = require(path.join(installer.RUNTIME_DIR, 'executor/runtime-options.cjs'));
+    const invocation = runtimeOptions.runtimeInvocationOptions('pi-mcts', 'pi-mcts');
+    assert.equal(invocation.agentOptions.runtimeKey, 'mcts');
+    assert.equal(invocation.agentOptions.values.maxIters, 5);
+    assert.deepEqual(invocation.args.slice(0, 4), ['--max-iters', '5', '--branching', '3']);
+    assert.equal(invocation.definition.parameters.some(field => 'binding' in field), false);
     const {loadProjectConfig} = require(path.join(installer.RUNTIME_DIR, 'packages/project-config/index.cjs'));
     const options = {root:installer.RUNTIME_DIR,env:{}};
     assert.equal(loadProjectConfig('executor', options).benchmarks['swe-bench'].gitSource, path.join(installer.RUNTIME_DIR,'git-cache'));

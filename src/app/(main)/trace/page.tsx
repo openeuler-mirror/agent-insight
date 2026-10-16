@@ -37,6 +37,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
 import { loadTraceFacetValues } from '@/lib/client/trace-facets';
+import { traceFilterParsers, useTraceFilterMemory } from '@/lib/client/use-trace-filter-memory';
 import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
 
@@ -545,24 +546,25 @@ function TracePageContent() {
     }, []);
 
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
-    const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
-    const [anomalyFilter, setAnomalyFilter] = useQueryState('status', parseAsString.withDefault('all'));
-    const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', parseAsString.withDefault('all'));
-    const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', parseAsString.withDefault('all'));
-    const [agentFilter, setAgentFilter] = useQueryState('agent', parseAsString.withDefault('all'));
-    const [skillFilter, setSkillFilter] = useQueryState('skill', parseAsString.withDefault('all'));
-    const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', parseAsString.withDefault(''));
-    const [legacyBusinessTagFilter, setLegacyBusinessTagFilter] = useQueryState('bizTag', parseAsString);
-    const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', parseAsString.withDefault('user'));
-    const [agentScopeFilter, setAgentScopeFilter] = useQueryState('scope', parseAsString.withDefault('root'));
+    const [timeFilter, setTimeFilter] = useQueryState('time', traceFilterParsers.time);
+    const [anomalyFilter, setAnomalyFilter] = useQueryState('status', traceFilterParsers.status);
+    const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
+    const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', traceFilterParsers.framework);
+    const [agentFilter, setAgentFilter] = useQueryState('agent', traceFilterParsers.agent);
+    const [skillFilter, setSkillFilter] = useQueryState('skill', traceFilterParsers.skill);
+    const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', traceFilterParsers.tagIds);
+    const [legacyBusinessTagFilter, setLegacyBusinessTagFilter] = useQueryState('bizTag', traceFilterParsers.bizTag);
+    const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', traceFilterParsers.ownership);
+    const [agentScopeFilter, setAgentScopeFilter] = useQueryState('scope', traceFilterParsers.scope);
     const [sortKey, setSortKey] = useQueryState('sort', parseAsString.withDefault('timestamp'));
     const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
     const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
-    const [search, setSearch] = useQueryState('q', parseAsString.withDefault(''));
+    const [search, setSearch] = useQueryState('q', traceFilterParsers.q);
     const [showFilters, setShowFilters] = useState(false);
-    const [clausesRaw, setClausesRaw] = useQueryState('f', parseAsString.withDefault(''));
+    const [clausesRaw, setClausesRaw] = useQueryState('f', traceFilterParsers.f);
+    const { filtersReady, clearFilterMemory } = useTraceFilterMemory(user);
     const clauses = useMemo<FilterClause[]>(() => {
         if (!clausesRaw) return [];
         try {
@@ -770,6 +772,7 @@ function TracePageContent() {
     }, [taskIdParam, data]);
 
     useEffect(() => {
+        if (!filtersReady) return;
         const requestId = ++listRequestIdRef.current;
         const filtersChanged = previousListFilterKeyRef.current !== listFilterKey;
         previousListFilterKeyRef.current = listFilterKey;
@@ -853,6 +856,7 @@ function TracePageContent() {
         listFilterKey,
         listRequestKey,
         setPage,
+        filtersReady,
     ]);
 
     const handleImportFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -951,17 +955,7 @@ function TracePageContent() {
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
     const resetFilters = () => {
-        setOwnershipFilter('all');
-        setAgentFilter('all');
-        setSkillFilter('all');
-        updateUserTagFilters([]);
-        setAnomalyFilter('all');
-        setReliabilityAnomalyFilter('all');
-        setTimeFilter('all');
-        setFrameworkFilter('all');
-        setAgentScopeFilter('root');
-        setSearch(null);
-        setClauses([]);
+        clearFilterMemory();
     };
 
     // Filter dropdown option sets
