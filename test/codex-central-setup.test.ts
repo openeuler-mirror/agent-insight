@@ -236,7 +236,9 @@ test("central and auto Codex PowerShell setup parse in Windows PowerShell 5.1 af
 
 test("standalone builds use the standalone server entrypoint", () => {
   const packageJson = JSON.parse(read("package.json")) as { scripts?: { start?: string } }
-  assert.equal(packageJson.scripts?.start, "node .next/standalone/server.js")
+  // 446-4：npm start 走启动器（同步 .next/static 与 public 后拉起 standalone
+  // server），不再裸跑 server.js——干净 build→start 的静态资源会 404。
+  assert.equal(packageJson.scripts?.start, "node scripts/start-standalone.cjs")
 })
 
 test("CLI exposes framework preselection and detects the installed local package", async () => {
