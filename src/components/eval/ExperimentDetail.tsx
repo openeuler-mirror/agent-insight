@@ -6,6 +6,8 @@ import { DeleteExperimentButton, PendingExperimentCancellations, isCompletedExpe
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useExperimentCasePagination } from '@/lib/client/use-experiment-case-pagination';
+import { CASE_PAGE_SIZE_OPTIONS, caseRowId, experimentCaseHref } from '@/lib/engine/experiment/case-navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
@@ -134,6 +136,7 @@ interface ExperimentDetail {
   caseTotal: number;
   casePage: number;
   casePageSize: number;
+  locatedCaseId?: string | null;
 }
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
@@ -189,7 +192,6 @@ function responseError(value: unknown, fallback: string): string {
     : fallback;
 }
 
-const CASE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 const DEFAULT_BENCHMARK_CASE_COLUMNS: readonly BenchmarkPresentationColumn[] = [
   { path: 'input', label: '输入', type: 'text' },
   { path: 'externalCaseId', label: 'Case', type: 'code' },
@@ -213,8 +215,8 @@ export function ExperimentDetail({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryingCaseId, setRetryingCaseId] = useState('');
-  const [casePage, setCasePage] = useState(1);
-  const [casePageSize, setCasePageSize] = useState(20);
+  const { casePage, casePageSize, focusCaseId, updatePagination, acceptPagination } = useExperimentCasePagination(embedded);
+  const [highlightedCaseId, setHighlightedCaseId] = useState('');
   const [addCasesOpen, setAddCasesOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [comments, setComments] = useState<EvalCommentRow[]>([]);
@@ -244,12 +246,13 @@ export function ExperimentDetail({
     if (!silent) setLoading(true);
     try {
       const res = await apiFetch(
-        `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&casePage=${casePage}&casePageSize=${casePageSize}`,
+        `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&casePage=${casePage}&casePageSize=${casePageSize}${focusCaseId ? `&locateCaseId=${encodeURIComponent(focusCaseId)}` : ''}`,
       );
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
       if (sequence !== loadSequence.current) return;
       setDetail(data);
+      acceptPagination(data);
       setError('');
     } catch (e: unknown) {
       if (!silent && sequence === loadSequence.current) {
@@ -259,13 +262,13 @@ export function ExperimentDetail({
     } finally {
       if (!silent && sequence === loadSequence.current) setLoading(false);
     }
-  }, [user, id, casePage, casePageSize]);
+  }, [user, id, casePage, casePageSize, focusCaseId, acceptPagination]);
 
   useEffect(() => () => { loadSequence.current += 1; }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); loadSequence.current += 1; };
   }, [load]);
 
   // 运行中、仍有未收敛子任务或监听开启时持续轮询；串行发请求，避免旧响应覆盖新快照。
@@ -369,12 +372,19 @@ export function ExperimentDetail({
   const runtimeParameters = detail?.executionAgentOptions?.values;
   const runtimeParameterFields = detail?.executionParameterDefinition?.parameters.filter(field => runtimeParameters?.[field.key] !== undefined) || [];
   const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
-  // 服务端页码越界（如减小每页条数后当前页超出）时回夹到末页
+  const focusVisible = Boolean(!loading && focusCaseId && detail?.id === id && detail.casePage === casePage
+    && detail.casePageSize === casePageSize && detail.cases.some(item => item.id === focusCaseId));
   useEffect(() => {
-    if (casePage <= totalPages) return;
-    const timer = window.setTimeout(() => setCasePage(totalPages), 0);
-    return () => window.clearTimeout(timer);
-  }, [casePage, totalPages]);
+    if (!focusCaseId || !focusVisible) return;
+    const row = document.getElementById(caseRowId(focusCaseId));
+    if (!row) return;
+    const scroll = window.setTimeout(() => {
+      row.scrollIntoView({ block: 'center', behavior: 'auto' });
+      setHighlightedCaseId(focusCaseId);
+    }, 0);
+    const clear = window.setTimeout(() => setHighlightedCaseId(''), 2500);
+    return () => { window.clearTimeout(scroll); window.clearTimeout(clear); };
+  }, [id, focusCaseId, focusVisible]);
 
   return (
     <>
@@ -646,7 +656,10 @@ export function ExperimentDetail({
                   </button>
                 )}
               </div>
-              <div style={{ maxHeight: 'min(42vh, 420px)', overflow: 'auto' }}>
+              {focusCaseId && detail.locatedCaseId === null && (
+                <p role="status" className="border-t border-border px-4 py-2 text-sm text-foreground-secondary">该 Case 已删除或不在当前实验中，已返回有效分页。</p>
+              )}
+              <div className="overflow-x-auto">
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: detail.scope === 'benchmark' ? 1280 : 1100 }}>
                   <thead>
                     <tr>
@@ -674,7 +687,8 @@ export function ExperimentDetail({
                   </thead>
                   <tbody>
                     {pagedRows.map((c) => (
-                      <tr key={c.id}>
+                      <tr key={c.id} id={caseRowId(c.id)} style={{ scrollMarginBlock: 80,
+                        background: focusVisible && highlightedCaseId === c.id ? 'var(--background-secondary)' : undefined }}>
                         {detail.scope === 'benchmark'
                           ? benchmarkCaseColumns.map((column) => {
                               const value = benchmarkPresentationText(benchmarkPresentationValue({
@@ -834,7 +848,7 @@ export function ExperimentDetail({
                               </button>
                             ) : (
                               <Link
-                                href={`/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(c.id)}`}
+                                href={experimentCaseHref(id, c.id, casePage, casePageSize)}
                                 style={{ ...ACTION_BTN, color: 'var(--accent)', borderColor: 'var(--accent)' }}
                               >
                                 详情
@@ -875,52 +889,51 @@ export function ExperimentDetail({
                   </tbody>
                 </table>
               </div>
-              {caseTotal > casePageSize && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px',
-                  borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--foreground-muted)',
-                }}>
-                  共 {caseTotal} 个 case
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 6 }}>
-                    每页
-                    <select
-                      value={casePageSize}
-                      onChange={(e) => { setCasePageSize(Number(e.target.value)); setCasePage(1); }}
-                      style={{
-                        fontSize: 11, padding: '2px 5px', borderRadius: 6,
-                        border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)',
-                      }}
-                    >
-                      {CASE_PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
-                    </select>
-                    条
-                  </label>
-                  <span style={{ flex: 1 }} />
-                  <button
-                    onClick={() => setCasePage((p) => Math.max(1, p - 1))}
-                    disabled={casePage <= 1}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px',
+                borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--foreground-muted)',
+              }}>
+                共 {caseTotal} 个 case
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 6 }}>
+                  每页
+                  <select
+                    value={casePageSize}
+                    onChange={(e) => updatePagination(1, Number(e.target.value))}
                     style={{
-                      fontSize: 11, padding: '2px 9px', borderRadius: 6, border: '1px solid var(--border)',
-                      background: 'var(--background-secondary)', color: 'var(--foreground)',
-                      cursor: casePage <= 1 ? 'default' : 'pointer', opacity: casePage <= 1 ? 0.5 : 1,
+                      fontSize: 11, padding: '2px 5px', borderRadius: 6,
+                      border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)',
                     }}
                   >
-                    上一页
-                  </button>
-                  <span>{casePage} / {totalPages}</span>
-                  <button
-                    onClick={() => setCasePage((p) => Math.min(totalPages, p + 1))}
-                    disabled={casePage >= totalPages}
-                    style={{
-                      fontSize: 11, padding: '2px 9px', borderRadius: 6, border: '1px solid var(--border)',
-                      background: 'var(--background-secondary)', color: 'var(--foreground)',
-                      cursor: casePage >= totalPages ? 'default' : 'pointer', opacity: casePage >= totalPages ? 0.5 : 1,
-                    }}
-                  >
-                    下一页
-                  </button>
-                </div>
-              )}
+                    {!CASE_PAGE_SIZE_OPTIONS.includes(casePageSize) && <option value={casePageSize}>{casePageSize}</option>}
+                    {CASE_PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                  条
+                </label>
+                <span style={{ flex: 1 }} />
+                <button
+                  onClick={() => updatePagination(Math.max(1, casePage - 1), casePageSize)}
+                  disabled={casePage <= 1}
+                  style={{
+                    fontSize: 11, padding: '2px 9px', borderRadius: 6, border: '1px solid var(--border)',
+                    background: 'var(--background-secondary)', color: 'var(--foreground)',
+                    cursor: casePage <= 1 ? 'default' : 'pointer', opacity: casePage <= 1 ? 0.5 : 1,
+                  }}
+                >
+                  上一页
+                </button>
+                <span>{casePage} / {totalPages}</span>
+                <button
+                  onClick={() => updatePagination(Math.min(totalPages, casePage + 1), casePageSize)}
+                  disabled={casePage >= totalPages}
+                  style={{
+                    fontSize: 11, padding: '2px 9px', borderRadius: 6, border: '1px solid var(--border)',
+                    background: 'var(--background-secondary)', color: 'var(--foreground)',
+                    cursor: casePage >= totalPages ? 'default' : 'pointer', opacity: casePage >= totalPages ? 0.5 : 1,
+                  }}
+                >
+                  下一页
+                </button>
+              </div>
             </div>
 
             {/* 实验级评论（针对单个 case / 单个评估器的意见留在各自详情页） */}

@@ -133,6 +133,8 @@ flowchart TD
 - **主题**：`lib/client/theme-context.tsx`（`useTheme`、`useThemeColors`）；令牌在 `src/app/globals.css` 中一次性定义（`:root` + `[data-theme='dark']`）。
 - **认证**：`lib/auth/auth-context.tsx`（`useAuth`）统一消费服务端 `login_mode`，区分本地登录、历史组织集成和 IDaaS OAuth 登录；IDaaS callback 由 `/callback`（兼容 `/api/auth/idaas-oauth/callback`）完成；可选地区限制先按 UUID 查询人员信息并失败关闭，放行后才映射本地用户。API Key 恢复也会复查地区，并把人员响应中的 `w3Account` 作为通用 `externalAccount` 绑定到 UUID 用户。`AuthProvider.user` 保留 UUID 供业务 API 使用，独立 `displayName` 只供侧边栏显示，缺失时回退 UUID；登录页分别展示地区不可用与地区校验失败。侧边栏在三种登录模式下均渲染通用退出入口；退出仅清除浏览器本地认证状态，不调用 IDaaS 单点登出。
 
+实验单组详情的 Case 分页通过 `useExperimentCasePagination` 与 URL 的 `casePage/casePageSize` 同步，保留其他 query，手动翻页或更改条数时清除 `focusCaseId`。进入单条 Case 的链接携带分页上下文，返回链接带 `focusCaseId`；列表请求将其作为 `locateCaseId` 发给现有详情接口，加载成功后采用服务端页码，定位行滚动到视区并短暂高亮。分页校正不得在详情未加载时按空总数重置页码；切换分页时失效旧请求，轮询不能覆盖新的分页状态。嵌入模式使用本地分页和原有 `onBack` 回调，不改父页面 URL。Case 明细表只保留横向 overflow，不设纵向固定高度或 max-height，分页栏在空列表和不足一页时也保留；删除入口集中在列表操作列，Case 详情不重复渲染。
+
 ## 构建与开发
 - **开发**：`npm run dev`（或 `bash scripts/restart_dev.sh`——项目规范的开发启动方式）。端口 3000。
 - **构建**：`npm run build`（`next build`）。**启动**：`npm run start`。

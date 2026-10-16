@@ -1,3 +1,4 @@
+import { casePagination, locateCasePage } from '@/lib/engine/experiment/case-navigation';
 import { normalizeAgentOptions, validateDefinition } from '../../../../../packages/agent-runtime/index.cjs';
 // 实验详情：实验元信息 + 服务端聚合（整体均分 overall / 评估器分解 breakdown /
 // 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
@@ -79,8 +80,8 @@ export async function GET(
     const url = new URL(req.url);
     const q = url.searchParams;
     const { username } = await resolveUser(req, q.get('user'));
-    const casePageSize = Math.min(Math.max(Number(q.get('casePageSize')) || 20, 1), 100);
-    const casePageRaw = Math.max(Number(q.get('casePage')) || 1, 1);
+    const { casePage: casePageRaw, casePageSize } = casePagination(q.get('casePage'), q.get('casePageSize'));
+    const locateCaseId = q.get('locateCaseId') || '';
     const wantCaseId = q.get('caseId') || '';
 
     const experimentMeta = await prisma.experiment.findFirst({
@@ -159,14 +160,14 @@ export async function GET(
     const allExperimentCases = await prisma.experimentCase.findMany({
       where: { experimentId: id, deletedAt: null },
       select: { id: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     const allExperimentCaseIds = allExperimentCases.map((item: Pick<ExperimentCase, 'id'>) => item.id);
     const caseTotal = allExperimentCaseIds.length;
-    const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
-    const casePage = Math.min(casePageRaw, casePages);
+    const { casePage, locatedCaseId } = locateCasePage(allExperimentCaseIds, casePageRaw, casePageSize, wantCaseId || locateCaseId);
     const pagedCases = await prisma.experimentCase.findMany({
       where: { experimentId: id, deletedAt: null, ...(wantCaseId ? { id: wantCaseId } : {}) },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
@@ -771,6 +772,7 @@ export async function GET(
       caseTotal,
       casePage,
       casePageSize,
+      locatedCaseId,
     });
   } catch (error) {
     console.error('[Experiment Detail Error]', error);
