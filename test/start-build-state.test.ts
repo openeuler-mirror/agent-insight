@@ -56,6 +56,7 @@ for (const [file, content] of Object.entries({
   'next.config.ts': 'config', 'tsconfig.next.json': '{}', 'postcss.config.mjs': 'postcss',
   '.env.production.local': 'NEXT_PUBLIC_TEST=changed', 'home/.env': 'SECRET=changed',
   'prisma/schema.prisma': 'schema', 'scripts/benchmark/generate-catalog.cjs': 'generator',
+  'runtimes/mcts/runtime.yaml': 'key: mcts', 'config/benchmark/executor.yaml': 'runtimes: {}',
 })) {
   test(`changed ${file} invalidates successful build`, t => {
     const f = fixture(t)

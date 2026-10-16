@@ -68,9 +68,10 @@ process.exit(Number(process.env.BOOTSTRAP_TEST_STATUS))
 `, { mode: 0o755 })
   const source = fs.readFileSync(startScript, 'utf8')
   const bootstrapStart = source.indexOf('if ! node scripts/benchmark/bootstrap-swe-bench-dataset.cjs; then')
-  const buildStart = source.indexOf('echo "Building project..."', bootstrapStart)
-  assert.ok(bootstrapStart > 0 && buildStart > bootstrapStart)
-  const startupStep = source.slice(bootstrapStart, buildStart) + 'echo "Building project..."\n'
+  const buildStart = source.indexOf('npm run build -- --webpack', bootstrapStart)
+  const bootstrapEnd = source.indexOf('\nfi\n', bootstrapStart) + 4
+  assert.ok(bootstrapStart > 0 && bootstrapEnd > bootstrapStart && buildStart > bootstrapEnd)
+  const startupStep = source.slice(bootstrapStart, bootstrapEnd) + 'echo "Building project..."\n'
   const cases = [
     { error: 'curl 执行失败：curl: (28) Operation timed out', reason: '下载超时', advice: 'dataset.source' },
     { error: 'curl 执行失败：curl: (7) Failed to connect', reason: '下载失败', advice: 'dataset.source' },

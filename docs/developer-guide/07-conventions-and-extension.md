@@ -103,7 +103,7 @@
 `scripts/start-build-state.cjs` 对文件内容、路径、权限及符号链接目标计算 SHA-256，不只比较 Git 提交号或源码修改时间。
 已安装依赖的逐文件摘要会缓存在 `node_modules/.cache/agent-insight/dependency-hashes.json`；每次仍遍历检查
 设备、inode、大小、权限、纳秒级 mtime/ctime，任一变化便重新读取内容计算摘要，缓存缺失时全量计算。
-构建输入覆盖 `src`、`public`、`prisma`、`scripts`、`generated`、`benchmarks`、`packages`、`services`、
+构建输入覆盖 `src`、`public`、`prisma`、`scripts`、`generated`、`benchmarks`、`runtimes`、`config`、`packages`、`services`、
 `skills`、`agent_ras`、`agent_fault_injection`、`integrations` 和 `bin`，包括未提交文件；
 同时覆盖根目录的 package/lock/构建配置、项目 `.env*`、运行根 `.env`、实际 `node_modules` 内容，
 以及 Node 版本、操作系统、架构、项目路径和 `NEXT_*`、`NEXT_PUBLIC_*`、`PRISMA_*`、`NODE_ENV`、`BABEL_ENV`、`CI`。
