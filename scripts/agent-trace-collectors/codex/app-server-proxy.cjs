@@ -49,6 +49,7 @@ function eventFor(observer, eventType, request, extra = {}) {
     clientMessageId: text(params.clientMessageId || params.client_message_id),
     timestampMs: extra.timestampMs || observer.now(),
     inputKind: extra.inputKind,
+    status: extra.status,
     payload: extra.payload || {},
     provenance: {
       direct: true,
@@ -66,7 +67,7 @@ function createAppServerProtocolObserver(options = {}) {
     protocolVersion: undefined,
     threadId: undefined,
     pending: new Map(),
-    diagnostics: { malformed: 0, protocolErrors: 0, unknownNotifications: 0 },
+    diagnostics: { malformed: 0, protocolErrors: 0, unknownNotifications: 0, observeErrors: 0 },
   };
 
   async function emit(event) {
@@ -177,19 +178,47 @@ function createAppServerProtocolObserver(options = {}) {
         await emit(event);
         return event ? [event] : [];
       }
+      // 446-6：turn/completed 是 proxy-only 部署（未启用 rollout）唯一的 turn 终态
+      // 通知；不处理会让执行永远停留在 in_progress。turn.status 映射：
+      // interrupt/cancel/abort → 中断；fail/error → 失败；其余（含缺省）→ 完成。
+      if (message.method === "turn/completed") {
+        const turn = params.turn || {};
+        const turnId = text(turn.id || params.turnId || params.turn_id);
+        const rawStatus = text(turn.status) || "completed";
+        if (/interrupt|cancel|abort/i.test(rawStatus)) {
+          const event = eventFor(observer, "execution_interrupted", { params }, {
+            sourceExecutionId: turnId,
+            payload: { reason: rawStatus },
+          });
+          await emit(event);
+          return event ? [event] : [];
+        }
+        const failed = /fail|error/i.test(rawStatus);
+        const event = eventFor(observer, "execution_completed", { params }, {
+          sourceExecutionId: turnId,
+          status: failed ? "failed" : "completed",
+          payload: { status: failed ? "failed" : "completed" },
+        });
+        await emit(event);
+        return event ? [event] : [];
+      }
       observer.diagnostics.unknownNotifications += 1;
     }
     return emitted;
   }
 
   async function observeLine(line, direction) {
+    // 446-2：JSON 解析错误在此计数；observeMessage 的异步 rejection 刻意留在
+    // 返回的 Promise 上，由转发层（forwardJsonLines 的 observeSafely）兜住并
+    // 计入 diagnostics，不上抛阻断协议转发。
+    let message;
     try {
-      const message = JSON.parse(String(line));
-      return observeMessage(message, direction);
+      message = JSON.parse(String(line));
     } catch {
       observer.diagnostics.malformed += 1;
       return [];
     }
+    return observeMessage(message, direction);
   }
 
   return { ...observer, observeLine, observeMessage };
@@ -202,10 +231,28 @@ async function writeLine(output, line) {
 
 async function forwardJsonLines(input, output, direction, observer) {
   const reader = createInterface({ input, crlfDelay: Infinity });
+  // 446-2：转发先于观测，观测在串行后台链上执行且异常不向协议通道传播——
+  // relay 掉线/超时最多拖慢上报（deliverLifecycleEvent 自带 2s 超时），不能
+  // 阻断或打断 App Server 的 JSON-RPC 通信。返回的 Promise 在输入结束且观测
+  // 链排空后 resolve，保证进程退出前事件有机会送达。
+  let observed = Promise.resolve();
+  const observeSafely = (line) => {
+    observed = observed.then(async () => {
+      try {
+        await observer.observeLine(line, direction);
+      } catch (error) {
+        observer.diagnostics.observeErrors = (observer.diagnostics.observeErrors || 0) + 1;
+        if (observer.diagnostics.observeErrors === 1) {
+          process.stderr.write(`Agent Insight Codex observation failed: ${error?.message || error}\n`);
+        }
+      }
+    });
+  };
   for await (const line of reader) {
-    await observer.observeLine(line, direction);
     await writeLine(output, line);
+    observeSafely(line);
   }
+  await observed;
 }
 
 function readProxyConfig(configPath = process.env.AGENT_INSIGHT_CODEX_CONFIG) {

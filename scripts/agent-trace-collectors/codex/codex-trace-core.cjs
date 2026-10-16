@@ -1314,11 +1314,18 @@ class CodexTraceCore {
     for (const snapshot of result.snapshots || []) {
       const payload = snapshot.payload || {};
       if (snapshot.eventType === "execution_snapshot") {
-        const executionId = `codex:${threadId}:turn:${snapshot.sourceExecutionId}`;
+        // 446-1：必须与 turn 级事件（OTLP/rollout 正文路径）共用同一 executionId
+        // 派生（executionId() → `${threadId}:turn:${turnId}`），服务端按 sessionId
+        // 分组才能把同轮的生命周期、正文与指标合并为一次执行；已存在的 turn 先经
+        // turnFor 解析别名，避免别名重定向后再次分叉。
+        const canonicalTurn = this.turnFor(session, snapshot.sourceExecutionId, false);
+        const lifecycleExecutionId = canonicalTurn
+          ? canonicalTurn.executionId
+          : executionId(threadId, snapshot.sourceExecutionId);
         await this.writer.append(eventBase(session, {
-          sessionId: executionId,
-          traceId: stableTraceId("codex", executionId),
-          spanId: stableSpanId("codex-lifecycle", executionId),
+          sessionId: lifecycleExecutionId,
+          traceId: stableTraceId("codex", lifecycleExecutionId),
+          spanId: stableSpanId("codex-lifecycle", lifecycleExecutionId),
           parentSpanId: undefined,
           kind: "agent",
           name: "agent.codex",
@@ -1330,7 +1337,7 @@ class CodexTraceCore {
           attributes: {
             "agent.insight.lifecycle": "execution",
             "codex.lifecycle.event_type": "execution_snapshot",
-            "codex.execution.id": executionId,
+            "codex.execution.id": lifecycleExecutionId,
             "codex.conversation.id": threadId,
             "codex.turn.id": snapshot.sourceExecutionId,
             "codex.source.kind": snapshot.sourceKind,

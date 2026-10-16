@@ -27,6 +27,7 @@ const {
 } = require("../scripts/agent-trace-collectors/codex/relay.cjs")
 const {
   aggregateCodexTraceEvents,
+  keepLatestCodexSpanSnapshots,
 } = require("../src/lib/ingest/otel/adapters/codex.ts")
 const { CodexTraceCore } = require("../scripts/agent-trace-collectors/codex/codex-trace-core.cjs")
 
@@ -388,4 +389,159 @@ test("server persistence and session API retain Codex source identity and status
   assert.match(storage, /threadOnly/)
   assert.match(storage, /traceThreadEvent\.upsert/)
   assert.match(sessionRoute, /thread/)
+})
+
+// ---- PR #446 审查意见回归（Bug 446-1/2/3/6/7/8） ----
+
+test("Bug 446-1 红灯：lifecycle 快照与 rollout 正文共用 session ID，聚合成一个完整执行", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => 1_700_000_020_000 })
+  const base = {
+    sourceThreadId: "thread-446-1",
+    sourceKind: "desktop",
+    sourceExecutionId: "turn-446-1",
+    provenance: { direct: true, confidence: "direct" },
+  }
+  await core.processLifecycleEvent({ ...base, eventId: "r1-start", eventType: "execution_started", timestampMs: 100 })
+  await core.processLifecycleEvent({ ...base, eventId: "r1-input", eventType: "user_input_accepted", inputKind: "initial", timestampMs: 101, payload: { content: "统一 ID 验证任务" } })
+  await core.processRolloutContent({ ...base, eventId: "r1-content", eventType: "rollout_content", contentKind: "llm_text", timestampMs: 150, payload: { text: "来自 rollout 的模型正文回答。" } })
+  await core.processLifecycleEvent({ ...base, eventId: "r1-done", eventType: "execution_completed", timestampMs: 200, payload: { status: "completed", output: "任务结论" } })
+
+  const groups = new Map<string, Array<Record<string, any>>>()
+  for (const item of writer.events) {
+    const list = groups.get(item.sessionId) || []
+    list.push(item)
+    groups.set(item.sessionId, list)
+  }
+  assert.equal(groups.size, 1, `lifecycle 与正文必须落在同一 sessionId（实际分组：${[...groups.keys()].join(", ")}）`)
+  const [sessionId, events] = [...groups.entries()][0]
+  assert.equal(sessionId, "thread-446-1:turn:turn-446-1", "executionId 必须由 executionId() 派生（无 codex: 前缀）")
+  // 服务端管道顺序：先按 spanId 保留最新快照（adapter preprocessEvents），再聚合。
+  const record = aggregateCodexTraceEvents(sessionId, keepLatestCodexSpanSnapshots(events as any))
+  assert.ok(record, "聚合必须产出执行记录")
+  assert.equal(record?.query, "统一 ID 验证任务")
+  assert.equal(record?.executionStatus, "completed")
+  assert.ok(
+    (record?.interactions || []).some((item: any) => item.role === "assistant" && String(item.content || "").includes("模型正文回答")),
+    "聚合执行必须包含 rollout 正文 LLM 交互",
+  )
+})
+
+test("Bug 446-2 红灯：onEvent 抛错时协议行仍被完整转发且 Promise 不拒绝", async () => {
+  const observer = createAppServerProtocolObserver({
+    onEvent: async () => { throw new Error("relay offline") },
+  })
+  await observer.observeMessage(
+    { id: 1, method: "turn/start", params: { threadId: "thread-446-2", input: [{ type: "text", text: "hello" }] } },
+    "client",
+  )
+  const input = new PassThrough()
+  const output = new PassThrough()
+  let forwarded = ""
+  output.setEncoding("utf8")
+  output.on("data", (chunk: string) => { forwarded += chunk })
+  const pending = forwardJsonLines(input, output, "server", observer)
+  const line = JSON.stringify({ id: 1, result: { turn: { id: "turn-446-2" } } })
+  input.end(`${line}\n`)
+  await assert.doesNotReject(pending, "采集上报失败不得使转发 Promise 拒绝")
+  assert.equal(forwarded, `${line}\n`, "正常 JSON-RPC 响应必须完整转发到客户端")
+  assert.ok(observer.diagnostics.observeErrors >= 1, "上报失败必须计入 diagnostics.observeErrors")
+})
+
+test("Bug 446-6 红灯：turn/completed 通知把 proxy-only 执行推入对应终态", async () => {
+  for (const [status, expected] of [
+    ["completed", "completed"],
+    ["failed", "failed"],
+    ["interrupted", "interrupted"],
+  ] as const) {
+    const events: any[] = []
+    const observer = createAppServerProtocolObserver({ now: () => 2_000, onEvent: async (item: any) => events.push(item) })
+    await observer.observeMessage({ id: 1, method: "turn/start", params: { threadId: "thread-446-6", input: "hi" } }, "client")
+    await observer.observeMessage({ id: 1, result: { turn: { id: "turn-446-6" } } }, "server")
+    await observer.observeMessage(
+      { method: "turn/completed", params: { threadId: "thread-446-6", turn: { id: "turn-446-6", status, items: [] } } },
+      "server",
+    )
+    const reducer = createCodexLifecycleReducer()
+    for (const item of events) reducer.apply(item)
+    const snapshot = reducer.snapshot()
+    assert.equal(snapshot.executions.length, 1, `${status}: 单次执行`)
+    assert.equal(snapshot.executions[0].status, expected, `${status} 通知必须映射到终态 ${expected}`)
+  }
+})
+
+test("Bug 446-3 红灯：未配置 backfillAfterMs 时历史文件不被回填，边界持久化", async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-backfill-default-"))
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const sessions = path.join(root, "sessions")
+  await fsp.mkdir(sessions, { recursive: true })
+  const rollout = path.join(sessions, "rollout-2020-01-01T00-00-00-old.jsonl")
+  const records = [
+    { type: "session_meta", payload: { id: "thread-446-3", originator: "Codex Desktop", source: "exec" } },
+    event("task_started", { turn_id: "task-old" }),
+    event("user_message", { turn_id: "task-old", message: "2020 年的历史提示词" }),
+  ]
+  await fsp.writeFile(rollout, `${records.map((item) => JSON.stringify(item)).join("\n")}\n`, "utf8")
+  const collected: any[] = []
+  const reader = createDesktopRolloutReader({
+    enabled: true,
+    sessionsDir: sessions,
+    stateDir: path.join(root, "state"),
+    onEvents: async (items: any[]) => collected.push(...items),
+  })
+  const result = await reader.scan()
+  assert.equal(result.events, 0, "缺省配置下启用前的历史文件不得产出事件")
+  assert.equal(collected.length, 0)
+  const checkpoint = JSON.parse(await fsp.readFile(reader.checkpointPath, "utf8"))
+  assert.ok(Number.isFinite(checkpoint.backfillBoundaryMs) && checkpoint.backfillBoundaryMs > 0, "首次启用边界必须持久化进 checkpoint")
+})
+
+test("Bug 446-7 红灯：跳过历史回填文件后，恢复旧会话的新任务仍被采集", async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-resume-skipped-"))
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const sessions = path.join(root, "sessions")
+  await fsp.mkdir(sessions, { recursive: true })
+  const rollout = path.join(sessions, "rollout-2020-01-01T00-00-00-resume.jsonl")
+  const oldRecords = [
+    { type: "session_meta", payload: { id: "thread-446-7", originator: "Codex Desktop", source: "exec" } },
+    event("task_started", { turn_id: "task-old" }),
+    event("user_message", { turn_id: "task-old", message: "历史任务" }),
+  ]
+  await fsp.writeFile(rollout, `${oldRecords.map((item) => JSON.stringify(item)).join("\n")}\n`, "utf8")
+  const collected: any[] = []
+  const reader = createDesktopRolloutReader({
+    enabled: true,
+    sessionsDir: sessions,
+    stateDir: path.join(root, "state"),
+    backfillAfterMs: Date.now(),
+    onEvents: async (items: any[]) => collected.push(...items),
+  })
+  await reader.scan()
+  assert.equal(collected.length, 0, "历史内容不回填")
+  assert.ok(await fsp.stat(reader.checkpointPath).then(() => true, () => false), "跳过决策必须落盘 checkpoint")
+  const newRecords = [
+    event("task_started", { turn_id: "task-new" }),
+    event("user_message", { turn_id: "task-new", message: "恢复旧会话后的新任务" }),
+  ]
+  await fsp.appendFile(rollout, `${newRecords.map((item) => JSON.stringify(item)).join("\n")}\n`, "utf8")
+  const second = await reader.scan()
+  assert.ok(second.events >= 2, `恢复旧会话的新增任务必须产出事件（实际 ${second.events}）`)
+  const started = collected.find((item: any) => item.eventType === "execution_started" && item.sourceExecutionId === "task-new")
+  assert.ok(started, "新增任务必须有 execution_started")
+  assert.equal(started.sourceThreadId, "thread-446-7", "新增事件必须归属到 session_meta 的 thread")
+})
+
+test("Bug 446-8 红灯：task_complete 失败状态传到事件顶层，reducer 终态为 failed", () => {
+  const context = { sourceThreadId: "thread-446-8", sourceKind: "desktop", unknownRecords: 0 }
+  const started = recordsToLifecycleEvents(event("task_started", { turn_id: "turn-fail" }), context)
+  const input = recordsToLifecycleEvents(event("user_message", { turn_id: "turn-fail", message: "会失败的任务" }), started.context)
+  const done = recordsToLifecycleEvents(event("task_complete", { turn_id: "turn-fail", status: "failed" }), input.context)
+  const events = [...started.events, ...input.events, ...done.events]
+  const completed = events.find((item: any) => item.eventType === "execution_completed")
+  assert.ok(completed, "task_complete 必须产出 execution_completed 事件")
+  assert.equal(completed?.status, "failed", "失败状态必须写入事件顶层（reducer 契约）")
+  const reducer = createCodexLifecycleReducer()
+  for (const item of events) reducer.apply(item)
+  const snapshot = reducer.snapshot()
+  assert.equal(snapshot.executions[0].status, "failed", "reducer 终态必须为 failed 而非 completed")
 })

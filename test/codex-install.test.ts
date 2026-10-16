@@ -399,6 +399,33 @@ test("OTel installer reports an existing exporter conflict without changing conf
   }
 })
 
+test("desktop rollout backfill boundary is written on install and preserved on reinstall (Bug 446-3)", async (t) => {
+  const homeDir = await tempDir(t)
+  const previousKey = process.env.AGENT_INSIGHT_API_KEY
+  process.env.AGENT_INSIGHT_API_KEY = "test-api-key"
+  t.after(() => {
+    if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY
+    else process.env.AGENT_INSIGHT_API_KEY = previousKey
+  })
+  const options = {
+    homeDir,
+    sourceDir: path.join(process.cwd(), "scripts", "agent-trace-collectors", "codex"),
+    relayPort: 43191,
+    startRelay: false,
+    installEditors: false,
+    skipVersionCheck: true,
+  }
+  await install(options)
+  const collectorConfigPath = path.join(homeDir, ".agent-insight", "collectors", "codex", "config.json")
+  const first = JSON.parse(await fsp.readFile(collectorConfigPath, "utf8"))
+  assert.ok(Number(first.desktopRolloutBackfillAfterMs) > 0, "install 必须写入回填边界（启用前历史不回灌）")
+  const boundary = first.desktopRolloutBackfillAfterMs
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  await install(options)
+  const second = JSON.parse(await fsp.readFile(collectorConfigPath, "utf8"))
+  assert.equal(second.desktopRolloutBackfillAfterMs, boundary, "重装必须保留既有边界，不得后移")
+})
+
 test("source installer roundtrip preserves unrelated hooks and restores config", async (t) => {
   const homeDir = await tempDir(t)
   const codexDir = path.join(homeDir, ".codex")
