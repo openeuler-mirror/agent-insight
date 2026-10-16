@@ -91,9 +91,38 @@
   不会提前把“进程存在”误报成“服务已就绪”。可用
   `AGENT_INSIGHT_STARTUP_TIMEOUT_SECONDS` 和
   `AGENT_INSIGHT_STARTUP_REQUEST_TIMEOUT_MS` 调整总等待时间与单次探测超时。
-- **Build**：`npm run build` · **Start (prod)**：`bash scripts/restart.sh` 或 `npm run start`。
+- **Build**：`npm run build` · **Start (源码生产部署)**：`bash scripts/start.sh`，运行校验过的 Next.js standalone server。
+  `--force-rebuild` 强制重新构建，但保留 `.next/cache`；可与 `--port` 组合。SWE-bench 自动准备仍由项目 YAML 配置控制。
+  普通启动仅在没有成功记录、输入变化或产物不完整时重建。直接运行 `npm run build` 不会创建可复用记录。
+  启动脚本始终执行数据库同步和首页、数据集、故障页面健康检查，并输出各阶段与总耗时。
 - **Test**：`npm run test`（`node --import tsx --test "test/**/*.test.ts"`）。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。
+
+### 生产启动构建复用
+
+`scripts/start-build-state.cjs` 对文件内容、路径、权限及符号链接目标计算 SHA-256，不只比较 Git 提交号或源码修改时间。
+已安装依赖的逐文件摘要会缓存在 `node_modules/.cache/agent-insight/dependency-hashes.json`；每次仍遍历检查
+设备、inode、大小、权限、纳秒级 mtime/ctime，任一变化便重新读取内容计算摘要，缓存缺失时全量计算。
+构建输入覆盖 `src`、`public`、`prisma`、`scripts`、`generated`、`benchmarks`、`packages`、`services`、
+`skills`、`agent_ras`、`agent_fault_injection`、`integrations` 和 `bin`，包括未提交文件；
+同时覆盖根目录的 package/lock/构建配置、项目 `.env*`、运行根 `.env`、实际 `node_modules` 内容，
+以及 Node 版本、操作系统、架构、项目路径和 `NEXT_*`、`NEXT_PUBLIC_*`、`PRISMA_*`、`NODE_ENV`、`BABEL_ENV`、`CI`。
+新增上述目录外的构建输入时，必须同步扩展此清单。生成缓存与 Python 缓存不参与指纹；端口的单次覆盖不触发重建。
+配置文件采用保守的整文件校验，即使只改其中运行时配置也会重建。指纹文件只保存摘要，不保存环境变量原文。
+
+构建前先生成 Benchmark catalog，再计算输入摘要，避免生成文件导致每次失效。
+`.next/start-build-state.json` 只在构建、静态资源复制、standalone 校验及前后输入一致性检查全部成功后原子写入。
+复用时重新校验页面清单、BUILD_ID，以及整个 standalone 和静态资源的内容摘要；缺失或损坏即重建。
+重建前删除旧构建输出和成功标记，保留 `.next/cache` 中的 Webpack 等缓存；
+仅移除与旧生成路由类型绑定的 `.next/cache/.tsbuildinfo`，避免在原有 2 GB 构建堆上限下重用旧类型图导致内存溢出。
+失败构建不会在下次被当成成功产物。
+同目录启动在有 `flock` 的系统上加互斥锁，服务子进程不会继承锁；不同目录各自独立。
+没有 `flock` 的系统仍须避免并行启动，同目录多端口服务也不能共享可变的构建目录。
+
+`start.sh` 通过 `db_push.sh --skip-generate` 同步数据库，保留已有的破坏性变更拦截。
+随后独立检查 Prisma schema、生成器和生成产物；首次记录、版本或内容变化、文件缺失时才执行一次 `prisma generate`。
+成功记录位于 `node_modules/.cache/agent-insight/start-prisma-state.json`；其他入口不传 `--skip-generate` 时保持原行为。
+更改 schema 不会因为复用 Client 而跳过数据库同步。
 
 ## SQLite data archive CLI
 
