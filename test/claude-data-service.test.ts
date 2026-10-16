@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
+import { isolateTestDatabase } from "./helpers/isolated-test-db"
+isolateTestDatabase("claude-data-service")
 import {
   saveExecutionRecord,
   shouldRefreshStoredQueryFromInteractions,

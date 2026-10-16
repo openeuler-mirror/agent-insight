@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { isolateTestDatabase } from './helpers/isolated-test-db';
+isolateTestDatabase('infra-store');
 import { deserializeRow, ensureSource, querySamples, saveSample, serializeSample } from '@/lib/infra/store';
 import { prismaRaw } from '@/lib/storage/prisma';
 import type { InfraMetricSample } from '@/lib/infra/types';

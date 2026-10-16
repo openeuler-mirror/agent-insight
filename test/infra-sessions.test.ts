@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { isolateTestDatabase } from './helpers/isolated-test-db';
+isolateTestDatabase('infra-sessions');
 import { countSessionsForEndpoint, listSessionsForEndpoint } from '@/lib/infra/sessions';
 import { prismaRaw } from '@/lib/storage/prisma';
 
