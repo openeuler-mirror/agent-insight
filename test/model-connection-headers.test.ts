@@ -154,6 +154,8 @@ test('连接测试会把 Authorization 等自定义 Header 发送给模型端点
     const body = await response.json();
     assert.equal(response.status, 200);
     assert.equal(body.success, true);
+    assert.equal(body.timeoutMs, 60_000);
+    assert.ok(body.elapsedMs >= 0);
     assert.equal(receivedAuthorization, 'internal-header-token');
   } finally {
     globalThis.fetch = originalFetch;
