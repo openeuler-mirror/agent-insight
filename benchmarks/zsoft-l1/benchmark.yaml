@@ -6,13 +6,17 @@ protocols:
 implementation:
   adapter: ./adapter/index.ts
   adapterExport: zsoftL1Adapter
+  datasetLoader: ./dataset/index.ts
+  datasetLoaderExport: zsoftDatasetLoader
+  datasetPreparer: ./dataset/prepare.ts
+  datasetPreparerExport: zsoftDatasetPreparer
   evaluator: ./evaluator/evaluator.yaml
 schemas:
   case: ./schemas/case.schema.json
   rawResult: ./schemas/result.schema.json
 executor:
   supported: true
-  requiredCapabilities: [public-bundle-workspace/v1, single-file/v1]
+  requiredCapabilities: [zsoft-tasks-workspace/v2, single-file/v1]
   defaultTimeoutSeconds: 900
 submission:
   artifacts:
@@ -30,7 +34,9 @@ dataset:
   profiles:
     - key: l1
       displayName: ZSoft L1
-      acceptedExtensions: [.json, .jsonl]
+      acceptedExtensions: []
+      acceptedSourceKinds: [directory]
+      version: official-directory/v1
 presentation:
   evaluator:
     displayName: ZSoft L1 Official Judge

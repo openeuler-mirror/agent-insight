@@ -15,8 +15,8 @@ Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--por
 
 Builds and starts Agent Insight. Benchmark selection precedence is CLI,
 AGENT_INSIGHT_BENCHMARK from the process environment, then ~/.agent-insight/.env.
-When the selected KEY is swe-bench, the first start also downloads, verifies,
-and imports SWE-bench Verified with its official loader.
+Registered benchmarks (swe-bench, zsoft-l1) prepare and import official data
+on first start. Offline sources are configured in ~/.agent-insight/.env.
 EOF
 }
 
@@ -57,10 +57,17 @@ done
 if [ -n "${PORT:-}" ]; then
   start_fail 'PORT 已移除，请改用 AGENT_INSIGHT_PORT 并移除旧 PORT 配置'
 fi
-case "$BENCHMARK_KEY" in
-  ''|swe-bench) ;;
-  *) start_fail "暂不支持自动准备 Benchmark：$BENCHMARK_KEY（当前支持：swe-bench）" ;;
-esac
+validate_benchmark_key() {
+  [ -z "$BENCHMARK_KEY" ] && return 0
+  node - "$BENCHMARK_KEY" <<'NODE'
+const supported = require('./generated/benchmark-catalog/dataset-preparer-keys.cjs')
+if (!supported.includes(process.argv[2])) {
+  console.error(`暂不支持自动准备 Benchmark：${process.argv[2]}（当前支持：${supported.join('、')}）`)
+  process.exit(1)
+}
+NODE
+}
+validate_benchmark_key || exit 1
 
 if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
   echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
@@ -246,10 +253,7 @@ echo "Checking port $PLATFORM_PORT..."
 if [ -z "$BENCHMARK_KEY" ]; then
   BENCHMARK_KEY="${AGENT_INSIGHT_BENCHMARK:-}"
 fi
-case "$BENCHMARK_KEY" in
-  ''|swe-bench) ;;
-  *) start_fail "暂不支持自动准备 Benchmark：$BENCHMARK_KEY（当前支持：swe-bench）" ;;
-esac
+validate_benchmark_key || exit 1
 
 if [[ "${DATABASE_URL:-}" == file:* ]]; then
   echo "SQLite database target: ${DATABASE_URL#file:}"
@@ -362,11 +366,11 @@ if ! npx prisma generate; then
   exit 1
 fi
 
-if [ "$BENCHMARK_KEY" = "swe-bench" ]; then
-  echo "Preparing SWE-bench Verified dataset..."
-  if ! npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts; then
+if [ -n "$BENCHMARK_KEY" ]; then
+  echo "Preparing Benchmark dataset: $BENCHMARK_KEY..."
+  if ! npx tsx scripts/benchmark/ensure-dataset.ts --benchmark "$BENCHMARK_KEY"; then
     echo ""
-    echo "  ⛔ SWE-bench Verified 自动准备或导入失败，服务未启动。"
+    echo "  ⛔ Benchmark 自动准备或导入失败，服务未启动。"
     echo "     修复上方错误后重新执行 bash scripts/start.sh。"
     exit 1
   fi

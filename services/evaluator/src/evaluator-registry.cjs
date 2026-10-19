@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
+const { runtimeDescriptor, remoteImage } = require('./runtime-image.cjs')
 
 class EvaluatorProtocolError extends Error {
   constructor(code, message, status = 422, retryable = false) {
@@ -218,6 +219,7 @@ function runEntrypoint(descriptor, args, options = {}) {
 }
 
 async function inspectOciRuntime(descriptor, options = {}) {
+  descriptor = runtimeDescriptor(descriptor)
   const commandRunner = options.commandRunner || runEntrypoint
   try {
     const result = await commandRunner({ command: 'direct', entrypoint: 'docker' }, [
@@ -233,6 +235,7 @@ async function inspectOciRuntime(descriptor, options = {}) {
 const runtimePreparations = new Map()
 
 async function ensureOciRuntime(descriptor, options = {}) {
+  descriptor = runtimeDescriptor(descriptor)
   const key = `${descriptor.image}:${descriptor.artifactDigest}`
   let work = runtimePreparations.get(key)
   if (!work) {
@@ -250,7 +253,7 @@ async function prepareOciRuntime(descriptor, options = {}) {
     throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_INVALID', 'Evaluator OCI Runtime 描述不合法', 500)
   }
   if (await inspectOciRuntime(descriptor, options)) return
-  if (descriptor.requiresPrebuiltRuntime) {
+  if (descriptor.requiresPrebuiltRuntime && !remoteImage(descriptor.image)) {
     throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_IMAGE_NOT_FOUND', '该 Evaluator 需要预先构建与 Catalog 摘要匹配的 Runtime 镜像', 503, false)
   }
   const { recordManagedImage } = require('./service-control.cjs')
@@ -266,6 +269,7 @@ async function prepareOciRuntime(descriptor, options = {}) {
       'pull', descriptor.image,
     ], { ...options, errorCode: 'EVALUATOR_RUNTIME_IMAGE_UNAVAILABLE' })
   } catch (pullError) {
+    if (descriptor.requiresPrebuiltRuntime) throw pullError
     if (!descriptor.dockerfile || !fs.existsSync(descriptor.dockerfile)) throw pullError
     await commandRunner({ command: 'direct', entrypoint: 'docker' }, [
       'build', '--file', descriptor.dockerfile,
@@ -291,6 +295,7 @@ async function prepareOciRuntime(descriptor, options = {}) {
 }
 
 async function runOciEntrypoint(descriptor, args, options = {}) {
+  descriptor = runtimeDescriptor(descriptor)
   await ensureOciRuntime(descriptor, options)
   const controllerContainer = String(process.env.EVALUATOR_CONTROLLER_CONTAINER_ID || process.env.HOSTNAME || '').trim()
   if (!/^[A-Za-z0-9_.-]+$/.test(controllerContainer)) {
@@ -388,7 +393,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
 
   async checkReady(runtime) {
     if (this.descriptor.runtime === 'oci-container' && !await inspectOciRuntime(this.descriptor)) {
-      if (this.descriptor.requiresPrebuiltRuntime) {
+      if (this.descriptor.requiresPrebuiltRuntime && !remoteImage(runtimeDescriptor(this.descriptor).image)) {
         return { ready: false, formalEligible: false, reason: '需要预先构建与 Catalog 摘要匹配的 Runtime 镜像' }
       }
       return {

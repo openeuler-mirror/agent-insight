@@ -1,7 +1,7 @@
 key: zsoft-l1
 runtime: oci-container
-requiresPrebuiltRuntime: true
 imageRepository: agent-insight-benchmark-runtime-zsoft-l1
+imageProvider: ./images.cjs
 dockerfile: ./Dockerfile
 entrypoint: ./entrypoint.py
 containerEntrypoint: /opt/agent-insight/zsoft/entrypoint.py

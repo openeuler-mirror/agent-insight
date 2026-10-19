@@ -137,7 +137,11 @@ function normalizeDataset(source, key) {
     const profileKey = string(profile?.key, `dataset.profiles[${index}].key`, /^[a-z0-9][a-z0-9._-]{0,63}$/)
     if (keys.has(profileKey)) fail(`${key} 的 Dataset Profile 重复：${profileKey}`)
     keys.add(profileKey)
-    if (!Array.isArray(profile?.acceptedExtensions) || !profile.acceptedExtensions.length) {
+    const sourceKinds = profile.acceptedSourceKinds == null ? ['file'] : profile.acceptedSourceKinds
+    if (!Array.isArray(sourceKinds) || !sourceKinds.length || sourceKinds.some(kind => !['file', 'directory'].includes(kind))) {
+      fail(`${profileKey}.acceptedSourceKinds 不合法`)
+    }
+    if (!Array.isArray(profile?.acceptedExtensions) || (!profile.acceptedExtensions.length && sourceKinds.includes('file'))) {
       fail(`${profileKey} 缺少 acceptedExtensions`)
     }
     const acceptedExtensions = profile.acceptedExtensions.map((extension, extensionIndex) => (
@@ -147,6 +151,8 @@ function normalizeDataset(source, key) {
       key: profileKey,
       displayName: string(profile?.displayName || profileKey, `${profileKey}.displayName`),
       acceptedExtensions,
+      ...(profile.version == null ? {} : { version: string(profile.version, `${profileKey}.version`) }),
+      ...(profile.acceptedSourceKinds == null ? {} : { acceptedSourceKinds: sourceKinds }),
       ...(profile?.expectedCaseCount == null
         ? {}
         : { expectedCaseCount: positiveInteger(profile.expectedCaseCount, `${profileKey}.expectedCaseCount`) }),
@@ -226,6 +232,12 @@ function loadPackage(packageDir) {
     : null
   const datasetLoaderExport = datasetLoaderPath
     ? string(source.implementation?.datasetLoaderExport, 'implementation.datasetLoaderExport', /^[A-Za-z_$][\w$]*$/)
+    : null
+  const datasetPreparerPath = source.implementation?.datasetPreparer
+    ? resolveInside(packageDir, source.implementation.datasetPreparer, 'implementation.datasetPreparer')
+    : null
+  const datasetPreparerExport = datasetPreparerPath
+    ? string(source.implementation?.datasetPreparerExport, 'implementation.datasetPreparerExport', /^[A-Za-z_$][\w$]*$/)
     : null
   const evaluatorYamlPath = resolveInside(packageDir, source.implementation?.evaluator, 'implementation.evaluator')
   const caseSchemaPath = resolveInside(packageDir, source.schemas?.case, 'schemas.case')
@@ -317,6 +329,7 @@ function loadPackage(packageDir) {
   const adapterExport = string(source.implementation?.adapterExport, 'implementation.adapterExport', /^[A-Za-z_$][\w$]*$/)
   const dataset = normalizeDataset(source.dataset, key)
   const presentation = normalizePresentation(source.presentation, key)
+  if (datasetPreparerPath && !dataset) fail(`${key} 声明了 Dataset Preparer，但没有 dataset.profiles`)
   if (datasetLoaderPath && !dataset) fail(`${key} 声明了 Dataset Loader，但没有 dataset.profiles`)
   const primaryMetricKey = string(source.result?.primaryMetric?.key, 'result.primaryMetric.key')
   const primaryMetricAggregation = source.result?.primaryMetric?.aggregation
@@ -331,7 +344,8 @@ function loadPackage(packageDir) {
   const files = [
     yamlPath,
     adapterPath,
-    ...(datasetLoaderPath ? [datasetLoaderPath] : []),
+    ...(datasetLoaderPath ? listFiles(path.dirname(datasetLoaderPath)) : []),
+    ...(datasetPreparerPath ? listFiles(path.dirname(datasetPreparerPath)) : []),
     caseSchemaPath,
     resultSchemaPath,
     ...executorFiles,
@@ -344,6 +358,8 @@ function loadPackage(packageDir) {
     adapterExport,
     datasetLoaderPath,
     datasetLoaderExport,
+    datasetPreparerPath,
+    datasetPreparerExport,
     gitSourcePolicyPath,
     executorFiles,
     manifest: {
@@ -460,6 +476,15 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     `export const generatedBenchmarkDatasetLoaders: readonly GeneratedBenchmarkDatasetLoader[] = [${packagesWithLoaders.map((item, index) => `{ adapterKey: ${JSON.stringify(item.key)}, loader: loader${index} }`).join(', ')}]`,
     '',
   ].join('\n')
+  const packagesWithPreparers = packages.filter(item => item.datasetPreparerPath)
+  const preparersSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    "import type { BenchmarkDatasetPreparer } from '../../packages/benchmark-protocol/src/contracts'",
+    ...packagesWithPreparers.map((item, index) => `import { ${item.datasetPreparerExport} as preparer${index} } from '${toImportPath(outputDir, item.datasetPreparerPath).replace(/\.ts$/, '')}'`),
+    `export const generatedBenchmarkDatasetPreparers: readonly { adapterKey: string; preparer: BenchmarkDatasetPreparer }[] = [${packagesWithPreparers.map((item, index) => `{ adapterKey: ${JSON.stringify(item.key)}, preparer: preparer${index} }`).join(', ')}]`,
+    '',
+  ].join('\n')
+  const preparerKeysSource = `// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog\nmodule.exports = ${JSON.stringify(packagesWithPreparers.map(item => item.key))}\n`
   const descriptors = packages.map((item) => ({
     ...item.evaluator,
     ...(item.evaluator.imageProvider
@@ -518,6 +543,8 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   fs.writeFileSync(path.join(outputDir, 'manifests.ts'), manifestSource)
   fs.writeFileSync(path.join(outputDir, 'adapters.ts'), adaptersSource)
   fs.writeFileSync(path.join(outputDir, 'dataset-loaders.ts'), loadersSource)
+  fs.writeFileSync(path.join(outputDir, 'dataset-preparers.ts'), preparersSource)
+  fs.writeFileSync(path.join(outputDir, 'dataset-preparer-keys.cjs'), preparerKeysSource)
   fs.writeFileSync(path.join(outputDir, 'evaluators.cjs'), evaluatorSource)
   fs.writeFileSync(path.join(outputDir, 'executors.cjs'), executorSource)
   fs.writeFileSync(path.join(outputDir, 'catalog-lock.json'), `${JSON.stringify({

@@ -101,12 +101,12 @@ const generatedEvaluatorDescriptors = [
     "key": "zsoft-l1",
     "benchmarkKey": "zsoft-l1",
     "runtime": "oci-container",
-    "requiresPrebuiltRuntime": true,
     "command": "python3",
     "entrypoint": "/opt/agent-insight/zsoft/entrypoint.py",
-    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-55650977087da9d6ff2bd3b8d06538cea8f9e04b3b3ed26e822dcc4b04f87a6d",
+    "imageProvider": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/images.cjs"),
+    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-374322edf9534449f68815b044e955da3310e9d027d46934b283ae1ea385e77a",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/Dockerfile"),
-    "artifactDigest": "sha256:55650977087da9d6ff2bd3b8d06538cea8f9e04b3b3ed26e822dcc4b04f87a6d",
+    "artifactDigest": "sha256:374322edf9534449f68815b044e955da3310e9d027d46934b283ae1ea385e77a",
     "network": "deny",
     "resources": {
       "cpu": 4,
@@ -130,7 +130,8 @@ const generatedEvaluatorDescriptors = [
         "bundleDigest",
         "taskDigest",
         "status",
-        "success"
+        "success",
+        "sourceTaskDigest"
       ],
       "properties": {
         "taskId": {
@@ -158,6 +159,10 @@ const generatedEvaluatorDescriptors = [
         },
         "success": {
           "type": "boolean"
+        },
+        "sourceTaskDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         }
       },
       "additionalProperties": false

@@ -45,8 +45,10 @@ function mctsPaths(config) {
   }
 }
 
-function checkMctsPython(python) {
-  const result = spawnSync(python, ['-c', 'import sys, importlib.util; print(f"{sys.version_info.major}.{sys.version_info.minor}"); sys.exit(0 if importlib.util.find_spec("datasets") is not None else 42)'], {
+function checkMctsPython(python, benchmarkKey = 'swe-bench') {
+  const script = 'import sys, importlib.util; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+    + (benchmarkKey === 'swe-bench' ? '; sys.exit(0 if importlib.util.find_spec("datasets") is not None else 42)' : '')
+  const result = spawnSync(python, ['-c', script], {
     encoding: 'utf8', timeout: 5_000,
   })
   if (result.error?.code === 'ETIMEDOUT') throw new Error('MCTS Python 环境检查超过 5 秒，请检查客户端负载后重试')
@@ -60,16 +62,19 @@ function checkMctsPython(python) {
   }
 }
 
-function checkMctsRepository(config) {
+function checkMctsRepository(config, benchmarkKey = 'swe-bench') {
   const paths = mctsPaths(config)
   if (!path.isAbsolute(paths.repoDir) || /[\0\r\n]/.test(paths.repoDir)) throw new Error('请填写 MCTS 仓库的绝对路径')
   if (!path.isAbsolute(paths.python)) throw new Error('MCTS Python 路径必须是绝对路径')
-  for (const [target, label] of [[paths.entrypoint, 'MCTS 启动脚本'], [paths.configEnv, 'MCTS config.env'], [paths.main, 'MCTS 主程序'], [paths.python, 'MCTS Python 虚拟环境']]) {
+  for (const [target, label] of [
+    ...(benchmarkKey === 'swe-bench' ? [[paths.entrypoint, 'MCTS 启动脚本']] : []),
+    [paths.configEnv, 'MCTS config.env'], [paths.main, 'MCTS 主程序'], [paths.python, 'MCTS Python 虚拟环境'],
+  ]) {
     try { if (!fs.statSync(target).isFile()) throw new Error() }
     catch { throw new Error(`${label} 不存在`) }
   }
   if (!fs.readFileSync(paths.main, 'utf8').includes('--output-dir')) throw new Error('MCTS 未支持 --output-dir')
-  checkMctsPython(paths.python)
+  checkMctsPython(paths.python, benchmarkKey)
   return paths
 }
 

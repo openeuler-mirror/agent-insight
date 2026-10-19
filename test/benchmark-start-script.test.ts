@@ -32,7 +32,7 @@ test('start.sh documents and validates benchmark bootstrap arguments before star
 })
 
 test('SWE-bench bootstrap explains how to fix a missing Python venv module', () => {
-  const source = fs.readFileSync(path.resolve('scripts/benchmark/ensure-swe-bench-dataset.ts'), 'utf8')
+  const source = fs.readFileSync(path.resolve('benchmarks/swe-bench/dataset/prepare.ts'), 'utf8')
   assert.match(source, /缺少 python3-venv，请安装后重试/)
 })
 

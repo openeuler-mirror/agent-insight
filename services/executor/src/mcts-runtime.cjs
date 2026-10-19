@@ -4,15 +4,21 @@
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 const { BenchmarkExecutorError, runProcess } = require('./index.cjs')
 const { MCTS_SEARCH_OPTIONS_CAPABILITY, MCTS_RUNTIMES, normalizeAgentOptions, mctsOptionArgs } = require('./mcts-options.cjs')
 const { mctsPaths, checkMctsRepository, mctsUpstream, proxyPythonScript, readMctsEnvFile } = require('./mcts-config.cjs')
+
+const { readBoundedFile } = require('./public-bundle.cjs')
+const { validateZsoftTasksSpec } = require('./zsoft-tasks.cjs')
+const ZSOFT_CAPABILITY = 'mcts-zsoft-export/v1'
+const SWE_CAPABILITY = 'mcts-swe-bench/v1'
 
 const RUN_ID = /^erun_[0-9a-f]{32}$/
 const INSTANCE_ID = /^[A-Za-z0-9_.-]{1,200}$/
 const MAX_PATCH_BYTES = 10 * 1024 * 1024
 
-function probeMctsBenchmarkRuntime(config) {
+function probeMctsBenchmarkRuntime(config, benchmarkKey = 'swe-bench') {
   const paths = mctsPaths(config)
   if (!path.isAbsolute(paths.repoDir)) return { ready: false, reason: 'MCTS 仓库路径未配置' }
   if (!path.isAbsolute(paths.traceLauncher)) return { ready: false, reason: 'MCTS Trace 启动器路径未配置' }
@@ -21,7 +27,7 @@ function probeMctsBenchmarkRuntime(config) {
   const transportDir = fs.existsSync(path.join(collectorDir, 'shared', 'trace-transport.cjs'))
     ? path.join(collectorDir, 'shared') : path.join(collectorDir, '..', 'shared')
   for (const [target, label] of [
-    [paths.entrypoint, 'MCTS 启动脚本'],
+    ...(benchmarkKey === 'swe-bench' ? [[paths.entrypoint, 'MCTS 启动脚本']] : []),
     [paths.configEnv, 'MCTS config.env'],
     [paths.python, 'MCTS Python 虚拟环境'],
     [paths.main, 'MCTS 主程序'],
@@ -35,7 +41,7 @@ function probeMctsBenchmarkRuntime(config) {
       if (!fs.statSync(target).isFile()) return { ready: false, reason: `${label} 不存在` }
     } catch { return { ready: false, reason: `${label} 不存在` } }
   }
-  try { checkMctsRepository(config) }
+  try { checkMctsRepository(config, benchmarkKey) }
   catch (error) { return { ready: false, reason: error.message } }
   const configPath = path.join(path.dirname(paths.traceLauncher), 'config.json')
   try {
@@ -47,6 +53,23 @@ function probeMctsBenchmarkRuntime(config) {
     if (!process.env.AGENT_INSIGHT_API_KEY) return { ready: false, reason: 'MCTS Trace 代理配置不可用' }
   }
   return { ready: true }
+}
+
+function probeMctsZsoftRuntime(config) {
+  const readiness = probeMctsBenchmarkRuntime(config, 'zsoft-l1')
+  if (!readiness.ready) return readiness
+  const paths = mctsPaths(config)
+  const result = spawnSync(paths.python, [path.join(__dirname, 'mcts-zsoft-contract.py'), paths.repoDir], {
+    encoding: 'utf8', timeout: 5_000, maxBuffer: 65536,
+  })
+  if (result.error?.code === 'ETIMEDOUT') return { ready: false, reason: 'MCTS ZSoft 接口检查超过 5 秒' }
+  try {
+    const contract = JSON.parse(result.stdout)
+    if (result.error || result.status !== 0 || contract.schemaVersion !== 'mcts-zsoft-contract/v1' || !/^sha256:[a-f0-9]{64}$/.test(contract.sourceDigest)) throw new Error()
+    return { ready: true, contract }
+  } catch {
+    return { ready: false, reason: 'MCTS ZSoft 插件缺失或不兼容平台 PoC 导出接口' }
+  }
 }
 
 async function mctsTraceId(observerHome) {
@@ -69,14 +92,29 @@ function validateMctsTask(payload) {
   const baseCommit = String(publicCase?.baseCommit || '')
   const expectedRepository = `https://github.com/${repo}.git`
   const runtime = Object.hasOwn(MCTS_RUNTIMES, payload.platform) ? MCTS_RUNTIMES[payload.platform] : null
-  if (payload.benchmarkKey !== 'swe-bench' || !runtime || payload.agent !== payload.platform) {
-    throw new BenchmarkExecutorError('MCTS_TASK_UNSUPPORTED', 'MCTS 仅支持 SWE-bench 的 MCTS 执行目标')
+  if (!['swe-bench', 'zsoft-l1'].includes(payload.benchmarkKey) || !runtime || payload.agent !== payload.platform) {
+    throw new BenchmarkExecutorError('MCTS_TASK_UNSUPPORTED', 'MCTS 仅支持 SWE-bench / ZSoft 的 MCTS 执行目标')
   }
-  if (!RUN_ID.test(runId) || !INSTANCE_ID.test(instanceId)) {
+  if (!RUN_ID.test(runId) || (payload.benchmarkKey === 'swe-bench' && !INSTANCE_ID.test(instanceId))) {
     throw new BenchmarkExecutorError('MCTS_TASK_INVALID', 'MCTS 运行 ID 或 SWE-bench Case ID 不合法')
   }
   if (payload.model) {
     throw new BenchmarkExecutorError('MCTS_MODEL_UNSUPPORTED', 'MCTS 模型由 xGovernor 服务端配置，请选择平台默认模型')
+  }
+  if (payload.benchmarkKey === 'zsoft-l1') {
+    validateZsoftTasksSpec(payload.workspace)
+    if (publicCase?.taskId !== payload.workspace.taskId
+      || !Array.isArray(publicCase.tags)
+      || publicCase.tags.includes('kernel') === publicCase.tags.includes('userspace')
+      || (publicCase.tags.includes('kernel') && publicCase.submissionKind !== 'c')
+      || !['python', 'c', 'binary'].includes(publicCase.submissionKind)
+      || !Number.isSafeInteger(publicCase.maxBytes) || publicCase.maxBytes < 1 || publicCase.maxBytes > 1048576) {
+      throw new BenchmarkExecutorError('MCTS_TASK_MISMATCH', 'ZSoft Case 与任务目录或提交契约不一致')
+    }
+    let agentOptions
+    try { agentOptions = normalizeAgentOptions(payload.agentOptions) }
+    catch (error) { throw new BenchmarkExecutorError('AGENT_OPTIONS_INVALID', error.message) }
+    return { runId, instanceId: publicCase.taskId, runtime, agentOptions, zsoft: true }
   }
   if (payload.workspace?.repository !== expectedRepository || payload.workspace?.revision !== baseCommit) {
     throw new BenchmarkExecutorError('MCTS_TASK_MISMATCH', 'SWE-bench Case 与 Git 工作区版本不一致')
@@ -88,14 +126,21 @@ function validateMctsTask(payload) {
 }
 
 async function runMctsBenchmarkCase(config, payload, processRunner = runProcess) {
-  const { runId, instanceId, runtime, agentOptions } = validateMctsTask(payload)
-  const readiness = probeMctsBenchmarkRuntime(config)
+  const { runId, instanceId, runtime, agentOptions, zsoft } = validateMctsTask(payload)
+  const readiness = zsoft ? probeMctsZsoftRuntime(config) : probeMctsBenchmarkRuntime(config)
   if (!readiness.ready) throw new BenchmarkExecutorError('MCTS_RUNTIME_UNAVAILABLE', readiness.reason, 503)
   const paths = mctsPaths(config)
+  if (zsoft) {
+    const metadata = JSON.parse((await readBoundedFile(payload.cwd, `tasks/${instanceId}/task.json`, 65536)).toString('utf8'))
+    if (metadata.task_id !== instanceId || metadata.submission_kind !== payload.benchmarkPayload.submissionKind
+      || metadata.max_bytes !== payload.benchmarkPayload.maxBytes) {
+      throw new BenchmarkExecutorError('MCTS_TASK_MISMATCH', '公开任务包元数据与冻结 Case 不一致')
+    }
+  }
   let upstream
   try { upstream = mctsUpstream(paths) }
   catch (error) { throw new BenchmarkExecutorError('MCTS_CONFIG_INVALID', error.message) }
-  const outputDir = path.join(paths.repoDir, 'testcases_union', 'output', 'sweverified', runId)
+  const outputDir = path.join(paths.repoDir, 'testcases_union', 'output', zsoft ? 'zsoft' : 'sweverified', runId)
   const observerHome = path.join(outputDir, '.agent-insight')
   const patchPath = path.join(outputDir, 'artifact.patch')
   try {
@@ -114,14 +159,17 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
     AGENT_INSIGHT_HOME: observerHome,
     AGENT_INSIGHT_MCTS_REPO_DIR: paths.repoDir,
     AGENT_INSIGHT_MCTS_PYTHON: paths.python,
+    ...(zsoft ? { AGENT_INSIGHT_ZSOFT_WORKSPACE: payload.cwd, AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND: payload.benchmarkPayload.submissionKind,
+      AGENT_INSIGHT_ZSOFT_CONTRACT_DIGEST: readiness.contract.sourceDigest } : {}),
   }
   try {
     await processRunner(process.execPath, [
       paths.traceLauncher, '--strict', '--config', path.join(path.dirname(paths.traceLauncher), 'config.json'),
       '--upstream', upstream,
-      '--', 'bash', paths.entrypoint,
-      '--mode', 'sweverified', '--runtime', runtime, '--testbench', 'sweverified', '--instance-id', instanceId,
-      '--split', 'test', '--output-dir', runId,
+      '--', 'bash', zsoft ? path.join(__dirname, 'mcts-zsoft-launch.sh') : paths.entrypoint,
+      ...(zsoft ? ['--mode', 'zsoft', '--runtime', runtime, '--task-id', instanceId]
+        : ['--mode', 'sweverified', '--runtime', runtime, '--testbench', 'sweverified', '--instance-id', instanceId, '--split', 'test']),
+      '--output-dir', runId,
       ...mctsOptionArgs(agentOptions),
     ], {
       cwd: paths.repoDir,
@@ -137,6 +185,22 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
       timeoutErrorCode: 'AGENT_TIMEOUT',
     })
     payload.signal?.throwIfAborted()
+    if (zsoft) {
+      const metadata = JSON.parse((await readBoundedFile(outputDir, 'platform-export.json', 4096)).toString('utf8'))
+      if (metadata.schemaVersion !== 'mcts-poc-export/v1' || metadata.taskId !== instanceId
+        || metadata.evaluation !== 'deferred' || metadata.submissionKind !== payload.benchmarkPayload.submissionKind
+        || metadata.mctsContract?.schemaVersion !== readiness.contract.schemaVersion
+        || metadata.mctsContract?.sourceDigest !== readiness.contract.sourceDigest) {
+        throw new BenchmarkExecutorError('MCTS_EXPORT_MISMATCH', 'MCTS 导出的 PoC 题目、类型或源码契约不一致')
+      }
+      const bytes = await readBoundedFile(outputDir, 'poc', payload.benchmarkPayload.maxBytes)
+      if (!bytes.length) throw new BenchmarkExecutorError('AGENT_NO_OUTPUT', 'MCTS 未导出最终 PoC')
+      const traceId = await mctsTraceId(observerHome)
+      const submission = await fsp.lstat(path.join(payload.cwd, 'submission'))
+      if (!submission.isDirectory() || submission.isSymbolicLink()) throw new BenchmarkExecutorError('MCTS_EXPORT_MISMATCH', '提交目录不合法')
+      await fsp.writeFile(path.join(payload.cwd, 'submission', 'poc'), bytes, { flag: 'wx', mode: 0o600 })
+      return { traceId, exitCode: 0, timedOut: false, mctsRuntime: runtime, mctsZsoftContract: readiness.contract, ...(agentOptions ? { agentOptions } : {}) }
+    }
     let stat
     try { stat = await fsp.lstat(patchPath) } catch {
       throw new BenchmarkExecutorError('AGENT_NO_OUTPUT', 'MCTS 未生成最终 artifact.patch')
@@ -162,5 +226,5 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
   }
 }
 
-module.exports = { mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask, readMctsEnvFile,
+module.exports = { ZSOFT_CAPABILITY, SWE_CAPABILITY, probeMctsZsoftRuntime, mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask, readMctsEnvFile,
   agentOptionCapabilities: [MCTS_SEARCH_OPTIONS_CAPABILITY] }

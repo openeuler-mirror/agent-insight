@@ -10,6 +10,7 @@ const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
 const { createGitSourcePolicies } = require('./source-policy-registry.cjs')
 const { normalizeAgentOptions, MCTS_RUNTIMES } = require('./mcts-options.cjs')
 const { PublicBundleWorkspaceProvider, SingleFileCollector, validatePublicBundleSpec } = require('./public-bundle.cjs')
+const { ZsoftTasksWorkspaceProvider, validateZsoftTasksSpec } = require('./zsoft-tasks.cjs')
 
 const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
 const DELIVERY_RETRY_BASE_MS = 5_000
@@ -156,7 +157,9 @@ function validateTaskEnvelope(task, runId) {
   if (!task.benchmark?.key || !task.task?.instruction || !task.task?.benchmarkPayload) {
     throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '任务缺少 Benchmark 公开输入')
   }
-  if (task.workspace?.provider === 'public-bundle') {
+  if (task.workspace?.provider === 'zsoft-tasks') {
+    validateZsoftTasksSpec(task.workspace)
+  } else if (task.workspace?.provider === 'public-bundle') {
     validatePublicBundleSpec(task.workspace)
   } else if (task.workspace?.provider === 'git') {
   if (!/^[0-9a-f]{40}$/i.test(String(task.workspace?.revision || ''))) {
@@ -768,7 +771,8 @@ class BenchmarkExecutionRunner {
     try {
       await this.progress(request, 'preparing', '正在准备任务工作区')
       workspace = await plan.workspaceProvider.prepare(plan.workspace, {
-        runId: request.runId, benchmarkKey: request.task.benchmark.key, signal,
+        runId: request.runId, benchmarkKey: request.task.benchmark.key,
+        benchmarkPayload: request.task.task.benchmarkPayload, signal,
       })
       appliedPolicy = await this.policyEnforcer.apply(plan.policy, { runId: request.runId })
       await this.progress(request, 'agent_running', '正在运行 Agent')
@@ -1020,6 +1024,7 @@ function createBenchmarkExecutor(options) {
   const workspaceProviders = options.workspaceProviders
     || new WorkspaceProviderRegistry([
       ['git', workspaceProvider],
+      ['zsoft-tasks', new ZsoftTasksWorkspaceProvider(path.join(baseDir, 'workspaces', 'zsoft-tasks'))],
       ['public-bundle', new PublicBundleWorkspaceProvider(path.join(baseDir, 'workspaces', 'public-bundle'),
         options.publicBundleDir || process.env.AGENT_INSIGHT_PUBLIC_BUNDLES_DIR
           || path.join(options.agentInsightHome || path.dirname(baseDir), 'benchmark-assets', 'public-bundles'))],

@@ -9,16 +9,19 @@ import { AbstractBenchmarkAdapter } from '../../../src/lib/benchmark/adapter-bas
 export type ZsoftPublicCase = {
   taskId: string; title: string; description: string
   submissionKind: 'python' | 'c' | 'binary'; maxBytes: number; tags: string[]
-  agentBundle?: { digest: string }
 }
-export type ZsoftPrivateCase = { revision: string; bundleDigest: string; taskDigest: string }
+export type ZsoftPrivateCase = { revision?: string; sourceTaskDigest: string }
 export type ZsoftCase = { public: ZsoftPublicCase; private: ZsoftPrivateCase }
 export type ZsoftEvaluationPayload = ZsoftPrivateCase & { taskId: string; maxBytes: number; submissionKind: string }
 
-type ZsoftResult = { taskId: string; submissionSha256: string; bundleDigest: string; taskDigest: string; status: string; success: boolean }
+type ZsoftResult = { sourceTaskDigest: string; taskId: string; submissionSha256: string; bundleDigest: string; taskDigest: string; status: string; success: boolean }
 
 export class ZsoftL1Adapter extends AbstractBenchmarkAdapter<ZsoftCase, ZsoftPublicCase, ZsoftPrivateCase, ZsoftEvaluationPayload> {
   readonly manifest = getGeneratedBenchmarkManifest('zsoft-l1')
+
+  imagePreparationInput(publicPayload: ZsoftPublicCase, privatePayload: ZsoftPrivateCase): ZsoftEvaluationPayload {
+    return { ...privatePayload, taskId: publicPayload.taskId, maxBytes: publicPayload.maxBytes, submissionKind: publicPayload.submissionKind }
+  }
 
   protected splitCase(raw: ZsoftCase) {
     return {
@@ -35,15 +38,16 @@ export class ZsoftL1Adapter extends AbstractBenchmarkAdapter<ZsoftCase, ZsoftPub
 
   protected createAgentTask(input: BuildAgentTaskInput<ZsoftPublicCase>): AgentTaskEnvelope {
     const payload = input.publicPayload
-    if (!payload.agentBundle) throw new BenchmarkProtocolError('ZSOFT_PUBLIC_BUNDLE_REQUIRED', '该数据集尚未配置公开任务包，请先导出并重新导入 Agent 数据集，或继续导入已有 PoC', 409)
-    if (!payload.tags.includes('userspace') || payload.tags.includes('kernel')) throw new BenchmarkProtocolError('ZSOFT_USERSPACE_ONLY', '当前 Agent 接入仅支持 userspace 题目', 409)
+    if (!input.runConfig.tasksDir) throw new BenchmarkProtocolError('ZSOFT_TASKS_DIR_REQUIRED', '请先为执行客户端配置 ZSoft 任务目录', 409)
+    const kernel = payload.tags.includes('kernel')
+    if (kernel === payload.tags.includes('userspace') || (kernel && payload.submissionKind !== 'c')) throw new BenchmarkProtocolError('ZSOFT_TASK_TRACK_INVALID', 'ZSoft 题目轨道或提交类型不一致，内核题需提交 C 源码', 409)
     return {
       schemaVersion: 'agent-task/v1', benchmark: { key: this.manifest.adapterKey }, context: input.context,
       task: {
         instruction: `${payload.title}\n\n${payload.description}\n\n公开任务资料：tasks/${payload.taskId}/public/README.md 及同目录文件。\n生成独立的单文件 ${payload.submissionKind} PoC，将最终文件写入 submission/poc（不要提交目录、Patch 或 verify.py）。\n提交大小上限 ${payload.maxBytes} 字节。遵守公开 README 中的运行路径、依赖和退出码契约。只有 submission/poc 会送至平台评测；本地执行反馈不代表正式评测结果。`,
         benchmarkPayload: payload,
       },
-      workspace: { provider: 'public-bundle', taskId: payload.taskId, digest: payload.agentBundle.digest },
+      workspace: { provider: 'zsoft-tasks', taskId: payload.taskId, tasksDir: input.runConfig.tasksDir },
       policy: { workspaceWrite: 'allow', hiddenDataAccess: 'deny', network: 'client-default' },
       submission: { requiredArtifacts: this.manifest.requiredArtifacts.map(item => ({ ...item })) },
       agentConfig: input.runConfig,
@@ -87,7 +91,7 @@ export class ZsoftL1Adapter extends AbstractBenchmarkAdapter<ZsoftCase, ZsoftPub
     const raw = completion.rawResult as ZsoftResult
     const expected = input.evaluationJob.payload as ZsoftEvaluationPayload
     const artifact = input.evaluationJob.artifacts.find((item) => item.name === 'poc')
-    if (raw.taskId !== expected.taskId || raw.bundleDigest !== expected.bundleDigest || raw.taskDigest !== expected.taskDigest || raw.submissionSha256 !== artifact?.sha256) {
+    if (raw.taskId !== expected.taskId || raw.sourceTaskDigest !== expected.sourceTaskDigest || raw.submissionSha256 !== artifact?.sha256) {
       throw new BenchmarkProtocolError('ZSOFT_RESULT_IDENTITY_MISMATCH', 'ZSoft 结果与冻结题目或 PoC 不一致', 422)
     }
     if (raw.status === 'infrastructure_error' || (completion.status === 'completed' && raw.status !== 'completed') || (completion.status === 'submission_invalid' && (raw.status !== 'invalid_submission' || raw.success))) {

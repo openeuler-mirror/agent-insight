@@ -21,6 +21,7 @@
 - [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 绑定/关系事件、端点解析、查询 API 与 reported Goal Plus 投影。
 - [MCTS xGovernor 方案设计](../design/mcts-trace-observability/phase2-requirements-design.md)：非侵入式透明代理、Runtime/checkpoint ledger、OTLP 与跨 Session 关系采集契约。
 - [benchmark/README.md](benchmark/README.md)：自定义 Benchmark 的客户入口、需求发现、统一接入开发规范和[整体服务安装指南](benchmark/service-deployment-guide.md)。
+- [benchmark/zsoft-deployment-guide.md](benchmark/zsoft-deployment-guide.md)：ZSoft 官方数据导入、执行任务目录、119 镜像构建、公有 SWR 发布和评测资产部署。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。

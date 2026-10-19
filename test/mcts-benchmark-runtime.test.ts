@@ -10,6 +10,8 @@ import { listTraceGenerationPlatforms } from '../src/lib/engine/experiment/execu
 import { parseCapabilities } from '../src/lib/reliability/client-registry'
 import { GET as listExperimentAgents } from '../src/app/api/experiments/agents/route'
 import { prisma, prismaRaw } from '../src/lib/storage/prisma'
+import { writeSyntheticZsoftPlugin } from './fixtures/mcts-zsoft-fixture'
+import { zsoftL1Adapter } from '../benchmarks/zsoft-l1/adapter'
 
 const require = createRequire(import.meta.url)
 const runtime = require('../services/executor/src/mcts-runtime.cjs')
@@ -426,4 +428,179 @@ test('process group cancellation sends SIGINT and lets child clean up', async ()
     await assert.rejects(run)
     assert.equal(fs.readFileSync(marker, 'utf8'), 'yes')
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+function zsoftFixture(kind = 'python') {
+  const f = fixture()
+  writeSyntheticZsoftPlugin(f.repoDir)
+  const python = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' })
+  assert.equal(python.status, 0, python.stderr)
+  const config = { ...f.config, mctsPython: python.stdout.trim() }
+  const taskId = 'synthetic-only'
+  fs.mkdirSync(path.join(f.workspace, 'tasks', taskId), { recursive: true })
+  fs.mkdirSync(path.join(f.workspace, 'submission'))
+  fs.writeFileSync(path.join(f.workspace, 'tasks', taskId, 'task.json'), JSON.stringify({ task_id: taskId, submission_kind: kind, max_bytes: 128 }))
+  const payload = { ...f.payload, benchmarkKey: 'zsoft-l1',
+    benchmarkPayload: { taskId, tags: ['userspace'], submissionKind: kind, maxBytes: 128 },
+    workspace: { provider: 'zsoft-tasks', taskId, tasksDir: path.join(f.root, 'native-tasks') } }
+  const output = path.join(f.repoDir, 'testcases_union/output/zsoft', f.runId)
+  const writeOutput = (bytes: Buffer, task = taskId) => {
+    fs.writeFileSync(path.join(output, 'poc'), bytes)
+    fs.writeFileSync(path.join(output, 'platform-export.json'), JSON.stringify({ schemaVersion: 'mcts-poc-export/v1', taskId: task, evaluation: 'deferred', submissionKind: kind,
+      mctsContract: runtime.probeMctsZsoftRuntime(config).contract }))
+    const directory = path.join(output, '.agent-insight/otel_data/mcts-xgovernor/key-hash')
+    fs.mkdirSync(directory, { recursive: true })
+    fs.writeFileSync(path.join(directory, 'runtime-ledger.json'), JSON.stringify({ runs: [{ sessionId: `mcts.run.${'b'.repeat(32)}` }] }))
+  }
+  return { ...f, config, payload, output, writeOutput }
+}
+
+test('MCTS ZSoft rejects historical public-bundle workspaces', () => {
+  const f = zsoftFixture()
+  try {
+    assert.throws(() => runtime.validateMctsTask({ ...f.payload,
+      workspace: { provider: 'public-bundle', taskId: f.payload.benchmarkPayload.taskId, digest: `sha256:${'a'.repeat(64)}` },
+    }), { code: 'ZSOFT_TASKS_DIR_INVALID' })
+  } finally { f.close() }
+})
+
+test('MCTS kernel tasks export C bytes with task-id and tasks-dir through the existing bridge', async () => {
+  const f = zsoftFixture('c')
+  f.payload.benchmarkPayload.tags = ['kernel']
+  const bytes = Buffer.from('synthetic C source; never executed')
+  try {
+    assert.equal(runtime.validateMctsTask(f.payload).zsoft, true)
+    await runtime.runMctsBenchmarkCase(f.config, f.payload, async (_command: string, args: string[], options: { env: Record<string, string> }) => {
+      assert.equal(options.env.AGENT_INSIGHT_ZSOFT_WORKSPACE, f.workspace)
+      assert.equal(args[args.indexOf('--task-id') + 1], f.payload.benchmarkPayload.taskId)
+      assert.equal(options.env.AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND, 'c')
+      f.writeOutput(bytes)
+    })
+    assert.deepEqual(fs.readFileSync(path.join(f.workspace, 'submission/poc')), bytes)
+    assert.throws(() => runtime.validateMctsTask({ ...f.payload, benchmarkPayload: { ...f.payload.benchmarkPayload, submissionKind: 'python' } }), { code: 'MCTS_TASK_MISMATCH' })
+  } finally { f.close() }
+})
+
+for (const kind of ['python', 'c', 'binary']) {
+  test(`MCTS ZSoft ${kind} exports synthetic bytes through the platform bridge`, async () => {
+    const f = zsoftFixture(kind)
+    const bytes = kind === 'binary' ? Buffer.from([0, 255, 128, 1]) : Buffer.from('synthetic text; never executed\r\n')
+    try {
+      const caps = client.buildCapabilities(f.config, { probe: { ready: false, platforms: {} } })
+      assert.equal(caps.components['mcts-zsoft-export/v1'].ready, true)
+      assert.equal(caps.components['single-file/v1'].ready, true)
+      const result = await runtime.runMctsBenchmarkCase(f.config, f.payload, async (command: string, args: string[], options: { env: Record<string, string> }) => {
+        assert.equal(command, process.execPath)
+        assert.ok(args.includes(path.resolve('services/executor/src/mcts-zsoft-launch.sh')))
+        assert.equal(args[args.indexOf('--task-id') + 1], f.payload.benchmarkPayload.taskId)
+        assert.equal(args[args.indexOf('--mode') + 1], 'zsoft')
+        for (const flag of ['--testbench', '--instance-id', '--split']) {
+          assert.equal(args.includes(flag), false, `ZSoft CLI does not accept ${flag}`)
+        }
+        assert.equal(options.env.AGENT_INSIGHT_ZSOFT_WORKSPACE, f.workspace)
+        assert.equal(options.env.AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND, kind)
+        f.writeOutput(bytes)
+      })
+      assert.equal(result.traceId, `mcts.run.${'b'.repeat(32)}`)
+      assert.deepEqual(fs.readFileSync(path.join(f.workspace, 'submission/poc')), bytes)
+      assert.equal(fs.existsSync(path.join(f.workspace, 'artifact.patch')), false)
+    } finally { f.close() }
+  })
+}
+
+test('ZSoft-only MCTS is selectable without datasets or the SWE launcher, while SWE stays unavailable', () => {
+  const f = zsoftFixture()
+  try {
+    const venv = path.join(f.root, 'zsoft-only-python')
+    const create = spawnSync('python3', ['-m', 'venv', '--without-pip', venv], { encoding: 'utf8' })
+    assert.equal(create.status, 0, create.stderr)
+    const config = { ...f.config, mctsPython: path.join(venv, 'bin', 'python') }
+    assert.match(runtime.probeMctsBenchmarkRuntime(config).reason, /datasets/)
+    fs.unlinkSync(path.join(f.repoDir, 'testcases_union/run_union.sh'))
+    assert.equal(runtime.probeMctsZsoftRuntime(config).ready, true)
+    const caps = client.buildCapabilities(config, { probe: { ready: false, platforms: {} } })
+    assert.equal(caps.components['agent-runtime/pi-mcts/v1'].ready, true)
+    assert.equal(caps.components['mcts-search-options/v1'].ready, true)
+    assert.equal(caps.components['mcts-zsoft-export/v1'].ready, true)
+    assert.equal(caps.components['mcts-swe-bench/v1'].ready, false)
+    assert.ok(client.benchmarkAgentPlatformsFromCapabilities(caps).includes('pi-mcts'))
+    const row = { clientId: 'synthetic', name: 'synthetic', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), unboundAt: null,
+      capabilitiesJson: JSON.stringify(caps) }
+    assert.equal(inspectBenchmarkExecutionTargets(row as never, zsoftL1Adapter.manifest).find(item => item.platform === 'pi-mcts')?.ready, true)
+    const swe = inspectBenchmarkExecutionTargets(row as never, { adapterKey: 'swe-bench', requiredCapabilities: ['git-workspace/v1', 'git-patch/v1'] } as never)
+    assert.deepEqual(swe.find(item => item.platform === 'pi-mcts')?.missingCapabilities, ['mcts-swe-bench/v1'])
+  } finally { f.close() }
+})
+
+test('ZSoft interface preflight rejects comments, incompatible signatures, CLI and registry hooks without importing the plugin', () => {
+  const mutations = [
+    ['flow.py', '# extract_poc\n'],
+    ['flow.py', 'def extract_poc(session): return b"unused"\n'],
+    ['plugin.py', "replace-registry"],
+    ['plugin.py', "replace-cli"],
+    ['plugin.py', "replace-mode-registration"],
+    ['plugin.py', "replace-submit"],
+  ]
+  for (const [file, source] of mutations) {
+    const f = zsoftFixture()
+    try {
+      const target = path.join(f.repoDir, 'testcases_union/res/task_plugins/zsoft', file)
+      let content = source
+      if (source === 'replace-registry') content = fs.readFileSync(target, 'utf8').replace("official_eval='zsoft_official'", "official_eval='other'")
+      if (source === 'replace-cli') content = fs.readFileSync(target, 'utf8').replace("'--task-id'", "'--instance-id'")
+      if (source === 'replace-mode-registration') content = fs.readFileSync(target, 'utf8').replace('MODES.register(', 'unused(')
+      if (source === 'replace-submit') content = fs.readFileSync(target, 'utf8').replace('return evaluate(node, task, output_root)', 'return None')
+      fs.writeFileSync(target, content)
+      assert.equal(runtime.probeMctsZsoftRuntime(f.config).ready, false)
+    } finally { f.close() }
+  }
+  const f = zsoftFixture()
+  try {
+    const target = path.join(f.repoDir, 'testcases_union/res/task_plugins/zsoft/plugin.py')
+    fs.appendFileSync(target, '\nraise RuntimeError("must not import during preflight")\n')
+    assert.equal(runtime.probeMctsZsoftRuntime(f.config).ready, true)
+  } finally { f.close() }
+})
+
+test('ZSoft rejects an export made from a different MCTS source fingerprint', async () => {
+  const f = zsoftFixture()
+  try {
+    await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => {
+      fs.appendFileSync(path.join(f.repoDir, 'testcases_union/res/task_plugins/zsoft/flow.py'), '\n# different version\n')
+      f.writeOutput(Buffer.from('synthetic'))
+    }), { code: 'MCTS_EXPORT_MISMATCH' })
+    assert.equal(fs.existsSync(path.join(f.workspace, 'submission/poc')), false)
+  } finally { f.close() }
+})
+
+test('MCTS ZSoft rejects mismatched tasks, exports and oversized files', async () => {
+  for (const failure of ['task', 'export', 'size', 'symlink']) {
+    const f = zsoftFixture()
+    try {
+      if (failure === 'task') f.payload.workspace.taskId = 'different'
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => {
+        f.writeOutput(Buffer.alloc(failure === 'size' ? 129 : 1), failure === 'export' ? 'different' : undefined)
+        if (failure === 'symlink') {
+          fs.renameSync(path.join(f.output, 'poc'), path.join(f.output, 'original'))
+          fs.symlinkSync(path.join(f.output, 'original'), path.join(f.output, 'poc'))
+        }
+      }), /不一致|大小|大小限制|符号链接/)
+      assert.equal(fs.existsSync(path.join(f.workspace, 'submission/poc')), false)
+    } finally { f.close() }
+  }
+})
+
+test('MCTS ZSoft capability is unavailable with missing plugins and cancellation skips submission', async () => {
+  const f = zsoftFixture()
+  try {
+    fs.writeFileSync(path.join(f.repoDir, 'testcases_union/res/task_plugins/zsoft/flow.py'), '')
+    assert.equal(runtime.probeMctsZsoftRuntime(f.config).ready, false)
+    writeSyntheticZsoftPlugin(f.repoDir)
+    const controller = new AbortController()
+    await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, signal: controller.signal }, async () => {
+      f.writeOutput(Buffer.from('synthetic'))
+      controller.abort()
+    }), { name: 'AbortError' })
+    assert.equal(fs.existsSync(path.join(f.workspace, 'submission/poc')), false)
+  } finally { f.close() }
 })

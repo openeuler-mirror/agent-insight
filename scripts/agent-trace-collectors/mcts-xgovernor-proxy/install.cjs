@@ -49,7 +49,7 @@ async function install(options) {
   let paths;
   let upstreamUrl = process.env.AGENT_INSIGHT_MCTS_UPSTREAM_URL || "http://127.0.0.1:8787";
   if (process.env.AGENT_INSIGHT_MCTS_REQUIRE_REPO === "1" || mcts.mctsRepoDir) {
-    paths = checkMctsRepository(mcts);
+    paths = checkMctsRepository(mcts, 'common');
     upstreamUrl = mctsUpstream(paths);
     try { await preflightUpstream(upstreamUrl); }
     catch { throw new Error("无法连接 MCTS config.env 配置的 xGovernor，请确认原有 MCTS 服务可用后重新执行安装命令"); }

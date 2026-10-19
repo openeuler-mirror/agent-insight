@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from assets import AssetError, digest_bytes, load_inventory, verify_task
+from assets import AssetError, digest_bytes, load_inventory, source_task_digest, verify_task
 from docker_proxy import REAL_DOCKER, host_path
 
 HERE = Path(__file__).resolve().parent
@@ -20,7 +20,9 @@ MESSAGES = {
     "ZSOFT_ASSET_MISSING": "ZSoft 评测资产缺失",
     "ZSOFT_IMAGE_MISSING": "ZSoft 预构建镜像缺失或摘要不一致",
     "ZSOFT_SHARED_MOUNT_MISSING": "ZSoft 资产或运行目录未通过 Controller 数据卷共享",
-    "ZSOFT_P2_USERSPACE_ONLY": "ZSoft P2 当前仅支持 userspace 题目",
+    "ZSOFT_KERNEL_ACCEL_INVALID": "ZSoft 内核加速模式应为 tcg 或 kvm",
+    "ZSOFT_KERNEL_KVM_UNAVAILABLE": "评测机 Docker 无法使用 /dev/kvm，请启用虚拟化或使用 tcg",
+    "ZSOFT_KERNEL_RESOURCES_INSUFFICIENT": "评测资源不足以运行题目声明的两版内核环境",
     "ZSOFT_EVALUATION_TIMEOUT": "ZSoft 评测超时",
     "ZSOFT_EVALUATION_CANCELLED": "ZSoft 评测已取消",
     "ZSOFT_CLEANUP_FAILED": "ZSoft 运行资源清理未完成",
@@ -53,14 +55,49 @@ def shared_mounts() -> list[dict]:
     return mounts
 
 
-def inspect_images(images: dict[str, str]) -> None:
+def inspect_images(images: dict[str, str], prepared: list[dict] | None = None) -> None:
+    if prepared is not None:
+        if not isinstance(prepared, list) or len(prepared) != len(images) or any(not isinstance(item, dict) for item in prepared):
+            raise AssetError("ZSOFT_PREPARED_IMAGES_MISMATCH")
+        resolved = {item.get("key"): item.get("imageId") for item in prepared}
+        if resolved != images:
+            raise AssetError("ZSOFT_PREPARED_IMAGES_MISMATCH")
     for tag, expected in images.items():
         try:
-            actual = docker(["image", "inspect", tag, "--format", "{{.Id}}"])
+            actual = docker(["image", "inspect", expected, "--format", "{{.Id}}"])
         except Exception:
             raise AssetError("ZSOFT_IMAGE_MISSING") from None
         if actual != expected:
             raise AssetError("ZSOFT_IMAGE_MISSING")
+
+
+def kernel_acceleration() -> str:
+    value = os.environ.get("ZSOFT_KERNEL_ACCEL", "tcg").strip().lower()
+    if value not in ("tcg", "kvm"):
+        raise AssetError("ZSOFT_KERNEL_ACCEL_INVALID")
+    return value
+
+
+def kernel_policy(root: Path, task: dict, limits: dict, evaluation_id: str) -> dict:
+    if "kernel" not in task["public"]["tags"]:
+        return {"track": "userspace"}
+    task_id = task["public"]["taskId"]
+    metadata = [json.loads((root / f".task-state/{task_id}/{variant}/artifacts/metadata.json").read_text()) for variant in ("vuln", "fix")]
+    if limits["memoryMiB"] < 2 * (max(item["memory_mb"] for item in metadata) + 512) or limits["cpu"] < 2 * max(item["smp"] for item in metadata):
+        raise AssetError("ZSOFT_KERNEL_RESOURCES_INSUFFICIENT")
+    acceleration = kernel_acceleration()
+    if acceleration == "kvm":
+        image_id = next(iter(task["images"].values()))
+        try:
+            docker(["run", "--rm", "--network", "none", "--read-only", "--device", "/dev/kvm:/dev/kvm:rw",
+                    "--label", f"agent-insight.evaluation-id={evaluation_id}",
+                    "--label", "agent-insight.role=zsoft-task",
+                    "--label", f"agent-insight.evaluator-instance={os.environ.get('EVALUATOR_INSTANCE_ID', '')}",
+                    "--entrypoint", "python3", image_id, "-c",
+                    "import os,fcntl; f=os.open('/dev/kvm',os.O_RDWR); assert fcntl.ioctl(f,0xae00,0)==12; os.close(f)"])
+        except Exception:
+            raise AssetError("ZSOFT_KERNEL_KVM_UNAVAILABLE") from None
+    return {"track": "kernel", "kernelAcceleration": acceleration}
 
 
 def error_code(error: Exception) -> str:
@@ -95,8 +132,13 @@ def doctor() -> int:
         docker(["compose", "version"])
         for task_id in inventory["tasks"]:
             task = verify_task(root, inventory, task_id)
-            inspect_images(task["images"])
-        result = {"ready": True, "formalEligible": True, "runtimeFacts": {"revision": inventory["revision"], "bundleDigest": inventory["bundleDigest"], "installedTaskCount": len(inventory["tasks"]), "track": "userspace"}}
+            if not task.get("registryImages"):
+                inspect_images(task["images"])
+        tracks = sorted({"kernel" if "kernel" in task["public"]["tags"] else "userspace" for task in inventory["tasks"].values()})
+        facts = {"revision": inventory["revision"], "bundleDigest": inventory["bundleDigest"], "installedTaskCount": len(inventory["tasks"]), "tracks": tracks}
+        if "kernel" in tracks:
+            facts["kernelAcceleration"] = kernel_acceleration()
+        result = {"ready": True, "formalEligible": True, "runtimeFacts": facts}
     except Exception as error:
         code = error_code(error)
         result = {"ready": False, "formalEligible": False, "reason": MESSAGES.get(code, code)}
@@ -109,10 +151,10 @@ def validate_request(request: dict, root: Path, inventory: dict) -> tuple[dict, 
     payload = job.get("payload", {})
     if request.get("schemaVersion") != "evaluator-entrypoint/v1" or job.get("benchmark", {}).get("key") != "zsoft-l1" or job.get("evaluator", {}).get("key") != "zsoft-l1" or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", str(job.get("evaluationId", ""))):
         raise AssetError("ZSOFT_REQUEST_INVALID")
-    if payload.get("revision") != inventory["revision"] or payload.get("bundleDigest") != inventory["bundleDigest"]:
+    if payload.get("revision") and payload["revision"] != inventory["revision"]:
         raise AssetError("ZSOFT_BUNDLE_MISMATCH")
     task = verify_task(root, inventory, str(payload.get("taskId", "")))
-    if payload.get("taskDigest") != task["taskDigest"] or payload.get("maxBytes") != task["public"]["maxBytes"] or payload.get("submissionKind") != task["public"]["submissionKind"]:
+    if payload.get("sourceTaskDigest") != source_task_digest(root, payload["taskId"]) or payload.get("maxBytes") != task["public"]["maxBytes"] or payload.get("submissionKind") != task["public"]["submissionKind"]:
         raise AssetError("ZSOFT_TASK_MISMATCH")
     limits = job.get("limits", {})
     if type(limits.get("timeoutSeconds")) is not int or not 1 <= limits["timeoutSeconds"] <= 86400 or not isinstance(limits.get("cpu"), (int, float)) or not math.isfinite(limits["cpu"]) or limits["cpu"] <= 0 or type(limits.get("memoryMiB")) is not int or limits["memoryMiB"] < 1:
@@ -144,7 +186,7 @@ def evaluate(request_path: Path, output_path: Path) -> None:
     evaluation_id = str(job.get("evaluationId", ""))
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", evaluation_id):
         raise AssetError("ZSOFT_REQUEST_INVALID")
-    completion = {"status": "failed", "rawResult": {}, "runtimeFacts": {"track": "userspace"}, "cleanup": {"status": "pending"}}
+    completion = {"status": "failed", "rawResult": {}, "runtimeFacts": {}, "cleanup": {"status": "pending"}}
     evidence = []
     worker = None
     work = output_path.parent.parent / "work"
@@ -167,9 +209,11 @@ def evaluate(request_path: Path, output_path: Path) -> None:
         descriptor = job["artifacts"][0]
         if artifact.stat().st_size != descriptor["sizeBytes"] or not 1 <= descriptor["sizeBytes"] <= task["public"]["maxBytes"] or digest_bytes(artifact.read_bytes()) != descriptor["sha256"]:
             raise AssetError("ZSOFT_ARTIFACT_DIGEST_MISMATCH")
-        inspect_images(task["images"])
+        inspect_images(task["images"], request.get("preparedImages"))
+        runtime_policy = kernel_policy(root, task, job["limits"], evaluation_id)
+        completion["runtimeFacts"].update(runtime_policy)
         mounts = shared_mounts()
-        policy = {"allowedRoots": [str(root), str(work)], "mounts": mounts, "images": task["images"], "evaluationId": evaluation_id, "instanceId": os.environ["EVALUATOR_INSTANCE_ID"], "cpu": job["limits"]["cpu"], "memoryMiB": job["limits"]["memoryMiB"], "projectName": "ai_zsoft_" + digest_bytes(evaluation_id.encode())[7:31], "workDir": str(work), "assetRoot": str(root)}
+        policy = {**runtime_policy, "allowedRoots": [str(root), str(work)], "mounts": mounts, "images": task["images"], "evaluationId": evaluation_id, "instanceId": os.environ["EVALUATOR_INSTANCE_ID"], "cpu": job["limits"]["cpu"], "memoryMiB": job["limits"]["memoryMiB"], "projectName": "ai_zsoft_" + digest_bytes(evaluation_id.encode())[7:31], "workDir": str(work), "assetRoot": str(root)}
         host_path(str(root), policy)
         host_path(str(work), policy)
         policy_path = work / "proxy-policy.json"
@@ -186,6 +230,9 @@ def evaluate(request_path: Path, output_path: Path) -> None:
         config_path = work / "worker-config.json"
         config_path.write_text(json.dumps(config))
         environment = {"PATH": f'{proxy_dir}:/usr/local/bin:/usr/bin:/bin', "PYTHONPATH": f'{root / "src"}:{HERE}', "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(work), "LANG": "C.UTF-8", "ZSOFT_PROXY_POLICY": str(policy_path)}
+        if runtime_policy["track"] == "kernel":
+            # The judge container has no KVM device; the proxy configures the host-side runner.
+            environment["ZSOFT_KERNEL_ACCEL"] = "tcg"
         with (work / "worker.stdout").open("wb") as stdout, (work / "worker.stderr").open("wb") as stderr:
             worker = subprocess.Popen([sys.executable, str(HERE / "worker.py"), str(config_path)], cwd=root, env=environment, stdout=stdout, stderr=stderr, start_new_session=True)
             try:
@@ -205,11 +252,11 @@ def evaluate(request_path: Path, output_path: Path) -> None:
             raise AssetError("ZSOFT_CLEANUP_FAILED")
         if status not in ("completed", "invalid_submission") or type(result.get("success")) is not bool or (status != "completed" and result["success"]):
             raise AssetError("ZSOFT_RESULT_INVALID")
-        raw = {"taskId": config["taskId"], "submissionSha256": descriptor["sha256"], "bundleDigest": inventory["bundleDigest"], "taskDigest": task["taskDigest"], "status": status, "success": result["success"]}
+        raw = {"sourceTaskDigest": task["sourceTaskDigest"], "taskId": config["taskId"], "submissionSha256": descriptor["sha256"], "bundleDigest": inventory["bundleDigest"], "taskDigest": task["taskDigest"], "status": status, "success": result["success"]}
         report = output_path.parent / "report.json"
         report.write_text(json.dumps(raw))
         evidence = [{"name": "report.json", "kind": "official-report", "mediaType": "application/json", "path": "report.json"}]
-        completion.update(status="completed" if status == "completed" else "submission_invalid", rawResult=raw, runtimeFacts={"revision": inventory["revision"], "bundleDigest": inventory["bundleDigest"], "track": "userspace"})
+        completion.update(status="completed" if status == "completed" else "submission_invalid", rawResult=raw, runtimeFacts={"revision": inventory["revision"], "bundleDigest": inventory["bundleDigest"], **runtime_policy})
     except Exception as error:
         code = error_code(error)
         completion["error"] = {"code": code, "message": MESSAGES.get(code, "ZSoft 评测资产或运行状态异常"), "retryable": code in ("ZSOFT_DOCKER_UNAVAILABLE", "ZSOFT_EVALUATION_TIMEOUT")}

@@ -99,6 +99,7 @@ function loadConfig() {
     fiCwd: process.env.AGENT_INSIGHT_FI_CWD || raw.fiCwd || '',
     // 安装器始终写入版本化 managed venv 的绝对解释器路径。
     fiPython: process.env.AGENT_FI_PYTHON || raw.fiPython || '',
+    publicBundleDir: process.env.AGENT_INSIGHT_PUBLIC_BUNDLES_DIR || raw.publicBundleDir || '',
     mctsRepoDir: process.env.AGENT_INSIGHT_MCTS_REPO_DIR || fileEnv.AGENT_INSIGHT_MCTS_REPO_DIR || raw.mctsRepoDir || '',
     mctsPython: process.env.AGENT_INSIGHT_MCTS_PYTHON || fileEnv.AGENT_INSIGHT_MCTS_PYTHON || raw.mctsPython || '',
     mctsTraceLauncher: process.env.AGENT_INSIGHT_MCTS_TRACE_LAUNCHER || fileEnv.AGENT_INSIGHT_MCTS_TRACE_LAUNCHER || raw.mctsTraceLauncher
@@ -519,6 +520,8 @@ function capabilityDiscoveryFingerprint(cfg = {}) {
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'config.env'),
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'core', 'main.py'),
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'xgovernor_client.py'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'task_plugins', 'zsoft'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'mode.py'),
     mctsPython,
     mctsTraceLauncher,
     path.join(path.dirname(mctsTraceLauncher), 'config.json'),
@@ -870,16 +873,25 @@ function buildCapabilities(cfg, opts) {
       actions: ['RUN_BENCHMARK_CASE'],
     })
   }
+  const zsoftProbe = mctsConfigured && mcts?.probeMctsZsoftRuntime
+    ? mcts.probeMctsZsoftRuntime(cfg) : { ready: false }
+  const mctsReady = mctsProbe.ready || zsoftProbe.ready
   const components = {
     clientVersion: AGENT_VERSION,
+    'mcts-zsoft-export/v1': { ready: zsoftProbe.ready, ...(zsoftProbe.reason ? { note: zsoftProbe.reason } : {}) },
+    'mcts-swe-bench/v1': { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) },
     'git-workspace/v1': { ready: true },
     'concurrent-execution/v1': { ready: true },
     'git-patch/v1': { ready: true },
+    'public-bundle-workspace/v1': { ready: true },
+    'zsoft-tasks-workspace/v1': { ready: true },
+    'zsoft-tasks-workspace/v2': { ready: true },
+    'single-file/v1': { ready: true },
   }
   for (const platform of platforms) {
     if (platform.id === 'pi-mcts') {
-      components['agent-runtime/pi-mcts/v1'] = { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
-      for (const capability of mcts?.agentOptionCapabilities || []) components[capability] = { ready: mctsProbe.ready }
+      components['agent-runtime/pi-mcts/v1'] = { ready: mctsReady, ...(!mctsReady && mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
+      for (const capability of mcts?.agentOptionCapabilities || []) components[capability] = { ready: mctsReady }
       continue
     }
     const runtime = runtimeFor(platform.id)
@@ -2391,6 +2403,7 @@ async function main() {
     insightBaseUrl: cfg.insightBaseUrl,
     baseDir: CLIENT_HOME,
     agentInsightHome: getAgentInsightHome(),
+    publicBundleDir: cfg.publicBundleDir,
     log: (...args) => log(...args),
     tryAcquireSlot: tryAcquireExecutionSlot,
     releaseSlot: releaseExecutionSlot,

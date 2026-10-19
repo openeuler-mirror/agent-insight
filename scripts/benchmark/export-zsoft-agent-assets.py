@@ -5,7 +5,11 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "benchmarks/zsoft-l1/evaluator"))
+from assets import userspace_tags
 
 HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -66,7 +70,7 @@ def export(dataset: Path, tasks_dir: Path, output_dir: Path, output_dataset: Pat
         if task_root.is_symlink() or not task_root.is_dir() or (task_root / "task.json").is_symlink():
             raise ValueError("official task directory is missing or symlinked")
         raw = json.loads((task_root / "task.json").read_text())
-        if (raw["task_id"], raw["title"], raw["description"], raw.get("tags", []), raw["submission"]["max_bytes"]) != (task_id, public["title"], public["description"], public["tags"], public["maxBytes"]):
+        if (raw["task_id"], raw["title"], raw["description"], userspace_tags(raw), raw["submission"]["max_bytes"]) != (task_id, public["title"], public["description"], public["tags"], public["maxBytes"]):
             raise ValueError("dataset metadata differs from the official public task")
         content = {f"tasks/{task_id}/public/{name}": value for name, value in public_files(task_root / "public").items()}
         # Keep only the metadata read by the executor plugin; judge entrypoints stay on the evaluator.

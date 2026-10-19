@@ -47,19 +47,6 @@
           "items": {
             "type": "string"
           }
-        },
-        "agentBundle": {
-          "type": "object",
-          "required": [
-            "digest"
-          ],
-          "properties": {
-            "digest": {
-              "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$"
-            }
-          },
-          "additionalProperties": false
         }
       },
       "additionalProperties": false,
@@ -68,20 +55,14 @@
     "private": {
       "type": "object",
       "required": [
-        "revision",
-        "bundleDigest",
-        "taskDigest"
+        "sourceTaskDigest"
       ],
       "properties": {
         "revision": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$"
         },
-        "bundleDigest": {
-          "type": "string",
-          "pattern": "^sha256:[0-9a-f]{64}$"
-        },
-        "taskDigest": {
+        "sourceTaskDigest": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
         }

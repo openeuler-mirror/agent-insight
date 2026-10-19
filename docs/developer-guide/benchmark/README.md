@@ -9,6 +9,7 @@
 | [《自定义 Benchmark 接入指南》](./custom-benchmark-onboarding-guide.md) | 帮助客户用自然语言描述需求，并与 AI 确认评测目标、数据边界和成功标准 |
 | [《Benchmark 接入开发规范》](./benchmark-integration-development-guide.md) | 指导 AI 或开发者实现 Manifest、Adapter、Evaluator、Presentation 和测试 |
 | [《Benchmark 整体服务安装指南》](./service-deployment-guide.md) | 指导部署已完成开发的接入包，安装平台、执行端、Evaluator 和数据集 |
+| [《ZSoft 部署指南》](./zsoft-deployment-guide.md) | 指导在线或离线自动导入官方数据、配置执行机任务目录，在 119 构建镜像并发布到公有 SWR，部署正式评测资产 |
 | 本文档 | 说明需求确认、接入开发和服务部署的完整流程 |
 
 ```text

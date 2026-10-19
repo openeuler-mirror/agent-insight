@@ -113,13 +113,13 @@ bash scripts/start.sh --port 3100 --benchmark swe-bench
 | 参数 | 含义 |
 |---|---|
 | `--port` | 本次启动使用的 Agent Insight 端口 |
-| `--benchmark swe-bench` | 本次启动自动准备 SWE-bench Verified |
+| `--benchmark <key>` | 本次启动调用 Catalog 注册的数据准备器并导入对应数据集 |
 
 ## 4. 安装 Benchmark 数据集
 
 ### 4.1 当前支持边界
 
-当前提供自动安装流程的数据集是 SWE-bench Verified。
+自动安装能力由接入包的 Dataset Preparer 在 Catalog 中注册。平台启动脚本通过通用入口获取来源、调用 Loader 和 Adapter 入库，不内置各 Benchmark 的下载或解析逻辑。以下使用 SWE-bench Verified 举例；其他接入包的来源配置见对应专项部署指南和 [评测数据集指南](../../user-guide/evaluation/datasets.md)。
 
 ### 4.2 随服务启动自动安装
 
@@ -155,7 +155,7 @@ SWE_BENCH_SOURCE_ARCHIVE_SOURCE=https://mirror.example.com/swe-bench/source.tar.
 
 ### 4.3 其他 Benchmark
 
-其他 Benchmark 必须提供自己的数据集安装方式。普通数据集页面导入不能替代 Benchmark 数据集安装。
+接入包可注册 `implementation.datasetPreparer` 和 `datasetPreparerExport`，复用 `bash scripts/start.sh --benchmark <key>`。不启动服务时运行 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>`；未注册准备器的接入包仍可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录。普通数据集页面导入不能替代 Benchmark 数据集安装。
 
 ## 5. 安装 Evaluator
 
@@ -360,7 +360,7 @@ Git 根地址会拼接为 `根地址/owner/repo.git`。例如 Flask 仓库对应
 
 已有 MCTS/xGovernor 服务的使用方可直接按 [MCTS 接入指南](../../user-guide/observability/mcts-xgovernor.md#接入前确认) 完成采集器安装、连接配置和客户端绑定，无需重新部署已有服务。
 
-`pi-mcts` 只用于 SWE-bench Benchmark 实验。按 MCTS README 完成一次性安装：**实际执行 Case 的客户端机器**准备 MCTS、Python 3.11+ 与 `datasets`、Reliability Client 和已启用的 `mcts-xgovernor-proxy` Trace 代理；**xGovernor 主机**准备 Pi CLI、Pi 桥接扩展和 Pi/E2B worker，并确保 E2B 的 SWE-bench 模板可用。两者可以分机部署，客户端不探测本地 Pi CLI。默认使用客户端 MCTS 仓库下的 `.venv/bin/python`；虚拟环境放在别处时可通过本机配置指定解释器。客户端不依赖交互终端的 venv 激活状态。MCTS 版本需支持 `--output-dir`，无需修改 MCTS 源码。执行机运行 Reliability Client 的账户必须能读取 MCTS 仓库及 `testcases_union/config.env`，并能在 `testcases_union/output/` 下写入；xGovernor 与 Trace 上报地址必须可达。
+`pi-mcts` 支持 SWE-bench 和兼容插件的 ZSoft 实验。按 MCTS README 完成一次性安装：**实际执行 Case 的客户端机器**准备 MCTS、Python 3.11+、Reliability Client 和已启用的 `mcts-xgovernor-proxy` Trace 代理；**xGovernor 主机**准备 Pi CLI、Pi 桥接扩展和 Pi/E2B worker，并确保所选数据集的沙箱环境可用。SWE-bench 额外需要执行机上的 `datasets` 和 `run_union.sh`，ZSoft 使用平台启动桥接，不要求这两项。两者可以分机部署，客户端不探测本地 Pi CLI。默认使用客户端 MCTS 仓库下的 `.venv/bin/python`；虚拟环境放在别处时可通过本机配置指定解释器。客户端不依赖交互终端的 venv 激活状态。MCTS 版本需支持 `--output-dir`，无需修改 MCTS 源码。执行机运行 Reliability Client 的账户必须能读取 MCTS 仓库及 `testcases_union/config.env`，并能在 `testcases_union/output/` 下写入；xGovernor 与 Trace 上报地址必须可达。
 
 在“客户端安装”页勾选 MCTS，仅填写执行机上的仓库绝对路径。生成命令通过管道右侧的 `AGENT_INSIGHT_MCTS_REPO_DIR` 将路径交给本机安装器，不把路径发到服务端，也不要求填写 xGovernor 地址：
 
@@ -376,9 +376,9 @@ MCTS 安装器将本次版本的上传模块放入采集器目录内的 `shared/
 
 仓库路径自动保存到本机 `AGENT_INSIGHT_HOME/.env`，默认 `~/.agent-insight/.env`。自定义部署仍支持 `AGENT_INSIGHT_MCTS_PYTHON` 和 `AGENT_INSIGHT_MCTS_TRACE_LAUNCHER`，默认分别为 `<仓库>/.venv/bin/python` 和 `<Agent Insight home>/collectors/mcts-xgovernor-proxy/run.cjs`。配置优先级为进程环境 → `.env` → 兼容 JSON 字段 `mctsRepoDir` / `mctsPython` / `mctsTraceLauncher` → 默认值。旧 systemd 环境覆盖需由部署者同步维护；客户端只读取这三个 MCTS 项。
 
-MCTS 就绪探测通过配置的 Python 检查版本及 `importlib.util.find_spec("datasets")`，不导入 `datasets` 及其传递依赖。探测上限为 5 秒，超时、无法启动、缺包、异常退出与版本不足分别返回明确原因，避免将执行机临时负载造成的超时误报为依赖未安装。实际 MCTS 运行仍正常导入依赖；运行时导入失败按实际进程错误处理。
+MCTS 安装器只检查公共仓库文件和 Python 版本。客户端按 Benchmark 分别探测：SWE-bench 检查 `run_union.sh` 及 `importlib.util.find_spec("datasets")`，不导入 `datasets`；ZSoft 检查公共运行前提和专用插件契约，不检查 SWE 依赖。Python 和接口子进程各有 5 秒上限，超时、无法启动、缺包、异常退出与版本不足分别返回原因。`agent-runtime/pi-mcts/v1` 与搜索参数能力在任一 Benchmark 就绪时可用；新客户端额外上报 `mcts-swe-bench/v1`，SWE 目标需该组件就绪，旧客户端未声明该组件时保留原兼容规则。实际运行仍正常导入依赖；运行时导入失败按实际进程错误处理。
 
-这些是执行机本地配置，不进入服务端下发的 Case 任务。缺少 MCTS 脚本、Python、Trace 代理配置或所需 MCTS 版本时，客户端会将 `agent-runtime/pi-mcts/v1` 标为未就绪。`pi-mcts` 不会出现在普通生成 Trace 实验中。
+这些是执行机本地配置，不进入服务端下发的 Case 任务。公共 Python/Trace 前提不满足，或两个 Benchmark 均不可用时，客户端会将 `agent-runtime/pi-mcts/v1` 标为未就绪；SWE 脚本缺失不会单独阻止 ZSoft。`pi-mcts` 不会出现在普通生成 Trace 实验中。
 
 执行器每次从 MCTS `config.env` 读取真实 xGovernor 地址，以 `--upstream` 传给严格模式 Trace 代理。代理将动态地址放入 `AGENT_INSIGHT_MCTS_PROXY_URL`；本次专用 `python` 脚本在 MCTS 加载配置之后，将 `XGOVERNOR_BASE_URL` 恢复为代理地址并 exec 原解释器。手动启动器也为每次运行创建独立 Python 包装目录，退出时清理。固定 URL 不会绕过采集，无需修改 MCTS 配置文件。未配置仓库的历史独立 Trace 安装仍读取 `upstreamUrl` / `AGENT_INSIGHT_MCTS_UPSTREAM_URL`。
 
@@ -480,3 +480,5 @@ bash scripts/evaluator.sh stop --purge-images
 | `--purge-images` | 停止服务时同时清理评测服务管理的镜像 |
 
 停止服务不需要传端口参数，自定义端口启动的服务也使用相同命令。
+
+ZSoft 的专属资产准备与镜像部署步骤见 [ZSoft 部署指南](zsoft-deployment-guide.md)。

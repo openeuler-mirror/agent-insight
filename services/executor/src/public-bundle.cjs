@@ -1,4 +1,5 @@
 'use strict'
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 const { createHash } = require('node:crypto')
 const fs = require('node:fs')
@@ -80,7 +81,9 @@ class PublicBundleWorkspaceProvider {
   async prepare(spec, context) {
     validatePublicBundleSpec(spec)
     if (!/^erun_[0-9a-f]{32}$/.test(context.runId)) fail('TASK_CONTEXT_MISMATCH', '运行 ID 不合法')
-    const source = await safeDirectory(this.bundleDir, spec.digest.slice(7))
+    let source
+    try { source = await safeDirectory(this.bundleDir, spec.digest.slice(7)) }
+    catch (error) { if (error.code === 'ENOENT') fail('PUBLIC_BUNDLE_MISSING', '执行器缺少指定公开任务包，请同步到配置的任务包目录'); throw error }
     const lock = JSON.parse((await readBoundedFile(source, 'bundle.json', 32 * 1024 * 1024)).toString('utf8'))
     if (lock.schemaVersion !== 'public-bundle/v1' || lock.taskId !== spec.taskId || digest(canonical(lock)) !== spec.digest
       || !lock.files || typeof lock.files !== 'object' || Array.isArray(lock.files)) fail('PUBLIC_BUNDLE_DIGEST_MISMATCH', '公开任务包与冻结指纹不一致')

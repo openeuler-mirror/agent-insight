@@ -18,10 +18,10 @@ const evaluatorModule = require('../services/evaluator/src/evaluator-registry.cj
 test('benchmark package catalog is reproducible and registers SWE-bench without core imports', () => {
   const generatedDir = path.join(repositoryRoot, 'generated', 'benchmark-catalog')
   generator.generate(repositoryRoot)
-  const first = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json']
+  const first = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json', 'dataset-preparers.ts', 'dataset-preparer-keys.cjs']
     .map((name) => fs.readFileSync(path.join(generatedDir, name), 'utf8'))
   assert.deepEqual(generator.generate(repositoryRoot), ['swe-bench', 'zsoft-l1'])
-  const second = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json']
+  const second = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json', 'dataset-preparers.ts', 'dataset-preparer-keys.cjs']
     .map((name) => fs.readFileSync(path.join(generatedDir, name), 'utf8'))
   assert.deepEqual(second, first)
   assert.equal(getBenchmarkAdapter('swe-bench').manifest.adapterKey, 'swe-bench')
@@ -124,6 +124,20 @@ presentation:
   )
   assert.match(generatedManifests, /"path": "values\.metadata\.owner"/)
   assert.match(generatedManifests, /"name": "answer\.txt"/)
+  await fsp.mkdir(path.join(packageDir, 'dataset'))
+  await fsp.writeFile(path.join(packageDir, 'dataset/prepare.ts'), 'export const fixturePreparer = { profileKey: "official" }\n')
+  const fixtureManifestPath = path.join(packageDir, 'benchmark.yaml')
+  const fixtureManifest = (await fsp.readFile(fixtureManifestPath, 'utf8'))
+    .replace('  adapterExport: fixtureAdapter', '  adapterExport: fixtureAdapter\n  datasetPreparer: ./dataset/prepare.ts\n  datasetPreparerExport: fixturePreparer')
+    + '\ndataset:\n  profiles:\n    - { key: official, displayName: Official, acceptedExtensions: [], acceptedSourceKinds: [directory], version: "directory/v1" }\n'
+  await fsp.writeFile(fixtureManifestPath, fixtureManifest)
+  generator.generate(root)
+  assert.match(await fsp.readFile(path.join(root, 'generated/benchmark-catalog/dataset-preparers.ts'), 'utf8'), /fixturePreparer/)
+  assert.deepEqual(require(path.join(root, 'generated/benchmark-catalog/dataset-preparer-keys.cjs')), ['fixture'])
+  const firstDigest = JSON.parse(await fsp.readFile(path.join(root, 'generated/benchmark-catalog/catalog-lock.json'), 'utf8')).packages[0].digest
+  await fsp.appendFile(path.join(packageDir, 'dataset/prepare.ts'), '\nexport const updated = true\n')
+  generator.generate(root)
+  assert.notEqual(JSON.parse(await fsp.readFile(path.join(root, 'generated/benchmark-catalog/catalog-lock.json'), 'utf8')).packages[0].digest, firstDigest)
   const secondPackageDir = path.join(root, 'benchmarks', 'fixture-two')
   await fsp.cp(packageDir, secondPackageDir, { recursive: true })
   const secondManifestPath = path.join(secondPackageDir, 'benchmark.yaml')

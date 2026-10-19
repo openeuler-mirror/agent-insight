@@ -10,7 +10,7 @@ description: "使用 Pi + MCTS 接入 Agent Insight，并创建、执行和查�
 ## 1. 接入前准备
 
 - MCTS 原始命令能够正常运行，支持输出目录隔离和中断清理。
-- 执行机已安装 Git、Node.js 22.19.0+，MCTS 使用的 Python 3.11+ 环境中已安装 `datasets`。
+- 执行机已安装 Git、Node.js 22.19.0+，MCTS 使用 Python 3.11+。SWE-bench 还要求该环境安装 `datasets` 并提供 `run_union.sh`；ZSoft 不依赖这两项。
 - 平台已导入 SWE-bench Benchmark 数据集，Benchmark 评测服务可用。
 
 确认 MCTS 的 `testcases_union/config.env` 已配置可访问的 xGovernor，安装器会沿用这份配置。模型和 E2B 凭据由 xGovernor 部署者配置，详见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。
@@ -25,7 +25,7 @@ description: "使用 Pi + MCTS 接入 Agent Insight，并创建、执行和查�
 curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIKey>&yes=1&frameworks=mcts-xgovernor" | AGENT_INSIGHT_MCTS_REPO_DIR='/opt/MCTS' bash
 ```
 
-以页面生成的命令为准。安装器检查仓库、Python 和 `datasets`、xGovernor 连接，安装采集器，将路径保存到 `~/.agent-insight/.env`，最后注册并启动客户端。**无需再编辑配置或手动重启**；检查失败时先处理提示，再重新执行同一命令。
+以页面生成的命令为准。安装器检查仓库、Python 版本和 xGovernor 连接；客户端再分别探测 SWE-bench 与 ZSoft 能力，安装采集器，将路径保存到 `~/.agent-insight/.env`，最后注册并启动客户端。**无需再编辑配置或手动重启**；检查失败时先处理提示，再重新执行同一命令。
 
 安装器复用 MCTS 的连接和凭据配置，不改动 MCTS 仓库。默认使用 `<仓库>/.venv/bin/python`；仓库外的解释器可由部署者预设 `AGENT_INSIGHT_MCTS_PYTHON`。正常安装不需要设置 `mctsTraceLauncher`。
 
@@ -124,6 +124,20 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 | 需要中止执行 | 使用平台停止入口；中断时尚未生成 Patch 的 Case 可能没有提交物 |
 
 **Trace 耗时与执行上限的计时范围不同。** Trace 可能未包含首次 xGovernor 请求前的准备时间；Case 总耗时还包含工作区准备和中断清理。判断是否超时，以 Case 的错误说明和配置上限为准。
+
+## ZSoft 实验
+
+ZSoft 数据集可以导入已有 PoC，也可以使用普通 Agent 或兼容 ZSoft 的 `pi-mcts` 自动生成 PoC。自动生成使用执行机上已有的原生 ZSoft 任务目录，无需额外导出或导入公开资料包；尚未配置任务目录时，实验创建会报错；内核题与 userspace 使用同一个目录配置，内核题提交 C 源码。准备步骤见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md#zsoft-任务目录与执行器)。
+
+选择 ZSoft 数据集、生成 Trace 和就绪的执行目标后，填写并保存 **ZSoft 任务目录**（执行机上的绝对路径）。目录内应有 `<task-id>/task.json` 和 `public/`；任务 ID 由平台下发。该配置属于 Benchmark，按客户端保存并自动复用，可修改；切换客户端会加载各自的目录，切换到 SWE-bench 时隐藏。保存仅检查路径格式，目录缺题或版本不一致会在执行准备阶段报告。MCTS 模型仍选择平台默认；执行客户端需升级并上报 `zsoft-tasks-workspace/v2`，MCTS 还需 `mcts-zsoft-export/v1`，缺失时该目标不可用。普通 Agent 按任务说明将 Python、C 或 binary 单文件写入 `submission/poc`；MCTS 会自动导出所选 PoC 并交给客户端上传。
+
+正式成绩由平台的 ZSoft L1 Official Judge 给出，MCTS 搜索反馈和有 Trace 均不代表正式通过。在 Case 详情查看 `poc` 和评测报告；提交物上传成功后可独立重评。数据集从官方目录自动导入，旧 P2 JSON/JSONL 不再支持，需重新导入官方数据。导入 PoC 无需执行目录，自动生成需配置执行客户端的原生任务目录。
+
+ZSoft 就绪检查通过静态解析检查插件函数签名、模式注册、CLI 参数和五个角色提示词，不加载插件或启动沙箱。桥接运行前再次核对源码摘要，预检后源码变化会拒绝执行。Python 题提交源码，C 题提交 C 源码，binary 题提交编译后的原始字节；生成提示按题目类型适配，保留公开题目和 README。C/binary 不使用插件内置的 Python preflight，需要按公开契约验证候选。
+
+管理员可批量准备 userspace 与内核题的环境，并发布至公有 SWR。内核题的 runner 镜像进入 SWR，两版内核与模块随冻结评测资产部署在评测机；无需用户额外导入公开包。评测服务按固定版本下载、缓存题目镜像；平台评测 Runtime 缺失时先尝试拉取，拉取失败后自动构建，无需手动预构建。首次评测可能需要等待 Runtime 构建和题目镜像下载，后续实验复用缓存；离线部署仍需提前准备匹配版本的 Runtime 和评测资产。环境准备见 [镜像部署说明](../../developer-guide/benchmark/zsoft-deployment-guide.md#zsoft-镜像准备与公有-swr-部署)。
+
+当前代码已覆盖 userspace 与内核题的接入流程，内核题在隔离的 runner 中通过 QEMU 运行，默认使用 TCG，支持评测管理员配置 KVM。内核环境尚未实际构建，真实 MCTS/E2B 与 ZSoft Judge 留待统一联调，合成回归通过不代表实题验收完成。
 
 ## 相关指南
 

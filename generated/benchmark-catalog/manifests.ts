@@ -324,7 +324,7 @@ export const generatedBenchmarkManifests = {
       "evaluation": "benchmark-evaluation/v1"
     },
     "requiredCapabilities": [
-      "public-bundle-workspace/v1",
+      "zsoft-tasks-workspace/v2",
       "single-file/v1"
     ],
     "defaultTimeoutSeconds": 900,
@@ -386,19 +386,6 @@ export const generatedBenchmarkManifests = {
                 "items": {
                   "type": "string"
                 }
-              },
-              "agentBundle": {
-                "type": "object",
-                "required": [
-                  "digest"
-                ],
-                "properties": {
-                  "digest": {
-                    "type": "string",
-                    "pattern": "^sha256:[0-9a-f]{64}$"
-                  }
-                },
-                "additionalProperties": false
               }
             },
             "additionalProperties": false,
@@ -407,20 +394,14 @@ export const generatedBenchmarkManifests = {
           "private": {
             "type": "object",
             "required": [
-              "revision",
-              "bundleDigest",
-              "taskDigest"
+              "sourceTaskDigest"
             ],
             "properties": {
               "revision": {
                 "type": "string",
                 "pattern": "^[0-9a-f]{40}$"
               },
-              "bundleDigest": {
-                "type": "string",
-                "pattern": "^sha256:[0-9a-f]{64}$"
-              },
-              "taskDigest": {
+              "sourceTaskDigest": {
                 "type": "string",
                 "pattern": "^sha256:[0-9a-f]{64}$"
               }
@@ -440,7 +421,8 @@ export const generatedBenchmarkManifests = {
           "bundleDigest",
           "taskDigest",
           "status",
-          "success"
+          "success",
+          "sourceTaskDigest"
         ],
         "properties": {
           "taskId": {
@@ -468,6 +450,10 @@ export const generatedBenchmarkManifests = {
           },
           "success": {
             "type": "boolean"
+          },
+          "sourceTaskDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
           }
         },
         "additionalProperties": false
@@ -492,9 +478,10 @@ export const generatedBenchmarkManifests = {
         {
           "key": "l1",
           "displayName": "ZSoft L1",
-          "acceptedExtensions": [
-            ".json",
-            ".jsonl"
+          "acceptedExtensions": [],
+          "version": "official-directory/v1",
+          "acceptedSourceKinds": [
+            "directory"
           ]
         }
       ]

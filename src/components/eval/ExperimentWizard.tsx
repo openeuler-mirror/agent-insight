@@ -10,6 +10,7 @@ import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { MctsOptionsFields } from '@/components/eval/MctsOptionsFields';
+import { ZsoftTasksDirectoryField, useZsoftTasksDirectory } from '@/components/eval/ZsoftTasksDirectoryField';
 import { mctsOptionsState, mctsOptionsToInputs, summarizeMctsOptions, type MctsOptionInputs } from '@/lib/engine/experiment/mcts-options';
 import {
   DropdownMenu,
@@ -648,6 +649,10 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const zsoftDirectoryRequired = isBenchmarkDataset && selectedDataset?.benchmark?.adapterKey === 'zsoft-l1'
+    && traceMode === 'generate' && Boolean(selectedTarget);
+  const zsoftDirectory = useZsoftTasksDirectory(user || '', selectedDatasetId,
+    selectedTarget?.workerId || '', zsoftDirectoryRequired);
   const mctsState = mctsOptionsState(isBenchmarkDataset && traceMode === 'generate' ? selectedTarget : null,
     mctsInputs, mctsOptionsPlatform, selectedDataset?.benchmark?.adapterKey);
   const generationCases = useMemo(
@@ -1457,6 +1462,7 @@ export function ExperimentWizard({
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
       }
       if (mctsState.error) throw new Error(mctsState.error);
+      if (!zsoftDirectory.ready) throw new Error('请先填写并保存 ZSoft 任务目录');
       const casesPayload = selectedList.map((c) => ({
         executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
@@ -1718,7 +1724,7 @@ export function ExperimentWizard({
     ? generateAvailable && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
     : (watchMode || selected.size >= 1);
   const step2Valid = expType === 'llm'
-    || (step2SelectionValid && !mctsState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
+    || (step2SelectionValid && !mctsState.error && zsoftDirectory.ready && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -2157,6 +2163,7 @@ export function ExperimentWizard({
                     onChange={setAgentTimeoutInput}
                   />
               </div>
+              {zsoftDirectoryRequired && <ZsoftTasksDirectoryField directory={zsoftDirectory} host={selectedTarget?.host || ''} />}
               {mctsState.active && <MctsOptionsFields value={mctsInputs} error={mctsState.error}
                 onChange={value => { setMctsInputs(value); setMctsOptionsPlatform(selectedTarget?.platform || ''); }} />}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>

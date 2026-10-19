@@ -62,6 +62,9 @@ export function inspectBenchmarkExecutionTargets(
     const requiredCapabilities = [
       ...manifest.requiredCapabilities,
       benchmarkAgentRuntimeCapability(platform.id),
+      ...(manifest.adapterKey === 'zsoft-l1' && platform.id.endsWith('-mcts') ? ['mcts-zsoft-export/v1'] : []),
+      ...(manifest.adapterKey === 'swe-bench' && platform.id.endsWith('-mcts')
+        && Object.hasOwn(capabilities.components || {}, 'mcts-swe-bench/v1') ? ['mcts-swe-bench/v1'] : []),
     ]
     const missingCapabilities = [...new Set(requiredCapabilities)].filter(
       capability => !componentReady(capabilities.components?.[capability]),
