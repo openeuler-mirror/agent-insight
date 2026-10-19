@@ -140,6 +140,10 @@ bash scripts/evaluator.sh start \
 
 ZSoft 与 SWE-bench 使用相同的 Runtime 准备流程：首次调用复用匹配的本地镜像，缺失时先拉取，失败后按接入包 Dockerfile 自动构建并校验 Catalog artifact 摘要。启动 Controller 不预热 Runtime。本方案不上传 Runtime，保持 `EVALUATOR_RUNTIME_IMAGE_PREFIX` 未设置，评测机需要访问基础镜像和 Python 依赖来源。
 
+ZSoft Runtime 构建默认从华为云 PyPI 源安装固定版本 `pydantic==2.10.6`，单次网络操作超时 60 秒、重试 5 次。需要其他包源时，Docker 构建参数 `PIP_INDEX_URL` 可覆盖默认地址；这是镜像构建参数，不能通过 `--evaluator-env` 修改。遇到 `pydantic-core` 下载超时或 `No matching distribution` 时先检查构建网络及包源，不要直接更改固定依赖版本。
+
+修改 Runtime Dockerfile 后运行 `node scripts/benchmark/generate-catalog.cjs`，并使用同一份代码重新构建、部署平台和 Controller，使新的 Catalog 摘要和 Runtime 标签生效。已有 PoC 的 Case 可在修复后点击“Benchmark 重评”，复用原提交物。
+
 平台独立导入官方数据集，执行机配置自己的原生任务目录。评测机无需数据库，评测请求只携带题目身份及版本。完整资产镜像仅由评测机安装，执行客户端与 MCTS 的命令保持原流程。
 
 评测端对公有 SWR 匿名拉取，无需 registry 认证配置。题目镜像由公共镜像池按固定摘要拉取、缓存、回收；重评或回收后重拉均使用同一摘要。Runtime 校验实际 Image ID 与冻结清单一致，Compose 使用 Image ID 且禁止自动 pull，因此无需覆盖原始 tag。当前清单未配置 `registryImages` 时需在本机预装固定 Image ID，不能在冷缓存下从远端恢复。缺少 `sourceTaskDigest` 的旧评测资产清单不再支持，需重新冻结。

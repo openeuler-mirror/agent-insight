@@ -113,9 +113,9 @@ const generatedEvaluatorDescriptors = [
       "verifyCommand": "python3",
       "verifyEntrypoint": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/verify_assets.py")
     },
-    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-065a76edbe9704e2540c0c1ffc69dd33d2ab2dc61d8a622ef0210ea55210b0d7",
+    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-f1bf25a4c048f13919c1cfdac4e339963145c5d454ef014d303e54e099afcc96",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/Dockerfile"),
-    "artifactDigest": "sha256:065a76edbe9704e2540c0c1ffc69dd33d2ab2dc61d8a622ef0210ea55210b0d7",
+    "artifactDigest": "sha256:f1bf25a4c048f13919c1cfdac4e339963145c5d454ef014d303e54e099afcc96",
     "network": "deny",
     "resources": {
       "cpu": 4,
