@@ -66,6 +66,26 @@ function installRuntime() {
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.copyFileSync(path.join(PACKAGE_ROOT, relativePath), target)
   }
+  const configRuntime = path.join(PACKAGE_ROOT, 'packages', 'project-config')
+  if (!fs.existsSync(configRuntime)) fail(`缺少配置加载器: ${configRuntime}`, '制品不完整；请重新执行安装命令。')
+  fs.cpSync(configRuntime, path.join(RUNTIME_DIR, 'packages', 'project-config'), { recursive: true })
+  for (const [source, destination] of [['packages/agent-runtime', 'packages/agent-runtime'], ['services/executor/runtimes', 'executor/runtimes']]) {
+    const input = path.join(PACKAGE_ROOT, source)
+    if (!fs.existsSync(input)) fail(`缺少 Runtime 参数定义: ${input}`, '制品不完整；请重新执行安装命令。')
+    fs.cpSync(input, path.join(RUNTIME_DIR, destination), { recursive: true })
+  }
+
+  fs.mkdirSync(path.join(RUNTIME_DIR, 'config', 'benchmark'), { recursive: true })
+  fs.copyFileSync(path.join(PACKAGE_ROOT, 'config', 'benchmark', 'executor.yaml'), path.join(RUNTIME_DIR, 'config', 'benchmark', 'executor.yaml'))
+  const previousConfigDir = path.join(RUNTIME_DIR, 'config')
+  const previousLocal = path.join(previousConfigDir, 'executor.local.yaml')
+  const currentLocal = path.join(previousConfigDir, 'benchmark', 'executor.local.yaml')
+  if (fs.existsSync(previousLocal) && !fs.existsSync(currentLocal)) {
+    const { loadProjectConfig } = require(path.join(configRuntime, 'index.cjs'))
+    const { dump } = require(path.join(configRuntime, 'yaml.cjs'))
+    const migrated = loadProjectConfig('executor', { configDir: previousConfigDir, env: {} })
+    fs.writeFileSync(currentLocal, dump(migrated), { flag: 'wx', mode: 0o600 })
+  }
   // 配置合并要用 OpenCode 插件自己的 config_sync.js（复用它保证两条写入路径
   // 结构一致）。运行时被搬到 RUNTIME_DIR 后相对路径失效，故与主脚本放在一起。
   const syncSrc = path.join(

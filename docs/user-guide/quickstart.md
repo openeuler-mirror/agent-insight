@@ -172,6 +172,19 @@ docker compose logs -f agent-insight   # 看到 "Building from source..." 到构
 
 注意用 `restart` 而不是 `up -d`：容器配置没变时 `up -d` 什么都不做，不会触发重新构建。只有改了 `package.json` 依赖、需要连镜像一起重建时才用 `docker compose up -d --build`。
 
+离线服务器也可以通过源码 ZIP 更新。更新脚本的帮助、进度与错误提示使用英文，避免服务器终端中文乱码。先把现有 Compose 的源码挂载改为 `${SOURCE_RELEASE:?SOURCE_RELEASE is required}:/src:ro`，保留 `AGENT_INSIGHT_SOURCE_DIR=/src` 和原有数据挂载。将 `scripts/update-source.sh` 放到服务器，修改顶部 `DEFAULT_COMPOSE_FILE`（默认 `/srv/agent-insight/compose.yml`），然后执行：
+
+```bash
+bash update-source.sh --zip /path/to/agent-insight.zip
+# 临时覆盖 Compose 路径；RELEASES_DIR 可覆盖解压目录（默认 /srv/agent-insight/releases）
+RELEASES_DIR=/srv/agent-insight/releases bash update-source.sh \
+  --zip /path/to/agent-insight.zip --compose /srv/agent-insight/compose.yml
+```
+
+脚本需要宿主机安装 Bash、Python 3 和 Docker Compose v2，并具有解压目录和 Docker 的操作权限。它会解压到新的版本目录，自动识别网页 ZIP 的外层目录，导出 `SOURCE_RELEASE`，然后执行与手动更新相同的 `docker compose -f <配置文件> up -d --force-recreate --pull never --no-build`。它不额外校验 Compose 的源码挂载，也不等待健康检查；命令返回后应用可能仍在构建，请查看日志并检查页面与业务功能。Compose 中的源码挂载仍需引用 `SOURCE_RELEASE`；若路径写死，导出的变量不会改变挂载位置。使用管理原容器的同一份 Compose 和项目名（自定义项目名可通过 `COMPOSE_PROJECT_NAME` 传入）。脚本不拉取或构建镜像，不清理旧版本目录。失败时保留源码并输出错误；不会自动备份或回滚数据库。脚本内导出的 `SOURCE_RELEASE` 不会保存到调用者的终端，后续单独执行 Compose 时需先设置脚本输出的源码路径。
+
+ZIP 更新前请备份数据库，并确认新分支的依赖、数据库 schema 和升级逻辑兼容现有部署。依赖变更仍需更新镜像。入口脚本会执行数据库准备脚本和 schema 同步，即使本次 schema 文件没变，也不能把 ZIP 更新视为绝不会修改数据库；修改源码中的 `docker-entrypoint.sh` 也不会替换镜像已安装的入口脚本。
+
 需要了解的行为：
 
 - **不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致**，容器直接运行镜像里打好的 `agent-insight` npm 包。
@@ -355,6 +368,13 @@ Pi Agent、Codex 和 Goal Plus 共用采集传输模块。重新安装时，已�
 如果使用 **AcTrail**，先自行完成 AcTrail 安装并启动守护进程，再在安装指导中选择 AcTrail，并于 AcTrail 所在的 Linux 环境运行页面生成的 curl 命令。脚本不会安装或包装 AcTrail，而是完成两项配置：合并更新 AcTrail 守护进程配置，启用完整请求、结构化工具调用、工具结果和子 Agent 关系；生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给官方 `otel-http` 插件。修改守护进程配置前，脚本会备份原文件；若守护进程正在运行则自动重启，然后持久化加载 `agent-insight.otel-http` 实例。之后继续使用原来的 `sudo actrailctl launch --name <名称> -- <Agent 命令>`，AcTrail 会自动上报。默认守护进程配置为 `/etc/actrail/actraild.conf`；非默认部署可在运行脚本前设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
 
 OTLP Logs 上报到 `/api/ingest/otel/v1/logs`，Traces 上报到 `/api/ingest/otel/v1/traces`；AcTrail 默认使用 OTLP/HTTP Protobuf。安装脚本末尾也会输出一份可手动复制的纯配置环境变量块。旧版 watcher 仅作为兼容方式保留；同一 OpenClaw 实例只能选择 OTel 或 watcher 其中一种，避免重复 Trace。
+
+如果使用 **QwenPaw**，在安装指导中勾选 QwenPaw 并执行对应系统的一行命令。脚本会下载
+`agent-insight-qwenpaw` collector zip，安装 Python 包，并把 `agent-insight-qwenpaw` 插件注册到
+QwenPaw plugins 目录。安装后必须重启 QwenPaw；新建对话时会在链路追踪中生成一条 Trace，同一
+对话继续提问会追加新的 USER 和 LLM/Tool 调用，新建对话才新增 Trace。详情页中的子 Agent 会按
+`AGENT -> TASK -> AGENT` 树展示。完整说明见
+[QwenPaw Trace Collector 接入指南](./observability/qwenpaw-trace-collector)。
 
 
 ---

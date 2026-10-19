@@ -331,7 +331,7 @@ datasetPreparerExport: repositoryQualityDatasetPreparer
 
 Catalog 自动生成 `dataset-preparers.ts` 和 `dataset-preparer-keys.cjs`；Loader 与 Preparer 源文件均参与接入包内容摘要。包内准备器负责官方来源、固定版本、缓存和依赖准备，返回文件或目录路径；公共服务 `ensureBenchmarkDataset` 负责查询数据库、调用准备器和统一安装，不包含 Benchmark 专属下载逻辑。
 
-统一入口为 `bash scripts/start.sh --benchmark <key>`，或仅安装时 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>`。数据库已存在当前 Profile 版本且未指定 `--refresh` 时，跳过全部来源访问与本机准备依赖。显式刷新仍遵守实验数据冻结：已引用的数据集不能覆盖，可指定新 `--name` 安装另一版本。
+统一准备入口为 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>`。`scripts/start.sh` 按项目 YAML 配置自动准备 SWE-bench，不再接受 `--benchmark`；其他接入包通过统一准备入口独立安装。数据库已存在当前 Profile 版本且未指定 `--refresh` 时，跳过全部来源访问与本机准备依赖。显式刷新仍遵守实验数据冻结：已引用的数据集不能覆盖，可指定新 `--name` 安装另一版本。
 
 数据准备运行在平台机器；执行客户端只读取本机任务环境；Evaluator 按评测请求携带的身份/版本匹配自己部署的资产，不访问平台数据库或平台本机路径。镜像准备与数据导入可以独立进行。
 
@@ -559,7 +559,7 @@ entrypoint/
 
 后台准备不占评测执行槽。重评创建新 Evaluation 后先尝试刷新窗口再下发评测；收到 `IMAGE_POOL_PREPARING` 时也刷新窗口，避免只重试评测而未触发准备。准备请求失败保留评测队列，后续重试及评测 watchdog 定期补偿。执行 watchdog 在启动恢复前注册，历史实验恢复逐条隔离异常，避免单条已取消任务阻断后续恢复或后台调度。无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。
 
-首次评测与重评共用 `evaluation-scheduler` 的服务容量与单用户配额；重评不设全平台单独并发上限。服务容量读取 `/health.maxConcurrency`，单用户配额可通过 `AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER` 限制。相同 Case 的重评使用进程内锁及数据库 Run 状态、`updatedAt` 条件更新认领，防止并发请求重复创建 attempt；不同 Case 可独立入队。
+首次评测与重评共用 `evaluation-scheduler` 的服务容量与单用户配额；重评不设全平台单独并发上限。服务容量读取 `/health.maxConcurrency`，单用户配额通过 `config/benchmark/platform.local.yaml` 的 `benchmarks.scheduling.maxEvaluationConcurrencyPerUser` 限制。相同 Case 的重评使用进程内锁及数据库 Run 状态、`updatedAt` 条件更新认领，防止并发请求重复创建 attempt；不同 Case 可独立入队。
 
 ## 10. Presentation
 

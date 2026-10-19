@@ -9,6 +9,7 @@ import {
   getAgentInsightDataDir,
   getAgentInsightHome,
 } from '../../../src/lib/env'
+import { loadProjectConfig } from '../../../packages/project-config/index.cjs'
 
 const execFileAsync = promisify(execFile)
 
@@ -57,13 +58,10 @@ function resolveSource(value: string): string {
 
 export function resolveSweBenchProvisionPaths(): SweBenchProvisionPaths {
   const vendorRoot = path.join(getAgentInsightHome(), 'vendor', 'SWE-bench')
-  const customPythonPath = Boolean(process.env.SWE_BENCH_PYTHON?.trim())
-  // 新变量显式留空时使用官方来源，不再回退到旧变量。
-  const datasetSource = resolveSource((process.env.SWE_BENCH_DATASET_SOURCE
-    ?? (process.env.SWE_BENCH_DATASET_PATH?.trim() || process.env.SWE_BENCH_DATASET_URL))?.trim()
-    || DEFAULT_DATASET_URL)
-  const sourceArchiveSource = resolveSource((process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE
-    ?? process.env.SWE_BENCH_SOURCE_ARCHIVE_URL)?.trim() || DEFAULT_SOURCE_ARCHIVE_URL)
+  const config = loadProjectConfig('platform').benchmarks['swe-bench']
+  const customPythonPath = config.loader.python !== null
+  const datasetSource = resolveSource(config.dataset.source || DEFAULT_DATASET_URL)
+  const sourceArchiveSource = resolveSource(config.loader.sourceArchive || DEFAULT_SOURCE_ARCHIVE_URL)
   return {
     vendorRoot,
     sourceArchivePath: isRemoteSource(sourceArchiveSource)
@@ -71,7 +69,7 @@ export function resolveSweBenchProvisionPaths(): SweBenchProvisionPaths {
       : sourceArchiveSource,
     sourcePath: path.join(vendorRoot, `source-${SWE_BENCH_SOURCE_COMMIT}`),
     pythonPath: customPythonPath
-      ? expandConfiguredPath(process.env.SWE_BENCH_PYTHON!.trim())
+      ? config.loader.python!
       : path.join(vendorRoot, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
     datasetPath: isRemoteSource(datasetSource)
       ? path.join(getAgentInsightDataDir(), 'imports', 'swe-bench-verified', 'test.parquet')
@@ -240,7 +238,7 @@ async function ensureOfficialPython(paths: SweBenchProvisionPaths): Promise<void
     return
   }
   if (paths.customPythonPath) {
-    throw new Error(`SWE_BENCH_PYTHON 无法加载官方 SWE-bench：${paths.pythonPath}`)
+    throw new Error(`benchmarks.swe-bench.loader.python 无法加载官方 SWE-bench：${paths.pythonPath}`)
   }
 
   await ensureCommand('python3', ['--version'])

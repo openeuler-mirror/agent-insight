@@ -1,3 +1,5 @@
+import type { DiagnosisProgressWriter } from './progress-types';
+
 export type AgentDebugBackgroundJobKind = 'agent-debug' | 'skills-analysis';
 
 export interface ActiveAgentDebugBackgroundJob {
@@ -5,6 +7,7 @@ export interface ActiveAgentDebugBackgroundJob {
   executionId: string;
   interactionsHash: string;
   startedAt: number;
+  progress?: DiagnosisProgressWriter;
 }
 
 declare global {

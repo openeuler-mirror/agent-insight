@@ -20,47 +20,43 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 
 ## 管理员导入 Benchmark 数据集
 
-SWE-bench Verified 随 Agent Insight 服务启动完成准备和导入。持续启用时，在 `~/.agent-insight/.env` 中配置：
-
-```dotenv
-AGENT_INSIGHT_BENCHMARK=swe-bench
-```
-
-之后使用统一启动命令：
+SWE-bench Verified 默认随 Agent Insight 服务启动自动准备和导入。配置位于项目 `config/benchmark/platform.yaml`，本机覆盖写入 `config/benchmark/platform.local.yaml`；没有版本字段。`benchmarks.swe-bench.dataset.autoImport` 默认 `true`，设置为 `false` 只跳过启动时自动导入，已有数据集与管理员手动导入仍可使用。直接执行：
 
 ```bash
 bash scripts/start.sh
 ```
 
-也可用 `bash scripts/start.sh --benchmark swe-bench` 仅对本次启动临时启用，命令行优先于环境配置。
+首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查当前数据库，完整、可用的数据集已经存在时会跳过全部准备和导入步骤。
 
-首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查数据库，数据集已经存在时会跳过全部准备和导入步骤。网络受限时，可在同一配置文件中设置内网镜像地址：
+准备或导入失败会显示简短警告，继续启动服务；SWE-bench Verified 相关实验暂不可用。详细错误记录在 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），下次启动自动重试。修复后也可在项目根目录运行 `npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts` 单独重试。
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE=http://intranet.example/swe-bench/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=http://intranet.example/swe-bench/source.tar.gz
+网络受限时，可在平台项目的 `config/benchmark/platform.local.yaml` 中设置内网镜像地址或本机文件：
+
+```yaml
+benchmarks:
+  swe-bench:
+    dataset:
+      source: /srv/datasets/test.parquet
+    loader:
+      sourceArchive: /srv/datasets/source.tar.gz
+      python: /srv/python/bin/python
 ```
 
-这两项也可以直接填写本机文件路径：
+`source` 和 `sourceArchive` 均支持 HTTP(S) 下载地址。路径是平台所在机器上的路径，相对路径按配置文件目录解析；推荐使用绝对路径。`null` 使用默认官方来源或自动创建 Python 环境。完全离线时，`loader.python` 必须指向已安装官方 Loader 的 Python 可执行文件，否则首次安装依赖仍需要可用的 pip 软件源。
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE="/srv/datasets/test.parquet"
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE="/srv/datasets/source.tar.gz"
-```
+本机文件与下载文件均按固定官方 SHA-256 校验，校验失败不会覆盖本机文件。成功导入后，后续运行从数据库读取数据，不依赖原始 Parquet；更换或清空数据库后重新导入需要再次提供数据文件。
 
-路径是 Agent Insight 服务所在机器上的路径，推荐使用绝对路径。本机文件与下载文件均按固定的官方 SHA-256 校验；本机文件缺失或校验失败会停止准备，不覆盖原文件。两项留空时使用官方来源，已安装的数据集和可用的受管缓存优先复用。Python 依赖首次安装仍需要可用的 pip 软件源，或通过 `SWE_BENCH_PYTHON` 指定已有环境。
+旧 `AGENT_INSIGHT_BENCHMARK`、`SWE_BENCH_DATASET_SOURCE`、`SWE_BENCH_SOURCE_ARCHIVE_SOURCE`、`SWE_BENCH_PYTHON` 及旧路径/URL变量均不再控制导入，发现残留变量会提示迁移至配置文件。
 
-旧的 `SWE_BENCH_DATASET_PATH`、`SWE_BENCH_DATASET_URL` 和 `SWE_BENCH_SOURCE_ARCHIVE_URL` 暂时兼容；新变量存在时优先使用新变量，显式留空表示使用官方来源。
-
-ZSoft L1 使用相同启动入口自动获取官方题目并导入数据库：
+ZSoft L1 使用统一数据准备命令获取官方题目并导入数据库：
 
 ```bash
-bash scripts/start.sh --benchmark zsoft-l1
+npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
 ```
 
-持续启用可在 `~/.agent-insight/.env` 设置 `AGENT_INSIGHT_BENCHMARK=zsoft-l1`。首次执行按接入包固定的官方提交拉取仓库，解析 30 道正式题（24 道 userspace、6 道内核题）；后续启动先查数据库，已安装时跳过来源读取和下载。缓存位于平台机器的 `~/.agent-insight/benchmark-assets/zsoft-l1/`（自定义 `AGENT_INSIGHT_HOME` 时跟随该目录）。数据准备只读取题目元数据和公开资料，不需要 Docker、镜像或评测资产。
+首次执行按接入包固定的官方提交拉取仓库，解析 30 道正式题（24 道 userspace、6 道内核题）；后续执行先查数据库，已安装时跳过来源读取和下载。缓存位于平台机器的 `~/.agent-insight/benchmark-assets/zsoft-l1/`（自定义 `AGENT_INSIGHT_HOME` 时跟随该目录）。数据准备只读取题目元数据和公开资料，不需要 Docker、镜像或评测资产。导入后正常运行 `bash scripts/start.sh` 启动服务，不再设置 `AGENT_INSIGHT_BENCHMARK` 或使用启动参数 `--benchmark`。
 
-离线时，将官方 ZSoft L1 目录或完整官方仓库放在平台机器的一个目录，在同一配置文件中设置：
+离线时，将官方 ZSoft L1 目录或完整官方仓库放在平台机器的一个目录，在 `~/.agent-insight/.env` 中设置：
 
 ```dotenv
 ZSOFT_DATASET_SOURCE=/srv/datasets/zsoft-l1

@@ -1,7 +1,9 @@
+import { notifySpoolReceived } from '@/lib/ingest/otel-consumer/live-input';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
+import { runtimeLockDirectory } from './ownership';
 
 const MAX_JSON_BYTES = 16 * 1024;
 const MAX_LEASES = 32;
@@ -41,6 +43,13 @@ function metadata(root: string, create = false): string | undefined {
   if (!directory(base, create)) return;
   for (const child of ['states', 'uses', 'locks']) if (!directory(path.join(base, child), create)) return;
   return base;
+}
+function lockMetadata(root: string): string | undefined {
+  const base = metadata(root, true);
+  if (!base) return;
+  const current = runtimeLockDirectory(base);
+  for (const child of ['uses', 'locks']) if (!directory(path.join(current, child), true)) return;
+  return current;
 }
 function readJson(file: string): unknown {
   let descriptor: number | undefined;
@@ -128,7 +137,7 @@ function maintenanceBlocks(file: string): boolean {
   return current !== undefined && !dead(current);
 }
 export function acquireSpoolUse(root: string): (() => void) | null {
-  const base = metadata(root, true);
+  const base = lockMetadata(root);
   if (!base) return null;
   const maintenance = path.join(base, 'maintenance.lock');
   if (maintenanceBlocks(maintenance)) return null;
@@ -139,7 +148,7 @@ export function acquireSpoolUse(root: string): (() => void) | null {
   return release;
 }
 export function trySpoolMaintenance<T>(root: string, callback: () => T): T | undefined {
-  const base = metadata(root, true);
+  const base = lockMetadata(root);
   if (!base) return;
   const release = claim(path.join(base, 'maintenance.lock'));
   if (!release) return;
@@ -216,7 +225,8 @@ function update(root: string, segment: string, change: (previous: SpoolState | u
   const base = metadata(root, true);
   if (!base) throw new Error('Spool metadata directory is unavailable');
   const file = statePath(base, segment);
-  const release = claim(path.join(base, 'locks', `${createHash('sha256').update(segment).digest('hex')}.lock`));
+  const locks = lockMetadata(root);
+  const release = locks && claim(path.join(locks, 'locks', `${createHash('sha256').update(segment).digest('hex')}.lock`));
   if (!release) throw new Error('Spool metadata is in use');
   try {
     const previous = readRawSpoolStateBySegment(root, segment);
@@ -234,6 +244,7 @@ export function noteSpoolReceived(root: string, key: string, now = Date.now()): 
     update(root, safeSpoolSegment(key), previous => ({ version: 1, key, generation, status: 'unknown', lastReceivedAt: now,
       ...(previous?.purgedAt === undefined ? {} : { purgedAt: previous.purgedAt, ...(previous.purgeIntent ? { purgeIntent: previous.purgeIntent } : {}) }),
       ...(previous?.taskId === undefined ? {} : { taskId: previous.taskId }) }));
+    notifySpoolReceived(root, key, now);
     return generation;
   } finally { release(); }
 }

@@ -2,13 +2,14 @@ import * as fs from 'node:fs/promises'
 import { constants } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { runtimeOwner } from './ownership'
 
 export const TEMPORARY_HOME_OWNER_FILE = '.agent-insight-temporary-home.json'
-type Owner = { version: 1; hostname: string; ownerPid: number; processGroupId: number | null; createdAt: number }
+type Owner = { version: 1; hostname: string; ownerPid: number; processGroupId: number | null; createdAt: number; runtimeId?: string }
 type Event = { kind: 'scanned' | 'deleted' | 'skipped'; bytes?: number; scannedBytes?: number; reason?: string }
 
 export async function markTemporaryHome(root: string, processGroupId: number | null = null): Promise<void> {
-  const owner: Owner = { version: 1, hostname: os.hostname(), ownerPid: process.pid, processGroupId, createdAt: Date.now() }
+  const owner: Owner = { version: 1, hostname: os.hostname(), ownerPid: process.pid, processGroupId, createdAt: Date.now(), runtimeId: runtimeOwner(root)?.id }
   const file = await fs.open(path.join(root, TEMPORARY_HOME_OWNER_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0), 0o600)
   try { await file.writeFile(JSON.stringify(owner)) } finally { await file.close() }
 }
@@ -40,9 +41,18 @@ async function readOwner(directory: string, meter: { bytes: number }): Promise<O
     const owner = JSON.parse(content) as Owner
     return owner.version === 1 && typeof owner.hostname === 'string'
       && Number.isSafeInteger(owner.ownerPid) && owner.ownerPid > 0
-      && Number.isSafeInteger(owner.processGroupId) && owner.processGroupId! > 0
+      && (owner.processGroupId === null || (Number.isSafeInteger(owner.processGroupId) && owner.processGroupId > 0))
+      && (owner.runtimeId === undefined || typeof owner.runtimeId === 'string')
       && Number.isFinite(owner.createdAt) && owner.createdAt > 0 ? owner : null
   } catch { return null }
+}
+
+function inactive(home: string, owner: Owner): boolean {
+  const runtime = runtimeOwner(home)
+  // The Docker entrypoint exclusively owns this HOME; earlier container processes have exited.
+  if (runtime && owner.runtimeId !== runtime.id) return true
+  return owner.hostname === os.hostname() && owner.processGroupId !== null
+    && !alive(owner.ownerPid) && !alive(-owner.processGroupId)
 }
 
 async function stillUnowned(home: string, owner: Owner, meter: { bytes: number }): Promise<boolean> {
@@ -50,7 +60,7 @@ async function stillUnowned(home: string, owner: Owner, meter: { bytes: number }
   const current = await readOwner(home, meter)
   return current !== null && current.ownerPid === owner.ownerPid
     && current.processGroupId === owner.processGroupId && current.createdAt === owner.createdAt
-    && current.hostname === owner.hostname && !alive(owner.ownerPid) && !alive(-owner.processGroupId!)
+    && current.hostname === owner.hostname && current.runtimeId === owner.runtimeId && inactive(home, owner)
 }
 
 async function* removeContents(directory: string, home: string, owner: Owner, dryRun: boolean, meter: { bytes: number }, emit: (event: Event) => Event, depth = 0): AsyncGenerator<Event> {
@@ -113,9 +123,9 @@ export async function* cleanupTemporaryHomes(options: {
       const home = path.join(userPath, homeEntry.name)
       if (!await realDirectory(home)) { yield emit({ kind: 'skipped', reason: 'unsafe-path' }); continue }
       const owner = await readOwner(home, meter)
-      if (!owner || owner.hostname !== os.hostname()) { yield emit({ kind: 'skipped', reason: 'unknown-or-foreign-owner' }); continue }
+      if (!owner) { yield emit({ kind: 'skipped', reason: 'unknown-owner' }); continue }
       if (now - owner.createdAt < retentionMs) { yield emit({ kind: 'skipped', reason: 'not-expired' }); continue }
-      if (alive(owner.ownerPid) || alive(-owner.processGroupId!)) { yield emit({ kind: 'skipped', reason: 'owner-active' }); continue }
+      if (!inactive(home, owner)) { yield emit({ kind: 'skipped', reason: 'owner-active-or-unknown' }); continue }
       try {
         yield* removeContents(home, home, owner, options.dryRun ?? false, meter, emit)
         if (options.dryRun) continue

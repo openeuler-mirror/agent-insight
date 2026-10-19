@@ -35,16 +35,18 @@ test('normal cache is deleted after 7d; receipts do not remove business records'
   } finally { f.dispose(); }
 });
 
-test('failed, unparsed and abandoned cache expires after 14d and retries do not renew it', async () => {
+test('failed, unparsed and abandoned cache expires after seven idle days and retries do not renew it', async () => {
   const f = fixture();
   try {
-    const old = f.file('failed', 15);
-    const keep = f.file('recent', 10);
-    const generation = noteSpoolReceived(f.root, 'failed', now - 15 * DAY_MS);
+    const old = f.file('failed', 8);
+    const unknown = f.file('unknown', 8);
+    const keep = f.file('recent', 6);
+    const generation = noteSpoolReceived(f.root, 'failed', now - 8 * DAY_MS);
     recordSpoolPersistence(f.root, 'failed', generation, { failed: true });
     recordSpoolPersistence(f.root, 'failed', generation, { failed: true });
     await collect(cleanupSpool({ root: f.root, now }));
     assert.equal(fs.existsSync(old), false);
+    assert.equal(fs.existsSync(unknown), false);
     assert.equal(fs.existsSync(keep), true);
   } finally { f.dispose(); }
 });

@@ -4,17 +4,17 @@
 
 ## ZSoft 任务目录与执行器
 
-ZSoft 是 Benchmark；MCTS 是执行器。平台直接读取官方题目目录，在线和离线都通过统一启动入口准备数据，无需导出中间数据集。
+ZSoft 是 Benchmark；MCTS 是执行器。平台直接读取官方题目目录，在线和离线都通过统一数据准备命令导入，无需导出中间数据集。
 
 **平台机器在线准备：**
 
 ```bash
-bash scripts/start.sh --benchmark zsoft-l1
+npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
 ```
 
-首次启动自动获取官方仓库 `https://gitcode.com/linmalin/muyuan-sec.git` 的固定提交 `7f7d675eff19eec27745ddcd24b1efaf398bb753`，缓存到 `~/.agent-insight/benchmark-assets/zsoft-l1/`，解析 30 道正式题（24 道 userspace、6 道 kernel）并导入数据库。已安装时直接复用数据库，不访问来源。持续启用可在 `~/.agent-insight/.env` 设置 `AGENT_INSIGHT_BENCHMARK=zsoft-l1`。
+首次执行获取官方仓库 `https://gitcode.com/linmalin/muyuan-sec.git` 的固定提交 `7f7d675eff19eec27745ddcd24b1efaf398bb753`，缓存到 `~/.agent-insight/benchmark-assets/zsoft-l1/`，解析 30 道正式题（24 道 userspace、6 道 kernel）并导入数据库。已安装时直接复用数据库，不访问来源。导入后正常运行 `bash scripts/start.sh` 启动服务；旧启动参数 `--benchmark` 和选择变量 `AGENT_INSIGHT_BENCHMARK` 已移除。
 
-**平台机器离线准备：** 将官方 L1 包目录或完整仓库放在本机目录，在上述配置文件设置：
+**平台机器离线准备：** 将官方 L1 包目录或完整仓库放在本机目录，在 `~/.agent-insight/.env` 设置：
 
 ```dotenv
 ZSOFT_DATASET_SOURCE=/srv/datasets/zsoft-l1

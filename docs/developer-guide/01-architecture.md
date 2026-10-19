@@ -259,7 +259,7 @@ erDiagram
 直接来自 `detected_concerns` 与代码：
 
 - **可观测性** `[确证]`：OpenTelemetry SDK + Langfuse；`src/instrumentation.ts`（运行时门控，仅 Node.js runtime 加载）→ `src/instrumentation-node.ts`（注册系统 agent `ensureAllSystemAgents`、opencode 子进程退出清理、拉起 uploader 处理待上报 spool）。OTel 接入端点 `src/app/api/ingest/otel/v1/{traces,logs,metrics}`，并在根路径 `/v1/*` rewrite 直收 collector 上报。
-- **运行缓存清理**：Node.js instrumentation 非阻塞注册 `src/lib/runtime-cleanup/index.ts` 的进程级单例。注册只安排计时器；默认延迟 60 秒后才动态加载日志、临时目录和接收缓存扫描器。异步生成器按分类和 spool 来源轮询，每片默认最多 100 步 / 50 ms / 1 MiB 读取，片间休息 5 秒，完整扫描后每小时重跑；单次 I/O 不能由该预算强制中断。异常按分类隔离，汇总只在整轮结束时输出。清理范围不包含数据库业务表，保留规则与运维开关见[用户 FAQ](../user-guide/faq.md#服务端自动清理)。
+- **运行缓存清理**：Node.js instrumentation 非阻塞注册 `src/lib/runtime-cleanup/index.ts` 的进程级单例。注册只安排计时器；默认延迟 60 秒后才动态加载日志、临时目录和接收缓存扫描器。异步生成器按分类和 spool 来源轮询，每片默认最多 100 步 / 50 ms / 1 MiB 读取，片间休息 5 秒，完整扫描后每小时重跑；单次 I/O 不能由该预算强制中断。容器独占运行根内的旧代次锁目录同样由后台分步回收，限定 UUID 目录、递归深度和目录读取缓冲，不追随符号链接；每次删除前复核运行代次与目录 inode，保留当前代次及业务状态。异常按分类隔离。日志记录调度、每轮开始及完成，长轮次在分批边界每分钟最多输出一次进度；汇总包含耗时、删除数量、释放字节及跳过原因，不逐文件打印。清理范围不包含数据库业务表，保留规则与运维开关见[用户 FAQ](../user-guide/faq.md#服务端自动清理)。
 - **数据持久化** `[确证]`：见 §6，`DatabaseAdapter` 抽象 + `data-service.ts` 高层服务。
 - **认证 / 多用户** `[确证]`：`User` 表（`apiKey` 唯一），`src/lib/auth/*`，按 `user` 字段做行级隔离；API Key 用于客户端接入鉴权。IDaaS 模式仍以 UUID 写入 `username`，可空唯一的 `externalAccount` 只保存人员账号别名，供界面展示和运维反查；standalone 模式仍为任意邮箱登录。
 - **向后兼容** `[确证]`：`next.config.ts` 维护一大批 `legacyAliases`，把旧扁平 `/api/*` 重写到分层后的 `ingest/observe/eval/*`，保证外部客户端不断。
@@ -270,6 +270,8 @@ erDiagram
 
 ## 8. 部署架构（Deployment）
 
+内部 opencode 可执行文件按以下优先级查找：已存在的 `OPENCODE_BIN` → `runtimePackageRoot()` 下的 `node_modules/.bin/opencode` → 系统 `PATH`。源码生产启动脚本 `scripts/start.sh` 在切换到 standalone 目录前设置 `AGENT_INSIGHT_PACKAGE_ROOT`；`runtimePackageRoot()` 优先使用此目录，未设置时使用当前工作目录。因此 standalone 运行时可复用项目根目录安装的 opencode，无需在 `.next/standalone` 内重复安装。
+
 `[确证]`：核心服务提供基于 npm 包的 `Dockerfile`：镜像构建时从 npm 安装 `agent-insight@latest`（可通过 `AGENT_INSIGHT_VERSION` 构建参数固定版本），不复制源码；运行时由 `scripts/docker-entrypoint.sh` 初始化持久化目录、同步数据库 schema，并以前台进程启动 Next.js standalone server。所有运行时数据均以 `AGENT_INSIGHT_HOME` 为根，实际持久化子目录为内部变量 `AGENT_INSIGHT_STORAGE_DIR=$AGENT_INSIGHT_HOME/data`：SQLite、Skill 附件、评测 runtime 文件默认落到 `/data/agent-insight/data/`，避免写入 Next.js standalone 目录。旧的 `AGENT_INSIGHT_DATA_DIR` 已移除；非空时入口报错，不静默回落默认目录。TS 与 Node 启动工具共用 `scripts/agent-insight-home.cjs` 解析根路径，Trace spool 默认同样跟随运行根；客户端分发包包含该模块，守护服务显式保存运行根。镜像同时显式导出 `OPENCODE_BIN=/app/node_modules/.bin/opencode`，以支持 `opencode-live` 评测在服务端容器内直接 spawn `opencode serve`。当前默认镜像走 SQLite-first 路线，不打包 OpenGauss 的 Python 依赖；若部署侧设置了 `DB_HOST`，entrypoint 会直接报错退出。主服务部署方式是：
 
 - **单 Node 进程**，`next start -p 3000`（`output: 'standalone'`）。
@@ -277,6 +279,10 @@ erDiagram
 - **进程管理脚本** `scripts/restart.sh`（生产）/ `scripts/restart_dev.sh`（开发）。
 - **容器部署**：`docker build --pull --no-cache -t agent-insight:npm-latest .` 后运行，默认暴露 3000，并将 `/data/agent-insight` 作为持久化根目录。
 - **客户端接入** 通过 `curl http://<host>:3000/api/ingest/setup | bash` 分发 watcher/插件到 Agent 宿主机。
+
+容器入口通过 `scripts/container-runtime.py` 对 `$AGENT_INSIGHT_HOME/.runtime-owner.lock` 获取非阻塞内核独占锁，再将持有的文件描述符和新的运行 UUID 传给服务；同一运行根同时启动第二个容器会失败。该守护 inode 不删除，进程退出由内核释放锁。`src/lib/runtime-cleanup/ownership.ts` 校验文件描述符、锁记录和路径范围后，为 spool 和日志维护锁提供 `.runtime-owners/<UUID>` 隔离目录，避免重建后的主机名变化、PID 复用或旧锁误判。启动工作量与历史文件数量无关，不扫描或删除历史树；旧运行元数据在后台清理。运行根以外的自定义 spool、日志目录不使用跨代次失效判定，继续保守检查所有者。
+
+Docker 中 `AGENT_INSIGHT_LOG_DIR` 默认解析为 `$AGENT_INSIGHT_HOME/logs`，因此日志随运行根挂载持久化。入口兼容实际 `.env` 的空值及旧模板 `/var/log/agent-insight` 默认值，保留其他自定义目录；显式容器环境变量优先于 `.env`，包括显式指定 `/var/log/agent-insight`。此规则只作用于容器入口。入口由 Dockerfile 复制进镜像，源码挂载部署同样需要更新镜像才能获得入口修复，仅更新挂载源码不足以完成升级。
 
 ```mermaid
 flowchart LR

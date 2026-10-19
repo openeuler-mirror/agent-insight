@@ -18,6 +18,20 @@ function loadGitSourcePolicyModule(benchmarkKey) {
   return require(descriptor.modulePath)
 }
 
+function readConfiguredGitSource(benchmarkKey, { home, env = process.env, config } = {}) {
+  const { loadProjectConfig, warnLegacy, legacySettings } = require('./project-config.cjs')
+  warnLegacy('executor', env)
+  if (home) {
+    try {
+      const content = fs.readFileSync(path.join(home, '.env'), 'utf8')
+      for (const name of Object.keys(legacySettings.executor)) {
+        if (new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`, 'm').test(content)) warnLegacy('executor', { [name]: '' })
+      }
+    } catch (error) { if (error.code !== 'ENOENT') throw error }
+  }
+  return (config || loadProjectConfig('executor', { env })).benchmarks[benchmarkKey]?.gitSource || ''
+}
+
 function createGitSourcePolicies(context) {
   const policies = new Map()
   for (const descriptor of loadCatalog().generatedGitSourcePolicyDescriptors) {
@@ -25,7 +39,8 @@ function createGitSourcePolicies(context) {
     if (typeof implementation.createGitSourcePolicy !== 'function') {
       throw new Error(`Git source policy factory missing: ${descriptor.benchmarkKey}`)
     }
-    const policy = implementation.createGitSourcePolicy({ ...context, readLocalSetting })
+    const policy = implementation.createGitSourcePolicy({ ...context, readLocalSetting,
+      readGitSource: () => readConfiguredGitSource(descriptor.benchmarkKey, context) })
     if (!policy || typeof policy.resolve !== 'function') {
       throw new Error(`Git source policy invalid: ${descriptor.benchmarkKey}`)
     }
@@ -34,4 +49,4 @@ function createGitSourcePolicies(context) {
   return policies
 }
 
-module.exports = { createGitSourcePolicies, loadGitSourcePolicyModule }
+module.exports = { createGitSourcePolicies, loadGitSourcePolicyModule, readConfiguredGitSource }

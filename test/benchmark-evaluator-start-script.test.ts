@@ -33,7 +33,7 @@ test('status distinguishes an absent Controller from a Docker permission failure
 test('optional image pool binds the daemon data filesystem read-only and keeps its secret out of Runtime env', () => {
   const source = fs.readFileSync(startScript, 'utf8')
   const storage = fs.readFileSync(path.join(repositoryRoot, 'scripts/evaluator-image-pool.sh'), 'utf8')
-  assert.match(storage, /POOL_ENABLED=true/)
+  assert.match(storage, /POOL_ENABLED=\$\{POOL_ENABLED:-true\}/)
   assert.match(storage, /docker info --format '\{\{\.DockerRootDir\}\}'/)
   assert.match(storage, /dst=\/host-docker,readonly/)
   assert.match(storage, /IMAGE_POOL_DISK_PATH=\/host-docker/)

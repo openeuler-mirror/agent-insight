@@ -21,6 +21,7 @@ export const FRAMEWORK_OPTIONS: readonly FrameworkOption[] = [
   { value: 'qwencode', label: 'Qwen Code' },
   { value: 'codex', label: 'Codex' },
   { value: 'deepseek-harness', label: 'DeepSeek Harness' },
+  { value: 'qwenpaw', label: 'QwenPaw' },
   { value: 'mcts-xgovernor', label: 'MCTS (xGovernor)' },
   { value: 'workbuddy', label: 'WorkBuddy' },
 ];

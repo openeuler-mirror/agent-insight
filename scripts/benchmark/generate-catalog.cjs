@@ -356,6 +356,11 @@ function loadPackage(packageDir) {
   const evaluatorFiles = [...new Set([
     ...listFiles(evaluatorDir),
     ...(smokeEntrypoint ? listFiles(path.dirname(smokeEntrypoint)) : []),
+    ...(ociRuntime ? [
+      path.resolve(packageDir, '../../packages/project-config'),
+      path.resolve(packageDir, '../../config/benchmark/evaluator.yaml'),
+      path.resolve(packageDir, '../../services/evaluator/src/evaluator-registry.cjs'),
+    ].flatMap((file) => fs.existsSync(file) ? (fs.statSync(file).isDirectory() ? listFiles(file) : [file]) : []) : []),
   ])]
   const evaluatorDigest = digestFiles(evaluatorFiles, evaluatorDir)
   const files = [

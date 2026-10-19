@@ -1,7 +1,7 @@
 import type { ReliabilityClient } from '@prisma/client'
 
-import { normalizeBenchmarkAgentOptions, type BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
-import { MCTS_SEARCH_OPTIONS_CAPABILITY } from '../../../services/executor/src/mcts-options.cjs'
+import type { BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
+import { resolveAgentOptions, type RuntimeDefinition } from '../../../packages/agent-runtime/index.cjs'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import {
   deriveServiceHealth,
@@ -21,7 +21,7 @@ export type BenchmarkExecutionTarget = {
   platform: string
   agents: string[]
   models: string[]
-  agentOptionCapabilities: string[]
+  parameterDefinitions: RuntimeDefinition[]
   status: ClientStatus
   serviceHealth: ServiceHealth
   ready: boolean
@@ -85,8 +85,7 @@ export function inspectBenchmarkExecutionTargets(
       platform: platform.id,
       agents,
       models: [...new Set(platform.models || [])],
-      agentOptionCapabilities: (platform.runBenchmarkCase?.agentOptionCapabilities || [])
-        .filter(capability => componentReady(capabilities.components?.[capability])),
+      parameterDefinitions: platform.parameterDefinitions || [],
       status,
       serviceHealth,
       ready: unavailableReasons.length === 0,
@@ -140,9 +139,9 @@ export function assertBenchmarkExecutionTarget(
       409,
     )
   }
-  const options = normalizeBenchmarkAgentOptions(input.agentOptions)
-  if (options?.mcts && !target.agentOptionCapabilities.includes(MCTS_SEARCH_OPTIONS_CAPABILITY)) {
-    throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '所选客户端不支持 MCTS 搜索参数，请升级客户端', 409)
+  try { resolveAgentOptions(target.parameterDefinitions, input.platform, input.agent, input.agentOptions) }
+  catch (error) {
+    throw new BenchmarkProtocolError((error as { code?: string }).code || 'AGENT_OPTIONS_INVALID', (error as Error).message, 409)
   }
   return target
 }

@@ -5,6 +5,7 @@ import {
   extractSkillsWithVersionsFromClaudeSession,
   extractSkillsWithVersionsFromOpenClawSession,
   extractSkillsWithVersionsFromOpencodeSession,
+  extractSkillsWithVersionsFromQwenPawSession,
   extractSkillsWithVersionsFromToolInteractions,
   normalizeInteractions,
 } from "../src/lib/shared/interaction-utils"
@@ -49,6 +50,7 @@ test("registry exposes the framework descriptor list", () => {
       "jiuwenswarm",
       "langfuse-langgraph",
       "llamaindex",
+      "qwenpaw",
       "qoder",
       "trae",
       "actrail",
@@ -85,6 +87,12 @@ assert.equal(getAdapter("codeagent").capabilities?.skillScope, "agent-tree")
   assert.equal(getAdapter("deepseek-harness").sessionMergeStrategy, "snapshot-replace")
   assert.equal(getAdapter("claude").capabilities?.skillScope, "session")
   assert.equal(getAdapter("llamaindex").capabilities?.skillScope, "agent-tree")
+  assert.equal(getAdapter("qwenpaw").extractSkills, extractSkillsWithVersionsFromQwenPawSession)
+  assert.equal(getAdapter("qwenpaw"), getAdapter("qwenpaw"))
+  assert.equal(getAdapter("qwenpaw").capabilities?.skills, true)
+  assert.equal(getAdapter("qwenpaw").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("qwenpaw").capabilities?.skillScope, "session")
+  assert.equal(getAdapter("qwenpaw").sessionMergeStrategy, "snapshot-replace")
   assert.equal(getAdapter("pi-agent").capabilities?.subagentTree, true)
   assert.equal(getAdapter("pi-agent").capabilities?.skills, true)
   assert.equal(getAdapter("jiuwen").capabilities?.subagentTree, undefined)

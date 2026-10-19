@@ -79,8 +79,8 @@ test("OTel consumer: null aggregation keeps the cursor replayable until the sour
         return { success: true, record: data }
       },
       shortMs: 5,
-      longMs: 10000,
-      maxWaitMs: 10000,
+      longMs: 50,
+      maxWaitMs: 100,
       tickMs: 5,
       seedOnStart: false,
       log: () => {},
@@ -94,7 +94,7 @@ test("OTel consumer: null aggregation keeps the cursor replayable until the sour
 
     persistable = true
     fs.appendFileSync(file, "{\"sessionId\":\"session-pending\",\"ready\":true}\n", "utf8")
-    await waitFor(() => saved.length === 1 && getOtelSpoolConsumerForTest()?.pendingFiles.size === 0)
+    await waitFor(() => saved.length >= 1 && getOtelSpoolConsumerForTest()?.pendingFiles.size === 0)
     assert.equal(getFileCursor(dir, relPath).bytes, fs.statSync(file).size)
   } finally {
     stopOtelSpoolConsumer()
@@ -205,7 +205,8 @@ test("OTel consumer: only one process can own every registered spool directory",
     ).href
     const childScript = `
       import fs from "node:fs";
-      import { startOtelSpoolConsumer, stopOtelSpoolConsumer, getOtelSpoolConsumerForTest } from ${JSON.stringify(consumerModule)};
+      const consumer = await import(${JSON.stringify(consumerModule)});
+      const { startOtelSpoolConsumer, stopOtelSpoolConsumer, getOtelSpoolConsumerForTest } = consumer.default ?? consumer;
       const firstSpool = ${JSON.stringify(firstSpool)};
       const secondSpool = ${JSON.stringify(secondSpool)};
       const ownersFile = ${JSON.stringify(ownersFile)};
@@ -362,7 +363,7 @@ test("OTel consumer: poisoned sessions retry from spool and release after recove
 
     await waitFor(() => {
       const state = getOtelSpoolConsumerForTest()
-      return Boolean(state && state.sessions.size === 0 && state.pendingFiles.size === 0)
+      return Boolean(attempts >= 2 && state && state.sessions.size === 0 && state.pendingFiles.size === 0)
     })
     const state = getOtelSpoolConsumerForTest()
     assert.ok(state)
@@ -529,11 +530,12 @@ test("OTel consumer: aggregate cooldown throttles rapid re-aggregation of active
     assert.ok(callTimes.length >= 2, "冷却结束后应完成顺延的聚合")
     assert.ok(callTimes[1] - callTimes[0] >= 300, `两轮间隔应受冷却约束,实际 ${callTimes[1] - callTimes[0]}ms`)
 
-    // 聚合完成后磁盘 cursor 推进到文件末尾(增量读没有丢数据)
+    // 快存保持可见性；evaluated 尚未到点时必须保留磁盘重放依据。
     await wait(100)
     const checkpoint = loadCheckpoint(dir)
     const relPath = toCheckpointRelPath(dir, file)
-    assert.equal(checkpoint.files[relPath]?.bytes, fs.statSync(file).size)
+    assert.equal(checkpoint.files[relPath]?.bytes || 0, 0)
+    assert.equal(getOtelSpoolConsumerForTest()?.pendingFiles.size, 1)
   } finally {
     stopOtelSpoolConsumer()
     fs.rmSync(dir, { recursive: true, force: true })

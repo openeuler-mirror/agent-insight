@@ -57,6 +57,7 @@ Agent Insight 已接入以下 Agent 平台，更多平台持续接入中：
 | OpenCode              | 原生插件       |
 | Claude Code           | OTLP 上报    |
 | Qwen Code             | Hook 采集器   |
+| QwenPaw               | Hook 插件     |
 | Hermes                | 原生插件       |
 | Trae IDE              | VS Code 插件 |
 | JiuwenSwarm           | OTLP 上报    |

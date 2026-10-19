@@ -1,3 +1,4 @@
+import { resolveAgentOptions } from '../../../packages/agent-runtime/index.cjs'
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity'
 import { randomUUID } from 'node:crypto'
@@ -91,7 +92,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   const clientId = input.clientId.trim()
   const platform = input.runConfig.platform.trim()
   const agent = input.runConfig.agent.trim()
-  const agentOptions = normalizeBenchmarkAgentOptions(input.runConfig.agentOptions)
+  let agentOptions = normalizeBenchmarkAgentOptions(input.runConfig.agentOptions)
   if (!user || !name || !datasetId || !clientId || !platform || !agent) {
     throw new BenchmarkProtocolError(
       'BENCHMARK_EXPERIMENT_INVALID',
@@ -144,7 +145,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   if (!client || client.unboundAt) {
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
-  assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
+  const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
+  const resolved = resolveAgentOptions(target.parameterDefinitions, platform, agent, agentOptions)
+  agentOptions = resolved.agentOptions
   if (executionConcurrency > 1 && JSON.parse(client.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
     throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '执行并发大于 1 需要升级客户端', 400)
   }
@@ -152,7 +155,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   const runConfig = {
     platform,
     agent,
-    ...(agentOptions ? { agentOptions } : {}),
+    ...(agentOptions ? { agentOptions, agentParameterDefinition: resolved.definition } : {}),
     ...(input.runConfig.model?.trim() ? { model: input.runConfig.model.trim() } : {}),
     timeoutSeconds,
     executionConcurrency,

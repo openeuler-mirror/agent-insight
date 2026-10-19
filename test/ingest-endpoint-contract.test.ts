@@ -175,6 +175,16 @@ const ENDPOINTS: { label: string; url: string; handler: string; sources: string[
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
+    label: "QwenPaw OTLP traces",
+    url: "/api/ingest/otel/v1/traces",
+    handler: "api/ingest/otel/v1/traces",
+    sources: [
+      "scripts/qwenpaw-collector/qwenpaw_insight/config.py",
+      "scripts/qwenpaw-collector/qwenpaw_insight/cli.py",
+      "scripts/qwenpaw-collector/qwenpaw_insight/__init__.py",
+    ],
+  },
+  {
     label: "opencode 插件下发",
     url: "/api/ingest/setup/opencode",
     handler: "api/ingest/setup/opencode",

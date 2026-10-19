@@ -1,12 +1,11 @@
 'use strict'
 
-const { loadGitSourcePolicyModule } = require('../source-policy-registry.cjs')
-const { readLocalSetting } = require('../git-source.cjs')
+const { loadGitSourcePolicyModule, readConfiguredGitSource } = require('../source-policy-registry.cjs')
 const { SweBenchGitSourcePolicy: PackagePolicy, MIRRORS } = loadGitSourcePolicyModule('swe-bench')
 
 class SweBenchGitSourcePolicy extends PackagePolicy {
   constructor(options) {
-    super({ ...options, readLocalSetting })
+    super({ ...options, readGitSource: () => readConfiguredGitSource('swe-bench', options) })
   }
 }
 

@@ -1,0 +1,7 @@
+key: opencode
+displayName: OpenCode
+targets:
+  - { platform: opencode, agent: '*' }
+parameterGroups: []
+parameters: []
+presets: []

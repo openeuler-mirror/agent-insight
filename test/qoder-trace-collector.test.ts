@@ -52,6 +52,26 @@ import {
 
 const SESSION_ID = "qoder-session-1"
 
+test("Qoder adapter does not claim QwenPaw OTLP telemetry", () => {
+  const adapter = getOtelTraceAdapter([{
+    receivedAt: "2026-08-01T00:00:00.000Z",
+    sessionId: "qwenpaw-session",
+    traceId: "qwenpaw-trace",
+    spanId: "qwenpaw-root",
+    name: "qwenpaw.agent",
+    kind: "agent",
+    serviceName: "qwenpaw",
+    startTimeMs: 1_700_000_000_000,
+    latencyMs: 10,
+    attributes: {
+      "agent.insight.framework": "qwenpaw",
+      "qwenpaw.session_id": "qwenpaw-session",
+    },
+  } as OtelTraceEvent])
+
+  assert.equal(adapter?.id, "qwenpaw")
+})
+
 async function loadSqlite() {
   const sqliteModule = "node:sqlite"
   return await import(sqliteModule) as {
@@ -2558,7 +2578,7 @@ test("Qoder framework and OTLP registries expose plugin onboarding and snapshot 
   assert.equal(framework.capabilities?.skills, true)
   assert.equal(framework.capabilities?.subagentTree, true)
   assert.equal(framework.capabilities?.allowSnapshotShrink, true)
-  assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["actrail", "langfuse-langgraph", "hermes", "qwencode", "openclaw", "codex", "llamaindex", "qoder", "pi-agent", "workbuddy", "generic"])
+  assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["actrail", "langfuse-langgraph", "hermes", "qwencode", "openclaw", "qwenpaw", "codex", "llamaindex", "qoder", "pi-agent", "workbuddy", "mcts-xgovernor", "generic"])
 })
 
 test("Qoder setup merges idempotently and removes only Agent Insight hooks", () => {

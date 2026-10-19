@@ -1,3 +1,5 @@
+import { loadRuntimeDefinitions } from '../packages/agent-runtime/loader.cjs'
+const definition = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -160,9 +162,8 @@ test('pi-mcts runs through the proxy without a local Pi CLI, applies the selecte
     })
     assert.ok(caps.platforms.some((item: { id: string }) => item.id === 'pi-mcts'))
     assert.deepEqual(caps.components['agent-runtime/pi-mcts/v1'], { ready: true })
-    assert.deepEqual(caps.components['mcts-search-options/v1'], { ready: true })
-    assert.deepEqual(caps.platforms.find((item: { id: string }) => item.id === 'pi-mcts').runBenchmarkCase.agentOptionCapabilities,
-      ['mcts-search-options/v1'])
+    assert.deepEqual(caps.platforms.find((item: { id: string }) => item.id === 'pi-mcts').parameterDefinitions,
+      [definition])
     assert.ok(client.benchmarkAgentPlatformsFromCapabilities(caps).includes('pi-mcts'))
     const launches: { command: string; args: string[]; options: Record<string, unknown> }[] = []
     const runner = async (command: string, args: string[], options: Record<string, unknown>) => {
@@ -193,6 +194,8 @@ test('pi-mcts runs through the proxy without a local Pi CLI, applies the selecte
       '--', 'bash', path.join(f.repoDir, 'testcases_union', 'run_union.sh'),
       '--mode', 'sweverified', '--runtime', 'pi', '--testbench', 'sweverified',
       '--instance-id', 'example__project-1', '--split', 'test', '--output-dir', f.runId,
+      '--max-iters', '5', '--branching', '3', '--max-turns-init', '160', '--max-turns-step', '80',
+      '--max-turns-author', '160', '--max-turns-author-step', '80', '--token-fuse-limit', '30000000',
     ])
     assert.equal((launches[0].options.env as Record<string, string>).AGENT_INSIGHT_HOME,
       path.join(f.outputDir, '.agent-insight'))
@@ -342,8 +345,8 @@ for (const scenario of [
         actions: ['RUN_BENCHMARK_CASE', ...(scenario.generic ? ['RUN_EXPERIMENT_CASE'] : [])],
         platforms: [{
           id: scenario.platform, agents: [scenario.platform], models: [],
-          runBenchmarkCase: { version: 1, returnsTraceId: true,
-            agentOptionCapabilities: 'searchOptions' in scenario ? ['mcts-search-options/v1'] : [] },
+          parameterDefinitions: 'searchOptions' in scenario ? [definition] : [],
+          runBenchmarkCase: { version: 1, returnsTraceId: true },
           ...(scenario.generic ? { runExperimentCase: { version: 2, returnsTraceId: true } } : {}),
         }],
         components: {
@@ -386,7 +389,7 @@ for (const scenario of [
     assert.equal(target.supportsBenchmark, true)
     assert.ok(target.benchmarkKeys.includes('swe-bench'))
     assert.equal(target.benchmarkUnavailableReason, null)
-    assert.deepEqual(target.agentOptionCapabilities, 'searchOptions' in scenario ? ['mcts-search-options/v1'] : [])
+    assert.deepEqual(target.parameterDefinitions, 'searchOptions' in scenario ? [definition] : [])
     assert.deepEqual(target.models, [{ id: '', label: '平台默认' }])
   })
 }
@@ -397,7 +400,7 @@ for (const platform of ['pi-mcts', 'xiao-mcts']) {
     const options = { maxIters: 1, branching: 1, maxTurnsInit: 20, maxTurnsStep: 10,
       maxTurnsAuthor: 20, maxTurnsAuthorStep: 10, tokenFuseLimit: 0 }
     try {
-      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, platform, agent: platform, agentOptions: { mcts: options } },
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, platform, agent: platform, agentOptions: { runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: options } },
         async (_command: string, args: string[]) => {
           assert.equal(args[args.indexOf('--runtime') + 1], platform === 'pi-mcts' ? 'pi' : 'xiaoo')
           assert.deepEqual(args.slice(-14), ['--max-iters', '1', '--branching', '1', '--max-turns-init', '20',
@@ -405,7 +408,7 @@ for (const platform of ['pi-mcts', 'xiao-mcts']) {
           f.writeTrace()
           throw new Error('fixture interruption')
         }), (error: { runFacts: { agentOptions: unknown; mctsRuntime: string } }) => {
-        assert.deepEqual(error.runFacts.agentOptions, { mcts: options })
+        assert.deepEqual(error.runFacts.agentOptions, { runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: options })
         assert.equal(error.runFacts.mctsRuntime, platform === 'pi-mcts' ? 'pi' : 'xiaoo')
         return true
       })
@@ -442,7 +445,7 @@ function zsoftFixture(kind = 'python') {
   fs.writeFileSync(path.join(f.workspace, 'tasks', taskId, 'task.json'), JSON.stringify({ task_id: taskId, submission_kind: kind, max_bytes: 128 }))
   const payload = { ...f.payload, benchmarkKey: 'zsoft-l1',
     benchmarkPayload: { taskId, tags: ['userspace'], submissionKind: kind, maxBytes: 128 },
-    workspace: { provider: 'zsoft-tasks', taskId, tasksDir: path.join(f.root, 'native-tasks') } }
+    workspace: { provider: 'zsoft-tasks', taskId } }
   const output = path.join(f.repoDir, 'testcases_union/output/zsoft', f.runId)
   const writeOutput = (bytes: Buffer, task = taskId) => {
     fs.writeFileSync(path.join(output, 'poc'), bytes)
@@ -520,7 +523,7 @@ test('ZSoft-only MCTS is selectable without datasets or the SWE launcher, while 
     assert.equal(runtime.probeMctsZsoftRuntime(config).ready, true)
     const caps = client.buildCapabilities(config, { probe: { ready: false, platforms: {} } })
     assert.equal(caps.components['agent-runtime/pi-mcts/v1'].ready, true)
-    assert.equal(caps.components['mcts-search-options/v1'].ready, true)
+    assert.ok(caps.platforms.find((item: { id: string }) => item.id === 'pi-mcts')?.parameterDefinitions.some((item: { runtimeKey: string }) => item.runtimeKey === 'mcts'))
     assert.equal(caps.components['mcts-zsoft-export/v1'].ready, true)
     assert.equal(caps.components['mcts-swe-bench/v1'].ready, false)
     assert.ok(client.benchmarkAgentPlatformsFromCapabilities(caps).includes('pi-mcts'))

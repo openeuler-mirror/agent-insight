@@ -41,6 +41,7 @@
 - **新增自定义评测器**：用 `LlmEvaluatorConfig` / `CodeEvaluatorConfig`（`src/lib/evaluators/custom-evaluator-model.ts`）建模；通过 `src/server/user_evaluators_storage.ts` 持久化。
 - **新增预置评估器**：实现放 `src/lib/engine/experiment/<族>-preset-evaluators.ts`（一族一文件），另需在卡片/元数据/分发/守卫测试四处登记。落点、命名与打分方法论见 [10-evaluator-development.md](./10-evaluator-development.md)——**动手前必读**，这条路径上的坑基本都记在那里了。
 - **新增框架接入路径**：在 `src/lib/ingest/*` 下加 parser/watcher 或 OTel 聚合器，并在 `src/lib/ingest/adapters/` 注册 `FrameworkAdapter`（descriptor、skill 抽取、必要的 `normalizeForStorage`）。路由层不要再手写框架分支；通过 `saveExecutionRecord` 归一化为 `Execution`。安装脚本框架清单仍是后续治理范围。
+- **新增 Runtime 参数**：在 `services/executor/runtimes/<key>/runtime.yaml` 声明 `targets`（platform/agent，agent 可为 `*`）、`parameterGroups`、`parameters`、`presets`。字段支持 integer/number/string/boolean/enum，以及 required/default/minimum/maximum/minLength/maxLength/choices；每项以 `binding: { kind: argv, flag: --example }` 映射，boolean 可加 `falseFlag`，未声明时 false 不发出开关。未知字段、重复 key/flag/目标、保留系统 flag 和非法默认值/预设在加载时失败。前端、平台校验和详情不得新增 Runtime 特判；新增已支持类型的 CLI 参数仅改 YAML。命令入口或产物流程变化仍需适配 Runtime。通过 `executor.local.yaml` 的 `runtimes.<key>.defaults` 覆盖默认值，字段 null 恢复 Manifest 默认值；重启客户端后重新上报描述。共享实现位于 `packages/agent-runtime/`，新增定义随 bundle、npm、standalone 和客户端安装分发。
 - **新增 Benchmark**：目标是统一开发规范，不是零代码、纯配置接入。通常只新增 `benchmarks/<key>/` 接入包：`benchmark.yaml`、实现五个业务 hook 的 `adapter/index.ts`、`schemas/{case,result}.schema.json`、`evaluator/evaluator.yaml`、遵循 `doctor` / `evaluate --request ... --output ...` 文件契约的 Entrypoint，以及需要独立依赖时的 `evaluator/Dockerfile`。`adapterKey` 与 `evaluation.evaluatorKey` 是不同身份，不能假设相等。Adapter 生成完整 Agent Prompt；判分语义留在实例 Evaluator；执行器只按 workspace provider、Agent platform 和 Artifact collector 选择通用能力。增加真实 Case smoke 和 conformance 后运行 `npm run benchmark:catalog`、相关 API 测试及 `npm run test`。禁止手改 `generated/benchmark-catalog/*`，也不在公共 API、调度器、Runner 或 Controller 中增加具体 Benchmark 分支。只有现有工作区、Agent Runtime 或 Artifact Collector 无法表达需求时，才新增可跨 Benchmark 复用的能力组件。完整设计见 [`docs/design/benchmark/`](../design/benchmark/)。
 - **Benchmark 数据集与展示**：有官方数据集时，在 `benchmark.yaml` 声明 `dataset.profiles` 和受控 `presentation`；特殊格式再提供 `dataset/index.ts` 的 `BenchmarkDatasetLoader`。Adapter 的 `validateAndSplitCase()` 返回公开 `catalogProjection`，其中业务字段走完整 `values.*` 路径。导入时后端把 `caseTable.columns` 冻结为 `fieldsJson`，包含 `path/label/type` 及可选 `width/format/truncate/description`；Manifest 后续变化不会静默覆盖已发布数据集，需要管理员运行 `scripts/benchmark/refresh-dataset-presentation.ts` 显式刷新。`presentation.artifacts` 只配置 Submission/Evidence 的标签与顺序，不能改变校验或过滤结果；结果 API 始终返回完整文件列表。禁止接入包注入 React、HTML 或 JavaScript。
 - **流程闸门**（`AGENTS.md` §4）：对 **Prisma schema** 的任何改动，或任何**新增 API 路由**，都需要先在 `docs/plans/YYYY-MM-DD-<topic>-design.md` 下产出一份 Plan 文档，对齐后再编码。
@@ -91,9 +92,38 @@
   不会提前把“进程存在”误报成“服务已就绪”。可用
   `AGENT_INSIGHT_STARTUP_TIMEOUT_SECONDS` 和
   `AGENT_INSIGHT_STARTUP_REQUEST_TIMEOUT_MS` 调整总等待时间与单次探测超时。
-- **Build**：`npm run build` · **Start (prod)**：`bash scripts/restart.sh` 或 `npm run start`。
+- **Build**：`npm run build` · **Start (源码生产部署)**：`bash scripts/start.sh`，运行校验过的 Next.js standalone server。
+  `--force-rebuild` 强制重新构建，但保留 `.next/cache`；可与 `--port` 组合。SWE-bench 自动准备仍由项目 YAML 配置控制。
+  普通启动仅在没有成功记录、输入变化或产物不完整时重建。直接运行 `npm run build` 不会创建可复用记录。
+  启动脚本始终执行数据库同步和首页、数据集、故障页面健康检查，并输出各阶段与总耗时。
 - **Test**：`npm run test`（`node --import tsx --test "test/**/*.test.ts"`）。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。
+
+### 生产启动构建复用
+
+`scripts/start-build-state.cjs` 对文件内容、路径、权限及符号链接目标计算 SHA-256，不只比较 Git 提交号或源码修改时间。
+已安装依赖的逐文件摘要会缓存在 `node_modules/.cache/agent-insight/dependency-hashes.json`；每次仍遍历检查
+设备、inode、大小、权限、纳秒级 mtime/ctime，任一变化便重新读取内容计算摘要，缓存缺失时全量计算。
+构建输入覆盖 `src`、`public`、`prisma`、`scripts`、`generated`、`benchmarks`、`config`、`packages`、`services`、
+`skills`、`agent_ras`、`agent_fault_injection`、`integrations` 和 `bin`，包括未提交文件；
+同时覆盖根目录的 package/lock/构建配置、项目 `.env*`、运行根 `.env`、实际 `node_modules` 内容，
+以及 Node 版本、操作系统、架构、项目路径和 `NEXT_*`、`NEXT_PUBLIC_*`、`PRISMA_*`、`NODE_ENV`、`BABEL_ENV`、`CI`。
+新增上述目录外的构建输入时，必须同步扩展此清单。生成缓存与 Python 缓存不参与指纹；端口的单次覆盖不触发重建。
+配置文件采用保守的整文件校验，即使只改其中运行时配置也会重建。指纹文件只保存摘要，不保存环境变量原文。
+
+构建前先生成 Benchmark catalog，再计算输入摘要，避免生成文件导致每次失效。
+`.next/start-build-state.json` 只在构建、静态资源复制、standalone 校验及前后输入一致性检查全部成功后原子写入。
+复用时重新校验页面清单、BUILD_ID，以及整个 standalone 和静态资源的内容摘要；缺失或损坏即重建。
+重建前删除旧构建输出和成功标记，保留 `.next/cache` 中的 Webpack 等缓存；
+仅移除与旧生成路由类型绑定的 `.next/cache/.tsbuildinfo`，避免在原有 2 GB 构建堆上限下重用旧类型图导致内存溢出。
+失败构建不会在下次被当成成功产物。
+同目录启动在有 `flock` 的系统上加互斥锁，服务子进程不会继承锁；不同目录各自独立。
+没有 `flock` 的系统仍须避免并行启动，同目录多端口服务也不能共享可变的构建目录。
+
+`start.sh` 通过 `db_push.sh --skip-generate` 同步数据库，保留已有的破坏性变更拦截。
+随后独立检查 Prisma schema、生成器和生成产物；首次记录、版本或内容变化、文件缺失时才执行一次 `prisma generate`。
+成功记录位于 `node_modules/.cache/agent-insight/start-prisma-state.json`；其他入口不传 `--skip-generate` 时保持原行为。
+更改 schema 不会因为复用 Client 而跳过数据库同步。
 
 ## SQLite data archive CLI
 

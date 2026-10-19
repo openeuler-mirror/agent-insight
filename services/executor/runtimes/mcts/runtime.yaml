@@ -1,0 +1,21 @@
+key: mcts
+displayName: MCTS
+targets:
+  - { platform: pi-mcts, agent: pi-mcts }
+  - { platform: xiao-mcts, agent: xiao-mcts }
+parameterGroups:
+  - key: search
+    label: MCTS 搜索参数
+    description: 已填入默认值，可直接调整。Token 熔断阈值为 0 时关闭熔断；Agent 超时独立生效。
+parameters:
+  - { key: maxIters, group: search, label: 最大迭代次数, type: integer, minimum: 1, required: true, default: 5, binding: { kind: argv, flag: --max-iters } }
+  - { key: branching, group: search, label: 分支数, type: integer, minimum: 1, required: true, default: 3, binding: { kind: argv, flag: --branching } }
+  - { key: maxTurnsInit, group: search, label: Solver 初始最大轮数, type: integer, minimum: 1, required: true, default: 160, binding: { kind: argv, flag: --max-turns-init } }
+  - { key: maxTurnsStep, group: search, label: Solver 后续最大轮数, type: integer, minimum: 1, required: true, default: 80, binding: { kind: argv, flag: --max-turns-step } }
+  - { key: maxTurnsAuthor, group: search, label: Author 初始最大轮数, type: integer, minimum: 1, required: true, default: 160, binding: { kind: argv, flag: --max-turns-author } }
+  - { key: maxTurnsAuthorStep, group: search, label: Author 后续最大轮数, type: integer, minimum: 1, required: true, default: 80, binding: { kind: argv, flag: --max-turns-author-step } }
+  - { key: tokenFuseLimit, group: search, label: Token 熔断阈值, type: integer, minimum: 0, required: true, default: 30000000, binding: { kind: argv, flag: --token-fuse-limit } }
+presets:
+  - key: quick
+    label: 填入联调参数
+    values: { maxIters: 1, branching: 1, maxTurnsInit: 20, maxTurnsStep: 10, maxTurnsAuthor: 20, maxTurnsAuthorStep: 10, tokenFuseLimit: 0 }

@@ -1,3 +1,4 @@
+import type { DiagnosisProgressWriter } from './progress-types';
 import {
   evaluateTrajectoryViaOpencode,
   type TrajectoryEvalInput,
@@ -17,15 +18,19 @@ export async function runAgentDebugSkillsAnalysis(args: {
   interactions: unknown[];
   user: string;
   interactionHash: string;
+  progress?: DiagnosisProgressWriter;
 }): Promise<AgentDebugSkillsAnalysis> {
   const executionId = String(args.execution.id || args.execution.taskId || '').trim();
   const taskId = String(args.execution.taskId || args.execution.id || '').trim();
   const interactions = Array.isArray(args.interactions) ? args.interactions : [];
+  const emit = (key: string, state: 'started' | 'completed' | 'failed', title: string, summary: string) => args.progress?.emit({ key, module: 'skills', kind: 'stage', state, title, summary });
+  emit('comparison-start', 'started', '提取 Skill 关键动作', '正在读取 Skill 要求与实际执行轨迹。');
   const comparison = await buildSkillKeyActionComparison(args.execution, taskId, args.user, interactions);
   if (comparison.status !== 'ok') {
     throw new Error(skillKeyActionComparisonMessage(comparison));
   }
 
+  emit('comparison-ready', 'completed', '关键动作已提取', `已读取 ${comparison.referenceKeyActions.length} 条关键动作与 ${comparison.actualExtractedSteps.length} 个实际步骤。`);
   const skillTargets = getPrimaryExecutionSkillTargets(args.execution, interactions);
   const primarySkill = skillTargets[0] || null;
   const input: TrajectoryEvalInput = {
@@ -45,12 +50,18 @@ export async function runAgentDebugSkillsAnalysis(args: {
     executionId: executionId || undefined,
   };
 
+  emit('evaluation-start', 'started', '逐条核验执行证据', '正在核对关键动作覆盖情况，等待评估结果。');
   const out = await evaluateTrajectoryViaOpencode(
     input,
     args.user,
     primarySkill?.skill || null,
     primarySkill?.version ?? null,
   );
+
+  emit('evaluation-ready', 'completed', '关键动作核验已返回', `已获得 ${(out.keyActionResults || []).length} 条核验结果。`);
+  for (const [index, item] of (out.keyActionResults || []).entries()) {
+    emit(`action-${index}`, 'completed', item.actionContent || `关键动作 ${index + 1}`, item.traceComparisonAnalysis || '核验结果已返回。');
+  }
 
   // 建议流：门控命中才跑读完整 trace 的建议 agent（非致命，失败退回空）。
   let skillSuggestions: AgentDebugSkillSuggestion[] = [];
@@ -62,6 +73,7 @@ export async function runAgentDebugSkillsAnalysis(args: {
         completeness: out.dimensionScores?.completeness,
       })
     ) {
+      emit('suggestions-start', 'started', '生成改进建议', '已满足建议生成条件，正在结合执行证据分析。');
       skillSuggestions = await runSkillSuggestionAgent({
         user: args.user,
         skillName: primarySkill.skill,
@@ -70,8 +82,10 @@ export async function runAgentDebugSkillsAnalysis(args: {
         interactions,
         keyActionResults: out.keyActionResults,
       });
+      emit('suggestions-ready', 'completed', '改进建议已返回', `已生成 ${skillSuggestions.length} 条建议。`);
     }
   } catch (e) {
+    emit('suggestions-failed', 'failed', '建议生成失败', '关键动作核验结果已保留，建议阶段未获得可用结果。');
     console.warn('[agent-debug-skills] suggestion agent failed (non-fatal):', (e as Error).message);
   }
 

@@ -14,7 +14,7 @@ export type CacheState = {
   busy?: boolean;
 };
 
-export function cleanupEligibility(state: CacheState, now: number, normalDays = 7, abnormalDays = 14) {
+export function cleanupEligibility(state: CacheState, now: number, normalDays = 7, abnormalDays = 7) {
   if (state.busy || !Number.isFinite(state.lastReceivedAt) || state.lastReceivedAt <= 0) {
     return { eligible: false, reason: 'busy-or-unknown-time' };
   }
@@ -48,7 +48,7 @@ export function readCleanupConfig(env: Record<string, string | undefined> = proc
     sliceMs: number('AGENT_INSIGHT_CLEANUP_SLICE_MS', 50, 1, 250),
     maxReadBytes: number('AGENT_INSIGHT_CLEANUP_MAX_READ_BYTES', 1024 * 1024, 64 * 1024, 16 * 1024 * 1024),
     normalDays,
-    abnormalDays: Math.max(normalDays, number('AGENT_INSIGHT_CLEANUP_ABNORMAL_DAYS', 14, 1, 3650)),
+    abnormalDays: Math.max(normalDays, number('AGENT_INSIGHT_CLEANUP_ABNORMAL_DAYS', 7, 1, 3650)),
     logRetentionDays: number('AGENT_INSIGHT_CLEANUP_LOG_RETENTION_DAYS', 14, 1, 3650),
     logRotateMs: number('AGENT_INSIGHT_CLEANUP_LOG_ROTATE_HOURS', 24, 1, 8760) * 3_600_000,
     logMaxFileBytes,

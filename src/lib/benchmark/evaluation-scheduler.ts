@@ -1,4 +1,5 @@
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
+import { platformBenchmarkConfig } from './project-config'
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/storage/prisma'
 import { refreshBenchmarkImagePreparation } from './image-preparation'
@@ -616,9 +617,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       evaluation.status === 'dispatch_unknown',
     )
     const capacity = capacityCache.get(target.baseUrl) || 1
-    const configuredQuota = process.env.AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER
-    const userQuota = configuredQuota === undefined || configuredQuota === '' ? capacity : Number(configuredQuota)
-    if (!Number.isSafeInteger(userQuota) || userQuota < 1) throw new BenchmarkProtocolError('EVALUATION_QUOTA_INVALID', '单用户评测并发必须为正整数', 500)
+    const userQuota = platformBenchmarkConfig().scheduling.maxEvaluationConcurrencyPerUser ?? capacity
     const admitted = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Taking the SQLite write lock before counting makes concurrent dispatchers share one reservation budget.
       const lease = await tx.benchmarkEvaluationDispatchOutbox.updateMany({ where: { evaluationId, status: 'sending', attemptCount: attemptNo }, data: { status: 'sending' } })

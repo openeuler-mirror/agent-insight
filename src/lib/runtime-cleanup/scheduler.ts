@@ -4,6 +4,32 @@ import { readCleanupConfig, type CleanupEvent } from './policy';
 type Sweep = AsyncGenerator<CleanupEvent>;
 type Budget = { maxSteps: number; sliceMs: number; maxReadBytes: number; clock?: () => number };
 
+type CleanupCounts = {
+  scanned: number; deleted: number; rotated: number; skipped: number;
+  freedBytes: number; readBytes: number; skipReasons: Record<string, number>;
+};
+export type CleanupStatus =
+  | { phase: 'scheduled'; dryRun: boolean; startupDelayMs: number; intervalMs: number; normalDays: number; abnormalDays: number }
+  | { phase: 'disabled' | 'sweep start'; dryRun: boolean }
+  | ({ phase: 'sweep progress' | 'sweep complete'; dryRun: boolean; durationMs: number } & CleanupCounts);
+
+const SKIP_REASONS = new Set([
+  'active-or-not-expired', 'busy-or-changed', 'dry-run', 'legacy-ownership-unknown',
+  'file-unavailable-or-changed', 'archive-changed', 'unsafe-path-or-depth',
+  'owner-active-or-path-changed', 'unsupported-file-type', 'file-changed-or-unavailable',
+  'unsafe-root', 'root-unavailable', 'invalid-root-or-retention', 'user-directory-unavailable',
+  'unsafe-path', 'unknown-owner', 'not-expired', 'owner-active-or-unknown',
+  'home-changed-or-unavailable', 'runtime-home-not-owned', 'metadata-depth-limit',
+  'metadata-file-changed', 'unsupported-metadata-entry', 'metadata-directory-not-empty',
+  'metadata-unavailable-or-changed',
+]);
+
+function skipReason(reason: string | undefined): string {
+  if (reason && SKIP_REASONS.has(reason)) return reason;
+  if (reason && /^(logs|temporary-homes|spool(?:-[a-z-]+)?)-failed$/.test(reason)) return 'category-failed';
+  return 'other';
+}
+
 export async function runCleanupSlice(iterator: Sweep, budget: Budget, onEvent?: (event: CleanupEvent) => void) {
   const clock = budget.clock || (() => performance.now());
   const started = clock();
@@ -27,8 +53,11 @@ export function startCleanupScheduler(options: {
   onError?: (error: unknown) => void;
   onEvent?: (event: CleanupEvent) => void;
   onComplete?: () => void;
+  onStatus?: (status: CleanupStatus) => void;
+  clock?: () => number;
 }) {
   const config = options.config || readCleanupConfig();
+  const clock = options.clock || (() => performance.now());
   const setTimer = options.setTimer || ((callback, delay) => {
     const timer = setTimeout(callback, delay);
     timer.unref();
@@ -39,6 +68,17 @@ export function startCleanupScheduler(options: {
   let stopped = false;
   let sweep: Sweep | undefined;
   let working: Promise<void> | undefined;
+  const freshCounts = (): CleanupCounts => ({ scanned: 0, deleted: 0, rotated: 0, skipped: 0, freedBytes: 0, readBytes: 0, skipReasons: {} });
+  let counts = freshCounts();
+  let startedAt = 0;
+  let lastProgressAt = 0;
+  const status = (value: CleanupStatus) => {
+    try { options.onStatus?.(value); } catch { /* Diagnostics cannot interrupt maintenance. */ }
+  };
+  const snapshot = (phase: 'sweep progress' | 'sweep complete'): CleanupStatus => ({
+    phase, ...counts, skipReasons: { ...counts.skipReasons },
+    durationMs: Math.max(0, Math.round(clock() - startedAt)), dryRun: config.dryRun,
+  });
   const report = (error: unknown) => {
     try { (options.onError || console.warn)(error); } catch { /* cleanup cannot fail startup */ }
   };
@@ -50,12 +90,31 @@ export function startCleanupScheduler(options: {
   const run = async () => {
     let delay = config.pauseMs;
     try {
-      sweep ||= options.createSweep();
-      const result = await runCleanupSlice(sweep, config, options.onEvent);
+      if (!sweep) {
+        counts = freshCounts();
+        startedAt = clock();
+        lastProgressAt = startedAt;
+        status({ phase: 'sweep start', dryRun: config.dryRun });
+        sweep = options.createSweep();
+      }
+      const result = await runCleanupSlice(sweep, config, event => {
+        counts[event.kind]++;
+        if (event.kind === 'deleted') counts.freedBytes += event.bytes || 0;
+        counts.readBytes += event.scannedBytes || 0;
+        if (event.kind === 'skipped') {
+          const reason = skipReason(event.reason);
+          counts.skipReasons[reason] = (counts.skipReasons[reason] || 0) + 1;
+        }
+        options.onEvent?.(event);
+      });
       if (result.done) {
         sweep = undefined;
         delay = config.intervalMs;
+        status(snapshot('sweep complete'));
         options.onComplete?.();
+      } else if (clock() - lastProgressAt >= 60_000) {
+        lastProgressAt = clock();
+        status(snapshot('sweep progress'));
       }
     } catch (error) {
       report(error);
@@ -71,7 +130,12 @@ export function startCleanupScheduler(options: {
     if (stopped || working) return;
     working = run();
   }
-  if (config.enabled) schedule(config.startupDelayMs);
+  if (config.enabled) {
+    schedule(config.startupDelayMs);
+    if (!stopped) status({ phase: 'scheduled', dryRun: config.dryRun,
+      startupDelayMs: config.startupDelayMs, intervalMs: config.intervalMs,
+      normalDays: config.normalDays, abnormalDays: config.abnormalDays });
+  } else status({ phase: 'disabled', dryRun: config.dryRun });
   return {
     idle: async () => { await working; },
     stop: async () => {

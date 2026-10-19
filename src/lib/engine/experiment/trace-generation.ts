@@ -1,3 +1,4 @@
+import { normalizeAgentOptions, resolveAgentOptions, type AgentOptions } from '../../../../packages/agent-runtime/index.cjs';
 import { withExperimentCancellation } from './cancellation-context';
 import { mapConcurrent, parseExecutionConcurrency } from './execution-concurrency';
 import { prisma } from '@/lib/storage/prisma';
@@ -26,6 +27,7 @@ export type TraceGenerationRequest = {
   platform: string;
   agent: string;
   model?: string | null;
+  agentOptions?: AgentOptions;
   timeoutSeconds?: number;
   executionConcurrency?: number;
   cases: TraceGenerationCaseSpec[];
@@ -175,7 +177,8 @@ export async function assertTraceGenerationTarget(input: {
   workerId: string;
   platform: string;
   agent: string;
-}): Promise<void> {
+  agentOptions?: unknown;
+}) {
   const targets = await listClientTraceGenerationTargets(input.user);
   const target = targets.find((item) =>
     item.workerId === input.workerId
@@ -187,6 +190,7 @@ export async function assertTraceGenerationTarget(input: {
       '所选运行主机已离线，或客户端不支持回传 Trace ID',
     );
   }
+  return resolveAgentOptions(target.parameterDefinitions || [], input.platform, input.agent, input.agentOptions);
 }
 
 async function waitForCommand(commandId: string, timeoutMs: number, signal?: AbortSignal): Promise<CommandRow | null> {
@@ -404,6 +408,7 @@ async function runAttempt(input: {
         platform: input.req.platform,
         agent: input.req.agent,
         model: input.req.model || null,
+        ...(input.req.agentOptions ? { agentOptions: input.req.agentOptions } : {}),
         input: input.item.input,
         timeoutSeconds: input.timeoutSeconds,
         ...(startupSeconds ? { startupTimeoutSeconds: startupSeconds } : {}),
@@ -654,6 +659,7 @@ export async function loadTraceGenerationRetryRequest(input: {
       platform: attempt.platform,
       agent: attempt.agent,
       model: attempt.model,
+      agentOptions: normalizeAgentOptions(payload.agentOptions),
       ...(payload.skillExecution ? { skillExecution: payload.skillExecution as NonNullable<TraceGenerationRequest['skillExecution']> } : {}),
       timeoutSeconds: attempt.timeoutSeconds,
       cases: [{ caseId: row.id, input: row.input.trim() }],
@@ -684,6 +690,7 @@ export async function loadTraceGenerationRetryRequest(input: {
     platform,
     agent,
     model: typeof payload.model === 'string' ? payload.model : null,
+    agentOptions: normalizeAgentOptions(payload.agentOptions),
     timeoutSeconds: Number(payload.timeoutSeconds) || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
     cases: [{ caseId: row.id, input: row.input.trim() }],
   };

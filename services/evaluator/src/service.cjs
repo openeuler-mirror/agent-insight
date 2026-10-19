@@ -1,4 +1,5 @@
 'use strict'
+const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
 
 const fs = require('node:fs/promises')
 const http = require('node:http')
@@ -240,9 +241,9 @@ class BenchmarkEvaluatorService {
   constructor(options = {}) {
     this.dataDir = options.dataDir || process.env.EVALUATOR_DATA_DIR || '/data'
     this.platformBaseUrl = options.platformBaseUrl || process.env.EVALUATOR_AGENT_INSIGHT_BASE_URL || ''
-    this.maxConcurrency = Number(options.maxConcurrency ?? (process.env.EVALUATOR_MAX_CONCURRENCY || 1))
+    this.maxConcurrency = options.maxConcurrency ?? loadProjectConfig('evaluator').maxConcurrency
     if (!Number.isSafeInteger(this.maxConcurrency) || this.maxConcurrency < 1) {
-      throw new Error('EVALUATOR_MAX_CONCURRENCY must be a positive integer')
+      throw new Error('maxConcurrency must be a positive integer')
     }
     this.journal = options.journal || new EvaluationJobJournal(this.dataDir)
     this.platform = options.platformClient || new AgentInsightPlatformClient(

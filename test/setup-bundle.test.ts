@@ -21,8 +21,15 @@ const clientFiles = [
   'scripts/install-fault-injection.js',
   'scripts/lib/fi-python-runtime.js',
   'scripts/fi-worker.js',
+  'packages/project-config/index.cjs',
+  'packages/project-config/yaml.cjs',
+  'config/benchmark/executor.yaml',
   'services/executor/src/index.cjs',
-  'services/executor/src/mcts-options.cjs',
+  'services/executor/src/runtime-options.cjs',
+  'packages/agent-runtime/index.cjs',
+  'packages/agent-runtime/loader.cjs',
+  'services/executor/runtimes/mcts/runtime.yaml',
+  'services/executor/runtimes/opencode/runtime.yaml',
   'services/executor/src/mcts-config.cjs',
   'services/executor/src/mcts-runtime.cjs',
   'services/executor/src/git-source.cjs',
@@ -91,7 +98,7 @@ test('incomplete client bundle returns missing entries instead of a partial arch
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-bundle-missing-'))
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
   usePackageRoot(t, temporary)
-  for (const file of clientFiles.filter((file) => !file.startsWith('services/executor/'))) {
+  for (const file of clientFiles.filter((file) => !file.startsWith('services/executor/src/'))) {
     const target = path.join(temporary, file)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.writeFileSync(target, 'fixture')

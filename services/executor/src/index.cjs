@@ -8,9 +8,9 @@ const path = require('node:path')
 const { spawn } = require('node:child_process')
 const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
 const { createGitSourcePolicies } = require('./source-policy-registry.cjs')
-const { normalizeAgentOptions, MCTS_RUNTIMES } = require('./mcts-options.cjs')
 const { PublicBundleWorkspaceProvider, SingleFileCollector, validatePublicBundleSpec } = require('./public-bundle.cjs')
 const { ZsoftTasksWorkspaceProvider, validateZsoftTasksSpec } = require('./zsoft-tasks.cjs')
+const { runtimeInvocationOptions } = require('./runtime-options.cjs')
 
 const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
 const DELIVERY_RETRY_BASE_MS = 5_000
@@ -202,12 +202,8 @@ function validateTaskEnvelope(task, runId) {
   ) {
     throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '提交物或 Agent 配置不合法')
   }
-  let agentOptions
-  try { agentOptions = normalizeAgentOptions(task.agentConfig.agentOptions) }
-  catch (error) { throw new BenchmarkExecutorError('AGENT_OPTIONS_INVALID', error.message) }
-  if (agentOptions?.mcts && !Object.hasOwn(MCTS_RUNTIMES, task.agentConfig.platform)) {
-    throw new BenchmarkExecutorError('AGENT_OPTIONS_UNSUPPORTED', '所选执行平台不支持 MCTS 搜索参数')
-  }
+  try { runtimeInvocationOptions(task.agentConfig.platform, task.agentConfig.agent, task.agentConfig.agentOptions) }
+  catch (error) { throw new BenchmarkExecutorError(error.code || 'AGENT_OPTIONS_INVALID', error.message) }
   const artifactNames = new Set()
   for (const artifact of task.submission.requiredArtifacts) {
     if (
