@@ -12,7 +12,7 @@ import nextConfig from "../next.config"
  * （不关心那个 URL 最后落到谁手上）。中间这段「URL → handler」的绑定关系没人看。
  *
  * 真实事故：`/api/upload` 是重构前的通用上报端点，重构后靠 next.config 的兼容别名
- * 指向 `/api/ingest/upload`（opencode uploader、openclaw watcher 都还硬编码着它）。
+ * 指向 `/api/ingest/upload`（事故发生时 opencode uploader、openclaw watcher 都硬编码着它）。
  * 有人把 OpenClaw 的桥接 handler 建在 `src/app/api/upload/route.ts` —— rewrites()
  * 返回数组等价于 afterFiles，优先级低于真实路由，别名被静默遮蔽。opencode 上报的整包
  * record（含 interactions）被桥接丢弃，trace 只剩一条合成的 chat span，全程 200 OK。
@@ -121,7 +121,7 @@ async function resolveRoute(urlPath: string): Promise<string | null> {
 const ENDPOINTS: { label: string; url: string; handler: string; sources: string[] }[] = [
   {
     label: "opencode uploader 上报",
-    url: "/api/upload",
+    url: "/api/ingest/upload",
     handler: "api/ingest/upload",
     sources: ["scripts/opencode_uploader_client.js"],
   },
@@ -186,31 +186,31 @@ const ENDPOINTS: { label: string; url: string; handler: string; sources: string[
   },
   {
     label: "opencode 插件下发",
-    url: "/api/ingest/setup/opencode",
+    url: "/api/setup/opencode",
     handler: "api/ingest/setup/opencode",
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
     label: "opencode uploader 下发",
-    url: "/api/ingest/setup/opencode-uploader",
+    url: "/api/setup/opencode-uploader",
     handler: "api/ingest/setup/opencode-uploader",
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
     label: "openclaw watcher 下发",
-    url: "/api/ingest/setup/openclaw-watcher",
+    url: "/api/setup/openclaw-watcher",
     handler: "api/ingest/setup/openclaw-watcher",
     sources: ["src/app/api/ingest/setup/auto/route.ts"],
   },
   {
     label: "hermes 插件下发",
-    url: "/api/ingest/setup/hermes-plugin",
+    url: "/api/setup/hermes-plugin",
     handler: "api/ingest/setup/hermes-plugin",
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
     label: "jiuwen extension 下发",
-    url: "/api/ingest/setup/jiuwen-extension",
+    url: "/api/setup/jiuwen-extension",
     handler: "api/ingest/setup/jiuwen-extension",
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
@@ -255,6 +255,10 @@ test("每个采集端点都解析到期望的 handler", async () => {
       + ` 常见原因是有人在别名路径上新建了真实路由——真实路由优先于 rewrite，别名会被静默遮蔽`,
     )
   }
+})
+
+test("存量 uploader 的 upload 别名仍解析到无损上传 handler", async () => {
+  assert.equal(await resolveRoute("/api/upload"), "api/ingest/upload")
 })
 
 test("opencode uploader 真实拼出来的上报路径能解析到 ingest/upload", async () => {

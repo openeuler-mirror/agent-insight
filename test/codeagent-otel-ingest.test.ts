@@ -540,6 +540,6 @@ test('CodeAgent background marker never removes the root run', () => {
 test('CodeAgent spool source is registered ahead of generic OTel sources', () => {
   assert.deepEqual(
     listSources().map((source) => source.id),
-    ['codeagent-otel-logs', 'claude-otel-logs', 'actrail-otel-traces', 'otel-traces'],
+    ['deepseek-harness-otel-logs', 'codeagent-otel-logs', 'claude-otel-logs', 'actrail-otel-traces', 'otel-traces'],
   );
 });

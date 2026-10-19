@@ -15,7 +15,7 @@ const generator = require('../scripts/benchmark/generate-catalog.cjs') as {
 const executorModule = require('../services/executor/src/index.cjs') as any
 const evaluatorModule = require('../services/evaluator/src/evaluator-registry.cjs') as any
 
-test('benchmark package catalog is reproducible and registers SWE-bench without core imports', () => {
+test('benchmark package catalog is reproducible and keeps business adapters and evaluators out of core', () => {
   const generatedDir = path.join(repositoryRoot, 'generated', 'benchmark-catalog')
   generator.generate(repositoryRoot)
   const first = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json']
@@ -47,7 +47,9 @@ test('benchmark package catalog is reproducible and registers SWE-bench without 
   assert.equal(evaluatorCatalog[0].runtime, 'oci-container')
   assert.match(evaluatorCatalog[0].image, /^agent-insight-benchmark-runtime-swe-bench:artifact-[0-9a-f]{64}$/)
   assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'src/lib/benchmark/adapter-registry.ts'), 'utf8'), /sweBenchAdapter/)
-  assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'services/executor/src/index.cjs'), 'utf8'), /SweBench/)
+  const executorSource = fs.readFileSync(path.join(repositoryRoot, 'services/executor/src/index.cjs'), 'utf8')
+  assert.doesNotMatch(executorSource, /\b(?:sweBenchAdapter|SweBenchEvaluator)\b/)
+  assert.doesNotMatch(executorSource, /(?:require\(|from\s+)["'][^"']*benchmarks\/[^/"']+\/(?:adapter|evaluator)(?:\/|["'])/)
   assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'services/evaluator/src/service.cjs'), 'utf8'), /SweBench/)
 })
 
