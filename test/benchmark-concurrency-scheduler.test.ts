@@ -43,7 +43,7 @@ test('asset health readiness keeps preparation retryable and installation failur
   }
 })
 
-test('concurrent dispatchers respect service capacity and per-user quota across experiments', async () => {
+test('initial evaluations and reevaluations share service capacity and per-user quota across experiments', async () => {
   const posted: string[] = []
   process.env.AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER = '1'
   scheduler.setEvaluatorTargetResolverForTest({ resolve: (evaluatorKey) => ({ targetKey: 'test', baseUrl: 'http://evaluator.test', evaluatorKey }) })
@@ -61,7 +61,7 @@ test('concurrent dispatchers respect service capacity and per-user quota across 
       const run = await prisma.benchmarkCaseRun.create({ data: { id: `quota-run-${i}`, experimentId: experiment.id, experimentCaseId: experiment.cases[0].id, ordinal: 0, adapterKey: 'swe-bench', clientId: 'test-client', status: 'submitted' } })
       const id = `quota-evaluation-${i}`
       const request = JSON.stringify({ runId: id, requestDigest: `digest-${i}` })
-      await prisma.benchmarkEvaluation.create({ data: { id, caseRunId: run.id, adapterKey: 'swe-bench', evaluatorKey: 'swe-bench', requestJson: request, requestDigest: `digest-${i}`, callbackBaseUrl: 'http://platform.test', timeoutSeconds: 60,
+      await prisma.benchmarkEvaluation.create({ data: { id, caseRunId: run.id, attemptNo: i % 2 + 1, adapterKey: 'swe-bench', evaluatorKey: 'swe-bench', requestJson: request, requestDigest: `digest-${i}`, callbackBaseUrl: 'http://platform.test', timeoutSeconds: 60,
         dispatch: { create: { requestJson: request, requestDigest: `digest-${i}` } } } })
       ids.push(id)
     }

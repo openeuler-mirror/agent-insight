@@ -17,6 +17,7 @@ import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
 import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
+import { refreshBenchmarkImagePreparation } from './image-preparation'
 
 function parseJson<T>(value: string | null, code: string): T {
   if (!value) throw new BenchmarkProtocolError(code, '评测所需的冻结数据不存在', 409)
@@ -239,7 +240,6 @@ export async function prepareBenchmarkEvaluation(
   return { evaluationRunId, status: 'queued', created: true }
 }
 
-const BENCHMARK_REEVALUATION_MAX_CONCURRENCY = 1
 const REEVALUATION_LOCK = Symbol.for('agent-insight.benchmark.reevaluation-lock')
 
 function reevaluationLocks(): Set<string> {
@@ -254,9 +254,6 @@ export async function retryBenchmarkEvaluation(input: {
   user: string
 }): Promise<{ status: 'running'; evaluationRunId: string }> {
   const lock = reevaluationLocks()
-  if (lock.size >= BENCHMARK_REEVALUATION_MAX_CONCURRENCY) {
-    throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '已有 Benchmark 重评正在执行，请稍后再试', 409)
-  }
   const result = await prisma.experimentEvalResult.findFirst({
     where: {
       id: input.resultId,
@@ -269,49 +266,53 @@ export async function retryBenchmarkEvaluation(input: {
     throw new BenchmarkProtocolError('BENCHMARK_RESULT_NOT_FOUND', 'Benchmark 评测结果不存在', 404)
   }
 
-  const activeCount = await prisma.benchmarkEvaluation.count({
-    where: {
-      attemptNo: { gt: 1 },
-      status: { in: ['queued', 'dispatch_unknown', 'running_evaluator', 'normalizing'] },
-    },
-  })
-  if (activeCount >= BENCHMARK_REEVALUATION_MAX_CONCURRENCY) {
-    throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '已有 Benchmark 重评正在执行，请稍后再试', 409)
-  }
-  const run = await prisma.benchmarkCaseRun.findFirst({
-    where: { experimentId: input.experimentId, experimentCaseId: result.caseId },
-    orderBy: { createdAt: 'desc' },
-    include: {
-      evaluations: { orderBy: { attemptNo: 'desc' }, take: 1 },
-      artifacts: true,
-    },
-  })
-  const requiredNames = run
-    ? getBenchmarkAdapter(run.adapterKey).manifest.requiredArtifacts.map((artifact) => artifact.name)
-    : []
-  const submittedNames = new Set(run?.artifacts.map((artifact: { name: string }) => artifact.name) || [])
-  if (
-    !run
-    || requiredNames.some((name) => !submittedNames.has(name))
-    || !['evaluated', 'evaluation_failed'].includes(run.status)
-  ) {
-    throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_NOT_READY', '当前 Case 没有可复用的有效提交物', 409)
-  }
-  if (run.evaluations[0]?.continuationStatus !== 'completed') {
-    throw new BenchmarkProtocolError(
-      'BENCHMARK_REEVALUATION_BUSY',
-      '当前 Benchmark 结果仍在收敛，请稍后重评',
-      409,
-    )
-  }
-
-  await readValidatedSubmission(run)
-
   const lockKey = `${input.experimentId}:${result.caseId}`
+  if (lock.has(lockKey)) {
+    throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '当前 Case 已有 Benchmark 重评正在执行', 409)
+  }
   lock.add(lockKey)
   try {
-    await prisma.$transaction([
-      prisma.experimentEvalResult.update({
+    const run = await prisma.benchmarkCaseRun.findFirst({
+      where: { experimentId: input.experimentId, experimentCaseId: result.caseId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        evaluations: { orderBy: { attemptNo: 'desc' }, take: 1 },
+        artifacts: true,
+      },
+    })
+    if (run && (run.status === 'submitted' || ['queued', 'dispatch_unknown', 'running_evaluator', 'normalizing'].includes(run.evaluations[0]?.status))) {
+      throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '当前 Case 正在执行或评测，请稍后重评', 409)
+    }
+    const requiredNames = run
+      ? getBenchmarkAdapter(run.adapterKey).manifest.requiredArtifacts.map((artifact) => artifact.name)
+      : []
+    const submittedNames = new Set(run?.artifacts.map((artifact: { name: string }) => artifact.name) || [])
+    if (
+      !run
+      || requiredNames.some((name) => !submittedNames.has(name))
+      || !['evaluated', 'evaluation_failed'].includes(run.status)
+    ) {
+      throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_NOT_READY', '当前 Case 没有可复用的有效提交物', 409)
+    }
+    if (run.evaluations[0]?.continuationStatus !== 'completed') {
+      throw new BenchmarkProtocolError(
+        'BENCHMARK_REEVALUATION_BUSY',
+        '当前 Benchmark 结果仍在收敛，请稍后重评',
+        409,
+      )
+    }
+
+    await readValidatedSubmission(run)
+
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const claimed = await tx.benchmarkCaseRun.updateMany({
+        where: { id: run.id, status: run.status, updatedAt: run.updatedAt },
+        data: { status: 'submitted', failureCode: null, failureMessage: null },
+      })
+      if (claimed.count !== 1) {
+        throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '当前 Case 已有 Benchmark 重评正在执行', 409)
+      }
+      await tx.experimentEvalResult.update({
         where: { id: input.resultId },
         data: {
           status: 'pending',
@@ -327,27 +328,26 @@ export async function retryBenchmarkEvaluation(input: {
           humanBy: null,
           humanAt: null,
         },
-      }),
-      prisma.benchmarkCaseRun.update({
-        where: { id: run.id },
-        data: { status: 'submitted', failureCode: null, failureMessage: null },
-      }),
-      prisma.experiment.update({
+      })
+      await tx.experiment.update({
         where: { id: input.experimentId },
         data: { status: 'running' },
-      }),
-      prisma.benchmarkExperimentBinding.update({
+      })
+      await tx.benchmarkExperimentBinding.update({
         where: { experimentId: input.experimentId },
         data: { schedulerStatus: 'running' },
-      }),
-    ])
+      })
+    })
     const prepared = await prepareBenchmarkEvaluation(run.id, {
       forceNewAttempt: true,
       retryOfEvaluationId: run.evaluations[0]?.id,
     })
-    void dispatchBenchmarkEvaluation(prepared.evaluationRunId).catch((error) => {
-      console.error('[benchmark/reevaluation] dispatch failed', error)
-    })
+    void refreshBenchmarkImagePreparation()
+      .catch((error) => console.warn('[benchmark/image-pool]', error))
+      .then(() => dispatchBenchmarkEvaluation(prepared.evaluationRunId))
+      .catch((error) => {
+        console.error('[benchmark/reevaluation] dispatch failed', error)
+      })
     return { status: 'running', evaluationRunId: prepared.evaluationRunId }
   } finally {
     lock.delete(lockKey)

@@ -557,7 +557,9 @@ entrypoint/
 
 准备消息复用 `POST /api/v1/evaluations`：`operation=prepare-images` 可下发 `revision + windows[]` 全服务窗口快照，兼容原有单实验窗口消息；总 Case 数不超过服务评测并发加 1。摘要覆盖完整消息，请求携带 `x-agent-insight-request-digest`，不再配置专用准备令牌。Controller 校验摘要与递增窗口版本，旧消息不能恢复旧窗口；空数组撤销准备。Evaluator 端口仅向平台开放，不增加用户配额或多平台协调。
 
-后台准备不占评测执行槽，发送失败降级到按需准备；无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。
+后台准备不占评测执行槽。重评创建新 Evaluation 后先尝试刷新窗口再下发评测；收到 `IMAGE_POOL_PREPARING` 时也刷新窗口，避免只重试评测而未触发准备。准备请求失败保留评测队列，后续重试及评测 watchdog 定期补偿。执行 watchdog 在启动恢复前注册，历史实验恢复逐条隔离异常，避免单条已取消任务阻断后续恢复或后台调度。无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。
+
+首次评测与重评共用 `evaluation-scheduler` 的服务容量与单用户配额；重评不设全平台单独并发上限。服务容量读取 `/health.maxConcurrency`，单用户配额可通过 `AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER` 限制。相同 Case 的重评使用进程内锁及数据库 Run 状态、`updatedAt` 条件更新认领，防止并发请求重复创建 attempt；不同 Case 可独立入队。
 
 ## 10. Presentation
 

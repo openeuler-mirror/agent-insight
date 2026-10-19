@@ -123,6 +123,8 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 | 已有 Patch，评测阶段失败 | 点击 **Benchmark 重评**，使用已有提交物重新评测 |
 | 需要中止执行 | 使用平台停止入口；中断时尚未生成 Patch 的 Case 可能没有提交物 |
 
+不同 Case 可以同时提交 **Benchmark 重评**，复用已有提交物，不重新执行 MCTS。首次评测和重评共用评测服务的并发容量；例如服务配置 `EVALUATOR_MAX_CONCURRENCY=4` 时，合计最多同时执行 4 个评测，其余自动排队。若管理员配置了单用户并发配额，还需遵守该配额。同一 Case 在重评完成前不能重复提交。重评会自动触发镜像准备，镜像尚未就绪时显示等待并自动重试。
+
 **Trace 耗时与执行上限的计时范围不同。** Trace 可能未包含首次 xGovernor 请求前的准备时间；Case 总耗时还包含工作区准备和中断清理。判断是否超时，以 Case 的错误说明和配置上限为准。
 
 ## ZSoft 实验

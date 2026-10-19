@@ -232,6 +232,7 @@ export function startBenchmarkEvaluationWatchdog(
     if (evaluationWatchdogSweep) return
     evaluationWatchdogSweep = reapStaleBenchmarkEvaluations()
       .then(async (count) => {
+        await refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool]', error))
         await resumeBenchmarkEvaluationContinuations()
         await resumeBenchmarkEvaluationDispatchesAtStartup()
         if (count > 0) console.warn(`[benchmark/evaluation-watchdog] 回收超时评测任务: ${count} 条`)
@@ -715,6 +716,9 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
         message: remoteMessage || `评测服务暂未接受任务（HTTP ${response.status}）`,
         delayMs: 1_000,
       })
+      if (remoteCode === 'IMAGE_POOL_PREPARING') {
+        await refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool]', error))
+      }
       return
     }
     const code = response.status === 409 && remoteCode === 'RUN_ID_CONFLICT'
