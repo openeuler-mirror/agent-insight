@@ -141,7 +141,7 @@ export async function POST(
     if (row.experiment.scope === 'benchmark') {
       const previous = row.benchmarkRuns[0];
       if (previous?.submissionSource === 'imported') {
-        return NextResponse.json({ error: '导入 PoC 请使用评测结果重评，或重新导入提交' }, { status: 409 });
+        return NextResponse.json({ error: '历史导入提交不支持重新执行' }, { status: 409 });
       }
       if (!previous || ![
         'evaluated', 'evaluation_failed', 'submission_invalid', 'execution_failed', 'dispatch_failed', 'blocked',

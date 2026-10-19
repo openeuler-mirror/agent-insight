@@ -212,9 +212,6 @@ export default function ExperimentsPage() {
         title="实验"
         actions={
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => router.push('/experiments/import-poc')}>
-              导入 PoC
-            </Button>
             <Button size="sm" onClick={() => router.push('/experiments/new')}>
               <Plus className="size-3.5" />
               新建实验
@@ -304,11 +301,6 @@ export default function ExperimentsPage() {
                     </td>
                     <td style={{ ...TD, whiteSpace: 'nowrap' }} onClick={(event) => event.stopPropagation()}>
                       <span style={{ display: 'inline-flex', gap: 8 }}>
-                        {r.submissionSource === 'imported' ? <button
-                          type="button"
-                          onClick={() => router.push('/experiments/import-poc')}
-                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: 'pointer' }}
-                        >重新导入 PoC</button> : <>
                         <button
                           type="button"
                           disabled={Boolean(actionId)}
@@ -323,7 +315,6 @@ export default function ExperimentsPage() {
                           onClick={() => router.push(`/experiments/new?reuseFrom=${encodeURIComponent(r.id)}`)}
                           style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
                         >复用评测配置</button>
-                        </>}
                         {user && <DeleteExperimentButton user={user} experimentId={r.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(r.status)} onDeleted={() => load(true)} />}
                       </span>
                     </td>

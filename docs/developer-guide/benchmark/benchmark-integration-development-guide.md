@@ -758,7 +758,7 @@ P1 通过要求 reference 为 `completed/success=true`、negative 为 `completed
 
 ### ZSoft 自动生成 PoC 的执行契约
 
-`zsoft-l1` 从官方目录导入 userspace 与 kernel Case，私有身份字段为 `sourceTaskDigest` 和可选 revision。旧 P2 JSON/JSONL 不再接受，也不需要 `agentBundle.digest`。实验向导选择数据集和客户端后设置原生任务目录；现有 `/api/benchmark/v1/execution-targets` 的 GET 返回客户端 `benchmarkConfig`，PUT 接收 `datasetId`、`clientId`、`tasksDir` 保存配置，支持公开目录数据集 ID 和内部 Benchmark 数据集 ID。配置复用 `ReliabilityClientConfig` 的 `benchmark:zsoft-l1` 命名空间，按用户和客户端隔离，不属于 Agent 平台配置。实验创建冻结目录到 `runConfigJson`，缺目录或非法任务契约在数据库写入前拒绝；内核题映射为 C 提交，与 userspace 互斥标记轨道。客户端通过 `zsoft-tasks-workspace/v2` 从 `<tasksDir>/<taskId>` 准备独立公开工作区，复制 `public/` 和裁剪元数据；缺题返回 `ZSOFT_TASK_MISSING`，公开元数据不一致返回 `ZSOFT_TASK_MISMATCH`。ZSoft 只接受原生任务目录工作区，不再回退历史公开包。
+`zsoft-l1` 从官方目录导入 userspace 与 kernel Case，私有身份字段为 `sourceTaskDigest` 和可选 revision。旧 P2 JSON/JSONL 不再接受，也不需要 `agentBundle.digest`。实验向导只选择数据集和执行目标；平台不持久化任务目录，也不扩展 `/api/benchmark/v1/execution-targets` 配置接口。平台按所选 Case 将 `taskId` 放进 `zsoft-tasks` workspace 契约。执行客户端从其 MCTS 仓库 `testcases_union/config.env` 读取 `ZSOFT_TASKS_DIR`，并通过 `zsoft-tasks-workspace/v3` 从 `<ZSOFT_TASKS_DIR>/<taskId>` 准备独立公开工作区，复制 `public/` 和裁剪元数据；随后 MCTS 在隔离工作区使用其中的 `tasks/`。缺少或非法目录配置返回 `ZSOFT_TASKS_DIR_INVALID`；缺题返回 `ZSOFT_TASK_MISSING`；公开元数据不一致返回 `ZSOFT_TASK_MISMATCH`。内核题映射为 C 提交，与 userspace 互斥标记轨道。ZSoft 只接受原生任务目录工作区，不再回退历史公开包。
 
 普通 Agent 使用 `single-file/v1` 收集固定的 `submission/poc`。MCTS 使用平台 Shell/Python 桥接，传入 `--mode zsoft`、`--runtime`、`--task-id` 与独立输出目录；ZSoft 插件不接受 SWE 专用的 `--testbench`、`--instance-id`、`--split`，平台不会传入这些参数。桥接替换最终官方判题回调，仅导出所选 PoC 原始字节，并阻止本地/远端正式 judge 入口。Python、C、binary 分别使用插件内部文件名 `poc.py`、`poc.c`、`poc`，平台产物统一为 `poc`。
 

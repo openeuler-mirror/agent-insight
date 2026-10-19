@@ -38,7 +38,6 @@ export class ZsoftL1Adapter extends AbstractBenchmarkAdapter<ZsoftCase, ZsoftPub
 
   protected createAgentTask(input: BuildAgentTaskInput<ZsoftPublicCase>): AgentTaskEnvelope {
     const payload = input.publicPayload
-    if (!input.runConfig.tasksDir) throw new BenchmarkProtocolError('ZSOFT_TASKS_DIR_REQUIRED', '请先为执行客户端配置 ZSoft 任务目录', 409)
     const kernel = payload.tags.includes('kernel')
     if (kernel === payload.tags.includes('userspace') || (kernel && payload.submissionKind !== 'c')) throw new BenchmarkProtocolError('ZSOFT_TASK_TRACK_INVALID', 'ZSoft 题目轨道或提交类型不一致，内核题需提交 C 源码', 409)
     return {
@@ -47,7 +46,7 @@ export class ZsoftL1Adapter extends AbstractBenchmarkAdapter<ZsoftCase, ZsoftPub
         instruction: `${payload.title}\n\n${payload.description}\n\n公开任务资料：tasks/${payload.taskId}/public/README.md 及同目录文件。\n生成独立的单文件 ${payload.submissionKind} PoC，将最终文件写入 submission/poc（不要提交目录、Patch 或 verify.py）。\n提交大小上限 ${payload.maxBytes} 字节。遵守公开 README 中的运行路径、依赖和退出码契约。只有 submission/poc 会送至平台评测；本地执行反馈不代表正式评测结果。`,
         benchmarkPayload: payload,
       },
-      workspace: { provider: 'zsoft-tasks', taskId: payload.taskId, tasksDir: input.runConfig.tasksDir },
+      workspace: { provider: 'zsoft-tasks', taskId: payload.taskId },
       policy: { workspaceWrite: 'allow', hiddenDataAccess: 'deny', network: 'client-default' },
       submission: { requiredArtifacts: this.manifest.requiredArtifacts.map(item => ({ ...item })) },
       agentConfig: input.runConfig,

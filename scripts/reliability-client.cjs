@@ -884,8 +884,7 @@ function buildCapabilities(cfg, opts) {
     'concurrent-execution/v1': { ready: true },
     'git-patch/v1': { ready: true },
     'public-bundle-workspace/v1': { ready: true },
-    'zsoft-tasks-workspace/v1': { ready: true },
-    'zsoft-tasks-workspace/v2': { ready: true },
+    'zsoft-tasks-workspace/v3': { ready: true },
     'single-file/v1': { ready: true },
   }
   for (const platform of platforms) {
@@ -2403,6 +2402,7 @@ async function main() {
     insightBaseUrl: cfg.insightBaseUrl,
     baseDir: CLIENT_HOME,
     agentInsightHome: getAgentInsightHome(),
+    mctsConfig: { mctsRepoDir: cfg.mctsRepoDir },
     publicBundleDir: cfg.publicBundleDir,
     log: (...args) => log(...args),
     tryAcquireSlot: tryAcquireExecutionSlot,

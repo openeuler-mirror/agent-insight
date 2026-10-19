@@ -133,20 +133,18 @@ test('Controller cleanup removes only containers and task networks labelled for 
   assert.equal(failed.status, 'failed')
 })
 
-test('ZSoft agent tasks use native tasks-dir without bundles and keep judge identities hidden', () => {
+test('ZSoft agent tasks use the executor-configured native tasks-dir and keep judge identities hidden', () => {
   const input = { publicPayload: raw.public, context: { runId: 'run-one', experimentId: 'experiment-one', caseId: 'case-one' }, runConfig: { platform: 'pi-mcts', agent: 'pi-mcts', timeoutSeconds: 900 } }
-  assert.throws(() => zsoftL1Adapter.buildAgentTask(input), /任务目录/)
-  const nativeTask = zsoftL1Adapter.buildAgentTask({ ...input, runConfig: { ...input.runConfig, tasksDir: '/srv/zsoft/tasks' } })
-  assert.deepEqual(nativeTask.workspace, { provider: 'zsoft-tasks', taskId: raw.public.taskId, tasksDir: '/srv/zsoft/tasks' })
+  const nativeTask = zsoftL1Adapter.buildAgentTask(input)
+  assert.deepEqual(nativeTask.workspace, { provider: 'zsoft-tasks', taskId: raw.public.taskId })
   assert.equal(JSON.stringify(nativeTask).includes('agentBundle'), false)
   const publicPayload = { ...raw.public, agentBundle: { digest: `sha256:${'d'.repeat(64)}` } }
-  assert.throws(() => zsoftL1Adapter.buildAgentTask({ ...input, publicPayload }), /任务目录/)
   assert.ok(nativeTask.task.instruction.includes('submission/poc'))
   assert.equal(JSON.stringify(nativeTask).includes(raw.private.sourceTaskDigest), false)
-  const kernel = zsoftL1Adapter.buildAgentTask({ ...input, runConfig: { ...input.runConfig, tasksDir: '/srv/zsoft/tasks' }, publicPayload: { ...raw.public, tags: ['kernel'], submissionKind: 'c' } })
+  const kernel = zsoftL1Adapter.buildAgentTask({ ...input, publicPayload: { ...raw.public, tags: ['kernel'], submissionKind: 'c' } })
   assert.match(kernel.task.instruction, /单文件 c/)
   assert.deepEqual(kernel.workspace, nativeTask.workspace)
-  assert.throws(() => zsoftL1Adapter.buildAgentTask({ ...input, runConfig: { ...input.runConfig, tasksDir: '/srv/zsoft/tasks' }, publicPayload: { ...raw.public, tags: ['kernel'] } }), /内核题需提交 C/)
+  assert.throws(() => zsoftL1Adapter.buildAgentTask({ ...input, publicPayload: { ...raw.public, tags: ['kernel'] } }), /内核题需提交 C/)
   const oldCase = { public: raw.public, private: { revision: raw.private.revision, bundleDigest: `sha256:${'b'.repeat(64)}`, taskDigest: `sha256:${'c'.repeat(64)}` } }
   assert.throws(() => zsoftL1Adapter.validateAndSplitCase(oldCase as unknown as ZsoftCase), /Schema/)
 })
@@ -154,7 +152,7 @@ test('ZSoft agent tasks use native tasks-dir without bundles and keep judge iden
 function executionClient(zsoftReady = true) {
   return { clientId: 'synthetic-client', name: 'synthetic', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), unboundAt: null,
     capabilitiesJson: JSON.stringify({ actions: ['RUN_BENCHMARK_CASE'], platforms: [{ id: 'pi-mcts', agents: ['pi-mcts'], runBenchmarkCase: { returnsTraceId: true } }],
-      components: { 'agent-runtime/pi-mcts/v1': { ready: true }, 'zsoft-tasks-workspace/v2': { ready: true }, 'single-file/v1': { ready: true }, 'mcts-zsoft-export/v1': { ready: zsoftReady } } }) }
+      components: { 'agent-runtime/pi-mcts/v1': { ready: true }, 'zsoft-tasks-workspace/v3': { ready: true }, 'single-file/v1': { ready: true }, 'mcts-zsoft-export/v1': { ready: zsoftReady } } }) }
 }
 
 test('ZSoft filters MCTS targets by benchmark-specific export readiness', () => {
@@ -163,32 +161,33 @@ test('ZSoft filters MCTS targets by benchmark-specific export readiness', () => 
   assert.deepEqual(unavailable[0].missingCapabilities, ['mcts-zsoft-export/v1'])
   assert.equal(inspectBenchmarkExecutionTargets(executionClient() as never, zsoftL1Adapter.manifest)[0].ready, true)
   const oldClient = executionClient()
-  oldClient.capabilitiesJson = oldClient.capabilitiesJson.replace('zsoft-tasks-workspace/v2', 'zsoft-tasks-workspace/v1')
-  assert.deepEqual(inspectBenchmarkExecutionTargets(oldClient as never, zsoftL1Adapter.manifest)[0].missingCapabilities, ['zsoft-tasks-workspace/v2'])
+  oldClient.capabilitiesJson = oldClient.capabilitiesJson.replace('zsoft-tasks-workspace/v3', 'zsoft-tasks-workspace/v2')
+  assert.deepEqual(inspectBenchmarkExecutionTargets(oldClient as never, zsoftL1Adapter.manifest)[0].missingCapabilities, ['zsoft-tasks-workspace/v3'])
 })
 
-test('experiment preflight rejects missing tasks-dir and inconsistent kernel submission kinds before writing an experiment', async (t) => {
+test('experiment preflight does not require a frontend tasks-dir and still rejects inconsistent kernel submissions', async (t) => {
   const datasetDelegate = prisma.benchmarkDataset
   const clientDelegate = prisma.reliabilityClient
   const originalDatasetLookup = datasetDelegate.findFirst
   const originalClientLookup = clientDelegate.findFirst
   const originalTransaction = prisma.$transaction
-  const originalConfigLookup = prisma.reliabilityClientConfig.findFirst
   for (const payload of [raw.public, { ...raw.public, tags: ['kernel'] }]) {
     datasetDelegate.findFirst = t.mock.fn(async () => ({ id: 'synthetic-dataset', status: 'ready', adapterKey: 'zsoft-l1', contentHash: 'synthetic-hash', agentEvalDataset: { casesJson: '[]' }, cases: [{ id: 'synthetic-case', publicPayloadJson: JSON.stringify(payload) }] })) as unknown as typeof originalDatasetLookup
     clientDelegate.findFirst = t.mock.fn(async () => executionClient()) as unknown as typeof originalClientLookup
-    prisma.reliabilityClientConfig.findFirst = t.mock.fn(async () => payload.tags.includes('kernel')
-      ? { overrideJson: JSON.stringify({ tasksDir: '/srv/zsoft/tasks' }) } : null) as unknown as typeof originalConfigLookup
     const transactionMock = t.mock.fn(async () => { throw new Error('unexpected database write') })
     prisma.$transaction = transactionMock as unknown as typeof originalTransaction
     try {
-      await assert.rejects(createBenchmarkExperiment({ user: 'synthetic', name: 'synthetic', datasetId: 'synthetic-dataset', clientId: 'synthetic-client', caseSelection: { mode: 'all' }, runConfig: { platform: 'pi-mcts', agent: 'pi-mcts' } }), /任务目录|内核题需提交 C/)
-      assert.equal(transactionMock.mock.callCount(), 0)
+      if (payload.tags.includes('kernel')) {
+        await assert.rejects(createBenchmarkExperiment({ user: 'synthetic', name: 'synthetic', datasetId: 'synthetic-dataset', clientId: 'synthetic-client', caseSelection: { mode: 'all' }, runConfig: { platform: 'pi-mcts', agent: 'pi-mcts' } }), /内核题需提交 C/)
+        assert.equal(transactionMock.mock.callCount(), 0)
+      } else {
+        await assert.rejects(createBenchmarkExperiment({ user: 'synthetic', name: 'synthetic', datasetId: 'synthetic-dataset', clientId: 'synthetic-client', caseSelection: { mode: 'all' }, runConfig: { platform: 'pi-mcts', agent: 'pi-mcts' } }), /unexpected database write/)
+        assert.equal(transactionMock.mock.callCount(), 1)
+      }
     } finally {
       datasetDelegate.findFirst = originalDatasetLookup
       clientDelegate.findFirst = originalClientLookup
       prisma.$transaction = originalTransaction
-      prisma.reliabilityClientConfig.findFirst = originalConfigLookup
     }
   }
 })

@@ -11,7 +11,6 @@ import { prisma } from '@/lib/storage/prisma'
 import { benchmarkEvaluatorId, getBenchmarkAdapter } from './adapter-registry'
 import { benchmarkDatasetOwners } from './dataset-ownership'
 import { assertBenchmarkExecutionTarget } from './execution-targets'
-import { getBenchmarkExecutorConfig } from './executor-config'
 
 type BenchmarkCaseSelection =
   | { mode: 'all' }
@@ -115,7 +114,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   }
   const adapter = getBenchmarkAdapter(dataset.adapterKey)
   if (adapter.manifest.supportsAgentExecution === false) {
-    throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_ONLY', '该 Benchmark 当前请通过导入 PoC 创建实验', 409)
+    throw new BenchmarkProtocolError('BENCHMARK_AGENT_EXECUTION_UNSUPPORTED', '该 Benchmark 不支持 Agent 执行', 409)
   }
   const catalogInputs = new Map<string, string>()
   try {
@@ -150,11 +149,6 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '执行并发大于 1 需要升级客户端', 400)
   }
 
-  const benchmarkConfig = dataset.adapterKey === 'zsoft-l1'
-    ? await getBenchmarkExecutorConfig(user, clientId, dataset.adapterKey) : null
-  if (dataset.adapterKey === 'zsoft-l1' && !benchmarkConfig) {
-    throw new BenchmarkProtocolError('ZSOFT_TASKS_DIR_REQUIRED', '请先为执行客户端配置 ZSoft 任务目录', 409)
-  }
   const runConfig = {
     platform,
     agent,
@@ -162,7 +156,6 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     ...(input.runConfig.model?.trim() ? { model: input.runConfig.model.trim() } : {}),
     timeoutSeconds,
     executionConcurrency,
-    ...(benchmarkConfig ? { tasksDir: benchmarkConfig.tasksDir } : {}),
   }
   const evaluatorIds = Array.from(new Set([
     benchmarkEvaluatorId(dataset.adapterKey),

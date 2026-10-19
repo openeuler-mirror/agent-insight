@@ -76,7 +76,7 @@ npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
 
 显式更新来源时加 `--refresh`；已被实验引用的数据集不能覆盖，可同时加 `--name "ZSoft L1 新版本"` 导入独立数据集。旧 P2 JSON/JSONL 不再接受，需要从官方目录重新导入；历史实验记录不会自动迁移。此前已安装的 24 题数据集不会自动扩展为 30 题，需要用 `--refresh --name "ZSoft L1 全量"` 显式安装新数据集。
 
-平台、执行客户端和评测服务可以在不同机器。创建自动生成实验时，选择执行客户端并保存该机器上的 **ZSoft 任务目录**；无需额外导入公开资料包。正式评测资产及镜像另行部署在评测机，评测服务不访问平台数据库。ZSoft 属于 Benchmark，执行器可以选择 MCTS。具体准备见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md)。
+平台、执行客户端和评测服务可以在不同机器。自动生成实验时选择执行客户端即可；该机器的 ZSoft 任务目录配置在 MCTS 仓库 `testcases_union/config.env` 的 `ZSOFT_TASKS_DIR` 中，平台按 Case 自动下发题目 ID，无需在前端填写目录或额外导入公开资料包。正式评测资产及镜像另行部署在评测机，评测服务不访问平台数据库。ZSoft 属于 Benchmark，执行器可以选择 MCTS。具体准备见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md)。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 

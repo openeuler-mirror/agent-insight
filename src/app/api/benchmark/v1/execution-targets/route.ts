@@ -5,7 +5,6 @@ import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry'
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error'
 import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership'
 import { listBenchmarkExecutionTargets } from '@/lib/benchmark/execution-targets'
-import { getBenchmarkExecutorConfig, saveBenchmarkExecutorConfig } from '@/lib/benchmark/executor-config'
 import { BenchmarkProtocolError } from '../../../../../../packages/benchmark-protocol/src/errors'
 import { prisma } from '@/lib/storage/prisma'
 
@@ -37,28 +36,9 @@ export async function GET(req: Request) {
   try {
     const datasetId = String(url.searchParams.get('datasetId') || '').trim()
     const dataset = await findDataset(username, datasetId)
-
     const manifest = getBenchmarkAdapter(dataset.adapterKey).manifest
     const items = await listBenchmarkExecutionTargets(username, manifest)
-    const configuredItems = await Promise.all(items.map(async item => ({
-      ...item,
-      benchmarkConfig: dataset.adapterKey === 'zsoft-l1'
-        ? await getBenchmarkExecutorConfig(username, item.clientId, dataset.adapterKey) : null,
-    })))
-    return NextResponse.json({ benchmarkKey: dataset.adapterKey, items: configuredItems })
-  } catch (error) {
-    return benchmarkErrorResponse(error, 'benchmark/execution-targets')
-  }
-}
-
-export async function PUT(req: Request) {
-  try {
-    const body = await req.json()
-    const { username } = await resolveUser(req, body.user)
-    if (!username) return NextResponse.json({ error: { code: 'USER_REQUIRED', message: '缺少用户身份' } }, { status: 401 })
-    const dataset = await findDataset(username, String(body.datasetId || '').trim())
-    const config = await saveBenchmarkExecutorConfig(username, String(body.clientId || '').trim(), dataset.adapterKey, body.tasksDir)
-    return NextResponse.json({ benchmarkKey: dataset.adapterKey, benchmarkConfig: config })
+    return NextResponse.json({ benchmarkKey: dataset.adapterKey, items })
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/execution-targets')
   }

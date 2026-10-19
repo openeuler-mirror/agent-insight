@@ -95,6 +95,20 @@ function mctsUpstream(paths, env = process.env) {
   return url.toString().replace(/\/+$/, '')
 }
 
+function mctsZsoftTasksDir(config, env = process.env) {
+  const paths = mctsPaths(config)
+  const result = spawnSync('bash', ['-c', 'set -e; source "$1" >/dev/null 2>&1; printf "%s" "${ZSOFT_TASKS_DIR:-}" >&3', 'mcts-zsoft-config', paths.configEnv], {
+    cwd: paths.repoDir, env, stdio: ['ignore', 'ignore', 'ignore', 'pipe'], encoding: 'utf8', timeout: 5_000,
+  })
+  if (result.error?.code === 'ETIMEDOUT') throw new Error('MCTS ZSoft 任务目录配置读取超过 5 秒')
+  if (result.error || result.status !== 0) throw new Error('MCTS config.env 加载失败，请检查 ZSoft 任务目录配置')
+  const tasksDir = String(result.output[3] || '').trim()
+  if (!path.isAbsolute(tasksDir) || tasksDir.length > 4096 || /[\0\r\n]/.test(tasksDir)) {
+    throw new Error('请在 MCTS testcases_union/config.env 中将 ZSOFT_TASKS_DIR 配置为绝对路径')
+  }
+  return tasksDir
+}
+
 function saveMctsRepoDir(home, repoDir, python) {
   const target = path.join(home, '.env')
   let content = ''
@@ -121,4 +135,4 @@ function proxyPythonScript(python) {
   return `#!/bin/sh\nif [ -n "\${AGENT_INSIGHT_MCTS_PROXY_URL:-}" ]; then\n  export XGOVERNOR_BASE_URL="$AGENT_INSIGHT_MCTS_PROXY_URL"\nfi\nexec ${quotedPython} "$@"\n`
 }
 
-module.exports = { readMctsEnvFile, installationMctsConfig, mctsPaths, checkMctsPython, checkMctsRepository, mctsUpstream, saveMctsRepoDir, shellQuote, proxyPythonScript }
+module.exports = { readMctsEnvFile, installationMctsConfig, mctsPaths, checkMctsPython, checkMctsRepository, mctsUpstream, mctsZsoftTasksDir, saveMctsRepoDir, shellQuote, proxyPythonScript }

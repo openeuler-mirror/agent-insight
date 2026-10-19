@@ -25,11 +25,10 @@
           }, "additionalProperties": false
         },
         {
-          "type": "object", "required": ["provider", "taskId", "tasksDir"],
+          "type": "object", "required": ["provider", "taskId"],
           "properties": {
             "provider": { "const": "zsoft-tasks" },
-            "taskId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
-            "tasksDir": { "type": "string", "maxLength": 4096, "pattern": "^/[^\\u0000\\r\\n]*$" }
+            "taskId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
           }, "additionalProperties": false
         }
       ]
@@ -66,7 +65,6 @@
         "model": { "type": "string", "minLength": 1 },
         "timeoutSeconds": { "type": "integer", "minimum": 1 },
         "executionConcurrency": { "type": "integer", "minimum": 1 },
-        "tasksDir": { "type": "string", "maxLength": 4096, "pattern": "^/[^\\u0000\\r\\n]*$" },
         "agentOptions": { "type": "object" }
       },
       "additionalProperties": false

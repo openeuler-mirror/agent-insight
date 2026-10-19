@@ -324,7 +324,7 @@ export const generatedBenchmarkManifests = {
       "evaluation": "benchmark-evaluation/v1"
     },
     "requiredCapabilities": [
-      "zsoft-tasks-workspace/v2",
+      "zsoft-tasks-workspace/v3",
       "single-file/v1"
     ],
     "defaultTimeoutSeconds": 900,
@@ -510,6 +510,9 @@ export const generatedBenchmarkManifests = {
             "type": "text"
           }
         ]
+      },
+      "execution": {
+        "notice": "执行客户端从 MCTS 的 testcases_union/config.env 读取 ZSOFT_TASKS_DIR；题目 ID 由平台自动下发。"
       },
       "evaluator": {
         "displayName": "ZSoft L1 Official Judge",

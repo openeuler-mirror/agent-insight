@@ -3,29 +3,31 @@
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { readBoundedFile, validatePublicPath, canonical } = require('./public-bundle.cjs')
+const { mctsZsoftTasksDir } = require('./mcts-config.cjs')
 
 function fail(code, message) { throw Object.assign(new Error(message), { code }) }
 
 function validateZsoftTasksSpec(spec) {
   if (spec?.provider !== 'zsoft-tasks' || typeof spec.taskId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(spec.taskId)
-    || typeof spec.tasksDir !== 'string' || !path.isAbsolute(spec.tasksDir)
-    || spec.tasksDir.length > 4096 || /[\0\r\n]/.test(spec.tasksDir)
-    || Object.keys(spec).some(key => !['provider', 'taskId', 'tasksDir'].includes(key))) {
-    fail('ZSOFT_TASKS_DIR_INVALID', '请配置执行机上 ZSoft 任务目录的绝对路径')
+    || Object.keys(spec).some(key => !['provider', 'taskId'].includes(key))) {
+    fail('ZSOFT_TASKS_DIR_INVALID', 'ZSoft 工作区任务配置不合法')
   }
 }
 
 class ZsoftTasksWorkspaceProvider {
-  constructor(rootDir) { this.rootDir = rootDir }
+  constructor(rootDir, mctsConfig = {}) { this.rootDir = rootDir; this.mctsConfig = mctsConfig }
 
   async prepare(spec, context) {
     validateZsoftTasksSpec(spec)
     if (!/^erun_[0-9a-f]{32}$/.test(context.runId) || context.benchmarkKey !== 'zsoft-l1') {
       fail('TASK_CONTEXT_MISMATCH', 'ZSoft 任务上下文不一致')
     }
-    const taskRoot = path.join(spec.tasksDir, spec.taskId)
+    let tasksDir
+    try { tasksDir = mctsZsoftTasksDir(this.mctsConfig) }
+    catch (error) { fail('ZSOFT_TASKS_DIR_INVALID', error.message) }
+    const taskRoot = path.join(tasksDir, spec.taskId)
     let manifest
-    try { manifest = JSON.parse((await readBoundedFile(spec.tasksDir, `${spec.taskId}/task.json`, 65536)).toString('utf8')) }
+    try { manifest = JSON.parse((await readBoundedFile(tasksDir, `${spec.taskId}/task.json`, 65536)).toString('utf8')) }
     catch (error) {
       if (error.code === 'ENOENT') fail('ZSOFT_TASK_MISSING', '执行机的 ZSoft 任务目录中缺少指定题目，请检查目录配置')
       throw error

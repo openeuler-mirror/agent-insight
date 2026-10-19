@@ -127,11 +127,11 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 
 ## ZSoft 实验
 
-ZSoft 数据集可以导入已有 PoC，也可以使用普通 Agent 或兼容 ZSoft 的 `pi-mcts` 自动生成 PoC。自动生成使用执行机上已有的原生 ZSoft 任务目录，无需额外导出或导入公开资料包；尚未配置任务目录时，实验创建会报错；内核题与 userspace 使用同一个目录配置，内核题提交 C 源码。准备步骤见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md#zsoft-任务目录与执行器)。
+ZSoft 数据集使用普通 Agent 或兼容 ZSoft 的 `pi-mcts` 自动生成 PoC。自动生成使用执行机上已有的原生 ZSoft 任务目录，无需额外导出或导入公开资料包；内核题与 userspace 共用该目录，内核题提交 C 源码。准备步骤见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md#zsoft-任务目录与执行器)。
 
-选择 ZSoft 数据集、生成 Trace 和就绪的执行目标后，填写并保存 **ZSoft 任务目录**（执行机上的绝对路径）。目录内应有 `<task-id>/task.json` 和 `public/`；任务 ID 由平台下发。该配置属于 Benchmark，按客户端保存并自动复用，可修改；切换客户端会加载各自的目录，切换到 SWE-bench 时隐藏。保存仅检查路径格式，目录缺题或版本不一致会在执行准备阶段报告。MCTS 模型仍选择平台默认；执行客户端需升级并上报 `zsoft-tasks-workspace/v2`，MCTS 还需 `mcts-zsoft-export/v1`，缺失时该目标不可用。普通 Agent 按任务说明将 Python、C 或 binary 单文件写入 `submission/poc`；MCTS 会自动导出所选 PoC 并交给客户端上传。
+执行客户端管理员在该机器的 MCTS 仓库 `testcases_union/config.env` 配置 `ZSOFT_TASKS_DIR` 绝对路径，目录内应有 `<task-id>/task.json` 和 `public/`。平台按所选 Case 自动下发 `task-id`，实验向导不再配置任务目录；每台执行客户端使用自己的 MCTS 配置。普通 Agent 按任务说明将 Python、C 或 binary 单文件写入 `submission/poc`；MCTS 会自动导出所选 PoC 并交给客户端上传。执行客户端需上报 `zsoft-tasks-workspace/v3`，MCTS 还需 `mcts-zsoft-export/v1`，缺失时该目标不可用。
 
-正式成绩由平台的 ZSoft L1 Official Judge 给出，MCTS 搜索反馈和有 Trace 均不代表正式通过。在 Case 详情查看 `poc` 和评测报告；提交物上传成功后可独立重评。数据集从官方目录自动导入，旧 P2 JSON/JSONL 不再支持，需重新导入官方数据。导入 PoC 无需执行目录，自动生成需配置执行客户端的原生任务目录。
+正式成绩由平台的 ZSoft L1 Official Judge 给出，MCTS 搜索反馈和有 Trace 均不代表正式通过。在 Case 详情查看 `poc` 和评测报告；提交物上传成功后可独立重评。数据集从官方目录自动导入，旧 P2 JSON/JSONL 不再支持，需重新导入官方数据。自动生成需配置执行客户端的原生任务目录。
 
 ZSoft 就绪检查通过静态解析检查插件函数签名、模式注册、CLI 参数和五个角色提示词，不加载插件或启动沙箱。桥接运行前再次核对源码摘要，预检后源码变化会拒绝执行。Python 题提交源码，C 题提交 C 源码，binary 题提交编译后的原始字节；生成提示按题目类型适配，保留公开题目和 README。C/binary 不使用插件内置的 Python preflight，需要按公开契约验证候选。
 

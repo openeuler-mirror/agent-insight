@@ -63,6 +63,9 @@ export type BenchmarkArtifactPresentation = {
 }
 
 export type BenchmarkPresentation = {
+  execution?: {
+    notice?: string
+  }
   evaluator?: {
     displayName: string
     description: string
@@ -137,7 +140,6 @@ export type BenchmarkManifest = {
 }
 
 export type BenchmarkRunConfig = {
-  tasksDir?: string
   executionConcurrency?: number
   platform: string
   agent: string
@@ -173,7 +175,6 @@ export type AgentTaskEnvelope = {
   } | {
     provider: 'zsoft-tasks'
     taskId: string
-    tasksDir: string
     repository?: never
     revision?: never
   }

@@ -33,13 +33,13 @@ npx tsx scripts/benchmark/ensure-dataset.ts \
 
 此前已安装的 24 题数据集不会自动扩容；使用上面的 `--refresh --name` 安装全量版本。在线缓存使用新的解析版本键，旧缓存不会被误判为损坏。旧 P2 JSON/JSONL 和 ZSoft 公开包工作区不再兼容，需从官方目录重新导入。历史实验不会自动迁移。题目身份使用 `task.json` 与公开文件内容的 `sourceTaskDigest`；私有判题材料和镜像构建摘要由评测机单独冻结，平台不以它们作为数据准备前置条件。
 
-执行机准备原生 ZSoft 任务目录，结构为 `<tasks-dir>/<task-id>/task.json` 和 `<tasks-dir>/<task-id>/public/`。路径属于执行客户端所在机器，可以沿用上游仓库已有目录；若执行在用户机器，由用户准备该目录，平台不需要访问它。私有判题资产和正式镜像仍由 Evaluator 管理。
+执行机准备原生 ZSoft 任务目录，结构为 `<tasks-dir>/<task-id>/task.json` 和 `<tasks-dir>/<task-id>/public/`。在执行客户端对应的 MCTS 仓库 `testcases_union/config.env` 设置绝对路径，例如 `ZSOFT_TASKS_DIR=/srv/zsoft/tasks`。可以沿用上游仓库已有目录；若执行在用户机器，由用户在该执行机准备目录并配置 MCTS，平台不需要访问它。私有判题资产和正式镜像仍由 Evaluator 管理。
 
-在实验向导中选择 ZSoft 数据集、生成 Trace 和执行客户端后，填写 **ZSoft 任务目录** 的绝对路径并保存。配置按用户、客户端 ID 和 Benchmark 保存，后续该客户端的 ZSoft 实验自动复用，也支持修改；IP 仅用于识别机器，不作为配置主键。切换到 SWE-bench 时隐藏此项。目录不是 Agent/MCTS 安装选项，`task-id` 由平台按所选 Case 下发。
+实验向导只需选择 ZSoft 数据集、生成 Trace 和执行客户端，不配置任务目录；平台根据所选 Case 自动下发 `task-id`。目录按执行客户端本机的 MCTS 配置管理，修改后对该客户端后续任务生效。
 
-创建实验时冻结当前目录。客户端收到 `zsoft-tasks` 工作区契约，核对题目 ID 和公开元数据，从原生目录复制 `public/` 与裁剪后的 `task.json` 到独立运行目录，不将私有判题文件交给 Agent，不改写原始任务。MCTS 使用该独立目录作为实际 `--tasks-dir`，生成单文件 PoC 和 Trace，客户端上传后清理运行目录。缺题返回 `ZSOFT_TASK_MISSING`；题目与数据集不一致返回 `ZSOFT_TASK_MISMATCH`。保存配置仅校验路径格式，文件存在性在执行机准备任务时检查。
+客户端收到 `zsoft-tasks` 工作区契约后，从 MCTS `config.env` 读取原生目录，核对题目 ID 和公开元数据，从原生目录复制 `public/` 与裁剪后的 `task.json` 到独立运行目录，不将私有判题文件交给 Agent，不改写原始任务。MCTS 使用该独立目录作为实际 `--tasks-dir`，生成单文件 PoC 和 Trace，客户端上传后清理运行目录。缺少或错误配置返回 `ZSOFT_TASKS_DIR_INVALID`；缺题返回 `ZSOFT_TASK_MISSING`；题目与数据集不一致返回 `ZSOFT_TASK_MISMATCH`。
 
-客户端上报 `zsoft-tasks-workspace/v2`、`single-file/v1`；MCTS 还需 `mcts-zsoft-export/v1`。v2 包含 userspace 与 kernel 轨道，旧客户端需升级后重新上报能力。内核题仍使用同一个 `tasks-dir`，任务 ID 由平台下发，提交物为单文件 C 源码。
+客户端上报 `zsoft-tasks-workspace/v3`、`single-file/v1`；MCTS 还需 `mcts-zsoft-export/v1`。v3 表示任务目录来自执行机 MCTS 配置，且包含 userspace 与 kernel 轨道。内核题仍使用同一个 `tasks-dir`，任务 ID 由平台下发，提交物为单文件 C 源码。
 
 ZSoft 执行链路只接受 `zsoft-tasks` 工作区；旧公开包导出脚本不再用于当前接入，无需设置 `AGENT_INSIGHT_PUBLIC_BUNDLES_DIR`。
 
@@ -137,7 +137,7 @@ bash scripts/evaluator.sh start \
   --evaluator-env ZSOFT_L1_ASSETS_DIR=/data/benchmark-assets/zsoft-l1/releases/20261014-v1
 ```
 
-安装脚本要求 digest 和 release ID，先校验镜像中的 release metadata、bundleDigest 及每道题的冻结文件，再复制到共享卷；目标 release 已存在时拒绝覆盖。每次更新使用新 release ID，旧目录保留到确认没有评测任务使用后再按运维流程清理。启动 Controller 时将 `ZSOFT_L1_ASSETS_DIR` 指向所选 release；平台按第一节独立获取并导入官方目录，执行机配置自己的公开原生任务目录。完整资产镜像只在评测机使用，执行机/MCTS 仍按原流程使用公开 `tasks-dir`。评测机无需数据库。评测任务携带 `taskId`、`sourceTaskDigest` 和可选 revision，评测端与本机清单匹配后执行；平台有 revision 时严格核对，无 Git 元数据的离线题按内容摘要匹配。导入已有 PoC 无需配置执行任务目录。
+安装脚本要求 digest 和 release ID，先校验镜像中的 release metadata、bundleDigest 及每道题的冻结文件，再复制到共享卷；目标 release 已存在时拒绝覆盖。每次更新使用新 release ID，旧目录保留到确认没有评测任务使用后再按运维流程清理。启动 Controller 时将 `ZSOFT_L1_ASSETS_DIR` 指向所选 release；平台按第一节独立获取并导入官方目录，执行机配置自己的公开原生任务目录。完整资产镜像只在评测机使用，执行机/MCTS 仍按原流程使用公开 `tasks-dir`。评测机无需数据库。评测任务携带 `taskId`、`sourceTaskDigest` 和可选 revision，评测端与本机清单匹配后执行。
 
 评测端对公有 SWR 匿名拉取，无需 registry 认证配置。题目镜像由公共镜像池按固定摘要拉取、缓存、回收；重评或回收后重拉均使用同一摘要。Runtime 校验实际 Image ID 与冻结清单一致，Compose 使用 Image ID 且禁止自动 pull，因此无需覆盖原始 tag。当前清单未配置 `registryImages` 时需在本机预装固定 Image ID，不能在冷缓存下从远端恢复。缺少 `sourceTaskDigest` 的旧评测资产清单不再支持，需重新冻结。
 

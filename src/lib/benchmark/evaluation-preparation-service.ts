@@ -65,7 +65,7 @@ async function readValidatedSubmission(run: StoredSubmissionRun) {
     ? canonicalJson(adapter.manifest.requiredArtifacts.map(item => ({ ...item, collector: 'imported-submission/v1' })) as unknown as JsonValue)
     : undefined
   if (imported && run.submissionContractJson !== currentContract && run.submissionContractJson !== legacyZsoftImportContract) {
-    throw new BenchmarkProtocolError('SUBMISSION_CONTRACT_CHANGED', '提交契约已变更，请重新导入 PoC', 409)
+    throw new BenchmarkProtocolError('SUBMISSION_CONTRACT_CHANGED', '历史提交契约已变更，无法继续评测', 409)
   }
   const artifactReaders: ReadonlySubmissionArtifact[] = run.artifacts.map((artifact: {
     id: string

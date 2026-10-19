@@ -1024,7 +1024,7 @@ function createBenchmarkExecutor(options) {
   const workspaceProviders = options.workspaceProviders
     || new WorkspaceProviderRegistry([
       ['git', workspaceProvider],
-      ['zsoft-tasks', new ZsoftTasksWorkspaceProvider(path.join(baseDir, 'workspaces', 'zsoft-tasks'))],
+      ['zsoft-tasks', new ZsoftTasksWorkspaceProvider(path.join(baseDir, 'workspaces', 'zsoft-tasks'), options.mctsConfig)],
       ['public-bundle', new PublicBundleWorkspaceProvider(path.join(baseDir, 'workspaces', 'public-bundle'),
         options.publicBundleDir || process.env.AGENT_INSIGHT_PUBLIC_BUNDLES_DIR
           || path.join(options.agentInsightHome || path.dirname(baseDir), 'benchmark-assets', 'public-bundles'))],

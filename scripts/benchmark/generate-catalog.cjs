@@ -179,6 +179,14 @@ function normalizePresentation(source, key) {
       columns: presentationColumns(caseTable.columns, 'caseTable.columns'),
     },
   }
+  if (source.execution != null) {
+    if (typeof source.execution !== 'object' || Array.isArray(source.execution)) {
+      fail('presentation.execution 必须是对象')
+    }
+    if (source.execution.notice != null) {
+      result.execution = { notice: string(source.execution.notice, 'execution.notice') }
+    }
+  }
   if (source.evaluator != null) {
     result.evaluator = {
       displayName: string(source.evaluator.displayName, 'evaluator.displayName'),
