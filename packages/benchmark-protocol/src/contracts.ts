@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { BenchmarkProtocolError } from './errors'
 import { validatePublicBundleSpec } from '../../../services/executor/src/public-bundle.cjs'
+import { validateZsoftTasksSpec } from '../../../services/executor/src/zsoft-tasks.cjs'
 import { normalizeAgentOptions, type AgentOptions } from '../../../services/executor/src/mcts-options.cjs'
 export type { AgentOptions } from '../../../services/executor/src/mcts-options.cjs'
 
@@ -31,7 +32,9 @@ export type BenchmarkDatasetProfile = {
   key: string
   displayName: string
   acceptedExtensions: readonly string[]
+  acceptedSourceKinds?: readonly ('file' | 'directory')[]
   expectedCaseCount?: number
+  version?: string
 }
 
 export type BenchmarkPresentationFormat =
@@ -92,6 +95,11 @@ export type BenchmarkPresentation = {
   artifacts?: readonly BenchmarkArtifactPresentation[]
 }
 
+export interface BenchmarkDatasetPreparer {
+  profileKey: string
+  prepareSource(): Promise<{ sourcePath: string; name?: string }>
+}
+
 export interface BenchmarkDatasetLoader {
   loadCases(sourcePath: string): AsyncIterable<JsonValue>
 }
@@ -129,6 +137,7 @@ export type BenchmarkManifest = {
 }
 
 export type BenchmarkRunConfig = {
+  tasksDir?: string
   executionConcurrency?: number
   platform: string
   agent: string
@@ -159,6 +168,12 @@ export type AgentTaskEnvelope = {
     provider: 'public-bundle'
     taskId: string
     digest: string
+    repository?: never
+    revision?: never
+  } | {
+    provider: 'zsoft-tasks'
+    taskId: string
+    tasksDir: string
     repository?: never
     revision?: never
   }
@@ -280,7 +295,10 @@ export function validateTaskEnvelope(
   if (canonicalJson(task.task.benchmarkPayload).length > 256 * 1024) {
     throw new BenchmarkProtocolError('TASK_PAYLOAD_TOO_LARGE', '任务公开数据超过 256 KiB')
   }
-  if (task.workspace.provider === 'public-bundle') {
+  if (task.workspace.provider === 'zsoft-tasks') {
+    try { validateZsoftTasksSpec(task.workspace) }
+    catch { throw new BenchmarkProtocolError('TASK_WORKSPACE_INVALID', 'ZSoft 任务目录契约不合法') }
+  } else if (task.workspace.provider === 'public-bundle') {
     try { validatePublicBundleSpec(task.workspace) }
     catch { throw new BenchmarkProtocolError('TASK_WORKSPACE_INVALID', '公开任务包契约不合法') }
   } else if (task.workspace.provider === 'git') {

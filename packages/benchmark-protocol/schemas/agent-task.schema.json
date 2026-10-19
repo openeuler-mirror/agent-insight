@@ -8,7 +8,32 @@
     "benchmark": { "type": "object", "required": ["key"] },
     "context": { "type": "object", "required": ["runId", "experimentId", "caseId"] },
     "task": { "type": "object", "required": ["instruction", "benchmarkPayload"] },
-    "workspace": { "type": "object", "required": ["provider", "repository", "revision"] },
+    "workspace": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["provider", "repository", "revision"],
+          "properties": {
+            "provider": { "const": "git" }, "repository": { "type": "string" },
+            "revision": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" }
+          }, "additionalProperties": false
+        },
+        {
+          "type": "object", "required": ["provider", "taskId", "digest"],
+          "properties": {
+            "provider": { "const": "public-bundle" }, "taskId": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }, "additionalProperties": false
+        },
+        {
+          "type": "object", "required": ["provider", "taskId", "tasksDir"],
+          "properties": {
+            "provider": { "const": "zsoft-tasks" },
+            "taskId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+            "tasksDir": { "type": "string", "maxLength": 4096, "pattern": "^/[^\\u0000\\r\\n]*$" }
+          }, "additionalProperties": false
+        }
+      ]
+    },
     "policy": { "type": "object", "required": ["workspaceWrite", "hiddenDataAccess", "network"] },
     "submission": {
       "type": "object",
@@ -40,7 +65,9 @@
         "agent": { "type": "string", "minLength": 1 },
         "model": { "type": "string", "minLength": 1 },
         "timeoutSeconds": { "type": "integer", "minimum": 1 },
-        "executionConcurrency": { "type": "integer", "minimum": 1 }
+        "executionConcurrency": { "type": "integer", "minimum": 1 },
+        "tasksDir": { "type": "string", "maxLength": 4096, "pattern": "^/[^\\u0000\\r\\n]*$" },
+        "agentOptions": { "type": "object" }
       },
       "additionalProperties": false
     }
