@@ -161,6 +161,8 @@ benchmarks:
 
 旧的数据来源、Python 和路径/URL环境变量不再生效。导入配置错误与下载/导入错误一样只警告，不阻止平台启动。
 
+启动时会重新生成 `generated/benchmark-catalog/catalog-lock.json` 和 `evaluators.cjs` 等注册信息。源码与相关配置不变时，生成内容应保持一致；Python `__pycache__/`、`*.pyc`、`*.pyo` 和 `.DS_Store` 不参与摘要，无需清理缓存或手动恢复生成文件。真实源码变更仍会更新摘要与 Runtime 镜像标签。
+
 ### 4.3 其他 Benchmark
 
 接入包可注册 `implementation.datasetPreparer` 和 `datasetPreparerExport`，通过 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>` 单独准备和导入数据；ZSoft 也已接入上述启动自动导入，开关、官方来源与版本配置在 `platform.local.yaml` 的 `benchmarks.zsoft-l1.dataset.autoImport`、`source`、`revision`。评测机的资产根目录与加速模式配置在 `evaluator.local.yaml` 的 `benchmarks.zsoft-l1.assetsDir`、`kernelAccel`。旧 ZSoft 业务环境变量只提示迁移，不再覆盖 YAML；MCTS 自有的 `ZSOFT_TASKS_DIR` 仍在其 `config.env` 管理。未注册准备器的接入包仍可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录。普通数据集页面导入不能替代 Benchmark 数据集安装。

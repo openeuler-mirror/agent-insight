@@ -641,6 +641,8 @@ npm run benchmark:catalog
 
 必须验证：路径不越界、key 唯一、Evaluator 匹配、资源一致、Artifact/能力一致、Schema 可读取、Presentation 合法，以及生成结果可重复。
 
+Catalog 目录扫描排除 `__pycache__/`、`*.pyc`、`*.pyo` 和 `.DS_Store`，这些运行缓存不参与包摘要、Runtime 摘要或执行器文件清单。真实源码、依赖配置与评测资产仍参与原有摘要计算；新增或修改缓存不应改变生成物，修改真实输入必须更新对应摘要。
+
 ### 12.2 Adapter 单元测试
 
 ```bash

@@ -41,6 +41,7 @@ function readJson(filePath, label) {
 
 function listFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === '__pycache__' || entry.name === '.DS_Store' || /\.py[co]$/.test(entry.name)) return []
     const target = path.join(directory, entry.name)
     return entry.isDirectory() ? listFiles(target) : [target]
   })
