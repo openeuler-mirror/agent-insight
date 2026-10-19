@@ -96,8 +96,14 @@ Benchmark 评估器目录由服务端 `app/(main)/metrics/page.tsx` 遍历 `list
 - **应用外壳** — `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader,providers}.tsx`。页面在 `<PageContainer>` 内渲染（左对齐、全幅——不要手写居中）。
 - **评测** — `eval/*`（`Dashboard`、`SkillEvaluation`、`TrajectoryEvalCenter`、`EvaluationRunDetailView`、`ExecutionRecordsTable`、`EvaluatorFindingsView`）以及 `evaluation/*`（`EvaluationContent`、`EvaluationFindings`）。
 - **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard,VersionWorkspaceTabs}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。筛选栏的用户标签下拉支持版本/业务标签混合多选，按类型及名称前缀聚类；前缀作为无框行标题，标签以可换行的胶囊横向排列。多个标签使用 AND 语义并写入 `tagIds` URL 参数。`version-workspace-navigation.ts` 定义版本分析与版本管理两个页签的路由归属；页面分别位于 `app/(main)/version-analysis/page.tsx` 与 `app/(main)/version-management/page.tsx`。
+  - `AgentDebugCard` 使用持续挂载的纵向模块卡与独立 Skills 核验区。模块收到首条真实事件后按到达顺序出现，默认展开；后续段落追加到同一卡片，保留用户折叠状态，不自动滚动。没有过程内容或报告证据的模块收在紧凑提示行；切换 Execution 或重试到新 run 时重置展示。`DiagnosisProgressFeed` 标注来源、接收时间和真实 Trace 引用，默认展示最近四段，历史可展开。
+  - 模块标签由 `getModuleActivity` 与 `DiagnosisModuleStatus` 投影已有事件，不改变诊断调度。该模块 `analysis/stage.started` 驱动蓝色检查状态，以 1.1 秒周期旋转；`update` 保留本轮状态，`completed/failed/skipped` 停止旋转。单独的 `evidence` 或全局工具事件不推断检查开始。已开始或仅收到证据/阶段更新的模块 60 秒没有新事件均显示琥珀色等待标签，以 2.4 秒周期缓慢旋转（表示等待更新，不推断正在检查），并在卡片标题区域保留模块最近更新时间；状态读取失败或 `progress.unavailable` 显示红色未知状态并停止旋转，最终报告覆盖过程态。新内容按同一 `runId` 的递增 `seq` 播放 700ms 标签提示；初次恢复历史、重复轮询与跨运行记录不播放。动效限于标签，使用共享令牌，并遵循 `prefers-reduced-motion`；模块身份图标静止；完成采用绿色静态图标，完成不等于检查正常。颜色复用共享 `StatusBadge` 状态样式，不在页面增加颜色说明栏。
+  - `SkillsAnalysisSection` 的外层折叠控制完整正文，包括过程、报告和历史入口；通过 `aria-controls` 关联内容容器，隐藏时保留内部展开状态。新任务进入 running 时默认展开，后续轮询与请求响应不能覆盖用户手动收起。完成时报告优先，过程移入默认折叠的历史区；收起时仅保留标题摘要及必要的异常提示。
+  - `observe/agent-debug-presentation.ts` 从最终报告提取模块结论；`progress` 只承载待最终报告确认的阶段内容。`stepRecords` 是被诊断任务的执行证据，不能据此推断诊断成功。缺失结论、整次跳过、提前结束、后台失败和状态读取失败分别展示。运行中主诊断与 Skills 继续使用原有三秒轮询；主诊断请求失败保留过程并继续查询，请求版本隔离重试前的迟到响应。
+  - 顶部同时显示最近真实进展时间与最近成功查询时间；超过一分钟没有新事件提示等待，不靠心跳、时间或固定顺序生成进度。过程写入异常与达到保留上限分别提示。中途失败保留已收到的段落，最终报告返回后作为结论真源，阶段内容仍可回看。旧缓存没有 `progress` 时仍能展示报告，不补造历史过程。
   - 列表保留可见页面的五秒静默刷新、Goal Plus worker 折叠和多选标签；当前请求未结束时跳过自动刷新，切换筛选/分页或卸载时通过 `AbortController` 取消旧请求。请求序号拦截迟到响应，最新请求完成后统一释放加载状态。当前页使用 `listPart=records`，成功后独立加载 `listPart=stats`，统计每 30 秒检查刷新且不重叠；切换筛选清除旧统计并忽略迟到响应。统计未知时分页由 `hasMore` 驱动，不伪造总数；HTTP 错误明确提示，后台刷新失败保留已有记录，统计失败不清空列表。Trace 列表内详情并行请求 Session 与轻量 Execution 元数据，状态更新不等待大正文，执行中/超时继续轮询，成功/失败停止。重复父子 Trace 导航会释放旧 fetch guard。
   - Trace 页面、顶部搜索栏与筛选侧栏通过 `src/lib/client/trace-facets.ts` 共享同一用户、同一字段正在进行的筛选项请求，统一读取 JSON 后分发给各调用方。请求成功或失败后即释放，不缓存已完成结果；后续打开筛选仍重新取数，各组件继续独立处理卸载与失败。列表请求和全局 `apiFetch` 不参与这一去重。
+  - `lib/client/use-trace-filter-memory.ts` 通过共享 nuqs parser 管理筛选记忆，写入按部署前缀及账号隔离的 `sessionStorage`（`trace.filters.v1:<prefix>:<user>`）。仅首次进入不带查询参数的 `/trace` 时批量恢复，显式 URL 优先；列表等待恢复完成后请求，避免先按默认条件加载。只保存筛选，不保存分页、排序或 `taskId`；重置批量清空筛选并移除记忆，损坏或不可用的存储不阻塞列表。
   - 列表点击详情与导入后的“打开 Trace”仅在这两类导航动作上给 `setTaskIdParam` 指定 `history: 'push'`，保留列表 URL 中的筛选和分页，支持浏览器后退/前进。页面内“返回列表”和无效 `taskId` 清理继续使用 `replace`；筛选参数与全局 `NuqsAdapter` 的默认历史策略不变。父子 Trace 之间继续通过 `router.push` 导航。
   - Trace ID 使用 `IdChip` 的自适应宽度模式；可排序表头使用统一双三角图标。子 Agent 展开/收起复用 `TermPopover` 提示，根 Agent 保持展开；`slowOnly` 使用严格 `duration > 60000` 的事件筛选，锁定耗时选择但保留 Agent 层级上下文。
   - `ContentModal` 为 `SmartViewer` 启用 `fullContent`，展开弹窗 JSON 全部层级并显示完整长字符串和大数组，普通内联预览保持限长；时间线 `ModalCodeBlock` 给输入/输出提供复制动作。共享 `copy-text.ts` 优先 Clipboard API，回退 textarea 放在当前聚焦的 dialog/alertdialog 内，兼容焦点锁；清理后恢复原焦点。
@@ -131,6 +137,8 @@ flowchart TD
 - **语言**：`src/locales/{en,zh}.ts` + `LocaleContext`（`lib/client/locale-context.tsx`，`useLocale().t(key)`）。产品为双语（中文/英文）。
 - **主题**：`lib/client/theme-context.tsx`（`useTheme`、`useThemeColors`）；令牌在 `src/app/globals.css` 中一次性定义（`:root` + `[data-theme='dark']`）。
 - **认证**：`lib/auth/auth-context.tsx`（`useAuth`）统一消费服务端 `login_mode`，区分本地登录、历史组织集成和 IDaaS OAuth 登录；IDaaS callback 由 `/callback`（兼容 `/api/auth/idaas-oauth/callback`）完成；可选地区限制先按 UUID 查询人员信息并失败关闭，放行后才映射本地用户。API Key 恢复也会复查地区，并把人员响应中的 `w3Account` 作为通用 `externalAccount` 绑定到 UUID 用户。`AuthProvider.user` 保留 UUID 供业务 API 使用，独立 `displayName` 只供侧边栏显示，缺失时回退 UUID；登录页分别展示地区不可用与地区校验失败。侧边栏在三种登录模式下均渲染通用退出入口；退出仅清除浏览器本地认证状态，不调用 IDaaS 单点登出。
+
+实验单组详情的 Case 分页通过 `useExperimentCasePagination` 与 URL 的 `casePage/casePageSize` 同步，保留其他 query，手动翻页或更改条数时清除 `focusCaseId`。进入单条 Case 的链接携带分页上下文，返回链接带 `focusCaseId`；列表请求将其作为 `locateCaseId` 发给现有详情接口，加载成功后采用服务端页码，定位行滚动到视区并短暂高亮。分页校正不得在详情未加载时按空总数重置页码；切换分页时失效旧请求，轮询不能覆盖新的分页状态。嵌入模式使用本地分页和原有 `onBack` 回调，不改父页面 URL。Case 明细表只保留横向 overflow，不设纵向固定高度或 max-height，分页栏在空列表和不足一页时也保留；删除入口集中在列表操作列，Case 详情不重复渲染。
 
 ## 构建与开发
 - **开发**：`npm run dev`（或 `bash scripts/restart_dev.sh`——项目规范的开发启动方式）。端口 3000。

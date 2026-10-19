@@ -2,7 +2,9 @@
 
 const os = require('node:os')
 const path = require('node:path')
-const { GitSourcePolicy, readLocalSetting } = require('../git-source.cjs')
+const fs = require('node:fs')
+const { GitSourcePolicy } = require('../git-source.cjs')
+const { loadProjectConfig, warnLegacy } = require('../project-config.cjs')
 
 const MIRRORS = Object.freeze({
   'astropy/astropy': 'mirrors/astropy',
@@ -20,10 +22,11 @@ const MIRRORS = Object.freeze({
 })
 
 class SweBenchGitSourcePolicy extends GitSourcePolicy {
-  constructor({ home, env = process.env }) {
+  constructor({ home, env = process.env, config }) {
     super()
     this.home = home
     this.env = env
+    this.config = config
   }
 
   resolve(spec) {
@@ -35,20 +38,27 @@ class SweBenchGitSourcePolicy extends GitSourcePolicy {
       || repo.split('/').some((part) => part === '.' || part === '..')) {
       throw new Error('SWE-bench repository must be a GitHub owner/repo URL')
     }
-    const configured = String(readLocalSetting('SWE_BENCH_GIT_SOURCE', this.home, this.env)).trim()
+    warnLegacy('executor', this.env)
+    try {
+      if (/^\s*(?:export\s+)?SWE_BENCH_GIT_SOURCE\s*=/m.test(fs.readFileSync(path.join(this.home, '.env'), 'utf8'))) {
+        warnLegacy('executor', { SWE_BENCH_GIT_SOURCE: '' })
+      }
+    } catch (error) { if (error.code !== 'ENOENT') throw error }
+    const config = this.config || loadProjectConfig('executor', { env: this.env })
+    const configured = config.benchmarks['swe-bench'].gitSource || ''
     const remotes = []
     let cachePath = null
     if (/^https?:\/\//i.test(configured)) {
       const root = new URL(configured)
       if (root.username || root.password || root.search || root.hash) {
-        throw new Error('SWE_BENCH_GIT_SOURCE: URL must not contain credentials, query or fragment')
+        throw new Error('benchmarks.swe-bench.gitSource: URL must not contain credentials, query or fragment')
       }
       root.pathname = `${root.pathname.replace(/\/$/, '')}/${repo}.git`
       remotes.push({ name: 'configured', url: root.href })
     } else if (configured) {
       const expanded = configured.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, os.homedir())
       if (!path.isAbsolute(expanded)) {
-        throw new Error('SWE_BENCH_GIT_SOURCE: use an absolute local directory or HTTP(S) Git root URL')
+        throw new Error('benchmarks.swe-bench.gitSource: use an absolute local directory or HTTP(S) Git root URL')
       }
       cachePath = path.join(expanded, `${repo}.git`)
     }

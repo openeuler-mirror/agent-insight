@@ -86,15 +86,18 @@ npm ci
 
 ```dotenv
 AGENT_INSIGHT_PORT=3000
-AGENT_INSIGHT_BENCHMARK=swe-bench
 ```
 
 | 配置 | 含义 |
 |---|---|
 | `AGENT_INSIGHT_PORT` | Agent Insight 对外端口 |
-| `AGENT_INSIGHT_BENCHMARK=swe-bench` | 启动时自动准备 SWE-bench Verified 数据集 |
 
 旧变量 `PORT` 不再支持。
+
+Benchmark 业务配置按进程分开：平台读取项目 `config/benchmark/platform.yaml`，评测读取 `config/benchmark/evaluator.yaml`，执行客户端读取 `config/benchmark/executor.yaml`。各自的 `*.local.yaml` 深度覆盖项目默认文件，未指定字段使用程序默认值；数组整体替换，`null` 恢复默认。配置文件不设 `version` 字段，未知字段和错误类型会明确报错。相对路径按所在配置文件目录解析；Evaluator Python 使用容器内命令名或绝对路径。
+
+本机覆盖文件不提交 Git。默认从安装根下的 `config/benchmark/` 加载，不依赖当前工作目录；`AGENT_INSIGHT_CONFIG_DIR` 可指定直接包含这三个 YAML 文件的其他目录，不会再自动追加子目录。业务环境变量不参与覆盖，残留变量会提示迁移。端口、数据库连接、密钥、运行目录及服务通信地址仍保留环境配置，通信地址现有的热更新机制保持不变。
+
 
 ### 3.3 启动与验证
 
@@ -104,16 +107,15 @@ bash scripts/start.sh
 curl -I http://127.0.0.1:3000
 ```
 
-单次指定端口或 Benchmark：
+单次指定端口：
 
 ```bash
-bash scripts/start.sh --port 3100 --benchmark swe-bench
+bash scripts/start.sh --port 3100
 ```
 
 | 参数 | 含义 |
 |---|---|
 | `--port` | 本次启动使用的 Agent Insight 端口 |
-| `--benchmark swe-bench` | 本次启动自动准备 SWE-bench Verified |
 
 ## 4. 安装 Benchmark 数据集
 
@@ -123,35 +125,39 @@ bash scripts/start.sh --port 3100 --benchmark swe-bench
 
 ### 4.2 随服务启动自动安装
 
-在 `~/.agent-insight/.env` 中设置：
-
-```dotenv
-AGENT_INSIGHT_BENCHMARK=swe-bench
-```
-
-然后启动 Agent Insight：
+启动 Agent Insight 时，`config/benchmark/platform.yaml` 的 `benchmarks.swe-bench.dataset.autoImport` 默认 `true`：
 
 ```bash
 bash scripts/start.sh
 ```
 
-首次启动会下载并导入数据集，后续启动会复用已安装的数据集。
+首次启动会下载、校验并导入 500 条 Case。后续启动先检查当前数据库，已存在完整、可用的数据集时跳过下载和导入。将 `autoImport` 设置为 `false` 可跳过启动自动导入，但不影响已有数据集和管理员手动导入。`AGENT_INSIGHT_BENCHMARK` 不再控制此行为，`scripts/start.sh` 不再接受 `--benchmark` 参数。
 
-如需使用内网文件或本机文件，可增加：
+准备或导入失败只输出简短警告，继续构建和启动服务；SWE-bench Verified 相关实验暂不可用。终端根据失败原因提示内网或本机来源、文件校验、Python 环境等处理方式，详细输出写入 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），每次启动覆盖该日志。当前仍同步等待本次准备结束，再继续启动；数据库初始化或构建失败仍会停止启动。
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE=/srv/datasets/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=/srv/datasets/source.tar.gz
+下次启动会自动重试。也可在修复后从项目根目录单独重试，无需重启已运行的服务：
+
+```bash
+npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts
 ```
 
-两个配置也可以填写 HTTP/HTTPS 下载地址。
+独立导入失败时返回非零退出码，便于管理员检查结果。
 
-例如使用内网文件服务：
+如需内网或离线来源，在项目 `config/benchmark/platform.local.yaml` 中配置：
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE=https://mirror.example.com/swe-bench/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=https://mirror.example.com/swe-bench/source.tar.gz
+```yaml
+benchmarks:
+  swe-bench:
+    dataset:
+      source: /srv/datasets/test.parquet
+    loader:
+      sourceArchive: https://mirror.example.com/swe-bench/source.tar.gz
+      python: /srv/python/bin/python
 ```
+
+数据与归档来源均支持 HTTP(S) 地址或本机文件，`null` 使用官方默认来源。本机与下载文件均校验固定官方 SHA-256，不覆盖校验失败的本机文件。完全离线时，`loader.python` 应指向已安装官方 Loader 的 Python，否则首次创建环境仍需要可用的 pip 软件源。导入完成后原始数据文件可以删除；数据库中没有已安装数据集时才需要重新提供。
+
+旧的数据来源、Python 和路径/URL环境变量不再生效。导入配置错误与下载/导入错误一样只警告，不阻止平台启动。
 
 ### 4.3 其他 Benchmark
 
@@ -203,7 +209,7 @@ bash scripts/evaluator.sh start \
 | `--platform-base-url URL` | Evaluator 回访 Agent Insight 的地址 |
 | `--port PORT` | Evaluator 对外端口，默认 `3001` |
 | `--bind-address ADDRESS` | Evaluator 监听地址，默认 `0.0.0.0` |
-| `--evaluator-env NAME=VALUE` | 传入 Evaluator 环境变量 |
+| `--evaluator-env NAME=VALUE` | 传入环境参数；业务配置改用 `config/benchmark/evaluator.local.yaml` |
 
 验证 Evaluator：
 
@@ -216,28 +222,20 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 
 ### 5.3 可选：跨 Benchmark 共享镜像池
 
-镜像池默认开启，无需额外参数。同一 Docker daemon 上的不同 Benchmark 和用户共享一个镜像池。
+镜像池和提前准备默认开启，同一 Docker daemon 上的不同 Benchmark 和用户共享镜像池。策略在评测机项目 `config/benchmark/evaluator.local.yaml` 设置，例如关闭预取：
 
-关闭镜像池：
-
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url <agent-insight-url> \
-  --evaluator-env IMAGE_POOL_ENABLED=false
+```yaml
+imagePool:
+  prefetchEnabled: false
 ```
 
-镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。
+关闭整个镜像池时设置 `imagePool.enabled: false`。`maxPulls` 默认 2，开启预取时至少为 2；`reserveRatio` 默认 0.3，`highWatermark` 默认 0.9，`waitSeconds` 默认 600。Mac 同盘共享目录通过 `imagePool.macDiskPath` 配置；磁盘挂载事实仍由脚本自动检测。
 
-提前准备镜像默认开启，无需增加启动参数；默认的 `IMAGE_POOL_MAX_PULLS=2` 为按需拉取保留容量，开启预取时不能设为 1。平台通过 `/health` 发现预取状态，无需配置额外令牌。Evaluator 端口应只允许 Agent Insight 平台访问。需要关闭预取时，在 Evaluator 启动命令中增加：
+修改后重新执行 `bash scripts/evaluator.sh start`，按 5.1/5.2 节补充通信地址与端口参数。启动脚本在 Controller 镜像内校验配置，不要求宿主安装 Node.js；配置无效时不会停止旧服务。校验后的 JSON 快照传给 Controller 和 Benchmark Runtime，禁止用 `--evaluator-env` 覆盖快照。
 
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url http://host.docker.internal:3000 \
-  --bind-address 127.0.0.1 \
-  --evaluator-env IMAGE_POOL_PREFETCH_ENABLED=false
-```
+SWE-bench 镜像来源、架构、非官方许可、代理和镜像仓库在 `benchmarks.swe-bench.images` 配置，Python 在 `benchmarks.swe-bench.python`，Docker SDK 超时和连接池在 `benchmarks.swe-bench.docker`。`verifiedMirrorRepositories: null` 使用内置仓库，`[]` 关闭额外镜像仓库；Epoch 仅允许显式许可的 ARM64 冒烟。
 
-分机部署时按 5.1 节替换地址和绑定参数。预取窗口及空间不足的处理见[并发调度方案](../../../评测服务文档/benchmark并发执行与评测调度方案.md#51-镜像准备)。
+镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。平台通过 `/health` 发现预取状态，无需额外令牌。Evaluator 端口应只允许平台访问。
 
 ### 5.4 评测并发与 Case 数量上限
 
@@ -245,29 +243,18 @@ bash scripts/evaluator.sh start \
 
 | 配置 | 设置位置 | 默认值 | 含义 |
 |---|---|---:|---|
-| `EVALUATOR_MAX_CONCURRENCY` | Evaluator 启动参数 `--evaluator-env` 或启动进程环境 | 1 | 评测服务同时运行的 Case 数 |
-| `AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER` | 平台机 `~/.agent-insight/.env` | 留空，跟随 Evaluator 总并发 | 单用户跨实验同时评测的 Case 数量上限 |
-| `AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS` | 平台机 `~/.agent-insight/.env` | 256 | 全平台执行中或尚未完成评测的 Benchmark Case 数量上限 |
-| `AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER` | 平台机 `~/.agent-insight/.env` | 128 | 每个用户执行中或尚未完成评测的 Benchmark Case 数量上限 |
+| `maxConcurrency` | `config/benchmark/evaluator.local.yaml` | 1 | Evaluator 同时运行的 Case 数 |
+| `benchmarks.scheduling.maxEvaluationConcurrencyPerUser` | `config/benchmark/platform.local.yaml` | `null`，跟随 Evaluator 总并发 | 单用户跨实验评测并发 |
+| `benchmarks.scheduling.maxPendingEvaluations` | `config/benchmark/platform.local.yaml` | 256 | 全平台执行中或待评测 Case 上限 |
+| `benchmarks.scheduling.maxPendingEvaluationsPerUser` | `config/benchmark/platform.local.yaml` | 128 | 每用户执行中或待评测 Case 上限 |
 
-表中四项均可省略或留空，分别按默认值生效；显式设置时须为正整数。Evaluator 启动脚本只会从评测机的 `~/.agent-insight/.env` 读取对外端口；评测并发须通过 `--evaluator-env` 或启动进程环境传入。
+显式并发和数量上限须为正整数。比如将 Evaluator 总并发设为 2，在评测机 `config/benchmark/evaluator.local.yaml` 写入：
 
-例如，设置评测总并发为 2，单用户额度留空。在平台机的 `~/.agent-insight/.env` 中加入或修改以下行，保留其他设置：
-
-```dotenv
-AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER=
-AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS=
-AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER=
+```yaml
+maxConcurrency: 2
 ```
 
-重启 Agent Insight 使配置生效。在 Evaluator 机器运行（以下为本机部署示例；分机部署按 5.1 节替换地址和绑定参数）：
-
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url http://host.docker.internal:3000 \
-  --bind-address 127.0.0.1 \
-  --evaluator-env EVALUATOR_MAX_CONCURRENCY=2
-```
+平台侧未覆盖时保持默认值。修改平台配置后重启平台；修改评测配置后重新运行 Evaluator 启动命令。旧并发/待评测上限环境变量不再生效。
 
 启动后验证：
 
@@ -327,24 +314,15 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 
 ### 7.1 配置 SWE-bench Case 源码来源（可选）
 
-在 Agent 执行机上创建或编辑配置文件：
+在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；安装版常驻客户端对应目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`。安装升级会更新默认文件、保留 local 文件；旧目录下的 `config/executor.local.yaml` 会在新目录尚无覆盖文件时迁移，并保留原相对 Git 路径的实际位置。也可由 `AGENT_INSIGHT_CONFIG_DIR` 指定配置目录。
 
-```bash
-mkdir -p "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}"
-vi "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/.env"
+```yaml
+benchmarks:
+  swe-bench:
+    gitSource: /srv/swe-git
 ```
 
-使用本地缓存目录：
-
-```dotenv
-SWE_BENCH_GIT_SOURCE=/srv/swe-git
-```
-
-使用指定的 Git 服务：
-
-```dotenv
-SWE_BENCH_GIT_SOURCE=https://git.example.com
-```
+`gitSource` 也可填写 `https://git.example.com`；`null` 使用默认 Gitee → GitHub 来源，不持久缓存。旧 `SWE_BENCH_GIT_SOURCE` 不再生效，发现残留配置会提示迁移。
 
 | 配置值 | 行为 |
 |---|---|
@@ -382,11 +360,25 @@ MCTS 就绪探测通过配置的 Python 检查版本及 `importlib.util.find_spe
 
 执行器每次从 MCTS `config.env` 读取真实 xGovernor 地址，以 `--upstream` 传给严格模式 Trace 代理。代理将动态地址放入 `AGENT_INSIGHT_MCTS_PROXY_URL`；本次专用 `python` 脚本在 MCTS 加载配置之后，将 `XGOVERNOR_BASE_URL` 恢复为代理地址并 exec 原解释器。手动启动器也为每次运行创建独立 Python 包装目录，退出时清理。固定 URL 不会绕过采集，无需修改 MCTS 配置文件。未配置仓库的历史独立 Trace 安装仍读取 `upstreamUrl` / `AGENT_INSIGHT_MCTS_UPSTREAM_URL`。
 
-每个 Case 的执行命令由客户端固定为 `run_union.sh --mode sweverified --runtime pi --testbench sweverified --instance-id <Case ID> --split test --output-dir <runId>`，并通过严格模式 Trace 代理启动。未携带搜索参数的历史任务仍使用 MCTS 配置；新建 SWE-bench 实验显式下发页面中的搜索参数，不自动注入 README 的快速验证参数（1 次迭代、1 个分支及 20/10 turns）；token 熔断可由 MCTS `config.env` 中的 `XIAOO_MCTS_TOKEN_FUSE_LIMIT` 配置。客户端创建本次运行专用的 `python` 启动脚本，直接 `exec` 配置的 Python 解释器，再运行原版 `run_union.sh`。启动脚本保留原解释器路径，使 Python 正确识别虚拟环境及 `datasets`；不要把 venv 解释器符号链接到外部目录后执行。MCTS 只将最终选中节点写入 `testcases_union/output/sweverified/<runId>/artifact.patch`；客户端检查 Patch 后应用到该 Case 的冻结 Git 工作区，再由现有 `git-patch/v1` Collector 生成并上传 `model.patch`。Trace 代理的本地状态按 Case 隔离，客户端从其运行记录取得根 Session ID（`mcts.run.<32 位十六进制>`），作为回调 `traceId`，与平台 `Execution.taskId` 保持一致。OTLP 的 32 位 Trace ID 仅用于传输，不直接用作页面跳转；历史误存 OTLP ID 的 Case 在读取时按同一账户下根 Session ID 的 SHA-256 精确映射，不按时间邻近猜测。停止实验时客户端向进程组发送 SIGINT，给 MCTS 的 `finally` 清理和 Trace 代理上传留出 30 秒，然后强制终止仍未退出的进程。
+每个 Case 的执行命令由客户端固定为 `run_union.sh --mode sweverified --runtime pi --testbench sweverified --instance-id <Case ID> --split test --output-dir <runId>`，并通过严格模式 Trace 代理启动。搜索参数由执行机的 Runtime YAML 和本机默认值覆盖解析，并显式追加到 CLI；新建实验冻结页面参数，不自动选择联调预设。显式 CLI 参数覆盖 MCTS `config.env` 中的对应环境配置。客户端创建本次运行专用的 `python` 启动脚本，直接 `exec` 配置的 Python 解释器，再运行原版 `run_union.sh`。启动脚本保留原解释器路径，使 Python 正确识别虚拟环境及 `datasets`；不要把 venv 解释器符号链接到外部目录后执行。MCTS 只将最终选中节点写入 `testcases_union/output/sweverified/<runId>/artifact.patch`；客户端检查 Patch 后应用到该 Case 的冻结 Git 工作区，再由现有 `git-patch/v1` Collector 生成并上传 `model.patch`。Trace 代理的本地状态按 Case 隔离，客户端从其运行记录取得根 Session ID（`mcts.run.<32 位十六进制>`），作为回调 `traceId`，与平台 `Execution.taskId` 保持一致。OTLP 的 32 位 Trace ID 仅用于传输，不直接用作页面跳转；历史误存 OTLP ID 的 Case 在读取时按同一账户下根 Session ID 的 SHA-256 精确映射，不按时间邻近猜测。停止实验时客户端向进程组发送 SIGINT，给 MCTS 的 `finally` 清理和 Trace 代理上传留出 30 秒，然后强制终止仍未退出的进程。
 
-MCTS 自定义搜索参数使用 `agentConfig.agentOptions.mcts` 传递，字段为 `maxIters`、`branching`、`maxTurnsInit`、`maxTurnsStep`、`maxTurnsAuthor`、`maxTurnsAuthorStep`、`tokenFuseLimit`。前六项为正安全整数，Token 阈值为非负安全整数；`0` 显式关闭熔断，旧任务的缺省字段不追加 CLI 参数；新建实验预填并冻结完整七项参数，默认值为 `5、3、160、80、160、80、30000000`，恢复默认重新填入这些值，空输入校验失败。显式 CLI 参数覆盖执行机对应环境配置。配置保存到已有 `runConfigJson/configSnapshotJson`，纳入任务摘要，并在复用和重试时继承。详情仅展示 SWE-bench 实验已保存的参数，不推断历史实际值。参数白名单、默认值、校验和 CLI 映射共用 `services/executor/src/mcts-options.cjs`；模块随客户端 bundle 安装，运行时不依赖平台源码目录。
+MCTS 的字段、中文名称、分组、类型、校验范围、默认值、联调预设和 CLI 绑定统一声明在 `services/executor/runtimes/mcts/runtime.yaml`。`pi-mcts` 与 `xiao-mcts` 共用此描述，内部 Runtime 映射仍为 `pi` / `xiaoo`；客户端自动发现仍只注册已有 Pi 目标。前六项为正安全整数，Token 阈值为非负安全整数，`0` 表示关闭熔断。默认值为 `5、3、160、80、160、80、30000000`；空输入按字段的 `required` 校验。
 
-客户端在对应平台的 `runBenchmarkCase.agentOptionCapabilities` 中声明 `mcts-search-options/v1`，并将同名组件标为就绪。平台仅在关联 SWE-bench 数据集且目标声明该能力时显示参数配置，创建实验与每次下发前均检查能力；旧客户端仍可执行没有覆盖值的任务，自定义参数遇到旧客户端时返回 `CLIENT_UPGRADE_REQUIRED`。前端能力与 MCTS 配置跨运行时复用；执行器映射 `pi-mcts → pi`、`xiao-mcts → xiaoo`，本次客户端自动发现仍只注册已有 Pi 目标。运行事实记录 `mctsRuntime` 与本次 `agentOptions`。上线需要更新平台及常驻客户端；重新执行页面生成的安装命令即可（包含客户端重启），无需更改 MCTS/xGovernor 的源码或服务配置。
+执行机可在 `config/benchmark/executor.local.yaml` 覆盖默认值，安装版目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`：
+
+```yaml
+runtimes:
+  mcts:
+    defaults:
+      maxIters: 3
+      tokenFuseLimit: 0
+```
+
+优先级为 Runtime YAML 默认值、本机默认值覆盖、本次实验输入。覆盖按 Runtime 和字段合并，字段设为 `null` 恢复 YAML 默认值。未知 Runtime、未知字段或非法取值会明确报错。参数定义修改后重启客户端并刷新页面；客户端会重新上报描述。安装更新保留 `executor.local.yaml`。源码定义位于 `services/executor/runtimes/`，安装到常驻客户端后位于 `$AGENT_INSIGHT_HOME/client/runtime/executor/runtimes/`。
+
+客户端在每个 platform 的 `parameterDefinitions` 上报生效的展示描述和 `definitionDigest`，不包含 CLI 绑定。通用模块为 `packages/agent-runtime/index.cjs`（协议、字段校验）与 `loader.cjs`（YAML 加载、覆盖、摘要、argv）。参数值采用 `agentOptions: { runtimeKey, definitionDigest, values }`；平台和执行端按所选 platform/agent 验证，摘要不一致返回 `AGENT_DEFINITION_CHANGED` 并要求刷新确认。平台创建实验时补齐默认值，将生效参数及 `agentParameterDefinition` 存入原有配置快照；参数值纳入任务摘要，复用和重试时继承，详情按冻结描述展示。旧 `agentOptions.mcts` 不兼容、不迁移，历史旧参数不展示或复用。
+
+平台及常驻客户端需同步升级。安装 bundle、npm 和 standalone 包均包含 `services/executor/runtimes/` 与共享加载器；重新执行页面生成的客户端安装命令即可部署并重启。OpenCode 具有 `services/executor/runtimes/opencode/runtime.yaml` 空参数定义，新增受支持的字段和 argv 绑定后，普通实验、Skill 实验和 Benchmark 页面复用通用参数表单与启动链路。Runtime 的主命令、工作区、Trace 和产物处理仍由代码实现，YAML 不能覆盖保留的系统启动参数。
 
 部署后先运行一个 SWE-bench Case：选择 `mcts-coordinator` Agent、`pi-mcts` 平台、默认模型及已就绪执行机，设置足够长的 Agent 超时；完成后检查 Case 中的根 Trace 链接、`model.patch` 和平台评测结果。MCTS 自身的最终节点官测是搜索过程的一部分，不能代替平台的 Benchmark 评测。`mcts-coordinator` 是展示和 Trace 检索名称；能力上报、任务的 `platform/agent` 均保持 `pi-mcts`。Agent 超时计时覆盖整个 MCTS 子进程；采集根 Trace 的开始时间是首次 xGovernor 请求，不能用这条 Trace 的耗时代替执行期限。采集器终态的失败或中断映射到已有 `agent-process-exit` failure，详情与 SQL 列表/聚合均据此显示失败。
 

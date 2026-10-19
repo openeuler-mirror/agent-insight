@@ -653,16 +653,15 @@ test('real SWE-bench Verified data crosses create/run APIs and the client comman
   setCommandDispatcher()
 })
 
-test('parallel Case claims use default budgets when platform limits are blank', async (t) => {
-  const previousGlobalBudget = process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS
-  const previousUserBudget = process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER
-  process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS = ''
-  process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER = ''
+test('parallel Case claims use project limits and restore default budgets when omitted', async (t) => {
+  const previousConfigDir = process.env.AGENT_INSIGHT_CONFIG_DIR
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-budgets-config-'))
+  process.env.AGENT_INSIGHT_CONFIG_DIR = configDir
+  const configure = (scheduling: Record<string, number>) => fs.writeFileSync(path.join(configDir, 'platform.local.yaml'), JSON.stringify({ benchmarks: { scheduling } }))
   t.after(() => {
-    if (previousGlobalBudget === undefined) delete process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS
-    else process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS = previousGlobalBudget
-    if (previousUserBudget === undefined) delete process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER
-    else process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER = previousUserBudget
+    if (previousConfigDir === undefined) delete process.env.AGENT_INSIGHT_CONFIG_DIR
+    else process.env.AGENT_INSIGHT_CONFIG_DIR = previousConfigDir
+    fs.rmSync(configDir, { recursive: true, force: true })
   })
   const { prepareNextBenchmarkCaseRun } = await import('@/lib/benchmark/orchestrator')
   const fixture = JSON.parse(fs.readFileSync(path.resolve('benchmarks/swe-bench/fixtures/smoke-case.json'), 'utf8'))
@@ -684,6 +683,11 @@ test('parallel Case claims use default budgets when platform limits are blank', 
   assert.equal(claimed.length, 2)
   assert.equal(new Set(claimed.map((row) => row.runId)).size, 2)
   await prisma.benchmarkCaseRun.update({ where: { id: claimed[0].runId }, data: { status: 'submitted' } })
+  configure({ maxPendingEvaluations: 2 })
+  assert.equal(await claim(), null)
+  configure({ maxPendingEvaluationsPerUser: 2 })
+  assert.equal(await claim(), null)
+  configure({})
   assert.ok(await claim())
   assert.equal(await claim(), null)
 })

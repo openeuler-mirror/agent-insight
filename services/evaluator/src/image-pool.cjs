@@ -1,4 +1,5 @@
 'use strict'
+const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
 
 const fs = require('node:fs/promises')
 const path = require('node:path')
@@ -23,19 +24,16 @@ function waitForImage(work, signal, timeoutMs) {
   })
 }
 
-function imagePoolConfig(env = process.env) {
-  const setting = env.IMAGE_POOL_ENABLED || 'true'
-  if (!['true', 'false'].includes(setting)) throw poolError('IMAGE_POOL_CONFIG_INVALID', 'IMAGE_POOL_ENABLED 必须为 true 或 false', false)
-  const prefetchSetting = env.IMAGE_POOL_PREFETCH_ENABLED || 'true'
-  if (!['true', 'false'].includes(prefetchSetting)) throw poolError('IMAGE_POOL_CONFIG_INVALID', 'IMAGE_POOL_PREFETCH_ENABLED 必须为 true 或 false', false)
-  const enabled = setting === 'true'
+function imagePoolConfig(settings = loadProjectConfig('evaluator').imagePool) {
+  const { enabled = true, prefetchEnabled = true } = settings
+  if (typeof enabled !== 'boolean' || typeof prefetchEnabled !== 'boolean') throw poolError('IMAGE_POOL_CONFIG_INVALID', 'imagePool.enabled / prefetchEnabled 必须为布尔值', false)
   const config = {
     enabled,
-    prefetch: enabled && prefetchSetting === 'true',
-    reserveRatio: Number(env.IMAGE_POOL_RESERVE_RATIO || 0.3),
-    highWatermark: Number(env.IMAGE_POOL_HIGH_WATERMARK || 0.9),
-    maxPulls: Number(env.IMAGE_POOL_MAX_PULLS || 2),
-    waitMs: Number(env.IMAGE_POOL_WAIT_SECONDS || 600) * 1000,
+    prefetch: enabled && prefetchEnabled,
+    reserveRatio: settings.reserveRatio ?? 0.3,
+    highWatermark: settings.highWatermark ?? 0.9,
+    maxPulls: settings.maxPulls ?? 2,
+    waitMs: (settings.waitSeconds ?? 600) * 1000,
   }
   if (enabled && (
     !(config.reserveRatio > 0 && config.reserveRatio < 1)

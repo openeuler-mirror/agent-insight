@@ -6,7 +6,7 @@ const { createHash } = require('node:crypto')
 const { verifyStandalone } = require('./verify-standalone.cjs')
 
 const VERSION = 2
-const SOURCE_DIRS = ['src', 'public', 'prisma', 'scripts', 'generated', 'benchmarks', 'packages', 'services', 'skills', 'agent_ras', 'agent_fault_injection', 'integrations', 'bin']
+const SOURCE_DIRS = ['src', 'public', 'prisma', 'scripts', 'generated', 'benchmarks', 'config', 'packages', 'services', 'skills', 'agent_ras', 'agent_fault_injection', 'integrations', 'bin']
 const IGNORED = new Set(['.git', '.cache', '__pycache__', '.pytest_cache'])
 const sha = value => createHash('sha256').update(value).digest('hex')
 

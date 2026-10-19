@@ -7,6 +7,8 @@ import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice
 import { benchmarkFailurePresentation } from '@/lib/benchmark/failure-presentation';
 
 const EXPECTED_LABELS = {
+  ENOSPC: '执行端存储空间不足',
+  EDQUOT: '执行端存储配额不足',
   EVENT_MONITOR_UNAVAILABLE: '失败监测通道未就绪',
   AGENT_TIMEOUT: 'Agent 执行超时',
   MODEL_ERROR: '模型调用失败',
@@ -25,6 +27,24 @@ test('Benchmark Agent failure codes have explicit Chinese labels', () => {
     assert.equal(failure?.label, label);
     assert.ok(failure?.message);
   }
+});
+
+test('legacy execution storage failures are reclassified for display without losing their original code', () => {
+  const message = 'pi-agent 会话报告模型错误: Pi model: ENOSPC: no space left on device, write';
+  for (const originalCode of ['MODEL_ERROR', 'WORKSPACE_PREPARE_FAILED', 'AGENT_EXIT_NONZERO', 'EXECUTION_FAILED']) {
+    assert.deepEqual(benchmarkFailurePresentation(originalCode, message), {
+      code: 'ENOSPC', originalCode, label: '执行端存储空间不足', message,
+    });
+  }
+  assert.equal(benchmarkFailurePresentation(null, 'git checkout failed: No space left on device')?.code, 'ENOSPC');
+  assert.equal(benchmarkFailurePresentation('MODEL_ERROR', 'EDQUOT: disk quota exceeded')?.code, 'EDQUOT');
+  for (const code of ['AGENT_TIMEOUT', 'SWE_HARNESS_FAILED', 'MODEL_UNAVAILABLE']) {
+    assert.equal(benchmarkFailurePresentation(code, 'a previous attempt reported ENOSPC')?.code, code);
+  }
+  const rendered = renderToStaticMarkup(createElement(BenchmarkFailureNotice, { code: 'MODEL_ERROR', message }));
+  assert.match(rendered, /执行端存储空间不足/);
+  assert.match(rendered, /ENOSPC（原始码：MODEL_ERROR）/);
+  assert.match(rendered, /Pi model: ENOSPC/);
 });
 
 test('Benchmark Agent failure presentation preserves detail and supports legacy messages', () => {

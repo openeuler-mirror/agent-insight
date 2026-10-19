@@ -11,13 +11,14 @@ export function BenchmarkFailureNotice({
 }) {
   const failure = benchmarkFailurePresentation(code, message);
   if (!failure) return null;
+  const displayedCode = `${failure.code || 'EXECUTION_FAILED'}${failure.originalCode ? `（原始码：${failure.originalCode}）` : ''}`;
 
   if (compact) {
     return (
-      <div title={`${failure.label}：${failure.message}`} style={{ display: 'grid', gap: 2 }}>
+      <div title={`${failure.label}（${displayedCode}）：${failure.message}`} style={{ display: 'grid', gap: 2 }}>
         <span style={{ color: 'var(--error)', fontSize: 11, fontWeight: 600 }}>{failure.label}</span>
         <span style={{ color: 'var(--foreground-muted)', fontSize: 10.5, fontFamily: 'var(--font-mono, monospace)' }}>
-          {failure.code || 'EXECUTION_FAILED'}
+          {displayedCode}
         </span>
       </div>
     );
@@ -38,7 +39,7 @@ export function BenchmarkFailureNotice({
         {failure.message}
       </span>
       <span style={{ marginLeft: 'auto', color: 'var(--error)', fontSize: 10.5, fontFamily: 'var(--font-mono, monospace)', whiteSpace: 'nowrap' }}>
-        {failure.code || 'EXECUTION_FAILED'}
+        {displayedCode}
       </span>
     </div>
   );
