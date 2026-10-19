@@ -1,3 +1,4 @@
+import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server';
 
 import fs from 'fs';
 import { OpenAI } from "openai";
@@ -40,6 +41,7 @@ const EVALUATION_LLM_OPTIONS = {
 } as const;
 
 function appendLog(stage: string, input: any, output: any) {
+  if (!isLogEnabled('debug')) return;
   try {
      const logDir = path.dirname(LOG_FILE);
      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, {recursive: true});
@@ -47,10 +49,10 @@ function appendLog(stage: string, input: any, output: any) {
      const record = {
          timestamp: new Date().toISOString(),
          stage,
-         input,
-         output
+         inputMeta: input,
+         outputMeta: output
      };
-     fs.appendFileSync(LOG_FILE, JSON.stringify(record) + '\n');
+     fs.appendFileSync(LOG_FILE, JSON.stringify(sanitizeLogValue(record)) + '\n');
   } catch(e) { console.error('Log error', e); }
 }
 
@@ -507,9 +509,7 @@ export async function analyzeEvaluationItems(
             const content = response.choices?.[0]?.message?.content;
             if (!content) {
                 console.error(`\n[SkillAnalysis API Error 🚨] LLM content is empty for item: ${item.id}`);
-                console.error(">>> Full LLM Response:");
-                console.error(JSON.stringify(response, null, 2));
-                console.error("<<<\n");
+                console.error('[SkillAnalysis] Empty response metadata', { id: response.id, model: response.model, finishReasons: response.choices?.map(choice => choice.finish_reason) });
                 continue;
             }
             
@@ -536,14 +536,14 @@ export async function analyzeEvaluationItems(
                     reasoning: parsed.reasoning ?? '',
                     improvement_suggestion: parsed.improvement_suggestion
                 });
-                console.log(`[SkillAnalysis] ${item.id}: IS Skill Issue - ${parsed.reasoning?.substring(0, 50)}...`);
+                console.log(`[SkillAnalysis] ${item.id}: IS Skill Issue - reasoningLength=${parsed.reasoning?.length || 0}`);
             } else {
-                console.log(`[SkillAnalysis] ${item.id}: NOT Skill Issue - ${parsed.reasoning?.substring(0, 50)}...`);
+                console.log(`[SkillAnalysis] ${item.id}: NOT Skill Issue - reasoningLength=${parsed.reasoning?.length || 0}`);
             }
             
         } catch (e: any) {
-            console.error(`[SkillAnalysis] Error analyzing ${item.id}:`, e.message);
-            appendLog('skill_issue_analysis_error', { item_id: item.id }, { error: e.message });
+            console.error(`[SkillAnalysis] Error analyzing ${item.id}:`, e);
+            appendLog('skill_issue_analysis_error', { item_id: item.id }, { error: e });
         }
     }
     
@@ -618,9 +618,7 @@ export async function analyzeFailures(
         
         if (!content) {
             console.error("\n[Failure Analysis API Error 🚨] LLM content is empty!");
-            console.error(">>> Full LLM Response:");
-            console.error(JSON.stringify(response, null, 2));
-            console.error("<<<\n");
+            console.error('[FailureAnalysis] Empty response metadata', { id: response.id, model: response.model, finishReasons: response.choices?.map(choice => choice.finish_reason) });
             return { failures: [] };
         }
 
@@ -657,7 +655,7 @@ export async function analyzeFailures(
             
             if (answerScore !== undefined && answerScore < 1.0 && judgmentReason && history) {
                 console.log(`[SkillAnalysis] ✓ All conditions met. Score is imperfect (${answerScore}). Analyzing which items are Skill issues...`);
-                console.log(`[SkillAnalysis] Using: query=${effectiveQuery.substring(0, 50)}..., answer=${effectiveAnswer.substring(0, 50)}..., history_len=${history.length}`);
+                console.log(`[SkillAnalysis] Using: queryLength=${effectiveQuery.length}, answerLength=${effectiveAnswer.length}, history_len=${history.length}`);
                 
                 skillIssues = await analyzeEvaluationItems(
                     skillDef,
@@ -1029,7 +1027,7 @@ export async function analyzeSession(input: any[], user?: string | null): Promis
         skill = Array.from(foundSkills).join(', ');
     }
 
-    console.log(`[Rule-Based Analysis] Query: ${query.substring(0,20)}..., Skill: ${skill}, Result Length: ${final_result.length}`);
+    console.log(`[Rule-Based Analysis] Query length: ${query.length}, Skill: ${skill}, Result Length: ${final_result.length}`);
 
     appendLog('extraction', { 
        messages_summary: `Total ${messages.length} interactions`,

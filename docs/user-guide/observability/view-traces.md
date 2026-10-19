@@ -540,7 +540,7 @@ fromSessionId/toSessionId 优先复用框架原有会话编号。平台仅在当
 
 运行 `bash scripts/develop_start.sh` 或 `bash scripts/start.sh` 后，日志位于仓库根目录 **server.log**。搜索 `collaboration` 或响应头 `x-collaboration-request-id`，可看到操作、账号、协作/事件编号、HTTP 状态、定位结果和失败原因。401 检查凭据；400 检查字段；409 检查是否修改了重试正文；500 检查数据库和启动迁移日志。201 只表示事件保存成功，不表示步骤已经明确定位。
 
-日志不记录 API Key、上报正文或 Shell 命令。保持日志等级 info 才能查看成功记录；启动脚本会覆盖 server.log，需留存时先备份。两个脚本继续自动执行已有 schema 同步与客户端生成；本轮独立协作图不新增数据库表。
+日志不记录 API Key、上报正文或 Shell 命令。服务端默认只输出 error；设置 `AGENT_INSIGHT_LOG_LEVEL=info`（或 `debug`）才能查看成功记录；启动脚本会覆盖 server.log，需留存时先备份。两个脚本继续自动执行已有 schema 同步与客户端生成；本轮独立协作图不新增数据库表。
 
 
 协作图有两个入口：Trace 详情的“调用关系图”展示该 Trace 可自动解析的原生调用；Trace 列表的“协作图”进入协作列表，选择上报的 `collaborationId` 后查看完整上报关系。成员 Trace 就绪后，链路列表只展示一个合并入口（复用首个无调用父级的成员 taskId），详情包含全部成员：定位唯一时挂到对应调用步骤，否则按关系的 observedAt（缺失时为接收时间）并列展示。循环和回传联系保留在协作图中，不生成循环的 Trace 树。普通协作成员缺失、身份歧义、无权读取、正文为空、已有原生子记录、Langfuse 专用树或超过容量时，保留相关原 Trace 列表入口，避免隐藏无法展示的数据；Goal Plus 已声明 worker 的等待规则见前文。返回列表时会重新加载数据，无需手动刷新页面。

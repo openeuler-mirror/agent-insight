@@ -1,3 +1,4 @@
+import { withTraceTiming, timeTraceStage, traceTimingEvent, beginTraceStage } from '@/lib/logger/trace-timing';
 import type { Prisma } from '@prisma/client';
 import { aggregateExecutionList, selectExecutionListIds } from '@/lib/storage/execution-list-sql';
 import { selectComputedRecordPage, type ComputedRecordPageOptions } from '@/lib/storage/computed-record-page';
@@ -2333,6 +2334,11 @@ async function normalizeLegacyCodexSessionHistory(
 }
 
 export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
+    return withTraceTiming({ scope: 'save', traceId: data.task_id, uploadId: data.upload_id, framework: data.framework },
+        () => saveExecutionRecordInternal(data, options));
+}
+
+async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
     const receivedAt = options?.receivedAt === null ? null : options?.receivedAt ?? new Date();
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
@@ -2349,7 +2355,7 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
         try {
             const where: any = { taskId: data.task_id };
             if (data.framework) where.framework = data.framework;
-            const existingByTask = await db.findExecutions(where, { timestamp: 'desc' });
+            const existingByTask = await timeTraceStage('identity-query', () => db.findExecutions(where, { timestamp: 'desc' }));
             if (existingByTask && existingByTask.length > 0 && existingByTask[0]?.id) {
                 const exact = existingByTask.find((x: any) => x.id === data.task_id);
                 const canonicalId = (exact && exact.id) ? exact.id : existingByTask[0].id;
@@ -2361,7 +2367,10 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
     }
 
     let existingRecord: ExecutionRecord | null = null;
-    const dbRecord = await db.findExecutionById(recordId);
+    const dbRecord = await timeTraceStage('execution-read', () => db.findExecutionById(recordId));
+
+    traceTimingEvent('identity-resolved', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
+    const finishPreparation = beginTraceStage('prepare');
 
     if (dbRecord) {
         existingRecord = {
@@ -2480,7 +2489,7 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
     targetRecord.upload_id = recordId;
 
     if ((!targetRecord.label || !targetRecord.model || !targetRecord.user) && targetRecord.task_id) {
-        const session = await db.findSessionByTaskId(targetRecord.task_id);
+        const session = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
         if (session) {
             if (!targetRecord.label && session.label) targetRecord.label = session.label;
             if (!targetRecord.model && session.model) targetRecord.model = session.model;
@@ -2540,7 +2549,7 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
         try {
             const mergeStrategy = targetRecord.session_merge_strategy || storageAdapter.sessionMergeStrategy || 'monotonic';
             if (mergeStrategy !== 'snapshot-replace') {
-                const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+                const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
                 let existingInteractions = existingSession?.interactions
                     ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
                     : [];
@@ -2557,7 +2566,7 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
                 // 能力的框架允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
                 const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
                 if (!allowShrink) {
-                    const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+                    const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
                     let existingInteractions = existingSession?.interactions
                         ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
                         : [];
@@ -2572,6 +2581,8 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
                                 ? `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`
                                 : `当前框架未声明允许快照缩小。`),
                         );
+                        finishPreparation();
+                        traceTimingEvent('save-skipped', { executionId: recordId, reason: 'smaller-snapshot' });
                         return { success: true, record: targetRecord };
                     }
                 }
@@ -2613,7 +2624,7 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
     let judgmentReason = targetRecord.judgment_reason || NO_OUTCOME_MATCH_REASON;
     targetRecord.skill_trigger_rate = null;
 
-    const configs = await readConfig(targetRecord.user);
+    const configs = await timeTraceStage('config-read', () => readConfig(targetRecord.user));
     if (configs.length > 0) {
         const routingConfig = await findBestRoutingConfig(configs, targetRecord.query, targetRecord.user);
         const outcomeConfig = findBestOutcomeConfig(configs, targetRecord);
@@ -2879,7 +2890,8 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
         : null;
     const previousReceivedAt = dbRecord?.lastIngestedAt ? new Date(dbRecord.lastIngestedAt).getTime() : 0;
     const lastIngestedAt = receivedAt ? new Date(Math.max(previousReceivedAt, receivedAt.getTime())) : dbRecord?.lastIngestedAt ?? null;
-    await db.upsertExecution({
+    finishPreparation();
+    await timeTraceStage('execution-upsert', () => db.upsertExecution({
         where: { id: recordId },
         create: {
             id: recordId,
@@ -2968,7 +2980,9 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
             reasoningTokens: targetRecord.reasoning_tokens,
             observedAgents: observedAgentsJson,
         }
-    });
+    }));
+    traceTimingEvent('execution-written', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
+    const finishPostExecution = beginTraceStage('post-execution');
 
     if (data.upload_id && data.task_id && data.upload_id !== recordId) {
         try {
@@ -3084,11 +3098,13 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
         && Number.isFinite(traceCompletedAtForSession.getTime())
         && (!hasExplicitTraceStart || traceCompletedAtForSession.getTime() >= explicitTraceStartedAt.getTime());
 
+    finishPostExecution();
+    const finishSession = beginTraceStage('session-save');
     if (targetRecord.task_id && mergedInteractionsForSession) {
         const isLangfuseTrace = targetRecord.framework === 'langfuse' || targetRecord.framework === 'langfuse-langgraph';
         let langfuseTraceNodesJson: string | undefined;
         if (isLangfuseTrace && Array.isArray(targetRecord.langfuseTraceNodes)) {
-            const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+            const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
             let existingNodes: LangfuseTraceNode[] = [];
             if (typeof existingSession?.langfuseTraceNodes === 'string' && existingSession.langfuseTraceNodes.trim()) {
                 try {
@@ -3099,8 +3115,8 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
             targetRecord.langfuseTraceNodes = mergeLangfuseTraceNodes(existingNodes, targetRecord.langfuseTraceNodes);
             langfuseTraceNodesJson = JSON.stringify(targetRecord.langfuseTraceNodes);
         }
-        await db.upsertSession(
-            targetRecord.task_id,
+        await timeTraceStage('session-upsert', () => db.upsertSession(
+            targetRecord.task_id!,
             {
                 taskId: targetRecord.task_id,
                 query: targetRecord.query,
@@ -3121,7 +3137,7 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
                 ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
             }
-        );
+        ));
         if (hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
         }
@@ -3129,6 +3145,9 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });
         }
     }
+
+    finishSession();
+    const finishPostSave = beginTraceStage('post-save');
 
     // 大盘 B 档：基于内存中的全量 merged interactions 预解析 per-call 摘要（零额外 JSON.parse，
     // 单遍 O(n)，全量重算幂等覆盖）。失败降级 null，绝不阻断主写入。
@@ -3169,6 +3188,8 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
         }
     }
 
+    finishPostSave();
+    traceTimingEvent('saved', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
     return { success: true, record: targetRecord };
 }
 

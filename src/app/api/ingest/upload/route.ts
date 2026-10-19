@@ -33,8 +33,7 @@ export async function POST(request: Request) {
     try {
         data = JSON.parse(rawBody);
     } catch (e) {
-        console.error('JSON Parse Error:', e);
-        console.error('Raw Body:', rawBody);
+        console.error('[Upload-API] Invalid JSON body', { errorName: e instanceof Error ? e.name : 'unknown', bodyBytes: Buffer.byteLength(rawBody) });
         return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
     }
     const headers = request.headers;
@@ -111,10 +110,8 @@ export async function POST(request: Request) {
     }
 
     if (apiKey && !apiKeyUser && !deviceIdentity) {
-      const keyPrefix = apiKey.slice(0, 12);
       console.error(
         `[Upload-API] ❌ Rejecting upload (HTTP 401): API key not found in User table.\n` +
-        `  Key prefix: ${keyPrefix}...\n` +
         `  task_id: ${data.task_id}\n` +
         `  framework: ${data.framework || 'unknown'}\n` +
         `  payload.user (untrusted): ${data.user || '(none)'}\n` +
@@ -183,7 +180,7 @@ export async function POST(request: Request) {
         }
     }
 
-    console.log(`[Upload-API] 📥 Received data from ${data.framework || 'unknown'}: task_id=${data.task_id}, query=${data.query?.substring(0, 50)}..., user=${username} (via ${userResolutionPath})`);
+    console.log(`[Upload-API] 📥 Received data from ${data.framework || 'unknown'}: task_id=${data.task_id}, queryLength=${data.query?.length || 0}, user=${username} (via ${userResolutionPath})`);
 
     if (data.endpoint) {
         data.endpoint = normalizeEndpointUrl(data.endpoint) ?? undefined;
