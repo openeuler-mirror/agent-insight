@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -81,7 +82,12 @@ test('online Git preparation pins a commit, validates cached content, and cleans
     t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous })
   }
   const cacheRoot = path.join(root, 'cache')
+  const legacyCache = path.join(cacheRoot, createHash('sha256').update(`${source}\n${revision}\nuserspace-kernel/v1`).digest('hex'))
+  await fs.mkdir(legacyCache, { recursive: true })
+  await fs.writeFile(path.join(legacyCache, '.agent-insight-source.json'), JSON.stringify({ source, revision, digest: 'old-locale-digest' }))
   const cache = await prepareZsoftSource({ cacheRoot })
+  assert.notEqual(cache, legacyCache)
+  assert.equal(JSON.parse(await fs.readFile(path.join(legacyCache, '.agent-insight-source.json'), 'utf8')).digest, 'old-locale-digest')
   assert.equal((await loadZsoftCases(cache))[0].private.revision, revision)
   git(['commit', '--allow-empty', '--quiet', '-m', 'new upstream version'])
   assert.equal(await prepareZsoftSource({ cacheRoot }), cache)
@@ -89,7 +95,7 @@ test('online Git preparation pins a commit, validates cached content, and cleans
   await fs.rename(repository, `${repository}-unavailable`)
   assert.equal(await prepareZsoftSource({ cacheRoot }), cache)
   await assert.rejects(prepareZsoftSource({ source, revision: 'f'.repeat(40), cacheRoot }))
-  assert.deepEqual(await fs.readdir(cacheRoot), [path.basename(cache)])
+  assert.deepEqual((await fs.readdir(cacheRoot)).sort(), [path.basename(cache), path.basename(legacyCache)].sort())
   await fs.writeFile(path.join(cache, 'tasks/c-case/public/README.md'), 'changed cached source')
   await assert.rejects(prepareZsoftSource({ source, revision, cacheRoot }), /缓存与冻结来源不一致/)
   await assert.rejects(prepareZsoftSource({ source, revision: 'moving-branch', cacheRoot }), /40位/)

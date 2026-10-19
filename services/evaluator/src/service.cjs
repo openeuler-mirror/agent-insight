@@ -294,13 +294,24 @@ class BenchmarkEvaluatorService {
         const evaluator = this.registry.get(window.evaluatorKey, window.benchmarkKey)
         await this.imagePool.initialize()
         const specs = []
-        for (const item of window.cases) specs.push(...await evaluator.describeImages(item, this.imagePool.arch))
-        windows.push({ ...window, specs })
+        const caseIds = []
+        const cases = []
+        for (let index = 0; index < window.cases.length; index++) {
+          try {
+            specs.push(...await evaluator.describeImages(window.cases[index], this.imagePool.arch))
+            caseIds.push(window.caseIds[index])
+            cases.push(window.cases[index])
+          } catch (error) {
+            if (!(error instanceof EvaluatorProtocolError) || error.status !== 422 || error.retryable !== false) throw error
+          }
+        }
+        windows.push({ ...window, specs, caseIds, cases })
       }
       return this.withAdmission(async () => {
         if ((this.imagePool.state.windowRevision ?? -1) >= request.revision) return { enabled: true, accepted: false }
+        const selected = new Set(windows.flatMap(window => window.caseIds))
         for (const [runId, entry] of this.imagePreparations) {
-          if (ids.has(entry.executionRunId)) continue
+          if (selected.has(entry.executionRunId)) continue
           this.controllers.get(runId)?.abort()
           await entry.task
           const prior = await this.journal.request(runId)
@@ -332,6 +343,9 @@ class BenchmarkEvaluatorService {
   async prepareBeforeAdmission(request, evaluator) {
     evaluator.assertAssetsReady?.()
     if (!this.imagePool || !evaluator.describeImages) return
+    await this.imagePool.initialize?.()
+    // Validate permanent metadata errors before window selection, or an excluded Case waits forever.
+    await evaluator.describeImages(request.evaluationJob.payload, this.imagePool.arch)
     if (this.imagePool.state?.windowRevision !== undefined) {
       const selected = Object.values(this.imagePool.state.windows).some((window) => window.expiresAt > Date.now() && window.caseIds?.includes(request.evaluationJob.executionRunId))
       if (!selected) throw evaluatorError('IMAGE_POOL_PREPARING', '等待进入镜像准备窗口', 409, true)

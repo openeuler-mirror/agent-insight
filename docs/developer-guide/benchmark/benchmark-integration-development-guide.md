@@ -311,6 +311,8 @@ npx tsx scripts/benchmark/install-dataset.ts \
 
 目录来源按解析后的 Case 规范化内容计算指纹，文件来源保留文件字节摘要。目录不得使用导入后删除来源选项。
 
+ZSoft 的 `sourceTaskDigest` 专门对原始 `task.json` 对象与 `public/` 文件字节摘要清单计算 SHA-256，键按固定 Unicode 字符顺序序列化；平台导入与 Node Provider 共用 `source-identity.cjs`，与 Python 冻结端保持一致，不复用通用协议中基于 `localeCompare` 的 JSON 排序。跨语言测试须包含多文件、大小写、标点和数字字符串键。只在实际资产及公开元数据全部验证通过后识别旧排序摘要，并以 `ZSOFT_TASK_DIGEST_LEGACY` 拒绝，不接受任意历史哈希；管理员显式导入新名称的数据集并新建实验，不静默改写冻结身份。通用请求摘要规则不变。
+
 ### 7.1 Dataset Preparer
 
 需要在线自动获取或离线复用来源时，在接入包实现：
@@ -565,6 +567,8 @@ ZSoft 不再把平台的任务哈希摘要作为官方报告。独立工作目�
 
 准备消息复用 `POST /api/v1/evaluations`：`operation=prepare-images` 可下发 `revision + windows[]` 全服务窗口快照，兼容原有单实验窗口消息；总 Case 数不超过服务评测并发加 1。摘要覆盖完整消息，请求携带 `x-agent-insight-request-digest`，不再配置专用准备令牌。Controller 校验摘要与递增窗口版本，旧消息不能恢复旧窗口；空数组撤销准备。Evaluator 端口仅向平台开放，不增加用户配额或多平台协调。
 
+Image Provider 可抛出带 `code/status=422/retryable=false` 的确定性元数据错误，由通用 Entrypoint 转为协议错误。完整预取快照仅排除出错 Case，其余 Case 的镜像与窗口继续发布；入场检查在窗口选择之前再次验证元数据并返回 HTTP 422，使平台结束该 Case 的等待。暂态和未知错误不被吞掉，资产未就绪等可重试状态仍按原协议处理。
+
 后台准备不占评测执行槽。重评创建新 Evaluation 后先尝试刷新窗口再下发评测；收到 `IMAGE_POOL_PREPARING` 时也刷新窗口，避免只重试评测而未触发准备。准备请求失败保留评测队列，后续重试及评测 watchdog 定期补偿。执行 watchdog 在启动恢复前注册，历史实验恢复逐条隔离异常，避免单条已取消任务阻断后续恢复或后台调度。无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。
 
 首次评测与重评共用 `evaluation-scheduler` 的服务容量与单用户配额；重评不设全平台单独并发上限。服务容量读取 `/health.maxConcurrency`，单用户配额通过 `config/benchmark/platform.local.yaml` 的 `benchmarks.scheduling.maxEvaluationConcurrencyPerUser` 限制。相同 Case 的重评使用进程内锁及数据库 Run 状态、`updatedAt` 条件更新认领，防止并发请求重复创建 attempt；不同 Case 可独立入队。
@@ -611,6 +615,8 @@ Presentation 只控制公共前端的名称、顺序和有限格式，不能改�
 文本、JSON、Diff、图片和 PDF 使用公共预览器，其他媒体类型保留下载入口。不要把 HTML、JavaScript 或 React 代码放入 Presentation。
 
 ## 11. 错误与安全
+
+MCTS 的本地采集器从失败 HTTP 响应、`turn_failed`/带错误的终态与失败工具结果提取固定诊断码，写入本次 `runtime-ledger.json`。输出截断的失败工具事件不受普通观察队列背压丢弃；未恢复的诊断可将表面成功的 turn 标为错误。同轮后续成功写入不保留已恢复的截断状态，空补救轮次不会擦除先前证据。执行器仅在 `MCTS_RUN_FAILED` / `AGENT_NO_OUTPUT` 时读取本次有界 ledger，并结合进程错误，将 `MCTS_LLM_INSUFFICIENT_BALANCE` / `MCTS_LLM_OUTPUT_TRUNCATED` 的固定中文说明透传至现有失败回调；同时保留根 Trace、原异常 cause 和诊断码，不覆盖取消、超时或提交物校验错误。无需新增路由或修改外部 MCTS/xGovernor；上游完全未暴露的余额错误不能靠文件 404 推断。部署需同步更新客户端运行时、采集器自包含安装包与 standalone 文件追踪清单。
 
 错误要区分：
 
@@ -781,6 +787,10 @@ P1 通过要求 reference 为 `completed/success=true`、negative 为 `completed
 `zsoft-l1` 从官方目录导入 userspace 与 kernel Case，私有身份字段为 `sourceTaskDigest` 和可选 revision。旧 P2 JSON/JSONL 不再接受，也不需要 `agentBundle.digest`。实验向导只选择数据集和执行目标；平台不持久化任务目录，也不扩展 `/api/benchmark/v1/execution-targets` 配置接口。平台按所选 Case 将 `taskId` 放进 `zsoft-tasks` workspace 契约。执行客户端从其 MCTS 仓库 `testcases_union/config.env` 读取 `ZSOFT_TASKS_DIR`，并通过 `zsoft-tasks-workspace/v3` 从 `<ZSOFT_TASKS_DIR>/<taskId>` 准备独立公开工作区，复制 `public/` 和裁剪元数据；随后 MCTS 在隔离工作区使用其中的 `tasks/`。缺少或非法目录配置返回 `ZSOFT_TASKS_DIR_INVALID`；缺题返回 `ZSOFT_TASK_MISSING`；公开元数据不一致返回 `ZSOFT_TASK_MISMATCH`。内核题映射为 C 提交，与 userspace 互斥标记轨道。ZSoft 只接受原生任务目录工作区，不再回退历史公开包。
 
 普通 Agent 使用 `single-file/v1` 收集固定的 `submission/poc`。MCTS 使用平台 Shell/Python 桥接，传入 `--mode zsoft`、`--runtime`、`--task-id` 与独立输出目录；ZSoft 插件不接受 SWE 专用的 `--testbench`、`--instance-id`、`--split`，平台不会传入这些参数。桥接替换最终官方判题回调，仅导出所选 PoC 原始字节，并阻止本地/远端正式 judge 入口。Python、C、binary 分别使用插件内部文件名 `poc.py`、`poc.c`、`poc`，平台产物统一为 `poc`。
+
+`ZsoftTasksWorkspaceProvider` 优先使用原生 `public/repo-vul`；缺少时通过 `zsoft-source.cjs` 有界读取任务的 `private/source-manifest.json` 和 `<tasks-dir>/../source-locks/<source-id>.json`，校验路径、普通文件、源码 ID、一致性、无凭据且可安全交给 Shell 的公开 HTTP(S) URL 与固定版本。只在新工作区生成 `{source_id}` 及 `{source_id,kind,url,commit?,sha256?}`，未知字段不复制，不放宽 `validatePublicPath`。这两个控制文件仅供宿主 MCTS 读取；缺少或非法来源分别返回 `ZSOFT_SOURCE_MISSING`、`ZSOFT_SOURCE_INVALID`。现有公开源码不读取私有来源，原始公开文件与数据集指纹不变。
+
+`mcts-zsoft-source.py` 提供无宿主缓存的沙箱下载步骤：归档有 SHA-256 时先校验再解压，Git 使用固定提交 shallow fetch 并核对 HEAD，不采用移动 ref。平台桥接替换 MCTS 的 `_download_script`，静态接口预检同时覆盖 materializer 文件与 `bundle_bytes`。每次 `bundle_bytes` 返回前，对 gzip tar 只读检查：文件集合与准备好的公开树、裁剪元数据及 README 派生文本完全匹配，逐文件大小和 SHA-256 相同，拒绝重复/越界名称、额外文件、链接和特殊文件，并限制数量、总大小。控制文件或判题文件混入返回 `ZSOFT_AGENT_BUNDLE_INVALID`，不进入沙箱上传。控制文件随工作区清理；不更新数据库、API 或评测侧资产。
 
 MCTS 输出 `platform-export.json`（`mcts-poc-export/v1`），包含 `taskId`、`submissionKind`、`evaluation: deferred` 和 `mctsContract`（版本 `mcts-zsoft-contract/v1`、源码 SHA-256、支持的提交类型）。静态接口预检检查调用签名、注册点、CLI 和提示文件；桥接启动时再次检查摘要，运行器核对导出摘要与启动前的契约一致。运行器核对公开任务元数据、导出身份、类型和题目大小限制，拒绝符号链接，成功取得唯一根 Trace 后复制到 `submission/poc`。正式结果来自平台 ZSoft Evaluator，不采用 MCTS 回调布尔值。
 

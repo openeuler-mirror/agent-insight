@@ -3,12 +3,12 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { canonicalJson, type BenchmarkDatasetLoader, type JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
+import { type BenchmarkDatasetLoader, type JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import type { ZsoftCase } from '../adapter'
+import { fingerprintSource } from '../evaluator/source-identity.cjs'
 
 const execFileAsync = promisify(execFile)
-function fingerprint(value: JsonValue) { return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}` }
 
 export async function resolveZsoftRoot(sourcePath: string) {
   for (const root of [sourcePath, path.join(sourcePath, 'benchmarks/vulnerability/zsoft-l1')]) {
@@ -30,7 +30,7 @@ export async function sourceTaskDigest(root: string, taskId: string, manifest: J
   }
   await visit(`tasks/${taskId}/public`)
   if (!files[`tasks/${taskId}/public/README.md`]) throw new BenchmarkProtocolError('ZSOFT_DATASET_PUBLIC_MISSING', `题目 ${taskId} 缺少 public/README.md`, 400)
-  return fingerprint({ manifest, publicFiles: files })
+  return fingerprintSource({ manifest, publicFiles: files })
 }
 
 export async function loadZsoftCases(sourcePath: string): Promise<ZsoftCase[]> {

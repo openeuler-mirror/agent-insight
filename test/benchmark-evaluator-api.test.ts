@@ -5,8 +5,10 @@ import fsp from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import test from 'node:test'
 import { sendImagePreparationWindow } from '../src/lib/benchmark/image-preparation'
+const loadModule = createRequire(import.meta.url)
 
 const {
   BenchmarkEvaluatorService,
@@ -1005,6 +1007,63 @@ test('Controller validates the total Case budget across a complete preparation s
   await prepare(3)
   await assert.rejects(prepare(4), /超过服务上限/)
   assert.equal(received.length, 1)
+})
+
+test('permanent image metadata errors exclude only their Case and return HTTP 422 before window waiting', { timeout: 10_000 }, async t => {
+  const { EvaluatorProtocolError } = loadModule('../services/evaluator/src/evaluator-registry.cjs')
+  const { fingerprintJson } = await import('../packages/benchmark-protocol/src/contracts')
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'evaluator-invalid-window-'))
+  type Window = { caseIds: string[]; specs: unknown[]; expiresAt?: number }
+  const pool = { config: { prefetch: true }, state: {} as { windowRevision?: number; windows?: Record<string, Window> }, arch: 'x86_64', async initialize() {}, async close() {},
+    async replaceWindows(revision: number, windows: Window[]) {
+      pool.state = { windowRevision: revision, windows: Object.fromEntries(windows.map((window, i) => [i, { ...window, expiresAt: Date.now() + 60_000 }])) }
+      return { accepted: true }
+    } }
+  const bad = requestFor('invalid-metadata')
+  const good = requestFor('valid-metadata')
+  let transient: Error | null = null
+  const evaluator = { key: 'swe-bench', benchmarkKey: 'swe-bench', validateJob() {}, describeImages(payload: unknown) {
+    if (transient) throw transient
+    if (JSON.stringify(payload) === JSON.stringify(bad.evaluationJob.payload)) throw new EvaluatorProtocolError('FIXTURE_METADATA_INVALID', '题目元数据不匹配', 422, false)
+    return [{ key: 'valid-image' }]
+  } }
+  good.evaluationJob.payload.instance.instance_id = 'valid-case'
+  good.requestDigest = evaluationDispatchDigest(good)
+  const service = new BenchmarkEvaluatorService({ dataDir: directory, maxConcurrency: 1, imagePool: pool,
+    registry: new EvaluatorRegistry([evaluator]) }) as unknown as {
+      createServer(): http.Server
+      prepareImageWindow(request: unknown, headers: Record<string, string>): Promise<void>
+      prepareBeforeAdmission(request: ReturnType<typeof requestFor>, evaluator: typeof evaluator): Promise<void>
+      acquireJobImages(): Promise<void>
+      imagePreparations: Map<string, { task: Promise<void> }>
+      journal: { state(runId: string): Promise<unknown> }
+    }
+  const listener = await listen(service.createServer())
+  t.after(async () => { await listener.close(); await fsp.rm(directory, { recursive: true, force: true }) })
+  const payload = { operation: 'prepare-images', revision: 1, windows: [{ benchmarkKey: 'swe-bench', evaluatorKey: 'swe-bench',
+    experimentId: 'fixture-experiment', cases: [bad.evaluationJob.payload, good.evaluationJob.payload], caseIds: [bad.evaluationJob.executionRunId, good.evaluationJob.executionRunId] }] }
+  const requestDigest = fingerprintJson(payload)
+  await service.prepareImageWindow({ ...payload, requestDigest }, { 'x-agent-insight-request-digest': requestDigest })
+  const windows = Object.values(pool.state.windows!)
+  assert.deepEqual(windows[0].caseIds, [good.evaluationJob.executionRunId])
+  assert.deepEqual(windows[0].specs, [{ key: 'valid-image' }])
+  const rejected = await fetch(`${listener.origin}/api/v1/evaluations`, { method: 'POST', headers: headers(bad), body: JSON.stringify(bad), signal: AbortSignal.timeout(5000) })
+  assert.equal(rejected.status, 422)
+  assert.deepEqual((await rejected.json()).error, { code: 'FIXTURE_METADATA_INVALID', message: '题目元数据不匹配', retryable: false })
+  assert.equal(await service.journal.state(bad.runId), null)
+  let acquired = false
+  service.acquireJobImages = async () => { acquired = true }
+  await assert.rejects(service.prepareBeforeAdmission(good, evaluator), { code: 'IMAGE_POOL_PREPARING' })
+  await service.imagePreparations.get(good.runId)!.task
+  assert.equal(acquired, true)
+  await service.prepareBeforeAdmission(good, evaluator)
+  for (const error of [new EvaluatorProtocolError('FIXTURE_TEMPORARY', 'temporarily unavailable', 503, true), new Error('unknown provider failure')]) {
+    transient = error
+    const newer = { ...payload, revision: 2 }
+    const digest = fingerprintJson(newer)
+    await assert.rejects(service.prepareImageWindow({ ...newer, requestDigest: digest }, { 'x-agent-insight-request-digest': digest }), error)
+    assert.equal(pool.state.windowRevision, 1)
+  }
 })
 
 test('only confirmed disk exhaustion with no other owners or reclaimable images fails a waiting Case', async (t) => {

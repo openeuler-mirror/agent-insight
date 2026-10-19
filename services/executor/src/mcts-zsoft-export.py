@@ -48,7 +48,21 @@ def main() -> None:
     sys.path.insert(0, str(repo))
     from testcases_union.res.task_plugins.zsoft import plugin, bundle, flow, official, artifact
     from testcases_union.res.task_plugins.zsoft.task import ZSoftTask
+    from testcases_union.res.task_plugins.zsoft import materializer
     from testcases_union.res.mode import OFFICIALS, ARTIFACT_READERS
+
+    source_spec = importlib.util.spec_from_file_location("platform_zsoft_source", Path(__file__).with_name("mcts-zsoft-source.py"))
+    source_module = importlib.util.module_from_spec(source_spec)
+    source_spec.loader.exec_module(source_module)
+    materializer._download_script = source_module.download_script
+    original_bundle_bytes = ZSoftTask.bundle_bytes
+
+    def checked_bundle_bytes(task):
+        content = original_bundle_bytes(task)
+        source_module.validate_agent_bundle(content, task)
+        return content
+
+    ZSoftTask.bundle_bytes = checked_bundle_bytes
 
     kind = os.environ["AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND"]
     if kind not in contract["submissionKinds"]:

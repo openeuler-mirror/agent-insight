@@ -143,6 +143,8 @@ Agent Insight 链路追踪
 
 xGovernor 把工具输入放在 `tool_activity(begin)`、把结果放在 `tool_activity(end)`。透明代理按同一个 activity ID 合并两端，因此 Bash 等工具的 Input 显示实际结构化参数，Output 显示执行结果。若上游未发送 begin，Input 保持空对象并在 Trace 元数据中标记采集缺失；采集到的字段仍经过通用密钥、账号和本地路径脱敏。
 
+若失败工具明确报告输出 token 截断，即使上游将该 turn 报成完成，Trace 也会标记这轮错误并显示原因；同轮后续成功写入可消除该轮待处理的截断提示。HTTP/SSE 明确返回的余额不足同样保留为错误摘要；本地 ledger 只保存固定诊断码，不保存额外的账户、密钥或完整错误正文。外部运行时未传出的模型错误不能由采集器还原，空回复和普通 404 不会被当成余额不足。
+
 ## 隐私和边界
 
 - 代理不解析 `exec`、`files/write`、checkpoint delete 等敏感请求正文；`files/read` 只统计调用次数，不保存路径或响应内容。

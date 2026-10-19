@@ -42,11 +42,23 @@ npx tsx scripts/benchmark/ensure-dataset.ts \
 
 此前已安装的 24 题数据集不会自动扩容；使用上面的 `--refresh --name` 安装全量版本。在线缓存使用新的解析版本键，旧缓存不会被误判为损坏。旧 P2 JSON/JSONL 和 ZSoft 公开包工作区不再兼容，需从官方目录重新导入。历史实验不会自动迁移。题目身份使用 `task.json` 与公开文件内容的 `sourceTaskDigest`；私有判题材料和镜像构建摘要由评测机单独冻结，平台不以它们作为数据准备前置条件。
 
+题目摘要在平台与评测端统一采用固定字符顺序，不使用受语言环境影响的 `localeCompare`。部分旧数据集（尤其含多文件源码的内核题）曾使用错误排序；更新平台及 Controller 后，旧错误摘要返回不可重试的 `ZSOFT_TASK_DIGEST_LEGACY`，不再一直显示等待镜像。按上面的 `--refresh --name "ZSoft L1 摘要修正版"` 从匹配的官方来源导入独立数据集，并基于它新建实验；不要只点击旧实验重评，因为实验身份已冻结。线上准备使用新的缓存版本键，避免旧缓存的导入摘要标记被误判为文件篡改；不会删除旧缓存，离线时可将 `dataset.source` 指向匹配的本机官方目录。已有正确摘要的数据不受影响，不修改数据库记录或跳过校验，也无需为此重新发布题目资产镜像。真正的内容变更仍返回 `ZSOFT_TASK_MISMATCH`。
+
+镜像预取窗口按 Case 隔离不可恢复的元数据错误，其他合法 Case 继续准备；正式下发即使尚未进入窗口，也会先返回该 Case 的明确错误，由平台标记评测失败。网络下载、资产准备及空间不足等可重试等待保持原行为。
+
 执行机准备原生 ZSoft 任务目录，结构为 `<tasks-dir>/<task-id>/task.json` 和 `<tasks-dir>/<task-id>/public/`。在执行客户端对应的 MCTS 仓库 `testcases_union/config.env` 设置绝对路径，例如 `ZSOFT_TASKS_DIR=/srv/zsoft/tasks`。可以沿用上游仓库已有目录；若执行在用户机器，由用户在该执行机准备目录并配置 MCTS，平台不需要访问它。私有判题资产和正式镜像仍由 Evaluator 管理。
+
+如果题目没有 `public/repo-vul/`，执行机还需保留原生 `<task-id>/private/source-manifest.json` 中的 `source_id`，以及 `<tasks-dir>/../source-locks/<source-id>.json`。客户端只提取 `source_id`、`kind`、公开 HTTP(S) `url`、固定 `commit` 和可选 `sha256`，在本次临时工作区重新生成最小控制文件，不复制原始私有文件。Git 来源必须固定到完整 40 位提交；归档需固定提交 URL 或 SHA-256，不接受仅指向移动分支的来源。无需新增环境变量或手动向 `public/` 填入源码。
+
+MCTS 优先使用已有公开源码，否则在沙箱内下载锁定版本；有归档 SHA-256 时先校验再解压，Git shallow fetch 后核对提交。不读取执行机的源码缓存，也不做预热或缓存优化。下载仍依赖沙箱网络，并占用执行时间预算，多个分支可能重复下载。缺少两种来源返回 `ZSOFT_SOURCE_MISSING`，非法字段、危险地址或符号链接返回 `ZSOFT_SOURCE_INVALID`，均在启动 MCTS 前失败。
+
+最小的 `private/source-manifest.json` 与 `source-locks/` 只供执行机读取，不上传或挂载进沙箱。桥接在返回待上传任务包前核对文件集合与字节，包内只允许裁剪后的 `task.json`、由公开 README 生成的 `TASK.md` 与 `public/` 文件；私有文件、控制文件、额外文件、内容替换及链接均拒绝并返回 `ZSOFT_AGENT_BUNDLE_INVALID`。隐藏测试、参考 PoC、修复补丁与 Judge 配置仍留在原位置。运行结束按现有机制清理临时工作区，不改原始任务、数据库身份或 SWR 镜像。
+
+升级后需在执行机重新执行客户端安装页面提供的安装命令，更新 `~/.agent-insight/client/runtime/` 并重启客户端；只更新平台项目代码不会更新已安装的执行客户端。无需修改外部 MCTS 源码；其插件需支持现有源码下载与 `bundle_bytes` 接口，不兼容时就绪检查会拒绝该执行目标。
 
 实验向导只需选择 ZSoft 数据集、生成 Trace 和执行客户端，不配置任务目录；平台根据所选 Case 自动下发 `task-id`。目录按执行客户端本机的 MCTS 配置管理，修改后对该客户端后续任务生效。
 
-客户端收到 `zsoft-tasks` 工作区契约后，从 MCTS `config.env` 读取原生目录，核对题目 ID 和公开元数据，从原生目录复制 `public/` 与裁剪后的 `task.json` 到独立运行目录，不将私有判题文件交给 Agent，不改写原始任务。MCTS 使用该独立目录作为实际 `--tasks-dir`，生成单文件 PoC 和 Trace，客户端上传后清理运行目录。缺少或错误配置返回 `ZSOFT_TASKS_DIR_INVALID`；缺题返回 `ZSOFT_TASK_MISSING`；题目与数据集不一致返回 `ZSOFT_TASK_MISMATCH`。
+客户端收到 `zsoft-tasks` 工作区契约后，从 MCTS `config.env` 读取原生目录，核对题目 ID 和公开元数据，从原生目录复制 `public/` 与裁剪后的 `task.json` 到独立运行目录，必要时生成上述最小源码控制文件，不将私有判题文件交给 Agent，不改写原始任务。MCTS 使用该独立目录作为实际 `--tasks-dir`，生成单文件 PoC 和 Trace，客户端上传后清理运行目录。缺少或错误配置返回 `ZSOFT_TASKS_DIR_INVALID`；缺题返回 `ZSOFT_TASK_MISSING`；题目与数据集不一致返回 `ZSOFT_TASK_MISMATCH`。
 
 客户端上报 `zsoft-tasks-workspace/v3`、`single-file/v1`；MCTS 还需 `mcts-zsoft-export/v1`。v3 表示任务目录来自执行机 MCTS 配置，且包含 userspace 与 kernel 轨道。内核题仍使用同一个 `tasks-dir`，任务 ID 由平台下发，提交物为单文件 C 源码。
 

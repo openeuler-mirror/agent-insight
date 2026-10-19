@@ -385,7 +385,14 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
   async describeImages(payload, arch) {
     const assetsDir = this.assertAssetsReady()
     if (!this.descriptor.imageProvider) return []
-    return require(this.descriptor.imageProvider).describeImages(payload, arch, { assetsDir })
+    try {
+      return await require(this.descriptor.imageProvider).describeImages(payload, arch, { assetsDir })
+    } catch (error) {
+      if (/^[A-Z][A-Z0-9_]{0,95}$/.test(error.code) && error.status === 422 && error.retryable === false) {
+        throw new EvaluatorProtocolError(error.code, error.message, 422, false)
+      }
+      throw error
+    }
   }
 
   validateBenchmarkJob(job) {

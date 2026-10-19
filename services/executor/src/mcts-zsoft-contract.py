@@ -16,7 +16,7 @@ def check_interface(repo: Path) -> dict:
         "main": "core/main.py",
         "mode": "res/mode.py",
         **{name: f"res/task_plugins/zsoft/{name}.py" for name in
-           ("plugin", "bundle", "flow", "official", "task", "artifact")},
+           ("plugin", "bundle", "flow", "official", "task", "artifact", "materializer")},
     }
     for name, relative in files.items():
         data = (repo / "testcases_union" / relative).read_bytes()
@@ -64,6 +64,8 @@ def check_interface(repo: Path) -> dict:
         if not any(isinstance(item, ast.Name) and item.id == "property" for item in getter.decorator_list):
             raise ValueError(f"missing property: {name}")
     function(task, "issue_text", 1)
+    function(task, "bundle_bytes", 1)
+    function(trees["materializer"], "_download_script", 1)
 
     plugin = trees["plugin"]
     if not any(isinstance(item, ast.ImportFrom) and item.module == "official"

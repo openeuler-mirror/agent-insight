@@ -30,6 +30,7 @@ async function fixture(t: TestContext, count: number) {
   let preparationCount = 0
   let waitingCount = 0
   let rejectPreparation = false
+  let terminalCode = ''
   let experimentId: string | undefined
   let datasetId: string | undefined
   const server = createServer(async (req, res) => {
@@ -48,6 +49,11 @@ async function fixture(t: TestContext, count: number) {
       windows.clear()
       for (const window of body.windows || []) for (const id of window.caseIds) windows.add(id)
       res.end('{}')
+      return
+    }
+    if (terminalCode && body.evaluationJob.payload.taskId === 'synthetic-0') {
+      res.statusCode = 422
+      res.end(JSON.stringify({ error: { code: terminalCode, message: '旧排序摘要，请重新导入新数据集', retryable: false } }))
       return
     }
     if (!windows.has(body.evaluationJob.executionRunId)) {
@@ -97,7 +103,8 @@ async function fixture(t: TestContext, count: number) {
     const result = await prisma.experimentEvalResult.create({ data: { experimentId: experiment.id, caseId: c.id, evaluatorId: 'benchmark:zsoft-l1', status: 'done', score: 100 } })
     cases.push({ experimentId: experiment.id, resultId: result.id, user: 'retry-user', runId })
   }
-  return { cases, windows, accepted, get preparationCount() { return preparationCount }, get waitingCount() { return waitingCount }, set rejectPreparation(value: boolean) { rejectPreparation = value } }
+  return { cases, windows, accepted, get preparationCount() { return preparationCount }, get waitingCount() { return waitingCount },
+    set rejectPreparation(value: boolean) { rejectPreparation = value }, set terminalCode(value: string) { terminalCode = value } }
 }
 
 test('different cases can reevaluate concurrently, same-case duplicate clicks create one attempt, and service capacity still applies', async (t) => {
@@ -133,6 +140,25 @@ test('an already queued evaluation refreshes its missing image window and recove
   await prisma.benchmarkEvaluationDispatchOutbox.update({ where: { evaluationId: prepared.evaluationRunId }, data: { nextAttemptAt: new Date(0) } })
   await scheduler.dispatchBenchmarkEvaluation(prepared.evaluationRunId)
   assert.deepEqual(f.accepted, [prepared.evaluationRunId])
+})
+
+test('permanent metadata rejection fails visibly without retrying or blocking another Case', async t => {
+  const f = await fixture(t, 2)
+  f.terminalCode = 'ZSOFT_TASK_DIGEST_LEGACY'
+  const rejected = await preparation.retryBenchmarkEvaluation(f.cases[0])
+  await eventually(async () => (await prisma.benchmarkEvaluation.findUniqueOrThrow({ where: { id: rejected.evaluationRunId } })).status === 'dispatch_failed')
+  const failed = await prisma.benchmarkEvaluation.findUniqueOrThrow({ where: { id: rejected.evaluationRunId } })
+  assert.equal(failed.failureCode, 'ZSOFT_TASK_DIGEST_LEGACY')
+  assert.match(failed.failureMessage || '', /重新导入/)
+  const run = await prisma.benchmarkCaseRun.findUniqueOrThrow({ where: { id: f.cases[0].runId } })
+  assert.equal(run.status, 'evaluation_failed')
+  const outbox = await prisma.benchmarkEvaluationDispatchOutbox.findUniqueOrThrow({ where: { evaluationId: rejected.evaluationRunId } })
+  assert.equal(outbox.status, 'failed')
+  await scheduler.dispatchBenchmarkEvaluation(rejected.evaluationRunId)
+  assert.equal((await prisma.benchmarkEvaluationDispatchOutbox.findUniqueOrThrow({ where: { evaluationId: rejected.evaluationRunId } })).attemptCount, outbox.attemptCount)
+  const good = await preparation.retryBenchmarkEvaluation(f.cases[1])
+  await eventually(async () => f.accepted.includes(good.evaluationRunId))
+  assert.equal(f.accepted.includes(rejected.evaluationRunId), false)
 })
 
 test('a preparation service failure keeps reevaluation queued and a later retry repairs its window', async (t) => {

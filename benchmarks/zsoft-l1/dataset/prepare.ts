@@ -27,7 +27,7 @@ export async function prepareZsoftSource(options: { source?: string; revision?: 
   const url = new URL(source)
   if (url.username || url.password) throw new Error('ZSoft 官方数据来源应为无需认证的 HTTP(S) Git 仓库')
   const cacheRoot = options.cacheRoot || resolveAgentInsightHomePath('benchmark-assets', 'zsoft-l1')
-  const key = createHash('sha256').update(`${source}\n${revision}\nuserspace-kernel/v1`).digest('hex')
+  const key = createHash('sha256').update(`${source}\n${revision}\nuserspace-kernel/codepoint-v2`).digest('hex')
   const cache = path.join(cacheRoot, key)
   const digestCases = async (directory: string) => createHash('sha256').update(canonicalJson(await loadZsoftCases(directory) as JsonValue)).digest('hex')
   try {

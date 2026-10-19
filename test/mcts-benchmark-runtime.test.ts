@@ -308,6 +308,65 @@ test('pi-mcts retains its root Trace ID when the run fails', async () => {
   } finally { f.close() }
 })
 
+test('MCTS execution reports observed billing and truncation causes before a downstream 404', async () => {
+  const f = fixture()
+  try {
+    const cause = Object.assign(new Error('author did not materialize verify.py: 404 Not Found'), { code: 'MCTS_RUN_FAILED' })
+    await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => {
+      f.writeTrace()
+      const ledgerPath = path.join(f.outputDir, '.agent-insight/otel_data/mcts-xgovernor/key-hash/runtime-ledger.json')
+      const ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'))
+      ledger.runs[0].runtimes = [{ turns: [{ failureCodes: ['MCTS_LLM_OUTPUT_TRUNCATED', 'MCTS_LLM_INSUFFICIENT_BALANCE'] }] }]
+      fs.writeFileSync(ledgerPath, JSON.stringify(ledger))
+      throw cause
+    }), (error: Error & { code: string; cause: Error; retryable: boolean; runFacts: { traceId: string; mctsFailureCodes: string[] } }) => {
+      assert.equal(error.code, 'MCTS_LLM_INSUFFICIENT_BALANCE')
+      assert.match(error.message, /余额或付费额度不足/)
+      assert.match(error.message, /token 上限/)
+      assert.equal(error.cause, cause)
+      assert.equal(error.retryable, false)
+      assert.equal(error.runFacts.traceId, 'mcts.run.' + 'b'.repeat(32))
+      assert.deepEqual(error.runFacts.mctsFailureCodes, ['MCTS_LLM_INSUFFICIENT_BALANCE', 'MCTS_LLM_OUTPUT_TRUNCATED'])
+      return true
+    })
+  } finally { f.close() }
+})
+
+test('MCTS can classify explicit process billing errors without a ledger and preserves cancellations', async () => {
+  for (const code of ['MCTS_RUN_FAILED', 'PROCESS_ABORTED']) {
+    const f = fixture()
+    try {
+      const cause = Object.assign(new Error('402 Insufficient Balance; Bearer secret-credential'), { code })
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => { throw cause }),
+        (error: Error & { code: string }) => {
+          if (code === 'PROCESS_ABORTED') assert.equal(error, cause)
+          else {
+            assert.equal(error.code, 'MCTS_LLM_INSUFFICIENT_BALANCE')
+            assert.doesNotMatch(error.message, /secret-credential|Bearer/)
+          }
+          return true
+        })
+    } finally { f.close() }
+  }
+})
+
+test('MCTS keeps the original missing-file error when the ledger is unavailable or contains no error evidence', async () => {
+  for (const contents of ['{broken-json', JSON.stringify({ version: 1, runs: [{ sessionId: `mcts.run.${'b'.repeat(32)}` }] })]) {
+    const f = fixture()
+    try {
+      const cause = Object.assign(new Error('404 Not Found verify.py'), { code: 'MCTS_RUN_FAILED' })
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => {
+        f.writeTrace()
+        fs.writeFileSync(path.join(f.outputDir, '.agent-insight/otel_data/mcts-xgovernor/key-hash/runtime-ledger.json'), contents)
+        throw cause
+      }), (error: Error) => {
+        assert.equal(error, cause)
+        return true
+      })
+    } finally { f.close() }
+  }
+})
+
 test('pi-mcts appears only as a ready Benchmark target', () => {
   const capabilities = parseCapabilities(JSON.stringify({
     actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'],

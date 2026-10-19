@@ -4,6 +4,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { readBoundedFile, validatePublicPath, canonical } = require('./public-bundle.cjs')
 const { mctsZsoftTasksDir } = require('./mcts-config.cjs')
+const { prepareZsoftSourceHandoff } = require('./zsoft-source.cjs')
 
 function fail(code, message) { throw Object.assign(new Error(message), { code }) }
 
@@ -47,6 +48,7 @@ class ZsoftTasksWorkspaceProvider {
     }
     const metadata = { task_id: spec.taskId, title: expected.title, description: expected.description,
       tags, submission_kind: kind, max_bytes: expected.maxBytes }
+    const sourceLock = await prepareZsoftSourceHandoff(tasksDir, spec.taskId)
     const workspace = path.join(this.rootDir, context.runId)
     await fsp.mkdir(this.rootDir, { recursive: true, mode: 0o700 })
     await fsp.mkdir(workspace, { mode: 0o700 })
@@ -73,6 +75,14 @@ class ZsoftTasksWorkspaceProvider {
       await readBoundedFile(taskRoot, 'public/README.md', 512 * 1024 * 1024)
       for (const entry of await fsp.readdir(path.join(taskRoot, 'public'))) await copyPublic(`public/${entry}`)
       await fsp.writeFile(path.join(workspace, 'tasks', spec.taskId, 'task.json'), canonical(metadata), { flag: 'wx', mode: 0o600 })
+      if (sourceLock) {
+        const privateDir = path.join(workspace, 'tasks', spec.taskId, 'private')
+        const locksDir = path.join(workspace, 'source-locks')
+        await fsp.mkdir(privateDir, { mode: 0o700 })
+        await fsp.mkdir(locksDir, { mode: 0o700 })
+        await fsp.writeFile(path.join(privateDir, 'source-manifest.json'), canonical({ source_id: sourceLock.source_id }), { flag: 'wx', mode: 0o600 })
+        await fsp.writeFile(path.join(locksDir, `${sourceLock.source_id}.json`), canonical(sourceLock), { flag: 'wx', mode: 0o600 })
+      }
       await fsp.mkdir(path.join(workspace, 'submission'), { mode: 0o700 })
       return { path: workspace }
     } catch (error) { await fsp.rm(workspace, { recursive: true, force: true }); throw error }

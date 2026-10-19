@@ -8,6 +8,7 @@ import path from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { loadZsoftCases } from '../../benchmarks/zsoft-l1/dataset'
 import { zsoftL1Adapter } from '../../benchmarks/zsoft-l1/adapter'
+import { canonicalJson, type JsonValue } from '../../packages/benchmark-protocol/src/contracts'
 
 const load = createRequire(import.meta.url)
 const { describeImages } = load('../../benchmarks/zsoft-l1/evaluator/images.cjs')
@@ -45,6 +46,9 @@ def fixture():
         task = root / 'tasks' / name
         (task / 'public').mkdir(parents=True)
         (task / 'public/README.md').write_text('synthetic instructions')
+        (task / 'public/repo-vul').mkdir()
+        for filename in ['Kconfig', 'Makefile', 'af_rxrpc.c', 'a-file.c', 'a_file.c']:
+            (task / 'public/repo-vul' / filename).write_text('synthetic source: ' + filename)
         (task / 'task.json').write_text(json.dumps({'task_id': name, 'title': '合成服务题', 'description': 'synthetic', 'tags': tags, 'submission': {'max_bytes': 128}}))
     state = root / '.task-state/service-case'
     state.mkdir(parents=True)
@@ -222,6 +226,17 @@ print(json.dumps(case))
   const specs = describeImages(payload, 'amd64')
   assert.deepEqual(describeImages(zsoftL1Adapter.imagePreparationInput(loaded[0].public, loaded[0].private), 'amd64'), specs)
   assert.deepEqual(specs, [{ key: 'zsoft-local:target', arch: 'x86_64', references: [`swr.example.test/team/zsoft@sha256:${'c'.repeat(64)}`], context: { expectedImageId: `sha256:${'b'.repeat(64)}` } }])
+  const sourceManifest = JSON.parse(await fs.readFile(path.join(directory, 'tasks/service-case/task.json'), 'utf8'))
+  const frozen = JSON.parse(await fs.readFile(path.join(directory, 'agent-insight-assets.json'), 'utf8'))
+  const publicFiles = Object.fromEntries(Object.entries(frozen.tasks['service-case'].files).filter(([name]) => name.startsWith('tasks/service-case/public/')))
+  const legacyDigest = `sha256:${createHash('sha256').update(canonicalJson({ manifest: sourceManifest, publicFiles } as JsonValue)).digest('hex')}`
+  assert.notEqual(legacyDigest, loaded[0].private.sourceTaskDigest)
+  assert.throws(() => describeImages({ ...payload, sourceTaskDigest: legacyDigest }, 'amd64'), { code: 'ZSOFT_TASK_DIGEST_LEGACY', status: 422, retryable: false })
+  assert.throws(() => describeImages({ ...payload, sourceTaskDigest: legacyDigest, maxBytes: 1 }, 'amd64'), { code: 'ZSOFT_TASK_MISMATCH' })
+  const { generatedEvaluatorDescriptors } = load('../../generated/benchmark-catalog/evaluators.cjs')
+  const descriptor = generatedEvaluatorDescriptors.find((item: { benchmarkKey: string }) => item.benchmarkKey === 'zsoft-l1')
+  const evaluator = new FileEvaluatorEntrypoint({ ...descriptor, assets: undefined })
+  await assert.rejects(evaluator.describeImages({ ...payload, sourceTaskDigest: legacyDigest }, 'amd64'), { code: 'ZSOFT_TASK_DIGEST_LEGACY', status: 422, retryable: false })
   for (const value of [{ ...payload, revision: 'd'.repeat(40) }, { ...payload, maxBytes: 1 }, { ...payload, sourceTaskDigest: `sha256:${'d'.repeat(64)}` }]) assert.throws(() => describeImages(value, 'amd64'), /MISMATCH/)
   assert.throws(() => describeImages(payload, 'arm64'), /ARCH_UNSUPPORTED/)
   const readme = path.join(directory, 'tasks/service-case/public/README.md')

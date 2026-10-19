@@ -123,6 +123,8 @@ ZSoft 的提交物为 **`poc`**。“评测证据”保留官方原始 `evaluati
 | `Missing datasets package` | 在 MCTS 实际使用的 Python 环境中安装 `datasets` |
 | 没有 MCTS 搜索参数 | 确认选中 SWE-bench 数据集和 MCTS 主机，并更新客户端 |
 | `AGENT_TIMEOUT` | 通过 **复用评测配置**增加执行上限，或减小搜索参数后创建新实验 |
+| `MCTS_LLM_INSUFFICIENT_BALANCE` | 模型服务明确返回余额或付费额度不足，检查所用账户或渠道后重跑 Case |
+| `MCTS_LLM_OUTPUT_TRUNCATED` | 输出达到 token 上限，写文件工具可能未执行；缩短单次输出或分段写入，并核对有效输出限额 |
 | 环境修复后重新执行 | 点击 **重试 / 重跑 Case**，沿用原实验参数 |
 | 已有 Patch，评测阶段失败 | 点击 **Benchmark 重评**，使用已有提交物重新评测 |
 | 需要中止执行 | 使用平台停止入口；中断时尚未生成 Patch 的 Case 可能没有提交物 |
@@ -131,11 +133,15 @@ ZSoft 的提交物为 **`poc`**。“评测证据”保留官方原始 `evaluati
 
 **Trace 耗时与执行上限的计时范围不同。** Trace 可能未包含首次 xGovernor 请求前的准备时间；Case 总耗时还包含工作区准备和中断清理。判断是否超时，以 Case 的错误说明和配置上限为准。
 
+客户端会优先显示已观察到的模型余额不足、输出截断等错误，不再只保留最后的文件缺失或 404；多个原因可以同时展示，并保留根 Trace 关联。这里不增加任务重试或更改模型配置。需更新客户端和 MCTS 采集器（重新执行页面生成的安装命令）；已有失败记录不会自动改写。若外部 xGovernor 将底层模型错误吞掉并报成空的成功轮次，平台只能展示实际收到的证据，不能由 404 推断余额不足，也不会读取外部 Pi 原始会话或修改 MCTS/xGovernor。
+
 ## ZSoft 实验
 
 ZSoft 数据集使用普通 Agent 或兼容 ZSoft 的 `pi-mcts` 自动生成 PoC。自动生成使用执行机上已有的原生 ZSoft 任务目录，无需额外导出或导入公开资料包；内核题与 userspace 共用该目录，内核题提交 C 源码。准备步骤见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md#zsoft-任务目录与执行器)。
 
 执行客户端管理员在该机器的 MCTS 仓库 `testcases_union/config.env` 配置 `ZSOFT_TASKS_DIR` 绝对路径，目录内应有 `<task-id>/task.json` 和 `public/`。平台按所选 Case 自动下发 `task-id`，实验向导不再配置任务目录；每台执行客户端使用自己的 MCTS 配置。普通 Agent 按任务说明将 Python、C 或 binary 单文件写入 `submission/poc`；MCTS 会自动导出所选 PoC 并交给客户端上传。执行客户端需上报 `zsoft-tasks-workspace/v3`，MCTS 还需 `mcts-zsoft-export/v1`，缺失时该目标不可用。
+
+MCTS 优先使用题目的 `public/repo-vul/`。没有该目录时，执行机需保留官方 `<task-id>/private/source-manifest.json` 和任务目录上一级的 `source-locks/`；客户端仅提取源码定位所需字段，沙箱下载固定版本，有 SHA-256 时先校验。原始私有文件、参考答案和判题资料不会上传，任务包在上传前另行核对公开文件集合与内容。缺少来源或来源非法会提前报 `ZSOFT_SOURCE_MISSING` / `ZSOFT_SOURCE_INVALID`。本次不增加源码缓存，首次下载耗时计入执行预算，仍需沙箱能访问源码地址。修复此类问题后应重跑 Case，而不是只重评；升级时重新执行客户端安装页面的安装命令，确保执行机运行时也已更新。
 
 正式成绩由平台的 ZSoft L1 Official Judge 给出，MCTS 搜索反馈和有 Trace 均不代表正式通过。在 Case 详情查看 `poc` 和评测报告；提交物上传成功后可独立重评。数据集从官方目录自动导入，旧 P2 JSON/JSONL 不再支持，需重新导入官方数据。自动生成需配置执行客户端的原生任务目录。
 

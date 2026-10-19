@@ -7,6 +7,7 @@ const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 const { BenchmarkExecutorError, runProcess } = require('./index.cjs')
 const { runtimeInvocationOptions } = require('./runtime-options.cjs')
+const { failureCodes, ledgerFailureCodes, summarizeFailures } = require('./mcts-failure.cjs')
 const MCTS_RUNTIMES = Object.freeze({ 'pi-mcts': 'pi', 'xiao-mcts': 'xiaoo' })
 const { mctsPaths, checkMctsRepository, mctsUpstream, proxyPythonScript, readMctsEnvFile } = require('./mcts-config.cjs')
 
@@ -73,17 +74,19 @@ function probeMctsZsoftRuntime(config) {
   }
 }
 
-async function mctsTraceId(observerHome) {
+async function mctsLedger(observerHome) {
   const traceRoot = path.join(observerHome, 'otel_data', 'mcts-xgovernor')
   const entries = await fsp.readdir(traceRoot, { withFileTypes: true })
   const directories = entries.filter(entry => entry.isDirectory())
   if (directories.length !== 1) throw new BenchmarkExecutorError('MCTS_TRACE_UNAVAILABLE', 'MCTS Trace 目录不唯一')
-  const ledger = JSON.parse(await fsp.readFile(path.join(traceRoot, directories[0].name, 'runtime-ledger.json'), 'utf8'))
+  const ledger = JSON.parse((await readBoundedFile(traceRoot, `${directories[0].name}/runtime-ledger.json`, 8 * 1024 * 1024)).toString('utf8'))
   if (!Array.isArray(ledger.runs) || ledger.runs.length !== 1 || !/^mcts\.run\.[0-9a-f]{32}$/.test(ledger.runs[0]?.sessionId)) {
     throw new BenchmarkExecutorError('MCTS_TRACE_UNAVAILABLE', 'MCTS 未生成唯一的根 Trace')
   }
-  return ledger.runs[0].sessionId
+  return ledger.runs[0]
 }
+
+async function mctsTraceId(observerHome) { return (await mctsLedger(observerHome)).sessionId }
 
 function validateMctsTask(payload) {
   const runId = String(payload.correlation?.caseRunId || '')
@@ -220,9 +223,19 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
       mctsRuntime: runtime, ...(agentOptions ? { agentOptions } : {}) }
   } catch (error) {
     if (error && typeof error === 'object') {
-      const traceId = await mctsTraceId(observerHome).catch(() => null)
+      const ledger = await mctsLedger(observerHome).catch(() => null)
+      const traceId = ledger?.sessionId
+      if (['MCTS_RUN_FAILED', 'AGENT_NO_OUTPUT'].includes(error.code)) {
+        const codes = [...new Set([...failureCodes(error), ...ledgerFailureCodes(ledger)])]
+        if (codes.length) {
+          const cause = error
+          error = new BenchmarkExecutorError(codes.includes('MCTS_LLM_INSUFFICIENT_BALANCE') ? 'MCTS_LLM_INSUFFICIENT_BALANCE' : codes[0], summarizeFailures(codes))
+          error.cause = cause
+          error.runFacts = { ...cause.runFacts, mctsFailureCodes: codes }
+        }
+      }
       error.runFacts = { ...(traceId ? { traceId } : {}), mctsRuntime: runtime,
-        ...(agentOptions ? { agentOptions } : {}) }
+        ...(agentOptions ? { agentOptions } : {}), ...error.runFacts }
     }
     throw error
   }

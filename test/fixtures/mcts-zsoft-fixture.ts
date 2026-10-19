@@ -46,11 +46,13 @@ class ZSoftTask:
     @property
     def poc_sandbox_path(self): return '/home/user/workspace/repo/' + self.poc_filename
     def issue_text(self): return '[README]\\nPublic preflight example: python3 /input/poc\\n\\nKeep every public paragraph.'
+    def bundle_bytes(self): return self.bundle.tar_path.read_bytes()
     def init_solver(self): return 'Run python3 /input/poc\\n\\nMandatory Python preflight.\\n\\n' + self.issue_text()
     def step_solver(self, prior=None): return 'Run python3 /input/poc'
     def init_author(self, *, reference_example_paths=None): return 'Write verify.py'
     def step_author(self, prior, *, node_id=''): return 'Update verify.py'
 `,
+    'res/task_plugins/zsoft/materializer.py': 'def _download_script(lock): return "unused fixture download"\n',
     'res/task_plugins/zsoft/artifact.py': 'def poc_file(node, task, *, session=None): raise RuntimeError("text reader called")\n',
     'core/main.py': `
 import argparse
