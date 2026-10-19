@@ -1,10 +1,19 @@
 export interface BenchmarkFailurePresentation {
   code: string;
+  originalCode?: string;
   label: string;
   message: string;
 }
 
 const FAILURE_META: Record<string, { label: string; message: string }> = {
+  ENOSPC: {
+    label: '执行端存储空间不足',
+    message: '执行端文件系统空间或 inode 不足，请检查对应挂载点后手动重试。',
+  },
+  EDQUOT: {
+    label: '执行端存储配额不足',
+    message: '执行端存储配额已耗尽，请检查配额后手动重试。',
+  },
   EVENT_MONITOR_UNAVAILABLE: {
     label: '失败监测通道未就绪',
     message: 'OpenCode 事件插件未就绪，请更新客户端并检查插件加载。',
@@ -19,11 +28,11 @@ const FAILURE_META: Record<string, { label: string; message: string }> = {
   },
   MODEL_ERROR: {
     label: '模型调用失败',
-    message: 'OpenCode 已报告模型或 Provider 错误，执行已提前终止。',
+    message: 'Agent 已报告模型或 Provider 错误，执行已提前终止。',
   },
   MODEL_NO_RESPONSE: {
     label: '模型未响应',
-    message: 'OpenCode 会话已结束，但没有产生任何模型输出或工具调用。',
+    message: 'Agent 会话已结束，但没有产生任何模型输出或工具调用。',
   },
   MODEL_START_TIMEOUT: {
     label: '等待模型响应超时',
@@ -50,12 +59,17 @@ export function benchmarkFailurePresentation(
   message: string | null | undefined,
 ): BenchmarkFailurePresentation | null {
   const normalizedMessage = message?.trim() || '';
-  const normalizedCode = code?.trim() || normalizedMessage.match(KNOWN_FAILURE_CODE)?.[1] || '';
+  const originalCode = code?.trim() || normalizedMessage.match(KNOWN_FAILURE_CODE)?.[1] || '';
+  const storageCode = /\bEDQUOT\b|disk quota exceeded/i.test(normalizedMessage) ? 'EDQUOT'
+    : /\bENOSPC\b|no space left on device/i.test(normalizedMessage) ? 'ENOSPC' : '';
+  const normalizedCode = storageCode && ['', 'MODEL_ERROR', 'AGENT_EXIT_NONZERO', 'WORKSPACE_PREPARE_FAILED', 'EXECUTION_FAILED'].includes(originalCode)
+    ? storageCode : originalCode;
   if (!normalizedCode && !normalizedMessage) return null;
 
   const meta = FAILURE_META[normalizedCode];
   return {
     code: normalizedCode,
+    ...(originalCode && originalCode !== normalizedCode ? { originalCode } : {}),
     label: meta?.label || 'Agent 执行失败',
     message: normalizedMessage && normalizedMessage !== normalizedCode
       ? normalizedMessage

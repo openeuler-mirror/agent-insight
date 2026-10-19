@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
+const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
 
 class EvaluatorProtocolError extends Error {
   constructor(code, message, status = 422, retryable = false) {
@@ -307,10 +308,12 @@ async function runOciEntrypoint(descriptor, args, options = {}) {
   ]
   const runtimeEnv = { ...(options.env || {}) }
   runtimeEnv.EVALUATOR_INSTANCE_ID = controllerContainer
+  runtimeEnv.AGENT_INSIGHT_EVALUATOR_CONFIG_JSON = JSON.stringify(loadProjectConfig('evaluator'))
   if (options.evaluationId) dockerArgs.push('--label', `agent-insight.evaluation-id=${options.evaluationId}`)
   const forbiddenRuntimeEnv = new Set([
     'EVALUATOR_AGENT_INSIGHT_BASE_URL',
     'EVALUATOR_RUNTIME_ENV_NAMES',
+    'AGENT_INSIGHT_EVALUATOR_CONFIG_JSON',
   ])
   for (const name of String(process.env.EVALUATOR_RUNTIME_ENV_NAMES || '').split(',').filter(Boolean)) {
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !name.startsWith('IMAGE_POOL_') && !forbiddenRuntimeEnv.has(name) && process.env[name] != null) {

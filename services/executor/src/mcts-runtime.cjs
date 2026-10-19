@@ -5,7 +5,8 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { BenchmarkExecutorError, runProcess } = require('./index.cjs')
-const { MCTS_SEARCH_OPTIONS_CAPABILITY, MCTS_RUNTIMES, normalizeAgentOptions, mctsOptionArgs } = require('./mcts-options.cjs')
+const { runtimeInvocationOptions } = require('./runtime-options.cjs')
+const MCTS_RUNTIMES = Object.freeze({ 'pi-mcts': 'pi', 'xiao-mcts': 'xiaoo' })
 const { mctsPaths, checkMctsRepository, mctsUpstream, proxyPythonScript, readMctsEnvFile } = require('./mcts-config.cjs')
 
 const RUN_ID = /^erun_[0-9a-f]{32}$/
@@ -81,14 +82,14 @@ function validateMctsTask(payload) {
   if (payload.workspace?.repository !== expectedRepository || payload.workspace?.revision !== baseCommit) {
     throw new BenchmarkExecutorError('MCTS_TASK_MISMATCH', 'SWE-bench Case 与 Git 工作区版本不一致')
   }
-  let agentOptions
-  try { agentOptions = normalizeAgentOptions(payload.agentOptions) }
-  catch (error) { throw new BenchmarkExecutorError('AGENT_OPTIONS_INVALID', error.message) }
-  return { runId, instanceId, runtime, agentOptions }
+  let invocation
+  try { invocation = runtimeInvocationOptions(payload.platform, payload.agent, payload.agentOptions) }
+  catch (error) { throw new BenchmarkExecutorError(error.code || 'AGENT_OPTIONS_INVALID', error.message) }
+  return { runId, instanceId, runtime, agentOptions: invocation.agentOptions, optionArgs: invocation.args }
 }
 
 async function runMctsBenchmarkCase(config, payload, processRunner = runProcess) {
-  const { runId, instanceId, runtime, agentOptions } = validateMctsTask(payload)
+  const { runId, instanceId, runtime, agentOptions, optionArgs } = validateMctsTask(payload)
   const readiness = probeMctsBenchmarkRuntime(config)
   if (!readiness.ready) throw new BenchmarkExecutorError('MCTS_RUNTIME_UNAVAILABLE', readiness.reason, 503)
   const paths = mctsPaths(config)
@@ -122,7 +123,7 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
       '--', 'bash', paths.entrypoint,
       '--mode', 'sweverified', '--runtime', runtime, '--testbench', 'sweverified', '--instance-id', instanceId,
       '--split', 'test', '--output-dir', runId,
-      ...mctsOptionArgs(agentOptions),
+      ...optionArgs,
     ], {
       cwd: paths.repoDir,
       env,
@@ -162,5 +163,4 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
   }
 }
 
-module.exports = { mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask, readMctsEnvFile,
-  agentOptionCapabilities: [MCTS_SEARCH_OPTIONS_CAPABILITY] }
+module.exports = { mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask, readMctsEnvFile }

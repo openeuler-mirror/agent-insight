@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createIsolatedDatabase } from './helpers/isolated-database'
-import { MCTS_QUICK_OPTIONS } from '../services/executor/src/mcts-options.cjs'
+import { loadRuntimeDefinitions } from '../packages/agent-runtime/loader.cjs'
+const definition = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
 
 test('MCTS options survive experiment creation, details, clone, dispatch and Case retry', async t => {
   const database = createIsolatedDatabase()
@@ -33,11 +34,10 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
     ordinal: 0, rawCaseJson: canonicalJson(raw), sourceFingerprint: fingerprintJson(raw),
     publicPayloadJson: canonicalJson(split.publicPayload), privatePayloadJson: canonicalJson(split.privatePayload),
     publicFingerprint: split.publicFingerprint, privateFingerprint: split.privateFingerprint } })
-  const options = { mcts: MCTS_QUICK_OPTIONS }
-  const capability = 'mcts-search-options/v1'
+  const options = { runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: definition.presets[0].values }
   const capabilities = { actions: ['RUN_BENCHMARK_CASE'], platforms: [{ id: 'pi-mcts', agents: ['pi-mcts'],
-    runBenchmarkCase: { version: 1, returnsTraceId: true, agentOptionCapabilities: [capability] } }],
-    components: { 'git-workspace/v1': true, 'git-patch/v1': true, 'agent-runtime/pi-mcts/v1': true, [capability]: true } }
+    parameterDefinitions: [definition], runBenchmarkCase: { version: 1, returnsTraceId: true } }],
+    components: { 'git-workspace/v1': true, 'git-patch/v1': true, 'agent-runtime/pi-mcts/v1': true } }
   await prisma.reliabilityClient.create({ data: { clientId: 'options-client', user: 'options-user', name: 'options',
     hostname: 'fixture', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), capabilitiesJson: JSON.stringify(capabilities) } })
   const body = { user: 'options-user', name: 'MCTS options', agentName: 'mcts-coordinator', datasetId: catalog.id, agentTimeoutSeconds: 900,
@@ -53,6 +53,8 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
   assert.equal(detailResponse.status, 200)
   const view = await detailResponse.json()
   assert.deepEqual(view.executionAgentOptions, options)
+  assert.deepEqual(view.executionParameterDefinition, definition)
+  assert.deepEqual(JSON.parse(binding.runConfigJson).agentParameterDefinition, definition)
   assert.deepEqual(view.reusableConfig.executionTarget.agentOptions, options)
   assert.equal(view.reusableConfig.executionTarget.timeoutSeconds, 900)
   const clone = await cloneExperimentFromFrozenConfig({ sourceExperimentId: experimentId, user: 'options-user' })
@@ -83,7 +85,7 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
   assert.deepEqual(JSON.parse(retried!.taskEnvelopeJson!).agentConfig.agentOptions, options)
 
   await prisma.reliabilityClient.update({ where: { clientId: 'options-client' }, data: { capabilitiesJson: JSON.stringify({
-    ...capabilities, platforms: [{ ...capabilities.platforms[0], runBenchmarkCase: { version: 1, returnsTraceId: true } }],
+    ...capabilities, platforms: [{ ...capabilities.platforms[0], runBenchmarkCase: { version: 1, returnsTraceId: true }, parameterDefinitions: [] }],
   }) } })
   await prisma.experiment.update({ where: { id: clone.id }, data: { status: 'running' } })
   await assert.rejects(prepareNextBenchmarkCaseRun({ experimentId: clone.id, callbackOrigin: 'http://fixture.invalid' }), { code: 'CLIENT_UPGRADE_REQUIRED' })

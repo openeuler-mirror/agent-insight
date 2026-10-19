@@ -1,4 +1,5 @@
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
+import { platformBenchmarkConfig } from './project-config'
 import type {
   BenchmarkRunConfig,
   JsonValue,
@@ -51,12 +52,11 @@ export async function prepareNextBenchmarkCaseRun(input: {
     const concurrency = parseExecutionConcurrency(parseJson<BenchmarkRunConfig>(binding!.runConfigJson, 'BENCHMARK_RUN_CONFIG_INVALID').executionConcurrency)
     const active = await tx.benchmarkCaseRun.count({ where: { experimentId: input.experimentId, status: { in: ACTIVE_RUN_STATUSES } } })
     if (active >= concurrency) return null
-    const budget = Number(process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS || 256)
-    if (!Number.isSafeInteger(budget) || budget < 1) throw new Error('AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS 必须为正整数')
+    const scheduling = platformBenchmarkConfig().scheduling
+    const budget = scheduling.maxPendingEvaluations
     const occupied = await tx.benchmarkCaseRun.count({ where: { status: { in: [...ACTIVE_RUN_STATUSES, 'submitted'] } } })
     if (occupied >= budget) return null
-    const userBudget = Number(process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER || 128)
-    if (!Number.isSafeInteger(userBudget) || userBudget < 1) throw new Error('AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER 必须为正整数')
+    const userBudget = scheduling.maxPendingEvaluationsPerUser
     const experiment = await tx.experiment.findUnique({ where: { id: input.experimentId }, select: { user: true } })
     if (await tx.benchmarkCaseRun.count({ where: { experiment: { user: experiment!.user }, status: { in: [...ACTIVE_RUN_STATUSES, 'submitted'] } } }) >= userBudget) return null
     const next = await tx.benchmarkCaseRun.findFirst({

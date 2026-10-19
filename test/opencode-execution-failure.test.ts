@@ -60,6 +60,17 @@ test('OpenCode 鉴权错误沿用 Benchmark MODEL_UNAVAILABLE 分类', async () 
   await assert.rejects(client.chat(sessionId, payload), { code: 'MODEL_UNAVAILABLE' });
 });
 
+test('OpenCode 结构化存储错误保留 ENOSPC 和 EDQUOT 分类', async () => {
+  for (const [code, message] of [['ENOSPC', 'no space left on device'], ['EDQUOT', 'disk quota exceeded']]) {
+    const client = mockClient([], { info: { error: { message: `${code}: ${message}, write` } } });
+    await assert.rejects(client.chat(sessionId, payload), (error: any) => {
+      assert.equal(error.code, code);
+      assert.match(error.message, /存储/);
+      return true;
+    });
+  }
+});
+
 test('正常文本包含 Connection error 不按字符串误判；空会话单独失败', async () => {
   const client = mockClient([], { info: { id: 'msg' }, parts: [{ type: 'text', text: '日志中的 Connection error 是网络问题。' }] });
   assert.match((await client.chat(sessionId, payload)).text, /Connection error/);

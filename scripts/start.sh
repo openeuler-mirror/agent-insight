@@ -15,20 +15,17 @@ clock_ms() {
 }
 START_MILLISECONDS=$(clock_ms)
 
-BENCHMARK_KEY=""
 START_PORT=""
 FORCE_REBUILD=""
 
 start_usage() {
   cat <<'EOF'
-Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--port PORT] [--benchmark KEY] [--force-rebuild]
+Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--port PORT] [--force-rebuild]
 
 Reuses a verified unchanged build; otherwise rebuilds with cache preserved.
 --force-rebuild always rebuilds, keeping the incremental cache.
-Benchmark selection precedence is CLI,
-AGENT_INSIGHT_BENCHMARK from the process environment, then ~/.agent-insight/.env.
-When the selected KEY is swe-bench, the first start also downloads, verifies,
-and imports SWE-bench Verified with its official loader.
+SWE-bench Verified is prepared automatically with its official loader unless
+already installed. Preparation failures warn and do not prevent startup.
 EOF
 }
 
@@ -41,18 +38,6 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --force-rebuild)
       FORCE_REBUILD="--force-rebuild"
-      shift
-      ;;
-    --benchmark)
-      [ "$#" -ge 2 ] || start_fail '--benchmark 缺少参数值'
-      [ -z "$BENCHMARK_KEY" ] || start_fail '--benchmark 只能指定一次'
-      BENCHMARK_KEY="$2"
-      shift 2
-      ;;
-    --benchmark=*)
-      [ -z "$BENCHMARK_KEY" ] || start_fail '--benchmark 只能指定一次'
-      BENCHMARK_KEY="${1#--benchmark=}"
-      [ -n "$BENCHMARK_KEY" ] || start_fail '--benchmark 缺少参数值'
       shift
       ;;
     --port)
@@ -73,10 +58,6 @@ done
 if [ -n "${PORT:-}" ]; then
   start_fail 'PORT 已移除，请改用 AGENT_INSIGHT_PORT 并移除旧 PORT 配置'
 fi
-case "$BENCHMARK_KEY" in
-  ''|swe-bench) ;;
-  *) start_fail "暂不支持自动准备 Benchmark：$BENCHMARK_KEY（当前支持：swe-bench）" ;;
-esac
 
 if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
   echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
@@ -99,9 +80,7 @@ load_agent_insight_env() {
   local name
   local overrides=()
   # 保留启动环境的显式空值，使其也能覆盖 .env。
-  for name in AGENT_INSIGHT_PORT DATABASE_URL AGENT_INSIGHT_BENCHMARK \
-    SWE_BENCH_DATASET_SOURCE SWE_BENCH_SOURCE_ARCHIVE_SOURCE SWE_BENCH_DATASET_PATH \
-    SWE_BENCH_DATASET_URL SWE_BENCH_SOURCE_ARCHIVE_URL SWE_BENCH_PYTHON; do
+  for name in AGENT_INSIGHT_PORT DATABASE_URL AGENT_INSIGHT_CONFIG_DIR; do
     if [ "${!name+x}" = x ]; then
       overrides+=("$name=${!name}")
     fi
@@ -259,14 +238,6 @@ if [ "${#PLATFORM_PORT}" -gt 5 ] || [ "$PLATFORM_PORT" -lt 1 ] || [ "$PLATFORM_P
 fi
 echo "Checking port $PLATFORM_PORT..."
 
-if [ -z "$BENCHMARK_KEY" ]; then
-  BENCHMARK_KEY="${AGENT_INSIGHT_BENCHMARK:-}"
-fi
-case "$BENCHMARK_KEY" in
-  ''|swe-bench) ;;
-  *) start_fail "暂不支持自动准备 Benchmark：$BENCHMARK_KEY（当前支持：swe-bench）" ;;
-esac
-
 if [[ "${DATABASE_URL:-}" == file:* ]]; then
   echo "SQLite database target: ${DATABASE_URL#file:}"
   check_sqlite_database_target
@@ -421,14 +392,8 @@ fi
 stage_done
 
 stage_begin "benchmark preparation"
-if [ "$BENCHMARK_KEY" = "swe-bench" ]; then
-  echo "Preparing SWE-bench Verified dataset..."
-  if ! npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts; then
-    echo ""
-    echo "  ⛔ SWE-bench Verified 自动准备或导入失败，服务未启动。"
-    echo "     修复上方错误后重新执行 bash scripts/start.sh。"
-    exit 1
-  fi
+if ! node scripts/benchmark/bootstrap-swe-bench-dataset.cjs; then
+  echo "⚠ SWE-bench Verified 自动准备脚本执行失败，将继续启动服务；下次启动自动重试。" >&2
 fi
 
 stage_done

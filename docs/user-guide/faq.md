@@ -27,7 +27,7 @@ DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh --port 3100
 仍在运行的旧实例。需要并行测试时，请使用独立 Git worktree，并为它设置独立的
 `AGENT_INSIGHT_HOME`、`DATABASE_URL` 和 `AGENT_INSIGHT_PORT`。
 
-启动会在停止旧服务和清理 `.next` 之前预检绝对 SQLite 路径：父目录必须已经存在且当前用户
+启动会在停止旧服务和重建之前预检绝对 SQLite 路径：父目录必须已经存在且当前用户
 可进入、可写；已有数据库文件必须为当前用户可读写的普通文件。检查失败会输出目标路径、
 当前用户和修复建议，不会继续构建。脚本不会自动创建自定义父目录，以免 root 用户因拼写错误
 在错误位置创建目录。

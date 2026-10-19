@@ -58,6 +58,14 @@ function sanitizeAgentDiagnostic(value, maxLength = 800) {
 
 function classifyAgentExitFailure({ platform, exitCode, signal, diagnostic, structured = false }) {
   const normalized = sanitizeAgentDiagnostic(diagnostic)
+  const storageCode = /\bEDQUOT\b|disk quota exceeded/i.test(normalized) ? 'EDQUOT'
+    : /\bENOSPC\b|no space left on device/i.test(normalized) ? 'ENOSPC' : null
+  if (storageCode) {
+    return {
+      code: storageCode,
+      message: `平台 ${platform} ${storageCode === 'EDQUOT' ? '存储配额不足' : '存储空间不足'}：${normalized}`,
+    }
+  }
   const strictModelSelectionFailure = /(?:modelnotfound|unknownmodel|invalidmodel|(?:unknown|invalid|unsupported)\s+model|requested\s+model\s+[^.]{0,100}(?:not found|does not exist)|model\s+(?:id|name)\s+[^.]{0,100}(?:not found|does not exist|invalid)|provider\s+(?:[^.]{0,100}\s+)?(?:not found|unknown|invalid)|no\s+(?:model|provider)\s+(?:was\s+)?found|模型(?:名称|标识)?[^。]{0,60}(?:不存在|未找到|无效|不支持))/i
   const structuredModelSelectionFailure = /(?:model\s+(?:[^.]{0,100}\s+)?(?:not found|does not exist|unknown|invalid|unsupported)|(?:unknown|invalid|unsupported)\s+model)/i
   const modelContext = /(?:model|provider|\bllm\b|openai|anthropic|gemini|deepseek|api[_ -]?key|模型|提供商|密钥|鉴权)/i
@@ -108,14 +116,15 @@ function createOpencodeFailureMonitor({ inspectEvent, onFailure, schedule = setT
     clearRetry()
     onFailure(failure.code, failure.message)
   }
-  const unavailable = (message) => classifyAgentExitFailure({
+  const classify = (message) => classifyAgentExitFailure({
     platform: 'opencode', diagnostic: `model provider: ${message}`, structured: true,
-  }).code === 'MODEL_UNAVAILABLE'
+  })
   const observeRetry = (value) => {
     if (closed || failure) return
     const message = sanitizeAgentDiagnostic(value.message || '模型请求重试')
-    if (unavailable(message)) {
-      fail('MODEL_UNAVAILABLE', `opencode 模型配置或鉴权失败：${message}`)
+    const classified = classify(message)
+    if (classified.code !== 'AGENT_EXIT_NONZERO') {
+      fail(classified.code, classified.message)
       return
     }
     if (!retry) {
@@ -139,13 +148,16 @@ function createOpencodeFailureMonitor({ inspectEvent, onFailure, schedule = setT
       // stderr 中只采信运行时生命周期信号，不扫描回答或工具输出中的错误文字。
       if (!event || !['error', 'session.error', 'session.status'].includes(event.type)) return
       if (event.error) {
-        fail(unavailable(event.error) ? 'MODEL_UNAVAILABLE' : 'MODEL_ERROR', `opencode 模型错误：${event.error}`)
+        const classified = classify(event.error)
+        fail(classified.code === 'AGENT_EXIT_NONZERO' ? 'MODEL_ERROR' : classified.code,
+          classified.code === 'AGENT_EXIT_NONZERO' ? `opencode 运行错误：${event.error}` : classified.message)
       }
       else onEvent(event)
       return
     }
-    if (!/^(?:Error:\s*)?(?:Cannot connect to API:|ProviderAuthError:|ModelNotFoundError:|ProviderModelNotFoundError:|APIKeyMissingError:|Unauthorized\b|Invalid API key\b|Unknown model\b|Model not found\b)/i.test(text)) return
-    if (unavailable(text)) fail('MODEL_UNAVAILABLE', `opencode 模型配置或鉴权失败：${text}`)
+    if (!/^(?:Error:\s*)?(?:ENOSPC\b|EDQUOT\b|Cannot connect to API:|ProviderAuthError:|ModelNotFoundError:|ProviderModelNotFoundError:|APIKeyMissingError:|Unauthorized\b|Invalid API key\b|Unknown model\b|Model not found\b)/i.test(text)) return
+    const classified = classify(text)
+    if (classified.code !== 'AGENT_EXIT_NONZERO') fail(classified.code, classified.message)
     else observeRetry({ message: text, attempt: text.match(/\battempt\s*#?\s*(\d+)/i)?.[1] })
   }
   return {

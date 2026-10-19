@@ -11,3 +11,11 @@
 !generated/
 !generated/benchmark-catalog/
 !generated/benchmark-catalog/evaluators.cjs
+!packages/
+!packages/project-config/
+!packages/project-config/**
+!config/
+!config/benchmark/
+!config/benchmark/platform.yaml
+!config/benchmark/evaluator.yaml
+!config/benchmark/executor.yaml
