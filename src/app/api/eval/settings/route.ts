@@ -1,3 +1,4 @@
+import { ModelTestValidationError } from '@/lib/shared/model-connection-test';
 
 import { getUserSettings, saveUserSettings, maskUserSettings } from '@/lib/storage/server-config';
 import { NextResponse } from 'next/server';
@@ -27,6 +28,6 @@ export async function POST(request: Request) {
 
         return NextResponse.json(maskUserSettings(await getUserSettings(user)));
     } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return NextResponse.json({ error: e.message }, { status: e instanceof ModelTestValidationError ? 400 : 500 });
     }
 }

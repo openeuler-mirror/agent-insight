@@ -1,3 +1,4 @@
+import { resolveModelTestTimeoutMs } from '@/lib/shared/model-connection-test';
 import { db } from '@/lib/storage/prisma';
 import { loadDefaultModelConfigs } from '@/lib/shared/default-model-config';
 import {
@@ -13,6 +14,7 @@ export interface ModelConfig {
     baseUrl?: string;
     model?: string;
     headers?: Record<string, string>;
+    testTimeoutMs?: number;
 }
 
 export interface UserSettings {
@@ -156,6 +158,7 @@ export async function saveUserSettings(user: string, settings: UserSettings): Pr
             ...c,
             apiKey: isMaskedApiKey(c.apiKey) ? (existingKeyById.get(c.id) ?? '') : c.apiKey,
             headers: normalizeCustomHeaders(restoredHeaders),
+            testTimeoutMs: resolveModelTestTimeoutMs(c.testTimeoutMs),
         };
     });
 
