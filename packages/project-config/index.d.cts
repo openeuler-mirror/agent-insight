@@ -9,7 +9,7 @@ export type PlatformConfig = {
       dataset: { autoImport: boolean; source: string | null }
       loader: { sourceArchive: string | null; python: string | null }
     }
-    'zsoft-l1': { dataset: { source: string | null; revision: string | null } }
+    'zsoft-l1': { dataset: { autoImport: boolean; source: string | null; revision: string | null } }
     scheduling: SchedulingConfig
   }
 }

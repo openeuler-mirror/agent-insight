@@ -33,7 +33,7 @@ test('ZSoft legacy variables only warn once and cannot override YAML', async t =
   const env = { NODE_ENV: 'test' as const, ZSOFT_DATASET_SOURCE: '/ignored-secret', ZSOFT_DATASET_REVISION: 'invalid', ZSOFT_L1_ASSETS_DIR: '/ignored-secret', ZSOFT_KERNEL_ACCEL: 'invalid' }
   const options = { configDir: root, env, warn: (message: string) => { warnings.push(message) } }
   for (let iteration = 0; iteration < 2; iteration++) {
-    assert.deepEqual(loadProjectConfig('platform', options).benchmarks['zsoft-l1'].dataset, { source: null, revision: null })
+    assert.deepEqual(loadProjectConfig('platform', options).benchmarks['zsoft-l1'].dataset, { autoImport: true, source: null, revision: null })
     assert.deepEqual(loadProjectConfig('evaluator', options).benchmarks['zsoft-l1'], { assetsDir: null, kernelAccel: 'tcg' })
   }
   assert.equal(warnings.length, 4)
@@ -45,14 +45,16 @@ test('ZSoft YAML merges overrides, resolves paths, resets with null, and rejects
   const root = await fixture(t)
   const options = { configDir: root, env: { NODE_ENV: 'test' as const } }
   await fs.writeFile(path.join(root, 'platform.yaml'), JSON.stringify({ benchmarks: { 'zsoft-l1': { dataset: { source: 'https://git.example.test/official.git', revision: 'a'.repeat(40) } } } }))
-  await fs.writeFile(path.join(root, 'platform.local.yaml'), JSON.stringify({ benchmarks: { 'zsoft-l1': { dataset: { source: '../official', revision: null } } } }))
-  assert.deepEqual(loadProjectConfig('platform', options).benchmarks['zsoft-l1'].dataset, { source: path.resolve(root, '../official'), revision: null })
+  await fs.writeFile(path.join(root, 'platform.local.yaml'), JSON.stringify({ benchmarks: { 'zsoft-l1': { dataset: { autoImport: false, source: '../official', revision: null } } } }))
+  assert.deepEqual(loadProjectConfig('platform', options).benchmarks['zsoft-l1'].dataset, { autoImport: false, source: path.resolve(root, '../official'), revision: null })
   await fs.writeFile(path.join(root, 'evaluator.local.yaml'), JSON.stringify({ benchmarks: { 'zsoft-l1': { assetsDir: './assets', kernelAccel: 'kvm' } } }))
   const config = loadProjectConfig('evaluator', options)
   assert.deepEqual(config.benchmarks['zsoft-l1'], { assetsDir: path.join(root, 'assets'), kernelAccel: 'kvm' })
   const snapshot = loadProjectConfig('evaluator', { env: { NODE_ENV: 'test', AGENT_INSIGHT_EVALUATOR_CONFIG_JSON: JSON.stringify(config), ZSOFT_KERNEL_ACCEL: 'tcg' } })
   assert.deepEqual(snapshot, config)
   for (const [scope, settings, field] of [
+    ['platform', { dataset: { autoImport: 'false' } }, 'dataset.autoImport'],
+    ['platform', { dataset: { autoImport: null } }, 'dataset.autoImport'],
     ['platform', { dataset: { source: '' } }, 'dataset.source'],
     ['platform', { dataset: { revision: 'master' } }, 'dataset.revision'],
     ['evaluator', { kernelAccel: 'auto' }, 'kernelAccel'],

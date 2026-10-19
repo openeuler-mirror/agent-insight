@@ -4,15 +4,17 @@
 
 ## ZSoft 任务目录与执行器
 
-ZSoft 是 Benchmark；MCTS 是执行器。平台直接读取官方题目目录，在线和离线都通过统一数据准备命令导入，无需导出中间数据集。
+ZSoft 是 Benchmark；MCTS 是执行器。平台直接读取官方题目目录，在线和离线都无需导出中间数据集。
 
 **平台机器在线准备：**
 
 ```bash
-npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
+bash scripts/start.sh
 ```
 
-首次执行获取官方仓库 `https://gitcode.com/linmalin/muyuan-sec.git` 的固定提交 `7f7d675eff19eec27745ddcd24b1efaf398bb753`，缓存到 `~/.agent-insight/benchmark-assets/zsoft-l1/`，解析 30 道正式题（24 道 userspace、6 道 kernel）并导入数据库。已安装时直接复用数据库，不访问来源。导入后正常运行 `bash scripts/start.sh` 启动服务；旧启动参数 `--benchmark` 和选择变量 `AGENT_INSIGHT_BENCHMARK` 已移除。
+`benchmarks.zsoft-l1.dataset.autoImport` 默认 `true`，启动时获取官方仓库 `https://gitcode.com/linmalin/muyuan-sec.git` 的固定提交 `7f7d675eff19eec27745ddcd24b1efaf398bb753`，缓存到 `~/.agent-insight/benchmark-assets/zsoft-l1/`，解析 30 道正式题（24 道 userspace、6 道 kernel）并导入当前数据库。已安装时直接复用数据库，不访问来源。将 `config/benchmark/platform.local.yaml` 中的 `autoImport` 设为 `false` 只关闭启动自动导入，不影响已有数据集和下面的管理命令。SWE-bench 与 ZSoft 开关互相独立；旧启动参数 `--benchmark` 和选择变量 `AGENT_INSIGHT_BENCHMARK` 已移除。
+
+准备或导入失败只警告，继续准备其他数据集并启动服务；详细输出写入 `~/.agent-insight/logs/zsoft-l1-bootstrap.log`（随 `AGENT_INSIGHT_HOME` 调整），每次尝试覆盖，下次启动重试。启动会同步等待准备完成；本步骤只导入题目，不启动评测服务或下载评测镜像。
 
 **平台机器离线准备：** 将官方 L1 包目录或完整仓库放在本机目录，在项目 `config/benchmark/platform.local.yaml` 设置：
 
@@ -20,11 +22,12 @@ npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
 benchmarks:
   zsoft-l1:
     dataset:
+      autoImport: true
       source: /srv/datasets/zsoft-l1
       revision: null
 ```
 
-L1 目录包含 `tasks/<task-id>/task.json` 与 `public/README.md`；完整仓库根目录内的 `benchmarks/vulnerability/zsoft-l1` 也能识别。仍运行同一数据准备命令，平台不需要 Docker、构建状态或私有判题资产。在线镜像将 `dataset.source` 设置为 HTTP(S) Git 仓库地址，`dataset.revision` 指定完整 40 位小写提交哈希；两项 `null` 使用接入包固定的官方来源与版本。离线按实际题目内容识别，有 Git 元数据时附带真实 revision。相对路径按声明配置的文件所在目录解析。
+L1 目录包含 `tasks/<task-id>/task.json` 与 `public/README.md`；完整仓库根目录内的 `benchmarks/vulnerability/zsoft-l1` 也能识别。配置后执行 `bash scripts/start.sh`，平台不需要 Docker、构建状态或私有判题资产。在线镜像将 `dataset.source` 设置为 HTTP(S) Git 仓库地址，`dataset.revision` 指定完整 40 位小写提交哈希；两项 `null` 使用接入包固定的官方来源与版本。离线按实际题目内容识别，有 Git 元数据时附带真实 revision。相对路径按声明配置的文件所在目录解析。
 
 旧 `ZSOFT_DATASET_SOURCE`、`ZSOFT_DATASET_REVISION` 不再生效，发现残留时提示迁移。不要再把它们写入 `.env`。已经导入数据库的数据不会因修改来源配置自动更新，需要显式刷新。
 

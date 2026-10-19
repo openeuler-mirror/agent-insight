@@ -125,20 +125,22 @@ bash scripts/start.sh --port 3100
 
 ### 4.2 随服务启动自动安装
 
-启动 Agent Insight 时，`config/benchmark/platform.yaml` 的 `benchmarks.swe-bench.dataset.autoImport` 默认 `true`：
+启动 Agent Insight 时，`config/benchmark/platform.yaml` 的 `benchmarks.swe-bench.dataset.autoImport` 和 `benchmarks.zsoft-l1.dataset.autoImport` 均默认 `true`，按顺序独立准备 SWE-bench 与 ZSoft：
 
 ```bash
 bash scripts/start.sh
 ```
 
-首次启动会下载、校验并导入 500 条 Case。后续启动先检查当前数据库，已存在完整、可用的数据集时跳过下载和导入。将 `autoImport` 设置为 `false` 可跳过启动自动导入，但不影响已有数据集和管理员手动导入。`AGENT_INSIGHT_BENCHMARK` 不再控制此行为，`scripts/start.sh` 不再接受 `--benchmark` 参数。
+首次启动会下载、校验并导入 SWE-bench 的 500 条 Case 和 ZSoft 的 30 道正式题。后续启动先检查当前数据库，已有可用数据集时跳过下载和导入。在 `platform.local.yaml` 将对应 Benchmark 的 `dataset.autoImport` 设置为 `false` 可独立跳过启动自动导入，不影响另一 Benchmark、已有数据集和管理员手动导入。`AGENT_INSIGHT_BENCHMARK` 不再控制此行为，`scripts/start.sh` 不再接受 `--benchmark` 参数。
 
-准备或导入失败只输出简短警告，继续构建和启动服务；SWE-bench Verified 相关实验暂不可用。终端根据失败原因提示内网或本机来源、文件校验、Python 环境等处理方式，详细输出写入 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），每次启动覆盖该日志。当前仍同步等待本次准备结束，再继续启动；数据库初始化或构建失败仍会停止启动。
+准备或导入失败只输出简短警告，继续准备其他数据集、构建和启动服务；失败的数据集相关实验暂不可用。终端提示来源配置、文件校验、Python 环境等处理方式，详细输出分别写入 `~/.agent-insight/logs/swe-bench-bootstrap.log`、`zsoft-l1-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），每次尝试覆盖对应日志。当前仍同步等待本次准备结束，再继续启动；数据库初始化或构建失败仍会停止启动。
 
 下次启动会自动重试。也可在修复后从项目根目录单独重试，无需重启已运行的服务：
 
 ```bash
 npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts
+# ZSoft 单独重试
+npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
 ```
 
 独立导入失败时返回非零退出码，便于管理员检查结果。
@@ -161,7 +163,7 @@ benchmarks:
 
 ### 4.3 其他 Benchmark
 
-接入包可注册 `implementation.datasetPreparer` 和 `datasetPreparerExport`，通过 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>` 单独准备和导入数据；ZSoft 的官方来源与版本配置在 `platform.local.yaml` 的 `benchmarks.zsoft-l1.dataset.source`、`revision`。评测机的资产根目录与加速模式配置在 `evaluator.local.yaml` 的 `benchmarks.zsoft-l1.assetsDir`、`kernelAccel`。旧 ZSoft 业务环境变量只提示迁移，不再覆盖 YAML；MCTS 自有的 `ZSOFT_TASKS_DIR` 仍在其 `config.env` 管理。未注册准备器的接入包仍可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录。普通数据集页面导入不能替代 Benchmark 数据集安装。
+接入包可注册 `implementation.datasetPreparer` 和 `datasetPreparerExport`，通过 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>` 单独准备和导入数据；ZSoft 也已接入上述启动自动导入，开关、官方来源与版本配置在 `platform.local.yaml` 的 `benchmarks.zsoft-l1.dataset.autoImport`、`source`、`revision`。评测机的资产根目录与加速模式配置在 `evaluator.local.yaml` 的 `benchmarks.zsoft-l1.assetsDir`、`kernelAccel`。旧 ZSoft 业务环境变量只提示迁移，不再覆盖 YAML；MCTS 自有的 `ZSOFT_TASKS_DIR` 仍在其 `config.env` 管理。未注册准备器的接入包仍可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录。普通数据集页面导入不能替代 Benchmark 数据集安装。
 
 ## 5. 安装 Evaluator
 

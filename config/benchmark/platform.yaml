@@ -8,6 +8,7 @@ benchmarks:
       python: null
   zsoft-l1:
     dataset:
+      autoImport: true
       source: null
       revision: null
   scheduling:

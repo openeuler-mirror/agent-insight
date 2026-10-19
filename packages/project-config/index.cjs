@@ -62,6 +62,7 @@ const schemas = {
       },
       'zsoft-l1': {
         dataset: {
+          autoImport: boolean(true),
           source: leaf(null, nullableString, source),
           revision: leaf(null, value => value === null || (typeof value === 'string' && /^[a-f0-9]{40}$/.test(value))),
         },

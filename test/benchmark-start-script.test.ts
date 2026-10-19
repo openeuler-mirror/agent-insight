@@ -7,12 +7,14 @@ import test from 'node:test'
 
 const startScript = path.resolve('scripts/start.sh')
 
-test('start.sh prepares SWE-bench by default and rejects the removed benchmark argument', () => {
+test('start.sh prepares SWE-bench and ZSoft by default and rejects the removed benchmark argument', () => {
   const help = spawnSync('bash', [startScript, '--help'], { encoding: 'utf8' })
   assert.equal(help.status, 0)
   assert.doesNotMatch(help.stdout, /--benchmark|AGENT_INSIGHT_BENCHMARK/)
   assert.match(help.stdout, /--port PORT/)
   assert.match(help.stdout, /SWE-bench Verified is prepared automatically/)
+  assert.match(help.stdout, /ZSoft L1 is also prepared automatically/)
+  assert.match(help.stdout, /dataset.autoImport/)
 
   const missing = spawnSync('bash', [startScript, '--benchmark'], { encoding: 'utf8' })
   assert.notEqual(missing.status, 0)

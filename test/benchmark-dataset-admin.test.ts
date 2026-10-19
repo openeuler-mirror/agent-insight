@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,7 +9,7 @@ const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-benchmark-a
 const databasePath = path.join(testDir, 'benchmark.db')
 process.env.DATABASE_URL = `file:${databasePath}`
 
-test('admin installs one shared dataset, optionally removes the source, and safely removes datasets', async () => {
+test('admin installs one shared dataset, optionally removes the source, and safely removes datasets', async t => {
   const sqliteModule = 'node:sqlite'
   const { DatabaseSync } = await import(sqliteModule) as {
     DatabaseSync: new (filename: string) => { exec(sql: string): void; close(): void }
@@ -240,6 +241,27 @@ test('admin installs one shared dataset, optionally removes the source, and safe
   }))
   fs.writeFileSync(path.join(taskDirectory, 'public/README.md'), 'Synthetic public instructions')
   fs.writeFileSync(path.join(taskDirectory, 'verify.py'), 'Private judge; never executed')
+  const configDir = path.join(testDir, 'config')
+  fs.mkdirSync(configDir)
+  const previousConfig = process.env.AGENT_INSIGHT_CONFIG_DIR
+  process.env.AGENT_INSIGHT_CONFIG_DIR = configDir
+  t.after(() => {
+    if (previousConfig === undefined) delete process.env.AGENT_INSIGHT_CONFIG_DIR
+    else process.env.AGENT_INSIGHT_CONFIG_DIR = previousConfig
+  })
+  const configureZsoft = (source: string, autoImport = true) => fs.writeFileSync(path.join(configDir, 'platform.local.yaml'), JSON.stringify({
+    benchmarks: { 'zsoft-l1': { dataset: { source, autoImport } } },
+  }))
+  const bootstrap = () => spawnSync(process.execPath, ['scripts/benchmark/bootstrap-zsoft-dataset.cjs'], {
+    env: { ...process.env, AGENT_INSIGHT_HOME: path.join(testDir, 'managed') }, encoding: 'utf8', timeout: 15_000,
+  })
+  configureZsoft(officialDirectory)
+  const startup = bootstrap()
+  assert.equal(startup.status, 0, startup.stderr)
+  assert.doesNotMatch(startup.stderr, /导入失败|导入配置无效|自动准备或日志写入失败/)
+  assert.match(startup.stdout, /ZSoft L1 数据集已就绪/)
+  const logPath = path.join(testDir, 'managed/logs/zsoft-l1-bootstrap.log')
+  assert.match(fs.readFileSync(logPath, 'utf8'), /"action": "imported"/)
   const zsoft = await admin.installBenchmarkDataset({ benchmarkKey: 'zsoft-l1', profileKey: 'l1', sourcePath: officialDirectory })
   assert.equal(zsoft.caseCount, 1)
   const zsoftRow = await prismaModule.prisma.benchmarkDataset.findUnique({ where: { id: zsoft.id }, include: { cases: true, agentEvalDataset: true } })
@@ -257,13 +279,16 @@ test('admin installs one shared dataset, optionally removes the source, and safe
   await prismaModule.prisma.benchmarkDataset.update({ where: { id: zsoft.id }, data: { sourceJson: JSON.stringify({ profileKey: 'l1' }) } })
   assert.equal(await admin.findInstalledSystemBenchmarkDataset({ benchmarkKey: 'zsoft-l1', profileKey: 'l1' }), null)
   await prismaModule.prisma.benchmarkDataset.update({ where: { id: zsoft.id }, data: { sourceJson: zsoftRow!.sourceJson } })
-  const previousSource = process.env.ZSOFT_DATASET_SOURCE
-  process.env.ZSOFT_DATASET_SOURCE = '/does-not-exist/offline-zsoft'
-  try {
+  configureZsoft(path.join(testDir, 'does-not-exist'))
+  const restarted = bootstrap()
+  assert.equal(restarted.status, 0, restarted.stderr)
+  assert.doesNotMatch(restarted.stderr, /导入失败|导入配置无效|自动准备或日志写入失败/)
+  assert.match(fs.readFileSync(logPath, 'utf8'), /"action": "already-installed"/)
+  {
     const { ensureBenchmarkDataset } = await import('@/lib/benchmark/dataset-preparation')
     assert.deepEqual(await ensureBenchmarkDataset('zsoft-l1'), { action: 'already-installed', id: zsoft.id, caseCount: 1 })
     await assert.rejects(ensureBenchmarkDataset('zsoft-l1', { refresh: true }), /官方/)
-    process.env.ZSOFT_DATASET_SOURCE = officialDirectory
+    configureZsoft(officialDirectory, false)
     await prismaModule.prisma.$executeRawUnsafe(
       `INSERT INTO BenchmarkExperimentBinding (experimentId, datasetId, datasetContentHash, adapterKey, selectionJson, runConfigJson, expectedCaseCount)
        VALUES (?, ?, ?, ?, '{}', '{}', 1)`, 'zsoft-experiment', zsoft.id, zsoft.contentHash, 'zsoft-l1',
@@ -273,9 +298,6 @@ test('admin installs one shared dataset, optionally removes the source, and safe
     const nextVersion = await ensureBenchmarkDataset('zsoft-l1', { refresh: true, name: 'ZSoft new version' })
     assert.notEqual(nextVersion.id, zsoft.id)
     assert.equal((await prismaModule.prisma.benchmarkDataset.findUnique({ where: { id: zsoft.id } }))?.contentHash, zsoft.contentHash)
-  } finally {
-    if (previousSource === undefined) delete process.env.ZSOFT_DATASET_SOURCE
-    else process.env.ZSOFT_DATASET_SOURCE = previousSource
   }
 
   await prismaModule.prisma.$disconnect()

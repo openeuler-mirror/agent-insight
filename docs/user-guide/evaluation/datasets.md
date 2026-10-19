@@ -48,13 +48,15 @@ benchmarks:
 
 旧 `AGENT_INSIGHT_BENCHMARK`、`SWE_BENCH_DATASET_SOURCE`、`SWE_BENCH_SOURCE_ARCHIVE_SOURCE`、`SWE_BENCH_PYTHON` 及旧路径/URL变量均不再控制导入，发现残留变量会提示迁移至配置文件。
 
-ZSoft L1 使用统一数据准备命令获取官方题目并导入数据库：
+ZSoft L1 也默认随服务启动自动获取官方题目并导入数据库。在项目 `config/benchmark/platform.local.yaml` 设置 `benchmarks.zsoft-l1.dataset.autoImport: false` 可单独关闭；不影响已有数据集和手动导入，也不影响 SWE-bench 的开关。直接执行：
 
 ```bash
-npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
+bash scripts/start.sh
 ```
 
-首次执行按接入包固定的官方提交拉取仓库，解析 30 道正式题（24 道 userspace、6 道内核题）；后续执行先查数据库，已安装时跳过来源读取和下载。缓存位于平台机器的 `~/.agent-insight/benchmark-assets/zsoft-l1/`（自定义 `AGENT_INSIGHT_HOME` 时跟随该目录）。数据准备只读取题目元数据和公开资料，不需要 Docker、镜像或评测资产。导入后正常运行 `bash scripts/start.sh` 启动服务，不再设置 `AGENT_INSIGHT_BENCHMARK` 或使用启动参数 `--benchmark`。
+首次执行按接入包固定的官方提交拉取仓库，解析 30 道正式题（24 道 userspace、6 道内核题）；后续执行先查当前数据库，已安装时跳过来源读取和下载。缓存位于平台机器的 `~/.agent-insight/benchmark-assets/zsoft-l1/`（自定义 `AGENT_INSIGHT_HOME` 时跟随该目录）。数据准备只读取题目元数据和公开资料，不需要 Docker、镜像或评测资产，也不会自动启动 Evaluator。不再设置 `AGENT_INSIGHT_BENCHMARK` 或使用启动参数 `--benchmark`。
+
+ZSoft 准备或导入失败只警告，继续启动服务，详细输出写入 `~/.agent-insight/logs/zsoft-l1-bootstrap.log`（随 `AGENT_INSIGHT_HOME` 调整），下次启动重试。启动会同步等待本次准备结束；已有数据集不会因修改来源而自动刷新。
 
 离线时，将官方 ZSoft L1 目录或完整官方仓库放在平台机器的一个目录，在项目 `config/benchmark/platform.local.yaml` 中设置：
 
@@ -62,11 +64,12 @@ npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
 benchmarks:
   zsoft-l1:
     dataset:
+      autoImport: true
       source: /srv/datasets/zsoft-l1
       revision: null
 ```
 
-目录应包含 `tasks/<task-id>/task.json` 和 `public/README.md`；完整仓库根目录也可自动识别。仍执行上面的数据准备命令，不需要预先导出或处理数据。在线镜像可将 `dataset.source` 设置为 HTTP(S) Git 仓库地址；`dataset.revision` 可指定完整 40 位小写提交哈希，`null` 使用接入包固定版本。两项均为 `null` 时使用固定的官方来源和版本。离线目录按实际内容识别，不由此配置伪造版本。相对路径按配置文件所在目录解析；旧 `ZSOFT_DATASET_SOURCE`、`ZSOFT_DATASET_REVISION` 只提示迁移，不再生效。
+目录应包含 `tasks/<task-id>/task.json` 和 `public/README.md`；完整仓库根目录也可自动识别。配置后正常启动服务即可，不需要预先导出或处理数据。在线镜像可将 `dataset.source` 设置为 HTTP(S) Git 仓库地址；`dataset.revision` 可指定完整 40 位小写提交哈希，`null` 使用接入包固定版本。两项均为 `null` 时使用固定的官方来源和版本。离线目录按实际内容识别，不由此配置伪造版本。相对路径按配置文件所在目录解析；旧 `ZSOFT_DATASET_SOURCE`、`ZSOFT_DATASET_REVISION` 只提示迁移，不再生效。
 
 只安装数据、不重启服务时使用：
 
