@@ -8,8 +8,8 @@
     },
     {
       "key": "zsoft-l1",
-      "digest": "sha256:ef8144e4ed617b71760161e6bba573ef06f03c96d75d65245509c69bd7f46091",
-      "evaluatorDigest": "sha256:23c21890dd4ca9733dfc1f7b90741abe927794b6a132c315b19d6b1343998981"
+      "digest": "sha256:4b46ff8c77ce027021a8c0fe07b50451dc7d605e4b3be4e7bf5370c5478db0e6",
+      "evaluatorDigest": "sha256:7f2f09afde16f79070c0464d1c958b3e202cb82e065b998fbf54dc2ba5450484"
     }
   ]
 }
