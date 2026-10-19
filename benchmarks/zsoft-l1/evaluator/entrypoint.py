@@ -37,7 +37,7 @@ def docker(args: list[str], timeout: int = 30) -> str:
 
 
 def asset_root() -> Path:
-    configured = os.environ.get("ZSOFT_L1_ASSETS_DIR", "/data/benchmark-assets/zsoft-l1")
+    configured = os.environ.get("EVALUATOR_ASSETS_DIR") or os.environ.get("ZSOFT_L1_ASSETS_DIR", "/data/benchmark-assets/zsoft-l1")
     root = Path(configured)
     if not root.is_absolute() or not root.is_dir() or root.is_symlink():
         raise AssetError("ZSOFT_ASSET_ROOT_MISSING")

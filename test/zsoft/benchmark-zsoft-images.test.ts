@@ -192,6 +192,16 @@ assert not (context / '.cache').exists()
 assert not (context / '.runs').exists()
 assert not (context / 'mapping.json').exists()
 assert verify_task(context, load_inventory(context), 'service-case')['public']['taskId'] == 'service-case'
+from verify_assets import verify
+verify(context, '20261014-v1', metadata['bundleDigest'])
+for release, digest in [('wrong-release', metadata['bundleDigest']), ('20261014-v1', 'sha256:' + '0' * 64)]:
+    try: verify(context, release, digest)
+    except ValueError: pass
+    else: raise AssertionError('wrong release identity accepted')
+(context / 'tasks/service-case/public/README.md').write_text('changed')
+try: verify(context, '20261014-v1', metadata['bundleDigest'])
+except AssetError: pass
+else: raise AssertionError('changed asset accepted')
 `)
 })
 

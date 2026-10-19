@@ -265,6 +265,15 @@ function loadPackage(packageDir) {
   const imageProvider = evaluator.imageProvider
     ? resolveInside(evaluatorDir, evaluator.imageProvider, 'evaluator.imageProvider')
     : null
+  const assets = evaluator.assets == null ? null : {
+    image: string(evaluator.assets.image, 'evaluator.assets.image', /^[a-z0-9][a-z0-9.:-]*\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/),
+    sourcePath: string(evaluator.assets.sourcePath, 'evaluator.assets.sourcePath', /^\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*$/),
+    releaseId: string(evaluator.assets.releaseId, 'evaluator.assets.releaseId', /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+    bundleDigest: string(evaluator.assets.bundleDigest, 'evaluator.assets.bundleDigest', /^sha256:[a-f0-9]{64}$/),
+    directoryEnv: string(evaluator.assets.directoryEnv, 'evaluator.assets.directoryEnv', /^[A-Z][A-Z0-9_]*$/),
+    verifyCommand: string(evaluator.assets.verifyCommand, 'evaluator.assets.verifyCommand', /^(python3|node)$/),
+    verifyEntrypoint: resolveInside(evaluatorDir, evaluator.assets.verifyEntrypoint, 'evaluator.assets.verifyEntrypoint'),
+  }
   const ociRuntime = evaluator.runtime === 'oci-container'
   const imageRepository = ociRuntime
     ? string(evaluator.imageRepository, 'evaluator.imageRepository', /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i)
@@ -407,6 +416,7 @@ function loadPackage(packageDir) {
       command: string(evaluator.command, 'evaluator.command'),
       entrypoint: containerEntrypoint || entrypoint,
       ...(imageProvider ? { imageProvider } : {}),
+      ...(assets ? { assets } : {}),
       ...(imageRepository ? {
         image: `${imageRepository}:artifact-${evaluatorDigest.slice('sha256:'.length)}`,
         dockerfile: runtimeDockerfile,
@@ -495,6 +505,10 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   const preparerKeysSource = `// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog\nmodule.exports = ${JSON.stringify(packagesWithPreparers.map(item => item.key))}\n`
   const descriptors = packages.map((item) => ({
     ...item.evaluator,
+    ...(item.evaluator.assets ? { assets: {
+      ...item.evaluator.assets,
+      verifyEntrypoint: path.relative(outputDir, item.evaluator.assets.verifyEntrypoint).replaceAll(path.sep, '/'),
+    } } : {}),
     ...(item.evaluator.imageProvider
       ? { imageProvider: path.relative(outputDir, item.evaluator.imageProvider).replaceAll(path.sep, '/') }
       : {}),
@@ -510,6 +524,7 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   }))
   let descriptorJson = JSON.stringify(descriptors, null, 2)
   descriptorJson = descriptorJson.replace(/"imageProvider": "([^"/][^"]*)"/g, '"imageProvider": path.resolve(__dirname, "$1")')
+  descriptorJson = descriptorJson.replace(/"verifyEntrypoint": "([^"/][^"]*)"/g, '"verifyEntrypoint": path.resolve(__dirname, "$1")')
   descriptorJson = descriptorJson.replace(/"smokeEntrypoint": "([^"/][^"]*)"/g, '"smokeEntrypoint": path.resolve(__dirname, "$1")')
   descriptorJson = descriptorJson.replace(
     /"entrypoint": "([^"/][^"]*)"/g,

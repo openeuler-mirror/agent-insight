@@ -108,6 +108,27 @@ presentation:
     - { source: submission, name: answer.txt, label: Answer, order: 10 }
 `)
   assert.deepEqual(generator.generate(root), ['fixture'])
+  const evaluatorFile = path.join(packageDir, 'evaluator/evaluator.yaml')
+  const evaluatorSource = await fsp.readFile(evaluatorFile, 'utf8')
+  const assetSource = `
+assets:
+  image: registry.example/team/assets@sha256:${'a'.repeat(64)}
+  sourcePath: /release/v1
+  releaseId: v1
+  bundleDigest: sha256:${'b'.repeat(64)}
+  directoryEnv: FIXTURE_ASSETS_DIR
+  verifyCommand: node
+  verifyEntrypoint: ./entrypoint.cjs
+`
+  await fsp.writeFile(evaluatorFile, evaluatorSource + assetSource)
+  generator.generate(root)
+  const assetsDescriptor = require(path.join(root, 'generated/benchmark-catalog/evaluators.cjs')).generatedEvaluatorDescriptors[0].assets
+  assert.equal(assetsDescriptor.releaseId, 'v1')
+  assert.equal(assetsDescriptor.verifyEntrypoint, path.join(packageDir, 'evaluator/entrypoint.cjs'))
+  await fsp.writeFile(evaluatorFile, evaluatorSource + assetSource.replace(`@sha256:${'a'.repeat(64)}`, ':latest'))
+  assert.throws(() => generator.generate(root), /evaluator.assets.image/)
+  await fsp.writeFile(evaluatorFile, evaluatorSource)
+  generator.generate(root)
   assert.match(
     await fsp.readFile(path.join(root, 'generated', 'benchmark-catalog', 'adapters.ts'), 'utf8'),
     /fixtureAdapter/,

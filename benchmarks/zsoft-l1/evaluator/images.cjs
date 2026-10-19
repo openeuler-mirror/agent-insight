@@ -29,10 +29,10 @@ function sourceTaskDigest(root, taskId) {
   return fingerprint({ manifest, publicFiles })
 }
 
-function describeImages(payload, arch) {
+function describeImages(payload, arch, context = {}) {
   const normalizedArch = { amd64: 'x86_64', x86_64: 'x86_64' }[arch]
   if (!normalizedArch) throw new Error('ZSOFT_IMAGE_ARCH_UNSUPPORTED: only linux/amd64 is supported')
-  const root = process.env.ZSOFT_L1_ASSETS_DIR || '/data/benchmark-assets/zsoft-l1'
+  const root = context.assetsDir || process.env.EVALUATOR_ASSETS_DIR || process.env.ZSOFT_L1_ASSETS_DIR || '/data/benchmark-assets/zsoft-l1'
   const inventory = JSON.parse(fs.readFileSync(path.join(root, 'agent-insight-assets.json'), 'utf8'))
   const { bundleDigest, ...content } = inventory
   if (inventory.schemaVersion !== 'zsoft-assets/v1' || fingerprint(content) !== bundleDigest

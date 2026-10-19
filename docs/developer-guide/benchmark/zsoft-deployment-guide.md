@@ -95,21 +95,21 @@ python3 scripts/benchmark/pack-zsoft-assets.py \
 
 `registry-images.json` 是 Case 镜像发布记录；`agent-insight-assets.json` 是冻结清单，记录私有文件摘要、本地 Image ID 与远端固定引用，以及题目的 `sourceTaskDigest`。本机构建摘要不参与平台数据集指纹；`source-metadata.json` 仅供资产审计，不需导入平台。冻结后不能再对该快照执行 build/publish；准备新版本应使用新目录。评测资产镜像从冻结清单覆盖的文件构建，不包含构建缓存、未选题目或 Docker 镜像层。
 
-完整评测资产包含私有任务状态、Judge 输入和内核文件，资产镜像必须推送到**私有 SWR 仓库**，不能复用公开的 Case 镜像仓库。此镜像不是 Evaluator Runtime，也不会被 MCTS 执行端拉取；它只是把固定 release 搬运到评测机的数据卷。
+完整评测资产包含任务状态、Judge 输入和内核文件。本部署使用公有 SWR，资产镜像与 Case 镜像共用仓库，通过 `assets-<release>` 标签区分；评测机匿名拉取，无需登录配置。此镜像只用于把固定 release 安装到评测机数据卷，MCTS 执行端仍使用自己的原生任务目录。
 
-**构建并发布私有资产镜像：**
+**构建并发布资产镜像（由版本发布者执行一次）：**
 
 ```bash
-ZSOFT_ASSET_IMAGE_REPOSITORY="$SWR_PREFIX/agent-insight-benchmark-assets-zsoft-l1"
+ZSOFT_ASSET_IMAGE_REPOSITORY="$SWR_PREFIX/zsoft-l1-userspace-x86-64"
 ZSOFT_ASSET_RELEASE='20261014-v1'
 python3 scripts/benchmark/build-zsoft-assets-image.py \
   --root "$ZSOFT_RELEASE/assets" \
   --repository "$ZSOFT_ASSET_IMAGE_REPOSITORY" \
   --release "$ZSOFT_ASSET_RELEASE" \
-  --push
+  --tag "assets-$ZSOFT_ASSET_RELEASE" --push
 ```
 
-SWR 控制台中先将该资产仓库设为私有。保留命令输出的 `repoDigests`，后续按 `repository@sha256:...` 安装，不能用可变 tag 作为部署身份。脚本在构建前逐题重新校验冻结清单及文件摘要；镜像只含清单、框架、选定任务、任务状态和 release 元数据。
+SWR 仓库保持公有。发布者将输出的 `repoDigests`、release ID、bundleDigest 和镜像内目录写入接入包 `evaluator.yaml` 的 `assets` 声明，再生成 Catalog。部署按 `repository@sha256:...` 固定版本，不使用可变 tag。脚本在构建前逐题重新校验冻结清单及文件摘要；镜像只含清单、框架、选定任务、任务状态和 release 元数据。
 
 **上传后的构建机清理：**
 
@@ -119,25 +119,28 @@ SWR 控制台中先将该资产仓库设为私有。保留命令输出的 `repoD
 
 **在正式评测机部署资产和 Runtime：**
 
-Controller 的 `/data` 命名卷与 Runtime 共享。ZSoft 与 SWE-bench 使用相同的 Runtime 准备流程：首次调用时复用摘要匹配的本地镜像；缺失时先尝试拉取，拉取失败后使用 Controller 中接入包的 Dockerfile 自动构建，并校验 Catalog artifact 摘要。启动 Controller 不会预热 Runtime。本方案不上传 Runtime，保持 `EVALUATOR_RUNTIME_IMAGE_PREFIX` 未设置；评测机需要访问构建基础镜像和 Python 依赖的网络。资产镜像则由独立私有 SWR 仓库拉取并安装到 Controller 的 `/data` 命名卷：
+Controller 启动后按接入包的 `assets` 声明在后台自动下载资产镜像，从未启动的临时容器复制文件，校验 release、冻结清单与逐题文件摘要，全部通过后原子安装到 `<EVALUATOR_DATA_DIR>/benchmark-assets/zsoft-l1/<镜像摘要>`。默认容器内为 `/data/benchmark-assets/zsoft-l1/<镜像摘要>`，重启校验并复用已安装版本。镜像搬运过程不执行其中的程序；无需管理员手工解压、执行安装脚本或配置 ZSoft 目录变量。
 
 ```bash
 bash scripts/evaluator.sh start \
   --platform-base-url <平台地址>
-docker inspect agent-insight-benchmark-evaluator --format '{{json .Mounts}}'
-
-# 安装前确认 SWR 登录态有私有仓库拉取权限；传入固定 digest。
-bash scripts/benchmark/install-zsoft-assets-image.sh \
-  --image "$ZSOFT_ASSET_IMAGE_REPOSITORY@sha256:<资产镜像摘要>" \
-  --release "$ZSOFT_ASSET_RELEASE"
-
-# Controller 的首次部署或更换 release 时配置对应目录。
-bash scripts/evaluator.sh start \
-  --platform-base-url <平台地址> \
-  --evaluator-env ZSOFT_L1_ASSETS_DIR=/data/benchmark-assets/zsoft-l1/releases/20261014-v1
 ```
 
-安装脚本要求 digest 和 release ID，先校验镜像中的 release metadata、bundleDigest 及每道题的冻结文件，再复制到共享卷；目标 release 已存在时拒绝覆盖。每次更新使用新 release ID，旧目录保留到确认没有评测任务使用后再按运维流程清理。启动 Controller 时将 `ZSOFT_L1_ASSETS_DIR` 指向所选 release；平台按第一节独立获取并导入官方目录，执行机配置自己的公开原生任务目录。完整资产镜像只在评测机使用，执行机/MCTS 仍按原流程使用公开 `tasks-dir`。评测机无需数据库。评测任务携带 `taskId`、`sourceTaskDigest` 和可选 revision，评测端与本机清单匹配后执行。
+`/data` 是容器内路径，默认由 Docker 命名卷 `agent-insight-benchmark-evaluator-data` 提供，宿主机无需创建 `/data`。可以预先用 Docker 的 local volume 驱动将同名卷绑定到有权限且空间充足的宿主目录；应在首次创建卷前配置，已有数据卷迁移需按运维流程保留数据。
+
+`ZSOFT_L1_ASSETS_DIR` 是可选的**资产存储根目录**，不是某个 release 的最终目录。需要更换卷内存放位置时可使用：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url <平台地址> \
+  --evaluator-env ZSOFT_L1_ASSETS_DIR=/data/custom-assets/zsoft-l1
+```
+
+实际版本目录仍自动追加镜像摘要。自定义根目录必须位于 Controller 与 Runtime 共享的可写 bind/volume 中；目录不共享、不可写、校验失败或拉取连续失败会给出明确错误。下载最多重试三次，失败后排除原因并重启 Controller 重试；不会无限显示“等待镜像准备”。安装期间平台显示准备、下载或校验评测资产，健康检查保留对应阶段。不同镜像摘要使用不同目录，旧目录保留，不覆盖历史版本；历史手工解压的目录不会被自动认作已安装版本。
+
+ZSoft 与 SWE-bench 使用相同的 Runtime 准备流程：首次调用复用匹配的本地镜像，缺失时先拉取，失败后按接入包 Dockerfile 自动构建并校验 Catalog artifact 摘要。启动 Controller 不预热 Runtime。本方案不上传 Runtime，保持 `EVALUATOR_RUNTIME_IMAGE_PREFIX` 未设置，评测机需要访问基础镜像和 Python 依赖来源。
+
+平台独立导入官方数据集，执行机配置自己的原生任务目录。评测机无需数据库，评测请求只携带题目身份及版本。完整资产镜像仅由评测机安装，执行客户端与 MCTS 的命令保持原流程。
 
 评测端对公有 SWR 匿名拉取，无需 registry 认证配置。题目镜像由公共镜像池按固定摘要拉取、缓存、回收；重评或回收后重拉均使用同一摘要。Runtime 校验实际 Image ID 与冻结清单一致，Compose 使用 Image ID 且禁止自动 pull，因此无需覆盖原始 tag。当前清单未配置 `registryImages` 时需在本机预装固定 Image ID，不能在冷缓存下从远端恢复。缺少 `sourceTaskDigest` 的旧评测资产清单不再支持，需重新冻结。
 
@@ -149,7 +152,7 @@ bash scripts/evaluator.sh start \
 
 ## 内核题资产准备与部署
 
-内核题仍使用同一个 ZSoft Evaluator Runtime。QEMU、C 编译工具和 rootfs 生成工具由官方 Case 的 runner 镜像提供，不需要新增平台 Runtime。每道内核题包含一个 `runner_image` 引用和漏洞版、修复版两套内核资产；6 道正式题合计 6 个 runner 镜像引用、12 套内核资产，实际镜像 ID 和层可能共享。runner 发布到 SWR，`bzImage`、`metadata.json` 及可选模块/rootfs 扩展文件通过私有资产包分发，不上传为 Docker 镜像。
+内核题仍使用同一个 ZSoft Evaluator Runtime。QEMU、C 编译工具和 rootfs 生成工具由官方 Case 的 runner 镜像提供，不需要新增平台 Runtime。每道内核题包含一个 `runner_image` 引用和漏洞版、修复版两套内核资产；6 道正式题合计 6 个 runner 镜像引用、12 套内核资产，实际镜像 ID 和层可能共享。runner 发布到 SWR，`bzImage`、`metadata.json` 及可选模块/rootfs 扩展文件随完整资产镜像安装到共享卷，仍以文件形式供 runner 挂载。
 
 内核 runner 可以与 userspace 镜像共用公有仓库，无需按题型另建仓库。119 本次沿用 `swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64`；名字中的 `userspace` 不限制镜像内容，发布脚本以任务 ID、角色和镜像 ID 生成独立标签，评测使用固定 digest。保留仓库名称可以继续使用已有 userspace 引用；若以后迁移仓库，需要重新发布并冻结新的引用。
 
@@ -213,14 +216,15 @@ python3 scripts/benchmark/pack-zsoft-assets.py \
   --output "$ZSOFT_KERNEL_RELEASE/combined-private-assets.tar.gz"
 ```
 
-该包包含合并后重新计算摘要的清单，覆盖 24 道 userspace 与 6 道内核题。将它复制到评测机并解压，按前节方式安装到新的共享数据卷目录，例如 `/data/benchmark-assets/zsoft-l1-full-v1`，然后启动对应配置：
+该包包含合并后重新计算摘要的清单，覆盖 24 道 userspace 与 6 道内核题。发布者将其解压到独立快照，按前节构建并发布完整资产镜像，再更新接入包固定引用。评测机启动通用服务即可自动安装全量资产，默认使用 `tcg`，不必增加 ZSoft 启动参数。
 
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url <平台地址> \
-  --evaluator-env ZSOFT_L1_ASSETS_DIR=/data/benchmark-assets/zsoft-l1-full-v1 \
-  --evaluator-env ZSOFT_KERNEL_ACCEL=tcg
+**119 完整资产镜像发布（2026-10-19）：** 复用已有合并包，没有重新编译题目。发布记录在 `/mnt/sdc/ymt/zsoft-releases/20261019-auto-assets-v1/`，标签为 `assets-20261019-full-v1`，固定引用为：
+
+```text
+swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64@sha256:af1e63c5cacb1753ceec85de245f129bdc63bb3ae15dca961248d17fa7e27a3b
 ```
+
+该版本包含全部 30 题，bundleDigest 为 `sha256:d73939d50ff543cbbe7a5a23e15ece361ed89d0dd998ab0f3cdace63e23621f9`。已使用空 Docker 配置核对公有匿名拉取；未运行 Judge 或 QEMU。
 
 加速模式默认 `tcg`，无需 `/dev/kvm`，但启动和执行可能较慢，实际超时预算待统一实题测试确定。此前检查 119 未提供 `/dev/kvm`，因此当前以 TCG 为部署起点；需要 KVM 时应先由宿主机开启虚拟化或嵌套虚拟化，再改为 `--evaluator-env ZSOFT_KERNEL_ACCEL=kvm`。平台 Runtime 本身无需设备或 privileged 权限，受控代理只向实际 runner 开放 `/dev/kvm:rw`；实际评测在拉取 runner 后检查 KVM API，失败返回 `ZSOFT_KERNEL_KVM_UNAVAILABLE`。doctor 只检查资产与加速配置，不代表已验证 KVM 或 QEMU 启动。
 

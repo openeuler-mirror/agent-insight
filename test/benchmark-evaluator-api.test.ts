@@ -263,6 +263,31 @@ test('a transient image pull failure stays retryable when an evaluation is submi
   assert.equal(attempts, 2)
 })
 
+test('asset preparation and terminal failures keep their codes across admission even with image pool disabled', async (t) => {
+  const { EvaluatorAssetError } = require('../services/evaluator/src/evaluator-assets.cjs')
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'evaluator-assets-api-'))
+  let failure = new EvaluatorAssetError('EVALUATOR_ASSETS_DOWNLOADING', '正在下载评测资产', true)
+  const evaluator = { key: 'swe-bench', validateJob() {}, assertAssetsReady() { throw failure } }
+  const service = new BenchmarkEvaluatorService({ dataDir: directory, imagePoolConfig: { enabled: false },
+    registry: new EvaluatorRegistry([evaluator]) }) as any
+  const listener = await listen(service.createServer())
+  t.after(async () => { await listener.close(); await fsp.rm(directory, { recursive: true, force: true }) })
+  const request = requestFor('asset-readiness')
+  const submit = () => fetch(`${listener.origin}/api/v1/evaluations`, {
+    method: 'POST', headers: headers(request), body: JSON.stringify(request),
+  })
+  const downloading = await submit()
+  assert.equal(downloading.status, 409)
+  assert.deepEqual(await downloading.json(), { error: {
+    code: 'EVALUATOR_ASSETS_DOWNLOADING', message: '正在下载评测资产', retryable: true,
+  } })
+  failure = new EvaluatorAssetError('EVALUATOR_ASSETS_DOWNLOAD_FAILED', '评测资产下载失败：registry unavailable')
+  const failed = await submit()
+  assert.equal(failed.status, 422)
+  assert.equal((await failed.json()).error.message, failure.message)
+  assert.equal(await service.journal.state(request.runId), null)
+})
+
 test('Controller passes frozen images to Runtime and releases protection only after successful cleanup', async (t) => {
   for (const cleanupSucceeded of [true, false]) {
     await t.test(String(cleanupSucceeded), async () => {

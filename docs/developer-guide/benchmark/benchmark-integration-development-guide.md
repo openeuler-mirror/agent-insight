@@ -463,6 +463,12 @@ resources:
 
 Entrypoint、Smoke 和 Dockerfile 必须位于接入包内。Catalog 按接入包内容摘要生成 Runtime 镜像 tag，并在运行时校验镜像 label；发布方可用 `node scripts/benchmark/build-evaluator-runtime.cjs <key>` 构建该制品，增加 `--image-prefix registry/namespace --push` 可上传到指定仓库。SWE-bench 和 ZSoft 均在本地镜像缺失时先拉取，拉取失败后按接入包 Dockerfile 自动构建；后续调用复用摘要匹配的镜像。声明 `requiresPrebuiltRuntime: true` 的接入包禁止该回退，本地引用必须预装，远程引用允许按需拉取。运行依赖归接入包制品所有，不要加入通用 Controller 基础依赖，也不要在 Controller 公共代码中加入 Benchmark 分支。
 
+接入包可选声明 `assets`：`image` 必须为固定 `repository@sha256`，同时声明镜像内 `sourcePath`、`releaseId`、`bundleDigest`、可选部署目录变量名 `directoryEnv`、`verifyCommand`（`python3` 或 `node`）及包内 `verifyEntrypoint`。Controller 在启动后台准备资产，调用校验器时依次传入目录、release ID、bundleDigest。校验器只读取文件与元数据，不执行 Judge 或构建任务。
+
+通用安装器按镜像摘要创建版本目录，拉取后从未启动容器复制、校验，再原子发布；并发请求共享准备状态，重启重新校验缓存。默认存储根为 `<EVALUATOR_DATA_DIR>/benchmark-assets/<benchmarkKey>`，目录变量只覆盖根路径，实际目录仍追加摘要。OCI 资产必须在 Controller 与 Runtime 共享卷内。Provider 的第三个参数 `assetsDir` 和 Runtime 环境 `EVALUATOR_ASSETS_DIR` 均为该接入实际解析出的版本目录，不从任务 payload 获取，也不修改全局环境变量。
+
+准备期间 admission 返回可重试的 `EVALUATOR_ASSETS_PREPARING`、`EVALUATOR_ASSETS_DOWNLOADING` 或 `EVALUATOR_ASSETS_VERIFYING`；安装失败返回不可重试的具体错误。健康检查通过 binding 的 `runtimeFacts.assetStage/assetErrorCode` 暴露状态，平台在健康检查和下发响应两条路径均保留错误及详细原因。没有声明资产的接入包不增加准备流程，公共 Controller 不含 ZSoft 分支。
+
 ### 9.2 Entrypoint 命令
 
 必须支持：
@@ -543,7 +549,7 @@ entrypoint/
 
 镜像池位于 `services/evaluator/src/image-pool.cjs`，按 Docker daemon 共享，不属于某个 Benchmark。接入包只声明需求，不另建空间预算或回收器，也不需要增加公共 API 路由。
 
-1. 在 `evaluator.yaml` 增加 `imageProvider: ./images.cjs`。该 Node 模块随 Catalog 加载，在 Controller 内导出 `describeImages(payload, daemonArch)`，返回数组；可无镜像或一个 Case 多镜像。这里只解析/校验元数据，不执行拉取、Shell 或 Harness，也不引入 Runtime 专属依赖。
+1. 在 `evaluator.yaml` 增加 `imageProvider: ./images.cjs`。该 Node 模块随 Catalog 加载，在 Controller 内导出 `describeImages(payload, daemonArch, { assetsDir })`，返回数组；可无镜像或一个 Case 多镜像。这里只解析/校验元数据，不执行拉取、Shell 或 Harness，也不引入 Runtime 专属依赖。
 2. 每项包含 `{ key, arch, references, estimatedBytes?, context? }`。`references` 是经接入包校验的来源和回退顺序；`estimatedBytes` 是新增占用的保守估值，省略使用主机默认值；`context` 是 Runtime 所需安全元数据。命中本地镜像也须校验允许范围和架构。公共层按架构和来源列表合并在途请求，解析后按实际 image ID 合并归属和使用者，不按 Benchmark/case 名称合并。
 3. 若需提前准备，Adapter 可增加 `imagePreparationInput(publicPayload, privatePayload)`，返回准备所需 JSON 或 `null`，不发送答案、测试补丁或完整私有载荷。平台在 Agent 下发前异步发送当前/下一个 Case 的元数据，Controller 使用同一个 `describeImages` 校验。此优化 hook 不替代五个必需业务 hook。
 4. Controller 获取镜像后持久化使用者，把 `preparedImages` 交给 Runtime；任务目录的 `pool-images.json` 冻结身份。重试重新检查本地镜像，仅按冻结 digest 重拉；仅本地 image ID 消失时明确失败，不回退到新 `latest`。
@@ -776,7 +782,7 @@ ZSoft 接入包声明 `imageProvider: ./images.cjs`。Adapter 的 `imagePreparat
 
 `zsoft-assets/v1` 新增可选 `tasks[taskId].registryImages`，键与 `images` 完全一致，值为公有仓库的固定 `repo@sha256`；该字段参与 task/bundle 摘要。原 `images` 保存 Docker config Image ID。公共镜像池冻结 `preparedImages`，Python 入口核对题目 key 与实际 Image ID，Compose 代理使用固定 ID 和 `pull_policy=never`。未配置 `registryImages` 的当前清单要求本地已装镜像；缺少 `sourceTaskDigest` 的旧清单不再支持。平台题目身份与评测机私有资产构建摘要分别管理，Evaluator 不连接平台数据库。
 
-Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构建端可使用 `--image-prefix`，Controller 配置 `EVALUATOR_RUNTIME_IMAGE_PREFIX`；显式 `--push` 才上传。ZSoft 默认复用本地 Runtime，缺失时尝试 pull，失败后自动 build，仍核对 Catalog artifact 标签。本部署方案只将 Case 镜像上传 SWR；自动构建 Runtime 不会构建题目环境，也不替代冻结资产部署。镜像池保持公有匿名 Docker API 拉取，不读取宿主 `docker login` 凭据。完整环境准备、发布和安装命令见 [ZSoft 部署指南](zsoft-deployment-guide.md#zsoft-镜像准备与公有-swr-部署)。
+Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构建端可使用 `--image-prefix`，Controller 配置 `EVALUATOR_RUNTIME_IMAGE_PREFIX`；显式 `--push` 才上传。ZSoft 默认复用本地 Runtime，缺失时尝试 pull，失败后自动 build，仍核对 Catalog artifact 标签。本部署方案将 Case 镜像和完整冻结资产镜像上传公有 SWR；Controller 启动后自动安装资产，自动构建 Runtime 不会重新构建题目环境。镜像池保持公有匿名 Docker API 拉取，不读取宿主 `docker login` 凭据。完整环境准备、发布和安装命令见 [ZSoft 部署指南](zsoft-deployment-guide.md#zsoft-镜像准备与公有-swr-部署)。
 
 内核题复用同一个 ZSoft Evaluator Runtime、任务协议和结果归一化。接入包将 `runner_image` 交给通用镜像池；`.task-state/<task-id>/{vuln,fix}/artifacts/` 中的 `bzImage`、metadata 和模块作为独立的冻结文件资产，按流式 SHA-256 校验，不作为 Docker 引用。资产打包支持合并同官方 revision、同框架摘要的冻结快照，评测机始终不访问数据库。
 

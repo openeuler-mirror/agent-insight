@@ -104,9 +104,18 @@ const generatedEvaluatorDescriptors = [
     "command": "python3",
     "entrypoint": "/opt/agent-insight/zsoft/entrypoint.py",
     "imageProvider": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/images.cjs"),
-    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-374322edf9534449f68815b044e955da3310e9d027d46934b283ae1ea385e77a",
+    "assets": {
+      "image": "swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64@sha256:af1e63c5cacb1753ceec85de245f129bdc63bb3ae15dca961248d17fa7e27a3b",
+      "sourcePath": "/opt/agent-insight/zsoft-l1/20261019-full-v1",
+      "releaseId": "20261019-full-v1",
+      "bundleDigest": "sha256:d73939d50ff543cbbe7a5a23e15ece361ed89d0dd998ab0f3cdace63e23621f9",
+      "directoryEnv": "ZSOFT_L1_ASSETS_DIR",
+      "verifyCommand": "python3",
+      "verifyEntrypoint": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/verify_assets.py")
+    },
+    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-065a76edbe9704e2540c0c1ffc69dd33d2ab2dc61d8a622ef0210ea55210b0d7",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/Dockerfile"),
-    "artifactDigest": "sha256:374322edf9534449f68815b044e955da3310e9d027d46934b283ae1ea385e77a",
+    "artifactDigest": "sha256:065a76edbe9704e2540c0c1ffc69dd33d2ab2dc61d8a622ef0210ea55210b0d7",
     "network": "deny",
     "resources": {
       "cpu": 4,

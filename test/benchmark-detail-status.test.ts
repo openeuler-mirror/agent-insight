@@ -3,10 +3,20 @@ import test from 'node:test'
 
 import {
   benchmarkCaseProgressLabel,
+  benchmarkEvaluationProgressLabel,
   deriveBenchmarkTraceStatus,
   isBenchmarkEvaluationInProgress,
   isBenchmarkSubmissionAwaitingCompletion,
 } from '@/lib/benchmark/detail-status'
+
+test('评测资产准备与题目镜像准备显示独立进度', () => {
+  for (const [code, label] of [
+    ['EVALUATOR_ASSETS_PREPARING', '正在准备评测资产…'],
+    ['EVALUATOR_ASSETS_DOWNLOADING', '正在下载评测资产…'],
+    ['EVALUATOR_ASSETS_VERIFYING', '正在校验评测资产…'],
+    ['IMAGE_POOL_PREPARING', '等待镜像准备…'],
+  ]) assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'queued', evaluationWaitCode: code }), label)
+})
 
 test('Benchmark 排队与执行阶段使用公共进度文案', () => {
   assert.equal(benchmarkCaseProgressLabel({ runStatus: 'pending' }), '等待开始')

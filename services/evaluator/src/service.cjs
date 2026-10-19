@@ -15,6 +15,7 @@ const {
 const { EvaluationJobJournal, atomicWriteJson } = require('./job-journal.cjs')
 const { BenchmarkImagePool, imagePoolConfig } = require('./image-pool.cjs')
 const { ServiceControl } = require('./service-control.cjs')
+const { EvaluatorAssetError } = require('./evaluator-assets.cjs')
 const { AgentInsightPlatformClient, PlatformClientError, sha256 } = require('./platform-client.cjs')
 
 const ACTIVE_STAGES = new Set([
@@ -145,7 +146,7 @@ function json(res, status, value) {
 function errorResponse(res, error) {
   const imagePoolError = error instanceof Error && /^IMAGE_POOL_[A-Z_]+$/.test(error.code)
     && error.status === 503 && typeof error.retryable === 'boolean'
-  const known = error instanceof EvaluatorProtocolError || error instanceof PlatformClientError || imagePoolError
+  const known = error instanceof EvaluatorProtocolError || error instanceof PlatformClientError || error instanceof EvaluatorAssetError || imagePoolError
   if (!known) console.error('[benchmark/evaluator]', error)
   json(res, imagePoolError && !error.retryable ? 422 : known ? error.status : 500, {
     error: {
@@ -249,7 +250,7 @@ class BenchmarkEvaluatorService {
       this.platformBaseUrl,
     )
     this.registry = options.registry || new EvaluatorRegistry(
-      generatedEvaluatorDescriptors.map((descriptor) => new FileEvaluatorEntrypoint(descriptor)),
+      generatedEvaluatorDescriptors.map((descriptor) => new FileEvaluatorEntrypoint(descriptor, undefined, { dataDir: this.dataDir })),
     )
     this.cleanupContainers = options.cleanupContainers || removeLabeledContainers
     this.controllerProbe = options.controllerProbe || defaultControllerProbe
@@ -328,6 +329,7 @@ class BenchmarkEvaluatorService {
   }
 
   async prepareBeforeAdmission(request, evaluator) {
+    evaluator.assertAssetsReady?.()
     if (!this.imagePool || !evaluator.describeImages) return
     if (this.imagePool.state?.windowRevision !== undefined) {
       const selected = Object.values(this.imagePool.state.windows).some((window) => window.expiresAt > Date.now() && window.caseIds?.includes(request.evaluationJob.executionRunId))
@@ -783,6 +785,7 @@ class BenchmarkEvaluatorService {
   async shutdown() {
     await this.control.stop()
     for (const controller of this.controllers.values()) controller.abort()
+    await Promise.all(this.registry.values().map(evaluator => evaluator.assets?.close()))
     for (const runId of await this.journal.listRunIds()) {
       if (ACTIVE_STAGES.has((await this.journal.state(runId))?.stage)) {
         await this.control.cancel(runId, 'SERVICE_STOPPED')
@@ -835,6 +838,7 @@ class BenchmarkEvaluatorService {
 
   async recover() {
     await this.control.assertRunning()
+    for (const evaluator of this.registry.values()) evaluator.prepareAssets?.()
     if (this.imagePool) {
       await this.imagePool.initialize()
       const owners = Object.values(this.imagePool.state.images).flatMap((entry) => Object.values(entry.users))

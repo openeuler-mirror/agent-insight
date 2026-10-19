@@ -5,6 +5,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 const { runtimeDescriptor, remoteImage } = require('./runtime-image.cjs')
+const { EvaluatorAssets } = require('./evaluator-assets.cjs')
 
 class EvaluatorProtocolError extends Error {
   constructor(code, message, status = 422, retryable = false) {
@@ -319,6 +320,7 @@ async function runOciEntrypoint(descriptor, args, options = {}) {
   const forbiddenRuntimeEnv = new Set([
     'EVALUATOR_AGENT_INSIGHT_BASE_URL',
     'EVALUATOR_RUNTIME_ENV_NAMES',
+    'EVALUATOR_ASSETS_DIR',
   ])
   for (const name of String(process.env.EVALUATOR_RUNTIME_ENV_NAMES || '').split(',').filter(Boolean)) {
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !name.startsWith('IMAGE_POOL_') && !forbiddenRuntimeEnv.has(name) && process.env[name] != null) {
@@ -353,17 +355,32 @@ function runtimeEnvironment(descriptor, limits) {
 }
 
 class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
-  constructor(descriptor, processRunner) {
+  constructor(descriptor, processRunner, options = {}) {
     super(descriptor.key)
     const runtimeStrategy = RUNTIME_STRATEGIES.get(descriptor.runtime)
     if (!runtimeStrategy) throw new TypeError(`unsupported evaluator runtime: ${descriptor.runtime}`)
     this.descriptor = descriptor
     this.processRunner = processRunner || runtimeStrategy
+    this.assets = descriptor.assets ? new EvaluatorAssets(descriptor, options.assetRunner || runEntrypoint, options) : null
+  }
+
+  prepareAssets() {
+    return this.assets?.start()
+  }
+
+  assertAssetsReady() {
+    return this.assets?.assertReady()
+  }
+
+  assetEnvironment() {
+    const root = this.assertAssetsReady()
+    return root ? { EVALUATOR_ASSETS_DIR: root } : {}
   }
 
   async describeImages(payload, arch) {
+    const assetsDir = this.assertAssetsReady()
     if (!this.descriptor.imageProvider) return []
-    return require(this.descriptor.imageProvider).describeImages(payload, arch)
+    return require(this.descriptor.imageProvider).describeImages(payload, arch, { assetsDir })
   }
 
   validateBenchmarkJob(job) {
@@ -392,6 +409,11 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
   }
 
   async checkReady(runtime) {
+    try { this.assertAssetsReady() }
+    catch (error) {
+      return { ready: false, formalEligible: false, reason: error.message,
+        runtimeFacts: { assetStage: this.assets.stage, assetErrorCode: error.code } }
+    }
     if (this.descriptor.runtime === 'oci-container' && !await inspectOciRuntime(this.descriptor)) {
       if (this.descriptor.requiresPrebuiltRuntime && !remoteImage(runtimeDescriptor(this.descriptor).image)) {
         return { ready: false, formalEligible: false, reason: '需要预先构建与 Catalog 摘要匹配的 Runtime 镜像' }
@@ -414,6 +436,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
           EVALUATOR_HOST_OS: runtime.hostOS,
           EVALUATOR_HOST_ARCH: runtime.hostArch,
           ...runtimeEnvironment(this.descriptor),
+          ...this.assetEnvironment(),
         },
         errorCode: 'EVALUATOR_DOCTOR_FAILED',
       })
@@ -437,6 +460,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
     if (!this.descriptor.smokeEntrypoint) {
       return { supported: false, evaluatorKey: this.key, reason: '该 Evaluator 未提供部署 Smoke' }
     }
+    await this.assets?.ensure()
     const descriptor = {
       ...this.descriptor,
       entrypoint: this.descriptor.runtimeSmokeEntrypoint || this.descriptor.smokeEntrypoint,
@@ -447,6 +471,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
         EVALUATOR_HOST_OS: runtime.hostOS,
         EVALUATOR_HOST_ARCH: runtime.hostArch,
         ...runtimeEnvironment(this.descriptor),
+        ...this.assetEnvironment(),
       },
       errorCode: 'EVALUATOR_SMOKE_FAILED',
       retryable: false,
@@ -459,6 +484,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
   }
 
   async evaluate(input) {
+    await this.assets?.ensure()
     const contractDir = path.join(input.workDir, 'entrypoint')
     const inputDir = path.join(contractDir, 'input')
     const outputDir = path.join(contractDir, 'output')
@@ -495,7 +521,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
     ], {
       cwd: contractDir,
       signal: input.signal,
-      env: runtimeEnvironment(this.descriptor, input.job.limits),
+      env: { ...runtimeEnvironment(this.descriptor, input.job.limits), ...this.assetEnvironment() },
       resources: input.job.limits,
       evaluationId: input.job.evaluationId,
     })
