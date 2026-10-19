@@ -20,6 +20,9 @@ MESSAGES = {
     "ZSOFT_ASSET_MISSING": "ZSoft 评测资产缺失",
     "ZSOFT_IMAGE_MISSING": "ZSoft 预构建镜像缺失或摘要不一致",
     "ZSOFT_SHARED_MOUNT_MISSING": "ZSoft 资产或运行目录未通过 Controller 数据卷共享",
+    "ZSOFT_ARTIFACT_INVALID": "ZSoft 提交物描述与当前任务不匹配",
+    "ZSOFT_ARTIFACT_PATH_INVALID": "ZSoft 提交物路径无效或不在输入目录内",
+    "ZSOFT_ARTIFACT_DIGEST_MISMATCH": "ZSoft 提交物大小或 SHA-256 与任务记录不一致",
     "ZSOFT_KERNEL_ACCEL_INVALID": "ZSoft 内核加速模式应为 tcg 或 kvm",
     "ZSOFT_KERNEL_KVM_UNAVAILABLE": "评测机 Docker 无法使用 /dev/kvm，请启用虚拟化或使用 tcg",
     "ZSOFT_KERNEL_RESOURCES_INSUFFICIENT": "评测资源不足以运行题目声明的两版内核环境",
@@ -160,10 +163,35 @@ def validate_request(request: dict, root: Path, inventory: dict) -> tuple[dict, 
     if type(limits.get("timeoutSeconds")) is not int or not 1 <= limits["timeoutSeconds"] <= 86400 or not isinstance(limits.get("cpu"), (int, float)) or not math.isfinite(limits["cpu"]) or limits["cpu"] <= 0 or type(limits.get("memoryMiB")) is not int or limits["memoryMiB"] < 1:
         raise AssetError("ZSOFT_REQUEST_INVALID")
     artifacts = request.get("artifacts", [])
-    if len(artifacts) != 1 or len(job.get("artifacts", [])) != 1 or artifacts[0].get("descriptor") != job["artifacts"][0]:
+    originals = job.get("artifacts", [])
+    if (
+        not isinstance(artifacts, list) or not isinstance(originals, list)
+        or len(artifacts) != 1 or len(originals) != 1
+        or not isinstance(artifacts[0], dict) or not isinstance(originals[0], dict)
+    ):
         raise AssetError("ZSOFT_ARTIFACT_INVALID")
-    descriptor = artifacts[0]["descriptor"]
-    if descriptor.get("name") != "poc" or descriptor.get("mediaType") != "application/octet-stream" or descriptor.get("executionRunId") != job.get("executionRunId"):
+    descriptor = artifacts[0].get("descriptor")
+    original = originals[0]
+    if not isinstance(descriptor, dict) or any(
+        field not in original or field not in descriptor
+        or type(descriptor[field]) is not type(original[field])
+        or descriptor[field] != original[field]
+        for field in ("artifactId", "name", "mediaType", "sha256", "sizeBytes")
+    ):
+        raise AssetError("ZSOFT_ARTIFACT_INVALID")
+    if (
+        not isinstance(original["artifactId"], str) or not original["artifactId"]
+        or type(original["sizeBytes"]) is not int or original["sizeBytes"] < 1
+        or not isinstance(original["sha256"], str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", original["sha256"])
+    ):
+        raise AssetError("ZSOFT_ARTIFACT_INVALID")
+    if (
+        descriptor.get("name") != "poc" or descriptor.get("mediaType") != "application/octet-stream"
+        or descriptor.get("evaluationId") != job["evaluationId"] or descriptor.get("kind") != "submission"
+        or not isinstance(job.get("executionRunId"), str) or not job["executionRunId"]
+        or original.get("executionRunId") != job["executionRunId"]
+    ):
         raise AssetError("ZSOFT_ARTIFACT_INVALID")
     return task, Path(str(artifacts[0].get("path", "")))
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import { createRequire } from 'node:module'
@@ -13,6 +14,10 @@ const { describeImages } = load('../../benchmarks/zsoft-l1/evaluator/images.cjs'
 const { runtimeDescriptor } = load('../../services/evaluator/src/runtime-image.cjs')
 const { ensureOciRuntime } = load('../../services/evaluator/src/evaluator-registry.cjs')
 const { BenchmarkImagePool } = load('../../services/evaluator/src/image-pool.cjs')
+const { BenchmarkEvaluatorService } = load('../../services/evaluator/src/service.cjs')
+const { EvaluationJobJournal } = load('../../services/evaluator/src/job-journal.cjs')
+const { AgentInsightPlatformClient } = load('../../services/evaluator/src/platform-client.cjs')
+const { FileEvaluatorEntrypoint } = load('../../services/evaluator/src/evaluator-registry.cjs')
 const prelude = `
 import importlib.util, json, sys, tarfile
 from pathlib import Path
@@ -61,6 +66,117 @@ async function temporary(t: TestContext) {
   t.after(() => fs.rm(directory, { recursive: true, force: true }))
   return directory
 }
+
+test('Controller submission staging reaches the ZSoft judge and rejects mismatched identities or tampered files', async (t) => {
+  const directory = await temporary(t)
+  const caseData = JSON.parse(python(directory, 'print(json.dumps(freeze()))'))
+  const bytes = Buffer.from('synthetic submission; never executed')
+  const artifact = {
+    artifactId: 'artifact-one', executionRunId: 'execution-one', name: 'poc',
+    mediaType: 'application/octet-stream', sizeBytes: bytes.length,
+    sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}` as `sha256:${string}`,
+  }
+  const job = zsoftL1Adapter.buildEvaluationRequest({
+    context: { evaluationRunId: 'evaluation-one', executionRunId: artifact.executionRunId, experimentId: 'experiment-one', caseId: 'case-one', datasetContentHash: 'dataset-one' },
+    publicPayload: caseData.public, privatePayload: caseData.private, artifacts: [artifact],
+    runConfig: { evaluatorKey: 'zsoft-l1', timeoutSeconds: 900, cpu: 4, memoryMiB: 8192 },
+  })
+  const journal = new EvaluationJobJournal(path.join(directory, 'controller'))
+  const platform = new AgentInsightPlatformClient(async () => new Response(bytes), 'https://platform.example.test')
+  const artifacts = await BenchmarkEvaluatorService.prototype.downloadArtifacts.call({ platform, journal }, { runId: job.evaluationId, evaluationJob: job })
+  assert.equal(artifacts.get('poc').descriptor.evaluationId, job.evaluationId)
+  assert.equal('executionRunId' in artifacts.get('poc').descriptor, false)
+  const { generatedEvaluatorDescriptors } = load('../../generated/benchmark-catalog/evaluators.cjs')
+  const runtime = generatedEvaluatorDescriptors.find((item: { benchmarkKey: string }) => item.benchmarkKey === 'zsoft-l1')
+  const evaluator = new FileEvaluatorEntrypoint({ ...runtime, assets: undefined }, async (_descriptor: unknown, args: string[]) => {
+    execFileSync('python3', ['-c', `
+import copy, json, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, str(Path.cwd() / 'benchmarks/zsoft-l1/evaluator'))
+import entrypoint
+root = Path(sys.argv[1]).resolve()
+request_path, output_path = Path(sys.argv[2]), Path(sys.argv[3])
+request = json.loads(request_path.read_text())
+original = request['evaluationJob']['artifacts'][0]
+class Worker:
+    pid = 123456
+    returncode = 0
+    def __init__(self, command, **kwargs):
+        config = json.loads(Path(command[-1]).read_text())
+        assert Path(config['submissionPath']).read_bytes() == b'synthetic submission; never executed'
+        Path(config['recordPath']).write_text(json.dumps({'task_id': config['taskId'], 'submission_sha256': original['sha256'][7:], 'submission_bytes': original['sizeBytes'], 'submission_kind': 'final', 'phase': 'final', 'cleanup_exit_code': 0, 'result': {'status': 'completed', 'success': True}}))
+    def wait(self, **kwargs): pass
+    def poll(self): return 0
+with patch.dict(entrypoint.os.environ, {'EVALUATOR_INSTANCE_ID': 'synthetic-instance'}), patch.object(entrypoint, 'asset_root', return_value=root), patch.object(entrypoint, 'shared_mounts', return_value=[{'Source': str(root), 'Destination': str(root), 'Type': 'bind'}]), patch.object(entrypoint, 'docker', return_value='sha256:' + 'b' * 64), patch.object(entrypoint.subprocess, 'Popen', side_effect=Worker) as worker, patch.object(entrypoint, 'cleanup', return_value={'status': 'succeeded'}), patch.object(entrypoint, 'stop_worker'):
+    entrypoint.evaluate(request_path, output_path)
+    worker.assert_called_once()
+    completed = json.loads(output_path.read_text())
+    assert completed['completion']['status'] == 'completed'
+    inventory = entrypoint.load_inventory(root)
+    for field in ('artifactId', 'name', 'mediaType', 'sha256', 'sizeBytes', 'evaluationId', 'kind'):
+        changed = copy.deepcopy(request)
+        descriptor = changed['artifacts'][0]['descriptor']
+        descriptor[field] = descriptor[field] + 1 if field == 'sizeBytes' else 'wrong'
+        try: entrypoint.validate_request(changed, root, inventory)
+        except entrypoint.AssetError as error: assert str(error) == 'ZSOFT_ARTIFACT_INVALID', field
+        else: raise AssertionError('mismatched ' + field + ' accepted')
+    for field in ('artifactId', 'name', 'mediaType', 'sha256', 'sizeBytes', 'evaluationId', 'kind'):
+        changed = copy.deepcopy(request)
+        del changed['artifacts'][0]['descriptor'][field]
+        try: entrypoint.validate_request(changed, root, inventory)
+        except entrypoint.AssetError as error: assert str(error) == 'ZSOFT_ARTIFACT_INVALID', field
+        else: raise AssertionError('missing ' + field + ' accepted')
+    changed = copy.deepcopy(request)
+    changed['evaluationJob']['artifacts'][0]['executionRunId'] = 'other-execution'
+    try: entrypoint.validate_request(changed, root, inventory)
+    except entrypoint.AssetError as error: assert str(error) == 'ZSOFT_ARTIFACT_INVALID'
+    else: raise AssertionError('other execution accepted')
+    for key, value in [('artifacts', []), ('artifacts', [None]), ('artifacts', None), ('artifacts', request['artifacts'] * 2)]:
+        changed = copy.deepcopy(request)
+        changed[key] = value
+        try: entrypoint.validate_request(changed, root, inventory)
+        except entrypoint.AssetError as error: assert str(error) == 'ZSOFT_ARTIFACT_INVALID'
+        else: raise AssertionError('malformed artifacts accepted')
+    def rejected(changed, code):
+        rejected_path = request_path.parent / 'rejected.json'
+        rejected_output = output_path.parent / 'rejected.json'
+        rejected_path.write_text(json.dumps(changed))
+        worker.reset_mock()
+        entrypoint.evaluate(rejected_path, rejected_output)
+        worker.assert_not_called()
+        failed = json.loads(rejected_output.read_text())
+        assert failed['completion']['error']['code'] == code, failed
+        assert failed['completion']['error']['message'] == entrypoint.MESSAGES[code]
+        assert failed['evidenceFiles'] == []
+    changed = copy.deepcopy(request)
+    changed['artifacts'][0]['descriptor']['evaluationId'] = 'other-evaluation'
+    rejected(changed, 'ZSOFT_ARTIFACT_INVALID')
+    changed = copy.deepcopy(request)
+    changed['artifacts'][0]['path'] = '../escape'
+    rejected(changed, 'ZSOFT_ARTIFACT_PATH_INVALID')
+    artifact_path = request_path.parent / request['artifacts'][0]['path']
+    saved = artifact_path.read_bytes()
+    try:
+        artifact_path.chmod(0o600)
+        artifact_path.write_bytes(b'x' * len(saved))
+        rejected(request, 'ZSOFT_ARTIFACT_DIGEST_MISMATCH')
+        artifact_path.write_bytes(saved + b'x')
+        rejected(request, 'ZSOFT_ARTIFACT_DIGEST_MISMATCH')
+    finally:
+        artifact_path.write_bytes(saved)
+`, directory, args[args.indexOf('--request') + 1], args[args.indexOf('--output') + 1]], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })
+    return { stdout: '', stderr: '' }
+  })
+  const result = await evaluator.evaluate({
+    job, artifacts, workDir: journal.jobDir(job.evaluationId),
+    preparedImages: [{ key: 'zsoft-local:target', imageId: `sha256:${'b'.repeat(64)}` }],
+    reportProgress: async () => {},
+  })
+  assert.equal(result.completion.status, 'completed')
+  assert.equal(result.completion.rawResult.submissionSha256, artifact.sha256)
+  assert.equal(result.evidenceFiles[0].name, 'report.json')
+})
 
 test('ZSoft Python export and Node provider agree on Unicode digests, task selection and immutable registry identities', async (t) => {
   const directory = await temporary(t)
@@ -226,7 +342,7 @@ for prepared in [[], [None], [{'key': 'wrong', 'imageId': image_id}]]:
     try: entrypoint.inspect_images({'original:tag': image_id}, prepared)
     except AssetError: pass
     else: raise AssertionError('bad prepared images accepted')
-with patch.object(entrypoint, 'asset_root', return_value=root), patch.object(entrypoint, 'shared_mounts', return_value=[{'Destination': str(root), 'Source': str(root), 'Type': 'bind'}]), patch.object(entrypoint, 'docker', return_value='compose'), patch.object(entrypoint, 'inspect_images') as inspect:
+with patch.object(entrypoint, 'asset_root', return_value=root), patch.object(entrypoint, 'shared_mounts', return_value=[{'Destination': str(root.resolve()), 'Source': str(root.resolve()), 'Type': 'bind'}]), patch.object(entrypoint, 'docker', return_value='compose'), patch.object(entrypoint, 'inspect_images') as inspect:
     assert entrypoint.doctor() == 0
     inspect.assert_not_called()
 `)
@@ -525,13 +641,15 @@ import entrypoint
 freeze_kernel()
 case = json.loads((root / 'kernel-dataset.json').read_text())[0]
 data = b'synthetic C source; never compiled'
-descriptor = {'name': 'poc', 'mediaType': 'application/octet-stream', 'executionRunId': 'run-one', 'sizeBytes': len(data), 'sha256': digest_bytes(data)}
+descriptor = {'artifactId': 'artifact-one', 'name': 'poc', 'mediaType': 'application/octet-stream', 'executionRunId': 'run-one', 'sizeBytes': len(data), 'sha256': digest_bytes(data)}
 for status in ('completed', 'invalid_submission', 'timeout'):
     attempt = root / status
     (attempt / 'input').mkdir(parents=True)
     (attempt / 'output').mkdir()
     (attempt / 'input/poc').write_bytes(data)
-    request = {'schemaVersion': 'evaluator-entrypoint/v1', 'evaluationJob': {'benchmark': {'key': 'zsoft-l1'}, 'evaluator': {'key': 'zsoft-l1'}, 'evaluationId': 'eval-' + status, 'executionRunId': 'run-one', 'payload': {**case['private'], 'taskId': 'kernel-case', 'submissionKind': 'c', 'maxBytes': 128}, 'limits': {'cpu': 4, 'memoryMiB': 8192, 'timeoutSeconds': 900}, 'artifacts': [descriptor]}, 'artifacts': [{'descriptor': descriptor, 'path': 'poc'}], 'preparedImages': [{'key': 'zsoft-local:runner', 'imageId': image_id}]}
+    staged = {key: value for key, value in descriptor.items() if key != 'executionRunId'}
+    staged.update(evaluationId='eval-' + status, kind='submission')
+    request = {'schemaVersion': 'evaluator-entrypoint/v1', 'evaluationJob': {'benchmark': {'key': 'zsoft-l1'}, 'evaluator': {'key': 'zsoft-l1'}, 'evaluationId': 'eval-' + status, 'executionRunId': 'run-one', 'payload': {**case['private'], 'taskId': 'kernel-case', 'submissionKind': 'c', 'maxBytes': 128}, 'limits': {'cpu': 4, 'memoryMiB': 8192, 'timeoutSeconds': 900}, 'artifacts': [descriptor]}, 'artifacts': [{'descriptor': staged, 'path': 'poc'}], 'preparedImages': [{'key': 'zsoft-local:runner', 'imageId': image_id}]}
     request_path = attempt / 'input/request.json'
     request_path.write_text(json.dumps(request))
     output_path = attempt / 'output/result.json'
@@ -547,7 +665,7 @@ for status in ('completed', 'invalid_submission', 'timeout'):
         def wait(self, **kwargs):
             if status == 'timeout': raise entrypoint.subprocess.TimeoutExpired('synthetic worker', 1)
         def poll(self): return 0
-    with patch.dict(entrypoint.os.environ, {'ZSOFT_KERNEL_ACCEL': 'tcg', 'EVALUATOR_INSTANCE_ID': 'synthetic-instance'}), patch.object(entrypoint, 'asset_root', return_value=root), patch.object(entrypoint, 'shared_mounts', return_value=[{'Source': str(root), 'Destination': str(root), 'Type': 'bind'}]), patch.object(entrypoint, 'docker', return_value=image_id), patch.object(entrypoint.subprocess, 'Popen', Worker), patch.object(entrypoint, 'cleanup', return_value={'status': 'succeeded'}) as cleanup, patch.object(entrypoint, 'stop_worker') as stop:
+    with patch.dict(entrypoint.os.environ, {'ZSOFT_KERNEL_ACCEL': 'tcg', 'EVALUATOR_INSTANCE_ID': 'synthetic-instance'}), patch.object(entrypoint, 'asset_root', return_value=root), patch.object(entrypoint, 'shared_mounts', return_value=[{'Source': str(root.resolve()), 'Destination': str(root.resolve()), 'Type': 'bind'}]), patch.object(entrypoint, 'docker', return_value=image_id), patch.object(entrypoint.subprocess, 'Popen', Worker), patch.object(entrypoint, 'cleanup', return_value={'status': 'succeeded'}) as cleanup, patch.object(entrypoint, 'stop_worker') as stop:
         entrypoint.evaluate(request_path, output_path)
         cleanup.assert_called_once_with('eval-' + status)
         stop.assert_called_once()

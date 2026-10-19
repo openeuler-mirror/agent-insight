@@ -153,6 +153,8 @@ Benchmark 的 Case 列、参考契约标题、主指标和评估器文案均来�
 
 ZSoft 已生成 PoC，但评测镜像安装 Python 依赖失败时，请管理员按 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md) 检查包源并更新评测服务。修复后点击“Benchmark 重评”即可复用现有 PoC。
 
+若提示“ZSoft 提交物描述与当前任务不匹配”，请管理员检查平台与评测服务的版本及提交物交接配置；若提示提交物大小或 SHA-256 不一致，则检查文件下载和存储完整性。修复后可用“Benchmark 重评”复用原 PoC，这类错误不代表 PoC 已被正式判定无效。
+
 Benchmark 实验的 Case 列表按实际执行阶段显示进度：尚未轮到的 Case 显示“等待开始”，下发和 Agent 执行分别显示对应状态；执行器准备 Git 工作区时显示“正在准备 Git 工作区…”，其他工作区类型使用通用的“正在准备执行环境…”。这些状态不表示所有 Case 同时运行，也不代表 Git 拉取百分比。
 
 ### 第三步：预期答案

@@ -144,6 +144,8 @@ ZSoft Runtime 构建默认从华为云 PyPI 源安装固定版本 `pydantic==2.1
 
 修改 Runtime Dockerfile 后运行 `node scripts/benchmark/generate-catalog.cjs`，并使用同一份代码重新构建、部署平台和 Controller，使新的 Catalog 摘要和 Runtime 标签生效。已有 PoC 的 Case 可在修复后点击“Benchmark 重评”，复用原提交物。
 
+提交物交接沿用通用协议：任务中的原始描述携带 `executionRunId`，Controller 暂存后的描述携带 `evaluationId` 与 `kind=submission`。ZSoft 按 `artifactId/name/mediaType/sha256/sizeBytes` 核对同一文件，分别校验执行与评测归属，并检查实际文件大小、SHA-256 和输入目录边界；不要求两种描述整体相同。`ZSOFT_ARTIFACT_INVALID` 表示提交物描述与当前任务不匹配，文件内容或大小不符返回 `ZSOFT_ARTIFACT_DIGEST_MISMATCH`。更新 Runtime 校验代码后同样需要重新生成 Catalog 并部署匹配版本，再对保留了 PoC 的 Case 重评。
+
 平台独立导入官方数据集，执行机配置自己的原生任务目录。评测机无需数据库，评测请求只携带题目身份及版本。完整资产镜像仅由评测机安装，执行客户端与 MCTS 的命令保持原流程。
 
 评测端对公有 SWR 匿名拉取，无需 registry 认证配置。题目镜像由公共镜像池按固定摘要拉取、缓存、回收；重评或回收后重拉均使用同一摘要。Runtime 校验实际 Image ID 与冻结清单一致，Compose 使用 Image ID 且禁止自动 pull，因此无需覆盖原始 tag。当前清单未配置 `registryImages` 时需在本机预装固定 Image ID，不能在冷缓存下从远端恢复。缺少 `sourceTaskDigest` 的旧评测资产清单不再支持，需重新冻结。
