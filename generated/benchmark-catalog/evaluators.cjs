@@ -12,11 +12,11 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": "/app/benchmarks/swe-bench/evaluator/entrypoint.cjs",
     "imageProvider": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/images.cjs"),
-    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-26b42bacebb1b00efcc5c3130ff8e66c38cc3819daa3cbd2f51714fda8a27b16",
+    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-f405d624a0dda73126b057b75708b48f3c40ada38031677ce1a60e921fa95b7f",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/Dockerfile"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
     "runtimeSmokeEntrypoint": "/app/benchmarks/swe-bench/smoke/index.cjs",
-    "artifactDigest": "sha256:26b42bacebb1b00efcc5c3130ff8e66c38cc3819daa3cbd2f51714fda8a27b16",
+    "artifactDigest": "sha256:f405d624a0dda73126b057b75708b48f3c40ada38031677ce1a60e921fa95b7f",
     "network": "deny",
     "resources": {
       "cpu": 4,

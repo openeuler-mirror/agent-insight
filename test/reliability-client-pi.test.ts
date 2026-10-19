@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
+import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import { activateIsolatedHome } from './helpers/isolated-home'
@@ -49,10 +50,11 @@ if (process.argv.includes('--list-models') && process.env.PI_TEST_MODE === 'cata
 if (process.argv.includes('--list-models') && process.env.PI_TEST_MODE === 'catalog-failure') process.exit(2)
 if (process.argv.includes('--list-models') && process.env.PI_TEST_MODE === 'catalog') {
   if (process.env.PI_TEST_CATALOG_AUTH) {
-    for (let i = 0; i < 405; i++) console.log('fixture model-' + i + ' 200K 8K yes no')
+    for (let i = 0; i < 405; i++) console.log('fixture model-' + i + '-' + 'long-model-name-'.repeat(16) + ' 200K 8K yes no')
     console.log('deepseek deepseek-v4-flash 1M 32K no yes')
   } else console.log('No models available')
-  process.exit(0)
+  // Let queued pipe writes drain before the fixture exits.
+  return
 }
 if (process.argv.includes('--list-models')) { console.log('provider model context max-out thinking images\\nfixture org/model 200K 8K yes no'); process.exit(0) }
 const emit = e => console.log(JSON.stringify(e))
@@ -93,6 +95,10 @@ process.stdin.on('end', () => {
     AGENT_INSIGHT_USER_HOME: root, PI_TELEMETRY: 'off',
   })
   for (const key of ['AGENT_INSIGHT_PI_CONFIG', 'AGENT_INSIGHT_API_KEY', 'AGENT_INSIGHT_OTLP_ENDPOINT', 'AGENT_INSIGHT_SUPERVISOR']) delete process.env[key]
+  // Host checks for a newly created executable must finish before exercising runtime deadlines.
+  const startup = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: 15_000 })
+  assert.equal(startup.status, 0, startup.error?.message || startup.stderr)
+  assert.equal(startup.stdout.trim(), '0.85.1')
   const settings = (value: unknown) => fs.writeFileSync(path.join(agentDir, 'settings.json'), JSON.stringify(value))
   const config = (value: unknown) => fs.writeFileSync(path.join(packageDir, 'config.json'), JSON.stringify(value))
   return {

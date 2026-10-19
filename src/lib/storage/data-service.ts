@@ -214,14 +214,28 @@ async function persistExecutionSkills(
 
 /**
  * 给定一条 Execution(= 某一层 agent)的 session interactions,算出**本层 agent 自己显式调用**的 skill。
- *   - opencode：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
+ *   - agent-tree 作用域框架及 Codex：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
  *     (root 行的 session 是全量;sub-agent 行的 session 是它自己的切片——两者切片的 tree 根都恰是该层 agent。)
  *   - claude / openclaw：单 agent,既有显式抽取即本层口径。
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'pi-agent' || framework === 'langfuse-langgraph' || framework === 'codeagent' || framework === 'deepseek-harness') {
-        const tree = buildAgentCallTree(interactions as any);
+    if (framework === 'codex' || getAdapter(framework).capabilities?.skillScope === 'agent-tree') {
+        const messages = interactions.flatMap(interaction => {
+            if (!interaction || typeof interaction !== 'object') return [];
+            const isEnvelope = Object.prototype.hasOwnProperty.call(interaction, 'responseMessage')
+                || (!Object.prototype.hasOwnProperty.call(interaction, 'role') && Array.isArray(interaction.requestMessages));
+            if (!isEnvelope) return [interaction];
+            const { requestMessages, responseMessage, ...message } = interaction;
+            return [
+                ...(Array.isArray(requestMessages) ? requestMessages : []),
+                ...(message.tool_calls || message.toolCalls ? [message] : []),
+                ...(responseMessage ? [responseMessage] : []),
+            ];
+        }).filter(Boolean).map(message => message.tool_calls || !message.toolCalls
+            ? message
+            : { ...message, tool_calls: message.toolCalls });
+        const tree = buildAgentCallTree(messages);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
     if (framework === 'qwenpaw') {

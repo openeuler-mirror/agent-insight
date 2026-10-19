@@ -29,7 +29,7 @@ if (args.includes('up') && process.env.MOCK_UP_FAIL) process.exit(1);
   archive.addFile(`${prefix}src/index.ts`, Buffer.from('export {}'))
   archive.writeZip(zipFile)
   const releases = path.join(directory, 'releases')
-  const run = (extraEnv: NodeJS.ProcessEnv = {}) => spawnSync('bash', [script, '--zip', zipFile, '--compose', compose], {
+  const run = (extraEnv: Partial<NodeJS.ProcessEnv> = {}) => spawnSync('bash', [script, '--zip', zipFile, '--compose', compose], {
     encoding: 'utf8',
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RELEASES_DIR: releases, MOCK_DOCKER_LOG: log, ...extraEnv },
   })

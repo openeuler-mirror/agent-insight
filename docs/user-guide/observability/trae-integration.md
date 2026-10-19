@@ -131,6 +131,8 @@ npx agent-insight install
 | `subagent-detect` | 子 Agent 发起 | 子 Agent 标识、任务描述 |
 | `notification` | 系统通知 | 通知内容、级别 |
 
+Skill 调用返回的说明中包含 `version: 1.2.0`、`Version 1.2.0` 或 `版本：1.2.0` 时，Linux/macOS 采集器会记录该版本；说明中未提供版本时保留缺失状态。
+
 ## 数据局限性
 
 TRAE 通过 Hooks 机制暴露的数据面有限，以下信息**无法从 TRAE 侧直接获取**，平台做了相应兜底处理：

@@ -65,7 +65,7 @@ test('setup scripts install the first-party Hermes plugin without GitHub or venv
         source.includes("{ name: \\'Hermes\\', value: \\'hermes\\' }"),
       `${route} should offer Hermes in the setup framework selector`,
     );
-    assert.ok(source.includes('/api/ingest/setup/hermes-plugin'), `${route} should download the first-party plugin`);
+    assert.ok(source.includes('/api/setup/hermes-plugin'), `${route} should download the first-party plugin through its compatibility route`);
     assert.ok(source.includes('plugins enable agent_insight_hermes'), `${route} should enable the first-party plugin`);
     assert.ok(
       !source.includes('plugins disable hermes_otel'),

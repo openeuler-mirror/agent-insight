@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { GET as getSetup } from '@/app/api/ingest/setup/route';
 import { GET as getAutoSetup } from '@/app/api/ingest/setup/auto/route';
+import { FRAMEWORK_OPTIONS, parseFrameworks } from '@/lib/ingest/setup/install-profile';
 
 const FRAMEWORK = 'deepseek-harness';
 
@@ -44,12 +45,15 @@ async function autoSetupScript(platform: 'unix' | 'windows'): Promise<string> {
 }
 
 test('unified install surfaces DeepSeek Harness in the page and both server allowlists', () => {
+  const option = { value: FRAMEWORK, label: 'DeepSeek Harness' };
+  assert.deepEqual(FRAMEWORK_OPTIONS.find(item => item.value === FRAMEWORK), option);
+  assert.deepEqual(parseFrameworks(FRAMEWORK), [option]);
   for (const relativePath of [
     'src/app/(main)/accessconfig/install/page.tsx',
     'src/app/api/ingest/setup/route.ts',
     'src/app/api/ingest/setup/auto/route.ts',
   ]) {
-    assert.match(read(relativePath), /value:\s*['"]deepseek-harness['"],\s*label:\s*['"]DeepSeek Harness['"]/);
+    assert.match(read(relativePath), /ingest\/setup\/install-profile/);
   }
 });
 

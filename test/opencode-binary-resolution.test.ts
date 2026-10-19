@@ -7,7 +7,7 @@ import test from 'node:test'
 import { resolveOpencodeBinary } from '../src/lib/engine/skill-generation/opencode-agent-cli/opencode-manager'
 
 test('opencode binary resolution supports standalone and source deployments', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-binary-'))
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-binary-')))
   const previousCwd = process.cwd()
   const previousRoot = process.env.AGENT_INSIGHT_PACKAGE_ROOT
   const previousBinary = process.env.OPENCODE_BIN

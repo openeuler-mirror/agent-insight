@@ -46,7 +46,7 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 
 - **Agent 范围**：区分只看主 Agent、只看子 Agent，或同时查看两者；该范围是硬筛选，与 Skill 等内容筛选组合时也不会混入其它层级
 - **Agent**：按具体执行主体过滤，适合定位到某个注册 Agent
-- **Skill**：按 Skill 触发情况收敛样本
+- **Skill**：按 Skill 触发情况收敛样本。LlamaIndex、Qoder 等支持多 Agent 的框架按当前 Agent 自己调用的 Skill 匹配；仅子 Agent 调用的 Skill 不会让父 Agent 命中该筛选
 - **用户标签**：版本标签和业务标签均可多选筛选；多个标签采用 AND 语义，只保留同时包含全部所选标签的 Trace
 - **状态**：优先筛出已完成、失败、异常或边界样本
 - **时间等附加条件**：用于框定问题发生窗口

@@ -1302,6 +1302,7 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
         "qoder",
         "pi-agent",
         "workbuddy",
+        "mcts-xgovernor",
         "generic",
       ],
     );
