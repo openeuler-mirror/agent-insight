@@ -655,6 +655,7 @@ function buildState(records) {
   const userTextByMsg = new Map()
   const sysPrompts = new Map()
   const inferenceByMessage = new Map()
+  const inferenceErrors = new Map()
   const cliCompletedSessions = new Set()
   const sessionPids = new Map()
   const sessionIdleAt = new Map()
@@ -704,6 +705,7 @@ function buildState(records) {
           ...previous,
           attempt_id: payload.attempt_id,
           request_id: payload.request_id,
+          ...(payload.transport_request_id ? { transport_request_id: payload.transport_request_id } : {}),
           ...(payload.started_at ? { started_at: payload.started_at } : {}),
           ...(payload.status_code ? { status_code: payload.status_code } : {}),
           ...(payload.error_type ? { error_type: payload.error_type } : {}),
@@ -760,6 +762,15 @@ function buildState(records) {
     const t = r?.payload?.type
     const ev = r?.payload?.event
     if (!t || !ev) continue
+
+    if (t === "session.error") {
+      const sid = ev.properties?.sessionID || recordSid
+      const error = ev.properties?.error
+      const headers = error?.data?.responseHeaders || {}
+      const id = Object.entries(headers).find(([key]) => key.toLowerCase() === 'x-agent-insight-call-id')?.[1]
+      if (sid && /^[a-f0-9-]{36}$/.test(id || '')) inferenceErrors.set(JSON.stringify([sid, id]), error.data.message || 'Model request failed')
+      continue
+    }
 
     const statusType = String(ev?.properties?.status?.type || ev?.properties?.status || "").toLowerCase()
     if (t === "session.idle" || (t === "session.status" && statusType === "idle")) {
@@ -848,7 +859,7 @@ function buildState(records) {
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
 }
 
 // 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
@@ -1056,15 +1067,21 @@ function buildMessagesForSession(state, sid) {
       //     it should go through its own channel.
       summary: info?.summary === true ? true : undefined,
       finish: info?.finish,
+      ...(info?.error ? { status: 'error', error_summary: typeof info.error === 'string' ? info.error : info.error.message || info.error.data?.message || 'Model request failed' } : {}),
       variant: info?.variant,
     }
     const inference = state.inferenceByMessage?.get(JSON.stringify([sid, mid]))
     if (role === "assistant" && inference?.requestIds.size === 1) {
+      m.trace_kind = "llm"
       m.inference_request_id = [...inference.requestIds][0]
       m.inference_session_id = sid
       m.inference_attempts = [...inference.attempts.values()]
       const callIds = [...new Set(m.inference_attempts.map(attempt => attempt.call_id).filter(Boolean))]
       if (callIds.length) m.inference_call_ids = callIds
+      if (!m.error_summary) {
+        const errors = callIds.map(id => state.inferenceErrors?.get(JSON.stringify([sid, id]))).filter(Boolean)
+        if (errors.length === 1) { m.status = 'error'; m.error_summary = errors[0] }
+      }
     }
     messages.push(m)
   }
@@ -1081,6 +1098,20 @@ function inferenceGatewayDirectory(insightDir, apiKey) {
 function applyInferenceGatewayRecords(state, insightDir, apiKey) {
   const root = inferenceGatewayDirectory(insightDir, apiKey)
   state.inferenceUnassigned = new Map()
+  const transportProofs = new Map()
+  for (const [key, inference] of state.inferenceByMessage) {
+    const [sid, mid] = JSON.parse(key)
+    const info = state.msgInfo.get(mid)
+    const expected = 'oc_' + createHash('sha256').update(JSON.stringify([sid, mid])).digest('hex').slice(0, 32)
+    if (info?.role !== 'assistant' || info.sessionID !== sid || inference.requestIds.size !== 1 || !inference.requestIds.has(expected)) continue
+    for (const attempt of inference.attempts.values()) {
+      if (!attempt.transport_request_id || !attempt.attempt_id || attempt.request_id !== expected) continue
+      const proofKey = JSON.stringify([sid, attempt.transport_request_id, attempt.attempt_id])
+      const owners = transportProofs.get(proofKey) || new Set()
+      owners.add(mid)
+      transportProofs.set(proofKey, owners)
+    }
+  }
   for (const sid of state.sessions.keys()) {
     const dir = path.join(root, createHash('sha256').update(sid).digest('hex'))
     let files
@@ -1089,15 +1120,19 @@ function applyInferenceGatewayRecords(state, insightDir, apiKey) {
       let call
       try { call = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) } catch { continue }
       if (call.agent !== 'opencode' || call.session_id !== sid || !/^[a-f0-9-]{36}$/.test(call.call_id || '')) continue
-      const info = state.msgInfo.get(call.message_id)
-      const expected = 'oc_' + createHash('sha256').update(JSON.stringify([sid, call.message_id])).digest('hex').slice(0, 32)
-      if (info?.role === 'assistant' && info.sessionID === sid && call.request_id === expected && call.attempt_id) {
-        const key = JSON.stringify([sid, call.message_id])
+      const owners = !call.message_id && transportProofs.get(JSON.stringify([sid, call.request_id, call.attempt_id]))
+      const lateMessageId = owners?.size === 1 ? [...owners][0] : undefined
+      const messageId = call.message_id || lateMessageId
+      const info = state.msgInfo.get(messageId)
+      const expected = 'oc_' + createHash('sha256').update(JSON.stringify([sid, messageId])).digest('hex').slice(0, 32)
+      if (info?.role === 'assistant' && info.sessionID === sid && (call.request_id === expected || lateMessageId) && call.attempt_id) {
+        const key = JSON.stringify([sid, messageId])
         const current = state.inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
-        current.requestIds.add(call.request_id)
+        current.requestIds.add(expected)
         const previous = current.attempts.get(call.attempt_id)
         const attemptKey = previous?.call_id && previous.call_id !== call.call_id ? `${call.attempt_id}:${call.call_id}` : call.attempt_id
-        current.attempts.set(attemptKey, { ...current.attempts.get(attemptKey), request_id: call.request_id,
+        current.attempts.set(attemptKey, { ...current.attempts.get(attemptKey), request_id: expected,
+          ...(lateMessageId ? { transport_request_id: call.request_id } : {}),
           attempt_id: call.attempt_id, call_id: call.call_id, started_at: call.started_at,
           status_code: call.status_code, error_type: call.error_type, state: call.state })
         state.inferenceByMessage.set(key, current)

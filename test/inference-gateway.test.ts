@@ -227,3 +227,21 @@ test('OpenCode preserves distinct gateway calls even if transport replays the sa
     const messages: any[] = uploader.mergeGraph(state, 'ses_replay');
     assert.deepEqual(messages[0].inference_call_ids.sort(), ids.sort());
 });
+
+test('OpenCode V2 joins exact transport proof to native LLM and leaves missing or conflicting proof unassigned', async t => {
+    const f = await fixture(t, (_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"id":"ok"}'); }, { agent: 'opencode' });
+    process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = '1';
+    const uploader = await import('../scripts/opencode_uploader_client.js');
+    const native = (mid: string) => ({ kind: 'event', payload: { type: 'message.updated', event: { properties: { info: { id: mid, sessionID: 'session', role: 'assistant' } } } } });
+    const proof = (mid: string, request: string, attempt: string) => ({ kind: 'llm.attempt', sessionID: 'session', payload: { messageID: mid, request_id: 'oc_' + crypto.createHash('sha256').update(JSON.stringify(['session', mid])).digest('hex').slice(0, 32), transport_request_id: request, attempt_id: attempt } });
+    const ids = [];
+    for (const [request, attempt, message] of [['oc_v2_good', 'a', ''], ['oc_v2_missing', 'b', ''], ['oc_v2_ambiguous', 'c', ''], ['oc_v2_wrong', 'd', 'wrong']]) {
+        const response = await post(f.url, { headers: { 'x-agent-insight-session-id': 'session', 'x-agent-insight-request-id': request, 'x-agent-insight-attempt-id': attempt, 'x-agent-insight-message-id': message } });
+        await response.text(); ids.push(response.headers.get('x-agent-insight-call-id'));
+    }
+    const state = uploader.buildState([native('msg-a'), native('msg-b'), proof('msg-a', 'oc_v2_good', 'a'), proof('msg-a', 'oc_v2_ambiguous', 'c'), proof('msg-b', 'oc_v2_ambiguous', 'c'), proof('msg-a', 'oc_v2_wrong', 'd')]);
+    uploader.applyInferenceGatewayRecords(state, f.dir, '');
+    const messages: any[] = uploader.mergeGraph(state, 'session');
+    assert.deepEqual(messages.find((m: any) => m.messageID === 'msg-a').inference_call_ids, [ids[0]]);
+    assert.deepEqual(messages.flatMap((m: any) => m.inference_unassigned_calls || []).map((c: any) => c.call_id).sort(), ids.slice(1).sort());
+});

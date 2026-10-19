@@ -48,6 +48,7 @@ async function fixture(t: TestContext, options: { failComponent?: string; proxyS
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const env: NodeJS.ProcessEnv = {
+        NODE_ENV: 'test',
         HOME: home, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, TMPDIR: dir,
         AGENT_INSIGHT_HOME: insight, AGENT_INSIGHT_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
         INSTALL_OPENCODE: 'true', INSTALL_QODER: 'true', FINAL_KEY: 'test-collection-key', SETUP_WORKING_DIR: dir,

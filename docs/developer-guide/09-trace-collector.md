@@ -478,7 +478,7 @@ Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `Inferen
 
 ## 十、OpenCode 模型请求关联
 
-`scripts/opencode_plugin_otel.ts` 的 `chat.headers` 使用插件 SDK 查询当前会话消息，仅在 session、用户 parentID、agent、provider、model 均匹配且唯一的未结束 assistant 存在时绑定。查询限时 1 秒，缺失、歧义或查询失败只记录 `llm.correlation.unbound`，不阻止模型调用，也不按时间或最近消息猜测归属。`input.message.id` 是用户消息 ID，不能直接作 LLM 调用 ID。
+**OpenCode 1.x：** `scripts/opencode_plugin_otel.ts` 的 `chat.headers` 使用插件 SDK 查询当前会话消息，仅在 session、用户 parentID、agent、provider、model 均匹配且唯一的未结束 assistant 存在时绑定。查询限时 1 秒，缺失、歧义或查询失败只记录 `llm.correlation.unbound`，不阻止模型调用，也不按时间或最近消息猜测归属。`input.message.id` 是用户消息 ID，不能直接作 LLM 调用 ID。
 
 | 模型请求头 | 最终 LLM interaction 字段 | 语义 |
 |---|---|---|
@@ -494,6 +494,21 @@ Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `Inferen
 `scripts/opencode_uploader_client.js` 按 `(sessionID, assistant messageID)` 关联原始事件，按 attempt ID 合并开始/结果和重复记录；冲突的逻辑请求 ID 不附到节点。`mergeGraph` 保留子会话身份，原有上传处理器、Session JSON 存储及 `buildAgentCallTree` 原样保留新增字段。历史记录没有关联信息时保持缺失，不填造 ID。
 
 回归入口为 `test/opencode-inference-correlation.test.ts`。已使用 OpenCode 1.18.29 与自定义 OpenAI-compatible Chat Completions SSE 网关验证同会话连续两次调用、两个子 Agent 并发、503 自动重试；实际 uploader → HTTP → 上传处理器 → SQLite 读回 → 最终 LLM 节点及重复上报均保留一致标识。原生 LLM runtime、其他 provider 特殊传输和后续插件覆写 headers/fetch 的组合不在本次实测范围。
+
+### OpenCode 2.x 原生插件
+
+安装脚本读取 `opencode --version`：1.x 使用默认工厂产物，2.x 下载 `/api/setup/opencode?apiVersion=2` 的 `{ id, setup }` 定义。同一源文件分别生成两个产物，不能把 1.x 的默认函数直接装入 2.x。升级或降级主版本后重新执行客户端安装命令并重启 OpenCode。2.x 跳过仅适配 1.x 的 TUI 扩展安装；RAS 和 TUI 功能不属于本次 2.x 数据链路验收范围。
+
+2.x 使用官方 `context` / `model.request` / `http.request` / `http.response` 与原生 session 事件，不修改 OpenCode 二进制。系统提示词、用户消息、文本/推理增量、工具结果、父子会话、tokens 和结束/失败状态转换为已有 spool 记录。原生 `subagent` 工具保留实际子会话 ID，映射为既有工具聚合入口。
+
+2.0.32 的 `session.step.started` 在 HTTP 请求发出之后才公布 `assistantMessageID`。因此 `model.request` 先生成 transport request UUID，`http.request` 验证 session、agent、model、kind 和该 UUID，并为每次 HTTP 请求生成 attempt UUID。网关仍在出站前生成统一 `X-Agent-Insight-Call-Id`，包括非 2xx 请求。原生 step 到达时，只将当前会话**唯一**待绑定的 primary 请求与该消息绑定；多个候选、模型不一致、缺失事件均不按时间或队列顺序猜测。标题、压缩等辅助调用保留 Trace 级关联，不冒充 primary LLM。
+
+采集器记录 canonical `inference_request_id = oc_<hash(sessionID, assistantMessageID)>`，每次 `inference_attempts` 同时保留 `transport_request_id`、`attempt_id` 与 `call_id`。uploader 用 `(sessionID, transport_request_id, attempt_id)` 的唯一原生绑定证明回填网关 journal；显式错误 message ID 不会被迟到证明覆盖。重试的多个调用 ID 归入同一个原生 LLM 节点；空响应也保留显式 LLM 类型和原生错误摘要。1.x 只有 session.error 时，用错误响应中的统一 call ID 精确回填对应节点的错误，不按会话最近消息猜测。无证明的请求保留为 `inference_unassigned_calls`。
+
+代理启用时，V2 在每次实际 HTTP 请求前解析其最终地址、注册/同步路由并改写 URL，覆盖新增 Provider、模型地址覆盖和配置更新后的首请求。支持 OpenAI Chat Completions、Responses、Anthropic Messages 路径；请求正文、查询参数和认证保留。将 provider 传输设为 HTTP，并阻断残留 WebSocket 路径，避免绕过入口；恢复停用后不再强制传输方式。运行组件丢失、未知接口路径、身份缺失或事件流中断都会报错，不静默直连。
+
+回归入口另包括 `test/opencode-v2-adapter.test.ts` 和 `test/opencode-plugin-distribution.test.ts`。真实 ARM64 CLI 数据链路验证覆盖 1.18.29、2.0.32 读取旧配置和 2.0.32 原生 `providers` 配置：多次调用、并发子 Agent、失败重试、切换模型、新 Provider 首请求，以及 uploader HTTP → 上传处理器 → SQLite → 最终 Trace/LLM 和重复上报。真实客户端协议验收为 OpenAI-compatible Chat Completions SSE；Responses、Anthropic 和 Windows 不等于已完成真实客户端验收。
+
 
 ## 十一、统一推理转发入口
 
@@ -517,9 +532,9 @@ Unix setup 选择 `qoder` / `opencode` 时，从现有 `?component=` 白名单�
 
 `inference_proxy.mjs` 管理 loopback 动态端口、健康检查、单实例文件锁和后台同步。配置改写前必须通过带随机 token 的本地健康检查；控制 token 和运行状态仅落本机 0600 文件，模型请求不能通过 URL 指定上游。重启优先使用原端口，不能绑定时不把配置改到不可用端口。`inference_gateway.mjs` 每次请求读取已发布的路由，仍先持久化 call ID，再发送上游。历史路由保留，避免切换配置后中断已经读取旧地址的会话。
 
-`inference_config.mjs` 解析 JSON/JSONC 的字符串范围，只替换地址字段，保持注释、换行、认证和模型等字段原样。Qoder 使用 `providers.<id>.baseUrl`；OpenCode 使用 `provider.<id>.options.baseURL`，根据已识别 SDK 确定协议。首次字节备份以原子方式发布且不覆盖，清单保存备份 SHA-256、字段原值和受管值；恢复前检查完整性。写入前检查原文未并发变化，失败回滚已改文件而不覆盖并发写入。
+`inference_config.mjs` 解析 JSON/JSONC 的字符串范围，只替换地址字段，保持注释、换行、认证和模型等字段原样。Qoder 使用 `providers.<id>.baseUrl`；OpenCode 1.x 使用 `provider.<id>.options.baseURL`，2.x 使用 `providers.<id>.settings.baseURL`，按已识别 SDK / 原生 provider package 确定协议；同一文档内两种结构均可识别。首次字节备份以原子方式发布且不覆盖，清单保存备份 SHA-256、字段原值和受管值；恢复前检查完整性。写入前检查原文未并发变化，失败回滚已改文件而不覆盖并发写入。
 
-OpenCode 插件的 `config` 钩子先 await `prepareOpenCodeConfig`，再安装现有身份采集包装器；只改模型地址，不替换认证或 provider fetch。运行时配置快照只记录 Provider 的 SDK 和地址，避免另存已合并密钥。未安装或已恢复停用时保持原采集行为；安装状态启用时，运行文件缺失、导入或配置处理失败都会阻断模型 POST。OpenCode 1.18.29 会吞掉 config 钩子的异常，因此先安装 fetch 保护再处理配置；不能只依靠抛错防止静默直连。Provider 配置来源仍按 OpenCode 原合并规则，未改变用户的模型选择。
+OpenCode 1.x 插件的 `config` 钩子先 await `prepareOpenCodeConfig`，再安装现有身份采集包装器；只改模型地址，不替换认证或 provider fetch。运行时配置快照只记录 Provider 的 SDK 和地址，避免另存已合并密钥。未安装或已恢复停用时保持原采集行为；安装状态启用时，运行文件缺失、导入或配置处理失败都会阻断模型 POST。OpenCode 1.18.29 会吞掉 config 钩子的异常，因此先安装 fetch 保护再处理配置；不能只依靠抛错防止静默直连。Provider 配置来源仍按 OpenCode 原合并规则，未改变用户的模型选择。
 
 Qoder CLI 通过原命令入口的受管启动器在读取配置前处理 `--config-dir`、`QODERCN_CONFIG_DIR`、`--cwd`、`--setting-sources` 和 `--settings`。内联 settings 写入本机 0600 的受管临时配置。原二进制、参数和信号转发保留，恢复只撤销仍是我方写入内容的启动器。后台识别 Qoder 升级器在同目录创建的版本符号链接后重新绑定；升级与修复之间存在窗口，安装验证不等于所有未来版本自动兼容。
 

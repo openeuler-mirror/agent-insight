@@ -204,3 +204,21 @@ test('failed restore keeps the installed proxy enabled and recoverable', async t
         assert.match(read(file).providers.local.baseUrl, /\/managed\/qoder/);
     } finally { fs.writeFileSync(backup, bytes); }
 });
+
+test('OpenCode V2 HTTP preparation routes a new endpoint before its first request and preserves query, body and auth', async t => {
+    const f = await fixture(t); await f.api.installProxy({ ...f.options, agents: ['opencode'] });
+    const source = f.upstream + '/new/chat/completions?api-version=probe';
+    const routed = await f.api.prepareOpenCodeRequest(source, f.options);
+    assert.match(routed, /\/managed\/opencode\//);
+    const response = await fetch(routed, { method: 'POST', headers: { authorization: 'Bearer dummy' }, body: JSON.stringify({ model: 'new', messages: [] }) });
+    await response.text(); assert.equal(response.status, 200);
+    assert.equal(f.seen[0].url, '/v1/new/chat/completions?api-version=probe');
+    assert.equal(f.seen[0].headers.authorization, 'Bearer dummy');
+    assert.ok(f.seen[0].headers['x-agent-insight-call-id']);
+    assert.deepEqual(f.seen[0].body, { model: 'new', messages: [] });
+    assert.equal(await f.api.prepareOpenCodeRequest(routed, f.options), routed, 'already managed request must not become a proxy loop');
+    await assert.rejects(f.api.prepareOpenCodeRequest(f.upstream + '/unsupported', f.options), /Unsupported/);
+    await assert.rejects(f.api.prepareOpenCodeRequest(source.replace('http://', 'http://user:password@'), f.options), /credentials/);
+    await f.api.restoreProxy(f.options);
+    assert.equal(await f.api.prepareOpenCodeRequest(source, f.options), source);
+});

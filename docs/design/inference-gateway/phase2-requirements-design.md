@@ -31,3 +31,9 @@ Unix curl 安装分发独立运行文件，先建立本机网关并检查健康�
 OpenCode 的现有 config 插件处理最终合并配置，覆盖显式 Base URL 的全局、项目和环境来源。Qoder CN CLI 启动器在配置读取前同步全局、项目、local 和显式 settings；后台轮询用于及时同步已登记文件，不作为新 Provider 首次请求绝不绕行的保证。Qoder 运行中新增或修改 Provider 后须重新启动 CLI；已托管 Provider 之间切换模型无需更改用户操作。未识别协议、内置账号服务以及 IDE 私有配置不声称已托管。
 
 后台路由保留旧版本，避免用户更换上游后中断已经载入旧地址的会话。每个物理请求仍生成独立调用 ID。恢复先通过独占锁暂停配置同步，再逐字段撤销仍属于我们的改写；已被用户再次修改的字段不覆盖，新增 Provider/模型等其他字段保留。未修改文件恢复为首次备份字节。配置恢复失败时保持原启用状态；恢复成功后才停用同步、停止网关、还原仍由我们管理的 CLI 启动入口；升级或用户替换过的启动入口保持原样。安装失败回滚本轮改写，不能以已完成状态掩盖失败。
+
+### OpenCode 2.x 兼容边界
+
+沿用现有出站 `X-Agent-Insight-Call-Id`、spool、上传接口与数据库字段，不要求推理服务按 Agent 或主版本适配。2.x 请求发送前尚无原生 assistantMessageID，插件先登记 transport request / attempt 标识，收到唯一可确认的原生 step 后回填消息身份；uploader 按 session/transport/attempt 的原生绑定证明关联 journal，失败和成功重试均保留独立 call ID。多个候选或缺失事件不猜测归属。1.x 仍使用原有 chat.headers/fetch 路径。
+
+2.x 配置支持 `providers.*.settings.baseURL`，保留字节备份及按字段恢复；实际 HTTP hook 同步最终请求地址，覆盖新 Provider 首请求。受管请求只走支持的 HTTP 协议，未知路径或 WebSocket 不静默绕过代理。安装按 CLI 主版本分发不同插件入口；跨主版本升级需重新运行安装命令。

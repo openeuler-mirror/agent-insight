@@ -695,16 +695,15 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         : extractPartsText(it.parts, 'reasoning') || toolNamesSummary() || errorSummaryOf(it);
 
     if (calls.length === 0) {
-        // Pure LLM response with no tool calls — emit an llm event if it produced
-        // any output (visible text or just reasoning).
-        if (isAssistantLike && llmSummary.trim()) {
+        // Explicit LLM spans remain observable when only metadata was captured.
+        if (isAssistantLike && (llmSummary.trim() || it.trace_kind === 'llm')) {
             out.push({
                 kind: 'llm',
                 interaction: it,
                 interactionIndex: idx,
                 startedAt: baseTs,
                 completedAt,
-                summary: llmSummary,
+                summary: llmSummary || '未采集到模型输出',
                 usage: it.usage,
             });
         }

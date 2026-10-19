@@ -14,7 +14,7 @@ async function fixture(t: TestContext) {
     const insightDir = path.join(dir, 'insight');
     const file = path.join(dir, 'opencode.jsonc');
     const origin = 'http://127.0.0.1:18080';
-    const run = (files = [{ agent: 'opencode', file }], env: NodeJS.ProcessEnv = {}) => api.syncConfigFiles({ insightDir, origin, files, env });
+    const run = (files = [{ agent: 'opencode', file }], env: NodeJS.ProcessEnv = { NODE_ENV: 'test' }) => api.syncConfigFiles({ insightDir, origin, files, env });
     return { api, dir, insightDir, file, origin, run };
 }
 const openCode = (url = 'https://inference.example.test/v1') => `{
@@ -79,9 +79,9 @@ test('restore recovers exact original bytes when untouched and preserves later u
 test('environment endpoints resolve at sync time while restore retains the original variable expression', async t => {
     const f = await fixture(t); const original = openCode('{env:MODEL_BASE_URL}'); fs.writeFileSync(f.file, original);
     assert.equal(f.run().unsupported.length, 1); assert.equal(fs.readFileSync(f.file, 'utf8'), original);
-    const first = f.run(undefined, { MODEL_BASE_URL: 'https://one.example/v1' });
+    const first = f.run(undefined, { NODE_ENV: 'test', MODEL_BASE_URL: 'https://one.example/v1' });
     assert.equal(first.routes[0].upstreamBaseUrl, 'https://one.example/v1');
-    const second = f.run(undefined, { MODEL_BASE_URL: 'https://two.example/v1' });
+    const second = f.run(undefined, { NODE_ENV: 'test', MODEL_BASE_URL: 'https://two.example/v1' });
     assert.equal(second.routes.length, 2); assert.ok(second.routes.some((r: { upstreamBaseUrl: string, basePath: string }) => r.upstreamBaseUrl === 'https://two.example/v1'));
     f.api.restoreConfigFiles({ insightDir: f.insightDir }); assert.equal(fs.readFileSync(f.file, 'utf8'), original);
 });
@@ -181,4 +181,16 @@ test('changing a provider protocol at the same upstream creates a new route and 
     assert.deepEqual(f.run().changed, []);
     f.api.restoreConfigFiles({ insightDir: f.insightDir });
     assert.equal(fs.readFileSync(f.file, 'utf8'), original.replace('@ai-sdk/openai-compatible', '@ai-sdk/anthropic'));
+});
+
+test('OpenCode V2 native and mixed V1 provider endpoints retain JSONC and later edits on restore', async t => {
+    const f = await fixture(t);
+    const original = '{\n // V2 native configuration\n "providers": {"native":{"package":"@opencode/ai/providers/openai-compatible","settings":{"baseURL":"https://v2.example/v1","apiKey":"private"}},"claude":{"package":"@opencode/ai/providers/anthropic","settings":{"baseURL":"https://anthropic.example/v1"}}},\n "provider":{"legacy":{"npm":"@ai-sdk/openai","options":{"baseURL":"https://v1.example/v1"}}}\n}';
+    fs.writeFileSync(f.file, original);
+    assert.equal(f.run().routes.length, 3);
+    const managed = fs.readFileSync(f.file, 'utf8');
+    assert.match(managed, /\/managed\/opencode\//);
+    fs.writeFileSync(f.file, managed.replace('"private"', '"user-edited"'));
+    f.api.restoreConfigFiles({ insightDir: f.insightDir });
+    assert.equal(fs.readFileSync(f.file, 'utf8'), original.replace('"private"', '"user-edited"'));
 });

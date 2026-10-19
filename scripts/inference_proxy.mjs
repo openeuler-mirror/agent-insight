@@ -244,6 +244,20 @@ export async function prepareOpenCodeConfig(cfg, options = {}) {
     return result
   })
 }
+export async function prepareOpenCodeRequest(address, options = {}) {
+  const c = context(options)
+  const install = loadInstall(c)
+  if (!install.enabled || !install.agents.includes('opencode')) return address
+  const url = new URL(address)
+  if (url.username || url.password || url.hash) throw new Error('Unsupported OpenCode inference URL credentials or fragment')
+  const suffix = /\/(chat\/completions|responses|messages)\/?$/.exec(url.pathname)
+  if (!suffix) throw new Error('Unsupported OpenCode inference endpoint; restore the proxy to use this protocol')
+  const protocol = suffix[1] === 'messages' ? 'anthropic' : 'openai'
+  const baseURL = url.origin + url.pathname.slice(0, suffix.index)
+  const cfg = { provider: { request: { npm: protocol === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible', options: { baseURL } } } }
+  await prepareOpenCodeConfig(cfg, options)
+  return cfg.provider.request.options.baseURL + '/' + suffix[1] + url.search
+}
 async function stopDaemon(c) {
   const runtime = await healthy(c)
   if (runtime) {

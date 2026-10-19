@@ -165,20 +165,25 @@ function commit(stateFile, state, changes, newBackups) {
 }
 
 function candidates(document, agent) {
-  const providers = agent === 'qoder' ? document.data.providers : document.data.provider
-  if (providers === undefined) return []
-  if (!object(providers)) throw new Error(`Invalid provider object in configuration: ${document.file}`)
-  return Object.entries(providers).map(([id, provider]) => {
-    const field = agent === 'qoder' ? ['providers', id, 'baseUrl'] : ['provider', id, 'options', 'baseURL']
-    let protocol
-    if (agent === 'qoder') {
-      if (provider?.type === 'openai-compatible' && (!provider.protocol || provider.protocol === 'openai')) protocol = 'openai'
-      if (provider?.type === 'anthropic-compatible' && (!provider.protocol || provider.protocol === 'anthropic')) protocol = 'anthropic'
-    } else {
-      if (['@ai-sdk/openai-compatible', '@ai-sdk/openai'].includes(provider?.npm)) protocol = 'openai'
-      if (provider?.npm === '@ai-sdk/anthropic') protocol = 'anthropic'
-    }
-    return { field, protocol, token: document.strings.get(JSON.stringify(field)) }
+  const groups = agent === 'qoder' ? ['providers'] : ['provider', 'providers']
+  return groups.flatMap(group => {
+    const providers = document.data[group]
+    if (providers === undefined) return []
+    if (!object(providers)) throw new Error(`Invalid provider object in configuration: ${document.file}`)
+    return Object.entries(providers).map(([id, provider]) => {
+      const native = agent === 'opencode' && group === 'providers'
+      const field = agent === 'qoder' ? [group, id, 'baseUrl'] : [group, id, native ? 'settings' : 'options', 'baseURL']
+      let protocol
+      if (agent === 'qoder') {
+        if (provider?.type === 'openai-compatible' && (!provider.protocol || provider.protocol === 'openai')) protocol = 'openai'
+        if (provider?.type === 'anthropic-compatible' && (!provider.protocol || provider.protocol === 'anthropic')) protocol = 'anthropic'
+      } else {
+        const pkg = native ? provider?.package?.replace(/^aisdk:/, '') : provider?.npm
+        if (['@ai-sdk/openai-compatible', '@ai-sdk/openai', '@opencode/ai/providers/openai-compatible', '@opencode/ai/providers/openai'].includes(pkg) || (native && !pkg && id === 'openai')) protocol = 'openai'
+        if (['@ai-sdk/anthropic', '@opencode/ai/providers/anthropic'].includes(pkg) || (native && !pkg && id === 'anthropic')) protocol = 'anthropic'
+      }
+      return { field, protocol, token: document.strings.get(JSON.stringify(field)) }
+    })
   })
 }
 
