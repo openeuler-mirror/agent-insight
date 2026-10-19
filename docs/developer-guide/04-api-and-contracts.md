@@ -269,6 +269,9 @@
 - **Preset result evaluators** — `runSingleResultMetric()`（`evaluation/result-metric-evaluator.ts`）为评测中心的准确性、答案质量、忠实度和指令遵循四个预置评估器提供公共分发与结构化模型传输。`experiment/result-preset-evaluators.ts` 将实验 case 的输入、参考输出和 interactions 适配为各叶子评估器所需参数，再归一成 `EvaluatorOutput`。该能力只由用户主动运行的评测实验调用，不写 `TraceEvaluation`，也不参与质量监控或 trace 上传。
 - **A/B scoring** — `AbScoringResult` / `AbScoringPolicy` / `AbScoreBreakdown`（`skill-analysis/ab-scoring.ts`）：评级、决策、`allowRelease`。
 - **Agent debug** — `AgentDebugReportPayload`、`AgentDebugIssue`、`AgentDebugRootCause`、`AgentDebugTriage`、`AgentDebugSkillsAnalysis`、`AgentDebugSkillsAnalysisRow`、`DebugTurn`、`DebugToolCall`（`engine/agent-debug/types.ts`）。
+  - 现有 `/api/observe/executions/:executionId/agent-debug` GET / POST（含缓存命中、运行中 409）增量提供 `progress: { runId, events, lastProgressAt, unavailable, truncated } | null`。events 包含单调 `seq`、接收时间 `at`、`kind`（task/tool/evidence/analysis/stage）、可选 `module`、`state`、`title`、`summary` 和可选真实 Trace `refs`。状态 completed 仅表示对应阶段结束，不能代替最终报告。
+  - Skills 对应接口在 `skillsAnalysis` 内提供可选 `runId` / `progress`；失败时保留 runId 以读取已保存的段落。新字段均可选，旧缓存没有进展时返回 null / 缺省；不新增 Prisma 字段、API 路由或逐 token 流。服务端按缓存行用户读取进展，不接受客户端指定进展文件路径。
+
 - **Trace** — `AgentNode`、`AgentEvent`、`ToolCall`、`RawInteraction`、`AgentNodeStats`（`engine/observability/agent-trace.ts`）。
   `ToolCall.state` 与 `output/result` 独立；可选 `exit_code`、`error` 经调用树保留为
   `AgentEvent.toolExitCode`、`toolError`。QwenPaw 将 `error.message`/`exception.message` 传入

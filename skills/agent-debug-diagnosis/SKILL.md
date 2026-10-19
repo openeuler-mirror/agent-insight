@@ -144,6 +144,19 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 12. 按 `08-detector-reconciliation.md` 直接生成完整最终报告：重复结果写入 core finding 的 `supplementalEvidence`；不重复结果写入 `detectorFindings`；仅相关结果可设置 `relatedFindingId`。
 13. 写入 `.agent-insight/agent-debug-final.json`，同时传入 `--static`、`--core`、`--detectors` 校验；修正错误并确认校验通过后，只返回 `AGENT_DEBUG_REPORT_READY`。
 
+## 阶段进展上报
+
+若工作目录存在 `.agent-insight/agent-debug-progress-context.json`，在实际开始某模块核验、获得模块证据、完成一轮检查或明确跳过检查时，立即调用本 Skill 的 `scripts/agentdebug_progress.py`，分段提供可展示的工作摘要。不要等最终报告完成后批量补报，也不要按时间编造进度或改变检查顺序。
+
+调用格式：`python3 <skill挂载目录>/scripts/agentdebug_progress.py --module action --state update --title '已核对工具返回' --summary '<已观察到的事实、尚待核验的问题>' --steps <真实traceStepIndex...>`。
+
+- `module` 为 memory / reflection / planning / action / system；跨模块活动使用 overall。System 仅表示系统环境维度，不能用它代替整个诊断任务。“开始五模块诊断”“全局资料读取”等活动必须使用 overall，不触发任何单模块运行状态。
+- 实际开始某模块核验时，先以该模块上报 started，并说明本轮检查范围；获得新的可核查事实时立即上报 update；本轮核验结束立即上报 completed；明确不适用才上报 skipped 并说明原因。重新核验时再发 started。没有实际开始的模块不得提前报 started，没有完成的模块不得报 completed；completed 只表示本轮检查完成，最终结论仍由最终报告确认。
+- 示例：真正开始核验计划约束时调用 `python3 <skill挂载目录>/scripts/agentdebug_progress.py --module planning --state started --title '开始核验计划约束' --summary '<本轮实际核验范围>'`。多个模块交叉检查时按各自实际边界上报，不强制改成串行，不补造五个模块同时开始。
+- 摘要只包含可核查事实、检查范围和阶段结果；不要输出内部思维链、密钥或原始完整工具输出。没有证据就明确说明证据不足，不推断正常。
+- `--steps` 引用真实 Trace 节点索引，不能填诊断步骤序号；没有定位信息时省略。
+- 本脚本仅追加进展记录；失败时继续原诊断流程，不修改 core / final 报告、诊断规则或最终输出协议。
+
 ## 一键诊断输出要求
 
 最终报告文件必须包含这些顶层字段：

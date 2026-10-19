@@ -452,7 +452,11 @@ flowchart LR
 一键诊断只启动一次 `fault-diagnosis-agent`。同一个 Agent 先根据 Trace、静态检测和五模块规程生成 `.agent-insight/agent-debug-core.json`，再调用 Skill-local runner 生成 `.agent-insight/agent-debug-detectors.json`，随后由该 Agent 基于真实证据完成通用富化、语义查重和关联，并直接写出 `.agent-insight/agent-debug-final.json`。重复结果进入目标 core finding 的 `supplementalEvidence`，独立结果进入 `detectorFindings`；冻结 core 字段和专项 `facts`、`anchors`、`details` 由 `agentdebug_validate.py --core --detectors` 确定性校验。服务端只准备输入与 trace bundle、启动 Agent、标准化并持久化最终报告、转发流式事件。
 
 
-`.agent-insight/agent-debug-final.json` 是一键诊断的唯一报告真源。每次运行前 runner 会删除同一 workspace 中的旧 final 文件，Agent 校验新文件后只返回 `AGENT_DEBUG_REPORT_READY`，服务端不再解析或要求模型回显完整报告。AgentDebug 将事件流最长时间设为 45 分钟，并给通用 Agent 配置默认 10 分钟“无有效进展” watchdog；只有心跳而没有真实 session 事件时，watchdog 通过 AbortSignal 中止底层 `session.prompt`。重跑同一 Execution 时会重新生成 `AgentDebugReport.id`，并同时刷新 `ranAt` 与 `updatedAt`；`id` 用于区分当前 attempt，`ranAt` 表示该 attempt 的开始边界。
+`.agent-insight/agent-debug-final.json` 是一键诊断的唯一报告真源。每次运行使用 execution 哈希与 runId 组成的独立 workspace，并在运行前清除该目录的旧 final 文件，Agent 校验新文件后只返回 `AGENT_DEBUG_REPORT_READY`，服务端不再解析或要求模型回显完整报告。AgentDebug 将事件流最长时间设为 45 分钟，并给通用 Agent 配置默认 10 分钟“无有效进展” watchdog；只有心跳而没有真实 session 事件时，watchdog 通过 AbortSignal 中止底层 `session.prompt`。重跑同一 Execution 时会重新生成 `AgentDebugReport.id`，并同时刷新 `ranAt` 与 `updatedAt`；`id` 用于区分当前 attempt，`ranAt` 表示该 attempt 的开始边界。
+
+主诊断过程通过 `progress-observer.ts` 接入通用 Agent 已有的工具开始/结束/失败回调，在工具结束、文件修改和步骤结束时读取完整的 static/core 中间文件。有模块证据才产生对应模块事件；不从工具名称猜测模块完成状态。static 和仅有执行记录的 core 片段仍作为 evidence；core 中明确提供模块结论的条目生成 analysis/completed，表示本轮结果已写入，最终结论仍待 final 确认。Skill 在真实模块边界分别上报 started/update/completed/skipped；全局或跨模块活动使用 `--module overall`，collector 转为无模块归属的 stage 事件，不能归到 System。`agentdebug_progress.py` 追加结构化摘要，collector 只接受当前 runId 的完整 JSONL 行，并将 Trace 引用映射到输入中的真实节点。上报失败不阻断诊断，不修改最终报告或增加诊断模型调用。
+
+`progress-store.ts` 按用户、Execution、runId 将有界快照原子写入 workspace root 下的用户 `.diagnosis-progress/` 目录；每次运行事件单调编号并去重，保留最近 200 条，摘要最多 1000 字符，不保存原始工具输入/输出或模型思维链。记录写入失败时活动任务可返回内存快照与 `unavailable`；服务重启后恢复磁盘中已成功保存的部分。进程仍沿用原有失活任务检测，不自动恢复执行。主任务 runId 为报告行 id；Skills 的 runId 独立生成并保存在现有 analysisJson 内。Skills 在提取、核验和建议生成的实际调用边界记录进展，与主诊断互不等待。
 
 AgentDebug 主诊断后端只向诊断 Agent 提供执行元数据、turn/node/artifact 数量和输入、静态、trace bundle 文件路径，不再把长 turn 摘要嵌入提示词。Skill 依次运行 `agentdebug_static.py` 全量拆分与静态检测、`agentdebug_inspect.py` 生成五模块候选信号并执行有界的 `tail/range/search/repeated-calls` 查询，再由 Agent 补充语义问题和 Phase 2；`agentdebug_validate.py --static` 校验最终报告未删除静态 step、issue 或 Phase 1 证据。超过 4000 字符的节点输入/输出由 trace bundle 外置为 artifact，查询脚本只返回完整 artifact 中的命中片段。
 
