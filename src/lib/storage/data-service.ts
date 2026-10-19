@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import { aggregateExecutionList } from '@/lib/storage/execution-list-sql';
+import { aggregateExecutionList, selectExecutionListIds } from '@/lib/storage/execution-list-sql';
 import { selectComputedRecordPage, type ComputedRecordPageOptions } from '@/lib/storage/computed-record-page';
 import fs from 'fs';
 import path from 'path';
@@ -1265,6 +1265,9 @@ export interface ReadRecordPageStats {
     toolErrorRate: number;
 }
 
+type RecordPageResult = { records: ExecutionRecord[]; total: number | null; stats: ReadRecordPageStats | null; hasMore?: boolean };
+type RecordListPart = 'records' | 'stats';
+
 async function appendExecutionOwnershipWhere(
     where: Record<string, any>,
     ownership?: 'user' | 'system',
@@ -1846,8 +1849,9 @@ async function hydrateAndNormalizeBatch(
 async function readRecordsInternal(
     user?: string,
     filters?: ReadRecordFilters,
-    options?: ReadRecordsOptions
-): Promise<{ records: ExecutionRecord[]; total: number; stats: ReadRecordPageStats }> {
+    options?: ReadRecordsOptions,
+    part?: RecordListPart,
+): Promise<RecordPageResult> {
     const light = options?.lightweight === true;
     // light 强制不附评测快照(routing/outcome_evaluation 需 final_result/judge 等重上下文,与轻量语义冲突;
     // 迁移的调用方今天也没开 includeEvaluations,故零行为变化,且连带省掉 configsData 与每条快照查询)。
@@ -1996,6 +2000,14 @@ async function readRecordsInternal(
         where.AND = [...((where.AND as any[]) ?? []), { OR: [{ taskId: null }, { taskId: { notIn: filters.excludedTaskIds } }] }];
     }
 
+    if (part === 'stats' && !process.env.DB_HOST) {
+        const stats = await aggregateExecutionList(where, {
+            ...options?.computedPage, lifecycleNow: options?.lifecycleNow, avgNullAsZero: !!options?.computedPage,
+        });
+        return { records: [], total: stats.total, stats };
+    }
+
+    const rowsOnly = part === 'records' && options?.databasePagination === true && !process.env.DB_HOST;
     const sortKey = options?.sortKey ?? 'timestamp';
     const sortDir = options?.sortDir ?? 'desc';
     const orderBy = [{ [sortKey]: sortDir }, { id: sortDir }];
@@ -2006,33 +2018,33 @@ async function readRecordsInternal(
     let computedStats: ReadRecordPageStats | undefined;
 
     if (pageSize > 0 && options?.databasePagination === true && options.computedPage && !process.env.DB_HOST) {
-        const selected = await selectComputedRecordPage(where, {
+        const computedOptions = {
             ...options.computedPage, sortDir, page, pageSize, lifecycleNow: options.lifecycleNow,
-        });
-        total = selected.total;
-        computedStats = selected.stats;
-        const rows = selected.ids.length ? await prismaRaw.execution.findMany({
-            where: { id: { in: selected.ids } }, select: LIGHT_EXECUTION_SELECT as any,
+        };
+        const selected = rowsOnly ? null : await selectComputedRecordPage(where, computedOptions);
+        const ids = selected?.ids ?? await selectExecutionListIds(where, computedOptions, pageSize + 1);
+        total = selected?.total ?? 0;
+        computedStats = selected?.stats;
+        const rows = ids.length ? await prismaRaw.execution.findMany({
+            where: { id: { in: ids } }, select: LIGHT_EXECUTION_SELECT as any,
         }) : [];
         const byId = new Map<string, any>(rows.map((row: any) => [row.id, row]));
-        paged = selected.ids.map(id => byId.get(id)).filter(Boolean);
+        paged = ids.map(id => byId.get(id)).filter(Boolean);
     } else if (pageSize > 0 && options?.databasePagination === true && !process.env.DB_HOST) {
         // SQLite/Prisma 主路径：过滤、排序、分页都在数据库中完成。列表后续的标签、状态、
         // 评测补充只处理当前页，避免“全量 hydrate 后再 slice”的假分页。
-        const [stats, rows] = await prismaRaw.$transaction(async transaction => {
-            const stats = await aggregateExecutionList(where, { lifecycleNow: options.lifecycleNow }, transaction);
-            const rows = await transaction.execution.findMany({
-                where,
-                orderBy,
-                skip: (page - 1) * pageSize,
-                take: pageSize,
-                select: LIGHT_EXECUTION_SELECT as any,
-            });
-            return [stats, rows] as const;
+        // Prisma SQLite interactive transactions use BEGIN IMMEDIATE even for reads.
+        if (!rowsOnly) {
+            computedStats = await aggregateExecutionList(where, { lifecycleNow: options.lifecycleNow });
+            total = computedStats.total;
+        }
+        paged = await prismaRaw.execution.findMany({
+            where,
+            orderBy,
+            skip: (page - 1) * pageSize,
+            take: pageSize + (rowsOnly ? 1 : 0),
+            select: LIGHT_EXECUTION_SELECT as any,
         });
-        total = stats.total;
-        computedStats = stats;
-        paged = rows;
     } else {
         // OpenGauss 适配器和非分页旧调用保持原行为；本次不扩展其它页面/数据库适配层。
         const records = await db.findExecutions(
@@ -2063,6 +2075,9 @@ async function readRecordsInternal(
         }
     }
 
+    const hasMore = rowsOnly && paged.length > pageSize;
+    if (rowsOnly) paged = paged.slice(0, pageSize);
+
     // 评测快照需要的 config 加载缓存(memoize per evaluationUser),跨批共享。
     const configCache = new Map<string, Promise<ConfigItem[]>>();
     const getConfigsForEvaluationUser = (evaluationUser?: string | null): Promise<ConfigItem[]> => {
@@ -2089,6 +2104,7 @@ async function readRecordsInternal(
         });
         out.push(...normalizedBatch);
     }
+    if (rowsOnly) return { records: out, total: null, stats: null, hasMore };
     let stats: ReadRecordPageStats;
     if (computedStats) {
         stats = computedStats;
@@ -2125,8 +2141,10 @@ export async function readRecordPage(
     user?: string,
     filters?: ReadRecordFilters,
     options?: ReadRecordsOptions
-): Promise<{ records: ExecutionRecord[]; total: number; stats: ReadRecordPageStats }> {
-    return readRecordsInternal(user, filters, options);
+): Promise<{ records: ExecutionRecord[]; total: number; stats: ReadRecordPageStats }>;
+export async function readRecordPage(user: string | undefined, filters: ReadRecordFilters | undefined, options: ReadRecordsOptions | undefined, part: RecordListPart | undefined): Promise<RecordPageResult>;
+export async function readRecordPage(user?: string, filters?: ReadRecordFilters, options?: ReadRecordsOptions, part?: RecordListPart): Promise<RecordPageResult> {
+    return readRecordsInternal(user, filters, options, part);
 }
 
 
