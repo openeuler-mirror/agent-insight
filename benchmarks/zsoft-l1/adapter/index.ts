@@ -16,6 +16,46 @@ export type ZsoftEvaluationPayload = ZsoftPrivateCase & { taskId: string; maxByt
 
 type ZsoftResult = { sourceTaskDigest: string; taskId: string; submissionSha256: string; bundleDigest: string; taskDigest: string; status: string; success: boolean }
 
+function jsonObject(value: JsonValue | undefined): Record<string, JsonValue> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+}
+
+function officialChecks(value: JsonValue | undefined): JsonValue {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return null
+  const checks = value.map(jsonObject)
+  if (checks.some(check => !check || typeof check.id !== 'string' || !check.id || typeof check.passed !== 'boolean' || (check.message != null && typeof check.message !== 'string'))) return null
+  return checks.map(check => ({ ...check!, message: check!.message ?? null }))
+}
+
+function officialSummary(input: NormalizeBenchmarkResultInput, raw: ZsoftResult): string | undefined {
+  const artifacts = input.evidenceArtifacts
+  const legacy = artifacts.filter(item => item.name === 'report.json' && item.kind === 'official-report' && item.mediaType === 'application/json')
+  if (artifacts.length === 1 && legacy.length === 1 && legacy[0].evaluationId === input.evaluationId && legacy[0].jsonContent !== undefined && canonicalJson(legacy[0].jsonContent) === canonicalJson(input.completion.rawResult)) return undefined
+  const reports = artifacts.filter(item => item.name === 'evaluation.json' && item.kind === 'official-report' && item.mediaType === 'application/json')
+  const records = artifacts.filter(item => item.name === 'record.json' && item.kind === 'official-record' && item.mediaType === 'application/json')
+  const report = jsonObject(reports[0]?.jsonContent)
+  const record = jsonObject(records[0]?.jsonContent)
+  const result = jsonObject(record?.result)
+  const submission = input.evaluationJob.artifacts.find(item => item.name === 'poc')
+  if (reports.length !== 1 || records.length !== 1 || artifacts.some(item => item.evaluationId !== input.evaluationId)
+    || new Set(artifacts.map(item => item.name)).size !== artifacts.length
+    || !report || !record || !result || !submission
+    || record.task_id !== raw.taskId || record.submission_sha256 !== submission.sha256.slice(7)
+    || record.submission_bytes !== submission.sizeBytes || record.phase !== 'final' || record.submission_kind !== 'final'
+    || record.evaluator_timed_out !== false || record.cleanup_timed_out !== false || record.cleanup_exit_code !== 0
+    || result.status !== raw.status || result.success !== raw.success
+    || report.status !== result.status || report.success !== result.success
+    || typeof result.summary !== 'string' || !result.summary.trim() || report.summary !== result.summary
+    || !Array.isArray(result.checks) || !jsonObject(result.details)
+    || officialChecks(report.checks) === null || officialChecks(result.checks) === null
+    || canonicalJson(officialChecks(report.checks)) !== canonicalJson(officialChecks(result.checks))
+    || canonicalJson(report.details ?? {}) !== canonicalJson(result.details)) {
+    throw new BenchmarkProtocolError('ZSOFT_REPORT_MISMATCH', 'ZSoft 官方报告证据缺失或与执行记录不一致', 422)
+  }
+  return result.summary
+}
+
 export class ZsoftL1Adapter extends AbstractBenchmarkAdapter<ZsoftCase, ZsoftPublicCase, ZsoftPrivateCase, ZsoftEvaluationPayload> {
   readonly manifest = getGeneratedBenchmarkManifest('zsoft-l1')
 
@@ -96,14 +136,11 @@ export class ZsoftL1Adapter extends AbstractBenchmarkAdapter<ZsoftCase, ZsoftPub
     if (raw.status === 'infrastructure_error' || (completion.status === 'completed' && raw.status !== 'completed') || (completion.status === 'submission_invalid' && (raw.status !== 'invalid_submission' || raw.success))) {
       throw new BenchmarkProtocolError('ZSOFT_RESULT_STATUS_INVALID', 'ZSoft 原生结果状态不一致', 422)
     }
-    const reports = input.evidenceArtifacts.filter((item) => item.name === 'report.json' && item.kind === 'official-report' && item.mediaType === 'application/json')
-    if (input.evidenceArtifacts.length !== 1 || reports.length !== 1 || reports[0].evaluationId !== input.evaluationId || reports[0].jsonContent === undefined || canonicalJson(reports[0].jsonContent) !== canonicalJson(completion.rawResult)) {
-      throw new BenchmarkProtocolError('ZSOFT_REPORT_MISMATCH', 'ZSoft 报告证据缺失或不一致', 422)
-    }
+    const summary = officialSummary(input, raw)
     const invalid = completion.status === 'submission_invalid'
     return {
       status: 'done', verdict: raw.success ? 'pass' : 'fail',
-      summary: invalid ? 'PoC 不符合官方提交要求' : raw.success ? 'PoC 通过官方判题' : 'PoC 未通过官方判题',
+      summary: summary || (invalid ? 'PoC 不符合官方提交要求' : raw.success ? 'PoC 通过官方判题' : 'PoC 未通过官方判题'),
       score: invalid ? null : raw.success ? 100 : 0,
       primaryMetric: { key: 'success', aggregation: 'boolean-rate', value: invalid ? null : raw.success },
       points: [{ label: 'Success', value: invalid ? null : raw.success }], evidence,

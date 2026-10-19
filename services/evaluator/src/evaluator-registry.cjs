@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process')
 const { runtimeDescriptor, remoteImage } = require('./runtime-image.cjs')
 const { EvaluatorAssets } = require('./evaluator-assets.cjs')
 const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
+const { isEvidencePath } = require('../../../packages/benchmark-protocol/artifact-path.cjs')
 
 class EvaluatorProtocolError extends Error {
   constructor(code, message, status = 422, retryable = false) {
@@ -83,9 +84,10 @@ class AbstractBenchmarkEvaluator {
     for (const evidence of output.evidenceFiles) {
       const resolved = path.resolve(evidence.path)
       if (
-        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(evidence.name || ''))
+        !isEvidencePath(evidence.name)
         || names.has(evidence.name)
         || !resolved.startsWith(`${root}${path.sep}`)
+        || !fs.realpathSync(resolved).startsWith(`${fs.realpathSync(root)}${path.sep}`)
         || !fs.statSync(resolved).isFile()
       ) {
         throw new EvaluatorProtocolError('EVALUATION_EVIDENCE_INVALID', 'Evaluator 证据文件不合法', 500)

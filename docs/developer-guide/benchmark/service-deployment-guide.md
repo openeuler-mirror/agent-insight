@@ -161,7 +161,7 @@ benchmarks:
 
 ### 4.3 其他 Benchmark
 
-接入包可注册 `implementation.datasetPreparer` 和 `datasetPreparerExport`，通过 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>` 单独准备和导入数据；ZSoft 仍使用 `ZSOFT_DATASET_SOURCE`、`ZSOFT_DATASET_REVISION` 配置其官方来源。未注册准备器的接入包仍可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录。普通数据集页面导入不能替代 Benchmark 数据集安装。
+接入包可注册 `implementation.datasetPreparer` 和 `datasetPreparerExport`，通过 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>` 单独准备和导入数据；ZSoft 的官方来源与版本配置在 `platform.local.yaml` 的 `benchmarks.zsoft-l1.dataset.source`、`revision`。评测机的资产根目录与加速模式配置在 `evaluator.local.yaml` 的 `benchmarks.zsoft-l1.assetsDir`、`kernelAccel`。旧 ZSoft 业务环境变量只提示迁移，不再覆盖 YAML；MCTS 自有的 `ZSOFT_TASKS_DIR` 仍在其 `config.env` 管理。未注册准备器的接入包仍可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录。普通数据集页面导入不能替代 Benchmark 数据集安装。
 
 ## 5. 安装 Evaluator
 

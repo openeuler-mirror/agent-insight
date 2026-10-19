@@ -1,11 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { apiFetch } from '@/lib/client/api';
 import type { BenchmarkPresentation } from '../../../packages/benchmark-protocol/src/contracts';
 import {
   benchmarkPresentationText,
+  benchmarkArtifactTree,
+  type BenchmarkArtifactTreeNode,
   canPreviewBenchmarkArtifact,
   presentBenchmarkArtifacts,
 } from '@/lib/benchmark/presentation';
@@ -137,7 +139,7 @@ export function BenchmarkArtifactActions({
       const objectUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
-      anchor.download = artifact.name;
+      anchor.download = artifact.name.split('/').pop() || artifact.name;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -157,9 +159,57 @@ export function BenchmarkArtifactActions({
     }
   }, [downloading, user]);
 
+  const renderArtifact = ({ source, label, artifact }: typeof artifacts[number], filename?: string) => (
+    <div
+      key={`${source}:${artifact.artifactId || artifact.kind}:${artifact.name}`}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
+        padding: '7px 9px', border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-sm)', background: 'var(--background-secondary)',
+      }}
+    >
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--foreground)' }}>{filename || label}</div>
+        <div
+          title={`${artifact.name} · ${artifact.mediaType}${artifact.sha256 ? ` · ${artifact.sha256}` : ''}`}
+          style={{ marginTop: 2, fontSize: 10.5, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
+          {artifact.name} · {benchmarkPresentationText(artifact.sizeBytes, { format: 'bytes' })}
+        </div>
+      </div>
+      {canPreviewBenchmarkArtifact(artifact) && (
+        <button type="button" className="ai-btn-s" onClick={() => void viewArtifact(label, artifact)}>
+          查看
+        </button>
+      )}
+      <button
+        type="button"
+        className="ai-btn-s"
+        disabled={Boolean(downloading)}
+        onClick={() => void downloadArtifact(artifact)}
+      >
+        {downloading === artifact.name ? '下载中…' : '下载'}
+      </button>
+    </div>
+  );
+
+  const renderTree = (nodes: BenchmarkArtifactTreeNode<BenchmarkArtifactRef>[]): ReactNode => nodes.map(node => (
+    node.children ? (
+      <details key={`directory:${node.path}`} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+        <summary style={{ padding: '7px 9px', cursor: 'pointer', fontSize: 11.5, fontWeight: 600, color: 'var(--foreground)' }}>
+          {node.name}/
+        </summary>
+        <div style={{ display: 'grid', gap: 6, margin: '0 9px 9px 18px' }}>
+          {renderTree(node.children)}
+        </div>
+      </details>
+    ) : renderArtifact(node.item, node.path.includes('/') ? node.name : undefined)
+  ));
+
   const renderArtifactList = (
     title: string,
     items: typeof artifacts,
+    tree = false,
   ) => (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
       <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--foreground-muted)', marginBottom: 7 }}>
@@ -169,39 +219,7 @@ export function BenchmarkArtifactActions({
         <div style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>暂无文件</div>
       ) : (
         <div style={{ display: 'grid', gap: 6 }}>
-          {items.map(({ source, label, artifact }) => (
-            <div
-              key={`${source}:${artifact.artifactId || artifact.kind}:${artifact.name}`}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
-                padding: '7px 9px', border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-sm)', background: 'var(--background-secondary)',
-              }}
-            >
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--foreground)' }}>{label}</div>
-                <div
-                  title={`${artifact.name} · ${artifact.mediaType}${artifact.sha256 ? ` · ${artifact.sha256}` : ''}`}
-                  style={{ marginTop: 2, fontSize: 10.5, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                >
-                  {artifact.name} · {benchmarkPresentationText(artifact.sizeBytes, { format: 'bytes' })}
-                </div>
-              </div>
-              {canPreviewBenchmarkArtifact(artifact) && (
-                <button type="button" className="ai-btn-s" onClick={() => void viewArtifact(label, artifact)}>
-                  查看
-                </button>
-              )}
-              <button
-                type="button"
-                className="ai-btn-s"
-                disabled={Boolean(downloading)}
-                onClick={() => void downloadArtifact(artifact)}
-              >
-                {downloading === artifact.name ? '下载中…' : '下载'}
-              </button>
-            </div>
-          ))}
+          {tree ? renderTree(benchmarkArtifactTree(items)) : items.map(item => renderArtifact(item))}
         </div>
       )}
     </div>
@@ -210,7 +228,7 @@ export function BenchmarkArtifactActions({
   return (
     <>
       {renderArtifactList('提交物', submissionArtifacts)}
-      {renderArtifactList('评测证据', evidenceArtifacts)}
+      {renderArtifactList('评测证据', evidenceArtifacts, true)}
 
       {viewer && (
         <div

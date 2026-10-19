@@ -16,8 +16,10 @@ Usage:
 
 The image is copied into the evaluator data volume at:
   /data/benchmark-assets/zsoft-l1/releases/<release-id>
-The resulting evaluator setting is:
-  ZSOFT_L1_ASSETS_DIR=/data/benchmark-assets/zsoft-l1/releases/<release-id>
+This legacy manual copy is for offline inspection. The Controller installs its
+own pinned release automatically. Do not use this release path as assetsDir.
+Configure the storage base in config/benchmark/evaluator.local.yaml under:
+  benchmarks.zsoft-l1.assetsDir
 EOF
 }
 
@@ -86,4 +88,5 @@ cp -a "$STAGING/." "$LAYOUT/benchmark-assets/zsoft-l1/releases/$RELEASE/"
 docker cp "$LAYOUT/benchmark-assets" "$CONTAINER:/data/"
 
 printf '已安装 ZSoft 资产 release：%s\n' "$RELEASE"
-printf '评测配置：ZSOFT_L1_ASSETS_DIR=%s\n' "$TARGET"
+printf '离线存放目录：%s\n' "$TARGET"
+printf 'Controller 会自动安装固定版本；不要将此 release 路径作为 evaluator.local.yaml 的 assetsDir。\n'

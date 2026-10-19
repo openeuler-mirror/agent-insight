@@ -99,6 +99,8 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 
 在 Case 明细点击 **详情**，查看或下载 **`model.patch`**、评测报告和日志。MCTS 从多个分支中选择最终 Patch，客户端自动上传，无需手工提交。
 
+ZSoft 的提交物为 **`poc`**。“评测证据”保留官方原始 `evaluation.json`、`record.json`、评测及清理日志，以及 `judge-evidence/`、`public-feedback/` 内的全部输出文件。文件夹可点击展开，文件可查看、下载；点击 **完整官方输出** 下载保留目录结构的 ZIP。空日志也保留，失败时仍可查看已经生成的输出。旧实验不会自动补齐完整报告，需点击 **Benchmark 重评**。
+
 ![Benchmark Case 详情：顶部前往链路观测入口、model.patch、评测结果和证据](../../images/agent/evaluation/mcts/case-result.png)
 
 *图 9：提交物、评测证据与右上角链路入口。*

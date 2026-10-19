@@ -60,6 +60,12 @@ const schemas = {
         dataset: { autoImport: boolean(true), source: leaf(null, nullableString, source) },
         loader: { sourceArchive: leaf(null, nullableString, source), python: leaf(null, nullableString, resolvePath) },
       },
+      'zsoft-l1': {
+        dataset: {
+          source: leaf(null, nullableString, source),
+          revision: leaf(null, value => value === null || (typeof value === 'string' && /^[a-f0-9]{40}$/.test(value))),
+        },
+      },
       scheduling: {
         maxPendingEvaluations: integer(256),
         maxPendingEvaluationsPerUser: integer(128),
@@ -80,6 +86,10 @@ const schemas = {
           verifiedMirrorRepositories: leaf(null, (value) => value === null || (Array.isArray(value) && value.length <= 8 && value.every((item) => typeof item === 'string' && /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)+$/.test(item)))),
         },
         docker: { requestTimeoutSeconds: integer(1800), connectionPoolSize: integer(16) },
+      },
+      'zsoft-l1': {
+        assetsDir: leaf(null, value => nullableString(value) && (value === null || !/^[a-z][a-z\d+.-]*:\/\//i.test(value)), resolvePath),
+        kernelAccel: choice('tcg', ['tcg', 'kvm']),
       },
     },
     imagePool: {
@@ -107,12 +117,16 @@ const legacySettings = {
     SWE_BENCH_SOURCE_ARCHIVE_SOURCE: 'benchmarks.swe-bench.loader.sourceArchive',
     SWE_BENCH_SOURCE_ARCHIVE_URL: 'benchmarks.swe-bench.loader.sourceArchive',
     SWE_BENCH_PYTHON: 'benchmarks.swe-bench.loader.python',
+    ZSOFT_DATASET_SOURCE: 'benchmarks.zsoft-l1.dataset.source',
+    ZSOFT_DATASET_REVISION: 'benchmarks.zsoft-l1.dataset.revision',
     AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS: 'benchmarks.scheduling.maxPendingEvaluations',
     AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER: 'benchmarks.scheduling.maxPendingEvaluationsPerUser',
     AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER: 'benchmarks.scheduling.maxEvaluationConcurrencyPerUser',
   },
   evaluator: {
     EVALUATOR_MAX_CONCURRENCY: 'maxConcurrency',
+    ZSOFT_L1_ASSETS_DIR: 'benchmarks.zsoft-l1.assetsDir',
+    ZSOFT_KERNEL_ACCEL: 'benchmarks.zsoft-l1.kernelAccel',
     SWE_BENCH_PYTHON: 'benchmarks.swe-bench.python',
     SWE_BENCH_IMAGE_SOURCE: 'benchmarks.swe-bench.images.source',
     SWE_BENCH_IMAGE_ARCH: 'benchmarks.swe-bench.images.arch',

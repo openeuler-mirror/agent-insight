@@ -4,6 +4,7 @@ const fs = require('node:fs/promises')
 const path = require('node:path')
 const { randomUUID } = require('node:crypto')
 const { setTimeout: delay } = require('node:timers/promises')
+const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
 
 class EvaluatorAssetError extends Error {
   constructor(code, message, retryable = false) {
@@ -77,7 +78,10 @@ class EvaluatorAssets {
 
   async prepare() {
     const spec = this.descriptor.assets
-    const base = this.environment[spec.directoryEnv] || path.join(this.dataDir, 'benchmark-assets', this.descriptor.benchmarkKey)
+    const settings = loadProjectConfig('evaluator', { env: this.environment }).benchmarks[this.descriptor.benchmarkKey]
+    const configured = settings && Object.hasOwn(settings, 'assetsDir') ? settings.assetsDir
+      : spec.directoryEnv ? this.environment[spec.directoryEnv] : null
+    const base = configured || path.join(this.dataDir, 'benchmark-assets', this.descriptor.benchmarkKey)
     if (!path.isAbsolute(base)) throw assetError('EVALUATOR_ASSETS_DIRECTORY_INVALID', '评测资产根目录必须为绝对路径')
     this.root = path.join(base, spec.image.split('@sha256:')[1])
     this.stage = 'preparing'

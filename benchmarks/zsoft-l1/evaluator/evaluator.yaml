@@ -7,7 +7,6 @@ assets:
   sourcePath: /opt/agent-insight/zsoft-l1/20261019-full-v1
   releaseId: 20261019-full-v1
   bundleDigest: sha256:d73939d50ff543cbbe7a5a23e15ece361ed89d0dd998ab0f3cdace63e23621f9
-  directoryEnv: ZSOFT_L1_ASSETS_DIR
   verifyCommand: python3
   verifyEntrypoint: ./verify_assets.py
 dockerfile: ./Dockerfile

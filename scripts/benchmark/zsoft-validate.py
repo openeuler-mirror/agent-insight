@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
 
 
@@ -27,13 +28,22 @@ def write_json(path, value):
     temporary.replace(path)
 
 
+def configured_kernel_acceleration():
+    loader = Path(__file__).resolve().parents[2] / "packages/project-config/index.cjs"
+    result = subprocess.run(["node", str(loader), "evaluator"], capture_output=True, text=True, check=True, timeout=30)
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    return json.loads(result.stdout)["benchmarks"]["zsoft-l1"]["kernelAccel"]
+
+
 def cli(args, output, label, command, timeout):
     stdout = output / (label + ".stdout.json")
     stderr = output / (label + ".stderr.log")
     started = time.monotonic()
     with stdout.open("w") as out, stderr.open("w") as err:
         result = subprocess.run([args.binary, *command], cwd=args.bench_root,
-                                stdout=out, stderr=err, timeout=timeout)
+                                stdout=out, stderr=err, timeout=timeout,
+                                env={**os.environ, "ZSOFT_KERNEL_ACCEL": args.kernel_accel})
     metadata = {"exit_code": result.returncode, "elapsed_seconds": round(time.monotonic() - started, 2),
                 "stdout": str(stdout), "stderr": str(stderr)}
     return metadata
@@ -175,6 +185,11 @@ def main():
     args.state_dir = (args.state_dir or args.bench_root / ".task-state").resolve()
     if not re.fullmatch(r"[0-9a-f]{40}", args.framework_revision):
         parser.error("--framework-revision must be a full commit hash")
+    try:
+        args.kernel_accel = configured_kernel_acceleration()
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
+        parser.error("无法读取 ZSoft YAML 评测配置（需要 Node.js）：" + detail)
     args.output_dir.mkdir(parents=True, exist_ok=False)
     rows = inventory(args, args.output_dir)
     by_id = {row["task_id"]: row for row in rows}
@@ -182,7 +197,7 @@ def main():
         parser.error("unknown task ID")
     report = {"schema_version": 1, "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "framework_revision": args.framework_revision, "backend": "local-docker",
-              "e2b_used": False, "kernel_accel": os.environ.get("ZSOFT_KERNEL_ACCEL", "auto"),
+              "e2b_used": False, "kernel_accel": args.kernel_accel,
               "p0_inventory_passed": True, "tasks": [], "passed": not args.task}
     write_json(args.output_dir / "summary.json", report)
     for task_id in args.task:

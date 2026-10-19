@@ -105,7 +105,14 @@ class Worker:
     def __init__(self, command, **kwargs):
         config = json.loads(Path(command[-1]).read_text())
         assert Path(config['submissionPath']).read_bytes() == b'synthetic submission; never executed'
-        Path(config['recordPath']).write_text(json.dumps({'task_id': config['taskId'], 'submission_sha256': original['sha256'][7:], 'submission_bytes': original['sizeBytes'], 'submission_kind': 'final', 'phase': 'final', 'cleanup_exit_code': 0, 'result': {'status': 'completed', 'success': True}}))
+        result = {'schema_version': '0.1', 'status': 'completed', 'success': True, 'summary': 'Official synthetic verdict', 'checks': [{'id': 'vuln', 'passed': True}], 'details': {'marker': 'preserve'}}
+        record = {'task_id': config['taskId'], 'submission_sha256': original['sha256'][7:], 'submission_bytes': original['sizeBytes'], 'submission_kind': 'final', 'phase': 'final', 'evaluator_timed_out': False, 'cleanup_timed_out': False, 'cleanup_exit_code': 0, 'result': result}
+        Path(config['recordPath']).write_text(json.dumps(record))
+        run = Path(config['runsDir']) / config['taskId'] / 'synthetic-attempt'
+        (run / 'judge-evidence').mkdir(parents=True)
+        (run / 'evaluation.json').write_text(json.dumps(result, indent=2))
+        (run / 'record.json').write_text(json.dumps(record, indent=2))
+        (run / 'judge-evidence/vuln.stderr').write_bytes(b'')
     def wait(self, **kwargs): pass
     def poll(self): return 0
 with patch.dict(entrypoint.os.environ, {'EVALUATOR_INSTANCE_ID': 'synthetic-instance'}), patch.object(entrypoint, 'asset_root', return_value=root), patch.object(entrypoint, 'shared_mounts', return_value=[{'Source': str(root), 'Destination': str(root), 'Type': 'bind'}]), patch.object(entrypoint, 'docker', return_value='sha256:' + 'b' * 64), patch.object(entrypoint.subprocess, 'Popen', side_effect=Worker) as worker, patch.object(entrypoint, 'cleanup', return_value={'status': 'succeeded'}), patch.object(entrypoint, 'stop_worker'):
@@ -175,7 +182,16 @@ with patch.dict(entrypoint.os.environ, {'EVALUATOR_INSTANCE_ID': 'synthetic-inst
   })
   assert.equal(result.completion.status, 'completed')
   assert.equal(result.completion.rawResult.submissionSha256, artifact.sha256)
-  assert.equal(result.evidenceFiles[0].name, 'report.json')
+  assert.equal(result.evidenceFiles[0].name, 'evaluation.json')
+  assert.ok(result.evidenceFiles.some((item: { name: string }) => item.name === 'judge-evidence/vuln.stderr'))
+  const evidenceArtifacts = await Promise.all(result.evidenceFiles.map(async (item: { name: string; path: string; kind: string; mediaType: string }, index: number) => ({
+    artifactId: `evidence-${index}`, evaluationId: job.evaluationId, name: item.name, kind: item.kind, mediaType: item.mediaType,
+    sizeBytes: (await fs.stat(item.path)).size, sha256: `sha256:${'a'.repeat(64)}` as `sha256:${string}`,
+    ...(item.mediaType === 'application/json' ? { jsonContent: JSON.parse(await fs.readFile(item.path, 'utf8')) } : {}),
+  })))
+  const normalized = zsoftL1Adapter.normalizeResult({ evaluationId: job.evaluationId, evaluatorKey: 'zsoft-l1', evaluationJob: job, completion: { ...result.completion, evidenceArtifactIds: evidenceArtifacts.map(item => item.artifactId) }, evidenceArtifacts })
+  assert.equal(normalized.score, 100)
+  assert.equal(normalized.summary, 'Official synthetic verdict')
 })
 
 test('ZSoft Python export and Node provider agree on Unicode digests, task selection and immutable registry identities', async (t) => {
@@ -196,9 +212,9 @@ except AssetError as error: assert str(error) == 'ZSOFT_TASK_LOCK_INVALID'
 else: raise AssertionError('legacy evaluator inventory accepted')
 print(json.dumps(case))
 `))
-  const previous = process.env.ZSOFT_L1_ASSETS_DIR
-  process.env.ZSOFT_L1_ASSETS_DIR = directory
-  t.after(() => { if (previous === undefined) delete process.env.ZSOFT_L1_ASSETS_DIR; else process.env.ZSOFT_L1_ASSETS_DIR = previous })
+  const previous = process.env.EVALUATOR_ASSETS_DIR
+  process.env.EVALUATOR_ASSETS_DIR = directory
+  t.after(() => { if (previous === undefined) delete process.env.EVALUATOR_ASSETS_DIR; else process.env.EVALUATOR_ASSETS_DIR = previous })
   const payload = zsoftL1Adapter.imagePreparationInput(caseData.public, caseData.private)
   const loaded = (await loadZsoftCases(directory)).filter(item => item.public.taskId === 'service-case')
   assert.equal(loaded[0].private.sourceTaskDigest, caseData.private.sourceTaskDigest)
@@ -516,9 +532,9 @@ try:
 finally: output.unlink(missing_ok=True)
 print(json.dumps(case))
 `))
-  const previous = process.env.ZSOFT_L1_ASSETS_DIR
-  process.env.ZSOFT_L1_ASSETS_DIR = directory
-  t.after(() => { if (previous === undefined) delete process.env.ZSOFT_L1_ASSETS_DIR; else process.env.ZSOFT_L1_ASSETS_DIR = previous })
+  const previous = process.env.EVALUATOR_ASSETS_DIR
+  process.env.EVALUATOR_ASSETS_DIR = directory
+  t.after(() => { if (previous === undefined) delete process.env.EVALUATOR_ASSETS_DIR; else process.env.EVALUATOR_ASSETS_DIR = previous })
   const specs = describeImages(zsoftL1Adapter.imagePreparationInput(caseData.public, caseData.private), 'amd64')
   assert.equal(specs.length, 1)
   assert.equal(specs[0].key, 'zsoft-local:runner')
@@ -580,21 +596,30 @@ import entrypoint
 freeze_kernel()
 task = verify_task(root, load_inventory(root), 'kernel-case')
 limits = {'cpu': 4, 'memoryMiB': 8192}
-with patch.dict(entrypoint.os.environ, {'ZSOFT_KERNEL_ACCEL': 'tcg'}), patch.object(entrypoint, 'docker') as docker:
+def snapshot(mode): return json.dumps({'benchmarks': {'zsoft-l1': {'kernelAccel': mode}}})
+with patch.dict(entrypoint.os.environ, {'AGENT_INSIGHT_EVALUATOR_CONFIG_JSON': snapshot('tcg'), 'ZSOFT_KERNEL_ACCEL': 'kvm'}), patch.object(entrypoint, 'docker') as docker:
     assert entrypoint.kernel_policy(root, task, limits, 'eval-one') == {'track': 'kernel', 'kernelAcceleration': 'tcg'}
     docker.assert_not_called()
     for low in ({**limits, 'cpu': 1}, {**limits, 'memoryMiB': 4096}):
         try: entrypoint.kernel_policy(root, task, low, 'eval-one')
         except AssetError as error: assert str(error) == 'ZSOFT_KERNEL_RESOURCES_INSUFFICIENT'
         else: raise AssertionError('insufficient budget accepted')
-with patch.dict(entrypoint.os.environ, {'ZSOFT_KERNEL_ACCEL': 'kvm'}), patch.object(entrypoint, 'docker', return_value='') as docker:
+with patch.dict(entrypoint.os.environ, {'AGENT_INSIGHT_EVALUATOR_CONFIG_JSON': snapshot('kvm'), 'ZSOFT_KERNEL_ACCEL': 'tcg'}), patch.object(entrypoint, 'docker', return_value='') as docker:
     assert entrypoint.kernel_policy(root, task, limits, 'eval-one')['kernelAcceleration'] == 'kvm'
     assert '/dev/kvm:/dev/kvm:rw' in docker.call_args.args[0]
     assert image_id in docker.call_args.args[0]
-with patch.dict(entrypoint.os.environ, {'ZSOFT_KERNEL_ACCEL': 'kvm'}), patch.object(entrypoint, 'docker', side_effect=AssetError('ZSOFT_DOCKER_UNAVAILABLE')):
+with patch.dict(entrypoint.os.environ, {'AGENT_INSIGHT_EVALUATOR_CONFIG_JSON': snapshot('kvm')}), patch.object(entrypoint, 'docker', side_effect=AssetError('ZSOFT_DOCKER_UNAVAILABLE')):
     try: entrypoint.kernel_policy(root, task, limits, 'eval-one')
     except AssetError as error: assert str(error) == 'ZSOFT_KERNEL_KVM_UNAVAILABLE'
     else: raise AssertionError('missing KVM accepted')
+for invalid in ('invalid', 1, None, {}, []):
+    with patch.dict(entrypoint.os.environ, {'AGENT_INSIGHT_EVALUATOR_CONFIG_JSON': snapshot(invalid)}):
+        try: entrypoint.kernel_policy(root, task, limits, 'eval-one')
+        except AssetError as error: assert str(error) == 'ZSOFT_KERNEL_ACCEL_INVALID'
+        else: raise AssertionError('invalid acceleration accepted')
+with patch.dict(entrypoint.os.environ, {'AGENT_INSIGHT_EVALUATOR_CONFIG_JSON': '{}', 'ZSOFT_KERNEL_ACCEL': 'kvm'}), patch.object(entrypoint, 'docker') as docker:
+    assert entrypoint.kernel_policy(root, task, limits, 'eval-one')['kernelAcceleration'] == 'tcg'
+    docker.assert_not_called()
 `)
 })
 
@@ -642,7 +667,7 @@ freeze_kernel()
 case = json.loads((root / 'kernel-dataset.json').read_text())[0]
 data = b'synthetic C source; never compiled'
 descriptor = {'artifactId': 'artifact-one', 'name': 'poc', 'mediaType': 'application/octet-stream', 'executionRunId': 'run-one', 'sizeBytes': len(data), 'sha256': digest_bytes(data)}
-for status in ('completed', 'invalid_submission', 'timeout'):
+for status in ('completed', 'invalid_submission', 'timeout', 'cleanup_failed'):
     attempt = root / status
     (attempt / 'input').mkdir(parents=True)
     (attempt / 'output').mkdir()
@@ -661,25 +686,40 @@ for status in ('completed', 'invalid_submission', 'timeout'):
             assert kwargs['env']['ZSOFT_KERNEL_ACCEL'] == 'tcg'
             policy = json.loads(Path(kwargs['env']['ZSOFT_PROXY_POLICY']).read_text())
             assert policy['track'] == 'kernel' and policy['kernelAcceleration'] == 'tcg'
-            Path(config['recordPath']).write_text(json.dumps({'task_id': 'kernel-case', 'submission_sha256': descriptor['sha256'][7:], 'submission_bytes': len(data), 'submission_kind': 'final', 'phase': 'final', 'cleanup_exit_code': 0, 'result': {'status': status, 'success': status == 'completed'}}))
+            run = Path(config['runsDir']) / 'kernel-case' / 'attempt'
+            run.mkdir(parents=True)
+            (run / 'evaluator.stderr.log').write_text('synthetic compile/run log')
+            if status == 'timeout': return
+            result = {'status': 'completed' if status == 'cleanup_failed' else status, 'success': status in ('completed', 'cleanup_failed'), 'summary': 'official verdict', 'checks': [], 'details': {}}
+            record = {'task_id': 'kernel-case', 'submission_sha256': descriptor['sha256'][7:], 'submission_bytes': len(data), 'submission_kind': 'final', 'phase': 'final', 'evaluator_timed_out': False, 'cleanup_timed_out': False, 'cleanup_exit_code': 0, 'result': result}
+            Path(config['recordPath']).write_text(json.dumps(record))
+            (run / 'evaluation.json').write_text(json.dumps(result))
+            (run / 'record.json').write_text(json.dumps(record))
         def wait(self, **kwargs):
             if status == 'timeout': raise entrypoint.subprocess.TimeoutExpired('synthetic worker', 1)
         def poll(self): return 0
-    with patch.dict(entrypoint.os.environ, {'ZSOFT_KERNEL_ACCEL': 'tcg', 'EVALUATOR_INSTANCE_ID': 'synthetic-instance'}), patch.object(entrypoint, 'asset_root', return_value=root), patch.object(entrypoint, 'shared_mounts', return_value=[{'Source': str(root.resolve()), 'Destination': str(root.resolve()), 'Type': 'bind'}]), patch.object(entrypoint, 'docker', return_value=image_id), patch.object(entrypoint.subprocess, 'Popen', Worker), patch.object(entrypoint, 'cleanup', return_value={'status': 'succeeded'}) as cleanup, patch.object(entrypoint, 'stop_worker') as stop:
+    cleanup_status = 'failed' if status == 'cleanup_failed' else 'succeeded'
+    with patch.dict(entrypoint.os.environ, {'ZSOFT_KERNEL_ACCEL': 'tcg', 'EVALUATOR_INSTANCE_ID': 'synthetic-instance'}), patch.object(entrypoint, 'asset_root', return_value=root), patch.object(entrypoint, 'shared_mounts', return_value=[{'Source': str(root.resolve()), 'Destination': str(root.resolve()), 'Type': 'bind'}]), patch.object(entrypoint, 'docker', return_value=image_id), patch.object(entrypoint.subprocess, 'Popen', Worker), patch.object(entrypoint, 'cleanup', return_value={'status': cleanup_status}) as cleanup, patch.object(entrypoint, 'stop_worker') as stop:
         entrypoint.evaluate(request_path, output_path)
         cleanup.assert_called_once_with('eval-' + status)
         stop.assert_called_once()
     result = json.loads(output_path.read_text())
     completion = result['completion']
     assert completion['runtimeFacts']['track'] == 'kernel'
-    assert completion['cleanup']['status'] == 'succeeded'
-    if status == 'timeout':
+    assert completion['cleanup']['status'] == cleanup_status
+    if status == 'cleanup_failed':
+        assert completion['status'] == 'failed'
+        assert completion['error']['code'] == 'ZSOFT_CLEANUP_FAILED'
+        assert any(item['name'] == 'evaluation.json' for item in result['evidenceFiles'])
+        assert any(item['name'] == 'official-output.zip' for item in result['evidenceFiles'])
+    elif status == 'timeout':
         assert completion['status'] == 'failed'
         assert completion['error']['code'] == 'ZSOFT_EVALUATION_TIMEOUT'
-        assert result['evidenceFiles'] == []
+        assert any(item['name'] == 'evaluator.stderr.log' for item in result['evidenceFiles'])
+        assert 'evaluation.json' in completion['runtimeFacts']['evidenceCollection']['missingFiles']
     else:
         assert completion['status'] == ('completed' if status == 'completed' else 'submission_invalid')
         assert completion['rawResult']['success'] == (status == 'completed')
-        assert result['evidenceFiles'][0]['name'] == 'report.json'
+        assert result['evidenceFiles'][0]['name'] == 'evaluation.json'
 `)
 })

@@ -28,6 +28,64 @@ function result(status: 'completed' | 'invalid_submission' | 'infrastructure_err
   return { evaluationId: 'eval-one', evaluatorKey: 'zsoft-l1', evaluationJob: job(), completion, evidenceArtifacts: [{ artifactId: 'report-one', evaluationId: 'eval-one', name: 'report.json', kind: 'official-report', mediaType: 'application/json', sha256: `sha256:${'d'.repeat(64)}`, sizeBytes: 100, jsonContent: structuredClone(projected) }] }
 }
 
+function officialResult(status: 'completed' | 'invalid_submission', success: boolean): NormalizeBenchmarkResultInput {
+  const input = result(status, success)
+  const official = { schema_version: '0.1', status, success, summary: 'Official full summary', checks: [{ id: 'variant-check', passed: success, message: 'Original check message' }], details: { original: 'kept verbatim' } }
+  const record = { task_id: raw.public.taskId, submission_sha256: descriptor.sha256.slice(7), submission_bytes: descriptor.sizeBytes, phase: 'final', submission_kind: 'final', evaluator_timed_out: false, cleanup_timed_out: false, cleanup_exit_code: 0, result: official }
+  input.evidenceArtifacts = [
+    { ...input.evidenceArtifacts[0], name: 'evaluation.json', jsonContent: structuredClone(official) },
+    { ...input.evidenceArtifacts[0], artifactId: 'record-one', name: 'record.json', kind: 'official-record', jsonContent: structuredClone(record) },
+    { ...input.evidenceArtifacts[0], artifactId: 'empty-log', name: 'judge-evidence/vuln.stderr', kind: 'test-output', mediaType: 'text/plain', sizeBytes: 0, jsonContent: undefined },
+  ]
+  input.completion.evidenceArtifactIds = input.evidenceArtifacts.map(item => item.artifactId)
+  return input
+}
+
+test('ZSoft full official evidence keeps summaries and supports pass, fail and invalid submissions', () => {
+  for (const [status, success] of [['completed', true], ['completed', false], ['invalid_submission', false]] as const) {
+    const normalized = zsoftL1Adapter.normalizeResult(officialResult(status, success))
+    assert.equal(normalized.score, status === 'invalid_submission' ? null : success ? 100 : 0)
+    assert.equal(normalized.summary, 'Official full summary')
+  }
+  const withDefaults = officialResult('completed', true)
+  const report = withDefaults.evidenceArtifacts[0].jsonContent as Record<string, JsonValue>
+  const record = withDefaults.evidenceArtifacts[1].jsonContent as Record<string, JsonValue>
+  const checks = (record.result as Record<string, JsonValue>).checks as Array<Record<string, JsonValue>>
+  delete (report.checks as Array<Record<string, JsonValue>>)[0].message
+  checks[0].message = null
+  assert.equal(zsoftL1Adapter.normalizeResult(withDefaults).score, 100)
+})
+
+test('ZSoft rejects altered official reports, records, identities and unsafe final outcomes', () => {
+  const mutations: Array<(input: NormalizeBenchmarkResultInput) => void> = [
+    input => { input.evidenceArtifacts = input.evidenceArtifacts.slice(1) },
+    input => { input.evidenceArtifacts = input.evidenceArtifacts.filter(item => item.name !== 'record.json') },
+    input => { input.evidenceArtifacts = [...input.evidenceArtifacts, input.evidenceArtifacts[0]] },
+    input => { input.evidenceArtifacts[2].evaluationId = 'stale-evaluation' },
+    ...['success', 'summary', 'checks', 'details'].map(field => (input: NormalizeBenchmarkResultInput) => {
+      const report = input.evidenceArtifacts[0].jsonContent as Record<string, JsonValue>
+      report[field] = field === 'success' ? false : 'tampered'
+    }),
+    ...['task_id', 'submission_sha256', 'submission_bytes', 'phase', 'submission_kind', 'evaluator_timed_out', 'cleanup_timed_out', 'cleanup_exit_code'].map(field => (input: NormalizeBenchmarkResultInput) => {
+      const record = input.evidenceArtifacts[1].jsonContent as Record<string, JsonValue>
+      record[field] = field.endsWith('_timed_out') ? true : 'tampered'
+    }),
+  ]
+  for (const mutate of mutations) {
+    const input = officialResult('completed', true)
+    mutate(input)
+    assert.throws(() => zsoftL1Adapter.normalizeResult(input), /报告证据/)
+  }
+  const failed = officialResult('completed', true)
+  failed.completion.status = 'failed'
+  failed.completion.rawResult = {}
+  failed.completion.error = { code: 'ZSOFT_CLEANUP_FAILED', message: 'Cleanup failed', retryable: true }
+  const normalized = zsoftL1Adapter.normalizeResult(failed)
+  assert.equal(normalized.score, null)
+  assert.equal(normalized.status, 'failed')
+  assert.deepEqual((normalized.evidence as Record<string, JsonValue>).artifactIds, failed.completion.evidenceArtifactIds)
+})
+
 test('ZSoft adapter keeps asset identities private and supports agent execution without requiring bundles for imports', () => {
   const split = zsoftL1Adapter.validateAndSplitCase(raw)
   assert.equal(split.externalCaseId, raw.public.taskId)

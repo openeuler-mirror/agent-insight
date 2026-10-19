@@ -9,10 +9,12 @@ import re
 import signal
 import subprocess
 import sys
+from uuid import uuid4
 from pathlib import Path
 
 from assets import AssetError, digest_bytes, load_inventory, source_task_digest, verify_task
 from docker_proxy import REAL_DOCKER, host_path
+from evidence import collect_evidence
 
 HERE = Path(__file__).resolve().parent
 MESSAGES = {
@@ -29,6 +31,10 @@ MESSAGES = {
     "ZSOFT_EVALUATION_TIMEOUT": "ZSoft 评测超时",
     "ZSOFT_EVALUATION_CANCELLED": "ZSoft 评测已取消",
     "ZSOFT_CLEANUP_FAILED": "ZSoft 运行资源清理未完成",
+    "ZSOFT_EVIDENCE_INVALID": "ZSoft 官方输出目录不合法或包含不安全文件",
+    "ZSOFT_EVIDENCE_COLLECTION_FAILED": "ZSoft 官方输出未完整收集，请查看证据采集状态",
+    "ZSOFT_OFFICIAL_REPORT_MISSING": "ZSoft 未生成官方判定报告或报告与最终记录不一致",
+    "ZSOFT_OFFICIAL_INFRASTRUCTURE_ERROR": "ZSoft 官方判题发生基础设施故障，请查看已保留的官方输出",
 }
 
 
@@ -40,7 +46,9 @@ def docker(args: list[str], timeout: int = 30) -> str:
 
 
 def asset_root() -> Path:
-    configured = os.environ.get("EVALUATOR_ASSETS_DIR") or os.environ.get("ZSOFT_L1_ASSETS_DIR", "/data/benchmark-assets/zsoft-l1")
+    configured = os.environ.get("EVALUATOR_ASSETS_DIR")
+    if not configured:
+        raise AssetError("ZSOFT_ASSET_ROOT_MISSING")
     root = Path(configured)
     if not root.is_absolute() or not root.is_dir() or root.is_symlink():
         raise AssetError("ZSOFT_ASSET_ROOT_MISSING")
@@ -75,7 +83,11 @@ def inspect_images(images: dict[str, str], prepared: list[dict] | None = None) -
 
 
 def kernel_acceleration() -> str:
-    value = os.environ.get("ZSOFT_KERNEL_ACCEL", "tcg").strip().lower()
+    try:
+        config = json.loads(os.environ.get("AGENT_INSIGHT_EVALUATOR_CONFIG_JSON", "{}"))
+        value = config.get("benchmarks", {}).get("zsoft-l1", {}).get("kernelAccel", "tcg")
+    except (ValueError, AttributeError):
+        raise AssetError("ZSOFT_KERNEL_ACCEL_INVALID") from None
     if value not in ("tcg", "kvm"):
         raise AssetError("ZSOFT_KERNEL_ACCEL_INVALID")
     return value
@@ -217,8 +229,9 @@ def evaluate(request_path: Path, output_path: Path) -> None:
     completion = {"status": "failed", "rawResult": {}, "runtimeFacts": {}, "cleanup": {"status": "pending"}}
     evidence = []
     worker = None
-    work = output_path.parent.parent / "work"
-    work.mkdir(mode=0o700, exist_ok=True)
+    work = output_path.parent.parent / "work" / uuid4().hex
+    work.mkdir(mode=0o700, parents=True)
+    task_id = None
 
     def interrupted(_number, _frame):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -231,6 +244,7 @@ def evaluate(request_path: Path, output_path: Path) -> None:
         root = asset_root()
         inventory = load_inventory(root)
         task, relative_artifact = validate_request(request, root, inventory)
+        task_id = job["payload"]["taskId"]
         artifact = (request_path.parent / relative_artifact).resolve()
         if relative_artifact.is_absolute() or not artifact.is_relative_to(request_path.parent) or artifact.is_symlink() or not artifact.is_file():
             raise AssetError("ZSOFT_ARTIFACT_PATH_INVALID")
@@ -281,10 +295,9 @@ def evaluate(request_path: Path, output_path: Path) -> None:
         if status not in ("completed", "invalid_submission") or type(result.get("success")) is not bool or (status != "completed" and result["success"]):
             raise AssetError("ZSOFT_RESULT_INVALID")
         raw = {"sourceTaskDigest": task["sourceTaskDigest"], "taskId": config["taskId"], "submissionSha256": descriptor["sha256"], "bundleDigest": inventory["bundleDigest"], "taskDigest": task["taskDigest"], "status": status, "success": result["success"]}
-        report = output_path.parent / "report.json"
-        report.write_text(json.dumps(raw))
-        evidence = [{"name": "report.json", "kind": "official-report", "mediaType": "application/json", "path": "report.json"}]
         completion.update(status="completed" if status == "completed" else "submission_invalid", rawResult=raw, runtimeFacts={"revision": inventory["revision"], "bundleDigest": inventory["bundleDigest"], **runtime_policy})
+        if status == "invalid_submission":
+            completion["error"] = {"code": "ZSOFT_SUBMISSION_INVALID", "message": "PoC 不符合官方提交要求", "retryable": False}
     except Exception as error:
         code = error_code(error)
         completion["error"] = {"code": code, "message": MESSAGES.get(code, "ZSoft 评测资产或运行状态异常"), "retryable": code in ("ZSOFT_DOCKER_UNAVAILABLE", "ZSOFT_EVALUATION_TIMEOUT")}
@@ -293,7 +306,24 @@ def evaluate(request_path: Path, output_path: Path) -> None:
         completion["cleanup"] = cleanup(evaluation_id)
         if completion["cleanup"]["status"] != "succeeded":
             completion.update(status="failed", rawResult={}, error={"code": "ZSOFT_CLEANUP_FAILED", "message": MESSAGES["ZSOFT_CLEANUP_FAILED"], "retryable": True})
-            evidence = []
+        if task_id is not None:
+            try:
+                evidence, facts = collect_evidence(work, task_id, output_path.parent)
+                completion["runtimeFacts"]["evidenceCollection"] = facts
+                if facts["errors"]:
+                    raise AssetError("ZSOFT_EVIDENCE_COLLECTION_FAILED")
+                if completion["status"] != "failed":
+                    report = next((item for item in evidence if item["name"] == "evaluation.json"), None)
+                    if not report or report["mediaType"] != "application/json":
+                        raise AssetError("ZSOFT_OFFICIAL_REPORT_MISSING")
+                    official = json.loads((output_path.parent / report["path"]).read_bytes())
+                    if official.get("status") != completion["rawResult"]["status"] or type(official.get("success")) is not bool or official["success"] != completion["rawResult"]["success"]:
+                        raise AssetError("ZSOFT_OFFICIAL_REPORT_MISSING")
+            except Exception as error:
+                code = error_code(error)
+                completion["runtimeFacts"].setdefault("evidenceCollection", {}).setdefault("errors", []).append(MESSAGES.get(code, "ZSoft 官方输出采集失败"))
+                if completion["status"] != "failed":
+                    completion.update(status="failed", rawResult={}, error={"code": code, "message": MESSAGES.get(code, "ZSoft 官方输出采集失败"), "retryable": False})
         output_path.write_text(json.dumps({"protocolVersion": "evaluator-output/v1", "completion": completion, "evidenceFiles": evidence}, ensure_ascii=False))
 
 

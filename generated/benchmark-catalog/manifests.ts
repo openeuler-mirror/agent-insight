@@ -542,6 +542,24 @@ export const generatedBenchmarkManifests = {
           "kind": "official-report",
           "label": "评测报告",
           "order": 20
+        },
+        {
+          "source": "evidence",
+          "kind": "official-record",
+          "label": "官方执行记录",
+          "order": 30
+        },
+        {
+          "source": "evidence",
+          "kind": "harness-log",
+          "label": "运行日志",
+          "order": 40
+        },
+        {
+          "source": "evidence",
+          "kind": "official-output-archive",
+          "label": "完整官方输出",
+          "order": 50
         }
       ]
     }

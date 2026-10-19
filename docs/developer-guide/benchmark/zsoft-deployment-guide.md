@@ -14,13 +14,19 @@ npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
 
 首次执行获取官方仓库 `https://gitcode.com/linmalin/muyuan-sec.git` 的固定提交 `7f7d675eff19eec27745ddcd24b1efaf398bb753`，缓存到 `~/.agent-insight/benchmark-assets/zsoft-l1/`，解析 30 道正式题（24 道 userspace、6 道 kernel）并导入数据库。已安装时直接复用数据库，不访问来源。导入后正常运行 `bash scripts/start.sh` 启动服务；旧启动参数 `--benchmark` 和选择变量 `AGENT_INSIGHT_BENCHMARK` 已移除。
 
-**平台机器离线准备：** 将官方 L1 包目录或完整仓库放在本机目录，在 `~/.agent-insight/.env` 设置：
+**平台机器离线准备：** 将官方 L1 包目录或完整仓库放在本机目录，在项目 `config/benchmark/platform.local.yaml` 设置：
 
-```dotenv
-ZSOFT_DATASET_SOURCE=/srv/datasets/zsoft-l1
+```yaml
+benchmarks:
+  zsoft-l1:
+    dataset:
+      source: /srv/datasets/zsoft-l1
+      revision: null
 ```
 
-L1 目录包含 `tasks/<task-id>/task.json` 与 `public/README.md`；完整仓库根目录内的 `benchmarks/vulnerability/zsoft-l1` 也能识别。仍运行同一启动命令，平台不需要 Docker、构建状态或私有判题资产。在线镜像可设置 HTTP(S) Git 仓库来源，`ZSOFT_DATASET_REVISION` 指定完整 40 位提交；离线按实际题目内容识别，有 Git 元数据时附带真实 revision。
+L1 目录包含 `tasks/<task-id>/task.json` 与 `public/README.md`；完整仓库根目录内的 `benchmarks/vulnerability/zsoft-l1` 也能识别。仍运行同一数据准备命令，平台不需要 Docker、构建状态或私有判题资产。在线镜像将 `dataset.source` 设置为 HTTP(S) Git 仓库地址，`dataset.revision` 指定完整 40 位小写提交哈希；两项 `null` 使用接入包固定的官方来源与版本。离线按实际题目内容识别，有 Git 元数据时附带真实 revision。相对路径按声明配置的文件所在目录解析。
+
+旧 `ZSOFT_DATASET_SOURCE`、`ZSOFT_DATASET_REVISION` 不再生效，发现残留时提示迁移。不要再把它们写入 `.env`。已经导入数据库的数据不会因修改来源配置自动更新，需要显式刷新。
 
 无需重启服务的管理命令：
 
@@ -128,15 +134,18 @@ bash scripts/evaluator.sh start \
 
 `/data` 是容器内路径，默认由 Docker 命名卷 `agent-insight-benchmark-evaluator-data` 提供，宿主机无需创建 `/data`。可以预先用 Docker 的 local volume 驱动将同名卷绑定到有权限且空间充足的宿主目录；应在首次创建卷前配置，已有数据卷迁移需按运维流程保留数据。
 
-`ZSOFT_L1_ASSETS_DIR` 是可选的**资产存储根目录**，不是某个 release 的最终目录。需要更换卷内存放位置时可使用：
+在评测机项目的 `config/benchmark/evaluator.local.yaml` 设置可选的**资产存储根目录**与加速模式：
 
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url <平台地址> \
-  --evaluator-env ZSOFT_L1_ASSETS_DIR=/data/custom-assets/zsoft-l1
+```yaml
+benchmarks:
+  zsoft-l1:
+    assetsDir: /data/custom-assets/zsoft-l1
+    kernelAccel: tcg
 ```
 
-实际版本目录仍自动追加镜像摘要。自定义根目录必须位于 Controller 与 Runtime 共享的可写 bind/volume 中；目录不共享、不可写、校验失败或拉取连续失败会给出明确错误。下载最多重试三次，失败后排除原因并重启 Controller 重试；不会无限显示“等待镜像准备”。安装期间平台显示准备、下载或校验评测资产，健康检查保留对应阶段。不同镜像摘要使用不同目录，旧目录保留，不覆盖历史版本；历史手工解压的目录不会被自动认作已安装版本。
+`assetsDir: null` 使用默认根目录，实际版本目录仍自动追加镜像摘要。自定义根目录必须位于 Controller 与 Runtime 共享的可写 bind/volume 中，通常使用 `/data` 内的路径；不会自动添加新的宿主机挂载。目录不共享、不可写、校验失败或拉取连续失败会给出明确错误。下载最多重试三次，失败后排除原因并重启 Controller 重试；不会无限显示“等待镜像准备”。安装期间平台显示准备、下载或校验评测资产，健康检查保留对应阶段。不同镜像摘要使用不同目录，旧目录保留，不覆盖历史版本；历史手工解压的目录不会被自动认作已安装版本。
+
+修改后重新执行 `bash scripts/evaluator.sh start --platform-base-url <平台地址>`。旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 只提示迁移，不再覆盖 YAML；不要再用 `--evaluator-env` 传入这两项。Controller 将校验后的配置快照和解析后的实际资产目录传给 Runtime，无需用户设置内部变量。平台与评测服务在不同机器时，各自在对应机器配置；自定义配置目录可用 `AGENT_INSIGHT_CONFIG_DIR`。
 
 ZSoft 与 SWE-bench 使用相同的 Runtime 准备流程：首次调用复用匹配的本地镜像，缺失时先拉取，失败后按接入包 Dockerfile 自动构建并校验 Catalog artifact 摘要。启动 Controller 不预热 Runtime。本方案不上传 Runtime，保持 `EVALUATOR_RUNTIME_IMAGE_PREFIX` 未设置，评测机需要访问基础镜像和 Python 依赖来源。
 
@@ -232,7 +241,7 @@ swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64@sha256:a
 
 该版本包含全部 30 题，bundleDigest 为 `sha256:d73939d50ff543cbbe7a5a23e15ece361ed89d0dd998ab0f3cdace63e23621f9`。已使用空 Docker 配置核对公有匿名拉取；未运行 Judge 或 QEMU。
 
-加速模式默认 `tcg`，无需 `/dev/kvm`，但启动和执行可能较慢，实际超时预算待统一实题测试确定。此前检查 119 未提供 `/dev/kvm`，因此当前以 TCG 为部署起点；需要 KVM 时应先由宿主机开启虚拟化或嵌套虚拟化，再改为 `--evaluator-env ZSOFT_KERNEL_ACCEL=kvm`。平台 Runtime 本身无需设备或 privileged 权限，受控代理只向实际 runner 开放 `/dev/kvm:rw`；实际评测在拉取 runner 后检查 KVM API，失败返回 `ZSOFT_KERNEL_KVM_UNAVAILABLE`。doctor 只检查资产与加速配置，不代表已验证 KVM 或 QEMU 启动。
+加速模式默认 `tcg`，无需 `/dev/kvm`，但启动和执行可能较慢，实际超时预算待统一实题测试确定。此前检查 119 未提供 `/dev/kvm`，因此当前以 TCG 为部署起点；需要 KVM 时应先由宿主机开启虚拟化或嵌套虚拟化，再将 `evaluator.local.yaml` 中 `benchmarks.zsoft-l1.kernelAccel` 改为 `kvm` 并重新启动评测服务。平台 Runtime 本身无需设备或 privileged 权限，受控代理只向实际 runner 开放 `/dev/kvm:rw`；实际评测在拉取 runner 后检查 KVM API，失败返回 `ZSOFT_KERNEL_KVM_UNAVAILABLE`。doctor 只检查资产与加速配置，不代表已验证 KVM 或 QEMU 启动。
 
 评测 CPU、内存预算仍通过平台现有资源配置传入。代理按 `vuln/fix` 两个服务均分，要求总 CPU 至少为两版 metadata 中最大 `smp` 的两倍，总内存至少为 `2 × (最大 memory_mb + 512)` MiB，不满足返回 `ZSOFT_KERNEL_RESOURCES_INSUFFICIENT`。当前官方 6 题每版内存为 2048 MiB、CPU 为 1 或 2，现有默认 4 CPU / 8192 MiB 满足此启动检查；并发容量及 TCG 耗时仍需部署后测定。平台全量数据集、执行客户端 v2 能力和对应原生任务目录也需同步准备。
 

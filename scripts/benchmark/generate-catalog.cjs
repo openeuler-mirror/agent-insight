@@ -270,7 +270,9 @@ function loadPackage(packageDir) {
     sourcePath: string(evaluator.assets.sourcePath, 'evaluator.assets.sourcePath', /^\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*$/),
     releaseId: string(evaluator.assets.releaseId, 'evaluator.assets.releaseId', /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
     bundleDigest: string(evaluator.assets.bundleDigest, 'evaluator.assets.bundleDigest', /^sha256:[a-f0-9]{64}$/),
-    directoryEnv: string(evaluator.assets.directoryEnv, 'evaluator.assets.directoryEnv', /^[A-Z][A-Z0-9_]*$/),
+    ...(evaluator.assets.directoryEnv == null ? {} : {
+      directoryEnv: string(evaluator.assets.directoryEnv, 'evaluator.assets.directoryEnv', /^[A-Z][A-Z0-9_]*$/),
+    }),
     verifyCommand: string(evaluator.assets.verifyCommand, 'evaluator.assets.verifyCommand', /^(python3|node)$/),
     verifyEntrypoint: resolveInside(evaluatorDir, evaluator.assets.verifyEntrypoint, 'evaluator.assets.verifyEntrypoint'),
   }

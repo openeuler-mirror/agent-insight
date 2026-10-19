@@ -6,6 +6,10 @@ benchmarks:
     loader:
       sourceArchive: null
       python: null
+  zsoft-l1:
+    dataset:
+      source: null
+      revision: null
   scheduling:
     maxPendingEvaluations: 256
     maxPendingEvaluationsPerUser: 128

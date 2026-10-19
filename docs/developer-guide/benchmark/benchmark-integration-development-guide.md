@@ -465,7 +465,7 @@ Entrypoint、Smoke 和 Dockerfile 必须位于接入包内。Catalog 按接入�
 
 接入包可选声明 `assets`：`image` 必须为固定 `repository@sha256`，同时声明镜像内 `sourcePath`、`releaseId`、`bundleDigest`、可选部署目录变量名 `directoryEnv`、`verifyCommand`（`python3` 或 `node`）及包内 `verifyEntrypoint`。Controller 在启动后台准备资产，调用校验器时依次传入目录、release ID、bundleDigest。校验器只读取文件与元数据，不执行 Judge 或构建任务。
 
-通用安装器按镜像摘要创建版本目录，拉取后从未启动容器复制、校验，再原子发布；并发请求共享准备状态，重启重新校验缓存。默认存储根为 `<EVALUATOR_DATA_DIR>/benchmark-assets/<benchmarkKey>`，目录变量只覆盖根路径，实际目录仍追加摘要。OCI 资产必须在 Controller 与 Runtime 共享卷内。Provider 的第三个参数 `assetsDir` 和 Runtime 环境 `EVALUATOR_ASSETS_DIR` 均为该接入实际解析出的版本目录，不从任务 payload 获取，也不修改全局环境变量。
+通用安装器按镜像摘要创建版本目录，拉取后从未启动容器复制、校验，再原子发布；并发请求共享准备状态，重启重新校验缓存。默认存储根为 `<EVALUATOR_DATA_DIR>/benchmark-assets/<benchmarkKey>`；配置 Schema 注册了 `benchmarks.<key>.assetsDir` 的接入包使用该 YAML 字段，`null` 使用默认根目录，不再回退旧目录变量。未注册此字段的其他接入包仍可使用 `directoryEnv`。实际目录仍追加摘要。OCI 资产必须在 Controller 与 Runtime 共享卷内。Provider 的第三个参数 `assetsDir` 和 Runtime 环境 `EVALUATOR_ASSETS_DIR` 均为该接入实际解析出的版本目录，不从任务 payload 获取，也不修改全局环境变量。
 
 准备期间 admission 返回可重试的 `EVALUATOR_ASSETS_PREPARING`、`EVALUATOR_ASSETS_DOWNLOADING` 或 `EVALUATOR_ASSETS_VERIFYING`；安装失败返回不可重试的具体错误。健康检查通过 binding 的 `runtimeFacts.assetStage/assetErrorCode` 暴露状态，平台在健康检查和下发响应两条路径均保留错误及详细原因。没有声明资产的接入包不增加准备流程，公共 Controller 不含 ZSoft 分支。
 
@@ -533,7 +533,15 @@ entrypoint/
 - `submission_invalid`：提交物在业务上不可评，例如 Patch 无法应用；
 - `failed`：Evaluator、容器、下载、超时或其他基础设施失败。
 
-`rawResult` 必须符合 `schemas/result.schema.json`。Evidence 文件名必须安全、唯一，路径必须位于输出目录。每个实际产生的 Evidence 都应返回，不能因 Presentation 未配置而丢弃。
+`rawResult` 必须符合 `schemas/result.schema.json`。Evidence 的 `name` 可以是安全、唯一的相对路径（如 `judge-evidence/vuln-result.json`），总长不超过 512、最多 16 段，每段匹配 `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`；禁止绝对路径、空段、反斜线和 `.`/`..`。`path` 及其真实文件路径必须位于输出目录。证据支持零字节日志，单文件仍限制 64 MiB；提交物的非空要求不变。平台按 Artifact ID 存储文件，保留原相对路径用于前端可展开目录与证据包，不直接将其作为落盘文件名。每个实际产生的 Evidence 都应返回，不能因 Presentation 未配置而丢弃。
+
+### ZSoft 官方评测证据
+
+ZSoft 不再把平台的任务哈希摘要作为官方报告。独立工作目录内的官方 `evaluation.json`、`record.json`、`evaluator.{stdout,stderr}.log`、`cleanup.{stdout,stderr}.log` 原字节复制；`judge-evidence/` 和 `public-feedback/` 递归保留全部普通文件及相对目录，并提供 `official-output.zip`。不导出 `context.json`、`compose.env`、提交物副本、隐藏判题源码或其他工作文件。拒绝符号链接、特殊文件及越界路径。
+
+成功结果必须有官方报告和执行记录；Adapter 核对任务、提交物摘要/大小、final 阶段、清理/超时状态以及报告和执行记录的最终判定、summary、checks、details。最终评分仍来自官方执行记录，原始报告不会被平台改写。旧版单个摘要 `report.json` 仍按原契约校验，历史实验需重评才能获得新证据。
+
+失败、超时和清理失败均收集已产生的官方输出，不清空证据。缺失文件和采集错误记录在 `runtimeFacts.evidenceCollection`；不存在的文件不生成占位报告。异常或未写完的 JSON 以二进制类型上传原字节，仍可查看原文，避免 JSON 解析错误阻止整个失败回调。单次收集最多 1024 个文件、总大小 256 MiB，单文件及 ZIP 不超过 64 MiB；不安全文件或超限时明确标记采集失败、不静默截断，已安全收集的文件仍保留。
 
 ### 9.4 运行要求
 
@@ -763,6 +771,8 @@ python3 scripts/benchmark/zsoft-validate.py \
 
 P1 通过要求 reference 为 `completed/success=true`、negative 为 `completed/success=false`，两者均保留 `submission_kind=final` 的完整私有记录，并检查本次新增 Compose 容器和网络是否清理。基础设施故障不能当作 negative 通过。结果、命令日志、镜像 ID 和内核资产摘要写入输出目录；这些私有验证记录不能交给执行 Agent。验证期间应避免其他任务并发创建 Compose 资源，以免剩余资源检查受到干扰。
 
+独立 `zsoft-validate.py` 同样通过 Node.js 配置加载器读取 `evaluator.local.yaml` 的 `benchmarks.zsoft-l1.kernelAccel`，并在调用官方 CLI 时内部转换为框架环境；不再读取旧用户加速变量。需提供 Node.js，配置错误在创建验证输出目录前报错。
+
 
 ### ZSoft 自动生成 PoC 的执行契约
 
@@ -788,4 +798,6 @@ Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构�
 
 内核题复用同一个 ZSoft Evaluator Runtime、任务协议和结果归一化。接入包将 `runner_image` 交给通用镜像池；`.task-state/<task-id>/{vuln,fix}/artifacts/` 中的 `bzImage`、metadata 和模块作为独立的冻结文件资产，按流式 SHA-256 校验，不作为 Docker 引用。资产打包支持合并同官方 revision、同框架摘要的冻结快照，评测机始终不访问数据库。
 
-`ZSOFT_KERNEL_ACCEL` 默认为 `tcg`，可显式配置 `kvm`。平台 Judge 所在 Runtime 不挂 KVM 设备，官方 Judge 的配置阶段使用 TCG；受控 Compose 代理向实际 runner 设置选定的 `KERNEL_ACCEL`，KVM 模式只开放 `/dev/kvm:rw`。实际评测在已准备的 runner 镜像中检查宿主机 KVM API，失败返回基础设施错误。资源预算按两服务分摊，并在启动前校验每版内核声明的 CPU、内存及 512 MiB 额外内存；提交编译失败保持 `submission_invalid`，超时、取消和容器/网络清理复用已有路径。doctor 校验资产、轨道和加速配置，不在冷缓存时拉镜像或启动 QEMU；KVM 可用性在实际评测前检查。
+ZSoft 平台配置为 `benchmarks.zsoft-l1.dataset.{source,revision}`，默认 `null` 使用接入包固定的官方来源与版本。评测配置为 `benchmarks.zsoft-l1.assetsDir`（默认 `null`）和 `kernelAccel`（默认 `tcg`，可选 `kvm`）；旧四个 ZSoft 业务变量仅提示迁移、不再生效。Controller 向 Runtime 传递校验后的 `AGENT_INSIGHT_EVALUATOR_CONFIG_JSON` 快照，Python 从该快照读取加速模式，不直接解析 YAML 或读取旧用户变量。MCTS 的 `ZSOFT_TASKS_DIR` 不属于平台业务配置，保持原契约。
+
+平台 Judge 所在 Runtime 不挂 KVM 设备，官方 Judge 的配置阶段仍通过内部环境注入 TCG；受控 Compose 代理向实际 runner 设置 YAML 选定的 `KERNEL_ACCEL`，KVM 模式只开放 `/dev/kvm:rw`。实际评测在已准备的 runner 镜像中检查宿主机 KVM API，失败返回基础设施错误。资源预算按两服务分摊，并在启动前校验每版内核声明的 CPU、内存及 512 MiB 额外内存；提交编译失败保持 `submission_invalid`，超时、取消和容器/网络清理复用已有路径。doctor 校验资产、轨道和加速配置，不在冷缓存时拉镜像或启动 QEMU；KVM 可用性在实际评测前检查。

@@ -68,6 +68,12 @@ test('online Git preparation pins a commit, validates cached content, and cleans
   git(['commit', '--quiet', '-m', 'fixture'])
   const revision = git(['rev-parse', 'HEAD']).trim()
   const source = 'https://datasets.example.test/official.git'
+  const configDir = path.join(root, 'config')
+  await fs.mkdir(configDir)
+  await fs.writeFile(path.join(configDir, 'platform.local.yaml'), JSON.stringify({ benchmarks: { 'zsoft-l1': { dataset: { source, revision } } } }))
+  const previousConfig = process.env.AGENT_INSIGHT_CONFIG_DIR
+  process.env.AGENT_INSIGHT_CONFIG_DIR = configDir
+  t.after(() => { if (previousConfig === undefined) delete process.env.AGENT_INSIGHT_CONFIG_DIR; else process.env.AGENT_INSIGHT_CONFIG_DIR = previousConfig })
   const configEnv = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${repository}.insteadOf`, GIT_CONFIG_VALUE_0: source, GIT_ALLOW_PROTOCOL: 'file' }
   for (const [key, value] of Object.entries(configEnv)) {
     const previous = process.env[key]
@@ -75,13 +81,13 @@ test('online Git preparation pins a commit, validates cached content, and cleans
     t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous })
   }
   const cacheRoot = path.join(root, 'cache')
-  const cache = await prepareZsoftSource({ source, revision, cacheRoot })
+  const cache = await prepareZsoftSource({ cacheRoot })
   assert.equal((await loadZsoftCases(cache))[0].private.revision, revision)
   git(['commit', '--allow-empty', '--quiet', '-m', 'new upstream version'])
-  assert.equal(await prepareZsoftSource({ source, revision, cacheRoot }), cache)
+  assert.equal(await prepareZsoftSource({ cacheRoot }), cache)
   assert.equal(execFileSync('git', ['-C', cache, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), revision)
   await fs.rename(repository, `${repository}-unavailable`)
-  assert.equal(await prepareZsoftSource({ source, revision, cacheRoot }), cache)
+  assert.equal(await prepareZsoftSource({ cacheRoot }), cache)
   await assert.rejects(prepareZsoftSource({ source, revision: 'f'.repeat(40), cacheRoot }))
   assert.deepEqual(await fs.readdir(cacheRoot), [path.basename(cache)])
   await fs.writeFile(path.join(cache, 'tasks/c-case/public/README.md'), 'changed cached source')
