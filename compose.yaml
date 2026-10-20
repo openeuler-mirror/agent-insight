@@ -1,0 +1,25 @@
+name: agent-insight-customer
+
+services:
+  agent-insight:
+    # 交付方固定此镜像标签；离线交付前先用 docker load 导入对应镜像包。
+    image: agent-insight:dev-jh
+    pull_policy: never
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "3000:3000"
+    environment:
+      # 用户只需填写这一项：协议 + IP/域名 + 端口；不带路径。暂不跳转可留空。
+      AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN: ""
+    volumes:
+      - data:/data/agent-insight
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  data:
+    name: agent-insight-customer-data

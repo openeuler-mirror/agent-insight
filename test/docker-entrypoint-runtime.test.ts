@@ -45,8 +45,11 @@ function fixture(t: TestContext) {
     fs.writeFileSync(path.join(packageRoot, 'scripts/db_push.sh'), '#!/bin/sh\nprintf "db-push\\n" >> "$FIXTURE_MARKERS"\n');
     fs.writeFileSync(path.join(packageRoot, '.next/standalone/server.js'), `
         const { runtimeOwner } = require(${JSON.stringify(path.resolve('src/lib/runtime-cleanup/ownership.ts'))});
+        const { resolveInferenceAnalysisConfig, buildInferenceAnalysisUrl } = require(${JSON.stringify(path.resolve('src/lib/trace/inference-analysis-link.ts'))});
         const owner = runtimeOwner(process.env.AGENT_INSIGHT_HOME);
-        process.stdout.write('RUNTIME_READY ' + JSON.stringify({ owner, pid: process.pid }) + '\\n');
+        const analysisOrigin = process.env.AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN;
+        const analysisUrl = buildInferenceAnalysisUrl(resolveInferenceAnalysisConfig(analysisOrigin), 'compose-probe');
+        process.stdout.write('RUNTIME_READY ' + JSON.stringify({ owner, pid: process.pid, analysisOrigin, analysisUrl }) + '\\n');
         setInterval(() => {}, 1000);
     `);
     fs.writeFileSync(path.join(home, '.env'), 'AGENT_INSIGHT_RUNTIME_OWNER="forged-by-env-file"\nAGENT_INSIGHT_LOG_DIR=/var/log/agent-insight\n');
@@ -75,7 +78,7 @@ function fixture(t: TestContext) {
                 if (line) { clearTimeout(timeout); resolve(line.slice('RUNTIME_READY '.length)); }
             });
         });
-        return { child, ...JSON.parse(ready) as { owner?: { id: string; scope: string; fd: number }; pid: number } };
+        return { child, ...JSON.parse(ready) as { owner?: { id: string; scope: string; fd: number }; pid: number; analysisOrigin?: string; analysisUrl?: string } };
     }
     return { root, home, env, entrypoint, markerFile, workdir, launch };
 }
@@ -122,4 +125,32 @@ test('real Docker entrypoint rejects a second source deployment before validatin
     assert.doesNotMatch(second.stderr, /package\.json/);
     assert.equal(fs.readFileSync(sentinel, 'utf8'), 'untouched');
     assert.equal(fs.readFileSync(setup.markerFile, 'utf8'), prepared);
+});
+
+test('Compose analysis origin takes precedence over a persisted .env through the complete entrypoint', async t => {
+    const setup = fixture(t);
+    const envFile = path.join(setup.home, '.env');
+    fs.appendFileSync(envFile, 'AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN=http://old.example.test:8080\n');
+    const original = fs.readFileSync(envFile, 'utf8');
+    setup.env.AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN = 'https://analysis.example.test:9443';
+    const running = await setup.launch();
+    assert.equal(running.analysisOrigin, 'https://analysis.example.test:9443');
+    assert.equal(running.analysisUrl, 'https://analysis.example.test:9443/model-performance?GlobalTrackNO=compose-probe');
+    assert.equal(fs.readFileSync(envFile, 'utf8'), original);
+});
+
+test('an explicitly empty Compose analysis origin disables links despite a persisted address', async t => {
+    const setup = fixture(t);
+    fs.appendFileSync(path.join(setup.home, '.env'), 'AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN=http://old.example.test:8080\n');
+    setup.env.AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN = '';
+    const running = await setup.launch();
+    assert.equal(running.analysisOrigin, '');
+    assert.equal(running.analysisUrl, undefined);
+});
+
+test('legacy deployments keep reading the analysis origin from .env when Compose does not set it', async t => {
+    const setup = fixture(t);
+    fs.appendFileSync(path.join(setup.home, '.env'), 'AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN=http://existing.example.test:8080\n');
+    const running = await setup.launch();
+    assert.equal(running.analysisUrl, 'http://existing.example.test:8080/model-performance?GlobalTrackNO=compose-probe');
 });
