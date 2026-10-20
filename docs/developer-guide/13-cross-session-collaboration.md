@@ -93,7 +93,7 @@ Trace 列表显式请求协作 worker 折叠。默认“仅主 Agent”范围排
 
 Goal Plus 投影计划把列表隐藏与详情合并分开：`hiddenChildren` 包含已声明 worker 与已合并子节点；其中尚未合并的已声明 worker 进入 `pendingChildren`；`links` 只包含当前可读的主从关系。main binding、主 Trace 或 worker 正文仍 pending 时，已声明 worker 不回退成默认主记录，详情也不会凭空生成正文。
 
-过滤发生在数据库分页和聚合之前，保证 page size、total 与统计一致；不改写 `Execution.isSubagent`。普通 reported 只有成功投影才隐藏，查询失败保留原列表。已识别 Goal Plus 声明后发生解析查询失败时保留该隐藏集合；全局投影安全限制触发时回退原列表。全局上限为 200 个协作组、2000 条关系、200 个 Session、32 MiB 正文。
+过滤发生在数据库分页和聚合之前，保证 page size、total 与统计一致；不改写 `Execution.isSubagent`。普通 reported 只有成功投影才隐藏，查询失败保留原列表。协作组按 collaborationId 游标每批 200 组读取，不限制账号的历史协作组总数。2000 条关系、200 个 Session、32 MiB 正文的投影上限按单个协作组检查，不跨组累计。单组超限或解析失败只让该组及共享 Trace 的关联组回退原列表，其余 MCTS / Goal Plus 组继续合并。异常组通过同用户绑定和事件端点元数据确定影响范围；无法读取这些元数据或协作组列表时才全局回退。失败链路中已声明的 Goal Plus worker 不再隐藏，父导航标记 unavailable；普通正文晚到仍按原有 pending 规则处理。
 
 ## 独立协作图
 

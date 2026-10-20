@@ -190,5 +190,165 @@ test('HTTP handlers and SQLite merge locator-free reports, recompute late traces
         assert.equal(await client.execution.count({ where: { isSubagent: true } }), 0);
         const page = await client.execution.findMany({ where: { user: 'alice', taskId: { notIn: links.map(x => x.child) } }, take: 1 });
         assert.equal(page[0].taskId, 'A');
+
+        const history = Array.from({ length: 201 }, (_, index) => `history-${String(index).padStart(3, '0')}`);
+        const now = new Date().toISOString();
+        const traceIds = history.flatMap(id => [`${id}-parent`, `${id}-child`]);
+        await client.execution.createMany({ data: traceIds.map(id => ({ id, taskId: id, user: 'alice', framework: 'mcts-xgovernor' })) });
+        await client.session.createMany({ data: traceIds.map(taskId => ({ taskId, user: 'alice', interactions: JSON.stringify([call(taskId, 'read', taskId)]) })) });
+        await client.collaboration.createMany({ data: history.map(id => ({ id, user: 'alice', collaborationId: id, createdAt: now })) });
+        await client.collaborationEvent.createMany({ data: history.map(id => ({
+            id, collaborationDbId: id, user: 'alice', collaborationId: id, eventId: id,
+            fromSessionId: `${id}-parent`, toSessionId: `${id}-child`,
+            eventBodyJson: JSON.stringify({ collaborationId: id, eventId: id, fromSessionId: `${id}-parent`, toSessionId: `${id}-child`, description: 'dispatch' }),
+            contentHash: 'fixture', receivedAt: now,
+        })) });
+        const largePlan = await projection.plan('alice');
+        assert.ok(history.every(id => largePlan.hiddenChildren.includes(`${id}-child`)));
+        assert.ok(largePlan.links.some(link => link.child === workerTraceId));
+        assert.ok(largePlan.links.some(link => link.parent === 'A' && link.child === 'B'));
+        const listWhere = { user: 'alice', taskId: { notIn: largePlan.hiddenChildren, startsWith: 'history-' } };
+        assert.equal(await client.execution.count({ where: listWhere }), 201);
+        const secondPage = await client.execution.findMany({ where: listWhere, orderBy: { taskId: 'asc' }, skip: 10, take: 10 });
+        assert.deepEqual(secondPage.map(row => row.taskId), history.slice(10, 20).map(id => `${id}-parent`));
+
+        const originalGraph = service.graph.bind(service);
+        service.graph = async (user, id, ...args) => {
+            if (id === history[0]) throw new Error('one collaboration unavailable');
+            return originalGraph(user, id, ...args);
+        };
+        const partialFailure = await projection.plan('alice');
+        assert.equal(partialFailure.hiddenChildren.includes(`${history[0]}-child`), false);
+        assert.ok(partialFailure.hiddenChildren.includes(`${history[200]}-child`));
+        assert.ok(partialFailure.hiddenChildren.includes(workerTraceId));
+        assert.deepEqual((await projection.plan('bob')).hiddenChildren, []);
     } finally { await client.$disconnect(); }
+});
+
+type ProjectionGroupFixture = {
+    id: string;
+    tasks: string[];
+    parents?: number[];
+    bytes?: number;
+    pending?: Set<string>;
+    failure?: 'snapshot' | 'graph' | 'body' | 'incomplete';
+    eventCount?: number;
+};
+
+function projectionFixture(groups: ProjectionGroupFixture[]) {
+    const pages: string[] = [];
+    const byId = new Map(groups.map(group => [group.id, group]));
+    const sessionId = (group: ProjectionGroupFixture, index: number) => group.id.startsWith('gp.')
+        ? index === 0 ? 'main' : `worker:${index}` : `runtime:${index}`;
+    const events = (group: ProjectionGroupFixture) => group.tasks.slice(1).map((_, index) => ({
+        eventId: `${group.id}:${index}`, fromSessionId: sessionId(group, group.parents?.[index] ?? 0),
+        toSessionId: sessionId(group, index + 1), fromLocator: { toolName: 'task' },
+        fromAnchor: { status: 'confirmed', position: { interactionIndex: index, callIndex: 0, callKey: `${index}` } },
+    }));
+    const service = {
+        store: {
+            sql: {
+                rows: async (sql: string, values: string[]) => {
+                    assert.equal(values[0], 'alice');
+                    if (sql.includes('WITH endpoints')) return byId.get(values[1])!.tasks.map(traceSessionId => ({ traceSessionId }));
+                    if (sql.includes('FROM "Collaboration"')) {
+                        pages.push(values[1]);
+                        return groups.filter(group => group.id > values[1]).sort((a, b) => a.id.localeCompare(b.id))
+                            .slice(0, 200).map(group => ({ collaborationId: group.id }));
+                    }
+                    const group = groups.find(group => group.tasks.includes(values[1]))!;
+                    if (group.failure === 'body') throw new Error('body metadata unavailable');
+                    if (group.pending?.has(values[1])) return [];
+                    return [{ bytes: group.bytes ?? 200_000, embedded: null, isSubagent: false, id: values[1], agentName: values[1], framework: 'test' }];
+                },
+            },
+            snapshot: async (_user: string, id: string) => {
+                const group = byId.get(id)!;
+                if (group.failure === 'snapshot') throw new Error('snapshot unavailable');
+                return {
+                    complete: true,
+                    bindings: group.tasks.map((traceSessionId, index) => ({ sessionId: sessionId(group, index), traceSessionId })),
+                    events: events(group).map(event => ({ sourceType: 'reported', bodyJson: JSON.stringify(event) })),
+                };
+            },
+        },
+        graph: async (_user: string, id: string) => {
+            const group = byId.get(id)!;
+            if (group.failure === 'graph') throw new Error('graph unavailable');
+            const reported = events(group);
+            return {
+                resolutionComplete: group.failure !== 'incomplete',
+                nodes: group.tasks.map((task, index) => ({ sessionId: sessionId(group, index), traceSessionId: task, executionId: task })),
+                events: group.eventCount ? Array.from({ length: group.eventCount }, () => reported[0]) : reported,
+            };
+        },
+    };
+    return { projection: new CollaborationProjection(service as unknown as CollaborationService), pages };
+}
+
+function projectionGroup(index: number, goalPlus = false, count = 11): ProjectionGroupFixture {
+    return {
+        id: goalPlus ? `gp.${index.toString(16).padStart(32, '0')}` : `mcts.${String(index).padStart(4, '0')}`,
+        tasks: Array.from({ length: count }, (_, member) => `trace-${index}-${member}`),
+    };
+}
+
+test('MCTS and Goal Plus keep merging beyond account-wide group, session, relation and byte limits', async () => {
+    const groups = Array.from({ length: 205 }, (_, index) => projectionGroup(index, index % 2 === 0));
+    const mcts = projectionGroup(1000, false, 7);
+    mcts.parents = [0, 0, 2, 0, 0, 0];
+    groups.push(mcts);
+    const { projection, pages } = projectionFixture(groups);
+    const plan = await projection.plan('alice');
+    assert.equal(plan.unavailable, undefined);
+    assert.equal(plan.links.length, 2056);
+    assert.equal(plan.hiddenChildren.length, 2056);
+    assert.equal(pages.length, 2);
+    assert.ok(plan.links.some(link => link.parent === mcts.tasks[2] && link.child === mcts.tasks[3]));
+    assert.ok(plan.links.some(link => link.independent && link.parent === groups[0].tasks[0]));
+    const merged = await projection.interactions('alice', mcts.tasks[0], async taskId => ({
+        session: { user: 'alice' }, interactions: [call(taskId, 'read', taskId)],
+    }), plan);
+    assert.equal(merged?.length, 7);
+    assert.deepEqual(new Set(merged?.map(item => item._collaboration.taskId)), new Set(mcts.tasks));
+    assert.equal(await projection.interactions('alice', mcts.tasks[0], async () => ({
+        session: { user: 'bob' }, interactions: [call('private', 'read', 'private')],
+    }), plan), null);
+});
+
+test('Goal Plus late workers retain pending and parent navigation behavior among many historical traces', async () => {
+    const live = projectionGroup(1000, true, 3);
+    live.pending = new Set([live.tasks[2]]);
+    const { projection } = projectionFixture([...Array.from({ length: 101 }, (_, i) => projectionGroup(i, false, 2)), live]);
+    const pending = await projection.plan('alice');
+    assert.ok(pending.hiddenChildren.includes(live.tasks[2]));
+    assert.ok(pending.pendingChildren.includes(live.tasks[2]));
+    assert.equal(pending.links.some(link => link.child === live.tasks[2]), false);
+    assert.equal(pending.parentAgents?.[live.tasks[1]].state, 'resolved');
+    assert.ok(pending.links.some(link => link.child === live.tasks[1]));
+    live.pending.clear();
+    const ready = await projection.plan('alice');
+    assert.ok(ready.links.some(link => link.child === live.tasks[2]));
+    assert.equal(ready.pendingChildren.includes(live.tasks[2]), false);
+    assert.equal(ready.parentAgents?.[live.tasks[2]].state, 'resolved');
+});
+
+test('failed or oversized groups degrade only their connected traces, including cross-group aliases', async () => {
+    for (const kind of ['snapshot', 'graph', 'body', 'incomplete', 'sessions', 'bytes', 'events'] as const) {
+        const broken = projectionGroup(1, false, kind === 'sessions' ? 201 : 2);
+        if (kind === 'sessions') broken.bytes = 10;
+        else if (kind === 'bytes') broken.bytes = 17 * 1024 * 1024;
+        else if (kind === 'events') broken.eventCount = 2001;
+        else broken.failure = kind;
+        const connected = projectionGroup(2, true, 2);
+        connected.tasks[0] = broken.tasks.at(-1)!;
+        const unaffected = projectionGroup(3, true, 2);
+        const healthy = projectionGroup(4, false, 2);
+        const { projection } = projectionFixture([broken, connected, unaffected, healthy]);
+        const plan = await projection.plan('alice');
+        assert.equal(plan.unavailable, undefined, kind);
+        assert.deepEqual(new Set(plan.hiddenChildren), new Set([unaffected.tasks[1], healthy.tasks[1]]), kind);
+        assert.equal(plan.parentAgents?.[connected.tasks[1]].state, 'unavailable', kind);
+        assert.equal(plan.links.length, 2, kind);
+    }
 });
