@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,7 +18,8 @@ import { listCodeAgentOtelSpoolFiles } from '@/lib/ingest/codeagent-otel/spool';
 import type { ClaudeOtelEvent } from '@/lib/ingest/claude-otel/types';
 import { listClaudeOtelSpoolFiles, listOtelTraceSpoolFiles } from '@/lib/ingest/claude-otel/spool';
 import { listSources } from '@/lib/ingest/otel-consumer/sources';
-import { computeOwnSkills, extractExplicitSkillsFromNode } from '@/lib/storage/data-service';
+import { computeOwnSkills, extractExplicitSkillsFromNode, saveExecutionRecord, shouldRefreshStoredQueryFromInteractions } from '@/lib/storage/data-service';
+import { prismaRaw } from '@/lib/storage/prisma';
 
 const attr = (key: string, value: any) => ({
   key,
@@ -542,4 +544,79 @@ test('CodeAgent spool source is registered ahead of generic OTel sources', () =>
     listSources().map((source) => source.id),
     ['deepseek-harness-otel-logs', 'codeagent-otel-logs', 'claude-otel-logs', 'actrail-otel-traces', 'otel-traces'],
   );
+});
+
+test('CodeAgent query refresh recognizes UUID placeholders without matching user titles or other frameworks', () => {
+  const placeholder = `CodeAgent Session ${randomUUID()}`;
+  assert.equal(shouldRefreshStoredQueryFromInteractions(placeholder, 'codeagent'), true);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(placeholder.toUpperCase(), 'codeagent'), true);
+  assert.equal(shouldRefreshStoredQueryFromInteractions('CodeAgent Session troubleshooting', 'codeagent'), false);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(`${placeholder} troubleshooting`, 'codeagent'), false);
+  assert.equal(shouldRefreshStoredQueryFromInteractions('用户设置的任务标题', 'codeagent'), false);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(placeholder, 'opencode'), false);
+});
+
+test('CodeAgent replaces an early placeholder in Execution and Session when the user prompt arrives', async () => {
+  const sessionId = randomUUID();
+  const user = `test-codeagent-query-${sessionId}`;
+  const start = event(sessionId, 'agent.start', 1, { agent_name: 'main' });
+  const prompt = event(sessionId, 'user_prompt', 11, { prompt: '你是？', agent_name: 'main' });
+  const saveSnapshot = async (events: ClaudeOtelEvent[]) => {
+    const record = aggregateCodeAgentOtelEvents(sessionId, events);
+    assert.ok(record);
+    const result = await saveExecutionRecord({
+      ...record,
+      user,
+      skip_evaluation: true,
+      skip_internal_judgment: true,
+    });
+    assert.equal(result.success, true);
+  };
+  const readQueries = async () => {
+    const execution = await prismaRaw.execution.findUnique({ where: { id: sessionId }, select: { query: true } });
+    const session = await prismaRaw.session.findUnique({ where: { taskId: sessionId }, select: { query: true } });
+    return [execution?.query, session?.query];
+  };
+
+  try {
+    await saveSnapshot([start]);
+    const placeholder = `CodeAgent Session ${sessionId}`;
+    assert.deepEqual(await readQueries(), [placeholder, placeholder]);
+    await saveSnapshot([start, prompt]);
+    assert.deepEqual(await readQueries(), ['你是？', '你是？']);
+    await saveSnapshot([start, prompt, event(sessionId, 'user_prompt', 12, { prompt: '下一轮输入' })]);
+    assert.deepEqual(await readQueries(), ['你是？', '你是？']);
+  } finally {
+    await prismaRaw.execution.deleteMany({ where: { id: sessionId, user } });
+    await prismaRaw.session.deleteMany({ where: { taskId: sessionId, user } });
+    await prismaRaw.registeredAgent.deleteMany({ where: { platform: 'codeagent', user } });
+  }
+});
+
+test('CodeAgent repairs a saved placeholder from interactions while preserving a custom task title', async () => {
+  for (const customTitle of [false, true]) {
+    const sessionId = randomUUID();
+    const user = `test-codeagent-existing-query-${sessionId}`;
+    const query = customTitle ? 'CodeAgent Session troubleshooting' : `CodeAgent Session ${sessionId}`;
+    try {
+      const result = await saveExecutionRecord({
+        task_id: sessionId,
+        framework: 'codeagent',
+        user,
+        query,
+        interactions: [{ role: 'user', agent: 'main', content: '你是？' }],
+        skip_evaluation: true,
+        skip_internal_judgment: true,
+      });
+      assert.equal(result.success, true);
+      const expected = customTitle ? query : '你是？';
+      const execution = await prismaRaw.execution.findUnique({ where: { id: sessionId }, select: { query: true } });
+      const session = await prismaRaw.session.findUnique({ where: { taskId: sessionId }, select: { query: true } });
+      assert.deepEqual([execution?.query, session?.query], [expected, expected]);
+    } finally {
+      await prismaRaw.execution.deleteMany({ where: { id: sessionId, user } });
+      await prismaRaw.session.deleteMany({ where: { taskId: sessionId, user } });
+      await prismaRaw.registeredAgent.deleteMany({ where: { platform: 'codeagent', user } });
+    }
+  }
 });
