@@ -374,8 +374,8 @@ if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$I
 fi
 
 if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_QODER" = "true" ]; then
-    echo "WARNING: Back up your Agent configuration before installation. Model addresses, hooks, plugins and Qoder CLI launchers may be overwritten. No automatic backup, restore, or uninstall is provided."
-    echo "警告：安装前请自行备份 Agent 配置；安装会改写模型地址、Hook、插件和 Qoder CLI 启动入口，不提供自动备份、回退或卸载。"
+    echo "WARNING: Back up your Agent configuration before installation. Collector hooks and plugin settings may be updated. Model addresses are unchanged; optional model forwarding requires a separate explicit command with backups."
+    echo "警告：安装前请自行备份 Agent 配置；采集安装会更新 Hook 和插件配置，不改写模型地址。模型转发需安装后单独执行显式命令，该命令会自动备份模型配置。"
     echo "Configuration paths: ~/.config/opencode/ (including tui.json; also XDG_CONFIG_HOME and custom paths), ~/.qoder-cn/settings.json, ~/.qoder/settings.json, ~/.qoderworkcn/settings.json, ~/.qoderwork/settings.json. Record original Qoder CLI launcher paths."
 fi
 
@@ -1498,8 +1498,8 @@ function generatePowerShellScript(
         '}',
         '',
         'if ($INSTALL_OPENCODE -or $INSTALL_QODER) {',
-        '    Write-Warning "WARNING: Back up your Agent configuration before installation. Model addresses, hooks, plugins and Qoder CLI launchers may be overwritten. No automatic backup, restore, or uninstall is provided."',
-        '    Write-Warning "警告：安装前请自行备份 Agent 配置；安装会改写模型地址、Hook、插件和 Qoder CLI 启动入口，不提供自动备份、回退或卸载。"',
+        '    Write-Warning "WARNING: Back up your Agent configuration before installation. Collector hooks and plugin settings may be updated. Model addresses are unchanged; optional model forwarding requires a separate explicit command with backups."',
+        '    Write-Warning "警告：安装前请自行备份 Agent 配置；采集安装会更新 Hook 和插件配置，不改写模型地址。模型转发需安装后单独执行显式命令，该命令会自动备份模型配置。"',
         '    Write-Host "Configuration paths: ~/.config/opencode/ (including tui.json; also XDG_CONFIG_HOME and custom paths), ~/.qoder-cn/settings.json, ~/.qoder/settings.json, ~/.qoderworkcn/settings.json, ~/.qoderwork/settings.json. Record original Qoder CLI launcher paths."',
         '}',
         '',

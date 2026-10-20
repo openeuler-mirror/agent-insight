@@ -174,27 +174,35 @@ AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN=http://inference.example.com:8080
 
 页面链接自动生成为 `http://inference.example.com:8080/model-performance?GlobalTrackNO=<模型调用ID>`。未配置、地址无效或历史数据缺少统一调用 ID 时，弹窗会说明原因。
 
-### 自动接入本地统一推理入口
+### 显式接入本地统一推理入口
 
-在“客户端安装”中选择 Qoder 或 OpenCode，执行 Linux/macOS 的 curl 安装命令即可。安装器先启动并检查本机转发进程，再改写已识别 Provider 的模型地址。执行前请自行备份模型与采集配置；安装器不自动备份，也不提供自动恢复或卸载。继续使用原来的模型名、Provider 名和 API Key；在已托管的模型之间切换，无需手动填写转发地址。
+采集安装与模型转发分开执行。在“客户端安装”选择 OpenCode 或 Qoder，先执行 Linux/macOS curl 命令安装采集组件。该步骤只更新采集 Hook / 插件及其运行配置，不改写模型地址，也不会自动接管新增 Provider。采集配置仍请在安装前自行备份。
 
-目前自动接入覆盖 Qoder CN CLI 的自定义 OpenAI-compatible Provider，以及 OpenCode 的 OpenAI-compatible、OpenAI、Anthropic 显式 Base URL。Qoder CLI 通过受管 `qoderclicn` 启动入口在原进程读配置前同步；`qodercn` 的 CLI 分支也会经过它。OpenCode 由插件处理最终合并配置，项目配置和环境内联配置中新增的 Provider 也在模型加载前处理。API Key 仍按原模型协议传给原上游，`AGENT_INSIGHT_API_KEY` 只用于平台采集账号。
+需要推理分析关联时，在 **Agent 项目目录**执行安装页“可选：启用 / 同步模型转发”命令。例如 OpenCode：
 
-Qoder 原生 IDE 与 JetBrains 插件当前保留 Trace 采集，但尚无已验证的模型地址接管适配；ARM64 不改变这个能力边界。安装输出会明确提示“模型地址未接管”。这两种产品的本地消息 ID 不作为推理服务响应 ID，不据此生成推理调用关联。安装器报告的受管地址数量只统计用户持久配置，不含历史路由和运行时配置快照，也不等同实际请求已经验证。
+```bash
+sh ~/.agent-insight/model-proxy.sh opencode
+```
 
-Qoder CN JetBrains 的 Token 采集可自动识别 `.qoder-cn` 下的本地数据库，并兼容旧 `.qoder` 目录。只有本地用量记录、没有会话正文时，可以保留模型调用的消息 ID 和 Token 统计，但不会补造回答正文或推理分析链接。
+Shell 脚本自动定位安装目录并优先复用安装时记录的 Node 路径；找不到时检查当前 PATH。**底层仍要求 Node.js 20+**，curl 安装也有相同要求，不会自动安装 Node。若两处都没有兼容版本，脚本明确提示并停止，模型配置不变。自定义 `AGENT_INSIGHT_HOME` 时，使用安装输出中的 `sh "<安装目录>/model-proxy.sh" opencode`。
 
-- **切换模型**：已托管 Provider 下的模型、主 Agent / 子 Agent / 辅助模型均使用同一入口，每次实际 HTTP 请求生成新的调用 ID。
-- **新增或修改 Provider**：后台同步已登记的配置文件。OpenCode 在重新加载配置时同步；Qoder 运行中通过 `/model` 新增或修改 Provider 后，需重新启动 CLI，确保新地址在首次请求前接入。后台轮询不保证运行中的下一次请求没有绕过窗口。
-- **升级 Qoder**：后台会重新绑定同目录下由 Qoder 升级器替换的版本链接。升级后应重新运行安装命令并重启 CLI，确认启动器仍受管；绕过受管命令直接运行版本二进制不在自动接入范围。
+Qoder CN CLI 将最后一个参数换成 `qoder`；同时处理两者可用 `opencode,qoder`。命令先检查本地转发服务和配置格式，备份配置，再登记原始上游并替换受支持的模型地址。模型名、API Key、注释和其他配置保持原样。OpenCode 实际字段为 1.x 的 `provider.<id>.options.baseURL`、2.x 的 `providers.<id>.settings.baseURL`；Qoder 为 `providers.<id>.baseUrl`。
 
-**安装前备份范围**：OpenCode 的 `~/.config/opencode/`（或 `XDG_CONFIG_HOME` / 自定义目录，含模型、插件和 `tui.json`），Qoder 的 `~/.qoder-cn/settings.json`、`~/.qoder/settings.json`、`~/.qoderworkcn/settings.json`、`~/.qoderwork/settings.json` 中实际使用的文件，以及 Qoder CLI 原启动入口路径。Windows 安装也会改写采集 Hook / 插件配置。配置备份可能包含模型密钥，请由用户妥善保存。安装后如需撤销，应先退出 Agent，再依据自行保存的备份手工调整对应模型地址、Hook、插件及启动入口，避免整份覆盖安装后新增的配置；平台不提供一键处理入口。GUI 模型配置位置及版本边界见[采集器开发指南](../../developer-guide/09-trace-collector.md#qoder-gui-模型存储与接入边界)。
+命令会输出每份配置对应的两个备份位置，位于 `$AGENT_INSIGHT_HOME/inference-proxy/backups/<文件标识>/`（默认 `~/.agent-insight/`）：
 
-同步遇到无效配置时会明确失败，请先修复文件再重试。`inference-proxy` 下的运行状态用于模型转发，不是配置备份；不要依赖它进行回退。
+- `original.jsonc`：第一次执行显式命令前的完整文件，后续不覆盖。旧版本已接管的配置，其首次原件可能已经包含转发地址。
+- `latest.jsonc`：保留本次执行时的用户配置、新模型、Provider、密钥变更和删除，并将已登记的转发地址还原成原始上游地址；每次显式执行同步更新。环境变量地址保留原表达式。
 
-推理服务统一读取 `X-Agent-Insight-Call-Id` 并为它建立索引；503 等失败请求也已携带 ID。整条 Trace 汇总调用 ID，成功模型调用对应具体 LLM；Qoder 无法精确归属的失败尝试留在整条 Trace。分析页接收单个 `GlobalTrackNO`，因此整条 Trace 入口提供逐请求链接，不把多个 ID 拼成一个参数。
+备份可能含 API Key，只保存在本机，目录权限 700、文件权限 600；命令不打印密钥。备份失败时不改写模型配置。多文件写入期间遇到并发修改会停止，已完成的文件可能已经生效，原始地址和备份仍保留；修复问题后可重跑。当前不提供一键恢复或卸载。手工恢复前请退出 Agent，并合并上次执行命令之后的新修改。
 
-此自动流程限 Unix CLI 与上述显式模型地址，未覆盖 Qoder 内置账号模型、IDE 私有模型设置、OpenCode 未识别协议或 Windows 自动代理。独立手动入口 `node scripts/inference_gateway.mjs <config.json>` 仍可用；同机采集器和入口必须使用同一 `AGENT_INSIGHT_HOME` 与平台账号。关联文件位于 `inference-gateway`，完成采集上传前应保留。没有部署中央网关或跨机器同步。
+- **切换已有模型**：同一受管 Provider 下模型共享入口，无需重新执行命令，每次实际 HTTP 请求生成新的调用 ID。
+- **新增模型 / Provider，或修改上游**：重新执行同一命令，然后重启 Agent 会话。已改写的地址按登记记录识别，避免再次代理自身；新增或改回真实地址的 Provider 会登记并改写，`latest.jsonc` 同步更新。新 Provider 在显式命令执行前保持直连，不生成统一调用 ID。
+- **配置范围**：OpenCode 扫描全局目录、当前项目及祖先目录（到 Git 根目录）、`OPENCODE_CONFIG` / `OPENCODE_CONFIG_DIR`；自定义环境变量需传给命令。Qoder 支持 `QODERCN_CONFIG_DIR` 及命令后追加 `--config-dir`、`--cwd`、`--setting-sources`、`--settings <文件>`。内联配置、缺少显式地址、未识别协议会保持原样或报告未支持。
+- **重启客户端机器**：Qoder 使用前重跑上述命令启动本机转发进程；OpenCode 插件可为已经登记的转发地址重新启动进程。新安装不包装 Qoder 可执行文件。升级旧版采集组件会停用旧后台改写逻辑，仅更新仍由我们持有且未被用户修改的旧包装器为透传参数版本。
+
+目前覆盖 OpenCode 的 OpenAI-compatible / OpenAI / Anthropic 显式 Base URL，以及 Qoder CN CLI 的受支持自定义 Provider。Qoder 原生 IDE / JetBrains 只支持采集，模型地址接管尚未完成；ARM64 不改变该边界。内置账号模型、GUI 私有配置、Windows 自动代理不在此次显式命令的安装支持范围。
+
+推理服务继续统一读取 `X-Agent-Insight-Call-Id`；503 等失败请求也携带 ID。整条 Trace 汇总调用 ID，精确匹配的模型调用对应具体 LLM；Qoder 无法精确归属的失败尝试留在整条 Trace。分析页接收单个 `GlobalTrackNO`，整条 Trace 入口提供逐请求链接。同机采集器和转发组件必须使用同一 `AGENT_INSIGHT_HOME` 与平台账号；`inference-gateway` 关联记录在完成上传前应保留。
 
 从列表点击进入详情，或在导入成功后点击“打开 Trace”，均可用浏览器后退返回原列表，保留原来的筛选条件和页码；浏览器前进可重新打开详情。详情顶部的“返回列表”始终打开当前筛选下的列表，通过分享链接直接进入详情时也可使用。
 

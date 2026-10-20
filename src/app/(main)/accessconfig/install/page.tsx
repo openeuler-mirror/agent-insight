@@ -52,6 +52,7 @@ export default function AccessInstallPage() {
     const installProfile = resolveInstallProfile(
         INSTALL_FRAMEWORK_OPTIONS.filter(option => frameworks.includes(option.value)),
     );
+    const proxyCmd = frameworks.length ? 'sh ~/.agent-insight/model-proxy.sh ' + frameworks.join(',') : '';
     const effectiveFrameworks = installProfile.effectiveFrameworks.map(option => option.value);
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -138,8 +139,8 @@ export default function AccessInstallPage() {
                             </p>
                             <p style={{ margin: 0 }}>
                                 {isZh
-                                    ? <>OpenCode 和 Qoder CLI 支持自动模型转发。Qoder GUI 的模型配置需单独适配。</>
-                                    : <>OpenCode and Qoder CLI support automatic model forwarding. Qoder GUI model settings require separate adapters.</>}
+                                    ? <>采集安装不改写模型地址。OpenCode 和 Qoder CLI 可在安装后显式启用模型转发；Qoder GUI 尚不支持模型地址接管。</>
+                                    : <>Collector installation leaves model addresses unchanged. Explicitly enable model forwarding for OpenCode or Qoder CLI after installation; Qoder GUI endpoint takeover is unavailable.</>}
                             </p>
                         </div>
                     </div>
@@ -177,14 +178,14 @@ export default function AccessInstallPage() {
                                     </h2>
                                     <p style={{ margin: '0 0 6px' }}>
                                         {isZh
-                                            ? '安装会改写受支持的模型地址、Hook 和插件配置，并可能覆盖已有配置文件。请在执行下方命令前自行备份；安装器不自动备份，也不提供一键恢复或卸载。'
-                                            : 'Installation rewrites supported model addresses, hooks, and plugin settings and may overwrite existing configuration files. Back them up before running a command below. The installer does not create backups or provide one-click restore or uninstall.'}
+                                            ? '采集安装会更新 Hook 和插件配置，请先自行备份这些配置；安装命令不改写模型地址。可选的模型转发命令会单独备份模型配置。不提供一键恢复或卸载。'
+                                            : 'Collector installation updates hooks and plugin settings; back them up first. Installation leaves model addresses unchanged. The optional forwarding command backs up model configuration separately. One-click restore and uninstall are not provided.'}
                                     </p>
                                     <p style={{ margin: 0 }}>
                                         {isZh ? '备份范围：' : 'Back up: '}
                                         <code>~/.config/opencode/</code>{isZh ? '（或 XDG_CONFIG_HOME / 自定义配置路径，含模型、插件和 tui.json），项目内 ' : ' (or XDG_CONFIG_HOME / custom configuration paths, including model, plugin, and tui.json settings), project '}
                                         <code>opencode.json(c)</code>、<code>.opencode/</code>、<code>.qoder/</code>{isZh ? '，以及 ' : ', and '}
-                                        <code>~/.qoder-cn/settings.json</code>、<code>~/.qoder/settings.json</code>、<code>~/.qoderworkcn/settings.json</code>、<code>~/.qoderwork/settings.json</code>{isZh ? ' 及实际使用的自定义目录。Qoder CLI 的启动入口也可能被改写，请同时记录原启动路径。' : ', and any custom locations you use. Qoder CLI launchers may also be rewritten; record their original paths.'}
+                                        <code>~/.qoder-cn/settings.json</code>、<code>~/.qoder/settings.json</code>、<code>~/.qoderworkcn/settings.json</code>、<code>~/.qoderwork/settings.json</code>{isZh ? ' 及实际使用的自定义目录。' : ', and any custom locations you use.'}
                                     </p>
                                     <p style={{ margin: '6px 0 0' }}>
                                         {isZh ? 'Qoder Token 采集还会修改 ' : 'Qoder Token collection also updates '}
@@ -214,6 +215,23 @@ export default function AccessInstallPage() {
                                 onCopy={() => handleCopy(windowsCmd, 'windows')}
                                 locale={locale}
                             />
+
+                            <CommandCard
+                                icon={<Terminal size={14} strokeWidth={2.2} />}
+                                label={isZh ? '可选：启用 / 同步模型转发（Linux / macOS）' : 'Optional: enable / sync model forwarding (Linux / macOS)'}
+                                hint={isZh ? '安装采集后，在 Agent 项目目录单独执行。将模型地址改为本机转发入口，原地址登记到本机路由。新增 Provider 或修改上游后，重新执行同一命令。' : 'Run separately from the Agent project after collector installation. Replaces model URLs with the local gateway and registers upstream routes. Repeat after adding providers or changing upstreams.'}
+                                cmd={proxyCmd}
+                                unavailableMessage={isZh ? '请先选择 OpenCode 或 Qoder' : 'Select OpenCode or Qoder first'}
+                                copied={copied === 'proxy'}
+                                onCopy={() => handleCopy(proxyCmd, 'proxy')}
+                                locale={locale}
+                            />
+                            <div style={hintBox}>
+                                <Info size={16} style={{ flexShrink: 0 }} />
+                                <div style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+                                    {isZh ? '命令执行前会自动备份并输出位置：original.jsonc 保留首次原件；latest.jsonc 同步用户后续修改和新增模型，并保留原始上游地址。备份位于 AGENT_INSIGHT_HOME/inference-proxy/backups/（默认 ~/.agent-insight/），可能包含 API Key，请妥善保管。后台不会自动接管新地址；修改后请重启 Agent 会话。脚本复用安装时的 Node.js 20+，缺失时会提示并停止。自定义安装目录请使用安装输出中的 sh 命令。' : 'The command backs up configuration before changes and prints its location: original.jsonc preserves the first copy; latest.jsonc includes later edits and models with original upstream URLs. Backups live under AGENT_INSIGHT_HOME/inference-proxy/backups/ (default ~/.agent-insight/) and may contain API keys. New endpoints are never enrolled in the background. Restart Agent sessions after changes. The script reuses Node.js 20+ from installation and stops if unavailable. For a custom installation directory, use the sh command printed by the installer.'}
+                                </div>
+                            </div>
 
                             {/* Footer hint */}
                             <div style={hintBox}>

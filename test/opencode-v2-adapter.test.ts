@@ -102,7 +102,7 @@ test('V2 context hook preserves system prompts with native model identity', asyn
 })
 
 
-test('V2 setup fails closed for lost event streams and managed WebSockets, while disabled proxy preserves transport', async () => {
+test('V2 setup restricts HTTP transport to explicitly managed providers and fails closed for lost event streams', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-v2-setup-'))
   const before = { ...process.env }
   const registry: Record<string, any> = {}
@@ -112,20 +112,26 @@ test('V2 setup fails closed for lost event streams and managed WebSockets, while
   try {
     const setup = (plugin as any).setupOpenCodeV2
     cleanup = await setup({ location: { directory: root }, session: { context: async () => [], hook: async (name: string, fn: any) => { registry[name] = fn } }, provider: { transform: async (fn: any) => { transform = fn } }, event: { subscribe: async function* ({ signal }: any) { await new Promise<void>(r => { endStream = r; signal.addEventListener('abort', () => r(), { once: true }) }) } } })
-    const provider = { id: 'local', settings: { transport: 'websocket' } }
+    const provider = { id: 'local', settings: { transport: 'websocket', baseURL: 'https://user.example/v1' } }
     const editor = { list: () => [{ provider }], update: (_id: string, fn: any) => fn(provider) }
-    transform(editor); assert.equal(provider.settings.transport, 'websocket')
+    await transform(editor); assert.equal(provider.settings.transport, 'websocket')
     fs.mkdirSync(path.join(root, 'inference-proxy'))
     const installation = path.join(root, 'inference-proxy/installation.json')
     fs.writeFileSync(installation, JSON.stringify({ enabled: true, agents: ['opencode'] }))
-    transform(editor); assert.equal(provider.settings.transport, 'http')
-    await assert.rejects(registry['experimental.ws.handshake']({}), /WebSocket.*blocked/)
+    fs.mkdirSync(path.join(root, 'inference-runtime'))
+    for (const name of ['inference_proxy.mjs', 'inference_config.mjs', 'inference_gateway.mjs']) fs.copyFileSync(path.resolve('scripts', name), path.join(root, 'inference-runtime', name))
+    await transform(editor); assert.equal(provider.settings.transport, 'websocket')
+    const managed = 'http://127.0.0.1:18080/managed/opencode/test'
+    fs.writeFileSync(path.join(root, 'inference-proxy/config-state.json'), JSON.stringify({ files: { config: { agent: 'opencode', fields: { local: { managed } } } } }))
+    provider.settings.baseURL = managed
+    await transform(editor); assert.equal(provider.settings.transport, 'http')
     const req: any = { sessionID: 'ses_A', agent: 'build', model, kind: 'primary', headers: {} }
     await registry['model.request'](req)
     req.request = new Request('http://localhost/v1/chat/completions', { method: 'POST', headers: req.headers, body: '{}' })
-    await assert.rejects(registry['http.request'](req), /Cannot find module/, 'missing installed runtime must not bypass proxy')
+    await registry['http.request'](req)
+    assert.equal(req.request.url, 'http://localhost/v1/chat/completions', 'unmanaged HTTP endpoint remains direct')
     fs.writeFileSync(installation, JSON.stringify({ enabled: false, agents: ['opencode'] }))
-    await registry['experimental.ws.handshake']({})
+    assert.equal(registry['experimental.ws.handshake'], undefined)
     endStream(); await new Promise(r => setImmediate(r))
     await assert.rejects(registry['http.request'](req), /event stream unavailable/)
   } finally {

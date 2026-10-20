@@ -24,8 +24,14 @@ function context(options = {}) {
   const insightDir = options.insightDir || env.AGENT_INSIGHT_HOME || path.join(homeDir, '.agent-insight')
   return { ...options, env, homeDir, insightDir, root: path.join(insightDir, 'inference-proxy') }
 }
-function loadInstall(c) { return read(path.join(c.root, 'installation.json'), { enabled: false, agents: [], files: [], launchers: [] }) }
-function saveInstall(c, value) { atomic(path.join(c.root, 'installation.json'), JSON.stringify(value)) }
+function loadInstall(c) {
+  const state = read(path.join(c.root, 'installation.json'), { enabled: false, agents: [], files: [], launchers: [] })
+  return { ...state, enabled: state.explicitEnabled ?? state.enabled }
+}
+function saveInstall(c, value) {
+  // Cached legacy plugins check only enabled; keep their automatic enrollment disabled.
+  atomic(path.join(c.root, 'installation.json'), JSON.stringify({ ...value, explicitEnabled: value.enabled, enabled: false }))
+}
 function accountKey(c) {
   if (c.env.AGENT_INSIGHT_API_KEY !== undefined) return c.env.AGENT_INSIGHT_API_KEY
   let key = ''
@@ -108,7 +114,7 @@ async function healthy(c) {
 async function ensureDaemon(c, installation) {
   const existing = await healthy(c)
   const accountHash = hash(accountKey(c) || 'anonymous').slice(0, 16)
-  if (existing && existing.accountHash === accountHash && existing.runtimePath === self) return existing
+  if (existing && existing.accountHash === accountHash && existing.runtimePath === self && existing.policy === 'explicit-v1') return existing
   if (existing) await stopDaemon(c)
   const log = fs.openSync(path.join(c.root, 'daemon.log'), 'a', 0o600)
   const child = spawn(installation.nodePath || process.execPath, [self, 'daemon', c.insightDir], {
@@ -127,9 +133,8 @@ function mergeFiles(...groups) {
   })).values()]
 }
 function syncKnown(c, install, origin, extra = []) {
-  const files = mergeFiles(install.files || [], discoverConfigFiles({ ...c, agents: install.agents }), extra)
-  const result = syncConfigFiles({ insightDir: c.insightDir, origin, files, env: c.env })
-  refreshLaunchers(c, install)
+  const files = mergeFiles((install.files || []).filter(item => install.agents.includes(item.agent)), discoverConfigFiles({ ...c, agents: install.agents }), extra)
+  const result = syncConfigFiles({ insightDir: c.insightDir, origin, files, env: c.env, onBackup: c.onBackup })
   const persistent = result.managed.filter(item => !['resolved', 'inline'].includes(path.relative(fs.realpathSync(c.root), item.file).split(path.sep)[0]))
   install.coverage = install.agents.flatMap(agent => {
     const managedEndpoints = persistent.filter(item => item.agent === agent).length
@@ -137,116 +142,65 @@ function syncKnown(c, install, origin, extra = []) {
     if (agent === 'qoder') for (const product of ['desktop', 'jetbrains']) coverage.push({ agent, product, state: 'adapter_unavailable', managedEndpoints: 0 })
     return coverage
   })
-  install.files = files; saveInstall(c, install)
+  const saved = loadInstall(c)
+  install.files = mergeFiles(saved.files || [], files)
+  saveInstall(c, { ...install, agents: [...new Set([...(saved.agents || []), ...install.agents])] })
   return { ...result, coverage: install.coverage }
 }
-function refreshLaunchers(c, install) {
-  for (const item of [...install.launchers]) {
-    try {
-      if (!fs.lstatSync(item.path).isSymbolicLink()) continue
-      const target = fs.realpathSync(item.path)
-      if (path.dirname(target) !== path.dirname(item.original) || !/^qoderclicn-\d/.test(path.basename(target))) continue
-      const [plan] = launcherPlans({ ...c, launchers: [{ agent: item.agent, path: item.path }] }, install)
-      if (plan.code) {
-        atomic(plan.path, plan.code, 0o755)
-        const { code, ...saved } = plan
-        install.launchers = mergeLaunchers(install.launchers, [saved])
-      }
-    } catch (error) { if (error.code !== 'ENOENT') throw error }
-  }
-}
-function commandPath(name, env) {
-  for (const dir of String(env.PATH || '').split(path.delimiter)) {
-    const file = path.join(dir, name)
-    try { fs.accessSync(file, fs.constants.X_OK); return path.resolve(file) } catch {}
-  }
-}
-function launcherPlans(c, installation) {
-  const requested = c.launchers ?? (installation.agents.includes('qoder') ? [{ agent: 'qoder', path: commandPath('qoderclicn', c.env) }].filter(x => x.path) : [])
-  return requested.map(item => {
-    const code = `#!${installation.nodePath}\nimport(${JSON.stringify(pathToFileURL(self).href)}).then(m=>m.launchQoder(${JSON.stringify(c.insightDir)},${JSON.stringify(item.path)},process.argv.slice(2))).catch(e=>{console.error('Agent Insight: '+e.message);process.exitCode=1})\n`
-    const existing = installation.launchers.find(x => x.path === item.path)
-    if (existing && fs.existsSync(item.path) && hash(fs.readFileSync(item.path)) === existing.managedHash) return { ...existing, code, managedHash: hash(code) }
-    const stat = fs.lstatSync(item.path)
-    const original = fs.realpathSync(item.path)
-    const saved = { ...item, original, managedHash: hash(code), code }
-    if (!stat.isSymbolicLink()) {
-      const executable = path.join(c.root, 'launchers', hash(item.path + ':' + hash(fs.readFileSync(item.path))))
-      if (!fs.existsSync(executable)) atomic(executable, fs.readFileSync(item.path), stat.mode & 0o777)
-      saved.original = executable
+export async function prepareProxy(options = {}) {
+  const c = context(options)
+  return locked(c, async () => {
+    const install = loadInstall(c)
+    install.nodePath = c.nodePath || install.nodePath || process.execPath
+    saveInstall(c, install)
+    for (const item of install.launchers || []) {
+      if (!fs.existsSync(item.path) || fs.lstatSync(item.path).isSymbolicLink()) continue
+      const code = `#!${install.nodePath || process.execPath}\nimport(${JSON.stringify(pathToFileURL(self).href)}).then(m=>m.launchQoder(${JSON.stringify(c.insightDir)},${JSON.stringify(item.path)},process.argv.slice(2))).catch(e=>{console.error('Agent Insight: '+e.message);process.exitCode=1})\n`
+      if (hash(fs.readFileSync(item.path)) !== item.managedHash) throw new Error(`Previously managed Qoder launcher was edited; update it manually before retrying: ${item.path}`)
+      if (hash(code) === item.managedHash) continue
+      const backup = path.join(c.root, 'legacy-launchers', hash(fs.readFileSync(item.path)))
+      if (!fs.existsSync(backup)) atomic(backup, fs.readFileSync(item.path))
+      atomic(item.path, code, 0o755)
+      item.managedHash = hash(code)
+      saveInstall(c, install)
     }
-    fs.accessSync(path.dirname(item.path), fs.constants.W_OK)
-    return saved
+    // Replace older polling runtimes without touching model configuration files or enrolling new endpoints.
+    if (install.enabled) await ensureDaemon(c, install)
+    return { prepared: true, enabled: install.enabled }
   })
 }
 export async function installProxy(options = {}) {
   const c = context(options)
-  process.stderr.write('安装将改写 OpenCode / Qoder 的模型地址及 Qoder CLI 启动入口。请在安装前自行备份相关全局、项目和自定义配置及启动入口；不提供自动备份、卸载或配置回退。安装失败可能已修改部分文件。\n')
+  process.stderr.write('显式配置模型转发：先备份配置，再登记上游并改写模型地址。新增 Provider 或修改上游后请重新执行此命令。\n')
   return locked(c, async () => {
     const before = loadInstall(c)
-    const install = { ...before, enabled: true, nodePath: c.nodePath || before.nodePath || process.execPath, homeDir: c.homeDir, agents: [...new Set([...before.agents, ...(c.agents || ['opencode', 'qoder'])])] }
-    const plans = launcherPlans(c, install)
-    const runtime = await ensureDaemon(c, install)
-    install.launchers = mergeLaunchers(before.launchers, plans.map(({ code, ...item }) => item))
+    const install = { ...before, enabled: true, nodePath: c.nodePath || before.nodePath || process.execPath, homeDir: c.homeDir, agents: [...new Set([...before.agents, ...(c.agents || ['opencode'])])] }
     saveInstall(c, install)
-    const result = syncKnown(c, install, runtime.origin)
-    for (const item of plans) if (item.code) atomic(item.path, item.code, 0o755)
+    const runtime = await ensureDaemon(c, install)
+    const result = syncKnown(c, { ...install, agents: c.agents || ['opencode'] }, runtime.origin, c.files || [])
     return { ...result, origin: runtime.origin, launchers: install.launchers.map(x => x.path) }
   })
 }
-const mergeLaunchers = (a, b) => [...new Map([...a, ...b].map(item => [item.path, item])).values()]
 export async function syncProxy(options = {}) {
+  return installProxy(options)
+}
+export function isManagedOpenCodeEndpoint(address, options = {}) {
+  if (typeof address !== 'string') return false
   const c = context(options)
-  return locked(c, async () => {
-    const install = loadInstall(c)
-    if (!install.enabled) return { changed: [], unsupported: [] }
-    const runtime = await ensureDaemon(c, install)
-    return syncKnown(c, install, runtime.origin, c.files || [])
-  })
+  const state = read(path.join(c.root, 'config-state.json'), {})
+  return Object.values(state.files || {}).some(file => file.agent === 'opencode' && Object.values(file.fields || {}).some(field =>
+    [field, ...(field.aliases || [])].some(record => address === record.managed || address.startsWith(record.managed + '/'))))
 }
 export async function prepareOpenCodeConfig(cfg, options = {}) {
-  const c = context(options)
-  if (!loadInstall(c).enabled || !loadInstall(c).agents.includes('opencode')) return
-  return locked(c, async () => {
-    const install = loadInstall(c)
-    if (!install.enabled) return
-    const runtime = await ensureDaemon(c, install)
-    // Persist only endpoint metadata; the resolved configuration may contain credentials.
-    const state = read(path.join(c.root, 'config-state.json'), {})
-    const ownedEndpoints = Object.values(state.files || {}).flatMap(file => Object.values(file.fields).flatMap(field => [field, ...(field.aliases || [])]))
-    const endpointConfig = { provider: Object.fromEntries(Object.entries(cfg.provider || {}).map(([id, provider]) => {
-      let baseURL = provider.options?.baseURL
-      if (typeof baseURL === 'string') {
-        const known = ownedEndpoints.find(field => baseURL === field.managed)
-        if (known) baseURL = known.original
-      }
-      return [id, { npm: provider.npm, options: { baseURL } }]
-    })) }
-    const file = path.join(c.root, 'resolved', `opencode-${hash(JSON.stringify(endpointConfig))}.json`)
-    if (!fs.existsSync(file)) atomic(file, JSON.stringify(endpointConfig))
-    const result = syncKnown(c, install, runtime.origin, [{ agent: 'opencode', file }])
-    const unresolved = result.unsupported.filter(item => item.file === fs.realpathSync(file) && item.reason !== 'missing_explicit_endpoint')
-    if (unresolved.length) throw new Error(`OpenCode inference proxy has unsupported endpoints: ${unresolved.map(item => item.reason).join(', ')}`)
-    const managed = read(file, {})
-    for (const [id, provider] of Object.entries(managed.provider || {})) {
-      if (provider.options?.baseURL && cfg.provider?.[id]?.options) cfg.provider[id].options.baseURL = provider.options.baseURL
-    }
-    return result
-  })
+  const c = context(options), install = loadInstall(c)
+  if (!install.enabled || !install.agents.includes('opencode')) return
+  const providers = [...Object.values(cfg.provider || {}).map(p => p.options), ...Object.values(cfg.providers || {}).map(p => p.settings)]
+  if (providers.some(p => isManagedOpenCodeEndpoint(p?.baseURL, c))) await locked(c, () => ensureDaemon(c, install))
 }
 export async function prepareOpenCodeRequest(address, options = {}) {
-  const c = context(options)
-  const install = loadInstall(c)
-  if (!install.enabled || !install.agents.includes('opencode')) return address
-  const url = new URL(address)
-  if (url.username || url.password || url.hash) throw new Error('Unsupported OpenCode inference URL credentials or fragment')
-  const suffix = /\/(chat\/completions|responses|messages)\/?$/.exec(url.pathname)
-  if (!suffix) throw new Error('Unsupported OpenCode inference endpoint; configure a supported HTTP model endpoint')
-  const protocol = suffix[1] === 'messages' ? 'anthropic' : 'openai'
-  const baseURL = url.origin + url.pathname.slice(0, suffix.index)
-  const cfg = { provider: { request: { npm: protocol === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible', options: { baseURL } } } }
-  await prepareOpenCodeConfig(cfg, options)
-  return cfg.provider.request.options.baseURL + '/' + suffix[1] + url.search
+  const c = context(options), install = loadInstall(c)
+  if (install.enabled && install.agents.includes('opencode') && isManagedOpenCodeEndpoint(address, c)) await locked(c, () => ensureDaemon(c, install))
+  return address
 }
 async function stopDaemon(c) {
   const runtime = await healthy(c)
@@ -258,22 +212,11 @@ async function stopDaemon(c) {
 }
 export async function launchQoder(insightDir, entry, args) {
   const c = context({ insightDir, args })
-  let install = loadInstall(c)
+  const install = loadInstall(c)
   const launcher = install.launchers.find(item => item.path === entry)
   if (!launcher) throw new Error('Managed Qoder launcher is missing its original executable')
-  const forwarded = [...args]
-  for (let i = 0; i < forwarded.length && forwarded[i] !== '--'; i++) {
-    const separate = forwarded[i] === '--settings'
-    if (!separate && !forwarded[i].startsWith('--settings=')) continue
-    const inline = separate ? forwarded[i + 1] : forwarded[i].slice('--settings='.length)
-    if (!inline?.trim().startsWith('{')) continue
-    const file = path.join(c.root, 'inline', `qoder-${hash(inline)}.json`)
-    if (!fs.existsSync(file)) atomic(file, inline)
-    if (separate) forwarded[++i] = file
-    else forwarded[i] = '--settings=' + file
-  }
-  await syncProxy({ ...c, args: forwarded, agents: ['qoder'] })
-  const child = spawn(launcher.original, forwarded, { stdio: 'inherit', env: { ...process.env, AGENT_INSIGHT_HOME: insightDir } })
+  await prepareProxy(c)
+  const child = spawn(launcher.original, args, { stdio: 'inherit', env: { ...process.env, AGENT_INSIGHT_HOME: insightDir } })
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal))
   child.once('error', error => { process.stderr.write(`Qoder launch failed: ${error.message}\n`); process.exitCode = 1 })
   child.once('exit', (code, signal) => { process.exitCode = code ?? (signal === 'SIGINT' ? 130 : 1) })
@@ -290,47 +233,39 @@ async function daemon(insightDir) {
     }
     gateway.emit('request', req, res)
   })
-  let busy = false, timer
-  const poll = async () => {
-    if (busy) return
-    busy = true
-    try {
-      const install = loadInstall(c)
-      if (install.enabled) await locked(c, async () => { const latest = loadInstall(c); if (latest.enabled) syncKnown({ ...c, homeDir: latest.homeDir }, latest, runtime.origin) })
-    } catch (error) { process.stderr.write(`Configuration sync paused: ${error.message}\n`) }
-    finally { busy = false }
-  }
-  const stop = () => { clearInterval(timer); server.close(); server.closeAllConnections() }
+  const stop = () => { server.close(); server.closeAllConnections() }
   process.once('SIGTERM', stop); process.once('SIGINT', stop)
   const previous = read(path.join(c.root, 'runtime.json'), undefined)
   const port = previous ? Number(new URL(previous.origin).port) : 0
   let runtime
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve) })
-    runtime = { origin: `http://127.0.0.1:${server.address().port}`, pid: process.pid, token, accountHash: hash(accountKey(c) || 'anonymous').slice(0, 16), runtimePath: self }
+    runtime = { origin: `http://127.0.0.1:${server.address().port}`, pid: process.pid, token, accountHash: hash(accountKey(c) || 'anonymous').slice(0, 16), runtimePath: self, policy: 'explicit-v1' }
     atomic(path.join(c.root, 'runtime.json'), JSON.stringify(runtime))
-    timer = setInterval(poll, 1000)
   } catch (error) { stop(); throw error }
 }
 let isMain = false
 try { isMain = Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === self } catch {}
 if (isMain) {
-  const [command, insightDir, agents] = process.argv.slice(2)
-  const options = { insightDir, ...(agents ? { agents: agents.split(',') } : {}) }
-  const action = { install: installProxy, sync: syncProxy, status: async o => ({ ...loadInstall(context(o)), healthy: Boolean(await healthy(context(o))) }) }[command]
-  try {
+  const [command, insightDir, agents, ...args] = process.argv.slice(2)
+  const options = { insightDir, nodePath: process.execPath, agents: (agents || 'opencode').split(','), args, onBackup: item => {
+    process.stderr.write(`配置：${item.file}\n首次原件：${item.original}\n最新原始地址备份：${item.latest}\n`)
+  } }
+  if (options.agents.some(agent => !['opencode', 'qoder'].includes(agent))) { process.stderr.write('Unsupported Agent; choose opencode or qoder\n'); process.exitCode = 1 }
+  else try {
+    const action = { prepare: prepareProxy, configure: installProxy, install: installProxy, sync: syncProxy, status: async o => ({ ...loadInstall(context(o)), healthy: Boolean(await healthy(context(o))) }) }[command]
     if (command === 'daemon') await daemon(insightDir)
     else if (action) {
       const result = await action(options)
       process.stdout.write(JSON.stringify(result) + '\n')
-      if (command === 'install') for (const item of result.coverage || []) {
+      if (['configure', 'install', 'sync'].includes(command)) for (const item of result.coverage || []) {
         if (item.state === 'adapter_unavailable') continue
         process.stderr.write(`${item.agent} CLI：持久配置中 ${item.managedEndpoints} 个模型地址已配置转发（不含运行时快照）；实际请求与 Trace 关联需单独验证。\n`)
       }
-      if (command === 'install' && result.coverage?.some(item => item.agent === 'qoder')) {
+      if (['configure', 'install', 'sync'].includes(command) && result.coverage?.some(item => item.agent === 'qoder')) {
         process.stderr.write('Qoder 原生 IDE / JetBrains：模型地址未接管；采集组件安装不代表统一调用 ID 关联已启用。\n')
       }
     }
-    else throw new Error('Usage: inference_proxy.mjs install|sync|status <insight-directory> [opencode,qoder]')
+    else throw new Error('Usage: inference_proxy.mjs prepare|configure|status <insight-directory> [opencode,qoder] [Qoder settings flags]')
   } catch (error) { process.stderr.write(`Agent Insight inference proxy: ${error.message}\n`); process.exitCode = 1 }
 }

@@ -141,7 +141,7 @@ LlamaIndex、模型 SDK 和 MCP Tool 依赖继续由业务项目管理。Functio
 
 在平台的“客户端安装”中执行 curl/PowerShell 安装命令，或使用本地制作的 Agent Insight npm 包执行 `npx agent-insight install` 时，可在不影响原有框架选项的前提下勾选 **Qoder CN product family**。安装器会配置 CLI、Desktop、JetBrains 和 Work 的 Hook、运行脚本及上传器，并自动把 Desktop VSIX 与 JetBrains ZIP 下载到 `~/.agent-insight/packages/qoder/`。单个插件包下载失败只会显示警告，不会撤销已经完成的采集器安装；可在服务端补齐插件包来源或构建环境后重新执行安装命令。Desktop VSIX 由服务端从 `integrations/qoder-desktop/` 源码构建；JetBrains ZIP 可由服务端从受信任的 Release 附件下载，或在有 IntelliJ/Java 构建环境时从 `integrations/qoder-jetbrains/` 源码构建。两类产物都缓存到 `.next/cache/qoder-plugins/`，仓库及本地 npm 包不携带预编译二进制。
 
-**安装前请自行备份配置。** 安装会改写各产品的 Hook 配置及相关模型地址，不自动备份，也不提供自动卸载或配置回退。请保存实际使用的 `~/.qoder-cn/settings.json`、`~/.qoder/settings.json`、`~/.qoderworkcn/settings.json`、`~/.qoderwork/settings.json` 及项目 `.qoder/` 配置；CLI / Work 的 Token 采集还会修改 Unix 的 `~/.profile`、`~/.bashrc`、`~/.zshrc` 或 Windows 用户环境变量，需先备份文件或记录原 `QODERCN_EXPOSE_TOKEN_USAGE` 值。使用模型代理时，也应记录 Qoder CLI 原启动入口。
+**安装前请自行备份配置。** 采集安装会更新各产品的 Hook 配置，不改写模型地址，不提供自动卸载或配置回退。模型转发需要单独执行显式命令，该命令会先备份模型配置并告知位置。请保存实际使用的 `~/.qoder-cn/settings.json`、`~/.qoder/settings.json`、`~/.qoderworkcn/settings.json`、`~/.qoderwork/settings.json` 及项目 `.qoder/` 配置；CLI / Work 的 Token 采集还会修改 Unix 的 `~/.profile`、`~/.bashrc`、`~/.zshrc` 或 Windows 用户环境变量，需先备份文件或记录原 `QODERCN_EXPOSE_TOKEN_USAGE` 值。新安装不包装 Qoder CLI 启动入口。
 
 ### Qoder CN Desktop
 

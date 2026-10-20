@@ -88,32 +88,19 @@ test("OpenCode config hook keeps collection and provider options when proxy runt
   }
 })
 
-test("OpenCode config hook loads the installed proxy before requests and passes the project directory", async t => {
+test("OpenCode config hook leaves new project and merged endpoints unchanged even when proxy is enabled", async t => {
   const fixture = proxyHookFixture(t)
-  const token = "fixture-control-token"
-  const server = http.createServer((req, res) => {
-    assert.equal(req.url, "/_agent_insight/health")
-    assert.equal(req.headers["x-agent-insight-control"], token)
-    res.setHeader("content-type", "application/json")
-    res.end(JSON.stringify({ instance: token }))
-  })
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
-  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) })
   const root = path.join(fixture.insightDir, "inference-proxy")
   fs.mkdirSync(root, { recursive: true })
-  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-  fs.writeFileSync(path.join(root, "runtime.json"), JSON.stringify({ origin, token, accountHash: crypto.createHash('sha256').update('anonymous').digest('hex').slice(0, 16), runtimePath: fs.realpathSync(path.join(fixture.insightDir, 'inference-runtime/inference_proxy.mjs')) }))
   fs.writeFileSync(path.join(root, "installation.json"), JSON.stringify({ enabled: true, agents: ["opencode"], files: [], launchers: [] }))
   const projectConfig = path.join(fixture.directory, "opencode.json")
-  fs.writeFileSync(projectConfig, JSON.stringify({ provider: { project: { npm: "@ai-sdk/openai-compatible", options: { baseURL: "https://project.invalid/v1" } } } }))
+  const content = JSON.stringify({ provider: { project: { npm: "@ai-sdk/openai-compatible", options: { baseURL: "https://project.invalid/v1" } } } })
+  fs.writeFileSync(projectConfig, content)
   const result = await runProxyConfigHook(fixture)
   assert.equal(result.code, 0, result.stderr)
-  const output = JSON.parse(result.stdout)
-  assert.ok(output.baseURL.startsWith(origin + "/managed/opencode/"), output.baseURL)
-  assert.equal(output.apiKey, "fixture-secret")
-  assert.equal(output.fetchPreserved, true)
-  assert.equal(output.correlationAvailable, true)
-  assert.ok(JSON.parse(fs.readFileSync(projectConfig, "utf8")).provider.project.options.baseURL.startsWith(origin + "/managed/opencode/"))
+  assert.deepEqual(JSON.parse(result.stdout), { baseURL: 'https://upstream.invalid/v1', apiKey: 'fixture-secret', fetchPreserved: true, correlationAvailable: true })
+  assert.equal(fs.readFileSync(projectConfig, 'utf8'), content)
+  assert.equal(fs.existsSync(path.join(root, 'runtime.json')), false)
 })
 
 test("OpenCode config hook rejects installed proxy failures instead of allowing direct inference", async t => {

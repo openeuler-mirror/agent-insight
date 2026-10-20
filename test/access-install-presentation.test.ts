@@ -54,11 +54,18 @@ test('客户安装页仅提供 OpenCode 和 Qoder，保留身份刷新与上报�
   assert.ok(!linuxCard.includes('<button'), '身份未就绪时不提供可复制的安装命令');
 });
 
-test('安装页在安装命令前提醒用户自行备份配置，不再提供自动恢复或卸载入口', () => {
+test('安装页区分采集安装和显式模型转发，展示备份位置与重新同步命令', () => {
   const html = renderInstallPage();
   assert.match(html, /安装前请自行备份/);
-  assert.match(html, /模型地址、Hook 和插件配置/);
-  assert.match(html, /不自动备份，也不提供一键恢复或卸载/);
+  assert.match(html, /采集安装会更新 Hook 和插件配置/);
+  assert.match(html, /安装命令不改写模型地址/);
+  assert.match(html, /不提供一键恢复或卸载/);
+  assert.match(html, /可选：启用 \/ 同步模型转发/);
+  assert.match(html, /sh ~\/\.agent-insight\/model-proxy\.sh opencode/);
+  assert.match(html, /Node.js 20/);
+  assert.match(html, /original.jsonc/);
+  assert.match(html, /latest.jsonc/);
+  assert.match(html, /后台不会自动接管新地址/);
   assert.match(html, /\.config\/opencode/);
   assert.match(html, /\.qoder-cn\/settings\.json/);
   assert.match(html, /opencode\.json/);

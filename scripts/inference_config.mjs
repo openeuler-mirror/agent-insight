@@ -117,12 +117,18 @@ function replaceTokens(document, replacements) {
   return Buffer.from(source)
 }
 
-function commit(stateFile, state, changes) {
-  for (const item of changes) {
+function commit(stateFile, state, changes, backups, onBackup) {
+  for (const item of [...changes, ...backups]) {
     if (!fs.readFileSync(item.file).equals(item.bytes)) throw new Error(`Configuration changed concurrently: ${item.file}`)
   }
   const root = path.dirname(stateFile)
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
+  for (const item of backups) {
+    fs.mkdirSync(path.dirname(item.original), { recursive: true, mode: 0o700 })
+    if (!fs.existsSync(item.original)) atomicWrite(item.original, item.bytes, 0o600)
+    if (!fs.existsSync(item.latest) || !fs.readFileSync(item.latest).equals(item.restored)) atomicWrite(item.latest, item.restored, 0o600)
+    onBackup?.({ file: item.file, original: item.original, latest: item.latest })
+  }
   // Publish routes first so any successfully rewritten file already has a live upstream mapping.
   atomicWrite(stateFile, Buffer.from(JSON.stringify(state, null, 2) + '\n'), 0o600)
   for (const item of changes) {
@@ -164,12 +170,12 @@ function upstreamAddress(raw, env) {
   return { resolved: url.href.replace(/\/$/, '') }
 }
 
-export function syncConfigFiles({ insightDir, origin, files, env = process.env }) {
+export function syncConfigFiles({ insightDir, origin, files, env = process.env, onBackup }) {
   const gateway = new URL(origin)
   if (!['http:', 'https:'].includes(gateway.protocol) || gateway.username || gateway.password || gateway.search || gateway.hash || gateway.pathname !== '/') throw new Error('Invalid inference gateway origin')
   const stateFile = stateLocation(insightDir)
   const state = loadState(stateFile)
-  const changes = [], unsupported = [], managedEndpoints = []
+  const changes = [], unsupported = [], managedEndpoints = [], backups = []
   const documents = [], seen = new Set()
   for (const item of files) {
     if (!['qoder', 'opencode'].includes(item.agent)) throw new Error('Unsupported Agent configuration type')
@@ -184,6 +190,12 @@ export function syncConfigFiles({ insightDir, origin, files, env = process.env }
     if (existing && existing.agent !== document.agent) throw new Error('Configuration Agent ownership mismatch')
     const entry = { agent: document.agent, fields: existing?.fields || {} }
     const replacements = []
+    const restoredTokens = []
+    for (const [key, prior] of Object.entries(entry.fields)) {
+      const token = document.strings.get(key)
+      const owned = token && [prior, ...(prior.aliases || [])].find(record => record.managed === token.value)
+      if (owned) restoredTokens.push({ token, replacement: owned.originalToken || JSON.stringify(owned.original) })
+    }
     for (const candidate of candidates(document, document.agent)) {
       const { field, protocol, token } = candidate
       const reject = reason => unsupported.push({ agent: document.agent, file: document.file, field, reason })
@@ -203,17 +215,20 @@ export function syncConfigFiles({ insightDir, origin, files, env = process.env }
       const managed = gateway.origin + basePath
       const aliases = [...(prior?.aliases || [])]
       if (prior && prior.managed !== managed && !aliases.some(alias => alias.managed === prior.managed)) {
-        aliases.push({ original: prior.original, managed: prior.managed })
+        aliases.push({ original: prior.original, originalToken: prior.originalToken, managed: prior.managed })
       }
-      entry.fields[key] = { field, original, managed, aliases: aliases.map(({ original, managed }) => ({ original, managed })) }
+      entry.fields[key] = { field, original, originalToken: owned ? (owned.originalToken || JSON.stringify(original)) : document.source.slice(token.start, token.end), managed, aliases }
       managedEndpoints.push({ agent: document.agent, file: document.file, field })
       if (token.value !== managed) replacements.push({ token, replacement: JSON.stringify(managed) })
     }
     if (Object.keys(entry.fields).length) {
+      const dir = path.join(path.dirname(stateFile), 'backups', digest(document.file))
+      entry.backups = { original: path.join(dir, 'original.jsonc'), latest: path.join(dir, 'latest.jsonc') }
+      backups.push({ ...document, ...entry.backups, restored: replaceTokens(document, restoredTokens) })
       state.files[document.file] = entry
     }
     if (replacements.length) changes.push({ ...document, next: replaceTokens(document, replacements) })
   }
-  if (Object.keys(state.files).length || state.routes.length) commit(stateFile, state, changes)
-  return { routes: state.routes, changed: changes.map(item => item.file), unsupported, managed: managedEndpoints }
+  if (Object.keys(state.files).length || state.routes.length) commit(stateFile, state, changes, backups, onBackup)
+  return { routes: state.routes, changed: changes.map(item => item.file), unsupported, managed: managedEndpoints, backups: backups.map(({ file, original, latest }) => ({ file, original, latest })) }
 }

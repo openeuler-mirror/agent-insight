@@ -36,7 +36,7 @@ async function stopFixture(insightDir: string) {
 }
 function disableFixture(insightDir: string) {
     const file = path.join(insightDir, 'inference-proxy/installation.json');
-    write(file, { ...read(file), enabled: false });
+    write(file, { ...read(file), enabled: false, explicitEnabled: false });
 }
 function write(file: string, data: unknown) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(data, null, 2)); }
 const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -71,17 +71,13 @@ test('Qoder CLI configuration coverage never implies JetBrains or native IDE cov
     assert.equal(after.coverage[0].managedEndpoints, 0);
 });
 
-test('runtime snapshots do not count as current persistent model configuration coverage', async t => {
+test('runtime hooks do not enroll inline-only providers or write snapshots', async t => {
     const f = await fixture(t); await f.api.installProxy({ ...f.options, agents: ['opencode'] });
-    const cfg = oc(f.upstream);
-    await f.api.prepareOpenCodeConfig(cfg, f.options);
-    const empty = await f.api.prepareOpenCodeConfig({ provider: {} }, f.options);
-    assert.ok(empty.managed.length > 0, 'old snapshots remain recoverable for existing sessions');
-    assert.equal(empty.coverage[0].managedEndpoints, 0);
-    assert.equal(empty.coverage[0].state, 'no_supported_endpoint');
-    const response = await fetch(cfg.provider.local.options.baseURL + '/chat/completions', { method: 'POST', body: '{}' });
-    await response.text(); assert.equal(response.status, 200, 'retained routes still serve in-flight sessions');
+    const cfg = oc(f.upstream); await f.api.prepareOpenCodeConfig(cfg, f.options);
+    assert.equal(cfg.provider.local.options.baseURL, f.upstream);
+    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/resolved')), false);
 });
+
 
 test('installation starts a healthy proxy before rewriting; model changes and retries retain uniform IDs; sync preserves user edits', async t => {
     const f = await fixture(t);
@@ -106,53 +102,47 @@ test('installation starts a healthy proxy before rewriting; model changes and re
     assert.equal(read(qFile).theme, 'user-new');
     assert.match(read(qFile).providers.local.baseUrl, /managed/);
     assert.match(read(ocFile).provider.local.options.baseURL, /managed/);
-    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/backups')), false);
+    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/backups')), true);
 });
 
-test('OpenCode config hook routes newly merged providers and inline overrides before the first request', async t => {
+test('OpenCode config hook preserves new providers and inline overrides until an explicit command', async t => {
     const f = await fixture(t); await f.api.installProxy(f.options);
-    const cfg = oc(f.upstream);
-    await f.api.prepareOpenCodeConfig(cfg, f.options);
-    assert.match(cfg.provider.local.options.baseURL, /\/managed\/opencode\//);
-    const response = await fetch(cfg.provider.local.options.baseURL + '/chat/completions', { method: 'POST', body: '{}' }); await response.text();
-    assert.ok(f.seen[0].headers['x-agent-insight-call-id']);
-    disableFixture(f.insightDir); await stopFixture(f.insightDir);
-    const after = oc(f.upstream); await f.api.prepareOpenCodeConfig(after, f.options);
-    assert.equal(after.provider.local.options.baseURL, f.upstream);
-});
-
-test('Qoder launcher synchronizes custom config before original CLI reads it without generating a restore command', async t => {
-    const f = await fixture(t);
-    const bin = path.join(f.homeDir, 'bin'); fs.mkdirSync(bin);
-    const original = path.join(bin, 'qoder-original');
-    fs.writeFileSync(original, `#!${process.execPath}\nconst fs=require('fs');const p=process.argv[process.argv.indexOf('--config-dir')+1];console.log(JSON.parse(fs.readFileSync(p+'/settings.json')).providers.local.baseUrl);`, { mode: 0o755 });
-    const entry = path.join(bin, 'qoderclicn'); fs.symlinkSync(original, entry);
-    await f.api.installProxy({ ...f.options, launchers: [{ agent: 'qoder', path: entry }] });
-    const configDir = path.join(f.homeDir, 'custom-config'); write(path.join(configDir, 'settings.json'), qoder(f.upstream));
-    const result = await new Promise<string>((resolve, reject) => { const child = spawn(entry, ['--config-dir', configDir], { env: f.options.env }); let out = '', err = ''; child.stdout.on('data', b => out += b); child.stderr.on('data', b => err += b); child.on('error', reject); child.on('exit', code => code === 0 ? resolve(out.trim()) : reject(new Error(err))); });
-    assert.match(result, /\/managed\/qoder\//);
-    assert.equal(fs.lstatSync(entry).isSymbolicLink(), false);
-    assert.equal(fs.existsSync(path.join(f.insightDir, 'restore_inference_proxy.sh')), false);
-});
-
-test('Qoder launcher rewrites the last repeated inline settings argument', async t => {
-    const f = await fixture(t); const bin = path.join(f.homeDir, 'bin'); fs.mkdirSync(bin);
-    const original = path.join(bin, 'qoder-original');
-    fs.writeFileSync(original, `#!${process.execPath}\nconst fs=require('fs');let v;for(let i=2;i<process.argv.length;i++){if(process.argv[i]==='--settings')v=process.argv[++i];else if(process.argv[i].startsWith('--settings='))v=process.argv[i].slice(11)}console.log((v.startsWith('{')?JSON.parse(v):JSON.parse(fs.readFileSync(v))).providers.local.baseUrl);`, { mode: 0o755 });
-    const entry = path.join(bin, 'qoderclicn'); fs.symlinkSync(original, entry);
-    await f.api.installProxy({ ...f.options, launchers: [{ agent: 'qoder', path: entry }] });
-    const result = await new Promise<string>((resolve, reject) => { const child = spawn(entry, ['--settings={}', '--settings=' + JSON.stringify(qoder(f.upstream))], { env: f.options.env }); let out = '', err = ''; child.stdout.on('data', b => out += b); child.stderr.on('data', b => err += b); child.on('error', reject); child.on('exit', code => code === 0 ? resolve(out.trim()) : reject(new Error(err))); });
-    assert.match(result, /\/managed\/qoder\//);
-});
-
-test('installation failure does not leave rewritten configuration or an enabled installation', async t => {
-    const f = await fixture(t);
-    const file = path.join(f.homeDir, '.qoder-cn/settings.json'); write(file, qoder(f.upstream)); const before = fs.readFileSync(file, 'utf8');
-    await assert.rejects(f.api.installProxy({ ...f.options, launchers: [{ agent: 'qoder', path: '/nonexistent/entry' }] }));
-    assert.equal(fs.readFileSync(file, 'utf8'), before);
     const cfg = oc(f.upstream); await f.api.prepareOpenCodeConfig(cfg, f.options);
     assert.equal(cfg.provider.local.options.baseURL, f.upstream);
+    const response = await fetch(cfg.provider.local.options.baseURL + '/chat/completions', { method: 'POST', body: '{}' }); await response.text();
+    assert.equal(f.seen[0].headers['x-agent-insight-call-id'], undefined);
 });
+
+
+test('explicit Qoder configuration leaves the executable and unselected custom settings untouched', async t => {
+    const f = await fixture(t); const bin = path.join(f.homeDir, 'bin'); fs.mkdirSync(bin);
+    const original = path.join(bin, 'qoder-original'); fs.writeFileSync(original, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const entry = path.join(bin, 'qoderclicn'); fs.symlinkSync(original, entry);
+    const configDir = path.join(f.homeDir, 'custom-config'); const file = path.join(configDir, 'settings.json'); write(file, qoder(f.upstream));
+    await f.api.installProxy({ ...f.options, launchers: [{ agent: 'qoder', path: entry }] });
+    assert.equal(read(file).providers.local.baseUrl, f.upstream);
+    await f.api.installProxy({ ...f.options, agents: ['qoder'], args: ['--config-dir', configDir] });
+    assert.match(read(file).providers.local.baseUrl, /managed/);
+    assert.equal(fs.lstatSync(entry).isSymbolicLink(), true);
+    assert.equal(fs.realpathSync(entry), fs.realpathSync(original));
+});
+
+
+test('explicit Qoder configuration does not enroll inline launch arguments', async t => {
+    const f = await fixture(t);
+    const result = await f.api.installProxy({ ...f.options, agents: ['qoder'], args: ['--settings=' + JSON.stringify(qoder(f.upstream))] });
+    assert.equal(result.managed.length, 0);
+    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/inline')), false);
+});
+
+
+test('invalid explicit configuration leaves the file unchanged', async t => {
+    const f = await fixture(t); const file = path.join(f.homeDir, '.qoder-cn/settings.json');
+    fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, '{broken');
+    await assert.rejects(f.api.installProxy(f.options), /Invalid/);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+});
+
 
 test('daemon restart reuses the managed address and OpenCode resolves disk-owned URLs in merged config', async t => {
     const f = await fixture(t);
@@ -184,25 +174,26 @@ test('all repeated Qoder settings and config roots are managed without guessing 
     assert.deepEqual(files.map((x: { file: string }) => x.file), ['first/settings.json', 'second/settings.json', 'first.json', 'second.json'].map(x => path.join(f.homeDir, x)));
 });
 
-test('Qoder vendor upgrade is rebound to the new binary while retaining the executable needed by the launcher', async t => {
+test('explicit configuration does not rebind a vendor-upgraded Qoder executable', async t => {
     const f = await fixture(t); const bin = path.join(f.homeDir, 'bin'); fs.mkdirSync(bin);
-    const entry = path.join(bin, 'qoderclicn');
-    const v1 = path.join(bin, 'qoderclicn-1.1.70'), v2 = path.join(bin, 'qoderclicn-1.1.71');
-    fs.writeFileSync(v1, '#!/bin/sh\necho old\n', { mode: 0o755 }); fs.writeFileSync(v2, '#!/bin/sh\necho new\n', { mode: 0o755 }); fs.symlinkSync(v1, entry);
+    const entry = path.join(bin, 'qoderclicn'), original = path.join(bin, 'qoderclicn-1.1.71');
+    fs.writeFileSync(original, '#!/bin/sh\necho new\n', { mode: 0o755 }); fs.symlinkSync(original, entry);
     await f.api.installProxy({ ...f.options, launchers: [{ agent: 'qoder', path: entry }] });
-    fs.unlinkSync(entry); fs.symlinkSync(v2, entry);
     await f.api.syncProxy(f.options);
-    assert.equal(fs.lstatSync(entry).isSymbolicLink(), false);
-    assert.equal(read(path.join(f.insightDir, 'inference-proxy/installation.json')).launchers[0].original, fs.realpathSync(v2));
+    assert.equal(fs.realpathSync(entry), fs.realpathSync(original));
+    assert.equal(fs.lstatSync(entry).isSymbolicLink(), true);
 });
 
-test('OpenCode never mistakes another host with a managed-looking suffix for its old upstream', async t => {
-    const f = await fixture(t); await f.api.installProxy(f.options);
-    const cfg = oc(f.upstream); await f.api.prepareOpenCodeConfig(cfg, f.options);
-    cfg.provider.local.options.baseURL = 'https://another.example' + new URL(cfg.provider.local.options.baseURL).pathname;
-    await assert.rejects(f.api.prepareOpenCodeConfig(cfg, f.options), /unsupported|unknown_managed_endpoint/);
+
+test('OpenCode never enrolls another host with a managed-looking suffix', async t => {
+    const f = await fixture(t); const file = path.join(f.homeDir, '.config/opencode/opencode.json'); write(file, oc(f.upstream));
+    await f.api.installProxy(f.options);
+    const cfg = read(file); cfg.provider.local.options.baseURL = 'https://another.example' + new URL(cfg.provider.local.options.baseURL).pathname;
+    await f.api.prepareOpenCodeConfig(cfg, f.options);
+    assert.equal(f.api.isManagedOpenCodeEndpoint(cfg.provider.local.options.baseURL, f.options), false);
     assert.match(cfg.provider.local.options.baseURL, /^https:\/\/another\.example/);
 });
+
 
 test('reinstallation with a different collection account restarts the gateway for the new account', async t => {
     const f = await fixture(t); const file = path.join(f.homeDir, '.qoder-cn/settings.json'); write(file, qoder(f.upstream));
@@ -243,22 +234,19 @@ test('runtime import tolerates the virtual executable path used by embedded Bun'
     assert.equal(result.code, 0, result.error);
 });
 
-test('OpenCode V2 HTTP preparation routes a new endpoint before its first request and preserves query, body and auth', async t => {
-    const f = await fixture(t); await f.api.installProxy({ ...f.options, agents: ['opencode'] });
+test('OpenCode V2 HTTP preparation starts only known routes and preserves query, body and auth', async t => {
+    const f = await fixture(t); const file = path.join(f.homeDir, '.config/opencode/opencode.json'); write(file, oc(f.upstream + '/new'));
+    await f.api.installProxy({ ...f.options, agents: ['opencode'] });
     const source = f.upstream + '/new/chat/completions?api-version=probe';
-    const routed = await f.api.prepareOpenCodeRequest(source, f.options);
-    assert.match(routed, /\/managed\/opencode\//);
+    assert.equal(await f.api.prepareOpenCodeRequest(source, f.options), source);
+    const managed = read(file).provider.local.options.baseURL + '/chat/completions?api-version=probe';
+    const routed = await f.api.prepareOpenCodeRequest(managed, f.options);
+    assert.equal(routed, managed);
     const response = await fetch(routed, { method: 'POST', headers: { authorization: 'Bearer dummy' }, body: JSON.stringify({ model: 'new', messages: [] }) });
     await response.text(); assert.equal(response.status, 200);
     assert.equal(f.seen[0].url, '/v1/new/chat/completions?api-version=probe');
     assert.equal(f.seen[0].headers.authorization, 'Bearer dummy');
     assert.ok(f.seen[0].headers['x-agent-insight-call-id']);
-    assert.deepEqual(f.seen[0].body, { model: 'new', messages: [] });
-    assert.equal(await f.api.prepareOpenCodeRequest(routed, f.options), routed, 'already managed request must not become a proxy loop');
-    await assert.rejects(f.api.prepareOpenCodeRequest(f.upstream + '/unsupported', f.options), /Unsupported/);
-    await assert.rejects(f.api.prepareOpenCodeRequest(source.replace('http://', 'http://user:password@'), f.options), /credentials/);
-    disableFixture(f.insightDir); await stopFixture(f.insightDir);
-    assert.equal(await f.api.prepareOpenCodeRequest(source, f.options), source);
 });
 
 
@@ -268,7 +256,7 @@ test('installation exposes no automatic uninstall or configuration restore entry
     const file = path.join(f.homeDir, '.config/opencode/opencode.json');
     write(file, oc(f.upstream));
     await f.api.installProxy(f.options);
-    for (const name of ['restore_inference_proxy.sh', 'uninstall_client.sh', 'inference-proxy/backups']) {
+    for (const name of ['restore_inference_proxy.sh', 'uninstall_client.sh']) {
         assert.equal(fs.existsSync(path.join(f.insightDir, name)), false);
     }
 });
@@ -285,10 +273,118 @@ test('a later configuration conflict leaves earlier routes live and never restor
         if (String(to) === fs.realpathSync(first)) fs.writeFileSync(second, '{concurrent-user-edit');
     });
     await assert.rejects(f.api.installProxy(f.options), /concurrent/i);
-    assert.equal(read(path.join(f.insightDir, 'inference-proxy/installation.json')).enabled, true);
+    assert.equal(read(path.join(f.insightDir, 'inference-proxy/installation.json')).explicitEnabled, true);
     assert.equal(fs.readFileSync(second, 'utf8'), '{concurrent-user-edit');
     const response = await fetch(read(first).provider.local.options.baseURL + '/chat/completions', { method: 'POST', body: '{}' });
     await response.text();
     assert.equal(response.status, 200);
     assert.ok(f.seen[0].headers['x-agent-insight-call-id']);
+});
+
+
+test('explicit-only runtime preparation and hooks never enroll new endpoints or poll user configuration', async t => {
+    const f = await fixture(t), file = path.join(f.homeDir, '.config/opencode/opencode.json');
+    write(file, oc(f.upstream)); const initial = fs.readFileSync(file);
+    assert.equal(typeof f.api.prepareProxy, 'function');
+    await f.api.prepareProxy(f.options);
+    assert.deepEqual(fs.readFileSync(file), initial);
+    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/runtime.json')), false);
+    await f.api.installProxy(f.options);
+    const address = read(file).provider.local.options.baseURL;
+    const edited = read(file); edited.provider.new = oc(f.upstream + '/new').provider.local; write(file, edited);
+    const before = fs.readFileSync(file);
+    await new Promise(r => setTimeout(r, 1250));
+    await f.api.prepareOpenCodeConfig(edited, f.options);
+    assert.equal(edited.provider.new.options.baseURL, f.upstream + '/new');
+    assert.equal(await f.api.prepareOpenCodeRequest(f.upstream + '/new/chat/completions', f.options), f.upstream + '/new/chat/completions');
+    assert.deepEqual(fs.readFileSync(file), before);
+    await f.api.installProxy(f.options);
+    assert.equal(read(file).provider.local.options.baseURL, address);
+    assert.match(read(file).provider.new.options.baseURL, /managed/);
+    const backups = read(path.join(f.insightDir, 'inference-proxy/config-state.json')).files[fs.realpathSync(file)].backups;
+    assert.equal(read(backups.latest).provider.local.options.baseURL, f.upstream);
+    assert.equal(read(backups.latest).provider.new.options.baseURL, f.upstream + '/new');
+});
+
+
+test('runtime upgrade replaces only a previously owned Qoder wrapper and stops implicit configuration enrollment', async t => {
+    const f = await fixture(t); const entry = path.join(f.homeDir, 'qoder-wrapper');
+    const original = path.join(f.homeDir, 'qoder-original');
+    fs.writeFileSync(original, '#!/bin/sh\nprintf "%s" "$1"\n', { mode: 0o755 });
+    const legacy = '#!/bin/sh\necho implicit-old-launcher\n'; fs.writeFileSync(entry, legacy, { mode: 0o755 });
+    const crypto = await import('node:crypto');
+    write(path.join(f.insightDir, 'inference-proxy/installation.json'), { enabled: true, agents: ['qoder'], files: [], launchers: [{ agent: 'qoder', path: entry, original, managedHash: crypto.createHash('sha256').update(legacy).digest('hex') }] });
+    const config = path.join(f.homeDir, '.qoder-cn/settings.json'); write(config, qoder(f.upstream));
+    await f.api.prepareProxy(f.options);
+    assert.notEqual(fs.readFileSync(entry, 'utf8'), legacy);
+    const output = await new Promise<string>((resolve, reject) => {
+        const child = spawn(entry, ['forwarded'], { env: f.options.env }); let out = '', error = '';
+        child.stdout.on('data', b => out += b); child.stderr.on('data', b => error += b);
+        child.on('error', reject); child.on('exit', code => code === 0 ? resolve(out) : reject(new Error(error)));
+    });
+    assert.equal(output, 'forwarded');
+    assert.equal(read(config).providers.local.baseUrl, f.upstream);
+});
+
+
+test('explicit configuration and new-provider sync keep mock inference IDs attached to final root and child LLM nodes', async t => {
+    const f = await fixture(t); const file = path.join(f.homeDir, '.config/opencode/opencode.json');
+    write(file, { providers: { local: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: f.upstream } } } });
+    await f.api.prepareProxy(f.options);
+    await f.api.installProxy({ ...f.options, agents: ['opencode'] });
+    const plugin = await import('../scripts/opencode_plugin_otel');
+    const { buildAgentCallTree } = await import('../src/lib/engine/observability/agent-trace');
+    const previous = process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN;
+    process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = '1';
+    const uploader = await import('../scripts/opencode_uploader_client.js');
+    t.after(() => { if (previous === undefined) delete process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN; else process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = previous; });
+    const records: any[] = [];
+    const adapter = plugin.createOpenCodeV2Adapter({ session: { context: async () => [] } }, (r: any) => records.push(r),
+      async (event: any) => { records.push({ kind: 'event', payload: { type: event.type, event } }); },
+      { identityTimeoutMs: 1, prepareRequest: (url: string) => f.api.prepareOpenCodeRequest(url, f.options) });
+    for (const sid of ['root', 'child-a', 'child-b']) await adapter.event({ type: 'session.created', created: 1, data: { sessionID: sid, ...(sid !== 'root' ? { parentID: 'root' } : {}), agent: 'build' } });
+    const expected = new Map<string, string[]>();
+    const invoke = async (sid: string, mid: string, provider = 'local', name = 'one') => {
+      const model = { providerID: provider, id: name };
+      const metadata: any = { sessionID: sid, agent: 'build', model, kind: 'primary', headers: {} };
+      await adapter.modelRequest(metadata);
+      const input = { ...metadata, request: new Request(read(file).providers[provider].settings.baseURL + '/chat/completions', { method: 'POST', headers: metadata.headers, body: JSON.stringify({ model: name }) }) };
+      await adapter.request(input);
+      const response = await fetch(input.request); await response.text();
+      await adapter.response({ ...input, response });
+      await adapter.event({ type: 'session.step.started', created: 10, data: { sessionID: sid, assistantMessageID: mid, agent: 'build', model, started: 10 } });
+      if (response.ok) await adapter.event({ type: 'session.text.ended', created: 20, data: { sessionID: sid, assistantMessageID: mid, ordinal: 0, text: 'mock answer' } });
+      const id = response.headers.get('x-agent-insight-call-id')!;
+      assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expected.set(mid, [...(expected.get(mid) || []), id]);
+      return response.status;
+    };
+    assert.equal(await invoke('root', 'first'), 200);
+    assert.equal(await invoke('root', 'retry', 'local', 'two'), 503);
+    assert.equal(await invoke('root', 'retry', 'local', 'two'), 200);
+    await Promise.all([invoke('child-a', 'child-a-llm'), invoke('child-b', 'child-b-llm')]);
+    const changed = read(file); changed.providers.added = { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: f.upstream + '/added' } }; write(file, changed);
+    await f.api.installProxy({ ...f.options, agents: ['opencode'] });
+    assert.equal(await invoke('root', 'added-llm', 'added'), 200);
+    const tree = buildAgentCallTree(JSON.parse(JSON.stringify(uploader.mergeGraph(uploader.buildState(records), 'root'))))!;
+    const nodes = [tree, ...tree.children].flatMap(n => n.events.filter(e => e.kind === 'llm'));
+    assert.equal(nodes.length, expected.size);
+    for (const node of nodes) assert.deepEqual(node.interaction.inference_call_ids, expected.get((node.interaction as any).messageID));
+    const ids = [...expected.values()].flat();
+    assert.equal(new Set(ids).size, 6);
+    assert.deepEqual(f.seen.map(call => call.headers['x-agent-insight-call-id']).sort(), [...ids].sort());
+    assert.equal(f.seen.at(-1)?.url, '/v1/added/chat/completions');
+});
+
+
+test('explicit configuration disables the legacy enable flag so cached old runtimes cannot enroll endpoints', async t => {
+    const f = await fixture(t); const file = path.join(f.homeDir, '.config/opencode/opencode.json'); write(file, oc(f.upstream));
+    await f.api.installProxy(f.options);
+    const saved = read(path.join(f.insightDir, 'inference-proxy/installation.json'));
+    assert.equal(saved.enabled, false, 'cached old code reads only enabled and must remain inactive');
+    assert.equal(saved.explicitEnabled, true);
+    await stopFixture(f.insightDir);
+    const cfg = read(file); await f.api.prepareOpenCodeConfig(cfg, f.options);
+    const response = await fetch(cfg.provider.local.options.baseURL + '/chat/completions', { method: 'POST', body: '{}' });
+    await response.text(); assert.equal(response.status, 200, 'new runtime still starts known routes');
 });

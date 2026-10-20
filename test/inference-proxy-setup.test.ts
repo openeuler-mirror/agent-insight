@@ -9,7 +9,7 @@ import test, { type TestContext } from 'node:test';
 import { GET as getSetup } from '@/app/api/ingest/setup/route';
 import { GET as getAutoSetup } from '@/app/api/ingest/setup/auto/route';
 
-const components = ['inference_gateway.mjs', 'inference_config.mjs', 'inference_proxy.mjs'];
+const components = ['inference_gateway.mjs', 'inference_config.mjs', 'inference_proxy.mjs', 'model-proxy.sh'];
 const blockModule = '../src/app/api/ingest/setup/inference-proxy-setup';
 async function getBlock() {
     const loaded = await import(blockModule).catch(() => ({}));
@@ -88,18 +88,28 @@ test('generated Unix setup invokes proxy after final credentials and collectors,
     assert.equal(spawnSync('bash', ['-n'], { input: auto }).status, 0);
 });
 
-test('real Bash downloads runtime and installs isolated configurations after warning and omits recovery commands', async t => {
+test('real Bash downloads optional runtime without rewriting models or launchers and prints an explicit command', async t => {
     const f = await fixture(t); const result = await f.execute();
     assert.equal(result.code, 0, result.stderr + result.stdout); assert.deepEqual(f.requested, components);
     for (const component of components) assert.equal(fs.readFileSync(path.join(f.insight, 'inference-runtime', component), 'utf8'), fs.readFileSync(path.resolve('scripts', component), 'utf8'));
-    assert.match(fs.readFileSync(f.openCodeFile, 'utf8'), /127\.0\.0\.1.*managed/);
-    assert.match(fs.readFileSync(f.qoderFile, 'utf8'), /127\.0\.0\.1.*managed/);
-    assert.match(result.stderr, /自行备份/);
-    assert.match(result.stderr, /Qoder.*JetBrains.*模型地址未接管/);
+    assert.equal(fs.readFileSync(f.openCodeFile, 'utf8'), f.originals.opencode);
+    assert.equal(fs.readFileSync(f.qoderFile, 'utf8'), f.originals.qoder);
+    assert.match(result.stdout, /sh .*model-proxy\.sh.*opencode,qoder/);
+    assert.equal(fs.existsSync(path.join(f.insight, 'inference-proxy/runtime.json')), false);
+    assert.equal(fs.lstatSync(path.join(f.bin, 'qoderclicn')).isSymbolicLink(), true);
     for (const name of ['uninstall_client.sh', 'restore_inference_proxy.sh', 'inference-proxy/backups']) {
         assert.equal(fs.existsSync(path.join(f.insight, name)), false);
     }
-    assert.ok((await getBlock()).indexOf('自行备份') < (await getBlock()).indexOf('node "$AGENT_INSIGHT_HOME/inference-runtime/inference_proxy.mjs" install'));
+    const configured = await run('/bin/sh', [path.join(f.insight, 'model-proxy.sh'), 'opencode'], { ...f.env, PATH: '/empty-path', AGENT_INSIGHT_HOME: '' }, f.dir);
+    assert.equal(configured.code, 0, configured.stderr);
+    assert.match(fs.readFileSync(f.openCodeFile, 'utf8'), /managed/);
+    assert.equal(fs.readFileSync(f.qoderFile, 'utf8'), f.originals.qoder, 'only the explicitly selected Agent is modified');
+    assert.match(configured.stderr, /首次原件：.*original.jsonc/);
+    assert.match(configured.stderr, /最新原始地址备份：.*latest.jsonc/);
+    const report = JSON.parse(configured.stdout);
+    assert.equal(fs.readFileSync(report.backups[0].original, 'utf8'), f.originals.opencode);
+    assert.equal((await f.execute()).code, 0, 'reinstall can refresh the prepared runtime');
+    assert.equal(fs.readFileSync(f.qoderFile, 'utf8'), f.originals.qoder);
 
 });
 
@@ -112,7 +122,7 @@ test('failed component download neither calls install nor replaces an existing r
     assert.equal(fs.existsSync(path.join(f.insight, 'inference-proxy/installation.json')), false);
 });
 
-test('reinstall refreshes a still-owned Qoder launcher to the new runtime version', async t => {
+test('reinstall updates the optional runtime but keeps the vendor Qoder launcher unchanged', async t => {
     const f = await fixture(t);
     assert.equal((await f.execute()).code, 0);
     const before = fs.realpathSync(path.join(f.insight, 'inference-runtime'));
@@ -120,8 +130,8 @@ test('reinstall refreshes a still-owned Qoder launcher to the new runtime versio
     const after = fs.realpathSync(path.join(f.insight, 'inference-runtime'));
     assert.notEqual(after, before);
     const launcher = fs.readFileSync(path.join(f.bin, 'qoderclicn'), 'utf8');
-    assert.ok(launcher.includes(pathToFileURL(after).href), 'Qoder launcher must import the newly installed runtime');
-    assert.ok(!launcher.includes(pathToFileURL(before).href));
+    assert.equal(fs.lstatSync(path.join(f.bin, 'qoderclicn')).isSymbolicLink(), true);
+    assert.equal(launcher, '#!/bin/sh\nexit 0\n');
 });
 
 test('CLI installation errors fail the Bash block clearly and unrelated framework selections skip it', async t => {
@@ -135,12 +145,56 @@ test('CLI installation errors fail the Bash block clearly and unrelated framewor
 test('installer passes only selected Agents to the CLI', async t => {
     const f = await fixture(t, { proxySource: 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");\n' });
     f.env.INSTALL_QODER = 'false'; const result = await f.execute();
-    assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /"install",.*"opencode"/); assert.doesNotMatch(result.stdout, /opencode,qoder/);
+    assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /"prepare",.*"opencode"/); assert.doesNotMatch(result.stdout, /opencode,qoder/);
 });
 
 test('missing original working directory fails before the installer CLI can run', async t => {
     const f = await fixture(t, { proxySource: 'process.stdout.write("CLI_WAS_CALLED\\n");\n' });
     f.env.SETUP_WORKING_DIR = path.join(f.dir, 'missing-project');
     const result = await f.execute(); assert.notEqual(result.code, 0); assert.doesNotMatch(result.stdout, /CLI_WAS_CALLED/);
+    assert.equal(fs.readFileSync(f.openCodeFile, 'utf8'), f.originals.opencode);
+});
+
+
+test('Shell entry reports missing Node before any configuration changes', async t => {
+    const f = await fixture(t); assert.equal((await f.execute()).code, 0);
+    fs.writeFileSync(path.join(f.insight, 'inference-runtime/node-path'), '/no-longer-installed/node\n');
+    const before = fs.readFileSync(f.openCodeFile);
+    const result = await run('/bin/sh', [path.join(f.insight, 'model-proxy.sh'), 'opencode'], { ...f.env, PATH: '/empty-path' }, f.dir);
+    assert.notEqual(result.code, 0); assert.match(result.stderr, /Node.js 20/);
+    assert.deepEqual(fs.readFileSync(f.openCodeFile), before);
+    assert.equal(fs.existsSync(path.join(f.insight, 'inference-proxy/backups')), false);
+    const help = await run('/bin/sh', [path.join(f.insight, 'model-proxy.sh'), '--help'], { ...f.env, PATH: '/empty-path' }, f.dir);
+    assert.equal(help.code, 0); assert.match(help.stdout, /opencode.*qoder/);
+});
+
+test('Shell entry falls back to a compatible PATH runtime and synchronizes newly added providers', async t => {
+    const f = await fixture(t); assert.equal((await f.execute()).code, 0);
+    const shell = path.join(f.insight, 'model-proxy.sh');
+    assert.equal((await run('/bin/sh', [shell, 'opencode'], f.env, f.dir)).code, 0);
+    fs.writeFileSync(path.join(f.insight, 'inference-runtime/node-path'), '/removed-node\n');
+    const stateFile = path.join(f.insight, 'inference-proxy/installation.json');
+    fs.writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(stateFile, 'utf8')), nodePath: '/removed-node' }));
+    const cfg = JSON.parse(fs.readFileSync(f.openCodeFile, 'utf8'));
+    const existing = cfg.provider.local.options.baseURL;
+    cfg.provider.added = { npm: '@ai-sdk/openai', options: { baseURL: 'https://added.example/v1' } };
+    fs.writeFileSync(f.openCodeFile, JSON.stringify(cfg));
+    const result = await run('/bin/sh', [shell, 'opencode'], f.env, f.dir);
+    assert.equal(result.code, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    const backup = JSON.parse(fs.readFileSync(report.backups[0].latest, 'utf8'));
+    assert.equal(backup.provider.added.options.baseURL, 'https://added.example/v1');
+    assert.equal(backup.provider.local.options.baseURL, 'https://upstream.example/v1');
+    const final = JSON.parse(fs.readFileSync(f.openCodeFile, 'utf8'));
+    assert.equal(final.provider.local.options.baseURL, existing);
+    assert.match(final.provider.added.options.baseURL, /managed/);
+    assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).nodePath, process.execPath);
+});
+
+test('failed Shell component download leaves the published runtime and model configuration intact', async t => {
+    const f = await fixture(t, { failComponent: 'model-proxy.sh' });
+    const result = await f.execute(); assert.notEqual(result.code, 0);
+    assert.equal(fs.existsSync(path.join(f.insight, 'inference-runtime')), false);
+    assert.equal(fs.existsSync(path.join(f.insight, 'model-proxy.sh')), false);
     assert.equal(fs.readFileSync(f.openCodeFile, 'utf8'), f.originals.opencode);
 });

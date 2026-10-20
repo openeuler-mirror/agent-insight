@@ -34,7 +34,7 @@ test('所有客户安装入口在改写 Agent 配置前提醒自行备份且不�
         ? script.indexOf('rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts"')
         : script.indexOf('Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Skill-Insight.ts")');
       assert.ok(firstPluginChange > warning, `${platform}: 备份提醒必须先于修改插件配置`);
-      assert.match(script, /No automatic backup, restore, or uninstall/);
+      assert.match(script, /Model addresses are unchanged/);
       assert.match(script, /安装前请自行备份/);
       assert.doesNotMatch(script, /client_uninstall\.mjs|restore_inference_proxy\.sh|uninstall_client\.sh/);
       if (platform === 'unix') {

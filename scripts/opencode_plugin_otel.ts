@@ -730,13 +730,13 @@ async function createOpenCodeCollector(context: any = {}, lifecycle?: { emit?: (
       const insightDir = getExistingInsightDir()
       const proxyRuntime = path.join(insightDir, "inference-runtime", "inference_proxy.mjs")
       try {
-        let installation: { enabled?: boolean, agents?: string[] } | undefined
+        let installation: { enabled?: boolean, explicitEnabled?: boolean, agents?: string[] } | undefined
         try {
           installation = JSON.parse(fs.readFileSync(path.join(insightDir, "inference-proxy", "installation.json"), "utf8"))
         } catch (error) {
           if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
         }
-        if (installation?.enabled && installation.agents?.includes("opencode")) {
+        if ((installation?.explicitEnabled ?? installation?.enabled) && installation?.agents?.includes("opencode")) {
           inference.setBlocked(true)
           const { prepareOpenCodeConfig } = await import(pathToFileURL(proxyRuntime).href)
           await prepareOpenCodeConfig(cfg, { insightDir, cwd: context.directory || process.cwd() })
@@ -1021,7 +1021,7 @@ export async function setupOpenCodeV2(context: any) {
     let install: any
     try { install = JSON.parse(fs.readFileSync(path.join(insightDir, 'inference-proxy/installation.json'), 'utf8')) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
-    return install.enabled && install.agents?.includes('opencode')
+    return (install.explicitEnabled ?? install.enabled) && install.agents?.includes('opencode')
   }
   const prepareRequest = async (address: string) => {
     if (!proxyEnabled()) return address
@@ -1046,12 +1046,15 @@ export async function setupOpenCodeV2(context: any) {
     await adapter.request(input)
   })
   await context.session.hook('http.response', adapter.response)
-  await context.session.hook('experimental.ws.handshake', async () => {
-    if (proxyEnabled()) throw new Error('Agent Insight model proxy requires HTTP transport; WebSocket request blocked')
-  })
-  await context.provider.transform((editor: any) => {
+  await context.provider.transform(async (editor: any) => {
     if (!proxyEnabled()) return
-    for (const item of editor.list()) editor.update(item.provider.id, (provider: any) => { provider.settings = { ...provider.settings, transport: 'http' } })
+    const runtime = path.join(insightDir, 'inference-runtime/inference_proxy.mjs')
+    const { isManagedOpenCodeEndpoint } = await import(pathToFileURL(runtime).href)
+    for (const item of editor.list()) {
+      if (isManagedOpenCodeEndpoint(item.provider.settings?.baseURL, { insightDir })) {
+        editor.update(item.provider.id, (provider: any) => { provider.settings = { ...provider.settings, transport: 'http' } })
+      }
+    }
   })
   return async () => { abort.abort(); await events; await lifecycle.close?.() }
 }

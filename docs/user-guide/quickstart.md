@@ -352,11 +352,11 @@ Pi Agent、Codex 和 Goal Plus 共用采集传输模块。重新安装时，已�
 
 OpenCode 支持 1.x 与 2.x 的 Trace 采集和模型转发；安装脚本会按本机 CLI 主版本选择插件。**升级或降级 OpenCode 主版本后，重新执行客户端安装页的命令并重启 OpenCode。** 2.x 的原生 `providers` 配置与兼容的旧 `provider` 配置均可接管；模型名称、认证信息和用户选中的模型保持原值，切换模型或新增 Provider 的实际请求会同步到本机入口。只有模型转发安装成功后，推理服务才会收到统一调用 ID。当前真实验证环境为 macOS ARM64、OpenCode 1.18.29 / 2.0.32、OpenAI-compatible Chat Completions SSE。2.x 的 TUI 扩展和 RAS 功能不在本次适配验收范围；安装时跳过旧版 TUI 扩展。
 
-选择 Qoder 或 OpenCode 的 Linux/macOS curl 安装时，还会自动安装本机模型转发入口，改写可识别的自定义 Provider 地址并同步后续变更。已接入模型可照常切换；Qoder 运行中新增或修改 Provider 后需要重启 CLI。
+选择 Qoder 或 OpenCode 的 Linux/macOS curl 安装时，会准备可选的本机模型转发工具，不改写模型地址。需要模型请求与推理分析关联时，安装后单独执行 `sh ~/.agent-insight/model-proxy.sh opencode`（Qoder 使用 `qoder`）；脚本复用现有 Node.js 20+。新增 Provider 或修改上游后重跑命令，并重启 Agent 会话。
 
 Qoder Desktop / JetBrains 插件只有在本次平台下载成功后才显示对应安装指导；下载失败时不要安装本地残留的旧 VSIX / ZIP。Qoder JetBrains 插件仅从平台接口下载。若下载失败，请部署方更新或从当前源码构建插件，再重新执行安装；不要安装本地已有的旧 ZIP，也不要绕过平台从历史 Release 直链下载。服务端不会分发仍含已删除自动卸载组件的旧制品。
 
-**执行安装命令前请自行备份。** 安装会改写模型地址、Hook、插件配置和 Qoder CLI 启动入口，可能覆盖原配置文件；不自动备份，也不提供一键恢复或卸载。至少保存 `~/.config/opencode/`（或 `XDG_CONFIG_HOME` / 自定义路径，含模型配置、插件和 `tui.json`）、`~/.qoder-cn/settings.json`、`~/.qoder/settings.json`、`~/.qoderworkcn/settings.json`、`~/.qoderwork/settings.json` 中实际使用的文件，并记录 Qoder CLI 原启动路径。Windows 安装同样会修改采集 Hook / 插件配置，也应先备份。配置可能含 API Key，请妥善保存；后续如需手工撤销，应对照备份逐项调整，避免覆盖安装后新增的配置。支持范围见[自动接入本地统一推理入口](./observability/view-traces#自动接入本地统一推理入口)。
+**执行采集安装命令前请自行备份 Hook / 插件配置。** curl 安装只安装采集组件，不改模型地址。需要模型转发时，在安装页复制另一条显式命令：该命令先自动备份模型配置并告知位置，再登记上游、改写地址；新增 Provider 后重新执行即可，同时更新保留用户修改的备份。详见[显式接入本地统一推理入口](./observability/view-traces#显式接入本地统一推理入口)。不提供一键恢复或卸载。
 
 如果使用 **AcTrail**，先自行完成 AcTrail 安装并启动守护进程，再在安装指导中选择 AcTrail，并于 AcTrail 所在的 Linux 环境运行页面生成的 curl 命令。脚本不会安装或包装 AcTrail，而是完成两项配置：合并更新 AcTrail 守护进程配置，启用完整请求、结构化工具调用、工具结果和子 Agent 关系；生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给官方 `otel-http` 插件。修改守护进程配置前，脚本会备份原文件；若守护进程正在运行则自动重启，然后持久化加载 `agent-insight.otel-http` 实例。之后继续使用原来的 `sudo actrailctl launch --name <名称> -- <Agent 命令>`，AcTrail 会自动上报。默认守护进程配置为 `/etc/actrail/actraild.conf`；非默认部署可在运行脚本前设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
 

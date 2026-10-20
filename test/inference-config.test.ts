@@ -37,14 +37,14 @@ test('coverage counts current managed endpoints rather than retained routes or c
     assert.deepEqual(removed.managed, [], 'historical routes must not imply current endpoint coverage');
 });
 
-test('sync changes only the exact JSONC endpoint token, creates no backups and is idempotent', async t => {
+test('sync changes only the exact JSONC endpoint token, backs up before changes and is idempotent', async t => {
     const f = await fixture(t); const original = openCode(); fs.writeFileSync(f.file, original);
     const result = f.run(); assert.equal(result.routes.length, 1); assert.deepEqual(result.changed, [f.file]);
     const managed = f.origin + result.routes[0].basePath;
     assert.deepEqual(result.routes[0], { basePath: result.routes[0].basePath, agent: 'opencode', protocol: 'openai', upstreamBaseUrl: 'https://inference.example.test/v1' });
     assert.match(result.routes[0].basePath, /^\/managed\/opencode\/[a-f0-9]{24}$/);
     assert.equal(fs.readFileSync(f.file, 'utf8'), original.replace(JSON.stringify('https://inference.example.test/v1'), JSON.stringify(managed)));
-    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/backups')), false);
+    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/backups')), true);
     assert.doesNotMatch(JSON.stringify(readState(f.insightDir)), /private-test-key/);
     assert.deepEqual(f.run().changed, []);
 });
@@ -152,7 +152,7 @@ test('interrupted routing-state publication does not modify Agent configuration'
     });
     assert.throws(() => f.run(), /storage write failure/);
     assert.equal(fs.readFileSync(f.file, 'utf8'), original);
-    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/backups')), false);
+    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/config-state.json')), false);
     f.run();
     assert.match(fs.readFileSync(f.file, 'utf8'), /managed\/opencode/);
 });
@@ -185,17 +185,17 @@ test('OpenCode V2 native and mixed V1 provider endpoints retain JSONC and later 
 });
 
 
-test('configuration sync no longer provides automatic backup or restore APIs', async t => {
+test('explicit configuration creates backups without reintroducing automatic restore APIs', async t => {
     const f = await fixture(t);
     assert.equal(f.api.restoreConfigFiles, undefined);
     assert.equal(f.api.removeConfigPlugins, undefined);
     fs.writeFileSync(f.file, openCode());
     f.run();
-    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/backups')), false);
+    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/backups')), true);
     const state = readState(f.insightDir);
     assert.equal(state.files[f.file].backup, undefined);
     assert.equal(state.files[f.file].backupHash, undefined);
-    assert.doesNotMatch(JSON.stringify(state), /private-test-key|originalToken/);
+    assert.doesNotMatch(JSON.stringify(state), /private-test-key/);
 });
 
 
@@ -210,4 +210,50 @@ test('previous installations keep routing without depending on old backup files'
     assert.deepEqual(next.changed, []);
     assert.deepEqual(next.routes, first.routes);
     assert.equal(readState(f.insightDir).files[f.file].backup, undefined);
+});
+
+
+test('explicit configuration keeps an immutable original and synchronizes an unproxied backup with user edits', async t => {
+    const f = await fixture(t); const original = openCode(); fs.writeFileSync(f.file, original);
+    const first = f.run();
+    assert.equal(first.backups?.length, 1);
+    const backup = first.backups[0];
+    assert.equal(fs.readFileSync(backup.original, 'utf8'), original);
+    assert.equal(fs.readFileSync(backup.latest, 'utf8'), original);
+    const managed = f.origin + first.routes[0].basePath;
+    const edits = fs.readFileSync(f.file, 'utf8').replace('"probe": {}', '"probe": {}, "added-model": {}')
+      .replace('private-test-key', 'changed-key').replace('"provider": {', '"provider": { "new": { "npm": "@ai-sdk/openai", "options": { "baseURL": "https://new.example/v1" } },');
+    fs.writeFileSync(f.file, edits);
+    const second = f.run();
+    assert.equal(second.routes.length, 2);
+    assert.equal(fs.readFileSync(backup.latest, 'utf8'), edits.replace(JSON.stringify(managed), JSON.stringify('https://inference.example.test/v1')));
+    assert.equal(fs.readFileSync(backup.original, 'utf8'), original);
+    assert.equal(fs.statSync(backup.latest).mode & 0o777, 0o600);
+    assert.deepEqual(f.run().changed, []);
+    assert.equal(fs.readFileSync(backup.latest, 'utf8').includes('/managed/'), false);
+    assert.doesNotMatch(JSON.stringify(readState(f.insightDir)), /changed-key/);
+});
+
+test('backup write failure prevents configuration and routing-state changes', async t => {
+    const f = await fixture(t); const original = openCode(); fs.writeFileSync(f.file, original);
+    const rename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', (from: fs.PathLike, to: fs.PathLike) => {
+        if (String(to).includes('/backups/')) throw new Error('backup unavailable');
+        rename(from, to);
+    });
+    assert.throws(() => f.run(), /backup unavailable/);
+    assert.equal(fs.readFileSync(f.file, 'utf8'), original);
+    assert.equal(fs.existsSync(path.join(f.insightDir, 'inference-proxy/config-state.json')), false);
+});
+
+
+test('backup locations are reported before any user configuration changes', async t => {
+    const f = await fixture(t); const original = openCode(); fs.writeFileSync(f.file, original);
+    const announced: any[] = [];
+    f.api.syncConfigFiles({ insightDir: f.insightDir, origin: f.origin, files: [{ agent: 'opencode', file: f.file }], onBackup: (backup: any) => {
+        assert.equal(fs.readFileSync(f.file, 'utf8'), original);
+        assert.equal(fs.readFileSync(backup.latest, 'utf8'), original);
+        announced.push(backup);
+    } });
+    assert.equal(announced.length, 1);
 });
