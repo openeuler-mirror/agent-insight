@@ -52,6 +52,7 @@ export async function GET(req: Request) {
       benchmarkKeys: string[];
       benchmarkUnavailableReason: string | null;
       parameterDefinitions: RuntimeDefinition[];
+      benchmarkEnvironments?: Record<string, { profile: NonNullable<(typeof benchmarkTargets)[number]['executionProfile']>; models: Array<{ id: string; label: string }> }>;
     };
     type Candidate = {
       name: string;
@@ -94,9 +95,11 @@ export async function GET(req: Request) {
         if (capability === 'generic') existing.parameterDefinitions = target.parameterDefinitions || [];
         if (capability === 'generic') existing.supportsTriggerRouting = Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting);
         existing.supportsFaultInjection ||= capability === 'fault-injection';
-        const models = new Map(existing.models.map((model) => [model.id, model]));
-        for (const model of target.models) models.set(model.id, model);
-        existing.models = Array.from(models.values());
+        if (capability !== 'benchmark') {
+          const models = new Map(existing.models.map((model) => [model.id, model]));
+          for (const model of target.models) models.set(model.id, model);
+          existing.models = Array.from(models.values());
+        }
       } else {
         current.targets.push({
           ...target,
@@ -149,6 +152,10 @@ export async function GET(req: Request) {
             target.benchmarkKeys.push(benchmark.adapterKey);
           }
           if (benchmark.ready) target.parameterDefinitions = benchmark.parameterDefinitions;
+          if (benchmark.ready && benchmark.executionProfile) {
+            target.benchmarkEnvironments ||= {};
+            target.benchmarkEnvironments[benchmark.adapterKey] = { profile: benchmark.executionProfile, models: [{ id: '', label: '平台默认' }, ...benchmark.models.map(id => ({ id, label: id }))] };
+          }
         }
         target.supportsBenchmark = target.benchmarkKeys.length > 0;
         target.benchmarkUnavailableReason = target.supportsBenchmark
@@ -180,6 +187,7 @@ export async function GET(req: Request) {
           benchmarkKeys: target.benchmarkKeys,
           benchmarkUnavailableReason: target.benchmarkUnavailableReason,
           parameterDefinitions: target.parameterDefinitions,
+          benchmarkEnvironments: target.benchmarkEnvironments,
         })),
       }));
 

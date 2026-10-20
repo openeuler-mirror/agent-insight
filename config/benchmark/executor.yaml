@@ -1,4 +1,16 @@
 benchmarks:
   swe-bench:
     gitSource: null
+    images:
+      source: official
+      arch: auto
+      allowNonOfficial: false
+      proxyPrefix: null
+      verifiedMirrorRepositories: null
 runtimes: {}
+execution:
+  profiles: {}
+  bindings:
+    - benchmarks: [swe-bench]
+      platforms: [pi-agent, xiaoo]
+      profile: xgovernor-local-docker

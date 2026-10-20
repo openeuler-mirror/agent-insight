@@ -241,6 +241,18 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 
 宿主上传生命周期：`fire_push_*` 注册 per-session pending handle；平台在异常与全部 `action_result` 入队后调用内部 `flush(timeout_ms)`，以 HTTP 2xx 作为 ack。flush 只等待调用时的 pending 快照，返回 `attempted/acked/failed/pending/timed_out`；并发 flush 各自使用本地快照结算，不会互相消费回执。未 flush 的完成回执按 session 最多保留 256 条，避免长驻宿主无界增长。超时不得取消上传或向 Agent 主流程抛错。OpenCode 的主 flush 点是 `onActions` 末尾，idle/bye 仅兜底，`reset` 不清理 pending。该有界 drain 保证正常短生命周期结束；SIGKILL/断电保证需另建持久化 outbox。
 
+## xGovernor 单 Agent Benchmark Trace
+
+该路径由 `xgovernor-agent` Adapter 接管，要求根 Session 为 `xgovernor:<runId>` 且带有 `xgovernor.runtime_id`，复用 Pi canonical 的 USER/LLM/Tool/Agent 映射，按 `agent.insight.framework` 保留 `pi-agent` 或 `xiaoo` 的身份。不改变原生 CLI 与 MCTS 的 Trace 归属。
+
+| 属性 | 来源与含义 |
+| --- | --- |
+| `benchmark.run_id` | 平台本次 Case Run ID |
+| `xgovernor.runtime_id` | 独立 daemon 下精确创建并持久化的 Runtime ID |
+| `agent.insight.framework` | 本次执行平台，由共享 Trace transport 写入 |
+
+Pi 的正文来自原生 JSONL；xiaoO 来自透明 worker 代理保存的完整 schema 1 state，不从 SSE 摘要或 SQLite 私有表拼接。调用与工具结果必须完整匹配；缺失时执行报告 Trace 不完整。xiaoO 仅上报原始 `api_usage_tokens` 总数，不推算输入/输出分项。业务 Trace ID 与 OTLP 传输 ID 分开，Case 链接使用前者。Trace 先写 durable spool，资源关闭后仍可重传；实际入库确认继续遵循既有规则。
+
 ## Goal Plus Pi 被动导入属性
 
 Goal Plus 以 `--no-extensions -e goal-plus.ts` 启动的 Pi worker 不运行 Agent Insight Pi Extension。Goal Plus collector 因此只读 `.gp` 内由 agent-session metadata 明确指向的 native session，将其转换为现有 Pi canonical event 并上报 `/api/ingest/otel/v1/traces`。它不引入新的 OTel adapter。

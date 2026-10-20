@@ -93,8 +93,20 @@ const schemas = {
     },
   },
   executor: {
-    benchmarks: { 'swe-bench': { gitSource: leaf(null, nullableString, gitSource) } },
+    benchmarks: {
+      'swe-bench': {
+        gitSource: leaf(null, nullableString, gitSource),
+        images: {
+          source: choice('official', ['official', 'epoch']),
+          arch: choice('auto', ['auto', 'x86_64', 'arm64']),
+          allowNonOfficial: boolean(false),
+          proxyPrefix: leaf(null, (value) => value === null || (typeof value === 'string' && /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i.test(value))),
+          verifiedMirrorRepositories: leaf(null, (value) => value === null || (Array.isArray(value) && value.length <= 8 && value.every((item) => typeof item === 'string' && /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)+$/.test(item)))),
+        },
+      },
+    },
     runtimes: leaf({}, runtimeOverrides),
+    execution: leaf({}, value => value && typeof value === 'object' && !Array.isArray(value)),
   },
 }
 
@@ -161,6 +173,13 @@ function apply(target, schema, values, filePath, prefix = '') {
           for (const [runtimeKey, runtime] of Object.entries(value)) {
             target[key][runtimeKey] = { defaults: { ...target[key][runtimeKey]?.defaults, ...structuredClone(runtime.defaults || {}) } }
           }
+        } else if (field === 'execution') {
+          const merge = (base, next) => Object.fromEntries([...new Set([...Object.keys(base), ...Object.keys(next)])].map(key => [key,
+            next[key] === undefined ? base[key]
+              : base[key] && next[key] && typeof base[key] === 'object' && typeof next[key] === 'object' && !Array.isArray(base[key]) && !Array.isArray(next[key])
+                ? merge(base[key], next[key]) : structuredClone(next[key]),
+          ]))
+          target[key] = merge(target[key], value)
         } else target[key] = rule.normalize ? rule.normalize(value, filePath) : structuredClone(value)
       } catch (error) {
         throw new Error(`${filePath}: ${field} ${error.message}`)
@@ -200,6 +219,13 @@ function loadProjectConfig(scope, options = {}) {
     if (config.imagePool.enabled && config.imagePool.prefetchEnabled && config.imagePool.maxPulls < 2) {
       throw new Error('config/benchmark/evaluator.yaml: imagePool.maxPulls 开启预取时至少为 2')
     }
+  }
+  if (scope === 'executor') {
+    const images = config.benchmarks['swe-bench'].images
+    if (images.source === 'epoch' && (!images.allowNonOfficial || images.arch === 'x86_64')) {
+      throw new Error('config/benchmark/executor.yaml: benchmarks.swe-bench.images.source=epoch 需要允许非官方镜像且使用 ARM64')
+    }
+    config.execution = require('../benchmark-protocol/execution.cjs').normalizeExecutionConfig(config.execution)
   }
   return config
 }

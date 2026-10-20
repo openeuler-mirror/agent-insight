@@ -349,6 +349,20 @@ Adapter 必须继承 `AbstractBenchmarkAdapter`，只实现五个受保护的业
 - `submission.requiredArtifacts` 必须与 Manifest 完全一致；
 - 不要把 shell 命令、凭据或私有 Payload 塞入任务信封。
 
+执行环境可通过可选 `AgentTaskEnvelope.execution` 表达冻结的公开 Profile、OCI 镜像引用、架构与工作目录。当前 SWE-bench Adapter 仅依据公开 `instanceId` 和选定架构生成官方镜像规格，仍保留原有 Git 基线与提交契约。只有声明 `execution-backend/v1` 且 Profile/Runtime 就绪的客户端可接收这种任务；现有 `agent-task/v1` 未升级为全局必需环境，不影响其他目标。
+
+客户端 `ExecutionBackendRegistry` 按 `backendKey` 选择 `prepare/runAgent/collect/cancel/close/recover` 六方法实现。Runner 仅保存不透明句柄，统一处理阶段期限、产物落盘、上传重试与清理恢复，不解析后端目录或 session。已有工作区/运行时/策略组件由 `LocalExecutionBackend` 包装；`XGovernorExecutionBackend` 负责每 Case daemon、Docker、Runtime 会话、Patch 与完整 Trace 导出。
+
+xGovernor 依赖由 `scripts/xgovernor.cjs` 管理，`update [--version <tag或commit>]` 从官方源码构建配套组件，`status` 校验版本，`rollback` 回退。安装版客户端分发该脚本和后端管理模块，安装位置为 `AGENT_INSIGHT_HOME/dependencies/xgovernor`，不占用平台、Evaluator 或全局 Agent 安装。`installation.cjs` 校验原子 current/previous 指针、清单、架构和实际制品摘要；没有手动组件路径的 Profile 自动解析受管理组件，随后由 `executionCapabilities()` 生成带实际 commit 与 `artifactDigest` 的公开摘要。现有客户端 PUT capabilities 与平台接收路由均须保留 `executionProfiles`，否则新版本无法传到平台。
+
+升级仅切换后续任务的版本指针，执行句柄固定本次 Runtime/模型凭据引用和组件路径，运行与 Trace 导出不依赖新的 current；旧版本目录保留供在途任务及恢复使用。任务受理前仍核对冻结摘要，不自动迁移旧实验。安装 smoke 只检查源码布局、扩展类型和 server 基础协议，实际模型、工具隔离、完整 Trace 仍需执行链路验证。安装步骤见[部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
+
+SWE-bench 执行端在 `services/executor/src/benchmarks/swe-bench-images.cjs` 独立维护镜像命名、架构选择、SWR 映射、代理及官方回退；Evaluator 保留 `benchmarks/swe-bench/evaluator/` 的原有实现。两端不互相导入、不依赖共用镜像模块，也不使用另一端的实现生成测试预期，可分别演进。执行端通过 `execution-images.cjs` 分派到自身 Benchmark 镜像适配器，再注入本机 Docker 调用。xGovernor 后端只使用准备结果，不内置 SWE-bench 仓库规则；替换后端仍可调用同一入口。两端分别维护各自的 `benchmarks.swe-bench.images` 配置定义并读取 `executor` 与 `evaluator` 配置，不自动同步。当前默认均支持本地缓存 → SWR → 代理 → 官方仓库，内置 SWR Verified 镜像仅适用于官方 x86_64。执行端模块随现有 `services/executor/src` 的客户端 bundle/npm/standalone 分发，不向 Evaluator 增加执行端依赖。
+
+带 OCI 执行环境的后端在执行前解析并持久化本机 image ID，通过 `runFacts.execution.imageId` 记录实际使用的镜像，`runFacts.execution.imageResolution` 记录来源及解析结果。平台不将其作为 EvaluationJob 的强制镜像约束；SWE-bench 评测与重评沿用私有评测配置中的镜像引用，以及 Evaluator 既有的 SWR、代理与官方镜像解析和回退策略。镜像预热不依赖执行端回传 registry digest。
+
+后续接 OpenCode 时，在 xGovernor 支持的前提下新增受信 Runtime 注册、模型/参数映射及完整 Trace 转换，再增加目标 binding；公共 Runner、SWE-bench 业务任务与 Evaluator 无需增加 OpenCode 分支。连 xGovernor 一起替换时，实现同一六方法合同、配置/能力描述及独立 Trace/产物适配，注册新 `backendKey`。目前 YAML 配置解析与预探测实现针对 xGovernor；增加其他后端须补充对应配置和能力装配。通用合同不代表其他后端已经完成适配。配置与导出合同见[部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
+
 ### 8.3 `validateBenchmarkSubmission`
 
 基类已经校验 Artifact 归属、名称、MIME、大小、SHA-256、真实字节和必需集合。实例只校验业务内容，例如：

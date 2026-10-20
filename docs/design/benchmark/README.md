@@ -46,6 +46,8 @@ flowchart LR
 | 7 | [结果处理](result-processing.md) | Raw Result、归一化、固定分母聚合与查询 |
 | 8 | [前端接入](frontend-development-plan.md) | 统一向导、详情、Artifact、重试/重评和趋势 |
 
+相关扩展设计：[xGovernor 本地 Docker 接入](../benchmark-xgovernor-local-docker/phase2-requirements-design.md)，覆盖原生 Pi/xiaoO 的 SWE-bench 执行迁移、Mermaid 架构图，以及后续 OpenCode 和沙箱替换的合同；需求与开发计划见同目录 phase1、phase3。当前实现范围仍以上述主链路说明为准。
+
 ## 3. 代码落点
 
 ```text

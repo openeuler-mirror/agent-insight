@@ -105,7 +105,7 @@ OpenCode 执行会实时识别运行时错误：鉴权或模型配置错误立�
 
 错误来自本次执行临时启用的事件插件，而非仅依赖 CLI 打印信息。插件通过独立通道传递当前根 Session 的原始重试/错误事件，不修改全局 OpenCode 配置，不影响手动使用。客户端给 OpenCode 最多 120 秒准备监测通道并创建根会话；若本次执行上限更短，仍以所配置的执行上限为准。首个模型响应的 90 秒兜底从会话创建后计时。初始化超时或进程结束仍无通道时，会显示实际失败原因，不把慢启动当成模型首响应超时。
 
-Pi Agent 可以通过在线客户端执行普通生成 Trace 实验和 Benchmark 实验。先按[Pi 接入说明](../settings/access-control.md#流程四接入-pi-agent)安装并注册现有 Trace Collector，更新并重启 Reliability Client，再选择平台 `pi-agent`、根 Agent `pi-agent` 和运行主机。仅安装 `pi` CLI 不会开放实验能力；客户端还会检查 CLI 版本与参数、Collector 注册、启用状态、上传配置和 spool 可写性。Pi 实验能力独立于故障注入，不需要 Pi FI 组件，也不将 SubAgent profile 作为可启动目标。
+Pi Agent 的普通生成 Trace 实验使用原生 CLI。以下 Pi CLI、模型发现和 Collector 说明适用于普通实验；SWE-bench Benchmark 的执行环境见下方“Benchmark 实验”。先按[Pi 接入说明](../settings/access-control.md#流程四接入-pi-agent)安装并注册现有 Trace Collector，更新并重启 Reliability Client，再选择平台 `pi-agent`、根 Agent `pi-agent` 和运行主机。仅安装 `pi` CLI 不会开放实验能力；客户端还会检查 CLI 版本与参数、Collector 注册、启用状态、上传配置和 spool 可写性。Pi 实验能力独立于故障注入，不需要 Pi FI 组件，也不将 SubAgent profile 作为可启动目标。
 
 Pi 模型配置仍读取运行用户的 `~/.pi/agent/settings.json`（默认 provider/model）、`models.json`（自定义模型）、`auth.json`（模型凭据）以及 provider 环境变量；设置 `PI_CODING_AGENT_DIR` 时使用该目录。模型列表由 `pi --no-approve --list-models` 发现，完整展示 Pi 在实验运行环境下列出的候选模型，标识为完整 `provider/model`；不增加白名单、不验证模型密钥有效性、余额或模型权限，也不逐个发起模型调用。发现失败时仍可选“平台默认”。
 
@@ -119,7 +119,7 @@ Pi 每次执行使用全新 Session，通过 stdin 接收 Case 文本；临时�
 
 实验使用 `--no-approve`，忽略 Case 仓库中的 `.pi` 项目资源与项目 Skill，保留全局 Collector/Skill。需要评测的 Skill 请安装到受控的全局位置；不要依赖 Case 中的 `.pi/extensions` 或项目模型覆盖。此选项只是项目信任策略，不是工具执行沙箱。
 
-xiaoo 可以通过在线客户端执行普通生成 Trace 实验和 Benchmark 实验。先使用现有 curl 安装流程完成客户端与 xiaoo Trace Collector 安装；更新客户端后重启服务，在 Agent 列表选择 `xiaoo · xiaoo · 可执行 N 台`，再选择对应运行主机。界面将 Collector 上报的 `xiaoo` Trace 身份与 CLI 原生 `defaultagent` 执行 ID 合并展示，实际执行仍使用 `defaultagent`。历史 Trace 中的 `xiaoo` 名称本身不表示该机器已具备实验执行能力。平台与运行主机可以分开部署，继续使用客户端安装时配置的平台地址。
+xiaoo 的普通生成 Trace 实验使用原生 CLI。以下 xiaoo CLI、密钥和 Collector 说明适用于普通实验；SWE-bench Benchmark 使用下方介绍的 xGovernor 后端。先使用现有 curl 安装流程完成客户端与 xiaoo Trace Collector 安装；更新客户端后重启服务，在 Agent 列表选择 `xiaoo · xiaoo · 可执行 N 台`，再选择对应运行主机。界面将 Collector 上报的 `xiaoo` Trace 身份与 CLI 原生 `defaultagent` 执行 ID 合并展示，实际执行仍使用 `defaultagent`。历史 Trace 中的 `xiaoo` 名称本身不表示该机器已具备实验执行能力。平台与运行主机可以分开部署，继续使用客户端安装时配置的平台地址。
 
 客户端要求 xiaoo CLI 支持 JSON 输出、Agent 和标题参数；模型 `provider/model` 会拆为 xiaoo 的 provider 和 model 参数。执行错误、模型鉴权失败、无输出和超时会回写为明确失败，原有 Trace Collector 继续负责上传轨迹。若 CLI 返回 HTTP 401，请修复运行主机上的模型鉴权配置后重跑 Case。
 
@@ -136,6 +136,16 @@ xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上�
 正常退出 xiaoo 后，Collector 会随最终上传携带明确的 Trace 完成标记，平台据此写入会话结束时间并显示“已完成”。若旧版本上传的 Trace 已有完整回复却长期显示“执行中”，更新 Collector 后的新 Trace 会恢复；旧记录需按实际退出时间一次性校正，不会自动猜测。
 
 #### Benchmark 实验
+
+原生 Pi/xiaoO 的新建 SWE-bench 实验使用 **xGovernor 本地 Docker**：每个 Case 在独立工具容器中修改仓库，模型请求仍由宿主机控制器发出。工具容器断网，资源限额约束工具容器。普通实验、OpenCode 与 MCTS 保留原有执行方式。
+
+执行机管理员先运行 `node scripts/xgovernor.cjs update` 安装依赖；没有源码仓库的安装版客户端使用 `node ~/.agent-insight/client/runtime/xgovernor.cjs update`。同一命令后续更新到官方默认分支最新提交，`--version <tag或commit>` 可固定版本，`status` 查看实际版本，`rollback` 回退。平台、客户端和 Evaluator 原安装命令保持不变，平台和 Evaluator 无需安装 xGovernor。用户不用单独启动 server，每个 Case 的启动和清理由客户端负责。安装需要 Linux、Node >=22.19、Git、Cargo/npm 等条件，详见[部署说明](../../developer-guide/benchmark/service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
+
+创建确认页与详情显示冻结的版本提交。受管理安装自动记录实际版本并刷新环境摘要，无需手动维护 `sourceRevision`；客户端正常联网时约在下一轮能力上报生效。已运行 Case 继续使用原版本，旧实验尚未运行的任务若与当前环境摘要不一致，需要重新创建并确认。模型配置或凭据变化仍按部署说明处理。
+
+平台和执行客户端需同步升级，执行机按[xGovernor 部署说明](../../developer-guide/benchmark/service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)配置 Linux/Docker、受管理 Runtime、模型环境变量和 Trace 上传。只安装原生 CLI 不足以执行这类 Benchmark；配置缺失或旧客户端会显示未就绪，不自动回退宿主机。模型候选来自该执行环境的显式配置，与普通实验的模型目录独立。执行与评测分别维护镜像拉取实现，当前默认顺序相同：先查本地缓存，再依次尝试 SWR、配置代理和官方仓库；SWR Verified 镜像适用于官方 x86_64，ARM64 跳过这些仓库。两端分别读取各自的 `benchmarks.swe-bench.images` 配置，不自动同步配置。执行与评测仍使用独立容器，不强制两端 digest、image ID 或架构相同；评测保留原有预热流程。因此不保证两端基础镜像内容完全相同。
+
+确认页展示所选执行环境、工具网络和资源；实验创建后冻结 Profile。配置摘要变化时需重新创建并确认。详情保留冻结环境，执行完成后还可查看实际镜像、隔离边界与清理状态。Trace ID 为 `xgovernor:<runId>`；上传与评测继续沿用现有流程。旧版 Pi/xiaoO 的 SWE-bench 待执行任务应重新创建，不自动迁移。
 
 Benchmark 全部 Case 及评测结果进入终态后，实验会结束：全部成功显示“已完成”，成功与失败并存显示“部分完成”，全部失败显示“失败”。Agent 执行失败时，Case 中会标明原因。只有仍有排队、执行或评测任务时才保持“运行中”；重试 Case 后重新进入“运行中”。“已完成”表示评测流程结束，SWE-bench 的 Resolved 结果仍可能为否。
 

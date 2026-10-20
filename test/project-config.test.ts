@@ -163,6 +163,9 @@ test('client upgrade migrates legacy local Git paths without overriding a newer 
     installer.installRuntime();
     assert.equal(fs.existsSync(path.join(installer.RUNTIME_DIR, 'executor/runtimes/mcts/runtime.yaml')), true);
     assert.equal(fs.existsSync(path.join(installer.RUNTIME_DIR, 'runtimes')), false);
+    const {prepareExecutionImage} = require(path.join(installer.RUNTIME_DIR, 'executor/execution-images.cjs'));
+    assert.equal(typeof prepareExecutionImage, 'function');
+    assert.equal(typeof require(path.join(installer.RUNTIME_DIR, 'executor/benchmarks/swe-bench-images.cjs')).SweBenchImageResolver, 'function');
     const runtimeOptions = require(path.join(installer.RUNTIME_DIR, 'executor/runtime-options.cjs'));
     const invocation = runtimeOptions.runtimeInvocationOptions('pi-mcts', 'pi-mcts');
     assert.equal(invocation.agentOptions.runtimeKey, 'mcts');

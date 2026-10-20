@@ -30,6 +30,7 @@ const BUNDLES: Record<string, string[]> = {
   client: [
     'scripts/install-ras-client.js',
     'scripts/reliability-client.cjs',
+    'scripts/xgovernor.cjs',
     'scripts/ordinary-experiment-state.cjs',
     'scripts/skill-experiment-workspace.cjs',
     'scripts/agent-run-diagnostics.cjs',
@@ -42,6 +43,8 @@ const BUNDLES: Record<string, string[]> = {
     'scripts/fi-worker.js',
     'services/executor/src',
     'packages/project-config',
+    'packages/benchmark-protocol',
+    'scripts/agent-trace-collectors/shared/trace-transport.cjs',
     'packages/agent-runtime',
     'services/executor/runtimes',
     'config/benchmark/executor.yaml',

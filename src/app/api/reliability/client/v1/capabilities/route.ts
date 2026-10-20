@@ -24,6 +24,7 @@ export async function PUT(req: Request) {
         platforms: Array.isArray(body.platforms) ? body.platforms : [],
         actions: body.actions,
         components: body.components,
+        executionProfiles: body.executionProfiles,
         faultInjection: body.faultInjection,
       },
     })

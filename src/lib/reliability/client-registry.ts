@@ -1,4 +1,5 @@
 import { validateDefinition, type RuntimeDefinition } from '../../../packages/agent-runtime/index.cjs'
+import { validateProfile, type ExecutionProfileCapability } from '../../../packages/benchmark-protocol/execution.cjs'
 /**
  * 客户端注册与设备凭证（IF-N01/N04/N06/N15）。
  * 令牌与凭证只保存哈希；明文只在创建时返回一次。
@@ -29,6 +30,7 @@ export type ClientPlatformCapability = {
 }
 
 export type ClientCapabilities = {
+  executionProfiles?: ExecutionProfileCapability[]
   platforms: ClientPlatformCapability[]
   actions?: string[]
   components?: Record<string, unknown>
@@ -332,6 +334,10 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
   const fi = value.faultInjection
   return {
     platforms,
+    executionProfiles: Array.isArray(value.executionProfiles) ? value.executionProfiles.map(item => ({
+      profile: validateProfile(item.profile), benchmarks: Array.isArray(item.benchmarks) ? item.benchmarks.map(String) : [], ready: item.ready === true,
+      ...(item.note ? { note: String(item.note) } : {}),
+    })) : [],
     actions: Array.isArray(value.actions) ? value.actions.map((a) => String(a)) : undefined,
     components: value.components && typeof value.components === 'object' ? value.components : undefined,
     faultInjection: fi && typeof fi === 'object'

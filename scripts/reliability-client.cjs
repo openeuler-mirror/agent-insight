@@ -115,6 +115,11 @@ function mctsRuntime() {
   return runtimePath ? require(runtimePath) : null
 }
 
+function executionRuntime() {
+  const candidates = [path.join(__dirname, 'executor', 'execution-config.cjs'), path.join(__dirname, '..', 'services', 'executor', 'src', 'execution-config.cjs')]
+  return require(candidates.find(candidate => fs.existsSync(candidate)))
+}
+
 /**
  * 控制通道地址以当前 insightBaseUrl 为准重新推导。
  * 注册时写入 config.json 的绝对地址在服务端换端口后会指向旧实例，
@@ -895,7 +900,20 @@ function buildCapabilities(cfg, opts) {
   for (const platform of platforms) {
     platform.parameterDefinitions = definitions.filter(definition => definition.targets.some(target => target.platform === platform.id))
   }
+  const execution = executionRuntime().executionCapabilities()
+  components['execution-backend/v1'] = { ready: true }
+  for (const capability of execution.profiles) {
+    for (const target of capability.profile.targets) {
+      let platform = platforms.find(item => item.id === target.platform)
+      if (!platform) {
+        platform = { id: target.platform, agents: target.agents, models: capability.profile.models, actions: ['RUN_BENCHMARK_CASE'] }
+        platforms.push(platform)
+      }
+      platform.runBenchmarkCase = { version: 1, returnsTraceId: true }
+    }
+  }
   return {
+    executionProfiles: execution.profiles,
     platforms,
     actions: [...WHITELIST],
     components,
@@ -911,6 +929,8 @@ function benchmarkAgentPlatformsFromCapabilities(capabilities) {
   const components = capabilities?.components || {}
   return [...new Set((capabilities?.platforms || [])
     .filter((platform) => {
+      const execution = capabilities.executionProfiles?.find(item => item.profile.targets.some(target => target.platform === platform.id))
+      if (execution) return execution.ready && platform.runBenchmarkCase?.returnsTraceId === true
       const component = components[`agent-runtime/${platform.id}/v1`]
       const ready = component === true
         || (component && typeof component === 'object' && component.ready !== false)
@@ -2202,6 +2222,7 @@ async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
     platforms: capabilities.platforms,
     actions: capabilities.actions,
     components: capabilities.components,
+    executionProfiles: capabilities.executionProfiles,
     faultInjection: capabilities.faultInjection,
   })
   log(
@@ -2698,6 +2719,7 @@ module.exports = {
   cleanupStaleInventoryOpencodeServers,
   buildFiInventory,
   buildCapabilities,
+  reportCapabilities,
   mergePiRuntimeCapability,
   benchmarkAgentPlatformsFromCapabilities,
   syncBenchmarkExecutorCapabilities,

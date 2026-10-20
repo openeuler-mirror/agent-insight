@@ -31,7 +31,7 @@ const RUNTIME_DIR = path.join(CLIENT_HOME, 'runtime')
 const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.cjs')
 
 /** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
-const RUNTIME_FILES = ['reliability-client.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'ws-client.cjs', 'agent-insight-home.cjs']
+const RUNTIME_FILES = ['reliability-client.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'ws-client.cjs', 'agent-insight-home.cjs', 'xgovernor.cjs']
 
 function installRuntime() {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true })
@@ -49,10 +49,12 @@ function installRuntime() {
   }
   fs.rmSync(executorDest, { recursive: true, force: true })
   fs.cpSync(executorSrc, executorDest, { recursive: true })
+  fs.mkdirSync(path.join(executorDest, 'vendor'), { recursive: true })
+  fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', 'agent-trace-collectors', 'shared', 'trace-transport.cjs'), path.join(executorDest, 'vendor', 'trace-transport.cjs'))
   const configRuntime = path.join(PACKAGE_ROOT, 'packages', 'project-config')
   if (!fs.existsSync(configRuntime)) fail(`缺少配置加载器: ${configRuntime}`, '制品不完整；请重新执行安装命令。')
   fs.cpSync(configRuntime, path.join(RUNTIME_DIR, 'packages', 'project-config'), { recursive: true })
-  for (const [source, destination] of [['packages/agent-runtime', 'packages/agent-runtime'], ['services/executor/runtimes', 'executor/runtimes']]) {
+  for (const [source, destination] of [['packages/benchmark-protocol', 'packages/benchmark-protocol'], ['packages/agent-runtime', 'packages/agent-runtime'], ['services/executor/runtimes', 'executor/runtimes']]) {
     const input = path.join(PACKAGE_ROOT, source)
     if (!fs.existsSync(input)) fail(`缺少 Runtime 参数定义: ${input}`, '制品不完整；请重新执行安装命令。')
     fs.cpSync(input, path.join(RUNTIME_DIR, destination), { recursive: true })

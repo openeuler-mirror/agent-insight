@@ -68,6 +68,8 @@ import {
 } from '@/lib/skill-workbench/experiment-policy';
 
 interface AgentTargetOption {
+  executionProfile?: import('../../../packages/benchmark-protocol/execution.cjs').ExecutionProfile;
+  benchmarkEnvironments?: Record<string, { profile: import('../../../packages/benchmark-protocol/execution.cjs').ExecutionProfile; models: Array<{ id: string; label: string }> }>;
   workerId: string;
   host: string;
   hostname: string | null;
@@ -640,7 +642,10 @@ export function ExperimentWizard({
         ? target.supportsBenchmark && target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '')
         : isReliabilityDataset
           ? target.supportsFaultInjection
-          : target.supportsGenericTrace),
+          : target.supportsGenericTrace).map(target => {
+            const environment = isBenchmarkDataset ? target.benchmarkEnvironments?.[selectedDataset?.benchmark?.adapterKey || ''] : null;
+            return environment ? { ...target, executionProfile: environment.profile, models: environment.models } : target;
+          }),
     [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey, skillPreset],
   );
   const selectedTarget = targetOptions.find(
@@ -1590,6 +1595,7 @@ export function ExperimentWizard({
             platform: selectedTarget.platform,
             agent: selectedTarget.agent,
             model: genModel || null,
+            ...(selectedTarget.executionProfile ? { executionProfileDigest: selectedTarget.executionProfile.definitionDigest } : {}),
             ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
           } : undefined,
           agentTimeoutSeconds,
@@ -3161,6 +3167,7 @@ export function ExperimentWizard({
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
+                  ...(isBenchmarkDataset && selectedTarget?.executionProfile ? [['执行环境', `${selectedTarget.executionProfile.key} · ${selectedTarget.executionProfile.sourceRevision.slice(0, 12)} · 工具断网 · ${selectedTarget.executionProfile.resources.cpu} CPU / ${selectedTarget.executionProfile.resources.memoryMiB} MiB`]] : []),
                   ...(runtimeState.active ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
