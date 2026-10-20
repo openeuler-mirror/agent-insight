@@ -162,26 +162,37 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 详情页承担“还原过程”和“定位原因”两类工作，适合对单条 Trace 做完整复盘。
 
-Qoder / OpenCode 链路顶部的 **推理分析** 对应整条链路；选中 LLM 后，右侧详情及时间线详情弹窗中的同名入口对应单次模型调用。经过统一入口时展示可复制的 **模型调用 ID**；一次 LLM 重试可包含多个 ID，整体入口汇总全部 ID。Qoder 无法确定失败尝试属于哪个 LLM 时，整体入口单独列出 **未确定所属 LLM 的调用 ID**，不会把它挂到某个子 Agent。历史数据仍展示原生请求/响应标识。当前第三方页面地址尚未配置，外部打开按钮暂不可用。
+Qoder / OpenCode 链路顶部的 **推理分析** 对应整条链路；选中 LLM 后，右侧详情及时间线详情弹窗中的同名入口对应单次模型调用。经过统一入口时展示可复制的 **模型调用 ID**；一次 LLM 重试可包含多个 ID，整体入口汇总全部 ID。Qoder 无法确定失败尝试属于哪个 LLM 时，整体入口单独列出 **未确定所属 LLM 的调用 ID**，不会把它挂到某个子 Agent。历史数据仍展示原生请求/响应标识。配置分析服务地址后，每次请求均可点击 **打开分析** 在新标签页查看。单 LLM 的 **打开推理分析** 默认对应可唯一确定的最近一次请求；无法确定重试顺序时，请在请求列表中逐条打开。
+
+### 配置推理分析页面
+
+在平台运行环境设置以下变量，然后重启平台。地址填写协议、IP/域名及端口，不带路径或查询参数；预构建镜像无需重新构建。浏览器需要能访问这个地址。
+
+```bash
+AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN=http://inference.example.com:8080
+```
+
+页面链接自动生成为 `http://inference.example.com:8080/model-performance?GlobalTrackNO=<模型调用ID>`。未配置、地址无效或历史数据缺少统一调用 ID 时，弹窗会说明原因。
 
 ### 自动接入本地统一推理入口
 
-在“客户端安装”中选择 Qoder 或 OpenCode，执行 Linux/macOS 的 curl 安装命令即可。安装器先启动并检查本机转发进程，再备份配置、改写已识别 Provider 的模型地址。继续使用原来的模型名、Provider 名和 API Key；在已托管的模型之间切换，无需手动填写转发地址。
+在“客户端安装”中选择 Qoder 或 OpenCode，执行 Linux/macOS 的 curl 安装命令即可。安装器先启动并检查本机转发进程，再改写已识别 Provider 的模型地址。执行前请自行备份模型与采集配置；安装器不自动备份，也不提供自动恢复或卸载。继续使用原来的模型名、Provider 名和 API Key；在已托管的模型之间切换，无需手动填写转发地址。
 
 目前自动接入覆盖 Qoder CN CLI 的自定义 OpenAI-compatible Provider，以及 OpenCode 的 OpenAI-compatible、OpenAI、Anthropic 显式 Base URL。Qoder CLI 通过受管 `qoderclicn` 启动入口在原进程读配置前同步；`qodercn` 的 CLI 分支也会经过它。OpenCode 由插件处理最终合并配置，项目配置和环境内联配置中新增的 Provider 也在模型加载前处理。API Key 仍按原模型协议传给原上游，`AGENT_INSIGHT_API_KEY` 只用于平台采集账号。
+
+Qoder 原生 IDE 与 JetBrains 插件当前保留 Trace 采集，但尚无已验证的模型地址接管适配；ARM64 不改变这个能力边界。安装输出会明确提示“模型地址未接管”。这两种产品的本地消息 ID 不作为推理服务响应 ID，不据此生成推理调用关联。安装器报告的受管地址数量只统计用户持久配置，不含历史路由和运行时配置快照，也不等同实际请求已经验证。
+
+Qoder CN JetBrains 的 Token 采集可自动识别 `.qoder-cn` 下的本地数据库，并兼容旧 `.qoder` 目录。只有本地用量记录、没有会话正文时，可以保留模型调用的消息 ID 和 Token 统计，但不会补造回答正文或推理分析链接。
 
 - **切换模型**：已托管 Provider 下的模型、主 Agent / 子 Agent / 辅助模型均使用同一入口，每次实际 HTTP 请求生成新的调用 ID。
 - **新增或修改 Provider**：后台同步已登记的配置文件。OpenCode 在重新加载配置时同步；Qoder 运行中通过 `/model` 新增或修改 Provider 后，需重新启动 CLI，确保新地址在首次请求前接入。后台轮询不保证运行中的下一次请求没有绕过窗口。
 - **升级 Qoder**：后台会重新绑定同目录下由 Qoder 升级器替换的版本链接。升级后应重新运行安装命令并重启 CLI，确认启动器仍受管；绕过受管命令直接运行版本二进制不在自动接入范围。
-- **恢复**：先结束正在运行的 Agent 会话，再执行以下一条命令。恢复地址完成后关闭转发进程，保留模型、Provider、权限等后续修改；用户已经自行修改的地址和启动入口不会被覆盖。恢复后重新启动 Agent。
 
-```bash
-sh "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/restore_inference_proxy.sh"
-```
+**安装前备份范围**：OpenCode 的 `~/.config/opencode/`（或 `XDG_CONFIG_HOME` / 自定义目录，含模型、插件和 `tui.json`），Qoder 的 `~/.qoder-cn/settings.json`、`~/.qoder/settings.json`、`~/.qoderworkcn/settings.json`、`~/.qoderwork/settings.json` 中实际使用的文件，以及 Qoder CLI 原启动入口路径。Windows 安装也会改写采集 Hook / 插件配置。配置备份可能包含模型密钥，请由用户妥善保存。安装后如需撤销，应先退出 Agent，再依据自行保存的备份手工调整对应模型地址、Hook、插件及启动入口，避免整份覆盖安装后新增的配置；平台不提供一键处理入口。GUI 模型配置位置及版本边界见[采集器开发指南](../../developer-guide/09-trace-collector.md#qoder-gui-模型存储与接入边界)。
 
-首次原文件字节备份保存在 `AGENT_INSIGHT_HOME/inference-proxy/backups`，重复安装不会覆盖，文件权限为 600。备份可能包含原配置中的模型密钥，只保留在本机。同步和恢复遇到无效配置或备份损坏会明确失败，请先修复文件再重试；不要手动删除备份或状态文件。
+同步遇到无效配置时会明确失败，请先修复文件再重试。`inference-proxy` 下的运行状态用于模型转发，不是配置备份；不要依赖它进行回退。
 
-推理服务统一读取 `X-Agent-Insight-Call-Id` 并为它建立索引；503 等失败请求也已携带 ID。整条 Trace 汇总调用 ID，成功模型调用对应具体 LLM；Qoder 无法精确归属的失败尝试留在整条 Trace。推理分析页面 URL 仍待对接。
+推理服务统一读取 `X-Agent-Insight-Call-Id` 并为它建立索引；503 等失败请求也已携带 ID。整条 Trace 汇总调用 ID，成功模型调用对应具体 LLM；Qoder 无法精确归属的失败尝试留在整条 Trace。分析页接收单个 `GlobalTrackNO`，因此整条 Trace 入口提供逐请求链接，不把多个 ID 拼成一个参数。
 
 此自动流程限 Unix CLI 与上述显式模型地址，未覆盖 Qoder 内置账号模型、IDE 私有模型设置、OpenCode 未识别协议或 Windows 自动代理。独立手动入口 `node scripts/inference_gateway.mjs <config.json>` 仍可用；同机采集器和入口必须使用同一 `AGENT_INSIGHT_HOME` 与平台账号。关联文件位于 `inference-gateway`，完成采集上传前应保留。没有部署中央网关或跨机器同步。
 
@@ -407,7 +418,9 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 2. 进入详情页，先看顶部摘要区确认失败状态
 3. 在 Span 列表中找到最后一个异常节点
 4. 结合时间轴和父子关系回溯问题源头
-5. 必要时进入 [智能诊断](./diagnosis) 做进一步归因
+5. 模型调用已有关联 ID 时，打开“推理分析”查看对应请求；无法关联时继续对照节点输入、输出与错误信息
+
+当前客户分支已隐藏列表行、详情顶部的智能诊断跳转，以及 Trace 抽屉的调测分析跳转。这里的“推理分析”是按模型调用 ID 打开外部分析页面，与智能诊断入口独立。
 
 关键判断点不是“哪里先报错”，而是“哪里最先偏离预期”。
 
@@ -429,7 +442,7 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 1. 找到看似成功但结果明显异常的 Trace
 2. 回看关键 Skill、Tool 和 LLM 节点是否按预期触发
 3. 对比输入输出是否出现遗漏、误读或错误分支
-4. 再决定是否进入诊断或沉淀为评测样本
+4. 导出 Trace 保留证据，或沉淀为后续对照样本
 
 这类问题往往不会直接抛错，因此更依赖上下文与执行过程的还原。
 
@@ -446,7 +459,7 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 这些样本后续适合用于：
 
 - 转换为评测数据集
-- 进入智能诊断做归因对照
+- 对照模型调用的推理分析结果
 - 作为优化前后的基线样本
 - 支撑 Skill、流程或提示词优化
 
@@ -460,7 +473,7 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 
 ## 下一步
 
-- 想对异常执行做自动归因： [智能诊断](./diagnosis)
+- 想查看单次模型推理：在 Trace 或 LLM 节点中打开“推理分析”
 - 想看整体健康趋势： [质量监控](./quality-monitoring)
 - 想把典型 Trace 转成数据集： [从 Trace 回流数据项](../evaluation/datasets#从-trace-回流数据项)
 - 想回到运行观测总览： [运行观测](./index)

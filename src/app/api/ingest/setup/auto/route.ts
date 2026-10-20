@@ -1,7 +1,6 @@
 import { SETUP_BASH_HOME, SETUP_POWERSHELL_HOME } from '@/lib/ingest/setup/home';
 import { NextResponse } from 'next/server';
 
-import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
@@ -11,6 +10,7 @@ import {
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
 import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+import { INFERENCE_PROXY_UNIX_SETUP_BLOCK } from '../inference-proxy-setup';
 import {
     parseFrameworks,
     resolveInstallProfile,
@@ -132,7 +132,6 @@ function generateBashScript(
     goalPlusHosts: GoalPlusHost[],
     autoAddedFrameworks: string[],
 ): NextResponse {
-    const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const packageSpec = getAgentInsightClientPackageSpec();
     const selectedFrameworks = preselected.map(framework => framework.value).join(',');
     const frameworksPreselected = preselected.length > 0;
@@ -150,7 +149,6 @@ SETUP_WORKING_DIR="$PWD"
 GOAL_PLUS_HOSTS="${bashDoubleQuoted(goalPlusHosts.join(','))}"
 AUTO_ADDED_FRAMEWORKS="${bashDoubleQuoted(autoAddedFrameworks.join(','))}"
 AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
-QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
 ${getAgentInsightRasBashInstaller()}
 
@@ -373,6 +371,12 @@ if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$I
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
+fi
+
+if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_QODER" = "true" ]; then
+    echo "WARNING: Back up your Agent configuration before installation. Model addresses, hooks, plugins and Qoder CLI launchers may be overwritten. No automatic backup, restore, or uninstall is provided."
+    echo "警告：安装前请自行备份 Agent 配置；安装会改写模型地址、Hook、插件和 Qoder CLI 启动入口，不提供自动备份、回退或卸载。"
+    echo "Configuration paths: ~/.config/opencode/ (including tui.json; also XDG_CONFIG_HOME and custom paths), ~/.qoder-cn/settings.json, ~/.qoder/settings.json, ~/.qoderworkcn/settings.json, ~/.qoderwork/settings.json. Record original Qoder CLI launcher paths."
 fi
 
 # 3. Download Components
@@ -849,7 +853,7 @@ fi
 
 # 6.35 Install Qoder CN product-family collectors
 if [ "$INSTALL_QODER" = "true" ]; then
-    if node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=cli --owner=cli && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop --owner=desktop && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains --owner=jetbrains && node "$QODER_DIST_DIR/qoder_work_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY"; then
+    if node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=cli && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains && node "$QODER_DIST_DIR/qoder_work_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY"; then
         echo "Qoder CN CLI/Desktop/JetBrains/Work collectors installed."
         echo ""
         QODER_PLUGIN_DIR="$AGENT_INSIGHT_HOME/packages/qoder"
@@ -867,29 +871,29 @@ if [ "$INSTALL_QODER" = "true" ]; then
             fi
         }
         echo "Downloading Qoder CN plugin packages..."
-        download_qoder_plugin "Qoder CN Desktop VSIX" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-desktop-vsix" "$QODER_PLUGIN_DIR/agent-insight-qoder-desktop.vsix" || true
-        QODER_JETBRAINS_TARGET="$QODER_PLUGIN_DIR/agent-insight-qoder-jetbrains.zip"
-        if ! download_qoder_plugin "Qoder for JetBrains ZIP" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-jetbrains-plugin" "$QODER_JETBRAINS_TARGET"; then
-            if [ -n "$QODER_JETBRAINS_RELEASE_URL" ]; then
-                echo "    Release attachment direct URL: $QODER_JETBRAINS_RELEASE_URL"
-                echo "    Retrying from the Release attachment..."
-                if ! download_qoder_plugin "Qoder for JetBrains ZIP (Release)" "$QODER_JETBRAINS_RELEASE_URL" "$QODER_JETBRAINS_TARGET"; then
-                    echo "    Manual download (Linux/macOS):"
-                    echo "      curl -fL \"$QODER_JETBRAINS_RELEASE_URL\" -o \"$QODER_JETBRAINS_TARGET\""
-                fi
-            else
-                echo "    Release attachment direct URL is not configured on the Agent Insight server."
-                echo "    Server administrator: set AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL to the trusted Release attachment URL, restart Agent Insight, and rerun setup."
-            fi
+        if download_qoder_plugin "Qoder CN Desktop VSIX" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-desktop-vsix" "$QODER_PLUGIN_DIR/agent-insight-qoder-desktop.vsix"; then
+            echo "    Desktop package path: $QODER_PLUGIN_DIR/agent-insight-qoder-desktop.vsix"
+            echo "    Desktop install: Qoder CN Desktop -> Extensions -> ... -> Install from VSIX."
+        else
+            echo "    Update or build the current Desktop plugin on the Agent Insight server, then rerun setup to download it from the platform."
+            echo "    Do not install an existing local VSIX; the current package has not been downloaded successfully."
         fi
-        echo "    Desktop install: Qoder CN Desktop -> Extensions -> ... -> Install from VSIX."
-        echo "    JetBrains package path: $QODER_JETBRAINS_TARGET"
-        echo "    JetBrains install: Settings -> Plugins -> gear icon -> Install Plugin from Disk -> select the ZIP above."
+        QODER_JETBRAINS_TARGET="$QODER_PLUGIN_DIR/agent-insight-qoder-jetbrains.zip"
+        if download_qoder_plugin "Qoder for JetBrains ZIP" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-jetbrains-plugin" "$QODER_JETBRAINS_TARGET"; then
+            echo "    JetBrains package path: $QODER_JETBRAINS_TARGET"
+            echo "    JetBrains install: Settings -> Plugins -> gear icon -> Install Plugin from Disk -> select the ZIP above."
+        else
+            echo "    Update or build the current plugin on the Agent Insight server, then rerun setup to download it from the platform."
+            echo "    Do not install an existing local ZIP; the current package has not been downloaded successfully."
+        fi
         echo "    Restart the corresponding IDE after installing the downloaded package."
     else
         echo "Warning: Qoder CN collector installation did not complete; review the errors above."
     fi
 fi
+
+FINAL_KEY="$AGENT_INSIGHT_API_KEY"
+${INFERENCE_PROXY_UNIX_SETUP_BLOCK}
 
 # 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist
 if [ "$INSTALL_QWENCODE" = "true" ]; then
@@ -1247,7 +1251,6 @@ function generatePowerShellScript(
     goalPlusHosts: GoalPlusHost[],
     autoAddedFrameworks: string[],
 ): NextResponse {
-    const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const selectedFrameworks = preselected.map(framework => framework.value).join(',');
     const frameworksPreselected = preselected.length > 0;
     const script = [
@@ -1263,7 +1266,6 @@ function generatePowerShellScript(
         '$SETUP_WORKING_DIR = (Get-Location).Path',
         '$GOAL_PLUS_HOSTS = "' + powerShellDoubleQuoted(goalPlusHosts.join(',')) + '"',
         '$AUTO_ADDED_FRAMEWORKS = "' + powerShellDoubleQuoted(autoAddedFrameworks.join(',')) + '"',
-        '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         '',
         'Write-Host "🚀 Fetching Skill-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -1493,6 +1495,12 @@ function generatePowerShellScript(
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
+        '}',
+        '',
+        'if ($INSTALL_OPENCODE -or $INSTALL_QODER) {',
+        '    Write-Warning "WARNING: Back up your Agent configuration before installation. Model addresses, hooks, plugins and Qoder CLI launchers may be overwritten. No automatic backup, restore, or uninstall is provided."',
+        '    Write-Warning "警告：安装前请自行备份 Agent 配置；安装会改写模型地址、Hook、插件和 Qoder CLI 启动入口，不提供自动备份、回退或卸载。"',
+        '    Write-Host "Configuration paths: ~/.config/opencode/ (including tui.json; also XDG_CONFIG_HOME and custom paths), ~/.qoder-cn/settings.json, ~/.qoder/settings.json, ~/.qoderworkcn/settings.json, ~/.qoderwork/settings.json. Record original Qoder CLI launcher paths."',
         '}',
         '',
         '# 3. Download Components',
@@ -1968,9 +1976,9 @@ function generatePowerShellScript(
         '',
         '# 6.35 Install Qoder CN product-family collectors',
         'if ($INSTALL_QODER) {',
-        '    & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=cli --owner=cli',
-        '    if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop --owner=desktop }',
-        '    if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains --owner=jetbrains }',
+        '    & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=cli',
+        '    if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop }',
+        '    if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains }',
         '    if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_work_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" }',
         '    if ($LASTEXITCODE -eq 0) {',
         '        Write-Host "Qoder CN CLI/Desktop/JetBrains/Work collectors installed."',
@@ -1992,26 +2000,23 @@ function generatePowerShellScript(
         '            }',
         '        }',
         '        Write-Host "Downloading Qoder CN plugin packages..."',
-        '        $null = Save-QoderPluginPackage "Qoder CN Desktop VSIX" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-desktop-vsix" (Join-Path $qoderPluginDir "agent-insight-qoder-desktop.vsix")',
+        '        $qoderDesktopDownloaded = Save-QoderPluginPackage "Qoder CN Desktop VSIX" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-desktop-vsix" (Join-Path $qoderPluginDir "agent-insight-qoder-desktop.vsix")',
+        '        if ($qoderDesktopDownloaded) {',
+        '            Write-Host "    Desktop package path: $qoderPluginDir/agent-insight-qoder-desktop.vsix"',
+        '            Write-Host "    Desktop install: Qoder CN Desktop -> Extensions -> ... -> Install from VSIX."',
+        '        } else {',
+        '            Write-Warning "Update or build the current Desktop plugin on the Agent Insight server, then rerun setup to download it from the platform."',
+        '            Write-Warning "Do not install an existing local VSIX; the current package has not been downloaded successfully."',
+        '        }',
         '        $qoderJetBrainsTarget = Join-Path $qoderPluginDir "agent-insight-qoder-jetbrains.zip"',
         '        $qoderJetBrainsDownloaded = Save-QoderPluginPackage "Qoder for JetBrains ZIP" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-jetbrains-plugin" $qoderJetBrainsTarget',
-        '        if (-not $qoderJetBrainsDownloaded) {',
-        '            if ($QODER_JETBRAINS_RELEASE_URL) {',
-        '                Write-Host "    Release attachment direct URL: $QODER_JETBRAINS_RELEASE_URL"',
-        '                Write-Host "    Retrying from the Release attachment..."',
-        '                $qoderJetBrainsDownloaded = Save-QoderPluginPackage "Qoder for JetBrains ZIP (Release)" $QODER_JETBRAINS_RELEASE_URL $qoderJetBrainsTarget',
-        '                if (-not $qoderJetBrainsDownloaded) {',
-        '                    Write-Host "    Manual download (PowerShell):"',
-        '                    Write-Host (\'      Invoke-WebRequest -Uri "\' + $QODER_JETBRAINS_RELEASE_URL + \'" -OutFile "\' + $qoderJetBrainsTarget + \'"\')',
-        '                }',
-        '            } else {',
-        '                Write-Host "    Release attachment direct URL is not configured on the Agent Insight server."',
-        '                Write-Host "    Server administrator: set AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL to the trusted Release attachment URL, restart Agent Insight, and rerun setup."',
-        '            }',
+        '        if ($qoderJetBrainsDownloaded) {',
+        '            Write-Host "    JetBrains package path: $qoderJetBrainsTarget"',
+        '            Write-Host "    JetBrains install: Settings -> Plugins -> gear icon -> Install Plugin from Disk -> select the ZIP above."',
+        '        } else {',
+        '            Write-Warning "Update or build the current plugin on the Agent Insight server, then rerun setup to download it from the platform."',
+        '            Write-Warning "Do not install an existing local ZIP; the current package has not been downloaded successfully."',
         '        }',
-        '        Write-Host "    Desktop install: Qoder CN Desktop -> Extensions -> ... -> Install from VSIX."',
-        '        Write-Host "    JetBrains package path: $qoderJetBrainsTarget"',
-        '        Write-Host "    JetBrains install: Settings -> Plugins -> gear icon -> Install Plugin from Disk -> select the ZIP above."',
         '        Write-Host "    Restart the corresponding IDE after installing the downloaded package."',
         '    } else {',
         '        Write-Host "Warning: Qoder CN collector installation did not complete; review the errors above."',

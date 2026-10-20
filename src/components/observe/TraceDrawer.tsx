@@ -192,7 +192,6 @@ function Header({ execution, onClose, locale }: { execution: TraceDrawerExecutio
     if (!execution) return null;
     const { taskId, query, framework, model, latency, tokens, cost, score, isAnswerCorrect, timestamp } = execution;
     const metricsLink = `${basePath}/metrics?taskId=${taskId}`;
-    const debugLink = `${basePath}/skill-eval?taskId=${taskId}`;
 
     return (
         <div
@@ -235,13 +234,6 @@ function Header({ execution, onClose, locale }: { execution: TraceDrawerExecutio
                         style={{ textDecoration: 'none', fontSize: 11 }}
                     >
                         {locale === 'zh' ? '指标 ↗' : 'Metrics ↗'}
-                    </a>
-                    <a
-                        href={debugLink}
-                        className="ai-btn-s"
-                        style={{ textDecoration: 'none', fontSize: 11 }}
-                    >
-                        {locale === 'zh' ? '调测分析 ↗' : 'Skill diagnosis ↗'}
                     </a>
                     <button
                         onClick={onClose}

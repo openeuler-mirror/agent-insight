@@ -13,6 +13,7 @@
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="Agent Insight Qoder Setup" displayType="BALLOON" isLogByDefault="true"/>
         <applicationService serviceImplementation="org.openeuler.agentinsight.qoder.JetBrainsMarkerService"/>
         <postStartupActivity implementation="org.openeuler.agentinsight.qoder.AgentInsightStartupActivity"/>
         <statusBarWidgetFactory id="AgentInsightQoder"

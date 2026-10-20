@@ -399,7 +399,7 @@ export function createInferenceCorrelation(context: any, record: (event: any) =>
               const method = String(init?.method ?? (request instanceof Request ? request.method : "GET")).toUpperCase()
               const pathname = new URL(request instanceof Request ? request.url : String(request)).pathname
               if (method === "POST" && /\/(?:chat\/completions|responses|messages)\/?$/.test(pathname)) {
-                return Promise.reject(new Error("Agent Insight OpenCode inference proxy: model requests are blocked after configuration failed. Reinstall or restore the inference proxy."))
+                return Promise.reject(new Error("Agent Insight OpenCode inference proxy: model requests are blocked after configuration failed. Check the inference proxy configuration or reinstall it, then retry."))
               }
             } catch {}
           }
@@ -744,7 +744,7 @@ async function createOpenCodeCollector(context: any = {}, lifecycle?: { emit?: (
         inference.setBlocked(false)
       } catch {
         inference.setBlocked(true)
-        throw new Error("Agent Insight OpenCode inference proxy configuration failed; model requests are blocked. Reinstall or restore the inference proxy.")
+        throw new Error("Agent Insight OpenCode inference proxy configuration failed; model requests are blocked. Check the inference proxy configuration or reinstall it, then retry.")
       }
       try {
         const redacted = redactJson(cfg || {})

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test, { type TestContext } from 'node:test';
 import { GET as getSetup } from '@/app/api/ingest/setup/route';
+import { GET as getAutoSetup } from '@/app/api/ingest/setup/auto/route';
 
 const components = ['inference_gateway.mjs', 'inference_config.mjs', 'inference_proxy.mjs'];
 const blockModule = '../src/app/api/ingest/setup/inference-proxy-setup';
@@ -54,8 +55,6 @@ async function fixture(t: TestContext, options: { failComponent?: string; proxyS
         INSTALL_OPENCODE: 'true', INSTALL_QODER: 'true', FINAL_KEY: 'test-collection-key', SETUP_WORKING_DIR: dir,
     };
     t.after(async () => {
-        const proxy = path.join(insight, 'inference-runtime/inference_proxy.mjs');
-        if (fs.existsSync(proxy) && !options.proxySource) await run(process.execPath, [proxy, 'restore', insight], env, dir);
         try {
             const runtime = JSON.parse(fs.readFileSync(path.join(insight, 'inference-proxy/runtime.json'), 'utf8'));
             if (runtime.pid) process.kill(runtime.pid, 'SIGTERM');
@@ -84,18 +83,24 @@ test('generated Unix setup invokes proxy after final credentials and collectors,
     assert.equal(spawnSync('bash', ['-n'], { input: script }).status, 0);
     const windows = await (await getSetup(new Request('http://localhost/api/ingest/setup?yes=1&nokey=1&frameworks=qoder', { headers: { 'x-platform': 'windows' } }))).text();
     assert.ok(!windows.includes('inference_proxy.mjs'));
+    const auto = await (await getAutoSetup(new Request('http://localhost/api/ingest/setup/auto?apiKey=test-key&host=localhost%3A3000', { headers: { 'x-platform': 'unix' } }))).text();
+    assert.ok(auto.includes(block), 'auto install must also include the inference proxy setup');
+    assert.equal(spawnSync('bash', ['-n'], { input: auto }).status, 0);
 });
 
-test('real Bash downloads runtime and installs/restores isolated Qoder and OpenCode model configurations', async t => {
+test('real Bash downloads runtime and installs isolated configurations after warning and omits recovery commands', async t => {
     const f = await fixture(t); const result = await f.execute();
     assert.equal(result.code, 0, result.stderr + result.stdout); assert.deepEqual(f.requested, components);
     for (const component of components) assert.equal(fs.readFileSync(path.join(f.insight, 'inference-runtime', component), 'utf8'), fs.readFileSync(path.resolve('scripts', component), 'utf8'));
     assert.match(fs.readFileSync(f.openCodeFile, 'utf8'), /127\.0\.0\.1.*managed/);
     assert.match(fs.readFileSync(f.qoderFile, 'utf8'), /127\.0\.0\.1.*managed/);
-    assert.match(result.stdout, /restore_inference_proxy\.sh/);
-    const restored = await run('/bin/sh', [path.join(f.insight, 'restore_inference_proxy.sh')], f.env, f.dir);
-    assert.equal(restored.code, 0, restored.stderr); assert.equal(fs.readFileSync(f.openCodeFile, 'utf8'), f.originals.opencode); assert.equal(fs.readFileSync(f.qoderFile, 'utf8'), f.originals.qoder);
-    assert.ok(fs.lstatSync(path.join(f.bin, 'qoderclicn')).isSymbolicLink());
+    assert.match(result.stderr, /自行备份/);
+    assert.match(result.stderr, /Qoder.*JetBrains.*模型地址未接管/);
+    for (const name of ['uninstall_client.sh', 'restore_inference_proxy.sh', 'inference-proxy/backups']) {
+        assert.equal(fs.existsSync(path.join(f.insight, name)), false);
+    }
+    assert.ok((await getBlock()).indexOf('自行备份') < (await getBlock()).indexOf('node "$AGENT_INSIGHT_HOME/inference-runtime/inference_proxy.mjs" install'));
+
 });
 
 test('failed component download neither calls install nor replaces an existing runtime or Agent config', async t => {

@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { GET } from '@/app/api/ingest/setup/route';
+import { GET as GET_AUTO } from '@/app/api/ingest/setup/auto/route';
 import { prismaRaw } from '@/lib/storage/prisma';
 
 const ALL_FRAMEWORKS = 'opencode,openclaw,claude,codeagent,hermes,jiuwen,qoder,trae,actrail,qwencode,deepseek-harness';
@@ -17,6 +18,37 @@ async function getScript(query: string, platform: 'unix' | 'windows'): Promise<s
   assert.equal(response.status, 200);
   return response.text();
 }
+
+test('所有客户安装入口在改写 Agent 配置前提醒自行备份且不分发卸载恢复脚本', async () => {
+  for (const platform of ['unix', 'windows'] as const) {
+    const autoResponse = await GET_AUTO(new Request(
+      'http://localhost/api/setup/auto?apiKey=test-key&host=http://localhost:3000&frameworks=opencode,qoder',
+      { headers: { 'x-platform': platform, host: 'localhost:3000' } },
+    ));
+    assert.equal(autoResponse.status, 200);
+    const scripts = [await getScript('yes=1&nokey=1&frameworks=opencode,qoder', platform), await autoResponse.text()];
+    for (const script of scripts) {
+      const warning = script.indexOf('Back up your Agent configuration before installation');
+      assert.ok(warning >= 0, `${platform}: 缺少安装前备份提醒`);
+      const firstPluginChange = platform === 'unix'
+        ? script.indexOf('rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts"')
+        : script.indexOf('Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Skill-Insight.ts")');
+      assert.ok(firstPluginChange > warning, `${platform}: 备份提醒必须先于修改插件配置`);
+      assert.match(script, /No automatic backup, restore, or uninstall/);
+      assert.match(script, /安装前请自行备份/);
+      assert.doesNotMatch(script, /client_uninstall\.mjs|restore_inference_proxy\.sh|uninstall_client\.sh/);
+      if (platform === 'unix') {
+        const syntax = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
+        assert.equal(syntax.status, 0, syntax.stderr);
+      }
+    }
+  }
+});
+
+test('安装组件分发接口不再提供客户端卸载实现', async () => {
+  const response = await GET(new Request('http://localhost/api/ingest/setup?component=client_uninstall.mjs'));
+  assert.equal(response.status, 404);
+});
 
 test('Bash 恢复 URL、CLI 和环境变量非交互入口，并保留全部框架', async () => {
   const script = await getScript(`yes=1&nokey=1&frameworks=${ALL_FRAMEWORKS}`, 'unix');
@@ -110,15 +142,16 @@ test('客户端安装器的 CommonJS 边界覆盖上层 .agent-insight ESM 配�
   }
 });
 
-test('安装页为已选框架生成 yes=1，并单独保留 LlamaIndex Python 选择', () => {
+test('客户安装页明确选择 Agent 后才生成 yes=1 命令，不回退到完整框架选择器', () => {
   const page = fs.readFileSync(path.resolve(__dirname, '../src/app/(main)/accessconfig/install/page.tsx'), 'utf8');
-  assert.match(page, /frameworks\.length \? `yes=1` : ''/);
+  assert.match(page, /'yes=1'/);
+  assert.match(page, /`frameworks=\$\{frameworks\.join\(','\)\}`/);
   assert.doesNotMatch(page, /goalPlusHosts=/);
   assert.doesNotMatch(page, /Goal Plus Pi Trace|goal-plus-collector attach/);
   assert.doesNotMatch(page, /\.\/install\.sh --(?:pi|codex)/);
-  assert.match(page, /frameworks\.includes\('llamaindex'\) \? 'llamaindexPromptPython=1' : ''/);
+  assert.doesNotMatch(page, /llamaindexPromptPython/);
   assert.match(page, /apiKey, authReady/);
-  assert.match(page, /if \(!authReady \|\| !apiKey\)/);
+  assert.match(page, /if \(!authReady \|\| !apiKey \|\| !frameworks\.length\)/);
   assert.doesNotMatch(page, /localStorage/);
 });
 

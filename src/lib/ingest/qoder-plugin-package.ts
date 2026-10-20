@@ -93,11 +93,13 @@ export async function getQoderPluginPackageBuildInfo(
   }
 }
 
-async function readFreshCache(info: QoderPluginPackageBuildInfo): Promise<Buffer | null> {
+async function readFreshCache(kind: QoderPluginPackage, info: QoderPluginPackageBuildInfo): Promise<Buffer | null> {
   try {
     const cached = await stat(info.cachePath)
     if (cached.isFile() && cached.mtimeMs >= info.sourceMtimeMs) {
-      return readFile(info.cachePath)
+      const content = await readFile(info.cachePath)
+      assertCurrentPluginPackage(kind, content, info.cachePath)
+      return content
     }
   } catch {}
   return null
@@ -118,6 +120,17 @@ function assertZipPackage(content: Buffer, source: string): void {
   }
 }
 
+function assertCurrentPluginPackage(kind: QoderPluginPackage, content: Buffer, source: string): void {
+  if (kind === "jetbrains") {
+    assertJetBrainsPluginPackage(content, source)
+    return
+  }
+  assertZipPackage(content, source)
+  if (new AdmZip(content).getEntry("extension/uninstall-watcher.mjs")) {
+    throw new Error(`Qoder Desktop package from ${source} contains a retired uninstaller; rebuild from current source`)
+  }
+}
+
 function assertJetBrainsPluginPackage(content: Buffer, source: string): void {
   assertZipPackage(content, source)
   try {
@@ -129,6 +142,9 @@ function assertJetBrainsPluginPackage(content: Buffer, source: string): void {
     const jarArchive = new AdmZip(pluginJar.getData())
     if (!jarArchive.getEntry("META-INF/plugin.xml")) {
       throw new Error("META-INF/plugin.xml is missing from the plugin JAR")
+    }
+    if (jarArchive.getEntry("collector/qoder_jetbrains_uninstall.mjs")) {
+      throw new Error("package contains a retired uninstaller; rebuild from current source")
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
@@ -211,7 +227,7 @@ async function buildPackage(
   kind: QoderPluginPackage,
   info: QoderPluginPackageBuildInfo,
 ): Promise<Buffer> {
-  const cached = await readFreshCache(info)
+  const cached = await readFreshCache(kind, info)
   if (cached) return cached
 
   const definition = QODER_PLUGIN_PACKAGES[kind]
@@ -229,7 +245,9 @@ async function buildPackage(
     timeout: kind === "jetbrains" ? 10 * 60_000 : 60_000,
     windowsHide: true,
   })
-  return readFile(info.cachePath)
+  const content = await readFile(info.cachePath)
+  assertCurrentPluginPackage(kind, content, info.cachePath)
+  return content
 }
 
 async function resolvePackage(kind: QoderPluginPackage): Promise<{
@@ -244,7 +262,7 @@ async function resolvePackage(kind: QoderPluginPackage): Promise<{
       if (key.startsWith(`${kind}:`)) buildPromises.delete(key)
     }
     pending = (async () => {
-      const cached = await readFreshCache(info)
+      const cached = await readFreshCache(kind, info)
       if (cached) return cached
 
       if (kind === "jetbrains" && configuredQoderJetBrainsPackageUrl()) {

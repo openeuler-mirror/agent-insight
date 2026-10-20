@@ -1,5 +1,6 @@
 export const INFERENCE_PROXY_UNIX_SETUP_BLOCK = `# Install the local inference proxy after collector credentials are configured.
 if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_QODER" = "true" ]; then
+    echo "安装将改写 OpenCode / Qoder 模型配置和 Qoder CLI 启动入口。请先自行备份全局、项目及自定义配置；不提供自动备份、卸载或配置回退，失败也可能已修改部分文件。" >&2
     if ! (
         set -e
         INFERENCE_PROXY_AGENTS=""
@@ -49,8 +50,7 @@ INFERENCE_PROXY_PUBLISH_EOF
             echo "Inference proxy installation failed; inspect the error above before retrying." >&2
             exit 1
         fi
-        echo "Local inference proxy installed for: $INFERENCE_PROXY_AGENTS"
-        printf 'Restore model addresses and stop the proxy: sh "%s/restore_inference_proxy.sh"\\n' "$AGENT_INSIGHT_HOME"
+        echo "Local inference proxy runtime installed. Model configuration coverage is reported separately."
     ); then
         echo "Agent Insight setup failed while installing the inference proxy." >&2
         exit 1

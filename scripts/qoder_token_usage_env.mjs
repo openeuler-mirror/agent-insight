@@ -6,7 +6,6 @@ import path from "node:path"
 
 export const QODERCN_TOKEN_USAGE_ENV = "QODERCN_EXPOSE_TOKEN_USAGE"
 const MANAGED_VALUE = "1"
-const STATE_FILE = "qodercn-token-usage-env.json"
 const PROFILE_START = "# >>> agent-insight qodercn token usage >>>"
 const PROFILE_END = "# <<< agent-insight qodercn token usage <<<"
 
@@ -59,21 +58,6 @@ function createSystemEnvironmentAdapter({ homeDir = os.homedir(), platform = pro
         run("setx.exe", [name, value])
         process.env[name] = value
       },
-      restore: (name, previousValue) => {
-        if (previousValue === undefined) {
-          const result = spawnSync("reg.exe", ["delete", "HKCU\\Environment", "/v", name, "/f"], {
-            encoding: "utf8",
-            windowsHide: true,
-          })
-          if (result.status !== 0 && readWindowsUserEnvironment(name) !== undefined) {
-            throw new Error(String(result.stderr || result.stdout || "Failed to remove managed Qoder environment variable").trim())
-          }
-          delete process.env[name]
-          return
-        }
-        run("setx.exe", [name, previousValue])
-        process.env[name] = previousValue
-      },
     }
   }
 
@@ -92,76 +76,26 @@ function createSystemEnvironmentAdapter({ homeDir = os.homedir(), platform = pro
       }
       process.env[name] = value
     },
-    restore: (name, previousValue) => {
-      for (const profile of profilePaths(homeDir)) {
-        if (!fs.existsSync(profile)) continue
-        const cleaned = removeManagedProfileBlock(fs.readFileSync(profile, "utf8"))
-        atomicWrite(profile, cleaned ? `${cleaned}\n` : "")
-      }
-      try { fs.unlinkSync(environmentFile) } catch {}
-      if (previousValue === undefined) delete process.env[name]
-      else process.env[name] = previousValue
-    },
   }
-}
-
-function readState(file) {
-  try {
-    const value = JSON.parse(fs.readFileSync(file, "utf8"))
-    if (value?.version === 1 && Array.isArray(value.owners)) return value
-  } catch {}
-  return undefined
 }
 
 export function ensureQoderTokenUsageEnvironment(options = {}) {
-  const insightDir = options.insightDir || getAgentInsightHome(options.homeDir)
-  const owner = String(options.owner || "").trim().toLowerCase()
-  if (!owner) throw new Error("Qoder token usage environment owner is required")
-  const statePath = path.join(insightDir, STATE_FILE)
   const adapter = options.adapter || createSystemEnvironmentAdapter(options)
   const currentValue = adapter.read(QODERCN_TOKEN_USAGE_ENV)
-  const existing = readState(statePath)
-  const owners = new Set(existing?.owners || [])
-  owners.add(owner)
-  const state = existing || {
-    version: 1,
-    previousValue: currentValue,
+  if (currentValue !== MANAGED_VALUE) {
+    const homeDir = options.homeDir || os.homedir()
+    const target = (options.platform || process.platform) === "win32"
+      ? `Windows 用户环境变量 ${QODERCN_TOKEN_USAGE_ENV}`
+      : profilePaths(homeDir).join(", ")
+    process.stderr.write(`安装将设置 ${QODERCN_TOKEN_USAGE_ENV}=1，并可能改写 ${target}；请在安装前自行备份。此安装不提供自动备份或配置回退。\n`)
+    adapter.set(QODERCN_TOKEN_USAGE_ENV, MANAGED_VALUE)
   }
-  state.owners = [...owners].sort()
-  state.managedValue = MANAGED_VALUE
-  if (currentValue !== MANAGED_VALUE) adapter.set(QODERCN_TOKEN_USAGE_ENV, MANAGED_VALUE)
-  atomicWrite(statePath, `${JSON.stringify(state, null, 2)}\n`)
   return {
     name: QODERCN_TOKEN_USAGE_ENV,
     value: MANAGED_VALUE,
-    owners: state.owners,
-    statePath,
     changed: currentValue !== MANAGED_VALUE,
     restartRequired: true,
   }
-}
-
-export function releaseQoderTokenUsageEnvironment(options = {}) {
-  const insightDir = options.insightDir || getAgentInsightHome(options.homeDir)
-  const owner = String(options.owner || "").trim().toLowerCase()
-  if (!owner) throw new Error("Qoder token usage environment owner is required")
-  const statePath = path.join(insightDir, STATE_FILE)
-  const state = readState(statePath)
-  if (!state) return { name: QODERCN_TOKEN_USAGE_ENV, owners: [], restored: false, statePath }
-  const owners = state.owners.filter((value) => value !== owner)
-  if (owners.length) {
-    atomicWrite(statePath, `${JSON.stringify({ ...state, owners }, null, 2)}\n`)
-    return { name: QODERCN_TOKEN_USAGE_ENV, owners, restored: false, statePath }
-  }
-  const adapter = options.adapter || createSystemEnvironmentAdapter(options)
-  const currentValue = adapter.read(QODERCN_TOKEN_USAGE_ENV)
-  let restored = false
-  if (currentValue === state.managedValue) {
-    adapter.restore(QODERCN_TOKEN_USAGE_ENV, state.previousValue)
-    restored = true
-  }
-  try { fs.unlinkSync(statePath) } catch {}
-  return { name: QODERCN_TOKEN_USAGE_ENV, owners: [], restored, statePath }
 }
 
 function getAgentInsightHome(homeDir = os.homedir()) {

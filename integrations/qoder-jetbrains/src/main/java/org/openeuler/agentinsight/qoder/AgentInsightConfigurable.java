@@ -31,6 +31,7 @@ public final class AgentInsightConfigurable implements Configurable {
                 .addLabeledComponent(new JBLabel("Server URL:"), hostField, 1, false)
                 .addLabeledComponent(new JBLabel("API Key:"), apiKeyField, 1, false)
                 .addComponentToRightColumn(new JBLabel("Configuration is shared with Qoder CLI and Desktop."))
+                .addComponentToRightColumn(new JBLabel("安装前请自行备份 ~/.qoder/settings.json 和 Agent Insight config；安装会改写配置，不提供自动备份或回退。"))
                 .addComponentFillVertically(new JPanel(), 0)
                 .getPanel();
         reset();

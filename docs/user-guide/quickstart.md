@@ -9,6 +9,8 @@ description: "登录看板、安装采集客户端，并在链路追踪与仪表
 
 当前客户分支的左侧菜单仅保留 **仪表盘、链路追踪、客户端安装**，管理员也显示相同菜单。登录后从 **客户端安装** 接入 Agent，再到 **链路追踪** 查看执行详情，**仪表盘** 用于查看汇总。其他功能菜单暂时隐藏。
 
+客户端安装页仅提供 **OpenCode 和 Qoder**，可单选或同时接入。其他 Agent 及 LangChain / LangGraph、LlamaIndex 的安装指导暂时隐藏。未选择 Agent 时不会生成安装命令；选中后，命令明确携带所选 Agent，避免进入完整框架的终端选择器。链路追踪列表、详情和 Trace 抽屉中的智能诊断、调测分析跳转也已隐藏；模型调用的 **推理分析** 入口仍可使用。
+
 下文保留完整功能部署的模型注册与 Agent 管理说明；当前客户分支可直接按“步骤一 → 步骤四 → 步骤五”完成已有 Agent 的采集接入。
 
 完成后你会得到：
@@ -350,7 +352,11 @@ Pi Agent、Codex 和 Goal Plus 共用采集传输模块。重新安装时，已�
 
 OpenCode 支持 1.x 与 2.x 的 Trace 采集和模型转发；安装脚本会按本机 CLI 主版本选择插件。**升级或降级 OpenCode 主版本后，重新执行客户端安装页的命令并重启 OpenCode。** 2.x 的原生 `providers` 配置与兼容的旧 `provider` 配置均可接管；模型名称、认证信息和用户选中的模型保持原值，切换模型或新增 Provider 的实际请求会同步到本机入口。只有模型转发安装成功后，推理服务才会收到统一调用 ID。当前真实验证环境为 macOS ARM64、OpenCode 1.18.29 / 2.0.32、OpenAI-compatible Chat Completions SSE。2.x 的 TUI 扩展和 RAS 功能不在本次适配验收范围；安装时跳过旧版 TUI 扩展。
 
-选择 Qoder 或 OpenCode 的 Linux/macOS curl 安装时，还会自动安装本机模型转发入口：先备份可识别的自定义 Provider 配置，再改写模型地址并同步后续变更。已托管模型可照常切换；Qoder 运行中新增或修改 Provider 后需要重启 CLI。需要撤销时执行 `sh "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/restore_inference_proxy.sh"`，会恢复模型地址并保留后续用户修改。支持范围与配置备份说明见[自动接入本地统一推理入口](./observability/view-traces#自动接入本地统一推理入口)。
+选择 Qoder 或 OpenCode 的 Linux/macOS curl 安装时，还会自动安装本机模型转发入口，改写可识别的自定义 Provider 地址并同步后续变更。已接入模型可照常切换；Qoder 运行中新增或修改 Provider 后需要重启 CLI。
+
+Qoder Desktop / JetBrains 插件只有在本次平台下载成功后才显示对应安装指导；下载失败时不要安装本地残留的旧 VSIX / ZIP。Qoder JetBrains 插件仅从平台接口下载。若下载失败，请部署方更新或从当前源码构建插件，再重新执行安装；不要安装本地已有的旧 ZIP，也不要绕过平台从历史 Release 直链下载。服务端不会分发仍含已删除自动卸载组件的旧制品。
+
+**执行安装命令前请自行备份。** 安装会改写模型地址、Hook、插件配置和 Qoder CLI 启动入口，可能覆盖原配置文件；不自动备份，也不提供一键恢复或卸载。至少保存 `~/.config/opencode/`（或 `XDG_CONFIG_HOME` / 自定义路径，含模型配置、插件和 `tui.json`）、`~/.qoder-cn/settings.json`、`~/.qoder/settings.json`、`~/.qoderworkcn/settings.json`、`~/.qoderwork/settings.json` 中实际使用的文件，并记录 Qoder CLI 原启动路径。Windows 安装同样会修改采集 Hook / 插件配置，也应先备份。配置可能含 API Key，请妥善保存；后续如需手工撤销，应对照备份逐项调整，避免覆盖安装后新增的配置。支持范围见[自动接入本地统一推理入口](./observability/view-traces#自动接入本地统一推理入口)。
 
 如果使用 **AcTrail**，先自行完成 AcTrail 安装并启动守护进程，再在安装指导中选择 AcTrail，并于 AcTrail 所在的 Linux 环境运行页面生成的 curl 命令。脚本不会安装或包装 AcTrail，而是完成两项配置：合并更新 AcTrail 守护进程配置，启用完整请求、结构化工具调用、工具结果和子 Agent 关系；生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给官方 `otel-http` 插件。修改守护进程配置前，脚本会备份原文件；若守护进程正在运行则自动重启，然后持久化加载 `agent-insight.otel-http` 实例。之后继续使用原来的 `sudo actrailctl launch --name <名称> -- <Agent 命令>`，AcTrail 会自动上报。默认守护进程配置为 `/etc/actrail/actraild.conf`；非默认部署可在运行脚本前设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
 

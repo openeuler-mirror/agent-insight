@@ -21,12 +21,10 @@
   "main": "./extension.js",
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:agentInsightQoder.configure",
-    "onCommand:agentInsightQoder.uninstallCollector"
+    "onCommand:agentInsightQoder.configure"
   ],
   "files": [
     "extension.js",
-    "uninstall-watcher.mjs",
     "collector/**",
     "LICENSE"
   ],
@@ -35,10 +33,6 @@
       {
         "command": "agentInsightQoder.configure",
         "title": "Agent Insight: Configure Qoder CN Collector"
-      },
-      {
-        "command": "agentInsightQoder.uninstallCollector",
-        "title": "Agent Insight: Uninstall Qoder CN Collector Data"
       }
     ],
     "configuration": {
@@ -47,7 +41,7 @@
         "agentInsightQoder.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable Qoder CN Desktop Trace collection."
+          "description": "Enable automatic Qoder CN Desktop collector setup. Turning this off does not remove existing Hook configuration."
         },
         "agentInsightQoder.host": {
           "type": "string",
@@ -60,11 +54,6 @@
           "minimum": 256,
           "maximum": 20000,
           "description": "Maximum captured characters for prompt, result, and tool content."
-        },
-        "agentInsightQoder.purgeOnUninstall": {
-          "type": "boolean",
-          "default": true,
-          "description": "Delete only the Qoder CN Desktop account-isolated spool after this extension is uninstalled."
         }
       }
     }

@@ -8,7 +8,6 @@ import {
     Check,
     Info,
     CircleCheck,
-    Cloud,
     UserCircle,
     Boxes,
 } from 'lucide-react';
@@ -23,8 +22,6 @@ import {
 } from '@/lib/ingest/setup/install-profile';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
-import { Input } from '@/components/ui/input';
-import { isMctsRepoPath, mctsInstallCommand } from '@/lib/ingest/setup/mcts-install';
 
 /**
  * 客户端安装指导页。
@@ -33,7 +30,10 @@ import { isMctsRepoPath, mctsInstallCommand } from '@/lib/ingest/setup/mcts-inst
  * introRow(描述)、双列网格(主区 + 300px sidebar)、panelCard、lucide 图标统一。
  */
 
-const FRAMEWORK_LABELS = new Map(FRAMEWORK_OPTIONS.map(option => [option.value, option.label]));
+const INSTALL_FRAMEWORK_OPTIONS = FRAMEWORK_OPTIONS
+    .filter(option => ['opencode', 'qoder'].includes(option.value))
+    .map(option => option.value === 'qoder' ? { ...option, label: 'Qoder' } : option);
+const FRAMEWORK_LABELS = new Map(INSTALL_FRAMEWORK_OPTIONS.map(option => [option.value, option.label]));
 
 export default function AccessInstallPage() {
     const { t, locale } = useLocale();
@@ -47,11 +47,10 @@ export default function AccessInstallPage() {
     const [linuxCmd, setLinuxCmd] = useState('');
     const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
-    const [mctsRepoDir, setMctsRepoDir] = useState('');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
     const installProfile = resolveInstallProfile(
-        FRAMEWORK_OPTIONS.filter(option => frameworks.includes(option.value)),
+        INSTALL_FRAMEWORK_OPTIONS.filter(option => frameworks.includes(option.value)),
     );
     const effectiveFrameworks = installProfile.effectiveFrameworks.map(option => option.value);
     useEffect(() => {
@@ -60,7 +59,7 @@ export default function AccessInstallPage() {
             const h = window.location.host;
             const baseUrl = `${protocol}//${h}`;
             setHost(baseUrl);
-            if (!authReady || !apiKey) {
+            if (!authReady || !apiKey || !frameworks.length) {
                 setLinuxCmd('');
                 setWindowsCmd('');
                 return;
@@ -69,19 +68,16 @@ export default function AccessInstallPage() {
             // 逗号在 query 里合法，不编码——命令行里可读性更好。
             const query = [
                 `key=${encodeURIComponent(apiKey)}`,
-                frameworks.length ? `yes=1` : '',
-                frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
-                frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
+                'yes=1',
+                `frameworks=${frameworks.join(',')}`,
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
             const url = `${baseUrl}${setupUrl}${suffix}`;
-            setLinuxCmd(frameworks.includes('mcts-xgovernor')
-                ? mctsInstallCommand(url, mctsRepoDir)
-                : `curl -sSf "${url}" | bash`);
+            setLinuxCmd(`curl -sSf "${url}" | bash`);
             setWindowsCmd(`Invoke-Expression (Invoke-RestMethod -Uri "${baseUrl}${setupUrl}${suffix}" -Headers @{'x-platform'='windows'})`);
         }, 0);
         return () => window.clearTimeout(timer);
-    }, [apiKey, authReady, frameworks, mctsRepoDir]);
+    }, [apiKey, authReady, frameworks]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -126,15 +122,6 @@ export default function AccessInstallPage() {
     };
 
     const keyReady = authReady && !!apiKey;
-    const langfuseUser = user || (isZh ? '<你的用户名>' : '<your-username>');
-    const langfuseSecret = apiKey || (isZh ? '<你的 Agent Insight API Key>' : '<your Agent Insight API key>');
-    const langfuseHost = host ? `${host}${getApiUrl('')}` : 'http://localhost:3000';
-    const langfuseEnv = [
-        `LANGFUSE_BASE_URL=${langfuseHost}`,
-        `LANGFUSE_PUBLIC_KEY=${langfuseUser}`,
-        `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
-    ].join('\n');
-    const llamaIndexSetupCode = 'import agent_insight_llamaindex; agent_insight_llamaindex.setup()';
 
     return (
         <>
@@ -146,35 +133,14 @@ export default function AccessInstallPage() {
                         <div style={descText}>
                             <p style={introLead}>
                                 {isZh
-                                    ? <>按<b style={descStrong}>项目类型</b>(而非操作系统)选择接入方式:</>
-                                    : <>Pick your integration path by <b style={descStrong}>project type</b>, not OS:</>}
+                                    ? <>当前支持 <b style={descStrong}>OpenCode 和 Qoder</b>。选择要接入的 Agent，在 Agent 所在主机运行下方一键安装命令。</>
+                                    : <>This deployment supports <b style={descStrong}>OpenCode and Qoder</b>. Select your agents and run the one-line installer on their host.</>}
                             </p>
-                            <ul style={introList}>
-                                <li style={introItem}>
-                                    <span style={introDot} />
-                                    <span>
-                                        {isZh
-                                            ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / OpenCode / OpenClaw 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
-                                            : <><b style={descStrong}>Command-line agents</b> (Claude Code, OpenCode, OpenClaw, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
-                                    </span>
-                                </li>
-                                <li style={introItem}>
-                                    <span style={introDot} />
-                                    <span>
-                                        {isZh
-                                            ? <><b style={descStrong}>LlamaIndex</b> Python 项目:在上方框架列表勾选 Trace Collector,使用同一条一键安装命令。</>
-                                            : <><b style={descStrong}>LlamaIndex</b> Python projects: select Trace Collector above and use the same one-line installer.</>}
-                                    </span>
-                                </li>
-                                <li style={introItem}>
-                                    <span style={introDot} />
-                                    <span>
-                                        {isZh
-                                            ? <><b style={descStrong}>LangChain / LangGraph</b> 的 Python 项目:无需安装,只改环境变量;Windows / Linux / macOS 写法相同。</>
-                                            : <><b style={descStrong}>LangChain / LangGraph</b> Python projects: no install needed — just set environment variables; identical on Windows, Linux and macOS.</>}
-                                    </span>
-                                </li>
-                            </ul>
+                            <p style={{ margin: 0 }}>
+                                {isZh
+                                    ? <>OpenCode 和 Qoder CLI 支持自动模型转发。Qoder GUI 的模型配置需单独适配。</>
+                                    : <>OpenCode and Qoder CLI support automatic model forwarding. Qoder GUI model settings require separate adapters.</>}
+                            </p>
                         </div>
                     </div>
 
@@ -197,84 +163,55 @@ export default function AccessInstallPage() {
                             </div>
 
                             <FrameworkPicker
-                                options={FRAMEWORK_OPTIONS}
+                                options={INSTALL_FRAMEWORK_OPTIONS}
                                 selected={frameworks}
                                 onToggle={toggleFramework}
                                 locale={locale}
                             />
 
-                            {frameworks.includes('mcts-xgovernor') && (
-                                <MctsRepoField
-                                    value={mctsRepoDir}
-                                    onChange={setMctsRepoDir}
-                                    locale={locale}
-                                />
-                            )}
+                            <section aria-labelledby="client-backup-title" style={{ ...hintBox, alignItems: 'flex-start', border: '1px solid var(--warning-subtle-border)', background: 'var(--warning-subtle)' }}>
+                                <Info size={18} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+                                <div style={{ ...descText, flex: 1, fontSize: 12.5 }}>
+                                    <h2 id="client-backup-title" style={{ margin: '0 0 6px', fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
+                                        {isZh ? '安装前请自行备份' : 'Back up your configuration before installation'}
+                                    </h2>
+                                    <p style={{ margin: '0 0 6px' }}>
+                                        {isZh
+                                            ? '安装会改写受支持的模型地址、Hook 和插件配置，并可能覆盖已有配置文件。请在执行下方命令前自行备份；安装器不自动备份，也不提供一键恢复或卸载。'
+                                            : 'Installation rewrites supported model addresses, hooks, and plugin settings and may overwrite existing configuration files. Back them up before running a command below. The installer does not create backups or provide one-click restore or uninstall.'}
+                                    </p>
+                                    <p style={{ margin: 0 }}>
+                                        {isZh ? '备份范围：' : 'Back up: '}
+                                        <code>~/.config/opencode/</code>{isZh ? '（或 XDG_CONFIG_HOME / 自定义配置路径，含模型、插件和 tui.json），项目内 ' : ' (or XDG_CONFIG_HOME / custom configuration paths, including model, plugin, and tui.json settings), project '}
+                                        <code>opencode.json(c)</code>、<code>.opencode/</code>、<code>.qoder/</code>{isZh ? '，以及 ' : ', and '}
+                                        <code>~/.qoder-cn/settings.json</code>、<code>~/.qoder/settings.json</code>、<code>~/.qoderworkcn/settings.json</code>、<code>~/.qoderwork/settings.json</code>{isZh ? ' 及实际使用的自定义目录。Qoder CLI 的启动入口也可能被改写，请同时记录原启动路径。' : ', and any custom locations you use. Qoder CLI launchers may also be rewritten; record their original paths.'}
+                                    </p>
+                                    <p style={{ margin: '6px 0 0' }}>
+                                        {isZh ? 'Qoder Token 采集还会修改 ' : 'Qoder Token collection also updates '}
+                                        <code>~/.profile</code>、<code>~/.bashrc</code>、<code>~/.zshrc</code>{isZh ? '（Unix）或 Windows 用户环境变量。请备份这些文件，或记录原来的 QODERCN_EXPOSE_TOKEN_USAGE 值。' : ' (Unix) or Windows user environment variables. Back up these files or record the original QODERCN_EXPOSE_TOKEN_USAGE value.'}
+                                    </p>
+                                </div>
+                            </section>
 
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Linux"
-                                hint={frameworks.includes('mcts-xgovernor')
-                                    ? (isZh ? '在 MCTS 执行机执行，自动完成配置、安装和客户端启动。Windows 请使用 WSL。' : 'Run on the MCTS host to configure, install and start the client. Use WSL on Windows.')
-                                    : (isZh ? '使用 Agent 所在 Linux 环境的 bash / zsh 终端' : 'Use a bash / zsh shell on the Linux Agent host')}
+                                hint={isZh ? '使用 Agent 所在 Linux 环境的 bash / zsh 终端' : 'Use a bash / zsh shell on the Linux Agent host'}
                                 cmd={linuxCmd}
-                                unavailableMessage={frameworks.includes('mcts-xgovernor') && !isMctsRepoPath(mctsRepoDir)
-                                    ? (isZh ? '请填写 MCTS 仓库的绝对路径' : 'Enter the absolute MCTS repository path') : undefined}
+                                unavailableMessage={!frameworks.length ? (isZh ? '请先选择 OpenCode 或 Qoder' : 'Select OpenCode or Qoder first') : undefined}
                                 copied={copied === 'linux'}
                                 onCopy={() => handleCopy(linuxCmd, 'linux')}
                                 locale={locale}
                             />
 
-                            {!frameworks.includes('mcts-xgovernor') && <CommandCard
+                            <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Windows (PowerShell)"
                                 hint={isZh ? '在 Windows PowerShell 中运行' : 'Run in Windows PowerShell'}
                                 cmd={windowsCmd}
+                                unavailableMessage={!frameworks.length ? (isZh ? '请先选择 OpenCode 或 Qoder' : 'Select OpenCode or Qoder first') : undefined}
                                 copied={copied === 'windows'}
                                 onCopy={() => handleCopy(windowsCmd, 'windows')}
-                                locale={locale}
-                            />}
-
-                            <div style={{ ...sectionHeading, marginTop: 8 }}>
-                                <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
-                                <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                                    {isZh ? 'LangChain / LangGraph 接入' : 'LangChain / LangGraph'}
-                                </span>
-                                <span style={countPill}>env</span>
-                                <span style={{ flex: 1 }} />
-                                <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? 'Python 项目,任何系统只改环境变量' : 'Python — env vars only, any OS'}
-                                </span>
-                            </div>
-
-                            <LangfuseEnvCard
-                                envText={langfuseEnv}
-                                copied={copied === 'langfuse-env'}
-                                onCopy={() => handleCopy(langfuseEnv, 'langfuse-env')}
-                                locale={locale}
-                            />
-
-                            <div style={{ ...sectionHeading, marginTop: 8 }}>
-                                <Terminal size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
-                                <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                                    LlamaIndex Trace Collector
-                                </span>
-                                <span style={countPill}>{isZh ? '应用注册' : 'app setup'}</span>
-                                <span style={{ flex: 1 }} />
-                                <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? '安装已并入上方一键脚本' : 'Installed by the one-line setup above'}
-                                </span>
-                            </div>
-
-                            <CommandCard
-                                icon={<Terminal size={14} strokeWidth={2.2} />}
-                                label={isZh ? '应用代码 · 一行注册' : 'Application code · one-line setup'}
-                                hint={isZh
-                                    ? '已执行 configure 时，将这一行放在 LlamaIndex 应用入口顶部'
-                                    : 'After configure, place this line near the top of the LlamaIndex entry point'}
-                                cmd={llamaIndexSetupCode}
-                                copied={copied === 'llamaindex-setup'}
-                                onCopy={() => handleCopy(llamaIndexSetupCode, 'llamaindex-setup')}
                                 locale={locale}
                             />
 
@@ -287,6 +224,7 @@ export default function AccessInstallPage() {
                                         : 'This page refreshes and verifies the current server identity before generating a copyable command. After changing hosts or rebuilding the service, reopen this page and run a fresh command.'}
                                 </div>
                             </div>
+
                         </div>
 
                         {/* --- Right sidebar --- */}
@@ -309,38 +247,6 @@ export default function AccessInstallPage() {
                 </div>
             </div>
         </>
-    );
-}
-
-function MctsRepoField({
-    value, onChange, locale,
-}: {
-    value: string;
-    onChange: (value: string) => void;
-    locale: string;
-}) {
-    const isZh = locale === 'zh';
-    return (
-        <article style={commandCard}>
-            <label htmlFor="mcts-repo-dir" style={configLabel}>
-                {isZh ? 'MCTS 仓库路径 *' : 'MCTS repository path *'}
-            </label>
-            <Input
-                id="mcts-repo-dir"
-                type="text"
-                required
-                aria-invalid={value.length > 0 && !isMctsRepoPath(value)}
-                value={value}
-                onChange={event => onChange(event.target.value)}
-                placeholder="/opt/MCTS"
-                style={configInput}
-            />
-            <div style={langfuseNote}>
-                {isZh
-                    ? '填写执行机上的绝对路径。连接配置沿用该仓库的 testcases_union/config.env。'
-                    : 'Enter the absolute path on the execution host. Connection settings are read from testcases_union/config.env in this repository.'}
-            </div>
-        </article>
     );
 }
 
@@ -376,6 +282,7 @@ function FrameworkPicker({
                             key={o.value}
                             type="button"
                             onClick={() => onToggle(o.value)}
+                            aria-pressed={active}
                             style={active ? frameworkChipActive : frameworkChip}
                         >
                             {active && <Check size={12} strokeWidth={2.6} />}
@@ -387,8 +294,8 @@ function FrameworkPicker({
             <div style={langfuseNote}>
                 {selected.length === 0
                     ? (isZh
-                        ? '未勾选任何框架 —— 命令不带 frameworks 参数,脚本会在终端里让你交互选择(该步骤需要访问 npm 源)。'
-                        : 'Nothing selected — the command omits the frameworks parameter and the script prompts inside the terminal (that step needs npm registry access).')
+                        ? '请至少选择 OpenCode 或 Qoder，选择后生成安装命令。'
+                        : 'Select OpenCode or Qoder to generate an installation command.')
                     : (isZh
                         ? '已勾选的框架会写进命令,脚本跳过终端内的交互选择 —— 内网/离线环境无需访问 npm 源。'
                         : 'Selected frameworks are baked into the command, so the script skips the terminal prompt — no npm registry access needed on offline or intranet machines.')}
@@ -422,6 +329,8 @@ function CommandCard({
                 </div>
                 {cmd && (
                     <button
+                        type="button"
+                        aria-label={isZh ? `复制${label}命令` : `Copy ${label} command`}
                         onClick={onCopy}
                         style={copied ? copiedBtn : ghostBtn}
                     >
@@ -521,7 +430,7 @@ function ConnectionPanel({
             </div>
             {reportingChannels.length === 0 ? (
                 <div style={emptyChannelText}>
-                    {isZh ? '将在终端中选择框架。' : 'Choose frameworks in the terminal.'}
+                    {isZh ? '请先选择 OpenCode 或 Qoder。' : 'Select OpenCode or Qoder first.'}
                 </div>
             ) : (
                 <div style={channelList}>
@@ -546,58 +455,6 @@ function ConnectionPanel({
         </section>
     );
 }
-
-function LangfuseEnvCard({
-    envText, copied, onCopy, locale,
-}: {
-    envText: string;
-    copied: boolean;
-    onCopy: () => void;
-    locale: string;
-}) {
-    const isZh = locale === 'zh';
-    return (
-        <article style={commandCard}>
-            <header style={commandCardHeader}>
-                <span style={commandIconBox}><Cloud size={14} strokeWidth={2.2} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
-                        {isZh ? '环境变量配置' : 'Environment variables'}
-                    </div>
-                    <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
-                        {isZh ? 'LangChain / LangGraph 项目通用,Windows / Linux / macOS 写法一致' : 'Same for LangChain / LangGraph on Windows, Linux or macOS'}
-                    </div>
-                </div>
-                <button onClick={onCopy} style={copied ? copiedBtn : ghostBtn}>
-                    {copied
-                        ? <><Check size={13} strokeWidth={2.5} />{isZh ? '已复制' : 'Copied'}</>
-                        : <><Copy size={13} strokeWidth={2.2} />{isZh ? '复制' : 'Copy'}</>}
-                </button>
-            </header>
-            <div style={commandBox}>
-                <code style={{ ...commandCode, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {envText}
-                </code>
-            </div>
-            <div style={langfuseEndpointRow}>
-                <span>{isZh ? 'Langfuse 兼容入口' : 'Langfuse-compatible endpoint'}</span>
-                <code style={langfuseEndpointCode}>/api/public/otel/v1/traces</code>
-            </div>
-            <div style={langfuseNote}>
-                {isZh
-                    ? '这些以 LANGFUSE_ 开头的变量由 LangChain / LangGraph 的追踪回调读取,填好即可、无需改代码。PUBLIC_KEY 填当前 Agent Insight 用户名,SECRET_KEY 填该用户的 Agent Insight API Key;两者不对应时平台会拒绝上报。'
-                    : 'These LANGFUSE_-prefixed variables are read by the LangChain / LangGraph tracing callback — no code changes needed. Set PUBLIC_KEY to your Agent Insight username and SECRET_KEY to that user\'s Agent Insight API key. Mismatched credentials are rejected.'}
-            </div>
-        </article>
-    );
-}
-
-/**
- * 常驻客户端安装（IF-N01/N02）。
- *
- * 与上方的 Trace 采集器安装是两件事：这里装的是独立常驻服务，由 systemd / launchd 守护，
- * 不随 Agent 平台启停，负责配置下发与双向控制通道。
- */
 
 function KvRow({
     label, value, mono, bold, ellipsis, icon,
@@ -671,30 +528,6 @@ const descStrong: CSSProperties = {
 
 const introLead: CSSProperties = {
     margin: '0 0 8px',
-};
-
-const introList: CSSProperties = {
-    listStyle: 'none',
-    margin: 0,
-    padding: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-};
-
-const introItem: CSSProperties = {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-};
-
-const introDot: CSSProperties = {
-    width: 5,
-    height: 5,
-    borderRadius: '50%',
-    background: 'var(--primary)',
-    flexShrink: 0,
-    marginTop: 7,
 };
 
 const twoColGrid: CSSProperties = {
@@ -836,28 +669,6 @@ const channelStatusNote: CSSProperties = {
     color: 'var(--foreground-muted)',
 };
 
-const langfuseEndpointRow: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    padding: '8px 10px',
-    border: '1px solid var(--border)',
-    borderRadius: 8,
-    background: 'var(--background-secondary)',
-    fontSize: 11.5,
-    color: 'var(--foreground-secondary)',
-};
-
-const langfuseEndpointCode: CSSProperties = {
-    minWidth: 0,
-    fontSize: 11,
-    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    color: 'var(--foreground)',
-    overflowWrap: 'anywhere',
-    textAlign: 'right',
-};
-
 const commandCard: CSSProperties = {
     background: 'var(--card-bg)',
     border: '1px solid var(--card-border)',
@@ -872,24 +683,6 @@ const commandCardHeader: CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 12,
-};
-
-const configLabel: CSSProperties = {
-    fontSize: 12.5,
-    fontWeight: 600,
-    color: 'var(--foreground)',
-};
-
-const configInput: CSSProperties = {
-    width: '100%',
-    boxSizing: 'border-box',
-    padding: '9px 11px',
-    color: 'var(--foreground)',
-    background: 'var(--background-secondary)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-md)',
-    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    fontSize: 12,
 };
 
 const commandIconBox: CSSProperties = {
@@ -1044,14 +837,4 @@ const langfuseNote: CSSProperties = {
     lineHeight: 1.6,
     color: 'var(--foreground-secondary)',
     padding: '0 2px',
-};
-
-const inlineCode: CSSProperties = {
-    background: 'var(--background-secondary)',
-    padding: '1px 6px',
-    borderRadius: 4,
-    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    fontSize: 11.5,
-    color: 'var(--foreground)',
-    border: '1px solid var(--border)',
 };

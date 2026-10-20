@@ -17,7 +17,8 @@ test("Qoder CN Desktop VSIX manifest exposes startup, status commands, and Setti
   assert.ok(manifest.contributes.commands.some((item: any) => item.command === "agentInsightQoder.configure"))
   assert.equal(manifest.contributes.configuration.properties["agentInsightQoder.enabled"].default, true)
   assert.equal(manifest.contributes.configuration.properties["agentInsightQoder.maxContentChars"].default, 2000)
-  assert.equal(manifest.contributes.configuration.properties["agentInsightQoder.purgeOnUninstall"].default, true)
+  assert.equal(manifest.contributes.configuration.properties["agentInsightQoder.purgeOnUninstall"], undefined)
+  assert.ok(!manifest.files.includes("uninstall-watcher.mjs"))
 })
 
 test("Qoder Desktop activation keeps synchronous startup below 200ms and 50MB", () => {
@@ -94,9 +95,9 @@ test("Qoder Desktop activation keeps synchronous startup below 200ms and 50MB", 
   const heapDelta = Math.max(0, process.memoryUsage().heapUsed - beforeHeap)
 
   assert.equal(statusShown, true)
-  assert.equal(watcherStarted, true)
+  assert.equal(watcherStarted, false)
   assert.ok(commands.includes("agentInsightQoder.configure"))
-  assert.ok(commands.includes("agentInsightQoder.uninstallCollector"))
+  assert.ok(!commands.includes("agentInsightQoder.uninstallCollector"))
   assert.ok(activationMs < 200, `synchronous activation took ${activationMs.toFixed(2)}ms`)
   assert.ok(heapDelta < 50 * 1024 * 1024, `synchronous activation allocated ${heapDelta} bytes`)
 })
@@ -175,7 +176,19 @@ test("Qoder for JetBrains flushes before application disposal and plugin unload"
   const lifecycle = fs.readFileSync(path.join(javaRoot, "AgentInsightPluginLifecycle.java"), "utf8")
   const installer = fs.readFileSync(path.join(javaRoot, "CollectorInstaller.java"), "utf8")
   assert.match(marker, /void dispose\(\)[\s\S]*CollectorInstaller\.flushOwnedCollector\(\)/)
-  assert.match(lifecycle, /beforePluginUnload[\s\S]*flushOwnedCollector\(\)[\s\S]*uninstallOwnedCollector\(\)/)
+  assert.match(lifecycle, /beforePluginUnload[\s\S]*flushOwnedCollector\(\)/)
+  assert.doesNotMatch(lifecycle + installer, /uninstallOwnedCollector|qoder_jetbrains_uninstall/)
   assert.match(installer, /--flush/)
   assert.match(installer, /--product=jetbrains/)
+})
+
+
+test("Qoder JetBrains automatic installation schedules its backup warning before background setup", () => {
+  const root = path.join(process.cwd(), "integrations", "qoder-jetbrains", "src", "main")
+  const installer = fs.readFileSync(path.join(root, "java", "org", "openeuler", "agentinsight", "qoder", "CollectorInstaller.java"), "utf8")
+  const plugin = fs.readFileSync(path.join(root, "resources", "META-INF", "plugin.xml"), "utf8")
+  const automaticInstall = installer.slice(installer.indexOf("public static void installAsync"), installer.indexOf("private static void install("))
+  assert.match(plugin, /<notificationGroup\s+id="Agent Insight Qoder Setup"\s+displayType="BALLOON"/)
+  assert.match(automaticInstall, /invokeLater\(\(\) -> \{[\s\S]*getNotificationGroup\("Agent Insight Qoder Setup"\)[\s\S]*自行备份[\s\S]*NotificationType\.WARNING[\s\S]*\.notify\(null\);[\s\S]*executeOnPooledThread\(\(\) -> \{[\s\S]*install\(markerService\)/)
+  assert.doesNotMatch(automaticInstall, /showYesNo|showDialog|showConfirmation/)
 })

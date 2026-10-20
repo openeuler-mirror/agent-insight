@@ -98,7 +98,6 @@ function buildWithIde(ideHome, destination, version) {
   }
   const resourcesRoot = path.join(integrationRoot, "src", "main", "resources")
   for (const file of filesUnder(resourcesRoot)) {
-    if (file.includes(`${path.sep}collector${path.sep}`)) continue
     addFile(jar, path.relative(resourcesRoot, file), file)
   }
   for (const script of [

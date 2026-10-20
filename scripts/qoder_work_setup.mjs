@@ -4,10 +4,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import {
-  ensureQoderTokenUsageEnvironment,
-  releaseQoderTokenUsageEnvironment,
-} from "./qoder_token_usage_env.mjs"
+import { ensureQoderTokenUsageEnvironment } from "./qoder_token_usage_env.mjs"
 
 export const QODER_WORK_HOOK_EVENTS = [
   "SessionStart",
@@ -34,6 +31,7 @@ function stableHex(value, length = 16) {
 }
 
 function atomicWrite(file, content, mode = 0o600) {
+  if (fs.existsSync(file)) file = fs.realpathSync(file)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`
   fs.writeFileSync(temporary, content, { encoding: "utf8", mode })
@@ -65,20 +63,21 @@ function quoteHookCommandArgument(value) {
   return `"${normalized.replace(/(["\\$`])/g, "\\$1")}"`
 }
 
-function isAgentInsightWorkHook(handler) {
+function isAgentInsightWorkHook(handler, collectorPath) {
   const command = String(handler?.command || "").toLowerCase().replace(/\\/g, "/")
   return command.includes("agent-insight-probe.ps1")
+    || (collectorPath && command.includes(String(collectorPath).toLowerCase().replace(/\\/g, "/")))
     || (command.includes("agent-insight") && command.includes("qoder-work") && command.includes("qoder_trace_collector.mjs"))
 }
 
-/** @param {any} settings */
-export function removeQoderWorkHooks(settings) {
+/** @param {any} settings @param {string | undefined} collectorPath */
+export function removeQoderWorkHooks(settings, collectorPath = undefined) {
   const result = clone(settings)
   if (!result.hooks || typeof result.hooks !== "object" || Array.isArray(result.hooks)) return result
   for (const [eventName, rawGroups] of Object.entries(result.hooks)) {
     if (!Array.isArray(rawGroups)) continue
     const groups = rawGroups.flatMap((group) => {
-      const hooks = Array.isArray(group?.hooks) ? group.hooks.filter((handler) => !isAgentInsightWorkHook(handler)) : []
+      const hooks = Array.isArray(group?.hooks) ? group.hooks.filter((handler) => !isAgentInsightWorkHook(handler, collectorPath)) : []
       return hooks.length ? [{ ...group, hooks }] : []
     })
     if (groups.length) result.hooks[eventName] = groups
@@ -90,7 +89,7 @@ export function removeQoderWorkHooks(settings) {
 
 /** @param {any} settings @param {{ nodePath?: string, collectorPath: string }} options */
 export function mergeQoderWorkHooks(settings, { nodePath, collectorPath }) {
-  const result = removeQoderWorkHooks(settings)
+  const result = removeQoderWorkHooks(settings, collectorPath)
   result.hooks = result.hooks && typeof result.hooks === "object" && !Array.isArray(result.hooks) ? result.hooks : {}
   const resolvedNodePath = nodePath || process.execPath
   const hookNodePath = process.platform === "win32"
@@ -124,7 +123,7 @@ export function resolveQoderWorkHome(homeDir = os.homedir(), requested) {
 }
 
 function startUploader(uploaderPath, spoolDir, host, apiKey) {
-  const child = spawn(process.execPath, [uploaderPath, "--watch"], {
+  const child = spawn(process.execPath, [uploaderPath, "--watch", `--spool-dir=${spoolDir}`], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
@@ -139,65 +138,8 @@ function startUploader(uploaderPath, spoolDir, host, apiKey) {
   return child.pid
 }
 
-function processIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function pauseSync(milliseconds) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
-}
-
-function stopUploader(spoolDir) {
-  const pids = new Set()
-  for (const name of ["uploader.lock", "upload-run.lock"]) {
-    try {
-      const lock = JSON.parse(fs.readFileSync(path.join(spoolDir, name), "utf8"))
-      const pid = Number(lock.pid)
-      if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid)
-    } catch {}
-  }
-  for (const pid of pids) {
-    try { process.kill(pid, "SIGTERM") } catch {}
-  }
-  return [...pids]
-}
-
-function waitForUploaderExit(pids, graceMs = 2_000) {
-  const unique = [...new Set(pids)].filter((pid) => pid !== process.pid)
-  const deadline = Date.now() + graceMs
-  while (unique.some(processIsAlive) && Date.now() < deadline) pauseSync(25)
-  for (const pid of unique.filter(processIsAlive)) {
-    try { process.kill(pid, "SIGKILL") } catch {}
-  }
-  const forcedDeadline = Date.now() + 500
-  while (unique.some(processIsAlive) && Date.now() < forcedDeadline) pauseSync(25)
-  return unique.filter((pid) => !processIsAlive(pid))
-}
-
-function stopQoderWorkUploaders(insightDir) {
-  const pids = []
-  const roots = [
-    path.join(insightDir, "otel_data", "qoder", "work"),
-    path.join(insightDir, "otel_data", "qoder-work"),
-  ]
-  for (const root of roots) {
-    try {
-      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory()) pids.push(...stopUploader(path.join(root, entry.name)))
-      }
-    } catch {}
-  }
-  waitForUploaderExit(pids)
-  return [...new Set(pids)]
-}
-
-/** @param {any} options */
+/** @param {any} options
+ * @returns {any} */
 export function installQoderWorkCollector(options = {}) {
   const homeDir = options.homeDir || os.homedir()
   const insightDir = options.insightDir || getAgentInsightHome(homeDir)
@@ -222,12 +164,12 @@ export function installQoderWorkCollector(options = {}) {
 
   const settingsPath = path.join(qoderWorkHome, "settings.json")
   const settings = mergeQoderWorkHooks(readJson(settingsPath), { nodePath: process.execPath, collectorPath })
+  process.stderr.write(`安装将改写 Qoder Work Hook 配置 ${settingsPath}；请在安装前自行备份。此安装不提供自动备份或配置回退。\n`)
   atomicWrite(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
   const tokenUsageEnvironment = (options.configureTokenUsageEnvironment ?? options.homeDir === undefined)
     ? ensureQoderTokenUsageEnvironment({
         homeDir,
         insightDir,
-        owner: "work",
         adapter: options.tokenUsageEnvironmentAdapter,
       })
     : undefined
@@ -235,41 +177,11 @@ export function installQoderWorkCollector(options = {}) {
   return { settingsPath, qoderWorkHome, collectorPath, uploaderPath, spoolDir, accountHash, tokenUsageEnvironment, uploaderPid }
 }
 
-/** @param {any} options */
-export function uninstallQoderWorkCollector(options = {}) {
-  const homeDir = options.homeDir || os.homedir()
-  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
-  const qoderWorkHome = resolveQoderWorkHome(homeDir, options.qoderWorkHome)
-  const settingsPath = path.join(qoderWorkHome, "settings.json")
-  if (fs.existsSync(settingsPath)) {
-    atomicWrite(settingsPath, `${JSON.stringify(removeQoderWorkHooks(readJson(settingsPath)), null, 2)}\n`)
-  }
-  const stoppedUploaderPids = stopQoderWorkUploaders(insightDir)
-  const tokenUsageEnvironment = releaseQoderTokenUsageEnvironment({
-    homeDir,
-    insightDir,
-    owner: "work",
-    adapter: options.tokenUsageEnvironmentAdapter,
-  })
-  const runtimeDir = path.resolve(insightDir, WORK_RUNTIME_DIR)
-  const spoolRoot = path.resolve(insightDir, "otel_data", "qoder", "work")
-  const legacySpoolRoot = path.resolve(insightDir, "otel_data", "qoder-work")
-  const insightRoot = path.resolve(insightDir) + path.sep
-  if (runtimeDir.startsWith(insightRoot)) fs.rmSync(runtimeDir, { recursive: true, force: true })
-  if (options.purge) {
-    for (const root of [spoolRoot, legacySpoolRoot]) {
-      if (root.startsWith(insightRoot)) fs.rmSync(root, { recursive: true, force: true })
-    }
-  }
-  return { settingsPath, runtimeDir, spoolRoot, stoppedUploaderPids, tokenUsageEnvironment, purged: Boolean(options.purge) }
-}
-
 function parseArgs(args) {
   const command = args[0] || "status"
   const options = {}
   for (const arg of args.slice(1)) {
-    if (arg === "--purge") options.purge = true
-    else if (arg === "--no-start") options.startUploader = false
+    if (arg === "--no-start") options.startUploader = false
     else if (arg.startsWith("--") && arg.includes("=")) {
       const [key, ...rest] = arg.slice(2).split("=")
       options[key.replace(/-([a-z])/g, (_, char) => char.toUpperCase())] = rest.join("=")
@@ -284,12 +196,8 @@ function main() {
     process.stdout.write(`${JSON.stringify(installQoderWorkCollector(options), null, 2)}\n`)
     return
   }
-  if (command === "uninstall") {
-    process.stdout.write(`${JSON.stringify(uninstallQoderWorkCollector(options), null, 2)}\n`)
-    return
-  }
+  process.exitCode = 1
   process.stdout.write("Usage: node qoder_work_setup.mjs install [--host=<url> --api-key=<key>] [--no-start]\n")
-  process.stdout.write("       node qoder_work_setup.mjs uninstall [--purge]\n")
 }
 
 const invokedPath = process.argv[1]

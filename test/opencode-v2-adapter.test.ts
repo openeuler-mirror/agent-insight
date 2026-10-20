@@ -102,7 +102,7 @@ test('V2 context hook preserves system prompts with native model identity', asyn
 })
 
 
-test('V2 setup fails closed for lost event streams and managed WebSockets, while restore preserves transport', async () => {
+test('V2 setup fails closed for lost event streams and managed WebSockets, while disabled proxy preserves transport', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-v2-setup-'))
   const before = { ...process.env }
   const registry: Record<string, any> = {}

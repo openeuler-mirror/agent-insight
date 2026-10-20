@@ -7,7 +7,7 @@ import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createInferenceGateway } from './inference_gateway.mjs'
-import { syncConfigFiles, restoreConfigFiles } from './inference_config.mjs'
+import { syncConfigFiles } from './inference_config.mjs'
 
 const self = fileURLToPath(import.meta.url)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -130,8 +130,15 @@ function syncKnown(c, install, origin, extra = []) {
   const files = mergeFiles(install.files || [], discoverConfigFiles({ ...c, agents: install.agents }), extra)
   const result = syncConfigFiles({ insightDir: c.insightDir, origin, files, env: c.env })
   refreshLaunchers(c, install)
+  const persistent = result.managed.filter(item => !['resolved', 'inline'].includes(path.relative(fs.realpathSync(c.root), item.file).split(path.sep)[0]))
+  install.coverage = install.agents.flatMap(agent => {
+    const managedEndpoints = persistent.filter(item => item.agent === agent).length
+    const coverage = [{ agent, product: 'cli', state: managedEndpoints ? 'configured' : 'no_supported_endpoint', managedEndpoints }]
+    if (agent === 'qoder') for (const product of ['desktop', 'jetbrains']) coverage.push({ agent, product, state: 'adapter_unavailable', managedEndpoints: 0 })
+    return coverage
+  })
   install.files = files; saveInstall(c, install)
-  return result
+  return { ...result, coverage: install.coverage }
 }
 function refreshLaunchers(c, install) {
   for (const item of [...install.launchers]) {
@@ -162,48 +169,31 @@ function launcherPlans(c, installation) {
     if (existing && fs.existsSync(item.path) && hash(fs.readFileSync(item.path)) === existing.managedHash) return { ...existing, code, managedHash: hash(code) }
     const stat = fs.lstatSync(item.path)
     const original = fs.realpathSync(item.path)
-    const saved = { ...item, original, link: stat.isSymbolicLink() ? fs.readlinkSync(item.path) : undefined, mode: stat.mode & 0o777, managedHash: hash(code), code }
+    const saved = { ...item, original, managedHash: hash(code), code }
     if (!stat.isSymbolicLink()) {
-      const backup = path.join(c.root, 'launchers', hash(item.path + ':' + hash(fs.readFileSync(item.path))))
-      if (!fs.existsSync(backup)) atomic(backup, fs.readFileSync(item.path), stat.mode & 0o777)
-      saved.original = backup
+      const executable = path.join(c.root, 'launchers', hash(item.path + ':' + hash(fs.readFileSync(item.path))))
+      if (!fs.existsSync(executable)) atomic(executable, fs.readFileSync(item.path), stat.mode & 0o777)
+      saved.original = executable
     }
     fs.accessSync(path.dirname(item.path), fs.constants.W_OK)
     return saved
   })
 }
-function restoreLaunchers(c, install) {
-  const conflicts = []
-  for (const item of install.launchers || []) {
-    if (!fs.existsSync(item.path) || hash(fs.readFileSync(item.path)) !== item.managedHash) { conflicts.push(item.path); continue }
-    if (item.link !== undefined) {
-      const temporary = `${item.path}.${crypto.randomUUID()}.tmp`; fs.symlinkSync(item.link, temporary); fs.renameSync(temporary, item.path)
-    } else atomic(item.path, fs.readFileSync(item.original), item.mode)
-  }
-  return conflicts
-}
 export async function installProxy(options = {}) {
   const c = context(options)
+  process.stderr.write('安装将改写 OpenCode / Qoder 的模型地址及 Qoder CLI 启动入口。请在安装前自行备份相关全局、项目和自定义配置及启动入口；不提供自动备份、卸载或配置回退。安装失败可能已修改部分文件。\n')
   return locked(c, async () => {
     const before = loadInstall(c)
     const install = { ...before, enabled: true, nodePath: c.nodePath || before.nodePath || process.execPath, homeDir: c.homeDir, agents: [...new Set([...before.agents, ...(c.agents || ['opencode', 'qoder'])])] }
     const plans = launcherPlans(c, install)
     const runtime = await ensureDaemon(c, install)
-    try {
-      const result = syncKnown(c, install, runtime.origin)
-      for (const item of plans) if (item.code) atomic(item.path, item.code, 0o755)
-      install.launchers = mergeLaunchers(before.launchers, plans.map(({ code, ...item }) => item))
-      saveInstall(c, install)
-      const restore = `#!/bin/sh\nexec ${shellQuote(install.nodePath)} ${shellQuote(self)} restore ${shellQuote(c.insightDir)}\n`
-      atomic(path.join(c.insightDir, 'restore_inference_proxy.sh'), restore, 0o700)
-      return { ...result, origin: runtime.origin, launchers: install.launchers.map(x => x.path) }
-    } catch (error) {
-      if (!before.enabled) { restoreConfigFiles({ insightDir: c.insightDir }); restoreLaunchers(c, { launchers: plans }); saveInstall(c, before); await stopDaemon(c) }
-      throw error
-    }
+    install.launchers = mergeLaunchers(before.launchers, plans.map(({ code, ...item }) => item))
+    saveInstall(c, install)
+    const result = syncKnown(c, install, runtime.origin)
+    for (const item of plans) if (item.code) atomic(item.path, item.code, 0o755)
+    return { ...result, origin: runtime.origin, launchers: install.launchers.map(x => x.path) }
   })
 }
-const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'"
 const mergeLaunchers = (a, b) => [...new Map([...a, ...b].map(item => [item.path, item])).values()]
 export async function syncProxy(options = {}) {
   const c = context(options)
@@ -251,7 +241,7 @@ export async function prepareOpenCodeRequest(address, options = {}) {
   const url = new URL(address)
   if (url.username || url.password || url.hash) throw new Error('Unsupported OpenCode inference URL credentials or fragment')
   const suffix = /\/(chat\/completions|responses|messages)\/?$/.exec(url.pathname)
-  if (!suffix) throw new Error('Unsupported OpenCode inference endpoint; restore the proxy to use this protocol')
+  if (!suffix) throw new Error('Unsupported OpenCode inference endpoint; configure a supported HTTP model endpoint')
   const protocol = suffix[1] === 'messages' ? 'anthropic' : 'openai'
   const baseURL = url.origin + url.pathname.slice(0, suffix.index)
   const cfg = { provider: { request: { npm: protocol === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible', options: { baseURL } } } }
@@ -263,19 +253,8 @@ async function stopDaemon(c) {
   if (runtime) {
     await fetch(runtime.origin + '/_agent_insight/stop', { method: 'POST', headers: { 'x-agent-insight-control': runtime.token }, signal: AbortSignal.timeout(2000) }).then(r => r.text())
     for (let i = 0; i < 40; i++) { if (!await healthy(c)) return; await sleep(25) }
-    throw new Error('Inference proxy has not stopped; retry restore')
+    throw new Error('Inference proxy has not stopped; retry installation')
   }
-}
-export async function restoreProxy(options = {}) {
-  const c = context(options)
-  return locked(c, async () => {
-    const install = loadInstall(c)
-    const result = restoreConfigFiles({ insightDir: c.insightDir })
-    const launcherConflicts = restoreLaunchers(c, install)
-    install.enabled = false; saveInstall(c, install)
-    await stopDaemon(c)
-    return { ...result, launcherConflicts }
-  })
 }
 export async function launchQoder(insightDir, entry, args) {
   const c = context({ insightDir, args })
@@ -338,10 +317,20 @@ try { isMain = Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === 
 if (isMain) {
   const [command, insightDir, agents] = process.argv.slice(2)
   const options = { insightDir, ...(agents ? { agents: agents.split(',') } : {}) }
-  const action = { install: installProxy, sync: syncProxy, restore: restoreProxy, status: async o => ({ ...loadInstall(context(o)), healthy: Boolean(await healthy(context(o))) }) }[command]
+  const action = { install: installProxy, sync: syncProxy, status: async o => ({ ...loadInstall(context(o)), healthy: Boolean(await healthy(context(o))) }) }[command]
   try {
     if (command === 'daemon') await daemon(insightDir)
-    else if (action) process.stdout.write(JSON.stringify(await action(options)) + '\n')
-    else throw new Error('Usage: inference_proxy.mjs install|sync|restore|status <insight-directory> [opencode,qoder]')
+    else if (action) {
+      const result = await action(options)
+      process.stdout.write(JSON.stringify(result) + '\n')
+      if (command === 'install') for (const item of result.coverage || []) {
+        if (item.state === 'adapter_unavailable') continue
+        process.stderr.write(`${item.agent} CLI：持久配置中 ${item.managedEndpoints} 个模型地址已配置转发（不含运行时快照）；实际请求与 Trace 关联需单独验证。\n`)
+      }
+      if (command === 'install' && result.coverage?.some(item => item.agent === 'qoder')) {
+        process.stderr.write('Qoder 原生 IDE / JetBrains：模型地址未接管；采集组件安装不代表统一调用 ID 关联已启用。\n')
+      }
+    }
+    else throw new Error('Usage: inference_proxy.mjs install|sync|status <insight-directory> [opencode,qoder]')
   } catch (error) { process.stderr.write(`Agent Insight inference proxy: ${error.message}\n`); process.exitCode = 1 }
 }

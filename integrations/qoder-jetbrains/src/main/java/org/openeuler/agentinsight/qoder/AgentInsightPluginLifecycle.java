@@ -11,7 +11,6 @@ public final class AgentInsightPluginLifecycle implements DynamicPluginListener 
     public void beforePluginUnload(@NotNull IdeaPluginDescriptor pluginDescriptor, boolean isUpdate) {
         if (PLUGIN_ID.equals(pluginDescriptor.getPluginId().getIdString())) {
             CollectorInstaller.flushOwnedCollector();
-            CollectorInstaller.uninstallOwnedCollector();
         }
     }
 }

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- OTLP fixtures intentionally exercise loosely typed external payloads. */
 import assert from "node:assert/strict"
-import { execFileSync, spawn, spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import http from "node:http"
 import os from "node:os"
@@ -35,19 +35,16 @@ import {
   mergeQoderHooks,
   QODER_HOOK_EVENTS,
   removeQoderHooks,
-  uninstallQoderCollector,
 } from "../scripts/qoder_setup.mjs"
 import {
   installQoderWorkCollector,
   mergeQoderWorkHooks,
   QODER_WORK_HOOK_EVENTS,
   removeQoderWorkHooks,
-  uninstallQoderWorkCollector,
 } from "../scripts/qoder_work_setup.mjs"
 import {
   ensureQoderTokenUsageEnvironment,
   QODERCN_TOKEN_USAGE_ENV,
-  releaseQoderTokenUsageEnvironment,
 } from "../scripts/qoder_token_usage_env.mjs"
 
 const SESSION_ID = "qoder-session-1"
@@ -2653,7 +2650,7 @@ test("Qoder framework and OTLP registries expose plugin onboarding and snapshot 
   assert.equal(framework.capabilities?.skills, true)
   assert.equal(framework.capabilities?.subagentTree, true)
   assert.equal(framework.capabilities?.allowSnapshotShrink, true)
-  assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["actrail", "langfuse-langgraph", "hermes", "qwencode", "openclaw", "codex", "llamaindex", "qoder", "pi-agent", "workbuddy", "generic"])
+  assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["actrail", "langfuse-langgraph", "hermes", "qwencode", "openclaw", "codex", "llamaindex", "qoder", "pi-agent", "workbuddy", "mcts-xgovernor", "generic"])
 })
 
 test("Qoder setup merges idempotently and removes only Agent Insight hooks", () => {
@@ -2710,7 +2707,7 @@ test("Qoder CN Desktop hook command executes successfully through Windows cmd", 
   }
 })
 
-test("Qoder setup installs account-isolated files and supports scoped purge", () => {
+test("Qoder setup installs account-isolated files and preserves unrelated settings", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-setup-"))
   try {
     const qoderDir = path.join(root, ".qoder-cn")
@@ -2745,77 +2742,38 @@ test("Qoder setup installs account-isolated files and supports scoped purge", ()
     assert.equal(installedFromConfig.accountHash, installed.accountHash)
     assert.equal(installedFromConfig.spoolDir, installed.spoolDir)
 
-    const legacySpoolRoot = path.join(insightDir, "otel_data", "qoder-cli")
-    fs.mkdirSync(path.join(legacySpoolRoot, installed.accountHash), { recursive: true })
-    const removed = uninstallQoderCollector({ homeDir: root, insightDir, purge: true })
-    assert.equal(removed.purged, true)
-    assert.equal(fs.existsSync(installed.spoolDir), false)
-    assert.equal(fs.existsSync(legacySpoolRoot), false)
-    assert.equal(fs.existsSync(installed.collectorPath), false)
-    const uninstalledSettings = JSON.parse(fs.readFileSync(installed.settingsPath, "utf8"))
-    assert.deepEqual(uninstalledSettings, { permissions: { allow: ["Read"] } })
-    const uninstalledConfig = fs.readFileSync(path.join(insightDir, "config"), "utf8")
-    assert.doesNotMatch(uninstalledConfig, /AGENT_INSIGHT_QODER/)
-    assert.match(uninstalledConfig, /^AGENT_INSIGHT_HOST=http:\/\/localhost:3000$/m)
-    assert.match(uninstalledConfig, /^AGENT_INSIGHT_API_KEY=account-a$/m)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
 
-test("Qoder CN CLI and Work share the managed exact-token environment without clobbering the user value", () => {
+test("Qoder token usage installation warns before overwriting and does not save a rollback value", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-token-env-"))
   let storedValue: string | undefined = "user-value"
+  const warnings: string[] = []
+  context.mock.method(process.stderr, "write", (message: string) => { warnings.push(message); return true })
   const adapter = {
     read: () => storedValue,
-    set: (_name: string, value: string) => { storedValue = value },
-    restore: (_name: string, value: string | undefined) => { storedValue = value },
+    set: (_name: string, value: string) => {
+      assert.match(warnings.join(""), /自行备份/)
+      assert.equal(storedValue, "user-value")
+      storedValue = value
+    },
   }
   try {
-    const cli = ensureQoderTokenUsageEnvironment({
-      homeDir: root,
-      insightDir: path.join(root, ".agent-insight"),
-      owner: "cli",
-      adapter,
-    })
-    assert.equal(cli.name, QODERCN_TOKEN_USAGE_ENV)
+    const first = ensureQoderTokenUsageEnvironment({ homeDir: root, insightDir: root, adapter })
+    assert.equal(first.name, QODERCN_TOKEN_USAGE_ENV)
+    assert.equal(first.changed, true)
     assert.equal(storedValue, "1")
-    assert.deepEqual(cli.owners, ["cli"])
-
-    const work = ensureQoderTokenUsageEnvironment({
-      homeDir: root,
-      insightDir: path.join(root, ".agent-insight"),
-      owner: "work",
-      adapter,
-    })
-    assert.deepEqual(work.owners, ["cli", "work"])
-
-    const cliRemoved = releaseQoderTokenUsageEnvironment({
-      homeDir: root,
-      insightDir: path.join(root, ".agent-insight"),
-      owner: "cli",
-      adapter,
-    })
-    assert.deepEqual(cliRemoved.owners, ["work"])
-    assert.equal(cliRemoved.restored, false)
-    assert.equal(storedValue, "1")
-
-    const workRemoved = releaseQoderTokenUsageEnvironment({
-      homeDir: root,
-      insightDir: path.join(root, ".agent-insight"),
-      owner: "work",
-      adapter,
-    })
-    assert.deepEqual(workRemoved.owners, [])
-    assert.equal(workRemoved.restored, true)
-    assert.equal(storedValue, "user-value")
-    assert.equal(fs.existsSync(workRemoved.statePath), false)
+    const second = ensureQoderTokenUsageEnvironment({ homeDir: root, insightDir: root, adapter })
+    assert.equal(second.changed, false)
+    assert.deepEqual(fs.readdirSync(root), [])
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
 
-test("Qoder CN CLI and Work installers register shared exact-token environment owners", () => {
+test("Qoder CN CLI and Work installers enable exact-token environment", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-token-env-install-"))
   const insightDir = path.join(root, ".agent-insight")
   const sourceDir = path.join(process.cwd(), "scripts")
@@ -2824,7 +2782,6 @@ test("Qoder CN CLI and Work installers register shared exact-token environment o
   const adapter = {
     read: () => storedValue,
     set: (_name: string, value: string) => { storedValue = value },
-    restore: (_name: string, value: string | undefined) => { storedValue = value },
   }
   try {
     fs.mkdirSync(workHome, { recursive: true })
@@ -2841,7 +2798,7 @@ test("Qoder CN CLI and Work installers register shared exact-token environment o
       configureTokenUsageEnvironment: true,
       tokenUsageEnvironmentAdapter: adapter,
     })
-    assert.deepEqual(cli.tokenUsageEnvironment?.owners, ["cli"])
+    assert.equal(cli.tokenUsageEnvironment?.value, "1")
     assert.equal(storedValue, "1")
 
     const work = installQoderWorkCollector({
@@ -2853,108 +2810,34 @@ test("Qoder CN CLI and Work installers register shared exact-token environment o
       configureTokenUsageEnvironment: true,
       tokenUsageEnvironmentAdapter: adapter,
     })
-    assert.deepEqual(work.tokenUsageEnvironment?.owners, ["cli", "work"])
+    assert.equal(work.tokenUsageEnvironment?.value, "1")
 
-    const cliRemoved = uninstallQoderCollector({
-      homeDir: root,
-      insightDir,
-      product: "cli",
-      owner: "cli",
-      tokenUsageEnvironmentAdapter: adapter,
-    })
-    assert.deepEqual(cliRemoved.tokenUsageEnvironment?.owners, ["work"])
-    assert.equal(storedValue, "1")
-
-    const workRemoved = uninstallQoderWorkCollector({
-      homeDir: root,
-      insightDir,
-      qoderWorkHome: workHome,
-      tokenUsageEnvironmentAdapter: adapter,
-    })
-    assert.equal(workRemoved.tokenUsageEnvironment?.restored, true)
-    assert.equal(storedValue, undefined)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
 
-test("Qoder shared setup keeps CLI active when the Desktop owner is uninstalled", () => {
+test("Qoder shared setup keeps CLI and Desktop hooks idempotent without uninstall ownership state", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-owner-setup-"))
   try {
     const insightDir = path.join(root, ".agent-insight")
-    const sourceDir = path.join(process.cwd(), "scripts")
-    const cli = installQoderCollector({
-      homeDir: root,
-      insightDir,
-      sourceDir,
-      host: "http://localhost:3000",
-      apiKey: "account-a",
-      product: "cli",
-      owner: "cli",
-      startUploader: false,
-    })
-    const desktop = installQoderCollector({
-      homeDir: root,
-      insightDir,
-      sourceDir,
-      host: "http://localhost:3000",
-      apiKey: "account-a",
-      product: "desktop",
-      owner: "desktop",
-      startUploader: false,
-    })
-    assert.match(cli.spoolDir, /qoder[\\/]cli/)
-    assert.match(desktop.spoolDir, /qoder[\\/]desktop/)
-    assert.equal(fs.existsSync(cli.markerPath), true)
-    assert.equal(fs.existsSync(desktop.markerPath), true)
-
-    const desktopRemoved = uninstallQoderCollector({
-      homeDir: root,
-      insightDir,
-      product: "desktop",
-      owner: "desktop",
-      purge: true,
-    })
-    assert.deepEqual(desktopRemoved.remainingOwners, ["cli"])
-    assert.equal(fs.existsSync(desktop.spoolDir), false)
-    assert.equal(fs.existsSync(cli.collectorPath), true)
-    const sharedSettings = JSON.parse(fs.readFileSync(cli.settingsPath, "utf8"))
-    assert.equal(sharedSettings.hooks.Stop.at(-1).hooks[0].name, "agent-insight-qoder")
-    assert.match(fs.readFileSync(path.join(insightDir, "config"), "utf8"), /AGENT_INSIGHT_QODER_UPLOADER=/)
-
-    const cliRemoved = uninstallQoderCollector({
-      homeDir: root,
-      insightDir,
-      product: "cli",
-      owner: "cli",
-      purge: true,
-    })
-    assert.deepEqual(cliRemoved.remainingOwners, [])
-    assert.equal(fs.existsSync(cli.collectorPath), false)
-    const cleanedSettings = JSON.parse(fs.readFileSync(cli.settingsPath, "utf8"))
-    assert.equal(cleanedSettings.hooks, undefined)
-    assert.doesNotMatch(fs.readFileSync(path.join(insightDir, "config"), "utf8"), /AGENT_INSIGHT_QODER/)
+    const options = { homeDir: root, insightDir, sourceDir: path.join(process.cwd(), "scripts"), host: "http://localhost:3000", apiKey: "account-a", startUploader: false }
+    const cli = installQoderCollector({ ...options, product: "cli" })
+    const desktop = installQoderCollector({ ...options, product: "desktop" })
+    assert.notEqual(cli.spoolDir, desktop.spoolDir)
+    const settings = JSON.parse(fs.readFileSync(cli.settingsPath, "utf8"))
+    for (const event of QODER_HOOK_EVENTS) {
+      assert.equal(settings.hooks[event].flatMap((group: any) => group.hooks).filter((hook: any) => hook.name === "agent-insight-qoder").length, 1)
+    }
+    assert.equal(fs.existsSync(path.join(insightDir, "qoder-owners")), false)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
 
-test("Qoder JetBrains uninstaller removes the empty product runtime root", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-jetbrains-uninstall-"))
-  try {
-    const runtimeDir = path.join(root, ".agent-insight", "qoder-jetbrains", "runtime")
-    fs.mkdirSync(runtimeDir, { recursive: true })
-    execFileSync(process.execPath, [
-      path.join(process.cwd(), "integrations", "qoder-jetbrains", "src", "main", "resources", "collector", "qoder_jetbrains_uninstall.mjs"),
-      runtimeDir,
-    ])
-    assert.equal(fs.existsSync(path.dirname(runtimeDir)), false)
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true })
-  }
-})
 
-test("Qoder Work setup preserves unrelated hooks and isolates install and uninstall from Qoder CLI", () => {
+
+test("Qoder Work setup preserves unrelated hooks and isolates installation from Qoder CLI", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-work-setup-"))
   try {
     const insightDir = path.join(root, ".agent-insight")
@@ -2991,187 +2874,14 @@ test("Qoder Work setup preserves unrelated hooks and isolates install and uninst
     assert.equal(fs.existsSync(installed.uploaderPath), true)
     assert.deepEqual(JSON.parse(fs.readFileSync(cliSettings, "utf8")), { cliOnly: true })
 
-    const legacySpoolRoot = path.join(insightDir, "otel_data", "qoder-work")
-    fs.mkdirSync(path.join(legacySpoolRoot, installed.accountHash), { recursive: true })
-    const removed = uninstallQoderWorkCollector({
-      homeDir: root,
-      insightDir,
-      qoderWorkHome: workHome,
-      purge: true,
-    })
-    assert.equal(removed.purged, true)
-    assert.equal(fs.existsSync(installed.spoolDir), false)
-    assert.equal(fs.existsSync(legacySpoolRoot), false)
-    assert.equal(fs.existsSync(installed.collectorPath), false)
-    assert.deepEqual(JSON.parse(fs.readFileSync(cliSettings, "utf8")), { cliOnly: true })
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(workHome, "settings.json"), "utf8")), original)
-    assert.match(fs.readFileSync(path.join(insightDir, "config"), "utf8"), /AGENT_INSIGHT_API_KEY=account-a/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
 
-test("AC30 uninstall stops CLI, Desktop, JetBrains, and Work uploader processes", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-four-product-stop-"))
-  const insightDir = path.join(root, ".agent-insight")
-  const sourceDir = path.join(process.cwd(), "scripts")
-  const workHome = path.join(root, ".qoderworkcn")
-  const startedPids: number[] = []
-  let oneShotPid: number | undefined
-  try {
-    fs.mkdirSync(insightDir, { recursive: true })
-    fs.mkdirSync(workHome, { recursive: true })
-    fs.writeFileSync(path.join(insightDir, "config"), "AGENT_INSIGHT_HOST=http://127.0.0.1:9\nAGENT_INSIGHT_API_KEY=account-a\n")
-    fs.writeFileSync(path.join(workHome, "settings.json"), "{}")
 
-    const cli = installQoderCollector({ homeDir: root, insightDir, sourceDir, host: "http://127.0.0.1:9", apiKey: "account-a", product: "cli", owner: "cli" })
-    const desktop = installQoderCollector({ homeDir: root, insightDir, sourceDir, host: "http://127.0.0.1:9", apiKey: "account-a", product: "desktop", owner: "desktop" })
-    const jetbrains = installQoderCollector({ homeDir: root, insightDir, sourceDir, host: "http://127.0.0.1:9", apiKey: "account-a", product: "jetbrains", owner: "jetbrains" })
-    const work = installQoderWorkCollector({ homeDir: root, insightDir, qoderWorkHome: workHome, sourceDir })
-    const products = [cli, desktop, jetbrains, work]
-    for (const installed of products) {
-      assert.ok(installed.uploaderPid)
-      startedPids.push(Number(installed.uploaderPid))
-      await waitForCondition(() => fs.existsSync(path.join(installed.spoolDir, "uploader.lock")))
-      assert.equal(testProcessIsAlive(installed.uploaderPid), true)
-    }
 
-    const oneShot = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true })
-    oneShotPid = oneShot.pid
-    assert.ok(oneShotPid)
-    fs.writeFileSync(path.join(desktop.spoolDir, "upload-run.lock"), JSON.stringify({ pid: oneShotPid }))
 
-    const desktopRemoved = uninstallQoderCollector({ homeDir: root, insightDir, product: "desktop", owner: "desktop", purge: true })
-    assert.ok(desktopRemoved.stoppedUploaderPids.includes(Number(desktop.uploaderPid)))
-    assert.ok(desktopRemoved.stoppedUploaderPids.includes(Number(oneShotPid)))
-    assert.equal(testProcessIsAlive(desktop.uploaderPid), false)
-    assert.equal(testProcessIsAlive(oneShotPid), false)
-    assert.equal(testProcessIsAlive(cli.uploaderPid), true)
-    assert.equal(testProcessIsAlive(jetbrains.uploaderPid), true)
-    assert.equal(testProcessIsAlive(work.uploaderPid), true)
-
-    const jetbrainsRemoved = uninstallQoderCollector({ homeDir: root, insightDir, product: "jetbrains", owner: "jetbrains", purge: true })
-    assert.ok(jetbrainsRemoved.stoppedUploaderPids.includes(Number(jetbrains.uploaderPid)))
-    assert.equal(testProcessIsAlive(jetbrains.uploaderPid), false)
-    assert.equal(testProcessIsAlive(cli.uploaderPid), true)
-    assert.equal(testProcessIsAlive(work.uploaderPid), true)
-
-    const cliRemoved = uninstallQoderCollector({ homeDir: root, insightDir, product: "cli", owner: "cli", purge: true })
-    assert.ok(cliRemoved.stoppedUploaderPids.includes(Number(cli.uploaderPid)))
-    assert.equal(testProcessIsAlive(cli.uploaderPid), false)
-    assert.equal(testProcessIsAlive(work.uploaderPid), true)
-
-    const workRemoved = uninstallQoderWorkCollector({ homeDir: root, insightDir, qoderWorkHome: workHome, purge: true })
-    assert.ok(workRemoved.stoppedUploaderPids.includes(Number(work.uploaderPid)))
-    assert.equal(testProcessIsAlive(work.uploaderPid), false)
-  } finally {
-    for (const pid of [...startedPids, Number(oneShotPid)].filter((value) => Number.isInteger(value) && value > 0)) {
-      if (testProcessIsAlive(pid)) try { process.kill(pid, "SIGKILL") } catch {}
-    }
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
-  }
-})
-
-test("AC31 and AC32 uninstall clean only Qoder state and all four products reinstall normally", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-four-product-reinstall-"))
-  const insightDir = path.join(root, ".agent-insight")
-  const sourceDir = path.join(process.cwd(), "scripts")
-  const qoderHome = path.join(root, ".qoder-cn")
-  const workHome = path.join(root, ".qoderworkcn")
-  const configPath = path.join(insightDir, "config")
-  const qoderSettingsPath = path.join(qoderHome, "settings.json")
-  const workSettingsPath = path.join(workHome, "settings.json")
-  const originalQoderSettings = { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", name: "other-collector", command: "other-collector-hook" }] }] }, permissions: { allow: ["Read"] } }
-  const originalWorkSettings = { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "other-work-hook" }] }] }, workOnly: true }
-  const unrelatedFiles = [
-    path.join(insightDir, "opencode", "collector.keep"),
-    path.join(insightDir, "claude", "collector.keep"),
-    path.join(insightDir, "hermes", "collector.keep"),
-  ]
-  try {
-    fs.mkdirSync(qoderHome, { recursive: true })
-    fs.mkdirSync(workHome, { recursive: true })
-    for (const file of unrelatedFiles) {
-      fs.mkdirSync(path.dirname(file), { recursive: true })
-      fs.writeFileSync(file, "keep")
-    }
-    fs.writeFileSync(configPath, [
-      "AGENT_INSIGHT_HOST=http://localhost:3000",
-      "AGENT_INSIGHT_API_KEY=account-a",
-      "OPENCODE_CONFIG_DIR=C:/opencode",
-      "CLAUDE_CODE_ENABLE_TELEMETRY=1",
-      "HERMES_HOME=C:/hermes",
-      "",
-    ].join("\n"))
-    fs.writeFileSync(qoderSettingsPath, JSON.stringify(originalQoderSettings))
-    fs.writeFileSync(workSettingsPath, JSON.stringify(originalWorkSettings))
-
-    const installAll = () => ({
-      cli: installQoderCollector({ homeDir: root, insightDir, sourceDir, fromConfig: true, product: "cli", owner: "cli", startUploader: false }),
-      desktop: installQoderCollector({ homeDir: root, insightDir, sourceDir, fromConfig: true, product: "desktop", owner: "desktop", startUploader: false }),
-      jetbrains: installQoderCollector({ homeDir: root, insightDir, sourceDir, fromConfig: true, product: "jetbrains", owner: "jetbrains", startUploader: false }),
-      work: installQoderWorkCollector({ homeDir: root, insightDir, qoderWorkHome: workHome, sourceDir, startUploader: false }),
-    })
-    const first = installAll()
-    for (const [product, installed] of Object.entries(first)) {
-      fs.writeFileSync(path.join(installed.spoolDir, `${product}.sentinel`), "remove")
-      const legacyRoot = path.join(insightDir, "otel_data", `qoder-${product}`)
-      fs.mkdirSync(path.join(legacyRoot, "legacy-account"), { recursive: true })
-      fs.writeFileSync(path.join(legacyRoot, "legacy-account", "sentinel"), "remove")
-    }
-
-    uninstallQoderCollector({ homeDir: root, insightDir, product: "desktop", owner: "desktop", purge: true })
-    uninstallQoderCollector({ homeDir: root, insightDir, product: "jetbrains", owner: "jetbrains", purge: true })
-    uninstallQoderCollector({ homeDir: root, insightDir, product: "cli", owner: "cli", purge: true })
-    uninstallQoderWorkCollector({ homeDir: root, insightDir, qoderWorkHome: workHome, purge: true })
-
-    for (const product of ["cli", "desktop", "jetbrains", "work"]) {
-      assert.equal(fs.existsSync(path.join(insightDir, "otel_data", "qoder", product)), false)
-      assert.equal(fs.existsSync(path.join(insightDir, "otel_data", `qoder-${product}`)), false)
-    }
-    assert.equal(fs.existsSync(path.join(insightDir, "qoder_trace_collector.mjs")), false)
-    assert.equal(fs.existsSync(path.join(insightDir, "qoder_uploader_client.mjs")), false)
-    assert.equal(fs.existsSync(path.join(insightDir, "qoder-work")), false)
-    assert.equal(fs.existsSync(path.join(insightDir, "qoder-owners")), false)
-    assert.deepEqual(JSON.parse(fs.readFileSync(qoderSettingsPath, "utf8")), originalQoderSettings)
-    assert.deepEqual(JSON.parse(fs.readFileSync(workSettingsPath, "utf8")), originalWorkSettings)
-    const cleanedConfig = fs.readFileSync(configPath, "utf8")
-    assert.doesNotMatch(cleanedConfig, /AGENT_INSIGHT_QODER_/)
-    assert.match(cleanedConfig, /OPENCODE_CONFIG_DIR=C:\/opencode/)
-    assert.match(cleanedConfig, /CLAUDE_CODE_ENABLE_TELEMETRY=1/)
-    assert.match(cleanedConfig, /HERMES_HOME=C:\/hermes/)
-    for (const file of unrelatedFiles) assert.equal(fs.readFileSync(file, "utf8"), "keep")
-
-    const second = installAll()
-    const reinstalled = Object.entries(second) as Array<[string, { spoolDir: string; collectorPath: string }]>
-    for (const [product, installed] of reinstalled) {
-      assert.equal(fs.existsSync(installed.collectorPath), true)
-      const collected = await collectQoderHook({
-        session_id: `reinstall-${product}`,
-        hook_event_name: "SessionEnd",
-        last_assistant_message: `${product} reinstall ok`,
-        qoder_product: product,
-      }, {
-        homeDir: root,
-        insightDir,
-        spoolDir: installed.spoolDir,
-        disableUploadKick: true,
-      })
-      assert.ok(collected.pendingFile && fs.existsSync(collected.pendingFile))
-    }
-    const reinstalledSettings = JSON.parse(fs.readFileSync(qoderSettingsPath, "utf8"))
-    assert.equal(reinstalledSettings.hooks.Stop.at(-1).hooks[0].name, "agent-insight-qoder")
-    const reinstalledWorkSettings = JSON.parse(fs.readFileSync(workSettingsPath, "utf8"))
-    assert.ok(reinstalledWorkSettings.hooks.Stop.length > 0)
-
-    uninstallQoderCollector({ homeDir: root, insightDir, product: "desktop", owner: "desktop", purge: true })
-    uninstallQoderCollector({ homeDir: root, insightDir, product: "jetbrains", owner: "jetbrains", purge: true })
-    uninstallQoderCollector({ homeDir: root, insightDir, product: "cli", owner: "cli", purge: true })
-    uninstallQoderWorkCollector({ homeDir: root, insightDir, qoderWorkHome: workHome, purge: true })
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true })
-  }
-})
 
 for (const discovery of ["hooks", "transcript"]) test(`Qoder child transcripts retain concurrent LLM ownership through final nodes (${discovery})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-child-llm-"))
@@ -3235,5 +2945,31 @@ test("Qoder synthetic errors retain content but never become inference response 
     assert.equal(event.interaction.inference_response_id, undefined)
     assert.equal(event.interaction.inference_response_unavailable, true)
     assert.equal(event.interaction.content, "Request failed")
+  }
+})
+
+for (const script of ["qoder_setup.mjs", "qoder_work_setup.mjs"]) test(`${script} warns before configuration changes and rejects removed uninstall command`, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-install-warning-"))
+  try {
+    const home = path.join(root, "home")
+    const insight = path.join(root, "insight")
+    const settingsDir = path.join(home, script === "qoder_setup.mjs" ? ".qoder-cn" : ".qoderworkcn")
+    fs.mkdirSync(settingsDir, { recursive: true })
+    const settingsPath = path.join(settingsDir, "settings.json")
+    fs.writeFileSync(settingsPath, JSON.stringify({ userSetting: "keep" }))
+    const args = [`--home-dir=${home}`, `--insight-dir=${insight}`, `--qoder-work-home=${settingsDir}`]
+    const env = { ...process.env, HOME: home, AGENT_INSIGHT_HOME: insight }
+    const installed = spawnSync(process.execPath, [path.join(process.cwd(), "scripts", script), "install", ...args, "--host=http://localhost:3000", "--api-key=test", "--no-start"], { encoding: "utf8", env })
+    assert.equal(installed.status, 0, installed.stderr)
+    assert.match(installed.stderr, /自行备份/)
+    assert.ok(installed.stderr.includes(settingsPath))
+    const currentSettings = fs.readFileSync(settingsPath, "utf8")
+    assert.equal(JSON.parse(currentSettings).userSetting, "keep")
+    const rejected = spawnSync(process.execPath, [path.join(process.cwd(), "scripts", script), "uninstall", ...args], { encoding: "utf8", env })
+    assert.equal(rejected.status, 1)
+    assert.equal(fs.readFileSync(settingsPath, "utf8"), currentSettings)
+    assert.deepEqual(fs.readdirSync(settingsDir), ["settings.json"])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })

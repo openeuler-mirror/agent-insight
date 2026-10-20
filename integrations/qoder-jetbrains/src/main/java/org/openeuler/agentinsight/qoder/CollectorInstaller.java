@@ -1,5 +1,7 @@
 package org.openeuler.agentinsight.qoder;
 
+import com.intellij.notification.NotificationGroupManager;
+import com.intellij.notification.NotificationType;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import org.jetbrains.annotations.NotNull;
@@ -27,24 +29,40 @@ public final class CollectorInstaller {
             "qoder_trace_collector.mjs",
             "qoder_uploader_client.mjs",
             "qoder_setup.mjs",
-            "qoder_token_usage_env.mjs",
-            "qoder_jetbrains_uninstall.mjs"
+            "qoder_token_usage_env.mjs"
     );
 
     private CollectorInstaller() {}
 
     public static @NotNull Path insightDirectory() {
+        String configured = System.getenv("AGENT_INSIGHT_HOME");
+        if (configured != null && !configured.isBlank()) return Path.of(configured.replaceFirst("^(~|\\$HOME|\\$\\{HOME})(?=[/\\\\]|$)", java.util.regex.Matcher.quoteReplacement(System.getProperty("user.home")))).toAbsolutePath();
         return Path.of(System.getProperty("user.home"), ".agent-insight");
     }
 
     public static void installAsync(@NotNull JetBrainsMarkerService markerService) {
         if (!INSTALLING.compareAndSet(false, true)) return;
         markerService.setCollectorStatus("Installing");
-        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+        ApplicationManager.getApplication().invokeLater(() -> {
             try {
-                install(markerService);
-            } finally {
+                NotificationGroupManager.getInstance()
+                        .getNotificationGroup("Agent Insight Qoder Setup")
+                        .createNotification(
+                                "Agent Insight 安装前备份提醒",
+                                "安装将改写 ~/.qoder/settings.json 和 Agent Insight config；请在安装前自行备份。不提供自动备份或配置回退。",
+                                NotificationType.WARNING
+                        ).notify(null);
+                ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                    try {
+                        install(markerService);
+                    } finally {
+                        INSTALLING.set(false);
+                    }
+                });
+            } catch (RuntimeException error) {
                 INSTALLING.set(false);
+                LOG.warn("Unable to schedule the Agent Insight Qoder collector setup", error);
+                markerService.setCollectorStatus("Setup failed: " + concise(error.getMessage()));
             }
         });
     }
@@ -67,8 +85,7 @@ public final class CollectorInstaller {
                     "install",
                     "--from-config",
                     "--scope=user",
-                    "--product=jetbrains",
-                    "--owner=jetbrains"
+                    "--product=jetbrains"
             ).redirectErrorStream(true).start();
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             Thread reader = new Thread(() -> {
@@ -91,20 +108,6 @@ public final class CollectorInstaller {
         } catch (Exception error) {
             LOG.warn("Unable to install the Agent Insight Qoder collector", error);
             markerService.setCollectorStatus("Setup failed: " + concise(error.getMessage()));
-        }
-    }
-
-    public static void uninstallOwnedCollector() {
-        Path runtime = insightDirectory().resolve("qoder-jetbrains").resolve("runtime");
-        Path uninstaller = runtime.resolve("qoder_jetbrains_uninstall.mjs");
-        if (!Files.exists(uninstaller)) return;
-        try {
-            new ProcessBuilder("node", uninstaller.toString(), runtime.toString())
-                    .redirectErrorStream(true)
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .start();
-        } catch (IOException error) {
-            LOG.warn("Unable to start Qoder for JetBrains collector cleanup", error);
         }
     }
 

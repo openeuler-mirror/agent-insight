@@ -392,15 +392,15 @@ Qwen Code 通过自身 Telemetry 配置把 traces 与 logs 直接发送到 `/api
 
 ## 九、Qoder CN 产品家族已实现链路
 
-普通 setup 与 auto setup 的 Unix/Windows 安装脚本均在原有框架列表末尾追加 `Qoder CN product family`。选中后，从 `setup/route.ts` 的固定白名单下载 `qoder_setup.mjs`、`qoder_trace_collector.mjs`、`qoder_uploader_client.mjs` 和 `qoder_work_setup.mjs`，再分别安装 CLI、Desktop、JetBrains owner 与 Work 采集器；请求任意非白名单组件返回 404。安装完成后，脚本使用临时文件从两个 Qoder 插件下载接口拉取 Desktop VSIX 与 JetBrains ZIP，成功后原子替换到 `~/.agent-insight/packages/qoder/`；插件包不可用或网络失败只产生警告，不回滚已安装的采集运行时。Desktop 接口从源码动态构建；JetBrains 接口使用 `src/lib/ingest/qoder-plugin-release.ts` 中的默认 Release 附件地址，并允许服务端环境变量 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 覆盖。下载时限制协议、超时和最大 50MB，并校验 ZIP、编译后插件 JAR 与 `META-INF/plugin.xml`，失败后依次回退本地缓存和 IntelliJ/Java 源码构建。当前默认值是贡献分支的临时 Release 附件，正式发布后应迁移为 openEuler 官方附件。`test/qoder-setup-routes.test.ts` 固定断言两个入口原有框架名称、值和顺序不变，Qoder 仅作为末尾新增项，同时校验四个组件分发、默认/覆盖 Release 下载、自动下载命令及生成的 Bash/PowerShell 安装脚本语法。界面 marker 插件仍需在对应 IDE 中从下载文件安装。
+普通 setup 与 auto setup 的 Unix/Windows 安装脚本均在原有框架列表末尾追加 `Qoder CN product family`。选中后，从 `setup/route.ts` 的固定白名单下载 `qoder_setup.mjs`、`qoder_trace_collector.mjs`、`qoder_uploader_client.mjs` 和 `qoder_work_setup.mjs`，再分别安装 CLI、Desktop、JetBrains 与 Work 采集器；请求任意非白名单组件返回 404。安装完成后，脚本使用临时文件从两个 Qoder 插件下载接口拉取 Desktop VSIX 与 JetBrains ZIP，成功后原子替换到 `~/.agent-insight/packages/qoder/`；插件包不可用或网络失败只产生警告，不回滚已安装的采集运行时。Desktop 接口从源码动态构建；JetBrains 接口使用 `src/lib/ingest/qoder-plugin-release.ts` 中的默认 Release 附件地址，并允许服务端环境变量 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 覆盖。下载时限制协议、超时和最大 50MB，并校验 ZIP、编译后插件 JAR 与 `META-INF/plugin.xml`，失败后依次回退本地缓存和 IntelliJ/Java 源码构建。当前默认值是贡献分支的临时 Release 附件，正式发布后应迁移为 openEuler 官方附件。`test/qoder-setup-routes.test.ts` 固定断言两个入口原有框架名称、值和顺序不变，Qoder 仅作为末尾新增项，同时校验四个组件分发、默认/覆盖 Release 下载、自动下载命令及生成的 Bash/PowerShell 安装脚本语法。界面 marker 插件仍需在对应 IDE 中从下载文件安装。
 
-生成的四种安装脚本（setup/auto × Bash/PowerShell）还会把当前生效的 Release 直链（环境变量覆盖值或源码默认值）嵌入脚本：服务端插件接口失败时先显示直链并自动重试，二次失败后输出平台对应的手动下载命令、目标 ZIP 路径和 `Install Plugin from Disk` 操作步骤；默认地址无需管理员预先配置，部署方需要切换制品来源时再设置环境变量并重启服务。
+生成的四种安装脚本（setup/auto × Bash/PowerShell）只从平台插件接口下载，不再通过 Release 直链绕过服务端校验。缓存、远端附件和本地构建产物均须通过检查；包含旧 Desktop 卸载 watcher 或 JetBrains 卸载脚本的包会被拒绝。只有下载成功才显示从磁盘安装的指引；失败时提示部署方更新或构建当前插件后重新下载，不得继续安装本机残留的旧包。服务端没有合格制品且无法本地构建时，下载接口返回 503。
 
 ### Qoder for JetBrains Release 制品维护声明
 
 Qoder for JetBrains 的 Java 源码必须经过 IntelliJ Platform SDK/JDK 编译，并封装为“插件 ZIP → `lib/*.jar` → `META-INF/plugin.xml` 与编译后 class”的标准结构。仓库以 `integrations/qoder-jetbrains/` 和共享 `scripts/qoder_*.mjs` 为源码事实来源，`integrations/qoder-jetbrains/build/` 仅存放本地构建结果且被 `.gitignore` 排除；不得把 VSIX/ZIP 二进制重新提交到 Git 源码目录。
 
-当前默认 Release 下载地址集中定义在 `src/lib/ingest/qoder-plugin-release.ts`，不要在 setup、auto setup 或下载 route 中重复写死。该模块同时保留 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 环境变量覆盖能力。服务端通过 `/api/ingest/setup/qoder-jetbrains-plugin` 对外分发，生成的 Bash/PowerShell 安装脚本会把当前生效地址写入安装流程，客户端最终下载到 `~/.agent-insight/packages/qoder/agent-insight-qoder-jetbrains.zip`。当前默认值指向贡献者仓库 `qoder-cn-collector-test-v0.1.0` Release 的临时附件；PR 合入且 openEuler 发布正式附件后，必须把默认值迁移到官方 Release，个人 Release 不作为长期生产制品源。
+当前默认 Release 下载地址集中定义在 `src/lib/ingest/qoder-plugin-release.ts`，不要在 setup、auto setup 或下载 route 中重复写死。该模块同时保留 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 环境变量覆盖能力。此地址仅供服务端获取并校验制品，客户端通过 `/api/ingest/setup/qoder-jetbrains-plugin` 下载到 `~/.agent-insight/packages/qoder/agent-insight-qoder-jetbrains.zip`。当前默认值指向贡献者仓库 `qoder-cn-collector-test-v0.1.0` Release 的临时附件；部署方必须提供与当前源码一致的包或可用的本地构建环境，旧附件可能因包含已移除的卸载组件而被拒绝。PR 合入且 openEuler 发布正式附件后，必须把默认值迁移到官方 Release，个人 Release 不作为长期生产制品源。
 
 Windows 维护者可执行：
 
@@ -436,7 +436,7 @@ AC35 只比较 Qoder 内置精确计量源，不使用 Credits 换算，也不�
 
 估算值只写入 `qoder.token_usage.estimated_*`，并带 `estimated=true`、`source=local_visible_transcript`、`scope=visible_transcript`、`missing_context=true` 和估算器版本。服务端仅把估算总量用于可观测展示，不写入精确 input/output 字段，避免由模型价格表推导出伪造费用。Trace 详情用 `≈` 区分估算值。该估算仅在 `AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS=1` 时启用，只覆盖 transcript 可见内容，不含隐藏 system prompt、Rules、Skill/MCP schema、内部推理与压缩前上下文；真实 Agent 会话中可能严重低估，故默认关闭。CLI/Work 不启用此兜底。
 
-spool 统一放在 `~/.agent-insight/otel_data/qoder/`，下一层按 `cli`、`desktop`、`jetbrains`、`work` 分开，再使用 API Key SHA-256 摘要作为账号目录。安装器识别旧的 `qoder-{product}` 配置并把新数据路由到统一根目录；卸载 purge 同时清理新旧产品目录。CLI/Desktop/JetBrains 的共享运行脚本通过 owner marker 引用计数，但 Hook 配置按产品实际目录管理：CN CLI/Desktop 共享 `~/.qoder-cn/settings.json`，JetBrains 使用 `~/.qoder/settings.json`。卸载一个产品只停止并清理该产品，只有引用同一设置文件的最后一个 owner 卸载时才移除其中的 Hook，全部 owner 卸载后才移除共享运行脚本。卸载会同时读取 `uploader.lock` 与 `upload-run.lock`，优雅停止常驻和 one-shot uploader，短时等待后强制结束仍存活的进程，再清理当前产品 spool；不会删除共享 Host/API Key 或其他框架的配置、运行目录和 spool。Desktop 与 JetBrains 生命周期结束前调用 collector `--flush`，为没有 pending 的活动 session 原子补写 SessionEnd snapshot，并用 `force=true` 绕过 retry 的 `nextAttemptAt` 等待一次上传；并发 uploader 锁会短时等待，失败文件仍留在磁盘，确保停用不丢数据。Work 始终独立卸载，不修改 `.qoder` 配置。自动化验收会启动四个真实 watcher 及一个 one-shot 进程，逐端卸载并验证其停止，再重新安装四端并各自产出 snapshot。
+spool 统一放在 `~/.agent-insight/otel_data/qoder/`，下一层按 `cli`、`desktop`、`jetbrains`、`work` 分开，再使用 API Key SHA-256 摘要作为账号目录。安装器识别旧的 `qoder-{product}` 配置并把新数据路由到统一根目录。CLI/Desktop/JetBrains 的 Hook 配置按产品实际目录管理：CN CLI/Desktop 共享 `~/.qoder-cn/settings.json`，JetBrains 使用 `~/.qoder/settings.json`。Desktop 与 JetBrains 生命周期结束前调用 collector `--flush`，为没有 pending 的活动 session 原子补写 SessionEnd snapshot，并用 `force=true` 绕过 retry 的 `nextAttemptAt` 等待一次上传；并发 uploader 锁会短时等待，失败文件仍留在磁盘。当前版本不提供自动卸载、配置回退或 spool 清理入口，既有 Trace 与采集数据不因本次功能移除而删除。
 
 AC27/AC28 把“主流程不等待采集器”作为硬性不变量：CLI、Desktop、JetBrains 与 Work 的全部 Hook（包括 `SessionStart` 和 `UserPromptSubmit`）都必须写入 `async: true`；Desktop 激活时通过零延迟任务调度后台安装，JetBrains 通过 `executeOnPooledThread` 安装，不能在 UI/启动线程等待 Node 安装器或上传器。`test/qoder-performance.test.ts` 还会对四端 `SessionStart` 的同步分派逐一执行 `< 200ms` 硬断言，并使用固定 250ms 首响应的本地 SSE 服务交替采样未采集/启用采集各 7 次，以中位数计算 `(instrumented - baseline) / baseline`，硬断言首 Token 增幅 `< 5%`。该基准只衡量采集器引入的客户端开销，排除公网和模型供应商波动；冷启动成本由 AC27 独立覆盖。2026-07-24 本机结果为四端同步分派 6.81/4.07/4.24/4.22ms，首 Token 中位数 259.66ms → 260.50ms，增幅 0.32%。
 
@@ -451,30 +451,30 @@ AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和
 | Qoder 来源 | OTLP / 平台字段 | 含义 |
 |---|---|---|
 | Hook `session_id` | `qoder.session.id` / `ExecutionRecord.task_id` | 会话，定位整条 Trace |
-| transcript `message.id` | `qoder.llm.message_id` / LLM interaction `messageID`、`inference_response_id` | 真实模型响应 ID；语义字段用于跨框架协作链路的推理关联 |
+| transcript `message.id` | `qoder.llm.message_id` / LLM interaction `messageID` | 原生消息标识；已验证的 CLI 路径另写 `inference_response_id`，Desktop / JetBrains 不将本地消息标识解释为推理响应 ID |
 | diagnostics `request_id` | `qoder.llm.request_id` | Qoder 请求标识，沿用旧的来源及兜底规则，不当作模型响应 ID |
 
 流式 transcript 分片按所属 Agent 和 `message.id` 合并。diagnostics 优先通过 transcript 的 `requestTokenAnchor.requestId` 或 `message.usage.request_id` 精确配对；只有不含原生请求 ID 的旧消息才允许按时间回退，禁止把显式属于另一个请求的消息配给当前调用。缺少 `message.id` 时不生成 `qoder.llm.message_id` / `messageID`，也不以 record UUID、SQLite 消息 ID、请求 ID 或 span ID 冒充。
 
-普通子 Agent 的 transcript 从 `SubagentStop.agent_transcript_path`、`PostToolUse.tool_response.transcriptPath` 或根/子 transcript 的 `toolUseResult.transcriptPath` 发现；最后一种来源允许已完成 Agent 的异步 Hook 晚于根 Stop 落盘。只读取当前会话 `subagents` 目录内、记录 `sessionId` 与 `agentId` 匹配的文件，并对重复引用去重。子 LLM 使用对应 Agent span 作为父级，`qoder.subagent.session_id` 保留子 Agent ID；`inference_session_id` 始终保留模型请求实际发送的根 `session-id`，二者不可混用。
+普通子 Agent 的 transcript 从 `SubagentStop.agent_transcript_path`、`PostToolUse.tool_response.transcriptPath` 或根/子 transcript 的 `toolUseResult.transcriptPath` 发现；最后一种来源允许已完成 Agent 的异步 Hook 晚于根 Stop 落盘。只读取当前会话 `subagents` 目录内、记录 `sessionId` 与 `agentId` 匹配的文件，并对重复引用去重。子 LLM 使用对应 Agent span 作为父级，`qoder.subagent.session_id` 保留子 Agent ID；已验证 CLI 路径的 `inference_session_id` 保留模型请求实际发送的根 `session-id`，二者不可混用。
 
 `isApiErrorMessage: true` 或 `message.model: "<synthetic>"` 表示本地合成错误消息：保留错误内容与 LLM 事件，设置 `qoder.llm.synthetic` / `inference_response_unavailable`，不导出 `messageID` / `inference_response_id`。服务端也屏蔽带 synthetic 标记或 `<synthetic>` 模型的旧采集数据。已用 Qoder CN CLI 1.1.70 的本地模拟网关验证两个子 Agent 并发、503 后成功及三次 503 耗尽，经过真实 uploader、OTLP handler、consumer、SQLite 和最终 LLM 节点核对。失败 HTTP 尝试的响应头 ID 未出现在 transcript 中，因此仍不能逐次关联失败尝试；根任务结束后继续运行的后台子 Agent 不在本次实测范围。
 
 对已确认原样保留响应 ID 的自定义模型端点，网关可记录 `(session-id, response.id)`，与平台 `(task_id, interaction.messageID)` 关联。要求每次响应 ID 唯一、同一次流式响应各分片 ID 一致；无响应的失败尝试和重试级关联还需独立请求标识。此字段保留不证明任意 Qoder 产品、模型协议或上游服务均满足这些约束。
 
-Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `InferenceAnalysisButton`，由 `src/lib/trace/inference-analysis.ts` 组织关联信息。优先使用统一 `inference_call_ids`，整体入口还包含 `inference_unassigned_calls`；缺少统一字段的历史数据仍展示 `inference_response_id` / `inference_request_id` 与 OpenCode `inference_attempts`。旧 Qoder `messageID` 仅在本 Trace 来源可确认且非合成错误时回退，不能按根 framework 解释其他协作 Trace 的消息 ID。第三方 URL 暂未配置，外部打开按钮禁用。
+Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `InferenceAnalysisButton`，由 `src/lib/trace/inference-analysis.ts` 组织关联信息。优先使用统一 `inference_call_ids`，整体入口还包含 `inference_unassigned_calls`；缺少统一字段的历史数据仍展示 `inference_response_id` / `inference_request_id` 与 OpenCode `inference_attempts`。旧 Qoder `messageID` 仅在本 Trace 来源可确认且非合成错误时回退，不能按根 framework 解释其他协作 Trace 的消息 ID。外部分析页固定为 `/model-performance?GlobalTrackNO=<call_id>`，一次只传一个统一 ID。整体弹窗列出所有调用的独立链接；单 LLM 仅在完整开始时间可确定唯一最新请求时提供默认入口，历史响应/请求标识仅展示，不拼入该参数。
 
 实现与测试入口：
 
 - `scripts/qoder_trace_collector.mjs`：Hook、脱敏、截断、transcript/diagnostics 合并和 OTLP snapshot。
 - `scripts/qoder_uploader_client.mjs`：单实例上传、断点保留、失败重试和成功清理。
 - `scripts/qoder_memory_soak.mjs`：AC29 八小时 RSS、增长量和增长斜率采样与留证。
-- `scripts/qoder_setup.mjs`：CN CLI/Desktop 与 JetBrains 的 user/project/local scope、owner 隔离安装与卸载；用户级 CN Hook 写入 `.qoder-cn`，且只管理名为 `agent-insight-qoder` 的 hooks。
-- `scripts/qoder_work_setup.mjs`：Qoder Work 独立安装、卸载和 `qoder-work` spool。
-- `integrations/qoder-desktop/`：Qoder CN Desktop VSIX、状态栏、Settings、后台安装和卸载监视。
-- `integrations/qoder-jetbrains/`：JetBrains Plugin SDK 插件、状态栏、设置、IDE marker 和动态卸载清理。
+- `scripts/qoder_setup.mjs`：CN CLI/Desktop 与 JetBrains 的 user/project/local scope 安装；用户级 CN Hook 写入 `.qoder-cn`，且只管理名为 `agent-insight-qoder` 的 hooks。
+- `scripts/qoder_work_setup.mjs`：Qoder Work 独立安装和 `qoder-work` spool。
+- `integrations/qoder-desktop/`：Qoder CN Desktop VSIX、状态栏、Settings 和后台安装。
+- `integrations/qoder-jetbrains/`：JetBrains Plugin SDK 插件、状态栏、设置和 IDE marker。
 - `src/lib/ingest/otel/adapters/qoder.ts`：服务端 Qoder OTLP 聚合。
-- `test/qoder-trace-collector.test.ts` / `test/qoder-desktop-extension.test.ts` / `test/qoder-performance.test.ts`：确定性、账号/产品隔离、重试、Skill/MCP/连接器、最新版 snapshot、多层 Subagent、安装卸载、四端启动预算和首 Token 开销验证。
+- `test/qoder-trace-collector.test.ts` / `test/qoder-desktop-extension.test.ts` / `test/qoder-performance.test.ts`：确定性、账号/产品隔离、重试、Skill/MCP/连接器、最新版 snapshot、多层 Subagent、安装、四端启动预算和首 Token 开销验证。
 
 ## 十、OpenCode 模型请求关联
 
@@ -505,12 +505,13 @@ Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `Inferen
 
 采集器记录 canonical `inference_request_id = oc_<hash(sessionID, assistantMessageID)>`，每次 `inference_attempts` 同时保留 `transport_request_id`、`attempt_id` 与 `call_id`。uploader 用 `(sessionID, transport_request_id, attempt_id)` 的唯一原生绑定证明回填网关 journal；显式错误 message ID 不会被迟到证明覆盖。重试的多个调用 ID 归入同一个原生 LLM 节点；空响应也保留显式 LLM 类型和原生错误摘要。1.x 只有 session.error 时，用错误响应中的统一 call ID 精确回填对应节点的错误，不按会话最近消息猜测。无证明的请求保留为 `inference_unassigned_calls`。
 
-代理启用时，V2 在每次实际 HTTP 请求前解析其最终地址、注册/同步路由并改写 URL，覆盖新增 Provider、模型地址覆盖和配置更新后的首请求。支持 OpenAI Chat Completions、Responses、Anthropic Messages 路径；请求正文、查询参数和认证保留。将 provider 传输设为 HTTP，并阻断残留 WebSocket 路径，避免绕过入口；恢复停用后不再强制传输方式。运行组件丢失、未知接口路径、身份缺失或事件流中断都会报错，不静默直连。
+代理启用时，V2 在每次实际 HTTP 请求前解析其最终地址、注册/同步路由并改写 URL，覆盖新增 Provider、模型地址覆盖和配置更新后的首请求。支持 OpenAI Chat Completions、Responses、Anthropic Messages 路径；请求正文、查询参数和认证保留。将 provider 传输设为 HTTP，并阻断残留 WebSocket 路径，避免绕过入口；未启用代理时不强制传输方式。运行组件丢失、未知接口路径、身份缺失或事件流中断都会报错，不静默直连。
 
 回归入口另包括 `test/opencode-v2-adapter.test.ts` 和 `test/opencode-plugin-distribution.test.ts`。真实 ARM64 CLI 数据链路验证覆盖 1.18.29、2.0.32 读取旧配置和 2.0.32 原生 `providers` 配置：多次调用、并发子 Agent、失败重试、切换模型、新 Provider 首请求，以及 uploader HTTP → 上传处理器 → SQLite → 最终 Trace/LLM 和重复上报。真实客户端协议验收为 OpenAI-compatible Chat Completions SSE；Responses、Anthropic 和 Windows 不等于已完成真实客户端验收。
 
-
 ## 十一、统一推理转发入口
+
+面向推理服务提供方的字段、重试语义和适配要求见 [推理服务模型调用 ID 接入说明](inference-service-integration.md)。
 
 `scripts/inference_gateway.mjs` 是独立本地 Node.js HTTP 转发进程。Agent 的自定义模型 Base URL 指向配置的 `basePath`，入口将后缀拼接到固定 `upstreamBaseUrl`。一条路由对应一种原生协议：OpenAI 的 `/chat/completions`、`/responses`，或 Anthropic 的 `/messages`；另支持 `/models` GET。不同协议不互相转换，不修改模型名或提示词。CLI 只监听 loopback；中央网关和跨机器关联记录同步尚未实现。
 
@@ -524,6 +525,8 @@ Trace 详情的整体入口与 LLM 详情（含时间线弹窗）共用 `Inferen
 - OpenCode 插件从响应头保留 `call_id`；uploader 另从 journal 按 session/message/request/attempt 精确回填，覆盖响应头前取消。没有合法消息锚点时保留 Trace 级未归属记录。账号级 revision 与内容签名保证迟到的关联字段可以重新上报已经结束的 Trace。子会话保留实际 session，重试 ID 集合归入同一逻辑 LLM。
 - 统一节点字段为 `inference_call_ids: string[]`，原生 request/response/attempt 字段不改义。前端优先使用统一 ID，因此不要求推理服务理解不同 Agent 的身份结构。
 
+`AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN` 配置推理分析站点 origin（HTTP(S) 协议、主机、端口）。RootLayout 在 `connection()` 后读取运行时配置，通过客户端 Context 供统一按钮使用；因此页面按请求动态渲染，无需重新构建。Docker entrypoint 保留容器环境中显式设置的值，其优先级高于运行目录 `.env`；显式空值关闭跳转，未设置时仍读取 `.env`。客户 Compose 修改此项后执行 `docker compose up -d` 使容器采用新环境；仅执行 `restart` 不会应用 Compose 环境变更。只接受无凭据、路径、查询和片段的 origin；未配置/无效时不生成外链。链接在新标签页打开，ID 用 URLSearchParams 编码，不发送平台鉴权信息。
+
 回归入口：`test/inference-gateway.test.ts`、`test/opencode-inference-correlation.test.ts`、`test/inference-analysis.test.ts`。真实 CLI 验收须比较推理服务实际收到的头、网关 journal、采集上传、SQLite 读回及最终节点；单测支持某协议不等于该协议在真实 Agent 上已验收。
 
 ### curl 安装与配置托管
@@ -532,14 +535,35 @@ Unix setup 选择 `qoder` / `opencode` 时，从现有 `?component=` 白名单�
 
 `inference_proxy.mjs` 管理 loopback 动态端口、健康检查、单实例文件锁和后台同步。配置改写前必须通过带随机 token 的本地健康检查；控制 token 和运行状态仅落本机 0600 文件，模型请求不能通过 URL 指定上游。重启优先使用原端口，不能绑定时不把配置改到不可用端口。`inference_gateway.mjs` 每次请求读取已发布的路由，仍先持久化 call ID，再发送上游。历史路由保留，避免切换配置后中断已经读取旧地址的会话。
 
-`inference_config.mjs` 解析 JSON/JSONC 的字符串范围，只替换地址字段，保持注释、换行、认证和模型等字段原样。Qoder 使用 `providers.<id>.baseUrl`；OpenCode 1.x 使用 `provider.<id>.options.baseURL`，2.x 使用 `providers.<id>.settings.baseURL`，按已识别 SDK / 原生 provider package 确定协议；同一文档内两种结构均可识别。首次字节备份以原子方式发布且不覆盖，清单保存备份 SHA-256、字段原值和受管值；恢复前检查完整性。写入前检查原文未并发变化，失败回滚已改文件而不覆盖并发写入。
+安装与同步返回 `coverage`，并写入 `installation.json`：每项含 `agent`、`product`、`state` 和 `managedEndpoints`。`configured` 仅表示当前用户持久配置中有受管地址，不能当作真实请求验收；`no_supported_endpoint` 表示这些配置中没有；Qoder Desktop / JetBrains 为 `adapter_unavailable`。计数来自本轮成功识别的持久配置字段，不使用保留的历史路由数、本次改动文件数或内部 `resolved/inline` 运行时快照。快照与历史路由仍保留供已有会话使用。安装输出明确提示 GUI 模型地址未接管，后台同步不改写 GUI 模型库。
 
-OpenCode 1.x 插件的 `config` 钩子先 await `prepareOpenCodeConfig`，再安装现有身份采集包装器；只改模型地址，不替换认证或 provider fetch。运行时配置快照只记录 Provider 的 SDK 和地址，避免另存已合并密钥。未安装或已恢复停用时保持原采集行为；安装状态启用时，运行文件缺失、导入或配置处理失败都会阻断模型 POST。OpenCode 1.18.29 会吞掉 config 钩子的异常，因此先安装 fetch 保护再处理配置；不能只依靠抛错防止静默直连。Provider 配置来源仍按 OpenCode 原合并规则，未改变用户的模型选择。
+`inference_config.mjs` 解析 JSON/JSONC 的字符串范围，只替换地址字段，保持注释、换行、认证和模型等字段原样。Qoder 使用 `providers.<id>.baseUrl`；OpenCode 1.x 使用 `provider.<id>.options.baseURL`，2.x 使用 `providers.<id>.settings.baseURL`，按已识别 SDK / 原生 provider package 确定协议；同一文档内两种结构均可识别。配置改写使用原子写入，并在写入前检查原文未被并发修改。仅保留转发必需的上游地址映射和路由元数据，不生成原配置副本或可用于整份恢复的备份。多文件处理中途失败时不整批回滚，之前成功修改的文件可能已生效；安装输出必须在修改前提醒用户自行备份。
 
-Qoder CLI 通过原命令入口的受管启动器在读取配置前处理 `--config-dir`、`QODERCN_CONFIG_DIR`、`--cwd`、`--setting-sources` 和 `--settings`。内联 settings 写入本机 0600 的受管临时配置。原二进制、参数和信号转发保留，恢复只撤销仍是我方写入内容的启动器。后台识别 Qoder 升级器在同目录创建的版本符号链接后重新绑定；升级与修复之间存在窗口，安装验证不等于所有未来版本自动兼容。
+OpenCode 1.x 插件的 `config` 钩子先 await `prepareOpenCodeConfig`，再安装现有身份采集包装器；只改模型地址，不替换认证或 provider fetch。运行时配置快照只记录 Provider 的 SDK 和地址，避免另存已合并密钥。未安装代理时保持原采集行为；安装状态启用时，运行文件缺失、导入或配置处理失败都会阻断模型 POST。OpenCode 1.18.29 会吞掉 config 钩子的异常，因此先安装 fetch 保护再处理配置；不能只依靠抛错防止静默直连。Provider 配置来源仍按 OpenCode 原合并规则，未改变用户的模型选择。
+
+Qoder CLI 通过原命令入口的受管启动器在读取配置前处理 `--config-dir`、`QODERCN_CONFIG_DIR`、`--cwd`、`--setting-sources` 和 `--settings`。内联 settings 写入本机 0600 的受管临时配置。原二进制、参数和信号转发保留；原二进制副本用于启动器继续执行原 CLI，不是配置备份或自动恢复服务。后台识别 Qoder 升级器在同目录创建的版本符号链接后重新绑定；升级与修复之间存在窗口，安装验证不等于所有未来版本自动兼容。
 
 Qoder 1.1.70 的 ConfigChange 是文件变化通知，并不构成模型请求前屏障，`/model` 自写配置还会被原生监控器跳过。故明确要求运行中新增或修改 Provider 后重启 CLI；不能把一秒轮询宣称为零绕过保证。内置账号模型、IDE 私有 Provider 配置和 Windows 自动代理不在此范围。
 
-恢复入口为 `restore_inference_proxy.sh`：先持有独占锁暂停同步，再按字段恢复仍为受管值的地址，保留新增模型、Provider 和用户自改地址；全部配置恢复成功后还原自有启动器、停用同步并停服务。配置错误时保持安装状态启用并保留网关用于已有会话，等待修复后重新恢复。恢复前应结束现有 Agent 会话，随后重启使内存中的地址也恢复。原备份与关联日志不删除。
+安装前应自行备份 Agent 配置目录及项目内的配置文件；安装会写入采集 Hook/插件、模型地址和 Qoder CLI 启动入口，可能覆盖既有受管字段。当前不生成一键卸载或模型配置恢复命令，也不自动创建配置备份。需要手工恢复时，先退出 Agent/IDE 并停止后台配置同步，核对备份与安装后的修改，再手工处理相应配置和启动入口；同步仍在运行时，恢复的地址可能再次被改写。恢复旧副本前应合并用户后续修改，不要直接覆盖整份配置。
 
-回归入口：`test/inference-config.test.ts`、`test/inference-proxy.test.ts`、`test/inference-proxy-setup.test.ts` 及原 `test/inference-gateway.test.ts` / `test/opencode-inference-correlation.test.ts`。安装专项实际执行 Bash 下载、发布、CLI 安装和恢复；真实 Agent 验收另以隔离配置及模拟推理服务验证，不启动开发页面。
+回归入口：`test/inference-config.test.ts`、`test/inference-proxy.test.ts`、`test/inference-proxy-setup.test.ts` 及原 `test/inference-gateway.test.ts` / `test/opencode-inference-correlation.test.ts`。安装专项实际执行 Bash 下载、发布和 CLI 安装；真实 Agent 验收另以隔离配置及模拟推理服务验证，不启动开发页面。
+
+
+### Qoder GUI 模型存储与接入边界
+
+普通安装与 auto 安装共用 `INFERENCE_PROXY_UNIX_SETUP_BLOCK`。当前不再分发客户端自动卸载组件，也不生成卸载/恢复脚本；Desktop 卸载监视和 JetBrains 动态卸载清理已移除。安装提醒用户自行备份，采集与模型转发能力按下面的产品边界判断。
+
+2026-10-16 核查官方 CN 发行包：Desktop 1.33.0 的模型列表是用户数据目录 `User/globalStorage/state.vscdb` 中的 `aicoding.customModels`，凭证使用 SecretStorage；IDEA 2026.1014.79711813 使用 IDE 配置目录 `options/qodercn_setting.xml` 的 `byokModelConfigs`，敏感值使用 PasswordSafe；Work 0.9.18 使用用户数据目录 `data/agents.db` 的 `byok_custom_models`，`url` 与 `encrypted_parameters` 分离。它们均不是 CLI `providers` 配置。
+
+进一步在 macOS ARM64 执行原包函数：Desktop 的 `addModel` 可保存 `baseUrl`，但主请求 `ChatSessionService.resolvePromptModelMeta` 与子请求 `CustomModelService.resolveModelConfig` 均重新构造参数，不传递 `baseUrl` / `url` / 额外 parameters，只保留 `parameters.api_key`。因此不能通过修改该数据库实现已确认的模型地址接管。
+
+JetBrains 核心 2026.1014.79696485 的字节码显示：`ChatTaskUtil.resolveCustomModel` 与 `EnterpriseModelService.buildCustomModelParam` 构造 `CustomModelParam` 时第 10 个形参 `url` 都为 null；普通 BYOK 的 extraFields 仅进入 parameters。内嵌 2026.1014.1 ARM64 运行时的 `start --help` 可执行，但 `--endpoint` 是产品后端入口，不能等同模型 Base URL。原生 IDE 后端静态路径还包含 `/api/v2/byok/config`、`/api/v2/byok/check`、登录及内部 Agent 协议，未验证兼容通用推理服务。这里分别是原函数隔离执行、字节码/反汇编检查和帮助命令运行，不是 GUI 到模型服务的实际请求验收。
+
+Desktop / JetBrains 的 ACP 消息/请求标识与推理侧响应 ID 的等价关系尚未证明。collector 不将这两个产品的本地消息 ID 与网关 journal 猜测匹配；服务端保留 `messageID`，置 `inference_response_unavailable`，不导出推理响应/会话 ID 或接受旧采集器误填的统一调用关联。相应回归在 `test/qoder-gui-inference-boundary.test.ts`。后续适配须同时证明地址接管、实际出站身份和采集节点身份，才能解除此限制。
+
+JetBrains 本地 Token 数据库优先读取已存在的 `~/.qoder-cn/shared_client/cache/db/local.db`，否则保留 `~/.qoder/shared_client/cache/db/local.db` 回退；`AGENT_INSIGHT_QODER_TOKEN_DB` 显式配置仍优先。读取只查询指定 session 的 assistant 记录。仅有 SQLite 用量而无 transcript 时，LLM 节点保留该行的本地 `messageId`，但不将它提升为推理响应 ID。Qoder adapter 将真实 LLM Span 标记为 `trace_kind=llm`，调用树在正文缺失时仍保留节点，以“未采集到模型输出”作摘要；空占位消息和 `trace_synthetic` 记录不据此生成模型节点。该路径已用 PyCharm 2026.2.3 / Qoder CN 2026.1014.79711813 的真实会话数据复测；数据重放不等于 Hook 自动触发或模型网关接管验收。
+
+Work 的 `resolveByokCustomModelPayload` 返回 `url`，后续模型解析传给 SDK，但尚未完成该产品的客户端请求身份与网关验收。这些属于版本相关内部实现，不能扩大为整个 Qoder 产品家族的已验证代理能力。部署与客户端安装步骤见[客户部署指南](../user-guide/customer-image-deployment.md)。
+
+历史卸载阶段曾在隔离 HOME 与本地 HTTP 模拟服务上验证恢复直连、用户修改保留、组件移除和进程停止；这些历史结果不代表当前版本仍提供卸载/恢复能力，对应旧验收项已撤出当前要求。GUI 未启动，不将源代码/函数验证等同于真实 Desktop、IDEA、Work 的端到端请求验收。

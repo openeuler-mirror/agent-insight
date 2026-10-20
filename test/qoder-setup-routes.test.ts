@@ -72,6 +72,18 @@ test("Qoder setup components are served from an explicit allowlist", async () =>
   assert.equal(rejected.status, 404)
 })
 
+test("Qoder installers omit retired owner registration and enable parameters", async () => {
+  for (const platform of ["unix", "windows"] as const) {
+    for (const script of [await setupScript(platform), await autoSetupScript(platform)]) {
+      assert.doesNotMatch(script, /--owner=(?:cli|desktop|jetbrains)/)
+      assert.doesNotMatch(script, /qoder_setup\.mjs[^\n]*--enable/)
+      assert.match(script, /--product=cli/)
+      assert.match(script, /--product=desktop/)
+      assert.match(script, /--product=jetbrains/)
+    }
+  }
+})
+
 test("Qoder Desktop VSIX is built from source and served from the source-mtime cache", async () => {
   const info = await getQoderPluginPackageBuildInfo("desktop")
   fs.rmSync(info.cachePath, { force: true })
@@ -285,33 +297,14 @@ test("Qoder plugin builders expose platform-neutral Node and shell entry points"
   assert.doesNotMatch(jetBrainsBuilder, /src\/main\/java[\s\S]*writeZip/)
 })
 
-test("install guide appends Qoder to the existing framework choices", () => {
-  const source = fs.readFileSync(
-    path.join(process.cwd(), "src", "app", "(main)", "accessconfig", "install", "page.tsx"),
-    "utf8",
-  )
-  const start = source.indexOf("const FRAMEWORK_OPTIONS")
-  const end = source.indexOf("];", start)
-
-  assert.notEqual(start, -1, "install guide must define framework choices")
-  assert.notEqual(end, -1, "install guide framework choices must terminate")
-  const options = [...source.slice(start, end).matchAll(/value: '([^']+)'/g)].map((match) => match[1])
-
-  assert.deepEqual(options, [
-    "opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen",
-    "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex",
-    "deepseek-harness", "workbuddy",
-  ])
-})
-
-test("curl setup appends Qoder without changing existing framework entries", async () => {
+test("curl setup retains Qoder and the supported framework entries", async () => {
   for (const platform of ["unix", "windows"] as const) {
     const script = await setupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
     assert.deepEqual(frameworkValues(script), [
       "opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen",
       "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
-      "deepseek-harness", "workbuddy",
+      "deepseek-harness", "mcts-xgovernor", "workbuddy",
     ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
@@ -326,22 +319,22 @@ test("curl setup appends Qoder without changing existing framework entries", asy
     assert.match(script, /agent-insight-qoder-desktop\.vsix/)
     assert.match(script, /agent-insight-qoder-jetbrains\.zip/)
     assert.match(script, platform === "unix" ? /curl -fsSL/ : /Invoke-WebRequest/)
-    assert.match(script, /Release attachment direct URL/)
-    assert.match(script, /AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL/)
+    assert.doesNotMatch(script, /Release attachment direct URL|QODER_JETBRAINS_RELEASE_URL/)
+    assert.match(script, /Update or build the current plugin on the Agent Insight server/)
     assert.match(script, /JetBrains package path/)
     assert.match(script, /Install from VSIX/)
     assert.match(script, /Install Plugin from Disk/)
   }
 })
 
-test("local npm auto setup appends Qoder without changing existing framework entries", async () => {
+test("local npm auto setup retains Qoder and the supported framework entries", async () => {
   for (const platform of ["unix", "windows"] as const) {
     const script = await autoSetupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
     assert.deepEqual(frameworkValues(script), [
       "opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen",
       "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
-      "deepseek-harness", "workbuddy",
+      "deepseek-harness", "mcts-xgovernor", "workbuddy",
     ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
@@ -356,15 +349,15 @@ test("local npm auto setup appends Qoder without changing existing framework ent
     assert.match(script, /agent-insight-qoder-desktop\.vsix/)
     assert.match(script, /agent-insight-qoder-jetbrains\.zip/)
     assert.match(script, platform === "unix" ? /curl -fsSL/ : /Invoke-WebRequest/)
-    assert.match(script, /Release attachment direct URL/)
-    assert.match(script, /AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL/)
+    assert.doesNotMatch(script, /Release attachment direct URL|QODER_JETBRAINS_RELEASE_URL/)
+    assert.match(script, /Update or build the current plugin on the Agent Insight server/)
     assert.match(script, /JetBrains package path/)
     assert.match(script, /Install from VSIX/)
     assert.match(script, /Install Plugin from Disk/)
   }
 })
 
-test("Qoder setup embeds the configured Release attachment fallback and manual download command", async () => {
+test("Qoder setup keeps configured Release sources on the server and never bypasses package validation", async () => {
   const previousPackageUrl = process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
   const releaseUrl = "https://releases.example.test/qoder/agent-insight-qoder-jetbrains.zip"
 
@@ -375,9 +368,10 @@ test("Qoder setup embeds the configured Release attachment fallback and manual d
       for (const platform of ["unix", "windows"] as const) {
         const script = await generate(platform)
 
-        assert.match(script, new RegExp(releaseUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
-        assert.match(script, /Retrying from the Release attachment/)
-        assert.match(script, platform === "unix" ? /curl -fL/ : /Invoke-WebRequest -Uri/)
+        assert.ok(!script.includes(releaseUrl))
+        assert.doesNotMatch(script, /Retrying from the Release attachment|QODER_JETBRAINS_RELEASE_URL|ZIP \(Release\)/)
+        assert.match(script, /Update or build the current plugin on the Agent Insight server/)
+        assert.match(script, /Do not install an existing local ZIP/)
         assert.match(script, /agent-insight-qoder-jetbrains\.zip/)
         assert.match(script, /Install Plugin from Disk -> select the ZIP above/)
       }
@@ -391,7 +385,7 @@ test("Qoder setup embeds the configured Release attachment fallback and manual d
   }
 })
 
-test("Qoder setup embeds the built-in JetBrains Release attachment when no override is configured", async () => {
+test("Qoder setup downloads JetBrains packages only from the platform when no override is configured", async () => {
   const previousPackageUrl = process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
 
   try {
@@ -400,11 +394,10 @@ test("Qoder setup embeds the built-in JetBrains Release attachment when no overr
     for (const generate of [setupScript, autoSetupScript]) {
       for (const platform of ["unix", "windows"] as const) {
         const script = await generate(platform)
-        assert.match(
-          script,
-          new RegExp(DEFAULT_QODER_JETBRAINS_PACKAGE_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-        )
-        assert.match(script, /Retrying from the Release attachment/)
+        assert.ok(!script.includes(DEFAULT_QODER_JETBRAINS_PACKAGE_URL))
+        assert.doesNotMatch(script, /Retrying from the Release attachment|QODER_JETBRAINS_RELEASE_URL/)
+        assert.match(script, /Update or build the current plugin on the Agent Insight server/)
+        assert.match(script, /\/api\/ingest\/setup\/qoder-jetbrains-plugin/)
       }
     }
   } finally {
@@ -413,5 +406,42 @@ test("Qoder setup embeds the built-in JetBrains Release attachment when no overr
     } else {
       process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL = previousPackageUrl
     }
+  }
+})
+
+test("Qoder Desktop Bash installers guide installation only after a successful VSIX download", async () => {
+  for (const generate of [setupScript, autoSetupScript]) {
+    const script = await generate("unix")
+    const start = script.indexOf('        echo "Downloading Qoder CN plugin packages..."')
+    const end = script.indexOf('        QODER_JETBRAINS_TARGET=', start)
+    assert.ok(start >= 0 && end > start)
+    assert.equal(script.split("Install from VSIX").length - 1, 1)
+    const block = script.slice(start, end)
+    for (const downloadStatus of [0, 1]) {
+      const probe = `download_qoder_plugin() { echo platform-download-attempt; return ${downloadStatus}; }\nAGENT_INSIGHT_BASE_URL=http://platform.invalid\nQODER_PLUGIN_DIR=/tmp/previous-qoder-package\n${block}`
+      const result = spawnSync("bash", [], { input: probe, encoding: "utf8" })
+      assert.equal(result.status, 0, result.stderr)
+      assert.equal(result.stdout.split("platform-download-attempt").length - 1, 1)
+      if (downloadStatus === 0) {
+        assert.match(result.stdout, /Install from VSIX/)
+        assert.doesNotMatch(result.stdout, /Do not install an existing local VSIX/)
+      } else {
+        assert.match(result.stdout, /Do not install an existing local VSIX/)
+        assert.doesNotMatch(result.stdout, /Install from VSIX|Desktop package path/)
+      }
+    }
+  }
+})
+
+test("Qoder Desktop PowerShell installers gate VSIX instructions on the download result", async () => {
+  for (const generate of [setupScript, autoSetupScript]) {
+    const script = await generate("windows")
+    assert.match(script, /\$qoderDesktopDownloaded = Save-QoderPluginPackage "Qoder CN Desktop VSIX"/)
+    const block = script.match(/if \(\$qoderDesktopDownloaded\) \{([\s\S]*?)\} else \{([\s\S]*?)\}/)
+    assert.ok(block)
+    assert.match(block[1], /Install from VSIX/)
+    assert.match(block[2], /Do not install an existing local VSIX/)
+    assert.doesNotMatch(block[2], /Install from VSIX|Desktop package path/)
+    assert.equal(script.split("Install from VSIX").length - 1, 1)
   }
 })

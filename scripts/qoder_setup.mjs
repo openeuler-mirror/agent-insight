@@ -4,10 +4,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import {
-  ensureQoderTokenUsageEnvironment,
-  releaseQoderTokenUsageEnvironment,
-} from "./qoder_token_usage_env.mjs"
+import { ensureQoderTokenUsageEnvironment } from "./qoder_token_usage_env.mjs"
 
 export const QODER_HOOK_EVENTS = [
   "SessionStart",
@@ -22,10 +19,6 @@ export const QODER_HOOK_EVENTS = [
 ]
 
 const HOOK_NAME = "agent-insight-qoder"
-const CONFIG_KEYS = [
-  "AGENT_INSIGHT_QODER_SPOOL_DIR",
-  "AGENT_INSIGHT_QODER_UPLOADER",
-]
 const QODER_PRODUCTS = new Set(["cli", "desktop", "jetbrains"])
 
 function clone(value) {
@@ -37,6 +30,7 @@ function stableHex(value, length = 16) {
 }
 
 function atomicWrite(file, content, mode = 0o600) {
+  if (fs.existsSync(file)) file = fs.realpathSync(file)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`
   fs.writeFileSync(temporary, content, { encoding: "utf8", mode })
@@ -134,9 +128,8 @@ export function removeQoderHooks(settings) {
   return result
 }
 
-/** @param {string} text @param {Record<string, string>} updates @param {string[]} removals */
-export function updateEnvText(text, updates, removals = []) {
-  const removeSet = new Set(removals)
+/** @param {string} text @param {Record<string, string>} updates */
+export function updateEnvText(text, updates) {
   const updateMap = new Map(Object.entries(updates))
   const written = new Set()
   const lines = String(text || "").split(/\r?\n/)
@@ -148,7 +141,6 @@ export function updateEnvText(text, updates, removals = []) {
       continue
     }
     const key = match[1]
-    if (removeSet.has(key)) continue
     if (updateMap.has(key)) {
       if (!written.has(key)) output.push(`${key}=${updateMap.get(key)}`)
       written.add(key)
@@ -170,104 +162,18 @@ function settingsPath(scope, homeDir, projectDir, product = "cli") {
   return path.join(homeDir, ".qoder-cn", "settings.json")
 }
 
-function processIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function pauseSync(milliseconds) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
-}
-
-function stopUploader(spoolDir) {
-  const pids = new Set()
-  for (const name of ["uploader.lock", "upload-run.lock"]) {
-    try {
-      const lock = JSON.parse(fs.readFileSync(path.join(spoolDir, name), "utf8"))
-      const pid = Number(lock.pid)
-      if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid)
-    } catch {}
-  }
-  for (const pid of pids) {
-    try { process.kill(pid, "SIGTERM") } catch {}
-  }
-  return [...pids]
-}
-
-function waitForUploaderExit(pids, graceMs = 2_000) {
-  const unique = [...new Set(pids)].filter((pid) => pid !== process.pid)
-  const deadline = Date.now() + graceMs
-  while (unique.some(processIsAlive) && Date.now() < deadline) pauseSync(25)
-  for (const pid of unique.filter(processIsAlive)) {
-    try { process.kill(pid, "SIGKILL") } catch {}
-  }
-  const forcedDeadline = Date.now() + 500
-  while (unique.some(processIsAlive) && Date.now() < forcedDeadline) pauseSync(25)
-  return unique.filter((pid) => !processIsAlive(pid))
-}
-
 function normalizeProduct(value) {
   const product = String(value || "cli").trim().toLowerCase()
   if (!QODER_PRODUCTS.has(product)) throw new Error(`Unsupported Qoder product: ${product}`)
   return product
 }
 
-function normalizeOwner(value, product) {
-  const owner = String(value || product).trim().toLowerCase()
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(owner)) throw new Error(`Unsupported Qoder owner: ${owner}`)
-  return owner
-}
-
-function ownerDirectory(insightDir) {
-  return path.join(insightDir, "qoder-owners")
-}
-
-function ownerMarkerPath(insightDir, owner) {
-  return path.join(ownerDirectory(insightDir), `${owner}.json`)
-}
-
-function readOwnerMarkers(insightDir) {
-  const markers = []
-  try {
-    for (const entry of fs.readdirSync(ownerDirectory(insightDir), { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue
-      try {
-        const value = JSON.parse(fs.readFileSync(path.join(ownerDirectory(insightDir), entry.name), "utf8"))
-        if (value?.owner && value?.settingsPath) markers.push(value)
-      } catch {}
-    }
-  } catch {}
-  return markers
-}
-
 function productSpoolDir(insightDir, accountHash, product) {
   return path.join(insightDir, "otel_data", "qoder", product, accountHash)
 }
 
-function stopQoderUploaders(insightDir, product) {
-  const pids = []
-  const roots = [
-    path.join(insightDir, "otel_data", "qoder", product),
-    path.join(insightDir, "otel_data", `qoder-${product}`),
-  ]
-  for (const root of roots) {
-    try {
-      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory()) pids.push(...stopUploader(path.join(root, entry.name)))
-      }
-    } catch {}
-  }
-  waitForUploaderExit(pids)
-  return [...new Set(pids)]
-}
-
 function startUploader(uploaderPath, spoolDir, host, apiKey) {
-  const child = spawn(process.execPath, [uploaderPath, "--watch"], {
+  const child = spawn(process.execPath, [uploaderPath, "--watch", `--spool-dir=${spoolDir}`], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
@@ -282,7 +188,8 @@ function startUploader(uploaderPath, spoolDir, host, apiKey) {
   return child.pid
 }
 
-/** @param {any} options */
+/** @param {any} options
+ * @returns {any} */
 export function installQoderCollector(options = {}) {
   const homeDir = options.homeDir || os.homedir()
   const projectDir = options.projectDir || process.cwd()
@@ -290,7 +197,6 @@ export function installQoderCollector(options = {}) {
   const sourceDir = options.sourceDir || path.dirname(fileURLToPath(import.meta.url))
   const scope = options.scope || "user"
   const product = normalizeProduct(options.product)
-  const owner = normalizeOwner(options.owner, product)
   const installedConfig = options.fromConfig ? readEnvFile(path.join(insightDir, "config")) : {}
   const host = String(options.host || installedConfig.AGENT_INSIGHT_HOST || "").trim().replace(/\/+$/, "")
   const apiKey = String(options.apiKey || installedConfig.AGENT_INSIGHT_API_KEY || "").trim()
@@ -309,14 +215,12 @@ export function installQoderCollector(options = {}) {
 
   const targetSettings = settingsPath(scope, homeDir, projectDir, product)
   const settings = mergeQoderHooks(readSettings(targetSettings), { nodePath: process.execPath, collectorPath })
+  process.stderr.write(`安装将改写 Qoder Hook 配置 ${targetSettings} 和 ${path.join(insightDir, "config")}；请在安装前自行备份。此安装不提供自动备份或配置回退。\n`)
   atomicWrite(targetSettings, `${JSON.stringify(settings, null, 2)}\n`)
-  const markerPath = ownerMarkerPath(insightDir, owner)
-  atomicWrite(markerPath, `${JSON.stringify({ owner, product, scope, settingsPath: targetSettings }, null, 2)}\n`)
   const tokenUsageEnvironment = product === "cli" && (options.configureTokenUsageEnvironment ?? options.homeDir === undefined)
     ? ensureQoderTokenUsageEnvironment({
         homeDir,
         insightDir,
-        owner: "cli",
         adapter: options.tokenUsageEnvironmentAdapter,
       })
     : undefined
@@ -332,70 +236,7 @@ export function installQoderCollector(options = {}) {
   }))
 
   const uploaderPid = options.startUploader === false ? undefined : startUploader(uploaderPath, spoolDir, host, apiKey)
-  return { settingsPath: targetSettings, collectorPath, uploaderPath, spoolDir, accountHash, product, owner, markerPath, tokenUsageEnvironment, uploaderPid }
-}
-
-/** @param {any} options */
-export function uninstallQoderCollector(options = {}) {
-  const homeDir = options.homeDir || os.homedir()
-  const projectDir = options.projectDir || process.cwd()
-  const insightDir = options.insightDir || getAgentInsightHome(homeDir)
-  const scope = options.scope || "user"
-  const product = normalizeProduct(options.product)
-  const owner = normalizeOwner(options.owner, product)
-  const targetSettings = settingsPath(scope, homeDir, projectDir, product)
-  const markerPath = ownerMarkerPath(insightDir, owner)
-  const markers = readOwnerMarkers(insightDir)
-  const currentMarker = markers.find((marker) => marker.owner === owner)
-  try { fs.unlinkSync(markerPath) } catch {}
-  const remainingOwners = readOwnerMarkers(insightDir)
-  const ownedSettingsPath = currentMarker?.settingsPath || targetSettings
-  const settingsStillShared = remainingOwners.some((marker) => path.resolve(marker.settingsPath) === path.resolve(ownedSettingsPath))
-  if (!settingsStillShared && fs.existsSync(ownedSettingsPath)) {
-    const settings = removeQoderHooks(readSettings(ownedSettingsPath))
-    atomicWrite(ownedSettingsPath, `${JSON.stringify(settings, null, 2)}\n`)
-  }
-
-  const configFile = path.join(insightDir, "config")
-  let configText = ""
-  try { configText = fs.readFileSync(configFile, "utf8") } catch {}
-  const spoolMatch = configText.match(/^AGENT_INSIGHT_QODER_SPOOL_DIR=(.+)$/m)
-  const spoolDir = spoolMatch?.[1]?.trim()
-  const stoppedUploaderPids = stopQoderUploaders(insightDir, product)
-  const tokenUsageEnvironment = product === "cli"
-    ? releaseQoderTokenUsageEnvironment({
-        homeDir,
-        insightDir,
-        owner: "cli",
-        adapter: options.tokenUsageEnvironmentAdapter,
-      })
-    : undefined
-  if (!remainingOwners.length && configText) atomicWrite(configFile, updateEnvText(configText, {}, CONFIG_KEYS))
-
-  if (!remainingOwners.length) {
-    for (const file of [path.join(insightDir, "qoder_trace_collector.mjs"), path.join(insightDir, "qoder_uploader_client.mjs")]) {
-      try { fs.unlinkSync(file) } catch {}
-    }
-    try { fs.rmdirSync(ownerDirectory(insightDir)) } catch {}
-  }
-  const qoderSpoolRoot = path.resolve(insightDir, "otel_data", "qoder", product)
-  const legacySpoolRoot = path.resolve(insightDir, "otel_data", `qoder-${product}`)
-  if (options.purge) {
-    const insightRoot = path.resolve(insightDir) + path.sep
-    for (const root of [qoderSpoolRoot, legacySpoolRoot]) {
-      if (root.startsWith(insightRoot)) fs.rmSync(root, { recursive: true, force: true })
-    }
-  }
-  return {
-    settingsPath: ownedSettingsPath,
-    spoolDir,
-    product,
-    owner,
-    remainingOwners: remainingOwners.map((marker) => marker.owner),
-    stoppedUploaderPids,
-    tokenUsageEnvironment,
-    purged: Boolean(options.purge),
-  }
+  return { settingsPath: targetSettings, collectorPath, uploaderPath, spoolDir, accountHash, product, tokenUsageEnvironment, uploaderPid }
 }
 
 function getAgentInsightHome(homeDir = os.homedir()) {
@@ -408,8 +249,7 @@ function parseArgs(args) {
   const command = args[0] || "status"
   const options = {}
   for (const arg of args.slice(1)) {
-    if (arg === "--purge") options.purge = true
-    else if (arg === "--no-start") options.startUploader = false
+    if (arg === "--no-start") options.startUploader = false
     else if (arg === "--from-config") options.fromConfig = true
     else if (arg.startsWith("--") && arg.includes("=")) {
       const [key, ...rest] = arg.slice(2).split("=")
@@ -425,13 +265,9 @@ function main() {
     process.stdout.write(`${JSON.stringify(installQoderCollector(options), null, 2)}\n`)
     return
   }
-  if (command === "uninstall") {
-    process.stdout.write(`${JSON.stringify(uninstallQoderCollector(options), null, 2)}\n`)
-    return
-  }
-  process.stdout.write("Usage: node qoder_setup.mjs install --host=<url> --api-key=<key> [--scope=user|project|local] [--product=cli|desktop|jetbrains] [--owner=<id>] [--no-start]\n")
-  process.stdout.write("       node qoder_setup.mjs install --from-config [--scope=user|project|local] [--product=cli|desktop|jetbrains] [--owner=<id>] [--no-start]\n")
-  process.stdout.write("       node qoder_setup.mjs uninstall [--scope=user|project|local] [--product=cli|desktop|jetbrains] [--owner=<id>] [--purge]\n")
+  process.exitCode = 1
+  process.stdout.write("Usage: node qoder_setup.mjs install --host=<url> --api-key=<key> [--scope=user|project|local] [--product=cli|desktop|jetbrains] [--no-start]\n")
+  process.stdout.write("       node qoder_setup.mjs install --from-config [--scope=user|project|local] [--product=cli|desktop|jetbrains] [--no-start]\n")
 }
 
 const invokedPath = process.argv[1]

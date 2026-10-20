@@ -5,7 +5,6 @@ const os = require("node:os")
 const path = require("node:path")
 const vscode = require("vscode")
 
-const OWNER = "desktop"
 const PRODUCT = "desktop"
 let statusItem
 let installPromise
@@ -13,7 +12,7 @@ let activeContext
 let flushPromise
 
 function insightDirectory() {
-  return path.join(os.homedir(), ".agent-insight")
+  return path.resolve((process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), ".agent-insight")).replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => os.homedir()))
 }
 
 function runtimeDirectory() {
@@ -126,11 +125,11 @@ async function installCollector(context) {
   installPromise = (async () => {
     const enabled = vscode.workspace.getConfiguration("agentInsightQoder").get("enabled", true)
     if (!enabled) {
-      await uninstallCollector(context, false)
-      setStatus("$(circle-slash) Agent Insight", "Qoder CN Desktop Trace collection is disabled")
+      setStatus("$(circle-slash) Agent Insight", "Automatic collector setup is disabled; existing Hook configuration remains active")
       return
     }
     setStatus("$(sync~spin) Agent Insight", "Installing the Qoder CN Desktop collector")
+    void vscode.window.showWarningMessage(`安装将改写 ${path.join(os.homedir(), ".qoder-cn", "settings.json")} 和 ${configPath()}；请在安装前自行备份。此安装不提供自动备份或配置回退。`)
     if (!await writeConfiguration(context)) {
       setStatus("$(warning) Agent Insight", "Configuration required. Click to configure.")
       return
@@ -142,7 +141,6 @@ async function installCollector(context) {
       "--from-config",
       "--scope=user",
       `--product=${PRODUCT}`,
-      `--owner=${OWNER}`,
     ])
     setStatus("$(pulse) Agent Insight", "Active · Qoder CN Desktop Trace collector")
   })().catch((error) => {
@@ -178,40 +176,6 @@ async function configure(context) {
   vscode.window.showInformationMessage("Agent Insight Qoder CN Desktop collector is active.")
 }
 
-async function uninstallCollector(context, purge) {
-  await flushCollector(context).catch(() => {})
-  const setupPath = prepareRuntime(context)
-  const args = [
-    setupPath,
-    "uninstall",
-    "--scope=user",
-    `--product=${PRODUCT}`,
-    `--owner=${OWNER}`,
-  ]
-  if (purge) args.push("--purge")
-  await execFile("node", args)
-  setStatus("$(circle-slash) Agent Insight", "Qoder CN Desktop collector data removed")
-}
-
-function startUninstallWatcher(context) {
-  const settings = vscode.workspace.getConfiguration("agentInsightQoder")
-  const watcher = path.join(context.extensionPath, "uninstall-watcher.mjs")
-  const setupPath = path.join(runtimeDirectory(), "qoder_setup.mjs")
-  const args = [
-    watcher,
-    `--extension-path=${context.extensionPath}`,
-    `--extension-id=${context.extension.id}`,
-    `--parent-pid=${process.pid}`,
-    `--setup-path=${setupPath}`,
-    `--runtime-dir=${runtimeDirectory()}`,
-    `--purge=${settings.get("purgeOnUninstall", true) ? "1" : "0"}`,
-  ]
-  try {
-    const child = childProcess.spawn("node", args, { detached: true, stdio: "ignore", windowsHide: true })
-    child.unref()
-  } catch {}
-}
-
 function activate(context) {
   activeContext = context
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 90)
@@ -220,19 +184,10 @@ function activate(context) {
   context.subscriptions.push(
     statusItem,
     vscode.commands.registerCommand("agentInsightQoder.configure", () => configure(context)),
-    vscode.commands.registerCommand("agentInsightQoder.uninstallCollector", async () => {
-      const choice = await vscode.window.showWarningMessage(
-        "Remove the Qoder CN Desktop collector and its account-isolated spool? Other Qoder collectors are preserved.",
-        { modal: true },
-        "Remove",
-      )
-      if (choice === "Remove") await uninstallCollector(context, true)
-    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("agentInsightQoder")) void installCollector(context)
     }),
   )
-  startUninstallWatcher(context)
   setTimeout(() => void installCollector(context), 0)
 }
 

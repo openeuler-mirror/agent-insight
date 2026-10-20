@@ -14,7 +14,6 @@
     "integrations/qoder-desktop/build-vsix.sh",
     "integrations/qoder-desktop/extension.js",
     "integrations/qoder-desktop/package.json",
-    "integrations/qoder-desktop/uninstall-watcher.mjs",
     "integrations/qoder-jetbrains/build-plugin.mjs",
     "integrations/qoder-jetbrains/build-plugin.ps1",
     "integrations/qoder-jetbrains/build-plugin.sh",

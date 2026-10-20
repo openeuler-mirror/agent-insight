@@ -69,7 +69,6 @@ import { cn } from '@/lib/utils';
 import { formatDurationMs } from '@/lib/latency-format';
 import { getAgentDisplayName } from '@/lib/engine/observability/agent-registration';
 
-const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 const MAX_TRACE_TAG_FILTERS = 20;
 
 interface InvokedSkill {
@@ -1720,9 +1719,6 @@ function TraceDetailView({
                         {locale === 'zh' ? '加入评测集' : 'Add to dataset'}
                     </Button>
                     <Button variant="outline" size="sm" asChild className="h-7 text-xs"><Link href={`/observe/collaborations?traceTaskId=${encodeURIComponent(taskId)}`}>调用关系图</Link></Button>
-                    <Button variant="default" size="sm" asChild className="h-7 text-xs">
-                        <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
-                    </Button>
                     <Button
                         variant="outline"
                         size="sm"
@@ -2108,11 +2104,6 @@ function Row({
 
                         <Button variant="ghost" size="sm" onClick={onClick} className="h-7 px-2 text-xs">
                             {t('tracePage.rowDetail')}
-                        </Button>
-                        <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs">
-                            <Link href={`${basePath}/fault?taskId=${id}`}>
-                                {t('tracePage.rowAnalysis')}
-                            </Link>
                         </Button>
                         <Button
                             variant="ghost"

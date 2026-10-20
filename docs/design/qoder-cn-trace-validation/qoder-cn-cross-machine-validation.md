@@ -1,5 +1,7 @@
 # Qoder CN 采集器跨机器验证手册
 
+安装前请自行备份机器 A 上的 Qoder 用户和项目配置。安装会写入采集 Hook/插件配置；Unix 转发接入还会改写受支持的模型地址及 CLI 启动入口。当前不提供自动配置备份、自动卸载或配置恢复，多文件修改中途失败可能留下部分已修改的文件。
+
 ## 1. 验证目标
 
 验证 Qoder CN 采集器和 Agent Insight 服务端部署在两台不同机器时，Trace 仍能通过网络正常上传、入库并展示。
@@ -413,13 +415,5 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new()
 1. 立即轮换或撤销本次测试使用的临时 API Key。
 2. 不要在截图、聊天记录、Issue 或提交中保留明文 API Key。
 3. 远程安装会把机器 A 的采集目标改为机器 B。若要恢复上传到机器 A 的本地 Agent Insight，请重新执行本地 `http://localhost:3000` 安装指导中的 Qoder CN 安装命令。
-4. 如果需要完全卸载，可使用安装到 `~/.agent-insight/qoder-distribution/` 的脚本；默认不加 `--purge` 会保留 spool，只有确认需要删除测试数据时才加 `--purge`。
-
-```powershell
-$dist = "$env:USERPROFILE\.agent-insight\qoder-distribution"
-
-node "$dist\qoder_setup.mjs" uninstall --scope=user --product=cli --owner=cli
-node "$dist\qoder_setup.mjs" uninstall --scope=user --product=desktop --owner=desktop
-node "$dist\qoder_setup.mjs" uninstall --scope=user --product=jetbrains --owner=jetbrains
-node "$dist\qoder_work_setup.mjs" uninstall
-```
+4. 当前没有自动卸载或配置回退入口。需要手工恢复配置时，先退出 Qoder/IDE 并停止后台配置同步，核对安装前自行保存的备份与后续修改，再手工恢复相应字段。后台同步仍在运行时，模型地址可能再次被改写。
+5. 保留服务端已有 Trace、本地 spool 和关联日志；不要把清除采集数据当作恢复配置的必要步骤。

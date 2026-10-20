@@ -101,7 +101,6 @@ export function buildDesktopVsix(outputPath) {
   )
   addFile(zip, "extension/package.json", extensionPackagePath)
   addFile(zip, "extension/extension.js", path.join(integrationRoot, "extension.js"))
-  addFile(zip, "extension/uninstall-watcher.mjs", path.join(integrationRoot, "uninstall-watcher.mjs"))
   addFile(zip, "extension/LICENSE.txt", path.join(repositoryRoot, "LICENSE"))
 
   for (const script of [
