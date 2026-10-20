@@ -116,6 +116,7 @@ export interface RawInteraction {
         started_at?: string;
         status_code?: number;
         error_type?: string;
+        state?: string;
     }>;
     trace_kind?: 'chain' | string;
     trace_name?: string;

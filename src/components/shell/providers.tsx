@@ -6,15 +6,17 @@ import { ThemeProvider } from '@/lib/client/theme-context';
 import { LocaleProvider } from '@/lib/client/locale-context';
 import { SidebarProvider } from '@/lib/client/sidebar-context';
 import { Toaster } from '@/components/ui/sonner';
+import { InferenceAnalysisProvider } from '@/lib/client/inference-analysis-context';
+import type { InferenceAnalysisConfig } from '@/lib/trace/inference-analysis-link';
 
-export function Providers({ children }: { children: React.ReactNode }) {
+export function Providers({ children, inferenceAnalysis = { status: 'unconfigured' } }: { children: React.ReactNode; inferenceAnalysis?: InferenceAnalysisConfig }) {
   return (
     <NuqsAdapter>
       <ThemeProvider>
         <LocaleProvider>
           <AuthProvider>
             <SidebarProvider>
-              {children}
+              <InferenceAnalysisProvider config={inferenceAnalysis}>{children}</InferenceAnalysisProvider>
               <Toaster />
             </SidebarProvider>
           </AuthProvider>

@@ -92,6 +92,8 @@ export function resolveQoderLocalTokenDatabase(product, options = {}) {
   if (options.databasePath) return path.resolve(options.databasePath)
   const homeDir = options.homeDir || os.homedir()
   if (normalizedProduct === "jetbrains") {
+    const cnDatabase = path.join(homeDir, ".qoder-cn", "shared_client", "cache", "db", "local.db")
+    if (fs.existsSync(cnDatabase)) return cnDatabase
     return path.join(homeDir, ".qoder", "shared_client", "cache", "db", "local.db")
   }
   if (normalizedProduct !== "desktop") return undefined
@@ -555,6 +557,7 @@ function connectorToolIdentity(mcpTool) {
  *   diagnosticRecords?: Array<any>,
  *   localTokenUsage?: Array<any>,
  *   expertAgents?: Array<any>,
+ *   inferenceCalls?: Array<any>,
  *   product?: string,
  *   accountHash?: string,
  *   estimateVisibleTokens?: boolean,
@@ -751,7 +754,7 @@ export function buildQoderOtlpPayload({
         "openinference.span.kind": "LLM",
         "qoder.span.type": "llm",
         "qoder.llm.request_id": requestId,
-        "qoder.llm.message_id": synthetic ? undefined : firstString(record?.message?.id),
+        "qoder.llm.message_id": synthetic ? undefined : firstString(record?.message?.id, !record ? localUsage?.messageId : undefined),
         "qoder.llm.synthetic": synthetic || undefined,
         "qoder.subagent.session_id": ownerId,
         "qoder.llm.turn_id": firstString(pair?.response?.turn_id),
@@ -1183,7 +1186,8 @@ export function buildQoderOtlpPayload({
       ["qoder.subagent.name", "qoder.subagent.type", "qoder.subagent.parent_session_id", "qoder.expert.name", "qoder.expert.role"].includes(key)))
   }
 
-  const calls = inferenceCalls.filter(call => call?.agent === "qoder" && call.session_id === sessionId
+  const inferenceIdentityVerified = !["desktop", "jetbrains"].includes(productName)
+  const calls = inferenceCalls.filter(call => inferenceIdentityVerified && call?.agent === "qoder" && call.session_id === sessionId
     && /^[a-f0-9-]{36}$/.test(call.call_id || "")
     && (!currentTurnStartMs || Date.parse(call.started_at) >= currentTurnStartMs)
     && Date.parse(call.started_at) <= endMs)

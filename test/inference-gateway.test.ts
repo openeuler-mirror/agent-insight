@@ -7,7 +7,7 @@ import path from 'node:path';
 import { collectQoderHook } from '../scripts/qoder_trace_collector.mjs';
 import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
 import { aggregateOtelTraceEvents } from '@/lib/ingest/otel/aggregate';
-import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, type AgentEvent, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { inferenceAnalysisTarget } from '@/lib/trace/inference-analysis';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -200,6 +200,72 @@ test('Qoder duplicate service response IDs stay unassigned instead of binding tw
     assert.equal(interactions.flatMap(i => i.inference_unassigned_calls ?? []).length, 2);
 });
 
+test('Qoder CLI gateway data fixture correlates repeated and concurrent child calls while failed retries stay trace-only', async t => {
+    const received: Array<{ label: string; id: string }> = [];
+    let active = 0, peak = 0;
+    const f = await fixture(t, async (req, res) => {
+        let body = ''; for await (const chunk of req) body += chunk;
+        const { label, fail } = JSON.parse(body);
+        received.push({ label, id: String(req.headers['x-agent-insight-call-id']) });
+        active++; peak = Math.max(peak, active);
+        await new Promise(resolve => setTimeout(resolve, label.startsWith('child-a') ? 30 : 10));
+        active--;
+        res.writeHead(fail ? 503 : 200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(fail ? { error: { id: 'local-error-id' } } : { id: `response-${label}` }));
+    });
+    const session = 'parallel-fixture', started = new Date().toISOString();
+    const transcript = path.join(f.dir, 'parallel.jsonl');
+    const options = { insightDir: f.dir, disableUploadKick: true, env: { AGENT_INSIGHT_API_KEY: '' } };
+    const calls: Array<{ label: string; id: string; child?: string; fail: boolean; completed: string }> = [];
+    const invoke = async (label: string, child?: string, fail = false, sessionId = session) => {
+        const response = await post(f.url, { headers: { 'session-id': sessionId }, body: JSON.stringify({ label, fail }) });
+        await response.text(); assert.equal(response.status, fail ? 503 : 200);
+        const id = response.headers.get('x-agent-insight-call-id')!;
+        if (sessionId === session) calls.push({ label, id, child, fail, completed: new Date().toISOString() });
+        return id;
+    };
+    await invoke('root-first');
+    for (const child of ['child-a', 'child-b']) await collectQoderHook({ hook_event_name: 'SubagentStart', session_id: session, agent_id: child, agent_type: child }, options);
+    await Promise.all([
+        (async () => { await invoke('child-a-first', 'child-a'); await invoke('child-a-second', 'child-a'); })(),
+        (async () => { await invoke('child-b-failed', 'child-b', true); await invoke('child-b-retry', 'child-b'); })(),
+    ]);
+    await invoke('root-last');
+    const foreignId = await invoke('root-first', undefined, false, 'other-session');
+    assert.ok(peak >= 2, 'the inference service must receive overlapping calls');
+    assert.equal(new Set(received.map(item => item.id)).size, received.length);
+    for (const call of calls) assert.ok(received.some(item => item.id === call.id && item.label === call.label));
+    fs.writeFileSync(transcript, [
+        { type: 'user', sessionId: session, timestamp: started, message: { content: 'parallel probe' } },
+        ...calls.map(call => ({ type: 'assistant', sessionId: session, agentId: call.child, timestamp: call.completed, isApiErrorMessage: call.fail,
+            message: { id: call.fail ? 'local-error-id' : `response-${call.label}`, model: call.fail ? '<synthetic>' : 'probe', content: [
+                { type: 'text', text: call.label },
+                ...(call.label === 'root-first' ? ['child-a', 'child-b'].map(child => ({ type: 'tool_use', id: `spawn-${child}`, name: 'Agent', input: { subagent_type: child, prompt: child } })) : []),
+            ] } })),
+        ...['child-a', 'child-b'].map(child => ({ type: 'user', sessionId: session, timestamp: new Date().toISOString(),
+            message: { content: [{ type: 'tool_result', tool_use_id: `spawn-${child}`, content: child }] }, toolUseResult: { agentId: child, agentType: child } })),
+    ].map(row => JSON.stringify(row)).join('\n'));
+    for (const child of ['child-a', 'child-b']) await collectQoderHook({ hook_event_name: 'SubagentStop', session_id: session, agent_id: child, agent_type: child }, options);
+    const collected = await collectQoderHook({ hook_event_name: 'Stop', qoder_product: 'cli', session_id: session, transcript_path: transcript }, options);
+    const record = aggregateOtelTraceEvents(session, normalizeOtlpTraces(JSON.parse(fs.readFileSync(collected.pendingFile!, 'utf8'))))!;
+    const interactions = JSON.parse(JSON.stringify(record.interactions));
+    const tree = buildAgentCallTree(interactions);
+    assert.ok(tree);
+    for (const call of calls.filter(item => !item.fail)) {
+        const owner: AgentNode | undefined = call.child ? tree.children.find(node => node.sessionId === call.child) : tree;
+        assert.ok(owner, `missing owner ${call.child}`);
+        const node: AgentEvent | undefined = owner.events.find(event => event.kind === 'llm' && event.interaction.messageID === `response-${call.label}`);
+        assert.ok(node, `missing LLM ${call.label}`);
+        assert.deepEqual(node.interaction.inference_call_ids, [call.id]);
+        assert.deepEqual(inferenceAnalysisTarget({ framework: 'qoder', scope: 'llm', interaction: node.interaction }).callIds, [call.id]);
+    }
+    const target = inferenceAnalysisTarget({ framework: 'qoder', scope: 'trace', rootSessionId: session, interactions });
+    assert.deepEqual([...target.callIds!].sort(), calls.map(call => call.id).sort());
+    assert.deepEqual(target.unassignedCallIds, calls.filter(call => call.fail).map(call => call.id));
+    assert.ok(!target.callIds?.includes(foreignId));
+    assert.ok(interactions.filter((item: any) => item.model === '<synthetic>').every((item: any) => !item.inference_call_ids?.length));
+});
+
 test('gateway uses installed account configuration when the shell has no API key', async t => {
     const f = await fixture(t, (_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"id":"account-response"}'); });
     fs.writeFileSync(path.join(f.dir, 'config'), 'AGENT_INSIGHT_API_KEY=local-account\n');
@@ -227,6 +293,7 @@ test('OpenCode preserves distinct gateway calls even if transport replays the sa
     const messages: any[] = uploader.mergeGraph(state, 'ses_replay');
     assert.deepEqual(messages[0].inference_call_ids.sort(), ids.sort());
 });
+
 
 test('OpenCode V2 joins exact transport proof to native LLM and leaves missing or conflicting proof unassigned', async t => {
     const f = await fixture(t, (_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"id":"ok"}'); }, { agent: 'opencode' });
