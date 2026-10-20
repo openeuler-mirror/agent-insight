@@ -4,6 +4,7 @@ services:
   agent-insight:
     # 交付方固定此镜像标签；离线交付前先用 docker load 导入对应镜像包。
     image: agent-insight:dev-jh
+    platform: linux/arm64
     pull_policy: never
     restart: unless-stopped
     stop_grace_period: 60s

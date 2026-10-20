@@ -30,7 +30,7 @@ docker buildx build \
 
 本地镜像只用于测试和交付候选版本。正式发布仍使用根目录 `Dockerfile`，并从 npm 安装明确的 `AGENT_INSIGHT_VERSION`。
 
-## 客户分支的离线 Compose 交付
+## 客户分支的离线镜像交付
 
 当前客户分支使用仓库根目录的 `compose.yaml`。交付方基于该分支的实际代码准备与客户服务器架构匹配的镜像，确保导入标签与 Compose 中的 `agent-insight:dev-jh` 一致；不能用默认 npm `latest` 镜像代替尚未发布的分支代码。离线包统一交付为 `agent-insight-image.tar.gz`，与 `compose.yaml` 放在同一目录。Compose 的 `pull_policy: never` 确保启动时只使用已导入的交付镜像。
 
@@ -38,9 +38,9 @@ docker buildx build \
 
 离线包还需包含当前 Qoder Desktop VSIX 和 JetBrains ZIP，放入 standalone 工作目录的 `.next/cache/qoder-plugins/`；同时保留 `integrations/`、`LICENSE` 和采集脚本供包版本校验。包缓存时间须晚于这些源文件，避免启动后的下载接口尝试现场编译或联网下载旧包。交付的 Compose 明确写入 `platform: linux/arm64` 时，只适用于对应架构。
 
-用户首次执行 `docker load -i agent-insight-image.tar.gz`，随后只填写 Compose 的 `AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN` 并执行 `docker compose up -d`。数据库、配置和日志位于 Docker 命名卷 `agent-insight-customer-data`，由镜像中 `/data/agent-insight` 的初始内容和用户权限初始化；不要添加 `nocopy` 或用宿主空目录挂载替代。项目名和卷名固定，避免更换交付目录后意外创建另一套空数据；不适用于直接接管原有 bind mount 部署，迁移已有数据需单独处理。
+用户首次执行 `docker load -i agent-insight-image.tar.gz`。已安装 Compose v2 时，填写 Compose 的 `AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN` 并执行 `docker compose up -d`；未安装 Compose 时，按[客户镜像部署指南](../user-guide/customer-image-deployment.md)执行 `docker run`，通过 `-e` 传入相同的分析地址，无需安装 Compose。两种方式均配置端口映射、自动重启、60 秒停止等待和日志轮转，数据库、配置和日志位于同一个 Docker 命名卷 `agent-insight-customer-data`，由镜像中 `/data/agent-insight` 的初始内容和用户权限初始化；不要添加 `nocopy` 或用宿主空目录挂载替代。固定卷名，避免更换交付目录后意外创建另一套空数据；不要同时启动两个实例使用该卷。不适用于直接接管原有 bind mount 部署，迁移已有数据需单独处理。
 
-Docker entrypoint 对分析地址采用“容器环境显式值优先于运行目录 `.env`”的规则，包括显式空值；未设置容器变量时保留旧 `.env` 部署行为。环境变化需 `docker compose up -d` 重建服务容器，`restart` 不会重新读取 Compose 环境。打包验收应覆盖空卷首次启动、普通用户可写、重建后 Trace 数据保留及修改分析地址后链接变化；当前 Compose 文件本身不代表交付镜像已构建或完成这些验收。
+Docker entrypoint 对分析地址采用“容器环境显式值优先于运行目录 `.env`”的规则，包括显式空值；未设置容器变量时保留旧 `.env` 部署行为。环境变化需重建服务容器：Compose 使用 `docker compose up -d`，`docker run` 部署则停止并移除旧容器后，使用新环境变量及相同命名卷重新创建；仅 `restart` 不会更新环境变量。打包验收应覆盖空卷首次启动、普通用户可写、重建后 Trace 数据保留及修改分析地址后链接变化；当前 Compose 文件或启动命令本身不代表交付镜像已构建或完成这些验收。
 
 ## 前置条件
 
