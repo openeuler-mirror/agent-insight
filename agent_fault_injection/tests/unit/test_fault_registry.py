@@ -36,6 +36,14 @@ class FaultRegistryTests(TestCase):
         self.assertIn("`occurred + unresolved`", content)
         self.assertNotIn("Agent 可以自行验证或恢复", content)
 
+    def test_resolves_reasoning_no_progress_skill(self) -> None:
+        fault = FaultRegistry().get("reasoning-no-progress")
+
+        self.assertEqual(fault.skill_name, "reasoning-no-progress")
+        self.assertTrue(fault.skill_file.is_file())
+        self.assertEqual(fault.skill_file.parent.name, "reasoning-no-progress")
+        self.assertEqual(Path(fault.skill_file).name, "SKILL.md")
+
     def test_resolves_analysis_paralysis_skill(self) -> None:
         fault = FaultRegistry().get("analysis-paralysis")
 
@@ -58,21 +66,13 @@ class FaultRegistryTests(TestCase):
         self.assertEqual(fault.skill_name, "ras-two-condition-test")
         self.assertEqual(
             tuple(path.name for path in fault.tool_files),
-            ("condition_one_test.py", "condition_two_test.py"),
+            ("condition_one_test.py",),
         )
         self.assertTrue(all(path.is_file() for path in fault.tool_files))
         self.assertEqual(
             tuple(path.name for path in fault.agent_tool_files),
             ("condition_one_test.py",),
         )
-        self.assertIsNotNone(fault.authoritative_verifier_command)
-        assert fault.authoritative_verifier_command is not None
-        self.assertEqual(fault.authoritative_verifier_command[0], "python3")
-        self.assertEqual(
-            Path(fault.authoritative_verifier_command[1]).name,
-            "condition_two_test.py",
-        )
-        self.assertEqual(fault.authoritative_verifier_timeout_seconds, 30)
 
     def test_resolves_execution_goal_drift_with_tools(self) -> None:
         fault = FaultRegistry().get("execution-goal-drift")
@@ -80,10 +80,9 @@ class FaultRegistryTests(TestCase):
         self.assertEqual(fault.skill_name, "ras-routing-continuity-test")
         self.assertEqual(
             tuple(path.name for path in fault.tool_files),
-            ("goal_state_tool.py", "verify_goal_recovery.py"),
+            ("goal_state_tool.py",),
         )
         self.assertTrue(all(path.is_file() for path in fault.tool_files))
-        self.assertIsNotNone(fault.authoritative_verifier_command)
 
     def test_unknown_fault_lists_available_names(self) -> None:
         with self.assertRaisesRegex(

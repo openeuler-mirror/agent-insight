@@ -195,6 +195,8 @@ class OpenCodeAdapter(PlatformAdapter):
                 reason = TerminationReason.FAULT_NOT_ACTIVATED
             elif exit_code == 0:
                 reason = TerminationReason.PROCESS_EXITED
+            elif self._was_fault_intercepted(artifacts, capture.session_id):
+                reason = TerminationReason.FAULT_INTERCEPTED
             else:
                 reason = TerminationReason.PLATFORM_ERROR
 
@@ -207,6 +209,47 @@ class OpenCodeAdapter(PlatformAdapter):
         finally:
             if process is not None and process.returncode is None:
                 await self.monitor.stop(process)
+
+    @staticmethod
+    def _was_fault_intercepted(
+        artifacts: RunArtifacts,
+        session_id: str | None,
+    ) -> bool:
+        """Return whether OpenCode reports an abort after fault activation.
+
+        ``run --format json`` emits a structured ``MessageAbortedError`` when
+        RAS successfully stops the active generation. The caller checks fault
+        activation first, so unrelated startup/process failures remain platform
+        errors instead of being promoted to successful interception.
+        """
+
+        try:
+            lines = artifacts.stdout_file.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines()
+        except OSError:
+            return False
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(event, dict) or event.get("type") != "error":
+                continue
+            event_session = str(event.get("sessionID") or "").strip()
+            if session_id and event_session and event_session != session_id:
+                continue
+            error = event.get("error")
+            if not isinstance(error, dict):
+                continue
+            data = error.get("data") if isinstance(error.get("data"), dict) else {}
+            if (
+                error.get("name") == "MessageAbortedError"
+                and data.get("message") == "Aborted"
+            ):
+                return True
+        return False
 
     @staticmethod
     def _is_database_locked_failure(

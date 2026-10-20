@@ -44,6 +44,8 @@ export function buildCasesFromCatalog(
       skillName,
       basePrompt: '',
       submode,
+      hidden: fault.hidden,
+      taskPrompt: fault.taskPrompt,
     })
     const key = faultSubmodeCaseKey(fault.id, submode?.id || null)
     const prev = prevByKey.get(key)

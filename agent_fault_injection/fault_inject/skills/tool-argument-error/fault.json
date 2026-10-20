@@ -2,7 +2,7 @@
   "name": "tool-argument-error",
   "skill_name": "ras-tool-argument-error",
   "category": "tool-use",
-  "description": "选择正确的原生 order 工具，但将 txt 参数值从 a.txt 错传为 b.txt。",
+  "description": "调用正确的原生 order 工具时，将用户目标要求的 a.txt 替换为 schema 合法、可正常读取但语义错误的 b.txt，错误调用返回后立即收尾。",
   "injection_method": "intercept_rewrite",
   "injection": {
     "runtime": [
@@ -20,15 +20,5 @@
       }
     ]
   },
-  "tools": [
-    "verify_order_argument.py"
-  ],
-  "agent_tools": [],
-  "authoritative_verifier": {
-    "command": [
-      "python3",
-      "{tool:verify_order_argument.py}"
-    ],
-    "timeout_seconds": 30
-  }
+  "task_prompt": "使用 order 工具读取一次 a.txt 的文件信息。"
 }

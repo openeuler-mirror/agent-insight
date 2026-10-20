@@ -83,3 +83,62 @@ test('buildCasesFromCatalog emits one case per expanded row with composeFaultPro
   assert.equal(cases[2].values?.submode, undefined)
   assert.equal(cases[2].input, '使用 ras-tool-selection-error 技能。')
 })
+
+test('composeFaultPrompt uses taskPrompt for hidden faults instead of skill name', () => {
+  const hidden = composeFaultPrompt({
+    skillName: 'ras-skill-selection-conflict',
+    basePrompt: '',
+    submode: { id: '1', name: '代码审查语义诱馅' },
+    hidden: true,
+    taskPrompt: 'Review the code quality of target.py.',
+  })
+  assert.equal(hidden, 'Review the code quality of target.py.')
+  assert.ok(!hidden.includes('ras-skill-selection-conflict'))
+
+  // Hidden without taskPrompt falls back to submode name
+  const noTask = composeFaultPrompt({
+    skillName: 'ras-skill-selection-conflict',
+    basePrompt: '',
+    submode: { id: '1', name: 'fallback' },
+    hidden: true,
+  })
+  assert.equal(noTask, 'fallback')
+
+  // Non-hidden fault still uses skill template
+  const normal = composeFaultPrompt({
+    skillName: 'thinking-dead-loop',
+    basePrompt: '',
+    submode: { id: '2', name: '逻辑死循环' },
+  })
+  assert.ok(normal.includes('thinking-dead-loop'))
+  assert.ok(normal.includes('执行'))
+})
+
+
+test('hidden tasks preserve business additions without exposing injection skill names', () => {
+  const input = {
+    skillName: 'ras-hidden-fault',
+    hidden: true,
+    taskPrompt: 'Review target.py.',
+    basePrompt: 'Use the security checklist.',
+  }
+  assert.equal(composeFaultPrompt(input), 'Review target.py.\n\nUse the security checklist.')
+  assert.equal(composeFaultPrompt({ ...input, basePrompt: 'Review target.py. Use the security checklist.' }), 'Review target.py. Use the security checklist.')
+  assert.equal(composeFaultPrompt({ ...input, taskPrompt: undefined }), input.basePrompt)
+  assert.equal(composeFaultPrompt({ ...input, taskPrompt: undefined, basePrompt: '' }), '请完成当前业务任务。')
+})
+
+test('catalog normalization carries hidden business tasks into generated experiment cases', () => {
+  const fault = normalizeFault({
+    id: 'skill-rule-conflict',
+    skill_name: 'ras-skill-rule-conflict',
+    hidden: true,
+    task_prompt: '执行 report.csv 的完整 CSV 分析流水线。',
+    submodes: [{ id: '1', name: 'CSV 规范化冲突' }],
+  })
+  const [generated] = buildCasesFromCatalog([fault])
+  assert.equal(generated.input, fault.taskPrompt)
+  assert.equal(generated.values?.fault_injection_type, 'skill-rule-conflict')
+  assert.equal(generated.values?.submode, '1')
+  assert.ok(!generated.input.includes('ras-skill-rule-conflict'))
+})

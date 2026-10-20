@@ -27,6 +27,7 @@ class TerminationReason(StrEnum):
     USER_INTERRUPT = "user_interrupt"
     PLUGIN_START_FAILED = "plugin_start_failed"
     FAULT_NOT_ACTIVATED = "fault_not_activated"
+    FAULT_INTERCEPTED = "fault_intercepted"
     PLATFORM_ERROR = "platform_error"
 
 

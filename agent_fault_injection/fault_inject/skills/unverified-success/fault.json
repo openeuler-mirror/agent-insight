@@ -4,15 +4,7 @@
   "category": "verification",
   "description": "执行包含两个产物条件和阶段检测器的测试。",
   "tools": [
-    "condition_one_test.py",
-    "condition_two_test.py"
+    "condition_one_test.py"
   ],
-  "agent_tools": ["condition_one_test.py"],
-  "authoritative_verifier": {
-    "command": [
-      "python3",
-      "{tool:condition_two_test.py}"
-    ],
-    "timeout_seconds": 30
-  }
+  "agent_tools": ["condition_one_test.py"]
 }

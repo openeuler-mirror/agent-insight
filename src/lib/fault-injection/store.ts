@@ -76,6 +76,8 @@ export async function createTaskWithRuns(input: {
     skillName?: string
     skill_name?: string
     submodes?: Array<{ id: string; name: string }>
+    hidden?: boolean
+    taskPrompt?: string
   }>
   const byFault = new Map(catalog.map((row) => [String(row.id || row.name || ''), row]))
 
@@ -91,6 +93,8 @@ export async function createTaskWithRuns(input: {
       skillName,
       basePrompt: input.prompt,
       submode: selected,
+      hidden: faultMeta?.hidden,
+      taskPrompt: faultMeta?.taskPrompt,
     })
     const run = await prisma.faultInjectionRun.create({
       data: {

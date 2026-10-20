@@ -76,6 +76,26 @@ class InterruptedOpenCodeAdapter(FakeOpenCodeAdapter):
         )
 
 
+class InterceptedOpenCodeAdapter(FakeOpenCodeAdapter):
+    """Simulate an activated fault stopped by the host during generation."""
+
+    async def execute(self, request, fault, artifacts, store):
+        result = await super().execute(request, fault, artifacts, store)
+        return PlatformRunResult(
+            exit_code=1,
+            termination_reason=TerminationReason.FAULT_INTERCEPTED,
+            session_id=result.session_id,
+            fault_activated=True,
+        )
+
+
+class InterceptedPlatformRegistry:
+    def get(self, name):
+        if name != "opencode":
+            raise AssertionError(name)
+        return InterceptedOpenCodeAdapter()
+
+
 class FakePlatformRegistry:
     def get(self, name):
         if name != "opencode":
@@ -231,6 +251,32 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 manifest["agent_execution_status"],
                 "interrupted",
             )
+
+    async def test_intercepted_fault_completes_collection_with_original_exit_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ExperimentRunner(
+                fault_registry=FaultRegistry(),
+                platform_registry=InterceptedPlatformRegistry(),
+            )
+            result = await runner.run(RunRequest(
+                platform="opencode",
+                agent="build",
+                fault="step-omission",
+                prompt="test",
+                workspace=root,
+                output_dir=root / "artifacts",
+            ))
+            self.assertEqual(result.status, RunStatus.COMPLETED)
+            self.assertEqual(result.exit_code, 0)
+            self.assertEqual(result.termination_reason, TerminationReason.FAULT_INTERCEPTED)
+            manifest = json.loads(result.artifacts.manifest_file.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["exit_code"], 1)
+            self.assertEqual(manifest["termination_reason"], "fault_intercepted")
+            self.assertEqual(manifest["agent_execution_status"], "interrupted")
+            self.assertTrue(result.artifacts.trajectory_file.is_file())
+            collect = json.loads((result.artifacts.root / "collect-result.json").read_text(encoding="utf-8"))
+            self.assertTrue(collect["faultActivated"])
 
     async def test_plugin_start_failed_stays_failed_without_trace(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

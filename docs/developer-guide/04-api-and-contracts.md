@@ -373,3 +373,12 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 `GET /api/experiments/:id` 返回适用实验的 `executionConcurrency`；Case 的 Benchmark 元数据增加 `evaluationWaitCode`，用于区分配额、镜像准备和镜像空间等待。评测服务 `/health` 返回 `maxConcurrency`、`activeCount`。同一个 `runId + requestDigest` 始终幂等，容量满返回可重试 `SERVICE_BUSY`，镜像未就绪返回 `IMAGE_POOL_PREPARING`；镜像仓库临时拉取失败返回可重试的 `IMAGE_POOL_PULL_FAILED`，平台保留待评测任务并重试下发。
 
 镜像预取继续使用已有 `POST /api/v1/evaluations`：`operation=prepare-images` 支持 `revision + windows[]` 全量快照；每个窗口含 `benchmarkKey/evaluatorKey/experimentId/caseIds/cases`，总 Case 数不超过服务并发加 1。预取开关由 Evaluator 的 `/health` 报告给平台；准备消息保留摘要校验和单实验窗口兼容，无需额外令牌。
+
+
+### FI 隐藏任务与主动拦截结果
+
+故障 `fault.json` 可选 `task_prompt`，提供时必须为非空字符串。Python catalog 输出 `taskPrompt` 和 `hidden`，经 `FaultItem`、FI Run 创建与内置可靠性数据集传入 `composeFaultPrompt`；隐藏任务不引用不可见的注入 Skill，缺字段时保留用户业务任务或兼容提示。无新增 API 路由或数据库字段。
+
+FI 的 `TerminationReason.FAULT_INTERCEPTED` 序列化为 `fault_intercepted`。OpenCode 在故障已激活、进程非零退出且当前会话输出结构化 `MessageAbortedError` / `Aborted` 时记录此原因；普通 Provider 错误仍为 `platform_error`。采集成功与故障恢复是不同结论：manifest 保留原退出码和中断状态，Judge 仍依赖真实轨迹评测。
+
+`FaultDefinition` 不再包含 `authoritative_verifier_command` / `authoritative_verifier_timeout_seconds`，内置机械 verifier 和 `compositional-implicit-intent` 场景退役。原注入原语、Worker 路由以及 RAS 的模型调用方式保持原契约。

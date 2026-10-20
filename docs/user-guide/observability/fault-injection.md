@@ -61,6 +61,12 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
 
 创建后任务一律 `queued`，由本机 Worker claim 后执行。任务列表支持行级 **停 / 再跑 / 删**。
 
+隐藏故障使用配方中的 `task_prompt` 自然业务任务，例如审查 `target.py`、读取 `a.txt` 或执行 CSV 分析流水线；不会要求 Agent 调用未暴露的注入 Skill。用户补充的业务要求会与自然任务一起传入。普通可见故障继续按 Skill 和子模式启动。
+
+故障目录新增 `skill-rule-conflict`（CSV 规范化规则冲突）和 `reasoning-no-progress`（真值者双解、汉诺塔约束、路径规划复核三个回环），原 `analysis-paralysis` 保留。`thinking-dead-loop` 三个子模式统一为字符重复死循环、语义重复死循环和逻辑连续崩溃。
+
+旧 `compositional-implicit-intent` 场景和机械 verifier 已移除。判定以服务端 Judge 的真实轨迹证据为准；注入完成不代表故障已恢复。工具参数与 Skill 选择改写只触发第一次匹配调用，内部改写诊断不会作为工具结果暴露给 Agent。
+
 ### 3. 看故障目录（可选）
 
 标题右上角 **故障目录** → `/agent-ras/fault-injection/faults`：按子模式拆行；点「注入方式」可看 Skill 说明。  
@@ -68,7 +74,7 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
 
 ### 4. 查看 Run 与 Judge
 
-进入任务详情，轮询进度。Run 页展示「注入流程」**四节点**与调用树；注入细节只在 **FI Run** 看。Judge 在服务端基于**已落库**轨迹给出结论（含 `inconclusive` 等语义），不以本机上传包直读。
+进入任务详情，轮询进度。Run 页展示「注入流程」**四节点**与调用树；注入细节只在 **FI Run** 看。OpenCode 已激活故障后报告结构化 `MessageAbortedError` 时，采集结果记录 `fault_intercepted`，并保留原进程退出码；它表示生成被中断，不单独证明检测正确或恢复成功。Judge 在服务端基于**已落库**轨迹给出结论（含 `inconclusive` 等语义），不以本机上传包直读。
 
 本机产物目录（排障用；权威数据在平台 DB）：
 
@@ -85,8 +91,8 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
 
 | 平台 | fault | submode |
 |------|-------|---------|
-| opencode | `thinking-dead-loop` | `2`（逻辑死循环） |
-| xiaoo | `thinking-dead-loop` | `2`（逻辑死循环；期望 `faultActivated` + abort + Judge `recovered`） |
+| opencode | `thinking-dead-loop` | `2`（语义重复死循环） |
+| xiaoo | `thinking-dead-loop` | `2`（语义重复死循环；期望 `faultActivated` + abort + Judge `recovered`） |
 | xiaoo | `tool_repeat_dead_loop` | `2`（unknown） |
 
 超时建议 60–180s。本地 CLI 排障也可用（不经 Worker）：
@@ -96,7 +102,7 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
   -m agent_fault_injection.cli run \
   --platform opencode --agent build \
   --fault thinking-dead-loop --submode 2 \
-  --prompt "执行场景2 / case2 / 逻辑死循环" \
+  --prompt "执行场景2 / case2 / 语义重复死循环" \
   --workspace ~/.agent-insight/fault-injection/workspaces \
   --output-dir ~/.agent-insight/fault-injection/artifacts \
   --timeout-seconds 90

@@ -99,7 +99,7 @@ fault_inject/
     SKILL.md          # 必须：剧本 + metadata
     fault.json        # 可选：机械注入
     assets/           # 可选：file.write from_asset
-    scripts/          # 可选：fault.json tools / verifier
+    scripts/          # 可选：fault.json tools / agent_tools
   catalog/
     skill_md.py       # frontmatter 唯一解析
     definition.py     # load/add + FaultRegistry
@@ -198,7 +198,7 @@ metadata:
 
 Skill 文案 + runtime 的混合故障应标 **`skill_inject`**，runtime 放 `injection.runtime[]`（可 `when_submode`）。展示用 method 标签来自 yaml，与真实 ops 可能并存——以 `fault.json` 为准。
 
-可选键：`tools` / `agent_tools`（`scripts/` 下文件名）、`authoritative_verifier`、`expose_skill_to_agent`。未知 op/method 由 `validate_fault_json_ops` / CI 拦住。
+可选键：`tools` / `agent_tools`（`scripts/` 下文件名）、`expose_skill_to_agent`、`task_prompt`。`task_prompt` 提供时必须是非空字符串；隐藏故障（`expose_skill_to_agent: false` 或工具调用改写）通过该字段提供自然业务任务，不向 Agent 暴露注入 Skill。未配置时兼容使用用户任务、子模式名称或通用任务提示。机械 `authoritative_verifier` 不再解析和执行，评判以服务端 Judge 的轨迹证据为准。未知 op/method 由 `validate_fault_json_ops` / CI 拦住。
 
 文件篡改示例（`when_submode` 对应子模式 id）：
 
@@ -252,7 +252,7 @@ Insight engine.ts      spawn Python 拼 JSON 列表；ordered_ids(order, 其余�
 
 ```text
 SKILL.md 装到平台 skills/
-composeFaultPrompt →「使用 <skill>，执行<场景>」
+composeFaultPrompt → 可见故障使用 Skill 提示；隐藏故障使用 task_prompt
 fault.json.steps → Agent 启动前改文件
 fault.json.runtime → AGENT_FI_INJECTION_RUNTIME → plugin/hooker 改写
 collect-result → Insight Judge（轨迹/终答；injectionEvidence 已从协议移除）

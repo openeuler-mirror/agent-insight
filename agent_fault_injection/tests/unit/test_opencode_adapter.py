@@ -444,6 +444,73 @@ class OpenCodeAdapterTests(TestCase):
                 )
             )
 
+    def test_recognizes_structured_opencode_abort_as_fault_interception(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = root / "raw"
+            raw.mkdir()
+            stdout = raw / "stdout.log"
+            stdout.write_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "sessionID": "ses_intercepted",
+                        "error": {
+                            "name": "MessageAbortedError",
+                            "data": {"message": "Aborted"},
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            artifacts = RunArtifacts(
+                run_id="run-intercepted",
+                root=root,
+                raw_dir=raw,
+                resolved_fault_dir=root / "resolved",
+                events_file=raw / "events.jsonl",
+                stdout_file=stdout,
+                stderr_file=raw / "stderr.log",
+                trajectory_file=root / "trajectory",
+                interactions_file=root / "interactions",
+                execution_file=root / "execution.jsonl",
+                manifest_file=root / "manifest",
+                request_file=root / "request",
+                plugin_ready_file=raw / "ready",
+            )
+
+            self.assertTrue(
+                OpenCodeAdapter._was_fault_intercepted(
+                    artifacts,
+                    "ses_intercepted",
+                )
+            )
+            self.assertFalse(
+                OpenCodeAdapter._was_fault_intercepted(
+                    artifacts,
+                    "ses_other",
+                )
+            )
+
+            stdout.write_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "sessionID": "ses_intercepted",
+                        "error": {
+                            "name": "ProviderError",
+                            "data": {"message": "500"},
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(
+                OpenCodeAdapter._was_fault_intercepted(artifacts, "ses_intercepted")
+            )
+
     def test_startup_failure_message_reports_empty_logs_and_plugin_gap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
