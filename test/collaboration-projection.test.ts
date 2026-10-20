@@ -352,3 +352,18 @@ test('failed or oversized groups degrade only their connected traces, including 
         assert.equal(plan.links.length, 2, kind);
     }
 });
+
+
+test('MCTS nested members expose matching parent and direct child references', async () => {
+    const group = { id: 'mcts-navigation', tasks: ['coordinator', 'solver', 'child', 'memory'], parents: [0, 1, 0] };
+    const { projection } = projectionFixture([group]);
+    const plan = await projection.plan('alice');
+    assert.equal(plan.parentAgents?.coordinator, undefined);
+    for (const [child, parent] of [['solver', 'coordinator'], ['child', 'solver'], ['memory', 'coordinator']]) {
+        const ref = plan.parentAgents?.[child];
+        assert.equal(ref?.state === 'resolved' && ref.taskId, parent);
+    }
+    assert.deepEqual(plan.childAgents?.coordinator.map(ref => ref.state === 'resolved' && ref.taskId), ['solver', 'memory']);
+    assert.deepEqual(plan.childAgents?.solver.map(ref => ref.state === 'resolved' && ref.taskId), ['child']);
+    assert.equal(plan.childAgents?.child, undefined);
+});

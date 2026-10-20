@@ -166,9 +166,11 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 从列表点击进入详情，或在导入成功后点击“打开 Trace”，均可用浏览器后退返回原列表，保留原来的筛选条件和页码；浏览器前进可重新打开详情。详情顶部的“返回列表”始终打开当前筛选下的列表，通过分享链接直接进入详情时也可使用。
 
-Goal Plus worker 的概览在 Token 消耗下方显示“父 Agent”，点击 **Trace** 可打开直接父 Agent 的 Trace；浏览器后退可回到 worker。直接打开 worker 链接、从主 Trace 的子 Agent 卡片进入，或在 Trace 抽屉查看时，都支持该入口。在主 Trace 内选中 worker，也会显示其逻辑父 Agent。父卡片只提供名称、框架和导航，不改变 worker 的调用树、耗时或 Token 统计。
+MCTS、Goal Plus 和原生子 Agent 的概览统一展示父子关系卡片。点击“父 Agent”的 **Trace** 返回直接父 Trace，点击“子 Agent”的卡片打开直接子 Trace；中间层同时具有两个方向的入口，可逐层往返。直接打开成员链接、在集合内选择成员，以及从 Trace 抽屉查看，都使用相同的关系逻辑。耗时和 Token 有数据时显示，缺失时显示 `—`；关系卡片不改变调用树和统计。
 
-父绑定或正文尚未到达时显示“等待父 Trace”；详情会开启自动刷新，即使 worker 已结束，也会等待父信息就绪，用户可以手动关闭自动刷新。父关系冲突时显示提示且不提供跳转；查询失败显示暂不可用，worker 正文仍可查看。普通独立 Trace 没有父关系时不显示该区域。
+真实根 Trace 显示“无父 Trace”，叶子显示“无子 Trace”。并列展示的虚拟“协作 Trace”展示“集合成员”，不作为真实父级。没有明确调用位置的关系保留“上报关联”提示。没有独立 Session 的原生 Agent 卡片仍在当前树内选择，不显示独立 Trace 入口。
+
+父级或子级正文尚未到达时显示等待状态；详情会开启自动刷新，即使 Trace 已结束也会等待关系就绪，用户可以手动关闭自动刷新。关系冲突时显示提示且不提供跳转；查询失败显示暂不可用，已有正文仍可查看。跳转加载失败时可以重试或返回列表，浏览器前进、后退继续保留原来的筛选条件。
 
 <p align="center">
   <img src="../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />

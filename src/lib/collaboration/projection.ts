@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { CollaborationService } from './service';
 import { collaborationLog, failureDetails } from './log';
 import type { Anchor } from './resolve';
-import type { ParentAgentReference } from '@/lib/trace/parent-agent';
+import type { ParentAgentReference, ChildAgentReference } from '@/lib/trace/parent-agent';
 
 export interface TraceLink { parent: string; child: string; anchor: Anchor; sequential?: boolean; order?: string; independent?: boolean }
 export interface CollaborationProjectionPlan {
@@ -10,6 +10,7 @@ export interface CollaborationProjectionPlan {
     pendingChildren: string[];
     links: TraceLink[];
     parentAgents?: Record<string, ParentAgentReference>;
+    childAgents?: Record<string, ChildAgentReference[]>;
     unavailable?: boolean;
 }
 
@@ -97,7 +98,7 @@ export class CollaborationProjection {
             const unavailable = new Set<string>();
             const failed = new Set<string>();
             const memberships: Set<string>[] = [];
-            const summaries = new Map<string, { id: string; agentName: string | null; subagentName: string | null; framework: string | null }>();
+            const summaries = new Map<string, { id: string; agentName: string | null; subagentName: string | null; framework: string | null; latency?: number | null; tokens?: number | bigint | null }>();
             for await (const group of this.groups(user)) {
                 const members = new Set<string>();
                 memberships.push(members);
@@ -134,8 +135,8 @@ export class CollaborationProjection {
                     for (const id of new Set(resolvedIds.values())) {
                         if (!sizes.has(id)) {
                             if (sizes.size >= 200) throw new ProjectionLimitError('Trace 投影超过 200 个 Session');
-                            const rows = await this.service.store.sql.rows<{ bytes: number; embedded: string | null; isSubagent: boolean | number; id: string; agentName: string | null; subagentName: string | null; framework: string | null }>(
-                                'SELECT LENGTH(s."interactions") AS bytes, s."langfuseTraceNodes" AS embedded, e."isSubagent", e."id", e."agentName", e."subagentName", e."framework" FROM "Session" s JOIN "Execution" e ON e."taskId"=s."taskId" AND e."user"=s."user" WHERE s."user"=? AND s."taskId"=? LIMIT 2', [user, id]);
+                            const rows = await this.service.store.sql.rows<{ bytes: number; embedded: string | null; isSubagent: boolean | number; id: string; agentName: string | null; subagentName: string | null; framework: string | null; latency?: number | null; tokens?: number | bigint | null }>(
+                                'SELECT LENGTH(s."interactions") AS bytes, s."langfuseTraceNodes" AS embedded, e."isSubagent", e."id", e."agentName", e."subagentName", e."framework", e."latency", e."tokens" FROM "Session" s JOIN "Execution" e ON e."taskId"=s."taskId" AND e."user"=s."user" WHERE s."user"=? AND s."taskId"=? LIMIT 2', [user, id]);
                             sizes.set(id, Number(rows[0]?.bytes ?? 0));
                             ready.set(id, rows.length === 1 && Boolean(rows[0].bytes && rows[0].bytes > 2 && !rows[0].isSubagent && (!rows[0].embedded || rows[0].embedded === '[]')));
                             if (rows.length === 1) summaries.set(id, rows[0]);
@@ -213,21 +214,47 @@ export class CollaborationProjection {
                     ? safeChildren.has(link.child) && !missingParents.has(link.child)
                     : !unavailable.has(link.parent) && !unavailable.has(link.child));
             const parentAgents: Record<string, ParentAgentReference> = Object.create(null);
-            for (const child of claimedGoalPlusChildren) {
-                const declared = declaredLinks.some(link => link.child === child);
-                const relation = resolved.find(link => link.independent && link.child === child);
-                const parent = relation && summaries.get(relation.parent);
-                parentAgents[child] = failed.has(child) ? { state: 'unavailable' } : declared && !safeChildren.has(child) ? { state: 'ambiguous' }
-                    : relation && parent ? { state: 'resolved', taskId: relation.parent, executionId: parent.id,
-                        agentName: parent.agentName || parent.subagentName || parent.framework || 'Agent', framework: parent.framework }
-                    : { state: 'pending' };
+            const childAgents: Record<string, ChildAgentReference[]> = Object.create(null);
+            const declarations = [...strictLinks, ...declaredLinks];
+            const declaredChildren = new Set(declarations.map(link => link.child));
+            const resolvedByChild = new Map(resolved.map(link => [link.child, link]));
+            const reference = (taskId: string, link: TraceLink): ParentAgentReference => {
+                const summary = summaries.get(taskId);
+                if (!summary) return { state: 'pending' };
+                return { state: 'resolved', taskId, executionId: summary.id,
+                    agentName: summary.agentName || summary.subagentName || summary.framework || 'Agent', framework: summary.framework,
+                    ...(link.sequential ? { reported: true } : {}),
+                    ...(summary.latency != null || summary.tokens != null ? { stats: {
+                        ...(summary.latency != null ? { durationMs: Number(summary.latency) } : {}),
+                        ...(summary.tokens != null ? { totalTokens: Number(summary.tokens) } : {}),
+                    } } : {}),
+                };
+            };
+            for (const child of new Set([...claimedGoalPlusChildren, ...declaredChildren, ...failed])) {
+                const declared = declaredChildren.has(child);
+                const relation = resolvedByChild.get(child);
+                parentAgents[child] = failed.has(child) ? { state: 'unavailable' }
+                    : declared && !safeChildren.has(child) ? { state: 'ambiguous' }
+                    : relation ? reference(relation.parent, relation) : { state: 'pending' };
+            }
+            const seenChildren = new Map<string, Set<string>>();
+            for (const link of declarations) {
+                const seen = seenChildren.get(link.parent) ?? new Set<string>();
+                if (seen.has(link.child)) continue;
+                seen.add(link.child); seenChildren.set(link.parent, seen);
+                const candidate = resolvedByChild.get(link.child);
+                const relation = candidate?.parent === link.parent ? candidate : undefined;
+                const child: ChildAgentReference = relation ? reference(link.child, relation)
+                    : { state: failed.has(link.parent) || failed.has(link.child) ? 'unavailable'
+                        : !safeChildren.has(link.child) ? 'ambiguous' : 'pending' };
+                (childAgents[link.parent] ??= []).push(child);
             }
             const hiddenChildren = [...new Set([...claimedGoalPlusChildren, ...resolved.map(link => link.child)])].filter(id => !failed.has(id));
             const mergedChildren = new Set(resolved.filter(link => link.independent).map(link => link.child));
             const pendingChildren = [...claimedGoalPlusChildren].filter(child => !failed.has(child) && !mergedChildren.has(child));
             const reportedRelations = strictLinks.length + independentLinks.length;
             if (reportedRelations || hiddenChildren.length) collaborationLog.info('Trace 合并关系已计算', { user, stage: 'projection', reportedRelations, hiddenChildren: hiddenChildren.length, pendingChildren: pendingChildren.length, mergedChildren: resolved.length, retainedRelations: reportedRelations - resolved.length });
-            return { hiddenChildren, pendingChildren, links: resolved, parentAgents };
+            return { hiddenChildren, pendingChildren, links: resolved, parentAgents, childAgents };
         } catch (error) {
             collaborationLog.warn('Trace 合并查询失败，保留原始列表', { user, stage: 'projection', ...(error instanceof ProjectionLimitError ? { causeCode: 'PROJECTION_LIMIT', reason: error.message } : failureDetails(error)) });
             return { hiddenChildren: [], pendingChildren: [], links: [], unavailable: true };
