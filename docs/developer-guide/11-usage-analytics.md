@@ -1,3 +1,10 @@
+---
+title: "平台用量统计（usage-analytics）"
+description: "说明平台用量统计的事件注册、队列语义、数据流及双数据库实现约束，指导统计能力扩展。"
+keywords: ["Agent Insight", "用量统计", "事件采集", "数据存储"]
+changefreq: monthly
+---
+
 # 平台用量统计（usage-analytics）
 
 管理员专用的功能采用度统计。设计原则一句话：**统计绝不进入业务热路径，绝不改变业务结果，随时可关。**

@@ -1,3 +1,10 @@
+---
+title: "跨 Session 协作 Trace"
+description: "说明跨 Session 协作关系的事件、查询与 Trace 投影机制，以及 Goal Plus 和 MCTS 的接入边界。"
+keywords: ["Agent Insight", "跨会话协作", "Trace 投影", "关系事件"]
+changefreq: monthly
+---
+
 # 跨 Session 协作 Trace
 
 跨 Session 协作层把分散的 Session 关系作为独立覆盖层保存。它与 Execution 原生父子树并存：关系可以先于 Trace 到达，端点关联随新 Execution 重算，但任何结果都不会写回 `parentExecutionId` 或 `rootExecutionId`。

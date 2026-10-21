@@ -1,3 +1,10 @@
+---
+title: "Agent-Insight — 开发者指南"
+description: "提供 Agent Insight 开发者指南的主题导航、实现查找入口与常用术语解释。"
+keywords: ["Agent Insight", "开发者指南", "文档导航", "术语表"]
+changefreq: monthly
+---
+
 # Agent-Insight — 开发者指南
 
 > Agent-Insight（`@witty-ai/skill-insight`）是一个框架无关、自托管的平台，用于**观测**、**评测**和**优化** AI Agent 及其 Skill。

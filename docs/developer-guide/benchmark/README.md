@@ -1,3 +1,10 @@
+---
+title: "Benchmark 文档关系与开发指南"
+description: "梳理 Benchmark 的需求确认、接入开发与服务部署文档，以及各服务之间的职责关系。"
+keywords: ["Agent Insight", "Benchmark", "评测接入", "文档导航"]
+changefreq: monthly
+---
+
 # Benchmark 文档关系与开发指南
 
 这是自定义 Benchmark 开发的客户入口。客户只需描述想评测什么并提供已有材料，AI 负责逐步梳理需求和完成接入设计。

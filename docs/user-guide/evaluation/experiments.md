@@ -1,6 +1,8 @@
 ---
 title: "实验"
 description: "创建和运行实验、选择 Trace 来源并查看实验与 Case 结果"
+keywords: ["Agent Insight", "评测实验", "Trace", "用例分析"]
+changefreq: monthly
 ---
 
 # 实验

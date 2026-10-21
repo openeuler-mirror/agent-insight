@@ -1,6 +1,8 @@
 ---
 title: "评估器"
-description: "评估器管理、创建流程与功能说明"
+description: "介绍评估器的职责、创建流程和维护方法，帮助用户为实验配置合适的评分标准。"
+keywords: ["Agent Insight", "评估器", "评分标准", "实验配置"]
+changefreq: monthly
 ---
 
 # 评估器

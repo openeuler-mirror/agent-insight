@@ -1,3 +1,10 @@
+---
+title: "API & Contracts"
+description: "整理 Agent Insight 的引擎接口、持久化模型、数据契约与扩展点，说明模块间交互约束。"
+keywords: ["Agent Insight", "API 契约", "数据模型", "模块扩展"]
+changefreq: monthly
+---
+
 # API & Contracts
 
 > 引擎从 `lib` 暴露约 380 个函数，从 `server` 暴露约 29 个，外加 14 个 prompt 构建器；代码库声明了约 890 个类型和约 290 个扩展点（接口/抽象类）。本页列出高信噪比的引擎 API、持久化 + 内存数据模型，以及扩展点。仅包含签名与调用关系 —— 不描述行为。所有签名均来自静态分析。

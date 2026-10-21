@@ -1,6 +1,8 @@
 ---
 title: "Docker 测试构建"
 description: "不发布 npm 包，直接用本地 npm pack 产物在服务器上快速验证 Docker 部署。"
+keywords: ["Agent Insight", "Docker", "测试构建", "部署验证"]
+changefreq: monthly
 ---
 
 # Docker 测试构建

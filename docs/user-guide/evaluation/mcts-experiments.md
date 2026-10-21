@@ -1,6 +1,8 @@
 ---
 title: "MCTS 实验用户使用说明书"
 description: "使用 Pi + MCTS 接入 Agent Insight，并创建、执行和查看 SWE-bench 实验"
+keywords: ["Agent Insight", "MCTS", "Pi", "SWE-bench", "评测实验"]
+changefreq: monthly
 ---
 
 # MCTS 实验用户使用说明书

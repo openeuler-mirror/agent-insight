@@ -1,3 +1,10 @@
+---
+title: "Benchmark 整体服务安装指南"
+description: "介绍 Benchmark 数据集、Evaluator 和 Agent 执行客户端的整体部署、互访配置与验收步骤。"
+keywords: ["Agent Insight", "Benchmark", "Evaluator", "服务部署", "环境验收"]
+changefreq: monthly
+---
+
 # Benchmark 整体服务安装指南
 
 本指南只说明安装步骤、执行命令和参数含义。架构与实现细节见 [`docs/design/benchmark/`](../../design/benchmark/README.md)。

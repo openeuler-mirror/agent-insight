@@ -1,3 +1,10 @@
+---
+title: "Benchmark 接入开发规范"
+description: "规定 Benchmark 接入包的目录、数据契约、适配器和验证流程，指导开发者实现可运行的评测集成。"
+keywords: ["Agent Insight", "Benchmark", "接入开发", "数据契约", "评测适配器"]
+changefreq: monthly
+---
+
 # Benchmark 接入开发规范
 
 > 面向 AI 编码 Agent 和 Benchmark 接入开发者。当前协议版本：`agent-task/v1`、`benchmark-evaluation/v1`。
