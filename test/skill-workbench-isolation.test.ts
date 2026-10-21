@@ -37,7 +37,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentService, /evaluationConcurrency:\s*runtime\.evaluationConcurrency/);
   assert.match(experimentService, /triggerConcurrency:\s*runtime\.triggerConcurrency/);
   assert.match(experimentService, /executionSides:\s*input\.preset === 'skill-ab' \? \['a', 'b'\] : \['b'\]/);
-  assert.match(experimentService, /boundSide:\s*input\.preset === 'skill-ab' \? 'a' : 'b'/);
+  assert.match(experimentService, /const boundSide = versionA \? 'a' : 'b'/);
   assert.match(experimentService, /triggerRouting:\s*input\.preset === 'trigger'/);
   assert.match(grayscaleRoute, /configuredExecutionSides/);
   assert.match(grayscaleRoute, /isGrayscaleTaskBindingValid/);

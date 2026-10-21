@@ -590,9 +590,13 @@ export function ExperimentWizard({
   const [triggerDatasetExpanded, setTriggerDatasetExpanded] = useState(false);
   const [triggerDatasetDirty, setTriggerDatasetDirty] = useState(false);
   const [versionAEnabled, setVersionAEnabled] = useState(true);
+  const [versionBEnabled, setVersionBEnabled] = useState(true);
   const [compareVersion, setCompareVersion] = useState<number | null>(() => (
     skillContext?.versions.find((item) => item.version !== skillContext.skillVersion)?.version ?? null
   ));
+  const validAbComparison = !versionBEnabled ? versionAEnabled : compareVersion !== null
+    && Boolean(skillContext?.versions.some((item) => item.version === compareVersion))
+    && (!versionAEnabled || compareVersion !== skillContext?.skillVersion);
 
   const selectedDataset = useMemo(
     () => selectedDatasetDetail?.id === selectedDatasetId
@@ -868,9 +872,10 @@ export function ExperimentWizard({
       if (skillPreset === 'skill-ab') {
         const sourceSkillContext = detail.skillContext && typeof detail.skillContext === 'object'
           ? detail.skillContext as Record<string, unknown> : {};
-        const versionB = Number(sourceSkillContext.versionB);
-        if (skillContext?.versions.some((item) => item.version === versionB)) setCompareVersion(versionB);
+        const versionB = sourceSkillContext.versionB == null ? null : Number(sourceSkillContext.versionB);
+        setCompareVersion(versionB !== null && skillContext?.versions.some((item) => item.version === versionB) ? versionB : null);
         setVersionAEnabled(sourceSnapshot.versionAId !== '__NONE__');
+        setVersionBEnabled(sourceSnapshot.versionBId !== '__NONE__');
       }
       if (restoredDatasetId && wizardDatasets.some((dataset) => dataset.id === restoredDatasetId)) {
         const restoredDataset = await selectWizardDataset(restoredDatasetId, restoredTraceSource);
@@ -1479,7 +1484,7 @@ export function ExperimentWizard({
         Object.entries(evaluatorConfigs).filter(([id]) => selectedEvaluators.has(id)),
       );
       if (skillContext && (skillPreset === 'skill-ab' || traceMode === 'generate')) {
-        if (skillPreset === 'skill-ab' && compareVersion == null) throw new Error('A/B 测试需要另一个 Skill 版本');
+        if (skillPreset === 'skill-ab' && !validAbComparison) throw new Error('请选择有效的 A/B 对比：至少一组使用 Skill，且不能选择相同版本');
         let abDatasetId = selectedDatasetId;
         let abCaseIds = Array.from(selectedGenerated.keys());
         if (skillPreset === 'skill-ab' && traceMode === 'existing') {
@@ -1522,7 +1527,7 @@ export function ExperimentWizard({
             version: skillContext.skillVersion,
             preset: skillPreset,
             datasetId: abDatasetId,
-            ...(skillPreset === 'skill-ab' ? { compareVersion, versionAEnabled } : {}),
+            ...(skillPreset === 'skill-ab' ? { compareVersion: versionBEnabled ? compareVersion : null, versionAEnabled, versionBEnabled } : {}),
             optimizationRecordId: skillContext.optimizationRecordId,
             name,
             agentName,
@@ -1719,7 +1724,7 @@ export function ExperimentWizard({
   );
   const step1Valid = name.trim() !== '' && agentName !== '' && triggerDatasetReady
     && (skillPreset !== 'skill-ab' || eligibleWizardDatasets.some((dataset) => dataset.id === selectedDatasetId))
-    && (skillPreset !== 'skill-ab' || compareVersion !== null)
+    && (skillPreset !== 'skill-ab' || validAbComparison)
     && (expType === 'single' || (groupAValue.trim() !== '' && groupBValue.trim() !== '' && groupAValue.trim() !== groupBValue.trim()));
   // 对比模式：case 由 autoPairGroups 自动产生（POST /api/experiments 内部调），无需手选 trace
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
@@ -2020,18 +2025,31 @@ export function ExperimentWizard({
               {skillContext && skillPreset === 'skill-ab' && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14, marginTop: 14 }}>
                   <div>
-                    <label style={FIELDLBL}>A 组 · 当前工作版本</label>
-                    <select style={{ ...INPUT, cursor: 'pointer' }} value={versionAEnabled ? 'current' : 'none'} onChange={(event) => setVersionAEnabled(event.target.value === 'current')}>
+                    <label style={FIELDLBL}>A 组 · 基线</label>
+                    <select aria-label="A 组基线" style={{ ...INPUT, cursor: 'pointer' }} value={versionAEnabled ? 'current' : 'none'} onChange={(event) => {
+                      const enabled = event.target.value === 'current';
+                      setVersionAEnabled(enabled);
+                      if (enabled && versionBEnabled && compareVersion === skillContext.skillVersion) {
+                        setCompareVersion(skillContext.versions.find((item) => item.version !== skillContext.skillVersion)?.version ?? null);
+                      } else if (!enabled && (!versionBEnabled || compareVersion === null)) {
+                        setVersionBEnabled(true);
+                        setCompareVersion(skillContext.skillVersion);
+                      }
+                    }}>
                       <option value="current">v{skillContext.skillVersion} · 当前工作版本</option>
                       <option value="none">无 Skill</option>
                     </select>
                   </div>
                   <div>
                     <label style={FIELDLBL}>B 组 · 对比版本</label>
-                    <select style={{ ...INPUT, cursor: 'pointer' }} value={compareVersion ?? ''} onChange={(event) => setCompareVersion(Number(event.target.value))}>
-                      <option value="">请选择另一个版本</option>
-                      {skillContext.versions.filter((item) => item.version !== skillContext.skillVersion).map((item) => (
-                        <option key={item.id} value={item.version}>v{item.version}</option>
+                    <select aria-label="B 组对比版本" style={{ ...INPUT, cursor: 'pointer' }} value={versionBEnabled ? compareVersion ?? '' : 'none'} onChange={(event) => {
+                      setVersionBEnabled(event.target.value !== 'none');
+                      setCompareVersion(event.target.value === '' || event.target.value === 'none' ? null : Number(event.target.value));
+                    }}>
+                      <option value="">请选择 Skill 版本</option>
+                      {versionAEnabled && <option value="none">无 Skill</option>}
+                      {skillContext.versions.filter((item) => !versionAEnabled || item.version !== skillContext.skillVersion).map((item) => (
+                        <option key={item.id} value={item.version}>v{item.version}{item.version === skillContext.skillVersion ? ' · 当前工作版本' : ''}</option>
                       ))}
                     </select>
                   </div>
@@ -2107,7 +2125,7 @@ export function ExperimentWizard({
 
               {skillPreset === 'skill-ab' && (
                 <div style={{ padding: '9px 11px', marginBottom: 12, borderRadius: 8, background: 'var(--primary-subtle)', color: 'var(--foreground-secondary)', fontSize: 11.5 }}>
-                  <b style={{ color: 'var(--primary)' }}>Skill 版本对比</b>：相同 Case 将分别使用两个版本生成 Trace，并按任务输入自动配对。
+                  <b style={{ color: 'var(--primary)' }}>Skill 版本对比</b>：相同 Case 将分别按 A、B 两侧的 Skill 配置生成 Trace，并按任务输入自动配对。
                 </div>
               )}
 

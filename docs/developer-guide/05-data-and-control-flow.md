@@ -264,6 +264,8 @@ OpenCode 的 `session.error`、assistant `info.error` 和 prompt 响应中的结
 
 已有 Trace 的用例分析不创建 `GrayscaleTask`。结果页按真实 `ExperimentCase.id` 关联详情 API 的 `cases` 与 `results`，通过 `use-case-results.ts` 派生单项状态和评分，不从空的 `caseStates` 推断“等待执行”。生成 Trace 与 A/B 仍使用原灰度运行投影。用例分析的结果分和轨迹分按已选评估器类别分别聚合，未选维度显示“未评测”，不得回退到 `overall`；仅轨迹类评分的结论限定在轨迹评测范围。已有 Trace 的重评复用 `POST /api/experiments/:id/results/:resultId/retry`，失败时只选失败行，全完成时确认后重评全部已选行；前端防重复提交，底层沿用行级执行锁。详情和删除传真实 Case ID，列表数量取未软删除 Case 数，而不是冻结的初始 Trace ID 数量。
 
+Skill A/B 创建契约使用 `versionAEnabled` / `versionBEnabled`（缺省均为 true）区分无 Skill 与未选择版本；禁用侧冻结为 `version*Id='__NONE__'`、`skillContext.version*=null`、`skillSnapshots.*=null`。A 启用时使用当前工作版本，B 启用时必须指定存在的 `compareVersion`；拒绝两侧均禁用及相同版本。`GrayscaleTask.boundSide` 选择 A（A 启用）或 B（A 禁用），任务 `skillVersion/skillVersionId` 绑定该侧实际版本，而不是固定绑定工作台版本；实验的 `skillVersion` 仍记录工作台上下文。启动时继续严格校验绑定，不放宽不可变约束。同配置复制保留冻结文件及无 Skill 侧，并重建正确的绑定侧；向导复用不得把 null 版本转换成 V0。
+
 Skill 用例分析生成 Trace、A/B 和触发分析创建时将 `workerId/host/platform/agent/model` 冻结到 `configSnapshot.executionTarget` 和灰度配置，同时冻结 A/B 的 `skillSnapshots` 与触发分析的 `triggerSkills` 内容。`traceGenerationTarget` 仅兼容旧展示；客户端模型 ID 不等于服务端 `modelConfigId`。新任务下发到选定客户端，不进入服务端默认模型分支；只评已有 Trace 的用例分析不受影响。
 
 触发分析创建事务同时登记全部 `ExperimentCase`；启动时按数据集绑定复用，补齐旧任务缺失行并排除已删除/取消项，执行循环不再逐条追加。无 Trace 尝试的行显示等待执行，单条输入或瞬时运行错误不熔断整批，只有 `MODEL_UNAVAILABLE/MODEL_MISMATCH/CLIENT_MISMATCH` 阻止后续派发。
