@@ -83,7 +83,7 @@ test('Evaluator deployment produces a validated snapshot with host paths and no 
   const runtime = path.join(f.root, 'packages', 'project-config')
   fs.cpSync(path.resolve('packages/project-config'), runtime, { recursive: true })
   f.write('evaluator.local.yaml', { maxConcurrency: 4, imagePool: { macDiskPath: '../probe' }, benchmarks: { 'swe-bench': { docker: { requestTimeoutSeconds: 99 } } } })
-  const cli = spawnSync(process.execPath, [path.join(runtime, 'index.cjs'), 'evaluator', f.configDir, '/host/project/config/benchmark', '--deployment'], { encoding: 'utf8', env: {} })
+  const cli = spawnSync(process.execPath, [path.join(runtime, 'index.cjs'), 'evaluator', f.configDir, '/host/project/config/benchmark', '--deployment'], { encoding: 'utf8', env: { NODE_ENV: 'test' } })
   assert.equal(cli.status, 0, cli.stderr)
   const lines = cli.stdout.trim().split('\n')
   assert.equal(lines[1], 'true')
@@ -128,7 +128,7 @@ test('installed client runtime loads its own executor configuration and retains 
     const result = policy.resolve({repository:'https://github.com/pallets/flask.git'});
     if(result.remotes[0].url!=='https://git.example.com/pallets/flask.git') process.exit(1);
   `
-  const env = { ...process.env, AGENT_INSIGHT_HOME: clientHome }
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: clientHome }
   delete env.AGENT_INSIGHT_CONFIG_DIR
   delete env.AGENT_INSIGHT_PACKAGE_ROOT
   const child = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8', env })
@@ -147,7 +147,7 @@ test('custom configuration directory directly contains scoped files without an e
 
 test('client upgrade migrates legacy local Git paths without overriding a newer local file', (t) => {
   const f = fixture(t)
-  const env = { ...process.env, AGENT_INSIGHT_HOME: path.join(f.root, 'home') }
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: path.join(f.root, 'home') }
   delete env.AGENT_INSIGHT_CONFIG_DIR
   delete env.AGENT_INSIGHT_PACKAGE_ROOT
   const child = spawnSync(process.execPath, ['-e', `

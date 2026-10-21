@@ -201,3 +201,26 @@ test('cancelled and denied tool calls are not shown as successful', () => {
     assert.match(eventDetailMarkup('interrupted', 'partial result'), /执行已中断/);
     assert.match(eventDetailMarkup('denied', 'Permission denied'), /调用被拒绝/);
 });
+
+test('opening the current Trace from a nested Agent resets to the root and still delegates standalone navigation', () => {
+    const opened: string[] = [];
+    let selected = 'a:worker', tab = 'timeline';
+    let expanded = new Set(['worker']);
+    const defaults = new Set(['root']);
+    const navigate = variable<(id: string) => void>('navigateToAgentTrace', {
+        useCallback: (callback: unknown) => callback,
+        rootSessionId: 'parent-task', tree: { id: 'virtual' }, nodeMap: new Map([['root', { id: 'root', sessionId: 'parent-task' }]]), defaultExpandedKeys: defaults,
+        setSelectedKey: (key: string) => { selected = key; },
+        setExpandedKeys: (keys: Set<string>) => { expanded = keys; },
+        setActiveDetailTab: (value: string) => { tab = value; },
+        agentKey: (id: string) => `a:${id}`,
+        onSubagentNavigate: (id: string) => { opened.push(id); },
+    });
+    navigate('parent-task');
+    assert.equal(selected, 'a:root');
+    assert.equal(tab, 'overview');
+    assert.equal(expanded, defaults);
+    assert.deepEqual(opened, ['parent-task']);
+    navigate('child-task');
+    assert.deepEqual(opened, ['parent-task', 'child-task']);
+});

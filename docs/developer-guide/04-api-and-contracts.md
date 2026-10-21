@@ -164,6 +164,8 @@
 - **Contract types**: `FrameworkAdapter`、`FrameworkDescriptor`（`src/lib/ingest/adapters/types.ts`）。
 - **Current responsibilities**: 框架名别名解析（`claudecode` → `claude`）、框架 skill 抽取分发、Claude 入库前 interactions 归一化。Langfuse-Langgraph 的 OTel adapter 负责 span→`ExecutionRecord` 转换；对应 `FrameworkAdapter` 声明 `skills/subagentTree`，并让归一化后的 `skill` tool call 进入 `ExecutionSkill` / `invokedSkills` 的统一解析路径。adapter 是纯转换层，不访问 DB/网络；入库仍由 `saveExecutionRecord` 负责。
 
+- **Skill ownership**: `computeOwnSkills` 兼容扁平消息和 `{requestMessages, responseMessage}` 交互；带 `role` 的原始消息所附 `requestMessages` 只是 LLM 输入快照，不作为新增调用展开。提取保留消息的 Agent 归属，并按 adapter 的 `capabilities.skillScope='agent-tree'` 重建当前 Agent 的调用树，只绑定根节点本层显式调用的 Skill，保留调用版本；LlamaIndex、Qoder 及其框架别名遵守同一规则，子 Agent 的 Skill 不向父 Agent 冒泡。Codex 保留既有树作用域，QwenPaw 保留专用 Skill span 提取与子 Agent 过滤。
+
 ### `getDatabaseAdapter(): DatabaseAdapter`  {#get-database-adapter}
 - **Location**: `src/lib/storage/db-interface.ts`
 - **Contract**: `DatabaseAdapter`（抽象存储接口）；`OpenGaussAdapter.query(text, params?)` 是具体的 OpenGauss/PostgreSQL 实现（调用最频繁的存储方法，约 32 处入向调用）。默认后端为 Prisma+SQLite。

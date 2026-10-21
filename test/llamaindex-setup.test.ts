@@ -19,6 +19,7 @@ import {
   GET as getCollectorArchive,
 } from '@/app/api/ingest/setup/llamaindex-collector/route';
 import { collectorArchive } from '@/app/api/ingest/setup/llamaindex-collector/archive';
+import { FRAMEWORK_OPTIONS } from '@/lib/ingest/setup/install-profile';
 
 const routes = [
   {
@@ -104,8 +105,11 @@ test('Windows setup offers the same LlamaIndex installation path', async () => {
 
 test('install guide exposes LlamaIndex through the shared one-line installer', () => {
   const page = readFileSync('src/app/(main)/accessconfig/install/page.tsx', 'utf8');
-  assert.match(page, /value: 'llamaindex', label: 'LlamaIndex'/);
-  assert.match(page, /value: 'llamaindex'/);
+  assert.deepEqual(FRAMEWORK_OPTIONS.find(option => option.value === 'llamaindex'), {
+    value: 'llamaindex', label: 'LlamaIndex',
+  });
+  assert.match(page, /ingest\/setup\/install-profile/);
+  assert.match(page, /options=\{FRAMEWORK_OPTIONS\}/);
   assert.match(page, /getApiUrl\('\/api\/ingest\/setup'\)/);
   assert.match(page, /frameworks=\$\{frameworks\.join\(','\)\}/);
   assert.match(page, /frameworks\.includes\('llamaindex'\) \? 'llamaindexPromptPython=1' : ''/);
@@ -114,8 +118,8 @@ test('install guide exposes LlamaIndex through the shared one-line installer', (
   assert.doesNotMatch(page, /LlamaIndex Python environment/);
   assert.match(page, /curl -sSf/);
   assert.match(page, /\| bash/);
-  assert.match(page, /irm/);
-  assert.match(page, /\| iex/);
+  assert.match(page, /Invoke-Expression \(Invoke-RestMethod -Uri/);
+  assert.match(page, /-Headers @\{'x-platform'='windows'\}/);
   assert.doesNotMatch(page, /api\/ingest\/setup\/llamaindex-collector/);
   assert.doesNotMatch(page, /zipfile -e/);
   assert.doesNotMatch(page, /python -m pip/);

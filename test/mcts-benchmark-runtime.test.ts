@@ -85,7 +85,7 @@ test('MCTS client keeps JSON and collector defaults when .env is missing or empt
 })
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-mcts-'))
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'insight-mcts-')))
   const repoDir = path.join(root, 'MCTS')
   const workspace = path.join(root, 'workspace')
   const launcherDir = path.join(root, 'collector')
@@ -115,6 +115,10 @@ function fixture() {
     fs.writeFileSync(file, `#!/bin/sh\n${body}\n`)
     fs.chmodSync(file, 0o755)
   }
+  // Host checks for a newly created executable must finish before exercising runtime deadlines.
+  const startup = spawnSync(path.join(repoDir, '.venv', 'bin', 'python'), [], { encoding: 'utf8', timeout: 15_000 })
+  assert.equal(startup.status, 0, startup.error?.message || startup.stderr)
+  assert.equal(startup.stdout.trim(), '3.11')
   const priorPath = process.env.PATH
   process.env.PATH = `${binDir}:${priorPath || ''}`
   git(workspace, 'init', '-q')

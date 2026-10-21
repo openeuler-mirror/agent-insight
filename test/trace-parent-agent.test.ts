@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { buildCollaborationTraceTree } from '@/lib/collaboration/display-tree';
-import { selectedParentAgent, type ParentAgentReference } from '@/lib/trace/parent-agent';
+import { selectedParentAgent, selectedChildAgents, traceRelationsPending, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from '@/components/observe/ParentAgentCard';
 import { walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 
@@ -43,7 +43,7 @@ test('standalone worker shows external parent and waiting/conflict states withou
         assert.equal(html.includes('<button'), parent.state === 'resolved');
     }
     assert.equal(root.children.length, 0);
-    assert.equal(renderToStaticMarkup(createElement(ParentAgentCard, { parent: null, locale: 'zh' })), '');
+    assert.match(renderToStaticMarkup(createElement(ParentAgentCard, { parent: null, locale: 'zh' })), /无父 Trace/);
 });
 
 test('Goal Plus parent references and Session API recover late data, reject conflicts and isolate owners', async t => {
@@ -95,7 +95,7 @@ test('Goal Plus parent references and Session API recover late data, reject conf
     await trace('main__task7', 'alice', false);
     assert.deepEqual((await projection.plan('alice')).parentAgents?.worker, { state: 'pending' });
     await client.session.create({ data: { taskId: 'main__task7', user: 'alice', query: 'main', interactions: JSON.stringify([interaction('Pi')]) } });
-    const expected = { state: 'resolved', taskId: 'main__task7', executionId: 'main__task7', agentName: 'Pi', framework: 'pi-agent' };
+    const expected = { state: 'resolved', taskId: 'main__task7', executionId: 'main__task7', agentName: 'Pi', framework: 'pi-agent', reported: true };
     for (const view of ['structure', 'full']) {
         const payload = await (await request('worker', view)).json();
         assert.deepEqual(payload.parentAgent, expected);
@@ -105,6 +105,9 @@ test('Goal Plus parent references and Session API recover late data, reject conf
     assert.deepEqual((await projection.plan('alice')).parentAgents?.worker, expected);
     const mainPayload = await (await request('main__task7')).json();
     assert.equal(mainPayload.parentAgent, null);
+    assert.equal(mainPayload.traceRelations.main__task7.children[0].taskId, 'worker');
+    assert.equal(mainPayload.traceRelations.worker.parent.taskId, 'main__task7');
+    assert.deepEqual(mainPayload.traceRelations.worker.children, []);
     assert.ok(mainPayload.interactions.some((item: { _collaboration?: { taskId: string } }) => item._collaboration?.taskId === 'worker'));
     const spy = t.mock.method(projection, 'plan');
     await request('worker');
@@ -117,7 +120,12 @@ test('Goal Plus parent references and Session API recover late data, reject conf
     await trace('grandchild');
     await connect('b', 'worker', 'grandchild');
     assert.equal((await (await request('grandchild')).json()).parentAgent.taskId, 'worker');
-    assert.equal((await (await request('worker')).json()).parentAgent.taskId, 'main__task7');
+    const middle = await (await request('worker')).json();
+    assert.equal(middle.parentAgent.taskId, 'main__task7');
+    assert.equal(middle.traceRelations.worker.children[0].taskId, 'grandchild');
+    assert.deepEqual(Object.keys(middle.traceRelations).sort(), ['grandchild', 'worker']);
+    const raw = await GET(new Request('http://localhost/api/observe/session?taskId=worker&source=raw', { headers: { 'x-witty-api-key': 'parent-test-alice' } }));
+    assert.equal((await raw.json()).traceRelations, undefined);
 
     await bind(group('c'), 'main', 'other-parent');
     await bind(group('c'), 'worker:one', 'worker');
@@ -140,9 +148,70 @@ test('Goal Plus parent references and Session API recover late data, reject conf
     const isolated = (await projection.plan('alice')).parentAgents?.['isolated-child'];
     assert.deepEqual(isolated, { state: 'pending' });
     assert.ok(!JSON.stringify(isolated).includes('private-parent'));
+    await trace('native-parent');
+    await trace('native-child');
+    await client.execution.update({ where: { id: 'native-child' }, data: { isSubagent: true, parentExecutionId: 'native-parent' } });
+    const nativeChild = await (await request('native-child')).json();
+    assert.equal(nativeChild.parentAgent.taskId, 'native-parent');
+    assert.deepEqual(nativeChild.traceRelations['native-child'].children, []);
+    const nativeParent = await (await request('native-parent')).json();
+    assert.equal(nativeParent.traceRelations['native-parent'].children[0].taskId, 'native-child');
+    await trace('native-late', 'alice', false);
+    await client.execution.update({ where: { id: 'native-late' }, data: { isSubagent: true, parentExecutionId: 'native-parent' } });
+    const waitingNative = await (await request('native-parent')).json();
+    assert.ok(waitingNative.traceRelations['native-parent'].children.some((child: ParentAgentReference) => child.state === 'pending'));
+    await client.session.create({ data: { taskId: 'native-late', user: 'alice', interactions: JSON.stringify([interaction('late')]) } });
+    const readyNative = await (await request('native-parent')).json();
+    assert.ok(readyNative.traceRelations['native-parent'].children.some((child: ParentAgentReference) => child.state === 'resolved' && child.taskId === 'native-late'));
+    await client.execution.update({ where: { id: 'native-parent' }, data: { user: 'bob' } });
+    assert.deepEqual((await (await request('native-child')).json()).parentAgent, { state: 'pending' });
+
+    await trace('mcts-root');
+    await trace('mcts-child');
+    await service.store.saveEvent('alice', { collaborationId: 'mcts.api-navigation', eventId: 'spawn',
+        fromSessionId: 'mcts-root', toSessionId: 'mcts-child', description: 'MCTS child' });
+    const mctsChild = await (await request('mcts-child')).json();
+    assert.equal(mctsChild.parentAgent.taskId, 'mcts-root');
+    const mctsRoot = await (await request('mcts-root')).json();
+    assert.equal(mctsRoot.traceRelations['mcts-root'].children[0].taskId, 'mcts-child');
+    assert.equal(mctsRoot.traceRelations['mcts-child'].parent.taskId, 'mcts-root');
+
     const failed = t.mock.method(service.store, 'snapshot', async () => { throw new Error('test database unavailable'); });
     const unavailable = await (await request('worker')).json();
     assert.deepEqual(unavailable.parentAgent, { state: 'unavailable' });
     assert.ok(unavailable.interactions.length > 0);
     failed.mock.restore();
+});
+
+
+test('direct children follow logical relations in both anchored and parallel collections without synthetic parents', () => {
+    for (const sequential of [false, true]) {
+        const items = ['A', 'B', 'C'].map((id, index) => ({ ...interaction(id), _collaboration: {
+            taskId: id, index: 0, version: 'v1', parent: index ? ['A', 'B'][index - 1] : undefined, sequential,
+        } }));
+        const root = buildCollaborationTraceTree(items)!;
+        const nodes = new Map<string, AgentNode>();
+        walkTree(root, node => { nodes.set(node.id, node); });
+        const before = JSON.stringify(root);
+        for (const [parent, child] of [['A', 'B'], ['B', 'C'], ['C', null]]) {
+            const node = [...nodes.values()].find(node => node.sessionId === parent)!;
+            const children = selectedChildAgents(node, root, nodes, items, 'A');
+            assert.deepEqual(children.map(ref => ref.state === 'resolved' ? ref.taskId : ref.state), child ? [child] : []);
+        }
+        if (sequential) {
+            assert.equal(selectedParentAgent(root, root, nodes, items, 'A', { state: 'resolved', taskId: 'external', agentName: 'External' }), null);
+            assert.equal(selectedChildAgents(root, root, nodes, items, 'A').length, 3);
+        }
+        assert.equal(JSON.stringify(root), before);
+    }
+});
+
+test('pending children remain visible without fabricated links and keep completed collections refreshing', () => {
+    const items = [interaction('main')];
+    const root = buildCollaborationTraceTree(items)!;
+    const relations = { main: { parent: null, children: [{ state: 'pending' as const }] } };
+    assert.deepEqual(selectedChildAgents(root, root, new Map([[root.id, root]]), items, 'main', relations), [{ state: 'pending' }]);
+    assert.equal(traceRelationsPending({ traceRelations: relations }), true);
+    assert.equal(traceRelationsPending({ traceRelations: { main: { parent: null, children: [] } } }), false);
+    assert.equal(traceRelationsPending({ traceRelations: { main: { parent: null, children: [{ state: 'ambiguous' }] } } }), false);
 });

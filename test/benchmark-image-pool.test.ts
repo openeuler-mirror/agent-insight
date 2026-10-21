@@ -555,7 +555,9 @@ test('low Mac host space blocks pulls even if the VM has plenty of free space', 
   assert.equal(store.pulls.length, 0)
 })
 
-test('containerd estimates remain labelled and deletion cannot spend space not actually reclaimed', async (t) => {
+test('containerd estimates remain labelled and deletion cannot spend space not actually reclaimed', { timeout: 5000 }, async (t) => {
+  // Disk writes must not race the admission deadline in this capacity-accounting test.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   const { pool, store } = await fixture(t, { waitMs: 25 })
   ;(store as any).containerd = true
   const image = await cache(pool, 'containerd')

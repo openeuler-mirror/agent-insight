@@ -12,6 +12,7 @@ import { getAdapter } from "@/lib/ingest/adapters/registry"
 import { aggregateOtelTraceEvents } from "@/lib/ingest/otel/aggregate"
 import { getOtelTraceAdapter, listOtelTraceAdapters } from "@/lib/ingest/otel/adapter-registry"
 import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
+import type { OtelTraceEvent } from "@/lib/ingest/otel/types"
 import { normalizeInteractions } from "@/lib/shared/interaction-utils"
 import {
   buildQoderOtlpPayload,
@@ -63,11 +64,12 @@ test("Qoder adapter does not claim QwenPaw OTLP telemetry", () => {
     serviceName: "qwenpaw",
     startTimeMs: 1_700_000_000_000,
     latencyMs: 10,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     attributes: {
       "agent.insight.framework": "qwenpaw",
       "qwenpaw.session_id": "qwenpaw-session",
     },
-  } as OtelTraceEvent])
+  } satisfies OtelTraceEvent])
 
   assert.equal(adapter?.id, "qwenpaw")
 })
@@ -2969,7 +2971,9 @@ test("AC30 uninstall stops CLI, Desktop, JetBrains, and Work uploader processes"
     const desktopRemoved = uninstallQoderCollector({ homeDir: root, insightDir, product: "desktop", owner: "desktop", purge: true })
     assert.ok(desktopRemoved.stoppedUploaderPids.includes(Number(desktop.uploaderPid)))
     assert.ok(desktopRemoved.stoppedUploaderPids.includes(Number(oneShotPid)))
+    await waitForCondition(() => !testProcessIsAlive(desktop.uploaderPid))
     assert.equal(testProcessIsAlive(desktop.uploaderPid), false)
+    await waitForCondition(() => !testProcessIsAlive(oneShotPid))
     assert.equal(testProcessIsAlive(oneShotPid), false)
     assert.equal(testProcessIsAlive(cli.uploaderPid), true)
     assert.equal(testProcessIsAlive(jetbrains.uploaderPid), true)
@@ -2977,17 +2981,20 @@ test("AC30 uninstall stops CLI, Desktop, JetBrains, and Work uploader processes"
 
     const jetbrainsRemoved = uninstallQoderCollector({ homeDir: root, insightDir, product: "jetbrains", owner: "jetbrains", purge: true })
     assert.ok(jetbrainsRemoved.stoppedUploaderPids.includes(Number(jetbrains.uploaderPid)))
+    await waitForCondition(() => !testProcessIsAlive(jetbrains.uploaderPid))
     assert.equal(testProcessIsAlive(jetbrains.uploaderPid), false)
     assert.equal(testProcessIsAlive(cli.uploaderPid), true)
     assert.equal(testProcessIsAlive(work.uploaderPid), true)
 
     const cliRemoved = uninstallQoderCollector({ homeDir: root, insightDir, product: "cli", owner: "cli", purge: true })
     assert.ok(cliRemoved.stoppedUploaderPids.includes(Number(cli.uploaderPid)))
+    await waitForCondition(() => !testProcessIsAlive(cli.uploaderPid))
     assert.equal(testProcessIsAlive(cli.uploaderPid), false)
     assert.equal(testProcessIsAlive(work.uploaderPid), true)
 
     const workRemoved = uninstallQoderWorkCollector({ homeDir: root, insightDir, qoderWorkHome: workHome, purge: true })
     assert.ok(workRemoved.stoppedUploaderPids.includes(Number(work.uploaderPid)))
+    await waitForCondition(() => !testProcessIsAlive(work.uploaderPid))
     assert.equal(testProcessIsAlive(work.uploaderPid), false)
   } finally {
     for (const pid of [...startedPids, Number(oneShotPid)].filter((value) => Number.isInteger(value) && value > 0)) {
