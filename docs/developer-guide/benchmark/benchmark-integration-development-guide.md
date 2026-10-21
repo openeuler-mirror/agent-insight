@@ -746,7 +746,7 @@ SWE-bench 是当前完整参考实例：
 
 参考它的目录和生命周期，不要复制它的 `model.patch`、Resolved、FAIL_TO_PASS、镜像或 Evidence 业务语义。新的 Benchmark 必须使用自己的实例代码表达这些差异。
 
-客户侧的自然语言协作方式见[《自定义 Benchmark 接入指南》](./custom-benchmark-onboarding-guide.md)，三份文档的使用顺序见[《Benchmark 文档关系与开发指南》](./README.md)。
+客户侧的自然语言协作方式见[《自定义 Benchmark 接入指南》](./custom-benchmark-onboarding-guide.md)，各指南的使用顺序见[《Benchmark 文档关系与开发指南》](./README.md)。
 
 ### ZSoft 接入前的本机验证
 
@@ -798,7 +798,7 @@ MCTS 输出 `platform-export.json`（`mcts-poc-export/v1`），包含 `taskId`�
 
 ZSoft 的 MCTS 目标需额外就绪能力 `mcts-zsoft-export/v1`。公共依赖不含 SWE 的 `datasets` 和启动脚本；SWE 另行检查这些依赖，新客户端声明 `mcts-swe-bench/v1` 时该能力必须就绪，未声明的旧客户端沿用原规则。上传、取消、工作区清理和恢复继续复用通用执行器状态机；上传失败前先持久化产物，恢复上传不会重跑搜索。MCTS 输出及 Trace 位于外部 MCTS 仓库的运行输出目录，沿用现有 MCTS 的保留策略，公开工作区由通用清理器移除。
 
-执行链路目前以合成数据、伪插件和伪运行器验证。此前 userspace Case 镜像已在 119 构建发布；本轮内核适配没有执行内核编译、ZSoft 官方验证、实际 PoC 或真实判题。
+合成数据、伪插件和伪运行器测试只能验证契约；真实判题需按 [ZSoft 部署验收](zsoft-deployment-guide.md#5-部署验收) 执行并保留部署环境的验收记录。
 
 ### ZSoft 公有镜像与冻结资产
 
@@ -806,10 +806,36 @@ ZSoft 接入包声明 `imageProvider: ./images.cjs`。Adapter 的 `imagePreparat
 
 `zsoft-assets/v1` 新增可选 `tasks[taskId].registryImages`，键与 `images` 完全一致，值为公有仓库的固定 `repo@sha256`；该字段参与 task/bundle 摘要。原 `images` 保存 Docker config Image ID。公共镜像池冻结 `preparedImages`，Python 入口核对题目 key 与实际 Image ID，Compose 代理使用固定 ID 和 `pull_policy=never`。未配置 `registryImages` 的当前清单要求本地已装镜像；缺少 `sourceTaskDigest` 的旧清单不再支持。平台题目身份与评测机私有资产构建摘要分别管理，Evaluator 不连接平台数据库。
 
-Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构建端可使用 `--image-prefix`，Controller 配置 `EVALUATOR_RUNTIME_IMAGE_PREFIX`；显式 `--push` 才上传。ZSoft 默认复用本地 Runtime，缺失时尝试 pull，失败后自动 build，仍核对 Catalog artifact 标签。本部署方案将 Case 镜像和完整冻结资产镜像上传公有 SWR；Controller 启动后自动安装资产，自动构建 Runtime 不会重新构建题目环境。镜像池保持公有匿名 Docker API 拉取，不读取宿主 `docker login` 凭据。完整环境准备、发布和安装命令见 [ZSoft 部署指南](zsoft-deployment-guide.md#zsoft-镜像准备与公有-swr-部署)。
+Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构建端可使用 `--image-prefix`，Controller 配置 `EVALUATOR_RUNTIME_IMAGE_PREFIX`；显式 `--push` 才上传。ZSoft 默认复用本地 Runtime，缺失时尝试 pull，失败后自动 build，仍核对 Catalog artifact 标签。本部署方案将 Case 镜像和完整冻结资产镜像上传公有 SWR；Controller 启动后自动安装资产，自动构建 Runtime 不会重新构建题目环境。镜像池保持公有匿名 Docker API 拉取，不读取宿主 `docker login` 凭据。构建与发布流程见 [ZSoft 评测资产发布指南](../zsoft-assets-release.md)，评测机安装见 [ZSoft 部署指南](zsoft-deployment-guide.md#4-评测端准备)。
 
 内核题复用同一个 ZSoft Evaluator Runtime、任务协议和结果归一化。接入包将 `runner_image` 交给通用镜像池；`.task-state/<task-id>/{vuln,fix}/artifacts/` 中的 `bzImage`、metadata 和模块作为独立的冻结文件资产，按流式 SHA-256 校验，不作为 Docker 引用。资产打包支持合并同官方 revision、同框架摘要的冻结快照，评测机始终不访问数据库。
 
 ZSoft 平台配置为 `benchmarks.zsoft-l1.dataset.{autoImport,source,revision}`，`autoImport` 默认 `true`，其余默认 `null` 使用接入包固定的官方来源与版本。`start.sh` 在数据库同步后顺序调用 SWE-bench 和 ZSoft 的 bootstrap；共用日志与非阻塞失败处理，分别按 YAML 开关跳过或调用准备入口。ZSoft 调用 `ensure-dataset.ts --benchmark zsoft-l1`，先复用已安装数据集；失败只警告，日志为 `<AGENT_INSIGHT_HOME>/logs/zsoft-l1-bootstrap.log`，下次启动重试。这里的非阻塞失败指不阻止后续启动，准备本身仍同步等待。关闭开关不影响管理员手动调用或显式刷新。评测配置为 `benchmarks.zsoft-l1.assetsDir`（默认 `null`）和 `kernelAccel`（默认 `tcg`，可选 `kvm`）；旧四个 ZSoft 业务变量仅提示迁移、不再生效。Controller 向 Runtime 传递校验后的 `AGENT_INSIGHT_EVALUATOR_CONFIG_JSON` 快照，Python 从该快照读取加速模式，不直接解析 YAML 或读取旧用户变量。MCTS 的 `ZSOFT_TASKS_DIR` 不属于平台业务配置，保持原契约。
 
 平台 Judge 所在 Runtime 不挂 KVM 设备，官方 Judge 的配置阶段仍通过内部环境注入 TCG；受控 Compose 代理向实际 runner 设置 YAML 选定的 `KERNEL_ACCEL`，KVM 模式只开放 `/dev/kvm:rw`。实际评测在已准备的 runner 镜像中检查宿主机 KVM API，失败返回基础设施错误。资源预算按两服务分摊，并在启动前校验每版内核声明的 CPU、内存及 512 MiB 额外内存；提交编译失败保持 `submission_invalid`，超时、取消和容器/网络清理复用已有路径。doctor 校验资产、轨道和加速配置，不在冷缓存时拉镜像或启动 QEMU；KVM 可用性在实际评测前检查。
+
+### MCTS Runtime 接入实现
+
+部署操作见 [MCTS xGovernor 接入](../../user-guide/observability/mcts-xgovernor.md#用于平台-benchmark-实验)，Benchmark 环境分别见 [SWE-bench](swe-bench-deployment-guide.md) 与 [ZSoft](zsoft-deployment-guide.md)。
+
+实验候选接口会独立合并已就绪的 Benchmark 执行目标，因此仅声明 `runBenchmarkCase` 的 `pi-mcts` 可直接出现在 Agent 列表；它不依赖普通执行能力或历史 Trace。同一客户端、平台和 Agent 的目标合并后保留各自的执行能力标记。
+
+`services/executor/src/mcts-config.cjs` 统一实现路径解析、Python 检查、连接读取和配置持久化，同时进入客户端 tar 包与 MCTS 采集器 zip 包。读取连接时在独立 Bash 子进程加载 `testcases_union/config.env`，仅提取 URL，丢弃其 stdout/stderr；检查 HTTP(S) URL，再进行 TCP/TLS 连接预检。连接预检不执行付费任务，也不代表模型/E2B 全链路验证。
+
+MCTS 安装器将本次版本的上传模块放入采集器目录内的 `shared/`，运行时优先读取此副本，保留旧版 `../shared/` 的兼容读取。升级不覆盖其他采集器已有的共享模块，避免版本差异阻止重复安装。
+
+MCTS 安装器只检查公共仓库文件和 Python 版本。客户端按 Benchmark 分别探测：SWE-bench 检查 `run_union.sh` 及 `importlib.util.find_spec("datasets")`，不导入 `datasets`；ZSoft 检查公共运行前提和专用插件契约，不检查 SWE 依赖。Python 和接口子进程各有 5 秒上限，超时、无法启动、缺包、异常退出与版本不足分别返回原因。`agent-runtime/pi-mcts/v1` 与搜索参数能力在任一 Benchmark 就绪时可用；新客户端额外上报 `mcts-swe-bench/v1`，SWE 目标需该组件就绪，旧客户端未声明该组件时保留原兼容规则。实际运行仍正常导入依赖；运行时导入失败按实际进程错误处理。
+
+这些是执行机本地配置，不进入服务端下发的 Case 任务。公共 Python/Trace 前提不满足，或两个 Benchmark 均不可用时，客户端会将 `agent-runtime/pi-mcts/v1` 标为未就绪；SWE 脚本缺失不会单独阻止 ZSoft。`pi-mcts` 不会出现在普通生成 Trace 实验中。
+
+执行器每次从 MCTS `config.env` 读取真实 xGovernor 地址，以 `--upstream` 传给严格模式 Trace 代理。代理将动态地址放入 `AGENT_INSIGHT_MCTS_PROXY_URL`；本次专用 `python` 脚本在 MCTS 加载配置之后，将 `XGOVERNOR_BASE_URL` 恢复为代理地址并 exec 原解释器。手动启动器也为每次运行创建独立 Python 包装目录，退出时清理。固定 URL 不会绕过采集，无需修改 MCTS 配置文件。未配置仓库的历史独立 Trace 安装仍读取 `upstreamUrl` / `AGENT_INSIGHT_MCTS_UPSTREAM_URL`。
+
+SWE-bench Case 的执行命令由客户端固定为 `run_union.sh --mode sweverified --runtime pi --testbench sweverified --instance-id <Case ID> --split test --output-dir <runId>`，并通过严格模式 Trace 代理启动。搜索参数由执行机的 Runtime YAML 和本机默认值覆盖解析，并显式追加到 CLI；新建实验冻结页面参数，联调配置通过普通参数模板复用。显式 CLI 参数覆盖 MCTS `config.env` 中的对应环境配置。客户端创建本次运行专用的 `python` 启动脚本，直接 `exec` 配置的 Python 解释器，再运行原版 `run_union.sh`。启动脚本保留原解释器路径，使 Python 正确识别虚拟环境及 `datasets`；不要把 venv 解释器符号链接到外部目录后执行。MCTS 只将最终选中节点写入 `testcases_union/output/sweverified/<runId>/artifact.patch`；客户端检查 Patch 后应用到该 Case 的冻结 Git 工作区，再由现有 `git-patch/v1` Collector 生成并上传 `model.patch`。Trace 代理的本地状态按 Case 隔离，客户端从其运行记录取得根 Session ID（`mcts.run.<32 位十六进制>`），作为回调 `traceId`，与平台 `Execution.taskId` 保持一致。OTLP 的 32 位 Trace ID 仅用于传输，不直接用作页面跳转；历史误存 OTLP ID 的 Case 在读取时按同一账户下根 Session ID 的 SHA-256 精确映射，不按时间邻近猜测。停止实验时客户端向进程组发送 SIGINT，给 MCTS 的 `finally` 清理和 Trace 代理上传留出 30 秒，然后强制终止仍未退出的进程。
+
+MCTS 的默认配置和可选执行 Schema 位于 `services/executor/runtimes/mcts/runtime.yaml`，通过 `delivery: argv`、`binding: { mode: passthrough }` 交付，不声明 flat/nested。上报给平台的通用描述只包含 `configuration: { version: 2, defaults }`。前端统一支持嵌套编辑，七个 MCTS 平铺默认字段仅是初始内容，修改草稿不会改变模板。执行客户端在启动前校验实际参数；不支持的嵌套值不会自动拆分。
+
+没有显式实验配置时，从 YAML 模板及本机覆盖初始化完整值；显式值不补默认字段。MCTS 的 CLI 交付器仅在执行端拒绝对象、数组、null、非法 CLI key 及调度保留 flag。平台保存并下发原值，不按 MCTS 特判。CLI key 保留大小写、下划线和点号，布尔值按 true/false 字面量交付；新增实际支持的参数直接使用同名 key/value。
+
+源码定义位于 `services/executor/runtimes/`，安装后实际读取 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/`。新客户端约每 30 秒重新读取并上报定义，改 YAML 后等待上报并刷新页面，或重启客户端加速生效。客户端在每个 platform 的 `parameterDefinitions` 上报描述和 `definitionDigest`，不包含执行绑定。共享模块为 `packages/agent-runtime/index.cjs`（协议、校验）、`parameter-json.cjs`（递归 JSON）与 `loader.cjs`（YAML、覆盖、交付）。任务使用 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }`；平台和执行端按选定 platform/agent 验证，契约不一致返回 `AGENT_DEFINITION_CHANGED`。
+
+默认值和预设变动只更新模板修订，不覆盖正在编辑的草稿。客户端契约摘要覆盖目标、交付方式、业务 Schema 和绑定，不含 flat/nested 声明；平台将摘要视为不透明标识。历史快照不回写，复用确认只将原配置用于新草稿，不更名、不拆层。OpenCode 新版客户端提供默认空对象的通用配置，当前使用 CLI 交付；JSON/YAML 等新入口由客户端按实际接口适配。

@@ -1,10 +1,19 @@
 # ZSoft 部署指南
 
-本指南说明 ZSoft userspace 与内核题的执行任务目录、119 服务器镜像准备、公有 SWR 发布和评测资产安装。平台、执行客户端及 Evaluator 的通用安装步骤见 [Benchmark 整体服务安装指南](service-deployment-guide.md)。
+本指南与 [SWE-bench 部署指南](swe-bench-deployment-guide.md) 同级，说明 ZSoft 的数据、执行任务目录、评测资产和验收。平台、执行客户端与 Evaluator 的公共安装见 [Benchmark 通用服务部署指南](service-deployment-guide.md)。资产构建与发布由维护者按 [ZSoft 评测资产发布指南](../zsoft-assets-release.md) 完成。
 
-## ZSoft 任务目录与执行器
+## 1. 部署前提
 
-ZSoft 是 Benchmark；MCTS 是执行器。平台直接读取官方题目目录，在线和离线都无需导出中间数据集。
+- 完成公共服务安装，平台、执行客户端和 Controller 版本兼容。
+- 平台能读取官方题目目录，执行机具备匹配的原生任务目录与所选 Agent Runtime。
+- 评测机具备 Docker 和 Compose，能匿名拉取接入包固定的资产镜像及 Case 镜像；Runtime 缺失时还需构建网络或预置匹配镜像。
+- 内核题的 runner 提供 QEMU、C 编译工具和 rootfs 工具。默认使用 TCG；使用 KVM 时需在宿主机提供虚拟化能力并完成实际评测验证。
+
+ZSoft 是 Benchmark，MCTS 是可选 Agent Runtime。数据集导入不要求平台具备 Docker、MCTS 或私有判题资产。
+
+## 2. 数据集安装
+
+### 在线与离线来源
 
 **平台机器在线准备：**
 
@@ -12,7 +21,7 @@ ZSoft 是 Benchmark；MCTS 是执行器。平台直接读取官方题目目录�
 bash scripts/start.sh
 ```
 
-`benchmarks.zsoft-l1.dataset.autoImport` 默认 `true`，启动时获取官方仓库 `https://gitcode.com/linmalin/muyuan-sec.git` 的固定提交 `7f7d675eff19eec27745ddcd24b1efaf398bb753`，缓存到 `~/.agent-insight/benchmark-assets/zsoft-l1/`，解析 30 道正式题（24 道 userspace、6 道 kernel）并导入当前数据库。已安装时直接复用数据库，不访问来源。将 `config/benchmark/platform.local.yaml` 中的 `autoImport` 设为 `false` 只关闭启动自动导入，不影响已有数据集和下面的管理命令。SWE-bench 与 ZSoft 开关互相独立；旧启动参数 `--benchmark` 和选择变量 `AGENT_INSIGHT_BENCHMARK` 已移除。
+`benchmarks.zsoft-l1.dataset.autoImport` 默认 `true`，启动时获取官方仓库 `https://gitcode.com/linmalin/muyuan-sec.git` 的固定提交 `7f7d675eff19eec27745ddcd24b1efaf398bb753`，缓存到 `~/.agent-insight/benchmark-assets/zsoft-l1/`，解析 30 道正式题（24 道 userspace、6 道 kernel）并导入当前数据库。已安装时直接复用数据库，不访问来源。将 `config/benchmark/platform.local.yaml` 中的 `autoImport` 设为 `false` 只关闭启动自动导入，不影响已有数据集和下面的管理命令。各 Benchmark 的开关互相独立；旧启动参数 `--benchmark` 和选择变量 `AGENT_INSIGHT_BENCHMARK` 已移除。
 
 准备或导入失败只警告，继续准备其他数据集并启动服务；详细输出写入 `~/.agent-insight/logs/zsoft-l1-bootstrap.log`（随 `AGENT_INSIGHT_HOME` 调整），每次尝试覆盖，下次启动重试。启动会同步等待准备完成；本步骤只导入题目，不启动评测服务或下载评测镜像。
 
@@ -40,224 +49,98 @@ npx tsx scripts/benchmark/ensure-dataset.ts \
   --benchmark zsoft-l1 --refresh --name "ZSoft L1 新版本"
 ```
 
-此前已安装的 24 题数据集不会自动扩容；使用上面的 `--refresh --name` 安装全量版本。在线缓存使用新的解析版本键，旧缓存不会被误判为损坏。旧 P2 JSON/JSONL 和 ZSoft 公开包工作区不再兼容，需从官方目录重新导入。历史实验不会自动迁移。题目身份使用 `task.json` 与公开文件内容的 `sourceTaskDigest`；私有判题材料和镜像构建摘要由评测机单独冻结，平台不以它们作为数据准备前置条件。
+旧 24 题数据集不会自动扩容；使用上面的 `--refresh --name` 安装全量版本。在线缓存使用新的解析版本键，旧缓存不会被误判为损坏。旧 P2 JSON/JSONL 和 ZSoft 公开包工作区不再兼容，需从官方目录重新导入。历史实验不会自动迁移。题目身份使用 `task.json` 与公开文件内容的 `sourceTaskDigest`；私有判题材料和镜像构建摘要由评测机单独冻结，平台不以它们作为数据准备前置条件。
 
-题目摘要在平台与评测端统一采用固定字符顺序，不使用受语言环境影响的 `localeCompare`。部分旧数据集（尤其含多文件源码的内核题）曾使用错误排序；更新平台及 Controller 后，旧错误摘要返回不可重试的 `ZSOFT_TASK_DIGEST_LEGACY`，不再一直显示等待镜像。按上面的 `--refresh --name "ZSoft L1 摘要修正版"` 从匹配的官方来源导入独立数据集，并基于它新建实验；不要只点击旧实验重评，因为实验身份已冻结。线上准备使用新的缓存版本键，避免旧缓存的导入摘要标记被误判为文件篡改；不会删除旧缓存，离线时可将 `dataset.source` 指向匹配的本机官方目录。已有正确摘要的数据不受影响，不修改数据库记录或跳过校验，也无需为此重新发布题目资产镜像。真正的内容变更仍返回 `ZSOFT_TASK_MISMATCH`。
+## 3. 执行端准备
 
-镜像预取窗口按 Case 隔离不可恢复的元数据错误，其他合法 Case 继续准备；正式下发即使尚未进入窗口，也会先返回该 Case 的明确错误，由平台标记评测失败。网络下载、资产准备及空间不足等可重试等待保持原行为。
-
-执行机准备原生 ZSoft 任务目录，结构为 `<tasks-dir>/<task-id>/task.json` 和 `<tasks-dir>/<task-id>/public/`。在执行客户端对应的 MCTS 仓库 `testcases_union/config.env` 设置绝对路径，例如 `ZSOFT_TASKS_DIR=/srv/zsoft/tasks`。可以沿用上游仓库已有目录；若执行在用户机器，由用户在该执行机准备目录并配置 MCTS，平台不需要访问它。私有判题资产和正式镜像仍由 Evaluator 管理。
-
-如果题目没有 `public/repo-vul/`，执行机还需保留原生 `<task-id>/private/source-manifest.json` 中的 `source_id`，以及 `<tasks-dir>/../source-locks/<source-id>.json`。客户端只提取 `source_id`、`kind`、公开 HTTP(S) `url`、固定 `commit` 和可选 `sha256`，在本次临时工作区重新生成最小控制文件，不复制原始私有文件。Git 来源必须固定到完整 40 位提交；归档需固定提交 URL 或 SHA-256，不接受仅指向移动分支的来源。无需新增环境变量或手动向 `public/` 填入源码。
-
-MCTS 优先使用已有公开源码，否则在沙箱内下载锁定版本；有归档 SHA-256 时先校验再解压，Git shallow fetch 后核对提交。不读取执行机的源码缓存，也不做预热或缓存优化。下载仍依赖沙箱网络，并占用执行时间预算，多个分支可能重复下载。缺少两种来源返回 `ZSOFT_SOURCE_MISSING`，非法字段、危险地址或符号链接返回 `ZSOFT_SOURCE_INVALID`，均在启动 MCTS 前失败。
-
-最小的 `private/source-manifest.json` 与 `source-locks/` 只供执行机读取，不上传或挂载进沙箱。桥接在返回待上传任务包前核对文件集合与字节，包内只允许裁剪后的 `task.json`、由公开 README 生成的 `TASK.md` 与 `public/` 文件；私有文件、控制文件、额外文件、内容替换及链接均拒绝并返回 `ZSOFT_AGENT_BUNDLE_INVALID`。隐藏测试、参考 PoC、修复补丁与 Judge 配置仍留在原位置。运行结束按现有机制清理临时工作区，不改原始任务、数据库身份或 SWR 镜像。
-
-升级后需在执行机重新执行客户端安装页面提供的安装命令，更新 `~/.agent-insight/client/runtime/` 并重启客户端；只更新平台项目代码不会更新已安装的执行客户端。无需修改外部 MCTS 源码；其插件需支持现有源码下载与 `bundle_bytes` 接口，不兼容时就绪检查会拒绝该执行目标。
-
-实验向导只需选择 ZSoft 数据集、生成 Trace 和执行客户端，不配置任务目录；平台根据所选 Case 自动下发 `task-id`。目录按执行客户端本机的 MCTS 配置管理，修改后对该客户端后续任务生效。
-
-客户端收到 `zsoft-tasks` 工作区契约后，从 MCTS `config.env` 读取原生目录，核对题目 ID 和公开元数据，从原生目录复制 `public/` 与裁剪后的 `task.json` 到独立运行目录，必要时生成上述最小源码控制文件，不将私有判题文件交给 Agent，不改写原始任务。MCTS 使用该独立目录作为实际 `--tasks-dir`，生成单文件 PoC 和 Trace，客户端上传后清理运行目录。缺少或错误配置返回 `ZSOFT_TASKS_DIR_INVALID`；缺题返回 `ZSOFT_TASK_MISSING`；题目与数据集不一致返回 `ZSOFT_TASK_MISMATCH`。
-
-客户端上报 `zsoft-tasks-workspace/v3`、`single-file/v1`；MCTS 还需 `mcts-zsoft-export/v1`。v3 表示任务目录来自执行机 MCTS 配置，且包含 userspace 与 kernel 轨道。内核题仍使用同一个 `tasks-dir`，任务 ID 由平台下发，提交物为单文件 C 源码。
-
-ZSoft 执行链路只接受 `zsoft-tasks` 工作区；旧公开包导出脚本不再用于当前接入，无需设置 `AGENT_INSIGHT_PUBLIC_BUNDLES_DIR`。
-
-## ZSoft 镜像准备与公有 SWR 部署
-
-镜像在 119 构建机准备；该机 MCTS 位于 `/mnt/sdc/ymt/MCTS`，正式评测镜像由官方 ZSoft L1 包的 `prepare` 构建，与 MCTS 搜索运行环境分开。以下是操作模板，需先将本次平台代码部署到 119，并替换源目录、版本和 SWR 地址。平台脚本不修改外部仓库；所有构建状态写在单独的资产快照中。
-
-SWR 只发布每题的目标环境，沿用 SWE-bench 的区域和组织，使用一个公有仓库 `swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64`。当前 24 道正式非内核题包含 6 组 `vuln_image/fix_image` 和 18 组 `target_image/driver_image`，共 48 个镜像引用；共享镜像和层可复用。此处的 `--all-userspace` 不选择样例或内核题；内核题另按下节准备，也可用 `--all-tasks` 选择全部正式题。没有 `userspace` 标签的非内核服务题在平台读取时补齐标签，原始 `task.json` 不改写。平台 ZSoft Evaluator Runtime 在评测机本地准备，不上传 SWR；只准备 Case 镜像时无需构建 Runtime。
-
-一道题对应一个 Case，Case 所需镜像数量由官方环境决定。`vuln_image/fix_image` 分别是漏洞版本和修复版本；`target_image/driver_image` 分别是目标服务环境和驱动环境。例如前两道 civetweb 题各生成漏洞、修复两个镜像，因此两题合计四个镜像引用。
-
-**在 119 准备独立快照并构建题目环境：**
+执行机准备原生目录 `<tasks-dir>/<task-id>/task.json` 和 `<tasks-dir>/<task-id>/public/`，题目内容与平台导入版本一致。MCTS 接入见 [MCTS xGovernor 接入](../../user-guide/observability/mcts-xgovernor.md#用于平台-benchmark-实验)；在执行机的 MCTS 仓库 `testcases_union/config.env` 设置绝对路径，例如：
 
 ```bash
-cd /mnt/sdc/ymt/agent-insight  # 使用已部署本次代码的平台目录
-ZSOFT_SOURCE=/path/to/official/benchmarks/vulnerability/zsoft-l1
-ZSOFT_REVISION='7f7d675eff19eec27745ddcd24b1efaf398bb753'
-ZSOFT_RELEASE='/mnt/sdc/ymt/zsoft-releases/<新的版本目录>'
-ZSOFT_PYTHON=/path/to/official/venv/bin/python
-export PATH="$(dirname "$ZSOFT_PYTHON"):$PATH"
-SWR_PREFIX='<swr区域域名>/<组织>'
-mkdir -p "$ZSOFT_RELEASE"
-cp -a "$ZSOFT_SOURCE" "$ZSOFT_RELEASE/assets"
-
-python3 scripts/benchmark/prepare-zsoft-images.py plan \
-  --root "$ZSOFT_RELEASE/assets" --revision "$ZSOFT_REVISION" --all-userspace
-python3 scripts/benchmark/prepare-zsoft-images.py build \
-  --root "$ZSOFT_RELEASE/assets" --revision "$ZSOFT_REVISION" --all-userspace \
-  --python "$ZSOFT_PYTHON"
+ZSOFT_TASKS_DIR=/srv/zsoft/tasks
 ```
 
-`ZSOFT_PYTHON` 使用已安装官方构建依赖的解释器，并将该解释器所在目录放在 `PATH` 前面，保证官方准备脚本的 `python3` 使用同一环境。`plan` 不调用 Docker；`build` 只顺序调用官方 `fetch-sources`、`prepare`，不运行 PoC 或 judge。可用重复的 `--task <id>` 替代 `--all-userspace`，先准备部分正式题。构建机需要源码下载和基础镜像拉取网络、Docker 及足够磁盘空间；正式评测另外需要 Compose。镜像体积由实际构建结果决定。
+可以沿用已有上游目录；平台不需要访问执行机路径。内核题与 userspace 共用目录，任务 ID 由平台自动下发。实验向导只选择数据集和执行客户端，无需填写任务目录或额外导入公开资料包。
 
-**发布到 SWR，再冻结评测资产：**
+没有 `public/repo-vul/` 的题目还需保留原生 `<task-id>/private/source-manifest.json` 和 `<tasks-dir>/../source-locks/<source-id>.json`。源码来源须锁定到完整提交或带 SHA-256 的归档；MCTS 在沙箱中下载，需预留网络和执行预算。隐藏测试、参考 PoC、修复补丁与 Judge 配置不交给 Agent。公开工作区与源码裁剪契约见 [接入开发规范](benchmark-integration-development-guide.md#zsoft-自动生成-poc-的执行契约)。
+
+客户端须上报 `zsoft-tasks-workspace/v3` 和 `single-file/v1`；MCTS 还需 `mcts-zsoft-export/v1`。ZSoft 不要求 SWE 专属的 `datasets` 和 `run_union.sh`；MCTS 插件需支持当前源码下载与 `bundle_bytes` 接口，未就绪时执行目标不可用。升级后重新安装客户端，不能只更新平台代码。
+
+## 4. 评测端准备
+
+### 安装固定资产版本
+
+直接使用接入包 `benchmarks/zsoft-l1/evaluator/evaluator.yaml` 中 `assets` 固定的 image digest、release ID、bundleDigest 和 sourcePath，不手工改成可变 tag。Controller 启动后在后台拉取资产镜像，从未启动的临时容器复制文件，校验 release、冻结清单与逐题摘要，再原子安装到共享卷：
 
 ```bash
-# 公有仓库的读取无需认证；写入端仍需按 SWR 控制台给出的命令 docker login。
-# 登录凭据只用于构建机 docker push，不配置到评测镜像池。
-python3 scripts/benchmark/prepare-zsoft-images.py publish \
-  --root "$ZSOFT_RELEASE/assets" --revision "$ZSOFT_REVISION" --all-userspace \
-  --repository "$SWR_PREFIX/zsoft-l1-userspace-x86-64" \
-  --output "$ZSOFT_RELEASE/registry-images.json"
-
-python3 scripts/benchmark/export-zsoft-dataset.py \
-  --root "$ZSOFT_RELEASE/assets" --revision "$ZSOFT_REVISION" --all-userspace \
-  --image-mapping "$ZSOFT_RELEASE/registry-images.json" \
-  --output "$ZSOFT_RELEASE/source-metadata.json"
-python3 scripts/benchmark/pack-zsoft-assets.py \
-  --root "$ZSOFT_RELEASE/assets" --output "$ZSOFT_RELEASE/private-assets.tar.gz"
+bash scripts/evaluator.sh start   --platform-base-url <agent-insight-url>
 ```
 
-确认 SWR 题目仓库为公有；首次 push 自动创建的仓库可能默认私有，需要在控制台调整可见性。发布脚本使用 `<task-id>-<角色>-<Image ID 前16位>` 作为稳定 tag（过长的 task-id 自动截短），角色为 `vuln/fix/target/driver` 等。上传后核对远端 manifest 的 config digest，并记录 tag 和固定 `repo@sha256`。每个成功镜像立即保存到映射文件；失败后用相同参数重试可跳过已成功上传且摘要匹配的镜像。
+默认目录为容器内 `/data/benchmark-assets/zsoft-l1/<镜像摘要>`；`/data` 由 Docker 命名卷 `agent-insight-benchmark-evaluator-data` 提供，宿主无需创建同名目录。需要宿主指定磁盘时，在首次创建卷前配置 local volume 绑定；已有卷迁移需保留原数据。
 
-`registry-images.json` 是 Case 镜像发布记录；`agent-insight-assets.json` 是冻结清单，记录私有文件摘要、本地 Image ID 与远端固定引用，以及题目的 `sourceTaskDigest`。本机构建摘要不参与平台数据集指纹；`source-metadata.json` 仅供资产审计，不需导入平台。冻结后不能再对该快照执行 build/publish；准备新版本应使用新目录。评测资产镜像从冻结清单覆盖的文件构建，不包含构建缓存、未选题目或 Docker 镜像层。
-
-完整评测资产包含任务状态、Judge 输入和内核文件。本部署使用公有 SWR，资产镜像与 Case 镜像共用仓库，通过 `assets-<release>` 标签区分；评测机匿名拉取，无需登录配置。此镜像只用于把固定 release 安装到评测机数据卷，MCTS 执行端仍使用自己的原生任务目录。
-
-**构建并发布资产镜像（由版本发布者执行一次）：**
-
-```bash
-ZSOFT_ASSET_IMAGE_REPOSITORY="$SWR_PREFIX/zsoft-l1-userspace-x86-64"
-ZSOFT_ASSET_RELEASE='20261014-v1'
-python3 scripts/benchmark/build-zsoft-assets-image.py \
-  --root "$ZSOFT_RELEASE/assets" \
-  --repository "$ZSOFT_ASSET_IMAGE_REPOSITORY" \
-  --release "$ZSOFT_ASSET_RELEASE" \
-  --tag "assets-$ZSOFT_ASSET_RELEASE" --push
-```
-
-SWR 仓库保持公有。发布者将输出的 `repoDigests`、release ID、bundleDigest 和镜像内目录写入接入包 `evaluator.yaml` 的 `assets` 声明，再生成 Catalog。部署按 `repository@sha256:...` 固定版本，不使用可变 tag。脚本在构建前逐题重新校验冻结清单及文件摘要；镜像只含清单、框架、选定任务、任务状态和 release 元数据。
-
-**上传后的构建机清理：**
-
-先完成上传、匿名读取和摘要核对，再生成冻结清单并打包私有资产。当前清单导出仍读取本地镜像 ID，因此不能在冻结前删除准备好的镜像。保留发布映射、冻结清单、私有资产包和日志；正式评测从公有 SWR 按固定摘要拉取，无需在构建机长期保留镜像层。
-
-清理时仅移除本次发布映射中的本地 prepared tag 和 SWR tag，并先核对它们的实际 Image ID 与映射一致。其他标签或容器仍引用的共享镜像要保留。删除标签后，镜像层可能仍被 BuildKit 缓存引用；待本批全部构建完成后，再按缓存 ID 清理本次构建产生的闲置缓存。不要在仍有题目构建时清空共享缓存，也不要用带 `--volumes` 的全局清理命令。
-
-**在正式评测机部署资产和 Runtime：**
-
-Controller 启动后按接入包的 `assets` 声明在后台自动下载资产镜像，从未启动的临时容器复制文件，校验 release、冻结清单与逐题文件摘要，全部通过后原子安装到 `<EVALUATOR_DATA_DIR>/benchmark-assets/zsoft-l1/<镜像摘要>`。默认容器内为 `/data/benchmark-assets/zsoft-l1/<镜像摘要>`，重启校验并复用已安装版本。镜像搬运过程不执行其中的程序；无需管理员手工解压、执行安装脚本或配置 ZSoft 目录变量。
-
-```bash
-bash scripts/evaluator.sh start \
-  --platform-base-url <平台地址>
-```
-
-`/data` 是容器内路径，默认由 Docker 命名卷 `agent-insight-benchmark-evaluator-data` 提供，宿主机无需创建 `/data`。可以预先用 Docker 的 local volume 驱动将同名卷绑定到有权限且空间充足的宿主目录；应在首次创建卷前配置，已有数据卷迁移需按运维流程保留数据。
-
-在评测机项目的 `config/benchmark/evaluator.local.yaml` 设置可选的**资产存储根目录**与加速模式：
+在评测机 `config/benchmark/evaluator.local.yaml` 可覆盖根目录与加速模式：
 
 ```yaml
 benchmarks:
   zsoft-l1:
-    assetsDir: /data/custom-assets/zsoft-l1
+    assetsDir: null
     kernelAccel: tcg
 ```
 
-`assetsDir: null` 使用默认根目录，实际版本目录仍自动追加镜像摘要。自定义根目录必须位于 Controller 与 Runtime 共享的可写 bind/volume 中，通常使用 `/data` 内的路径；不会自动添加新的宿主机挂载。目录不共享、不可写、校验失败或拉取连续失败会给出明确错误。下载最多重试三次，失败后排除原因并重启 Controller 重试；不会无限显示“等待镜像准备”。安装期间平台显示准备、下载或校验评测资产，健康检查保留对应阶段。不同镜像摘要使用不同目录，旧目录保留，不覆盖历史版本；历史手工解压的目录不会被自动认作已安装版本。
+`assetsDir: null` 使用默认根目录；自定义目录须处于 Controller 与 Runtime 共享且可写的 bind/volume 内，通常在 `/data` 下，不会自动新增宿主挂载。实际版本目录自动追加镜像摘要，重启复用已校验版本；不同摘要分别保存，不覆盖历史版本。安装失败最多重试三次，排除网络、权限或摘要问题后重启 Controller 重试。旧手动解压目录不会被自动识别为托管版本。
 
-修改后重新执行 `bash scripts/evaluator.sh start --platform-base-url <平台地址>`。旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 只提示迁移，不再覆盖 YAML；不要再用 `--evaluator-env` 传入这两项。Controller 将校验后的配置快照和解析后的实际资产目录传给 Runtime，无需用户设置内部变量。平台与评测服务在不同机器时，各自在对应机器配置；自定义配置目录可用 `AGENT_INSIGHT_CONFIG_DIR`。
+旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再覆盖 YAML，不要通过 `--evaluator-env` 传入。平台和评测机分别维护各自配置；评测端不连接平台数据库。
 
-ZSoft 与 SWE-bench 使用相同的 Runtime 准备流程：首次调用复用匹配的本地镜像，缺失时先拉取，失败后按接入包 Dockerfile 自动构建并校验 Catalog artifact 摘要。启动 Controller 不预热 Runtime。本方案不上传 Runtime，保持 `EVALUATOR_RUNTIME_IMAGE_PREFIX` 未设置，评测机需要访问基础镜像和 Python 依赖来源。
+Case 镜像由公共镜像池按固定 digest 拉取、缓存和回收，Compose 使用已校验 Image ID 并禁止自动 pull。没有 `registryImages` 的冻结清单要求本机预装固定 Image ID；缺少 `sourceTaskDigest` 的旧清单需由维护者重新冻结。离线部署需提前搬运匹配版本的完整资产镜像、题目镜像及 Runtime。
 
-ZSoft Runtime 构建默认从华为云 PyPI 源安装固定版本 `pydantic==2.10.6`，单次网络操作超时 60 秒、重试 5 次。需要其他包源时，Docker 构建参数 `PIP_INDEX_URL` 可覆盖默认地址；这是镜像构建参数，不能通过 `--evaluator-env` 修改。遇到 `pydantic-core` 下载超时或 `No matching distribution` 时先检查构建网络及包源，不要直接更改固定依赖版本。
+### 准备 Evaluator Runtime
 
-修改 Runtime Dockerfile 后运行 `node scripts/benchmark/generate-catalog.cjs`，并使用同一份代码重新构建、部署平台和 Controller，使新的 Catalog 摘要和 Runtime 标签生效。已有 PoC 的 Case 可在修复后点击“Benchmark 重评”，复用原提交物。
+首次评测复用匹配的本地 Runtime，缺失时尝试拉取，失败后按接入包 Dockerfile 自动构建并核对 Catalog artifact 摘要。启动 Controller 不预热 Runtime；自动构建不会重新编译 Case 环境。无需远程 Runtime 时保持 `EVALUATOR_RUNTIME_IMAGE_PREFIX` 未设置。
 
-提交物交接沿用通用协议：任务中的原始描述携带 `executionRunId`，Controller 暂存后的描述携带 `evaluationId` 与 `kind=submission`。ZSoft 按 `artifactId/name/mediaType/sha256/sizeBytes` 核对同一文件，分别校验执行与评测归属，并检查实际文件大小、SHA-256 和输入目录边界；不要求两种描述整体相同。`ZSOFT_ARTIFACT_INVALID` 表示提交物描述与当前任务不匹配，文件内容或大小不符返回 `ZSOFT_ARTIFACT_DIGEST_MISMATCH`。更新 Runtime 校验代码后同样需要重新生成 Catalog 并部署匹配版本，再对保留了 PoC 的 Case 重评。
+避免首次等待或准备离线环境时，可在与 Controller 一致的源码版本执行：
 
-平台独立导入官方数据集，执行机配置自己的原生任务目录。评测机无需数据库，评测请求只携带题目身份及版本。完整资产镜像仅由评测机安装，执行客户端与 MCTS 的命令保持原流程。
+```bash
+node scripts/benchmark/build-evaluator-runtime.cjs zsoft-l1
+```
 
-评测端对公有 SWR 匿名拉取，无需 registry 认证配置。题目镜像由公共镜像池按固定摘要拉取、缓存、回收；重评或回收后重拉均使用同一摘要。Runtime 校验实际 Image ID 与冻结清单一致，Compose 使用 Image ID 且禁止自动 pull，因此无需覆盖原始 tag。当前清单未配置 `registryImages` 时需在本机预装固定 Image ID，不能在冷缓存下从远端恢复。缺少 `sourceTaskDigest` 的旧评测资产清单不再支持，需重新冻结。
+不传 `--push`、`--image-prefix` 时只准备本地 Runtime；跨机可用 `docker save/load` 搬运匹配镜像。构建和发布流程的区别见 [资产发布指南](../zsoft-assets-release.md)。
 
-本地 Runtime 的标签和 Catalog artifact 摘要必须匹配，后续调用直接复用；接入包内容变化会生成新标签并重新准备。需要避免首次评测等待构建，或评测机离线时，可提前用与 Controller 一致的平台源码执行 `node scripts/benchmark/build-evaluator-runtime.cjs zsoft-l1`，不传 `--push`、`--image-prefix`，也可通过 `docker save/load` 搬运匹配版本。采用远端题目清单时 doctor 不要求所有题目镜像预先缓存，实际评测逐题验证。首次调用可能等待 Runtime 构建及题目镜像下载，构建失败会返回错误，恢复网络或依赖来源后可重试。该自动构建仅针对平台 Runtime；Case 镜像和冻结评测资产仍按前述发布流程提前准备。`EVALUATOR_RUNTIME_IMAGE_PREFIX` 仍是通用的可选远端 Runtime 配置，本部署方案不使用它。
+### 内核加速与资源
 
-当前已在 119 完成官方提交 `7f7d675eff19eec27745ddcd24b1efaf398bb753` 的 24 道正式 userspace 题构建和发布，公有 SWR 仓库包含 48 个 tag，全部通过匿名读取与 manifest/config 摘要核对。发布目录为 `/mnt/sdc/ymt/zsoft-releases/20261012-swr-v1`，包含 `registry-images.json`、`assets/agent-insight-assets.json`、`private-assets.tar.gz`、`anonymous-verification.json` 和日志。
+默认 `kernelAccel: tcg` 无需 `/dev/kvm`，但应按真实耗时调整超时。使用 `kvm` 前，先在宿主开启虚拟化或嵌套虚拟化，再修改 YAML 并重启 Evaluator。平台 Runtime 不需要 privileged；受控代理仅对实际 runner 开放 `/dev/kvm:rw`。实际评测会检查 KVM API；doctor 不代表已验证 KVM 或 QEMU 启动。
 
-冻结与打包完成后，已移除本次 96 个本地 prepared/SWR 标签，并定向清理本批闲置构建缓存，释放约 5.73 GiB。其他镜像、容器和卷保留，共享层仍可能由其他镜像或历史缓存引用。此次未准备 Runtime、部署评测服务或运行 PoC/judge；这些步骤及真实题目验收仍需后续执行。
+CPU、内存使用平台现有评测资源预算。两版服务均分预算，总 CPU 至少为两版 metadata 中最大 `smp` 的两倍，总内存至少为 `2 × (最大 memory_mb + 512)` MiB。当前官方题目每版内存 2048 MiB、CPU 为 1 或 2，默认 4 CPU / 8192 MiB 可通过启动资源检查；并发容量与 TCG 耗时需部署后实测。
 
-## 内核题资产准备与部署
+## 5. 部署验收
 
-内核题仍使用同一个 ZSoft Evaluator Runtime。QEMU、C 编译工具和 rootfs 生成工具由官方 Case 的 runner 镜像提供，不需要新增平台 Runtime。每道内核题包含一个 `runner_image` 引用和漏洞版、修复版两套内核资产；6 道正式题合计 6 个 runner 镜像引用、12 套内核资产，实际镜像 ID 和层可能共享。runner 发布到 SWR，`bzImage`、`metadata.json` 及可选模块/rootfs 扩展文件随完整资产镜像安装到共享卷，仍以文件形式供 runner 挂载。
+```bash
+curl -fsS http://127.0.0.1:3001/health
+bash scripts/evaluator-doctor.sh
+```
 
-内核 runner 可以与 userspace 镜像共用公有仓库，无需按题型另建仓库。119 本次沿用 `swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64`；名字中的 `userspace` 不限制镜像内容，发布脚本以任务 ID、角色和镜像 ID 生成独立标签，评测使用固定 digest。保留仓库名称可以继续使用已有 userspace 引用；若以后迁移仓库，需要重新发布并冻结新的引用。
+自定义端口时替换 `3001`。doctor 校验资产、轨道和加速配置，不在冷缓存时启动 QEMU。真实验收应分别覆盖 userspace 和 kernel：
 
-构建机需要 Docker、官方 Python 构建依赖和 Linux 内核编译工具；Debian/Ubuntu 上通常包括 `build-essential`、`flex`、`bison`、`bc`、`libelf-dev`、`libssl-dev`、`rsync`、`patch`、`cpio`、`kmod`。源码编译在构建机执行，预留磁盘、内存及编译时间；无需在构建机运行 QEMU 或准备 KVM。公有仓库允许匿名拉取，上传仍需要有推送权限的有效 SWR 登录凭据。
+1. 用已知正确和错误提交运行判题，确认结果与预期一致，基础设施错误不能当作错误提交通过。
+2. 创建单 Case 自动生成实验，确认客户端产出单文件 PoC（内核题为 C 源码）、根 Trace、提交物上传和独立 Evaluator 评测。
+3. 检查编译失败、超时、取消的终态和错误详情，以及容器、网络和临时工作区清理。
+4. 重启服务或清理受管镜像后重评已有提交，确认固定版本可恢复且历史实验快照未变。
 
-**119 已准备的内核发布（2026-10-14）：** 固定官方 revision 为 `7f7d675eff19eec27745ddcd24b1efaf398bb753`，发布目录为 `/mnt/sdc/ymt/zsoft-releases/20261014-kernel-v1`。6 道内核题已准备 12 套内核资产，runner 的 6 个任务标签全部上传并通过匿名读取、manifest digest 和 config digest 核对；实际共用 2 个不同镜像 digest。024 题复用了历史构建资产，复制前核对框架源码、任务文件及源码锁一致，复制后核对资产摘要；其余 5 题执行了本次官方 `prepare` 构建。GitHub 源码下载限流通过同一固定提交的本地源码缓存绕过；初次上传权限错误已重试成功。
+原生对照验证工具的前提与操作见 [ZSoft 本机验证](benchmark-integration-development-guide.md#zsoft-接入前的本机验证)。只有镜像拉取或摘要校验通过，不能判定完整链路验收成功。
 
-该目录保存 `registry-images.json`、`assets/agent-insight-assets.json`、`reuse-provenance.json`、逐题日志，以及以下包和核对记录：
+## 6. 排查与更新
 
-| 文件 | 内容 |
+| 现象或错误 | 处理 |
 |---|---|
-| `private-assets.tar.gz` | 6 道内核题、12 套内核资产，约 353 MiB |
-| `combined-private-assets.tar.gz` | 已有 24 道 userspace 与 6 道内核题的合并资产，约 353 MiB；后续完整部署可使用此包 |
-| `anonymous-verification.json` | 6 个 runner 引用匿名核对全部通过，仓库共 54 个标签 |
-| `package-verification.json` | 包文件 SHA-256、大小、题目及内核资产数量 |
-| `archive-content-verification.json` | 归档内各文件摘要和 bundleDigest 的核对结果 |
+| 导入失败 | 检查 `zsoft-l1-bootstrap.log`、官方目录结构与来源版本，修复后单独重试导入 |
+| `ZSOFT_TASKS_DIR_INVALID` / `ZSOFT_TASK_MISSING` | 在执行机核对 MCTS 配置、目录权限和题目是否存在 |
+| `ZSOFT_SOURCE_MISSING` / `ZSOFT_SOURCE_INVALID` | 补齐原生公开源码或合法、固定版本的 source manifest 与 source lock |
+| `ZSOFT_AGENT_BUNDLE_INVALID` | 核对客户端与插件版本、公开包内容及链接；不将私有判题文件加入公开包 |
+| `ZSOFT_TASK_DIGEST_LEGACY` | 更新平台和 Controller，从匹配来源用 `--refresh --name` 安装独立数据集，再新建实验；旧快照不回写，重评旧实验不会更新冻结身份 |
+| `ZSOFT_TASK_MISMATCH` | 核对平台、执行机任务和评测资产的题目内容与 revision，不跳过摘要校验 |
+| `ZSOFT_KERNEL_KVM_UNAVAILABLE` | 检查宿主虚拟化和设备，或按实际条件切换 TCG 后重启 |
+| `ZSOFT_KERNEL_RESOURCES_INSUFFICIENT` | 根据题目 metadata 提高评测 CPU、内存预算 |
+| Runtime 依赖下载失败 | 检查构建网络与包源；默认华为云 PyPI、固定 `pydantic==2.10.6`，单次超时 60 秒、重试 5 次。`PIP_INDEX_URL` 是 Docker 构建参数，不能用 `--evaluator-env` 修改 |
+| `ZSOFT_ARTIFACT_INVALID` / `ZSOFT_ARTIFACT_DIGEST_MISMATCH` | 检查三端版本与提交物归属、文件大小及 SHA-256，按错误日志定位，勿跳过校验 |
 
-本次生成的 `source`、`out`、`modules-install` 中间目录已定向清理；保留最终资产、源码缓存和本地 runner 标签。旧 userspace 发布目录未覆盖。本次没有构建 Runtime、安装到评测机或运行 QEMU、PoC、Judge；这些属于后续统一部署和实题验证。
+旧摘要排序问题通过新解析缓存版本修正；正确摘要不受影响，无需因此重发题目镜像。正式错误与可重试下载、空间等待分开处理，不应持续等待不可恢复的元数据错误。
 
-**在 119 使用独立快照准备内核资产：**
-
-```bash
-cd /mnt/sdc/ymt/agent-insight
-ZSOFT_SOURCE=/path/to/official/benchmarks/vulnerability/zsoft-l1
-ZSOFT_REVISION='7f7d675eff19eec27745ddcd24b1efaf398bb753'
-ZSOFT_KERNEL_RELEASE='/mnt/sdc/ymt/zsoft-releases/<新的内核版本目录>'
-ZSOFT_PYTHON=/path/to/official/venv/bin/python
-export PATH="$(dirname "$ZSOFT_PYTHON"):$PATH"
-SWR_PREFIX='<swr区域域名>/<组织>'
-mkdir -p "$ZSOFT_KERNEL_RELEASE"
-cp -a "$ZSOFT_SOURCE" "$ZSOFT_KERNEL_RELEASE/assets"
-
-python3 scripts/benchmark/prepare-zsoft-images.py plan \
-  --root "$ZSOFT_KERNEL_RELEASE/assets" --revision "$ZSOFT_REVISION" --all-kernel
-python3 scripts/benchmark/prepare-zsoft-images.py build \
-  --root "$ZSOFT_KERNEL_RELEASE/assets" --revision "$ZSOFT_REVISION" --all-kernel \
-  --python "$ZSOFT_PYTHON"
-python3 scripts/benchmark/prepare-zsoft-images.py publish \
-  --root "$ZSOFT_KERNEL_RELEASE/assets" --revision "$ZSOFT_REVISION" --all-kernel \
-  --repository "$SWR_PREFIX/zsoft-l1-userspace-x86-64" \
-  --output "$ZSOFT_KERNEL_RELEASE/registry-images.json"
-python3 scripts/benchmark/export-zsoft-dataset.py \
-  --root "$ZSOFT_KERNEL_RELEASE/assets" --revision "$ZSOFT_REVISION" --all-kernel \
-  --image-mapping "$ZSOFT_KERNEL_RELEASE/registry-images.json" \
-  --output "$ZSOFT_KERNEL_RELEASE/source-metadata.json"
-python3 scripts/benchmark/pack-zsoft-assets.py \
-  --root "$ZSOFT_KERNEL_RELEASE/assets" \
-  --output "$ZSOFT_KERNEL_RELEASE/private-assets.tar.gz"
-```
-
-`build` 仅调用官方 `fetch-sources` 和 `prepare`，不运行 Judge 或 PoC。请从未冻结的官方源码目录复制快照；不要复制已有 `agent-insight-assets.json`，也不要覆盖已发布的 userspace 快照。冻结清单必须覆盖 `.task-state/<task-id>/image-refs.json` 以及两版 `artifacts/` 中的全部文件；打包排除同级源码、编译输出和缓存目录。先发布、核对匿名读取和镜像摘要，再冻结打包，之后按前节定向清理本批镜像及闲置编译缓存，保留内核文件资产及发布记录。
-
-**与现有 userspace 资产合并：**
-
-可以直接读取 `/mnt/sdc/ymt/zsoft-releases/20261012-swr-v1/assets` 的冻结资产，无需恢复已清理的 Docker 镜像；若只保留旧包，先将它解压到独立目录，再把该目录作为 `--root`。合并要求官方 revision 和框架文件摘要相同；同题存在冲突时拒绝合并。输出必须是源目录外的新文件。
-
-```bash
-python3 scripts/benchmark/pack-zsoft-assets.py \
-  --root /mnt/sdc/ymt/zsoft-releases/20261012-swr-v1/assets \
-  --additional-root "$ZSOFT_KERNEL_RELEASE/assets" \
-  --output "$ZSOFT_KERNEL_RELEASE/combined-private-assets.tar.gz"
-```
-
-该包包含合并后重新计算摘要的清单，覆盖 24 道 userspace 与 6 道内核题。发布者将其解压到独立快照，按前节构建并发布完整资产镜像，再更新接入包固定引用。评测机启动通用服务即可自动安装全量资产，默认使用 `tcg`，不必增加 ZSoft 启动参数。
-
-**119 完整资产镜像发布（2026-10-19）：** 复用已有合并包，没有重新编译题目。发布记录在 `/mnt/sdc/ymt/zsoft-releases/20261019-auto-assets-v1/`，标签为 `assets-20261019-full-v1`，固定引用为：
-
-```text
-swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64@sha256:af1e63c5cacb1753ceec85de245f129bdc63bb3ae15dca961248d17fa7e27a3b
-```
-
-该版本包含全部 30 题，bundleDigest 为 `sha256:d73939d50ff543cbbe7a5a23e15ece361ed89d0dd998ab0f3cdace63e23621f9`。已使用空 Docker 配置核对公有匿名拉取；未运行 Judge 或 QEMU。
-
-加速模式默认 `tcg`，无需 `/dev/kvm`，但启动和执行可能较慢，实际超时预算待统一实题测试确定。此前检查 119 未提供 `/dev/kvm`，因此当前以 TCG 为部署起点；需要 KVM 时应先由宿主机开启虚拟化或嵌套虚拟化，再将 `evaluator.local.yaml` 中 `benchmarks.zsoft-l1.kernelAccel` 改为 `kvm` 并重新启动评测服务。平台 Runtime 本身无需设备或 privileged 权限，受控代理只向实际 runner 开放 `/dev/kvm:rw`；实际评测在拉取 runner 后检查 KVM API，失败返回 `ZSOFT_KERNEL_KVM_UNAVAILABLE`。doctor 只检查资产与加速配置，不代表已验证 KVM 或 QEMU 启动。
-
-评测 CPU、内存预算仍通过平台现有资源配置传入。代理按 `vuln/fix` 两个服务均分，要求总 CPU 至少为两版 metadata 中最大 `smp` 的两倍，总内存至少为 `2 × (最大 memory_mb + 512)` MiB，不满足返回 `ZSOFT_KERNEL_RESOURCES_INSUFFICIENT`。当前官方 6 题每版内存为 2048 MiB、CPU 为 1 或 2，现有默认 4 CPU / 8192 MiB 满足此启动检查；并发容量及 TCG 耗时仍需部署后测定。平台全量数据集、执行客户端 v2 能力和对应原生任务目录也需同步准备。
-
-后续统一验证应覆盖 userspace 与内核题的正确/错误提交、编译失败、超时、取消、资源清理，以及 MCTS 单文件 C 导出到独立评测机的完整链路。本次内核资产已构建、发布并冻结，但没有执行这些真实验证，也没有构建或上传平台 Runtime。
+更新 Runtime Dockerfile 或校验实现后，由维护者重新生成 Catalog，部署匹配平台和 Controller。已有 PoC 的 Case 可用“Benchmark 重评”复用提交。执行端更新需重新安装客户端；通用回滚见 [更新与回滚](service-deployment-guide.md#9-更新与回滚)。

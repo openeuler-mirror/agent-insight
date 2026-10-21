@@ -9,7 +9,7 @@
 MCTS 服务由使用方负责准备；接入前应满足：
 
 - MCTS 原命令能够连接 xGovernor，并在完成任务后生成 `artifact.patch`；
-- 执行机有 Python 3.11+，运行 MCTS 的 Python 环境已安装 `datasets`；
+- 执行机有 Python 3.11+；SWE-bench 还需在所配置 Python 环境安装 `datasets`，ZSoft 需兼容当前执行契约的插件；
 - xGovernor 主机已安装 Pi CLI 和桥接扩展，并配置好模型凭据、E2B 凭据及 `swepro-docker` 模板；
 - 执行机有 Node.js 22.19.0+，能够访问 Agent Insight，且已有平台账号的 API Key。
 
@@ -35,7 +35,7 @@ Runtime 角色按可验证行为标记为 `solver-initial`、`solver-child`、`a
 curl -sSf "https://insight.example.com/api/ingest/setup?key=<your-api-key>&yes=1&frameworks=mcts-xgovernor" | AGENT_INSIGHT_MCTS_REPO_DIR='/opt/MCTS' bash
 ```
 
-安装器先检查 MCTS 仓库、Python 3.11+、`datasets` 和现有 xGovernor 连接，再安装采集器、保存路径、注册并启动常驻客户端。无需安装后再改路径或重启。失败时按提示处理，再执行同一命令。只接入 MCTS 不会连带安装 Pi Agent、xiaoO 或 Goal Plus。
+安装器先检查 MCTS 仓库、Python 3.11+ 和现有 xGovernor 连接，再安装采集器、保存路径、注册并启动常驻客户端。无需安装后再改路径或重启。失败时按提示处理，再执行同一命令。只接入 MCTS 不会连带安装 Pi Agent、xiaoO 或 Goal Plus。
 
 连接配置来自仓库中的 `testcases_union/config.env`。安装器在执行机的独立 Bash 子进程中读取配置，只提取 xGovernor 地址；不会打印 token 或修改该文件。模型、E2B 及 xGovernor 服务仍由部署者准备。
 
@@ -115,7 +115,7 @@ agent-insight-mcts-run --upstream http://127.0.0.1:8787 -- <原 MCTS 命令>
 
 平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；选择支持参数能力的执行主机后，实验向导提供树形/JSON 编辑、JSON 导入导出和个人模板。MCTS 默认模板保持平铺，key 使用执行端 CLI 原名并省略 `--`：`max-iters/branching/max-turns-init/max-turns-step/max-turns-author/max-turns-author-step/token-fuse-limit`，默认值依次为 `5、3、160、80、160、80、30000000`。“恢复默认”使用执行机上报配置，Token 阈值 `0` 关闭熔断。新增 MCTS 已支持的业务参数只需在平台增加同名标量 key/value，原名直传，不维护逐字段映射；通用编辑器允许新增嵌套草稿并原样下发；CLI 不支持的结构或调度参数覆盖在执行客户端报错。完整快照保留字段类型和删除语义，历史值不改写；复用时确认完整原配置，平台不转换别名或层级。详情见 [运行参数说明](../evaluation/experiments.md)。Pi 与后续 xiaoO 使用相同 MCTS 配置项。用户无需手动运行命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，关联本次根 Trace；平台独立运行 Benchmark 评测。停止实验向进程组发送 SIGINT，留出 30 秒释放本次会话/checkpoint 并刷新 Trace。Agent 超时从 MCTS 命令启动计时，覆盖准备、搜索、官测和退出上传；根 Trace 从首次 xGovernor 调用开始记录，耗时可能短于实验执行耗时。采集到分支 Trace 不代表已生成最终提交物。
 
-常驻客户端需要包含 `executor/mcts-runtime.cjs` 和 `pi-mcts` 能力发现逻辑；仅安装采集代理不会自动获得 Benchmark 执行能力。部署与评测服务要求见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。
+常驻客户端需要包含 `executor/mcts-runtime.cjs` 和 `pi-mcts` 能力发现逻辑；仅安装采集代理不会自动获得 Benchmark 执行能力。公共服务与客户端更新见 [Benchmark 通用服务部署指南](../../developer-guide/benchmark/service-deployment-guide.md#72-参数配置与客户端更新)，Benchmark 专属准备分别见 [SWE-bench](../../developer-guide/benchmark/swe-bench-deployment-guide.md) 与 [ZSoft](../../developer-guide/benchmark/zsoft-deployment-guide.md)。
 
 ## 数据流与展示
 
