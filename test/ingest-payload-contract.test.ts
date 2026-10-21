@@ -142,6 +142,9 @@ test("openclaw 兼容入口原样委托通用 upload，并复用 400/401 身份�
       body: JSON.stringify({ ...record, user: "untrusted-user" }),
     }))
     assert.equal(invalidKey.status, 401)
+    const rejection = await invalidKey.json()
+    assert.equal(rejection.error, "Invalid API key")
+    assert.doesNotMatch(JSON.stringify(rejection), /invalid-openclaw-contract-key|invalid-open/)
   } finally {
     if (previousDefaultUser === undefined) delete process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER
     else process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER = previousDefaultUser

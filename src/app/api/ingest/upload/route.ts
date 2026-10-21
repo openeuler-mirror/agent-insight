@@ -121,7 +121,7 @@ export async function POST(request: Request) {
         {
           error: 'Invalid API key',
           detail: 'API Key 在 User 表里没匹配。Server 拒绝接收以避免数据跑到错误账号。',
-          keyPrefix: keyPrefix + '...',
+          keyPrefix: '[REDACTED]',
           hint: '检查 AGENT_INSIGHT_API_KEY env 与 server DB 里目标 User.apiKey 是否一致',
         },
         { status: 401 },
