@@ -6,7 +6,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 const { BenchmarkExecutorError, runProcess } = require('./index.cjs')
-const { runtimeInvocationOptions } = require('./runtime-options.cjs')
+const { runtimeInvocationOptions, prepareRuntimeInvocation } = require('./runtime-options.cjs')
 const { failureCodes, ledgerFailureCodes, summarizeFailures } = require('./mcts-failure.cjs')
 const MCTS_RUNTIMES = Object.freeze({ 'pi-mcts': 'pi', 'xiao-mcts': 'xiaoo' })
 const { mctsPaths, checkMctsRepository, mctsUpstream, proxyPythonScript, readMctsEnvFile } = require('./mcts-config.cjs')
@@ -115,11 +115,10 @@ function validateMctsTask(payload) {
       || !Number.isSafeInteger(publicCase.maxBytes) || publicCase.maxBytes < 1 || publicCase.maxBytes > 1048576) {
       throw new BenchmarkExecutorError('MCTS_TASK_MISMATCH', 'ZSoft Case 与任务目录或提交契约不一致')
     }
-    let agentOptions
-    let optionArgs
-    try { ({ agentOptions, args: optionArgs } = runtimeInvocationOptions(payload.platform, payload.agent, payload.agentOptions)) }
-    catch (error) { throw new BenchmarkExecutorError('AGENT_OPTIONS_INVALID', error.message) }
-    return { runId, instanceId: publicCase.taskId, runtime, agentOptions, optionArgs, zsoft: true }
+    let invocation
+    try { invocation = runtimeInvocationOptions(payload.platform, payload.agent, payload.agentOptions) }
+    catch (error) { throw new BenchmarkExecutorError(error.code || 'AGENT_OPTIONS_INVALID', error.message) }
+    return { runId, instanceId: publicCase.taskId, runtime, agentOptions: invocation.agentOptions, optionArgs: invocation.args, invocationPlan: invocation, zsoft: true }
   }
   if (payload.workspace?.repository !== expectedRepository || payload.workspace?.revision !== baseCommit) {
     throw new BenchmarkExecutorError('MCTS_TASK_MISMATCH', 'SWE-bench Case 与 Git 工作区版本不一致')
@@ -127,11 +126,11 @@ function validateMctsTask(payload) {
   let invocation
   try { invocation = runtimeInvocationOptions(payload.platform, payload.agent, payload.agentOptions) }
   catch (error) { throw new BenchmarkExecutorError(error.code || 'AGENT_OPTIONS_INVALID', error.message) }
-  return { runId, instanceId, runtime, agentOptions: invocation.agentOptions, optionArgs: invocation.args }
+  return { runId, instanceId, runtime, agentOptions: invocation.agentOptions, optionArgs: invocation.args, invocationPlan: invocation }
 }
 
 async function runMctsBenchmarkCase(config, payload, processRunner = runProcess) {
-  const { runId, instanceId, runtime, agentOptions, optionArgs, zsoft } = validateMctsTask(payload)
+  const { runId, instanceId, runtime, agentOptions, invocationPlan, zsoft } = validateMctsTask(payload)
   const readiness = zsoft ? probeMctsZsoftRuntime(config) : probeMctsBenchmarkRuntime(config)
   if (!readiness.ready) throw new BenchmarkExecutorError('MCTS_RUNTIME_UNAVAILABLE', readiness.reason, 503)
   const paths = mctsPaths(config)
@@ -167,7 +166,10 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
     ...(zsoft ? { AGENT_INSIGHT_ZSOFT_WORKSPACE: payload.cwd, AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND: payload.benchmarkPayload.submissionKind,
       AGENT_INSIGHT_ZSOFT_CONTRACT_DIGEST: readiness.contract.sourceDigest } : {}),
   }
+  let preparedRuntime
   try {
+    preparedRuntime = prepareRuntimeInvocation(invocationPlan, outputDir)
+    Object.assign(env, preparedRuntime.env)
     await processRunner(process.execPath, [
       paths.traceLauncher, '--strict', '--config', path.join(path.dirname(paths.traceLauncher), 'config.json'),
       '--upstream', upstream,
@@ -175,7 +177,7 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
       ...(zsoft ? ['--mode', 'zsoft', '--runtime', runtime, '--task-id', instanceId]
         : ['--mode', 'sweverified', '--runtime', runtime, '--testbench', 'sweverified', '--instance-id', instanceId, '--split', 'test']),
       '--output-dir', runId,
-      ...optionArgs,
+      ...preparedRuntime.args,
     ], {
       cwd: paths.repoDir,
       env,
@@ -238,7 +240,7 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
         ...(agentOptions ? { agentOptions } : {}), ...error.runFacts }
     }
     throw error
-  }
+  } finally { preparedRuntime?.cleanup() }
 }
 
 module.exports = { ZSOFT_CAPABILITY, SWE_CAPABILITY, probeMctsZsoftRuntime, mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask, readMctsEnvFile }

@@ -59,7 +59,29 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 
 首次联调可选择一条 Case、并发设为 `1`，点击 **填入联调参数**；正式实验使用默认搜索参数或按需调整。
 
-参数区由源码中的 `services/executor/runtimes/mcts/runtime.yaml` 定义生成；安装到常驻客户端后，定义位于 `$AGENT_INSIGHT_HOME/client/runtime/executor/runtimes/mcts/runtime.yaml`。字段和预设不再写在前端。管理员可通过 `config/benchmark/executor.local.yaml` 的 `runtimes.mcts.defaults` 覆盖默认值；以页面当前显示为准。“恢复默认”恢复该执行机上报的默认值。修改配置后重启客户端并刷新页面；若复用实验提示定义已变化，请恢复默认后重新确认。实验详情使用创建时的参数快照；旧格式参数不再展示或复用。升级时需同时更新平台和执行客户端。
+参数区提供树形编辑和 JSON 编辑，MCTS 保持根级平铺参数。Key 使用 CLI 原 long 选项名，仅省略统一 `--` 前缀，保留大小写、下划线和点号，点号不表示层级。可以增删字符串、数字和布尔值；不能增加对象、数组、null 或人为分组。点击 **导入 JSON** 粘贴或上传完整对象，预览差异后整体替换；也可导出、查看最终配置或保存个人模板。同名模板保存为新版本，已有实验保留原快照。快速联调配置示例：
+
+```json
+{
+  "max-iters": 1,
+  "branching": 1,
+  "max-turns-init": 20,
+  "max-turns-step": 10,
+  "max-turns-author": 20,
+  "max-turns-author-step": 10,
+  "token-fuse-limit": 0
+}
+```
+
+新增 MCTS 已支持的 CLI 业务参数后，在平台增加同名 key/value 即可；例如执行端增加 `--new-option`，平台使用 `"new-option": "value"`，无需修改平台代码或增加逐字段 YAML 映射。参数必须由 MCTS 本身支持，平台不猜测类型、开关或结构。`mode/runtime/testbench/instance-id/split/output-dir` 等由平台根据目标和 Case 自动生成，不能被用户参数覆盖。
+
+默认值、可选校验和联调预设位于源码 `services/executor/runtimes/mcts/runtime.yaml`，交付声明为 `structure: flat`、`delivery: argv`、`binding: { mode: passthrough }`；完整声明见 [Runtime 参数接入](../../developer-guide/04-api-and-contracts.md#runtime-json-参数接入)。安装后定义位于 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/mcts/runtime.yaml`。仅需为新字段提供默认值、校验或预设时，再修改相应配置；普通参数透传不依赖这些配置。管理员可在 `config/benchmark/executor.local.yaml` 的 `runtimes.mcts.defaults` 覆盖默认值，例如 `max-iters: 3`。“恢复默认”恢复执行机上报值。
+
+新版客户端约每 30 秒重读并上报 YAML，修改后等待上报或重启，再刷新页面。首次升级执行代码，需重新运行页面生成的客户端安装命令；已有注册也可在新版源码目录运行 `node scripts/install-ras-client.js`，复制新运行时并自动重启。只更新源码 checkout 后重启旧服务不会更新安装目录副本。重新安装会覆盖安装目录 Runtime YAML，定制定义应在源码或配置仓维护；`executor.local.yaml` 会保留。
+
+如果本机 `executor.local.yaml` 中仍有 `maxIters` 等历史别名，升级时需手工核对并改为对应 CLI 原名，例如 `max-iters`。平台不会自动修改执行机的覆盖文件，也不会将旧别名当作新的参数名重写。
+
+已有实验保存的完整值和描述快照不改写，删除字段不会在复用或重跑时补默认值。复用旧 camelCase 参数时先预览转换为 CLI 原名的差异，确认后使用新草稿，原实验保持原样。交付契约不兼容需重新确认；仅默认值变化不使兼容的 v2 快照失效。通用编辑器保留嵌套能力给实际支持该结构的其他应用，不能借此改变 MCTS 格式。详细操作见 [实验运行参数](experiments.md)。
 
 - **Agent 单次执行上限**按每个 Case 计时：`900` 秒为 15 分钟，`1800` 秒为 30 分钟。达到上限会中断执行。
 - **执行并发**控制同时运行的 Case 数；**分支数**控制一个 Case 内的搜索。
@@ -67,7 +89,7 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 
 ![生成 Trace 页面：选择 pi-mcts 主机、默认模型、并发和超时，设置七项 MCTS 搜索参数并勾选 Case](../../images/agent/evaluation/mcts/experiment-trace-config.png)
 
-*图 5：截图使用默认搜索参数、1800 秒上限和三条 Case。选好后向下滚动，点击“下一步：预期答案”。*
+*图 5：旧版平铺参数区示意，使用默认搜索参数、1800 秒上限和三条 Case。新版参数区提供树形/JSON 编辑，Case 选择与下一步流程相同。*
 
 ### 4.3 预期答案
 

@@ -18,6 +18,7 @@ import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTre
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import type { AgentOptions, RuntimeDefinition } from '@/lib/engine/experiment/runtime-options';
+import { RuntimeParameterSnapshot } from '@/components/eval/RuntimeParameterSnapshot';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -370,8 +371,6 @@ export function ExperimentDetail({
   const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || DEFAULT_BENCHMARK_CASE_COLUMNS;
   const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
-  const runtimeParameters = detail?.executionAgentOptions?.values;
-  const runtimeParameterFields = detail?.executionParameterDefinition?.parameters.filter(field => runtimeParameters?.[field.key] !== undefined) || [];
   const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
   const focusVisible = Boolean(!loading && focusCaseId && detail?.id === id && detail.casePage === casePage
     && detail.casePageSize === casePageSize && detail.cases.some(item => item.id === focusCaseId));
@@ -518,19 +517,7 @@ export function ExperimentDetail({
                 </span>
               )}
               </div>
-              {runtimeParameterFields.length > 0 && (
-                <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 border-t border-[var(--border)] pt-3">
-                  <span className="font-semibold">{detail.executionParameterDefinition?.displayName} 运行参数</span>
-                  <dl className="flex flex-wrap gap-x-5 gap-y-2">
-                    {runtimeParameterFields.map((field) => (
-                      <div key={field.key} className="flex">
-                        <dt className="text-[var(--foreground-muted)]">{field.label}：</dt>
-                        <dd>{String(runtimeParameters![field.key])}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              )}
+              <RuntimeParameterSnapshot definition={detail.executionParameterDefinition} options={detail.executionAgentOptions} />
             </div>
 
             {detail.traceProgress && detail.traceProgress.failed > 0 && (

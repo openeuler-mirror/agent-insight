@@ -255,9 +255,11 @@ function taskValue(value: AgentTaskEnvelope): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue
 }
 
-function scanForbiddenKeys(value: JsonValue, path = '$'): void {
+function scanForbiddenKeys(value: JsonValue, allowRuntimeValues: boolean, segments: string[] = [], path = '$'): void {
+  if (allowRuntimeValues && segments.length === 3
+    && segments[0] === 'agentConfig' && segments[1] === 'agentOptions' && segments[2] === 'values') return
   if (Array.isArray(value)) {
-    value.forEach((item, index) => scanForbiddenKeys(item, `${path}[${index}]`))
+    value.forEach((item, index) => scanForbiddenKeys(item, allowRuntimeValues, [...segments, String(index)], `${path}[${index}]`))
     return
   }
   if (!value || typeof value !== 'object') return
@@ -268,7 +270,7 @@ function scanForbiddenKeys(value: JsonValue, path = '$'): void {
         `任务包含禁止字段 ${path}.${key}`,
       )
     }
-    scanForbiddenKeys(item, `${path}.${key}`)
+    scanForbiddenKeys(item, allowRuntimeValues, [...segments, key], `${path}.${key}`)
   }
 }
 
@@ -345,8 +347,8 @@ export function validateTaskEnvelope(
   ) {
     throw new BenchmarkProtocolError('TASK_AGENT_CONFIG_INVALID', 'Agent 配置不合法')
   }
-  normalizeBenchmarkAgentOptions(task.agentConfig.agentOptions)
-  scanForbiddenKeys(taskValue(task))
+  const agentOptions = normalizeBenchmarkAgentOptions(task.agentConfig.agentOptions)
+  scanForbiddenKeys(taskValue(task), agentOptions?.version === 2)
 }
 
 export function benchmarkDispatchDigest(input: {

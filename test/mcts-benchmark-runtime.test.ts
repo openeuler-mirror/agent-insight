@@ -458,20 +458,21 @@ for (const scenario of [
 }
 
 for (const platform of ['pi-mcts', 'xiao-mcts']) {
-  test(`${platform} maps shared MCTS options to its runtime and keeps zero token fuse`, async () => {
+  test(`${platform} passes CLI-named MCTS options and a new business key directly, keeping zero token fuse`, async () => {
     const f = fixture()
-    const options = { maxIters: 1, branching: 1, maxTurnsInit: 20, maxTurnsStep: 10,
-      maxTurnsAuthor: 20, maxTurnsAuthorStep: 10, tokenFuseLimit: 0 }
+    const options = { 'max-iters': 1, branching: 1, 'max-turns-init': 20, 'max-turns-step': 10,
+      'max-turns-author': 20, 'max-turns-author-step': 10, 'token-fuse-limit': 0, 'new-business-option': 'literal value' }
     try {
-      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, platform, agent: platform, agentOptions: { runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: options } },
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, platform, agent: platform, agentOptions: { version: 2, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: options } },
         async (_command: string, args: string[]) => {
           assert.equal(args[args.indexOf('--runtime') + 1], platform === 'pi-mcts' ? 'pi' : 'xiaoo')
-          assert.deepEqual(args.slice(-14), ['--max-iters', '1', '--branching', '1', '--max-turns-init', '20',
-            '--max-turns-step', '10', '--max-turns-author', '20', '--max-turns-author-step', '10', '--token-fuse-limit', '0'])
+          assert.deepEqual(args.slice(-16), ['--max-iters', '1', '--branching', '1', '--max-turns-init', '20',
+            '--max-turns-step', '10', '--max-turns-author', '20', '--max-turns-author-step', '10', '--token-fuse-limit', '0',
+            '--new-business-option', 'literal value'])
           f.writeTrace()
           throw new Error('fixture interruption')
         }), (error: { runFacts: { agentOptions: unknown; mctsRuntime: string } }) => {
-        assert.deepEqual(error.runFacts.agentOptions, { runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: options })
+        assert.deepEqual(error.runFacts.agentOptions, { version: 2, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: options })
         assert.equal(error.runFacts.mctsRuntime, platform === 'pi-mcts' ? 'pi' : 'xiaoo')
         return true
       })

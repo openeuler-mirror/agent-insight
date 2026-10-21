@@ -10,7 +10,7 @@ const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
 const { createGitSourcePolicies } = require('./source-policy-registry.cjs')
 const { PublicBundleWorkspaceProvider, SingleFileCollector, validatePublicBundleSpec } = require('./public-bundle.cjs')
 const { ZsoftTasksWorkspaceProvider, validateZsoftTasksSpec } = require('./zsoft-tasks.cjs')
-const { runtimeInvocationOptions } = require('./runtime-options.cjs')
+const runtimeOptions = require('./runtime-options.cjs')
 
 const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
 const DELIVERY_RETRY_BASE_MS = 5_000
@@ -133,9 +133,11 @@ const FORBIDDEN_KEYS = new Set([
   'privatepayload',
 ])
 
-function scanForbidden(value, currentPath = '$') {
+function scanForbidden(value, allowRuntimeValues, segments = [], currentPath = '$') {
+  if (allowRuntimeValues && segments.length === 3
+    && segments[0] === 'agentConfig' && segments[1] === 'agentOptions' && segments[2] === 'values') return
   if (Array.isArray(value)) {
-    value.forEach((item, index) => scanForbidden(item, `${currentPath}[${index}]`))
+    value.forEach((item, index) => scanForbidden(item, allowRuntimeValues, [...segments, String(index)], `${currentPath}[${index}]`))
     return
   }
   if (!value || typeof value !== 'object') return
@@ -143,7 +145,7 @@ function scanForbidden(value, currentPath = '$') {
     if (FORBIDDEN_KEYS.has(key.toLowerCase())) {
       throw new BenchmarkExecutorError('TASK_FORBIDDEN_FIELD', `任务包含禁止字段 ${currentPath}.${key}`)
     }
-    scanForbidden(item, `${currentPath}.${key}`)
+    scanForbidden(item, allowRuntimeValues, [...segments, key], `${currentPath}.${key}`)
   }
 }
 
@@ -202,7 +204,8 @@ function validateTaskEnvelope(task, runId) {
   ) {
     throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '提交物或 Agent 配置不合法')
   }
-  try { runtimeInvocationOptions(task.agentConfig.platform, task.agentConfig.agent, task.agentConfig.agentOptions) }
+  let agentOptions
+  try { ({ agentOptions } = runtimeOptions.runtimeInvocationOptions(task.agentConfig.platform, task.agentConfig.agent, task.agentConfig.agentOptions)) }
   catch (error) { throw new BenchmarkExecutorError(error.code || 'AGENT_OPTIONS_INVALID', error.message) }
   const artifactNames = new Set()
   for (const artifact of task.submission.requiredArtifacts) {
@@ -218,7 +221,7 @@ function validateTaskEnvelope(task, runId) {
     }
     artifactNames.add(artifact.name)
   }
-  scanForbidden(task)
+  scanForbidden(task, agentOptions?.version === 2)
 }
 
 class CapabilityRegistry {

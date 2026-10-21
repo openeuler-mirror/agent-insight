@@ -1,4 +1,8 @@
 'use strict'
+/* eslint-disable @typescript-eslint/no-require-imports */
+
+const { parseParameterJson, validateParameterObject, validateSchema, formatParameterJson } = require('./parameter-json.cjs')
+const { validateNativeCliKey } = require('./cli-parameters.cjs')
 
 const own = (value, key) => Object.hasOwn(value, key)
 const identifier = /^[A-Za-z][A-Za-z0-9_-]{0,127}$/
@@ -31,6 +35,17 @@ function fieldValue(field, value) {
   return value
 }
 function validateValues(definition, input, fillDefaults = true) {
+  if (definition.configuration?.version === 2) {
+    const values = validateParameterObject(input, definition.configuration.schema)
+    if (definition.configuration.structure === 'flat') {
+      for (const [key, value] of Object.entries(values)) {
+        if (definition.configuration.delivery === 'argv') validateNativeCliKey(key)
+        if (!scalar(value)) fail(`${key} 必须为有限数值、字符串或布尔值；执行端仅支持平铺参数`)
+        if (typeof value === 'string' && value.includes('\0')) fail(`${key} 参数不能包含空字符`)
+      }
+    }
+    return values
+  }
   record(input, '参数值')
   const fields = new Map(definition.parameters.map(field => [field.key, field]))
   for (const key of Object.keys(input)) if (!fields.has(key)) fail(`未知的 Runtime 参数：${key}`)
@@ -42,10 +57,26 @@ function validateValues(definition, input, fillDefaults = true) {
   }
   return values
 }
+function validateExecutionValues(definition, input, fillDefaults = true) {
+  const values = validateValues(definition, input, fillDefaults)
+  if (definition.configuration?.version === 2 && definition.configuration.structure !== 'nested'
+    && Object.values(values).some(value => !scalar(value))) {
+    fail('执行端未声明嵌套参数结构，仅支持平铺的字符串、数字和布尔值')
+  }
+  return values
+}
 function validateDefinition(input) {
-  keys(input, ['runtimeKey', 'displayName', 'definitionDigest', 'targets', 'parameterGroups', 'parameters', 'presets'], 'Runtime 描述')
+  keys(input, ['runtimeKey', 'displayName', 'definitionDigest', 'templateRevision', 'targets', 'parameterGroups', 'parameters', 'presets', 'configuration'], 'Runtime 描述')
   name(input.runtimeKey, 'runtimeKey'); text(input.displayName, 'displayName')
   if (!/^sha256:[a-f0-9]{64}$/.test(input.definitionDigest)) fail('Runtime 定义摘要不合法')
+  if (input.templateRevision !== undefined && !/^sha256:[a-f0-9]{64}$/.test(input.templateRevision)) fail('Runtime 模板摘要不合法')
+  if (input.configuration !== undefined) {
+    keys(input.configuration, ['version', 'defaults', 'schema', 'delivery', 'structure'], '参数配置定义')
+    if (input.configuration.version !== 2 || !['json-file', 'json-arg', 'argv'].includes(input.configuration.delivery)) fail('参数配置协议或交付方式不支持')
+    if (input.configuration.structure !== undefined && !['flat', 'nested'].includes(input.configuration.structure)) fail('参数配置结构仅支持 flat / nested')
+    if (input.configuration.schema !== undefined) validateSchema(input.configuration.schema)
+    validateValues(input, input.configuration.defaults)
+  }
   for (const key of ['targets', 'parameterGroups', 'parameters', 'presets']) if (!Array.isArray(input[key]) || input[key].length > 128) fail(`${key}必须是有限数组`)
   if (!input.targets.length) fail('Runtime 必须声明执行目标')
   const targets = new Set()
@@ -94,16 +125,20 @@ function definitionsForTarget(definitions, platform, agent) {
 }
 function normalizeAgentOptions(value, definition) {
   if (value == null) return undefined
-  keys(value, ['runtimeKey', 'definitionDigest', 'values'], 'Agent 参数')
+  keys(value, ['version', 'runtimeKey', 'definitionDigest', 'values'], 'Agent 参数')
   name(value.runtimeKey, 'runtimeKey')
   if (!/^sha256:[a-f0-9]{64}$/.test(value.definitionDigest)) fail('Runtime 定义摘要不合法')
+  if (value.version !== undefined && value.version !== 2) fail('Agent 参数协议版本不支持', 'CLIENT_UPGRADE_REQUIRED')
+  if (value.version === 2 && definition && definition.configuration?.version !== 2) fail('所选客户端不支持 JSON 参数协议，请升级客户端', 'CLIENT_UPGRADE_REQUIRED')
+  if (definition?.configuration?.version === 2 && value.version !== 2) fail('Agent 参数需要 version: 2，请重新确认参数', 'AGENT_DEFINITION_CHANGED')
   record(value.values, '参数值')
-  for (const [key, item] of Object.entries(value.values)) {
+  if (value.version === 2) validateParameterObject(value.values)
+  else for (const [key, item] of Object.entries(value.values)) {
     name(key, '参数 key'); if (!scalar(item) || (typeof item === 'string' && item.includes('\0'))) fail('参数值必须是有限数值、字符串或布尔值')
   }
   if (definition && (value.runtimeKey !== definition.runtimeKey || value.definitionDigest !== definition.definitionDigest)) fail('执行器参数定义已变化，请刷新并重新确认参数', 'AGENT_DEFINITION_CHANGED')
-  return { runtimeKey: value.runtimeKey, definitionDigest: value.definitionDigest,
-    values: definition ? validateValues(definition, value.values) : { ...value.values } }
+  return { ...(value.version === 2 ? { version: 2 } : {}), runtimeKey: value.runtimeKey, definitionDigest: value.definitionDigest,
+    values: definition ? validateValues(definition, value.values) : value.version === 2 ? validateParameterObject(value.values) : { ...value.values } }
 }
 function resolveAgentOptions(definitions, platform, agent, value) {
   const matches = definitionsForTarget(definitions, platform, agent)
@@ -113,10 +148,16 @@ function resolveAgentOptions(definitions, platform, agent, value) {
     if (value != null) fail('所选客户端未上报该执行目标的参数定义，请升级客户端', 'CLIENT_UPGRADE_REQUIRED')
     return { agentOptions: undefined, definition: undefined }
   }
-  const options = value ?? { runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: {} }
-  return { agentOptions: definition.parameters.length || value != null ? normalizeAgentOptions(options, definition) : undefined, definition }
+  const options = value ?? { ...(definition.configuration?.version === 2 ? { version: 2 } : {}), runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: definition.configuration?.defaults || {} }
+  const agentOptions = definition.configuration || definition.parameters.length || value != null ? normalizeAgentOptions(options, definition) : undefined
+  if (agentOptions) agentOptions.values = validateExecutionValues(definition, agentOptions.values)
+  return { agentOptions, definition }
 }
 function optionsToInputs(definition, options) {
+  if (definition.configuration?.version === 2) {
+    const values = options ? normalizeAgentOptions(options, definition).values : validateValues(definition, definition.configuration.defaults)
+    return { __json: formatParameterJson(values) }
+  }
   const supplied = options ? normalizeAgentOptions(options) : undefined
   if (supplied && (supplied.runtimeKey !== definition.runtimeKey || supplied.definitionDigest !== definition.definitionDigest)) fail('执行器参数定义已变化，请刷新并重新确认参数', 'AGENT_DEFINITION_CHANGED')
   const values = { ...Object.fromEntries(definition.parameters.filter(field => own(field, 'default')).map(field => [field.key, field.default])),
@@ -124,6 +165,7 @@ function optionsToInputs(definition, options) {
   return Object.fromEntries(definition.parameters.map(field => [field.key, values[field.key] === undefined ? '' : String(values[field.key])]))
 }
 function parseOptionInputs(definition, inputs) {
+  if (definition.configuration?.version === 2) return normalizeAgentOptions({ version: 2, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: validateExecutionValues(definition, parseParameterJson(inputs.__json ?? '')) }, definition)
   const values = {}
   for (const field of definition.parameters) {
     if (!own(inputs, field.key)) continue
@@ -139,6 +181,7 @@ function parseOptionInputs(definition, inputs) {
 function summarizeOptions(definition, options) {
   if (!definition || !options) return ''
   const normalized = normalizeAgentOptions(options, definition)
+  if (normalized.version === 2) return JSON.stringify(normalized.values)
   return definition.parameters.filter(field => own(normalized.values, field.key)).map(field => `${field.label}：${String(normalized.values[field.key])}`).join('；')
 }
-module.exports = { validateDefinition, validateValues, definitionsForTarget, normalizeAgentOptions, resolveAgentOptions, optionsToInputs, parseOptionInputs, summarizeOptions }
+module.exports = { parseParameterJson, validateParameterObject, formatParameterJson, validateDefinition, validateValues, validateExecutionValues, definitionsForTarget, normalizeAgentOptions, resolveAgentOptions, optionsToInputs, parseOptionInputs, summarizeOptions }

@@ -47,9 +47,12 @@ function runtimeOverrides(value) {
     if (Object.keys(runtime).some(key => key !== 'defaults')) return false
     if (runtime.defaults === undefined) return true
     if (!runtime.defaults || typeof runtime.defaults !== 'object' || Array.isArray(runtime.defaults)) return false
-    return Object.entries(runtime.defaults).every(([key, item]) => /^[A-Za-z][A-Za-z0-9_-]*$/.test(key)
-      && !['__proto__', 'prototype', 'constructor'].includes(key)
-      && (item === null || ['string', 'boolean'].includes(typeof item) || (typeof item === 'number' && Number.isFinite(item))))
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('../agent-runtime/parameter-json.cjs').validateParameterObject(runtime.defaults)
+      return true
+    }
+    catch { return false }
   })
 }
 

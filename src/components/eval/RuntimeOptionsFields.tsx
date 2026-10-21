@@ -1,22 +1,37 @@
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { optionsToInputs, type RuntimeDefinition, type RuntimeOptionInputs } from '@/lib/engine/experiment/runtime-options'
+import { JsonParameterEditor } from './JsonParameterEditor'
+import { formatParameterJson, validateExecutionValues } from '../../../packages/agent-runtime/index.cjs'
+import { optionsToInputs, type AgentOptions, type RuntimeDefinition, type RuntimeOptionInputs } from '@/lib/engine/experiment/runtime-options'
 
-export function RuntimeOptionsFields({ definition, value, error, onChange }: {
+export function runtimePresetInputs(definition: RuntimeDefinition, values: AgentOptions['values']): RuntimeOptionInputs {
+  return optionsToInputs(definition, {
+    ...(definition.configuration?.version === 2 ? { version: 2 } : {}),
+    runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values,
+  })
+}
+
+export function RuntimeOptionsFields({ definition, value, error, onChange, templateControls }: {
   definition: RuntimeDefinition
   value: RuntimeOptionInputs
   error: string | null
   onChange: (value: RuntimeOptionInputs) => void
+  templateControls?: ReactNode
 }) {
   return <section className="mb-4 grid gap-3" aria-label={`${definition.displayName} 运行参数`}>
     <div className="flex flex-wrap items-center gap-2">
       <h3 className="text-sm font-semibold">{definition.displayName} 运行参数</h3>
       {definition.presets.map(preset => <Button key={preset.key} type="button" variant="outline" size="sm"
-        onClick={() => onChange(optionsToInputs(definition, { runtimeKey: definition.runtimeKey,
-          definitionDigest: definition.definitionDigest, values: preset.values }))}>{preset.label}</Button>)}
+        onClick={() => onChange(runtimePresetInputs(definition, preset.values))}>{preset.label}</Button>)}
       <Button type="button" variant="ghost" size="sm" onClick={() => onChange(optionsToInputs(definition))}>恢复默认</Button>
     </div>
-    {definition.parameterGroups.map(group => <div key={group.key} className="grid gap-3">
+    {templateControls}
+    {definition.configuration?.version === 2 ? <JsonParameterEditor
+      value={value.__json ?? formatParameterJson(definition.configuration.defaults)}
+      schema={definition.configuration.schema} structure={definition.configuration.structure === 'nested' ? 'nested' : 'flat'} error={error}
+      validateValue={values => { validateExecutionValues(definition, values) }}
+      onChange={raw => onChange({ __json: raw })} /> : <>{definition.parameterGroups.map(group => <div key={group.key} className="grid gap-3">
       <h4 className="text-sm font-semibold">{group.label}</h4>
       {group.description && <p className="text-xs text-foreground-muted">{group.description}</p>}
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
@@ -36,6 +51,6 @@ export function RuntimeOptionsFields({ definition, value, error, onChange }: {
         </label>)}
       </div>
     </div>)}
-    {error && <p className="text-sm text-error" role="alert">{error}</p>}
+    {error && <p className="text-sm text-error" role="alert">{error}</p>}</>}
   </section>
 }

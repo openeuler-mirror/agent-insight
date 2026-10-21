@@ -1643,8 +1643,12 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     literalInput: triggerRouting,
     correlation,
   })
-  const { args: runtimeArgs, agentOptions: effectiveAgentOptions } = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
-  invocation.args.push(...runtimeArgs)
+  const runtimePlan = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
+  const effectiveAgentOptions = runtimePlan.agentOptions
+  const preparedRuntime = agentRuntimeOptions().prepareRuntimeInvocation(runtimePlan, cwd)
+  try {
+  invocation.args.push(...preparedRuntime.args)
+  Object.assign(env, preparedRuntime.env)
   const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
   const eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env) : null
   if (eventChannel) {
@@ -1665,7 +1669,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
   const firstModelResponseTimeoutMs = firstModelResponseTimeoutSeconds * 1000
   const startedAt = new Date().toISOString()
 
-  return new Promise((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     fs.mkdirSync(cwd, { recursive: true })
     const activityEvidence = runtime?.createActivityEvidence?.()
     let child
@@ -2050,6 +2054,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       void finishAgentRun(code, signal)
     })
   })
+  } finally { preparedRuntime.cleanup() }
 }
 
 function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
