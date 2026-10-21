@@ -437,13 +437,14 @@ function fileContainsAnyText(file, needles) {
 
 function selectJsonlFilesForUpload(files, options = {}) {
   const forceSessions = Array.from(options.forceSessions || []).filter(Boolean)
+  const pendingFiles = new Set(options.pendingFiles || [])
   const lastScanMtime = Number(options.lastScanMtime) || 0
   const needles = forceSessions.length
     ? forceSessions.map((sessionId) => JSON.stringify(sessionId))
     : SESSION_RECORD_MARKERS
 
   return files.filter((file) => {
-    if (!forceSessions.length && lastScanMtime > 0) {
+    if (!forceSessions.length && !pendingFiles.has(file) && lastScanMtime > 0) {
       try {
         if (fs.statSync(file).mtimeMs <= lastScanMtime) return false
       } catch {
@@ -656,6 +657,7 @@ function buildState(records) {
   const sysPrompts = new Map()
   const cliCompletedSessions = new Set()
   const sessionPids = new Map()
+  const sessionFiles = new Map()
   const sessionIdleAt = new Map()
   // 每个 session 落到 spool 的原始记录条数。只增不减，是"这个会话还在干活"的唯一
   // 可靠信号——工具死循环时消息条数/终稿文本/时间戳全都不变，只有它会涨。
@@ -668,6 +670,10 @@ function buildState(records) {
 
   const recordSessionPid = (sid, r) => {
     if (!sid) return
+    if (r.__sourceFile) {
+      if (!sessionFiles.has(sid)) sessionFiles.set(sid, new Set())
+      sessionFiles.get(sid).add(r.__sourceFile)
+    }
     const pid = Number(r?.__pluginPid)
     if (!Number.isFinite(pid) || pid <= 0) return
     if (!sessionPids.has(sid)) sessionPids.set(sid, new Set())
@@ -826,7 +832,7 @@ function buildState(records) {
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionFiles, sessionIdleAt, sessionRecordCounts }
 }
 
 // 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
@@ -1254,20 +1260,6 @@ async function main() {
 
   cleanupOldFiles(spoolDir, retentionDays)
 
-  const ckpt = loadCheckpoint(checkpointFile)
-
-  // Fast-skip gate: if no spool file has been touched since the last scan, exit
-  // immediately without reading/parsing any data. This keeps the polling daemon
-  // cheap (~5ms) when opencode is idle. Force=1 bypasses for manual debugging.
-  const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
-  const lastScanMtime = ckpt.__lastScanMtime || 0
-  if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
-    appendUploaderLog(
-      `main.fastSkip newestMtime=${newestMtime} lastScanMtime=${lastScanMtime} spoolDir=${spoolDir}`,
-    )
-    process.exit(0)
-  }
-
   // 单例锁: 同一时刻只允许一个 uploader 真正干活。plugin 每个 opencode event 都会 kick 一个
   // FORCE 实例, 叠加 5min cron, 高峰能堆出几十个进程啃同一份积压、吃爆内存(实测 75 个)。
   // 用 pid 锁文件去重: 已有存活 uploader 持锁就直接退出; 陈旧锁(pid 已死)则接管; 退出时释放自己的锁。
@@ -1295,8 +1287,30 @@ async function main() {
     } catch {}
   })
 
+  const ckpt = loadCheckpoint(checkpointFile)
+  const pendingSessions = ckpt.__pendingSessions && typeof ckpt.__pendingSessions === "object"
+    && !Array.isArray(ckpt.__pendingSessions) ? ckpt.__pendingSessions : {}
+  const spoolRoot = `${path.resolve(spoolDir)}${path.sep}`
+  for (const [sid, sources] of Object.entries(pendingSessions)) {
+    const valid = Array.isArray(sources) ? sources.filter(file => typeof file === "string"
+      && path.resolve(file).startsWith(spoolRoot) && file.endsWith(".jsonl") && fs.existsSync(file)) : []
+    if (deletedSessionIds.has(sid) || !valid.length) delete pendingSessions[sid]
+    else pendingSessions[sid] = valid
+  }
+  ckpt.__pendingSessions = pendingSessions
+  const pendingFiles = new Set(Object.values(pendingSessions).flat())
+  const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
+  const lastScanMtime = ckpt.__lastScanMtime || 0
+  // 进程退出不会改变 spool mtime，未完成上报的会话必须重新检查。
+  if (!pendingFiles.size && !forceSessions.size && newestMtime > 0 && newestMtime <= lastScanMtime
+    && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
+    saveCheckpoint(checkpointFile, ckpt)
+    appendUploaderLog(`main.fastSkip newestMtime=${newestMtime} lastScanMtime=${lastScanMtime} spoolDir=${spoolDir}`)
+    return
+  }
   const candidateFiles = selectJsonlFiles(spoolDir, spoolFile)
-  const files = selectJsonlFilesForUpload(candidateFiles, { forceSessions, lastScanMtime })
+  const candidates = !spoolFile && !forceSessions.size ? [...new Set([...candidateFiles, ...pendingFiles])] : candidateFiles
+  const files = selectJsonlFilesForUpload(candidates, { forceSessions, lastScanMtime, pendingFiles })
   appendUploaderLog(
     `main.scan files=${files.length}/${candidateFiles.length} ` +
     `mode=${spoolFile ? "spool-file" : forceSessions.size ? "force-session" : "changed-session-files"} ` +
@@ -1323,6 +1337,7 @@ async function main() {
   appendUploaderLog(`main.sessions total=${state.sessions.size} roots=${roots.length}`)
 
   for (const rootSid of roots) {
+    if (forceSessions.size && !forceSessions.has(rootSid)) continue
     if (deletedSessionIds.has(rootSid)) {
       appendUploaderLog(`session.skip deleted task_id=${rootSid}`)
       continue
@@ -1342,6 +1357,10 @@ async function main() {
     const pids = Array.from(state.sessionPids.get(rootSid) || [])
     const opencodeCliCompleted = state.cliCompletedSessions.has(rootSid)
       || (pids.length > 0 && pids.every((pid) => !isPidAlive(pid)))
+    const sourceFiles = [...new Set(collectSessionSubtree(state, rootSid)
+      .flatMap(sid => [...(state.sessionFiles.get(sid) || [])]))]
+    pendingSessions[rootSid] = sourceFiles
+    saveCheckpoint(checkpointFile, ckpt)
     const idleMs = state.sessionIdleAt.get(rootSid) || 0
     let lastTs = 0
     for (const m of interactions) {
@@ -1412,6 +1431,7 @@ async function main() {
         `session.skip before-upload-since task_id=${rootSid} activityMs=${activityMs} sinceMs=${uploadSinceMs} sig=${sig}`,
       )
       ckpt[rootSid] = sig
+      delete pendingSessions[rootSid]
       saveCheckpoint(checkpointFile, ckpt)
       continue
     }
@@ -1420,7 +1440,12 @@ async function main() {
     // 排障都推不上去。这里放行，但**只对指定 session**——FORCE=1 是进程级的，如果让它
     // 绕过所有 session 的 checkpoint，shutdown 那一次强推会把 spool 里保留期内的所有
     // 历史会话重传一遍，并在服务端触发一整轮 LLM 分析。
-    if (!forceSessions.has(rootSid) && isSignatureUnchanged(ckpt[rootSid], sig)) {
+    if ((!forceSessions.has(rootSid) || process.env.AGENT_INSIGHT_UPLOADER_RECHECK_ONLY === "1")
+      && isSignatureUnchanged(ckpt[rootSid], sig)) {
+      if (opencodeCliCompleted) {
+        delete pendingSessions[rootSid]
+        saveCheckpoint(checkpointFile, ckpt)
+      }
       appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig} prevSig=${ckpt[rootSid]}`)
       // 老格式 checkpoint 原地升级成新格式（见 isSignatureUnchanged 的注释）。
       if (ckpt[rootSid] !== sig) {
@@ -1434,6 +1459,7 @@ async function main() {
     const res = await postJson(host, apiKey, payload, clientIdentity)
     if (res.ok) {
       ckpt[rootSid] = sig
+      if (opencodeCliCompleted) delete pendingSessions[rootSid]
       saveCheckpoint(checkpointFile, ckpt)
       appendUploaderLog(`session.uploaded task_id=${rootSid} status=${res.status} sig=${sig}`)
     } else {
