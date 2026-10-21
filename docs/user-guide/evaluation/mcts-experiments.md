@@ -75,13 +75,13 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 
 新增 MCTS 已支持的 CLI 业务参数后，在平台增加同名 key/value 即可；例如执行端增加 `--new-option`，平台使用 `"new-option": "value"`，无需修改平台代码或增加逐字段 YAML 映射。参数必须由 MCTS 本身支持，平台不猜测类型、开关或结构。`mode/runtime/testbench/instance-id/split/output-dir` 等由平台根据目标和 Case 自动生成，不能被用户参数覆盖。
 
-默认值、可选校验和联调预设位于源码 `services/executor/runtimes/mcts/runtime.yaml`，交付声明为 `structure: flat`、`delivery: argv`、`binding: { mode: passthrough }`；完整声明见 [Runtime 参数接入](../../developer-guide/04-api-and-contracts.md#runtime-json-参数接入)。安装后定义位于 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/mcts/runtime.yaml`。仅需为新字段提供默认值、校验或预设时，再修改相应配置；普通参数透传不依赖这些配置。管理员可在 `config/benchmark/executor.local.yaml` 的 `runtimes.mcts.defaults` 覆盖默认值，例如 `max-iters: 3`。“恢复默认”恢复执行机上报值。
+默认模板、可选执行校验和联调预设位于 `services/executor/runtimes/mcts/runtime.yaml`；交付使用 `delivery: argv`、`binding: { mode: passthrough }`，无需 flat/nested 声明。客户端只向平台上报默认配置作为初始模板，业务 Schema 与交付绑定留在执行端。安装后文件位于 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/mcts/runtime.yaml`。本机 `config/benchmark/executor.local.yaml` 的 `runtimes.mcts.defaults` 可覆盖模板；平台“恢复默认”仅重新复制当前上报值到本次草稿，不修改该文件。
 
 新版客户端约每 30 秒重读并上报 YAML，修改后等待上报或重启，再刷新页面。首次升级执行代码，需重新运行页面生成的客户端安装命令；已有注册也可在新版源码目录运行 `node scripts/install-ras-client.js`，复制新运行时并自动重启。只更新源码 checkout 后重启旧服务不会更新安装目录副本。重新安装会覆盖安装目录 Runtime YAML，定制定义应在源码或配置仓维护；`executor.local.yaml` 会保留。
 
 如果本机 `executor.local.yaml` 中仍有 `maxIters` 等历史别名，升级时需手工核对并改为对应 CLI 原名，例如 `max-iters`。平台不会自动修改执行机的覆盖文件，也不会将旧别名当作新的参数名重写。
 
-已有实验保存的完整值和描述快照不改写，删除字段不会在复用或重跑时补默认值。复用旧 camelCase 参数时先预览转换为 CLI 原名的差异，确认后使用新草稿，原实验保持原样。交付契约不兼容需重新确认；仅默认值变化不使兼容的 v2 快照失效。通用编辑器保留嵌套能力给实际支持该结构的其他应用，不能借此改变 MCTS 格式。详细操作见 [实验运行参数](experiments.md)。
+已有实验的完整值和描述快照原样保留。通用编辑器允许在 MCTS 默认模板上新增对象、数组及 null，保存和下发完整草稿；当前 MCTS CLI 不能消费的配置由执行客户端在启动前报错。默认值不是编辑或提交的结构约束，删除字段不会被补回。客户端契约变化时，复用确认保留原 Key 和层级，不做 camelCase 别名转换。详细操作见 [实验运行参数](experiments.md)。
 
 - **Agent 单次执行上限**按每个 Case 计时：`900` 秒为 15 分钟，`1800` 秒为 30 分钟。达到上限会中断执行。
 - **执行并发**控制同时运行的 Case 数；**分支数**控制一个 Case 内的搜索。

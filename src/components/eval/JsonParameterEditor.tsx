@@ -5,52 +5,49 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Plus, Trash2, 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { formatParameterJson, type JsonObject, type JsonSchema } from '../../../packages/agent-runtime/index.cjs'
+import { formatParameterJson } from '../../../packages/agent-runtime/index.cjs'
 import {
   changeParameterType, diffParameterObjects, isParameterNumber, moveParameterNode, newParameterNode, parameterNodesFromObject,
-  parameterPointer, parameterTypesForStructure, readParameterDraft, removeParameterNode, serializeParameterNodes, updateParameterNode,
-  type JsonEditorNode, type JsonEditorType, type JsonParameterStructure,
+  parameterEditorTypes, parameterPointer, readParameterDraft, removeParameterNode, serializeParameterNodes, updateParameterNode,
+  type JsonEditorNode, type JsonEditorType,
 } from '@/lib/client/json-parameter-editor'
 
 const selectClass = 'h-9 w-full rounded-md border border-card-border bg-background px-2 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20'
 const textareaClass = 'w-full resize-y rounded-md border border-card-border bg-background p-3 font-mono text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20'
 const typeLabels = { string: 'String', number: 'Number', boolean: 'Boolean', object: 'Object', array: 'Array', null: 'Null' }
 
-function readTree(raw: string, structure: JsonParameterStructure) {
-  const { value } = readParameterDraft(raw, undefined, structure)
-  return { raw, structure, nodes: value ? parameterNodesFromObject(value) : [], editable: !!value }
+function readTree(raw: string) {
+  const { value } = readParameterDraft(raw)
+  return { raw, nodes: value ? parameterNodesFromObject(value) : [], editable: !!value }
 }
 
 function displayValue(value: unknown): string {
   return value === undefined ? '（不存在）' : JSON.stringify(value)
 }
 
-export function JsonParameterEditor({ value, schema, structure = 'nested', validateValue, error, onChange }: {
+export function JsonParameterEditor({ value, error, onChange }: {
   value: string
-  schema?: JsonSchema
-  structure?: JsonParameterStructure
-  validateValue?: (value: JsonObject) => void
   error: string | null
   onChange: (value: string) => void
 }) {
   const editorId = useId()
-  const [tree, setTree] = useState(() => readTree(value, structure))
-  const [mode, setMode] = useState<'tree' | 'json'>(() => readParameterDraft(value, undefined, structure).value ? 'tree' : 'json')
+  const [tree, setTree] = useState(() => readTree(value))
+  const [mode, setMode] = useState<'tree' | 'json'>(() => readParameterDraft(value).value ? 'tree' : 'json')
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [fileError, setFileError] = useState<string | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
-  const draft = useMemo(() => readParameterDraft(value, schema, structure, validateValue), [value, schema, structure, validateValue])
-  const imported = useMemo(() => readParameterDraft(importText, schema, structure, validateValue), [importText, schema, structure, validateValue])
+  const draft = useMemo(() => readParameterDraft(value), [value])
+  const imported = useMemo(() => readParameterDraft(importText), [importText])
   const differences = useMemo(() => draft.value && imported.value ? diffParameterObjects(draft.value, imported.value) : [], [draft.value, imported.value])
   const problem = error || draft.error
 
-  if (tree.raw !== value || tree.structure !== structure) setTree(readTree(value, structure))
+  if (tree.raw !== value) setTree(readTree(value))
 
   function publish(nodes: JsonEditorNode[]) {
     const raw = serializeParameterNodes(nodes)
-    setTree({ raw, structure, nodes, editable: true })
+    setTree({ raw, nodes, editable: true })
     onChange(raw)
   }
 
@@ -80,7 +77,7 @@ export function JsonParameterEditor({ value, schema, structure = 'nested', valid
         const container = node.type === 'object' || node.type === 'array'
         const open = !collapsed.has(node.id)
         return <li key={node.id}>
-          <div className="grid items-center gap-3 border-b border-card-border px-3 py-2" style={{ gridTemplateColumns: `minmax(${200 + depth * 16}px, 1.2fr) 112px minmax(180px, 1.4fr) 176px`, minWidth: 760 + depth * 16 }}>
+          <div className="grid items-center gap-3 border-b border-card-border px-3 py-2" style={{ gridTemplateColumns: `minmax(${200 + depth * 16}px, 1.2fr) 112px minmax(180px, 1.4fr) 208px`, minWidth: 760 + depth * 16 }}>
             <div className="flex min-w-0 items-center gap-1" style={{ paddingLeft: depth * 16 }}>
               {container ? <Button type="button" variant="ghost" size="sm" className="h-8 w-7 shrink-0 px-0"
                 aria-label={`${open ? '折叠' : '展开'} ${path}`} aria-expanded={open}
@@ -93,7 +90,7 @@ export function JsonParameterEditor({ value, schema, structure = 'nested', valid
             </div>
             <select className={selectClass} aria-label={`参数类型 ${path}`} value={node.type}
               onChange={event => changeNode(node.id, current => changeParameterType(current, event.target.value as JsonEditorType))}>
-              {parameterTypesForStructure(structure).map(type => <option value={type} key={type}>{typeLabels[type]}</option>)}
+              {parameterEditorTypes.map(type => <option value={type} key={type}>{typeLabels[type]}</option>)}
             </select>
             {container ? <span className="text-xs text-foreground-muted">{node.children.length} 个{node.type === 'object' ? '字段' : '元素'}</span>
               : node.type === 'null' ? <span className="font-mono text-sm text-foreground-muted">null</span>
@@ -107,8 +104,8 @@ export function JsonParameterEditor({ value, schema, structure = 'nested', valid
                     className="font-mono" aria-label={`参数值 ${path}`} placeholder="输入数字"
                     onChange={event => changeNode(node.id, current => ({ ...current, text: event.target.value }))} />}
             <div className="flex items-center justify-end gap-1">
-              {container && structure === 'nested' && <Button type="button" variant="ghost" size="sm" onClick={() => addChild(node)} aria-label={`${node.type === 'object' ? '添加子项' : '添加元素'} ${path}`}>
-                <Plus className="size-3" />{node.type === 'object' ? '子项' : '元素'}
+              {container && <Button type="button" variant="ghost" size="sm" onClick={() => addChild(node)} aria-label={`${node.type === 'object' ? '添加子字段' : '添加元素'} ${path}`}>
+                <Plus className="size-3" />{node.type === 'object' ? '添加子字段' : '添加元素'}
               </Button>}
               {parentType === 'array' && <>
                 <Button type="button" variant="ghost" size="sm" className="h-8 w-7 px-0" title="上移" aria-label={`上移 ${path}`} disabled={index === 0}
@@ -130,7 +127,7 @@ export function JsonParameterEditor({ value, schema, structure = 'nested', valid
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-card-border bg-background-secondary p-2">
       <div className="flex gap-1" role="group" aria-label="参数编辑模式">
         <Button type="button" size="sm" variant={mode === 'tree' ? 'secondary' : 'ghost'} aria-pressed={mode === 'tree'}
-          disabled={!tree.editable && !draft.value} onClick={() => setMode('tree')}>{structure === 'flat' ? '参数编辑' : '树形编辑'}</Button>
+          disabled={!tree.editable && !draft.value} onClick={() => setMode('tree')}>树形编辑</Button>
         <Button type="button" size="sm" variant={mode === 'json' ? 'secondary' : 'ghost'} aria-pressed={mode === 'json'}
           onClick={() => setMode('json')}>JSON 编辑</Button>
       </div>
@@ -140,15 +137,19 @@ export function JsonParameterEditor({ value, schema, structure = 'nested', valid
       </div>
     </div>
     {mode === 'tree' ? tree.editable ? <>
+      <p className="px-3 pt-2 text-xs text-foreground-muted">需要子字段时，将类型设为 Object；Array 可添加元素。配置结构需与执行端一致。</p>
       <p className="px-3 pt-2 text-xs text-foreground-muted md:hidden">左右滑动查看参数类型、值和操作。</p>
       <div className="max-h-[520px] overflow-auto">
-        <div className="grid min-w-[760px] gap-3 border-b border-card-border px-3 py-2 text-xs font-medium text-foreground-muted" style={{ gridTemplateColumns: 'minmax(200px, 1.2fr) 112px minmax(180px, 1.4fr) 176px' }}>
+        <div className="grid min-w-[760px] gap-3 border-b border-card-border px-3 py-2 text-xs font-medium text-foreground-muted" style={{ gridTemplateColumns: 'minmax(200px, 1.2fr) 112px minmax(180px, 1.4fr) 208px' }}>
           <span className="pl-8">参数 Key</span><span>类型</span><span>Value</span><span className="text-right">操作</span>
         </div>
         {renderNodes(tree.nodes, 'object', '', 0)}
         {!tree.nodes.length && <p className="p-4 text-sm text-foreground-muted">暂无参数，添加字段或导入 JSON 开始配置。</p>}
       </div>
-      <div className="p-2"><Button type="button" variant="ghost" size="sm" onClick={() => publish([...tree.nodes, newParameterNode('string', unusedKey(tree.nodes))])}><Plus />添加字段</Button></div>
+      <div className="flex flex-wrap gap-1 p-2">
+        <Button type="button" variant="ghost" size="sm" onClick={() => publish([...tree.nodes, newParameterNode('string', unusedKey(tree.nodes))])}><Plus />添加字段</Button>
+        <Button type="button" variant="ghost" size="sm" onClick={() => publish([...tree.nodes, newParameterNode('object', unusedKey(tree.nodes))])}><Plus />添加对象</Button>
+      </div>
     </> : <p className="p-4 text-sm text-foreground-muted">请在 JSON 编辑中按执行端要求修正配置后切换参数编辑。</p> : <div className="grid gap-2 p-3">
       <label htmlFor={`${editorId}-json`} className="sr-only">运行参数 JSON</label>
       <textarea id={`${editorId}-json`} className={textareaClass} rows={16} spellCheck={false} value={value} aria-invalid={!!problem}
@@ -158,7 +159,7 @@ export function JsonParameterEditor({ value, schema, structure = 'nested', valid
     </div>}
     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-card-border px-3 py-2">
       {problem ? <p className="min-w-0 flex-1 break-words text-sm text-error" role="alert">{problem}</p>
-        : <p className="text-xs text-foreground-muted" role="status">{structure === 'flat' ? '✓ 配置格式正确 · 按执行端原名填写平铺参数，值支持 String、Number、Boolean' : '✓ 配置格式正确 · 按执行端原始结构编辑，支持嵌套对象、数组和类型化值'}</p>}
+        : <p className="text-xs text-foreground-muted" role="status">✓ JSON 格式正确 · 本次配置将完整保存并原样下发</p>}
       <Button type="button" variant="ghost" size="sm" disabled={!!problem || !draft.value} onClick={() => setPreviewOpen(true)}>查看最终配置</Button>
     </div>
 

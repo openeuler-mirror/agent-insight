@@ -43,13 +43,13 @@ test('YAML defines all MCTS fields, presets and startup flags; zero is retained'
   assert.equal(JSON.stringify(definition).includes('binding'), false)
 })
 
-test('form follows target identity, preserves full JSON and blocks invalid values and stale definitions', () => {
+test('form follows target identity, preserves full JSON and blocks malformed JSON and stale definitions', () => {
   const target = { platform: 'pi-mcts', agent: 'pi-mcts', parameterDefinitions: [definition] }
   const inputs = optionsToInputs(definition)
   assert.deepEqual(JSON.parse(inputs.__json), defaults)
   assert.deepEqual(runtimeOptionsState(target, {}, '', 'host1').agentOptions, options())
   assert.match(runtimeOptionsState(target, { __json: '' }, 'host1', 'host1').error!, /JSON/)
-  assert.match(runtimeOptionsState(target, { __json: '{"branching":1.5}' }, 'host1', 'host1').error!, /integer/)
+  assert.deepEqual(runtimeOptionsState(target, { __json: '{"branching":1.5}' }, 'host1', 'host1').agentOptions?.values, { branching: 1.5 })
   assert.deepEqual(runtimeOptionsState(target, { __json: '{"branching":10}' }, 'host1', 'host2').agentOptions, options())
   assert.deepEqual(runtimeOptionsState(target, { __json: '{}' }, 'host1', 'host1').agentOptions, options({}))
   const stale = { ...options(), definitionDigest: `sha256:${'f'.repeat(64)}` }
@@ -57,7 +57,7 @@ test('form follows target identity, preserves full JSON and blocks invalid value
   assert.equal(runtimeOptionsState({ platform: 'opencode', agent: 'build' }, inputs, 'host1', 'host2').active, false)
 })
 
-test('old envelope is rejected; MCTS validates flat CLI fields and passes new scalar keys directly', () => {
+test('platform accepts generic values while the MCTS client validates its native CLI inputs', () => {
   for (const value of [[], 'flags', { mcts: { 'max-iters': 5 } }, { other: {} }, { ...options(), args: [] }]) {
     assert.throws(() => normalizeAgentOptions(value))
     assert.throws(() => normalizeBenchmarkAgentOptions(value), { code: 'AGENT_OPTIONS_INVALID' })
@@ -65,19 +65,22 @@ test('old envelope is rejected; MCTS validates flat CLI fields and passes new sc
   }
   for (const values of [{ 'max-iters': 0 }, { branching: -1 }, { 'max-turns-init': 1.5 },
     { 'max-turns-step': '20' }, { 'token-fuse-limit': -1 }, { 'max-iters': Number.MAX_SAFE_INTEGER + 1 }]) {
-    assert.throws(() => normalizeAgentOptions(options(values), definition))
+    assert.deepEqual(normalizeAgentOptions(options(values), definition)?.values, values)
+    assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', options(values)))
   }
   assert.deepEqual(normalizeAgentOptions(options({ 'token-fuse-limit': 0 }), definition)?.values, { 'token-fuse-limit': 0 })
   for (const value of [{ nested: 1 }, [1], null]) {
-    assert.throws(() => normalizeAgentOptions(options({ unknown: value }), definition))
+    assert.deepEqual(normalizeAgentOptions(options({ unknown: value }), definition)?.values, { unknown: value })
+    assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', options({ unknown: value })))
   }
   const added = options({ 'new-business-option': 'literal value', enabled: false, empty: '' })
   assert.deepEqual(runtimeInvocationOptions('pi-mcts', 'pi-mcts', added).args,
     ['--new-business-option', 'literal value', '--enabled', 'false', '--empty', ''])
   for (const key of ['mode', 'runtime', 'testbench', 'instance-id', 'split', 'output-dir']) {
-    assert.throws(() => normalizeAgentOptions(options({ [key]: 'override' }), definition))
+    assert.deepEqual(normalizeAgentOptions(options({ [key]: 'override' }), definition)?.values, { [key]: 'override' })
+    assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', options({ [key]: 'override' })))
   }
-  assert.throws(() => runtimeInvocationOptions('opencode', 'build', options()), { code: 'CLIENT_UPGRADE_REQUIRED' })
+  assert.throws(() => runtimeInvocationOptions('opencode', 'build', options()), { code: 'AGENT_DEFINITION_CHANGED' })
 })
 
 test('execution target requires a matching client definition and rejects changed digests', () => {
@@ -98,12 +101,13 @@ test('execution target requires a matching client definition and rejects changed
   }
 })
 
-test('MCTS local defaults reject null and template changes do not invalidate frozen options', t => {
+test('local templates preserve null, final client validation rejects it and template revisions preserve frozen options', t => {
   const settings = configurationFixture(t)
   const config = path.join(settings.root, 'config/benchmark')
   fs.writeFileSync(path.join(config, 'executor.yaml'), 'runtimes:\n  mcts:\n    defaults: { max-iters: 8, branching: 4 }\n')
   fs.writeFileSync(path.join(config, 'executor.local.yaml'), 'runtimes:\n  mcts:\n    defaults: { max-iters: null, token-fuse-limit: 0 }\n')
-  assert.throws(() => loadRuntimeDefinitions(settings), /max-iters.*integer/)
+  assert.equal(loadRuntimeDefinitions(settings).find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor.configuration!.defaults['max-iters'], null)
+  assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', undefined, settings), /max-iters.*integer/)
   fs.writeFileSync(path.join(config, 'executor.local.yaml'), 'runtimes:\n  mcts:\n    defaults: { max-iters: 5, token-fuse-limit: 0 }\n')
   const runtime = loadRuntimeDefinitions(settings).find(item => item.descriptor.runtimeKey === 'mcts')!
   const effective = resolveAgentOptions([runtime.descriptor], 'pi-mcts', 'pi-mcts').agentOptions!
@@ -120,13 +124,12 @@ test('configuration errors fail before startup and identify the YAML file', t =>
   for (const content of ['runtimes: { mcts: { defaults: { branching: 0 } } }', 'runtimes: { missing: { defaults: {} } }',
     'runtimes: { mcts: { defaults: { max-iters: "5" } } }']) {
     fs.writeFileSync(local, content)
-    assert.throws(() => loadRuntimeDefinitions(settings), /Runtime|runtime|未知|范围|整数|integer/)
+    assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', undefined, settings), /Runtime|runtime|未知|范围|整数|integer/)
   }
   fs.writeFileSync(local, '{}')
   const file = path.join(settings.root, 'services/executor/runtimes/mcts/runtime.yaml')
   const original = fs.readFileSync(file, 'utf8')
-  for (const modified of [original.replace('mode: passthrough', 'mode: missing'), original.replace('structure: flat', 'structure: invalid'),
-    original.replace('type: integer', 'type: shell'), original + '\nunknown: true\n']) {
+  for (const modified of [original.replace('mode: passthrough', 'mode: missing'), original.replace('type: integer', 'type: shell'), original + '\nunknown: true\n']) {
     fs.writeFileSync(file, modified)
     assert.throws(() => loadRuntimeDefinitions(settings), /runtime.yaml/)
   }

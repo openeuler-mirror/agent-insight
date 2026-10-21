@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { JsonParameterEditor } from './JsonParameterEditor'
-import { formatParameterJson, validateExecutionValues } from '../../../packages/agent-runtime/index.cjs'
+import { formatParameterJson } from '../../../packages/agent-runtime/index.cjs'
 import { optionsToInputs, type AgentOptions, type RuntimeDefinition, type RuntimeOptionInputs } from '@/lib/engine/experiment/runtime-options'
 
 export function runtimePresetInputs(definition: RuntimeDefinition, values: AgentOptions['values']): RuntimeOptionInputs {
@@ -29,8 +29,7 @@ export function RuntimeOptionsFields({ definition, value, error, onChange, templ
     {templateControls}
     {definition.configuration?.version === 2 ? <JsonParameterEditor
       value={value.__json ?? formatParameterJson(definition.configuration.defaults)}
-      schema={definition.configuration.schema} structure={definition.configuration.structure === 'nested' ? 'nested' : 'flat'} error={error}
-      validateValue={values => { validateExecutionValues(definition, values) }}
+      error={error}
       onChange={raw => onChange({ __json: raw })} /> : <>{definition.parameterGroups.map(group => <div key={group.key} className="grid gap-3">
       <h4 className="text-sm font-semibold">{group.label}</h4>
       {group.description && <p className="text-xs text-foreground-muted">{group.description}</p>}

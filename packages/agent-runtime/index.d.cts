@@ -8,7 +8,7 @@ export type JsonSchema = boolean | {
 export type ParameterValue = string | number | boolean
 export type AgentOptions = { version?: 2; runtimeKey: string; definitionDigest: string; values: JsonObject }
 export type ParameterField = { key: string; group: string; label: string; description?: string; type: 'integer' | 'number' | 'string' | 'boolean' | 'enum'; required?: boolean; default?: ParameterValue; minimum?: number; maximum?: number; minLength?: number; maxLength?: number; choices?: ParameterValue[] }
-export type RuntimeDefinition = { runtimeKey: string; displayName: string; definitionDigest: string; templateRevision?: string; targets: Array<{ platform: string; agent: string }>; parameterGroups: Array<{ key: string; label: string; description?: string }>; parameters: ParameterField[]; presets: Array<{ key: string; label: string; values: JsonObject }>; configuration?: { version: 2; defaults: JsonObject; schema?: JsonSchema; delivery: 'json-file' | 'json-arg' | 'argv'; structure?: 'flat' | 'nested' } }
+export type RuntimeDefinition = { runtimeKey: string; displayName: string; definitionDigest: string; templateRevision?: string; targets: Array<{ platform: string; agent: string }>; parameterGroups: Array<{ key: string; label: string; description?: string }>; parameters: ParameterField[]; presets: Array<{ key: string; label: string; values: JsonObject }>; configuration?: { version: 2; defaults: JsonObject; schema?: JsonSchema; delivery?: string; structure?: string } }
 export function parseParameterJson(text: string): JsonObject
 export function formatParameterJson(value: unknown): string
 export function validateParameterObject(value: unknown, schema?: JsonSchema): JsonObject

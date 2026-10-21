@@ -366,7 +366,7 @@ MCTS 安装器只检查公共仓库文件和 Python 版本。客户端按 Benchm
 
 每个 Case 的执行命令由客户端固定为 `run_union.sh --mode sweverified --runtime pi --testbench sweverified --instance-id <Case ID> --split test --output-dir <runId>`，并通过严格模式 Trace 代理启动。搜索参数由执行机的 Runtime YAML 和本机默认值覆盖解析，并显式追加到 CLI；新建实验冻结页面参数，不自动选择联调预设。显式 CLI 参数覆盖 MCTS `config.env` 中的对应环境配置。客户端创建本次运行专用的 `python` 启动脚本，直接 `exec` 配置的 Python 解释器，再运行原版 `run_union.sh`。启动脚本保留原解释器路径，使 Python 正确识别虚拟环境及 `datasets`；不要把 venv 解释器符号链接到外部目录后执行。MCTS 只将最终选中节点写入 `testcases_union/output/sweverified/<runId>/artifact.patch`；客户端检查 Patch 后应用到该 Case 的冻结 Git 工作区，再由现有 `git-patch/v1` Collector 生成并上传 `model.patch`。Trace 代理的本地状态按 Case 隔离，客户端从其运行记录取得根 Session ID（`mcts.run.<32 位十六进制>`），作为回调 `traceId`，与平台 `Execution.taskId` 保持一致。OTLP 的 32 位 Trace ID 仅用于传输，不直接用作页面跳转；历史误存 OTLP ID 的 Case 在读取时按同一账户下根 Session ID 的 SHA-256 精确映射，不按时间邻近猜测。停止实验时客户端向进程组发送 SIGINT，给 MCTS 的 `finally` 清理和 Trace 代理上传留出 30 秒，然后强制终止仍未退出的进程。
 
-MCTS 的默认配置、可选 Schema 和联调预设统一声明在 `services/executor/runtimes/mcts/runtime.yaml`。配置使用 `configuration: { version: 2, structure: flat, delivery: argv, binding: { mode: passthrough } }`，前端提供平铺树形/JSON 编辑和 JSON 导入；key 与 MCTS CLI 原名一致，仅省略 `--`，不拆分子项或添加业务层级。七个 key 为 `max-iters/branching/max-turns-init/max-turns-step/max-turns-author/max-turns-author-step/token-fuse-limit`，默认值依次为 `5、3、160、80、160、80、30000000`。已知字段存在时满足整数约束，Token 阈值 `0` 关闭熔断；额外业务标量字段允许直接透传，无需逐字段映射。新增字段必须是 MCTS 实际支持的 CLI 参数。`pi-mcts` 与 `xiao-mcts` 共用描述，内部 Runtime 仍为 `pi` / `xiaoo`；客户端自动发现仍只注册已有 Pi 目标。
+MCTS 的默认模板、可选执行 Schema 和预设位于 `services/executor/runtimes/mcts/runtime.yaml`，通过 `delivery: argv`、`binding: { mode: passthrough }` 交付，不声明 flat/nested。上报给平台的通用描述只包含 `configuration: { version: 2, defaults }`。前端统一支持嵌套编辑，七个 MCTS 平铺默认字段仅是初始内容，修改草稿不会改变模板。执行客户端在启动前校验实际参数；不支持的嵌套值不会自动拆分。
 
 执行机可在 `config/benchmark/executor.local.yaml` 覆盖默认值，安装版目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`：
 
@@ -378,13 +378,13 @@ runtimes:
       token-fuse-limit: 0
 ```
 
-没有显式实验配置时，使用 YAML 默认值叠加本机覆盖；显式实验配置保存为完整对象，不重新补默认值。MCTS 拒绝对象、数组、null、非法 key 和平台保留 flag；`mode/runtime/testbench/instance-id/split/output-dir` 等由上下文生成。CLI key 使用原 long 选项名，仅省略统一 `--` 前缀，大小写、下划线和点号原样保留，点号不表示嵌套层级；布尔值交付为 `true/false` 字面量，不猜测无值开关。新增普通参数只需在平台填写同名 key/value；只有需要新默认值、预设或校验时才调整配置。完整示例见 [Runtime 参数接入](../04-api-and-contracts.md#runtime-json-参数接入)。
+没有显式实验配置时，从 YAML 模板及本机覆盖初始化完整值；显式值不补默认字段。MCTS 的 CLI 交付器仅在执行端拒绝对象、数组、null、非法 CLI key 及调度保留 flag。平台保存并下发原值，不按 MCTS 特判。CLI key 保留大小写、下划线和点号，布尔值按 true/false 字面量交付；新增实际支持的参数直接使用同名 key/value。
 
 升级前应核对保留的 `executor.local.yaml`：其中历史 `maxIters` 等别名需由部署者确认并改成 CLI 原名。客户端不自动改写本机覆盖文件，也不会在正常执行时把 camelCase、下划线或点号重新解释成另一个名称或层级。
 
 源码定义位于 `services/executor/runtimes/`，安装后实际读取 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/`。新客户端约每 30 秒重新读取并上报定义，改 YAML 后等待上报并刷新页面，或重启客户端加速生效。客户端在每个 platform 的 `parameterDefinitions` 上报描述和 `definitionDigest`，不包含执行绑定。共享模块为 `packages/agent-runtime/index.cjs`（协议、校验）、`parameter-json.cjs`（递归 JSON）与 `loader.cjs`（YAML、覆盖、交付）。任务使用 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }`；平台和执行端按选定 platform/agent 验证，契约不一致返回 `AGENT_DEFINITION_CHANGED`。
 
-默认值和预设变动只更新模板修订；结构、约束、绑定或交付方式不兼容时需重新确认。平台保留完整值及描述快照，历史实验不改写；复用旧 MCTS camelCase 参数时展示固定历史名称转换的差异，确认后生成新草稿。执行器不会静默迁移旧参数。已有显式 CLI 映射模式保留给其他需要该入口的应用；只有实际支持嵌套结构的应用才声明 `structure: nested`，按其原生格式和入口交付。OpenCode 当前仍为空参数定义，后续 YAML 文件能力不由现有 JSON 文件/参数通道替代。
+默认值和预设变动只更新模板修订，不覆盖正在编辑的草稿。客户端契约摘要覆盖目标、交付方式、业务 Schema 和绑定，不含 flat/nested 声明；平台将摘要视为不透明标识。历史快照不回写，复用确认只将原配置用于新草稿，不更名、不拆层。OpenCode 新版客户端提供默认空对象的通用配置，当前使用 CLI 交付；JSON/YAML 等新入口由客户端按实际接口适配。
 
 平台及客户端首次启用本次能力需同步升级。先部署新平台，再重新执行页面生成的客户端安装命令，安装器复制新运行时并自动重启。已有注册的执行机也可在新版源码目录运行 `node scripts/install-ras-client.js`，保留绑定、复制运行时并重启；只更新 checkout 后重启旧服务不会更新安装目录副本。安装更新保留 `executor.local.yaml`，但覆盖安装目录 Runtime YAML，定制声明应在源码或配置仓维护并随升级部署。Linux 普通用户服务为 `systemctl --user restart agent-insight-client.service`，系统级服务使用 `sudo systemctl restart agent-insight-client.service`；macOS 使用 `launchctl kickstart -k "gui/$(id -u)/ai.agent-insight.client"`。Runtime 的主命令、工作区、Trace 和产物处理仍由代码实现，配置不能覆盖保留启动参数。
 

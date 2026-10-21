@@ -56,15 +56,15 @@ test('templates append immutable revisions scoped to Runtime and keep values as 
   }
 })
 
-test('an undeclared structure blocks nested submission without changing historical snapshot values', () => {
+test('an undeclared structure permits nested submission without changing historical snapshot values', () => {
   const legacyDefinition = validateDefinition({ ...definition, configuration: { version: 2, defaults: {}, delivery: 'json-file' } })
   const historical = normalizeAgentOptions({ ...options, definitionDigest: legacyDefinition.definitionDigest }, legacyDefinition)!
   const raw = savedOptionsToInputs(historical)
   const before = structuredClone(historical)
   const target = { platform: 'fixture', agent: 'build', parameterDefinitions: [legacyDefinition] }
   const state = runtimeOptionsState(target, raw, 'host1', 'host1', historical)
-  assert.match(state.error!, /未声明嵌套/)
-  assert.equal(state.agentOptions, undefined)
+  assert.equal(state.error, null)
+  assert.deepEqual(state.agentOptions?.values, values)
   assert.deepEqual(state.inputs, raw)
   assert.deepEqual(historical, before)
   assert.deepEqual(runtimeOptionsState(target, { __json: '{"native-key":0}' }, 'host1', 'host1').agentOptions?.values, { 'native-key': 0 })

@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { RuntimeOptionsFields } from '@/components/eval/RuntimeOptionsFields';
 import { RuntimeParameterTemplates } from '@/components/eval/RuntimeParameterTemplates';
 import { RuntimeOptionMigration } from '@/components/eval/RuntimeOptionMigration';
-import { runtimeOptionsState, readSavedOptions, readSavedDefinition, savedOptionsToInputs, optionsToInputs, summarizeOptions, type RuntimeOptionInputs, type RuntimeDefinition, type AgentOptions } from '@/lib/engine/experiment/runtime-options';
+import { runtimeOptionsState, initializeRuntimeDraft, readSavedOptions, readSavedDefinition, savedOptionsToInputs, optionsToInputs, summarizeOptions, type RuntimeOptionInputs, type RuntimeDefinition, type RuntimeDraft } from '@/lib/engine/experiment/runtime-options';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -532,7 +532,7 @@ export function ExperimentWizard({
     String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
   );
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
-  const [runtimeDrafts, setRuntimeDrafts] = useState<Record<string, { inputs: RuntimeOptionInputs; restored?: AgentOptions; restoredDefinition?: RuntimeDefinition }>>({});
+  const [runtimeDrafts, setRuntimeDrafts] = useState<Record<string, RuntimeDraft>>({});
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
@@ -655,6 +655,10 @@ export function ExperimentWizard({
   const runtimeState = runtimeOptionsState(!isReliabilityDataset && traceMode === 'generate' ? selectedTarget : null,
     runtimeDraft?.inputs || {}, runtimeDraft ? runtimeTargetKey : '', runtimeTargetKey, runtimeDraft?.restored, runtimeDraft?.restoredDefinition);
   const updateRuntimeInputs = (inputs: RuntimeOptionInputs) => setRuntimeDrafts(current => ({ ...current, [runtimeTargetKey]: { inputs } }));
+  const runtimeDefinition = runtimeState.definition;
+  if (runtimeState.active && runtimeDefinition && runtimeTargetKey && !runtimeDraft) {
+    setRuntimeDrafts(current => initializeRuntimeDraft(current, runtimeTargetKey, runtimeDefinition));
+  }
   const generationCases = useMemo(
     () => generationCasesFromDataset(selectedDataset),
     [selectedDataset],

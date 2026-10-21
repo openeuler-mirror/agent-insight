@@ -22,20 +22,17 @@ const legacy = validateDefinition({
 })
 const target = { platform: 'pi-mcts', agent: 'pi-mcts', parameterDefinitions: [current] }
 
-test('historical alias conversion is previewed and requires explicit confirmation without modifying the original snapshot', () => {
+test('historical configurations require confirmation of the original values without field-name conversion', () => {
   const saved: AgentOptions = { runtimeKey: 'mcts', definitionDigest: legacy.definitionDigest, values: { maxIters: 1, branching: 1, tokenFuseLimit: 0 } }
   const frozen = JSON.stringify({ agentParameterDefinition: legacy, agentOptions: saved })
   const inputs = savedOptionsToInputs(saved)
   const before = runtimeOptionsState(target, inputs, 'host', 'host', saved, legacy)
   assert.equal(before.agentOptions, undefined)
-  assert.match(before.error!, /预览.*确认/)
+  assert.match(before.error!, /确认原配置/)
   assert.deepEqual(JSON.parse(before.inputs.__json), saved.values)
-  assert.deepEqual(before.migration!.options.values, { 'max-iters': 1, branching: 1, 'token-fuse-limit': 0 })
-  assert.deepEqual(before.migration!.changes.map(change => [change.from, change.to]), [
-    ['maxIters', 'max-iters'], ['tokenFuseLimit', 'token-fuse-limit'],
-  ])
+  assert.deepEqual(before.migration!.options.values, saved.values)
   const preview = renderToStaticMarkup(createElement(RuntimeOptionMigration, { migration: before.migration!, onConfirm() {} }))
-  assert.match(preview, /确认转换并用于新实验/)
+  assert.match(preview, /确认原配置并用于新实验/)
   assert.match(preview, /原实验快照不变/)
   const confirmed = runtimeOptionsState(target, optionsToInputs(current, before.migration!.options), 'host', 'host')
   assert.equal(confirmed.error, null)
@@ -52,31 +49,25 @@ test('v2 historical scalar snapshots retain deletions and old names in the detai
   })
   const saved: AgentOptions = { version: 2, runtimeKey: 'mcts', definitionDigest: prior.definitionDigest, values: { maxIters: 2, tokenFuseLimit: 0 } }
   const proposal = proposeOptionMigration(prior, current, saved)!
-  assert.deepEqual(proposal.options.values, { 'max-iters': 2, 'token-fuse-limit': 0 })
+  assert.deepEqual(proposal.options.values, saved.values)
   const rendered = renderToStaticMarkup(createElement(RuntimeParameterSnapshot, { definition: prior, options: saved }))
   assert.match(rendered, /maxIters/)
   assert.doesNotMatch(rendered, /max-iters/)
   assert.equal(Object.hasOwn(proposal.options.values, 'branching'), false)
 })
 
-test('conversion only recognizes declared historical aliases and never flattens native objects or merges conflicting names', () => {
+test('confirmation is generic across runtimes and never guesses aliases, flattens objects or merges fields', () => {
   const saved = { version: 2 as const, runtimeKey: 'mcts', definitionDigest: legacy.definitionDigest,
-    values: { maxIters: 1 } }
-  const prior = validateDefinition({ ...legacy, configuration: { version: 2, delivery: 'argv', defaults: {} } })
-  for (const options of [
-    { ...saved, values: { maxIters: 1, 'max-iters': 2 } },
-    { ...saved, values: { maxIters: 1, solver: { turns: 2 } } },
-    { ...saved, values: { maxIters: 1, mode: 'override' } },
-    { ...saved, values: { 'max-iters': 1 } },
-    { ...saved, definitionDigest: `sha256:${'b'.repeat(64)}` },
-    { ...saved, runtimeKey: 'opencode' },
-  ]) assert.equal(proposeOptionMigration(prior, current, options), undefined)
+    values: { maxIters: 1, 'max-iters': 2, solver: { rows: [false, null] }, mode: 'business-data' } }
+  const proposal = proposeOptionMigration(legacy, current, saved)!
+  assert.deepEqual(proposal.options.values, saved.values)
+  for (const candidate of [{ ...saved, definitionDigest: `sha256:${'b'.repeat(64)}` }, { ...saved, runtimeKey: 'other' }]) {
+    assert.equal(proposeOptionMigration(legacy, current, candidate), undefined)
+  }
   assert.equal(proposeOptionMigration(undefined, current, saved), undefined)
-  assert.equal(proposeOptionMigration({ ...legacy, parameters: [] }, current, saved), undefined)
-  const originalNames = proposeOptionMigration(prior, current, { ...saved,
-    values: { maxIters: 1, myPrivateKey: 2, native_key: 3, 'plugin.retry': 4 } })!
-  assert.deepEqual(originalNames.options.values, { 'max-iters': 1, myPrivateKey: 2, native_key: 3, 'plugin.retry': 4 })
-  assert.deepEqual(originalNames.changes.map(change => change.from), ['maxIters'])
+  const otherCurrent = { ...current, runtimeKey: 'other' }
+  const otherLegacy = { ...legacy, runtimeKey: 'other' }
+  assert.deepEqual(proposeOptionMigration(otherLegacy, otherCurrent, { ...saved, runtimeKey: 'other' })!.options.values, saved.values)
   assert.equal(readSavedDefinition({ runtimeKey: 'mcts' }), undefined)
 })
 
@@ -104,6 +95,6 @@ test('historical experiment API still displays its frozen names and reading or p
     readSavedDefinition(detail.executionParameterDefinition))
   assert.equal(state.agentOptions, undefined)
   assert.ok(state.migration)
-  assert.deepEqual(state.migration.options.values, { 'max-iters': 1, branching: 1, 'token-fuse-limit': 0 })
+  assert.deepEqual(state.migration.options.values, saved.values)
   assert.equal((await prisma.experiment.findUniqueOrThrow({ where: { id: experiment.id } })).configSnapshotJson, frozen)
 })

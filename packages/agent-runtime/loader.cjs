@@ -7,6 +7,7 @@ const { createHash } = require('node:crypto')
 const yaml = require('../project-config/yaml.cjs')
 const { loadProjectConfig } = require('../project-config/index.cjs')
 const { validateDefinition, validateValues, validateExecutionValues, resolveAgentOptions, formatParameterJson } = require('./index.cjs')
+const { validateSchema } = require('./parameter-json.cjs')
 const { validateCliFlag: flag, validateNativeCliKey } = require('./cli-parameters.cjs')
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical)
@@ -15,12 +16,14 @@ function canonical(value) {
 const digest = value => `sha256:${createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex')}`
 const fail = message => { throw Object.assign(new TypeError(message), { code: 'AGENT_OPTIONS_INVALID' }) }
 function configurationBinding(configuration) {
+  if (configuration.version !== 2 || !['json-file', 'json-arg', 'argv'].includes(configuration.delivery)) fail('执行客户端不支持该参数交付方式')
+  if (configuration.schema !== undefined) validateSchema(configuration.schema)
   const binding = configuration.binding || {}
   if (!binding || typeof binding !== 'object' || Array.isArray(binding)) fail('参数交付 binding 必须是对象')
   const flags = new Set()
   if (configuration.delivery === 'argv') {
     if (binding.mode === 'passthrough') {
-      if (Object.keys(binding).some(key => key !== 'mode') || configuration.structure !== 'flat') fail('argv passthrough 必须声明 structure: flat，binding 仅支持 mode')
+      if (Object.keys(binding).some(key => key !== 'mode')) fail('argv passthrough binding 仅支持 mode')
       return binding
     }
     if (Object.keys(binding).some(key => key !== 'mappings') || !Array.isArray(binding.mappings)) fail('argv 必须声明 binding.mappings')
@@ -84,28 +87,23 @@ function loadRuntimeDefinitions(options = {}) {
       let configuration
       if (manifest.configuration !== undefined) {
         deliveryBinding = configurationBinding(manifest.configuration)
-        configuration = Object.fromEntries(Object.entries(manifest.configuration).filter(([key]) => key !== 'binding'))
+        configuration = { version: 2, defaults: manifest.configuration.defaults ?? {} }
       }
       const descriptor = validateDefinition({ runtimeKey: manifest.key, displayName: manifest.displayName, definitionDigest: `sha256:${'0'.repeat(64)}`, targets: manifest.targets, parameterGroups: manifest.parameterGroups || [], parameters, presets: manifest.presets || [], ...(configuration ? { configuration } : {}) })
       const override = overrides[manifest.key]?.defaults || {}
       if (configuration) {
-        descriptor.configuration.defaults = validateExecutionValues(descriptor, { ...configuration.defaults, ...override })
+        descriptor.configuration.defaults = validateValues(descriptor, { ...configuration.defaults, ...override })
       } else {
         const defaults = Object.fromEntries(Object.entries(override).filter(([, value]) => value !== null))
         validateValues(descriptor, defaults, false)
         for (const field of descriptor.parameters) if (Object.hasOwn(defaults, field.key)) field.default = defaults[field.key]
       }
       validateDefinition(descriptor)
-      for (const preset of descriptor.presets) validateExecutionValues(descriptor, preset.values, false)
       if (configuration) {
-        descriptor.definitionDigest = digest({ runtimeKey: descriptor.runtimeKey, targets: descriptor.targets, version: 2, delivery: configuration.delivery, structure: configuration.structure, schema: contractSchema(configuration.schema), binding: deliveryBinding })
+        descriptor.definitionDigest = digest({ runtimeKey: descriptor.runtimeKey, targets: descriptor.targets, version: 2, delivery: manifest.configuration.delivery, schema: contractSchema(manifest.configuration.schema), binding: deliveryBinding })
         descriptor.templateRevision = digest({ defaults: descriptor.configuration.defaults, presets: descriptor.presets })
-        if (deliveryBinding.mode === 'passthrough') {
-          passthroughArguments(descriptor.configuration.defaults)
-          for (const preset of descriptor.presets) passthroughArguments(preset.values)
-        }
       } else descriptor.definitionDigest = digest({ descriptor, bindings: Object.fromEntries(bindings) })
-      definitions.push({ descriptor, bindings, ...(configuration ? { deliveryBinding } : {}) })
+      definitions.push({ descriptor, bindings, ...(configuration ? { deliveryBinding, executionConfiguration: manifest.configuration } : {}) })
     } catch (error) { throw new Error(`${file}: ${error.message}`) }
   }
   for (const key of Object.keys(overrides)) if (!definitions.some(item => item.descriptor.runtimeKey === key)) throw new Error(`未知 Runtime 默认值覆盖：${key}`)
@@ -173,7 +171,8 @@ function runtimeInvocationOptions(platform, agent, options, settings = {}) {
   const args = []; const env = {}
   let parameterFile
   if (resolved.agentOptions?.version === 2) {
-    const configuration = runtime.descriptor.configuration
+    const configuration = runtime.executionConfiguration
+    resolved.agentOptions.values = validateExecutionValues({ ...runtime.descriptor, configuration }, resolved.agentOptions.values)
     const binding = runtime.deliveryBinding
     const contents = formatParameterJson(resolved.agentOptions.values)
     if (configuration.delivery === 'argv') args.push(...(binding.mode === 'passthrough' ? passthroughArguments(resolved.agentOptions.values) : mappedArguments(resolved.agentOptions.values, binding.mappings)))

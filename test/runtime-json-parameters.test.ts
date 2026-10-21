@@ -71,7 +71,7 @@ test('v2 values are complete snapshots and editor round trips preserve deletion,
   assert.throws(() => resolveAgentOptions([], 'fixture', 'build', supplied), { code: 'CLIENT_UPGRADE_REQUIRED' })
 })
 
-test('live manifests without a declared structure reject nested defaults, overrides and presets', t => {
+test('live templates preserve nested defaults, overrides and presets without a structure declaration', t => {
   const current = fixture(t)
   const file = path.join(current.root, 'services/executor/runtimes/fixture/runtime.yaml')
   const directory = path.join(current.root, 'config/benchmark')
@@ -82,16 +82,16 @@ test('live manifests without a declared structure reject nested defaults, overri
   for (const values of [{ native: { count: 1 } }, { native: [1] }, { native: null }] as JsonObject[]) {
     fs.writeFileSync(override, JSON.stringify({ runtimes: {} }))
     fs.writeFileSync(file, JSON.stringify({ ...manifest, configuration: { ...configuration, defaults: values } }))
-    assert.throws(() => loadRuntimeDefinitions(current.settings), /未声明嵌套/)
+    assert.deepEqual(loadRuntimeDefinitions(current.settings)[0].descriptor.configuration!.defaults, values)
     fs.writeFileSync(file, JSON.stringify({ ...manifest, presets: [{ key: 'fixture', label: 'Fixture', values }] }))
-    assert.throws(() => loadRuntimeDefinitions(current.settings), /未声明嵌套/)
+    assert.deepEqual(loadRuntimeDefinitions(current.settings)[0].descriptor.presets[0].values, values)
     fs.writeFileSync(file, JSON.stringify(manifest))
     fs.writeFileSync(override, JSON.stringify({ runtimes: { fixture: { defaults: values } } }))
-    assert.throws(() => loadRuntimeDefinitions(current.settings), /未声明嵌套/)
+    assert.deepEqual(loadRuntimeDefinitions(current.settings)[0].descriptor.configuration!.defaults, values)
   }
 })
 
-test('undeclared structure blocks direct execution while frozen nested snapshots still normalize unchanged', t => {
+test('generic JSON delivery accepts undeclared nested structure and frozen snapshots remain unchanged', t => {
   const current = fixture(t)
   const manifest = { ...current.manifest, configuration: { ...current.manifest.configuration, structure: undefined, defaults: {} } }
   fs.writeFileSync(path.join(current.root, 'services/executor/runtimes/fixture/runtime.yaml'), JSON.stringify(manifest))
@@ -102,10 +102,10 @@ test('undeclared structure blocks direct execution while frozen nested snapshots
     const snapshot = JSON.stringify({ definition: frozen, options: saved })
     assert.deepEqual(normalizeAgentOptions(saved, frozen), saved)
     assert.equal(JSON.stringify({ definition: frozen, options: saved }), snapshot)
-    assert.throws(() => parseOptionInputs(definition, optionsToInputs(frozen, saved)), /未声明嵌套/)
-    assert.throws(() => resolveAgentOptions([definition], 'fixture', 'build', saved), /未声明嵌套/)
-    assert.throws(() => resolveAgentOptions([frozen], 'fixture', 'build'), /未声明嵌套/)
-    assert.throws(() => runtimeInvocationOptions('fixture', 'build', saved, current.settings), /未声明嵌套/)
+    assert.deepEqual(parseOptionInputs(definition, optionsToInputs(frozen, saved)).values, values)
+    assert.deepEqual(resolveAgentOptions([definition], 'fixture', 'build', saved).agentOptions?.values, values)
+    assert.deepEqual(resolveAgentOptions([frozen], 'fixture', 'build').agentOptions?.values, values)
+    assert.deepEqual(JSON.parse(runtimeInvocationOptions('fixture', 'build', saved, current.settings).parameterFile!.contents), values)
   }
   const values = { count: 0, enabled: false, empty: '' }
   const options = { version: 2 as const, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values }
@@ -306,5 +306,5 @@ test('near-limit compact JSON remains editable and deliverable when pretty forma
 
 test('MCTS task identity flags cannot be overridden by a parameter mapping', t => {
   const current = fixture(t, 'argv', { mappings: [{ path: '/solver', flag: '--task-id', encoding: 'json' }] })
-  assert.throws(() => loadRuntimeDefinitions(current.settings), /task-id/)
+  assert.throws(() => runtimeInvocationOptions('fixture', 'agent', undefined, current.settings), /task-id/)
 })

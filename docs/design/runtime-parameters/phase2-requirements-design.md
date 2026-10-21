@@ -1,23 +1,25 @@
 # Runtime 参数配置设计
 
-`services/executor/runtimes/<key>/runtime.yaml` 声明目标 platform/agent、默认值、预设、可选约束、原生配置结构和交付方式；共享包 `packages/agent-runtime` 提供浏览器可用的协议校验和 Node 加载器。执行命令仍由 Runtime 实现提供。平台不重新设计应用参数格式。
+## 配置与草稿
 
-客户端加载 YAML，应用 `config/benchmark/executor.local.yaml` 的 `runtimes.<key>.defaults`，计算契约摘要及模板修订。能力上报包含不带执行绑定的描述。平台按客户端、platform、agent 选择描述，校验输入，冻结完整值和描述快照；执行端按本机定义再次校验。配置错误、未知结构和定义漂移显式失败。YAML 由 JSON schema 模式解析，不执行表达式。
+客户端 YAML 维护原生默认模板、预设、可选执行 Schema 和交付绑定。平台接收 `configuration: { version: 2, defaults }`，缺省 defaults 按 `{}`；delivery、binding、schema 留在客户端，平台不解释这些业务格式规则。旧快照中的历史结构元数据只作为兼容数据读取。
 
-## 通用配置协议 v2
+所有 v2 目标使用通用编辑器，提供六种 JSON 类型、添加对象、对象子字段、数组元素、JSON 导入、差异预览、导出及个人模板。`initializeRuntimeDraft` 按 workerId/platform/agent 首次复制默认值，已有记录不覆盖，包括已删除所有字段的 `{}`。默认值刷新与个人草稿隔离；恢复默认显式重新复制当前模板。
 
-Runtime 描述使用 `configuration: { version: 2, structure, defaults, schema?, delivery }`，执行绑定仅保留在可信 Runtime YAML 中。任务使用 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }`。无配置时初始化默认值；显式提交时按完整替换处理，不再次补默认值。可选 schema 在创建和执行时均校验，不支持的关键字在加载时拒绝。
+草稿通过 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }` 完整保存及下发，不按默认值字段筛选或重新合并。树形/JSON 双视图共享原始草稿，不自动拆层、扁平化、改名或将字符串解析为对象。平台仅做根对象、重复 key、有限数值、危险原型字段、256 KiB、32 层、20,000 节点等通用校验。
 
-`structure: flat` 只允许根级字符串、数字和布尔值；`structure: nested` 仅用于执行端原生支持嵌套配置的应用，保留其对象、数组与 null。未声明结构时向导仅开放平铺能力，历史嵌套快照不变，但提交前需要执行端明确声明。平台共用一个 JSON 草稿状态，按声明限制树编辑的类型与层级；JSON 导入同样校验该声明，拒绝不匹配的结构，不自动展开、扁平化或重命名。导入解析成功后展示整体替换差异，用户应用后才更新本次实验；导出及最终预览使用同一解析结果。解析器检查重复 key、根对象、有限数值、结构深度和大小，并隔离危险原型字段。
+## 执行端
 
-MCTS 声明 `structure: flat`、`delivery: argv`、`binding: { mode: passthrough }`。key 与 CLI 原 long 选项名一致且仅省略统一 `--` 前缀，保留大小写、下划线和点号，不将点号解释成层级，按 `key/value → [--key, String(value)]` 交付，新增合法标量字段不要求默认值、Schema 属性或映射。布尔值是 `true`/`false` 字面量，不猜测开关；对象、数组、null 与保留调度字段拒绝执行。值以 `-` 开头时使用 `--key=value`，其余值通过独立 argv 字面量传递，空字符串保留。七项现有默认值、预设和约束使用相同的 CLI key，不引入业务分组层级。
+客户端从本机交付方式、绑定和执行 Schema 计算契约摘要，平台仅检查其不透明标识。默认值和预设修订独立，不使现有兼容快照失效。
 
-已有 `binding.mappings` 模式保留给实际需要显式绑定的应用，用 JSON Pointer 与指定编码生成 argv，不允许静默丢弃未消费值。`json-file` 为每次调用创建临时 JSON 文件，通过执行端约定的路径入口交付并在退出后清理；`json-arg` 使用单个字面量 argv 参数交付完整对象。这些通道只在应用实际支持时使用，不能替代其原生 YAML 配置格式。OpenCode 当前保留空参数定义，后续按其实际结构及文件入口接入。
+`runtimeInvocationOptions` 校验最终值的业务 Schema，再生成应用实际支持的交付计划。CLI passthrough 将根 key 按原名交付，不逐字段维护映射；遇到不能消费的对象、数组、null、非法 key 或保留 flag 明确报错，不擅自拆层。JSON 文件/参数通道直接交付完整嵌套数据，临时文件逐次隔离并在成功、失败后清理。原生 YAML 等其他入口由客户端后续适配，平台不用修改编辑器格式。
 
-命令、工作目录、Case ID、模型和输出等平台控制字段不能被参数配置覆盖。MCTS 的 `mode/runtime/testbench/instance-id/split/output-dir` 等由上下文生成。业务 JSON 中同名数据字段仅在其实际交付契约允许时作为数据使用，任务其他控制位置仍执行原有禁止字段检查。
+MCTS 默认值保持七项 CLI 原名，但编辑、平台保存和下发均允许用户增加嵌套字段；能否执行由客户端判断。OpenCode 提供默认空对象的通用配置，当前使用 CLI 交付。
 
-v2 契约摘要覆盖目标、结构、交付方式、Schema 约束及绑定；默认值、显示标签和预设修订独立于契约兼容版本。实验冻结完整值与描述，默认值更新不影响重跑。已有实验快照保持原样，不自动迁移；复用旧 MCTS camelCase 参数时展示固定历史名称转换的预览，确认后才生成新实验草稿。执行器不执行这层迁移，新参数无需追加兼容映射。旧客户端收到不支持的协议明确失败，不静默降级。
+## 历史数据与模板
 
-参数模板存于现有 `UserSettings.settingsJson.runtimeParameterTemplates`，通过 `/api/eval/settings` 的专用 section/action 读取与追加修订，避免参数编辑器读取或提交模型配置。模板包含 Runtime key、契约摘要、完整值、名称和修订号；选择模板仅覆盖当前草稿，保存产生新修订，其他设置保存应保留已有模板。
+历史完整值和定义快照不改写，契约变化时仅确认原 JSON 用于新草稿，不猜测字段别名、层级或补入新默认值。确认更新新草稿的协议元数据，原实验保持原样。
 
-客户端安装包、npm 包和 standalone 包均包含共享加载器和 Runtime YAML。常驻客户端安装后从 `executor/runtimes/` 读取，源码使用 `services/executor/runtimes/`。新客户端约每 30 秒重读并上报 YAML；修改定义后等待上报或重启，刷新页面即可。执行代码升级需重新安装并重启；重新安装会覆盖安装目录的 Runtime YAML，定制声明应在源码或配置仓维护。
+个人模板使用既有 `UserSettings.settingsJson.runtimeParameterTemplates`，通过 `/api/eval/settings` 专用 section/action 追加不可变修订。应用模板只修改本次草稿，不修改客户端默认配置。
+
+客户端更新代码需重新安装并重启；配置约每 30 秒重新读取、上报。安装覆盖运行时 YAML，保留 executor.local.yaml，定制模板在源码或配置仓维护。

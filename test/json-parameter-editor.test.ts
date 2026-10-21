@@ -5,10 +5,11 @@ import test from 'node:test'
 import { formatParameterJson, parseParameterJson, validateDefinition, validateValues } from '../packages/agent-runtime/index.cjs'
 import {
   changeParameterType, diffParameterObjects, isParameterNumber, moveParameterNode, newParameterNode, parameterNodesFromObject,
-  parameterTypesForStructure, readParameterDraft, removeParameterNode, serializeParameterNodes, updateParameterNode,
+  parameterEditorTypes, readParameterDraft, removeParameterNode, serializeParameterNodes, updateParameterNode,
 } from '../src/lib/client/json-parameter-editor'
 import { JsonParameterEditor } from '../src/components/eval/JsonParameterEditor'
 import { RuntimeOptionsFields, runtimePresetInputs } from '../src/components/eval/RuntimeOptionsFields'
+import { initializeRuntimeDraft, optionsToInputs, runtimeOptionsState } from '../src/lib/engine/experiment/runtime-options'
 
 test('parameter tree retains nested typed values through rename, insertion, deletion and array reorder', () => {
   const initial = { solver: { retry: { enabled: false, count: 2 }, models: ['fast', { name: 'accurate', args: [null, true, 5, '5'] }] }, empty: {}, list: [] }
@@ -80,7 +81,7 @@ test('number fields cannot change value type or inject extra fields using valid 
 test('v2 preset actions include the protocol version and legacy presets retain flat inputs', () => {
   const generic = validateDefinition({ runtimeKey: 'custom', displayName: 'Custom Agent', definitionDigest: `sha256:${'a'.repeat(64)}`,
     targets: [{ platform: 'custom', agent: '*' }], parameters: [], parameterGroups: [], presets: [],
-    configuration: { version: 2, delivery: 'json-file', defaults: {} } })
+    configuration: { version: 2, delivery: 'json-file', structure: 'nested', defaults: {} } })
   const preset = { solver: { retry: { enabled: false, max_attempts: 0 } }, list: [null, 5, '5'] }
   assert.deepEqual(parseParameterJson(runtimePresetInputs(generic, preset).__json), preset)
   const legacy = validateDefinition({ runtimeKey: 'legacy', displayName: 'Legacy Agent', definitionDigest: `sha256:${'b'.repeat(64)}`,
@@ -126,11 +127,11 @@ test('generic runtime renders nested editing controls with typed values and acce
   assert.match(html, /导入 JSON/)
   assert.match(html, /查看最终配置/)
   assert.match(html, /aria-label="参数值 \/solver\/retries"[^>]*value="2"/)
-  assert.match(html, /aria-label="添加子项 \/solver"/)
+  assert.match(html, /aria-label="添加子字段 \/solver"/)
   assert.match(html, /aria-label="上移 \/models\/0" disabled/)
   assert.match(html, /aria-label="下移 \/models\/0"/)
   assert.match(html, /aria-label="折叠 \/solver" aria-expanded="true"/)
-  assert.match(html, /配置格式正确/)
+  assert.match(html, /JSON 格式正确/)
 })
 
 test('tree string values preserve line breaks using multiline controls and nested names retain room for indentation', () => {
@@ -143,116 +144,112 @@ test('tree string values preserve line breaks using multiline controls and neste
   assert.match(html, /左右滑动查看参数类型、值和操作/)
 })
 
-test('invalid raw JSON stays visible and prevents preview/export while schema errors retain editable tree', () => {
+test('invalid raw JSON stays visible and prevents import, preview and export', () => {
   const invalid = renderToStaticMarkup(createElement(JsonParameterEditor, { value: '{"attempts":', error: null, onChange() {} }))
   assert.match(invalid, /textarea[^>]*aria-invalid="true"/)
   assert.match(invalid, /\{&quot;attempts&quot;:/)
   assert.match(invalid, /role="alert"/)
   assert.match(invalid, /disabled=""[^>]*>查看最终配置/)
-  const schema = renderToStaticMarkup(createElement(JsonParameterEditor, { value: '{"attempts":-1}',
-    schema: { type: 'object', properties: { attempts: { type: 'integer', minimum: 0 } } }, error: null, onChange() {} }))
-  assert.match(schema, /aria-label="参数值 \/attempts"/)
-  assert.match(schema, /role="alert"/)
-  assert.match(schema, /disabled=""[^>]*>查看最终配置/)
 })
 
-test('flat runtime editor preserves CLI names and only offers executable scalar types', () => {
-  const values = { 'max-iters': 1, 'max-turns-author-step': 10, 'token-fuse-limit': 0, 'new-cli-flag': false, 'model-name': '5' }
-  const definition = validateDefinition({ runtimeKey: 'mcts', displayName: 'MCTS', definitionDigest: `sha256:${'a'.repeat(64)}`,
-    targets: [{ platform: 'pi-mcts', agent: 'pi-mcts' }], parameters: [], parameterGroups: [], presets: [],
-    configuration: { version: 2, delivery: 'argv', structure: 'flat', defaults: values } })
-  const raw = serializeParameterNodes(parameterNodesFromObject(values))
-  assert.deepEqual(readParameterDraft(raw, undefined, 'flat'), { value: values, error: null })
-  assert.deepEqual(parameterTypesForStructure('flat'), ['string', 'number', 'boolean'])
-  const html = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition, value: { __json: raw }, error: null, onChange() {} }))
-  assert.match(html, /参数编辑/)
-  assert.match(html, /aria-label="参数名 \/max-turns-author-step"/)
-  assert.match(html, /value="new-cli-flag"/)
-  assert.match(html, /按执行端原名填写平铺参数/)
-  assert.doesNotMatch(html, /option value="(?:object|array|null)"/)
-  assert.doesNotMatch(html, /添加子项|添加元素|search|solver/)
+const genericMcts = validateDefinition({ runtimeKey: 'mcts', displayName: 'MCTS', definitionDigest: `sha256:${'a'.repeat(64)}`,
+  targets: [{ platform: 'pi-mcts', agent: 'pi-mcts' }], parameters: [], parameterGroups: [], presets: [],
+  configuration: { version: 2, delivery: 'argv', structure: 'flat', defaults: { 'max-iters': 5, 'token-fuse-limit': 0 },
+    schema: { type: 'object', additionalProperties: false, properties: { 'max-iters': { type: 'integer', minimum: 1 }, 'token-fuse-limit': { type: 'integer' } } } } })
+const mctsTarget = { platform: 'pi-mcts', agent: 'pi-mcts', parameterDefinitions: [genericMcts] }
+
+test('all runtime editors offer generic types and preserve flat defaults without grouping them', () => {
+  const raw = JSON.stringify(genericMcts.configuration!.defaults)
+  const html = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition: genericMcts, value: { __json: raw }, error: null, onChange() {} }))
+  assert.deepEqual(parameterEditorTypes, ['string', 'number', 'boolean', 'object', 'array', 'null'])
+  for (const type of parameterEditorTypes) assert.match(html, new RegExp(`option value="${type}"`))
+  assert.match(html, /树形编辑/)
+  assert.match(html, /添加对象/)
+  assert.match(html, /需要子字段时，将类型设为 Object/)
+  assert.doesNotMatch(html, /aria-label="添加子字段|aria-label="添加元素|search|solver/)
+  assert.deepEqual(readParameterDraft(raw), { value: genericMcts.configuration!.defaults, error: null })
 })
 
-test('flat JSON edits and imports retain incompatible drafts without an applicable value', () => {
-  for (const item of [{ retries: 2 }, [1, 2], null]) {
-    const raw = JSON.stringify({ 'max-iters': 1, 'native-option': item }, null, 2)
-    const draft = readParameterDraft(raw, undefined, 'flat')
-    assert.equal(draft.value, undefined)
-    assert.match(draft.error!, /执行端只支持平铺参数/)
-    assert.match(draft.error!, /\/native-option/)
-    const html = renderToStaticMarkup(createElement(JsonParameterEditor, { value: raw, structure: 'flat', error: null, onChange() {} }))
-    assert.match(html, /textarea[^>]*aria-invalid="true"/)
-    assert.match(html, /&quot;native-option&quot;/)
-    assert.match(html, /执行端只支持平铺参数/)
-    assert.match(html, /disabled=""[^>]*>查看最终配置/)
-    assert.match(html, /disabled=""[^>]*>[\s\S]*?导出/)
-    assert.doesNotMatch(html, /aria-label="添加子项|aria-label="添加元素/)
-    assert.ok(html.includes(raw.replaceAll('"', '&quot;')), 'the complete incompatible JSON remains visible for correction')
-  }
-})
-
-test('nested editor keeps execution-native configuration without adding or renaming levels', () => {
-  const native = { provider: { custom: { options: { baseURL: 'https://example.invalid', retry: false } } }, tools: ['read', 'edit'], disabled: null }
-  const raw = JSON.stringify(native)
-  assert.deepEqual(readParameterDraft(raw, undefined, 'nested'), { value: native, error: null })
-  assert.deepEqual(readParameterDraft(raw), { value: native, error: null })
-  assert.deepEqual(parameterTypesForStructure('nested'), ['string', 'number', 'boolean', 'object', 'array', 'null'])
-  assert.deepEqual(parseParameterJson(serializeParameterNodes(parameterNodesFromObject(native))), native)
-  const html = renderToStaticMarkup(createElement(JsonParameterEditor, { value: raw, structure: 'nested', error: null, onChange() {} }))
-  assert.match(html, /按执行端原始结构编辑/)
-  assert.match(html, /aria-label="添加子项 \/provider\/custom\/options"/)
-  assert.match(html, /aria-label="参数名 \/provider\/custom\/options\/baseURL"/)
-  assert.match(html, /option value="object"/)
-  assert.match(html, /option value="array"/)
-  assert.match(html, /option value="null"/)
-})
-
-test('draft and import preflight reject execution-invalid CLI keys while retaining editable values', () => {
-  const definition = validateDefinition({ runtimeKey: 'mcts', displayName: 'MCTS', definitionDigest: `sha256:${'a'.repeat(64)}`,
-    targets: [{ platform: 'pi-mcts', agent: 'pi-mcts' }], parameters: [], parameterGroups: [], presets: [],
-    configuration: { version: 2, delivery: 'argv', structure: 'flat', defaults: {} } })
-  for (const values of [{ ' mode ': 'sweverified' }, { mode: 'sweverified' }, { '--max-iters': 1 }, { 'model-name': 'invalid\0value' }]) {
+test('MCTS nested drafts can be imported, edited, previewed, saved and submitted independently of default structure', () => {
+  for (const item of [{ retries: 2 }, [1, null, false], null]) {
+    const values = { 'max-iters': -1, 'new-option': item }
     const raw = JSON.stringify(values)
-    const draft = readParameterDraft(raw, undefined, 'flat', value => { validateValues(definition, value) })
-    assert.ok(draft.error, 'the import cannot be applied when execution would reject the parameter')
-    assert.deepEqual(draft.value, values, 'the editor keeps original keys and values for correction')
-    const html = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition, value: { __json: raw }, error: null, onChange() {} }))
-    assert.match(html, /role="alert"/)
-    assert.match(html, /disabled=""[^>]*>查看最终配置/)
+    assert.deepEqual(readParameterDraft(raw), { value: values, error: null })
+    const state = runtimeOptionsState(mctsTarget, { __json: raw }, 'host', 'host')
+    assert.equal(state.error, null)
+    assert.deepEqual(state.agentOptions?.values, values)
+    const html = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition: genericMcts, value: state.inputs, error: state.error, onChange() {} }))
+    assert.match(html, /JSON 格式正确/)
+    assert.doesNotMatch(html, /role="alert"|disabled=""[^>]*>查看最终配置|disabled=""[^>]*>[\s\S]*?导出/)
+    if (item !== null) assert.match(html, Array.isArray(item) ? /aria-label="添加元素 \/new-option"/ : /aria-label="添加子字段 \/new-option"/)
+    assert.deepEqual(parseParameterJson(serializeParameterNodes(parameterNodesFromObject(values))), values)
   }
 })
 
-test('execution preflight preserves frozen CLI snapshots and native nested file shapes', () => {
-  const base = { runtimeKey: 'custom', displayName: 'Custom', definitionDigest: `sha256:${'a'.repeat(64)}`,
-    targets: [{ platform: 'custom', agent: '*' }], parameters: [], parameterGroups: [], presets: [] }
-  const snapshot = Object.freeze({ 'max-iters': 1, 'new-cli-flag': false, 'model-name': '5' })
-  const cli = validateDefinition({ ...base, configuration: { version: 2, delivery: 'argv', structure: 'flat', defaults: {} } })
-  const before = JSON.stringify(snapshot)
-  const cliDraft = readParameterDraft(before, undefined, 'flat', value => { validateValues(cli, value) })
-  assert.equal(cliDraft.error, null)
-  assert.deepEqual(cliDraft.value, snapshot)
-  assert.equal(JSON.stringify(snapshot), before)
-
-  const file = validateDefinition({ ...base, configuration: { version: 2, delivery: 'json-file', structure: 'nested', defaults: {} } })
-  const native = { ' mode ': { '--max-iters': 1 }, mode: ['literal', null], 'model-name': '5' }
-  const nativeRaw = JSON.stringify(native)
-  assert.deepEqual(readParameterDraft(nativeRaw, undefined, 'nested', value => { validateValues(file, value) }), { value: native, error: null })
+test('manual object creation leaves defaults unchanged and submission keeps the exact user values', () => {
+  const before = JSON.stringify(genericMcts.configuration!.defaults)
+  let nodes = [...parameterNodesFromObject(genericMcts.configuration!.defaults), newParameterNode('object', 'permission')]
+  nodes = updateParameterNode(nodes, nodes[2].id, node => ({ ...node, children: [{ ...newParameterNode('string', 'example'), text: 'allow' }] }))
+  const raw = serializeParameterNodes(nodes)
+  const state = runtimeOptionsState(mctsTarget, { __json: raw }, 'host', 'host')
+  assert.equal(state.error, null)
+  assert.deepEqual(state.agentOptions?.values, { ...genericMcts.configuration!.defaults, permission: { example: 'allow' } })
+  const html = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition: genericMcts, value: state.inputs, error: state.error, onChange() {} }))
+  assert.match(html, /aria-label="添加子字段 \/permission"/)
+  assert.match(html, /aria-label="参数值 \/permission\/example"/)
+  assert.equal(JSON.stringify(genericMcts.configuration!.defaults), before)
 })
 
-test('runtime editors without an explicit native structure stay flat while preserving incompatible drafts', () => {
-  const definition = validateDefinition({ runtimeKey: 'older', displayName: 'Older client', definitionDigest: `sha256:${'a'.repeat(64)}`,
-    targets: [{ platform: 'older', agent: '*' }], parameters: [], parameterGroups: [], presets: [],
-    configuration: { version: 2, delivery: 'json-file', defaults: { 'max-iters': 1 } } })
-  const scalarHtml = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition, value: { __json: '{"max-iters":1}' }, error: null, onChange() {} }))
-  assert.match(scalarHtml, /按执行端原名填写平铺参数/)
-  assert.doesNotMatch(scalarHtml, /option value="(?:object|array|null)"/)
-  const raw = '{"native":{"option":1},"values":[1,2]}'
-  const html = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition, value: { __json: raw }, error: null, onChange() {} }))
-  assert.ok(html.includes(raw.replaceAll('"', '&quot;')))
-  assert.match(html, /执行端只支持平铺参数/)
-  assert.match(html, /disabled=""[^>]*>查看最终配置/)
-  const imported = readParameterDraft(raw, definition.configuration!.schema,
-    definition.configuration!.structure === 'nested' ? 'nested' : 'flat', value => { validateValues(definition, value) })
-  assert.equal(imported.value, undefined)
-  assert.match(imported.error!, /执行端只支持平铺参数/)
+test('native permission JSON keeps path keys literal without splitting or renaming any levels', () => {
+  const values = { permission: { external_directory: { '~/.agent-insight/example/**': 'allow' } }, tools: ['read', null], 'plugin.retry': '5' }
+  const raw = serializeParameterNodes(parameterNodesFromObject(values))
+  const state = runtimeOptionsState(mctsTarget, { __json: raw }, 'host', 'host')
+  const html = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition: genericMcts, value: state.inputs, error: state.error, onChange() {} }))
+  assert.match(html, /aria-label="添加子字段 \/permission"/)
+  assert.match(html, /aria-label="添加子字段 \/permission\/external_directory"/)
+  assert.match(html, /value="~\/\.agent-insight\/example\/\*\*"/)
+  assert.deepEqual(state.agentOptions?.values, values)
+  assert.equal(state.error, null)
+  assert.deepEqual(validateValues(genericMcts, values), values)
+})
+
+test('JSON keys remain business data on the platform rather than being interpreted as CLI options', () => {
+  for (const values of [{ ' mode ': 'data' }, { mode: 'data' }, { '--max-iters': 1 }, { 'model-name': 'literal\0value' }]) {
+    const raw = JSON.stringify(values)
+    assert.deepEqual(readParameterDraft(raw), { value: values, error: null })
+    const state = runtimeOptionsState(mctsTarget, { __json: raw }, 'host', 'host')
+    assert.equal(state.error, null)
+    assert.deepEqual(state.agentOptions?.values, values)
+  }
+})
+
+test('draft initialization copies defaults once, keeps deletion and isolates targets from later default updates', () => {
+  const initial = initializeRuntimeDraft({}, 'host', genericMcts)
+  assert.deepEqual(JSON.parse(initial.host.inputs.__json), genericMcts.configuration!.defaults)
+  const next = validateDefinition({ ...genericMcts, configuration: { version: 2, defaults: { 'max-iters': 99, newDefault: true } } })
+  assert.equal(initializeRuntimeDraft(initial, 'host', next), initial)
+  const edited = { ...initial, host: { inputs: { __json: '{"permission":{"external_directory":{"~/example/**":"allow"}}}' } } }
+  assert.equal(initializeRuntimeDraft(edited, 'host', next), edited)
+  const state = runtimeOptionsState({ ...mctsTarget, parameterDefinitions: [next] }, edited.host.inputs, 'host', 'host')
+  assert.deepEqual(state.agentOptions?.values, JSON.parse(edited.host.inputs.__json))
+  assert.equal(Object.hasOwn(state.agentOptions!.values, 'max-iters'), false)
+  const empty = { host: { inputs: { __json: '{}' } } }
+  assert.equal(initializeRuntimeDraft(empty, 'host', next), empty)
+  assert.deepEqual(runtimeOptionsState(mctsTarget, empty.host.inputs, 'host', 'host').agentOptions?.values, {})
+  const other = initializeRuntimeDraft(edited, 'other-host', next)
+  assert.deepEqual(other.host, edited.host)
+  assert.deepEqual(JSON.parse(other['other-host'].inputs.__json), next.configuration!.defaults)
+  assert.deepEqual(JSON.parse(optionsToInputs(next).__json), next.configuration!.defaults)
+})
+
+test('a runtime without defaults starts empty and accepts nested additions without a structure declaration', () => {
+  const definition = validateDefinition({ runtimeKey: 'empty', displayName: 'Empty', definitionDigest: `sha256:${'b'.repeat(64)}`,
+    targets: [{ platform: 'empty', agent: '*' }], parameters: [], parameterGroups: [], presets: [], configuration: { version: 2 } })
+  const draft = initializeRuntimeDraft({}, 'host', definition)
+  assert.deepEqual(JSON.parse(draft.host.inputs.__json), {})
+  const values = { rows: [1, false, null, { enabled: true }], native: { child: 'value' } }
+  const state = runtimeOptionsState({ platform: 'empty', agent: 'build', parameterDefinitions: [definition] }, { __json: JSON.stringify(values) }, 'host', 'host')
+  assert.equal(state.error, null)
+  assert.deepEqual(state.agentOptions?.values, values)
+  assert.deepEqual(definition.configuration!.defaults, {})
 })

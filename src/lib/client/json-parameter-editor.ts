@@ -1,7 +1,6 @@
-import { parseParameterJson, validateParameterObject, type JsonObject, type JsonSchema, type JsonValue } from '../../../packages/agent-runtime/index.cjs'
+import { parseParameterJson, type JsonObject, type JsonValue } from '../../../packages/agent-runtime/index.cjs'
 
 export type JsonEditorType = 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null'
-export type JsonParameterStructure = 'flat' | 'nested'
 export type JsonEditorNode = {
   id: string
   key: string
@@ -13,25 +12,11 @@ export type JsonParameterDifference = { path: string; before: JsonValue | undefi
 
 let nextNodeId = 0
 
-export function parameterTypesForStructure(structure: JsonParameterStructure = 'nested'): JsonEditorType[] {
-  return structure === 'flat' ? ['string', 'number', 'boolean'] : ['string', 'number', 'boolean', 'object', 'array', 'null']
-}
+export const parameterEditorTypes: readonly JsonEditorType[] = ['string', 'number', 'boolean', 'object', 'array', 'null']
 
-export function readParameterDraft(raw: string, schema?: JsonSchema, structure: JsonParameterStructure = 'nested', validateValue?: (value: JsonObject) => void): { value?: JsonObject; error: string | null } {
-  let value: JsonObject
-  try { value = parseParameterJson(raw) } catch (error) {
+export function readParameterDraft(raw: string): { value?: JsonObject; error: string | null } {
+  try { return { value: parseParameterJson(raw), error: null } } catch (error) {
     return { error: error instanceof Error ? error.message : 'JSON 格式不正确' }
-  }
-  if (structure === 'flat') {
-    const unsupported = Object.entries(value).find(([, item]) => item === null || typeof item === 'object')
-    if (unsupported) {
-      const [key, item] = unsupported
-      const type = item === null ? 'Null' : Array.isArray(item) ? 'Array' : 'Object'
-      return { error: `执行端只支持平铺参数，${parameterPointer('', key)} 不能使用 ${type}。请保持执行端原始结构，值仅支持 String、Number 或 Boolean。` }
-    }
-  }
-  try { validateParameterObject(value, schema); validateValue?.(value); return { value, error: null } } catch (error) {
-    return { value, error: error instanceof Error ? error.message : '参数不符合配置要求' }
   }
 }
 

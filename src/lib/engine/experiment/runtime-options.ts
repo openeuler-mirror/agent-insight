@@ -4,6 +4,12 @@ import { proposeOptionMigration, type OptionMigration } from '../../../../packag
 export { optionsToInputs, summarizeOptions } from '../../../../packages/agent-runtime/index.cjs'
 export type { AgentOptions, RuntimeDefinition } from '../../../../packages/agent-runtime/index.cjs'
 export type RuntimeOptionInputs = Record<string, string>
+export type RuntimeDraft = { inputs: RuntimeOptionInputs; restored?: AgentOptions; restoredDefinition?: RuntimeDefinition }
+
+export function initializeRuntimeDraft(drafts: Record<string, RuntimeDraft>, key: string, definition: RuntimeDefinition): Record<string, RuntimeDraft> {
+  if (Object.hasOwn(drafts, key)) return drafts
+  return { ...drafts, [key]: { inputs: optionsToInputs(definition) } }
+}
 
 export function readSavedOptions(value: unknown): AgentOptions | undefined {
   try { return normalizeAgentOptions(value) } catch { return undefined }
@@ -40,7 +46,7 @@ export function runtimeOptionsState(target: { platform: string; agent: string; p
   } catch (error) {
     const migration = usingSaved && restored ? proposeOptionMigration(restoredDefinition, definition, restored) : undefined
     return { active: true, definition, inputs: effectiveInputs,
-      error: migration ? '旧参数使用历史别名，请预览并确认转换后用于新实验' : error instanceof Error ? error.message : 'Runtime 参数不合法',
+      error: migration ? '参数契约已变化，请确认原配置后用于新实验' : error instanceof Error ? error.message : 'Runtime 参数不合法',
       ...(migration ? { migration } : {}) }
   }
 }
