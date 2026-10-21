@@ -116,6 +116,8 @@ scripts/trae-collector/
 - **快速返回**：脚本只做 JSON 序列化 + 文件追加，不阻塞 IDE 主流程
 - **跨平台**：Linux/macOS 使用 Bash 脚本；Windows 使用 PowerShell 脚本；功能完全镜像
 
+Bash `post-tool-use.sh` 从 `tool_response.skill_detail` 提取中英文版本字段，复用 Hook 已依赖的 Python 正则，兼容 macOS 自带工具链；无版本时不生成 `skillVersion`。
+
 **事件流转**：
 ```
 TRAE IDE Lifecycle

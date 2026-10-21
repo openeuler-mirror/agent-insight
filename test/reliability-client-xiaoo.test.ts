@@ -77,6 +77,10 @@ if (mode?.startsWith('collector-')) {
   process.env.XDG_CONFIG_HOME = path.join(root, 'config')
   process.env.AGENT_INSIGHT_HOME = path.join(root, 'data')
   delete process.env.XIAOO_CONFIG
+  // Host checks for a newly created executable must finish before exercising runtime deadlines.
+  const startup = spawnSync(executable, ['--help'], { encoding: 'utf8', timeout: 15_000 })
+  assert.equal(startup.status, 0, startup.error?.message || startup.stderr)
+  assert.match(startup.stdout, /xiaoo --cli/)
   return {
     root, executable,
     installCollector() {

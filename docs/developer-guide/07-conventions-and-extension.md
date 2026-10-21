@@ -96,7 +96,8 @@
   `--force-rebuild` 强制重新构建，但保留 `.next/cache`；可与 `--port` 组合。SWE-bench 自动准备仍由项目 YAML 配置控制。
   普通启动仅在没有成功记录、输入变化或产物不完整时重建。直接运行 `npm run build` 不会创建可复用记录。
   启动脚本始终执行数据库同步和首页、数据集、故障页面健康检查，并输出各阶段与总耗时。
-- **Test**：`npm run test`（`node --import tsx --test "test/**/*.test.ts"`）。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
+- **Test**：`npm run test` 先检查 Trae 采集器类型，再执行 `node --import tsx --test "test/**/*.test.ts"`；它不替代根项目和 Next 应用的类型检查。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
+- **测试前置条件**：Python 环境需安装 `agent_ras/pyproject.toml` 和 `agent_fault_injection/pyproject.toml` 声明的运行依赖；PowerShell 脚本解析与安装测试需要 PATH 中存在 `pwsh`。Trae 产物检查前执行 `npm run compile --prefix scripts/trae-collector`。数据库测试使用独立 SQLite 库和当前 Prisma schema，数据目录使用隔离的 `AGENT_INSIGHT_HOME`，不得指向个人日常数据；环境缺失应单列为验证阻塞，不能据此认定产品功能失败。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。
 
 ### 生产启动构建复用
