@@ -37,7 +37,7 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
     ordinal: 0, rawCaseJson: canonicalJson(raw), sourceFingerprint: fingerprintJson(raw),
     publicPayloadJson: canonicalJson(split.publicPayload), privatePayloadJson: canonicalJson(split.privatePayload),
     publicFingerprint: split.publicFingerprint, privateFingerprint: split.privateFingerprint } })
-  const options = { version: 2, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: { ...definition.presets[0].values, 'new-business-option': 'literal value' } }
+  const options = { version: 2, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: { ...definition.configuration!.defaults, 'new-business-option': 'literal value' } }
   const capabilities = { actions: ['RUN_BENCHMARK_CASE'], platforms: [{ id: 'pi-mcts', agents: ['pi-mcts'],
     parameterDefinitions: [definition], runBenchmarkCase: { version: 1, returnsTraceId: true } }],
     components: { 'git-workspace/v1': true, 'git-patch/v1': true, 'agent-runtime/pi-mcts/v1': true } }

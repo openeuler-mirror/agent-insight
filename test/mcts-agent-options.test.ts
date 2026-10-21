@@ -26,15 +26,17 @@ function configurationFixture(t: test.TestContext) {
   return { root, env: {} }
 }
 
-test('YAML defines all MCTS fields, presets and startup flags; zero is retained', () => {
-  const quick = options(definition.presets[0].values)
+test('MCTS exposes defaults without a dedicated preset and custom inputs preserve zero and startup flags', () => {
+  const quick = options({ 'max-iters': 1, branching: 1, 'max-turns-init': 20, 'max-turns-step': 10,
+    'max-turns-author': 20, 'max-turns-author-step': 10, 'token-fuse-limit': 0 })
   const markup = renderToStaticMarkup(createElement(RuntimeOptionsFields, {
     definition, value: optionsToInputs(definition, quick), error: '参数不合法', onChange: () => {},
   }))
   assert.equal((markup.match(/aria-label="参数值 /g) || []).length, 7)
   assert.match(markup, /aria-label="参数值 \/token-fuse-limit"[^>]+value="0"/)
   assert.match(markup, /role="alert">参数不合法/)
-  assert.match(markup, /填入联调参数/)
+  assert.deepEqual(definition.presets, [])
+  assert.doesNotMatch(markup, /填入联调参数/)
   assert.match(markup, /恢复默认/)
   for (const platform of ['pi-mcts', 'xiao-mcts']) {
     assert.deepEqual(runtimeInvocationOptions(platform, platform, quick).args, ['--max-iters', '1', '--branching', '1',

@@ -5,10 +5,7 @@ targets:
   - { platform: xiao-mcts, agent: xiao-mcts }
 parameterGroups: []
 parameters: []
-presets:
-  - key: quick
-    label: 填入联调参数
-    values: { max-iters: 1, branching: 1, max-turns-init: 20, max-turns-step: 10, max-turns-author: 20, max-turns-author-step: 10, token-fuse-limit: 0 }
+presets: []
 
 configuration:
   version: 2

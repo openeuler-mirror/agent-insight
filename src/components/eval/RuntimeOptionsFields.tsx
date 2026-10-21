@@ -3,14 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { JsonParameterEditor } from './JsonParameterEditor'
 import { formatParameterJson } from '../../../packages/agent-runtime/index.cjs'
-import { optionsToInputs, type AgentOptions, type RuntimeDefinition, type RuntimeOptionInputs } from '@/lib/engine/experiment/runtime-options'
-
-export function runtimePresetInputs(definition: RuntimeDefinition, values: AgentOptions['values']): RuntimeOptionInputs {
-  return optionsToInputs(definition, {
-    ...(definition.configuration?.version === 2 ? { version: 2 } : {}),
-    runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values,
-  })
-}
+import { optionsToInputs, type RuntimeDefinition, type RuntimeOptionInputs } from '@/lib/engine/experiment/runtime-options'
 
 export function RuntimeOptionsFields({ definition, value, error, onChange, templateControls }: {
   definition: RuntimeDefinition
@@ -22,8 +15,6 @@ export function RuntimeOptionsFields({ definition, value, error, onChange, templ
   return <section className="mb-4 grid gap-3" aria-label={`${definition.displayName} 运行参数`}>
     <div className="flex flex-wrap items-center gap-2">
       <h3 className="text-sm font-semibold">{definition.displayName} 运行参数</h3>
-      {definition.presets.map(preset => <Button key={preset.key} type="button" variant="outline" size="sm"
-        onClick={() => onChange(runtimePresetInputs(definition, preset.values))}>{preset.label}</Button>)}
       <Button type="button" variant="ghost" size="sm" onClick={() => onChange(optionsToInputs(definition))}>恢复默认</Button>
     </div>
     {templateControls}

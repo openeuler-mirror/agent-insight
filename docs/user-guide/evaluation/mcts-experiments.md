@@ -57,9 +57,9 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 
 选择 **生成 Trace**，运行主机选择配置好的 **`pi-mcts`** 执行机，模型选择 **平台默认**（沿用 xGovernor 配置），勾选要执行的 Case。
 
-首次联调可选择一条 Case、并发设为 `1`，点击 **填入联调参数**；正式实验使用默认搜索参数或按需调整。
+首次联调可选择一条 Case、并发设为 `1`，通过 **导入 JSON** 使用下面的示例，再点击 **保存为模板**。后续从同 Runtime 的参数模板中选择；正式实验使用默认搜索参数或按需调整。参数区统一使用模板入口，不再提供专用联调按钮。
 
-参数区提供树形编辑和 JSON 编辑，MCTS 保持根级平铺参数。Key 使用 CLI 原 long 选项名，仅省略统一 `--` 前缀，保留大小写、下划线和点号，点号不表示层级。可以增删字符串、数字和布尔值；不能增加对象、数组、null 或人为分组。点击 **导入 JSON** 粘贴或上传完整对象，预览差异后整体替换；也可导出、查看最终配置或保存个人模板。同名模板保存为新版本，已有实验保留原快照。快速联调配置示例：
+参数区提供通用树形编辑和 JSON 编辑，MCTS 默认内容是根级 CLI 参数。Key 使用 CLI 原 long 选项名，仅省略统一 `--` 前缀，保留大小写、下划线和点号，点号不表示层级。通用编辑器也支持新增对象、数组和 null，实际能否执行由客户端入口检查。点击 **导入 JSON** 粘贴或上传完整对象，预览差异后整体替换；也可导出、查看最终配置或保存个人模板。模板按同一 Runtime 筛选，同名保存为新版本，已有实验保留原快照。快速联调配置示例：
 
 ```json
 {
@@ -75,7 +75,7 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 
 新增 MCTS 已支持的 CLI 业务参数后，在平台增加同名 key/value 即可；例如执行端增加 `--new-option`，平台使用 `"new-option": "value"`，无需修改平台代码或增加逐字段 YAML 映射。参数必须由 MCTS 本身支持，平台不猜测类型、开关或结构。`mode/runtime/testbench/instance-id/split/output-dir` 等由平台根据目标和 Case 自动生成，不能被用户参数覆盖。
 
-默认模板、可选执行校验和联调预设位于 `services/executor/runtimes/mcts/runtime.yaml`；交付使用 `delivery: argv`、`binding: { mode: passthrough }`，无需 flat/nested 声明。客户端只向平台上报默认配置作为初始模板，业务 Schema 与交付绑定留在执行端。安装后文件位于 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/mcts/runtime.yaml`。本机 `config/benchmark/executor.local.yaml` 的 `runtimes.mcts.defaults` 可覆盖模板；平台“恢复默认”仅重新复制当前上报值到本次草稿，不修改该文件。
+默认配置和可选执行校验位于 `services/executor/runtimes/mcts/runtime.yaml`；交付使用 `delivery: argv`、`binding: { mode: passthrough }`，无需 flat/nested 声明。客户端只向平台上报默认配置作为初始模板，业务 Schema 与交付绑定留在执行端。安装后文件位于 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/mcts/runtime.yaml`。本机 `config/benchmark/executor.local.yaml` 的 `runtimes.mcts.defaults` 可覆盖模板；平台“恢复默认”仅重新复制当前上报值到本次草稿，不修改该文件。
 
 新版客户端约每 30 秒重读并上报 YAML，修改后等待上报或重启，再刷新页面。首次升级执行代码，需重新运行页面生成的客户端安装命令；已有注册也可在新版源码目录运行 `node scripts/install-ras-client.js`，复制新运行时并自动重启。只更新源码 checkout 后重启旧服务不会更新安装目录副本。重新安装会覆盖安装目录 Runtime YAML，定制定义应在源码或配置仓维护；`executor.local.yaml` 会保留。
 

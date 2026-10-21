@@ -8,7 +8,8 @@ import {
   parameterEditorTypes, readParameterDraft, removeParameterNode, serializeParameterNodes, updateParameterNode,
 } from '../src/lib/client/json-parameter-editor'
 import { JsonParameterEditor } from '../src/components/eval/JsonParameterEditor'
-import { RuntimeOptionsFields, runtimePresetInputs } from '../src/components/eval/RuntimeOptionsFields'
+import { RuntimeOptionsFields } from '../src/components/eval/RuntimeOptionsFields'
+import { RuntimeParameterTemplates } from '../src/components/eval/RuntimeParameterTemplates'
 import { initializeRuntimeDraft, optionsToInputs, runtimeOptionsState } from '../src/lib/engine/experiment/runtime-options'
 
 test('parameter tree retains nested typed values through rename, insertion, deletion and array reorder', () => {
@@ -78,16 +79,20 @@ test('number fields cannot change value type or inject extra fields using valid 
   }
 })
 
-test('v2 preset actions include the protocol version and legacy presets retain flat inputs', () => {
+test('runtime configuration uses template controls without exposing client preset shortcut buttons', () => {
   const generic = validateDefinition({ runtimeKey: 'custom', displayName: 'Custom Agent', definitionDigest: `sha256:${'a'.repeat(64)}`,
-    targets: [{ platform: 'custom', agent: '*' }], parameters: [], parameterGroups: [], presets: [],
+    targets: [{ platform: 'custom', agent: '*' }], parameters: [], parameterGroups: [],
+    presets: [{ key: 'quick', label: '客户端专用快捷配置', values: { attempts: 1 } }],
     configuration: { version: 2, delivery: 'json-file', structure: 'nested', defaults: {} } })
-  const preset = { solver: { retry: { enabled: false, max_attempts: 0 } }, list: [null, 5, '5'] }
-  assert.deepEqual(parseParameterJson(runtimePresetInputs(generic, preset).__json), preset)
-  const legacy = validateDefinition({ runtimeKey: 'legacy', displayName: 'Legacy Agent', definitionDigest: `sha256:${'b'.repeat(64)}`,
-    targets: [{ platform: 'legacy', agent: '*' }], parameterGroups: [{ key: 'main', label: 'Main' }],
-    parameters: [{ key: 'steps', group: 'main', label: 'Steps', type: 'integer', default: 2 }], presets: [] })
-  assert.deepEqual(runtimePresetInputs(legacy, { steps: 5 }), { steps: '5' })
+  const html = renderToStaticMarkup(createElement(RuntimeOptionsFields, { definition: generic,
+    value: { __json: '{}' }, error: null, onChange() {},
+    templateControls: createElement(RuntimeParameterTemplates, { user: 'fixture', definition: generic,
+      options: { version: 2, runtimeKey: generic.runtimeKey, definitionDigest: generic.definitionDigest, values: {} }, error: null, onApply() {} }),
+  }))
+  assert.match(html, /参数模板/)
+  assert.match(html, /保存为模板/)
+  assert.match(html, /恢复默认/)
+  assert.doesNotMatch(html, /客户端专用快捷配置|填入联调参数/)
 })
 
 test('type changes preserve string/number distinction and initialize containers explicitly', () => {
