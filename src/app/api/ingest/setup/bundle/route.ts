@@ -32,6 +32,7 @@ const BUNDLES: Record<string, string[]> = {
     'scripts/reliability-client.cjs',
     'scripts/ordinary-experiment-state.cjs',
     'scripts/skill-experiment-workspace.cjs',
+    'scripts/opencode-connection-config.cjs',
     'scripts/agent-run-diagnostics.cjs',
     'scripts/opencode-experiment-events.cjs',
     'scripts/opencode-experiment-events.mjs',

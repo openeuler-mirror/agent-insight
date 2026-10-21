@@ -1581,9 +1581,13 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     const cwd = fs.mkdtempSync(path.join(root, 'case-'))
     isolated = { cwd, env: {}, cleanup() { fs.rmSync(cwd, { recursive: true, force: true }) } }
   }
+  let discardWorkspace = false
   try {
     return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
-  } finally { isolated?.cleanup(Boolean(payload.signal?.aborted)) }
+  } catch (error) {
+    discardWorkspace = error.code === 'MODEL_UNAVAILABLE'
+    throw error
+  } finally { isolated?.cleanup(discardWorkspace || Boolean(payload.signal?.aborted)) }
 }
 
 async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {

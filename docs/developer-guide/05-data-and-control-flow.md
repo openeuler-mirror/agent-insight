@@ -273,7 +273,11 @@ Skill 用例分析生成 Trace、A/B 和触发分析创建时将 `workerId/host/
 
 上述 4 路用例 / 2 个 A/B 配对是编排上限；新版客户端执行路径在 `withSkillClientSlot` 按 worker 串行占用单个 Agent 槽，因此同机两侧不同时启动。客户端需上报 `runExperimentCase.skillSnapshotVersion>=1` 才能运行用例/A/B；触发分析需要版本 4，旧客户端在目标列表中不可选。`skill-experiment-workspace.cjs` 在客户端解析本机 OpenCode 连接配置，密钥不进入下发 payload。版本 1 只安装当前侧 Skill 快照并强制加载，基线禁用 Skill；版本 2 安装冻结的候选 Skill 元数据；版本 3 增加路由事件直判，允许正常路由，但禁用写入、Shell、Web 和 MCP 等有副作用的能力。版本 4 分离启动与路由计时并将触发输入原样经 stdin 传递，不解析 Slash Command。所选模型通过 CLI `--model` 传入，不允许回退。
 
-用例/A/B 每次运行隔离 HOME、配置与工作目录。触发分析按客户端、实验、可执行文件、Agent、模型及完整 Skill 快照的哈希租用工作区，复用配置与插件依赖，但每条 Case 启动独立进程和会话。忙碌租约不得并发复用；目录使用 realpath 避免临时目录别名导致重复 Skill 扫描。空闲 120 秒、切换实验配置、取消或客户端退出时清理缓存。工作区连接配置在租约存续期间保持不变。
+`opencode-connection-config.cjs` 先读取原生 `debug config` 的生效配置，仅恢复实验会复制的 provider、所选 Agent 与非触发实验 MCP 中的脱敏连接字段；触发实验仍禁用 MCP。原生命令 stdout 写入私有临时文件后完整解析，避免立即退出时管道输出被截断；限制 8 MiB 和 15 秒，拒绝多份、残缺、非法 UTF-8 或尾随杂质的配置输出，所有退出路径清理临时文件。恢复按 OpenCode 1.19.3（兼容 1.18.35）的本地加载顺序合并全局 `config.json/opencode.json/opencode.jsonc`、`OPENCODE_CONFIG`、项目配置、`.opencode` 与 `OPENCODE_CONFIG_DIR`、`OPENCODE_CONFIG_CONTENT`、系统 managed 配置，遵守项目边界及禁用项目配置开关。支持 JSONC、环境变量与相对声明文件的文件引用；只读快照前后校验文件摘要，变化时重读一次，持续变化则失败。原始连接中的非脱敏字段必须与生效配置一致，防止端点和凭据串配。
+
+恢复仅在执行客户端本地进行，凭据不进入 payload、返回值或错误信息。显式 Key/请求头/敏感 URL 的原始值缺失、为空、仍为占位符，或来源存在远程 `.well-known`/活动组织配置、旧 TOML、需转换的配置格式、MDM、未验证版本时，以 `MODEL_UNAVAILABLE` 提前停止；不猜测凭据，不回退模型。没有需要恢复的字段时保留原生配置；原生未显式输出 Key 时不补造 Key，共享原有 XDG 数据目录以继续使用 OpenCode 原生认证。该辅助模块同时随客户端安装脚本与 setup bundle 分发。
+
+用例/A/B 每次运行隔离 HOME、配置与工作目录，`OPENCODE_TEST_HOME` 同步指向隔离 HOME。触发分析按客户端、实验、可执行文件、Agent、模型及完整 Skill 快照的哈希租用工作区，复用配置与插件依赖，但每条 Case 启动独立进程和会话。忙碌租约不得并发复用；目录使用 realpath 避免临时目录别名导致重复 Skill 扫描。空闲 120 秒、切换实验配置、取消、`MODEL_UNAVAILABLE` 或客户端退出时清理缓存。工作区连接配置在租约存续期间保持不变。
 
 远端执行保留真实 `ExperimentCase` ID 与数据集绑定；尝试记录保存客户端、Agent、模型与 command ID，按本次返回的 Trace ID 绑定，不用旧输出或按输入猜测。Skill 请求在绑定前拒绝空输出、缺失实际模型或模型不一致；模型错误不可自动回退重试。取消信号下发 `CANCEL_EXPERIMENT_RUN`，删除继续复用原取消确认机制。执行重试沿用冻结目标和版本文件，普通 Trace 重试读取历史 command 的 Skill 快照。已有历史实验缺失真实执行目标时拒绝再次执行，要求重建。详情 API 保留每个 Case 的 `actualModel/actualHost`，页面不再额外展示实际模型、实际主机与评估模型卡片；历史不一致只做警告而不改写旧结果。非 A/B 的 Case 与评估明细默认展开，手动折叠不受轮询刷新影响；切换到另一实验时默认展开。A/B 明细继续直接展示。
 
