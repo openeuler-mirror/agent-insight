@@ -20,37 +20,68 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 
 ## 管理员导入 Benchmark 数据集
 
-SWE-bench Verified 随 Agent Insight 服务启动完成准备和导入。持续启用时，在 `~/.agent-insight/.env` 中配置：
-
-```dotenv
-AGENT_INSIGHT_BENCHMARK=swe-bench
-```
-
-之后使用统一启动命令：
+SWE-bench Verified 默认随 Agent Insight 服务启动自动准备和导入。配置位于项目 `config/benchmark/platform.yaml`，本机覆盖写入 `config/benchmark/platform.local.yaml`；没有版本字段。`benchmarks.swe-bench.dataset.autoImport` 默认 `true`，设置为 `false` 只跳过启动时自动导入，已有数据集与管理员手动导入仍可使用。直接执行：
 
 ```bash
 bash scripts/start.sh
 ```
 
-也可用 `bash scripts/start.sh --benchmark swe-bench` 仅对本次启动临时启用，命令行优先于环境配置。
+首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查当前数据库，完整、可用的数据集已经存在时会跳过全部准备和导入步骤。
 
-首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查数据库，数据集已经存在时会跳过全部准备和导入步骤。网络受限时，可在同一配置文件中设置内网镜像地址：
+准备或导入失败会显示简短警告，继续启动服务；SWE-bench Verified 相关实验暂不可用。详细错误记录在 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），下次启动自动重试。修复后也可在项目根目录运行 `npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts` 单独重试。
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE=http://intranet.example/swe-bench/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=http://intranet.example/swe-bench/source.tar.gz
+网络受限时，可在平台项目的 `config/benchmark/platform.local.yaml` 中设置内网镜像地址或本机文件：
+
+```yaml
+benchmarks:
+  swe-bench:
+    dataset:
+      source: /srv/datasets/test.parquet
+    loader:
+      sourceArchive: /srv/datasets/source.tar.gz
+      python: /srv/python/bin/python
 ```
 
-这两项也可以直接填写本机文件路径：
+`source` 和 `sourceArchive` 均支持 HTTP(S) 下载地址。路径是平台所在机器上的路径，相对路径按配置文件目录解析；推荐使用绝对路径。`null` 使用默认官方来源或自动创建 Python 环境。完全离线时，`loader.python` 必须指向已安装官方 Loader 的 Python 可执行文件，否则首次安装依赖仍需要可用的 pip 软件源。
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE="/srv/datasets/test.parquet"
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE="/srv/datasets/source.tar.gz"
+本机文件与下载文件均按固定官方 SHA-256 校验，校验失败不会覆盖本机文件。成功导入后，后续运行从数据库读取数据，不依赖原始 Parquet；更换或清空数据库后重新导入需要再次提供数据文件。
+
+旧 `AGENT_INSIGHT_BENCHMARK`、`SWE_BENCH_DATASET_SOURCE`、`SWE_BENCH_SOURCE_ARCHIVE_SOURCE`、`SWE_BENCH_PYTHON` 及旧路径/URL变量均不再控制导入，发现残留变量会提示迁移至配置文件。
+
+ZSoft L1 也默认随服务启动自动获取官方题目并导入数据库。在项目 `config/benchmark/platform.local.yaml` 设置 `benchmarks.zsoft-l1.dataset.autoImport: false` 可单独关闭；不影响已有数据集和手动导入，也不影响 SWE-bench 的开关。直接执行：
+
+```bash
+bash scripts/start.sh
 ```
 
-路径是 Agent Insight 服务所在机器上的路径，推荐使用绝对路径。本机文件与下载文件均按固定的官方 SHA-256 校验；本机文件缺失或校验失败会停止准备，不覆盖原文件。两项留空时使用官方来源，已安装的数据集和可用的受管缓存优先复用。Python 依赖首次安装仍需要可用的 pip 软件源，或通过 `SWE_BENCH_PYTHON` 指定已有环境。
+首次执行按接入包固定的官方提交拉取仓库，解析 30 道正式题（24 道 userspace、6 道内核题）；后续执行先查当前数据库，已安装时跳过来源读取和下载。缓存位于平台机器的 `~/.agent-insight/benchmark-assets/zsoft-l1/`（自定义 `AGENT_INSIGHT_HOME` 时跟随该目录）。数据准备只读取题目元数据和公开资料，不需要 Docker、镜像或评测资产，也不会自动启动 Evaluator。不再设置 `AGENT_INSIGHT_BENCHMARK` 或使用启动参数 `--benchmark`。
 
-旧的 `SWE_BENCH_DATASET_PATH`、`SWE_BENCH_DATASET_URL` 和 `SWE_BENCH_SOURCE_ARCHIVE_URL` 暂时兼容；新变量存在时优先使用新变量，显式留空表示使用官方来源。
+ZSoft 准备或导入失败只警告，继续启动服务，详细输出写入 `~/.agent-insight/logs/zsoft-l1-bootstrap.log`（随 `AGENT_INSIGHT_HOME` 调整），下次启动重试。启动会同步等待本次准备结束；已有数据集不会因修改来源而自动刷新。
+
+离线时，将官方 ZSoft L1 目录或完整官方仓库放在平台机器的一个目录，在项目 `config/benchmark/platform.local.yaml` 中设置：
+
+```yaml
+benchmarks:
+  zsoft-l1:
+    dataset:
+      autoImport: true
+      source: /srv/datasets/zsoft-l1
+      revision: null
+```
+
+目录应包含 `tasks/<task-id>/task.json` 和 `public/README.md`；完整仓库根目录也可自动识别。配置后正常启动服务即可，不需要预先导出或处理数据。在线镜像可将 `dataset.source` 设置为 HTTP(S) Git 仓库地址；`dataset.revision` 可指定完整 40 位小写提交哈希，`null` 使用接入包固定版本。两项均为 `null` 时使用固定的官方来源和版本。离线目录按实际内容识别，不由此配置伪造版本。相对路径按配置文件所在目录解析；旧 `ZSOFT_DATASET_SOURCE`、`ZSOFT_DATASET_REVISION` 只提示迁移，不再生效。
+
+只安装数据、不重启服务时使用：
+
+```bash
+npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
+```
+
+显式更新来源时加 `--refresh`；已被实验引用的数据集不能覆盖，可同时加 `--name "ZSoft L1 新版本"` 导入独立数据集。旧 P2 JSON/JSONL 不再接受，需要从官方目录重新导入；历史实验记录不会自动迁移。此前已安装的 24 题数据集不会自动扩展为 30 题，需要用 `--refresh --name "ZSoft L1 全量"` 显式安装新数据集。
+
+若升级后旧 ZSoft 实验提示 `ZSOFT_TASK_DIGEST_LEGACY`，表示旧版导入程序与评测端采用了不同的文件名排序，并非题目文件一定被修改。管理员应在更新平台与评测服务后，执行 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1 --refresh --name "ZSoft L1 摘要修正版"`，再选择新数据集新建实验。旧实验身份不自动修改，直接重评仍使用旧摘要；正常摘要无需迁移。此类错误会显示为评测失败，不再无限等待镜像，也不阻塞同窗口其他合法 Case。
+
+平台、执行客户端和评测服务可以在不同机器。自动生成实验时选择执行客户端即可；该机器的 ZSoft 任务目录仍配置在 MCTS 仓库 `testcases_union/config.env` 的 `ZSOFT_TASKS_DIR` 中，本次不迁移此项。平台按 Case 自动下发题目 ID，无需在前端填写目录或额外导入公开资料包。评测服务启动后自动从公有 SWR 下载并校验接入包固定版本的完整资产，安装到共享数据卷，后续启动复用，无需手动解压。可在评测机项目 `config/benchmark/evaluator.local.yaml` 设置 `benchmarks.zsoft-l1.assetsDir`（默认 `null`，使用托管目录）和 `kernelAccel`（默认 `tcg`，可选 `kvm`），修改后重新启动评测服务。旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再覆盖这些配置。评测服务不访问平台数据库。ZSoft 属于 Benchmark，执行器可以选择 MCTS。具体准备见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md)。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 

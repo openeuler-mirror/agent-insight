@@ -1,6 +1,7 @@
 import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { findAgentDataset } from '@/server/agent_datasets_storage';
+import { assertTraceGenerationTarget } from '@/lib/engine/experiment/trace-generation';
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
 // 评测「实验」API —— 列表 + 创建（单组 type='single' + LLM 对比 type='llm'）。
 // 对比类型：createComparisonExperiment + autoPairGroups（跳过 case 校验，case 由配对产生）。
@@ -153,6 +154,10 @@ export async function GET(req: Request) {
         status,
         watchMode: r.watchMode,
         scope: r.scope,
+        submissionSource: (() => {
+          try { return JSON.parse(r.configSnapshotJson || '{}').submissionSource === 'imported' ? 'imported' : 'agent'; }
+          catch { return 'agent'; }
+        })(),
         skillName: r.skillName,
         skillVersion: r.skillVersion,
         preset: r.preset,
@@ -348,6 +353,16 @@ export async function POST(req: Request) {
       try { executionConcurrency = parseExecutionConcurrency(body.executionConcurrency ?? configSnapshot?.executionConcurrency); }
       catch { return NextResponse.json({ error: '执行并发必须为正整数' }, { status: 400 }); }
       configSnapshot = { ...configSnapshot, executionConcurrency };
+      const target = body.executionTarget || configSnapshot.executionTarget;
+      if (target && typeof target === 'object') {
+        try {
+          const resolved = await assertTraceGenerationTarget({ user: username, workerId: String(target.workerId || ''),
+            platform: String(target.platform || ''), agent: String(target.agent || agentName), agentOptions: target.agentOptions });
+          configSnapshot = { ...configSnapshot, executionTarget: { ...configSnapshot.executionTarget, ...target,
+            agentOptions: resolved.agentOptions, agentParameterDefinition: resolved.definition } };
+        } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 400 }); }
+      }
+
     }
 
     if (!name) {

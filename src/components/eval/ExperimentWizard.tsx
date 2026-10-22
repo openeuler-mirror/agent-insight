@@ -9,8 +9,11 @@ import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
-import { MctsOptionsFields } from '@/components/eval/MctsOptionsFields';
-import { mctsOptionsState, mctsOptionsToInputs, summarizeMctsOptions, type MctsOptionInputs } from '@/lib/engine/experiment/mcts-options';
+import { Button } from '@/components/ui/button';
+import { RuntimeOptionsFields } from '@/components/eval/RuntimeOptionsFields';
+import { RuntimeParameterTemplates } from '@/components/eval/RuntimeParameterTemplates';
+import { RuntimeOptionMigration } from '@/components/eval/RuntimeOptionMigration';
+import { runtimeOptionsState, initializeRuntimeDraft, readSavedOptions, readSavedDefinition, savedOptionsToInputs, optionsToInputs, summarizeOptions, type RuntimeOptionInputs, type RuntimeDefinition, type RuntimeDraft } from '@/lib/engine/experiment/runtime-options';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -80,7 +83,7 @@ interface AgentTargetOption {
   supportsBenchmark: boolean;
   benchmarkKeys: string[];
   benchmarkUnavailableReason: string | null;
-  agentOptionCapabilities?: string[];
+  parameterDefinitions?: RuntimeDefinition[];
 }
 
 interface AgentOption {
@@ -529,8 +532,7 @@ export function ExperimentWizard({
     String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
   );
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
-  const [mctsInputs, setMctsInputs] = useState<MctsOptionInputs>(() => mctsOptionsToInputs(undefined));
-  const [mctsOptionsPlatform, setMctsOptionsPlatform] = useState('');
+  const [runtimeDrafts, setRuntimeDrafts] = useState<Record<string, RuntimeDraft>>({});
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
@@ -648,8 +650,15 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
-  const mctsState = mctsOptionsState(isBenchmarkDataset && traceMode === 'generate' ? selectedTarget : null,
-    mctsInputs, mctsOptionsPlatform, selectedDataset?.benchmark?.adapterKey);
+  const runtimeTargetKey = selectedTarget ? `${selectedTarget.workerId}::${selectedTarget.platform}::${selectedTarget.agent}` : '';
+  const runtimeDraft = runtimeDrafts[runtimeTargetKey];
+  const runtimeState = runtimeOptionsState(!isReliabilityDataset && traceMode === 'generate' ? selectedTarget : null,
+    runtimeDraft?.inputs || {}, runtimeDraft ? runtimeTargetKey : '', runtimeTargetKey, runtimeDraft?.restored, runtimeDraft?.restoredDefinition);
+  const updateRuntimeInputs = (inputs: RuntimeOptionInputs) => setRuntimeDrafts(current => ({ ...current, [runtimeTargetKey]: { inputs } }));
+  const runtimeDefinition = runtimeState.definition;
+  if (runtimeState.active && runtimeDefinition && runtimeTargetKey && !runtimeDraft) {
+    setRuntimeDrafts(current => initializeRuntimeDraft(current, runtimeTargetKey, runtimeDefinition));
+  }
   const generationCases = useMemo(
     () => generationCasesFromDataset(selectedDataset),
     [selectedDataset],
@@ -851,8 +860,12 @@ export function ExperimentWizard({
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
-      setMctsInputs(mctsOptionsToInputs(restoredTarget.agentOptions));
-      setMctsOptionsPlatform(restoredTarget.agentOptions ? platform : '');
+      const savedOptions = readSavedOptions(restoredTarget.agentOptions);
+      const savedDefinition = readSavedDefinition(detail.executionParameterDefinition);
+      if (savedOptions && workerId && platform) {
+        const targetKey = `${workerId}::${platform}::${String(restoredTarget.agent || restoredAgentName)}`;
+        setRuntimeDrafts(current => ({ ...current, [targetKey]: { inputs: savedOptionsToInputs(savedOptions), restored: savedOptions, restoredDefinition: savedDefinition } }));
+      }
       const runtime = sourceSnapshot.runtime && typeof sourceSnapshot.runtime === 'object'
         ? sourceSnapshot.runtime as Record<string, unknown> : {};
       const restoredTimeoutSeconds = skillContext
@@ -1456,7 +1469,7 @@ export function ExperimentWizard({
       if (agentTimeoutRequired && !agentTimeoutValid) {
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
       }
-      if (mctsState.error) throw new Error(mctsState.error);
+      if (runtimeState.error) throw new Error(runtimeState.error);
       const casesPayload = selectedList.map((c) => ({
         executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
@@ -1530,11 +1543,13 @@ export function ExperimentWizard({
               platform: selectedTarget.platform,
               agent: selectedTarget.agent,
               model: genModel || null,
+              ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
             } : null,
             traceGenerationTarget: traceMode === 'generate' && selectedTarget ? {
               host: selectedTarget.host,
               platform: selectedTarget.platform,
               model: genModel || null,
+              ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
             } : null,
             agentTimeoutSeconds,
           }),
@@ -1583,7 +1598,7 @@ export function ExperimentWizard({
             platform: selectedTarget.platform,
             agent: selectedTarget.agent,
             model: genModel || null,
-            ...(mctsState.agentOptions ? { agentOptions: mctsState.agentOptions } : {}),
+            ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
           } : undefined,
           agentTimeoutSeconds,
           ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
@@ -1615,6 +1630,7 @@ export function ExperimentWizard({
                 agent: selectedTarget.agent,
                 model: genModel || null,
                 timeoutSeconds: agentTimeoutSeconds,
+                ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
               } : null,
               fiOrchestrate: isReliabilityDataset,
               ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
@@ -1669,6 +1685,7 @@ export function ExperimentWizard({
               agent: selectedTarget.agent,
               model: genModel || null,
               timeoutSeconds: agentTimeoutSeconds,
+              ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
             },
           }
         : {};
@@ -1718,7 +1735,7 @@ export function ExperimentWizard({
     ? generateAvailable && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
     : (watchMode || selected.size >= 1);
   const step2Valid = expType === 'llm'
-    || (step2SelectionValid && !mctsState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
+    || (step2SelectionValid && !runtimeState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -2157,8 +2174,20 @@ export function ExperimentWizard({
                     onChange={setAgentTimeoutInput}
                   />
               </div>
-              {mctsState.active && <MctsOptionsFields value={mctsInputs} error={mctsState.error}
-                onChange={value => { setMctsInputs(value); setMctsOptionsPlatform(selectedTarget?.platform || ''); }} />}
+              {isBenchmarkDataset && traceMode === 'generate' && benchmarkPresentation?.execution?.notice && (
+                <p className="mb-4 text-xs text-foreground-muted">{benchmarkPresentation.execution.notice}</p>
+              )}
+              {runtimeState.migration && runtimeState.definition && <RuntimeOptionMigration migration={runtimeState.migration}
+                onConfirm={() => updateRuntimeInputs(optionsToInputs(runtimeState.definition!, runtimeState.migration!.options))} />}
+              {runtimeState.active && runtimeState.definition && <RuntimeOptionsFields key={`${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} definition={runtimeState.definition} value={runtimeState.inputs} error={runtimeState.error}
+                onChange={updateRuntimeInputs} templateControls={runtimeState.definition.configuration?.version === 2 ? <RuntimeParameterTemplates
+                  key={`templates:${user}:${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} user={user}
+                  definition={runtimeState.definition} options={runtimeState.agentOptions} error={runtimeState.error}
+                  onApply={options => updateRuntimeInputs(optionsToInputs(runtimeState.definition!, options))} /> : undefined} />}
+              {!runtimeState.active && runtimeState.error && <div className="mb-4 flex items-center gap-2">
+                <p className="text-sm text-error" role="alert">{runtimeState.error}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => setRuntimeDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== runtimeTargetKey)))}>清除已保存参数</Button>
+              </div>}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case</div>
                 <span style={{ flex: 1 }} />
@@ -3148,7 +3177,7 @@ export function ExperimentWizard({
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
-                  ...(mctsState.active ? [['MCTS 搜索参数', summarizeMctsOptions(mctsState.agentOptions)]] : []),
+                  ...(runtimeState.active ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
                     skillPreset === 'skill-ab'
@@ -3158,7 +3187,7 @@ export function ExperimentWizard({
                 ].map(([label, value]) => (
                   <div key={label} style={{ padding: '10px 12px', background: 'var(--background-secondary)' }}>
                     <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{label}</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>{value}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)', overflowWrap: 'anywhere', maxHeight: 180, overflow: 'auto' }}>{value}</div>
                   </div>
                 ))}
               </div>

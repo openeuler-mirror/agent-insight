@@ -1,6 +1,7 @@
+import { readSavedOptions } from './runtime-options'
 import { prisma } from '@/lib/storage/prisma'
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service'
-import { loadTraceGenerationRetryRequest } from '@/lib/engine/experiment/trace-generation'
+import { assertTraceGenerationTarget, loadTraceGenerationRetryRequest } from '@/lib/engine/experiment/trace-generation'
 import { defaultExperimentName, defaultSkillExperimentName } from '@/lib/engine/experiment/experiment-name'
 import { cloneWorkbenchExperimentFromFrozenConfig } from '@/lib/skill-workbench/experiment-service'
 
@@ -56,6 +57,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
     const binding = source.benchmarkBinding
     if (!binding) throw new Error('Benchmark 实验缺少冻结配置')
     const runConfig = parseObject(binding.runConfigJson)
+    if (runConfig.submissionSource === 'imported') throw new Error('历史导入提交实验不支持复用配置')
     const selection = parseObject(binding.selectionJson)
     const result = await createBenchmarkExperiment({
       user: input.user,
@@ -73,7 +75,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
       runConfig: {
         platform: String(runConfig.platform || ''),
         agent: String(runConfig.agent || source.agentName),
-        agentOptions: runConfig.agentOptions,
+        agentOptions: readSavedOptions(runConfig.agentOptions),
         model: typeof runConfig.model === 'string' ? runConfig.model : undefined,
         agentTimeoutSeconds: Number(runConfig.timeoutSeconds) || undefined,
         executionConcurrency: Number(runConfig.executionConcurrency) || 1,
@@ -128,6 +130,15 @@ export async function cloneExperimentFromFrozenConfig(input: {
       platform: request.platform,
       model: request.model,
       timeoutSeconds: request.timeoutSeconds,
+    }
+  }
+  if (traceSource === 'generate' && !snapshot.fiOrchestrate) {
+    const target = snapshot.executionTarget as Record<string, unknown> | undefined
+    if (target && readSavedOptions(target.agentOptions)) {
+      const resolved = await assertTraceGenerationTarget({ user: input.user, workerId: String(target.workerId || ''),
+        platform: String(target.platform || ''), agent: String(target.agent || source.agentName),
+        agentOptions: readSavedOptions(target.agentOptions) })
+      snapshot.executionTarget = { ...target, agentOptions: resolved.agentOptions, agentParameterDefinition: resolved.definition }
     }
   }
   const activeCases = source.cases.filter((item: { deletedAt: Date | null }) => !item.deletedAt)

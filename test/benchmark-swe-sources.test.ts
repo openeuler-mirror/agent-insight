@@ -11,50 +11,32 @@ import {
   resolveSweBenchProvisionPaths,
 } from '../scripts/benchmark/ensure-swe-bench-dataset'
 
-test('unified SWE-bench sources accept paths and URLs, with explicit empty overriding legacy settings', () => {
-  const variables = [
-    'SWE_BENCH_DATASET_SOURCE', 'SWE_BENCH_SOURCE_ARCHIVE_SOURCE',
-    'SWE_BENCH_DATASET_PATH', 'SWE_BENCH_DATASET_URL', 'SWE_BENCH_SOURCE_ARCHIVE_URL',
-  ]
-  const previous = variables.map(name => process.env[name])
+test('SWE-bench configuration accepts files and URLs; null restores official sources', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swe-sources-config-'))
+  const previous = process.env.AGENT_INSIGHT_CONFIG_DIR
+  process.env.AGENT_INSIGHT_CONFIG_DIR = root
+  const update = (source: string | null, sourceArchive: string | null) => fs.writeFileSync(path.join(root, 'platform.local.yaml'), JSON.stringify({
+    benchmarks: { 'swe-bench': { dataset: { source }, loader: { sourceArchive } } },
+  }))
   try {
-    for (const name of variables) delete process.env[name]
-    process.env.SWE_BENCH_DATASET_PATH = '/legacy/test.parquet'
-    process.env.SWE_BENCH_DATASET_URL = 'https://legacy.example/test.parquet'
-    process.env.SWE_BENCH_SOURCE_ARCHIVE_URL = 'https://legacy.example/source.tar.gz'
+    update('~/datasets/test.parquet', '$HOME/datasets/source.tar.gz')
     let paths = resolveSweBenchProvisionPaths()
-    assert.equal(paths.datasetPath, '/legacy/test.parquet')
-    assert.equal(paths.sourceArchiveSource, 'https://legacy.example/source.tar.gz')
-
-    process.env.SWE_BENCH_DATASET_SOURCE = '~/datasets/test.parquet'
-    process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE = '$HOME/datasets/source.tar.gz'
-    paths = resolveSweBenchProvisionPaths()
-    assert.equal(paths.datasetSource, path.join(os.homedir(), 'datasets/test.parquet'))
-    assert.equal(paths.datasetPath, paths.datasetSource)
+    assert.equal(paths.datasetPath, path.join(os.homedir(), 'datasets/test.parquet'))
     assert.equal(paths.sourceArchivePath, path.join(os.homedir(), 'datasets/source.tar.gz'))
-    assert.equal(paths.sourceArchivePath, paths.sourceArchiveSource)
-
-    process.env.SWE_BENCH_DATASET_SOURCE = 'http://mirror.example/test.parquet'
-    process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE = 'https://mirror.example/source.tar.gz'
+    update('http://mirror.example/test.parquet', 'https://mirror.example/source.tar.gz')
     paths = resolveSweBenchProvisionPaths()
-    assert.equal(paths.datasetSource, process.env.SWE_BENCH_DATASET_SOURCE)
-    assert.equal(paths.sourceArchiveSource, process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE)
+    assert.equal(paths.datasetSource, 'http://mirror.example/test.parquet')
     assert.notEqual(paths.datasetPath, paths.datasetSource)
-    assert.notEqual(paths.sourceArchivePath, paths.sourceArchiveSource)
-
-    process.env.SWE_BENCH_DATASET_SOURCE = ''
-    process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE = ''
+    update(null, null)
     paths = resolveSweBenchProvisionPaths()
     assert.match(paths.datasetSource, /^https:\/\/huggingface\.co\//)
     assert.match(paths.sourceArchiveSource, /^https:\/\/codeload\.github\.com\//)
-
-    process.env.SWE_BENCH_DATASET_SOURCE = 'ftp://mirror.example/test.parquet'
-    assert.throws(resolveSweBenchProvisionPaths, /HTTP\(S\).*本机文件路径/)
+    update('ftp://mirror.example/test.parquet', null)
+    assert.throws(resolveSweBenchProvisionPaths, /HTTP\(S\).*文件路径/)
   } finally {
-    variables.forEach((name, i) => {
-      if (previous[i] === undefined) delete process.env[name]
-      else process.env[name] = previous[i]
-    })
+    if (previous === undefined) delete process.env.AGENT_INSIGHT_CONFIG_DIR
+    else process.env.AGENT_INSIGHT_CONFIG_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })
 

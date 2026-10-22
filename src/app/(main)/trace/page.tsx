@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { traceRelationsPending } from '@/lib/trace/parent-agent';
 import { useRouter, useSearchParams } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import {
@@ -37,6 +38,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
 import { loadTraceFacetValues } from '@/lib/client/trace-facets';
+import { traceFilterParsers, useTraceFilterMemory } from '@/lib/client/use-trace-filter-memory';
 import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
 
@@ -545,24 +547,25 @@ function TracePageContent() {
     }, []);
 
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
-    const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
-    const [anomalyFilter, setAnomalyFilter] = useQueryState('status', parseAsString.withDefault('all'));
-    const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', parseAsString.withDefault('all'));
-    const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', parseAsString.withDefault('all'));
-    const [agentFilter, setAgentFilter] = useQueryState('agent', parseAsString.withDefault('all'));
-    const [skillFilter, setSkillFilter] = useQueryState('skill', parseAsString.withDefault('all'));
-    const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', parseAsString.withDefault(''));
-    const [legacyBusinessTagFilter, setLegacyBusinessTagFilter] = useQueryState('bizTag', parseAsString);
-    const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', parseAsString.withDefault('user'));
-    const [agentScopeFilter, setAgentScopeFilter] = useQueryState('scope', parseAsString.withDefault('root'));
+    const [timeFilter, setTimeFilter] = useQueryState('time', traceFilterParsers.time);
+    const [anomalyFilter, setAnomalyFilter] = useQueryState('status', traceFilterParsers.status);
+    const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
+    const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', traceFilterParsers.framework);
+    const [agentFilter, setAgentFilter] = useQueryState('agent', traceFilterParsers.agent);
+    const [skillFilter, setSkillFilter] = useQueryState('skill', traceFilterParsers.skill);
+    const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', traceFilterParsers.tagIds);
+    const [legacyBusinessTagFilter, setLegacyBusinessTagFilter] = useQueryState('bizTag', traceFilterParsers.bizTag);
+    const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', traceFilterParsers.ownership);
+    const [agentScopeFilter, setAgentScopeFilter] = useQueryState('scope', traceFilterParsers.scope);
     const [sortKey, setSortKey] = useQueryState('sort', parseAsString.withDefault('timestamp'));
     const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
     const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
-    const [search, setSearch] = useQueryState('q', parseAsString.withDefault(''));
+    const [search, setSearch] = useQueryState('q', traceFilterParsers.q);
     const [showFilters, setShowFilters] = useState(false);
-    const [clausesRaw, setClausesRaw] = useQueryState('f', parseAsString.withDefault(''));
+    const [clausesRaw, setClausesRaw] = useQueryState('f', traceFilterParsers.f);
+    const { filtersReady, clearFilterMemory } = useTraceFilterMemory(user);
     const clauses = useMemo<FilterClause[]>(() => {
         if (!clausesRaw) return [];
         try {
@@ -694,7 +697,9 @@ function TracePageContent() {
 
     // Resolve selectedExecution from URL on data load or URL change.
     //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)
-    const fetchGuardRef = useRef<string | null>(null);
+    const executionLookupRequestRef = useRef(0);
+    const [executionLookupError, setExecutionLookupError] = useState<string | null>(null);
+    const [executionLookupRetry, setExecutionLookupRetry] = useState(0);
     const listRequestIdRef = useRef(0);
     const listFilterKey = useMemo(() => JSON.stringify([
         agentScopeFilter,
@@ -734,42 +739,43 @@ function TracePageContent() {
     const previousListFilterKeyRef = useRef(listFilterKey);
     const previousListRequestKeyRef = useRef<string | null>(null);
     useEffect(() => {
+        const requestId = ++executionLookupRequestRef.current;
+        setExecutionLookupError(null);
         if (!taskIdParam) {
-            if (selectedExecution) setSelectedExecution(null);
-            fetchGuardRef.current = null;
+            setSelectedExecution(null);
             return;
         }
-        const exec = data.find(e => e.task_id === taskIdParam || e.upload_id === taskIdParam);
+        const matchesTask = (item: Execution) => item.task_id === taskIdParam || item.upload_id === taskIdParam;
+        const exec = data.find(matchesTask);
         if (exec) {
-            fetchGuardRef.current = null;
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }
-        if (fetchGuardRef.current === taskIdParam) return;
-        fetchGuardRef.current = taskIdParam;
-        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`)
+        if (selectedExecution && matchesTask(selectedExecution)) return;
+        const controller = new AbortController();
+        setSelectedExecution(null);
+        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`, { signal: controller.signal })
             .then(async r => ({ ok: r.ok, status: r.status, body: await r.json() }))
             .then(({ ok, status, body }) => {
-                if (fetchGuardRef.current !== taskIdParam) return;
+                if (controller.signal.aborted || requestId !== executionLookupRequestRef.current) return;
                 if (!ok && status !== 404) throw new Error('Trace lookup failed');
-                const d = body as Execution[];
-                if (Array.isArray(d) && d.length > 0) {
-                    setSelectedExecution(d[0]);
+                const target = ok && Array.isArray(body) ? body.find(matchesTask) : null;
+                if (target) {
+                    setSelectedExecution(target);
                     return;
                 }
-                setSelectedExecution(null);
-                void setTaskIdParam(null);
-                toast.error(locale === 'zh' ? '未找到对应的子 Agent Trace' : 'Sub-agent trace not found');
+                setExecutionLookupError(locale === 'zh' ? '未找到对应的 Agent Trace' : 'Agent Trace not found');
             })
             .catch(() => {
-                if (fetchGuardRef.current !== taskIdParam) return;
-                fetchGuardRef.current = null;
-                toast.error(locale === 'zh' ? '子 Agent Trace 加载失败' : 'Failed to load sub-agent trace');
+                if (controller.signal.aborted || requestId !== executionLookupRequestRef.current) return;
+                setExecutionLookupError(locale === 'zh' ? 'Agent Trace 加载失败' : 'Failed to load Agent Trace');
             });
+        return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [taskIdParam, data]);
+    }, [taskIdParam, data, executionLookupRetry]);
 
     useEffect(() => {
+        if (!filtersReady) return;
         const requestId = ++listRequestIdRef.current;
         const filtersChanged = previousListFilterKeyRef.current !== listFilterKey;
         previousListFilterKeyRef.current = listFilterKey;
@@ -853,6 +859,7 @@ function TracePageContent() {
         listFilterKey,
         listRequestKey,
         setPage,
+        filtersReady,
     ]);
 
     const handleImportFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -951,17 +958,7 @@ function TracePageContent() {
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
     const resetFilters = () => {
-        setOwnershipFilter('all');
-        setAgentFilter('all');
-        setSkillFilter('all');
-        updateUserTagFilters([]);
-        setAnomalyFilter('all');
-        setReliabilityAnomalyFilter('all');
-        setTimeFilter('all');
-        setFrameworkFilter('all');
-        setAgentScopeFilter('root');
-        setSearch(null);
-        setClauses([]);
+        clearFilterMemory();
     };
 
     // Filter dropdown option sets
@@ -1003,7 +1000,7 @@ function TracePageContent() {
         <>
             <AppTopBar
                 title={<Term id="trace" label={t('nav.trace')} />}
-                actions={!selectedExecution ? (
+                actions={!taskIdParam ? (
                     <>
                         <Button variant="outline" size="sm" asChild><Link href="/observe/collaborations">协作图</Link></Button>
                         <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
@@ -1016,7 +1013,19 @@ function TracePageContent() {
                 showDefaultActions={false}
             />
             <PageContainer>
-                {selectedExecution ? (
+                {taskIdParam && (!selectedExecution || (selectedExecution.task_id !== taskIdParam && selectedExecution.upload_id !== taskIdParam)) ? (
+                    executionLookupError ? <div role="alert" className="rounded-md border border-border p-6 space-y-3">
+                        <p>{executionLookupError}</p>
+                        <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => setExecutionLookupRetry(value => value + 1)}>{locale === 'zh' ? '重试' : 'Retry'}</Button>
+                            <Button variant="ghost" onClick={() => handleSelectExecution(null)}>{t('tracePage.backToList')}</Button>
+                        </div>
+                    </div> : <div role="status" className="space-y-4 p-6">
+                        <p className="text-sm text-foreground-muted">{locale === 'zh' ? '正在加载目标 Trace…' : 'Loading target Trace…'}</p>
+                        <Skeleton className="h-12 w-full" />
+                        <Skeleton className="h-64 w-full" />
+                    </div>
+                ) : selectedExecution ? (
                     <TraceDetailView
                         key={selectedExecution.task_id || selectedExecution.upload_id}
                         execution={selectedExecution}
@@ -1501,8 +1510,8 @@ function TraceDetailView({
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => {
                 if (requestId !== sessionRequestRef.current) return;
-                const wasWaiting = ['pending', 'unavailable'].includes(sessionRef.current?.parentAgent?.state);
-                if (!wasWaiting && ['pending', 'unavailable'].includes(j.parentAgent?.state)) setAutoRefresh(true);
+                const wasWaiting = traceRelationsPending(sessionRef.current);
+                if (!wasWaiting && traceRelationsPending(j)) setAutoRefresh(true);
                 setSession(j);
                 setSecondsSinceRefresh(0);
             })
@@ -1514,10 +1523,10 @@ function TraceDetailView({
 
     useEffect(() => { fetchSession(false); }, [fetchSession]);
 
-    const waitingForParent = session?.parentAgent?.state === 'pending' || session?.parentAgent?.state === 'unavailable';
+    const waitingForRelations = traceRelationsPending(session);
 
     useEffect(() => {
-        if (!autoRefresh || (!waitingForParent && execStatus !== 'running' && execStatus !== 'timed_out')) return;
+        if (!autoRefresh || (!waitingForRelations && execStatus !== 'running' && execStatus !== 'timed_out')) return;
         const refreshWhenVisible = () => {
             if (document.visibilityState === 'visible') fetchSession(true);
         };
@@ -1527,7 +1536,7 @@ function TraceDetailView({
             window.clearInterval(id);
             document.removeEventListener('visibilitychange', refreshWhenVisible);
         };
-    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus, waitingForParent]);
+    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus, waitingForRelations]);
 
     useEffect(() => {
         const id = setInterval(() => setSecondsSinceRefresh(s => s + 1), 1000);
@@ -1568,7 +1577,7 @@ function TraceDetailView({
     const cost = typeof latestExecution?.cost === 'number'
         ? latestExecution.cost
         : execution.cost;
-    const isRunning = execStatus === 'running' || execStatus === 'timed_out';
+    const canAutoRefresh = waitingForRelations || execStatus === 'running' || execStatus === 'timed_out';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
     const downloadSessionJson = async () => {
@@ -1676,24 +1685,24 @@ function TraceDetailView({
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <Button
-                                    variant={autoRefresh && isRunning ? 'default' : 'outline'}
+                                    variant={autoRefresh && canAutoRefresh ? 'default' : 'outline'}
                                     size="sm"
-                                    disabled={!isRunning}
-                                    onClick={() => isRunning && setAutoRefresh(v => !v)}
-                                    aria-pressed={autoRefresh && isRunning}
+                                    disabled={!canAutoRefresh}
+                                    onClick={() => canAutoRefresh && setAutoRefresh(v => !v)}
+                                    aria-pressed={autoRefresh && canAutoRefresh}
                                     className="h-7 px-2.5 text-xs"
                                 >
-                                    <RefreshCw className={cn('size-3.5', autoRefresh && isRunning && 'animate-spin')} />
-                                    {autoRefresh && isRunning ? t('tracePage.autoRefresh') : t('tracePage.paused')}
+                                    <RefreshCw className={cn('size-3.5', autoRefresh && canAutoRefresh && 'animate-spin')} />
+                                    {autoRefresh && canAutoRefresh ? t('tracePage.autoRefresh') : t('tracePage.paused')}
                                 </Button>
                             </TooltipTrigger>
                             <TooltipContent side="bottom" className="text-xs">
-                                {!isRunning ? t('tracePage.autoRefreshUnavailable') : t('tracePage.autoRefresh')}
+                                {!canAutoRefresh ? t('tracePage.autoRefreshUnavailable') : t('tracePage.autoRefresh')}
                             </TooltipContent>
                         </Tooltip>
                     </TooltipProvider>
 
-                    {autoRefresh && isRunning && (
+                    {autoRefresh && canAutoRefresh && (
                         <Select
                             value={String(refreshIntervalSec)}
                             onChange={v => setRefreshIntervalSec(Number(v))}
@@ -1781,6 +1790,7 @@ function TraceDetailView({
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
                         parentAgent={session?.taskId === taskId ? session.parentAgent : null}
+                        traceRelations={session?.taskId === taskId ? session.traceRelations : undefined}
                         rootSessionId={taskId}
                         traceIdentity={taskId}
                         rootExecutionId={execution.upload_id || execution.task_id}

@@ -192,8 +192,13 @@ if [ "$TOOL_TYPE" = "skill" ] || [ "$TOOL_NAME" = "Skill" ]; then
   SKILL_TYPE=$(echo "$TOOL_RESPONSE" | json_extract_string ".skill_type")
 
   # Try to extract version from skill_detail markdown
-  [ -z "$SKILL_VERSION" ] && SKILL_VERSION=$(echo "$SKILL_DETAIL" | grep -oP '版本[:：]\s*\K[\d.]+' 2>/dev/null | head -1 || echo "")
-  [ -z "$SKILL_VERSION" ] && SKILL_VERSION=$(echo "$SKILL_DETAIL" | grep -oP '[Vv]ersion[:：\s]+\K[\d.]+' 2>/dev/null | head -1 || echo "")
+  SKILL_VERSION=$(printf '%s' "$SKILL_DETAIL" | python3 -c '
+import re, sys
+detail = sys.stdin.read()
+match = re.search(r"版本[:：]\s*([0-9.]+)", detail) or re.search(r"[Vv]ersion[:：\s]+([0-9.]+)", detail)
+if match:
+    sys.stdout.write(match.group(1))
+' 2>/dev/null || printf '')
 
   SKILL_PAYLOAD="{\"skillName\": \"$(json_escape "$SKILL_NAME")\""
   [ -n "$SKILL_VERSION" ] && SKILL_PAYLOAD="$SKILL_PAYLOAD, \"skillVersion\": \"$(json_escape "$SKILL_VERSION")\""

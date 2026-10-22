@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
+import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import { activateIsolatedHome } from './helpers/isolated-home'
@@ -49,10 +50,11 @@ if (process.argv.includes('--list-models') && process.env.PI_TEST_MODE === 'cata
 if (process.argv.includes('--list-models') && process.env.PI_TEST_MODE === 'catalog-failure') process.exit(2)
 if (process.argv.includes('--list-models') && process.env.PI_TEST_MODE === 'catalog') {
   if (process.env.PI_TEST_CATALOG_AUTH) {
-    for (let i = 0; i < 405; i++) console.log('fixture model-' + i + ' 200K 8K yes no')
+    for (let i = 0; i < 405; i++) console.log('fixture model-' + i + '-' + 'long-model-name-'.repeat(16) + ' 200K 8K yes no')
     console.log('deepseek deepseek-v4-flash 1M 32K no yes')
   } else console.log('No models available')
-  process.exit(0)
+  // Let queued pipe writes drain before the fixture exits.
+  return
 }
 if (process.argv.includes('--list-models')) { console.log('provider model context max-out thinking images\\nfixture org/model 200K 8K yes no'); process.exit(0) }
 const emit = e => console.log(JSON.stringify(e))
@@ -66,6 +68,16 @@ process.stdin.on('end', () => {
   if (mode === 'timeout') { setInterval(() => {}, 1000); return }
   if (mode === 'nonzero') { process.exitCode = 7; return }
   emit({type:'message_end', message:{role:'user',content:[{type:'text',text:input}]}})
+  if (mode && mode.startsWith('storage-')) {
+    const error = mode === 'storage-quota' ? 'EDQUOT: disk quota exceeded, write' : 'ENOSPC: no space left on device, write'
+    if (mode === 'storage-stderr') { console.error(error); process.exitCode = 1; return }
+    emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:error,content:[]}})
+    if (mode !== 'storage-recovered') {
+      if (mode !== 'storage-unsettled') process.stdout.write(JSON.stringify({type:'agent_settled'}))
+      if (mode === 'storage-nonzero') process.exitCode = 1
+      return
+    }
+  }
   if (mode === 'retry' || mode === 'error') {
     emit({type:'message_end', message:{role:'assistant',stopReason:'error',errorMessage:'provider HTTP 401 Unauthorized',content:[]}})
     emit({type:'agent_end',willRetry:mode === 'retry'})
@@ -83,6 +95,10 @@ process.stdin.on('end', () => {
     AGENT_INSIGHT_USER_HOME: root, PI_TELEMETRY: 'off',
   })
   for (const key of ['AGENT_INSIGHT_PI_CONFIG', 'AGENT_INSIGHT_API_KEY', 'AGENT_INSIGHT_OTLP_ENDPOINT', 'AGENT_INSIGHT_SUPERVISOR']) delete process.env[key]
+  // Host checks for a newly created executable must finish before exercising runtime deadlines.
+  const startup = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: 15_000 })
+  assert.equal(startup.status, 0, startup.error?.message || startup.stderr)
+  assert.equal(startup.stdout.trim(), '0.85.1')
   const settings = (value: unknown) => fs.writeFileSync(path.join(agentDir, 'settings.json'), JSON.stringify(value))
   const config = (value: unknown) => fs.writeFileSync(path.join(packageDir, 'config.json'), JSON.stringify(value))
   return {
@@ -308,6 +324,49 @@ test('Pi refuses execution when Collector is absent instead of creating an unbin
   } finally { f.close() }
 })
 
+test('Pi storage failures retain their cause across successful exits, error exits and final events', async () => {
+  const f = fixture()
+  try {
+    f.installCollector()
+    for (const [mode, expectedCode, exitCode] of [
+      ['storage-settled', 'ENOSPC', 0], ['storage-nonzero', 'ENOSPC', 1],
+      ['storage-unsettled', 'ENOSPC', 0], ['storage-stderr', 'ENOSPC', 1],
+      ['storage-quota', 'EDQUOT', 0],
+    ] as const) {
+      process.env.PI_TEST_MODE = mode
+      await assert.rejects(client.runExperimentCase({ clientId: 'test', workspaceBase: f.root }, {
+        platform: 'pi-agent', agent: 'pi-agent', input: 'exercise storage failure', timeoutSeconds: 5,
+      }), (error: any) => {
+        assert.equal(error.code, expectedCode, mode)
+        assert.equal(error.runFacts.exitCode, exitCode, mode)
+        assert.match(error.message, /存储/)
+        assert.match(error.message, new RegExp(expectedCode))
+        assert.doesNotMatch(error.message, /会话报告模型错误|Pi model:/)
+        return true
+      })
+    }
+    process.env.PI_TEST_MODE = 'storage-recovered'
+    const recovered = await client.runExperimentCase({ clientId: 'test', workspaceBase: f.root }, {
+      platform: 'pi-agent', agent: 'pi-agent', input: 'ENOSPC: no space left on device is an example, EDQUOT too', timeoutSeconds: 5,
+    })
+    assert.equal(recovered.exitCode, 0)
+    assert.equal(recovered.modelActivityObserved, true)
+  } finally { f.close() }
+})
+
+test('shared classifier recognizes storage errors before generic model failure', () => {
+  for (const [diagnostic, code] of [
+    ['Pi model: ENOSPC: no space left on device, write', 'ENOSPC'],
+    ['git checkout failed: No space left on device', 'ENOSPC'],
+    ['provider: EDQUOT: disk quota exceeded, write', 'EDQUOT'],
+    ['Error: disk quota exceeded', 'EDQUOT'],
+  ]) {
+    const failure = client.classifyAgentExitFailure({ platform: 'pi-agent', diagnostic, structured: true })
+    assert.equal(failure.code, code)
+    assert.match(failure.message, /存储/)
+  }
+})
+
 test('Pi parser recognizes only real model activity and waits through retry events', () => {
   const inspect = client.createPiEventInspector({ sessionId: 'test-base' })
   const emit = (value: unknown) => inspect(JSON.stringify(value))
@@ -316,9 +375,22 @@ test('Pi parser recognizes only real model activity and waits through retry even
   assert.equal(emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '你好' } }).modelActivity, true)
   assert.equal(emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'connection failed' } }).error, null)
   assert.equal(emit({ type: 'agent_end', willRetry: true }).error, null)
-  assert.equal(emit({ type: 'agent_settled' }).error, 'Pi model: connection failed')
+  assert.equal(emit({ type: 'agent_settled' }).error, 'Pi runtime: connection failed')
   assert.equal(client.classifyAgentExitFailure({ platform: 'pi-agent', exitCode: 1,
     diagnostic: 'Model "unknown/provider-model" not found. Use --list-models to see available models.' }).code, 'MODEL_UNAVAILABLE')
+})
+
+test('Pi normal responses and tool output mentioning storage errors remain successful', () => {
+  const inspect = client.createPiEventInspector({ sessionId: 'storage-example' })
+  const emit = (value: unknown) => inspect(JSON.stringify(value))
+  emit({ type: 'session', id: 'storage-example' })
+  emit({ type: 'message_end', message: { role: 'user', errorMessage: 'ENOSPC: no space left on device' } })
+  emit({ type: 'tool_execution_end', result: { text: 'Error: EDQUOT: disk quota exceeded' } })
+  emit({ type: 'message_end', message: {
+    role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'ENOSPC: no space left on device is a log example' }],
+  } })
+  assert.equal(emit({ type: 'agent_settled' }).error, null)
+  assert.equal(inspect('', true).error, null)
 })
 
 test('Pi reported task ID matches the real Collector and OTLP aggregation contract', async () => {

@@ -1,3 +1,5 @@
+import { loadRuntimeDefinitions } from '../packages/agent-runtime/loader.cjs'
+const definition = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -10,6 +12,8 @@ import { listTraceGenerationPlatforms } from '../src/lib/engine/experiment/execu
 import { parseCapabilities } from '../src/lib/reliability/client-registry'
 import { GET as listExperimentAgents } from '../src/app/api/experiments/agents/route'
 import { prisma, prismaRaw } from '../src/lib/storage/prisma'
+import { writeSyntheticZsoftPlugin } from './fixtures/mcts-zsoft-fixture'
+import { zsoftL1Adapter } from '../benchmarks/zsoft-l1/adapter'
 
 const require = createRequire(import.meta.url)
 const runtime = require('../services/executor/src/mcts-runtime.cjs')
@@ -83,7 +87,7 @@ test('MCTS client keeps JSON and collector defaults when .env is missing or empt
 })
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-mcts-'))
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'insight-mcts-')))
   const repoDir = path.join(root, 'MCTS')
   const workspace = path.join(root, 'workspace')
   const launcherDir = path.join(root, 'collector')
@@ -113,6 +117,10 @@ function fixture() {
     fs.writeFileSync(file, `#!/bin/sh\n${body}\n`)
     fs.chmodSync(file, 0o755)
   }
+  // Host checks for a newly created executable must finish before exercising runtime deadlines.
+  const startup = spawnSync(path.join(repoDir, '.venv', 'bin', 'python'), [], { encoding: 'utf8', timeout: 15_000 })
+  assert.equal(startup.status, 0, startup.error?.message || startup.stderr)
+  assert.equal(startup.stdout.trim(), '3.11')
   const priorPath = process.env.PATH
   process.env.PATH = `${binDir}:${priorPath || ''}`
   git(workspace, 'init', '-q')
@@ -158,9 +166,8 @@ test('pi-mcts runs through the proxy without a local Pi CLI, applies the selecte
     })
     assert.ok(caps.platforms.some((item: { id: string }) => item.id === 'pi-mcts'))
     assert.deepEqual(caps.components['agent-runtime/pi-mcts/v1'], { ready: true })
-    assert.deepEqual(caps.components['mcts-search-options/v1'], { ready: true })
-    assert.deepEqual(caps.platforms.find((item: { id: string }) => item.id === 'pi-mcts').runBenchmarkCase.agentOptionCapabilities,
-      ['mcts-search-options/v1'])
+    assert.deepEqual(caps.platforms.find((item: { id: string }) => item.id === 'pi-mcts').parameterDefinitions,
+      [definition])
     assert.ok(client.benchmarkAgentPlatformsFromCapabilities(caps).includes('pi-mcts'))
     const launches: { command: string; args: string[]; options: Record<string, unknown> }[] = []
     const runner = async (command: string, args: string[], options: Record<string, unknown>) => {
@@ -191,6 +198,8 @@ test('pi-mcts runs through the proxy without a local Pi CLI, applies the selecte
       '--', 'bash', path.join(f.repoDir, 'testcases_union', 'run_union.sh'),
       '--mode', 'sweverified', '--runtime', 'pi', '--testbench', 'sweverified',
       '--instance-id', 'example__project-1', '--split', 'test', '--output-dir', f.runId,
+      '--max-iters', '5', '--branching', '3', '--max-turns-init', '160', '--max-turns-step', '80',
+      '--max-turns-author', '160', '--max-turns-author-step', '80', '--token-fuse-limit', '30000000',
     ])
     assert.equal((launches[0].options.env as Record<string, string>).AGENT_INSIGHT_HOME,
       path.join(f.outputDir, '.agent-insight'))
@@ -303,6 +312,65 @@ test('pi-mcts retains its root Trace ID when the run fails', async () => {
   } finally { f.close() }
 })
 
+test('MCTS execution reports observed billing and truncation causes before a downstream 404', async () => {
+  const f = fixture()
+  try {
+    const cause = Object.assign(new Error('author did not materialize verify.py: 404 Not Found'), { code: 'MCTS_RUN_FAILED' })
+    await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => {
+      f.writeTrace()
+      const ledgerPath = path.join(f.outputDir, '.agent-insight/otel_data/mcts-xgovernor/key-hash/runtime-ledger.json')
+      const ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'))
+      ledger.runs[0].runtimes = [{ turns: [{ failureCodes: ['MCTS_LLM_OUTPUT_TRUNCATED', 'MCTS_LLM_INSUFFICIENT_BALANCE'] }] }]
+      fs.writeFileSync(ledgerPath, JSON.stringify(ledger))
+      throw cause
+    }), (error: Error & { code: string; cause: Error; retryable: boolean; runFacts: { traceId: string; mctsFailureCodes: string[] } }) => {
+      assert.equal(error.code, 'MCTS_LLM_INSUFFICIENT_BALANCE')
+      assert.match(error.message, /余额或付费额度不足/)
+      assert.match(error.message, /token 上限/)
+      assert.equal(error.cause, cause)
+      assert.equal(error.retryable, false)
+      assert.equal(error.runFacts.traceId, 'mcts.run.' + 'b'.repeat(32))
+      assert.deepEqual(error.runFacts.mctsFailureCodes, ['MCTS_LLM_INSUFFICIENT_BALANCE', 'MCTS_LLM_OUTPUT_TRUNCATED'])
+      return true
+    })
+  } finally { f.close() }
+})
+
+test('MCTS can classify explicit process billing errors without a ledger and preserves cancellations', async () => {
+  for (const code of ['MCTS_RUN_FAILED', 'PROCESS_ABORTED']) {
+    const f = fixture()
+    try {
+      const cause = Object.assign(new Error('402 Insufficient Balance; Bearer secret-credential'), { code })
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => { throw cause }),
+        (error: Error & { code: string }) => {
+          if (code === 'PROCESS_ABORTED') assert.equal(error, cause)
+          else {
+            assert.equal(error.code, 'MCTS_LLM_INSUFFICIENT_BALANCE')
+            assert.doesNotMatch(error.message, /secret-credential|Bearer/)
+          }
+          return true
+        })
+    } finally { f.close() }
+  }
+})
+
+test('MCTS keeps the original missing-file error when the ledger is unavailable or contains no error evidence', async () => {
+  for (const contents of ['{broken-json', JSON.stringify({ version: 1, runs: [{ sessionId: `mcts.run.${'b'.repeat(32)}` }] })]) {
+    const f = fixture()
+    try {
+      const cause = Object.assign(new Error('404 Not Found verify.py'), { code: 'MCTS_RUN_FAILED' })
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => {
+        f.writeTrace()
+        fs.writeFileSync(path.join(f.outputDir, '.agent-insight/otel_data/mcts-xgovernor/key-hash/runtime-ledger.json'), contents)
+        throw cause
+      }), (error: Error) => {
+        assert.equal(error, cause)
+        return true
+      })
+    } finally { f.close() }
+  }
+})
+
 test('pi-mcts appears only as a ready Benchmark target', () => {
   const capabilities = parseCapabilities(JSON.stringify({
     actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'],
@@ -340,8 +408,8 @@ for (const scenario of [
         actions: ['RUN_BENCHMARK_CASE', ...(scenario.generic ? ['RUN_EXPERIMENT_CASE'] : [])],
         platforms: [{
           id: scenario.platform, agents: [scenario.platform], models: [],
-          runBenchmarkCase: { version: 1, returnsTraceId: true,
-            agentOptionCapabilities: 'searchOptions' in scenario ? ['mcts-search-options/v1'] : [] },
+          parameterDefinitions: 'searchOptions' in scenario ? [definition] : [],
+          runBenchmarkCase: { version: 1, returnsTraceId: true },
           ...(scenario.generic ? { runExperimentCase: { version: 2, returnsTraceId: true } } : {}),
         }],
         components: {
@@ -384,26 +452,27 @@ for (const scenario of [
     assert.equal(target.supportsBenchmark, true)
     assert.ok(target.benchmarkKeys.includes('swe-bench'))
     assert.equal(target.benchmarkUnavailableReason, null)
-    assert.deepEqual(target.agentOptionCapabilities, 'searchOptions' in scenario ? ['mcts-search-options/v1'] : [])
+    assert.deepEqual(target.parameterDefinitions, 'searchOptions' in scenario ? [definition] : [])
     assert.deepEqual(target.models, [{ id: '', label: '平台默认' }])
   })
 }
 
 for (const platform of ['pi-mcts', 'xiao-mcts']) {
-  test(`${platform} maps shared MCTS options to its runtime and keeps zero token fuse`, async () => {
+  test(`${platform} passes CLI-named MCTS options and a new business key directly, keeping zero token fuse`, async () => {
     const f = fixture()
-    const options = { maxIters: 1, branching: 1, maxTurnsInit: 20, maxTurnsStep: 10,
-      maxTurnsAuthor: 20, maxTurnsAuthorStep: 10, tokenFuseLimit: 0 }
+    const options = { 'max-iters': 1, branching: 1, 'max-turns-init': 20, 'max-turns-step': 10,
+      'max-turns-author': 20, 'max-turns-author-step': 10, 'token-fuse-limit': 0, 'new-business-option': 'literal value' }
     try {
-      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, platform, agent: platform, agentOptions: { mcts: options } },
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, platform, agent: platform, agentOptions: { version: 2, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: options } },
         async (_command: string, args: string[]) => {
           assert.equal(args[args.indexOf('--runtime') + 1], platform === 'pi-mcts' ? 'pi' : 'xiaoo')
-          assert.deepEqual(args.slice(-14), ['--max-iters', '1', '--branching', '1', '--max-turns-init', '20',
-            '--max-turns-step', '10', '--max-turns-author', '20', '--max-turns-author-step', '10', '--token-fuse-limit', '0'])
+          assert.deepEqual(args.slice(-16), ['--max-iters', '1', '--branching', '1', '--max-turns-init', '20',
+            '--max-turns-step', '10', '--max-turns-author', '20', '--max-turns-author-step', '10', '--token-fuse-limit', '0',
+            '--new-business-option', 'literal value'])
           f.writeTrace()
           throw new Error('fixture interruption')
         }), (error: { runFacts: { agentOptions: unknown; mctsRuntime: string } }) => {
-        assert.deepEqual(error.runFacts.agentOptions, { mcts: options })
+        assert.deepEqual(error.runFacts.agentOptions, { version: 2, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: options })
         assert.equal(error.runFacts.mctsRuntime, platform === 'pi-mcts' ? 'pi' : 'xiaoo')
         return true
       })
@@ -426,4 +495,179 @@ test('process group cancellation sends SIGINT and lets child clean up', async ()
     await assert.rejects(run)
     assert.equal(fs.readFileSync(marker, 'utf8'), 'yes')
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+function zsoftFixture(kind = 'python') {
+  const f = fixture()
+  writeSyntheticZsoftPlugin(f.repoDir)
+  const python = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' })
+  assert.equal(python.status, 0, python.stderr)
+  const config = { ...f.config, mctsPython: python.stdout.trim() }
+  const taskId = 'synthetic-only'
+  fs.mkdirSync(path.join(f.workspace, 'tasks', taskId), { recursive: true })
+  fs.mkdirSync(path.join(f.workspace, 'submission'))
+  fs.writeFileSync(path.join(f.workspace, 'tasks', taskId, 'task.json'), JSON.stringify({ task_id: taskId, submission_kind: kind, max_bytes: 128 }))
+  const payload = { ...f.payload, benchmarkKey: 'zsoft-l1',
+    benchmarkPayload: { taskId, tags: ['userspace'], submissionKind: kind, maxBytes: 128 },
+    workspace: { provider: 'zsoft-tasks', taskId } }
+  const output = path.join(f.repoDir, 'testcases_union/output/zsoft', f.runId)
+  const writeOutput = (bytes: Buffer, task = taskId) => {
+    fs.writeFileSync(path.join(output, 'poc'), bytes)
+    fs.writeFileSync(path.join(output, 'platform-export.json'), JSON.stringify({ schemaVersion: 'mcts-poc-export/v1', taskId: task, evaluation: 'deferred', submissionKind: kind,
+      mctsContract: runtime.probeMctsZsoftRuntime(config).contract }))
+    const directory = path.join(output, '.agent-insight/otel_data/mcts-xgovernor/key-hash')
+    fs.mkdirSync(directory, { recursive: true })
+    fs.writeFileSync(path.join(directory, 'runtime-ledger.json'), JSON.stringify({ runs: [{ sessionId: `mcts.run.${'b'.repeat(32)}` }] }))
+  }
+  return { ...f, config, payload, output, writeOutput }
+}
+
+test('MCTS ZSoft rejects historical public-bundle workspaces', () => {
+  const f = zsoftFixture()
+  try {
+    assert.throws(() => runtime.validateMctsTask({ ...f.payload,
+      workspace: { provider: 'public-bundle', taskId: f.payload.benchmarkPayload.taskId, digest: `sha256:${'a'.repeat(64)}` },
+    }), { code: 'ZSOFT_TASKS_DIR_INVALID' })
+  } finally { f.close() }
+})
+
+test('MCTS kernel tasks export C bytes with task-id and tasks-dir through the existing bridge', async () => {
+  const f = zsoftFixture('c')
+  f.payload.benchmarkPayload.tags = ['kernel']
+  const bytes = Buffer.from('synthetic C source; never executed')
+  try {
+    assert.equal(runtime.validateMctsTask(f.payload).zsoft, true)
+    await runtime.runMctsBenchmarkCase(f.config, f.payload, async (_command: string, args: string[], options: { env: Record<string, string> }) => {
+      assert.equal(options.env.AGENT_INSIGHT_ZSOFT_WORKSPACE, f.workspace)
+      assert.equal(args[args.indexOf('--task-id') + 1], f.payload.benchmarkPayload.taskId)
+      assert.equal(options.env.AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND, 'c')
+      f.writeOutput(bytes)
+    })
+    assert.deepEqual(fs.readFileSync(path.join(f.workspace, 'submission/poc')), bytes)
+    assert.throws(() => runtime.validateMctsTask({ ...f.payload, benchmarkPayload: { ...f.payload.benchmarkPayload, submissionKind: 'python' } }), { code: 'MCTS_TASK_MISMATCH' })
+  } finally { f.close() }
+})
+
+for (const kind of ['python', 'c', 'binary']) {
+  test(`MCTS ZSoft ${kind} exports synthetic bytes through the platform bridge`, async () => {
+    const f = zsoftFixture(kind)
+    const bytes = kind === 'binary' ? Buffer.from([0, 255, 128, 1]) : Buffer.from('synthetic text; never executed\r\n')
+    try {
+      const caps = client.buildCapabilities(f.config, { probe: { ready: false, platforms: {} } })
+      assert.equal(caps.components['mcts-zsoft-export/v1'].ready, true)
+      assert.equal(caps.components['single-file/v1'].ready, true)
+      const result = await runtime.runMctsBenchmarkCase(f.config, f.payload, async (command: string, args: string[], options: { env: Record<string, string> }) => {
+        assert.equal(command, process.execPath)
+        assert.ok(args.includes(path.resolve('services/executor/src/mcts-zsoft-launch.sh')))
+        assert.equal(args[args.indexOf('--task-id') + 1], f.payload.benchmarkPayload.taskId)
+        assert.equal(args[args.indexOf('--mode') + 1], 'zsoft')
+        for (const flag of ['--testbench', '--instance-id', '--split']) {
+          assert.equal(args.includes(flag), false, `ZSoft CLI does not accept ${flag}`)
+        }
+        assert.equal(options.env.AGENT_INSIGHT_ZSOFT_WORKSPACE, f.workspace)
+        assert.equal(options.env.AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND, kind)
+        f.writeOutput(bytes)
+      })
+      assert.equal(result.traceId, `mcts.run.${'b'.repeat(32)}`)
+      assert.deepEqual(fs.readFileSync(path.join(f.workspace, 'submission/poc')), bytes)
+      assert.equal(fs.existsSync(path.join(f.workspace, 'artifact.patch')), false)
+    } finally { f.close() }
+  })
+}
+
+test('ZSoft-only MCTS is selectable without datasets or the SWE launcher, while SWE stays unavailable', () => {
+  const f = zsoftFixture()
+  try {
+    const venv = path.join(f.root, 'zsoft-only-python')
+    const create = spawnSync('python3', ['-m', 'venv', '--without-pip', venv], { encoding: 'utf8' })
+    assert.equal(create.status, 0, create.stderr)
+    const config = { ...f.config, mctsPython: path.join(venv, 'bin', 'python') }
+    assert.match(runtime.probeMctsBenchmarkRuntime(config).reason, /datasets/)
+    fs.unlinkSync(path.join(f.repoDir, 'testcases_union/run_union.sh'))
+    assert.equal(runtime.probeMctsZsoftRuntime(config).ready, true)
+    const caps = client.buildCapabilities(config, { probe: { ready: false, platforms: {} } })
+    assert.equal(caps.components['agent-runtime/pi-mcts/v1'].ready, true)
+    assert.ok(caps.platforms.find((item: { id: string }) => item.id === 'pi-mcts')?.parameterDefinitions.some((item: { runtimeKey: string }) => item.runtimeKey === 'mcts'))
+    assert.equal(caps.components['mcts-zsoft-export/v1'].ready, true)
+    assert.equal(caps.components['mcts-swe-bench/v1'].ready, false)
+    assert.ok(client.benchmarkAgentPlatformsFromCapabilities(caps).includes('pi-mcts'))
+    const row = { clientId: 'synthetic', name: 'synthetic', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), unboundAt: null,
+      capabilitiesJson: JSON.stringify(caps) }
+    assert.equal(inspectBenchmarkExecutionTargets(row as never, zsoftL1Adapter.manifest).find(item => item.platform === 'pi-mcts')?.ready, true)
+    const swe = inspectBenchmarkExecutionTargets(row as never, { adapterKey: 'swe-bench', requiredCapabilities: ['git-workspace/v1', 'git-patch/v1'] } as never)
+    assert.deepEqual(swe.find(item => item.platform === 'pi-mcts')?.missingCapabilities, ['mcts-swe-bench/v1'])
+  } finally { f.close() }
+})
+
+test('ZSoft interface preflight rejects comments, incompatible signatures, CLI and registry hooks without importing the plugin', () => {
+  const mutations = [
+    ['flow.py', '# extract_poc\n'],
+    ['flow.py', 'def extract_poc(session): return b"unused"\n'],
+    ['plugin.py', "replace-registry"],
+    ['plugin.py', "replace-cli"],
+    ['plugin.py', "replace-mode-registration"],
+    ['plugin.py', "replace-submit"],
+  ]
+  for (const [file, source] of mutations) {
+    const f = zsoftFixture()
+    try {
+      const target = path.join(f.repoDir, 'testcases_union/res/task_plugins/zsoft', file)
+      let content = source
+      if (source === 'replace-registry') content = fs.readFileSync(target, 'utf8').replace("official_eval='zsoft_official'", "official_eval='other'")
+      if (source === 'replace-cli') content = fs.readFileSync(target, 'utf8').replace("'--task-id'", "'--instance-id'")
+      if (source === 'replace-mode-registration') content = fs.readFileSync(target, 'utf8').replace('MODES.register(', 'unused(')
+      if (source === 'replace-submit') content = fs.readFileSync(target, 'utf8').replace('return evaluate(node, task, output_root)', 'return None')
+      fs.writeFileSync(target, content)
+      assert.equal(runtime.probeMctsZsoftRuntime(f.config).ready, false)
+    } finally { f.close() }
+  }
+  const f = zsoftFixture()
+  try {
+    const target = path.join(f.repoDir, 'testcases_union/res/task_plugins/zsoft/plugin.py')
+    fs.appendFileSync(target, '\nraise RuntimeError("must not import during preflight")\n')
+    assert.equal(runtime.probeMctsZsoftRuntime(f.config).ready, true)
+  } finally { f.close() }
+})
+
+test('ZSoft rejects an export made from a different MCTS source fingerprint', async () => {
+  const f = zsoftFixture()
+  try {
+    await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => {
+      fs.appendFileSync(path.join(f.repoDir, 'testcases_union/res/task_plugins/zsoft/flow.py'), '\n# different version\n')
+      f.writeOutput(Buffer.from('synthetic'))
+    }), { code: 'MCTS_EXPORT_MISMATCH' })
+    assert.equal(fs.existsSync(path.join(f.workspace, 'submission/poc')), false)
+  } finally { f.close() }
+})
+
+test('MCTS ZSoft rejects mismatched tasks, exports and oversized files', async () => {
+  for (const failure of ['task', 'export', 'size', 'symlink']) {
+    const f = zsoftFixture()
+    try {
+      if (failure === 'task') f.payload.workspace.taskId = 'different'
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, f.payload, async () => {
+        f.writeOutput(Buffer.alloc(failure === 'size' ? 129 : 1), failure === 'export' ? 'different' : undefined)
+        if (failure === 'symlink') {
+          fs.renameSync(path.join(f.output, 'poc'), path.join(f.output, 'original'))
+          fs.symlinkSync(path.join(f.output, 'original'), path.join(f.output, 'poc'))
+        }
+      }), /不一致|大小|大小限制|符号链接/)
+      assert.equal(fs.existsSync(path.join(f.workspace, 'submission/poc')), false)
+    } finally { f.close() }
+  }
+})
+
+test('MCTS ZSoft capability is unavailable with missing plugins and cancellation skips submission', async () => {
+  const f = zsoftFixture()
+  try {
+    fs.writeFileSync(path.join(f.repoDir, 'testcases_union/res/task_plugins/zsoft/flow.py'), '')
+    assert.equal(runtime.probeMctsZsoftRuntime(f.config).ready, false)
+    writeSyntheticZsoftPlugin(f.repoDir)
+    const controller = new AbortController()
+    await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, signal: controller.signal }, async () => {
+      f.writeOutput(Buffer.from('synthetic'))
+      controller.abort()
+    }), { name: 'AbortError' })
+    assert.equal(fs.existsSync(path.join(f.workspace, 'submission/poc')), false)
+  } finally { f.close() }
 })

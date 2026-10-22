@@ -1,3 +1,4 @@
+import { definitionsForTarget, type RuntimeDefinition } from '../../../../packages/agent-runtime/index.cjs';
 import { prisma } from '@/lib/storage/prisma';
 import { pickDisplayClientIp } from '@/lib/reliability/client-ip';
 import {
@@ -16,6 +17,7 @@ export type ClientTraceGenerationTarget = {
   agentLabel: string;
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
+  parameterDefinitions?: RuntimeDefinition[];
   supportsSkillSnapshot?: boolean;
   supportsTriggerRouting?: boolean;
 };
@@ -62,6 +64,7 @@ export async function listClientTraceGenerationTargets(
           agentLabel: agent,
           models,
           lastSeenAt: client.lastSeenAt.toISOString(),
+          parameterDefinitions: definitionsForTarget(platform.parameterDefinitions || [], platform.id, agent),
           supportsSkillSnapshot: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 1,
           supportsTriggerRouting: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 4,
         });

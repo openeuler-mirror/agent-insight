@@ -1,0 +1,17 @@
+benchmarks:
+  swe-bench:
+    dataset:
+      autoImport: true
+      source: null
+    loader:
+      sourceArchive: null
+      python: null
+  zsoft-l1:
+    dataset:
+      autoImport: true
+      source: null
+      revision: null
+  scheduling:
+    maxPendingEvaluations: 256
+    maxPendingEvaluationsPerUser: 128
+    maxEvaluationConcurrencyPerUser: null

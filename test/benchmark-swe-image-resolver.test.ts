@@ -20,8 +20,20 @@ const proxyImage = `docker.1ms.run/${image}`
 const pinnedImage = `swebench/sweb.eval.x86_64.pallets_1776_flask-5014@sha256:${'a'.repeat(64)}`
 const localImageId = `sha256:${'b'.repeat(64)}`
 
-process.env.SWE_BENCH_IMAGE_PROXY_PREFIX = 'docker.1ms.run'
-process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS = ''
+const imageConfig: Record<string, any> = new Proxy({}, {
+  set(target: Record<string, any>, name: string, value) {
+    target[name] = value
+    process.env.AGENT_INSIGHT_EVALUATOR_CONFIG_JSON = JSON.stringify({ benchmarks: { 'swe-bench': { images: target } } })
+    return true
+  },
+  deleteProperty(target: Record<string, any>, name: string) {
+    delete target[name]
+    process.env.AGENT_INSIGHT_EVALUATOR_CONFIG_JSON = JSON.stringify({ benchmarks: { 'swe-bench': { images: target } } })
+    return true
+  },
+})
+imageConfig.proxyPrefix = 'docker.1ms.run'
+imageConfig.verifiedMirrorRepositories = []
 
 function runnerWithImage(local: boolean, proxyUnavailable = false) {
   const calls: Array<{ command: string; args: string[] }> = []
@@ -108,8 +120,8 @@ test('SWE-bench pulls a missing Case image through the configured proxy and rest
 test('SWE-bench uses Docker daemon registry mirrors when no proxy prefix is configured', async () => {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swe-image-daemon-mirror-'))
   const runnerProcess = runnerWithImage(false)
-  const configuredProxy = process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
-  delete process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
+  const configuredProxy = imageConfig.proxyPrefix
+  delete imageConfig.proxyPrefix
   try {
     const result = await new SweBenchImageResolver(runnerProcess.runner).resolve(
       image,
@@ -120,7 +132,7 @@ test('SWE-bench uses Docker daemon registry mirrors when no proxy prefix is conf
     assert.deepEqual(runnerProcess.calls.find((call) => call.args[0] === 'pull')?.args, ['pull', image])
     assert.equal(runnerProcess.calls.some((call) => call.args[0] === 'tag'), false)
   } finally {
-    process.env.SWE_BENCH_IMAGE_PROXY_PREFIX = configuredProxy
+    imageConfig.proxyPrefix = configuredProxy
     await fsp.rm(workDir, { recursive: true, force: true })
   }
 })
@@ -166,8 +178,8 @@ test('SWE-bench pulls an x86_64 Verified Case from the configured SWR repositori
     if (args[0] === 'pull' || args[0] === 'tag') return { stdout: '', stderr: '' }
     throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
   }
-  const configuredMirrors = process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
-  process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS = repositories.join(',')
+  const configuredMirrors = imageConfig.verifiedMirrorRepositories
+  imageConfig.verifiedMirrorRepositories = repositories
   try {
     const result = await new SweBenchImageResolver(runner).resolve(
       image,
@@ -186,8 +198,8 @@ test('SWE-bench pulls an x86_64 Verified Case from the configured SWR repositori
       ['tag', mirrorImages[1], image],
     )
   } finally {
-    if (configuredMirrors === undefined) delete process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
-    else process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS = configuredMirrors
+    if (configuredMirrors === undefined) delete imageConfig.verifiedMirrorRepositories
+    else imageConfig.verifiedMirrorRepositories = configuredMirrors
     await fsp.rm(workDir, { recursive: true, force: true })
   }
 })
@@ -209,8 +221,8 @@ test('SWE-bench uses the two public SWR repositories by default on x86_64', asyn
     if (args[0] === 'pull' || args[0] === 'tag') return { stdout: '', stderr: '' }
     throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
   }
-  const configuredMirrors = process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
-  delete process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
+  const configuredMirrors = imageConfig.verifiedMirrorRepositories
+  delete imageConfig.verifiedMirrorRepositories
   try {
     const result = await new SweBenchImageResolver(runner).resolve(
       image,
@@ -220,8 +232,8 @@ test('SWE-bench uses the two public SWR repositories by default on x86_64', asyn
     assert.equal(result.resolvedImageReference, expectedImage)
     assert.deepEqual(calls.find((call) => call.args[0] === 'pull')?.args, ['pull', expectedImage])
   } finally {
-    if (configuredMirrors === undefined) delete process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
-    else process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS = configuredMirrors
+    if (configuredMirrors === undefined) delete imageConfig.verifiedMirrorRepositories
+    else imageConfig.verifiedMirrorRepositories = configuredMirrors
     await fsp.rm(workDir, { recursive: true, force: true })
   }
 })
@@ -247,8 +259,8 @@ test('SWE-bench falls back to the existing proxy after all Verified mirror repos
     if (args[0] === 'pull' || args[0] === 'tag') return { stdout: '', stderr: '' }
     throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
   }
-  const configuredMirrors = process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
-  process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS = repositories.join(',')
+  const configuredMirrors = imageConfig.verifiedMirrorRepositories
+  imageConfig.verifiedMirrorRepositories = repositories
   try {
     const result = await new SweBenchImageResolver(runner).resolve(
       image,
@@ -261,8 +273,8 @@ test('SWE-bench falls back to the existing proxy after all Verified mirror repos
       [['pull', mirrorImages[0]], ['pull', mirrorImages[1]], ['pull', proxyImage]],
     )
   } finally {
-    if (configuredMirrors === undefined) delete process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
-    else process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS = configuredMirrors
+    if (configuredMirrors === undefined) delete imageConfig.verifiedMirrorRepositories
+    else imageConfig.verifiedMirrorRepositories = configuredMirrors
     await fsp.rm(workDir, { recursive: true, force: true })
   }
 })
@@ -284,10 +296,10 @@ test('SWE-bench does not use the x86_64 SWR repositories on an ARM64 Docker daem
     if (args[0] === 'pull') return { stdout: '', stderr: '' }
     throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
   }
-  const configuredMirrors = process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
-  const configuredProxy = process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
-  process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS = 'swr.cn-east-3.myhuaweicloud.com/agent-insight/swebench-verified-x86-64-a'
-  delete process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
+  const configuredMirrors = imageConfig.verifiedMirrorRepositories
+  const configuredProxy = imageConfig.proxyPrefix
+  imageConfig.verifiedMirrorRepositories = ['swr.cn-east-3.myhuaweicloud.com/agent-insight/swebench-verified-x86-64-a']
+  delete imageConfig.proxyPrefix
   try {
     const result = await new SweBenchImageResolver(runner).resolve(
       image,
@@ -298,10 +310,10 @@ test('SWE-bench does not use the x86_64 SWR repositories on an ARM64 Docker daem
     assert.deepEqual(calls.find((call) => call.args[0] === 'pull')?.args, ['pull', armImage])
     assert.equal(calls.some((call) => call.args[0] === 'tag'), false)
   } finally {
-    if (configuredMirrors === undefined) delete process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS
-    else process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS = configuredMirrors
-    if (configuredProxy === undefined) delete process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
-    else process.env.SWE_BENCH_IMAGE_PROXY_PREFIX = configuredProxy
+    if (configuredMirrors === undefined) delete imageConfig.verifiedMirrorRepositories
+    else imageConfig.verifiedMirrorRepositories = configuredMirrors
+    if (configuredProxy === undefined) delete imageConfig.proxyPrefix
+    else imageConfig.proxyPrefix = configuredProxy
     await fsp.rm(workDir, { recursive: true, force: true })
   }
 })

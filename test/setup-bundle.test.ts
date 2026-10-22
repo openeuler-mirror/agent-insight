@@ -21,13 +21,23 @@ const clientFiles = [
   'scripts/install-fault-injection.js',
   'scripts/lib/fi-python-runtime.js',
   'scripts/fi-worker.js',
+  'packages/project-config/index.cjs',
+  'packages/project-config/yaml.cjs',
+  'config/benchmark/executor.yaml',
   'services/executor/src/index.cjs',
-  'services/executor/src/mcts-options.cjs',
+  'services/executor/src/runtime-options.cjs',
+  'packages/agent-runtime/index.cjs',
+  'packages/agent-runtime/loader.cjs',
+  'services/executor/runtimes/mcts/runtime.yaml',
+  'services/executor/runtimes/opencode/runtime.yaml',
   'services/executor/src/mcts-config.cjs',
   'services/executor/src/mcts-runtime.cjs',
   'services/executor/src/git-source.cjs',
   'services/executor/src/git-source-workspace.cjs',
+  'services/executor/src/source-policy-registry.cjs',
   'services/executor/src/benchmarks/swe-bench.cjs',
+  'generated/benchmark-catalog/executors.cjs',
+  'benchmarks/swe-bench/executor/git-source-policy.cjs',
   'agent_ras/platform_adapter/opencode/config_sync.js',
   'agent_fault_injection/pyproject.toml',
 ]
@@ -88,7 +98,7 @@ test('incomplete client bundle returns missing entries instead of a partial arch
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-bundle-missing-'))
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
   usePackageRoot(t, temporary)
-  for (const file of clientFiles.filter((file) => !file.startsWith('services/executor/'))) {
+  for (const file of clientFiles.filter((file) => !file.startsWith('services/executor/src/'))) {
     const target = path.join(temporary, file)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.writeFileSync(target, 'fixture')
@@ -96,6 +106,45 @@ test('incomplete client bundle returns missing entries instead of a partial arch
   const response = await GET(new Request('http://localhost/api/ingest/setup/bundle?name=client'))
   assert.equal(response.status, 503)
   assert.deepEqual((await response.json()).missing, ['services/executor/src'])
+})
+
+test('installed executor loads package policies after the installation source moves away', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-executor-policy-'))
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+  usePackageRoot(t, repositoryRoot)
+  const source = path.join(temporary, 'source')
+  const home = path.join(temporary, 'home')
+  fs.mkdirSync(source)
+  const response = await GET(new Request('http://localhost/api/ingest/setup/bundle?name=client'))
+  assert.equal(response.status, 200)
+  const archive = Buffer.from(await response.arrayBuffer())
+  const extraction = spawnSync('tar', ['-xzf', '-', '-C', source], { input: archive })
+  assert.equal(extraction.status, 0, extraction.stderr.toString())
+  const installed = spawnSync(process.execPath, ['-e', `require(${JSON.stringify(path.join(source, 'scripts/install-ras-client.js'))}).installRuntime()`], {
+    env: { ...process.env, AGENT_INSIGHT_HOME: home }, encoding: 'utf8',
+  })
+  assert.equal(installed.status, 0, installed.stderr)
+  fs.renameSync(source, path.join(temporary, 'moved-source'))
+  const executorDir = path.join(home, 'client', 'runtime', 'executor')
+  const loaded = spawnSync(process.execPath, ['-e', `
+    const assert = require('node:assert/strict')
+    const path = require('node:path')
+    const dir = ${JSON.stringify(executorDir)}
+    const { createBenchmarkExecutor } = require(path.join(dir, 'index.cjs'))
+    const executor = createBenchmarkExecutor({
+      clientId: 'fixture', deviceCredential: 'fixture', insightBaseUrl: 'http://localhost',
+      baseDir: ${JSON.stringify(path.join(home, 'client'))}, agentInsightHome: ${JSON.stringify(home)},
+      runAgent: async () => { throw new Error('Agent must not execute') },
+    })
+    const policies = executor.runner.workspaceProviders.get('git').sourcePolicies
+    assert.deepEqual([...policies.keys()], ['swe-bench'])
+    assert.equal(policies.get('swe-bench').home, ${JSON.stringify(home)})
+    const legacy = require(path.join(dir, 'benchmarks/swe-bench.cjs'))
+    assert.equal(new legacy.SweBenchGitSourcePolicy({ home: ${JSON.stringify(home)}, env: { SWE_BENCH_GIT_SOURCE: '' } })
+      .resolve({ repository: 'https://github.com/pallets/flask.git' }).remotes[0].name, 'gitee')
+    executor.close()
+  `], { encoding: 'utf8' })
+  assert.equal(loaded.status, 0, loaded.stderr)
 })
 
 test('an existing RAS installer alone cannot produce a successful RAS bundle', async (t) => {

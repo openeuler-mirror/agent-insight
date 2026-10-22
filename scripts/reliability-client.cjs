@@ -99,6 +99,7 @@ function loadConfig() {
     fiCwd: process.env.AGENT_INSIGHT_FI_CWD || raw.fiCwd || '',
     // 安装器始终写入版本化 managed venv 的绝对解释器路径。
     fiPython: process.env.AGENT_FI_PYTHON || raw.fiPython || '',
+    publicBundleDir: process.env.AGENT_INSIGHT_PUBLIC_BUNDLES_DIR || raw.publicBundleDir || '',
     mctsRepoDir: process.env.AGENT_INSIGHT_MCTS_REPO_DIR || fileEnv.AGENT_INSIGHT_MCTS_REPO_DIR || raw.mctsRepoDir || '',
     mctsPython: process.env.AGENT_INSIGHT_MCTS_PYTHON || fileEnv.AGENT_INSIGHT_MCTS_PYTHON || raw.mctsPython || '',
     mctsTraceLauncher: process.env.AGENT_INSIGHT_MCTS_TRACE_LAUNCHER || fileEnv.AGENT_INSIGHT_MCTS_TRACE_LAUNCHER || raw.mctsTraceLauncher
@@ -519,6 +520,8 @@ function capabilityDiscoveryFingerprint(cfg = {}) {
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'config.env'),
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'core', 'main.py'),
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'xgovernor_client.py'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'task_plugins', 'zsoft'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'mode.py'),
     mctsPython,
     mctsTraceLauncher,
     path.join(path.dirname(mctsTraceLauncher), 'config.json'),
@@ -814,6 +817,12 @@ function mergePiRuntimeCapability(platforms, runtime) {
   return [...platforms.filter(platform => platform.id !== 'pi-agent'), capability]
 }
 
+function agentRuntimeOptions() {
+  const candidates = [path.join(__dirname, 'packages', 'agent-runtime', 'loader.cjs'),
+    path.join(__dirname, '..', 'packages', 'agent-runtime', 'loader.cjs')]
+  return require(candidates.find(candidate => fs.existsSync(candidate)))
+}
+
 function buildCapabilities(cfg, opts) {
   const fi = opts?.probe || getProbe(cfg, opts)
   const runtimeByPlatform = new Map()
@@ -865,27 +874,37 @@ function buildCapabilities(cfg, opts) {
     platforms = platforms.filter(platform => platform.id !== 'pi-mcts')
     platforms.push({
       id: 'pi-mcts', models: [], agents: ['pi-mcts'],
-      runBenchmarkCase: { version: 1, returnsTraceId: true,
-        agentOptionCapabilities: mcts?.agentOptionCapabilities || [] },
+      runBenchmarkCase: { version: 1, returnsTraceId: true },
       actions: ['RUN_BENCHMARK_CASE'],
     })
   }
+  const zsoftProbe = mctsConfigured && mcts?.probeMctsZsoftRuntime
+    ? mcts.probeMctsZsoftRuntime(cfg) : { ready: false }
+  const mctsReady = mctsProbe.ready || zsoftProbe.ready
   const components = {
     clientVersion: AGENT_VERSION,
+    'mcts-zsoft-export/v1': { ready: zsoftProbe.ready, ...(zsoftProbe.reason ? { note: zsoftProbe.reason } : {}) },
+    'mcts-swe-bench/v1': { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) },
     'git-workspace/v1': { ready: true },
     'concurrent-execution/v1': { ready: true },
     'git-patch/v1': { ready: true },
+    'public-bundle-workspace/v1': { ready: true },
+    'zsoft-tasks-workspace/v3': { ready: true },
+    'single-file/v1': { ready: true },
   }
   for (const platform of platforms) {
     if (platform.id === 'pi-mcts') {
-      components['agent-runtime/pi-mcts/v1'] = { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
-      for (const capability of mcts?.agentOptionCapabilities || []) components[capability] = { ready: mctsProbe.ready }
+      components['agent-runtime/pi-mcts/v1'] = { ready: mctsReady, ...(!mctsReady && mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
       continue
     }
     const runtime = runtimeFor(platform.id)
     components[`agent-runtime/${platform.id}/v1`] = {
       ready: platform.runExperimentCase?.returnsTraceId === true && runtime.ready,
     }
+  }
+  const definitions = agentRuntimeOptions().loadRuntimeDefinitions().map(item => item.descriptor)
+  for (const platform of platforms) {
+    platform.parameterDefinitions = definitions.filter(definition => definition.targets.some(target => target.platform === platform.id))
   }
   return {
     platforms,
@@ -1506,7 +1525,7 @@ function createPiEventInspector(invocation) {
     const message = event?.message
     if (type === 'message_end' && message?.role === 'assistant') {
       pendingError = ['error', 'aborted'].includes(message.stopReason)
-        ? `Pi model: ${message.errorMessage || message.stopReason}` : null
+        ? `Pi runtime: ${message.errorMessage || message.stopReason}` : null
     }
     if (type === 'auto_retry_end' && event.success === false) pendingError = String(event.error || pendingError || 'Pi retry exhausted')
     if (type === 'error') pendingError = extractStructuredAgentError(line) || 'Pi runtime error'
@@ -1624,6 +1643,12 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     literalInput: triggerRouting,
     correlation,
   })
+  const runtimePlan = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
+  const effectiveAgentOptions = runtimePlan.agentOptions
+  const preparedRuntime = agentRuntimeOptions().prepareRuntimeInvocation(runtimePlan, cwd)
+  try {
+  invocation.args.push(...preparedRuntime.args)
+  Object.assign(env, preparedRuntime.env)
   const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
   const eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env) : null
   if (eventChannel) {
@@ -1644,7 +1669,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
   const firstModelResponseTimeoutMs = firstModelResponseTimeoutSeconds * 1000
   const startedAt = new Date().toISOString()
 
-  return new Promise((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     fs.mkdirSync(cwd, { recursive: true })
     const activityEvidence = runtime?.createActivityEvidence?.()
     let child
@@ -1799,10 +1824,10 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
           diagnostic: event.error,
           structured: true,
         })
-        const code = event.failureCode || (classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR')
-        const message = classified.code === 'MODEL_UNAVAILABLE'
-          ? classified.message
-          : `${platform} 会话报告模型错误: ${sanitizeAgentDiagnostic(event.error) || '未知错误'}`
+        const code = event.failureCode || (classified.code === 'AGENT_EXIT_NONZERO' ? 'MODEL_ERROR' : classified.code)
+        const message = classified.code === 'AGENT_EXIT_NONZERO'
+          ? `${platform} 会话报告运行错误: ${sanitizeAgentDiagnostic(event.error) || '未知错误'}`
+          : classified.message
         if (settled || event.deferFailureUntilExit) {
           if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
         } else {
@@ -1918,6 +1943,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       const finishedAt = new Date().toISOString()
       const runFacts = {
         state: 'AGENT_EXITED',
+        ...(effectiveAgentOptions ? { agentOptions: effectiveAgentOptions } : {}),
         ...(traceId ? { traceId } : {}),
         exitCode: code,
         signal: signal || undefined,
@@ -1963,7 +1989,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
           diagnostic: structuredErrors.join('\n'),
           structured: true,
         })
-        if (!triggerHit && structuredErrors.length && structuredFailure.code === 'MODEL_UNAVAILABLE') {
+        if (!triggerHit && structuredErrors.length && structuredFailure.code !== 'AGENT_EXIT_NONZERO') {
           failure = createAgentRunError(structuredFailure.code, structuredFailure.message, runFacts)
         }
       }
@@ -2028,6 +2054,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       void finishAgentRun(code, signal)
     })
   })
+  } finally { preparedRuntime.cleanup() }
 }
 
 function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
@@ -2391,6 +2418,8 @@ async function main() {
     insightBaseUrl: cfg.insightBaseUrl,
     baseDir: CLIENT_HOME,
     agentInsightHome: getAgentInsightHome(),
+    mctsConfig: { mctsRepoDir: cfg.mctsRepoDir },
+    publicBundleDir: cfg.publicBundleDir,
     log: (...args) => log(...args),
     tryAcquireSlot: tryAcquireExecutionSlot,
     releaseSlot: releaseExecutionSlot,

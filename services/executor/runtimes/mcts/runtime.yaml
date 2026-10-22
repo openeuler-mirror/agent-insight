@@ -1,0 +1,26 @@
+key: mcts
+displayName: MCTS
+targets:
+  - { platform: pi-mcts, agent: pi-mcts }
+  - { platform: xiao-mcts, agent: xiao-mcts }
+parameterGroups: []
+parameters: []
+presets: []
+
+configuration:
+  version: 2
+  delivery: argv
+  defaults: { max-iters: 5, branching: 3, max-turns-init: 160, max-turns-step: 80, max-turns-author: 160, max-turns-author-step: 80, token-fuse-limit: 30000000 }
+  schema:
+    type: object
+    additionalProperties: true
+    properties:
+      max-iters: { type: integer, minimum: 1 }
+      branching: { type: integer, minimum: 1 }
+      max-turns-init: { type: integer, minimum: 1 }
+      max-turns-step: { type: integer, minimum: 1 }
+      max-turns-author: { type: integer, minimum: 1 }
+      max-turns-author-step: { type: integer, minimum: 1 }
+      token-fuse-limit: { type: integer, minimum: 0 }
+  binding:
+    mode: passthrough

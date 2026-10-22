@@ -41,6 +41,7 @@ function readJson(filePath, label) {
 
 function listFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === '__pycache__' || entry.name === '.DS_Store' || /\.py[co]$/.test(entry.name)) return []
     const target = path.join(directory, entry.name)
     return entry.isDirectory() ? listFiles(target) : [target]
   })
@@ -137,7 +138,11 @@ function normalizeDataset(source, key) {
     const profileKey = string(profile?.key, `dataset.profiles[${index}].key`, /^[a-z0-9][a-z0-9._-]{0,63}$/)
     if (keys.has(profileKey)) fail(`${key} 的 Dataset Profile 重复：${profileKey}`)
     keys.add(profileKey)
-    if (!Array.isArray(profile?.acceptedExtensions) || !profile.acceptedExtensions.length) {
+    const sourceKinds = profile.acceptedSourceKinds == null ? ['file'] : profile.acceptedSourceKinds
+    if (!Array.isArray(sourceKinds) || !sourceKinds.length || sourceKinds.some(kind => !['file', 'directory'].includes(kind))) {
+      fail(`${profileKey}.acceptedSourceKinds 不合法`)
+    }
+    if (!Array.isArray(profile?.acceptedExtensions) || (!profile.acceptedExtensions.length && sourceKinds.includes('file'))) {
       fail(`${profileKey} 缺少 acceptedExtensions`)
     }
     const acceptedExtensions = profile.acceptedExtensions.map((extension, extensionIndex) => (
@@ -147,6 +152,8 @@ function normalizeDataset(source, key) {
       key: profileKey,
       displayName: string(profile?.displayName || profileKey, `${profileKey}.displayName`),
       acceptedExtensions,
+      ...(profile.version == null ? {} : { version: string(profile.version, `${profileKey}.version`) }),
+      ...(profile.acceptedSourceKinds == null ? {} : { acceptedSourceKinds: sourceKinds }),
       ...(profile?.expectedCaseCount == null
         ? {}
         : { expectedCaseCount: positiveInteger(profile.expectedCaseCount, `${profileKey}.expectedCaseCount`) }),
@@ -172,6 +179,14 @@ function normalizePresentation(source, key) {
         : {}),
       columns: presentationColumns(caseTable.columns, 'caseTable.columns'),
     },
+  }
+  if (source.execution != null) {
+    if (typeof source.execution !== 'object' || Array.isArray(source.execution)) {
+      fail('presentation.execution 必须是对象')
+    }
+    if (source.execution.notice != null) {
+      result.execution = { notice: string(source.execution.notice, 'execution.notice') }
+    }
   }
   if (source.evaluator != null) {
     result.evaluator = {
@@ -227,6 +242,12 @@ function loadPackage(packageDir) {
   const datasetLoaderExport = datasetLoaderPath
     ? string(source.implementation?.datasetLoaderExport, 'implementation.datasetLoaderExport', /^[A-Za-z_$][\w$]*$/)
     : null
+  const datasetPreparerPath = source.implementation?.datasetPreparer
+    ? resolveInside(packageDir, source.implementation.datasetPreparer, 'implementation.datasetPreparer')
+    : null
+  const datasetPreparerExport = datasetPreparerPath
+    ? string(source.implementation?.datasetPreparerExport, 'implementation.datasetPreparerExport', /^[A-Za-z_$][\w$]*$/)
+    : null
   const evaluatorYamlPath = resolveInside(packageDir, source.implementation?.evaluator, 'implementation.evaluator')
   const caseSchemaPath = resolveInside(packageDir, source.schemas?.case, 'schemas.case')
   const resultSchemaPath = resolveInside(packageDir, source.schemas?.rawResult, 'schemas.rawResult')
@@ -245,6 +266,17 @@ function loadPackage(packageDir) {
   const imageProvider = evaluator.imageProvider
     ? resolveInside(evaluatorDir, evaluator.imageProvider, 'evaluator.imageProvider')
     : null
+  const assets = evaluator.assets == null ? null : {
+    image: string(evaluator.assets.image, 'evaluator.assets.image', /^[a-z0-9][a-z0-9.:-]*\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/),
+    sourcePath: string(evaluator.assets.sourcePath, 'evaluator.assets.sourcePath', /^\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*$/),
+    releaseId: string(evaluator.assets.releaseId, 'evaluator.assets.releaseId', /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+    bundleDigest: string(evaluator.assets.bundleDigest, 'evaluator.assets.bundleDigest', /^sha256:[a-f0-9]{64}$/),
+    ...(evaluator.assets.directoryEnv == null ? {} : {
+      directoryEnv: string(evaluator.assets.directoryEnv, 'evaluator.assets.directoryEnv', /^[A-Z][A-Z0-9_]*$/),
+    }),
+    verifyCommand: string(evaluator.assets.verifyCommand, 'evaluator.assets.verifyCommand', /^(python3|node)$/),
+    verifyEntrypoint: resolveInside(evaluatorDir, evaluator.assets.verifyEntrypoint, 'evaluator.assets.verifyEntrypoint'),
+  }
   const ociRuntime = evaluator.runtime === 'oci-container'
   const imageRepository = ociRuntime
     ? string(evaluator.imageRepository, 'evaluator.imageRepository', /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i)
@@ -276,15 +308,30 @@ function loadPackage(packageDir) {
     }
   })
   const requiredCapabilities = source.executor?.requiredCapabilities
-  if (!Array.isArray(requiredCapabilities) || !requiredCapabilities.length) fail(`${key} 缺少执行器能力声明`)
+  if (!Array.isArray(requiredCapabilities) || (!requiredCapabilities.length && source.executor?.supported !== false)) fail(`${key} 缺少执行器能力声明`)
   const normalizedCapabilities = requiredCapabilities.map((item, index) => (
     string(item, `requiredCapabilities[${index}]`, /^[a-z0-9][a-z0-9._/-]{0,127}$/)
   ))
   if (new Set(normalizedCapabilities).size !== normalizedCapabilities.length) {
     fail(`${key} 的执行器能力声明重复`)
   }
+  const gitSourcePolicyPath = source.executor?.gitSourcePolicy == null
+    ? null
+    : resolveInside(packageDir, source.executor.gitSourcePolicy, 'executor.gitSourcePolicy')
+  if (gitSourcePolicyPath && (source.executor?.supported === false || !normalizedCapabilities.includes('git-workspace/v1'))) {
+    fail(`${key} 的 Git 来源策略需要 git-workspace/v1 执行能力`)
+  }
+  if (gitSourcePolicyPath && path.extname(gitSourcePolicyPath) !== '.cjs') {
+    fail(`${key} 的 executor.gitSourcePolicy 必须是 CommonJS .cjs 模块`)
+  }
+  const executorFiles = gitSourcePolicyPath ? listFiles(path.dirname(gitSourcePolicyPath)) : []
+  for (const filePath of executorFiles) {
+    if (!fs.realpathSync(filePath).startsWith(`${fs.realpathSync(packageDir)}${path.sep}`)) {
+      fail(`${key} 的执行器文件越出接入包：${filePath}`)
+    }
+  }
   for (const artifact of normalizedArtifacts) {
-    if (!normalizedCapabilities.includes(artifact.collector)) {
+    if (source.executor?.supported !== false && !normalizedCapabilities.includes(artifact.collector)) {
       fail(`${key} 的 Artifact collector 未列入 requiredCapabilities：${artifact.collector}`)
     }
   }
@@ -302,6 +349,7 @@ function loadPackage(packageDir) {
   const adapterExport = string(source.implementation?.adapterExport, 'implementation.adapterExport', /^[A-Za-z_$][\w$]*$/)
   const dataset = normalizeDataset(source.dataset, key)
   const presentation = normalizePresentation(source.presentation, key)
+  if (datasetPreparerPath && !dataset) fail(`${key} 声明了 Dataset Preparer，但没有 dataset.profiles`)
   if (datasetLoaderPath && !dataset) fail(`${key} 声明了 Dataset Loader，但没有 dataset.profiles`)
   const primaryMetricKey = string(source.result?.primaryMetric?.key, 'result.primaryMetric.key')
   const primaryMetricAggregation = source.result?.primaryMetric?.aggregation
@@ -311,14 +359,21 @@ function loadPackage(packageDir) {
   const evaluatorFiles = [...new Set([
     ...listFiles(evaluatorDir),
     ...(smokeEntrypoint ? listFiles(path.dirname(smokeEntrypoint)) : []),
+    ...(ociRuntime ? [
+      path.resolve(packageDir, '../../packages/project-config'),
+      path.resolve(packageDir, '../../config/benchmark/evaluator.yaml'),
+      path.resolve(packageDir, '../../services/evaluator/src/evaluator-registry.cjs'),
+    ].flatMap((file) => fs.existsSync(file) ? (fs.statSync(file).isDirectory() ? listFiles(file) : [file]) : []) : []),
   ])]
   const evaluatorDigest = digestFiles(evaluatorFiles, evaluatorDir)
   const files = [
     yamlPath,
     adapterPath,
-    ...(datasetLoaderPath ? [datasetLoaderPath] : []),
+    ...(datasetLoaderPath ? listFiles(path.dirname(datasetLoaderPath)) : []),
+    ...(datasetPreparerPath ? listFiles(path.dirname(datasetPreparerPath)) : []),
     caseSchemaPath,
     resultSchemaPath,
+    ...executorFiles,
     ...evaluatorFiles,
   ]
   return {
@@ -328,9 +383,14 @@ function loadPackage(packageDir) {
     adapterExport,
     datasetLoaderPath,
     datasetLoaderExport,
+    datasetPreparerPath,
+    datasetPreparerExport,
+    gitSourcePolicyPath,
+    executorFiles,
     manifest: {
       adapterKey: key,
       displayName: string(source.displayName, 'displayName'),
+      ...(source.executor?.supported === false ? { supportsAgentExecution: false } : {}),
       protocols: {
         agentTask: string(source.protocols?.agentTask, 'protocols.agentTask'),
         evaluation: string(source.protocols?.evaluation, 'protocols.evaluation'),
@@ -360,9 +420,11 @@ function loadPackage(packageDir) {
       key: evaluator.key,
       benchmarkKey: key,
       runtime: evaluator.runtime,
+      ...(evaluator.requiresPrebuiltRuntime === true ? { requiresPrebuiltRuntime: true } : {}),
       command: string(evaluator.command, 'evaluator.command'),
       entrypoint: containerEntrypoint || entrypoint,
       ...(imageProvider ? { imageProvider } : {}),
+      ...(assets ? { assets } : {}),
       ...(imageRepository ? {
         image: `${imageRepository}:artifact-${evaluatorDigest.slice('sha256:'.length)}`,
         dockerfile: runtimeDockerfile,
@@ -440,8 +502,21 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     `export const generatedBenchmarkDatasetLoaders: readonly GeneratedBenchmarkDatasetLoader[] = [${packagesWithLoaders.map((item, index) => `{ adapterKey: ${JSON.stringify(item.key)}, loader: loader${index} }`).join(', ')}]`,
     '',
   ].join('\n')
+  const packagesWithPreparers = packages.filter(item => item.datasetPreparerPath)
+  const preparersSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    "import type { BenchmarkDatasetPreparer } from '../../packages/benchmark-protocol/src/contracts'",
+    ...packagesWithPreparers.map((item, index) => `import { ${item.datasetPreparerExport} as preparer${index} } from '${toImportPath(outputDir, item.datasetPreparerPath).replace(/\.ts$/, '')}'`),
+    `export const generatedBenchmarkDatasetPreparers: readonly { adapterKey: string; preparer: BenchmarkDatasetPreparer }[] = [${packagesWithPreparers.map((item, index) => `{ adapterKey: ${JSON.stringify(item.key)}, preparer: preparer${index} }`).join(', ')}]`,
+    '',
+  ].join('\n')
+  const preparerKeysSource = `// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog\nmodule.exports = ${JSON.stringify(packagesWithPreparers.map(item => item.key))}\n`
   const descriptors = packages.map((item) => ({
     ...item.evaluator,
+    ...(item.evaluator.assets ? { assets: {
+      ...item.evaluator.assets,
+      verifyEntrypoint: path.relative(outputDir, item.evaluator.assets.verifyEntrypoint).replaceAll(path.sep, '/'),
+    } } : {}),
     ...(item.evaluator.imageProvider
       ? { imageProvider: path.relative(outputDir, item.evaluator.imageProvider).replaceAll(path.sep, '/') }
       : {}),
@@ -457,6 +532,7 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   }))
   let descriptorJson = JSON.stringify(descriptors, null, 2)
   descriptorJson = descriptorJson.replace(/"imageProvider": "([^"/][^"]*)"/g, '"imageProvider": path.resolve(__dirname, "$1")')
+  descriptorJson = descriptorJson.replace(/"verifyEntrypoint": "([^"/][^"]*)"/g, '"verifyEntrypoint": path.resolve(__dirname, "$1")')
   descriptorJson = descriptorJson.replace(/"smokeEntrypoint": "([^"/][^"]*)"/g, '"smokeEntrypoint": path.resolve(__dirname, "$1")')
   descriptorJson = descriptorJson.replace(
     /"entrypoint": "([^"/][^"]*)"/g,
@@ -478,10 +554,30 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     'module.exports = { generatedEvaluatorDescriptors }',
     '',
   ].join('\n')
+  const policyPackages = packages.filter(item => item.gitSourcePolicyPath)
+  const executorSource = [
+    "'use strict'",
+    '',
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '',
+    "const path = require('node:path')",
+    '',
+    'const generatedGitSourcePolicyDescriptors = [',
+    ...policyPackages.map(item => `  { benchmarkKey: ${JSON.stringify(item.key)}, modulePath: path.resolve(__dirname, ${JSON.stringify(toImportPath(outputDir, item.gitSourcePolicyPath))}) },`),
+    ']',
+    '',
+    `const generatedExecutorPackageFiles = ${JSON.stringify([...new Set(policyPackages.flatMap(item => item.executorFiles.map(filePath => path.relative(rootDir, filePath).replaceAll(path.sep, '/'))))].sort(), null, 2)}`,
+    '',
+    'module.exports = { generatedGitSourcePolicyDescriptors, generatedExecutorPackageFiles }',
+    '',
+  ].join('\n')
   fs.writeFileSync(path.join(outputDir, 'manifests.ts'), manifestSource)
   fs.writeFileSync(path.join(outputDir, 'adapters.ts'), adaptersSource)
   fs.writeFileSync(path.join(outputDir, 'dataset-loaders.ts'), loadersSource)
+  fs.writeFileSync(path.join(outputDir, 'dataset-preparers.ts'), preparersSource)
+  fs.writeFileSync(path.join(outputDir, 'dataset-preparer-keys.cjs'), preparerKeysSource)
   fs.writeFileSync(path.join(outputDir, 'evaluators.cjs'), evaluatorSource)
+  fs.writeFileSync(path.join(outputDir, 'executors.cjs'), executorSource)
   fs.writeFileSync(path.join(outputDir, 'catalog-lock.json'), `${JSON.stringify({
     notice: 'AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
     packages: packages.map((item) => ({ key: item.key, digest: item.packageDigest, evaluatorDigest: item.evaluator.artifactDigest })),

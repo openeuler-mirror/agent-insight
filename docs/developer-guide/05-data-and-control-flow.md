@@ -49,7 +49,7 @@ evaluator.sh images {list|purge} → 管理容器 → 数据卷内 manager.sock
 
 Benchmark 在同一事务中领取 pending Case、校验实验执行额度，以及全平台和每用户执行中或尚未完成评测的 Case 数量上限。执行器提交终态后释放执行额度并补位，评测独立持久化到 Evaluation/Outbox。平台按评测服务地址及用户预留名额，Controller 再通过串行化接收和持久化 accepted 状态防止同时请求超卖。接收未知保留名额，用同一 Run 和摘要重试；资源等待不触发 queued 的 300 秒失败。
 
-镜像候选从持久化 Case 状态生成，全服务准备窗口最多为 `EVALUATOR_MAX_CONCURRENCY + 1`。平台通过现有 `POST /api/v1/evaluations` 的 `prepare-images` 操作下发全量 `windows`（含 Case ID），Controller 原子替换窗口并保存全局 revision，拒绝迟到消息，重启后重新对账。镜像按需就绪后才接收评测，正式任务硬保护与准备窗口软保护分开管理。
+镜像候选从持久化 Case 状态生成，全服务准备窗口最多为 `config/benchmark/evaluator.yaml` 的 `maxConcurrency + 1`。平台通过现有 `POST /api/v1/evaluations` 的 `prepare-images` 操作下发全量 `windows`（含 Case ID），Controller 原子替换窗口并保存全局 revision，拒绝迟到消息，重启后重新对账。镜像按需就绪后才接收评测，正式任务硬保护与准备窗口软保护分开管理。
 
 客户端为普通 Case 隔离临时目录，Benchmark 继续使用每 Run 的工作区。活动进程与取消上下文按 Run 管理，长轮询收取命令不再等待普通 Case 完成。`components.concurrent-execution/v1.ready` 用于拒绝将大于 1 的并发下发到旧客户端；Skill/FI 保留原有互斥。
 
@@ -346,6 +346,10 @@ Benchmark 的执行目标发现与普通实验共享客户端能力真源：从�
 
 第一阶段在 Agent 子进程与 Artifact 收集边界做确定性失败收敛，`BenchmarkCaseRun.status` 统一进入 `execution_failed`，具体原因保存在 `failureCode` 并由详情页映射展示。OpenCode 执行直接解析 `opencode run --format json` 事件，不等待 Trace 异步入库：结构化 `session.error`/错误事件按确定证据分为 `MODEL_UNAVAILABLE` 或 `MODEL_ERROR`；`session.idle` 或正常退出时若从未看到非空文本、推理、工具或 step finish 则为 `MODEL_NO_RESPONSE`；进程仍活着但默认 90 秒内没有首个模型活动则为 `MODEL_START_TIMEOUT`。以上失败会立即 TERM/KILL 进程组；已观察到模型活动后才继续使用冻结的 Agent 总超时，超时使用 `AGENT_TIMEOUT`。其他非零退出使用 `AGENT_EXIT_NONZERO`；模型已运行但必需 Patch 为空时使用 `AGENT_NO_OUTPUT`。这些确定性失败立即停止当前 Case，不进入 Artifact 上传或 Official Harness，也不参与自动重试；用户修复外部条件后通过 Case 重跑开启新的 Run。
 
+共享 `scripts/agent-run-diagnostics.cjs` 在通用模型分类前识别确定的存储证据：`ENOSPC` / `no space left on device` 返回 `ENOSPC`，`EDQUOT` / `disk quota exceeded` 返回 `EDQUOT`。客户端事件处理、进程结束检查和 OpenCode SDK 的结构化失败都保留具体分类，只有通用结构化错误才回退 `MODEL_ERROR`；正常回答和工具输出中的错误示例不触发失败。Pi 解析器使用中性的 `Pi runtime:` 前缀，仍等到最终事件或进程退出判断失败，成功的后续 assistant 消息可清除重试期间的旧错误。进程退出 0 不会覆盖已经确认的终态存储错误。
+
+Benchmark 的 `failure-presentation.ts` 对新存储错误提供独立标签，并仅对历史通用执行错误码（`MODEL_ERROR` / `AGENT_EXIT_NONZERO` / `WORKSPACE_PREPARE_FAILED` / `EXECUTION_FAILED`）或缺失错误码按明确存储证据修正展示；已明确为超时、模型不可用或 Harness 失败的记录不被覆盖。展示模型保留 `originalCode`，数据库原始码、消息、Case 状态和评分均不回写。平台更新即可修正历史提示；新执行任务的分类依赖执行客户端同步更新并重启。
+
 平台运行两类 Benchmark watchdog。Agent Run 在启动时先扫描一次，此后每 30 秒扫描 `running_agent/collecting/uploading/cleaning`：进度为 `preparing` 时阈值 7 分钟，其余 `running_agent` 取冻结 `timeoutSeconds + 90s`，后三阶段固定 5 分钟。Evaluation 同周期扫描 queued/dispatch 不确定、运行 Harness、证据收集/上传/清理和 `normalizing`：除 Harness 取 `timeoutSeconds + 90s` 外，其余阶段固定 5 分钟。活性一律使用服务端接收时间。watchdog、完成回调和下发响应分别以状态/活性时间及 outbox `attemptCount` 做 CAS；胜者写终态，迟到 completion 或 dispatch 不能复活已回收任务。终态事务先持久化结果行、Case 状态和 `continuationStatus=pending` 再 ACK；持久化 continuation 使用递增 attempt 作为 owner lease，服务重启或下次 watchdog 可恢复，且会跳过已经完成的补充评估器。旧 Run 发现后继重跑时直接停止，不能覆盖新投影。执行器把 `complete_pending/upload_pending` 从 Agent 串行槽中拆成独立投递 lane，持久化失败次数和下次投递时间，采用 5 秒起步、最大 5 分钟的指数退避；单次 HTTP 回调 30 秒超时。投递 lane 与新 Agent 任务可并行，重启后均从磁盘状态恢复。Git Workspace Provider 的 fetch 单次超时为 120 秒，只对白名单瞬时网络故障进行总计 3 次尝试，退避为 1 秒、2 秒并附加小幅随机抖动；每次尝试前重建仓库，避免超时遗留 lock/半包，最后一次以 invocation-local `-c http.version=HTTP/1.1` 兜底。fetch 使用独立进程组，超时先 TERM、2 秒后 KILL，并禁用交互式凭据提示；永久仓库、revision、鉴权、证书和磁盘错误不重试。
 
 SWE-bench 的归一化不信任单一回传字段。平台把冻结 `EvaluationJob` 和重读、复核 size/SHA-256 后的 `report.json` 一起交给 Adapter；Adapter 要求实例一致、严格 JSON boolean、`FAIL_TO_PASS/PASS_TO_PASS` 与冻结名单完整且唯一、Raw Result 计数与官方报告一致，并精确验证三类证据契约。字符串 `"false"`、错误实例、空/缺失/重复/未知测试或证据内容漂移都收敛为无分的分类错误，不能产生 pass；运行架构不参与结果准入。Controller 对超时后的进程退出 0 仍固定判为 `EVALUATION_TIMEOUT`，且仅接受结构和状态均匹配的 callback ACK。实验结果查询只采用 Case 重试图中的叶子 Run，并以 `createdAt + id` 稳定排序，避免旧尝试重复计分。
@@ -448,7 +452,11 @@ flowchart LR
 一键诊断只启动一次 `fault-diagnosis-agent`。同一个 Agent 先根据 Trace、静态检测和五模块规程生成 `.agent-insight/agent-debug-core.json`，再调用 Skill-local runner 生成 `.agent-insight/agent-debug-detectors.json`，随后由该 Agent 基于真实证据完成通用富化、语义查重和关联，并直接写出 `.agent-insight/agent-debug-final.json`。重复结果进入目标 core finding 的 `supplementalEvidence`，独立结果进入 `detectorFindings`；冻结 core 字段和专项 `facts`、`anchors`、`details` 由 `agentdebug_validate.py --core --detectors` 确定性校验。服务端只准备输入与 trace bundle、启动 Agent、标准化并持久化最终报告、转发流式事件。
 
 
-`.agent-insight/agent-debug-final.json` 是一键诊断的唯一报告真源。每次运行前 runner 会删除同一 workspace 中的旧 final 文件，Agent 校验新文件后只返回 `AGENT_DEBUG_REPORT_READY`，服务端不再解析或要求模型回显完整报告。AgentDebug 将事件流最长时间设为 45 分钟，并给通用 Agent 配置默认 10 分钟“无有效进展” watchdog；只有心跳而没有真实 session 事件时，watchdog 通过 AbortSignal 中止底层 `session.prompt`。重跑同一 Execution 时会重新生成 `AgentDebugReport.id`，并同时刷新 `ranAt` 与 `updatedAt`；`id` 用于区分当前 attempt，`ranAt` 表示该 attempt 的开始边界。
+`.agent-insight/agent-debug-final.json` 是一键诊断的唯一报告真源。每次运行使用 execution 哈希与 runId 组成的独立 workspace，并在运行前清除该目录的旧 final 文件，Agent 校验新文件后只返回 `AGENT_DEBUG_REPORT_READY`，服务端不再解析或要求模型回显完整报告。AgentDebug 将事件流最长时间设为 45 分钟，并给通用 Agent 配置默认 10 分钟“无有效进展” watchdog；只有心跳而没有真实 session 事件时，watchdog 通过 AbortSignal 中止底层 `session.prompt`。重跑同一 Execution 时会重新生成 `AgentDebugReport.id`，并同时刷新 `ranAt` 与 `updatedAt`；`id` 用于区分当前 attempt，`ranAt` 表示该 attempt 的开始边界。
+
+主诊断过程通过 `progress-observer.ts` 接入通用 Agent 已有的工具开始/结束/失败回调，在工具结束、文件修改和步骤结束时读取完整的 static/core 中间文件。有模块证据才产生对应模块事件；不从工具名称猜测模块完成状态。static 和仅有执行记录的 core 片段仍作为 evidence；core 中明确提供模块结论的条目生成 analysis/completed，表示本轮结果已写入，最终结论仍待 final 确认。Skill 在真实模块边界分别上报 started/update/completed/skipped；全局或跨模块活动使用 `--module overall`，collector 转为无模块归属的 stage 事件，不能归到 System。`agentdebug_progress.py` 追加结构化摘要，collector 只接受当前 runId 的完整 JSONL 行，并将 Trace 引用映射到输入中的真实节点。上报失败不阻断诊断，不修改最终报告或增加诊断模型调用。
+
+`progress-store.ts` 按用户、Execution、runId 将有界快照原子写入 workspace root 下的用户 `.diagnosis-progress/` 目录；每次运行事件单调编号并去重，保留最近 200 条，摘要最多 1000 字符，不保存原始工具输入/输出或模型思维链。记录写入失败时活动任务可返回内存快照与 `unavailable`；服务重启后恢复磁盘中已成功保存的部分。进程仍沿用原有失活任务检测，不自动恢复执行。主任务 runId 为报告行 id；Skills 的 runId 独立生成并保存在现有 analysisJson 内。Skills 在提取、核验和建议生成的实际调用边界记录进展，与主诊断互不等待。
 
 AgentDebug 主诊断后端只向诊断 Agent 提供执行元数据、turn/node/artifact 数量和输入、静态、trace bundle 文件路径，不再把长 turn 摘要嵌入提示词。Skill 依次运行 `agentdebug_static.py` 全量拆分与静态检测、`agentdebug_inspect.py` 生成五模块候选信号并执行有界的 `tail/range/search/repeated-calls` 查询，再由 Agent 补充语义问题和 Phase 2；`agentdebug_validate.py --static` 校验最终报告未删除静态 step、issue 或 Phase 1 证据。超过 4000 字符的节点输入/输出由 trace bundle 外置为 artifact，查询脚本只返回完整 artifact 中的命中片段。
 

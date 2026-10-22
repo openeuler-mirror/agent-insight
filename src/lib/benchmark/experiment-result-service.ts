@@ -115,6 +115,7 @@ export async function getBenchmarkExperimentResult(input: {
       ordinal: true,
       status: true,
       runFactsJson: true,
+      submissionSource: true,
       failureCode: true,
       failureMessage: true,
       datasetCase: { select: { externalCaseId: true } },
@@ -211,6 +212,7 @@ export async function getBenchmarkExperimentResult(input: {
       nativeMetrics: normalized?.nativeMetrics || {},
       execution: {
         runId: run.id,
+        submissionSource: run.submissionSource,
         traceId: typeof runFacts.traceId === 'string' ? runFacts.traceId : null,
       },
       submissions: run.artifacts.map((artifact) => ({

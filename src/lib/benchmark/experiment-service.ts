@@ -1,3 +1,4 @@
+import { resolveAgentOptions } from '../../../packages/agent-runtime/index.cjs'
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity'
 import { randomUUID } from 'node:crypto'
@@ -91,7 +92,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   const clientId = input.clientId.trim()
   const platform = input.runConfig.platform.trim()
   const agent = input.runConfig.agent.trim()
-  const agentOptions = normalizeBenchmarkAgentOptions(input.runConfig.agentOptions)
+  let agentOptions = normalizeBenchmarkAgentOptions(input.runConfig.agentOptions)
   if (!user || !name || !datasetId || !clientId || !platform || !agent) {
     throw new BenchmarkProtocolError(
       'BENCHMARK_EXPERIMENT_INVALID',
@@ -113,6 +114,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', 'Benchmark 数据集不存在或未就绪', 404)
   }
   const adapter = getBenchmarkAdapter(dataset.adapterKey)
+  if (adapter.manifest.supportsAgentExecution === false) {
+    throw new BenchmarkProtocolError('BENCHMARK_AGENT_EXECUTION_UNSUPPORTED', '该 Benchmark 不支持 Agent 执行', 409)
+  }
   const catalogInputs = new Map<string, string>()
   try {
     const catalogCases = JSON.parse(dataset.agentEvalDataset.casesJson) as Array<{
@@ -141,7 +145,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   if (!client || client.unboundAt) {
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
-  assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
+  const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
+  const resolved = resolveAgentOptions(target.parameterDefinitions, platform, agent, agentOptions)
+  agentOptions = resolved.agentOptions
   if (executionConcurrency > 1 && JSON.parse(client.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
     throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '执行并发大于 1 需要升级客户端', 400)
   }
@@ -149,7 +155,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   const runConfig = {
     platform,
     agent,
-    ...(agentOptions ? { agentOptions } : {}),
+    ...(agentOptions ? { agentOptions, agentParameterDefinition: resolved.definition } : {}),
     ...(input.runConfig.model?.trim() ? { model: input.runConfig.model.trim() } : {}),
     timeoutSeconds,
     executionConcurrency,
@@ -160,12 +166,18 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   ]))
   const preparedCases = cases.map((datasetCase, ordinal) => {
     const publicPayload = parsePublicPayload(datasetCase.publicPayloadJson)
+    const runId = newRunId()
+    const experimentCaseId = newExperimentCaseId()
+    adapter.buildAgentTask({
+      publicPayload, runConfig,
+      context: { runId, experimentId: 'preflight', caseId: experimentCaseId },
+    })
     return {
       datasetCase,
       ordinal,
       publicPayload,
-      experimentCaseId: newExperimentCaseId(),
-      runId: newRunId(),
+      experimentCaseId,
+      runId,
     }
   })
 

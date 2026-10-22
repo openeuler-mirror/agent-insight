@@ -4,6 +4,7 @@ const fs = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
+const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
 
 const {
   AbstractBenchmarkEvaluator,
@@ -81,8 +82,8 @@ function imageRepository(image) {
 }
 
 function imageProxyPrefix() {
-  const configured = process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
-  const prefix = String(configured === undefined ? '' : configured)
+  const configured = loadProjectConfig('evaluator').benchmarks['swe-bench'].images.proxyPrefix
+  const prefix = String(configured || '')
     .trim()
     .replace(/\/+$/, '')
   if (prefix && !/^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i.test(prefix)) {
@@ -92,9 +93,8 @@ function imageProxyPrefix() {
 }
 
 function verifiedImageMirrorRepositories() {
-  const configured = process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS === undefined
-    ? DEFAULT_VERIFIED_IMAGE_MIRROR_REPOSITORIES.join(',')
-    : String(process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS).trim()
+  const configured = (loadProjectConfig('evaluator').benchmarks['swe-bench'].images.verifiedMirrorRepositories
+    ?? DEFAULT_VERIFIED_IMAGE_MIRROR_REPOSITORIES).join(',')
   if (!configured) return []
   const repositories = configured.split(',').map((value) => value.trim())
   if (
@@ -131,9 +131,10 @@ class SweBenchImageResolver {
   }
 
   imageFor(jobImage, instanceId, arch) {
-    const source = String(process.env.SWE_BENCH_IMAGE_SOURCE || 'official').trim()
-    const configuredArch = String(process.env.SWE_BENCH_IMAGE_ARCH || 'auto').trim()
-    const allowNonOfficial = process.env.SWE_BENCH_ALLOW_NON_OFFICIAL === 'true'
+    const config = loadProjectConfig('evaluator').benchmarks['swe-bench'].images
+    const source = config.source
+    const configuredArch = config.arch
+    const allowNonOfficial = config.allowNonOfficial
     if (!['official', 'epoch'].includes(source) || !['auto', 'x86_64', 'arm64'].includes(configuredArch)) {
       throw new EvaluatorProtocolError('SWE_IMAGE_CONFIGURATION_INVALID', 'SWE-bench 镜像配置不合法', 500)
     }
@@ -281,7 +282,8 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
     super('swe-bench')
     this.processRunner = options.processRunner || runProcess
     this.imageResolver = options.imageResolver || new SweBenchImageResolver(this.processRunner)
-    this.python = options.python || process.env.SWE_BENCH_PYTHON || 'python3'
+    this.config = loadProjectConfig('evaluator').benchmarks['swe-bench']
+    this.python = options.python || this.config.python
     this.entrypoint = options.entrypoint || path.join(__dirname, 'run.py')
   }
 
@@ -336,7 +338,7 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
       ])
       const hostOS = process.env.EVALUATOR_HOST_OS || runtime.hostOS || os.platform()
       const hostArch = process.env.EVALUATOR_HOST_ARCH || runtime.hostArch || os.arch()
-      const imageSource = String(process.env.SWE_BENCH_IMAGE_SOURCE || 'official').trim()
+      const imageSource = this.config.images.source
       const proxyPrefix = imageProxyPrefix()
       const mirrorRepositories = arch === 'x86_64' && imageSource === 'official'
         ? verifiedImageMirrorRepositories()
@@ -399,6 +401,7 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
         model_patch_path: patchArtifact.path,
       },
       limits: input.job.limits,
+      docker: this.config.docker,
       runtimeFacts: {
         harnessSourceCommit: OFFICIAL_COMMIT,
         caseImage: image.pinnedImage,

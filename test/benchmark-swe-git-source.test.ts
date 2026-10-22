@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 const { GitWorkspaceProvider, GitPatchCollector, createBenchmarkExecutor, runProcess } = require('../services/executor/src/index.cjs')
 const { SweBenchGitSourcePolicy, MIRRORS } = require('../services/executor/src/benchmarks/swe-bench.cjs')
 const { readLocalSetting } = require('../services/executor/src/git-source.cjs')
+const { SweBenchGitSourcePolicy: PackagePolicy } = require('../benchmarks/swe-bench/executor/git-source-policy.cjs')
 const repository = 'https://github.com/pallets/flask.git'
 
 test('default executor registers only the SWE-bench policy with the explicit client home', async (t) => {
@@ -20,7 +21,7 @@ test('default executor registers only the SWE-bench policy with the explicit cli
   t.after(() => executor.close())
   const policies = executor.runner.workspaceProviders.get('git').sourcePolicies
   assert.deepEqual([...policies.keys()], ['swe-bench'])
-  assert.ok(policies.get('swe-bench') instanceof SweBenchGitSourcePolicy)
+  assert.ok(policies.get('swe-bench') instanceof PackagePolicy)
   assert.equal(policies.get('swe-bench').home, root)
 })
 
@@ -42,7 +43,7 @@ async function fixture(t: any, source: string | undefined = undefined) {
   await commit()
   const second = await git(upstream, ['rev-parse', 'HEAD'])
   const cacheRoot = path.join(root, 'cache')
-  const policy = new SweBenchGitSourcePolicy({ home: root, env: { SWE_BENCH_GIT_SOURCE: source ?? cacheRoot } })
+  const policy = new SweBenchGitSourcePolicy({ home: root, config: { benchmarks: { 'swe-bench': { gitSource: source ?? cacheRoot } } } })
   const requests: string[] = []
   let offline = false
   let failGitee = false
@@ -67,20 +68,20 @@ async function fixture(t: any, source: string | undefined = undefined) {
 }
 
 test('SWE policy maps all 12 repositories and appends HTTP root before Gitee and GitHub', () => {
-  const defaults = new SweBenchGitSourcePolicy({ home: '/unused', env: { SWE_BENCH_GIT_SOURCE: '' } })
+  const defaults = new SweBenchGitSourcePolicy({ home: '/unused', config: { benchmarks: { 'swe-bench': { gitSource: null } } } })
   assert.equal(Object.keys(MIRRORS).length, 12)
   for (const repo of Object.keys(MIRRORS)) {
     const result = defaults.resolve({ repository: `https://github.com/${repo}.git` })
     assert.equal(result.cachePath, null)
     assert.equal(result.remotes[0].url, `https://gitee.com/${MIRRORS[repo]}.git`)
   }
-  const custom = new SweBenchGitSourcePolicy({ home: '/unused', env: { SWE_BENCH_GIT_SOURCE: 'http://mirror.example/git/' } })
+  const custom = new SweBenchGitSourcePolicy({ home: '/unused', config: { benchmarks: { 'swe-bench': { gitSource: 'http://mirror.example/git/' } } } })
   assert.deepEqual(custom.resolve({ repository }).remotes.map((r: any) => r.url), [
     'http://mirror.example/git/pallets/flask.git', 'https://gitee.com/mirrors/flask.git', repository,
   ])
   assert.equal(defaults.resolve({ repository: 'https://github.com/example/unknown.git' }).remotes.length, 1)
   for (const value of ['relative/path', 'ftp://mirror.example/git', 'https://user:secret@mirror.example/git', 'http://mirror.example/?q=x']) {
-    assert.throws(() => new SweBenchGitSourcePolicy({ home: '/unused', env: { SWE_BENCH_GIT_SOURCE: value } }).resolve({ repository }))
+    assert.throws(() => new SweBenchGitSourcePolicy({ home: '/unused', config: { benchmarks: { 'swe-bench': { gitSource: value } } } }).resolve({ repository }))
   }
 })
 

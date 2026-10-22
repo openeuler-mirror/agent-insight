@@ -28,6 +28,7 @@ const nextConfig: NextConfig = {
   // 1GB+ of local logs, bloating the npm package non-deterministically per machine).
   outputFileTracingExcludes: {
     '*': [
+      'config/**/*.local.yaml',
       '.git/**',
       'tmp/**',
       '*.tar',
@@ -52,9 +53,16 @@ const nextConfig: NextConfig = {
       'scripts/agent-trace-collectors/shared/collaboration-transport.cjs',
       'scripts/agent-trace-collectors/shared/trace-transport.cjs',
       'services/executor/src/mcts-config.cjs',
+      'services/executor/src/mcts-failure.cjs',
     ],
     '*': [
       'generated/trace-datasets/worker.cjs',
+      'packages/project-config/**',
+      'packages/agent-runtime/**',
+      'services/executor/runtimes/**',
+      'config/benchmark/platform.yaml',
+      'config/benchmark/evaluator.yaml',
+      'config/benchmark/executor.yaml',
       'node_modules/next/dist/server/mcp/**/*',
       'node_modules/next/dist/next-devtools/**/*',
       'node_modules/next/dist/lib/metadata/**/*',
@@ -128,5 +136,16 @@ const nextConfig: NextConfig = {
     return rewrites;
   },
 };
+
+// Docker source builds share /app/node_modules through an absolute symlink.
+// Tracing that alias into standalone can copy files back into the image dependencies.
+if (process.env.AGENT_INSIGHT_SOURCE_DIR && path.resolve('.') === '/app/source') {
+  nextConfig.turbopack = { ...nextConfig.turbopack, root: '/app' };
+  const excludes = nextConfig.outputFileTracingExcludes || {};
+  nextConfig.outputFileTracingExcludes = {
+    ...excludes,
+    '*': [...(excludes['*'] || []), 'node_modules', 'node_modules/**'],
+  };
+}
 
 export default nextConfig;

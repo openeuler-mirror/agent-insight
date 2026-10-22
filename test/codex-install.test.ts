@@ -625,7 +625,7 @@ test("setup route escapes forwarded origins for Bash and PowerShell", async () =
   assert.ok(powerShell.includes('https://proxy.example/`$HOME-`$(touch codex-pwn)-``id``-`"quoted`"-`$env:USERPROFILE'))
 })
 
-test("setup serves one deterministic Codex bundle whose digest covers all 14 assets", async () => {
+test("setup serves one deterministic Codex bundle whose digest covers all shipped assets", async () => {
   const bashResponse = await getInstaller(new Request("https://insight.example/api/ingest/setup/codex"))
   const powerShellResponse = await getInstaller(new Request(
     "https://insight.example/api/ingest/setup/codex",
@@ -656,11 +656,11 @@ test("setup serves one deterministic Codex bundle whose digest covers all 14 ass
   )
 
   const probe = [
-    'import { codexCollectorBundle } from "./src/app/api/ingest/setup/codex/bundle.ts"',
+    'const { codexCollectorBundle } = require("./src/app/api/ingest/setup/codex/bundle.ts")',
     "process.stdout.write(codexCollectorBundle(process.cwd()).sha256)",
   ].join("; ")
   const digests = ["UTC", "Asia/Shanghai", "America/Los_Angeles"].map((timezone) => {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", probe], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=commonjs", "-e", probe], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: { ...process.env, TZ: timezone },
@@ -790,23 +790,25 @@ test("source checkout uninstaller refuses recursive removal outside managed path
   assert.match(result.stderr, /Refusing to remove unexpected collector path/)
 })
 
-test("Windows hook handlers wrap node invocation in cmd /c", () => {
+test("hook handlers wrap node invocation in cmd /c only on Windows", () => {
   const handlerPath = "C:\\Users\\test\\.agent-insight\\collectors\\codex\\hook-handler.cjs"
-  // 模拟 Windows 平台：nodePath 为 Windows 可执行文件路径
-  const installed = installHooksDocument({ hooks: {} }, {
-    handlerPath,
-    nodePath: "C:\\Program Files\\nodejs\\node.exe",
-  })
-  const handler = installed.document.hooks.SessionStart[0].hooks[0]
-  // command 保持原始 node 调用；commandWindows 用 cmd /c 包装（MSYS execvp 无法
-  // 直接执行 PE 二进制，见 docs/tasks/bugs/issue-159-codex-open.md Bug 7）
-  assert.equal(
-    handler.command,
-    '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\test\\.agent-insight\\collectors\\codex\\hook-handler.cjs"',
-  )
-  assert.ok(handler.commandWindows.startsWith('cmd /c "'), "commandWindows wraps in cmd /c")
-  assert.ok(
-    handler.commandWindows.includes('"C:\\Program Files\\nodejs\\node.exe"'),
-    "commandWindows keeps node path",
-  )
+  const options = { handlerPath, nodePath: "C:\\Program Files\\nodejs\\node.exe" }
+  for (const platform of ["win32", "linux"]) {
+    const probe = [
+      `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} })`,
+      'const { installHooksDocument } = require("./scripts/agent-trace-collectors/codex/config-core.cjs")',
+      `const installed = installHooksDocument({ hooks: {} }, ${JSON.stringify(options)})`,
+      'process.stdout.write(JSON.stringify(installed.document.hooks.SessionStart[0].hooks[0]))',
+    ].join("; ")
+    const result = spawnSync(process.execPath, ["--input-type=commonjs", "-e", probe], {
+      cwd: process.cwd(), encoding: "utf8",
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const handler = JSON.parse(result.stdout)
+    assert.equal(
+      handler.command,
+      '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\test\\.agent-insight\\collectors\\codex\\hook-handler.cjs"',
+    )
+    assert.equal(handler.commandWindows, platform === "win32" ? `cmd /c "${handler.command}"` : handler.command)
+  }
 })

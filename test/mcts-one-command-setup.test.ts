@@ -136,10 +136,10 @@ test('one copied command persists configuration before client startup, supports 
 
 test('invalid MCTS environment stops the one-command installer before registration or startup', async t => {
     const f = await fixture(t);
-    await fs.writeFile(path.join(f.repoDir, '.venv/bin/python'), '#!/bin/sh\necho 3.11\nexit 42\n', { mode: 0o700 });
+    await fs.writeFile(path.join(f.repoDir, '.venv/bin/python'), '#!/bin/sh\necho 3.10\n', { mode: 0o700 });
     let result = await execute(mctsInstallCommand(`${f.origin}/setup`, f.repoDir), f.env, f.root);
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /datasets/);
+    assert.match(result.stderr, /3.11/);
     assert.equal(f.requests.includes('/api/reliability/install-tokens'), false);
     assert.equal(readMctsEnvFile(f.insight).AGENT_INSIGHT_MCTS_REPO_DIR, '/old/path');
     await fs.writeFile(path.join(f.repoDir, '.venv/bin/python'), '#!/bin/sh\necho 3.11\n', { mode: 0o700 });
@@ -153,6 +153,19 @@ test('invalid MCTS environment stops the one-command installer before registrati
     assert.match(result.stderr, /无法连接.*xGovernor/);
     assert.equal(f.requests.includes('/api/reliability/install-tokens'), false);
     await assert.rejects(fs.access(path.join(f.insight, 'client-started')));
+});
+
+test('collector installation only checks common MCTS dependencies without the SWE launcher or datasets', async t => {
+    const f = await fixture(t);
+    await fs.rm(path.join(f.repoDir, 'testcases_union/run_union.sh'));
+    await fs.writeFile(path.join(f.repoDir, '.venv/bin/python'), '#!/bin/sh\ncase "$2" in *find_spec*) exit 42;; esac\necho 3.11\n', { mode: 0o700 });
+    const result = await execute(`node scripts/agent-trace-collectors/mcts-xgovernor-proxy/install.cjs --home '${f.env.HOME}'`, {
+        ...f.env, AGENT_INSIGHT_API_KEY: 'synthetic-key', AGENT_INSIGHT_MCTS_REPO_DIR: f.repoDir,
+    }, repository);
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    assert.equal(readMctsEnvFile(f.insight).AGENT_INSIGHT_MCTS_REPO_DIR, f.repoDir);
+    const cfg = JSON.parse(await fs.readFile(path.join(f.insight, 'collectors/mcts-xgovernor-proxy/config.json'), 'utf8'));
+    assert.equal(cfg.mctsRepoDir, f.repoDir);
 });
 
 test('client registration failure is not reported as a ready MCTS experiment client', async t => {

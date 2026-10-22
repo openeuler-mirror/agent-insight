@@ -4,8 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { createRequire } from 'node:module'
+import { spawnSync } from 'node:child_process'
 
 const require_ = createRequire(import.meta.url)
+const { getAgentInsightHome } = require_('../scripts/agent-insight-home.cjs') as {
+  getAgentInsightHome: () => string
+}
 const client = require_('../scripts/reliability-client.cjs') as {
   buildCollectorArgs: (
     run: Record<string, unknown>,
@@ -193,7 +197,7 @@ test('client whitelist matches the server-side action set', () => {
 test('config target path is derived locally and never taken from the server', () => {
   const clientPath = client.configTargetPath('opencode', 'client')
   assert.ok(clientPath.endsWith(path.join('ras', 'opencode', 'client-config.json')))
-  assert.ok(clientPath.startsWith(os.homedir()))
+  assert.equal(clientPath, path.join(getAgentInsightHome(), 'ras', 'opencode', 'client-config.json'))
 
   const expPath = client.configTargetPath('opencode', 'experiment', { caseRunId: 'case_run_01' })
   assert.ok(expPath.includes(path.join('ras', 'opencode', 'experiments')))
@@ -546,7 +550,7 @@ test('stale inventory sandboxes are removed without touching sibling directories
 })
 
 test('stale inventory OpenCode servers are limited to the managed FI runtime', () => {
-  const managedRoot = path.join(os.homedir(), '.agent-insight', 'fault-injection', 'runtimes')
+  const managedRoot = path.join(getAgentInsightHome(), 'fault-injection', 'runtimes')
   const killed: Array<{ pid: number; signal: NodeJS.Signals }> = []
   const runner = (command: string, args: string[]) => {
     if (command === 'ps') {
@@ -896,6 +900,12 @@ if (mode === 'model') {
     timeoutSeconds: 1,
   })
   try {
+    // Host checks for a newly created executable must finish before exercising runtime deadlines.
+    const startup = spawnSync(executable, [], {
+      env: { ...process.env, BENCHMARK_FAKE_FAILURE_MODE: 'fixture-ready' }, encoding: 'utf8', timeout: 15_000,
+    })
+    assert.equal(startup.status, 0, startup.error?.message || startup.stderr)
+    assert.deepEqual(JSON.parse(startup.stdout), { sessionID: 'ses_fixture-ready' })
     process.env.BENCHMARK_FAKE_FAILURE_MODE = 'timeout'
     await assert.rejects(run(), (error: unknown) => {
       const failure = error as Error & {
@@ -1245,7 +1255,7 @@ test('runtime bundle carries config_sync.js next to the client script', () => {
   // 若 config_sync.js 没跟着走，写 RAS 运行时配置会静默跳过 ——
   // 页面显示「已写入」，RAS 却永远读到旧值。
   const runtimeDir = installer.RUNTIME_DIR || ''
-  assert.match(runtimeDir, /\.agent-insight[/\\]client[/\\]runtime$/)
+  assert.equal(runtimeDir, path.join(getAgentInsightHome(), 'client', 'runtime'))
   const src = installer.installRuntime ? String(installer.installRuntime.toString()) : ''
   assert.match(src, /config_sync\.js/, 'installRuntime 必须固化 config_sync.js')
   assert.match(src, /services.*executor.*src/s, 'installRuntime 必须固化 Benchmark executor')

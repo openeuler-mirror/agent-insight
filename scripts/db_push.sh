@@ -19,10 +19,15 @@
 # 报错退出，把这个脚雷拆掉。
 set -eu
 
+case "$#:$*" in
+  0:|1:--skip-generate) ;;
+  *) echo "Usage: sh scripts/db_push.sh [--skip-generate]" >&2; exit 1 ;;
+esac
+
 # 用户要求撤销旧版派生统计；仅移除该列，其他破坏性 schema 变更仍由下方护栏拦截。
 node scripts/trace-datasets/remove-legacy-summary.cjs
 
-if output=$(npx prisma db push < /dev/null 2>&1); then
+if output=$(npx prisma db push "$@" < /dev/null 2>&1); then
   printf '%s\n' "$output"
   exit 0
 fi
@@ -34,7 +39,7 @@ allowed=$((widenings + external_account_unique))
 
 if [ "$warnings" -gt 0 ] && [ "$warnings" = "$allowed" ]; then
   echo "  [db push] 待应用的变更仅包含无损白名单项（Int→BigInt: ${widenings}，User.externalAccount 唯一约束: ${external_account_unique}），放行。"
-  npx prisma db push --accept-data-loss < /dev/null
+  npx prisma db push "$@" --accept-data-loss < /dev/null
   exit 0
 fi
 

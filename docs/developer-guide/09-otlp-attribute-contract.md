@@ -184,6 +184,8 @@ CodeAgent 使用自己的 LogRecord 协议而非上述通用 span 属性。服�
 
 Logs 中的 `api_request` / `api_response`、`tool_request` / `tool_response`、`agent.start` / `agent.finish` 是 CodeAgent Execution 的权威输入。工具事件通过 `tool_call_id` 与 `inference_id` 关联；`execution.agent_run_id` 与 `execution.parent_agent_run_id` 表达父子运行关系；root 与 child 的 Agent 名称优先读取 `agent_name`，其次读取 `execution.agent_id`，仅在两者都缺失时使用框架兜底名；没有独立 `user_prompt` 事件时，接收端从 root 首个 `api_request.request_text` 提取用户消息并补成 `role=user` interaction；`skill_name` 及 Skill 参数表达技能调用。接收端将 `Skill` 规范化为 `skill`，将 `Agent` / `Task` 规范化为 `task`，再复用统一 Execution 树与 Skill 归属逻辑。
 
+用户输入尚未到达时，聚合器使用 `CodeAgent Session <会话 UUID>` 作为临时 query。CodeAgent FrameworkAdapter 通过 `isPlaceholderQuery` 精确识别该 UUID 占位格式；后续保存时，`saveExecutionRecord` 从 interactions 提取首条非空用户消息，同步刷新 Execution 和 Session 的 query，真实任务标题继续保留。历史占位值在会话重新聚合并保存时修正，不在服务启动或读取时批量回填。
+
 setup wrapper 只设置 `CODEAGENT3_ENABLE_TELEMETRY=1`、OTLP base endpoint、JSON protocol 和认证 header，不写 `OTEL_TRACES_EXPORTER=none` / `OTEL_METRICS_EXPORTER=none`；CodeAgent 当前会覆盖这类关闭变量。
 
 ## LlamaIndex 兼容契约
