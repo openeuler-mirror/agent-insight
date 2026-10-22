@@ -22,6 +22,7 @@ interface ExperimentRow {
   agentName: string;
   status: string;
   scope?: string;
+  submissionSource?: string;
   watchMode?: boolean;
   caseCount: number;
   evaluatorCount: number;
@@ -210,10 +211,12 @@ export default function ExperimentsPage() {
       <AppTopBar
         title="实验"
         actions={
-          <Button size="sm" onClick={() => router.push('/experiments/new')}>
-            <Plus className="size-3.5" />
-            新建实验
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => router.push('/experiments/new')}>
+              <Plus className="size-3.5" />
+              新建实验
+            </Button>
+          </div>
         }
       />
       <PageContainer>

@@ -26,6 +26,7 @@ const ENTRIES = [
   'mcts-xgovernor-proxy/gateway.cjs',
   'mcts-xgovernor-proxy/install.cjs',
   'mcts-xgovernor-proxy/mcts-config.cjs',
+  'mcts-xgovernor-proxy/mcts-failure.cjs',
   'mcts-xgovernor-proxy/run.cjs',
   'shared/collaboration-transport.cjs',
   'shared/trace-transport.cjs',

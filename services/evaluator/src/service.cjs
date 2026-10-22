@@ -16,6 +16,7 @@ const {
 const { EvaluationJobJournal, atomicWriteJson } = require('./job-journal.cjs')
 const { BenchmarkImagePool, imagePoolConfig } = require('./image-pool.cjs')
 const { ServiceControl } = require('./service-control.cjs')
+const { EvaluatorAssetError } = require('./evaluator-assets.cjs')
 const { AgentInsightPlatformClient, PlatformClientError, sha256 } = require('./platform-client.cjs')
 
 const ACTIVE_STAGES = new Set([
@@ -146,7 +147,7 @@ function json(res, status, value) {
 function errorResponse(res, error) {
   const imagePoolError = error instanceof Error && /^IMAGE_POOL_[A-Z_]+$/.test(error.code)
     && error.status === 503 && typeof error.retryable === 'boolean'
-  const known = error instanceof EvaluatorProtocolError || error instanceof PlatformClientError || imagePoolError
+  const known = error instanceof EvaluatorProtocolError || error instanceof PlatformClientError || error instanceof EvaluatorAssetError || imagePoolError
   if (!known) console.error('[benchmark/evaluator]', error)
   json(res, imagePoolError && !error.retryable ? 422 : known ? error.status : 500, {
     error: {
@@ -157,40 +158,41 @@ function errorResponse(res, error) {
   })
 }
 
-function removeLabeledContainers(evaluationId) {
-  return new Promise((resolve) => {
-    const query = spawn('docker', [
-      'ps', '-aq', '--filter', `label=agent-insight.evaluation-id=${evaluationId}`,
-    ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
-    let output = ''
-    let errorOutput = ''
-    query.stdout.on('data', (chunk) => { output += String(chunk) })
-    query.stderr.on('data', (chunk) => { errorOutput += String(chunk) })
-    query.on('error', (error) => resolve({ status: 'failed', errors: [error.message] }))
-    query.on('close', (code) => {
-      if (code !== 0) {
-        return resolve({
-          status: 'failed',
-          errors: [(errorOutput || `docker ps exited with ${code}`).trim().slice(-2000)],
-        })
-      }
-      const ids = output.split(/\s+/).filter(Boolean)
-      if (!ids.length) return resolve({ status: 'succeeded', removedContainerIds: [] })
-      const cleanup = spawn('docker', ['rm', '-f', ...ids], {
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let cleanupError = ''
-      cleanup.stderr.on('data', (chunk) => { cleanupError += String(chunk) })
-      cleanup.on('error', (error) => resolve({ status: 'failed', errors: [error.message] }))
-      cleanup.on('close', (cleanupCode) => resolve(cleanupCode === 0
-        ? { status: 'succeeded', removedContainerIds: ids }
-        : {
-            status: 'failed',
-            errors: [(cleanupError || `docker rm exited with ${cleanupCode}`).trim().slice(-2000)],
-          }))
+function cleanupDockerCommand(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('docker', args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000)
+    timer.unref?.()
+    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
+    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    child.on('error', (error) => { clearTimeout(timer); reject(error) })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) resolve(stdout)
+      else reject(new Error((stderr || `docker cleanup exited with ${code}`).trim().slice(-2000)))
     })
   })
+}
+
+async function removeLabeledContainers(evaluationId, commandRunner = cleanupDockerCommand) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(String(evaluationId))) return { status: 'failed', errors: ['Invalid evaluation ID'] }
+  const filters = ['--filter', `label=agent-insight.evaluation-id=${evaluationId}`]
+  try {
+    const ids = (await commandRunner(['ps', '-aq', ...filters])).split(/\s+/).filter(Boolean)
+    if (ids.some((id) => !/^[0-9a-f]{12,64}$/.test(id))) throw new Error('Invalid container ID')
+    if (ids.length) await commandRunner(['rm', '-f', ...ids])
+    const networkFilters = [...filters, '--filter', 'label=agent-insight.role=zsoft-task']
+    const networks = (await commandRunner(['network', 'ls', '-q', ...networkFilters])).split(/\s+/).filter(Boolean)
+    if (networks.some((id) => !/^[0-9a-f]{12,64}$/.test(id))) throw new Error('Invalid network ID')
+    if (networks.length) await commandRunner(['network', 'rm', ...networks])
+    if ((await commandRunner(['ps', '-aq', ...filters])).trim()
+      || (await commandRunner(['network', 'ls', '-q', ...networkFilters])).trim()) throw new Error('Evaluation resources remain after cleanup')
+    return { status: 'succeeded', removedContainerIds: ids, removedNetworkIds: networks }
+  } catch (error) {
+    return { status: 'failed', errors: [error.message] }
+  }
 }
 
 function normalizeArchitecture(value) {
@@ -249,7 +251,7 @@ class BenchmarkEvaluatorService {
       this.platformBaseUrl,
     )
     this.registry = options.registry || new EvaluatorRegistry(
-      generatedEvaluatorDescriptors.map((descriptor) => new FileEvaluatorEntrypoint(descriptor)),
+      generatedEvaluatorDescriptors.map((descriptor) => new FileEvaluatorEntrypoint(descriptor, undefined, { dataDir: this.dataDir })),
     )
     this.cleanupContainers = options.cleanupContainers || removeLabeledContainers
     this.controllerProbe = options.controllerProbe || defaultControllerProbe
@@ -292,13 +294,24 @@ class BenchmarkEvaluatorService {
         const evaluator = this.registry.get(window.evaluatorKey, window.benchmarkKey)
         await this.imagePool.initialize()
         const specs = []
-        for (const item of window.cases) specs.push(...await evaluator.describeImages(item, this.imagePool.arch))
-        windows.push({ ...window, specs })
+        const caseIds = []
+        const cases = []
+        for (let index = 0; index < window.cases.length; index++) {
+          try {
+            specs.push(...await evaluator.describeImages(window.cases[index], this.imagePool.arch))
+            caseIds.push(window.caseIds[index])
+            cases.push(window.cases[index])
+          } catch (error) {
+            if (!(error instanceof EvaluatorProtocolError) || error.status !== 422 || error.retryable !== false) throw error
+          }
+        }
+        windows.push({ ...window, specs, caseIds, cases })
       }
       return this.withAdmission(async () => {
         if ((this.imagePool.state.windowRevision ?? -1) >= request.revision) return { enabled: true, accepted: false }
+        const selected = new Set(windows.flatMap(window => window.caseIds))
         for (const [runId, entry] of this.imagePreparations) {
-          if (ids.has(entry.executionRunId)) continue
+          if (selected.has(entry.executionRunId)) continue
           this.controllers.get(runId)?.abort()
           await entry.task
           const prior = await this.journal.request(runId)
@@ -328,7 +341,11 @@ class BenchmarkEvaluatorService {
   }
 
   async prepareBeforeAdmission(request, evaluator) {
+    evaluator.assertAssetsReady?.()
     if (!this.imagePool || !evaluator.describeImages) return
+    await this.imagePool.initialize?.()
+    // Validate permanent metadata errors before window selection, or an excluded Case waits forever.
+    await evaluator.describeImages(request.evaluationJob.payload, this.imagePool.arch)
     if (this.imagePool.state?.windowRevision !== undefined) {
       const selected = Object.values(this.imagePool.state.windows).some((window) => window.expiresAt > Date.now() && window.caseIds?.includes(request.evaluationJob.executionRunId))
       if (!selected) throw evaluatorError('IMAGE_POOL_PREPARING', '等待进入镜像准备窗口', 409, true)
@@ -783,6 +800,7 @@ class BenchmarkEvaluatorService {
   async shutdown() {
     await this.control.stop()
     for (const controller of this.controllers.values()) controller.abort()
+    await Promise.all(this.registry.values().map(evaluator => evaluator.assets?.close()))
     for (const runId of await this.journal.listRunIds()) {
       if (ACTIVE_STAGES.has((await this.journal.state(runId))?.stage)) {
         await this.control.cancel(runId, 'SERVICE_STOPPED')
@@ -835,6 +853,7 @@ class BenchmarkEvaluatorService {
 
   async recover() {
     await this.control.assertRunning()
+    for (const evaluator of this.registry.values()) evaluator.prepareAssets?.()
     if (this.imagePool) {
       await this.imagePool.initialize()
       const owners = Object.values(this.imagePool.state.images).flatMap((entry) => Object.values(entry.users))

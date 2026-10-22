@@ -11,7 +11,9 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
 import { RuntimeOptionsFields } from '@/components/eval/RuntimeOptionsFields';
-import { runtimeOptionsState, readSavedOptions, summarizeOptions, type RuntimeOptionInputs, type RuntimeDefinition, type AgentOptions } from '@/lib/engine/experiment/runtime-options';
+import { RuntimeParameterTemplates } from '@/components/eval/RuntimeParameterTemplates';
+import { RuntimeOptionMigration } from '@/components/eval/RuntimeOptionMigration';
+import { runtimeOptionsState, initializeRuntimeDraft, readSavedOptions, readSavedDefinition, savedOptionsToInputs, optionsToInputs, summarizeOptions, type RuntimeOptionInputs, type RuntimeDefinition, type RuntimeDraft } from '@/lib/engine/experiment/runtime-options';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -530,9 +532,7 @@ export function ExperimentWizard({
     String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
   );
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
-  const [runtimeInputs, setRuntimeInputs] = useState<RuntimeOptionInputs>({});
-  const [runtimeOptionsTarget, setRuntimeOptionsTarget] = useState('');
-  const [restoredRuntimeOptions, setRestoredRuntimeOptions] = useState<AgentOptions>();
+  const [runtimeDrafts, setRuntimeDrafts] = useState<Record<string, RuntimeDraft>>({});
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
@@ -651,8 +651,14 @@ export function ExperimentWizard({
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
   const runtimeTargetKey = selectedTarget ? `${selectedTarget.workerId}::${selectedTarget.platform}::${selectedTarget.agent}` : '';
+  const runtimeDraft = runtimeDrafts[runtimeTargetKey];
   const runtimeState = runtimeOptionsState(!isReliabilityDataset && traceMode === 'generate' ? selectedTarget : null,
-    runtimeInputs, runtimeOptionsTarget, runtimeTargetKey, restoredRuntimeOptions);
+    runtimeDraft?.inputs || {}, runtimeDraft ? runtimeTargetKey : '', runtimeTargetKey, runtimeDraft?.restored, runtimeDraft?.restoredDefinition);
+  const updateRuntimeInputs = (inputs: RuntimeOptionInputs) => setRuntimeDrafts(current => ({ ...current, [runtimeTargetKey]: { inputs } }));
+  const runtimeDefinition = runtimeState.definition;
+  if (runtimeState.active && runtimeDefinition && runtimeTargetKey && !runtimeDraft) {
+    setRuntimeDrafts(current => initializeRuntimeDraft(current, runtimeTargetKey, runtimeDefinition));
+  }
   const generationCases = useMemo(
     () => generationCasesFromDataset(selectedDataset),
     [selectedDataset],
@@ -855,9 +861,11 @@ export function ExperimentWizard({
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
       const savedOptions = readSavedOptions(restoredTarget.agentOptions);
-      setRestoredRuntimeOptions(savedOptions);
-      setRuntimeInputs(Object.fromEntries(Object.entries(savedOptions?.values || {}).map(([key, value]) => [key, String(value)])));
-      setRuntimeOptionsTarget(savedOptions && workerId && platform ? `${workerId}::${platform}::${String(restoredTarget.agent || restoredAgentName)}` : '');
+      const savedDefinition = readSavedDefinition(detail.executionParameterDefinition);
+      if (savedOptions && workerId && platform) {
+        const targetKey = `${workerId}::${platform}::${String(restoredTarget.agent || restoredAgentName)}`;
+        setRuntimeDrafts(current => ({ ...current, [targetKey]: { inputs: savedOptionsToInputs(savedOptions), restored: savedOptions, restoredDefinition: savedDefinition } }));
+      }
       const runtime = sourceSnapshot.runtime && typeof sourceSnapshot.runtime === 'object'
         ? sourceSnapshot.runtime as Record<string, unknown> : {};
       const restoredTimeoutSeconds = skillContext
@@ -2166,11 +2174,19 @@ export function ExperimentWizard({
                     onChange={setAgentTimeoutInput}
                   />
               </div>
-              {runtimeState.active && runtimeState.definition && <RuntimeOptionsFields definition={runtimeState.definition} value={runtimeState.inputs} error={runtimeState.error}
-                onChange={value => { setRuntimeInputs(value); setRuntimeOptionsTarget(runtimeTargetKey); setRestoredRuntimeOptions(undefined); }} />}
+              {isBenchmarkDataset && traceMode === 'generate' && benchmarkPresentation?.execution?.notice && (
+                <p className="mb-4 text-xs text-foreground-muted">{benchmarkPresentation.execution.notice}</p>
+              )}
+              {runtimeState.migration && runtimeState.definition && <RuntimeOptionMigration migration={runtimeState.migration}
+                onConfirm={() => updateRuntimeInputs(optionsToInputs(runtimeState.definition!, runtimeState.migration!.options))} />}
+              {runtimeState.active && runtimeState.definition && <RuntimeOptionsFields key={`${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} definition={runtimeState.definition} value={runtimeState.inputs} error={runtimeState.error}
+                onChange={updateRuntimeInputs} templateControls={runtimeState.definition.configuration?.version === 2 ? <RuntimeParameterTemplates
+                  key={`templates:${user}:${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} user={user}
+                  definition={runtimeState.definition} options={runtimeState.agentOptions} error={runtimeState.error}
+                  onApply={options => updateRuntimeInputs(optionsToInputs(runtimeState.definition!, options))} /> : undefined} />}
               {!runtimeState.active && runtimeState.error && <div className="mb-4 flex items-center gap-2">
                 <p className="text-sm text-error" role="alert">{runtimeState.error}</p>
-                <Button type="button" variant="outline" size="sm" onClick={() => { setRestoredRuntimeOptions(undefined); setRuntimeInputs({}); }}>清除已保存参数</Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => setRuntimeDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== runtimeTargetKey)))}>清除已保存参数</Button>
               </div>}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case</div>
@@ -3171,7 +3187,7 @@ export function ExperimentWizard({
                 ].map(([label, value]) => (
                   <div key={label} style={{ padding: '10px 12px', background: 'var(--background-secondary)' }}>
                     <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{label}</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>{value}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)', overflowWrap: 'anywhere', maxHeight: 180, overflow: 'auto' }}>{value}</div>
                   </div>
                 ))}
               </div>

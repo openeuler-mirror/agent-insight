@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
+import { requestOptimizationCancellation } from '@/lib/skill-workbench/optimization-cancellation';
 import {
   getWorkbenchOptimization,
   startWorkbenchOptimization,
@@ -27,6 +28,15 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const { username } = await resolveUser(request, body.user);
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const { id } = await context.params;
+    if (body.action === 'cancel') {
+      if (typeof body.taskId !== 'string' || !body.taskId.trim()) {
+        return NextResponse.json({ error: '缺少优化任务 ID' }, { status: 400 });
+      }
+      const result = await requestOptimizationCancellation(username, id, body.taskId);
+      if (result.kind === 'not_found') return NextResponse.json({ error: '优化任务不存在' }, { status: 404 });
+      if (result.kind === 'finalizing') return NextResponse.json({ error: '优化结果正在保存，请等待完成' }, { status: 409 });
+      return NextResponse.json(result);
+    }
     if (body.action === 'sync') {
       const sourceKind = body.sourceKind === 'experiment' || body.sourceKind === 'evaluation' ? body.sourceKind : 'user';
       const result = await syncWorkbenchOptimization({

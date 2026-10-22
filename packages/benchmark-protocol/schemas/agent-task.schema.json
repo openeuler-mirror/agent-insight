@@ -8,7 +8,31 @@
     "benchmark": { "type": "object", "required": ["key"] },
     "context": { "type": "object", "required": ["runId", "experimentId", "caseId"] },
     "task": { "type": "object", "required": ["instruction", "benchmarkPayload"] },
-    "workspace": { "type": "object", "required": ["provider", "repository", "revision"] },
+    "workspace": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["provider", "repository", "revision"],
+          "properties": {
+            "provider": { "const": "git" }, "repository": { "type": "string" },
+            "revision": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" }
+          }, "additionalProperties": false
+        },
+        {
+          "type": "object", "required": ["provider", "taskId", "digest"],
+          "properties": {
+            "provider": { "const": "public-bundle" }, "taskId": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }, "additionalProperties": false
+        },
+        {
+          "type": "object", "required": ["provider", "taskId"],
+          "properties": {
+            "provider": { "const": "zsoft-tasks" },
+            "taskId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+          }, "additionalProperties": false
+        }
+      ]
+    },
     "policy": { "type": "object", "required": ["workspaceWrite", "hiddenDataAccess", "network"] },
     "submission": {
       "type": "object",
@@ -40,10 +64,53 @@
         "agent": { "type": "string", "minLength": 1 },
         "model": { "type": "string", "minLength": 1 },
         "timeoutSeconds": { "type": "integer", "minimum": 1 },
-        "executionConcurrency": { "type": "integer", "minimum": 1 }
+        "executionConcurrency": { "type": "integer", "minimum": 1 },
+        "agentOptions": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["runtimeKey", "definitionDigest", "values"],
+              "properties": {
+                "runtimeKey": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$" },
+                "definitionDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+                "values": {
+                  "type": "object",
+                  "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$" },
+                  "additionalProperties": { "type": ["string", "number", "boolean"] }
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["version", "runtimeKey", "definitionDigest", "values"],
+              "properties": {
+                "version": { "const": 2 },
+                "runtimeKey": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$" },
+                "definitionDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+                "values": { "$ref": "#/$defs/jsonObject" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
       },
       "additionalProperties": false
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "jsonValue": {
+      "oneOf": [
+        { "type": ["null", "boolean", "number", "string"] },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        { "$ref": "#/$defs/jsonObject" }
+      ]
+    },
+    "jsonObject": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "prototype", "constructor"] } },
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    }
+  }
 }

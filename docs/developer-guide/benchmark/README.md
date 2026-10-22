@@ -7,7 +7,7 @@ changefreq: monthly
 
 # Benchmark 文档关系与开发指南
 
-这是自定义 Benchmark 开发的客户入口。客户只需描述想评测什么并提供已有材料，AI 负责逐步梳理需求和完成接入设计。
+这是 Benchmark 接入开发与部署的文档入口。自定义接入从需求确认开始；部署已有接入包时先安装公共服务，再选择同级的 SWE-bench 或 ZSoft 部署指南。
 
 ## 文档关系
 
@@ -15,7 +15,10 @@ changefreq: monthly
 |---|---|
 | [《自定义 Benchmark 接入指南》](./custom-benchmark-onboarding-guide.md) | 帮助客户用自然语言描述需求，并与 AI 确认评测目标、数据边界和成功标准 |
 | [《Benchmark 接入开发规范》](./benchmark-integration-development-guide.md) | 指导 AI 或开发者实现 Manifest、Adapter、Evaluator、Presentation 和测试 |
-| [《Benchmark 整体服务安装指南》](./service-deployment-guide.md) | 指导部署已完成开发的接入包，安装平台、执行端、Evaluator 和数据集 |
+| [《Benchmark 通用服务部署指南》](./service-deployment-guide.md) | 安装平台、执行客户端和 Evaluator，配置通信、共享镜像池、并发与公共运维 |
+| [《SWE-bench 部署指南》](./swe-bench-deployment-guide.md) | 安装 SWE-bench 数据集，配置 Case 源码与评测镜像，完成验收 |
+| [《ZSoft 部署指南》](./zsoft-deployment-guide.md) | 安装 ZSoft 数据集，配置原生任务目录、固定评测资产与内核加速，完成验收 |
+| [《ZSoft 评测资产发布指南》](../zsoft-assets-release.md) | 维护者构建、冻结、发布 userspace 和内核资产，供部署者消费固定版本 |
 | 本文档 | 说明需求确认、接入开发和服务部署的完整流程 |
 
 ```text
@@ -32,12 +35,19 @@ AI 阅读材料、提出方案，并通过少量问答生成接入确认单
 AI 开发 benchmarks/<key> 接入包并完成测试
                   │
                   ▼
-《Benchmark 整体服务安装指南》
-部署平台、执行端、Evaluator 和数据集
+《Benchmark 通用服务部署指南》
+部署平台、执行客户端和 Evaluator
                   │
+          ┌───────┴───────┐
+          ▼               ▼
+《SWE-bench 部署指南》 《ZSoft 部署指南》
+安装各自数据、执行环境与评测资产
+          └───────┬───────┘
                   ▼
-客户验收成功、失败和异常场景
+客户验收所选 Benchmark 的成功、失败和异常场景
 ```
+
+SWE-bench 与 ZSoft 是并列的 Benchmark；MCTS、OpenCode 等是 Agent Runtime。Runtime 接入见对应指南，不改变 Benchmark 文档层级。构建发布与日常部署分开，具体机器地址、账号、发布目录和实测记录由部署方在项目文档之外管理。
 
 ## 服务关系
 

@@ -25,7 +25,9 @@ Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--por
 Reuses a verified unchanged build; otherwise rebuilds with cache preserved.
 --force-rebuild always rebuilds, keeping the incremental cache.
 SWE-bench Verified is prepared automatically with its official loader unless
-already installed. Preparation failures warn and do not prevent startup.
+already installed. ZSoft L1 is also prepared automatically unless installed.
+Each benchmark can opt out via dataset.autoImport in config/benchmark/platform.local.yaml.
+Preparation failures warn and do not prevent startup.
 EOF
 }
 
@@ -394,6 +396,9 @@ stage_done
 stage_begin "benchmark preparation"
 if ! node scripts/benchmark/bootstrap-swe-bench-dataset.cjs; then
   echo "⚠ SWE-bench Verified 自动准备脚本执行失败，将继续启动服务；下次启动自动重试。" >&2
+fi
+if ! node scripts/benchmark/bootstrap-zsoft-dataset.cjs; then
+  echo "⚠ ZSoft L1 自动准备脚本执行失败，将继续启动服务；下次启动自动重试。" >&2
 fi
 
 stage_done

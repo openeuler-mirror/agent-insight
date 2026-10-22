@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 const { GitWorkspaceProvider, GitPatchCollector, createBenchmarkExecutor, runProcess } = require('../services/executor/src/index.cjs')
 const { SweBenchGitSourcePolicy, MIRRORS } = require('../services/executor/src/benchmarks/swe-bench.cjs')
 const { readLocalSetting } = require('../services/executor/src/git-source.cjs')
+const { SweBenchGitSourcePolicy: PackagePolicy } = require('../benchmarks/swe-bench/executor/git-source-policy.cjs')
 const repository = 'https://github.com/pallets/flask.git'
 
 test('default executor registers only the SWE-bench policy with the explicit client home', async (t) => {
@@ -20,7 +21,7 @@ test('default executor registers only the SWE-bench policy with the explicit cli
   t.after(() => executor.close())
   const policies = executor.runner.workspaceProviders.get('git').sourcePolicies
   assert.deepEqual([...policies.keys()], ['swe-bench'])
-  assert.ok(policies.get('swe-bench') instanceof SweBenchGitSourcePolicy)
+  assert.ok(policies.get('swe-bench') instanceof PackagePolicy)
   assert.equal(policies.get('swe-bench').home, root)
 })
 

@@ -126,9 +126,9 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 | Agent Insight 部署和访问方式 | 当前支持 | 需要做什么 | IP 列结果 |
 |---|---|---|---|
-| 外部电脑直接访问公网 IP 和端口，例如 `http://119.3.152.42:3000` | 支持 | uploader 使用有效 API Key 或设备凭证；无需代理配置 | 电脑所在网络的公网出口 IP |
+| 外部电脑直接访问公网 IP 和端口，例如 `http://203.0.113.10:3000` | 支持 | uploader 使用有效 API Key 或设备凭证；无需代理配置 | 电脑所在网络的公网出口 IP |
 | 外部电脑直接访问公网域名和端口 | 支持 | 与公网 IP 直连相同 | 电脑所在网络的公网出口 IP |
-| OpenCode 与 Agent Insight 在同一台服务器，uploader 访问该服务器的公网 IP，例如 `http://119.3.152.42:3000` | 支持 | 必须使用公网 IP 作为 `AGENT_INSIGHT_HOST`，且 uploader 需通过 API Key 或设备凭证认证 | 服务器公网 IP，例如 `119.3.152.42` |
+| OpenCode 与 Agent Insight 在同一台服务器，uploader 访问该服务器的公网 IP，例如 `http://203.0.113.10:3000` | 支持 | 必须使用公网 IP 作为 `AGENT_INSIGHT_HOST`，且 uploader 需通过 API Key 或设备凭证认证 | 服务器公网 IP，例如 `203.0.113.10` |
 | OpenCode 与 Agent Insight 在同一台服务器，uploader 访问公网域名 | 有条件支持 | 只有连接到达服务端时来源已经是公网地址才支持；若被解析为本机回环或私网连接，服务端不会把域名反查成公网 IP | 公网来源地址或 `—`；推荐改用公网 IP 地址 |
 | OpenCode 与 Agent Insight 在同一台服务器，但 uploader 访问 `localhost`、`127.0.0.1` 或服务器私网 IP | 不支持公网 IP 绑定 | 改为访问服务器公网 IP | `—` |
 | Nginx、Apache、网关或负载均衡转发到 Agent Insight | 有条件支持 | 代理必须覆盖真实来源头；服务端配置 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER` 并重启 | 可信来源头中的公网 IP |

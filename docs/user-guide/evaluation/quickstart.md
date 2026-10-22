@@ -30,7 +30,7 @@ changefreq: monthly
 
 ### SWE-bench Case 仓库源码来源
 
-源码来源由 Agent 执行机管理员配置，普通实验用户无需设置。需要使用本地缓存或指定 Git 服务时，参见 [配置 SWE-bench Case 源码来源](../../developer-guide/benchmark/service-deployment-guide.md#71-配置-swe-bench-case-源码来源可选)。
+源码来源由 Agent 执行机管理员配置，普通实验用户无需设置。需要使用本地缓存或指定 Git 服务时，参见 [配置 SWE-bench Case 源码来源](../../developer-guide/benchmark/swe-bench-deployment-guide.md#配置-case-源码来源)。
 
 ### 首次运行 Benchmark 的额外前置条件
 

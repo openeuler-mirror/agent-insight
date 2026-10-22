@@ -302,19 +302,47 @@ export interface BenchmarkDatasetLoader {
 }
 ```
 
-Loader 只负责把文件逐条解析为原始 Case，不负责公开/私有拆分或业务校验；这些仍由 Adapter 完成。
+Loader 负责将 Profile 接受的文件或目录解析为原始 Case，不负责公开/私有拆分或业务校验；这些仍由 Adapter 完成。
 
-`dataset.profiles` 声明可安装的数据集变体、显示名称、文件扩展名和可选预期数量。声明 Loader 时必须同时声明至少一个 Profile。
+`dataset.profiles` 声明变体、显示名称、`acceptedExtensions` 和可选预期数量。`acceptedSourceKinds` 可为 `file`、`directory` 或两者，省略时保持文件模式；仅接受目录时 `acceptedExtensions` 可为空。可选 `version` 标识来源契约版本，通用已安装检查会严格匹配，避免复用不同契约的数据。声明 Loader 时必须同时声明至少一个 Profile。
 
-安装命令：
+手动安装命令：
 
 ```bash
 npx tsx scripts/benchmark/install-dataset.ts \
   --benchmark <key> \
   --profile <profile> \
-  --source <dataset-file> \
+  --source <dataset-file-or-directory> \
   --name <display-name>
 ```
+
+目录来源按解析后的 Case 规范化内容计算指纹，文件来源保留文件字节摘要。目录不得使用导入后删除来源选项。
+
+ZSoft 的 `sourceTaskDigest` 专门对原始 `task.json` 对象与 `public/` 文件字节摘要清单计算 SHA-256，键按固定 Unicode 字符顺序序列化；平台导入与 Node Provider 共用 `source-identity.cjs`，与 Python 冻结端保持一致，不复用通用协议中基于 `localeCompare` 的 JSON 排序。跨语言测试须包含多文件、大小写、标点和数字字符串键。只在实际资产及公开元数据全部验证通过后识别旧排序摘要，并以 `ZSOFT_TASK_DIGEST_LEGACY` 拒绝，不接受任意历史哈希；管理员显式导入新名称的数据集并新建实验，不静默改写冻结身份。通用请求摘要规则不变。
+
+### 7.1 Dataset Preparer
+
+需要在线自动获取或离线复用来源时，在接入包实现：
+
+```ts
+export interface BenchmarkDatasetPreparer {
+  profileKey: string
+  prepareSource(): Promise<{ sourcePath: string; name?: string }>
+}
+```
+
+在 `implementation` 中注册（以下字段为可选扩展）：
+
+```yaml
+datasetPreparer: ./dataset/prepare.ts
+datasetPreparerExport: repositoryQualityDatasetPreparer
+```
+
+Catalog 自动生成 `dataset-preparers.ts` 和 `dataset-preparer-keys.cjs`；Loader 与 Preparer 源文件均参与接入包内容摘要。包内准备器负责官方来源、固定版本、缓存和依赖准备，返回文件或目录路径；公共服务 `ensureBenchmarkDataset` 负责查询数据库、调用准备器和统一安装，不包含 Benchmark 专属下载逻辑。
+
+统一准备入口为 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <key>`。`scripts/start.sh` 按项目 YAML 配置自动准备 SWE-bench，不再接受 `--benchmark`；其他接入包通过统一准备入口独立安装。数据库已存在当前 Profile 版本且未指定 `--refresh` 时，跳过全部来源访问与本机准备依赖。显式刷新仍遵守实验数据冻结：已引用的数据集不能覆盖，可指定新 `--name` 安装另一版本。
+
+数据准备运行在平台机器；执行客户端只读取本机任务环境；Evaluator 按评测请求携带的身份/版本匹配自己部署的资产，不访问平台数据库或平台本机路径。镜像准备与数据导入可以独立进行。
 
 数据集安装后只读；字段定义按当时的 Presentation 冻结。只刷新展示字段而不重写 Case：
 
@@ -442,7 +470,13 @@ resources:
 - `command`：`node`、`python3`、`direct`；
 - `network`：`deny` 或 `allow`。`deny` 使用 Docker `network_mode=none` 隔离外部网络，同时保留容器内部 `localhost` 解析与回环套接字；`allow` 使用 bridge 网络。SWE-bench 官方 Case 容器与其 Evaluator Runtime 遵循同一策略，测试插件需要的本地通信不会被误禁用。
 
-Entrypoint、Smoke 和 Dockerfile 必须位于接入包内。Catalog 按接入包内容摘要生成 Runtime 镜像 tag，并在运行时校验镜像 label；发布方可用 `node scripts/benchmark/build-evaluator-runtime.cjs <key>` 构建并推送该制品。未命中远端制品的源码 checkout 会在首次任务中回退本地构建，之后复用缓存。运行依赖归接入包制品所有，不要加入通用 Controller 基础依赖，也不要在 Controller 公共代码中加入 Benchmark 分支。
+Entrypoint、Smoke 和 Dockerfile 必须位于接入包内。Catalog 按接入包内容摘要生成 Runtime 镜像 tag，并在运行时校验镜像 label；发布方可用 `node scripts/benchmark/build-evaluator-runtime.cjs <key>` 构建该制品，增加 `--image-prefix registry/namespace --push` 可上传到指定仓库。SWE-bench 和 ZSoft 均在本地镜像缺失时先拉取，拉取失败后按接入包 Dockerfile 自动构建；后续调用复用摘要匹配的镜像。声明 `requiresPrebuiltRuntime: true` 的接入包禁止该回退，本地引用必须预装，远程引用允许按需拉取。运行依赖归接入包制品所有，不要加入通用 Controller 基础依赖，也不要在 Controller 公共代码中加入 Benchmark 分支。
+
+接入包可选声明 `assets`：`image` 必须为固定 `repository@sha256`，同时声明镜像内 `sourcePath`、`releaseId`、`bundleDigest`、可选部署目录变量名 `directoryEnv`、`verifyCommand`（`python3` 或 `node`）及包内 `verifyEntrypoint`。Controller 在启动后台准备资产，调用校验器时依次传入目录、release ID、bundleDigest。校验器只读取文件与元数据，不执行 Judge 或构建任务。
+
+通用安装器按镜像摘要创建版本目录，拉取后从未启动容器复制、校验，再原子发布；并发请求共享准备状态，重启重新校验缓存。默认存储根为 `<EVALUATOR_DATA_DIR>/benchmark-assets/<benchmarkKey>`；配置 Schema 注册了 `benchmarks.<key>.assetsDir` 的接入包使用该 YAML 字段，`null` 使用默认根目录，不再回退旧目录变量。未注册此字段的其他接入包仍可使用 `directoryEnv`。实际目录仍追加摘要。OCI 资产必须在 Controller 与 Runtime 共享卷内。Provider 的第三个参数 `assetsDir` 和 Runtime 环境 `EVALUATOR_ASSETS_DIR` 均为该接入实际解析出的版本目录，不从任务 payload 获取，也不修改全局环境变量。
+
+准备期间 admission 返回可重试的 `EVALUATOR_ASSETS_PREPARING`、`EVALUATOR_ASSETS_DOWNLOADING` 或 `EVALUATOR_ASSETS_VERIFYING`；安装失败返回不可重试的具体错误。健康检查通过 binding 的 `runtimeFacts.assetStage/assetErrorCode` 暴露状态，平台在健康检查和下发响应两条路径均保留错误及详细原因。没有声明资产的接入包不增加准备流程，公共 Controller 不含 ZSoft 分支。
 
 ### 9.2 Entrypoint 命令
 
@@ -508,7 +542,15 @@ entrypoint/
 - `submission_invalid`：提交物在业务上不可评，例如 Patch 无法应用；
 - `failed`：Evaluator、容器、下载、超时或其他基础设施失败。
 
-`rawResult` 必须符合 `schemas/result.schema.json`。Evidence 文件名必须安全、唯一，路径必须位于输出目录。每个实际产生的 Evidence 都应返回，不能因 Presentation 未配置而丢弃。
+`rawResult` 必须符合 `schemas/result.schema.json`。Evidence 的 `name` 可以是安全、唯一的相对路径（如 `judge-evidence/vuln-result.json`），总长不超过 512、最多 16 段，每段匹配 `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`；禁止绝对路径、空段、反斜线和 `.`/`..`。`path` 及其真实文件路径必须位于输出目录。证据支持零字节日志，单文件仍限制 64 MiB；提交物的非空要求不变。平台按 Artifact ID 存储文件，保留原相对路径用于前端可展开目录与证据包，不直接将其作为落盘文件名。每个实际产生的 Evidence 都应返回，不能因 Presentation 未配置而丢弃。
+
+### ZSoft 官方评测证据
+
+ZSoft 不再把平台的任务哈希摘要作为官方报告。独立工作目录内的官方 `evaluation.json`、`record.json`、`evaluator.{stdout,stderr}.log`、`cleanup.{stdout,stderr}.log` 原字节复制；`judge-evidence/` 和 `public-feedback/` 递归保留全部普通文件及相对目录，并提供 `official-output.zip`。不导出 `context.json`、`compose.env`、提交物副本、隐藏判题源码或其他工作文件。拒绝符号链接、特殊文件及越界路径。
+
+成功结果必须有官方报告和执行记录；Adapter 核对任务、提交物摘要/大小、final 阶段、清理/超时状态以及报告和执行记录的最终判定、summary、checks、details。最终评分仍来自官方执行记录，原始报告不会被平台改写。旧版单个摘要 `report.json` 仍按原契约校验，历史实验需重评才能获得新证据。
+
+失败、超时和清理失败均收集已产生的官方输出，不清空证据。缺失文件和采集错误记录在 `runtimeFacts.evidenceCollection`；不存在的文件不生成占位报告。异常或未写完的 JSON 以二进制类型上传原字节，仍可查看原文，避免 JSON 解析错误阻止整个失败回调。单次收集最多 1024 个文件、总大小 256 MiB，单文件及 ZIP 不超过 64 MiB；不安全文件或超限时明确标记采集失败、不静默截断，已安全收集的文件仍保留。
 
 ### 9.4 运行要求
 
@@ -524,7 +566,7 @@ entrypoint/
 
 镜像池位于 `services/evaluator/src/image-pool.cjs`，按 Docker daemon 共享，不属于某个 Benchmark。接入包只声明需求，不另建空间预算或回收器，也不需要增加公共 API 路由。
 
-1. 在 `evaluator.yaml` 增加 `imageProvider: ./images.cjs`。该 Node 模块随 Catalog 加载，在 Controller 内导出 `describeImages(payload, daemonArch)`，返回数组；可无镜像或一个 Case 多镜像。这里只解析/校验元数据，不执行拉取、Shell 或 Harness，也不引入 Runtime 专属依赖。
+1. 在 `evaluator.yaml` 增加 `imageProvider: ./images.cjs`。该 Node 模块随 Catalog 加载，在 Controller 内导出 `describeImages(payload, daemonArch, { assetsDir })`，返回数组；可无镜像或一个 Case 多镜像。这里只解析/校验元数据，不执行拉取、Shell 或 Harness，也不引入 Runtime 专属依赖。
 2. 每项包含 `{ key, arch, references, estimatedBytes?, context? }`。`references` 是经接入包校验的来源和回退顺序；`estimatedBytes` 是新增占用的保守估值，省略使用主机默认值；`context` 是 Runtime 所需安全元数据。命中本地镜像也须校验允许范围和架构。公共层按架构和来源列表合并在途请求，解析后按实际 image ID 合并归属和使用者，不按 Benchmark/case 名称合并。
 3. 若需提前准备，Adapter 可增加 `imagePreparationInput(publicPayload, privatePayload)`，返回准备所需 JSON 或 `null`，不发送答案、测试补丁或完整私有载荷。平台在 Agent 下发前异步发送当前/下一个 Case 的元数据，Controller 使用同一个 `describeImages` 校验。此优化 hook 不替代五个必需业务 hook。
 4. Controller 获取镜像后持久化使用者，把 `preparedImages` 交给 Runtime；任务目录的 `pool-images.json` 冻结身份。重试重新检查本地镜像，仅按冻结 digest 重拉；仅本地 image ID 消失时明确失败，不回退到新 `latest`。
@@ -532,7 +574,11 @@ entrypoint/
 
 准备消息复用 `POST /api/v1/evaluations`：`operation=prepare-images` 可下发 `revision + windows[]` 全服务窗口快照，兼容原有单实验窗口消息；总 Case 数不超过服务评测并发加 1。摘要覆盖完整消息，请求携带 `x-agent-insight-request-digest`，不再配置专用准备令牌。Controller 校验摘要与递增窗口版本，旧消息不能恢复旧窗口；空数组撤销准备。Evaluator 端口仅向平台开放，不增加用户配额或多平台协调。
 
-后台准备不占评测执行槽，发送失败降级到按需准备；无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。
+Image Provider 可抛出带 `code/status=422/retryable=false` 的确定性元数据错误，由通用 Entrypoint 转为协议错误。完整预取快照仅排除出错 Case，其余 Case 的镜像与窗口继续发布；入场检查在窗口选择之前再次验证元数据并返回 HTTP 422，使平台结束该 Case 的等待。暂态和未知错误不被吞掉，资产未就绪等可重试状态仍按原协议处理。
+
+后台准备不占评测执行槽。重评创建新 Evaluation 后先尝试刷新窗口再下发评测；收到 `IMAGE_POOL_PREPARING` 时也刷新窗口，避免只重试评测而未触发准备。准备请求失败保留评测队列，后续重试及评测 watchdog 定期补偿。执行 watchdog 在启动恢复前注册，历史实验恢复逐条隔离异常，避免单条已取消任务阻断后续恢复或后台调度。无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。
+
+首次评测与重评共用 `evaluation-scheduler` 的服务容量与单用户配额；重评不设全平台单独并发上限。服务容量读取 `/health.maxConcurrency`，单用户配额通过 `config/benchmark/platform.local.yaml` 的 `benchmarks.scheduling.maxEvaluationConcurrencyPerUser` 限制。相同 Case 的重评使用进程内锁及数据库 Run 状态、`updatedAt` 条件更新认领，防止并发请求重复创建 attempt；不同 Case 可独立入队。
 
 ## 10. Presentation
 
@@ -577,6 +623,8 @@ Presentation 只控制公共前端的名称、顺序和有限格式，不能改�
 
 ## 11. 错误与安全
 
+MCTS 的本地采集器从失败 HTTP 响应、`turn_failed`/带错误的终态与失败工具结果提取固定诊断码，写入本次 `runtime-ledger.json`。输出截断的失败工具事件不受普通观察队列背压丢弃；未恢复的诊断可将表面成功的 turn 标为错误。同轮后续成功写入不保留已恢复的截断状态，空补救轮次不会擦除先前证据。执行器仅在 `MCTS_RUN_FAILED` / `AGENT_NO_OUTPUT` 时读取本次有界 ledger，并结合进程错误，将 `MCTS_LLM_INSUFFICIENT_BALANCE` / `MCTS_LLM_OUTPUT_TRUNCATED` 的固定中文说明透传至现有失败回调；同时保留根 Trace、原异常 cause 和诊断码，不覆盖取消、超时或提交物校验错误。无需新增路由或修改外部 MCTS/xGovernor；上游完全未暴露的余额错误不能靠文件 404 推断。部署需同步更新客户端运行时、采集器自包含安装包与 standalone 文件追踪清单。
+
 错误要区分：
 
 | 类别 | 示例 | 结果处理 |
@@ -605,6 +653,8 @@ npm run benchmark:catalog
 ```
 
 必须验证：路径不越界、key 唯一、Evaluator 匹配、资源一致、Artifact/能力一致、Schema 可读取、Presentation 合法，以及生成结果可重复。
+
+Catalog 目录扫描排除 `__pycache__/`、`*.pyc`、`*.pyo` 和 `.DS_Store`，这些运行缓存不参与包摘要、Runtime 摘要或执行器文件清单。真实源码、依赖配置与评测资产仍参与原有摘要计算；新增或修改缓存不应改变生成物，修改真实输入必须更新对应摘要。
 
 ### 12.2 Adapter 单元测试
 
@@ -703,4 +753,96 @@ SWE-bench 是当前完整参考实例：
 
 参考它的目录和生命周期，不要复制它的 `model.patch`、Resolved、FAIL_TO_PASS、镜像或 Evidence 业务语义。新的 Benchmark 必须使用自己的实例代码表达这些差异。
 
-客户侧的自然语言协作方式见[《自定义 Benchmark 接入指南》](./custom-benchmark-onboarding-guide.md)，三份文档的使用顺序见[《Benchmark 文档关系与开发指南》](./README.md)。
+客户侧的自然语言协作方式见[《自定义 Benchmark 接入指南》](./custom-benchmark-onboarding-guide.md)，各指南的使用顺序见[《Benchmark 文档关系与开发指南》](./README.md)。
+
+### ZSoft 接入前的本机验证
+
+`scripts/benchmark/zsoft-preflight.py` 与 `scripts/benchmark/zsoft-validate.py` 用于接入前的环境和原生判题验证；它们尚未注册平台 Benchmark，也不运行 MCTS、模型或 E2B。ZSoft 源码和 Python 依赖应使用独立目录与虚拟环境。需要 Docker Compose；内核题还需宿主编译工具、libelf/OpenSSL 开发文件及锁定源码。没有 `/dev/kvm` 时使用 TCG，实际能否满足判题超时必须由对照验证确认。
+
+在 Linux 评测机设置自己的源码、虚拟环境与输出路径后执行：
+
+```bash
+python3 scripts/benchmark/zsoft-preflight.py \
+  --mcts-root "$MCTS_ROOT" --work-root "$VALIDATION_ROOT" \
+  --bench-root "$ZSOFT_ROOT" --zsoft-bin "$ZSOFT_BIN" \
+  --run-container-smoke --output "$VALIDATION_ROOT/preflight.json"
+
+python3 scripts/benchmark/zsoft-validate.py \
+  --bench-root "$ZSOFT_ROOT" --binary "$ZSOFT_BIN" \
+  --framework-revision "$ZSOFT_REVISION" \
+  --output-dir "$VALIDATION_ROOT/p0"
+
+python3 scripts/benchmark/zsoft-validate.py \
+  --bench-root "$ZSOFT_ROOT" --binary "$ZSOFT_BIN" \
+  --framework-revision "$ZSOFT_REVISION" \
+  --output-dir "$VALIDATION_ROOT/p1" --prepare \
+  --task libxml2-002-relaxng-pushcdata-oob \
+  --task linux-rxrpc-024-add-key-roundup-oob
+```
+
+`ZSOFT_REVISION` 必须为所部署框架的完整提交哈希；脚本记录此值，部署者仍需核对源码来源。正式源码先由上游 `zsoft-poc fetch-sources --task-id TASK_ID` 缓存。若 Compose 安装在独立目录，需要将相应 `DOCKER_CONFIG` 传给上述命令，并将 ZSoft 虚拟环境的 `bin` 加入 `PATH`，供题目子进程导入框架。
+
+不带 `--task` 时只做 P0：冻结 30 道正式题的 manifest、source lock 和控制提交摘要，调用上游导出器逐题检查公开文件清单与内容，不执行判题。`inventory.json` 不代表全部源码缓存已通过上游 `validate --strict`。带 `--task` 后运行 P1；`--prepare` 会按上游逻辑构建镜像及内核资产，需预留磁盘和编译时间。输出目录必须不存在，避免覆盖先前证据；同一题不要并发 prepare。
+
+P1 通过要求 reference 为 `completed/success=true`、negative 为 `completed/success=false`，两者均保留 `submission_kind=final` 的完整私有记录，并检查本次新增 Compose 容器和网络是否清理。基础设施故障不能当作 negative 通过。结果、命令日志、镜像 ID 和内核资产摘要写入输出目录；这些私有验证记录不能交给执行 Agent。验证期间应避免其他任务并发创建 Compose 资源，以免剩余资源检查受到干扰。
+
+独立 `zsoft-validate.py` 同样通过 Node.js 配置加载器读取 `evaluator.local.yaml` 的 `benchmarks.zsoft-l1.kernelAccel`，并在调用官方 CLI 时内部转换为框架环境；不再读取旧用户加速变量。需提供 Node.js，配置错误在创建验证输出目录前报错。
+
+
+### ZSoft 自动生成 PoC 的执行契约
+
+`zsoft-l1` 从官方目录导入 userspace 与 kernel Case，私有身份字段为 `sourceTaskDigest` 和可选 revision。旧 P2 JSON/JSONL 不再接受，也不需要 `agentBundle.digest`。实验向导只选择数据集和执行目标；平台不持久化任务目录，也不扩展 `/api/benchmark/v1/execution-targets` 配置接口。平台按所选 Case 将 `taskId` 放进 `zsoft-tasks` workspace 契约。执行客户端从其 MCTS 仓库 `testcases_union/config.env` 读取 `ZSOFT_TASKS_DIR`，并通过 `zsoft-tasks-workspace/v3` 从 `<ZSOFT_TASKS_DIR>/<taskId>` 准备独立公开工作区，复制 `public/` 和裁剪元数据；随后 MCTS 在隔离工作区使用其中的 `tasks/`。缺少或非法目录配置返回 `ZSOFT_TASKS_DIR_INVALID`；缺题返回 `ZSOFT_TASK_MISSING`；公开元数据不一致返回 `ZSOFT_TASK_MISMATCH`。内核题映射为 C 提交，与 userspace 互斥标记轨道。ZSoft 只接受原生任务目录工作区，不再回退历史公开包。
+
+普通 Agent 使用 `single-file/v1` 收集固定的 `submission/poc`。MCTS 使用平台 Shell/Python 桥接，传入 `--mode zsoft`、`--runtime`、`--task-id` 与独立输出目录；ZSoft 插件不接受 SWE 专用的 `--testbench`、`--instance-id`、`--split`，平台不会传入这些参数。桥接替换最终官方判题回调，仅导出所选 PoC 原始字节，并阻止本地/远端正式 judge 入口。Python、C、binary 分别使用插件内部文件名 `poc.py`、`poc.c`、`poc`，平台产物统一为 `poc`。
+
+`ZsoftTasksWorkspaceProvider` 优先使用原生 `public/repo-vul`；缺少时通过 `zsoft-source.cjs` 有界读取任务的 `private/source-manifest.json` 和 `<tasks-dir>/../source-locks/<source-id>.json`，校验路径、普通文件、源码 ID、一致性、无凭据且可安全交给 Shell 的公开 HTTP(S) URL 与固定版本。只在新工作区生成 `{source_id}` 及 `{source_id,kind,url,commit?,sha256?}`，未知字段不复制，不放宽 `validatePublicPath`。这两个控制文件仅供宿主 MCTS 读取；缺少或非法来源分别返回 `ZSOFT_SOURCE_MISSING`、`ZSOFT_SOURCE_INVALID`。现有公开源码不读取私有来源，原始公开文件与数据集指纹不变。
+
+`mcts-zsoft-source.py` 提供无宿主缓存的沙箱下载步骤：归档有 SHA-256 时先校验再解压，Git 使用固定提交 shallow fetch 并核对 HEAD，不采用移动 ref。平台桥接替换 MCTS 的 `_download_script`，静态接口预检同时覆盖 materializer 文件与 `bundle_bytes`。每次 `bundle_bytes` 返回前，对 gzip tar 只读检查：文件集合与准备好的公开树、裁剪元数据及 README 派生文本完全匹配，逐文件大小和 SHA-256 相同，拒绝重复/越界名称、额外文件、链接和特殊文件，并限制数量、总大小。控制文件或判题文件混入返回 `ZSOFT_AGENT_BUNDLE_INVALID`，不进入沙箱上传。控制文件随工作区清理；不更新数据库、API 或评测侧资产。
+
+MCTS 输出 `platform-export.json`（`mcts-poc-export/v1`），包含 `taskId`、`submissionKind`、`evaluation: deferred` 和 `mctsContract`（版本 `mcts-zsoft-contract/v1`、源码 SHA-256、支持的提交类型）。静态接口预检检查调用签名、注册点、CLI 和提示文件；桥接启动时再次检查摘要，运行器核对导出摘要与启动前的契约一致。运行器核对公开任务元数据、导出身份、类型和题目大小限制，拒绝符号链接，成功取得唯一根 Trace 后复制到 `submission/poc`。正式结果来自平台 ZSoft Evaluator，不采用 MCTS 回调布尔值。
+
+桥接按提交类型适配任务消息和五个系统角色提示，提示副本写在公开工作区内；题目原文及公开 README 保留。C 要求提交源码，binary 要求按公开架构/ABI 编译并提交原始字节；两者不使用内置 Python preflight，候选验证仍依赖公开契约和生成的 `verify.py`。binary 的候选读取器提供长度和 SHA-256 摘要，避免 UTF-8 解码二进制；这不能替代执行证据或正式判题。
+
+ZSoft 的 MCTS 目标需额外就绪能力 `mcts-zsoft-export/v1`。公共依赖不含 SWE 的 `datasets` 和启动脚本；SWE 另行检查这些依赖，新客户端声明 `mcts-swe-bench/v1` 时该能力必须就绪，未声明的旧客户端沿用原规则。上传、取消、工作区清理和恢复继续复用通用执行器状态机；上传失败前先持久化产物，恢复上传不会重跑搜索。MCTS 输出及 Trace 位于外部 MCTS 仓库的运行输出目录，沿用现有 MCTS 的保留策略，公开工作区由通用清理器移除。
+
+合成数据、伪插件和伪运行器测试只能验证契约；真实判题需按 [ZSoft 部署验收](zsoft-deployment-guide.md#5-部署验收) 执行并保留部署环境的验收记录。
+
+### ZSoft 公有镜像与冻结资产
+
+ZSoft 接入包声明 `imageProvider: ./images.cjs`。Adapter 的 `imagePreparationInput` 提供题目 ID、大小/提交类型、官方题目内容摘要 `sourceTaskDigest` 与可选 revision，支持统一镜像窗口预取；Controller 按同一 payload 准备实际评测镜像。Provider 核对题目内容摘要和请求中存在的 revision，并校验评测机本地冻结清单后生成引用，不接受任务直接指定任意镜像。
+
+`zsoft-assets/v1` 新增可选 `tasks[taskId].registryImages`，键与 `images` 完全一致，值为公有仓库的固定 `repo@sha256`；该字段参与 task/bundle 摘要。原 `images` 保存 Docker config Image ID。公共镜像池冻结 `preparedImages`，Python 入口核对题目 key 与实际 Image ID，Compose 代理使用固定 ID 和 `pull_policy=never`。未配置 `registryImages` 的当前清单要求本地已装镜像；缺少 `sourceTaskDigest` 的旧清单不再支持。平台题目身份与评测机私有资产构建摘要分别管理，Evaluator 不连接平台数据库。
+
+Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构建端可使用 `--image-prefix`，Controller 配置 `EVALUATOR_RUNTIME_IMAGE_PREFIX`；显式 `--push` 才上传。ZSoft 默认复用本地 Runtime，缺失时尝试 pull，失败后自动 build，仍核对 Catalog artifact 标签。本部署方案将 Case 镜像和完整冻结资产镜像上传公有 SWR；Controller 启动后自动安装资产，自动构建 Runtime 不会重新构建题目环境。镜像池保持公有匿名 Docker API 拉取，不读取宿主 `docker login` 凭据。构建与发布流程见 [ZSoft 评测资产发布指南](../zsoft-assets-release.md)，评测机安装见 [ZSoft 部署指南](zsoft-deployment-guide.md#4-评测端准备)。
+
+内核题复用同一个 ZSoft Evaluator Runtime、任务协议和结果归一化。接入包将 `runner_image` 交给通用镜像池；`.task-state/<task-id>/{vuln,fix}/artifacts/` 中的 `bzImage`、metadata 和模块作为独立的冻结文件资产，按流式 SHA-256 校验，不作为 Docker 引用。资产打包支持合并同官方 revision、同框架摘要的冻结快照，评测机始终不访问数据库。
+
+ZSoft 平台配置为 `benchmarks.zsoft-l1.dataset.{autoImport,source,revision}`，`autoImport` 默认 `true`，其余默认 `null` 使用接入包固定的官方来源与版本。`start.sh` 在数据库同步后顺序调用 SWE-bench 和 ZSoft 的 bootstrap；共用日志与非阻塞失败处理，分别按 YAML 开关跳过或调用准备入口。ZSoft 调用 `ensure-dataset.ts --benchmark zsoft-l1`，先复用已安装数据集；失败只警告，日志为 `<AGENT_INSIGHT_HOME>/logs/zsoft-l1-bootstrap.log`，下次启动重试。这里的非阻塞失败指不阻止后续启动，准备本身仍同步等待。关闭开关不影响管理员手动调用或显式刷新。评测配置为 `benchmarks.zsoft-l1.assetsDir`（默认 `null`）和 `kernelAccel`（默认 `tcg`，可选 `kvm`）；旧四个 ZSoft 业务变量仅提示迁移、不再生效。Controller 向 Runtime 传递校验后的 `AGENT_INSIGHT_EVALUATOR_CONFIG_JSON` 快照，Python 从该快照读取加速模式，不直接解析 YAML 或读取旧用户变量。MCTS 的 `ZSOFT_TASKS_DIR` 不属于平台业务配置，保持原契约。
+
+平台 Judge 所在 Runtime 不挂 KVM 设备，官方 Judge 的配置阶段仍通过内部环境注入 TCG；受控 Compose 代理向实际 runner 设置 YAML 选定的 `KERNEL_ACCEL`，KVM 模式只开放 `/dev/kvm:rw`。实际评测在已准备的 runner 镜像中检查宿主机 KVM API，失败返回基础设施错误。资源预算按两服务分摊，并在启动前校验每版内核声明的 CPU、内存及 512 MiB 额外内存；提交编译失败保持 `submission_invalid`，超时、取消和容器/网络清理复用已有路径。doctor 校验资产、轨道和加速配置，不在冷缓存时拉镜像或启动 QEMU；KVM 可用性在实际评测前检查。
+
+### MCTS Runtime 接入实现
+
+部署操作见 [MCTS xGovernor 接入](../../user-guide/observability/mcts-xgovernor.md#用于平台-benchmark-实验)，Benchmark 环境分别见 [SWE-bench](swe-bench-deployment-guide.md) 与 [ZSoft](zsoft-deployment-guide.md)。
+
+实验候选接口会独立合并已就绪的 Benchmark 执行目标，因此仅声明 `runBenchmarkCase` 的 `pi-mcts` 可直接出现在 Agent 列表；它不依赖普通执行能力或历史 Trace。同一客户端、平台和 Agent 的目标合并后保留各自的执行能力标记。
+
+`services/executor/src/mcts-config.cjs` 统一实现路径解析、Python 检查、连接读取和配置持久化，同时进入客户端 tar 包与 MCTS 采集器 zip 包。读取连接时在独立 Bash 子进程加载 `testcases_union/config.env`，仅提取 URL，丢弃其 stdout/stderr；检查 HTTP(S) URL，再进行 TCP/TLS 连接预检。连接预检不执行付费任务，也不代表模型/E2B 全链路验证。
+
+MCTS 安装器将本次版本的上传模块放入采集器目录内的 `shared/`，运行时优先读取此副本，保留旧版 `../shared/` 的兼容读取。升级不覆盖其他采集器已有的共享模块，避免版本差异阻止重复安装。
+
+MCTS 安装器只检查公共仓库文件和 Python 版本。客户端按 Benchmark 分别探测：SWE-bench 检查 `run_union.sh` 及 `importlib.util.find_spec("datasets")`，不导入 `datasets`；ZSoft 检查公共运行前提和专用插件契约，不检查 SWE 依赖。Python 和接口子进程各有 5 秒上限，超时、无法启动、缺包、异常退出与版本不足分别返回原因。`agent-runtime/pi-mcts/v1` 与搜索参数能力在任一 Benchmark 就绪时可用；新客户端额外上报 `mcts-swe-bench/v1`，SWE 目标需该组件就绪，旧客户端未声明该组件时保留原兼容规则。实际运行仍正常导入依赖；运行时导入失败按实际进程错误处理。
+
+这些是执行机本地配置，不进入服务端下发的 Case 任务。公共 Python/Trace 前提不满足，或两个 Benchmark 均不可用时，客户端会将 `agent-runtime/pi-mcts/v1` 标为未就绪；SWE 脚本缺失不会单独阻止 ZSoft。`pi-mcts` 不会出现在普通生成 Trace 实验中。
+
+执行器每次从 MCTS `config.env` 读取真实 xGovernor 地址，以 `--upstream` 传给严格模式 Trace 代理。代理将动态地址放入 `AGENT_INSIGHT_MCTS_PROXY_URL`；本次专用 `python` 脚本在 MCTS 加载配置之后，将 `XGOVERNOR_BASE_URL` 恢复为代理地址并 exec 原解释器。手动启动器也为每次运行创建独立 Python 包装目录，退出时清理。固定 URL 不会绕过采集，无需修改 MCTS 配置文件。未配置仓库的历史独立 Trace 安装仍读取 `upstreamUrl` / `AGENT_INSIGHT_MCTS_UPSTREAM_URL`。
+
+SWE-bench Case 的执行命令由客户端固定为 `run_union.sh --mode sweverified --runtime pi --testbench sweverified --instance-id <Case ID> --split test --output-dir <runId>`，并通过严格模式 Trace 代理启动。搜索参数由执行机的 Runtime YAML 和本机默认值覆盖解析，并显式追加到 CLI；新建实验冻结页面参数，联调配置通过普通参数模板复用。显式 CLI 参数覆盖 MCTS `config.env` 中的对应环境配置。客户端创建本次运行专用的 `python` 启动脚本，直接 `exec` 配置的 Python 解释器，再运行原版 `run_union.sh`。启动脚本保留原解释器路径，使 Python 正确识别虚拟环境及 `datasets`；不要把 venv 解释器符号链接到外部目录后执行。MCTS 只将最终选中节点写入 `testcases_union/output/sweverified/<runId>/artifact.patch`；客户端检查 Patch 后应用到该 Case 的冻结 Git 工作区，再由现有 `git-patch/v1` Collector 生成并上传 `model.patch`。Trace 代理的本地状态按 Case 隔离，客户端从其运行记录取得根 Session ID（`mcts.run.<32 位十六进制>`），作为回调 `traceId`，与平台 `Execution.taskId` 保持一致。OTLP 的 32 位 Trace ID 仅用于传输，不直接用作页面跳转；历史误存 OTLP ID 的 Case 在读取时按同一账户下根 Session ID 的 SHA-256 精确映射，不按时间邻近猜测。停止实验时客户端向进程组发送 SIGINT，给 MCTS 的 `finally` 清理和 Trace 代理上传留出 30 秒，然后强制终止仍未退出的进程。
+
+MCTS 的默认配置和可选执行 Schema 位于 `services/executor/runtimes/mcts/runtime.yaml`，通过 `delivery: argv`、`binding: { mode: passthrough }` 交付，不声明 flat/nested。上报给平台的通用描述只包含 `configuration: { version: 2, defaults }`。前端统一支持嵌套编辑，七个 MCTS 平铺默认字段仅是初始内容，修改草稿不会改变模板。执行客户端在启动前校验实际参数；不支持的嵌套值不会自动拆分。
+
+没有显式实验配置时，从 YAML 模板及本机覆盖初始化完整值；显式值不补默认字段。MCTS 的 CLI 交付器仅在执行端拒绝对象、数组、null、非法 CLI key 及调度保留 flag。平台保存并下发原值，不按 MCTS 特判。CLI key 保留大小写、下划线和点号，布尔值按 true/false 字面量交付；新增实际支持的参数直接使用同名 key/value。
+
+源码定义位于 `services/executor/runtimes/`，安装后实际读取 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/`。新客户端约每 30 秒重新读取并上报定义，改 YAML 后等待上报并刷新页面，或重启客户端加速生效。客户端在每个 platform 的 `parameterDefinitions` 上报描述和 `definitionDigest`，不包含执行绑定。共享模块为 `packages/agent-runtime/index.cjs`（协议、校验）、`parameter-json.cjs`（递归 JSON）与 `loader.cjs`（YAML、覆盖、交付）。任务使用 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }`；平台和执行端按选定 platform/agent 验证，契约不一致返回 `AGENT_DEFINITION_CHANGED`。
+
+默认值和预设变动只更新模板修订，不覆盖正在编辑的草稿。客户端契约摘要覆盖目标、交付方式、业务 Schema 和绑定，不含 flat/nested 声明；平台将摘要视为不透明标识。历史快照不回写，复用确认只将原配置用于新草稿，不更名、不拆层。OpenCode 新版客户端提供默认空对象的通用配置，当前使用 CLI 交付；JSON/YAML 等新入口由客户端按实际接口适配。

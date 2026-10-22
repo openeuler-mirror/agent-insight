@@ -114,6 +114,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', 'Benchmark 数据集不存在或未就绪', 404)
   }
   const adapter = getBenchmarkAdapter(dataset.adapterKey)
+  if (adapter.manifest.supportsAgentExecution === false) {
+    throw new BenchmarkProtocolError('BENCHMARK_AGENT_EXECUTION_UNSUPPORTED', '该 Benchmark 不支持 Agent 执行', 409)
+  }
   const catalogInputs = new Map<string, string>()
   try {
     const catalogCases = JSON.parse(dataset.agentEvalDataset.casesJson) as Array<{
@@ -163,12 +166,18 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   ]))
   const preparedCases = cases.map((datasetCase, ordinal) => {
     const publicPayload = parsePublicPayload(datasetCase.publicPayloadJson)
+    const runId = newRunId()
+    const experimentCaseId = newExperimentCaseId()
+    adapter.buildAgentTask({
+      publicPayload, runConfig,
+      context: { runId, experimentId: 'preflight', caseId: experimentCaseId },
+    })
     return {
       datasetCase,
       ordinal,
       publicPayload,
-      experimentCaseId: newExperimentCaseId(),
-      runId: newRunId(),
+      experimentCaseId,
+      runId,
     }
   })
 
