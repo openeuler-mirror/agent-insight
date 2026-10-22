@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 const { artifactIdentity } = require('./artifact-identity.cjs')
+const { BRIDGE_VERSION } = require('./native-credentials-build.cjs')
 
 const repository = 'https://gitcode.com/openeuler/xGovernor.git'
 const releaseId = /^[a-f0-9]{40}-[a-f0-9]{16}$/
@@ -36,6 +37,7 @@ function readRelease(root, id, target = { platform: process.platform, arch: proc
     || !/^sha256:[a-f0-9]{64}$/.test(manifest.artifactDigest) || manifest.compatibility?.contract !== 'agent-insight-xgovernor/v1') throw new Error('安装清单、协议或目标架构不兼容')
   if (manifest.build?.layoutVersion !== BUILD_LAYOUT_VERSION) throw new Error('旧安装未在最终版本目录构建；请重新执行客户端安装命令以重建 xGovernor')
   if (manifest.build.sourceDirectory !== fs.realpathSync(path.join(directory, 'source'))) throw new Error('安装目录已移动，与编译时路径不一致；请重新执行客户端安装命令以重建 xGovernor')
+  if (manifest.components?.xiaooCredentials?.version !== BRIDGE_VERSION) throw new Error('安装缺少 xiaoO 原生凭据桥接；请重新执行客户端安装命令以重建')
   const resolve = name => {
     const value = manifest.artifacts?.[name]
     if (typeof value !== 'string' || path.isAbsolute(value) || value.split(/[\\/]/).includes('..')) throw new Error('安装清单制品路径不合法')
@@ -47,12 +49,12 @@ function readRelease(root, id, target = { platform: process.platform, arch: proc
     serverExecutable: resolve('server'),
     runtimes: {
       'pi-agent': { kind: 'pi', workerExecutable: resolve('piWorker'), executable: resolve('pi'), extensionDirectory: resolve('extension') },
-      xiaoo: { kind: 'xiaoo', workerExecutable: resolve('server') },
+      xiaoo: { kind: 'xiaoo', workerExecutable: resolve('server'), credentialExecutable: resolve('xiaooCredentials') },
     },
   }
   const identity = artifactIdentity(config)
   if (identity.reasons.length || identity.digest !== manifest.artifactDigest) throw new Error(`安装制品缺失或摘要不一致${identity.reasons.length ? `：${identity.reasons.join('；')}` : ''}`)
-  for (const file of [config.serverExecutable, config.runtimes['pi-agent'].workerExecutable, config.runtimes['pi-agent'].executable]) {
+  for (const file of [config.serverExecutable, config.runtimes['pi-agent'].workerExecutable, config.runtimes['pi-agent'].executable, config.runtimes.xiaoo.credentialExecutable]) {
     if (!fs.statSync(file).isFile()) throw new Error('安装制品不是可执行文件')
     fs.accessSync(file, fs.constants.X_OK)
   }

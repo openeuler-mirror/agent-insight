@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { createRequire } from 'node:module'
+import { writeXiaooCredentialBridge } from './helpers/xiaoo-credential-bridge'
 const require = createRequire(import.meta.url)
 const { resolvePi, resolveXiaoo, resolveModel, validateResolved } = require('../services/executor/src/xgovernor/model-resolver.cjs')
 
@@ -106,7 +107,8 @@ test('xiaoO TOML capabilities and reasoning survive the private credential subpr
   fs.writeFileSync(path.join(root, 'setup.json'), JSON.stringify({ context: { home: directory, SHELL: '/bin/bash' } }))
   const config = path.join(directory, 'config.toml')
   fs.writeFileSync(config, '[llm]\nprovider="custom"\nmodel="default"\napi_base="https://model.example/v1"\napi_key_env="MODEL_KEY"\nmax_tokens=128000\nreasoning_effort="high"\nkvcache_enabled=false\nkvcache_debug_enabled=false\n')
-  const resolved = await resolveModel({ agentConfig: { model: 'custom/selected' } }, { kind: 'xiaoo' }, { models: {} }, { root, env: { ...process.env, HOME: directory, AGENT_INSIGHT_HOME: directory, XIAOO_CONFIG: config, MODEL_KEY: 'private-subprocess-secret' } })
+  const credentialExecutable = writeXiaooCredentialBridge(directory, { provider: 'custom', model: 'default', api_base: 'https://model.example/v1', api_key_env: 'MODEL_KEY', max_tokens: 128000, reasoning_effort: 'high' })
+  const resolved = await resolveModel({ agentConfig: { model: 'custom/selected' } }, { kind: 'xiaoo', credentialExecutable }, { models: {} }, { root, env: { ...process.env, HOME: directory, AGENT_INSIGHT_HOME: directory, XIAOO_CONFIG: config, MODEL_KEY: 'private-subprocess-secret' } })
   assert.deepEqual(resolved.model.capabilities, { max_tokens: 128000 })
   assert.equal(resolved.model.reasoningEffort, 'high')
   assert.equal(resolved.model.model, 'selected')

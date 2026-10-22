@@ -180,7 +180,19 @@ bash scripts/evaluator.sh start \
 | `--platform-base-url URL` | Evaluator 回访 Agent Insight 的地址 |
 | `--port PORT` | Evaluator 对外端口，默认 `3001` |
 | `--bind-address ADDRESS` | Evaluator 监听地址，默认 `0.0.0.0` |
-| `--evaluator-env NAME=VALUE` | 传入环境参数；业务配置改用 `config/benchmark/evaluator.local.yaml` |
+| `--evaluator-env NAME=VALUE` | 可重复传入；已知业务变量转换为本次启动的配置覆盖，其他变量传入 Controller/Runtime |
+
+原有并发命令可直接使用，无需创建 YAML 文件：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url http://host.docker.internal:3000 \
+  --evaluator-env EVALUATOR_MAX_CONCURRENCY=4
+```
+
+优先级为显式 `--evaluator-env` > `evaluator.local.yaml` > `evaluator.yaml` > 默认值；同一变量重复传入时最后一个生效，仅影响本次启动，不改写 YAML。业务覆盖在合并后统一校验，非法值在替换旧服务前报错。日志打印最终并发、镜像池和预取配置；`/health.maxConcurrency` 应为 4。普通进程环境里的旧变量仍不隐式覆盖 YAML，端口继续使用 `--port`，配置快照和镜像池内部磁盘参数禁止直接覆盖。
+
+SWE-bench 同样支持 `SWE_BENCH_PYTHON`、`SWE_BENCH_IMAGE_SOURCE`、`SWE_BENCH_IMAGE_ARCH`、`SWE_BENCH_ALLOW_NON_OFFICIAL`、`SWE_BENCH_IMAGE_PROXY_PREFIX`、`SWE_BENCH_VERIFIED_MIRROR_REPOS`、`SWEBENCH_DOCKER_TIMEOUT` 和 `SWEBENCH_DOCKER_POOL_SIZE` 的显式覆盖。镜像仓库列表接受逗号分隔或 JSON 字符串数组，空字符串关闭额外仓库，`null` 恢复内置仓库；未知 SWE-bench/镜像池配置变量明确报错，不再忽略。
 
 验证 Evaluator：
 
@@ -204,6 +216,8 @@ imagePool:
 
 修改后重新执行 `bash scripts/evaluator.sh start`，按 5.1/5.2 节补充通信地址与端口参数。启动脚本在 Controller 镜像内校验配置，不要求宿主安装 Node.js；配置无效时不会停止旧服务。校验后的 JSON 快照传给 Controller 和 Benchmark Runtime，禁止用 `--evaluator-env` 覆盖快照。
 
+也支持显式传入 `--evaluator-env IMAGE_POOL_ENABLED=false`、`IMAGE_POOL_PREFETCH_ENABLED=false`，以及 `IMAGE_POOL_RESERVE_RATIO`、`IMAGE_POOL_HIGH_WATERMARK`、`IMAGE_POOL_MAX_PULLS`、`IMAGE_POOL_WAIT_SECONDS`、`IMAGE_POOL_MAC_DISK_PATH`。布尔值接受 `true/false/1/0`，路径相对所选配置目录解析。参数通过 stdin 交给容器内校验器，不出现在辅助 Docker 命令参数中；日志只打印固定配置摘要，不输出非业务 Runtime 凭据。
+
 镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。平台通过 `/health` 发现预取状态，无需额外令牌。Evaluator 端口应只允许平台访问。
 
 ### 5.4 评测并发与 Case 数量上限
@@ -223,7 +237,7 @@ imagePool:
 maxConcurrency: 2
 ```
 
-平台侧未覆盖时保持默认值。修改平台配置后重启平台；修改评测配置后重新运行 Evaluator 启动命令。旧并发/待评测上限环境变量不再生效。
+平台侧未覆盖时保持默认值。修改平台配置后重启平台；修改评测配置后重新运行 Evaluator 启动命令。旧进程环境中的并发/待评测上限变量不再隐式覆盖 YAML；评测并发可用显式 `--evaluator-env EVALUATOR_MAX_CONCURRENCY=4` 覆盖。
 
 启动后验证：
 
@@ -318,6 +332,10 @@ node ~/.agent-insight/client/runtime/xgovernor.cjs status
 node ~/.agent-insight/client/runtime/xgovernor.cjs update --version <tag或完整commit>
 node ~/.agent-insight/client/runtime/xgovernor.cjs rollback
 ```
+
+安装器同时构建 `insight-xiaoo-credentials`，复用 xGovernor 锁定的 xiaoO 原生 SecretProvider、Vault/SDF 与 provider 解析器，读取原有 config.toml 及同目录加密凭据库，不要求将 Key 另存到 xGovernor 配置或导出到 shell。桥接具有独立 Cargo manifest/lock，首次解析沿用上游现有锁文件；不改动 xGovernor 的原始 Cargo.toml/Cargo.lock。`components.xiaooCredentials` 记录桥接版本与原生源码来源，二进制参与制品摘要。旧安装即使上游 commit 相同，缺少该桥接也会在新版 curl 安装时自动重建；重复安装校验通过后复用。构建与基础探测不读取用户 Key、不调用模型、不创建 Case 容器。
+
+凭据桥接升级：先更新并重启平台，再在客户端安装页选择原生 Pi/xiaoo，执行新生成的一条 curl 命令并等待构建完成。用 `node ~/.agent-insight/client/runtime/xgovernor.cjs status` 确认 `components.xiaooCredentials.version` 为 `1`，然后重启客户端或等待重新上报能力。新增制品会改变冻结环境摘要，应新建实验并选择更新后的执行环境；原有失败记录不会自动重跑。MCTS 服务、凭据与进程不参与此次升级。无需修改 cgroup、重拉 Case 镜像或重启评测服务。
 
 源码安装入口为 `node scripts/xgovernor.cjs`；`AGENT_INSIGHT_HOME` 自定义时相应替换目录。手动 `update` 不传版本仍使用官方 HEAD；正常 curl 自动安装始终使用平台固定版本。不要将这里的安装目录指向 MCTS。`status` 校验制品，不代替实际模型或 Docker Case 验证。
 

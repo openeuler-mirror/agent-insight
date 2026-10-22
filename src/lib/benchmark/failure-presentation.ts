@@ -6,6 +6,22 @@ export interface BenchmarkFailurePresentation {
 }
 
 const FAILURE_META: Record<string, { label: string; message: string }> = {
+  MODEL_CONFIGURATION_INVALID: {
+    label: '模型配置解析失败',
+    message: '执行端无法解析所选模型配置，模型请求尚未发出。请查看具体原因并检查执行机器上的原生 Agent 配置。',
+  },
+  MODEL_CREDENTIAL_MISSING: {
+    label: '未取得模型凭据',
+    message: '执行端未取得所选模型凭据，模型请求尚未发出。请检查执行机器上的原生 Agent 凭据配置后重跑 Case。',
+  },
+  MODEL_CREDENTIAL_STORE_UNREADABLE: {
+    label: '原生凭据库读取失败',
+    message: '执行端无法读取或解密原生凭据库，请检查运行账号、文件权限及 Vault/SDF 环境。模型请求尚未发出。',
+  },
+  MODEL_CREDENTIAL_ADAPTER_UNAVAILABLE: {
+    label: '模型凭据适配未就绪',
+    message: '客户端凭据桥接缺失、版本不兼容或不支持当前认证方式，请更新客户端并查看具体原因；这不代表模型或 Key 无效。',
+  },
   XGOVERNOR_REJECTED: {
     label: '执行环境请求被拒绝',
     message: 'xGovernor 拒绝执行请求，请检查客户端安装与会话配置。',
@@ -71,11 +87,15 @@ export function benchmarkFailurePresentation(
   if (!normalizedCode && !normalizedMessage) return null;
 
   const meta = FAILURE_META[normalizedCode];
+  const legacyCredentialMessage = normalizedCode === 'MODEL_CONFIGURATION_INVALID'
+    && normalizedMessage === '所选模型凭据不可用，请完成原有 Agent 的模型配置或登录';
   return {
     code: normalizedCode,
     ...(originalCode && originalCode !== normalizedCode ? { originalCode } : {}),
     label: meta?.label || 'Agent 执行失败',
-    message: normalizedMessage && normalizedMessage !== normalizedCode
+    message: legacyCredentialMessage
+      ? '执行端未取得所选模型凭据。旧版记录未区分凭据缺失与凭据适配不支持，请更新客户端后重跑 Case 获取具体原因；这不代表模型或 Key 无效。'
+      : normalizedMessage && normalizedMessage !== normalizedCode
       ? normalizedMessage
       : meta?.message || 'Agent 执行未成功完成。',
   };

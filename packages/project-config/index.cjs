@@ -164,6 +164,42 @@ const legacySettings = {
 }
 const warned = new Set()
 
+function parseEvaluatorEnv(assignments) {
+  const overrides = {}
+  const passthrough = []
+  for (const assignment of assignments) {
+    if (typeof assignment !== 'string' || /[\r\n\0]/.test(assignment) || !/^[A-Za-z_][A-Za-z0-9_]*=/.test(assignment)) throw new Error('--evaluator-env 必须是单行 NAME=VALUE')
+    const separator = assignment.indexOf('=')
+    const name = assignment.slice(0, separator)
+    const raw = assignment.slice(separator + 1)
+    const field = Object.hasOwn(legacySettings.evaluator, name) ? legacySettings.evaluator[name] : null
+    if (!field) {
+      if (/^(SWE_BENCH_|SWEBENCH_|IMAGE_POOL_)/.test(name)) throw new Error(`--evaluator-env 不支持的配置变量：${name}`)
+      passthrough.push(assignment)
+      continue
+    }
+    const keys = field.split('.')
+    const rule = keys.reduce((schema, key) => schema[key], schemas.evaluator)
+    let value = raw.trim()
+    try {
+      if (typeof rule.defaultValue === 'boolean') {
+        if (!/^(true|false|1|0)$/i.test(value)) throw new Error()
+        value = /^(true|1)$/i.test(value)
+      } else if (typeof rule.defaultValue === 'number') {
+        if (!/^(0|[1-9]\d*)(\.\d+)?$/.test(value)) throw new Error()
+        value = Number(value)
+      } else if (name === 'SWE_BENCH_VERIFIED_MIRROR_REPOS') {
+        value = value === 'null' ? null : value.startsWith('[') ? JSON.parse(value) : value ? value.split(',').map(item => item.trim()) : []
+      } else if (rule.defaultValue === null && !value) value = null
+      if (!rule.valid(value)) throw new Error()
+    } catch { throw new Error(`--evaluator-env ${name} 的类型或取值不合法（配置字段 ${field}）`) }
+    let target = overrides
+    for (const key of keys.slice(0, -1)) target = target[key] ||= {}
+    target[keys.at(-1)] = value
+  }
+  return { overrides, passthrough }
+}
+
 function warnLegacy(scope, env = process.env, warn = console.warn) {
   for (const [name, field] of Object.entries(legacySettings[scope])) {
     const key = `${scope}:${name}`
@@ -233,6 +269,11 @@ function loadProjectConfig(scope, options = {}) {
       apply(config, schemas[scope], values === undefined ? {} : values, originPath)
     }
   }
+  if (options.deploymentOverrides) {
+    if (scope !== 'evaluator') throw new Error('显式部署覆盖仅适用于 evaluator 配置')
+    const directory = options.pathBaseDir || options.configDir || env.AGENT_INSIGHT_CONFIG_DIR || path.join(options.root || env.AGENT_INSIGHT_PACKAGE_ROOT || path.resolve(__dirname, '../..'), 'config', 'benchmark')
+    apply(config, schemas.evaluator, options.deploymentOverrides, path.join(directory, '--evaluator-env'))
+  }
   if (scope === 'evaluator') {
     const images = config.benchmarks['swe-bench'].images
     if (images.source === 'epoch' && (!images.allowNonOfficial || images.arch === 'x86_64')) {
@@ -252,13 +293,20 @@ function loadProjectConfig(scope, options = {}) {
   return config
 }
 
-module.exports = { loadProjectConfig, warnLegacy, legacySettings }
+module.exports = { loadProjectConfig, parseEvaluatorEnv, warnLegacy, legacySettings }
 
 if (require.main === module) {
   try {
-    const config = loadProjectConfig(process.argv[2], { configDir: process.argv[3], pathBaseDir: process.argv[4] })
+    const explicitEnv = process.argv[5] === '--deployment' && process.argv[6] === '--env-overrides'
+    const input = explicitEnv ? fs.readFileSync(0, 'utf8') : ''
+    const parsed = parseEvaluatorEnv(input ? input.replace(/\n$/, '').split('\n') : [])
+    const config = loadProjectConfig(process.argv[2], { configDir: process.argv[3], pathBaseDir: process.argv[4], ...(explicitEnv ? { deploymentOverrides: parsed.overrides } : {}) })
     process.stdout.write(JSON.stringify(config))
     if (process.argv[5] === '--deployment') process.stdout.write(`\n${config.imagePool.enabled}\n${config.imagePool.macDiskPath || ''}\n`)
+    if (explicitEnv) {
+      if (parsed.passthrough.length) process.stdout.write(`${parsed.passthrough.join('\n')}\n`)
+      console.error(`Evaluator 生效配置：maxConcurrency=${config.maxConcurrency}，imagePool.enabled=${config.imagePool.enabled}，imagePool.prefetchEnabled=${config.imagePool.prefetchEnabled}，imagePool.maxPulls=${config.imagePool.maxPulls}`)
+    }
   }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { createRequire } from 'node:module'
+import { writeXiaooCredentialBridge } from './helpers/xiaoo-credential-bridge'
 const require = createRequire(import.meta.url)
 const { installSelectedBackend, readSetup, COMPATIBLE_REVISION } = require('../services/executor/src/xgovernor/setup.cjs')
 const { resolveNative, resolveModel, resolvePi, resolveXiaoo } = require('../services/executor/src/xgovernor/model-resolver.cjs')
@@ -147,15 +148,17 @@ test('toolchain bootstrap keeps Rust in managed directory and limits build paral
   assert.equal(calls.some(call => /kill|systemctl/.test(call.file)), false)
 })
 
-test('xiaoO credential resolution parses actual TOML in a subprocess and keeps parser errors secret', async t => {
+test('xiaoO credential resolution consumes native bridge results and keeps parser errors secret', async t => {
   const f = fixture(t)
   const file = path.join(f.home, 'config.toml')
   fs.writeFileSync(file, '[llm]\nprovider = "custom"\nmodel = "default"\napi_base = "https://example.com/v1" # original endpoint\napi_key_env = "EXISTING_MODEL_KEY"\n')
   const env = { ...process.env, HOME: f.home, AGENT_INSIGHT_HOME: f.home, XIAOO_CONFIG: file, EXISTING_MODEL_KEY: 'test-key' }
-  const resolved = await resolveXiaoo('custom/from-experiment', env)
+  const credentialExecutable = writeXiaooCredentialBridge(f.home, { provider: 'custom', model: 'default', api_base: 'https://example.com/v1', api_key_env: 'EXISTING_MODEL_KEY' })
+  const resolved = await resolveXiaoo('custom/from-experiment', env, undefined, { credentialExecutable })
   assert.equal(resolved.model.model, 'from-experiment')
   assert.equal(resolved.model.apiBase, 'https://example.com/v1')
   assert.equal(resolved.credential, 'test-key')
   fs.writeFileSync(file, '[llm]\nprovider = "sensitive-unclosed-value\n')
-  await assert.rejects(resolveXiaoo('custom/from-experiment', env), (cause: Error) => !cause.message.includes('sensitive-unclosed-value') && cause.message.includes('TOML'))
+  writeXiaooCredentialBridge(f.home, {}, { schemaVersion: 1, error: 'MODEL_CONFIG_INVALID', message: 'sensitive-unclosed-value' })
+  await assert.rejects(resolveXiaoo('custom/from-experiment', env, undefined, { credentialExecutable }), (cause: Error) => !cause.message.includes('sensitive-unclosed-value') && cause.message.includes('config.toml'))
 })

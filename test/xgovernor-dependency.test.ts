@@ -61,6 +61,10 @@ async function fixture(t: TestContext) {
   const commands: Array<{ file: string; args: string[]; cwd: string; targetDirectory: string }> = []
   const manager = new DependencyManager({
     root: path.join(root, 'installed'), target, log() {},
+    async buildNativeCredentials(source: string) {
+      write(path.join(source, 'target/release/insight-xiaoo-credentials'), `#!${process.execPath}\n`, true)
+      return { version: 1, source: 'fixture-native-source' }
+    },
     async command(file: string, args: string[], options: any) {
       commands.push({ file, args, cwd: options.cwd, targetDirectory: options.env.CARGO_TARGET_DIR })
       if (file === 'git') {
@@ -96,7 +100,7 @@ test('managed dependency installs official HEAD, keeps source/locked components,
   const initial = await f.manager.update()
   assert.equal(initial.revision, f.first)
   assert.equal(initial.requestedVersion, 'HEAD')
-  assert.deepEqual(initial.components, { pi: '0.84.2', extension: '0.1.0' })
+  assert.deepEqual(initial.components, { pi: '0.84.2', extension: '0.1.0', xiaooCredentials: { version: 1, source: 'fixture-native-source' } })
   const one = f.manager.status()
   assert.equal(one.installed, true)
   assert.ok(fs.existsSync(path.join(one.directory, 'source/.git')))
@@ -209,6 +213,24 @@ test('relocated releases fail readiness validation instead of using stale compil
   fs.renameSync(f.manager.root, relocated)
   const state = readState(relocated)
   assert.throws(() => readRelease(relocated, state.current, target), /目录已移动/)
+})
+
+test('missing native credential bridge rebuilds the same upstream revision and bridge tampering invalidates its digest', async t => {
+  const f = await fixture(t)
+  await f.manager.update('v1')
+  const before = f.manager.status()
+  const file = path.join(before.directory, 'installation.json')
+  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
+  delete manifest.components.xiaooCredentials
+  fs.writeFileSync(file, JSON.stringify(manifest))
+  assert.throws(() => f.manager.status(), /原生凭据桥接.*重新执行客户端安装/)
+  assert.equal((await f.manager.update('v1')).changed, true)
+  const current = f.manager.status()
+  assert.notEqual(current.directory, before.directory)
+  assert.equal(current.components.xiaooCredentials.version, 1)
+  assert.ok(fs.existsSync(before.directory))
+  fs.appendFileSync(path.join(current.directory, current.artifacts.xiaooCredentials), '\n// tamper')
+  assert.throws(() => f.manager.status(), /摘要不一致/)
 })
 
 test('parallel updates are refused; corrupt bundles and architecture mismatches never become ready', async t => {

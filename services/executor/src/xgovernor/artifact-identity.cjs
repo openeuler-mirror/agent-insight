@@ -62,6 +62,7 @@ function artifactIdentity(config) {
       inspect(`${platform}/extension`, runtime.extensionDirectory)
     }
     if (runtime.traceExporter) inspect(`${platform}/trace-exporter`, runtime.traceExporter)
+    if (runtime.credentialExecutable) inspect(`${platform}/credentials`, runtime.credentialExecutable)
   }
   return { digest: `sha256:${createHash('sha256').update(JSON.stringify(files)).digest('hex')}`, reasons }
 }

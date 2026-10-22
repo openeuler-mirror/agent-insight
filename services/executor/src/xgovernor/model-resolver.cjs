@@ -11,6 +11,8 @@ const { readSetup } = require('./setup.cjs')
 const { toolchainEnvironment } = require('./toolchain.cjs')
 const { collectorEnvironment } = require('./credentials.cjs')
 const { error } = require('./client.cjs')
+const { readNativeCredentials } = require('./xiaoo-credentials.cjs')
+const CREDENTIAL_CODES = new Set(['MODEL_CONFIGURATION_INVALID', 'MODEL_CREDENTIAL_MISSING', 'MODEL_CREDENTIAL_STORE_UNREADABLE', 'MODEL_CREDENTIAL_ADAPTER_UNAVAILABLE'])
 const APIS = ['openai-completions', 'openai-responses', 'anthropic-messages']
 const MODEL_KEY = 'AGENT_INSIGHT_CASE_MODEL_KEY'
 function invalid(message) { return error('MODEL_CONFIGURATION_INVALID', message) }
@@ -39,7 +41,7 @@ function reasoningEffort(value) {
   if (!effort) throw invalid('xiaoO reasoning_effort 仅支持 off、high、max（及其原生别名）')
   return effort
 }
-function validateResolved(model, credential) {
+function validateResolved(model, credential, agent = 'Agent') {
   if (!model?.provider || !model?.model) throw invalid('请选择模型或配置 Agent 的默认模型')
   if (model.api && !APIS.includes(model.api)) throw invalid('所选模型的 API 协议尚不支持 xGovernor 执行')
   if (model.apiBase) {
@@ -50,7 +52,7 @@ function validateResolved(model, credential) {
   const caps = capabilities(model.capabilities)
   const effort = reasoningEffort(model.reasoningEffort)
   if (caps?.reasoning === false && effort && effort !== 'off') throw invalid('模型不支持推理，不能启用 reasoning_effort')
-  if (typeof credential !== 'string' || !credential.trim()) throw invalid('所选模型凭据不可用，请完成原有 Agent 的模型配置或登录')
+  if (typeof credential !== 'string' || !credential.trim()) throw error('MODEL_CREDENTIAL_MISSING', `${agent} 未提供所选模型的非空凭据，请检查执行机器上的原生模型配置；模型请求尚未发出`)
   return { model: { provider: model.provider, model: model.model, ...(model.api ? { api: model.api } : {}), ...(model.apiBase ? { apiBase: model.apiBase } : {}),
     ...(caps ? { capabilities: caps } : {}), ...(effort ? { reasoningEffort: effort } : {}), apiKeyEnv: MODEL_KEY }, credential }
 }
@@ -70,7 +72,7 @@ async function resolvePi(modelId, runtime, env, loadSdk) {
   if (native.isUsingOAuth(provider) || native.isUsingSubscription(provider)) throw invalid('该 Pi 模型使用 OAuth/订阅认证，当前 xGovernor 适配暂不支持；请使用已有的 API Key 模型')
   const registry = new sdk.ModelRegistry(native)
   const auth = await registry.getApiKeyAndHeaders(model)
-  if (!auth.ok) throw invalid('Pi 无法解析所选模型凭据')
+  if (!auth.ok) throw error('MODEL_CREDENTIAL_MISSING', 'Pi 原生 SDK 未能取得所选模型凭据，请检查执行机器上的 Pi auth.json、models.json 或其凭据引用；模型请求尚未发出')
   // Pi 桥接从内置目录重建模型，只能保留与该目录一致的兼容配置。
   const catalog = await sdk.ModelRuntime.create({ modelsPath: null, refreshOnCreate: false, allowModelNetwork: false })
   const builtin = catalog.getModel(provider, name)
@@ -85,26 +87,13 @@ async function resolvePi(modelId, runtime, env, loadSdk) {
   if (custom.length) throw invalid(`所选 Pi 模型包含当前 xGovernor 桥接无法保留的自定义配置：${custom.join('、')}`)
   return validateResolved({ provider, model: name, api: model.api, apiBase: auth.baseUrl || model.baseUrl,
     capabilities: { reasoning: model.reasoning, input: model.input, context_window: model.contextWindow, max_tokens: model.maxTokens },
-  }, auth.apiKey)
+  }, auth.apiKey, 'Pi')
 }
-async function readXiaoo(file, env) {
-  const { execFile } = require('node:child_process')
-  const script = 'import json,sys\ntry:\n import tomllib\nexcept ImportError:\n import tomli as tomllib\nwith open(sys.argv[1],"rb") as f: print(json.dumps(tomllib.load(f).get("llm",{})))'
-  const home = env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
-  const client = json(path.join(home, 'client/config.json'))
-  const candidates = [...new Set([client.fiPython, 'python3.13', 'python3.12', 'python3.11', 'python3'].filter(Boolean))]
-  for (const python of candidates) {
-    try {
-      const text = await new Promise((resolve, reject) => execFile(python, ['-c', script, file], { env, timeout: 5000, maxBuffer: 65536 }, (cause, stdout) => cause ? reject(cause) : resolve(stdout)))
-      return JSON.parse(text)
-    } catch {}
-  }
-  throw invalid('无法读取 xiaoO config.toml；请确认 TOML 格式及 Python 3.11+（或 tomli）可用')
-}
-async function resolveXiaoo(modelId, env, read = readXiaoo) {
+async function resolveXiaoo(modelId, env, read, runtime = {}) {
   const home = env.AGENT_INSIGHT_USER_HOME || env.HOME || os.homedir()
   const file = (env.XIAOO_CONFIG || path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'xiaoo/config.toml')).replace(/^~(?=\/)/, home)
-  const llm = await read(file, env)
+  const native = read ? null : await readNativeCredentials(file, modelId, runtime, env)
+  const llm = native ? native.llm : await read(file, env)
   const selected = modelId || (llm.provider && llm.model ? `${llm.provider}/${llm.model}` : '')
   const split = selected.indexOf('/')
   if (split < 1 || selected.slice(0, split) !== llm.provider) throw invalid('实验所选 provider 与 xiaoO 原有配置不一致，请先配置该 provider')
@@ -113,8 +102,8 @@ async function resolveXiaoo(modelId, env, read = readXiaoo) {
     if (llm[key] === true) throw invalid(`xiaoO ${key}=true 当前 xGovernor 契约尚不支持`)
   }
   return validateResolved({ provider: llm.provider, model: selected.slice(split + 1), ...(llm.api_base ? { apiBase: llm.api_base } : {}), ...(llm.api ? { api: llm.api } : {}),
-    capabilities: { max_tokens: llm.max_tokens }, reasoningEffort: llm.reasoning_effort,
-  }, env[llm.api_key_env])
+    capabilities: { max_tokens: llm.max_tokens, context_window: llm.context_window }, reasoningEffort: llm.reasoning_effort,
+  }, native ? native.credential : env[llm.api_key_env], 'xiaoo')
 }
 async function resolveNative(input, options = {}) {
   const env = collectorEnvironment(options.env || process.env)
@@ -123,7 +112,7 @@ async function resolveNative(input, options = {}) {
     return validateResolved(model, env[apiKeyEnv])
   }
   if (input.runtime.kind === 'pi') return resolvePi(input.modelId, input.runtime, env, options.loadSdk)
-  if (input.runtime.kind === 'xiaoo') return resolveXiaoo(input.modelId, env, options.readXiaoo)
+  if (input.runtime.kind === 'xiaoo') return resolveXiaoo(input.modelId, env, options.readXiaoo, input.runtime)
   throw invalid('此 Runtime 尚未实现原生模型凭据适配')
 }
 async function resolveModel(task, runtime, local, options = {}) {
@@ -153,7 +142,7 @@ async function resolveModel(task, runtime, local, options = {}) {
       if (overflow) return reject(invalid('Agent 凭据解析输出超限'))
       let result
       try { result = JSON.parse(output) } catch { return reject(invalid('Agent 模型解析失败或超时，请检查原有配置及登录环境')) }
-      if (code || result.error) return reject(invalid(result.error || 'Agent 模型解析失败'))
+      if (code || result.error) return reject(error(CREDENTIAL_CODES.has(result.code) ? result.code : 'MODEL_CONFIGURATION_INVALID', result.error || 'Agent 模型解析失败'))
       try { resolve(validateResolved(result.model, result.credential)) } catch (cause) { reject(cause) }
     })
     child.stdin.end(JSON.stringify(input))
@@ -170,7 +159,7 @@ if (require.main === module) {
       if (request.context?.home) process.env.AGENT_INSIGHT_USER_HOME = request.context.home
       fs.writeSync(3, JSON.stringify(await resolveNative(request)))
     } catch (cause) {
-      fs.writeSync(3, JSON.stringify({ error: cause.code === 'MODEL_CONFIGURATION_INVALID' ? cause.message : 'Agent 模型或凭据解析失败，请检查原有配置' }))
+      fs.writeSync(3, JSON.stringify({ code: CREDENTIAL_CODES.has(cause.code) ? cause.code : 'MODEL_CONFIGURATION_INVALID', error: CREDENTIAL_CODES.has(cause.code) ? cause.message : 'Agent 模型或凭据解析失败，请检查原有配置' }))
       process.exitCode = 1
     }
   })

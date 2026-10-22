@@ -399,6 +399,10 @@ curl 安装所选 Pi/xiaoO 时，通过 `install-ras-client.js` 自动调用 `xg
 
 `model-resolver.cjs` 属于执行端 Agent 适配层，按实验所选模型解析原有配置和凭据；Backend 仅将解析结果映射为 xGovernor 会话参数。私有子进程管道传递密钥，只有选中模型的凭据进入 case 环境，不写入 lease 或任务；Trace 认证复用客户端既有采集配置。环境就绪与模型认证独立，模型缺失在 prepare 阶段给出错误。Pi 兼容配置对照同版本 SDK 的纯内置目录，只拒绝无法由桥接保留的差异；已解析模型能力通过 `llm.capabilities` 传给会话。xiaoO 原配置的输出 Token 上限和推理强度分别映射到会话 capabilities 和每轮 `reasoning_effort`；已准备句柄持久保存这些非敏感设置，恢复时继续使用本次值。当前无法承接的启用 KV cache 配置明确拒绝。
 
+xiaoo 凭据由安装时构建的 `insight-xiaoo-credentials` 解析：从 `cargo metadata --locked` 定位 xGovernor 实际锁定的 xiaoO 源码，直接编译其 `SecretProvider`，链接同一源码的 `vault` 与 `llm-client`，不在 JS 中复制解密算法。桥接读取原有 config.toml，默认采用 active_profile，实验显式模型优先匹配启用的 provider/model 配置；凭据引用采用显式 api_key_env 或原生 provider 默认值。按原生顺序读取同目录 llm_secrets.json 的 api_keys、tokens，再回退环境变量，使用原生白盒/SDF 实现；损坏库不会悄悄回退到另一 Key，也不修改原配置或凭据库。桥接用 stdin 接收配置路径和模型选择，fd3 返回本次模型与凭据，stdout/stderr 丢弃；不发送模型请求、不启动原生服务。新增桥接制品进入安装清单和 artifactDigest，缺失或版本不兼容需重跑 curl 自动重建。手动安装需在 worker 同目录提供该二进制。
+
+凭据诊断区分 `MODEL_CREDENTIAL_MISSING`、`MODEL_CREDENTIAL_STORE_UNREADABLE`、`MODEL_CREDENTIAL_ADAPTER_UNAVAILABLE`；配置错误仍用 `MODEL_CONFIGURATION_INVALID`。跨登录 Shell 的私有解析进程保留这些错误码，公开消息仅采用固定原因和合法的凭据引用名，不回传原始解析/解密异常。Case 详情和列表显示具体原因及处理方式，明确本地失败尚未发出模型请求。原生允许免 Key 而当前 xGovernor 会话协议要求非空凭据的模型，明确报适配限制，不注入虚构 Key。Pi 保留 SDK ModelRuntime/ModelRegistry 解析及 OAuth/订阅限制。MCTS 仍使用自身已配置的服务环境与 XGOVERNOR_LLM_KEY_ENV 引用，不接入这个凭据读取过程。
+
 升级仅切换后续任务的版本指针，执行句柄固定本次 Runtime/模型凭据引用和组件路径，运行与 Trace 导出不依赖新的 current；旧版本目录保留供在途任务及恢复使用。任务受理前仍核对冻结摘要，不自动迁移旧实验。安装 smoke 只检查源码布局、扩展类型和 server 基础协议，实际模型、工具隔离、完整 Trace 仍需执行链路验证。安装步骤见[部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
 
 SWE-bench 执行端在 `services/executor/src/benchmarks/swe-bench-images.cjs` 独立维护镜像命名、架构选择、SWR 映射、代理及官方回退；Evaluator 保留 `benchmarks/swe-bench/evaluator/` 的原有实现。两端不互相导入、不依赖共用镜像模块，也不使用另一端的实现生成测试预期，可分别演进。执行端通过 `execution-images.cjs` 分派到自身 Benchmark 镜像适配器，再注入本机 Docker 调用。xGovernor 后端只使用准备结果，不内置 SWE-bench 仓库规则；替换后端仍可调用同一入口。两端分别维护各自的 `benchmarks.swe-bench.images` 配置定义并读取 `executor` 与 `evaluator` 配置，不自动同步。当前默认均支持本地缓存 → SWR → 代理 → 官方仓库，内置 SWR Verified 镜像仅适用于官方 x86_64。执行端模块随现有 `services/executor/src` 的客户端 bundle/npm/standalone 分发，不向 Evaluator 增加执行端依赖。
@@ -467,6 +471,8 @@ type NormalizedBenchmarkResult = {
 ## 9. Evaluator 开发规范
 
 部署入口 `scripts/evaluator.sh start` 只启动通用 Controller，不接受 Benchmark 选择、Runtime 预热或应用层鉴权参数。Controller 收到任务后，才根据 `benchmark.key + evaluator.key` 从 Catalog 解析并准备对应 Runtime；相同内容摘要的镜像直接复用。Agent Insight 与 Controller 之间不发送或校验 Bearer Token，部署者必须使用白名单、安全组或防火墙限制双向访问。这里的服务互访边界与 `evaluator.yaml` 的 `network` 不同：后者只约束实例 Runtime 执行评测时的容器网络策略。
+
+`--evaluator-env` 的已知业务变量由 `packages/project-config` 的 `parseEvaluatorEnv()` 精确映射到配置字段，再覆盖 YAML 并统一校验，生成传给 Controller 与 Runtime 的同一份 JSON 快照。例如 `EVALUATOR_MAX_CONCURRENCY=4` 对应 `maxConcurrency: 4`；普通进程环境不恢复隐式覆盖。启动脚本通过 stdin 传入参数，校验器返回配置、挂载设置和非业务透传变量；业务变量不再原样注入 Runtime，避免两套配置互相覆盖。未知 SWE-bench/镜像池配置变量、非法值和多行赋值明确报错，错误不回显值。合法非业务变量保留原透传，端口、配置快照及内部磁盘参数仍由部署脚本管理。
 
 ### 9.1 `evaluator.yaml`
 
@@ -842,7 +848,7 @@ Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构�
 
 内核题复用同一个 ZSoft Evaluator Runtime、任务协议和结果归一化。接入包将 `runner_image` 交给通用镜像池；`.task-state/<task-id>/{vuln,fix}/artifacts/` 中的 `bzImage`、metadata 和模块作为独立的冻结文件资产，按流式 SHA-256 校验，不作为 Docker 引用。资产打包支持合并同官方 revision、同框架摘要的冻结快照，评测机始终不访问数据库。
 
-ZSoft 平台配置为 `benchmarks.zsoft-l1.dataset.{autoImport,source,revision}`，`autoImport` 默认 `true`，其余默认 `null` 使用接入包固定的官方来源与版本。`start.sh` 在数据库同步后顺序调用 SWE-bench 和 ZSoft 的 bootstrap；共用日志与非阻塞失败处理，分别按 YAML 开关跳过或调用准备入口。ZSoft 调用 `ensure-dataset.ts --benchmark zsoft-l1`，先复用已安装数据集；失败只警告，日志为 `<AGENT_INSIGHT_HOME>/logs/zsoft-l1-bootstrap.log`，下次启动重试。这里的非阻塞失败指不阻止后续启动，准备本身仍同步等待。关闭开关不影响管理员手动调用或显式刷新。评测配置为 `benchmarks.zsoft-l1.assetsDir`（默认 `null`）和 `kernelAccel`（默认 `tcg`，可选 `kvm`）；旧四个 ZSoft 业务变量仅提示迁移、不再生效。Controller 向 Runtime 传递校验后的 `AGENT_INSIGHT_EVALUATOR_CONFIG_JSON` 快照，Python 从该快照读取加速模式，不直接解析 YAML 或读取旧用户变量。MCTS 的 `ZSOFT_TASKS_DIR` 不属于平台业务配置，保持原契约。
+ZSoft 平台配置为 `benchmarks.zsoft-l1.dataset.{autoImport,source,revision}`，`autoImport` 默认 `true`，其余默认 `null` 使用接入包固定的官方来源与版本。`start.sh` 在数据库同步后顺序调用 SWE-bench 和 ZSoft 的 bootstrap；共用日志与非阻塞失败处理，分别按 YAML 开关跳过或调用准备入口。ZSoft 调用 `ensure-dataset.ts --benchmark zsoft-l1`，先复用已安装数据集；失败只警告，日志为 `<AGENT_INSIGHT_HOME>/logs/zsoft-l1-bootstrap.log`，下次启动重试。这里的非阻塞失败指不阻止后续启动，准备本身仍同步等待。关闭开关不影响管理员手动调用或显式刷新。评测配置为 `benchmarks.zsoft-l1.assetsDir`（默认 `null`）和 `kernelAccel`（默认 `tcg`，可选 `kvm`）；旧四个 ZSoft 业务变量在普通进程环境中仅提示迁移；显式 `--evaluator-env ZSOFT_L1_ASSETS_DIR=...` / `ZSOFT_KERNEL_ACCEL=...` 可覆盖本次评测配置。Controller 向 Runtime 传递校验后的 `AGENT_INSIGHT_EVALUATOR_CONFIG_JSON` 快照，Python 从该快照读取加速模式，不直接解析 YAML 或读取旧用户变量。MCTS 的 `ZSOFT_TASKS_DIR` 不属于平台业务配置，保持原契约。
 
 平台 Judge 所在 Runtime 不挂 KVM 设备，官方 Judge 的配置阶段仍通过内部环境注入 TCG；受控 Compose 代理向实际 runner 设置 YAML 选定的 `KERNEL_ACCEL`，KVM 模式只开放 `/dev/kvm:rw`。实际评测在已准备的 runner 镜像中检查宿主机 KVM API，失败返回基础设施错误。资源预算按两服务分摊，并在启动前校验每版内核声明的 CPU、内存及 512 MiB 额外内存；提交编译失败保持 `submission_invalid`，超时、取消和容器/网络清理复用已有路径。doctor 校验资产、轨道和加速配置，不在冷缓存时拉镜像或启动 QEMU；KVM 可用性在实际评测前检查。
 

@@ -9,6 +9,7 @@ const { randomBytes } = require('node:crypto')
 const { once } = require('node:events')
 const { installationRoot, readState, readRelease, repository, BUILD_LAYOUT_VERSION } = require('./installation.cjs')
 const { artifactIdentity } = require('./artifact-identity.cjs')
+const { buildNativeCredentials, BINARY } = require('./native-credentials-build.cjs')
 
 async function atomicJson(file, value) {
   const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`
@@ -31,7 +32,7 @@ async function command(file, args, options = {}) {
     const timer = setTimeout(abort, options.timeoutMs || 45 * 60 * 1000)
     options.signal?.addEventListener('abort', abort, { once: true })
     const dispose = () => { clearTimeout(timer); options.signal?.removeEventListener('abort', abort) }
-    child.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-1024 * 1024); if (options.verbose) process.stderr.write(chunk) })
+    child.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-(options.maxOutputBytes || 1024 * 1024)); if (options.verbose) process.stderr.write(chunk) })
     child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-1024 * 1024); if (options.verbose) process.stderr.write(chunk) })
     child.once('error', cause => { dispose(); reject(new Error(`无法执行 ${file}：${cause.message}`)) })
     child.once('close', code => {
@@ -138,6 +139,7 @@ class DependencyManager {
     this.env = options.env || process.env
     this.signal = options.signal
     this.log = options.log || (message => console.log(`[xgovernor] ${message}`))
+    this.buildNativeCredentials = options.buildNativeCredentials || buildNativeCredentials
   }
   async locked(action) {
     await fsp.mkdir(this.root, { recursive: true, mode: 0o700 })
@@ -160,8 +162,8 @@ class DependencyManager {
       let activated = false
       await fsp.mkdir(path.join(stage, 'source'), { recursive: true, mode: 0o700 })
       let source = path.join(stage, 'source')
-      const run = (file, args, cwd = source, verbose = false) => this.run(file, args, {
-        cwd, verbose, signal: this.signal, timeoutMs: file === 'git' ? 180000 : undefined,
+      const run = (file, args, cwd = source, verbose = false, maxOutputBytes) => this.run(file, args, {
+        cwd, verbose, maxOutputBytes, signal: this.signal, timeoutMs: file === 'git' ? 180000 : undefined,
         env: { ...this.env, GIT_TERMINAL_PROMPT: '0', CARGO_TARGET_DIR: path.join(source, 'target'), CARGO_BUILD_JOBS: '2' },
       })
       try {
@@ -189,6 +191,8 @@ class DependencyManager {
         source = await fsp.realpath(path.join(release, 'source'))
         this.log(`构建 ${revision} 的 server、Pi worker；首次构建可能较慢`)
         await run('cargo', ['build', '--locked', '--release', '-p', 'xgovernor-server', '-p', 'xgovernor-runtime-pi', '--bin', 'xgovernor-server', '--bin', 'pi-worker'], source, true)
+        this.log('构建 xiaoO 原生凭据桥接；复用锁定源码中的凭据库与 provider 解析器')
+        components.xiaooCredentials = await this.buildNativeCredentials(source, run)
         this.log(`安装上游锁定的 Pi ${components.pi} 及桥接扩展依赖`)
         const extension = path.join(source, 'apps/runtime-pi/extension')
         await run('npm', ['ci', '--include=dev', '--no-audit', '--no-fund'], extension, true)
@@ -198,10 +202,11 @@ class DependencyManager {
         const artifacts = {
           server: 'source/target/release/xgovernor-server', piWorker: 'source/target/release/pi-worker',
           pi: 'source/apps/runtime-pi/extension/node_modules/.bin/pi', extension: 'source/apps/runtime-pi/extension',
+          xiaooCredentials: `source/target/release/${BINARY}`,
         }
         const config = { serverExecutable: path.join(release, artifacts.server), runtimes: {
           'pi-agent': { kind: 'pi', workerExecutable: path.join(release, artifacts.piWorker), executable: path.join(release, artifacts.pi), extensionDirectory: path.join(release, artifacts.extension) },
-          xiaoo: { kind: 'xiaoo', workerExecutable: path.join(release, artifacts.server) },
+          xiaoo: { kind: 'xiaoo', workerExecutable: path.join(release, artifacts.server), credentialExecutable: path.join(release, artifacts.xiaooCredentials) },
         } }
         const identity = artifactIdentity(config)
         if (identity.reasons.length) throw new Error(identity.reasons.join('；'))

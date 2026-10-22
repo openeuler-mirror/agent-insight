@@ -7,6 +7,10 @@ import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice
 import { benchmarkFailurePresentation } from '@/lib/benchmark/failure-presentation';
 
 const EXPECTED_LABELS = {
+  MODEL_CONFIGURATION_INVALID: '模型配置解析失败',
+  MODEL_CREDENTIAL_MISSING: '未取得模型凭据',
+  MODEL_CREDENTIAL_STORE_UNREADABLE: '原生凭据库读取失败',
+  MODEL_CREDENTIAL_ADAPTER_UNAVAILABLE: '模型凭据适配未就绪',
   XGOVERNOR_REJECTED: '执行环境请求被拒绝',
   ENOSPC: '执行端存储空间不足',
   EDQUOT: '执行端存储配额不足',
@@ -29,6 +33,21 @@ test('Benchmark Agent failure codes have explicit Chinese labels', () => {
     assert.ok(failure?.message);
   }
 });
+
+test('credential failures show actionable details in both Case notice and experiment list', () => {
+  for (const code of ['MODEL_CREDENTIAL_MISSING', 'MODEL_CREDENTIAL_STORE_UNREADABLE', 'MODEL_CREDENTIAL_ADAPTER_UNAVAILABLE', 'MODEL_CONFIGURATION_INVALID']) {
+    const message = 'xiaoo 原生凭据解析失败，模型请求尚未发出。请更新客户端后重跑 Case。'
+    for (const compact of [true, false]) {
+      const html = renderToStaticMarkup(createElement(BenchmarkFailureNotice, { code, message, compact }))
+      assert.match(html, />xiaoo 原生凭据解析失败/)
+      assert.match(html, /尚未发出/)
+      assert.match(html, /重跑 Case/)
+    }
+  }
+  const legacy = benchmarkFailurePresentation('MODEL_CONFIGURATION_INVALID', '所选模型凭据不可用，请完成原有 Agent 的模型配置或登录')
+  assert.match(legacy!.message, /旧版记录未区分.*重跑 Case/)
+  assert.equal(legacy!.message.includes('登录'), false)
+})
 
 test('legacy execution storage failures are reclassified for display without losing their original code', () => {
   const message = 'pi-agent 会话报告模型错误: Pi model: ENOSPC: no space left on device, write';

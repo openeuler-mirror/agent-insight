@@ -88,6 +88,8 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 普通实验会等待本批 Trace 生成和重试完成，再评估成功的 Case；普通评估器继续使用共享的 4 条结果行并发。Benchmark 的执行与评测分别调度，执行结束即可释放执行名额，后续 Case 可继续运行；评测容量由管理员设置。评测服务默认会在 Agent 执行期间提前准备镜像，空间不足时仍可能等待镜像或镜像空间；镜像仓库连接临时中断时会等待重试。页面会区分等待配额、等待镜像、等待镜像空间与评测中。执行中或尚未完成评测的 Benchmark Case 数达到平台上限时，暂停启动新的 Case；已有任务继续运行，腾出名额后恢复。
 
+Benchmark 官方评测并发独立于 Agent 执行并发，默认是 1。管理员可沿用原启动命令中的 `--evaluator-env EVALUATOR_MAX_CONCURRENCY=4` 将本次启动容量设为 4，无需修改命令格式或创建 YAML；启动日志与 `/health` 会显示生效值。已有 YAML 配置会被该显式参数覆盖，但文件本身不改写。镜像池和预取开关也可通过显式启动参数设置，详见[评测服务部署](../../developer-guide/benchmark/service-deployment-guide.md#5-安装-evaluator)。
+
 每个 Case 的 Agent 执行上限默认是 10 分钟，可在实验向导中配置为 30～3600 秒；达到上限仍未结束时，本次 Trace 生成按超时失败处理。该上限只约束 Agent 运行，不改变后续评估器各自的超时与重试规则。
 
 <p align="center">
@@ -160,7 +162,9 @@ retention:
 
 `days` 必须为正整数，修改后在下一轮清理检查生效。清理只涉及客户端的 `benchmark-runs/` 和对应 `xgovernor-runs/` 本地目录，不清理 Docker 镜像。xGovernor 安装版本在客户端执行空闲时清理：当前版本、上一版本和仍被未完成清理的 Case 引用的版本始终保留，其他版本超过同一保留期限后删除。旧记录缺少终态时间或上传确认时也会保留。
 
-模型沿用实验中的选择。Pi 从原有 `models.json`、`auth.json` 和登录环境解析；xiaoO 从原有 `config.toml` 的 `[llm]` 和其 `api_key_env` 解析。选择默认模型时使用 Agent 原有默认配置。新机器仍须完成一次原有 Agent 的模型配置；无需再配置 xGovernor 的模型 Key。Pi 内置模型的兼容参数正常沿用，模型的推理能力、输入类型、上下文和输出 Token 上限同步传入执行会话；只有与同版本内置目录不同、当前桥接无法保留的自定义 headers/兼容参数才报出具体字段。Pi OAuth/订阅认证仍不支持。xiaoO 沿用 `[llm].max_tokens`，并将 `reasoning_effort` 传给每轮请求；当前支持 `off/high/max` 及原生别名（例如 `xhigh` 对应 `max`），未配置时使用 Runtime 默认值。`kvcache_enabled` 和 `kvcache_debug_enabled` 未配置或为 `false` 可执行，显式设为 `true` 会提示当前 xGovernor 契约不支持，不会忽略配置后继续运行。Trace 上传复用 curl 安装保存的采集认证。
+模型沿用实验中的选择。Pi 从原有 `models.json`、`auth.json` 和登录环境解析；xiaoO 从原有 `config.toml` 的 `[llm]` / 启用的模型 Profile 解析，凭据沿用同目录加密库 `llm_secrets.json`（原生 `api_keys`、`tokens` 优先级）和环境变量；未显式指定 `api_key_env` 时使用原生 provider 的默认引用。不要求把已保存在 xiaoo 中的 Key 再导出到 shell。选择默认模型时使用 Agent 原有默认配置。新机器仍须完成一次原有 Agent 的模型配置；无需再配置 xGovernor 的模型 Key。Pi 内置模型的兼容参数正常沿用，模型的推理能力、输入类型、上下文和输出 Token 上限同步传入执行会话；只有与同版本内置目录不同、当前桥接无法保留的自定义 headers/兼容参数才报出具体字段。Pi OAuth/订阅认证仍不支持。xiaoO 沿用 `[llm].max_tokens`，并将 `reasoning_effort` 传给每轮请求；当前支持 `off/high/max` 及原生别名（例如 `xhigh` 对应 `max`），未配置时使用 Runtime 默认值。`kvcache_enabled` 和 `kvcache_debug_enabled` 未配置或为 `false` 可执行，显式设为 `true` 会提示当前 xGovernor 契约不支持，不会忽略配置后继续运行。Trace 上传复用 curl 安装保存的采集认证。
+
+凭据解析失败时，Case 详情和实验列表会分别提示“未取得模型凭据”“原生凭据库读取失败”或“模型凭据适配未就绪”，显示具体原因及处理方式。此时尚未向模型发请求，不代表 Key 无效或模型服务不可用。旧客户端缺少原生凭据桥接时，更新平台并重跑安装页生成的 curl 命令即可自动构建；无需手工配置 xGovernor Key。构建会更新执行环境摘要，请新建实验选择更新后的环境。原生免 Key 模型若受当前 xGovernor 桥接限制，会明确提示不支持该认证方式。
 
 MCTS 的 xGovernor 保持独立：不接管其进程、源码、配置或版本；原生执行端每个 Case 使用自己的动态端口、状态目录和 Docker 标签。两者共享机器资源，需合理控制并发。
 
