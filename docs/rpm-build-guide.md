@@ -1,15 +1,17 @@
 # Agent Insight 830 分支 RPM 构建指南
 
-本文用于在 `119.3.152.42` 上重复构建、验证和分发 Agent Insight `830` 分支的 RPM。
+本文用于在 openEuler 构建机上重复构建、验证和分发 Agent Insight `830` 分支的 RPM。
 
-构建基线：openEuler 24.03 LTS-SP2、`x86_64`、Node.js 20.18.2、npm 10.8.2。源码位于 `/home/ymt/agent-insight`，构建产物写入 `/mnt/sdc/ymt/agent-insight-rpm`。
+下文以示例账号 `builder`、源码目录 `/home/builder/agent-insight` 和构建目录 `/srv/agent-insight-rpm` 演示，请替换为自己的构建环境，并提前创建普通构建账号。
+
+构建基线：openEuler 24.03 LTS-SP2、`x86_64`、Node.js 20.18.2、npm 10.8.2。源码位于 `/home/builder/agent-insight`，构建产物写入 `/srv/agent-insight-rpm`。
 
 ## 1. 必须遵守的规则
 
 - 源码必须位于干净的 `830` 分支，构建前记录 commit。
 - 当前应用版本固定为 `0.7.0`；若 `package.json` 版本变化，必须同步修改 spec 和产物路径。
 - 每次源码 commit 变化都必须递增 `PACKAGE_RELEASE`，例如 `0.830.1` → `0.830.2`，不得用不同代码覆盖同一 NEVRA。
-- 使用普通用户 `ymt` 构建；`root` 只负责安装工具、授权目录和安装验证。
+- 使用普通用户 `builder` 构建；`root` 只负责安装工具、授权目录和安装验证。
 - 测试失败仅记录告警，不阻塞；`npm ci`、`npm run build`、standalone 准备和 RPM 阶段失败仍会阻塞。
 - RPM 内置官方 Node.js 20.18.2，目标服务器已有 Node.js 18 或 22 均不影响服务启动。
 - RPM 不包含密钥；模型 API Key 等配置只在目标服务器填写。
@@ -20,7 +22,7 @@
 以 `root` 登录：
 
 ```bash
-ssh root@119.3.152.42
+ssh root@build.example.com
 ```
 
 检查构建工具；版本已经正确时不要重复安装：
@@ -58,28 +60,28 @@ dnf downgrade -y \
 创建构建目录：
 
 ```bash
-install -d -o ymt -g ymt -m 0755 \
-  /mnt/sdc/ymt/agent-insight-rpm \
-  /mnt/sdc/ymt/agent-insight-rpm/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} \
-  /mnt/sdc/ymt/agent-insight-rpm/{npm-cache,tmp,build-data,release}
+install -d -o builder -g builder -m 0755 \
+  /srv/agent-insight-rpm \
+  /srv/agent-insight-rpm/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} \
+  /srv/agent-insight-rpm/{npm-cache,tmp,build-data,release}
 
-chown -R ymt:ymt /home/ymt/agent-insight
-df -h / /mnt/sdc
+chown -R builder:builder /home/builder/agent-insight
+df -h / /srv
 ```
 
 ## 3. 每次代码更新后构建
 
-进入 `ymt` 的 Bash 环境：
+进入 `builder` 的 Bash 环境：
 
 ```bash
-su --login --shell /bin/bash ymt
+su --login --shell /bin/bash builder
 
 export PATH=/usr/bin:/bin:/usr/sbin
-export RPM_TOPDIR=/mnt/sdc/ymt/agent-insight-rpm/rpmbuild
-export RPM_TMPDIR=/mnt/sdc/ymt/agent-insight-rpm/tmp
-export npm_config_cache=/mnt/sdc/ymt/agent-insight-rpm/npm-cache
-export TMPDIR=/mnt/sdc/ymt/agent-insight-rpm/tmp
-export AGENT_INSIGHT_HOME=/mnt/sdc/ymt/agent-insight-rpm/build-data
+export RPM_TOPDIR=/srv/agent-insight-rpm/rpmbuild
+export RPM_TMPDIR=/srv/agent-insight-rpm/tmp
+export npm_config_cache=/srv/agent-insight-rpm/npm-cache
+export TMPDIR=/srv/agent-insight-rpm/tmp
+export AGENT_INSIGHT_HOME=/srv/agent-insight-rpm/build-data
 ```
 
 确认 Node/npm：
@@ -97,7 +99,7 @@ node -p 'process.execPath'
 如果构建远端最新的 `origin/830`：
 
 ```bash
-cd /home/ymt/agent-insight
+cd /home/builder/agent-insight
 git remote -v
 git fetch origin 830
 git switch 830
@@ -127,7 +129,7 @@ printf 'SOURCE_COMMIT=%s\n' "$SOURCE_COMMIT"
 
 ```bash
 export PACKAGE_RELEASE=0.830.3
-export BUILD_LOG="/mnt/sdc/ymt/agent-insight-rpm/rpmbuild-${PACKAGE_RELEASE}.log"
+export BUILD_LOG="/srv/agent-insight-rpm/rpmbuild-${PACKAGE_RELEASE}.log"
 
 test ! -e "$RPM_TOPDIR/RPMS/x86_64/agent-insight-0.7.0-${PACKAGE_RELEASE}.x86_64.rpm"
 test ! -e "$RPM_TOPDIR/SRPMS/agent-insight-0.7.0-${PACKAGE_RELEASE}.src.rpm"
@@ -136,7 +138,7 @@ test ! -e "$RPM_TOPDIR/SRPMS/agent-insight-0.7.0-${PACKAGE_RELEASE}.src.rpm"
 ### 3.3 生成源码包和私有 Node 运行时
 
 ```bash
-cd /home/ymt/agent-insight
+cd /home/builder/agent-insight
 
 git archive \
   --format=tar.gz \
@@ -421,9 +423,9 @@ rpm -qlp "$RPM_FILE" | grep '/usr/lib/agent-insight/runtime/bin/node'
 rpm -qlp "$RPM_FILE" | grep -E 'schema-engine-debian-openssl-(1\.1|3\.0)\.x$'
 rpm -qlp "$RPM_FILE" | grep -E 'libquery_engine-debian-openssl-(1\.1|3\.0)\.x\.so\.node$'
 
-! rpm -qlp "$RPM_FILE" | grep -E '^(/mnt/sdc|/home/ymt|/root)(/|$)'
+! rpm -qlp "$RPM_FILE" | grep -E '^(/srv|/home/builder|/root)(/|$)'
 rpm -qpl --dump "$RPM_FILE" |
-  awk '$NF ~ /^\/(mnt\/sdc|home\/ymt|root)(\/|$)/ { print; bad=1 } END { exit bad }'
+  awk '$NF ~ /^\/(srv|home\/builder|root)(\/|$)/ { print; bad=1 } END { exit bad }'
 
 CHECK_DIR=$(mktemp -d "$RPM_TMPDIR/rpm-check.XXXXXX")
 cd "$CHECK_DIR"
@@ -437,11 +439,11 @@ rpm2cpio "$RPM_FILE" |
 ### 5.3 生成独立交付目录
 
 ```bash
-export RELEASE_DIR="/mnt/sdc/ymt/agent-insight-rpm/release/agent-insight-0.7.0-${PACKAGE_RELEASE}"
+export RELEASE_DIR="/srv/agent-insight-rpm/release/agent-insight-0.7.0-${PACKAGE_RELEASE}"
 test ! -e "$RELEASE_DIR"
-install -d -o ymt -g ymt "$RELEASE_DIR"
+install -d -o builder -g builder "$RELEASE_DIR"
 
-install -o ymt -g ymt -m 0644 \
+install -o builder -g builder -m 0644 \
   "$RPM_FILE" \
   "$SRPM_FILE" \
   "$RPM_TOPDIR/SPECS/agent-insight.spec" \
@@ -451,7 +453,7 @@ install -o ymt -g ymt -m 0644 \
 cd "$RELEASE_DIR"
 grep -E '^[[:space:]]*not ok [0-9]+' "$BUILD_LOG" |
   sed -E 's/^[[:space:]]+//' |
-  sed 's#/mnt/sdc/ymt/agent-insight-rpm/rpmbuild/BUILD/agent-insight-0.7.0/##' \
+  sed 's#/srv/agent-insight-rpm/rpmbuild/BUILD/agent-insight-0.7.0/##' \
   > FAILED-TESTS.txt || :
 
 {
@@ -466,7 +468,7 @@ grep -E '^[[:space:]]*not ok [0-9]+' "$BUILD_LOG" |
   grep -E '^# (tests|pass|fail|skipped) ' "$BUILD_LOG" | tail -n 4
 } > BUILD-INFO.txt
 
-chown ymt:ymt BUILD-INFO.txt FAILED-TESTS.txt
+chown builder:builder BUILD-INFO.txt FAILED-TESTS.txt
 chmod 0644 BUILD-INFO.txt FAILED-TESTS.txt
 
 sha256sum \
@@ -477,7 +479,7 @@ sha256sum \
   BUILD-INFO.txt \
   FAILED-TESTS.txt \
   > SHA256SUMS
-chown ymt:ymt SHA256SUMS
+chown builder:builder SHA256SUMS
 sha256sum -c SHA256SUMS
 ```
 
@@ -490,10 +492,10 @@ sha256sum -c SHA256SUMS
 以 `root` 执行：
 
 ```bash
-exit  # 从 ymt 构建 shell 返回 root
+exit  # 从 builder 构建 shell 返回 root
 
 export PACKAGE_RELEASE=0.830.3
-export RPM_FILE="/mnt/sdc/ymt/agent-insight-rpm/rpmbuild/RPMS/x86_64/agent-insight-0.7.0-${PACKAGE_RELEASE}.x86_64.rpm"
+export RPM_FILE="/srv/agent-insight-rpm/rpmbuild/RPMS/x86_64/agent-insight-0.7.0-${PACKAGE_RELEASE}.x86_64.rpm"
 
 rpm -Uvh --test "$RPM_FILE"
 dnf install -y --nogpgcheck "$RPM_FILE"

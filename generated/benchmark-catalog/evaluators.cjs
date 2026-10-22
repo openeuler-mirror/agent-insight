@@ -12,11 +12,11 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": "/app/benchmarks/swe-bench/evaluator/entrypoint.cjs",
     "imageProvider": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/images.cjs"),
-    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-f405d624a0dda73126b057b75708b48f3c40ada38031677ce1a60e921fa95b7f",
+    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-1584d7c33d02e2effc62865da49b74ae35ed0e76977a11c8e697a5aed02122a4",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/Dockerfile"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
     "runtimeSmokeEntrypoint": "/app/benchmarks/swe-bench/smoke/index.cjs",
-    "artifactDigest": "sha256:f405d624a0dda73126b057b75708b48f3c40ada38031677ce1a60e921fa95b7f",
+    "artifactDigest": "sha256:1584d7c33d02e2effc62865da49b74ae35ed0e76977a11c8e697a5aed02122a4",
     "network": "deny",
     "resources": {
       "cpu": 4,
@@ -92,6 +92,85 @@ const generatedEvaluatorDescriptors = [
         },
         "officialReport": {
           "type": "object"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "key": "zsoft-l1",
+    "benchmarkKey": "zsoft-l1",
+    "runtime": "oci-container",
+    "command": "python3",
+    "entrypoint": "/opt/agent-insight/zsoft/entrypoint.py",
+    "imageProvider": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/images.cjs"),
+    "assets": {
+      "image": "swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64@sha256:af1e63c5cacb1753ceec85de245f129bdc63bb3ae15dca961248d17fa7e27a3b",
+      "sourcePath": "/opt/agent-insight/zsoft-l1/20261019-full-v1",
+      "releaseId": "20261019-full-v1",
+      "bundleDigest": "sha256:d73939d50ff543cbbe7a5a23e15ece361ed89d0dd998ab0f3cdace63e23621f9",
+      "verifyCommand": "python3",
+      "verifyEntrypoint": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/verify_assets.py")
+    },
+    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-a16bad020bd777695262cef4184adcaf78d3661899c41e66b73fe474f70ed89e",
+    "dockerfile": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/Dockerfile"),
+    "artifactDigest": "sha256:a16bad020bd777695262cef4184adcaf78d3661899c41e66b73fe474f70ed89e",
+    "network": "deny",
+    "resources": {
+      "cpu": 4,
+      "memoryMiB": 8192,
+      "timeoutSeconds": 900
+    },
+    "requiredArtifacts": [
+      {
+        "name": "poc",
+        "mediaType": "application/octet-stream",
+        "collector": "single-file/v1",
+        "maxBytes": 1048576
+      }
+    ],
+    "rawResultSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "taskId",
+        "submissionSha256",
+        "bundleDigest",
+        "taskDigest",
+        "status",
+        "success",
+        "sourceTaskDigest"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"
+        },
+        "submissionSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "bundleDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "taskDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "invalid_submission",
+            "infrastructure_error"
+          ]
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "sourceTaskDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         }
       },
       "additionalProperties": false

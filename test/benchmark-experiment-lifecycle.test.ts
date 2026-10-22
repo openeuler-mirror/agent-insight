@@ -118,6 +118,18 @@ test('background recovery repairs a stale running experiment whose Case already 
   await assertStatus(f.id, 'failed')
 })
 
+test('a cancelled historical experiment cannot interrupt recovery of later experiments', async (t) => {
+  const cancelled = await fixture(t, [{ run: 'running_agent', result: 'pending' }])
+  await prisma.experimentCancellation.create({ data: {
+    id: `${cancelled.id}-cancellation`, user: 'fixture-user', experimentId: cancelled.id,
+  } })
+  t.after(async () => { await prisma.experimentCancellation.deleteMany({ where: { experimentId: cancelled.id } }) })
+  await prisma.benchmarkExperimentBinding.update({ where: { experimentId: cancelled.id }, data: { updatedAt: new Date(0) } })
+  const healthy = await fixture(t, [{ run: 'execution_failed', result: 'failed' }])
+  assert.equal(await scheduler.resumeBenchmarkDispatchesAtStartup(), 0)
+  await assertStatus(healthy.id, 'failed')
+})
+
 for (const legacy of [false, true]) {
   test(`MCTS failure links its exact coordinator Trace with ${legacy ? 'legacy OTLP hash' : 'session ID'}`, async (t) => {
     const f = await fixture(t, [{ run: 'execution_failed', result: 'failed' }])

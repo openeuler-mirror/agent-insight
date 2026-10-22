@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import test from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -13,8 +14,9 @@ import { normalizeBenchmarkAgentOptions } from '../packages/benchmark-protocol/s
 import { assertBenchmarkExecutionTarget } from '../src/lib/benchmark/execution-targets'
 
 const definition = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
-const defaults = Object.fromEntries(definition.parameters.map(field => [field.key, field.default]))
-const options = (values: Record<string, unknown> = defaults) => ({ runtimeKey: 'mcts', definitionDigest: definition.definitionDigest, values })
+const runtimeRequire = createRequire(import.meta.url)
+const defaults = definition.configuration!.defaults
+const options = (values: Record<string, unknown> = defaults) => ({ version: 2 as const, runtimeKey: 'mcts', definitionDigest: definition.definitionDigest, values })
 
 function configurationFixture(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-parameters-'))
@@ -24,15 +26,17 @@ function configurationFixture(t: test.TestContext) {
   return { root, env: {} }
 }
 
-test('YAML defines all MCTS fields, presets and startup flags; zero is retained', () => {
-  const quick = options(definition.presets[0].values)
+test('MCTS exposes defaults without a dedicated preset and custom inputs preserve zero and startup flags', () => {
+  const quick = options({ 'max-iters': 1, branching: 1, 'max-turns-init': 20, 'max-turns-step': 10,
+    'max-turns-author': 20, 'max-turns-author-step': 10, 'token-fuse-limit': 0 })
   const markup = renderToStaticMarkup(createElement(RuntimeOptionsFields, {
     definition, value: optionsToInputs(definition, quick), error: '参数不合法', onChange: () => {},
   }))
-  assert.equal((markup.match(/type="number"/g) || []).length, 7)
-  assert.match(markup, /aria-label="Token 熔断阈值"[^>]+value="0"/)
+  assert.equal((markup.match(/aria-label="参数值 /g) || []).length, 7)
+  assert.match(markup, /aria-label="参数值 \/token-fuse-limit"[^>]+value="0"/)
   assert.match(markup, /role="alert">参数不合法/)
-  assert.match(markup, /填入联调参数/)
+  assert.deepEqual(definition.presets, [])
+  assert.doesNotMatch(markup, /填入联调参数/)
   assert.match(markup, /恢复默认/)
   for (const platform of ['pi-mcts', 'xiao-mcts']) {
     assert.deepEqual(runtimeInvocationOptions(platform, platform, quick).args, ['--max-iters', '1', '--branching', '1',
@@ -41,30 +45,43 @@ test('YAML defines all MCTS fields, presets and startup flags; zero is retained'
   assert.equal(JSON.stringify(definition).includes('binding'), false)
 })
 
-test('form follows target identity, uses defaults and blocks cleared required fields and stale definitions', () => {
+test('form follows target identity, preserves full JSON and blocks malformed JSON and stale definitions', () => {
   const target = { platform: 'pi-mcts', agent: 'pi-mcts', parameterDefinitions: [definition] }
   const inputs = optionsToInputs(definition)
-  assert.deepEqual(inputs, { maxIters: '5', branching: '3', maxTurnsInit: '160', maxTurnsStep: '80', maxTurnsAuthor: '160', maxTurnsAuthorStep: '80', tokenFuseLimit: '30000000' })
+  assert.deepEqual(JSON.parse(inputs.__json), defaults)
   assert.deepEqual(runtimeOptionsState(target, {}, '', 'host1').agentOptions, options())
-  assert.match(runtimeOptionsState(target, { ...inputs, maxIters: '' }, 'host1', 'host1').error!, /不能为空/)
-  assert.match(runtimeOptionsState(target, { ...inputs, branching: '1.5' }, 'host1', 'host1').error!, /安全整数/)
-  assert.deepEqual(runtimeOptionsState(target, { ...inputs, branching: '10' }, 'host1', 'host2').agentOptions, options())
+  assert.match(runtimeOptionsState(target, { __json: '' }, 'host1', 'host1').error!, /JSON/)
+  assert.deepEqual(runtimeOptionsState(target, { __json: '{"branching":1.5}' }, 'host1', 'host1').agentOptions?.values, { branching: 1.5 })
+  assert.deepEqual(runtimeOptionsState(target, { __json: '{"branching":10}' }, 'host1', 'host2').agentOptions, options())
+  assert.deepEqual(runtimeOptionsState(target, { __json: '{}' }, 'host1', 'host1').agentOptions, options({}))
   const stale = { ...options(), definitionDigest: `sha256:${'f'.repeat(64)}` }
   assert.match(runtimeOptionsState(target, inputs, 'host1', 'host1', stale as never).error!, /定义已变化/)
   assert.equal(runtimeOptionsState({ platform: 'opencode', agent: 'build' }, inputs, 'host1', 'host2').active, false)
 })
 
-test('old protocol is rejected and never reused; generic fields are validated against the selected definition', () => {
-  for (const value of [[], 'flags', { mcts: { maxIters: 5 } }, { other: {} }, { ...options(), args: [] }]) {
+test('platform accepts generic values while the MCTS client validates its native CLI inputs', () => {
+  for (const value of [[], 'flags', { mcts: { 'max-iters': 5 } }, { other: {} }, { ...options(), args: [] }]) {
     assert.throws(() => normalizeAgentOptions(value))
     assert.throws(() => normalizeBenchmarkAgentOptions(value), { code: 'AGENT_OPTIONS_INVALID' })
     assert.equal(readSavedOptions(value), undefined)
   }
-  for (const values of [{ unknown: 1 }, { maxIters: 0 }, { branching: -1 }, { maxTurnsInit: 1.5 },
-    { maxTurnsStep: '20' }, { tokenFuseLimit: -1 }, { maxIters: Number.MAX_SAFE_INTEGER + 1 }]) {
-    assert.throws(() => normalizeAgentOptions(options(values), definition))
+  for (const values of [{ 'max-iters': 0 }, { branching: -1 }, { 'max-turns-init': 1.5 },
+    { 'max-turns-step': '20' }, { 'token-fuse-limit': -1 }, { 'max-iters': Number.MAX_SAFE_INTEGER + 1 }]) {
+    assert.deepEqual(normalizeAgentOptions(options(values), definition)?.values, values)
+    assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', options(values)))
   }
-  assert.deepEqual(normalizeAgentOptions(options({ tokenFuseLimit: 0 }), definition)?.values, { ...defaults, tokenFuseLimit: 0 })
+  assert.deepEqual(normalizeAgentOptions(options({ 'token-fuse-limit': 0 }), definition)?.values, { 'token-fuse-limit': 0 })
+  for (const value of [{ nested: 1 }, [1], null]) {
+    assert.deepEqual(normalizeAgentOptions(options({ unknown: value }), definition)?.values, { unknown: value })
+    assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', options({ unknown: value })))
+  }
+  const added = options({ 'new-business-option': 'literal value', enabled: false, empty: '' })
+  assert.deepEqual(runtimeInvocationOptions('pi-mcts', 'pi-mcts', added).args,
+    ['--new-business-option', 'literal value', '--enabled', 'false', '--empty', ''])
+  for (const key of ['mode', 'runtime', 'testbench', 'instance-id', 'split', 'output-dir']) {
+    assert.deepEqual(normalizeAgentOptions(options({ [key]: 'override' }), definition)?.values, { [key]: 'override' })
+    assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', options({ [key]: 'override' })))
+  }
   assert.throws(() => runtimeInvocationOptions('opencode', 'build', options()), { code: 'AGENT_DEFINITION_CHANGED' })
 })
 
@@ -86,33 +103,35 @@ test('execution target requires a matching client definition and rejects changed
   }
 })
 
-test('local overrides merge defaults, reset with null and change the execution definition digest', t => {
+test('local templates preserve null, final client validation rejects it and template revisions preserve frozen options', t => {
   const settings = configurationFixture(t)
   const config = path.join(settings.root, 'config/benchmark')
-  fs.writeFileSync(path.join(config, 'executor.yaml'), 'runtimes:\n  mcts:\n    defaults: { maxIters: 8, branching: 4 }\n')
-  fs.writeFileSync(path.join(config, 'executor.local.yaml'), 'runtimes:\n  mcts:\n    defaults: { maxIters: null, tokenFuseLimit: 0 }\n')
+  fs.writeFileSync(path.join(config, 'executor.yaml'), 'runtimes:\n  mcts:\n    defaults: { max-iters: 8, branching: 4 }\n')
+  fs.writeFileSync(path.join(config, 'executor.local.yaml'), 'runtimes:\n  mcts:\n    defaults: { max-iters: null, token-fuse-limit: 0 }\n')
+  assert.equal(loadRuntimeDefinitions(settings).find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor.configuration!.defaults['max-iters'], null)
+  assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', undefined, settings), /max-iters.*integer/)
+  fs.writeFileSync(path.join(config, 'executor.local.yaml'), 'runtimes:\n  mcts:\n    defaults: { max-iters: 5, token-fuse-limit: 0 }\n')
   const runtime = loadRuntimeDefinitions(settings).find(item => item.descriptor.runtimeKey === 'mcts')!
   const effective = resolveAgentOptions([runtime.descriptor], 'pi-mcts', 'pi-mcts').agentOptions!
-  assert.deepEqual(effective.values, { ...defaults, branching: 4, tokenFuseLimit: 0 })
-  assert.notEqual(effective.definitionDigest, definition.definitionDigest)
-  assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', options(), settings), { code: 'AGENT_DEFINITION_CHANGED' })
+  assert.deepEqual(effective.values, { ...defaults, branching: 4, 'token-fuse-limit': 0 })
+  assert.equal(effective.definitionDigest, definition.definitionDigest)
+  assert.notEqual(runtime.descriptor.templateRevision, definition.templateRevision)
+  assert.deepEqual(runtimeInvocationOptions('pi-mcts', 'pi-mcts', options(), settings).agentOptions, options())
   assert.deepEqual(runtimeInvocationOptions('pi-mcts', 'pi-mcts', effective, settings).agentOptions, effective)
 })
 
 test('configuration errors fail before startup and identify the YAML file', t => {
   const settings = configurationFixture(t)
   const local = path.join(settings.root, 'config/benchmark/executor.local.yaml')
-  for (const content of ['runtimes: { mcts: { defaults: { unknown: 1 } } }',
-    'runtimes: { mcts: { defaults: { branching: 0 } } }', 'runtimes: { missing: { defaults: {} } }',
-    'runtimes: { mcts: { defaults: { maxIters: "5" } } }']) {
+  for (const content of ['runtimes: { mcts: { defaults: { branching: 0 } } }', 'runtimes: { missing: { defaults: {} } }',
+    'runtimes: { mcts: { defaults: { max-iters: "5" } } }']) {
     fs.writeFileSync(local, content)
-    assert.throws(() => loadRuntimeDefinitions(settings), /Runtime|runtime|未知|范围|整数/)
+    assert.throws(() => runtimeInvocationOptions('pi-mcts', 'pi-mcts', undefined, settings), /Runtime|runtime|未知|范围|整数|integer/)
   }
   fs.writeFileSync(local, '{}')
   const file = path.join(settings.root, 'services/executor/runtimes/mcts/runtime.yaml')
   const original = fs.readFileSync(file, 'utf8')
-  for (const modified of [original.replace('--max-iters', '--output-dir'), original.replace('--branching', '--max-iters'),
-    original.replace('type: integer', 'type: shell'), original.replace('group: search', 'group: missing'), original + '\nunknown: true\n']) {
+  for (const modified of [original.replace('mode: passthrough', 'mode: missing'), original.replace('type: integer', 'type: shell'), original + '\nunknown: true\n']) {
     fs.writeFileSync(file, modified)
     assert.throws(() => loadRuntimeDefinitions(settings), /runtime.yaml/)
   }
@@ -159,7 +178,7 @@ parameters:
   - { key: label, group: execution, label: 标签, type: string, default: 'a b;$(touch should-not-exist)', binding: { kind: argv, flag: --fixture-label } }
 presets: []
 `)
-  const loader = require('../packages/agent-runtime/loader.cjs')
+  const loader = runtimeRequire('../packages/agent-runtime/loader.cjs')
   const invoke = loader.runtimeInvocationOptions
   t.mock.method(loader, 'runtimeInvocationOptions', (platform: string, agent: string, value: unknown) => invoke(platform, agent, value, settings))
   const descriptor = loadRuntimeDefinitions(settings).find(item => item.descriptor.runtimeKey === 'opencode')!.descriptor
@@ -176,7 +195,7 @@ console.log(JSON.stringify({ type: 'text', sessionID: 'ses_runtime_parameters', 
   const previousPath = process.env.PATH
   process.env.PATH = `${bin}${path.delimiter}${previousPath}`
   t.after(() => { process.env.PATH = previousPath })
-  const client = require('../scripts/reliability-client.cjs')
+  const client = runtimeRequire('../scripts/reliability-client.cjs')
   const result = await client.runExperimentCase({ clientId: 'runtime-test', workspaceBase: settings.root }, {
     platform: 'opencode', agent: 'build', input: 'fixture', cwd: settings.root, timeoutSeconds: 10, agentOptions: parsed,
   })
