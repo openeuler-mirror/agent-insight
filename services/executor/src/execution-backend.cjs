@@ -21,7 +21,7 @@ class LocalExecutionBackend {
   constructor(components) { Object.assign(this, components) }
   async prepare(task, context) {
     const provider = this.workspaceProviders.get(task.workspace.provider)
-    const workspace = await provider.prepare(task.workspace, { ...context, benchmarkKey: task.benchmark.key })
+    const workspace = await provider.prepare(task.workspace, { ...context, benchmarkKey: task.benchmark.key, benchmarkPayload: task.task.benchmarkPayload })
     const handle = { backendKey: 'local', schemaVersion: 1, runId: context.runId, opaque: { workspace } }
     await context.persist(handle)
     const appliedPolicy = await this.policyEnforcer.apply(task.policy, context)

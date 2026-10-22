@@ -75,7 +75,8 @@ test('healthy Benchmark host exposes selectable environment and no unavailable r
   const [target] = agent.targets;
   assert.equal(target.supportsBenchmark, true);
   assert.deepEqual(target.benchmarkKeys, ['swe-bench']);
-  assert.deepEqual(target.benchmarkUnavailableReasons, {});
+  assert.equal(target.benchmarkUnavailableReasons['swe-bench'], undefined);
+  assert.match(target.benchmarkUnavailableReasons['zsoft-l1'], /缺少 zsoft-tasks-workspace/);
   assert.equal(target.benchmarkUnavailableReason, null);
   assert.equal(target.benchmarkEnvironments['swe-bench'].profile.key, 'xgovernor-local-docker');
 });

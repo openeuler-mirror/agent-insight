@@ -18,6 +18,7 @@ import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTre
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import type { AgentOptions, RuntimeDefinition } from '@/lib/engine/experiment/runtime-options';
+import { RuntimeParameterSnapshot } from '@/components/eval/RuntimeParameterSnapshot';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -80,6 +81,7 @@ interface ExperimentDetail {
     traceAttemptStatus: string | null;
     caseValues?: Record<string, unknown> | null;
     benchmark?: {
+      submissionSource?: string;
       adapterKey: string;
       displayName: string;
       externalCaseId: string;
@@ -371,8 +373,6 @@ export function ExperimentDetail({
   const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || DEFAULT_BENCHMARK_CASE_COLUMNS;
   const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
-  const runtimeParameters = detail?.executionAgentOptions?.values;
-  const runtimeParameterFields = detail?.executionParameterDefinition?.parameters.filter(field => runtimeParameters?.[field.key] !== undefined) || [];
   const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
   const focusVisible = Boolean(!loading && focusCaseId && detail?.id === id && detail.casePage === casePage
     && detail.casePageSize === casePageSize && detail.cases.some(item => item.id === focusCaseId));
@@ -482,7 +482,7 @@ export function ExperimentDetail({
               }}>
                 {status.label}
               </span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
+              <span><span style={{ color: 'var(--foreground-muted)' }}>{detail.reusableConfig?.traceSource === 'import' ? '提交来源：' : '待评测 Agent：'}</span>{detail.agentName || '—'}</span>
               {detail.reusableConfig?.traceSource === 'generate' && detail.reusableConfig.executionTarget && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
@@ -520,19 +520,7 @@ export function ExperimentDetail({
                 </span>
               )}
               </div>
-              {runtimeParameterFields.length > 0 && (
-                <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 border-t border-[var(--border)] pt-3">
-                  <span className="font-semibold">{detail.executionParameterDefinition?.displayName} 运行参数</span>
-                  <dl className="flex flex-wrap gap-x-5 gap-y-2">
-                    {runtimeParameterFields.map((field) => (
-                      <div key={field.key} className="flex">
-                        <dt className="text-[var(--foreground-muted)]">{field.label}：</dt>
-                        <dd>{String(runtimeParameters![field.key])}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              )}
+              <RuntimeParameterSnapshot definition={detail.executionParameterDefinition} options={detail.executionAgentOptions} />
             </div>
 
             {detail.traceProgress && detail.traceProgress.failed > 0 && (
@@ -866,7 +854,7 @@ export function ExperimentDetail({
                                 ...c, evaluatorIds: detail.evaluatorIds, results: detail.results.filter((row) => row.caseId === c.id),
                               })}
                               onDeleted={(experimentDeleted) => experimentDeleted ? router.replace('/experiments') : load(true)} />}
-                            {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
+                            {c.benchmark?.submissionSource !== 'imported' && (c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
                                 disabled={!!retryingCaseId}

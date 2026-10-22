@@ -46,6 +46,7 @@ export function inspectBenchmarkExecutionTargets(
   client: ReliabilityClient,
   manifest: BenchmarkManifest,
 ): BenchmarkExecutionTarget[] {
+  if (manifest.supportsAgentExecution === false) return []
   const capabilities = parseCapabilities(client.capabilitiesJson)
   const status = deriveStatus(client)
   const serviceHealth = deriveServiceHealth(client)
@@ -65,6 +66,9 @@ export function inspectBenchmarkExecutionTargets(
     const requiredCapabilities = [
       ...manifest.requiredCapabilities,
       ...(requiresProfile ? ['execution-backend/v1'] : [benchmarkAgentRuntimeCapability(platform.id)]),
+      ...(manifest.adapterKey === 'zsoft-l1' && platform.id.endsWith('-mcts') ? ['mcts-zsoft-export/v1'] : []),
+      ...(manifest.adapterKey === 'swe-bench' && platform.id.endsWith('-mcts')
+        && Object.hasOwn(capabilities.components || {}, 'mcts-swe-bench/v1') ? ['mcts-swe-bench/v1'] : []),
     ]
     const missingCapabilities = [...new Set(requiredCapabilities)].filter(
       capability => !componentReady(capabilities.components?.[capability]),

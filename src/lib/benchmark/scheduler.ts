@@ -144,7 +144,7 @@ export function startBenchmarkRunWatchdog(
         return count
       })
       .then(async (count) => {
-        await refreshBenchmarkImagePreparation()
+        await refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool]', error))
         await resumeBenchmarkDispatchesAtStartup()
 
         await retireImagePreparationWindows(async (experimentId) => {
@@ -309,6 +309,7 @@ export async function dispatchBenchmarkRun(runId: string): Promise<void> {
     if (
       request.runId !== runId
       || request.requestDigest !== outbox.requestDigest
+      || !outbox.run.clientId
     ) {
       await markDispatchFailed(runId, {
         code: 'DISPATCH_REQUEST_INVALID',
@@ -515,7 +516,7 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
     where: {
       schedulerStatus: 'running',
       callbackOrigin: { not: null },
-      experiment: { status: 'running', scope: 'benchmark' },
+      experiment: { status: 'running', scope: 'benchmark', deletedAt: null },
     },
     orderBy: { updatedAt: 'asc' },
     take: Math.min(100, Math.max(1, limit)),
@@ -523,15 +524,19 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
   let resumed = 0
   const executorCallbackBaseUrl = defaultEvaluatorRuntimeConfigProvider.snapshot().executorCallbackBaseUrl
   for (const binding of bindings) {
-    const { settleBenchmarkExperimentStatus } = await import('./experiment-lifecycle')
-    await settleBenchmarkExperimentStatus(binding.experimentId)
-    const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
-    if (!experiment || !binding.callbackOrigin) continue
-    const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
-      publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
-      resumeOnly: true })
-    if (result?.runId) resumed++
-    void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
+    try {
+      const { settleBenchmarkExperimentStatus } = await import('./experiment-lifecycle')
+      await settleBenchmarkExperimentStatus(binding.experimentId)
+      const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
+      if (!experiment || !binding.callbackOrigin) continue
+      const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
+        publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
+        resumeOnly: true })
+      if (result?.runId) resumed++
+      void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
+    } catch (error) {
+      console.error(`[benchmark/scheduler] recovery failed for ${binding.experimentId}`, error)
+    }
   }
   return resumed
 }

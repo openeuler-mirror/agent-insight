@@ -245,9 +245,51 @@
 - **工作快照发布**：`/:sessionId/publish` 按来源保持原有行为。`source='generated'` 不要求二次确认或静态评估，只检查归属会话、非空文件、`SKILL.md` 和最新正式版本内容非重复；frontmatter 缺少 name 时沿用 `untitled-skill` 回退，并在提交时按最新版本自动递增。静态评估、触发分析、用例分析和 A/B 测试不是前置条件。上传快照继续要求当前内容 hash 对应的有效静态评估、无受支持证据的 high 问题以及 `confirmed=true`。两类快照发布后都立即激活新版本，流程解析异步执行且失败不回滚。
 - **隔离边界**：这些端点不替换 `/api/skills`、`/api/skill-generator`、`/api/skill-eval` 或 `/api/skill-opt`。预览完成前 `/skills` 与正式导航保持原样。
 
+## Runtime JSON 参数接入
+
+默认配置仅是新建草稿的初始模板。通用编辑器对所有 v2 Runtime 提供 String、Number、Boolean、Object、Array、Null，以及对象子字段和数组操作；平台不按 Agent 名称、默认值形状或历史 `structure` 字段限制配置。平台只进行 JSON 根对象、大小、深度、有限数值、重复 key 和危险原型字段等通用校验。
+
+客户端上报 `configuration: { version: 2, defaults }`，没有默认配置时使用 `{}`。交付方式、绑定和业务 Schema 保留在客户端 YAML，不再作为前端编辑或平台提交约束。客户端从这些私有配置计算契约摘要，平台将摘要作为不透明标识检查兼容性。旧快照中的 delivery/structure/schema 元数据可读取，但不约束 v2 参数内容；旧版逐字段协议仅作兼容，使用通用配置需升级客户端。
+
+以 MCTS 为例，客户端配置如下。默认值保留 CLI 原名，平台初始展示七个平铺字段，用户仍可在本次草稿中添加嵌套对象。
+
+```yaml
+key: mcts
+displayName: MCTS
+targets:
+  - { platform: pi-mcts, agent: pi-mcts }
+  - { platform: xiao-mcts, agent: xiao-mcts }
+parameterGroups: []
+parameters: []
+presets: []
+configuration:
+  version: 2
+  delivery: argv
+  defaults:
+    max-iters: 5
+    branching: 3
+    max-turns-init: 160
+    max-turns-step: 80
+    max-turns-author: 160
+    max-turns-author-step: 80
+    token-fuse-limit: 30000000
+  binding:
+    mode: passthrough
+```
+
+草稿按执行目标首次展示时独立初始化，之后默认值更新不覆盖已有草稿。修改字段、导入 JSON 或保存个人模板均不会改写客户端默认配置；“恢复默认”显式重新复制当前上报值。导入整体替换，提交保存完整对象，删除字段或显式 `{}` 不重新补默认值。平台不自动分组、改名、扁平化或把字符串解析为对象；字段名中的 `/`、`.` 保持字面量。
+
+客户端 `runtimeInvocationOptions` 在进程启动前按本机 Schema 和原生入口校验最终配置，不会自动重组不支持的对象。`argv` 的 `binding.mode: passthrough` 按根 key 生成原名 `--key` 与字面量值，无需逐字段 mappings；字符串、数值和布尔值保留，空字符串保留独立空 argv，负号开头的值使用 `--key=value`。CLI key 保留大小写、下划线和点号；非法名称、NUL、平台调度保留 flag，以及该 CLI 通道不能消费的对象、数组、null 仅在执行客户端被拒绝。MCTS 新增原生已支持的 CLI 参数只需填写同名 key/value；前端允许保存嵌套草稿不代表 MCTS CLI 已支持它。
+
+显式 `binding.mappings` 保留为客户端交付适配，path 使用 JSON Pointer；未消费的值不会静默丢弃。支持 JSON 输入的应用可使用 `json-file` 或 `json-arg`，无需声明嵌套类型。文件通道按次创建独立目录/文件，权限为 0700/0600，通过客户端约定的 flag/env 交付路径并在成功、失败后清理；参数通道以一个字面量 argv 传递完整 JSON。OpenCode 现提供默认 `{}` 的通用配置，当前客户端使用 CLI 交付；后续原生 YAML 等入口由客户端适配，平台不转换文件格式。
+
+客户端可选 Schema 使用已有 JSON Schema 基础子集，在最终执行时校验业务要求。平台参数限制为 256 KiB、32 层、20,000 个节点；`formatParameterJson` 优先缩进，超限时使用紧凑格式。本机 `runtimes.<key>.defaults` 按根字段覆盖模板，null 是实际配置值，模板在展示阶段不充当最终执行配置。
+
+已有实验的完整值和描述快照不改写。契约变化时，复用确认展示原始完整 JSON，只更新新草稿的协议元数据，不推断字段别名或转换层级；兼容性由执行客户端判断。任务控制结构仍执行禁止字段检查，业务 JSON 仅作为数据传递。
 ## Key TypeScript data contracts (`types`)
 核心接口（形状节选；完整成员见源码）：
-- **Agent Runtime 参数** — `services/executor/runtimes/<key>/runtime.yaml` 定义目标、参数组、字段约束/默认值、预设和 argv 绑定；客户端 platform 能力的 `parameterDefinitions` 上报不含绑定的描述与完整定义摘要。现有执行目标接口透传描述，任务 `agentOptions` 为 `{ runtimeKey, definitionDigest, values }`。创建时按对应客户端/platform/agent 校验并冻结完整值与 `agentParameterDefinition`，执行前再次检查摘要；`AGENT_DEFINITION_CHANGED` 不能自动重试。通用协议仅验证标量 envelope，具体字段校验由所选描述提供。旧 `agentOptions.mcts` 拒绝接收、不迁移。普通实验、Skill 客户端执行和 Benchmark 共用参数协议；不新增 API 或数据库列。
+- **Agent Runtime 参数** — `services/executor/runtimes/<key>/runtime.yaml` 定义目标、默认配置、可选 Schema、预设和交付绑定，客户端 `parameterDefinitions` 上报通用默认模板和不透明契约摘要。旧平铺协议保留；通用配置使用 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }`，`values` 是完整递归 JSON 对象，允许新增业务 key。创建时按选中的客户端/platform/agent 校验并冻结完整值和 `agentParameterDefinition`；显式值不重新补默认。执行前检查契约摘要，`AGENT_DEFINITION_CHANGED` 不自动重试，旧客户端收到 v2 明确返回 `CLIENT_UPGRADE_REQUIRED`。v2 `definitionDigest` 覆盖目标、交付方式、客户端 Schema 约束和绑定，默认值/预设变动只更新 `templateRevision`。旧 `agentOptions.mcts` 仍拒绝接收。普通实验、Skill 客户端执行和 Benchmark 共用协议及现有 JSON 快照，不新增路由或数据库列。
+- **Runtime 参数模板** — 已有 `GET /api/eval/settings?user=…&section=runtime-parameters` 仅返回 `{ templates }`；已有 `POST /api/eval/settings` 接收 `{ user, action: 'save-runtime-parameter-template', template: { name, runtimeKey, definitionDigest, values } }` 并返回新修订。模板按用户隔离，名称与 Runtime 相同则递增修订，只追加完整值；使用现有 `UserSettings.settingsJson.runtimeParameterTemplates`。模型设置保存保留模板，模板写入保留模型设置，不通过浏览器回传模型密钥。同一用户的设置写入在进程内串行化。
 - **Benchmark Agent 与评测链路** — `BenchmarkAdapter` 的五个方法是 `validateAndSplitCase()`、`buildAgentTask()`、`validateSubmission()`、`buildEvaluationRequest()`、`normalizeResult()`；`AbstractBenchmarkAdapter` 统一处理 Schema、公开/私有边界、上下文、Artifact 和归一化不变量，实例 Adapter/Evaluator 承载具体业务语义。`benchmark.yaml` 是接入唯一 Manifest，构建期 Catalog 注册 Adapter、Manifest 和 Evaluator descriptor；官方评估器 ID 必须取 `evaluation.evaluatorKey`，不得假设它等于 `adapterKey`。执行器只根据 workspace provider、Agent platform 和 Artifact collector 组合能力，公共层不解释 `model.patch`、测试名单或 `SWE_*`。Controller 通过统一文件协议运行实例 Entrypoint，按 descriptor 的 runtime、网络策略和资源上限执行；`application/json` Evidence 统一解析，业务一致性由 Adapter/Evaluator 判断。`NormalizedBenchmarkPoint` 以 `label + value` 为通用事实，可选 `total/format/score/evidence`。结果 API 只返回完整 `submissions[]` 与 `evidenceArtifacts[]` 及受控 `contentUrl`，不保留 `patchArtifactId` 或单个 `submission`。业务层不建立 Benchmark、数据集或评估器版本；协议中的 `/v1` 只表示跨进程兼容。
 - **Benchmark 动态执行目标** — `GET /api/benchmark/v1/execution-targets?datasetId=` 复用普通实验的客户端平台能力判定：只接受声明 `RUN_EXPERIMENT_CASE`、`RUN_BENCHMARK_CASE`、`runExperimentCase.returnsTraceId=true` 且上报至少一个 Agent 的平台，再叠加客户端在线/服务健康、Adapter 静态能力以及动态 `agent-runtime/{platform}/v1` 检查。创建 Benchmark 实验时对同一 `clientId + platform + agent` 精确组合再次校验，不能仅凭客户端拥有另一种 Runtime 放行。执行任务通过已有 WSS/长轮询控制通道按 `clientId` 投递，客户端不需要执行器 URL 或监听端口。SWE-bench Manifest 因此只固定 `git-workspace/v1` 与 `git-patch/v1`，不固定 OpenCode。
 - **Benchmark 浏览器契约** — 浏览器继续使用 `/api/agent-datasets`、`/api/experiments/agents`、`/api/experiments` 和通用详情/重试接口。`datasetKind=benchmark` 的公共投影携带 `readOnly`、`shared`、`adapterKey`、独立的 `evaluatorKey`、声明式 Presentation 与公开 Case。创建接口按 Manifest 自动绑定 `benchmark:<evaluatorKey>`。详情的 `case.benchmark` 返回 `publicPayload`、`submissions[]` 和 `evidenceArtifacts[]`；文件只暴露元数据与受控 `contentUrl`，不返回私有 Case、存储路径或正文。运行状态由通用 Run/Evaluation 状态表达，具体文件名称和业务标签由 `presentation.artifacts` 匹配，缺少匹配规则时仍返回原始文件名。

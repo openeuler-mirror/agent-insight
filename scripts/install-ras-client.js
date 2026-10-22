@@ -48,10 +48,27 @@ function installRuntime() {
   if (!fs.existsSync(executorSrc)) {
     fail(`缺少执行器运行时: ${executorSrc}`, '制品不完整；请重新执行安装命令。')
   }
+  const executorCatalogPath = path.join('generated', 'benchmark-catalog', 'executors.cjs')
+  const executorCatalog = path.join(PACKAGE_ROOT, executorCatalogPath)
+  if (!fs.existsSync(executorCatalog)) {
+    fail(`缺少执行器注册表: ${executorCatalog}`, '制品不完整；请重新执行安装命令。')
+  }
+  const { generatedExecutorPackageFiles } = require(executorCatalog)
+  const executorPackageFiles = [executorCatalogPath, ...generatedExecutorPackageFiles]
+  for (const relativePath of executorPackageFiles) {
+    if (!fs.existsSync(path.join(PACKAGE_ROOT, relativePath))) {
+      fail(`缺少执行器接入包文件: ${relativePath}`, '制品不完整；请重新执行安装命令。')
+    }
+  }
   fs.rmSync(executorDest, { recursive: true, force: true })
   fs.cpSync(executorSrc, executorDest, { recursive: true })
   fs.mkdirSync(path.join(executorDest, 'vendor'), { recursive: true })
   fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', 'agent-trace-collectors', 'shared', 'trace-transport.cjs'), path.join(executorDest, 'vendor', 'trace-transport.cjs'))
+  for (const relativePath of executorPackageFiles) {
+    const target = path.join(executorDest, relativePath)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(path.join(PACKAGE_ROOT, relativePath), target)
+  }
   const configRuntime = path.join(PACKAGE_ROOT, 'packages', 'project-config')
   if (!fs.existsSync(configRuntime)) fail(`缺少配置加载器: ${configRuntime}`, '制品不完整；请重新执行安装命令。')
   fs.cpSync(configRuntime, path.join(RUNTIME_DIR, 'packages', 'project-config'), { recursive: true })

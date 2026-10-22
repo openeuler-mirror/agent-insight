@@ -11,6 +11,9 @@ benchmarks:
     docker:
       requestTimeoutSeconds: 1800
       connectionPoolSize: 16
+  zsoft-l1:
+    assetsDir: null
+    kernelAccel: tcg
 imagePool:
   enabled: true
   prefetchEnabled: true

@@ -203,7 +203,7 @@ test('installed client ignores both old local paths without migration or fallbac
     const runtimeOptions = require(path.join(installer.RUNTIME_DIR, 'executor/runtime-options.cjs'));
     const invocation = runtimeOptions.runtimeInvocationOptions('pi-mcts', 'pi-mcts');
     assert.equal(invocation.agentOptions.runtimeKey, 'mcts');
-    assert.equal(invocation.agentOptions.values.maxIters, 5);
+    assert.equal(invocation.agentOptions.values['max-iters'], 5);
     assert.deepEqual(invocation.args.slice(0, 4), ['--max-iters', '5', '--branching', '3']);
     assert.equal(invocation.definition.parameters.some(field => 'binding' in field), false);
     const {loadProjectConfig} = require(path.join(installer.RUNTIME_DIR, 'packages/project-config/index.cjs'));

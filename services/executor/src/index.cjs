@@ -7,12 +7,14 @@ const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
-const { SweBenchGitSourcePolicy } = require('./benchmarks/swe-bench.cjs')
-const { runtimeInvocationOptions } = require('./runtime-options.cjs')
 const { ExecutionBackendRegistry, LocalExecutionBackend } = require('./execution-backend.cjs')
 const { validateExecution, bindingFor, executionCapabilities } = require('./execution-config.cjs')
 const { LocalRetention, SWEEP_INTERVAL } = require('./retention.cjs')
 const { loadProjectConfig } = require('./project-config.cjs')
+const { createGitSourcePolicies } = require('./source-policy-registry.cjs')
+const { PublicBundleWorkspaceProvider, SingleFileCollector, validatePublicBundleSpec } = require('./public-bundle.cjs')
+const { ZsoftTasksWorkspaceProvider, validateZsoftTasksSpec } = require('./zsoft-tasks.cjs')
+const runtimeOptions = require('./runtime-options.cjs')
 
 const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
 const DELIVERY_RETRY_BASE_MS = 5_000
@@ -135,9 +137,11 @@ const FORBIDDEN_KEYS = new Set([
   'privatepayload',
 ])
 
-function scanForbidden(value, currentPath = '$') {
+function scanForbidden(value, allowRuntimeValues, segments = [], currentPath = '$') {
+  if (allowRuntimeValues && segments.length === 3
+    && segments[0] === 'agentConfig' && segments[1] === 'agentOptions' && segments[2] === 'values') return
   if (Array.isArray(value)) {
-    value.forEach((item, index) => scanForbidden(item, `${currentPath}[${index}]`))
+    value.forEach((item, index) => scanForbidden(item, allowRuntimeValues, [...segments, String(index)], `${currentPath}[${index}]`))
     return
   }
   if (!value || typeof value !== 'object') return
@@ -145,7 +149,7 @@ function scanForbidden(value, currentPath = '$') {
     if (FORBIDDEN_KEYS.has(key.toLowerCase())) {
       throw new BenchmarkExecutorError('TASK_FORBIDDEN_FIELD', `任务包含禁止字段 ${currentPath}.${key}`)
     }
-    scanForbidden(item, `${currentPath}.${key}`)
+    scanForbidden(item, allowRuntimeValues, [...segments, key], `${currentPath}.${key}`)
   }
 }
 
@@ -159,10 +163,12 @@ function validateTaskEnvelope(task, runId) {
   if (!task.benchmark?.key || !task.task?.instruction || !task.task?.benchmarkPayload) {
     throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '任务缺少 Benchmark 公开输入')
   }
-  if (
-    task.workspace?.provider !== 'git'
-    || !/^[0-9a-f]{40}$/i.test(String(task.workspace?.revision || ''))
-  ) {
+  if (task.workspace?.provider === 'zsoft-tasks') {
+    validateZsoftTasksSpec(task.workspace)
+  } else if (task.workspace?.provider === 'public-bundle') {
+    validatePublicBundleSpec(task.workspace)
+  } else if (task.workspace?.provider === 'git') {
+  if (!/^[0-9a-f]{40}$/i.test(String(task.workspace?.revision || ''))) {
     throw new BenchmarkExecutorError('TASK_WORKSPACE_INVALID', 'Git 工作区契约不合法')
   }
   let repository
@@ -180,6 +186,9 @@ function validateTaskEnvelope(task, runId) {
     || repository.hash
   ) {
     throw new BenchmarkExecutorError('TASK_REPOSITORY_INVALID', '仓库必须是 GitHub HTTPS 地址')
+  }
+  } else {
+    throw new BenchmarkExecutorError('TASK_WORKSPACE_INVALID', '工作区类型不受支持')
   }
   if (
     task.policy?.workspaceWrite !== 'allow'
@@ -199,7 +208,8 @@ function validateTaskEnvelope(task, runId) {
   ) {
     throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '提交物或 Agent 配置不合法')
   }
-  try { runtimeInvocationOptions(task.agentConfig.platform, task.agentConfig.agent, task.agentConfig.agentOptions) }
+  let agentOptions
+  try { ({ agentOptions } = runtimeOptions.runtimeInvocationOptions(task.agentConfig.platform, task.agentConfig.agent, task.agentConfig.agentOptions)) }
   catch (error) { throw new BenchmarkExecutorError(error.code || 'AGENT_OPTIONS_INVALID', error.message) }
   const artifactNames = new Set()
   for (const artifact of task.submission.requiredArtifacts) {
@@ -216,7 +226,7 @@ function validateTaskEnvelope(task, runId) {
     artifactNames.add(artifact.name)
   }
   if (task.execution) validateExecution(task.execution)
-  scanForbidden(task)
+  scanForbidden(task, agentOptions?.version === 2)
 }
 
 class CapabilityRegistry {
@@ -797,7 +807,7 @@ class BenchmarkExecutionRunner {
     const timedSignal = seconds => signal ? AbortSignal.any([signal, AbortSignal.timeout(seconds * 1000)]) : AbortSignal.timeout(seconds * 1000)
     try {
       const prepareSeconds = task.execution?.profile.timeouts.prepareSeconds
-      await this.progress(request, 'preparing', task.execution ? '正在准备容器执行环境' : '正在准备 Git 工作区', prepareSeconds)
+      await this.progress(request, 'preparing', task.execution ? '正在准备容器执行环境' : task.workspace.provider === 'git' ? '正在准备 Git 工作区' : '正在准备任务工作区', prepareSeconds)
       stageSignal = prepareSeconds ? timedSignal(prepareSeconds) : signal
       context.signal = stageSignal
       handle = await backend.prepare(task, context)
@@ -947,13 +957,19 @@ function createBenchmarkExecutor(options) {
   const store = options.store || new FileRunStore(path.join(baseDir, 'benchmark-runs'))
   const workspaceProvider = options.workspaceProvider
     || new GitWorkspaceProvider(path.join(baseDir, 'workspaces', 'benchmark'), runProcess, {
-      sourcePolicies: options.sourcePolicies || new Map([
-        ['swe-bench', new SweBenchGitSourcePolicy({ home: options.agentInsightHome || path.dirname(baseDir) })],
-      ]),
+      sourcePolicies: options.sourcePolicies ?? createGitSourcePolicies({
+        home: options.agentInsightHome || path.dirname(baseDir),
+      }),
       log: options.log || (() => {}),
     })
   const workspaceProviders = options.workspaceProviders
-    || new WorkspaceProviderRegistry([['git', workspaceProvider]])
+    || new WorkspaceProviderRegistry([
+      ['git', workspaceProvider],
+      ['zsoft-tasks', new ZsoftTasksWorkspaceProvider(path.join(baseDir, 'workspaces', 'zsoft-tasks'), options.mctsConfig)],
+      ['public-bundle', new PublicBundleWorkspaceProvider(path.join(baseDir, 'workspaces', 'public-bundle'),
+        options.publicBundleDir || process.env.AGENT_INSIGHT_PUBLIC_BUNDLES_DIR
+          || path.join(options.agentInsightHome || path.dirname(baseDir), 'benchmark-assets', 'public-bundles'))],
+    ])
   const configuredAgentPlatforms = options.agentPlatforms === undefined
     ? ['opencode']
     : Array.isArray(options.agentPlatforms) ? options.agentPlatforms : []
@@ -978,7 +994,9 @@ function createBenchmarkExecutor(options) {
   if (managesAgentRuntimes) setAgentPlatforms(agentPlatforms)
   const collectors = options.collectors instanceof ArtifactCollectorRegistry
     ? options.collectors
-    : new ArtifactCollectorRegistry(options.collectors || [['git-patch/v1', new GitPatchCollector()]])
+    : new ArtifactCollectorRegistry(options.collectors || [
+      ['git-patch/v1', new GitPatchCollector()], ['single-file/v1', new SingleFileCollector()],
+    ])
   const callback = options.callback || new AgentInsightCallbackClient(options)
   const policyEnforcer = options.policyEnforcer || new LocalPolicyEnforcer()
   const cleanupManager = options.cleanupManager || new WorkspaceCleanupManager()

@@ -87,6 +87,9 @@ export function benchmarkEvaluationProgressLabel(input: {
 }): string {
   if (input.evaluationStatus === 'dispatch_unknown') return '正在确认评测下发…'
   if (input.evaluationStatus === 'queued') {
+    if (input.evaluationWaitCode === 'EVALUATOR_ASSETS_DOWNLOADING') return '正在下载评测资产…'
+    if (input.evaluationWaitCode === 'EVALUATOR_ASSETS_VERIFYING') return '正在校验评测资产…'
+    if (input.evaluationWaitCode === 'EVALUATOR_ASSETS_PREPARING') return '正在准备评测资产…'
     if (input.evaluationWaitCode === 'IMAGE_POOL_SPACE_LOW') return '等待镜像空间…'
     if (input.evaluationWaitCode === 'IMAGE_POOL_PREPARING') return '等待镜像准备…'
     return '等待评测配额…'

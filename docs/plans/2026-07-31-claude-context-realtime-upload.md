@@ -66,14 +66,14 @@
 3. 运行 `npx tsc --noEmit`。
 4. 检查 `git diff --check` 和最终 diff。
 
-### Task 6: 119 真实跨机验证
+### Task 6: 部署环境真实跨机验证
 
 **Files:**
 - Test only
 
 1. 将 MR 最新 uploader 安装到 Claude Code 客户端测试环境，并确认四类 hook 已注册。
 2. 运行包含系统提示词、`additionalContext`、普通工具和子 Agent 的唯一标记会话。
-3. 主 Agent 一轮结束后不执行 `/exit`，轮询 `119.3.152.42:3000` 的 spool/数据库。
+3. 主 Agent 一轮结束后不执行 `/exit`，轮询 `<agent-insight-host>:3000` 的 spool/数据库。
 4. 断言唯一 session 已出现补传事件，且 interactions/Agent tree 能看到四类内容。
 5. 验证完成后正常退出测试会话，确认 `SessionEnd` 不产生重复内容。
 

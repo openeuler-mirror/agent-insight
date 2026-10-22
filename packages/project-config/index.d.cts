@@ -9,6 +9,7 @@ export type PlatformConfig = {
       dataset: { autoImport: boolean; source: string | null }
       loader: { sourceArchive: string | null; python: string | null }
     }
+    'zsoft-l1': { dataset: { autoImport: boolean; source: string | null; revision: string | null } }
     scheduling: SchedulingConfig
   }
 }
@@ -20,10 +21,11 @@ export type EvaluatorConfig = {
       images: { source: 'official' | 'epoch'; arch: 'auto' | 'x86_64' | 'arm64'; allowNonOfficial: boolean; proxyPrefix: string | null; verifiedMirrorRepositories: string[] | null }
       docker: { requestTimeoutSeconds: number; connectionPoolSize: number }
     }
+    'zsoft-l1': { assetsDir: string | null; kernelAccel: 'tcg' | 'kvm' }
   }
   imagePool: { enabled: boolean; prefetchEnabled: boolean; reserveRatio: number; highWatermark: number; maxPulls: number; waitSeconds: number; macDiskPath: string | null }
 }
-export type ExecutorConfig = { retention: { days: number }; benchmarks: { 'swe-bench': { gitSource: string | null; images: { source: 'official' | 'epoch'; arch: 'auto' | 'x86_64' | 'arm64'; allowNonOfficial: boolean; proxyPrefix: string | null; verifiedMirrorRepositories: string[] | null } } }; runtimes: Record<string, { defaults?: Record<string, string | number | boolean | null> }>; execution: { profiles: Record<string, unknown>; bindings: Array<{ benchmarks: string[]; platforms: string[]; profile: string }> } }
+export type ExecutorConfig = { retention: { days: number }; benchmarks: { 'swe-bench': { gitSource: string | null; images: { source: 'official' | 'epoch'; arch: 'auto' | 'x86_64' | 'arm64'; allowNonOfficial: boolean; proxyPrefix: string | null; verifiedMirrorRepositories: string[] | null } } }; runtimes: Record<string, { defaults?: import('../agent-runtime/index.cjs').JsonObject }>; execution: { profiles: Record<string, unknown>; bindings: Array<{ benchmarks: string[]; platforms: string[]; profile: string }> } }
 type Environment = Readonly<Record<string, string | undefined>>
 type Options = { root?: string; configDir?: string; env?: Environment; warn?: (message: string) => void }
 export function loadProjectConfig(scope: 'platform', options?: Options): PlatformConfig
