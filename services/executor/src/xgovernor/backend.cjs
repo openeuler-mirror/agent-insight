@@ -181,7 +181,7 @@ class XGovernorExecutionBackend {
     }
     const model = resolved.model
     handle.opaque.modelId = `${model.provider}/${model.model}`
-    handle.opaque.resolvedModel = { provider: model.provider, model: model.model }
+    handle.opaque.resolvedModel = { provider: model.provider, model: model.model, ...(model.capabilities ? { capabilities: model.capabilities } : {}), ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}) }
     await this.persist(handle, context)
     const role = { ...(['pi', 'xiaoo'].includes(runtime.kind) ? { tools_enabled: true, max_turns: 160 } : {}), ...runtime.settings, backend_id: 'docker',
       ...(runtime.kind === 'pi' ? { extension_dir: runtime.extensionDirectory, discovery: { extensions: false, skills: false, prompt_templates: false, themes: false, context_files: false } } : runtime.kind === 'xiaoo' ? { allow_interaction: false } : {}),
@@ -189,7 +189,7 @@ class XGovernorExecutionBackend {
     const opened = await client.request('/sessions/open', {
       runtime_id: handle.opaque.runtimeId, runtime_kind: runtime.kind, conversation_id: handle.opaque.deployment, sender_id: 'agent-insight',
       workspace: { kind: 'daemon_default' },
-      llm: { provider: model.provider, model: model.model, api_key_env: model.apiKeyEnv, ...(model.apiBase ? { api_base: model.apiBase } : {}), ...(model.api ? { api: model.api } : {}) },
+      llm: { provider: model.provider, model: model.model, api_key_env: model.apiKeyEnv, ...(model.apiBase ? { api_base: model.apiBase } : {}), ...(model.api ? { api: model.api } : {}), ...(model.capabilities ? { capabilities: model.capabilities } : {}) },
       deployment: { options: { provider_options: { network_mode: 'none', workspace_root: spec.environment.workspaceRoot, bootstrap: true } } },
       ext: { [runtime.namespace]: role },
     }, context.signal, local.timeouts.prepareSeconds * 1000)
@@ -228,7 +228,9 @@ class XGovernorExecutionBackend {
     await this.persist(handle, context)
     let result
     try {
-      const receipt = await client.request('/sessions/turns', { runtime_id: handle.opaque.runtimeId, text: input.input, client_request_id: handle.runId }, input.signal)
+      const receipt = await client.request('/sessions/turns', { runtime_id: handle.opaque.runtimeId, text: input.input, client_request_id: handle.runId,
+        ...(handle.opaque.resolvedModel?.reasoningEffort ? { reasoning_effort: handle.opaque.resolvedModel.reasoningEffort } : {}),
+      }, input.signal)
       if (receipt.runtime_id !== handle.opaque.runtimeId || !receipt.turn_id) throw error('XGOVERNOR_EVENT_MISMATCH', '任务回执与会话不匹配')
       handle.opaque.turnId = receipt.turn_id
       await this.persist(handle, context)

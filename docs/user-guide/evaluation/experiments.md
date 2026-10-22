@@ -152,7 +152,7 @@ retention:
 
 `days` 必须为正整数，修改后在下一轮清理检查生效。清理只涉及客户端的 `benchmark-runs/` 和对应 `xgovernor-runs/` 本地目录，不清理 Docker 镜像。xGovernor 安装版本在客户端执行空闲时清理：当前版本、上一版本和仍被未完成清理的 Case 引用的版本始终保留，其他版本超过同一保留期限后删除。旧记录缺少终态时间或上传确认时也会保留。
 
-模型沿用实验中的选择。Pi 从原有 `models.json`、`auth.json` 和登录环境解析；xiaoO 从原有 `config.toml` 的 `[llm]` 和其 `api_key_env` 解析。选择默认模型时使用 Agent 原有默认配置。新机器仍须完成一次原有 Agent 的模型配置；无需再配置 xGovernor 的模型 Key。当前 Pi OAuth/订阅认证、自定义 headers/兼容参数尚不支持，会明确报错，不会替换模型。Trace 上传复用 curl 安装保存的采集认证。
+模型沿用实验中的选择。Pi 从原有 `models.json`、`auth.json` 和登录环境解析；xiaoO 从原有 `config.toml` 的 `[llm]` 和其 `api_key_env` 解析。选择默认模型时使用 Agent 原有默认配置。新机器仍须完成一次原有 Agent 的模型配置；无需再配置 xGovernor 的模型 Key。Pi 内置模型的兼容参数正常沿用，模型的推理能力、输入类型、上下文和输出 Token 上限同步传入执行会话；只有与同版本内置目录不同、当前桥接无法保留的自定义 headers/兼容参数才报出具体字段。Pi OAuth/订阅认证仍不支持。xiaoO 沿用 `[llm].max_tokens`，并将 `reasoning_effort` 传给每轮请求；当前支持 `off/high/max` 及原生别名（例如 `xhigh` 对应 `max`），未配置时使用 Runtime 默认值。`kvcache_enabled` 和 `kvcache_debug_enabled` 未配置或为 `false` 可执行，显式设为 `true` 会提示当前 xGovernor 契约不支持，不会忽略配置后继续运行。Trace 上传复用 curl 安装保存的采集认证。
 
 MCTS 的 xGovernor 保持独立：不接管其进程、源码、配置或版本；原生执行端每个 Case 使用自己的动态端口、状态目录和 Docker 标签。两者共享机器资源，需合理控制并发。
 

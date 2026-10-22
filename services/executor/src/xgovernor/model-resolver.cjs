@@ -5,6 +5,7 @@ const path = require('node:path')
 const os = require('node:os')
 const { spawn } = require('node:child_process')
 const { pathToFileURL } = require('node:url')
+const { isDeepStrictEqual } = require('node:util')
 const { installationRoot } = require('./installation.cjs')
 const { readSetup } = require('./setup.cjs')
 const { toolchainEnvironment } = require('./toolchain.cjs')
@@ -16,6 +17,28 @@ function invalid(message) { return error('MODEL_CONFIGURATION_INVALID', message)
 function json(file, fallback = {}) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch (cause) { if (cause.code === 'ENOENT') return fallback; throw invalid('Agent 模型配置不是合法 JSON') }
 }
+function capabilities(value) {
+  if (value == null) return undefined
+  if (typeof value !== 'object' || Array.isArray(value)) throw invalid('模型 capabilities 必须为对象')
+  const result = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (!['reasoning', 'input', 'context_window', 'max_tokens'].includes(key)) throw invalid('模型 capabilities 包含不支持的字段')
+    if (item == null) continue
+    if (key === 'reasoning' && typeof item !== 'boolean') throw invalid('模型 reasoning 必须为布尔值')
+    if (key === 'input' && (!Array.isArray(item) || !item.length || item.some(input => !['text', 'image'].includes(input)))) throw invalid('模型 input 必须包含 text 或 image')
+    if (['context_window', 'max_tokens'].includes(key) && (!Number.isInteger(item) || item < 1 || item > 0xffffffff)) throw invalid(`模型 ${key} 必须为正整数且不超过 u32 上限`)
+    result[key] = Array.isArray(item) ? [...item] : item
+  }
+  if (result.context_window && result.max_tokens > result.context_window) throw invalid('模型 max_tokens 不能超过 context_window')
+  return Object.keys(result).length ? result : undefined
+}
+function reasoningEffort(value) {
+  if (value == null) return undefined
+  const aliases = { off: 'off', none: 'off', disabled: 'off', high: 'high', max: 'max', xhigh: 'max', maximum: 'max' }
+  const effort = typeof value === 'string' && Object.hasOwn(aliases, value.trim().toLowerCase()) ? aliases[value.trim().toLowerCase()] : undefined
+  if (!effort) throw invalid('xiaoO reasoning_effort 仅支持 off、high、max（及其原生别名）')
+  return effort
+}
 function validateResolved(model, credential) {
   if (!model?.provider || !model?.model) throw invalid('请选择模型或配置 Agent 的默认模型')
   if (model.api && !APIS.includes(model.api)) throw invalid('所选模型的 API 协议尚不支持 xGovernor 执行')
@@ -24,8 +47,12 @@ function validateResolved(model, credential) {
     try { url = new URL(model.apiBase) } catch { throw invalid('Agent 模型 endpoint 不合法') }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw invalid('Agent 模型 endpoint 含不支持的认证信息或参数')
   }
+  const caps = capabilities(model.capabilities)
+  const effort = reasoningEffort(model.reasoningEffort)
+  if (caps?.reasoning === false && effort && effort !== 'off') throw invalid('模型不支持推理，不能启用 reasoning_effort')
   if (typeof credential !== 'string' || !credential.trim()) throw invalid('所选模型凭据不可用，请完成原有 Agent 的模型配置或登录')
-  return { model: { ...model, apiKeyEnv: MODEL_KEY }, credential }
+  return { model: { provider: model.provider, model: model.model, ...(model.api ? { api: model.api } : {}), ...(model.apiBase ? { apiBase: model.apiBase } : {}),
+    ...(caps ? { capabilities: caps } : {}), ...(effort ? { reasoningEffort: effort } : {}), apiKeyEnv: MODEL_KEY }, credential }
 }
 async function resolvePi(modelId, runtime, env, loadSdk) {
   const home = env.AGENT_INSIGHT_USER_HOME || env.HOME || os.homedir()
@@ -44,8 +71,21 @@ async function resolvePi(modelId, runtime, env, loadSdk) {
   const registry = new sdk.ModelRegistry(native)
   const auth = await registry.getApiKeyAndHeaders(model)
   if (!auth.ok) throw invalid('Pi 无法解析所选模型凭据')
-  if (Object.keys(auth.headers || {}).length || Object.keys(model.headers || {}).length || Object.keys(model.compat || {}).length) throw invalid('所选 Pi 模型要求自定义 headers/兼容参数，当前 xGovernor 契约尚不支持')
-  return validateResolved({ provider, model: name, api: model.api, apiBase: auth.baseUrl || model.baseUrl }, auth.apiKey)
+  // Pi 桥接从内置目录重建模型，只能保留与该目录一致的兼容配置。
+  const catalog = await sdk.ModelRuntime.create({ modelsPath: null, refreshOnCreate: false, allowModelNetwork: false })
+  const builtin = catalog.getModel(provider, name)
+  const custom = []
+  const actualCompat = model.compat || {}; const builtinCompat = builtin?.compat || {}
+  for (const key of new Set([...Object.keys(actualCompat), ...Object.keys(builtinCompat)])) {
+    if (!isDeepStrictEqual(actualCompat[key], builtinCompat[key])) custom.push(`compat.${key}`)
+  }
+  const headers = value => Object.fromEntries(Object.entries(value || {}).map(([key, item]) => [key.toLowerCase(), item]))
+  const actualHeaders = { ...headers(model.headers), ...headers(auth.headers) }
+  if (!isDeepStrictEqual(actualHeaders, headers(builtin?.headers))) custom.push('headers')
+  if (custom.length) throw invalid(`所选 Pi 模型包含当前 xGovernor 桥接无法保留的自定义配置：${custom.join('、')}`)
+  return validateResolved({ provider, model: name, api: model.api, apiBase: auth.baseUrl || model.baseUrl,
+    capabilities: { reasoning: model.reasoning, input: model.input, context_window: model.contextWindow, max_tokens: model.maxTokens },
+  }, auth.apiKey)
 }
 async function readXiaoo(file, env) {
   const { execFile } = require('node:child_process')
@@ -68,7 +108,13 @@ async function resolveXiaoo(modelId, env, read = readXiaoo) {
   const selected = modelId || (llm.provider && llm.model ? `${llm.provider}/${llm.model}` : '')
   const split = selected.indexOf('/')
   if (split < 1 || selected.slice(0, split) !== llm.provider) throw invalid('实验所选 provider 与 xiaoO 原有配置不一致，请先配置该 provider')
-  return validateResolved({ provider: llm.provider, model: selected.slice(split + 1), ...(llm.api_base ? { apiBase: llm.api_base } : {}), ...(llm.api ? { api: llm.api } : {}) }, env[llm.api_key_env])
+  for (const key of ['kvcache_enabled', 'kvcache_debug_enabled']) {
+    if (llm[key] != null && typeof llm[key] !== 'boolean') throw invalid(`xiaoO ${key} 必须为布尔值`)
+    if (llm[key] === true) throw invalid(`xiaoO ${key}=true 当前 xGovernor 契约尚不支持`)
+  }
+  return validateResolved({ provider: llm.provider, model: selected.slice(split + 1), ...(llm.api_base ? { apiBase: llm.api_base } : {}), ...(llm.api ? { api: llm.api } : {}),
+    capabilities: { max_tokens: llm.max_tokens }, reasoningEffort: llm.reasoning_effort,
+  }, env[llm.api_key_env])
 }
 async function resolveNative(input, options = {}) {
   const env = collectorEnvironment(options.env || process.env)

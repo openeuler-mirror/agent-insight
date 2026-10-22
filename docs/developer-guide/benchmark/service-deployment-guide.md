@@ -383,7 +383,7 @@ execution:
 
 默认模型解析在客户端 Agent 适配层完成。实验指定的 model 优先于 Runtime 的 `defaultModel`，再使用 Pi settings 或 xiaoO `[llm]` 默认值。Pi 使用配套 SDK 的 ModelRuntime/ModelRegistry 读取原有 models.json/auth.json；xiaoO 使用原配置的 provider、api_base、api_key_env，允许同 provider 的实验模型覆盖，不跨 provider 借用凭据。xiaoO TOML 解析使用客户端 FI Python 或 Python 3.11+（兼容已有 tomli）。原配置路径和用户目录从安装上下文恢复，在独立登录 shell 子进程中解析环境变量；秘钥只通过私有管道返回，不进入命令参数、Profile、能力上报或 lease。
 
-仅将当前模型的密钥放入 case 进程专用环境变量，模型请求仍由宿主机发出。当前不支持 Pi OAuth/订阅认证及自定义 headers/兼容参数，也不静默降级。显式 `models` 映射作为高级覆盖保留，但只检查当前选中模型的凭据，其他模型不会阻止环境就绪。模型目录不再必须复制到 Profile，默认复用 Agent 上报的 models。Trace 认证从原有 `$AGENT_INSIGHT_HOME/.env` 读取，显式环境变量仍优先，不使用设备凭据替代采集密钥。
+仅将当前模型的密钥放入 case 进程专用环境变量，模型请求仍由宿主机发出。Pi 通过配套 SDK 的纯内置目录（`modelsPath: null`、离线模式）比对有效模型的 `compat` 与 headers：内置配置由 xGovernor Pi 桥接保留，只有实际不同的自定义项才拒绝，并返回字段名而非值。Pi 模型的 `reasoning/input/contextWindow/maxTokens` 映射到 `llm.capabilities.reasoning/input/context_window/max_tokens`，输出限制不得超过上下文。xiaoO `[llm].max_tokens` 映射到 `llm.capabilities.max_tokens`，`reasoning_effort` 按当前原生枚举规范为 `off/high/max`（含 `none/disabled/xhigh/maximum` 别名），随每轮请求发送；解析结果保存在本次句柄，后续配置变化不会改写已准备 Case 的设置。两个 KV cache 开关不配置或为 false 可执行，true 因当前契约不支持而报出字段名。Pi OAuth/订阅及无法保留的自定义 headers/兼容项仍不支持，不静默降级。显式 `models` 映射作为高级覆盖保留，但只检查当前选中模型的凭据，其他模型不会阻止环境就绪。模型目录不再必须复制到 Profile，默认复用 Agent 上报的 models。Trace 认证从原有 `$AGENT_INSIGHT_HOME/.env` 读取，显式环境变量仍优先，不使用设备凭据替代采集密钥。
 
 手动安装仍可显式配置 `serverExecutable` 和各 Runtime 的 `workerExecutable`，Pi 另需 `executable`、`extensionDirectory`，均使用绝对路径。只要存在这些自定义路径，就完整采用手动安装，不与受管理安装混用；要迁移到受管理安装，先移除这些路径。手动安装按实际制品计算摘要，公开 `sourceRevision` 显示 `unknown`；兼容保留的旧 `sourceRevision` 声明不能证明二进制来源，也无需继续手动维护。
 

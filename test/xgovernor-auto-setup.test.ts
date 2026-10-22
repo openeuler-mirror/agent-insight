@@ -74,7 +74,10 @@ test('Pi resolves experiment selection, endpoint and credential through native S
   fs.writeFileSync(path.join(agentDir, 'settings.json'), JSON.stringify({ defaultProvider: 'custom', defaultModel: 'default' }))
   let requested = ''
   const native = { getError() {}, getModel(provider: string, name: string) { requested = `${provider}/${name}`; return { provider, id: name, api: 'openai-completions', baseUrl: 'https://example.com/v1' } }, isUsingOAuth: () => false, isUsingSubscription: () => false }
-  const sdk = async () => ({ ModelRuntime: { async create(options: any) { assert.equal(options.modelsPath, path.join(agentDir, 'models.json')); assert.equal(options.authPath, path.join(agentDir, 'auth.json')); return native } }, ModelRegistry: class { async getApiKeyAndHeaders() { return { ok: true, apiKey: 'native-secret' } } } })
+  const sdk = async () => ({ ModelRuntime: { async create(options: any) {
+    if (options.modelsPath === null) return { getModel() {} }
+    assert.equal(options.modelsPath, path.join(agentDir, 'models.json')); assert.equal(options.authPath, path.join(agentDir, 'auth.json')); return native
+  } }, ModelRegistry: class { async getApiKeyAndHeaders() { return { ok: true, apiKey: 'native-secret' } } } })
   const env = { HOME: f.home, PI_CODING_AGENT_DIR: agentDir }
   const resolved = await resolvePi('custom/selected', {}, env, sdk)
   assert.equal(requested, 'custom/selected')
