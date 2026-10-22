@@ -393,6 +393,10 @@ curl 安装所选 Pi/xiaoO 时，通过 `install-ras-client.js` 自动调用 `xg
 
 `XGovernorClient` 的 HTTP 失败只回传固定词表内的安全原因与已知缺失/不支持字段名，有界读取防止大响应或挂起响应拖住清理。原始错误 JSON、任意 details、URL、headers 和凭据不进入完成回调；`XGOVERNOR_REJECTED` 的安全消息随原有完成链路保存并由 Case 失败组件展示。
 
+`execution-workspace.cjs` 将 SWE-bench 的镜像工作区准备分派到执行端 `benchmarks/swe-bench.cjs`，其他 Benchmark 保留原有工作区准备策略。SWE-bench 不再 reset/clean 或校验 origin：官方镜像可移除 origin，并在数据集基线之后提交安装调整。执行端验证初始 HEAD、数据集 commit 存在且为 HEAD 祖先、初始状态干净，分别持久化 `datasetRevision` 和用于 Patch 的 `baseCommit`，不修改任务信封中的 `workspace.revision`。替换 Backend 时可注入自己的 `exec` 复用该工作区策略，不依赖 xGovernor 会话实现或 Evaluator。
+
+`GitPatchCollector` 将修改暂存并相对持久化基线生成二进制完整 diff，禁用外部 diff/textconv，继续排除提交物自身、校验大小和路径。收集时不使用当前 HEAD 替换基线，因此 Agent commit、暂存及未暂存修改和新增/删除文件均可包含；缺少持久化基线时明确失败。`command-diagnostics.cjs` 将沙箱非零退出/超时映射为固定安全说明，写入 `diagnostic.json` 与 `runFacts.sandboxDiagnostic`；Runner 合并失败事实与已有运行事实，保留收集失败前的 Trace。诊断只存固定操作和原因、阶段、退出码及超时标记，不持久化原始命令或 stderr，随 Case 的保留策略清理。
+
 `model-resolver.cjs` 属于执行端 Agent 适配层，按实验所选模型解析原有配置和凭据；Backend 仅将解析结果映射为 xGovernor 会话参数。私有子进程管道传递密钥，只有选中模型的凭据进入 case 环境，不写入 lease 或任务；Trace 认证复用客户端既有采集配置。环境就绪与模型认证独立，模型缺失在 prepare 阶段给出错误。Pi 兼容配置对照同版本 SDK 的纯内置目录，只拒绝无法由桥接保留的差异；已解析模型能力通过 `llm.capabilities` 传给会话。xiaoO 原配置的输出 Token 上限和推理强度分别映射到会话 capabilities 和每轮 `reasoning_effort`；已准备句柄持久保存这些非敏感设置，恢复时继续使用本次值。当前无法承接的启用 KV cache 配置明确拒绝。
 
 升级仅切换后续任务的版本指针，执行句柄固定本次 Runtime/模型凭据引用和组件路径，运行与 Trace 导出不依赖新的 current；旧版本目录保留供在途任务及恢复使用。任务受理前仍核对冻结摘要，不自动迁移旧实验。安装 smoke 只检查源码布局、扩展类型和 server 基础协议，实际模型、工具隔离、完整 Trace 仍需执行链路验证。安装步骤见[部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。

@@ -29,6 +29,7 @@ for (const kind of ['pi', 'xiaoo']) {
     const imageId = `sha256:${'b'.repeat(64)}`
     const runId = `run_wire_${kind}`
     const revision = 'a'.repeat(40)
+    const imageHead = 'c'.repeat(40)
     const task = {
       context: { runId }, benchmark: { key: 'swe-bench' }, task: { instruction: 'fix the issue', benchmarkPayload: { instanceId: 'example__project-1' } },
       workspace: { provider: 'git', revision, repository: 'https://github.com/example/project.git' },
@@ -63,7 +64,10 @@ for (const kind of ['pi', 'xiaoo']) {
           alive = true
           return Response.json({ runtime_id: payload.runtime_id, isolation: { boundary: 'container', network: 'isolated' } })
         }
-        if (url.endsWith('/sessions/exec')) return Response.json({ exit_code: 0, stdout: payload.command[1] === 'rev-parse' ? revision : payload.command[1] === 'remote' ? task.workspace.repository : '', stderr: '', timed_out: false })
+        if (url.endsWith('/sessions/exec')) {
+          assert.equal(['reset', 'clean', 'remote'].includes(payload.command[1]), false)
+          return Response.json({ exit_code: 0, stdout: payload.command[1] === 'rev-parse' ? imageHead : '', stderr: '', timed_out: false })
+        }
         if (url.endsWith('/sessions/turns')) return new Response(null, { status: 503 })
         if (url.endsWith('/sessions/close')) { alive = false; child.exitCode = 0 }
         return Response.json({})
@@ -79,6 +83,9 @@ for (const kind of ['pi', 'xiaoo']) {
     assert.equal(environments[0].AGENT_INSIGHT_CASE_MODEL_KEY, 'private-case-secret')
     assert.equal(JSON.stringify(prepared).includes('private-case-secret'), false)
     const persisted = JSON.parse(fs.readFileSync(path.join(prepared.opaque.directory, 'lease.json'), 'utf8'))
+    assert.equal(persisted.baseCommit, imageHead)
+    assert.equal(persisted.datasetRevision, revision)
+    assert.equal(task.workspace.revision, revision)
     resolved.model.reasoningEffort = 'off'
     await assert.rejects(backend.runAgent({ ...prepared, opaque: persisted }, { platform, input: 'fix the issue' }, context), /返回 HTTP 503/)
     const turns = requests.filter(item => item.url.endsWith('/sessions/turns'))

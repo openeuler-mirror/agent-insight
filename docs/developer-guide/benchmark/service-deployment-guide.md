@@ -393,9 +393,15 @@ execution:
 
 `runtimes` 是完整运行集合；默认受管理 Profile 按安装时选择过滤 Runtime，管理器仍构建配套组件。高级手动 Profile 可显式配置运行集合。同一个 Profile 内启用的 worker 或 Trace 依赖未就绪会报告环境不可用；模型凭据在任务准备阶段单独校验。`workerEnvironment` 可覆盖 Runtime 的 worker 变量名；Pi/xiaoO 默认分别为 `XGOVERNOR_PI_WORKER` / `XGOVERNOR_XIAOO_WORKER`。`settings` 仅由受信本机配置补充 Runtime 扩展，隔离参数由驱动固定。
 
-每个 Case 使用独立 daemon、凭据、状态目录和工具容器。两个监听端口动态分配，启动阶段确认端口占用时最多尝试 3 次；清理按 PID 身份和独立 deployment 标签执行，不使用全局 kill/prune。MCTS 服务及其配置不参与这一生命周期。镜像先解析为本机不可变 image ID，再核对架构、Git HEAD/origin/干净工作树，以及容器实际的无网络、无宿主挂载、非 root 用户、capability、no-new-privileges 和资源限制。预探测不会运行模型或逐个拉取 Case 镜像，显示“就绪”仍可能在实际镜像或模型检查时失败。
+每个 Case 使用独立 daemon、凭据、状态目录和工具容器。两个监听端口动态分配，启动阶段确认端口占用时最多尝试 3 次；清理按 PID 身份和独立 deployment 标签执行，不使用全局 kill/prune。MCTS 服务及其配置不参与这一生命周期。镜像先解析为本机不可变 image ID，再核对架构，以及容器实际的无网络、无宿主挂载、非 root 用户、capability、no-new-privileges 和资源限制。SWE-bench 直接使用镜像中的 `/testbed`，验证 Git HEAD、数据集基线 commit 存在且为 HEAD 的祖先，以及初始工作树干净；不检查 origin，不执行 reset/clean，保留官方镜像构建时的安装提交。预探测不会运行模型或逐个拉取 Case 镜像，显示“就绪”仍可能在实际镜像或模型检查时失败。
+
+执行句柄分别持久化 `datasetRevision`（任务原有 base_commit）和 `baseCommit`（镜像初始 HEAD / Patch 基线），不改写任务版本。收集器相对持久化的镜像基线汇总 Agent 已提交、暂存和未暂存的修改，包含新增、删除文件，排除提交物自身，并禁用外部 diff/textconv。成功运行事实中的 `execution.workspace` 保存 `datasetRevision` 与 `patchBaseCommit`。两端仍独立选择镜像，Patch 由现有 Evaluator 应用和评测。
 
 xGovernor HTTP 拒绝通过有界读取提取原因（最多 16 KiB、最多等待 1 秒），按固定词表转换为可展示的 Pi 探测、模型认证、网络或能力配置错误，已知请求字段错误仅保留字段名。响应中的 headers、密钥、URL、本地路径和任意 details 不传回平台；未知、过大、无法解析或读取失败的响应保留 HTTP 状态码。Case 失败提示以“执行环境请求被拒绝”展示安全原因，不重试已被拒绝的会话创建。历史仅存状态码的失败记录不会自动补齐。
+
+HTTP 200 但沙箱命令退出非零或超时，按 `SANDBOX_COMMAND_FAILED` 回传安全消息；操作名来自固定列表，stderr 只取前 16 KiB 匹配固定原因，不回显原文、stdout 或命令参数。`runFacts.sandboxDiagnostic` 和本次私有目录的 `diagnostic.json` 保存阶段、操作、退出码、超时标记及原因；收集阶段失败仍保留已有 Trace/模型事实。未知原因明确标为未识别，不再提示用户查看不存在的诊断。
+
+仅更新本次工作区与 Patch 修复时，更新平台并重跑安装页生成的 Pi/xiaoO curl 命令，以更新客户端 JS bundle；已通过布局校验的同版本 xGovernor 继续复用，不需要重新编译 Rust、重拉 Case 镜像或修改 cgroup。等待客户端重新上线后重跑失败 Case。只有安装器报告旧布局需要重建或环境摘要发生变化时，才需要重建依赖或重新确认实验执行环境。
 
 执行端和 Evaluator 分别维护自身的 SWE-bench 镜像实现，互不依赖，可独立调整。当前两端默认策略相同：优先使用本地官方别名缓存；没有缓存时，按 SWR 仓库列表 → 配置代理 → 官方仓库顺序拉取，SWR/代理成功后自动恢复官方别名。`verifiedMirrorRepositories: null` 使用内置两个 SWR Verified 仓库，`[]` 关闭镜像站，也可填写自有仓库列表；各仓库按 `<repository>:<instance_id>` 查找 Case。该 SWR 映射只适用于官方 x86_64，ARM64 跳过。
 

@@ -15,6 +15,8 @@ const { resolveModel } = require('./model-resolver.cjs')
 const { installationRoot } = require('./installation.cjs')
 const { toolchainEnvironment } = require('./toolchain.cjs')
 const { prepareExecutionImage } = require('../execution-images.cjs')
+const { prepareExecutionWorkspace } = require('../execution-workspace.cjs')
+const { commandFailure } = require('./command-diagnostics.cjs')
 
 async function port() {
   const server = net.createServer()
@@ -116,7 +118,7 @@ class XGovernorExecutionBackend {
     const adminPort = await port()
     let tenantPort = await port()
     while (tenantPort === adminPort) tenantPort = await port()
-    Object.assign(handle.opaque, { adminPort, tenantPort, workspaceRoot: spec.environment.workspaceRoot, baseCommit: task.workspace.revision })
+    Object.assign(handle.opaque, { adminPort, tenantPort, workspaceRoot: spec.environment.workspaceRoot, datasetRevision: task.workspace.revision })
     const auth = randomBytes(32).toString('hex')
     await fsp.writeFile(path.join(directory, 'admin.auth'), auth, { mode: 0o600, flag: 'wx' })
     await fsp.writeFile(path.join(directory, 'tenants.toml'), `[admin]\ntokens = ["${auth}"]\n\n[[tenant]]\ntenant_id = "case"\ntokens = ["${randomBytes(32).toString('hex')}"]\n`, { mode: 0o600, flag: 'wx' })
@@ -202,19 +204,21 @@ class XGovernorExecutionBackend {
       || inspected.HostConfig.Memory !== local.resources.memoryMiB * 1024 ** 2 || inspected.HostConfig.NanoCpus !== local.resources.cpu * 1e9 || inspected.HostConfig.PidsLimit !== local.resources.pids) throw error('ISOLATION_MISMATCH', '容器实际配置与冻结要求不同')
     handle.opaque.containerId = inspected.Id
     await this.persist(handle, context)
-    await this.exec(handle, ['git', 'reset', '--hard', task.workspace.revision], context.signal)
-    await this.exec(handle, ['git', 'clean', '-fd'], context.signal)
-    const baseline = await this.exec(handle, ['git', 'rev-parse', 'HEAD'], context.signal)
-    const origin = await this.exec(handle, ['git', 'remote', 'get-url', 'origin'], context.signal)
-    const status = await this.exec(handle, ['git', 'status', '--porcelain'], context.signal)
-    if (baseline.stdout.trim() !== task.workspace.revision || status.stdout.trim() || origin.stdout.trim().replace(/\.git\/?$/, '').replace(/\/$/, '') !== task.workspace.repository.replace(/\.git\/?$/, '').replace(/\/$/, '')) throw error('WORKSPACE_REVISION_MISMATCH', '镜像仓库或工作树不是干净的冻结基线')
+    Object.assign(handle.opaque, await prepareExecutionWorkspace(task, {
+      exec: (command, operation) => this.exec(handle, command, context.signal, undefined, operation),
+    }))
+    await this.persist(handle, context)
     this.assertFrozen(local)
     return handle
   }
-  async exec(handle, command, signal, cwd) {
+  async exec(handle, command, signal, cwd, operation = 'sandbox-command') {
     const client = await this.client(handle)
     const result = await client.request('/sessions/exec', { runtime_id: handle.opaque.runtimeId, command, cwd: cwd || handle.opaque.workspaceRoot, timeout_ms: 120000 }, signal, 150000)
-    if (result.exit_code !== 0 || result.timed_out) throw error('SANDBOX_COMMAND_FAILED', '沙箱命令执行失败，请查看本次执行诊断')
+    if (result.exit_code !== 0 || result.timed_out) {
+      const cause = commandFailure(result, operation)
+      await this.options.atomicWriteJson(path.join(handle.opaque.directory, 'diagnostic.json'), cause.runFacts.sandboxDiagnostic).catch(() => {})
+      throw cause
+    }
     return result
   }
   async runAgent(handle, input, context) {
@@ -237,7 +241,7 @@ class XGovernorExecutionBackend {
       const terminal = await client.events(handle.opaque.runtimeId, receipt.turn_id, input.signal, () => context.heartbeat?.())
       if (terminal.kind !== 'turn_completed' || terminal.outcome !== 'complete') throw error('AGENT_RUN_FAILED', 'Agent 未正常完成本次任务')
       result = { exitCode: 0, timedOut: false, model: handle.opaque.modelId, usage: terminal.usage, startedAt: new Date(handle.opaque.startedAt).toISOString(), finishedAt: new Date().toISOString(), execution: {
-        profile: handle.opaque.profile || describeProfile(handle.opaque.profileKey, local), controllerBoundary: 'host', toolBoundary: 'container', network: 'deny', resources: local.resources, imageId: handle.opaque.imageId, ...(handle.opaque.imageResolution ? { imageResolution: handle.opaque.imageResolution } : {}),
+        profile: handle.opaque.profile || describeProfile(handle.opaque.profileKey, local), controllerBoundary: 'host', toolBoundary: 'container', network: 'deny', resources: local.resources, imageId: handle.opaque.imageId, workspace: { datasetRevision: handle.opaque.datasetRevision, patchBaseCommit: handle.opaque.baseCommit }, ...(handle.opaque.imageResolution ? { imageResolution: handle.opaque.imageResolution } : {}),
       } }
     } catch (cause) {
       await this.cancel(handle).catch(() => {})
@@ -249,10 +253,9 @@ class XGovernorExecutionBackend {
   }
   async collect(handle, contract, context) {
     if (contract.collector !== 'git-patch/v1') throw error('ARTIFACT_COLLECTOR_UNSUPPORTED', '后端未实现该提交物合同')
-    const head = await this.exec(handle, ['git', 'rev-parse', 'HEAD'], context.signal)
-    if (head.stdout.trim() !== handle.opaque.baseCommit) throw error('WORKSPACE_REVISION_MISMATCH', 'Agent 改变了冻结基线 HEAD')
+    if (!/^[a-f0-9]{40}$/.test(handle.opaque.baseCommit)) throw error('WORKSPACE_REVISION_MISMATCH', '执行句柄缺少有效的 Patch 基线，拒绝使用当前 HEAD 替代')
     const collector = new this.options.GitPatchCollector(async (command, args) => {
-      const result = await this.exec(handle, [command, ...args], context.signal)
+      const result = await this.exec(handle, [command, ...args], context.signal, undefined, args[0] === 'add' ? 'patch-stage' : 'patch-diff')
       return { stdout: result.stdout, stderr: result.stderr }
     })
     return collector.collect(contract, { workspace: { baseCommit: handle.opaque.baseCommit } })

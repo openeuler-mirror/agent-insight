@@ -640,7 +640,7 @@ class GitPatchCollector {
     const diff = await this.processRunner(
       'git',
       [
-        'diff', '--cached', '--binary', '--full-index', context.workspace.baseCommit,
+        'diff', '--no-ext-diff', '--no-textconv', '--cached', '--binary', '--full-index', context.workspace.baseCommit,
         '--', '.', reservedArtifact,
       ],
       { cwd: context.workspace.path, errorCode: 'ARTIFACT_COLLECT_FAILED' },
@@ -863,7 +863,7 @@ class BenchmarkExecutionRunner {
         await this.store.writeState(request.runId, { stage: 'complete_pending', completion, callbackError: cause.message })
         return
       }
-      runFacts ||= cause.runFacts ? { ...cause.runFacts, platform: task.agentConfig.platform, agent: task.agentConfig.agent } : { finishedAt: new Date().toISOString() }
+      runFacts = { ...(runFacts || { finishedAt: new Date().toISOString() }), ...(cause.runFacts || {}), platform: task.agentConfig.platform, agent: task.agentConfig.agent }
       if (handle && (!cleanup || cleanup.status !== 'succeeded')) {
         await backend.cancel(handle).catch(() => {})
         cleanup = await this.cleanup(backend, handle, request)
