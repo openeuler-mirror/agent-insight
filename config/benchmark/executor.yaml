@@ -1,3 +1,5 @@
+retention:
+  days: 7
 benchmarks:
   swe-bench:
     gitSource: null

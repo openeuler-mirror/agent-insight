@@ -30,8 +30,19 @@ test('defaults, scoped files and local overrides need no version field', (t) => 
   assert.equal(loadProjectConfig('evaluator', { root: f.root, env: {} }).maxConcurrency, 3)
   assert.equal(loadProjectConfig('evaluator', f.options).maxConcurrency, 3)
   assert.equal(loadProjectConfig('executor', f.options).benchmarks['swe-bench'].gitSource, null)
+  assert.equal(loadProjectConfig('executor', f.options).retention.days, 7)
   f.write('platform.local.yaml', { version: 1 })
   assert.throws(() => loadProjectConfig('platform', f.options), /platform.local.yaml.*未知配置字段 version/)
+})
+
+test('local history retention accepts only positive integer days', t => {
+  const f = fixture(t)
+  f.write('executor.local.yaml', { retention: { days: 30 } })
+  assert.equal(loadProjectConfig('executor', f.options).retention.days, 30)
+  for (const days of [0, -1, 1.5, '7', null]) {
+    f.write('executor.local.yaml', { retention: { days } })
+    assert.throws(() => loadProjectConfig('executor', f.options), /retention.days/)
+  }
 })
 
 test('configuration resolves paths by the declaring file and distinguishes null from empty lists', (t) => {
@@ -125,6 +136,7 @@ test('installed client loads user configuration outside runtime and retains over
     assert.equal(fs.existsSync(path.dirname(local)), true);
     assert.equal(fs.existsSync(local), false);
     fs.writeFileSync(local, JSON.stringify({
+      retention:{days:14},
       benchmarks:{'swe-bench':{gitSource:'../git-cache'}},
       execution:{profiles:{'xgovernor-local-docker':{resources:{cpu:4,memoryMiB:8192}}}},
       runtimes:{mcts:{defaults:{maxIters:7}}}
@@ -134,6 +146,7 @@ test('installed client loads user configuration outside runtime and retains over
     assert.equal(fs.readFileSync(local, 'utf8'), text);
     const {loadProjectConfig} = require(path.join(installer.RUNTIME_DIR, 'packages/project-config/index.cjs'));
     const config = loadProjectConfig('executor');
+    assert.equal(config.retention.days, 14);
     assert.equal(config.execution.profiles['xgovernor-local-docker'].resources.cpu, 4);
     assert.equal(config.execution.profiles['xgovernor-local-docker'].resources.memoryMiB, 8192);
     assert.equal(config.execution.profiles['xgovernor-local-docker'].resources.pids, 512);

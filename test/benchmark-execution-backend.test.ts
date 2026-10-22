@@ -127,6 +127,8 @@ test('a replacement backend executes an arbitrary Benchmark without local paths 
     assert.deepEqual(f.calls, ['prepare', 'run', 'collect', 'close'])
     assert.equal(f.sent[0].runFacts.traceId, 'exact-trace')
     assert.equal((await f.store.state(f.task.runId)).terminalStatus, 'succeeded')
+    assert.ok((await f.store.state(f.task.runId)).completionDeliveredAt)
+    assert.ok((await f.store.state(f.task.runId)).terminalAt)
   } finally { fs.rmSync(f.root, { recursive: true, force: true }) }
 })
 
@@ -136,11 +138,30 @@ test('cleanup failure persists the backend handle and recovery never reruns the 
     await f.runner.execute(f.task)
     const state = await f.store.state(f.task.runId)
     assert.equal(state.stage, 'cleanup_pending')
+    assert.equal(state.completionDeliveredAt, undefined)
     assert.equal(f.sent.length, 0)
     await f.runner.resume(f.task, state)
     assert.equal(f.calls.filter(item => item === 'run').length, 1)
     assert.equal(f.sent[0].status, 'succeeded')
     assert.equal(f.sent[0].cleanup.status, 'succeeded')
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('completion acknowledgement is persisted only after a successful callback retry', async () => {
+  const f = await runnerFixture()
+  try {
+    const complete = f.callback.complete
+    f.callback.complete = async () => { throw new Error('temporary callback outage') }
+    await f.runner.execute(f.task)
+    const pending = await f.store.state(f.task.runId)
+    assert.equal(pending.stage, 'complete_pending')
+    assert.equal(pending.completionDeliveredAt, undefined)
+    f.callback.complete = complete
+    await f.runner.resume(f.task, pending)
+    const done = await f.store.state(f.task.runId)
+    assert.equal(done.stage, 'terminal')
+    assert.ok(done.completionDeliveredAt)
+    assert.equal(f.calls.filter(item => item === 'run').length, 1)
   } finally { fs.rmSync(f.root, { recursive: true, force: true }) }
 })
 

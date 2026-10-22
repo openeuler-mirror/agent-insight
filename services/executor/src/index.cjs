@@ -11,6 +11,8 @@ const { SweBenchGitSourcePolicy } = require('./benchmarks/swe-bench.cjs')
 const { runtimeInvocationOptions } = require('./runtime-options.cjs')
 const { ExecutionBackendRegistry, LocalExecutionBackend } = require('./execution-backend.cjs')
 const { validateExecution, bindingFor, executionCapabilities } = require('./execution-config.cjs')
+const { LocalRetention, SWEEP_INTERVAL } = require('./retention.cjs')
+const { loadProjectConfig } = require('./project-config.cjs')
 
 const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
 const DELIVERY_RETRY_BASE_MS = 5_000
@@ -361,9 +363,14 @@ class FileRunStore {
   }
 
   writeState(runId, patch) {
-    const next = (this.stateWrites.get(runId) || Promise.resolve()).catch(() => {}).then(async () => atomicWriteJson(
-      path.join(this.runDir(runId), 'state.json'), { ...(await this.state(runId) || {}), ...patch, updatedAt: new Date().toISOString() },
-    ))
+    const next = (this.stateWrites.get(runId) || Promise.resolve()).catch(() => {}).then(async () => {
+      const prior = await this.state(runId) || {}
+      const updatedAt = new Date().toISOString()
+      await atomicWriteJson(path.join(this.runDir(runId), 'state.json'), {
+        ...prior, ...patch, updatedAt,
+        ...(patch.stage === 'terminal' ? { terminalAt: prior.terminalAt || updatedAt } : {}),
+      })
+    })
     this.stateWrites.set(runId, next)
     return next.finally(() => { if (this.stateWrites.get(runId) === next) this.stateWrites.delete(runId) })
   }
@@ -839,7 +846,7 @@ class BenchmarkExecutionRunner {
       await this.store.writeState(request.runId, { stage: 'complete_pending', completion })
       signal?.throwIfAborted()
       await this.callback.complete(request, completion)
-      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'succeeded' })
+      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'succeeded', completionDeliveredAt: new Date().toISOString() })
     } catch (cause) {
       const cancelled = Boolean(await this.store.cancellation?.(request.runId))
       if (completion && !cancelled) {
@@ -865,7 +872,7 @@ class BenchmarkExecutionRunner {
       if (cancelled || retryUpload || cleanup.status !== 'succeeded') return
       try {
         await this.callback.complete(request, completion)
-        await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'failed' })
+        await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'failed', completionDeliveredAt: new Date().toISOString() })
       } catch (error) { await this.store.writeState(request.runId, { callbackError: error.message }) }
     } finally {
       clearInterval(timer)
@@ -899,7 +906,7 @@ class BenchmarkExecutionRunner {
     }
     if (state.stage === 'complete_pending' && state.completion) {
       await this.callback.complete(request, state.completion)
-      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: state.completion.status })
+      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: state.completion.status, completionDeliveredAt: new Date().toISOString() })
     }
   }
 }
@@ -1001,6 +1008,15 @@ function createBenchmarkExecutor(options) {
   let recoveryTimer = null
   let recoveryTimerDueAt = 0
   let closed = false
+  const retention = new LocalRetention({
+    baseDir, installRoot: options.retentionInstallationRoot || require('./xgovernor/installation.cjs').installationRoot({ AGENT_INSIGHT_HOME: options.agentInsightHome || path.dirname(baseDir) }),
+    getDays: () => (options.retention || loadProjectConfig('executor').retention).days,
+    isActive: runId => activeRunIds.has(runId) || deliveryRetryRunId === runId || store.stateWrites?.has(runId),
+    hasActiveRuns: () => closed || activeRunIds.size > 0 || Boolean(deliveryRetryRunId),
+    log: options.log, logError: options.logError,
+  })
+  const retentionTimer = setInterval(() => { if (!closed) retention.sweep() }, SWEEP_INTERVAL)
+  retentionTimer.unref?.()
 
   function deliveryRetryDelay(attempt) {
     return Math.min(
@@ -1252,6 +1268,7 @@ function createBenchmarkExecutor(options) {
     for (const candidate of executionCandidates) {
       if (tryAcquire(candidate.runId)) runInBackground(candidate.request, candidate.state)
     }
+    if (!closed) await retention.sweep()
   }
 
   return {
@@ -1291,6 +1308,8 @@ function createBenchmarkExecutor(options) {
     },
     async close() {
       closed = true
+      clearInterval(retentionTimer)
+      await retention.pending
       if (recoveryTimer) clearTimeout(recoveryTimer)
       recoveryTimer = null
       recoveryTimerDueAt = 0
@@ -1298,6 +1317,7 @@ function createBenchmarkExecutor(options) {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     },
     recover,
+    cleanupRetainedRuns: () => retention.sweep(true),
   }
 }
 

@@ -14,7 +14,7 @@ function resumeUpload(handle, config, insightBaseUrl) {
   if (!apiKey || !fs.existsSync(stateDir)) return null
   if (!uploaders.has(stateDir)) {
     const { DurableTraceUploader } = transport()
-    const uploader = new DurableTraceUploader({ framework: handle.opaque.platform, apiKey, stateDir, endpoint: `${insightBaseUrl}/api/ingest/otel/v1/traces`, maxRetries: 0, redactLocalPaths: false,
+    const uploader = new DurableTraceUploader({ framework: handle.opaque.platform, apiKey, stateDir, endpoint: `${insightBaseUrl}/api/ingest/otel/v1/traces`, maxRetries: 0, redactLocalPaths: false, cleanupRetention: false,
       fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(30000) }),
     })
     const flush = uploader.flushOnce.bind(uploader)
@@ -122,4 +122,4 @@ async function exportTrace(handle, runtime, config, context, processRunner) {
   return { traceId: root.sessionId }
 }
 
-module.exports = { exportTrace, piEvents, xiaooEvents, transport, resumeUpload }
+module.exports = { exportTrace, piEvents, xiaooEvents, transport, resumeUpload, hasActiveUpload: directory => uploaders.has(path.join(directory, 'trace-spool')) }

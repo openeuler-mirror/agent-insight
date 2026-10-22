@@ -406,7 +406,18 @@ node ~/.agent-insight/client/runtime/xgovernor.cjs rollback
 
 安装检查不调用模型、不创建任务容器，不能替代真实 Pi/xiaoO + Docker Case 验收，也不能保证任意上游协议变化均可自动适配。布局或基础协议不兼容时拒绝切换，需升级本平台适配器。
 
-不配置 server/worker/CLI/扩展路径时，客户端自动发现受管理安装，实际 commit 和制品摘要随现有约 30 秒能力上报刷新，正常联网时不需要重启客户端。每个 Case 将自身实际组件路径及非密钥配置持久化，升级/回退后正在执行的 Case 继续使用原版本；旧目录保留，不自动清理。旧实验冻结的环境摘要与新版不一致时拒绝执行，需重新创建并确认配置。更新 xGovernor 本身不需要重新部署平台或 Evaluator。
+不配置 server/worker/CLI/扩展路径时，客户端自动发现受管理安装，实际 commit 和制品摘要随现有约 30 秒能力上报刷新，正常联网时不需要重启客户端。每个 Case 将自身实际组件路径及非密钥配置持久化，升级/回退后正在执行的 Case 继续使用原版本；自动清理保留 current、previous 和仍被引用的版本。旧实验冻结的环境摘要与新版不一致时拒绝执行，需重新创建并确认配置。更新 xGovernor 本身不需要重新部署平台或 Evaluator。
+
+客户端启动恢复后及之后每小时执行本地历史清理。`retention.days` 默认为 7，正整数，在每轮清理时重新读取。安装版可编辑 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`：
+
+```yaml
+retention:
+  days: 7
+```
+
+Case 的 `terminalAt` 首次进入终态时写入，重复状态写入不会延长保留期限；仅终态、资源清理成功、全部本地 Artifact 上传确认且完成回调成功（或已取消）的记录可以过期。删除前还需确认对应 lease 已关闭、没有活动上传器或上传锁、Trace checkpoint 已覆盖每个 JSONL 文件全部字节。未完成、损坏或缺少确认的记录继续保留。清理确认后将 `client/xgovernor-runs/<runId>/` 和 `client/benchmark-runs/<runId>/` 移入客户端独立的 `retention-trash/` 再删除，确认记录独立保存，删除中断后下一轮可继续回收；不改平台记录、镜像缓存或其他服务目录。Trace 暂存不再套用通用上传器按日期分区删除的策略，避免未上传或尾行未完整写入的数据丢失。
+
+版本清理仅在客户端 Benchmark 执行空闲且没有安装操作时进行，复用 `update.lock` 排斥更新/回退；current、previous、未关闭 lease 和待恢复记录引用的版本均保留。其余安装版本按 `installation.json.installedAt` 应用同一保留期限，仅删除清单与命名均符合托管规则的目录，不接管 MCTS 的版本。清理失败记录客户端错误并下轮重试；目录符号链接和无法确认的记录跳过。首次升级前缺少 `terminalAt` 或完成回调确认的旧记录不会自动删除。
 
 正常使用无需创建配置文件。高级覆盖可在执行机的 `config/benchmark/executor.local.yaml`（安装版目录同 7.1）配置；下面的显式模型映射只用于兼容手动部署，不是必填步骤：
 

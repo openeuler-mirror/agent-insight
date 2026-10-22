@@ -93,6 +93,7 @@ const schemas = {
     },
   },
   executor: {
+    retention: { days: integer(7) },
     benchmarks: {
       'swe-bench': {
         gitSource: leaf(null, nullableString, gitSource),

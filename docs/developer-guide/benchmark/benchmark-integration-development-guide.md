@@ -357,6 +357,8 @@ curl 安装所选 Pi/xiaoO 时，通过 `install-ras-client.js` 自动调用 `xg
 
 安装版配置加载器读取运行时内置 `config/benchmark/executor.yaml` 后，只合并 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`（默认 `~/.agent-insight/config/executor.local.yaml`）。执行 Profile、镜像策略、Git 源和 Runtime 默认参数使用同一入口；旧运行时目录的 local 文件不读取、不迁移。源码运行仍合并仓库 `config/benchmark/executor.local.yaml`。显式 `AGENT_INSIGHT_CONFIG_DIR` 保留原语义，指定目录中的文件独立生效。用户配置按声明文件解析相对路径，升级只更新内置默认文件并保留用户配置。
 
+`retention.cjs` 在客户端恢复后和每小时按 `retention.days`（默认 7）清理过期本地 Benchmark 历史。`FileRunStore` 记录稳定的 `terminalAt`，Runner 仅在完成回调成功后记录 `completionDeliveredAt`。清理还核对 cleanup、逐项 Artifact 上传确认、xGovernor closed lease 和 Trace 的字节 checkpoint，并避开活动任务及上传锁；缺少确认的数据保留。xGovernor Trace 上传器关闭自身日期分区过期删除，统一交由 Case 保留策略管理。版本清理等待执行空闲，使用安装管理器的 `update.lock`，保护 current、previous 和未关闭/待恢复任务的版本引用，只删除过期的受管理版本。清理逻辑不进入任务信封或冻结 Profile，不改变 SWE-bench 调度和 Evaluator。
+
 `model-resolver.cjs` 属于执行端 Agent 适配层，按实验所选模型解析原有配置和凭据；Backend 仅将解析结果映射为 xGovernor 会话参数。私有子进程管道传递密钥，只有选中模型的凭据进入 case 环境，不写入 lease 或任务；Trace 认证复用客户端既有采集配置。环境就绪与模型认证独立，模型缺失在 prepare 阶段给出错误。
 
 升级仅切换后续任务的版本指针，执行句柄固定本次 Runtime/模型凭据引用和组件路径，运行与 Trace 导出不依赖新的 current；旧版本目录保留供在途任务及恢复使用。任务受理前仍核对冻结摘要，不自动迁移旧实验。安装 smoke 只检查源码布局、扩展类型和 server 基础协议，实际模型、工具隔离、完整 Trace 仍需执行链路验证。安装步骤见[部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。

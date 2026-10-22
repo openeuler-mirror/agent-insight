@@ -143,6 +143,15 @@ xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上�
 
 需要调整 CPU、内存、准备超时或镜像来源时，curl 安装版统一编辑 `~/.agent-insight/config/executor.local.yaml`；自定义 `AGENT_INSIGHT_HOME` 时使用 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`。安装器会创建目录并提示路径，文件可按需创建，客户端升级不会覆盖它。旧的 `client/runtime/config/` 下的用户配置不再读取，也不会自动迁移；需要保留的设置请写入新路径，其中相对路径按新目录解析。源码运行仍使用项目内的 `config/benchmark/executor.local.yaml`。
 
+Benchmark 的本地日志和运行记录默认保留 **7 天**，从 Case 进入终态开始计时。客户端启动时及之后每小时检查一次；只有任务已结束、资源清理成功、Artifact 与 Trace 没有待上传内容，并已成功回调平台（或已取消）时才删除。正在执行、待上传、待清理或状态无法确认的记录继续保留，平台上已入库的结果和 Trace 不受影响。在上述用户配置文件中可设置：
+
+```yaml
+retention:
+  days: 14
+```
+
+`days` 必须为正整数，修改后在下一轮清理检查生效。清理只涉及客户端的 `benchmark-runs/` 和对应 `xgovernor-runs/` 本地目录，不清理 Docker 镜像。xGovernor 安装版本在客户端执行空闲时清理：当前版本、上一版本和仍被未完成清理的 Case 引用的版本始终保留，其他版本超过同一保留期限后删除。旧记录缺少终态时间或上传确认时也会保留。
+
 模型沿用实验中的选择。Pi 从原有 `models.json`、`auth.json` 和登录环境解析；xiaoO 从原有 `config.toml` 的 `[llm]` 和其 `api_key_env` 解析。选择默认模型时使用 Agent 原有默认配置。新机器仍须完成一次原有 Agent 的模型配置；无需再配置 xGovernor 的模型 Key。当前 Pi OAuth/订阅认证、自定义 headers/兼容参数尚不支持，会明确报错，不会替换模型。Trace 上传复用 curl 安装保存的采集认证。
 
 MCTS 的 xGovernor 保持独立：不接管其进程、源码、配置或版本；原生执行端每个 Case 使用自己的动态端口、状态目录和 Docker 标签。两者共享机器资源，需合理控制并发。
