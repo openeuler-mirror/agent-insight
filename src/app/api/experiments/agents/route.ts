@@ -51,6 +51,7 @@ export async function GET(req: Request) {
       supportsBenchmark: boolean;
       benchmarkKeys: string[];
       benchmarkUnavailableReason: string | null;
+      benchmarkUnavailableReasons: Record<string, string>;
       parameterDefinitions: RuntimeDefinition[];
       benchmarkEnvironments?: Record<string, { profile: NonNullable<(typeof benchmarkTargets)[number]['executionProfile']>; models: Array<{ id: string; label: string }> }>;
     };
@@ -109,6 +110,7 @@ export async function GET(req: Request) {
           supportsBenchmark: false,
           benchmarkKeys: [],
           benchmarkUnavailableReason: '该执行目标未上报 Benchmark 所需能力',
+          benchmarkUnavailableReasons: {},
           parameterDefinitions: target.parameterDefinitions || [],
         });
       }
@@ -121,7 +123,6 @@ export async function GET(req: Request) {
       attachTarget(target, 'fault-injection');
     }
     for (const target of benchmarkTargets) {
-      if (!target.ready) continue;
       for (const agent of target.agents) {
         attachTarget({
           workerId: target.clientId,
@@ -148,6 +149,9 @@ export async function GET(req: Request) {
         ));
         if (!matchingBenchmarks.length) continue;
         for (const benchmark of matchingBenchmarks) {
+          if (!benchmark.ready) {
+            target.benchmarkUnavailableReasons[benchmark.adapterKey] = [...new Set(benchmark.unavailableReasons)].join('；') || 'Benchmark 执行目标未就绪';
+          }
           if (benchmark.ready && !target.benchmarkKeys.includes(benchmark.adapterKey)) {
             target.benchmarkKeys.push(benchmark.adapterKey);
           }
@@ -171,7 +175,7 @@ export async function GET(req: Request) {
         name: item.name,
         traces: item.traces,
         frameworks: Array.from(item.frameworks).sort(),
-        executable: item.targets.length > 0,
+        executable: item.targets.some(target => target.supportsGenericTrace || target.supportsFaultInjection || target.supportsBenchmark),
         targets: item.targets.map((target) => ({
           workerId: target.workerId,
           host: target.host,
@@ -186,6 +190,7 @@ export async function GET(req: Request) {
           supportsBenchmark: target.supportsBenchmark,
           benchmarkKeys: target.benchmarkKeys,
           benchmarkUnavailableReason: target.benchmarkUnavailableReason,
+          benchmarkUnavailableReasons: target.benchmarkUnavailableReasons,
           parameterDefinitions: target.parameterDefinitions,
           benchmarkEnvironments: target.benchmarkEnvironments,
         })),

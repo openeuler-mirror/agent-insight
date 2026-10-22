@@ -353,6 +353,8 @@ Adapter 必须继承 `AbstractBenchmarkAdapter`，只实现五个受保护的业
 
 客户端 `ExecutionBackendRegistry` 按 `backendKey` 选择 `prepare/runAgent/collect/cancel/close/recover` 六方法实现。Runner 仅保存不透明句柄，统一处理阶段期限、产物落盘、上传重试与清理恢复，不解析后端目录或 session。已有工作区/运行时/策略组件由 `LocalExecutionBackend` 包装；`XGovernorExecutionBackend` 负责每 Case daemon、Docker、Runtime 会话、Patch 与完整 Trace 导出。
 
+实验 Agent 列表保留未就绪的 Benchmark 目标用于诊断，按 Adapter Key 在 `benchmarkUnavailableReasons` 中返回对应 `unavailableReasons`；只有就绪目标进入 `benchmarkKeys` 并提供可执行环境。前端“生成 Trace”空状态按当前数据集显示主机与原因，未就绪目标不进入运行主机选项，也不单独使 Agent 标记为可执行。该步骤定期刷新客户端状态，环境恢复后重新计算可用目标。
+
 curl 安装所选 Pi/xiaoO 时，通过 `install-ras-client.js` 自动调用 `xgovernor/setup.cjs` 安装固定兼容源码版本；同版本直接复用，构建限并行，工具链和制品均独立于 MCTS。xGovernor 依赖仍可由 `scripts/xgovernor.cjs` 手动管理，`update [--version <tag或commit>]` 从官方源码构建配套组件，`status` 校验版本，`rollback` 回退。安装版客户端分发该脚本和后端管理模块，安装位置为 `AGENT_INSIGHT_HOME/dependencies/xgovernor`，不占用平台、Evaluator 或全局 Agent 安装。`installation.cjs` 校验原子 current/previous 指针、清单、架构和实际制品摘要；没有手动组件路径的 Profile 自动解析受管理组件，随后由 `executionCapabilities()` 生成带实际 commit 与 `artifactDigest` 的公开摘要。现有客户端 PUT capabilities 与平台接收路由均须保留 `executionProfiles`，否则新版本无法传到平台。
 
 安装版配置加载器读取运行时内置 `config/benchmark/executor.yaml` 后，只合并 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`（默认 `~/.agent-insight/config/executor.local.yaml`）。执行 Profile、镜像策略、Git 源和 Runtime 默认参数使用同一入口；旧运行时目录的 local 文件不读取、不迁移。源码运行仍合并仓库 `config/benchmark/executor.local.yaml`。显式 `AGENT_INSIGHT_CONFIG_DIR` 保留原语义，指定目录中的文件独立生效。用户配置按声明文件解析相对路径，升级只更新内置默认文件并保留用户配置。

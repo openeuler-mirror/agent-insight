@@ -83,6 +83,7 @@ interface AgentTargetOption {
   supportsBenchmark: boolean;
   benchmarkKeys: string[];
   benchmarkUnavailableReason: string | null;
+  benchmarkUnavailableReasons?: Record<string, string>;
   parameterDefinitions?: RuntimeDefinition[];
 }
 
@@ -655,6 +656,9 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const unavailableBenchmarkTargets = isBenchmarkDataset
+    ? (selectedAgent?.targets || []).filter(target => !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))
+    : [];
   const runtimeTargetKey = selectedTarget ? `${selectedTarget.workerId}::${selectedTarget.platform}::${selectedTarget.agent}` : '';
   const runtimeState = runtimeOptionsState(!isReliabilityDataset && traceMode === 'generate' ? selectedTarget : null,
     runtimeInputs, runtimeOptionsTarget, runtimeTargetKey, restoredRuntimeOptions);
@@ -694,7 +698,7 @@ export function ExperimentWizard({
   }, [refreshAgents]);
 
   useEffect(() => {
-    if (!user || step !== 1) return;
+    if (!user || (step !== 1 && !(step === 2 && isBenchmarkDataset && traceMode === 'generate'))) return;
     const timer = window.setInterval(() => {
       refreshAgents().catch(() => undefined);
     }, 10_000);
@@ -706,7 +710,7 @@ export function ExperimentWizard({
       window.clearInterval(timer);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [refreshAgents, step, user]);
+  }, [refreshAgents, step, user, isBenchmarkDataset, traceMode]);
 
   useEffect(() => {
     if (!user) return;
@@ -2128,6 +2132,17 @@ export function ExperimentWizard({
                     : isReliabilityDataset
                       ? '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'
                       : '当前 Agent 没有在线且支持回传 Trace ID 的客户端，请检查客户端状态；旧客户端需要升级后才能用于普通数据集生成 Trace。'}
+                  {isBenchmarkDataset && unavailableBenchmarkTargets.length > 0 && (
+                    <ul aria-label="Benchmark 执行环境未就绪原因" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
+                      {unavailableBenchmarkTargets.map(target => (
+                        <li key={`${target.workerId}::${target.platform}`}>
+                          <strong>{target.host} · {target.platform}</strong>：
+                          {target.benchmarkUnavailableReasons?.[selectedDataset?.benchmark?.adapterKey || '']
+                            || target.benchmarkUnavailableReason || '该执行目标未上报当前 Benchmark 所需能力'}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               ) : (
                 <>
