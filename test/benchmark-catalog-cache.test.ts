@@ -12,7 +12,7 @@ type CatalogLock = { packages: { key: string; digest: string; evaluatorDigest: s
 function fixture(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-catalog-cache-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
-  for (const source of ['benchmarks', 'packages/project-config', 'config/benchmark/evaluator.yaml', 'services/evaluator/src/evaluator-registry.cjs']) {
+  for (const source of ['benchmarks', 'packages/project-config', 'config/benchmark/evaluator.yaml', 'services/evaluator/src', 'packages/benchmark-protocol/artifact-path.cjs']) {
     const target = path.join(root, source)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.cpSync(path.resolve(source), target, { recursive: true })
@@ -34,7 +34,7 @@ test('Catalog output stays identical across repeated generation and cache creati
   assert.deepEqual(f.snapshot(), baseline)
   const cacheFiles: string[] = []
   for (const directory of ['benchmarks/zsoft-l1/evaluator', 'benchmarks/zsoft-l1/dataset', 'benchmarks/swe-bench/evaluator',
-    'benchmarks/swe-bench/smoke', 'benchmarks/swe-bench/executor', 'packages/project-config']) {
+    'benchmarks/swe-bench/smoke', 'benchmarks/swe-bench/executor', 'packages/project-config', 'services/evaluator/src']) {
     for (const name of ['__pycache__/nested/module.py', '__pycache__/module.cpython-311.pyc', 'nested/module.pyc', 'module.pyo', '.DS_Store']) {
       const file = path.join(f.root, directory, name)
       fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -82,3 +82,18 @@ test('real shared configuration loader changes still invalidate both Runtime dig
     assert.notEqual(after.packages[index].evaluatorDigest, before.packages[index].evaluatorDigest)
   }
 })
+
+for (const dependency of ['services/evaluator/src/runtime-image.cjs', 'services/evaluator/src/evaluator-assets.cjs', 'packages/benchmark-protocol/artifact-path.cjs']) {
+  test(`shared Runtime dependency ${dependency} updates digests and image tags`, t => {
+    const f = fixture(t)
+    const before = f.lock()
+    fs.appendFileSync(path.join(f.root, dependency), '\n// changed Runtime dependency\n')
+    const snapshot = f.snapshot()
+    const after: CatalogLock = JSON.parse(snapshot['catalog-lock.json'])
+    for (let index = 0; index < before.packages.length; index++) {
+      assert.notEqual(after.packages[index].digest, before.packages[index].digest)
+      assert.notEqual(after.packages[index].evaluatorDigest, before.packages[index].evaluatorDigest)
+      assert.ok(snapshot['evaluators.cjs'].includes(`artifact-${after.packages[index].evaluatorDigest.slice('sha256:'.length)}`))
+    }
+  })
+}

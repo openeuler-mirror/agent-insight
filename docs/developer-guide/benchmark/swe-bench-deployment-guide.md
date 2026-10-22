@@ -114,4 +114,5 @@ bash scripts/evaluator-doctor.sh --smoke swe-bench
 - 仓库获取失败：检查执行机 `gitSource`、目录权限和远程源访问。
 - MCTS 未就绪：核对执行机 Python、`datasets`、启动脚本及 Trace 连接；预检通过仍需实际 Case 验收。
 - 评测等待或失败：检查镜像来源、架构、网络、磁盘和 `/health` 中的准备状态。
+- 已有 `model.patch`，但评测报 `Evaluator Entrypoint` / `Cannot find module './runtime-image.cjs'`：这是旧 SWE-bench Runtime 镜像漏包，不是 Agent 权限或断网导致。更新代码和生成的 Catalog 后，重新运行原有 `bash scripts/evaluator.sh start` 命令及部署参数；新摘要会触发准备完整依赖的 Runtime。远程预构建镜像部署须先发布同摘要的新制品。随后在 Case 页面点击“Benchmark 重评”，复用已有 Patch；无需重跑 Agent、重新安装客户端或放开网络。
 - 更新执行适配时重新安装客户端；更新平台或 Evaluator 按 [更新与回滚](service-deployment-guide.md#9-更新与回滚) 操作，保留历史实验快照。

@@ -495,6 +495,8 @@ resources:
 
 Entrypoint、Smoke 和 Dockerfile 必须位于接入包内。Catalog 按接入包内容摘要生成 Runtime 镜像 tag，并在运行时校验镜像 label；发布方可用 `node scripts/benchmark/build-evaluator-runtime.cjs <key>` 构建该制品，增加 `--image-prefix registry/namespace --push` 可上传到指定仓库。SWE-bench 和 ZSoft 均在本地镜像缺失时先拉取，拉取失败后按接入包 Dockerfile 自动构建；后续调用复用摘要匹配的镜像。声明 `requiresPrebuiltRuntime: true` 的接入包禁止该回退，本地引用必须预装，远程引用允许按需拉取。运行依赖归接入包制品所有，不要加入通用 Controller 基础依赖，也不要在 Controller 公共代码中加入 Benchmark 分支。
 
+OCI Runtime 的摘要同时覆盖 `services/evaluator/src/`、`packages/project-config/`、协议路径校验工具 `packages/benchmark-protocol/artifact-path.cjs` 和评测默认配置，公共依赖变化也会生成新的镜像 tag。SWE-bench Runtime 复制完整评测公共源码目录及协议工具，在 Docker 构建阶段加载实际评测 Entrypoint 与 Smoke 入口；缺少传递依赖时构建直接失败，不发布只能在运行时报告 `MODULE_NOT_FOUND` 的制品。测试按 Dockerfile 的 COPY 布局构造独立目录并加载入口，不能借用开发仓库文件或 node_modules 掩盖漏包。
+
 接入包可选声明 `assets`：`image` 必须为固定 `repository@sha256`，同时声明镜像内 `sourcePath`、`releaseId`、`bundleDigest`、可选部署目录变量名 `directoryEnv`、`verifyCommand`（`python3` 或 `node`）及包内 `verifyEntrypoint`。Controller 在启动后台准备资产，调用校验器时依次传入目录、release ID、bundleDigest。校验器只读取文件与元数据，不执行 Judge 或构建任务。
 
 通用安装器按镜像摘要创建版本目录，拉取后从未启动容器复制、校验，再原子发布；并发请求共享准备状态，重启重新校验缓存。默认存储根为 `<EVALUATOR_DATA_DIR>/benchmark-assets/<benchmarkKey>`；配置 Schema 注册了 `benchmarks.<key>.assetsDir` 的接入包使用该 YAML 字段，`null` 使用默认根目录，不再回退旧目录变量。未注册此字段的其他接入包仍可使用 `directoryEnv`。实际目录仍追加摘要。OCI 资产必须在 Controller 与 Runtime 共享卷内。Provider 的第三个参数 `assetsDir` 和 Runtime 环境 `EVALUATOR_ASSETS_DIR` 均为该接入实际解析出的版本目录，不从任务 payload 获取，也不修改全局环境变量。

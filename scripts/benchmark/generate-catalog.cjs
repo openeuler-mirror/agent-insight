@@ -362,7 +362,8 @@ function loadPackage(packageDir) {
     ...(ociRuntime ? [
       path.resolve(packageDir, '../../packages/project-config'),
       path.resolve(packageDir, '../../config/benchmark/evaluator.yaml'),
-      path.resolve(packageDir, '../../services/evaluator/src/evaluator-registry.cjs'),
+      path.resolve(packageDir, '../../services/evaluator/src'),
+      path.resolve(packageDir, '../../packages/benchmark-protocol/artifact-path.cjs'),
     ].flatMap((file) => fs.existsSync(file) ? (fs.statSync(file).isDirectory() ? listFiles(file) : [file]) : []) : []),
   ])]
   const evaluatorDigest = digestFiles(evaluatorFiles, evaluatorDir)

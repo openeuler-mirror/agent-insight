@@ -141,6 +141,8 @@ xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上�
 
 Case 镜像已包含源码和安装环境，Pi/xiaoO 直接在镜像的 `/testbed` 中工作，不重新拉取源码，也不要求仓库保留 origin。执行端保留镜像构建时的安装提交，以镜像初始 HEAD 为基线生成 `model.patch`；数据集的 `base_commit` 仍用于确认镜像包含正确的任务基线。Agent 创建的 commit、尚未提交的修改、新增与删除文件都会纳入最终 Patch，镜像原有安装修改和 `model.patch` 文件自身不作为提交物。初始工作树不干净或不包含任务基线时会明确失败，不自动删除镜像中的文件。
 
+已有 `model.patch` 但评测提示 `Evaluator Entrypoint` 找不到模块（如 `runtime-image.cjs`），说明评测运行镜像缺少依赖，不能据此判断 Agent 修复失败。管理员更新评测服务及 Runtime 后，点击“Benchmark 重评”即可复用已有 Patch，无需重跑 Agent。该问题不需要开放执行容器网络或调整权限。
+
 沙箱命令失败时，Case 页面会显示失败阶段、操作、退出码和可识别的安全原因，例如 Git 仓库缺失、权限不足、磁盘已满或镜像基线不匹配。本地对应 `xgovernor-runs/<runId>/diagnostic.json` 保存同样的脱敏诊断，沿用 Case 日志保留期限；原始命令参数、stderr 中的路径、URL 和凭据不会显示或写入该诊断。历史失败记录不会自动补齐，更新后需要重跑 Case。
 
 在客户端安装页选择 Pi/xiaoO，执行原有的一条 curl 命令即可。客户端注册后自动准备编译依赖、拉取平台固定版本的 xGovernor 源码并编译；重复安装会复用已通过校验的同版本组件。缺失的系统编译依赖在支持的发行版上通过包管理器安装，需要 root 或可用的非交互 sudo；Node/Rust 必要时安装到客户端独立目录。执行机仍需可访问的 Docker Linux daemon 和 cgroup v2，不自动修改内核启动参数或重启。安装失败会明确显示 Benchmark 未就绪，处理后重跑同一命令。用户无需手工启动 xGovernor、配置 YAML 或修改 systemd，平台和 Evaluator 无需安装它。
