@@ -7,6 +7,7 @@ const { artifactIdentity } = require('./artifact-identity.cjs')
 
 const repository = 'https://gitcode.com/openeuler/xGovernor.git'
 const releaseId = /^[a-f0-9]{40}-[a-f0-9]{16}$/
+const BUILD_LAYOUT_VERSION = 1
 
 function installationRoot(env = process.env) {
   if (env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR 已不支持，请迁移至 AGENT_INSIGHT_HOME')
@@ -33,6 +34,8 @@ function readRelease(root, id, target = { platform: process.platform, arch: proc
   if (manifest.schemaVersion !== 1 || manifest.repository !== repository || !/^[a-f0-9]{40}$/.test(manifest.revision)
     || !id.startsWith(`${manifest.revision}-`) || manifest.platform !== target.platform || manifest.arch !== target.arch
     || !/^sha256:[a-f0-9]{64}$/.test(manifest.artifactDigest) || manifest.compatibility?.contract !== 'agent-insight-xgovernor/v1') throw new Error('安装清单、协议或目标架构不兼容')
+  if (manifest.build?.layoutVersion !== BUILD_LAYOUT_VERSION) throw new Error('旧安装未在最终版本目录构建；请重新执行客户端安装命令以重建 xGovernor')
+  if (manifest.build.sourceDirectory !== fs.realpathSync(path.join(directory, 'source'))) throw new Error('安装目录已移动，与编译时路径不一致；请重新执行客户端安装命令以重建 xGovernor')
   const resolve = name => {
     const value = manifest.artifacts?.[name]
     if (typeof value !== 'string' || path.isAbsolute(value) || value.split(/[\\/]/).includes('..')) throw new Error('安装清单制品路径不合法')
@@ -74,4 +77,4 @@ function resolveManagedProfile(local, options = {}) {
   }
 }
 
-module.exports = { installationRoot, readState, readRelease, resolveManagedProfile, repository }
+module.exports = { installationRoot, readState, readRelease, resolveManagedProfile, repository, BUILD_LAYOUT_VERSION }

@@ -7,6 +7,7 @@ import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice
 import { benchmarkFailurePresentation } from '@/lib/benchmark/failure-presentation';
 
 const EXPECTED_LABELS = {
+  XGOVERNOR_REJECTED: '执行环境请求被拒绝',
   ENOSPC: '执行端存储空间不足',
   EDQUOT: '执行端存储配额不足',
   EVENT_MONITOR_UNAVAILABLE: '失败监测通道未就绪',

@@ -6,6 +6,10 @@ export interface BenchmarkFailurePresentation {
 }
 
 const FAILURE_META: Record<string, { label: string; message: string }> = {
+  XGOVERNOR_REJECTED: {
+    label: '执行环境请求被拒绝',
+    message: 'xGovernor 拒绝执行请求，请检查客户端安装与会话配置。',
+  },
   ENOSPC: {
     label: '执行端存储空间不足',
     message: '执行端文件系统空间或 inode 不足，请检查对应挂载点后手动重试。',

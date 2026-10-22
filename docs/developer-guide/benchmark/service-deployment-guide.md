@@ -323,7 +323,11 @@ node ~/.agent-insight/client/runtime/xgovernor.cjs rollback
 
 源码和构建产物位于 `$AGENT_INSIGHT_HOME/dependencies/xgovernor/releases/<commit>-<安装标识>/source/`（`AGENT_INSIGHT_HOME` 默认为 `~/.agent-insight`），每个版本另有 `installation.json`。`current.json` 在同一次原子替换中保存当前版本和上一个版本。更新锁防止并发修改；下载、构建、扩展类型检查、新 server 健康/鉴权/会话路由检查全部通过后才切换指针。失败保留原版本；`rollback` 校验并探测上一个版本后切换。SIGINT/SIGTERM 会取消构建并清理临时安装；SIGKILL/掉电可能留下临时目录或 `update.lock`，需确认安装进程已经退出后再清理。
 
+源码下载和检出可使用临时目录；编译与 npm 依赖安装必须在最终版本目录内完成，成功后只切换 `current.json`，不移动已编译目录。xGovernor Pi 探测把构建时扩展绝对路径写入二进制，编译后搬动目录会使探测找不到 `probe.ts`。`installation.json.build` 保存 `layoutVersion: 1` 与规范化的 `sourceDirectory`，安装校验同时核对当前路径。缺少此标记的旧安装或被搬动的安装不能进入就绪状态，也不能通过 rollback 激活。重新执行新版平台生成的 curl 安装命令，会重建同一固定源码版本，无需手工删除旧安装；失败只清理本次未激活目录，原 current 与旧版本目录保留。
+
 安装检查不调用模型、不创建任务容器，不能替代真实 Pi/xiaoO + Docker Case 验收，也不能保证任意上游协议变化均可自动适配。布局或基础协议不兼容时拒绝切换，需升级本平台适配器。
+
+升级此修复时，先更新并启动平台，再在客户端安装页选择 Pi/xiaoO 并执行新生成的 curl 命令，等待重建完成。可用 `node ~/.agent-insight/client/runtime/xgovernor.cjs status` 检查 `build.layoutVersion` 和路径。重建会刷新制品与执行环境摘要，应新建或复用实验并重新确认执行环境，再运行一个 Case；旧任务冻结的摘要不会自动改写。
 
 不配置 server/worker/CLI/扩展路径时，客户端自动发现受管理安装，实际 commit 和制品摘要随现有约 30 秒能力上报刷新，正常联网时不需要重启客户端。每个 Case 将自身实际组件路径及非密钥配置持久化，升级/回退后正在执行的 Case 继续使用原版本；自动清理保留 current、previous 和仍被引用的版本。旧实验冻结的环境摘要与新版不一致时拒绝执行，需重新创建并确认配置。更新 xGovernor 本身不需要重新部署平台或 Evaluator。
 
@@ -390,6 +394,8 @@ execution:
 `runtimes` 是完整运行集合；默认受管理 Profile 按安装时选择过滤 Runtime，管理器仍构建配套组件。高级手动 Profile 可显式配置运行集合。同一个 Profile 内启用的 worker 或 Trace 依赖未就绪会报告环境不可用；模型凭据在任务准备阶段单独校验。`workerEnvironment` 可覆盖 Runtime 的 worker 变量名；Pi/xiaoO 默认分别为 `XGOVERNOR_PI_WORKER` / `XGOVERNOR_XIAOO_WORKER`。`settings` 仅由受信本机配置补充 Runtime 扩展，隔离参数由驱动固定。
 
 每个 Case 使用独立 daemon、凭据、状态目录和工具容器。两个监听端口动态分配，启动阶段确认端口占用时最多尝试 3 次；清理按 PID 身份和独立 deployment 标签执行，不使用全局 kill/prune。MCTS 服务及其配置不参与这一生命周期。镜像先解析为本机不可变 image ID，再核对架构、Git HEAD/origin/干净工作树，以及容器实际的无网络、无宿主挂载、非 root 用户、capability、no-new-privileges 和资源限制。预探测不会运行模型或逐个拉取 Case 镜像，显示“就绪”仍可能在实际镜像或模型检查时失败。
+
+xGovernor HTTP 拒绝通过有界读取提取原因（最多 16 KiB、最多等待 1 秒），按固定词表转换为可展示的 Pi 探测、模型认证、网络或能力配置错误，已知请求字段错误仅保留字段名。响应中的 headers、密钥、URL、本地路径和任意 details 不传回平台；未知、过大、无法解析或读取失败的响应保留 HTTP 状态码。Case 失败提示以“执行环境请求被拒绝”展示安全原因，不重试已被拒绝的会话创建。历史仅存状态码的失败记录不会自动补齐。
 
 执行端和 Evaluator 分别维护自身的 SWE-bench 镜像实现，互不依赖，可独立调整。当前两端默认策略相同：优先使用本地官方别名缓存；没有缓存时，按 SWR 仓库列表 → 配置代理 → 官方仓库顺序拉取，SWR/代理成功后自动恢复官方别名。`verifiedMirrorRepositories: null` 使用内置两个 SWR Verified 仓库，`[]` 关闭镜像站，也可填写自有仓库列表；各仓库按 `<repository>:<instance_id>` 查找 Case。该 SWR 映射只适用于官方 x86_64，ARM64 跳过。
 

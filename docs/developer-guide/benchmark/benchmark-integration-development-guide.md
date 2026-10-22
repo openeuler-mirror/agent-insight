@@ -385,9 +385,13 @@ Adapter 必须继承 `AbstractBenchmarkAdapter`，只实现五个受保护的业
 
 curl 安装所选 Pi/xiaoO 时，通过 `install-ras-client.js` 自动调用 `xgovernor/setup.cjs` 安装固定兼容源码版本；同版本直接复用，构建限并行，工具链和制品均独立于 MCTS。xGovernor 依赖仍可由 `scripts/xgovernor.cjs` 手动管理，`update [--version <tag或commit>]` 从官方源码构建配套组件，`status` 校验版本，`rollback` 回退。安装版客户端分发该脚本和后端管理模块，安装位置为 `AGENT_INSIGHT_HOME/dependencies/xgovernor`，不占用平台、Evaluator 或全局 Agent 安装。`installation.cjs` 校验原子 current/previous 指针、清单、架构和实际制品摘要；没有手动组件路径的 Profile 自动解析受管理组件，随后由 `executionCapabilities()` 生成带实际 commit 与 `artifactDigest` 的公开摘要。现有客户端 PUT capabilities 与平台接收路由均须保留 `executionProfiles`，否则新版本无法传到平台。
 
+受管理构建在最终 `releases/<commit>-<安装标识>/source` 目录执行，避免 Cargo 嵌入的 Pi 探测扩展路径随临时目录移动失效。`installation.json.build` 的布局版本与构建源码路径参与安装校验；无布局标记的历史版本即使 commit 相同也必须重建，只有验证通过才原子激活。旧制品保留给在途任务，回退同样要求布局校验。
+
 安装版配置加载器读取运行时内置 `config/benchmark/executor.yaml` 后，只合并 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`（默认 `~/.agent-insight/config/executor.local.yaml`）。执行 Profile、镜像策略、Git 源和 Runtime 默认参数使用同一入口；旧运行时目录的 local 文件不读取、不迁移。源码运行仍合并仓库 `config/benchmark/executor.local.yaml`。显式 `AGENT_INSIGHT_CONFIG_DIR` 保留原语义，指定目录中的文件独立生效。用户配置按声明文件解析相对路径，升级只更新内置默认文件并保留用户配置。
 
 `retention.cjs` 在客户端恢复后和每小时按 `retention.days`（默认 7）清理过期本地 Benchmark 历史。`FileRunStore` 记录稳定的 `terminalAt`，Runner 仅在完成回调成功后记录 `completionDeliveredAt`。清理还核对 cleanup、逐项 Artifact 上传确认、xGovernor closed lease 和 Trace 的字节 checkpoint，并避开活动任务及上传锁；缺少确认的数据保留。xGovernor Trace 上传器关闭自身日期分区过期删除，统一交由 Case 保留策略管理。版本清理等待执行空闲，使用安装管理器的 `update.lock`，保护 current、previous 和未关闭/待恢复任务的版本引用，只删除过期的受管理版本。清理逻辑不进入任务信封或冻结 Profile，不改变 SWE-bench 调度和 Evaluator。
+
+`XGovernorClient` 的 HTTP 失败只回传固定词表内的安全原因与已知缺失/不支持字段名，有界读取防止大响应或挂起响应拖住清理。原始错误 JSON、任意 details、URL、headers 和凭据不进入完成回调；`XGOVERNOR_REJECTED` 的安全消息随原有完成链路保存并由 Case 失败组件展示。
 
 `model-resolver.cjs` 属于执行端 Agent 适配层，按实验所选模型解析原有配置和凭据；Backend 仅将解析结果映射为 xGovernor 会话参数。私有子进程管道传递密钥，只有选中模型的凭据进入 case 环境，不写入 lease 或任务；Trace 认证复用客户端既有采集配置。环境就绪与模型认证独立，模型缺失在 prepare 阶段给出错误。Pi 兼容配置对照同版本 SDK 的纯内置目录，只拒绝无法由桥接保留的差异；已解析模型能力通过 `llm.capabilities` 传给会话。xiaoO 原配置的输出 Token 上限和推理强度分别映射到会话 capabilities 和每轮 `reasoning_effort`；已准备句柄持久保存这些非敏感设置，恢复时继续使用本次值。当前无法承接的启用 KV cache 配置明确拒绝。
 

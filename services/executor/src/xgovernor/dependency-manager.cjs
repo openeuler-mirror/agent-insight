@@ -7,7 +7,7 @@ const net = require('node:net')
 const { spawn } = require('node:child_process')
 const { randomBytes } = require('node:crypto')
 const { once } = require('node:events')
-const { installationRoot, readState, readRelease, repository } = require('./installation.cjs')
+const { installationRoot, readState, readRelease, repository, BUILD_LAYOUT_VERSION } = require('./installation.cjs')
 const { artifactIdentity } = require('./artifact-identity.cjs')
 
 async function atomicJson(file, value) {
@@ -51,7 +51,7 @@ function checkSource(source) {
   if (!main.includes('XGOVERNOR_TENANT_BIND_ADDR') || !main.includes('--worker') || !main.includes('DockerProvider')
     || !['/sessions/open', '/sessions/exec', '/sessions/turns', '/sessions/close', '/sessions/cancel', '/turns/:turn_id/events'].every(route => routes.includes(route))
     || !worker.includes('RuntimeStateSnapshot')) throw new Error('上游源码不满足当前适配器的协议布局；需要更新适配器，旧版本保持不变')
-  for (const file of ['Cargo.lock', 'apps/runtime-pi/extension/package-lock.json']) fs.accessSync(path.join(source, file))
+  for (const file of ['Cargo.lock', 'apps/runtime-pi/extension/package-lock.json', 'apps/runtime-pi/extension/probe.ts', 'apps/runtime-pi/extension/model-config.ts']) fs.accessSync(path.join(source, file))
   const pkg = JSON.parse(read('apps/runtime-pi/extension/package.json'))
   const piVersion = pkg.devDependencies?.['@earendil-works/pi-coding-agent']
   if (!/^\d+\.\d+\.\d+$/.test(piVersion) || !pkg.pi?.extensions?.includes('./index.ts')) throw new Error('上游 Pi 依赖或桥接扩展布局不兼容')
@@ -159,7 +159,7 @@ class DependencyManager {
       let release
       let activated = false
       await fsp.mkdir(path.join(stage, 'source'), { recursive: true, mode: 0o700 })
-      const source = path.join(stage, 'source')
+      let source = path.join(stage, 'source')
       const run = (file, args, cwd = source, verbose = false) => this.run(file, args, {
         cwd, verbose, signal: this.signal, timeoutMs: file === 'git' ? 180000 : undefined,
         env: { ...this.env, GIT_TERMINAL_PROMPT: '0', CARGO_TARGET_DIR: path.join(source, 'target'), CARGO_BUILD_JOBS: '2' },
@@ -181,6 +181,12 @@ class DependencyManager {
           } catch (cause) { this.log(`当前安装需要修复：${cause.message}`) }
         }
         const components = checkSource(source)
+        const id = `${revision}-${randomBytes(8).toString('hex')}`
+        release = path.join(this.root, 'releases', id)
+        await fsp.mkdir(path.dirname(release), { recursive: true })
+        await fsp.rename(stage, release)
+        // Cargo 会把 Pi 探测扩展的绝对路径写入二进制，构建后不能再移动源码目录。
+        source = await fsp.realpath(path.join(release, 'source'))
         this.log(`构建 ${revision} 的 server、Pi worker；首次构建可能较慢`)
         await run('cargo', ['build', '--locked', '--release', '-p', 'xgovernor-server', '-p', 'xgovernor-runtime-pi', '--bin', 'xgovernor-server', '--bin', 'pi-worker'], source, true)
         this.log(`安装上游锁定的 Pi ${components.pi} 及桥接扩展依赖`)
@@ -189,10 +195,6 @@ class DependencyManager {
         await run('npm', ['run', 'typecheck'], extension, true)
         const installedPi = JSON.parse(await fsp.readFile(path.join(extension, 'node_modules/@earendil-works/pi-coding-agent/package.json'), 'utf8'))
         if (installedPi.version !== components.pi) throw new Error('Pi 实际安装版本与上游锁定版本不一致')
-        const id = `${revision}-${randomBytes(8).toString('hex')}`
-        release = path.join(this.root, 'releases', id)
-        await fsp.mkdir(path.dirname(release), { recursive: true })
-        await fsp.rename(stage, release)
         const artifacts = {
           server: 'source/target/release/xgovernor-server', piWorker: 'source/target/release/pi-worker',
           pi: 'source/apps/runtime-pi/extension/node_modules/.bin/pi', extension: 'source/apps/runtime-pi/extension',
@@ -206,6 +208,7 @@ class DependencyManager {
         this.log('检查新 server 启动、鉴权及会话接口；不调用模型、不创建任务容器')
         await this.probe(release, config, this.signal, this.env)
         const manifest = { schemaVersion: 1, repository, revision, requestedVersion: version || 'HEAD', installedAt: new Date().toISOString(),
+          build: { layoutVersion: BUILD_LAYOUT_VERSION, sourceDirectory: source },
           ...this.target, artifacts, components, artifactDigest: identity.digest,
           compatibility: { contract: 'agent-insight-xgovernor/v1', checks: ['source-layout', 'extension-typecheck', 'server-health-auth-routes'] },
         }

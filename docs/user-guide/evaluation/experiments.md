@@ -141,6 +141,8 @@ xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上�
 
 在客户端安装页选择 Pi/xiaoO，执行原有的一条 curl 命令即可。客户端注册后自动准备编译依赖、拉取平台固定版本的 xGovernor 源码并编译；重复安装会复用已通过校验的同版本组件。缺失的系统编译依赖在支持的发行版上通过包管理器安装，需要 root 或可用的非交互 sudo；Node/Rust 必要时安装到客户端独立目录。执行机仍需可访问的 Docker Linux daemon 和 cgroup v2，不自动修改内核启动参数或重启。安装失败会明确显示 Benchmark 未就绪，处理后重跑同一命令。用户无需手工启动 xGovernor、配置 YAML 或修改 systemd，平台和 Evaluator 无需安装它。
 
+旧客户端若出现“Pi 在返回模型探测结果前退出”，可能是旧安装编译后移动目录造成扩展路径失效。先升级平台，再重新执行客户端安装页生成的 Pi/xiaoO curl 命令；安装器会自动识别并重建旧制品，无需手工删除安装目录。重建后环境摘要会变化，请新建或复用实验并重新确认执行环境，再运行 Case。新失败记录会在页面显示脱敏后的模型探测、认证或网络原因，无法识别的响应只显示 HTTP 状态码。
+
 需要调整 CPU、内存、准备超时或镜像来源时，curl 安装版统一编辑 `~/.agent-insight/config/executor.local.yaml`；自定义 `AGENT_INSIGHT_HOME` 时使用 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`。安装器会创建目录并提示路径，文件可按需创建，客户端升级不会覆盖它。旧的 `client/runtime/config/` 下的用户配置不再读取，也不会自动迁移；需要保留的设置请写入新路径，其中相对路径按新目录解析。源码运行仍使用项目内的 `config/benchmark/executor.local.yaml`。
 
 Benchmark 的本地日志和运行记录默认保留 **7 天**，从 Case 进入终态开始计时。客户端启动时及之后每小时检查一次；只有任务已结束、资源清理成功、Artifact 与 Trace 没有待上传内容，并已成功回调平台（或已取消）时才删除。正在执行、待上传、待清理或状态无法确认的记录继续保留，平台上已入库的结果和 Trace 不受影响。在上述用户配置文件中可设置：

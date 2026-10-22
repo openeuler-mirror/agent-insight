@@ -44,6 +44,8 @@ async function fixture(t: TestContext) {
   write(path.join(upstream, 'apps/runtime-pi/extension/package-lock.json'), '{}')
   write(path.join(upstream, 'apps/runtime-pi/extension/package.json'), JSON.stringify({ version: '0.1.0', devDependencies: { '@earendil-works/pi-coding-agent': '0.84.2' }, pi: { extensions: ['./index.ts'] } }))
   write(path.join(upstream, 'apps/runtime-pi/extension/index.ts'), 'export {}')
+  write(path.join(upstream, 'apps/runtime-pi/extension/probe.ts'), 'export {}')
+  write(path.join(upstream, 'apps/runtime-pi/extension/model-config.ts'), 'export {}')
   await command('git', ['init', '--quiet'], { cwd: upstream })
   const commit = async (tag: string) => {
     write(path.join(upstream, 'version'), tag)
@@ -56,11 +58,11 @@ async function fixture(t: TestContext) {
   let builds = 0
   let failBuild = false
   let failProbe = false
-  const commands: Array<{ file: string; args: string[] }> = []
+  const commands: Array<{ file: string; args: string[]; cwd: string; targetDirectory: string }> = []
   const manager = new DependencyManager({
     root: path.join(root, 'installed'), target, log() {},
     async command(file: string, args: string[], options: any) {
-      commands.push({ file, args })
+      commands.push({ file, args, cwd: options.cwd, targetDirectory: options.env.CARGO_TARGET_DIR })
       if (file === 'git') {
         const actual = args[0] === 'remote' ? [...args.slice(0, -1), upstream] : args
         return command(file, actual, { ...options, verbose: false })
@@ -72,6 +74,8 @@ async function fixture(t: TestContext) {
         const version = fs.readFileSync(path.join(options.cwd, 'version'), 'utf8')
         write(path.join(options.cwd, 'target/release/xgovernor-server'), server + `\n// ${version}\n`, true)
         write(path.join(options.cwd, 'target/release/pi-worker'), `#!${process.execPath}\n// ${version}\n`, true)
+        const probe = path.join(options.cwd, 'apps/runtime-pi/extension/probe.ts')
+        write(path.join(options.cwd, 'target/release/check-pi-probe'), `#!${process.execPath}\nconst fs = require('node:fs'); const probe = ${JSON.stringify(probe)};\nif (!fs.existsSync(probe)) process.exit(1);\nconsole.log(probe);\n`, true)
       } else if (args[0] === 'ci') {
         write(path.join(options.cwd, 'node_modules/@earendil-works/pi-coding-agent/package.json'), '{"version":"0.84.2"}')
         write(path.join(options.cwd, 'node_modules/.bin/pi'), `#!${process.execPath}\n`, true)
@@ -142,6 +146,69 @@ test('build, compatibility and download failures preserve the active pointer and
   await assert.rejects(f.manager.rollback(), /没有可回退/)
   await assert.rejects(f.manager.update('--upload-pack=bad'), /tag 或 commit/)
   assert.equal(fs.readFileSync(path.join(f.manager.root, 'current.json'), 'utf8'), before)
+})
+
+test('build embeds the final Pi probe path, and activation never moves the compiled source', async t => {
+  const f = await fixture(t)
+  await f.manager.update()
+  const installed = f.manager.status()
+  const source = fs.realpathSync(path.join(installed.directory, 'source'))
+  const builds = f.commands.filter(item => item.file === 'cargo' && item.args[0] === 'build')
+  assert.equal(builds.length, 1)
+  assert.equal(builds[0].cwd, source)
+  assert.equal(builds[0].targetDirectory, path.join(source, 'target'))
+  assert.equal(installed.build.layoutVersion, 1)
+  assert.equal(installed.build.sourceDirectory, source)
+  assert.equal(fs.readdirSync(f.manager.root).some(file => file.startsWith('.staging-')), false)
+  const checked = spawnSync(path.join(source, 'target/release/check-pi-probe'), [], { encoding: 'utf8' })
+  assert.equal(checked.status, 0, 'A compile-time extension path must still exist after activation')
+  assert.equal(checked.stdout.trim(), path.join(source, 'apps/runtime-pi/extension/probe.ts'))
+  await f.commit('v2')
+  await f.manager.update()
+  assert.equal(spawnSync(path.join(source, 'target/release/check-pi-probe')).status, 0, 'Updating does not move an older immutable release')
+})
+
+test('legacy layouts rebuild the same revision, preserve the old directory, and cannot be rolled back into service', async t => {
+  const f = await fixture(t)
+  await f.manager.update('v1')
+  const old = f.manager.status()
+  const file = path.join(old.directory, 'installation.json')
+  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
+  delete manifest.build
+  fs.writeFileSync(file, JSON.stringify(manifest))
+  assert.throws(() => f.manager.status(), /重新执行客户端安装命令以重建/)
+  const raw = normalizeExecutionConfig()
+  const capabilities = executionCapabilities({ config: raw, installationRoot: f.manager.root, target, env: {}, os: 'linux', refresh: true })
+  assert.equal(capabilities.profiles[0].ready, false)
+  assert.match(capabilities.profiles[0].note, /重建/)
+  const beforeRepair = fs.readFileSync(path.join(f.manager.root, 'current.json'), 'utf8')
+  f.failBuild = true
+  await assert.rejects(f.manager.update('v1'), /compile error/)
+  f.failBuild = false
+  assert.equal(fs.readFileSync(path.join(f.manager.root, 'current.json'), 'utf8'), beforeRepair)
+  assert.equal(fs.readdirSync(path.join(f.manager.root, 'releases')).length, 1)
+  assert.ok(fs.existsSync(path.join(old.directory, 'source/target/release/xgovernor-server')))
+  const repaired = await f.manager.update('v1')
+  assert.equal(repaired.changed, true)
+  assert.equal(repaired.revision, old.revision)
+  assert.equal(f.builds, 3)
+  const active = f.manager.status()
+  assert.notEqual(active.directory, old.directory)
+  assert.ok(fs.existsSync(old.directory))
+  assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(manifest))
+  const pointer = fs.readFileSync(path.join(f.manager.root, 'current.json'), 'utf8')
+  await assert.rejects(f.manager.rollback(), /重建/)
+  assert.equal(fs.readFileSync(path.join(f.manager.root, 'current.json'), 'utf8'), pointer)
+  assert.equal((await f.manager.update('v1')).changed, false)
+})
+
+test('relocated releases fail readiness validation instead of using stale compiled paths', async t => {
+  const f = await fixture(t)
+  await f.manager.update()
+  const relocated = path.join(f.root, 'relocated')
+  fs.renameSync(f.manager.root, relocated)
+  const state = readState(relocated)
+  assert.throws(() => readRelease(relocated, state.current, target), /目录已移动/)
 })
 
 test('parallel updates are refused; corrupt bundles and architecture mismatches never become ready', async t => {
