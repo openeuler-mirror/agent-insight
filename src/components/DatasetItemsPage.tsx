@@ -577,7 +577,7 @@ export default function DatasetItemsPage() {
   };
 
   const saveRowFromModal = async () => {
-    if (!rowEditor || !dataset) return;
+    if (!rowEditor || !dataset || saving) return;
     if (!hasMeaningfulDatasetCaseValue(rowEditor.row, dataset.fields)) {
       toast.error('请至少填写一个字段');
       return;
@@ -604,18 +604,19 @@ export default function DatasetItemsPage() {
       }
     }
     const row = { ...rowEditor.row, values };
-    let full: AgentDataset;
+    setSaving(true);
     try {
-      full = await loadFullDataset();
+      const full = await loadFullDataset();
+      const next =
+        mode === 'add'
+          ? [...full.cases, row]
+          : full.cases.map(c => (c.id === row.id ? row : c));
+      await persistCases(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : '完整数据加载失败');
-      return;
+    } finally {
+      setSaving(false);
     }
-    const next =
-      mode === 'add'
-        ? [...full.cases, row]
-        : full.cases.map(c => (c.id === row.id ? row : c));
-    await persistCases(next);
   };
 
   const closeBatchModal = () => {
@@ -629,12 +630,13 @@ export default function DatasetItemsPage() {
   };
 
   const runBatchImport = async () => {
-    if (!dataset || !user) return;
+    if (!dataset || !user || saving) return;
     if (isReadOnly) {
       setBatchModalError('内置可靠性评测集由系统维护，不可导入数据');
       return;
     }
     setBatchModalError('');
+    setSaving(true);
     try {
       let text = '';
       if (batchImportMethod === 'paste') {
@@ -682,6 +684,8 @@ export default function DatasetItemsPage() {
       closeBatchModal();
     } catch (e) {
       setBatchModalError(e instanceof Error ? e.message : '导入失败');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -994,14 +998,15 @@ export default function DatasetItemsPage() {
         <div
           role="presentation"
           className={styles.modalBackdrop}
-          onClick={() => !saving && closeBatchModal()}
+          onMouseDown={event => {
+            if (event.button === 0 && event.target === event.currentTarget && !saving) closeBatchModal();
+          }}
         >
           <div
             role="dialog"
             aria-modal
             aria-labelledby="batch-import-title"
             className={styles.modalPanel}
-            onClick={e => e.stopPropagation()}
           >
             <div className={styles.modalHeader}>
               <div className={styles.modalTitleWrap}>
@@ -1211,9 +1216,11 @@ export default function DatasetItemsPage() {
             justifyContent: 'center',
             padding: 20,
           }}
-          onClick={() => setRowEditor(null)}
+          onMouseDown={event => {
+            if (event.button === 0 && event.target === event.currentTarget && !saving) setRowEditor(null);
+          }}
         >
-          <div className="ai-card" style={{ width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', padding: 16 }} onClick={e => e.stopPropagation()}>
+          <div className="ai-card" style={{ width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', padding: 16 }}>
             <div style={{ fontWeight: 600, marginBottom: 12 }}>{rowEditor.mode === 'add' ? '添加数据' : '编辑数据'}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {dataset.fields.map(field => (
@@ -1261,7 +1268,7 @@ export default function DatasetItemsPage() {
               ))}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-              <button type="button" className="ai-btn-s" onClick={() => setRowEditor(null)}>
+              <button type="button" className="ai-btn-s" onClick={() => setRowEditor(null)} disabled={saving}>
                 取消
               </button>
               <button type="button" className="ai-btn-p" onClick={() => void saveRowFromModal()} disabled={saving}>
