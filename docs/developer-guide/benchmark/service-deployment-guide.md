@@ -317,125 +317,57 @@ node scripts/install-ras-client.js
 
 ### 7.3 原生 Pi/xiaoO 的 SWE-bench：xGovernor 本地 Docker
 
-新建的 `swe-bench + pi-agent/xiaoo` 任务默认绑定 `xgovernor-local-docker`。这条路径独立于普通实验的原生 CLI 与 Collector 就绪探测；未配置时明确不可用，不回退宿主机执行。OpenCode、MCTS 和非 Benchmark 实验继续走各自原有路径。平台和执行客户端须同步升级并重启。
+`swe-bench + pi-agent/xiaoo` 默认使用 `xgovernor-local-docker`，环境未就绪时不会回退宿主机执行。平台和 Evaluator 无需安装 xGovernor；MCTS 使用自己的独立服务。
 
-执行机要求 Linux x64/arm64、可访问的 Docker Linux daemon 和 cgroup v2。平台和 Evaluator 无需安装 xGovernor；安装页选择 Pi/xiaoO 后执行原有 curl 即可，所有客户端安装来源均将 `--frameworks` 传给安装器。先注册并启动客户端，再进行耗时的源码构建，避免 10 分钟安装令牌在编译中失效。
+**准备与安装**
 
-`setup.cjs` 将兼容版本固定为 `d08e67e366b89e622af9383383e251c4f40eb728`；更新此常量需验证适配协议。同版本制品校验通过时跳过下载编译。否则自动准备 Git、C/C++ 构建工具、pkg-config 等依赖，支持 apt/dnf/yum，需 root 或非交互 sudo 权限。Node 不足 22.19 时安装独立 Node 22.19.0 并验证下载校验和；Cargo 缺失或版本不足时安装独立 Rust 1.97.1。工具链放在 `dependencies/xgovernor/toolchain/`，不修改 shell 配置；Cargo 构建并行度限制为 2。需要访问 GitCode、Rust/Cargo、Node 与 npm 下载源。Docker 与 cgroup v2 由宿主机管理员准备，安装器不自动修改内核参数、安装 Docker 或重启。
+执行机需为 Linux x64/arm64，Docker 可用且使用 cgroup v2，并具备原生 Agent 的模型配置。自动准备构建依赖需 root 或非交互 sudo 权限，并能访问 GitCode、Rust/Cargo、Node 与 npm 下载源；Docker 和 cgroup v2 由管理员提前准备。
 
-自动安装锁 `setup.lock` 防止重复准备工具链，管理器的 `update.lock` 保护版本切换。安装失败写入 `setup.json` 并打印原因，客户端仍可在线，但不宣称 Benchmark 已就绪。`setup.json` 只保存所选 Runtime、配置路径和状态，不保存模型凭据。MCTS-only 安装不触发这一流程；即使同机已有 MCTS xGovernor，也不探测或接管它的二进制、服务和仓库。
+1. 在平台 **配置 → 客户端安装** 选择 Pi/xiaoO，执行页面生成的一条 curl 命令（见第 7 节）。
+2. 等待源码编译完成；安装器自动准备 xGovernor、配套组件和 xiaoo 凭据桥接，正常使用无需填写路径或另配模型 Key。
+3. 确认客户端在线、执行环境就绪，再创建单 Case 实验，检查 Trace、`model.patch` 和官方评测结果。仅“在线”不代表构建已完成。
 
-高级管理员仍可使用以下入口管理客户端专属安装：
+安装状态可在执行机查看；自定义 `AGENT_INSIGHT_HOME` 时相应替换路径：
 
 ```bash
 node ~/.agent-insight/client/runtime/xgovernor.cjs status
-node ~/.agent-insight/client/runtime/xgovernor.cjs update --version <tag或完整commit>
-node ~/.agent-insight/client/runtime/xgovernor.cjs rollback
 ```
 
-安装器同时构建 `insight-xiaoo-credentials`，复用 xGovernor 锁定的 xiaoO 原生 SecretProvider、Vault/SDF 与 provider 解析器，读取原有 config.toml 及同目录加密凭据库，不要求将 Key 另存到 xGovernor 配置或导出到 shell。桥接具有独立 Cargo manifest/lock，首次解析沿用上游现有锁文件；不改动 xGovernor 的原始 Cargo.toml/Cargo.lock。`components.xiaooCredentials` 记录桥接版本与原生源码来源，二进制参与制品摘要。旧安装即使上游 commit 相同，缺少该桥接也会在新版 curl 安装时自动重建；重复安装校验通过后复用。构建与基础探测不读取用户 Key、不调用模型、不创建 Case 容器。
+**默认行为**
 
-凭据桥接升级：先更新并重启平台，再在客户端安装页选择原生 Pi/xiaoo，执行新生成的一条 curl 命令并等待构建完成。用 `node ~/.agent-insight/client/runtime/xgovernor.cjs status` 确认 `components.xiaooCredentials.version` 为 `1`，然后重启客户端或等待重新上报能力。新增制品会改变冻结环境摘要，应新建实验并选择更新后的执行环境；原有失败记录不会自动重跑。MCTS 服务、凭据与进程不参与此次升级。无需修改 cgroup、重拉 Case 镜像或重启评测服务。
+| 项目 | 默认值或行为 |
+|---|---|
+| 模型与凭据 | 沿用实验选择及原生 Agent 配置，每个 Case 准备时读取；无需另配 xGovernor Key |
+| 隔离 | 每 Case 独立服务和工具容器，监听端口动态分配；工具容器断网，模型请求由宿主机控制器发出 |
+| 工具容器资源 | 2 CPU、4 GiB 内存、512 PID |
+| 本地记录 | 默认保留 7 天，只清理已结束且上传、资源清理均已确认的记录；镜像另行管理 |
+| Case 镜像 | 使用镜像内源码；来源和架构配置见 [SWE-bench 镜像配置](swe-bench-deployment-guide.md#原生-pixiaoo-的-case-镜像) |
 
-源码安装入口为 `node scripts/xgovernor.cjs`；`AGENT_INSIGHT_HOME` 自定义时相应替换目录。手动 `update` 不传版本仍使用官方 HEAD；正常 curl 自动安装始终使用平台固定版本。不要将这里的安装目录指向 MCTS。`status` 校验制品，不代替实际模型或 Docker Case 验证。
+**可选配置**
 
-源码和构建产物位于 `$AGENT_INSIGHT_HOME/dependencies/xgovernor/releases/<commit>-<安装标识>/source/`（`AGENT_INSIGHT_HOME` 默认为 `~/.agent-insight`），每个版本另有 `installation.json`。`current.json` 在同一次原子替换中保存当前版本和上一个版本。更新锁防止并发修改；下载、构建、扩展类型检查、新 server 健康/鉴权/会话路由检查全部通过后才切换指针。失败保留原版本；`rollback` 校验并探测上一个版本后切换。SIGINT/SIGTERM 会取消构建并清理临时安装；SIGKILL/掉电可能留下临时目录或 `update.lock`，需确认安装进程已经退出后再清理。
-
-源码下载和检出可使用临时目录；编译与 npm 依赖安装必须在最终版本目录内完成，成功后只切换 `current.json`，不移动已编译目录。xGovernor Pi 探测把构建时扩展绝对路径写入二进制，编译后搬动目录会使探测找不到 `probe.ts`。`installation.json.build` 保存 `layoutVersion: 1` 与规范化的 `sourceDirectory`，安装校验同时核对当前路径。缺少此标记的旧安装或被搬动的安装不能进入就绪状态，也不能通过 rollback 激活。重新执行新版平台生成的 curl 安装命令，会重建同一固定源码版本，无需手工删除旧安装；失败只清理本次未激活目录，原 current 与旧版本目录保留。
-
-安装检查不调用模型、不创建任务容器，不能替代真实 Pi/xiaoO + Docker Case 验收，也不能保证任意上游协议变化均可自动适配。布局或基础协议不兼容时拒绝切换，需升级本平台适配器。
-
-升级此修复时，先更新并启动平台，再在客户端安装页选择 Pi/xiaoO 并执行新生成的 curl 命令，等待重建完成。可用 `node ~/.agent-insight/client/runtime/xgovernor.cjs status` 检查 `build.layoutVersion` 和路径。重建会刷新制品与执行环境摘要，应新建或复用实验并重新确认执行环境，再运行一个 Case；旧任务冻结的摘要不会自动改写。
-
-不配置 server/worker/CLI/扩展路径时，客户端自动发现受管理安装，实际 commit 和制品摘要随现有约 30 秒能力上报刷新，正常联网时不需要重启客户端。每个 Case 将自身实际组件路径及非密钥配置持久化，升级/回退后正在执行的 Case 继续使用原版本；自动清理保留 current、previous 和仍被引用的版本。旧实验冻结的环境摘要与新版不一致时拒绝执行，需重新创建并确认配置。更新 xGovernor 本身不需要重新部署平台或 Evaluator。
-
-客户端启动恢复后及之后每小时执行本地历史清理。`retention.days` 默认为 7，正整数，在每轮清理时重新读取。安装版可编辑 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`：
+curl 安装版编辑 `~/.agent-insight/config/executor.local.yaml`；源码运行编辑仓库 `config/benchmark/executor.local.yaml`。自定义配置目录规则见 7.1。以下为默认值，按需覆盖即可：
 
 ```yaml
 retention:
   days: 7
-```
-
-Case 的 `terminalAt` 首次进入终态时写入，重复状态写入不会延长保留期限；仅终态、资源清理成功、全部本地 Artifact 上传确认且完成回调成功（或已取消）的记录可以过期。删除前还需确认对应 lease 已关闭、没有活动上传器或上传锁、Trace checkpoint 已覆盖每个 JSONL 文件全部字节。未完成、损坏或缺少确认的记录继续保留。清理确认后将 `client/xgovernor-runs/<runId>/` 和 `client/benchmark-runs/<runId>/` 移入客户端独立的 `retention-trash/` 再删除，确认记录独立保存，删除中断后下一轮可继续回收；不改平台记录、镜像缓存或其他服务目录。Trace 暂存不再套用通用上传器按日期分区删除的策略，避免未上传或尾行未完整写入的数据丢失。
-
-版本清理仅在客户端 Benchmark 执行空闲且没有安装操作时进行，复用 `update.lock` 排斥更新/回退；current、previous、未关闭 lease 和待恢复记录引用的版本均保留。其余安装版本按 `installation.json.installedAt` 应用同一保留期限，仅删除清单与命名均符合托管规则的目录，不接管 MCTS 的版本。清理失败记录客户端错误并下轮重试；目录符号链接和无法确认的记录跳过。首次升级前缺少 `terminalAt` 或完成回调确认的旧记录不会自动删除。
-
-正常使用无需创建配置文件。高级覆盖可在执行机的 `config/benchmark/executor.local.yaml`（安装版目录同 7.1）配置；下面的显式模型映射只用于兼容手动部署，不是必填步骤：
-
-```yaml
-benchmarks:
-  swe-bench:
-    images:
-      source: official
-      arch: auto
-      allowNonOfficial: false
-      proxyPrefix: null
-      verifiedMirrorRepositories: null
 execution:
   profiles:
     xgovernor-local-docker:
-      dockerExecutable: docker
-      dockerSocket: /var/run/docker.sock
-      traceApiKeyEnv: AGENT_INSIGHT_API_KEY
       resources: { cpu: 2, memoryMiB: 4096, pids: 512 }
-      timeouts: { prepareSeconds: 1800, cleanupSeconds: 120 }
-      models:
-        example/model:
-          provider: example
-          model: model
-          api: openai-completions
-          apiBase: https://model.example.com/v1
-          apiKeyEnv: BENCHMARK_MODEL_API_KEY
-      runtimes:
-        pi-agent:
-          kind: pi
-          namespace: runtime_pi
-          agents: [pi-agent]
-          defaultModel: example/model
-        xiaoo:
-          kind: xiaoo
-          namespace: xiaoo
-          agents: [defaultagent]
-          defaultModel: example/model
-  bindings:
-    - benchmarks: [swe-bench]
-      platforms: [pi-agent, xiaoo]
-      profile: xgovernor-local-docker
 ```
 
-默认模型解析在客户端 Agent 适配层完成。实验指定的 model 优先于 Runtime 的 `defaultModel`，再使用 Pi settings 或 xiaoO `[llm]` 默认值。Pi 使用配套 SDK 的 ModelRuntime/ModelRegistry 读取原有 models.json/auth.json；xiaoO 使用原配置的 provider、api_base、api_key_env，允许同 provider 的实验模型覆盖，不跨 provider 借用凭据。xiaoO TOML 解析使用客户端 FI Python 或 Python 3.11+（兼容已有 tomli）。原配置路径和用户目录从安装上下文恢复，在独立登录 shell 子进程中解析环境变量；秘钥只通过私有管道返回，不进入命令参数、Profile、能力上报或 lease。
+**更新与排障**
 
-仅将当前模型的密钥放入 case 进程专用环境变量，模型请求仍由宿主机发出。Pi 通过配套 SDK 的纯内置目录（`modelsPath: null`、离线模式）比对有效模型的 `compat` 与 headers：内置配置由 xGovernor Pi 桥接保留，只有实际不同的自定义项才拒绝，并返回字段名而非值。Pi 模型的 `reasoning/input/contextWindow/maxTokens` 映射到 `llm.capabilities.reasoning/input/context_window/max_tokens`，输出限制不得超过上下文。xiaoO `[llm].max_tokens` 映射到 `llm.capabilities.max_tokens`，`reasoning_effort` 按当前原生枚举规范为 `off/high/max`（含 `none/disabled/xhigh/maximum` 别名），随每轮请求发送；解析结果保存在本次句柄，后续配置变化不会改写已准备 Case 的设置。两个 KV cache 开关不配置或为 false 可执行，true 因当前契约不支持而报出字段名。Pi OAuth/订阅及无法保留的自定义 headers/兼容项仍不支持，不静默降级。显式 `models` 映射作为高级覆盖保留，但只检查当前选中模型的凭据，其他模型不会阻止环境就绪。模型目录不再必须复制到 Profile，默认复用 Agent 上报的 models。Trace 认证从原有 `$AGENT_INSIGHT_HOME/.env` 读取，显式环境变量仍优先，不使用设备凭据替代采集密钥。
+更新平台后，重新执行安装页生成的 curl 命令，等待安装完成及客户端重新上报能力。匹配版本会复用；缺少组件、旧布局或目录曾被移动时自动重建。执行环境摘要变化后需新建实验并重新选择环境，历史记录不会自动重跑。
 
-手动安装仍可显式配置 `serverExecutable` 和各 Runtime 的 `workerExecutable`，Pi 另需 `executable`、`extensionDirectory`，均使用绝对路径。只要存在这些自定义路径，就完整采用手动安装，不与受管理安装混用；要迁移到受管理安装，先移除这些路径。手动安装按实际制品计算摘要，公开 `sourceRevision` 显示 `unknown`；兼容保留的旧 `sourceRevision` 声明不能证明二进制来源，也无需继续手动维护。
+| 现象 | 处理 |
+|---|---|
+| Docker / cgroup v2 未就绪 | 管理员修复宿主机，再重跑安装命令 |
+| 构建失败或凭据桥接缺失 | 查看安装输出及 `status`，修复构建依赖、下载网络或权限后重跑 curl |
+| 模型配置或凭据解析失败 | 按 Case 中的具体原因检查原生 Agent 配置、凭据库及运行账号 |
+| 已有 Patch，但评测失败 | 按 [SWE-bench 排查与更新](swe-bench-deployment-guide.md#6-排查与更新) 检查 Evaluator |
 
-`runtimes` 是完整运行集合；默认受管理 Profile 按安装时选择过滤 Runtime，管理器仍构建配套组件。高级手动 Profile 可显式配置运行集合。同一个 Profile 内启用的 worker 或 Trace 依赖未就绪会报告环境不可用；模型凭据在任务准备阶段单独校验。`workerEnvironment` 可覆盖 Runtime 的 worker 变量名；Pi/xiaoO 默认分别为 `XGOVERNOR_PI_WORKER` / `XGOVERNOR_XIAOO_WORKER`。`settings` 仅由受信本机配置补充 Runtime 扩展，隔离参数由驱动固定。
-
-每个 Case 使用独立 daemon、凭据、状态目录和工具容器。两个监听端口动态分配，启动阶段确认端口占用时最多尝试 3 次；清理按 PID 身份和独立 deployment 标签执行，不使用全局 kill/prune。MCTS 服务及其配置不参与这一生命周期。镜像先解析为本机不可变 image ID，再核对架构，以及容器实际的无网络、无宿主挂载、非 root 用户、capability、no-new-privileges 和资源限制。SWE-bench 直接使用镜像中的 `/testbed`，验证 Git HEAD、数据集基线 commit 存在且为 HEAD 的祖先，以及初始工作树干净；不检查 origin，不执行 reset/clean，保留官方镜像构建时的安装提交。预探测不会运行模型或逐个拉取 Case 镜像，显示“就绪”仍可能在实际镜像或模型检查时失败。
-
-执行句柄分别持久化 `datasetRevision`（任务原有 base_commit）和 `baseCommit`（镜像初始 HEAD / Patch 基线），不改写任务版本。收集器相对持久化的镜像基线汇总 Agent 已提交、暂存和未暂存的修改，包含新增、删除文件，排除提交物自身，并禁用外部 diff/textconv。成功运行事实中的 `execution.workspace` 保存 `datasetRevision` 与 `patchBaseCommit`。两端仍独立选择镜像，Patch 由现有 Evaluator 应用和评测。
-
-xGovernor HTTP 拒绝通过有界读取提取原因（最多 16 KiB、最多等待 1 秒），按固定词表转换为可展示的 Pi 探测、模型认证、网络或能力配置错误，已知请求字段错误仅保留字段名。响应中的 headers、密钥、URL、本地路径和任意 details 不传回平台；未知、过大、无法解析或读取失败的响应保留 HTTP 状态码。Case 失败提示以“执行环境请求被拒绝”展示安全原因，不重试已被拒绝的会话创建。历史仅存状态码的失败记录不会自动补齐。
-
-HTTP 200 但沙箱命令退出非零或超时，按 `SANDBOX_COMMAND_FAILED` 回传安全消息；操作名来自固定列表，stderr 只取前 16 KiB 匹配固定原因，不回显原文、stdout 或命令参数。`runFacts.sandboxDiagnostic` 和本次私有目录的 `diagnostic.json` 保存阶段、操作、退出码、超时标记及原因；收集阶段失败仍保留已有 Trace/模型事实。未知原因明确标为未识别，不再提示用户查看不存在的诊断。
-
-仅更新本次工作区与 Patch 修复时，更新平台并重跑安装页生成的 Pi/xiaoO curl 命令，以更新客户端 JS bundle；已通过布局校验的同版本 xGovernor 继续复用，不需要重新编译 Rust、重拉 Case 镜像或修改 cgroup。等待客户端重新上线后重跑失败 Case。只有安装器报告旧布局需要重建或环境摘要发生变化时，才需要重建依赖或重新确认实验执行环境。
-
-执行端和 Evaluator 分别维护自身的 SWE-bench 镜像实现，互不依赖，可独立调整。当前两端默认策略相同：优先使用本地官方别名缓存；没有缓存时，按 SWR 仓库列表 → 配置代理 → 官方仓库顺序拉取，SWR/代理成功后自动恢复官方别名。`verifiedMirrorRepositories: null` 使用内置两个 SWR Verified 仓库，`[]` 关闭镜像站，也可填写自有仓库列表；各仓库按 `<repository>:<instance_id>` 查找 Case。该 SWR 映射只适用于官方 x86_64，ARM64 跳过。
-
-执行机读取 `executor.local.yaml` 的 `benchmarks.swe-bench.images`；评测机读取 `evaluator.local.yaml` 的同名配置，已有评测配置不会自动复制给执行端。执行端支持同样的 `proxyPrefix`、`arch` 和显式 ARM64 非官方 smoke 策略；目标架构必须匹配任务和本机 Docker。私有 SWR 的认证通过执行客户端运行账号、对应 Docker daemon 的现有 Docker 凭据配置准备，不在任务或 YAML 中传入密钥。
-
-执行端记录 `runFacts.execution.imageId` 和 `runFacts.execution.imageResolution`，本次执行使用本机不可变镜像 ID；本地镜像不要求具有 RepoDigests。执行与评测分别选择镜像，不强制两端 digest、image ID 或架构一致。评测端保留原有预热流程。
-
-执行与评测使用独立容器，初始化过程和资源上限各自配置，不保证两端基础镜像内容完全相同。
-
-工具容器网络固定 `none`；模型请求由宿主机控制器发出。CPU/内存/PID 限额约束工具容器，不覆盖宿主机 Agent 控制器。Pi 使用受控桥接扩展并关闭个人资源发现，不自动携带全局 Skill。当前原生后端不接受 MCTS 等 Runtime 的 `agentOptions`。
-
-Trace 使用现有上传端点与 durable spool：Pi 从本次唯一原生 JSONL 导出；xiaoO 通过透明 worker 代理持久化完整 `state` 快照，只接受 `runtime_kind=xiaoo/schema_version=1` 与对应 ChatMessage 格式。摘要 SSE 不作为完整 Trace。业务 Trace ID 固定为 `xgovernor:<runId>`；runtime ID/turn ID 精确归属，SSE 断连不重新提交 Agent。
-
-可选 `traceExporter` 支持新的 Runtime/快照格式：可执行文件 `--describe` 返回 `{ "schemaVersion": "execution-trace/v1", "full": true, "runtimeKinds": ["opencode"] }`；`--export` 从 stdin 接收本次 runId/runtimeId/stateDirectory 等元数据，返回同版本、`full: true`、对应 runId/runtimeId 及完整 canonical `events`。事件必须属于唯一 `xgovernor:<runId>` 根会话并包含模型正文。新的 Runtime 还须补充上游会话参数映射和 Trace 语义验证。
-
-Runner 为准备、Agent、收集与清理持久化阶段期限；心跳不会延长期限。取消和重启优先清理本次 ownership 标识匹配的进程/容器，无法确认清理完成时保留 `cleanup_pending` 并占用资源预算。Patch 与 Trace 在关闭前落盘，上传失败只重传，不重跑 Agent。Case 详情显示冻结 Profile 和实际环境事实。真实部署验收应至少完成一次 Pi、一次 xiaoO 单 Case，并验证取消、重启清理和平台 Evaluator 结果。
+手动版本更新、回退及安装实现见 [受管理安装与版本](benchmark-integration-development-guide.md#受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](benchmark-integration-development-guide.md#原生执行高级配置)。
 
 ## 8. 整体验收
 

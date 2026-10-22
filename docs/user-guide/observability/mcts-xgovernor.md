@@ -89,6 +89,10 @@ cd /path/to/MCTS
 agent-insight-mcts-run --upstream http://127.0.0.1:8787 -- <原 MCTS 命令>
 ```
 
+采集 Key 的读取顺序为：显式进程环境变量 `AGENT_INSIGHT_API_KEY` → 采集器所属安装目录的 `.env` → 旧版采集器 `config.json`。因此公共 Key 更新后，新启动的 MCTS 会自动使用新值，无需手工同步 MCTS JSON；显式设置的进程环境变量仍需自行同步。Benchmark 的每 Case 输出目录只存轨迹，读取凭据时根据安装版 `--config` 路径定位公共配置，不读取 Case 目录中的 `.env`。公共配置显式清空 Key 时，不回退到旧 Key。
+
+安装及每次启动采集前，会向配置的 OTLP 接口发送空事件请求，校验平台鉴权，不生成任务 Trace。Key 无效、平台不可达或响应异常时立即报错，不启动 MCTS；安装鉴权失败不覆盖已有采集器配置。这只验证采集入口，不代替模型或 xGovernor 可用性验证。运行中的采集进程不会热更新 Key，历史上传失败数据也不会自动补传；需要在任务结束后单独恢复。
+
 默认是 fail-open：缺少 API Key 或本地代理启动失败时，启动器提示原因并直接执行原命令。要求观测不可用时拒绝启动，可增加 `--strict`。推理正文默认不采集；明确需要时增加 `--capture-reasoning`。
 
 同一能力也可用环境变量控制：`AGENT_INSIGHT_MCTS_PROXY_ENABLED`、`AGENT_INSIGHT_MCTS_UPSTREAM_URL`、`AGENT_INSIGHT_MCTS_CAPTURE_REASONING`、`AGENT_INSIGHT_MCTS_BYPASS_ON_START_FAILURE` 和 `AGENT_INSIGHT_MCTS_STRICT`。命令行 `--upstream`、`--capture-reasoning`、`--strict` 的优先级更高。
