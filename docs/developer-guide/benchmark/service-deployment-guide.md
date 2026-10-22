@@ -314,7 +314,7 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 
 ### 7.1 配置 SWE-bench Case 源码来源（可选）
 
-在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；安装版常驻客户端对应目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`。安装升级会更新默认文件、保留 local 文件；旧目录下的 `config/executor.local.yaml` 会在新目录尚无覆盖文件时迁移，并保留原相对 Git 路径的实际位置。也可由 `AGENT_INSIGHT_CONFIG_DIR` 指定配置目录。
+源码运行时在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；curl 安装版统一使用 `~/.agent-insight/config/executor.local.yaml`，自定义根目录时为 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`。安装器自动准备用户配置目录并打印路径，不要求创建配置文件。安装升级只更新运行时内置的 `executor.yaml`，不覆盖用户配置。安装版不读取、迁移或回退到 `client/runtime/config/benchmark/executor.local.yaml` 或更早的 `client/runtime/config/executor.local.yaml`；旧文件保留但不生效，需要的配置请自行写入新路径。配置中的相对路径以新配置文件所在目录为基准。显式设置 `AGENT_INSIGHT_CONFIG_DIR` 时仍从指定目录读取 `executor.yaml` 与 `executor.local.yaml`，不叠加上述用户配置。
 
 ```yaml
 benchmarks:
@@ -364,7 +364,7 @@ MCTS 就绪探测通过配置的 Python 检查版本及 `importlib.util.find_spe
 
 MCTS 的字段、中文名称、分组、类型、校验范围、默认值、联调预设和 CLI 绑定统一声明在 `services/executor/runtimes/mcts/runtime.yaml`。`pi-mcts` 与 `xiao-mcts` 共用此描述，内部 Runtime 映射仍为 `pi` / `xiaoo`；客户端自动发现仍只注册已有 Pi 目标。前六项为正安全整数，Token 阈值为非负安全整数，`0` 表示关闭熔断。默认值为 `5、3、160、80、160、80、30000000`；空输入按字段的 `required` 校验。
 
-执行机可在 `config/benchmark/executor.local.yaml` 覆盖默认值，安装版目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`：
+执行机可在 `config/benchmark/executor.local.yaml` 覆盖默认值，curl 安装版使用 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`（默认 `~/.agent-insight/config/executor.local.yaml`）：
 
 ```yaml
 runtimes:
@@ -386,31 +386,21 @@ runtimes:
 
 新建的 `swe-bench + pi-agent/xiaoo` 任务默认绑定 `xgovernor-local-docker`。这条路径独立于普通实验的原生 CLI 与 Collector 就绪探测；未配置时明确不可用，不回退宿主机执行。OpenCode、MCTS 和非 Benchmark 实验继续走各自原有路径。平台和执行客户端须同步升级并重启。
 
-执行机要求 Linux x64/arm64、Docker Linux daemon 与 cgroup v2，以及官方 SWE-bench 实例镜像。安装 xGovernor 另外需要 Git、Cargo/Rust 构建工具链、Node.js >=22.19 和 npm，且可访问官方 GitCode 仓库、Cargo 依赖源和 npm。Rust 的具体最低版本及系统编译依赖以上游锁定源码为准；本命令不安装 Docker、Rust 或系统软件。Case 镜像须满足上游 bootstrap 的 Python/helper 依赖。Docker socket 仅由受信宿主机控制器访问，不能挂进工具容器。
+执行机要求 Linux x64/arm64、可访问的 Docker Linux daemon 和 cgroup v2。平台和 Evaluator 无需安装 xGovernor；安装页选择 Pi/xiaoO 后执行原有 curl 即可，所有客户端安装来源均将 `--frameworks` 传给安装器。先注册并启动客户端，再进行耗时的源码构建，避免 10 分钟安装令牌在编译中失效。
 
-平台、客户端和 Evaluator 的原安装/启动命令保持不变；平台与客户端先升级到包含此功能的配套版本。仅在承担这些任务的执行机额外安装依赖，源码部署在仓库根目录运行：
+`setup.cjs` 将兼容版本固定为 `d08e67e366b89e622af9383383e251c4f40eb728`；更新此常量需验证适配协议。同版本制品校验通过时跳过下载编译。否则自动准备 Git、C/C++ 构建工具、pkg-config 等依赖，支持 apt/dnf/yum，需 root 或非交互 sudo 权限。Node 不足 22.19 时安装独立 Node 22.19.0 并验证下载校验和；Cargo 缺失或版本不足时安装独立 Rust 1.97.1。工具链放在 `dependencies/xgovernor/toolchain/`，不修改 shell 配置；Cargo 构建并行度限制为 2。需要访问 GitCode、Rust/Cargo、Node 与 npm 下载源。Docker 与 cgroup v2 由宿主机管理员准备，安装器不自动修改内核参数、安装 Docker 或重启。
 
-```bash
-node scripts/xgovernor.cjs update
-```
+自动安装锁 `setup.lock` 防止重复准备工具链，管理器的 `update.lock` 保护版本切换。安装失败写入 `setup.json` 并打印原因，客户端仍可在线，但不宣称 Benchmark 已就绪。`setup.json` 只保存所选 Runtime、配置路径和状态，不保存模型凭据。MCTS-only 安装不触发这一流程；即使同机已有 MCTS xGovernor，也不探测或接管它的二进制、服务和仓库。
 
-平台安装的常驻客户端使用随安装包落盘的入口，不依赖源码仓库或当前工作目录：
+高级管理员仍可使用以下入口管理客户端专属安装：
 
 ```bash
-node ~/.agent-insight/client/runtime/xgovernor.cjs update
+node ~/.agent-insight/client/runtime/xgovernor.cjs status
+node ~/.agent-insight/client/runtime/xgovernor.cjs update --version <tag或完整commit>
+node ~/.agent-insight/client/runtime/xgovernor.cjs rollback
 ```
 
-配置 `AGENT_INSIGHT_HOME` 时将入口路径改为对应的 `$AGENT_INSIGHT_HOME/client/runtime/xgovernor.cjs`，并使用与客户端相同的环境变量和运行账号。客户端安装只分发管理工具，不自动触发下载或编译；平台和 Evaluator 不需要安装 xGovernor。
-
-`update` 首次运行即安装，后续默认解析官方仓库默认分支 HEAD，锁定本次实际 commit 后构建 server/Pi worker，并按上游 lockfile 安装配套 Pi CLI 与桥接扩展。当前采用源码构建，不依赖上游存在预编译发布包，不修改全局 Pi/xiaoO 安装。
-
-```bash
-node scripts/xgovernor.cjs update --version <tag或完整commit>
-node scripts/xgovernor.cjs status
-node scripts/xgovernor.cjs rollback
-```
-
-上述子命令在安装版也使用同一 `~/.agent-insight/client/runtime/xgovernor.cjs` 入口。`status` 输出实际 commit、组件版本、摘要与安装位置，并校验制品；不代替 Docker、模型凭据等运行就绪检查。
+源码安装入口为 `node scripts/xgovernor.cjs`；`AGENT_INSIGHT_HOME` 自定义时相应替换目录。手动 `update` 不传版本仍使用官方 HEAD；正常 curl 自动安装始终使用平台固定版本。不要将这里的安装目录指向 MCTS。`status` 校验制品，不代替实际模型或 Docker Case 验证。
 
 源码和构建产物位于 `$AGENT_INSIGHT_HOME/dependencies/xgovernor/releases/<commit>-<安装标识>/source/`（`AGENT_INSIGHT_HOME` 默认为 `~/.agent-insight`），每个版本另有 `installation.json`。`current.json` 在同一次原子替换中保存当前版本和上一个版本。更新锁防止并发修改；下载、构建、扩展类型检查、新 server 健康/鉴权/会话路由检查全部通过后才切换指针。失败保留原版本；`rollback` 校验并探测上一个版本后切换。SIGINT/SIGTERM 会取消构建并清理临时安装；SIGKILL/掉电可能留下临时目录或 `update.lock`，需确认安装进程已经退出后再清理。
 
@@ -418,7 +408,7 @@ node scripts/xgovernor.cjs rollback
 
 不配置 server/worker/CLI/扩展路径时，客户端自动发现受管理安装，实际 commit 和制品摘要随现有约 30 秒能力上报刷新，正常联网时不需要重启客户端。每个 Case 将自身实际组件路径及非密钥配置持久化，升级/回退后正在执行的 Case 继续使用原版本；旧目录保留，不自动清理。旧实验冻结的环境摘要与新版不一致时拒绝执行，需重新创建并确认配置。更新 xGovernor 本身不需要重新部署平台或 Evaluator。
 
-在执行机的 `config/benchmark/executor.local.yaml`（安装版目录同 7.1）配置，例如：
+正常使用无需创建配置文件。高级覆盖可在执行机的 `config/benchmark/executor.local.yaml`（安装版目录同 7.1）配置；下面的显式模型映射只用于兼容手动部署，不是必填步骤：
 
 ```yaml
 benchmarks:
@@ -461,13 +451,15 @@ execution:
       profile: xgovernor-local-docker
 ```
 
-模型参数以所部署 Runtime 的支持范围为准。模型密钥和 Trace 上传密钥通过上述环境变量提供给常驻客户端，不写入 YAML、任务或平台快照。这里不自动继承 Pi `auth.json`、OAuth 或 xiaoo 的原生密钥存储；请显式映射兼容的 provider/model、协议、endpoint 与环境变量引用。修改配置后重启客户端；公开 Profile 摘要变化时，旧实验要求重新创建并确认配置。默认模型仅在配置 `defaultModel` 或只有一个模型时可解析。
+默认模型解析在客户端 Agent 适配层完成。实验指定的 model 优先于 Runtime 的 `defaultModel`，再使用 Pi settings 或 xiaoO `[llm]` 默认值。Pi 使用配套 SDK 的 ModelRuntime/ModelRegistry 读取原有 models.json/auth.json；xiaoO 使用原配置的 provider、api_base、api_key_env，允许同 provider 的实验模型覆盖，不跨 provider 借用凭据。xiaoO TOML 解析使用客户端 FI Python 或 Python 3.11+（兼容已有 tomli）。原配置路径和用户目录从安装上下文恢复，在独立登录 shell 子进程中解析环境变量；秘钥只通过私有管道返回，不进入命令参数、Profile、能力上报或 lease。
+
+仅将当前模型的密钥放入 case 进程专用环境变量，模型请求仍由宿主机发出。当前不支持 Pi OAuth/订阅认证及自定义 headers/兼容参数，也不静默降级。显式 `models` 映射作为高级覆盖保留，但只检查当前选中模型的凭据，其他模型不会阻止环境就绪。模型目录不再必须复制到 Profile，默认复用 Agent 上报的 models。Trace 认证从原有 `$AGENT_INSIGHT_HOME/.env` 读取，显式环境变量仍优先，不使用设备凭据替代采集密钥。
 
 手动安装仍可显式配置 `serverExecutable` 和各 Runtime 的 `workerExecutable`，Pi 另需 `executable`、`extensionDirectory`，均使用绝对路径。只要存在这些自定义路径，就完整采用手动安装，不与受管理安装混用；要迁移到受管理安装，先移除这些路径。手动安装按实际制品计算摘要，公开 `sourceRevision` 显示 `unknown`；兼容保留的旧 `sourceRevision` 声明不能证明二进制来源，也无需继续手动维护。
 
-`runtimes` 是完整运行集合；仅启用 Pi 时只声明 `pi-agent` 并将 binding 的 platforms 改成 `[pi-agent]`，管理命令仍安装 Pi/xiaoO 配套组件。同一个 Profile 内任何 worker、模型凭据或 Trace 依赖未就绪，整个 Profile 都会报告不可用。`workerEnvironment` 可覆盖 Runtime 的 worker 变量名；Pi/xiaoO 默认分别为 `XGOVERNOR_PI_WORKER` / `XGOVERNOR_XIAOO_WORKER`。`settings` 仅由受信本机配置补充 Runtime 扩展，隔离参数由驱动固定。
+`runtimes` 是完整运行集合；默认受管理 Profile 按安装时选择过滤 Runtime，管理器仍构建配套组件。高级手动 Profile 可显式配置运行集合。同一个 Profile 内启用的 worker 或 Trace 依赖未就绪会报告环境不可用；模型凭据在任务准备阶段单独校验。`workerEnvironment` 可覆盖 Runtime 的 worker 变量名；Pi/xiaoO 默认分别为 `XGOVERNOR_PI_WORKER` / `XGOVERNOR_XIAOO_WORKER`。`settings` 仅由受信本机配置补充 Runtime 扩展，隔离参数由驱动固定。
 
-每个 Case 使用独立 daemon、凭据、状态目录和工具容器。镜像先解析为本机不可变 image ID，再核对架构、Git HEAD/origin/干净工作树，以及容器实际的无网络、无宿主挂载、非 root 用户、capability、no-new-privileges 和资源限制。预探测不会运行模型或逐个拉取 Case 镜像，显示“就绪”仍可能在实际镜像或模型检查时失败。
+每个 Case 使用独立 daemon、凭据、状态目录和工具容器。两个监听端口动态分配，启动阶段确认端口占用时最多尝试 3 次；清理按 PID 身份和独立 deployment 标签执行，不使用全局 kill/prune。MCTS 服务及其配置不参与这一生命周期。镜像先解析为本机不可变 image ID，再核对架构、Git HEAD/origin/干净工作树，以及容器实际的无网络、无宿主挂载、非 root 用户、capability、no-new-privileges 和资源限制。预探测不会运行模型或逐个拉取 Case 镜像，显示“就绪”仍可能在实际镜像或模型检查时失败。
 
 执行端和 Evaluator 分别维护自身的 SWE-bench 镜像实现，互不依赖，可独立调整。当前两端默认策略相同：优先使用本地官方别名缓存；没有缓存时，按 SWR 仓库列表 → 配置代理 → 官方仓库顺序拉取，SWR/代理成功后自动恢复官方别名。`verifiedMirrorRepositories: null` 使用内置两个 SWR Verified 仓库，`[]` 关闭镜像站，也可填写自有仓库列表；各仓库按 `<repository>:<instance_id>` 查找 Case。该 SWR 映射只适用于官方 x86_64，ARM64 跳过。
 

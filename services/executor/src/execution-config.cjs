@@ -5,16 +5,21 @@ const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 const { loadProjectConfig } = require('./project-config.cjs')
 const { artifactIdentity } = require('./xgovernor/artifact-identity.cjs')
-const { resolveManagedProfile } = require('./xgovernor/installation.cjs')
+const { resolveManagedProfile, installationRoot } = require('./xgovernor/installation.cjs')
 const protocolPath = fs.existsSync(path.resolve(__dirname, '../../../packages/benchmark-protocol/execution.cjs'))
   ? path.resolve(__dirname, '../../../packages/benchmark-protocol/execution.cjs') : path.resolve(__dirname, '../packages/benchmark-protocol/execution.cjs')
 const protocol = require(protocolPath)
+const { readSetup } = require('./xgovernor/setup.cjs')
+const { traceApiKey } = require('./xgovernor/credentials.cjs')
 const executable = file => { try { fs.accessSync(file, fs.constants.X_OK); return true } catch { return false } }
 
 let probeCache
 let processConfig
 function executionCapabilities(options = {}) {
-  const raw = options.config || (processConfig ||= loadProjectConfig('executor').execution)
+  const original = options.config || (processConfig ||= loadProjectConfig('executor').execution)
+  const selected = readSetup(options.installationRoot || installationRoot(options.env)).platforms
+  const raw = { ...original, profiles: Object.fromEntries(Object.entries(original.profiles).map(([key, local]) => [key, selected?.length && key === 'xgovernor-local-docker' && !local.serverExecutable
+    ? { ...local, runtimes: Object.fromEntries(Object.entries(local.runtimes).filter(([platform]) => selected.includes(platform))) } : local])) }
   const installations = new Map(Object.entries(raw.profiles).map(([key, local]) => [key, resolveManagedProfile(local, {
     env: options.env || process.env, root: options.installationRoot, target: options.target,
   })]))
@@ -22,7 +27,7 @@ function executionCapabilities(options = {}) {
   const identities = new Map(Object.entries(configured.profiles).map(([key, local]) => [key, artifactIdentity(local)]))
   const config = { ...configured, profiles: Object.fromEntries(Object.entries(configured.profiles).map(([key, local]) => [key, { ...local, artifactDigest: identities.get(key).digest }])) }
   const env = options.env || process.env
-  const fingerprint = protocol.digest({ config, os: options.os || process.platform, credentials: Object.values(config.profiles).flatMap(p => [Boolean(env[p.traceApiKeyEnv]), ...Object.values(p.models).map(m => Boolean(env[m.apiKeyEnv]))]) })
+  const fingerprint = protocol.digest({ config, os: options.os || process.platform, credentials: Object.values(config.profiles).flatMap(p => [Boolean(traceApiKey(p, env)), ...Object.values(p.models).map(m => Boolean(env[m.apiKeyEnv]))]) })
   if (!options.refresh && probeCache?.fingerprint === fingerprint && Date.now() - probeCache.at < 30_000) return probeCache.value
   const profiles = Object.entries(config.profiles).map(([key, local]) => {
     const reasons = []
@@ -30,8 +35,7 @@ function executionCapabilities(options = {}) {
     reasons.push(...identities.get(key).reasons)
     if ((options.os || process.platform) !== 'linux') reasons.push('xGovernor 本地 Docker 执行需要 Linux')
     if (!executable(local.serverExecutable)) reasons.push('请配置可执行的 xGovernor server')
-    if (!env[local.traceApiKeyEnv]) reasons.push(`缺少 Trace 上传环境变量 ${local.traceApiKeyEnv}`)
-    if (!Object.keys(local.models).length || Object.values(local.models).some(model => !env[model.apiKeyEnv])) reasons.push('模型配置或模型凭据未就绪')
+    if (!traceApiKey(local, env)) reasons.push('Trace 采集认证未就绪，请重新运行客户端安装命令')
     for (const [platform, runtime] of Object.entries(local.runtimes)) {
       if (!executable(runtime.workerExecutable)) reasons.push(`${platform} worker 未配置`)
       if (runtime.kind === 'pi' && (!executable(runtime.executable) || !runtime.extensionDirectory || !fs.existsSync(runtime.extensionDirectory))) reasons.push('Pi CLI 或桥接扩展未配置')

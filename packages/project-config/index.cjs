@@ -199,8 +199,11 @@ function loadProjectConfig(scope, options = {}) {
     const root = options.root || env.AGENT_INSIGHT_PACKAGE_ROOT || path.resolve(__dirname, '../..')
     const configuredDir = options.configDir || env.AGENT_INSIGHT_CONFIG_DIR
     const directory = configuredDir ? path.resolve(root, configuredDir) : path.join(root, 'config', 'benchmark')
-    for (const suffix of ['', '.local']) {
-      const filePath = path.resolve(directory, `${scope}${suffix}.yaml`)
+    const installedExecutor = scope === 'executor' && !configuredDir && fs.existsSync(path.join(root, 'reliability-client.cjs'))
+    const localDirectory = installedExecutor
+      ? path.join(require(path.join(root, 'agent-insight-home.cjs')).getAgentInsightHome(env), 'config')
+      : directory
+    for (const filePath of [path.join(directory, `${scope}.yaml`), path.join(localDirectory, `${scope}.local.yaml`)]) {
       let text
       try { text = fs.readFileSync(filePath, 'utf8') }
       catch (error) { if (error.code === 'ENOENT') continue; throw error }

@@ -11,6 +11,9 @@ const { XGovernorClient, error } = require('./client.cjs')
 const { exportTrace, resumeUpload } = require('./trace.cjs')
 const { describeProfile, validateExecution, bindingFor, executionCapabilities } = require('../execution-config.cjs')
 const { artifactIdentity } = require('./artifact-identity.cjs')
+const { resolveModel } = require('./model-resolver.cjs')
+const { installationRoot } = require('./installation.cjs')
+const { toolchainEnvironment } = require('./toolchain.cjs')
 const { prepareExecutionImage } = require('../execution-images.cjs')
 
 async function port() {
@@ -91,6 +94,7 @@ class XGovernorExecutionBackend {
   }
   async prepare(task, context) {
     const { local, runtime, spec } = this.validate(task)
+    const resolved = await (this.options.resolveModel || resolveModel)(task, runtime, local, { signal: context.signal })
     this.reservations.set(context.runId, local.resources)
     const directory = path.join(this.root, context.runId)
     await fsp.mkdir(directory, { recursive: true, mode: 0o700 }).catch(cause => { this.reservations.delete(context.runId); throw cause })
@@ -116,9 +120,11 @@ class XGovernorExecutionBackend {
     const auth = randomBytes(32).toString('hex')
     await fsp.writeFile(path.join(directory, 'admin.auth'), auth, { mode: 0o600, flag: 'wx' })
     await fsp.writeFile(path.join(directory, 'tenants.toml'), `[admin]\ntokens = ["${auth}"]\n\n[[tenant]]\ntenant_id = "case"\ntokens = ["${randomBytes(32).toString('hex')}"]\n`, { mode: 0o600, flag: 'wx' })
-    const environment = { ...process.env }
+    const inherited = toolchainEnvironment(installationRoot(), process.env)
+    const environment = Object.fromEntries(Object.entries(inherited).filter(([key]) => ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'].includes(key)))
     for (const key of Object.keys(environment)) if (key.startsWith('XGOVERNOR_') || key === 'E2B_API_KEY') delete environment[key]
-    for (const model of Object.values(local.models)) environment[model.apiKeyEnv] = process.env[model.apiKeyEnv]
+    for (const model of Object.values(local.models)) delete environment[model.apiKeyEnv]
+    environment[resolved.model.apiKeyEnv] = resolved.credential
     Object.assign(environment, {
       XGOVERNOR_DATA_DIR: path.join(directory, 'state'), XGOVERNOR_TENANTS_CONFIG_PATH: path.join(directory, 'tenants.toml'),
       XGOVERNOR_BIND_ADDR: `127.0.0.1:${adminPort}`, XGOVERNOR_TENANT_BIND_ADDR: `127.0.0.1:${tenantPort}`,
@@ -140,30 +146,42 @@ class XGovernorExecutionBackend {
       environment.XGOVERNOR_XIAOO_WORKER = wrapper
     }
     await this.persist(handle, context)
-    const logFile = await fsp.open(path.join(directory, 'server.log'), 'a', 0o600)
-    try { this.assertFrozen(local) } catch (cause) { await logFile.close(); throw cause }
-    const child = (this.options.spawnImpl || spawn)(local.serverExecutable, [], { cwd: directory, env: environment, detached: true, stdio: ['ignore', logFile.fd, logFile.fd] })
-    const spawned = new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
-    spawned.catch(() => {})
-    await logFile.close()
-    child.on('error', () => {})
-    this.processes.set(context.runId, child)
-    await spawned
-    handle.opaque.pid = child.pid
-    handle.opaque.processIdentity = await identity(child.pid)
-    await this.persist(handle, context)
-    const client = await this.client(handle)
-    const readyDeadline = Date.now() + 60000
-    while (true) {
-      context.signal?.throwIfAborted()
-      if (child.exitCode !== null || child.signalCode) throw error('XGOVERNOR_START_FAILED', 'xGovernor 启动后退出；请检查本机日志')
-      try { await client.request('/health', undefined, context.signal, 1000); break } catch (cause) { if (Date.now() > readyDeadline) throw cause }
-      await new Promise(resolve => setTimeout(resolve, 250))
+    let child
+    let client
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const logFile = await fsp.open(path.join(directory, 'server.log'), 'a', 0o600)
+      const offset = (await logFile.stat()).size
+      try { this.assertFrozen(local) } catch (cause) { await logFile.close(); throw cause }
+      child = (this.options.spawnImpl || spawn)(local.serverExecutable, [], { cwd: directory, env: environment, detached: true, stdio: ['ignore', logFile.fd, logFile.fd] })
+      const spawned = new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+      spawned.catch(() => {})
+      await logFile.close()
+      child.on('error', () => {})
+      this.processes.set(context.runId, child)
+      await spawned
+      handle.opaque.pid = child.pid
+      handle.opaque.processIdentity = await identity(child.pid)
+      await this.persist(handle, context)
+      client = await this.client(handle)
+      const readyDeadline = Date.now() + 60000
+      let ready = false
+      while (true) {
+        context.signal?.throwIfAborted()
+        if (child.exitCode !== null || child.signalCode) break
+        try { await client.request('/health', undefined, context.signal, 1000); await client.request('/sessions', undefined, context.signal, 1000); ready = true; break } catch (cause) { if (Date.now() > readyDeadline) throw cause }
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+      if (ready) break
+      const startupLog = (await fsp.readFile(path.join(directory, 'server.log'))).subarray(offset).toString()
+      if (attempt === 2 || !/address already in use|EADDRINUSE|os error 98/i.test(startupLog)) throw error('XGOVERNOR_START_FAILED', 'xGovernor 启动后退出；请检查本机日志')
+      handle.opaque.adminPort = await port()
+      do { handle.opaque.tenantPort = await port() } while (handle.opaque.adminPort === handle.opaque.tenantPort)
+      environment.XGOVERNOR_BIND_ADDR = `127.0.0.1:${handle.opaque.adminPort}`
+      environment.XGOVERNOR_TENANT_BIND_ADDR = `127.0.0.1:${handle.opaque.tenantPort}`
     }
-    const modelId = task.agentConfig.model || runtime.defaultModel || (Object.keys(local.models).length === 1 ? Object.keys(local.models)[0] : null)
-    const model = local.models[modelId]
-    if (!model || !process.env[model.apiKeyEnv]) throw error('MODEL_CONFIGURATION_INVALID', '模型或凭据来源未配置')
-    handle.opaque.modelId = modelId
+    const model = resolved.model
+    handle.opaque.modelId = `${model.provider}/${model.model}`
+    handle.opaque.resolvedModel = { provider: model.provider, model: model.model }
     await this.persist(handle, context)
     const role = { ...(['pi', 'xiaoo'].includes(runtime.kind) ? { tools_enabled: true, max_turns: 160 } : {}), ...runtime.settings, backend_id: 'docker',
       ...(runtime.kind === 'pi' ? { extension_dir: runtime.extensionDirectory, discovery: { extensions: false, skills: false, prompt_templates: false, themes: false, context_files: false } } : runtime.kind === 'xiaoo' ? { allow_interaction: false } : {}),

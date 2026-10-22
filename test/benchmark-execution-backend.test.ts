@@ -81,6 +81,10 @@ test('Benchmark sandbox readiness is independent from the native CLI readiness a
   assert.deepEqual(target.agents, ['pi-agent'])
   assert.deepEqual(target.models, ['provider/model'])
   assert.equal(listTraceGenerationPlatforms(parseCapabilities(row.capabilitiesJson)).length, 1)
+  const automatic = configuration().profiles['xgovernor-local-docker']
+  automatic.models = {}
+  cap.executionProfiles[0].profile = describeProfile('xgovernor-local-docker', automatic)
+  assert.deepEqual(inspectBenchmarkExecutionTargets({ ...row, capabilitiesJson: JSON.stringify(cap) } as never, manifest as never)[0].models, ['native/unavailable'])
   cap.executionProfiles[0].ready = false
   assert.equal(inspectBenchmarkExecutionTargets({ ...row, capabilitiesJson: JSON.stringify(cap) } as never, manifest as never)[0].ready, false)
   delete (cap as any).executionProfiles
@@ -170,6 +174,7 @@ test('xGovernor adapter prepares and collects through session APIs and checks ac
   let handle: any
   let child: any
   let environment: any
+  let starts = 0
   const commands: string[][] = []
   let alive = false
   const prior = process.env.MODEL_KEY
@@ -180,7 +185,9 @@ test('xGovernor adapter prepares and collects through session APIs and checks ac
     spawnImpl(_file: string, _args: string[], options: any) {
       environment = options.env
       child = new EventEmitter()
-      Object.assign(child, { exitCode: null, signalCode: null })
+      starts++
+      Object.assign(child, { exitCode: starts === 1 ? 1 : null, signalCode: null })
+      if (starts === 1) fs.writeSync(options.stdio[1], 'Address already in use (os error 98)\n')
       queueMicrotask(() => child.emit('spawn'))
       return child
     },
@@ -198,7 +205,7 @@ test('xGovernor adapter prepares and collects through session APIs and checks ac
       if (url.endsWith('/sessions/open')) {
         alive = true
         assert.equal(payload.ext.runtime_pi.backend_id, 'docker')
-        assert.equal(payload.llm.api_key_env, 'MODEL_KEY')
+        assert.equal(payload.llm.api_key_env, 'AGENT_INSIGHT_CASE_MODEL_KEY')
         assert.equal(JSON.stringify(payload).includes('fixture-secret'), false)
         result = { runtime_id: payload.runtime_id, isolation: { boundary: 'container', network: 'isolated' } }
       } else if (url.endsWith('/sessions/exec')) {
@@ -212,6 +219,10 @@ test('xGovernor adapter prepares and collects through session APIs and checks ac
     const context = { runId: body.context.runId, async persist(next: unknown) { handle = next } }
     assert.equal((await backend.recover({}, context)).status, 'succeeded')
     handle = await backend.prepare(body, context)
+    assert.equal(starts, 2)
+    assert.equal(environment.AGENT_INSIGHT_CASE_MODEL_KEY, 'fixture-secret')
+    assert.equal(environment.MODEL_KEY, undefined)
+    assert.equal(JSON.stringify(handle).includes('fixture-secret'), false)
     assert.equal(environment.XGOVERNOR_DOCKER_IMAGE, imageId)
     assert.equal(handle.opaque.imageId, imageId)
     assert.deepEqual(handle.opaque.executionConfig, config.profiles['xgovernor-local-docker'])

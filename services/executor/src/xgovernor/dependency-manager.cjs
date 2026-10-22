@@ -66,7 +66,7 @@ async function freePort() {
   return result
 }
 
-async function probeServer(directory, config, signal) {
+async function probeServer(directory, config, signal, sourceEnv = process.env) {
   const probe = path.join(directory, '.probe')
   await fsp.mkdir(probe, { mode: 0o700 })
   const token = randomBytes(32).toString('hex')
@@ -74,7 +74,7 @@ async function probeServer(directory, config, signal) {
   const admin = await freePort()
   let tenant = await freePort()
   while (tenant === admin) tenant = await freePort()
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('XGOVERNOR_') && key !== 'E2B_API_KEY'))
+  const env = Object.fromEntries(Object.entries(sourceEnv).filter(([key]) => !key.startsWith('XGOVERNOR_') && key !== 'E2B_API_KEY'))
   Object.assign(env, {
     XGOVERNOR_DATA_DIR: path.join(probe, 'state'), XGOVERNOR_TENANTS_CONFIG_PATH: path.join(probe, 'tenants.toml'),
     XGOVERNOR_BIND_ADDR: `127.0.0.1:${admin}`, XGOVERNOR_TENANT_BIND_ADDR: `127.0.0.1:${tenant}`,
@@ -135,6 +135,7 @@ class DependencyManager {
     this.target = options.target || { platform: process.platform, arch: process.arch }
     this.run = options.command || command
     this.probe = options.probe || probeServer
+    this.env = options.env || process.env
     this.signal = options.signal
     this.log = options.log || (message => console.log(`[xgovernor] ${message}`))
   }
@@ -152,8 +153,6 @@ class DependencyManager {
   async update(version) {
     if (version !== undefined && (typeof version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(version) || version.includes('..'))) throw new Error('--version 需为 tag 或 commit')
     if (this.target.platform !== 'linux' || !['x64', 'arm64'].includes(this.target.arch)) throw new Error('xGovernor 本地 Docker 安装仅支持 Linux x64/arm64；请在执行机运行此命令')
-    const [major, minor] = process.versions.node.split('.').map(Number)
-    if (major < 22 || major === 22 && minor < 19) throw new Error('构建 Pi 桥接扩展需要 Node.js >=22.19')
     return this.locked(async () => {
       const previous = readState(this.root)
       const stage = path.join(this.root, `.staging-${randomBytes(8).toString('hex')}`)
@@ -163,11 +162,12 @@ class DependencyManager {
       const source = path.join(stage, 'source')
       const run = (file, args, cwd = source, verbose = false) => this.run(file, args, {
         cwd, verbose, signal: this.signal, timeoutMs: file === 'git' ? 180000 : undefined,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', CARGO_TARGET_DIR: path.join(source, 'target') },
+        env: { ...this.env, GIT_TERMINAL_PROMPT: '0', CARGO_TARGET_DIR: path.join(source, 'target'), CARGO_BUILD_JOBS: '2' },
       })
       try {
         this.log('检查 Git、Cargo 和 npm；从官方仓库解析目标版本')
         for (const tool of ['git', 'cargo', 'npm']) await run(tool, ['--version'])
+        if (!require('./toolchain.cjs').nodeSupported(await run('node', ['--version']))) throw new Error('构建 Pi 桥接扩展需要 Node.js >=22.19；请重新执行客户端安装命令')
         await run('git', ['init', '--quiet'])
         await run('git', ['remote', 'add', 'origin', repository])
         await run('git', ['fetch', '--depth=1', 'origin', version || 'HEAD'], source, true)
@@ -204,7 +204,7 @@ class DependencyManager {
         const identity = artifactIdentity(config)
         if (identity.reasons.length) throw new Error(identity.reasons.join('；'))
         this.log('检查新 server 启动、鉴权及会话接口；不调用模型、不创建任务容器')
-        await this.probe(release, config, this.signal)
+        await this.probe(release, config, this.signal, this.env)
         const manifest = { schemaVersion: 1, repository, revision, requestedVersion: version || 'HEAD', installedAt: new Date().toISOString(),
           ...this.target, artifacts, components, artifactDigest: identity.digest,
           compatibility: { contract: 'agent-insight-xgovernor/v1', checks: ['source-layout', 'extension-typecheck', 'server-health-auth-routes'] },
@@ -234,7 +234,7 @@ class DependencyManager {
       const state = readState(this.root)
       if (!state?.previous) throw new Error('没有可回退的已安装版本')
       const previous = readRelease(this.root, state.previous, this.target)
-      await this.probe(previous.directory, previous.config, this.signal)
+      await this.probe(previous.directory, previous.config, this.signal, this.env)
       this.signal?.throwIfAborted()
       await atomicJson(path.join(this.root, 'current.json'), { schemaVersion: 1, current: state.previous, previous: state.current })
       this.log(`已回退到 ${previous.manifest.revision}；运行中的 Case 保持原版本`)

@@ -5,7 +5,10 @@ const fs = require('node:fs')
 const path = require('node:path')
 const source = path.resolve(__dirname, '../services/executor/src/xgovernor/dependency-manager.cjs')
 const installed = path.resolve(__dirname, 'executor/xgovernor/dependency-manager.cjs')
-const { DependencyManager } = require(fs.existsSync(source) ? source : installed)
+const managerPath = fs.existsSync(source) ? source : installed
+const { DependencyManager } = require(managerPath)
+const { installationRoot } = require(path.join(path.dirname(managerPath), 'installation.cjs'))
+const { toolchainEnvironment } = require(path.join(path.dirname(managerPath), 'toolchain.cjs'))
 
 async function run(args = process.argv.slice(2)) {
   if (args.includes('--help') || args.includes('-h') || !args.length) {
@@ -19,7 +22,7 @@ async function run(args = process.argv.slice(2)) {
   process.once('SIGINT', cancel)
   process.once('SIGTERM', cancel)
   try {
-    const manager = new DependencyManager({ signal: controller.signal })
+    const manager = new DependencyManager({ signal: controller.signal, env: toolchainEnvironment(installationRoot()) })
     const result = action === 'update' ? await manager.update(options[1]) : action === 'rollback' ? await manager.rollback() : manager.status()
     console.log(JSON.stringify(result, null, 2))
   } finally {

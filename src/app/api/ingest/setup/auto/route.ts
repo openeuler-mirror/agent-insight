@@ -10,7 +10,7 @@ import {
   ACTRAIL_UNIX_SETUP_BLOCK,
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
-import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller, getAgentInsightClientBashInstaller } from '@/lib/ingest/setup-package';
 import {
     parseFrameworks,
     resolveInstallProfile,
@@ -153,6 +153,7 @@ AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
 ${getAgentInsightRasBashInstaller()}
+${getAgentInsightClientBashInstaller()}
 
 echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
@@ -1118,6 +1119,14 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
         "$AGENT_INSIGHT_HOME/start_watchers.sh"
     else
         echo "⚠️  Node.js (npx) not found. Skipping watcher startup."
+    fi
+fi
+
+if [[ ",$SELECTED_FRAMEWORKS," == *",pi-agent,"* ]] || [[ ",$SELECTED_FRAMEWORKS," == *",xiaoo,"* ]]; then
+    echo "🖥️  Registering resident client and preparing native Benchmark backend..."
+    if ! install_agent_insight_client "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY"; then
+        echo "❌ 常驻客户端安装失败，请修复错误后重新执行同一命令"
+        exit 1
     fi
 fi
 

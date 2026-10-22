@@ -6,10 +6,11 @@ const path = require('node:path')
 const { error } = require('./client.cjs')
 const candidates = [path.resolve(__dirname, '../../../../scripts/agent-trace-collectors/shared/trace-transport.cjs'), path.resolve(__dirname, '../vendor/trace-transport.cjs')]
 function transport() { return require(candidates.find(file => fs.existsSync(file)) || candidates[0]) }
+const { traceApiKey } = require('./credentials.cjs')
 const uploaders = new Map()
 function resumeUpload(handle, config, insightBaseUrl) {
   const stateDir = path.join(handle.opaque.directory, 'trace-spool')
-  const apiKey = process.env[config.traceApiKeyEnv]
+  const apiKey = traceApiKey(config)
   if (!apiKey || !fs.existsSync(stateDir)) return null
   if (!uploaders.has(stateDir)) {
     const { DurableTraceUploader } = transport()
@@ -87,7 +88,7 @@ function xiaooEvents(snapshot, metadata) {
 }
 
 async function exportTrace(handle, runtime, config, context, processRunner) {
-  const model = config.models[handle.opaque.modelId] || {}
+  const model = handle.opaque.resolvedModel || config.models[handle.opaque.modelId] || {}
   const metadata = { model: model.model || context.model, provider: model.provider, runId: handle.runId, runtimeId: handle.opaque.runtimeId, stateDirectory: path.join(handle.opaque.directory, 'state'), startedAt: handle.opaque.startedAt, input: context.input, failed: Boolean(context.failed) }
   let events
   if (runtime.traceExporter) {
@@ -109,13 +110,14 @@ async function exportTrace(handle, runtime, config, context, processRunner) {
   const root = roots[0]
   if (roots.length !== 1 || root.sessionId !== `xgovernor:${handle.runId}` || !events.some(event => event.kind === 'llm') || events.some(event => event.sessionId !== root.sessionId)) throw error('TRACE_INCOMPLETE', 'Trace 必须包含唯一根会话及模型正文')
   const { DurableTraceWriter } = transport()
-  const apiKey = process.env[config.traceApiKeyEnv]
+  const apiKey = traceApiKey(config)
   const stateDir = path.join(handle.opaque.directory, 'trace-spool')
   const framework = context.platform
   const writer = new DurableTraceWriter({ framework, apiKey, stateDir, redactLocalPaths: false })
   for (const event of events) await writer.append(event)
   await writer.flush()
   const uploader = resumeUpload(handle, config, context.insightBaseUrl)
+  if (!uploader) throw error('TRACE_AUTH_MISSING', 'Trace 采集认证不可用，请重新运行客户端安装命令')
   uploader.flushOnce().catch(() => {})
   return { traceId: root.sessionId }
 }

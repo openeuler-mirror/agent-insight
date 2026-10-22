@@ -87,7 +87,7 @@ export function inspectBenchmarkExecutionTargets(
       arch: client.arch,
       platform: platform.id,
       agents,
-      models: [...new Set(profileCapability ? profileCapability.profile.models : platform.models || [])],
+      models: [...new Set(profileCapability?.profile.models.length ? profileCapability.profile.models : platform.models || [])],
       parameterDefinitions: platform.parameterDefinitions || [],
       status,
       serviceHealth,

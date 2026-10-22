@@ -139,11 +139,17 @@ xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上�
 
 原生 Pi/xiaoO 的新建 SWE-bench 实验使用 **xGovernor 本地 Docker**：每个 Case 在独立工具容器中修改仓库，模型请求仍由宿主机控制器发出。工具容器断网，资源限额约束工具容器。普通实验、OpenCode 与 MCTS 保留原有执行方式。
 
-执行机管理员先运行 `node scripts/xgovernor.cjs update` 安装依赖；没有源码仓库的安装版客户端使用 `node ~/.agent-insight/client/runtime/xgovernor.cjs update`。同一命令后续更新到官方默认分支最新提交，`--version <tag或commit>` 可固定版本，`status` 查看实际版本，`rollback` 回退。平台、客户端和 Evaluator 原安装命令保持不变，平台和 Evaluator 无需安装 xGovernor。用户不用单独启动 server，每个 Case 的启动和清理由客户端负责。安装需要 Linux、Node >=22.19、Git、Cargo/npm 等条件，详见[部署说明](../../developer-guide/benchmark/service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
+在客户端安装页选择 Pi/xiaoO，执行原有的一条 curl 命令即可。客户端注册后自动准备编译依赖、拉取平台固定版本的 xGovernor 源码并编译；重复安装会复用已通过校验的同版本组件。缺失的系统编译依赖在支持的发行版上通过包管理器安装，需要 root 或可用的非交互 sudo；Node/Rust 必要时安装到客户端独立目录。执行机仍需可访问的 Docker Linux daemon 和 cgroup v2，不自动修改内核启动参数或重启。安装失败会明确显示 Benchmark 未就绪，处理后重跑同一命令。用户无需手工启动 xGovernor、配置 YAML 或修改 systemd，平台和 Evaluator 无需安装它。
 
-创建确认页与详情显示冻结的版本提交。受管理安装自动记录实际版本并刷新环境摘要，无需手动维护 `sourceRevision`；客户端正常联网时约在下一轮能力上报生效。已运行 Case 继续使用原版本，旧实验尚未运行的任务若与当前环境摘要不一致，需要重新创建并确认。模型配置或凭据变化仍按部署说明处理。
+需要调整 CPU、内存、准备超时或镜像来源时，curl 安装版统一编辑 `~/.agent-insight/config/executor.local.yaml`；自定义 `AGENT_INSIGHT_HOME` 时使用 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`。安装器会创建目录并提示路径，文件可按需创建，客户端升级不会覆盖它。旧的 `client/runtime/config/` 下的用户配置不再读取，也不会自动迁移；需要保留的设置请写入新路径，其中相对路径按新目录解析。源码运行仍使用项目内的 `config/benchmark/executor.local.yaml`。
 
-平台和执行客户端需同步升级，执行机按[xGovernor 部署说明](../../developer-guide/benchmark/service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)配置 Linux/Docker、受管理 Runtime、模型环境变量和 Trace 上传。只安装原生 CLI 不足以执行这类 Benchmark；配置缺失或旧客户端会显示未就绪，不自动回退宿主机。模型候选来自该执行环境的显式配置，与普通实验的模型目录独立。执行与评测分别维护镜像拉取实现，当前默认顺序相同：先查本地缓存，再依次尝试 SWR、配置代理和官方仓库；SWR Verified 镜像适用于官方 x86_64，ARM64 跳过这些仓库。两端分别读取各自的 `benchmarks.swe-bench.images` 配置，不自动同步配置。执行与评测仍使用独立容器，不强制两端 digest、image ID 或架构相同；评测保留原有预热流程。因此不保证两端基础镜像内容完全相同。
+模型沿用实验中的选择。Pi 从原有 `models.json`、`auth.json` 和登录环境解析；xiaoO 从原有 `config.toml` 的 `[llm]` 和其 `api_key_env` 解析。选择默认模型时使用 Agent 原有默认配置。新机器仍须完成一次原有 Agent 的模型配置；无需再配置 xGovernor 的模型 Key。当前 Pi OAuth/订阅认证、自定义 headers/兼容参数尚不支持，会明确报错，不会替换模型。Trace 上传复用 curl 安装保存的采集认证。
+
+MCTS 的 xGovernor 保持独立：不接管其进程、源码、配置或版本；原生执行端每个 Case 使用自己的动态端口、状态目录和 Docker 标签。两者共享机器资源，需合理控制并发。
+
+创建确认页与详情显示冻结的版本提交。受管理安装自动记录实际版本并刷新环境摘要，无需手动维护 `sourceRevision`；客户端正常联网时约在下一轮能力上报生效。已运行 Case 继续使用原版本，旧实验尚未运行的任务若与当前环境摘要不一致，需要重新创建并确认。原生模型配置和凭据在每次任务准备时重新读取；轮换 Key 不改变执行环境摘要。
+
+平台和执行客户端需同步升级。执行环境就绪与模型凭据检查分开：环境未就绪不会回退宿主机，所选模型在任务准备阶段校验。模型候选默认沿用该 Agent 的模型目录；高级手动 Profile 的显式模型映射仍可覆盖。执行与评测分别维护镜像拉取实现，当前默认顺序相同：先查本地缓存，再依次尝试 SWR、配置代理和官方仓库；SWR Verified 镜像适用于官方 x86_64，ARM64 跳过这些仓库。两端分别读取各自的 `benchmarks.swe-bench.images` 配置，不自动同步配置。执行与评测仍使用独立容器，不强制两端 digest、image ID 或架构相同；评测保留原有预热流程。因此不保证两端基础镜像内容完全相同。
 
 确认页展示所选执行环境、工具网络和资源；实验创建后冻结 Profile。配置摘要变化时需重新创建并确认。详情保留冻结环境，执行完成后还可查看实际镜像、隔离边界与清理状态。Trace ID 为 `xgovernor:<runId>`；上传与评测继续沿用现有流程。旧版 Pi/xiaoO 的 SWE-bench 待执行任务应重新创建，不自动迁移。
 

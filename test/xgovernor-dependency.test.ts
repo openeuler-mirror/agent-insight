@@ -65,7 +65,7 @@ async function fixture(t: TestContext) {
         const actual = args[0] === 'remote' ? [...args.slice(0, -1), upstream] : args
         return command(file, actual, { ...options, verbose: false })
       }
-      if (args[0] === '--version') return 'fixture'
+      if (args[0] === '--version') return file === 'node' ? 'v24.13.0' : 'fixture'
       if (file === 'cargo') {
         builds++
         if (failBuild) throw new Error('fixture compile error')
@@ -220,4 +220,13 @@ test('standalone packaging fills partially traced directories and replaces stale
   const status = spawnSync(process.execPath, [path.join(root, 'scripts/xgovernor.cjs'), 'status'], { cwd: os.tmpdir(), env: isolatedHomeEnv(root), encoding: 'utf8' })
   assert.equal(status.status, 0, status.stderr)
   assert.equal(JSON.parse(status.stdout).installed, false)
+})
+
+test('managed profile only advertises selected native runtimes', async t => {
+  const f = await fixture(t)
+  await f.manager.update('v1')
+  write(path.join(f.manager.root, 'setup.json'), JSON.stringify({ platforms: ['xiaoo'] }))
+  const result = executionCapabilities({ config: normalizeExecutionConfig(), installationRoot: f.manager.root, target, env: {}, os: 'linux', refresh: true })
+  assert.deepEqual(result.profiles[0].profile.targets.map((item: any) => item.platform), ['xiaoo'])
+  assert.deepEqual(Object.keys(result.config.profiles['xgovernor-local-docker'].runtimes), ['xiaoo'])
 })

@@ -62,7 +62,7 @@ function resolveManagedProfile(local, options = {}) {
   try {
     const root = options.root || installationRoot(options.env)
     const state = readState(root)
-    if (!state) return { config: local, reasons: ['尚未安装 xGovernor；请在执行机运行 xgovernor.cjs update'] }
+    if (!state) return { config: local, reasons: ['尚未安装 xGovernor；请重新执行客户端安装命令并选择 Pi/xiaoO'] }
     const installed = readRelease(root, state.current, options.target)
     const runtimes = Object.fromEntries(Object.entries(local.runtimes).map(([platform, runtime]) => {
       const component = Object.values(installed.config.runtimes).find(item => item.kind === runtime.kind)
