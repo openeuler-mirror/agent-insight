@@ -375,9 +375,9 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 镜像预取继续使用已有 `POST /api/v1/evaluations`：`operation=prepare-images` 支持 `revision + windows[]` 全量快照；每个窗口含 `benchmarkKey/evaluatorKey/experimentId/caseIds/cases`，总 Case 数不超过服务并发加 1。预取开关由 Evaluator 的 `/health` 报告给平台；准备消息保留摘要校验和单实验窗口兼容，无需额外令牌。
 
 
-### FI 隐藏任务与主动拦截结果
+### FI 统一任务提示与主动拦截结果
 
-故障 `fault.json` 可选 `task_prompt`，提供时必须为非空字符串。Python catalog 输出 `taskPrompt` 和 `hidden`，经 `FaultItem`、FI Run 创建与内置可靠性数据集传入 `composeFaultPrompt`；隐藏任务不引用不可见的注入 Skill，缺字段时保留用户业务任务或兼容提示。无新增 API 路由或数据库字段。
+所有故障通过 `composeFaultPrompt` 拼接 Skill 名称、可选子模式名称与用户补充，FI Run 与内置可靠性数据集使用同一入口。故障配方与 `FaultDefinition` 不再提供 `task_prompt` / `expose_skill_to_agent`，Python catalog 和 `FaultItem` 不再传递 `taskPrompt` / `hidden`。OpenCode 与 xiaoO 一律安装注入 Skill；具体业务任务由 Skill 的执行入口定义。OpenCode 始终请求加载注入 Skill，并将该准备调用排除在业务工具参数改写计数之外，保证 `call_index=1` 仍命中第一次业务 Skill 选择。无新增 API 路由或数据库字段。
 
 FI 的 `TerminationReason.FAULT_INTERCEPTED` 序列化为 `fault_intercepted`。OpenCode 在故障已激活、进程非零退出且当前会话输出结构化 `MessageAbortedError` / `Aborted` 时记录此原因；普通 Provider 错误仍为 `platform_error`。采集成功与故障恢复是不同结论：manifest 保留原退出码和中断状态，Judge 仍依赖真实轨迹评测。
 

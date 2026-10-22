@@ -6,6 +6,42 @@ from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 
 
 class FaultRegistryTests(TestCase):
+    def test_all_fault_skills_are_installed_for_both_platforms(self) -> None:
+        """Exercise actual installers, including formerly omitted injection skills."""
+        import tempfile
+
+        from agent_fault_injection.fault_inject.injection.installer import InstallSession
+        from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter
+        from agent_fault_injection.platform_adapters.xiaoo.adapter import XiaoOAdapter
+
+        registry = FaultRegistry()
+        plugin_source = (
+            Path(__file__).resolve().parents[2]
+            / "platform_adapters/opencode/plugin/agent-fault-injection.ts"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            for name in registry.names():
+                with self.subTest(fault=name):
+                    fault = registry.get(name)
+                    workspace = Path(temporary) / name
+                    installation = InstallSession()
+                    try:
+                        OpenCodeAdapter._install_workspace_plugin_and_skill(
+                            installation=installation,
+                            workspace=workspace,
+                            fault=fault,
+                            plugin_source=plugin_source,
+                        )
+                        XiaoOAdapter._install_fault_skill(installation, fault, workspace)
+                        for platform in (".opencode", ".xiaoo"):
+                            installed = workspace / platform / "skills" / fault.skill_name / "SKILL.md"
+                            self.assertEqual(
+                                installed.read_text(encoding="utf-8"),
+                                fault.skill_file.read_text(encoding="utf-8"),
+                            )
+                    finally:
+                        installation.cleanup()
+
     def test_resolves_step_omission_skill(self) -> None:
         fault = FaultRegistry().get("step-omission")
 

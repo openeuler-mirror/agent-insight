@@ -27,7 +27,7 @@ from ...pipeline.models import (
 )
 from ...pipeline.monitor import ProcessMonitor
 from ..base import PlatformAdapter
-from ..lifecycle import AdapterRunContext, should_expose_fault_skill, strip_ras_detector_env
+from ..lifecycle import AdapterRunContext, strip_ras_detector_env
 from .mapper import OpenCodeTrajectoryMapper
 
 
@@ -342,8 +342,7 @@ class OpenCodeAdapter(PlatformAdapter):
             workspace / ".opencode" / "skills" / fault.skill_name / "SKILL.md"
         )
         installation.install_file(plugin_source, plugin_dest, overwrite=True)
-        if should_expose_fault_skill(fault):
-            installation.install_file(fault.skill_file, skill_dest, overwrite=True)
+        installation.install_file(fault.skill_file, skill_dest, overwrite=True)
 
         # Plugin imports relative modules from ``../lib/``; missing siblings make
         # OpenCode skip/fail the workspace plugin without writing plugin-ready.

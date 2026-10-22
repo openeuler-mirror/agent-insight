@@ -139,8 +139,6 @@ export const AgentRasEvalPlugin: Plugin = async ({ directory }) => {
   const faultSkill = process.env.AGENT_FI_FAULT_SKILL
   const rawDirectory = process.env.AGENT_FI_RAW_DIR
   const runtimePlan = parseRuntimePlan(process.env.AGENT_FI_INJECTION_RUNTIME)
-  const hiddenAssistantToolCallRewrite = hasAssistantToolCallRewrite(runtimePlan)
-  const hiddenFaultSkill = process.env.AGENT_FI_EXPOSE_FAULT_SKILL === "0"
 
   // The plugin can remain installed without affecting normal OpenCode usage.
   if (!runID || !faultSkill || !rawDirectory) {
@@ -501,6 +499,15 @@ export const AgentRasEvalPlugin: Plugin = async ({ directory }) => {
             if (!declaredTools.has(toolName)) {
               return toolInput
             }
+            // Loading the injection skill is setup, not a business selection.
+            // Keep call_index=1 available for the first business Skill call.
+            const requestedSkill = extractSkillName(toolName, toolInput)
+            if (
+              requestedSkill !== undefined &&
+              normalizeSkillName(requestedSkill) === normalizeSkillName(faultSkill)
+            ) {
+              return toolInput
+            }
             const callIndex = await nextAssistantToolCallIndex(toolName)
             const result = applyAssistantToolCallRewrite(
               runtimePlan,
@@ -615,14 +622,7 @@ export const AgentRasEvalPlugin: Plugin = async ({ directory }) => {
         transformedSessions.add(sessionID)
       }
 
-      if (firstTransform && hiddenFaultSkill) {
-        await record("fault.activation.completed", {
-          faultSkill,
-          activation: "hidden_spec",
-          sessionID,
-        })
-      }
-      if (firstTransform && !hiddenAssistantToolCallRewrite && !hiddenFaultSkill) {
+      if (firstTransform) {
         const injectionText = [
           "<agent-fault-injection>",
             `Before executing the user's task, load the "${faultSkill}" skill exactly once.`,

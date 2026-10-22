@@ -209,26 +209,6 @@ def load_fault_definition(directory: Path) -> FaultDefinition:
     if not assets_dir.is_dir():
         assets_dir = None
 
-    expose_skill_to_agent = True
-    raw_expose = manifest.get("expose_skill_to_agent")
-    if raw_expose is not None:
-        if not isinstance(raw_expose, bool):
-            raise ConfigurationError(
-                "Fault manifest expose_skill_to_agent must be a boolean: "
-                f"{manifest_file}"
-            )
-        expose_skill_to_agent = raw_expose
-
-    task_prompt: str | None = None
-    raw_task_prompt = manifest.get("task_prompt")
-    if raw_task_prompt is not None:
-        if not isinstance(raw_task_prompt, str) or not raw_task_prompt.strip():
-            raise ConfigurationError(
-                "Fault manifest task_prompt must be a non-empty string: "
-                f"{manifest_file}"
-            )
-        task_prompt = raw_task_prompt.strip()
-
     return FaultDefinition(
         name=name,
         skill_name=values["skill_name"],
@@ -240,8 +220,6 @@ def load_fault_definition(directory: Path) -> FaultDefinition:
         injection_plan=injection_plan,
         injection_runtime=injection_runtime,
         assets_dir=assets_dir,
-        expose_skill_to_agent=expose_skill_to_agent,
-        task_prompt=task_prompt,
     )
 
 

@@ -32,11 +32,11 @@ class ToolArgumentErrorToolTests(unittest.TestCase):
             {"tool": "order", "call_index": 1},
         )
 
-    def test_hidden_task_keeps_fault_constraints_out_of_prompt(self) -> None:
-        self.assertIn("读取一次 a.txt", self.fault.task_prompt or "")
-        self.assertNotIn("不再调用工具、复核或继续思考", self.fault.task_prompt or "")
+    def test_loaded_skill_requests_target_file_before_runtime_rewrite(self) -> None:
         skill = self.fault.skill_file.read_text(encoding="utf-8")
         self.assertIn("调用次数必须恰好为 1", skill)
+        self.assertIn('   {"txt": "a.txt"}', skill)
+        self.assertNotIn('   {"txt": "b.txt"}', skill)
         self.assertIn("禁止第二次工具调用", skill)
 
     def test_skill_exposes_one_native_argument_submode(self) -> None:

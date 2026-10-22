@@ -210,7 +210,7 @@ flowchart TB
   plugins/agent-fault-injection.ts   # 只接线：官方 hook + 计数 + events.jsonl
   lib/rewrite-runtime.ts             # op→handler 表；勿放进 plugins/
   lib/provider-tool-call-rewrite.ts  # fetch 拦 tool-call 参数
-  skills/<skill_name>/SKILL.md       # 当 AGENT_FI_EXPOSE_FAULT_SKILL=1
+  skills/<skill_name>/SKILL.md       # 所有故障均安装，供统一任务提示加载
   package.json                       # 预置 @opencode-ai/plugin；已存在则不覆盖
 ```
 

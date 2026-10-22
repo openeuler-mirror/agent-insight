@@ -37,7 +37,6 @@ from ..base import PlatformAdapter
 from ..lifecycle import (
     AdapterRunContext,
     build_fi_injection_env,
-    should_expose_fault_skill,
     strip_ras_detector_env,
 )
 from .catalog import list_xiaoo_agents, list_xiaoo_models
@@ -750,8 +749,8 @@ class XiaoOAdapter(PlatformAdapter):
         fault: FaultDefinition,
         workspace: Path,
     ) -> None:
-        if not should_expose_fault_skill(fault):
-            return
+        """Install the selected fault skill so the composed task can load it."""
+
         destination = (
             workspace / ".xiaoo" / "skills" / fault.skill_name / "SKILL.md"
         )

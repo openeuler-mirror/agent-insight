@@ -30,35 +30,6 @@ class FaultCatalogTests(TestCase):
         )
         return skill
 
-    def test_task_prompt_is_trimmed_and_invalid_values_are_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            skills_root = root / "skills"
-            added = add_fault(
-                name="task-case",
-                skill_file=self._skill(root),
-                skills_root=skills_root,
-            )
-            manifest = added.skill_file.parent / "fault.json"
-            values = {
-                "name": "task-case",
-                "skill_name": added.skill_name,
-                "category": "tool",
-                "description": added.description,
-                "task_prompt": "  Review target.py.  ",
-            }
-            manifest.write_text(json.dumps(values), encoding="utf-8")
-            self.assertEqual(
-                FaultRegistry(skills_root).get("task-case").task_prompt,
-                "Review target.py.",
-            )
-            for invalid in ["", " ", 1, False, [], {}]:
-                with self.subTest(value=invalid):
-                    values["task_prompt"] = invalid
-                    manifest.write_text(json.dumps(values), encoding="utf-8")
-                    with self.assertRaisesRegex(ConfigurationError, "task_prompt"):
-                        FaultRegistry(skills_root).get("task-case")
-
     def test_adds_fault_and_registry_discovers_it(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
-from agent_fault_injection.platform_adapters.lifecycle import should_expose_fault_skill
 
 
 class SkillRuleConflictToolTests(unittest.TestCase):
@@ -50,8 +49,7 @@ class SkillRuleConflictToolTests(unittest.TestCase):
             result = self._run(workspace, *arguments)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_definition_is_hidden_zero_runtime_structural_injection(self) -> None:
-        self.assertFalse(should_expose_fault_skill(self.fault))
+    def test_definition_is_zero_runtime_structural_injection(self) -> None:
         self.assertEqual(self.fault.injection_method, "skill_inject")
         self.assertEqual(len(self.fault.injection_runtime), 0)
         self.assertEqual(len(self.fault.injection_plan), 4)
@@ -63,7 +61,10 @@ class SkillRuleConflictToolTests(unittest.TestCase):
             [path.name for path in self.fault.tool_files],
             ["csv_conflict_tool.py"],
         )
-        self.assertNotIn("冲突", self.fault.task_prompt or "")
+        skill = self.fault.skill_file.read_text(encoding="utf-8")
+        self.assertIn("report.csv", skill)
+        self.assertIn("分别加载 `ras-financial-analysis` 和 `ras-csv-normalization`", skill)
+        self.assertIn("加载 `ras-csv-analysis-pipeline`", skill)
 
     def test_assets_define_conflicting_rules_and_full_pipeline(self) -> None:
         skill_a = (self.fault.assets_dir / "skill-a-financial-analysis.md").read_text(

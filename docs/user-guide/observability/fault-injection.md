@@ -61,7 +61,7 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
 
 创建后任务一律 `queued`，由本机 Worker claim 后执行。任务列表支持行级 **停 / 再跑 / 删**。
 
-隐藏故障使用配方中的 `task_prompt` 自然业务任务，例如审查 `target.py`、读取 `a.txt` 或执行 CSV 分析流水线；不会要求 Agent 调用未暴露的注入 Skill。用户补充的业务要求会与自然任务一起传入。普通可见故障继续按 Skill 和子模式启动。
+所有故障统一使用「使用 <Skill 名称> 技能，执行<子模式名称>。」生成执行提示词；未选择子模式时只指定 Skill，用户补充要求追加在后面。所有注入 Skill 都会安装并提供给 Agent，不再使用 `task_prompt` 或隐藏开关。审查 `target.py`、读取 `a.txt`、执行 `report.csv` 流水线等具体任务写在对应 Skill 的执行步骤中，加载后即可执行。
 
 故障目录新增 `skill-rule-conflict`（CSV 规范化规则冲突）和 `reasoning-no-progress`（真值者双解、汉诺塔约束、路径规划复核三个回环），原 `analysis-paralysis` 保留。`thinking-dead-loop` 三个子模式统一为字符重复死循环、语义重复死循环和逻辑连续崩溃。
 
