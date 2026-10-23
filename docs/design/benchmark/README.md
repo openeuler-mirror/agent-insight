@@ -24,6 +24,7 @@ flowchart LR
 
 - `benchmark.yaml` 唯一 Manifest、构建期 Catalog 和五方法 `AbstractBenchmarkAdapter`；
 - Dataset Loader、系统共享只读数据集和声明式 Presentation；
+- 数据集级 `execution-environment/v1` 协议，通过接入包执行端模块按所选 Agent 检查、准备运行环境；
 - 统一实验 API、单 Case 串行调度、持久化 Outbox、watchdog 和重启恢复；
 - 通过现有常驻客户端的 `RUN_BENCHMARK_CASE` 控制指令执行任务，不要求客户端开放入站端口；
 - 通用 Workspace、Agent Runtime、Artifact Collector 能力组合；
@@ -83,6 +84,7 @@ benchmarks/<key>/
 ├── benchmark.yaml
 ├── adapter/index.ts
 ├── dataset/index.ts              # 特殊数据格式才需要
+├── executor/environment.cjs      # checkEnvironment / prepareEnvironment
 ├── evaluator/
 │   ├── evaluator.yaml
 │   └── entrypoint
@@ -92,6 +94,8 @@ benchmarks/<key>/
 └── smoke/
 ```
 
-Adapter 实现五个业务 hook：Case 拆分、Agent Task 构造、提交物校验、EvaluationJob 构造和结果归一化；Evaluator 实现统一文件协议，独立依赖放入实例 Dockerfile。`adapterKey` 与 `evaluatorKey` 不要求相等。只有现有通用能力无法表达需求时，才扩展执行器能力；不要在平台调度器、Runner 或 Controller 中增加具体 Benchmark 分支。这是统一开发规范，不是零代码、纯配置接入。
+Adapter 实现五个业务 hook：Case 拆分、Agent Task 构造、提交物校验、EvaluationJob 构造和结果归一化；执行端环境模块独立实现检查和准备两个方法；Evaluator 实现统一文件协议，独立依赖放入实例 Dockerfile。`adapterKey` 与 `evaluatorKey` 不要求相等。只有现有通用能力无法表达需求时，才扩展执行器能力；不要在平台调度器、Runner 或 Controller 中增加具体 Benchmark 分支。这是统一开发规范，不是零代码、纯配置接入。
+
+环境准备的 Manifest 声明、上下文、返回值、进度与测试要求，以[接入开发规范第 5.5 节](../../developer-guide/benchmark/benchmark-integration-development-guide.md#55-执行环境准备协议)为准；流程设计见[实验执行环境准备](../experiment-environment-preparation/phase2-requirements-design.md)。
 
 详细扩展约束见[开发者指南](../../developer-guide/07-conventions-and-extension.md)。

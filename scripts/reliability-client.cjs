@@ -37,6 +37,7 @@ const WHITELIST = new Set([
   'RUN_BENCHMARK_CASE',
   'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
+  'PREPARE_EXECUTION_ENVIRONMENT',
 ])
 
 // 配置类 action 禁止携带下载地址/路径/完整配置；运行类禁止携带自由执行字段。
@@ -116,9 +117,15 @@ function mctsRuntime() {
   return runtimePath ? require(runtimePath) : null
 }
 
-function executionRuntime() {
+function executionRuntimePath() {
   const candidates = [path.join(__dirname, 'executor', 'execution-config.cjs'), path.join(__dirname, '..', 'services', 'executor', 'src', 'execution-config.cjs')]
-  return require(candidates.find(candidate => fs.existsSync(candidate)))
+  return candidates.find(candidate => fs.existsSync(candidate))
+}
+function executionRuntime() { return require(executionRuntimePath()) }
+function clearEnvironmentProbeCache() {
+  cachedProbe = null
+  cachedFiCwd = undefined
+  piRuntimeProbeCache.clear()
 }
 
 /**
@@ -917,6 +924,9 @@ function buildCapabilities(cfg, opts) {
     for (const target of capability.profile.targets) {
       let platform = platforms.find(item => item.id === target.platform)
       if (!platform) {
+        const runtime = execution.config.profiles[capability.profile.key]?.runtimes[target.platform]
+        const binary = runtime?.kind === 'pi' ? 'pi' : target.platform
+        if (!which(binary) && !runtime?.workerExecutable) continue
         platform = { id: target.platform, agents: target.agents, models: capability.profile.models, actions: ['RUN_BENCHMARK_CASE'] }
         platforms.push(platform)
       }
@@ -941,7 +951,8 @@ function benchmarkAgentPlatformsFromCapabilities(capabilities) {
   return [...new Set((capabilities?.platforms || [])
     .filter((platform) => {
       const execution = capabilities.executionProfiles?.find(item => item.profile.targets.some(target => target.platform === platform.id))
-      if (execution) return execution.ready && platform.runBenchmarkCase?.returnsTraceId === true
+      const readiness = execution?.targetReadiness?.[platform.id] || execution
+      if (readiness?.ready && platform.runBenchmarkCase?.returnsTraceId === true) return true
       const component = components[`agent-runtime/${platform.id}/v1`]
       const ready = component === true
         || (component && typeof component === 'object' && component.ready !== false)
@@ -1283,7 +1294,7 @@ async function executeAction(cfg, frame, sendStatus) {
     await sendStatus('FAILED', { error: { code: 'ACTION_NOT_ALLOWED', message: `未知 action: ${action}` } })
     return
   }
-  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'].includes(action)
+  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE', 'PREPARE_EXECUTION_ENVIRONMENT'].includes(action)
     ? RUN_FORBIDDEN
     : CONFIG_FORBIDDEN
   for (const key of Object.keys(payload)) {
@@ -1293,6 +1304,26 @@ async function executeAction(cfg, frame, sendStatus) {
       })
       return
     }
+  }
+
+  if (action === 'PREPARE_EXECUTION_ENVIRONMENT') {
+    await sendStatus('RUNNING', { result: { state: 'checking' } })
+    try {
+      const { executePreparation, markPreparationReported } = require(path.join(path.dirname(require.resolve(executionRuntimePath())), 'environment/task-runner.cjs'))
+      const result = await executePreparation(frame, { cfg, baseDir: CLIENT_HOME,
+        report: progress => sendStatus('RUNNING', { result: progress }) })
+      if (result.state === 'ready') {
+        Object.assign(cfg, loadConfig())
+        clearEnvironmentProbeCache()
+        await refreshCapabilityReports(cfg, { force: true })
+      }
+      await sendStatus(result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result,
+        ...(result.state === 'failed' ? { error: { code: result.issues[0]?.code, message: result.issues[0]?.message } } : {}) })
+      await markPreparationReported(CLIENT_HOME, payload.contextDigest, frame.commandId)
+    } catch {
+      await sendStatus('FAILED', { error: { code: 'ENVIRONMENT_PREPARATION_FAILED', message: '运行环境准备中断或超时，请检查执行机后再次点击“下一步”。' } })
+    }
+    return
   }
 
   if (action === 'REFRESH_CAPABILITIES') {
@@ -2398,6 +2429,17 @@ async function flushSpool(cfg) {
 
 // ---------------------------------------------------------------- main loop
 
+function recoverEnvironmentTasks(cfg) {
+  return require(path.join(path.dirname(executionRuntimePath()), 'environment/task-runner.cjs')).recoverPreparations(CLIENT_HOME, async (commandId, result) => {
+    if (result.state === 'ready') {
+      Object.assign(cfg, loadConfig())
+      clearEnvironmentProbeCache()
+      await refreshCapabilityReports(cfg, { force: true })
+    }
+    await sendCommandStatus(cfg, commandId, result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result })
+  })
+}
+
 async function main() {
   const cfg = loadConfig()
   if (!cfg.insightBaseUrl || !cfg.clientId || !cfg.deviceCredential) {
@@ -2422,6 +2464,8 @@ async function main() {
   notifyReady()
   setInterval(notifyWatchdog, WATCHDOG_MS)
   notifyWatchdog()
+
+  recoverEnvironmentTasks(cfg).catch(error => logErr('environment task recovery failed', error.message))
 
   const runtimeCandidates = [
     path.join(__dirname, 'executor', 'index.cjs'),
@@ -2711,6 +2755,7 @@ let shuttingDown = false
 async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
+  require(path.join(path.dirname(require.resolve(executionRuntimePath())), 'environment/task-runner.cjs')).stopPreparations()
   for (const child of piModelProbeChildren) signalProcessTree(child, 'SIGKILL')
   for (const controller of experimentControllers.values()) controller.abort()
   const settled = [...experimentSettled.values()]
@@ -2724,6 +2769,7 @@ process.on('SIGTERM', () => void shutdown())
 process.on('SIGINT', () => void shutdown())
 
 module.exports = {
+  clearEnvironmentProbeCache,
   loadConfig,
   executeAction,
   buildAgentProcessLaunch,

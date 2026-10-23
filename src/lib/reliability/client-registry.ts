@@ -337,6 +337,7 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
     executionProfiles: Array.isArray(value.executionProfiles) ? value.executionProfiles.map(item => ({
       profile: validateProfile(item.profile), benchmarks: Array.isArray(item.benchmarks) ? item.benchmarks.map(String) : [], ready: item.ready === true,
       ...(item.note ? { note: String(item.note) } : {}),
+      ...(item.targetReadiness && typeof item.targetReadiness === 'object' ? { targetReadiness: Object.fromEntries(Object.entries(item.targetReadiness).map(([key, readiness]) => [key, { ready: readiness?.ready === true, ...(readiness?.note ? { note: String(readiness.note) } : {}) }])) } : {}),
     })) : [],
     actions: Array.isArray(value.actions) ? value.actions.map((a) => String(a)) : undefined,
     components: value.components && typeof value.components === 'object' ? value.components : undefined,

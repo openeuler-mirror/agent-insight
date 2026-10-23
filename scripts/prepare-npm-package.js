@@ -15,14 +15,16 @@ function copyDirIfMissing(sourceDir, targetDir, label) {
 }
 
 function copyBenchmarkExecutionRuntime(packageRoot, standaloneDir) {
-  for (const directory of ['packages/project-config', 'packages/benchmark-protocol', 'packages/agent-runtime', 'services/executor/src', 'services/executor/runtimes']) {
+  for (const directory of ['packages/project-config', 'packages/benchmark-protocol', 'packages/agent-runtime', 'services/executor/src', 'services/executor/runtimes', 'agent_fault_injection']) {
     const source = path.join(packageRoot, directory)
     if (!fs.existsSync(source)) continue
     const destination = path.join(standaloneDir, directory)
     fs.mkdirSync(path.dirname(destination), { recursive: true })
     fs.cpSync(source, destination, { recursive: true })
   }
-  for (const file of ['scripts/xgovernor.cjs', 'scripts/agent-trace-collectors/shared/trace-transport.cjs']) {
+  const executorCatalog = path.join(packageRoot, 'generated/benchmark-catalog/executors.cjs')
+  const executorFiles = fs.existsSync(executorCatalog) ? require(executorCatalog).generatedExecutorPackageFiles : []
+  for (const file of ['scripts/xgovernor.cjs', 'scripts/reliability-client.cjs', 'scripts/install-ras-client.js', 'scripts/agent-insight-home.cjs', 'scripts/lib/fi-python-runtime.js', 'scripts/agent-trace-collectors/shared/trace-transport.cjs', 'generated/benchmark-catalog/executors.cjs', ...executorFiles]) {
     const source = path.join(packageRoot, file)
     if (!fs.existsSync(source)) continue
     const destination = path.join(standaloneDir, file)

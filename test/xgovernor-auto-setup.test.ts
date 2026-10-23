@@ -48,6 +48,15 @@ test('MCTS-only selection performs no native dependency installation or configur
   assert.equal(fs.existsSync(f.root), false)
   assert.deepEqual(f.events, [])
 })
+test('long-build hint is emitted only when actually building, never when a matching installation is reused', async t => {
+  const f = fixture(t)
+  const hints: boolean[] = []
+  const onBuild = async ({ firstInstall }: { firstInstall: boolean }) => { hints.push(firstInstall) }
+  await installSelectedBackend({ ...f.options, frameworks: 'pi-agent', onBuild })
+  assert.deepEqual(hints, [true])
+  await installSelectedBackend({ ...f.options, frameworks: 'pi-agent', onBuild })
+  assert.deepEqual(hints, [true])
+})
 test('build failure and unsupported host are reported without marking sandbox ready', async t => {
   const f = fixture(t)
   f.options.manager.update = async () => { throw new Error('compile failed') }
@@ -131,6 +140,20 @@ test('backend readiness does not require model credentials', async t => {
   const result = executionCapabilities({ config, env: { AGENT_INSIGHT_HOME: f.home, AGENT_INSIGHT_API_KEY: 'fixture' }, os: 'linux', refresh: true })
   assert.equal(result.profiles[0].ready, true)
   assert.deepEqual(result.profiles[0].profile.models, [])
+})
+test('a missing unselected Runtime does not block the selected Runtime readiness', t => {
+  const f = fixture(t)
+  const server = path.join(f.home, 'server'); const docker = path.join(f.home, 'docker')
+  fs.writeFileSync(server, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  fs.writeFileSync(docker, '#!/bin/sh\necho "linux 2"\n', { mode: 0o755 })
+  const config = normalizeExecutionConfig({ profiles: { 'xgovernor-local-docker': { serverExecutable: server, dockerExecutable: docker, runtimes: {
+    'pi-agent': { kind: 'pi', namespace: 'runtime_pi', agents: ['pi-agent'] },
+    xiaoo: { kind: 'xiaoo', namespace: 'xiaoo', agents: ['defaultagent'], workerExecutable: server },
+  } } } })
+  const result = executionCapabilities({ config, env: { AGENT_INSIGHT_HOME: f.home, AGENT_INSIGHT_API_KEY: 'fixture' }, os: 'linux', refresh: true })
+  assert.equal(result.profiles[0].targetReadiness.xiaoo.ready, true)
+  assert.equal(result.profiles[0].targetReadiness['pi-agent'].ready, false)
+  assert.equal(result.profiles[0].ready, false)
 })
 test('toolchain bootstrap keeps Rust in managed directory and limits build parallelism', async t => {
   const f = fixture(t)

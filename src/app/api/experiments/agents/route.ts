@@ -50,6 +50,8 @@ export async function GET(req: Request) {
       supportsFaultInjection: boolean;
       supportsBenchmark: boolean;
       benchmarkKeys: string[];
+      preparableBenchmarkKeys: string[];
+      supportsEnvironmentPreparation: boolean;
       benchmarkUnavailableReason: string | null;
       benchmarkUnavailableReasons: Record<string, string>;
       parameterDefinitions: RuntimeDefinition[];
@@ -77,7 +79,7 @@ export async function GET(req: Request) {
       byName.set(name, current);
     }
     const attachTarget = (
-      target: (typeof faultInjectionTargets)[number] & { parameterDefinitions?: RuntimeDefinition[] },
+      target: (typeof faultInjectionTargets)[number] & { parameterDefinitions?: RuntimeDefinition[]; supportsEnvironmentPreparation?: boolean },
       capability: 'generic' | 'fault-injection' | 'benchmark',
     ) => {
       const name = canonicalExperimentAgentName(target.platform, target.agent);
@@ -96,6 +98,7 @@ export async function GET(req: Request) {
         if (capability === 'generic') existing.parameterDefinitions = target.parameterDefinitions || [];
         if (capability === 'generic') existing.supportsTriggerRouting = Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting);
         existing.supportsFaultInjection ||= capability === 'fault-injection';
+        existing.supportsEnvironmentPreparation ||= target.supportsEnvironmentPreparation === true;
         if (capability !== 'benchmark') {
           const models = new Map(existing.models.map((model) => [model.id, model]));
           for (const model of target.models) models.set(model.id, model);
@@ -109,6 +112,8 @@ export async function GET(req: Request) {
           supportsFaultInjection: capability === 'fault-injection',
           supportsBenchmark: false,
           benchmarkKeys: [],
+          preparableBenchmarkKeys: [],
+          supportsEnvironmentPreparation: target.supportsEnvironmentPreparation === true,
           benchmarkUnavailableReason: '该执行目标未上报 Benchmark 所需能力',
           benchmarkUnavailableReasons: {},
           parameterDefinitions: target.parameterDefinitions || [],
@@ -149,14 +154,18 @@ export async function GET(req: Request) {
         ));
         if (!matchingBenchmarks.length) continue;
         for (const benchmark of matchingBenchmarks) {
+          if (benchmark.canPrepare) {
+            target.supportsEnvironmentPreparation = true;
+            if (!target.preparableBenchmarkKeys.includes(benchmark.adapterKey)) target.preparableBenchmarkKeys.push(benchmark.adapterKey);
+          }
           if (!benchmark.ready) {
             target.benchmarkUnavailableReasons[benchmark.adapterKey] = [...new Set(benchmark.unavailableReasons)].join('；') || 'Benchmark 执行目标未就绪';
           }
           if (benchmark.ready && !target.benchmarkKeys.includes(benchmark.adapterKey)) {
             target.benchmarkKeys.push(benchmark.adapterKey);
           }
-          if (benchmark.ready) target.parameterDefinitions = benchmark.parameterDefinitions;
-          if (benchmark.ready && benchmark.executionProfile) {
+          if (benchmark.ready || benchmark.canPrepare) target.parameterDefinitions = benchmark.parameterDefinitions;
+          if ((benchmark.ready || benchmark.canPrepare) && benchmark.executionProfile) {
             target.benchmarkEnvironments ||= {};
             target.benchmarkEnvironments[benchmark.adapterKey] = { profile: benchmark.executionProfile, models: [{ id: '', label: '平台默认' }, ...benchmark.models.map(id => ({ id, label: id }))] };
           }
@@ -175,7 +184,7 @@ export async function GET(req: Request) {
         name: item.name,
         traces: item.traces,
         frameworks: Array.from(item.frameworks).sort(),
-        executable: item.targets.some(target => target.supportsGenericTrace || target.supportsFaultInjection || target.supportsBenchmark),
+        executable: item.targets.some(target => target.supportsGenericTrace || target.supportsFaultInjection || target.supportsBenchmark || target.preparableBenchmarkKeys.length > 0),
         targets: item.targets.map((target) => ({
           workerId: target.workerId,
           host: target.host,
@@ -189,6 +198,8 @@ export async function GET(req: Request) {
           supportsFaultInjection: target.supportsFaultInjection,
           supportsBenchmark: target.supportsBenchmark,
           benchmarkKeys: target.benchmarkKeys,
+          preparableBenchmarkKeys: target.preparableBenchmarkKeys,
+          supportsEnvironmentPreparation: target.supportsEnvironmentPreparation,
           benchmarkUnavailableReason: target.benchmarkUnavailableReason,
           benchmarkUnavailableReasons: target.benchmarkUnavailableReasons,
           parameterDefinitions: target.parameterDefinitions,

@@ -16,6 +16,18 @@ function selectedFrameworks(value) {
 function readSetup(root = installationRoot()) {
   try { return JSON.parse(fs.readFileSync(path.join(root, 'setup.json'), 'utf8')) } catch { return {} }
 }
+async function saveSetupContext(options = {}) {
+  const env = options.env || process.env
+  const root = options.root || installationRoot(env)
+  const previous = readSetup(root)
+  const platforms = [...new Set([...(previous.platforms || []), ...selectedFrameworks(options.frameworks)])]
+  if (!platforms.length) return
+  await fsp.mkdir(root, { recursive: true, mode: 0o700 })
+  await atomicJson(path.join(root, 'setup.json'), { ...previous, schemaVersion: 1, platforms, context: {
+    home: env.AGENT_INSIGHT_USER_HOME || os.homedir(),
+    ...Object.fromEntries(['PI_CODING_AGENT_DIR', 'XIAOO_CONFIG', 'XDG_CONFIG_HOME', 'SHELL'].filter(key => env[key]).map(key => [key, env[key]])),
+  } })
+}
 async function installUnlocked(options = {}) {
   const env = options.env || process.env
   const root = options.root || installationRoot(env)
@@ -38,8 +50,9 @@ async function installUnlocked(options = {}) {
     try { installed = manager.status() } catch {}
     if (installed?.installed && installed.revision === COMPATIBLE_REVISION) log('[xgovernor] 已安装兼容版本，跳过下载和编译')
     else {
+      await options.onBuild?.({ firstInstall: !fs.existsSync(path.join(root, 'current.json')) })
       log('[xgovernor] 准备源码编译依赖；仅维护客户端独立目录，不操作 MCTS')
-      await (options.ensureBuildTools || ensureBuildTools)({ root, env, target, command: run, log })
+      await (options.ensureBuildTools || ensureBuildTools)({ root, env, target, command: run, log, autoInstallSystem: options.autoInstallSystem })
       manager.env = toolchainEnvironment(root, env)
       await manager.update(COMPATIBLE_REVISION)
     }
@@ -71,6 +84,9 @@ async function installSelectedBackend(options = {}) {
     return { ready: false, note }
   }
   const controller = new AbortController()
+  const externalCancel = () => controller.abort(options.signal.reason)
+  options.signal?.addEventListener('abort', externalCancel, { once: true })
+  if (options.signal?.aborted) externalCancel()
   const cancel = () => controller.abort(new Error('安装已取消'))
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel)
   try {
@@ -80,7 +96,8 @@ async function installSelectedBackend(options = {}) {
     return await installUnlocked({ ...options, root, manager, command: run })
   } finally {
     process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel)
+    options.signal?.removeEventListener('abort', externalCancel)
     await descriptor.close(); await fsp.rm(lock, { force: true })
   }
 }
-module.exports = { COMPATIBLE_REVISION, selectedFrameworks, readSetup, installSelectedBackend }
+module.exports = { COMPATIBLE_REVISION, selectedFrameworks, readSetup, saveSetupContext, installSelectedBackend }

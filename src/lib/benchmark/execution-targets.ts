@@ -27,6 +27,7 @@ export type BenchmarkExecutionTarget = {
   status: ClientStatus
   serviceHealth: ServiceHealth
   ready: boolean
+  canPrepare: boolean
   unavailableReasons: string[]
   missingCapabilities: string[]
   lastSeenAt: Date
@@ -60,6 +61,7 @@ export function inspectBenchmarkExecutionTargets(
   }).flatMap((platform) => {
     const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
     const profileCapability = capabilities.executionProfiles?.find(item => item.benchmarks.includes(manifest.adapterKey) && item.profile.targets.some(target => target.platform === platform.id))
+    const readiness = profileCapability?.targetReadiness?.[platform.id] || profileCapability
     const agents = [...new Set(profileCapability?.profile.targets.find(target => target.platform === platform.id)?.agents || platform.agents || [])]
     if (!agents.length) return []
     const requiresProfile = Boolean(profileCapability || bindingFor(DEFAULT_BINDINGS, manifest.adapterKey, platform.id))
@@ -77,7 +79,7 @@ export function inspectBenchmarkExecutionTargets(
       status !== 'online' ? `客户端状态不可用：${status}` : '',
       serviceHealth !== 'healthy' ? '客户端服务未就绪' : '',
       !actions.has('RUN_BENCHMARK_CASE') ? '客户端版本不支持 Benchmark 控制指令' : '',
-      profileCapability && !profileCapability.ready ? profileCapability.note || '执行环境未就绪' : '',
+      readiness && !readiness.ready ? readiness.note || '执行环境未就绪' : '',
       requiresProfile && !profileCapability ? '该 Benchmark 需要升级客户端并配置沙箱执行环境' : '',
       ...missingCapabilities.map(capability => `缺少 ${capability}`),
     ].filter(Boolean)
@@ -96,6 +98,7 @@ export function inspectBenchmarkExecutionTargets(
       status,
       serviceHealth,
       ready: unavailableReasons.length === 0,
+      canPrepare: status === 'online' && serviceHealth === 'healthy' && Boolean(capabilities.actions?.includes('PREPARE_EXECUTION_ENVIRONMENT')),
       unavailableReasons,
       missingCapabilities,
       lastSeenAt: client.lastSeenAt,

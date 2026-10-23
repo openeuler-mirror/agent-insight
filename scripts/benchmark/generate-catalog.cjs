@@ -324,7 +324,13 @@ function loadPackage(packageDir) {
   if (gitSourcePolicyPath && path.extname(gitSourcePolicyPath) !== '.cjs') {
     fail(`${key} 的 executor.gitSourcePolicy 必须是 CommonJS .cjs 模块`)
   }
-  const executorFiles = gitSourcePolicyPath ? listFiles(path.dirname(gitSourcePolicyPath)) : []
+  const preparation = source.executor?.environmentPreparation
+  if (preparation && (preparation.protocol !== 'execution-environment/v1'
+    || Object.keys(preparation).some(key => !['protocol', 'implementation'].includes(key)))) fail(`${key} 的环境准备协议不支持`)
+  const environmentPreparationPath = preparation
+    ? resolveInside(packageDir, preparation.implementation, 'executor.environmentPreparation.implementation') : null
+  if (environmentPreparationPath && (path.extname(environmentPreparationPath) !== '.cjs' || source.executor?.supported === false)) fail(`${key} 的环境准备必须是启用的执行端 CommonJS 模块`)
+  const executorFiles = [...new Set([gitSourcePolicyPath, environmentPreparationPath].filter(Boolean).flatMap(file => listFiles(path.dirname(file))))]
   for (const filePath of executorFiles) {
     if (!fs.realpathSync(filePath).startsWith(`${fs.realpathSync(packageDir)}${path.sep}`)) {
       fail(`${key} 的执行器文件越出接入包：${filePath}`)
@@ -387,6 +393,7 @@ function loadPackage(packageDir) {
     datasetPreparerPath,
     datasetPreparerExport,
     gitSourcePolicyPath,
+    environmentPreparationPath,
     executorFiles,
     manifest: {
       adapterKey: key,
@@ -567,9 +574,13 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     ...policyPackages.map(item => `  { benchmarkKey: ${JSON.stringify(item.key)}, modulePath: path.resolve(__dirname, ${JSON.stringify(toImportPath(outputDir, item.gitSourcePolicyPath))}) },`),
     ']',
     '',
-    `const generatedExecutorPackageFiles = ${JSON.stringify([...new Set(policyPackages.flatMap(item => item.executorFiles.map(filePath => path.relative(rootDir, filePath).replaceAll(path.sep, '/'))))].sort(), null, 2)}`,
+    'const generatedEnvironmentPreparationDescriptors = [',
+    ...packages.filter(item => item.environmentPreparationPath).map(item => `  { datasetAdapterKey: ${JSON.stringify(item.key)}, protocol: 'execution-environment/v1', modulePath: path.resolve(__dirname, ${JSON.stringify(toImportPath(outputDir, item.environmentPreparationPath))}) },`),
+    ']',
     '',
-    'module.exports = { generatedGitSourcePolicyDescriptors, generatedExecutorPackageFiles }',
+    `const generatedExecutorPackageFiles = ${JSON.stringify([...new Set(packages.flatMap(item => item.executorFiles.map(filePath => path.relative(rootDir, filePath).replaceAll(path.sep, '/'))))].sort(), null, 2)}`,
+    '',
+    'module.exports = { generatedGitSourcePolicyDescriptors, generatedEnvironmentPreparationDescriptors, generatedExecutorPackageFiles }',
     '',
   ].join('\n')
   fs.writeFileSync(path.join(outputDir, 'manifests.ts'), manifestSource)

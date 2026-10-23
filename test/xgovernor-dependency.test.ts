@@ -311,11 +311,11 @@ test('standalone packaging fills partially traced directories and replaces stale
   assert.equal(JSON.parse(status.stdout).installed, false)
 })
 
-test('managed profile only advertises selected native runtimes', async t => {
+test('managed profile preserves other native runtimes for later dataset preparation', async t => {
   const f = await fixture(t)
   await f.manager.update('v1')
   write(path.join(f.manager.root, 'setup.json'), JSON.stringify({ platforms: ['xiaoo'] }))
   const result = executionCapabilities({ config: normalizeExecutionConfig(), installationRoot: f.manager.root, target, env: {}, os: 'linux', refresh: true })
-  assert.deepEqual(result.profiles[0].profile.targets.map((item: any) => item.platform), ['xiaoo'])
-  assert.deepEqual(Object.keys(result.config.profiles['xgovernor-local-docker'].runtimes), ['xiaoo'])
+  assert.deepEqual(result.profiles[0].profile.targets.map((item: any) => item.platform), ['pi-agent', 'xiaoo'])
+  assert.deepEqual(Object.keys(result.config.profiles['xgovernor-local-docker'].runtimes), ['pi-agent', 'xiaoo'])
 })

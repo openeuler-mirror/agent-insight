@@ -321,11 +321,12 @@ node scripts/install-ras-client.js
 
 **准备与安装**
 
-执行机需为 Linux x64/arm64，Docker 可用且使用 cgroup v2，并具备原生 Agent 的模型配置。自动准备构建依赖需 root 或非交互 sudo 权限，并能访问 GitCode、Rust/Cargo、Node 与 npm 下载源；Docker 和 cgroup v2 由管理员提前准备。
+执行机需为 Linux x64/arm64，Docker 可用且使用 cgroup v2，并具备原生 Agent 的模型配置。Git、C/C++、make、pkg-config、OpenSSL 开发库、curl、tar、xz 和 Python/TOML 读取能力由管理员提前准备；实验环境检查不会隐式执行系统包管理器或提权。执行机还需能访问 GitCode、Rust/Cargo、Node 与 npm 下载源；不足的 Node/Rust 工具链安装到独立依赖目录。
 
 1. 在平台 **配置 → 客户端安装** 选择 Pi/xiaoO，执行页面生成的一条 curl 命令（见第 7 节）。
-2. 等待源码编译完成；安装器自动准备 xGovernor、配套组件和 xiaoo 凭据桥接，正常使用无需填写路径或另配模型 Key。
-3. 确认客户端在线、执行环境就绪，再创建单 Case 实验，检查 Trace、`model.patch` 和官方评测结果。仅“在线”不代表构建已完成。
+2. 安装仅接入链路采集和基础客户端，不因选择 Pi/xiaoO 就编译 xGovernor。确认客户端在线后创建单 Case 实验。
+3. 在实验第二步选择主机、模型及 Case，点击下一步后检查环境；缺少受管理组件时自动编译 xGovernor、配套组件和 xiaoO 凭据桥接，通过复查后自动进入第三步。首次编译期间底部提示可能需要几分钟。需要配置模型凭据或系统依赖时，按底部说明在执行机处理，再次点击下一步。
+4. 开始实验后检查 Trace、`model.patch` 和官方评测结果。准备复用原生 Agent 模型配置，无需另配 xGovernor Key；已有有效安装不会重复编译。
 
 安装状态可在执行机查看；自定义 `AGENT_INSIGHT_HOME` 时相应替换路径：
 

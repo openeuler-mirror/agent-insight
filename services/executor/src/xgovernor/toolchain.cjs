@@ -15,7 +15,17 @@ function nodeSupported(version) {
   const [major, minor] = String(version).trim().replace(/^v/, '').split('.').map(Number)
   return major > 22 || major === 22 && minor >= 19
 }
-async function ensureBuildTools({ root, env = process.env, target, command: run, log = console.log }) {
+async function checkBuildTools({ root, env = process.env, command: run }) {
+  const buildEnv = toolchainEnvironment(root, env)
+  const missing = []
+  for (const file of ['git', 'cc', 'c++', 'make', 'pkg-config', 'curl', 'tar', 'xz', 'python3']) {
+    try { await run(file, ['--version'], { env: buildEnv, timeoutMs: 10000 }) } catch { missing.push(file) }
+  }
+  try { await run('pkg-config', ['--exists', 'openssl'], { env: buildEnv, timeoutMs: 10000 }) } catch { missing.push('OpenSSL 开发库') }
+  try { await run('python3', ['-c', 'import importlib.util; assert importlib.util.find_spec("tomllib") or importlib.util.find_spec("tomli")'], { env: buildEnv, timeoutMs: 10000 }) } catch { missing.push('Python TOML parser') }
+  return missing
+}
+async function ensureBuildTools({ root, env = process.env, target, command: run, log = console.log, autoInstallSystem = true }) {
   const base = path.join(root, 'toolchain')
   await fsp.mkdir(base, { recursive: true, mode: 0o700 })
   let buildEnv = toolchainEnvironment(root, env)
@@ -27,6 +37,7 @@ async function ensureBuildTools({ root, env = process.env, target, command: run,
   let needsTomli = false
   try { await run('python3', ['-c', 'import importlib.util; assert importlib.util.find_spec("tomllib") or importlib.util.find_spec("tomli")'], { env: buildEnv, timeoutMs: 10000 }) } catch { needsTomli = true; missing.push('Python TOML parser') }
   if (missing.length) {
+    if (!autoInstallSystem) throw new Error(`请由管理员安装编译依赖：${missing.join(', ')}`)
     const manager = await available('apt-get') ? 'apt-get' : await available('dnf') ? 'dnf' : await available('yum') ? 'yum' : null
     if (!manager) throw new Error(`缺少编译工具 ${missing.join(', ')}；此发行版需管理员安装`)
     const prefix = process.getuid?.() === 0 ? [] : ['sudo', '-n']
@@ -63,4 +74,4 @@ async function ensureBuildTools({ root, env = process.env, target, command: run,
     })
   }
 }
-module.exports = { toolchainEnvironment, ensureBuildTools, nodeSupported }
+module.exports = { toolchainEnvironment, ensureBuildTools, checkBuildTools, nodeSupported }

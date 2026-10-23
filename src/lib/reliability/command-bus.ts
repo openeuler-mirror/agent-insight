@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto'
 
 import { prisma } from '@/lib/storage/prisma'
 import { ReliabilityError } from '@/lib/reliability/client-registry'
+import { ACTION as ENVIRONMENT_ACTION, validateContext, contextDigest } from '../../../packages/benchmark-protocol/environment.cjs'
 
 export const WHITELISTED_ACTIONS = [
   'APPLY_CLIENT_CONFIG',
@@ -16,6 +17,7 @@ export const WHITELISTED_ACTIONS = [
   'RUN_BENCHMARK_CASE',
   'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
+  'PREPARE_EXECUTION_ENVIRONMENT',
 ] as const
 
 export type CommandAction = (typeof WHITELISTED_ACTIONS)[number]
@@ -40,8 +42,14 @@ export function isWhitelistedAction(value: unknown): value is CommandAction {
 }
 
 export function assertPayloadSafe(action: CommandAction, payload: Record<string, unknown>): void {
+  if (action === ENVIRONMENT_ACTION) {
+    const context = validateContext(payload.context)
+    if (Object.keys(payload).some(key => !['context', 'contextDigest'].includes(key)) || contextDigest(context) !== payload.contextDigest) {
+      throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', '执行环境请求摘要或字段不合法', 400)
+    }
+  }
   const forbidden =
-    action === 'RUN_EXPERIMENT_CASE' || action === 'RUN_BENCHMARK_CASE'
+    action === 'RUN_EXPERIMENT_CASE' || action === 'RUN_BENCHMARK_CASE' || action === ENVIRONMENT_ACTION
       ? RUN_FORBIDDEN_KEYS
       : CONFIG_FORBIDDEN_KEYS
   for (const key of Object.keys(payload || {})) {

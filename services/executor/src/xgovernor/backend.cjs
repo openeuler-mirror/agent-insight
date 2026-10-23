@@ -62,7 +62,8 @@ class XGovernorExecutionBackend {
   validate(task) {
     const result = this.profile(task)
     const capability = (this.options.probe || executionCapabilities)({ config: result.config }).profiles.find(item => item.profile.key === task.execution.profile.key)
-    if (!capability?.ready) throw error('EXECUTOR_CAPABILITY_MISSING', capability?.note || '执行环境未就绪')
+    const readiness = capability?.targetReadiness?.[task.agentConfig.platform] || capability
+    if (!readiness?.ready) throw error('EXECUTOR_CAPABILITY_MISSING', readiness?.note || '执行环境未就绪')
     if (!this.reservations.has(task.context.runId)) {
       const usage = [...this.reservations.values()]
       if (usage.some(resources => !resources)
@@ -73,10 +74,11 @@ class XGovernorExecutionBackend {
     }
     return result
   }
-  assertFrozen(local) {
+  assertFrozen(local, platform) {
     if (!local.artifactDigest) return
     const identity = artifactIdentity(local)
-    if (identity.reasons.length || identity.digest !== local.artifactDigest) throw error('EXECUTION_PROFILE_CHANGED', '本次执行绑定的制品发生变化')
+    const selected = platform ? artifactIdentity({ ...local, runtimes: { [platform]: local.runtimes[platform] } }) : identity
+    if (selected.reasons.length || identity.digest !== local.artifactDigest) throw error('EXECUTION_PROFILE_CHANGED', '本次执行绑定的制品发生变化')
   }
   assertHandle(handle) {
     if (handle.backendKey !== 'xgovernor' || !/^[A-Za-z0-9_-]{1,160}$/.test(handle.runId) || handle.opaque.directory !== path.join(this.root, handle.runId)) throw error('EXECUTION_HANDLE_INVALID', '执行句柄 ownership 不匹配')
@@ -153,7 +155,7 @@ class XGovernorExecutionBackend {
     for (let attempt = 0; attempt < 3; attempt++) {
       const logFile = await fsp.open(path.join(directory, 'server.log'), 'a', 0o600)
       const offset = (await logFile.stat()).size
-      try { this.assertFrozen(local) } catch (cause) { await logFile.close(); throw cause }
+      try { this.assertFrozen(local, task.agentConfig.platform) } catch (cause) { await logFile.close(); throw cause }
       child = (this.options.spawnImpl || spawn)(local.serverExecutable, [], { cwd: directory, env: environment, detached: true, stdio: ['ignore', logFile.fd, logFile.fd] })
       const spawned = new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
       spawned.catch(() => {})
@@ -208,7 +210,7 @@ class XGovernorExecutionBackend {
       exec: (command, operation) => this.exec(handle, command, context.signal, undefined, operation),
     }))
     await this.persist(handle, context)
-    this.assertFrozen(local)
+    this.assertFrozen(local, task.agentConfig.platform)
     return handle
   }
   async exec(handle, command, signal, cwd, operation = 'sandbox-command') {
@@ -224,7 +226,7 @@ class XGovernorExecutionBackend {
   async runAgent(handle, input, context) {
     const local = handle.opaque.executionConfig || this.config.profiles[handle.opaque.profileKey]
     const runtime = local.runtimes[input.platform]
-    this.assertFrozen(local)
+    this.assertFrozen(local, input.platform)
     const client = await this.client(handle)
     if (handle.opaque.submitIntent) throw error('EXECUTION_STATE_UNKNOWN', '任务已提交或结果未知，拒绝重复运行')
     handle.opaque.submitIntent = true

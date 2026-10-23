@@ -27,6 +27,7 @@ import { TextEvaluatorConfigDialog } from '@/components/eval/TextEvaluatorConfig
 import { RuntimeModelSelect } from '@/components/eval/RuntimeModelSelect';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { useExecutionEnvironment, type EnvironmentSelection } from '@/lib/client/use-execution-environment';
 import {
   describeMatchResult,
   findBestDatasetInputMatch,
@@ -84,6 +85,8 @@ interface AgentTargetOption {
   supportsFaultInjection: boolean;
   supportsBenchmark: boolean;
   benchmarkKeys: string[];
+  preparableBenchmarkKeys?: string[];
+  supportsEnvironmentPreparation?: boolean;
   benchmarkUnavailableReason: string | null;
   benchmarkUnavailableReasons?: Record<string, string>;
   parameterDefinitions?: RuntimeDefinition[];
@@ -515,6 +518,8 @@ export function ExperimentWizard({
 
   const [step, setStep] = useState(1);
   const [maxVisited, setMaxVisited] = useState(1);
+  const [advancingTrace, setAdvancingTrace] = useState(false);
+  const traceAdvanceRef = useRef(false);
 
   // ① 实验设计
   const [name, setName] = useState(() => skillContext
@@ -640,9 +645,9 @@ export function ExperimentWizard({
       skillPreset === 'trigger'
         ? target.supportsTriggerRouting
         : isBenchmarkDataset
-        ? target.supportsBenchmark && target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '')
+        ? target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '') || target.preparableBenchmarkKeys?.includes(selectedDataset?.benchmark?.adapterKey || '')
         : isReliabilityDataset
-          ? target.supportsFaultInjection
+          ? target.supportsFaultInjection || (target.supportsEnvironmentPreparation && ['opencode', 'xiaoo'].includes(target.platform))
           : target.supportsGenericTrace).map(target => {
             const environment = isBenchmarkDataset ? target.benchmarkEnvironments?.[selectedDataset?.benchmark?.adapterKey || ''] : null;
             return environment ? { ...target, executionProfile: environment.profile, models: environment.models } : target;
@@ -687,6 +692,20 @@ export function ExperimentWizard({
     () => Array.from(selectedGenerated.values()),
     [selectedGenerated],
   );
+  const environmentSelection: EnvironmentSelection | null = selectedTarget && expType === 'single' && (traceMode === 'generate' || skillPreset === 'skill-ab') ? {
+    datasetId: selectedDatasetId || null,
+    clientId: selectedTarget.workerId,
+    platform: selectedTarget.platform,
+    agent: selectedTarget.agent,
+    model: genModel,
+    ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
+    caseIds: Array.from(traceMode === 'generate' ? selectedGenerated.keys() : selected.keys()).sort(),
+    mode: skillPreset === 'skill-ab' ? 'skill-ab' : skillPreset === 'trigger' ? 'trigger' : 'generate',
+    timeoutSeconds: agentTimeoutSeconds,
+    concurrency: executionConcurrencyRequired ? executionConcurrency : 1,
+  } : null;
+  const environment = useExecutionEnvironment(user || '', environmentSelection);
+  const environmentBusy = environment.busy || advancingTrace;
 
   const refreshAgents = useCallback(async () => {
     if (!user) return;
@@ -1136,6 +1155,12 @@ export function ExperimentWizard({
   }, [loadTraces, step, traceMode]);
 
   const goTo = (s: number) => {
+    if (environmentBusy) return;
+    if (s > 2 && step < 3) {
+      if (step !== 2 || !step2Valid) return;
+      void advanceFromTrace();
+      return;
+    }
     setStep(s);
     setMaxVisited((m) => Math.max(m, s));
   };
@@ -1748,6 +1773,23 @@ export function ExperimentWizard({
     || (step2SelectionValid && !runtimeState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const advanceFromTrace = async () => {
+    if (!step2Valid || environmentBusy || traceAdvanceRef.current) return;
+    traceAdvanceRef.current = true;
+    setAdvancingTrace(true);
+    try {
+      if (environmentSelection) {
+        if (!await environment.check()) return;
+        try { await refreshAgents(); }
+        catch { environment.fail('运行环境已准备，但执行目标信息刷新失败，请再次点击“下一步”。'); return; }
+      }
+      setStep(3);
+      setMaxVisited(value => Math.max(value, 3));
+    } finally {
+      traceAdvanceRef.current = false;
+      setAdvancingTrace(false);
+    }
+  };
 
   const stepSummaries = [
     `${name.trim() || '未命名'} · ${expType === 'llm' ? 'LLM 对比' : selectedDataset?.name || '未选数据集'}`,
@@ -1768,24 +1810,26 @@ export function ExperimentWizard({
 
   // 各步 panel 内底部 footer：分隔线 + 右对齐 上一步/下一步
   const footer = (opts: { nextDisabled?: boolean; nextLabel?: string; onNext?: () => void }) => (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+      {step === 2 && environment.message && <div role={environment.failed ? 'alert' : 'status'} aria-live="polite" style={{ marginBottom: 10, whiteSpace: 'pre-line', fontSize: 12, color: environment.failed ? 'var(--error)' : 'var(--foreground-secondary)' }}>{environment.message}</div>}
     <div style={{
       display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8,
-      marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)',
     }}>
       {step > 1 && (
-        <button style={BTN_GHOST} onClick={() => goTo(step - 1)}>← 上一步</button>
+        <button style={BTN_GHOST} disabled={environmentBusy} onClick={() => goTo(step - 1)}>← 上一步</button>
       )}
       <button
-        disabled={opts.nextDisabled}
-        onClick={opts.onNext ?? (() => goTo(step + 1))}
+        disabled={opts.nextDisabled || environmentBusy}
+        onClick={step === 2 ? () => void advanceFromTrace() : opts.onNext ?? (() => goTo(step + 1))}
         style={{
           ...BTN_PRIMARY,
-          opacity: opts.nextDisabled ? 0.5 : 1,
-          cursor: opts.nextDisabled ? 'not-allowed' : 'pointer',
+          opacity: opts.nextDisabled || environmentBusy ? 0.5 : 1,
+          cursor: opts.nextDisabled || environmentBusy ? 'not-allowed' : 'pointer',
         }}
       >
-        {opts.nextLabel ?? NEXT_LABELS[step - 1]}
+        {step === 2 && environmentBusy ? '检查与准备中…' : opts.nextLabel ?? NEXT_LABELS[step - 1]}
       </button>
+    </div>
     </div>
   );
 
@@ -1810,6 +1854,7 @@ export function ExperimentWizard({
         </div>
 
         <Stepper step={step} maxVisited={maxVisited} summaries={stepSummaries} onJump={goTo} />
+        <fieldset disabled={environmentBusy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
 
         {step === 1 && (
           <div style={PANEL}>
@@ -3424,6 +3469,7 @@ export function ExperimentWizard({
             </div>
           </div>
         )}
+        </fieldset>
       </PageContainer>
     </>
   );

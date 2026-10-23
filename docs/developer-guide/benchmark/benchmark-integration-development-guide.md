@@ -1,6 +1,6 @@
 # Benchmark 接入开发规范
 
-> 面向 AI 编码 Agent 和 Benchmark 接入开发者。当前协议版本：`agent-task/v1`、`benchmark-evaluation/v1`。
+> 面向 AI 编码 Agent 和 Benchmark 接入开发者。当前协议版本：`execution-environment/v1`、`agent-task/v1`、`benchmark-evaluation/v1`。
 
 ## 1. 目标与非目标
 
@@ -12,6 +12,7 @@
   → benchmarks/<key> 接入包
   → Catalog 校验
   → 数据集安装
+  → 按数据集与所选 Agent 检查、准备执行环境
   → Agent 执行与 Submission
   → Evaluator 判定与结果归一化
   → 公共前端展示
@@ -21,6 +22,7 @@
 
 - 公共平台负责任务状态机、执行目标匹配、Artifact 传输、评测调度、结果保存和统一页面；
 - Adapter 负责具体 Benchmark 的 Case 拆分、任务构造、提交校验、评测请求和结果归一化；
+- 接入包内的执行端环境模块负责按数据集与所选 Agent 声明、检查和准备本次运行要求；
 - Evaluator 负责运行 Benchmark 的权威判定逻辑并产出原生结果和 Evidence；
 - Manifest 和 Presentation 声明静态契约及受控展示。
 
@@ -47,6 +49,7 @@
 - 目标与一条 Case 的业务含义；
 - 原始字段、公开数据、私有数据和目录展示投影；
 - Agent 工作区、任务说明、网络策略和 Submission；
+- 各 Agent 的执行环境要求、可自动准备项、需用户配置项及耗时动作；
 - Evaluator 的权威判定依据、运行环境和 Evidence；
 - 主指标、聚合方式、评分点及页面展示；
 - V1 能力判断和可能的公共扩展。
@@ -68,7 +71,7 @@
 
 ### 2.4 实现与验证
 
-确认后按顺序完成：Schema → Manifest → Adapter → Evaluator → Dataset Loader → Presentation → 单元测试 → Smoke → 端到端验收。
+确认后按顺序完成：Schema → Manifest → Adapter → 执行端环境模块 → Evaluator → Dataset Loader → Presentation → 单元测试 → Smoke → 端到端验收。
 
 ## 3. V1 支持边界
 
@@ -100,6 +103,8 @@ benchmarks/<key>/
 │   └── index.ts
 ├── dataset/                    # 可选：官方数据源 Loader
 │   └── index.ts
+├── executor/
+│   └── environment.cjs         # 执行环境检查与准备，按所选 Agent 判断
 ├── evaluator/
 │   ├── evaluator.yaml
 │   ├── entrypoint.cjs          # 也可以是 Python 或可执行文件
@@ -141,6 +146,9 @@ schemas:
   rawResult: ./schemas/result.schema.json
 
 executor:
+  environmentPreparation:
+    protocol: execution-environment/v1
+    implementation: ./executor/environment.cjs
   requiredCapabilities:
     - git-workspace/v1
     - git-patch/v1
@@ -230,6 +238,95 @@ presentation:
 - `mean`：Case 值必须是有限数字，实验趋势聚合均值。
 
 主指标 key 必须与 Adapter 归一化结果中的 key 一致。
+
+### 5.5 执行环境准备协议
+
+执行环境准备以数据集为入口，判断依据是本次选择的数据集版本、Case、主机、Agent、模型、执行方式和实验参数。同一数据集可以因所选 Agent 不同而需要不同环境；同源数据集共用接入实现，不为每个数据集记录复制代码。
+
+Benchmark 的实现放在 `benchmarks/<key>/executor/environment.cjs`，属于接入包协议的一部分，独立于平台侧 Adapter 的五个业务 Hook。普通数据集和可靠性数据集使用相同方法合同，通过公共注册入口加载，不需要实现 Benchmark 评测协议。新增 Benchmark 应在上述 Manifest 字段中声明此入口；旧接入包未声明时不会自动获得环境准备能力，客户端找不到对应实现会提示更新，不会退回普通数据集检查并报告就绪。
+
+#### 方法与上下文
+
+模块使用 CommonJS，导出两个异步方法：
+
+```js
+module.exports = { checkEnvironment, prepareEnvironment }
+
+// 只读检查，返回 { issues: [{ code, message }], prepare: string[] }
+async function checkEnvironment(context, services) { /* ... */ }
+
+// 执行自动准备；正常完成即可，最终是否就绪由复查决定
+async function prepareEnvironment(context, services, reportProgress) { /* ... */ }
+```
+
+`context` 来自平台校验后的选择快照，字段以 [`EnvironmentContext`](../../../packages/benchmark-protocol/environment.d.cts) 为准：
+
+| 字段 | 含义 |
+|---|---|
+| `protocol` | 固定为 `execution-environment/v1` |
+| `clientId` | 本次执行主机 |
+| `dataset` | `id`、`adapterKey`、`revision`、`caseIds`、`faultTypes` |
+| `platform` / `agent` | 选定 Agent Runtime 与 Agent |
+| `model` / `agentOptions` | 所选模型及可选 Agent 参数；原生默认模型可不指定具体名称 |
+| `experiment` | `mode`、`timeoutSeconds`、`concurrency` |
+
+上下文只传公开选择与配置，不传 API Key、隐藏测试或私有评测数据。模型凭据由执行机本地配置解析。
+
+`services` 由通用执行器注入，提供 Agent、沙箱、故障注入、MCTS 等已有检查与准备能力。接入模块组合这些能力，并按 `context` 选择要求；公共编排服务和前端不判断 Benchmark 名称。新增可复用的环境能力时先扩展公共服务，再由接入模块调用。
+
+#### 检查结果与编排
+
+| 返回内容 | 通用执行器行为 |
+|---|---|
+| `issues` 非空 | 返回 `needs_action`，提示用户配置；本轮不执行自动安装 |
+| `issues` 为空、`prepare` 非空 | 调用一次 `prepareEnvironment`，然后重新检查 |
+| 两个数组均为空 | 返回 `ready` |
+| 准备抛错，或复查后仍有待准备项 | 返回失败，可再次点击“下一步”重试 |
+
+`issues` 表示需用户处理的问题，例如缺少模型 API 配置、Docker 权限或系统构建工具；`message` 应说明去执行机处理什么，不输出凭据或原始安装日志。`prepare` 是接入模块内部的待准备项标识，例如 `sandbox`；通用执行器仅据其是否为空决定是否调用准备方法，不把它当作远程命令。
+
+检查必须只读，不能在检查方法中下载、编译或安装。准备方法应能重复调用并复用已满足的环境，通过公共服务复用安装锁与版本校验；只准备当前数据集和所选 Agent 需要的组件，不因其他 Runtime 缺少组件阻断本次实验。无需自动安装的接入也应导出准备方法，此方法不会在 `prepare: []` 时调用。
+
+下面以 SWE-bench 的现有接入为例，按实际执行绑定选择检查方式：
+
+```js
+async function checkEnvironment(context, services) {
+  const binding = services.executionBinding(context)
+  if (binding?.backendKey === 'xgovernor') return services.checkSandbox(context, binding)
+  if (context.platform === 'pi-mcts') return services.checkMcts(context, 'swe-bench')
+  return { issues: await services.checkAgent(context), prepare: [] }
+}
+
+async function prepareEnvironment(context, services, reportProgress) {
+  const binding = services.executionBinding(context)
+  if (!binding || binding.backendKey !== 'xgovernor') throw new Error('所选执行方式没有自动准备操作')
+  await services.prepareSandbox(context, binding, reportProgress)
+}
+
+module.exports = { checkEnvironment, prepareEnvironment }
+```
+
+#### 进度与前端约定
+
+准备方法通过 `await reportProgress({ state: 'preparing', durationHint? })` 上报进度，不自己生成前端文案：
+
+| `durationHint` | 使用时机 | 前端准备提示 |
+|---|---|---|
+| 不传 | 普通自动准备 | 正在准备运行环境 |
+| `first_install_minutes` | 确实开始首次耗时安装或编译 | 正在准备运行环境，首次可能需要几分钟 |
+| `minutes` | 其他确实需要数分钟的准备动作 | 正在准备运行环境，可能需要几分钟 |
+
+只有进入实际耗时动作才报告耗时提示，不能因为选择了某个数据集或后端就预先报告。通用执行器负责 `checking → preparing → checking → ready / needs_action / failed` 的任务状态，接入模块不得跳过复查直接报告就绪。
+
+前端在实验向导第二步 Trace 来源点击“下一步”时触发检查。已满足时直接进入下一步；自动准备时只在底部按钮上方提示并锁定配置；需人工处理时在同处提示，用户配置后再次点击“下一步”重新检查。切换配置后使用新上下文，旧检查结果不复用。仅使用已有 Trace、无需运行 Agent 的流程跳过此环节。
+
+#### 分发与阶段边界
+
+Catalog 校验协议和包内 `.cjs` 入口，并将执行端文件纳入接入包内容摘要与分发清单；客户端加载时校验两个方法是否存在。环境准备入口不依赖 `gitSourcePolicy`。发布安装包必须带上 `generatedEnvironmentPreparationDescriptors` 和对应 executor 文件，不能只在源码仓库中可用。新接入不需要在公共平台或前端增加 Benchmark 专属分支。
+
+此环节准备执行主机的共享运行环境；Case 工作区、Case 容器等仍由执行后端按任务生命周期管理。它也不同于第 7.1 节的平台数据集来源准备，以及 Evaluator 的评测 Runtime 准备。客户端安装只完成客户端及链路跟踪接入，保存配置上下文，不提前编译本次实验可能用不到的执行后端。
+
+通用实现见 [`services/executor/src/environment/`](../../../services/executor/src/environment/)，完整设计见[实验执行环境准备](../../design/experiment-environment-preparation/phase2-requirements-design.md)。
 
 ## 6. Case Schema 与数据边界
 
@@ -383,11 +480,15 @@ Adapter 必须继承 `AbstractBenchmarkAdapter`，只实现五个受保护的业
 
 客户端 `ExecutionBackendRegistry` 按 `backendKey` 选择 `prepare/runAgent/collect/cancel/close/recover` 六方法实现。Runner 仅保存不透明句柄，统一处理阶段期限、产物落盘、上传重试与清理恢复，不解析后端目录或 session。已有工作区/运行时/策略组件由 `LocalExecutionBackend` 包装；`XGovernorExecutionBackend` 负责每 Case daemon、Docker、Runtime 会话、Patch 与完整 Trace 导出。
 
-实验 Agent 列表保留未就绪的 Benchmark 目标用于诊断，按 Adapter Key 在 `benchmarkUnavailableReasons` 中返回对应 `unavailableReasons`；只有就绪目标进入 `benchmarkKeys` 并提供可执行环境。前端“生成 Trace”空状态按当前数据集显示主机与原因，未就绪目标不进入运行主机选项，也不单独使 Agent 标记为可执行。该步骤定期刷新客户端状态，环境恢复后重新计算可用目标。
+实验 Agent 列表区分当前就绪与可准备：就绪目标进入 `benchmarkKeys`，在线、健康且支持 `PREPARE_EXECUTION_ENVIRONMENT` 的目标进入 `preparableBenchmarkKeys`；后者即使缺少组件也允许在主机选项中选择。原因仍由 `benchmarkUnavailableReasons` 返回。第二步点击下一步才触发检查；安装后刷新客户端能力，再使用最终 Profile 冻结实验。`executionProfiles.targetReadiness` 按 platform 返回检查结果，选择一个 Runtime 不会因另一个 Runtime 缺少组件而被阻止；未安装执行后端也不影响已就绪的普通 Agent 执行能力。
+
+#### 执行环境准备协议
+
+Manifest 声明、执行端方法、返回值、进度和分发约定统一见[第 5.5 节](#55-执行环境准备协议)。这两个方法独立于本节的平台 Adapter 方法。
 
 #### 受管理安装与版本
 
-curl 安装所选 Pi/xiaoO 时，通过 `install-ras-client.js` 自动调用 `xgovernor/setup.cjs` 安装固定兼容源码版本；同版本且制品校验通过时复用，构建限并行，工具链和制品均独立于 MCTS。xGovernor 依赖仍可由 `scripts/xgovernor.cjs` 手动管理，`update [--version <tag或commit>]` 从官方源码构建配套组件，`status` 校验版本，`rollback` 回退。安装版客户端分发该脚本和后端管理模块，安装位置为 `AGENT_INSIGHT_HOME/dependencies/xgovernor`，不占用平台、Evaluator 或全局 Agent 安装。`installation.cjs` 校验原子 current/previous 指针、清单、架构和实际制品摘要；没有手动组件路径的 Profile 自动解析受管理组件，随后由 `executionCapabilities()` 生成带实际 commit 与 `artifactDigest` 的公开摘要。现有客户端 PUT capabilities 与平台接收路由均须保留 `executionProfiles`，否则新版本无法传到平台。
+curl 安装所选 Pi/xiaoO 时，`install-ras-client.js` 仅通过 `saveSetupContext` 保存配置查找上下文。实验第二步下一步触发 SWE-bench 执行端接入检查，需要安装时调用 `xgovernor/setup.cjs` 准备固定兼容源码版本；同版本且制品校验通过时复用，构建限并行，工具链和制品均独立于 MCTS。xGovernor 依赖仍可由 `scripts/xgovernor.cjs` 手动管理，`update [--version <tag或commit>]` 从官方源码构建配套组件，`status` 校验版本，`rollback` 回退。安装版客户端分发该脚本和后端管理模块，安装位置为 `AGENT_INSIGHT_HOME/dependencies/xgovernor`，不占用平台、Evaluator 或全局 Agent 安装。`installation.cjs` 校验原子 current/previous 指针、清单、架构和实际制品摘要；没有手动组件路径的 Profile 自动解析受管理组件，随后由 `executionCapabilities()` 生成带实际 commit 与 `artifactDigest` 的公开摘要。现有客户端 PUT capabilities 与平台接收路由均须保留 `executionProfiles` 与 `targetReadiness`，否则实际版本或对应 Runtime 就绪结果会丢失。
 
 固定版本及工具链定义集中在执行端源码，当前值如下；变更兼容版本前应验证适配协议：
 
@@ -396,11 +497,11 @@ curl 安装所选 Pi/xiaoO 时，通过 `install-ras-client.js` 自动调用 `xg
 | `setup.cjs` 的 `COMPATIBLE_REVISION` | `d08e67e366b89e622af9383383e251c4f40eb728` |
 | Node.js | 要求 >=22.19；不足时安装独立 Node 22.19.0 并校验下载摘要 |
 | Rust / Cargo | 缺失或版本不足时安装独立 Rust 1.97.1；构建并行度为 2 |
-| 系统依赖 | 自动准备 Git、C/C++ 构建工具、pkg-config；支持 apt/dnf/yum，需 root 或非交互 sudo |
+| 系统依赖 | 实验准备只检查 Git、C/C++ 构建工具、pkg-config 等，缺少时提示管理员处理；不隐式执行系统包管理器 |
 | 凭据桥接版本 | `native-credentials-build.cjs` 的 `BRIDGE_VERSION: 1`，状态中对应 `components.xiaooCredentials.version` |
 | 工具链目录 | `dependencies/xgovernor/toolchain/`，不修改用户 shell 配置 |
 
-安装器先注册并启动客户端，再进行耗时构建，避免安装令牌在编译中失效。`setup.lock` 防止重复准备工具链，`update.lock` 保护更新、回退与版本回收；失败写入 `setup.json` 并报告未就绪，客户端仍可在线。`setup.json` 仅保存 Runtime、原配置路径与状态，不保存模型凭据。MCTS-only 安装跳过此流程，也不接管同机 MCTS 的服务、配置或仓库。
+安装器注册并启动客户端；耗时构建推迟到实验环境准备阶段，不占用一次性安装令牌的有效期。`setup.lock` 防止重复准备工具链，`update.lock` 保护更新、回退与版本回收；失败写入 `setup.json` 并报告未就绪，客户端仍可在线。`setup.json` 仅保存 Runtime、原配置路径与状态，不保存模型凭据。MCTS 使用自己的检查流程，不接管同机 MCTS 的服务、配置或仓库。
 
 客户端安装目录默认由 `AGENT_INSIGHT_HOME` 定位，以下命令只管理原生执行端的 xGovernor：
 
@@ -790,6 +891,8 @@ npm run benchmark:catalog
 
 必须验证：路径不越界、key 唯一、Evaluator 匹配、资源一致、Artifact/能力一致、Schema 可读取、Presentation 合法，以及生成结果可重复。
 
+声明环境准备入口时，还须验证协议兼容、入口与传递依赖随执行端安装包分发、文件变更更新内容摘要，以及未声明 `gitSourcePolicy` 时仍能加载环境模块。
+
 Catalog 目录扫描排除 `__pycache__/`、`*.pyc`、`*.pyo` 和 `.DS_Store`，这些运行缓存不参与包摘要、Runtime 摘要或执行器文件清单。真实源码、依赖配置与评测资产仍参与原有摘要计算；新增或修改缓存不应改变生成物，修改真实输入必须更新对应摘要。
 
 ### 12.2 Adapter 单元测试
@@ -828,7 +931,9 @@ Doctor 验证依赖可用性，Smoke 必须使用已知结果的最小样例穿�
 node --import tsx --test \
   test/benchmark-extension-conformance.test.ts \
   test/benchmark-presentation.test.ts \
-  test/benchmark-experiment-wizard-ui.test.ts
+  test/benchmark-experiment-wizard-ui.test.ts \
+  test/execution-environment.test.ts \
+  test/execution-environment-api.test.ts
 
 npm run test
 ```
@@ -847,6 +952,13 @@ npm run test
 | 新增未配置 Evidence | 仍以原始名称显示和下载 |
 | `evaluatorKey != adapterKey` | 自动绑定、重评和趋势均使用正确 Evaluator |
 | 数字主指标 | `mean` 聚合和 Presentation 格式正确 |
+| 环境已经满足 | 检查无安装副作用，直接进入下一步 |
+| 同一数据集切换 Agent | 只检查当前 Agent 所需环境，旧结果不放行新配置 |
+| 可自动准备 | 自动安装、复查后进入下一步；再次检查复用已有环境 |
+| 缺少 API 配置或权限 | 底部提示执行机配置要求，配置后点击“下一步”重新检查 |
+| 人工问题与可安装项并存 | 先提示人工问题，本轮不启动安装 |
+| 首次耗时编译 | 仅实际进入编译时显示“首次可能需要几分钟” |
+| 准备失败或复查仍不满足 | 不进入下一步，允许用户处理后重试 |
 
 ## 13. 禁止事项
 
@@ -864,6 +976,7 @@ npm run test
 - [ ] 客户确认《Benchmark 接入确认单》；
 - [ ] `benchmark.yaml`、Case Schema、Raw Result Schema；
 - [ ] Adapter 五个 Hook；
+- [ ] 执行端环境模块、Manifest 声明、按 Agent 检查和准备测试；
 - [ ] Dataset Loader 和 Profile（如需要）；
 - [ ] Evaluator Entrypoint、依赖或镜像构建文件；
 - [ ] Doctor 和真实 Smoke；
@@ -880,6 +993,7 @@ SWE-bench 是当前完整参考实例：
 
 - [Manifest](../../../benchmarks/swe-bench/benchmark.yaml)
 - [Adapter](../../../benchmarks/swe-bench/adapter/index.ts)
+- [执行端环境模块](../../../benchmarks/swe-bench/executor/environment.cjs)
 - [Evaluator 配置](../../../benchmarks/swe-bench/evaluator/evaluator.yaml)
 - [Evaluator Entrypoint](../../../benchmarks/swe-bench/evaluator/entrypoint.cjs)
 - [Case Schema](../../../benchmarks/swe-bench/schemas/case.schema.json)

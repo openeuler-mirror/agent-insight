@@ -62,6 +62,12 @@ function installRuntime() {
   }
   fs.rmSync(executorDest, { recursive: true, force: true })
   fs.cpSync(executorSrc, executorDest, { recursive: true })
+  fs.mkdirSync(path.join(RUNTIME_DIR, 'lib'), { recursive: true })
+  fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts/lib/fi-python-runtime.js'), path.join(RUNTIME_DIR, 'lib/fi-python-runtime.js'))
+  fs.cpSync(path.join(PACKAGE_ROOT, 'agent_fault_injection'), path.join(RUNTIME_DIR, 'fi-source'), {
+    recursive: true,
+    filter: file => !['__pycache__', '.venv', 'venv', '.pytest_cache'].includes(path.basename(file)),
+  })
   fs.mkdirSync(path.join(executorDest, 'vendor'), { recursive: true })
   fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', 'agent-trace-collectors', 'shared', 'trace-transport.cjs'), path.join(executorDest, 'vendor', 'trace-transport.cjs'))
   for (const relativePath of executorPackageFiles) {
@@ -739,8 +745,8 @@ async function main() {
   if (process.platform === 'linux') installSystemd(args.start, systemdTarget)
   else installLaunchd(args.start)
 
-  const { installSelectedBackend } = require(path.join(RUNTIME_DIR, 'executor/xgovernor/setup.cjs'))
-  await installSelectedBackend({ frameworks: args.frameworks, log })
+  const { saveSetupContext } = require(path.join(RUNTIME_DIR, 'executor/xgovernor/setup.cjs'))
+  await saveSetupContext({ frameworks: args.frameworks })
 
   log('')
   log('安装完成。客户端独立于 Agent 平台运行，崩溃后由系统进程管理器自动拉起。')

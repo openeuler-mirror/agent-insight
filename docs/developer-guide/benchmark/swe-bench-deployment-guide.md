@@ -76,7 +76,9 @@ xGovernor、Pi/E2B 和 Trace 代理的部署属于 Runtime 接入，不属于 SW
 
 ### 原生 Pi/xiaoO 的 Case 镜像
 
-客户端安装与更新见 [通用部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。以下为执行机 `executor.local.yaml` 中的可选覆盖，配置路径同本节前文；不填写时使用默认值：
+客户端安装与更新见 [通用部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。xGovernor 在实验第二步点击下一步时按所选 Agent/执行方式检查并自动准备，不在链路采集器安装时编译。模型凭据、Docker 权限及系统编译依赖需要人工处理时，页面底部给出说明；修复后再次点击下一步。该主机级准备不提前下载全部 Case 镜像，镜像仍在各 Case 执行准备阶段按需获取。
+
+以下为执行机 `executor.local.yaml` 中的可选覆盖，配置路径同本节前文；不填写时使用默认值：
 
 ```yaml
 benchmarks:
