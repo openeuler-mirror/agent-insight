@@ -10,6 +10,7 @@ import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { deriveEvaluatorTags } from '@/lib/evaluators/registry';
 import EvaluatorDetailModal from '@/components/eval/EvaluatorDetailModal';
 import EvaluatorSkillsEditor from '@/components/eval/EvaluatorSkillsEditor';
+import EvaluatorPointsEditor from '@/components/eval/EvaluatorPointsEditor';
 import type { EvaluatorSkillSelection } from '@/lib/evaluators/evaluator-skills';
 import {
   type EvaluatorCard,
@@ -17,6 +18,7 @@ import {
   type LlmEvaluatorConfig,
   findUnsupportedCustomEvaluatorVariables,
   isValidCustomEvaluatorName,
+  normalizeEvaluatorPoints,
 } from '@/lib/evaluators/custom-evaluator-model';
 
 type TabKey = 'custom' | 'preset';
@@ -44,7 +46,7 @@ interface LlmEvaluatorDraft {
   category: 'res' | 'traj';
   systemPrompt: string;
   /** 评分点清单（可选）：保存时收集非空行存入 card.pointsDef */
-  points: Array<{ label: string; note: string }>;
+  points: NonNullable<EvaluatorCard['pointsDef']>;
 }
 
 // Custom RPC 尚未提供可执行实现，不放进选项避免用户点了发现没结果。
@@ -285,11 +287,7 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
       return;
     }
 
-    // 评分点：收集非空行（判定说明可选）
-    const pointsDef = llmDraft.points
-      .map(p => ({ label: p.label.trim(), note: p.note.trim() }))
-      .filter(p => p.label)
-      .map(p => (p.note ? { label: p.label, note: p.note } : { label: p.label }));
+    const pointsDef = normalizeEvaluatorPoints(llmDraft.points);
 
     // 模型：用平台当前激活的评测模型（用户在 settings/eval 那边切换）；评估器自身不绑定具体模型，
     // 只承载 prompt 配置。activeModel 还没就绪时存空字符串占位，运行时由 trajectory-eval 后端
@@ -1143,70 +1141,7 @@ function LlmEvaluatorCreatePanel({
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>评分点（可选）</span>
-          {draft.points.map((point, index) => (
-            <div key={index} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                value={point.label}
-                maxLength={50}
-                onChange={e => {
-                  const points = draft.points.slice();
-                  points[index] = { ...points[index], label: e.target.value };
-                  onChange({ ...draft, points });
-                }}
-                placeholder="评分点名称"
-                style={{
-                  flex: '0 0 200px',
-                  height: 32,
-                  borderRadius: 8,
-                  border: '1px solid var(--input-border)',
-                  background: 'var(--input-bg)',
-                  color: 'var(--foreground)',
-                  padding: '0 10px',
-                  fontSize: 12.5,
-                }}
-              />
-              <input
-                value={point.note}
-                maxLength={200}
-                onChange={e => {
-                  const points = draft.points.slice();
-                  points[index] = { ...points[index], note: e.target.value };
-                  onChange({ ...draft, points });
-                }}
-                placeholder="判定说明（可选）"
-                style={{
-                  flex: 1,
-                  height: 32,
-                  borderRadius: 8,
-                  border: '1px solid var(--input-border)',
-                  background: 'var(--input-bg)',
-                  color: 'var(--foreground)',
-                  padding: '0 10px',
-                  fontSize: 12.5,
-                }}
-              />
-              <button
-                type="button"
-                className="ai-btn-s"
-                aria-label="删除评分点"
-                style={{ color: 'var(--error)', minWidth: 30, padding: '4px 8px' }}
-                onClick={() => onChange({ ...draft, points: draft.points.filter((_, i) => i !== index) })}
-              >
-                ×
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            className="ai-btn-s"
-            style={{ alignSelf: 'flex-start' }}
-            onClick={() => onChange({ ...draft, points: [...draft.points, { label: '', note: '' }] })}
-          >
-            ＋ 添加评分点
-          </button>
-        </div>
+        <EvaluatorPointsEditor value={draft.points} onChange={points => onChange({ ...draft, points })} />
       </section>
 
       <EvaluatorSkillsEditor value={draft.skills} onChange={skills => onChange({ ...draft, skills })} />

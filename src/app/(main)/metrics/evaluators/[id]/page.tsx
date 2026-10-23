@@ -11,6 +11,7 @@ import { useLocale } from '@/lib/client/locale-context';
 import {
   findUnsupportedCustomEvaluatorVariables,
   isValidCustomEvaluatorName,
+  normalizeEvaluatorPoints,
   type EvaluatorCard,
   type LlmEvaluatorConfig,
   type CodeEvaluatorConfig,
@@ -18,6 +19,7 @@ import {
 import { Term } from '@/components/text/Term';
 import styles from './code-evaluator-detail.module.css';
 import EvaluatorSkillsEditor from '@/components/eval/EvaluatorSkillsEditor';
+import EvaluatorPointsEditor from '@/components/eval/EvaluatorPointsEditor';
 
 const CodeMonacoEditor = dynamic(
   () => import('@monaco-editor/react').then(m => m.Editor),
@@ -101,6 +103,7 @@ export default function CustomEvaluatorDetailPage() {
         ...c,
         name: c.name.trim(),
         scoreRange: '0-100',
+        pointsDef: normalizeEvaluatorPoints(c.pointsDef),
         llmConfig: { ...c.llmConfig, userPrompt: prompt },
         mappedMetrics: model ? ['LLM 评测', model] : ['LLM 评测'],
       };
@@ -365,6 +368,8 @@ function LlmEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eval
           </button>
         )}
       </div>
+
+      <EvaluatorPointsEditor value={card.pointsDef ?? []} onChange={pointsDef => onChange({ ...card, pointsDef })} />
 
       <EvaluatorSkillsEditor evaluatorId={card.id} value={cfg.skills || []} onChange={skills => patchCfg({ skills })} />
 

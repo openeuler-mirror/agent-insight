@@ -18,6 +18,13 @@ export function isValidCustomEvaluatorName(name: string): boolean {
   return CUSTOM_EVALUATOR_NAME_PATTERN.test(name.trim());
 }
 
+export function normalizeEvaluatorPoints(points: EvaluatorCard['pointsDef']): NonNullable<EvaluatorCard['pointsDef']> {
+  return (points ?? [])
+    .map(point => ({ label: point.label.trim(), note: point.note?.trim() }))
+    .filter(point => point.label)
+    .map(point => point.note ? { label: point.label, note: point.note } : { label: point.label });
+}
+
 export const CUSTOM_EVALUATOR_ALLOWED_VARIABLES = [
   'input',
   'dataset_input',

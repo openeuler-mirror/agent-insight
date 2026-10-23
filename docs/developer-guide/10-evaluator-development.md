@@ -625,6 +625,8 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 
 ## 自建评估器的 Skills 扩展
 
+创建与编辑表单共用 `EvaluatorPointsEditor` 管理 `card.pointsDef`，保存时共用 `normalizeEvaluatorPoints` 去除首尾空白、忽略空名称行。编辑页直接回显 GET 返回的清单；清空后明确提交空数组，重新加载后保持清空状态，不从旧卡片恢复评分点。评分点变更沿用原有实验冻结规则。
+
 自建评估器仍使用 LLM 类型和 custom-* id，Prompt/评分点定义判定标准，可在 llmConfig.skills 添加 library/local 来源。所有添加的主指令会确定性进入请求；无需为纯指令 Skill 虚构工具调用，也不强制无条件运行每个脚本。Skill 文件中的模板不替换为 Case 变量，只有评估器 Prompt 做变量替换。
 
 有 Skills 时使用 custom-evaluator-runtime.ts，不能走 callJudgeLlm 的 direct 路径。复用 judge-assembly 输出约束和评分点 label；Skill 默认格式不能覆盖平台结果契约。运行失败不是被评测 Agent 的 0 分，必须记录失败；原始评分证据与平台 runtime 元数据分别保存，禁止依赖模型自行上报“用了哪些 Skill”。

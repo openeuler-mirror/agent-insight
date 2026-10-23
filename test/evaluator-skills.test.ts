@@ -14,11 +14,11 @@ process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || 'file:
 import { EvaluatorSkillStore, normalizeSkillPackage, readSkillZip, skillRelativePath, type SkillPackageFile } from '@/lib/evaluators/evaluator-skill-store';
 import { normalizeEvaluatorSkillCards, freezeCustomEvaluators, resolveFrozenCustomEvaluator, customEvaluatorsForReuse } from '@/lib/evaluators/evaluator-skill-service';
 import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError, setCustomEvaluatorSkillCallerForTest } from '@/lib/engine/evaluation/custom-evaluator-runtime';
-import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import { normalizeEvaluatorPoints, type EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { writeUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { POST as importSkill } from '@/app/api/user-evaluators/skill-imports/route';
-import { PUT as saveEvaluators } from '@/app/api/user-evaluators/route';
+import { GET as getEvaluators, PUT as saveEvaluators } from '@/app/api/user-evaluators/route';
 import { GET as previewImport } from '@/app/api/user-evaluators/skill-imports/[importToken]/files/route';
 import { GET as previewBinding } from '@/app/api/user-evaluators/[evaluatorId]/skills/[name]/files/route';
 import { GET as libraryVersions } from '@/app/api/skills/by-name/[name]/versions/route';
@@ -29,7 +29,7 @@ import { POST as createExperiment } from '@/app/api/experiments/route';
 import { startExperimentRun, ensureEvalExperiment } from '@/lib/engine/experiment/run-experiment';
 import { createComparisonExperiment } from '@/lib/engine/experiment/comparison-runner';
 import { runCustomLlmEvaluator } from '@/lib/engine/evaluation/custom-llm-evaluator';
-import { parseJudgeText } from '@/lib/evaluators/judge-assembly';
+import { buildJudgePrompt, parseJudgeText } from '@/lib/evaluators/judge-assembly';
 import { cloneExperimentFromFrozenConfig } from '@/lib/engine/experiment/reuse-config';
 
 const user = `evaluator-skills-${Date.now()}`;
@@ -141,6 +141,39 @@ test('本地上传 → 文件预览 → 保存 → 冻结文件查看，全程�
   const files = await previewBinding(new Request(`http://localhost/preview?user=${user}&path=SKILL.md`), { params: Promise.resolve({ evaluatorId: item.id, name: 'validator' }) });
   assert.equal(files.status, 200); assert.match((await files.json()).content, /VALIDATE/);
   assert.equal(await prismaRaw.skill.count({ where: { user } }), count);
+});
+
+test('评分点创建后回读、增改删后保存并重新加载，保留 Prompt 与 Skill 绑定', async () => {
+  const item = card(); item.id = 'custom-points-roundtrip';
+  item.llmConfig!.skills = [await new EvaluatorSkillStore().publish(user, packageFiles(), { kind: 'local' })];
+  await writeUserCustomEvaluators(user, [item]);
+  const read = async () => {
+    const response = await getEvaluators(new Request(`http://localhost/api/user-evaluators?user=${user}`));
+    assert.equal(response.status, 200);
+    return (await response.json() as EvaluatorCard[]).find(candidate => candidate.id === item.id)!;
+  };
+  const save = async (draft: EvaluatorCard) => {
+    const response = await saveEvaluators(new Request('http://localhost/api/user-evaluators', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user, evaluators: [{ ...draft, pointsDef: normalizeEvaluatorPoints(draft.pointsDef) }] }),
+    }));
+    assert.equal(response.status, 200);
+    return read();
+  };
+  const created = await read();
+  assert.deepEqual(created.pointsDef, [{ label: '验证结果' }]);
+  const edited = await save({ ...created, pointsDef: [
+    { label: ' 订单金额正确性 ', note: ' 核对订单金额 ' },
+    { label: '输出格式', note: '  ' }, { label: '   ', note: '空名称草稿行' },
+  ] });
+  assert.deepEqual(edited.pointsDef, [{ label: '订单金额正确性', note: '核对订单金额' }, { label: '输出格式' }]);
+  assert.match(buildJudgePrompt(edited, {}).user, /1\. 订单金额正确性——核对订单金额/);
+  const removed = await save({ ...edited, pointsDef: edited.pointsDef!.slice(1) });
+  assert.deepEqual(removed.pointsDef, [{ label: '输出格式' }]);
+  const empty = await save({ ...removed, pointsDef: [] });
+  assert.deepEqual(empty.pointsDef, []);
+  assert.match(buildJudgePrompt(empty, {}).user, /自行提取 2~6 个评分点/);
+  assert.deepEqual(empty.llmConfig, created.llmConfig);
 });
 
 test('上传在解析 multipart 前限制实际接收字节，不能省略 Content-Length 绕过限制', async () => {
