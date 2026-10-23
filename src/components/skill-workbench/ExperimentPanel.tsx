@@ -67,7 +67,7 @@ export function ExperimentPanel({
   const [preset, setPreset] = useState<SkillExperimentPreset | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [reuseFromExperimentId, setReuseFromExperimentId] = useState('');
-  const [actionId, setActionId] = useState('');
+  const [busyExperimentIds, setBusyExperimentIds] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -177,10 +177,10 @@ export function ExperimentPanel({
                     <td className="px-4 py-3 text-foreground-muted">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
                     <td className="whitespace-nowrap px-4 py-3" onClick={(event) => event.stopPropagation()}>
                       {row.preset && row.preset !== 'retest' ? (
-                        <SameConfigExperimentAction user={user} sourceExperimentId={row.id} disabled={Boolean(actionId)}
-                          onBusyChange={(busy) => setActionId(busy ? row.id : '')} onStarted={setDetailId}>
-                          <button type="button" disabled={Boolean(actionId)} onClick={() => { setReuseFromExperimentId(row.id); setPreset(row.preset as SkillExperimentPreset); }} className="text-primary disabled:opacity-50">复用同配置</button>
-                          <DeleteExperimentButton disabled={Boolean(actionId)} user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} />
+                        <SameConfigExperimentAction user={user} sourceExperimentId={row.id} disabled={Boolean(busyExperimentIds[row.id])}
+                          onBusyChange={(busy) => setBusyExperimentIds(current => ({ ...current, [row.id]: busy }))} onStarted={setDetailId}>
+                          <button type="button" disabled={Boolean(busyExperimentIds[row.id])} onClick={() => { setReuseFromExperimentId(row.id); setPreset(row.preset as SkillExperimentPreset); }} className="text-primary disabled:opacity-50">复用同配置</button>
+                          <DeleteExperimentButton disabled={Boolean(busyExperimentIds[row.id])} user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} />
                         </SameConfigExperimentAction>
                       ) : <DeleteExperimentButton user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} />}
                     </td>

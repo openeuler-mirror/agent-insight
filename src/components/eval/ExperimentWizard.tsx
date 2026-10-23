@@ -520,6 +520,7 @@ export function ExperimentWizard({
   const [maxVisited, setMaxVisited] = useState(1);
   const [advancingTrace, setAdvancingTrace] = useState(false);
   const traceAdvanceRef = useRef(false);
+  const agentsRequestIdRef = useRef(0);
 
   // ① 实验设计
   const [name, setName] = useState(() => skillContext
@@ -707,25 +708,28 @@ export function ExperimentWizard({
   const environment = useExecutionEnvironment(user || '', environmentSelection);
   const environmentBusy = environment.busy || advancingTrace;
 
-  const refreshAgents = useCallback(async () => {
-    if (!user) return [];
+  const refreshAgents = useCallback(async (confirmPreparation = false) => {
+    if (!user || (traceAdvanceRef.current && !confirmPreparation)) return [];
+    const requestId = ++agentsRequestIdRef.current;
     const response = await apiFetch(`/api/experiments/agents?user=${encodeURIComponent(user)}`);
     if (!response.ok) throw new Error('Agent 列表刷新失败');
     const data = await response.json();
     const updated: AgentOption[] = Array.isArray(data?.agents) ? data.agents : [];
-    setAgents(updated);
+    if (agentsRequestIdRef.current === requestId) setAgents(updated);
     return updated;
   }, [user]);
 
+  useEffect(() => () => { agentsRequestIdRef.current += 1; }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      refreshAgents().catch(() => setAgents([]));
+      refreshAgents().catch(() => undefined);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [refreshAgents]);
 
   useEffect(() => {
-    if (!user || (step !== 1 && !(step === 2 && isBenchmarkDataset && traceMode === 'generate'))) return;
+    if (!user || environmentBusy || (step !== 1 && !(step === 2 && isBenchmarkDataset && traceMode === 'generate'))) return;
     const timer = window.setInterval(() => {
       refreshAgents().catch(() => undefined);
     }, 10_000);
@@ -737,7 +741,7 @@ export function ExperimentWizard({
       window.clearInterval(timer);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [refreshAgents, step, user, isBenchmarkDataset, traceMode]);
+  }, [refreshAgents, step, user, isBenchmarkDataset, traceMode, environmentBusy]);
 
   useEffect(() => {
     if (!user) return;
@@ -1157,7 +1161,7 @@ export function ExperimentWizard({
   }, [loadTraces, step, traceMode]);
 
   const goTo = (s: number) => {
-    if (environmentBusy) return;
+    if (environmentBusy || traceAdvanceRef.current) return;
     if (s > 2 && step < 3) {
       if (step !== 2 || !step2Valid) return;
       void advanceFromTrace();
@@ -1778,13 +1782,14 @@ export function ExperimentWizard({
   const advanceFromTrace = async () => {
     if (!step2Valid || environmentBusy || traceAdvanceRef.current) return;
     traceAdvanceRef.current = true;
+    agentsRequestIdRef.current += 1;
     setAdvancingTrace(true);
     try {
       if (environmentSelection) {
         setSelectedTargetKey(`${environmentSelection.clientId}::${environmentSelection.platform}`);
         if (!await environment.check()) return;
         try {
-          const updated = await refreshAgents();
+          const updated = await refreshAgents(true);
           if (!environment.isCurrent()) return;
           const target = updated.flatMap(item => item.targets).find(item => item.workerId === environmentSelection.clientId && item.platform === environmentSelection.platform && item.agent === environmentSelection.agent);
           if (!target || (isBenchmarkDataset && !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))) {
@@ -1792,7 +1797,10 @@ export function ExperimentWizard({
             return;
           }
         }
-        catch { environment.fail('运行环境已准备，但执行目标信息刷新失败，请再次点击“下一步”。'); return; }
+        catch {
+          if (environment.isCurrent()) environment.fail('运行环境已准备，但执行目标信息刷新失败，请再次点击“下一步”。');
+          return;
+        }
       }
       setStep(3);
       setMaxVisited(value => Math.max(value, 3));
@@ -1851,8 +1859,13 @@ export function ExperimentWizard({
         {/* 页头 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0 12px' }}>
           <button
+            type="button"
             style={{ ...BTN_GHOST, height: 26, padding: '0 9px', fontSize: 11.5 }}
-            onClick={() => onBack ? onBack() : router.push('/experiments')}
+            disabled={environmentBusy}
+            onClick={() => {
+              if (environmentBusy || traceAdvanceRef.current) return;
+              if (onBack) onBack(); else router.push('/experiments');
+            }}
           >
             ‹ 返回
           </button>

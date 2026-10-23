@@ -182,3 +182,49 @@ test('same-config also checks and starts over HTTP without crypto.randomUUID', a
   assert.equal(requests.length, 1)
   assert.match(requests[0], /^[A-Za-z0-9_-]{8,100}$/)
 })
+
+for (const [file, rowName] of [
+  ['src/app/(main)/experiments/page.tsx', 'r'],
+  ['src/components/skill-workbench/ExperimentPanel.tsx', 'row'],
+]) {
+  test(`${file}: checking one experiment leaves other rows available and preserves independent locks`, () => {
+    const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+    let action = ''
+    const find = (node: ts.Node) => {
+      if (ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === 'SameConfigExperimentAction') action = node.getText(source)
+      ts.forEachChild(node, find)
+    }
+    find(source)
+    assert(action)
+    const code = ts.transpileModule(`const render = (${rowName}: { id: string; status: string }) => (${action})`, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+    }).outputText
+    let locks: Record<string, boolean> = {}
+    const setLocks = (update: (current: Record<string, boolean>) => Record<string, boolean>) => { locks = update(locks) }
+    const noop = () => {}
+    const jsx = (type: string, props: Node['props']) => ({ type, props })
+    const render = (id: string) => {
+      const build = new Function('exports', 'require', 'SameConfigExperimentAction', 'DeleteExperimentButton', 'user', 'busyExperimentIds', 'setBusyExperimentIds', 'router', 'setDetailId', 'load', `${code}; return render`)(
+        {}, () => ({ jsx, jsxs: jsx }), 'SameConfigExperimentAction', 'DeleteExperimentButton', 'user', locks, setLocks, { push: noop }, noop, noop,
+      ) as (row: { id: string; status: string }) => Node
+      return build({ id, status: 'done' })
+    }
+    const controls = (id: string) => {
+      const node = render(id)
+      const children = node.props.children as Node[]
+      return [node, ...children.filter(Boolean)]
+    }
+    const setBusy = (node: Node, busy: boolean) => (node.props.onBusyChange as (value: boolean) => void)(busy)
+    const initialA = render('a')
+    const initialB = render('b')
+    setBusy(initialA, true)
+    controls('a').forEach(node => assert.equal(node.props.disabled, true))
+    controls('b').forEach(node => assert.equal(node.props.disabled, false))
+    setBusy(initialB, true)
+    setBusy(initialA, false)
+    controls('a').forEach(node => assert.equal(node.props.disabled, false))
+    controls('b').forEach(node => assert.equal(node.props.disabled, true))
+    setBusy(initialB, false)
+    controls('b').forEach(node => assert.equal(node.props.disabled, false))
+  })
+}

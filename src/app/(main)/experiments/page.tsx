@@ -113,7 +113,7 @@ export default function ExperimentsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
-  const [actionId, setActionId] = useState('');
+  const [busyExperimentIds, setBusyExperimentIds] = useState<Record<string, boolean>>({});
   const loadSequence = useRef(0);
 
   const load = useCallback(async (silent = false) => {
@@ -270,17 +270,17 @@ export default function ExperimentsPage() {
                       <SameConfigExperimentAction
                         user={user || ''}
                         sourceExperimentId={r.id}
-                        disabled={Boolean(actionId)}
-                        onBusyChange={(busy) => setActionId(busy ? r.id : '')}
+                        disabled={Boolean(busyExperimentIds[r.id])}
+                        onBusyChange={(busy) => setBusyExperimentIds(current => ({ ...current, [r.id]: busy }))}
                         onStarted={(id) => router.push(`/experiments/${id}`)}
                       >
                         <button
                           type="button"
-                          disabled={Boolean(actionId)}
+                          disabled={Boolean(busyExperimentIds[r.id])}
                           onClick={() => router.push(`/experiments/new?reuseFrom=${encodeURIComponent(r.id)}`)}
-                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
+                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: busyExperimentIds[r.id] ? 'not-allowed' : 'pointer' }}
                         >复用评测配置</button>
-                        {user && <DeleteExperimentButton disabled={Boolean(actionId)} user={user} experimentId={r.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(r.status)} onDeleted={() => load(true)} />}
+                        {user && <DeleteExperimentButton disabled={Boolean(busyExperimentIds[r.id])} user={user} experimentId={r.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(r.status)} onDeleted={() => load(true)} />}
                       </SameConfigExperimentAction>
                     </td>
                   </tr>

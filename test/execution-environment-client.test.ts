@@ -102,22 +102,41 @@ test('late results cannot advance a changed selection or overwrite its saved tas
 })
 
 const wizard = ts.createSourceFile('wizard.tsx', fs.readFileSync('src/components/eval/ExperimentWizard.tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
-let advanceCode = ''
-function visit(node: ts.Node) { if (ts.isVariableDeclaration(node) && node.name.getText(wizard) === 'advanceFromTrace') advanceCode = node.initializer!.getText(wizard); ts.forEachChild(node, visit) }
+const wizardFunctions: Record<string, string> = {}
+let backClickCode = ''
+let backDisabledCode = ''
+function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && ['advanceFromTrace', 'refreshAgents', 'goTo'].includes(node.name.getText(wizard))) {
+    const initializer = node.initializer!
+    wizardFunctions[node.name.getText(wizard)] = (ts.isCallExpression(initializer) ? initializer.arguments[0] : initializer).getText(wizard)
+  }
+  if (ts.isJsxElement(node) && node.openingElement.tagName.getText(wizard) === 'button' && node.children.some(child => ts.isJsxText(child) && child.text.includes('‹ 返回'))) {
+    for (const property of node.openingElement.attributes.properties) {
+      if (!ts.isJsxAttribute(property) || !property.initializer || !ts.isJsxExpression(property.initializer)) continue
+      if (property.name.getText(wizard) === 'onClick') backClickCode = property.initializer.expression!.getText(wizard)
+      if (property.name.getText(wizard) === 'disabled') backDisabledCode = property.initializer.expression!.getText(wizard)
+    }
+  }
+  ts.forEachChild(node, visit)
+}
 visit(wizard)
-function advanceHarness(targets: unknown[], current = true, requiresExecution = true) {
+function advanceHarness(targets: unknown[], current = true, requiresExecution = true, overrides: { check?: () => Promise<boolean>; refresh?: () => Promise<unknown[]> } = {}) {
   const steps: number[] = []
   const keys: string[] = []
   const errors: string[] = []
-  const deps = { step2Valid: true, environmentBusy: false, traceAdvanceRef: { current: false }, setAdvancingTrace: () => {},
+  const routes: string[] = []
+  const locks: boolean[] = []
+  const deps = { step2Valid: true, environmentBusy: false, traceAdvanceRef: { current: false }, agentsRequestIdRef: { current: 0 }, setAdvancingTrace: (value: boolean) => locks.push(value),
     environmentSelection: requiresExecution ? selection : null, setSelectedTargetKey: (key: string) => keys.push(key),
-    environment: { check: async () => true, isCurrent: () => current, fail: (message: string) => errors.push(message) },
-    refreshAgents: async () => [{ targets }], isBenchmarkDataset: false, selectedDataset: null,
+    environment: { check: overrides.check || (async () => true), isCurrent: () => current, fail: (message: string) => errors.push(message) },
+    refreshAgents: overrides.refresh || (async () => [{ targets }]), isBenchmarkDataset: false, selectedDataset: null,
+    router: { push: (path: string) => routes.push(path), replace: (path: string) => routes.push(path), refresh: () => routes.push('refresh') },
+    onBack: () => routes.push('back'),
     setStep: (step: number) => steps.push(step), setMaxVisited: () => {},
   }
-  const code = ts.transpileModule(`const advance = ${advanceCode}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const code = ts.transpileModule(`const advance = ${wizardFunctions.advanceFromTrace}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const advance = new Function(...Object.keys(deps), `${code}; return advance`)(...Object.values(deps)) as () => Promise<void>
-  return { advance, steps, keys, errors }
+  return { advance, steps, keys, errors, routes, locks, deps }
 }
 
 test('post-check target refresh keeps the checked host and rejects disappearing or stale targets', async () => {
@@ -155,4 +174,102 @@ test('HTTP browsers without randomUUID can submit, retry and recover environment
   restored.storage.set('experiment-environment:user', JSON.stringify({ key: JSON.stringify(selection), taskId: 'old-ready', requestId: 'old-request' }))
   assert.equal(await restored.render().check(), true)
   assert.deepEqual(methods, ['GET', 'POST'])
+})
+
+
+function evaluate<T>(expression: string, dependencies: Record<string, unknown>): T {
+  const code = ts.transpileModule(`const evaluated = ${expression}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  return new Function(...Object.keys(dependencies), `${code}; return evaluated`)(...Object.values(dependencies)) as T
+}
+
+test('preparation and target refresh advance only once to step 3 without list navigation or page refresh', async () => {
+  let finishCheck!: (ready: boolean) => void
+  let finishRefresh!: (targets: unknown[]) => void
+  const target = { workerId: selection.clientId, platform: selection.platform, agent: selection.agent }
+  const view = advanceHarness([], true, true, {
+    check: () => new Promise(resolve => { finishCheck = resolve }),
+    refresh: () => new Promise(resolve => { finishRefresh = resolve }),
+  })
+  const pending = view.advance()
+  await view.advance()
+  assert.deepEqual(view.steps, [])
+  assert.equal(view.deps.traceAdvanceRef.current, true)
+  assert.deepEqual(view.locks, [true])
+  finishCheck(true)
+  await Promise.resolve()
+  assert.deepEqual(view.steps, [])
+  assert.equal(view.deps.traceAdvanceRef.current, true)
+  finishRefresh([{ targets: [target] }])
+  await pending
+  assert.deepEqual(view.steps, [3])
+  assert.deepEqual(view.routes, [])
+  assert.deepEqual(view.locks, [true, false])
+  assert.equal(view.deps.traceAdvanceRef.current, false)
+})
+
+test('manual action, refresh failure or leaving during refresh cannot navigate away from the wizard', async () => {
+  const manual = advanceHarness([], true, true, { check: async () => false })
+  await manual.advance()
+  assert.deepEqual(manual.steps, [])
+  assert.deepEqual(manual.routes, [])
+  const failed = advanceHarness([], true, true, { refresh: async () => { throw new Error('offline') } })
+  await failed.advance()
+  assert.deepEqual(failed.steps, [])
+  assert.deepEqual(failed.routes, [])
+  assert.match(failed.errors[0], /刷新失败/)
+  const left = advanceHarness([], false, true, { refresh: async () => { throw new Error('offline') } })
+  await left.advance()
+  assert.deepEqual(left.steps, [])
+  assert.deepEqual(left.routes, [])
+  assert.deepEqual(left.errors, [])
+})
+
+test('late host refreshes cannot overwrite a newer result or mutate state after invalidation', async () => {
+  const responses: Array<(response: Response) => void> = []
+  const snapshots: unknown[][] = []
+  const sequence = { current: 0 }
+  const preparation = { current: false }
+  const refresh = evaluate<(confirmPreparation?: boolean) => Promise<unknown[]>>(wizardFunctions.refreshAgents, {
+    user: 'user', agentsRequestIdRef: sequence, traceAdvanceRef: preparation, apiFetch: () => new Promise(resolve => responses.push(resolve)),
+    setAgents: (value: unknown[]) => snapshots.push(value),
+  })
+  const old = refresh()
+  const ready = refresh()
+  responses[1](new Response(JSON.stringify({ agents: [{ name: 'ready-host' }] })))
+  await ready
+  responses[0](new Response(JSON.stringify({ agents: [{ name: 'old-host' }] })))
+  await old
+  assert.deepEqual(snapshots, [[{ name: 'ready-host' }]])
+  const unmounted = refresh()
+  sequence.current += 1
+  responses[2](new Response(JSON.stringify({ agents: [] })))
+  await unmounted
+  assert.equal(snapshots.length, 1)
+  preparation.current = true
+  assert.deepEqual(await refresh(), [])
+  assert.equal(responses.length, 3)
+  const confirmation = refresh(true)
+  responses[3](new Response(JSON.stringify({ agents: [{ name: 'confirmed-host' }] })))
+  await confirmation
+  assert.deepEqual(snapshots[1], [{ name: 'confirmed-host' }])
+})
+
+test('header back and step navigation stay locked until preparation and target refresh finish', () => {
+  const routes: string[] = []
+  const steps: number[] = []
+  const traceAdvanceRef = { current: true }
+  const dependencies = { environmentBusy: false, traceAdvanceRef, onBack: undefined,
+    router: { push: (path: string) => routes.push(path) }, step: 2, step2Valid: true,
+    advanceFromTrace: () => assert.fail('unexpected preparation'), setStep: (step: number) => steps.push(step), setMaxVisited: () => {},
+  }
+  const back = evaluate<() => void>(backClickCode, dependencies)
+  const goTo = evaluate<(step: number) => void>(wizardFunctions.goTo, dependencies)
+  back(); goTo(1)
+  assert.deepEqual(routes, [])
+  assert.deepEqual(steps, [])
+  assert.equal(evaluate(backDisabledCode, { environmentBusy: true }), true)
+  traceAdvanceRef.current = false
+  back(); goTo(1)
+  assert.deepEqual(routes, ['/experiments'])
+  assert.deepEqual(steps, [1])
 })
