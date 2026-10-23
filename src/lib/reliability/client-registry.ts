@@ -351,6 +351,35 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
   }
 }
 
+export function mergeCapabilities(current: ClientCapabilities, patch: ClientCapabilities): ClientCapabilities {
+  const platforms = new Map(current.platforms.map(item => [item.id, item]))
+  for (const item of patch.platforms) {
+    const previous = platforms.get(item.id)
+    platforms.set(item.id, {
+      ...previous, ...item,
+      agents: [...new Set([...(previous?.agents || []), ...(item.agents || [])])],
+      models: [...new Set([...(previous?.models || []), ...(item.models || [])])],
+    })
+  }
+  const profiles = new Map(current.executionProfiles?.map(item => [item.profile.key, item]))
+  for (const item of patch.executionProfiles || []) {
+    const previous = profiles.get(item.profile.key)
+    const sameDefinition = previous?.profile.definitionDigest === item.profile.definitionDigest
+    const readiness = Object.fromEntries(item.profile.targets.map(target => [target.platform,
+      item.targetReadiness?.[target.platform] || (sameDefinition ? previous?.targetReadiness?.[target.platform] : undefined)
+      || { ready: false, note: '该 Agent 的执行环境尚未检查' },
+    ]))
+    const notes = Object.values(readiness).filter(value => !value.ready).map(value => value.note).filter(Boolean)
+    profiles.set(item.profile.key, { ...item, targetReadiness: readiness, ready: Object.values(readiness).every(value => value.ready), note: notes.join('；') || undefined })
+  }
+  return normalizeCapabilities({
+    ...current, platforms: [...platforms.values()], executionProfiles: [...profiles.values()],
+    actions: [...new Set([...(current.actions || []), ...(patch.actions || [])])],
+    components: { ...current.components, ...patch.components },
+    faultInjection: patch.faultInjection || current.faultInjection,
+  })
+}
+
 export async function recordHeartbeat(input: {
   clientId: string
   agentVersion?: string | null
@@ -401,32 +430,39 @@ export async function updateCapabilities(input: {
   os?: string | null
   arch?: string | null
   capabilities: ClientCapabilities
+  partial?: boolean
 }): Promise<{ acceptedRevision: string | null }> {
-  const existing = await prisma.reliabilityClient.findUnique({
-    where: { clientId: input.clientId },
-  })
-  if (!existing) {
-    throw new ReliabilityError('CLIENT_NOT_FOUND', '客户端不存在', 404)
-  }
-  // Same revision replayed is a no-op, not an error (IF-N15 idempotency).
-  if (input.revision && existing.capabilitiesRevision === input.revision) {
-    return { acceptedRevision: input.revision }
-  }
-  await prisma.reliabilityClient.update({
-    where: { clientId: input.clientId },
-    data: {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const existing = await prisma.reliabilityClient.findUnique({
+      where: { clientId: input.clientId },
+    })
+    if (!existing) {
+      throw new ReliabilityError('CLIENT_NOT_FOUND', '客户端不存在', 404)
+    }
+    // Same revision replayed is a no-op, not an error (IF-N15 idempotency).
+    if (input.revision && existing.capabilitiesRevision === input.revision) {
+      return { acceptedRevision: input.revision }
+    }
+    const data = {
       hostname: input.hostname || undefined,
       reportedIp: input.reportedIp || undefined,
       // observedIp 由服务端从连接源地址推导，不接受请求体覆盖。
       observedIp: input.observedIp || undefined,
       os: input.os || undefined,
       arch: input.arch || undefined,
-      capabilitiesJson: JSON.stringify(normalizeCapabilities(input.capabilities)),
+      capabilitiesJson: JSON.stringify(input.partial ? mergeCapabilities(parseCapabilities(existing.capabilitiesJson), input.capabilities) : normalizeCapabilities(input.capabilities)),
       capabilitiesRevision: input.revision || null,
       lastSeenAt: new Date(),
-    },
-  })
-  return { acceptedRevision: input.revision || null }
+    }
+    if (input.partial) {
+      const changed = await prisma.reliabilityClient.updateMany({
+        where: { clientId: input.clientId, capabilitiesJson: existing.capabilitiesJson, capabilitiesRevision: existing.capabilitiesRevision }, data,
+      })
+      if (!changed.count) continue
+    } else await prisma.reliabilityClient.update({ where: { clientId: input.clientId }, data })
+    return { acceptedRevision: input.revision || null }
+  }
+  throw new ReliabilityError('CAPABILITIES_UPDATE_CONFLICT', '客户端能力正在更新，请重试', 409)
 }
 
 export function parseCapabilities(json: string | null | undefined): ClientCapabilities {

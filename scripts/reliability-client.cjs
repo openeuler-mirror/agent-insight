@@ -1314,12 +1314,12 @@ async function executeAction(cfg, frame, sendStatus) {
         report: progress => sendStatus('RUNNING', { result: progress }) })
       if (result.state === 'ready') {
         Object.assign(cfg, loadConfig())
-        clearEnvironmentProbeCache()
-        await refreshCapabilityReports(cfg, { force: true })
+        try { await reportEnvironmentCapabilities(cfg, result) }
+        catch (cause) { logErr('environment capability report deferred until reconnect', cause.message); return }
       }
-      await sendStatus(result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result,
+      const reported = await sendStatus(result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result,
         ...(result.state === 'failed' ? { error: { code: result.issues[0]?.code, message: result.issues[0]?.message } } : {}) })
-      await markPreparationReported(CLIENT_HOME, payload.contextDigest, frame.commandId)
+      if (reported !== false) await markPreparationReported(CLIENT_HOME, payload.contextDigest, frame.commandId)
     } catch {
       await sendStatus('FAILED', { error: { code: 'ENVIRONMENT_PREPARATION_FAILED', message: '运行环境准备中断或超时，请检查执行机后再次点击“下一步”。' } })
     }
@@ -2284,6 +2284,31 @@ async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
 let lastCapabilityFingerprint = null
 let capabilityRefreshInFlight = null
 
+async function reportEnvironmentCapabilities(cfg, result) {
+  const capabilities = result.capabilities
+  if (capabilities) {
+    capabilitiesRevision += 1
+    await api(cfg, 'PUT', '/api/reliability/client/v1/capabilities', {
+      revision: `cap_${REVISION_EPOCH}_${capabilitiesRevision}`, partial: true, ...capabilities,
+    })
+    const ready = benchmarkAgentPlatformsFromCapabilities(capabilities)
+    benchmarkExecutor?.setAgentPlatforms([...new Set([...benchmarkExecutor.agentPlatforms, ...ready])])
+  }
+  if (result.fiInventory) {
+    const platforms = { ...cachedProbe?.platforms }
+    const mergeRows = (left, right) => [...new Map([...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])].map(item => [typeof item === 'string' ? item : item?.id || item?.name, item])).values()]
+    for (const [key, platform] of Object.entries(result.fiInventory.platforms)) {
+      const previous = platforms[key]
+      platforms[key] = { ...previous, ...platform, agents: mergeRows(previous?.agents, platform.agents), models: mergeRows(previous?.models, platform.models) }
+    }
+    cacheSuccessfulProbe({ ready: true, platforms })
+    await api(cfg, 'POST', '/api/fault-injection/worker/heartbeat', {
+      workerId: cfg.clientId, hostname: os.hostname(), version: AGENT_VERSION,
+      partial: true, inventory: result.fiInventory, busySlots: fiBusy,
+    })
+  }
+}
+
 function syncBenchmarkExecutorCapabilities(executor, capabilities) {
   const platforms = benchmarkAgentPlatformsFromCapabilities(capabilities)
   executor?.setAgentPlatforms(platforms)
@@ -2429,15 +2454,26 @@ async function flushSpool(cfg) {
 
 // ---------------------------------------------------------------- main loop
 
+let environmentRecoveryInFlight = null
 function recoverEnvironmentTasks(cfg) {
-  return require(path.join(path.dirname(executionRuntimePath()), 'environment/task-runner.cjs')).recoverPreparations(CLIENT_HOME, async (commandId, result) => {
+  if (environmentRecoveryInFlight) return environmentRecoveryInFlight
+  const runtime = require(path.join(path.dirname(executionRuntimePath()), 'environment/task-runner.cjs'))
+  environmentRecoveryInFlight = runtime.recoverPreparations(CLIENT_HOME, async (commandId, result) => {
     if (result.state === 'ready') {
       Object.assign(cfg, loadConfig())
-      clearEnvironmentProbeCache()
-      await refreshCapabilityReports(cfg, { force: true })
+      await reportEnvironmentCapabilities(cfg, result)
     }
-    await sendCommandStatus(cfg, commandId, result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result })
-  })
+    try { await sendCommandStatus(cfg, commandId, result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result }, { spool: false }) }
+    catch (cause) { if (![404, 410].includes(cause.status)) throw cause }
+  }, { isActive: commandId => executingCommands.has(commandId), recheck: saved => {
+    Object.assign(cfg, loadConfig())
+    return runtime.executePreparation({ commandId: saved.taskId, createdAt: new Date().toISOString(), expiresAt: new Date(Math.min(Date.parse(saved.expiresAt), Date.now() + 120000)).toISOString(),
+      payload: { context: saved.context, contextDigest: saved.contextDigest } }, {
+      cfg, baseDir: CLIENT_HOME, report: async () => {},
+      worker: (context, config, signal, report, lease) => runtime.runWorker(context, config, signal, report, { ...lease, checkOnly: true }),
+    })
+  } }).finally(() => { environmentRecoveryInFlight = null })
+  return environmentRecoveryInFlight
 }
 
 async function main() {
@@ -2509,6 +2545,7 @@ async function main() {
 
   setInterval(() => {
     flushSpool(cfg).catch(() => {})
+    recoverEnvironmentTasks(cfg).catch(error => logErr('environment task recovery failed', error.message))
   }, 15_000)
 
   // 能力探测可能 spawn opencode / FI inventory，耗时长；不得阻塞 systemd 就绪与喂狗。
@@ -2530,7 +2567,7 @@ async function main() {
   pollLoop(cfg)
 }
 
-async function sendCommandStatus(cfg, commandId, status, extra = {}) {
+async function sendCommandStatus(cfg, commandId, status, extra = {}, { spool = true } = {}) {
   const body = {
     type: 'COMMAND_STATUS',
     commandId,
@@ -2541,7 +2578,7 @@ async function sendCommandStatus(cfg, commandId, status, extra = {}) {
   try {
     await api(cfg, 'POST', `/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`, body)
   } catch (err) {
-    if (err.status !== 404 && err.status !== 410) spoolReceipt({ commandId, body })
+    if (spool && err.status !== 404 && err.status !== 410) spoolReceipt({ commandId, body })
     throw err
   }
 }
@@ -2561,9 +2598,12 @@ async function handleCommand(cfg, frame, sendVia) {
 
   const sendStatus = async (status, extra) => {
     try {
-      await sendVia(frame.commandId, status, extra)
+      if (frame.action === 'PREPARE_EXECUTION_ENVIRONMENT' && ['SUCCEEDED', 'FAILED'].includes(status)) await sendCommandStatus(cfg, frame.commandId, status, extra, { spool: false })
+      else await sendVia(frame.commandId, status, extra)
+      return true
     } catch (err) {
       logErr(`status ${status} failed for ${frame.commandId}:`, err.message)
+      return false
     }
   }
 
@@ -2772,6 +2812,7 @@ module.exports = {
   clearEnvironmentProbeCache,
   loadConfig,
   executeAction,
+  handleCommand,
   buildAgentProcessLaunch,
   controlUrls,
   rasRuntimeConfigPath,
@@ -2794,6 +2835,8 @@ module.exports = {
   parseOpencodeSlashCommand,
   capabilityDiscoveryFingerprint,
   refreshCapabilityReports,
+  reportEnvironmentCapabilities,
+  recoverEnvironmentTasks,
   normalizeModelIds,
   extractTraceIdFromJsonLine,
   extractStructuredAgentError,

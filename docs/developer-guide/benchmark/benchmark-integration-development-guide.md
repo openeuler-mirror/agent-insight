@@ -287,6 +287,8 @@ async function prepareEnvironment(context, services, reportProgress) { /* ... */
 
 检查必须只读，不能在检查方法中下载、编译或安装。准备方法应能重复调用并复用已满足的环境，通过公共服务复用安装锁与版本校验；只准备当前数据集和所选 Agent 需要的组件，不因其他 Runtime 缺少组件阻断本次实验。无需自动安装的接入也应导出准备方法，此方法不会在 `prepare: []` 时调用。
 
+普通检查和任务恢复均不调用或等待 `refreshCapabilityReports` 全量扫描。公共环境服务复用本轮已验证事实，增量上报所选平台与相关 Profile；可靠性检查只读取所选 Agent 的 FI 适配及数据集需要的故障定义，不枚举其他平台或完整模型目录。Profile 身份变化时，未检查 Runtime 不沿用旧身份下的就绪状态。客户端启动、定时和手动全量刷新保留独立运行。
+
 下面以 SWE-bench 的现有接入为例，按实际执行绑定选择检查方式：
 
 ```js
@@ -319,6 +321,8 @@ module.exports = { checkEnvironment, prepareEnvironment }
 只有进入实际耗时动作才报告耗时提示，不能因为选择了某个数据集或后端就预先报告。通用执行器负责 `checking → preparing → checking → ready / needs_action / failed` 的任务状态，接入模块不得跳过复查直接报告就绪。
 
 前端在实验向导第二步 Trace 来源点击“下一步”时触发检查。已满足时直接进入下一步；自动准备时只在底部按钮上方提示并锁定配置；需人工处理时在同处提示，用户配置后再次点击“下一步”重新检查。切换配置后使用新上下文，旧检查结果不复用。仅使用已有 Trace、无需运行 Agent 的流程跳过此环节。
+
+恢复尚未完成的任务时先查询其状态；缓存任务已结束则重新检查当前组合。任务不存在、过期或上下文冲突时清除失效引用，下一次点击可提交新请求；网络状态不明时保留请求标识保证重试幂等。检查结束刷新候选列表后，必须仍使用刚检查的主机与 Agent，不能自动切换到列表第一项并放行。ACK 使用原有短期限，不能等待整个安装期限；数据集版本或主机健康变化后，旧就绪结果失效。
 
 #### 分发与阶段边界
 
@@ -501,7 +505,7 @@ curl 安装所选 Pi/xiaoO 时，`install-ras-client.js` 仅通过 `saveSetupCon
 | 凭据桥接版本 | `native-credentials-build.cjs` 的 `BRIDGE_VERSION: 1`，状态中对应 `components.xiaooCredentials.version` |
 | 工具链目录 | `dependencies/xgovernor/toolchain/`，不修改用户 shell 配置 |
 
-安装器注册并启动客户端；耗时构建推迟到实验环境准备阶段，不占用一次性安装令牌的有效期。`setup.lock` 防止重复准备工具链，`update.lock` 保护更新、回退与版本回收；失败写入 `setup.json` 并报告未就绪，客户端仍可在线。`setup.json` 仅保存 Runtime、原配置路径与状态，不保存模型凭据。MCTS 使用自己的检查流程，不接管同机 MCTS 的服务、配置或仓库。
+安装器注册并启动客户端；耗时构建推迟到实验环境准备阶段，不占用一次性安装令牌的有效期。`setup.lock` 防止重复准备工具链，`update.lock` 保护更新、回退与版本回收；实验准备通过锁的 PID 核对进程，确认已退出后清理遗留锁，存活时等待并在获得锁后重新验证兼容安装，避免重复编译。失败保留工具链、构建或 Docker 阶段及安全错误分类，写入 `setup.json` 并报告未就绪，客户端仍可在线。`setup.json` 仅保存 Runtime、原配置路径与状态，不保存模型凭据。MCTS 使用自己的检查流程，不接管同机 MCTS 的服务、配置或仓库。
 
 客户端安装目录默认由 `AGENT_INSIGHT_HOME` 定位，以下命令只管理原生执行端的 xGovernor：
 

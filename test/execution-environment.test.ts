@@ -7,7 +7,7 @@ import path from 'node:path'
 import { PROTOCOL, contextDigest, preparationMessage, validateContext, type EnvironmentContext } from '../packages/benchmark-protocol/environment.cjs'
 
 const require = createRequire(import.meta.url)
-const { prepareEnvironment, loadEnvironmentAdapter } = require('../services/executor/src/environment/registry.cjs')
+const { prepareEnvironment, checkEnvironment, loadEnvironmentAdapter } = require('../services/executor/src/environment/registry.cjs')
 const { executePreparation, recoverPreparations } = require('../services/executor/src/environment/task-runner.cjs')
 const { checkBuildTools } = require('../services/executor/src/xgovernor/toolchain.cjs')
 const base: EnvironmentContext = { protocol: PROTOCOL, clientId: 'client-1', dataset: { id: 'dataset-1', adapterKey: 'swe-bench', revision: 'v1', caseIds: ['case-1'], faultTypes: [] }, platform: 'pi-agent', agent: 'pi-agent', model: 'provider/model', experiment: { mode: 'generate', timeoutSeconds: 600, concurrency: 1 } }
@@ -118,4 +118,22 @@ test('real worker returns manual-action results and recovery replays facts witho
     if (previous === undefined) delete process.env.AGENT_INSIGHT_HOME; else process.env.AGENT_INSIGHT_HOME = previous
     await fs.rm(root, { recursive: true, force: true })
   }
+})
+
+test('recovery rechecks current facts without automatic installation or replaying stale readiness', async () => {
+  const adapter = { checkEnvironment: async () => ({ issues: [], prepare: ['sandbox'] }), prepareEnvironment: async () => assert.fail('recovery must not install') }
+  assert.equal((await checkEnvironment(base, {}, async () => {}, () => adapter)).state, 'needs_action')
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'environment-recheck-'))
+  try {
+    const records = path.join(root, 'environment-preparations')
+    await fs.mkdir(records)
+    const file = path.join(records, `${'b'.repeat(64)}.json`)
+    await fs.writeFile(file, JSON.stringify({ taskId: 'recheck', context: base, expiresAt: new Date(Date.now() + 60000).toISOString(), result: { state: 'ready', issues: [] } }))
+    const received: string[] = []
+    await recoverPreparations(root, async (_id: string, result: { state: string }) => { received.push(result.state) }, {
+      recheck: async () => ({ state: 'needs_action', issues: [{ code: 'MODEL_CREDENTIAL_MISSING', message: '配置已变化' }] }),
+    })
+    assert.deepEqual(received, ['needs_action'])
+    assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).reported, true)
+  } finally { await fs.rm(root, { recursive: true, force: true }) }
 })

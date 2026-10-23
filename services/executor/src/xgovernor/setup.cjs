@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const os = require('node:os')
+const { setTimeout: delay } = require('node:timers/promises')
 const { DependencyManager, atomicJson, command } = require('./dependency-manager.cjs')
 const { installationRoot } = require('./installation.cjs')
 const { ensureBuildTools, toolchainEnvironment } = require('./toolchain.cjs')
@@ -44,6 +45,7 @@ async function installUnlocked(options = {}) {
   await atomicJson(path.join(root, 'setup.json'), state)
   const run = options.command || command
   const manager = options.manager || new DependencyManager({ root, target, log, env: toolchainEnvironment(root, env) })
+  let stage = 'platform'
   try {
     if (target.platform !== 'linux' || !['x64', 'arm64'].includes(target.arch)) throw new Error('本地 Docker 执行仅支持 Linux x64/arm64；普通 Agent 采集仍可使用')
     let installed
@@ -52,10 +54,13 @@ async function installUnlocked(options = {}) {
     else {
       await options.onBuild?.({ firstInstall: !fs.existsSync(path.join(root, 'current.json')) })
       log('[xgovernor] 准备源码编译依赖；仅维护客户端独立目录，不操作 MCTS')
+      stage = 'toolchain'
       await (options.ensureBuildTools || ensureBuildTools)({ root, env, target, command: run, log, autoInstallSystem: options.autoInstallSystem })
       manager.env = toolchainEnvironment(root, env)
+      stage = 'build'
       await manager.update(COMPATIBLE_REVISION)
     }
+    stage = 'docker'
     const dockerConfig = options.dockerConfig || require('../project-config.cjs').loadProjectConfig('executor').execution.profiles['xgovernor-local-docker']
     const docker = await run(dockerConfig.dockerExecutable, ['--host', `unix://${dockerConfig.dockerSocket}`, 'info', '--format', '{{.OSType}} {{.CgroupVersion}}'], { env, timeoutMs: 10000 })
     if (docker.trim() !== 'linux 2') throw new Error('Docker 需要 Linux 和 cgroup v2；请由管理员调整宿主机后重新执行安装命令')
@@ -66,7 +71,7 @@ async function installUnlocked(options = {}) {
     const note = cause.message
     await atomicJson(path.join(root, 'setup.json'), { ...state, ready: false, note })
     log(`[xgovernor] Benchmark 未就绪：${note}。客户端保持在线；处理后重跑同一 curl 命令。`)
-    return { ready: false, note }
+    return { ready: false, note, stage, code: cause.code }
   }
 }
 async function installSelectedBackend(options = {}) {
@@ -76,12 +81,16 @@ async function installSelectedBackend(options = {}) {
   await fsp.mkdir(root, { recursive: true, mode: 0o700 })
   const lock = path.join(root, 'setup.lock')
   let descriptor
-  try { descriptor = await fsp.open(lock, 'wx', 0o600) } catch (cause) {
-    if (cause.code !== 'EEXIST') throw cause
-    const note = '另一安装进程正在准备 xGovernor；待其结束后重试。异常终止遗留锁需确认进程退出后清理'
-    const log = options.log || console.log
-    log(note)
-    return { ready: false, note }
+  while (!descriptor) {
+    if (options.waitForLock) await waitForSetupLocks(root, options)
+    try { descriptor = await fsp.open(lock, 'wx', 0o600) } catch (cause) {
+      if (cause.code !== 'EEXIST') throw cause
+      if (options.waitForLock) continue
+      const note = '另一安装进程正在准备 xGovernor；待其结束后重试。异常终止遗留锁需确认进程退出后清理'
+      const log = options.log || console.log
+      log(note)
+      return { ready: false, note }
+    }
   }
   const controller = new AbortController()
   const externalCancel = () => controller.abort(options.signal.reason)
@@ -98,6 +107,29 @@ async function installSelectedBackend(options = {}) {
     process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel)
     options.signal?.removeEventListener('abort', externalCancel)
     await descriptor.close(); await fsp.rm(lock, { force: true })
+  }
+}
+async function waitForSetupLocks(root, options) {
+  for (;;) {
+    options.signal?.throwIfAborted()
+    let waiting = false
+    for (const name of ['setup.lock', 'update.lock']) {
+      const file = path.join(root, name)
+      try {
+        const info = await fsp.stat(file)
+        const pid = Number(await fsp.readFile(file, 'utf8'))
+        let dead = false
+        if (Number.isSafeInteger(pid) && pid > 0) {
+          try { process.kill(pid, 0) } catch (cause) { dead = cause.code === 'ESRCH' }
+        }
+        const latest = await fsp.stat(file)
+        if (dead && latest.ino === info.ino && latest.mtimeMs === info.mtimeMs) await fsp.unlink(file)
+        else waiting = true
+      } catch (cause) { if (cause.code !== 'ENOENT') throw cause }
+    }
+    if (!waiting) return
+    await options.reportProgress?.({ state: 'preparing' })
+    await delay(250, undefined, { signal: options.signal })
   }
 }
 module.exports = { COMPATIBLE_REVISION, selectedFrameworks, readSetup, saveSetupContext, installSelectedBackend }

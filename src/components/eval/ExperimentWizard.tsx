@@ -708,11 +708,13 @@ export function ExperimentWizard({
   const environmentBusy = environment.busy || advancingTrace;
 
   const refreshAgents = useCallback(async () => {
-    if (!user) return;
+    if (!user) return [];
     const response = await apiFetch(`/api/experiments/agents?user=${encodeURIComponent(user)}`);
     if (!response.ok) throw new Error('Agent 列表刷新失败');
     const data = await response.json();
-    setAgents(Array.isArray(data?.agents) ? data.agents : []);
+    const updated: AgentOption[] = Array.isArray(data?.agents) ? data.agents : [];
+    setAgents(updated);
+    return updated;
   }, [user]);
 
   useEffect(() => {
@@ -1779,8 +1781,17 @@ export function ExperimentWizard({
     setAdvancingTrace(true);
     try {
       if (environmentSelection) {
+        setSelectedTargetKey(`${environmentSelection.clientId}::${environmentSelection.platform}`);
         if (!await environment.check()) return;
-        try { await refreshAgents(); }
+        try {
+          const updated = await refreshAgents();
+          if (!environment.isCurrent()) return;
+          const target = updated.flatMap(item => item.targets).find(item => item.workerId === environmentSelection.clientId && item.platform === environmentSelection.platform && item.agent === environmentSelection.agent);
+          if (!target || (isBenchmarkDataset && !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))) {
+            environment.fail('刚检查的执行目标已变化或不再就绪，请确认主机与 Agent 后再次点击“下一步”。');
+            return;
+          }
+        }
         catch { environment.fail('运行环境已准备，但执行目标信息刷新失败，请再次点击“下一步”。'); return; }
       }
       setStep(3);

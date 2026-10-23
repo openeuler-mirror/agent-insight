@@ -32,6 +32,10 @@
 
 任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
 
+检查和重启恢复不触发全量能力扫描。执行端复用本轮已验证事实，通过现有 `PUT /api/reliability/client/v1/capabilities` 的 `partial: true` 增量同步平台、组件和最终执行 Profile；服务端合并更新，保留其他 Agent、模型与组件。Profile 摘要改变时，未检查 Runtime 的旧就绪状态失效。可靠性数据集额外通过现有 Worker heartbeat 的 `partial: true` 合并所选平台 inventory，不枚举其他 Agent 或模型目录；普通全量上报语义不变。增量同步成功后才回报环境 `ready`，避免后续实验冻结安装前的身份。
+
+环境终态通过 HTTP 确认，未确认结果由环境任务记录负责恢复，不能用通用回执队列直接回放过时的 `ready`。恢复前按原上下文只读复查，过期或缺少上下文则要求重新检查。指令回执通过带状态条件的原子更新防止晚到 ACK/进度覆盖已完成结果；查询就绪结果时再次核对数据集身份和主机健康。
+
 ### 模型连接测试
 
 - `ModelConfig.testTimeoutMs?: number` 存于现有用户设置 JSON；缺省为 `60000`，范围 `10000～300000` 整数毫秒。保存设置和测试接口均校验，非法值返回 `400`；无需 Prisma schema 迁移。该字段不改变评测、生成或优化的业务超时。

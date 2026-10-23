@@ -84,9 +84,9 @@ async function executePreparation(frame, { cfg, baseDir, report, worker = runWor
       }
     }
     if (waited) await report({ state: 'checking' })
-    await atomicJson(record, { taskId: frame.commandId, contextDigest: frame.payload.contextDigest, expiresAt: frame.expiresAt, startedAt: Date.now() })
+    await atomicJson(record, { taskId: frame.commandId, contextDigest: frame.payload.contextDigest, context, expiresAt: frame.expiresAt, startedAt: Date.now() })
     const result = await worker(context, cfg, controller.signal, report, { record, lock, owner, taskId: frame.commandId, contextDigest: frame.payload.contextDigest, expiresAt: frame.expiresAt })
-    await atomicJson(record, { taskId: frame.commandId, contextDigest: frame.payload.contextDigest, completedAt: Date.now(), result })
+    await atomicJson(record, { taskId: frame.commandId, contextDigest: frame.payload.contextDigest, context, expiresAt: frame.expiresAt, completedAt: Date.now(), result })
     return result
   } finally {
     clearTimeout(timer)
@@ -105,12 +105,12 @@ async function markPreparationReported(baseDir, digest, taskId) {
   const saved = JSON.parse(await fs.readFile(file, 'utf8').catch(() => '{}'))
   if (saved.taskId === taskId && saved.result) await atomicJson(file, { ...saved, reported: true })
 }
-async function recoverPreparations(baseDir, report) {
+async function recoverPreparations(baseDir, report, { isActive = () => false, recheck } = {}) {
   const root = path.join(baseDir, 'environment-preparations')
   const entries = await fs.readdir(root).catch(() => [])
-  await Promise.all(entries.filter(name => /^[a-f0-9]{64}\.json$/.test(name)).map(async name => {
+  const results = await Promise.allSettled(entries.filter(name => /^[a-f0-9]{64}\.json$/.test(name)).map(async name => {
     let saved = JSON.parse(await fs.readFile(path.join(root, name), 'utf8').catch(() => '{}'))
-    if (!saved.taskId || saved.reported) return
+    if (!saved.taskId || saved.reported || isActive(saved.taskId)) return
     const lock = path.join(root, name.replace(/\.json$/, '.lock'))
     while (!saved.result && saved.expiresAt && Date.parse(saved.expiresAt) > Date.now()) {
       const held = JSON.parse(await fs.readFile(lock, 'utf8').catch(() => '{}'))
@@ -120,9 +120,15 @@ async function recoverPreparations(baseDir, report) {
       await delay(1000)
       saved = JSON.parse(await fs.readFile(path.join(root, name), 'utf8').catch(() => '{}'))
     }
-    const result = saved.result || { state: 'failed', issues: [{ code: 'ENVIRONMENT_INTERRUPTED', message: '客户端重启导致环境准备中断，请再次点击“下一步”重新检查。' }] }
+    let result = saved.result || { state: 'failed', issues: [{ code: 'ENVIRONMENT_INTERRUPTED', message: '客户端重启导致环境准备中断，请再次点击“下一步”重新检查。' }] }
+    if (result.state === 'ready' && recheck) {
+      result = saved.context && Date.parse(saved.expiresAt) > Date.now() ? await recheck(saved)
+        : { state: 'failed', issues: [{ code: 'ENVIRONMENT_CONTEXT_EXPIRED', message: '先前检查的上下文已过期或无法确认，请再次点击“下一步”重新检查。' }] }
+    }
     await report(saved.taskId, result)
     await atomicJson(path.join(root, name), { ...saved, result, reported: true })
   }))
+  const failure = results.find(result => result.status === 'rejected')
+  if (failure) throw failure.reason
 }
 module.exports = { executePreparation, stopPreparations, markPreparationReported, recoverPreparations, runWorker }

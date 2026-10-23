@@ -24,8 +24,8 @@ const delay = (signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   if (signal.aborted) cancel()
 })
 async function readTask(response: Response): Promise<EnvironmentTask> {
-  const value = await response.json()
-  if (!response.ok) throw new Error(typeof value.error === 'string' ? value.error : value.error?.message || '运行环境检查失败，请再次点击“下一步”。')
+  const value = await response.json().catch(() => ({}))
+  if (!response.ok) throw Object.assign(new Error(typeof value.error === 'string' ? value.error : value.error?.message || '运行环境检查失败，请再次点击“下一步”。'), { status: response.status })
   if (!value.taskId || !['checking', 'preparing', 'needs_action', 'failed', 'ready'].includes(value.state)) throw new Error('环境准备响应不完整，请更新客户端后重试。')
   return value
 }
@@ -59,10 +59,18 @@ export function useExecutionEnvironment(user: string, selection: EnvironmentSele
       const query = `?user=${encodeURIComponent(user)}`
       if (saved.taskId) {
         task = await readTask(await apiFetch(`/api/experiments/environment-preparations/${encodeURIComponent(saved.taskId)}${query}`, { signal: abort.signal }))
-      } else {
+        if (abort.signal.aborted || current.current !== key) return false
+        if (['ready', 'needs_action', 'failed'].includes(task.state)) {
+          saved = { key, requestId: crypto.randomUUID() }
+          task = undefined
+        }
+      }
+      if (!task) {
+        try { sessionStorage.setItem(storageKey, JSON.stringify(saved)) } catch {}
         task = await readTask(await apiFetch(`/api/experiments/environment-preparations${query}`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...selection, requestId: saved.requestId }), signal: abort.signal,
         }))
+        if (abort.signal.aborted || current.current !== key) return false
         try { sessionStorage.setItem(storageKey, JSON.stringify({ ...saved, taskId: task.taskId })) } catch {}
       }
       while (!abort.signal.aborted && current.current === key) {
@@ -80,6 +88,10 @@ export function useExecutionEnvironment(user: string, selection: EnvironmentSele
       }
     } catch (error) {
       if (!abort.signal.aborted && current.current === key) {
+        const status = (error as { status?: number })?.status
+        if (status && status >= 400 && status < 500 && status !== 429) {
+          try { sessionStorage.removeItem(storageKey) } catch {}
+        }
         setStatus({ key, task: { state: 'failed', message: error instanceof Error ? error.message : '暂时无法确认环境准备状态，请恢复连接后再次点击“下一步”。' } })
       }
     } finally {
@@ -88,5 +100,5 @@ export function useExecutionEnvironment(user: string, selection: EnvironmentSele
     return false
   }, [key, selection, storageKey, user])
   const task = status?.key === key ? status.task : null
-  return { check, fail: (message: string) => setStatus({ key, task: { state: 'failed', message } }), busy: Boolean(task && ['checking', 'preparing'].includes(task.state)), message: task?.state === 'ready' ? '' : task?.message || '', failed: Boolean(task && ['needs_action', 'failed'].includes(task.state)) }
+  return { check, isCurrent: () => current.current === key && !controller.current?.signal.aborted, fail: (message: string) => setStatus({ key, task: { state: 'failed', message } }), busy: Boolean(task && ['checking', 'preparing'].includes(task.state)), message: task?.state === 'ready' ? '' : task?.message || '', failed: Boolean(task && ['needs_action', 'failed'].includes(task.state)) }
 }

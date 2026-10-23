@@ -409,7 +409,9 @@ Pi 使用每次运行独立的 `createEventInspector`，只消费完整 JSON 行
 
 CLI/Collector 就绪检查保持 3 秒单命令超时及 5 分钟缓存，文件指纹变化即时失效；30 秒能力扫描只检查 settings/models/auth、Collector 与可执行文件，不扫描 Pi 历史 Sessions。`probePiRuntime()` 不再同步调用模型目录，只读取就绪信息和已缓存目录。`refreshCapabilityReports()` 并行等待隔离 FI inventory 与 `refreshPiModelCatalog()`，完成后才上报能力。模型目录通过异步 `spawn` 执行 `--no-approve --list-models`，允许 20 秒，不阻塞主进程心跳；输出合计限制 1 MiB，超时/输出超限杀进程组，服务退出也清理未完成探测。同一配置的并发探测合并为一次；成功缓存 5 分钟，失败保留同指纹上次成功列表并在 30 秒后允许重试，无旧列表时保留“平台默认”，配置变更不沿用旧目录。有效空目录与超时、异常退出、格式错误明确区分，日志 `Pi model catalog` 只记录固定错误码、数量、耗时和重试周期，不记录原始 stdout/stderr 或密钥。模型发现不影响 Collector 就绪判定。
 
-Benchmark runtime 列表仍在客户端启动时固定，安装或修复后重启客户端。`test/reliability-client-pi.test.ts` 覆盖慢于 3 秒时仍可发现模型且定时器持续运行、并发去重、失败重试与成功缓存保留，以及隔离启动、重试、能力合并及真实 Collector→normalize→aggregate 契约；设置 `PI_EXPERIMENT_TEST_CLI=/absolute/path/to/pi` 可额外运行隔离本地 HTTP provider + 真实 Pi/Collector 的测试，不使用真实模型凭据。
+实验第二步的环境检查不调用或等待上述全量刷新；它只检查本次数据集与所选 Agent，复用已验证事实增量同步相关能力和 Profile，随后回报就绪。可靠性检查只读取所选平台的 FI 适配和所需故障定义，不扫描其他平台或完整模型目录。恢复时依据持久化上下文对当前组合做只读复查，再增量同步；不会直接回放旧的就绪结论，也不会在恢复时自动重装。终态通过 HTTP 确认，未确认结果保留并定期重试，已过期或不存在的服务端任务停止补报。Benchmark Runtime 列表在能力同步后动态更新，安装或修复后无需为此重启客户端。
+
+`test/reliability-client-pi.test.ts` 覆盖慢于 3 秒时仍可发现模型且定时器持续运行、并发去重、失败重试与成功缓存保留，以及隔离启动、重试、能力合并及真实 Collector→normalize→aggregate 契约；设置 `PI_EXPERIMENT_TEST_CLI=/absolute/path/to/pi` 可额外运行隔离本地 HTTP provider + 真实 Pi/Collector 的测试，不使用真实模型凭据。
 
 模型目录探测也通过 `buildAgentProcessLaunch()` 启动，复用执行时的用户 shell、环境与启动输出隔离，并从 `child.stdio[stdoutIndex]` 而非固定 stdout 读取结果。bash 交互登录会关闭 fd 3–19，因此无 profile 的引导 shell 先将私有管道移至 fd 20/21，再 exec 登录 shell；实际 CLI 启动前还原 stdout/stderr 并关闭额外描述符，进程组管理不变。缓存 key 包含 supervisor、shell、HOME/ZDOTDIR；shell 配置变更需要重启服务。客户端完整接受 Pi 列出的模型，不做额外白名单、凭据有效性/余额/权限探测或逐模型调用。
 

@@ -48,6 +48,40 @@ test('MCTS-only selection performs no native dependency installation or configur
   assert.equal(fs.existsSync(f.root), false)
   assert.deepEqual(f.events, [])
 })
+
+test('experiment preparation waits for a concurrent install and reuses it without compiling twice', async t => {
+  const f = fixture(t)
+  const hints: string[] = []
+  const options = { ...f.options, waitForLock: true, onBuild: () => hints.push('build') }
+  const results = await Promise.all([
+    installSelectedBackend({ ...options, frameworks: 'pi-agent' }),
+    installSelectedBackend({ ...options, frameworks: 'xiaoo' }),
+  ])
+  assert(results.every(result => result.ready))
+  assert.equal(f.events.filter(item => item === 'build').length, 1)
+  assert.deepEqual(hints, ['build'])
+})
+
+test('preparation recovers dead-process locks while preserving a live installation lock on cancellation', async t => {
+  const f = fixture(t)
+  fs.mkdirSync(f.root, { recursive: true })
+  for (const name of ['setup.lock', 'update.lock']) fs.writeFileSync(path.join(f.root, name), '2147483647')
+  assert.equal((await installSelectedBackend({ ...f.options, frameworks: 'pi-agent', waitForLock: true })).ready, true)
+  fs.writeFileSync(path.join(f.root, 'setup.lock'), String(process.pid))
+  const abort = new AbortController()
+  const pending = installSelectedBackend({ ...f.options, frameworks: 'xiaoo', waitForLock: true, signal: abort.signal })
+  setTimeout(() => abort.abort(new Error('cancelled fixture')), 20)
+  await assert.rejects(pending, /abort|cancelled/i)
+  assert.equal(fs.readFileSync(path.join(f.root, 'setup.lock'), 'utf8'), String(process.pid))
+})
+
+test('installation failures retain a safe stage and filesystem error code for actionable messages', async t => {
+  const f = fixture(t)
+  const result = await installSelectedBackend({ ...f.options, frameworks: 'pi-agent', ensureBuildTools: async () => { throw Object.assign(new Error('private install output'), { code: 'ENOSPC' }) } })
+  assert.equal(result.ready, false)
+  assert.equal(result.stage, 'toolchain')
+  assert.equal(result.code, 'ENOSPC')
+})
 test('long-build hint is emitted only when actually building, never when a matching installation is reused', async t => {
   const f = fixture(t)
   const hints: boolean[] = []

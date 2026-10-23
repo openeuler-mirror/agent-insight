@@ -14,6 +14,7 @@ export async function PUT(req: Request) {
     const result = await updateCapabilities({
       clientId,
       revision: body.revision ? String(body.revision) : null,
+      partial: body.partial === true,
       hostname: body.hostname ? String(body.hostname) : null,
       reportedIp: body.reportedIp ? String(body.reportedIp) : null,
       // 服务端从连接源地址生成 observedIp，不接受请求体覆盖。

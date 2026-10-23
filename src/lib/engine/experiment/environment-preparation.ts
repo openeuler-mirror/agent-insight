@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { prisma } from '@/lib/storage/prisma'
-import { ReliabilityError, deriveStatus, parseCapabilities } from '@/lib/reliability/client-registry'
+import { ReliabilityError, deriveStatus, deriveServiceHealth, parseCapabilities } from '@/lib/reliability/client-registry'
 import { dispatchCommand } from '@/lib/reliability/control-dispatch'
-import { markSent, type CommandFrame } from '@/lib/reliability/command-bus'
+import { ackTimeoutMs, markSent, type CommandFrame } from '@/lib/reliability/command-bus'
 import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership'
 import { digest } from '../../../../packages/benchmark-protocol/execution.cjs'
 import { ACTION, PROTOCOL, TIMEOUT_MS, contextDigest, preparationMessage, validateContext, type EnvironmentTask, type EnvironmentContext } from '../../../../packages/benchmark-protocol/environment.cjs'
@@ -23,7 +23,7 @@ const requestSchema = z.object({
 }).strict()
 
 type Store = typeof prisma
-type CommandRow = { commandId: string; user: string; clientId: string; action: string; status: string; payloadJson: string; resultJson: string | null; errorMessage: string | null; expiresAt: Date; createdAt: Date }
+type CommandRow = { commandId: string; user: string; clientId: string; action: string; status: string; payloadJson: string; resultJson: string | null; errorMessage: string | null; expiresAt: Date; createdAt: Date; sentAt?: Date | null }
 type DatasetCase = { id?: string; input?: string; values?: Record<string, unknown> }
 function json(value: string | null): Record<string, unknown> { try { return JSON.parse(value || '{}') } catch { return {} } }
 
@@ -36,11 +36,13 @@ export function environmentTask(row: CommandRow): EnvironmentTask {
     : ['FAILED', 'EXPIRED', 'DELIVERY_FAILED', 'SUCCEEDED'].includes(row.status) ? 'failed'
     : result.state === 'preparing' ? 'preparing' : 'checking'
   if (!['ready', 'needs_action', 'failed'].includes(state) && row.expiresAt.getTime() <= Date.now()) state = 'failed'
+  const unacked = row.status === 'SENT' && row.sentAt && row.sentAt.getTime() < Date.now() - ackTimeoutMs()
+  if (unacked) state = 'failed'
   const durationHint = ['first_install_minutes', 'minutes'].includes(String(result.durationHint)) ? result.durationHint as EnvironmentTask['durationHint'] : undefined
   return {
     taskId: row.commandId, contextDigest: String(payload.contextDigest || ''), state, durationHint, issues,
     message: state === 'needs_action' ? `${typeof result.hostname === 'string' ? `主机 ${result.hostname}：\n` : ''}${issues.map(item => item.message).join('\n') || '请在执行机完成所需配置，然后再次点击“下一步”。'}`
-      : state === 'failed' ? issues.map(item => item.message).join('\n') || row.errorMessage || '运行环境准备中断或超时，请检查执行机后再次点击“下一步”。'
+      : state === 'failed' ? issues.map(item => item.message).join('\n') || row.errorMessage || (unacked ? '执行主机未确认收到检查请求，请确认客户端连接后再次点击“下一步”。' : '运行环境准备中断或超时，请检查执行机后再次点击“下一步”。')
       : preparationMessage(state, durationHint),
   }
 }
@@ -52,6 +54,7 @@ export async function createEnvironmentPreparation(user: string, body: unknown, 
   const client = await store.reliabilityClient.findFirst({ where: { clientId: input.clientId, user, unboundAt: null } })
   if (!client) throw new ReliabilityError('CLIENT_NOT_FOUND', '执行主机不存在或无权访问', 404)
   if (deriveStatus(client) !== 'online') throw new ReliabilityError('CLIENT_OFFLINE', '执行主机不在线，请恢复连接或更换主机后再次点击“下一步”。', 409)
+  if (deriveServiceHealth(client) !== 'healthy') throw new ReliabilityError('CLIENT_NOT_READY', '执行主机客户端服务尚未就绪，请确认服务正常后再次点击“下一步”。', 409)
   const caps = parseCapabilities(client.capabilitiesJson)
   if (!caps.actions?.includes(ACTION)) throw new ReliabilityError('ENVIRONMENT_CLIENT_UPGRADE_REQUIRED', '执行主机客户端暂不支持环境准备，请更新客户端后重试。', 409)
   const platform = caps.platforms.find(p => p.id === input.platform)
@@ -83,6 +86,8 @@ export async function createEnvironmentPreparation(user: string, body: unknown, 
       ...(input.agentOptions ? { agentOptions: input.agentOptions } : {}), experiment: { mode: input.mode, timeoutSeconds: input.timeoutSeconds, concurrency: input.concurrency } })
   } catch { throw new ReliabilityError('ENVIRONMENT_CONTEXT_INVALID', '执行配置不合法或选择范围过大，请调整后再次点击“下一步”。', 400) }
   const hash = contextDigest(context)
+  await store.reliabilityCommand.updateMany({ where: { user, action: ACTION, status: 'SENT', sentAt: { lt: new Date(Date.now() - ackTimeoutMs()) } },
+    data: { status: 'DELIVERY_FAILED', errorCode: 'ACK_TIMEOUT', errorMessage: '执行主机未确认收到检查请求，请确认客户端连接后重试。', completedAt: new Date() } })
   const commandId = `env_${createHash('sha256').update(`${user}\0${input.requestId}`).digest('hex').slice(0, 40)}`
   const existing = await store.reliabilityCommand.findUnique({ where: { commandId } })
   if (existing && json(existing.payloadJson).contextDigest !== hash) throw new ReliabilityError('ENVIRONMENT_REQUEST_CONFLICT', '该请求对应的执行配置已变化，请重新点击“下一步”。', 409)
@@ -99,7 +104,19 @@ export async function createEnvironmentPreparation(user: string, body: unknown, 
 }
 
 export async function getEnvironmentPreparation(user: string, taskId: string, store: Store = prisma): Promise<EnvironmentTask> {
-  const row = await store.reliabilityCommand.findFirst({ where: { commandId: taskId, user, action: ACTION, client: { user, unboundAt: null } } })
+  const row = await store.reliabilityCommand.findFirst({ where: { commandId: taskId, user, action: ACTION, client: { user, unboundAt: null } }, include: { client: true } })
   if (!row) throw new ReliabilityError('ENVIRONMENT_TASK_NOT_FOUND', '环境准备任务不存在或无权访问', 404)
-  return environmentTask(row)
+  const task = environmentTask(row)
+  if (task.state === 'ready') {
+    const context = json(row.payloadJson).context as EnvironmentContext
+    let message = ''
+    if (deriveStatus(row.client) !== 'online' || deriveServiceHealth(row.client) !== 'healthy') message = '执行主机当前不在线或服务未就绪，请确认后再次点击“下一步”。'
+    if (context.dataset.id !== 'trace-samples') {
+      const dataset = await store.agentEvalDataset.findFirst({ where: { id: context.dataset.id, user: { in: benchmarkDatasetOwners(user) } }, include: { benchmarkDataset: true } })
+      const revision = dataset && (dataset.benchmarkDataset?.contentHash || digest({ updatedAt: dataset.updatedAt.toISOString(), cases: dataset.casesJson }))
+      if (!dataset || (dataset.user !== user && dataset.datasetKind !== 'benchmark') || revision !== context.dataset.revision || (dataset.datasetKind === 'benchmark' && dataset.benchmarkDataset?.status !== 'ready')) message = '数据集内容或接入状态已变化，请重新选择并再次点击“下一步”。'
+    }
+    if (message) return { ...task, state: 'failed', message, issues: [{ code: 'ENVIRONMENT_CONTEXT_CHANGED', message }] }
+  }
+  return task
 }

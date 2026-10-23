@@ -197,11 +197,12 @@ export async function applyCommandStatus(input: {
     throw new ReliabilityError('COMMAND_NOT_FOUND', '指令不存在', 404)
   }
   if (command.expiresAt.getTime() < Date.now() && !TERMINAL.includes(command.status as CommandStatus)) {
-    await prisma.reliabilityCommand.update({
-      where: { commandId: input.commandId },
+    const expired = await prisma.reliabilityCommand.updateMany({
+      where: { commandId: input.commandId, status: { notIn: TERMINAL } },
       data: { status: 'EXPIRED', errorCode: 'COMMAND_EXPIRED', completedAt: new Date() },
     })
-    throw new ReliabilityError('COMMAND_EXPIRED', '指令已过期', 410)
+    if (expired.count) throw new ReliabilityError('COMMAND_EXPIRED', '指令已过期', 410)
+    return { action: command.action as CommandAction, payload: safeParse(command.payloadJson) }
   }
   // 幂等：已到终态的指令不再被回执改写。
   if (TERMINAL.includes(command.status as CommandStatus)) {
@@ -222,8 +223,10 @@ export async function applyCommandStatus(input: {
     data.errorMessage = input.error.message || null
   }
 
-  await prisma.reliabilityCommand.update({
-    where: { commandId: input.commandId },
+  const allowed = input.status === 'RECEIVED' ? ['CREATED', 'SENT', 'RECEIVED']
+    : ['CREATED', 'SENT', 'RECEIVED', 'RUNNING']
+  await prisma.reliabilityCommand.updateMany({
+    where: { commandId: input.commandId, status: { in: allowed } },
     data,
   })
   return {

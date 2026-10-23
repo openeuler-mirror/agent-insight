@@ -23,6 +23,7 @@ async function fixture(kind = 'ideal_output', preparation = true) {
     actions: preparation ? [ACTION, 'RUN_EXPERIMENT_CASE'] : ['RUN_EXPERIMENT_CASE'],
     platforms: [{ id: 'opencode', agents: ['build'], runExperimentCase: { version: 2, returnsTraceId: true } }],
   } })
+  await store.reliabilityClient.update({ where: { clientId: client.clientId }, data: { serviceHealth: 'healthy' } })
   await store.agentEvalDataset.create({ data: { id, user, name: 'fixture', datasetKind: kind, casesJson: JSON.stringify([{ id: 'case-1', input: 'task', values: { fault_injection_type: 'tool-repetition' } }]) } })
   return { requestId: `request-${sequence}-0000`, datasetId: id, clientId: client.clientId, platform: 'opencode', agent: 'build', model: '', caseIds: ['case-1'], mode: 'generate', timeoutSeconds: 600, concurrency: 1 }
 }
@@ -97,4 +98,54 @@ test('legacy multiline dataset Cases without ids remain selectable for environme
   await store.agentEvalDataset.update({ where: { id: input.datasetId }, data: { casesJson: JSON.stringify([{ input: multiline }]) } })
   const task = await createEnvironmentPreparation(user, { ...input, caseIds: [`dataset-case-0:${multiline}`] }, store, dispatch)
   assert.equal(task.state, 'checking')
+})
+
+test('preparation ACK keeps its short deadline and a retry does not reuse an unacknowledged task', async () => {
+  const input = await fixture()
+  const first = await createEnvironmentPreparation(user, input, store, dispatch)
+  await store.reliabilityCommand.update({ where: { commandId: first.taskId }, data: { status: 'SENT', sentAt: new Date(Date.now() - 60000) } })
+  const failed = await getEnvironmentPreparation(user, first.taskId, store)
+  assert.equal(failed.state, 'failed')
+  assert.match(failed.message, /未确认收到/)
+  const retry = await createEnvironmentPreparation(user, { ...input, requestId: 'ack-retry-0000' }, store, dispatch)
+  assert.notEqual(retry.taskId, first.taskId)
+})
+
+test('ready results become invalid when dataset contents or host health change', async () => {
+  const input = await fixture()
+  const first = await createEnvironmentPreparation(user, input, store, dispatch)
+  await applyCommandStatus({ clientId: input.clientId, commandId: first.taskId, status: 'SUCCEEDED', result: { state: 'ready', issues: [] } })
+  await store.agentEvalDataset.update({ where: { id: input.datasetId }, data: { casesJson: JSON.stringify([{ id: 'case-1', input: 'changed' }]) } })
+  assert.match((await getEnvironmentPreparation(user, first.taskId, store)).message, /数据集内容/)
+  await store.reliabilityClient.update({ where: { clientId: input.clientId }, data: { serviceHealth: 'degraded' } })
+  await assert.rejects(() => createEnvironmentPreparation(user, { ...input, requestId: 'health-retry-0000' }, store, dispatch), /服务尚未就绪/)
+})
+
+test('late progress and ACK cannot overwrite a concurrent ready result or move the command backwards', async () => {
+  for (const [lateStatus, finalStatus] of [['RUNNING', 'SUCCEEDED'], ['RECEIVED', 'RUNNING']] as const) {
+    const input = await fixture()
+    const task = await createEnvironmentPreparation(user, input, store, dispatch)
+    const delegate = store.reliabilityCommand as unknown as { findUnique: (args: unknown) => Promise<unknown> }
+    const original = delegate.findUnique
+    let release!: () => void
+    let read!: () => void
+    const released = new Promise<void>(resolve => { release = resolve })
+    const snapshotRead = new Promise<void>(resolve => { read = resolve })
+    let held = false
+    delegate.findUnique = async args => {
+      const snapshot = await original(args)
+      if (!held) { held = true; read(); await released }
+      return snapshot
+    }
+    try {
+      const late = applyCommandStatus({ clientId: input.clientId, commandId: task.taskId, status: lateStatus, result: { state: 'checking' } })
+      await snapshotRead
+      await applyCommandStatus({ clientId: input.clientId, commandId: task.taskId, status: finalStatus, result: { state: finalStatus === 'SUCCEEDED' ? 'ready' : 'preparing', issues: [] } })
+      release()
+      await late
+      const row = await store.reliabilityCommand.findUniqueOrThrow({ where: { commandId: task.taskId } })
+      assert.equal(row.status, finalStatus)
+      assert.equal(JSON.parse(row.resultJson!).state, finalStatus === 'SUCCEEDED' ? 'ready' : 'preparing')
+    } finally { release(); delegate.findUnique = original }
+  }
 })

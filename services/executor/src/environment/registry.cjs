@@ -31,4 +31,11 @@ async function prepareEnvironment(context, services, report, load = loadEnvironm
   if (result.prepare.length) throw Object.assign(new Error('准备后仍有运行组件未就绪，请检查执行机配置后再次点击“下一步”。'), { code: 'ENVIRONMENT_VERIFICATION_FAILED' })
   return { state: 'ready', issues: [] }
 }
-module.exports = { loadEnvironmentAdapter, prepareEnvironment }
+async function checkEnvironment(context, services, report, load = loadEnvironmentAdapter) {
+  await report({ state: 'checking' })
+  const result = await load(context.dataset.adapterKey).checkEnvironment(context, services)
+  if (result.issues.length) return { state: 'needs_action', issues: result.issues }
+  if (result.prepare.length) return { state: 'needs_action', issues: [{ code: 'ENVIRONMENT_CHANGED', message: '执行机环境已变化，请再次点击“下一步”重新检查并准备。' }] }
+  return { state: 'ready', issues: [] }
+}
+module.exports = { loadEnvironmentAdapter, prepareEnvironment, checkEnvironment }
