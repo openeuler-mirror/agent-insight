@@ -8,6 +8,7 @@ import {
   ExperimentWizard,
   type SkillExperimentPreset,
 } from '@/components/eval/ExperimentWizard';
+import { SameConfigExperimentAction } from '@/components/eval/SameConfigExperimentAction';
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { apiFetch } from '@/lib/client/api';
 import { SkillExperimentResult } from './SkillExperimentResult';
@@ -67,7 +68,6 @@ export function ExperimentPanel({
   const [detailId, setDetailId] = useState<string | null>(null);
   const [reuseFromExperimentId, setReuseFromExperimentId] = useState('');
   const [actionId, setActionId] = useState('');
-  const [actionError, setActionError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,45 +92,6 @@ export function ExperimentPanel({
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
-
-  const createSameConfigExperiment = async (sourceExperimentId: string) => {
-    if (actionId) return;
-    setActionId(sourceExperimentId);
-    setActionError('');
-    try {
-      const response = await apiFetch('/api/experiments', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, createMode: 'same-config', sourceExperimentId }),
-      });
-      const created = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(created.error || '复制 Skill 实验配置失败');
-      const experimentId = String(created.id || '');
-      if (!experimentId) throw new Error('复制实验后未返回实验 ID');
-      try {
-        const taskId = typeof created.grayscaleTaskId === 'string' ? created.grayscaleTaskId : '';
-        const caseIds = Array.isArray(created.caseIds) ? created.caseIds.map(String) : [];
-        const evaluators = Array.isArray(created.evaluatorIds) ? created.evaluatorIds.map(String) : [];
-        const runResponse = taskId
-          ? await apiFetch(`/api/debug/grayscale-tasks/${encodeURIComponent(taskId)}`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ user, action: 'start', caseIds, evaluators }),
-            })
-          : await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-            });
-        const started = await runResponse.json().catch(() => ({}));
-        if (!runResponse.ok) throw new Error(started.error || '启动 Skill 实验失败');
-      } catch (runError) {
-        await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`, { method: 'DELETE' }).catch(() => undefined);
-        throw runError;
-      }
-      setDetailId(experimentId);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : '同配置实验创建失败');
-    } finally {
-      setActionId('');
-    }
-  };
 
   if (detailId) {
     return <SkillExperimentResult user={user} skillName={skillName} version={version} experimentId={detailId} onBack={() => { setDetailId(null); void load(); }} />;
@@ -179,7 +140,6 @@ export function ExperimentPanel({
         </div>
 
         <PendingExperimentCancellations user={user} />
-        {actionError && <p role="alert" className="text-xs text-error">{actionError}</p>}
         <section className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="flex items-center border-b border-border px-4 py-3">
             <FlaskConical className="mr-2 size-4 text-primary" />
@@ -216,15 +176,13 @@ export function ExperimentPanel({
                     <td className="px-4 py-3"><span className="rounded bg-background-secondary px-2 py-1 text-[10px] text-foreground-secondary">{STATUS_LABELS[row.status] || row.status}</span></td>
                     <td className="px-4 py-3 text-foreground-muted">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
                     <td className="whitespace-nowrap px-4 py-3" onClick={(event) => event.stopPropagation()}>
-                      <span className="inline-flex items-center gap-3">
-                        {row.preset && row.preset !== 'retest' && <>
-                          <button type="button" disabled={Boolean(actionId)} onClick={() => void createSameConfigExperiment(row.id)} className="text-primary disabled:opacity-50">
-                            {actionId === row.id ? '创建中…' : '同配置实验'}
-                          </button>
+                      {row.preset && row.preset !== 'retest' ? (
+                        <SameConfigExperimentAction user={user} sourceExperimentId={row.id} disabled={Boolean(actionId)}
+                          onBusyChange={(busy) => setActionId(busy ? row.id : '')} onStarted={setDetailId}>
                           <button type="button" disabled={Boolean(actionId)} onClick={() => { setReuseFromExperimentId(row.id); setPreset(row.preset as SkillExperimentPreset); }} className="text-primary disabled:opacity-50">复用同配置</button>
-                        </>}
-                        <DeleteExperimentButton user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} />
-                      </span>
+                          <DeleteExperimentButton disabled={Boolean(actionId)} user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} />
+                        </SameConfigExperimentAction>
+                      ) : <DeleteExperimentButton user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} />}
                     </td>
                   </tr>
                 ))}

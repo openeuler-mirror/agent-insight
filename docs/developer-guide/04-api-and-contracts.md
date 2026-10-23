@@ -24,11 +24,13 @@
 
 | 接口 / 合同 | 输入与输出 |
 | --- | --- |
-| `POST /api/experiments/environment-preparations` | 接收 `requestId/datasetId/clientId/platform/agent/model/caseIds/mode/timeoutSeconds/concurrency` 及可选 `agentOptions`；服务端解析数据集接入标识与版本，返回 `202` 和准备任务 |
+| `POST /api/experiments/environment-preparations` | 接收 `requestId/datasetId/clientId/platform/agent/model/caseIds/mode/timeoutSeconds/concurrency` 及可选 `agentOptions`；同配置入口改为仅传 `requestId/sourceExperimentId`，禁止混入执行目标覆盖；服务端解析数据集接入标识与版本，返回 `202` 和准备任务 |
 | `GET /api/experiments/environment-preparations/:taskId` | 按当前用户与仍有效的客户端归属查询任务 |
 | 准备任务 | `{ taskId, contextDigest, state, message, issues, durationHint? }`；状态为 `checking/preparing/needs_action/ready/failed` |
 | `execution-environment/v1` | `packages/benchmark-protocol/environment.cjs` 及 `.d.cts`，严格校验上下文与摘要 |
 | 执行端接入方法 | `checkEnvironment(context, services)` 返回 `{ issues, prepare }`；`prepareEnvironment(context, services, reportProgress)` 执行准备，调用方再次检查 |
+
+实验列表与 Skill 工作台共用 `SameConfigExperimentAction`，复用 `useExecutionEnvironment` 轮询及恢复逻辑，环境通过后才复制、启动并跳转。服务端 `resolveReuseEnvironment` 按归属读取原实验冻结配置：Benchmark 从绑定恢复运行参数与 Case 选择，普通/可靠性数据集从未删除 Case 的数据集绑定恢复范围，Skill 从快照和取消记录恢复范围。缺少可靠绑定的旧记录提示通过向导重新确认，不猜测主机或扫描全量能力。纯已有 Trace/LLM 对比返回 `{ state: 'skipped' }`，不创建执行端任务；需要客户端执行的 Skill A/B 不跳过。`skipped` 仅是同配置 POST 的无任务响应，不属于执行端状态协议。准备接口不创建实验；启动仍使用原有实验/Skill 任务 API 并保留其就绪校验。
 
 任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
 

@@ -23,19 +23,20 @@ const delay = (signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   signal.addEventListener('abort', cancel, { once: true })
   if (signal.aborted) cancel()
 })
-async function readTask(response: Response): Promise<EnvironmentTask> {
+async function readTask(response: Response, allowSkip = false): Promise<EnvironmentTask> {
   const value = await response.json().catch(() => ({}))
+  if (response.ok && allowSkip && value.state === 'skipped') return { taskId: '', contextDigest: '', state: 'ready', message: '', issues: [] }
   if (!response.ok) throw Object.assign(new Error(typeof value.error === 'string' ? value.error : value.error?.message || '运行环境检查失败，请再次点击“下一步”。'), { status: response.status })
   if (!value.taskId || !['checking', 'preparing', 'needs_action', 'failed', 'ready'].includes(value.state)) throw new Error('环境准备响应不完整，请更新客户端后重试。')
   return value
 }
-export function useExecutionEnvironment(user: string, selection: EnvironmentSelection | null) {
+export function useExecutionEnvironment(user: string, selection: EnvironmentSelection | { sourceExperimentId: string } | null) {
   const key = selection ? JSON.stringify(selection) : ''
   const current = useRef(key)
   const controller = useRef<AbortController | null>(null)
   const running = useRef(false)
   const [status, setStatus] = useState<{ key: string; task: Pick<EnvironmentTask, 'state' | 'message'> } | null>(null)
-  const storageKey = `experiment-environment:${user}`
+  const storageKey = `experiment-environment:${user}${selection && 'sourceExperimentId' in selection ? `:${selection.sourceExperimentId}` : ''}`
 
   useEffect(() => {
     current.current = key
@@ -69,7 +70,7 @@ export function useExecutionEnvironment(user: string, selection: EnvironmentSele
         try { sessionStorage.setItem(storageKey, JSON.stringify(saved)) } catch {}
         task = await readTask(await apiFetch(`/api/experiments/environment-preparations${query}`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...selection, requestId: saved.requestId }), signal: abort.signal,
-        }))
+        }), 'sourceExperimentId' in selection)
         if (abort.signal.aborted || current.current !== key) return false
         try { sessionStorage.setItem(storageKey, JSON.stringify({ ...saved, taskId: task.taskId })) } catch {}
       }
@@ -100,5 +101,5 @@ export function useExecutionEnvironment(user: string, selection: EnvironmentSele
     return false
   }, [key, selection, storageKey, user])
   const task = status?.key === key ? status.task : null
-  return { check, isCurrent: () => current.current === key && !controller.current?.signal.aborted, fail: (message: string) => setStatus({ key, task: { state: 'failed', message } }), busy: Boolean(task && ['checking', 'preparing'].includes(task.state)), message: task?.state === 'ready' ? '' : task?.message || '', failed: Boolean(task && ['needs_action', 'failed'].includes(task.state)) }
+  return { state: task?.state, check, isCurrent: () => current.current === key && !controller.current?.signal.aborted, fail: (message: string) => setStatus({ key, task: { state: 'failed', message } }), busy: Boolean(task && ['checking', 'preparing'].includes(task.state)), message: task?.state === 'ready' ? '' : task?.message || '', failed: Boolean(task && ['needs_action', 'failed'].includes(task.state)) }
 }

@@ -96,3 +96,9 @@ Golden path：选择 SWE-bench + Pi + 缺少受管理组件的可用 Linux 主�
 行为回归包括 `test/execution-environment-client.test.ts`、`test/execution-environment-api.test.ts`、`test/execution-environment.test.ts`、`test/execution-environment-capabilities.test.ts` 与 xGovernor 接入/分发测试；自动化不替代上文真实客户端与浏览器验收。
 
 待完善：普通 xiaoO 的原生默认凭据引用及 `llm_secrets.json` 实际解密能力尚未完整纳入预检；当前配置/文件存在性检查不能覆盖所有“凭据缺失或不可读”场景，AC-06 在这些场景下不能标记完整通过。沙箱路径已有原生凭据桥接校验；普通执行路径需要独立的原生只读校验能力，不能为了检查而要求安装或编译 Benchmark 后端。
+
+### 同配置入口补充验收
+
+实验列表与 Skill 工作台共用行内操作组件：环境检查/准备通过后才复制并启动。服务端从原实验冻结配置解析上下文，纯已有 Trace 跳过，实际执行 Agent 的 Skill A/B 仍检查；手动配置和失败留在该行，点击“重试”重新检查。
+
+针对性自动化覆盖：Pi/xiaoO + SWE-bench 未就绪时仍可发起准备、普通/可靠性数据集上下文恢复、权限及旧配置校验、等待期间不创建实验、重复点击、手动配置重试、准备文案、页面卸载阻止晚到结果启动、Skill 独立任务启动。无需全量测试或启动浏览器。

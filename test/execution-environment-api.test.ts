@@ -149,3 +149,92 @@ test('late progress and ACK cannot overwrite a concurrent ready result or move t
     } finally { release(); delegate.findUnique = original }
   }
 })
+
+const { createReuseEnvironmentPreparation } = require('../src/lib/engine/experiment/environment-preparation') as typeof import('@/lib/engine/experiment/environment-preparation')
+const { resolveReuseEnvironment } = require('../src/lib/engine/experiment/reuse-environment') as typeof import('@/lib/engine/experiment/reuse-environment')
+
+async function reuseFixture(kind = 'ideal_output') {
+  const input = await fixture(kind)
+  const snapshot = { datasetId: input.datasetId, traceSource: 'generate', executionConcurrency: 2, fiOrchestrate: kind === 'reliability',
+    executionTarget: { workerId: input.clientId, platform: input.platform, agent: input.agent, model: 'provider/model', timeoutSeconds: 300 } }
+  const source = await store.experiment.create({ data: { user, name: 'reuse', agentName: 'build', configSnapshotJson: JSON.stringify(snapshot),
+    cases: { create: [{ input: 'task', faultInjectionType: kind === 'reliability' ? 'tool-repetition' : null, caseValuesJson: JSON.stringify({ __agentInsightDatasetCase: { datasetId: input.datasetId, caseId: 'case-1' } }) }] } } })
+  return { input, snapshot, source, request: { sourceExperimentId: source.id, requestId: input.requestId } }
+}
+
+test('same-config prepares only the frozen host, Agent, model and active dataset Cases', async () => {
+  for (const kind of ['ideal_output', 'reliability']) {
+    const { input, source, request } = await reuseFixture(kind)
+    await store.experimentCase.create({ data: { experimentId: source.id, input: 'removed', deletedAt: new Date() } })
+    const before = await store.experiment.count()
+    const task = await createReuseEnvironmentPreparation(user, request, store, dispatch)
+    assert('taskId' in task)
+    const row = await store.reliabilityCommand.findUniqueOrThrow({ where: { commandId: task.taskId } })
+    const { context } = JSON.parse(row.payloadJson)
+    assert.equal(context.clientId, input.clientId)
+    assert.equal(context.platform, input.platform)
+    assert.equal(context.agent, 'build')
+    assert.equal(context.model, 'provider/model')
+    assert.deepEqual(context.dataset.caseIds, ['case-1'])
+    assert.equal(context.dataset.adapterKey, kind === 'reliability' ? 'reliability' : 'generic')
+    assert.deepEqual(context.experiment, { mode: 'generate', timeoutSeconds: 300, concurrency: 2 })
+    assert.equal(await store.experiment.count(), before)
+  }
+})
+
+test('same-config skips existing Trace evaluation but checks Skill A/B even with existing Traces', async () => {
+  const { source, snapshot, request } = await reuseFixture()
+  await store.experiment.update({ where: { id: source.id }, data: { configSnapshotJson: JSON.stringify({ ...snapshot, traceSource: 'existing', executionTarget: null }) } })
+  assert.deepEqual(await createReuseEnvironmentPreparation(user, request, store, dispatch), { state: 'skipped' })
+  for (const preset of ['skill-ab', 'trigger']) {
+    await store.experiment.update({ where: { id: source.id }, data: { scope: 'skill-workbench', preset,
+      configSnapshotJson: JSON.stringify({ ...snapshot, traceSource: 'existing', grayscaleTaskId: 'frozen-task', caseIds: ['case-1'], runtime: { timeoutMs: 240000 } }) } })
+    const selection = await resolveReuseEnvironment(user, source.id, store)
+    assert.equal(selection?.mode, preset)
+    assert.equal(selection?.timeoutSeconds, 240)
+    assert.equal(selection?.concurrency, 1)
+    assert.deepEqual(selection?.caseIds, ['case-1'])
+  }
+})
+
+test('same-config rejects foreign/deleted sources, injected targets and incomplete legacy config', async () => {
+  const { source, request } = await reuseFixture()
+  await assert.rejects(() => createReuseEnvironmentPreparation('other', request, store, dispatch), /无权访问/)
+  await assert.rejects(() => createReuseEnvironmentPreparation(user, { ...request, clientId: 'different-host' }, store, dispatch), /请求无效/)
+  await store.experimentCase.updateMany({ where: { experimentId: source.id }, data: { caseValuesJson: null } })
+  await assert.rejects(() => createReuseEnvironmentPreparation(user, request, store, dispatch), /复用评测配置/)
+  await store.experiment.update({ where: { id: source.id }, data: { deletedAt: new Date() } })
+  await assert.rejects(() => createReuseEnvironmentPreparation(user, request, store, dispatch), /无权访问/)
+})
+
+test('Benchmark same-config restores Pi/xiaoO options and checks preparation before runtime readiness', async () => {
+  for (const platform of ['pi-agent', 'xiaoo']) {
+    const { input, source, request } = await reuseFixture('benchmark')
+    await store.reliabilityClient.update({ where: { clientId: input.clientId }, data: { capabilitiesJson: JSON.stringify({ actions: [ACTION], platforms: [{ id: platform, agents: [platform] }] }) } })
+    const dataset = await store.benchmarkDataset.create({ data: { user, name: source.id, agentEvalDatasetId: input.datasetId, adapterKey: 'swe-bench', contentHash: 'content',
+      cases: { create: { id: `benchmark-case-${platform}`, externalCaseId: 'case-1', rawCaseJson: '{}', publicPayloadJson: '{}', privatePayloadJson: '{}', sourceFingerprint: 's', publicFingerprint: 'p', privateFingerprint: 'v', ordinal: 0 } } } })
+    const caseId = `benchmark-case-${platform}`
+    await store.agentEvalDataset.update({ where: { id: input.datasetId }, data: { casesJson: JSON.stringify([{ id: caseId, input: 'task' }]) } })
+    const agentOptions = { version: 2, runtimeKey: platform, definitionDigest: `sha256:${'a'.repeat(64)}`, values: { active_profile: 'test-profile' } }
+    await store.experiment.update({ where: { id: source.id }, data: { scope: 'benchmark', configSnapshotJson: JSON.stringify({ clientId: input.clientId }),
+      benchmarkBinding: { create: { datasetId: dataset.id, adapterKey: 'swe-bench', datasetContentHash: 'content', expectedCaseCount: 1, selectionJson: JSON.stringify({ mode: 'explicit', caseIds: [caseId] }),
+        runConfigJson: JSON.stringify({ platform, agent: platform, model: 'provider/model', timeoutSeconds: 900, executionConcurrency: 3, agentOptions }) } } } })
+    const task = await createReuseEnvironmentPreparation(user, request, store, dispatch)
+    assert('taskId' in task)
+    const row = await store.reliabilityCommand.findUniqueOrThrow({ where: { commandId: task.taskId } })
+    const { context } = JSON.parse(row.payloadJson)
+    assert.equal(context.platform, platform)
+    assert.equal(context.dataset.adapterKey, 'swe-bench')
+    assert.deepEqual(context.dataset.caseIds, [caseId])
+    assert.deepEqual(context.agentOptions, agentOptions)
+    await store.benchmarkExperimentBinding.update({ where: { experimentId: source.id }, data: { selectionJson: '{"mode":"all"}' } })
+    assert.deepEqual((await resolveReuseEnvironment(user, source.id, store))?.caseIds, [caseId])
+  }
+})
+
+
+test('same-config refuses changed reliability requirements instead of checking a different fault', async () => {
+  const { input, request } = await reuseFixture('reliability')
+  await store.agentEvalDataset.update({ where: { id: input.datasetId }, data: { casesJson: JSON.stringify([{ id: 'case-1', input: 'task', values: { fault_injection_type: 'other-fault' } }]) } })
+  await assert.rejects(() => createReuseEnvironmentPreparation(user, request, store, dispatch), /复用评测配置/)
+})

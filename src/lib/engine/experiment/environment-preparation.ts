@@ -7,6 +7,7 @@ import { ackTimeoutMs, markSent, type CommandFrame } from '@/lib/reliability/com
 import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership'
 import { digest } from '../../../../packages/benchmark-protocol/execution.cjs'
 import { ACTION, PROTOCOL, TIMEOUT_MS, contextDigest, preparationMessage, validateContext, type EnvironmentTask, type EnvironmentContext } from '../../../../packages/benchmark-protocol/environment.cjs'
+import { resolveReuseEnvironment } from './reuse-environment'
 
 const requestSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9_-]{8,100}$/),
@@ -23,6 +24,13 @@ const requestSchema = z.object({
 }).strict()
 
 type Store = typeof prisma
+export async function createReuseEnvironmentPreparation(user: string, body: unknown, store: Store = prisma, dispatch = dispatchCommand) {
+  const parsed = z.object({ requestId: requestSchema.shape.requestId, sourceExperimentId: z.string().min(1).max(256) }).strict().safeParse(body)
+  if (!parsed.success) throw new ReliabilityError('ENVIRONMENT_REQUEST_INVALID', '同配置环境检查请求无效', 400)
+  const selection = await resolveReuseEnvironment(user, parsed.data.sourceExperimentId, store)
+  if (!selection) return { state: 'skipped' as const }
+  return createEnvironmentPreparation(user, { ...selection, requestId: parsed.data.requestId }, store, dispatch)
+}
 type CommandRow = { commandId: string; user: string; clientId: string; action: string; status: string; payloadJson: string; resultJson: string | null; errorMessage: string | null; expiresAt: Date; createdAt: Date; sentAt?: Date | null }
 type DatasetCase = { id?: string; input?: string; values?: Record<string, unknown> }
 function json(value: string | null): Record<string, unknown> { try { return JSON.parse(value || '{}') } catch { return {} } }
