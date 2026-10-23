@@ -4,7 +4,7 @@ import test from 'node:test'
 import ts from 'typescript'
 
 type Node = { type: string; props: { children?: Node | Node[] | string; [key: string]: unknown } }
-function harness(fetcher: (url: string, options?: RequestInit) => Promise<Response>) {
+function harness(fetcher: (url: string, options?: RequestInit) => Promise<Response>, browserCrypto: Partial<Crypto> = globalThis.crypto) {
   const slots: unknown[] = []
   let cursor = 0
   const effects = new Map<number, { deps: unknown[]; cleanup?: () => void }>()
@@ -25,13 +25,14 @@ function harness(fetcher: (url: string, options?: RequestInit) => Promise<Respon
   function load(file: string) {
     const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText
     const exports: Record<string, unknown> = {}
-    new Function('require', 'exports', 'window', 'sessionStorage', code)(
+    new Function('require', 'exports', 'window', 'sessionStorage', 'crypto', code)(
       (id: string) => { assert(id in modules, id); return modules[id] }, exports,
       { setTimeout: (fn: () => void) => setTimeout(fn, 0), clearTimeout },
-      { getItem: (key: string) => storage.get(key) || null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
+      { getItem: (key: string) => storage.get(key) || null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) }, browserCrypto,
     )
     return exports
   }
+  modules['@/lib/safe-uuid'] = load('src/lib/safe-uuid.ts')
   modules['@/lib/client/use-execution-environment'] = load('src/lib/client/use-execution-environment.ts')
   modules['@/lib/client/start-same-config-experiment'] = load('src/lib/client/start-same-config-experiment.ts')
   const { SameConfigExperimentAction } = load('src/components/eval/SameConfigExperimentAction.tsx') as { SameConfigExperimentAction: (props: unknown) => Node }
@@ -164,4 +165,20 @@ test('Skill clone starts its independent task and explicit start rejection clean
       assert.deepEqual(view.started, [])
     }
   }
+})
+
+
+test('same-config also checks and starts over HTTP without crypto.randomUUID', async () => {
+  const requests: string[] = []
+  const view = harness(async (url, options) => {
+    if (url.includes('environment-preparations')) {
+      requests.push(JSON.parse(String(options?.body)).requestId)
+      return task('ready')
+    }
+    return json(url === '/api/experiments' ? { id: 'new' } : {})
+  }, { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) })
+  view.render().click()
+  await until(() => view.started.length === 1)
+  assert.equal(requests.length, 1)
+  assert.match(requests[0], /^[A-Za-z0-9_-]{8,100}$/)
 })

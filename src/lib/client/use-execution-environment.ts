@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/client/api'
+import { safeUUID } from '@/lib/safe-uuid'
 import type { EnvironmentTask } from '../../../packages/benchmark-protocol/environment.cjs'
 
 export type EnvironmentSelection = {
@@ -55,14 +56,14 @@ export function useExecutionEnvironment(user: string, selection: EnvironmentSele
     try {
       let saved: { key: string; taskId?: string; requestId: string } | undefined
       try { saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null') || undefined } catch {}
-      if (saved?.key !== key) saved = { key, requestId: crypto.randomUUID() }
+      if (saved?.key !== key) saved = { key, requestId: safeUUID() }
       try { sessionStorage.setItem(storageKey, JSON.stringify(saved)) } catch {}
       const query = `?user=${encodeURIComponent(user)}`
       if (saved.taskId) {
         task = await readTask(await apiFetch(`/api/experiments/environment-preparations/${encodeURIComponent(saved.taskId)}${query}`, { signal: abort.signal }))
         if (abort.signal.aborted || current.current !== key) return false
         if (['ready', 'needs_action', 'failed'].includes(task.state)) {
-          saved = { key, requestId: crypto.randomUUID() }
+          saved = { key, requestId: safeUUID() }
           task = undefined
         }
       }

@@ -7,7 +7,7 @@ import type { EnvironmentSelection } from '../src/lib/client/use-execution-envir
 const hookCode = ts.transpileModule(fs.readFileSync('src/lib/client/use-execution-environment.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
 const selection: EnvironmentSelection = { datasetId: 'dataset', clientId: 'host-a', platform: 'opencode', agent: 'build', model: '', caseIds: ['case'], mode: 'generate', timeoutSeconds: 600, concurrency: 1 }
 const task = (state: string) => new Response(JSON.stringify({ taskId: 'task', contextDigest: 'digest', state, message: state === 'needs_action' ? '配置 API Key' : '' }))
-function harness(fetcher: (url: string, options?: RequestInit) => Promise<Response>) {
+function harness(fetcher: (url: string, options?: RequestInit) => Promise<Response>, browserCrypto: Partial<Crypto> | undefined = globalThis.crypto) {
   const slots: unknown[] = []
   let cursor = 0
   const effects = new Map<number, { deps: unknown[]; cleanup?: () => void }>()
@@ -24,10 +24,13 @@ function harness(fetcher: (url: string, options?: RequestInit) => Promise<Respon
       if (!old || deps.some((value, index) => value !== old.deps[index])) pending.push(() => { old?.cleanup?.(); effects.set(i, { deps, cleanup: callback() }) })
     },
   }
-  new Function('require', 'exports', 'window', 'sessionStorage', hookCode)(
-    (name: string) => name === 'react' ? react : { apiFetch: fetcher }, exports,
+  const uuidCode = ts.transpileModule(fs.readFileSync('src/lib/safe-uuid.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
+  const uuid = {}
+  new Function('exports', 'crypto', uuidCode)(uuid, browserCrypto)
+  new Function('require', 'exports', 'window', 'sessionStorage', 'crypto', hookCode)(
+    (name: string) => name === 'react' ? react : name === '@/lib/safe-uuid' ? uuid : { apiFetch: fetcher }, exports,
     { setTimeout: (fn: () => void) => setTimeout(fn, 0), clearTimeout },
-    { getItem: (key: string) => storage.get(key) || null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
+    { getItem: (key: string) => storage.get(key) || null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) }, browserCrypto,
   )
   return { storage, render: (value: EnvironmentSelection = selection) => { cursor = 0; const result = exports.useExecutionEnvironment('user', value); const callbacks = pending; pending = []; callbacks.forEach(fn => fn()); return result } }
 }
@@ -133,4 +136,23 @@ test('post-check target refresh keeps the checked host and rejects disappearing 
   const traces = advanceHarness([], true, false)
   await traces.advance()
   assert.deepEqual(traces.steps, [3])
+})
+
+
+test('HTTP browsers without randomUUID can submit, retry and recover environment checks', async () => {
+  const browserCrypto = { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) }
+  const ids: string[] = []
+  const view = harness(async (_url, options) => {
+    ids.push(JSON.parse(String(options?.body)).requestId)
+    return task(ids.length === 1 ? 'needs_action' : 'ready')
+  }, browserCrypto)
+  assert.equal(await view.render().check(), false)
+  assert.equal(await view.render().check(), true)
+  assert.notEqual(ids[0], ids[1])
+  ids.forEach(id => assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/))
+  const methods: string[] = []
+  const restored = harness(async (_url, options) => { methods.push(options?.method || 'GET'); return task('ready') }, browserCrypto)
+  restored.storage.set('experiment-environment:user', JSON.stringify({ key: JSON.stringify(selection), taskId: 'old-ready', requestId: 'old-request' }))
+  assert.equal(await restored.render().check(), true)
+  assert.deepEqual(methods, ['GET', 'POST'])
 })
