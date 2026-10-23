@@ -686,10 +686,10 @@ export function ExperimentWizard({
       refreshAgents().catch(() => setAgents([]));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [refreshAgents]);
+  }, [refreshAgents, step]);
 
   useEffect(() => {
-    if (!user || step !== 1) return;
+    if (!user || (step !== 1 && step !== 2)) return;
     const timer = window.setInterval(() => {
       refreshAgents().catch(() => undefined);
     }, 10_000);

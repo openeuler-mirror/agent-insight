@@ -3,13 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-test('experiment wizard refreshes executable agents while design step is visible', () => {
+test('experiment wizard refreshes executable agents while design or trace-source step is visible', () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), 'src/components/eval/ExperimentWizard.tsx'),
     'utf8',
   );
   assert.match(source, /const refreshAgents = useCallback/);
-  assert.match(source, /step !== 1/);
+  assert.match(source, /\[refreshAgents, step\]/);
+  assert.match(source, /step !== 1 && step !== 2/);
   assert.match(source, /window\.setInterval\([\s\S]*?10_000/);
   assert.match(source, /window\.addEventListener\('focus', handleFocus\)/);
   assert.match(source, /window\.removeEventListener\('focus', handleFocus\)/);
