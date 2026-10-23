@@ -299,7 +299,7 @@ test('an in-flight Case retains its original runtime and model mapping after dep
   const handle = { backendKey: 'xgovernor', runId: 'run_bound', opaque: {
     directory, profileKey: 'xgovernor-local-docker', executionConfig: original, runtimeId: 'old-runtime', modelId: 'provider/model', adminPort: 1,
   } }
-  await assert.rejects(backend.runAgent(handle, { platform: 'pi-agent', input: 'fix it' }, { async persist() {} }), /返回 HTTP 500/)
+  await assert.rejects(backend.runAgent(handle, { platform: 'pi-agent', input: 'fix it' }, { async persist() {} }), /HTTP 500/)
   assert.equal(exportCalls, 1)
   const persisted = JSON.parse(fs.readFileSync(path.join(directory, 'lease.json'), 'utf8'))
   assert.equal(persisted.executionConfig.models['provider/model'].model, 'model')

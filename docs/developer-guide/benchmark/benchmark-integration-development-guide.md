@@ -581,7 +581,7 @@ Runner 为准备、Agent、收集与清理持久化期限，心跳不延长时�
 
 #### 工作区、提交与诊断
 
-`XGovernorClient` 的 HTTP 失败只回传固定词表内的安全原因与已知缺失/不支持字段名，最多读取 16 KiB、等待 1 秒，避免大响应或挂起响应拖住清理。原始错误 JSON、任意 details、URL、headers 和凭据不进入完成回调；`XGOVERNOR_REJECTED` 的安全消息随原有完成链路保存并由 Case 失败组件展示。
+`XGovernorClient` 的 HTTP 失败只回传固定词表内的安全原因与已知缺失/不支持字段名，最多读取 16 KiB、等待 1 秒，避免大响应或挂起响应拖住清理。模型错误按大小写无关的固定短语识别，支持 Pi 与 xiaoO 的扁平 `message`、`error.message`、字符串 `error` 和纯文本响应。模型预检查超时/失败分别返回 `MODEL_PREFLIGHT_TIMEOUT` / `MODEL_PREFLIGHT_FAILED`；认证、模型不存在、连接、限流、响应异常分别使用 `MODEL_AUTHENTICATION_FAILED`、`MODEL_NOT_FOUND`、`MODEL_CONNECTION_FAILED`、`MODEL_RATE_LIMITED`、`MODEL_RESPONSE_INVALID`，请求超时/配置错误及服务错误使用 `MODEL_REQUEST_TIMEOUT`、`MODEL_REQUEST_INVALID`、`MODEL_SERVICE_ERROR`。只返回固定中文原因与处理指引，原始错误 JSON、任意 details、URL、headers 和凭据不进入完成回调。无法识别时保留 `XGOVERNOR_REJECTED`，显示“执行环境请求失败（HTTP 状态码）”，不能仅凭 HTTP 400/401 等推断模型原因。错误码和安全消息经现有完成链路保存，Case 顶部、列表摘要与评测结果沿用同一原因；摘要直接显示模型问题的处理提示。历史只有 HTTP 状态的记录不推断补写原因。该映射不改变 xGovernor 的模型预检查期限或自动重试策略。
 
 `execution-workspace.cjs` 将 SWE-bench 的镜像工作区准备分派到执行端 `benchmarks/swe-bench.cjs`，其他 Benchmark 保留原有工作区准备策略。SWE-bench 不再 reset/clean 或校验 origin：官方镜像可移除 origin，并在数据集基线之后提交安装调整。执行端验证初始 HEAD、数据集 commit 存在且为 HEAD 祖先、初始状态干净，分别持久化 `datasetRevision` 和用于 Patch 的 `baseCommit`，不修改任务信封中的 `workspace.revision`。替换 Backend 时可注入自己的 `exec` 复用该工作区策略，不依赖 xGovernor 会话实现或 Evaluator。
 

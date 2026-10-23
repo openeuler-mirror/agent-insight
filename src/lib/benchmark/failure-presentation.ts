@@ -6,6 +6,46 @@ export interface BenchmarkFailurePresentation {
 }
 
 const FAILURE_META: Record<string, { label: string; message: string }> = {
+  MODEL_PREFLIGHT_TIMEOUT: {
+    label: '模型预检查超时',
+    message: '启动 Agent 前的模型检查未在规定时间内完成。请检查执行机到模型服务的连接，或稍后重试。',
+  },
+  MODEL_PREFLIGHT_FAILED: {
+    label: '模型预检查失败',
+    message: '启动 Agent 前的模型检查失败，请检查执行机上的 Agent 安装和模型配置。',
+  },
+  MODEL_AUTHENTICATION_FAILED: {
+    label: '模型认证失败',
+    message: '模型服务拒绝了认证，请检查执行机上所选 Agent 的模型凭据或登录状态。',
+  },
+  MODEL_NOT_FOUND: {
+    label: '所选模型不存在或不可用',
+    message: '所选模型不存在或不可用，请检查模型名称及当前账号的访问权限。',
+  },
+  MODEL_CONNECTION_FAILED: {
+    label: '无法连接模型服务',
+    message: '无法连接模型服务，请检查执行机网络和所选模型的服务地址。',
+  },
+  MODEL_RATE_LIMITED: {
+    label: '模型服务请求受限',
+    message: '模型服务请求受限，请检查服务配额或降低并发后重试。',
+  },
+  MODEL_RESPONSE_INVALID: {
+    label: '模型服务响应格式异常',
+    message: '模型服务返回的响应格式异常或缺少有效输出，请检查模型 API 协议与服务兼容性。',
+  },
+  MODEL_REQUEST_TIMEOUT: {
+    label: '模型请求超时',
+    message: '模型请求未在规定时间内完成，请检查执行机到模型服务的连接，或稍后重试。',
+  },
+  MODEL_REQUEST_INVALID: {
+    label: '模型请求配置不合法',
+    message: '模型 API 协议或请求配置不合法，请检查所选 Agent 的模型配置。',
+  },
+  MODEL_SERVICE_ERROR: {
+    label: '模型服务请求失败',
+    message: '模型服务处理请求失败，请检查服务状态或稍后重试。',
+  },
   MODEL_CONFIGURATION_INVALID: {
     label: '模型配置解析失败',
     message: '执行端无法解析所选模型配置，模型请求尚未发出。请查看具体原因并检查执行机器上的原生 Agent 配置。',
@@ -23,8 +63,8 @@ const FAILURE_META: Record<string, { label: string; message: string }> = {
     message: '客户端凭据桥接缺失、版本不兼容或不支持当前认证方式，请更新客户端并查看具体原因；这不代表模型或 Key 无效。',
   },
   XGOVERNOR_REJECTED: {
-    label: '执行环境请求被拒绝',
-    message: 'xGovernor 拒绝执行请求，请检查客户端安装与会话配置。',
+    label: '执行环境请求失败',
+    message: '执行环境未能完成请求，请检查客户端状态及会话配置。',
   },
   ENOSPC: {
     label: '执行端存储空间不足',

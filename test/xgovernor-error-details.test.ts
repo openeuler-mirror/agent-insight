@@ -80,7 +80,7 @@ test('collecting command failure retains existing Trace facts and reaches the Ca
   } })
   const request = { runId: 'run_error', timeoutSeconds: 30, task: {
     context: { runId: 'run_error' }, benchmark: { key: 'swe-bench' }, workspace: { provider: 'git' },
-    agentConfig: { platform: 'xiaoo', agent: 'defaultagent', timeoutSeconds: 30 }, task: { instruction: 'fix it' }, submission: { requiredArtifacts: [{ name: 'model.patch' }] },
+    agentConfig: { platform: 'pi-agent', agent: 'pi-agent', timeoutSeconds: 30 }, task: { instruction: 'fix it' }, submission: { requiredArtifacts: [{ name: 'model.patch' }] },
   } }
   await store.accept(request)
   await runner.execute(request)
@@ -95,34 +95,32 @@ test('collecting command failure retains existing Trace facts and reaches the Ca
   assert.equal(markup.includes('private-secret'), false)
 })
 
-async function rejected(response: Response): Promise<Error & { code: string }> {
+async function rejected(response: Response, expectedCode = 'XGOVERNOR_REJECTED'): Promise<Error & { code: string }> {
   const client = new XGovernorClient('http://127.0.0.1:1', 'private-admin-token', async () => response)
   try { await client.request('/sessions/open', {}); assert.fail('Expected HTTP rejection') }
   catch (cause) {
-    assert.equal((cause as { code: string }).code, 'XGOVERNOR_REJECTED')
+    assert.equal((cause as { code: string }).code, expectedCode)
     return cause as Error & { code: string }
   }
 }
 
 test('actual flat SessionWireError JSON preserves a safe Pi probe failure reason', async () => {
-  const failure = await rejected(Response.json({ code: 'invalid_request', message: probeFailure }, { status: 400 }))
-  assert.match(failure.message, /HTTP 400/)
-  assert.match(failure.message, /Pi 在返回模型探测结果前退出/)
-  assert.ok(failure.message.includes(probeFailure))
+  const failure = await rejected(Response.json({ code: 'invalid_request', message: probeFailure }, { status: 400 }), 'MODEL_PREFLIGHT_FAILED')
+  assert.match(failure.message, /Pi 在返回模型预检查结果前退出/)
   assert.match(failure.message, /扩展路径/)
 })
 
 test('known model errors expose fixed reasons without credentials, endpoints, headers or local paths', async () => {
   const secrets = ['private-api-key', 'private-token', 'private-password', 'https://private-model.example/v1?api_key=private-query', '/root/private-agent/auth.json']
-  for (const [message, expected] of [
-    ['Failed to start isolated Pi model probe', '无法启动 Pi 模型探测进程'],
-    ['Pi model probe timed out', 'Pi 模型探测超时'],
-    ['Model authentication failed', '模型认证失败'],
-    ['Model not found or unavailable', '所选模型不存在或不可用'],
-    ['Model endpoint connection failed', '无法连接模型服务'],
-    ['Invalid model protocol or capabilities', '模型 API 协议或能力配置不合法'],
+  for (const [message, expected, code] of [
+    ['Failed to start isolated Pi model probe', '无法启动 Pi 模型预检查进程', 'MODEL_PREFLIGHT_FAILED'],
+    ['Pi model probe timed out', '模型检查未在规定时间内完成', 'MODEL_PREFLIGHT_TIMEOUT'],
+    ['Model authentication failed', '模型服务拒绝了认证', 'MODEL_AUTHENTICATION_FAILED'],
+    ['Model not found or unavailable', '所选模型不存在或不可用', 'MODEL_NOT_FOUND'],
+    ['Model endpoint connection failed', '无法连接模型服务', 'MODEL_CONNECTION_FAILED'],
+    ['Invalid model protocol or capabilities', '模型 API 协议或请求配置不合法', 'MODEL_REQUEST_INVALID'],
   ]) {
-    const failure = await rejected(Response.json({ error: { message: `${message}: ${secrets.join(' ')} Authorization: Bearer private-token`, details: { api_key: secrets[0], password: secrets[2] } } }, { status: 400 }))
+    const failure = await rejected(Response.json({ error: { message: `${message}: ${secrets.join(' ')} Authorization: Bearer private-token`, details: { api_key: secrets[0], password: secrets[2] } } }, { status: 400 }), code)
     assert.ok(failure.message.includes(expected))
     for (const secret of [...secrets, 'private-admin-token']) assert.equal(failure.message.includes(secret), false)
     assert.equal('details' in failure, false)
@@ -139,7 +137,7 @@ test('unknown, malformed and oversized error bodies fall back to HTTP status wit
     new Response(null, { status: 502 }),
   ]) {
     const failure = await rejected(response)
-    assert.equal(failure.message, 'xGovernor /sessions/open 返回 HTTP 502')
+    assert.equal(failure.message, '执行环境请求失败（HTTP 502）')
   }
 })
 
@@ -155,11 +153,11 @@ test('known invalid request fields identify the field without echoing unknown na
 
 test('failed or stalled error body streams retain the HTTP rejection and are cancelled', async () => {
   const failed = await rejected(new Response(new ReadableStream({ start(controller) { controller.error(new Error('private-stream-error')) } }), { status: 500 }))
-  assert.equal(failed.message, 'xGovernor /sessions/open 返回 HTTP 500')
+  assert.equal(failed.message, '执行环境请求失败（HTTP 500）')
   let cancelled = false
   const pending = new Response(new ReadableStream({ cancel() { cancelled = true } }), { status: 500 })
   const failure = await rejected(pending)
-  assert.equal(failure.message, 'xGovernor /sessions/open 返回 HTTP 500')
+  assert.equal(failure.message, '执行环境请求失败（HTTP 500）')
   assert.equal(cancelled, true)
 })
 
@@ -169,7 +167,7 @@ test('safe xGovernor rejection survives executor completion and renders in the C
   let calls = 0
   const client = new XGovernorClient('http://127.0.0.1:1', 'private-admin-token', async () => {
     calls++
-    return Response.json({ code: 'invalid_request', message: `${probeFailure}; token=private-api-key; /root/private-path` }, { status: 400 })
+    return Response.json({ code: 'invalid_request', message: 'invalid request: model preflight timed out; token=private-api-key; /root/private-path' }, { status: 400 })
   })
   let completion: any
   const backend = {
@@ -184,17 +182,57 @@ test('safe xGovernor rejection survives executor completion and renders in the C
   } })
   const request = { runId: 'run_error', timeoutSeconds: 30, task: {
     context: { runId: 'run_error' }, benchmark: { key: 'swe-bench' }, workspace: { provider: 'git' },
-    agentConfig: { platform: 'pi-agent', agent: 'pi-agent', timeoutSeconds: 30 }, task: { instruction: 'fix it' }, submission: { requiredArtifacts: [] },
+    agentConfig: { platform: 'xiaoo', agent: 'defaultagent', timeoutSeconds: 30 }, task: { instruction: 'fix it' }, submission: { requiredArtifacts: [] },
   } }
   await store.accept(request)
   await runner.execute(request)
   assert.equal(calls, 1, 'A rejected open request must not be replayed')
   assert.equal(completion.status, 'failed')
-  assert.equal(completion.error.code, 'XGOVERNOR_REJECTED')
+  assert.equal(completion.error.code, 'MODEL_PREFLIGHT_TIMEOUT')
   assert.equal((await store.state(request.runId)).completion.error.message, completion.error.message)
   const markup = renderToStaticMarkup(createElement(BenchmarkFailureNotice, completion.error))
-  assert.match(markup, /执行环境请求被拒绝/)
-  assert.match(markup, /HTTP 400/)
-  assert.ok(markup.includes(probeFailure))
+  assert.match(markup, /模型预检查超时/)
+  assert.match(markup, /启动 Agent 前的模型检查未在规定时间内完成/)
+  assert.match(markup, /检查执行机到模型服务的连接/)
   for (const value of ['private-admin-token', 'private-api-key', '/root/private-path']) assert.equal(markup.includes(value), false)
+})
+
+test('xiaoO model preflight causes map independently of casing and error-envelope layout', async () => {
+  const cases = [
+    ['model preflight timed out', 'MODEL_PREFLIGHT_TIMEOUT', '模型检查未在规定时间内完成'],
+    ['model preflight: request failed: model authentication failed', 'MODEL_AUTHENTICATION_FAILED', '模型服务拒绝了认证'],
+    ['model preflight: request failed: model not found', 'MODEL_NOT_FOUND', '所选模型不存在或不可用'],
+    ['model preflight: request failed: model connection failed', 'MODEL_CONNECTION_FAILED', '无法连接模型服务'],
+    ['model preflight: request failed: model rate limited', 'MODEL_RATE_LIMITED', '请求受限'],
+    ['model preflight: request failed: invalid model response', 'MODEL_RESPONSE_INVALID', '响应格式异常'],
+    ['model preflight: request failed: model request timed out', 'MODEL_REQUEST_TIMEOUT', '模型请求未在规定时间内完成'],
+    ['model preflight: request failed: invalid model request configuration', 'MODEL_REQUEST_INVALID', '模型 API 协议或请求配置不合法'],
+    ['model preflight: request failed: model context limit exceeded', 'MODEL_REQUEST_INVALID', '超过上下文限制'],
+    ['model preflight: request failed: model service request failed', 'MODEL_SERVICE_ERROR', '模型服务处理请求失败'],
+  ]
+  const secret = 'private-api-key https://private-model.example/v1?token=private-token /root/private-path'
+  for (const [message, code, expected] of cases) {
+    for (const value of [message, message.toUpperCase()]) {
+      const body = `invalid request: ${value}; ${secret}`
+      for (const response of [
+        Response.json({ code: 'invalid_request', message: body }, { status: 400 }),
+        Response.json({ error: { message: body } }, { status: 400 }),
+        Response.json({ error: body }, { status: 400 }),
+        Response.json(body, { status: 400 }),
+        new Response(body, { status: 400 }),
+      ]) {
+        const failure = await rejected(response, code)
+        assert.ok(failure.message.includes(expected), failure.message)
+        assert.equal(failure.message.includes('HTTP 400'), false)
+        for (const privateValue of ['private-api-key', 'private-model.example', 'private-token', '/root/private-path']) assert.equal(failure.message.includes(privateValue), false)
+      }
+    }
+  }
+})
+
+test('HTTP status alone never guesses a model failure reason', async () => {
+  for (const status of [400, 401, 403, 404, 429, 500]) {
+    const failure = await rejected(Response.json({ code: 'invalid_request', message: 'Unrecognized private-api-key' }, { status }))
+    assert.equal(failure.message, `执行环境请求失败（HTTP ${status}）`)
+  }
 })

@@ -3,17 +3,34 @@
 const error = (code, message) => Object.assign(new Error(message), { code })
 
 const SAFE_REASONS = [
-  ['Pi exited without a model probe result', 'Pi 在返回模型探测结果前退出，请检查客户端安装和 Pi 扩展路径'],
-  ['Failed to start isolated Pi model probe', '无法启动 Pi 模型探测进程，请检查 Pi 可执行文件和运行环境'],
-  ['Pi model probe timed out', 'Pi 模型探测超时'],
-  ['Model authentication failed', '模型认证失败，请检查原有 Agent 的模型凭据'],
-  ['Model not found or unavailable', '所选模型不存在或不可用'],
-  ['Model request timed out', '模型请求超时'],
-  ['Model endpoint connection failed', '无法连接模型服务，请检查执行机网络和模型服务地址'],
-  ['Invalid model protocol or capabilities', '模型 API 协议或能力配置不合法'],
-  ['Model provider request failed', '模型服务请求失败'],
-  ['invalid llm.api_base URL', '模型服务地址格式不合法'],
-  ['model does not support reasoning', '所选模型不支持当前推理配置'],
+  { phrases: ['model preflight timed out', 'pi model probe timed out'], code: 'MODEL_PREFLIGHT_TIMEOUT',
+    message: '启动 Agent 前的模型检查未在规定时间内完成。请检查执行机到模型服务的连接，或稍后重试。' },
+  { phrases: ['pi exited without a model probe result'], code: 'MODEL_PREFLIGHT_FAILED',
+    message: 'Pi 在返回模型预检查结果前退出，请检查客户端安装和 Pi 扩展路径。' },
+  { phrases: ['failed to start isolated pi model probe'], code: 'MODEL_PREFLIGHT_FAILED',
+    message: '无法启动 Pi 模型预检查进程，请检查 Pi 可执行文件和运行环境。' },
+  { phrases: ['model authentication failed'], code: 'MODEL_AUTHENTICATION_FAILED',
+    message: '模型服务拒绝了认证，请检查执行机上所选 Agent 的模型凭据或登录状态。' },
+  { phrases: ['model not found'], code: 'MODEL_NOT_FOUND',
+    message: '所选模型不存在或不可用，请检查模型名称及当前账号的访问权限。' },
+  { phrases: ['model request timed out'], code: 'MODEL_REQUEST_TIMEOUT',
+    message: '模型请求未在规定时间内完成，请检查执行机到模型服务的连接，或稍后重试。' },
+  { phrases: ['model endpoint connection failed', 'model connection failed'], code: 'MODEL_CONNECTION_FAILED',
+    message: '无法连接模型服务，请检查执行机网络和所选模型的服务地址。' },
+  { phrases: ['model rate limited'], code: 'MODEL_RATE_LIMITED',
+    message: '模型服务请求受限，请检查服务配额或降低并发后重试。' },
+  { phrases: ['invalid model response', 'model returned no assistant output'], code: 'MODEL_RESPONSE_INVALID',
+    message: '模型服务返回的响应格式异常或缺少有效输出，请检查模型 API 协议与服务兼容性。' },
+  { phrases: ['invalid model protocol or capabilities', 'invalid model request configuration'], code: 'MODEL_REQUEST_INVALID',
+    message: '模型 API 协议或请求配置不合法，请检查所选 Agent 的模型配置。' },
+  { phrases: ['model context limit exceeded'], code: 'MODEL_REQUEST_INVALID',
+    message: '模型请求超过上下文限制，请检查模型上下文配置或缩短输入。' },
+  { phrases: ['model provider request failed', 'model service request failed'], code: 'MODEL_SERVICE_ERROR',
+    message: '模型服务处理请求失败，请检查服务状态或稍后重试。' },
+  { phrases: ['invalid llm.api_base url'], code: 'MODEL_REQUEST_INVALID',
+    message: '模型服务地址格式不合法，请检查所选 Agent 的模型服务地址。' },
+  { phrases: ['model does not support reasoning'], code: 'MODEL_REQUEST_INVALID',
+    message: '所选模型不支持当前推理配置，请调整模型配置后重试。' },
 ]
 const REQUEST_FIELDS = new Set(['runtime_id', 'runtime_kind', 'conversation_id', 'sender_id', 'workspace', 'llm', 'provider', 'model', 'api', 'api_base', 'api_key_env', 'capabilities', 'reasoning', 'input', 'context_window', 'max_tokens', 'deployment', 'options', 'provider_options', 'network_mode', 'workspace_root', 'bootstrap', 'ext', 'runtime_pi', 'xiaoo', 'extension_dir', 'backend_id', 'tools_enabled', 'max_turns', 'discovery', 'allow_interaction', 'reasoning_effort'])
 
@@ -43,10 +60,11 @@ async function safeResponseReason(response) {
         message = typeof body === 'string' ? body : typeof body.error === 'string' ? body.error : body.error?.message || body.message || ''
       } catch {}
       if (typeof message !== 'string') return ''
-      const known = SAFE_REASONS.find(([phrase]) => message.includes(phrase))
-      if (known) return `${known[1]}（${known[0]}）`
+      const normalized = message.toLowerCase()
+      const known = SAFE_REASONS.find(reason => reason.phrases.some(phrase => normalized.includes(phrase)))
+      if (known) return { code: known.code, message: known.message }
       const field = message.match(/\b(unknown|missing) field [`'"]([a-z_]+)[`'"]/)
-      if (field && REQUEST_FIELDS.has(field[2])) return `会话请求${field[1] === 'missing' ? '缺少必填' : '包含不支持的'}字段：${field[2]}`
+      if (field && REQUEST_FIELDS.has(field[2])) return { code: 'XGOVERNOR_REJECTED', message: `会话请求${field[1] === 'missing' ? '缺少必填' : '包含不支持的'}字段：${field[2]}` }
       return ''
     } catch { return '' }
     finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
@@ -73,7 +91,7 @@ class XGovernorClient {
     }
     if (!response.ok) {
       const reason = await safeResponseReason(response)
-      throw error('XGOVERNOR_REJECTED', `xGovernor ${route} 返回 HTTP ${response.status}${reason ? `：${reason}` : ''}`)
+      throw error(reason?.code || 'XGOVERNOR_REJECTED', reason?.message || `执行环境请求失败（HTTP ${response.status}）`)
     }
     const content = await response.text()
     return content ? JSON.parse(content) : null

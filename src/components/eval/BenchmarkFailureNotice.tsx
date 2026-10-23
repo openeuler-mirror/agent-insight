@@ -20,7 +20,7 @@ export function BenchmarkFailureNotice({
         <span style={{ color: 'var(--foreground-muted)', fontSize: 10.5, fontFamily: 'var(--font-mono, monospace)' }}>
           {displayedCode}
         </span>
-        {(failure.code === 'MODEL_CONFIGURATION_INVALID' || failure.code.startsWith('MODEL_CREDENTIAL_')) && (
+        {(failure.code.startsWith('MODEL_') || failure.code === 'XGOVERNOR_REJECTED') && (
           <span style={{ color: 'var(--foreground-secondary)', fontSize: 11, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
             {failure.message}
           </span>

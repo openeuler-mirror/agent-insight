@@ -87,7 +87,7 @@ for (const kind of ['pi', 'xiaoo']) {
     assert.equal(persisted.datasetRevision, revision)
     assert.equal(task.workspace.revision, revision)
     resolved.model.reasoningEffort = 'off'
-    await assert.rejects(backend.runAgent({ ...prepared, opaque: persisted }, { platform, input: 'fix the issue' }, context), /返回 HTTP 503/)
+    await assert.rejects(backend.runAgent({ ...prepared, opaque: persisted }, { platform, input: 'fix the issue' }, context), /HTTP 503/)
     const turns = requests.filter(item => item.url.endsWith('/sessions/turns'))
     assert.equal(turns.length, 1)
     assert.equal(turns[0].payload.reasoning_effort, kind === 'xiaoo' ? 'high' : undefined)
