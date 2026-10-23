@@ -18,6 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 自建评估器 Prompt + Skills | [custom-evaluator-skills](custom-evaluator-skills/phase1-requirements-analysis.md) | 支持从 Skill 库选固定版本或从电脑导入，后者不自动入库；统一冻结文件并通过 OpenCode 执行，全部添加项参与评估，不设启停 | Feature | 2026-10-23 | 🟡 原配置流程已验收；本轮结果/卡片/选择器调整、39 项专项测试及真实模型链路持久化验证通过（100 分、7 次工具调用，脚本凭据一致）；本轮浏览器复查受安全策略阻止，既有类型门禁问题未全绿 | —（待补） |
 | Benchmark 业务配置文件 | [benchmark-runtime-config](benchmark-runtime-config/phase1-requirements-analysis.md) | 平台、Evaluator 与执行客户端按进程使用项目 YAML 配置及本地覆盖，迁移 SWE-bench 与调度业务环境变量 | Refactor | 2026-10-14 | ✅ 已实现，专项测试通过；未运行真实 Docker 部署及浏览器验收 | — |
 | MCTS 执行 Trace 非侵入式接入 | [mcts-trace-observability](mcts-trace-observability/) | 不修改 MCTS 代码，由独立安装的外部启动器和透明 xGovernor 观测网关采集精确 Runtime Trace 与 checkpoint 血缘；MCTS node/score/final tree 仅按 stdout 权威边界独立展示 | Feature / Observability | 2026-09-23 | 🟡 核心实现、独立安装分发与自动化测试完成；待真实 MCTS golden path 和浏览器验收 | —（待补） |
 | 实验删除与评测服务停止清理 | [experiment-cancellation](experiment-cancellation/phase1-requirements.md) | 实验及 Case 定向停止和逻辑删除、立即停服、离线镜像清理，保留共享资源及未确认取消记录 | Feature | 2026-09-23 | 🟡 工作区实现，专项通过，待全量与部署验收 | — |

@@ -9,6 +9,8 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { deriveEvaluatorTags } from '@/lib/evaluators/registry';
 import EvaluatorDetailModal from '@/components/eval/EvaluatorDetailModal';
+import EvaluatorSkillsEditor from '@/components/eval/EvaluatorSkillsEditor';
+import type { EvaluatorSkillSelection } from '@/lib/evaluators/evaluator-skills';
 import {
   type EvaluatorCard,
   type EvaluatorType,
@@ -35,6 +37,7 @@ interface CustomToolbarState {
 }
 
 interface LlmEvaluatorDraft {
+  skills: EvaluatorSkillSelection[];
   name: string;
   description: string;
   /** 类目（注册时元数据）：res=看结果 / traj=看轨迹 */
@@ -70,6 +73,7 @@ const systemPromptPlaceholder = `请编写评估器的 system prompt。可引用
 这些字段都不是必填；目前仅支持以上五个变量。评估器最终需要输出 0～100 的 score 和 reason。`;
 
 const blankLlmDraft = (): LlmEvaluatorDraft => ({
+  skills: [],
   name: '',
   description: '',
   category: 'res',
@@ -123,7 +127,6 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
   const { user } = useAuth();
   const router = useRouter();
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
-  const [evaluatorsHydrated, setEvaluatorsHydrated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>('custom');
   const [filters, setFilters] = useState<FilterState>(emptyFilters);
   const [customToolbar, setCustomToolbar] = useState<CustomToolbarState>(emptyCustomToolbar);
@@ -157,7 +160,6 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
   useEffect(() => {
     if (!user) {
       setCustomEvaluators([]);
-      setEvaluatorsHydrated(false);
     }
   }, [user]);
 
@@ -222,7 +224,6 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
 
         if (!cancelled) {
           setCustomEvaluators(list);
-          setEvaluatorsHydrated(true);
         }
       } catch (e) {
         if (!cancelled) {
@@ -238,19 +239,6 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
     };
   }, [user, reloadVersion]);
 
-  useEffect(() => {
-    if (!user || !evaluatorsHydrated) return;
-    const timer = window.setTimeout(() => {
-      apiFetch('/api/user-evaluators', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, evaluators: customEvaluators }),
-      }).catch(() => {
-        /* 持久化失败不阻塞界面；可后续加 toast */
-      });
-    }, 600);
-    return () => window.clearTimeout(timer);
-  }, [user, evaluatorsHydrated, customEvaluators]);
 
   const visibleCards = useMemo(() => {
     if (activeTab === 'preset') return presetCards.filter(card => matchesFilter(card, filters));
@@ -275,7 +263,9 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
     setError('');
   };
 
-  const finalizeLlmEvaluator = () => {
+  const [creating, setCreating] = useState(false);
+  const finalizeLlmEvaluator = async () => {
+    if (!user || creating) return;
     const name = llmDraft.name.trim();
     if (!name) {
       setError('请填写评估器名称');
@@ -309,6 +299,7 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
     const llmConfig: LlmEvaluatorConfig = {
       model: activeModel?.model || '',
       systemPrompt: llmDraft.systemPrompt.trim(),
+      skills: llmDraft.skills,
     };
 
     const item: EvaluatorCard = {
@@ -331,12 +322,22 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
       llmConfig,
     };
 
-    setCustomEvaluators(prev => [item, ...prev]);
-    setCustomPage(1);
-    setCustomCreate(null);
-    setLlmDraft(blankLlmDraft());
-    setActiveTab('custom');
-    setError('');
+    setCreating(true);
+    try {
+      const res = await apiFetch('/api/user-evaluators', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, evaluators: [item, ...customEvaluators] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '创建失败');
+      setCustomEvaluators(data.evaluators);
+      setCustomPage(1);
+      setCustomCreate(null);
+      setLlmDraft(blankLlmDraft());
+      setActiveTab('custom');
+      setError('');
+    } catch (e) { setError(e instanceof Error ? e.message : '创建失败'); }
+    finally { setCreating(false); }
   };
 
   const onTabChange = (tab: TabKey) => {
@@ -429,7 +430,8 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
           draft={llmDraft}
           onChange={setLlmDraft}
           onBack={() => { setCustomCreate(null); setLlmDraft(blankLlmDraft()); setError(''); }}
-          onSubmit={finalizeLlmEvaluator}
+          onSubmit={() => void finalizeLlmEvaluator()}
+          saving={creating}
         />
       ) : activeTab === 'custom' ? (
         <div ref={customListRef} style={{ paddingTop: 16 }}>
@@ -773,7 +775,8 @@ function EvaluatorCardView({
         ))}
       </div>
 
-      <div style={{ marginTop: 'auto' }}>
+      <div className="mt-auto space-y-2">
+        {!!card.llmConfig?.skills?.length && <div className="text-xs text-foreground-muted">{card.llmConfig.skills.length} 个 Skills</div>}
         <MiniMeta label="评分" value={card.source === 'custom' ? '0-100' : card.scoreRange} />
       </div>
 
@@ -936,7 +939,9 @@ function LlmEvaluatorCreatePanel({
   onChange,
   onBack,
   onSubmit,
+  saving,
 }: {
+  saving: boolean;
   draft: LlmEvaluatorDraft;
   onChange: (d: LlmEvaluatorDraft) => void;
   onBack: () => void;
@@ -1204,6 +1209,8 @@ function LlmEvaluatorCreatePanel({
         </div>
       </section>
 
+      <EvaluatorSkillsEditor value={draft.skills} onChange={skills => onChange({ ...draft, skills })} />
+
       <section style={{ marginBottom: 28, padding: 14, borderRadius: 8, background: 'var(--background-secondary)', border: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <span className="ai-section-title" style={{ margin: 0 }}>输出</span>
@@ -1227,7 +1234,7 @@ function LlmEvaluatorCreatePanel({
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button type="button" className="ai-btn-s" onClick={onBack}>取消</button>
-        <button type="button" className="ai-btn-p" onClick={onSubmit}>创建</button>
+        <button type="button" className="ai-btn-p" disabled={saving} onClick={onSubmit}>创建</button>
       </div>
     </div>
   );

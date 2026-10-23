@@ -17,6 +17,7 @@ import {
 } from '@/lib/evaluators/custom-evaluator-model';
 import { Term } from '@/components/text/Term';
 import styles from './code-evaluator-detail.module.css';
+import EvaluatorSkillsEditor from '@/components/eval/EvaluatorSkillsEditor';
 
 const CodeMonacoEditor = dynamic(
   () => import('@monaco-editor/react').then(m => m.Editor),
@@ -55,7 +56,8 @@ async function persistAll(user: string, list: EvaluatorCard[]): Promise<boolean>
     body: JSON.stringify({ user, evaluators: list }),
   });
   const data = await res.json().catch(() => ({}));
-  return res.ok && data?.success !== false;
+  if (!res.ok || data?.success === false) throw new Error(data.error || '保存失败');
+  return true;
 }
 
 export default function CustomEvaluatorDetailPage() {
@@ -363,6 +365,8 @@ function LlmEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eval
           </button>
         )}
       </div>
+
+      <EvaluatorSkillsEditor evaluatorId={card.id} value={cfg.skills || []} onChange={skills => patchCfg({ skills })} />
 
       <section style={{ marginTop: 18, padding: 14, borderRadius: 8, background: 'var(--background-secondary)', border: '1px solid var(--border)' }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>输出</div>

@@ -24,7 +24,7 @@
 系统的枢纽。大部分业务逻辑都在这里。主要子区域：
 - **`engine/`** —— 领域引擎，按能力组织：
   - `agent-debug/` —— 失败根因分析（`AgentDebugReportPayload`，step/issue/triage 模型）。驱动故障诊断。
-  - `evaluation/` —— 评测核心：`judge.ts`（LLM 评判）、`result-metric-evaluator.ts`（评测中心四个结果类预置评估器的公共分发与模型传输）、`result-accuracy-evaluator.ts`（预期关键观点与完整最终输出的准确性裁决）、`dataset-case-match.ts`（评测中心的 Case 精确/语义匹配）、`faithfulness-evaluator.ts`（链路工具证据、原子主张和逐项忠实度裁决）、`instruction-adherence-evaluator.ts`（两阶段输出约束评测）、`answer-quality-evaluator.ts`（相关性/完整性/连贯性评测）、`trajectory-evaluator.ts`、`custom-llm-evaluator.ts`、`semantic-dataset-match.ts`、`task-completion-scoring.ts`、`trace-summarizer.ts`、`config-target.ts` / `config-dataset.ts`、`derive-skill-opt-points.ts`，以及大型契约文件 `evaluation-types.ts`。
+  - `evaluation/` —— 评测核心：`judge.ts`（LLM 评判）、`result-metric-evaluator.ts`（评测中心四个结果类预置评估器的公共分发与模型传输）、`result-accuracy-evaluator.ts`（预期关键观点与完整最终输出的准确性裁决）、`dataset-case-match.ts`（评测中心的 Case 精确/语义匹配）、`faithfulness-evaluator.ts`（链路工具证据、原子主张和逐项忠实度裁决）、`instruction-adherence-evaluator.ts`（两阶段输出约束评测）、`answer-quality-evaluator.ts`（相关性/完整性/连贯性评测）、`trajectory-evaluator.ts`、`custom-llm-evaluator.ts`、`custom-evaluator-runtime.ts`（自建评估器 Skills 的共享 OpenCode 执行与运行证据）、`semantic-dataset-match.ts`、`task-completion-scoring.ts`、`trace-summarizer.ts`、`config-target.ts` / `config-dataset.ts`、`derive-skill-opt-points.ts`，以及大型契约文件 `evaluation-types.ts`。
   - `quality-monitoring/` —— 按 Agent/时间窗收集 trace，聚合过程、成本和错误维度，生成趋势、问题汇总和执行记录；不读取 `TraceEvaluation`，也不调度结果评估器。
   - `general-agent/` —— 内部的 LangGraph/deepagents 运行时：`runner.ts`（`runGeneralAgent`）、`concurrency-limiter.ts`、`pending-requests.ts`、`skill-resolver.ts`、`skill-workspace-deployer.ts`、`skill-opt-prompt.ts`。
   - `observability/` —— trace 解析/归一化：`agent-trace.ts`（`buildAgentCallTree`、`AgentNode`）、`claude-parser.ts`、`openclaw-parser.ts`、`flow-parser.ts`（Skill 流程对齐）、`fault-path.ts`、`trace-bundle.ts`、`agent-registration.ts`。
@@ -34,7 +34,7 @@
 - **`ingest/`** —— 框架无关的接入：`adapters/`（`FrameworkAdapter` 注册表、skill 抽取与存储归一化入口）、`claude-otel/`、`otel-consumer/`、`openclaw-watcher.ts`、`opencode-deleted-sessions.ts`、`proxy-config.ts` / `proxy-store.ts`、`routing-signature.ts`、`upload-throttle.ts` / `upload-analysis-debouncer.ts`。
 - **`auth/`** —— `auth.ts`（`resolveUser`、`canAccessSkill`）和 `auth-context.tsx`。
 - **`skill-analysis/`** —— `ab-scoring.ts`、`ab-significance.ts`、`diagnosis.ts`、`grayscale-utils.ts`。
-- **`evaluators/`** —— 预设 + 自定义评测器模型。
+- **`evaluators/`** —— 预设 + 自定义评测器模型；`evaluator-skills.ts` 定义双来源绑定，`evaluator-skill-store.ts` 管理导入、文件与固定快照，`evaluator-skill-service.ts` 解析库来源、校验卡片并冻结任务配置。
 - **`client/`** —— React 上下文（`api.ts` 的 `apiFetch`、区域设置/主题/侧边栏/认证、用户引导）。
 - **`shared/`** —— 模型定价/配置、交互工具、默认模型配置。
 - 此外还有顶层辅助函数：`agent-adapter.ts`、`agent-dataset-model.ts`、`llm-providers.ts`、`system-agents.ts`、`glossary.ts`、`safe-uuid.ts`、`utils.ts`（`cn` —— 被调用次数最多的单个函数）等。

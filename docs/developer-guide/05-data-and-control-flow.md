@@ -487,3 +487,14 @@ flowchart LR
 
 实现入口为 `src/lib/trace-transfer.ts`（Bundle 校验、排序与 ID 重映射）和 `src/lib/trace-transfer-service.ts`（所有权、完整树查询、持久化与失败清理）。Session 的 `interactions` 随树迁移；Langfuse Session 同时迁移完整 `langfuseTraceNodes`，冲突重映射只改其中的 `subagentSessionId`，保留 OTel trace/span 父子标识。导入目标 user 始终取当前请求身份，不信任 Bundle 中的来源用户。任一节点写入或 Skill 重算失败时，服务会清理本次已创建的 Session 与 Execution，避免保留可见的半棵树。
 <!-- Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics. -->
+
+
+## 自建评估器 Prompt + Skills
+
+创建或编辑时，从库中选固定版本或通过系统选择器直接上传 Skill 文件夹；本地项更新通过移除后重新添加完成，不提供重新导入按钮；库文件从 SkillVersion 读取，本地文件只暂存，均经 evaluator-skill-store 校验后冻结完整字节。PUT 成功才替换卡片，返回持久绑定；本地来源不经过 Skill 库写入链路。
+
+普通实验、对比实验、Benchmark 追加评估器、工作台、eval-traces backing 实验与轨迹任务在创建时冻结自建卡片。行执行优先读取任务冻结配置，重试/追加/监听不重读最新卡片；复用同配置复制冻结内容。历史无快照任务使用旧 Prompt 解析且 skills 为空，新任务缺失已声明的冻结卡片时明确失败。
+
+无 Skills 沿用原传输。有 Skills 进入 custom-evaluator-runtime，校验快照摘要，为每个 Case/evaluator/attempt 建立独立临时目录，将所有 SKILL.md 原文加入请求，并挂载完整 scripts/references/assets，Case 写入 inputs/case.json。强制 OpenCode，不走直连 Judge 或无 Skill 降级；透传所属实验取消及总超时，排队可取消，进程结束后清理运行目录，持久快照保留。
+
+全局实验返回统一 EvaluatorOutput；旧轨迹接口适配 score/reason 并保留完整 output/runtime。工具事件来自 OpenCode onTool，独立于模型声称的调用。证据容器保留原评分依据与运行元数据，结果详情仅渲染原依据。Agent 会话删除前读取真实消息，复用 evaluator-execution-recorder 保存加载指令和工具调用；使用 skip_evaluation/skip_internal_judgment 防止监听循环，保存成功后写入 evaluationTraceId。详情 API 再校验 Execution 存在且属于当前用户，满足条件才返回评估链路入口；空会话、普通 LLM、历史无记录或已失效引用均不显示。HOME 与工作目录隔离不等于操作系统沙箱，沿用已有 read/bash 等权限。

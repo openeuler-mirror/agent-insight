@@ -1,3 +1,4 @@
+import { freezeCustomEvaluators, customEvaluatorsForReuse, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service';
 import { randomUUID } from 'crypto';
 
 import { DEFAULT_SELECTED_PRESET_IDS } from '@/lib/evaluators/preset-evaluators';
@@ -132,6 +133,7 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
 }
 
 export async function createWorkbenchExperiment(input: {
+  frozenCustomEvaluators?: CustomSnapshots;
   user: string;
   sessionId?: string;
   skillName: string;
@@ -239,6 +241,7 @@ export async function createWorkbenchExperiment(input: {
     agentMaxConcurrency: concurrencyPolicy.executionConcurrency,
     retryLimit: isTriggerExperiment ? 1 : 2,
   };
+  const customEvaluatorSnapshots = input.frozenCustomEvaluators ?? await freezeCustomEvaluators(input.user, evaluatorIds);
   const created = await prismaRaw.$transaction(async (tx) => {
     const experiment = await tx.experiment.create({
       data: {
@@ -307,6 +310,7 @@ export async function createWorkbenchExperiment(input: {
       await tx.experimentCase.createMany({ data: triggerExperimentCaseData(experiment.id, dataset.id, selectedCases) });
     }
     const configSnapshot = {
+      customEvaluatorSnapshots,
       schemaVersion: 1,
       preset: input.preset,
       datasetId: dataset.id,
@@ -407,7 +411,9 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
   const runtime = snapshot.runtime && typeof snapshot.runtime === 'object'
     ? snapshot.runtime as Record<string, unknown> : {};
   const timeoutSeconds = Number(runtime.timeoutMs) / 1_000;
+  snapshot.customEvaluatorSnapshots = await customEvaluatorsForReuse(user, parseJson<string[]>(source.evaluatorIdsJson, []), snapshot);
   const result = await createWorkbenchExperiment({
+    frozenCustomEvaluators: await customEvaluatorsForReuse(user, parseJson<string[]>(source.evaluatorIdsJson, []), snapshot),
     user,
     skillName: source.skillName,
     version: source.skillVersion,

@@ -2,12 +2,14 @@
 
 export type EvaluatorType = 'LLM' | 'Code' | 'Custom RPC';
 export type EvaluatorSource = 'preset' | 'custom';
+import type { EvaluatorSkillSelection } from './evaluator-skills';
 
 export interface LlmEvaluatorConfig {
   model: string;
   systemPrompt: string;
   /** 单段 user prompt（新格式） */
   userPrompt?: string;
+  skills?: EvaluatorSkillSelection[];
 }
 
 export const CUSTOM_EVALUATOR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{1,63}$/;
