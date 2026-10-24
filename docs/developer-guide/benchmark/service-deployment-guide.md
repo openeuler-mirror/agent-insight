@@ -435,13 +435,13 @@ bash scripts/evaluator.sh start \
 # 查看服务状态
 bash scripts/evaluator.sh status
 
-# 查看镜像池管理的镜像
+# 查看镜像池与受管 Runtime 镜像的清理预览
 bash scripts/evaluator.sh images list
 
-# 预览可清理的空闲镜像
+# 预览可清理的空闲 Case 镜像与旧 Runtime
 bash scripts/evaluator.sh images purge --dry-run
 
-# 保持服务运行，清理空闲镜像
+# 保持服务运行，清理空闲 Case 镜像与旧 Runtime
 bash scripts/evaluator.sh images purge
 
 # 立即停止服务，保留镜像
@@ -460,5 +460,9 @@ bash scripts/evaluator.sh stop --purge-images
 | `--purge-images` | 停止服务时同时清理评测服务管理的镜像 |
 
 停止服务不需要传端口参数，自定义端口启动的服务也使用相同命令。
+
+`start` 在新 Controller 通过 Doctor 后自动清理旧 Runtime；失败只打印警告，不停止已启动的服务。在线 `images list/purge` 使用运行中 Controller 内的 Catalog 和配置，不使用宿主工作区的 Catalog；旧版 Controller 需先执行 `start` 升级。关闭 Case 镜像池时，Runtime 清理仍可使用。
+
+Runtime 清理只处理同一 Docker daemon、同一数据卷中已登记且身份确认的 Runtime。始终保留当前 Catalog 所需引用及相同 Image ID、被任何容器（包括已停止容器）引用的镜像、未确认操作、被改写的引用及存在额外标签/其他仓库 digest 的镜像。删除不使用强制模式，不停止任务，也不执行全局 prune。输出的 `runtimes` 包含候选、删除、保留原因和失败项；`--dry-run` 不删除镜像或归属记录。预装/手工构建且未登记的历史 Runtime、Case 资产镜像及构建缓存不在 Runtime 清理范围内。
 
 完成公共服务安装后，分别按 [SWE-bench 部署指南](swe-bench-deployment-guide.md) 或 [ZSoft 部署指南](zsoft-deployment-guide.md) 验收所选 Benchmark。

@@ -98,6 +98,8 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 Benchmark 官方评测并发独立于 Agent 执行并发，默认是 1。管理员可沿用原启动命令中的 `--evaluator-env EVALUATOR_MAX_CONCURRENCY=4` 将本次启动容量设为 4，无需修改命令格式或创建 YAML；启动日志与 `/health` 会显示生效值。已有 YAML 配置会被该显式参数覆盖，但文件本身不改写。镜像池和预取开关也可通过显式启动参数设置，详见[评测服务部署](../../developer-guide/benchmark/service-deployment-guide.md#5-安装-evaluator)。
 
+评测服务启动成功后会自动清理已登记、不再被当前版本需要的旧 Runtime 镜像；管理员也可在评测机项目目录执行 `bash scripts/evaluator.sh images purge`，在线清理空闲 Case 镜像和旧 Runtime，不停止正在运行的任务。加 `--dry-run` 可先预览；当前版本需要、被容器引用或归属不明确的镜像会保留，详见[镜像清理](../../developer-guide/benchmark/service-deployment-guide.md#11-立即停止与镜像清理)。
+
 每个 Case 的 Agent 执行上限默认是 10 分钟，可在实验向导中配置为 30～3600 秒；达到上限仍未结束时，本次 Trace 生成按超时失败处理。该上限只约束 Agent 运行，不改变后续评估器各自的超时与重试规则。
 
 <p align="center">

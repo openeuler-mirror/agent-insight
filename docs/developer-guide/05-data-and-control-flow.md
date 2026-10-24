@@ -29,16 +29,18 @@
 evaluator.sh stop → 与启动互斥 → 持久化停止标记 → 关闭 Controller
                    → 再次扫描作业 → 定向清理容器 → 可选清理登记镜像
 
-evaluator.sh images {list|purge} → 管理容器 → 数据卷内 manager.sock
-                                      → 当前 Controller 镜像池互斥
-                                      → 列表或逐个清理空闲自有 Case 镜像
+evaluator.sh images {list|purge} → docker exec 当前 Controller（部署 Catalog/配置）
+                                → manager.sock 镜像池互斥 → 空闲自有 Case 镜像
+                                → 归属记录与 Docker 引用检查 → 旧受管 Runtime
+
+evaluator.sh start → 新 Controller 通过 Doctor → 同一 Runtime 清理策略（失败只警告）
 ```
 
 本地取消检查周期 500ms，后台取消对账周期 3 秒，页面待确认列表每 5 秒刷新。轮询不是等待实验自然结束；收到信号后立即请求退出。删除最后一个有效 Case 时，同一事务会将实验标记为已删除并关闭监听；Case 删除响应将此状态返回页面，以便跳转实验列表。后台对账也会收敛此前遗留的普通及 Benchmark 零 Case 实验。仍有有效 Case 时，Case 取消确认后 Benchmark 推进下一 Case，普通实验重新结算；没有有效结果不能判成功。新派发、重试、出队、恢复和回调均检查删除/取消状态。
 
 本地执行记录不按超时擅自过期：平台进程崩溃可能留下尚未确认的执行或子进程，重启后仍显示待确认，需要运维核对。远端离线则自动重发取消指令；旧客户端明确拒绝停止指令时保留待确认并提示升级，在客户端进程重启后再重发，避免每轮对账重复投递。首版不自动推断“心跳消失等于任务已死”，也不提供批量抹除未确认记录的入口。
 
-评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。在线镜像命令不新增 HTTP 管理接口，必须挂载同一命名卷，并由正在运行的 Controller 执行；管理容器不直接并发改写 `image-pool/state.json`。
+评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。在线镜像命令不新增 HTTP 管理接口，由正在运行的 Controller 执行，不直接并发改写 `image-pool/state.json`。Runtime 清理只删除同 daemon、同数据卷登记的已确认旧镜像，保留当前 Catalog 引用与 Image ID、容器引用及归属/操作不确定项，按 Image ID 非强制删除，避免标签改写时误删新镜像。
 | Entry | File | Kind |
 |---|---|---|
 | `POST` ingest upload | `src/app/api/ingest/upload/route.ts` | HTTP |

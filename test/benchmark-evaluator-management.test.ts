@@ -35,6 +35,39 @@ evaluator_management_run sha256:test ${args}
   }
 })
 
+test('online image management uses the running Controller code and environment, not a host Catalog or helper', () => {
+  for (const args of ['--images-list', '--images-purge', '--images-purge --dry-run', '--runtimes-purge']) {
+    const result = spawnSync('bash', ['-c', `
+set -eu
+source "$1"
+docker() { printf '%s\\n' "$*" >&2; }
+CONTAINER_NAME=test-evaluator
+evaluator_management_online ${args}
+`, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    const calls = result.stderr.trim().split('\n')
+    assert.equal(calls.length, 2)
+    assert.match(calls[0], /^exec test-evaluator node -e/)
+    assert.match(calls[0], /MANAGEMENT_PROTOCOL_VERSION !== 2/)
+    assert.match(calls[0], /RUNTIME_IMAGE_MANAGEMENT_VERSION !== 1/)
+    assert.equal(calls[1], `exec --env EVALUATOR_INSTANCE_ID=test-evaluator test-evaluator node /app/services/evaluator/src/manage.cjs ${args}`)
+    assert.doesNotMatch(result.stderr, /--mount|run --rm|--env EVALUATOR_RUNTIME_IMAGE_PREFIX/)
+  }
+})
+
+test('online image management refuses an old or stopped Controller before cleanup', () => {
+  const result = spawnSync('bash', ['-c', `
+set -eu
+source "$1"
+docker() { printf '%s\\n' "$*" >&2; return 1; }
+CONTAINER_NAME=test-evaluator
+evaluator_management_online --images-purge
+`, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /尚未执行清理/)
+  assert.doesNotMatch(result.stderr, /manage\.cjs --images-purge/)
+})
+
 test('missing bundled management code fails before mounting Docker or service data', () => {
   const result = spawnSync('bash', ['-c', `
 set -eu

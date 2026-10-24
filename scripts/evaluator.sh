@@ -23,7 +23,8 @@ Usage:
 
 The start command builds and starts the Evaluator Controller from the current Git
 checkout on Linux or macOS. The stop command stops it immediately. Image commands
-keep the Controller running and operate only on the shared Benchmark image pool.
+keep the Controller running and manage the shared Case image pool and old managed
+Runtime images. Current Catalog runtimes and container-referenced images are kept.
 Defaults: --bind-address 0.0.0.0 --port 3001.
 Port precedence: --port > AGENT_INSIGHT_EVALUATOR_PORT in process environment
 > $AGENT_INSIGHT_HOME/.env (default: $HOME/.agent-insight/.env) > 3001.
@@ -149,15 +150,15 @@ images_evaluator() {
     || fail '缺少包含管理工具的 Controller 镜像'
   MANAGEMENT_READONLY=,readonly
   if [ "$action" = list ]; then
-    evaluator_management_run "$MANAGEMENT_IMAGE" --images-list
+    evaluator_management_online --images-list
     return
   fi
   if [ "$dry_run" = true ]; then
-    evaluator_management_run "$MANAGEMENT_IMAGE" --images-purge --dry-run
+    evaluator_management_online --images-purge --dry-run
     return
   fi
   evaluator_management_lock || fail '管理操作冲突'
-  evaluator_management_run "$MANAGEMENT_IMAGE" --images-purge
+  evaluator_management_online --images-purge
 }
 
 status_evaluator() {
@@ -444,6 +445,10 @@ bash "$SCRIPT_DIR/evaluator-doctor.sh" \
   --container "$CONTAINER_NAME" \
   --config "$CONFIG_FILE" \
   --expected-image-id "$IMAGE_ID"
+
+if ! evaluator_management_online --runtimes-purge; then
+  printf '警告：旧 Runtime 镜像清理未全部完成；Controller 继续运行，请检查清理输出。\n' >&2
+fi
 
 while IFS='|' read -r CONTROLLER_REPOSITORY CONTROLLER_TAG; do
   [ "$CONTROLLER_REPOSITORY" = "$IMAGE_REPOSITORY" ] || continue
