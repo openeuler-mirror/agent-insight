@@ -719,6 +719,18 @@ OCI Runtime 的摘要同时覆盖 `services/evaluator/src/`、`packages/project-
 
 准备期间 admission 返回可重试的 `EVALUATOR_ASSETS_PREPARING`、`EVALUATOR_ASSETS_DOWNLOADING` 或 `EVALUATOR_ASSETS_VERIFYING`；安装失败返回不可重试的具体错误。健康检查通过 binding 的 `runtimeFacts.assetStage/assetErrorCode` 暴露状态，平台在健康检查和下发响应两条路径均保留错误及详细原因。没有声明资产的接入包不增加准备流程，公共 Controller 不含 ZSoft 分支。
 
+#### Runtime 镜像生命周期与清理
+
+Runtime 镜像是可重新拉取或构建的评测制品，不是永久缓存，也不能作为提交物、Evidence 或运行日志的唯一存储位置。接入包复用公共 OCI 入口与清理策略，不自行扫描删除其他版本、不改写公共归属记录，也不执行全局 prune。
+
+- **版本与归属**：继续使用 Catalog 生成的内容摘要 tag 和镜像 label。公共 `prepareOciRuntime()` 发起 pull/build 前，通过 `recordManagedImage()` 在 `<EVALUATOR_DATA_DIR>/managed-images/` 登记 `reference`、`daemonId`、`role: runtime` 和 `uncertain: true`；制品校验通过后补全本机 Image ID，并置为已确认。直接命中的预装/手工构建镜像只复用，不自动接管归属；不能仅凭仓库名认定镜像可删。
+- **自动清理**：`scripts/evaluator.sh start` 在新 Controller 通过 Doctor 后，调用公共 `runtime-image-cleanup.cjs` 清理已登记的旧 Runtime；清理失败只警告，不停止已经启动的服务。正常启动只打印检查与清理摘要，异常仍保留具体原因。
+- **在线管理**：`images list`、`images purge --dry-run` 和 `images purge` 均使用运行中 Controller 的 Catalog、配置和数据目录，不使用宿主工作区的 Catalog。`purge` 同时处理空闲 Case 镜像池和旧 Runtime；关闭 Case 镜像池不影响 Runtime 清理。预览不删除镜像或归属记录，手动命令保留完整结果。
+- **保护边界**：只清理同一 Docker daemon、同一数据目录内归属已确认的旧 Runtime。当前 Catalog 所需的原始/有效镜像引用及相同 Image ID、被任意容器（包括已停止容器）引用、操作未确认、引用已改写或存在额外标签/其他仓库 digest 的镜像均保留。删除前重新核对归属，按已确认 Image ID 非强制删除；Docker 检查或删除发生冲突时报告并保留，不为清理而停止任务、删除容器或强制解除引用。
+- **接入职责与范围**：实例运行和恢复必须沿用公共容器标签与独立工作目录，不能绕过公共入口创建无归属的 Runtime。此策略不接管 Case Runner、`assets` 资产镜像、未登记的历史镜像、无标签镜像或构建缓存；Case 镜像的保护和回收遵循第 9.5 节镜像池协议，不能把这些对象当作旧 Runtime 一并删除。
+
+操作命令与保留原因见[部署指南：立即停止与镜像清理](service-deployment-guide.md#11-立即停止与镜像清理)。不新增 Benchmark Manifest 字段或 HTTP 管理接口。
+
 ### 9.2 Entrypoint 命令
 
 必须支持：
