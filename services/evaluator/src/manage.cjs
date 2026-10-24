@@ -174,6 +174,25 @@ async function manage(options) {
   return result
 }
 
+function formatManagementOutput(result, summary = false) {
+  if (!summary) return JSON.stringify(result, null, 2)
+  if (result.runtimes) {
+    const { removed, retained, skipped } = result.runtimes
+    const deleted = removed.filter((item) => item.existed).length
+    const lines = [`旧 Runtime 清理：删除 ${deleted} 个镜像，保留 ${retained.length} 项，失败 ${skipped.length} 项。`]
+    if (removed.length > deleted) lines.push(`已清除 ${removed.length - deleted} 条失效 Runtime 归属记录。`)
+    for (const item of skipped) lines.push(`Runtime 清理失败：${item.reference}：${item.reason}`)
+    return lines.join('\n')
+  }
+  if (result.initialized) return '评测服务管理状态已就绪。'
+  if (result.stopped !== undefined) {
+    const lines = [result.stopped ? '旧评测服务已停止。' : '旧评测服务未完全停止。']
+    for (const item of result.skipped || []) lines.push(`未完成：${item.target}：${item.reason}`)
+    return lines.join('\n')
+  }
+  return JSON.stringify(result, null, 2)
+}
+
 if (require.main === module) {
   const args = new Set(process.argv.slice(2))
   const modes = ['--start', '--images-list', '--images-purge', '--runtimes-purge'].filter((flag) => args.has(flag))
@@ -187,11 +206,11 @@ if (require.main === module) {
       volume: process.env.EVALUATOR_VOLUME, imageReference: process.env.EVALUATOR_IMAGE_REFERENCE,
       mode, dryRun: args.has('--dry-run'), purge: args.has('--purge-images') })
       .then((result) => {
-        console.log(JSON.stringify(result, null, 2))
+        console.log(formatManagementOutput(result, args.has('--summary')))
         for (const record of result.controllerImages || []) console.log(`CONTROLLER_IMAGE\t${record.id}\t${record.reference}`)
         if (!result.dryRun && (result.skipped?.length || result.runtimes?.skipped?.length || result.stopped === false)) process.exitCode = 2
       }).catch((error) => { console.error(error.message); process.exitCode = 1 })
   }
 }
 
-module.exports = { MANAGEMENT_PROTOCOL_VERSION, RUNTIME_IMAGE_MANAGEMENT_VERSION, manage, imagePoolCommand }
+module.exports = { MANAGEMENT_PROTOCOL_VERSION, RUNTIME_IMAGE_MANAGEMENT_VERSION, manage, imagePoolCommand, formatManagementOutput }

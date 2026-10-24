@@ -12,11 +12,11 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": "/app/benchmarks/swe-bench/evaluator/entrypoint.cjs",
     "imageProvider": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/images.cjs"),
-    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-63606dbcd91f7144840a541cbf6691f72e5c77c13844400fe36bbb541fc1dfb1",
+    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-b7b4ebf57642facdc064c8171939d9acc7ec0a0f7195297b49a0c9ef92517a6a",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/Dockerfile"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
     "runtimeSmokeEntrypoint": "/app/benchmarks/swe-bench/smoke/index.cjs",
-    "artifactDigest": "sha256:63606dbcd91f7144840a541cbf6691f72e5c77c13844400fe36bbb541fc1dfb1",
+    "artifactDigest": "sha256:b7b4ebf57642facdc064c8171939d9acc7ec0a0f7195297b49a0c9ef92517a6a",
     "network": "deny",
     "resources": {
       "cpu": 4,
@@ -112,9 +112,9 @@ const generatedEvaluatorDescriptors = [
       "verifyCommand": "python3",
       "verifyEntrypoint": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/verify_assets.py")
     },
-    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-fb9992d5cc8665cb185d3c9f967e083ae399bc4914e27e50529f3b41b68749df",
+    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-6ba4944f05a11f978fd4d983b2ef936a8fcf44ee9020c87943962a5754d59155",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/Dockerfile"),
-    "artifactDigest": "sha256:fb9992d5cc8665cb185d3c9f967e083ae399bc4914e27e50529f3b41b68749df",
+    "artifactDigest": "sha256:6ba4944f05a11f978fd4d983b2ef936a8fcf44ee9020c87943962a5754d59155",
     "network": "deny",
     "resources": {
       "cpu": 4,

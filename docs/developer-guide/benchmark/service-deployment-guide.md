@@ -461,7 +461,7 @@ bash scripts/evaluator.sh stop --purge-images
 
 停止服务不需要传端口参数，自定义端口启动的服务也使用相同命令。
 
-`start` 在新 Controller 通过 Doctor 后自动清理旧 Runtime；失败只打印警告，不停止已启动的服务。在线 `images list/purge` 使用运行中 Controller 内的 Catalog 和配置，不使用宿主工作区的 Catalog；旧版 Controller 需先执行 `start` 升级。关闭 Case 镜像池时，Runtime 清理仍可使用。
+`start` 在新 Controller 通过 Doctor 后自动清理旧 Runtime；正常启动只显示 Doctor 和清理数量摘要，不逐项打印镜像 ID、摘要和 JSON。失败仍显示具体原因；Runtime 清理失败只打印警告，不停止已启动的服务。手动执行 `bash scripts/evaluator-doctor.sh`、`images list/purge` 保留完整诊断结果。在线 `images list/purge` 使用运行中 Controller 内的 Catalog 和配置，不使用宿主工作区的 Catalog；旧版 Controller 需先执行 `start` 升级。关闭 Case 镜像池时，Runtime 清理仍可使用。
 
 Runtime 清理只处理同一 Docker daemon、同一数据卷中已登记且身份确认的 Runtime。始终保留当前 Catalog 所需引用及相同 Image ID、被任何容器（包括已停止容器）引用的镜像、未确认操作、被改写的引用及存在额外标签/其他仓库 digest 的镜像。删除不使用强制模式，不停止任务，也不执行全局 prune。输出的 `runtimes` 包含候选、删除、保留原因和失败项；`--dry-run` 不删除镜像或归属记录。预装/手工构建且未登记的历史 Runtime、Case 资产镜像及构建缓存不在 Runtime 清理范围内。
 

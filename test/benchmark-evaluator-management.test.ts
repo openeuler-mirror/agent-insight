@@ -5,7 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { spawnSync } from 'node:child_process'
 
-const { manage } = require('../services/evaluator/src/manage.cjs')
+const { manage, formatManagementOutput } = require('../services/evaluator/src/manage.cjs')
 const { ServiceControl, recordManagedImage } = require('../services/evaluator/src/service-control.cjs')
 const { EvaluationJobJournal, atomicWriteJson } = require('../services/evaluator/src/job-journal.cjs')
 
@@ -79,6 +79,27 @@ evaluator_management_run sha256:legacy --purge-images
   assert.match(result.stderr, /尚未执行停止或清理/)
   assert.match(result.stderr, /evaluator\.sh start/)
   assert.doesNotMatch(result.stderr, /--mount|--purge-images/)
+})
+
+test('startup summary omits Runtime inventories while manual output preserves the full result', () => {
+  const result = { runtimes: { candidates: [{ reference: 'runtime:long-digest', id: 'sha256:long-id' }],
+    removed: [{ reference: 'runtime:old', existed: true }, { reference: 'runtime:missing', existed: false }],
+    retained: [{ reference: 'runtime:current' }], skipped: [] } }
+  const summary = formatManagementOutput(result, true)
+  assert.match(summary, /删除 1 个镜像，保留 1 项，失败 0 项/)
+  assert.match(summary, /清除 1 条失效/)
+  assert.doesNotMatch(summary, /runtime:|sha256:|candidates|\{/)
+  assert.deepEqual(JSON.parse(formatManagementOutput(result)), result)
+})
+
+test('startup management summaries keep actionable failures and never claim an incomplete stop succeeded', () => {
+  const result = { runtimes: { removed: [], retained: [], skipped: [{ reference: 'runtime:old', reason: 'Docker connection interrupted' }] } }
+  assert.match(formatManagementOutput(result, true), /Runtime 清理失败：runtime:old：Docker connection interrupted/)
+  assert.match(formatManagementOutput({ initialized: true }, true), /管理状态已就绪/)
+  assert.match(formatManagementOutput({ stopped: true }, true), /旧评测服务已停止/)
+  const failed = formatManagementOutput({ stopped: false, skipped: [{ target: 'container', reason: 'still running' }] }, true)
+  assert.match(failed, /未完全停止/)
+  assert.match(failed, /container：still running/)
 })
 
 async function fixture(t: any) {

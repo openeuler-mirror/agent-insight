@@ -94,7 +94,7 @@ test('startup cleans old Runtimes only after Doctor and preserves the service if
   const runContainerIndex = source.indexOf('docker run --detach --pull never')
   const doctorIndex = source.indexOf('bash "$SCRIPT_DIR/evaluator-doctor.sh"')
   const removeOldImageIndex = source.indexOf('docker image rm "$OLD_CONTROLLER_REF"')
-  const cleanupRuntimeIndex = source.indexOf('if ! evaluator_management_online --runtimes-purge; then')
+  const cleanupRuntimeIndex = source.indexOf('if ! evaluator_management_online --runtimes-purge --summary; then')
 
   assert.ok(removeContainerIndex >= 0)
   assert.ok(runContainerIndex > removeContainerIndex)
@@ -102,6 +102,9 @@ test('startup cleans old Runtimes only after Doctor and preserves the service if
   assert.ok(removeOldImageIndex > doctorIndex)
   assert.ok(cleanupRuntimeIndex > doctorIndex)
   assert.match(source.slice(cleanupRuntimeIndex, removeOldImageIndex), /Controller 继续运行/)
+  assert.match(source.slice(doctorIndex, cleanupRuntimeIndex), /--summary/)
+  assert.match(source, /evaluator_management_run "\$IMAGE_ID" --summary/)
+  assert.match(source, /evaluator_management_run "\$IMAGE_ID" --start --summary/)
   assert.match(source, /docker image ls --format .*"\$IMAGE_REPOSITORY"/)
   assert.match(source, /PREVIOUS_CONTROLLER_IMAGE_IDS=/)
   assert.doesNotMatch(source, /docker image prune|docker system prune/)

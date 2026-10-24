@@ -425,9 +425,9 @@ CONFIG_DIGEST=$(git_checkout hash-object --no-filters "$CONFIG_FILE")
 
 docker volume create "$DATA_VOLUME" >/dev/null
 if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-  evaluator_management_run "$IMAGE_ID"
+  evaluator_management_run "$IMAGE_ID" --summary
 fi
-evaluator_management_run "$IMAGE_ID" --start
+evaluator_management_run "$IMAGE_ID" --start --summary
 printf '启动 Evaluator Controller 容器：%s\n' "$CONTAINER_NAME"
 docker run --detach --pull never \
   --name "$CONTAINER_NAME" \
@@ -444,9 +444,10 @@ docker run --detach --pull never \
 bash "$SCRIPT_DIR/evaluator-doctor.sh" \
   --container "$CONTAINER_NAME" \
   --config "$CONFIG_FILE" \
-  --expected-image-id "$IMAGE_ID"
+  --expected-image-id "$IMAGE_ID" \
+  --summary
 
-if ! evaluator_management_online --runtimes-purge; then
+if ! evaluator_management_online --runtimes-purge --summary; then
   printf '警告：旧 Runtime 镜像清理未全部完成；Controller 继续运行，请检查清理输出。\n' >&2
 fi
 
