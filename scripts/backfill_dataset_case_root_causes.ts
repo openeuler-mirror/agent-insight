@@ -1,4 +1,5 @@
 import { config as loadEnv } from 'dotenv';
+import { extractRootCausesFromExpected } from '@/lib/engine/evaluation/root-cause-extractor';
 import {
   prepareDatasetCasesForPersistence,
   readAllAgentDatasets,
@@ -25,7 +26,7 @@ async function main() {
     const result = await prepareDatasetCasesForPersistence({
       nextCases: dataset.cases,
       previousCases,
-      user: dataset.user,
+      extractor: (input, expectedOutput) => extractRootCausesFromExpected(input, expectedOutput, dataset.user),
       retryFailed,
       forceRefresh,
     });
