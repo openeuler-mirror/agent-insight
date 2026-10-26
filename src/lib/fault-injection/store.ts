@@ -3,6 +3,7 @@ import { prisma } from '@/lib/storage/prisma'
 import { composeFaultPrompt, findSubmode } from '@/lib/fault-injection/compose-prompt'
 import { listFaultsViaPython, type CollectPayload } from '@/lib/fault-injection/engine'
 import { judgeFaultInjection } from '@/lib/fault-injection/judge'
+import { isFiBusinessTraceUsable } from '@/lib/fault-injection/trace-readiness'
 import { mergeEvaluationMarkers } from '@/lib/fault-injection/trace-markers'
 
 export function newTaskKey(): string {
@@ -176,10 +177,7 @@ export async function persistFiCollectIngress(input: {
   // 实验「生成 Trace」依赖 Case.taskId；collect 对齐后立刻回填（避免评测时空轨迹）。
   if (sessionTaskId) {
     const fiKeys = Array.from(new Set([input.runId, updated.id].filter(Boolean)))
-    const execution = await prisma.execution.findFirst({
-      where: { taskId: sessionTaskId },
-      select: { id: true },
-    })
+    const trace = await loadBusinessSession(sessionTaskId, updated)
     await prisma.experimentCase.updateMany({
       where: {
         fiRunId: { in: fiKeys },
@@ -187,7 +185,7 @@ export async function persistFiCollectIngress(input: {
       },
       data: {
         taskId: sessionTaskId,
-        ...(execution ? { executionId: execution.id } : {}),
+        ...(trace.ready && trace.execution ? { executionId: trace.execution.id } : {}),
       },
     })
   }
@@ -205,18 +203,29 @@ function parseSessionInteractionsJson(raw: string | null | undefined): unknown[]
   }
 }
 
-/** ⓪ Session is judge-ready when dialogue has assistant turns or the Trace completed. */
-export function isSessionTraceReadyForJudge(
-  interactions: unknown[],
-  opts?: { endTime?: Date | string | null },
-): boolean {
-  if (!Array.isArray(interactions) || interactions.length === 0) return false
-  if (opts?.endTime) return true
-  return interactions.some((row) => {
-    if (!row || typeof row !== 'object') return false
-    const role = String((row as { role?: string }).role || '').toLowerCase()
-    return role === 'assistant' || role === 'opencode' || role === 'subagent'
+/** Identity required to keep internal sessions out of FI scoring. */
+type FiTraceIdentity = { platform: string; agent: string; user?: string | null }
+
+/** Read the independent collector's business trace; never synthesize it from FI output. */
+async function loadBusinessSession(sessionTaskId: string, identity: FiTraceIdentity) {
+  const owner = identity.user ? { user: identity.user } : {}
+  const [session, execution] = await Promise.all([
+    prisma.session.findFirst({ where: { taskId: sessionTaskId, ...owner } }),
+    prisma.execution.findFirst({
+      where: { taskId: sessionTaskId, isSubagent: false, ...owner },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true, agentName: true },
+    }),
+  ])
+  const ready = isFiBusinessTraceUsable({
+    platform: identity.platform, agent: identity.agent,
+    executionAgent: execution?.agentName,
+    interactions: session?.interactions, endTime: session?.endTime,
   })
+  return {
+    execution, ready,
+    interactions: ready ? parseSessionInteractionsJson(session?.interactions) : [],
+  }
 }
 
 function judgeSessionWaitMs(): number {
@@ -241,7 +250,7 @@ function sleep(ms: number): Promise<void> {
  * When FI is session-aligned, wait for Insight ⓪ to write Session.interactions
  * before Judge runs (collect often finishes before OpenCode upload).
  */
-export async function waitForSessionTraceForJudge(sessionTaskId: string): Promise<{
+export async function waitForSessionTraceForJudge(sessionTaskId: string, identity: FiTraceIdentity): Promise<{
   interactions: unknown[]
   ready: boolean
   waitedMs: number
@@ -250,16 +259,7 @@ export async function waitForSessionTraceForJudge(sessionTaskId: string): Promis
   const pollMs = judgeSessionPollMs()
   const started = Date.now()
 
-  const loadOnce = async () => {
-    const session = await prisma.session.findUnique({
-      where: { taskId: sessionTaskId },
-    })
-    const interactions = parseSessionInteractionsJson(session?.interactions)
-    return {
-      interactions,
-      ready: isSessionTraceReadyForJudge(interactions, { endTime: session?.endTime }),
-    }
-  }
+  const loadOnce = () => loadBusinessSession(sessionTaskId, identity)
 
   let loaded = await loadOnce()
   if (loaded.ready || timeoutMs <= 0) {
@@ -310,18 +310,14 @@ export async function loadPersistedFiCollectForJudge(runId: string): Promise<{
   let sessionWaitMs = 0
   if (run.sessionTaskId) {
     if (run.faultActivated) {
-      const waited = await waitForSessionTraceForJudge(run.sessionTaskId)
+      const waited = await waitForSessionTraceForJudge(run.sessionTaskId, run)
       interactions = waited.interactions
       sessionTraceReady = waited.ready
       sessionWaitMs = waited.waitedMs
     } else {
-      const session = await prisma.session.findUnique({
-        where: { taskId: run.sessionTaskId },
-      })
-      interactions = parseSessionInteractionsJson(session?.interactions)
-      sessionTraceReady = isSessionTraceReadyForJudge(interactions, {
-        endTime: session?.endTime,
-      })
+      const loaded = await loadBusinessSession(run.sessionTaskId, run)
+      interactions = loaded.interactions
+      sessionTraceReady = loaded.ready
     }
   }
   let markers: unknown[] = []

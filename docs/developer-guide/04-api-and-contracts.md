@@ -28,7 +28,6 @@
 - 独立截止时间覆盖模型请求及响应体解析，超时和客户端取消都会 abort 底层请求，结束后释放定时器和监听器。取消表示终止本地等待及传输，不保证供应商立即停止推理。
 - 前端只有测试成功且未取消时才调用设置保存接口，测试中冻结表单、阻止重复提交。保存阶段不提供取消，避免误报“未保存”。健康检查区分超时、取消与其他失败；失败信息持续显示并支持显式关闭或重试。
 
-
 ### 实验重命名
 
 `PATCH /api/experiments/:id` 接收 `{ user, name }`，只更新当前用户未删除的普通或 Skill 实验。名称会去除首尾空白，长度须为 1～120 个字符；成功返回 `{ success: true, name }`，不存在或无权访问返回 `404`。该接口原有的 `{ user, watchMode: false }` 停止监听契约保留，两类修改不能合并在一次请求中。重命名只修改 `Experiment.name`，不改冻结配置、执行状态或评测结果。
@@ -321,7 +320,6 @@
 
 
 
-
 ## Trace Bundle 导入导出契约
 
 - `GET /api/observe/traces/export?executionId=<id>`：校验当前用户可见性；若传入子 Agent Execution，则先解析到根 Execution，再导出整棵树。响应为 `agent-insight.trace-bundle` v1 JSON，并设置下载文件名。
@@ -329,7 +327,6 @@
 - v1 Bundle 顶层字段为 `format`、`version`、`exportedAt`、`rootExecutionId`、`executions`；每个节点包含 portable Execution 与可空 Session。Session `interactions` 保留规范化原始值，不做面向展示的时间格式化；Langfuse Session 还可携带完整 `langfuseTraceNodes`，旧版未包含该可选字段的 v1 Bundle 仍可导入。
 - `Execution.id` 与 Execution/Session `taskId` 共享冲突检测空间。无冲突 ID 原样保留；有冲突 ID 才生成 `import_<uuid>`，并同步更新父子 ID、root ID、`agentSessionId`、interactions 中已知的 session/execution 引用及 Langfuse 节点的 `subagentSessionId`。OTel `traceId` / `spanId` / `parentSpanId` 不参与重映射。
 - 导入只创建 Execution、Session 和可重算的 ExecutionSkill；不迁移 Evaluation、TraceEvaluation、AgentDebugReport、ExecutionTag 或基础设施关联，也不调度 LLM 评测。
-
 
 ## Cross-session collaboration graph and Trace projection
 
@@ -374,13 +371,13 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 镜像预取继续使用已有 `POST /api/v1/evaluations`：`operation=prepare-images` 支持 `revision + windows[]` 全量快照；每个窗口含 `benchmarkKey/evaluatorKey/experimentId/caseIds/cases`，总 Case 数不超过服务并发加 1。预取开关由 Evaluator 的 `/health` 报告给平台；准备消息保留摘要校验和单实验窗口兼容，无需额外令牌。
 
-
 ### FI 统一任务提示与主动拦截结果
+
+FI 批量绑定启用 waitForActiveRuns：queued/collecting/judging 等活动 Run 不受初始收集窗口限制；全部 Run 进入终态后，迟到 Trace 最多等待 180 秒，取消或删除实验立即退出。collect 回填、FI 评分入口、实验绑定与详情页统一校验 platform/Agent 身份、Session 结束标记和非空 assistant 响应或工具调用；内部 ras-judge 不会被业务 Case 接受。普通数据集保持原 Trace 判据。
 
 FI 认领过期仅用于回收失联 Worker 的孤儿任务；有新心跳的健康 Worker 不因 claimedAt 超过 300 秒而丢失长任务。回收按原 owner/status/claimedAt 比较后更新，避免覆盖并发完成或新认领；客户端按活动 runId 去重，并持槽至结果上传结束。
 
 OpenCode FI 插件以 `run.session.bound` 固定业务根 Session，只在该 Session 执行注入；内部 RAS 判定和标题生成不参与注入或激活计数。mapper 优先取显式根绑定，兼容旧轨迹时保留首次激活会话，不再使用最后出现的 Session ID。进程启动重试可建立新的显式根绑定。
-
 
 所有故障通过 `composeFaultPrompt` 拼接 Skill 名称、可选子模式名称与用户补充，FI Run 与内置可靠性数据集使用同一入口。故障配方与 `FaultDefinition` 不再提供 `task_prompt` / `expose_skill_to_agent`，Python catalog 和 `FaultItem` 不再传递 `taskPrompt` / `hidden`。OpenCode 与 xiaoO 一律安装注入 Skill；具体业务任务由 Skill 的执行入口定义。OpenCode 始终请求加载注入 Skill，并将该准备调用排除在业务工具参数改写计数之外，保证 `call_index=1` 仍命中第一次业务 Skill 选择。无新增 API 路由或数据库字段。
 

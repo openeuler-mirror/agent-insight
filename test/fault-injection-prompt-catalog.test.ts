@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import type { FaultInjectionRun } from '@prisma/client'
 import test from 'node:test'
 import { listFaultsViaPython } from '@/lib/fault-injection/engine'
 import { createTaskWithRuns } from '@/lib/fault-injection/store'
@@ -24,7 +25,7 @@ test('real catalog prompts survive task creation and match every generated case'
     })),
   })
   try {
-    const stored = await prisma.faultInjectionRun.findMany({
+    const stored: FaultInjectionRun[] = await prisma.faultInjectionRun.findMany({
       where: { fiTaskId: created.task.id },
     })
     const byRunId = new Map(stored.map((run) => [run.runId, run]))

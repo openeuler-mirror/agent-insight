@@ -69,9 +69,12 @@ describe('FI Judge reads persisted Prisma rows', () => {
         label: 'pre-existing',
         query: null,
         interactions: JSON.stringify(dbInteractions),
+        endTime: new Date(),
         user,
       },
     })
+
+    await prisma.execution.create({ data: { user, taskId: sessionTaskId, agentName: 'build', framework: 'opencode' } })
 
     const payload: CollectPayload = {
       runId,
@@ -293,6 +296,7 @@ describe('FI Judge reads persisted Prisma rows', () => {
       { role: 'user', content: 'late-user', timestamp: 1 },
       { role: 'assistant', content: 'late-assistant', timestamp: 2 },
     ]
+    await prisma.execution.create({ data: { user, taskId: localSessionTaskId, agentName: 'build', framework: 'opencode' } })
     const createLate = new Promise<void>((resolve, reject) => {
       setTimeout(() => {
         prisma.session
@@ -302,6 +306,7 @@ describe('FI Judge reads persisted Prisma rows', () => {
               label: 'late-upload',
               query: null,
               interactions: JSON.stringify(lateTree),
+              endTime: new Date(),
               user,
             },
           })
@@ -324,6 +329,7 @@ describe('FI Judge reads persisted Prisma rows', () => {
       await prisma.faultInjectionRun.deleteMany({ where: { runId: localRunId } })
       await prisma.faultInjectionTask.delete({ where: { id: task.id } })
       await prisma.session.delete({ where: { taskId: localSessionTaskId } }).catch(() => {})
+      await prisma.execution.deleteMany({ where: { user, taskId: localSessionTaskId } })
     }
   })
 
@@ -333,6 +339,7 @@ describe('FI Judge reads persisted Prisma rows', () => {
     if (sessionTaskId) {
       await prisma.session.delete({ where: { taskId: sessionTaskId } }).catch(() => {})
     }
+    await prisma.execution.deleteMany({ where: { user } })
     await prisma.$disconnect()
   })
 })
