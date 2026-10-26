@@ -13,6 +13,7 @@ import {
   assertTraceGenerationTarget,
   generateExperimentTraces,
   loadTraceGenerationRetryRequest,
+  reserveTraceRetry,
   TraceGenerationError,
 } from '@/lib/engine/experiment/trace-generation';
 import { prisma } from '@/lib/storage/prisma';
@@ -73,7 +74,7 @@ async function prepareGeneratedTraceRetry(experimentId: string, caseId: string):
         pointsJson: null,
         evidenceJson: null,
         errorMessage: null,
-        attempts: 0,
+        attempts: { increment: 1 },
         durationMs: null,
         humanScore: null,
         humanReason: null,
@@ -232,11 +233,11 @@ export async function POST(
       : null;
     if (genericRequest) {
       await assertTraceGenerationTarget(genericRequest);
-      await prepareGeneratedTraceRetry(id, caseId);
+      const reservedAttemptIds = await reserveTraceRetry(genericRequest);
       backgroundOwnsLock = true;
       void (async () => {
         try {
-          const generated = await generateExperimentTraces(genericRequest, { forceNewTrace: true });
+          const generated = await generateExperimentTraces(genericRequest, { forceNewTrace: true, reservedAttemptIds });
           if (!generated.readyCaseIds.length) {
             await settleAfterTraceRetryFailure(id);
             return;
@@ -250,7 +251,7 @@ export async function POST(
           active.delete(lockKey);
         }
       })();
-      return NextResponse.json({ kind: 'trace', status: 'running' });
+      return NextResponse.json({ kind: 'trace', status: 'running', attemptId: reservedAttemptIds[caseId] });
     }
 
     if (row.fiTaskId && row.fiRunId && row.faultInjectionType) {

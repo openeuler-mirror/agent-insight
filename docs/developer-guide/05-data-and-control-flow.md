@@ -299,6 +299,16 @@ flowchart LR
     settle --> align["analyze-match / 轨迹归因"]
 ```
 
+### 普通单组实验的执行进度与重试隔离
+
+现有 `GET /api/experiments/:id` 在普通单组实验的 `cases[].executionProgress` 返回当前执行身份、轮次、阶段、更新时间、精确主执行 ID 和各评估器状态。`execution-progress-service.ts` 在只读事务中读取同一份 Case、最新 Attempt、结果及主 Execution，并同步投影当前行的实际输出、链路和评分行，避免拼接不同轮次的数据。生成流程使用 `ExperimentTraceAttempt`，FI 使用当前 `fiRunId`，已有 Trace 直接进入评测；主记录查询按当前用户限定且排除子 Agent。没有唯一主记录时不生成链接。Attempt 已下发时继续读取对应命令：`CREATED/SENT/RECEIVED` 显示等待客户端开始，`RUNNING` 显示 Agent 执行，`SUCCEEDED` 显示等待 Trace 入库；不把服务端下发当作客户端已开始执行。
+
+普通 Trace 重试通过 `reserveTraceRetry` 在同一事务中锁定实验、校验调用方看到的旧 Attempt、创建新 `queued` Attempt、清空 Case 旧链路和重置结果。执行调度消费这个预占 Attempt，不额外创建一轮。数据库事务和 `(caseId, attemptNo)` 唯一约束负责多进程互斥；进程内锁只用于快速拒绝重复请求。最新 Attempt 无论处于排队、失败还是取消状态，旧 Attempt 均不得绑定当前 Case；历史回收也只检查最新 Attempt。客户端返回历史 Attempt 的 Trace ID 时以 `TRACE_ID_REUSED` 终止，不自动重试，也不按输入文本或最新记录猜测主链路。
+
+评测行通过状态、`updatedAt`、单调递增的 `attempts` 和当前 Case 执行身份竞争领取；写回须同时匹配领取时的计数、Execution/Task/FI Run 和最新 Trace Attempt。重置评测递增计数，不归零，防止旧完成写入新的评测轮次。外层调度异常不再无条件覆盖可能已重置的结果行。`attempts` 同时包含重置的隔离计数，不应解释为精确模型调用次数。
+
+列表每 2 秒串行轮询；打开弹窗、恢复焦点及重试受理后触发刷新。前端同时校验请求顺序、执行轮次、快照版本和阶段，拒绝回退；拒绝某行快照时同步保留该行原有结果，不能只保留进度文字。仅显式的新执行或新评测轮次允许重新进入对应阶段。`/trace?executionId=...&taskId=...` 优先按具体 Execution ID 查询、选中和渲染，找不到时明确提示，不回退到同一会话的其他记录。客户端上报机制和普通 Case 详情布局保持原样。
+
 ## 后端流水线：Benchmark Agent 执行与回传
 
 ```mermaid

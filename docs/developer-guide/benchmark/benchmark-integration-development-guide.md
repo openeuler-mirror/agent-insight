@@ -590,6 +590,12 @@ Presentation 只控制公共前端的名称、顺序和有限格式，不能改�
 
 私有字段不能进入 Presentation。数据集导入时会冻结字段快照，Manifest 后续变化不会静默修改已发布数据集。
 
+实验详情的 Case 明细表将执行状态集中到独立的“执行进度”列和步骤弹窗，提交物列只展示文件，不再展示参考契约列；单个 Case 详情页及 `presentation.referencePanel` 契约保持不变。阶段名称使用平台通用映射，本轮不新增 Manifest 配置。“Agent 执行”步骤复用详情接口返回的 Case `taskId` 打开 `/trace?taskId=...`（新标签页）；没有关联时显示占位提示，导入提交物时隐藏入口。沿用现有主 Trace 绑定及 MCTS 历史标识解析，不从子 Agent 或其他 Case 猜测链接；执行期间能否跳转取决于主链路是否已关联。
+
+现有 `GET /api/experiments/:id` 的 `cases[].benchmark.progressDetails` 返回当前最新 Run 的创建/结束时间、执行启动/最近上报/可选阶段开始时间，以及最新评测 attempt 的阶段、创建/启动/结束时间、最近上报和失败原因。仅投影这些公开状态字段，不返回原始进度 JSON。评测开始后使用评测侧的上报时间，重评活动状态优先于 Run 旧终态。步骤由实际状态映射，不推算百分比；没有可靠开始时间时不显示阶段耗时，也不编造历史阶段耗时。
+
+运行期间沿用详情页 5 秒轮询，轮询失败保留快照并明确提示，恢复后清除提示。非排队活动阶段超过 5 分钟无上报时提示观测延迟；从未收到上报则从该流程启动时间计时。此提示不改变后端状态，不将阶段回调视为心跳，不触发重试或超时终止。导入提交物跳过执行阶段，终态停止转圈并冻结总耗时。
+
 ### 10.2 Evaluator
 
 `presentation.evaluator` 提供 `displayName/description/runMode/outputDescription`。这些是实例业务文案，公共 React 组件不应根据 Benchmark key 推断名称。

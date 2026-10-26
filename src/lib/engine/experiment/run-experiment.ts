@@ -26,6 +26,7 @@
 
 import { createHash } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
+import type { Prisma } from '@prisma/client';
 import {
   buildJudgePrompt,
   parseJudgeText,
@@ -433,6 +434,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
     include: {
       case: {
         include: {
+          traceAttempts: { orderBy: { attemptNo: 'desc' }, take: 1 },
           experiment: {
             select: { evaluatorIdsJson: true, evaluatorConfigsJson: true, skillName: true },
           },
@@ -443,27 +445,34 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   if (!row) throw new Error(`ExperimentEvalResult ${resultId} 不存在`);
   await assertExperimentActive(row.experimentId, row.caseId);
 
-  await prisma.experimentEvalResult.update({
-    where: { id: resultId },
-    data: { status: 'running', errorMessage: null },
+  if (row.status === 'running' || row.status === 'cancelled') return 'failed';
+  const traceAttempt = row.case.traceAttempts[0];
+  if (traceAttempt && traceAttempt.status !== 'ready') return 'failed';
+  const caseFence = {
+    deletedAt: null, experiment: { deletedAt: null }, executionId: row.case.executionId, taskId: row.case.taskId, fiRunId: row.case.fiRunId,
+    traceAttempts: traceAttempt
+      ? { none: { attemptNo: { gt: traceAttempt.attemptNo } } }
+      : { none: {} },
+  };
+  const claim = await prisma.experimentEvalResult.updateMany({
+    where: { id: resultId, updatedAt: row.updatedAt, status: row.status, attempts: row.attempts, case: caseFence },
+    data: { status: 'running', errorMessage: null, attempts: { increment: 1 } },
   });
+  if (!claim.count) return 'failed';
+  const writeFence = { id: resultId, status: 'running', attempts: row.attempts + 1, case: caseFence };
 
   const startedAt = Date.now();
   const maxAttempts = experimentEngineConfig.retryDelaysMs.length + 1;
   let localAttempts = 0;
   let lastError: unknown = null;
 
-  const runtime = await loadCaseRuntime(
-    row.case,
-    user,
-    row.case.experiment.skillName,
-    row.evaluatorId === 'preset-agent-task-completion',
-  );
-
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await assertExperimentActive(row.experimentId, row.caseId);
     localAttempts = attempt;
     try {
+      const runtime = await loadCaseRuntime(
+        row.case, user, row.case.experiment.skillName, row.evaluatorId === 'preset-agent-task-completion',
+      );
       let evaluatorConfig: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | undefined;
       const evaluatorId = String(row.evaluatorId);
       if (isConfigurableTextEvaluatorId(evaluatorId)) {
@@ -488,7 +497,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
           : experimentEngineConfig.rowTimeoutMs,
       );
       await prisma.experimentEvalResult.updateMany({
-        where: { id: resultId, status: 'running', case: { deletedAt: null, experiment: { deletedAt: null } } },
+        where: writeFence,
         data: {
           status: 'done',
           verdict: out.verdict ?? null,
@@ -514,7 +523,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
 
   const message = lastError instanceof Error ? lastError.message : String(lastError || '未知错误');
   await prisma.experimentEvalResult.updateMany({
-    where: { id: resultId, status: 'running', case: { deletedAt: null, experiment: { deletedAt: null } } },
+    where: writeFence,
     data: {
       status: 'failed',
       errorMessage: message.slice(0, 2000),
@@ -691,15 +700,6 @@ function getOrStartResultRun(user: string, resultId: string): Promise<void> {
     } catch (e) {
       // executeResultRow 内部已写 failed；这里兜底行本身不存在等意外
       console.error(`[experiment-engine] row ${resultId} failed:`, (e as Error)?.message);
-      try {
-        await prisma.experimentEvalResult.updateMany({
-          where: { id: resultId, status: { in: ['pending', 'running'] }, case: { deletedAt: null, experiment: { deletedAt: null } } },
-          data: {
-            status: 'failed',
-            errorMessage: ((e as Error)?.message || '未知错误').slice(0, 2000),
-          },
-        });
-      } catch { /* 行不存在时放弃 */ }
     } finally {
       try {
         const row = await prisma.experimentEvalResult.findUnique({ where: { id: resultId }, select: { caseId: true, experimentId: true } });
@@ -741,17 +741,20 @@ async function resetResultRun(params: {
   user: string;
 }): Promise<{ resultId: string; completion?: Promise<void> }> {
   await assertExperimentActive(params.experimentId, params.caseId);
-  return withKeyedLock(`eval-result:${params.caseId}:${params.evaluatorId}`, async () => {
-    const existingRow = await prisma.experimentEvalResult.findUnique({
+  return withKeyedLock(`eval-result:${params.caseId}:${params.evaluatorId}`, async () => prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.experimentCase.updateMany({ where: { id: params.caseId, deletedAt: null }, data: { id: params.caseId } });
+    const existingRow = await tx.experimentEvalResult.findUnique({
       where: { caseId_evaluatorId: { caseId: params.caseId, evaluatorId: params.evaluatorId } },
-      select: { id: true },
+      select: { id: true, status: true },
     });
     const existingRun = existingRow ? getResultRuns().get(existingRow.id) : undefined;
     if (existingRow && existingRun) {
       return { resultId: existingRow.id, completion: existingRun };
     }
 
-    const row = await prisma.experimentEvalResult.upsert({
+    if (existingRow?.status === 'running') return { resultId: existingRow.id, completion: Promise.resolve() };
+
+    const row = await tx.experimentEvalResult.upsert({
       where: { caseId_evaluatorId: { caseId: params.caseId, evaluatorId: params.evaluatorId } },
       create: {
         experimentId: params.experimentId,
@@ -760,6 +763,7 @@ async function resetResultRun(params: {
         status: 'pending',
       },
       update: {
+        attempts: { increment: 1 },
         status: 'pending', verdict: null, summary: null,
         score: null, pointsJson: null,
         evidenceJson: null, errorMessage: null, durationMs: null,
@@ -768,7 +772,7 @@ async function resetResultRun(params: {
       select: { id: true },
     });
     return { resultId: row.id };
-  });
+  }));
 }
 
 async function prepareAndScheduleResultRuns(

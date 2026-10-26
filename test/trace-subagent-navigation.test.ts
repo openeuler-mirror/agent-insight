@@ -15,21 +15,22 @@ visit(ast);
 assert.ok(callback);
 const js = ts.transpileModule(`const run = ${callback.getText(ast)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function harness() {
-    const root = { task_id: 'root' }, child = { task_id: 'child' }, other = { task_id: 'other' };
+    const root = { task_id: 'root', upload_id: 'root-execution' }, child = { task_id: 'child' }, other = { task_id: 'other' };
     const requestRef = { current: 0 };
     let selected: unknown = root;
     let error: string | null = null;
     let cleanup: (() => void) | undefined;
-    const pending: Array<{ resolve: (value: unknown) => void; signal: AbortSignal }> = [];
+    const pending: Array<{ resolve: (value: unknown) => void; signal: AbortSignal; url: string }> = [];
     const scope = { data: [root], executionLookupRequestRef: requestRef,
         setSelectedExecution: (value: unknown) => { selected = value; },
         setExecutionLookupError: (value: string | null) => { error = value; }, locale: 'zh', AbortController,
-        apiFetch: (_: string, options: { signal: AbortSignal }) => new Promise(resolve => pending.push({ resolve, signal: options.signal })),
+        apiFetch: (url: string, options: { signal: AbortSignal }) => new Promise(resolve => pending.push({ resolve, url, signal: options.signal })),
     };
     return { root, child, other, selected: () => selected, error: () => error, requests: () => pending.length,
-        navigate: (taskIdParam: string | null) => {
+        url: (index: number) => pending[index].url,
+        navigate: (taskIdParam: string | null, executionIdParam: string | null = null) => {
             cleanup?.();
-            const args = { ...scope, taskIdParam, selectedExecution: selected };
+            const args = { ...scope, taskIdParam, executionIdParam, selectedExecution: selected };
             cleanup = new Function(...Object.keys(args), `${js}; return run();`)(...Object.values(args));
         },
         aborted: (index: number) => pending[index].signal.aborted,
@@ -71,4 +72,19 @@ test('failed target lookup shows an error and can retry instead of retaining the
 test('missing or mismatched target is not displayed as the requested trace', async () => {
     const h = harness(); h.navigate('child'); await h.resolve(0, [h.root]);
     assert.equal(h.selected(), null); assert.match(h.error()!, /未找到/);
+});
+
+test('exact execution identity wins over a matching task ID and cannot fall back to an older record', async () => {
+    const h = harness();
+    h.navigate('root', 'new-execution');
+    assert.equal(h.selected(), null);
+    assert.match(h.url(0), /executionId=new-execution/);
+    assert.doesNotMatch(h.url(0), /taskId=/);
+    await h.resolve(0, [h.root]);
+    assert.equal(h.selected(), null);
+    assert.match(h.error()!, /未找到/);
+    h.navigate('root', 'new-execution');
+    const current = { task_id: 'root', upload_id: 'new-execution' };
+    await h.resolve(1, [current]);
+    assert.deepEqual(h.selected(), current);
 });

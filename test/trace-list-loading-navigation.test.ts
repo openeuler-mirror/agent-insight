@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
-import { parseAsString, useQueryState } from 'nuqs';
+import { parseAsString, useQueryStates } from 'nuqs';
 import { NuqsTestingAdapter } from 'nuqs/adapters/testing';
 import ts from 'typescript';
 
@@ -229,8 +229,8 @@ test('initial errors release loading and permit the next refresh', async () => {
 });
 
 const taskIdHook = findNode(node => ts.isCallExpression(node)
-    && node.expression.getText(ast) === 'useQueryState'
-    && node.arguments[0]?.getText(ast) === "'taskId'");
+    && node.expression.getText(ast) === 'useQueryStates'
+    && Boolean(node.arguments[0]?.getText(ast).includes('executionId')));
 const selectDeclaration = findNode(node => ts.isVariableDeclaration(node)
     && node.name.getText(ast) === 'handleSelectExecution') as ts.VariableDeclaration;
 const selectCallback = (selectDeclaration.initializer as ts.CallExpression).arguments[0];
@@ -243,10 +243,10 @@ async function navigationHarness(run: (scope: Record<string, unknown>) => void, 
     Object.defineProperty(globalThis, 'window', { configurable: true, value: {} });
     Object.defineProperty(globalThis, 'location', { configurable: true, value: new URL('http://example.test/trace' + initialQuery) });
     try {
-        let setter: (value: string | null, options?: { history?: 'push' | 'replace' }) => Promise<URLSearchParams>;
+        let setter: (value: { taskId: string | null; executionId: string | null }, options?: { history?: 'push' | 'replace' }) => Promise<URLSearchParams>;
         const updates: Array<{ queryString: string; options: { history: string } }> = [];
         function Harness() {
-            const [, update] = expression(taskIdHook, { useQueryState, parseAsString });
+            const [, update] = expression(taskIdHook, { useQueryStates, parseAsString });
             setter = update;
             return null;
         }
@@ -259,7 +259,7 @@ async function navigationHarness(run: (scope: Record<string, unknown>) => void, 
         run({
             setSelectedExecution: () => {}, reportTraceDetailView: () => {}, setImportResult: () => {},
             importResult: { rootTaskId: 'trace-123' },
-            setTaskIdParam: (value: string | null, options?: { history?: 'push' | 'replace' }) => {
+            setTraceTarget: (value: { taskId: string | null; executionId: string | null }, options?: { history?: 'push' | 'replace' }) => {
                 pending = setter(value, options);
                 return pending;
             },
@@ -292,7 +292,15 @@ test('opening an imported Trace adds a detail history entry', async () => {
 });
 
 test('the in-page return-to-list action replaces detail state instead of adding another entry', async () => {
-    const updates = await navigationHarness(scope => expression(selectCallback, scope)(null), '?page=3&status=failed&taskId=trace-123');
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)(null), '?page=3&status=failed&taskId=trace-123&executionId=execution-123');
+    assert.equal(updates.length, 1);
     assert.equal(updates[0].options.history, 'replace');
     assert.equal(updates[0].queryString, '?page=3&status=failed');
+});
+
+test('switching away from an exact execution clears its identity in the same history update', async () => {
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)({ task_id: 'trace-456' }), '?taskId=trace-123&executionId=execution-123');
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].options.history, 'push');
+    assert.equal(updates[0].queryString, '?taskId=trace-456');
 });

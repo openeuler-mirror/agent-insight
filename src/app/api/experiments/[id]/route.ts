@@ -35,6 +35,8 @@ import {
 } from '@/lib/skill-workbench/item-progress';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
+import { loadCaseExecutionProgress } from '@/lib/engine/experiment/execution-progress-service';
+
 export const dynamic = 'force-dynamic';
 
 function parseJsonValue(value: string | null): unknown {
@@ -172,8 +174,16 @@ export async function GET(
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
+    const caseExecutionProgress = !experiment.scope && experiment.type !== 'llm'
+      ? await loadCaseExecutionProgress(id, experiment.user, pagedCases.map(c => c.id), evaluatorIds, configSnapshot?.traceSource === 'generate')
+      : null;
+
     const benchmarkRunByCase = new Map<string, {
       submissionSource: string;
+      createdAt: Date;
+      startedAt: Date | null;
+      finishedAt: Date | null;
+      lastProgressAt: Date | null;
       status: string;
       failureCode: string | null;
       failureMessage: string | null;
@@ -186,6 +196,12 @@ export async function GET(
         id: string;
         status: string;
         failureCode: string | null;
+        failureMessage: string | null;
+        progressJson: string | null;
+        createdAt: Date;
+        startedAt: Date | null;
+        finishedAt: Date | null;
+        lastProgressAt: Date | null;
         normalizedResultJson: string | null;
         artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
       }>;
@@ -207,6 +223,12 @@ export async function GET(
               id: true,
               status: true,
               failureCode: true,
+              failureMessage: true,
+              progressJson: true,
+              createdAt: true,
+              startedAt: true,
+              finishedAt: true,
+              lastProgressAt: true,
               normalizedResultJson: true,
               artifacts: {
                 orderBy: { createdAt: 'asc' },
@@ -570,7 +592,7 @@ export async function GET(
     }
 
     const results = pagedCases.flatMap((c) =>
-      (invalidGeneratedCaseIds.has(c.id) ? [] : c.results).map((r) => ({
+      (caseExecutionProgress?.get(c.id)?.results ?? (invalidGeneratedCaseIds.has(c.id) ? [] : c.results)).map((r) => ({
         id: r.id,
         caseId: r.caseId,
         evaluatorId: r.evaluatorId,
@@ -660,6 +682,9 @@ export async function GET(
           null;
         const benchmarkRun = benchmarkRunByCase.get(c.id);
         const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
+        const benchmarkEvaluation = benchmarkRun?.evaluations[0];
+        const evaluationProgress = asRecord(parseJsonValue(benchmarkEvaluation?.progressJson || null));
+        const executionProgressDetail = asRecord(benchmarkProgress?.progress);
         const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
         const benchmarkWorkspace = asRecord(benchmarkTask?.workspace);
         const benchmarkPayload = benchmarkRun
@@ -693,6 +718,7 @@ export async function GET(
         }
         return {
           id: c.id,
+          ...(caseExecutionProgress ? { executionProgress: caseExecutionProgress.get(c.id)?.progress || null } : {}),
           executionId: c.executionId || legacyReference?.id || traceState?.executionId || null,
           taskId: effectiveTaskId,
           input: c.input || ex?.query || '',
@@ -713,6 +739,16 @@ export async function GET(
           traceError: benchmarkRun ? benchmarkRun.failureMessage : traceState?.error || null,
           traceAttemptNo: traceState?.attemptNo || null,
           traceAttemptStatus: traceState?.attemptStatus || null,
+          ...(caseExecutionProgress?.get(c.id) ? {
+            taskId: caseExecutionProgress.get(c.id)!.taskId,
+            executionId: caseExecutionProgress.get(c.id)!.executionId,
+            actualOutput: caseExecutionProgress.get(c.id)!.actualOutput,
+            traceStatus: caseExecutionProgress.get(c.id)!.progress.source === 'existing' ? null
+              : caseExecutionProgress.get(c.id)!.progress.stage >= 3 ? 'ready'
+              : ['failed', 'cancelled'].includes(caseExecutionProgress.get(c.id)!.progress.status) ? 'failed' : 'pending',
+            traceError: caseExecutionProgress.get(c.id)!.progress.error,
+            traceAttemptNo: caseExecutionProgress.get(c.id)!.progress.attemptNo || null,
+          } : {}),
           ...(benchmarkRun ? {
             benchmark: {
               submissionSource: benchmarkRun.submissionSource,
@@ -751,6 +787,23 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              progressDetails: {
+                createdAt: benchmarkRun.createdAt.toISOString(),
+                finishedAt: benchmarkRun.finishedAt?.toISOString() || null,
+                execution: {
+                  startedAt: benchmarkRun.startedAt?.toISOString() || null,
+                  lastProgressAt: benchmarkRun.lastProgressAt?.toISOString() || null,
+                  stageStartedAt: typeof executionProgressDetail?.stageStartedAt === 'string' ? executionProgressDetail.stageStartedAt : null,
+                },
+                evaluation: benchmarkEvaluation ? {
+                  stage: typeof evaluationProgress?.stage === 'string' ? evaluationProgress.stage : null,
+                  createdAt: benchmarkEvaluation.createdAt.toISOString(),
+                  startedAt: benchmarkEvaluation.startedAt?.toISOString() || null,
+                  finishedAt: benchmarkEvaluation.finishedAt?.toISOString() || null,
+                  lastProgressAt: benchmarkEvaluation.lastProgressAt?.toISOString() || null,
+                  failureMessage: benchmarkEvaluation.failureMessage,
+                } : null,
+              },
               progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
               workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
