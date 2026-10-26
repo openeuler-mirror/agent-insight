@@ -387,12 +387,16 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     echo "⏬ Downloading OpenCode Plugin..."
     rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
+    OPENCODE_PLUGIN_QUERY=""
+    OPENCODE_INSTALLED_VERSION=$(opencode --version 2>/dev/null || true)
+    case "$OPENCODE_INSTALLED_VERSION" in 2.*|"opencode v2."*) OPENCODE_PLUGIN_QUERY="?apiVersion=2" ;; esac
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode$OPENCODE_PLUGIN_QUERY" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     echo "⏬ Downloading OpenCode Uploader..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$AGENT_INSIGHT_HOME/opencode_uploader_client.js"
     echo "⏬ Installing OpenCode commands..."
     mkdir -p "$OPENCODE_CONFIG_DIR/commands"
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
+    if [ -z "$OPENCODE_PLUGIN_QUERY" ]; then
     echo "⏬ Downloading OpenCode TUI Plugin..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
     export TUI_PLUGIN_PATH="$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
@@ -419,6 +423,7 @@ fs.writeFileSync(file, JSON.stringify(data, null, 2));
 NODE
     else
       echo "⚠️  node not found; skip TUI plugin config patch."
+    fi
     fi
 fi
 
@@ -859,7 +864,7 @@ if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ -n "$GOAL_PLUS_HOSTS" ]; then
 fi
 
 # 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
-if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
+if { [ "$INSTALL_OPENCODE" = "true" ] && [ -z "$OPENCODE_PLUGIN_QUERY" ]; } || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
     echo "🛡️  Installing Agent RAS runtime..."
     install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
 fi
@@ -1532,9 +1537,15 @@ function generatePowerShellScript(
         '    Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
+        '    $opencodePluginQuery = ""',
+        '    if (Get-Command opencode -ErrorAction SilentlyContinue) {',
+        '        $opencodeInstalledVersion = (& opencode --version 2>$null | Out-String).Trim()',
+        '        if ($opencodeInstalledVersion -match "(^|\\s)v?2\\.") { $opencodePluginQuery = "?apiVersion=2" }',
+        '    }',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode$opencodePluginQuery" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
         '    Write-Host "⏬ Downloading OpenCode Uploader..."',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -OutFile (Join-Path $skillInsightDir "opencode_uploader_client.js")',
+        '    if (-not $opencodePluginQuery) {',
         '    Write-Host "⏬ Downloading OpenCode TUI Plugin..."',
         '    $tuiPluginPath = Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.tui.tsx"',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -OutFile $tuiPluginPath',
@@ -1550,6 +1561,7 @@ function generatePowerShellScript(
         '        $data | ConvertTo-Json -Depth 10 | Set-Content -Path $tuiConfigFile -Encoding UTF8',
         '    } catch {',
         '        Write-Host "⚠️  Failed to patch tui.json for TUI plugin."',
+        '    }',
         '    }',
         '}',
         '',

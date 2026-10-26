@@ -388,3 +388,28 @@ test("all startup paths run the SQLite schema preflight", () => {
     assert.match(source, /prepare-ras-sqlite-schema\.js/)
   }
 })
+
+
+test("OpenCode RAS adapter skips V2 without touching configuration and retains V1 installation", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ras-opencode-version-"))
+  try {
+    const runtimeRoot = path.join(root, "runtime")
+    const adapterRoot = path.join(runtimeRoot, "platform_adapter", "opencode")
+    fs.mkdirSync(adapterRoot, { recursive: true })
+    fs.writeFileSync(path.join(adapterRoot, "ras_judge_agent.json"), JSON.stringify({ "ras-judge": { hidden: true } }))
+    const configHome = path.join(root, "config")
+    const configPath = path.join(configHome, "opencode", "opencode.json")
+    fs.mkdirSync(path.dirname(configPath), { recursive: true })
+    fs.writeFileSync(configPath, '{"provider":{"custom":{}},"plugin":["other"]}')
+    const before = fs.readFileSync(configPath, 'utf8')
+    const options = { env: { XDG_CONFIG_HOME: configHome }, runner: () => ({ status: 0, stdout: 'opencode v2.0.32' }) }
+    assert.equal(installer.installOpenCodeRasAdapter(runtimeRoot, options).status, 'unsupported')
+    assert.equal(fs.readFileSync(configPath, 'utf8'), before)
+    assert.equal(fs.existsSync(path.join(configHome, 'opencode/plugins/agent-insight-ras.js')), false)
+    const result = installer.installOpenCodeRasAdapter(runtimeRoot, { ...options, runner: () => ({ status: 0, stdout: '1.18.29' }) })
+    assert.equal(result.status, 'installed')
+    assert.match(fs.readFileSync(result.wrapperPath, 'utf8'), /export \{ default \} from/)
+    assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')).provider, { custom: {} })
+    assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')).plugin, ['other', './plugins/agent-insight-ras.js'])
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
