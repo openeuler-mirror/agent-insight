@@ -471,6 +471,11 @@ function checkRasInstallation(options = {}) {
     return statusResult('unsupported', '原生 Windows 暂不支持 Agent RAS inproc，请在 WSL 中安装')
   }
 
+  const want = options.platforms || ['opencode', 'xiaoo']
+  const openCodeV2 = want.includes('opencode') && isOpenCodeV2(options)
+  const openCodeStatus = openCodeV2 ? openCodeV2RasStatus(options) : undefined
+  if (openCodeV2 && want.length === 1) return openCodeStatus
+
   const packageRoot = options.packageRoot || PACKAGE_ROOT
   const sourceRoot = path.join(packageRoot, 'agent_ras')
   if (!fs.existsSync(sourceRoot)) {
@@ -505,12 +510,12 @@ function checkRasInstallation(options = {}) {
       return statusResult('failed', 'Agent RAS runtime 不是当前版本，请执行 agent-insight install-ras')
     }
 
-    const want = options.platforms || ['opencode', 'xiaoo']
     const configHome = env.XDG_CONFIG_HOME || path.join(options.home || os.homedir(), '.config')
     const details = { configPath, runtimeRoot, platforms: {} }
 
-    if (want.includes('opencode') && isOpenCodeV2(options)) {
-      if (want.length === 1) return statusResult('unsupported', 'OpenCode 2.x 暂不支持 RAS 插件', details)
+    if (openCodeV2) {
+      details.platforms.opencode = 'unsupported'
+      details.opencode = openCodeStatus
     } else if (want.includes('opencode')) {
       const openCodeRoot = path.join(configHome, 'opencode')
       const wrapperPath = path.join(openCodeRoot, 'plugins', 'agent-insight-ras.js')
@@ -562,7 +567,7 @@ function checkRasInstallation(options = {}) {
     }
 
     const missing = Object.entries(details.platforms)
-      .filter(([, v]) => v !== 'ok')
+      .filter(([, v]) => v !== 'ok' && v !== 'unsupported')
       .map(([k]) => k)
     if (missing.length && want.length > 1) {
       const collectorDetail = details.xiaooTraceCollector && details.xiaooTraceCollector !== 'ok'
@@ -575,7 +580,7 @@ function checkRasInstallation(options = {}) {
       )
     }
 
-    return statusResult('already current', 'Agent RAS 已是当前版本', details)
+    return statusResult('already current', 'Agent RAS 已是当前版本' + (openCodeStatus ? '；' + openCodeStatus.message : ''), details)
   } catch (error) {
     return statusResult('failed', `Agent RAS 安装状态无效：${error.message}`)
   }
@@ -585,11 +590,27 @@ function isOpenCodeV2(options = {}) {
   const result = (options.runner || spawnSync)('opencode', ['--version'], {
     encoding: 'utf8', env: options.env || process.env, timeout: 5000,
   })
-  return result.status === 0 && /^(?:opencode\s+v?)?2\./.test(String(result.stdout || '').trim())
+  return result.status === 0 && /^(?:opencode\s+)?v?2\./.test(String(result.stdout || '').trim())
+}
+
+function openCodeV2RasStatus(options) {
+  const env = options.env || process.env
+  const configHome = env.XDG_CONFIG_HOME || path.join(options.home || os.homedir(), '.config')
+  const root = path.join(configHome, 'opencode')
+  const wrapper = path.join(root, 'plugins', 'agent-insight-ras.js')
+  const legacyPaths = fs.existsSync(wrapper) ? [wrapper] : []
+  for (const name of ['opencode.json', 'opencode.jsonc']) {
+    const file = path.join(root, name)
+    try { if (fs.readFileSync(file, 'utf8').includes('agent-insight-ras')) legacyPaths.push(file) } catch {}
+  }
+  const warning = legacyPaths.length
+    ? `；检测到旧 agent-insight-ras：${legacyPaths.join('、')}。请先备份配置及插件目录，再移走旧插件并移除对应 plugin 条目；保留其他插件、模型和 ras-judge 自定义配置`
+    : ''
+  return statusResult('unsupported', 'OpenCode 2.x 暂不支持 RAS 插件' + warning, { legacyPaths })
 }
 
 function installOpenCodeRasAdapter(runtimeRoot, options = {}) {
-  if (isOpenCodeV2(options)) return statusResult('unsupported', 'OpenCode 2.x 暂不安装 1.x RAS 插件')
+  if (isOpenCodeV2(options)) return openCodeV2RasStatus(options)
   const env = options.env || process.env
   const configHome = env.XDG_CONFIG_HOME || path.join(options.home || os.homedir(), '.config')
   const openCodeRoot = path.join(configHome, 'opencode')

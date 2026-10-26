@@ -788,18 +788,21 @@ export function createOpenCodeV2Adapter(context: any, record: (value: any) => vo
       }
     }
   }
+  const startSnapshot = (sessionID: string) => {
+    let pending = pendingSnapshots.get(sessionID)
+    if (!pending) {
+      pending = Promise.resolve().then(() => context.session.context({ sessionID })).then(values => snapshot(sessionID, values))
+        .catch(error => { if (!disposed) emit(sessionID, 'collector.error', { phase: 'snapshot', message: String(error) }) })
+      pendingSnapshots.set(sessionID, pending)
+      void pending.then(() => pendingSnapshots.delete(sessionID))
+    }
+    return pending
+  }
   const refresh = async (sessionID: string) => {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      let pending = pendingSnapshots.get(sessionID)
-      if (!pending) {
-        pending = Promise.resolve().then(() => context.session.context({ sessionID })).then(values => snapshot(sessionID, values))
-        pendingSnapshots.set(sessionID, pending)
-        const clear = () => pendingSnapshots.delete(sessionID)
-        pending.then(clear, clear)
-      }
       await Promise.race([
-        pending,
+        startSnapshot(sessionID),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Snapshot timed out')), 250) }),
       ])
     } catch (error) { emit(sessionID, 'collector.error', { phase: 'snapshot', message: String(error) }) }
@@ -857,12 +860,11 @@ export function createOpenCodeV2Adapter(context: any, record: (value: any) => vo
     },
     context: async (input: any) => {
       if (disposed) return
-      await refresh(input.sessionID)
-      if (disposed) return
+      void startSnapshot(input.sessionID)
       const system = (input.system || []).map((value: any) => typeof value === 'string' ? value : value.text).filter((value: any) => typeof value === 'string')
       const joined = system.join('\n')
-      record({ t: nowIso(), kind: 'system.prompt', sessionID: input.sessionID, providerID: input.model.providerID,
-        modelID: input.model.id, trace_id: input.sessionID, payload: { system, length: joined.length, sha256: sha256Hex(joined) } })
+      record({ t: nowIso(), kind: 'system.prompt', sessionID: input.sessionID, providerID: input.model?.providerID,
+        modelID: input.model?.id, trace_id: input.sessionID, payload: { system, length: joined.length, sha256: sha256Hex(joined) } })
     },
   }
 }

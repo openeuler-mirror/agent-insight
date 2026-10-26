@@ -50,13 +50,20 @@ test('both Unix installers select the native V2 collector and skip the V1-only T
     try {
       const bin = path.join(root, 'bin'); fs.mkdirSync(bin)
       fs.writeFileSync(path.join(bin, 'curl'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PROBE_LOG"\n', { mode: 0o755 })
-      for (const version of ['1.18.29', '2.0.32', 'opencode v2.0.32']) {
+      for (const version of ['1.18.29', 'opencode v1.18.29', '2.0.32', 'opencode v2.0.32', 'opencode 2.0.32', 'v2.0.32', '  opencode  v2.0.32  ']) {
         fs.writeFileSync(path.join(bin, 'opencode'), `#!/bin/sh\nprintf '${version}\\n'\n`, { mode: 0o755 })
+        const configDir = path.join(root, '.config/opencode')
+        fs.mkdirSync(path.join(configDir, 'plugins'), { recursive: true })
+        const wrapper = path.join(configDir, 'plugins/agent-insight-ras.js')
+        const config = path.join(configDir, 'opencode.json')
+        fs.writeFileSync(wrapper, '// user modified wrapper')
+        fs.writeFileSync(config, '{"plugin":["./plugins/agent-insight-ras.js"],"provider":{"custom":{}}}')
+        const before = fs.readFileSync(config, 'utf8')
         const log = path.join(root, version + '.log')
         const run = spawnSync('bash', ['-c', script.slice(start, end)], { encoding: 'utf8', env: { NODE_ENV: 'test', HOME: root, PATH: bin + ':/usr/bin:/bin', INSTALL_OPENCODE: 'true', AGENT_INSIGHT_HOME: root, OPENCODE_CONFIG_DIR: path.join(root, '.config/opencode'), AGENT_INSIGHT_BASE_URL: 'http://fixture', PROBE_LOG: log } })
         assert.equal(run.status, 0, run.stderr)
         const urls = fs.readFileSync(log, 'utf8')
-        if (version.includes('2.0.32')) { assert.match(urls, /opencode\?apiVersion=2/); assert.doesNotMatch(urls, /opencode-tui/) }
+        if (version.includes('2.0.32')) { assert.match(urls, /opencode\?apiVersion=2/); assert.doesNotMatch(urls, /opencode-tui/); assert.match(run.stdout, /agent-insight-ras.*备份/); assert.equal(fs.readFileSync(config, 'utf8'), before); assert.equal(fs.readFileSync(wrapper, 'utf8'), '// user modified wrapper') }
         else { assert.doesNotMatch(urls, /apiVersion=2/); assert.match(urls, /opencode-tui/) }
       }
     } finally { fs.rmSync(root, { recursive: true, force: true }) }

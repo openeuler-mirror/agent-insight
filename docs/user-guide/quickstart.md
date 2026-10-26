@@ -366,9 +366,11 @@ OpenCode 跨大版本升级或降级后，重新执行安装命令并重启 Open
 
 OpenCode 1.x 继续安装原有 TUI 附件和 Agent RAS，使用当前登录账号 API Key；
 2.x 暂只支持 Trace 采集，跳过不兼容的 1.x TUI 附件和 OpenCode RAS 插件。
-若从已安装 RAS 的 1.x 环境升级，旧 RAS 文件和配置会保留：出现 `failed to load plugin` 时，
-先备份 OpenCode 配置及插件目录，再移走 `plugins/agent-insight-ras.js`，并从 `opencode.json`
-的 `plugin` 列表中移除对应条目；保留其他插件和模型配置。
+若从已安装 RAS 的 1.x 环境升级，安装脚本会检测全局插件目录及 `opencode.json` / `opencode.jsonc` 中的旧 RAS 引用，
+发现残留时显示备份与迁移提示；`install-ras --check` 也会明确报告 OpenCode 2.x 不支持 RAS，而不会将其显示为已就绪。
+旧文件和用户配置会保留：请先备份提示的 OpenCode 配置及插件目录，再移走 `plugins/agent-insight-ras.js`，
+并从配置的 `plugin` 列表中移除对应条目；保留其他插件、模型和自行修改的 `ras-judge` Agent 配置。
+项目内单独配置的旧 RAS 插件也需要按同样方式迁移。
 之后重启 Agent Insight 只会同步平台地址，不会把客户端身份覆盖成内部 `admin` 账号。
 
 2.x 已用 OpenCode 2.0.32 在 macOS ARM64 和本地模拟模型服务验证多次调用、并发子 Agent 与失败重试的

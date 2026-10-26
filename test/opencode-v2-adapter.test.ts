@@ -137,14 +137,14 @@ test('V2 collector registers observational hooks only and tolerates snapshot and
   }
 })
 
-test('V2 hung snapshots time out without blocking hooks or creating repeated RPCs', async () => {
+test('V2 terminal reconciliation bounds hung snapshots and reuses an in-flight RPC', async () => {
   const f = await fixture()
   let calls = 0
   f.context.session.context = () => { calls++; return new Promise(() => {}) }
   const input = { sessionID: 'ses_root', model, system: [] }
   const started = Date.now()
   await Promise.race([
-    Promise.all([f.adapter.context(input), f.adapter.context(input)]),
+    Promise.all([f.adapter.context(input), f.adapter.event({ type: 'session.execution.succeeded', data: { sessionID: 'ses_root' } })]),
     new Promise((_, reject) => setTimeout(() => reject(new Error('hook blocked')), 1000)),
   ])
   assert.ok(Date.now() - started < 1000)
@@ -180,4 +180,31 @@ test('V2 late final snapshot triggers another terminal upload after its data', a
   assert.equal(f.events.filter(e => e.type === 'session.idle').length, 2)
   assert.equal(f.events.at(-1).type, 'session.idle')
   assert.equal(f.interactions('ses_root')[0].content, 'late final prompt')
+})
+
+
+test('V2 model hooks return without waiting for snapshots and collect late input once', async () => {
+  const f = await fixture()
+  let resolve!: (values: any[]) => void
+  let calls = 0
+  f.context.session.context = () => { calls++; return new Promise(r => { resolve = r }) }
+  const input = { sessionID: 'ses_root', model, system: ['prompt'] }
+  const returned = await Promise.race([
+    Promise.all([f.adapter.context(input), f.adapter.context(input)]).then(() => true),
+    new Promise<boolean>(r => setImmediate(() => r(false))),
+  ])
+  assert.equal(returned, true, 'observational hook must not wait for a snapshot RPC')
+  assert.equal(calls, 1)
+  resolve([{ type: 'user', id: 'user', text: 'late input', time: { created: 10 } }])
+  await new Promise(r => setImmediate(r))
+  assert.equal(f.events.filter(e => e.type === 'message.updated').length, 1)
+  assert.equal(f.interactions('ses_root').find(r => r.messageID === 'user').content, 'late input')
+  f.adapter.close()
+})
+
+test('V2 system prompt survives a partial hook payload without model metadata', async () => {
+  const f = await fixture()
+  await f.adapter.context({ sessionID: 'ses_root', system: ['prompt'] })
+  assert.deepEqual(f.records.find(r => r.kind === 'system.prompt').payload.system, ['prompt'])
+  f.adapter.close()
 })
