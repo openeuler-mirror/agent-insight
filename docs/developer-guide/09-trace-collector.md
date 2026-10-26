@@ -36,6 +36,22 @@
 
 ## 二、服务端开发工作
 
+### 服务端日志与 Trace 耗时
+
+Node 运行时在 `instrumentation.ts` 导入业务启动模块前安装统一 `console` 等级过滤。`src/lib/logger/server.ts` 与现有 `createLogger` 共用等级解析：`AGENT_INSIGHT_LOG_LEVEL` 优先于 `LOG_LEVEL`，默认/无效值为 `error`；`log` 兼容映射为 `info`。开关不修改浏览器 console、构建命令、独立服务或 Node 原生 stderr。现有应用文件日志保持原出口，未把所有 console 日志新增为同步文件写入；model_debug/flow_debug 仅在 debug 写入脱敏后的元数据。OpenCode 进程输出经 console 转发，其自身日志源等级仍由 OpenCode 启动配置决定。
+
+`debug` 下，`[OTelIngest]` 的 `received`、`stage-start`、`stage-end`、`trace-ids`、`trace-session`、`completed/failed` 通过 `requestId` 关联；所有有效 Trace ID 按 32 个分行输出，不受生产采样预算限制。结束日志包含 `stageDurationsMs`，失败时附脱敏后的异常详情；解码异常可能回显正文，因此仅保留异常名/错误码并明确标注正文省略。非 debug 下仍保留每分钟有限接收样例及汇总；失败和含失败的汇总以 `error` 输出，因此默认等级不会隐藏鉴权、解码或缓存失败。
+
+`[TraceTiming]` 使用异步上下文隔离 `runId`，嵌套保存通过 `parentRunId` 关联消费轮次，包含 `sessionId`/`traceId`、`fast/evaluated` 模式、阶段开始/结束和单调时钟耗时：
+
+- `consumer`：`waitAfterDueMs` 为调度到期到实际分派的时间，包含队列竞争和冷却；`lastDataAgeMs` 是调度器最近数据时间到分派的间隔。`source` 事件的 `receivedAt`、`receiptAgeMs`、`receiptGeneration` 来自该源本轮读取的最新 receipt；多批上报时它不是首批等待时间。
+- `aggregate` / `save` / `receipt-update` / `checkpoint`：分别记录聚合、保存函数、receipt 元数据和游标更新。
+- `save` 作用域：`identity-query`、`execution-read`、`prepare`、`execution-upsert`、`post-execution`、`session-save`、`post-save`。`prepare` 内含 `config-read`/`session-read`，`session-save` 内含 `session-read`/`session-upsert`，父子阶段不可重复相加。
+- `identity-resolved` 的 `existingBeforeSave` 表示本次查询时记录是否存在；`execution-written` 在 Execution upsert 返回后输出，`saved` 在保存流程结束输出，均带服务端时间。它们不是数据库原生提交审计或浏览器首次可见时间。
+- `save-skipped` 标明归属防线或小快照保护跳过保存；消费者 `save-returned` 仅表示保存函数返回成功，不能单独代替实际写入证据。`end` 表示该函数返回，源内捕获的失败还需查看 `source-failed`。阶段开始但无结束可用于定位尚未返回的操作。
+
+debug 不对上述请求、阶段和错误做全局限频；只汇总消费 tick 和连续相同的 infra 失败，保留次数及时间范围。统一出口对常见凭据和正文脱敏，限制超大单条上下文并显式标记截断。新日志应只传递排查需要的 ID、状态、错误码、数量、耗时，不能依赖通用脱敏发现任意自由文本中的秘密。日志函数异常不能改变请求成功、重试或 checkpoint 语义。这里没有客户端发送时刻或浏览器渲染探针，不能据此声称测得整个端到端延迟。
+
 ### 共享模块升级契约
 
 Pi Agent、Codex、Goal Plus 的 ZIP 分发均包含 `shared/install-modules.cjs`。

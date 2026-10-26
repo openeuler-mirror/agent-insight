@@ -32,6 +32,30 @@ description: "不发布 npm 包，直接用本地 npm pack 产物在服务器上
 > [5 分钟上手 · 用法三：挂载源码运行](./quickstart#用法三挂载源码运行代码更新后重启即可生效)。
 > 该路径的依赖来自镜像，源码新增依赖时仍需重建镜像。
 
+## 服务端日志等级
+
+服务端默认 `AGENT_INSIGHT_LOG_LEVEL=error`，输出关键故障。需要查看状态信息可设为 `info`；专项排查使用 `debug`，它会逐条记录 Trace 请求、Trace ID 与会话的映射、鉴权/解码/缓存写入耗时，以及消费调度、聚合、历史查询、Execution/Session 写入和后续处理耗时。`warn` 会包含警告和错误；旧的 `LOG_LEVEL` 是后备配置，旧值 `log` 等价于 `info`，无效值回退到 `error`。
+
+在已有 Compose 服务的 `environment` 中添加或修改：
+
+```yaml
+environment:
+  AGENT_INSIGHT_LOG_LEVEL: "debug"
+```
+
+配置变更需要重建容器，单独 `docker restart` 不会更新容器环境变量：
+
+```sh
+docker compose -f /实际路径/compose.yml up -d --force-recreate agent-insight
+docker logs --since 10m --timestamps 容器名或ID
+```
+
+排查结束改回 `error`，再执行同一条重建命令。源码模式需挂载包含此功能的源码，启动时完成构建；内置代码模式需使用包含此功能的新镜像。等级配置本身不需要重新构建镜像。
+
+`debug` 不对 Trace 请求、阶段日志和不同 Trace 的错误做普通采样或全局条数丢弃，大批 Trace ID 会分行打印。消费心跳和连续相同的指标采集错误按分钟汇总；错误变化立即输出。日志不用于导出业务正文，常见凭据字段、请求/响应正文及 Prompt 会脱敏；超大文本或上下文会明确标记 `TRUNCATED`，不会默默截断。高流量下日志量仍可能很大，应短期开启，并使用 Docker 日志轮转控制磁盘占用。
+
+开关覆盖应用服务端的 `console`、应用 logger、model_debug/flow_debug 调试文件和服务端转发的 OpenCode 子进程输出。构建/安装命令、Node 原生警告、其他独立服务和客户端/浏览器日志有各自的日志配置。日志级别不会替换 Trace 数据、消费者游标或缓存，也不保证容器重建前的历史日志仍然存在。
+
 ## 运行目录变量迁移
 
 运行根使用 `AGENT_INSIGHT_HOME`，容器默认 `/data/agent-insight`，原数据卷挂载和 `data/witty_insight.db` 路径不变。旧 `AGENT_INSIGHT_DATA_DIR` 非空时新版会明确报错；重建镜像，并将 compose、启动命令或环境文件中的旧变量改名（值保持原根目录），不要同时保留旧变量。挂载新版源码但仍使用旧 entrypoint 的容器也应更新镜像。
