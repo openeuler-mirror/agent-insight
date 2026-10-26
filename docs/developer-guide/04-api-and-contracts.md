@@ -373,6 +373,8 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 ### FI 统一任务提示与主动拦截结果
 
+OpenCode 采集插件在 session.idle / session.status idle 触发上传前，必须先同步刷新此前消息和结束事件到 spool；普通事件仍按批写入。不能依赖 CLI 的 beforeExit 或异步流尾部完成，否则已结束的 FI 任务可能只有进行中快照，Session.endTime 永不落库。
+
 FI 批量绑定启用 waitForActiveRuns：queued/collecting/judging 等活动 Run 不受初始收集窗口限制；全部 Run 进入终态后，迟到 Trace 最多等待 180 秒，取消或删除实验立即退出。collect 回填、FI 评分入口、实验绑定与详情页统一校验 platform/Agent 身份、Session 结束标记和非空 assistant 响应或工具调用；内部 ras-judge 不会被业务 Case 接受。普通数据集保持原 Trace 判据。
 
 FI 认领过期仅用于回收失联 Worker 或客户端重启后遗失的孤儿任务；新版客户端在既有 inventoryJson 内上报 activeRunIds，在线且仍持有该 Run 才续保；旧客户端未上报列表时按在线心跳兼容。有新心跳的健康 Worker 不因 claimedAt 超过 300 秒而丢失长任务。回收按原 owner/status/claimedAt 比较后更新，避免覆盖并发完成或新认领；客户端按活动 runId 去重，并持槽至结果上传结束。

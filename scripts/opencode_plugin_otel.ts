@@ -199,58 +199,46 @@ function buildOutFile(spoolDir: string): string {
   return path.join(dayDir, `opencode-otel-${runId}.jsonl`)
 }
 
-function createWriter(outFile: string): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string } {
+/** Flush terminal events synchronously so an immediate CLI exit cannot drop them. */
+function createWriter(outFile: string): {
+  enqueue: (obj: any) => void
+  flush: () => void
+  close: () => Promise<void>
+  outFile: string
+} {
   safeMkdirp(path.dirname(outFile))
-  const stream = fs.createWriteStream(outFile, { flags: "a" })
-  const queue: any[] = []
-  let flushing = false
+  const queue: string[] = []
   let stopped = false
   let pending: NodeJS.Timeout | null = null
 
-  const flush = async (): Promise<void> => {
-    if (flushing || stopped) return
-    flushing = true
-    try {
-      while (queue.length > 0 && !stopped) {
-        const chunk = queue.shift()
-        const ok = stream.write(chunk)
-        if (!ok) await new Promise<void>((resolve) => stream.once("drain", () => resolve()))
-      }
-    } catch {}
-    flushing = false
+  const flush = (): void => {
+    if (pending) clearTimeout(pending)
+    pending = null
+    if (stopped || queue.length === 0) return
+    // Batch ordinary events; avoid an async stream whose tail can outlive the CLI.
+    fs.appendFileSync(outFile, queue.join(""))
+    queue.length = 0
   }
 
   const enqueue = (obj: any): void => {
     if (stopped) return
-    try {
-      queue.push(JSON.stringify(obj) + "\n")
-    } catch {
-      return
-    }
+    try { queue.push(JSON.stringify(obj) + "\n") } catch { return }
     if (!pending) {
       pending = setTimeout(() => {
         pending = null
-        flush()
+        try { flush() } catch {}
       }, 0)
-      if (pending && pending.unref) pending.unref()
+      pending.unref?.()
     }
   }
 
   const close = async (): Promise<void> => {
     if (stopped) return
-    try {
-      if (pending) clearTimeout(pending)
-    } catch {}
-    try {
-      await flush()
-    } catch {}
+    flush()
     stopped = true
-    try {
-      stream.end()
-    } catch {}
   }
 
-  return { enqueue, close, outFile }
+  return { enqueue, flush, close, outFile }
 }
 
 function extractTextFromParts(parts: any): string {
@@ -296,7 +284,7 @@ export function getSessionEventUploadMode(
   type: string,
   status: string,
 ): "force" | "none" {
-  return type === "session.idle" || (type === "session.updated" && status === "idle")
+  return type === "session.idle" || (["session.updated", "session.status"].includes(type) && status === "idle")
     ? "force"
     : "none"
 }
@@ -684,13 +672,22 @@ export default async function WittySkillInsightOtelPlugin() {
           trace_id: sessionID ? String(sessionID) : undefined,
         }
 
+        writer.enqueue({
+          ...base,
+          payload: {
+            type,
+            event: type.startsWith("tool") || type.includes("tool")
+              ? safeToolIoPayload(event) : safeEventPayload(event),
+          },
+        })
+
         try {
           // Trigger uploader on idle signal:
           //   - `session.idle` is the idle signal itself; it doesn't carry a status field
           //   - `session.updated` may fire many times during a session — only kick when
           //     properties.info.status === "idle" so we don't spam mid-conversation
           const status = String(
-            event?.properties?.info?.status || event?.properties?.status || ""
+            event?.properties?.info?.status || event?.properties?.status?.type || event?.properties?.status || ""
           ).toLowerCase()
           const sessionEventUploadMode = getSessionEventUploadMode(type, status)
           if (sessionEventUploadMode === "force") {
@@ -699,6 +696,7 @@ export default async function WittySkillInsightOtelPlugin() {
               pluginLogPath,
               `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
             )
+            writer.flush()
             kickUploader(sid, true, `event:${type}`)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
@@ -725,11 +723,6 @@ export default async function WittySkillInsightOtelPlugin() {
           }
         } catch {}
 
-        if (type.startsWith("tool") || type.includes("tool")) {
-          writer.enqueue({ ...base, payload: { type, event: safeToolIoPayload(event) } })
-          return
-        }
-        writer.enqueue({ ...base, payload: { type, event: safeEventPayload(event) } })
       } catch {}
     },
   }
