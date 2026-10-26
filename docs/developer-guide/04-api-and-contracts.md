@@ -377,6 +377,9 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 ### FI 统一任务提示与主动拦截结果
 
+OpenCode FI 插件以 `run.session.bound` 固定业务根 Session，只在该 Session 执行注入；内部 RAS 判定和标题生成不参与注入或激活计数。mapper 优先取显式根绑定，兼容旧轨迹时保留首次激活会话，不再使用最后出现的 Session ID。进程启动重试可建立新的显式根绑定。
+
+
 所有故障通过 `composeFaultPrompt` 拼接 Skill 名称、可选子模式名称与用户补充，FI Run 与内置可靠性数据集使用同一入口。故障配方与 `FaultDefinition` 不再提供 `task_prompt` / `expose_skill_to_agent`，Python catalog 和 `FaultItem` 不再传递 `taskPrompt` / `hidden`。OpenCode 与 xiaoO 一律安装注入 Skill；具体业务任务由 Skill 的执行入口定义。OpenCode 始终请求加载注入 Skill，并将该准备调用排除在业务工具参数改写计数之外，保证 `call_index=1` 仍命中第一次业务 Skill 选择。无新增 API 路由或数据库字段。
 
 FI 的 `TerminationReason.FAULT_INTERCEPTED` 序列化为 `fault_intercepted`。OpenCode 在故障已激活、进程非零退出且当前会话输出结构化 `MessageAbortedError` / `Aborted` 时记录此原因；普通 Provider 错误仍为 `platform_error`。采集成功与故障恢复是不同结论：manifest 保留原退出码和中断状态，Judge 仍依赖真实轨迹评测。

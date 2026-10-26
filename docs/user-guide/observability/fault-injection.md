@@ -63,6 +63,8 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
 
 所有故障统一使用「使用 <Skill 名称> 技能，执行<子模式名称>。」生成执行提示词；未选择子模式时只指定 Skill，用户补充要求追加在后面。所有注入 Skill 都会安装并提供给 Agent，不再使用 `task_prompt` 或隐藏开关。审查 `target.py`、读取 `a.txt`、执行 `report.csv` 流水线等具体任务写在对应 Skill 的执行步骤中，加载后即可执行。
 
+FI 运行只关联本次业务 Agent 的主会话；RAS 内部判定或标题生成会话不会替代业务 Trace。
+
 故障目录新增 `skill-rule-conflict`（CSV 规范化规则冲突）和 `reasoning-no-progress`（真值者双解、汉诺塔约束、路径规划复核三个回环），原 `analysis-paralysis` 保留。`thinking-dead-loop` 三个子模式统一为字符重复死循环、语义重复死循环和逻辑连续崩溃。
 
 旧 `compositional-implicit-intent` 场景和机械 verifier 已移除。判定以服务端 Judge 的真实轨迹证据为准；注入完成不代表故障已恢复。工具参数与 Skill 选择改写只触发第一次匹配调用，内部改写诊断不会作为工具结果暴露给 Agent。

@@ -41,12 +41,26 @@ for (const fault of ['skill-selection-conflict', 'tool-argument-error', 'skill-r
     try {
       const initialize = await loadPlugin(root)
       const hooks = await initialize({ directory: root })
+      const title = { system: ['You are a title generator. You output ONLY a thread title.'] }
+      await hooks['experimental.chat.system.transform']({ sessionID: 'title-session' }, title)
+      assert.equal(title.system.length, 1)
+      await hooks['chat.message'](
+        { sessionID: 'judge-before-root', agent: 'ras-judge' },
+        { message: { role: 'user' }, parts: [] },
+      )
       const sessionID = 'visible-skill-session'
       const system = { system: [] as string[] }
       await hooks['experimental.chat.system.transform']({ sessionID }, system)
       assert.ok(system.system.join('\n').includes(`load the "${recipe.skill_name}" skill exactly once`))
       await hooks['experimental.chat.system.transform']({ sessionID }, system)
       assert.equal(system.system.length, 1)
+      const reviewer = { system: ['Internal review instructions'] }
+      await hooks['experimental.chat.system.transform']({ sessionID: 'ras-reviewer' }, reviewer)
+      assert.deepEqual(reviewer.system, ['Internal review instructions'])
+      await hooks['tool.execute.after'](
+        { sessionID: 'ras-reviewer', tool: 'skill', args: { name: recipe.skill_name } },
+        { output: 'internal skill result' },
+      )
 
       if (recipe.injection.runtime.length) {
         let toolName = 'skill'
@@ -113,6 +127,11 @@ for (const fault of ['skill-selection-conflict', 'tool-argument-error', 'skill-r
       const events = readFileSync(path.join(rawDir, 'events.jsonl'), 'utf8')
         .trim().split('\n').map((line) => JSON.parse(line))
       assert.equal(events.filter((event) => event.kind === 'fault.activation.requested').length, 1)
+      assert.deepEqual(
+        events.filter((event) => event.kind === 'run.session.bound').map((event) => event.payload.sessionID),
+        [sessionID],
+      )
+      assert.equal(events.some((event) => event.payload?.sessionID === 'ras-reviewer'), false)
       const applied = events.filter((event) => event.kind === 'fault.injection.applied')
       assert.equal(applied.length, recipe.injection.runtime.length ? 1 : 0)
       if (applied.length) assert.equal(applied[0].payload.call_index, 1)

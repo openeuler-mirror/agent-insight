@@ -55,18 +55,37 @@ class OpenCodeTrajectoryMapper:
                 yield value
 
     def inspect(self, path: Path) -> CaptureSummary:
-        session_id: str | None = None
-        fault_activated = False
-        event_count = 0
-
-        for event in self.read_events(path):
-            event_count += 1
-            kind = event.get("kind")
-            payload = event.get("payload")
-            session_id = _session_id(payload) or session_id
-
-            if kind == "fault.activation.completed":
-                fault_activated = True
+        events = list(self.read_events(path))
+        event_count = len(events)
+        # Explicit bindings identify CLI roots across process retries. Legacy
+        # captures use their first activation session, never the last reviewer.
+        roots = [
+            _session_id(event.get("payload"))
+            for event in events
+            if event.get("kind") == "run.session.bound"
+        ]
+        session_id = next((sid for sid in reversed(roots) if sid), None)
+        if session_id is None:
+            session_id = next(
+                (
+                    _session_id(event.get("payload"))
+                    for event in events
+                    if str(event.get("kind", "")).startswith("fault.activation.")
+                    and _session_id(event.get("payload"))
+                ),
+                None,
+            )
+        if session_id is None:
+            session_id = next(
+                (_session_id(event.get("payload")) for event in events
+                 if _session_id(event.get("payload"))),
+                None,
+            )
+        fault_activated = bool(session_id) and any(
+            event.get("kind") == "fault.activation.completed"
+            and _session_id(event.get("payload")) == session_id
+            for event in events
+        )
 
         return CaptureSummary(
             session_id=session_id,
@@ -87,10 +106,11 @@ class OpenCodeTrajectoryMapper:
         normalized: list[dict[str, Any]] = []
         for event in events:
             kind = str(event.get("kind", "unknown"))
-            if kind == "fault.activation.started":
-                phase = "fault_activation"
-            elif kind == "fault.activation.completed":
-                phase = "fault_active"
+            if _session_id(event.get("payload")) == summary.session_id:
+                if kind == "fault.activation.started":
+                    phase = "fault_activation"
+                elif kind == "fault.activation.completed":
+                    phase = "fault_active"
 
             sequence = event.get("sequence")
             normalized.append(
