@@ -671,6 +671,7 @@ export function ExperimentWizard({
     runtimeDraft?.inputs || {}, runtimeDraft ? runtimeTargetKey : '', runtimeTargetKey, runtimeDraft?.restored, runtimeDraft?.restoredDefinition);
   const updateRuntimeInputs = (inputs: RuntimeOptionInputs) => setRuntimeDrafts(current => ({ ...current, [runtimeTargetKey]: { inputs } }));
   const runtimeDefinition = runtimeState.definition;
+  const runtimeParameterEditorVisible = runtimeDefinition?.runtimeKey !== 'opencode';
   if (runtimeState.active && runtimeDefinition && runtimeTargetKey && !runtimeDraft) {
     setRuntimeDrafts(current => initializeRuntimeDraft(current, runtimeTargetKey, runtimeDefinition));
   }
@@ -2269,12 +2270,12 @@ export function ExperimentWizard({
               )}
               {runtimeState.migration && runtimeState.definition && <RuntimeOptionMigration migration={runtimeState.migration}
                 onConfirm={() => updateRuntimeInputs(optionsToInputs(runtimeState.definition!, runtimeState.migration!.options))} />}
-              {runtimeState.active && runtimeState.definition && <RuntimeOptionsFields key={`${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} definition={runtimeState.definition} value={runtimeState.inputs} error={runtimeState.error}
+              {runtimeParameterEditorVisible && runtimeState.active && runtimeState.definition && <RuntimeOptionsFields key={`${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} definition={runtimeState.definition} value={runtimeState.inputs} error={runtimeState.error}
                 onChange={updateRuntimeInputs} templateControls={runtimeState.definition.configuration?.version === 2 ? <RuntimeParameterTemplates
                   key={`templates:${user}:${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} user={user}
                   definition={runtimeState.definition} options={runtimeState.agentOptions} error={runtimeState.error}
                   onApply={options => updateRuntimeInputs(optionsToInputs(runtimeState.definition!, options))} /> : undefined} />}
-              {!runtimeState.active && runtimeState.error && <div className="mb-4 flex items-center gap-2">
+              {(!runtimeState.active || (!runtimeParameterEditorVisible && !runtimeState.migration)) && runtimeState.error && <div className="mb-4 flex items-center gap-2">
                 <p className="text-sm text-error" role="alert">{runtimeState.error}</p>
                 <Button type="button" variant="outline" size="sm" onClick={() => setRuntimeDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== runtimeTargetKey)))}>清除已保存参数</Button>
               </div>}
@@ -3268,7 +3269,7 @@ export function ExperimentWizard({
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
                   ...(isBenchmarkDataset && selectedTarget?.executionProfile ? [['执行环境', `${selectedTarget.executionProfile.key} · ${selectedTarget.executionProfile.sourceRevision.slice(0, 12)} · 工具断网 · ${selectedTarget.executionProfile.resources.cpu} CPU / ${selectedTarget.executionProfile.resources.memoryMiB} MiB`]] : []),
-                  ...(runtimeState.active ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
+                  ...(runtimeState.active && (runtimeParameterEditorVisible || Object.keys(runtimeState.agentOptions?.values || {}).length > 0) ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
                     skillPreset === 'skill-ab'
