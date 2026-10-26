@@ -432,6 +432,8 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 包限制为 8 个 Skill/评估器、256 个文件及 10 MiB/包、64 KiB 主指令合计。本地导入拒绝 ZIP/单文件及伪造目录路径，检查根目录主文件、路径、多个 Skill 根与总容量。预览最大 512 KiB 并标记 truncated，运行文件不截断。快照文件在 `<data>/evaluator-skills/<user-key>/<hash>/`，临时导入在 `evaluator-skill-imports`；备份需覆盖数据库及持久快照，临时上传无需备份。
 
+Benchmark 错误适配器 `benchmarkErrorResponse` 将 `EvaluatorSkillError` 映射为 `{error:{code:'EVALUATOR_SKILL_ERROR',message,retryable:false}}`，保留原始 HTTP 状态码与可读错误信息。评估器冻结时的配置校验、权限或快照缺失错误不会被转换为通用 500；其他未识别异常仍返回脱敏的 `INTERNAL_ERROR`。
+
 文件夹上传在 multipart filename 中可能携带完整相对路径。前端显式提交 file.name；服务端兼容末段文件名与完整相对路径两种形式，后者必须与同项 paths 完全一致，不允许仅截取 basename 后放行其他目录的文件名。
 
 新任务的 configSnapshotJson.customEvaluatorSnapshots 为 `{schemaVersion:1,cards:{[evaluatorId]:card}}`，轨迹入口在 rawAnalysisJson 使用同一字段。服务端冻结，不能信任调用者自带该字段。结果 evidence.json 用 `type:'custom-evaluator-runtime-v1'` 容器保存原 evaluationEvidence 和平台生成 customEvaluatorRuntime，后者独立于模型输出归一化，包含来源、实际模型、工具摘要与耗时。 Agent 会话真实记录保存成功后还可含 evaluationTraceId。GET /api/experiments/:id 在 results 中返回经当前用户归属与存在性校验后的 evaluationTraceId（不可用为 null）；普通 LLM 与无记录历史结果不返回入口。结果详情仅渲染 evaluationEvidence，运行过程通过评估链路查看。
