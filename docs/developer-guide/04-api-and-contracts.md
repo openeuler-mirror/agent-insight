@@ -377,6 +377,8 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 ### FI 统一任务提示与主动拦截结果
 
+FI 认领过期仅用于回收失联 Worker 的孤儿任务；有新心跳的健康 Worker 不因 claimedAt 超过 300 秒而丢失长任务。回收按原 owner/status/claimedAt 比较后更新，避免覆盖并发完成或新认领；客户端按活动 runId 去重，并持槽至结果上传结束。
+
 OpenCode FI 插件以 `run.session.bound` 固定业务根 Session，只在该 Session 执行注入；内部 RAS 判定和标题生成不参与注入或激活计数。mapper 优先取显式根绑定，兼容旧轨迹时保留首次激活会话，不再使用最后出现的 Session ID。进程启动重试可建立新的显式根绑定。
 
 

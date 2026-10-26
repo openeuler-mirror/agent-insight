@@ -1104,6 +1104,7 @@ async function writeRasRuntimeConfig(snapshot) {
 // ---------------------------------------------------------------- FI collector
 
 const activeChildren = new Map()
+const activeFiRuns = new Set()
 /** 可靠性 Case 独占槽：持有期间不领 FI run，避免多个故障注入互相污染。 */
 let reliabilitySlotHeld = false
 const parallelExecutionSlots = new Set()
@@ -2611,6 +2612,36 @@ async function pollOnce(cfg) {
 }
 
 /**
+ * Hold one FI slot through collection and upload; duplicate claims never spawn
+ * another collector or write concurrently into the same artifacts directory.
+ */
+async function executeClaimedFiRun(cfg, run, options = {}) {
+  if (activeFiRuns.has(run.runId)) return false
+  activeFiRuns.add(run.runId)
+  fiBusy += 1
+  const collect = options.collect || runCollector
+  const postResult = options.postResult || ((payload) => api(
+    cfg, 'POST',
+    '/api/fault-injection/runs/' + encodeURIComponent(run.runId) + '/collect-result',
+    payload,
+  ))
+  try {
+    const payload = await collect(cfg, run)
+    await postResult(payload)
+    log('fi run completed: ' + run.runId)
+  } catch (err) {
+    logErr('fi run failed ' + run.runId + ':', err.message)
+    await postResult({ error: err.message, interactions: [] }).catch((uploadErr) => {
+      logErr('fi result upload failed ' + run.runId + ':', uploadErr.message)
+    })
+  } finally {
+    activeFiRuns.delete(run.runId)
+    fiBusy = Math.max(0, fiBusy - 1)
+  }
+  return true
+}
+
+/**
  * FI run 领取循环：可靠性 Case 持槽时不领，避免故障注入互相污染。
  *
  * FI 组件不可用时只跳过 claim，**不影响心跳** —— 心跳由 main 的
@@ -2633,32 +2664,9 @@ async function fiLoop(cfg) {
           if (cmd.type === 'stop' && cmd.runId) killRun(cmd.runId)
         }
         for (const run of claim?.runs || []) {
-          fiBusy += 1
-          void (async () => {
-            try {
-              const payload = await runCollector(cfg, run)
-              await api(
-                cfg,
-                'POST',
-                `/api/fault-injection/runs/${encodeURIComponent(run.runId)}/collect-result`,
-                payload,
-              )
-              log(`fi run completed: ${run.runId}`)
-            } catch (err) {
-              logErr(`fi run failed ${run.runId}:`, err.message)
-              await api(
-                cfg,
-                'POST',
-                `/api/fault-injection/runs/${encodeURIComponent(run.runId)}/collect-result`,
-                { error: err.message, interactions: [] },
-              ).catch((uploadErr) => {
-                // 别静默：上传失败会让 run 永远卡在 collecting，必须留下线索。
-                logErr(`fi result upload failed ${run.runId}:`, uploadErr.message)
-              })
-            } finally {
-              fiBusy = Math.max(0, fiBusy - 1)
-            }
-          })()
+          void executeClaimedFiRun(cfg, run).catch((error) => {
+            logErr('fi run handler failed ' + run.runId + ':', error.message)
+          })
         }
       }
     } catch (err) {
@@ -2721,6 +2729,7 @@ module.exports = {
   classifyAgentExitFailure,
   buildCollectorArgs,
   readCollectResult,
+  executeClaimedFiRun,
   configTargetPath,
   atomicWriteJson,
   probeFaultInjection,
