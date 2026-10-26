@@ -20,5 +20,6 @@
     "@earendil-works/pi-coding-agent": {
       "optional": true
     }
-  }
+  },
+  "license": "Apache-2.0"
 }

@@ -1,6 +1,8 @@
 'use strict'
 
 // AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// SPDX-License-Identifier: Apache-2.0
 
 const path = require('node:path')
 
@@ -12,11 +14,11 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": "/app/benchmarks/swe-bench/evaluator/entrypoint.cjs",
     "imageProvider": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/images.cjs"),
-    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-f405d624a0dda73126b057b75708b48f3c40ada38031677ce1a60e921fa95b7f",
+    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-dbe3fc7a5cea9a98f19f3f1362ae8b4713f9b4f1760a00cd9e10c5c00a0b7405",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/Dockerfile"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
     "runtimeSmokeEntrypoint": "/app/benchmarks/swe-bench/smoke/index.cjs",
-    "artifactDigest": "sha256:f405d624a0dda73126b057b75708b48f3c40ada38031677ce1a60e921fa95b7f",
+    "artifactDigest": "sha256:dbe3fc7a5cea9a98f19f3f1362ae8b4713f9b4f1760a00cd9e10c5c00a0b7405",
     "network": "deny",
     "resources": {
       "cpu": 4,
