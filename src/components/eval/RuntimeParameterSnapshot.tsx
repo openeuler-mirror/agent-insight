@@ -4,7 +4,7 @@ export function RuntimeParameterSnapshot({ definition, options }: {
   definition?: RuntimeDefinition | null
   options?: AgentOptions | null
 }) {
-  if (!definition || !options) return null
+  if (!definition || !options || definition.runtimeKey === 'opencode') return null
   if (options.version === 2) return <details className="mt-3 border-t border-card-border pt-3">
     <summary className="cursor-pointer font-semibold">{definition.displayName} 运行参数 · 查看配置快照</summary>
     <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md border border-card-border bg-background-secondary p-3 font-mono text-xs text-foreground">

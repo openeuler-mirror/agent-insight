@@ -3269,7 +3269,7 @@ export function ExperimentWizard({
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
                   ...(isBenchmarkDataset && selectedTarget?.executionProfile ? [['执行环境', `${selectedTarget.executionProfile.key} · ${selectedTarget.executionProfile.sourceRevision.slice(0, 12)} · 工具断网 · ${selectedTarget.executionProfile.resources.cpu} CPU / ${selectedTarget.executionProfile.resources.memoryMiB} MiB`]] : []),
-                  ...(runtimeState.active && (runtimeParameterEditorVisible || Object.keys(runtimeState.agentOptions?.values || {}).length > 0) ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
+                  ...(runtimeState.active && runtimeParameterEditorVisible ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
                     skillPreset === 'skill-ab'
