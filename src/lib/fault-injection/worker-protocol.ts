@@ -32,9 +32,15 @@ export async function sweepStaleClaims(user: string | null) {
       const worker = await prisma.faultInjectionWorker.findUnique({
         where: { workerId: run.workerId },
       })
-      // claimedAt is the start time, not a renewable lease. A healthy worker
-      // may legitimately hold it longer than the orphan-claim timeout.
-      if (worker && worker.lastSeenAt >= new Date(Date.now() - workerOnlineMs())) continue
+      // claimedAt is a start time. Renew protection only for live work;
+      // a restarted client can heartbeat while its previous collectors are gone.
+      if (worker && worker.lastSeenAt >= new Date(Date.now() - workerOnlineMs())) {
+        let activeRunIds: unknown
+        try {
+          activeRunIds = JSON.parse(worker.inventoryJson || '{}').activeRunIds
+        } catch { /* Legacy workers do not report individual active runs. */ }
+        if (!Array.isArray(activeRunIds) || activeRunIds.includes(run.runId)) continue
+      }
     }
     const result = await prisma.faultInjectionRun.updateMany({
       where: {

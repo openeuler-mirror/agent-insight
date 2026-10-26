@@ -2279,7 +2279,7 @@ async function sendFiHeartbeat(cfg) {
       workerId: cfg.clientId,
       hostname: os.hostname(),
       version: AGENT_VERSION,
-      inventory: buildFiInventory(cfg),
+      inventory: { ...buildFiInventory(cfg), activeRunIds: Array.from(activeFiRuns) },
       busySlots: fiBusy,
     })
   } catch (err) {

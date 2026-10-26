@@ -62,3 +62,18 @@ test('concurrent reclaim passes do not reset or count the same claim twice', asy
   assert.equal(fresh.status, 'queued')
   assert.equal(await sweep(user), 0)
 })
+
+test('current active-run heartbeats protect live work but recover claims lost on restart', async () => {
+  const active = await fixture('reported-active', true)
+  const lost = await fixture('restarted', true)
+  await prisma.faultInjectionWorker.update({ where: { workerId: active.workerId! },
+    data: { inventoryJson: JSON.stringify({ activeRunIds: [active.runId] }) } })
+  await prisma.faultInjectionWorker.update({ where: { workerId: lost.workerId! },
+    data: { inventoryJson: JSON.stringify({ activeRunIds: [] }) } })
+  assert.equal(await sweep(user), 1)
+  const kept = await prisma.faultInjectionRun.findUniqueOrThrow({ where: { id: active.id } })
+  const recovered = await prisma.faultInjectionRun.findUniqueOrThrow({ where: { id: lost.id } })
+  assert.equal(kept.status, 'collecting')
+  assert.equal(recovered.status, 'queued')
+  assert.equal(recovered.workerId, null)
+})
