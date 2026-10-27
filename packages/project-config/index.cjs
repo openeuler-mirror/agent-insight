@@ -107,8 +107,21 @@ const schemas = {
     },
   },
   executor: {
-    benchmarks: { 'swe-bench': { gitSource: leaf(null, nullableString, gitSource) } },
+    retention: { days: integer(7) },
+    benchmarks: {
+      'swe-bench': {
+        gitSource: leaf(null, nullableString, gitSource),
+        images: {
+          source: choice('official', ['official', 'epoch']),
+          arch: choice('auto', ['auto', 'x86_64', 'arm64']),
+          allowNonOfficial: boolean(false),
+          proxyPrefix: leaf(null, (value) => value === null || (typeof value === 'string' && /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i.test(value))),
+          verifiedMirrorRepositories: leaf(null, (value) => value === null || (Array.isArray(value) && value.length <= 8 && value.every((item) => typeof item === 'string' && /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)+$/.test(item)))),
+        },
+      },
+    },
     runtimes: leaf({}, runtimeOverrides),
+    execution: leaf({}, value => value && typeof value === 'object' && !Array.isArray(value)),
   },
 }
 
@@ -151,6 +164,42 @@ const legacySettings = {
 }
 const warned = new Set()
 
+function parseEvaluatorEnv(assignments) {
+  const overrides = {}
+  const passthrough = []
+  for (const assignment of assignments) {
+    if (typeof assignment !== 'string' || /[\r\n\0]/.test(assignment) || !/^[A-Za-z_][A-Za-z0-9_]*=/.test(assignment)) throw new Error('--evaluator-env 必须是单行 NAME=VALUE')
+    const separator = assignment.indexOf('=')
+    const name = assignment.slice(0, separator)
+    const raw = assignment.slice(separator + 1)
+    const field = Object.hasOwn(legacySettings.evaluator, name) ? legacySettings.evaluator[name] : null
+    if (!field) {
+      if (/^(SWE_BENCH_|SWEBENCH_|IMAGE_POOL_)/.test(name)) throw new Error(`--evaluator-env 不支持的配置变量：${name}`)
+      passthrough.push(assignment)
+      continue
+    }
+    const keys = field.split('.')
+    const rule = keys.reduce((schema, key) => schema[key], schemas.evaluator)
+    let value = raw.trim()
+    try {
+      if (typeof rule.defaultValue === 'boolean') {
+        if (!/^(true|false|1|0)$/i.test(value)) throw new Error()
+        value = /^(true|1)$/i.test(value)
+      } else if (typeof rule.defaultValue === 'number') {
+        if (!/^(0|[1-9]\d*)(\.\d+)?$/.test(value)) throw new Error()
+        value = Number(value)
+      } else if (name === 'SWE_BENCH_VERIFIED_MIRROR_REPOS') {
+        value = value === 'null' ? null : value.startsWith('[') ? JSON.parse(value) : value ? value.split(',').map(item => item.trim()) : []
+      } else if (rule.defaultValue === null && !value) value = null
+      if (!rule.valid(value)) throw new Error()
+    } catch { throw new Error(`--evaluator-env ${name} 的类型或取值不合法（配置字段 ${field}）`) }
+    let target = overrides
+    for (const key of keys.slice(0, -1)) target = target[key] ||= {}
+    target[keys.at(-1)] = value
+  }
+  return { overrides, passthrough }
+}
+
 function warnLegacy(scope, env = process.env, warn = console.warn) {
   for (const [name, field] of Object.entries(legacySettings[scope])) {
     const key = `${scope}:${name}`
@@ -179,6 +228,13 @@ function apply(target, schema, values, filePath, prefix = '') {
           for (const [runtimeKey, runtime] of Object.entries(value)) {
             target[key][runtimeKey] = { defaults: { ...target[key][runtimeKey]?.defaults, ...structuredClone(runtime.defaults || {}) } }
           }
+        } else if (field === 'execution') {
+          const merge = (base, next) => Object.fromEntries([...new Set([...Object.keys(base), ...Object.keys(next)])].map(key => [key,
+            next[key] === undefined ? base[key]
+              : base[key] && next[key] && typeof base[key] === 'object' && typeof next[key] === 'object' && !Array.isArray(base[key]) && !Array.isArray(next[key])
+                ? merge(base[key], next[key]) : structuredClone(next[key]),
+          ]))
+          target[key] = merge(target[key], value)
         } else target[key] = rule.normalize ? rule.normalize(value, filePath) : structuredClone(value)
       } catch (error) {
         throw new Error(`${filePath}: ${field} ${error.message}`)
@@ -198,8 +254,11 @@ function loadProjectConfig(scope, options = {}) {
     const root = options.root || env.AGENT_INSIGHT_PACKAGE_ROOT || path.resolve(__dirname, '../..')
     const configuredDir = options.configDir || env.AGENT_INSIGHT_CONFIG_DIR
     const directory = configuredDir ? path.resolve(root, configuredDir) : path.join(root, 'config', 'benchmark')
-    for (const suffix of ['', '.local']) {
-      const filePath = path.resolve(directory, `${scope}${suffix}.yaml`)
+    const installedExecutor = scope === 'executor' && !configuredDir && fs.existsSync(path.join(root, 'reliability-client.cjs'))
+    const localDirectory = installedExecutor
+      ? path.join(require(path.join(root, 'agent-insight-home.cjs')).getAgentInsightHome(env), 'config')
+      : directory
+    for (const filePath of [path.join(directory, `${scope}.yaml`), path.join(localDirectory, `${scope}.local.yaml`)]) {
       let text
       try { text = fs.readFileSync(filePath, 'utf8') }
       catch (error) { if (error.code === 'ENOENT') continue; throw error }
@@ -210,6 +269,11 @@ function loadProjectConfig(scope, options = {}) {
       apply(config, schemas[scope], values === undefined ? {} : values, originPath)
     }
   }
+  if (options.deploymentOverrides) {
+    if (scope !== 'evaluator') throw new Error('显式部署覆盖仅适用于 evaluator 配置')
+    const directory = options.pathBaseDir || options.configDir || env.AGENT_INSIGHT_CONFIG_DIR || path.join(options.root || env.AGENT_INSIGHT_PACKAGE_ROOT || path.resolve(__dirname, '../..'), 'config', 'benchmark')
+    apply(config, schemas.evaluator, options.deploymentOverrides, path.join(directory, '--evaluator-env'))
+  }
   if (scope === 'evaluator') {
     const images = config.benchmarks['swe-bench'].images
     if (images.source === 'epoch' && (!images.allowNonOfficial || images.arch === 'x86_64')) {
@@ -219,16 +283,30 @@ function loadProjectConfig(scope, options = {}) {
       throw new Error('config/benchmark/evaluator.yaml: imagePool.maxPulls 开启预取时至少为 2')
     }
   }
+  if (scope === 'executor') {
+    const images = config.benchmarks['swe-bench'].images
+    if (images.source === 'epoch' && (!images.allowNonOfficial || images.arch === 'x86_64')) {
+      throw new Error('config/benchmark/executor.yaml: benchmarks.swe-bench.images.source=epoch 需要允许非官方镜像且使用 ARM64')
+    }
+    config.execution = require('../benchmark-protocol/execution.cjs').normalizeExecutionConfig(config.execution)
+  }
   return config
 }
 
-module.exports = { loadProjectConfig, warnLegacy, legacySettings }
+module.exports = { loadProjectConfig, parseEvaluatorEnv, warnLegacy, legacySettings }
 
 if (require.main === module) {
   try {
-    const config = loadProjectConfig(process.argv[2], { configDir: process.argv[3], pathBaseDir: process.argv[4] })
+    const explicitEnv = process.argv[5] === '--deployment' && process.argv[6] === '--env-overrides'
+    const input = explicitEnv ? fs.readFileSync(0, 'utf8') : ''
+    const parsed = parseEvaluatorEnv(input ? input.replace(/\n$/, '').split('\n') : [])
+    const config = loadProjectConfig(process.argv[2], { configDir: process.argv[3], pathBaseDir: process.argv[4], ...(explicitEnv ? { deploymentOverrides: parsed.overrides } : {}) })
     process.stdout.write(JSON.stringify(config))
     if (process.argv[5] === '--deployment') process.stdout.write(`\n${config.imagePool.enabled}\n${config.imagePool.macDiskPath || ''}\n`)
+    if (explicitEnv) {
+      if (parsed.passthrough.length) process.stdout.write(`${parsed.passthrough.join('\n')}\n`)
+      console.error(`Evaluator 生效配置：maxConcurrency=${config.maxConcurrency}，imagePool.enabled=${config.imagePool.enabled}，imagePool.prefetchEnabled=${config.imagePool.prefetchEnabled}，imagePool.maxPulls=${config.imagePool.maxPulls}`)
+    }
   }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }

@@ -3,6 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
+test('Benchmark empty state displays host readiness reasons and refreshes while generating Trace', () => {
+  const wizard = fs.readFileSync(path.join(process.cwd(), 'src/components/eval/ExperimentWizard.tsx'), 'utf8');
+  assert.match(wizard, /aria-label="Benchmark 执行环境未就绪原因"/);
+  assert.match(wizard, /unavailableBenchmarkTargets\.map/);
+  assert.match(wizard, /<strong>\{target\.host\} · \{target\.platform\}<\/strong>/);
+  assert.match(wizard, /target\.benchmarkUnavailableReasons\?\.\[selectedDataset\?\.benchmark\?\.adapterKey/);
+  assert.match(wizard, /step === 2 && isBenchmarkDataset && traceMode === 'generate'/);
+});
+
 test('Benchmark Trace generation follows public Manifest columns and search paths', () => {
   const wizard = fs.readFileSync(
     path.join(process.cwd(), 'src/components/eval/ExperimentWizard.tsx'),

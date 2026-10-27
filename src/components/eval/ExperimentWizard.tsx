@@ -27,6 +27,7 @@ import { TextEvaluatorConfigDialog } from '@/components/eval/TextEvaluatorConfig
 import { RuntimeModelSelect } from '@/components/eval/RuntimeModelSelect';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { useExecutionEnvironment, type EnvironmentSelection } from '@/lib/client/use-execution-environment';
 import {
   describeMatchResult,
   findBestDatasetInputMatch,
@@ -70,6 +71,8 @@ import {
 } from '@/lib/skill-workbench/experiment-policy';
 
 interface AgentTargetOption {
+  executionProfile?: import('../../../packages/benchmark-protocol/execution.cjs').ExecutionProfile;
+  benchmarkEnvironments?: Record<string, { profile: import('../../../packages/benchmark-protocol/execution.cjs').ExecutionProfile; models: Array<{ id: string; label: string }> }>;
   workerId: string;
   host: string;
   hostname: string | null;
@@ -82,7 +85,10 @@ interface AgentTargetOption {
   supportsFaultInjection: boolean;
   supportsBenchmark: boolean;
   benchmarkKeys: string[];
+  preparableBenchmarkKeys?: string[];
+  supportsEnvironmentPreparation?: boolean;
   benchmarkUnavailableReason: string | null;
+  benchmarkUnavailableReasons?: Record<string, string>;
   parameterDefinitions?: RuntimeDefinition[];
 }
 
@@ -512,6 +518,9 @@ export function ExperimentWizard({
 
   const [step, setStep] = useState(1);
   const [maxVisited, setMaxVisited] = useState(1);
+  const [advancingTrace, setAdvancingTrace] = useState(false);
+  const traceAdvanceRef = useRef(false);
+  const agentsRequestIdRef = useRef(0);
 
   // ① 实验设计
   const [name, setName] = useState(() => skillContext
@@ -637,10 +646,13 @@ export function ExperimentWizard({
       skillPreset === 'trigger'
         ? target.supportsTriggerRouting
         : isBenchmarkDataset
-        ? target.supportsBenchmark && target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '')
+        ? target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '') || target.preparableBenchmarkKeys?.includes(selectedDataset?.benchmark?.adapterKey || '')
         : isReliabilityDataset
-          ? target.supportsFaultInjection
-          : target.supportsGenericTrace),
+          ? target.supportsFaultInjection || (target.supportsEnvironmentPreparation && ['opencode', 'xiaoo'].includes(target.platform))
+          : target.supportsGenericTrace).map(target => {
+            const environment = isBenchmarkDataset ? target.benchmarkEnvironments?.[selectedDataset?.benchmark?.adapterKey || ''] : null;
+            return environment ? { ...target, executionProfile: environment.profile, models: environment.models } : target;
+          }),
     [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey, skillPreset],
   );
   const selectedTarget = targetOptions.find(
@@ -650,12 +662,16 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const unavailableBenchmarkTargets = isBenchmarkDataset
+    ? (selectedAgent?.targets || []).filter(target => !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))
+    : [];
   const runtimeTargetKey = selectedTarget ? `${selectedTarget.workerId}::${selectedTarget.platform}::${selectedTarget.agent}` : '';
   const runtimeDraft = runtimeDrafts[runtimeTargetKey];
   const runtimeState = runtimeOptionsState(!isReliabilityDataset && traceMode === 'generate' ? selectedTarget : null,
     runtimeDraft?.inputs || {}, runtimeDraft ? runtimeTargetKey : '', runtimeTargetKey, runtimeDraft?.restored, runtimeDraft?.restoredDefinition);
   const updateRuntimeInputs = (inputs: RuntimeOptionInputs) => setRuntimeDrafts(current => ({ ...current, [runtimeTargetKey]: { inputs } }));
   const runtimeDefinition = runtimeState.definition;
+  const runtimeParameterEditorVisible = runtimeDefinition?.runtimeKey !== 'opencode';
   if (runtimeState.active && runtimeDefinition && runtimeTargetKey && !runtimeDraft) {
     setRuntimeDrafts(current => initializeRuntimeDraft(current, runtimeTargetKey, runtimeDefinition));
   }
@@ -678,24 +694,43 @@ export function ExperimentWizard({
     () => Array.from(selectedGenerated.values()),
     [selectedGenerated],
   );
+  const environmentSelection: EnvironmentSelection | null = selectedTarget && expType === 'single' && (traceMode === 'generate' || skillPreset === 'skill-ab') ? {
+    datasetId: selectedDatasetId || null,
+    clientId: selectedTarget.workerId,
+    platform: selectedTarget.platform,
+    agent: selectedTarget.agent,
+    model: genModel,
+    ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
+    caseIds: Array.from(traceMode === 'generate' ? selectedGenerated.keys() : selected.keys()).sort(),
+    mode: skillPreset === 'skill-ab' ? 'skill-ab' : skillPreset === 'trigger' ? 'trigger' : 'generate',
+    timeoutSeconds: agentTimeoutSeconds,
+    concurrency: executionConcurrencyRequired ? executionConcurrency : 1,
+  } : null;
+  const environment = useExecutionEnvironment(user || '', environmentSelection);
+  const environmentBusy = environment.busy || advancingTrace;
 
-  const refreshAgents = useCallback(async () => {
-    if (!user) return;
+  const refreshAgents = useCallback(async (confirmPreparation = false) => {
+    if (!user || (traceAdvanceRef.current && !confirmPreparation)) return [];
+    const requestId = ++agentsRequestIdRef.current;
     const response = await apiFetch(`/api/experiments/agents?user=${encodeURIComponent(user)}`);
     if (!response.ok) throw new Error('Agent 列表刷新失败');
     const data = await response.json();
-    setAgents(Array.isArray(data?.agents) ? data.agents : []);
+    const updated: AgentOption[] = Array.isArray(data?.agents) ? data.agents : [];
+    if (agentsRequestIdRef.current === requestId) setAgents(updated);
+    return updated;
   }, [user]);
+
+  useEffect(() => () => { agentsRequestIdRef.current += 1; }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      refreshAgents().catch(() => setAgents([]));
+      refreshAgents().catch(() => undefined);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [refreshAgents]);
 
   useEffect(() => {
-    if (!user || step !== 1) return;
+    if (!user || environmentBusy || (step !== 1 && !(step === 2 && isBenchmarkDataset && traceMode === 'generate'))) return;
     const timer = window.setInterval(() => {
       refreshAgents().catch(() => undefined);
     }, 10_000);
@@ -707,7 +742,7 @@ export function ExperimentWizard({
       window.clearInterval(timer);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [refreshAgents, step, user]);
+  }, [refreshAgents, step, user, isBenchmarkDataset, traceMode, environmentBusy]);
 
   useEffect(() => {
     if (!user) return;
@@ -1127,6 +1162,12 @@ export function ExperimentWizard({
   }, [loadTraces, step, traceMode]);
 
   const goTo = (s: number) => {
+    if (environmentBusy || traceAdvanceRef.current) return;
+    if (s > 2 && step < 3) {
+      if (step !== 2 || !step2Valid) return;
+      void advanceFromTrace();
+      return;
+    }
     setStep(s);
     setMaxVisited((m) => Math.max(m, s));
   };
@@ -1598,6 +1639,7 @@ export function ExperimentWizard({
             platform: selectedTarget.platform,
             agent: selectedTarget.agent,
             model: genModel || null,
+            ...(selectedTarget.executionProfile ? { executionProfileDigest: selectedTarget.executionProfile.definitionDigest } : {}),
             ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
           } : undefined,
           agentTimeoutSeconds,
@@ -1738,6 +1780,36 @@ export function ExperimentWizard({
     || (step2SelectionValid && !runtimeState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const advanceFromTrace = async () => {
+    if (!step2Valid || environmentBusy || traceAdvanceRef.current) return;
+    traceAdvanceRef.current = true;
+    agentsRequestIdRef.current += 1;
+    setAdvancingTrace(true);
+    try {
+      if (environmentSelection) {
+        setSelectedTargetKey(`${environmentSelection.clientId}::${environmentSelection.platform}`);
+        if (!await environment.check()) return;
+        try {
+          const updated = await refreshAgents(true);
+          if (!environment.isCurrent()) return;
+          const target = updated.flatMap(item => item.targets).find(item => item.workerId === environmentSelection.clientId && item.platform === environmentSelection.platform && item.agent === environmentSelection.agent);
+          if (!target || (isBenchmarkDataset && !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))) {
+            environment.fail('刚检查的执行目标已变化或不再就绪，请确认主机与 Agent 后再次点击“下一步”。');
+            return;
+          }
+        }
+        catch {
+          if (environment.isCurrent()) environment.fail('运行环境已准备，但执行目标信息刷新失败，请再次点击“下一步”。');
+          return;
+        }
+      }
+      setStep(3);
+      setMaxVisited(value => Math.max(value, 3));
+    } finally {
+      traceAdvanceRef.current = false;
+      setAdvancingTrace(false);
+    }
+  };
 
   const stepSummaries = [
     `${name.trim() || '未命名'} · ${expType === 'llm' ? 'LLM 对比' : selectedDataset?.name || '未选数据集'}`,
@@ -1758,24 +1830,26 @@ export function ExperimentWizard({
 
   // 各步 panel 内底部 footer：分隔线 + 右对齐 上一步/下一步
   const footer = (opts: { nextDisabled?: boolean; nextLabel?: string; onNext?: () => void }) => (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+      {step === 2 && environment.message && <div role={environment.failed ? 'alert' : 'status'} aria-live="polite" style={{ marginBottom: 10, whiteSpace: 'pre-line', fontSize: 12, color: environment.failed ? 'var(--error)' : 'var(--foreground-secondary)' }}>{environment.message}</div>}
     <div style={{
       display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8,
-      marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)',
     }}>
       {step > 1 && (
-        <button style={BTN_GHOST} onClick={() => goTo(step - 1)}>← 上一步</button>
+        <button style={BTN_GHOST} disabled={environmentBusy} onClick={() => goTo(step - 1)}>← 上一步</button>
       )}
       <button
-        disabled={opts.nextDisabled}
-        onClick={opts.onNext ?? (() => goTo(step + 1))}
+        disabled={opts.nextDisabled || environmentBusy}
+        onClick={step === 2 ? () => void advanceFromTrace() : opts.onNext ?? (() => goTo(step + 1))}
         style={{
           ...BTN_PRIMARY,
-          opacity: opts.nextDisabled ? 0.5 : 1,
-          cursor: opts.nextDisabled ? 'not-allowed' : 'pointer',
+          opacity: opts.nextDisabled || environmentBusy ? 0.5 : 1,
+          cursor: opts.nextDisabled || environmentBusy ? 'not-allowed' : 'pointer',
         }}
       >
-        {opts.nextLabel ?? NEXT_LABELS[step - 1]}
+        {step === 2 && environmentBusy ? '检查与准备中…' : opts.nextLabel ?? NEXT_LABELS[step - 1]}
       </button>
+    </div>
     </div>
   );
 
@@ -1786,8 +1860,13 @@ export function ExperimentWizard({
         {/* 页头 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0 12px' }}>
           <button
+            type="button"
             style={{ ...BTN_GHOST, height: 26, padding: '0 9px', fontSize: 11.5 }}
-            onClick={() => onBack ? onBack() : router.push('/experiments')}
+            disabled={environmentBusy}
+            onClick={() => {
+              if (environmentBusy || traceAdvanceRef.current) return;
+              if (onBack) onBack(); else router.push('/experiments');
+            }}
           >
             ‹ 返回
           </button>
@@ -1800,6 +1879,7 @@ export function ExperimentWizard({
         </div>
 
         <Stepper step={step} maxVisited={maxVisited} summaries={stepSummaries} onJump={goTo} />
+        <fieldset disabled={environmentBusy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
 
         {step === 1 && (
           <div style={PANEL}>
@@ -2130,6 +2210,17 @@ export function ExperimentWizard({
                     : isReliabilityDataset
                       ? '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'
                       : '当前 Agent 没有在线且支持回传 Trace ID 的客户端，请检查客户端状态；旧客户端需要升级后才能用于普通数据集生成 Trace。'}
+                  {isBenchmarkDataset && unavailableBenchmarkTargets.length > 0 && (
+                    <ul aria-label="Benchmark 执行环境未就绪原因" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
+                      {unavailableBenchmarkTargets.map(target => (
+                        <li key={`${target.workerId}::${target.platform}`}>
+                          <strong>{target.host} · {target.platform}</strong>：
+                          {target.benchmarkUnavailableReasons?.[selectedDataset?.benchmark?.adapterKey || '']
+                            || target.benchmarkUnavailableReason || '该执行目标未上报当前 Benchmark 所需能力'}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               ) : (
                 <>
@@ -2179,12 +2270,12 @@ export function ExperimentWizard({
               )}
               {runtimeState.migration && runtimeState.definition && <RuntimeOptionMigration migration={runtimeState.migration}
                 onConfirm={() => updateRuntimeInputs(optionsToInputs(runtimeState.definition!, runtimeState.migration!.options))} />}
-              {runtimeState.active && runtimeState.definition && <RuntimeOptionsFields key={`${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} definition={runtimeState.definition} value={runtimeState.inputs} error={runtimeState.error}
+              {runtimeParameterEditorVisible && runtimeState.active && runtimeState.definition && <RuntimeOptionsFields key={`${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} definition={runtimeState.definition} value={runtimeState.inputs} error={runtimeState.error}
                 onChange={updateRuntimeInputs} templateControls={runtimeState.definition.configuration?.version === 2 ? <RuntimeParameterTemplates
                   key={`templates:${user}:${runtimeTargetKey}:${runtimeState.definition.definitionDigest}`} user={user}
                   definition={runtimeState.definition} options={runtimeState.agentOptions} error={runtimeState.error}
                   onApply={options => updateRuntimeInputs(optionsToInputs(runtimeState.definition!, options))} /> : undefined} />}
-              {!runtimeState.active && runtimeState.error && <div className="mb-4 flex items-center gap-2">
+              {(!runtimeState.active || (!runtimeParameterEditorVisible && !runtimeState.migration)) && runtimeState.error && <div className="mb-4 flex items-center gap-2">
                 <p className="text-sm text-error" role="alert">{runtimeState.error}</p>
                 <Button type="button" variant="outline" size="sm" onClick={() => setRuntimeDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== runtimeTargetKey)))}>清除已保存参数</Button>
               </div>}
@@ -3177,7 +3268,8 @@ export function ExperimentWizard({
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
-                  ...(runtimeState.active ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
+                  ...(isBenchmarkDataset && selectedTarget?.executionProfile ? [['执行环境', `${selectedTarget.executionProfile.key} · ${selectedTarget.executionProfile.sourceRevision.slice(0, 12)} · 工具断网 · ${selectedTarget.executionProfile.resources.cpu} CPU / ${selectedTarget.executionProfile.resources.memoryMiB} MiB`]] : []),
+                  ...(runtimeState.active && runtimeParameterEditorVisible ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
                     skillPreset === 'skill-ab'
@@ -3402,6 +3494,7 @@ export function ExperimentWizard({
             </div>
           </div>
         )}
+        </fieldset>
       </PageContainer>
     </>
   );

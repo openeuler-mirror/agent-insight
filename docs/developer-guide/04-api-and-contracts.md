@@ -20,6 +20,28 @@
 
 ## Public API
 
+### 实验执行环境准备
+
+| 接口 / 合同 | 输入与输出 |
+| --- | --- |
+| `POST /api/experiments/environment-preparations` | 接收 `requestId/datasetId/clientId/platform/agent/model/caseIds/mode/timeoutSeconds/concurrency` 及可选 `agentOptions`；同配置入口改为仅传 `requestId/sourceExperimentId`，禁止混入执行目标覆盖；服务端解析数据集接入标识与版本，返回 `202` 和准备任务 |
+| `GET /api/experiments/environment-preparations/:taskId` | 按当前用户与仍有效的客户端归属查询任务 |
+| 准备任务 | `{ taskId, contextDigest, state, message, issues, durationHint? }`；状态为 `checking/preparing/needs_action/ready/failed` |
+| `execution-environment/v1` | `packages/benchmark-protocol/environment.cjs` 及 `.d.cts`，严格校验上下文与摘要 |
+| 执行端接入方法 | `checkEnvironment(context, services)` 返回 `{ issues, prepare }`；`prepareEnvironment(context, services, reportProgress)` 执行准备，调用方再次检查 |
+
+实验列表与 Skill 工作台按实验 ID 独立保存忙状态，仅禁用当前行操作，某行完成或失败不解除其他仍在处理的行；两处共用 `SameConfigExperimentAction`，复用 `useExecutionEnvironment` 轮询及恢复逻辑，环境通过后才复制、启动并跳转。服务端 `resolveReuseEnvironment` 按归属读取原实验冻结配置：Benchmark 从绑定恢复运行参数与 Case 选择，普通/可靠性数据集从未删除 Case 的数据集绑定恢复范围，Skill 从快照和取消记录恢复范围。缺少可靠绑定的旧记录提示通过向导重新确认，不猜测主机或扫描全量能力。纯已有 Trace/LLM 对比返回 `{ state: 'skipped' }`，不创建执行端任务；需要客户端执行的 Skill A/B 不跳过。`skipped` 仅是同配置 POST 的无任务响应，不属于执行端状态协议。准备接口不创建实验；启动仍使用原有实验/Skill 任务 API 并保留其就绪校验。
+
+向导环境检查成功后只执行步骤切换：先刷新执行目标并核对原主机/Agent，确认通过后进入第三步；失败留在第二步提示。整个过程不调用路由跳转或整页刷新。后台主机轮询与窗口聚焦刷新在准备期间暂停，进入门禁时使旧请求失效，刷新结果按请求序号防止乱序覆盖，页面卸载同样使未完成刷新失效。页头返回及步骤导航锁定到目标复核结束。向导步骤保存在组件内存，浏览器整页重载会从第一步开始，相同配置再次检查时恢复已有环境任务。
+
+准备请求的 `requestId` 统一使用 `safeUUID()`，兼容通过局域网 HTTP 访问时浏览器未提供 `crypto.randomUUID()` 的情况；网络不确定时复用原请求 ID，明确结束后重试生成新 ID。
+
+任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
+
+检查和重启恢复不触发全量能力扫描。执行端复用本轮已验证事实，通过现有 `PUT /api/reliability/client/v1/capabilities` 的 `partial: true` 增量同步平台、组件和最终执行 Profile；服务端合并更新，保留其他 Agent、模型与组件。Profile 摘要改变时，未检查 Runtime 的旧就绪状态失效。可靠性数据集额外通过现有 Worker heartbeat 的 `partial: true` 合并所选平台 inventory，不枚举其他 Agent 或模型目录；普通全量上报语义不变。增量同步成功后才回报环境 `ready`，避免后续实验冻结安装前的身份。
+
+环境终态通过 HTTP 确认，未确认结果由环境任务记录负责恢复，不能用通用回执队列直接回放过时的 `ready`。恢复前按原上下文只读复查，过期或缺少上下文则要求重新检查。指令回执通过带状态条件的原子更新防止晚到 ACK/进度覆盖已完成结果；查询就绪结果时再次核对数据集身份和主机健康。
+
 ### 模型连接测试
 
 - `ModelConfig.testTimeoutMs?: number` 存于现有用户设置 JSON；缺省为 `60000`，范围 `10000～300000` 整数毫秒。保存设置和测试接口均校验，非法值返回 `400`；无需 Prisma schema 迁移。该字段不改变评测、生成或优化的业务超时。
@@ -282,7 +304,7 @@ configuration:
 
 客户端 `runtimeInvocationOptions` 在进程启动前按本机 Schema 和原生入口校验最终配置，不会自动重组不支持的对象。`argv` 的 `binding.mode: passthrough` 按根 key 生成原名 `--key` 与字面量值，无需逐字段 mappings；字符串、数值和布尔值保留，空字符串保留独立空 argv，负号开头的值使用 `--key=value`。CLI key 保留大小写、下划线和点号；非法名称、NUL、平台调度保留 flag，以及该 CLI 通道不能消费的对象、数组、null 仅在执行客户端被拒绝。MCTS 新增原生已支持的 CLI 参数只需填写同名 key/value；前端允许保存嵌套草稿不代表 MCTS CLI 已支持它。
 
-显式 `binding.mappings` 保留为客户端交付适配，path 使用 JSON Pointer；未消费的值不会静默丢弃。支持 JSON 输入的应用可使用 `json-file` 或 `json-arg`，无需声明嵌套类型。文件通道按次创建独立目录/文件，权限为 0700/0600，通过客户端约定的 flag/env 交付路径并在成功、失败后清理；参数通道以一个字面量 argv 传递完整 JSON。OpenCode 现提供默认 `{}` 的通用配置，当前客户端使用 CLI 交付；后续原生 YAML 等入口由客户端适配，平台不转换文件格式。
+显式 `binding.mappings` 保留为客户端交付适配，path 使用 JSON Pointer；未消费的值不会静默丢弃。支持 JSON 输入的应用可使用 `json-file` 或 `json-arg`，无需声明嵌套类型。文件通道按次创建独立目录/文件，权限为 0700/0600，通过客户端约定的 flag/env 交付路径并在成功、失败后清理；参数通道以一个字面量 argv 传递完整 JSON。OpenCode 客户端保留默认 `{}` 的 CLI 交付通道，界面暂时隐藏其参数编辑、模板入口、执行摘要和详情页快照，包括非空历史配置；参数校验、下发与历史快照存储保持兼容。后续原生配置入口由客户端适配，平台不转换文件格式。
 
 客户端可选 Schema 使用已有 JSON Schema 基础子集，在最终执行时校验业务要求。平台参数限制为 256 KiB、32 层、20,000 个节点；`formatParameterJson` 优先缩进，超限时使用紧凑格式。本机 `runtimes.<key>.defaults` 按根字段覆盖模板，null 是实际配置值，模板在展示阶段不充当最终执行配置。
 

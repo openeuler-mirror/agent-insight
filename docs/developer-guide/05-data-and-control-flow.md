@@ -4,6 +4,19 @@
 
 ## Entry points
 
+### 实验第二步环境准备
+
+```text
+第二步下一步 → 表单校验 → 固定当前数据集/主机/Agent/模型/参数/Case 范围
+  → 创建或复用环境任务 → 现有客户端指令通道
+  → 独立进程调用数据集 checkEnvironment
+      ├→ 人工问题 → needs_action → 底部提示 → 用户配置后再次点击下一步
+      ├→ 已满足 → ready → 刷新执行目标 → 自动进入第三步
+      └→ 自动准备 → prepareEnvironment → 复查 → ready 或明确问题
+```
+
+选择主机或修改字段本身不触发检查。准备期间第二步字段与导航锁定；纯已有 Trace 评测直接跳过，仍重新执行 Agent 的 Skill A/B 不跳过。长编译不阻塞客户端心跳，进度和结果沿原控制通道回报；同上下文任务去重，共享组件复用安装锁。断连或重启通过本地任务记录核对，不由页面关闭推断安装取消；最终开始执行仍保留原有能力与 Profile 校验，不在第四步自动安装。
+
 ### 实验取消与本机停服
 
 ```text
@@ -16,16 +29,18 @@
 evaluator.sh stop → 与启动互斥 → 持久化停止标记 → 关闭 Controller
                    → 再次扫描作业 → 定向清理容器 → 可选清理登记镜像
 
-evaluator.sh images {list|purge} → 管理容器 → 数据卷内 manager.sock
-                                      → 当前 Controller 镜像池互斥
-                                      → 列表或逐个清理空闲自有 Case 镜像
+evaluator.sh images {list|purge} → docker exec 当前 Controller（部署 Catalog/配置）
+                                → manager.sock 镜像池互斥 → 空闲自有 Case 镜像
+                                → 归属记录与 Docker 引用检查 → 旧受管 Runtime
+
+evaluator.sh start → 新 Controller 通过 Doctor → 同一 Runtime 清理策略（失败只警告）
 ```
 
 本地取消检查周期 500ms，后台取消对账周期 3 秒，页面待确认列表每 5 秒刷新。轮询不是等待实验自然结束；收到信号后立即请求退出。删除最后一个有效 Case 时，同一事务会将实验标记为已删除并关闭监听；Case 删除响应将此状态返回页面，以便跳转实验列表。后台对账也会收敛此前遗留的普通及 Benchmark 零 Case 实验。仍有有效 Case 时，Case 取消确认后 Benchmark 推进下一 Case，普通实验重新结算；没有有效结果不能判成功。新派发、重试、出队、恢复和回调均检查删除/取消状态。
 
 本地执行记录不按超时擅自过期：平台进程崩溃可能留下尚未确认的执行或子进程，重启后仍显示待确认，需要运维核对。远端离线则自动重发取消指令；旧客户端明确拒绝停止指令时保留待确认并提示升级，在客户端进程重启后再重发，避免每轮对账重复投递。首版不自动推断“心跳消失等于任务已死”，也不提供批量抹除未确认记录的入口。
 
-评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。在线镜像命令不新增 HTTP 管理接口，必须挂载同一命名卷，并由正在运行的 Controller 执行；管理容器不直接并发改写 `image-pool/state.json`。
+评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。在线镜像命令不新增 HTTP 管理接口，由正在运行的 Controller 执行，不直接并发改写 `image-pool/state.json`。Runtime 清理只删除同 daemon、同数据卷登记的已确认旧镜像，保留当前 Catalog 引用与 Image ID、容器引用及归属/操作不确定项，按 Image ID 非强制删除，避免标签改写时误删新镜像。
 | Entry | File | Kind |
 |---|---|---|
 | `POST` ingest upload | `src/app/api/ingest/upload/route.ts` | HTTP |
@@ -396,7 +411,9 @@ Pi 使用每次运行独立的 `createEventInspector`，只消费完整 JSON 行
 
 CLI/Collector 就绪检查保持 3 秒单命令超时及 5 分钟缓存，文件指纹变化即时失效；30 秒能力扫描只检查 settings/models/auth、Collector 与可执行文件，不扫描 Pi 历史 Sessions。`probePiRuntime()` 不再同步调用模型目录，只读取就绪信息和已缓存目录。`refreshCapabilityReports()` 并行等待隔离 FI inventory 与 `refreshPiModelCatalog()`，完成后才上报能力。模型目录通过异步 `spawn` 执行 `--no-approve --list-models`，允许 20 秒，不阻塞主进程心跳；输出合计限制 1 MiB，超时/输出超限杀进程组，服务退出也清理未完成探测。同一配置的并发探测合并为一次；成功缓存 5 分钟，失败保留同指纹上次成功列表并在 30 秒后允许重试，无旧列表时保留“平台默认”，配置变更不沿用旧目录。有效空目录与超时、异常退出、格式错误明确区分，日志 `Pi model catalog` 只记录固定错误码、数量、耗时和重试周期，不记录原始 stdout/stderr 或密钥。模型发现不影响 Collector 就绪判定。
 
-Benchmark runtime 列表仍在客户端启动时固定，安装或修复后重启客户端。`test/reliability-client-pi.test.ts` 覆盖慢于 3 秒时仍可发现模型且定时器持续运行、并发去重、失败重试与成功缓存保留，以及隔离启动、重试、能力合并及真实 Collector→normalize→aggregate 契约；设置 `PI_EXPERIMENT_TEST_CLI=/absolute/path/to/pi` 可额外运行隔离本地 HTTP provider + 真实 Pi/Collector 的测试，不使用真实模型凭据。
+实验第二步的环境检查不调用或等待上述全量刷新；它只检查本次数据集与所选 Agent，复用已验证事实增量同步相关能力和 Profile，随后回报就绪。可靠性检查只读取所选平台的 FI 适配和所需故障定义，不扫描其他平台或完整模型目录。恢复时依据持久化上下文对当前组合做只读复查，再增量同步；不会直接回放旧的就绪结论，也不会在恢复时自动重装。终态通过 HTTP 确认，未确认结果保留并定期重试，已过期或不存在的服务端任务停止补报。Benchmark Runtime 列表在能力同步后动态更新，安装或修复后无需为此重启客户端。
+
+`test/reliability-client-pi.test.ts` 覆盖慢于 3 秒时仍可发现模型且定时器持续运行、并发去重、失败重试与成功缓存保留，以及隔离启动、重试、能力合并及真实 Collector→normalize→aggregate 契约；设置 `PI_EXPERIMENT_TEST_CLI=/absolute/path/to/pi` 可额外运行隔离本地 HTTP provider + 真实 Pi/Collector 的测试，不使用真实模型凭据。
 
 模型目录探测也通过 `buildAgentProcessLaunch()` 启动，复用执行时的用户 shell、环境与启动输出隔离，并从 `child.stdio[stdoutIndex]` 而非固定 stdout 读取结果。bash 交互登录会关闭 fd 3–19，因此无 profile 的引导 shell 先将私有管道移至 fd 20/21，再 exec 登录 shell；实际 CLI 启动前还原 stdout/stderr 并关闭额外描述符，进程组管理不变。缓存 key 包含 supervisor、shell、HOME/ZDOTDIR；shell 配置变更需要重启服务。客户端完整接受 Pi 列出的模型，不做额外白名单、凭据有效性/余额/权限探测或逐模型调用。
 
