@@ -199,7 +199,7 @@ export async function setupNodeRuntime(): Promise<void> {
     const { startOtelSpoolConsumer } = await import('@/lib/ingest/otel-consumer/consumer');
     startOtelSpoolConsumer();
   } catch (err) {
-    console.warn(
+    console.error(
       '[instrumentation] otel spool consumer start failed:',
       (err as Error)?.message,
     );
@@ -218,4 +218,10 @@ export async function setupNodeRuntime(): Promise<void> {
   } catch (err) {
     console.warn('[instrumentation] startExperimentWatcher failed (non-fatal):', (err as Error)?.message);
   }
+
+  setImmediate(() => {
+    void import('@/server/trace-datasets/manager')
+      .then(({ startTraceDatasetManager }) => startTraceDatasetManager())
+      .catch(() => { console.warn('[trace-datasets] generation unavailable'); });
+  }).unref();
 }

@@ -1,3 +1,10 @@
+---
+title: "Conventions & Extension"
+description: "汇总 Agent Insight 的开发约定、扩展方法与模块边界，指导开发者按现有架构添加功能。"
+keywords: ["Agent Insight", "开发规范", "模块扩展", "代码协作"]
+changefreq: monthly
+---
+
 # Conventions & Extension
 
 > 本代码库实际遵循的模式——包括一些不那么显而易见、Agent 容易搞错的项目规则。遵循它们，新代码才能保持一致。最权威的协作约定是仓库根目录的 `AGENTS.md`；最权威的架构文档是 `docs/PROJECT.md`。本文件总结了编写代码时最需要关注的内容。
@@ -182,3 +189,17 @@
 | `getProxyConfig` | `src/lib/ingest/proxy-config.ts` | 12 |
 | `buildAgentCallTree` | `src/lib/engine/observability/agent-trace.ts` | 6 |
 | `runGeneralAgent` | `src/lib/engine/general-agent/runner.ts` | 9 |
+
+### 扩展 Trace 生成来源与策略
+
+平台目录合并ingest适配器注册表与安装平台目录，复用framework别名归一。RegisteredAgent ID优先；历史记录使用平台、精确Agent名称与clientId派生稳定键。目录只暴露当前owner有Execution的平台，窗口内计数单独计算。新增采集器需验证存储后的完整单任务输入、最终回答、终态和所选Agent归属；只有目录可见不等于原始格式已验收。
+
+内容处理边界为`src/server/trace-datasets/content-processor.ts`，当前identity-v1。替换处理器须升级版本并重冻去重/签名向量；不能在采样后改变正文。行为缺失不补造false、无工具或工具转换；部分观测只贡献有证据的维度，时延和token不参与选样。
+
+策略、签名和测试分别位于`src/lib/trace-datasets/sampling/`、`test/trace-datasets-*.test.ts`。修改签名、排序、任务归类或行为比例都必须提升策略版本并重新跑确定性、误差及性能验证。默认行为比例0.20是经过逻辑验证的启发式保留比例，不代表已证明最优；公开聊天数据不包含真实行为，不能用它们宣称行为收益。
+
+生产入口 `sampling/production.ts` 保留 v6.35 和已冻结任务所需的 v4/v5 分派；`sampling/` 仅保留生产及类型依赖链，不按文件名中的历史版本删公共实现。签名固定向量位于 `test/fixtures/trace-datasets/`，公开对照和签名缓存辅助代码位于 `test/helpers/trace-datasets/`，随测试维护，不随 `scripts/` 发布。历史实验数据、逐轮脚本、未使用的采样策略及其专属测试归档在 Git 提交 `742502d8bb2495bb0311b31f02c353f2e07d6b7d`；效果与复现限制见[对比报告](../design/trace-eval-dataset/eight-datasets-comparison-report.md#6-验证材料与历史归档)。数据库升级仍由 `scripts/db_push.sh` 调用 `scripts/trace-datasets/remove-legacy-summary.cjs`，Worker 构建仍使用 `scripts/build-trace-dataset-worker.cjs`。
+
+增量SQL见`prisma/trace-dataset-generation.sql`；正常部署仍由既有安全db-push流程同步schema。新列可空，旧记录不回填Trace状态。回退前应排空运行、删除和待清理任务，保留新增列和回执；不要用旧代码把未发布占位当普通空数据集。
+
+扩展 Trace 多轮提取应在生成时复用已有 Execution/Session 的角色、消息顺序、关联标识、工具事件和终态做结构检查；不得新增采集字段或持久证据存储。当前不验证上下文语义独立性，不将多轮/历史消息/缺少原始请求作为排除条件，不调用模型或通过关键词猜测独立性。新增结构原因同步 EXCLUSION_REASONS 和用户指南，覆盖逐轮配对、无原始 spool、部分保留/全排除、跨用户隔离与临时明细生命周期。

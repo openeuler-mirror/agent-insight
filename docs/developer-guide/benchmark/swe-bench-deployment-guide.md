@@ -6,7 +6,7 @@
 
 - 完成公共服务安装，三端使用相互兼容的代码与 Catalog。
 - 平台具备数据来源和官方 Loader 所需网络，或按下节准备离线文件及 Python 环境。
-- 执行机能获取 Case 对应仓库，具备所选 Agent Runtime。
+- 执行机具备所选 Agent Runtime，并能按执行方式获取 Case 镜像或源码仓库。
 - 评测机 Docker 可用，能访问配置的 Case 镜像来源及 Runtime 构建依赖。镜像来源与 CPU 架构必须匹配。
 
 ## 2. 数据集安装
@@ -43,7 +43,9 @@ benchmarks:
 
 ### 配置 Case 源码来源
 
-在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；安装版常驻客户端对应目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`。安装升级会更新默认文件、保留 local 文件；旧目录下的 `config/executor.local.yaml` 会在新目录尚无覆盖文件时迁移，并保留原相对 Git 路径的实际位置。也可由 `AGENT_INSIGHT_CONFIG_DIR` 指定配置目录。
+以下 `gitSource` 用于 Git 工作区链路。原生 Pi/xiaoO 的 xGovernor 本地 Docker 直接使用 Case 镜像中的 `/testbed`，无需配置 `gitSource`，见下方 [Case 镜像](#原生-pixiaoo-的-case-镜像)。
+
+在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；curl 安装版使用 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`，默认 `~/.agent-insight/config/executor.local.yaml`。安装升级只更新运行时默认文件，保留用户配置；旧运行时目录的 local 文件不再读取，也不自动迁移。也可由 `AGENT_INSIGHT_CONFIG_DIR` 指定独立配置目录。
 
 ```yaml
 benchmarks:
@@ -72,6 +74,38 @@ Git 根地址会拼接为 `根地址/owner/repo.git`。例如 Flask 仓库对应
 
 xGovernor、Pi/E2B 和 Trace 代理的部署属于 Runtime 接入，不属于 SWE-bench 数据集或 Evaluator 安装。MCTS 最终选中的 Patch 会作为 `model.patch` 上传；自身搜索过程中的官测不能代替平台评测。
 
+### 原生 Pi/xiaoO 的 Case 镜像
+
+客户端安装与更新见 [通用部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。xGovernor 在实验第二步点击下一步时按所选 Agent/执行方式检查并自动准备，不在链路采集器安装时编译。模型凭据、Docker 权限及系统编译依赖需要人工处理时，页面底部给出说明；修复后再次点击下一步。该主机级准备不提前下载全部 Case 镜像，镜像仍在各 Case 执行准备阶段按需获取。
+
+以下为执行机 `executor.local.yaml` 中的可选覆盖，配置路径同本节前文；不填写时使用默认值：
+
+```yaml
+benchmarks:
+  swe-bench:
+    images:
+      source: official
+      arch: auto
+      allowNonOfficial: false
+      proxyPrefix: null
+      verifiedMirrorRepositories: null
+```
+
+执行端和评测端分别维护镜像实现与配置。当前默认均优先使用本地官方别名缓存，缺失时依次尝试 SWR → 配置代理 → 官方仓库；SWR/代理拉取成功后恢复官方别名。执行端读取 `executor.local.yaml`，评测端读取 `evaluator.local.yaml`，不会自动同步。
+
+| 配置 | 含义 |
+|---|---|
+| `source` / `arch` | 默认官方来源、自动识别架构；须与执行机及任务匹配 |
+| `verifiedMirrorRepositories: null` | 使用内置两个 SWR Verified 仓库，仅适用于官方 x86_64；ARM64 跳过 |
+| `verifiedMirrorRepositories: []` | 关闭额外镜像仓库，仍可使用配置代理或官方来源 |
+| 自定义镜像仓库列表 | 按 `<repository>:<instance_id>` 查找 Case |
+| `proxyPrefix` | 配置镜像代理前缀，默认不使用代理 |
+| `allowNonOfficial` | 默认关闭；Epoch 仅用于显式许可的 ARM64 冒烟，不能替代正式结果 |
+
+执行端访问私有 SWR 时，通过客户端运行账号及对应 Docker daemon 的现有认证配置准备，不在任务或 YAML 中填写密钥。执行端使用 Docker 本地缓存；[镜像池与预取](service-deployment-guide.md#53-可选跨-benchmark-共享镜像池) 由 Evaluator 管理。
+
+执行与评测使用独立容器，分别选择镜像，不强制两端 digest、image ID 或架构相同，也不保证环境内容完全一致。执行端直接使用镜像内源码，不 reset/clean；记录本次镜像身份与来源，官方安装提交与 Patch 基线处理见 [工作区、提交与诊断](benchmark-integration-development-guide.md#工作区提交与诊断)。
+
 ## 4. 评测端准备
 
 在评测机 `config/benchmark/evaluator.local.yaml` 配置镜像和 Docker 选项：
@@ -91,7 +125,7 @@ benchmarks:
       connectionPoolSize: 16
 ```
 
-`images` 控制来源、架构、非官方镜像许可、代理及镜像仓库。`verifiedMirrorRepositories: null` 使用内置仓库，`[]` 关闭额外镜像仓库；Epoch 仅允许显式许可的 ARM64 冒烟。正式评测前核对所选来源、架构与接入包支持边界，不要用非官方冒烟替代正式结果。
+`images` 的字段及拉取顺序同上方 [Case 镜像配置](#原生-pixiaoo-的-case-镜像)，此处独立控制评测端。正式评测前核对所选来源、架构与接入包支持边界。
 
 修改后按通用指南重启 Evaluator。公共镜像池按需拉取、缓存和回收 Case 镜像；预取与容量配置见 [共享镜像池](service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。首次运行还可能等待 Evaluator Runtime 准备，离线环境应提前准备匹配版本的 Runtime 和 Case 镜像。
 
@@ -114,4 +148,5 @@ bash scripts/evaluator-doctor.sh --smoke swe-bench
 - 仓库获取失败：检查执行机 `gitSource`、目录权限和远程源访问。
 - MCTS 未就绪：核对执行机 Python、`datasets`、启动脚本及 Trace 连接；预检通过仍需实际 Case 验收。
 - 评测等待或失败：检查镜像来源、架构、网络、磁盘和 `/health` 中的准备状态。
+- 已有 `model.patch`，但评测报 `Evaluator Entrypoint` / `Cannot find module './runtime-image.cjs'`：这是旧 SWE-bench Runtime 镜像漏包，不是 Agent 权限或断网导致。更新代码和生成的 Catalog 后，重新运行原有 `bash scripts/evaluator.sh start` 命令及部署参数；新摘要会触发准备完整依赖的 Runtime。远程预构建镜像部署须先发布同摘要的新制品。随后在 Case 页面点击“Benchmark 重评”，复用已有 Patch；无需重跑 Agent、重新安装客户端或放开网络。
 - 更新执行适配时重新安装客户端；更新平台或 Evaluator 按 [更新与回滚](service-deployment-guide.md#9-更新与回滚) 操作，保留历史实验快照。

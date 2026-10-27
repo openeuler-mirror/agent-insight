@@ -153,10 +153,9 @@ interface TraceListStats {
 
 interface TracePageResponse {
     records: Execution[];
-    total: number;
+    hasMore: boolean;
     page: number;
     pageSize: number;
-    stats?: TraceListStats;
 }
 
 interface FacetValueRow {
@@ -170,6 +169,7 @@ type SortDir = 'asc' | 'desc';
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
 const TRACE_LIST_REFRESH_MS = 5_000;
+const TRACE_STATS_REFRESH_MS = 30_000;
 
 type TraceColumnKey = 'traceId' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
 type ResizableColKey = TraceColumnKey;
@@ -506,13 +506,14 @@ function TracePageContent() {
     const { user, apiKey } = useAuth();
     const { t, locale } = useLocale();
     const [data, setData] = useState<Execution[]>([]);
-    const [total, setTotal] = useState(0);
-    const [stats, setStats] = useState<TraceListStats>({
-        total: 0,
-        failedCount: 0,
-        avgLatencyMs: 0,
-        toolErrorRate: 0,
-    });
+    const [stats, setStats] = useState<TraceListStats | null>(null);
+    const [statsRequest, setStatsRequest] = useState<string | null>(null);
+    const [statsLoading, setStatsLoading] = useState(false);
+    const [statsError, setStatsError] = useState(false);
+    const [statsRetry, setStatsRetry] = useState(0);
+    const [hasMore, setHasMore] = useState(false);
+    const [listError, setListError] = useState(false);
+    const total = stats?.total ?? null;
     const [loading, setLoading] = useState(true);
     const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
     const [selectedTracesByKey, setSelectedTracesByKey] = useState<Map<string, Execution>>(() => new Map());
@@ -702,6 +703,9 @@ function TracePageContent() {
     const [executionLookupRetry, setExecutionLookupRetry] = useState(0);
     const listRequestIdRef = useRef(0);
     const listFilterKey = useMemo(() => JSON.stringify([
+        user,
+        apiKey,
+        reliabilityAnomalyFilter,
         agentScopeFilter,
         skillFilter,
         selectedUserTagIds,
@@ -716,6 +720,9 @@ function TracePageContent() {
         sortDir,
         pageSize,
     ]), [
+        user,
+        apiKey,
+        reliabilityAnomalyFilter,
         agentScopeFilter,
         skillFilter,
         selectedUserTagIds,
@@ -779,6 +786,7 @@ function TracePageContent() {
         const requestId = ++listRequestIdRef.current;
         const filtersChanged = previousListFilterKeyRef.current !== listFilterKey;
         previousListFilterKeyRef.current = listFilterKey;
+        if (filtersChanged) setStatsRequest(null);
         if (filtersChanged && page !== 1) {
             void setPage(1);
             return;
@@ -788,7 +796,12 @@ function TracePageContent() {
         listRequestPendingRef.current = true;
         const silentRefresh = previousListRequestKeyRef.current === listRequestKey;
         previousListRequestKeyRef.current = listRequestKey;
-        if (!silentRefresh) setLoading(true);
+        if (!silentRefresh) {
+            setLoading(true);
+            setData([]);
+            setHasMore(false);
+            setListError(false);
+        }
         const scopeParam = agentScopeFilter === 'subagent'
             ? '&onlySubagents=1'
             : agentScopeFilter === 'all'
@@ -803,27 +816,25 @@ function TracePageContent() {
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
-            .then(r => r.json())
+        const listUrl = `/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`;
+        apiFetch(listUrl + '&listPart=records', { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+            .then(response => {
+                if (!response.ok) throw new Error('Trace list request failed');
+                return response.json();
+            })
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
-                const records = Array.isArray(response?.records) ? response.records : [];
-                setData(records);
-                setTotal(typeof response?.total === 'number' ? response.total : 0);
-                setStats(response?.stats ?? {
-                    total: typeof response?.total === 'number' ? response.total : 0,
-                    failedCount: 0,
-                    avgLatencyMs: 0,
-                    toolErrorRate: 0,
-                });
+                if (!Array.isArray(response?.records)) throw new Error('Invalid Trace list response');
+                setListError(false);
+                setData(response.records);
+                setHasMore(response.hasMore === true);
+                const params = new URLSearchParams(listUrl.split('?')[1]);
+                params.set('listPart', 'stats');
+                setStatsRequest('/api/observe/data?' + params.toString());
             })
             .catch(() => {
                 if (listRequestIdRef.current !== requestId) return;
-                if (!silentRefresh) {
-                    setData([]);
-                    setTotal(0);
-                    setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
-                }
+                setListError(true);
             })
             .finally(() => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -861,6 +872,49 @@ function TracePageContent() {
         setPage,
         filtersReady,
     ]);
+
+    useEffect(() => {
+        setStats(null);
+        setStatsError(false);
+        setStatsLoading(false);
+        if (!statsRequest) return;
+        const controller = new AbortController();
+        let active = true;
+        let pending = false;
+        const refresh = async () => {
+            if (pending || document.visibilityState !== 'visible') return;
+            pending = true;
+            setStatsLoading(true);
+            try {
+                const response = await apiFetch(statsRequest, {
+                    cache: 'no-store', signal: controller.signal,
+                    headers: apiKey ? { 'x-witty-api-key': apiKey } : {},
+                });
+                if (!response.ok) throw new Error('Trace statistics request failed');
+                const payload = await response.json();
+                if (!payload?.stats || !['total', 'failedCount', 'avgLatencyMs', 'toolErrorRate']
+                    .every(key => typeof payload.stats[key] === 'number' && Number.isFinite(payload.stats[key]))) {
+                    throw new Error('Invalid Trace statistics response');
+                }
+                if (!active) return;
+                setStats(payload.stats);
+                setStatsError(false);
+            } catch {
+                if (active) setStatsError(true);
+            } finally {
+                pending = false;
+                if (active) setStatsLoading(false);
+            }
+        };
+        void refresh();
+        const timer = window.setInterval(refresh, TRACE_STATS_REFRESH_MS);
+        return () => {
+            active = false;
+            controller.abort();
+            window.clearInterval(timer);
+        };
+    }, [statsRequest, apiKey, statsRetry]);
+
 
     const handleImportFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -903,7 +957,7 @@ function TracePageContent() {
         }
     };
 
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const totalPages = total === null ? null : Math.max(1, Math.ceil(total / pageSize));
     const pageItems = data;
 
     const selectedTraceKeys = useMemo(
@@ -950,8 +1004,8 @@ function TracePageContent() {
     const clearTraceSelection = useCallback(() => setSelectedTracesByKey(new Map()), []);
 
     useEffect(() => {
-        if (page > totalPages) setPage(totalPages);
-    }, [page, totalPages, setPage]);
+        if (!loading && !listError && data.length === 0 && totalPages !== null && page > totalPages) setPage(totalPages);
+    }, [page, totalPages, setPage, loading, listError, data.length]);
 
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || selectedUserTagIds.length > 0
         || anomalyFilter !== 'all' || reliabilityAnomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
@@ -1040,19 +1094,26 @@ function TracePageContent() {
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                             <StatCard
                                 label={<Term id="trace" label={t('tracePage.statTotal')} />}
-                                value={stats.total.toLocaleString()}
+                                value={stats ? stats.total.toLocaleString() : '—'}
                             />
                             <StatCard
                                 label={<Term id="fault-item" label={t('tracePage.statFailed')} />}
-                                value={String(stats.failedCount)}
-                                accent={stats.failedCount > 0 ? 'error' : undefined}
+                                value={stats ? String(stats.failedCount) : '—'}
+                                accent={stats && stats.failedCount > 0 ? 'error' : undefined}
                             />
-                            <StatCard label={t('tracePage.statAvgLatency')} value={formatDurationMs(stats.avgLatencyMs)} />
+                            <StatCard label={t('tracePage.statAvgLatency')} value={stats ? formatDurationMs(stats.avgLatencyMs) : '—'} />
                             <StatCard
                                 label={<Term id="tool-error-rate" label={t('tracePage.statToolErrorRate')} align="end" />}
-                                value={`${stats.toolErrorRate}%`}
+                                value={stats ? `${stats.toolErrorRate}%` : '—'}
                             />
                         </div>
+
+                        {(statsLoading || statsError) && (
+                            <div role="status" className="mb-3 text-xs text-foreground-muted flex items-center gap-2">
+                                {t(statsError ? 'tracePage.statsError' : 'tracePage.statsLoading')}
+                                {statsError && <Button variant="ghost" size="sm" onClick={() => setStatsRetry(value => value + 1)}>{t('tracePage.retry')}</Button>}
+                            </div>
+                        )}
 
                         {user && (
                             <div className="mb-3">
@@ -1177,7 +1238,7 @@ function TracePageContent() {
                             ) : (
                                 <h2 className="text-sm font-semibold text-foreground">
                                     {t('tracePage.listTitle')}
-                                    <span className="ml-2 text-foreground-muted font-normal tabular-nums">{total}</span>
+                                    <span className="ml-2 text-foreground-muted font-normal tabular-nums">{total ?? '—'}</span>
                                 </h2>
                             )}
                             <div className="flex items-center gap-3">
@@ -1231,6 +1292,12 @@ function TracePageContent() {
                         </div>
 
                         <PageContent className="flex flex-col">
+                            {listError && (
+                                <div role="alert" className="mb-3 flex items-center gap-2 text-sm text-foreground-muted">
+                                    {t('tracePage.listError')}
+                                    <Button variant="outline" size="sm" onClick={() => setReloadKey(value => value + 1)}>{t('tracePage.retry')}</Button>
+                                </div>
+                            )}
                             <div className="flex-1 min-h-0 rounded-md border border-card-border bg-card overflow-auto">
                                 {loading ? (
                                     <div className="p-4 space-y-2">
@@ -1238,9 +1305,9 @@ function TracePageContent() {
                                     </div>
                                 ) : pageItems.length === 0 ? (
                                     <EmptyState
-                                        title={t('tracePage.emptyTitle')}
-                                        description={hasActiveFilters ? t('tracePage.emptyDescription') : undefined}
-                                        action={hasActiveFilters ? (
+                                        title={t(listError ? 'tracePage.listError' : 'tracePage.emptyTitle')}
+                                        description={!listError && hasActiveFilters ? t('tracePage.emptyDescription') : undefined}
+                                        action={!listError && hasActiveFilters ? (
                                             <Button variant="outline" size="sm" onClick={resetFilters}>
                                                 {t('tracePage.resetFilters')}
                                             </Button>
@@ -1344,13 +1411,15 @@ function TracePageContent() {
                             </div>
                         </PageContent>
 
-                        {total > 0 && (
+                        {(data.length > 0 || page > 1) && (
                             <PageFooter className="border-0 mt-3 pt-0 shrink-0">
                                 <Pagination
                                     className="w-full"
                                     page={page}
                                     pageSize={pageSize}
                                     total={total}
+                                    hasMore={hasMore}
+                                    unknownTotalSummary={t('tracePage.pageUnknownTotal', { page: String(page) })}
                                     onPageChange={setPage}
                                     onPageSizeChange={setPageSize}
                                     pageSizes={PAGE_SIZE_OPTIONS}

@@ -15,6 +15,9 @@ schemas:
   case: ./schemas/case.schema.json
   rawResult: ./schemas/result.schema.json
 executor:
+  environmentPreparation:
+    protocol: execution-environment/v1
+    implementation: ./executor/environment.cjs
   gitSourcePolicy: ./executor/git-source-policy.cjs
   requiredCapabilities:
     - git-workspace/v1

@@ -439,3 +439,17 @@ test("WorkBuddy round-trip: Agent 名称归一化为 WorkBuddy，状态标记为
   assert.ok(record.trace_completed_at)
   assert.equal(record.trace_status, "success")
 })
+
+test('WorkBuddy collection adds no dataset metadata and generation does not trust synthetic requestMessages', async () => {
+  const { normalizeSourceUnits } = await import('../src/server/trace-datasets/trace-analysis');
+  const docs = [workbuddyTrace({ traceId: 'first', start: '2026-09-06T01:00:00Z', prompt: '计算 2 + 3', completion: '5' }), workbuddyTrace({ traceId: 'second', start: '2026-09-06T01:01:00Z', prompt: '再乘以 2', completion: '10' })];
+  const { canonical, record } = roundTrip(docs, 'existing-session');
+  assert.ok(record);
+  assert.ok(canonical.every((e: any) => !Object.keys(e.attributes || {}).some(key => key.includes('dataset_boundary'))));
+  assert.ok((record.interactions as any[]).every(e => !('traceDatasetBoundary' in e)));
+  const before = JSON.stringify(record);
+  const result = normalizeSourceUnits({ query: record.query || '', finalResult: record.final_result || '', completed: true, failed: false, isSubagent: false, platform: 'workbuddy', events: record.interactions as any });
+  assert.deepEqual(result.units.map(u => [u.input, u.reference_output]), [['计算 2 + 3', '5'], ['再乘以 2', '10']]);
+  assert.deepEqual(result.exclusions, []);
+  assert.equal(JSON.stringify(record), before);
+});

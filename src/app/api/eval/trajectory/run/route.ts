@@ -1,5 +1,7 @@
 import { withFrozenCustomEvaluators, resolveFrozenCustomEvaluator } from '@/lib/evaluators/evaluator-skill-service';
 import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
+import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { NextResponse } from 'next/server';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
@@ -673,6 +675,7 @@ export async function POST(request: Request) {
         const allowedDatasetIds: string[] = Array.isArray(body.datasetIds)
             ? body.datasetIds.map((d: unknown) => String(d).trim()).filter(Boolean)
             : [];
+        for (const id of new Set([datasetId, ...allowedDatasetIds].filter(Boolean))) await guardTraceDataset(request, id, user, true);
         const pairs = Array.isArray(body.pairs) ? (body.pairs as RunPair[]) : [];
         let taskMeta = normalizeTrajectoryTaskMeta({
             title: body.taskTitle,
@@ -874,6 +877,7 @@ export async function POST(request: Request) {
                             ...evaluatorMeta,
                             ...frozenTaskSnapshot,
                             taskMeta,
+                            ...(dataset.generationSource === 'trace' ? { frozenTraceDataset: { id: dataset.id, name: dataset.name, cases: [caseEntry] } } : {}),
                             ...(grayscaleBinding ? { grayscaleBinding } : {}),
                         }),
                     },
@@ -918,6 +922,7 @@ export async function POST(request: Request) {
             skipped,
         });
     } catch (error: unknown) {
+        if (error instanceof GenerationError) return generationErrorResponse(error);
         console.error('trajectory/run POST error:', error);
         const message = error instanceof Error ? error.message : 'failed to start trajectory evaluation';
         return NextResponse.json({ error: message }, { status: error instanceof EvaluatorSkillError ? error.status : 500 });
@@ -1278,7 +1283,8 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
     let matchKind: 'explicit-pair' | 'exact-input' | 'semantic' | 'auto-match' | 'no-dataset' | 'fallback' = 'no-dataset';
     if (row.datasetId && row.caseId) {
         try {
-            const dataset = await findAgentDataset(user, row.datasetId);
+            const frozen = safeParseRecord(row.rawAnalysisJson).frozenTraceDataset as { id: string; name: string; cases: DatasetCase[] } | undefined;
+            const dataset = frozen?.id === row.datasetId ? frozen : await findAgentDataset(user, row.datasetId);
             if (!dataset) {
                 throw new StagedEvaluationError(
                     'no-evaluable-case',

@@ -32,6 +32,7 @@ export type CreateBenchmarkExperimentInput = {
     platform: string
     agent: string
     model?: string
+    executionProfileDigest?: string
     agentOptions?: unknown
     agentTimeoutSeconds?: number
     executionConcurrency?: number
@@ -148,6 +149,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
   const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
+  if (input.runConfig.executionProfileDigest !== undefined && input.runConfig.executionProfileDigest !== target.executionProfile?.definitionDigest) {
+    throw new BenchmarkProtocolError('EXECUTION_PROFILE_CHANGED', '执行环境已变化，请刷新后重新确认', 409)
+  }
   const resolved = resolveAgentOptions(target.parameterDefinitions, platform, agent, agentOptions)
   agentOptions = resolved.agentOptions
   if (executionConcurrency > 1 && JSON.parse(client.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
@@ -155,6 +159,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   }
 
   const runConfig = {
+    ...(target.executionProfile ? { executionProfile: target.executionProfile, executionArch: ['arm64', 'aarch64'].includes(client.arch || '') ? 'arm64' as const : 'amd64' as const } : {}),
     platform,
     agent,
     ...(agentOptions ? { agentOptions, agentParameterDefinition: resolved.definition } : {}),

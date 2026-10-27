@@ -1,3 +1,10 @@
+---
+title: "openjiuwen / jiuwenclaw 接入"
+description: "说明在 openjiuwen 和 jiuwenclaw 中启用 Agent RAS 深度挂载与检测恢复配置的方法。"
+keywords: ["Agent RAS", "openjiuwen", "jiuwenclaw", "异常恢复"]
+changefreq: monthly
+---
+
 # openjiuwen / jiuwenclaw 接入
 
 深挂载：L3 Rail 直连 L0，流内 abort / steer / notice；thinking-loop 含 L3 自动 Reviewer。

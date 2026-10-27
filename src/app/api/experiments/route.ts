@@ -1,5 +1,8 @@
 import { withFrozenCustomEvaluators } from '@/lib/evaluators/evaluator-skill-service';
 import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
+import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
+import { findAgentDataset } from '@/server/agent_datasets_storage';
 import { assertTraceGenerationTarget } from '@/lib/engine/experiment/trace-generation';
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
 // 评测「实验」API —— 列表 + 创建（单组 type='single' + LLM 对比 type='llm'）。
@@ -170,6 +173,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ items, total, limit, offset });
   } catch (error) {
+    if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('[Experiments GET Error]', error);
     return NextResponse.json({ error: 'Failed to load experiments' }, { status: 500 });
   }
@@ -199,6 +203,7 @@ export async function POST(req: Request) {
     }
 
     const agentEvalDatasetId = String(body.datasetId || '').trim();
+    if (agentEvalDatasetId) await guardTraceDataset(req, agentEvalDatasetId, username, true);
     const publicBenchmarkDataset = agentEvalDatasetId
       ? await prisma.agentEvalDataset.findFirst({
           where: {
@@ -248,6 +253,7 @@ export async function POST(req: Request) {
             platform: String(executionTarget.platform || ''),
             agent: executionAgent,
             agentOptions: executionTarget.agentOptions,
+            executionProfileDigest: executionTarget.executionProfileDigest as string | undefined,
             model: executionTarget.model ? String(executionTarget.model) : undefined,
             agentTimeoutSeconds: body.agentTimeoutSeconds == null
               ? undefined
@@ -305,6 +311,7 @@ export async function POST(req: Request) {
             platform: String(runConfig.platform || ''),
             agent: String(runConfig.agent || ''),
             agentOptions: runConfig.agentOptions,
+            executionProfileDigest: runConfig.executionProfileDigest as string | undefined,
             model: runConfig.model ? String(runConfig.model) : undefined,
             agentTimeoutSeconds: runConfig.agentTimeoutSeconds == null
               ? undefined
@@ -431,6 +438,20 @@ export async function POST(req: Request) {
       );
     }
 
+    for (const item of cases) {
+      const datasetId = String(item.datasetId || agentEvalDatasetId || '');
+      if (!datasetId) continue;
+      if (await guardTraceDataset(req, datasetId, username, true)) {
+        const dataset = await findAgentDataset(username, datasetId);
+        const source = dataset?.cases.find(c => c.id === item.datasetCaseId);
+        if (!source) throw new GenerationError('INVALID_CONFIG', '请选择有效的数据项', 422);
+        item.input = source.input;
+        item.datasetInput = source.input;
+        item.referenceOutput = source.expectedOutput;
+        item.values = source.values;
+        item.datasetId = datasetId;
+      }
+    }
     let normalizedCases: Array<Omit<CaseInput, 'faultInjectionType'> & {
       evaluatorContextJson: string | null
       faultInjectionType: string | null
@@ -517,6 +538,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ id: experiment.id });
   } catch (error) {
+    if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('[Experiments POST Error]', error);
     if (error instanceof EvaluatorSkillError) return NextResponse.json({ error: error.message }, { status: error.status });
     return NextResponse.json({ error: 'Failed to create experiment' }, { status: 500 });

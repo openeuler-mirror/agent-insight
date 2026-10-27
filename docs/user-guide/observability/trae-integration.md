@@ -1,6 +1,8 @@
 ---
 title: "Trae IDE 接入指南"
 description: "在 Trae IDE 中安装 Agent Insight 插件，将 Agent 运行数据接入平台进行观测与分析。"
+keywords: ["Agent Insight", "Trae IDE", "插件安装", "运行观测"]
+changefreq: monthly
 ---
 
 # Trae IDE 接入指南

@@ -181,6 +181,8 @@ export async function GET(
       progressJson: string | null;
       taskEnvelopeJson: string | null;
       publicPayloadJson: string | null;
+      runFactsJson: string | null;
+      cleanupJson: string | null;
       datasetCase: { externalCaseId: string } | null;
       artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
       evaluations: Array<{
@@ -651,6 +653,7 @@ export async function GET(
               platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
               agent: String((configSnapshot.runConfig as Record<string, unknown>).agent || ''),
               agentOptions: executionAgentOptions,
+              executionProfile: (configSnapshot.runConfig as Record<string, unknown>).executionProfile || null,
               model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
               timeoutSeconds: Number((configSnapshot.runConfig as Record<string, unknown>).timeoutSeconds) || null,
             }
@@ -671,6 +674,8 @@ export async function GET(
         const benchmarkRun = benchmarkRunByCase.get(c.id);
         const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
         const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
+        const environmentFacts = asRecord(asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.execution);
+        const cleanupFacts = asRecord(parseJsonValue(benchmarkRun?.cleanupJson || null));
         const benchmarkWorkspace = asRecord(benchmarkTask?.workspace);
         const benchmarkPayload = benchmarkRun
           ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
@@ -761,6 +766,13 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              environmentFacts: environmentFacts ? {
+                imageId: typeof environmentFacts.imageId === 'string' ? environmentFacts.imageId : null,
+                toolBoundary: typeof environmentFacts.toolBoundary === 'string' ? environmentFacts.toolBoundary : null,
+                controllerBoundary: typeof environmentFacts.controllerBoundary === 'string' ? environmentFacts.controllerBoundary : null,
+                network: typeof environmentFacts.network === 'string' ? environmentFacts.network : null,
+              } : null,
+              cleanupStatus: typeof cleanupFacts?.status === 'string' ? cleanupFacts.status : null,
               progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
               workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,

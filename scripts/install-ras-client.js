@@ -29,9 +29,10 @@ const PACKAGE_ROOT = path.join(__dirname, '..')
  */
 const RUNTIME_DIR = path.join(CLIENT_HOME, 'runtime')
 const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.cjs')
+const USER_CONFIG_DIR = path.join(getAgentInsightHome(), 'config')
 
 /** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
-const RUNTIME_FILES = ['reliability-client.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'ws-client.cjs', 'agent-insight-home.cjs']
+const RUNTIME_FILES = ['reliability-client.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'ws-client.cjs', 'agent-insight-home.cjs', 'xgovernor.cjs']
 
 function installRuntime() {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true })
@@ -61,6 +62,14 @@ function installRuntime() {
   }
   fs.rmSync(executorDest, { recursive: true, force: true })
   fs.cpSync(executorSrc, executorDest, { recursive: true })
+  fs.mkdirSync(path.join(RUNTIME_DIR, 'lib'), { recursive: true })
+  fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts/lib/fi-python-runtime.js'), path.join(RUNTIME_DIR, 'lib/fi-python-runtime.js'))
+  fs.cpSync(path.join(PACKAGE_ROOT, 'agent_fault_injection'), path.join(RUNTIME_DIR, 'fi-source'), {
+    recursive: true,
+    filter: file => !['__pycache__', '.venv', 'venv', '.pytest_cache'].includes(path.basename(file)),
+  })
+  fs.mkdirSync(path.join(executorDest, 'vendor'), { recursive: true })
+  fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', 'agent-trace-collectors', 'shared', 'trace-transport.cjs'), path.join(executorDest, 'vendor', 'trace-transport.cjs'))
   for (const relativePath of executorPackageFiles) {
     const target = path.join(executorDest, relativePath)
     fs.mkdirSync(path.dirname(target), { recursive: true })
@@ -69,7 +78,7 @@ function installRuntime() {
   const configRuntime = path.join(PACKAGE_ROOT, 'packages', 'project-config')
   if (!fs.existsSync(configRuntime)) fail(`缺少配置加载器: ${configRuntime}`, '制品不完整；请重新执行安装命令。')
   fs.cpSync(configRuntime, path.join(RUNTIME_DIR, 'packages', 'project-config'), { recursive: true })
-  for (const [source, destination] of [['packages/agent-runtime', 'packages/agent-runtime'], ['services/executor/runtimes', 'executor/runtimes']]) {
+  for (const [source, destination] of [['packages/benchmark-protocol', 'packages/benchmark-protocol'], ['packages/agent-runtime', 'packages/agent-runtime'], ['services/executor/runtimes', 'executor/runtimes']]) {
     const input = path.join(PACKAGE_ROOT, source)
     if (!fs.existsSync(input)) fail(`缺少 Runtime 参数定义: ${input}`, '制品不完整；请重新执行安装命令。')
     fs.cpSync(input, path.join(RUNTIME_DIR, destination), { recursive: true })
@@ -77,15 +86,7 @@ function installRuntime() {
 
   fs.mkdirSync(path.join(RUNTIME_DIR, 'config', 'benchmark'), { recursive: true })
   fs.copyFileSync(path.join(PACKAGE_ROOT, 'config', 'benchmark', 'executor.yaml'), path.join(RUNTIME_DIR, 'config', 'benchmark', 'executor.yaml'))
-  const previousConfigDir = path.join(RUNTIME_DIR, 'config')
-  const previousLocal = path.join(previousConfigDir, 'executor.local.yaml')
-  const currentLocal = path.join(previousConfigDir, 'benchmark', 'executor.local.yaml')
-  if (fs.existsSync(previousLocal) && !fs.existsSync(currentLocal)) {
-    const { loadProjectConfig } = require(path.join(configRuntime, 'index.cjs'))
-    const { dump } = require(path.join(configRuntime, 'yaml.cjs'))
-    const migrated = loadProjectConfig('executor', { configDir: previousConfigDir, env: {} })
-    fs.writeFileSync(currentLocal, dump(migrated), { flag: 'wx', mode: 0o600 })
-  }
+  fs.mkdirSync(USER_CONFIG_DIR, { recursive: true, mode: 0o700 })
   // 配置合并要用 OpenCode 插件自己的 config_sync.js（复用它保证两条写入路径
   // 结构一致）。运行时被搬到 RUNTIME_DIR 后相对路径失效，故与主脚本放在一起。
   const syncSrc = path.join(
@@ -109,6 +110,7 @@ function installRuntime() {
     fs.cpSync(fiSrc, fiDest, { recursive: true })
   }
   log(`✓ 运行时已部署到 ${RUNTIME_DIR}`)
+  log(`用户配置（可选）：${path.join(USER_CONFIG_DIR, 'executor.local.yaml')}`)
 }
 
 const SERVICE_NAME = 'agent-insight-client'
@@ -124,6 +126,7 @@ function parseArgs(argv) {
     // 令牌对应的账号，由安装脚本从 install-tokens 响应带入，用于判断是否改绑。
     else if (arg === '--user') out.user = argv[++i]
     else if (arg === '--name') out.name = argv[++i]
+    else if (arg === '--frameworks') out.frameworks = argv[++i]
     else if (arg === '--no-start') out.start = false
     else if (arg === '--start') out.start = true
     else if (arg === '--no-fi') out.withFi = false
@@ -741,6 +744,9 @@ async function main() {
 
   if (process.platform === 'linux') installSystemd(args.start, systemdTarget)
   else installLaunchd(args.start)
+
+  const { saveSetupContext } = require(path.join(RUNTIME_DIR, 'executor/xgovernor/setup.cjs'))
+  await saveSetupContext({ frameworks: args.frameworks })
 
   log('')
   log('安装完成。客户端独立于 Agent 平台运行，崩溃后由系统进程管理器自动拉起。')

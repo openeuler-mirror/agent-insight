@@ -34,13 +34,13 @@ export function emptyCaseEvaluationMessage(experimentStatus: string, state: Case
   return '等待执行，尚未进入评测。';
 }
 
-export function DeleteExperimentButton({ user, experimentId, caseId, completed = false, className = 'text-xs', onDeleted }: {
-  user: string; experimentId: string; caseId?: string; completed?: boolean; className?: string; onDeleted: (experimentDeleted: boolean) => void | Promise<void>;
+export function DeleteExperimentButton({ user, experimentId, caseId, completed = false, disabled = false, className = 'text-xs', onDeleted }: {
+  user: string; experimentId: string; caseId?: string; completed?: boolean; disabled?: boolean; className?: string; onDeleted: (experimentDeleted: boolean) => void | Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   return <span onClick={(event) => event.stopPropagation()}>
-    <button type="button" disabled={busy} className={`${className} text-foreground-muted hover:text-foreground disabled:opacity-50`}
+    <button type="button" disabled={busy || disabled} className={`${className} text-foreground-muted hover:text-foreground disabled:opacity-50`}
       onClick={async () => {
         if (!window.confirm(caseId
           ? `${completed ? '删除' : '停止并删除'}本次实验中的这个 Case？其他 Case 和源数据集不受影响。`
