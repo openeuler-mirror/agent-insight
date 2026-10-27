@@ -519,7 +519,11 @@ export default function SkillOptimizePage() {
         if (optimizedIssueIds.has(id) || issues.find(i => i.id === id)?.resolvedAt) return;
         setCheckedIssueIds(prev => {
             const next = new Set(prev);
-            next.has(id) ? next.delete(id) : next.add(id);
+            if (next.has(id)) {
+                next.delete(id);
+            } else {
+                next.add(id);
+            }
             return next;
         });
     };

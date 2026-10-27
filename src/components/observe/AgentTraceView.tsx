@@ -3838,7 +3838,7 @@ function TimelineTree({ events, onSelectChild, node, interactions }: { events: A
                 return (
                     <div key={tNode.index}>
                         <TimelineEventRow event={tNode.event} hasChildren={hasChildren} isExpanded={isExpanded}
-                            onToggle={() => setExpandedIdx(s => { const n = new Set(s); n.has(tNode.index) ? n.delete(tNode.index) : n.add(tNode.index); return n; })}
+                            onToggle={() => setExpandedIdx(s => { const n = new Set(s); if (n.has(tNode.index)) { n.delete(tNode.index); } else { n.add(tNode.index); } return n; })}
                             onSelectChild={onSelectChild} indent={0} isLast={ti === tree.length - 1 && (!hasChildren || !isExpanded)} showVerticalLine={ti !== tree.length - 1 || (hasChildren && isExpanded)} node={node} interactions={interactions} />
                         {hasChildren && isExpanded && (
                             <div style={{ borderLeft: '1px solid var(--border)', marginLeft: 18 }}>
