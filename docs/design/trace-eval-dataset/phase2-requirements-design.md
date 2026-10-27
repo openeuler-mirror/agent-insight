@@ -484,7 +484,7 @@ Worker 由 [build-trace-dataset-worker.cjs](../../../scripts/build-trace-dataset
 
 - 生产正确性：[采样测试](../../../test/trace-datasets-sampling.test.ts)、[生产分派测试](../../../test/trace-datasets-production.test.ts)、[SQLite/Worker 集成测试](../../../test/trace-datasets-integration.test.ts)。
 - 产品自动化与此前浏览器验证范围见[开发计划 §3](phase3-development-plan.md#3-产品正确性验证)；截图及原始浏览器记录不纳入本次提交。
-- 新来源流水线：[准备](../../../scripts/trace-datasets/prepare-v635-confirmation.py) → [冻结选样](../../../scripts/trace-datasets/run-v635-confirmation.ts) → [指标审计](../../../scripts/trace-datasets/audit-v635-confirmation.ts)，另运行[来源隔离检查](../../../scripts/trace-datasets/verify-v635-source-isolation.py)。
-- 效果证据：[对比报告](eight-datasets-comparison-report.md)、[开发池指标](examples/evidence-six-rounds-v632-v637/summary.json)、[新来源指标](examples/v635-independent-20261013/summary.json)。这些材料中的历史默认版本和验收结论不覆盖本三份文档的现行要求。
+- 新来源流水线及指标原件随历史实验归档到 Git 提交 `742502d8bb2495bb0311b31f02c353f2e07d6b7d`；恢复该提交的 `scripts/trace-datasets/` 与相关数据后才能运行，不属于生产部署依赖。
+- 效果证据：[对比报告](eight-datasets-comparison-report.md)、开发池指标（历史归档 `examples/evidence-six-rounds-v632-v637/summary.json`）、新来源指标（历史归档 `examples/v635-independent-20261013/summary.json`）。这些材料中的历史默认版本和验收结论不覆盖本三份文档的现行要求。
 
 Web UI 使用真实应用、认证、API、SQLite 和 Worker 验证正常及异常流程，不能由原型或纯函数测试代替。性能记录硬件、N、K、长文本规模及并发数，保留绝对耗时/峰值内存和失败；没有相对 v5 的工程门槛，也不承诺尚未验证的任意规模资源上限。

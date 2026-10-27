@@ -172,4 +172,4 @@ Agent 使用执行记录中的身份信息区分；不要求必须存在独立�
 
 R01–R09 按可观察行为及正反例验收，覆盖真实 SQLite/Worker、鉴权、恢复、清理、幂等和实际 Web UI。R10 同时要求八源公开值目标、五个新来源目标、预算与数据隔离、统计证据和如实报告；不能仅凭生成可用或报告完成宣布整体目标完成。
 
-交付包括生产源码、数据库增量结构、Worker 构建、用户/开发者指南及验证材料。逐平台真实格式、完整部署链路、大规模并发和既有入口兼容的缺口在[开发计划](phase3-development-plan.md)逐项登记。本文与[需求设计](phase2-requirements-design.md)只描述当前要求与实现，不保留逐轮迭代记录；实验原始数据在[对比报告](eight-datasets-comparison-report.md)及其附件中查证。
+交付包括生产源码、数据库增量结构、Worker 构建、用户/开发者指南及验证材料。逐平台真实格式、完整部署链路、大规模并发和既有入口兼容的缺口在[开发计划](phase3-development-plan.md)逐项登记。本文与[需求设计](phase2-requirements-design.md)只描述当前要求与实现，不保留逐轮迭代记录；实验指标在[对比报告](eight-datasets-comparison-report.md)中查证，原始材料按报告中的历史 Git 提交恢复。

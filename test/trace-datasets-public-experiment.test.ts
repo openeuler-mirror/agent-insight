@@ -20,7 +20,7 @@ test('public comparison preserves QA variants, hides quality labels and verifies
     await writeFile(path.join(data, 'Fixture', 'manifest.json'), JSON.stringify({ name: 'Fixture', file: 'fixture.json', sha256: createHash('sha256').update(content).digest('hex') }));
   };
   const run = async (output: string) => {
-    await execute(process.execPath, ['--import', 'tsx', 'scripts/trace-datasets/compare-eight-datasets.ts', data, path.join(root, output), 'Fixture'], { maxBuffer: 1024 * 1024 });
+    await execute(process.execPath, ['--import', 'tsx', 'test/helpers/trace-datasets/compare-eight-datasets.ts', data, path.join(root, output), 'Fixture'], { maxBuffer: 1024 * 1024 });
     return JSON.parse(await readFile(path.join(root, output, 'Fixture.json'), 'utf8'));
   };
   await save();
@@ -53,7 +53,7 @@ test('public comparison preserves QA variants, hides quality labels and verifies
 test('public summary ratings accept numeric strings without turning missing values into zero', async () => {
   await execute('python3', ['-c', `
 import ast, pathlib, math
-source = ast.parse(pathlib.Path('scripts/trace-datasets/fetch-eight-datasets.py').read_text())
+source = ast.parse(pathlib.Path('test/helpers/trace-datasets/fetch-eight-datasets.py').read_text())
 function = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == 'numeric_rating')
 scope = {'math': math}
 exec(compile(ast.Module(body=[function], type_ignores=[]), '<numeric_rating>', 'exec'), scope)

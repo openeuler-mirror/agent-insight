@@ -1,15 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {hash,lexicalFeatures,signature,POLICY,type Candidate,type Selection} from '../src/lib/trace-datasets/sampling';
-import {pairedAnswerFeaturesSteps as originalPaired} from '../src/lib/trace-datasets/sampling/answer-sparse-paired';
+import {hash,lexicalFeatures,signature,LEGACY_POLICY,sample,type Candidate,type Selection} from '../src/lib/trace-datasets/sampling';
 import {pairedAnswerFeaturesSteps} from '../src/lib/trace-datasets/sampling/answer-memo-paired';
 import {groundedFeaturesSteps} from '../src/lib/trace-datasets/sampling/answer-sparse-grounded';
-import {calibratedFeaturesSteps} from '../src/lib/trace-datasets/sampling/answer-calibrated';
-import {calibratedSample,CALIBRATED_POLICIES} from '../src/lib/trace-datasets/sampling/budgeted-calibrated';
 import {phraseFeaturesSteps} from '../src/lib/trace-datasets/sampling/answer-phrase';
 import {proxyImproveSteps} from '../src/lib/trace-datasets/sampling/budgeted-proxy';
 import {supportedImproveSteps} from '../src/lib/trace-datasets/sampling/budgeted-supported-proxy';
-import {evidenceSample,evidenceSampleSteps,supportedReplaceSteps,EVIDENCE_POLICIES as policies} from '../src/lib/trace-datasets/sampling/budgeted-evidence';
+import {evidenceSample,supportedReplaceSteps,EVIDENCE_POLICIES as policies} from '../src/lib/trace-datasets/sampling/budgeted-evidence';
+import { PRODUCTION_POLICY, productionSampleSteps } from '../src/lib/trace-datasets/sampling/production';
+import {pairedAnswerFeaturesSteps as originalPaired} from '../src/lib/trace-datasets/sampling/answer-paired';
 function drain<T>(steps: Generator<void, T>): T { let n = steps.next(); while (!n.done) n = steps.next(); return n.value; }
 function fixture() {
   const rows: Candidate[] = [], answers = new Map<string, string>();
@@ -32,12 +31,6 @@ test('memoized intersections exactly preserve directed summation, the 32 peer ca
  const {rows,answers}=fixture();assert.deepEqual(drain(pairedAnswerFeaturesSteps(rows,answers)),drain(originalPaired(rows,answers)));
  const large=Array.from({length:41},(_,i)=>({...rows[0],key:String(i),inputKey:'one'})),texts=new Map(large.map((r,i)=>[r.key,Array.from({length:2+i%11},(_,j)=>`term${(i+j)%13}`).reverse().join(' ')]));
  assert.deepEqual(drain(pairedAnswerFeaturesSteps(large,texts)),drain(originalPaired(large,texts)));
-});
-test('v632 exactly replays the full v630 result across budgets and requested counts',()=>{
- const {rows,answers}=fixture();for(const k of [1,12,40,500])for(const budgetRatio of [1,1.1,1.2]){
-  const a=calibratedSample(rows,answers,k,CALIBRATED_POLICIES.V630,{budgetRatio}),b=evidenceSample(rows,answers,k,policies.V632,{budgetRatio});
-  assert.deepEqual({...b,optimization:{...b.optimization,requestedPolicy:a.optimization.requestedPolicy,effectivePolicy:a.optimization.effectivePolicy}},a);
- }
 });
 test('phrase F2 uses ordered adjacent tokens with directional peer mass and deduplicated supporting answers',()=>{
  const row=fixture().rows[0],texts=new Map([['a','A b c'],['b','a b'],['copy','A b c']]),rows=[...texts.keys()].map(key=>({...row,key,inputKey:'q'}));
@@ -63,22 +56,39 @@ test('dual support vetoes a higher mean with one declining component; permissive
  const a=new Map([['old',.4],['bad',.3]]),b=new Map([['old',.4],['bad',.9]]),supports=(old:string,next:string)=>a.get(next)!>=a.get(old)!&&b.get(next)!>=b.get(old)!;
  assert.deepEqual(drain(supportedReplaceSteps(pair,[pick],f,supports)).selected,[pick]);a.set('bad',.5);assert.equal(drain(supportedReplaceSteps(pair,[pick],f,supports)).selected[0].key,'bad');
 });
-test('six evidence branches preserve feasible constraints, real paths, counts, coverage and deterministic input ordering',()=>{
- const {rows,answers}=fixture(),byKey=new Map(rows.map(r=>[r.key,r])),inputs=(s:Selection[])=>s.map(p=>byKey.get(p.key)!.inputKey),parents={V633:'V632',V634:'V633',V635:'V632',V636:'V635',V637:'V632'};
- const p=drain(pairedAnswerFeaturesSteps(rows,answers)),g=drain(groundedFeaturesSteps(p.high,p.records)),l=drain(calibratedFeaturesSteps('length',g,p.high,p.records)),dual=drain(phraseFeaturesSteps('dual',l,p.records));
- for(const k of [1,12,40,500])for(const budgetRatio of [1,1.1,1.2]){
-  const runs=new Map(Object.entries(policies).map(([v,policy])=>[v,evidenceSample(rows,answers,k,policy,{budgetRatio})]));
-  for(const [v,parent] of Object.entries(parents)){
-   const a=runs.get(parent)!,b=runs.get(v)!;assert.equal(a.selected.length,b.selected.length);assert.equal(new Set(b.selected.map(s=>s.key)).size,b.selected.length);assert.equal(new Set(inputs(b.selected)).size,new Set(inputs(a.selected)).size);assert.deepEqual(actual(rows,b.selected),{vocabulary:b.optimization.vocabulary,tokens:b.optimization.tokens});
-   if(v==='V633'||v==='V635'){assert.deepEqual(inputs(b.selected),inputs(a.selected));assert.deepEqual(actual(rows,b.selected),actual(rows,a.selected));}
-   if(a.optimization.feasible){assert.ok(b.optimization.vocabulary>=a.optimization.vocabulary);assert.ok(b.optimization.tokens<=b.optimization.tokenBudget);assert.ok(b.optimization.lengthTV<=b.optimization.lengthLimit+1e-9);assert.ok(b.optimization.taskTV<=b.optimization.taskLimit+1e-9);}
-   const cells=new Set(b.selected.flatMap(s=>s.path.cells));for(const c of a.selected.flatMap(s=>s.path.cells))assert.ok(cells.has(c));for(const s of b.selected)assert.ok(byKey.get(s.key)!.paths.some(p=>p.key===s.path.key));
-   if(v==='V637')for(let i=0;i<a.selected.length;i++)for(const f of [dual.phrase,dual.repeat])assert.ok(f.scores.get(b.selected[i].key)!>=f.scores.get(a.selected[i].key)!);
-   assert.deepEqual(evidenceSample([...rows].reverse(),answers,k,policies[v],{budgetRatio}),b);
+
+test('production evidence preserves feasible constraints, real paths, counts and deterministic ordering', () => {
+  const { rows, answers } = fixture(), before = structuredClone(rows);
+  const byKey = new Map(rows.map(row => [row.key, row]));
+  for (const k of [1, 12, 40, 500]) for (const budgetRatio of [1, 1.1, 1.2]) {
+    const result = evidenceSample(rows, answers, k, policies.V635, { budgetRatio });
+    assert.equal(result.selected.length, Math.min(k, rows.length));
+    assert.equal(new Set(result.selected.map(s => s.key)).size, result.selected.length);
+    assert.deepEqual(actual(rows, result.selected), { vocabulary: result.optimization.vocabulary, tokens: result.optimization.tokens });
+    for (const selected of result.selected) assert.ok(byKey.get(selected.key)!.paths.some(p => p.key === selected.path.key));
+    if (result.optimization.feasible) {
+      assert.ok(result.optimization.tokens <= result.optimization.tokenBudget);
+      assert.ok(result.optimization.lengthTV <= result.optimization.lengthLimit + 1e-9);
+      assert.ok(result.optimization.taskTV <= result.optimization.taskLimit + 1e-9);
+    }
+    assert.deepEqual(evidenceSample([...rows].reverse(), answers, k, policies.V635, { budgetRatio }), result);
   }
- }
+  assert.deepEqual(rows, before);
 });
-test('evidence samplers retain cancellation, invalid inputs, infeasible v4 fallback and production default',()=>{
- const {rows,answers}=fixture(),before=structuredClone(rows);for(const p of Object.values(policies)){const g=evidenceSampleSteps(rows,answers,12,p);assert.equal(g.next().done,false);g.return(undefined as never);}assert.deepEqual(rows,before);assert.equal(POLICY.version,'trace-coverage-v4');assert.throws(()=>evidenceSample(rows,answers,0),/INVALID_CONFIG/);assert.throws(()=>evidenceSample(rows,answers,12,{...policies.V632,version:'bad'}),/INVALID_CONFIG/);
- const bad=Array.from({length:31},(_,i)=>({...rows[0],key:`i${i}`,inputKey:`i${i}`,task:i?'unknown':'rare-task',lexical:{terms:[`t${i}`],tokenCount:i?1:10000},paths:[{key:`p${i}`,cells:[],knownDimensions:0}]})),texts=new Map(bad.map(r=>[r.key,'reference answer'])),original=calibratedSample(bad,texts,2,CALIBRATED_POLICIES.V630);assert.equal(original.optimization.feasible,false);for(const p of Object.values(policies)){const r=evidenceSample(bad,texts,2,p);assert.equal(r.optimization.effectivePolicy,'trace-coverage-v4');assert.deepEqual(r.selected,original.selected);}
+
+test('production evidence retains cancellation, invalid input rejection and infeasible v4 fallback', () => {
+  const { rows, answers } = fixture(), before = structuredClone(rows);
+  const steps = productionSampleSteps(rows, answers, 12);
+  assert.equal(steps.next().done, false);
+  steps.return(undefined as never);
+  assert.deepEqual(rows, before);
+  assert.throws(() => evidenceSample(rows, answers, 0, policies.V635), /INVALID_CONFIG/);
+  assert.throws(() => evidenceSample(rows, answers, 12, { ...policies.V635, version: 'bad' }), /INVALID_CONFIG/);
+  const bad = Array.from({ length: 31 }, (_, i) => ({ ...rows[0], key: `i${i}`, inputKey: `i${i}`, task: i ? 'unknown' : 'rare-task', lexical: { terms: [`t${i}`], tokenCount: i ? 1 : 10000 }, paths: [{ key: `p${i}`, cells: [], knownDimensions: 0 }] }));
+  const texts = new Map(bad.map(row => [row.key, 'reference answer']));
+  const result = evidenceSample(bad, texts, 2, policies.V635);
+  assert.deepEqual(drain(productionSampleSteps(bad, texts, 2)), result);
+  assert.equal(result.optimization.feasible, false);
+  assert.equal(result.optimization.effectivePolicy, LEGACY_POLICY.version);
+  assert.deepEqual(result.selected, sample(bad, 2, { ...LEGACY_POLICY, seed: PRODUCTION_POLICY.seed, rho: PRODUCTION_POLICY.rho }).selected);
 });

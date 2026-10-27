@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { hash, normalizeText, LEGACY_POLICY as POLICY, sample, signature, taskType, type Candidate } from '../../src/lib/trace-datasets/sampling';
+import { hash, normalizeText, LEGACY_POLICY as POLICY, sample, signature, taskType, type Candidate } from '../../../src/lib/trace-datasets/sampling';
 
 type Raw = { input: string; reference_output: string; group: string; rowId: string; language?: string; category?: string; quality?: Record<string, number>; domain?: string; split?: string };
 type Pair = Raw & { key: string; inputKey: string; groupKey: string; refs: string[]; labels: Record<string, number[]>; tokens: string[]; task: string };
@@ -25,7 +25,7 @@ const plan = {
 const planPath = path.join(outRoot, 'evaluation-plan.json');
 if (fs.existsSync(planPath)) assert.deepEqual(JSON.parse(fs.readFileSync(planPath, 'utf8')), plan, 'refuse mixing experiment plans');
 else fs.writeFileSync(planPath, JSON.stringify(plan, null, 2));
-const sourceFiles = ['src/lib/trace-datasets/sampling/index.ts', 'scripts/trace-datasets/compare-eight-datasets.ts', 'scripts/trace-datasets/fetch-eight-datasets.py'];
+const sourceFiles = ['src/lib/trace-datasets/sampling/index.ts', 'test/helpers/trace-datasets/compare-eight-datasets.ts', 'test/helpers/trace-datasets/fetch-eight-datasets.py'];
 fs.writeFileSync(path.join(outRoot, 'implementation.json'), JSON.stringify({ files: sourceFiles.map(file => ({ file, sha256: hash(fs.readFileSync(file, 'utf8')) })), hashEncoding: 'SHA256(JSON.stringify(file UTF8 text))', hardware: { cpu: os.cpus()[0].model, logicalCpus: os.cpus().length, totalMemory: os.totalmem(), node: process.version } }, null, 2));
 const manifest: any[] = fs.readdirSync(dataRoot, { withFileTypes: true }).filter(e => e.isDirectory() && fs.existsSync(path.join(dataRoot, e.name, 'manifest.json'))).map(e => JSON.parse(fs.readFileSync(path.join(dataRoot, e.name, 'manifest.json'), 'utf8')));
 const mean = (a: number[]) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;

@@ -19,7 +19,7 @@
 
 开发池按原始来源、分层及标注范围冻结，主要实验 K=100，种子为 42、100、101、102、103。六个词汇覆盖池各有 5,000 条候选。OASST2 主质量使用 `quality-annotated` 子池；SummarizeFeedback 按 CNN-DM/test、TLDR/valid2、TLDR/valid1 分层，不能与全池统计混用。
 
-微软参考值来自 [Intelligent Sampling in Microsoft Foundry](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/intelligent-sampling-in-microsoft-foundry-the-science-behind-selecting-better-pr/4523722)。本地来源、版本与下载范围见[来源清单](examples/eight-datasets/data-manifest.json)。即使数据集名称相同，也不表示快照、候选池、取数和预处理完全相同；ShareGPT-GPT4 的本地映射来源也必须以清单为准。
+微软参考值来自 [Intelligent Sampling in Microsoft Foundry](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/intelligent-sampling-in-microsoft-foundry-the-science-behind-selecting-better-pr/4523722)。本地来源、版本与下载范围见来源清单（历史归档 `examples/eight-datasets/data-manifest.json`）。即使数据集名称相同，也不表示快照、候选池、取数和预处理完全相同；ShareGPT-GPT4 的本地映射来源也必须以清单为准。
 
 ## 2. 微软公开数据与本地最终结果
 
@@ -65,7 +65,7 @@ HelpSteer2 的 helpfulness、correctness 已从开发池及新来源目标中移
 
 TLDR/valid2 的 coherence 为 6.339500，达到已调整下限 6.339，但比随机低约 0.016833 分。这说明总体评分提升可以伴随某个细分维度小幅下降；达标来自当前允许的边界，不能表述为每个质量维度均提高。其余列出的摘要细分轴高于同池随机。
 
-以上数值直接取自[开发池冻结指标](examples/evidence-six-rounds-v632-v637/summary.json)的 B0 与 V635 字段，配置见[生产算法实验计划](examples/evidence-six-rounds-v632-v637/v635/plan.json)，原审计结果见[验证摘要](examples/evidence-six-rounds-v632-v637/v635/verification.json)。按现行目标重新判定，没有重跑或改写原始测量。
+以上数值直接取自开发池冻结指标（历史归档 `examples/evidence-six-rounds-v632-v637/summary.json`）的 B0 与 V635 字段，配置见生产算法实验计划（历史归档 `examples/evidence-six-rounds-v632-v637/v635/plan.json`），原审计结果见验证摘要（历史归档 `examples/evidence-six-rounds-v632-v637/v635/verification.json`）。按现行目标重新判定，没有重跑或改写原始测量。
 
 ## 3. 五个新来源与同池随机比较
 
@@ -140,26 +140,28 @@ UltraChat 新页因服务限流未取得完整数据；Dolly、ShareGPT-GPT4 及
 | Summarize from Feedback | 摘要偏好与人工评价数据 | 按来源/切分检查摘要 overall 及细分质量 |
 | SummEval（新增确认来源） | 专家评价的新闻摘要 | 检查新文章上的摘要质量迁移，量表与上项分开 |
 
-八源具体仓库、修订、许可、下载范围及映射文件 SHA 以[开发池来源清单](examples/eight-datasets/data-manifest.json)为准；新来源以[下载清单](examples/v635-independent-20261013/download-manifest.json)与[候选池清单](examples/v635-independent-20261013/pool-manifest.json)为准。
+八源具体仓库、修订、许可、下载范围及映射文件 SHA 以开发池来源清单（历史归档 `examples/eight-datasets/data-manifest.json`）为准；新来源以下载清单（历史归档 `examples/v635-independent-20261013/download-manifest.json`）与候选池清单（历史归档 `examples/v635-independent-20261013/pool-manifest.json`）为准。
 
-## 6. 随代码提交的验证材料
+## 6. 验证材料与历史归档
 
 | 材料 | 用途 |
 | --- | --- |
-| [签名测试向量](examples/signature-v4-vectors.json) | 确定性签名回归测试所需固定输入与结果 |
-| [开发池指标摘要](examples/evidence-six-rounds-v632-v637/summary.json) | 读取 B0、V635 覆盖、质量及资源实测 |
-| [V635 实验计划](examples/evidence-six-rounds-v632-v637/v635/plan.json) | 种子、K、预算与代码指纹 |
-| [V635 审计摘要](examples/evidence-six-rounds-v632-v637/v635/verification.json) | 已执行的指标与约束核对结果 |
-| [开发数据来源清单](examples/eight-datasets/data-manifest.json) | 八源地址、修订、取数范围与哈希 |
-| [新来源指标摘要](examples/v635-independent-20261013/summary.json) | 完整池、敏感性、面板及当前适用指标 |
-| [冻结协议](examples/v635-independent-20261013/protocol.json) | 实验执行时冻结的协议和代码指纹 |
-| [候选池清单](examples/v635-independent-20261013/pool-manifest.json) | 来源分组、排除与池构建信息 |
-| [下载清单](examples/v635-independent-20261013/download-manifest.json) | 下载响应与原始文件校验信息 |
-| [指标审计](examples/v635-independent-20261013/audited-metrics.json) | 从选样记录复算的指标 |
-| [来源隔离验证](examples/v635-independent-20261013/source-isolation-verification.json) | 来源及词法近重复隔离核对 |
-| [新来源验证摘要](examples/v635-independent-20261013/verification.json) | 实验核对状态 |
-| [负对照](examples/v635-independent-20261013/negative-control.json) | 负对照验证记录 |
+| [签名测试向量](../../../test/fixtures/trace-datasets/signature-v4-vectors.json) | 确定性签名回归测试所需固定输入与结果 |
+| 开发池指标摘要（历史归档 `examples/evidence-six-rounds-v632-v637/summary.json`） | 读取 B0、V635 覆盖、质量及资源实测 |
+| V635 实验计划（历史归档 `examples/evidence-six-rounds-v632-v637/v635/plan.json`） | 种子、K、预算与代码指纹 |
+| V635 审计摘要（历史归档 `examples/evidence-six-rounds-v632-v637/v635/verification.json`） | 已执行的指标与约束核对结果 |
+| 开发数据来源清单（历史归档 `examples/eight-datasets/data-manifest.json`） | 八源地址、修订、取数范围与哈希 |
+| 新来源指标摘要（历史归档 `examples/v635-independent-20261013/summary.json`） | 完整池、敏感性、面板及当前适用指标 |
+| 冻结协议（历史归档 `examples/v635-independent-20261013/protocol.json`） | 实验执行时冻结的协议和代码指纹 |
+| 候选池清单（历史归档 `examples/v635-independent-20261013/pool-manifest.json`） | 来源分组、排除与池构建信息 |
+| 下载清单（历史归档 `examples/v635-independent-20261013/download-manifest.json`） | 下载响应与原始文件校验信息 |
+| 指标审计（历史归档 `examples/v635-independent-20261013/audited-metrics.json`） | 从选样记录复算的指标 |
+| 来源隔离验证（历史归档 `examples/v635-independent-20261013/source-isolation-verification.json`） | 来源及词法近重复隔离核对 |
+| 新来源验证摘要（历史归档 `examples/v635-independent-20261013/verification.json`） | 实验核对状态 |
+| 负对照（历史归档 `examples/v635-independent-20261013/negative-control.json`） | 负对照验证记录 |
 
-上述 JSON 保持原始字节，便于核对既有 SHA 链；其中的旧默认版本、历史门槛、已移除指标或整体通过字段是实验当时的记录，**不作为当前验收要求**。本报告只展示现行目标需要的数值。实验脚本也保留冻结研究口径，不能直接将其旧放行判断作为生产结论。
+除签名测试向量迁入 `test/fixtures/trace-datasets/` 外，上表实验 JSON、逐轮脚本和历史算法已移出当前源码树。原始文件保存在 Git 提交 `742502d8bb2495bb0311b31f02c353f2e07d6b7d`，路径沿用表中历史路径，可用 `git show <提交>:docs/design/trace-eval-dataset/<历史路径>` 查看；实验脚本与算法分别位于该提交的 `scripts/trace-datasets/` 和 `src/lib/trace-datasets/sampling/`。
 
-本次提交不包含完整原始问答、标签、下载响应、逐场景入选记录、逐轮运行产物及截图。清单和审计摘要可以追溯来源、配置与已报告结果，但**不能单凭它们重新生成完全相同的结果**：逐位复现需另行取得相同快照并通过 SHA 校验，历史脚本还可能需要未提交的前序运行产物。公开源发生变化或下载不可用时，仅靠重新下载不能保证复原；按新快照重跑应作为新实验报告。
+归档 JSON 保持原始字节，便于核对既有 SHA 链；其中的旧默认版本、历史门槛、已移除指标或整体通过字段是实验当时的记录，**不作为当前验收要求**。本报告只展示现行目标需要的数值。归档中的实验脚本保留冻结研究口径，不能直接将其旧放行判断作为生产结论。
+
+原始实验提交也不包含完整原始问答、标签、下载响应、逐场景入选记录、逐轮运行产物及截图。清单和审计摘要可以追溯来源、配置与已报告结果，但**不能单凭它们重新生成完全相同的结果**：逐位复现需另行取得相同快照并通过 SHA 校验，从上述历史提交恢复实验脚本后，还可能需要未提交的前序运行产物。公开源发生变化或下载不可用时，仅靠重新下载不能保证复原；按新快照重跑应作为新实验报告。

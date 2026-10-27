@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { normalizeText } from '../../src/lib/trace-datasets/sampling';
+import { normalizeText } from '../../../src/lib/trace-datasets/sampling';
 
 export function baseHashes(text: string): Uint32Array {
   const points = [...normalizeText(text)];

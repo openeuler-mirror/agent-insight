@@ -6,7 +6,7 @@ import { normalizeTraceCases, validateConfig, receiptExpiry } from '../src/lib/t
 import { normalizeSource } from '../src/server/trace-datasets/normalizer';
 import { parseTraceBatch } from '../src/lib/trace-datasets/import';
 const sample: typeof sampleWithPolicy = (candidates, limit, policy = POLICY, experiment) => sampleWithPolicy(candidates, limit, policy, experiment);
-const vectors = JSON.parse(fs.readFileSync('docs/design/trace-eval-dataset/examples/signature-v4-vectors.json', 'utf8'));
+const vectors = JSON.parse(fs.readFileSync('test/fixtures/trace-datasets/signature-v4-vectors.json', 'utf8'));
 test('128-dimensional signatures match independently frozen vectors', () => { for (const v of vectors.vectors) assert.deepEqual([...signature(v.text)], v.signature); });
 function candidate(input: string, answer: string, cells: string[] = [], task = 'coding'): Candidate {
   return { key: hash([input, answer]), inputKey: hash([input]), signature: signature(input), lexical: lexicalFeatures(input), task, paths: [{ key: hash([input, answer, cells]), cells, knownDimensions: cells.length ? 1 : 0 }] };

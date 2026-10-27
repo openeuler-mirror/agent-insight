@@ -34,7 +34,7 @@
 | 构建与启动 | [build-trace-dataset-worker.cjs](../../../scripts/build-trace-dataset-worker.cjs)、[next.config.ts](../../../next.config.ts)、[instrumentation-node.ts](../../../src/instrumentation-node.ts) |
 | 用户指南 | [评测数据集](../../user-guide/evaluation/datasets.md#基于-trace-自动生成) |
 | 开发者指南 | [API 契约](../../developer-guide/04-api-and-contracts.md)、[数据与控制流](../../developer-guide/05-data-and-control-flow.md)、[扩展约定](../../developer-guide/07-conventions-and-extension.md) |
-| 效果报告与实验入口 | [对比报告](eight-datasets-comparison-report.md)、[scripts/trace-datasets](../../../scripts/trace-datasets/) |
+| 效果报告与实验归档 | [对比报告](eight-datasets-comparison-report.md#6-验证材料与历史归档)；历史脚本、数据与算法见 Git 提交 `742502d8bb2495bb0311b31f02c353f2e07d6b7d` |
 
 ## 3. 产品正确性验证
 
@@ -43,17 +43,19 @@
 | 层级 | 已验证内容 |
 | --- | --- |
 | 提取与去重 | Unicode/换行、非空判断、多轮问答、上下文依赖文本原样保留、已知归属冲突、首尾 query/finalResult 核对、非文本/截断/缺回答、部分保留、精确去重、不同回答 |
-| 生产分派 | v6.35 与冻结离线实现 K=1/20/500 的选样/路径/诊断一致；旧 v4/v5 保持原结果；未知版本或缺少词项/回答特征被拒绝；空候选失败、计算可中断 |
+| 生产分派 | v6.35 在 K=1/20/500 下与清理前冻结的选样/路径/诊断摘要一致；旧 v4/v5 保持原结果；未知版本或缺少词项/回答特征被拒绝；空候选失败、计算可中断 |
 | 真实 SQLite/Worker | 来源摘要与变化检查、发布数量、K=2 入选 ID 与离线算法一致、原始来源保留、成功 Job 退役、失败保留 |
 | 调度与故障 | 非阻塞初始化、并发请求共用初始化、503/重试头、失败冷却及恢复、不支持存储保护；4 槽位、FIFO、20 任务容量、取消与迟到消息、恢复、Worker 异常、孤儿目录与清理故障 |
 | 生命周期与权限 | 同请求幂等、跨 owner 隔离、无成功 Job 时编辑与删除、删除后重放拒绝、回执过期/时钟回拨、退役事务回滚 |
 
-此前生产接入专项去重计数为 **32/32 通过**，严格类型检查覆盖生产入口、Worker 和新增生产测试。本次提交前复跑全部 Trace 专项及 WorkBuddy、数据集管理、SWE-bench、迁移相关测试，共 **180 项：179 通过、0 失败、1 跳过**；Worker 构建成功。本次后台初始化改动后执行 `npm run test`，结果为 **3,724 项：3,581 通过、119 失败、24 跳过**；全仓未通过，不能将专项通过等同于所有原入口兼容。与改动前日志对照，119 个失败项名称一致，没有新增失败；其中包含数据库无法打开和既有静态断言不匹配等问题，尚未完成全部失败归因。新增初始化测试 **4/4 通过**。本次变更范围及依赖的严格类型检查通过；全仓类型检查受既有 `.next/dev/types/routes.d.ts` 生成文件语法损坏阻塞。本次浏览器组件验证与此前完整应用验证分开列示。
+历史验证记录：此前生产接入专项去重计数为 **32/32 通过**，严格类型检查覆盖生产入口、Worker 和新增生产测试。本次提交前复跑全部 Trace 专项及 WorkBuddy、数据集管理、SWE-bench、迁移相关测试，共 **180 项：179 通过、0 失败、1 跳过**；Worker 构建成功。本次后台初始化改动后执行 `npm run test`，结果为 **3,724 项：3,581 通过、119 失败、24 跳过**；全仓未通过，不能将专项通过等同于所有原入口兼容。与改动前日志对照，119 个失败项名称一致，没有新增失败；其中包含数据库无法打开和既有静态断言不匹配等问题，尚未完成全部失败归因。新增初始化测试 **4/4 通过**。本次变更范围及依赖的严格类型检查通过；全仓类型检查受既有 `.next/dev/types/routes.d.ts` 生成文件语法损坏阻塞。本次浏览器组件验证与此前完整应用验证分开列示。
+
+历史实验清理后的验证：保留生产及类型依赖链的 18 个采样模块，源码字节与清理前一致；固定签名向量迁入测试 fixture，公开对照与签名缓存代码迁入测试 helper。刷新 Prisma Client 和 Trae 构建产物后，在隔离数据库中运行 `npm run test`：**3,975 项，3,890 通过、69 失败、16 跳过**；失败名称均已在清理前出现。剩余失败包含测试库缺少字段、既有静态断言及缺少 PowerShell。保留的 Trace 专项单独复跑 **49/49 通过**。Worker 构建、生产与保留 Trace 测试的严格类型检查、`git diff --check` 均通过；全仓 Next 类型检查仍受旧分支 `.next/types` 路由缓存引用缺失文件影响。`npm pack --dry-run --ignore-scripts` 确认发布包只保留 Trace 数据库升级脚本，不含历史实验脚本或测试 helper。本轮未启动 dev，未在浏览器中验证。
 
 推荐复跑：
 
 ```sh
-node --import tsx --test test/trace-datasets-sampling.test.ts test/trace-datasets-production.test.ts test/trace-datasets-evidence.test.ts test/trace-datasets-integration.test.ts
+node --import tsx --test test/trace-datasets-*.test.ts
 npm run test
 git diff --check
 ```
@@ -100,7 +102,7 @@ Chrome 无头浏览器使用实际 `TraceDatasetFlow` 组件及 CSS，模拟身�
 | TLDR/valid1 / overall | 相对随机 ≥+10%（对应 ≥5.078803） | 5.575000 | 通过 |
 | TLDR/valid2 / coherence | ≥6.339 | 6.339500 | 通过 |
 
-前两表的六项覆盖和四项主质量构成 10 项主要效果条件；摘要 coherence 是另列防退步轴，不计入 10 项。其余保留的质量轴须继续核对，不以 10/10 代替全部质量、成本与统计要求。开发池数据来自[冻结指标](examples/evidence-six-rounds-v632-v637/summary.json)，目标见[需求分析 §4](phase1-requirements-analysis.md#4-r10效果目标与验证范围)，按现行目标读取原数值，不沿用附件中的历史默认版本或 v5 门槛。
+前两表的六项覆盖和四项主质量构成 10 项主要效果条件；摘要 coherence 是另列防退步轴，不计入 10 项。其余保留的质量轴须继续核对，不以 10/10 代替全部质量、成本与统计要求。开发池数据来自冻结指标（历史归档 `examples/evidence-six-rounds-v632-v637/summary.json`），目标见[需求分析 §4](phase1-requirements-analysis.md#4-r10效果目标与验证范围)，按现行目标读取原数值，不沿用附件中的历史默认版本或 v5 门槛。
 
 这些结果超过了对应公开数值目标，但不是微软同池实现的对照结果，也不能证明所有新来源都达标。
 
@@ -130,7 +132,7 @@ Chrome 无头浏览器使用实际 `TraceDatasetFlow` 组件及 CSS，模拟身�
 
 预算/分布在各完整池 20/20 次可行，K 敏感性已有验证。统计支持仍需单列：20 个种子的区间只描述同池波动，来源面板较少且采样比例改变，不能冒充完整池置信区间；所有均值通过项不自动等于独立统计验收通过。无标签来源的质量仍为证据不足。
 
-证据：[新来源指标](examples/v635-independent-20261013/summary.json)、[冻结协议](examples/v635-independent-20261013/protocol.json)、[来源清单](examples/v635-independent-20261013/pool-manifest.json)、[指标审计](examples/v635-independent-20261013/audited-metrics.json)、[来源隔离验证](examples/v635-independent-20261013/source-isolation-verification.json)。这些材料中的历史通过字段、随机/v4/v5 防退步结论和旧默认版本不是当前验收规则；保留原始证据，按本节目标复算。
+证据：新来源指标（历史归档 `examples/v635-independent-20261013/summary.json`）、冻结协议（历史归档 `examples/v635-independent-20261013/protocol.json`）、来源清单（历史归档 `examples/v635-independent-20261013/pool-manifest.json`）、指标审计（历史归档 `examples/v635-independent-20261013/audited-metrics.json`）、来源隔离验证（历史归档 `examples/v635-independent-20261013/source-isolation-verification.json`）。这些材料中的历史通过字段、随机/v4/v5 防退步结论和旧默认版本不是当前验收规则；原始证据保存在上述历史提交，按本节目标复算。
 
 ### 4.3 结论边界
 
