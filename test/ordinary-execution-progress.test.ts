@@ -33,3 +33,14 @@ test('链路入口锁定 executionId；缺少记录时不按 taskId 猜测跳转
   assert.equal(url.searchParams.get('executionId'), 'root/2')
   assert.equal(url.searchParams.get('taskId'), 'session&2')
 })
+
+test('同一轮新快照缺少链路时保留已绑定链路，不允许切换到其他根', () => {
+  const current = snapshot({ traceId: 'session-2', executionId: 'root-2' })
+  const missing = snapshot({ revision: 2200 })
+  const accepted = acceptCaseProgress(current, missing)
+  assert.equal(accepted.traceId, 'session-2')
+  assert.equal(accepted.executionId, 'root-2')
+  assert.equal(acceptCaseProgress(current, snapshot({ revision: 2200, traceId: 'another' })), current)
+  const retry = snapshot({ identity: 'attempt-3', attemptNo: 3, stage: 0 })
+  assert.equal(acceptCaseProgress(current, retry).traceId, null)
+})

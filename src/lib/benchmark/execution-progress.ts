@@ -112,3 +112,22 @@ export function benchmarkExecutionProgress(input: BenchmarkProgressInput, now: n
     failureMessage: failed ? evaluation?.failureMessage || input.failure?.message || input.failure?.code || '未收到详细失败原因' : null,
   }
 }
+
+export type BenchmarkProgressSnapshot = BenchmarkProgressInput & {
+  runId?: string; runAttemptNo?: number; generation?: number; revision?: number; evaluationAttemptNo?: number
+  traceId?: string | null; traceTaskId?: string | null; executionId?: string | null
+}
+
+export function acceptBenchmarkProgress<T extends BenchmarkProgressSnapshot>(previous: T, next: T): T {
+  if (previous.runId !== next.runId && previous.runAttemptNo && next.runAttemptNo) return next.runAttemptNo > previous.runAttemptNo ? next : previous
+  if (previous.runId !== next.runId) return (next.generation || 0) < (previous.generation || 0) ? previous : next
+  if ((next.revision || 0) < (previous.revision || 0) || (next.evaluationAttemptNo || 0) < (previous.evaluationAttemptNo || 0)) return previous
+  const reevaluating = (next.evaluationAttemptNo || 0) > (previous.evaluationAttemptNo || 0)
+  const before = benchmarkExecutionProgress(previous, 0)
+  const after = benchmarkExecutionProgress(next, 0)
+  const reached = (value: ReturnType<typeof benchmarkExecutionProgress>) => value.steps.reduce((index, step, i) => ['running', 'failed', 'cancelled', 'done'].includes(step.state) ? i : index, 0)
+  if (!reevaluating && (reached(after) < reached(before) || (before.failed || before.cancelled || before.completed) && after.active)) return previous
+  if (previous.traceId && next.traceId && previous.traceId !== next.traceId) return previous
+  if (previous.traceId && !next.traceId || previous.executionId && !next.executionId) return { ...next, traceId: next.traceId || previous.traceId, traceTaskId: next.traceTaskId || previous.traceTaskId, executionId: next.executionId || previous.executionId }
+  return next
+}

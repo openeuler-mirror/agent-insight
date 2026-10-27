@@ -29,6 +29,8 @@ export function acceptCaseProgress(previous: CaseExecutionProgress | undefined, 
   if (next.stage < previous.stage && !reevaluating) return previous
   if (['done', 'failed', 'cancelled'].includes(previous.status) && !reevaluating && next.status !== previous.status) return previous
   if (previous.status === 'retry_wait' && next.stage <= previous.stage && next.status === 'running') return previous
+  if (previous.traceId && next.traceId && previous.traceId !== next.traceId) return previous
+  if (previous.traceId && !next.traceId || previous.executionId && !next.executionId) return { ...next, traceId: next.traceId || previous.traceId, executionId: next.executionId || previous.executionId }
   return next
 }
 

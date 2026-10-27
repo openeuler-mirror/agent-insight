@@ -8,7 +8,7 @@ const net = require('node:net')
 const { randomBytes } = require('node:crypto')
 const { spawn } = require('node:child_process')
 const { XGovernorClient, error } = require('./client.cjs')
-const { exportTrace, resumeUpload } = require('./trace.cjs')
+const { exportTrace, resumeUpload, liveTraceReporter } = require('./trace.cjs')
 const { describeProfile, validateExecution, bindingFor, executionCapabilities } = require('../execution-config.cjs')
 const { artifactIdentity } = require('./artifact-identity.cjs')
 const { resolveModel } = require('./model-resolver.cjs')
@@ -233,6 +233,8 @@ class XGovernorExecutionBackend {
     handle.opaque.startedAt = Date.now()
     await this.persist(handle, context)
     let result
+    let traceReporter
+    const traceContext = { ...context, input: input.input, platform: input.platform }
     try {
       const receipt = await client.request('/sessions/turns', { runtime_id: handle.opaque.runtimeId, text: input.input, client_request_id: handle.runId,
         ...(handle.opaque.resolvedModel?.reasoningEffort ? { reasoning_effort: handle.opaque.resolvedModel.reasoningEffort } : {}),
@@ -240,17 +242,21 @@ class XGovernorExecutionBackend {
       if (receipt.runtime_id !== handle.opaque.runtimeId || !receipt.turn_id) throw error('XGOVERNOR_EVENT_MISMATCH', '任务回执与会话不匹配')
       handle.opaque.turnId = receipt.turn_id
       await this.persist(handle, context)
+      await context.onTraceId?.({ traceId: `xgovernor:${handle.runId}` })
+      traceReporter = liveTraceReporter(handle, runtime, local, traceContext, this.processRunner, { log: this.options.log })
       const terminal = await client.events(handle.opaque.runtimeId, receipt.turn_id, input.signal, () => context.heartbeat?.())
       if (terminal.kind !== 'turn_completed' || terminal.outcome !== 'complete') throw error('AGENT_RUN_FAILED', 'Agent 未正常完成本次任务')
       result = { exitCode: 0, timedOut: false, model: handle.opaque.modelId, usage: terminal.usage, startedAt: new Date(handle.opaque.startedAt).toISOString(), finishedAt: new Date().toISOString(), execution: {
         profile: handle.opaque.profile || describeProfile(handle.opaque.profileKey, local), controllerBoundary: 'host', toolBoundary: 'container', network: 'deny', resources: local.resources, imageId: handle.opaque.imageId, workspace: { datasetRevision: handle.opaque.datasetRevision, patchBaseCommit: handle.opaque.baseCommit }, ...(handle.opaque.imageResolution ? { imageResolution: handle.opaque.imageResolution } : {}),
       } }
     } catch (cause) {
+      await traceReporter?.stop()
       await this.cancel(handle).catch(() => {})
-      cause.runFacts = { ...(cause.runFacts || {}), ...(await exportTrace(handle, runtime, local, { ...context, input: input.input, platform: input.platform, failed: true }, this.processRunner).catch(() => ({}))) }
+      cause.runFacts = { ...(cause.runFacts || {}), ...(await exportTrace(handle, runtime, local, { ...traceContext, failed: true }, this.processRunner).catch(() => ({}))) }
       throw cause
     }
-    const trace = await exportTrace(handle, runtime, local, { ...context, input: input.input, platform: input.platform }, this.processRunner)
+    await traceReporter?.stop()
+    const trace = await exportTrace(handle, runtime, local, traceContext, this.processRunner)
     return { ...result, traceId: trace.traceId }
   }
   async collect(handle, contract, context) {

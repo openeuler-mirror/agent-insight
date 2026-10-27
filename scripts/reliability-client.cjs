@@ -2564,9 +2564,9 @@ async function main() {
     tryAcquireSlot: tryAcquireExecutionSlot,
     releaseSlot: releaseExecutionSlot,
     agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
-    runAgent: (payload) => payload.platform === 'pi-mcts'
+    runAgent: (payload) => ['pi-mcts', 'xiao-mcts'].includes(payload.platform)
       ? mctsRuntime().runMctsBenchmarkCase(cfg, payload)
-      : runExperimentCase(cfg, payload),
+      : runExperimentCase(cfg, payload, payload.onTraceId),
     logError: (...args) => logErr(...args),
   })
   await benchmarkExecutor.recover()

@@ -167,9 +167,24 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
       AGENT_INSIGHT_ZSOFT_CONTRACT_DIGEST: readiness.contract.sourceDigest } : {}),
   }
   let preparedRuntime
+  let traceMonitor
+  let traceRead = Promise.resolve()
+  let reportedTraceId = null
+  const reportTrace = async () => {
+    const traceId = await mctsTraceId(observerHome).catch(() => null)
+    if (!traceId || !payload.onTraceId) return
+    if (reportedTraceId && reportedTraceId !== traceId) throw new BenchmarkExecutorError('TRACE_ID_CONFLICT', 'MCTS 根链路发生变化')
+    if (!reportedTraceId) {
+      await payload.onTraceId({ traceId })
+      reportedTraceId = traceId
+    }
+  }
+  const checkTrace = () => { traceRead = traceRead.then(reportTrace).catch(error => { cfg.log?.('MCTS early trace report failed', error.message) }); return traceRead }
   try {
     preparedRuntime = prepareRuntimeInvocation(invocationPlan, outputDir)
     Object.assign(env, preparedRuntime.env)
+    traceMonitor = setInterval(checkTrace, 1000)
+    traceMonitor.unref?.()
     await processRunner(process.execPath, [
       paths.traceLauncher, '--strict', '--config', path.join(path.dirname(paths.traceLauncher), 'config.json'),
       '--upstream', upstream,
@@ -191,6 +206,7 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
       errorCode: 'MCTS_RUN_FAILED',
       timeoutErrorCode: 'AGENT_TIMEOUT',
     })
+    await checkTrace()
     payload.signal?.throwIfAborted()
     if (zsoft) {
       const metadata = JSON.parse((await readBoundedFile(outputDir, 'platform-export.json', 4096)).toString('utf8'))
@@ -240,7 +256,7 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
         ...(agentOptions ? { agentOptions } : {}), ...error.runFacts }
     }
     throw error
-  } finally { preparedRuntime?.cleanup() }
+  } finally { clearInterval(traceMonitor); await traceRead; preparedRuntime?.cleanup() }
 }
 
 module.exports = { ZSOFT_CAPABILITY, SWE_CAPABILITY, probeMctsZsoftRuntime, mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask, readMctsEnvFile }

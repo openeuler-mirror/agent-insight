@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client'
 /**
  * 控制指令总线（IF-N05/N07/N08）。
  *
@@ -5,6 +6,7 @@
  * ACK 窗口内没收到就是 DELIVERY_FAILED。指令不在重连后自动补发。
  */
 import { randomBytes } from 'node:crypto'
+import { mergeTraceFacts, traceIdFromFacts } from '@/lib/trace-reference'
 
 import { prisma } from '@/lib/storage/prisma'
 import { ReliabilityError } from '@/lib/reliability/client-registry'
@@ -190,18 +192,34 @@ export async function applyCommandStatus(input: {
   result?: Record<string, unknown>
   error?: { code?: string; message?: string }
 }): Promise<{ action: CommandAction; payload: Record<string, unknown> }> {
-  const command = await prisma.reliabilityCommand.findUnique({
+  const snapshot = await prisma.reliabilityCommand.findUnique({ where: { commandId: input.commandId } })
+  const result = snapshot?.action === 'RUN_EXPERIMENT_CASE'
+    ? await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.reliabilityCommand.updateMany({ where: { commandId: input.commandId, clientId: input.clientId, status: { notIn: TERMINAL } }, data: { commandId: input.commandId } })
+      return applyCommandStatusRow(input, tx)
+    })
+    : await applyCommandStatusRow(input, prisma, snapshot)
+  // 事务外抛错，保留刚写入的过期状态。
+  if ('expired' in result) throw new ReliabilityError('COMMAND_EXPIRED', '指令已过期', 410)
+  return result
+}
+
+async function applyCommandStatusRow(
+  input: Parameters<typeof applyCommandStatus>[0], tx: Prisma.TransactionClient,
+  snapshot?: Awaited<ReturnType<typeof tx.reliabilityCommand.findUnique>>,
+) {
+  const command = snapshot || await tx.reliabilityCommand.findUnique({
     where: { commandId: input.commandId },
   })
   if (!command || command.clientId !== input.clientId) {
     throw new ReliabilityError('COMMAND_NOT_FOUND', '指令不存在', 404)
   }
   if (command.expiresAt.getTime() < Date.now() && !TERMINAL.includes(command.status as CommandStatus)) {
-    const expired = await prisma.reliabilityCommand.updateMany({
+    const expired = await tx.reliabilityCommand.updateMany({
       where: { commandId: input.commandId, status: { notIn: TERMINAL } },
       data: { status: 'EXPIRED', errorCode: 'COMMAND_EXPIRED', completedAt: new Date() },
     })
-    if (expired.count) throw new ReliabilityError('COMMAND_EXPIRED', '指令已过期', 410)
+    if (expired.count) return { expired: true, action: command.action as CommandAction, payload: safeParse(command.payloadJson) }
     return { action: command.action as CommandAction, payload: safeParse(command.payloadJson) }
   }
   // 幂等：已到终态的指令不再被回执改写。
@@ -217,7 +235,30 @@ export async function applyCommandStatus(input: {
   if (input.status === 'RECEIVED') data.receivedAt = now
   if (input.status === 'RUNNING') data.startedAt = now
   if (input.status === 'SUCCEEDED' || input.status === 'FAILED') data.completedAt = now
-  if (input.result) data.resultJson = JSON.stringify(input.result)
+  if (input.result) {
+    const result = command.action === 'RUN_EXPERIMENT_CASE'
+      ? mergeTraceFacts(safeParse(command.resultJson), input.result, (code, message) => new ReliabilityError(code, message, 409))
+      : input.result
+    const traceId = traceIdFromFacts(result)
+    if (command.action === 'RUN_EXPERIMENT_CASE' && traceId) {
+      const payload = safeParse(command.payloadJson)
+      const correlation = payload.correlation as Record<string, unknown> | undefined
+      const attempt = await tx.experimentTraceAttempt.findFirst({ where: {
+        id: String(correlation?.traceAttemptId || ''), commandId: input.commandId, workerId: input.clientId,
+        caseId: String(correlation?.caseRunId || ''), experimentId: String(correlation?.experimentId || ''),
+      } })
+      if (attempt) {
+        const reused = await tx.experimentTraceAttempt.count({ where: { caseId: attempt.caseId, id: { not: attempt.id }, traceId } })
+        if (reused) throw new ReliabilityError('TRACE_ID_REUSED', '客户端返回了其他执行的主链路 ID', 409)
+        if (attempt.traceId && attempt.traceId !== traceId) throw new ReliabilityError('TRACE_ID_CONFLICT', '本次执行已绑定其他主链路，拒绝覆盖', 409)
+        await tx.experimentTraceAttempt.updateMany({ where: {
+          id: attempt.id, commandId: input.commandId, traceId: attempt.traceId,
+          case: { deletedAt: null, experiment: { deletedAt: null, status: { not: 'cancelled' } } },
+        }, data: { traceId } })
+      }
+    }
+    data.resultJson = JSON.stringify(result)
+  }
   if (input.error) {
     data.errorCode = input.error.code || 'CLIENT_ERROR'
     data.errorMessage = input.error.message || null
@@ -225,7 +266,7 @@ export async function applyCommandStatus(input: {
 
   const allowed = input.status === 'RECEIVED' ? ['CREATED', 'SENT', 'RECEIVED']
     : ['CREATED', 'SENT', 'RECEIVED', 'RUNNING']
-  await prisma.reliabilityCommand.updateMany({
+  await tx.reliabilityCommand.updateMany({
     where: { commandId: input.commandId, status: { in: allowed } },
     data,
   })

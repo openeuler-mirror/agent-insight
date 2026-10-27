@@ -20,7 +20,7 @@ export type BenchmarkExecutionAccepted = {
 export type BenchmarkExecutionProgress = {
   kind: 'execution'
   stage: 'preparing' | 'agent_running' | 'collecting' | 'uploading' | 'cleaning'
-  progress?: { message?: string; elapsedSeconds?: number; stageStartedAt?: string; stageDeadlineAt?: string }
+  progress?: { traceId?: string; message?: string; elapsedSeconds?: number; stageStartedAt?: string; stageDeadlineAt?: string }
   occurredAt: string
 }
 

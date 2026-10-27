@@ -55,7 +55,7 @@ export function CaseExecutionProgress({ progress, title, refreshingFailed, retry
               <div className="flex justify-between gap-3"><span>{name}</span><span className="text-xs text-foreground-muted">{state}</span></div>
               {(index === 1 && !skipped || index === 2 && skipped) && (href
                 ? <Link href={href} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline">查看本次主 Agent 链路<ExternalLink aria-label="新标签页打开" className="size-3" /></Link>
-                : <p className="mt-1 text-xs text-foreground-muted">{retrying ? '等待新执行确认' : progress.traceId ? '主 Agent 链路入库中' : '本次主 Agent 链路尚未关联'}</p>)}
+                : <p className="mt-1 text-xs text-foreground-muted">{retrying ? '等待新执行确认' : progress.traceId ? '主 Agent 链路上传中' : '等待本次主 Agent 链路关联'}</p>)}
               {index === 3 && progress.stage >= 3 && <details className="mt-2 text-xs text-foreground-secondary">
                 <summary className="cursor-pointer">已完成 {progress.evaluators.filter(e => ['done', 'skipped'].includes(e.status)).length}/{progress.evaluators.length} 项</summary>
                 <ul className="mt-2 space-y-2">{progress.evaluators.map(e => <li key={e.id} className="break-words">{evaluatorName(e.id)} · {({ done: '已完成', failed: '失败', running: '评测中', pending: '待评测', cancelled: '已取消', skipped: '已跳过' } as Record<string, string>)[e.status] || e.status}{e.error && <p style={{ color: 'var(--error)' }}>{e.error}</p>}</li>)}</ul>

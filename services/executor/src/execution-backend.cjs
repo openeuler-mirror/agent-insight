@@ -29,7 +29,7 @@ class LocalExecutionBackend {
     await context.persist(handle)
     return handle
   }
-  runAgent(handle, input) { return this.agentRuntimes.get(input.platform).run({ ...input, cwd: handle.opaque.workspace.path }) }
+  runAgent(handle, input, context) { return this.agentRuntimes.get(input.platform).run({ ...input, cwd: handle.opaque.workspace.path, onTraceId: context.onTraceId }) }
   collect(handle, contract, context) { return this.collectors.get(contract.collector).collect(contract, { workspace: handle.opaque.workspace, runFacts: context.runFacts }) }
   async cancel() {}
   async close(handle) {

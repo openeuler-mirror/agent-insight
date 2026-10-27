@@ -124,3 +124,24 @@ test('评测完成表示流程完成，无论业务得分；未知状态和旧�
   assert.equal(unknown.elapsed, null)
   assert.equal(unknown.stageElapsed, null)
 })
+
+test('Benchmark 迟到旧轮和旧快照不能带回链路或阶段，新重试立即清空旧链接', async () => {
+  const { acceptBenchmarkProgress } = await import('@/lib/benchmark/execution-progress')
+  const current = { ...fixture({ progressStage: 'collecting', runStatus: 'collecting' }), runId: 'run-2', runAttemptNo: 2, generation: 2000, revision: 2100, traceId: 'trace-2' as string | null, executionId: 'root-2' as string | null, evaluationAttemptNo: 0 }
+  assert.equal(acceptBenchmarkProgress(current, { ...current, runId: 'run-1', runAttemptNo: 1, generation: 3000, revision: 3000 }), current)
+  assert.equal(acceptBenchmarkProgress(current, { ...current, revision: 2101, progressStage: 'agent_running', runStatus: 'running_agent' }), current)
+  assert.equal(acceptBenchmarkProgress(current, { ...current, revision: 2000 }), current)
+  const missing = acceptBenchmarkProgress(current, { ...current, revision: 2200, traceId: null, executionId: null })
+  assert.equal(missing.traceId, 'trace-2')
+  assert.equal(missing.executionId, 'root-2')
+  const next = { ...current, runId: 'run-3', runAttemptNo: 3, generation: 1000, traceId: null, executionId: null, runStatus: 'pending', progressStage: null }
+  assert.equal(acceptBenchmarkProgress(current, next), next)
+})
+
+test('Benchmark 终态不会退回执行，新的评测轮次可以进入重评', async () => {
+  const { acceptBenchmarkProgress } = await import('@/lib/benchmark/execution-progress')
+  const current = { ...fixture({ runStatus: 'evaluated', evaluationStatus: 'completed' }), runId: 'run', revision: 2000, evaluationAttemptNo: 1 }
+  assert.equal(acceptBenchmarkProgress(current, { ...current, revision: 2100, runStatus: 'running_agent', evaluationStatus: null }), current)
+  const reevaluation = { ...current, revision: 2100, evaluationAttemptNo: 2, evaluationStatus: 'running_evaluator' }
+  assert.equal(acceptBenchmarkProgress(current, reevaluation), reevaluation)
+})

@@ -395,3 +395,90 @@ test('xiaoO Worker state capture preserves NDJSON and exports complete native to
     assert.throws(() => xiaooEvents({ ...snapshot, schema_version: 2 }, {}), /版本不兼容/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
+
+test('Runner forwards an early root while Agent is running and retains it through subsequent stages', async () => {
+  let f: Awaited<ReturnType<typeof runnerFixture>>
+  f = await runnerFixture({ async runAgent(_handle: unknown, _input: unknown, context: any) {
+    await context.onTraceId({ traceId: 'live-root' })
+    const state = await f.store.state(f.task.runId)
+    assert.equal(state.stage, 'agent_running')
+    assert.equal(state.progress.traceId, 'live-root')
+    assert.equal(f.sent.length, 0)
+    return { exitCode: 0, traceId: 'live-root' }
+  } })
+  const reports: any[] = []
+  f.callback.progress = async (...[_request, stage, details]: any[]) => { reports.push({ stage, details }) }
+  try {
+    await f.runner.execute(f.task)
+    assert.ok(reports.some(report => report.stage === 'agent_running' && report.details.traceId === 'live-root'))
+    assert.ok(reports.filter(report => ['collecting', 'uploading', 'cleaning'].includes(report.stage)).every(report => report.details.traceId === 'live-root'))
+    assert.equal(f.sent[0].runFacts.traceId, 'live-root')
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('sandbox snapshots permit pending tools, keep one stable root and cannot replace the terminal root with a late live snapshot', () => {
+  for (const platform of ['pi-agent', 'xiaoo']) {
+    const metadata = { runId: `snapshots-${platform}`, runtimeId: 'runtime', startedAt: 1000, input: 'Fix it' }
+    const records = [
+      { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Fix it' }], timestamp: 1000 } },
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call', name: 'bash', arguments: { command: 'test' } }], timestamp: 1100 } },
+    ]
+    const live = piEvents(records, { ...metadata, partial: true })
+    assert.equal(live.find((event: any) => event.kind === 'agent').status, 'running')
+    assert.throws(() => piEvents(records, metadata), /缺少结果/)
+    const final = piEvents([...records, { type: 'message', message: { role: 'toolResult', toolCallId: 'call', content: [{ type: 'text', text: 'Done' }], timestamp: 1200 } }], metadata)
+    const { canonicalEventsToOtlp } = require('../scripts/agent-trace-collectors/shared/trace-transport.cjs')
+    const normalize = (events: any[]) => normalizeOtlpTraces(canonicalEventsToOtlp(events, { framework: platform }), { authenticatedUser: 'alice' })
+    const before = aggregateOtelTraceEvents(`xgovernor:${metadata.runId}`, normalize(live))
+    assert.ok(before)
+    assert.equal(before.trace_completed_at, undefined)
+    const after = aggregateOtelTraceEvents(`xgovernor:${metadata.runId}`, [...normalize(final), ...normalize(live)])
+    assert.ok(after?.trace_completed_at)
+    assert.equal(after?.llm_call_count, 1)
+    assert.equal(after?.tool_call_count, 1)
+  }
+})
+
+test('sandbox exporter publishes an empty running root before native history exists without accepting it as a complete trace', async () => {
+  const { exportTrace } = require('../services/executor/src/xgovernor/trace.cjs')
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'live-sandbox-root-'))
+  const handle = { runId: 'empty-running-root', opaque: { directory, runtimeId: 'runtime', startedAt: 1000, platform: 'pi-agent' } }
+  const config = { models: {}, traceApiKeyEnv: 'FIXTURE_MISSING_TRACE_KEY' }
+  try {
+    await assert.rejects(exportTrace(handle, { kind: 'pi' }, config, { partial: true, input: 'Fix it', platform: 'pi-agent' }), (error: any) => error.code === 'TRACE_AUTH_MISSING')
+    const files = fs.readdirSync(path.join(directory, 'trace-spool'), { recursive: true }) as string[]
+    const spool = files.find(file => file.endsWith('.jsonl'))!
+    const event = JSON.parse(fs.readFileSync(path.join(directory, 'trace-spool', spool), 'utf8').trim())
+    assert.equal(event.sessionId, 'xgovernor:empty-running-root')
+    assert.equal(event.status, 'running')
+    assert.equal(event.attributes['xgovernor.runtime_id'], 'runtime')
+    assert.equal(event.attributes['agent.insight.trace.completed'], false)
+    const { canonicalEventsToOtlp } = require('../scripts/agent-trace-collectors/shared/trace-transport.cjs')
+    const beforeModel = aggregateOtelTraceEvents(event.sessionId, normalizeOtlpTraces(canonicalEventsToOtlp([event], { framework: 'pi-agent' }), { authenticatedUser: 'alice' }))
+    assert.ok(beforeModel)
+    assert.equal(beforeModel.trace_completed_at, undefined)
+    assert.equal(beforeModel.llm_call_count, 0)
+    await assert.rejects(exportTrace(handle, { kind: 'pi' }, config, { input: 'Fix it', platform: 'pi-agent' }))
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('sandbox live export serializes snapshots and drains before final export', async () => {
+  const { liveTraceReporter } = require('../services/executor/src/xgovernor/trace.cjs')
+  const calls: string[] = []
+  let release: () => void = () => {}
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const reporter = liveTraceReporter({}, {}, {}, { onTraceId: async ({ traceId }: any) => { calls.push(traceId) } }, null, {
+    intervalMs: 10000,
+    exportTrace: async () => { calls.push('partial'); await gate; return { traceId: 'stable-root' } },
+  })
+  const pending = reporter.tick()
+  assert.equal(calls.length, 1)
+  const stopped = reporter.stop()
+  release()
+  await pending
+  await stopped
+  calls.push('final')
+  assert.deepEqual(calls, ['partial', 'stable-root', 'final'])
+  reporter.tick()
+  assert.equal(calls.length, 3)
+})

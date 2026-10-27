@@ -333,6 +333,9 @@ flowchart LR
 
 ### 普通单组实验的执行进度与重试隔离
 
+OpenCode、xiaoO、Pi 客户端发现本次根会话后，通过 `RUNNING(state=TRACE_STARTED, traceId)` 提前回传。公共指令回执在事务内校验 `commandId/clientId`、冻结 correlation 中的 `traceAttemptId/caseRunId/experimentId`，将根 ID 写入对应 Attempt；同轮重复幂等，换根或复用其他轮根 ID 返回冲突。命令终态合并保留已绑定根 ID。进度只读取最新 Attempt，在 Agent 未退出时也可查询唯一的根 Execution 并提供链接；正式回填输出和进入评测仍须等待执行结束及完整 Session。旧轮只能补自己的 Attempt，不能重写当前 Case；前端同轮保留已确认链路，新轮撤下旧链路，阶段和终态不回退。
+
+
 现有 `GET /api/experiments/:id` 在普通单组实验的 `cases[].executionProgress` 返回当前执行身份、轮次、阶段、更新时间、精确主执行 ID 和各评估器状态。`execution-progress-service.ts` 在只读事务中读取同一份 Case、最新 Attempt、结果及主 Execution，并同步投影当前行的实际输出、链路和评分行，避免拼接不同轮次的数据。生成流程使用 `ExperimentTraceAttempt`，FI 使用当前 `fiRunId`，已有 Trace 直接进入评测；主记录查询按当前用户限定且排除子 Agent。没有唯一主记录时不生成链接。Attempt 已下发时继续读取对应命令：`CREATED/SENT/RECEIVED` 显示等待客户端开始，`RUNNING` 显示 Agent 执行，`SUCCEEDED` 显示等待 Trace 入库；不把服务端下发当作客户端已开始执行。
 
 普通 Trace 重试通过 `reserveTraceRetry` 在同一事务中锁定实验、校验调用方看到的旧 Attempt、创建新 `queued` Attempt、清空 Case 旧链路和重置结果。执行调度消费这个预占 Attempt，不额外创建一轮。数据库事务和 `(caseId, attemptNo)` 唯一约束负责多进程互斥；进程内锁只用于快速拒绝重复请求。最新 Attempt 无论处于排队、失败还是取消状态，旧 Attempt 均不得绑定当前 Case；历史回收也只检查最新 Attempt。客户端返回历史 Attempt 的 Trace ID 时以 `TRACE_ID_REUSED` 终止，不自动重试，也不按输入文本或最新记录猜测主链路。

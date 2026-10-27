@@ -191,6 +191,8 @@ for (const legacy of [false, true]) {
       assert.equal(detail.reusableConfig.executionTarget.platform, 'pi-mcts')
       assert.equal(detail.cases[0].taskId, sessionId)
       assert.equal(detail.cases[0].executionId, execution.id)
+      assert.equal(detail.cases[0].benchmark.traceId, traceId)
+      assert.equal(detail.cases[0].benchmark.traceTaskId, sessionId)
       assert.equal((await prisma.experimentCase.findUniqueOrThrow({ where: { id: run.experimentCaseId } })).taskId, traceId)
     }
     await lifecycle.finalizeBenchmarkCase({ caseRunId: run.id, runSupplementalEvaluators: false, continueCases: false })

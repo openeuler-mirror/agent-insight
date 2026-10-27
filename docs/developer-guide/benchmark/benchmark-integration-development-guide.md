@@ -627,8 +627,8 @@ SWE-bench 执行端在 `services/executor/src/benchmarks/swe-bench-images.cjs` �
 | 调用 | 契约 |
 |---|---|
 | `--describe` | 返回 schemaVersion=execution-trace/v1、full=true 和 runtimeKinds 列表 |
-| `--export` | stdin 接收本次 runId/runtimeId/stateDirectory 等元数据，返回同版本、full=true、匹配 runId/runtimeId 及完整 canonical events |
-| 事件校验 | 唯一根会话为 `xgovernor:<runId>`，包含模型正文；还须实现上游会话参数映射并验证 Trace 语义 |
+| `--export` | stdin 接收本次 runId/runtimeId/stateDirectory 及 `partial` 元数据；`partial=true` 返回当前可用的完整快照（可仅含根会话），`partial=false` 返回最终完整 canonical events；均须同版本、full=true、匹配 runId/runtimeId |
+| 事件校验 | 唯一根会话为 `xgovernor:<runId>`；最终导出包含模型正文，运行中导出不提前声明会话完成；还须实现上游会话参数映射并验证 Trace 语义 |
 
 后续接 OpenCode 时，在 xGovernor 支持的前提下新增受信 Runtime 注册、模型/参数映射及完整 Trace 转换，再增加目标 binding；公共 Runner、SWE-bench 业务任务与 Evaluator 无需增加 OpenCode 分支。连 xGovernor 一起替换时，实现同一六方法合同、配置/能力描述及独立 Trace/产物适配，注册新 `backendKey`。目前 YAML 配置解析与预探测实现针对 xGovernor；增加其他后端须补充对应配置和能力装配。通用合同不代表其他后端已经完成适配。配置与导出合同见本节的 [原生执行高级配置](#原生执行高级配置) 与 Trace 导出说明；部署操作见 [通用部署指南 7.3](service-deployment-guide.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
 
@@ -861,11 +861,30 @@ Presentation 只控制公共前端的名称、顺序和有限格式，不能改�
 
 私有字段不能进入 Presentation。数据集导入时会冻结字段快照，Manifest 后续变化不会静默修改已发布数据集。
 
-实验详情的 Case 明细表将执行状态集中到独立的“执行进度”列和步骤弹窗，提交物列只展示文件，不再展示参考契约列；单个 Case 详情页及 `presentation.referencePanel` 契约保持不变。阶段名称使用平台通用映射，本轮不新增 Manifest 配置。“Agent 执行”步骤复用详情接口返回的 Case `taskId` 打开 `/trace?taskId=...`（新标签页）；没有关联时显示占位提示，导入提交物时隐藏入口。沿用现有主 Trace 绑定及 MCTS 历史标识解析，不从子 Agent 或其他 Case 猜测链接；执行期间能否跳转取决于主链路是否已关联。
+实验详情的 Case 明细表将执行状态集中到独立的“执行进度”列和步骤弹窗，提交物列只展示文件，不再展示参考契约列；单个 Case 详情页及 `presentation.referencePanel` 契约保持不变。阶段名称使用平台通用映射，本轮不新增 Manifest 配置。“Agent 执行”步骤读取当前 `caseRun` 的 `traceId/executionId`，唯一根 Execution 入库后在新标签页通过 `executionId + taskId` 精确打开。未收到根 ID 时显示“等待本次主 Agent 链路关联”，已收到但尚未入库时显示“主 Agent 链路上传中”，导入提交物时隐藏入口。新重试使用新的 Run，立即撤下历史链接；Case 上残留的旧 `taskId` 不参与当前执行进度关联。详情同时返回 `runId/runAttemptNo/generation/revision/evaluationAttemptNo`，前端按执行轮次、快照版本和阶段过滤迟到响应，保留同轮已确认的链路；新评测轮次允许重评。
 
 现有 `GET /api/experiments/:id` 的 `cases[].benchmark.progressDetails` 返回当前最新 Run 的创建/结束时间、执行启动/最近上报/可选阶段开始时间，以及最新评测 attempt 的阶段、创建/启动/结束时间、最近上报和失败原因。仅投影这些公开状态字段，不返回原始进度 JSON。评测开始后使用评测侧的上报时间，重评活动状态优先于 Run 旧终态。步骤由实际状态映射，不推算百分比；没有可靠开始时间时不显示阶段耗时，也不编造历史阶段耗时。
 
 运行期间沿用详情页 5 秒轮询，轮询失败保留快照并明确提示，恢复后清除提示。非排队活动阶段超过 5 分钟无上报时提示观测延迟；从未收到上报则从该流程启动时间计时。此提示不改变后端状态，不将阶段回调视为心跳，不触发重试或超时终止。导入提交物跳过执行阶段，终态停止转圈并冻结总耗时。
+
+### 执行中的主链路回调
+
+执行器发现本次唯一根会话后，立即使用现有 `POST /api/benchmark/v1/runs/{runId}/progress` 上报，不等待 Agent 结束：
+
+```json
+{
+  "kind": "execution",
+  "stage": "agent_running",
+  "progress": { "message": "正在运行 Agent", "traceId": "本次根会话 ID" },
+  "occurredAt": "2026-10-27T06:00:00.000Z"
+}
+```
+
+`progress.traceId` 是可选的业务根会话键（对应 `Execution.taskId`），不是 OTLP 的十六进制 trace hash。未发现根时省略；同轮后续阶段和心跳持续携带同一个 ID。公共本机 Runtime 通过 `input.onTraceId({ traceId })` 通知 Runner，其他执行后端使用 `context.onTraceId({ traceId })`；回调只补链路，不能推进或重置执行阶段。MCTS 从本次独立输出目录中唯一 ledger 的 coordinator 会话读取 ID，动态搜索节点不得替换根会话。
+
+服务端以 `runId + 已认证 clientId` 校验归属，在事务中锁定对应 Case，再首次绑定 `runFactsJson.traceId`。相同 ID 幂等，不同 ID 返回 `TRACE_ID_CONFLICT`，其他重试已使用的 ID 返回 `TRACE_ID_REUSED`；非法 ID 返回 `TRACE_ID_INVALID`。完成回调的 `runFacts.traceId` 必须与提前绑定一致，省略时保留原值。旧 Run 的迟到上报只补旧 Run；终态允许补根 ID，但不改阶段、终态或计时。阶段顺序为 `preparing → agent_running → collecting → uploading → cleaning`，较早阶段及同阶段较旧回调不能覆盖当前阶段或阶段时钟，即使它们携带此前未收到的根 ID。更新采用条件写入，竞争失败后重新读取，避免进度与完成回调相互覆盖。
+
+原生 Pi/xiaoO 沙箱在会话受理后绑定 `xgovernor:<runId>`，运行中串行读取本次原生消息快照并沿用 durable spool 上传；根事件标记 `status=running`、`agent.insight.trace.completed=false`。首条模型消息尚未出现时允许上传运行中的根会话；未完成工具调用允许出现在运行中快照中。最终导出必须仍满足完整模型、工具结果校验，先停止并等待运行中导出，再导出终态。相同 span 的终态根不会被迟到的运行中快照覆盖。客户端安装包需与服务端一起更新，新建运行生效。
 
 ### 10.2 Evaluator
 

@@ -15,10 +15,9 @@ function StepIcon({ state, paused = false }: { state: ProgressStepState; paused?
   return <Icon aria-hidden="true" className={`size-4 shrink-0 ${state === 'running' && !paused ? 'motion-safe:animate-spin' : ''}`} />;
 }
 
-export function BenchmarkExecutionProgress({ benchmark, caseTitle, taskId, refreshFailed }: {
-  benchmark: BenchmarkProgressInput;
+export function BenchmarkExecutionProgress({ benchmark, caseTitle, refreshFailed }: {
+  benchmark: BenchmarkProgressInput & { traceId?: string | null; traceTaskId?: string | null; executionId?: string | null };
   caseTitle: string;
-  taskId: string | null;
   refreshFailed: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -62,15 +61,15 @@ export function BenchmarkExecutionProgress({ benchmark, caseTitle, taskId, refre
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3"><span className="font-medium">{step.title}</span><span className="shrink-0 text-xs text-foreground-muted">{step.state === 'running' && paused ? '待确认' : step.state === 'running' && progress.waiting ? '等待中' : STATE_LABEL[step.state]}</span></div>
                 {step.title === 'Agent 执行' && step.state !== 'skipped' && (
-                  taskId ? <Link
-                    href={`/trace?taskId=${encodeURIComponent(taskId)}`}
+                  benchmark.executionId && benchmark.traceId ? <Link
+                    href={`/trace?executionId=${encodeURIComponent(benchmark.executionId)}&taskId=${encodeURIComponent(benchmark.traceTaskId || benchmark.traceId)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
                     aria-label="查看主 Agent 链路（新标签页打开）"
                   >
                     查看主 Agent 链路<ExternalLink aria-hidden="true" className="size-3" />
-                  </Link> : <p className="mt-1 text-xs text-foreground-muted">主 Agent 链路尚未关联</p>
+                  </Link> : <p className="mt-1 text-xs text-foreground-muted">{benchmark.traceId ? '主 Agent 链路上传中' : '等待本次主 Agent 链路关联'}</p>
                 )}
                 {step.detail && <p className="mt-1 text-xs text-foreground-secondary">{step.detail}</p>}
                 {step.state === 'running' && progress.stageElapsed !== null && <p className="mt-1 text-xs text-foreground-muted">当前阶段已用时 {progressDuration(progress.stageElapsed)}</p>}

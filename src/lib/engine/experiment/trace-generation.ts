@@ -271,7 +271,7 @@ async function bindExecution(input: {
     });
     if (!locked.count) return false;
     const attempt = await tx.experimentTraceAttempt.findUnique({ where: { id: input.attemptId } });
-    if (!attempt || ['cancelled', 'superseded'].includes(attempt.status) || attempt.failureCode === 'EXPERIMENT_CANCELLED') return false;
+    if (!attempt || attempt.traceId && attempt.traceId !== input.traceId || ['cancelled', 'superseded'].includes(attempt.status) || attempt.failureCode === 'EXPERIMENT_CANCELLED') return false;
     const newer = await tx.experimentTraceAttempt.count({ where: { caseId: input.caseId,
       attemptNo: { gt: attempt.attemptNo } } });
     if (newer) return false;
@@ -317,8 +317,8 @@ export async function reconcileGeneratedTraceCase(input: {
       const command = await getCommand(attempt.commandId);
       traceId = parseTraceIdFromCommandResult(command?.resultJson);
       if (traceId) {
-        await prisma.experimentTraceAttempt.update({
-          where: { id: attempt.id },
+        await prisma.experimentTraceAttempt.updateMany({
+          where: { id: attempt.id, traceId: null, case: { traceAttempts: { none: { id: { not: attempt.id }, traceId } } } },
           data: { traceId },
         });
       }
@@ -532,7 +532,7 @@ async function runAttempt(input: {
         };
       } else {
         const advanced = await prisma.experimentTraceAttempt.updateMany({
-          where: { id: attempt.id, status: 'running', case: { traceAttempts: { none: { attemptNo: { gt: attempt.attemptNo } } } } },
+          where: { id: attempt.id, status: 'running', OR: [{ traceId: null }, { traceId }], case: { traceAttempts: { none: { attemptNo: { gt: attempt.attemptNo } } } } },
           data: { traceId, status: 'waiting_trace' },
         });
         if (!advanced.count) return { ready: false };

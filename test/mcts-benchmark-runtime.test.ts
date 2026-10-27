@@ -675,3 +675,31 @@ test('MCTS ZSoft capability is unavailable with missing plugins and cancellation
     assert.equal(fs.existsSync(path.join(f.workspace, 'submission/poc')), false)
   } finally { f.close() }
 })
+
+test('MCTS reports its stable coordinator root before the Agent process completes', async () => {
+  const f = fixture()
+  let finished = false
+  let release: () => void = () => {}
+  const linked = new Promise<void>(resolve => { release = resolve })
+  const received: string[] = []
+  const deadline = setTimeout(release, 5000)
+  try {
+    const result = await runtime.runMctsBenchmarkCase(f.config, { ...f.payload, onTraceId: async ({ traceId }: any) => {
+      assert.equal(finished, false)
+      received.push(traceId)
+      release()
+    } }, async (command: string) => {
+      if (command === process.execPath) {
+        fs.mkdirSync(f.outputDir, { recursive: true })
+        f.writeTrace()
+        await linked
+        assert.deepEqual(received, [`mcts.run.${'b'.repeat(32)}`])
+        fs.writeFileSync(path.join(f.outputDir, 'artifact.patch'), 'fixture patch')
+        finished = true
+      }
+      return { stdout: '', stderr: '', exitCode: 0 }
+    })
+    assert.equal(result.traceId, received[0])
+    assert.equal(received.length, 1)
+  } finally { clearTimeout(deadline); f.close() }
+})

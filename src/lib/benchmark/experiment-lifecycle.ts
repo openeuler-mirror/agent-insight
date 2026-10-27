@@ -134,6 +134,7 @@ export async function finalizeBenchmarkCase(input: {
     },
   })
   if (!run) return true
+  if (await prisma.benchmarkCaseRun.count({ where: { retryOfRunId: run.id } })) return true
 
   const facts = parsedObject(run.runFactsJson)
   const traceId = typeof facts.traceId === 'string' ? facts.traceId.trim() : ''
@@ -149,8 +150,8 @@ export async function finalizeBenchmarkCase(input: {
     const artifactSummary = run.artifacts
       .map((artifact: { name: string; sha256: string }) => `${artifact.name} · ${artifact.sha256}`)
       .join('\n')
-    await prisma.experimentCase.update({
-      where: { id: run.experimentCaseId },
+    await prisma.experimentCase.updateMany({
+      where: { id: run.experimentCaseId, benchmarkRuns: { none: { retryOfRunId: run.id } } },
       data: {
         executionId: execution.id,
         taskId: execution.taskId || traceId,
@@ -160,8 +161,8 @@ export async function finalizeBenchmarkCase(input: {
     })
   } else if (traceId && run.status === 'execution_failed') {
     if (!(await shouldContinue())) return false
-    await prisma.experimentCase.update({
-      where: { id: run.experimentCaseId },
+    await prisma.experimentCase.updateMany({
+      where: { id: run.experimentCaseId, benchmarkRuns: { none: { retryOfRunId: run.id } } },
       data: { taskId: traceId },
     })
   }
@@ -239,7 +240,7 @@ export async function failBenchmarkCaseResults(caseRunId: string, message: strin
       where: {
         experimentId: run.experimentId,
         caseId: run.experimentCaseId,
-        case: { deletedAt: null, experiment: { deletedAt: null } },
+        case: { deletedAt: null, benchmarkRuns: { none: { retryOfRunId: caseRunId } }, experiment: { deletedAt: null } },
         status: { in: ['pending', 'running'] },
       },
       data: { status: 'failed', errorMessage: message },

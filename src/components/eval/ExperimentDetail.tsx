@@ -13,6 +13,7 @@ import { ArrowLeft } from 'lucide-react';
 
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
 import { CaseExecutionProgress } from '@/components/eval/CaseExecutionProgress';
+import { acceptBenchmarkProgress } from '@/lib/benchmark/execution-progress';
 import { acceptCaseProgress, type CaseExecutionProgress as CaseProgress } from '@/lib/engine/experiment/execution-progress';
 import { BenchmarkExecutionProgress } from '@/components/eval/BenchmarkExecutionProgress';
 import { benchmarkExecutionProgress, type BenchmarkProgressDetails } from '@/lib/benchmark/execution-progress';
@@ -79,6 +80,7 @@ interface ExperimentDetail {
     caseValues?: Record<string, unknown> | null;
     executionProgress?: CaseProgress | null;
     benchmark?: {
+      runId?: string; runAttemptNo?: number; generation?: number; revision?: number; evaluationAttemptNo?: number; traceId?: string | null; traceTaskId?: string | null; executionId?: string | null;
       submissionSource?: string;
       adapterKey: string;
       displayName: string;
@@ -261,10 +263,14 @@ export function ExperimentDetail({
         const retained = new Set<string>();
         const cases = (data.cases as ExperimentDetail['cases']).map(next => {
           const old = previous.cases.find(item => item.id === next.id);
-          if (old?.executionProgress && next.executionProgress && acceptCaseProgress(old.executionProgress, next.executionProgress) === old.executionProgress) {
+          const ordinary = old?.executionProgress && next.executionProgress ? acceptCaseProgress(old.executionProgress, next.executionProgress) : next.executionProgress;
+          const benchmark = old?.benchmark && next.benchmark ? acceptBenchmarkProgress(old.benchmark, next.benchmark) : next.benchmark;
+          if (old && (old.executionProgress && ordinary === old.executionProgress || old.benchmark && benchmark === old.benchmark)) {
             retained.add(next.id);
             return old;
           }
+          if (ordinary && ordinary !== next.executionProgress) return { ...next, executionProgress: ordinary, executionId: ordinary.executionId, taskId: ordinary.traceId };
+          if (benchmark && benchmark !== next.benchmark) return { ...next, benchmark, executionId: benchmark.executionId || null, taskId: benchmark.traceTaskId || benchmark.traceId || null };
           return next;
         });
         return { ...data, cases, results: [...data.results.filter((result: { caseId: string }) => !retained.has(result.caseId)), ...previous.results.filter(result => retained.has(result.caseId))] };
@@ -749,7 +755,7 @@ export function ExperimentDetail({
                           : <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>}
                         <td style={{ ...TD, maxWidth: 220 }}>
                           {detail.scope === 'benchmark'
-                            ? c.benchmark ? <BenchmarkExecutionProgress benchmark={c.benchmark} caseTitle={c.benchmark.externalCaseId || c.input || 'Case'} taskId={c.taskId} refreshFailed={refreshFailed} />
+                            ? c.benchmark ? <BenchmarkExecutionProgress benchmark={c.benchmark} caseTitle={c.benchmark.externalCaseId || c.input || 'Case'} refreshFailed={refreshFailed} />
                               : <span className="text-foreground-muted">进度暂不可用</span>
                             : c.referenceOutput ? truncate(c.referenceOutput, 60)
                               : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}
