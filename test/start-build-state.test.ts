@@ -171,6 +171,8 @@ test('start documents force rebuild; db push wrapper rejects arbitrary destructi
 
 test('db push forwards skip-generate on normal and allowed retry paths, preserving the default', t => {
   const f = fixture(t)
+  f.write('scripts/db_push.sh', fs.readFileSync('scripts/db_push.sh', 'utf8'))
+  f.write('scripts/trace-datasets/remove-legacy-summary.cjs', '')
   const bin = path.join(f.root, 'bin')
   f.write('bin/npx', `#!/bin/sh
 printf '%s\\n' "$*" >> "$CALLS"
@@ -183,7 +185,7 @@ fi
   fs.chmodSync(path.join(bin, 'npx'), 0o755)
   const calls = path.join(f.root, 'calls')
   const run = (args: string[], retry = '0') => spawnSync('sh', ['scripts/db_push.sh', ...args], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, RETRY: retry },
+    cwd: f.root, encoding: 'utf8', env: { ...process.env, ...f.env, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, RETRY: retry },
   })
   assert.equal(run([]).status, 0)
   assert.equal(run(['--skip-generate']).status, 0)
@@ -206,7 +208,7 @@ test('start.sh integration: reuse, source change, forced and failed rebuilds', {
   for (const file of ['start.sh', 'start-build-state.cjs', 'verify-standalone.cjs', 'db_push.sh']) {
     f.write(`scripts/${file}`, fs.readFileSync(`scripts/${file}`, 'utf8'))
   }
-  for (const file of ['prepare-ras-sqlite-schema.js', 'stop-orphan-trace-consumer.cjs', 'benchmark/generate-catalog.cjs']) f.write(`scripts/${file}`, '')
+  for (const file of ['prepare-ras-sqlite-schema.js', 'stop-orphan-trace-consumer.cjs', 'benchmark/generate-catalog.cjs', 'trace-datasets/remove-legacy-summary.cjs']) f.write(`scripts/${file}`, '')
   f.write('home/.env', '')
   f.write('public/logo.svg', 'logo')
   f.write('prisma/schema.prisma', 'schema')
