@@ -1,6 +1,8 @@
 ---
 title: "内置示例走查的成本参考"
 description: "用 deepseek-v4-flash 跑通内置示例的 生成 → 评测 → 优化 三个阶段，完整一次大约花多少钱，以及各阶段的成本占比。"
+keywords: ["Agent Insight", "内置示例", "模型成本", "Skill 优化"]
+changefreq: monthly
 ---
 
 # 内置示例走查的成本参考

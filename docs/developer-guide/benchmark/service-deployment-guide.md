@@ -1,6 +1,13 @@
-# Benchmark 整体服务安装指南
+---
+title: "Benchmark 通用服务部署指南"
+description: "介绍 Agent Insight、Agent 执行客户端和 Evaluator 的公共服务部署、互访配置与验收步骤，并提供各 Benchmark 的专属部署入口。"
+keywords: ["Agent Insight", "Benchmark", "Evaluator", "服务部署", "环境验收"]
+changefreq: monthly
+---
 
-本指南只说明安装步骤、执行命令和参数含义。架构与实现细节见 [`docs/design/benchmark/`](../../design/benchmark/README.md)。
+# Benchmark 通用服务部署指南
+
+本指南部署 Agent Insight、执行客户端和 Evaluator 的公共服务。完成公共安装后，按所选 Benchmark 阅读同级的 [SWE-bench 部署指南](swe-bench-deployment-guide.md) 或 [ZSoft 部署指南](zsoft-deployment-guide.md)，完成数据、执行环境和评测资产配置。架构与实现细节见 [`docs/design/benchmark/`](../../design/benchmark/README.md)。
 
 ## 1. 部署结构
 
@@ -32,11 +39,7 @@ benchmarks/<benchmark-key>/evaluator/
 generated/benchmark-catalog/
 ```
 
-开发或发布接入包时生成 Catalog：
-
-```bash
-npm run benchmark:catalog
-```
+接入包开发和 Catalog 生成由发布者完成，参见 [Benchmark 接入开发规范](benchmark-integration-development-guide.md)。部署者使用包含匹配 Catalog 的代码版本。
 
 ### 2.2 运行环境
 
@@ -119,49 +122,24 @@ bash scripts/start.sh --port 3100
 
 ## 4. 安装 Benchmark 数据集
 
-### 4.1 当前支持边界
+自动安装能力由接入包的 Dataset Preparer 在 Catalog 中注册，平台不内置各 Benchmark 的下载和解析逻辑。启动脚本按已支持的 Benchmark 顺序独立检查并导入；对应 `dataset.autoImport` 为 `false` 时跳过启动导入，不影响已有数据集或管理员手动安装。
 
-当前提供自动安装流程的数据集是 SWE-bench Verified。
-
-### 4.2 随服务启动自动安装
-
-启动 Agent Insight 时，`config/benchmark/platform.yaml` 的 `benchmarks.swe-bench.dataset.autoImport` 默认 `true`：
+准备或导入失败只警告，继续其他数据准备、构建和启动；本次准备本身仍同步等待。日志写入 `<AGENT_INSIGHT_HOME>/logs/<benchmark-key>-bootstrap.log`，默认 home 为 `~/.agent-insight`，每次尝试覆盖对应日志。修复后下次启动会重试，也可从项目根目录单独执行：
 
 ```bash
-bash scripts/start.sh
+npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <benchmark-key>
 ```
 
-首次启动会下载、校验并导入 500 条 Case。后续启动先检查当前数据库，已存在完整、可用的数据集时跳过下载和导入。将 `autoImport` 设置为 `false` 可跳过启动自动导入，但不影响已有数据集和管理员手动导入。`AGENT_INSIGHT_BENCHMARK` 不再控制此行为，`scripts/start.sh` 不再接受 `--benchmark` 参数。
+独立导入失败返回非零退出码；数据库初始化或构建失败仍会停止平台启动。已安装数据集不会因修改来源配置自动更新。具体来源、固定版本、离线依赖和刷新步骤分别见：
 
-准备或导入失败只输出简短警告，继续构建和启动服务；SWE-bench Verified 相关实验暂不可用。终端根据失败原因提示内网或本机来源、文件校验、Python 环境等处理方式，详细输出写入 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），每次启动覆盖该日志。当前仍同步等待本次准备结束，再继续启动；数据库初始化或构建失败仍会停止启动。
+| Benchmark | 部署说明 |
+|---|---|
+| SWE-bench | [数据集安装](swe-bench-deployment-guide.md#2-数据集安装) |
+| ZSoft | [数据集安装](zsoft-deployment-guide.md#2-数据集安装) |
 
-下次启动会自动重试。也可在修复后从项目根目录单独重试，无需重启已运行的服务：
+未注册准备器的接入包可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录，参见 [接入开发规范](benchmark-integration-development-guide.md)。普通数据集页面导入不能替代 Benchmark 数据集安装。
 
-```bash
-npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts
-```
-
-独立导入失败时返回非零退出码，便于管理员检查结果。
-
-如需内网或离线来源，在项目 `config/benchmark/platform.local.yaml` 中配置：
-
-```yaml
-benchmarks:
-  swe-bench:
-    dataset:
-      source: /srv/datasets/test.parquet
-    loader:
-      sourceArchive: https://mirror.example.com/swe-bench/source.tar.gz
-      python: /srv/python/bin/python
-```
-
-数据与归档来源均支持 HTTP(S) 地址或本机文件，`null` 使用官方默认来源。本机与下载文件均校验固定官方 SHA-256，不覆盖校验失败的本机文件。完全离线时，`loader.python` 应指向已安装官方 Loader 的 Python，否则首次创建环境仍需要可用的 pip 软件源。导入完成后原始数据文件可以删除；数据库中没有已安装数据集时才需要重新提供。
-
-旧的数据来源、Python 和路径/URL环境变量不再生效。导入配置错误与下载/导入错误一样只警告，不阻止平台启动。
-
-### 4.3 其他 Benchmark
-
-其他 Benchmark 必须提供自己的数据集安装方式。普通数据集页面导入不能替代 Benchmark 数据集安装。
+启动时重新生成 Catalog。源码与配置不变时，生成内容应保持一致；Python 缓存和 `.DS_Store` 不参与摘要，无需手动恢复生成文件。真实源码变更会更新摘要与 Runtime 镜像标签。
 
 ## 5. 安装 Evaluator
 
@@ -209,7 +187,19 @@ bash scripts/evaluator.sh start \
 | `--platform-base-url URL` | Evaluator 回访 Agent Insight 的地址 |
 | `--port PORT` | Evaluator 对外端口，默认 `3001` |
 | `--bind-address ADDRESS` | Evaluator 监听地址，默认 `0.0.0.0` |
-| `--evaluator-env NAME=VALUE` | 传入环境参数；业务配置改用 `config/benchmark/evaluator.local.yaml` |
+| `--evaluator-env NAME=VALUE` | 可重复传入；已知业务变量转换为本次启动的配置覆盖，其他变量传入 Controller/Runtime |
+
+原有并发命令可直接使用，无需创建 YAML 文件：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url http://host.docker.internal:3000 \
+  --evaluator-env EVALUATOR_MAX_CONCURRENCY=4
+```
+
+优先级为显式 `--evaluator-env` > `evaluator.local.yaml` > `evaluator.yaml` > 默认值；同一变量重复传入时最后一个生效，仅影响本次启动，不改写 YAML。业务覆盖在合并后统一校验，非法值在替换旧服务前报错。日志打印最终并发、镜像池和预取配置；`/health.maxConcurrency` 应为 4。普通进程环境里的旧变量仍不隐式覆盖 YAML，端口继续使用 `--port`，配置快照和镜像池内部磁盘参数禁止直接覆盖。
+
+SWE-bench 同样支持 `SWE_BENCH_PYTHON`、`SWE_BENCH_IMAGE_SOURCE`、`SWE_BENCH_IMAGE_ARCH`、`SWE_BENCH_ALLOW_NON_OFFICIAL`、`SWE_BENCH_IMAGE_PROXY_PREFIX`、`SWE_BENCH_VERIFIED_MIRROR_REPOS`、`SWEBENCH_DOCKER_TIMEOUT` 和 `SWEBENCH_DOCKER_POOL_SIZE` 的显式覆盖。镜像仓库列表接受逗号分隔或 JSON 字符串数组，空字符串关闭额外仓库，`null` 恢复内置仓库；未知 SWE-bench/镜像池配置变量明确报错，不再忽略。
 
 验证 Evaluator：
 
@@ -233,7 +223,7 @@ imagePool:
 
 修改后重新执行 `bash scripts/evaluator.sh start`，按 5.1/5.2 节补充通信地址与端口参数。启动脚本在 Controller 镜像内校验配置，不要求宿主安装 Node.js；配置无效时不会停止旧服务。校验后的 JSON 快照传给 Controller 和 Benchmark Runtime，禁止用 `--evaluator-env` 覆盖快照。
 
-SWE-bench 镜像来源、架构、非官方许可、代理和镜像仓库在 `benchmarks.swe-bench.images` 配置，Python 在 `benchmarks.swe-bench.python`，Docker SDK 超时和连接池在 `benchmarks.swe-bench.docker`。`verifiedMirrorRepositories: null` 使用内置仓库，`[]` 关闭额外镜像仓库；Epoch 仅允许显式许可的 ARM64 冒烟。
+也支持显式传入 `--evaluator-env IMAGE_POOL_ENABLED=false`、`IMAGE_POOL_PREFETCH_ENABLED=false`，以及 `IMAGE_POOL_RESERVE_RATIO`、`IMAGE_POOL_HIGH_WATERMARK`、`IMAGE_POOL_MAX_PULLS`、`IMAGE_POOL_WAIT_SECONDS`、`IMAGE_POOL_MAC_DISK_PATH`。布尔值接受 `true/false/1/0`，路径相对所选配置目录解析。参数通过 stdin 交给容器内校验器，不出现在辅助 Docker 命令参数中；日志只打印固定配置摘要，不输出非业务 Runtime 凭据。
 
 镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。平台通过 `/health` 发现预取状态，无需额外令牌。Evaluator 端口应只允许平台访问。
 
@@ -254,7 +244,7 @@ SWE-bench 镜像来源、架构、非官方许可、代理和镜像仓库在 `be
 maxConcurrency: 2
 ```
 
-平台侧未覆盖时保持默认值。修改平台配置后重启平台；修改评测配置后重新运行 Evaluator 启动命令。旧并发/待评测上限环境变量不再生效。
+平台侧未覆盖时保持默认值。修改平台配置后重启平台；修改评测配置后重新运行 Evaluator 启动命令。旧进程环境中的并发/待评测上限变量不再隐式覆盖 YAML；评测并发可用显式 `--evaluator-env EVALUATOR_MAX_CONCURRENCY=4` 覆盖。
 
 启动后验证：
 
@@ -262,7 +252,7 @@ maxConcurrency: 2
 curl -fsS http://127.0.0.1:3001/health
 ```
 
-确认返回的 `maxConcurrency` 为 2；使用其他端口时替换 `3001`。并发值的实测方法、Case 数量上限的统计方式及调度行为见[并发调度方案](../../../评测服务文档/benchmark并发执行与评测调度方案.md)。
+确认返回的 `maxConcurrency` 为 2；使用其他端口时替换 `3001`。Case 数量上限的统计方式及调度行为见 [Benchmark 执行与评测调度](../05-data-and-control-flow.md#实验并发与资源调度)。
 
 ## 6. 配置 Agent Insight 与 Evaluator 的互访地址
 
@@ -312,75 +302,80 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 - 客户端具备 Benchmark 要求的 Agent Runtime；
 - 客户端可以访问代码仓库和 Agent Insight。
 
-### 7.1 配置 SWE-bench Case 源码来源（可选）
+### 7.1 执行机配置与 Runtime 接入
 
-在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；安装版常驻客户端对应目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`。安装升级会更新默认文件、保留 local 文件；旧目录下的 `config/executor.local.yaml` 会在新目录尚无覆盖文件时迁移，并保留原相对 Git 路径的实际位置。也可由 `AGENT_INSIGHT_CONFIG_DIR` 指定配置目录。
+源码运行时在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；curl 安装版统一使用 `~/.agent-insight/config/executor.local.yaml`，自定义根目录时为 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`。安装器自动准备用户配置目录并打印路径，不要求创建配置文件。安装升级只更新运行时内置的 `executor.yaml`，不覆盖用户配置。安装版不读取、迁移或回退到 `client/runtime/config/benchmark/executor.local.yaml` 或更早的 `client/runtime/config/executor.local.yaml`；旧文件保留但不生效，需要的配置请自行写入新路径。配置中的相对路径以新配置文件所在目录为基准。显式设置 `AGENT_INSIGHT_CONFIG_DIR` 时仍从指定目录读取 `executor.yaml` 与 `executor.local.yaml`，不叠加上述用户配置。
 
-```yaml
-benchmarks:
-  swe-bench:
-    gitSource: /srv/swe-git
-```
+执行机的 Benchmark 专属准备分别见 [SWE-bench](swe-bench-deployment-guide.md#3-执行端准备) 和 [ZSoft](zsoft-deployment-guide.md#3-执行端准备)。MCTS 是 Agent Runtime，接入与连接预检见 [MCTS xGovernor 接入](../../user-guide/observability/mcts-xgovernor.md#用于平台-benchmark-实验)，不按 Benchmark 另建安装流程。
 
-`gitSource` 也可填写 `https://git.example.com`；`null` 使用默认 Gitee → GitHub 来源，不持久缓存。旧 `SWE_BENCH_GIT_SOURCE` 不再生效，发现残留配置会提示迁移。
+### 7.2 参数配置与客户端更新
 
-| 配置值 | 行为 |
-|---|---|
-| 不配置 | 从默认远程源获取，不保留本地缓存 |
-| 本地目录，如 `/srv/swe-git` | 优先使用并维护本地仓库缓存 |
-| Git 根地址，如 `https://git.example.com` | 优先从指定 Git 服务获取 |
+支持通用参数协议的 Runtime 由客户端上报默认配置，平台统一提供嵌套 key/value、JSON 导入导出和同 Runtime 参数模板。平台保存并下发完整配置，不改写字段名称或层级；实际 CLI、JSON/YAML 等交付方式由执行端适配。默认配置和本机覆盖不替代实验冻结的显式值。契约与扩展入口见 [Agent Runtime 参数](../04-api-and-contracts.md)。
 
-Git 根地址会拼接为 `根地址/owner/repo.git`。例如 Flask 仓库对应 `https://git.example.com/pallets/flask.git`。
-
-### 7.2 接入 pi-mcts 执行器
-
-实验候选接口会独立合并已就绪的 Benchmark 执行目标，因此仅声明 `runBenchmarkCase` 的 `pi-mcts` 可直接出现在 Agent 列表；它不依赖普通执行能力或历史 Trace。同一客户端、平台和 Agent 的目标合并后保留各自的执行能力标记。
-
-已有 MCTS/xGovernor 服务的使用方可直接按 [MCTS 接入指南](../../user-guide/observability/mcts-xgovernor.md#接入前确认) 完成采集器安装、连接配置和客户端绑定，无需重新部署已有服务。
-
-`pi-mcts` 只用于 SWE-bench Benchmark 实验。按 MCTS README 完成一次性安装：**实际执行 Case 的客户端机器**准备 MCTS、Python 3.11+ 与 `datasets`、Reliability Client 和已启用的 `mcts-xgovernor-proxy` Trace 代理；**xGovernor 主机**准备 Pi CLI、Pi 桥接扩展和 Pi/E2B worker，并确保 E2B 的 SWE-bench 模板可用。两者可以分机部署，客户端不探测本地 Pi CLI。默认使用客户端 MCTS 仓库下的 `.venv/bin/python`；虚拟环境放在别处时可通过本机配置指定解释器。客户端不依赖交互终端的 venv 激活状态。MCTS 版本需支持 `--output-dir`，无需修改 MCTS 源码。执行机运行 Reliability Client 的账户必须能读取 MCTS 仓库及 `testcases_union/config.env`，并能在 `testcases_union/output/` 下写入；xGovernor 与 Trace 上报地址必须可达。
-
-在“客户端安装”页勾选 MCTS，仅填写执行机上的仓库绝对路径。生成命令通过管道右侧的 `AGENT_INSIGHT_MCTS_REPO_DIR` 将路径交给本机安装器，不把路径发到服务端，也不要求填写 xGovernor 地址：
+更新 Runtime 或 Collector 后，在每台执行机重新运行客户端安装页生成的命令；已有注册的执行机也可在新版源码目录运行：
 
 ```bash
-curl -sSf "https://insight.example.com/api/ingest/setup?key=<your-api-key>&yes=1&frameworks=mcts-xgovernor" | AGENT_INSIGHT_MCTS_REPO_DIR='/opt/MCTS' bash
+node scripts/install-ras-client.js
 ```
 
-安装顺序为仓库/Python/连接预检 → Trace 采集器安装 → 路径写入 `.env` → 常驻客户端注册和启动。预检或采集器失败会终止流程；MCTS 接入时客户端注册或启动失败也返回非零退出码，不输出 READY。重新执行命令可更新路径、采集配置并重启客户端。安装器不部署 xGovernor、不修改 MCTS 文件。
+安装器保留绑定与 `executor.local.yaml`，复制新版运行时并重启。只更新 checkout 或重启旧服务不会更新安装目录副本。Runtime YAML 定制应在源码或配置仓维护并随安装发布，安装目录中的定义会被升级覆盖。客户端约每 30 秒重新读取并上报定义，修改后等待上报并刷新页面，或重启客户端。
 
-`services/executor/src/mcts-config.cjs` 统一实现路径解析、Python 检查、连接读取和配置持久化，同时进入客户端 tar 包与 MCTS 采集器 zip 包。读取连接时在独立 Bash 子进程加载 `testcases_union/config.env`，仅提取 URL，丢弃其 stdout/stderr；检查 HTTP(S) URL，再进行 TCP/TLS 连接预检。连接预检不执行付费任务，也不代表模型/E2B 全链路验证。
+首次启用新协议时先升级平台，再升级执行客户端。历史实验快照保留原值；契约变化时使用匹配客户端或确认原配置后新建实验，不回写历史快照。
 
-MCTS 安装器将本次版本的上传模块放入采集器目录内的 `shared/`，运行时优先读取此副本，保留旧版 `../shared/` 的兼容读取。升级不覆盖其他采集器已有的共享模块，避免版本差异阻止重复安装。
+### 7.3 原生 Pi/xiaoO 的 SWE-bench：xGovernor 本地 Docker
 
-仓库路径自动保存到本机 `AGENT_INSIGHT_HOME/.env`，默认 `~/.agent-insight/.env`。自定义部署仍支持 `AGENT_INSIGHT_MCTS_PYTHON` 和 `AGENT_INSIGHT_MCTS_TRACE_LAUNCHER`，默认分别为 `<仓库>/.venv/bin/python` 和 `<Agent Insight home>/collectors/mcts-xgovernor-proxy/run.cjs`。配置优先级为进程环境 → `.env` → 兼容 JSON 字段 `mctsRepoDir` / `mctsPython` / `mctsTraceLauncher` → 默认值。旧 systemd 环境覆盖需由部署者同步维护；客户端只读取这三个 MCTS 项。
+`swe-bench + pi-agent/xiaoo` 默认使用 `xgovernor-local-docker`，环境未就绪时不会回退宿主机执行。平台和 Evaluator 无需安装 xGovernor；MCTS 使用自己的独立服务。
 
-MCTS 就绪探测通过配置的 Python 检查版本及 `importlib.util.find_spec("datasets")`，不导入 `datasets` 及其传递依赖。探测上限为 5 秒，超时、无法启动、缺包、异常退出与版本不足分别返回明确原因，避免将执行机临时负载造成的超时误报为依赖未安装。实际 MCTS 运行仍正常导入依赖；运行时导入失败按实际进程错误处理。
+**准备与安装**
 
-这些是执行机本地配置，不进入服务端下发的 Case 任务。缺少 MCTS 脚本、Python、Trace 代理配置或所需 MCTS 版本时，客户端会将 `agent-runtime/pi-mcts/v1` 标为未就绪。`pi-mcts` 不会出现在普通生成 Trace 实验中。
+执行机需为 Linux x64/arm64，Docker 可用且使用 cgroup v2，并具备原生 Agent 的模型配置。Git、C/C++、make、pkg-config、OpenSSL 开发库、curl、tar、xz 和 Python/TOML 读取能力由管理员提前准备；实验环境检查不会隐式执行系统包管理器或提权。执行机还需能访问 GitCode、Rust/Cargo、Node 与 npm 下载源；不足的 Node/Rust 工具链安装到独立依赖目录。
 
-执行器每次从 MCTS `config.env` 读取真实 xGovernor 地址，以 `--upstream` 传给严格模式 Trace 代理。代理将动态地址放入 `AGENT_INSIGHT_MCTS_PROXY_URL`；本次专用 `python` 脚本在 MCTS 加载配置之后，将 `XGOVERNOR_BASE_URL` 恢复为代理地址并 exec 原解释器。手动启动器也为每次运行创建独立 Python 包装目录，退出时清理。固定 URL 不会绕过采集，无需修改 MCTS 配置文件。未配置仓库的历史独立 Trace 安装仍读取 `upstreamUrl` / `AGENT_INSIGHT_MCTS_UPSTREAM_URL`。
+1. 在平台 **配置 → 客户端安装** 选择 Pi/xiaoO，执行页面生成的一条 curl 命令（见第 7 节）。
+2. 安装仅接入链路采集和基础客户端，不因选择 Pi/xiaoO 就编译 xGovernor。确认客户端在线后创建单 Case 实验。
+3. 在实验第二步选择主机、模型及 Case，点击下一步后检查环境；缺少受管理组件时自动编译 xGovernor、配套组件和 xiaoO 凭据桥接，通过复查后自动进入第三步。首次编译期间底部提示可能需要几分钟。需要配置模型凭据或系统依赖时，按底部说明在执行机处理，再次点击下一步。
+4. 开始实验后检查 Trace、`model.patch` 和官方评测结果。准备复用原生 Agent 模型配置，无需另配 xGovernor Key；已有有效安装不会重复编译。
 
-每个 Case 的执行命令由客户端固定为 `run_union.sh --mode sweverified --runtime pi --testbench sweverified --instance-id <Case ID> --split test --output-dir <runId>`，并通过严格模式 Trace 代理启动。搜索参数由执行机的 Runtime YAML 和本机默认值覆盖解析，并显式追加到 CLI；新建实验冻结页面参数，不自动选择联调预设。显式 CLI 参数覆盖 MCTS `config.env` 中的对应环境配置。客户端创建本次运行专用的 `python` 启动脚本，直接 `exec` 配置的 Python 解释器，再运行原版 `run_union.sh`。启动脚本保留原解释器路径，使 Python 正确识别虚拟环境及 `datasets`；不要把 venv 解释器符号链接到外部目录后执行。MCTS 只将最终选中节点写入 `testcases_union/output/sweverified/<runId>/artifact.patch`；客户端检查 Patch 后应用到该 Case 的冻结 Git 工作区，再由现有 `git-patch/v1` Collector 生成并上传 `model.patch`。Trace 代理的本地状态按 Case 隔离，客户端从其运行记录取得根 Session ID（`mcts.run.<32 位十六进制>`），作为回调 `traceId`，与平台 `Execution.taskId` 保持一致。OTLP 的 32 位 Trace ID 仅用于传输，不直接用作页面跳转；历史误存 OTLP ID 的 Case 在读取时按同一账户下根 Session ID 的 SHA-256 精确映射，不按时间邻近猜测。停止实验时客户端向进程组发送 SIGINT，给 MCTS 的 `finally` 清理和 Trace 代理上传留出 30 秒，然后强制终止仍未退出的进程。
+安装状态可在执行机查看；自定义 `AGENT_INSIGHT_HOME` 时相应替换路径：
 
-MCTS 的字段、中文名称、分组、类型、校验范围、默认值、联调预设和 CLI 绑定统一声明在 `services/executor/runtimes/mcts/runtime.yaml`。`pi-mcts` 与 `xiao-mcts` 共用此描述，内部 Runtime 映射仍为 `pi` / `xiaoo`；客户端自动发现仍只注册已有 Pi 目标。前六项为正安全整数，Token 阈值为非负安全整数，`0` 表示关闭熔断。默认值为 `5、3、160、80、160、80、30000000`；空输入按字段的 `required` 校验。
+```bash
+node ~/.agent-insight/client/runtime/xgovernor.cjs status
+```
 
-执行机可在 `config/benchmark/executor.local.yaml` 覆盖默认值，安装版目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`：
+**默认行为**
+
+| 项目 | 默认值或行为 |
+|---|---|
+| 模型与凭据 | 沿用实验选择及原生 Agent 配置，每个 Case 准备时读取；无需另配 xGovernor Key |
+| 隔离 | 每 Case 独立服务和工具容器，监听端口动态分配；工具容器断网，模型请求由宿主机控制器发出 |
+| 工具容器资源 | 2 CPU、4 GiB 内存、512 PID |
+| 本地记录 | 默认保留 7 天，只清理已结束且上传、资源清理均已确认的记录；镜像另行管理 |
+| Case 镜像 | 使用镜像内源码；来源和架构配置见 [SWE-bench 镜像配置](swe-bench-deployment-guide.md#原生-pixiaoo-的-case-镜像) |
+
+**可选配置**
+
+curl 安装版编辑 `~/.agent-insight/config/executor.local.yaml`；源码运行编辑仓库 `config/benchmark/executor.local.yaml`。自定义配置目录规则见 7.1。以下为默认值，按需覆盖即可：
 
 ```yaml
-runtimes:
-  mcts:
-    defaults:
-      maxIters: 3
-      tokenFuseLimit: 0
+retention:
+  days: 7
+execution:
+  profiles:
+    xgovernor-local-docker:
+      resources: { cpu: 2, memoryMiB: 4096, pids: 512 }
 ```
 
-优先级为 Runtime YAML 默认值、本机默认值覆盖、本次实验输入。覆盖按 Runtime 和字段合并，字段设为 `null` 恢复 YAML 默认值。未知 Runtime、未知字段或非法取值会明确报错。参数定义修改后重启客户端并刷新页面；客户端会重新上报描述。安装更新保留 `executor.local.yaml`。源码定义位于 `services/executor/runtimes/`，安装到常驻客户端后位于 `$AGENT_INSIGHT_HOME/client/runtime/executor/runtimes/`。
+**更新与排障**
 
-客户端在每个 platform 的 `parameterDefinitions` 上报生效的展示描述和 `definitionDigest`，不包含 CLI 绑定。通用模块为 `packages/agent-runtime/index.cjs`（协议、字段校验）与 `loader.cjs`（YAML 加载、覆盖、摘要、argv）。参数值采用 `agentOptions: { runtimeKey, definitionDigest, values }`；平台和执行端按所选 platform/agent 验证，摘要不一致返回 `AGENT_DEFINITION_CHANGED` 并要求刷新确认。平台创建实验时补齐默认值，将生效参数及 `agentParameterDefinition` 存入原有配置快照；参数值纳入任务摘要，复用和重试时继承，详情按冻结描述展示。旧 `agentOptions.mcts` 不兼容、不迁移，历史旧参数不展示或复用。
+更新平台后，重新执行安装页生成的 curl 命令，等待安装完成及客户端重新上报能力。匹配版本会复用；缺少组件、旧布局或目录曾被移动时自动重建。执行环境摘要变化后需新建实验并重新选择环境，历史记录不会自动重跑。
 
-平台及常驻客户端需同步升级。安装 bundle、npm 和 standalone 包均包含 `services/executor/runtimes/` 与共享加载器；重新执行页面生成的客户端安装命令即可部署并重启。OpenCode 具有 `services/executor/runtimes/opencode/runtime.yaml` 空参数定义，新增受支持的字段和 argv 绑定后，普通实验、Skill 实验和 Benchmark 页面复用通用参数表单与启动链路。Runtime 的主命令、工作区、Trace 和产物处理仍由代码实现，YAML 不能覆盖保留的系统启动参数。
+| 现象 | 处理 |
+|---|---|
+| Docker / cgroup v2 未就绪 | 管理员修复宿主机，再重跑安装命令 |
+| 构建失败或凭据桥接缺失 | 查看安装输出及 `status`，修复构建依赖、下载网络或权限后重跑 curl |
+| 模型配置或凭据解析失败 | 按 Case 中的具体原因检查原生 Agent 配置、凭据库及运行账号 |
+| 已有 Patch，但评测失败 | 按 [SWE-bench 排查与更新](swe-bench-deployment-guide.md#6-排查与更新) 检查 Evaluator |
 
-部署后先运行一个 SWE-bench Case：选择 `mcts-coordinator` Agent、`pi-mcts` 平台、默认模型及已就绪执行机，设置足够长的 Agent 超时；完成后检查 Case 中的根 Trace 链接、`model.patch` 和平台评测结果。MCTS 自身的最终节点官测是搜索过程的一部分，不能代替平台的 Benchmark 评测。`mcts-coordinator` 是展示和 Trace 检索名称；能力上报、任务的 `platform/agent` 均保持 `pi-mcts`。Agent 超时计时覆盖整个 MCTS 子进程；采集根 Trace 的开始时间是首次 xGovernor 请求，不能用这条 Trace 的耗时代替执行期限。采集器终态的失败或中断映射到已有 `agent-process-exit` failure，详情与 SQL 列表/聚合均据此显示失败。
+手动版本更新、回退及安装实现见 [受管理安装与版本](benchmark-integration-development-guide.md#受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](benchmark-integration-development-guide.md#原生执行高级配置)。
 
 ## 8. 整体验收
 
@@ -447,13 +442,13 @@ bash scripts/evaluator.sh start \
 # 查看服务状态
 bash scripts/evaluator.sh status
 
-# 查看镜像池管理的镜像
+# 查看镜像池与受管 Runtime 镜像的清理预览
 bash scripts/evaluator.sh images list
 
-# 预览可清理的空闲镜像
+# 预览可清理的空闲 Case 镜像与旧 Runtime
 bash scripts/evaluator.sh images purge --dry-run
 
-# 保持服务运行，清理空闲镜像
+# 保持服务运行，清理空闲 Case 镜像与旧 Runtime
 bash scripts/evaluator.sh images purge
 
 # 立即停止服务，保留镜像
@@ -472,3 +467,9 @@ bash scripts/evaluator.sh stop --purge-images
 | `--purge-images` | 停止服务时同时清理评测服务管理的镜像 |
 
 停止服务不需要传端口参数，自定义端口启动的服务也使用相同命令。
+
+`start` 在新 Controller 通过 Doctor 后自动清理旧 Runtime；正常启动只显示 Doctor 和清理数量摘要，不逐项打印镜像 ID、摘要和 JSON。失败仍显示具体原因；Runtime 清理失败只打印警告，不停止已启动的服务。手动执行 `bash scripts/evaluator-doctor.sh`、`images list/purge` 保留完整诊断结果。在线 `images list/purge` 使用运行中 Controller 内的 Catalog 和配置，不使用宿主工作区的 Catalog；旧版 Controller 需先执行 `start` 升级。关闭 Case 镜像池时，Runtime 清理仍可使用。
+
+Runtime 清理只处理同一 Docker daemon、同一数据卷中已登记且身份确认的 Runtime。始终保留当前 Catalog 所需引用及相同 Image ID、被任何容器（包括已停止容器）引用的镜像、未确认操作、被改写的引用及存在额外标签/其他仓库 digest 的镜像。删除不使用强制模式，不停止任务，也不执行全局 prune。输出的 `runtimes` 包含候选、删除、保留原因和失败项；`--dry-run` 不删除镜像或归属记录。预装/手工构建且未登记的历史 Runtime、Case 资产镜像及构建缓存不在 Runtime 清理范围内。
+
+完成公共服务安装后，分别按 [SWE-bench 部署指南](swe-bench-deployment-guide.md) 或 [ZSoft 部署指南](zsoft-deployment-guide.md) 验收所选 Benchmark。

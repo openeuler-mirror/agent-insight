@@ -1,3 +1,10 @@
+---
+title: "OTLP 属性契约 (FR-011)"
+description: "定义 Agent Insight 接收 OTLP Trace 和 Log 的传输、属性及内部映射约定，指导采集端兼容接入。"
+keywords: ["Agent Insight", "OpenTelemetry", "OTLP", "属性契约", "链路采集"]
+changefreq: monthly
+---
+
 # OTLP 属性契约 (FR-011)
 
 > 本文档定义 OpenClaw 及其他 OTLP/HTTP 客户端向 Agent Insight 上报 trace/log 时必须遵守的属性契约。服务端依据此契约解析、归一化并存储为 `Execution` / `Session` 记录。
@@ -242,6 +249,18 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 落库模型：`RasAnomalyEvent`。实现：`src/lib/ingest/ras/*`、`src/app/api/ingest/ras-events`；推送方：同进程 `agent_ras/ras_runtime/insight_push.py`（fail-open）。同一 `taskId + deliveryId` 幂等更新；相同内容的两次真实异常使用不同 `deliveryId`，不会被错误合并。`payload.actions[]` 保留动作类型及完整 `message`；`payload.trace_anchor` 使用 `message_id + part_id + channel` 定位**检测点**，或使用 `call_id + channel=tool_call` 定位工具调用。`action_result` 携带同一检测锚点、实际投递内容，以及可选的 `payload.delivery_anchor`（`message_id` 必须是**平台分配**的投递消息 id，才可把投递交互重分类为 RAS；`channel` 为 `ras_notice` 或 `ras_steering`）。拿不到平台真 id 时**省略** `delivery_anchor`，**禁止**客户端伪造 id。**不做**正文匹配兜底。
 
 宿主上传生命周期：`fire_push_*` 注册 per-session pending handle；平台在异常与全部 `action_result` 入队后调用内部 `flush(timeout_ms)`，以 HTTP 2xx 作为 ack。flush 只等待调用时的 pending 快照，返回 `attempted/acked/failed/pending/timed_out`；并发 flush 各自使用本地快照结算，不会互相消费回执。未 flush 的完成回执按 session 最多保留 256 条，避免长驻宿主无界增长。超时不得取消上传或向 Agent 主流程抛错。OpenCode 的主 flush 点是 `onActions` 末尾，idle/bye 仅兜底，`reset` 不清理 pending。该有界 drain 保证正常短生命周期结束；SIGKILL/断电保证需另建持久化 outbox。
+
+## xGovernor 单 Agent Benchmark Trace
+
+该路径由 `xgovernor-agent` Adapter 接管，要求根 Session 为 `xgovernor:<runId>` 且带有 `xgovernor.runtime_id`，复用 Pi canonical 的 USER/LLM/Tool/Agent 映射，按 `agent.insight.framework` 保留 `pi-agent` 或 `xiaoo` 的身份。不改变原生 CLI 与 MCTS 的 Trace 归属。
+
+| 属性 | 来源与含义 |
+| --- | --- |
+| `benchmark.run_id` | 平台本次 Case Run ID |
+| `xgovernor.runtime_id` | 独立 daemon 下精确创建并持久化的 Runtime ID |
+| `agent.insight.framework` | 本次执行平台，由共享 Trace transport 写入 |
+
+Pi 的正文来自原生 JSONL；xiaoO 来自透明 worker 代理保存的完整 schema 1 state，不从 SSE 摘要或 SQLite 私有表拼接。调用与工具结果必须完整匹配；缺失时执行报告 Trace 不完整。xiaoO 仅上报原始 `api_usage_tokens` 总数，不推算输入/输出分项。业务 Trace ID 与 OTLP 传输 ID 分开，Case 链接使用前者。Trace 先写 durable spool，资源关闭后仍可重传；实际入库确认继续遵循既有规则。
 
 ## Goal Plus Pi 被动导入属性
 

@@ -283,7 +283,7 @@ export async function draftTriggerEvalSet(args: DraftTriggerEvalSetArgs): Promis
   // 3. 解析
   const rawArr = extractJsonArray(text);
   if (!rawArr) {
-    logger.warn('Failed to parse LLM draft output as JSON array', { textHead: text.slice(0, 200) });
+    logger.warn('Failed to parse LLM draft output as JSON array', { textLength: text.length });
     throw new Error('LLM 起草输出无法解析为 JSON 数组；查看 server 日志');
   }
   const draftItems: TriggerItem[] = [];

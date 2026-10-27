@@ -34,6 +34,7 @@ import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTre
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import type { AgentOptions, RuntimeDefinition } from '@/lib/engine/experiment/runtime-options';
+import { RuntimeParameterSnapshot } from '@/components/eval/RuntimeParameterSnapshot';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -75,7 +76,7 @@ interface ExperimentDetail {
   executionParameterDefinition?: RuntimeDefinition | null;
   reusableConfig?: {
     traceSource?: string | null;
-    executionTarget?: { model?: string | null; timeoutSeconds?: number | null } | null;
+    executionTarget?: { model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; resources: { cpu: number; memoryMiB: number } } | null } | null;
   };
   preset?: string | null;
   watchMode?: boolean;
@@ -96,6 +97,7 @@ interface ExperimentDetail {
     traceAttemptStatus: string | null;
     caseValues?: Record<string, unknown> | null;
     benchmark?: {
+      submissionSource?: string;
       adapterKey: string;
       displayName: string;
       externalCaseId: string;
@@ -122,6 +124,8 @@ interface ExperimentDetail {
         contentUrl: string;
       }>;
       runStatus: string;
+      environmentFacts?: { imageId: string | null; toolBoundary: string | null; controllerBoundary: string | null; network: string | null } | null;
+      cleanupStatus?: string | null;
       progressStage: string | null;
       workspaceProvider: string | null;
       evaluationStatus: string | null;
@@ -385,8 +389,6 @@ export function ExperimentDetail({
   const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || DEFAULT_BENCHMARK_CASE_COLUMNS;
   const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
-  const runtimeParameters = detail?.executionAgentOptions?.values;
-  const runtimeParameterFields = detail?.executionParameterDefinition?.parameters.filter(field => runtimeParameters?.[field.key] !== undefined) || [];
   const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
   const focusVisible = Boolean(!loading && focusCaseId && detail?.id === id && detail.casePage === casePage
     && detail.casePageSize === casePageSize && detail.cases.some(item => item.id === focusCaseId));
@@ -496,11 +498,12 @@ export function ExperimentDetail({
               }}>
                 {status.label}
               </span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
+              <span><span style={{ color: 'var(--foreground-muted)' }}>{detail.reusableConfig?.traceSource === 'import' ? '提交来源：' : '待评测 Agent：'}</span>{detail.agentName || '—'}</span>
               {detail.reusableConfig?.traceSource === 'generate' && detail.reusableConfig.executionTarget && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
+              {detail.reusableConfig?.executionTarget?.executionProfile && <span><span style={{ color: 'var(--foreground-muted)' }}>执行环境：</span>{detail.reusableConfig.executionTarget.executionProfile.key}{detail.reusableConfig.executionTarget.executionProfile.sourceRevision && ` · ${detail.reusableConfig.executionTarget.executionProfile.sourceRevision.slice(0, 12)}`} · 工具断网 · {detail.reusableConfig.executionTarget.executionProfile.resources.cpu} CPU / {detail.reusableConfig.executionTarget.executionProfile.resources.memoryMiB} MiB</span>}
               {Number.isSafeInteger(executionTimeoutSeconds) && executionTimeoutSeconds > 0 && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>Agent 单次执行上限：</span>{executionTimeoutSeconds} 秒</span>
               )}
@@ -533,19 +536,7 @@ export function ExperimentDetail({
                 </span>
               )}
               </div>
-              {runtimeParameterFields.length > 0 && (
-                <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 border-t border-[var(--border)] pt-3">
-                  <span className="font-semibold">{detail.executionParameterDefinition?.displayName} 运行参数</span>
-                  <dl className="flex flex-wrap gap-x-5 gap-y-2">
-                    {runtimeParameterFields.map((field) => (
-                      <div key={field.key} className="flex">
-                        <dt className="text-[var(--foreground-muted)]">{field.label}：</dt>
-                        <dd>{String(runtimeParameters![field.key])}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              )}
+              <RuntimeParameterSnapshot definition={detail.executionParameterDefinition} options={detail.executionAgentOptions} />
             </div>
 
             {detail.traceProgress && detail.traceProgress.failed > 0 && (
@@ -744,6 +735,10 @@ export function ExperimentDetail({
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
                           {detail.scope === 'benchmark' && c.benchmark?.submissions.length ? (
                             <div style={{ minWidth: 0 }}>
+                              {c.benchmark.environmentFacts && <div style={{ fontSize: 10, color: 'var(--foreground-muted)', overflowWrap: 'anywhere', marginBottom: 6 }}>
+                                工具边界：{c.benchmark.environmentFacts.toolBoundary} · 控制器：{c.benchmark.environmentFacts.controllerBoundary} · 网络：{c.benchmark.environmentFacts.network} · 清理：{c.benchmark.cleanupStatus || '待确认'}<br />
+                                镜像：{c.benchmark.environmentFacts.imageId || '—'}
+                              </div>}
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                                 <span title={c.benchmark.submissions.map((item) => item.name).join('\n')}>
                                   {c.benchmark.submissions.length} 个提交物 · {c.benchmark.submissions.map((item) => item.name).join('、')}
@@ -875,7 +870,7 @@ export function ExperimentDetail({
                                 ...c, evaluatorIds: detail.evaluatorIds, results: detail.results.filter((row) => row.caseId === c.id),
                               })}
                               onDeleted={(experimentDeleted) => experimentDeleted ? router.replace('/experiments') : load(true)} />}
-                            {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
+                            {c.benchmark?.submissionSource !== 'imported' && (c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
                                 disabled={!!retryingCaseId}

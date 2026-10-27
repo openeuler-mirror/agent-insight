@@ -21,7 +21,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { spawnSync } from 'node:child_process'
 
-const { manage } = require('../services/evaluator/src/manage.cjs')
+const { manage, formatManagementOutput } = require('../services/evaluator/src/manage.cjs')
 const { ServiceControl, recordManagedImage } = require('../services/evaluator/src/service-control.cjs')
 const { EvaluationJobJournal, atomicWriteJson } = require('../services/evaluator/src/job-journal.cjs')
 
@@ -51,6 +51,39 @@ evaluator_management_run sha256:test ${args}
   }
 })
 
+test('online image management uses the running Controller code and environment, not a host Catalog or helper', () => {
+  for (const args of ['--images-list', '--images-purge', '--images-purge --dry-run', '--runtimes-purge']) {
+    const result = spawnSync('bash', ['-c', `
+set -eu
+source "$1"
+docker() { printf '%s\\n' "$*" >&2; }
+CONTAINER_NAME=test-evaluator
+evaluator_management_online ${args}
+`, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    const calls = result.stderr.trim().split('\n')
+    assert.equal(calls.length, 2)
+    assert.match(calls[0], /^exec test-evaluator node -e/)
+    assert.match(calls[0], /MANAGEMENT_PROTOCOL_VERSION !== 2/)
+    assert.match(calls[0], /RUNTIME_IMAGE_MANAGEMENT_VERSION !== 1/)
+    assert.equal(calls[1], `exec --env EVALUATOR_INSTANCE_ID=test-evaluator test-evaluator node /app/services/evaluator/src/manage.cjs ${args}`)
+    assert.doesNotMatch(result.stderr, /--mount|run --rm|--env EVALUATOR_RUNTIME_IMAGE_PREFIX/)
+  }
+})
+
+test('online image management refuses an old or stopped Controller before cleanup', () => {
+  const result = spawnSync('bash', ['-c', `
+set -eu
+source "$1"
+docker() { printf '%s\\n' "$*" >&2; return 1; }
+CONTAINER_NAME=test-evaluator
+evaluator_management_online --images-purge
+`, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /尚未执行清理/)
+  assert.doesNotMatch(result.stderr, /manage\.cjs --images-purge/)
+})
+
 test('missing bundled management code fails before mounting Docker or service data', () => {
   const result = spawnSync('bash', ['-c', `
 set -eu
@@ -62,6 +95,27 @@ evaluator_management_run sha256:legacy --purge-images
   assert.match(result.stderr, /尚未执行停止或清理/)
   assert.match(result.stderr, /evaluator\.sh start/)
   assert.doesNotMatch(result.stderr, /--mount|--purge-images/)
+})
+
+test('startup summary omits Runtime inventories while manual output preserves the full result', () => {
+  const result = { runtimes: { candidates: [{ reference: 'runtime:long-digest', id: 'sha256:long-id' }],
+    removed: [{ reference: 'runtime:old', existed: true }, { reference: 'runtime:missing', existed: false }],
+    retained: [{ reference: 'runtime:current' }], skipped: [] } }
+  const summary = formatManagementOutput(result, true)
+  assert.match(summary, /删除 1 个镜像，保留 1 项，失败 0 项/)
+  assert.match(summary, /清除 1 条失效/)
+  assert.doesNotMatch(summary, /runtime:|sha256:|candidates|\{/)
+  assert.deepEqual(JSON.parse(formatManagementOutput(result)), result)
+})
+
+test('startup management summaries keep actionable failures and never claim an incomplete stop succeeded', () => {
+  const result = { runtimes: { removed: [], retained: [], skipped: [{ reference: 'runtime:old', reason: 'Docker connection interrupted' }] } }
+  assert.match(formatManagementOutput(result, true), /Runtime 清理失败：runtime:old：Docker connection interrupted/)
+  assert.match(formatManagementOutput({ initialized: true }, true), /管理状态已就绪/)
+  assert.match(formatManagementOutput({ stopped: true }, true), /旧评测服务已停止/)
+  const failed = formatManagementOutput({ stopped: false, skipped: [{ target: 'container', reason: 'still running' }] }, true)
+  assert.match(failed, /未完全停止/)
+  assert.match(failed, /container：still running/)
 })
 
 async function fixture(t: any) {

@@ -19,7 +19,9 @@ import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 import {
   normalizeEntityF1RunConfig,
   normalizeExactMatchRunConfig,
+  type ConfigurableTextEvaluatorId,
   type EntityF1RunConfig,
+  type EvaluatorRunConfigMap,
   type ExactMatchRunConfig,
 } from '@/lib/evaluators/evaluator-run-config';
 import { runTextAiFlavorPreset, TEXT_AI_FLAVOR_PRESET_ID } from './text-ai-flavor-preset-evaluator';
@@ -55,7 +57,7 @@ export function runTextPreset(
   id: TextPresetId,
   user: string,
   ctx: FaithfulPresetContext,
-  config?: ExactMatchRunConfig | EntityF1RunConfig,
+  config?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
   switch (id) {
     case TEXT_AI_FLAVOR_PRESET_ID: return runTextAiFlavorPreset(user, ctx);
@@ -110,7 +112,7 @@ const REFERENCE_TEXT_PRESET_NAMES: Record<ReferenceTextPresetId, string> = {
 async function runReferenceTextPreset(
   id: ReferenceTextPresetId,
   ctx: FaithfulPresetContext,
-  config?: ExactMatchRunConfig | EntityF1RunConfig,
+  config?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
   if (ctx.referenceOutput === null || !ctx.referenceOutput.trim()) {
     return missingReference(REFERENCE_TEXT_PRESET_NAMES[id]);

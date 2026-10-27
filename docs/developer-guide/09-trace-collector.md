@@ -1,3 +1,10 @@
+---
+title: "新增第三方Agent框架Trace采集开发方案"
+description: "说明为第三方 Agent 框架开发 Trace 采集器所需的服务端适配、客户端实现与安装分发步骤。"
+keywords: ["Agent Insight", "Trace 采集器", "框架接入", "客户端开发"]
+changefreq: monthly
+---
+
 # 新增第三方Agent框架Trace采集开发方案
 
 ## 一、整体架构概览
@@ -35,6 +42,22 @@
 ---
 
 ## 二、服务端开发工作
+
+### 服务端日志与 Trace 耗时
+
+Node 运行时在 `instrumentation.ts` 导入业务启动模块前安装统一 `console` 等级过滤。`src/lib/logger/server.ts` 与现有 `createLogger` 共用等级解析：`AGENT_INSIGHT_LOG_LEVEL` 优先于 `LOG_LEVEL`，默认/无效值为 `error`；`log` 兼容映射为 `info`。开关不修改浏览器 console、构建命令、独立服务或 Node 原生 stderr。现有应用文件日志保持原出口，未把所有 console 日志新增为同步文件写入；model_debug/flow_debug 仅在 debug 写入脱敏后的元数据。OpenCode 进程输出经 console 转发，其自身日志源等级仍由 OpenCode 启动配置决定。
+
+`debug` 下，`[OTelIngest]` 的 `received`、`stage-start`、`stage-end`、`trace-ids`、`trace-session`、`completed/failed` 通过 `requestId` 关联；所有有效 Trace ID 按 32 个分行输出，不受生产采样预算限制。结束日志包含 `stageDurationsMs`，失败时附脱敏后的异常详情；解码异常可能回显正文，因此仅保留异常名/错误码并明确标注正文省略。非 debug 下仍保留每分钟有限接收样例及汇总；失败和含失败的汇总以 `error` 输出，因此默认等级不会隐藏鉴权、解码或缓存失败。
+
+`[TraceTiming]` 使用异步上下文隔离 `runId`，嵌套保存通过 `parentRunId` 关联消费轮次，包含 `sessionId`/`traceId`、`fast/evaluated` 模式、阶段开始/结束和单调时钟耗时：
+
+- `consumer`：`waitAfterDueMs` 为调度到期到实际分派的时间，包含队列竞争和冷却；`lastDataAgeMs` 是调度器最近数据时间到分派的间隔。`source` 事件的 `receivedAt`、`receiptAgeMs`、`receiptGeneration` 来自该源本轮读取的最新 receipt；多批上报时它不是首批等待时间。
+- `aggregate` / `save` / `receipt-update` / `checkpoint`：分别记录聚合、保存函数、receipt 元数据和游标更新。
+- `save` 作用域：`identity-query`、`execution-read`、`prepare`、`execution-upsert`、`post-execution`、`session-save`、`post-save`。`prepare` 内含 `config-read`/`session-read`，`session-save` 内含 `session-read`/`session-upsert`，父子阶段不可重复相加。
+- `identity-resolved` 的 `existingBeforeSave` 表示本次查询时记录是否存在；`execution-written` 在 Execution upsert 返回后输出，`saved` 在保存流程结束输出，均带服务端时间。它们不是数据库原生提交审计或浏览器首次可见时间。
+- `save-skipped` 标明归属防线或小快照保护跳过保存；消费者 `save-returned` 仅表示保存函数返回成功，不能单独代替实际写入证据。`end` 表示该函数返回，源内捕获的失败还需查看 `source-failed`。阶段开始但无结束可用于定位尚未返回的操作。
+
+debug 不对上述请求、阶段和错误做全局限频；只汇总消费 tick 和连续相同的 infra 失败，保留次数及时间范围。统一出口对常见凭据和正文脱敏，限制超大单条上下文并显式标记截断。新日志应只传递排查需要的 ID、状态、错误码、数量、耗时，不能依赖通用脱敏发现任意自由文本中的秘密。日志函数异常不能改变请求成功、重试或 checkpoint 语义。这里没有客户端发送时刻或浏览器渲染探针，不能据此声称测得整个端到端延迟。
 
 ### 共享模块升级契约
 
@@ -457,3 +480,34 @@ AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和
 - `integrations/qoder-jetbrains/`：JetBrains Plugin SDK 插件、状态栏、设置、IDE marker 和动态卸载清理。
 - `src/lib/ingest/otel/adapters/qoder.ts`：服务端 Qoder OTLP 聚合。
 - `test/qoder-trace-collector.test.ts` / `test/qoder-desktop-extension.test.ts` / `test/qoder-performance.test.ts`：确定性、账号/产品隔离、重试、Skill/MCP/连接器、最新版 snapshot、多层 Subagent、安装卸载、四端启动预算和首 Token 开销验证。
+
+
+## OpenCode 1.x / 2.x 采集兼容
+
+`/api/ingest/setup/opencode` 默认下发 1.x 的函数插件；传入 `apiVersion=2` 时下发只有一个
+默认导出的 `{ id: "agent-insight.trace", setup }` 原生定义。Unix 和 PowerShell 安装器根据本机
+`opencode --version` 选择制品。2.x 跳过旧 TUI 附件；仅选择 OpenCode 2.x 时不安装 RAS，
+混选其他框架时仍安装它们的 RAS runtime，但 RAS 安装器不再给 2.x 写入 1.x OpenCode 插件。
+旧插件文件不自动清理，升级前的手工停用步骤见用户快速开始指南。
+
+两版复用同一 JSONL writer、脱敏、心跳和 uploader：插件事件 → 本地 JSONL →
+`opencode_uploader_client.js` → `/api/ingest/upload` → Execution / Trace。
+这是自定义 JSON 上传链路，不是 OTLP。2.x 只注册 `context`、`compaction`、`generate`、`title`
+四类观察 hook，并订阅原生会话事件；不注册 Provider/HTTP 请求改写，也不实现模型转发。
+
+2.x 的 session/step/text/reasoning/tool 事件先规范化为现有 `message.updated`、
+`message.part.updated` / `delta` 结构。首次 delta 补充带类型的空 part，保证中断时仍能恢复累计文本；
+事件 ID 去重和 snapshot 指纹避免重放叠加。会话快照同时补齐用户输入和流结束后的最终内容，
+快照 RPC 每会话至多一个在途请求，每次等待上限为 250ms；异常或超时只记录采集错误。
+超时后正常返回的快照仍在后台补齐一次，终态补偿完成后再次触发强制上传；插件卸载后的迟到结果不再写入。
+订阅失败时记录日志，后续快照 hook 仍可工作；插件卸载会终止订阅并等待 writer 完成落盘，再触发最终上传。
+
+用户消息标记 `trace_kind=user`，助手消息标记 `trace_kind=llm`。前者不会因旧协议的
+`role=opencode` 被误算为 LLM；后者即使没有输出，也保留模型节点及错误摘要。
+`subagent` 工具规范化为 `task`，使用父会话 ID 和工具 metadata 中的 child session ID
+匹配具体子 Agent，优先于名称和输出文本。并发同名 Agent 的输入、输出和 Token 分别归属自己的节点。
+同一 native message 的失败、重试和成功更新同一 LLM 节点，HTTP 尝试不另造模型调用 ID。
+
+回归入口：`test/opencode-v2-adapter.test.ts`、`test/opencode-plugin-distribution.test.ts`，以及原有
+OpenCode uploader / Trace 树测试。真实验证使用 OpenCode 2.0.32 + 本地 OpenAI-compatible SSE
+模拟服务，覆盖多次调用、并发子会话和 503 后重试；不代表其他版本、传输模式或 Windows 已完成实测。

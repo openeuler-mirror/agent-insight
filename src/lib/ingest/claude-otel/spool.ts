@@ -536,7 +536,7 @@ export function appendOtelTraceEvents(events: OtelTraceEvent[], spoolDir = getOt
         }
 
         if (rejectedForIdentityLimit > 0) {
-          console.warn('[OTel] Rejected trace events after session identity limit', {
+          console.error('[OTel] Rejected trace events after session identity limit', {
             sessionId,
             rejectedEvents: rejectedForIdentityLimit,
             maximum: maxIdentities,

@@ -64,10 +64,13 @@ RUN set -eu; \
 
 WORKDIR /app
 
-COPY services/evaluator/src/evaluator-registry.cjs ./services/evaluator/src/evaluator-registry.cjs
+COPY services/evaluator/src ./services/evaluator/src
 COPY packages/project-config ./packages/project-config
+COPY packages/benchmark-protocol/artifact-path.cjs ./packages/benchmark-protocol/artifact-path.cjs
 COPY config/benchmark/evaluator.yaml ./config/benchmark/evaluator.yaml
 COPY benchmarks/swe-bench ./benchmarks/swe-bench
+
+RUN node -e "require('./benchmarks/swe-bench/evaluator/entrypoint.cjs'); require('./benchmarks/swe-bench/smoke/index.cjs')"
 
 ENV EVALUATOR_LISTEN_HOST=0.0.0.0 \
     EVALUATOR_DATA_DIR=/data \

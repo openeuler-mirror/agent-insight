@@ -101,7 +101,7 @@ export async function gatherWebSearchEvidence(user: string, question: string, an
       try {
         hits.push(...await tavilySearch(apiKey, query));
       } catch (err) {
-        console.warn(`[hallucination-web-search] "${query.slice(0, 30)}" 搜索失败，跳过:`, (err as Error)?.message);
+        console.warn(`[hallucination-web-search] (queryLength=${query.length}) 搜索失败，跳过:`, (err as Error)?.message);
       }
     }
     if (hits.length === 0) return null;

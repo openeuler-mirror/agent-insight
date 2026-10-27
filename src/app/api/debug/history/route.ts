@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
         const body = await req.json();
         const { user, skillId, skillName, versionA, versionB, query, temperature, results } = body;
 
-        console.log('[DEBUG_HISTORY_POST] Received body:', body);
+        console.debug('[DEBUG_HISTORY_POST] Received', { user, skillId, versionA, versionB, resultCount: Array.isArray(results) ? results.length : undefined });
 
         if (!user) {
             console.error('[DEBUG_HISTORY_POST] Missing user');

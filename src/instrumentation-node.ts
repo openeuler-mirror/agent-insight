@@ -127,6 +127,7 @@ export async function setupNodeRuntime(): Promise<void> {
       resumeBenchmarkDispatchesAtStartup,
       startBenchmarkRunWatchdog,
     } = await import('@/lib/benchmark/scheduler');
+    startBenchmarkRunWatchdog();
     const reaped = await reapStaleBenchmarkRuns();
     if (reaped > 0) {
       console.warn(`[instrumentation] 回收超时 Benchmark 执行: ${reaped} 条`);
@@ -135,7 +136,6 @@ export async function setupNodeRuntime(): Promise<void> {
     if (resumed > 0) {
       console.warn(`[instrumentation] 恢复 Benchmark 下发: ${resumed} 条`);
     }
-    startBenchmarkRunWatchdog();
   } catch (err) {
     console.warn('[instrumentation] benchmark dispatch resume failed:', (err as Error)?.message);
   }
@@ -215,7 +215,7 @@ export async function setupNodeRuntime(): Promise<void> {
     const { startOtelSpoolConsumer } = await import('@/lib/ingest/otel-consumer/consumer');
     startOtelSpoolConsumer();
   } catch (err) {
-    console.warn(
+    console.error(
       '[instrumentation] otel spool consumer start failed:',
       (err as Error)?.message,
     );

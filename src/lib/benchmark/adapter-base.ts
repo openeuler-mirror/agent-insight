@@ -86,6 +86,9 @@ export abstract class AbstractBenchmarkAdapter<
   }
 
   buildAgentTask(input: BuildAgentTaskInput<TPublic>): AgentTaskEnvelope {
+    if (this.manifest.supportsAgentExecution === false) {
+      throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_ONLY', '该 Benchmark 当前仅支持导入已有提交', 409)
+    }
     const task = this.createAgentTask(input)
     validateTaskEnvelope(task, input.context, this.manifest)
     return task
@@ -96,7 +99,7 @@ export abstract class AbstractBenchmarkAdapter<
     const seen = new Set<string>()
     for (const artifact of input.artifacts) {
       const descriptor = artifact.descriptor
-      if (descriptor.executionRunId !== input.task.context.runId) {
+      if (descriptor.executionRunId !== (input.task?.context.runId ?? input.submission?.runId)) {
         throw new BenchmarkProtocolError('ARTIFACT_RUN_MISMATCH', 'Artifact 不属于当前 Run')
       }
       if (seen.has(descriptor.name)) {

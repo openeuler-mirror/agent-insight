@@ -745,3 +745,76 @@ test('engine: 已有 Trace 的触发分析使用真实 Skill 命中事实确定�
   assert.equal(result!.summary, '实际触发结果与预期标注一致。');
   assert.equal(JSON.parse(result!.pointsJson!)[0].label, '触发准确率');
 });
+
+test('engine: 文本相似度阈值从实验配置流入评估器（threshold=60 → partially_similar 65 PASS）', async () => {
+  setJudgeLlmCallerForTest(async () => JSON.stringify({ level: 'partially_similar', reason: '部分语义重合' }));
+  const executionId = await createExecution();
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-similarity-text'],
+    '参考文本',
+    null,
+    JSON.stringify({ schemaVersion: 1, configs: { 'preset-similarity-text': { threshold: 60 } } }),
+  );
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirst({ where: { experimentId } });
+  assert.equal(row!.status, 'done');
+  assert.equal(row!.score, 65);
+  assert.equal(row!.verdict, 'pass');
+  assert.match(row!.summary!, /阈值 60/);
+  assert.match(JSON.parse(row!.pointsJson!)[1].evidence.md, /≥ 60|≥60/);
+  setJudgeLlmCallerForTest(null);
+});
+
+test('engine: 未配置文本相似度阈值时回退默认 80 → partially_similar(65) FAIL', async () => {
+  setJudgeLlmCallerForTest(async () => JSON.stringify({ level: 'partially_similar', reason: '部分语义重合' }));
+  const executionId = await createExecution();
+  const { experimentId } = await createExperiment(executionId, ['preset-similarity-text']);
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirst({ where: { experimentId } });
+  assert.equal(row!.status, 'done');
+  assert.equal(row!.score, 65);
+  assert.equal(row!.verdict, 'fail');
+  setJudgeLlmCallerForTest(null);
+});
+
+test('engine: 同时选择精确匹配与文本相似度时，各评估器只拿到自己那份运行配置', async () => {
+  setJudgeLlmCallerForTest(async () => JSON.stringify({ level: 'partially_similar', reason: '部分语义重合' }));
+  const executionId = await createExecution();
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-text-exact-match', 'preset-similarity-text'],
+    '答案是 42',
+    null,
+    JSON.stringify({ schemaVersion: 1, configs: { 'preset-similarity-text': { threshold: 60 } } }),
+  );
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const rows = await prisma.experimentEvalResult.findMany({ where: { experimentId } });
+  const exact = rows.find((r: { evaluatorId: string }) => r.evaluatorId === 'preset-text-exact-match');
+  const similarity = rows.find((r: { evaluatorId: string }) => r.evaluatorId === 'preset-similarity-text');
+
+  // 相似度阈值不得流到精确匹配：该行仍按默认配置执行
+  assert.equal(exact?.status, 'done');
+  const exactConfig = JSON.parse(exact!.evidenceJson!).json.config;
+  assert.deepEqual(exactConfig, {
+    caseSensitive: true,
+    punctuationInsensitive: false,
+    whitespaceNormalization: false,
+    widthNormalization: false,
+    multiCandidateScoring: 'any',
+  });
+  assert.equal('threshold' in exactConfig, false);
+
+  // 相似度评估器拿到 threshold=60：partially_similar(65) ≥ 60 → PASS
+  assert.equal(similarity?.status, 'done');
+  assert.equal(similarity?.score, 65);
+  assert.equal(similarity?.verdict, 'pass');
+  setJudgeLlmCallerForTest(null);
+});
+

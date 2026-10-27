@@ -73,6 +73,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
     const binding = source.benchmarkBinding
     if (!binding) throw new Error('Benchmark 实验缺少冻结配置')
     const runConfig = parseObject(binding.runConfigJson)
+    if (runConfig.submissionSource === 'imported') throw new Error('历史导入提交实验不支持复用配置')
     const selection = parseObject(binding.selectionJson)
     const result = await createBenchmarkExperiment({
       user: input.user,

@@ -79,7 +79,7 @@ export async function deleteExperimentExecution(user: string, experimentId: stri
       ...attempts.filter((item: any) => item.commandId).map((item: any) => ({ kind: 'ordinary' as const, runId: item.commandId, clientId: item.workerId })),
     ];
     for (const run of runs) {
-      if (!terminalRun.includes(run.status) && run.status !== 'pending') targets.push({ kind: 'benchmark', runId: run.id, clientId: run.clientId });
+      if (run.clientId && !terminalRun.includes(run.status) && run.status !== 'pending') targets.push({ kind: 'benchmark', runId: run.id, clientId: run.clientId });
       for (const evaluation of run.evaluations) {
         if (!terminalEvaluation.includes(evaluation.status)) targets.push({ kind: 'evaluation', runId: evaluation.id,
           baseUrl: evaluation.evaluatorBaseUrl || undefined, requestDigest: evaluation.requestDigest });

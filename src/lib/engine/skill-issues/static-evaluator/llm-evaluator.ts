@@ -109,10 +109,10 @@ function tryParseJson(text: string): any {
     // 兜底：jsonrepair 修不规范 JSON
     try {
       const repaired = jsonrepair(s);
-      console.warn(`[static-eval] JSON.parse failed (${e1.message}), recovered by jsonrepair (len=${s.length})`);
+      console.warn(`[static-eval] JSON.parse failed (${e1.name}), recovered by jsonrepair (len=${s.length})`);
       return JSON.parse(repaired);
     } catch (e2: any) {
-      console.warn(`[static-eval] jsonrepair also failed: ${e2.message}; raw len=${s.length}, head=${s.slice(0, 120)}`);
+      console.warn(`[static-eval] jsonrepair also failed: ${e2.name}; raw len=${s.length}`);
       throw e1;
     }
   }
@@ -415,11 +415,11 @@ export async function runLlmStaticEvaluation(args: {
     const raw = await callLlm(client, model, prompt);
     let parsed = parseDimensions(raw, defaultDim);
     if (parsed.dims.length === 0) {
-      console.warn(`[static-eval] ${label} empty dims on attempt 1 (raw len=${raw.length}, head="${raw.slice(0, 80)}"), retrying`);
+      console.warn(`[static-eval] ${label} empty dims on attempt 1 (raw len=${raw.length}), retrying`);
       const raw2 = await callLlm(client, model, prompt);
       parsed = parseDimensions(raw2, defaultDim);
       if (parsed.dims.length === 0) {
-        console.warn(`[static-eval] ${label} still empty after retry (raw len=${raw2.length}, head="${raw2.slice(0, 80)}")`);
+        console.warn(`[static-eval] ${label} still empty after retry (raw len=${raw2.length})`);
       }
     }
     return parsed;

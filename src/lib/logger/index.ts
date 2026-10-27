@@ -16,28 +16,11 @@
 
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-
-type LogLevel = "debug" | "log" | "info" | "warn" | "error";
+import { getLogLevel, isLogEnabled, sanitizeLogValue, type LogLevel } from './server';
+export { installServerLogging, isLogEnabled } from './server';
 
 const DEFAULT_LOG_DIR = "/var/log/agent-insight";
-const DEFAULT_LOG_LEVEL: LogLevel = "log";
 const LOG_FILE_NAME = "agent-insight.log";
-
-const LEVEL_PRIORITY: Record<LogLevel, number> = {
-  debug: 10,
-  log: 20,
-  info: 30,
-  warn: 40,
-  error: 50,
-};
-
-function resolveLogLevel(value?: string): LogLevel {
-  const normalized = (value || "").toLowerCase();
-  if (normalized === "debug" || normalized === "log" || normalized === "info" || normalized === "warn" || normalized === "error") {
-    return normalized;
-  }
-  return DEFAULT_LOG_LEVEL;
-}
 
 function isNodeRuntime(): boolean {
   return Boolean(process?.versions?.node);
@@ -56,37 +39,29 @@ interface LogPayload {
   context?: unknown;
 }
 
-const loggerConfig: LoggerConfig = {
-  logDir: process.env.AGENT_INSIGHT_LOG_DIR || DEFAULT_LOG_DIR,
-  level: resolveLogLevel(process.env.AGENT_INSIGHT_LOG_LEVEL || process.env.LOG_LEVEL),
-};
-
-let fileLoggingInitialized = false;
+let initializedDirectory: string | undefined;
 let fileLoggingAvailable = false;
 let logFilePath = "";
 
 function initializeFileLogging(): void {
-  if (fileLoggingInitialized || !isNodeRuntime()) {
+  const { logDir } = getLoggerConfig();
+  if (initializedDirectory === logDir || !isNodeRuntime()) {
     return;
   }
-  fileLoggingInitialized = true;
+  initializedDirectory = logDir;
 
   try {
-    if (!existsSync(loggerConfig.logDir)) {
-      mkdirSync(loggerConfig.logDir, { recursive: true });
+    if (!existsSync(logDir)) {
+      mkdirSync(logDir, { recursive: true });
     }
-    logFilePath = join(loggerConfig.logDir, LOG_FILE_NAME);
+    logFilePath = join(logDir, LOG_FILE_NAME);
     fileLoggingAvailable = true;
   } catch (error) {
     fileLoggingAvailable = false;
-    const err = error as Error;
+    const err = error as NodeJS.ErrnoException;
     // Keep this warning visible even if file logging is unavailable.
-    console.warn(`[logger] Failed to initialize file logging at ${loggerConfig.logDir}: ${err.message}`);
+    console.error(`[logger] Failed to initialize file logging: ${err.code || err.name}`);
   }
-}
-
-function shouldWrite(level: LogLevel): boolean {
-  return LEVEL_PRIORITY[level] >= LEVEL_PRIORITY[loggerConfig.level];
 }
 
 function writeLine(line: string): void {
@@ -96,14 +71,14 @@ function writeLine(line: string): void {
   }
   try {
     appendFileSync(logFilePath, `${line}\n`, "utf-8");
-  } catch (error) {
-    const err = error as Error;
-    console.warn(`[logger] Failed to append log file: ${err.message}`);
+  } catch {
+    fileLoggingAvailable = false;
+    console.error('[logger] Failed to append log file; continuing with console output');
   }
 }
 
 function emit(level: LogLevel, scope: string, message: string, context?: unknown): void {
-  if (!shouldWrite(level)) {
+  if (!isLogEnabled(level)) {
     return;
   }
 
@@ -115,27 +90,31 @@ function emit(level: LogLevel, scope: string, message: string, context?: unknown
     ...(context !== undefined ? { context } : {}),
   };
 
-  const line = JSON.stringify(payload);
-  writeLine(line);
+  let line: string;
+  try { line = JSON.stringify(sanitizeLogValue(payload)); }
+  catch { line = JSON.stringify({ ts: payload.ts, level, scope, message: '[logger] log formatting failed' }); }
+  try {
+    writeLine(line);
 
-  // Console output remains available for local debugging.
-  switch (level) {
-    case "debug":
-      console.debug(line);
-      break;
-    case "info":
-    case "log":
-      console.log(line);
-      break;
-    case "warn":
-      console.warn(line);
-      break;
-    case "error":
-      console.error(line);
-      break;
-    default:
-      console.log(line);
-  }
+    // Console output remains available for local debugging.
+    switch (level) {
+      case "debug":
+        console.debug(line);
+        break;
+      case "info":
+      case "log":
+        console.log(line);
+        break;
+      case "warn":
+        console.warn(line);
+        break;
+      case "error":
+        console.error(line);
+        break;
+      default:
+        console.log(line);
+    }
+  } catch { /* Logging cannot fail a business operation. */ }
 }
 
 export interface AppLogger {
@@ -167,5 +146,5 @@ export function createLogger(scope: string): AppLogger {
 }
 
 export function getLoggerConfig(): LoggerConfig {
-  return { ...loggerConfig };
+  return { logDir: process.env.AGENT_INSIGHT_LOG_DIR || DEFAULT_LOG_DIR, level: getLogLevel() };
 }

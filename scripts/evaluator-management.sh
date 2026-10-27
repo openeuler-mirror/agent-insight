@@ -41,3 +41,12 @@ evaluator_management_run() {
     --mount "type=volume,src=$DATA_VOLUME,dst=/data${MANAGEMENT_READONLY:-}" \
     "$management_image" /app/services/evaluator/src/manage.cjs "$@"
 }
+
+evaluator_management_online() {
+  if ! docker exec "$CONTAINER_NAME" node -e 'const m=require("/app/services/evaluator/src/manage.cjs"); if (m.MANAGEMENT_PROTOCOL_VERSION !== 2 || m.RUNTIME_IMAGE_MANAGEMENT_VERSION !== 1) process.exit(1)'; then
+    printf '在线镜像管理需要运行中的新版 Controller；请先使用 evaluator.sh start 升级。尚未执行清理。\n' >&2
+    return 1
+  fi
+  docker exec --env "EVALUATOR_INSTANCE_ID=$CONTAINER_NAME" "$CONTAINER_NAME" \
+    node /app/services/evaluator/src/manage.cjs "$@"
+}

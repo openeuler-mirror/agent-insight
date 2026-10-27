@@ -21,6 +21,7 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { spawnSync } from 'node:child_process'
 
 const loadCommonJs = createRequire(__filename)
 const { BenchmarkEvaluatorService } = loadCommonJs('../services/evaluator/src/service.cjs') as {
@@ -36,6 +37,54 @@ const { doctor } = loadCommonJs('../services/evaluator/src/cli.cjs') as {
     evaluators: Array<{ reason?: string }>
   }>
 }
+const { formatDoctorOutput } = loadCommonJs('../services/evaluator/src/cli.cjs') as {
+  formatDoctorOutput(output: Record<string, unknown>, summary?: boolean): string
+}
+
+test('startup Doctor prints a compact count while manual Doctor retains diagnostic JSON', () => {
+  const report = { ok: true, checks: { http: true, dockerSocket: true, journal: true, catalog: true },
+    runtime: { image: 'controller:long-digest' }, evaluators: [
+      { key: 'swe-bench', ready: true, runtimeFacts: { artifactDigest: 'sha256:long-digest' } },
+      { key: 'zsoft-l1', ready: true },
+    ] }
+  assert.equal(formatDoctorOutput(report, true), 'Doctor 检查通过：评测器就绪 2/2。')
+  assert.deepEqual(JSON.parse(formatDoctorOutput(report)), report)
+})
+
+test('Doctor summary preserves failed checks and evaluator readiness reasons', () => {
+  const output = formatDoctorOutput({ ok: false, checks: { http: true, dockerSocket: false },
+    reason: 'Docker unavailable', evaluators: [{ key: 'zsoft-l1', ready: false, reason: 'assets unavailable' }] }, true)
+  assert.match(output, /Doctor 检查失败/)
+  assert.match(output, /Controller：Docker unavailable/)
+  assert.match(output, /检查未通过：dockerSocket/)
+  assert.match(output, /zsoft-l1 未就绪：assets unavailable/)
+})
+
+test('Doctor wrapper forwards summary only when requested and prints captured diagnostics on failure', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evaluator-doctor-output-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const config = path.join(directory, 'evaluator.env')
+  fs.writeFileSync(config, '', { mode: 0o600 })
+  const script = path.resolve(__dirname, '../scripts/evaluator-doctor.sh')
+  for (const args of ['', '--summary']) {
+    const result = spawnSync('bash', ['-c', `
+docker() {
+  printf 'CALL %s\\n' "$*" >&2
+  case "$*" in
+    *State.Running*) printf 'true\\n' ;;
+    *cli.cjs*) printf 'Doctor captured failure\\n'; return 1 ;;
+  esac
+}
+export -f docker
+bash "$1" --config "$2" ${args}
+`, 'test', script, config], { encoding: 'utf8' })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /Doctor captured failure/)
+    assert.match(result.stderr, /容器内 Doctor 未通过/)
+    if (args) assert.match(result.stderr, /cli\.cjs doctor --summary/)
+    else assert.doesNotMatch(result.stderr, /--summary/)
+  }
+})
 
 function listen(server: http.Server): Promise<{ port: number; close(): Promise<void> }> {
   return new Promise((resolve, reject) => {

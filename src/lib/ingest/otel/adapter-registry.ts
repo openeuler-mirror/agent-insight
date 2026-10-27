@@ -27,10 +27,12 @@ import { qwenCodeOtelTraceAdapter } from './adapters/qwencode';
 import { qwenpawOtelTraceAdapter } from './adapters/qwenpaw';
 import { workbuddyOtelTraceAdapter } from './adapters/workbuddy';
 import { mctsXgovernorOtelTraceAdapter } from './adapters/mcts-xgovernor';
+import { xgovernorAgentOtelTraceAdapter } from './adapters/xgovernor-agent';
 import type { OtelTraceAdapter } from './adapters/types';
 import type { OtelTraceEvent } from './types';
 
 const frameworkAdapters: readonly OtelTraceAdapter[] = [
+  xgovernorAgentOtelTraceAdapter,
   actrailOtelTraceAdapter,
   langfuseLangGraphOtelTraceAdapter,
   hermesOtelTraceAdapter,

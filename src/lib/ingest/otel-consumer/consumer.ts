@@ -15,6 +15,8 @@
  */
 
 import path from 'node:path';
+import { withTraceTiming, timeTraceStage, timeTraceStageSync, traceTimingEvent, diagnosticErrorCode, diagnosticTimestamp } from '@/lib/logger/trace-timing';
+import { createProgressSummary } from '@/lib/logger/summary';
 import { LiveSpoolDiscovery } from './live-discovery';
 import { subscribeSpoolReceipts } from './live-input';
 import fs from 'node:fs';
@@ -131,6 +133,7 @@ export type OtelSpoolConsumerState = {
   activeStartedAt?: number;
   lastStallWarnAt?: number;
   liveServed: number;
+  tickSummary: ReturnType<typeof createProgressSummary>;
   log: (...args: any[]) => void;
   warn: (...args: any[]) => void;
 };
@@ -194,7 +197,7 @@ function createState(
     scanOffsets: new Map(),
     sourceOffset: 0,
     processLocks,
-    saveExecution: wrapSaveExecutionWithAttributionGuard(options.saveExecution || saveExecutionRecord, options.log || console.log),
+    saveExecution: wrapSaveExecutionWithAttributionGuard(options.saveExecution || saveExecutionRecord, options.warn || console.error),
     shortMs: options.shortMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_SHORT_MS', 3000),
     longMs: options.longMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LONG_MS', 30000),
     maxWaitMs: options.maxWaitMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_MAX_WAIT_MS', 120000),
@@ -226,8 +229,15 @@ function createState(
     stallMs: options.stallMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_STALL_MS', 15000),
     dispatching: false,
     liveServed: 0,
-    log: options.log || console.log,
-    warn: options.warn || console.warn,
+    tickSummary: createProgressSummary(fields => {
+      const write = Number(fields.parseErrors) > 0 ? (options.warn || console.error) : (options.log || console.debug);
+      write('[OTelConsumer] tick', fields);
+    }),
+    log: options.log || console.debug,
+    warn: options.warn || ((message, ...args) => {
+      if (message === '[OTelConsumer] slow aggregate') console.debug(message, ...args);
+      else console.error(message, ...args);
+    }),
   };
 }
 
@@ -255,6 +265,7 @@ function wrapSaveExecutionWithAttributionGuard(
     });
 
     if (!result.pass && !authenticatedQoderIngest) {
+      traceTimingEvent('save-skipped', { traceId: data.task_id, reason: 'attribution' });
       log('[AttributionGuard] dropping unattributed session', {
         taskId: result.taskId,
         framework: result.framework,
@@ -404,6 +415,7 @@ function handleSessionFailure(state: OtelSpoolConsumerState, sessionId: string, 
     sessionId,
     failures: session.failures,
     message: (err as Error)?.message || String(err),
+    error: err,
   });
   if (session.failures >= state.parkAfter) {
     session.parked = true;
@@ -581,6 +593,7 @@ async function pumpDispatch(state: OtelSpoolConsumerState): Promise<void> {
   state.activeStartedAt = now;
   const startedAt = now;
   const { session, mode } = job;
+  const dueAt = mode === 'evaluated' ? evaluatedDueAt(session) : session.fastDueAt;
 
   if (mode === 'evaluated') {
     session.evaluatedDueAt = undefined;
@@ -591,7 +604,10 @@ async function pumpDispatch(state: OtelSpoolConsumerState): Promise<void> {
   }
 
   try {
-    await runJob(state, session, mode);
+    await withTraceTiming({ scope: 'consumer', sessionId: session.sessionId, mode,
+      lastDataAt: diagnosticTimestamp(session.lastDataAt), lastDataAgeMs: Math.max(0, now - session.lastDataAt),
+      waitAfterDueMs: dueAt === undefined ? undefined : Math.max(0, now - dueAt), backlog: state.pendingFiles.size,
+    }, () => runJob(state, session, mode));
   } catch (err) {
     handleSessionFailure(state, session.sessionId, err, mode);
   } finally {
@@ -632,6 +648,7 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
     const spoolDir = source.spoolDir();
     const release = acquireSpoolUse(spoolDir);
     if (!release) {
+      traceTimingEvent('deferred', { source: sourceId, reason: 'spool-in-use' });
       if (!deferSource(state, session, sourceId)) scheduleRetry(session, mode, state.parkedRetryMs);
       continue;
     }
@@ -642,13 +659,17 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
         if (pending?.source.id === sourceId) covered.set(pending, pending.versions.get(session.sessionId)!);
       }
       const receipt = readSpoolState(spoolDir, session.sessionId);
+      traceTimingEvent('source', { source: sourceId, receiptGeneration: receipt?.generation,
+        receivedAt: receipt ? diagnosticTimestamp(receipt.lastReceivedAt) : undefined,
+        receiptAgeMs: receipt && Number.isFinite(receipt.lastReceivedAt) ? Math.max(0, Date.now() - receipt.lastReceivedAt) : undefined });
       if (receipt?.purgedAt) {
         markSourceDone(state, session.sessionId, sourceId, covered);
         session.sourceIds.delete(sourceId);
         session.lastAggregate = undefined;
         continue;
       }
-      const result = aggregateForSession(state, session, source);
+      const result = timeTraceStageSync('aggregate', () => aggregateForSession(state, session, source));
+      traceTimingEvent('aggregated', { source: sourceId, disposition: result.disposition, traceId: result.record?.task_id, eventCount: result.eventCount });
       if (result.disposition === 'retry-later') {
         session.failures = 0;
         session.lastAggregate = undefined;
@@ -681,29 +702,31 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
         });
       };
       if (mode === 'fast') {
-        const saved = await state.saveExecution({
+        const saved = await timeTraceStage('save', () => state.saveExecution({
           ...record,
           skip_evaluation: source.defaultSkipEvaluation(),
-        }, { receivedAt: new Date(session.lastDataAt) });
+        }, { receivedAt: new Date(session.lastDataAt) }));
         if (!saved.success) throw new Error('execution persistence returned success=false');
         session.failures = 0;
         // Keep the replay cursor until evaluated succeeds, so its failures can release capacity safely.
       } else {
-        const saved = await state.saveExecution({
+        const saved = await timeTraceStage('save', () => state.saveExecution({
           ...record,
           skip_evaluation: false,
           skip_internal_judgment: true,
           force_judgment: true,
-        }, { receivedAt: new Date(session.lastDataAt) });
+        }, { receivedAt: new Date(session.lastDataAt) }));
         if (!saved.success) throw new Error('execution persistence returned success=false');
-        recordPersistence();
+        timeTraceStageSync('receipt-update', recordPersistence);
         session.failures = 0;
         // evaluated 完成后才确认重放游标；积压时它也可能直接替代 fast。
-        markSourceDone(state, session.sessionId, sourceId, covered);
+        timeTraceStageSync('checkpoint', () => markSourceDone(state, session.sessionId, sourceId, covered));
         session.lastAggregate = undefined;
 
       }
+      traceTimingEvent('save-returned', { source: sourceId, traceId: record.task_id, success: true });
     } catch (err) {
+      traceTimingEvent('source-failed', { source: sourceId, errorCode: diagnosticErrorCode(err) });
       handleSessionFailure(state, session.sessionId, err, mode);
       if (session.parked) break;
     } finally {
@@ -884,7 +907,7 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
   const parked = [...state.sessions.values()].filter((session) => session.parked).length;
   const failed = [...state.sessions.values()].filter((session) => session.failures > 0).length;
   if (discovered || state.pendingFiles.size || parked || failed || parseErrors) {
-    state.log('[OTelConsumer] tick', {
+    state.tickSummary.record({
       discovered,
       backlog: state.pendingFiles.size,
       sessions: state.sessions.size,
@@ -894,6 +917,7 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
       parseErrors,
     });
   }
+  state.tickSummary.flushIfDue();
 
   // 卡住告警:同一个在途任务每分钟最多一条,不按 tick 刷屏。
   if (state.dispatching && state.activeStartedAt) {
@@ -914,7 +938,7 @@ export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): 
   const sources = options.sources || listSources();
   const processLocks = acquireConsumerProcessLocks(sources.map(source => source.spoolDir()));
   if (!processLocks) {
-    (options.warn || console.warn)('[OTelConsumer] spool is owned by another process', {
+    (options.warn || console.error)('[OTelConsumer] spool is owned by another process', {
       sources: sources.map(source => source.id),
     });
     return;
@@ -950,6 +974,7 @@ export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): 
 export function stopOtelSpoolConsumer(): void {
   const state = globalThis.__otelSpoolConsumer;
   if (!state) return;
+  state.tickSummary.flush();
   state.stopped = true;
   state.unsubscribeReceipts?.();
   state.liveDiscovery?.stop();

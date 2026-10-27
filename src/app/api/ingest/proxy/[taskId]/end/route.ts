@@ -234,7 +234,7 @@ export async function POST(
     if (!session.query && analysis.query) {
         try {
             await db.updateSession(taskId, { query: analysis.query });
-            console.log(`[End] Updated session query for ${taskId}: ${analysis.query.substring(0, 50)}...`);
+            console.log(`[End] Updated session query for ${taskId}: queryLength=${analysis.query.length}`);
         } catch (e) {
             console.warn(`[End] Failed to update session query: ${e}`);
         }

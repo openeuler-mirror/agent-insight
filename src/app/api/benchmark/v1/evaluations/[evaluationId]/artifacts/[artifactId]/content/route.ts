@@ -38,7 +38,7 @@ export async function GET(
       headers: {
         'content-type': artifact.mediaType,
         'content-length': String(artifact.bytes.byteLength),
-        'content-disposition': `attachment; filename="${artifact.name}"`,
+        'content-disposition': `attachment; filename="${artifact.name.split('/').pop()}"`,
         etag: `"${artifact.sha256}"`,
         'cache-control': 'private, no-store',
       },

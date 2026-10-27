@@ -134,7 +134,6 @@ export async function POST(request: Request) {
     }
     const { cases, warnings } = await prepareDatasetCasesForPersistence({
       nextCases: normalizedCases,
-      user,
     });
 
     const now = new Date().toISOString();
@@ -240,7 +239,6 @@ export async function PATCH(request: Request) {
         ? await prepareDatasetCasesForPersistence({
             nextCases: inputCases,
             previousCases: current.cases,
-            user,
           })
         : { cases: current.cases, warnings: [] };
 

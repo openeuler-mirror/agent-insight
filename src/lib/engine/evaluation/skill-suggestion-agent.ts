@@ -468,9 +468,7 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
       );
       const suggestions = parseSkillSuggestions(agentText);
       if (suggestions.length === 0) {
-        // 跑完但没解析出建议：打印原始输出预览，便于区分"解析问题"还是"真没建议"。
-        const preview = String(agentText || '').slice(0, 800);
-        console.warn(`[skill-suggestion-agent] empty parse for ${executionId} (attempt ${attempt}); raw output preview:\n${preview}`);
+        console.warn(`[skill-suggestion-agent] empty parse for ${executionId} (attempt ${attempt}); outputLength=${agentText?.length || 0}`);
       }
       // 成功跑完（无论是否空）不再重试——重试只针对错误。
       return suggestions;

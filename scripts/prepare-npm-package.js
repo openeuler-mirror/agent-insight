@@ -30,6 +30,25 @@ function copyDirIfMissing(sourceDir, targetDir, label) {
   return true
 }
 
+function copyBenchmarkExecutionRuntime(packageRoot, standaloneDir) {
+  for (const directory of ['packages/project-config', 'packages/benchmark-protocol', 'packages/agent-runtime', 'services/executor/src', 'services/executor/runtimes', 'agent_fault_injection']) {
+    const source = path.join(packageRoot, directory)
+    if (!fs.existsSync(source)) continue
+    const destination = path.join(standaloneDir, directory)
+    fs.mkdirSync(path.dirname(destination), { recursive: true })
+    fs.cpSync(source, destination, { recursive: true })
+  }
+  const executorCatalog = path.join(packageRoot, 'generated/benchmark-catalog/executors.cjs')
+  const executorFiles = fs.existsSync(executorCatalog) ? require(executorCatalog).generatedExecutorPackageFiles : []
+  for (const file of ['scripts/xgovernor.cjs', 'scripts/reliability-client.cjs', 'scripts/install-ras-client.js', 'scripts/agent-insight-home.cjs', 'scripts/lib/fi-python-runtime.js', 'scripts/agent-trace-collectors/shared/trace-transport.cjs', 'generated/benchmark-catalog/executors.cjs', ...executorFiles]) {
+    const source = path.join(packageRoot, file)
+    if (!fs.existsSync(source)) continue
+    const destination = path.join(standaloneDir, file)
+    fs.mkdirSync(path.dirname(destination), { recursive: true })
+    fs.copyFileSync(source, destination)
+  }
+}
+
 // Local/temp & non-runtime project dirs that `next build` sweeps into standalone.
 // `files` whitelist makes .npmignore unable to drop them, so we delete physically.
 // Runs on every `npm pack`/`npm publish` via the prepack hook.
@@ -220,11 +239,7 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   const scriptsDir = path.join(packageRoot, 'scripts')
   const standaloneScriptsDir = path.join(standaloneDir, 'scripts')
   copyDirIfMissing(scriptsDir, standaloneScriptsDir, 'Scripts')
-  const configurationRuntime = path.join(packageRoot, 'packages', 'project-config')
-  copyDirIfMissing(configurationRuntime, path.join(standaloneDir, 'packages', 'project-config'), 'Project configuration runtime')
-  for (const directory of ['packages/agent-runtime', 'services/executor/runtimes']) {
-    copyDirIfMissing(path.join(packageRoot, directory), path.join(standaloneDir, directory), directory)
-  }
+  copyBenchmarkExecutionRuntime(packageRoot, standaloneDir)
   fs.mkdirSync(path.join(standaloneDir, 'config', 'benchmark'), { recursive: true })
   for (const scope of ['platform', 'evaluator', 'executor']) {
     const source = path.join(packageRoot, 'config', 'benchmark', `${scope}.yaml`)
@@ -273,6 +288,7 @@ if (require.main === module) {
 
 module.exports = {
   copyLegalFiles,
+  copyBenchmarkExecutionRuntime,
   copyLlamaIndexCollector,
   ensureStandalonePackage,
 }

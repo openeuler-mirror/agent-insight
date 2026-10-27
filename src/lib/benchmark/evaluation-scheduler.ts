@@ -117,7 +117,7 @@ function evaluationTimeout(input: {
   updatedAt: Date
 }, now: Date, graceMs: number): { code: string; message: string } | null {
   if (input.status === 'dispatch_unknown') return null
-  if (input.status === 'queued' && (!input.failureCode || ['SERVICE_BUSY', 'EVALUATION_QUOTA_WAIT', 'IMAGE_POOL_SPACE_LOW', 'IMAGE_POOL_PREPARING'].includes(input.failureCode))) return null
+  if (input.status === 'queued' && (!input.failureCode || ['SERVICE_BUSY', 'EVALUATION_QUOTA_WAIT', 'IMAGE_POOL_SPACE_LOW', 'IMAGE_POOL_PREPARING', 'EVALUATOR_ASSETS_PREPARING', 'EVALUATOR_ASSETS_DOWNLOADING', 'EVALUATOR_ASSETS_VERIFYING'].includes(input.failureCode))) return null
   const progress = parseJsonRecord(input.progressJson)
   const stage = typeof progress.stage === 'string' ? progress.stage : ''
   let deadline: Date
@@ -249,6 +249,7 @@ export function startBenchmarkEvaluationWatchdog(
     if (evaluationWatchdogSweep) return
     evaluationWatchdogSweep = reapStaleBenchmarkEvaluations()
       .then(async (count) => {
+        await refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool]', error))
         await resumeBenchmarkEvaluationContinuations()
         await resumeBenchmarkEvaluationDispatchesAtStartup()
         if (count > 0) console.warn(`[benchmark/evaluation-watchdog] 回收超时评测任务: ${count} 条`)
@@ -563,6 +564,15 @@ async function ensureHealthy(
     return value.benchmarkKey === benchmarkKey || value.benchmarkKey === '*'
   }) as Record<string, unknown> | undefined
   const ready = bindings.length ? binding?.ready === true : evaluatorState?.ready === true
+  const readiness = bindings.length ? binding : evaluatorState
+  const facts = readiness?.runtimeFacts as Record<string, unknown> | undefined
+  const assetCode = typeof facts?.assetErrorCode === 'string' ? facts.assetErrorCode : ''
+  if (response.ok && body.value.status === 'healthy' && !ready && /^EVALUATOR_ASSETS_[A-Z_]+$/.test(assetCode)) {
+    const retryable = ['EVALUATOR_ASSETS_PREPARING', 'EVALUATOR_ASSETS_DOWNLOADING', 'EVALUATOR_ASSETS_VERIFYING'].includes(assetCode)
+    throw new BenchmarkProtocolError(assetCode,
+      typeof readiness?.reason === 'string' ? readiness.reason.slice(0, 4000) : '评测资产未就绪',
+      retryable ? 409 : 422, retryable)
+  }
   if (!response.ok || body.value.status !== 'healthy' || (!allowBusy && body.value.busy === true) || !ready) {
     throw new BenchmarkProtocolError(
       body.value.busy === true ? 'SERVICE_BUSY' : 'EVALUATOR_NOT_READY',
@@ -706,8 +716,11 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       return
     }
     const remoteCode = responseErrorCode(body.value)
+    const remoteMessage = typeof body.value.error === 'object' && body.value.error
+      && typeof (body.value.error as Record<string, unknown>).message === 'string'
+      ? String((body.value.error as Record<string, unknown>).message).slice(0, 4000) : ''
     const retryable = response.status === 503
-      || ['SERVICE_BUSY', 'IMAGE_POOL_SPACE_LOW', 'IMAGE_POOL_PREPARING'].includes(remoteCode)
+      || ['SERVICE_BUSY', 'IMAGE_POOL_SPACE_LOW', 'IMAGE_POOL_PREPARING', 'EVALUATOR_ASSETS_PREPARING', 'EVALUATOR_ASSETS_DOWNLOADING', 'EVALUATOR_ASSETS_VERIFYING'].includes(remoteCode)
       || (response.status === 422 && body.value.retryable === true)
     if (retryable) {
       await markPending(evaluationId, {
@@ -715,9 +728,12 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
         status: response.status,
         responseJson: body.text,
         code: remoteCode || 'EVALUATOR_NOT_READY',
-        message: `评测服务暂未接受任务（HTTP ${response.status}）`,
+        message: remoteMessage || `评测服务暂未接受任务（HTTP ${response.status}）`,
         delayMs: 1_000,
       })
+      if (remoteCode === 'IMAGE_POOL_PREPARING') {
+        await refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool]', error))
+      }
       return
     }
     const code = response.status === 409 && remoteCode === 'RUN_ID_CONFLICT'
@@ -730,7 +746,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       status: response.status,
       responseJson: body.text,
       code,
-      message: `评测服务拒绝任务（HTTP ${response.status}）`,
+      message: remoteMessage || `评测服务拒绝任务（HTTP ${response.status}）`,
     })
   } catch (error) {
     if (evaluation.status === 'dispatch_unknown') {

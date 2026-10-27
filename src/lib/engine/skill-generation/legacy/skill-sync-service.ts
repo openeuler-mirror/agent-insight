@@ -43,7 +43,7 @@ async function fetchEnterpriseSkillList(cookie?: string): Promise<EnterpriseSkil
   console.log('[Enterprise-Sync] 响应状态:', response.status, response.statusText);
 
   const data: EnterpriseSkillListResponse = await response.json();
-  console.log('[Enterprise-Sync] 响应数据:', JSON.stringify(data, null, 2));
+  console.debug('[Enterprise-Sync] 清单响应', { count: Array.isArray(data.data) ? data.data.length : 0 });
 
   if (data.code !== 200) {
     throw new Error(`获取企业技能清单失败: ${data.message}`);
@@ -74,7 +74,7 @@ async function fetchSkillDownloadUrl(skillId: number, cookie?: string): Promise<
 
   console.log('[Enterprise-Sync] 下载地址响应状态:', response.status, response.statusText);
   const data: EnterpriseDownloadResponse = await response.json();
-  console.log('[Enterprise-Sync] 下载地址响应:', JSON.stringify(data, null, 2));
+  console.debug('[Enterprise-Sync] 下载地址响应已解析');
 
   if (data.code !== 200) {
     throw new Error(`获取技能下载地址失败: ${data.message}`);
@@ -354,7 +354,7 @@ export async function fetchEnterpriseSkillInfo(
   console.log('[Enterprise-Info] 响应状态:', response.status, response.statusText);
 
   const data: EnterpriseSkillInfoResponse = await response.json();
-  console.log('[Enterprise-Info] 响应数据:', JSON.stringify(data, null, 2));
+  console.debug('[Enterprise-Info] 响应已解析');
   console.log('[Enterprise-Info] 企业skill版本:', data.data.version);
 
   if (data.code !== 200) {

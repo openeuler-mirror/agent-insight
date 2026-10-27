@@ -65,6 +65,7 @@ const nextConfig: NextConfig = {
       'scripts/agent-trace-collectors/shared/collaboration-transport.cjs',
       'scripts/agent-trace-collectors/shared/trace-transport.cjs',
       'services/executor/src/mcts-config.cjs',
+      'services/executor/src/mcts-failure.cjs',
     ],
     '*': [
       'packages/project-config/**',

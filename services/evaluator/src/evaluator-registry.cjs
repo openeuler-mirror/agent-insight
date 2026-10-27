@@ -20,7 +20,10 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
+const { runtimeDescriptor, remoteImage } = require('./runtime-image.cjs')
+const { EvaluatorAssets } = require('./evaluator-assets.cjs')
 const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
+const { isEvidencePath } = require('../../../packages/benchmark-protocol/artifact-path.cjs')
 
 class EvaluatorProtocolError extends Error {
   constructor(code, message, status = 422, retryable = false) {
@@ -97,9 +100,10 @@ class AbstractBenchmarkEvaluator {
     for (const evidence of output.evidenceFiles) {
       const resolved = path.resolve(evidence.path)
       if (
-        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(evidence.name || ''))
+        !isEvidencePath(evidence.name)
         || names.has(evidence.name)
         || !resolved.startsWith(`${root}${path.sep}`)
+        || !fs.realpathSync(resolved).startsWith(`${fs.realpathSync(root)}${path.sep}`)
         || !fs.statSync(resolved).isFile()
       ) {
         throw new EvaluatorProtocolError('EVALUATION_EVIDENCE_INVALID', 'Evaluator 证据文件不合法', 500)
@@ -235,6 +239,7 @@ function runEntrypoint(descriptor, args, options = {}) {
 }
 
 async function inspectOciRuntime(descriptor, options = {}) {
+  descriptor = runtimeDescriptor(descriptor)
   const commandRunner = options.commandRunner || runEntrypoint
   try {
     const result = await commandRunner({ command: 'direct', entrypoint: 'docker' }, [
@@ -250,6 +255,7 @@ async function inspectOciRuntime(descriptor, options = {}) {
 const runtimePreparations = new Map()
 
 async function ensureOciRuntime(descriptor, options = {}) {
+  descriptor = runtimeDescriptor(descriptor)
   const key = `${descriptor.image}:${descriptor.artifactDigest}`
   let work = runtimePreparations.get(key)
   if (!work) {
@@ -267,6 +273,9 @@ async function prepareOciRuntime(descriptor, options = {}) {
     throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_INVALID', 'Evaluator OCI Runtime 描述不合法', 500)
   }
   if (await inspectOciRuntime(descriptor, options)) return
+  if (descriptor.requiresPrebuiltRuntime && !remoteImage(descriptor.image)) {
+    throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_IMAGE_NOT_FOUND', '该 Evaluator 需要预先构建与 Catalog 摘要匹配的 Runtime 镜像', 503, false)
+  }
   const { recordManagedImage } = require('./service-control.cjs')
   const dataDir = process.env.EVALUATOR_DATA_DIR
   let ownership
@@ -280,6 +289,7 @@ async function prepareOciRuntime(descriptor, options = {}) {
       'pull', descriptor.image,
     ], { ...options, errorCode: 'EVALUATOR_RUNTIME_IMAGE_UNAVAILABLE' })
   } catch (pullError) {
+    if (descriptor.requiresPrebuiltRuntime) throw pullError
     if (!descriptor.dockerfile || !fs.existsSync(descriptor.dockerfile)) throw pullError
     await commandRunner({ command: 'direct', entrypoint: 'docker' }, [
       'build', '--file', descriptor.dockerfile,
@@ -305,6 +315,7 @@ async function prepareOciRuntime(descriptor, options = {}) {
 }
 
 async function runOciEntrypoint(descriptor, args, options = {}) {
+  descriptor = runtimeDescriptor(descriptor)
   await ensureOciRuntime(descriptor, options)
   const controllerContainer = String(process.env.EVALUATOR_CONTROLLER_CONTAINER_ID || process.env.HOSTNAME || '').trim()
   if (!/^[A-Za-z0-9_.-]+$/.test(controllerContainer)) {
@@ -329,6 +340,7 @@ async function runOciEntrypoint(descriptor, args, options = {}) {
   const forbiddenRuntimeEnv = new Set([
     'EVALUATOR_AGENT_INSIGHT_BASE_URL',
     'EVALUATOR_RUNTIME_ENV_NAMES',
+    'EVALUATOR_ASSETS_DIR',
     'AGENT_INSIGHT_EVALUATOR_CONFIG_JSON',
   ])
   for (const name of String(process.env.EVALUATOR_RUNTIME_ENV_NAMES || '').split(',').filter(Boolean)) {
@@ -364,17 +376,39 @@ function runtimeEnvironment(descriptor, limits) {
 }
 
 class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
-  constructor(descriptor, processRunner) {
+  constructor(descriptor, processRunner, options = {}) {
     super(descriptor.key)
     const runtimeStrategy = RUNTIME_STRATEGIES.get(descriptor.runtime)
     if (!runtimeStrategy) throw new TypeError(`unsupported evaluator runtime: ${descriptor.runtime}`)
     this.descriptor = descriptor
     this.processRunner = processRunner || runtimeStrategy
+    this.assets = descriptor.assets ? new EvaluatorAssets(descriptor, options.assetRunner || runEntrypoint, options) : null
+  }
+
+  prepareAssets() {
+    return this.assets?.start()
+  }
+
+  assertAssetsReady() {
+    return this.assets?.assertReady()
+  }
+
+  assetEnvironment() {
+    const root = this.assertAssetsReady()
+    return root ? { EVALUATOR_ASSETS_DIR: root } : {}
   }
 
   async describeImages(payload, arch) {
+    const assetsDir = this.assertAssetsReady()
     if (!this.descriptor.imageProvider) return []
-    return require(this.descriptor.imageProvider).describeImages(payload, arch)
+    try {
+      return await require(this.descriptor.imageProvider).describeImages(payload, arch, { assetsDir })
+    } catch (error) {
+      if (/^[A-Z][A-Z0-9_]{0,95}$/.test(error.code) && error.status === 422 && error.retryable === false) {
+        throw new EvaluatorProtocolError(error.code, error.message, 422, false)
+      }
+      throw error
+    }
   }
 
   validateBenchmarkJob(job) {
@@ -403,7 +437,15 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
   }
 
   async checkReady(runtime) {
+    try { this.assertAssetsReady() }
+    catch (error) {
+      return { ready: false, formalEligible: false, reason: error.message,
+        runtimeFacts: { assetStage: this.assets.stage, assetErrorCode: error.code } }
+    }
     if (this.descriptor.runtime === 'oci-container' && !await inspectOciRuntime(this.descriptor)) {
+      if (this.descriptor.requiresPrebuiltRuntime && !remoteImage(runtimeDescriptor(this.descriptor).image)) {
+        return { ready: false, formalEligible: false, reason: '需要预先构建与 Catalog 摘要匹配的 Runtime 镜像' }
+      }
       return {
         ready: true,
         formalEligible: true,
@@ -422,6 +464,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
           EVALUATOR_HOST_OS: runtime.hostOS,
           EVALUATOR_HOST_ARCH: runtime.hostArch,
           ...runtimeEnvironment(this.descriptor),
+          ...this.assetEnvironment(),
         },
         errorCode: 'EVALUATOR_DOCTOR_FAILED',
       })
@@ -445,6 +488,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
     if (!this.descriptor.smokeEntrypoint) {
       return { supported: false, evaluatorKey: this.key, reason: '该 Evaluator 未提供部署 Smoke' }
     }
+    await this.assets?.ensure()
     const descriptor = {
       ...this.descriptor,
       entrypoint: this.descriptor.runtimeSmokeEntrypoint || this.descriptor.smokeEntrypoint,
@@ -455,6 +499,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
         EVALUATOR_HOST_OS: runtime.hostOS,
         EVALUATOR_HOST_ARCH: runtime.hostArch,
         ...runtimeEnvironment(this.descriptor),
+        ...this.assetEnvironment(),
       },
       errorCode: 'EVALUATOR_SMOKE_FAILED',
       retryable: false,
@@ -467,6 +512,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
   }
 
   async evaluate(input) {
+    await this.assets?.ensure()
     const contractDir = path.join(input.workDir, 'entrypoint')
     const inputDir = path.join(contractDir, 'input')
     const outputDir = path.join(contractDir, 'output')
@@ -503,7 +549,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
     ], {
       cwd: contractDir,
       signal: input.signal,
-      env: runtimeEnvironment(this.descriptor, input.job.limits),
+      env: { ...runtimeEnvironment(this.descriptor, input.job.limits), ...this.assetEnvironment() },
       resources: input.job.limits,
       evaluationId: input.job.evaluationId,
     })

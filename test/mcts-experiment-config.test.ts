@@ -16,8 +16,9 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createRequire } from 'node:module'
 import { createIsolatedDatabase } from './helpers/isolated-database'
-import { loadRuntimeDefinitions } from '../packages/agent-runtime/loader.cjs'
+import { loadRuntimeDefinitions, runtimeInvocationOptions } from '../packages/agent-runtime/loader.cjs'
 const definition = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
 
 test('MCTS options survive experiment creation, details, clone, dispatch and Case retry', async t => {
@@ -32,7 +33,7 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
   const { refreshBenchmarkImagePreparation } = await import('../src/lib/benchmark/image-preparation')
   const { getBenchmarkAdapter } = await import('../src/lib/benchmark/adapter-registry')
   const { canonicalJson, fingerprintJson } = await import('../packages/benchmark-protocol/src/contracts')
-  const { buildExecutionPlan } = require('../services/executor/src/index.cjs')
+  const { buildExecutionPlan } = createRequire(import.meta.url)('../services/executor/src/index.cjs')
   t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 503 }))
   scheduler.setBenchmarkCommandDispatcherForTest(async () => ({ commandId: 'fixture-command', status: 'rejected' }))
   t.after(async () => {
@@ -52,7 +53,7 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
     ordinal: 0, rawCaseJson: canonicalJson(raw), sourceFingerprint: fingerprintJson(raw),
     publicPayloadJson: canonicalJson(split.publicPayload), privatePayloadJson: canonicalJson(split.privatePayload),
     publicFingerprint: split.publicFingerprint, privateFingerprint: split.privateFingerprint } })
-  const options = { runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: definition.presets[0].values }
+  const options = { version: 2, runtimeKey: definition.runtimeKey, definitionDigest: definition.definitionDigest, values: { ...definition.configuration!.defaults, 'new-business-option': 'literal value' } }
   const capabilities = { actions: ['RUN_BENCHMARK_CASE'], platforms: [{ id: 'pi-mcts', agents: ['pi-mcts'],
     parameterDefinitions: [definition], runBenchmarkCase: { version: 1, returnsTraceId: true } }],
     components: { 'git-workspace/v1': true, 'git-patch/v1': true, 'agent-runtime/pi-mcts/v1': true } }
@@ -101,6 +102,30 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
   assert.equal(retried?.status, 'dispatch_failed')
   assert.equal(retried?.retryOfRunId, run.id)
   assert.deepEqual(JSON.parse(retried!.taskEnvelopeJson!).agentConfig.agentOptions, options)
+
+  const nestedOptions = { ...options, values: { permission: { external_directory: { '~/.agent-insight/example/**': 'allow' } },
+    routes: [null, false, { label: '5' }] } }
+  const nestedResponse = await create(new Request('http://fixture.invalid/api/experiments', { method: 'POST',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...body, name: 'MCTS independent nested draft',
+      executionTarget: { ...body.executionTarget, agentOptions: nestedOptions } }) }))
+  assert.equal(nestedResponse.status, 201, JSON.stringify(await nestedResponse.clone().json()))
+  const nestedId = (await nestedResponse.json()).id
+  const nestedBinding = await prisma.benchmarkExperimentBinding.findUniqueOrThrow({ where: { experimentId: nestedId } })
+  assert.deepEqual(JSON.parse(nestedBinding.runConfigJson).agentOptions, nestedOptions)
+  const nestedDetail = await detail(new Request(`http://fixture.invalid/api/experiments/${nestedId}?user=options-user`),
+    { params: Promise.resolve({ id: nestedId }) })
+  assert.deepEqual((await nestedDetail.json()).executionAgentOptions, nestedOptions)
+  await prisma.experiment.update({ where: { id: nestedId }, data: { status: 'running' } })
+  const nestedPrepared = await prepareNextBenchmarkCaseRun({ experimentId: nestedId, callbackOrigin: 'http://fixture.invalid' })
+  const nestedRun = await prisma.benchmarkCaseRun.findUniqueOrThrow({ where: { id: nestedPrepared!.runId } })
+  const nestedTask = JSON.parse(nestedRun.taskEnvelopeJson!)
+  assert.deepEqual(nestedTask.agentConfig.agentOptions, nestedOptions)
+  assert.deepEqual(buildExecutionPlan(nestedTask, { workspaceProviders: fakeRegistry, policyEnforcers: fakeRegistry,
+    agentRuntimes: fakeRegistry, collectors: fakeRegistry }).agent.agentOptions, nestedOptions)
+  assert.throws(() => runtimeInvocationOptions(nestedTask.agentConfig.platform, nestedTask.agentConfig.agent,
+    nestedTask.agentConfig.agentOptions), /不能拆分嵌套参数/)
+  assert.deepEqual(nestedTask.agentConfig.agentOptions, nestedOptions)
+  assert.equal((await prisma.benchmarkExperimentBinding.findUniqueOrThrow({ where: { experimentId: nestedId } })).runConfigJson, nestedBinding.runConfigJson)
 
   await prisma.reliabilityClient.update({ where: { clientId: 'options-client' }, data: { capabilitiesJson: JSON.stringify({
     ...capabilities, platforms: [{ ...capabilities.platforms[0], runBenchmarkCase: { version: 1, returnsTraceId: true }, parameterDefinitions: [] }],

@@ -58,7 +58,7 @@ export function buildDebugTurns(interactions: unknown[]): DebugTurn[] {
   const turns: DebugTurn[] = [];
   input.forEach((raw, index) => {
     const item = asRecord(raw);
-    if (!item) return;
+    if (!item || item.trace_kind === 'user') return;
     const directRole = String(item.role || '');
     const responseMessage = asRecord(item.responseMessage);
     const responseRole = String(responseMessage?.role || '');

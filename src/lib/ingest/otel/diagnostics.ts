@@ -16,6 +16,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
+import { isLogEnabled, sanitizeLogValue, type LogLevel } from '@/lib/logger/server';
 
 type Stage = 'received' | 'api-key-auth' | 'decode' | 'partition' | 'langfuse-auth' | 'normalize' | 'spool' | 'jiuwen';
 type AuthMode = 'api-key' | 'basic' | 'langfuse-headers' | 'none';
@@ -25,7 +26,8 @@ type Reason = 'accepted' | 'ignored-codeagent' | 'invalid-api-key' | 'missing-ap
 type Result = { reason: Reason; spooled?: number; deduplicated?: number; rejected?: number; error?: unknown };
 type Options = {
   now?: () => number;
-  emit?: (level: 'info' | 'warn', line: string) => void;
+  emit?: (level: LogLevel, line: string) => void;
+  debug?: () => boolean;
   schedule?: (callback: () => void, delay: number) => void;
 };
 
@@ -93,6 +95,7 @@ export class OtelIngestDiagnostics {
   private readonly now: () => number;
   private readonly emit: NonNullable<Options['emit']>;
   private readonly schedule: NonNullable<Options['schedule']>;
+  private readonly debug: () => boolean;
   private windowStart: number;
   private scheduled = false;
   private inFlight = 0;
@@ -114,12 +117,13 @@ export class OtelIngestDiagnostics {
 
   constructor(options: Options = {}) {
     this.now = options.now || Date.now;
-    this.emit = options.emit || ((level, line) => level === 'warn' ? console.warn(line) : console.info(line));
+    this.emit = options.emit || ((level, line) => { if (isLogEnabled(level)) console[level](line); });
+    this.debug = options.debug || (() => isLogEnabled('debug'));
     this.schedule = options.schedule || ((callback, delay) => { setTimeout(callback, delay).unref(); });
     this.windowStart = this.now();
   }
 
-  private write(level: 'info' | 'warn', data: Record<string, unknown>) {
+  private write(level: LogLevel, data: Record<string, unknown>) {
     try { this.emit(level, `[OTelIngest] ${JSON.stringify({ pid: process.pid, ...data })}`); } catch {}
   }
 
@@ -128,14 +132,14 @@ export class OtelIngestDiagnostics {
     this.scheduled = true;
     this.schedule(() => {
       this.scheduled = false;
-      this.write('info', {
+      this.write(Object.keys(this.errorsByStage).length ? 'error' : 'info', {
         event: 'summary', windowStart: new Date(this.windowStart).toISOString(), windowEnd: new Date(this.now()).toISOString(),
         received: this.received, completed: this.completed, inFlight: this.inFlight,
         receivedByAuth: this.receivedByAuth, authenticatedByAuth: this.authenticatedByAuth,
         http: this.http, errorsByStage: this.errorsByStage,
         errorsByCode: this.errorsByCode, errorsByReason: this.errorsByReason, spooled: this.spooled,
         deduplicated: this.deduplicated, rejected: this.rejected, suppressedErrors: this.suppressedErrors,
-        detailsSampled: true,
+        detailsSampled: !this.debug(),
       });
       this.windowStart = this.now();
       this.received = this.completed = this.spooled = this.deduplicated = this.rejected = this.suppressedErrors = 0;
@@ -155,11 +159,19 @@ export class OtelIngestDiagnostics {
   begin(req: Request) {
     if (!this.scheduled) this.windowStart = this.now();
     const started = this.now();
+    const debug = this.debug();
     const metadata = { requestId: randomUUID(), ...requestMetadata(req) };
-    const sampled = !this.receivedSamples.has(metadata.authMode);
+    const sampled = debug || !this.receivedSamples.has(metadata.authMode);
     let stage: Stage = 'received';
     let authenticated = false;
     let finished = false;
+    let stageStarted = started;
+    const stageDurationsMs: Partial<Record<Stage, number>> = {};
+    const finishStage = () => {
+      const durationMs = Math.max(0, this.now() - stageStarted);
+      stageDurationsMs[stage] = (stageDurationsMs[stage] || 0) + durationMs;
+      if (debug) this.write('debug', { event: 'stage-end', ...metadata, stage, durationMs });
+    };
     let traces: ReturnType<typeof traceSample> = { traceIds: [], traceIdsTruncated: false };
     this.received++;
     this.inFlight++;
@@ -170,8 +182,39 @@ export class OtelIngestDiagnostics {
     }
     this.scheduleSummary();
     return {
-      stage(next: Stage) { stage = next; },
-      decoded(body: unknown) { traces = traceSample(body); },
+      stage: (next: Stage) => {
+        if (finished) return;
+        if (debug) finishStage();
+        stage = next;
+        stageStarted = this.now();
+        if (debug) this.write('debug', { event: 'stage-start', ...metadata, stage });
+      },
+      decoded: (body: any) => {
+        traces = traceSample(body);
+        if (!debug) return;
+        const ids = new Set<string>();
+        for (const resource of Array.isArray(body?.resourceSpans) ? body.resourceSpans : []) {
+          for (const scope of Array.isArray(resource?.scopeSpans) ? resource.scopeSpans : []) {
+            for (const span of Array.isArray(scope?.spans) ? scope.spans : []) {
+              if (typeof span?.traceId === 'string' && /^[a-f\d]{32}$/i.test(span.traceId)) ids.add(span.traceId.toLowerCase());
+            }
+          }
+        }
+        const all = [...ids];
+        for (let offset = 0; offset < all.length; offset += 32) {
+          this.write('debug', { event: 'trace-ids', requestId: metadata.requestId, traceIds: all.slice(offset, offset + 32), offset, total: all.length });
+        }
+      },
+      mapped: (events: Array<{ traceId?: string; sessionId: string }>) => {
+        if (!debug) return;
+        const seen = new Set<string>();
+        for (const event of events) {
+          const key = JSON.stringify([event.traceId, event.sessionId]);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          this.write('debug', { event: 'trace-session', requestId: metadata.requestId, traceId: event.traceId, sessionId: event.sessionId });
+        }
+      },
       authenticated: () => {
         if (authenticated || finished) return;
         authenticated = true;
@@ -179,6 +222,7 @@ export class OtelIngestDiagnostics {
       },
       finish: (status: number, result: Result) => {
         if (finished) return;
+        if (debug) finishStage();
         finished = true;
         this.inFlight--;
         this.completed++;
@@ -197,18 +241,21 @@ export class OtelIngestDiagnostics {
           this.errorsByCode[codeBucket] = (this.errorsByCode[codeBucket] || 0) + 1;
           this.errorsByReason[result.reason] = (this.errorsByReason[result.reason] || 0) + 1;
           const signature = `${stage}:${status}:${result.reason}:${code || ''}`;
-          if (!this.errorSamples.has(signature) && this.errorSamples.size < DETAIL_LIMIT) {
-            this.errorSamples.add(signature);
+          if (debug || (!this.errorSamples.has(signature) && this.errorSamples.size < DETAIL_LIMIT)) {
+            if (!debug) this.errorSamples.add(signature);
             print = true;
           } else this.suppressedErrors++;
-        } else if (sampled && this.successSamples < DETAIL_LIMIT) {
+        } else if (debug || (sampled && this.successSamples < DETAIL_LIMIT)) {
           this.successSamples++;
           print = true;
         }
-        if (print) this.write(failure ? 'warn' : 'info', {
+        if (print) this.write(failure ? 'error' : 'info', {
           event: failure ? 'failed' : 'completed', ...metadata, ...traces, stage, authenticated,
           status, reason: result.reason, errorCode: code, durationMs: Math.max(0, this.now() - started),
           spooled: result.spooled, deduplicated: result.deduplicated, rejected: result.rejected,
+          ...(debug ? { stageDurationsMs, errorDetails: result.error ? sanitizeLogValue(stage === 'decode'
+            ? { name: (result.error as Error).name, code, message: '[decoder source excerpt omitted]' }
+            : result.error) : undefined } : {}),
         });
       },
     };

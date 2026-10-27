@@ -26,6 +26,7 @@ const BUNDLE_FILES = [
   ['mcts-xgovernor-proxy/gateway.cjs', ['mcts-xgovernor-proxy', 'gateway.cjs']],
   ['mcts-xgovernor-proxy/install.cjs', ['mcts-xgovernor-proxy', 'install.cjs']],
   ['mcts-xgovernor-proxy/mcts-config.cjs', ['..', '..', 'services', 'executor', 'src', 'mcts-config.cjs']],
+  ['mcts-xgovernor-proxy/mcts-failure.cjs', ['..', '..', 'services', 'executor', 'src', 'mcts-failure.cjs']],
   ['mcts-xgovernor-proxy/run.cjs', ['mcts-xgovernor-proxy', 'run.cjs']],
   ['shared/collaboration-transport.cjs', ['shared', 'collaboration-transport.cjs']],
   ['shared/trace-transport.cjs', ['shared', 'trace-transport.cjs']],

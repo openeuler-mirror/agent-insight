@@ -20,6 +20,9 @@
 !services/evaluator/
 !services/evaluator/src/
 !services/evaluator/src/**
+!packages/
+!packages/benchmark-protocol/
+!packages/benchmark-protocol/artifact-path.cjs
 !benchmarks/
 !benchmarks/**
 !generated/

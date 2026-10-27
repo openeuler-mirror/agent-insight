@@ -87,6 +87,8 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-task-completion-no-ref': { category: 'res', requires: [] },
   // 内容严谨性：只读最终输出；参考答案是可选依据，不做门控
   'preset-rigor-content': { category: 'res', requires: [] },
+  'preset-similarity-text': { category: 'res', requires: ['reference'] },
+  'preset-similarity-answer-match': { category: 'res', requires: ['reference'] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };

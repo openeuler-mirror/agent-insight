@@ -65,7 +65,7 @@ const STATUS_COPY: Record<string, { label: string; tone: string }> = {
   published: { label: '已发布', tone: 'text-success bg-success-subtle' },
   abandoned: { label: '已放弃', tone: 'text-foreground-muted bg-background-secondary' },
   optimization_failed: { label: '优化失败', tone: 'text-error bg-error-subtle' },
-  optimization_cancelled: { label: '优化已取消', tone: 'text-foreground-muted bg-background-secondary' },
+  optimization_cancelled: { label: '优化已停止', tone: 'text-foreground-muted bg-background-secondary' },
 };
 
 const ABANDONABLE = new Set(['pending_retest', 'retest_passed', 'retest_failed', 'retest_cancelled']);
@@ -175,7 +175,7 @@ export function OptimizationRecordsPanel({
             <div className="grid grid-cols-3 gap-3 py-4">
               <Metric label="基线版本" value={`v${selected.baseVersion}`} />
               <Metric label="候选版本" value={getOptimizationTargetVersion(selected)} />
-              <Metric label="质量校验" value={executionFailed ? '未执行' : selected.status === 'optimization_failed' ? '未通过' : selected.staticEvaluationId ? '已通过' : '待完成'} />
+              <Metric label="质量校验" value={selected.status === 'optimization_cancelled' ? '已停止' : executionFailed ? '未执行' : selected.status === 'optimization_failed' ? '未通过' : selected.staticEvaluationId ? '已通过' : '待完成'} />
             </div>
             <section className="rounded-md border border-border">
               <div className="flex items-center border-b border-border px-3 py-2"><b className="text-xs text-foreground">版本差异</b><span className="ml-auto text-[10px] text-foreground-muted">{selected.diff?.length || 0} 个文件变更</span></div>

@@ -46,8 +46,19 @@ test('defaults, scoped files and local overrides need no version field', (t) => 
   assert.equal(loadProjectConfig('evaluator', { root: f.root, env: {} }).maxConcurrency, 3)
   assert.equal(loadProjectConfig('evaluator', f.options).maxConcurrency, 3)
   assert.equal(loadProjectConfig('executor', f.options).benchmarks['swe-bench'].gitSource, null)
+  assert.equal(loadProjectConfig('executor', f.options).retention.days, 7)
   f.write('platform.local.yaml', { version: 1 })
   assert.throws(() => loadProjectConfig('platform', f.options), /platform.local.yaml.*未知配置字段 version/)
+})
+
+test('local history retention accepts only positive integer days', t => {
+  const f = fixture(t)
+  f.write('executor.local.yaml', { retention: { days: 30 } })
+  assert.equal(loadProjectConfig('executor', f.options).retention.days, 30)
+  for (const days of [0, -1, 1.5, '7', null]) {
+    f.write('executor.local.yaml', { retention: { days } })
+    assert.throws(() => loadProjectConfig('executor', f.options), /retention.days/)
+  }
 })
 
 test('configuration resolves paths by the declaring file and distinguishes null from empty lists', (t) => {
@@ -128,7 +139,7 @@ test('disabled or invalid auto-import configuration never starts the importer or
   }
 })
 
-test('installed client runtime loads its own executor configuration and retains local overrides on reinstall', (t) => {
+test('installed client loads user configuration outside runtime and retains overrides on reinstall', (t) => {
   const f = fixture(t)
   const clientHome = path.join(f.root, 'home')
   const code = `
@@ -136,20 +147,40 @@ test('installed client runtime loads its own executor configuration and retains 
     const path = require('node:path');
     const installer = require('./scripts/install-ras-client.js');
     installer.installRuntime();
-    const local = path.join(installer.RUNTIME_DIR, 'config/benchmark/executor.local.yaml');
-    fs.writeFileSync(local, JSON.stringify({benchmarks:{'swe-bench':{gitSource:'https://git.example.com'}}}));
+    const assert = require('node:assert/strict');
+    const local = path.join(process.env.AGENT_INSIGHT_HOME, 'config/executor.local.yaml');
+    assert.equal(fs.existsSync(path.dirname(local)), true);
+    assert.equal(fs.existsSync(local), false);
+    fs.writeFileSync(local, JSON.stringify({
+      retention:{days:14},
+      benchmarks:{'swe-bench':{gitSource:'../git-cache'}},
+      execution:{profiles:{'xgovernor-local-docker':{resources:{cpu:4,memoryMiB:8192}}}},
+      runtimes:{mcts:{defaults:{maxIters:7}}}
+    }));
+    const text = fs.readFileSync(local, 'utf8');
     installer.installRuntime();
+    assert.equal(fs.readFileSync(local, 'utf8'), text);
+    const {loadProjectConfig} = require(path.join(installer.RUNTIME_DIR, 'packages/project-config/index.cjs'));
+    const config = loadProjectConfig('executor');
+    assert.equal(config.retention.days, 14);
+    assert.equal(config.execution.profiles['xgovernor-local-docker'].resources.cpu, 4);
+    assert.equal(config.execution.profiles['xgovernor-local-docker'].resources.memoryMiB, 8192);
+    assert.equal(config.execution.profiles['xgovernor-local-docker'].resources.pids, 512);
+    assert.equal(config.benchmarks['swe-bench'].images.source, 'official');
+    const runtimeOptions = require(path.join(installer.RUNTIME_DIR, 'executor/runtime-options.cjs'));
+    assert.equal(runtimeOptions.runtimeInvocationOptions('pi-mcts', 'pi-mcts').agentOptions.values.maxIters, 7);
     const {SweBenchGitSourcePolicy} = require(path.join(installer.RUNTIME_DIR, 'executor/benchmarks/swe-bench.cjs'));
-    const policy = new SweBenchGitSourcePolicy({home:process.env.AGENT_INSIGHT_HOME,env:{}});
+    const policy = new SweBenchGitSourcePolicy({home:process.env.AGENT_INSIGHT_HOME});
     const result = policy.resolve({repository:'https://github.com/pallets/flask.git'});
-    if(result.remotes[0].url!=='https://git.example.com/pallets/flask.git') process.exit(1);
+    assert.equal(result.cachePath, path.join(process.env.AGENT_INSIGHT_HOME, 'git-cache/pallets/flask.git'));
   `
   const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: clientHome }
   delete env.AGENT_INSIGHT_CONFIG_DIR
   delete env.AGENT_INSIGHT_PACKAGE_ROOT
   const child = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8', env })
   assert.equal(child.status, 0, child.stderr)
-  assert.ok(fs.existsSync(path.join(clientHome, 'client/runtime/config/benchmark/executor.local.yaml')))
+  assert.ok(fs.existsSync(path.join(clientHome, 'config/executor.local.yaml')))
+  assert.match(child.stdout, /用户配置（可选）：/)
 })
 
 test('custom configuration directory directly contains scoped files without an extra benchmark suffix', (t) => {
@@ -161,7 +192,7 @@ test('custom configuration directory directly contains scoped files without an e
   assert.equal(config.benchmarks['swe-bench'].dataset.autoImport, false)
 })
 
-test('client upgrade migrates legacy local Git paths without overriding a newer local file', (t) => {
+test('installed client ignores both old local paths without migration or fallback', (t) => {
   const f = fixture(t)
   const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: path.join(f.root, 'home') }
   delete env.AGENT_INSIGHT_CONFIG_DIR
@@ -176,23 +207,39 @@ test('client upgrade migrates legacy local Git paths without overriding a newer 
     const legacyLocal = path.join(legacyDir, 'executor.local.yaml');
     const legacyText = 'benchmarks:\\n  swe-bench:\\n    gitSource: ../git-cache\\n';
     fs.writeFileSync(legacyLocal, legacyText);
+    const oldBenchmarkLocal = path.join(legacyDir, 'benchmark/executor.local.yaml');
+    fs.mkdirSync(path.dirname(oldBenchmarkLocal), {recursive:true});
+    fs.writeFileSync(oldBenchmarkLocal, 'invalid: [');
     installer.installRuntime();
     assert.equal(fs.existsSync(path.join(installer.RUNTIME_DIR, 'executor/runtimes/mcts/runtime.yaml')), true);
     assert.equal(fs.existsSync(path.join(installer.RUNTIME_DIR, 'runtimes')), false);
+    const {prepareExecutionImage} = require(path.join(installer.RUNTIME_DIR, 'executor/execution-images.cjs'));
+    assert.equal(typeof prepareExecutionImage, 'function');
+    assert.equal(typeof require(path.join(installer.RUNTIME_DIR, 'executor/benchmarks/swe-bench-images.cjs')).SweBenchImageResolver, 'function');
     const runtimeOptions = require(path.join(installer.RUNTIME_DIR, 'executor/runtime-options.cjs'));
     const invocation = runtimeOptions.runtimeInvocationOptions('pi-mcts', 'pi-mcts');
     assert.equal(invocation.agentOptions.runtimeKey, 'mcts');
-    assert.equal(invocation.agentOptions.values.maxIters, 5);
+    assert.equal(invocation.agentOptions.values['max-iters'], 5);
     assert.deepEqual(invocation.args.slice(0, 4), ['--max-iters', '5', '--branching', '3']);
     assert.equal(invocation.definition.parameters.some(field => 'binding' in field), false);
     const {loadProjectConfig} = require(path.join(installer.RUNTIME_DIR, 'packages/project-config/index.cjs'));
-    const options = {root:installer.RUNTIME_DIR,env:{}};
-    assert.equal(loadProjectConfig('executor', options).benchmarks['swe-bench'].gitSource, path.join(installer.RUNTIME_DIR,'git-cache'));
+    const options = {root:installer.RUNTIME_DIR};
+    const local = path.join(process.env.AGENT_INSIGHT_HOME, 'config/executor.local.yaml');
+    assert.equal(fs.existsSync(local), false);
+    assert.equal(loadProjectConfig('executor', options).benchmarks['swe-bench'].gitSource, null);
     assert.equal(fs.readFileSync(legacyLocal,'utf8'),legacyText);
-    const currentLocal = path.join(legacyDir,'benchmark/executor.local.yaml');
-    fs.writeFileSync(currentLocal,'benchmarks:\\n  swe-bench:\\n    gitSource: https://new.example/git\\n');
+    assert.equal(fs.readFileSync(oldBenchmarkLocal,'utf8'), 'invalid: [');
+    fs.writeFileSync(local,'benchmarks:\\n  swe-bench:\\n    gitSource: https://new.example/git\\n');
     installer.installRuntime();
     assert.equal(loadProjectConfig('executor', options).benchmarks['swe-bench'].gitSource,'https://new.example/git');
+    assert.equal(fs.readFileSync(oldBenchmarkLocal,'utf8'), 'invalid: [');
+    const customDir = path.join(process.env.AGENT_INSIGHT_HOME, 'custom-config');
+    fs.mkdirSync(customDir);
+    fs.writeFileSync(path.join(customDir,'executor.local.yaml'), 'benchmarks:\\n  swe-bench:\\n    gitSource: ../custom-cache\\n');
+    const custom = loadProjectConfig('executor', {root:installer.RUNTIME_DIR, env:{...process.env,AGENT_INSIGHT_CONFIG_DIR:customDir}});
+    assert.equal(custom.benchmarks['swe-bench'].gitSource, path.join(process.env.AGENT_INSIGHT_HOME, 'custom-cache'));
+    fs.writeFileSync(local, 'invalid: [');
+    assert.throws(() => loadProjectConfig('executor', options), /config[/\\\\]executor.local.yaml/);
   `], { env, encoding: 'utf8' })
   assert.equal(child.status, 0, child.stderr)
 })

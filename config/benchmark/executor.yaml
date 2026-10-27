@@ -12,7 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+retention:
+  days: 7
 benchmarks:
   swe-bench:
     gitSource: null
+    images:
+      source: official
+      arch: auto
+      allowNonOfficial: false
+      proxyPrefix: null
+      verifiedMirrorRepositories: null
 runtimes: {}
+execution:
+  profiles: {}
+  bindings:
+    - benchmarks: [swe-bench]
+      platforms: [pi-agent, xiaoo]
+      profile: xgovernor-local-docker

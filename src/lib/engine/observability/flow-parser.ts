@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server';
 import { OpenAI } from "openai";
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { getActiveConfig } from '@/lib/storage/server-config';
@@ -39,6 +40,7 @@ interface LogOutput {
 }
 
 function appendLog(stage: string, input: LogInput, output: LogOutput): void {
+  if (!isLogEnabled('debug')) return;
   try {
     const logDir = path.dirname(LOG_FILE);
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
@@ -46,10 +48,10 @@ function appendLog(stage: string, input: LogInput, output: LogOutput): void {
     const record = {
       timestamp: new Date().toISOString(),
       stage,
-      input,
-      output
+      inputMeta: input,
+      outputMeta: output
     };
-    fs.appendFileSync(LOG_FILE, JSON.stringify(record) + '\n');
+    fs.appendFileSync(LOG_FILE, JSON.stringify(sanitizeLogValue(record)) + '\n');
   } catch (e) { 
     console.error('Log error', e); 
   }

@@ -26,7 +26,7 @@ import {
   ACTRAIL_UNIX_SETUP_BLOCK,
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
-import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller, getAgentInsightClientBashInstaller } from '@/lib/ingest/setup-package';
 import {
     parseFrameworks,
     resolveInstallProfile,
@@ -169,6 +169,7 @@ AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
 ${getAgentInsightRasBashInstaller()}
+${getAgentInsightClientBashInstaller()}
 
 echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
@@ -403,12 +404,19 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     echo "⏬ Downloading OpenCode Plugin..."
     rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
+    OPENCODE_PLUGIN_QUERY=""
+    OPENCODE_INSTALLED_VERSION=$(opencode --version 2>/dev/null || true)
+    if printf "%s\\n" "$OPENCODE_INSTALLED_VERSION" | grep -Eq '^[[:space:]]*(opencode[[:space:]]+)?v?2[.]'; then OPENCODE_PLUGIN_QUERY="?apiVersion=2"; fi
+    if [ -n "$OPENCODE_PLUGIN_QUERY" ] && { [ -f "$OPENCODE_CONFIG_DIR/plugins/agent-insight-ras.js" ] || grep -Fq "agent-insight-ras" "$OPENCODE_CONFIG_DIR/opencode.json" "$OPENCODE_CONFIG_DIR/opencode.jsonc" 2>/dev/null; }; then
+        echo "⚠️  检测到旧 agent-insight-ras，OpenCode 2.x 不兼容。请先备份 $OPENCODE_CONFIG_DIR，再移走 plugins/agent-insight-ras.js 并移除配置中对应的 plugin 条目；保留其他插件、模型和自定义 Agent 配置。"
+    fi
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode$OPENCODE_PLUGIN_QUERY" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     echo "⏬ Downloading OpenCode Uploader..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$AGENT_INSIGHT_HOME/opencode_uploader_client.js"
     echo "⏬ Installing OpenCode commands..."
     mkdir -p "$OPENCODE_CONFIG_DIR/commands"
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
+    if [ -z "$OPENCODE_PLUGIN_QUERY" ]; then
     echo "⏬ Downloading OpenCode TUI Plugin..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
     export TUI_PLUGIN_PATH="$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
@@ -435,6 +443,7 @@ fs.writeFileSync(file, JSON.stringify(data, null, 2));
 NODE
     else
       echo "⚠️  node not found; skip TUI plugin config patch."
+    fi
     fi
 fi
 
@@ -875,7 +884,7 @@ if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ -n "$GOAL_PLUS_HOSTS" ]; then
 fi
 
 # 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
-if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
+if { [ "$INSTALL_OPENCODE" = "true" ] && [ -z "$OPENCODE_PLUGIN_QUERY" ]; } || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
     echo "🛡️  Installing Agent RAS runtime..."
     install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
 fi
@@ -1134,6 +1143,14 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
         "$AGENT_INSIGHT_HOME/start_watchers.sh"
     else
         echo "⚠️  Node.js (npx) not found. Skipping watcher startup."
+    fi
+fi
+
+if [[ ",$SELECTED_FRAMEWORKS," == *",pi-agent,"* ]] || [[ ",$SELECTED_FRAMEWORKS," == *",xiaoo,"* ]]; then
+    echo "🖥️  Registering resident client and preparing native Benchmark backend..."
+    if ! install_agent_insight_client "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY"; then
+        echo "❌ 常驻客户端安装失败，请修复错误后重新执行同一命令"
+        exit 1
     fi
 fi
 
@@ -1548,9 +1565,23 @@ function generatePowerShellScript(
         '    Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
+        '    $opencodePluginQuery = ""',
+        '    if (Get-Command opencode -ErrorAction SilentlyContinue) {',
+        '        $opencodeInstalledVersion = (& opencode --version 2>$null | Out-String).Trim()',
+        '        if ($opencodeInstalledVersion -match "^\\s*(opencode\\s+)?v?2\\.") { $opencodePluginQuery = "?apiVersion=2" }',
+        '    }',
+        "    if ($opencodePluginQuery) {",
+        "        $legacyRas = Test-Path (Join-Path $opencodeConfigDir \"plugins\\agent-insight-ras.js\")",
+        "        foreach ($name in @(\"opencode.json\", \"opencode.jsonc\")) {",
+        "            $configPath = Join-Path $opencodeConfigDir $name",
+        "            if ((Test-Path $configPath) -and (Select-String -LiteralPath $configPath -SimpleMatch \"agent-insight-ras\" -Quiet)) { $legacyRas = $true }",
+        "        }",
+        "        if ($legacyRas) { Write-Host \"⚠️  检测到旧 agent-insight-ras，OpenCode 2.x 不兼容。请先备份 $opencodeConfigDir，再移走 plugins/agent-insight-ras.js 并移除配置中对应的 plugin 条目；保留其他插件、模型和自定义 Agent 配置。\" }",
+        "    }",
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode$opencodePluginQuery" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
         '    Write-Host "⏬ Downloading OpenCode Uploader..."',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -OutFile (Join-Path $skillInsightDir "opencode_uploader_client.js")',
+        '    if (-not $opencodePluginQuery) {',
         '    Write-Host "⏬ Downloading OpenCode TUI Plugin..."',
         '    $tuiPluginPath = Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.tui.tsx"',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -OutFile $tuiPluginPath',
@@ -1566,6 +1597,7 @@ function generatePowerShellScript(
         '        $data | ConvertTo-Json -Depth 10 | Set-Content -Path $tuiConfigFile -Encoding UTF8',
         '    } catch {',
         '        Write-Host "⚠️  Failed to patch tui.json for TUI plugin."',
+        '    }',
         '    }',
         '}',
         '',

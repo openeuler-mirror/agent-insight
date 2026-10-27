@@ -17,6 +17,9 @@
 import { createHash } from 'node:crypto'
 
 import { BenchmarkProtocolError } from './errors'
+import { validateExecution, validateProfile, type ExecutionProfile, type ExecutionSpec } from '../execution.cjs'
+import { validatePublicBundleSpec } from '../../../services/executor/src/public-bundle.cjs'
+import { validateZsoftTasksSpec } from '../../../services/executor/src/zsoft-tasks.cjs'
 import { normalizeAgentOptions, type AgentOptions } from '../../agent-runtime/index.cjs'
 export type { AgentOptions } from '../../agent-runtime/index.cjs'
 
@@ -46,7 +49,9 @@ export type BenchmarkDatasetProfile = {
   key: string
   displayName: string
   acceptedExtensions: readonly string[]
+  acceptedSourceKinds?: readonly ('file' | 'directory')[]
   expectedCaseCount?: number
+  version?: string
 }
 
 export type BenchmarkPresentationFormat =
@@ -75,6 +80,9 @@ export type BenchmarkArtifactPresentation = {
 }
 
 export type BenchmarkPresentation = {
+  execution?: {
+    notice?: string
+  }
   evaluator?: {
     displayName: string
     description: string
@@ -107,6 +115,11 @@ export type BenchmarkPresentation = {
   artifacts?: readonly BenchmarkArtifactPresentation[]
 }
 
+export interface BenchmarkDatasetPreparer {
+  profileKey: string
+  prepareSource(): Promise<{ sourcePath: string; name?: string }>
+}
+
 export interface BenchmarkDatasetLoader {
   loadCases(sourcePath: string): AsyncIterable<JsonValue>
 }
@@ -114,6 +127,7 @@ export interface BenchmarkDatasetLoader {
 export type BenchmarkManifest = {
   adapterKey: string
   displayName: string
+  supportsAgentExecution?: boolean
   protocols: {
     agentTask: 'agent-task/v1'
     evaluation: 'benchmark-evaluation/v1'
@@ -143,6 +157,8 @@ export type BenchmarkManifest = {
 }
 
 export type BenchmarkRunConfig = {
+  executionProfile?: ExecutionProfile
+  executionArch?: 'amd64' | 'arm64'
   executionConcurrency?: number
   platform: string
   agent: string
@@ -158,6 +174,7 @@ export type BenchmarkRunContext = {
 }
 
 export type AgentTaskEnvelope = {
+  execution?: ExecutionSpec
   schemaVersion: 'agent-task/v1'
   benchmark: { key: string }
   context: BenchmarkRunContext
@@ -169,6 +186,17 @@ export type AgentTaskEnvelope = {
     provider: 'git'
     repository: string
     revision: string
+  } | {
+    provider: 'public-bundle'
+    taskId: string
+    digest: string
+    repository?: never
+    revision?: never
+  } | {
+    provider: 'zsoft-tasks'
+    taskId: string
+    repository?: never
+    revision?: never
   }
   policy: {
     workspaceWrite: 'allow'
@@ -247,9 +275,11 @@ function taskValue(value: AgentTaskEnvelope): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue
 }
 
-function scanForbiddenKeys(value: JsonValue, path = '$'): void {
+function scanForbiddenKeys(value: JsonValue, allowRuntimeValues: boolean, segments: string[] = [], path = '$'): void {
+  if (allowRuntimeValues && segments.length === 3
+    && segments[0] === 'agentConfig' && segments[1] === 'agentOptions' && segments[2] === 'values') return
   if (Array.isArray(value)) {
-    value.forEach((item, index) => scanForbiddenKeys(item, `${path}[${index}]`))
+    value.forEach((item, index) => scanForbiddenKeys(item, allowRuntimeValues, [...segments, String(index)], `${path}[${index}]`))
     return
   }
   if (!value || typeof value !== 'object') return
@@ -260,7 +290,7 @@ function scanForbiddenKeys(value: JsonValue, path = '$'): void {
         `任务包含禁止字段 ${path}.${key}`,
       )
     }
-    scanForbiddenKeys(item, `${path}.${key}`)
+    scanForbiddenKeys(item, allowRuntimeValues, [...segments, key], `${path}.${key}`)
   }
 }
 
@@ -269,6 +299,14 @@ export function validateTaskEnvelope(
   context: BenchmarkRunContext,
   manifest: BenchmarkManifest,
 ): void {
+  if (task.execution) {
+    try {
+      validateExecution(task.execution)
+      if (task.agentConfig.executionProfile) validateProfile(task.agentConfig.executionProfile)
+      const target = task.execution.profile.targets.find(item => item.platform === task.agentConfig.platform)
+      if (!target?.agents.includes(task.agentConfig.agent) || task.policy.network !== task.execution.profile.network) throw new Error('执行环境与 Agent 或网络策略不匹配')
+    } catch (error) { throw new BenchmarkProtocolError('EXECUTION_PROFILE_INVALID', (error as Error).message) }
+  }
   if (task.schemaVersion !== 'agent-task/v1') {
     throw new BenchmarkProtocolError('TASK_SCHEMA_INVALID', '任务协议标识不受支持')
   }
@@ -288,6 +326,13 @@ export function validateTaskEnvelope(
   if (canonicalJson(task.task.benchmarkPayload).length > 256 * 1024) {
     throw new BenchmarkProtocolError('TASK_PAYLOAD_TOO_LARGE', '任务公开数据超过 256 KiB')
   }
+  if (task.workspace.provider === 'zsoft-tasks') {
+    try { validateZsoftTasksSpec(task.workspace) }
+    catch { throw new BenchmarkProtocolError('TASK_WORKSPACE_INVALID', 'ZSoft 任务目录契约不合法') }
+  } else if (task.workspace.provider === 'public-bundle') {
+    try { validatePublicBundleSpec(task.workspace) }
+    catch { throw new BenchmarkProtocolError('TASK_WORKSPACE_INVALID', '公开任务包契约不合法') }
+  } else if (task.workspace.provider === 'git') {
   let repository: URL
   try {
     repository = new URL(task.workspace.repository)
@@ -306,6 +351,9 @@ export function validateTaskEnvelope(
   }
   if (!/^[0-9a-f]{40}$/i.test(task.workspace.revision)) {
     throw new BenchmarkProtocolError('TASK_REVISION_INVALID', '仓库 revision 必须是 40 位 commit SHA')
+  }
+  } else {
+    throw new BenchmarkProtocolError('TASK_WORKSPACE_INVALID', '工作区类型不受支持')
   }
   const expectedArtifacts = canonicalJson(manifest.requiredArtifacts as unknown as JsonValue)
   const actualArtifacts = canonicalJson(task.submission.requiredArtifacts as unknown as JsonValue)
@@ -327,8 +375,8 @@ export function validateTaskEnvelope(
   ) {
     throw new BenchmarkProtocolError('TASK_AGENT_CONFIG_INVALID', 'Agent 配置不合法')
   }
-  normalizeBenchmarkAgentOptions(task.agentConfig.agentOptions)
-  scanForbiddenKeys(taskValue(task))
+  const agentOptions = normalizeBenchmarkAgentOptions(task.agentConfig.agentOptions)
+  scanForbiddenKeys(taskValue(task), agentOptions?.version === 2)
 }
 
 export function benchmarkDispatchDigest(input: {

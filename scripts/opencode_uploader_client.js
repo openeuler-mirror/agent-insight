@@ -1049,6 +1049,8 @@ function buildMessagesForSession(state, sid) {
       //     it should go through its own channel.
       summary: info?.summary === true ? true : undefined,
       finish: info?.finish,
+      ...(['llm', 'user'].includes(info?.trace_kind) ? { trace_kind: info.trace_kind } : {}),
+      ...(info?.error ? { status: 'error', error_summary: typeof info.error === 'string' ? info.error : info.error.message || info.error.data?.message || 'Model request failed' } : {}),
       variant: info?.variant,
     }
     messages.push(m)

@@ -45,6 +45,7 @@ WORKDIR /app
 COPY services/evaluator ./services/evaluator
 COPY packages/project-config ./packages/project-config
 COPY config/benchmark/evaluator.yaml ./config/benchmark/evaluator.yaml
+COPY packages/benchmark-protocol/artifact-path.cjs ./packages/benchmark-protocol/artifact-path.cjs
 COPY benchmarks ./benchmarks
 COPY generated/benchmark-catalog/evaluators.cjs ./generated/benchmark-catalog/evaluators.cjs
 

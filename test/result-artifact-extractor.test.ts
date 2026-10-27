@@ -63,3 +63,15 @@ test("extractRecentLlmOutputs limits to the latest non-empty LLM outputs", () =>
   assert.deepEqual(outputs.map(output => output.id), ["llm-10", "llm-11", "llm-12"]);
   assert.deepEqual(outputs.map(output => output.output), ["output 10", "output 11", "output 12"]);
 });
+
+
+test('artifact candidates exclude explicit child input and retain legacy OpenCode outputs', () => {
+  const outputs = extractRecentLlmOutputs([
+    { role: 'opencode', trace_kind: 'user', content: 'child input', subagent_session_id: 'child' },
+    { role: 'subagent', trace_kind: 'llm', content: 'child answer' },
+    { role: 'opencode', content: 'legacy answer' },
+    { responseMessage: { role: 'assistant', content: 'wrapped answer' } },
+  ], 10);
+  assert.deepEqual(outputs.map(o => o.output), ['child answer', 'legacy answer', 'wrapped answer']);
+  assert.deepEqual(outputs.map(o => o.id), ['llm-1', 'llm-2', 'llm-3']);
+});

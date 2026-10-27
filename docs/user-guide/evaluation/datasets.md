@@ -1,6 +1,8 @@
 ---
 title: "评测数据集"
 description: "创建、导入与版本化管理离线评测所需的样本数据"
+keywords: ["Agent Insight", "评测数据集", "样本管理", "数据导入"]
+changefreq: monthly
 ---
 
 # 评测数据集
@@ -47,6 +49,41 @@ benchmarks:
 本机文件与下载文件均按固定官方 SHA-256 校验，校验失败不会覆盖本机文件。成功导入后，后续运行从数据库读取数据，不依赖原始 Parquet；更换或清空数据库后重新导入需要再次提供数据文件。
 
 旧 `AGENT_INSIGHT_BENCHMARK`、`SWE_BENCH_DATASET_SOURCE`、`SWE_BENCH_SOURCE_ARCHIVE_SOURCE`、`SWE_BENCH_PYTHON` 及旧路径/URL变量均不再控制导入，发现残留变量会提示迁移至配置文件。
+
+ZSoft L1 也默认随服务启动自动获取官方题目并导入数据库。在项目 `config/benchmark/platform.local.yaml` 设置 `benchmarks.zsoft-l1.dataset.autoImport: false` 可单独关闭；不影响已有数据集和手动导入，也不影响 SWE-bench 的开关。直接执行：
+
+```bash
+bash scripts/start.sh
+```
+
+首次执行按接入包固定的官方提交拉取仓库，解析 30 道正式题（24 道 userspace、6 道内核题）；后续执行先查当前数据库，已安装时跳过来源读取和下载。缓存位于平台机器的 `~/.agent-insight/benchmark-assets/zsoft-l1/`（自定义 `AGENT_INSIGHT_HOME` 时跟随该目录）。数据准备只读取题目元数据和公开资料，不需要 Docker、镜像或评测资产，也不会自动启动 Evaluator。不再设置 `AGENT_INSIGHT_BENCHMARK` 或使用启动参数 `--benchmark`。
+
+ZSoft 准备或导入失败只警告，继续启动服务，详细输出写入 `~/.agent-insight/logs/zsoft-l1-bootstrap.log`（随 `AGENT_INSIGHT_HOME` 调整），下次启动重试。启动会同步等待本次准备结束；已有数据集不会因修改来源而自动刷新。
+
+离线时，将官方 ZSoft L1 目录或完整官方仓库放在平台机器的一个目录，在项目 `config/benchmark/platform.local.yaml` 中设置：
+
+```yaml
+benchmarks:
+  zsoft-l1:
+    dataset:
+      autoImport: true
+      source: /srv/datasets/zsoft-l1
+      revision: null
+```
+
+目录应包含 `tasks/<task-id>/task.json` 和 `public/README.md`；完整仓库根目录也可自动识别。配置后正常启动服务即可，不需要预先导出或处理数据。在线镜像可将 `dataset.source` 设置为 HTTP(S) Git 仓库地址；`dataset.revision` 可指定完整 40 位小写提交哈希，`null` 使用接入包固定版本。两项均为 `null` 时使用固定的官方来源和版本。离线目录按实际内容识别，不由此配置伪造版本。相对路径按配置文件所在目录解析；旧 `ZSOFT_DATASET_SOURCE`、`ZSOFT_DATASET_REVISION` 只提示迁移，不再生效。
+
+只安装数据、不重启服务时使用：
+
+```bash
+npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
+```
+
+显式更新来源时加 `--refresh`；已被实验引用的数据集不能覆盖，可同时加 `--name "ZSoft L1 新版本"` 导入独立数据集。旧 P2 JSON/JSONL 不再接受，需要从官方目录重新导入；历史实验记录不会自动迁移。此前已安装的 24 题数据集不会自动扩展为 30 题，需要用 `--refresh --name "ZSoft L1 全量"` 显式安装新数据集。
+
+若升级后旧 ZSoft 实验提示 `ZSOFT_TASK_DIGEST_LEGACY`，表示旧版导入程序与评测端采用了不同的文件名排序，并非题目文件一定被修改。管理员应在更新平台与评测服务后，执行 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1 --refresh --name "ZSoft L1 摘要修正版"`，再选择新数据集新建实验。旧实验身份不自动修改，直接重评仍使用旧摘要；正常摘要无需迁移。此类错误会显示为评测失败，不再无限等待镜像，也不阻塞同窗口其他合法 Case。
+
+平台、执行客户端和评测服务可以在不同机器。自动生成实验时选择执行客户端即可；该机器的 ZSoft 任务目录仍配置在 MCTS 仓库 `testcases_union/config.env` 的 `ZSOFT_TASKS_DIR` 中，本次不迁移此项。平台按 Case 自动下发题目 ID，无需在前端填写目录或额外导入公开资料包。评测服务启动后自动从公有 SWR 下载并校验接入包固定版本的完整资产，安装到共享数据卷，后续启动复用，无需手动解压。可在评测机项目 `config/benchmark/evaluator.local.yaml` 设置 `benchmarks.zsoft-l1.assetsDir`（默认 `null`，使用托管目录）和 `kernelAccel`（默认 `tcg`，可选 `kvm`），修改后重新启动评测服务。旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再覆盖这些配置。评测服务不访问平台数据库。ZSoft 属于 Benchmark，执行器可以选择 MCTS。具体准备见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md)。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 
@@ -152,7 +189,7 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 
 > **Note**
 > `reference_output` 是可选的预期输出字段。没有该字段或字段值为空不影响样本保存；只有依赖预期输出的评测指标会缺少对比基线。
-> 新增样本或修改预期输出时，系统会缓存从预期输出提取的关键观点。历史样本没有有效缓存时，无论从“实验”还是已有 Trace 评测入口运行任务完成度评测，系统都会实时提取并在成功后回写当前样本；无关的数据集编辑不会批量处理全部历史数据。非空预期输出如果没有拆出独立观点，会把完整预期输出作为一个兜底观点，避免短答案无法参与任务完成度评测。
+> 单条录入、批量导入和实验标注存入数据集时，保存只执行校验与存储，无需等待模型提取关键观点，也无需先配置评测模型。预期输出未变时保留有效缓存，新增样本或修改预期输出后，在首次任务完成度评测时提取关键观点并回写当前样本；后续评测复用缓存。从“实验”和已有 Trace 评测入口运行时均适用，因此首次评测会包含关键观点提取耗时。非空预期输出如果没有拆出独立观点，会把完整预期输出作为一个兜底观点，避免短答案无法参与任务完成度评测。
 
 ## 维护数据项
 
@@ -194,6 +231,8 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 - **编辑**：更新单条数据项的所有字段值，包括自定义字段。
 - **删除**：移除错误、重复或失效的样例。
 - **刷新**：重新拉取当前评测集的数据项。
+
+单条录入和批量导入弹窗支持右键菜单与文本选择。未保存时，左键直接按下遮罩或点击取消可关闭弹窗；保存期间取消及遮罩关闭均不可用。
 
 ### 查看可靠性故障模式说明
 

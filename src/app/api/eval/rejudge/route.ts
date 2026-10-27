@@ -124,7 +124,7 @@ export async function POST(request: Request) {
     const cfg = findBestMatchConfig(configs, query, 'outcome');
     
     if (!cfg) {
-        console.warn(`[Rejudge] No matching evaluation configuration found for query: ${query}`);
+        console.warn(`[Rejudge] No matching evaluation configuration found (queryLength=${query.length})`);
         finish(actionUser, taskId, runId);
         return NextResponse.json({ 
             error: 'No matching evaluation configuration found for this query. Please ensure a valid configuration exists before re-judging.' 
@@ -155,7 +155,6 @@ export async function POST(request: Request) {
     const score = typeof judgment?.score === 'number' ? judgment.score : 0;
     
     console.log(`[Rejudge] Judgment result - score: ${score}, is_correct: ${judgment?.is_correct}, reason length: ${judgment?.reason?.length || 0}`);
-    console.log(`[Rejudge] Judgment reason preview: ${judgment?.reason?.substring(0, 200) || 'none'}...`);
     
     if (score === 0 && (judgment.reason?.includes('failed') || judgment.reason?.includes('disabled') || judgment.reason?.includes('禁用'))) {
           finish(actionUser, taskId, runId);

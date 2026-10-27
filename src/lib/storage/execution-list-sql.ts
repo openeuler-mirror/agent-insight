@@ -184,7 +184,7 @@ function cost(): Prisma.Sql {
         CASE ${Prisma.join(branches, ' ')} ELSE 0 END ELSE 0 END)`;
 }
 
-export async function selectExecutionListPage(where: Prisma.ExecutionWhereInput, options: ComputedRecordPageOptions) {
+export async function selectExecutionListIds(where: Prisma.ExecutionWhereInput, options: ComputedRecordPageOptions, take = options.pageSize) {
     if (!['timestamp', 'agentName', 'latency', 'tokens', 'cost', 'status'].includes(options.sortKey)) {
         throw new Error(`Unsupported Execution sort field: ${options.sortKey}`);
     }
@@ -195,11 +195,15 @@ export async function selectExecutionListPage(where: Prisma.ExecutionWhereInput,
         : options.sortKey === 'cost' ? cost()
             : options.sortKey === 'timestamp' || options.sortKey === 'agentName' ? Prisma.raw(`e."${options.sortKey}"`)
                 : Prisma.sql`COALESCE(${Prisma.raw(`e."${options.sortKey}"`)}, 0)`;
-    return prismaRaw.$transaction(async transaction => {
-        const stats = await aggregateExecutionList(where, { ...fixedOptions, avgNullAsZero: true }, transaction);
-        const rows = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT e.id ${from} WHERE ${predicate(where, fixedOptions)}
-            ORDER BY ${sort} ${Prisma.raw(options.sortDir === 'asc' ? 'ASC' : 'DESC')}, e.timestamp DESC, e.id DESC
-            LIMIT ${options.pageSize} OFFSET ${(options.page - 1) * options.pageSize}`);
-        return { ids: rows.map(row => row.id), total: stats.total, stats };
-    });
+    const rows = await prismaRaw.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT e.id ${from} WHERE ${predicate(where, fixedOptions)}
+        ORDER BY ${sort} ${Prisma.raw(options.sortDir === 'asc' ? 'ASC' : 'DESC')}, e.timestamp DESC, e.id DESC
+        LIMIT ${take} OFFSET ${(options.page - 1) * options.pageSize}`);
+    return rows.map(row => row.id);
+}
+
+export async function selectExecutionListPage(where: Prisma.ExecutionWhereInput, options: ComputedRecordPageOptions) {
+    const fixedOptions = { ...options, lifecycleNow: options.lifecycleNow ?? Date.now() };
+    const stats = await aggregateExecutionList(where, { ...fixedOptions, avgNullAsZero: true });
+    const ids = await selectExecutionListIds(where, fixedOptions);
+    return { ids, total: stats.total, stats };
 }

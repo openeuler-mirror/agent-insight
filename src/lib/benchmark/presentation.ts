@@ -19,6 +19,7 @@ import type {
   BenchmarkPresentationColumn,
   BenchmarkPresentationFormat,
 } from '../../../packages/benchmark-protocol/src/contracts';
+import { isEvidencePath } from '../../../packages/benchmark-protocol/artifact-path.cjs';
 
 export interface BenchmarkPresentationRecord {
   input?: unknown;
@@ -205,4 +206,34 @@ export function canPreviewBenchmarkArtifact(artifact: Pick<BenchmarkArtifactLike
     || artifact.name.endsWith('.json')
     || artifact.name.endsWith('.diff')
     || artifact.name.endsWith('.patch');
+}
+
+export type BenchmarkArtifactTreeNode<T extends BenchmarkArtifactLike = BenchmarkArtifactLike> =
+  | { name: string; path: string; item: PresentedBenchmarkArtifact<T>; children?: never }
+  | { name: string; path: string; children: BenchmarkArtifactTreeNode<T>[]; item?: never };
+
+export function benchmarkArtifactTree<T extends BenchmarkArtifactLike>(
+  items: readonly PresentedBenchmarkArtifact<T>[],
+): BenchmarkArtifactTreeNode<T>[] {
+  const roots: BenchmarkArtifactTreeNode<T>[] = [];
+  const directories = new Map<string, BenchmarkArtifactTreeNode<T>[]>();
+  directories.set('', roots);
+  for (const item of items) {
+    const segments = isEvidencePath(item.artifact.name) ? item.artifact.name.split('/') : [item.artifact.name];
+    let parent = '';
+    for (let index = 0; index < segments.length; index += 1) {
+      const name = segments[index];
+      const path = parent ? `${parent}/${name}` : name;
+      const siblings = directories.get(parent)!;
+      if (index === segments.length - 1) {
+        siblings.push({ name, path, item });
+      } else if (!directories.has(path)) {
+        const children: BenchmarkArtifactTreeNode<T>[] = [];
+        siblings.push({ name, path, children });
+        directories.set(path, children);
+      }
+      parent = path;
+    }
+  }
+  return roots;
 }

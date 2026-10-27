@@ -277,6 +277,9 @@ export async function GET(request: Request) {
     const paginated = searchParams.get('paginated') === '1' || searchParams.get('paginated') === 'true';
     const databasePagination = searchParams.get('databasePagination') === '1'
         || searchParams.get('databasePagination') === 'true';
+    const requestedPart = searchParams.get('listPart');
+    const listPart = paginated && databasePagination && (requestedPart === 'records' || requestedPart === 'stats')
+        ? requestedPart : undefined;
     // 轻量返回:只给 denormalized 元数据,不读 finalResult/不解析 session,根治非分页路径堆 OOM。
     const lightweight = searchParams.get('fields') === 'light' || searchParams.get('lightweight') === '1';
     const page = parsePositiveInt(searchParams.get('page'), 1);
@@ -403,8 +406,11 @@ export async function GET(request: Request) {
                 anomaly: anomalyParam,
                 sortKey: sortParam === 'status' ? 'status' as const : sortKey,
             } } : {}),
-        })
+        }, process.env.DB_HOST ? undefined : listPart)
         : null;
+    if (listPart === 'stats' && pageResult && !process.env.DB_HOST) {
+        return NextResponse.json({ stats: pageResult.stats });
+    }
     const data = pageResult
         ? pageResult.records
         : await readRecords(user, recordFilters, { attachEvaluations, lightweight, includeTags });
@@ -629,6 +635,11 @@ export async function GET(request: Request) {
         console.log(`[Data-API] 📤 Sending ${responseRecords.length} records. Top record skills: ${JSON.stringify(responseRecords[0].skills)}, is_evaluating: ${responseRecords[0].is_evaluating}`);
     }
     if (paginated) {
+        if (listPart === 'stats') return NextResponse.json({ stats: responseStats });
+        if (listPart === 'records') return NextResponse.json({
+            records: responseRecords, page, pageSize,
+            hasMore: pageResult?.hasMore ?? page * pageSize < responseTotal,
+        });
         return NextResponse.json({
             records: responseRecords,
             total: responseTotal,

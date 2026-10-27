@@ -36,6 +36,7 @@ export type ClientTraceGenerationTarget = {
   parameterDefinitions?: RuntimeDefinition[];
   supportsSkillSnapshot?: boolean;
   supportsTriggerRouting?: boolean;
+  supportsEnvironmentPreparation?: boolean;
 };
 
 export function listTraceGenerationPlatforms(
@@ -83,6 +84,7 @@ export async function listClientTraceGenerationTargets(
           parameterDefinitions: definitionsForTarget(platform.parameterDefinitions || [], platform.id, agent),
           supportsSkillSnapshot: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 1,
           supportsTriggerRouting: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 4,
+          supportsEnvironmentPreparation: capabilities.actions?.includes('PREPARE_EXECUTION_ENVIRONMENT') === true,
         });
       }
     }

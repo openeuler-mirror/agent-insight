@@ -1,6 +1,8 @@
 ---
 title: "智能诊断"
-description: "基于 Trace 证据的异常归因与诊断结果解读"
+description: "介绍如何根据 Trace 证据发起智能诊断、识别异常根因并解读诊断结果。"
+keywords: ["Agent Insight", "智能诊断", "异常归因", "Trace 分析"]
+changefreq: monthly
 ---
 
 # 智能诊断

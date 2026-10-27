@@ -127,12 +127,15 @@ export async function prepareNextBenchmarkCaseRun(input: {
       'BENCHMARK_RUN_CONFIG_INVALID',
     )
     const agentOptions = normalizeBenchmarkAgentOptions(runConfig.agentOptions)
-    if (agentOptions) {
+    if (agentOptions || runConfig.executionProfile) {
       const client = await prisma.reliabilityClient.findFirst({ where: {
         clientId: run.clientId, user: run.experiment.user, unboundAt: null,
       } })
       if (!client) throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
-      assertBenchmarkExecutionTarget(client, adapter.manifest, { ...runConfig, agentOptions })
+      const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { ...runConfig, agentOptions })
+      if (target.executionProfile?.definitionDigest !== runConfig.executionProfile?.definitionDigest) {
+        throw new BenchmarkProtocolError('EXECUTION_PROFILE_CHANGED', '执行环境已变化，请重新创建实验')
+      }
     }
     const task = adapter.buildAgentTask({
       publicPayload: split.publicPayload,

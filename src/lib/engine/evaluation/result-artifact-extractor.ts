@@ -224,7 +224,7 @@ function normalizeTraceEvents(interactions: unknown[]): TraceEvent[] {
 
   for (let interactionIndex = 0; interactionIndex < interactions.length; interactionIndex += 1) {
     const item = asObject(interactions[interactionIndex]);
-    if (!item) continue;
+    if (!item || item.trace_kind === 'user') continue;
 
     const requestMessages = Array.isArray(item.requestMessages) ? item.requestMessages : [];
     for (const message of requestMessages) {

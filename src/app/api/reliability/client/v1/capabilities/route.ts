@@ -30,6 +30,7 @@ export async function PUT(req: Request) {
     const result = await updateCapabilities({
       clientId,
       revision: body.revision ? String(body.revision) : null,
+      partial: body.partial === true,
       hostname: body.hostname ? String(body.hostname) : null,
       reportedIp: body.reportedIp ? String(body.reportedIp) : null,
       // 服务端从连接源地址生成 observedIp，不接受请求体覆盖。
@@ -40,6 +41,7 @@ export async function PUT(req: Request) {
         platforms: Array.isArray(body.platforms) ? body.platforms : [],
         actions: body.actions,
         components: body.components,
+        executionProfiles: body.executionProfiles,
         faultInjection: body.faultInjection,
       },
     })

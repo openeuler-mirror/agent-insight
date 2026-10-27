@@ -35,7 +35,7 @@ export function parseInstallDatasetArgs(args: string[]): CliOptions {
   const profileKey = valueAfter(args, '--profile')
   const sourcePath = valueAfter(args, '--source')
   if (!benchmarkKey || !profileKey || !sourcePath) {
-    throw new Error('用法：npx tsx scripts/benchmark/install-dataset.ts --benchmark <key> --profile <key> --source <file> [--name <name>] [--delete-source-after-import]')
+    throw new Error('用法：npx tsx scripts/benchmark/install-dataset.ts --benchmark <key> --profile <key> --source <file-or-directory> [--name <name>] [--delete-source-after-import]')
   }
   return {
     benchmarkKey,

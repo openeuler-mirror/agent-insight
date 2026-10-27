@@ -167,6 +167,10 @@ export async function GET(req: Request) {
         status,
         watchMode: r.watchMode,
         scope: r.scope,
+        submissionSource: (() => {
+          try { return JSON.parse(r.configSnapshotJson || '{}').submissionSource === 'imported' ? 'imported' : 'agent'; }
+          catch { return 'agent'; }
+        })(),
         skillName: r.skillName,
         skillVersion: r.skillVersion,
         preset: r.preset,
@@ -258,6 +262,7 @@ export async function POST(req: Request) {
             platform: String(executionTarget.platform || ''),
             agent: executionAgent,
             agentOptions: executionTarget.agentOptions,
+            executionProfileDigest: executionTarget.executionProfileDigest as string | undefined,
             model: executionTarget.model ? String(executionTarget.model) : undefined,
             agentTimeoutSeconds: body.agentTimeoutSeconds == null
               ? undefined
@@ -315,6 +320,7 @@ export async function POST(req: Request) {
             platform: String(runConfig.platform || ''),
             agent: String(runConfig.agent || ''),
             agentOptions: runConfig.agentOptions,
+            executionProfileDigest: runConfig.executionProfileDigest as string | undefined,
             model: runConfig.model ? String(runConfig.model) : undefined,
             agentTimeoutSeconds: runConfig.agentTimeoutSeconds == null
               ? undefined

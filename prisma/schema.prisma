@@ -1328,7 +1328,9 @@ model BenchmarkCaseRun {
   ordinal            Int
   status             String                @default("pending")
   adapterKey         String
-  clientId           String
+  clientId           String?
+  submissionSource   String                @default("agent")
+  submissionContractJson String?
   publicPayloadJson  String?
   privatePayloadJson String?
   taskEnvelopeJson   String?

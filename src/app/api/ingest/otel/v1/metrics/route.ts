@@ -86,7 +86,7 @@ export async function POST(req: Request) {
       await saveSample(src.id, sample);
       attachedTo = src.endpoint;
     } catch (persistErr) {
-      console.warn('[vLLM OTel Metrics] persist skipped:', persistErr instanceof Error ? persistErr.message : persistErr);
+      console.error('[vLLM OTel Metrics] persist skipped:', persistErr instanceof Error ? persistErr.message : persistErr);
     }
 
     return NextResponse.json({

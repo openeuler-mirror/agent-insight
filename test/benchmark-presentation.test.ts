@@ -25,6 +25,7 @@ import {
 import {
   benchmarkPresentationText,
   benchmarkPresentationValue,
+  benchmarkArtifactTree,
   canPreviewBenchmarkArtifact,
   presentBenchmarkArtifacts,
   truncateBenchmarkText,
@@ -41,6 +42,18 @@ test('Benchmark Presentation resolves only the shared case projection paths', ()
   assert.equal(benchmarkPresentationValue(item, 'externalCaseId'), 'case-1');
   assert.equal(benchmarkPresentationValue(item, 'values.repository.name'), 'demo');
   assert.equal(benchmarkPresentationValue(item, 'values.missing'), undefined);
+});
+
+test('evidence tree retains root files and groups nested files without merging equal basenames', () => {
+  const names = ['evaluation.json', 'judge-evidence/vuln/result.json', 'judge-evidence/fix/result.json', 'public-feedback/generator.json', 'official-output.zip'];
+  const items = presentBenchmarkArtifacts({ submissions: [], evidence: names.map(name => ({ name, kind: 'test-output', mediaType: 'application/json', sizeBytes: 0, contentUrl: '/artifact' })) });
+  const tree = benchmarkArtifactTree(items);
+  assert.deepEqual(tree.map(node => node.name), ['evaluation.json', 'judge-evidence', 'public-feedback', 'official-output.zip']);
+  assert.deepEqual(tree[1].children?.map(node => node.name), ['vuln', 'fix']);
+  assert.equal(tree[1].children?.[0].children?.[0].item?.artifact.name, names[1]);
+  assert.equal(tree[1].children?.[1].children?.[0].item?.artifact.name, names[2]);
+  const flat = benchmarkArtifactTree(items.slice(0, 1));
+  assert.equal(flat[0].item?.artifact.name, 'evaluation.json');
 });
 
 test('Benchmark evaluator catalog projects public card data from installed packages', () => {

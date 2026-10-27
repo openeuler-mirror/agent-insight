@@ -1,0 +1,85 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+key: zsoft-l1
+displayName: ZSoft L1
+protocols:
+  agentTask: agent-task/v1
+  evaluation: benchmark-evaluation/v1
+implementation:
+  adapter: ./adapter/index.ts
+  adapterExport: zsoftL1Adapter
+  datasetLoader: ./dataset/index.ts
+  datasetLoaderExport: zsoftDatasetLoader
+  datasetPreparer: ./dataset/prepare.ts
+  datasetPreparerExport: zsoftDatasetPreparer
+  evaluator: ./evaluator/evaluator.yaml
+schemas:
+  case: ./schemas/case.schema.json
+  rawResult: ./schemas/result.schema.json
+executor:
+  environmentPreparation:
+    protocol: execution-environment/v1
+    implementation: ./executor/environment.cjs
+  supported: true
+  requiredCapabilities: [zsoft-tasks-workspace/v3, single-file/v1]
+  defaultTimeoutSeconds: 900
+submission:
+  artifacts:
+    - name: poc
+      mediaType: application/octet-stream
+      collector: single-file/v1
+      maxBytes: 1048576
+evaluation:
+  evaluatorKey: zsoft-l1
+  defaultTimeoutSeconds: 900
+  resources: { cpu: 4, memoryMiB: 8192 }
+result:
+  primaryMetric: { key: success, aggregation: boolean-rate }
+dataset:
+  profiles:
+    - key: l1
+      displayName: ZSoft L1
+      acceptedExtensions: []
+      acceptedSourceKinds: [directory]
+      version: official-directory/v1
+presentation:
+  execution:
+    notice: 执行客户端从 MCTS 的 testcases_union/config.env 读取 ZSOFT_TASKS_DIR；题目 ID 由平台自动下发。
+  evaluator:
+    displayName: ZSoft L1 Official Judge
+    description: 在自有评测服务中验证单文件 PoC。
+    runMode: Official Judge
+    outputDescription: 输出官方 success、提交有效性和基础设施状态。
+  caseTable:
+    searchPaths: [externalCaseId, values.title]
+    searchPlaceholder: 搜索 Task ID 或题目
+    columns:
+      - { path: input, label: 任务, type: text }
+      - { path: externalCaseId, label: Task ID, type: code }
+      - { path: values.submissionKind, label: 提交类型, type: text }
+  result:
+    primaryMetric:
+      path: primaryMetric.value
+      label: Success
+      aggregateLabel: Success Rate
+      type: boolean
+      trueLabel: 成功
+      falseLabel: 未成功
+  artifacts:
+    - { source: submission, name: poc, label: PoC, order: 10 }
+    - { source: evidence, kind: official-report, label: 评测报告, order: 20 }
+    - { source: evidence, kind: official-record, label: 官方执行记录, order: 30 }
+    - { source: evidence, kind: harness-log, label: 运行日志, order: 40 }
+    - { source: evidence, kind: official-output-archive, label: 完整官方输出, order: 50 }

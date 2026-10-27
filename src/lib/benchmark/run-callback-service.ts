@@ -105,11 +105,23 @@ export async function recordBenchmarkRunProgress(input: {
   if ((rank.get(status) || 0) < (rank.get(run.status) || 0)) {
     return { accepted: true, desiredState: 'continue' }
   }
+  let progress = input.progress
+  const task = run.taskEnvelopeJson ? JSON.parse(run.taskEnvelopeJson) as AgentTaskEnvelope : null
+  if (task?.execution) {
+    const previous = run.progressJson ? JSON.parse(run.progressJson) as BenchmarkExecutionProgress : null
+    const stages = ['preparing', 'agent_running', 'collecting', 'uploading', 'cleaning']
+    if (previous && stages.indexOf(previous.stage) > stages.indexOf(progress.stage)) return { accepted: true, desiredState: 'continue' }
+    const seconds = progress.stage === 'preparing' ? task.execution.profile.timeouts.prepareSeconds
+      : progress.stage === 'agent_running' ? task.agentConfig.timeoutSeconds
+        : progress.stage === 'cleaning' ? task.execution.profile.timeouts.cleanupSeconds : 300
+    const startedAt = previous?.stage === progress.stage && previous.progress?.stageStartedAt ? previous.progress.stageStartedAt : new Date().toISOString()
+    progress = { ...progress, progress: { ...progress.progress, stageStartedAt: startedAt, stageDeadlineAt: new Date(Date.parse(startedAt) + seconds * 1000).toISOString() } }
+  }
   const updated = await prisma.benchmarkCaseRun.updateMany({
-    where: { id: input.runId, status: run.status },
+    where: { id: input.runId, status: run.status, ...(task?.execution ? { progressJson: run.progressJson } : {}) },
     data: {
       status,
-      progressJson: canonicalJson(input.progress as unknown as JsonValue),
+      progressJson: canonicalJson(progress as unknown as JsonValue),
       lastProgressAt: new Date(),
     },
   })

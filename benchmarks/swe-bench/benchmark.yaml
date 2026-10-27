@@ -22,11 +22,17 @@ implementation:
   adapterExport: sweBenchAdapter
   datasetLoader: ./dataset/index.ts
   datasetLoaderExport: sweBenchDatasetLoader
+  datasetPreparer: ./dataset/prepare.ts
+  datasetPreparerExport: sweBenchDatasetPreparer
   evaluator: ./evaluator/evaluator.yaml
 schemas:
   case: ./schemas/case.schema.json
   rawResult: ./schemas/result.schema.json
 executor:
+  environmentPreparation:
+    protocol: execution-environment/v1
+    implementation: ./executor/environment.cjs
+  gitSourcePolicy: ./executor/git-source-policy.cjs
   requiredCapabilities:
     - git-workspace/v1
     - git-patch/v1

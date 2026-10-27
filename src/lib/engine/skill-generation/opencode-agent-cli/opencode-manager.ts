@@ -28,6 +28,7 @@ import { isModelConnectionReady } from '@/lib/shared/model-connection'
 import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
 import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
 import { runtimePackageRoot } from '@/lib/runtime/package-root'
+import { isLogEnabled } from '@/lib/logger/server'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -979,12 +980,12 @@ async function startServerForUser(
   if (typeof proc.pid === 'number') registerOpencodePgid(proc.pid, user)
 
   // 转发日志(可选)。生产环境可以写到文件。
-  if (verbose) {
+  if (verbose || isLogEnabled('debug')) {
     proc.stdout?.on('data', (b: Buffer) =>
-      process.stderr.write(`[opencode:${user}] ${b.toString()}`),
+      console.debug(`[opencode:${user}] ${b.toString()}`),
     )
     proc.stderr?.on('data', (b: Buffer) =>
-      process.stderr.write(`[opencode:${user}] ${b.toString()}`),
+      console.debug(`[opencode:${user}] ${b.toString()}`),
     )
   } else {
     // 即使不转发日志也必须消费 pipe，否则父进程不读 → ~64KB pipe buffer 撑满 →

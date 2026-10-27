@@ -134,7 +134,7 @@ const coalescer = new JiuwenBatchCoalescer(
     try {
       await flushGroupByKey(key, user);
     } catch (error) {
-      console.warn(`[jiuwen-ingest] deferred flush failed for ${key}`, error);
+      console.error(`[jiuwen-ingest] deferred flush failed for ${key}`, error);
     }
   },
   { intervalMs: coalesceIntervalMs() },
