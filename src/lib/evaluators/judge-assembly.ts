@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * LLM Judge 请求三段式组装（自建提示词评估器 + 预置 LLM 评估器共用）。
  *
@@ -126,6 +142,10 @@ export function parseJudgeText(
     );
   }
   const out = normalizeEvaluatorOutput(parsed);
+  if (out.evidence && 'json' in out.evidence && out.evidence.json && typeof out.evidence.json === 'object'
+    && (out.evidence.json as { type?: unknown }).type === 'custom-evaluator-runtime-v1') {
+    throw new JudgeOutputParseError('评估器响应不能包含平台保留的运行元数据', rawText);
+  }
   if (pointsDef && pointsDef.length && out.points) {
     const allowed = new Set(pointsDef.map((p) => p.label));
     const filtered: EvalPoint[] = out.points.filter((p) => allowed.has(p.label));

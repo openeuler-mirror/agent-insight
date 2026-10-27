@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
 import { useState } from 'react';
@@ -18,16 +34,20 @@ import { cn } from '@/lib/utils';
 import {
   DEFAULT_ENTITY_F1_RUN_CONFIG,
   DEFAULT_EXACT_MATCH_RUN_CONFIG,
+  DEFAULT_SIMILARITY_TEXT_RUN_CONFIG,
   ENTITY_F1_EVALUATOR_ID,
   EXACT_MATCH_EVALUATOR_ID,
+  SIMILARITY_TEXT_EVALUATOR_ID,
   normalizeEntityF1RunConfig,
   normalizeExactMatchRunConfig,
+  normalizeSimilarityTextRunConfig,
   type ConfigurableTextEvaluatorId,
   type EntityF1RunConfig,
   type EntityMatchMode,
   type EvaluatorRunConfigMap,
   type ExactMatchRunConfig,
   type MultiCandidateScoring,
+  type SimilarityTextRunConfig,
 } from '@/lib/evaluators/evaluator-run-config';
 
 interface TextEvaluatorConfigDialogProps {
@@ -36,7 +56,7 @@ interface TextEvaluatorConfigDialogProps {
   onOpenChange: (open: boolean) => void;
   onSave: (
     id: ConfigurableTextEvaluatorId,
-    config: ExactMatchRunConfig | EntityF1RunConfig,
+    config: ExactMatchRunConfig | EntityF1RunConfig | SimilarityTextRunConfig,
   ) => void;
 }
 
@@ -115,18 +135,23 @@ export function TextEvaluatorConfigDialog({
     normalizeExactMatchRunConfig(configs[EXACT_MATCH_EVALUATOR_ID]));
   const [f1Draft, setF1Draft] = useState<EntityF1RunConfig>(() =>
     normalizeEntityF1RunConfig(configs[ENTITY_F1_EVALUATOR_ID]));
+  const [similarityDraft, setSimilarityDraft] = useState<SimilarityTextRunConfig>(() =>
+    normalizeSimilarityTextRunConfig(configs[SIMILARITY_TEXT_EVALUATOR_ID]));
 
   const isExact = evaluatorId === EXACT_MATCH_EVALUATOR_ID;
   const isF1 = evaluatorId === ENTITY_F1_EVALUATOR_ID;
+  const isSimilarity = evaluatorId === SIMILARITY_TEXT_EVALUATOR_ID;
 
   const reset = () => {
     if (isExact) setExactDraft({ ...DEFAULT_EXACT_MATCH_RUN_CONFIG });
     if (isF1) setF1Draft({ ...DEFAULT_ENTITY_F1_RUN_CONFIG });
+    if (isSimilarity) setSimilarityDraft({ ...DEFAULT_SIMILARITY_TEXT_RUN_CONFIG });
   };
 
   const save = () => {
     if (isExact) onSave(EXACT_MATCH_EVALUATOR_ID, exactDraft);
     if (isF1) onSave(ENTITY_F1_EVALUATOR_ID, f1Draft);
+    if (isSimilarity) onSave(SIMILARITY_TEXT_EVALUATOR_ID, similarityDraft);
     onOpenChange(false);
   };
 
@@ -137,13 +162,15 @@ export function TextEvaluatorConfigDialog({
           <div className="flex items-center gap-2 text-primary">
             <SlidersHorizontal className="size-4" />
             <DialogTitle>
-              {isExact ? '完全精确匹配配置' : '实体 F1 匹配配置'}
+              {isExact ? '完全精确匹配配置' : isF1 ? '实体 F1 匹配配置' : '文本相似度配置'}
             </DialogTitle>
           </div>
           <DialogDescription>
             {isExact
               ? '控制比较前的文本标准化方式，以及多个参考答案的计分口径。'
-              : '控制实体之间如何判定匹配，以及比较前的标准化方式。'}
+              : isF1
+              ? '控制实体之间如何判定匹配，以及比较前的标准化方式。'
+              : '设置文本相似度的合格阈值，决定相似度达到多少判为 PASS。'}
           </DialogDescription>
         </DialogHeader>
 
@@ -279,6 +306,32 @@ export function TextEvaluatorConfigDialog({
                 </div>
               </section>
             </>
+          )}
+
+          {isSimilarity && (
+            <section className="rounded-lg border border-card-border bg-background-secondary/45 p-3.5">
+              <label htmlFor="similarity-threshold" className="text-sm font-semibold text-foreground">
+                合格阈值
+              </label>
+              <p className="mt-0.5 text-xs leading-5 text-foreground-muted">
+                相似度 ≥ 阈值判 PASS，否则 FAIL；取值 0–100，默认 {DEFAULT_SIMILARITY_TEXT_RUN_CONFIG.threshold}。
+              </p>
+              <Input
+                id="similarity-threshold"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={similarityDraft.threshold}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (Number.isInteger(value) && value >= 0 && value <= 100) {
+                    setSimilarityDraft((prev) => ({ ...prev, threshold: value }));
+                  }
+                }}
+                className="mt-2 w-28 bg-card"
+              />
+            </section>
           )}
 
           <div className="flex gap-2 rounded-lg border border-primary-subtle-border bg-primary-subtle px-3.5 py-3 text-xs leading-5 text-foreground-secondary">

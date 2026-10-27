@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 import { useSearchParams } from 'next/navigation';
 import { casePagination, experimentDetailHref } from '@/lib/engine/experiment/case-navigation';
@@ -39,6 +55,7 @@ import {
 } from '@/lib/benchmark/presentation';
 
 interface ResultRow {
+  evaluationTraceId?: string | null;
   id: string;
   caseId: string;
   evaluatorId: string;
@@ -652,7 +669,7 @@ export function ExperimentCaseDetail({
                   href={`/trace?taskId=${encodeURIComponent(caseRow.taskId)}`}
                   style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}
                 >
-                  前往链路观测 →
+                  查看执行链路 →
                 </Link>
               )}
             </div>
@@ -852,6 +869,11 @@ export function ExperimentCaseDetail({
                             <span style={{ fontSize: 12.5, fontWeight: 600 }}>{lookup.nameOf(r.evaluatorId)}</span>
                             {tags.map((t) => <TagChip key={t} text={t} />)}
                             <span style={{ flex: 1 }} />
+                            {r.evaluationTraceId && (
+                              <Link href={`/trace?taskId=${encodeURIComponent(r.evaluationTraceId)}`} onClick={event => event.stopPropagation()} className="text-xs text-primary hover:underline">
+                                查看评估链路 ↗
+                              </Link>
+                            )}
                             {failed ? (
                               <span style={{
                                 fontSize: 11, padding: '1px 8px', borderRadius: 8, fontWeight: 500,

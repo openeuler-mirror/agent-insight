@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 import { DeleteExperimentButton, PendingExperimentCancellations } from '@/components/eval/DeleteExperimentButton';
 
@@ -9,6 +25,7 @@ import { FlaskConical, Plus } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
+import { SameConfigExperimentAction } from '@/components/eval/SameConfigExperimentAction';
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -112,8 +129,7 @@ export default function ExperimentsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
-  const [actionId, setActionId] = useState('');
-  const [actionError, setActionError] = useState('');
+  const [busyExperimentIds, setBusyExperimentIds] = useState<Record<string, boolean>>({});
   const loadSequence = useRef(0);
 
   const load = useCallback(async (silent = false) => {
@@ -173,39 +189,6 @@ export default function ExperimentsPage() {
     return () => window.clearTimeout(timer);
   }, [page, totalPages]);
 
-  const createSameConfigExperiment = async (sourceExperimentId: string) => {
-    if (!user || actionId) return;
-    setActionId(sourceExperimentId);
-    setActionError('');
-    try {
-      const createResponse = await apiFetch('/api/experiments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, createMode: 'same-config', sourceExperimentId }),
-      });
-      const created = await createResponse.json().catch(() => ({}));
-      if (!createResponse.ok) throw new Error(responseError(created, '复制实验配置失败'));
-      const experimentId = String(created?.id || '');
-      if (!experimentId) throw new Error('复制实验后未返回实验 ID');
-      const runResponse = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      });
-      const started = await runResponse.json().catch(() => ({}));
-      if (!runResponse.ok) {
-        await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`, {
-          method: 'DELETE',
-        }).catch(() => undefined);
-        throw new Error(responseError(started, '启动实验失败'));
-      }
-      router.push(`/experiments/${experimentId}`);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : '同配置实验创建失败');
-      setActionId('');
-    }
-  };
-
   return (
     <>
       <AppTopBar
@@ -223,7 +206,7 @@ export default function ExperimentsPage() {
         {user && <PendingExperimentCancellations user={user} />}
         <div style={{
           background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-          borderRadius: 10, overflow: 'hidden',
+          borderRadius: 10, flexShrink: 0, minWidth: 0, overflowX: 'auto',
         }}>
           {loading ? (
             <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
@@ -300,23 +283,21 @@ export default function ExperimentsPage() {
                       {new Date(r.createdAt).toLocaleString('zh-CN', { hour12: false })}
                     </td>
                     <td style={{ ...TD, whiteSpace: 'nowrap' }} onClick={(event) => event.stopPropagation()}>
-                      <span style={{ display: 'inline-flex', gap: 8 }}>
+                      <SameConfigExperimentAction
+                        user={user || ''}
+                        sourceExperimentId={r.id}
+                        disabled={Boolean(busyExperimentIds[r.id])}
+                        onBusyChange={(busy) => setBusyExperimentIds(current => ({ ...current, [r.id]: busy }))}
+                        onStarted={(id) => router.push(`/experiments/${id}`)}
+                      >
                         <button
                           type="button"
-                          disabled={Boolean(actionId)}
-                          onClick={() => void createSameConfigExperiment(r.id)}
-                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
-                        >
-                          {actionId === r.id ? '创建中…' : '同配置实验'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={Boolean(actionId)}
+                          disabled={Boolean(busyExperimentIds[r.id])}
                           onClick={() => router.push(`/experiments/new?reuseFrom=${encodeURIComponent(r.id)}`)}
-                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
+                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: busyExperimentIds[r.id] ? 'not-allowed' : 'pointer' }}
                         >复用评测配置</button>
-                        {user && <DeleteExperimentButton user={user} experimentId={r.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(r.status)} onDeleted={() => load(true)} />}
-                      </span>
+                        {user && <DeleteExperimentButton disabled={Boolean(busyExperimentIds[r.id])} user={user} experimentId={r.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(r.status)} onDeleted={() => load(true)} />}
+                      </SameConfigExperimentAction>
                     </td>
                   </tr>
                 ))}
@@ -325,10 +306,8 @@ export default function ExperimentsPage() {
           )}
         </div>
 
-        {actionError && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--error)' }}>{actionError}</div>}
-
         {!loading && total > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 12, fontSize: 12, color: 'var(--foreground-muted)' }}>
+          <div style={{ display: 'flex', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 12, fontSize: 12, color: 'var(--foreground-muted)' }}>
             <span>共 {total} 个实验</span>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               每页

@@ -1,6 +1,8 @@
 ---
 title: "Skill 优化"
 description: "在 Skill 工作台中基于评估、实验和人工反馈生成候选版本"
+keywords: ["Agent Insight", "Skill 优化", "候选版本", "评测反馈"]
+changefreq: monthly
 ---
 
 # Skill 优化

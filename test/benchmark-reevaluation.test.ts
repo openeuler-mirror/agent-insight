@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -96,7 +112,7 @@ async function fixture(t: TestContext, count: number) {
     const storagePath = `${runId}-poc`
     await fs.mkdir(resolveAgentInsightDataPath(), { recursive: true })
     await fs.writeFile(resolveAgentInsightDataPath(storagePath), bytes)
-    await prisma.benchmarkCaseRun.create({ data: { id: runId, experimentId: experiment.id, experimentCaseId: c.id, datasetCaseId: datasetCase.id, ordinal, adapterKey: 'zsoft-l1', status: 'evaluated', submissionSource: 'imported', submissionContractJson: canonicalJson(zsoftL1Adapter.manifest.requiredArtifacts), publicPayloadJson: JSON.stringify(raw.public), privatePayloadJson: JSON.stringify(raw.private),
+    await prisma.benchmarkCaseRun.create({ data: { id: runId, experimentId: experiment.id, experimentCaseId: c.id, datasetCaseId: datasetCase.id, ordinal, adapterKey: 'zsoft-l1', status: 'evaluated', submissionSource: 'imported', submissionContractJson: canonicalJson([...zsoftL1Adapter.manifest.requiredArtifacts]), publicPayloadJson: JSON.stringify(raw.public), privatePayloadJson: JSON.stringify(raw.private),
       artifacts: { create: { id: `${runId}-artifact`, name: 'poc', mediaType: 'application/octet-stream', sizeBytes: bytes.length, sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`, storagePath } },
       evaluations: { create: { id: `${runId}-original`, adapterKey: 'zsoft-l1', evaluatorKey: 'zsoft-l1', requestJson: '{}', requestDigest: 'original', callbackBaseUrl: 'http://platform.test', timeoutSeconds: 60, status: 'completed', continuationStatus: 'completed' } },
     } })
@@ -119,7 +135,7 @@ test('different cases can reevaluate concurrently, same-case duplicate clicks cr
   assert.equal(more.length, 2)
   await eventually(async () => {
     const rows = await prisma.benchmarkEvaluationDispatchOutbox.findMany({ where: { evaluation: { caseRun: { experimentId: f.cases[0].experimentId } } } })
-    return rows.length === 3 && rows.every(row => row.attemptCount > 0 && row.status !== 'sending')
+    return rows.length === 3 && rows.every((row: { attemptCount: number; status: string }) => row.attemptCount > 0 && row.status !== 'sending')
   })
   assert.equal(f.accepted.length, 2)
   assert.equal(f.waitingCount, 0, 'reevaluation must refresh the image window before first dispatch')
@@ -178,8 +194,8 @@ test('a preparation service failure keeps reevaluation queued and a later retry 
 test('a run changed by another worker cannot be claimed from a stale reevaluation snapshot', async (t) => {
   const f = await fixture(t, 1)
   const original = fs.readFile.bind(fs)
-  const snapshot = t.mock.method(fs, 'readFile', async (file, options) => {
-    const bytes = await original(file, options)
+  const snapshot = t.mock.method(fs, 'readFile', async (...args: Parameters<typeof fs.readFile>) => {
+    const bytes = await original(...args)
     await prisma.benchmarkCaseRun.update({ where: { id: f.cases[0].runId }, data: { updatedAt: new Date(0) } })
     return bytes
   })

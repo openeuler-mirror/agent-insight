@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use strict'
 
 const fs = require('node:fs/promises')
@@ -6,9 +22,11 @@ const path = require('node:path')
 const { DockerImageStore } = require('./image-pool-docker.cjs')
 const { EvaluationJobJournal, atomicWriteJson } = require('./job-journal.cjs')
 const { ServiceControl, readJson, recordManagedImage } = require('./service-control.cjs')
+const { cleanupRuntimeImages } = require('./runtime-image-cleanup.cjs')
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
 const MANAGEMENT_PROTOCOL_VERSION = 2
+const RUNTIME_IMAGE_MANAGEMENT_VERSION = 1
 
 function imagePoolCommand(dataDir, command, options = {}) {
   return new Promise((resolve, reject) => {
@@ -36,8 +54,14 @@ function imagePoolCommand(dataDir, command, options = {}) {
 async function manage(options) {
   const { dataDir, instance, dryRun = false, purge = false, mode = 'stop' } = options
   if (!/^[A-Za-z0-9_.-]+$/.test(instance || '')) throw new Error('Invalid evaluator instance')
-  if (mode === 'images-list') return imagePoolCommand(dataDir, 'list')
-  if (mode === 'images-purge') return imagePoolCommand(dataDir, 'purge', { dryRun })
+  if (mode === 'runtimes-purge') return { dryRun, runtimes: await cleanupRuntimeImages(options) }
+  if (mode === 'images-list' || mode === 'images-purge') {
+    const enabled = options.imagePoolEnabled ?? require('../../../packages/project-config/index.cjs').loadProjectConfig('evaluator').imagePool.enabled
+    const pool = enabled ? await (options.poolCommand || imagePoolCommand)(dataDir, mode === 'images-list' ? 'list' : 'purge', { dryRun })
+      : { images: [], enabled: false }
+    return { ...pool, dryRun: mode === 'images-list' || dryRun,
+      runtimes: await cleanupRuntimeImages({ ...options, dryRun: mode === 'images-list' || dryRun }) }
+  }
   const docker = options.docker || new DockerImageStore()
   const control = new ServiceControl(dataDir)
   const journal = new EvaluationJobJournal(dataDir)
@@ -166,23 +190,43 @@ async function manage(options) {
   return result
 }
 
+function formatManagementOutput(result, summary = false) {
+  if (!summary) return JSON.stringify(result, null, 2)
+  if (result.runtimes) {
+    const { removed, retained, skipped } = result.runtimes
+    const deleted = removed.filter((item) => item.existed).length
+    const lines = [`旧 Runtime 清理：删除 ${deleted} 个镜像，保留 ${retained.length} 项，失败 ${skipped.length} 项。`]
+    if (removed.length > deleted) lines.push(`已清除 ${removed.length - deleted} 条失效 Runtime 归属记录。`)
+    for (const item of skipped) lines.push(`Runtime 清理失败：${item.reference}：${item.reason}`)
+    return lines.join('\n')
+  }
+  if (result.initialized) return '评测服务管理状态已就绪。'
+  if (result.stopped !== undefined) {
+    const lines = [result.stopped ? '旧评测服务已停止。' : '旧评测服务未完全停止。']
+    for (const item of result.skipped || []) lines.push(`未完成：${item.target}：${item.reason}`)
+    return lines.join('\n')
+  }
+  return JSON.stringify(result, null, 2)
+}
+
 if (require.main === module) {
   const args = new Set(process.argv.slice(2))
-  const modes = ['--start', '--images-list', '--images-purge'].filter((flag) => args.has(flag))
+  const modes = ['--start', '--images-list', '--images-purge', '--runtimes-purge'].filter((flag) => args.has(flag))
   if (modes.length > 1) {
     console.error('Only one evaluator management mode may be selected')
     process.exitCode = 1
   } else {
-    const mode = args.has('--start') ? 'start' : args.has('--images-list') ? 'images-list' : args.has('--images-purge') ? 'images-purge' : 'stop'
-  manage({ dataDir: '/data', instance: process.env.EVALUATOR_INSTANCE_ID,
-    volume: process.env.EVALUATOR_VOLUME, imageReference: process.env.EVALUATOR_IMAGE_REFERENCE,
-    mode, dryRun: args.has('--dry-run'), purge: args.has('--purge-images') })
-    .then((result) => {
-      console.log(JSON.stringify(result, null, 2))
-      for (const record of result.controllerImages || []) console.log(`CONTROLLER_IMAGE\t${record.id}\t${record.reference}`)
-      if (!result.dryRun && (result.skipped?.length || result.stopped === false)) process.exitCode = 2
-    }).catch((error) => { console.error(error.message); process.exitCode = 1 })
+    const mode = args.has('--start') ? 'start' : args.has('--images-list') ? 'images-list' : args.has('--images-purge') ? 'images-purge'
+      : args.has('--runtimes-purge') ? 'runtimes-purge' : 'stop'
+    manage({ dataDir: '/data', instance: process.env.EVALUATOR_INSTANCE_ID,
+      volume: process.env.EVALUATOR_VOLUME, imageReference: process.env.EVALUATOR_IMAGE_REFERENCE,
+      mode, dryRun: args.has('--dry-run'), purge: args.has('--purge-images') })
+      .then((result) => {
+        console.log(formatManagementOutput(result, args.has('--summary')))
+        for (const record of result.controllerImages || []) console.log(`CONTROLLER_IMAGE\t${record.id}\t${record.reference}`)
+        if (!result.dryRun && (result.skipped?.length || result.runtimes?.skipped?.length || result.stopped === false)) process.exitCode = 2
+      }).catch((error) => { console.error(error.message); process.exitCode = 1 })
   }
 }
 
-module.exports = { MANAGEMENT_PROTOCOL_VERSION, manage, imagePoolCommand }
+module.exports = { MANAGEMENT_PROTOCOL_VERSION, RUNTIME_IMAGE_MANAGEMENT_VERSION, manage, imagePoolCommand, formatManagementOutput }

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { loadRuntimeDefinitions } from '../packages/agent-runtime/loader.cjs'
 const definition = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
 import assert from 'node:assert/strict'
@@ -435,7 +451,11 @@ for (const scenario of [
     assert.equal(response.status, 200)
     const body = await response.json()
     if (!scenario.ready) {
-      assert.deepEqual(body.agents, [])
+      assert.equal(body.agents.length, 1)
+      assert.equal(body.agents[0].executable, false)
+      assert.equal(body.agents[0].targets[0].supportsBenchmark, false)
+      assert.deepEqual(body.agents[0].targets[0].benchmarkKeys, [])
+      assert.match(body.agents[0].targets[0].benchmarkUnavailableReasons['swe-bench'], /缺少 agent-runtime\/pi-mcts\/v1/)
       return
     }
     assert.equal(body.agents.length, 1)

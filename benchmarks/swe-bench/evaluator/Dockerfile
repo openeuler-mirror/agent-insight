@@ -1,3 +1,17 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 FROM node:20-bookworm-slim
 
 ARG SWE_BENCH_SOURCE_COMMIT=02e7a74ffd0b707aab73d203fe87bdc7c76afc8e
@@ -50,10 +64,13 @@ RUN set -eu; \
 
 WORKDIR /app
 
-COPY services/evaluator/src/evaluator-registry.cjs ./services/evaluator/src/evaluator-registry.cjs
+COPY services/evaluator/src ./services/evaluator/src
 COPY packages/project-config ./packages/project-config
+COPY packages/benchmark-protocol/artifact-path.cjs ./packages/benchmark-protocol/artifact-path.cjs
 COPY config/benchmark/evaluator.yaml ./config/benchmark/evaluator.yaml
 COPY benchmarks/swe-bench ./benchmarks/swe-bench
+
+RUN node -e "require('./benchmarks/swe-bench/evaluator/entrypoint.cjs'); require('./benchmarks/swe-bench/smoke/index.cjs')"
 
 ENV EVALUATOR_LISTEN_HOST=0.0.0.0 \
     EVALUATOR_DATA_DIR=/data \

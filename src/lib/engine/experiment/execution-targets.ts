@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { definitionsForTarget, type RuntimeDefinition } from '../../../../packages/agent-runtime/index.cjs';
 import { prisma } from '@/lib/storage/prisma';
 import { pickDisplayClientIp } from '@/lib/reliability/client-ip';
@@ -20,6 +36,7 @@ export type ClientTraceGenerationTarget = {
   parameterDefinitions?: RuntimeDefinition[];
   supportsSkillSnapshot?: boolean;
   supportsTriggerRouting?: boolean;
+  supportsEnvironmentPreparation?: boolean;
 };
 
 export function listTraceGenerationPlatforms(
@@ -67,6 +84,7 @@ export async function listClientTraceGenerationTargets(
           parameterDefinitions: definitionsForTarget(platform.parameterDefinitions || [], platform.id, agent),
           supportsSkillSnapshot: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 1,
           supportsTriggerRouting: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 4,
+          supportsEnvironmentPreparation: capabilities.actions?.includes('PREPARE_EXECUTION_ENVIRONMENT') === true,
         });
       }
     }

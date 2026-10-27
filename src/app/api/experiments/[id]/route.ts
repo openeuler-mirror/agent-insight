@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { agentEvaluationTraceId } from '@/lib/evaluators/evaluator-skills';
 import { casePagination, locateCasePage } from '@/lib/engine/experiment/case-navigation';
 import { normalizeAgentOptions, validateDefinition } from '../../../../../packages/agent-runtime/index.cjs';
 // 实验详情：实验元信息 + 服务端聚合（整体均分 overall / 评估器分解 breakdown /
@@ -180,6 +197,8 @@ export async function GET(
       progressJson: string | null;
       taskEnvelopeJson: string | null;
       publicPayloadJson: string | null;
+      runFactsJson: string | null;
+      cleanupJson: string | null;
       datasetCase: { externalCaseId: string } | null;
       artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
       evaluations: Array<{
@@ -589,6 +608,15 @@ export async function GET(
         durationMs: r.durationMs,
       })),
     );
+    const traceIds = results.map(result => agentEvaluationTraceId(result.evidence)).filter((id): id is string => Boolean(id));
+    const recordedTraces = username && traceIds.length ? await prisma.execution.findMany({
+      where: { user: username, taskId: { in: traceIds } }, select: { taskId: true },
+    }) : [];
+    const availableTraces = new Set(recordedTraces.map((trace: { taskId: string | null }) => trace.taskId));
+    const resultsWithTraces = results.map(result => {
+      const traceId = agentEvaluationTraceId(result.evidence);
+      return { ...result, evaluationTraceId: traceId && availableTraces.has(traceId) ? traceId : null };
+    });
     const baselineTrend = await baselineTrendPromise;
 
     return NextResponse.json({
@@ -641,6 +669,7 @@ export async function GET(
               platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
               agent: String((configSnapshot.runConfig as Record<string, unknown>).agent || ''),
               agentOptions: executionAgentOptions,
+              executionProfile: (configSnapshot.runConfig as Record<string, unknown>).executionProfile || null,
               model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
               timeoutSeconds: Number((configSnapshot.runConfig as Record<string, unknown>).timeoutSeconds) || null,
             }
@@ -661,6 +690,8 @@ export async function GET(
         const benchmarkRun = benchmarkRunByCase.get(c.id);
         const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
         const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
+        const environmentFacts = asRecord(asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.execution);
+        const cleanupFacts = asRecord(parseJsonValue(benchmarkRun?.cleanupJson || null));
         const benchmarkWorkspace = asRecord(benchmarkTask?.workspace);
         const benchmarkPayload = benchmarkRun
           ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
@@ -751,6 +782,13 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              environmentFacts: environmentFacts ? {
+                imageId: typeof environmentFacts.imageId === 'string' ? environmentFacts.imageId : null,
+                toolBoundary: typeof environmentFacts.toolBoundary === 'string' ? environmentFacts.toolBoundary : null,
+                controllerBoundary: typeof environmentFacts.controllerBoundary === 'string' ? environmentFacts.controllerBoundary : null,
+                network: typeof environmentFacts.network === 'string' ? environmentFacts.network : null,
+              } : null,
+              cleanupStatus: typeof cleanupFacts?.status === 'string' ? cleanupFacts.status : null,
               progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
               workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
@@ -765,7 +803,7 @@ export async function GET(
           } : {}),
         };
       }),
-      results,
+      results: resultsWithTraces,
       progress,
       traceProgress,
       executionProgress: itemProgress?.executionProgress || null,

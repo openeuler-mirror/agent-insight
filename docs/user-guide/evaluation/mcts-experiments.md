@@ -1,6 +1,8 @@
 ---
 title: "MCTS 实验用户使用说明书"
 description: "使用 Pi + MCTS 接入 Agent Insight，并创建、执行和查看 SWE-bench 或 ZSoft 实验"
+keywords: ["Agent Insight", "MCTS", "SWE-bench", "ZSoft", "评测实验"]
+changefreq: monthly
 ---
 
 # MCTS 实验用户使用说明书
@@ -60,6 +62,8 @@ curl -sSf "https://insight.example.com/api/ingest/setup?key=<当前账号的APIK
 1. 选择 **生成 Trace**，运行主机选择配置好的 **`pi-mcts`** 执行机，模型使用 **平台默认**。
 2. 按需设置执行并发、单次执行上限和 MCTS 参数；可选择同 Runtime 的参数模板，也可通过 **导入 JSON** 填入配置、**保存为模板** 供后续复用。
 3. 勾选要执行的 Case，点击 **下一步**。首次运行建议选择一个 Case，并发设为 `1`。
+
+点击下一步后，平台会在所选执行机检查当前数据集与 Agent 对应的环境。MCTS 使用自己的接入检查，不会因为选择 SWE-bench 就安装原生 Pi/xiaoO 的本地 xGovernor。需人工处理的问题显示在本步底部，完成执行机配置后再次点击下一步；通过后自动进入第三步。
 
 ![生成 Trace 页面：pi-mcts 执行主机、平台默认模型、并发与执行上限、参数模板、MCTS 参数编辑区及 Case 选择](../../images/agent/evaluation/mcts/experiment-trace-config.png)
 

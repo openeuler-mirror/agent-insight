@@ -4,7 +4,7 @@
   "description": "Correlates Codex IDE file and terminal activity with Agent Insight traces.",
   "version": "0.1.0",
   "publisher": "openeuler",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.93.0"
   },

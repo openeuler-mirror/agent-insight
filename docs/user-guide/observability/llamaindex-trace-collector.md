@@ -1,6 +1,8 @@
 ---
 title: "LlamaIndex Trace Collector"
-description: "LlamaIndex 采集器的安装、配置、接入、存储与卸载指南"
+description: "介绍 LlamaIndex 采集器的安装配置、链路接入、数据存储与卸载方法。"
+keywords: ["Agent Insight", "LlamaIndex", "链路采集", "OpenTelemetry"]
+changefreq: monthly
 ---
 
 # LlamaIndex Trace Collector

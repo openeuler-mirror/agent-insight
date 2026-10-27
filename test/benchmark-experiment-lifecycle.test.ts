@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -186,4 +202,36 @@ test('MCTS interrupted Trace is failed in SQL filtering and aggregate counts', a
   assert.equal(page.total, 1)
   assert.equal(page.stats.failedCount, 1)
   assert.equal((await aggregateExecutionList(where)).failedCount, 1)
+})
+
+test('model preflight reason survives completion into Case API and evaluation results', async t => {
+  const f = await fixture(t, [{ run: 'running_agent', result: 'pending' }])
+  const { createRequire } = await import('node:module')
+  const { XGovernorClient } = createRequire(import.meta.url)('../services/executor/src/xgovernor/client.cjs')
+  const client = new XGovernorClient('http://127.0.0.1:1', 'private-admin-token', async () => Response.json({
+    code: 'invalid_request', message: 'invalid request: model preflight timed out; api_key=private-model-secret',
+  }, { status: 400 }))
+  let failure!: { code: string; message: string }
+  try { await client.request('/sessions/open', {}); assert.fail('session must be rejected') }
+  catch (cause) { failure = cause as typeof failure }
+  assert.equal(failure.code, 'MODEL_PREFLIGHT_TIMEOUT')
+  const { completeBenchmarkRun } = await import('../src/lib/benchmark/run-callback-service')
+  await completeBenchmarkRun({ runId: f.runIds[0], clientId: 'fixture-client', completion: {
+    kind: 'execution', status: 'failed', artifacts: [], runFacts: { finishedAt: new Date().toISOString() },
+    cleanup: { status: 'succeeded', finishedAt: new Date().toISOString() }, error: { code: failure.code, message: failure.message },
+  } })
+  const run = await prisma.benchmarkCaseRun.findUniqueOrThrow({ where: { id: f.runIds[0] } })
+  assert.equal(run.failureCode, failure.code)
+  assert.equal(run.failureMessage, failure.message)
+  const results = await prisma.experimentEvalResult.findMany({ where: { experimentId: f.id } })
+  assert.equal(results[0].errorMessage, failure.message)
+  assert.equal(results[0].status, 'failed')
+  const { GET } = await import('../src/app/api/experiments/[id]/route')
+  const response = await GET(new Request(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`), { params: Promise.resolve({ id: f.id }) })
+  assert.equal(response.status, 200)
+  const detail = await response.json()
+  assert.equal(detail.cases[0].benchmark.failure.code, failure.code)
+  assert.equal(detail.cases[0].traceError, failure.message)
+  assert.ok(JSON.stringify(detail.results).includes(failure.message))
+  assert.equal(JSON.stringify(detail).includes('private-model-secret'), false)
 })

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import {
   ackTimeoutMs,
@@ -94,9 +110,14 @@ export async function reapStaleBenchmarkRuns(options: {
         : BENCHMARK_POST_AGENT_STALE_MS
     const staleBefore = new Date(now.getTime() - staleMs)
     const lastActivityAt = run.lastProgressAt || run.startedAt || run.updatedAt
-    if (lastActivityAt > staleBefore) continue
+    const detail = parseJsonRecord(JSON.stringify(progress.progress || {}))
+    const deadline = Date.parse(String(detail.stageDeadlineAt || ''))
+    const request = parseJsonRecord(run.dispatch?.requestJson)
+    const hasEnvironment = Boolean((request.task as { execution?: unknown } | undefined)?.execution)
+    const expired = hasEnvironment && Number.isFinite(deadline) && now.getTime() > deadline + graceMs
+    if (!expired && lastActivityAt > staleBefore) continue
 
-    const message = isPreparing
+    const message = expired ? '执行阶段超过冻结的绝对期限，平台已结束任务' : isPreparing
       ? 'Git 工作区准备超过 420 秒未完成，平台已自动结束任务'
       : run.status === 'running_agent'
         ? `Agent 执行超过 ${timeoutSeconds} 秒且宽限期内未上报进度，平台已自动结束任务`
@@ -105,11 +126,11 @@ export async function reapStaleBenchmarkRuns(options: {
       where: {
         id: run.id,
         status: run.status,
-        OR: [
+        ...(expired ? { progressJson: run.progressJson } : { OR: [
           { lastProgressAt: { lte: staleBefore } },
           { lastProgressAt: null, startedAt: { lte: staleBefore } },
           { lastProgressAt: null, startedAt: null, updatedAt: { lte: staleBefore } },
-        ],
+        ] }),
       },
       data: {
         status: 'execution_failed',
@@ -166,11 +187,12 @@ async function dispatchThroughClientControl(input: {
   request: Record<string, unknown>
 }): Promise<BenchmarkCommandOutcome> {
   const timeoutSeconds = Math.max(1, Number(input.request.timeoutSeconds) || 600)
+  const profile = (input.request.task as { execution?: { profile?: { timeouts?: { prepareSeconds?: number; cleanupSeconds?: number } } } } | undefined)?.execution?.profile
   const frame = await createCommand({
     user: input.user,
     clientId: input.clientId,
     action: 'RUN_BENCHMARK_CASE',
-    ttlMs: (timeoutSeconds + 90) * 1_000,
+    ttlMs: (timeoutSeconds + (profile?.timeouts?.prepareSeconds || 0) + (profile?.timeouts?.cleanupSeconds || 0) + 90) * 1_000,
     payload: { request: input.request },
   })
   const dispatched = await dispatchCommand(input.clientId, frame)

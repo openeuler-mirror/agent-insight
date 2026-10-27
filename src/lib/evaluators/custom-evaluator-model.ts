@@ -1,19 +1,44 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /** 自建评估器卡片 JSON 模型（与 API / DB 存储一致） */
 
 export type EvaluatorType = 'LLM' | 'Code' | 'Custom RPC';
 export type EvaluatorSource = 'preset' | 'custom';
+import type { EvaluatorSkillSelection } from './evaluator-skills';
 
 export interface LlmEvaluatorConfig {
   model: string;
   systemPrompt: string;
   /** 单段 user prompt（新格式） */
   userPrompt?: string;
+  skills?: EvaluatorSkillSelection[];
 }
 
 export const CUSTOM_EVALUATOR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{1,63}$/;
 
 export function isValidCustomEvaluatorName(name: string): boolean {
   return CUSTOM_EVALUATOR_NAME_PATTERN.test(name.trim());
+}
+
+export function normalizeEvaluatorPoints(points: EvaluatorCard['pointsDef']): NonNullable<EvaluatorCard['pointsDef']> {
+  return (points ?? [])
+    .map(point => ({ label: point.label.trim(), note: point.note?.trim() }))
+    .filter(point => point.label)
+    .map(point => point.note ? { label: point.label, note: point.note } : { label: point.label });
 }
 
 export const CUSTOM_EVALUATOR_ALLOWED_VARIABLES = [

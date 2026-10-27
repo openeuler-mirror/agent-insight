@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -171,6 +187,10 @@ let input=''; process.stdin.on('data', chunk => input+=chunk); process.stdin.on(
  if(input==='no-start') { setInterval(()=>{},1000); return; }
  const start=()=>{
   send('ready'); send('session'); send('model',{model:'csi-provider/GLM-5.2'});
+  if(input==='auth-error') {
+   console.log(JSON.stringify({type:'session.error',sessionID:'timing-session',error:{name:'ProviderAuthError',message:'Invalid API key'}}));
+   return;
+  }
   if(input==='route-hang' || input==='late-hit') {
    if(input==='late-hit') process.on('SIGTERM',()=>{send('trigger',{skillName:'test-skill'});process.exit(0);});
    setInterval(()=>{},1000); return;
@@ -205,6 +225,9 @@ let input=''; process.stdin.on('data', chunk => input+=chunk); process.stdin.on(
     finally { clearTimeout(cancellation); }
     const afterCancel = await run(raw);
     assert.equal(afterCancel.workspaceReused, false);
+    await assert.rejects(run('auth-error'), { code: 'MODEL_UNAVAILABLE' });
+    const afterAuthError = await run(raw);
+    assert.equal(afterAuthError.workspaceReused, false);
     for (const code of ['AGENT_STARTUP_TIMEOUT', 'TRIGGER_ROUTING_TIMEOUT']) assert.equal(isTraceGenerationFailureRetryable(code), false);
   } finally {
     workspace.clearTriggerWorkspaces();

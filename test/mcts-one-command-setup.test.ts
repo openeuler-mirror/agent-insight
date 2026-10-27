@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -57,6 +73,7 @@ async function fixture(t: TestContext) {
         else if (url.pathname.endsWith('mcts-xgovernor-collector.zip')) res.end(mctsXgovernorCollectorBundle(repository).buffer);
         else if (url.pathname === '/api/reliability/install-tokens') res.end('{"installToken":"fixture-token","user":"fixture-user"}');
         else if (url.pathname === '/api/ingest/setup/bundle' && url.searchParams.get('name') === 'client') res.end(clientBundle);
+        else if (url.pathname === '/api/ingest/otel/v1/traces') res.end('{"status":"accepted","received":0}');
         else if (url.pathname.includes('/api/ingest/')) res.end('{}');
         else res.end('fixture');
     });
@@ -83,7 +100,7 @@ async function fixture(t: TestContext) {
     const response = await getSetup(new Request(`${origin}/api/ingest/setup?yes=1&nokey=1&frameworks=mcts-xgovernor&key=synthetic-key`, { headers: { 'x-platform': 'unix', host: new URL(origin).host, 'x-forwarded-proto': 'http' } }));
     setup = (await response.text()).replace('FORCE_NO_KEY=true', 'FORCE_NO_KEY=false');
     installer = await (await getInstaller(new Request(`${origin}/api/ingest/setup/mcts-xgovernor`))).text();
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, AGENT_INSIGHT_HOME: insight };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, AGENT_INSIGHT_HOME: insight, AGENT_INSIGHT_BASE_URL: origin, AGENT_INSIGHT_OTLP_ENDPOINT: `${origin}/api/ingest/otel/v1/traces` };
     for (const key of ['AGENT_INSIGHT_DATA_DIR', 'AGENT_INSIGHT_MCTS_REPO_DIR', 'AGENT_INSIGHT_MCTS_PYTHON', 'AGENT_INSIGHT_MCTS_TRACE_LAUNCHER', 'AGENT_INSIGHT_MCTS_REQUIRE_REPO', 'AGENT_INSIGHT_NO_KEY', 'AGENT_INSIGHT_FRAMEWORKS', 'AGENT_INSIGHT_CLIENT_SOURCE']) delete env[key];
     return { root, repoDir, insight, origin, configEnv, requests, env };
 }

@@ -1,6 +1,8 @@
 ---
 title: "用例分析"
 description: "使用已有 Trace 或数据集 Case 验证 Skill 的任务结果与执行轨迹"
+keywords: ["Agent Insight", "Skill", "用例分析", "执行轨迹", "任务结果"]
+changefreq: monthly
 ---
 
 # 用例分析

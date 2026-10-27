@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use strict'
 
 const { createHash, createHmac, timingSafeEqual } = require('node:crypto')
@@ -7,6 +23,10 @@ const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
+const { ExecutionBackendRegistry, LocalExecutionBackend } = require('./execution-backend.cjs')
+const { validateExecution, bindingFor, executionCapabilities } = require('./execution-config.cjs')
+const { LocalRetention, SWEEP_INTERVAL } = require('./retention.cjs')
+const { loadProjectConfig } = require('./project-config.cjs')
 const { createGitSourcePolicies } = require('./source-policy-registry.cjs')
 const { PublicBundleWorkspaceProvider, SingleFileCollector, validatePublicBundleSpec } = require('./public-bundle.cjs')
 const { ZsoftTasksWorkspaceProvider, validateZsoftTasksSpec } = require('./zsoft-tasks.cjs')
@@ -189,7 +209,7 @@ function validateTaskEnvelope(task, runId) {
   if (
     task.policy?.workspaceWrite !== 'allow'
     || task.policy?.hiddenDataAccess !== 'deny'
-    || task.policy?.network !== 'client-default'
+    || !['client-default', ...(task.execution ? ['deny'] : [])].includes(task.policy?.network)
   ) {
     throw new BenchmarkExecutorError('POLICY_UNSUPPORTED', '当前执行器只支持 client-default 网络策略')
   }
@@ -221,6 +241,7 @@ function validateTaskEnvelope(task, runId) {
     }
     artifactNames.add(artifact.name)
   }
+  if (task.execution) validateExecution(task.execution)
   scanForbidden(task, agentOptions?.version === 2)
 }
 
@@ -281,9 +302,10 @@ class ArtifactCollectorRegistry extends CapabilityRegistry {
 function buildExecutionPlan(task, registries) {
   return {
     workspace: task.workspace,
-    workspaceProvider: registries.workspaceProviders.get(task.workspace.provider),
+    backend: registries.executionBackends?.get(task.execution?.profile.backendKey || 'local'),
+    workspaceProvider: task.execution ? null : registries.workspaceProviders.get(task.workspace.provider),
     policy: task.policy,
-    agentRuntime: registries.agentRuntimes.get(task.agentConfig.platform),
+    agentRuntime: task.execution ? null : registries.agentRuntimes.get(task.agentConfig.platform),
     agent: {
       ...task.agentConfig,
       input: task.task.instruction,
@@ -297,7 +319,7 @@ function buildExecutionPlan(task, registries) {
     },
     artifacts: task.submission.requiredArtifacts.map((contract) => ({
       contract,
-      collector: registries.collectors.get(contract.collector),
+      collector: task.execution ? null : registries.collectors.get(contract.collector),
     })),
   }
 }
@@ -315,6 +337,7 @@ async function atomicWriteJson(filePath, value) {
 class FileRunStore {
   constructor(rootDir) {
     this.rootDir = rootDir
+    this.stateWrites = new Map()
   }
 
   runDir(runId) {
@@ -366,10 +389,16 @@ class FileRunStore {
   }
 
   writeState(runId, patch) {
-    return this.state(runId).then((current) => atomicWriteJson(
-      path.join(this.runDir(runId), 'state.json'),
-      { ...(current || {}), ...patch, updatedAt: new Date().toISOString() },
-    ))
+    const next = (this.stateWrites.get(runId) || Promise.resolve()).catch(() => {}).then(async () => {
+      const prior = await this.state(runId) || {}
+      const updatedAt = new Date().toISOString()
+      await atomicWriteJson(path.join(this.runDir(runId), 'state.json'), {
+        ...prior, ...patch, updatedAt,
+        ...(patch.stage === 'terminal' ? { terminalAt: prior.terminalAt || updatedAt } : {}),
+      })
+    })
+    this.stateWrites.set(runId, next)
+    return next.finally(() => { if (this.stateWrites.get(runId) === next) this.stateWrites.delete(runId) })
   }
 
   async writeArtifact(runId, name, bytes) {
@@ -401,7 +430,7 @@ function runProcess(command, args, options = {}) {
       cwd: options.cwd,
       env: options.env || process.env,
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       detached: useProcessGroup,
     })
     let stdout = ''
@@ -469,6 +498,13 @@ function runProcess(command, args, options = {}) {
       else if (!timedOut && code === 0) settle(() => resolve({ stdout, stderr }))
       else settle(() => reject(processError(code, signal)))
     })
+    if (options.input !== undefined) {
+      child.stdin.on('error', (error) => {
+        terminate('SIGTERM')
+        settle(() => reject(error))
+      })
+      child.stdin.end(options.input)
+    }
     if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true
@@ -620,7 +656,7 @@ class GitPatchCollector {
     const diff = await this.processRunner(
       'git',
       [
-        'diff', '--cached', '--binary', '--full-index', context.workspace.baseCommit,
+        'diff', '--no-ext-diff', '--no-textconv', '--cached', '--binary', '--full-index', context.workspace.baseCommit,
         '--', '.', reservedArtifact,
       ],
       { cwd: context.workspace.path, errorCode: 'ARTIFACT_COLLECT_FAILED' },
@@ -742,239 +778,161 @@ class AgentInsightCallbackClient {
 
 class BenchmarkExecutionRunner {
   constructor(options) {
-    this.store = options.store
-    this.workspaceProviders = options.workspaceProviders
-    this.agentRuntimes = options.agentRuntimes
-    this.policyEnforcer = options.policyEnforcer
-    this.collectors = options.collectors
-    this.cleanupManager = options.cleanupManager
-    this.callback = options.callback
-    this.logError = options.logError
+    Object.assign(this, options)
+    this.executionBackends = options.executionBackends || new ExecutionBackendRegistry([['local', new LocalExecutionBackend(options)]])
   }
 
-  async progress(request, stage, message) {
+  async progress(request, stage, message, seconds) {
     if (await this.store.cancellation?.(request.runId)) throw new BenchmarkExecutorError('EXECUTION_CANCELLED', '实验已取消', 409)
-    await this.store.writeState(request.runId, { stage })
-    await this.callback.progress(request, stage, { message }).catch(() => undefined)
+    this.currentProgress = this.currentProgress || new Map()
+    const progress = { message, stageStartedAt: new Date().toISOString(), ...(seconds ? { stageDeadlineAt: new Date(Date.now() + seconds * 1000).toISOString() } : {}) }
+    this.currentProgress.set(request.runId, { stage, progress })
+    await this.store.writeState(request.runId, { stage, progress })
+    await this.callback.progress(request, stage, progress).catch(() => undefined)
+  }
+
+  async cleanup(backend, handle, request, recovery = false) {
+    try {
+      const context = { runId: request.runId, signal: AbortSignal.timeout((request.task.execution?.profile.timeouts.cleanupSeconds || 120) * 1000) }
+      const result = recovery ? await backend.recover({ ...(await this.store.state(request.runId)), task: request.task }, context) : await backend.close(handle, context)
+      return result || { status: 'failed', message: '执行后端未确认清理结果' }
+    } catch (cause) { return { status: 'failed', message: cause.message || String(cause) } }
   }
 
   async execute(request, signal) {
-    const plan = buildExecutionPlan(request.task, this)
-    let workspace = null
-    let appliedPolicy = null
-    let cleanup = null
+    const task = request.task
+    const backend = this.executionBackends.get(task.execution?.profile.backendKey || 'local')
+    let handle = null
     let runFacts = null
+    let cleanup = null
+    let completion = null
+    let stageSignal = signal
+    let stage = 'preparing'
     const localArtifacts = []
     const uploadedArtifacts = []
-    let pendingCompletion = null
+    const context = {
+      runId: request.runId, signal, insightBaseUrl: this.insightBaseUrl,
+      persist: async (next) => { handle = next; await this.store.writeState(request.runId, { executionHandle: next }) },
+      heartbeat: async () => {
+        const latest = this.currentProgress?.get(request.runId)
+        if (latest) await this.callback.progress(request, latest.stage, latest.progress).catch(() => {})
+      },
+    }
+    const timer = setInterval(() => context.heartbeat().catch(() => {}), 10000)
+    timer.unref?.()
+    const timedSignal = seconds => signal ? AbortSignal.any([signal, AbortSignal.timeout(seconds * 1000)]) : AbortSignal.timeout(seconds * 1000)
     try {
-      await this.progress(request, 'preparing', '正在准备任务工作区')
-      workspace = await plan.workspaceProvider.prepare(plan.workspace, {
-        runId: request.runId, benchmarkKey: request.task.benchmark.key,
-        benchmarkPayload: request.task.task.benchmarkPayload, signal,
-      })
-      appliedPolicy = await this.policyEnforcer.apply(plan.policy, { runId: request.runId })
-      await this.progress(request, 'agent_running', '正在运行 Agent')
-      const agentResult = await plan.agentRuntime.run({
-        ...plan.agent,
-        cwd: workspace.path,
-        timeoutSeconds: Math.min(plan.agent.timeoutSeconds, request.timeoutSeconds),
-        signal,
-      })
-      runFacts = {
-        ...agentResult,
-        platform: plan.agent.platform,
-        agent: plan.agent.agent,
-        ...(plan.agent.model ? { model: plan.agent.model } : {}),
-      }
-      if (agentResult?.timedOut === true) {
-        throw new BenchmarkExecutorError('AGENT_TIMEOUT', 'Agent 执行超过任务上限并已被终止')
-      }
-      if (
-        (agentResult?.exitCode !== undefined && agentResult?.exitCode !== null && agentResult.exitCode !== 0)
-        || (agentResult?.exitCode === null && agentResult?.signal)
-      ) {
-        throw new BenchmarkExecutorError(
-          'AGENT_EXIT_NONZERO',
-          `Agent 异常退出（${agentResult.exitCode === null ? `signal ${agentResult.signal}` : `exit ${agentResult.exitCode}`}）`,
-        )
-      }
-      await this.progress(request, 'collecting', '正在收集提交物')
-      for (const artifactPlan of plan.artifacts) {
-        const artifact = await artifactPlan.collector.collect(artifactPlan.contract, { workspace, runFacts })
-        if (
-          artifact.name !== artifactPlan.contract.name
-          || artifact.mediaType !== artifactPlan.contract.mediaType
-          || !Buffer.isBuffer(artifact.bytes)
-          || artifact.bytes.length < 1
-          || artifact.bytes.length > artifactPlan.contract.maxBytes
-          || artifact.sha256 !== sha256(artifact.bytes)
-        ) {
-          throw new BenchmarkExecutorError('ARTIFACT_COLLECTOR_OUTPUT_INVALID', '提交物收集器返回了错误的契约')
-        }
+      const prepareSeconds = task.execution?.profile.timeouts.prepareSeconds
+      await this.progress(request, 'preparing', task.execution ? '正在准备容器执行环境' : task.workspace.provider === 'git' ? '正在准备 Git 工作区' : '正在准备任务工作区', prepareSeconds)
+      stageSignal = prepareSeconds ? timedSignal(prepareSeconds) : signal
+      context.signal = stageSignal
+      handle = await backend.prepare(task, context)
+      const agentSeconds = Math.min(task.agentConfig.timeoutSeconds, request.timeoutSeconds)
+      stage = 'agent_running'
+      await this.progress(request, stage, '正在运行 Agent', agentSeconds)
+      stageSignal = timedSignal(agentSeconds)
+      context.signal = stageSignal
+      const result = await backend.runAgent(handle, {
+        ...task.agentConfig, input: task.task.instruction, benchmarkKey: task.benchmark.key,
+        benchmarkPayload: task.task.benchmarkPayload, workspace: task.workspace,
+        correlation: { experimentId: task.context.experimentId, caseRunId: request.runId },
+        timeoutSeconds: agentSeconds, signal: stageSignal,
+      }, context)
+      runFacts = { ...result, platform: task.agentConfig.platform, agent: task.agentConfig.agent, ...(task.agentConfig.model ? { model: task.agentConfig.model } : {}) }
+      await this.store.writeState(request.runId, { runFacts })
+      if (result?.timedOut) throw new BenchmarkExecutorError('AGENT_TIMEOUT', 'Agent 执行超过任务上限并已被终止')
+      if ((result?.exitCode != null && result.exitCode !== 0) || (result?.exitCode === null && result?.signal)) throw new BenchmarkExecutorError('AGENT_EXIT_NONZERO', 'Agent 异常退出')
+      stage = 'collecting'
+      await this.progress(request, stage, '正在收集提交物', 300)
+      stageSignal = timedSignal(300)
+      context.signal = stageSignal
+      for (const contract of task.submission.requiredArtifacts) {
+        const artifact = await backend.collect(handle, contract, { ...context, runFacts })
+        if (artifact.name !== contract.name || artifact.mediaType !== contract.mediaType || !Buffer.isBuffer(artifact.bytes) || artifact.bytes.length < 1 || artifact.bytes.length > contract.maxBytes || artifact.sha256 !== sha256(artifact.bytes)) throw new BenchmarkExecutorError('ARTIFACT_COLLECTOR_OUTPUT_INVALID', '提交物收集器返回了错误的契约')
         artifact.path = await this.store.writeArtifact(request.runId, artifact.name, artifact.bytes)
         localArtifacts.push(artifact)
       }
-      await this.store.writeState(request.runId, {
-        stage: 'uploading',
-        runFacts,
-        localArtifacts: localArtifacts.map(({ name, mediaType, sha256, path: artifactPath }) => ({
-          name, mediaType, sha256, path: artifactPath,
-        })),
-      })
-      await this.callback.progress(request, 'uploading', { message: '正在上传 Artifact' }).catch(() => undefined)
+      const persisted = localArtifacts.map(({ name, mediaType, sha256: hash, path: artifactPath }) => ({ name, mediaType, sha256: hash, path: artifactPath }))
+      await this.store.writeState(request.runId, { localArtifacts: persisted, runFacts })
+      stage = 'uploading'
+      await this.progress(request, stage, '正在上传 Artifact', 300)
       for (const artifact of localArtifacts) {
+        signal?.throwIfAborted()
         const uploaded = await this.callback.uploadArtifact(request, artifact)
-        uploadedArtifacts.push({
-          artifactId: uploaded.artifactId,
-          name: artifact.name,
-          sha256: artifact.sha256,
-        })
+        uploadedArtifacts.push({ artifactId: uploaded.artifactId, name: artifact.name, sha256: artifact.sha256 })
         await this.store.writeState(request.runId, { uploadedArtifacts })
       }
-      await this.callback.progress(request, 'cleaning', { message: '正在清理工作区' }).catch(() => undefined)
-      cleanup = await this.cleanupManager.cleanup({ workspace, appliedPolicy })
-      await this.policyEnforcer.release(appliedPolicy).catch(() => undefined)
-      appliedPolicy = null
-      workspace = null
-      pendingCompletion = {
-        kind: 'execution',
-        status: 'succeeded',
-        artifacts: uploadedArtifacts,
-        runFacts,
-        cleanup,
-      }
-      await this.store.writeState(request.runId, { stage: 'complete_pending', completion: pendingCompletion })
-      if (await this.store.cancellation?.(request.runId)) throw new BenchmarkExecutorError('EXECUTION_CANCELLED', '实验已取消', 409)
-      await this.callback.complete(request, pendingCompletion)
-      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'succeeded' })
-    } catch (error) {
-      const errorRunFacts = error?.runFacts
-      if (!runFacts && errorRunFacts && typeof errorRunFacts === 'object' && !Array.isArray(errorRunFacts)) {
-        runFacts = {
-          ...errorRunFacts,
-          platform: plan.agent.platform,
-          agent: plan.agent.agent,
-          ...(plan.agent.model ? { model: plan.agent.model } : {}),
-        }
-      }
-      const normalized = error instanceof BenchmarkExecutorError
-        ? error
-        : new BenchmarkExecutorError(error?.code || 'EXECUTION_FAILED', error?.message || '执行器运行失败')
-      const cancelled = Boolean(await this.store.cancellation?.(request.runId))
-      if (pendingCompletion && !cancelled) {
-        this.logError?.(`benchmark completion ${request.runId} pending delivery`, normalized)
-        await this.store.writeState(request.runId, {
-          stage: 'complete_pending',
-          completion: pendingCompletion,
-          callbackError: normalized.message,
-        })
+      await this.progress(request, 'cleaning', '正在清理执行环境', task.execution?.profile.timeouts.cleanupSeconds || 120)
+      cleanup = await this.cleanup(backend, handle, request)
+      completion = { kind: 'execution', status: 'succeeded', artifacts: uploadedArtifacts, runFacts, cleanup }
+      if (cleanup.status !== 'succeeded') {
+        await this.store.writeState(request.runId, { stage: 'cleanup_pending', resumeStage: 'complete_pending', completion, cleanup })
         return
-      }
-      if (workspace) {
-        cleanup = await this.cleanupManager.cleanup({ workspace, appliedPolicy }).catch((cleanupError) => ({
-          status: 'failed',
-          message: cleanupError?.message || String(cleanupError),
-        }))
-      } else {
-        cleanup = cleanup || { status: 'succeeded', finishedAt: new Date().toISOString() }
-      }
-      if (appliedPolicy) await this.policyEnforcer.release(appliedPolicy).catch(() => undefined)
-      if (cancelled) {
-        await this.store.writeState(request.runId, {
-          stage: cleanup?.status === 'succeeded' ? 'terminal' : 'cancelling',
-          terminalStatus: 'cancelled', cleanup,
-        })
-        return
-      }
-      if (localArtifacts.length && uploadedArtifacts.length < localArtifacts.length && normalized.retryable) {
-        await this.store.writeState(request.runId, {
-          stage: 'upload_pending',
-          runFacts,
-          cleanup,
-          localArtifacts: localArtifacts.map(({ name, mediaType, sha256, path: artifactPath }) => ({
-            name, mediaType, sha256, path: artifactPath,
-          })),
-          uploadedArtifacts,
-          error: { code: normalized.code, message: normalized.message },
-        })
-        return
-      }
-      const completion = {
-        kind: 'execution',
-        status: 'failed',
-        artifacts: [],
-        runFacts: runFacts || { finishedAt: new Date().toISOString() },
-        cleanup,
-        error: { code: normalized.code, message: normalized.message },
       }
       await this.store.writeState(request.runId, { stage: 'complete_pending', completion })
+      signal?.throwIfAborted()
+      await this.callback.complete(request, completion)
+      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'succeeded', completionDeliveredAt: new Date().toISOString() })
+    } catch (cause) {
+      const cancelled = Boolean(await this.store.cancellation?.(request.runId))
+      if (completion && !cancelled) {
+        await this.store.writeState(request.runId, { stage: 'complete_pending', completion, callbackError: cause.message })
+        return
+      }
+      runFacts = { ...(runFacts || { finishedAt: new Date().toISOString() }), ...(cause.runFacts || {}), platform: task.agentConfig.platform, agent: task.agentConfig.agent }
+      if (handle && (!cleanup || cleanup.status !== 'succeeded')) {
+        await backend.cancel(handle).catch(() => {})
+        cleanup = await this.cleanup(backend, handle, request)
+      }
+      cleanup ||= { status: 'succeeded', finishedAt: new Date().toISOString() }
+      const timeout = stageSignal?.aborted && !signal?.aborted
+      const failure = { code: timeout ? stage === 'preparing' ? 'EXECUTION_PREPARE_TIMEOUT' : stage === 'agent_running' ? 'AGENT_TIMEOUT' : 'EXECUTION_PHASE_TIMEOUT' : cause.code || 'EXECUTION_FAILED', message: timeout ? '执行阶段超过冻结期限' : cause.message || String(cause) }
+      const retryUpload = localArtifacts.length && uploadedArtifacts.length < localArtifacts.length && cause.retryable
+      completion = { kind: 'execution', status: 'failed', artifacts: [], runFacts, cleanup, error: failure }
+      const nextStage = cancelled ? 'terminal' : retryUpload ? 'upload_pending' : 'complete_pending'
+      await this.store.writeState(request.runId, {
+        stage: cleanup.status === 'succeeded' ? nextStage : 'cleanup_pending', resumeStage: nextStage,
+        terminalStatus: cancelled ? 'cancelled' : undefined, completion, runFacts, cleanup, uploadedArtifacts,
+        localArtifacts: localArtifacts.map(({ name, mediaType, sha256: hash, path: artifactPath }) => ({ name, mediaType, sha256: hash, path: artifactPath })),
+      })
+      if (cancelled || retryUpload || cleanup.status !== 'succeeded') return
       try {
         await this.callback.complete(request, completion)
-        await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'failed' })
-      } catch (callbackError) {
-        await this.store.writeState(request.runId, {
-          stage: 'complete_pending',
-          callbackError: callbackError?.message || String(callbackError),
-        })
-      }
+        await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'failed', completionDeliveredAt: new Date().toISOString() })
+      } catch (error) { await this.store.writeState(request.runId, { callbackError: error.message }) }
+    } finally {
+      clearInterval(timer)
+      this.currentProgress?.delete(request.runId)
     }
   }
 
   async resume(request, state) {
-    if (state.stage === 'complete_pending' && state.completion) {
-      await this.callback.complete(request, state.completion)
-      await this.store.writeState(request.runId, {
-        stage: 'terminal',
-        terminalStatus: state.completion.status,
-      })
-      return
+    const cancelled = Boolean(await this.store.cancellation?.(request.runId))
+    if (state.stage === 'accepted' && !cancelled) return this.execute(request)
+    if (cancelled || ['preparing', 'agent_running', 'collecting', 'uploading', 'cleaning', 'cleanup_pending', 'cancelling'].includes(state.stage)) {
+      const backend = this.executionBackends.get(state.executionHandle?.backendKey || request.task.execution?.profile.backendKey || 'local')
+      const cleanup = state.cleanup?.status === 'succeeded' ? state.cleanup : await this.cleanup(backend, state.executionHandle, request, true)
+      if (cleanup.status !== 'succeeded') { await this.store.writeState(request.runId, { stage: 'cleanup_pending', cleanup }); return }
+      if (cancelled) { await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'cancelled', cleanup }); return }
+      const completion = state.completion || { kind: 'execution', status: 'failed', artifacts: [], runFacts: state.runFacts || {}, cleanup, error: { code: 'EXECUTOR_RESTARTED', message: '执行器重启，未自动重跑 Agent' } }
+      state = { ...state, stage: state.resumeStage || (state.localArtifacts?.length ? 'upload_pending' : 'complete_pending'), cleanup, completion: { ...completion, cleanup } }
+      await this.store.writeState(request.runId, state)
     }
     if (state.stage === 'upload_pending' && Array.isArray(state.localArtifacts)) {
-      const uploadedArtifacts = Array.isArray(state.uploadedArtifacts) ? [...state.uploadedArtifacts] : []
-      const uploadedNames = new Set(uploadedArtifacts.map((artifact) => artifact.name))
+      const uploaded = state.uploadedArtifacts || []
       for (const artifact of state.localArtifacts) {
-        if (uploadedNames.has(artifact.name)) continue
-        const bytes = await fsp.readFile(artifact.path)
-        const uploaded = await this.callback.uploadArtifact(request, { ...artifact, bytes })
-        uploadedArtifacts.push({
-          artifactId: uploaded.artifactId,
-          name: artifact.name,
-          sha256: artifact.sha256,
-        })
-        await this.store.writeState(request.runId, { uploadedArtifacts })
+        if (uploaded.some(item => item.name === artifact.name)) continue
+        const result = await this.callback.uploadArtifact(request, { ...artifact, bytes: await fsp.readFile(artifact.path) })
+        uploaded.push({ artifactId: result.artifactId, name: artifact.name, sha256: artifact.sha256 })
+        await this.store.writeState(request.runId, { uploadedArtifacts: uploaded })
       }
-      const completion = {
-        kind: 'execution',
-        status: 'succeeded',
-        artifacts: uploadedArtifacts,
-        runFacts: state.runFacts || {},
-        cleanup: state.cleanup || { status: 'succeeded' },
-      }
-      await this.store.writeState(request.runId, { stage: 'complete_pending', completion })
-      await this.callback.complete(request, completion)
-      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'succeeded' })
-      return
+      state.completion = { kind: 'execution', status: 'succeeded', artifacts: uploaded, runFacts: state.runFacts || {}, cleanup: state.cleanup }
+      state.stage = 'complete_pending'
+      await this.store.writeState(request.runId, { stage: state.stage, completion: state.completion })
     }
-    if (state.stage === 'accepted') {
-      await this.execute(request)
-      return
-    }
-    if (['preparing', 'agent_running', 'collecting', 'uploading', 'cleaning'].includes(state.stage)) {
-      const provider = this.workspaceProviders.get(request.task.workspace.provider)
-      const workspace = { path: path.join(provider.rootDir, request.runId) }
-      const cleanup = await this.cleanupManager.cleanup({ workspace }).catch(() => ({ status: 'failed' }))
-      const completion = {
-        kind: 'execution',
-        status: 'failed',
-        artifacts: [],
-        runFacts: { finishedAt: new Date().toISOString() },
-        cleanup,
-        error: { code: 'EXECUTOR_RESTARTED', message: '执行器重启，未自动重跑 Agent' },
-      }
-      await this.store.writeState(request.runId, { stage: 'complete_pending', completion })
-      await this.callback.complete(request, completion)
-      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'failed' })
+    if (state.stage === 'complete_pending' && state.completion) {
+      await this.callback.complete(request, state.completion)
+      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: state.completion.status, completionDeliveredAt: new Date().toISOString() })
     }
   }
 }
@@ -1056,13 +1014,21 @@ function createBenchmarkExecutor(options) {
       ['git-patch/v1', new GitPatchCollector()], ['single-file/v1', new SingleFileCollector()],
     ])
   const callback = options.callback || new AgentInsightCallbackClient(options)
+  const policyEnforcer = options.policyEnforcer || new LocalPolicyEnforcer()
+  const cleanupManager = options.cleanupManager || new WorkspaceCleanupManager()
+  const executionConfig = options.executionConfig || executionCapabilities().config
+  const executionBackends = options.executionBackends || new ExecutionBackendRegistry([
+    ['local', new LocalExecutionBackend({ workspaceProviders, agentRuntimes, collectors, policyEnforcer, cleanupManager })],
+    ['xgovernor', new (require('./xgovernor/backend.cjs').XGovernorExecutionBackend)({ config: executionConfig, ...(!options.executionConfig ? { configProvider: () => executionCapabilities().config } : {}), baseDir, insightBaseUrl: options.insightBaseUrl, processRunner: runProcess, atomicWriteJson, GitPatchCollector })],
+  ])
   const runner = options.runner || new BenchmarkExecutionRunner({
+    executionBackends, insightBaseUrl: options.insightBaseUrl,
     store,
     workspaceProviders,
     agentRuntimes,
-    policyEnforcer: options.policyEnforcer || new LocalPolicyEnforcer(),
+    policyEnforcer,
     collectors,
-    cleanupManager: options.cleanupManager || new WorkspaceCleanupManager(),
+    cleanupManager,
     callback,
     logError: options.logError,
   })
@@ -1076,6 +1042,15 @@ function createBenchmarkExecutor(options) {
   let recoveryTimer = null
   let recoveryTimerDueAt = 0
   let closed = false
+  const retention = new LocalRetention({
+    baseDir, installRoot: options.retentionInstallationRoot || require('./xgovernor/installation.cjs').installationRoot({ AGENT_INSIGHT_HOME: options.agentInsightHome || path.dirname(baseDir) }),
+    getDays: () => (options.retention || loadProjectConfig('executor').retention).days,
+    isActive: runId => activeRunIds.has(runId) || deliveryRetryRunId === runId || store.stateWrites?.has(runId),
+    hasActiveRuns: () => closed || activeRunIds.size > 0 || Boolean(deliveryRetryRunId),
+    log: options.log, logError: options.logError,
+  })
+  const retentionTimer = setInterval(() => { if (!closed) retention.sweep() }, SWEEP_INTERVAL)
+  retentionTimer.unref?.()
 
   function deliveryRetryDelay(attempt) {
     return Math.min(
@@ -1119,6 +1094,7 @@ function createBenchmarkExecutor(options) {
       try {
         if (await store.cancellation(request.runId)) {
           if (!state?.stage || state.stage === 'accepted') await store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'cancelled' })
+          else await runner.resume(request, state)
           return
         }
         if (state?.stage && state.stage !== 'accepted') await runner.resume(request, state)
@@ -1193,7 +1169,10 @@ function createBenchmarkExecutor(options) {
       runId,
       allowAlternateCallbackOrigin,
     )
-    buildExecutionPlan(request.task, { workspaceProviders, agentRuntimes, collectors })
+    const plan = buildExecutionPlan(request.task, { workspaceProviders, agentRuntimes, collectors, executionBackends })
+    if (request.task.execution) plan.backend.validate?.(request.task)
+    const binding = bindingFor(executionConfig.bindings, request.task.benchmark.key, request.task.agentConfig.platform)
+    if (binding && !request.task.execution && !options.runner && !options.allowLegacyExecution) throw new BenchmarkExecutorError('EXECUTION_PROFILE_REQUIRED', '该执行目标需要冻结的沙箱 Profile；请重新创建实验')
     return { runId, digest }
   }
 
@@ -1302,7 +1281,6 @@ function createBenchmarkExecutor(options) {
     let nextDeliveryDelay = null
     for (const runId of runIds) {
       if (closed) break
-      if (await store.cancellation(runId)) continue
       const [request, state] = await Promise.all([store.request(runId), store.state(runId)])
       if (!request || !state || state.stage === 'terminal') continue
       if (DELIVERY_RETRY_STAGES.has(state.stage)) {
@@ -1324,6 +1302,7 @@ function createBenchmarkExecutor(options) {
     for (const candidate of executionCandidates) {
       if (tryAcquire(candidate.runId)) runInBackground(candidate.request, candidate.state)
     }
+    if (!closed) await retention.sweep()
   }
 
   return {
@@ -1363,6 +1342,8 @@ function createBenchmarkExecutor(options) {
     },
     async close() {
       closed = true
+      clearInterval(retentionTimer)
+      await retention.pending
       if (recoveryTimer) clearTimeout(recoveryTimer)
       recoveryTimer = null
       recoveryTimerDueAt = 0
@@ -1370,6 +1351,7 @@ function createBenchmarkExecutor(options) {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     },
     recover,
+    cleanupRetainedRuns: () => retention.sweep(true),
   }
 }
 
@@ -1378,6 +1360,9 @@ module.exports = {
   AgentInsightCallbackClient,
   ArtifactCollectorRegistry,
   BenchmarkExecutionRunner,
+  ExecutionBackendRegistry,
+  LocalExecutionBackend,
+  atomicWriteJson,
   BenchmarkExecutorError,
   FileRunStore,
   GitPatchCollector,

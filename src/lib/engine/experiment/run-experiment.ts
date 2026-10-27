@@ -1,3 +1,21 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { withFrozenCustomEvaluators, resolveFrozenCustomEvaluator } from '@/lib/evaluators/evaluator-skill-service';
+import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError } from '@/lib/engine/evaluation/custom-evaluator-runtime';
 /**
  * 单组实验执行引擎（M5）。
  *
@@ -66,9 +84,9 @@ import {
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
 import {
+  evaluatorRunConfigOf,
   isConfigurableTextEvaluatorId,
   parseStoredEvaluatorRunConfigs,
-  type ConfigurableTextEvaluatorId,
   type EvaluatorRunConfigMap,
 } from '@/lib/evaluators/evaluator-run-config';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
@@ -99,6 +117,7 @@ import { deriveSettledExperimentStatus } from './detail-agg';
 import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
 import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
 import { activeCaseOperations, assertExperimentActive, withExperimentCancellation } from './cancellation-context';
+import { isSimilarityPresetId, runSimilarityPreset } from './similarity-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -345,7 +364,8 @@ async function evaluateOnce(
   user: string,
   evaluatorId: string,
   runtime: CaseRuntime,
-  evaluatorConfig?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
+  configs: EvaluatorRunConfigMap,
+  frozenSnapshot: Record<string, unknown> = {},
 ): Promise<EvaluatorOutput> {
   if (isSkillTriggerAnalyzerId(evaluatorId)) {
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
@@ -363,7 +383,7 @@ async function evaluateOnce(
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isTextPresetId(evaluatorId)) {
-    return runTextPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorConfig);
+    return runTextPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorRunConfigOf(configs, evaluatorId));
   }
   // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
@@ -398,7 +418,12 @@ async function evaluateOnce(
   if (isHallucinationPresetId(evaluatorId)) {
     return runHallucinationPreset(evaluatorId, user, runtime.faithfulCtx);
   }
-  const card = await resolveEvaluatorCard(user, evaluatorId);
+  if (isSimilarityPresetId(evaluatorId)) {
+    return runSimilarityPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorRunConfigOf(configs, evaluatorId));
+  }
+  const card = evaluatorId.startsWith('custom-')
+    ? await resolveFrozenCustomEvaluator(user, evaluatorId, frozenSnapshot)
+    : await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
   if (card.evaluatorType !== 'LLM' || !card.llmConfig?.systemPrompt) {
     throw new Error(`评估器 ${evaluatorId} 缺少可执行的 LLM 配置`);
@@ -413,6 +438,7 @@ async function evaluateOnce(
       };
     }
   }
+  if (card.llmConfig.skills?.length) return (await runCustomEvaluatorWithSkills(user, card, runtime.judgeCtx)).output;
   const prompt = buildJudgePrompt(card, runtime.judgeCtx);
   const text = await callJudgeLlm(user, {
     system: prompt.system,
@@ -434,7 +460,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
       case: {
         include: {
           experiment: {
-            select: { evaluatorIdsJson: true, evaluatorConfigsJson: true, skillName: true },
+            select: { evaluatorIdsJson: true, evaluatorConfigsJson: true, skillName: true, configSnapshotJson: true },
           },
         },
       },
@@ -464,7 +490,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
     await assertExperimentActive(row.experimentId, row.caseId);
     localAttempts = attempt;
     try {
-      let evaluatorConfig: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | undefined;
+      let configs: EvaluatorRunConfigMap = {};
       const evaluatorId = String(row.evaluatorId);
       if (isConfigurableTextEvaluatorId(evaluatorId)) {
         let evaluatorIds: string[];
@@ -475,14 +501,13 @@ export async function executeResultRow(user: string, resultId: string): Promise<
         } catch {
           throw new Error('实验评估器列表不是有效 JSON 数组');
         }
-        const configs = parseStoredEvaluatorRunConfigs(
+        configs = parseStoredEvaluatorRunConfigs(
           row.case.experiment.evaluatorConfigsJson,
           evaluatorIds,
         );
-        evaluatorConfig = configs[evaluatorId];
       }
       const out = await withTimeout(
-        withExperimentCancellation(row.experimentId, row.caseId, () => evaluateOnce(user, row.evaluatorId, runtime, evaluatorConfig)),
+        withExperimentCancellation(row.experimentId, row.caseId, () => evaluateOnce(user, row.evaluatorId, runtime, configs, JSON.parse(row.case.experiment.configSnapshotJson || '{}'))),
         row.evaluatorId === 'preset-agent-trace-quality'
           ? EXPERIMENT_TRAJECTORY_TIMEOUTS.resultRowMs
           : experimentEngineConfig.rowTimeoutMs,
@@ -517,6 +542,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
     where: { id: resultId, status: 'running', case: { deletedAt: null, experiment: { deletedAt: null } } },
     data: {
       status: 'failed',
+      ...(lastError instanceof CustomEvaluatorExecutionError ? { evidenceJson: JSON.stringify({ json: { type: 'custom-evaluator-runtime-v1', customEvaluatorRuntime: lastError.runtime } }) } : {}),
       errorMessage: message.slice(0, 2000),
       attempts: row.attempts + localAttempts,
       durationMs: Date.now() - startedAt,
@@ -861,6 +887,7 @@ export async function ensureEvalExperiment(params: {
       type: 'single',
       agentName: params.agentName ?? '',
       evaluatorIdsJson: JSON.stringify(params.evaluatorIds),
+      configSnapshotJson: JSON.stringify(await withFrozenCustomEvaluators(params.user, params.evaluatorIds)),
       // 建出来时还没有任何 case/结果，不是「运行中」——空评测任务(createOnly 0 trace)
       // 若建成 running 会永久卡住（尚无结果行可供 settleExperimentStatus 结算）。
       // 真正评估时由同步 case 调用或批次收尾统一落到 done/failed。

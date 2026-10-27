@@ -1,3 +1,17 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 generator client {
   provider = "prisma-client-js"
   output   = "../node_modules/.prisma/client"
@@ -687,6 +701,10 @@ model AgentEvalDataset {
   datasetKind        String   @default("ideal_output")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  generationSource String?
+  generationStatus String?
+  generationJob TraceDatasetGenerationJob?
 
   benchmarkDataset BenchmarkDataset?
 
@@ -2074,4 +2092,51 @@ model CollaborationSessionBinding {
   createdAt       String
 
   @@unique([user, collaborationId, sessionId])
+}
+
+model TraceDatasetGenerationJob {
+  id String @id
+  datasetId String @unique
+  dataset AgentEvalDataset @relation(fields: [datasetId], references: [id])
+  owner String
+  configJson String
+  status String @default("queued")
+  stage String @default("queued")
+  stageIndex Int @default(0)
+  generatedCount Int @default(0)
+  errorCode String?
+  errorMessage String?
+  leaseEpoch Int @default(0)
+  leaseOwner String?
+  leaseUntil DateTime?
+  cancelRequested Boolean @default(false)
+  requestId String
+  requestHash String
+  captureState String @default("pending")
+  captureManifestHash String?
+  attemptCount Int @default(0)
+  nextEligibleAt DateTime?
+  cleanupPending Boolean @default(false)
+  deletionId String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([owner, requestId])
+  @@index([owner, status, createdAt])
+  @@index([status, leaseUntil])
+}
+
+model TraceDatasetOperationReceipt {
+  id String @id
+  ownerKey String
+  kind String
+  operationKey String
+  requestHash String?
+  datasetId String?
+  jobId String?
+  deletionId String?
+  outcome String
+  expiresAt DateTime?
+  clockHighWaterMs BigInt?
+  @@unique([ownerKey, kind, operationKey])
+  @@index([expiresAt])
 }

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -89,11 +105,23 @@ export async function recordBenchmarkRunProgress(input: {
   if ((rank.get(status) || 0) < (rank.get(run.status) || 0)) {
     return { accepted: true, desiredState: 'continue' }
   }
+  let progress = input.progress
+  const task = run.taskEnvelopeJson ? JSON.parse(run.taskEnvelopeJson) as AgentTaskEnvelope : null
+  if (task?.execution) {
+    const previous = run.progressJson ? JSON.parse(run.progressJson) as BenchmarkExecutionProgress : null
+    const stages = ['preparing', 'agent_running', 'collecting', 'uploading', 'cleaning']
+    if (previous && stages.indexOf(previous.stage) > stages.indexOf(progress.stage)) return { accepted: true, desiredState: 'continue' }
+    const seconds = progress.stage === 'preparing' ? task.execution.profile.timeouts.prepareSeconds
+      : progress.stage === 'agent_running' ? task.agentConfig.timeoutSeconds
+        : progress.stage === 'cleaning' ? task.execution.profile.timeouts.cleanupSeconds : 300
+    const startedAt = previous?.stage === progress.stage && previous.progress?.stageStartedAt ? previous.progress.stageStartedAt : new Date().toISOString()
+    progress = { ...progress, progress: { ...progress.progress, stageStartedAt: startedAt, stageDeadlineAt: new Date(Date.parse(startedAt) + seconds * 1000).toISOString() } }
+  }
   const updated = await prisma.benchmarkCaseRun.updateMany({
-    where: { id: input.runId, status: run.status },
+    where: { id: input.runId, status: run.status, ...(task?.execution ? { progressJson: run.progressJson } : {}) },
     data: {
       status,
-      progressJson: canonicalJson(input.progress as unknown as JsonValue),
+      progressJson: canonicalJson(progress as unknown as JsonValue),
       lastProgressAt: new Date(),
     },
   })

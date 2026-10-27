@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 预置评估器注册表一致性守卫。
  *
@@ -73,6 +89,11 @@ import {
   RIGOR_PRESET_IDS,
   isRigorPresetId,
 } from '../src/lib/engine/experiment/rigor-preset-evaluators';
+import {
+  SIMILARITY_PRESET_IDS,
+  isSimilarityPresetId,
+} from '../src/lib/engine/experiment/similarity-preset-evaluators';
+
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
  * 新增一族预置评估器时，在 evaluateOnce 里接了分发，就同步在这里登记一行。
@@ -116,6 +137,7 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     ids: [...FLUENCY_PRESET_IDS, ...HALLUCINATION_PRESET_IDS],
   },
   { name: 'rigor-preset-evaluators.ts', claims: isRigorPresetId, ids: RIGOR_PRESET_IDS },
+  { name: 'similarity-preset-evaluators.ts', claims: isSimilarityPresetId, ids: SIMILARITY_PRESET_IDS },
 ];
 
 test('旧质量卡保留 faithful runner，新过程质量卡与效率卡由 trajectory runner 唯一认领', () => {

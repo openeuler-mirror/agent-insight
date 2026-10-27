@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { saveExecutionRecord, type ExecutionRecord } from '@/lib/storage/data-service';
 import { extractStructuredAgentError, sanitizeAgentDiagnostic } from '../../../../scripts/agent-run-diagnostics.cjs';
 
@@ -294,6 +310,22 @@ export async function recordEvaluatorExecution(
   await saveExecutionRecord(record);
 
   return interactions.length;
+}
+
+export async function recordAgentJudgeExecution(
+  client: MessageListClientLike,
+  input: RecordEvaluatorExecutionInput & { systemPrompt: string },
+): Promise<string | null> {
+  const messages = await client.listMessages(input.taskId);
+  const interactions = normalizeEvaluatorExecutionInteractions(messages);
+  if (!interactions.some(item => item.role === 'assistant' && (item.content || item.tool_calls?.length || item.error))) return null;
+  const record = buildOpencodeExecutionRecord(messages, input);
+  record.interactions = [
+    { role: 'system', content: input.systemPrompt, agent: input.agentName, timestamp: input.startedAt },
+    ...(record.interactions as EvaluatorTraceInteraction[]),
+  ];
+  const saved = await saveExecutionRecord(record);
+  return saved.success ? input.taskId : null;
 }
 
 export function buildOpencodeExecutionRecord(rawMessages: unknown[], input: RecordEvaluatorExecutionInput): ExecutionRecord {

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 import { DeleteExperimentButton, PendingExperimentCancellations, isCompletedExperimentCase } from './DeleteExperimentButton';
 
@@ -60,7 +76,7 @@ interface ExperimentDetail {
   executionParameterDefinition?: RuntimeDefinition | null;
   reusableConfig?: {
     traceSource?: string | null;
-    executionTarget?: { model?: string | null; timeoutSeconds?: number | null } | null;
+    executionTarget?: { model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; resources: { cpu: number; memoryMiB: number } } | null } | null;
   };
   preset?: string | null;
   watchMode?: boolean;
@@ -108,6 +124,8 @@ interface ExperimentDetail {
         contentUrl: string;
       }>;
       runStatus: string;
+      environmentFacts?: { imageId: string | null; toolBoundary: string | null; controllerBoundary: string | null; network: string | null } | null;
+      cleanupStatus?: string | null;
       progressStage: string | null;
       workspaceProvider: string | null;
       evaluationStatus: string | null;
@@ -485,6 +503,7 @@ export function ExperimentDetail({
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
+              {detail.reusableConfig?.executionTarget?.executionProfile && <span><span style={{ color: 'var(--foreground-muted)' }}>执行环境：</span>{detail.reusableConfig.executionTarget.executionProfile.key}{detail.reusableConfig.executionTarget.executionProfile.sourceRevision && ` · ${detail.reusableConfig.executionTarget.executionProfile.sourceRevision.slice(0, 12)}`} · 工具断网 · {detail.reusableConfig.executionTarget.executionProfile.resources.cpu} CPU / {detail.reusableConfig.executionTarget.executionProfile.resources.memoryMiB} MiB</span>}
               {Number.isSafeInteger(executionTimeoutSeconds) && executionTimeoutSeconds > 0 && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>Agent 单次执行上限：</span>{executionTimeoutSeconds} 秒</span>
               )}
@@ -716,6 +735,10 @@ export function ExperimentDetail({
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
                           {detail.scope === 'benchmark' && c.benchmark?.submissions.length ? (
                             <div style={{ minWidth: 0 }}>
+                              {c.benchmark.environmentFacts && <div style={{ fontSize: 10, color: 'var(--foreground-muted)', overflowWrap: 'anywhere', marginBottom: 6 }}>
+                                工具边界：{c.benchmark.environmentFacts.toolBoundary} · 控制器：{c.benchmark.environmentFacts.controllerBoundary} · 网络：{c.benchmark.environmentFacts.network} · 清理：{c.benchmark.cleanupStatus || '待确认'}<br />
+                                镜像：{c.benchmark.environmentFacts.imageId || '—'}
+                              </div>}
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                                 <span title={c.benchmark.submissions.map((item) => item.name).join('\n')}>
                                   {c.benchmark.submissions.length} 个提交物 · {c.benchmark.submissions.map((item) => item.name).join('、')}

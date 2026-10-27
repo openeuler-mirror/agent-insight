@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use strict'
 
 const { createHash } = require('node:crypto')
@@ -324,7 +340,13 @@ function loadPackage(packageDir) {
   if (gitSourcePolicyPath && path.extname(gitSourcePolicyPath) !== '.cjs') {
     fail(`${key} 的 executor.gitSourcePolicy 必须是 CommonJS .cjs 模块`)
   }
-  const executorFiles = gitSourcePolicyPath ? listFiles(path.dirname(gitSourcePolicyPath)) : []
+  const preparation = source.executor?.environmentPreparation
+  if (preparation && (preparation.protocol !== 'execution-environment/v1'
+    || Object.keys(preparation).some(key => !['protocol', 'implementation'].includes(key)))) fail(`${key} 的环境准备协议不支持`)
+  const environmentPreparationPath = preparation
+    ? resolveInside(packageDir, preparation.implementation, 'executor.environmentPreparation.implementation') : null
+  if (environmentPreparationPath && (path.extname(environmentPreparationPath) !== '.cjs' || source.executor?.supported === false)) fail(`${key} 的环境准备必须是启用的执行端 CommonJS 模块`)
+  const executorFiles = [...new Set([gitSourcePolicyPath, environmentPreparationPath].filter(Boolean).flatMap(file => listFiles(path.dirname(file))))]
   for (const filePath of executorFiles) {
     if (!fs.realpathSync(filePath).startsWith(`${fs.realpathSync(packageDir)}${path.sep}`)) {
       fail(`${key} 的执行器文件越出接入包：${filePath}`)
@@ -362,7 +384,8 @@ function loadPackage(packageDir) {
     ...(ociRuntime ? [
       path.resolve(packageDir, '../../packages/project-config'),
       path.resolve(packageDir, '../../config/benchmark/evaluator.yaml'),
-      path.resolve(packageDir, '../../services/evaluator/src/evaluator-registry.cjs'),
+      path.resolve(packageDir, '../../services/evaluator/src'),
+      path.resolve(packageDir, '../../packages/benchmark-protocol/artifact-path.cjs'),
     ].flatMap((file) => fs.existsSync(file) ? (fs.statSync(file).isDirectory() ? listFiles(file) : [file]) : []) : []),
   ])]
   const evaluatorDigest = digestFiles(evaluatorFiles, evaluatorDir)
@@ -386,6 +409,7 @@ function loadPackage(packageDir) {
     datasetPreparerPath,
     datasetPreparerExport,
     gitSourcePolicyPath,
+    environmentPreparationPath,
     executorFiles,
     manifest: {
       adapterKey: key,
@@ -466,6 +490,8 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   fs.mkdirSync(outputDir, { recursive: true })
   const manifestSource = [
     '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
     '',
     "import type { BenchmarkManifest } from '../../packages/benchmark-protocol/src/contracts'",
     '',
@@ -481,6 +507,8 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   ))
   const adaptersSource = [
     '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
     '',
     "import type { BenchmarkAdapter } from '../../packages/benchmark-protocol/src/evaluation-contracts'",
     ...imports,
@@ -494,6 +522,8 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   ))
   const loadersSource = [
     '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
     '',
     "import type { BenchmarkDatasetLoader } from '../../packages/benchmark-protocol/src/contracts'",
     ...loaderImports,
@@ -505,12 +535,14 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   const packagesWithPreparers = packages.filter(item => item.datasetPreparerPath)
   const preparersSource = [
     '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
     "import type { BenchmarkDatasetPreparer } from '../../packages/benchmark-protocol/src/contracts'",
     ...packagesWithPreparers.map((item, index) => `import { ${item.datasetPreparerExport} as preparer${index} } from '${toImportPath(outputDir, item.datasetPreparerPath).replace(/\.ts$/, '')}'`),
     `export const generatedBenchmarkDatasetPreparers: readonly { adapterKey: string; preparer: BenchmarkDatasetPreparer }[] = [${packagesWithPreparers.map((item, index) => `{ adapterKey: ${JSON.stringify(item.key)}, preparer: preparer${index} }`).join(', ')}]`,
     '',
   ].join('\n')
-  const preparerKeysSource = `// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog\nmodule.exports = ${JSON.stringify(packagesWithPreparers.map(item => item.key))}\n`
+  const preparerKeysSource = `// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog\n// Copyright (c) 2026 Huawei Technologies Co., Ltd.\n// SPDX-License-Identifier: Apache-2.0\nmodule.exports = ${JSON.stringify(packagesWithPreparers.map(item => item.key))}\n`
   const descriptors = packages.map((item) => ({
     ...item.evaluator,
     ...(item.evaluator.assets ? { assets: {
@@ -546,6 +578,8 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     "'use strict'",
     '',
     '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
     '',
     "const path = require('node:path')",
     '',
@@ -559,6 +593,8 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     "'use strict'",
     '',
     '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
     '',
     "const path = require('node:path')",
     '',
@@ -566,9 +602,13 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     ...policyPackages.map(item => `  { benchmarkKey: ${JSON.stringify(item.key)}, modulePath: path.resolve(__dirname, ${JSON.stringify(toImportPath(outputDir, item.gitSourcePolicyPath))}) },`),
     ']',
     '',
-    `const generatedExecutorPackageFiles = ${JSON.stringify([...new Set(policyPackages.flatMap(item => item.executorFiles.map(filePath => path.relative(rootDir, filePath).replaceAll(path.sep, '/'))))].sort(), null, 2)}`,
+    'const generatedEnvironmentPreparationDescriptors = [',
+    ...packages.filter(item => item.environmentPreparationPath).map(item => `  { datasetAdapterKey: ${JSON.stringify(item.key)}, protocol: 'execution-environment/v1', modulePath: path.resolve(__dirname, ${JSON.stringify(toImportPath(outputDir, item.environmentPreparationPath))}) },`),
+    ']',
     '',
-    'module.exports = { generatedGitSourcePolicyDescriptors, generatedExecutorPackageFiles }',
+    `const generatedExecutorPackageFiles = ${JSON.stringify([...new Set(packages.flatMap(item => item.executorFiles.map(filePath => path.relative(rootDir, filePath).replaceAll(path.sep, '/'))))].sort(), null, 2)}`,
+    '',
+    'module.exports = { generatedGitSourcePolicyDescriptors, generatedEnvironmentPreparationDescriptors, generatedExecutorPackageFiles }',
     '',
   ].join('\n')
   fs.writeFileSync(path.join(outputDir, 'manifests.ts'), manifestSource)

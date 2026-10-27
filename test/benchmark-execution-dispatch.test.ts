@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -397,8 +413,76 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
   assert.equal(missingCapabilityBody.error.code, 'EXECUTOR_CAPABILITY_MISSING')
 })
 
-test('watchdog settles a stale running Agent task once', async () => {
-  const suffix = `${Date.now()}_${process.pid}`
+test('xGovernor experiment APIs freeze the confirmed environment and keep native model choices independent', async () => {
+  const { describeProfile, normalizeExecutionConfig } = require('../packages/benchmark-protocol/execution.cjs')
+  const config = normalizeExecutionConfig({ profiles: { 'xgovernor-local-docker': {
+    sourceRevision: 'a'.repeat(40),
+    runtimes: { 'pi-agent': { kind: 'pi', namespace: 'runtime_pi', agents: ['pi-agent'] } },
+    models: { 'sandbox/model': { provider: 'sandbox', model: 'model', apiKeyEnv: 'FIXTURE_KEY' } },
+  } } })
+  const profile = describeProfile('xgovernor-local-docker', config.profiles['xgovernor-local-docker'])
+  const sandboxClient = `${clientId}-sandbox`
+  const capabilities = {
+    platforms: [{ id: 'pi-agent', agents: ['pi-agent'], models: ['native/model'], actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'], runExperimentCase: { version: 2, returnsTraceId: true }, runBenchmarkCase: { version: 1, returnsTraceId: true } }],
+    components: { 'execution-backend/v1': { ready: true }, 'agent-runtime/pi-agent/v1': { ready: true }, 'git-workspace/v1': { ready: true }, 'git-patch/v1': { ready: true } },
+    executionProfiles: [{ profile, benchmarks: ['swe-bench'], ready: true, note: '' }],
+  }
+  await prisma.reliabilityClient.create({ data: { clientId: sandboxClient, user, name: 'sandbox fixture', arch: 'x64', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), capabilitiesJson: JSON.stringify(capabilities) } })
+  const imported = await importBenchmarkDataset({ user, name: 'sandbox API fixture', adapterKey: 'swe-bench', source: { kind: 'synthetic-test-fixture' }, cases: [JSON.parse(fs.readFileSync(path.resolve('benchmarks/swe-bench/fixtures/smoke-case.json'), 'utf8'))] })
+  const { GET: listAgents } = await import('@/app/api/experiments/agents/route')
+  const candidates = await (await listAgents(new Request(`http://insight.test/api/experiments/agents?user=${encodeURIComponent(user)}`))).json()
+  const target = candidates.agents.flatMap((agent: any) => agent.targets).find((item: any) => item.workerId === sandboxClient)
+  assert.deepEqual(target.models.map((item: any) => item.id), ['', 'native/model'])
+  assert.deepEqual(target.benchmarkEnvironments['swe-bench'].models.map((item: any) => item.id), ['', 'sandbox/model'])
+  assert.equal(target.benchmarkEnvironments['swe-bench'].profile.definitionDigest, profile.definitionDigest)
+  const create = (executionProfileDigest: string) => createExperiment(new Request('http://insight.test/api/experiments', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ user, scope: 'benchmark', name: 'confirmed environment', benchmark: {
+      datasetId: imported.id, caseSelection: { mode: 'all' }, executionTarget: { clientId: sandboxClient }, runConfig: { platform: 'pi-agent', agent: 'pi-agent', model: 'sandbox/model', executionProfileDigest },
+    } }),
+  }))
+  const changed = await create(`sha256:${'0'.repeat(64)}`)
+  assert.equal(changed.status, 409)
+  assert.equal((await changed.json()).error.code, 'EXECUTION_PROFILE_CHANGED')
+  const created = await create(profile.definitionDigest)
+  assert.equal(created.status, 201)
+  const binding = await prisma.benchmarkExperimentBinding.findUniqueOrThrow({ where: { experimentId: (await created.json()).id } })
+  const frozen = JSON.parse(binding.runConfigJson)
+  assert.equal(frozen.executionProfile.definitionDigest, profile.definitionDigest)
+  assert.equal(frozen.executionArch, 'amd64')
+  const run = await prisma.benchmarkCaseRun.findFirstOrThrow({ where: { experimentId: binding.experimentId } })
+  const { getBenchmarkAdapter } = await import('@/lib/benchmark/adapter-registry')
+  const { prepareBenchmarkEvaluation } = await import('@/lib/benchmark/evaluation-preparation-service')
+  const adapter = getBenchmarkAdapter('swe-bench')
+  const split = adapter.validateAndSplitCase(JSON.parse(fs.readFileSync(path.resolve('benchmarks/swe-bench/fixtures/smoke-case.json'), 'utf8')))
+  const task = adapter.buildAgentTask({ publicPayload: split.publicPayload, context: { runId: run.id, experimentId: binding.experimentId, caseId: run.experimentCaseId }, runConfig: frozen })
+  const bytes = Buffer.from('diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n')
+  fs.mkdirSync(path.join(testDir, 'data', 'artifacts'), { recursive: true })
+  fs.writeFileSync(path.join(testDir, 'data', 'artifacts', 'frozen-image.patch'), bytes)
+  await prisma.benchmarkArtifact.create({ data: { id: 'artifact_frozen_image', runId: run.id, name: 'model.patch', mediaType: 'text/x-diff', sizeBytes: bytes.length, sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`, storagePath: 'artifacts/frozen-image.patch' } })
+  const privatePayload = split.privatePayload as Record<string, unknown>
+  const evaluationImage = 'swr.example.test/benchmark/case:latest'
+  await prisma.benchmarkCaseRun.update({ where: { id: run.id }, data: { status: 'submitted', taskEnvelopeJson: JSON.stringify(task), runFactsJson: '{}', privatePayloadJson: JSON.stringify({ ...privatePayload, evaluation: { image: evaluationImage, script: 'pytest', type: 'pytest', logParser: 'pytest' } }) } })
+  await prisma.benchmarkExperimentBinding.update({ where: { experimentId: binding.experimentId }, data: { callbackOrigin: 'http://insight.test' } })
+  const prepared = await prepareBenchmarkEvaluation(run.id)
+  const evaluation = await prisma.benchmarkEvaluation.findUniqueOrThrow({ where: { id: prepared.evaluationRunId } })
+  assert.equal(JSON.parse(evaluation.requestJson).payload.executionImage, undefined)
+  assert.equal(JSON.parse(evaluation.requestJson).payload.instance.image, evaluationImage)
+  const retry = await prepareBenchmarkEvaluation(run.id, { forceNewAttempt: true, retryOfEvaluationId: evaluation.id })
+  const retried = await prisma.benchmarkEvaluation.findUniqueOrThrow({ where: { id: retry.evaluationRunId } })
+  assert.equal(JSON.parse(retried.requestJson).payload.executionImage, undefined)
+  assert.equal(JSON.parse(retried.requestJson).payload.instance.image, evaluationImage)
+  capabilities.executionProfiles[0].ready = false
+  capabilities.executionProfiles[0].note = 'Docker 未就绪'
+  await prisma.reliabilityClient.update({ where: { clientId: sandboxClient }, data: { capabilitiesJson: JSON.stringify(capabilities) } })
+  const unavailable = await create(profile.definitionDigest)
+  assert.equal(unavailable.status, 409)
+  assert.equal((await unavailable.json()).error.code, 'EXECUTOR_NOT_READY')
+})
+
+for (const absoluteDeadline of [false, true]) test(absoluteDeadline
+  ? 'watchdog enforces a frozen phase deadline despite a fresh heartbeat'
+  : 'watchdog settles a stale running Agent task once', async () => {
+  const suffix = `${Date.now()}_${process.pid}_${absoluteDeadline}`
   const experimentId = `exp_stale_${suffix}`
   const caseId = `case_stale_${suffix}`
   const runId = `erun_stale_${suffix}`
@@ -451,14 +535,14 @@ test('watchdog settles a stale running Agent task once', async () => {
       adapterKey: 'swe-bench',
       clientId,
       startedAt: staleAt,
-      lastProgressAt: staleAt,
-      progressJson: '{"kind":"execution","stage":"preparing"}',
+      lastProgressAt: absoluteDeadline ? now : staleAt,
+      progressJson: JSON.stringify({ kind: 'execution', stage: 'preparing', ...(absoluteDeadline ? { progress: { stageDeadlineAt: new Date(now.getTime() + 1_000).toISOString() } } : {}) }),
     },
   })
   await prisma.benchmarkDispatchOutbox.create({
     data: {
       runId,
-      requestJson: '{"timeoutSeconds":60}',
+      requestJson: JSON.stringify({ timeoutSeconds: 60, ...(absoluteDeadline ? { task: { execution: {} } } : {}) }),
       requestDigest: `sha256:${'e'.repeat(64)}`,
       status: 'accepted',
     },
@@ -469,7 +553,7 @@ test('watchdog settles a stale running Agent task once', async () => {
   assert.equal(await reapStaleRuns({ now, graceMs: 0, experimentId }), 0)
   await prisma.benchmarkCaseRun.update({
     where: { id: runId },
-    data: { progressJson: '{"kind":"execution","stage":"agent_running"}' },
+    data: { progressJson: JSON.stringify({ kind: 'execution', stage: 'agent_running', ...(absoluteDeadline ? { progress: { stageDeadlineAt: staleAt.toISOString() } } : {}) }) },
   })
   assert.equal(await reapStaleRuns({ now, graceMs: 0, experimentId }), 1)
   assert.equal(await reapStaleRuns({ now, graceMs: 0, experimentId }), 0)

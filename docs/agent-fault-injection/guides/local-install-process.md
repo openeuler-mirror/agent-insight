@@ -1,3 +1,10 @@
+---
+title: "Agent FI：本机安装过程详解"
+description: "说明 Agent FI 客户端的安装步骤、配置落盘、Worker 常驻机制及验收排障方法。"
+keywords: ["Agent FI", "客户端安装", "故障注入", "Worker 运维"]
+changefreq: monthly
+---
+
 # Agent FI：本机安装过程详解
 
 > **读者**：需要理解「执行 FI setup curl 后，用户机器上发生了什么」的使用者与排障者。  

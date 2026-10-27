@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
@@ -61,6 +77,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
       datasetId: body.datasetId,
       compareVersion,
       versionAEnabled: body.versionAEnabled !== false,
+      versionBEnabled: body.versionBEnabled !== false,
       optimizationRecordId: typeof body.optimizationRecordId === 'string' ? body.optimizationRecordId : undefined,
       name: typeof body.name === 'string' ? body.name : undefined,
       agentName: typeof body.agentName === 'string' ? body.agentName : undefined,
@@ -82,7 +99,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     });
     if (result.kind === 'invalid_context') return NextResponse.json({ error: '实验关联的工作会话已失效' }, { status: 409 });
     if (result.kind === 'not_found') return NextResponse.json({ error: 'Skill 或版本不存在' }, { status: 404 });
-    if (result.kind === 'invalid_compare') return NextResponse.json({ error: 'A/B 必须选择不同且存在的对照版本' }, { status: 400 });
+    if (result.kind === 'invalid_compare') return NextResponse.json({ error: 'A/B 至少一组使用 Skill，且不能选择相同版本；所选版本必须存在' }, { status: 400 });
     if (result.kind === 'invalid_dataset') return NextResponse.json({ error: '评测数据集不存在、为空或不适用于当前实验类型' }, { status: 400 });
     if (result.kind === 'invalid_cases') return NextResponse.json({ error: '已选 Case 不属于当前数据集或已失效' }, { status: 400 });
     if (result.kind === 'invalid_evaluators') return NextResponse.json({ error: '当前实验类型不支持所选评估器' }, { status: 400 });

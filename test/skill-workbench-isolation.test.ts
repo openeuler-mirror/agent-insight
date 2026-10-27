@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -37,7 +53,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentService, /evaluationConcurrency:\s*runtime\.evaluationConcurrency/);
   assert.match(experimentService, /triggerConcurrency:\s*runtime\.triggerConcurrency/);
   assert.match(experimentService, /executionSides:\s*input\.preset === 'skill-ab' \? \['a', 'b'\] : \['b'\]/);
-  assert.match(experimentService, /boundSide:\s*input\.preset === 'skill-ab' \? 'a' : 'b'/);
+  assert.match(experimentService, /const boundSide = versionA \? 'a' : 'b'/);
   assert.match(experimentService, /triggerRouting:\s*input\.preset === 'trigger'/);
   assert.match(grayscaleRoute, /configuredExecutionSides/);
   assert.match(grayscaleRoute, /isGrayscaleTaskBindingValid/);

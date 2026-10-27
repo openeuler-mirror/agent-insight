@@ -1,6 +1,8 @@
 'use strict'
 
 // AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// SPDX-License-Identifier: Apache-2.0
 
 const path = require('node:path')
 
@@ -12,11 +14,11 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": "/app/benchmarks/swe-bench/evaluator/entrypoint.cjs",
     "imageProvider": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/images.cjs"),
-    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-1584d7c33d02e2effc62865da49b74ae35ed0e76977a11c8e697a5aed02122a4",
+    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-41882cd577054b59a5cc535875ab9161e1b35b09debf5043e169c5b74a1dca8c",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/Dockerfile"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
     "runtimeSmokeEntrypoint": "/app/benchmarks/swe-bench/smoke/index.cjs",
-    "artifactDigest": "sha256:1584d7c33d02e2effc62865da49b74ae35ed0e76977a11c8e697a5aed02122a4",
+    "artifactDigest": "sha256:41882cd577054b59a5cc535875ab9161e1b35b09debf5043e169c5b74a1dca8c",
     "network": "deny",
     "resources": {
       "cpu": 4,
@@ -112,9 +114,9 @@ const generatedEvaluatorDescriptors = [
       "verifyCommand": "python3",
       "verifyEntrypoint": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/verify_assets.py")
     },
-    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-a16bad020bd777695262cef4184adcaf78d3661899c41e66b73fe474f70ed89e",
+    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-6b0aa4da7be9b070ef4da90398d46f284b2b79f0a439da2fd8d03069e8f487aa",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/Dockerfile"),
-    "artifactDigest": "sha256:a16bad020bd777695262cef4184adcaf78d3661899c41e66b73fe474f70ed89e",
+    "artifactDigest": "sha256:6b0aa4da7be9b070ef4da90398d46f284b2b79f0a439da2fd8d03069e8f487aa",
     "network": "deny",
     "resources": {
       "cpu": 4,

@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * This component is licensed under MulanPSL-2.0.
+ * See LICENSE in this directory for the full license text.
+ */
+
 /* eslint-disable @typescript-eslint/no-require-imports -- VS Code loads this extension through its CommonJS entry point. */
 const childProcess = require("node:child_process")
 const fs = require("node:fs")

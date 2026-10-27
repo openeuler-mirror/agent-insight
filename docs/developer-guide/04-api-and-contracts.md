@@ -1,3 +1,10 @@
+---
+title: "API & Contracts"
+description: "整理 Agent Insight 的引擎接口、持久化模型、数据契约与扩展点，说明模块间交互约束。"
+keywords: ["Agent Insight", "API 契约", "数据模型", "模块扩展"]
+changefreq: monthly
+---
+
 # API & Contracts
 
 > 引擎从 `lib` 暴露约 380 个函数，从 `server` 暴露约 29 个，外加 14 个 prompt 构建器；代码库声明了约 890 个类型和约 290 个扩展点（接口/抽象类）。本页列出高信噪比的引擎 API、持久化 + 内存数据模型，以及扩展点。仅包含签名与调用关系 —— 不描述行为。所有签名均来自静态分析。
@@ -19,6 +26,28 @@
 | `getActiveConfig` / `getUserSettings` | [#get-active-config](#get-active-config) | lib/storage |
 
 ## Public API
+
+### 实验执行环境准备
+
+| 接口 / 合同 | 输入与输出 |
+| --- | --- |
+| `POST /api/experiments/environment-preparations` | 接收 `requestId/datasetId/clientId/platform/agent/model/caseIds/mode/timeoutSeconds/concurrency` 及可选 `agentOptions`；同配置入口改为仅传 `requestId/sourceExperimentId`，禁止混入执行目标覆盖；服务端解析数据集接入标识与版本，返回 `202` 和准备任务 |
+| `GET /api/experiments/environment-preparations/:taskId` | 按当前用户与仍有效的客户端归属查询任务 |
+| 准备任务 | `{ taskId, contextDigest, state, message, issues, durationHint? }`；状态为 `checking/preparing/needs_action/ready/failed` |
+| `execution-environment/v1` | `packages/benchmark-protocol/environment.cjs` 及 `.d.cts`，严格校验上下文与摘要 |
+| 执行端接入方法 | `checkEnvironment(context, services)` 返回 `{ issues, prepare }`；`prepareEnvironment(context, services, reportProgress)` 执行准备，调用方再次检查 |
+
+实验列表与 Skill 工作台按实验 ID 独立保存忙状态，仅禁用当前行操作，某行完成或失败不解除其他仍在处理的行；两处共用 `SameConfigExperimentAction`，复用 `useExecutionEnvironment` 轮询及恢复逻辑，环境通过后才复制、启动并跳转。服务端 `resolveReuseEnvironment` 按归属读取原实验冻结配置：Benchmark 从绑定恢复运行参数与 Case 选择，普通/可靠性数据集从未删除 Case 的数据集绑定恢复范围，Skill 从快照和取消记录恢复范围。缺少可靠绑定的旧记录提示通过向导重新确认，不猜测主机或扫描全量能力。纯已有 Trace/LLM 对比返回 `{ state: 'skipped' }`，不创建执行端任务；需要客户端执行的 Skill A/B 不跳过。`skipped` 仅是同配置 POST 的无任务响应，不属于执行端状态协议。准备接口不创建实验；启动仍使用原有实验/Skill 任务 API 并保留其就绪校验。
+
+向导环境检查成功后只执行步骤切换：先刷新执行目标并核对原主机/Agent，确认通过后进入第三步；失败留在第二步提示。整个过程不调用路由跳转或整页刷新。后台主机轮询与窗口聚焦刷新在准备期间暂停，进入门禁时使旧请求失效，刷新结果按请求序号防止乱序覆盖，页面卸载同样使未完成刷新失效。页头返回及步骤导航锁定到目标复核结束。向导步骤保存在组件内存，浏览器整页重载会从第一步开始，相同配置再次检查时恢复已有环境任务。
+
+准备请求的 `requestId` 统一使用 `safeUUID()`，兼容通过局域网 HTTP 访问时浏览器未提供 `crypto.randomUUID()` 的情况；网络不确定时复用原请求 ID，明确结束后重试生成新 ID。
+
+任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
+
+检查和重启恢复不触发全量能力扫描。执行端复用本轮已验证事实，通过现有 `PUT /api/reliability/client/v1/capabilities` 的 `partial: true` 增量同步平台、组件和最终执行 Profile；服务端合并更新，保留其他 Agent、模型与组件。Profile 摘要改变时，未检查 Runtime 的旧就绪状态失效。可靠性数据集额外通过现有 Worker heartbeat 的 `partial: true` 合并所选平台 inventory，不枚举其他 Agent 或模型目录；普通全量上报语义不变。增量同步成功后才回报环境 `ready`，避免后续实验冻结安装前的身份。
+
+环境终态通过 HTTP 确认，未确认结果由环境任务记录负责恢复，不能用通用回执队列直接回放过时的 `ready`。恢复前按原上下文只读复查，过期或缺少上下文则要求重新检查。指令回执通过带状态条件的原子更新防止晚到 ACK/进度覆盖已完成结果；查询就绪结果时再次核对数据集身份和主机健康。
 
 ### 模型连接测试
 
@@ -282,7 +311,7 @@ configuration:
 
 客户端 `runtimeInvocationOptions` 在进程启动前按本机 Schema 和原生入口校验最终配置，不会自动重组不支持的对象。`argv` 的 `binding.mode: passthrough` 按根 key 生成原名 `--key` 与字面量值，无需逐字段 mappings；字符串、数值和布尔值保留，空字符串保留独立空 argv，负号开头的值使用 `--key=value`。CLI key 保留大小写、下划线和点号；非法名称、NUL、平台调度保留 flag，以及该 CLI 通道不能消费的对象、数组、null 仅在执行客户端被拒绝。MCTS 新增原生已支持的 CLI 参数只需填写同名 key/value；前端允许保存嵌套草稿不代表 MCTS CLI 已支持它。
 
-显式 `binding.mappings` 保留为客户端交付适配，path 使用 JSON Pointer；未消费的值不会静默丢弃。支持 JSON 输入的应用可使用 `json-file` 或 `json-arg`，无需声明嵌套类型。文件通道按次创建独立目录/文件，权限为 0700/0600，通过客户端约定的 flag/env 交付路径并在成功、失败后清理；参数通道以一个字面量 argv 传递完整 JSON。OpenCode 现提供默认 `{}` 的通用配置，当前客户端使用 CLI 交付；后续原生 YAML 等入口由客户端适配，平台不转换文件格式。
+显式 `binding.mappings` 保留为客户端交付适配，path 使用 JSON Pointer；未消费的值不会静默丢弃。支持 JSON 输入的应用可使用 `json-file` 或 `json-arg`，无需声明嵌套类型。文件通道按次创建独立目录/文件，权限为 0700/0600，通过客户端约定的 flag/env 交付路径并在成功、失败后清理；参数通道以一个字面量 argv 传递完整 JSON。OpenCode 客户端保留默认 `{}` 的 CLI 交付通道，界面暂时隐藏其参数编辑、模板入口、执行摘要和详情页快照，包括非空历史配置；参数校验、下发与历史快照存储保持兼容。后续原生配置入口由客户端适配，平台不转换文件格式。
 
 客户端可选 Schema 使用已有 JSON Schema 基础子集，在最终执行时校验业务要求。平台参数限制为 256 KiB、32 层、20,000 个节点；`formatParameterJson` 优先缩进，超限时使用紧凑格式。本机 `runtimes.<key>.defaults` 按根字段覆盖模板，null 是实际配置值，模板在展示阶段不充当最终执行配置。
 
@@ -416,3 +445,54 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 `GET /api/experiments/:id` 返回适用实验的 `executionConcurrency`；Case 的 Benchmark 元数据增加 `evaluationWaitCode`，用于区分配额、镜像准备和镜像空间等待。评测服务 `/health` 返回 `maxConcurrency`、`activeCount`。同一个 `runId + requestDigest` 始终幂等，容量满返回可重试 `SERVICE_BUSY`，镜像未就绪返回 `IMAGE_POOL_PREPARING`；镜像仓库临时拉取失败返回可重试的 `IMAGE_POOL_PULL_FAILED`，平台保留待评测任务并重试下发。
 
 镜像预取继续使用已有 `POST /api/v1/evaluations`：`operation=prepare-images` 支持 `revision + windows[]` 全量快照；每个窗口含 `benchmarkKey/evaluatorKey/experimentId/caseIds/cases`，总 Case 数不超过服务并发加 1。预取开关由 Evaluator 的 `/health` 报告给平台；准备消息保留摘要校验和单实验窗口兼容，无需额外令牌。
+
+### Trace 批量生成评测集
+
+新接口均从 `x-witty-api-key` 验证身份，不能通过 `query.user` 或 `query.apiKey` 指定来源用户。旧数据集接口保留兼容行为，但 Trace 来源的列表、详情、修改、删除和评测装配必须通过同一凭据校验。
+
+| 接口 | 契约 |
+| --- | --- |
+| `GET /api/agent-datasets/generation-options` | 可选 `platform/from/to`；返回历史已接入平台、窗口内 Agent 与唯一 Execution 数量 |
+| `POST /api/agent-datasets/trace-generation` | `name/description/platform/agentKey/from/to/limit/requestId`；requestId 为 UUIDv7；202 返回 datasetId/jobId |
+| `GET /api/agent-datasets/:id/generation` | 返回阶段、状态、生成数和按钮能力；失败附回填配置。成功任务退役后根据已发布数据集返回 complete/caseCount，回执及本次明细已过期时 jobId=null |
+| `DELETE /api/agent-datasets/:id/generation` | 仅释放当前任务的筛选明细；校验 owner，成功 204，可重复调用；不取消任务、不删除数据集 |
+| `POST /api/agent-datasets/:id/generation/cancel` | 取消未发布任务；清理完成前不报成功；已发布返回409 |
+| `DELETE /api/agent-datasets/:id` | Trace 来源任何状态均走停止与清理；202提供deletionId，重复完成删除可204 |
+| `GET /api/agent-datasets/deletions/:deletionId` | 按归属返回deleting/deleted/cleanup_failed |
+
+生成服务在主服务启动流程返回后后台初始化。依赖 Manager 的接口初始化期间快速返回 `503 FEATURE_INITIALIZING`（`Retry-After: 2`），失败返回 `503 FEATURE_UNAVAILABLE`（`Retry-After: 30`）；均设置 `Cache-Control: no-store`，不提前接受新建任务。并发请求共用初始化，失败后 30 秒才允许重新尝试。配置窗口自动重查、禁用生成并保留输入；进度窗口遇到该状态继续等待，不将其记作任务失败。客户端重试提交保留原 requestId。
+
+普通错误为 `{error:{code,message}}`；删除中的进度409使用 `error.details.deletionId`。同一创建请求返回原任务，配置冲突409，删除后重放410。首次接受窗口为UUID时间未超前5分钟且未满24小时；持久时间水位防止回拨复活。
+
+`generationSource=trace` 固定为ideal_output与双字段，后端不接受额外业务列。内部同步input/expectedOutput别名和values，并原子更新referenceCasesJson/caseCount；NFC/LF之外不trim正文。生成及后续新增、编辑、导入跳过关键观点模型提取，不写伪造的派生缓存。此来源应通过显式caseId绑定评测；自动按输入寻找第一条答案的旧匹配器不纳入Trace生成集，避免同输入回答变体串用。旧单条Trace回流入口不向此来源追加可变字段，改用详情页双字段导入。
+
+Trace 生成进度包含 `summary: GenerationSummary | null`：version=1、sourceTraces、retainedTraces、candidateCount、duplicateCount、sampledOutCount（采样前为 null）和 exclusions[{code,traceCount,turnCount}]。只返回原因代码与计数，不返回源内容。Worker 在发布前向 Manager 发送统计并等待确认；Manager 仅为本次新建任务的查看窗口中转统计，按 jobId/leaseEpoch 保存；GET 轮询续期 60 秒，停止轮询后自动清理。窗口关闭通过同一路径 DELETE 立即释放，组件卸载/pagehide 使用 keepalive 尽力释放；释放后后续 Worker 消息仍确认但不重新缓存，旧任务重读或幂等重放不恢复明细。前端保留已收到的结果至关闭；换代清空旧结果，删除/服务关闭清理。NO_VALID_SAMPLES 同样可展示原因。summary=null 表示临时明细不可用，不代表没有跳过样本。
+
+不为多轮提取增加 Trace 元数据或数据库列。旧版 summaryJson 由 scripts/db_push.sh 调用 scripts/trace-datasets/remove-legacy-summary.cjs 精确移除；迁移在启动脚本停服后的 schema 同步阶段运行，保留中断任务的状态及其余任务/数据集/Trace，新 Manager 负责恢复。新库不会创建该列。schema/契约见 docs/design/trace-eval-dataset/。
+
+Trace 生成不检查上下文语义独立性，不再产生 CONTEXT_* 排除；旧冻结任务仍可展示旧原因。结构提取新增 INPUT_CONTENT_UNSUPPORTED（纯文本数据集无法完整保留非文本输入）。NO_VALID_SAMPLES 表示没有完整可配对的问答，不表示已进行语义独立性或答案正确性审核。
+
+成功发布且临时目录清理后删除 TraceDatasetGenerationJob（包括旧版 cleanupPending=false 的成功任务），同一事务将 create 回执置 succeeded 并保留 requestHash/datasetId/jobId 和有界期限。失败/未完成任务继续保留；文件清理或事务失败不得提前删任务。成功任务不存在时，同一 requestId/配置通过有效回执返回原数据集，配置冲突 409，已删/到期 410；过期回执清除后由请求时间窗和持久时钟水位阻止重建。DELETE 已发布数据集不依赖任务记录，原子删数据集并写删除回执。当前窗口明细独立于成功任务保留到关闭/空闲过期。
+
+Trace 生成特性的采样方案称为智能采样，服务端当前固定实现版本为 `trace-coverage-v6.35`，客户端不可指定；新任务保存生产策略，未完成的旧 v4/v5 任务按其原配置恢复。已发布数据集不重采样。
+
+## 自建评估器 Skills 契约
+
+`LlmEvaluatorConfig.skills` 可为空，持久化项包含 name、source、snapshotHash、fileCount、totalBytes。source 为 library（owner、固定非负整数 version）或 local（可选原文件名）；本地导入不写 Skill/SkillVersion。客户端新增绑定分别提交 `{kind:'library',name,sourceOwner,version}` 或 `{kind:'local',name,importToken,fileCount}`，服务端规范化为固定快照。更新卡片省略 skills 表示保留，显式空数组表示移除全部；已绑定快照只可由所属用户和原评估器复用。
+
+| 接口 | 契约 |
+|---|---|
+| GET `/api/skills/by-name/:name/versions` | user、sourceOwner（空字符串代表共享来源）必需；返回版本；可用 version 参数读取所选包 manifest |
+| GET `/api/skills/by-name/:name/versions/:version/files/:path` | 按来源授权，返回文本预览或二进制元数据 |
+| POST `/api/user-evaluators/skill-imports` | multipart：user、kind=folder、files 和等长 paths；仅接受单个目录，各路径必须位于同一目录且与文件名匹配；返回临时凭证、到期时间及 manifest |
+| GET `/api/user-evaluators/skill-imports/:importToken/files` | user 授权，path 可选；临时凭证有效 24 小时，过期返回 410 |
+| GET `/api/user-evaluators/:evaluatorId/skills/:name/files` | 由所属用户的已绑定快照读取，path 可选 |
+| PUT `/api/user-evaluators` | 校验并冻结全部绑定后整体保存，成功返回 success 和规范化 evaluators；失败保留原卡片 |
+
+包限制为 8 个 Skill/评估器、256 个文件及 10 MiB/包、64 KiB 主指令合计。本地导入拒绝 ZIP/单文件及伪造目录路径，检查根目录主文件、路径、多个 Skill 根与总容量。预览最大 512 KiB 并标记 truncated，运行文件不截断。快照文件在 `<data>/evaluator-skills/<user-key>/<hash>/`，临时导入在 `evaluator-skill-imports`；备份需覆盖数据库及持久快照，临时上传无需备份。
+
+Benchmark 错误适配器 `benchmarkErrorResponse` 将 `EvaluatorSkillError` 映射为 `{error:{code:'EVALUATOR_SKILL_ERROR',message,retryable:false}}`，保留原始 HTTP 状态码与可读错误信息。评估器冻结时的配置校验、权限或快照缺失错误不会被转换为通用 500；其他未识别异常仍返回脱敏的 `INTERNAL_ERROR`。
+
+文件夹上传在 multipart filename 中可能携带完整相对路径。前端显式提交 file.name；服务端兼容末段文件名与完整相对路径两种形式，后者必须与同项 paths 完全一致，不允许仅截取 basename 后放行其他目录的文件名。
+
+新任务的 configSnapshotJson.customEvaluatorSnapshots 为 `{schemaVersion:1,cards:{[evaluatorId]:card}}`，轨迹入口在 rawAnalysisJson 使用同一字段。服务端冻结，不能信任调用者自带该字段。结果 evidence.json 用 `type:'custom-evaluator-runtime-v1'` 容器保存原 evaluationEvidence 和平台生成 customEvaluatorRuntime，后者独立于模型输出归一化，包含来源、实际模型、工具摘要与耗时。 Agent 会话真实记录保存成功后还可含 evaluationTraceId。GET /api/experiments/:id 在 results 中返回经当前用户归属与存在性校验后的 evaluationTraceId（不可用为 null）；普通 LLM 与无记录历史结果不返回入口。结果详情仅渲染 evaluationEvidence，运行过程通过评估链路查看。

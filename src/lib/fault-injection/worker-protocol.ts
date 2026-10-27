@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import type { FaultInjectionWorker } from '@prisma/client'
 import { prisma } from '@/lib/storage/prisma'
 import { refreshTaskProgress } from '@/lib/fault-injection/store'
@@ -188,7 +204,26 @@ export async function upsertWorkerHeartbeat(input: {
   version?: string | null
   inventory?: unknown
   busySlots?: number
+  partial?: boolean
 }) {
+  if (input.partial) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const previous = await prisma.faultInjectionWorker.findUnique({ where: { workerId: input.workerId } })
+      if (!previous) {
+        await prisma.faultInjectionWorker.upsert({ where: { workerId: input.workerId },
+          create: { workerId: input.workerId, user: input.user, inventoryJson: '{}', lastSeenAt: new Date() }, update: {} })
+        continue
+      }
+      const changed = await prisma.faultInjectionWorker.updateMany({
+        where: { workerId: input.workerId, inventoryJson: previous.inventoryJson },
+        data: { user: input.user, hostname: input.hostname || undefined, version: input.version || undefined,
+          lastSeenAt: new Date(), busySlots: input.busySlots ?? 0,
+          inventoryJson: JSON.stringify(mergeWorkerInventory(previous.inventoryJson, input.inventory)) },
+      })
+      if (changed.count) return prisma.faultInjectionWorker.findUniqueOrThrow({ where: { workerId: input.workerId } })
+    }
+    throw new Error('Worker inventory is being updated; retry heartbeat')
+  }
   const inventoryJson = JSON.stringify(input.inventory ?? {})
   return prisma.faultInjectionWorker.upsert({
     where: { workerId: input.workerId },
@@ -210,6 +245,23 @@ export async function upsertWorkerHeartbeat(input: {
       busySlots: input.busySlots ?? 0,
     },
   })
+}
+
+export function mergeWorkerInventory(previous: string | null | undefined, patch: unknown): Record<string, unknown> & { platforms: Record<string, unknown> } {
+  const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  let current: Record<string, unknown> = {}
+  try { current = record(JSON.parse(previous || '{}')) } catch {}
+  const next = record(patch)
+  const platforms = { ...record(current.platforms) }
+  const mergeRows = (left: unknown, right: unknown) => [...new Map([
+    ...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : []),
+  ].map(item => [typeof item === 'string' ? item : record(item).id || record(item).name || JSON.stringify(item), item])).values()]
+  for (const [key, value] of Object.entries(record(next.platforms))) {
+    const entry = record(value)
+    const old = record(platforms[key])
+    platforms[key] = { ...old, ...entry, agents: mergeRows(old?.agents, entry.agents), models: mergeRows(old?.models, entry.models) }
+  }
+  return { ...current, ...next, platforms }
 }
 
 export async function listStopCommandsForWorker(user: string, workerId: string) {

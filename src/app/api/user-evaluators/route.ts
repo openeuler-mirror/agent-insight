@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { NextResponse } from 'next/server';
 import { readUserCustomEvaluators, writeUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import {
@@ -5,9 +21,11 @@ import {
   isValidCustomEvaluatorName,
   type EvaluatorCard,
 } from '@/lib/evaluators/custom-evaluator-model';
-import { syncCustomEvaluatorRegisteredAgents } from '@/lib/engine/evaluation/custom-llm-evaluator';
+import { syncCustomEvaluatorRegisteredAgents, invalidateCustomEvaluatorCache } from '@/lib/engine/evaluation/custom-llm-evaluator';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
+import { normalizeEvaluatorSkillCards } from '@/lib/evaluators/evaluator-skill-service';
+import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,14 +98,16 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: validationError }, { status: 400 });
     }
 
-    // 评估器没有独立删除接口 —— 删除表现为"保存了一份更短的列表"，用条数变化区分。
-    // 这次额外读取只在统计开启时才做，关闭时保存路径的开销与接入统计前一致
-    // （null 表示没读，事件反正会被 collector 丢弃）。
     const usageOn = isUsageEnabled();
-    const previousCount = usageOn ? (await readUserCustomEvaluators(user)).length : null;
+    const previous = await readUserCustomEvaluators(user) as EvaluatorCard[];
+    const previousCount = usageOn ? previous.length : null;
+    const normalized = await normalizeEvaluatorSkillCards(user, raw as EvaluatorCard[], previous);
 
-    await writeUserCustomEvaluators(user, raw);
-    await syncCustomEvaluatorRegisteredAgents(user, raw as EvaluatorCard[]);
+    await writeUserCustomEvaluators(user, normalized);
+    invalidateCustomEvaluatorCache();
+    await syncCustomEvaluatorRegisteredAgents(user, normalized).catch(error => {
+      console.warn('[user-evaluators] agent registration failed after saving:', error instanceof Error ? error.message : String(error));
+    });
 
     recordUsageEvent({
       user,
@@ -96,8 +116,9 @@ export async function PUT(request: Request) {
         previousCount !== null && raw.length < previousCount ? 'evaluator.delete' : 'evaluator.save',
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, evaluators: normalized });
   } catch (error) {
+    if (error instanceof EvaluatorSkillError) return NextResponse.json({ error: error.message }, { status: error.status });
     console.error('user-evaluators PUT error:', error);
     return NextResponse.json({ error: 'failed to save evaluators' }, { status: 500 });
   }
