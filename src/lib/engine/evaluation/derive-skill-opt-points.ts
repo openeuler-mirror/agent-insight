@@ -24,7 +24,7 @@
  *   - 任务完成度评测产出（rawAnalysis.key_point_findings —— 来自主评估器）
  *   - Execution 行（拿 invokedSkills + skillVersion + id）
  *
- * 写入分工（详见 docs/plans/2026-05-08-skill-opt-issues-api-design.md）：
+ * 写入分工（详见 design/2026-05-08-skill-opt-issues-api-design.md）：
  *   - 每个被评测涉及的 skill：建一行 Evaluation(type='dynamic', skillId, version, user,
  *     executionId, runId=evaluatorRunId, generator='trajectory-evaluator@1.0')
  *   - Evaluation 下挂 N 行 SkillIssue：source='dynamic', dedupKey=hash6(category+normSummary),

@@ -43,7 +43,7 @@
     "!scripts/otel_data/",
     "!scripts/**/*.jsonl",
     "!scripts/**/*.jsonl.*",
-    "docs/user-guide/observability/llamaindex-trace-collector.md",
+    "docs/zh/how-to/observability/llamaindex-trace-collector.md",
     "!scripts/trae-collector/package-lock.json",
     "prisma/",
     "agent_ras/",

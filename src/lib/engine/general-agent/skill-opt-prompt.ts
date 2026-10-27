@@ -17,7 +17,7 @@
 /**
  * Skill 优化 Agent 的 system prompt 构造。
  *
- * 设计取自 docs/plans/2026-05-08-skill-opt-chat-backend-design.md：
+ * 设计取自 design/2026-05-08-skill-opt-chat-backend-design.md：
  *  - 把用户在前端勾选的 issues 结构化注入（id / severity / category / summary / evidence）
  *  - 借鉴 trace2skill 的 prevalence 思路：多 issue 指向同一处时让 agent 合并
  *  - 要求 agent 收尾报告里回引 issue id，便于前端后续在列表上打"已处理"标
@@ -39,7 +39,7 @@ export interface SkillOptIssueLite {
 /**
  * 归并算子产出的 plan item（注入 prompt 用的精简形态）。
  * 与平铺 checkedIssues 互斥：有 plan 时 agent 按 plan 执行，不再自行二次合并。
- * 设计：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
+ * 设计：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
  */
 export interface SkillOptPlanItemLite {
   id: string;

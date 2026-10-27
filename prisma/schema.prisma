@@ -125,7 +125,7 @@ model Execution {
   // 让轻量列表(fields=light)无需加载/解析 session interactions 即可拿到完整 agents,根治堆 OOM 又不丢数据。
   observedAgents           String?
   // 写入时预解析的 per-call 统计摘要(固定体积对数桶直方图,大盘 B 档面板消费,
-  // 结构见 src/lib/fleet/call-stats.ts / docs/design/fleet-dashboard-tier-b-preparse-risk.md)。
+  // 结构见 src/lib/fleet/call-stats.ts / design/platform/fleet-dashboard-tier-b-preparse-risk.md)。
   callStats                String?
 
   // --- 多 Agent 拆分字段 ---
@@ -254,7 +254,7 @@ model ExecutionTag {
 }
 
 /// 一次评估事件——静态评估和动态评估统一到这张表，按 type 区分。
-/// 详细设计见 docs/plans/2026-05-08-skill-opt-issues-api-design.md
+/// 详细设计见 design/2026-05-08-skill-opt-issues-api-design.md
 model Evaluation {
   id   String @id @default(cuid())
   type String // 'static' | 'dynamic' | 'trigger'
@@ -463,7 +463,7 @@ model SkillGeneratorMessage {
 }
 
 /// skill-opt 优化页的会话。结构镜像 PlaygroundSession，多两个业务字段（skillName/baseVersion）
-/// 标识"哪个 skill 哪个 base 版本起的优化"。详见 docs/plans/2026-05-09-skill-opt-history-design.md。
+/// 标识"哪个 skill 哪个 base 版本起的优化"。详见 design/2026-05-09-skill-opt-history-design.md。
 model SkillOptSession {
   id                String              @id @default(cuid())
   user              String? // username（与其它表对齐）
@@ -489,7 +489,7 @@ model SkillOptSession {
 /// 一轮优化会话入口处由归并算子产出的统一优化计划。
 /// SkillIssue 是不可变的原始发现台账（跨 eval 累积）；plan 是它的归并视图，
 /// 生命周期 = 一轮会话 + 一个 baseVersion，不回写台账。
-/// 设计：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
+/// 设计：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
 model SkillOptPlan {
   id           String             @id @default(cuid())
   sessionId    String             @unique // 一轮会话至多一份 plan
@@ -884,7 +884,7 @@ model AgentDebugSkillsAnalysis {
 }
 
 // 注：旧 `SkillOptimizationPoint` 单表方案已废弃，统一收敛到 `Evaluation` + `SkillIssue`
-// 两表设计（详见 docs/plans/2026-05-08-skill-opt-issues-api-design.md）。
+// 两表设计（详见 design/2026-05-08-skill-opt-issues-api-design.md）。
 // `SkillIssue.category` / `resolvedAt` / `resolvedRunId` + `Evaluation.runId` 把原表能力
 // 全部覆盖；frequency 合并由读取时的 prevalenceCount 派生（重评懒删除模型）。
 
@@ -1607,7 +1607,7 @@ model PlatformUsageDaily {
 
 // ---------------------------------------------------------------------------
 // Agent RAS 客户端控制面
-// 设计：docs/agent-ras/designs/features/reliability-client-control-plane.md
+// 设计：design/reliability/agent-ras/reliability-client-control-plane.md
 // ---------------------------------------------------------------------------
 
 /// 一次性安装令牌：只保存哈希，注册成功即消费。
@@ -1789,7 +1789,7 @@ model ReliabilityConfigLoad {
 
 // ---------------------------------------------------------------------------
 // Goal Plus observability overlay
-// Design: docs/design/goal-plus-observability/
+// Design: design/observability/goal-plus-observability/
 // ---------------------------------------------------------------------------
 
 model GoalPlusSource {
@@ -2010,7 +2010,7 @@ model GoalPlusSemanticSnapshot {
 
 // ---------------------------------------------------------------------------
 // Cross-session collaboration trace overlay
-// Designs: docs/design/cross-session-collaboration*/
+// Designs: design/observability/cross-session-collaboration*/
 // ---------------------------------------------------------------------------
 
 model Collaboration {

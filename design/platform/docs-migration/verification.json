@@ -1,0 +1,137 @@
+{
+  "baselineCommit": "1bb2585c66aaea37b5b668409cfc80be2f8389b7",
+  "branch": "codex/docs-layout-migration",
+  "scope": {
+    "commentOnlyCodeFiles": 37,
+    "executableChanges": [
+      "scripts/prepare-npm-package.js",
+      "src/app/api/ingest/setup/llamaindex-collector/archive.ts"
+    ],
+    "prismaModelUnchanged": true
+  },
+  "docsFocused": {
+    "tests": 18,
+    "pass": 17,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 1
+  },
+  "fullSuite": {
+    "tests": 4329,
+    "pass": 4306,
+    "fail": 3,
+    "cancelled": 2,
+    "skipped": 18
+  },
+  "upstreamKnownFailures": {
+    "tests": 92,
+    "pass": 88,
+    "fail": 3,
+    "cancelled": 0,
+    "skipped": 1
+  },
+  "upstreamCancellationReproduction": {
+    "tests": 2,
+    "pass": 0,
+    "fail": 0,
+    "cancelled": 2,
+    "skipped": 0
+  },
+  "npmPack": {
+    "newGuideIncluded": true,
+    "oldGuideIncluded": false,
+    "designFilesIncluded": 0,
+    "fileCount": 728
+  },
+  "browserVerified": false,
+  "dockerImageBuilt": false,
+  "published": false,
+  "notes": [
+    "全量三个断言失败与未迁移上游基线同名失败一致。",
+    "两个实验取消用例在当前环境和未迁移基线均因 event loop 已结束而 Promise 未完成被取消；未修改相关业务代码。",
+    "专项验证包括下载 ZIP 内 README 与迁移后的源文档逐字一致，以及 standalone 准备流程。"
+  ],
+  "documentation": {
+    "originalFiles": 432,
+    "movedFiles": 317,
+    "unmodifiedContentFiles": 277,
+    "allFilesRetained": true,
+    "missingFiles": [],
+    "changedBinaryOrVendorFiles": [],
+    "preservedLocalLinksChecked": 1066,
+    "linkRegressions": [],
+    "preexistingBrokenLinks": 80,
+    "currentBrokenLinks": 80,
+    "navigationPages": 98,
+    "navigationMissing": [],
+    "longPublicDocuments": 30
+  },
+  "packageScriptsUnchanged": true,
+  "dependenciesUnchanged": true,
+  "requiredDisclaimersPreserved": true,
+  "verificationStage": "Top-level results describe the initial migration before approved cleanup; approvedCleanup describes the follow-up.",
+  "approvedCleanup": {
+    "date": "2026-10-27",
+    "approvedRemovedFiles": [
+      "design/platform/legacy/eval-dashboard.md",
+      "docs/snippets/install-sdk.mdx",
+      "docs/snippets/setup-env.mdx",
+      "docs/zh/explanation/platform/user-overview.html"
+    ],
+    "retainedWithoutChanges": [
+      "docs/zh/explanation/platform/developer-overview.html",
+      "docs/zh/how-to/platform/build-rpm.md"
+    ],
+    "changedDocumentationFiles": [
+      "design/optimization/skill-workbench-refactor/phase2-requirements-design.md",
+      "design/platform/docs-migration/implementation-plan.md",
+      "design/platform/docs-migration/long-documents.json",
+      "design/platform/docs-migration/migration-review.md",
+      "design/platform/docs-migration/verification.json",
+      "docs/README.md",
+      "docs/docs.json",
+      "docs/zh/explanation/README.md",
+      "docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md",
+      "docs/zh/explanation/observability/hermes-storage-analysis.md",
+      "docs/zh/explanation/platform/architecture.md",
+      "docs/zh/explanation/platform/developer-index.md",
+      "docs/zh/explanation/platform/positioning.md",
+      "docs/zh/how-to/observability/llamaindex-trace-collector.md",
+      "docs/zh/reference/platform/example-cost.md"
+    ],
+    "changedNonDocumentationFiles": [],
+    "vendorAndLicenseFilesUnchanged": true,
+    "originalMigrationFilesAccountedFor": 432,
+    "originalFilesRemaining": 428,
+    "unapprovedRemovals": [],
+    "preCleanupBrokenLocalReferences": 80,
+    "currentBrokenLocalReferences": 80,
+    "newBrokenLocalReferences": [],
+    "navigationPages": 98,
+    "navigationMissing": [],
+    "docsFocused": {
+      "tests": 18,
+      "pass": 17,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1
+    },
+    "fullSuite": {
+      "tests": 4329,
+      "pass": 4306,
+      "fail": 3,
+      "cancelled": 2,
+      "skipped": 18
+    },
+    "sameFailuresAndCancellationsAsBeforeCleanup": true,
+    "npmPack": {
+      "guideIncluded": true,
+      "removedFilesIncluded": [],
+      "designFilesIncluded": 0,
+      "fileCount": 728
+    },
+    "browserVerified": false,
+    "dockerImageBuilt": false,
+    "published": false
+  }
+}

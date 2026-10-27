@@ -8,8 +8,8 @@ the generator retains these lines when rebuilding the catalog.
 Preserved upstream code
 - packages/project-config/yaml.cjs: original MIT terms and copyright are in
   packages/project-config/YAML-LICENSE.
-- docs/developer-guide/vendor/mermaid.min.js and
-  docs/user-guide/vendor/mermaid.min.js: upstream bundle notices are preserved;
+- docs/assets/developer-guide/vendor/mermaid.min.js and
+  docs/assets/user-guide/vendor/mermaid.min.js: upstream bundle notices are preserved;
   additional collected attributions are in licenses/mermaid-bundle.txt.
 - src/lib/engine/skill-generation/skills/skill-creator/: upstream source and
   LICENSE.txt are retained. No Huawei ownership is asserted over these files

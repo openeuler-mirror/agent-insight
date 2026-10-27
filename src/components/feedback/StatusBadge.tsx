@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/foundations.md §2 B.4 — status must be color + icon + text (triple-encoded).
+// design/foundations.md §2 B.4 — status must be color + icon + text (triple-encoded).
 import * as React from 'react';
 import { AlertTriangle, Ban, CheckCircle2, Clock, Loader2, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';

@@ -166,7 +166,8 @@ function copyLlamaIndexCollector(packageRoot, standaloneDir) {
   const sourceReadme = path.join(
     packageRoot,
     'docs',
-    'user-guide',
+    'zh',
+    'how-to',
     'observability',
     'llamaindex-trace-collector.md',
   )

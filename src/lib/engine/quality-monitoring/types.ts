@@ -15,7 +15,7 @@
  */
 
 // 质量监控（Quality Monitoring）领域引擎 — 内存数据契约（非持久化）。
-// 字段形状对齐 docs/design/quality-monitoring/quality-monitoring-design.md §5.2。
+// 字段形状对齐 design/evaluation/quality-monitoring/quality-monitoring-design.md §5.2。
 // 引擎为纯聚合函数：collect → problem → score(错误维消费问题汇总) → trend。
 
 import type { FailureItem, SkillImprovementItem } from '@/lib/engine/evaluation/judge';

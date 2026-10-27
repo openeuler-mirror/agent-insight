@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/components.md §E.14.7 — 词典壳。
+// design/components.md §E.14.7 — 词典壳。
 // 用法：<Term id="p95-latency" /> 自动从 lib/glossary 取条目；
 //      <Term id="..." render="badge" /> 控制是否显示文字。
 // 找不到 id 时回退到只展示 id 文本，避免页面崩溃。

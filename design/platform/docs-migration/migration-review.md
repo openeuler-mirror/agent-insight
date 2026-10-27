@@ -1,0 +1,130 @@
+# 文档迁移结果与待审清单
+
+第一阶段迁移文档、更新引用和导航、适配文档下载与打包路径，保留了全部 432 个原文件。随后按维护者确认清理下列第 1、2、3、4 项，保留第 5、6 项，并更新其余已识别的过时说明。本记录基于本地迁移基线 `1bb2585c` 及后续文档修改，不代表远端最新代码的完整内容验收。
+
+## 迁移范围
+
+| 项目 | 结果 |
+| --- | --- |
+| 原 `docs/` 文件 | 432 个完成迁移；随后授权清理 4 个，保留 428 个原文件 |
+| 移动文件 | 317 个 |
+| 公开文档区域 | 首次迁入 98 个原文件，其中 94 篇 Markdown/MDX 正文；随后清理 1 份重复 HTML，保留 97 个原文件 |
+| 内部设计区域 | 首次迁入 217 个原文件；随后清理 1 份退役档案，保留 216 个原文件 |
+| 支撑资源 | 首次保留 117 个原文件；随后清理 2 个未引用片段，保留 115 个原文件，第三方 bundle 未变 |
+| 中文正文分类 | 教程 5、操作指南 48、参考 6、解释 35；不含新增导航页 |
+| 英文 | 已建立四类目录及翻译待补齐入口；未新增正文译文，不视为双语达标 |
+
+首次迁移的旧路径逐文件对应关系见 [path-map.json](path-map.json)；该历史映射保留原记录，后续删除以本页处理结果及 verification.json 的 approvedCleanup 为准。共享图片和片段保留原位置；两份第三方 Mermaid bundle 各自保留并调整许可清单中的位置，没有去重或重新打包。
+
+公开入口：[文档导航](../../../docs/README.md)。内部设计继续使用[需求清单](../../README.md)登记状态，源码三模块迁移不在本轮范围内。
+
+## 已识别的内容缺口
+
+这里区分“缺少内容”和“内容已有但未整理”。四类目录齐全不等于内容已完整；六个业务领域也不要求机械地各写四篇。
+
+| 项目 | 当前情况 | 后续可做的工作 |
+| --- | --- | --- |
+| 英文正式文档 | 当前迁入的 94 篇正文主要为中文，英文入口明确标记待补齐 | 先确定对外范围，再按中文权威版本逐篇翻译和校对 |
+| 服务 API 参考 | [API 与契约](../../../docs/zh/reference/platform/api-and-contracts.md)混合 HTTP 端点、内部函数、数据模型与实现说明 | 将对外 REST API 按业务拆分，补齐鉴权、请求、响应和错误；不能把旧导航缺失的 SDK 页面当成已存在 SDK 的证明 |
+| 评测协议与配置参考 | 契约散落在[评估器开发](../../../docs/zh/how-to/evaluation/develop-evaluator.md)、[Benchmark 开发](../../../docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md)和 API 总览 | 抽取输出契约、参数、状态/错误码到 reference/evaluation，操作步骤保留 how-to |
+| 运行和部署配置 | 安装、鉴权、模型配置分别已有说明，缺少集中且有明确适用范围的环境变量/配置索引 | 整理入口和优先级，不把历史片段中的变量直接认定为支持项 |
+| 升级、回滚、备份恢复 | 旧站点导航声称有独立升级页，但对应文件不存在；当前相关步骤散落在安装与部署指南 | 补一份以当前 CLI、数据路径和版本兼容性为依据的操作指南 |
+| 独立观测入门教程 | 首次接入和查看 Trace 已包含在[快速开始](../../../docs/zh/tutorial/platform/01-quick-start.md)中，没有单独 tutorial/observability 教程 | 可从现有内容提炼，不需要新造功能或立即为每个领域创建教程 |
+| 三模块职责说明 | 原外部设计是目标结构，当前源码位置尚未整体迁移 | 更新公开架构说明时区分当前实现与目标结构，平台内置评估不归为独立 evaluator 服务 |
+| 混合主题与篇幅 | 30 篇公开正文超过 20 个 Markdown 标题；部分同时包含教程、操作、契约和原理 | 逐篇拆分和互链，本轮保留原文，见下方完整清单 |
+| 历史坏链接 | 迁移前已有 80 处本地目标缺失或相对路径错误；没有新增本地目标失效 | 见 [existing-link-gaps.json](existing-link-gaps.json)，逐项决定恢复目标、纠正引用或保留历史说明 |
+| 旧站点占位导航 | 原导航中 19 个页面目标不存在 | 新导航已按实际文档重建；原目标及核对建议见 [previous-navigation-gaps.json](previous-navigation-gaps.json) |
+
+## 已确认的清理与更新（2026-10-27）
+
+编号沿用维护者确认的逐项清单；仅第 1、2、3、4 项获准删除。没有删除业务代码、第三方 bundle 或其他历史资料。
+
+| 编号 | 文档 | 处理结果与原因 |
+| --- | --- | --- |
+| 1 | `docs/snippets/install-sdk.mdx` | 已删除。无页面引用，Python/JS SDK 的描述与当前平台包用途不符；不据此断言外部同名包不存在 |
+| 2 | `docs/snippets/setup-env.mdx` | 已删除。无页面引用，示例项目变量没有当前代码读取点，Key 示例与本地接入不符 |
+| 3 | `design/platform/legacy/eval-dashboard.md` | 已删除。明确标记 RETIRED 的旧组件源码档案，不是运行中的组件 |
+| 4 | `docs/zh/explanation/platform/user-overview.html` | 已删除。与开发者 HTML 正文基本重复，未找到当前入口引用 |
+| 5 | [开发者 HTML 概览](../../../docs/zh/explanation/platform/developer-overview.html) | 按维护者要求暂时保留，正文未改；仍为历史快照，不作为当前实现的完整说明 |
+| 6 | [830 RPM 指南](../../../docs/zh/how-to/platform/build-rpm.md) | 按维护者要求暂时保留，正文未改；仅适用于文中明确的旧分支与版本，不代表当前 master 的许可和交付配置 |
+| 7 | [项目定位](../../../docs/zh/explanation/platform/positioning.md) | 已更新包名、Apache-2.0、Node 要求、文档入口和协作上游；移除无依据的旧测试数量与成熟度推断 |
+| 8 | [架构说明](../../../docs/zh/explanation/platform/architecture.md) | 已更新包名、安装命令、Skill 当前导航、旧入口兼容说明及测试覆盖边界；初稿基线与本次核对范围分开记录 |
+| 9 | [开发者导航](../../../docs/zh/explanation/platform/developer-index.md) | 已更正 npm 包名，保留导航和术语表，不加入逐次变更日志 |
+| 10 | [LlamaIndex 接入指南](../../../docs/zh/how-to/observability/llamaindex-trace-collector.md) | 已将自有采集器代码许可说明改为 Apache-2.0，并说明第三方许可边界；继续用于下载 ZIP 和 npm 分发 |
+| 11 | [诊断循环问题分析](../../../docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md) | 已补充 @0.6 的专项检测调度、报告兼容和能力边界；@0.1 现场、旧行号和原方案明确标为历史依据 |
+| 12 | [Hermes 落盘分析](../../../docs/zh/explanation/observability/hermes-storage-analysis.md) | 已核对并注明单 span 增量提交、session 分片和分块读取已实现；history 双字段仍存在，但不沿用旧样本推断当前开销 |
+| 13 | [Skill 工作台工程设计](../../optimization/skill-workbench-refactor/phase2-requirements-design.md) | 保留工程方案，明确仓外产品设计与仓内工程记录的关系，更新当前入口和历史切流计划；未修改仓外产品方案 |
+| 14 | [示例成本参考](../../../docs/zh/reference/platform/example-cost.md) | 保留历史数字，明确原记录缺少测量日期、代码版本与精确配置，补充当前重新估算的方法；未虚构数据或重新调用模型 |
+| 15 | [文档站配置](../../../docs/docs.json) | 将 GitHub 占位页脚替换为当前协作上游的 GitCode 文本链接，保留所有活动导航目标 |
+
+上述处理基于当前本地代码、引用和打包入口；未发现仓内引用不代表没有外部旧链接。两份 Mermaid bundle 和许可材料保持不变。第 5、6 项以及下面的历史计划、原型仍保留，未扩展清理范围。
+
+## 历史计划和原型
+
+以下仅按“历史材料”登记，不根据日期判定废弃，也未合并同名或相似方案：
+
+- `design/observability/historical-plans/`：8 份 Claude/OpenClaw 采集与 Trace 语义计划。
+- `design/evaluation/historical-plans/`：1 份触发评测超时重试计划。
+- `design/optimization/historical-plans/`：1 份 Skill issue 合并冲突计划。
+- [RAS 历史原型](../../reliability/agent-ras/assets/demo/reliability-prototype.html)。
+- [Goal Plus 原型](../../observability/goal-plus-observability/agent-insight-goal-plus-hifi.html)。
+- [实验原型](../../evaluation/eval-experiment/eval-experiment-hifi.html)与[另一份实验原型](../../evaluation/eval-experiment/评测实验-高保真.html)。
+- [质量监控原型](../../evaluation/quality-monitoring/quality-monitor.html)。
+- [Jiuwenswarm 渲染材料](../../observability/jiuwenswarm-tracing/index.html)及随附 Python 验证脚本。
+
+## 需要拆分的长文档
+
+以下按去除代码块后的 Markdown 标题统计，并随本次说明更新刷新计数；只说明篇幅或归类需要复核，不表示内容过期。完整计数见 [long-documents.json](long-documents.json)。
+
+| 文档 | 标题数 |
+| --- | --- |
+| [qa](../../../docs/zh/how-to/platform/qa.md) | 79 |
+| [develop-benchmark](../../../docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md) | 64 |
+| [ras-fi-insight-relationship](../../../docs/zh/explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship.md) | 47 |
+| [view-traces](../../../docs/zh/how-to/observability/view-traces.md) | 44 |
+| [develop-evaluator](../../../docs/zh/how-to/evaluation/develop-evaluator.md) | 41 |
+| [skill-workflow](../../../docs/zh/how-to/optimization/skills/skill-workflow.md) | 39 |
+| [api-and-contracts](../../../docs/zh/reference/platform/api-and-contracts.md) | 37 |
+| [faq](../../../docs/zh/how-to/platform/faq.md) | 36 |
+| [datasets](../../../docs/zh/how-to/evaluation/datasets.md) | 35 |
+| [diagnosis](../../../docs/zh/how-to/diagnosis/agent-debug/diagnosis.md) | 34 |
+| [deploy-services](../../../docs/zh/how-to/evaluation/benchmarks/deploy-services.md) | 30 |
+| [experiments](../../../docs/zh/how-to/evaluation/experiments.md) | 29 |
+| [access-control](../../../docs/zh/how-to/platform/settings/access-control.md) | 26 |
+| [static-evaluator](../../../docs/zh/explanation/evaluation/skills/static-evaluator.mdx) | 26 |
+| [llamaindex-trace-collector](../../../docs/zh/how-to/observability/llamaindex-trace-collector.md) | 25 |
+| [overview](../../../docs/zh/explanation/observability/overview.md) | 24 |
+| [manage](../../../docs/zh/how-to/optimization/skills/manage.md) | 24 |
+| [data-control-flow](../../../docs/zh/explanation/platform/data-control-flow.md) | 24 |
+| [recovery](../../../docs/zh/explanation/reliability/agent-ras/modules/recovery.md) | 24 |
+| [diagnosis-loop-analysis](../../../docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md) | 25 |
+| [web-search](../../../docs/zh/how-to/platform/settings/web-search.md) | 23 |
+| [architecture](../../../docs/zh/explanation/platform/architecture.md) | 23 |
+| [develop-trace-collector](../../../docs/zh/how-to/observability/develop-trace-collector.md) | 23 |
+| [evaluators](../../../docs/zh/how-to/evaluation/evaluators.md) | 22 |
+| [model-registry](../../../docs/zh/how-to/platform/settings/model-registry.md) | 22 |
+| [otlp-attribute-contract](../../../docs/zh/reference/observability/otlp-attribute-contract.md) | 22 |
+| [detectors](../../../docs/zh/explanation/reliability/agent-ras/modules/detectors.md) | 22 |
+| [platform-adapter](../../../docs/zh/explanation/reliability/agent-ras/modules/platform-adapter.md) | 22 |
+| [monitor](../../../docs/zh/explanation/reliability/agent-ras/modules/monitor.md) | 21 |
+| [local-install-process](../../../docs/zh/how-to/reliability/agent-ras/local-install-process.md) | 21 |
+
+## 迁移验证
+
+本节记录首次迁移的验证结果；授权清理后的本轮结果另见 verification.json 的 approvedCleanup。
+
+原有 1066 处有效本地目标引用已保留，重建的 98 个站点导航目标均存在。检查范围为仓内文档文件和本地资源，不包含外部 URL 可达性与片段锚点的浏览器解析。
+
+验证结果见 [verification.json](verification.json)。文档专项 18 项：17 通过、1 跳过；全量 4329 项：4306 通过、3 失败、2 取消、18 跳过。3 个失败已在未迁移的上游基线复现；2 个实验取消用例也在相同环境的上游基线复现。本轮未修复这些既有测试问题。npm dry-run 已确认新路径的采集器文档进入发布包，内部 design 材料未被打入包。本轮不启动开发服务，未在浏览器中验证，也未执行完整 Docker 镜像构建；本地文档引用、HTML 资源和 npm 打包内容按静态和自动化检查验证。
+
+产品行为相关代码只调整采集器文档读取路径；其余源文件改动应仅为文档引用注释。依赖版本、package.json scripts、API 契约、数据库模型字段和业务流程不在此次变更范围内。
+
+## 授权清理后的验证
+
+- 本阶段仅删除清单第 1、2、3、4 项；第 5、6 项文件内容与阶段开始时一致。
+- 本阶段业务代码、测试代码、依赖、package.json、脚本与第三方资源未修改；上阶段的文档路径适配仍保留。
+- 文档专项 18 项：17 通过、1 跳过；覆盖采集器 ZIP README 内容和 standalone 文档复制。
+- 全量 4329 项：4306 通过、3 失败、2 取消、18 跳过。数量及失败/取消名称与清理前一致；既有异常未在本阶段修复。
+- npm dry-run 共 728 个文件，LlamaIndex 指南仍包含在包中，内部 design 和本次删除文件均未进入包。
+- 本地目标引用、98 个活动导航与授权删除范围的检查结果见 verification.json 的 approvedCleanup；检查不包含所有外部 URL 和浏览器锚点解析。
+- 文档站页脚按 [Mintlify footer 配置](https://www.mintlify.com/docs/organize/settings-structure#footer)使用文本链接；未启动文档站或应用 dev server，未在浏览器中验证，也未重新构建 Docker 镜像。

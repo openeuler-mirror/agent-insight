@@ -130,7 +130,7 @@ export interface AgentDebugTrajectoryAnchor {
  * 轨迹级 finding —— 由确定性「轨迹诊断器」(trajectory-detector) 产出，与逐-step 认知
  * finding (AgentDebugFinding) 并列存在于报告中。它描述"跨区间的循环 / 无进展"这类
  * 时序属性，不绑定单一 criticalStep、不套五模块；展示形态是"故障机制 + 故障链 + 证据节点"。
- * 设计见 docs/agentdebug-diagnosis-principle-and-loop-detection-gap.md。
+ * 设计见 docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md。
  */
 export interface AgentDebugTrajectoryFinding {
   id: string;

@@ -17,7 +17,7 @@
 /**
  * 触发评测 runner（opencode-live 路线）。
  *
- * 设计来源：docs/design/skill-eval-datasets/design.md。
+ * 设计来源：design/skill-eval-datasets/design.md。
  * 灵感：anthropic skill-creator `scripts/run_eval.py`——spawn 真实 agent runtime，
  *      流式抓 tool_use 事件，命中即 abort 节省 token。
  *

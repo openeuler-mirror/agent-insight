@@ -1,0 +1,550 @@
+---
+title: "链路追踪"
+description: "查看、筛选并分析一次执行的完整 Trace"
+keywords: ["Agent Insight", "链路追踪", "Trace 筛选", "执行分析"]
+changefreq: monthly
+---
+
+# 链路追踪
+
+链路追踪用于还原一次真实执行从入口到结束的完整过程，是运行观测中最核心的分析入口。无论问题表现为失败、变慢、结果偏差，还是 Token 消耗异常，通常都应先回到 Trace 本身确认事实，再决定是否进入诊断、评测或优化流程。
+
+> **Note**
+> 当问题位置尚不明确，或无法判断属于偶发问题还是稳定回归时，链路追踪通常是最合适的起点。
+
+## 这页的核心价值
+
+- 还原一次执行到底发生了什么
+- 判断问题出在入口、模型、工具、Skill 还是子 Agent
+- 找到最慢、最异常、最值得复盘的关键节点
+- 对高价值样本做后续诊断、评测沉淀或优化对照
+
+## 列表页总览
+
+列表页承担“发现样本”和“缩小范围”两类工作，适合先从大量执行记录中筛出值得进入详情的 Trace。
+
+<p align="center">
+  <img src="../../../images/agent/observability/trace_list.png" alt="链路追踪列表页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
+
+上图展示了链路追踪列表页的典型结构：顶部是聚合指标，指标下方是筛选区，中间是执行记录表格，右侧操作列用于继续进入评测、分析或详情页。
+
+### 列表页主要区域
+
+#### 1. 顶部指标卡
+
+顶部指标卡通常用于快速建立整体判断，常见信息包括：
+
+- **执行次数**：当前筛选范围内共命中的 Trace 数量
+- **失败次数**：状态为失败或异常的执行数量
+- **平均耗时**：筛选结果的平均执行时长
+- **工具错误率**：工具调用失败在整体执行中的占比
+
+这一区域更适合回答“最近是否整体变差”“失败是否突然增多”“问题是否集中在某一时间段”。
+
+#### 2. 筛选区
+
+筛选区用于快速收敛问题范围，截图中可见的筛选维度包括：
+
+- **Agent 范围**：区分只看主 Agent、只看子 Agent，或同时查看两者；该范围是硬筛选，与 Skill 等内容筛选组合时也不会混入其它层级
+- **Agent**：按具体执行主体过滤，适合定位到某个注册 Agent
+- **Skill**：按 Skill 触发情况收敛样本。LlamaIndex、Qoder 等支持多 Agent 的框架按当前 Agent 自己调用的 Skill 匹配；仅子 Agent 调用的 Skill 不会让父 Agent 命中该筛选
+- **用户标签**：版本标签和业务标签均可多选筛选；多个标签采用 AND 语义，只保留同时包含全部所选标签的 Trace
+- **状态**：优先筛出已完成、失败、异常或边界样本
+- **时间等附加条件**：用于框定问题发生窗口
+
+在同一浏览器标签页内，切换到其他页面再返回链路追踪时，会按当前账号恢复上次的筛选条件，包括状态、框架、Agent、归属、范围、用户标签、时间、搜索及高级筛选。带查询参数的链接优先使用链接中的条件；页码和详情中的 Trace 不会被记住。点击“重置筛选”会清除筛选记忆，关闭标签页后记忆也会清除。浏览器禁用存储时仍可正常筛选，但无法记住选择。
+
+其中，**Agent 范围**在多 Agent 场景尤其关键：
+
+- **仅主 Agent**：适合观察入口任务是否正常进入系统
+- **仅子 Agent**：适合排查派生任务、分工任务和协作路径
+- **主 Agent + 子 Agent**：适合完整回看整条协作链路
+
+Agent 下拉同时列出已观测的主 Agent 和子 Agent。选择子 Agent（例如 Pi 的 `planner`
+或 `worker`）后，配合“仅子 Agent”范围查看该 profile 的独立执行；根 Pi CLI 没有可用
+profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和实际执行主体，不能互相替代。
+
+#### 3. 执行记录表格
+
+表格是列表页的核心区域，通常包含以下字段：
+
+- **Trace ID**：当前执行的唯一标识；拖宽该列可显示更多字符，复制按钮始终复制完整 ID
+- **Agent**：发起或承载该执行的 Agent
+- **执行状态**：成功、失败、执行中或超时；可在状态筛选中单独查看超时 Trace
+- **用户标签**：用户维护的版本标签和业务标签，可在列表内直接添加或移除
+- **系统标签**：系统从 Trace 派生的只读标签，例如 Multi-Agent、Skills、SUB 和框架名，默认隐藏
+- **任务内容**：本次执行的任务摘要或问题内容
+- **执行时间**：以浏览器本地时区显示完整发生时间（`YYYY-MM-DD HH:mm:ss`），用于回溯事件窗口；悬停可查看相对时间
+- **操作**：继续进入详情、分析或评测流程
+
+其中，**执行状态**表示 Trace 生命周期，与评测状态分开：
+
+- 收到完成信号后，按采集到的终态显示成功或失败。AcTrail 根 Agent 进程非零退出、Goal Plus Pi Session 的明确失败均显示失败；普通工具错误或 RAS 恢复动作不会单独把整条 Trace 判为失败。
+- 尚未收到完成信号时显示执行中。所有 Agent 框架统一使用十分钟无上报兜底：从服务端最后一次接收该 Trace 数据起满十分钟，显示超时。
+- 超时只表示这段时间没有收到新数据，不会伪造完成时间；再次收到数据后恢复执行中，收到真正的完成信号后进入成功或失败。评测、标签和人工修改不会延后超时。
+- 部分采集器会依据实际根 span、交互时间或 OpenCode `session.idle` 补齐完成时间；页面不再因静默 60 秒或本机无法找到远端进程而推断成功。
+
+列表每页显示 20 条。筛选和排序作用于当前账号及所选条件下的全部匹配记录，顶部统计也按该范围计算；它们不会只统计当前页。SQLite 部署由数据库完成这些计算，筛选范围越大，精确统计和复杂排序仍可能耗时更长。
+
+当前页先显示，顶部统计独立加载；统计未完成时显示「—」，仍可通过上一页、下一页浏览。统计在页面可见时每 30 秒更新，未结束的统计请求不会重复发起。列表与统计分别读取，因此持续上报时总数可能稍晚更新。统计失败只提示统计暂不可用，不清空列表；记录查询失败则明确提示重试，不能按「没有执行记录」理解。
+
+列表在页面可见时每五秒检查刷新；上一轮尚未返回时会等待，不重复加载。首次结果返回后显示列表，后续刷新期间保留已有记录。详情中的执行中和超时 Trace 也会自动刷新状态。隐藏页面暂停轮询，重新可见后继续检查。
+
+**环内 RAS（可靠性）与普通链路追踪解耦。** 「运行观测 / 链路追踪」（`/trace`）列表与详情**不再**展示 RAS 徽章或异常面板；环内异常与恢复请到侧栏 **AgentRAS 可靠性 / 可靠性观测**（`/agent-ras/trace`）查看。该页以当前账号的根 Trace（Execution）左连接 RAS 事件，并合并**仅有 RAS 事件、无 Execution** 的任务（例如 xiaoO CLI / inproc 注入），同时包含无故障 Trace 和异常 Trace。详情页顶部用**可折叠 RAS 异常摘要条**（默认收起，保证完整链路在首屏）：按**一次 anomaly 检测**一行展示类型、严重度、摘要、操作标签与恢复结果；同一次故障的恢复 / 中断等操作并入该行，不拆成多张卡。点选行会联动下方链路树中的 RAS 节点，右侧展示完整摘要与动作详情。有 Execution / 平台观测上报时复用完整链路视图并**叠 RAS 标记**（前端展示不变）；**仅有 RAS 事件、无平台对话链路**时不展示链路树。完整链路由 **agent-insight** 采集器提供（OpenCode：插件 + uploader → `/api/ingest/upload`；xiaoO：`scripts/xiaoo-trace-collector` → `/api/ingest/otel/v1/traces`）。排查「有 RAS 无 Trace」时先确认对应 Insight 采集器已安装（xiaoo：`node scripts/xiaoo-trace-collector/install.js` 或跑过 `install-ras`），**不要**把完整链路 Trace 当成 RAS 职责。RAS / FI 只上报自身事件并在对应页展示（可靠性观测叠 RAS；故障注入 Run 叠 RAS + FI），**不会**为进可靠性列表用 FI collect 合成 `Execution`。
+
+可靠性观测列表额外提供 **平台**列，以及顶部的 **搜索 / 平台 / 状态** 过滤（交互对齐「链路追踪」页的筛选条，字段集更精简）。**RAS 处置**列按「有故障 → 是否启动恢复 → 恢复是否成功」展示，与 **执行状态** 解耦：
+
+- **执行状态**：可靠性观测列表当前按 Session 完成信号（`endTime`）显示执行中 / 正常完成；该列表的状态计算独立于普通链路追踪的十分钟超时和采集终态判定。RAS 下发的 `abort_stream` 不会单独改写执行状态，该动作的恢复结果看 **RAS 处置**列。
+- **RAS 处置**取值：无故障；有故障 · 未启动恢复；有故障 · 已启动 · 恢复成功 / 恢复失败 / 结果未知。「结果未知」表示已有处置请求（`actions`）但缺少对应 `action_result`，此时列表信息不足以断言恢复成败，需进详情或核对推送是否漏报。若处置含 `abort_stream`，单元格会附带「含流中断动作」提示，仍不表示执行失败。
+- **时间**列显示精确本地时间（年-月-日 时:分:秒），不再使用「x 分钟前」相对文案；列头可点击，在升序 / 降序之间切换（默认最新在前）。
+- 列表支持**多选删除**：勾选一条或多条链路后点删除，会移除当前账号下对应的根 Execution、Session 与关联 RAS 事件；删除前有确认，且只能删自己名下的数据。
+
+在「AgentRAS 可靠性 / 可靠性能力」页（`/agent-ras/fault-modes`，侧栏亦有入口）有两个视图：
+
+- **能力目录**：按「故障模式 → 子故障模式 → 恢复措施 → 严重度」列出当前 runtime **已落地** 的细粒度检测能力。思考死循环的 L3 合并为一条「规划执行语义判定」（语义死锁 / 文本崩坏 / 过度思考共享同一检测链路，恢复模板按类型分开展示）。子故障模式显示名可在本机编辑；恢复措施若为提示词类动作，以中性标签按钮点击弹出模板全文。
+- **平台配置**：按平台维护与 runtime `AgentRASConfig` 对齐的启停与阈值；可选开启「同步到客户端」（**OpenCode / xiaoO** 启动或会话开始时拉取合并）；其他平台可导出 YAML/JSON 后人工落盘。
+
+设计中尚未实现的检测域不会出现在目录表。子模式**没有**独立开关——启停粒度停在 detector。
+
+普通链路与可靠性观测使用同一登录账号。standalone 登录使用邮箱，IDaaS 登录在内部使用
+userinfo 返回的 UUID，侧边栏可显示人员接口返回的账号别名；OpenCode 上传使用的 API Key 必须属于该账号。本地 keyless 模式的数据归属
+`AGENT_INSIGHT_DEFAULT_INGEST_USER`，该值也应配置为同一个 `User.username`。`admin`
+这类没有对应登录账号的旧别名不能用于页面登录。
+
+可将列表页理解为一次“样本筛选台”：先判断哪些 Trace 值得看，再进入详情做证据级分析。
+
+#### 4. 标签与列设置
+
+Trace 列表支持两类标签列：**用户标签**默认显示，用于维护版本标签和业务标签；**系统标签**默认隐藏，只展示由数据派生的只读事实。点击用户标签列中的带加号标签入口可以打开标签编辑器：标签先按“版本 / 业务”分区，再按名称中首个 `_` 或 `-` 之前的前缀逐行聚类，不含分隔符的标签进入“未分组”；每行标签横向排列并在空间不足时自动换行。点击标签即可添加或移除，也可以在弹层中快速新建标签并立即绑定到当前 Trace；弹层右上角提供关闭按钮。
+
+筛选栏的“用户标签”下拉同时提供版本标签和业务标签，并沿用相同的“类型 → 前缀”聚类规则。每个前缀以无框文字显示在左侧，其标签以椭圆胶囊横向排列并在空间不足时自动换行；未选标签使用彩色小方块标识，已选标签改为勾选状态。下拉支持搜索和连续勾选，最多选择 20 个标签；多个标签采用 AND 语义。例如同时选择版本标签 `release-v2` 与业务标签 `scene-regression` 时，只显示同时绑定这两个标签的 Trace。标签后的数字表示当前标签绑定的 Trace 数量，已选标签可以逐项取消或一键清空。
+
+右上角的列设置菜单可以显示或隐藏 Trace ID、Agent、IP、状态、用户标签、系统标签、任务内容、Token、时间和操作列。**IP 列默认隐藏**，需要查看时在“列设置”中勾选 **IP**；列显隐与列宽会保存在浏览器本地。拖动表头分隔线时，被调整列会沿拖动方向伸缩，空间不足时表格支持横向滚动。用户标签单元格固定保留打标加号，并根据当前列宽尽可能展示更多标签；只有剩余空间不足时才以 `+N` 折叠，较长名称会显示省略号，完整名称可通过悬停查看。隐藏用户标签列后，操作列不再展示标签编辑入口；需要继续打标时，请先在列设置中重新显示用户标签列。
+
+#### 5. OpenCode Trace 公网 IP
+
+当前公网 IP 绑定只用于 **OpenCode Trace**；Claude Code、Hermes、xiaoO 等其他框架的 Trace 尚未接入这套字段。列表显示的是服务端在 Trace 上报时得到的公网来源地址 `observedIp`，不是 OpenCode 调用的模型地址，也不是客户端自报的本地网卡地址。多台电脑共用同一个路由器或 NAT 出口时会显示同一个公网出口 IP，因此不能用它代替稳定的客户端身份。
+
+| Agent Insight 部署和访问方式 | 当前支持 | 需要做什么 | IP 列结果 |
+|---|---|---|---|
+| 外部电脑直接访问公网 IP 和端口，例如 `http://203.0.113.10:3000` | 支持 | uploader 使用有效 API Key 或设备凭证；无需代理配置 | 电脑所在网络的公网出口 IP |
+| 外部电脑直接访问公网域名和端口 | 支持 | 与公网 IP 直连相同 | 电脑所在网络的公网出口 IP |
+| OpenCode 与 Agent Insight 在同一台服务器，uploader 访问该服务器的公网 IP，例如 `http://203.0.113.10:3000` | 支持 | 必须使用公网 IP 作为 `AGENT_INSIGHT_HOST`，且 uploader 需通过 API Key 或设备凭证认证 | 服务器公网 IP，例如 `203.0.113.10` |
+| OpenCode 与 Agent Insight 在同一台服务器，uploader 访问公网域名 | 有条件支持 | 只有连接到达服务端时来源已经是公网地址才支持；若被解析为本机回环或私网连接，服务端不会把域名反查成公网 IP | 公网来源地址或 `—`；推荐改用公网 IP 地址 |
+| OpenCode 与 Agent Insight 在同一台服务器，但 uploader 访问 `localhost`、`127.0.0.1` 或服务器私网 IP | 不支持公网 IP 绑定 | 改为访问服务器公网 IP | `—` |
+| Nginx、Apache、网关或负载均衡转发到 Agent Insight | 有条件支持 | 代理必须覆盖真实来源头；服务端配置 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER` 并重启 | 可信来源头中的公网 IP |
+| Cloudflare 转发 | 有条件支持 | 服务端配置 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER=cf-connecting-ip` 并重启 | Cloudflare 提供的客户端公网 IP |
+| Docker 或 Kubernetes | 有条件支持 | 推荐由 Ingress 或网关覆盖真实来源头并按上一行配置；如果端口映射把来源改成私网地址，则无法绑定 | 正确配置时显示公网 IP，否则 `—` |
+| 仅通过局域网私网 IP、VPN 私网地址或 SSH 隧道访问 | 不支持公网 IP 绑定 | 当前功能只保存公网地址 | `—` |
+
+使用步骤：
+
+1. 确认 OpenCode uploader 的 `~/.agent-insight/.env` 中，`AGENT_INSIGHT_HOST` 指向实际使用的 Agent Insight 地址。服务器本机场景应填写公网 IP 地址，不能填写 `localhost`。
+2. 确认同一文件配置了有效 `AGENT_INSIGHT_API_KEY`，或者 `~/.agent-insight/client/config.json` 中已有设备凭证。已有一键接入且 API Key 有效时不需要额外安装。
+3. 修改配置后重启 watcher；随后运行一次新的 OpenCode 任务。
+4. 进入 **运行观测 → 链路追踪 → 列设置**，勾选默认隐藏的 **IP** 列。
+5. 查看新 Trace。历史 Trace 不会批量回填；只有再次上报且原 IP 为空的记录才可能补上。
+
+代理部署时，`AGENT_INSIGHT_TRUSTED_PROXY_HEADER` 只允许填写 `x-forwarded-for`、`x-real-ip` 或 `cf-connecting-ip`。最外层代理必须删除客户端自带的同名头并写入真实来源地址，不能直接透传客户端提供的值。
+
+#### 6. 版本管理与版本分析
+
+从 **运行观测 → 版本分析** 进入版本能力页面。页面顶部包含 **版本分析 / 版本管理** 两个页签；版本管理作为版本分析的子能力，不再占用独立侧边栏入口。版本管理页签用于维护版本标签和业务标签：两类标签都可用于链路追踪列表筛选，版本标签还用于版本分析的分组维度。管理页分别按标签名称中首个 `_` 或 `-` 之前的前缀聚类为卡片，不含分隔符的标签进入“未分组”；卡片汇总标签数与 Trace 绑定数，并支持预填同前缀快速新建。两类标签都可以从 Trace 列表的用户标签列绑定到具体 Trace。编辑标签会同步影响链路追踪、版本分析和用户标签筛选中的展示，不会丢失已绑定 Trace；删除标签是硬删除，会移除对应 Trace 绑定，其中版本标签还会影响版本分析。
+
+版本分析只统计 root Trace，只消费版本标签；「平均任务完成度」取每条 Trace 在实验中最新一次成功的「Agent 任务完成度」评测生效分，存在人工修正时优先使用人工分。任务完成度是满分 100 的评估分，页面以「分」而不是百分号展示；指标名称旁的灰色问号可查看完整口径。没有任务完成度评测的 Trace 不进入平均分，但仍计入 Trace 总数和「任务完成度评测覆盖率」分母。运行成功率由 Trace 完成状态派生，不是独立存储字段。页面顶端会展示当前 Agent、框架和时间窗口下的版本总览；时间窗口筛选 Trace 的发生时间，并同时影响顶端统计、版本对比和版本详情。图表默认查看「平均 Token」，指标切换位于图表标题栏右侧；Token 会按 k/M 紧凑展示，时延会按 ms/s/m/h 展示；p95 时延表示 95% 的 Trace 耗时不超过该值，用于观察长尾慢请求。版本对比里的单问题下钻只影响对比图和对比表，不改变顶端总览。页面支持按当前筛选导出聚合数据，版本分析内按业务标签二次过滤仍作为未来优化点保留。
+
+#### 7. 操作入口
+
+截图右侧可见常见操作入口：
+
+- **详情**：进入单条 Trace 的完整执行视图
+- **分析**：对异常或可疑样本继续做归因分析
+- **评测**：将高价值样本沉淀到后续评测流程
+
+当目标是定位问题原因时，通常先进入 **详情**；当目标是沉淀样本或批量复盘时，再进入分析或评测更高效。
+
+## 详情页总览
+
+详情页承担“还原过程”和“定位原因”两类工作，适合对单条 Trace 做完整复盘。
+
+从列表点击进入详情，或在导入成功后点击“打开 Trace”，均可用浏览器后退返回原列表，保留原来的筛选条件和页码；浏览器前进可重新打开详情。详情顶部的“返回列表”始终打开当前筛选下的列表，通过分享链接直接进入详情时也可使用。
+
+MCTS、Goal Plus 和原生子 Agent 的概览统一展示父子关系卡片。点击“父 Agent”的 **Trace** 返回直接父 Trace，点击“子 Agent”的卡片打开直接子 Trace；中间层同时具有两个方向的入口，可逐层往返。直接打开成员链接、在集合内选择成员，以及从 Trace 抽屉查看，都使用相同的关系逻辑。耗时和 Token 有数据时显示，缺失时显示 `—`；关系卡片不改变调用树和统计。
+
+真实根 Trace 显示“无父 Trace”，叶子显示“无子 Trace”。并列展示的虚拟“协作 Trace”展示“集合成员”，不作为真实父级。没有明确调用位置的关系保留“上报关联”提示。没有独立 Session 的原生 Agent 卡片仍在当前树内选择，不显示独立 Trace 入口。
+
+父级或子级正文尚未到达时显示等待状态；详情会开启自动刷新，即使 Trace 已结束也会等待关系就绪，用户可以手动关闭自动刷新。关系冲突时显示提示且不提供跳转；查询失败显示暂不可用，已有正文仍可查看。跳转加载失败时可以重试或返回列表，浏览器前进、后退继续保留原来的筛选条件。
+
+<p align="center">
+  <img src="../../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
+
+上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。
+
+当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
+
+当前 Goal Plus 采集器使用 main/worker 绑定和关系事件。默认 **仅主 Agent** 列表在收到明确的 worker 声明及绑定后就将它作为子 Agent 隐藏，即使主 Trace 或 worker 正文还未到齐；此时可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围查看已有记录。主端与某个 worker 的正文就绪、身份唯一后，该 worker 即可进入主 Trace，无须等待其他 worker 或主任务结束。列表隐藏与详情合并是两件事，等待中的 worker 不会生成虚假正文。reported 合并优先，同一 worker 不会与历史语义投影重复显示。
+
+对于历史 Goal Plus 语义数据，当语义关系已经把一个唯一主 Trace 与当前 Search run 的 worker Trace 确定关联后，**仅主 Agent** 列表隐藏已投影的 worker，已关联 worker 可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围中单独检索；打开主 Trace 时，这些独立 Session 会在现有链路树中展示为 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**。Pi passive importer 存在多个历史主会话时，以 Goal 当前 active native Session 对应的 canonical Trace 为准；Pi 将同一原生 Session 的任务保存为 `<sessionId>__taskN` 时，明确由 `/goal-plus` 启动且只对应一个 Goal 的主任务也会显示同一子树。candidate ID 和 run ID 可用于核对成员，同一 Session 的续跑不会重复建节点。这是查询时生成的只读跨 Session 投影：主 Trace、worker Trace 及其原始采集内容仍分别保存，平台不会改写原生父子关系，也不会把编排关系伪装成已确认的具体启动调用位置。点击子 Agent 的 **Trace** 可继续打开该 worker 的独立详情。历史 run、主 Trace 不唯一、worker 正文尚未到达、超过投影上限、普通 Pi 任务或端点关联存在歧义时，平台保留独立 Session 入口，不做猜测性合并。
+
+任务完成度、轨迹质量等预置评估器生成的 `direct-llm` Trace，会以本次评估模型请求发出前和响应返回后的时间作为起止点。根 Agent、LLM Span、Session 和列表耗时使用同一次请求的时间窗口，因此新产生的评估 Trace 不会再因写库时间代替模型调用时间而显示为 `0ms`。修复前已经保存且缺少原始起止时间的历史 Trace 无法可靠反推真实耗时，不会自动补算。
+
+Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。`langfuse-langgraph` Trace 详情中所有识别为 JSON 的内容默认展开全部对象和数组层级，仍可手动收起；其他框架沿用默认折叠深度。点击 LLM 节点时，Input 直接使用该 generation 上报的 request messages：`system`、`user`、`assistant` 和真实工具结果会按原始角色与顺序分开显示，旧轮次放入 History，本轮新增用户消息或工具结果放入 Current input；被上报为 `role=tool` 的可用工具 schema 不会冒充工具结果，LLM Output 中的真实工具调用则会以 Assistant 工具调用及参数展示。相邻 CHAIN 节点的 input/output 不会被当成模型对话历史。子 Agent 行和右侧“子 Agent”卡片上的 **Trace** 按钮可直接进入该子 Agent 的独立执行详情；目标执行不存在时，页面会提示未找到，而不会继续停留在父 Trace 造成无响应的错觉。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
+
+AcTrail Trace 的 LLM Input 同样直接使用每次模型请求上报的完整消息，而不是从相邻事件猜测。内容块会先整理成可读文本，系统提示和旧轮次放入 History；本轮工具交互按调用标识显示为一组 Assistant 工具调用与 User 工具结果，不会因为旧消息的正文发生轻微变化而把多轮历史混入 Current input。单条消息及历史条数仍有上限保护。AcTrail 没有单独上报某个工具结果时，平台会从后续模型请求中按相同工具调用标识回填结果，并将其后连续的文本块一起作为输出。失败的模型调用会显示 AcTrail 实际上报的 HTTP 状态码和原因，例如 `LLM 调用失败：HTTP 404 Not Found`。Agent 名称优先使用 AcTrail 明确上报的名称；如果只上报了 `agent identity process-*` 这类进程占位名，平台会在请求信息足够明确时识别实际 Agent，例如 `claude-cli` 显示为 `Claude Code`。
+
+Langfuse 按已结束 span 增量上报时，子 Agent 可能早于应用根 span 到达。平台会等待可确认的顶层 span 后再生成主 Trace，避免把 `intent-agent` 等子 Agent 临时显示为主 Agent。
+
+### 详情页主要区域
+
+#### 1. 顶部摘要区
+
+顶部摘要区通常会集中展示：
+
+- 当前 Trace 的标识信息
+- 执行状态
+- 总耗时
+- Token 消耗
+- 成本或资源消耗估算
+
+若在 **可靠性观测详情**（`/agent-ras/trace/[taskId]`）打开关联了环内 RAS 的 Trace，顶部会出现可折叠的 **可靠性异常**摘要条：严重度分布芯片、单故障单行列表（操作如「中断输出流」，原始协议值为 `abort_stream`）。默认收起以免挤占链路；展开后点选某行可定位完整链路中的故障节点，右侧展示检测摘要与恢复动作/结果。这与「故障诊断 / Fault」不同——Fault 是事后 AgentDebug；RAS 标记是环内实时检测落库后的只读回放。
+
+可靠性详情同时提供两种定位方式：
+
+- **摘要条**（推荐扫读）：一次 anomaly 检测一行；恢复 / 中断操作并入同行标签，不另开多卡。
+- **检测点** 链路树中的 **故障** 节点；选中后右侧按「恢复操作 → 对应结果」交错展示，中文界面使用「中断输出流 / 发送通知 / 注入纠偏提示」等展示名，原始协议值仅在悬停提示中保留。经宿主写入的恢复通知 / steering 依然按可靠性事件处理（不是 USER）。靠 `action_result.delivery_anchor.message_id` 关联；**不做**正文匹配。时间线不再额外堆叠扁平的「请求处置 / 处置成功」行。
+
+新产生的事件使用 `messageID + partID` 定位 LLM 输出/思考节点，使用 `callID` 定位工具调用；投递消息另有 `delivery_anchor`。没有精确锚点时检测点仅在一秒时间窗口内兜底匹配，投递行保持 USER。
+
+RAS 思考循环严重度保持三级检测口径：L1 `suffix_cycle` 为低危、L2 `similar_clauses` 为中危、L3 语义死锁为高危。严重度描述检测层级；是否发生流中断、处置是否成功由 **RAS 处置**（及详情中的 `action_result`）表示，与执行状态生命周期正交。
+
+这一层适合先回答三个问题：
+
+- 本次执行是否成功完成
+- 代价是否异常偏高
+- 是否值得继续深入查看内部节点（含是否曾被环内中止或纠偏）
+
+#### 2. 统计标签页
+
+截图中的详情页提供了多个聚合标签页，例如：
+
+- **AGENTS**：参与当前执行的 Agent 数量
+- **TASK SPAWNS**：执行过程中派生的新任务数量
+- **CHAIN SPANS**：Langfuse、LlamaIndex 等框架归一后保留的业务链路节点数量；已知的低价值
+  SDK/运行时包装节点不会计入
+- **TOOL CALLS**：工具调用次数
+- **SKILL CALLS**：Skill 触发次数
+- **LLM TURNS**：模型交互轮次
+- **TOKENS**：累计 Token 消耗
+
+这些统计用于快速建立问题画像。例如：
+
+- 工具调用过多，常见于流程冗长或工具重试过频
+- LLM 轮次偏多，常见于提示不收敛或任务拆分过细
+- Token 异常偏高，常见于上下文过长、重复阅读或无效多轮
+
+#### 3. Span 列表
+
+左侧列表按时间顺序展示执行节点。每一行通常代表一个 Span，常见类型包括：
+
+- **AGENT**：Agent 层级的总任务或子任务
+- **CHAIN**：Langfuse 采集的业务步骤或链路容器，可继续展开其子节点
+- **LLM**：一次模型请求或模型输出
+- **TOOL**：一次工具调用
+- **SKILL**：一次 Skill 触发
+
+Span 列表适合完成三件事：
+
+- 找到失败或耗时最长的节点
+- 判断关键步骤是否按预期发生
+- 识别是否出现了多余调用、重复调用或错误分支
+
+链路树的展开、收起按钮控制子 Agent，悬停说明与列表 Trace ID 表头使用相同样式；收起后仍保留根 Agent。折叠箭头向右，展开后向下。
+
+**仅慢节点（>60s）**按事件节点的耗时严格筛选：恰好 60 秒以及缺少耗时的事件不匹配。开启后耗时筛选固定为 `>60s`，关闭后可重新选择。根 Agent 保留为层级入口，子 Agent 行不直接按自身耗时筛选，但会随所属父事件被过滤或因折叠而隐藏。因此，保留下来的 Agent 行不代表其耗时一定超过 60 秒。
+
+#### 4. 时间轴
+
+中间时间轴用于展示各个 Span 的持续时间和前后关系，是判断性能瓶颈与执行顺序的关键区域。
+
+通过时间轴可以快速识别：
+
+- 哪一步耗时最长
+- 哪些步骤是串行发生，哪些存在并发
+- 问题是从某个单点开始，还是在多处逐渐累积
+
+性能问题通常不应只看最终总耗时，而应优先回到时间轴定位最长的那一段 Span。
+
+#### 5. 节点详情面板
+
+右侧详情面板展示当前选中节点的摘要和核心指标，通常包括：
+
+- 当前节点所属 Agent
+- 节点深度与占比
+- 该节点下的任务数、工具数、Skill 数、LLM 数
+- Token 输入、输出、缓存读取与总量
+- 关键步骤摘要
+
+这一面板适合判断当前节点是否就是问题核心，也适合在复杂 Trace 中快速理解“这个节点到底承担了什么职责”。
+
+工具输入和输出的“查看全部”弹窗显示完整内容，包括深层 JSON、长字符串和大数组，复制按钮复制完整内容。弹窗内的复制支持普通 HTTP 访问，复制后保留当前操作焦点。时间线事件中的工具输入和输出也各自提供复制按钮；内容继续按原有格式和 JSON 折叠规则展示。重复从父 Trace 进入子 Trace、返回后再进入时，会重新加载所选详情。
+
+## 关键功能与名词解释
+
+### Trace
+
+Trace 表示一次完整执行的全链路记录，覆盖从请求进入到最终结束的所有关键过程。一个 Trace 内通常包含多个 Span。
+
+### Span
+
+Span 是 Trace 中最小的可观测执行单元，代表一段具体动作，例如一次模型调用、一次工具调用、一段业务逻辑，或一个子 Agent 任务。
+
+### Agent
+
+Agent 是执行任务的主体。列表和详情中既可能出现主 Agent，也可能出现派生出来的子 Agent。
+对于以 profile 启动独立子进程的运行时，子 Agent 显示其实际 profile 名，而不是父运行时
+或框架名。例如 Pi 子进程可显示 `planner`、`reviewer`、`scout` 或 `worker`；这些名称取决于
+当前用户或项目配置，并非平台的固定列表。
+
+### 主 Agent / 子 Agent
+
+- **主 Agent**：接收入口请求并承担主流程编排的执行主体
+- **子 Agent**：由主流程在执行过程中派生出来、负责局部任务的执行主体
+
+在复杂协作场景中，问题可能并不出在入口主流程，而是出在某个子 Agent 的局部步骤。
+
+### Skill Call
+
+Skill Call 表示某个 Skill 在执行过程中被触发的记录。它反映的是 Skill 是否被调用，以及在整条链路中的位置和作用。Skill 是独立的执行节点，不计为 LLM Turn；选中该节点可查看触发参数和实际加载的 Skill 内容或运行结果。
+
+### Tool Call
+
+Tool Call 表示一次外部工具或内部能力调用，例如读取文件、搜索、执行命令或访问外部服务。工具报错、超时和重试通常都应优先回看这一层。
+
+### LLM Turn
+
+LLM Turn 表示一次模型交互轮次，通常包含提示输入与模型输出。轮次过多时，往往意味着任务拆分不合理、决策路径反复或提示不够收敛。
+
+### Token
+
+Token 是模型消耗的计量单位。详情页通常会拆分为输入、输出、缓存读取和总量。高 Token 并不必然代表问题，但通常需要结合耗时、轮次和结果质量一起判断。
+
+### Task Spawn
+
+Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent 或多阶段流程中，这个指标有助于识别流程是否出现过度拆分。
+
+## DeepSeek Harness 接入
+
+Agent Insight 通过 DeepSeek Harness 官方 Session Telemetry OTLP Logs 观测执行过程，不接管 Harness 的模型选择、Tool、Skill、审批或沙箱。当前支持 macOS 与 Linux，并要求本机已有 Node.js、npm、pnpm；安装器会在找不到 `dsh` 时安装已验证的 `@deepseek-ai/dsh@0.1.0-rc.8`。
+
+推荐在 Agent Insight 的 **接入配置 → 客户端安装** 中勾选 **DeepSeek Harness**，复制页面生成的一键安装命令并在运行 Harness 的机器上执行。统一安装脚本会把当前服务地址与 API Key 通过子进程环境变量交给专用 Harness 安装器，不会把 API Key 拼进下载 URL；也可以使用下面的独立安装命令：
+
+```bash
+export AGENT_INSIGHT_API_KEY='wi_xxxx'
+curl -sSf 'http://<Agent-Insight-Host>:3000/api/ingest/setup/deepseek-harness' | sh
+```
+
+安装器会把 `package.json`、`index.js`、`cordis.patch.yml` 三个白名单文件下载到临时目录并逐一校验 SHA-256；全部通过后才安装到 Harness 的 `headless` 与 `web` profile，不需要客户端安装 `unzip`。Agent Insight 地址和 API Key 会写入权限为 `0600` 的 `~/.dsh/.env`。重复执行是幂等的。Windows 原生环境暂不安装该插件，客户端安装脚本会提示改在 WSL 中运行。随后照常运行 Harness，例如：
+
+```bash
+dsh --profile headless '使用项目中的 Skill 分析问题，并调用必要的 Tool 验证结论。'
+```
+
+新的 Trace 会以框架 **DeepSeek Harness** 出现在链路追踪列表。详情可查看根/子 Agent 的 System Prompt、用户输入、模型回答、Token、Tool 调用及结果、Skill 调用和子 Session；子 Session 同时保留为独立 Execution，并通过父子关系进入 Agent Tree。
+
+Harness `FULL` telemetry 会携带完整 Session Event，因此可能包含 prompt、Tool 参数和 Tool 结果。Agent Insight 插件在发送前递归遮盖 API Key、Token、Authorization、Cookie、密码等敏感值，并对超长字符串做截断；普通 prompt、Tool schema 与 Token 统计不会被默认删除。可通过 `AGENT_INSIGHT_DSH_MAX_STRING_CHARS` 调整单个字符串的最大长度。服务端必须校验有效的 `x-witty-api-key` 才会接受 Harness Resource。
+
+此链路沿用 Harness 官方 OTel backend 的 best-effort 交付语义：摄入接口 HTTP 200 只表示事件已写入服务端 spool，后台 consumer 通常在数秒后生成或更新 Trace；客户端在进程崩溃前尚未导出的内存队列无法补传。
+
+卸载时分别执行：
+
+```bash
+dsh plugin --profile headless remove agent-insight-deepseek-harness-observability
+dsh plugin --profile web remove agent-insight-deepseek-harness-observability
+```
+
+确认两个 profile 均已移除后，可再手工清理 `~/.agent-insight/deepseek-harness/` 中的历史版本目录，并按需从 `~/.dsh/.env` 删除 `AGENT_INSIGHT_BASE_URL`、`AGENT_INSIGHT_API_KEY`。
+
+## 推荐使用路径
+
+### 场景一：确认接入是否成功
+
+建议顺序：
+
+1. 打开链路追踪列表页
+2. 将时间范围收敛到最近一段时间
+3. 查看是否出现新 Trace
+4. 点入任意一条执行，确认详情页可以展开 Span 和时间轴
+
+该路径适合首次接入后确认“数据是否已进入平台”。
+
+> **Note**
+> 通过 OTel `logs` / `traces` 端点接入的数据是异步可见的：端点返回成功表示平台已受理并写入本地 spool（`traces` 支持 OTLP JSON 与 protobuf），后台消费者会在短暂 debounce 后落库，随后在会话空闲后再补充结果评估。因此刚发完上报后，列表页可能需要等待几秒才出现新 Trace，评估分数可能再稍后更新。
+> Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。安装脚本还会注册仅供 Claude Code 使用的上下文补传器：主 Agent 每轮结束、子 Agent 结束或本轮 API 失败后会在后台补传系统提示词、hook 上下文、工具输出和子 Agent 映射，不需要执行 `/exit`；`SessionEnd` 仅作为最终兜底。系统提示词会分别归到 root 和对应子 Agent；Trace 列表使用首条真实用户输入，Claude Code 自己的标题生成、输入建议、离开摘要和 Agent 摘要不会显示为业务对话。高频 hook 会先按 Session 合并本地任务并共用一个上传 worker；这能避免 30 个 hook 事件/s 重复拉起进程，但 30 个全新完整 Session/s 是否能实时清空仍取决于网络和服务端容量，出现积压时任务会保留在本地队列等待后续重试。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
+> CodeAgent 接入后重启终端或加载对应环境脚本，继续使用原来的 `codeagent` 命令即可。Unix setup 安装 `~/.agent-insight/bin/codeagent`，Windows setup 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` 和 `codeagent-wrapper.ps1` 并持久化用户级 PATH；继承该 PATH 的终端及 Shell、PowerShell、CMD、Python、Node 子脚本会自动注入 OTel 配置。cron、systemd、容器、Windows 服务等独立环境需要显式配置包装器目录。CodeAgent Logs 异步写入 `~/.agent-insight/otel_data/codeagent` 并生成 `framework=codeagent` 的 Trace；其 Traces/Metrics 请求会收到成功响应，但平台不会保存这两类信号。
+
+### 场景二：排查失败问题
+
+建议顺序：
+
+1. 先按状态筛出失败或异常执行
+2. 进入详情页，先看顶部摘要区确认失败状态
+3. 在 Span 列表中找到最后一个异常节点
+4. 结合时间轴和父子关系回溯问题源头
+5. 必要时进入 [智能诊断](../diagnosis/agent-debug/diagnosis.md) 做进一步归因
+
+关键判断点不是“哪里先报错”，而是“哪里最先偏离预期”。
+
+### 场景三：排查慢问题
+
+建议顺序：
+
+1. 在列表页先观察平均耗时和目标时间窗口
+2. 找到耗时明显偏高的 Trace
+3. 进入详情页，优先查看时间轴中最长的 Span
+4. 判断瓶颈属于模型、工具、子 Agent 还是等待链路
+
+慢问题通常不是列表页上的总耗时问题，而是详情页内部某段 Span 的结构性瓶颈。
+
+### 场景四：排查结果偏差问题
+
+建议顺序：
+
+1. 找到看似成功但结果明显异常的 Trace
+2. 回看关键 Skill、Tool 和 LLM 节点是否按预期触发
+3. 对比输入输出是否出现遗漏、误读或错误分支
+4. 再决定是否进入诊断或沉淀为评测样本
+
+这类问题往往不会直接抛错，因此更依赖上下文与执行过程的还原。
+
+## 哪些 Trace 值得重点沉淀
+
+更值得沉淀和复盘的 Trace 通常包括：
+
+- 高频失败样本
+- 用户反馈明显但状态显示已完成的样本
+- 耗时或 Token 明显偏离常态的样本
+- 效果特别好的正向样本
+- 代表某类边界场景的典型样本
+
+这些样本后续适合用于：
+
+- 转换为评测数据集
+- 进入智能诊断做归因对照
+- 作为优化前后的基线样本
+- 支撑 Skill、流程或提示词优化
+
+## 常见误区
+
+- 只看最终状态，不看中间 Span 和时间轴
+- 只分析失败样本，忽略高质量正向样本的参考价值
+- 在多 Agent 场景下忽略主 Agent / 子 Agent 范围
+- 看到工具报错就停止分析，没有继续回看上游触发条件
+- 只关注 Token 总量，不结合轮次、耗时和结果质量一起判断
+
+## 下一步
+
+- 想对异常执行做自动归因： [智能诊断](../diagnosis/agent-debug/diagnosis.md)
+- 想看整体健康趋势： [质量监控](quality-monitoring.md)
+- 想把典型 Trace 转成数据集： [从 Trace 回流数据项](../evaluation/datasets.md#从-trace-回流数据项)
+- 想回到运行观测总览： [运行观测](../../explanation/observability/overview.md)
+
+
+
+
+## Trace Bundle 导入与导出
+
+- 在 Trace 详情页点击「导出 Trace」，下载的是版本化 Trace Bundle。即使当前打开的是子 Agent，导出范围仍是根 Trace 与全部子 Agent 节点。
+- 在链路追踪列表右上角点击「导入 Trace」，选择平台导出的 JSON 文件。导入上限为 50 MB、500 个执行节点。
+- 导入归属当前用户。原 Execution ID、task ID 没有冲突时保持不变；只有目标库中已存在的 ID 才会生成新 ID，并同步改写父子关系与 session 引用。OTel trace/span ID 保持原值。
+- 成功弹窗会显示文件名、原 Trace ID、新 Trace ID、节点数和 ID 重映射数量，可直接打开导入后的 Trace。原、新 Trace ID 无论是否发生冲突都会显示；弹窗不展开完整 ID 重映射明细。
+- Bundle 只迁移 Trace 展示所需的 Execution、Session 与 interactions；不会迁移用户标签、评测结果、智能诊断报告或基础设施关联，也不会自动触发 LLM 评测。
+
+
+## 自定义 Agent Trace 合并与协作图
+
+本功能按增量关系事件建立独立协作图。用户只需调用一个新上报接口：`POST /api/ingest/collaborations/events`。**普通自定义协作不用先登记参与者，不用调用 sessions 绑定接口，没有原 Trace 也能显示节点和关系。** 成员 Trace 唯一关联且完整可读后，链路追踪列表只保留一个合并入口；详情展示全部成员，原始数据库记录保持不变。已有绑定仍然有效，Goal Plus 采集器的专用 main/worker 绑定和实时合并规则继续保留。
+
+### 1. 最小请求：没有 Trace 也可使用
+
+请求头：`Content-Type: application/json`、`x-witty-api-key: <你的采集凭据>`。
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "eventId": "event-001",
+  "fromSessionId": "session-a",
+  "toSessionId": "session-b",
+  "description": "A 启动 B 做调研"
+}
+```
+
+第一次保存返回 201；同 eventId、同正文重试返回 200/duplicate。同 eventId 修改正文返回 409，不能覆盖。每次新联系使用新的 eventId，网络失败或响应丢失时保存并重发原编号和原正文。多个执行端共享同一 collaborationId，但必须属于同一授权账号。
+
+首次出现的 from/to 自动成为图中节点。A→B、B→C、C→A 都可以保留；同一对会话多次联系不会合成一条事件。description 只是用户说明，“返回结果”“发送消息”不会被当作新建子 Agent 的依据。
+
+### 2. 可选内容和步骤定位
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "eventId": "event-002",
+  "fromSessionId": "session-a",
+  "toSessionId": "session-c",
+  "description": "启动方案 Agent",
+  "content": "根据调研结果整理方案",
+  "observedAt": "2026-09-16T10:00:00+08:00",
+  "fromLocator": { "recordType": "shell", "commandContains": "agent-run --task plan" }
+}
+```
+
+工具名匹配改用 `{"recordType":"tool","name":"spawn_agent"}`。可选字段省略即可，不传 null。fromLocator 只读取发起方已采集的工具/Shell 记录，不执行命令，也不要求用户提供 spanId。工具名精确匹配，命令按字面包含；唯一匹配用于将子 Agent 挂到对应步骤，页面标注“候选步骤”以保留证据强弱。
+
+| 定位结果 | 页面含义 |
+|---|---|
+| not_provided | 未配置定位且无明确记录依据，保留会话关系 |
+| waiting_trace | 发起方 Trace 尚未唯一关联 |
+| not_found | 原 Trace 没有匹配记录，成员并列展示 |
+| candidate | 名称/命令唯一匹配，挂载到该步骤并标注候选 |
+| ambiguous | 多个候选或匹配依据有歧义 |
+| confirmed | 原始调用记录明确包含目标会话编号 |
+| time_ordered | 满足完整分组、数量、执行时间及可信时钟等条件的顺序推定，可能随迟到数据变化 |
+| pending | 查询暂不可用或超过单次解析容量 |
+
+只有存在可信执行端时钟依据时才进行组内时间推定。仅传 observedAt 不证明跨机器时钟已同步；当前无已知时钟依据时保留候选/歧义，并显示原因。不按接收顺序、最近时间或 Agent 名称猜测步骤。
+
+### 3. 如何关联原 Trace
+
+fromSessionId/toSessionId 优先复用框架原有会话编号。平台仅在当前账号内，精确匹配 `Session.taskId` 或 `Execution.taskId / agentSessionId`；唯一对应一个 Trace 才关联，多个对应则提示歧义。编号不相同且无明确映射时不会猜测。
+
+没有 Trace 时仍展示关系和上报内容，节点说明执行详情尚未关联；Trace 后续到达，点击刷新即可补齐。历史 `/sessions` 绑定接口保留兼容老接入，但不是新接入的必需步骤。这个事件接口不上传完整工具执行正文，也不会凭空生成输入输出。
+
+### 4. 页面入口与操作
+
+链路追踪列表右上角点击 **协作图**，进入 `/observe/collaborations`，选择协作编号。也可以直接打开 `/observe/collaborations/<collaborationId>`。
+
+- 点击节点：查看会话编号和 Trace 关联状态；已关联时可打开原 Trace，或读取执行原文。
+- 点击箭头或下方事件：查看完整说明、上报内容、发生/接收时间、来源、fromLocator 和位置依据。明确/时间推定位置可打开对应步骤原文；唯一候选步骤可挂载子 Agent，并保留候选标识。
+- 同向多条联系分别画线，并在事件列表完整列出；循环、自联系、多父级都保留。
+- 默认每次加载 100 条上报事件，点击“加载更多”继续；刷新重新计算节点、自动关系和定位状态。
+- 图的位置不代表执行顺序；合并 Trace 内没有唯一调用位置的成员并列展示，排序使用 observedAt，缺失时使用接收时间，此顺序不作为真实调用证据。始终显示“任务结束状态未知”。
+
+已有 Trace 无需上报事件：在 Trace 详情点击 **调用关系图**，平台按原始 task/spawn_agent/subagent 调用中明确的目标会话编号画图，保留真实多层关系。不采用 Agent 类型/FIFO 兜底作为确认依据。原始调用与上报事件有唯一明确对应时合并来源；仅双方相同不会合并事件。
+
+### 5. 查询、日志与限制
+
+携带相同 API Key 查询：
+
+- `GET /api/observe/collaborations?limit=50`：协作列表，按 nextCursor 分页。
+- `GET /api/observe/collaborations/demo-task-001?offset=0&limit=100`：分页上报 events、nodes、只读 automaticEvents 和定位结果。
+- `GET /api/observe/collaborations/native?traceTaskId=<会话编号>`：已有 Trace 的明确调用图，不写入协作事件。
+
+请求体最大 64 KiB，description 最多 500 字符，content 最多 4000 字符；不接受未知字段、重复 JSON 键或错误类型。单实例每用户每分钟最多 120 次关系接口请求，429 按 Retry-After 原样重试。单组最多解析 2000 条事件、200 个会话，正文累计 32 MiB、调用 100000 条；超限保留分页关系并标注解析不完整，不能将不完整数据用于排序。
+
+运行 `bash scripts/develop_start.sh` 或 `bash scripts/start.sh` 后，日志位于仓库根目录 **server.log**。搜索 `collaboration` 或响应头 `x-collaboration-request-id`，可看到操作、账号、协作/事件编号、HTTP 状态、定位结果和失败原因。401 检查凭据；400 检查字段；409 检查是否修改了重试正文；500 检查数据库和启动迁移日志。201 只表示事件保存成功，不表示步骤已经明确定位。
+
+日志不记录 API Key、上报正文或 Shell 命令。服务端默认只输出 error；设置 `AGENT_INSIGHT_LOG_LEVEL=info`（或 `debug`）才能查看成功记录；启动脚本会覆盖 server.log，需留存时先备份。两个脚本继续自动执行已有 schema 同步与客户端生成；本轮独立协作图不新增数据库表。
+
+
+协作图有两个入口：Trace 详情的“调用关系图”展示该 Trace 可自动解析的原生调用；Trace 列表的“协作图”进入协作列表，选择上报的 `collaborationId` 后查看完整上报关系。成员 Trace 就绪后，链路列表只展示一个合并入口（复用首个无调用父级的成员 taskId），详情包含全部成员：定位唯一时挂到对应调用步骤，否则按关系的 observedAt（缺失时为接收时间）并列展示。循环和回传联系保留在协作图中，不生成循环的 Trace 树。普通协作成员缺失、身份歧义、无权读取、正文为空、已有原生子记录、Langfuse 专用树或超过容量时，保留相关原 Trace 列表入口，避免隐藏无法展示的数据；Goal Plus 已声明 worker 的等待规则见前文。返回列表时会重新加载数据，无需手动刷新页面。 MCTS 与 Goal Plus 的合并容量按单个协作组判断，账号历史会话或协作组总数超过 200 不会拆开原有主子 Trace。某组超限或解析失败时，仅该组及共享 Trace 的关联组暂时保留独立入口，其他组正常展示；Goal Plus 正常等待正文的 worker 仍按前文规则处理。

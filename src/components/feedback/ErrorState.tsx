@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/components.md §2 E.8 — explicit error state with title + description + retry.
+// design/components.md §2 E.8 — explicit error state with title + description + retry.
 import * as React from 'react';
 import { AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
