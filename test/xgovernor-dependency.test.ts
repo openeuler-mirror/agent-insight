@@ -238,7 +238,7 @@ test('model preflight timeout is compiled as 60 seconds; older builds rebuild an
   const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
   delete manifest.build.modelPreflightTimeoutSeconds
   fs.writeFileSync(file, JSON.stringify(manifest))
-  assert.throws(() => f.manager.status(), /60 秒.*重新执行客户端安装命令/)
+  assert.throws(() => f.manager.status(), /60 秒.*向导第二步.*重建 xGovernor.*重装客户端不会自动重建/)
   assert.equal((await f.manager.update('v1')).changed, true)
   assert.equal(f.manager.status().build.modelPreflightTimeoutSeconds, 60)
   assert.notEqual(f.manager.status().directory, old.directory)

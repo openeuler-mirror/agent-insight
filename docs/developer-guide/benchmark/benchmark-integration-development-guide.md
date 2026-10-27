@@ -606,6 +606,8 @@ xiaoo 的 max_tokens/context_window 映射到 capabilities，reasoning_effort �
 
 受管理构建在 Cargo 编译前，仅将 `apps/runtime-xiaoo/src/model.rs` 中现有会话模型探测的超时从 10 秒调整为 60 秒；探测请求、执行阶段及页面 Agent 时限不变。`installation.json.build.modelPreflightTimeoutSeconds` 记录该值，缺少或不匹配时要求同一上游 revision 重建，防止复用旧的 10 秒二进制。补丁严格匹配现有探测调用，源码布局不兼容则中止安装并保留原版本；手动配置的 xGovernor 二进制需自行同步该修改。向导环境检查仍只读取配置和依赖，不新增真实模型探测。
 
+`install-ras-client.js` 仅调用 `saveSetupContext()`，客户端重装不触发 xGovernor 构建。旧构建修复由新建实验向导的 `prepareSandbox()` → `installSelectedBackend()` 发起，也可手动运行客户端 Runtime 下的 `xgovernor.cjs update --version <COMPATIBLE_REVISION>`；对旧实验直接重试会校验冻结 Profile，不运行自动安装。
+
 xiaoo 凭据由安装时构建的 `insight-xiaoo-credentials` 解析：从 `cargo metadata --locked` 定位 xGovernor 实际锁定的 xiaoO 源码，直接编译其 `SecretProvider`，链接同一源码的 `vault` 与 `llm-client`，不在 JS 中复制解密算法。桥接读取原有 config.toml，默认采用 active_profile，实验显式模型优先匹配启用的 provider/model 配置；凭据引用采用显式 api_key_env 或原生 provider 默认值。按原生顺序读取同目录 llm_secrets.json 的 api_keys、tokens，再回退环境变量，使用原生白盒/SDF 实现；损坏库不会悄悄回退到另一 Key，也不修改原配置或凭据库。桥接用 stdin 接收配置路径和模型选择，fd3 返回本次模型与凭据，stdout/stderr 丢弃；不发送模型请求、不启动原生服务。桥接使用独立 Cargo manifest/lock，首次解析复用上游现有锁文件，不改动 xGovernor 原始 manifest/lock；components.xiaooCredentials 记录桥接版本及原生源码来源。新增制品进入安装清单和 artifactDigest，即使上游 commit 相同，缺失或版本不兼容也需重跑 curl 自动重建。修改桥接实现时应同步递增 BRIDGE_VERSION。手动安装需在 worker 同目录提供该二进制。
 
 凭据诊断区分 `MODEL_CREDENTIAL_MISSING`、`MODEL_CREDENTIAL_STORE_UNREADABLE`、`MODEL_CREDENTIAL_ADAPTER_UNAVAILABLE`；配置错误仍用 `MODEL_CONFIGURATION_INVALID`。跨登录 Shell 的私有解析进程保留这些错误码，公开消息仅采用固定原因和合法的凭据引用名，不回传原始解析/解密异常。Case 详情和列表显示具体原因及处理方式，明确本地失败尚未发出模型请求。原生允许免 Key 而当前 xGovernor 会话协议要求非空凭据的模型，明确报适配限制，不注入虚构 Key。Pi 保留 SDK ModelRuntime/ModelRegistry 解析及 OAuth/订阅限制。MCTS 仍使用自身已配置的服务环境与 XGOVERNOR_LLM_KEY_ENV 引用，不接入这个凭据读取过程。

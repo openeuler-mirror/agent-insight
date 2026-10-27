@@ -38,7 +38,7 @@ function readRelease(root, id, target = { platform: process.platform, arch: proc
     || !/^sha256:[a-f0-9]{64}$/.test(manifest.artifactDigest) || manifest.compatibility?.contract !== 'agent-insight-xgovernor/v1') throw new Error('安装清单、协议或目标架构不兼容')
   if (manifest.build?.layoutVersion !== BUILD_LAYOUT_VERSION) throw new Error('旧安装未在最终版本目录构建；请重新执行客户端安装命令以重建 xGovernor')
   if (manifest.build.sourceDirectory !== fs.realpathSync(path.join(directory, 'source'))) throw new Error('安装目录已移动，与编译时路径不一致；请重新执行客户端安装命令以重建 xGovernor')
-  if (manifest.build.modelPreflightTimeoutSeconds !== MODEL_PREFLIGHT_TIMEOUT_SECONDS) throw new Error('安装未包含 xiaoO 模型预检 60 秒时限；请重新执行客户端安装命令以重建 xGovernor')
+  if (manifest.build.modelPreflightTimeoutSeconds !== MODEL_PREFLIGHT_TIMEOUT_SECONDS) throw new Error('安装未包含 xiaoO 模型预检 60 秒时限；请在新建实验向导第二步重新准备环境以重建 xGovernor，重装客户端不会自动重建')
   if (manifest.components?.xiaooCredentials?.version !== BRIDGE_VERSION) throw new Error('安装缺少 xiaoO 原生凭据桥接；请重新执行客户端安装命令以重建')
   const resolve = name => {
     const value = manifest.artifacts?.[name]
