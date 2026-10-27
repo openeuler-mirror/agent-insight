@@ -367,7 +367,10 @@ OpenCode 跨大版本升级或降级后，重新执行安装命令并重启 Open
 模型地址或请求路由。
 
 OpenCode 1.x 继续安装原有 TUI 附件和 Agent RAS，使用当前登录账号 API Key；
-2.x 暂只支持 Trace 采集，跳过不兼容的 1.x TUI 附件和 OpenCode RAS 插件。
+2.x 支持 Trace 采集和普通数据集「生成 Trace」，跳过不兼容的 1.x TUI 附件和 OpenCode RAS 插件。
+生成 Trace 还需要常驻客户端注册成功、在线并发现可用 Agent；仅出现 `Telemetry: READY` 不代表这些条件已经满足。
+更新服务端后，请重新执行当前账号的一键接入命令以更新常驻客户端，再刷新实验页面。
+Skill 冻结快照和只读触发分析继续使用 1.x；2.x 不声明这些能力。
 若从已安装 RAS 的 1.x 环境升级，安装脚本会检测全局插件目录及 `opencode.json` / `opencode.jsonc` 中的旧 RAS 引用，
 发现残留时显示备份与迁移提示；`install-ras --check` 也会明确报告 OpenCode 2.x 不支持 RAS，而不会将其显示为已就绪。
 旧文件和用户配置会保留：请先备份提示的 OpenCode 配置及插件目录，再移走 `plugins/agent-insight-ras.js`，
@@ -376,7 +379,7 @@ OpenCode 1.x 继续安装原有 TUI 附件和 Agent RAS，使用当前登录账�
 之后重启 Agent Insight 只会同步平台地址，不会把客户端身份覆盖成内部 `admin` 账号。
 
 2.x 已用 OpenCode 2.0.32 在 macOS ARM64 和本地模拟模型服务验证多次调用、并发子 Agent 与失败重试的
-采集数据。其他 2.x 版本及 Windows 原生运行仍需对应环境验证；脚本的版本选择不等于所有版本均已实测。
+采集数据；普通数据集生成 Trace 已在 Linux/WSL 使用 1.14.39、2.1.4 和本地模拟模型验证执行、上传、Case 绑定、取消与失败回报。其他版本及 Windows 原生运行仍需对应环境验证；脚本的版本选择不等于所有版本均已实测。
 
 你也可以选择 **OpenClaw**。安装脚本会生成一个同名命令包装函数，在调用原始 `openclaw` 命令时注入 OTel 环境变量；OpenClaw 仍直接访问自己的模型供应商，Agent Insight 只接收遥测数据，不代理模型请求。
 

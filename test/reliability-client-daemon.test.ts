@@ -399,7 +399,7 @@ test('capabilities and FI inventory agree on readiness', () => {
   assert.equal(caps.faultInjection.note, inv.platforms.opencode.note)
 })
 
-test('OpenCode remains executable with its built-in build agent when inventory is unavailable', () => {
+test('OpenCode does not invent a build agent when inventory is unavailable', () => {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-fallback-bin-'))
   const previousPath = process.env.PATH
   const executable = path.join(binDir, 'opencode')
@@ -412,7 +412,7 @@ test('OpenCode remains executable with its built-in build agent when inventory i
       { refresh: true },
     )
     const opencode = caps.platforms.find((platform) => platform.id === 'opencode')
-    assert.deepEqual(opencode?.agents, ['build'])
+    assert.deepEqual(opencode?.agents, [])
   } finally {
     process.env.PATH = previousPath
     fs.rmSync(binDir, { recursive: true, force: true })
@@ -684,8 +684,9 @@ test('OpenCode execution terminates early on idle, structured error, and first-r
   fs.writeFileSync(executable, `#!/usr/bin/env node
 if (process.argv.includes('debug')) { console.log(JSON.stringify({provider:{fixture:{options:{apiKey:'fixture-key'}}},model:'fixture/model'})); process.exit(0); }
 if (process.argv[2] === 'models') { console.log('fixture/model'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log('1.14.39'); process.exit(0); }
 if (process.argv.includes('--help')) {
-  console.log('opencode run --format json')
+  console.log('opencode run --format json --agent --model --title --command')
   process.exit(0)
 }
 const mode = process.env.OPENCODE_SIGNAL_TEST_MODE
@@ -991,6 +992,7 @@ test('Agent diagnostics redact common JSON, environment, query, bearer, and bare
 test('client advertises Trace-ID-safe generic execution only for supported platforms', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-old-xiaoo-'))
   const previousPath = process.env.PATH
+  fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nconsole.log(process.argv.includes('--version') ? '1.14.39' : 'run --format json --agent --model --title --command')\n`, { mode: 0o755 })
   fs.writeFileSync(path.join(root, 'xiaoo'), `#!${process.execPath}\nconsole.log('legacy --agent only')\n`, { mode: 0o755 })
   process.env.PATH = `${root}:${previousPath || ''}`
   try {
@@ -1000,7 +1002,8 @@ test('client advertises Trace-ID-safe generic execution only for supported platf
     )
     const opencode = caps.platforms.find((platform) => platform.id === 'opencode')
     const xiaoo = caps.platforms.find((platform) => platform.id === 'xiaoo')
-    assert.deepEqual(opencode?.runExperimentCase, { version: 2, returnsTraceId: true, skillSnapshotVersion: 4 })
+    assert.equal(opencode?.runExperimentCase?.returnsTraceId, false)
+    assert.equal((opencode?.runExperimentCase as { ready?: boolean })?.ready, false)
     assert.equal(xiaoo?.runExperimentCase?.returnsTraceId, false)
   } finally {
     if (previousPath === undefined) delete process.env.PATH
@@ -1168,6 +1171,39 @@ test('systemd preflight rejects an unprivileged legacy migration before registra
     source.indexOf('preflightSystemd(systemdTarget)') < source.indexOf('await register({'),
     'systemd 可用性必须在设备凭证轮换前检查',
   )
+})
+
+test('systemd fills missing user bus variables only for the current UID and preserves explicit settings', () => {
+  const { systemdEnvironment } = require_('../scripts/install-ras-client.js')
+  const statSync = (file: string) => ({ uid: 1001,
+    isDirectory: () => file === '/run/user/1001' || file === '/custom/runtime',
+    isSocket: () => file === '/run/user/1001/bus' || file === '/custom/runtime/bus',
+  })
+  const env = { PATH: '/usr/bin', SUDO_UID: '2000' }
+  const expected = { ...env, XDG_RUNTIME_DIR: '/run/user/1001', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1001/bus' }
+  assert.deepEqual(systemdEnvironment('user', { env, uid: 1001, statSync }), expected)
+  assert.deepEqual(env, { PATH: '/usr/bin', SUDO_UID: '2000' })
+  assert.deepEqual(systemdEnvironment('system', { env, uid: 1001, statSync }), env)
+  assert.deepEqual(systemdEnvironment('user', { env, uid: null, statSync }), env)
+  assert.equal(systemdEnvironment('user', { env: { XDG_RUNTIME_DIR: '/custom/runtime' }, uid: 1001, statSync }).DBUS_SESSION_BUS_ADDRESS, 'unix:path=/custom/runtime/bus')
+  assert.equal(systemdEnvironment('user', { env: { DBUS_SESSION_BUS_ADDRESS: 'unix:abstract=custom' }, uid: 1001, statSync }).DBUS_SESSION_BUS_ADDRESS, 'unix:abstract=custom')
+  const explicit = { XDG_RUNTIME_DIR: '/custom/runtime', DBUS_SESSION_BUS_ADDRESS: 'unix:abstract=custom' }
+  assert.deepEqual(systemdEnvironment('user', { env: explicit, uid: 1001, statSync: () => { throw new Error('must not inspect explicit settings') } }), explicit)
+  for (const inspect of [
+    () => { throw new Error('ENOENT') },
+    () => ({ uid: 2000, isDirectory: () => true, isSocket: () => true }),
+    () => ({ uid: 1001, isDirectory: () => true, isSocket: () => false }),
+  ]) assert.deepEqual(systemdEnvironment('user', { env, uid: 1001, statSync: inspect }), env)
+})
+
+test('missing systemd user manager remains a pre-registration failure with actionable guidance', () => {
+  const result = installer.preflightSystemd?.(
+    { scope: 'user', uid: 1001, unitPath: '/fixture/user.service', legacySystemUnit: false },
+    () => ({ status: 1, stderr: 'Failed to connect to bus: No medium found' }),
+  )
+  assert.equal(result?.ok, false)
+  assert.match(result?.detail || '', /No medium found/)
+  assert.match(result?.detail || '', /systemd user manager.*\/run\/user\/1001\/bus/)
 })
 
 test('system-level unit uses multi-user target while user unit keeps default target', () => {

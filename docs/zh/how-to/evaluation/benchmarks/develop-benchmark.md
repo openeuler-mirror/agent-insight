@@ -859,6 +859,8 @@ Presentation 只控制公共前端的名称、顺序和有限格式，不能改�
 - `searchPaths` 使用同一组安全路径；
 - 数据集详情、创建实验和实验详情使用同一公共取值逻辑。
 
+数据集导入与实验创建在同一事务中分表批量写入 Case、Run 和初始结果，保持全有或全无；大量 Case 不逐条往返写入，以免默认事务期限被串行 I/O 消耗。
+
 私有字段不能进入 Presentation。数据集导入时会冻结字段快照，Manifest 后续变化不会静默修改已发布数据集。
 
 实验详情的 Case 明细表将执行状态集中到独立的“执行进度”列和步骤弹窗，提交物列只展示文件，不再展示参考契约列；单个 Case 详情页及 `presentation.referencePanel` 契约保持不变。阶段名称使用平台通用映射，本轮不新增 Manifest 配置。“Agent 执行”步骤读取当前 `caseRun` 的 `traceId/executionId`，唯一根 Execution 入库后在新标签页通过 `executionId + taskId` 精确打开。未收到根 ID 时显示“等待本次主 Agent 链路关联”，已收到但尚未入库时显示“主 Agent 链路上传中”，导入提交物时隐藏入口。新重试使用新的 Run，立即撤下历史链接；Case 上残留的旧 `taskId` 不参与当前执行进度关联。详情同时返回 `runId/runAttemptNo/generation/revision/evaluationAttemptNo`，前端按执行轮次、快照版本和阶段过滤迟到响应，保留同轮已确认的链路；新评测轮次允许重评。

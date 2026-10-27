@@ -205,7 +205,8 @@ presets: []
 const fs = require('node:fs')
 if (process.argv.includes('debug')) { console.log(JSON.stringify({provider:{fixture:{options:{apiKey:'fixture-key'}}},model:'fixture/model'})); process.exit(0); }
 if (process.argv[2] === 'models') { console.log('fixture/model'); process.exit(0); }
-if (process.argv.includes('--help')) process.exit(0)
+if (process.argv.includes('--version')) { console.log('1.14.39'); process.exit(0) }
+if (process.argv.includes('--help')) { console.log('--format json --agent --model --title'); process.exit(0) }
 fs.writeFileSync('actual-args.json', JSON.stringify(process.argv.slice(2)))
 for (const kind of ['ready', 'session']) fs.writeSync(3, JSON.stringify({ protocol: 1, token: process.env.AGENT_INSIGHT_EVENT_TOKEN, kind, sessionId: 'ses_runtime_parameters' }) + '\\n')
 console.log(JSON.stringify({ type: 'text', sessionID: 'ses_runtime_parameters', part: { type: 'text', text: 'done' } }))

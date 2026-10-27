@@ -38,7 +38,7 @@ describe('内置可靠性数据集只读契约', () => {
 
     assert.match(itemsPage, /disabled=\{saving \|\| isReadOnly\}/)
     assert.match(itemsPage, /disabled=\{isReadOnly\}/)
-    assert.match(datasetCenter, /disabled=\{isBuiltinReliabilityDataset\(item\) \|\| item\.readOnly \|\| item\.datasetKind === 'benchmark'\}/)
+    assert.match(datasetCenter, /disabled=\{deletingId === item\.id \|\| item\.generationStatus === 'generating' \|\| isBuiltinReliabilityDataset\(item\) \|\| item\.readOnly \|\| item\.datasetKind === 'benchmark'\}/)
     assert.match(datasetRoute, /if \(isBuiltinReliabilityDataset\(current\)\)/)
     assert.match(datasetRoute, /status: 403/)
     assert.match(backflowRoute, /if \(isBuiltinReliabilityDataset\(current\)\)/)

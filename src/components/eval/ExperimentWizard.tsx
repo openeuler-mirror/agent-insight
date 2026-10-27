@@ -99,6 +99,7 @@ interface AgentTargetOption {
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
   supportsGenericTrace: boolean;
+  supportsSkillSnapshot?: boolean;
   supportsTriggerRouting?: boolean;
   supportsFaultInjection: boolean;
   supportsBenchmark: boolean;
@@ -546,6 +547,7 @@ export function ExperimentWizard({
     : defaultExperimentName());
   const [agentName, setAgentName] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [traceGenerationDiagnostics, setTraceGenerationDiagnostics] = useState<Array<{ clientId?: string; host?: string; platform?: string; code: string; message: string }>>([]);
   const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
   const [wizardDatasetsLoaded, setWizardDatasetsLoaded] = useState(false);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
@@ -678,7 +680,7 @@ export function ExperimentWizard({
         ? target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '') || target.preparableBenchmarkKeys?.includes(selectedDataset?.benchmark?.adapterKey || '')
         : isReliabilityDataset
           ? target.supportsFaultInjection || (target.supportsEnvironmentPreparation && ['opencode', 'xiaoo'].includes(target.platform))
-          : target.supportsGenericTrace).map(target => {
+          : target.supportsGenericTrace && (skillPreset !== 'skill-ab' || target.supportsSkillSnapshot)).map(target => {
             const environment = isBenchmarkDataset ? target.benchmarkEnvironments?.[selectedDataset?.benchmark?.adapterKey || ''] : null;
             return environment ? { ...target, executionProfile: environment.profile, models: environment.models } : target;
           }),
@@ -745,7 +747,10 @@ export function ExperimentWizard({
     if (!response.ok) throw new Error('Agent 列表刷新失败');
     const data = await response.json();
     const updated: AgentOption[] = Array.isArray(data?.agents) ? data.agents : [];
-    if (agentsRequestIdRef.current === requestId) setAgents(updated);
+    if (agentsRequestIdRef.current === requestId) {
+      setAgents(updated);
+      setTraceGenerationDiagnostics(Array.isArray(data?.traceGenerationDiagnostics) ? data.traceGenerationDiagnostics : []);
+    }
     return updated;
   }, [user]);
 
@@ -1980,6 +1985,13 @@ export function ExperimentWizard({
                   <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
                     候选项为具有历史 Trace 的 Agent 与所有在线客户端可执行 Agent 的并集
                   </div>
+                  {agents.length === 0 && traceGenerationDiagnostics.length > 0 && (
+                    <ul aria-label="Agent 探测诊断" style={{ fontSize: 12, color: 'var(--foreground-secondary)', paddingLeft: 18 }}>
+                      {traceGenerationDiagnostics.map((item, index) => (
+                        <li key={index}>{item.host ? `${item.host}：` : ''}{item.message}</li>
+                      ))}
+                    </ul>
+                  )}
                   {agentName && !selectedAgent && (
                     <div style={{ fontSize: 10, color: 'var(--error)', marginTop: 5 }}>
                       当前 Agent 已不在最新候选中，请重新选择
@@ -2280,7 +2292,18 @@ export function ExperimentWizard({
                       ? '当前 Agent 没有满足该 Benchmark 执行要求的在线客户端，请检查客户端状态和执行目标配置。'
                     : isReliabilityDataset
                       ? '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'
-                      : '当前 Agent 没有在线且支持回传 Trace ID 的客户端，请检查客户端状态；旧客户端需要升级后才能用于普通数据集生成 Trace。'}
+                    : skillPreset === 'skill-ab'
+                      ? '当前 Agent 没有支持 Skill 冻结快照的在线客户端。OpenCode v2 当前支持普通数据集生成 Trace，此模式需要 OpenCode v1。'
+                      : '所选 Agent 当前没有可用于生成 Trace 的运行主机。请检查下方客户端诊断，或选择客户端已扫描到的 Agent。'}
+                  {!isBenchmarkDataset && !isReliabilityDataset && traceGenerationDiagnostics.length > 0 && (
+                    <ul aria-label="Trace 生成客户端诊断" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
+                      {traceGenerationDiagnostics.filter(item => !item.platform || !selectedAgent?.frameworks.length || selectedAgent.frameworks.includes(item.platform)).map((item, index) => (
+                        <li key={`${item.clientId || item.code}:${item.platform || ''}:${index}`}>
+                          {item.host ? `${item.host}${item.platform ? ` · ${item.platform}` : ''}：` : ''}{item.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {isBenchmarkDataset && unavailableBenchmarkTargets.length > 0 && (
                     <ul aria-label="Benchmark 执行环境未就绪原因" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
                       {unavailableBenchmarkTargets.map(target => (
@@ -2660,11 +2683,11 @@ export function ExperimentWizard({
                 <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('existing')}>选择 Trace</button>
                 <button
                   type="button"
-                  disabled={!selectedDataset || targetOptions.length === 0}
-                  title={!selectedDataset ? '请先在第一步选择数据集' : targetOptions.length === 0 ? '该 Agent 没有在线可执行主机' : '按数据集 Case 生成 Trace'}
-                  style={{ ...BTN_GHOST, height: 30, opacity: !selectedDataset || targetOptions.length === 0 ? 0.45 : 1, cursor: !selectedDataset || targetOptions.length === 0 ? 'not-allowed' : 'pointer' }}
+                  disabled={!selectedDataset}
+                  title={!selectedDataset ? '请先在第一步选择数据集' : targetOptions.length === 0 ? '查看生成 Trace 不可用原因' : '按数据集 Case 生成 Trace'}
+                  style={{ ...BTN_GHOST, height: 30, opacity: !selectedDataset ? 0.45 : 1, cursor: !selectedDataset ? 'not-allowed' : 'pointer' }}
                   onClick={() => {
-                    if (selectedDataset && targetOptions.length > 0) {
+                    if (selectedDataset) {
                       setTraceMode('generate');
                       setWatchMode(false);
                     }

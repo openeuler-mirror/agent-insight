@@ -26,13 +26,16 @@ test('execution concurrency validates explicit values and preserves the legacy d
   }
 });
 
-test('bounded execution overlaps jobs, refills free slots and preserves result order', async () => {
+test('bounded execution overlaps jobs, refills free slots and preserves result order', { timeout: 10_000 }, async () => {
   let active = 0, peak = 0;
   const completion: number[] = [];
-  const results = await mapConcurrent([40, 5, 5, 5], 2, async (delay, index) => {
+  let releaseFirst!: () => void;
+  const first = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const results = await mapConcurrent([0, 1, 2, 3], 2, async (_item, index) => {
     active++; peak = Math.max(peak, active);
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (index === 0) await first;
     completion.push(index); active--;
+    if (index === 3) releaseFirst();
     return index;
   });
   assert.equal(peak, 2);

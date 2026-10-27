@@ -21,7 +21,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { listWorkerExecutionTargets } from '@/lib/fault-injection/worker-protocol';
-import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
+import { listClientTraceGenerationAvailability } from '@/lib/engine/experiment/execution-targets';
 import { listBenchmarkAdapters } from '@/lib/benchmark/adapter-registry';
 import { listBenchmarkExecutionTargets } from '@/lib/benchmark/execution-targets';
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
@@ -35,7 +35,7 @@ export async function GET(req: Request) {
     const userFilter = username ? { user: username } : {};
     const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
 
-    const [grouped, faultInjectionTargets, genericTraceTargets, benchmarkTargets] = await Promise.all([
+    const [grouped, faultInjectionTargets, genericTraceAvailability, benchmarkTargets] = await Promise.all([
       prisma.execution.groupBy({
       by: ['agentName', 'framework'],
       where: {
@@ -49,7 +49,7 @@ export async function GET(req: Request) {
       take: 200,
       }),
       listWorkerExecutionTargets(username),
-      listClientTraceGenerationTargets(username),
+      listClientTraceGenerationAvailability(username),
       username
         ? Promise.all(listBenchmarkAdapters().map(async (manifest) => (
             (await listBenchmarkExecutionTargets(username, manifest)).map((target) => ({
@@ -62,6 +62,7 @@ export async function GET(req: Request) {
 
     type CandidateTarget = (typeof faultInjectionTargets)[number] & {
       supportsGenericTrace: boolean;
+      supportsSkillSnapshot?: boolean;
       supportsTriggerRouting?: boolean;
       supportsFaultInjection: boolean;
       supportsBenchmark: boolean;
@@ -112,6 +113,7 @@ export async function GET(req: Request) {
       if (existing) {
         existing.supportsGenericTrace ||= capability === 'generic';
         if (capability === 'generic') existing.parameterDefinitions = target.parameterDefinitions || [];
+        if (capability === 'generic') existing.supportsSkillSnapshot = Boolean((target as { supportsSkillSnapshot?: boolean }).supportsSkillSnapshot);
         if (capability === 'generic') existing.supportsTriggerRouting = Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting);
         existing.supportsFaultInjection ||= capability === 'fault-injection';
         existing.supportsEnvironmentPreparation ||= target.supportsEnvironmentPreparation === true;
@@ -124,6 +126,7 @@ export async function GET(req: Request) {
         current.targets.push({
           ...target,
           supportsGenericTrace: capability === 'generic',
+          supportsSkillSnapshot: capability === 'generic' && Boolean((target as { supportsSkillSnapshot?: boolean }).supportsSkillSnapshot),
           supportsTriggerRouting: capability === 'generic' && Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting),
           supportsFaultInjection: capability === 'fault-injection',
           supportsBenchmark: false,
@@ -137,7 +140,7 @@ export async function GET(req: Request) {
       }
       byName.set(name, current);
     };
-    for (const target of genericTraceTargets) {
+    for (const target of genericTraceAvailability.targets) {
       attachTarget(target, 'generic');
     }
     for (const target of faultInjectionTargets) {
@@ -210,6 +213,7 @@ export async function GET(req: Request) {
           models: target.models,
           lastSeenAt: target.lastSeenAt,
           supportsGenericTrace: target.supportsGenericTrace,
+          supportsSkillSnapshot: target.supportsSkillSnapshot,
           supportsTriggerRouting: target.supportsTriggerRouting,
           supportsFaultInjection: target.supportsFaultInjection,
           supportsBenchmark: target.supportsBenchmark,
@@ -223,7 +227,7 @@ export async function GET(req: Request) {
         })),
       }));
 
-    return NextResponse.json({ agents });
+    return NextResponse.json({ agents, traceGenerationDiagnostics: genericTraceAvailability.diagnostics });
   } catch (error) {
     console.error('[Experiment Agents Error]', error);
     return NextResponse.json({ error: 'Failed to load agents' }, { status: 500 });

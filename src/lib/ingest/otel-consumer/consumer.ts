@@ -445,7 +445,7 @@ function sessionCooldownRemaining(state: OtelSpoolConsumerState, session: Sessio
  *   1) 倍数封顶到 aggGlobalMaxWaitMs —— 慢聚合不再能把整条流水线按比例冻住;
  *   2) backlog 越过阈值进排空模式 —— 此时单飞已经把 CPU 锁在 1 核以内,再节流只会让积压更久。
  */
-function globalGateRemaining(state: OtelSpoolConsumerState, now: number): number {
+export function globalGateRemaining(state: Pick<OtelSpoolConsumerState, 'pendingFiles' | 'draining' | 'drainBacklog' | 'lastGlobalAggEndedAt' | 'lastGlobalAggCostMs' | 'aggGlobalMaxWaitMs' | 'aggGlobalFactor'>, now: number): number {
   const backlog = state.pendingFiles.size;
   if (state.draining) {
     if (backlog < state.drainBacklog / 2) state.draining = false;

@@ -82,11 +82,12 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
     }
     const name = context.platform === 'pi-agent' ? 'pi' : context.platform
     if (!which(name)) return [issue('AGENT_NOT_INSTALLED', `请在执行机安装所选 Agent（${name}），然后再次点击“下一步”。`)]
+    let runtime
     if (!options.sandbox) {
-      const runtime = client.probeExperimentRuntime(context.platform)
+      runtime = client.probeExperimentRuntime(context.platform)
       if (!runtime.ready) issues.push(issue('AGENT_TRACE_NOT_READY', '所选 Agent 的执行或链路回传组件未就绪，请重新执行该 Agent 的链路跟踪安装命令。'))
       else {
-        recordPlatform(context, { runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(context.platform === 'opencode' ? { skillSnapshotVersion: 4 } : {}) } })
+        recordPlatform(context, { runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(context.platform === 'opencode' && runtime.major === 1 ? { skillSnapshotVersion: 4 } : {}) } })
         capabilities.components[`agent-runtime/${context.platform}/v1`] = { ready: true }
       }
     }

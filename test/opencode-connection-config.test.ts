@@ -77,6 +77,27 @@ process.exit(Number(process.env.FIXTURE_EXIT || 0));
     check: (sel = selection) => checkModel(executable, sel, options) };
 }
 
+test('v2 共用同步与异步预检，执行前不会回退 v1 配置解析且保留错误分类', async t => {
+  const f = fixture(t, { data: [{ providerID: 'test', id: 'model', enabled: true }] });
+  f.env.FIXTURE_VERSION = 'opencode v2.1.4';
+  assert.deepEqual(f.check(), { model: 'test/model' });
+  assert.deepEqual(await checkModelAsync(f.executable, selection, f.options), { model: 'test/model' });
+  f.write(f.outputFile, { data: { providerID: 'test', id: 'other', enabled: true } });
+  assert.deepEqual(await checkModelAsync(f.executable, { agent: 'build' }, f.options), { model: 'test/other' });
+  f.write(f.outputFile, { data: [] });
+  await assert.rejects(checkModelAsync(f.executable, selection, f.options), { code: 'MODEL_UNAVAILABLE' });
+  f.write(f.outputFile, { data: null });
+  await assert.rejects(checkModelAsync(f.executable, { agent: 'build' }, f.options), { code: 'MODEL_CONFIGURATION_MISSING' });
+  f.write(f.outputFile, 'private-test-token');
+  await assert.rejects(checkModelAsync(f.executable, selection, f.options), (error: any) => {
+    assert.equal(error.code, 'MODEL_CONFIGURATION_UNREADABLE');
+    assert(!error.message.includes('private-test-token'));
+    return true;
+  });
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert(calls.every(call => call.args[0] === '--version' || (call.args[0] === 'api' && call.args[1] === '--standalone')));
+});
+
 test('公共预检解析原始认证、读取原生模型目录，返回结果和错误不携带凭据', t => {
   const f = fixture(t);
   assert.deepEqual(f.check(), { model: 'test/model' });
@@ -194,7 +215,7 @@ test('普通、Skill 和 Benchmark 的环境适配器复用公共检查；执行
     await assert.rejects(client.runExperimentCase({ clientId: 'test', workspaceBase: f.cwd }, { platform: 'opencode', agent: 'build', model: 'test/model', input: 'test', skillExecution }), (error: any) => error.code === 'MODEL_UNAVAILABLE' && /模型目录/.test(error.message));
   }
   } finally { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-  assert(fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).every(call => !call.args.includes('run')));
+  assert(fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).every(call => !call.args.includes('run') || call.args.includes('--help')));
 });
 
 test('恢复原始 Key、嵌套 headers 和 URL，保留模型、普通 *** 提示词及隔离权限', t => {

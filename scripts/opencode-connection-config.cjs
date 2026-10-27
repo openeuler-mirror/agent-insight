@@ -297,6 +297,25 @@ function readOpenCodeConfig(executable, options = {}) {
   return parseOpenCodeConfigOutput(privateCommand(executable, ['debug', 'config'], contextFor(options)))
 }
 
+function checkOpenCodeV2Model(executable, selected, options = {}) {
+  let data
+  try {
+    const output = privateCommand(executable, ['api', '--standalone', selected ? 'model.list' : 'model.default'], contextFor(options))
+    data = JSON.parse(output).data
+    const valid = model => record(model) && typeof model.providerID === 'string' && typeof model.id === 'string' && typeof model.enabled === 'boolean'
+    if (selected ? !Array.isArray(data) || !data.every(valid) : data !== null && !valid(data)) throw new Error('invalid model response')
+  } catch {
+    throw Object.assign(new Error('无法读取 OpenCode v2 的原生模型目录，请使用客户端运行账号执行 opencode api --standalone model.list，检查配置、插件加载和客户端日志后重试。'), { code: 'MODEL_CONFIGURATION_UNREADABLE' })
+  }
+  const model = selected ? data.find(item => `${item.providerID}/${item.id}` === selected) : data
+  if (!model?.enabled) {
+    throw Object.assign(new Error(selected
+      ? '执行机 OpenCode v2 的可用模型目录中没有所选模型，请使用客户端运行账号检查 provider 认证、模型是否启用及模型 ID；更新后重新选择模型并点击“下一步”。'
+      : '执行机 OpenCode v2 没有可用的默认模型，请配置并启用模型，或为实验选择可用模型。'), { code: selected ? 'MODEL_UNAVAILABLE' : 'MODEL_CONFIGURATION_MISSING' })
+  }
+  return { model: `${model.providerID}/${model.id}` }
+}
+
 function loadOpenCodeConnectionConfig(executable, selection, options = {}) {
   const context = contextFor(options)
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -341,6 +360,8 @@ function assertNoMaskedConnections(config, selection) {
 function checkOpenCodeModelConfig(executable, selection, options = {}) {
   selection = { ...selection, agent: selection.agent || 'build' }
   const context = contextFor(options)
+  const version = privateCommand(executable, ['--version'], context, '版本').trim()
+  if (/^(?:opencode\s+)?v?2\./i.test(version)) return checkOpenCodeV2Model(executable, selection.model, context)
   const config = loadOpenCodeConnectionConfig(executable, selection, { ...options, modelOnly: true })
   const model = selectedModel(config, selection)
   const split = model.indexOf('/')
@@ -435,7 +456,9 @@ function checkOpenCodeModelConfigAsync(executable, selection, { cwd, env, signal
       if (stoppedError) return finish(stoppedError)
       let result
       try { result = JSON.parse(output) } catch { return finish(configError('模型配置检查中断或返回无效结果')) }
-      if (result.error) return finish(Object.assign(new Error(result.error), { code: 'MODEL_UNAVAILABLE' }))
+      if (result.error) return finish(Object.assign(new Error(result.error), {
+        code: ['MODEL_CONFIGURATION_UNREADABLE', 'MODEL_CONFIGURATION_MISSING'].includes(result.code) ? result.code : 'MODEL_UNAVAILABLE',
+      }))
       if (code) return finish(configError('模型配置检查失败'))
       if (typeof result.model !== 'string') return finish(configError('模型配置检查未返回模型标识'))
       finish(null, result)
@@ -445,7 +468,7 @@ function checkOpenCodeModelConfigAsync(executable, selection, { cwd, env, signal
   })
 }
 
-module.exports = { loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, checkOpenCodeModelConfig, checkOpenCodeModelConfigAsync, parseJsonc }
+module.exports = { loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, checkOpenCodeV2Model, checkOpenCodeModelConfig, checkOpenCodeModelConfigAsync, parseJsonc }
 
 if (require.main === module && process.argv[2] === '--check-model') {
   let input = ''
@@ -455,7 +478,8 @@ if (require.main === module && process.argv[2] === '--check-model') {
       const { executable, selection, temporaryRoot } = JSON.parse(input)
       process.stdout.write(JSON.stringify(checkOpenCodeModelConfig(executable, selection, { temporaryRoot })))
     } catch (error) {
-      process.stdout.write(JSON.stringify({ error: error.code === 'MODEL_UNAVAILABLE' ? error.message : '无法确认 OpenCode 模型配置，请检查客户端运行环境' }))
+      const known = ['MODEL_UNAVAILABLE', 'MODEL_CONFIGURATION_UNREADABLE', 'MODEL_CONFIGURATION_MISSING'].includes(error.code)
+      process.stdout.write(JSON.stringify({ error: known ? error.message : '无法确认 OpenCode 模型配置，请检查客户端运行环境', code: known ? error.code : 'MODEL_UNAVAILABLE' }))
       process.exitCode = 1
     }
   })

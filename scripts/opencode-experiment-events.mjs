@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { writeSync } from 'node:fs'
+import { appendFileSync, writeSync } from 'node:fs'
 import diagnostics from './agent-run-diagnostics.cjs'
 
 export default async function InsightExperimentEvents() {
@@ -26,7 +26,11 @@ export default async function InsightExperimentEvents() {
   let modelReported = false
   let routeCompleted = false
   const send = (value) => {
-    try { writeSync(3, JSON.stringify({ protocol: 1, token, ...value }) + '\n') } catch {}
+    try {
+      const line = JSON.stringify({ protocol: 1, token, ...value }) + '\n'
+      if (process.env.AGENT_INSIGHT_EVENT_FILE) appendFileSync(process.env.AGENT_INSIGHT_EVENT_FILE, line)
+      else writeSync(3, line)
+    } catch {}
   }
   send({ kind: 'ready' })
   return {
