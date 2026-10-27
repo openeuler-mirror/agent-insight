@@ -1,3 +1,10 @@
+---
+title: "Agent RAS：本机安装过程详解"
+description: "说明 Agent RAS 安装器的执行流程、平台挂载、本机目录结构和安装验收方法。"
+keywords: ["Agent RAS", "客户端安装", "平台适配", "安装排障"]
+changefreq: monthly
+---
+
 # Agent RAS：本机安装过程详解
 
 > **读者**：需要理解「执行安装命令后，用户机器上发生了什么」的使用者与排障者。  

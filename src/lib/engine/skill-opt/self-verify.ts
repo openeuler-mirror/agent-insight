@@ -105,9 +105,12 @@ async function scoreCase(
   skillName: string,
   version: number,
   c: DatasetCase,
+  signal?: AbortSignal,
 ): Promise<{ score: number; reason: string } | null> {
   try {
+    signal?.throwIfAborted();
     const res = await runGeneralAgent({
+      cancelSignal: signal,
       user,
       query: c.input,
       skill: skillName,
@@ -115,11 +118,14 @@ async function scoreCase(
       ephemeralServer: true, // 后台批量须 true，保证拿到刚部署的候选（含临时负版本）
       interactionPolicy: 'auto-allow',
     });
+    signal?.throwIfAborted();
     const output = res.output || '';
     if (output.trim().length < 5) return null;
     const v = await judgeAnswer(c.input, criteriaOf(c), output, user);
     return { score: v.score, reason: v.reason || '' };
   } catch (e) {
+    if (e instanceof Error && e.message.includes('停止 OpenCode 执行未确认')) throw e;
+    signal?.throwIfAborted();
     console.warn('[self-verify] scoreCase failed (treat as skip):', (e as Error)?.message?.slice(0, 120));
     return null;
   }
@@ -132,11 +138,12 @@ async function baselineScore(
   skillId: string,
   baseVersion: number,
   c: DatasetCase,
+  signal?: AbortSignal,
 ): Promise<{ score: number; reason: string } | null> {
   const key = `${skillId}:${baseVersion}:${c.id}`;
   const hit = baselineMemo.get(key);
   if (hit) return hit;
-  const r = await scoreCase(user, skillName, baseVersion, c);
+  const r = await scoreCase(user, skillName, baseVersion, c, signal);
   if (r) baselineMemo.set(key, r);
   return r;
 }
@@ -150,6 +157,7 @@ export interface BehavioralArgs {
   candidateFiles: Record<string, string>; // 技能根相对（SKILL.md 在根）
   cases: DatasetCase[];                    // 已选好的代表性子集
   budgetYuan?: number;
+  signal?: AbortSignal;
   onProgress?: (msg: string) => void;
 }
 
@@ -163,14 +171,15 @@ export async function verifyBehavioral(args: BehavioralArgs): Promise<Behavioral
   let rollouts = 0;
   try {
     for (const c of cases) {
+      args.signal?.throwIfAborted();
       if (args.budgetYuan != null && rollouts * EST_YUAN_PER_ROLLOUT >= args.budgetYuan) {
         onProgress?.(`自验证预算软门（~¥${args.budgetYuan}）触发，停在 ${perCase.length}/${cases.length} 例`);
         break;
       }
       onProgress?.(`行为重评 ${c.id.slice(0, 8)}（${perCase.length + 1}/${cases.length}）…`);
-      const base = await baselineScore(user, skillName, skillId, baseVersion, c);
+      const base = await baselineScore(user, skillName, skillId, baseVersion, c, args.signal);
       if (!baselineMemo.has(`${skillId}:${baseVersion}:${c.id}`)) rollouts++; // 仅未命中缓存才算花了 rollout
-      const cand = await scoreCase(user, skillName, candV, c);
+      const cand = await scoreCase(user, skillName, candV, c, args.signal);
       rollouts++;
       const b = base ? ROUND(base.score) : null;
       const a = cand ? ROUND(cand.score) : null;
@@ -204,6 +213,7 @@ export interface SelfVerifyArgs {
   budgetYuan?: number;
   /** 仅跑结构门（无预算 / 关掉行为门时）。 */
   structuralOnly?: boolean;
+  signal?: AbortSignal;
   onProgress?: (msg: string) => void;
 }
 
@@ -228,6 +238,7 @@ function exampleLogPath(cases: DatasetCase[]): string | undefined {
 }
 
 export async function runSelfVerification(args: SelfVerifyArgs): Promise<SelfVerifyResult> {
+  args.signal?.throwIfAborted();
   const structural = verifyStructure(args.candidateFiles);
   args.onProgress?.(`结构门：${structural.ok ? 'pass' : 'FAIL — ' + structural.failures.join('；')}`);
   if (!structural.ok) {
@@ -251,7 +262,9 @@ export async function runSelfVerification(args: SelfVerifyArgs): Promise<SelfVer
   const logPath = exampleLogPath(allCases);
   // 跑一次候选脚本拿输出样本，给断言 reviewer 看「脚本算了哪些全局字段」（首次派生用；之后缓存）
   const scriptSample = logPath ? runScriptsForSample(args.candidateFiles, logPath) : '';
+  args.signal?.throwIfAborted();
   const assertions = await deriveScriptAssertions(allCases, args.user, scriptSample);
+  args.signal?.throwIfAborted();
   if (assertions.length && logPath) {
     scriptTruth = verifyScriptTruth(args.candidateFiles, { logPath, assertions });
     args.onProgress?.(`脚本真值门（${assertions.map((a) => a.id).join(', ')}）：${scriptTruth.ok ? 'pass' : 'FAIL — ' + scriptTruth.failures.join('；')}`);
@@ -278,10 +291,12 @@ export async function runSelfVerification(args: SelfVerifyArgs): Promise<SelfVer
       behavioral = await verifyBehavioral({
         user: args.user, skillName: args.skillName, skillId, baseVersion: args.baseVersion,
         candidateSkillMd: args.candidateSkillMd, candidateFiles: args.candidateFiles, cases,
-        budgetYuan: args.budgetYuan, onProgress: args.onProgress,
+        budgetYuan: args.budgetYuan, onProgress: args.onProgress, signal: args.signal,
       });
     }
   } catch (e) {
+    if (e instanceof Error && e.message.includes('停止 OpenCode 执行未确认')) throw e;
+    args.signal?.throwIfAborted();
     console.warn('[self-verify] behavioral phase errored (treat as pass, structural still gated):', (e as Error)?.message);
     behavioral = { ok: true, baseMean: null, candMean: null, delta: null, perCase: [], regressions: [], measured: 0, skipped: '行为门异常，已跳过' };
   }

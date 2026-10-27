@@ -1,6 +1,8 @@
 ---
 title: "Trae IDE 接入指南"
 description: "在 Trae IDE 中安装 Agent Insight 插件，将 Agent 运行数据接入平台进行观测与分析。"
+keywords: ["Agent Insight", "Trae IDE", "插件安装", "运行观测"]
+changefreq: monthly
 ---
 
 # Trae IDE 接入指南
@@ -130,6 +132,8 @@ npx agent-insight install
 | `stop` | 会话结束 | 结束时间、执行摘要 |
 | `subagent-detect` | 子 Agent 发起 | 子 Agent 标识、任务描述 |
 | `notification` | 系统通知 | 通知内容、级别 |
+
+Skill 调用返回的说明中包含 `version: 1.2.0`、`Version 1.2.0` 或 `版本：1.2.0` 时，Linux/macOS 采集器会记录该版本；说明中未提供版本时保留缺失状态。
 
 ## 数据局限性
 

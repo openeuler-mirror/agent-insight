@@ -1,3 +1,4 @@
+import { freezeCustomEvaluators, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service';
 /**
  * 对比 runner：在冻结的单组引擎之上加「对比」层。
  *
@@ -234,6 +235,8 @@ export async function computePairs(
 // ─── createComparisonExperiment ─────────────────────────────────────────────
 
 export interface CreateComparisonParams {
+  frozenCustomEvaluators?: CustomSnapshots;
+  configSnapshot?: Record<string, unknown>;
   user: string;
   name: string;
   agentName: string;
@@ -268,6 +271,7 @@ export async function createComparisonExperiment(params: CreateComparisonParams)
       name,
       agentName,
       type: 'llm',
+      configSnapshotJson: JSON.stringify({ ...params.configSnapshot, customEvaluatorSnapshots: params.frozenCustomEvaluators ?? await freezeCustomEvaluators(user, evaluatorIds) }),
       scope: '',
       evaluatorIdsJson: JSON.stringify(evaluatorIds),
       status: 'draft',

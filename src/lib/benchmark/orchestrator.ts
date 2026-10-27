@@ -1,4 +1,5 @@
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
+import { platformBenchmarkConfig } from './project-config'
 import type {
   BenchmarkRunConfig,
   JsonValue,
@@ -51,12 +52,11 @@ export async function prepareNextBenchmarkCaseRun(input: {
     const concurrency = parseExecutionConcurrency(parseJson<BenchmarkRunConfig>(binding!.runConfigJson, 'BENCHMARK_RUN_CONFIG_INVALID').executionConcurrency)
     const active = await tx.benchmarkCaseRun.count({ where: { experimentId: input.experimentId, status: { in: ACTIVE_RUN_STATUSES } } })
     if (active >= concurrency) return null
-    const budget = Number(process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS || 256)
-    if (!Number.isSafeInteger(budget) || budget < 1) throw new Error('AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS 必须为正整数')
+    const scheduling = platformBenchmarkConfig().scheduling
+    const budget = scheduling.maxPendingEvaluations
     const occupied = await tx.benchmarkCaseRun.count({ where: { status: { in: [...ACTIVE_RUN_STATUSES, 'submitted'] } } })
     if (occupied >= budget) return null
-    const userBudget = Number(process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER || 128)
-    if (!Number.isSafeInteger(userBudget) || userBudget < 1) throw new Error('AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER 必须为正整数')
+    const userBudget = scheduling.maxPendingEvaluationsPerUser
     const experiment = await tx.experiment.findUnique({ where: { id: input.experimentId }, select: { user: true } })
     if (await tx.benchmarkCaseRun.count({ where: { experiment: { user: experiment!.user }, status: { in: [...ACTIVE_RUN_STATUSES, 'submitted'] } } }) >= userBudget) return null
     const next = await tx.benchmarkCaseRun.findFirst({
@@ -111,12 +111,15 @@ export async function prepareNextBenchmarkCaseRun(input: {
       'BENCHMARK_RUN_CONFIG_INVALID',
     )
     const agentOptions = normalizeBenchmarkAgentOptions(runConfig.agentOptions)
-    if (agentOptions) {
+    if (agentOptions || runConfig.executionProfile) {
       const client = await prisma.reliabilityClient.findFirst({ where: {
         clientId: run.clientId, user: run.experiment.user, unboundAt: null,
       } })
       if (!client) throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
-      assertBenchmarkExecutionTarget(client, adapter.manifest, { ...runConfig, agentOptions })
+      const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { ...runConfig, agentOptions })
+      if (target.executionProfile?.definitionDigest !== runConfig.executionProfile?.definitionDigest) {
+        throw new BenchmarkProtocolError('EXECUTION_PROFILE_CHANGED', '执行环境已变化，请重新创建实验')
+      }
     }
     const task = adapter.buildAgentTask({
       publicPayload: split.publicPayload,

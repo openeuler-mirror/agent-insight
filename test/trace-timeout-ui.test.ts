@@ -49,7 +49,8 @@ test('detail refresh updates timeout metadata independently of the pending sessi
     const metadata = { task_id: 'trace-timeout', trace_status: 'timed_out' };
     const updates: unknown[] = [];
     const refresh = evaluate<(silent: boolean) => void>(callback.getText(ast), {
-        taskId: 'trace-timeout', apiKey: 'test-key', sessionRef: { current: {} },
+        // PR #446 的 fetchSession 携带已认证 user 边界（session URL 拼接 user），mock 作用域需提供。
+        taskId: 'trace-timeout', apiKey: 'test-key', user: 'test-user', sessionRef: { current: {} },
         sessionRequestRef: { current: 0 },
         setLoading() {}, setSession() {}, setSecondsSinceRefresh() {},
         onExecutionRefresh: (value: unknown) => updates.push(value),
@@ -76,7 +77,7 @@ test('detail refresh updates timeout metadata independently of the pending sessi
 test('running and timed-out detail traces refresh only while visible and remove their listeners', () => {
     const node = find(n => ts.isCallExpression(n) && n.expression.getText(ast) === 'useEffect'
         && n.arguments[0]?.getText(ast).includes('!autoRefresh')) as ts.CallExpression;
-    for (const [status, waitingForParent] of [
+    for (const [status, waitingForRelations] of [
         ['running', false], ['timed_out', false], ['success', false], ['failed', false],
         ['success', true], ['failed', true],
     ] as const) {
@@ -95,7 +96,7 @@ test('running and timed-out detail traces refresh only while visible and remove 
         };
         const run = evaluate<() => (() => void) | undefined>(node.arguments[0].getText(ast), {
             autoRefresh: true, execStatus: status, refreshIntervalSec: 5,
-            waitingForParent,
+            waitingForRelations,
             fetchSession: () => { requests++; },
             window: timer, ...timer,
             document: {
@@ -108,7 +109,7 @@ test('running and timed-out detail traces refresh only while visible and remove 
             },
         });
         const cleanup = run();
-        if (!waitingForParent && (status === 'success' || status === 'failed')) {
+        if (!waitingForRelations && (status === 'success' || status === 'failed')) {
             assert.equal(intervals.length, 0);
             continue;
         }
@@ -133,7 +134,8 @@ test('late session and parent metadata responses cannot replace a newly selected
     const updates: unknown[] = [];
     const sessionRequestRef = { current: 0 };
     const refresh = evaluate<(silent: boolean) => void>(callback.getText(ast), {
-        taskId: 'old-worker', apiKey: 'test-key', sessionRef: { current: {} }, sessionRequestRef,
+        // 同上：fetchSession 的 user 边界需要 mock 作用域提供。
+        taskId: 'old-worker', apiKey: 'test-key', user: 'test-user', sessionRef: { current: {} }, sessionRequestRef,
         setLoading: (value: unknown) => updates.push(value), setSession: (value: unknown) => updates.push(value),
         setSecondsSinceRefresh: (value: unknown) => updates.push(value), setAutoRefresh: (value: unknown) => updates.push(value),
         onExecutionRefresh: (value: unknown) => updates.push(value),
@@ -144,4 +146,12 @@ test('late session and parent metadata responses cannot replace a newly selected
     for (const resolve of pending) resolve({ ok: true, json: async () => ({ taskId: 'old-worker', parentAgent: { state: 'resolved', taskId: 'old-parent' } }) });
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(updates, []);
+});
+
+
+test('completed traces with pending relations keep the refresh control available for manual pause', () => {
+    const node = find(n => ts.isVariableDeclaration(n) && n.name.getText(ast) === 'canAutoRefresh') as ts.VariableDeclaration;
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'success', waitingForRelations: true }), true);
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'success', waitingForRelations: false }), false);
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'running', waitingForRelations: false }), true);
 });

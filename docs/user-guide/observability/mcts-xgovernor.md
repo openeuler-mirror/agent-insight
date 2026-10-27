@@ -1,3 +1,10 @@
+---
+title: "MCTS xGovernor Trace 非侵入式接入"
+description: "介绍通过透明代理接入 MCTS 与 xGovernor 的方法，以及 Runtime 链路展示、隐私边界和排障步骤。"
+keywords: ["Agent Insight", "MCTS", "xGovernor", "透明代理", "链路追踪"]
+changefreq: monthly
+---
+
 # MCTS xGovernor Trace 非侵入式接入
 
 本指南面向已经部署好 MCTS 和 xGovernor 的用户。Agent Insight 接入由外部启动器完成：启动器在 MCTS 执行机的回环地址创建透明代理，给 MCTS 子进程注入 `XGOVERNOR_BASE_URL`，采集 xGovernor HTTP/SSE 数据并上传。Pi 由 xGovernor 执行，因此这条链路使用 MCTS 专用代理采集。
@@ -9,7 +16,7 @@
 MCTS 服务由使用方负责准备；接入前应满足：
 
 - MCTS 原命令能够连接 xGovernor，并在完成任务后生成 `artifact.patch`；
-- 执行机有 Python 3.11+，运行 MCTS 的 Python 环境已安装 `datasets`；
+- 执行机有 Python 3.11+；SWE-bench 还需在所配置 Python 环境安装 `datasets`，ZSoft 需兼容当前执行契约的插件；
 - xGovernor 主机已安装 Pi CLI 和桥接扩展，并配置好模型凭据、E2B 凭据及 `swepro-docker` 模板；
 - 执行机有 Node.js 22.19.0+，能够访问 Agent Insight，且已有平台账号的 API Key。
 
@@ -35,7 +42,7 @@ Runtime 角色按可验证行为标记为 `solver-initial`、`solver-child`、`a
 curl -sSf "https://insight.example.com/api/ingest/setup?key=<your-api-key>&yes=1&frameworks=mcts-xgovernor" | AGENT_INSIGHT_MCTS_REPO_DIR='/opt/MCTS' bash
 ```
 
-安装器先检查 MCTS 仓库、Python 3.11+、`datasets` 和现有 xGovernor 连接，再安装采集器、保存路径、注册并启动常驻客户端。无需安装后再改路径或重启。失败时按提示处理，再执行同一命令。只接入 MCTS 不会连带安装 Pi Agent、xiaoO 或 Goal Plus。
+安装器先检查 MCTS 仓库、Python 3.11+ 和现有 xGovernor 连接，再安装采集器、保存路径、注册并启动常驻客户端。无需安装后再改路径或重启。失败时按提示处理，再执行同一命令。只接入 MCTS 不会连带安装 Pi Agent、xiaoO 或 Goal Plus。
 
 连接配置来自仓库中的 `testcases_union/config.env`。安装器在执行机的独立 Bash 子进程中读取配置，只提取 xGovernor 地址；不会打印 token 或修改该文件。模型、E2B 及 xGovernor 服务仍由部署者准备。
 
@@ -89,6 +96,10 @@ cd /path/to/MCTS
 agent-insight-mcts-run --upstream http://127.0.0.1:8787 -- <原 MCTS 命令>
 ```
 
+采集 Key 的读取顺序为：显式进程环境变量 `AGENT_INSIGHT_API_KEY` → 采集器所属安装目录的 `.env` → 旧版采集器 `config.json`。因此公共 Key 更新后，新启动的 MCTS 会自动使用新值，无需手工同步 MCTS JSON；显式设置的进程环境变量仍需自行同步。Benchmark 的每 Case 输出目录只存轨迹，读取凭据时根据安装版 `--config` 路径定位公共配置，不读取 Case 目录中的 `.env`。公共配置显式清空 Key 时，不回退到旧 Key。
+
+安装及每次启动采集前，会向配置的 OTLP 接口发送空事件请求，校验平台鉴权，不生成任务 Trace。Key 无效、平台不可达或响应异常时立即报错，不启动 MCTS；安装鉴权失败不覆盖已有采集器配置。这只验证采集入口，不代替模型或 xGovernor 可用性验证。运行中的采集进程不会热更新 Key，历史上传失败数据也不会自动补传；需要在任务结束后单独恢复。
+
 默认是 fail-open：缺少 API Key 或本地代理启动失败时，启动器提示原因并直接执行原命令。要求观测不可用时拒绝启动，可增加 `--strict`。推理正文默认不采集；明确需要时增加 `--capture-reasoning`。
 
 同一能力也可用环境变量控制：`AGENT_INSIGHT_MCTS_PROXY_ENABLED`、`AGENT_INSIGHT_MCTS_UPSTREAM_URL`、`AGENT_INSIGHT_MCTS_CAPTURE_REASONING`、`AGENT_INSIGHT_MCTS_BYPASS_ON_START_FAILURE` 和 `AGENT_INSIGHT_MCTS_STRICT`。命令行 `--upstream`、`--capture-reasoning`、`--strict` 的优先级更高。
@@ -113,9 +124,9 @@ agent-insight-mcts-run --upstream http://127.0.0.1:8787 -- <原 MCTS 命令>
 
 启动检查只确认 Python 版本与 `datasets` 模块是否可发现，不在探测阶段导入整个依赖包。“未找到 datasets”表示配置的 Python 环境缺少该模块；“环境检查超过 5 秒”表示探测超时，应检查执行机负载后重试，不能据此判断依赖未安装。Case 的 Agent 执行超时则由实验保存的执行上限决定，与环境检查超时不同。
 
-平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；关联 SWE-bench 数据集并选择支持参数能力的执行主机后，实验向导显示 MCTS 搜索参数，默认值为 `5、3、160、80、160、80、30000000`，可直接修改且不能为空；恢复默认重新填入上述数值，Token 熔断阈值为 `0` 时关闭熔断。平台保存并显式下发这些数值，复用实验和重跑 Case 时保留；已保存参数的 SWE-bench 实验在详情顶部单独一行显示配置。Pi 与后续 xiaoO 使用相同的 MCTS 配置项。用户无需每次手动运行启动命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，同时关联本次根 Trace；平台仍会独立运行 Benchmark 评测。停止实验会向进程组发送 SIGINT，留出 30 秒让 MCTS 释放本次会话/checkpoint 并刷新 Trace。实验 Agent 超时从 MCTS 命令启动时计时，覆盖准备、搜索、MCTS 官测和退出上传；根 Trace 从首次 xGovernor 调用开始记录，显示耗时可能短于实验执行耗时。采集到分支 Trace 不代表已生成最终提交物。
+平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；选择支持参数能力的执行主机后，实验向导提供树形/JSON 编辑、JSON 导入导出和个人模板。MCTS 默认模板保持平铺，key 使用执行端 CLI 原名并省略 `--`：`max-iters/branching/max-turns-init/max-turns-step/max-turns-author/max-turns-author-step/token-fuse-limit`，默认值依次为 `5、3、160、80、160、80、30000000`。“恢复默认”使用执行机上报配置，Token 阈值 `0` 关闭熔断。新增 MCTS 已支持的业务参数只需在平台增加同名标量 key/value，原名直传，不维护逐字段映射；通用编辑器允许新增嵌套草稿并原样下发；CLI 不支持的结构或调度参数覆盖在执行客户端报错。完整快照保留字段类型和删除语义，历史值不改写；复用时确认完整原配置，平台不转换别名或层级。详情见 [运行参数说明](../evaluation/experiments.md)。Pi 与后续 xiaoO 使用相同 MCTS 配置项。用户无需手动运行命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，关联本次根 Trace；平台独立运行 Benchmark 评测。停止实验向进程组发送 SIGINT，留出 30 秒释放本次会话/checkpoint 并刷新 Trace。Agent 超时从 MCTS 命令启动计时，覆盖准备、搜索、官测和退出上传；根 Trace 从首次 xGovernor 调用开始记录，耗时可能短于实验执行耗时。采集到分支 Trace 不代表已生成最终提交物。
 
-常驻客户端需要包含 `executor/mcts-runtime.cjs` 和 `pi-mcts` 能力发现逻辑；仅安装采集代理不会自动获得 Benchmark 执行能力。部署与评测服务要求见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。
+常驻客户端需要包含 `executor/mcts-runtime.cjs` 和 `pi-mcts` 能力发现逻辑；仅安装采集代理不会自动获得 Benchmark 执行能力。公共服务与客户端更新见 [Benchmark 通用服务部署指南](../../developer-guide/benchmark/service-deployment-guide.md#72-参数配置与客户端更新)，Benchmark 专属准备分别见 [SWE-bench](../../developer-guide/benchmark/swe-bench-deployment-guide.md) 与 [ZSoft](../../developer-guide/benchmark/zsoft-deployment-guide.md)。
 
 ## 数据流与展示
 
@@ -142,6 +153,8 @@ Agent Insight 链路追踪
 父级的 TASK 行表示一次 Runtime 派生关系，不是另一次 LLM 调用。TASK 的 `session_id` 与子 Runtime 的逻辑 Session ID 精确一致时，子 Agent 会展开在该 TASK 下，并显示子 Trace 的真实耗时；关系尚未定位时显示 `-`，不会把瞬时关系事件误报为 `0ms`。stdout 调度摘要只显示对应的观测/Tool 行，不代表发生了一次模型调用，也不会额外生成 LLM 行。
 
 xGovernor 把工具输入放在 `tool_activity(begin)`、把结果放在 `tool_activity(end)`。透明代理按同一个 activity ID 合并两端，因此 Bash 等工具的 Input 显示实际结构化参数，Output 显示执行结果。若上游未发送 begin，Input 保持空对象并在 Trace 元数据中标记采集缺失；采集到的字段仍经过通用密钥、账号和本地路径脱敏。
+
+若失败工具明确报告输出 token 截断，即使上游将该 turn 报成完成，Trace 也会标记这轮错误并显示原因；同轮后续成功写入可消除该轮待处理的截断提示。HTTP/SSE 明确返回的余额不足同样保留为错误摘要；本地 ledger 只保存固定诊断码，不保存额外的账户、密钥或完整错误正文。外部运行时未传出的模型错误不能由采集器还原，空回复和普通 404 不会被当成余额不足。
 
 ## 隐私和边界
 

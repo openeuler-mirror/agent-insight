@@ -1,6 +1,8 @@
 ---
 title: "Skills 管理"
 description: "查看 Skill 列表、创建 Skill 与管理版本"
+keywords: ["Agent Insight", "Skill 管理", "资产管理", "版本管理"]
+changefreq: monthly
 ---
 
 # Skills 管理

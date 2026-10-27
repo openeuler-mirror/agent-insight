@@ -12,7 +12,7 @@ interface StatusBadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   size?: 'sm' | 'md';
 }
 
-const STATUS_CLASSES: Record<StatusKind, { subtle: string; outline: string; iconClass?: string }> = {
+export const STATUS_CLASSES: Record<StatusKind, { subtle: string; outline: string; iconClass?: string }> = {
   // foundations.md §2 B.4 — Running is Blue-600 (#2563EB), NOT primary Indigo, to avoid clash with primary action button.
   running: {
     subtle:  'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-500/10 dark:text-blue-300 dark:border-blue-400/30',

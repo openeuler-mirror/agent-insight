@@ -14,7 +14,7 @@ export async function POST(
         const { version, user: explicitUser } = body;
 
         if (version === undefined || version === null) {
-            console.error('Activate Error: Version missing in body', body);
+            console.error('Activate Error: Version missing in body');
             return NextResponse.json({ error: 'Version is required' }, { status: 400 });
         }
 

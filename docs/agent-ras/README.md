@@ -1,3 +1,10 @@
+---
+title: "Agent RAS 文档"
+description: "汇总 Agent RAS 的架构、模块和使用指南，帮助读者定位异常检测与自动恢复相关文档。"
+keywords: ["Agent RAS", "异常检测", "自动恢复", "文档导航"]
+changefreq: monthly
+---
+
 # Agent RAS 文档
 
 环内可靠性包 [`agent_ras/`](../../agent_ras/)：异常检测 + 自动恢复。本目录只有 **设计**（`designs/`）与 **使用**（`guides/`）。

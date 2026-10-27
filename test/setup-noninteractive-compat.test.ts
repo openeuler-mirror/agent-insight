@@ -8,7 +8,7 @@ import test from 'node:test';
 import { GET } from '@/app/api/ingest/setup/route';
 import { prismaRaw } from '@/lib/storage/prisma';
 
-const ALL_FRAMEWORKS = 'opencode,openclaw,claude,codeagent,hermes,jiuwen,qoder,trae,actrail,qwencode,deepseek-harness';
+const ALL_FRAMEWORKS = 'opencode,openclaw,claude,codeagent,hermes,jiuwen,qoder,trae,actrail,qwencode,deepseek-harness,qwenpaw';
 
 async function getScript(query: string, platform: 'unix' | 'windows'): Promise<string> {
   const response = await GET(new Request(`http://localhost/api/ingest/setup?${query}`, {
@@ -33,7 +33,8 @@ test('Bash 恢复 URL、CLI 和环境变量非交互入口，并保留全部框�
   assert.match(script, /if \[ "\$FORCE_NO_KEY" = "true" \]; then/);
   assert.match(script, /if \[ "\$NONINTERACTIVE" = "true" \]; then/);
 
-  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL', 'QWENCODE', 'DEEPSEEK_HARNESS']) {
+  assert.match(script, /QwenPaw/);
+  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL', 'QWENCODE', 'DEEPSEEK_HARNESS', 'QWENPAW']) {
     assert.match(script, new RegExp(`INSTALL_${flag}=true`));
   }
 });
@@ -50,7 +51,8 @@ test('PowerShell 恢复 URL 与环境变量非交互入口并可强制清空 key
   assert.match(script, /if \(\$FORCE_NO_KEY\) \{/);
   assert.match(script, /if \(\$NONINTERACTIVE\) \{/);
 
-  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL', 'QWENCODE', 'DEEPSEEK_HARNESS']) {
+  assert.match(script, /QwenPaw/);
+  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL', 'QWENCODE', 'DEEPSEEK_HARNESS', 'QWENPAW']) {
     assert.match(script, new RegExp(`\\$INSTALL_${flag} = \\$true`));
   }
 });
@@ -164,5 +166,17 @@ test('OpenClaw 纯配置输出与已安装 wrapper 使用相同的 JSON logs/tra
     assert.match(configBlock, /OTEL_EXPORTER_OTLP_TRACES_PROTOCOL[^\n]*http\/json/);
     assert.match(configBlock, /OTEL_EXPORTER_OTLP_TRACES_ENDPOINT[^\n]*\/api\/ingest\/otel\/v1\/traces/);
     assert.doesNotMatch(configBlock, /http\/protobuf/);
+  }
+});
+
+test('Pi/xiaoO selections reach every client installation source and auto setup registers the same installer', async () => {
+  const { GET: autoSetup } = await import('@/app/api/ingest/setup/auto/route');
+  const normal = await getScript('yes=1&frameworks=pi-agent,xiaoo', 'unix');
+  const auto = await (await autoSetup(new Request('http://localhost/api/ingest/setup/auto?apiKey=fixture&host=http://localhost&frameworks=pi-agent,xiaoo', { headers: { 'x-platform': 'unix', host: 'localhost' } }))).text();
+  for (const script of [normal, auto]) {
+    assert.equal((script.match(/--frameworks "\$SELECTED_FRAMEWORKS"/g) || []).length, 3);
+    const parsed = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
+    assert.equal(parsed.status, 0, parsed.stderr);
+    assert.match(script, /install_agent_insight_client "\$(?:FINAL_HOST|AGENT_INSIGHT_HOST)"/);
   }
 });

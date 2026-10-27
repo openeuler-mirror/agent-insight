@@ -28,10 +28,10 @@ function renderInstallPage() {
   );
 }
 
-test('安装页只展示 Linux 安装命令卡，不展示 Windows 或相关文档卡', () => {
+test('安装页展示 Linux 和 Windows 安装命令卡，不展示相关文档卡', () => {
   const html = renderInstallPage();
   assert.ok(/>Linux<\//.test(html), '应展示 Linux 命令卡');
-  assert.ok(!/Windows \(PowerShell\)|以管理员身份运行 PowerShell/.test(html), '不应展示 Windows 命令卡');
+  assert.match(html, />Windows \(PowerShell\)<\//, '应展示 Windows 命令卡');
   assert.ok(!/相关文档|客户端高级配置|常见接入问题排查/.test(html), '不应展示相关文档卡');
   assert.match(html, /命令已包含当前账号的 API Key/);
 });
@@ -45,8 +45,11 @@ test('安装页保留 master 的框架选择、专用接入信息和身份刷新
   assert.match(html, /import agent_insight_llamaindex/);
   assert.match(html, /当前上报通道/);
   assert.match(html, /页面会先向服务端刷新并验证当前登录身份/);
-  const linuxCard = html.match(/<article\b[\s\S]*?<\/article>/g)?.find(card => />Linux(?: \/ macOS)?<\//.test(card));
-  assert.ok(linuxCard, '应保留 Linux 命令卡');
-  assert.ok(linuxCard.includes('加载中…'));
-  assert.ok(!linuxCard.includes('<button'), '身份未就绪时不提供可复制的安装命令');
+  const cards = html.match(/<article\b[\s\S]*?<\/article>/g) || [];
+  for (const label of ['Linux', 'Windows (PowerShell)']) {
+    const card = cards.find(item => item.includes(`>${label}</`));
+    assert.ok(card, `应保留 ${label} 命令卡`);
+    assert.ok(card.includes('加载中…'));
+    assert.ok(!card.includes('<button'), '身份未就绪时不提供可复制的安装命令');
+  }
 });

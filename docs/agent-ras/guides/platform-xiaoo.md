@@ -1,3 +1,10 @@
+---
+title: "xiaoO 平台接入"
+description: "介绍 xiaoO 接入 Agent RAS 的安装配置、Daemon SSE 控制面及故障验收方法。"
+keywords: ["Agent RAS", "xiaoO", "平台接入", "故障验收"]
+changefreq: monthly
+---
+
 # xiaoO 平台接入
 
 **原则**：检测与恢复走协议 inproc（`ras_runtime`）。stock master 上 mid-stream 思考/工具环与 abort/steer 以 **官方 Daemon SSE 控制面** 为主；插件 hooks 仍负责 Chat/Tool/lifecycle。**不改 FI**。

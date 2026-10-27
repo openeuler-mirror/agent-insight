@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
     Plus,
     Search,
@@ -38,6 +38,8 @@ import {
     supportsCustomHeaders,
 } from '@/lib/shared/model-connection';
 
+import { DEFAULT_MODEL_TEST_TIMEOUT_MS, resolveModelTestTimeoutMs, formatModelTestResult, type ModelTestResult } from '@/lib/shared/model-connection-test';
+
 export interface EvalConfigItem {
     id: string;
     name: string;
@@ -46,6 +48,7 @@ export interface EvalConfigItem {
     baseUrl?: string;
     model?: string;
     headers?: Record<string, string>;
+    testTimeoutMs?: number;
 }
 
 interface ProviderPreset {
@@ -77,7 +80,7 @@ const PROVIDER_META: Record<EvalConfigItem['provider'], {
 
 const CAPACITY_LIMIT = 32;
 
-type HealthState = 'ok' | 'checking' | 'failed' | 'unconfigured';
+type HealthState = 'ok' | 'checking' | 'failed' | 'unconfigured' | 'timeout' | 'cancelled';
 
 const isDefaultConfig = (id: string | null) => !!id && id.startsWith('default_');
 
@@ -104,6 +107,16 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
         id: 'new', name: locale === 'zh' ? '新配置' : 'New Config', provider: 'deepseek-official', model: 'deepseek-v4-flash',
     });
     const [isSaving, setIsSaving] = useState(false);
+    const [isTesting, setIsTesting] = useState(false);
+    const saveController = useRef<AbortController | null>(null);
+    const healthController = useRef<AbortController | null>(null);
+    const [healthResults, setHealthResults] = useState<Record<string, ModelTestResult>>({});
+    useEffect(() => () => {
+        saveController.current?.abort();
+        healthController.current?.abort();
+        saveController.current = null;
+        healthController.current = null;
+    }, []);
     const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info', msg: string } | null>(null);
     const [loaded, setLoaded] = useState(false);
     const [query, setQuery] = useState('');
@@ -153,7 +166,10 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
     }, [allConfigs]);
 
     const recheckHealth = useCallback(async () => {
-        if (isRechecking || allConfigs.length === 0) return;
+        if (healthController.current || allConfigs.length === 0) return;
+        const controller = new AbortController();
+        healthController.current = controller;
+        setHealthResults({});
         setIsRechecking(true);
         setHealthMap(prev => {
             const n: Record<string, HealthState> = { ...prev };
@@ -162,9 +178,12 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
         });
         const results = await Promise.all(allConfigs.map(async (c) => {
             if (!isModelConnectionReady(c)) return [c.id, 'unconfigured' as HealthState] as const;
+            const startedAt = Date.now();
+            let result: ModelTestResult;
             try {
                 const res = await apiFetch('/api/eval/settings/test', {
                     method: 'POST',
+                    signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         provider: c.provider,
@@ -172,23 +191,30 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                         baseUrl: c.baseUrl,
                         model: c.model,
                         headers: c.headers,
+                        testTimeoutMs: c.testTimeoutMs,
                         user,
                         configId: c.id,
                     }),
                 });
-                const data = await res.json().catch(() => ({ success: false }));
-                return [c.id, (data.success ? 'ok' : 'failed') as HealthState] as const;
+                result = await res.json();
             } catch {
-                return [c.id, 'failed' as HealthState] as const;
+                result = { success: false, code: controller.signal.aborted ? 'cancelled' : 'network',
+                    elapsedMs: Date.now() - startedAt, timeoutMs: c.testTimeoutMs ?? DEFAULT_MODEL_TEST_TIMEOUT_MS };
             }
+            if (healthController.current === controller) {
+                setHealthResults(prev => ({ ...prev, [c.id]: result }));
+            }
+            return [c.id, (result.success ? 'ok' : result.code === 'timeout' ? 'timeout' : result.code === 'cancelled' ? 'cancelled' : 'failed') as HealthState] as const;
         }));
+        if (healthController.current !== controller) return;
+        healthController.current = null;
         setHealthMap(prev => {
             const n: Record<string, HealthState> = { ...prev };
             for (const [id, state] of results) n[id] = state;
             return n;
         });
         setIsRechecking(false);
-    }, [allConfigs, isRechecking]);
+    }, [allConfigs, user]);
 
     const persist = useCallback(async (configs: EvalConfigItem[], activeId: string) => {
         const finalPayload = { settings: { activeConfigId: activeId, configs }, user };
@@ -200,12 +226,19 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
     }, [user]);
 
     const saveCurrentConfig = async () => {
+        if (saveController.current || isSaving) return;
+        const controller = new AbortController();
+        saveController.current = controller;
+        const startedAt = Date.now();
+        let phase: 'validation' | 'test' | 'save' = 'validation';
         setIsSaving(true);
+        setIsTesting(true);
         setStatus({ type: 'info', msg: locale === 'zh' ? '正在测试连接…' : 'Testing connection…' });
         try {
             let newConfigs = [...allConfigs];
             const configToSave = {
                 ...tempConfig,
+                testTimeoutMs: resolveModelTestTimeoutMs(tempConfig.testTimeoutMs),
                 headers: supportsCustomHeaders(tempConfig)
                     ? normalizeCustomHeaders(tempConfig.headers)
                     : undefined,
@@ -222,8 +255,10 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                 newConfigs = newConfigs.map(c => (c.id === configToSave.id ? configToSave : c));
             }
 
+            phase = 'test';
             const testRes = await apiFetch('/api/eval/settings/test', {
                 method: 'POST',
+                signal: controller.signal,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     provider: configToSave.provider,
@@ -231,25 +266,29 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                     baseUrl: configToSave.baseUrl,
                     model: configToSave.model,
                     headers: configToSave.headers,
+                    testTimeoutMs: configToSave.testTimeoutMs,
                     user,
                     configId: configToSave.id,
                     // 用户点保存触发的主动测试才计入用量；recheckHealth 的页面轮询不传这个标记
                     usageActive: true,
                 }),
             });
-            const testData = await testRes.json();
+            const testData: ModelTestResult = await testRes.json();
+            controller.signal.throwIfAborted();
+            if (saveController.current !== controller) return;
+            setIsTesting(false);
             if (!testData.success) {
-                setStatus({ type: 'error', msg: (locale === 'zh' ? '连接测试失败：' : 'Connection test failed: ') + testData.error });
-                setTimeout(() => setStatus(null), 1500);
-                setIsSaving(false);
+                setStatus({ type: 'error', msg: formatModelTestResult(testData, locale) });
                 return;
             }
+            setStatus({ type: 'info', msg: formatModelTestResult(testData, locale) + (locale === 'zh' ? '正在保存…' : 'Saving…') });
 
             let newActiveId = activeConfigId;
             if (newConfigs.length === 1 || activeConfigId === 'default') {
                 newActiveId = configToSave.id;
             }
 
+            phase = 'save';
             const res = await persist(newConfigs, newActiveId);
             if (res.ok) {
                 // Reload from the server so state holds masked keys, not the
@@ -257,19 +296,44 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                 await fetchSettings();
                 setEditingConfigId(null);
                 setPickedProvider(null);
-                setStatus({ type: 'success', msg: locale === 'zh' ? '已保存' : 'Saved' });
-                setTimeout(() => setStatus(null), 1500);
+                setHealthMap(prev => ({ ...prev, [configToSave.id]: 'ok' }));
+                setHealthResults(prev => ({ ...prev, [configToSave.id]: testData }));
+                setStatus({ type: 'success', msg: formatModelTestResult(testData, locale) + (locale === 'zh' ? '配置已保存。' : 'Configuration saved.') });
             } else {
                 const err = await res.json().catch(() => ({}));
                 setStatus({ type: 'error', msg: (locale === 'zh' ? '保存失败：' : 'Save failed: ') + (err.error || res.statusText) });
-                setTimeout(() => setStatus(null), 1500);
             }
-        } catch (e: any) {
-            setStatus({ type: 'error', msg: `Error: ${e.message}` });
-            setTimeout(() => setStatus(null), 1500);
+        } catch (e: unknown) {
+            if (saveController.current !== controller) return;
+            if (phase === 'validation') {
+                setStatus({ type: 'error', msg: locale === 'zh'
+                    ? '请检查模型连接信息、请求头以及测试超时（10～300 秒）。'
+                    : 'Check the model connection, headers and test timeout (10–300 seconds).' });
+                return;
+            }
+            if (phase === 'save') {
+                setStatus({ type: 'error', msg: locale === 'zh'
+                    ? '未能确认配置是否保存，请刷新列表检查后再重试。'
+                    : 'Could not confirm whether the configuration was saved. Refresh the list before retrying.' });
+                return;
+            }
+            setStatus({ type: controller.signal.aborted ? 'info' : 'error', msg: formatModelTestResult({
+                success: false,
+                code: controller.signal.aborted ? 'cancelled' : e instanceof TypeError ? 'network' : 'unknown',
+                elapsedMs: Date.now() - startedAt,
+                timeoutMs: tempConfig.testTimeoutMs ?? DEFAULT_MODEL_TEST_TIMEOUT_MS,
+            }, locale) });
         } finally {
-            setIsSaving(false);
+            if (saveController.current === controller) {
+                saveController.current = null;
+                setIsTesting(false);
+                setIsSaving(false);
+            }
         }
+    };
+
+    const cancelTest = () => {
+        saveController.current?.abort();
     };
 
     const activateConfig = async (id: string) => {
@@ -365,7 +429,7 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
     return (
         <div style={pageWrap}>
           <div style={pageInner}>
-            {status && <StatusBar status={status} />}
+            {status && <StatusBar status={status} onDismiss={() => setStatus(null)} locale={locale} />}
 
             {pickerOpen ? (
                 <ProviderPicker
@@ -381,6 +445,8 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                     onReselect={editingConfigId === 'new' ? reopenPicker : undefined}
                     onSave={saveCurrentConfig}
                     isSaving={isSaving}
+                    isTesting={isTesting}
+                    onCancelTest={cancelTest}
                     isDefault={isDefaultConfig(editingConfigId)}
                     pickedProvider={pickedProvider}
                     locale={locale}
@@ -490,6 +556,8 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                             <HealthCheckPanel
                                 configs={allConfigs}
                                 healthMap={healthMap}
+                                results={healthResults}
+                                onCancel={() => healthController.current?.abort()}
                                 isRechecking={isRechecking}
                                 onRecheck={recheckHealth}
                                 locale={locale}
@@ -521,7 +589,7 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
 
 /* ====================== Sub-components ====================== */
 
-function StatusBar({ status }: { status: { type: 'success' | 'error' | 'info', msg: string } }) {
+function StatusBar({ status, onDismiss, locale }: { status: { type: 'success' | 'error' | 'info', msg: string }; onDismiss: () => void; locale: string }) {
     const tone = status.type === 'success'
         ? { bg: 'var(--success-subtle)', fg: 'var(--success)', border: 'var(--success-subtle-border)' }
         : status.type === 'error'
@@ -542,7 +610,8 @@ function StatusBar({ status }: { status: { type: 'success' | 'error' | 'info', m
             gap: 6,
         }}>
             {status.type === 'success' && <Check size={13} strokeWidth={2.5} />}
-            {status.msg}
+            <span role={status.type === 'error' ? 'alert' : 'status'} style={{ flex: 1 }}>{status.msg}</span>
+            <button type="button" style={ghostBtn} onClick={onDismiss} aria-label={locale === 'zh' ? '关闭提示' : 'Dismiss'}>×</button>
         </div>
     );
 }
@@ -630,10 +699,10 @@ function ModelCard({
                             {locale === 'zh' ? '连接中' : 'Checking'}
                         </span>
                     )}
-                    {effHealth === 'failed' && (
+                    {(effHealth === 'failed' || effHealth === 'timeout' || effHealth === 'cancelled') && (
                         <span style={badgeFailed}>
                             <XCircle size={11} strokeWidth={2.4} />
-                            {locale === 'zh' ? '连接失败' : 'Connection failed'}
+                            {effHealth === 'timeout' ? (locale === 'zh' ? '测试超时' : 'Test timed out') : effHealth === 'cancelled' ? (locale === 'zh' ? '已取消' : 'Cancelled') : (locale === 'zh' ? '连接失败' : 'Connection failed')}
                         </span>
                     )}
                     {effHealth === 'unconfigured' && (
@@ -754,10 +823,12 @@ function CurrentDefaultPanel({
 }
 
 function HealthCheckPanel({
-    configs, healthMap, isRechecking, onRecheck, locale,
+    configs, healthMap, results, isRechecking, onRecheck, onCancel, locale,
 }: {
     configs: EvalConfigItem[];
     healthMap: Record<string, HealthState>;
+    results: Record<string, ModelTestResult>;
+    onCancel: () => void;
     isRechecking: boolean;
     onRecheck: () => void;
     locale: string;
@@ -778,7 +849,7 @@ function HealthCheckPanel({
                         {configs.map(c => {
                             const h = healthMap[c.id] ?? initialHealth(c);
                             return (
-                                <li key={c.id} style={healthRow}>
+                                <li key={c.id} style={{ ...healthRow, flexWrap: 'wrap' }}>
                                     <span style={{
                                         flex: 1,
                                         minWidth: 0,
@@ -791,10 +862,12 @@ function HealthCheckPanel({
                                         {c.model || c.name}
                                     </span>
                                     <HealthBadge state={h} locale={locale} />
+                                    {results[c.id] && <div style={{ width: '100%', fontSize: 12, color: 'var(--foreground-secondary)' }}>{formatModelTestResult(results[c.id], locale)}</div>}
                                 </li>
                             );
                         })}
                     </ul>
+                    {isRechecking && <button style={ghostBtn} onClick={onCancel}>{locale === 'zh' ? '取消检查' : 'Cancel checks'}</button>}
                     <button style={recheckBtn} onClick={onRecheck} disabled={isRechecking}>
                         <RefreshCw size={12} strokeWidth={2.2} style={isRechecking ? { animation: 'spin 1s linear infinite' } : undefined} />
                         {isRechecking
@@ -931,11 +1004,11 @@ function HealthBadge({ state, locale }: { state: HealthState, locale: string }) 
             </span>
         );
     }
-    if (state === 'failed') {
+    if (state === 'failed' || state === 'timeout' || state === 'cancelled') {
         return (
             <span style={badgeFailed}>
                 <XCircle size={11} strokeWidth={2.4} />
-                {locale === 'zh' ? '失效' : 'Failed'}
+                {state === 'timeout' ? (locale === 'zh' ? '测试超时' : 'Timed out') : state === 'cancelled' ? (locale === 'zh' ? '已取消' : 'Cancelled') : (locale === 'zh' ? '连接失败' : 'Failed')}
             </span>
         );
     }
@@ -1106,13 +1179,15 @@ function ProviderPicker({
 }
 
 function EditForm({
-    config, setConfig, onCancel, onReselect, onSave, isSaving, isDefault, pickedProvider, locale,
+    config, setConfig, onCancel, onReselect, onSave, isSaving, isTesting, onCancelTest, isDefault, pickedProvider, locale,
 }: {
     config: EvalConfigItem;
     setConfig: (c: EvalConfigItem) => void;
     onCancel: () => void;
     onReselect?: () => void;
     onSave: () => void;
+    isTesting: boolean;
+    onCancelTest: () => void;
     isSaving: boolean;
     isDefault: boolean;
     pickedProvider?: LlmProvider | null;
@@ -1151,14 +1226,15 @@ function EditForm({
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                     {onReselect && (
-                        <button style={ghostBtn} onClick={onReselect}>
+                        <button style={ghostBtn} disabled={isSaving} onClick={onReselect}>
                             {locale === 'zh' ? '← 选择其它供应商' : '← Choose other provider'}
                         </button>
                     )}
-                    <button style={ghostBtn} onClick={onCancel}>{locale === 'zh' ? '返回列表' : 'Back to list'}</button>
+                    <button style={ghostBtn} disabled={isSaving} onClick={onCancel}>{locale === 'zh' ? '返回列表' : 'Back to list'}</button>
                 </div>
             </div>
 
+            <fieldset disabled={isSaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '14px 18px' }}>
                 <Field label={locale === 'zh' ? '配置名称' : 'Config Name'}>
                     <input
@@ -1268,8 +1344,25 @@ function EditForm({
                 )}
             </div>
 
+            <details style={{ marginTop: 16 }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--foreground-secondary)' }}>{locale === 'zh' ? '高级设置' : 'Advanced settings'}</summary>
+                <div style={{ marginTop: 12 }}>
+                    <Field label={locale === 'zh' ? '连接测试超时（秒）' : 'Connection test timeout (seconds)'}>
+                        <input aria-label={locale === 'zh' ? '连接测试超时（秒）' : 'Connection test timeout (seconds)'}
+                            type="number" min={10} max={300} step={1} style={inputStyle} disabled={isDefault}
+                            value={config.testTimeoutMs === undefined ? 60 : config.testTimeoutMs === 0 ? '' : config.testTimeoutMs / 1000}
+                            onChange={e => setConfig({ ...config, testTimeoutMs: Number(e.target.value) * 1000 })} />
+                        <p style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 6 }}>
+                            {locale === 'zh' ? '默认 60 秒，范围 10～300 秒。用于保存前测试和手动健康检查，不影响评测任务超时。每次测试仅请求一次。' : 'Default 60s; range 10–300s. Applies to save-time tests and health checks only, not evaluation tasks. Each test sends one request.'}
+                        </p>
+                    </Field>
+                </div>
+            </details>
+            </fieldset>
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-                <button style={ghostBtn} onClick={onCancel}>{locale === 'zh' ? '取消' : 'Cancel'}</button>
+                {isTesting && <button style={ghostBtn} onClick={onCancelTest}>{locale === 'zh' ? '取消测试' : 'Cancel test'}</button>}
+                <button style={ghostBtn} disabled={isSaving} onClick={onCancel}>{locale === 'zh' ? '取消' : 'Cancel'}</button>
                 {!isDefault && (
                     <button style={isSaving ? primaryBtnDisabled : primaryBtn} disabled={isSaving} onClick={onSave}>
                         {isSaving

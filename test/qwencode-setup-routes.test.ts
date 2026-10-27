@@ -63,6 +63,7 @@ test('the curl setup script accepts Qwen Code as a preselected framework and ins
   assert.match(script, /\{ name: 'Hermes', value: 'hermes' \}/);
   assert.match(script, /\{ name: 'JiuwenSwarm', value: 'jiuwen' \}/);
   assert.match(script, /\{ name: 'Qwen Code', value: 'qwencode' \}/);
+  assert.match(script, /\{ name: 'QwenPaw', value: 'qwenpaw' \}/);
   assert.match(script, /INSTALL_QWENCODE/);
   assert.match(script, /qwencode-collector-source/);
   assert.match(script, /Join-Path \$qwenCollectorSource "install\.mjs"/);
@@ -157,6 +158,7 @@ test('the local npm auto-setup script installs Qwen Code from its package files'
 
   assert.match(script, /\{ name: 'OpenClaw', value: 'openclaw' \}/);
   assert.match(script, /\{ name: 'Qwen Code', value: 'qwencode' \}/);
+  assert.match(script, /\{ name: 'QwenPaw', value: 'qwenpaw' \}/);
   assert.match(script, /INSTALL_QWENCODE/);
   assert.match(script, /require\.resolve\('agent-insight\/package\.json'\)/);
   assert.match(script, /scripts\\qwencode-collector\\install\.mjs/);

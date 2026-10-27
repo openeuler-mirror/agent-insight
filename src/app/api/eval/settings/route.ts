@@ -1,11 +1,15 @@
+import { ModelTestValidationError } from '@/lib/shared/model-connection-test';
 
-import { getUserSettings, saveUserSettings, maskUserSettings } from '@/lib/storage/server-config';
+import { getUserSettings, saveUserSettings, maskUserSettings, getRuntimeParameterTemplates, saveRuntimeParameterTemplate } from '@/lib/storage/server-config';
 import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const user = searchParams.get('user');
+    if (searchParams.get('section') === 'runtime-parameters') {
+        return NextResponse.json({ templates: await getRuntimeParameterTemplates(user) });
+    }
     // Mask model API keys before they reach the browser — the client only needs
     // a masked value for rendering. Real keys never leave the server.
     return NextResponse.json(maskUserSettings(await getUserSettings(user)));
@@ -13,8 +17,11 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
     try {
-        const { settings, user, usageSource } = await request.json();
+        const { settings, user, usageSource, action, template } = await request.json();
         if (!user) return NextResponse.json({ error: 'User is required' }, { status: 400 });
+        if (action === 'save-runtime-parameter-template') {
+            return NextResponse.json({ template: await saveRuntimeParameterTemplate(user, template) });
+        }
         await saveUserSettings(user, settings);
 
         // 模型注册页与联网搜索页共用本接口，且都提交完整 settings 对象，
@@ -26,7 +33,7 @@ export async function POST(request: Request) {
         }
 
         return NextResponse.json(maskUserSettings(await getUserSettings(user)));
-    } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+    } catch (e: unknown) {
+        return NextResponse.json({ error: e instanceof Error ? e.message : '保存设置失败' }, { status: e instanceof ModelTestValidationError || e instanceof TypeError ? 400 : 500 });
     }
 }

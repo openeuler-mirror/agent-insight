@@ -1,3 +1,10 @@
+---
+title: "Skill 生成：工作原理、流水线与能力边界"
+description: "说明 Skill 生成的对话流程、内置工作流、产物校验与落地方式，并梳理能力边界和常见问题。"
+keywords: ["Agent Insight", "Skill 生成", "生成流水线", "产物校验"]
+changefreq: monthly
+---
+
 # Skill 生成：工作原理、流水线与能力边界
 
 > 适用版本：平台内置「Skill 生成」特性（`skill-generator-agent`，见 `src/lib/skill-generator-opencode-bridge.ts:47`）

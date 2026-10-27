@@ -84,7 +84,7 @@ test('stderr 分段和 ANSI 错误实时识别，JSON 错误及鉴权错误立�
 test('模型回答和工具输出的错误文字不误判，进程结束/取消清除错误计时器', () => {
   const { monitor, failures, timers } = setup();
   for (const type of ['text', 'tool_result']) {
-    const line = JSON.stringify({ type, part: { text: 'Cannot connect to API: example' } });
+    const line = JSON.stringify({ type, part: { text: 'ENOSPC: no space left on device; EDQUOT: disk quota exceeded; Cannot connect to API: example' } });
     monitor.onEvent(inspectOpencodeRunEvent(line));
     monitor.onStderr(line + '\n');
   }
@@ -99,4 +99,19 @@ test('模型回答和工具输出的错误文字不误判，进程结束/取消�
   pending.monitor.onEvent(retry());
   assert.equal(pending.monitor.finish()?.code, 'MODEL_ERROR');
   assert.equal(pending.timers.size, 0);
+});
+
+test('存储错误在结构化失败、重试和 stderr 中保留资源分类', () => {
+  const a = setup();
+  a.monitor.onStderr(JSON.stringify({ type: 'session.error', error: { message: 'ENOSPC: no space left on device, write' } }));
+  assert.equal(a.failures[0].code, 'ENOSPC');
+  const b = setup();
+  b.monitor.onEvent(retry(1, 'EDQUOT: disk quota exceeded, write'));
+  assert.equal(b.failures[0].code, 'EDQUOT');
+  assert.equal(b.timers.size, 0);
+  const c = setup();
+  c.monitor.onStderr('Error: ENO');
+  assert.equal(c.failures.length, 0);
+  c.monitor.onStderr('SPC: no space left on device, write');
+  assert.equal(c.failures[0].code, 'ENOSPC');
 });

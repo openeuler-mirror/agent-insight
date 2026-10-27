@@ -1,3 +1,6 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { createDiagnosisObserver } from './progress-observer';
+import type { DiagnosisProgressWriter } from './progress-types';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { loadFileBasedSkillPrompt, mountFileBasedSkillResources } from '@/lib/engine/general-agent/skills-fs-loader';
 import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
@@ -46,6 +49,7 @@ export async function runAgentDebugDiagnosis(args: {
   execution: ExecutionLike;
   interactions: unknown[];
   user: string;
+  progress?: DiagnosisProgressWriter;
 }): Promise<AgentDebugReportPayload> {
   const startedAt = Date.now();
   const executionId = String(args.execution.id || args.execution.taskId || '');
@@ -83,7 +87,7 @@ export async function runAgentDebugDiagnosis(args: {
     };
   }
 
-  const workspaceTag = `agent-debug-${executionId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}`;
+  const workspaceTag = `agent-debug-${createHash('sha256').update(executionId).digest('hex').slice(0, 12)}-${args.progress?.runId || randomUUID()}`;
   const workspaceDir = ensureSessionWorkspace(args.user, workspaceTag);
   fs.rmSync(path.join(workspaceDir, AGENT_DEBUG_FINAL_REPORT_REL_PATH), { force: true });
   const traceBundle = ensureTraceBundle({ workspaceDir, executionId, interactions });
@@ -97,28 +101,38 @@ export async function runAgentDebugDiagnosis(args: {
     turns,
     traceBundle,
   });
-  await runGeneralAgent({
-    user: args.user,
-    query: buildAgentQuery({
-      execution: args.execution,
-      executionId,
-      turns,
-      traceBundle,
-      inputRelPath,
-      skillMountPath: mounted.mountPoint ? './.' + AGENT_DEBUG_SKILL_NAME : null,
-    }),
-    system,
-    workspaceTag,
-    sessionTitle: `agent-debug · ${executionId}`,
-    systemAgentName: FAULT_DIAGNOSIS_AGENT_NAME,
-    recordTraceAs: FAULT_DIAGNOSIS_AGENT_NAME,
-    tagSkill: AGENT_DEBUG_SKILL_NAME,
-    interactionPolicy: 'auto-allow',
-    agent: 'build',
-    timeoutMs: Number(process.env.AGENT_DEBUG_AGENT_TIMEOUT_MS || 45 * 60_000),
-    progressTimeoutMs: Number(process.env.AGENT_DEBUG_AGENT_PROGRESS_TIMEOUT_MS || 10 * 60_000),
-    modelOptions: { temperature: 0, maxTokens: 6000 },
-  });
+  args.progress?.emit({ key: 'input-ready', kind: 'stage', state: 'completed', title: '执行资料已准备', summary: `已整理 ${turns.length} 个执行片段、${traceBundle.nodeCount} 个 Trace 节点，开始诊断。` });
+  const observer = args.progress ? createDiagnosisObserver({ workspaceDir, progress: args.progress, traceRefs: turns.flatMap(turn => [
+    ...(turn.traceStepIndex != null ? [{ traceStepIndex: turn.traceStepIndex, anchorId: turn.anchorIds[0] }] : []),
+    ...turn.toolCalls.flatMap(tool => tool.traceStepIndex != null ? [{ traceStepIndex: tool.traceStepIndex, anchorId: tool.anchorId }] : []),
+  ]) }) : null;
+  try {
+    await runGeneralAgent({
+      handlers: observer?.handlers,
+      user: args.user,
+      query: buildAgentQuery({
+        execution: args.execution,
+        executionId,
+        turns,
+        traceBundle,
+        inputRelPath,
+        skillMountPath: mounted.mountPoint ? './.' + AGENT_DEBUG_SKILL_NAME : null,
+      }),
+      system,
+      workspaceTag,
+      sessionTitle: `agent-debug · ${executionId}`,
+      systemAgentName: FAULT_DIAGNOSIS_AGENT_NAME,
+      recordTraceAs: FAULT_DIAGNOSIS_AGENT_NAME,
+      tagSkill: AGENT_DEBUG_SKILL_NAME,
+      interactionPolicy: 'auto-allow',
+      agent: 'build',
+      timeoutMs: Number(process.env.AGENT_DEBUG_AGENT_TIMEOUT_MS || 45 * 60_000),
+      progressTimeoutMs: Number(process.env.AGENT_DEBUG_AGENT_PROGRESS_TIMEOUT_MS || 10 * 60_000),
+      modelOptions: { temperature: 0, maxTokens: 6000 },
+    });
+  } finally {
+    observer?.scan();
+  }
 
   const parsed = readAgentDebugFinalReport(workspaceDir);
   if (!parsed) {
@@ -255,6 +269,7 @@ function buildAgentQuery(args: {
     `- 返回前必须运行无损校验：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_validate.py --input ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} --static ${AGENT_DEBUG_STATIC_REPORT_REL_PATH} --core .agent-insight/agent-debug-core.json --detectors .agent-insight/agent-debug-detectors.json`,
     `- ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} 是唯一报告真源；校验通过后最终回复只能是 ${AGENT_DEBUG_REPORT_READY}，不得回显报告 JSON、摘要或额外说明。`,
     '- 按 agent-debug-diagnosis Skill 把严格 JSON 写入最终报告文件。',
+    '- 如存在 .agent-insight/agent-debug-progress-context.json，按 Skill 的阶段进展协议，在真实开始某模块检查前上报该模块 started，获得新事实时上报 update，本轮完成时上报 completed，明确跳过时上报 skipped。立即调用 agentdebug_progress.py，不要延迟或批量补报。跨模块活动使用 --module overall，不能归到 system；不改变检查顺序，不虚构状态。上报失败不影响诊断。',
     '- Memory / Reflection / Planning / Action 都允许留白；空模块不是错误。',
     '- Action 必须基于真实 tool call；不要从 Action 失败倒推 Planning 一定错误。',
     '- 不使用候选窗口；必须基于输入文件中的全部 turns 运行拆分、静态检测和 Phase 1 分析。',

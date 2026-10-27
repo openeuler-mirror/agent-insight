@@ -141,6 +141,7 @@ export async function GET(request: NextRequest) {
       return {
         id: s.id,
         name: s.name,
+        sourceOwner: s.user ?? null,
         description: displayDescription,
         category: s.category,
         tags: s.tags ? JSON.parse(s.tags) : [],

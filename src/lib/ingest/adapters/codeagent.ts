@@ -15,4 +15,5 @@ export const codeagentAdapter: FrameworkAdapter = {
   },
   sessionMergeStrategy: 'snapshot-replace',
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,
+  isPlaceholderQuery: (query) => /^CodeAgent Session [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query),
 };

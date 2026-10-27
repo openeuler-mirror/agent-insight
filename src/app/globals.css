@@ -1492,3 +1492,23 @@ input:focus, textarea:focus, select:focus {
   border-top: 1px solid var(--border);
   margin: 8px 0;
 }
+
+@keyframes diagnosis-status-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes diagnosis-status-arrival {
+  35% { background-color: var(--border); }
+}
+@keyframes diagnosis-status-pop {
+  35% { transform: scale(1.2); }
+}
+.diagnosis-status-spin { animation: diagnosis-status-spin 1.1s linear infinite; }
+.diagnosis-status-spin-slow { animation: diagnosis-status-spin 2.4s linear infinite; }
+.diagnosis-status-arrival { animation: diagnosis-status-arrival 700ms ease-out; }
+.diagnosis-status-pop { animation: diagnosis-status-pop 700ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .diagnosis-status-spin,
+  .diagnosis-status-spin-slow,
+  .diagnosis-status-arrival,
+  .diagnosis-status-pop { animation: none; }
+}

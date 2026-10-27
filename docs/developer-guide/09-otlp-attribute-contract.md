@@ -1,3 +1,10 @@
+---
+title: "OTLP 属性契约 (FR-011)"
+description: "定义 Agent Insight 接收 OTLP Trace 和 Log 的传输、属性及内部映射约定，指导采集端兼容接入。"
+keywords: ["Agent Insight", "OpenTelemetry", "OTLP", "属性契约", "链路采集"]
+changefreq: monthly
+---
+
 # OTLP 属性契约 (FR-011)
 
 > 本文档定义 OpenClaw 及其他 OTLP/HTTP 客户端向 Agent Insight 上报 trace/log 时必须遵守的属性契约。服务端依据此契约解析、归一化并存储为 `Execution` / `Session` 记录。
@@ -184,6 +191,8 @@ CodeAgent 使用自己的 LogRecord 协议而非上述通用 span 属性。服�
 
 Logs 中的 `api_request` / `api_response`、`tool_request` / `tool_response`、`agent.start` / `agent.finish` 是 CodeAgent Execution 的权威输入。工具事件通过 `tool_call_id` 与 `inference_id` 关联；`execution.agent_run_id` 与 `execution.parent_agent_run_id` 表达父子运行关系；root 与 child 的 Agent 名称优先读取 `agent_name`，其次读取 `execution.agent_id`，仅在两者都缺失时使用框架兜底名；没有独立 `user_prompt` 事件时，接收端从 root 首个 `api_request.request_text` 提取用户消息并补成 `role=user` interaction；`skill_name` 及 Skill 参数表达技能调用。接收端将 `Skill` 规范化为 `skill`，将 `Agent` / `Task` 规范化为 `task`，再复用统一 Execution 树与 Skill 归属逻辑。
 
+用户输入尚未到达时，聚合器使用 `CodeAgent Session <会话 UUID>` 作为临时 query。CodeAgent FrameworkAdapter 通过 `isPlaceholderQuery` 精确识别该 UUID 占位格式；后续保存时，`saveExecutionRecord` 从 interactions 提取首条非空用户消息，同步刷新 Execution 和 Session 的 query，真实任务标题继续保留。历史占位值在会话重新聚合并保存时修正，不在服务启动或读取时批量回填。
+
 setup wrapper 只设置 `CODEAGENT3_ENABLE_TELEMETRY=1`、OTLP base endpoint、JSON protocol 和认证 header，不写 `OTEL_TRACES_EXPORTER=none` / `OTEL_METRICS_EXPORTER=none`；CodeAgent 当前会覆盖这类关闭变量。
 
 ## LlamaIndex 兼容契约
@@ -240,6 +249,18 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 落库模型：`RasAnomalyEvent`。实现：`src/lib/ingest/ras/*`、`src/app/api/ingest/ras-events`；推送方：同进程 `agent_ras/ras_runtime/insight_push.py`（fail-open）。同一 `taskId + deliveryId` 幂等更新；相同内容的两次真实异常使用不同 `deliveryId`，不会被错误合并。`payload.actions[]` 保留动作类型及完整 `message`；`payload.trace_anchor` 使用 `message_id + part_id + channel` 定位**检测点**，或使用 `call_id + channel=tool_call` 定位工具调用。`action_result` 携带同一检测锚点、实际投递内容，以及可选的 `payload.delivery_anchor`（`message_id` 必须是**平台分配**的投递消息 id，才可把投递交互重分类为 RAS；`channel` 为 `ras_notice` 或 `ras_steering`）。拿不到平台真 id 时**省略** `delivery_anchor`，**禁止**客户端伪造 id。**不做**正文匹配兜底。
 
 宿主上传生命周期：`fire_push_*` 注册 per-session pending handle；平台在异常与全部 `action_result` 入队后调用内部 `flush(timeout_ms)`，以 HTTP 2xx 作为 ack。flush 只等待调用时的 pending 快照，返回 `attempted/acked/failed/pending/timed_out`；并发 flush 各自使用本地快照结算，不会互相消费回执。未 flush 的完成回执按 session 最多保留 256 条，避免长驻宿主无界增长。超时不得取消上传或向 Agent 主流程抛错。OpenCode 的主 flush 点是 `onActions` 末尾，idle/bye 仅兜底，`reset` 不清理 pending。该有界 drain 保证正常短生命周期结束；SIGKILL/断电保证需另建持久化 outbox。
+
+## xGovernor 单 Agent Benchmark Trace
+
+该路径由 `xgovernor-agent` Adapter 接管，要求根 Session 为 `xgovernor:<runId>` 且带有 `xgovernor.runtime_id`，复用 Pi canonical 的 USER/LLM/Tool/Agent 映射，按 `agent.insight.framework` 保留 `pi-agent` 或 `xiaoo` 的身份。不改变原生 CLI 与 MCTS 的 Trace 归属。
+
+| 属性 | 来源与含义 |
+| --- | --- |
+| `benchmark.run_id` | 平台本次 Case Run ID |
+| `xgovernor.runtime_id` | 独立 daemon 下精确创建并持久化的 Runtime ID |
+| `agent.insight.framework` | 本次执行平台，由共享 Trace transport 写入 |
+
+Pi 的正文来自原生 JSONL；xiaoO 来自透明 worker 代理保存的完整 schema 1 state，不从 SSE 摘要或 SQLite 私有表拼接。调用与工具结果必须完整匹配；缺失时执行报告 Trace 不完整。xiaoO 仅上报原始 `api_usage_tokens` 总数，不推算输入/输出分项。业务 Trace ID 与 OTLP 传输 ID 分开，Case 链接使用前者。Trace 先写 durable spool，资源关闭后仍可重传；实际入库确认继续遵循既有规则。
 
 ## Goal Plus Pi 被动导入属性
 

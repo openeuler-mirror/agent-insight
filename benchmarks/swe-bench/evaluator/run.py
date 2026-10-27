@@ -153,8 +153,8 @@ def main(input_path: str, output_path: str) -> int:
     test_output_path = log_dir / LOG_TEST_OUTPUT
     instance_log_path = log_dir / LOG_INSTANCE
     client = docker.from_env(
-        timeout=int(os.environ.get("SWEBENCH_DOCKER_TIMEOUT", "1800")),
-        max_pool_size=int(os.environ.get("SWEBENCH_DOCKER_POOL_SIZE", "16")),
+        timeout=payload["docker"]["requestTimeoutSeconds"],
+        max_pool_size=payload["docker"]["connectionPoolSize"],
     )
     controlled = ControlledDockerClient(
         client,

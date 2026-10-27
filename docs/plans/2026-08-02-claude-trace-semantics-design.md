@@ -2,7 +2,7 @@
 
 ## 背景
 
-MR !244 用 Claude Code 专属补传器补齐官方 OTel 跨机上报缺失的 system prompt、hook additionalContext、工具输出和子 Agent 映射。119 实测 task `2a1b9675-13d5-40b7-b3f1-0590e88d0109` 暴露出四类语义错误：
+MR !244 用 Claude Code 专属补传器补齐官方 OTel 跨机上报缺失的 system prompt、hook additionalContext、工具输出和子 Agent 映射。部署环境实测暴露出四类语义错误：
 
 - Claude 内部的标题生成、输入建议和离开回顾被当成业务对话；
 - 首批聚合写入的 `Claude Code Session <UUID>` 没被后续真实用户输入替换；
@@ -74,7 +74,7 @@ MR !244 用 Claude Code 专属补传器补齐官方 OTel 跨机上报缺失的 s
 
 - 补传器只由 Claude setup 安装，入口仍是 `/api/ingest/claude/context`；其他框架不会调用。
 - 本地实测纯队列写入约 6,384 ops/s，不是瓶颈；30 次 Node 冷启动约 0.65s，现有“每次再拉一个 worker”才是需要消除的开销。
-- 到 119 的 HTTP RTT 多数 26–36ms，单 worker 串行处理 30 个不同 Session/s 已接近上限。相同 Session 的高频轮次会被队列合并；30 个完整新 Session/s 持续输入仍可能形成可恢复积压。
+- HTTP RTT 会影响单 worker 串行处理的吞吐上限，应在目标网络实测。相同 Session 的高频轮次会被队列合并；30 个完整新 Session/s 持续输入仍可能形成可恢复积压。
 - 服务端采用 spool + 单飞 consumer，接收成功不等于立即可见。若 30 个完整 Session/s 是正式容量指标，应另做持续压测并评估多 consumer/分区存储，不能在本次语义修复里直接放开并发。
 
 ## 验证
@@ -84,4 +84,4 @@ MR !244 用 Claude Code 专属补传器补齐官方 OTel 跨机上报缺失的 s
 - 断言建树结果包含两个 child、父 task 均有 `spawnedChildId`，root/child system prompt 各归其位。
 - 对 OpenCode、Hermes、CodeAgent 和 Claude 同机 body_ref 既有用例做回归。
 - 对 300 次 burst enqueue 验证只 spawn 一个 worker，并覆盖完成后再启动、陈旧令牌恢复和失败队列保留。
-- 最后运行 Claude 专项、完整 `npm run test`、`npx tsc --noEmit`，再在 119 进行真实 Claude Code 端到端验证。
+- 最后运行 Claude 专项、完整 `npm run test`、`npx tsc --noEmit`，再在验收环境进行真实 Claude Code 端到端验证。

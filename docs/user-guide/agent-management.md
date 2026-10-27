@@ -1,6 +1,8 @@
 ---
 title: "Agent 概览"
-description: "创建 Agent、获取 API Key、Workspace 切换"
+description: "介绍 Agent 的注册、平台归属与主子关系，帮助用户在概览页管理和识别已接入的 Agent。"
+keywords: ["Agent Insight", "Agent 管理", "平台注册", "主子关系"]
+changefreq: monthly
 ---
 
 # Agent 概览

@@ -1,6 +1,7 @@
 'use client';
-import { useRouter } from 'next/navigation';
-import { DeleteExperimentButton, isCompletedExperimentCase, emptyCaseEvaluationMessage } from './DeleteExperimentButton';
+import { useSearchParams } from 'next/navigation';
+import { casePagination, experimentDetailHref } from '@/lib/engine/experiment/case-navigation';
+import { emptyCaseEvaluationMessage } from './DeleteExperimentButton';
 
 // Trace 评测详情：任务输入/预期输出/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
 // （类目均分 · N/M 项计入）→ 每个评估器一张全宽卡。
@@ -38,6 +39,7 @@ import {
 } from '@/lib/benchmark/presentation';
 
 interface ResultRow {
+  evaluationTraceId?: string | null;
   id: string;
   caseId: string;
   evaluatorId: string;
@@ -61,6 +63,8 @@ interface ExperimentDetail {
   scope?: string;
   evaluatorConfigs: EvaluatorRunConfigMap;
   evaluatorIds: string[];
+  casePage?: number;
+  casePageSize?: number;
   cases: Array<{
     id: string;
     taskId: string | null;
@@ -72,6 +76,7 @@ interface ExperimentDetail {
     traceAttemptStatus?: string | null;
     caseValues?: Record<string, unknown> | null;
     benchmark?: {
+      submissionSource?: string;
       adapterKey: string;
       displayName: string;
       presentation: BenchmarkPresentation | null;
@@ -445,7 +450,8 @@ export function ExperimentCaseDetail({
   onBack?: () => void;
 }) {
   const { user } = useAuth();
-  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { casePage, casePageSize } = casePagination(searchParams.get('casePage'), searchParams.get('casePageSize'));
   const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -486,7 +492,7 @@ export function ExperimentCaseDetail({
       // 带 caseId：让详情 API 精确返回这一条 case（不受 case 列表分页影响，
       // 否则该 case 不在第 1 页时这里 find 不到 → 详情空白）。
       const res = await apiFetch(
-        `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&caseId=${encodeURIComponent(caseId)}`,
+        `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&caseId=${encodeURIComponent(caseId)}&casePage=${casePage}&casePageSize=${casePageSize}`,
       );
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
@@ -500,7 +506,7 @@ export function ExperimentCaseDetail({
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [user, id, caseId]);
+  }, [user, id, caseId, casePage, casePageSize]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -580,22 +586,41 @@ export function ExperimentCaseDetail({
     return [...values, benchmark.reference.description].filter(Boolean).join('\n');
   })();
 
+  const backControl = embedded && onBack ? (
+    <button
+      type="button"
+      onClick={onBack}
+      style={{
+        fontSize: 12, color: 'var(--foreground-secondary)',
+        padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
+        background: 'var(--background-secondary)', cursor: 'pointer',
+      }}
+    >
+      ‹ 返回实验详情
+    </button>
+  ) : (
+    <Link
+      href={experimentDetailHref(id, caseId, detail?.casePage ?? casePage, casePageSize)}
+      style={{
+        fontSize: 12, color: 'var(--foreground-secondary)', textDecoration: 'none',
+        padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
+        background: 'var(--background-secondary)',
+      }}
+    >
+      ‹ 返回实验详情
+    </Link>
+  );
+
   return (
     <>
       {!embedded && <AppTopBar title={isBenchmark ? 'Benchmark Case 详情' : 'Trace 评测详情'} />}
       <PageContainer className="min-w-0 max-w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full [&>*]:shrink-0">
-        {user && caseRow && detail && <DeleteExperimentButton user={user} experimentId={id} caseId={caseId}
-          completed={isCompletedExperimentCase(detail.status, caseRow.benchmark?.runStatus, {
-            ...caseRow, evaluatorIds: detail.evaluatorIds, results: caseResults,
-          })}
-          onDeleted={(experimentDeleted) => experimentDeleted
-            ? router.replace('/experiments')
-            : onBack ? onBack() : router.push(`/experiments/${encodeURIComponent(id)}`)} />}
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : !detail || !caseRow ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>
-            {error || 'case 不存在'}
+            {backControl}
+            <p className="mt-3">{error || 'case 不存在'}</p>
           </div>
         ) : (
           <>
@@ -605,30 +630,7 @@ export function ExperimentCaseDetail({
 
             {/* 页头 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-              {embedded && onBack ? (
-                <button
-                  type="button"
-                  onClick={onBack}
-                  style={{
-                    fontSize: 12, color: 'var(--foreground-secondary)',
-                    padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
-                    background: 'var(--background-secondary)', cursor: 'pointer',
-                  }}
-                >
-                  ‹ 返回实验详情
-                </button>
-              ) : (
-                <Link
-                  href={`/experiments/${encodeURIComponent(id)}`}
-                  style={{
-                    fontSize: 12, color: 'var(--foreground-secondary)', textDecoration: 'none',
-                    padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
-                    background: 'var(--background-secondary)',
-                  }}
-                >
-                  ‹ 返回实验详情
-                </Link>
-              )}
+              {backControl}
               <span style={{
                 fontSize: 13, fontWeight: 600, maxWidth: 520, overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -636,7 +638,7 @@ export function ExperimentCaseDetail({
                 {inputSummary.length > 60 ? `${inputSummary.slice(0, 60)}…` : inputSummary || '—'}
               </span>
               <span style={{ flex: 1 }} />
-              {isBenchmark && (
+              {isBenchmark && caseRow?.benchmark?.submissionSource !== 'imported' && (
                 <button
                   type="button"
                   disabled={Boolean(retryingId)}
@@ -651,7 +653,7 @@ export function ExperimentCaseDetail({
                   href={`/trace?taskId=${encodeURIComponent(caseRow.taskId)}`}
                   style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}
                 >
-                  前往链路观测 →
+                  查看执行链路 →
                 </Link>
               )}
             </div>
@@ -851,6 +853,11 @@ export function ExperimentCaseDetail({
                             <span style={{ fontSize: 12.5, fontWeight: 600 }}>{lookup.nameOf(r.evaluatorId)}</span>
                             {tags.map((t) => <TagChip key={t} text={t} />)}
                             <span style={{ flex: 1 }} />
+                            {r.evaluationTraceId && (
+                              <Link href={`/trace?taskId=${encodeURIComponent(r.evaluationTraceId)}`} onClick={event => event.stopPropagation()} className="text-xs text-primary hover:underline">
+                                查看评估链路 ↗
+                              </Link>
+                            )}
                             {failed ? (
                               <span style={{
                                 fontSize: 11, padding: '1px 8px', borderRadius: 8, fontWeight: 500,

@@ -1,3 +1,10 @@
+---
+title: "Agent-insight 共享账户接入说明"
+description: "介绍 Agent Insight 共享账户的服务端配置、OpenCode 客户端接入与部署验收方法。"
+keywords: ["Agent Insight", "共享账户", "OpenCode", "部署配置"]
+changefreq: monthly
+---
+
 # Agent-insight 共享账户接入说明
 
 > 面向：把 Agent-insight 部署给一个团队共用的运维/接入方。

@@ -1,3 +1,7 @@
+import { guardTraceDataset, generationErrorResponse, traceIdentity } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
+import { hash } from '@/lib/trace-datasets/sampling';
+import { getTraceDatasetManager } from '@/server/trace-datasets/manager';
 import { NextResponse } from 'next/server';
 import {
   buildAgentDatasetItemsView,
@@ -22,6 +26,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
     }
 
+    await guardTraceDataset(request, id.trim(), user);
     const dataset = await findAgentDataset(user, id.trim());
     if (!dataset) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
@@ -38,6 +43,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     }
     return NextResponse.json(view === 'items' ? buildAgentDatasetItemsView(decorated) : decorated);
   } catch (error) {
+    if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('agent-datasets [id] GET error:', error);
     return NextResponse.json({ error: 'failed to load dataset' }, { status: 500 });
   }
@@ -53,6 +59,21 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
     }
 
+    const owner = await traceIdentity(request, false);
+    if (owner === user) {
+      const manager = await getTraceDatasetManager().catch(() => null);
+      const job = manager && await manager.client.traceDatasetGenerationJob.findFirst({ where: { owner, datasetId: idTrim }, select: { id: true } });
+      const receipt = manager && await manager.client.traceDatasetOperationReceipt.findFirst({ where: { ownerKey: hash(owner), datasetId: idTrim, kind: 'delete' }, select: { id: true } });
+      if (manager && (job || receipt)) {
+        const result = await manager.remove(owner, idTrim);
+        return result ? NextResponse.json(result, { status: 202 }) : new Response(null, { status: 204 });
+      }
+    }
+    if (await guardTraceDataset(request, idTrim, user)) {
+      const manager = await getTraceDatasetManager();
+      const result = await manager.remove(user, idTrim);
+      return result ? NextResponse.json(result, { status: 202 }) : new Response(null, { status: 204 });
+    }
     const existing = await findAgentDataset(user, idTrim);
     if (!existing) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
@@ -79,6 +100,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('agent-datasets [id] DELETE error:', error);
     return NextResponse.json({ error: 'failed to delete dataset' }, { status: 500 });
   }

@@ -5,7 +5,7 @@
 
 ## 背景 / 问题
 
-线上（119）某 skill 触发评测的"应触发场景"全挂（TPR=0），排查发现**不是 skill 不触发，而是执行被超时掐断**：
+部署环境中某 skill 触发评测的"应触发场景"全挂（TPR=0），排查发现**不是 skill 不触发，而是执行被超时掐断**：
 
 - 单条 query 默认 30s 超时，并发 5。opencode/deepseek 在多路并发下慢，正样本常常在模型刚吐完前言、还没跑到 `skill` 调用时就被 abort。
 - runner 里"30s 超时 abort"和"自然跑完没触发"落库后**完全一样**（都 `triggered:false`、无 error），前端无从区分，于是"全挂"看起来像 skill 质量问题，实则是执行问题。
@@ -68,7 +68,7 @@
 - `npx tsc --noEmit -p tsconfig.json`：`src/` 0 错（杂物来自仓库外未跟踪目录）。
 - eslint（限改动文件）：0 新增错误；page.tsx 的 3 个 `set-state-in-effect` 为既有问题（upstream/master 同样 3 个）。
 - `npm run test`：190 pass / 0 fail / 1 skip（含新增 17 例）。
-- 端到端（真实触发评测路径）建议在 119 用新 build 重跑目标 skill 验证 TPR 回正——既验功能也复验本次根因。
+- 端到端（真实触发评测路径）建议在验收环境用新 build 重跑目标 skill 验证 TPR 回正——既验功能也复验本次根因。
 
 ## 风险
 

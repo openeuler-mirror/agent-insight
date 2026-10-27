@@ -73,6 +73,11 @@ import {
   RIGOR_PRESET_IDS,
   isRigorPresetId,
 } from '../src/lib/engine/experiment/rigor-preset-evaluators';
+import {
+  SIMILARITY_PRESET_IDS,
+  isSimilarityPresetId,
+} from '../src/lib/engine/experiment/similarity-preset-evaluators';
+
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
  * 新增一族预置评估器时，在 evaluateOnce 里接了分发，就同步在这里登记一行。
@@ -116,6 +121,7 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     ids: [...FLUENCY_PRESET_IDS, ...HALLUCINATION_PRESET_IDS],
   },
   { name: 'rigor-preset-evaluators.ts', claims: isRigorPresetId, ids: RIGOR_PRESET_IDS },
+  { name: 'similarity-preset-evaluators.ts', claims: isSimilarityPresetId, ids: SIMILARITY_PRESET_IDS },
 ];
 
 test('旧质量卡保留 faithful runner，新过程质量卡与效率卡由 trajectory runner 唯一认领', () => {

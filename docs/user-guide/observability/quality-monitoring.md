@@ -1,6 +1,8 @@
 ---
 title: "质量监控"
 description: "查看 Agent 的过程、成本和错误质量"
+keywords: ["Agent Insight", "质量监控", "过程质量", "成本分析", "错误分析"]
+changefreq: monthly
 ---
 
 # 质量监控

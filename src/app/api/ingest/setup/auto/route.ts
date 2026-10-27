@@ -10,7 +10,7 @@ import {
   ACTRAIL_UNIX_SETUP_BLOCK,
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
-import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller, getAgentInsightClientBashInstaller } from '@/lib/ingest/setup-package';
 import {
     parseFrameworks,
     resolveInstallProfile,
@@ -153,6 +153,7 @@ AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
 ${getAgentInsightRasBashInstaller()}
+${getAgentInsightClientBashInstaller()}
 
 echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
@@ -222,6 +223,7 @@ const frameworks = [
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
     { name: 'DeepSeek Harness', value: 'deepseek-harness' },
+    { name: 'QwenPaw', value: 'qwenpaw' },
     { name: 'MCTS (xGovernor)', value: 'mcts-xgovernor' },
     { name: 'WorkBuddy', value: 'workbuddy' }
 ];
@@ -311,6 +313,7 @@ INSTALL_ACTRAIL=false
 INSTALL_CODEX=false
 INSTALL_QWENCODE=false
 INSTALL_DEEPSEEK_HARNESS=false
+INSTALL_QWENPAW=false
 INSTALL_MCTS_XGOVERNOR=false
 DEEPSEEK_HARNESS_SETUP_OK=false
 MCTS_XGOVERNOR_SETUP_OK=false
@@ -361,6 +364,9 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
     INSTALL_DEEPSEEK_HARNESS=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"qwenpaw"* ]]; then
+    INSTALL_QWENPAW=true
+fi
 if [[ ",$SELECTED_FRAMEWORKS," == *",mcts-xgovernor,"* ]]; then
     INSTALL_MCTS_XGOVERNOR=true
 fi
@@ -369,7 +375,7 @@ if [[ "$SELECTED_FRAMEWORKS" == *"workbuddy"* ]]; then
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -382,12 +388,19 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     echo "⏬ Downloading OpenCode Plugin..."
     rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
+    OPENCODE_PLUGIN_QUERY=""
+    OPENCODE_INSTALLED_VERSION=$(opencode --version 2>/dev/null || true)
+    if printf "%s\\n" "$OPENCODE_INSTALLED_VERSION" | grep -Eq '^[[:space:]]*(opencode[[:space:]]+)?v?2[.]'; then OPENCODE_PLUGIN_QUERY="?apiVersion=2"; fi
+    if [ -n "$OPENCODE_PLUGIN_QUERY" ] && { [ -f "$OPENCODE_CONFIG_DIR/plugins/agent-insight-ras.js" ] || grep -Fq "agent-insight-ras" "$OPENCODE_CONFIG_DIR/opencode.json" "$OPENCODE_CONFIG_DIR/opencode.jsonc" 2>/dev/null; }; then
+        echo "⚠️  检测到旧 agent-insight-ras，OpenCode 2.x 不兼容。请先备份 $OPENCODE_CONFIG_DIR，再移走 plugins/agent-insight-ras.js 并移除配置中对应的 plugin 条目；保留其他插件、模型和自定义 Agent 配置。"
+    fi
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode$OPENCODE_PLUGIN_QUERY" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     echo "⏬ Downloading OpenCode Uploader..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$AGENT_INSIGHT_HOME/opencode_uploader_client.js"
     echo "⏬ Installing OpenCode commands..."
     mkdir -p "$OPENCODE_CONFIG_DIR/commands"
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
+    if [ -z "$OPENCODE_PLUGIN_QUERY" ]; then
     echo "⏬ Downloading OpenCode TUI Plugin..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
     export TUI_PLUGIN_PATH="$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
@@ -414,6 +427,7 @@ fs.writeFileSync(file, JSON.stringify(data, null, 2));
 NODE
     else
       echo "⚠️  node not found; skip TUI plugin config patch."
+    fi
     fi
 fi
 
@@ -772,6 +786,23 @@ if [ "$INSTALL_CODEX" = "true" ]; then
     rm -f "$CODEX_INSTALLER"
 fi
 
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "⏬ Installing QwenPaw AgentInsight collector..."
+    if command -v python3 >/dev/null 2>&1; then QWENPAW_PYTHON="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then QWENPAW_PYTHON="$(command -v python)"; else echo "❌ Python 3.11+ is required for the QwenPaw collector."; exit 1; fi
+    if ! "$QWENPAW_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"; then echo "❌ $QWENPAW_PYTHON must be Python 3.11 or newer."; exit 1; fi
+    QWENPAW_ROOT="$AGENT_INSIGHT_HOME/collectors/qwenpaw"
+    QWENPAW_ARCHIVE="$QWENPAW_ROOT/agent-insight-qwenpaw.zip"
+    QWENPAW_SOURCE_DIR="$QWENPAW_ROOT/current"
+    rm -rf "$QWENPAW_SOURCE_DIR"
+    mkdir -p "$QWENPAW_ROOT" "$QWENPAW_SOURCE_DIR"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qwenpaw-collector" -o "$QWENPAW_ARCHIVE"
+    "$QWENPAW_PYTHON" -m zipfile -e "$QWENPAW_ARCHIVE" "$QWENPAW_SOURCE_DIR"
+    "$QWENPAW_PYTHON" -m pip install --disable-pip-version-check --upgrade "$QWENPAW_SOURCE_DIR"
+    "$QWENPAW_PYTHON" -m qwenpaw_insight.cli install --host "$AGENT_INSIGHT_HOST" --api-key "$AGENT_INSIGHT_API_KEY"
+    echo "QwenPaw collector installed (source: $QWENPAW_SOURCE_DIR, spool: $AGENT_INSIGHT_HOME/otel_data/qwenpaw)"
+    echo "   Restart QwenPaw; the plugin is loaded by QwenPaw hooks."
+fi
+
 if [ "$LLAMAINDEX_READY" = "true" ]; then
     if ! PYTHONPATH="$LLAMAINDEX_SOURCE_DIR\${PYTHONPATH:+:$PYTHONPATH}" AGENT_INSIGHT_API_KEY="$AGENT_INSIGHT_API_KEY" "$LLAMAINDEX_PYTHON" -m agent_insight_llamaindex.cli configure --endpoint "$AGENT_INSIGHT_HOST"; then
         echo "❌ Unable to configure the LlamaIndex collector."
@@ -837,7 +868,7 @@ if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ -n "$GOAL_PLUS_HOSTS" ]; then
 fi
 
 # 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
-if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
+if { [ "$INSTALL_OPENCODE" = "true" ] && [ -z "$OPENCODE_PLUGIN_QUERY" ]; } || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
     echo "🛡️  Installing Agent RAS runtime..."
     install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
 fi
@@ -1099,6 +1130,14 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     fi
 fi
 
+if [[ ",$SELECTED_FRAMEWORKS," == *",pi-agent,"* ]] || [[ ",$SELECTED_FRAMEWORKS," == *",xiaoo,"* ]]; then
+    echo "🖥️  Registering resident client and preparing native Benchmark backend..."
+    if ! install_agent_insight_client "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY"; then
+        echo "❌ 常驻客户端安装失败，请修复错误后重新执行同一命令"
+        exit 1
+    fi
+fi
+
 # 10. Final Summary
 echo ""
 GOAL_PLUS_TRACE_READY=true
@@ -1161,6 +1200,9 @@ fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  ✅ Codex Collector: ~/.agent-insight/collectors/codex"
 fi
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "  ✅ QwenPaw Collector: bundled hook plugin (spool $AGENT_INSIGHT_HOME/otel_data/qwenpaw)"
+fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  ✅ DeepSeek Harness observability: headless + web profiles"
 fi
@@ -1208,6 +1250,9 @@ if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
 fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  8. Start Codex, run /hooks, and trust the Agent Insight handlers"
+fi
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "  9. Restart QwenPaw, then run a conversation"
 fi
 if [ "$MCTS_XGOVERNOR_SETUP_OK" = "true" ]; then
     echo "  9. Run MCTS through the proxy: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]"
@@ -1336,6 +1381,7 @@ function generatePowerShellScript(
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
         '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },"',
+        '    "    { name: \'QwenPaw\', value: \'qwenpaw\' },"',
         '    "    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },"',
         '    "    { name: \'WorkBuddy\', value: \'workbuddy\' }"',
         '    "];"',
@@ -1426,6 +1472,7 @@ function generatePowerShellScript(
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
+        '$INSTALL_QWENPAW = $false',
         '$INSTALL_WORKBUDDY = $false',
         '$INSTALL_MCTS_XGOVERNOR = $false',
         '$MCTS_XGOVERNOR_SETUP_OK = $false',
@@ -1476,6 +1523,9 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
         '    $INSTALL_DEEPSEEK_HARNESS = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "qwenpaw") {',
+        '    $INSTALL_QWENPAW = $true',
+        '}',
         'if ($SELECTED_FRAMEWORKS -match "workbuddy") {',
         '    $INSTALL_WORKBUDDY = $true',
         '}',
@@ -1484,7 +1534,7 @@ function generatePowerShellScript(
         '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_WORKBUDDY -and -not $INSTALL_MCTS_XGOVERNOR) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_QWENPAW -and -not $INSTALL_WORKBUDDY -and -not $INSTALL_MCTS_XGOVERNOR) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1499,9 +1549,23 @@ function generatePowerShellScript(
         '    Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
+        '    $opencodePluginQuery = ""',
+        '    if (Get-Command opencode -ErrorAction SilentlyContinue) {',
+        '        $opencodeInstalledVersion = (& opencode --version 2>$null | Out-String).Trim()',
+        '        if ($opencodeInstalledVersion -match "^\\s*(opencode\\s+)?v?2\\.") { $opencodePluginQuery = "?apiVersion=2" }',
+        '    }',
+        "    if ($opencodePluginQuery) {",
+        "        $legacyRas = Test-Path (Join-Path $opencodeConfigDir \"plugins\\agent-insight-ras.js\")",
+        "        foreach ($name in @(\"opencode.json\", \"opencode.jsonc\")) {",
+        "            $configPath = Join-Path $opencodeConfigDir $name",
+        "            if ((Test-Path $configPath) -and (Select-String -LiteralPath $configPath -SimpleMatch \"agent-insight-ras\" -Quiet)) { $legacyRas = $true }",
+        "        }",
+        "        if ($legacyRas) { Write-Host \"⚠️  检测到旧 agent-insight-ras，OpenCode 2.x 不兼容。请先备份 $opencodeConfigDir，再移走 plugins/agent-insight-ras.js 并移除配置中对应的 plugin 条目；保留其他插件、模型和自定义 Agent 配置。\" }",
+        "    }",
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode$opencodePluginQuery" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
         '    Write-Host "⏬ Downloading OpenCode Uploader..."',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -OutFile (Join-Path $skillInsightDir "opencode_uploader_client.js")',
+        '    if (-not $opencodePluginQuery) {',
         '    Write-Host "⏬ Downloading OpenCode TUI Plugin..."',
         '    $tuiPluginPath = Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.tui.tsx"',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -OutFile $tuiPluginPath',
@@ -1517,6 +1581,7 @@ function generatePowerShellScript(
         '        $data | ConvertTo-Json -Depth 10 | Set-Content -Path $tuiConfigFile -Encoding UTF8',
         '    } catch {',
         '        Write-Host "⚠️  Failed to patch tui.json for TUI plugin."',
+        '    }',
         '    }',
         '}',
         '',
@@ -1867,6 +1932,27 @@ function generatePowerShellScript(
         '    } finally {',
         '        Remove-Item -LiteralPath $codexInstaller -Force -ErrorAction SilentlyContinue',
         '    }',
+        '}',
+        '',
+        'if ($INSTALL_QWENPAW) {',
+        '    Write-Host "⏬ Installing QwenPaw AgentInsight collector..."',
+        '    $qwenpawPython = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1).Source',
+        '    if (-not $qwenpawPython) { throw "Python 3.11+ is required for the QwenPaw collector." }',
+        '    & $qwenpawPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"',
+        '    if ($LASTEXITCODE -ne 0) { throw "$qwenpawPython must be Python 3.11 or newer." }',
+        '    $qwenpawRoot = Join-Path $env:AGENT_INSIGHT_HOME "collectors\\qwenpaw"',
+        '    $qwenpawArchive = Join-Path $qwenpawRoot "agent-insight-qwenpaw.zip"',
+        '    $qwenpawSourceDir = Join-Path $qwenpawRoot "current"',
+        '    Remove-Item $qwenpawSourceDir -Recurse -Force -ErrorAction SilentlyContinue',
+        '    New-Item -ItemType Directory -Path $qwenpawRoot, $qwenpawSourceDir -Force | Out-Null',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qwenpaw-collector" -OutFile $qwenpawArchive',
+        '    & $qwenpawPython -m zipfile -e $qwenpawArchive $qwenpawSourceDir',
+        '    & $qwenpawPython -m pip install --disable-pip-version-check --upgrade $qwenpawSourceDir',
+        '    if ($LASTEXITCODE -ne 0) { throw "Unable to install the QwenPaw collector package." }',
+        '    & $qwenpawPython -m qwenpaw_insight.cli install --host $AGENT_INSIGHT_HOST --api-key $AGENT_INSIGHT_API_KEY',
+        '    if ($LASTEXITCODE -ne 0) { throw "Unable to configure the QwenPaw collector plugin." }',
+        '    Write-Host "QwenPaw collector installed (source: $qwenpawSourceDir, spool: $env:AGENT_INSIGHT_HOME\\otel_data\\qwenpaw)"',
+        '    Write-Host "   Restart QwenPaw; the plugin is loaded by QwenPaw hooks."',
         '}',
         '',
         'if ($LLAMAINDEX_READY) {',
@@ -2271,6 +2357,7 @@ function generatePowerShellScript(
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK) { Write-Host "  ⚠️  Goal Plus worker and relationship collector: not installed" }',
         'if ($AUTO_ADDED_FRAMEWORKS) { Write-Host "  ℹ️  Trace collectors configured for Goal Plus: $AUTO_ADDED_FRAMEWORKS" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:AGENT_INSIGHT_HOME\\collectors\\codex" }',
+        'if ($INSTALL_QWENPAW) { Write-Host "  ✅ QwenPaw Collector: bundled hook plugin (spool $env:AGENT_INSIGHT_HOME\\otel_data\\qwenpaw)" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2313,6 +2400,7 @@ function generatePowerShellScript(
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
         'if ($INSTALL_WORKBUDDY) { Write-Host "  9. Open WorkBuddy and start a conversation; traces auto-collect (task: schtasks /query /tn AgentInsight-WorkBuddyCollector)" }',
         'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  9. In WSL run: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]" }',
+        'if ($INSTALL_QWENPAW) { Write-Host "  9. Restart QwenPaw, then run a conversation" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS) { Write-Host "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "      Worker relationship collection: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
         'Write-Host "------------------------------------------------"',

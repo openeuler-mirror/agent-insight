@@ -50,17 +50,19 @@ RUN set -eu; \
 
 WORKDIR /app
 
-COPY services/evaluator/src/evaluator-registry.cjs ./services/evaluator/src/evaluator-registry.cjs
+COPY services/evaluator/src ./services/evaluator/src
+COPY packages/project-config ./packages/project-config
+COPY packages/benchmark-protocol/artifact-path.cjs ./packages/benchmark-protocol/artifact-path.cjs
+COPY config/benchmark/evaluator.yaml ./config/benchmark/evaluator.yaml
 COPY benchmarks/swe-bench ./benchmarks/swe-bench
+
+RUN node -e "require('./benchmarks/swe-bench/evaluator/entrypoint.cjs'); require('./benchmarks/swe-bench/smoke/index.cjs')"
 
 ENV EVALUATOR_LISTEN_HOST=0.0.0.0 \
     EVALUATOR_DATA_DIR=/data \
     EVALUATOR_SOURCE_REVISION=$EVALUATOR_SOURCE_REVISION \
     EVALUATOR_SOURCE_DIRTY=$EVALUATOR_SOURCE_DIRTY \
-    SWE_BENCH_PYTHON=/opt/swebench-venv/bin/python \
-    SWE_BENCH_IMAGE_SOURCE=official \
-    SWE_BENCH_IMAGE_ARCH=auto \
-    SWE_BENCH_ALLOW_NON_OFFICIAL=false
+    PATH=/opt/swebench-venv/bin:$PATH
 
 VOLUME ["/data"]
 CMD ["node", "benchmarks/swe-bench/evaluator/entrypoint.cjs", "doctor"]

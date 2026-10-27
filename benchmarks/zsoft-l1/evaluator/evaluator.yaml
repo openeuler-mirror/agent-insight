@@ -1,0 +1,17 @@
+key: zsoft-l1
+runtime: oci-container
+imageRepository: agent-insight-benchmark-runtime-zsoft-l1
+imageProvider: ./images.cjs
+assets:
+  image: swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64@sha256:af1e63c5cacb1753ceec85de245f129bdc63bb3ae15dca961248d17fa7e27a3b
+  sourcePath: /opt/agent-insight/zsoft-l1/20261019-full-v1
+  releaseId: 20261019-full-v1
+  bundleDigest: sha256:d73939d50ff543cbbe7a5a23e15ece361ed89d0dd998ab0f3cdace63e23621f9
+  verifyCommand: python3
+  verifyEntrypoint: ./verify_assets.py
+dockerfile: ./Dockerfile
+entrypoint: ./entrypoint.py
+containerEntrypoint: /opt/agent-insight/zsoft/entrypoint.py
+command: python3
+network: deny
+resources: { cpu: 4, memoryMiB: 8192, timeoutSeconds: 900 }

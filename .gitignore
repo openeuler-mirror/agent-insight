@@ -35,6 +35,7 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env.local
 .env
+/config/**/*.local.yaml
 
 # custom model config (copy from custom-models.example.json)
 custom-models.json
@@ -126,3 +127,6 @@ docs/series-articles/
 # Python build artifacts from pip install (agent_fault_injection)
 agent_fault_injection/build/
 agent_fault_injection/*.egg-info/
+
+# Generated standalone Trace dataset Worker
+generated/trace-datasets/

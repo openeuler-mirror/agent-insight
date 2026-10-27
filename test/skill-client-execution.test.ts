@@ -171,6 +171,10 @@ let input=''; process.stdin.on('data', chunk => input+=chunk); process.stdin.on(
  if(input==='no-start') { setInterval(()=>{},1000); return; }
  const start=()=>{
   send('ready'); send('session'); send('model',{model:'csi-provider/GLM-5.2'});
+  if(input==='auth-error') {
+   console.log(JSON.stringify({type:'session.error',sessionID:'timing-session',error:{name:'ProviderAuthError',message:'Invalid API key'}}));
+   return;
+  }
   if(input==='route-hang' || input==='late-hit') {
    if(input==='late-hit') process.on('SIGTERM',()=>{send('trigger',{skillName:'test-skill'});process.exit(0);});
    setInterval(()=>{},1000); return;
@@ -205,6 +209,9 @@ let input=''; process.stdin.on('data', chunk => input+=chunk); process.stdin.on(
     finally { clearTimeout(cancellation); }
     const afterCancel = await run(raw);
     assert.equal(afterCancel.workspaceReused, false);
+    await assert.rejects(run('auth-error'), { code: 'MODEL_UNAVAILABLE' });
+    const afterAuthError = await run(raw);
+    assert.equal(afterAuthError.workspaceReused, false);
     for (const code of ['AGENT_STARTUP_TIMEOUT', 'TRIGGER_ROUTING_TIMEOUT']) assert.equal(isTraceGenerationFailureRetryable(code), false);
   } finally {
     workspace.clearTriggerWorkspaces();

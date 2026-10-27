@@ -8,7 +8,7 @@ import { aggregateClaudeOtelEvents } from '@/lib/ingest/claude-otel/aggregator';
 
 // 白名单是**显式清单**，不从 QUIET_WINDOW_INFERRED_FRAMEWORKS 反推——否则改了实现
 // 测试跟着一起变，等于没测。往集合里加框架必须同步改这里，逼一次有意识的确认。
-const QUIET_WINDOW_FRAMEWORKS = ['claudecode', 'jiuwenswarm', 'opencode', 'hermes', 'openclaw'];
+const QUIET_WINDOW_FRAMEWORKS = ['claudecode', 'jiuwenswarm', 'opencode', 'hermes', 'openclaw', 'qwenpaw'];
 const NON_QUIET_WINDOW_FRAMEWORKS = ['claude', 'direct_llm', 'generic', 'langfuse-langgraph', undefined];
 
 test('Claude Code trace lifecycle: quiet window infers completion for the allowlisted frameworks', () => {

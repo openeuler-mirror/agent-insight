@@ -1,6 +1,8 @@
 ---
 title: "运行观测"
-description: "Agent 概览、链路追踪与推理基础设施总览"
+description: "介绍运行观测的模块入口、使用顺序及平台接入方式，帮助用户定位 Agent 的运行状态与链路问题。"
+keywords: ["Agent Insight", "运行观测", "链路追踪", "平台接入"]
+changefreq: monthly
 ---
 
 # 运行观测
@@ -85,12 +87,31 @@ Hermes 插件会把 hook 数据编码为标准 OTLP/HTTP JSON，并直接上报�
 
 采集器会先将 Qwen Code 的会话、工具、LLM、Skill、子 Agent 和 Hook 数据写入 `~/.agent-insight/otel_data/qwencode/` 下按账号隔离的 spool，再异步上传。安装后发送一次真实 Qwen Code 请求；如果页面仍没有新 Trace，先确认 `.qwen/.env` 中的 endpoint 与当前平台地址一致，再检查该 spool 目录是否持续堆积。上传连续失败时，最新的会话编号和失败原因会写入同一账号目录下的 `logs/last-upload-failures.json`；该文件不会写入 API Key 或服务端响应正文。
 
+## QwenPaw 接入
+
+完整的安装、验证、Trace 展示、故障排查和卸载说明见
+[QwenPaw Trace Collector 接入指南](./qwenpaw-trace-collector)。
+
+安装指导页的普通 setup 和 auto setup 都支持选择 QwenPaw。QwenPaw 当前通过 hook 插件采集
+Trace：安装脚本从当前 Agent Insight 服务端下载内置 collector zip，解压到
+`~/.agent-insight/collectors/qwenpaw/current/`，用本机 Python 3.11+ 安装后执行
+`python -m qwenpaw_insight.cli install`，把 `plugin.json`、`backend.py` 和
+`qwenpaw_insight/` 注册到 QwenPaw plugins 目录。
+
+插件在 QwenPaw 启动后通过 startup/runtime/middleware/shutdown hook 采集根 Agent、用户问题、
+子 Agent、Skill、Tool、LLM、MCP、Channel 和 Cron span，并以 `service.name=qwenpaw` 发送到
+`/api/ingest/otel/v1/traces`。本地待上传数据写入
+`~/.agent-insight/otel_data/qwenpaw/` 下按 API Key 隔离的 spool；接入后重启 QwenPaw，运行一次
+真实对话，再到链路追踪页确认 `AGENT` 列显示真实 Agent 名称，详情中出现根 `USER` 行。
+
 ## CodeAgent 接入
 
 普通交互版 setup 和 auto setup 都支持选择 CodeAgent。setup 不修改 CodeAgent 源码：Unix 安装 `~/.agent-insight/bin/codeagent`，并由 `codeagent_otel_env.sh` 通过 shell profile 将该目录放到 PATH 前面；Windows 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` 和 `codeagent-wrapper.ps1`，同时把该目录置于用户级 PATH 前面，`codeagent_otel_env.ps1` 负责刷新当前 PowerShell 会话并清理旧 Alias/函数。两端包装器每次都会排除自身目录查找当前环境中的真实 CodeAgent，找不到时回退到安装时记录的路径，只为 CodeAgent 子进程注入 OTel 配置。重启终端或加载环境脚本后仍使用原来的 `codeagent` 命令；Shell、PowerShell、CMD、Python、Node 等继承 PATH 的子脚本都会经过包装器。cron、systemd、容器、Windows 服务等不继承用户 PATH 的独立环境需显式加入对应 `~/.agent-insight/bin` 目录或直接调用包装器。
 
 
 CodeAgent 当前会同时发出 Logs、Traces 和 Metrics，且内部配置会覆盖常规 exporter 关闭变量。Agent Insight 因此只把 `service.name=CodeAgentOC` 的 Logs 写入 `~/.agent-insight/otel_data/codeagent` 并聚合为 `framework=codeagent`；同来源的 Traces/Metrics 返回成功后直接丢弃，不写 trace spool、InfraSource 或指标样本。Skill 调用会映射为标准 `skill` 事件；`Agent`/`Task` 调用会映射为 `task`，用于生成子 Agent Trace 和按节点隔离 Skill。CodeAgent 在主回答结束后发起的 `extract_memories` 和 `auto_dream` 内部记忆维护仍保留在原始 Logs spool 中，但不会进入用户 Trace 的调用树、耗时及 Token/LLM/工具统计。
+
+CodeAgent 会话在用户输入到达前可能暂时显示 `CodeAgent Session <会话 UUID>`；收到用户消息后，任务内容会自动更新为首条非空用户输入。已有的真实任务标题会保留。升级前已保存的占位标题需要在该会话重新聚合并保存后才会更新，仅重启服务不会自动修正全部历史记录。
 
 ## LlamaIndex 接入
 

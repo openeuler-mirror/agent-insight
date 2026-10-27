@@ -12,6 +12,8 @@ import type {
 } from '../../../packages/benchmark-protocol/src/contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { resolveAgentInsightDataPath, resolveAgentInsightHomePath } from '../../../src/lib/env'
+import { loadProjectConfig } from '../../../packages/project-config/index.cjs'
+import { runtimePackageRoot } from '../../../src/lib/runtime/package-root'
 
 const execFileAsync = promisify(execFile)
 const MAX_DATASET_BYTES = 100 * 1024 * 1024
@@ -71,18 +73,19 @@ async function sha256File(filePath: string): Promise<`sha256:${string}`> {
 }
 
 export function resolveOfficialSweBenchPaths(options: OfficialLoaderOptions = {}) {
+  const config = loadProjectConfig('platform', { root: runtimePackageRoot() }).benchmarks['swe-bench']
   return {
     datasetPath: resolveConfiguredPath(
       options.datasetPath
-        || process.env.SWE_BENCH_DATASET_PATH
+        || (config.dataset.source && !/^https?:\/\//i.test(config.dataset.source) ? config.dataset.source : null)
         || resolveAgentInsightDataPath('imports', 'swe-bench-verified', 'test.parquet'),
     ),
     pythonPath: resolveConfiguredPath(
-      options.pythonPath || process.env.SWE_BENCH_PYTHON || defaultPythonPath(),
+      options.pythonPath || config.loader.python || defaultPythonPath(),
     ),
     bridgePath: resolveConfiguredPath(
       options.bridgePath
-        || path.join(process.cwd(), 'scripts', 'benchmark', 'load_official_swebench_dataset.py'),
+        || path.join(runtimePackageRoot(), 'scripts', 'benchmark', 'load_official_swebench_dataset.py'),
     ),
   }
 }

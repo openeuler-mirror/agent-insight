@@ -37,7 +37,7 @@ test('collaboration outbox retries transient failures and quarantines determinis
   const outbox = new DurableCollaborationOutbox({
     framework: 'goal-plus',
     apiKey: 'test-key',
-    homeDir,
+    stateDir: path.join(homeDir, 'relationships'),
     sessionsEndpoint: 'http://example.invalid/api/ingest/collaborations/sessions',
     eventsEndpoint: 'http://example.invalid/api/ingest/collaborations/events',
     now: () => now,
@@ -48,6 +48,7 @@ test('collaboration outbox retries transient failures and quarantines determinis
       return { status, async text() { return status === 409 ? 'immutable conflict' : ''; } };
     },
   });
+  assert.deepEqual(await outbox.status(), { pending: 0, rejected: 0, delivered: 0 });
   const session = goalPlusMainBinding('pi-main', 'gp_demo', 'pi-main__task0');
   await outbox.enqueueSession(session);
   assert.deepEqual(await outbox.flushOnce(), {

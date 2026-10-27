@@ -21,8 +21,8 @@ function fixture() {
   };
   const exports: Record<string, any> = {};
   vm.runInNewContext(code, {
-    exports, process: { env: {} }, Date: { now: () => now },
-    console: { warn: (...args: unknown[]) => warnings.push(args), log: (...args: unknown[]) => messages.push(args) },
+    exports, process: { env: {} }, Date: class extends Date { static now() { return now; } },
+    console: { error: (...args: unknown[]) => warnings.push(args), log: (...args: unknown[]) => messages.push(args) },
     setInterval: (cb: () => void) => { callback = cb; return { unref() {} }; },
     clearInterval: () => { callback = undefined; },
     require: (name: string) => {

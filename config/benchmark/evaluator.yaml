@@ -1,0 +1,24 @@
+maxConcurrency: 1
+benchmarks:
+  swe-bench:
+    python: python3
+    images:
+      source: official
+      arch: auto
+      allowNonOfficial: false
+      proxyPrefix: null
+      verifiedMirrorRepositories: null
+    docker:
+      requestTimeoutSeconds: 1800
+      connectionPoolSize: 16
+  zsoft-l1:
+    assetsDir: null
+    kernelAccel: tcg
+imagePool:
+  enabled: true
+  prefetchEnabled: true
+  reserveRatio: 0.3
+  highWatermark: 0.9
+  maxPulls: 2
+  waitSeconds: 600
+  macDiskPath: null

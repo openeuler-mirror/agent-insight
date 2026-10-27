@@ -1,3 +1,5 @@
+import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
@@ -61,6 +63,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'datasetName is required' }, { status: 400 });
     }
 
+    if (mode === 'existing' && await guardTraceDataset(request, datasetId, user, true)) throw new GenerationError('INVALID_CONFIG', 'Trace 生成的数据集请在详情页使用双字段导入', 422);
     let current: AgentDatasetRecord | null = null;
     let fields: DatasetField[];
     try {
@@ -191,6 +194,7 @@ export async function POST(request: Request) {
         : fields.length,
     });
   } catch (error) {
+    if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('agent-datasets backflow POST error:', error);
     return NextResponse.json({ error: 'failed to save trace to dataset' }, { status: 500 });
   }

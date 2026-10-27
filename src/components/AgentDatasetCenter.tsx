@@ -2,7 +2,9 @@
 
 import { useCallback, useMemo, useState, useEffect, useRef, startTransition, type CSSProperties, type MouseEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { ClipboardList, Pencil, PlayCircle, Trash2 } from 'lucide-react';
+import { ClipboardList, Pencil, PlayCircle, Sparkles, Trash2 } from 'lucide-react';
+import TraceDatasetFlow, { cleanTraceDataset } from '@/components/TraceDatasetFlow';
+import type { GenerationConfig } from '@/lib/trace-datasets/contracts';
 import { apiFetch } from '@/lib/client/api';
 import {
   type DatasetKind,
@@ -21,6 +23,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 
 interface DatasetDraft {
+  generationSource?: string | null;
   id?: string;
   name: string;
   description: string;
@@ -51,6 +54,7 @@ const emptyDraft: DatasetDraft = {
 function toDraft(dataset: AgentDataset): DatasetDraft {
   return {
     id: dataset.id,
+    generationSource: dataset.generationSource,
     name: dataset.name,
     description: dataset.description || '',
     targetAgent: dataset.targetAgent || '',
@@ -110,6 +114,7 @@ function datasetPrimaryStatLine(item: AgentDatasetListItem): { label: string; va
 }
 
 function datasetCardStatus(item: AgentDatasetListItem): { label: string; tone: 'published' | 'iterating' } {
+  if (item.generationSource === 'trace') return { label: item.generationStatus === 'published' ? '已发布' : item.generationStatus === 'failed' ? '异常' : '生成中', tone: item.generationStatus === 'published' ? 'published' : 'iterating' };
   const n = item.caseCount;
   if (n >= 1) return { label: '已发布', tone: 'published' };
   return { label: '迭代中', tone: 'iterating' };
@@ -257,6 +262,8 @@ export default function AgentDatasetCenter() {
   const listTopRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [tableActionError, setTableActionError] = useState('');
+  const [traceFlow, setTraceFlow] = useState<{ initialId?: string; initialName?: string; initialConfig?: GenerationConfig; replaceId?: string } | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadDatasets = useCallback(
     async (opts?: { isRefresh?: boolean }): Promise<AgentDatasetListItem[]> => {
@@ -344,7 +351,22 @@ export default function AgentDatasetCenter() {
     listTopRef.current?.scrollIntoView({ block: 'start' });
   };
 
+  useEffect(() => {
+    if (!datasets.some(d => d.generationStatus === 'generating')) return;
+    const timer = setInterval(() => void loadDatasets({ isRefresh: true }), 2000);
+    return () => clearInterval(timer);
+  }, [datasets, loadDatasets]);
+
   const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
+    if (dataset.generationSource === 'trace' && dataset.generationStatus === 'failed') {
+      try {
+        const response = await apiFetch(`/api/agent-datasets/${dataset.id}/generation`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error?.message || '加载失败');
+        setTraceFlow({ initialConfig: data.generationConfig, replaceId: dataset.id });
+      } catch (e) { setTableActionError(e instanceof Error ? e.message : '加载失败'); }
+      return;
+    }
     if (!user) return;
     if (dataset.readOnly || dataset.datasetKind === 'benchmark') {
       setTableActionError('Benchmark 数据集由系统导入并维护，只能查看和发起评测');
@@ -438,7 +460,13 @@ export default function AgentDatasetCenter() {
     }
     if (!globalThis.confirm(`确定删除评测集「${item.name}」？删除后不可恢复。`)) return;
     setTableActionError('');
+    setDeletingId(item.id);
     try {
+      if (item.generationSource === 'trace') {
+        await cleanTraceDataset(item.id, user);
+        await loadDatasets({ isRefresh: true });
+        return;
+      }
       const res = await apiFetch(
         `/api/agent-datasets/${encodeURIComponent(item.id)}?user=${encodeURIComponent(user)}`,
         { method: 'DELETE' },
@@ -450,7 +478,7 @@ export default function AgentDatasetCenter() {
       await loadDatasets({ isRefresh: true });
     } catch (e) {
       setTableActionError(e instanceof Error ? e.message : '删除失败');
-    }
+    } finally { setDeletingId(null); }
   };
 
   const handleSave = async () => {
@@ -488,7 +516,7 @@ export default function AgentDatasetCenter() {
       const res = await apiFetch('/api/agent-datasets', {
         method: creating ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(draft.generationSource === 'trace' ? { user, id: draft.id, name: payload.name, description: payload.description } : payload),
       });
       const result = await res.json();
       if (!res.ok || !result?.success) {
@@ -651,6 +679,12 @@ export default function AgentDatasetCenter() {
                 </span>
                 新建评测集
               </button>
+              <button type="button" role="menuitem" className="ai-dataset-menu-item" onClick={() => { setCreateMenuOpen(false); setTraceFlow({}); }}>
+                <span className="ai-dataset-menu-item__icon">
+                  <Sparkles size={14} aria-hidden="true" />
+                </span>
+                基于 Trace 生成
+              </button>
               <button
                 type="button"
                 role="menuitem"
@@ -712,12 +746,12 @@ export default function AgentDatasetCenter() {
             const status = datasetCardStatus(item);
             const badgeBg =
               status.tone === 'published'
-                ? 'rgba(34, 197, 94, 0.14)'
-                : 'rgba(245, 158, 11, 0.18)';
-            const badgeColor = status.tone === 'published' ? '#15803d' : '#c2410c';
+                ? 'var(--success-subtle)'
+                : 'var(--warning-subtle)';
+            const badgeColor = status.tone === 'published' ? 'var(--success)' : 'var(--warning)';
             const evalHint =
               item.caseCount > 0 && status.tone === 'published' ? '评测：待同步' : '评测：待发起';
-            const openDataset = () => router.push(`/dataset/${item.id}`);
+            const openDataset = () => { if (deletingId === item.id) return; if (item.generationSource === 'trace' && item.generationStatus !== 'published') setTraceFlow({ initialId: item.id, initialName: item.name }); else router.push(`/dataset/${item.id}`); };
             const stopActionPropagation = (event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
             };
@@ -875,7 +909,7 @@ export default function AgentDatasetCenter() {
                       stopActionPropagation(event);
                       openEditorForDataset(item);
                     }}
-                    disabled={isBuiltinReliabilityDataset(item) || item.readOnly || item.datasetKind === 'benchmark'}
+                    disabled={deletingId === item.id || item.generationStatus === 'generating' || isBuiltinReliabilityDataset(item) || item.readOnly || item.datasetKind === 'benchmark'}
                     title={item.datasetKind === 'benchmark' ? '系统导入的 Benchmark 数据集不可编辑' : isBuiltinReliabilityDataset(item) ? '内置可靠性评测集不可编辑' : '编辑数据集信息'}
                   >
                     <Pencil size={14} aria-hidden />
@@ -890,10 +924,10 @@ export default function AgentDatasetCenter() {
                       stopActionPropagation(event);
                       void handleDeleteDataset(item);
                     }}
-                    title="删除数据集"
+                    title="删除数据集" disabled={deletingId === item.id}
                   >
                     <Trash2 size={14} aria-hidden />
-                    删除
+                    {deletingId === item.id ? '正在清理…' : '删除'}
                   </button>
                   )}
                   <div style={{ flex: 1, minWidth: 8 }} />
@@ -901,9 +935,10 @@ export default function AgentDatasetCenter() {
                     type="button"
                     className="ai-dataset-action ai-dataset-action--primary"
                     style={datasetActionPrimaryStyle}
+                    disabled={deletingId === item.id || (item.generationSource === 'trace' && (item.generationStatus !== 'published' || !item.caseCount))}
                     onClick={event => {
                       stopActionPropagation(event);
-                      if (item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' || item.datasetKind === 'benchmark') {
+                      if (item.generationSource === 'trace' || item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' || item.datasetKind === 'benchmark') {
                         // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入预期输出）
                         router.push(`/experiments/new?datasetId=${encodeURIComponent(item.id)}`);
                       } else {
@@ -938,6 +973,7 @@ export default function AgentDatasetCenter() {
         </>
       )}
 
+      {traceFlow && <TraceDatasetFlow {...traceFlow} onClose={() => { setTraceFlow(null); void loadDatasets({ isRefresh: true }); }} onChange={() => void loadDatasets({ isRefresh: true })} />}
       {editorOpen && (
         <div
           role="presentation"
@@ -977,7 +1013,7 @@ export default function AgentDatasetCenter() {
                 {creating ? '新建评测集' : '编辑评测集'}
               </div>
               <div className="ai-section-hint">
-                仅填写评测集定义（名称、描述、场景）。保存新建后将进入「数据项」页录入样例。
+                {draft.generationSource === 'trace' ? '修改名称或描述，已生成数据项保持不变。' : '仅填写评测集定义（名称、描述、场景）。保存新建后将进入「数据项」页录入样例。'}
               </div>
             </div>
 
@@ -1074,7 +1110,7 @@ export default function AgentDatasetCenter() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => selectDatasetKind('trajectory')}
+                  disabled={draft.generationSource === 'trace'} onClick={() => selectDatasetKind('trajectory')}
                   style={{
                     textAlign: 'left',
                     padding: '12px 14px',
@@ -1093,7 +1129,7 @@ export default function AgentDatasetCenter() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => selectDatasetKind('reliability')}
+                  disabled={draft.generationSource === 'trace'} onClick={() => selectDatasetKind('reliability')}
                   style={{
                     textAlign: 'left',
                     padding: '12px 14px',
@@ -1120,7 +1156,7 @@ export default function AgentDatasetCenter() {
               <div className="ai-section-hint" style={{ marginBottom: 10 }}>
                 配置列说明：理想输出默认 input、reference_output（预期输出）；轨迹额外 trajectory；可靠性额外必填 fault_injection_type。
               </div>
-              <DefaultFieldsTable fields={defaultFieldsForKind(draft.datasetKind)} />
+              <DefaultFieldsTable fields={defaultFieldsForKind(draft.datasetKind).map(f => draft.generationSource === 'trace' ? { ...f, required: '是' as const } : f)} />
             </div>
 
             <p className="ai-section-hint" style={{ margin: '12px 0 16px' }}>

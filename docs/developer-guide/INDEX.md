@@ -1,3 +1,10 @@
+---
+title: "Agent-Insight — 开发者指南"
+description: "提供 Agent Insight 开发者指南的主题导航、实现查找入口与常用术语解释。"
+keywords: ["Agent Insight", "开发者指南", "文档导航", "术语表"]
+changefreq: monthly
+---
+
 # Agent-Insight — 开发者指南
 
 > Agent-Insight（`@witty-ai/skill-insight`）是一个框架无关、自托管的平台，用于**观测**、**评测**和**优化** AI Agent 及其 Skill。
@@ -20,7 +27,10 @@
 - [12-goal-plus-observability.md](12-goal-plus-observability.md)：重构后 Goal Plus 的 Pi 主绑定、worker OTLP、关系 outbox 与主从 Trace 展示契约。
 - [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 绑定/关系事件、端点解析、查询 API 与 reported Goal Plus 投影。
 - [MCTS xGovernor 方案设计](../design/mcts-trace-observability/phase2-requirements-design.md)：非侵入式透明代理、Runtime/checkpoint ledger、OTLP 与跨 Session 关系采集契约。
-- [benchmark/README.md](benchmark/README.md)：自定义 Benchmark 的客户入口、需求发现、统一接入开发规范和[整体服务安装指南](benchmark/service-deployment-guide.md)。
+- [benchmark/README.md](benchmark/README.md)：自定义 Benchmark 的客户入口、需求发现、统一接入开发规范和[通用服务部署指南](benchmark/service-deployment-guide.md)。
+- [benchmark/swe-bench-deployment-guide.md](benchmark/swe-bench-deployment-guide.md)：SWE-bench 数据集、Case 源码、评测镜像与部署验收。
+- [benchmark/zsoft-deployment-guide.md](benchmark/zsoft-deployment-guide.md)：ZSoft 数据集、原生任务目录、评测资产、内核加速与部署验收。
+- [zsoft-assets-release.md](zsoft-assets-release.md)：维护者构建、冻结和发布 ZSoft userspace 与内核评测资产。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。
@@ -37,7 +47,7 @@
 | 调用或扩展某个引擎 API / 类型 | [04-api-and-contracts.md](04-api-and-contracts.md) |
 | 端到端跟踪接入 / 评测流程 | [05-data-and-control-flow.md](05-data-and-control-flow.md) |
 | 接入新的 Benchmark | [Benchmark 文档关系与开发指南](benchmark/README.md) · [07-conventions-and-extension.md](07-conventions-and-extension.md) |
-| 部署 Benchmark 整体服务 | [Benchmark 整体服务安装指南](benchmark/service-deployment-guide.md) |
+| 部署 Benchmark 服务与数据 | [通用服务部署](benchmark/service-deployment-guide.md) · [SWE-bench](benchmark/swe-bench-deployment-guide.md) · [ZSoft](benchmark/zsoft-deployment-guide.md) |
 | 新增 API 路由或页面 | [01-architecture.md](01-architecture.md) · [07-conventions-and-extension.md](07-conventions-and-extension.md) |
 | 为页面设置样式 / 使用正确的颜色、间距或组件 | [08-design-system.md](08-design-system.md) |
 | 遵循项目的模式 | [07-conventions-and-extension.md](07-conventions-and-extension.md) |
@@ -56,5 +66,6 @@
 - **Config (dataset config)**：某个查询的标准答案记录——预期 Skill、标准答案、根因、关键动作（Prisma `Config`、`ConfigItem`）。
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。
 - **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（包括 OpenCode、Claude、OpenClaw、AcTrail）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
+- **智能采样**：Agent Insight 基于 Trace 生成评测数据集时使用的生产采样能力；当前策略实现版本为 `trace-coverage-v6.35`，名称不表示与其他产品采用同一算法。
 - **Collaboration trace**：独立于原生 Execution 树的跨 Session 关系覆盖层；事件正文不可变，端点到 Execution 的关联可随 Trace 到达重算。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。

@@ -5,17 +5,20 @@ import {
     restoreMaskedHeaders,
 } from '@/lib/storage/server-config';
 import {
-    getOpenAICompatibleClientConfig,
     normalizeCustomHeaders,
     supportsCustomHeaders,
 } from '@/lib/shared/model-connection';
 import { NextResponse } from 'next/server';
-import { OpenAI } from "openai";
+import { DEFAULT_MODEL_TEST_TIMEOUT_MS, ModelTestValidationError, resolveModelTestTimeoutMs } from '@/lib/shared/model-connection-test';
+import { classifyModelTestError, probeModelConnection } from '@/lib/server/model-connection-test';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export async function POST(request: Request) {
+    const startedAt = Date.now();
+    let timeoutMs = DEFAULT_MODEL_TEST_TIMEOUT_MS;
     try {
         const body = await request.json();
+        timeoutMs = resolveModelTestTimeoutMs(body.testTimeoutMs);
         const apiKey = body.apiKey || body.evalApiKey;
         const provider = body.provider || body.evalProvider;
         const model = body.model || body.evalModel;
@@ -48,56 +51,40 @@ export async function POST(request: Request) {
             resolvedHeaders = restoreMaskedHeaders(requestedHeaders, storedHeaders);
         }
         if (resolvedHeaders && !supportsCustomHeaders({ provider })) {
-            return NextResponse.json(
-                { success: false, error: 'Custom headers are only supported for Custom (OpenAI Compatible) models' },
-                { status: 400 },
-            );
+            throw new ModelTestValidationError('Custom headers require a Custom model');
         }
-        resolvedHeaders = normalizeCustomHeaders(resolvedHeaders);
+        try {
+            resolvedHeaders = normalizeCustomHeaders(resolvedHeaders);
+        } catch {
+            throw new ModelTestValidationError('Invalid custom headers');
+        }
 
         const { customFetch } = getProxyConfig();
-        const connection = getOpenAICompatibleClientConfig({
+        await probeModelConnection({
             provider,
             apiKey: resolvedKey,
             baseUrl: normalizedBaseUrl ||
                 (provider === 'deepseek-official' || provider === 'deepseek' ? "https://api.deepseek.com" :
                  provider === 'siliconflow' ? "https://api.siliconflow.cn/v1" :
                  undefined),
-            model,
-            headers: resolvedHeaders,
-        });
-
-        const client = new OpenAI({
-             ...connection,
-             fetch: customFetch,
-             timeout: 10000
-        });
-
-        const completion = await client.chat.completions.create({
-            messages: [{ role: "user", content: "Hi" }],
             model: model ||
-                   (provider === 'deepseek-official' || provider === 'deepseek' ? "deepseek-v4-flash" :
-                    provider === 'siliconflow' ? "deepseek-ai/DeepSeek-V3" :
-                    "gpt-3.5-turbo"),
-            max_tokens: 5
-        });
+                (provider === 'deepseek-official' || provider === 'deepseek' ? 'deepseek-v4-flash' :
+                 provider === 'siliconflow' ? 'deepseek-ai/DeepSeek-V3' : 'gpt-3.5-turbo'),
+            headers: resolvedHeaders,
+        }, { timeoutMs, signal: request.signal, fetch: customFetch });
 
-        if (completion && completion.choices) {
-             // 只有用户主动触发的测试计数；页面健康轮询不带 usageActive，不计。
-             if (body.usageActive && body.user) {
-                 recordUsageEvent({ user: body.user, featureKey: 'model-registry', eventKey: 'model.test' });
-             }
-             return NextResponse.json({ success: true, message: 'Connection successful' });
-        } else {
-             throw new Error('No response from model');
+        if (body.usageActive && body.user) {
+            recordUsageEvent({ user: body.user, featureKey: 'model-registry', eventKey: 'model.test' });
         }
-
-    } catch (e: any) {
-        console.error("Test Route Error:", e);
-        const detail = e.cause ? ` (Cause: ${e.cause.message || e.cause})` : '';
-        return NextResponse.json({ 
-            success: false, 
-            error: (e.message || 'Connection failed') + detail
-        }, { status: 500 });
+        return NextResponse.json({ success: true, elapsedMs: Date.now() - startedAt, timeoutMs });
+    } catch (error: unknown) {
+        const failure = classifyModelTestError(error);
+        return NextResponse.json({
+            success: false,
+            code: failure.code,
+            error: failure.error,
+            elapsedMs: Date.now() - startedAt,
+            timeoutMs,
+        }, { status: failure.status });
     }
 }

@@ -1,3 +1,10 @@
+---
+title: "Agent Fault Injection 文档"
+description: "汇总 Agent FI 的模块职责、与平台及 RAS 的关系，以及安装使用和设计文档入口。"
+keywords: ["Agent FI", "故障注入", "可靠性评测", "文档导航"]
+changefreq: monthly
+---
+
 # Agent Fault Injection 文档
 
 仓根 [`agent_fault_injection/`](../../agent_fault_injection/)：**agent-fi 功能实现模块**（注入 + 采集）。  

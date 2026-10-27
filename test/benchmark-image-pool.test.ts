@@ -75,16 +75,16 @@ async function cache(pool: any, name: string) {
 test('image pool defaults on without byte settings, can opt out, and validates remaining configuration', () => {
   assert.equal(imagePoolConfig({}).enabled, true)
   assert.equal(imagePoolConfig({}).prefetch, true)
-  assert.equal(imagePoolConfig({ IMAGE_POOL_ENABLED: '' }).enabled, true)
-  assert.equal(imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: '' }).prefetch, true)
-  assert.equal(imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: 'false' }).prefetch, false)
-  assert.equal(imagePoolConfig({ IMAGE_POOL_ENABLED: 'false' }).enabled, false)
-  assert.equal(imagePoolConfig({ IMAGE_POOL_ENABLED: 'false' }).prefetch, false)
-  assert.throws(() => imagePoolConfig({ IMAGE_POOL_ENABLED: 'invalid' }))
-  assert.throws(() => imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: 'invalid' }))
-  assert.throws(() => imagePoolConfig({ IMAGE_POOL_MAX_PULLS: '1' }))
-  assert.equal(imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: 'false', IMAGE_POOL_MAX_PULLS: '1' }).maxPulls, 1)
-  assert.throws(() => imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: 'true', IMAGE_POOL_MAX_PULLS: '1' }))
+  assert.equal(imagePoolConfig({ enabled: true }).enabled, true)
+  assert.equal(imagePoolConfig({ prefetchEnabled: true }).prefetch, true)
+  assert.equal(imagePoolConfig({ prefetchEnabled: false }).prefetch, false)
+  assert.equal(imagePoolConfig({ enabled: false }).enabled, false)
+  assert.equal(imagePoolConfig({ enabled: false }).prefetch, false)
+  assert.throws(() => imagePoolConfig({ enabled: 'invalid' }))
+  assert.throws(() => imagePoolConfig({ prefetchEnabled: 'invalid' }))
+  assert.throws(() => imagePoolConfig({ maxPulls: 1 }))
+  assert.equal(imagePoolConfig({ prefetchEnabled: false, maxPulls: 1 }).maxPulls, 1)
+  assert.throws(() => imagePoolConfig({ prefetchEnabled: true, maxPulls: 1 }))
   assert.equal(imagePoolConfig({}).maxPulls, 2)
   assert.equal(imagePoolConfig({ IMAGE_POOL_ESTIMATE_BYTES: 'invalid', IMAGE_POOL_TEMPORARY_BYTES: 'invalid' }).estimateBytes, undefined)
 })
@@ -555,7 +555,9 @@ test('low Mac host space blocks pulls even if the VM has plenty of free space', 
   assert.equal(store.pulls.length, 0)
 })
 
-test('containerd estimates remain labelled and deletion cannot spend space not actually reclaimed', async (t) => {
+test('containerd estimates remain labelled and deletion cannot spend space not actually reclaimed', { timeout: 5000 }, async (t) => {
+  // Disk writes must not race the admission deadline in this capacity-accounting test.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   const { pool, store } = await fixture(t, { waitMs: 25 })
   ;(store as any).containerd = true
   const image = await cache(pool, 'containerd')

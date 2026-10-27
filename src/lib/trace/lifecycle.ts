@@ -10,7 +10,7 @@ export type TimestampCarrier = {
 };
 
 export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set([
-    'claudecode', 'jiuwenswarm', 'opencode', 'hermes', 'openclaw',
+    'claudecode', 'jiuwenswarm', 'opencode', 'hermes', 'openclaw', 'qwenpaw',
 ]);
 
 export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
