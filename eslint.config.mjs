@@ -28,6 +28,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // docs/ 下随文档一起发布的第三方压缩产物（mermaid.min.js 等）：
+    // 它们不是本仓源码，lint 会产出上万条误报，把真实问题全部淹没。
+    "docs/**/vendor/**",
   ]),
 ]);
 
