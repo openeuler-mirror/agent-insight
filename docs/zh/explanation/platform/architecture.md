@@ -277,6 +277,8 @@ erDiagram
 
 ## 8. 部署架构（Deployment）
 
+公开文档 `docs/` 和内部设计 `design/` 不属于服务运行目录：Next 文件追踪排除两者，npm 的 prepack 也会清理 standalone 中误带入的副本。LlamaIndex 接入指南是分发例外，由打包脚本从 `docs/zh/how-to/observability/llamaindex-trace-collector.md` 显式复制为采集器目录的 `README.md`；运行时仍可下载该指南。
+
 内部 opencode 可执行文件按以下优先级查找：已存在的 `OPENCODE_BIN` → `runtimePackageRoot()` 下的 `node_modules/.bin/opencode` → 系统 `PATH`。源码生产启动脚本 `scripts/start.sh` 在切换到 standalone 目录前设置 `AGENT_INSIGHT_PACKAGE_ROOT`；`runtimePackageRoot()` 优先使用此目录，未设置时使用当前工作目录。因此 standalone 运行时可复用项目根目录安装的 opencode，无需在 `.next/standalone` 内重复安装。
 
 `[确证]`：核心服务提供基于 npm 包的 `Dockerfile`：镜像构建时从 npm 安装 `agent-insight@latest`（可通过 `AGENT_INSIGHT_VERSION` 构建参数固定版本），不复制源码；运行时由 `scripts/docker-entrypoint.sh` 初始化持久化目录、同步数据库 schema，并以前台进程启动 Next.js standalone server。所有运行时数据均以 `AGENT_INSIGHT_HOME` 为根，实际持久化子目录为内部变量 `AGENT_INSIGHT_STORAGE_DIR=$AGENT_INSIGHT_HOME/data`：SQLite、Skill 附件、评测 runtime 文件默认落到 `/data/agent-insight/data/`，避免写入 Next.js standalone 目录。旧的 `AGENT_INSIGHT_DATA_DIR` 已移除；非空时入口报错，不静默回落默认目录。TS 与 Node 启动工具共用 `scripts/agent-insight-home.cjs` 解析根路径，Trace spool 默认同样跟随运行根；客户端分发包包含该模块，守护服务显式保存运行根。镜像同时显式导出 `OPENCODE_BIN=/app/node_modules/.bin/opencode`，以支持 `opencode-live` 评测在服务端容器内直接 spawn `opencode serve`。当前默认镜像走 SQLite-first 路线，不打包 OpenGauss 的 Python 依赖；若部署侧设置了 `DB_HOST`，entrypoint 会直接报错退出。主服务部署方式是：

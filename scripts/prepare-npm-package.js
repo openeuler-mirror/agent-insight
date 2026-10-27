@@ -64,6 +64,7 @@ const STANDALONE_JUNK_DIRS = [
   'features',
   'tools',
   'docs',
+  'design',
   'data',
   'logs',
   'src',
