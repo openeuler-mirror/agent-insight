@@ -4,7 +4,7 @@
   "description": "全链路 Trace 采集器 — 采集 TRAE Agent/LLM/Tool/MCP 调用数据并上报到 Agent Insight 平台",
   "version": "0.1.0",
   "publisher": "agent-insight",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "icon": "icon.png",
   "engines": {
     "vscode": "^1.85.0"

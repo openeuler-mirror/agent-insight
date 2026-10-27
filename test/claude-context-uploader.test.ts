@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 客户端补传器(scripts/claude_context_uploader.js)的抽取逻辑测试。
 // 用真实数据形状造夹具:raw body 的 metadata.user_id 是一段【JSON 字符串】,里面才有 session_id;
 // transcript 里 hook 注入上下文是 type=attachment / attachment.type=hook_additional_context。

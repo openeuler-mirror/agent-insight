@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 把一个 infra 源在指定时间段的时序数据导出，供用户拿去做离线分析 / 喂给大模型。
 // 参数与 /api/observe/infra/history 对齐（sourceId / model / from / to），另加：
 //   · format=csv|md   —— md 给大模型直读（口径说明能写成正经章节），csv 给 Excel/pandas

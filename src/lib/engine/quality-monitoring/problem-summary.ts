@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // problem-summary — 统一问题汇总（双源合并，FR-008/009/015 / BR-012/013 / DC-009）。
 // 来源A 结构化错误：buildFaultPathSteps 重解析原始交互 → status==='error' 步 → (节点×错误码×对象) 聚类。
 // 来源B 评测问题：failures(自由文本) + skillIssues + 低分/失败维度。

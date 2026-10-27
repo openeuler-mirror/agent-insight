@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 网关托管源（endpoint 带实例路径）+ 带鉴权拉取。
 // 两条底线：① 普通裸机源的身份键必须与历史行为逐字一致（不弄坏已有的源和 session 关联）；
 //          ② metrics 地址与 agent 侧 baseURL 必须归到同一个键，否则 trace 的 Infra tab 会空。

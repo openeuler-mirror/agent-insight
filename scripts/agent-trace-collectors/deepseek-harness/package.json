@@ -5,11 +5,14 @@
   "main": "index.js",
   "files": [
     "index.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "LICENSE",
+    "NOTICE"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
-  }
+  },
+  "license": "Apache-2.0"
 }

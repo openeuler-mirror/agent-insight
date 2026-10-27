@@ -12,35 +12,53 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-43853d.svg" alt="Node" /></a>
-  <a href="https://gitcode.com/openeuler/agent-insight"><img src="https://img.shields.io/badge/repo-gitcode-1f7ae0.svg" alt="Repo" /></a>
-  <a href="mailto:intelligence@openeuler.org"><img src="https://img.shields.io/badge/contact-intelligence%40openeuler.org-orange.svg" alt="Contact" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20.9.0-43853d.svg" alt="Node" /></a>
+  <a href="https://gitcode.com/openJiuwen/agent-insight"><img src="https://img.shields.io/badge/repo-gitcode-1f7ae0.svg" alt="Repo" /></a>
+</p>
+
+<p align="center">
+  <a href="README.zh.md">简体中文</a> |
+  <a href="README_en.md">English</a>
 </p>
 
 ---
 
-## 📖 什么是 Agent Insight？
+## 免责声明
+
+本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。
+
+---
+
+## 📖 简介
 
 随着 Agent 在各行业的落地，开发者面临五大痛点：① Agent 运行链路如同黑盒，难以追溯完整执行过程；② 可靠性缺少体系化量化评估，业务可用度难以判定；③ 隐性质量退化无法提前感知，多为事后才发现问题；④ 故障根因定位全靠人工，诊断经验无法沉淀复用；⑤ 缺少评测与自动化优化闭环，Agent 无法实现持续进化。
 
-**Agent Insight** 是openEuler社区孵化的开源AgentOps平台，致力于构建「观测 → 评测 → 诊断 → 优化」持续运转的能力闭环，以及贯穿全流程的可靠性保障能力，将黑盒化的Agent转化为可观测、可度量、可治理的可信资产，使生产级Agent做到"行为看得清、故障诊得准、服务跑得稳"，并持续进化。目前，Agent Insight已适配OpenCode、Claude Code、Hermes、Trae IDE、JiuwenSwarm等10+个主流Agent平台。
+**Agent Insight** 是开源 AgentOps 平台，致力于构建「观测 → 评测 → 诊断 → 优化」持续运转的能力闭环，以及贯穿全流程的可靠性保障能力，将黑盒化的Agent转化为可观测、可度量、可治理的可信资产，使生产级Agent做到"行为看得清、故障诊得准、服务跑得稳"，并持续进化。目前，Agent Insight已适配OpenCode、Claude Code、Hermes、Trae IDE、JiuwenSwarm等10+个主流Agent平台。
 
 ---
 
-## ✨ 核心能力
+## ✨ 功能特性
 
 - 🔭 **链路追踪** · 采用白盒追踪机制完整还原Agent端到端执行链路，提供调用树、时序时间线等视图，全局视角分析Agent行为轨迹。
-- 🛠️ **多维评测** · 覆盖MenchMark、结果、轨迹、可靠性四大评估维度，预置 20 + 评估器，支持自定义扩展，实现全面、精准评测，支撑 Agent 上线质量校验。
+- 🛠️ **多维评测** · 覆盖Benchmark、结果、轨迹、可靠性四大评估维度，预置 20 + 评估器，支持自定义扩展，实现全面、精准评测，支撑 Agent 上线质量校验。
 - 🧠 **智能诊断** · 记忆、反思、规划、行动、系统五维认知归因，搭配预检‑检测‑归因三阶段分析，融合确定性规则与 LLM 语义判别，实现分钟级故障精准定位。
 - 🔁 **闭环优化** · 以问题为驱动，融合问题归并（问题去重排序，降本提效）、编辑范围约束（规避优化器误删、大幅改动基线脚本）、自验证闭环能力，实现 Skill 持续迭代，保障优化后效果不劣于基线。
-- 🛡️ **可靠保障** · 盖事前 Agent 故障注入与可靠性评估、事中故障检测与恢复、事后可靠性自演进，保障 Agent 稳定可靠运行。
+- 🛡️ **可靠保障** · 覆盖事前 Agent 故障注入与可靠性评估、事中故障检测与恢复、事后可靠性自演进，保障 Agent 稳定可靠运行。
 - 🔌 **生态兼容** · 基于 OpenTelemetry 等业界标准协议，通过原生插件或 OTLP 上报无缝兼容 OpenCode、Claude Code、Hermes、JiuwenSwarm 等多种 Agent 平台。
-- 🏠 **完全自托管** · 一键安装，全栈本地化部署，数据完全自主可控，无外部依赖。
+- 🏠 **自主部署** · 支持本地或服务器部署，运行数据自主可控；需要模型推理的功能连接用户配置的外部模型服务。
 
 ---
 
-## 🏗️ 架构
+## 🏗️ 架构简介
+
+平台由 Agent 接入、应用服务和数据存储三部分组成：
+
+- **Agent 接入**：通过原生插件、Hook、文件采集器或 OTLP 接收 Agent 执行数据，不同平台采用各自支持的接入方式。
+- **应用服务**：使用 Next.js、React 和 TypeScript 提供 Web 看板与 API，组织链路查询、评测、诊断、Skill 生成和优化流程。
+- **数据存储**：通过 Prisma 和数据库适配层管理运行记录与任务数据，默认使用本地 SQLite；其他数据库配置见开发者指南。
+
+需要模型推理的步骤调用用户配置的模型服务，平台不内置 AI 模型。架构与模块说明见[开发者指南](docs/developer-guide/INDEX.md)。
 
 <p align="center">
   <img src="docs/images/architecture.png" alt="Agent-Insight 架构图" />
@@ -79,7 +97,7 @@ Agent Insight 已接入以下 Agent 平台，更多平台持续接入中：
 
 **环境要求**
 
-- Node.js >= 20.0.0
+- Node.js >= 20.9.0
 - 3000 端口未被占用
 
 提供以下三种安装方式，可根据实际应用场景任选其一：
@@ -116,11 +134,11 @@ Agent RAS inproc 插件。RAS runtime 保存到 `~/.agent-insight/ras/runtime/`�
 适用于需要二次开发或深度定制的场景。
 
 ```bash
-git clone https://gitcode.com/openeuler/agent-insight.git
+git clone https://gitcode.com/openJiuwen/agent-insight.git
 cd agent-insight
 npm install
 # 构建 Trae IDE 采集器插件（生成 scripts/trae-collector/agent-insight-trae-collector-0.1.0.vsix）
-cd scripts/trae-collector && npm install && npm run build
+(cd scripts/trae-collector && npm install && npm run build)
 ```
 
 #### 方式三：使用 Docker 镜像部署
@@ -169,7 +187,7 @@ docker run -d \
 适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
 
 ```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
+git clone https://gitcode.com/openJiuwen/agent-insight.git /srv/agent-insight
 
 docker run -d \
   --name agent-insight \
@@ -203,11 +221,9 @@ OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行�
 
 **启动服务**
 
-安装完成后，在工作目录下执行以下命令启动服务：
+源码安装完成后，在仓库根目录执行以下命令启动服务；npm 安装使用前文的 `npx agent-insight start`：
 
 ```bash
-cd agent-insight
-
 # 启动服务端，默认端口是3000
 bash scripts/start.sh
 ```
@@ -279,15 +295,15 @@ bash scripts/stop.sh
    <p align="center"><img src="docs/images/model-provider.png" alt="选择模型供应商" /></p>
 
 3. 配置 API 密钥，单击 **测试连接并保存**。
-   
+
    <p align="center"><img src="docs/images/model-configkey.png" alt="配置 API Key" /></p>
 
 ### 生成 Skill
 
 1. 进入 **Skill**，单击 **新建会话**，选择 **生成一个 Skill**，提交需求描述，例如：
-   
+
    > 创建一个 Skill，当用户请求查看系统信息时，自动执行 shell 脚本收集当前系统的关键信息（操作系统、CPU、内存、磁盘、网络等），以 Markdown 报告呈现给用户。
-   
+
    <p align="center"><img src="docs/images/skill-gen.png" alt="生成 Skill" /></p>
 
 2. 单击 **保存并发布**。
@@ -324,16 +340,16 @@ bash scripts/stop.sh
 
 8. 浏览实验结果。
 
-   <p align="center"><img src="docs/images/skill_exp_resultr.png" alt="实验结果" /></p>
+   <p align="center"><img src="docs/images/skill_exp_result.png" alt="实验结果" /></p>
 
 ### 优化 Skill
 
 1. 单击 **Skill 优化**，系统将基于评估与实验结果启动优化流程。
-   
+
    <p align="center"><img src="docs/images/skill-optimization.png" alt="优化 Skill" /></p>
 
 2. 优化完成后，可以查看优化结果，确认无误后，单击 **发布为 v1**，系统将自动保存为新版本。
-   
+
    <p align="center"><img src="docs/images/skill-optimization-result.png" alt="优化结果" /></p>
 
 ---
@@ -354,19 +370,16 @@ bash scripts/stop.sh
 
 > 新用户推荐从 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通「智能诊断 → Skill 生成 → 评测 → 优化」完整闭环。
 
-## 🤝 如何贡献
+## 🤝 参与贡献
 
-我们诚挚欢迎新贡献者加入项目，也会为新加入者提供全面的指导与帮助。
+欢迎通过问题反馈、文档改进、测试和代码提交参与项目：
 
-贡献代码前，请先签署 [CLA](https://clasign.osinfra.cn/sign/6983225bdcbb19710248ccf0)，再参考 [代码贡献指引](https://www.openeuler.org/zh/community/contribution/detail#_4-2-代码类贡献) 提交代码。
-
-如有任何疑问、建议或讨论需求，欢迎通过以下方式联系我们：
-
-- 提交 [Issue](https://atomgit.com/openeuler/agent-insight/issues)
-- 发送邮件至 <intelligence@openeuler.org>
+1. 在 [Issue](https://gitcode.com/openJiuwen/agent-insight/issues) 中反馈问题，附上版本、复现步骤和已脱敏日志；较大的功能改动请先讨论方案。
+2. 提交代码前签署 [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee)，阅读[社区贡献指南](https://gitcode.com/openJiuwen/community/blob/main/README_CN.md)及仓库 [AGENTS.md](AGENTS.md)。
+3. Fork 仓库并创建工作分支，完成改动及相关文档更新，运行 `npm run test`，然后向 `openJiuwen/agent-insight` 提交 PR，说明改动目的和验证结果。
 
 ---
 
-## 📝 License
+## 📝 开源许可证
 
-本项目采用 [MIT](LICENSE) 开源协议。
+本项目采用 [Apache-2.0](LICENSE) 开源协议。历史 MIT 声明保留于 [LICENSE-MIT-Historical](LICENSE-MIT-Historical)，独立组件按各自许可证分发；第三方信息见 [Third_Party_Open_Source_Software_Notice.txt](Third_Party_Open_Source_Software_Notice.txt)。
