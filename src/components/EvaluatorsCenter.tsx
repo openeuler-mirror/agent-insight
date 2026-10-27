@@ -25,12 +25,16 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { deriveEvaluatorTags } from '@/lib/evaluators/registry';
 import EvaluatorDetailModal from '@/components/eval/EvaluatorDetailModal';
+import EvaluatorSkillsEditor from '@/components/eval/EvaluatorSkillsEditor';
+import EvaluatorPointsEditor from '@/components/eval/EvaluatorPointsEditor';
+import type { EvaluatorSkillSelection } from '@/lib/evaluators/evaluator-skills';
 import {
   type EvaluatorCard,
   type EvaluatorType,
   type LlmEvaluatorConfig,
   findUnsupportedCustomEvaluatorVariables,
   isValidCustomEvaluatorName,
+  normalizeEvaluatorPoints,
 } from '@/lib/evaluators/custom-evaluator-model';
 
 type TabKey = 'custom' | 'preset';
@@ -51,13 +55,14 @@ interface CustomToolbarState {
 }
 
 interface LlmEvaluatorDraft {
+  skills: EvaluatorSkillSelection[];
   name: string;
   description: string;
   /** 类目（注册时元数据）：res=看结果 / traj=看轨迹 */
   category: 'res' | 'traj';
   systemPrompt: string;
   /** 评分点清单（可选）：保存时收集非空行存入 card.pointsDef */
-  points: Array<{ label: string; note: string }>;
+  points: NonNullable<EvaluatorCard['pointsDef']>;
 }
 
 // Custom RPC 尚未提供可执行实现，不放进选项避免用户点了发现没结果。
@@ -86,6 +91,7 @@ const systemPromptPlaceholder = `请编写评估器的 system prompt。可引用
 这些字段都不是必填；目前仅支持以上五个变量。评估器最终需要输出 0～100 的 score 和 reason。`;
 
 const blankLlmDraft = (): LlmEvaluatorDraft => ({
+  skills: [],
   name: '',
   description: '',
   category: 'res',
@@ -139,7 +145,6 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
   const { user } = useAuth();
   const router = useRouter();
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
-  const [evaluatorsHydrated, setEvaluatorsHydrated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>('custom');
   const [filters, setFilters] = useState<FilterState>(emptyFilters);
   const [customToolbar, setCustomToolbar] = useState<CustomToolbarState>(emptyCustomToolbar);
@@ -173,7 +178,6 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
   useEffect(() => {
     if (!user) {
       setCustomEvaluators([]);
-      setEvaluatorsHydrated(false);
     }
   }, [user]);
 
@@ -238,7 +242,6 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
 
         if (!cancelled) {
           setCustomEvaluators(list);
-          setEvaluatorsHydrated(true);
         }
       } catch (e) {
         if (!cancelled) {
@@ -254,19 +257,6 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
     };
   }, [user, reloadVersion]);
 
-  useEffect(() => {
-    if (!user || !evaluatorsHydrated) return;
-    const timer = window.setTimeout(() => {
-      apiFetch('/api/user-evaluators', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, evaluators: customEvaluators }),
-      }).catch(() => {
-        /* 持久化失败不阻塞界面；可后续加 toast */
-      });
-    }, 600);
-    return () => window.clearTimeout(timer);
-  }, [user, evaluatorsHydrated, customEvaluators]);
 
   const visibleCards = useMemo(() => {
     if (activeTab === 'preset') return presetCards.filter(card => matchesFilter(card, filters));
@@ -291,7 +281,9 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
     setError('');
   };
 
-  const finalizeLlmEvaluator = () => {
+  const [creating, setCreating] = useState(false);
+  const finalizeLlmEvaluator = async () => {
+    if (!user || creating) return;
     const name = llmDraft.name.trim();
     if (!name) {
       setError('请填写评估器名称');
@@ -311,11 +303,7 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
       return;
     }
 
-    // 评分点：收集非空行（判定说明可选）
-    const pointsDef = llmDraft.points
-      .map(p => ({ label: p.label.trim(), note: p.note.trim() }))
-      .filter(p => p.label)
-      .map(p => (p.note ? { label: p.label, note: p.note } : { label: p.label }));
+    const pointsDef = normalizeEvaluatorPoints(llmDraft.points);
 
     // 模型：用平台当前激活的评测模型（用户在 settings/eval 那边切换）；评估器自身不绑定具体模型，
     // 只承载 prompt 配置。activeModel 还没就绪时存空字符串占位，运行时由 trajectory-eval 后端
@@ -325,6 +313,7 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
     const llmConfig: LlmEvaluatorConfig = {
       model: activeModel?.model || '',
       systemPrompt: llmDraft.systemPrompt.trim(),
+      skills: llmDraft.skills,
     };
 
     const item: EvaluatorCard = {
@@ -347,12 +336,22 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
       llmConfig,
     };
 
-    setCustomEvaluators(prev => [item, ...prev]);
-    setCustomPage(1);
-    setCustomCreate(null);
-    setLlmDraft(blankLlmDraft());
-    setActiveTab('custom');
-    setError('');
+    setCreating(true);
+    try {
+      const res = await apiFetch('/api/user-evaluators', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, evaluators: [item, ...customEvaluators] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '创建失败');
+      setCustomEvaluators(data.evaluators);
+      setCustomPage(1);
+      setCustomCreate(null);
+      setLlmDraft(blankLlmDraft());
+      setActiveTab('custom');
+      setError('');
+    } catch (e) { setError(e instanceof Error ? e.message : '创建失败'); }
+    finally { setCreating(false); }
   };
 
   const onTabChange = (tab: TabKey) => {
@@ -445,7 +444,8 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
           draft={llmDraft}
           onChange={setLlmDraft}
           onBack={() => { setCustomCreate(null); setLlmDraft(blankLlmDraft()); setError(''); }}
-          onSubmit={finalizeLlmEvaluator}
+          onSubmit={() => void finalizeLlmEvaluator()}
+          saving={creating}
         />
       ) : activeTab === 'custom' ? (
         <div ref={customListRef} style={{ paddingTop: 16 }}>
@@ -789,7 +789,8 @@ function EvaluatorCardView({
         ))}
       </div>
 
-      <div style={{ marginTop: 'auto' }}>
+      <div className="mt-auto space-y-2">
+        {!!card.llmConfig?.skills?.length && <div className="text-xs text-foreground-muted">{card.llmConfig.skills.length} 个 Skills</div>}
         <MiniMeta label="评分" value={card.source === 'custom' ? '0-100' : card.scoreRange} />
       </div>
 
@@ -952,7 +953,9 @@ function LlmEvaluatorCreatePanel({
   onChange,
   onBack,
   onSubmit,
+  saving,
 }: {
+  saving: boolean;
   draft: LlmEvaluatorDraft;
   onChange: (d: LlmEvaluatorDraft) => void;
   onBack: () => void;
@@ -1154,71 +1157,10 @@ function LlmEvaluatorCreatePanel({
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>评分点（可选）</span>
-          {draft.points.map((point, index) => (
-            <div key={index} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                value={point.label}
-                maxLength={50}
-                onChange={e => {
-                  const points = draft.points.slice();
-                  points[index] = { ...points[index], label: e.target.value };
-                  onChange({ ...draft, points });
-                }}
-                placeholder="评分点名称"
-                style={{
-                  flex: '0 0 200px',
-                  height: 32,
-                  borderRadius: 8,
-                  border: '1px solid var(--input-border)',
-                  background: 'var(--input-bg)',
-                  color: 'var(--foreground)',
-                  padding: '0 10px',
-                  fontSize: 12.5,
-                }}
-              />
-              <input
-                value={point.note}
-                maxLength={200}
-                onChange={e => {
-                  const points = draft.points.slice();
-                  points[index] = { ...points[index], note: e.target.value };
-                  onChange({ ...draft, points });
-                }}
-                placeholder="判定说明（可选）"
-                style={{
-                  flex: 1,
-                  height: 32,
-                  borderRadius: 8,
-                  border: '1px solid var(--input-border)',
-                  background: 'var(--input-bg)',
-                  color: 'var(--foreground)',
-                  padding: '0 10px',
-                  fontSize: 12.5,
-                }}
-              />
-              <button
-                type="button"
-                className="ai-btn-s"
-                aria-label="删除评分点"
-                style={{ color: 'var(--error)', minWidth: 30, padding: '4px 8px' }}
-                onClick={() => onChange({ ...draft, points: draft.points.filter((_, i) => i !== index) })}
-              >
-                ×
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            className="ai-btn-s"
-            style={{ alignSelf: 'flex-start' }}
-            onClick={() => onChange({ ...draft, points: [...draft.points, { label: '', note: '' }] })}
-          >
-            ＋ 添加评分点
-          </button>
-        </div>
+        <EvaluatorPointsEditor value={draft.points} onChange={points => onChange({ ...draft, points })} />
       </section>
+
+      <EvaluatorSkillsEditor value={draft.skills} onChange={skills => onChange({ ...draft, skills })} />
 
       <section style={{ marginBottom: 28, padding: 14, borderRadius: 8, background: 'var(--background-secondary)', border: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -1243,7 +1185,7 @@ function LlmEvaluatorCreatePanel({
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button type="button" className="ai-btn-s" onClick={onBack}>取消</button>
-        <button type="button" className="ai-btn-p" onClick={onSubmit}>创建</button>
+        <button type="button" className="ai-btn-p" disabled={saving} onClick={onSubmit}>创建</button>
       </div>
     </div>
   );

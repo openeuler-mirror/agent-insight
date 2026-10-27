@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { traceIdentity, guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError, normalizeTraceCases, TRACE_FIELDS } from '@/lib/trace-datasets/contracts';
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import {
@@ -52,6 +54,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
 
+    const includeTrace = (await traceIdentity(request, false)) === user;
     await ensureBuiltinReliabilityDataset(user).catch(() => undefined);
     // 可选过滤：?targetSkill=<name> 拉挂在某 skill 上的；?targetSkill=__none__ 拉通用 agent eval（targetSkill === ''）。
     // 不传则全部。
@@ -61,14 +64,14 @@ export async function GET(request: Request) {
       : targetSkillParam === '__none__' ? '' : targetSkillParam.trim();
     const view = searchParams.get('view');
     if (view === 'summary') {
-      const datasets = await readAgentDatasetSummaries(user, wantedTargetSkill);
+      const datasets = await readAgentDatasetSummaries(user, wantedTargetSkill, includeTrace);
       return NextResponse.json(await decoratePublicBenchmarkDatasets(user, datasets));
     }
     if (view === 'reference') {
-      const datasets = await readAgentDatasetReferences(user, wantedTargetSkill);
+      const datasets = await readAgentDatasetReferences(user, wantedTargetSkill, includeTrace);
       return NextResponse.json(await decoratePublicBenchmarkDatasets(user, datasets));
     }
-    let datasets = await readUserAgentDatasets(user);
+    let datasets = await readUserAgentDatasets(user, includeTrace);
     if (targetSkillParam !== null) {
       const wanted = targetSkillParam === '__none__' ? '' : targetSkillParam.trim();
       datasets = datasets.filter(d => (d.targetSkill ?? '') === wanted);
@@ -172,6 +175,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
     }
 
+    const trace = await guardTraceDataset(request, id, user, true);
     const current = await findAgentDataset(user, id);
     if (!current) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
@@ -189,6 +193,10 @@ export async function PATCH(request: Request) {
       );
     }
 
+    if (trace && ((body.datasetKind !== undefined && body.datasetKind !== 'ideal_output') || (body.fields !== undefined && (!Array.isArray(body.fields) || body.fields.length !== 2 || body.fields.some((f: { key: string; type: string } | null, i: number) => !f || f.key !== TRACE_FIELDS[i].key || f.type !== 'text'))))) {
+      throw new GenerationError('INVALID_CONFIG', 'Trace 数据集固定为理想输出，且只允许 input/reference_output 两列', 422);
+    }
+    if (trace && ((body.name !== undefined && String(body.name).trim().length > 50) || (body.description !== undefined && String(body.description).length > 200))) throw new GenerationError('INVALID_CONFIG', '名称最多50字，描述最多200字', 422);
     const nextName = body.name !== undefined ? String(body.name || '').trim() : current.name;
     if (!nextName) {
       return NextResponse.json({ error: 'dataset name is required' }, { status: 400 });
@@ -210,7 +218,7 @@ export async function PATCH(request: Request) {
         { status: 400 },
       );
     }
-    const inputCases = body.cases !== undefined ? normalizeCases(body.cases) : current.cases;
+    const inputCases = body.cases !== undefined ? (trace ? normalizeTraceCases(body.cases) : normalizeCases(body.cases)) : current.cases;
 
     // datasetKind 或 cases 任一变化时都要重新校验：
     // 比如把已有 ideal_output 数据集改成 reliability，原 case 可能没有 fault_injection_type。
@@ -235,7 +243,7 @@ export async function PATCH(request: Request) {
     }
 
     const preparedCasesResult =
-      body.cases !== undefined
+      trace ? { cases: inputCases, warnings: [] } : body.cases !== undefined
         ? await prepareDatasetCasesForPersistence({
             nextCases: inputCases,
             previousCases: current.cases,
@@ -246,9 +254,9 @@ export async function PATCH(request: Request) {
       ...current,
       name: nextName,
       description: body.description !== undefined ? String(body.description || '').trim() : current.description,
-      targetAgent: body.targetAgent !== undefined ? String(body.targetAgent || '').trim() : current.targetAgent,
-      targetSkill: body.targetSkill !== undefined ? String(body.targetSkill || '').trim() : current.targetSkill,
-      tags: body.tags !== undefined ? normalizeTags(body.tags) : current.tags,
+      targetAgent: !trace && body.targetAgent !== undefined ? String(body.targetAgent || '').trim() : current.targetAgent,
+      targetSkill: !trace && body.targetSkill !== undefined ? String(body.targetSkill || '').trim() : current.targetSkill,
+      tags: !trace && body.tags !== undefined ? normalizeTags(body.tags) : current.tags,
       fields: nextFields,
       cases: preparedCasesResult.cases,
       datasetKind: nextDatasetKind,
@@ -263,6 +271,7 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ success: true, dataset: updated, warnings: preparedCasesResult.warnings });
   } catch (error) {
+    if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('agent-datasets PATCH error:', error);
     return NextResponse.json({ error: 'failed to update dataset' }, { status: 500 });
   }

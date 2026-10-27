@@ -15,6 +15,7 @@
  */
 
 import { readSavedOptions } from './runtime-options'
+import { customEvaluatorsForReuse } from '@/lib/evaluators/evaluator-skill-service'
 import { prisma } from '@/lib/storage/prisma'
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service'
 import { assertTraceGenerationTarget, loadTraceGenerationRetryRequest } from '@/lib/engine/experiment/trace-generation'
@@ -58,6 +59,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
   if (!source) throw new Error('source experiment not found')
   const evaluatorIds = parseStringArray(source.evaluatorIdsJson)
   const snapshot = parseObject(source.configSnapshotJson)
+  snapshot.customEvaluatorSnapshots = await customEvaluatorsForReuse(input.user, evaluatorIds, snapshot)
   const name = source.scope === 'skill-workbench' && source.skillName && source.skillVersion != null
     ? defaultSkillExperimentName(source.skillName, 'use-case', source.skillVersion)
     : defaultExperimentName()
@@ -76,6 +78,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
     if (runConfig.submissionSource === 'imported') throw new Error('历史导入提交实验不支持复用配置')
     const selection = parseObject(binding.selectionJson)
     const result = await createBenchmarkExperiment({
+      frozenCustomEvaluators: await customEvaluatorsForReuse(input.user, evaluatorIds, snapshot),
       user: input.user,
       name,
       agentName: source.agentName,
@@ -107,6 +110,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
 
   if (source.type === 'llm') {
     const created = await createComparisonExperiment({
+      frozenCustomEvaluators: await customEvaluatorsForReuse(input.user, evaluatorIds, snapshot),
       user: input.user,
       name,
       agentName: source.agentName,
@@ -118,7 +122,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
       where: { id: created.id },
       data: {
         sourceExperimentId: source.id,
-        configSnapshotJson: source.configSnapshotJson,
+        configSnapshotJson: JSON.stringify(snapshot),
         evaluatorConfigsJson: source.evaluatorConfigsJson,
       },
     })

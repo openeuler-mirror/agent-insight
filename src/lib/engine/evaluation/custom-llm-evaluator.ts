@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError, type CustomEvaluatorRuntime } from './custom-evaluator-runtime';
 /**
  * 自建 LLM 评估器运行时。
  *
@@ -22,12 +23,10 @@
  * 通过 opencode build agent 发起一次评测会话。这样自建评估器本身也会产生可追踪的会话数据。
  */
 
-import {
-    AgentInsight,
-    type ChatHandlers,
-    type SendPromptPayload,
+import type {
+    ChatHandlers,
+    SendPromptPayload,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { buildEvaluatorPermissions } from '@/lib/engine/general-agent/workspace';
 import { getActiveConfig, type ModelConfig } from '@/lib/storage/server-config';
@@ -69,6 +68,8 @@ export interface CustomEvaluatorInput {
 }
 
 export interface CustomEvaluatorResult {
+    runtime?: CustomEvaluatorRuntime;
+    output?: import('@/lib/evaluators/eval-output').EvaluatorOutput;
     evaluatorId: string;
     evaluatorName: string;
     /** 0-100 之间的分数；解析失败时为 null */
@@ -81,12 +82,14 @@ export interface CustomEvaluatorResult {
 }
 
 interface CustomEvaluatorBundle {
+    card: EvaluatorCard;
     id: string;
     name: string;
     config: LlmEvaluatorConfig;
 }
 
 let cardListCache: { user: string; expiresAt: number; map: Map<string, CustomEvaluatorBundle> } | null = null;
+export function invalidateCustomEvaluatorCache() { cardListCache = null; }
 const CACHE_TTL_MS = 5_000;
 
 async function getEvaluatorMap(user: string): Promise<Map<string, CustomEvaluatorBundle>> {
@@ -104,6 +107,7 @@ async function getEvaluatorMap(user: string): Promise<Map<string, CustomEvaluato
             id: item.id,
             name: item.name || item.id,
             config: item.llmConfig,
+            card: item,
         });
     }
     cardListCache = { user, expiresAt: now + CACHE_TTL_MS, map };
@@ -317,11 +321,33 @@ export async function runCustomLlmEvaluator(
     input: CustomEvaluatorInput,
     skillName?: string | null,    // 透传给 limiter,让"后台分析任务"按 skill 严格过滤
     skillVersion?: number | null, // skill 版本号,展示用
+    frozenCard?: EvaluatorCard | null,
+    signal?: AbortSignal,
 ): Promise<CustomEvaluatorResult> {
+  const bundle = frozenCard === undefined ? await loadCustomEvaluator(user, evaluatorId)
+    : frozenCard?.llmConfig ? { id: frozenCard.id, name: frozenCard.name, config: frozenCard.llmConfig, card: frozenCard } : null;
+  if (bundle?.config.skills?.length) {
+    try {
+      const result = await runCustomEvaluatorWithSkills(user, bundle.card, {
+        input: input.caseInput, datasetInput: input.datasetInput, output: input.actualOutput,
+        referenceOutput: input.expectedOutput, trajectory: input.traceText,
+      }, { signal });
+      return { evaluatorId, evaluatorName: bundle.name, score: result.output.score ?? null,
+        reason: result.output.summary || '', rawResponse: result.raw, model: result.runtime.model,
+        durationMs: result.runtime.durationMs, runtime: result.runtime, output: result.output };
+    } catch (error) {
+      return { evaluatorId, evaluatorName: bundle.name, score: null, reason: '', rawResponse: '', model: '', durationMs: 0,
+        error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof CustomEvaluatorExecutionError ? { runtime: error.runtime, model: error.runtime.model, durationMs: error.runtime.durationMs } : {}) };
+    }
+  }
   return withBackgroundOpencodeSlot(async () => {
+   const [{ runWithEphemeralOpencodeServer }, { AgentInsight }] = await Promise.all([
+     import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager'),
+     import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-client'),
+   ]);
    return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true }, async (serverUrl) => {
     const startedAt = Date.now();
-    const bundle = await loadCustomEvaluator(user, evaluatorId);
     if (!bundle) {
         return {
             evaluatorId,

@@ -17,8 +17,15 @@
 import { NextResponse } from 'next/server'
 
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
+import { EvaluatorSkillError } from '../evaluators/evaluator-skill-store'
 
 export function benchmarkErrorResponse(error: unknown, source: string): NextResponse {
+  if (error instanceof EvaluatorSkillError) {
+    return NextResponse.json(
+      { error: { code: 'EVALUATOR_SKILL_ERROR', message: error.message, retryable: false } },
+      { status: error.status },
+    )
+  }
   if (error instanceof BenchmarkProtocolError) {
     return NextResponse.json(
       {

@@ -702,6 +702,10 @@ model AgentEvalDataset {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
+  generationSource String?
+  generationStatus String?
+  generationJob TraceDatasetGenerationJob?
+
   benchmarkDataset BenchmarkDataset?
 
   @@index([user])
@@ -2088,4 +2092,51 @@ model CollaborationSessionBinding {
   createdAt       String
 
   @@unique([user, collaborationId, sessionId])
+}
+
+model TraceDatasetGenerationJob {
+  id String @id
+  datasetId String @unique
+  dataset AgentEvalDataset @relation(fields: [datasetId], references: [id])
+  owner String
+  configJson String
+  status String @default("queued")
+  stage String @default("queued")
+  stageIndex Int @default(0)
+  generatedCount Int @default(0)
+  errorCode String?
+  errorMessage String?
+  leaseEpoch Int @default(0)
+  leaseOwner String?
+  leaseUntil DateTime?
+  cancelRequested Boolean @default(false)
+  requestId String
+  requestHash String
+  captureState String @default("pending")
+  captureManifestHash String?
+  attemptCount Int @default(0)
+  nextEligibleAt DateTime?
+  cleanupPending Boolean @default(false)
+  deletionId String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([owner, requestId])
+  @@index([owner, status, createdAt])
+  @@index([status, leaseUntil])
+}
+
+model TraceDatasetOperationReceipt {
+  id String @id
+  ownerKey String
+  kind String
+  operationKey String
+  requestHash String?
+  datasetId String?
+  jobId String?
+  deletionId String?
+  outcome String
+  expiresAt DateTime?
+  clockHighWaterMs BigInt?
+  @@unique([ownerKey, kind, operationKey])
+  @@index([expiresAt])
 }

@@ -18,18 +18,27 @@
 
 export type EvaluatorType = 'LLM' | 'Code' | 'Custom RPC';
 export type EvaluatorSource = 'preset' | 'custom';
+import type { EvaluatorSkillSelection } from './evaluator-skills';
 
 export interface LlmEvaluatorConfig {
   model: string;
   systemPrompt: string;
   /** 单段 user prompt（新格式） */
   userPrompt?: string;
+  skills?: EvaluatorSkillSelection[];
 }
 
 export const CUSTOM_EVALUATOR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{1,63}$/;
 
 export function isValidCustomEvaluatorName(name: string): boolean {
   return CUSTOM_EVALUATOR_NAME_PATTERN.test(name.trim());
+}
+
+export function normalizeEvaluatorPoints(points: EvaluatorCard['pointsDef']): NonNullable<EvaluatorCard['pointsDef']> {
+  return (points ?? [])
+    .map(point => ({ label: point.label.trim(), note: point.note?.trim() }))
+    .filter(point => point.label)
+    .map(point => point.note ? { label: point.label, note: point.note } : { label: point.label });
 }
 
 export const CUSTOM_EVALUATOR_ALLOWED_VARIABLES = [

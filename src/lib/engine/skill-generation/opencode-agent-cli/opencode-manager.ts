@@ -1221,6 +1221,7 @@ export function getActiveServerCount(): number {
  */
 export async function runWithEphemeralOpencodeServer<T>(
   opts: {
+    signal?: AbortSignal
     user?: string
     verbose?: boolean
     /**
@@ -1246,7 +1247,8 @@ export async function runWithEphemeralOpencodeServer<T>(
   const verbose = opts.verbose ?? false
   const telemetryEnabled = opts.telemetryEnabled ?? !opts.isolateHome
   const { experimentSignal, markExperimentCleanupUnconfirmed } = await import('@/lib/engine/experiment/cancellation-context')
-  const cancellation = experimentSignal()
+  const parentSignal = experimentSignal()
+  const cancellation = opts.signal && parentSignal ? AbortSignal.any([opts.signal, parentSignal]) : opts.signal || parentSignal
   cancellation?.throwIfAborted()
   // 准备隔离 HOME (如启用), 拿 cleanup 在 finally 里调
   let homeCleanup: (() => Promise<void>) | null = null

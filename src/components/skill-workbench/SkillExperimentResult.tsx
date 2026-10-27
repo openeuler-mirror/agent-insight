@@ -551,7 +551,7 @@ export function SkillExperimentResult({
     .join('、');
   const percent = total > 0 ? Math.min(100, Math.floor((completed / total) * 100)) : 0;
   const versionALabel = detail.skillContext?.versionA == null ? '无 Skill' : `v${String(detail.skillContext.versionA)}`;
-  const versionBLabel = `v${String(detail.skillContext?.versionB ?? '—')}`;
+  const versionBLabel = detail.skillContext?.versionB == null ? '无 Skill' : `v${String(detail.skillContext.versionB)}`;
   const detailCases = new Map((detail.cases || []).map((item) => [item.id, item]));
   const datasetCases = new Map<string, Record<string, unknown>>((dataset?.cases || []).map((item) => [
     String(item.id || ''),
@@ -640,7 +640,7 @@ export function SkillExperimentResult({
               <div className="rounded-xl border border-border border-t-2 border-t-primary bg-card p-5">
                 <div className="flex items-center gap-2">
                   <span className="flex size-6 items-center justify-center rounded-md bg-primary text-sm font-semibold text-white">A</span>
-                  <b className="text-sm text-foreground">当前版本 · {versionALabel}</b>
+                  <b className="text-sm text-foreground">基线版本 · {versionALabel}</b>
                 </div>
                 <div className="mt-3 flex items-baseline gap-3">
                   <strong className="text-lg font-semibold tabular-nums leading-6 text-primary">{formatScore(isDone ? abComparison.aScore : null)}</strong>
@@ -691,7 +691,7 @@ export function SkillExperimentResult({
           <div className="border-b border-border px-4 py-3"><h3 className="text-base font-semibold text-foreground">已冻结配置</h3></div>
           <div className="grid gap-px bg-border md:grid-cols-3">
             {[
-              ['Skill', `${detail.skillName || skillName} · ${isAb ? `A ${detail.skillContext?.versionA == null ? '无 Skill' : `v${String(detail.skillContext.versionA)}`} / B v${String(detail.skillContext?.versionB ?? '—')}` : `v${detail.skillVersion ?? '—'}`}`],
+              ['Skill', `${detail.skillName || skillName} · ${isAb ? `A ${versionALabel} / B ${versionBLabel}` : `v${detail.skillVersion ?? '—'}`}`],
               ['Agent', detail.agentName || '—'],
               ['数据集', dataset?.name || String(snapshot.datasetId || (existingTrace ? '未关联数据集' : '—'))],
               ['Trace 来源', traceSource],

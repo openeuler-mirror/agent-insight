@@ -15,6 +15,8 @@
  */
 
 import type { AgentRunError } from '../../../../../../scripts/agent-run-diagnostics.cjs';
+import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/storage/prisma';
@@ -3287,6 +3289,8 @@ export async function POST(
         }
         const storeKey = `${user}:${taskId}`;
         const origin = req.nextUrl.origin;
+        const sourceTask = await loadTask(taskId, user);
+        if (sourceTask) for (const datasetId of getConfiguredDatasetIds(sourceTask.configJson)) await guardTraceDataset(req, datasetId, user, true);
         // === action: abort —— 用户点「终止」按钮 ===
         if (action === 'abort') {
             // 双场景:
@@ -3558,6 +3562,7 @@ export async function POST(
         return NextResponse.json({ ok: true, runId });
     } catch (err) {
         console.error('[GRAYSCALE_TASKS_POST] Failed:', err);
+        if (err instanceof GenerationError) return generationErrorResponse(err);
         return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed to start task' }, { status: 500 });
     }
 }
@@ -3600,6 +3605,7 @@ export async function PATCH(
                 return NextResponse.json({ error: 'task skill version binding cannot be changed' }, { status: 400 });
             }
             const normalizedNextConfig = normalizeGrayscaleTaskBinding(nextConfig, existing);
+            for (const datasetId of getConfiguredDatasetIds(normalizedNextConfig)) await guardTraceDataset(req, datasetId, user, true);
             // E: evaluationBatchId 后端独占 —— 前端 PATCH 不带/带空值时,保留库里已有的稳定批次 id,
             // 不让前端用空值覆盖。否则一个 A/B 任务的评测会散裂成多个批次(实测 gyc-v0 散成 20 个)。
             if (!String(normalizedNextConfig.evaluationBatchId || '').trim()) {
@@ -3657,6 +3663,7 @@ export async function PATCH(
         });
     } catch (err) {
         console.error('[GRAYSCALE_TASKS_PATCH] Failed:', err);
+        if (err instanceof GenerationError) return generationErrorResponse(err);
         return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
     }
 }

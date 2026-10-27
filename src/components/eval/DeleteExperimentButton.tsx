@@ -31,7 +31,7 @@ export function isCompletedExperimentCase(experimentStatus: string, benchmarkRun
     return ['evaluated', 'evaluation_failed', 'submission_invalid', 'execution_failed', 'dispatch_failed', 'blocked', 'cancelled'].includes(benchmarkRunStatus);
   }
   if (state) {
-    if (['queued', 'dispatching', 'running', 'retry_wait'].includes(state.traceAttemptStatus || '')
+    if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(state.traceAttemptStatus || '')
       || state.results?.some((row) => ['pending', 'running'].includes(row.status))) return false;
     if (state.traceStatus === 'failed') return true;
     if (state.traceStatus === 'pending') return ['failed', 'cancelled'].includes(experimentStatus);
@@ -46,6 +46,7 @@ export function emptyCaseEvaluationMessage(experimentStatus: string, state: Case
   if (state.traceStatus === 'failed') return '执行失败，未进入评测。请查看上方失败原因后重试。';
   if (['failed', 'cancelled', 'done', 'partial'].includes(experimentStatus)) return '实验已结束，本项未产生评测结果。';
   if (state.traceStatus === 'ready') return '执行已完成，等待评测。';
+  if (state.traceAttemptStatus === 'waiting_trace') return '执行已结束，等待 Trace 完成上报，尚未进入评测。';
   if (['dispatching', 'running'].includes(state.traceAttemptStatus || '')) return '正在执行，尚未进入评测。';
   return '等待执行，尚未进入评测。';
 }

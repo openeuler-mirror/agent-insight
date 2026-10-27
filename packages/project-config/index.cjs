@@ -19,6 +19,7 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { createRequire } = require('node:module')
 const yaml = require('./yaml.cjs')
 
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0
@@ -272,7 +273,7 @@ function loadProjectConfig(scope, options = {}) {
     const directory = configuredDir ? path.resolve(root, configuredDir) : path.join(root, 'config', 'benchmark')
     const installedExecutor = scope === 'executor' && !configuredDir && fs.existsSync(path.join(root, 'reliability-client.cjs'))
     const localDirectory = installedExecutor
-      ? path.join(require(path.join(root, 'agent-insight-home.cjs')).getAgentInsightHome(env), 'config')
+      ? path.join(createRequire(path.join(root, 'package.json'))('./agent-insight-home.cjs').getAgentInsightHome(env), 'config')
       : directory
     for (const filePath of [path.join(directory, `${scope}.yaml`), path.join(localDirectory, `${scope}.local.yaml`)]) {
       let text

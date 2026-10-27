@@ -290,6 +290,8 @@ OpenCode 的 `session.error`、assistant `info.error` 和 prompt 响应中的结
 
 已有 Trace 的用例分析不创建 `GrayscaleTask`。结果页按真实 `ExperimentCase.id` 关联详情 API 的 `cases` 与 `results`，通过 `use-case-results.ts` 派生单项状态和评分，不从空的 `caseStates` 推断“等待执行”。生成 Trace 与 A/B 仍使用原灰度运行投影。用例分析的结果分和轨迹分按已选评估器类别分别聚合，未选维度显示“未评测”，不得回退到 `overall`；仅轨迹类评分的结论限定在轨迹评测范围。已有 Trace 的重评复用 `POST /api/experiments/:id/results/:resultId/retry`，失败时只选失败行，全完成时确认后重评全部已选行；前端防重复提交，底层沿用行级执行锁。详情和删除传真实 Case ID，列表数量取未软删除 Case 数，而不是冻结的初始 Trace ID 数量。
 
+Skill A/B 创建契约使用 `versionAEnabled` / `versionBEnabled`（缺省均为 true）区分无 Skill 与未选择版本；禁用侧冻结为 `version*Id='__NONE__'`、`skillContext.version*=null`、`skillSnapshots.*=null`。A 启用时使用当前工作版本，B 启用时必须指定存在的 `compareVersion`；拒绝两侧均禁用及相同版本。`GrayscaleTask.boundSide` 选择 A（A 启用）或 B（A 禁用），任务 `skillVersion/skillVersionId` 绑定该侧实际版本，而不是固定绑定工作台版本；实验的 `skillVersion` 仍记录工作台上下文。启动时继续严格校验绑定，不放宽不可变约束。同配置复制保留冻结文件及无 Skill 侧，并重建正确的绑定侧；向导复用不得把 null 版本转换成 V0。
+
 Skill 用例分析生成 Trace、A/B 和触发分析创建时将 `workerId/host/platform/agent/model` 冻结到 `configSnapshot.executionTarget` 和灰度配置，同时冻结 A/B 的 `skillSnapshots` 与触发分析的 `triggerSkills` 内容。`traceGenerationTarget` 仅兼容旧展示；客户端模型 ID 不等于服务端 `modelConfigId`。新任务下发到选定客户端，不进入服务端默认模型分支；只评已有 Trace 的用例分析不受影响。
 
 触发分析创建事务同时登记全部 `ExperimentCase`；启动时按数据集绑定复用，补齐旧任务缺失行并排除已删除/取消项，执行循环不再逐条追加。无 Trace 尝试的行显示等待执行，单条输入或瞬时运行错误不熔断整批，只有 `MODEL_UNAVAILABLE/MODEL_MISMATCH/CLIENT_MISMATCH` 阻止后续派发。
@@ -299,7 +301,11 @@ Skill 用例分析生成 Trace、A/B 和触发分析创建时将 `workerId/host/
 
 上述 4 路用例 / 2 个 A/B 配对是编排上限；新版客户端执行路径在 `withSkillClientSlot` 按 worker 串行占用单个 Agent 槽，因此同机两侧不同时启动。客户端需上报 `runExperimentCase.skillSnapshotVersion>=1` 才能运行用例/A/B；触发分析需要版本 4，旧客户端在目标列表中不可选。`skill-experiment-workspace.cjs` 在客户端解析本机 OpenCode 连接配置，密钥不进入下发 payload。版本 1 只安装当前侧 Skill 快照并强制加载，基线禁用 Skill；版本 2 安装冻结的候选 Skill 元数据；版本 3 增加路由事件直判，允许正常路由，但禁用写入、Shell、Web 和 MCP 等有副作用的能力。版本 4 分离启动与路由计时并将触发输入原样经 stdin 传递，不解析 Slash Command。所选模型通过 CLI `--model` 传入，不允许回退。
 
-用例/A/B 每次运行隔离 HOME、配置与工作目录。触发分析按客户端、实验、可执行文件、Agent、模型及完整 Skill 快照的哈希租用工作区，复用配置与插件依赖，但每条 Case 启动独立进程和会话。忙碌租约不得并发复用；目录使用 realpath 避免临时目录别名导致重复 Skill 扫描。空闲 120 秒、切换实验配置、取消或客户端退出时清理缓存。工作区连接配置在租约存续期间保持不变。
+`opencode-connection-config.cjs` 先读取原生 `debug config` 的生效配置，仅恢复实验会复制的 provider、所选 Agent 与非触发实验 MCP 中的脱敏连接字段；触发实验仍禁用 MCP。原生命令 stdout 写入私有临时文件后完整解析，避免立即退出时管道输出被截断；限制 8 MiB 和 15 秒，拒绝多份、残缺、非法 UTF-8 或尾随杂质的配置输出，所有退出路径清理临时文件。恢复按 OpenCode 1.19.3（兼容 1.18.35）的本地加载顺序合并全局 `config.json/opencode.json/opencode.jsonc`、`OPENCODE_CONFIG`、项目配置、`.opencode` 与 `OPENCODE_CONFIG_DIR`、`OPENCODE_CONFIG_CONTENT`、系统 managed 配置，遵守项目边界及禁用项目配置开关。支持 JSONC、环境变量与相对声明文件的文件引用；只读快照前后校验文件摘要，变化时重读一次，持续变化则失败。原始连接中的非脱敏字段必须与生效配置一致，防止端点和凭据串配。
+
+恢复仅在执行客户端本地进行，凭据不进入 payload、返回值或错误信息。显式 Key/请求头/敏感 URL 的原始值缺失、为空、仍为占位符，或来源存在远程 `.well-known`/活动组织配置、旧 TOML、需转换的配置格式、MDM、未验证版本时，以 `MODEL_UNAVAILABLE` 提前停止；不猜测凭据，不回退模型。没有需要恢复的字段时保留原生配置；原生未显式输出 Key 时不补造 Key，共享原有 XDG 数据目录以继续使用 OpenCode 原生认证。该辅助模块同时随客户端安装脚本与 setup bundle 分发。
+
+用例/A/B 每次运行隔离 HOME、配置与工作目录，`OPENCODE_TEST_HOME` 同步指向隔离 HOME。触发分析按客户端、实验、可执行文件、Agent、模型及完整 Skill 快照的哈希租用工作区，复用配置与插件依赖，但每条 Case 启动独立进程和会话。忙碌租约不得并发复用；目录使用 realpath 避免临时目录别名导致重复 Skill 扫描。空闲 120 秒、切换实验配置、取消、`MODEL_UNAVAILABLE` 或客户端退出时清理缓存。工作区连接配置在租约存续期间保持不变。
 
 远端执行保留真实 `ExperimentCase` ID 与数据集绑定；尝试记录保存客户端、Agent、模型与 command ID，按本次返回的 Trace ID 绑定，不用旧输出或按输入猜测。Skill 请求在绑定前拒绝空输出、缺失实际模型或模型不一致；模型错误不可自动回退重试。取消信号下发 `CANCEL_EXPERIMENT_RUN`，删除继续复用原取消确认机制。执行重试沿用冻结目标和版本文件，普通 Trace 重试读取历史 command 的 Skill 快照。已有历史实验缺失真实执行目标时拒绝再次执行，要求重建。详情 API 保留每个 Case 的 `actualModel/actualHost`，页面不再额外展示实际模型、实际主机与评估模型卡片；历史不一致只做警告而不改写旧结果。非 A/B 的 Case 与评估明细默认展开，手动折叠不受轮询刷新影响；切换到另一实验时默认展开。A/B 明细继续直接展示。
 
@@ -450,6 +456,10 @@ Skill 实验列表的“同配置实验”复用 `/api/experiments` 的 `createM
 
 `/skills` 是正式 Skill 工作台；`/skill-workbench` 保留为兼容别名，`/config/skills` 渲染原资产管理能力。旧生成、评测、A/B 与优化 API 未删除，工作台通过服务端适配层复用它们。生成和优化的 SSE 是发起页面的低延迟实时视图，领域执行与最终同步由服务端持久化任务完成；运行开始时先创建 Agent 消息，流事件在内存中合并并限频更新同一行，串行 checkpoint 的最终 flush 先于任务 `done/failed`。观察页面按任务状态读取这些增量快照，因此刷新、复制会话 URL 或在另一个页面打开同一 `sessionId` 时都能继续追赶；同一会话和任务类型在服务端拒绝并发运行。评估、实验和复测同样以数据库状态作为恢复真源，因此任何站内导航都不会取消已接受的运行。生成/上传与优化候选在发布前都只保存不可执行的文件快照。静态评估状态按当前文件 hash 恢复，UI 将“评估器执行状态”和“无 high 的质量门禁状态”分开显示；评估中持续轮询并禁用发布，完成后清理旧的门禁错误。门禁阻断时，UI 可显式把当前问题集交给既有 Skill 优化 Agent；生成/上传来源会把 Agent 输出回写为同版本工作快照并重新静态评估，正式管理版本则继续形成独立 `SkillOptimizationRecord`，二者都不会自动发布。Skill 实验与全局实验共用执行模型但按 `scope` 隔离列表。实验创建时冻结客户端执行目标、模型 ID、数据集、Case 顺序、评估器、Skill 版本与对应快照；用例/A-B 的服务端评估模型配置与客户端执行模型是独立契约。客户端密钥始终由其本地 OpenCode 配置读取，不进入实验下发 payload。
 
+环境预检与隔离实验共用 `scripts/opencode-connection-config.cjs` 的 `readOpenCodeConfig()`。配置命令写入权限为 `0600` 的临时文件，避免较大输出在 stdout 管道中被截断，读取后清理文件；预检允许配置 JSON 前的插件日志，仍拒绝多个配置对象、不完整 JSON 和尾部杂项；它仅检查认证配置是否存在，真实脱敏凭据恢复仍在实验执行客户端本地完成。安装包同时分发该解析器，源码和安装目录使用同一解析规则。
+
+OpenCode 实验进程关闭后，常驻客户端调用本机上传器，以 `AGENT_INSIGHT_UPLOADER_FORCE_SESSION` 限定本次 Trace，最多等待 20 秒；补报失败不改变 Agent 的执行结果，服务器仍通过 Trace 完整性检查后才绑定用例。上传器在账号对应的 checkpoint 中保存 `__pendingSessions`（会话到 spool 文件的映射），未完成 CLI 结束上报或 HTTP 上传失败时继续重检这些文件，进程退出不再依赖 mtime 变化。结束上传成功后移除待处理记录，内容指纹抑制重复上传；指定会话的补报不重传同文件内其他根会话。`waiting_trace` 在详情页显示为“执行已结束，等待 Trace 完成上报”，不再落到“等待执行”。
+
 工作台会话首次从管理中心选择时写入固定 `skillName` 和起始 `workVersion`。会话内每次成功发布只推进 `workVersion`，不会改变 `skillName`；历史任务和优化记录继续保存各轮精确基线。顶部资产选择器是独立的右栏资产状态，不持久化到会话；详情、正式评估、实验和优化记录都读取该 `skillName + version`。正式评估和实验不为资产创建过程会话。重新打开历史会话、开始生成或开始优化时，前端才以过程会话保存的 `skillName + workVersion` 恢复右侧资产。
 
 ```mermaid
@@ -515,3 +525,36 @@ flowchart LR
 
 实现入口为 `src/lib/trace-transfer.ts`（Bundle 校验、排序与 ID 重映射）和 `src/lib/trace-transfer-service.ts`（所有权、完整树查询、持久化与失败清理）。Session 的 `interactions` 随树迁移；Langfuse Session 同时迁移完整 `langfuseTraceNodes`，冲突重映射只改其中的 `subagentSessionId`，保留 OTel trace/span 父子标识。导入目标 user 始终取当前请求身份，不信任 Bundle 中的来源用户。任一节点写入或 Skill 重算失败时，服务会清理本次已创建的 Session 与 Execution，避免保留可见的半棵树。
 <!-- Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics. -->
+
+### Trace 数据集生成与清理
+
+Trace 生成特性的生产采样方案称为**智能采样**，生产策略由 `sampling/production.ts` 固定为 `trace-coverage-v6.35`。效果验收以当前需求分析和最终对比报告为准，不使用研究脚本中的历史默认版本或已取消门槛。
+
+`TraceDatasetManager` 是进程级单例，任务根目录锁限制同一数据目录只运行一个服务调度器。主服务启动钩子返回后，通过 `setImmediate` 后台初始化；启动调用不等待恢复队列或 Worker 就绪。初始化状态与首个请求共享，未就绪接口快速返回 `503 FEATURE_INITIALIZING`，失败后进入 30 秒重试冷却。初始化时恢复持久队列；4个长期复用Worker各自使用独立Prisma客户端，FIFO领取，实例最多接受20个未完成作业。SQLite使用WAL，写事务冲突有界重试。Worker构建入口为`scripts/build-trace-dataset-worker.cjs`，Next配置在开发/构建阶段生成`generated/trace-datasets/worker.cjs`，standalone追踪规则将其纳入产物。
+
+数据流：固定绝对时间与Agent身份 → 分页固定成员清单及正文摘要 → 两次完整哈希校验并原子保存来源 → sealed → 双字段去重及输入组共享签名 → 智能采样 v6.35（全局预算覆盖优化、参考回答选择与回填）→ 单事务发布所有案例、投影和状态。来源与中间文件按owner哈希/job UUID隔离；成功或失败事务同时持久化cleanupPending。成功任务在临时目录清理后，以事务写入 succeeded 操作回执并删除任务记录；失败任务仅清理临时文件和清除标记，保留失败原因与配置。调度器兼容旧版成功任务，清理失败或事务中断则保留记录并重试。已发布数据集独立提供终态进度和删除能力，回执保证重复请求不重建。保存已发布数据集允许成功任务已删除，或关联任务仍为 succeeded；生成中与 deleting 仍禁止写入，案例修改同步维护评测投影。
+
+取消先增加leaseEpoch并置deleting，再通知对应Worker协作停止；5秒内未停止才终止该线程，确认退出后重建对应槽位。迟到消息必须匹配jobId/epoch/incarnationId，发布也校验租约。删除等待文件清理后才原子删除任务与数据集并写无正文回执；清理失败保留deleting供恢复。原始Execution/Session不在清理范围。实验创建复制所选caseId对应的输入与参考答案，显式轨迹配对在评测记录中冻结案例，避免删除原集损坏评测。
+
+采样计算会分块让出线程事件循环，以响应取消与心跳。来源读取通过SQLite JSON投影分页提取必要事件字段，不将巨型工具正文传入JavaScript；完整原文哈希分段扫描。最终casesJson/referenceCasesJson仍由现有Prisma接口物化；这不是无限大小或全链路恒定内存保证，资源不足须明确失败，不以样本大小静默过滤。
+
+Trace 评测集在生成阶段仅做结构提取，不改采集/入库，不验证语义独立性。source-reader 只读当前 owner 的 Execution/Session，不再读取原始 OTEL spool，不要求原始请求 messages。来源摘要覆盖执行、会话元数据及完整 interactions；冻结前后变化照旧排除。trace-analysis 按已落库消息顺序以 user 划分轮次，检查已知 traceId 冲突、子 Agent 消息和跨轮响应时间重叠；单轮归一器定位排除思考/工具调用后的最终回答，检查截断、非文本输入、失败/未完成响应和后续工具活动。Execution.query 只校验首轮，finalResult 只校验末轮，不能把整会话的最后回答套到每轮。数字毫秒及 ISO 消息时间均投影为 ISO。
+
+新任务冻结 stored-interactions-v4；不产生 CONTEXT_UNCONFIRMED/HISTORY/INPUT_LOSS 原因。旧 unit/units[] 已封存来源仍按冻结结果恢复，历史原因保留展示兼容；未捕获旧来源摘要不一致时按 SOURCE_CHANGED 跳过，需重新生成使用新规则。统计从冻结结果重算，经 Worker IPC 传给本次窗口的临时中转区，GET 轮询续期 60 秒，关闭窗口以 DELETE generation 释放；释放或过期后不因迟到 IPC/重读重新建立缓存。窗口已收到的数据只保留在组件状态，不写数据库、configJson 或额外统计文件；任务原有冻结/取消/清理机制保持。
+
+智能采样的生产策略由 `sampling/production.ts` 的 `PRODUCTION_POLICY` 指定为 `trace-coverage-v6.35`，Manager 冻结该策略，Worker 复用 `evidenceSampleSteps` 的 V635 分支。输入词项/签名共享，候选回答按问答键仅在 Worker 内存中保留，用于词项共识、长度与重复片段校准；不新增 Trace 字段、持久特征缓存或模型调用。缺少必要特征或未知版本明确拒绝。已保存 v4/v5 的任务按旧算法恢复；底层 `sampling/index.ts` 的 `POLICY` 保留为 v4 研究基线，不是生产默认。预算不可行时保留 v6.35 原有 v4 回退。
+
+
+效果验证与生产执行分开：`prepare-v635-confirmation.py` 固定来源及算法指纹，并将文本与人工评分分离；`run-v635-confirmation.ts` 完成选样后，`audit-v635-confirmation.ts` 才读取评分。`verify-v635-source-isolation.py` 检查新旧来源及输入词项近重复。研究用签名缓存不进入产品存储，标签不进入生产选择函数。
+
+当前开发池与五个新来源的适用效果均值目标通过；独立统计确认、全平台真实 Trace、完整浏览器操作链路和生产压力验证仍有缺口。五源只与同池随机采样比较。冻结实验附件中的历史默认、旧门槛和通过字段不作为现行结论，见[最终对比报告](../design/trace-eval-dataset/eight-datasets-comparison-report.md)与[开发计划](../design/trace-eval-dataset/phase3-development-plan.md)。仓库保留指定指标与审计摘要，不包含全部原始数据及逐轮运行产物；重放历史脚本需另行准备其要求的数据与附件。
+
+## 自建评估器 Prompt + Skills
+
+创建或编辑时，从库中选固定版本或通过系统选择器直接上传 Skill 文件夹；本地项更新通过移除后重新添加完成，不提供重新导入按钮；库文件从 SkillVersion 读取，本地文件只暂存，均经 evaluator-skill-store 校验后冻结完整字节。PUT 成功才替换卡片，返回持久绑定；本地来源不经过 Skill 库写入链路。
+
+普通实验、对比实验、Benchmark 追加评估器、工作台、eval-traces backing 实验与轨迹任务在创建时冻结自建卡片。行执行优先读取任务冻结配置，重试/追加/监听不重读最新卡片；复用同配置复制冻结内容。历史无快照任务使用旧 Prompt 解析且 skills 为空，新任务缺失已声明的冻结卡片时明确失败。
+
+无 Skills 沿用原传输。有 Skills 进入 custom-evaluator-runtime，校验快照摘要，为每个 Case/evaluator/attempt 建立独立临时目录，将所有 SKILL.md 原文加入请求，并挂载完整 scripts/references/assets，Case 写入 inputs/case.json。强制 OpenCode，不走直连 Judge 或无 Skill 降级；透传所属实验取消及总超时，排队可取消，进程结束后清理运行目录，持久快照保留。
+
+全局实验返回统一 EvaluatorOutput；旧轨迹接口适配 score/reason 并保留完整 output/runtime。工具事件来自 OpenCode onTool，独立于模型声称的调用。证据容器保留原评分依据与运行元数据，结果详情仅渲染原依据。Agent 会话删除前读取真实消息，复用 evaluator-execution-recorder 保存加载指令和工具调用；使用 skip_evaluation/skip_internal_judgment 防止监听循环，保存成功后写入 evaluationTraceId。详情 API 再校验 Execution 存在且属于当前用户，满足条件才返回评估链路入口；空会话、普通 LLM、历史无记录或已失效引用均不显示。HOME 与工作目录隔离不等于操作系统沙箱，沿用已有 read/bash 等权限。

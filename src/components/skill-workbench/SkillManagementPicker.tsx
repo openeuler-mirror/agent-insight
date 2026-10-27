@@ -29,6 +29,7 @@ interface ManagedSkillVersion {
 
 interface ManagedSkill {
   id: string;
+  sourceOwner?: string | null;
   name: string;
   category: string;
   description: string | null;
@@ -53,12 +54,16 @@ interface SkillManagementPickerProps {
   open: boolean;
   user: string;
   selecting: boolean;
-  purpose: 'bind' | 'browse';
+  purpose: 'bind' | 'browse' | 'evaluate';
+  disabledSkillNames?: string[];
+  onlySkillName?: string;
+  onlySkillOwner?: string | null;
+  onPreview?: (skillName: string, version: number, owner: string | null) => Promise<void>;
   onClose: () => void;
-  onSelect: (skillName: string, version: number) => Promise<void>;
+  onSelect: (skillName: string, version: number, owner?: string | null) => Promise<void>;
 }
 
-export function SkillManagementPicker({ open, user, selecting, purpose, onClose, onSelect }: SkillManagementPickerProps) {
+export function SkillManagementPicker({ open, user, selecting, purpose, onClose, onSelect, onPreview, disabledSkillNames = [], onlySkillName, onlySkillOwner }: SkillManagementPickerProps) {
   const [draftSearch, setDraftSearch] = useState('');
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
@@ -76,21 +81,34 @@ export function SkillManagementPicker({ open, user, selecting, purpose, onClose,
     if (search) params.set('search', search);
     if (category) params.set('category', category);
 
-    setLoading(true);
-    setError('');
-    void apiFetch(`/api/skill-management/skills?${params.toString()}`, {
+    queueMicrotask(() => { if (!controller.signal.aborted) { setLoading(true); setError(''); } });
+    const evaluationParams = new URLSearchParams({ user });
+    if (search) evaluationParams.set('query', search);
+    if (category) evaluationParams.set('category', category);
+    void apiFetch(purpose === 'evaluate' ? `/api/skills?${evaluationParams}` : `/api/skill-management/skills?${params.toString()}`, {
       cache: 'no-store',
       signal: controller.signal,
     })
       .then(async (response) => {
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || '加载 Skill 失败');
-        setData(result as PickerResponse);
+        const payload = await response.json();
+        if (controller.signal.aborted) return;
+        if (!response.ok) throw new Error(payload.error || '加载 Skill 失败');
+        let result: PickerResponse = payload;
+        if (purpose === 'evaluate') {
+          const items = (payload as ManagedSkill[]).filter(skill =>
+            (!onlySkillName || (skill.name === onlySkillName && (skill.sourceOwner ?? null) === onlySkillOwner))
+            && (source === 'all' || skill.isUploaded === (source === 'uploaded')));
+          const pages = Math.max(1, Math.ceil(items.length / 9));
+          const currentPage = Math.min(page, pages);
+          result = { items: items.slice((currentPage - 1) * 9, currentPage * 9), total: items.length, page: currentPage, pageSize: 9, pages };
+        }
+        setData(result);
         setVersions((current) => {
           const next = { ...current };
           for (const skill of result.items as ManagedSkill[]) {
             const activeExists = skill.versions.some((item) => item.version === skill.activeVersion);
-            next[skill.name] = activeExists
+            if (skill.versions.some(item => item.version === current[skill.id])) continue;
+            next[skill.id] = activeExists
               ? skill.activeVersion as number
               : skill.versions[0]?.version ?? 0;
           }
@@ -98,13 +116,14 @@ export function SkillManagementPicker({ open, user, selecting, purpose, onClose,
         });
       })
       .catch((loadError) => {
+        if (controller.signal.aborted) return;
         if (loadError instanceof DOMException && loadError.name === 'AbortError') return;
         setError(loadError instanceof Error ? loadError.message : '加载 Skill 失败');
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
 
     return () => controller.abort();
-  }, [category, open, page, search, source, user]);
+  }, [category, open, page, search, source, user, purpose, onlySkillName, onlySkillOwner]);
 
   const range = useMemo(() => {
     if (!data || data.total === 0) return '0 项';
@@ -127,9 +146,11 @@ export function SkillManagementPicker({ open, user, selecting, purpose, onClose,
             <FolderSearch className="size-4.5" />
           </span>
           <div>
-            <h2 className="text-sm font-semibold text-foreground">从 Skill 管理中心选择</h2>
+            <h2 className="text-sm font-semibold text-foreground">{purpose === 'evaluate' ? (onlySkillName ? `更换 ${onlySkillName} 版本` : '从 Skill 库选择') : '从 Skill 管理中心选择'}</h2>
             <p className="mt-0.5 text-xs text-foreground-muted">
-              {purpose === 'bind'
+              {purpose === 'evaluate'
+                ? '选择固定版本用于评估，保存后不会随 Skill 库自动更新。'
+                : purpose === 'bind'
                 ? '选择明确版本作为本会话的起始工作版本，不会修改线上激活版本。'
                 : '切换右侧全部页签使用的 Skill 和版本，不会改变当前会话绑定。'}
             </p>
@@ -195,7 +216,8 @@ export function SkillManagementPicker({ open, user, selecting, purpose, onClose,
           ) : data?.items.length ? (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {data.items.map((skill) => {
-                const selectedVersion = versions[skill.name] ?? skill.versions[0]?.version ?? 0;
+                const alreadyAdded = disabledSkillNames.includes(skill.name);
+                const selectedVersion = versions[skill.id] ?? skill.versions[0]?.version ?? 0;
                 return (
                   <article key={skill.id} className="flex min-h-48 flex-col rounded-lg border border-border bg-card p-4 hover:border-primary">
                     <div className="flex items-start gap-2">
@@ -205,6 +227,7 @@ export function SkillManagementPicker({ open, user, selecting, purpose, onClose,
                       </div>
                       <span className="rounded bg-background-secondary px-1.5 py-0.5 text-[10px] text-foreground-muted">{skill.visibility}</span>
                     </div>
+                    {purpose === 'evaluate' && <p className="mt-1 truncate text-[11px] text-foreground-muted">{skill.sourceOwner || '共享'}</p>}
                     <p className="mt-3 line-clamp-2 text-xs leading-5 text-foreground-secondary">{skill.description || '暂无描述'}</p>
                     <div className="mt-2 flex min-h-5 flex-wrap gap-1">
                       {skill.tags.slice(0, 3).map((tag) => (
@@ -216,7 +239,7 @@ export function SkillManagementPicker({ open, user, selecting, purpose, onClose,
                         aria-label={`${skill.name} 版本`}
                         value={selectedVersion}
                         disabled={skill.versions.length === 0 || selecting}
-                        onChange={(event) => setVersions((current) => ({ ...current, [skill.name]: Number(event.target.value) }))}
+                        onChange={(event) => setVersions((current) => ({ ...current, [skill.id]: Number(event.target.value) }))}
                         className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary disabled:opacity-50"
                       >
                         {skill.versions.map((version) => (
@@ -225,13 +248,14 @@ export function SkillManagementPicker({ open, user, selecting, purpose, onClose,
                           </option>
                         ))}
                       </select>
+                      {onPreview && <button type="button" className="ai-btn-s" disabled={selecting || skill.versions.length === 0} onClick={() => void onPreview(skill.name, selectedVersion, skill.sourceOwner ?? null)}>查看文件</button>}
                       <button
                         type="button"
-                        disabled={skill.versions.length === 0 || selecting}
-                        onClick={() => void onSelect(skill.name, selectedVersion)}
+                        disabled={skill.versions.length === 0 || selecting || alreadyAdded}
+                        onClick={() => void onSelect(skill.name, selectedVersion, skill.sourceOwner ?? null)}
                         className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {selecting ? <Loader2 className="size-3.5 animate-spin" /> : '选择'}
+                        {selecting ? <Loader2 className="size-3.5 animate-spin" /> : alreadyAdded ? '已添加' : '选择'}
                       </button>
                     </div>
                   </article>

@@ -206,7 +206,7 @@ export default function ExperimentsPage() {
         {user && <PendingExperimentCancellations user={user} />}
         <div style={{
           background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-          borderRadius: 10, overflow: 'hidden',
+          borderRadius: 10, flexShrink: 0, minWidth: 0, overflowX: 'auto',
         }}>
           {loading ? (
             <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
@@ -307,7 +307,7 @@ export default function ExperimentsPage() {
         </div>
 
         {!loading && total > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 12, fontSize: 12, color: 'var(--foreground-muted)' }}>
+          <div style={{ display: 'flex', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 12, fontSize: 12, color: 'var(--foreground-muted)' }}>
             <span>共 {total} 个实验</span>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               每页

@@ -98,7 +98,10 @@ test('OpenCode 评估器创建 Session 时都绑定确定的工作目录', () =>
   ];
   for (const relativePath of fixedDirectoryEvaluators) {
     const source = fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
-    assert.match(source, /createSession\(\{[\s\S]*?directory:\s*'\/tmp'/, relativePath);
+    const directory = relativePath.endsWith('/judge-llm.ts')
+      ? /createSession\(\{[\s\S]*?directory:\s*req\.directory\s*\|\|\s*'\/tmp'/
+      : /createSession\(\{[\s\S]*?directory:\s*'\/tmp'/;
+    assert.match(source, directory, relativePath);
   }
 
   const suggestionAgent = fs.readFileSync(

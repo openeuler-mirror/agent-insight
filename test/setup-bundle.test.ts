@@ -31,6 +31,7 @@ const clientFiles = [
   'scripts/xgovernor.cjs',
   'scripts/ordinary-experiment-state.cjs',
   'scripts/skill-experiment-workspace.cjs',
+  'scripts/opencode-connection-config.cjs',
   'scripts/agent-run-diagnostics.cjs',
   'scripts/opencode-experiment-events.cjs',
   'scripts/opencode-experiment-events.mjs',
@@ -169,6 +170,8 @@ test('installed executor loads package policies after the installation source mo
     const assert = require('node:assert/strict')
     const path = require('node:path')
     const dir = ${JSON.stringify(executorDir)}
+    assert.equal(typeof require(path.join(dir, '../opencode-connection-config.cjs')).loadOpenCodeConnectionConfig, 'function')
+    assert.equal(typeof require(path.join(dir, '../xgovernor.cjs')).run, 'function')
     const { createBenchmarkExecutor } = require(path.join(dir, 'index.cjs'))
     const executor = createBenchmarkExecutor({
       clientId: 'fixture', deviceCredential: 'fixture', insightBaseUrl: 'http://localhost',

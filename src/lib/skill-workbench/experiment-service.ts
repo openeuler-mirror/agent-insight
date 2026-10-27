@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { freezeCustomEvaluators, customEvaluatorsForReuse, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service';
 import { randomUUID } from 'crypto';
 
 import { DEFAULT_SELECTED_PRESET_IDS } from '@/lib/evaluators/preset-evaluators';
@@ -148,6 +149,7 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
 }
 
 export async function createWorkbenchExperiment(input: {
+  frozenCustomEvaluators?: CustomSnapshots;
   user: string;
   sessionId?: string;
   skillName: string;
@@ -156,6 +158,7 @@ export async function createWorkbenchExperiment(input: {
   datasetId: string;
   compareVersion?: number;
   versionAEnabled?: boolean;
+  versionBEnabled?: boolean;
   optimizationRecordId?: string;
   name?: string;
   agentName?: string;
@@ -185,11 +188,17 @@ export async function createWorkbenchExperiment(input: {
   if (!skill || !currentVersion) return { kind: 'not_found' as const };
   const versionA = input.preset === 'skill-ab' && input.versionAEnabled !== false ? currentVersion : null;
   const versionB = input.preset === 'skill-ab'
-    ? skill.versions.find((version) => version.version === input.compareVersion)
+    ? input.versionBEnabled === false ? null : skill.versions.find((version) => version.version === input.compareVersion)
     : currentVersion;
-  if (input.preset === 'skill-ab' && (!versionB || versionB.version === versionA?.version)) {
+  if (input.preset === 'skill-ab' && (
+    (input.versionBEnabled !== false && !versionB)
+    || (!versionA && !versionB)
+    || (versionA && versionB && versionB.id === versionA.id)
+  )) {
     return { kind: 'invalid_compare' as const };
   }
+  const boundVersion = (versionA || versionB)!;
+  const boundSide = versionA ? 'a' : 'b';
   const dataset = await findAgentDataset(input.user, input.datasetId);
   if (
     !dataset
@@ -255,6 +264,7 @@ export async function createWorkbenchExperiment(input: {
     agentMaxConcurrency: concurrencyPolicy.executionConcurrency,
     retryLimit: isTriggerExperiment ? 1 : 2,
   };
+  const customEvaluatorSnapshots = input.frozenCustomEvaluators ?? await freezeCustomEvaluators(input.user, evaluatorIds);
   const created = await prismaRaw.$transaction(async (tx) => {
     const experiment = await tx.experiment.create({
       data: {
@@ -281,14 +291,14 @@ export async function createWorkbenchExperiment(input: {
         user: input.user,
         skillId: skill.id,
         skillName: input.skillName,
-        skillVersion: currentVersion.version,
-        skillVersionId: currentVersion.id,
+        skillVersion: boundVersion.version,
+        skillVersionId: boundVersion.id,
         taskName: `${experiment.name} · ${experiment.id.slice(-6)}`,
         configJson: JSON.stringify({
           skillId: skill.id,
           versionAId: versionA?.id || '__NONE__',
-          versionBId: versionB!.id,
-          boundSide: input.preset === 'skill-ab' ? 'a' : 'b',
+          versionBId: versionB?.id || '__NONE__',
+          boundSide,
           linkedDatasetIds: [dataset.id],
           evaluators: evaluatorIds,
           runCount: selectedCases.length,
@@ -304,7 +314,7 @@ export async function createWorkbenchExperiment(input: {
           triggerSkills,
           skillSnapshots: executionTarget ? {
             a: versionA ? { name: skill.name, version: versionA.version, files: resolveSkillVersionFiles(skill.id, versionA.version, versionA.files, versionA.content) } : null,
-            b: { name: skill.name, version: versionB!.version, files: resolveSkillVersionFiles(skill.id, versionB!.version, versionB!.files, versionB!.content) },
+            b: versionB ? { name: skill.name, version: versionB.version, files: resolveSkillVersionFiles(skill.id, versionB.version, versionB.files, versionB.content) } : null,
           } : undefined,
           modelOptions: runtime.modelOptions,
           interactionPolicy: runtime.interactionPolicy,
@@ -323,14 +333,15 @@ export async function createWorkbenchExperiment(input: {
       await tx.experimentCase.createMany({ data: triggerExperimentCaseData(experiment.id, dataset.id, selectedCases) });
     }
     const configSnapshot = {
+      customEvaluatorSnapshots,
       schemaVersion: 1,
       preset: input.preset,
       datasetId: dataset.id,
       caseIds: selectedCases.map((item) => item.id),
       evaluatorIds,
       versionAId: versionA?.id || '__NONE__',
-      versionBId: versionB!.id,
-      boundSide: input.preset === 'skill-ab' ? 'a' : 'b',
+      versionBId: versionB?.id || '__NONE__',
+      boundSide,
       baselineSide: versionA ? 'a' : 'b',
       executionSides: input.preset === 'skill-ab' ? ['a', 'b'] : ['b'],
       traceSource: input.traceSource || 'generate',
@@ -416,14 +427,17 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
   if (!caseIds?.length) throw new Error('原 Skill 实验没有可复用的 Case');
   const preset = source.preset as WorkbenchExperimentPreset;
   const versionBId = typeof snapshot.versionBId === 'string' ? snapshot.versionBId : '';
-  const compareVersion = preset === 'skill-ab'
+  const versionBEnabled = versionBId !== '__NONE__';
+  const compareVersion = preset === 'skill-ab' && versionBEnabled
     ? await prismaRaw.skillVersion.findFirst({ where: { id: versionBId }, select: { version: true } }).then((row) => row?.version)
     : undefined;
-  if (preset === 'skill-ab' && compareVersion == null) throw new Error('原 A/B 实验的对照版本已失效');
+  if (preset === 'skill-ab' && versionBEnabled && compareVersion == null) throw new Error('原 A/B 实验的对照版本已失效');
   const runtime = snapshot.runtime && typeof snapshot.runtime === 'object'
     ? snapshot.runtime as Record<string, unknown> : {};
   const timeoutSeconds = Number(runtime.timeoutMs) / 1_000;
+  snapshot.customEvaluatorSnapshots = await customEvaluatorsForReuse(user, parseJson<string[]>(source.evaluatorIdsJson, []), snapshot);
   const result = await createWorkbenchExperiment({
+    frozenCustomEvaluators: await customEvaluatorsForReuse(user, parseJson<string[]>(source.evaluatorIdsJson, []), snapshot),
     user,
     skillName: source.skillName,
     version: source.skillVersion,
@@ -432,6 +446,7 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
     caseIds,
     compareVersion,
     versionAEnabled: snapshot.versionAId !== '__NONE__',
+    versionBEnabled,
     name: defaultSkillExperimentName(source.skillName, preset, source.skillVersion),
     agentName: source.agentName,
     evaluatorIds: parseJson<string[]>(source.evaluatorIdsJson, []),
@@ -445,6 +460,7 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
       where: { id: result.grayscaleTask.id },
       data: { configJson: JSON.stringify({
         ...sourceTaskConfig,
+        boundSide: result.configSnapshot.boundSide,
         evalExperimentId: result.experiment.id,
         evaluationBatchTitle: result.experiment.name,
         runCount: caseIds.length,
@@ -454,7 +470,7 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
       where: { id: result.experiment.id },
       data: {
         sourceExperimentId: source.id,
-        configSnapshotJson: JSON.stringify({ ...snapshot, caseIds, grayscaleTaskId: result.grayscaleTask.id }),
+        configSnapshotJson: JSON.stringify({ ...snapshot, boundSide: result.configSnapshot.boundSide, caseIds, grayscaleTaskId: result.grayscaleTask.id }),
       },
     }),
   ]);

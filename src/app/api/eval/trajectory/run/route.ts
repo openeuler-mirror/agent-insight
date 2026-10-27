@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import { withFrozenCustomEvaluators, resolveFrozenCustomEvaluator } from '@/lib/evaluators/evaluator-skill-service';
+import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
+import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { NextResponse } from 'next/server';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
@@ -615,6 +619,13 @@ export async function POST(request: Request) {
 
         // 自建评估器需要真存在于该用户的 CustomEvaluatorList 才能放行；找不到的 ID 直接拒绝，
         // 避免后台 runner 反复抛"未找到自建评估器"。
+        let frozenTaskSnapshot: Record<string, unknown> = {};
+        if (appendRunId) {
+            const source = await prisma.trajectoryEvalResult.findFirst({ where: { user, evaluatorRunId: appendRunId }, orderBy: { createdAt: 'asc' } });
+            if (!source) return NextResponse.json({ error: 'evaluatorRunId not found' }, { status: 404 });
+            const sourceMeta = safeParseRecord(source.rawAnalysisJson);
+            if (Object.hasOwn(sourceMeta, 'customEvaluatorSnapshots')) frozenTaskSnapshot = { customEvaluatorSnapshots: sourceMeta.customEvaluatorSnapshots };
+        }
         const customIdsRequested = selectedEvaluators.filter(isCustomEvaluatorId);
         const validCustomIds = new Set<string>();
         const customNameMap = new Map<string, string>();
@@ -622,7 +633,10 @@ export async function POST(request: Request) {
             const knownIds = await listCustomEvaluatorIds(user);
             const missing: string[] = [];
             for (const id of customIdsRequested) {
-                if (knownIds.has(id)) {
+                const frozenCard = appendRunId && Object.hasOwn(frozenTaskSnapshot, 'customEvaluatorSnapshots')
+                    ? await resolveFrozenCustomEvaluator(user, id, frozenTaskSnapshot) : null;
+                if (frozenCard) customNameMap.set(id, frozenCard.name);
+                if (knownIds.has(id) || frozenCard) {
                     validCustomIds.add(id);
                 } else {
                     missing.push(id);
@@ -677,6 +691,7 @@ export async function POST(request: Request) {
         const allowedDatasetIds: string[] = Array.isArray(body.datasetIds)
             ? body.datasetIds.map((d: unknown) => String(d).trim()).filter(Boolean)
             : [];
+        for (const id of new Set([datasetId, ...allowedDatasetIds].filter(Boolean))) await guardTraceDataset(request, id, user, true);
         const pairs = Array.isArray(body.pairs) ? (body.pairs as RunPair[]) : [];
         let taskMeta = normalizeTrajectoryTaskMeta({
             title: body.taskTitle,
@@ -775,6 +790,7 @@ export async function POST(request: Request) {
             },
         );
 
+        if (!appendRunId) frozenTaskSnapshot = await withFrozenCustomEvaluators(user, evaluatorMeta.selectedEvaluators);
         const evaluatorRunId = appendRunId || generateRunId();
         const created: { id: string; caseId: string; executionId?: string; taskId?: string }[] = [];
         const skipped: { caseId: string; reason: string }[] = [];
@@ -797,6 +813,7 @@ export async function POST(request: Request) {
                         status: 'pending',
                         rawAnalysisJson: JSON.stringify({
                             ...evaluatorMeta,
+                            ...frozenTaskSnapshot,
                             taskMeta,
                             ...(grayscaleBinding ? { grayscaleBinding } : {}),
                             ...(allowedDatasetIds.length > 0 ? { allowedDatasetIds } : {}),
@@ -832,6 +849,7 @@ export async function POST(request: Request) {
                     status: 'pending',
                     rawAnalysisJson: JSON.stringify({
                         ...evaluatorMeta,
+                        ...frozenTaskSnapshot,
                         taskMeta,
                         ...(grayscaleBinding ? { grayscaleBinding } : {}),
                         watchPlaceholder: true,
@@ -873,7 +891,9 @@ export async function POST(request: Request) {
                         status: 'pending',
                         rawAnalysisJson: JSON.stringify({
                             ...evaluatorMeta,
+                            ...frozenTaskSnapshot,
                             taskMeta,
+                            ...(dataset.generationSource === 'trace' ? { frozenTraceDataset: { id: dataset.id, name: dataset.name, cases: [caseEntry] } } : {}),
                             ...(grayscaleBinding ? { grayscaleBinding } : {}),
                         }),
                     },
@@ -918,9 +938,10 @@ export async function POST(request: Request) {
             skipped,
         });
     } catch (error: unknown) {
+        if (error instanceof GenerationError) return generationErrorResponse(error);
         console.error('trajectory/run POST error:', error);
         const message = error instanceof Error ? error.message : 'failed to start trajectory evaluation';
-        return NextResponse.json({ error: message }, { status: 500 });
+        return NextResponse.json({ error: message }, { status: error instanceof EvaluatorSkillError ? error.status : 500 });
     }
 }
 
@@ -1166,11 +1187,13 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
     let finalDiagnostic: EvaluationDiagnostic | null = null;
     let customEvaluationsRawAnalysis: Record<string, unknown> | null = null;
     const customEvaluatorScores: number[] = [];
+    let customSkillError: string | null = null;
+    const frozenRunSnapshot = safeParseRecord(row.rawAnalysisJson);
     const customEvaluatorBundles = hasCustomEvaluators
         ? await Promise.all(
             customEvaluatorIds.map(async evaluatorId => ({
                 evaluatorId,
-                bundle: await loadCustomEvaluator(user, evaluatorId),
+                bundle: await resolveFrozenCustomEvaluator(user, evaluatorId, frozenRunSnapshot).then(card => card?.llmConfig ? { id: card.id, name: card.name, config: card.llmConfig, card } : null),
             })),
         )
         : [];
@@ -1193,8 +1216,9 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
     );
     const needsCustomReferenceOutput = requestedCustomVars.has('reference_output');
     const needsCustomDatasetInput = requestedCustomVars.has('dataset_input');
-    const needsCustomOutput = requestedCustomVars.has('output');
-    const needsCustomTrajectory = requestedCustomVars.has('trajectory');
+    const hasSkillEvaluators = customEvaluatorBundles.some(item => item.bundle?.config.skills?.length);
+    const needsCustomOutput = requestedCustomVars.has('output') || hasSkillEvaluators;
+    const needsCustomTrajectory = requestedCustomVars.has('trajectory') || hasSkillEvaluators;
 
     // 先解析 taskId 和执行记录，用于匹配数据集 case
     let resolvedTaskId = row.taskId;
@@ -1275,7 +1299,8 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
     let matchKind: 'explicit-pair' | 'exact-input' | 'semantic' | 'auto-match' | 'no-dataset' | 'fallback' = 'no-dataset';
     if (row.datasetId && row.caseId) {
         try {
-            const dataset = await findAgentDataset(user, row.datasetId);
+            const frozen = safeParseRecord(row.rawAnalysisJson).frozenTraceDataset as { id: string; name: string; cases: DatasetCase[] } | undefined;
+            const dataset = frozen?.id === row.datasetId ? frozen : await findAgentDataset(user, row.datasetId);
             if (!dataset) {
                 throw new StagedEvaluationError(
                     'no-evaluable-case',
@@ -1541,6 +1566,7 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
     // skillAttribution + comparisonMode 写进 baseRawAnalysisMeta 后所有 evaluator
     // 写盘的 rawAnalysisJson 都会带上，前端按 state 显示徽章。
     const baseRawAnalysisMeta = {
+        ...(Object.hasOwn(frozenRunSnapshot, 'customEvaluatorSnapshots') ? { customEvaluatorSnapshots: frozenRunSnapshot.customEvaluatorSnapshots } : {}),
         ...evaluatorMeta,
         taskMeta,
         ...(grayscaleBinding ? { grayscaleBinding } : {}),
@@ -1863,11 +1889,11 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
                 }
                 return runCustomLlmEvaluator(user, evaluatorId, {
                     caseInput: taskInputForEvaluation,
-                    datasetInput: evaluatorVars.has('dataset_input') ? caseEntry!.input : '',
-                    expectedOutput: evaluatorVars.has('reference_output') ? caseEntry!.expectedOutput : '',
+                    datasetInput: evaluatorVars.has('dataset_input') || (bundle?.config.skills?.length && hasDeterministicDatasetInputMatch) ? caseEntry!.input : '',
+                    expectedOutput: evaluatorVars.has('reference_output') || bundle?.config.skills?.length ? caseEntry!.expectedOutput : '',
                     actualOutput: actualOutputForCustom,
                     traceText: traceTextForCustom,
-                }, evalSkillName, evalSkillVersion).catch(e => ({
+                }, evalSkillName, evalSkillVersion, bundle?.card || null, getTrajectoryEvalRunSignal(row.evaluatorRunId)).catch(e => ({
                     evaluatorId,
                     evaluatorName: evaluatorId,
                     score: null as number | null,
@@ -1880,6 +1906,7 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
             }),
         );
 
+        customSkillError = customResults.find(r => r.runtime?.error)?.error || null;
         const byId: Record<string, unknown> = {};
         for (const r of customResults) {
             byId[r.evaluatorId] = {
@@ -1889,6 +1916,8 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
                 reason: r.reason,
                 model: r.model,
                 durationMs: r.durationMs,
+                runtime: r.runtime,
+                output: r.output,
                 error: r.error,
             };
             if (typeof r.score === 'number') customEvaluatorScores.push(r.score);
@@ -1907,10 +1936,10 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
         const resultEvalSid = (resultEvaluationRawAnalysis as Record<string, unknown> | null)?.evaluatorSessionId;
         const resultEvaluatorSessionId = typeof resultEvalSid === 'string' ? resultEvalSid.trim() : '';
         const resultEvaluationMissing = shouldRunResultEvaluation && (!resultEvaluationRawAnalysis || !resultEvaluatorSessionId);
-        const finalStatus = resultEvaluationMissing ? 'failed' : 'done';
+        const finalStatus = resultEvaluationMissing || customSkillError ? 'failed' : 'done';
         const finalErrorMessage = resultEvaluationMissing
             ? (resultEvaluationError || '结果评测未产出有效结果或评测 session')
-            : null;
+            : customSkillError;
         if (resultEvaluationMissing && !finalDiagnostic) {
             finalDiagnostic = buildEvaluationDiagnostic('result_evaluator_failed', {
                 details: finalErrorMessage || undefined,
@@ -2030,14 +2059,14 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
         await prisma.trajectoryEvalResult.update({
             where: { id },
             data: {
-                status: 'done',
+                status: customSkillError ? 'failed' : 'done',
                 trajectoryScore: out.trajectoryScore,
                 dimensionScoresJson: JSON.stringify(out.dimensionScores),
                 deviationStepsJson: JSON.stringify(out.deviationSteps),
                 rootCauseStep: out.rootCauseStep || null,
                 reasonText: out.reasonText || null,
                 rawAnalysisJson: JSON.stringify(mergedRawAnalysis),
-                errorMessage: null,
+                errorMessage: customSkillError,
             },
         });
     } catch (e) {

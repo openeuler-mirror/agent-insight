@@ -55,6 +55,7 @@ import {
 } from '@/lib/benchmark/presentation';
 
 interface ResultRow {
+  evaluationTraceId?: string | null;
   id: string;
   caseId: string;
   evaluatorId: string;
@@ -668,7 +669,7 @@ export function ExperimentCaseDetail({
                   href={`/trace?taskId=${encodeURIComponent(caseRow.taskId)}`}
                   style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}
                 >
-                  前往链路观测 →
+                  查看执行链路 →
                 </Link>
               )}
             </div>
@@ -868,6 +869,11 @@ export function ExperimentCaseDetail({
                             <span style={{ fontSize: 12.5, fontWeight: 600 }}>{lookup.nameOf(r.evaluatorId)}</span>
                             {tags.map((t) => <TagChip key={t} text={t} />)}
                             <span style={{ flex: 1 }} />
+                            {r.evaluationTraceId && (
+                              <Link href={`/trace?taskId=${encodeURIComponent(r.evaluationTraceId)}`} onClick={event => event.stopPropagation()} className="text-xs text-primary hover:underline">
+                                查看评估链路 ↗
+                              </Link>
+                            )}
                             {failed ? (
                               <span style={{
                                 fontSize: 11, padding: '1px 8px', borderRadius: 8, fontWeight: 500,
