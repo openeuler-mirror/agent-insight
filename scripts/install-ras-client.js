@@ -32,7 +32,7 @@ const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.cjs')
 const USER_CONFIG_DIR = path.join(getAgentInsightHome(), 'config')
 
 /** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
-const RUNTIME_FILES = ['reliability-client.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'ws-client.cjs', 'agent-insight-home.cjs', 'xgovernor.cjs']
+const RUNTIME_FILES = ['reliability-client.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'opencode-connection-config.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'ws-client.cjs', 'agent-insight-home.cjs', 'xgovernor.cjs']
 
 function installRuntime() {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true })

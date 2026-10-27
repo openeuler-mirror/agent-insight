@@ -1643,9 +1643,34 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     const cwd = fs.mkdtempSync(path.join(root, 'case-'))
     isolated = { cwd, env: {}, cleanup() { fs.rmSync(cwd, { recursive: true, force: true }) } }
   }
+  let discardWorkspace = false
   try {
     return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
-  } finally { isolated?.cleanup(Boolean(payload.signal?.aborted)) }
+  } catch (error) {
+    discardWorkspace = error.code === 'MODEL_UNAVAILABLE'
+    throw error
+  } finally { isolated?.cleanup(discardWorkspace || Boolean(payload.signal?.aborted)) }
+}
+
+function flushOpencodeTrace(traceId, { home = getAgentInsightHome(), timeoutMs = 20_000 } = {}) {
+  const uploader = path.join(home, 'opencode_uploader_client.js')
+  if (!/^ses_[a-zA-Z0-9_-]+$/.test(traceId || '') || !fs.existsSync(uploader)) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(process.execPath, [uploader], {
+        cwd: home,
+        env: { ...process.env, AGENT_INSIGHT_HOME: home, AGENT_INSIGHT_UPLOADER_NO_MAIN: '0',
+          AGENT_INSIGHT_UPLOADER_FORCE: '1', AGENT_INSIGHT_UPLOADER_FORCE_SESSION: traceId,
+          AGENT_INSIGHT_UPLOADER_RECHECK_ONLY: '1',
+          AGENT_INSIGHT_UPLOADER_SPOOL_FILE: '' },
+        stdio: 'ignore',
+      })
+    } catch { resolve(false); return }
+    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(false) }, timeoutMs)
+    child.once('error', () => { clearTimeout(timer); resolve(false) })
+    child.once('close', code => { clearTimeout(timer); resolve(code === 0) })
+  })
 }
 
 async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
@@ -1991,6 +2016,10 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       }
       activityEvidence?.cleanup()
       await waitForTraceReport()
+      if (platform === 'opencode' && traceId) {
+        const flushed = await flushOpencodeTrace(traceId)
+        if (!flushed) logErr(`OpenCode Trace 收尾上传未完成，等待采集器重试 (${traceId})`)
+      }
       const finishedAt = new Date().toISOString()
       const runFacts = {
         state: 'AGENT_EXITED',
@@ -2830,6 +2859,7 @@ module.exports = {
   syncBenchmarkExecutorCapabilities,
   buildExperimentCaseInvocation,
   runExperimentCase,
+  flushOpencodeTrace,
   tryAcquireExecutionSlot,
   releaseExecutionSlot,
   parseOpencodeSlashCommand,
