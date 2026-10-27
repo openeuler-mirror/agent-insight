@@ -17,7 +17,7 @@
   },
   {
     "path": "docs/zh/how-to/evaluation/develop-evaluator.md",
-    "headings": 41
+    "headings": 42
   },
   {
     "path": "docs/zh/how-to/optimization/skills/skill-workflow.md",
@@ -69,7 +69,7 @@
   },
   {
     "path": "docs/zh/explanation/platform/data-control-flow.md",
-    "headings": 24
+    "headings": 25
   },
   {
     "path": "docs/zh/explanation/observability/overview.md",
@@ -97,7 +97,7 @@
   },
   {
     "path": "docs/zh/how-to/evaluation/evaluators.md",
-    "headings": 22
+    "headings": 23
   },
   {
     "path": "docs/zh/how-to/platform/settings/model-registry.md",

@@ -186,5 +186,78 @@
     "browserVerified": false,
     "fullNextBuildPerformed": false,
     "dockerImageBuilt": false
+  },
+  "latestUpstreamSync": {
+    "baseCommit": "62b9bbfb5c345eaf49549bd7ed4fc16529ee7ddb",
+    "testedCommit": "f03df1580f9d7ff6459f28c437be6dc2eed3fe27",
+    "documentation": {
+      "base": "62b9bbfb5c345eaf49549bd7ed4fc16529ee7ddb",
+      "mappedOriginalFiles": 437,
+      "retainedOriginalFiles": 433,
+      "approvedRemovedFiles": [
+        "design/platform/legacy/eval-dashboard.md",
+        "docs/snippets/install-sdk.mdx",
+        "docs/snippets/setup-env.mdx",
+        "docs/zh/explanation/platform/user-overview.html"
+      ],
+      "brokenLocalReferences": 80,
+      "newBrokenLocalReferences": 0,
+      "navigationPages": 98,
+      "retainedItems5and6Unchanged": true,
+      "upstreamNewDesigns": 4,
+      "upstreamNewImages": 1
+    },
+    "fullSuite": {
+      "tests": 4356,
+      "pass": 4334,
+      "fail": 4,
+      "cancelled": 0,
+      "skipped": 18
+    },
+    "upstreamFullSuite": {
+      "tests": 4355,
+      "pass": 4333,
+      "fail": 4,
+      "cancelled": 0,
+      "skipped": 18
+    },
+    "commonFailingTests": [
+      "页面禁用编辑入口，公开 PATCH 执行服务端保护",
+      "OTel trace adapter registry selects Hermes before the generic fallback",
+      "Qoder framework and OTLP registries expose plugin onboarding and snapshot replacement"
+    ],
+    "currentFullSuiteOnlyFailure": {
+      "name": "search failures degrade locally but the evaluation deadline cancels in-flight search",
+      "assertion": "Missing expected rejection: 评估尝试超时",
+      "currentIsolated": {
+        "tests": 2,
+        "pass": 2,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "upstreamIsolated": {
+        "tests": 2,
+        "pass": 2,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "upstreamFullSuitePassed": true,
+      "classification": "Not consistently reproduced. Related source and test match upstream byte-for-byte; root cause remains unconfirmed."
+    },
+    "upstreamSnapshotOnlyFailure": {
+      "name": "AC1: dist/extension.js 构建产物存在且非空（可被打包安装）",
+      "reason": "The git archive snapshot does not include generated scripts/trae-collector/dist/extension.js. The current workspace includes this build artifact."
+    },
+    "npmPack": {
+      "files": 726,
+      "designFiles": [],
+      "llamaIndexGuide": true
+    },
+    "mergeReview": "No blocking findings: latest evaluator docs, images and design status retained; 40 non-documentation files changed by the latest upstream merge match upstream byte-for-byte.",
+    "browserVerified": false,
+    "fullNextBuildPerformed": false,
+    "dockerImageBuilt": false
   }
 }

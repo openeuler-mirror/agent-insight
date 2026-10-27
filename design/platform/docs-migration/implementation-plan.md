@@ -50,3 +50,9 @@
 - 合入明确目标 upstream/master 的最新示例数据脱敏提交，保留其脚本与数据清理。
 - 为迁出的根 design 同步 Next 文件追踪排除和 prepack 清理规则；用真实 standalone 目录验证排除内部设计而不删除源码、运行文件和许可材料。
 - 完成独立审查与同步后全量验证，结果记录到 verification.json 的 submissionValidation。
+
+## 7. 按维护者授权提交 PR
+
+- 正常合并 upstream/master 的评估器配置更新，解决文档目录冲突并将新增四篇设计和一张图片纳入映射。
+- 保留上游业务实现、图片和新说明，复核仅删除已批准四项；提交至 origin 的文档分支，并以 upstream/master 为 PR 目标。
+- 合并后全量、未迁移上游对照及搜索测试单跑结果分别记录到 verification.json 的 latestUpstreamSync，不将未稳定复现的失败认定为通过。

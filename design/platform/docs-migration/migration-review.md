@@ -1,20 +1,20 @@
 # 文档迁移结果与待审清单
 
-第一阶段迁移文档、更新引用和导航、适配文档下载与打包路径，保留了全部 432 个原文件。随后按维护者确认清理下列第 1、2、3、4 项，保留第 5、6 项，并更新其余已识别的过时说明。本记录基于本地迁移基线 `1bb2585c` 及后续文档修改，不代表远端最新代码的完整内容验收。
+第一阶段迁移文档、更新引用和导航、适配文档下载与打包路径，保留了全部 432 个原文件。随后按维护者确认清理下列第 1、2、3、4 项，保留第 5、6 项，并更新其余已识别的过时说明。首次迁移基线为 `1bb2585c`；提交前已同步至上游 `62b9bbfb`，新增设计与图片按相同规则归位。各阶段的验证范围和结果分别记录在下方。
 
 ## 迁移范围
 
 | 项目 | 结果 |
 | --- | --- |
-| 原 `docs/` 文件 | 432 个完成迁移；随后授权清理 4 个，保留 428 个原文件 |
-| 移动文件 | 317 个 |
+| 原 `docs/` 文件 | 首次 432 个，随后同步上游新增 5 个，共映射 437 个；授权清理 4 个，保留 433 个原文件 |
+| 移动文件 | 首次移动 317 个，随后迁移上游新增 4 篇设计 |
 | 公开文档区域 | 首次迁入 98 个原文件，其中 94 篇 Markdown/MDX 正文；随后清理 1 份重复 HTML，保留 97 个原文件 |
-| 内部设计区域 | 首次迁入 217 个原文件；随后清理 1 份退役档案，保留 216 个原文件 |
-| 支撑资源 | 首次保留 117 个原文件；随后清理 2 个未引用片段，保留 115 个原文件，第三方 bundle 未变 |
+| 内部设计区域 | 首次迁入 217 个原文件；随后清理 1 份退役档案并同步新增 4 篇设计，保留 220 个原文件 |
+| 支撑资源 | 首次保留 117 个原文件；随后清理 2 个未引用片段并同步新增 1 张图片，保留 116 个原文件，第三方 bundle 未变 |
 | 中文正文分类 | 教程 5、操作指南 48、参考 6、解释 35；不含新增导航页 |
 | 英文 | 已建立四类目录及翻译待补齐入口；未新增正文译文，不视为双语达标 |
 
-首次迁移的旧路径逐文件对应关系见 [path-map.json](path-map.json)；该历史映射保留原记录，后续删除以本页处理结果及 verification.json 的 approvedCleanup 为准。共享图片和片段保留原位置；两份第三方 Mermaid bundle 各自保留并调整许可清单中的位置，没有去重或重新打包。
+旧路径逐文件对应关系见 [path-map.json](path-map.json)，已补齐同步上游时新增的 5 个条目；删除结果以本页处理结果及 verification.json 的 approvedCleanup 为准。共享图片和片段保留原位置；两份第三方 Mermaid bundle 各自保留并调整许可清单中的位置，没有去重或重新打包。
 
 公开入口：[文档导航](../../../docs/README.md)。内部设计继续使用[需求清单](../../README.md)登记状态，源码三模块迁移不在本轮范围内。
 
@@ -82,7 +82,7 @@
 | [develop-benchmark](../../../docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md) | 64 |
 | [ras-fi-insight-relationship](../../../docs/zh/explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship.md) | 47 |
 | [view-traces](../../../docs/zh/how-to/observability/view-traces.md) | 44 |
-| [develop-evaluator](../../../docs/zh/how-to/evaluation/develop-evaluator.md) | 41 |
+| [develop-evaluator](../../../docs/zh/how-to/evaluation/develop-evaluator.md) | 42 |
 | [skill-workflow](../../../docs/zh/how-to/optimization/skills/skill-workflow.md) | 39 |
 | [api-and-contracts](../../../docs/zh/reference/platform/api-and-contracts.md) | 37 |
 | [faq](../../../docs/zh/how-to/platform/faq.md) | 36 |
@@ -95,13 +95,13 @@
 | [llamaindex-trace-collector](../../../docs/zh/how-to/observability/llamaindex-trace-collector.md) | 25 |
 | [overview](../../../docs/zh/explanation/observability/overview.md) | 24 |
 | [manage](../../../docs/zh/how-to/optimization/skills/manage.md) | 24 |
-| [data-control-flow](../../../docs/zh/explanation/platform/data-control-flow.md) | 24 |
+| [data-control-flow](../../../docs/zh/explanation/platform/data-control-flow.md) | 25 |
 | [recovery](../../../docs/zh/explanation/reliability/agent-ras/modules/recovery.md) | 24 |
 | [diagnosis-loop-analysis](../../../docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md) | 25 |
 | [web-search](../../../docs/zh/how-to/platform/settings/web-search.md) | 23 |
 | [architecture](../../../docs/zh/explanation/platform/architecture.md) | 23 |
 | [develop-trace-collector](../../../docs/zh/how-to/observability/develop-trace-collector.md) | 23 |
-| [evaluators](../../../docs/zh/how-to/evaluation/evaluators.md) | 22 |
+| [evaluators](../../../docs/zh/how-to/evaluation/evaluators.md) | 23 |
 | [model-registry](../../../docs/zh/how-to/platform/settings/model-registry.md) | 22 |
 | [otlp-attribute-contract](../../../docs/zh/reference/observability/otlp-attribute-contract.md) | 22 |
 | [detectors](../../../docs/zh/explanation/reliability/agent-ras/modules/detectors.md) | 22 |
@@ -135,6 +135,16 @@
 
 审查发现内部设计移到根 `design/` 后遗漏 standalone 排除：源码文件追踪确实捕获了该目录内两份 YAML，且 prepack 原先不会清理该目录。已在 `next.config.ts` 的文件追踪规则与 `scripts/prepare-npm-package.js` 的产物清理列表中补齐 design。新增真实目录打包用例先复现问题，再验证设计资料不进入产物，同时保留源码设计、server.js、采集器 README、诊断运行文件和许可材料。没有修改业务流程。
 
-最终代码验证基线为 `bd7c8921`：全量 4330 项，4309 通过、3 失败、0 取消、18 跳过；3 个断言失败仍为此前已在上游基线复现的用例。文档和打包专项 22 项，21 通过、1 个 Windows 专用用例跳过。最终 npm dry-run 726 个文件，数量减少来自上游删除的两个 mock 脚本；迁移后的采集器指南仍在包中，design 未进入包。98 个活动导航均存在，没有新增本地目标失效。
+第一次同步后的代码验证基线为 `bd7c8921`：全量 4330 项，4309 通过、3 失败、0 取消、18 跳过；3 个断言失败仍为此前已在上游基线复现的用例。文档和打包专项 22 项，21 通过、1 个 Windows 专用用例跳过。最终 npm dry-run 726 个文件，数量减少来自上游删除的两个 mock 脚本；迁移后的采集器指南仍在包中，design 未进入包。98 个活动导航均存在，没有新增本地目标失效。
 
-相对最新上游，40 个源码或 CSS 文件的变更仅为注释引用，非注释变更限定于 Next 追踪排除、打包脚本文档复制/清理以及 LlamaIndex README 读取路径。独立差异审查无剩余阻塞项。未执行完整 Next/Docker 构建或浏览器验收；详情见 verification.json 的 submissionValidation。
+相对上游 `4e878243`，40 个源码或 CSS 文件的变更仅为注释引用，非注释变更限定于 Next 追踪排除、打包脚本文档复制/清理以及 LlamaIndex README 读取路径。独立差异审查无剩余阻塞项。未执行完整 Next/Docker 构建或浏览器验收；详情见 verification.json 的 submissionValidation。
+
+## 最新上游同步与 PR 验证
+
+提交期间 `upstream/master` 更新至 `62b9bbfb`，包含评估器超时和重试配置。已正常合并并解决三处文档冲突，将新增四篇设计归入 `design/evaluation/evaluator-execution-settings/`，保留新增图片、操作说明和设计状态。映射现有 437 个上游原文件，其中保留 433 个，仅删除此前批准的四项；第 5、6 项仍保持原样。98 个活动导航有效，历史本地目标问题仍为 80 处，无新增。
+
+合并后的代码验证提交为 `f03df158`：全量 4356 项，4334 通过、4 失败、0 取消、18 跳过。其中三项与此前已复现的上游失败相同；新增的搜索超时断言在本次全量失败，但在当前分支和原样上游快照中各自单跑两项搜索测试均通过，未稳定复现，根因未确认。该测试及相关业务源码与上游一致，本次未修改。
+
+原样上游 `62b9bbfb` 全量对照为 4355 项，4333 通过、4 失败、0 取消、18 跳过：复现上述三项共同失败，搜索超时项通过；另一项失败来自纯源码快照缺少未受版本管理的 Trae `dist/extension.js` 构建产物。因此两次全量的失败集合并不完全相同，不能将全量描述为通过或四项均为已确认的上游问题。
+
+同步后的 npm dry-run 仍为 726 个文件，LlamaIndex 指南存在，design 未进入包。独立复核确认新增文档、图片及上游业务代码保留完整，无剩余文档冲突。未执行浏览器、完整 Next 或 Docker 构建验证。详情见 verification.json 的 latestUpstreamSync。
