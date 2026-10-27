@@ -1,3 +1,10 @@
+---
+title: "Q&A"
+description: "解答 Agent Insight 在概念、安装接入、Skill 管理、评测观测和开发排障中的常见问题。"
+keywords: ["Agent Insight", "常见问题", "安装接入", "评测观测", "故障排查"]
+changefreq: weekly
+---
+
 # Q&A
 
 本文档汇总 Agent Insight 平台的常见问答，覆盖平台概念、安装部署、框架接入、Skill 全生命周期、评测中心、运行观测、架构数据模型、开发约定与运维排障等内容，帮助开发者快速理解平台定位并定位使用过程中的常见问题。

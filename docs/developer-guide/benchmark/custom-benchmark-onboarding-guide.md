@@ -1,3 +1,10 @@
+---
+title: "自定义 Benchmark 接入指南"
+description: "指导用户整理自定义 Benchmark 的评测目标、样本和执行要求，并通过需求确认推进接入开发。"
+keywords: ["Agent Insight", "Benchmark", "自定义评测", "需求确认"]
+changefreq: monthly
+---
+
 # 自定义 Benchmark 接入指南
 
 > 面向提出评测需求的客户和业务人员。本指南不要求你理解 Manifest、Adapter、Evaluator，也不要求先填写技术表格。

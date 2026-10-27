@@ -1,6 +1,8 @@
 ---
 title: "5 分钟上手"
 description: "登录看板、注册模型、创建 Agent、完成接入，并在 UI 中看到第一条链路。"
+keywords: ["Agent Insight", "智能体接入", "部署配置", "链路追踪"]
+changefreq: monthly
 ---
 
 # 5 分钟上手

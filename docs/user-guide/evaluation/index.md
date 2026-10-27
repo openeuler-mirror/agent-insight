@@ -1,6 +1,8 @@
 ---
 title: "评估与实验"
-description: "实验、评测数据集与评估器的职责和使用入口"
+description: "介绍实验、评测数据集与评估器的分工及操作入口，帮助用户建立评测闭环。"
+keywords: ["Agent Insight", "评测实验", "数据集", "评估器"]
+changefreq: monthly
 ---
 
 # 评估与实验

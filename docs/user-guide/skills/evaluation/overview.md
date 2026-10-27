@@ -1,6 +1,8 @@
 ---
 title: "Skill 评估与实验"
 description: "在一站式 Skill 工作台中检查静态质量并验证真实运行效果"
+keywords: ["Agent Insight", "Skill", "静态评估", "运行实验"]
+changefreq: monthly
 ---
 
 # Skill 评估与实验

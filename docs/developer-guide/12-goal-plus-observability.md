@@ -1,3 +1,10 @@
+---
+title: "Goal Plus Pi 主从 Trace 接入"
+description: "说明 Goal Plus 在 Pi 中的主从 Trace 绑定、关系事件投递及观测接入的数据契约与排障方式。"
+keywords: ["Agent Insight", "Goal Plus", "Pi", "主从链路", "观测接入"]
+changefreq: monthly
+---
+
 # Goal Plus Pi 主从 Trace 接入
 
 本适配面向重构后的 Goal Plus：Pi 和 Goal Plus 使用统一的 session 描述，Agent Insight 复用已有 OTLP Trace ingest 与跨 Session 关系 ingest，把 Pi 原生主 Trace 和 Goal Plus Pi worker Trace 合成为只读的主从展示。

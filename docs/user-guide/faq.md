@@ -1,6 +1,8 @@
 ---
 title: "常见问题"
-description: "高频问题集中解答"
+description: "解答 Agent Insight 接入登录、运行观测、评测、Skill 使用及数据维护中的常见问题。"
+keywords: ["Agent Insight", "常见问题", "接入排障", "数据维护"]
+changefreq: weekly
 ---
 
 # 常见问题

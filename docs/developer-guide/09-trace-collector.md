@@ -1,3 +1,10 @@
+---
+title: "新增第三方Agent框架Trace采集开发方案"
+description: "说明为第三方 Agent 框架开发 Trace 采集器所需的服务端适配、客户端实现与安装分发步骤。"
+keywords: ["Agent Insight", "Trace 采集器", "框架接入", "客户端开发"]
+changefreq: monthly
+---
+
 # 新增第三方Agent框架Trace采集开发方案
 
 ## 一、整体架构概览

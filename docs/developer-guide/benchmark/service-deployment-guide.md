@@ -1,3 +1,10 @@
+---
+title: "Benchmark 通用服务部署指南"
+description: "介绍 Agent Insight、Agent 执行客户端和 Evaluator 的公共服务部署、互访配置与验收步骤，并提供各 Benchmark 的专属部署入口。"
+keywords: ["Agent Insight", "Benchmark", "Evaluator", "服务部署", "环境验收"]
+changefreq: monthly
+---
+
 # Benchmark 通用服务部署指南
 
 本指南部署 Agent Insight、执行客户端和 Evaluator 的公共服务。完成公共安装后，按所选 Benchmark 阅读同级的 [SWE-bench 部署指南](swe-bench-deployment-guide.md) 或 [ZSoft 部署指南](zsoft-deployment-guide.md)，完成数据、执行环境和评测资产配置。架构与实现细节见 [`docs/design/benchmark/`](../../design/benchmark/README.md)。

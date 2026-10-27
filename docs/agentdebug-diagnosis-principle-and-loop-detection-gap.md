@@ -1,3 +1,10 @@
+---
+title: "AgentDebug 智能诊断：工作原理、能力边界，与「检测不到死循环」的根因分析"
+description: "分析 AgentDebug 的认知诊断流水线、循环检测缺口与轨迹级检测改造方案，说明诊断能力边界。"
+keywords: ["AgentDebug", "智能诊断", "循环检测", "执行轨迹"]
+changefreq: monthly
+---
+
 # AgentDebug 智能诊断：工作原理、能力边界，与「检测不到死循环」的根因分析
 
 > 适用版本：`agent-debug-diagnosis-skill@0.1`（`AGENT_DEBUG_GENERATOR`，见 `src/lib/engine/agent-debug/runner.ts:27`）

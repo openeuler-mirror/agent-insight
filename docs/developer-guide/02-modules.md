@@ -1,3 +1,10 @@
+---
+title: "Modules"
+description: "梳理 Agent Insight 各模块的职责、依赖关系和关键实现，帮助开发者定位业务与基础设施代码。"
+keywords: ["Agent Insight", "模块划分", "依赖关系", "代码导航"]
+changefreq: monthly
+---
+
 # Modules
 
 > 该代码库共有 12 个顶层模块。下文的分级来自跨模块 fan-in（`moduleRanking`）：跨模块入度越高 = 越核心。请先阅读核心模块。

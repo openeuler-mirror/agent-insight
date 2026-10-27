@@ -1,6 +1,8 @@
 ---
 title: "评测数据集"
 description: "创建、导入与版本化管理离线评测所需的样本数据"
+keywords: ["Agent Insight", "评测数据集", "样本管理", "数据导入"]
+changefreq: monthly
 ---
 
 # 评测数据集

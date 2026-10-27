@@ -1,6 +1,8 @@
 ---
 title: "故障注入与评测"
 description: "安装 FI Worker、创建注入任务、查看 Run 与 Judge，并与环内 RAS 能力区分。"
+keywords: ["Agent Insight", "故障注入", "FI Worker", "可靠性评测"]
+changefreq: monthly
 ---
 
 # 故障注入与评测

@@ -1,3 +1,10 @@
+---
+title: "Benchmark 文档关系与开发指南"
+description: "梳理 Benchmark 的需求确认、接入开发与服务部署文档，以及各服务之间的职责关系。"
+keywords: ["Agent Insight", "Benchmark", "评测接入", "文档导航"]
+changefreq: monthly
+---
+
 # Benchmark 文档关系与开发指南
 
 这是 Benchmark 接入开发与部署的文档入口。自定义接入从需求确认开始；部署已有接入包时先安装公共服务，再选择同级的 SWE-bench 或 ZSoft 部署指南。
