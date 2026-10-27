@@ -133,12 +133,12 @@ test('ordinary checks reject empty OpenCode credentials instead of accepting an 
   try {
     process.env.PATH = root
     process.env.AGENT_INSIGHT_HOME = root
-    fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(1, JSON.stringify({ model: 'provider/model' }))\n`, { mode: 0o755 })
+    fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(1, process.argv[2] === 'models' ? 'provider/model' : JSON.stringify({ model: 'provider/model' }))\n`, { mode: 0o755 })
     fs.mkdirSync(path.join(root, 'opencode-data/opencode'), { recursive: true })
     fs.writeFileSync(path.join(root, 'opencode-data/opencode/auth.json'), JSON.stringify({ provider: { type: 'api', key: '   ' } }))
     const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: path.join(root, 'opencode-data'), PROVIDER_API_KEY: '   ' }, client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true }) } })
     const issues = await services.checkAgent(context)
-    assert(issues.some((item: { code: string }) => item.code === 'MODEL_CREDENTIAL_MISSING'))
+    assert(issues.some((item: { code: string; message: string }) => item.code === 'MODEL_UNAVAILABLE' && item.message.includes('认证记录为空或不完整')))
     fs.writeFileSync(path.join(root, 'opencode-data/opencode/auth.json'), JSON.stringify({ provider: { type: 'oauth', refresh: 'fixture-refresh' } }))
     assert.deepEqual(await services.checkAgent(context), [])
   } finally {
@@ -160,7 +160,7 @@ test('OpenCode environment checks accept plugin-prefixed config and reject ambig
   process.env.PATH = root
   process.env.AGENT_INSIGHT_HOME = root
   const outputFile = path.join(root, 'config-output')
-  fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nconst fs = require('node:fs'); require('node:assert/strict').equal(fs.fstatSync(1).isFile(), true); fs.writeFileSync(1, fs.readFileSync(${JSON.stringify(outputFile)}));\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nconst fs = require('node:fs'); require('node:assert/strict').equal(fs.fstatSync(1).isFile(), true); fs.writeFileSync(1, process.argv[2] === 'models' ? 'provider/model' : fs.readFileSync(${JSON.stringify(outputFile)}));\n`, { mode: 0o755 })
   const config = JSON.stringify({ model: 'provider/model' })
   const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: root, PROVIDER_API_KEY: 'fixture-key' },
     client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true }) } })
@@ -172,7 +172,7 @@ test('OpenCode environment checks accept plugin-prefixed config and reject ambig
   for (const invalid of [config.slice(0, -1), `${config}\n${config}`, `${config}\nunexpected output`, '{"model":42}']) {
     fs.writeFileSync(outputFile, invalid)
     const issues = await services.checkAgent(context)
-    assert(issues.some((item: { code: string }) => item.code === 'MODEL_CONFIGURATION_UNREADABLE'))
+    assert(issues.some((item: { code: string }) => item.code === 'MODEL_UNAVAILABLE'))
   }
 })
 

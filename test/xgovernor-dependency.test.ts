@@ -14,6 +14,18 @@ const { artifactIdentity } = require('../services/executor/src/xgovernor/artifac
 const { normalizeExecutionConfig, describeProfile } = require('../packages/benchmark-protocol/execution.cjs')
 const { executionCapabilities } = require('../services/executor/src/execution-config.cjs')
 const target = { platform: 'linux', arch: 'x64' }
+const xiaooModel = `pub(crate) async fn probe(llm: &PersistedLlm) -> Result<(), SessionDomainError> {
+    let provider = provider(llm, Arc::new(Mutex::new(Default::default())))?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        provider.complete(&request),
+    )
+    .await
+    .map_err(|_| invalid("model preflight timed out"))?
+    .map(|_| ())
+}
+const OTHER_TIMEOUT: Duration = Duration::from_secs(10);
+`
 
 function write(file: string, content: string, executable = false) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -40,6 +52,7 @@ async function fixture(t: TestContext) {
   write(path.join(upstream, 'apps/server/src/main.rs'), 'XGOVERNOR_TENANT_BIND_ADDR --worker DockerProvider')
   write(path.join(upstream, 'apps/server/src/httpserver/session.rs'), '/sessions/open /sessions/exec /sessions/turns /sessions/close /sessions/cancel /turns/:turn_id/events')
   write(path.join(upstream, 'crates/protocol/runtime/src/worker.rs'), 'RuntimeStateSnapshot')
+  write(path.join(upstream, 'apps/runtime-xiaoo/src/model.rs'), xiaooModel)
   write(path.join(upstream, 'Cargo.lock'), 'locked')
   write(path.join(upstream, 'apps/runtime-pi/extension/package-lock.json'), '{}')
   write(path.join(upstream, 'apps/runtime-pi/extension/package.json'), JSON.stringify({ version: '0.1.0', devDependencies: { '@earendil-works/pi-coding-agent': '0.84.2' }, pi: { extensions: ['./index.ts'] } }))
@@ -75,6 +88,7 @@ async function fixture(t: TestContext) {
       if (file === 'cargo') {
         builds++
         if (failBuild) throw new Error('fixture compile error')
+        assert.equal(fs.readFileSync(path.join(options.cwd, 'apps/runtime-xiaoo/src/model.rs'), 'utf8'), xiaooModel.replace('from_secs(10)', 'from_secs(60)'))
         const version = fs.readFileSync(path.join(options.cwd, 'version'), 'utf8')
         write(path.join(options.cwd, 'target/release/xgovernor-server'), server + `\n// ${version}\n`, true)
         write(path.join(options.cwd, 'target/release/pi-worker'), `#!${process.execPath}\n// ${version}\n`, true)
@@ -213,6 +227,31 @@ test('relocated releases fail readiness validation instead of using stale compil
   fs.renameSync(f.manager.root, relocated)
   const state = readState(relocated)
   assert.throws(() => readRelease(relocated, state.current, target), /目录已移动/)
+})
+
+test('model preflight timeout is compiled as 60 seconds; older builds rebuild and incompatible source never activates', async t => {
+  const f = await fixture(t)
+  await f.manager.update('v1')
+  const old = f.manager.status()
+  assert.equal(old.build.modelPreflightTimeoutSeconds, 60)
+  const file = path.join(old.directory, 'installation.json')
+  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
+  delete manifest.build.modelPreflightTimeoutSeconds
+  fs.writeFileSync(file, JSON.stringify(manifest))
+  assert.throws(() => f.manager.status(), /60 秒.*重新执行客户端安装命令/)
+  assert.equal((await f.manager.update('v1')).changed, true)
+  assert.equal(f.manager.status().build.modelPreflightTimeoutSeconds, 60)
+  assert.notEqual(f.manager.status().directory, old.directory)
+  assert.ok(fs.existsSync(old.directory))
+  assert.equal((await f.manager.update('v1')).changed, false)
+  const pointer = fs.readFileSync(path.join(f.manager.root, 'current.json'), 'utf8')
+  write(path.join(f.upstream, 'apps/runtime-xiaoo/src/model.rs'), xiaooModel.replace('from_secs(10)', 'from_secs(20)'))
+  await f.commit('v2')
+  await assert.rejects(f.manager.update('v2'), /模型预检源码布局不兼容/)
+  assert.equal(fs.readFileSync(path.join(f.manager.root, 'current.json'), 'utf8'), pointer)
+  write(path.join(f.upstream, 'apps/runtime-xiaoo/src/model.rs'), xiaooModel.replace('from_secs(10)', 'from_secs(60)'))
+  await f.commit('v3')
+  assert.equal((await f.manager.update('v3')).changed, true)
 })
 
 test('missing native credential bridge rebuilds the same upstream revision and bridge tampering invalidates its digest', async t => {
