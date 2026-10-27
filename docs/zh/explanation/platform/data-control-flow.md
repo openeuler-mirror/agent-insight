@@ -343,6 +343,19 @@ flowchart LR
     settle --> align["analyze-match / 轨迹归因"]
 ```
 
+### 普通单组实验的执行进度与重试隔离
+
+OpenCode、xiaoO、Pi 客户端发现本次根会话后，通过 `RUNNING(state=TRACE_STARTED, traceId)` 提前回传。公共指令回执在事务内校验 `commandId/clientId`、冻结 correlation 中的 `traceAttemptId/caseRunId/experimentId`，将根 ID 写入对应 Attempt；同轮重复幂等，换根或复用其他轮根 ID 返回冲突。命令终态合并保留已绑定根 ID。进度只读取最新 Attempt，在 Agent 未退出时也可查询唯一的根 Execution 并提供链接；正式回填输出和进入评测仍须等待执行结束及完整 Session。旧轮只能补自己的 Attempt，不能重写当前 Case；前端同轮保留已确认链路，新轮撤下旧链路，阶段和终态不回退。
+
+
+现有 `GET /api/experiments/:id` 在普通单组实验的 `cases[].executionProgress` 返回当前执行身份、轮次、阶段、更新时间、精确主执行 ID 和各评估器状态。`execution-progress-service.ts` 在只读事务中读取同一份 Case、最新 Attempt、结果及主 Execution，并同步投影当前行的实际输出、链路和评分行，避免拼接不同轮次的数据。生成流程使用 `ExperimentTraceAttempt`，FI 使用当前 `fiRunId`，已有 Trace 直接进入评测；主记录查询按当前用户限定且排除子 Agent。没有唯一主记录时不生成链接。Attempt 已下发时继续读取对应命令：`CREATED/SENT/RECEIVED` 显示等待客户端开始，`RUNNING` 显示 Agent 执行，`SUCCEEDED` 显示等待 Trace 入库；不把服务端下发当作客户端已开始执行。
+
+普通 Trace 重试通过 `reserveTraceRetry` 在同一事务中锁定实验、校验调用方看到的旧 Attempt、创建新 `queued` Attempt、清空 Case 旧链路和重置结果。执行调度消费这个预占 Attempt，不额外创建一轮。数据库事务和 `(caseId, attemptNo)` 唯一约束负责多进程互斥；进程内锁只用于快速拒绝重复请求。最新 Attempt 无论处于排队、失败还是取消状态，旧 Attempt 均不得绑定当前 Case；历史回收也只检查最新 Attempt。客户端返回历史 Attempt 的 Trace ID 时以 `TRACE_ID_REUSED` 终止，不自动重试，也不按输入文本或最新记录猜测主链路。
+
+评测行通过状态、`updatedAt`、单调递增的 `attempts` 和当前 Case 执行身份竞争领取；写回须同时匹配领取时的计数、Execution/Task/FI Run 和最新 Trace Attempt。重置评测递增计数，不归零，防止旧完成写入新的评测轮次。外层调度异常不再无条件覆盖可能已重置的结果行。`attempts` 同时包含重置的隔离计数，不应解释为精确模型调用次数。
+
+列表每 2 秒串行轮询；打开弹窗、恢复焦点及重试受理后触发刷新。前端同时校验请求顺序、执行轮次、快照版本和阶段，拒绝回退；拒绝某行快照时同步保留该行原有结果，不能只保留进度文字。仅显式的新执行或新评测轮次允许重新进入对应阶段。`/trace?executionId=...&taskId=...` 优先按具体 Execution ID 查询、选中和渲染，找不到时明确提示，不回退到同一会话的其他记录。客户端上报机制和普通 Case 详情布局保持原样。
+
 ## 后端流水线：Benchmark Agent 执行与回传
 
 ```mermaid
@@ -468,7 +481,13 @@ Skill 实验列表的“同配置实验”复用 `/api/experiments` 的 `createM
 
 `/skills` 是正式 Skill 工作台；`/skill-workbench` 保留为兼容别名，`/config/skills` 渲染原资产管理能力。旧生成、评测、A/B 与优化 API 未删除，工作台通过服务端适配层复用它们。生成和优化的 SSE 是发起页面的低延迟实时视图，领域执行与最终同步由服务端持久化任务完成；运行开始时先创建 Agent 消息，流事件在内存中合并并限频更新同一行，串行 checkpoint 的最终 flush 先于任务 `done/failed`。观察页面按任务状态读取这些增量快照，因此刷新、复制会话 URL 或在另一个页面打开同一 `sessionId` 时都能继续追赶；同一会话和任务类型在服务端拒绝并发运行。评估、实验和复测同样以数据库状态作为恢复真源，因此任何站内导航都不会取消已接受的运行。生成/上传与优化候选在发布前都只保存不可执行的文件快照。静态评估状态按当前文件 hash 恢复，UI 将“评估器执行状态”和“无 high 的质量门禁状态”分开显示；评估中持续轮询并禁用发布，完成后清理旧的门禁错误。门禁阻断时，UI 可显式把当前问题集交给既有 Skill 优化 Agent；生成/上传来源会把 Agent 输出回写为同版本工作快照并重新静态评估，正式管理版本则继续形成独立 `SkillOptimizationRecord`，二者都不会自动发布。Skill 实验与全局实验共用执行模型但按 `scope` 隔离列表。实验创建时冻结客户端执行目标、模型 ID、数据集、Case 顺序、评估器、Skill 版本与对应快照；用例/A-B 的服务端评估模型配置与客户端执行模型是独立契约。客户端密钥始终由其本地 OpenCode 配置读取，不进入实验下发 payload。
 
-环境预检与隔离实验共用 `scripts/opencode-connection-config.cjs` 的 `readOpenCodeConfig()`。配置命令写入权限为 `0600` 的临时文件，避免较大输出在 stdout 管道中被截断，读取后清理文件；预检允许配置 JSON 前的插件日志，仍拒绝多个配置对象、不完整 JSON 和尾部杂项；它仅检查认证配置是否存在，真实脱敏凭据恢复仍在实验执行客户端本地完成。安装包同时分发该解析器，源码和安装目录使用同一解析规则。
+OpenCode 环境预检与客户端执行前共用 `scripts/opencode-connection-config.cjs` 的 `checkOpenCodeModelConfig()`。`services.checkAgent()` 供普通、Skill 和原生 Benchmark 环境适配器复用；`runExperimentCase()` 覆盖实际客户端执行，并在 Skill 隔离或缓存工作区准备后使用该工作区的 cwd/env 检查，将解析后的模型固定到本次调用。模型优先级为显式选择、Agent 默认、全局默认；未选 Provider 和 MCP 不参与模型连接的脱敏恢复。所选 Agent 被禁用或仅为子 Agent、Provider 被禁用、连接地址无效、Key/请求头为空或引用未解析、认证记录不完整时返回脱敏的 `MODEL_UNAVAILABLE`。
+
+公共检查以 `opencode models` 返回的完整 ID 验证所选模型，子进程设置 `OPENCODE_DISABLE_MODELS_FETCH=1` 和 `OPENCODE_DISABLE_AUTOUPDATE=1`，不传 `--refresh`，不执行 `run` 或真实推理探测；内置 Provider 的注册及原生认证能力交由原生目录判断，自定义 Provider 额外校验配置、认证存储、环境变量或认证请求头，本地回环免密连接保留。检查只返回解析后的模型 ID，不向服务端传递凭据，不保证远端 Key、权限、余额或网络可用。
+
+环境准备原本在独立 Worker 中执行同步检查；实际 Case 执行通过同模块的 `checkOpenCodeModelConfigAsync()` 在独立子进程检查，整体上限 30 秒，支持取消并终止检查进程组，避免额外 CLI 等待阻塞常驻客户端心跳。子进程只回传模型 ID 或脱敏错误；CLI 的配置输出仍留在私有临时文件中。
+
+底层仍复用 `readOpenCodeConfig()` 与现有本地连接恢复规则。配置和目录命令输出写入权限为 `0600` 的临时文件，避免 stdout 管道截断；限制为 8 MiB 和 15 秒，读取后清理文件。配置解析允许前置插件日志，拒绝多个配置对象、不完整 JSON 和尾部杂项。需要恢复的脱敏连接继续遵守已验证版本与本地来源限制；安装包分发同一模块，源码和安装目录使用同一规则。
 
 OpenCode 实验进程关闭后，常驻客户端调用本机上传器，以 `AGENT_INSIGHT_UPLOADER_FORCE_SESSION` 限定本次 Trace，最多等待 20 秒；补报失败不改变 Agent 的执行结果，服务器仍通过 Trace 完整性检查后才绑定用例。上传器在账号对应的 checkpoint 中保存 `__pendingSessions`（会话到 spool 文件的映射），未完成 CLI 结束上报或 HTTP 上传失败时继续重检这些文件，进程退出不再依赖 mtime 变化。结束上传成功后移除待处理记录，内容指纹抑制重复上传；指定会话的补报不重传同文件内其他根会话。`waiting_trace` 在详情页显示为“执行已结束，等待 Trace 完成上报”，不再落到“等待执行”。
 

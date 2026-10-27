@@ -23,7 +23,7 @@ const net = require('node:net')
 const { spawn } = require('node:child_process')
 const { randomBytes } = require('node:crypto')
 const { once } = require('node:events')
-const { installationRoot, readState, readRelease, repository, BUILD_LAYOUT_VERSION } = require('./installation.cjs')
+const { installationRoot, readState, readRelease, repository, BUILD_LAYOUT_VERSION, MODEL_PREFLIGHT_TIMEOUT_SECONDS } = require('./installation.cjs')
 const { artifactIdentity } = require('./artifact-identity.cjs')
 const { buildNativeCredentials, BINARY } = require('./native-credentials-build.cjs')
 
@@ -81,6 +81,21 @@ async function freePort() {
   const result = socket.address().port
   await new Promise(resolve => socket.close(resolve))
   return result
+}
+
+async function applyModelPreflightTimeout(source) {
+  const file = path.join(source, 'apps/runtime-xiaoo/src/model.rs')
+  const content = await fsp.readFile(file, 'utf8')
+  const original = `tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        provider.complete(&request),
+    )
+    .await
+    .map_err(|_| invalid("model preflight timed out"))?`
+  const adjusted = original.replace('from_secs(10)', `from_secs(${MODEL_PREFLIGHT_TIMEOUT_SECONDS})`)
+  if (content.split(adjusted).length === 2 && !content.includes(original)) return
+  if (content.split(original).length !== 2 || content.includes(adjusted)) throw new Error('xiaoO 模型预检源码布局不兼容，无法应用 60 秒时限；旧版本保持不变')
+  await fsp.writeFile(file, content.replace(original, adjusted))
 }
 
 async function probeServer(directory, config, signal, sourceEnv = process.env) {
@@ -199,6 +214,7 @@ class DependencyManager {
           } catch (cause) { this.log(`当前安装需要修复：${cause.message}`) }
         }
         const components = checkSource(source)
+        await applyModelPreflightTimeout(source)
         const id = `${revision}-${randomBytes(8).toString('hex')}`
         release = path.join(this.root, 'releases', id)
         await fsp.mkdir(path.dirname(release), { recursive: true })
@@ -229,7 +245,7 @@ class DependencyManager {
         this.log('检查新 server 启动、鉴权及会话接口；不调用模型、不创建任务容器')
         await this.probe(release, config, this.signal, this.env)
         const manifest = { schemaVersion: 1, repository, revision, requestedVersion: version || 'HEAD', installedAt: new Date().toISOString(),
-          build: { layoutVersion: BUILD_LAYOUT_VERSION, sourceDirectory: source },
+          build: { layoutVersion: BUILD_LAYOUT_VERSION, sourceDirectory: source, modelPreflightTimeoutSeconds: MODEL_PREFLIGHT_TIMEOUT_SECONDS },
           ...this.target, artifacts, components, artifactDigest: identity.digest,
           compatibility: { contract: 'agent-insight-xgovernor/v1', checks: ['source-layout', 'extension-typecheck', 'server-health-auth-routes'] },
         }

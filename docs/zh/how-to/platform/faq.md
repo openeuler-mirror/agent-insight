@@ -39,6 +39,8 @@ DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh --port 3100
 执行 `bash scripts/start.sh` 时，如果上次成功构建的文件完整，且源码、已安装依赖和构建配置未变化，
 就复用构建并重启服务。首次使用此判断机制、输入变化或构建文件缺失、损坏时会自动重建。
 数据库结构同步和页面健康检查仍会执行；Prisma Client 未变化且完整时跳过重复生成。
+启动会在检查构建指纹前生成 Benchmark 目录与 Trace 数据集 Worker，避免首次构建新增文件导致
+“Build inputs changed during compilation”而中止启动。Worker 生成失败时会停止启动并显示错误。
 
 需要强制重建时执行：
 

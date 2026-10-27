@@ -682,6 +682,8 @@ test('OpenCode execution terminates early on idle, structured error, and first-r
   fs.mkdirSync(binDir, { recursive: true })
   fs.mkdirSync(workspace, { recursive: true })
   fs.writeFileSync(executable, `#!/usr/bin/env node
+if (process.argv.includes('debug')) { console.log(JSON.stringify({provider:{fixture:{options:{apiKey:'fixture-key'}}},model:'fixture/model'})); process.exit(0); }
+if (process.argv[2] === 'models') { console.log('fixture/model'); process.exit(0); }
 if (process.argv.includes('--help')) {
   console.log('opencode run --format json')
   process.exit(0)

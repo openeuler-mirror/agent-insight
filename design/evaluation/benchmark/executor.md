@@ -238,6 +238,10 @@ Benchmark 使用控制总线白名单 action `RUN_BENCHMARK_CASE`。WSS 可用�
 
 请求中的 `callbackBaseUrl` 保持为当前 Run 资源：`{executorCallbackOrigin}/api/benchmark/v1/runs/{runId}`，并继续参与请求摘要和兼容旧客户端。新版执行器校验其 HTTP(S) 协议、无凭证/query/fragment 且路径中的 `runId` 精确匹配，但 Artifact、`${runBase}/progress` 和 `${runBase}/complete` 的实际 origin 统一取安装 `curl` 已写入的 `insightBaseUrl`，其中 `runBase={insightBaseUrl}/api/benchmark/v1/runs/{runId}`。因此客户端没有第二个回调配置，跨机器部署也不会误用平台下发的 loopback origin。所有请求复用现有 `deviceCredential + x-agent-insight-client-id`，平台再校验 Run 确实属于该 `clientId`；`AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL` 仅保留给旧客户端和已冻结任务。
 
+执行期间发现唯一主链路后，通过同一 `/progress` 回调的 `progress.traceId` 提前上报业务根会话键；阶段与 `occurredAt` 沿用现有字段。Runner 的本机 Runtime 接收 `input.onTraceId({ traceId })`，执行后端接收 `context.onTraceId({ traceId })`。后续心跳和阶段保留此 ID，完成回调 `runFacts.traceId` 与其保持一致；完成回调省略时保留已绑定值。根 ID 不改变阶段，较早阶段回调只允许补齐根引用。状态顺序单调，终态不退回执行中。
+
+绑定按 `runId + clientId` 隔离并通过 Case 事务锁防止跨重试复用。相同根重复上报幂等，不同根返回 `TRACE_ID_CONFLICT`，复用历史重试的根返回 `TRACE_ID_REUSED`，非法值返回 `TRACE_ID_INVALID`。旧 Run 迟到数据只能补旧 Run，不能重写当前 Case 链路或结果。详情按最新重试投影根引用，根 Execution 尚未入库时显示上传中；唯一记录入库后才提供精确链接。MCTS 锁定本次 ledger 的 coordinator，沙箱沿用 `xgovernor:<runId>` 并上传运行中快照。完整字段、扩展导出器的 `partial` 合同与快照规则见[Benchmark 接入开发协议](../../../docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md#执行中的主链路回调)。
+
 成功终态：
 
 ```json

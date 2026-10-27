@@ -226,7 +226,9 @@ function dedupeBySpan(events: OtelTraceEvent[]): OtelTraceEvent[] {
       continue;
     }
     const existing = latest.get(event.spanId);
-    if (!existing || eventEndMs(event) >= eventEndMs(existing)) latest.set(event.spanId, event);
+    const completed = (row: OtelTraceEvent) => attrs(row)['agent.insight.trace.completed'] === true || attrs(row)['agent.insight.trace.completed'] === 'true';
+    if (existing && completed(existing) && !completed(event)) continue;
+    if (!existing || completed(event) && !completed(existing) || eventEndMs(event) >= eventEndMs(existing)) latest.set(event.spanId, event);
   }
   const retained = [...latest.values(), ...withoutSpan];
   const bySpanId = new Map(

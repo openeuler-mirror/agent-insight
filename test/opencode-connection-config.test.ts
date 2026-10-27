@@ -24,7 +24,7 @@ import { createServer } from 'node:http';
 import test, { type TestContext } from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { loadOpenCodeConnectionConfig: load, parseJsonc } = require('../scripts/opencode-connection-config.cjs');
+const { loadOpenCodeConnectionConfig: load, checkOpenCodeModelConfig: checkModel, checkOpenCodeModelConfigAsync: checkModelAsync, parseJsonc } = require('../scripts/opencode-connection-config.cjs');
 const { prepareSkillExperimentWorkspace: prepare } = require('../scripts/skill-experiment-workspace.cjs');
 const selection = { agent: 'build', model: 'test/model', trigger: true };
 const raw = (key: string) => ({ provider: { test: { npm: '@ai-sdk/openai-compatible', options: { apiKey: key, baseURL: 'https://example.test/v1' } } } });
@@ -44,18 +44,26 @@ function fixture(t: TestContext, output: unknown = masked) {
   };
   const configFile = path.join(env.XDG_CONFIG_HOME!, 'opencode', 'opencode.json');
   const outputFile = path.join(root, 'output');
+  const modelsFile = path.join(root, 'models');
+  const callsFile = path.join(root, 'calls');
   const write = (file: string, value: unknown) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value));
   };
   write(configFile, raw('local-test-key'));
   write(outputFile, output);
+  write(modelsFile, 'test/model\ntest/other\n');
   const executable = path.join(root, 'opencode');
   const changeFile = path.join(root, 'change.cjs');
   write(executable, `#!${process.execPath}
 const fs=require('node:fs');
+fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),offline:process.env.OPENCODE_DISABLE_MODELS_FETCH})+'\\n');
 if(process.argv.includes('--version')) console.log(process.env.FIXTURE_VERSION || '1.19.3');
 else if(process.argv.includes('db')) console.log(process.env.FIXTURE_DB || '[{"active_orgs":0}]');
+else if(process.argv[2]==='models') {
+ if(process.env.FIXTURE_MODELS_DELAY) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(process.env.FIXTURE_MODELS_DELAY));
+ process.stdout.write(fs.readFileSync(${JSON.stringify(modelsFile)}));
+}
 else {
  if(fs.existsSync(${JSON.stringify(changeFile)})) require(${JSON.stringify(changeFile)});
  process.stdout.write(fs.readFileSync(${JSON.stringify(outputFile)}));
@@ -64,9 +72,130 @@ process.exit(Number(process.env.FIXTURE_EXIT || 0));
 `);
   fs.chmodSync(executable, 0o700);
   const options = { home, cwd, env, platform: 'linux' };
-  return { root, home, cwd, env, configFile, outputFile, executable, changeFile, write, options,
-    run: (sel = selection) => load(executable, sel, options) };
+  return { root, home, cwd, env, configFile, outputFile, modelsFile, callsFile, executable, changeFile, write, options,
+    run: (sel = selection) => load(executable, sel, options),
+    check: (sel = selection) => checkModel(executable, sel, options) };
 }
+
+test('公共预检解析原始认证、读取原生模型目录，返回结果和错误不携带凭据', t => {
+  const f = fixture(t);
+  assert.deepEqual(f.check(), { model: 'test/model' });
+  f.write(f.modelsFile, 'plugin ready\n{"level":"info"}\ntest/other\n');
+  assert.throws(f.check, (error: any) => error.code === 'MODEL_UNAVAILABLE' && /模型目录/.test(error.message) && !error.message.includes('local-test-key'));
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert(calls.some(call => call.args[0] === 'models' && call.offline === '1' && call.cwd === fs.realpathSync(f.cwd)));
+  assert(calls.every(call => !call.args.includes('run') && !call.args.includes('--refresh')));
+});
+
+test('执行前异步检查不阻塞常驻客户端，可取消正在读取的模型目录', { timeout: 10000 }, async t => {
+  const f = fixture(t);
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 10);
+  try {
+    assert.deepEqual(await checkModelAsync(f.executable, selection, { cwd: f.cwd, temporaryRoot: f.root, env: { ...process.env, ...f.env, FIXTURE_MODELS_DELAY: '300' } }), { model: 'test/model' });
+    assert(ticks > 0);
+  } finally { clearInterval(timer); }
+  assert(!fs.readdirSync(f.root).some(name => name.startsWith('insight-opencode-model-')));
+  f.write(f.callsFile, '');
+  const controller = new AbortController();
+  const pending = checkModelAsync(f.executable, selection, { cwd: f.cwd, temporaryRoot: f.root, env: { ...process.env, ...f.env, FIXTURE_MODELS_DELAY: '4000' }, signal: controller.signal });
+  const rejected = assert.rejects(pending, { name: 'AbortError' });
+  try {
+    let started = false;
+    for (let i = 0; i < 100 && !started; i++) {
+      started = fs.readFileSync(f.callsFile, 'utf8').split('\n').some(line => line && JSON.parse(line).args[0] === 'models');
+      if (!started) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert(started, '模型目录读取已开始');
+  } finally { controller.abort(); await rejected; }
+  assert(!fs.readdirSync(f.root).some(name => name.startsWith('insight-opencode-model-')));
+});
+
+test('显式模型、Agent 默认模型、全局默认模型按优先级选择，缺失或禁用时拒绝', t => {
+  const f = fixture(t, { ...raw('key'), model: 'test/other', agent: { custom: { model: 'test/model' } } });
+  assert.equal(f.check().model, 'test/model');
+  assert.equal(f.check({ agent: 'custom', model: '', trigger: false }).model, 'test/model');
+  assert.equal(f.check({ ...selection, model: '' }).model, 'test/other');
+  for (const config of [
+    { ...raw('key'), disabled_providers: ['test'] }, { ...raw('key'), enabled_providers: ['other'] },
+    { ...raw('key'), agent: { build: { disable: true } } },
+  ]) { f.write(f.outputFile, config); assert.throws(f.check, { code: 'MODEL_UNAVAILABLE' }); }
+  for (const config of [{ provider: {} }, { ...raw('key'), model: 'invalid' }]) {
+    f.write(f.outputFile, config); assert.throws(() => f.check({ ...selection, model: '' }), { code: 'MODEL_UNAVAILABLE' });
+  }
+  f.write(f.outputFile, raw('key'));
+  assert.throws(() => f.check({ ...selection, agent: 'missing' }), /Agent/);
+});
+
+test('只验证所选连接，不要求未选 Provider 或 MCP 的脱敏凭据可恢复', t => {
+  const f = fixture(t, { ...raw('key'), provider: { test: { ...raw('key').provider.test, models: { unused: { options: { apiKey: '***' } } } }, unused: { options: { apiKey: '***' } } }, mcp: { unused: { headers: { Authorization: '***' } } } });
+  assert.equal(f.check().model, 'test/model');
+});
+
+test('错误 endpoint、空 Key、未展开引用和无效认证请求头在预检阶段失败且脱敏', t => {
+  const f = fixture(t, raw('key'));
+  const invalid = [
+    { baseURL: 'not-a-url' }, { baseURL: 'file:///secret-path' }, { baseURL: '{env:MISSING}' },
+    { baseURL: 'https://user:secret-password@example.test' }, { apiKey: '' }, { apiKey: '{env:MISSING}' },
+    { headers: { Authorization: '' } }, { headers: { Authorization: '{file:/secret-path}' } },
+  ];
+  for (const options of invalid) {
+    const config = raw('secret-key'); Object.assign(config.provider.test.options, options); f.write(f.outputFile, config);
+    assert.throws(f.check, (error: any) => error.code === 'MODEL_UNAVAILABLE' && !/secret-key|secret-password|secret-path/.test(error.message));
+  }
+});
+
+test('认证存储、环境变量、认证头及本地免密连接使用同一检查，OAuth 不强制 API Key', t => {
+  const config = { provider: { test: { options: { baseURL: 'https://example.test/v1' } } } };
+  const f = fixture(t, config);
+  assert.throws(f.check, /认证配置/);
+  f.env.TEST_API_KEY = 'env-key'; assert.equal(f.check().model, 'test/model'); delete f.env.TEST_API_KEY;
+  f.env.OPENCODE_AUTH_CONTENT = JSON.stringify({ test: { type: 'oauth', refresh: 'refresh-token', access: '' } });
+  assert.equal(f.check().model, 'test/model');
+  f.env.OPENCODE_AUTH_CONTENT = JSON.stringify({ test: { type: 'api', key: '' } }); assert.throws(f.check, /认证记录/);
+  delete f.env.OPENCODE_AUTH_CONTENT;
+  f.write(f.outputFile, { provider: { test: { options: { baseURL: 'http://[::1]:8000/v1' } } } });
+  assert.equal(f.check().model, 'test/model');
+  f.write(f.outputFile, { provider: { test: { options: { headers: { 'x-api-key': 'header-key' } } } } });
+  assert.equal(f.check().model, 'test/model');
+});
+
+test('原生内置 Provider 可由原生目录确认，不要求出现在自定义 provider 配置中', t => {
+  const f = fixture(t, { provider: {}, model: 'native/model' });
+  f.write(f.modelsFile, 'native/model\n');
+  assert.equal(f.check({ ...selection, model: '' }).model, 'native/model');
+});
+
+test('普通、Skill 和 Benchmark 的环境适配器复用公共检查；执行前同样拦截无效模型', async t => {
+  const f = fixture(t);
+  const priorPath = process.env.PATH, priorHome = process.env.AGENT_INSIGHT_HOME;
+  process.env.PATH = `${f.root}:${priorPath || ''}`; process.env.AGENT_INSIGHT_HOME = f.root;
+  t.after(() => { process.env.PATH = priorPath; if (priorHome === undefined) delete process.env.AGENT_INSIGHT_HOME; else process.env.AGENT_INSIGHT_HOME = priorHome; });
+  const { createServices } = require('../services/executor/src/environment/services.cjs');
+  const { loadEnvironmentAdapter } = require('../services/executor/src/environment/registry.cjs');
+  f.write(path.join(f.root, 'dependencies/xgovernor/setup.json'), { context: { home: '/unused-sandbox-home', XDG_CONFIG_HOME: '/unused-sandbox-config', XDG_DATA_HOME: '/unused-sandbox-data' } });
+  const services = createServices({ cfg: { workspaceBase: f.cwd }, env: f.env, client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true }) } });
+  for (const mode of ['generate', 'skill-ab', 'trigger']) {
+    const context = { platform: 'opencode', agent: 'build', model: 'test/model', experiment: { mode }, dataset: { adapterKey: 'generic' } };
+    assert.deepEqual(await services.checkAgent(context), []);
+    f.write(f.modelsFile, 'test/other\n');
+    for (const adapter of ['generic', 'swe-bench', 'zsoft-l1']) {
+      const result = await loadEnvironmentAdapter(adapter).checkEnvironment(context, { ...services, executionBinding: () => null, checkZsoftSource: async () => [] });
+      assert.equal(result.issues[0].code, 'MODEL_UNAVAILABLE');
+    }
+    f.write(f.modelsFile, 'test/model\n');
+  }
+  f.write(f.modelsFile, 'test/other\n');
+  const client = require('../scripts/reliability-client.cjs');
+  const previous = Object.fromEntries(Object.keys(f.env).map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(f.env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  try {
+  for (const skillExecution of [undefined, { version: 1, skill: null }]) {
+    await assert.rejects(client.runExperimentCase({ clientId: 'test', workspaceBase: f.cwd }, { platform: 'opencode', agent: 'build', model: 'test/model', input: 'test', skillExecution }), (error: any) => error.code === 'MODEL_UNAVAILABLE' && /模型目录/.test(error.message));
+  }
+  } finally { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
+  assert(fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).every(call => !call.args.includes('run')));
+});
 
 test('恢复原始 Key、嵌套 headers 和 URL，保留模型、普通 *** 提示词及隔离权限', t => {
   const f = fixture(t);
@@ -240,4 +369,35 @@ test('生成的隔离配置真正发送原始测试认证头，恢复失败不�
     f.write(f.configFile, raw('***')); assert.throws(f.run);
     assert.equal(received.length, 1);
   } finally { prepared.cleanup(); }
+});
+
+test('真实 OpenCode 公共预检使用本地目录，合法与非法模型均不请求模型服务', { skip: !process.env.OPENCODE_MODEL_CHECK_CLI, timeout: 60000 }, async t => {
+  const f = fixture(t);
+  let requests = 0;
+  const server = createServer((_req, res) => { requests++; res.end('{}'); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  f.write(f.configFile, { model: 'test/model', provider: { test: {
+    npm: '@ai-sdk/openai-compatible', options: { baseURL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1` },
+    models: { model: { name: 'Local model', limit: { context: 16384, output: 128 } } },
+  } } });
+  const module = path.resolve('scripts/opencode-connection-config.cjs');
+  const script = `const assert=require('node:assert/strict'); const {checkOpenCodeModelConfig:check}=require(${JSON.stringify(module)});
+const options=${JSON.stringify({ home: f.home, cwd: f.cwd })};
+assert.deepEqual(check(process.env.OPENCODE_MODEL_CHECK_CLI,{agent:'build',model:'test/model'},options),{model:'test/model'});
+assert.throws(()=>check(process.env.OPENCODE_MODEL_CHECK_CLI,{agent:'build',model:'test/missing'},options),e=>e.code==='MODEL_UNAVAILABLE');
+console.log('native static preflight verified');`;
+  const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script], { cwd: f.cwd, env: {
+      NODE_ENV: 'test', PATH: process.env.PATH, ...f.env, OPENCODE_MODEL_CHECK_CLI: process.env.OPENCODE_MODEL_CHECK_CLI,
+      OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_DEFAULT_PLUGINS: '1',
+    }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('native preflight timeout')); }, 50000);
+    child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('exit', code => { clearTimeout(timer); resolve({ code, output }); });
+  });
+  assert.equal(result.code, 0, result.output);
+  assert.equal(requests, 0);
 });
