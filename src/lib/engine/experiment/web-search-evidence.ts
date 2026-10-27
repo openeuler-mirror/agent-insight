@@ -21,7 +21,7 @@
  */
 import { experimentSignal } from './cancellation-context';
 import { hasEvaluatorExecutionPolicy } from './evaluator-execution-policy';
-import { remainingEvaluationTimeMs, trackEvaluationRequest } from './evaluation-attempt';
+import { trackEvaluationRequest } from './evaluation-attempt';
 import { hasJudgeLlmTestInjection } from './judge-llm';
 
 export interface WebSearchHit {
@@ -66,7 +66,7 @@ async function tavilySearch(apiKey: string, query: string): Promise<WebSearchHit
   const ctrl = new AbortController();
   const parent = experimentSignal();
   parent?.throwIfAborted();
-  const timeout = Math.min(REQUEST_TIMEOUT_MS, remainingEvaluationTimeMs() ?? REQUEST_TIMEOUT_MS);
+  const timeout = REQUEST_TIMEOUT_MS;
   const signal = parent ? AbortSignal.any([parent, ctrl.signal]) : ctrl.signal;
   const timer = setTimeout(() => ctrl.abort(new Error(`timeout after ${timeout}ms`)), timeout);
   try {

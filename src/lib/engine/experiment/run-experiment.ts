@@ -819,7 +819,6 @@ async function resetResultRun(params: {
         status: 'pending',
       },
       update: {
-        attempts: { increment: 1 },
         status: 'pending', verdict: null, summary: null,
         score: null, pointsJson: null,
         evidenceJson: null, errorMessage: null, durationMs: null,

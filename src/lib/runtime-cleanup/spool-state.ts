@@ -278,6 +278,14 @@ export function recordSpoolPersistence(root: string, key: string, generation: st
 }
 export function markSpoolSegmentPurged(root: string, segment: string, now = Date.now(), intent?: SpoolPurgeIntent): void {
   if (!validSegment(segment) || !Number.isFinite(now) || now <= 0 || (intent && !validPurgeIntent(intent))) throw new Error('Invalid spool purge marker');
+  if (intent && intent.birthtimeMs === undefined && intent.ctimeMs === undefined) {
+    try {
+      const file = fs.lstatSync(intent.path);
+      if (file.isFile() && file.ino === intent.ino && file.dev === intent.dev) {
+        intent = { ...intent, birthtimeMs: file.birthtimeMs, ctimeMs: file.ctimeMs };
+      }
+    } catch {}
+  }
   update(root, segment, previous => {
     if (previous && effectiveState(previous).purgedAt !== undefined) return previous;
     return { ...(previous ?? { version: 1, generation: randomUUID(), status: 'unknown', lastReceivedAt: 0 }), purgedAt: now, purgeIntent: intent };

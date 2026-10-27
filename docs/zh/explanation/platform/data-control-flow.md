@@ -214,6 +214,8 @@ flowchart TD
 
 ### OTel Ingest 数据流
 
+Live spool 扫描兼容文件系统对修改时间的秒级取整，候选文件筛选向下取整启动时间，但每条记录仍以精确 `receivedAt` 判断是否属于启动后的数据。清理状态记录文件的设备、inode 与创建/变更时间；调用方只提供设备和 inode 时会补齐文件身份，避免文件删除后 inode 被复用而抹掉既有清理标记。
+
 OpenClaw、LlamaIndex 及其他 OTLP 客户端通过 `POST /api/ingest/otel/v1/traces` 上报 trace。LlamaIndex 客户端先经官方兼容 Handler、隔离 Provider、自定义非阻塞 exporter 和客户端持久 spool；服务端接收后的通用流程如下：
 
 1. 从 `x-witty-api-key` Header 解析身份（关联 Workspace）
@@ -268,7 +270,7 @@ flowchart TD
 
 `GET /api/user-evaluators?view=execution-config` 返回 `{ evaluators, executionCapabilities }`，每个能力项包含自己的系统默认两项数值，特殊作用范围通过 `scopeNote` 提供给前端（不写入运行参数快照）；不带该参数仍返回原数组。能力清单由服务端维护，不能仅凭 `evaluatorType: LLM` 推断。
 
-`executeResultRow` 对已保存策略的评估器建立 `withEvaluatorExecution` 上下文，由 `runConfiguredEvaluationStage` 统一拥有重试预算，内部 `withEvaluationAttempt` 传播截止时间和取消信号。普通路径包住完整评估；任务完成度、轨迹质量在既有分析之后只包住评分，RAS 在读取同一份事件证据后包住模型判定和计分。带 Skills 的自定义项在完整调用外控制重试，在 OpenCode 服务和会话就绪后才对执行计时。必要子请求共享剩余预算，评分 SDK 重试关闭，最多尝试 `maxRetries + 1` 次，退避为 2/8/20 秒并支持取消。超时、临时网络、429/5xx（不可恢复配额除外）和输出解析错误可重试。成功、失败结果的 `evidenceJson.executionConfig` 保存参数、来源和本运行周期尝试数；结果行 `attempts` 继续累计历史次数。
+`executeResultRow` 对已保存策略的评估器建立 `withEvaluatorExecution` 上下文，由 `runConfiguredEvaluationStage` 统一拥有重试预算，内部 `withEvaluationAttempt` 传播截止时间和取消信号。普通路径包住完整评估；任务完成度、轨迹质量在既有分析之后只包住评分，RAS 在读取同一份事件证据后包住模型判定和计分。带 Skills 的自定义项在完整调用外控制重试，在 OpenCode 服务和会话就绪后才对执行计时。必要子请求共享剩余预算，评分 SDK 重试关闭，最多尝试 `maxRetries + 1` 次，退避为 2/8/20 秒并支持取消。超时、临时网络、429/5xx（不可恢复配额除外）和输出解析错误可重试。成功、失败结果的 `evidenceJson.executionConfig` 保存参数、来源和本运行周期尝试数；结果行 `attempts` 继续累计历史次数，重评重置不计一次，只有认领执行及实际重试才计数。联网搜索保留独立的 8 秒局部上限，同时接收整轮 AbortSignal；整轮超时不能被局部搜索降级吞掉。
 
 新策略的通用 Judge 使用直连模型请求，关闭 OpenCode 强制传输及失败后隐式回退，避免一次尝试内额外完整评分和不可控子进程重试；历史实验和不支持新策略的特殊评估器保留原传输行为。新增适配路径必须让请求接受取消信号并通过 `trackEvaluationRequest` 登记。超时/失败后取消同次请求，并等待本地工作及并行请求结束；5 秒内无法确认停止则保留清理标记、返回 `EVALUATION_CLEANUP_UNCONFIRMED` 并停止自动重试。仅结束本地请求不保证 Provider 停止远端计算。
 

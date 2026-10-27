@@ -26,7 +26,7 @@ import { experimentSignal } from '@/lib/engine/experiment/cancellation-context';
 
 process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || process.env.DATABASE_URL;
 
-test('search failures degrade locally but the evaluation deadline cancels in-flight search', async () => {
+test('search failures degrade locally but the evaluation deadline cancels in-flight search', { timeout: 30_000 }, async t => {
   const originalFetch = globalThis.fetch;
   const user = `search-budget-${Date.now()}`;
   await prisma.userSettings.create({ data: { user, settingsJson: JSON.stringify({ searchProvider: 'tavily', searchApiKey: 'synthetic-test-key', configs: [] }) } });
@@ -43,13 +43,22 @@ test('search failures degrade locally but the evaluation deadline cancels in-fli
     assert.equal(evidence?.status, 'partial_failure');
     assert.equal(evidence?.hits.length, 1);
     let stopped = false;
+    let notifyStarted!: () => void;
+    const started = new Promise<void>(resolve => { notifyStarted = resolve; });
     globalThis.fetch = async (_url, options) => new Promise((_resolve, reject) => {
       options!.signal!.addEventListener('abort', () => { stopped = true; reject(options!.signal!.reason); }, { once: true });
+      notifyStarted();
     });
-    await assert.rejects(withEvaluatorExecution({ attemptTimeoutSeconds: 0.02, maxRetries: 0 }, new AbortController().signal,
-      () => runConfiguredEvaluationStage(() => gatherWebSearchEvidence(user, 'question', '2024年研究调查报告内容足够长。'))), /评估尝试超时/);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const evaluation = withEvaluatorExecution({ attemptTimeoutSeconds: 0.02, maxRetries: 0 }, new AbortController().signal,
+      () => runConfiguredEvaluationStage(() => gatherWebSearchEvidence(user, 'question', '2024年研究调查报告内容足够长。')));
+    const rejected = assert.rejects(evaluation, /评估尝试超时/);
+    await started;
+    t.mock.timers.tick(20);
+    await rejected;
+    t.mock.timers.reset();
     assert.equal(stopped, true);
-  } finally { globalThis.fetch = originalFetch; await prisma.userSettings.deleteMany({ where: { user } }); }
+  } finally { t.mock.timers.reset(); globalThis.fetch = originalFetch; await prisma.userSettings.deleteMany({ where: { user } }); }
 });
 
 test('expired evidence lookup never starts the Judge; degraded evidence retains the knowledge fallback', async () => {

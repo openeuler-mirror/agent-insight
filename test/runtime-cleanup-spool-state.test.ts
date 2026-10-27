@@ -134,7 +134,7 @@ test('stale canonical lock reclamation excludes another cleaner until fresh owne
   assert.equal(result, 'owner');
 }));
 
-test('pending purge intent suppresses tombstone until raw removal and survives a fresh receipt', () => fixture(root => {
+test('pending purge intent suppresses tombstone until raw removal and survives a fresh receipt', t => fixture(root => {
   const file = path.join(root, 'raw.jsonl');
   fs.writeFileSync(file, 'raw');
   const info = fs.statSync(file);
@@ -146,6 +146,11 @@ test('pending purge intent suppresses tombstone until raw removal and survives a
   fs.unlinkSync(file);
   assert.equal(readSpoolState(root, 'session')?.purgedAt, 200);
   fs.writeFileSync(file, 'later raw');
+  const lstat = fs.lstatSync;
+  t.mock.method(fs, 'lstatSync', (...args: Parameters<typeof fs.lstatSync>) => {
+    const current = lstat(...args);
+    return args[0] === file && current ? Object.assign(current, { ino: info.ino, birthtimeMs: info.birthtimeMs + 1, ctimeMs: info.ctimeMs + 1 }) : current;
+  });
   const later = fs.statSync(file);
   trySpoolMaintenance(root, () => markSpoolPurged(root, 'session', 400, { path: file, ino: later.ino, dev: later.dev }));
   assert.equal(readSpoolState(root, 'session')?.purgedAt, 200);
