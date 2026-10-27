@@ -540,18 +540,20 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 
 - **得分列显示 `—`** 只应有一种含义：**该点不参与计分**（无从判定）。任何"未达标"都必须给 0，不能留空。
 - **证据与建议**共用右栏和同一个折叠内容块。所有内容块的折叠预览统一以「证据：」开头，展开后先显示「证据」Markdown 小节；建议非空时再追加「Skill 改进建议」小节，不再渲染独立标签或第二个折叠栏。层级明细（如完整性下挂的每条关键动作覆盖）**写进证据 md**，不要另造嵌套行结构。
-- 轨迹质量评分流只产完整性、工具选择和冗余度；当关键动作部分覆盖、缺失或完整性不足时，实验适配层另行调用 `skill-suggestion-agent` 深读完整 Trace，并把非空建议作为 Markdown 挂到「完整性」评分点。建议不参与轨迹分，但通过 `skillAttributable + suggestion` 继续进入 Skill 优化闭环。该实验适配层为评分保留 5 分钟阶段预算，为建议生成配置每次 7 分钟、最多尝试 2 次（含首次），并将该评估器的行级保护上限设为 20 分钟；建议两次失败时返回空建议，不影响已经得到的轨迹分。其他调用 `skill-suggestion-agent` 的入口继续使用默认的每次 5 分钟、最多尝试 3 次。
+- 轨迹质量评分流只产完整性、工具选择和冗余度；当关键动作部分覆盖、缺失或完整性不足时，实验适配层另行调用 `skill-suggestion-agent` 深读完整 Trace，并把非空建议作为 Markdown 挂到「完整性」评分点。建议不参与轨迹分，但通过 `skillAttributable + suggestion` 继续进入 Skill 优化闭环。未配置新运行策略时，该实验适配层为评分保留 5 分钟阶段预算，为建议生成配置每次 7 分钟、最多尝试 2 次（含首次），并将该评估器的行级保护上限设为 20 分钟；建议两次失败时返回空建议，不影响已经得到的轨迹分。其他调用 `skill-suggestion-agent` 的入口继续使用默认的每次 5 分钟、最多尝试 3 次。
 - 状态 chip 与得分**同时给**：chip 表达定性（已覆盖/部分/未覆盖），分数表达定量，两者不矛盾。
 
 ---
 
 ### 6.7 实验评估运行配置能力
 
-支持清单与默认值在 `src/lib/evaluators/evaluator-execution-config.server.ts`。仅使用 Prompt 的自定义 LLM Judge 和已适配的通用 Judge 默认使用 180 秒、2 次；四个结果指标默认 300 秒、2 次，可分别由现有 `EXPERIMENT_JUDGE_TIMEOUT_MS`、`RESULT_QUALITY_TIMEOUT_MS`（回退 `JUDGMENT_TIMEOUT_MS`）提供 30～3600 秒范围内的默认值。缺失或超范围时使用上述标准值。新策略的数值是整次尝试预算；旧实验的请求超时、SDK 重试与外层结果行超时不被迁移或重新解释。
+支持清单与默认值在 `src/lib/evaluators/evaluator-execution-config.server.ts`。仅使用 Prompt 的自定义 LLM Judge 和已适配的通用 Judge 默认使用 180 秒、2 次；四个结果指标默认 300 秒、2 次，可分别由现有 `EXPERIMENT_JUDGE_TIMEOUT_MS`、`RESULT_QUALITY_TIMEOUT_MS`（回退 `JUDGMENT_TIMEOUT_MS`）提供 30～3600 秒范围内的默认值。缺失或超范围时使用上述标准值。普通新策略的数值是整次尝试预算；任务完成度、轨迹质量及 RAS 只约束评分阶段，带 Skills 的自定义项只约束 OpenCode 执行。前端范围说明由服务端能力的 `scopeNote` 提供；旧实验的请求超时、SDK 重试与外层结果行超时不被迁移或重新解释。
 
 新增内置评估器不能只标记 LLM 就自动加入清单。所有必要模型调用、解析及子阶段必须消费 `remainingEvaluationTimeMs()` 和 `experimentSignal()`，请求用 `trackEvaluationRequest` 登记，SDK `maxRetries` 设为 0。同次尝试内不能另设固定 180/300 秒截止时间、赠送解析修复调用或隐式完整评分回退。结构化输出错误用 `JudgeOutputParseError` 交给结果行统一判定重试。评估失败必须抛错，不返回零分占位。
 
-通用 Judge 的新策略只使用直连；OpenCode 的强制传输/自动回退仅保留给未配置策略的旧链路。带 Skills 的自定义评估器保留现有 OpenCode 运行策略，能力清单不包含它们。轨迹质量等多阶段或进程型适配器应先补齐资源排队、共享预算、取消清理及评分成功后附加建议失败的语义，再声明能力。Benchmark 官方运行参数与确定性代码规则不属于这份 LLM 配置。
+31 个预置 LLM 及两种自定义 LLM 均已登记能力。任务完成度评分默认 180 秒/2 次，轨迹质量评分默认 300 秒/2 次；二者在分析和资源排队之后用 `runConfiguredEvaluationStage` 重试评分，复用已完成分析，不修改附加建议的系统策略。RAS 读取一次证据后重试模型判定与计分；新策略下技术错误不能被 `warn` 吞掉，故障未确认发生的正常无分结果不重试。过程质量和步骤效率在同一重试预算内生成白名单修复反馈；相似度解析错误子类按类型识别。幻觉搜索组合父级与局部信号，整轮取消必须向外传播，局部失败可降级并记录证据状态。
+
+通用 Judge 与任务完成度、轨迹质量的新评分策略只使用直连，关闭隐藏 SDK 重试和传输回退。带 Skills 的自定义评估器仍强制 OpenCode，默认执行 180 秒/2 次；`runConfiguredEvaluationStage(work, {deferTimeout:true})` 控制完整调用重试，OpenCode 会话就绪后才用 `withConfiguredEvaluationTimeout` 限制模型及工具执行，旧任务的准备计时逻辑不变。进程组退出确认后才可重试，失败包装保留 cause 和运行证据。Benchmark 官方运行参数与确定性代码规则不属于这份 LLM 配置，页面只显示原因提示。
 
 配置冻结、API 和重试生命周期见[数据与控制流](05-data-and-control-flow.md#实验评估尝试的超时与重试)。扩展能力时至少验证取消终止、并行请求共享预算、无隐藏重试、0 次重试、清理无法确认时停止重试，以及 legacy 不变。
 

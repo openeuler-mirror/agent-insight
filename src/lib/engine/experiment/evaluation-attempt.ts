@@ -1,4 +1,21 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 
 type Attempt = { signal: AbortSignal; deadline: number; pending: Set<Promise<unknown>> };
 const context = new AsyncLocalStorage<Attempt>();
@@ -69,7 +86,10 @@ export function isRetryableEvaluationFailure(error: unknown): boolean {
   if (['EXPERIMENT_CANCELLED', 'EVALUATION_CLEANUP_UNCONFIRMED'].includes(item?.code || '')) return false;
   if ([400, 401, 403, 404].includes(item?.status || 0)) return false;
   if (/insufficient_quota|quota exceeded|鉴权|未配置|无效配置/i.test(`${item?.code} ${item?.message}`)) return false;
-  if (item?.code === 'EVALUATION_TIMEOUT' || item?.name === 'JudgeOutputParseError') return true;
+  if (item?.name === 'AbortError') return false;
+  if (item?.code === 'EVALUATION_TIMEOUT' || error instanceof JudgeOutputParseError || item?.name === 'JudgeOutputParseError') return true;
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  if (cause && cause !== error) return isRetryableEvaluationFailure(cause);
   if (item?.status === 429 || (item?.status ?? 0) >= 500) return true;
   return /timeout|timed out|超时|ECONN|ETIMEDOUT|EAI_AGAIN|fetch failed|network|socket hang/i.test(`${item?.code} ${item?.message}`);
 }

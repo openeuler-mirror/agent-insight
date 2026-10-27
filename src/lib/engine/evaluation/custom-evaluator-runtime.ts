@@ -25,6 +25,8 @@ import { savedSkillBindings } from '@/lib/evaluators/evaluator-skill-service';
 import { buildJudgePrompt, parseJudgeText, type JudgeCaseContext } from '@/lib/evaluators/judge-assembly';
 import type { EvaluatorOutput } from '@/lib/evaluators/eval-output';
 import { opencodeJudgeCaller, type JudgeLlmCaller } from '@/lib/engine/experiment/judge-llm';
+import { evaluatorExecutionTimeoutMs, hasEvaluatorExecutionPolicy } from '@/lib/engine/experiment/evaluator-execution-policy';
+import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import { experimentSignal } from '@/lib/engine/experiment/cancellation-context';
 
 export interface CustomEvaluatorRuntime {
@@ -39,7 +41,7 @@ export interface CustomEvaluatorRuntime {
   toolsTruncated?: boolean;
 }
 export class CustomEvaluatorExecutionError extends Error {
-  constructor(message: string, public runtime: CustomEvaluatorRuntime) { super(message); this.name = 'CustomEvaluatorExecutionError'; }
+  constructor(message: string, public runtime: CustomEvaluatorRuntime, cause?: unknown) { super(message, { cause }); this.name = 'CustomEvaluatorExecutionError'; }
 }
 
 let callerForTest: JudgeLlmCaller | null = null;
@@ -57,7 +59,9 @@ export async function runCustomEvaluatorWithSkills(user: string, card: Evaluator
   const started = Date.now();
   const bindings = savedSkillBindings(card.llmConfig?.skills);
   if (!bindings.length) throw new Error('Skill 评估必须包含已保存的 Skill');
-  const signal = AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? 180_000), ...[options.signal, experimentSignal()].filter((s): s is AbortSignal => Boolean(s))]);
+  const configured = hasEvaluatorExecutionPolicy();
+  const signal = AbortSignal.any([...(configured ? [] : [AbortSignal.timeout(options.timeoutMs ?? 180_000)]),
+    ...[options.signal, experimentSignal()].filter((s): s is AbortSignal => Boolean(s))]);
   signal.throwIfAborted();
   const runtime: CustomEvaluatorRuntime = {
     configHash: createHash('sha256').update(JSON.stringify(card)).digest('hex'), model: '', transport: 'opencode', skills: [], tools: [], durationMs: 0,
@@ -95,7 +99,7 @@ export async function runCustomEvaluatorWithSkills(user: string, card: Evaluator
     const raw = await (options.caller || callerForTest || opencodeJudgeCaller)(user, {
       system: `${prompt.system}\n\n${instructions.join('\n\n')}\n\nPrompt 定义本次评判目标与标准，Skills 提供验证方法；所有 Skill 主指令均已加载。脚本与参考资料按适用条件使用。Skill 默认输出不能覆盖用户消息中的平台输出协议。无法消解的指令冲突或验证基础设施故障必须明确报错，不得编造分数。`,
       user: `${prompt.user}\n\n本次 Case 输入文件：${path.join(workspace, 'inputs/case.json')}。脚本产物写入 outputs/。`,
-      directory: workspace, signal, timeoutMs: options.timeoutMs ?? 180_000, sessionTitle: `custom-eval-${card.name}`,
+      directory: workspace, signal, timeoutMs: options.timeoutMs ?? evaluatorExecutionTimeoutMs() ?? 180_000, sessionTitle: `custom-eval-${card.name}`,
       recordTrace: { agentName: card.name, query: ctx.input || `评估器 ${card.name}` },
       onTraceSaved: taskId => { runtime.evaluationTraceId = taskId; },
       onModel: model => { runtime.model = model; },
@@ -112,12 +116,12 @@ export async function runCustomEvaluatorWithSkills(user: string, card: Evaluator
     });
     signal.throwIfAborted();
     const output = parseJudgeText(raw, card.pointsDef);
-    if (!output.summary || !output.verdict || typeof output.score !== 'number') throw new Error('评估器未返回有效 verdict、summary 和 score');
+    if (!output.summary || !output.verdict || typeof output.score !== 'number') throw new JudgeOutputParseError('评估器未返回有效 verdict、summary 和 score', raw);
     runtime.durationMs = Date.now() - started;
     return { raw, runtime, output: { ...output, evidence: { json: { type: 'custom-evaluator-runtime-v1', evaluationEvidence: output.evidence || null, customEvaluatorRuntime: runtime } } } };
   } catch (error) {
     runtime.durationMs = Date.now() - started;
     runtime.error = error instanceof Error ? error.message : String(error);
-    throw new CustomEvaluatorExecutionError(runtime.error, runtime);
+    throw new CustomEvaluatorExecutionError(runtime.error, runtime, error);
   } finally { await fs.rm(workspace, { recursive: true, force: true }); }
 }

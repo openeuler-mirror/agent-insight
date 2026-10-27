@@ -903,3 +903,28 @@ test('engine: 同时选择精确匹配与文本相似度时，各评估器只拿
   setJudgeLlmCallerForTest(null);
 });
 
+
+test('configured similarity and RAS adapters persist exact retry counts without treating normal no-score as failure', async () => {
+  const { getEvaluatorExecutionCapabilities } = await import('@/lib/evaluators/evaluator-execution-config.server');
+  for (const id of ['preset-similarity-text', 'preset-ras-reliability-detection-recovery']) {
+    let calls = 0;
+    setJudgeLlmCallerForTest(async () => {
+      calls++;
+      if (calls === 1) return 'invalid-json';
+      return id === 'preset-similarity-text'
+        ? '{"level":"partially_similar","reason":"部分语义一致"}'
+        : '{"faultOccurred":{"verdict":"missing","reason":"没有故障证据","suggestion":"确认故障"},"dimensions":[]}';
+    });
+    const snapshot = resolveEvaluatorExecutionConfig({ mode: 'uniform', uniform: { attemptTimeoutSeconds: 600, maxRetries: 1 }, overrides: {} }, [id], getEvaluatorExecutionCapabilities([]));
+    const { experimentId } = await createExperiment(await createExecution(), [id], '参考答案', null,
+      serializeExperimentEvaluatorConfigs({}, [id], snapshot));
+    await (await startExperimentRun(experimentId, TEST_USER))!.completion;
+    const result = await prisma.experimentEvalResult.findFirstOrThrow({ where: { experimentId } });
+    assert.equal(result.status, 'done');
+    assert.equal(calls, 2);
+    assert.equal(result.attempts, 2);
+    assert.equal(JSON.parse(result.evidenceJson!).executionConfig.attempts, 2);
+    assert.equal(result.score, id === 'preset-similarity-text' ? 65 : null);
+  }
+  setJudgeLlmCallerForTest(null);
+});

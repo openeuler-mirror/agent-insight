@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
@@ -19,12 +35,14 @@ const capabilities = {
 };
 const ids = Object.keys(capabilities);
 
-test('custom evaluators with Skills retain their existing process runtime policy', () => {
+test('custom evaluators with Skills support the OpenCode execution policy', () => {
   const promptOnly = { id: 'custom-prompt', evaluatorType: 'LLM', llmConfig: { systemPrompt: '评估 {{output}}' } } as EvaluatorCard;
   const withSkills = { ...promptOnly, id: 'custom-skills', llmConfig: { ...promptOnly.llmConfig, skills: [{}] } } as EvaluatorCard;
   const supported = getEvaluatorExecutionCapabilities([promptOnly, withSkills]);
   assert.ok(supported[promptOnly.id]);
-  assert.equal(Object.hasOwn(supported, withSkills.id), false);
+  assert.equal(supported[withSkills.id].attemptTimeoutSeconds, 180);
+  assert.equal(supported[withSkills.id].maxRetries, 2);
+  assert.match(supported[withSkills.id].scopeNote!, /OpenCode/);
 });
 
 test('execution policy resolves system / uniform / override and snapshots alongside text rules', () => {
@@ -103,4 +121,19 @@ test('system-mode settings render numeric editable defaults and always-enabled r
   assert.match(html, /value="300"/);
   assert.equal((html.match(/恢复系统默认/g) ?? []).length, 2);
   assert.doesNotMatch(html, /\sdisabled(?:=|\s|>)|确认修改|配置方式/);
+});
+
+ test('all 31 preset LLM evaluators are configurable; code and benchmark notices remain visible', async () => {
+  const { presetEvaluators } = await import('@/lib/evaluators/preset-evaluators');
+  const capabilities = getEvaluatorExecutionCapabilities([]);
+  assert.equal(presetEvaluators.filter(c => c.evaluatorType === 'LLM').length, 31);
+  assert.equal(Object.keys(capabilities).length, 31);
+  for (const card of presetEvaluators) assert.equal(Boolean(capabilities[card.id]), card.evaluatorType === 'LLM', card.id);
+  const cards = [...presetEvaluators, { id: 'benchmark:swe-bench', name: 'SWE-bench', evaluatorType: 'Code' } as EvaluatorCard];
+  const html = renderToStaticMarkup(createElement(EvaluatorExecutionSettings, { cards, capabilities, value: executionDraft(), onChange() {} }));
+  assert.match(html, /代码评估器，不调用模型，不支持超时和重试配置/);
+  assert.match(html, /SWE-bench：独立评测服务，不支持在实验中配置超时和重试/);
+  assert.doesNotMatch(html, /SWE-bench：代码评估器/);
+  assert.match(html, /仅配置评分阶段，Skill 分析和附加建议沿用系统策略/);
+  assert.equal((html.match(/恢复系统默认/g) ?? []).length, 31);
 });

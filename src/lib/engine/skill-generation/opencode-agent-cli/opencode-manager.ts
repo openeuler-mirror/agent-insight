@@ -1232,6 +1232,7 @@ export async function runWithEphemeralOpencodeServer<T>(
      *               用于"用户实时对话"等需要看到 user skill 的场景 (skill-generator 等)。
      */
     isolateHome?: boolean
+    requireCleanup?: boolean
     /**
      * false: 不让隔离 OpenCode 进程里的 Witty-Skill-Insight plugin 采集/上传。
      * 适用于评测器/建议器/recordTraceAs 执行：这些内部执行已通过后端显式落库，
@@ -1269,9 +1270,11 @@ export async function runWithEphemeralOpencodeServer<T>(
     return await fn(inst.baseUrl)
   } finally {
     cancellation?.removeEventListener('abort', cancel)
+    let cleanupUnconfirmed = false
     try {
       await terminateOpencodeProcess(inst.process, `ephemeral cleanup for ${userKey}`)
     } catch (cleanupErr) {
+      cleanupUnconfirmed = true
       markExperimentCleanupUnconfirmed()
       // cleanup 失败不应该掩盖 fn 的真错误,只 warn 不抛
       console.warn(
@@ -1280,11 +1283,15 @@ export async function runWithEphemeralOpencodeServer<T>(
       )
     }
     if (typeof inst.process.pid === 'number' && processGroupExists(inst.process.pid)) {
+      cleanupUnconfirmed = true
       markExperimentCleanupUnconfirmed()
     }
     // 隔离 HOME 临时目录在 server 死透之后清, 避免 server 还在引用文件被 unlink
     if (homeCleanup) {
       await homeCleanup()
+    }
+    if (opts.requireCleanup && cleanupUnconfirmed) {
+      throw Object.assign(new Error('OpenCode 执行未能确认停止，已停止重试'), { code: 'EVALUATION_CLEANUP_UNCONFIRMED' })
     }
   }
 }
