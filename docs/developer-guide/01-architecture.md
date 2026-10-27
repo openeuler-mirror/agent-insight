@@ -1,3 +1,10 @@
+---
+title: "Agent-Insight 架构设计文档"
+description: "说明 Agent Insight 的架构分层、技术选型、数据设计与部署方式，并梳理关键风险和演进方向。"
+keywords: ["Agent Insight", "系统架构", "数据设计", "自托管部署"]
+changefreq: monthly
+---
+
 # Agent-Insight 架构设计文档
 
 > 本文档基于源码逆向重建，系统说明该系统要解决的问题、整体架构形态、关键技术选型依据及主要风险。

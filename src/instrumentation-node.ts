@@ -218,4 +218,10 @@ export async function setupNodeRuntime(): Promise<void> {
   } catch (err) {
     console.warn('[instrumentation] startExperimentWatcher failed (non-fatal):', (err as Error)?.message);
   }
+
+  setImmediate(() => {
+    void import('@/server/trace-datasets/manager')
+      .then(({ startTraceDatasetManager }) => startTraceDatasetManager())
+      .catch(() => { console.warn('[trace-datasets] generation unavailable'); });
+  }).unref();
 }

@@ -8,8 +8,15 @@ const generatedGitSourcePolicyDescriptors = [
   { benchmarkKey: "swe-bench", modulePath: path.resolve(__dirname, "../../benchmarks/swe-bench/executor/git-source-policy.cjs") },
 ]
 
-const generatedExecutorPackageFiles = [
-  "benchmarks/swe-bench/executor/git-source-policy.cjs"
+const generatedEnvironmentPreparationDescriptors = [
+  { datasetAdapterKey: "swe-bench", protocol: 'execution-environment/v1', modulePath: path.resolve(__dirname, "../../benchmarks/swe-bench/executor/environment.cjs") },
+  { datasetAdapterKey: "zsoft-l1", protocol: 'execution-environment/v1', modulePath: path.resolve(__dirname, "../../benchmarks/zsoft-l1/executor/environment.cjs") },
 ]
 
-module.exports = { generatedGitSourcePolicyDescriptors, generatedExecutorPackageFiles }
+const generatedExecutorPackageFiles = [
+  "benchmarks/swe-bench/executor/environment.cjs",
+  "benchmarks/swe-bench/executor/git-source-policy.cjs",
+  "benchmarks/zsoft-l1/executor/environment.cjs"
+]
+
+module.exports = { generatedGitSourcePolicyDescriptors, generatedEnvironmentPreparationDescriptors, generatedExecutorPackageFiles }

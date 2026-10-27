@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import { BenchmarkProtocolError } from './errors'
+import { validateExecution, validateProfile, type ExecutionProfile, type ExecutionSpec } from '../execution.cjs'
 import { validatePublicBundleSpec } from '../../../services/executor/src/public-bundle.cjs'
 import { validateZsoftTasksSpec } from '../../../services/executor/src/zsoft-tasks.cjs'
 import { normalizeAgentOptions, type AgentOptions } from '../../agent-runtime/index.cjs'
@@ -140,6 +141,8 @@ export type BenchmarkManifest = {
 }
 
 export type BenchmarkRunConfig = {
+  executionProfile?: ExecutionProfile
+  executionArch?: 'amd64' | 'arm64'
   executionConcurrency?: number
   platform: string
   agent: string
@@ -155,6 +158,7 @@ export type BenchmarkRunContext = {
 }
 
 export type AgentTaskEnvelope = {
+  execution?: ExecutionSpec
   schemaVersion: 'agent-task/v1'
   benchmark: { key: string }
   context: BenchmarkRunContext
@@ -279,6 +283,14 @@ export function validateTaskEnvelope(
   context: BenchmarkRunContext,
   manifest: BenchmarkManifest,
 ): void {
+  if (task.execution) {
+    try {
+      validateExecution(task.execution)
+      if (task.agentConfig.executionProfile) validateProfile(task.agentConfig.executionProfile)
+      const target = task.execution.profile.targets.find(item => item.platform === task.agentConfig.platform)
+      if (!target?.agents.includes(task.agentConfig.agent) || task.policy.network !== task.execution.profile.network) throw new Error('执行环境与 Agent 或网络策略不匹配')
+    } catch (error) { throw new BenchmarkProtocolError('EXECUTION_PROFILE_INVALID', (error as Error).message) }
+  }
   if (task.schemaVersion !== 'agent-task/v1') {
     throw new BenchmarkProtocolError('TASK_SCHEMA_INVALID', '任务协议标识不受支持')
   }

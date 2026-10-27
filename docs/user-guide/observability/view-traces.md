@@ -1,6 +1,8 @@
 ---
 title: "链路追踪"
 description: "查看、筛选并分析一次执行的完整 Trace"
+keywords: ["Agent Insight", "链路追踪", "Trace 筛选", "执行分析"]
+changefreq: monthly
 ---
 
 # 链路追踪

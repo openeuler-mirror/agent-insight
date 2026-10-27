@@ -1,6 +1,8 @@
 ---
 title: "Skill 工作台"
 description: "在同一工作台中生成、评估、实验、优化和发布 Skill"
+keywords: ["Agent Insight", "Skill 工作台", "质量评估", "持续优化"]
+changefreq: monthly
 ---
 
 # Skill 工作台

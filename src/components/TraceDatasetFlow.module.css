@@ -1,0 +1,72 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--overlay-bg);
+}
+.dialog {
+  width: min(920px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  box-shadow: 0 20px 80px var(--shadow-color-lg);
+}
+.progressDialog { width: min(620px, 100%); }
+.header { padding: 20px 24px 10px; }
+.header h2 { font-size: 16px; font-weight: 600; }
+.body { padding: 14px 24px 0; }
+.required { color: var(--error); }
+.formGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin: 20px -24px 0;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+}
+.footer button { min-height: 32px; padding: 6px 13px; font-size: 12px; }
+.footer button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+  background: var(--background-secondary);
+  color: var(--foreground-muted);
+}
+.progressTitle { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--foreground-secondary); }
+.progressTitle > span:first-child { overflow-wrap: anywhere; }
+.badge { flex-shrink: 0; padding: 3px 8px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 500; }
+.generating { background: var(--warning-subtle); color: var(--tag-amber-fg); }
+.success { background: var(--success-subtle); color: var(--tag-green-fg); }
+.failure { background: var(--error-subtle); color: var(--tag-red-fg); }
+.summary { padding: 14px 0; font-size: 14px; }
+.bar { height: 6px; overflow: hidden; border-radius: var(--radius-sm); background: var(--background-secondary); }
+.bar > span { display: block; height: 100%; border-radius: inherit; transition: width .2s; }
+.stages { list-style: none; margin: 12px 0 0; padding: 0; }
+.stage { display: flex; align-items: center; gap: 15px; padding: 13px 0; border-bottom: 1px solid var(--table-row-border); }
+.stage h3 { flex: 1; font-size: 13px; font-weight: 600; }
+.stepNumber { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 50%; font-size: 12px; }
+.stageStatus { font-size: 12px; color: var(--foreground-muted); }
+.done .stepNumber { background: var(--success-subtle); border-color: var(--success-subtle-border); color: var(--tag-green-fg); }
+.running .stepNumber { background: var(--primary-subtle); border-color: var(--primary-subtle-border); color: var(--primary); }
+.failed .stepNumber { background: var(--error-subtle); border-color: var(--error-subtle-border); color: var(--tag-red-fg); }
+.errorDetail { padding: 13px; border: 1px solid var(--error-subtle-border); border-radius: var(--radius-sm); background: var(--error-subtle); color: var(--tag-red-fg); font-size: 12px; }
+.errorDetail p { margin-top: 12px; }
+.tip { margin: 12px 0 0; font-size: 12px; color: var(--foreground-muted); }
+.filterSummary { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; color: var(--foreground-secondary); }
+.filterSummary h3 { color: var(--foreground); font-weight: 600; }
+.filterSummary p { margin-top: 6px; line-height: 1.6; }
+.filterSummary ul { margin: 10px 0 0; padding-left: 18px; }
+.filterSummary li + li { margin-top: 10px; }
+@media (prefers-reduced-motion: no-preference) {
+  .running .stepNumber { animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+}
+@media (max-width: 580px) {
+  .overlay { padding: 10px; }
+  .header { padding: 16px 16px 10px; }
+  .body { padding: 12px 16px 0; }
+  .footer { margin-inline: -16px; padding: 12px 16px; }
+  .formGrid { grid-template-columns: 1fr; }
+}

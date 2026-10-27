@@ -1,3 +1,10 @@
+---
+title: "Agent Insight 830 分支 RPM 构建指南"
+description: "说明 Agent Insight 830 分支的 RPM 构建准备、验包、转测与分发流程，帮助维护者制作交付包。"
+keywords: ["Agent Insight", "RPM", "软件打包", "部署交付"]
+changefreq: monthly
+---
+
 # Agent Insight 830 分支 RPM 构建指南
 
 本文用于在 openEuler 构建机上重复构建、验证和分发 Agent Insight `830` 分支的 RPM。

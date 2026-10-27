@@ -1,6 +1,8 @@
 ---
 title: "运行观测"
-description: "Agent 概览、链路追踪与推理基础设施总览"
+description: "介绍运行观测的模块入口、使用顺序及平台接入方式，帮助用户定位 Agent 的运行状态与链路问题。"
+keywords: ["Agent Insight", "运行观测", "链路追踪", "平台接入"]
+changefreq: monthly
 ---
 
 # 运行观测

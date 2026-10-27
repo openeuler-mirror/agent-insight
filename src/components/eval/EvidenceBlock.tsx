@@ -3,6 +3,8 @@
 // 证据渲染小组件：默认折叠单行预览，点击展开后按内容格式自动渲染
 // （{md} → 轻量 Markdown：**粗体** / `code` / - 列表；{json} → 缩进代码块）。
 import { useState, type ReactNode } from 'react';
+import { isCustomEvaluatorRuntime } from './CustomEvaluatorRuntimeDetails';
+import type { CustomEvaluatorRuntime } from '@/lib/engine/evaluation/custom-evaluator-runtime';
 
 interface EvidenceLike {
   md?: string;
@@ -422,6 +424,10 @@ export function EvidenceBlock({
   const [open, setOpen] = useState(false);
   const ev = coerce(evidence);
   if (!ev) return null;
+  const envelope = ev.json as { type?: string; evaluationEvidence?: unknown; customEvaluatorRuntime?: CustomEvaluatorRuntime } | undefined;
+  if (envelope?.type === 'custom-evaluator-runtime-v1' && isCustomEvaluatorRuntime(envelope.customEvaluatorRuntime)) {
+    return <EvidenceBlock evidence={envelope.evaluationEvidence} evaluatorId={evaluatorId} supplementalMarkdown={supplementalMarkdown} />;
+  }
   const suggestion = supplementalMarkdown?.trim() || '';
   const md = ev.md
     ? [

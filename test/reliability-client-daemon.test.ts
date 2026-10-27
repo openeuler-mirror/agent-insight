@@ -179,6 +179,7 @@ test('client whitelist matches the server-side action set', () => {
     [
       'APPLY_CLIENT_CONFIG',
       'CANCEL_EXPERIMENT_RUN',
+      'PREPARE_EXECUTION_ENVIRONMENT',
       'PREPARE_EXPERIMENT_CASE',
       'REFRESH_CAPABILITIES',
       'RUN_BENCHMARK_CASE',

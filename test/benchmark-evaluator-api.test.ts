@@ -1033,7 +1033,7 @@ test('permanent image metadata errors exclude only their Case and return HTTP 42
     registry: new EvaluatorRegistry([evaluator]) }) as unknown as {
       createServer(): http.Server
       prepareImageWindow(request: unknown, headers: Record<string, string>): Promise<void>
-      prepareBeforeAdmission(request: ReturnType<typeof requestFor>, evaluator: typeof evaluator): Promise<void>
+      prepareBeforeAdmission(request: ReturnType<typeof requestFor>, definition: typeof evaluator): Promise<void>
       acquireJobImages(): Promise<void>
       imagePreparations: Map<string, { task: Promise<void> }>
       journal: { state(runId: string): Promise<unknown> }

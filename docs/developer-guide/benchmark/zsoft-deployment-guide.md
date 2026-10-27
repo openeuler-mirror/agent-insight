@@ -88,7 +88,7 @@ benchmarks:
 
 `assetsDir: null` 使用默认根目录；自定义目录须处于 Controller 与 Runtime 共享且可写的 bind/volume 内，通常在 `/data` 下，不会自动新增宿主挂载。实际版本目录自动追加镜像摘要，重启复用已校验版本；不同摘要分别保存，不覆盖历史版本。安装失败最多重试三次，排除网络、权限或摘要问题后重启 Controller 重试。旧手动解压目录不会被自动识别为托管版本。
 
-旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再覆盖 YAML，不要通过 `--evaluator-env` 传入。平台和评测机分别维护各自配置；评测端不连接平台数据库。
+普通进程环境中的旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再隐式覆盖 YAML；可显式使用 `--evaluator-env ZSOFT_L1_ASSETS_DIR=/data/custom-assets` 或 `--evaluator-env ZSOFT_KERNEL_ACCEL=kvm` 覆盖本次启动配置。启动器会转换为配置快照并校验，不修改 YAML；共享目录和 KVM 权限检查仍然生效。平台和评测机分别维护各自配置；评测端不连接平台数据库。
 
 Case 镜像由公共镜像池按固定 digest 拉取、缓存和回收，Compose 使用已校验 Image ID 并禁止自动 pull。没有 `registryImages` 的冻结清单要求本机预装固定 Image ID；缺少 `sourceTaskDigest` 的旧清单需由维护者重新冻结。离线部署需提前搬运匹配版本的完整资产镜像、题目镜像及 Runtime。
 

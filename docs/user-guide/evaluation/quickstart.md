@@ -1,6 +1,8 @@
 ---
 title: "跑通第一次评测"
 description: "使用已有 Trace 或 Benchmark 数据集完成第一次实验"
+keywords: ["Agent Insight", "评测入门", "Trace", "Benchmark"]
+changefreq: monthly
 ---
 
 # 跑通第一次评测

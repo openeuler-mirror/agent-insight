@@ -168,3 +168,15 @@ test('OpenClaw 纯配置输出与已安装 wrapper 使用相同的 JSON logs/tra
     assert.doesNotMatch(configBlock, /http\/protobuf/);
   }
 });
+
+test('Pi/xiaoO selections reach every client installation source and auto setup registers the same installer', async () => {
+  const { GET: autoSetup } = await import('@/app/api/ingest/setup/auto/route');
+  const normal = await getScript('yes=1&frameworks=pi-agent,xiaoo', 'unix');
+  const auto = await (await autoSetup(new Request('http://localhost/api/ingest/setup/auto?apiKey=fixture&host=http://localhost&frameworks=pi-agent,xiaoo', { headers: { 'x-platform': 'unix', host: 'localhost' } }))).text();
+  for (const script of [normal, auto]) {
+    assert.equal((script.match(/--frameworks "\$SELECTED_FRAMEWORKS"/g) || []).length, 3);
+    const parsed = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
+    assert.equal(parsed.status, 0, parsed.stderr);
+    assert.match(script, /install_agent_insight_client "\$(?:FINAL_HOST|AGENT_INSIGHT_HOST)"/);
+  }
+});

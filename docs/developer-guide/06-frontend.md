@@ -1,3 +1,10 @@
+---
+title: "Frontend"
+description: "介绍 Agent Insight 前端的路由、导航、组件组织、状态管理与主题机制，帮助开发者定位界面实现。"
+keywords: ["Agent Insight", "前端架构", "Next.js", "路由导航", "状态管理"]
+changefreq: monthly
+---
+
 # Frontend
 
 > 框架：Next.js 16 App Router + React 19（RSC + 客户端组件）。样式：Tailwind CSS 4，在 `src/app/globals.css` 中带有一套令牌系统；基础组件构建于 Radix UI 之上。状态：React Context（`src/lib/client/*`）+ Zustand + 经由 `nuqs` 的 URL 状态。Agent 聊天 UI：assistant-ui（`src/providers/*`）。数据获取：`apiFetch`（`src/lib/client/api.ts`）请求应用自身的 API 路由。
@@ -90,6 +97,8 @@ Benchmark 评估器目录由服务端 `app/(main)/metrics/page.tsx` 遍历 `list
 `AgentDatasetCenter` 对已加载的摘要先按名称和类型筛选，再每页显示最多 12 张卡片；宽屏固定 4 列、最多 3 行，窄屏响应式减少列数。搜索、类型切换、刷新、保存与删除回到第一页；异步数据变化导致页码越界时按末页渲染。列表底部显示范围和上一页／下一页，翻页滚回列表顶部。保持现有摘要 API，不新增服务端分页协议。
 
 全局实验默认名称由 `engine/experiment/experiment-name.ts` 统一生成。“同配置实验”的服务端复制和“复用评测配置”的客户端向导都使用当前时间生成新名称，不继承原实验名称；配置复用与来源关联保持原流程。列表和详情对带旧复用后缀的存量名称，按实验 `createdAt` 投影标准标题，不改写数据库中的原名称。
+
+`/experiments` 列表由 `PageContainer` 统一承载纵向滚动。表格容器和分页栏设置 `flex-shrink: 0`，避免纵向 Flex 布局压缩表格并裁掉末尾记录；表格容器通过 `overflow-x: auto` 承载窄屏横向滚动，分页栏允许换行。表格高度随当前页实际记录数自然展开，不设置固定高度或内部纵向滚动区。
 
 `ExperimentRenameButton` 复用同一 `PATCH /api/experiments/:id` 名称更新契约，在普通实验与 Skill 实验的列表、详情入口使用；保存成功后各视图更新本地名称，下一次列表或详情读取以数据库值为准。重命名不触发评测重跑。
 

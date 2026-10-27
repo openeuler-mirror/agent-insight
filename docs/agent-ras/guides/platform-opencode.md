@@ -1,3 +1,10 @@
+---
+title: "OpenCode 接入"
+description: "介绍 OpenCode 接入 Agent RAS 的安装方式、同进程运行架构及能力限制。"
+keywords: ["Agent RAS", "OpenCode", "同进程集成", "可靠性"]
+changefreq: monthly
+---
+
 # OpenCode 接入
 
 同进程：`ras_runtime` + bun:ffi；能力为 partial（非 jiuwen 同级 chunk abort）。

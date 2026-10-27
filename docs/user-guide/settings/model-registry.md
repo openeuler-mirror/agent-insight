@@ -1,6 +1,8 @@
 ---
 title: "模型注册"
-description: "注册外部模型、管理 API Key"
+description: "介绍模型注册、供应商配置、连接测试和密钥管理方法，帮助用户设置平台可用的模型。"
+keywords: ["Agent Insight", "模型注册", "供应商配置", "密钥管理"]
+changefreq: monthly
 ---
 
 # 模型注册

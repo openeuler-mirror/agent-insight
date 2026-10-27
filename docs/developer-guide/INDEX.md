@@ -1,3 +1,10 @@
+---
+title: "Agent-Insight — 开发者指南"
+description: "提供 Agent Insight 开发者指南的主题导航、实现查找入口与常用术语解释。"
+keywords: ["Agent Insight", "开发者指南", "文档导航", "术语表"]
+changefreq: monthly
+---
+
 # Agent-Insight — 开发者指南
 
 > Agent-Insight（`@witty-ai/skill-insight`）是一个框架无关、自托管的平台，用于**观测**、**评测**和**优化** AI Agent 及其 Skill。
@@ -59,5 +66,6 @@
 - **Config (dataset config)**：某个查询的标准答案记录——预期 Skill、标准答案、根因、关键动作（Prisma `Config`、`ConfigItem`）。
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。
 - **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（包括 OpenCode、Claude、OpenClaw、AcTrail）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
+- **智能采样**：Agent Insight 基于 Trace 生成评测数据集时使用的生产采样能力；当前策略实现版本为 `trace-coverage-v6.35`，名称不表示与其他产品采用同一算法。
 - **Collaboration trace**：独立于原生 Execution 树的跨 Session 关系覆盖层；事件正文不可变，端点到 Execution 的关联可随 Trace 到达重算。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。

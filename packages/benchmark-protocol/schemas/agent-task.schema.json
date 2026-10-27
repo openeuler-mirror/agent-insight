@@ -4,6 +4,173 @@
   "type": "object",
   "required": ["schemaVersion", "benchmark", "context", "task", "workspace", "policy", "submission", "agentConfig"],
   "properties": {
+    "execution": {
+      "type": "object",
+      "required": [
+        "profile",
+        "environment"
+      ],
+      "properties": {
+        "profile": {
+          "type": "object",
+          "required": [
+            "key",
+            "backendKey",
+            "sandbox",
+            "sourceRevision",
+            "implementationDigest",
+            "network",
+            "resources",
+            "timeouts",
+            "targets",
+            "models",
+            "definitionDigest"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "backendKey": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "sandbox": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "sourceRevision": {
+              "type": "string",
+              "pattern": "^(?:[a-f0-9]{40}|unknown|unconfigured)$"
+            },
+            "artifactDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "implementationDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "network": {
+              "const": "deny"
+            },
+            "resources": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memoryMiB",
+                "pids"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1024
+                },
+                "memoryMiB": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1048576
+                },
+                "pids": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1048576
+                }
+              },
+              "additionalProperties": false
+            },
+            "timeouts": {
+              "type": "object",
+              "required": [
+                "prepareSeconds",
+                "cleanupSeconds"
+              ],
+              "properties": {
+                "prepareSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 86400
+                },
+                "cleanupSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600
+                }
+              },
+              "additionalProperties": false
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "platform",
+                  "agents"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                  },
+                  "agents": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "models": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[^\\s/]+/.+$"
+              }
+            },
+            "definitionDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "environment": {
+          "type": "object",
+          "required": [
+            "kind",
+            "image",
+            "arch",
+            "workspaceRoot"
+          ],
+          "properties": {
+            "kind": {
+              "const": "oci-image"
+            },
+            "image": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/)?[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_.-]+|@sha256:[a-f0-9]{64})?$"
+            },
+            "arch": {
+              "enum": [
+                "amd64",
+                "arm64"
+              ]
+            },
+            "workspaceRoot": {
+              "type": "string",
+              "pattern": "^/(?:[A-Za-z0-9_-]+/?)+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "schemaVersion": { "const": "agent-task/v1" },
     "benchmark": { "type": "object", "required": ["key"] },
     "context": { "type": "object", "required": ["runId", "experimentId", "caseId"] },
@@ -60,6 +227,8 @@
       "type": "object",
       "required": ["platform", "agent", "timeoutSeconds"],
       "properties": {
+        "executionProfile": { "type": "object" },
+        "executionArch": { "enum": ["amd64", "arm64"] },
         "platform": { "type": "string", "minLength": 1 },
         "agent": { "type": "string", "minLength": 1 },
         "model": { "type": "string", "minLength": 1 },
