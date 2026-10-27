@@ -224,6 +224,8 @@ test('ordinary client removes parameter files after successful execution and bef
   fs.mkdirSync(bin)
   fs.writeFileSync(path.join(bin, 'opencode'), `#!${process.execPath}
 const fs = require('node:fs')
+if (process.argv.includes('debug')) { console.log(JSON.stringify({provider:{fixture:{options:{apiKey:'fixture-key'}}},model:'fixture/model'})); process.exit(0); }
+if (process.argv[2] === 'models') { console.log('fixture/model'); process.exit(0); }
 if (process.argv.includes('--version')) { console.log('1.14.39'); process.exit(0) }
 if (process.argv.includes('--help')) { console.log('--format json --agent --model --title'); process.exit(0) }
 fs.writeFileSync('received.json', fs.readFileSync(process.env.AGENT_INSIGHT_PARAMETERS_FILE))

@@ -26,6 +26,10 @@ import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { EvaluatorExecutionSettings } from '@/components/eval/EvaluatorExecutionSettings';
+import { buildExecutionConfig, executionDraft, filterEvaluatorCards, type EvaluatorSourceFilter } from '@/lib/evaluators/evaluator-execution-draft';
+import type { EvaluatorExecutionCapabilities, EvaluatorExecutionConfig } from '@/lib/evaluators/evaluator-execution-config';
 import { RuntimeOptionsFields } from '@/components/eval/RuntimeOptionsFields';
 import { RuntimeParameterTemplates } from '@/components/eval/RuntimeParameterTemplates';
 import { RuntimeOptionMigration } from '@/components/eval/RuntimeOptionMigration';
@@ -607,6 +611,13 @@ export function ExperimentWizard({
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
   const [selectedEvaluators, setSelectedEvaluators] = useState<Set<string>>(new Set());
   const [evaluatorConfigs, setEvaluatorConfigs] = useState<EvaluatorRunConfigMap>({});
+  const [evaluatorExecutionDraft, setEvaluatorExecutionDraft] = useState(() => executionDraft());
+  const [executionCapabilities, setExecutionCapabilities] = useState<EvaluatorExecutionCapabilities>({});
+  const [evaluatorConfigLoaded, setEvaluatorConfigLoaded] = useState(false);
+  const [evaluatorLoadError, setEvaluatorLoadError] = useState('');
+  const [evaluatorSearch, setEvaluatorSearch] = useState('');
+  const [evaluatorSource, setEvaluatorSource] = useState<EvaluatorSourceFilter>('all');
+  const [evaluatorPage, setEvaluatorPage] = useState(1);
   const [configuringEvaluatorId, setConfiguringEvaluatorId] = useState<ConfigurableTextEvaluatorId | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -769,10 +780,16 @@ export function ExperimentWizard({
 
   useEffect(() => {
     if (!user) return;
-    apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`)
-      .then((r) => r.json())
-      .then((d) => setCustomEvaluators(Array.isArray(d) ? d : []))
-      .catch(() => setCustomEvaluators([]));
+    apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}&view=execution-config`)
+      .then((r) => { if (!r.ok) throw new Error('评估器配置加载失败，请刷新页面重试'); return r.json(); })
+      .then((d) => {
+        if (!Array.isArray(d.evaluators) || !d.executionCapabilities) throw new Error('评估器配置加载失败，请刷新页面重试');
+        setCustomEvaluators(d.evaluators);
+        setExecutionCapabilities(d.executionCapabilities);
+        setEvaluatorConfigLoaded(true);
+        setEvaluatorLoadError('');
+      })
+      .catch((error) => { setEvaluatorLoadError(error.message); setEvaluatorConfigLoaded(false); });
     apiFetch(`/api/tags?user=${encodeURIComponent(user)}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setTraceTags(Array.isArray(d) ? d : []))
@@ -914,6 +931,7 @@ export function ExperimentWizard({
       setEvaluatorConfigs(config.evaluatorConfigs && typeof config.evaluatorConfigs === 'object'
         ? config.evaluatorConfigs as EvaluatorRunConfigMap
         : {});
+      setEvaluatorExecutionDraft(executionDraft(config.evaluatorExecutionConfig as EvaluatorExecutionConfig | null));
       const workerId = String(restoredTarget.workerId || '');
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
@@ -1509,6 +1527,22 @@ export function ExperimentWizard({
     });
   };
 
+  useEffect(() => {
+    setEvaluatorExecutionDraft((previous) => {
+      const entries = Object.entries(previous.overrides).filter(([id]) => selectedEvaluators.has(id));
+      return entries.length === Object.keys(previous.overrides).length ? previous : { ...previous, overrides: Object.fromEntries(entries) };
+    });
+  }, [selectedEvaluators]);
+
+  const filteredEvaluators = filterEvaluatorCards(allEvaluators, evaluatorSearch, evaluatorSource);
+  const evaluatorPageCount = Math.max(1, Math.ceil(filteredEvaluators.length / 12));
+  const currentEvaluatorPage = Math.min(evaluatorPage, evaluatorPageCount);
+  const visibleEvaluators = filteredEvaluators.slice((currentEvaluatorPage - 1) * 12, currentEvaluatorPage * 12);
+  const evaluatorExecutionState = useMemo(() => {
+    try { return { config: buildExecutionConfig(evaluatorExecutionDraft, selectedEvaluators, executionCapabilities), error: '' }; }
+    catch (error) { return { config: undefined, error: (error as Error).message }; }
+  }, [evaluatorExecutionDraft, selectedEvaluators, executionCapabilities]);
+
   // 监听 trace 不携带逐条预期输出、数据集输入或 Tool/Skill 目录，移除带前置条件的评估器。
   useEffect(() => {
     if (!watchMode) return;
@@ -1530,6 +1564,8 @@ export function ExperimentWizard({
     setSubmitting(true);
     setSubmitError('');
     try {
+      if (!evaluatorConfigLoaded) throw new Error(evaluatorLoadError || '正在加载评估器配置');
+      if (evaluatorExecutionState.error) throw new Error(evaluatorExecutionState.error);
       if (executionConcurrencyRequired && !executionConcurrencyValid) throw new Error('执行并发必须为正整数');
       if (agentTimeoutRequired && !agentTimeoutValid) {
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
@@ -1600,6 +1636,8 @@ export function ExperimentWizard({
             name,
             agentName,
             evaluatorIds: Array.from(selectedEvaluators),
+            evaluatorConfigs: selectedEvaluatorConfigs,
+            evaluatorExecutionConfig: evaluatorExecutionState.config,
             caseIds: abCaseIds,
             traceSource: traceMode,
             executionTarget: selectedTarget ? {
@@ -1677,6 +1715,7 @@ export function ExperimentWizard({
           }),
           evaluatorIds: Array.from(selectedEvaluators),
           evaluatorConfigs: selectedEvaluatorConfigs,
+          evaluatorExecutionConfig: evaluatorExecutionState.config,
           ...(!skillContext ? {
             configSnapshot: {
               schemaVersion: 1,
@@ -3341,8 +3380,21 @@ export function ExperimentWizard({
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
                 为本次实验挑选评估器（可多选）。依赖预期输出、数据集输入或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
               </div>
+              <div className="mb-3 flex flex-wrap items-center gap-3">
+                <Input className="max-w-sm" type="search" aria-label="搜索评估器" placeholder="搜索评估器名称或描述……"
+                  value={evaluatorSearch} onChange={(event) => { setEvaluatorSearch(event.target.value); setEvaluatorPage(1); }} />
+                <label className="flex items-center gap-2 text-xs">来源
+                  <select value={evaluatorSource} style={{ ...INPUT, width: 'auto' }} aria-label="评估器来源"
+                    onChange={(event) => { setEvaluatorSource(event.target.value as EvaluatorSourceFilter); setEvaluatorPage(1); }}>
+                    <option value="all">全部来源</option><option value="preset">内置</option><option value="custom">自定义</option>
+                    {isBenchmarkDataset && <option value="benchmark">Benchmark</option>}
+                  </select>
+                </label>
+                <span className="ml-auto text-xs" style={{ color: 'var(--foreground-muted)' }}>已选 {selectedEvaluators.size} 个</span>
+              </div>
+              {!filteredEvaluators.length && <p className="py-4 text-sm" style={{ color: 'var(--foreground-muted)' }}>未找到匹配的评估器</p>}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
-                {allEvaluators.map((card) => {
+                {visibleEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
                   const isBoundBenchmarkEvaluator = isBenchmarkDataset && card.id === benchmarkEvaluatorId;
                   // 监听模式的新 trace 没有逐条预期输出或 Tool/Skill 目录，带前置条件的评估器不可用。
@@ -3444,12 +3496,26 @@ export function ExperimentWizard({
                 })}
               </div>
 
+              {evaluatorPageCount > 1 && <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                <span style={{ color: 'var(--foreground-muted)' }}>共 {filteredEvaluators.length} 个评估器</span>
+                <div className="ml-auto flex items-center gap-3">
+                  <Button type="button" variant="outline" size="sm" disabled={currentEvaluatorPage === 1} onClick={() => setEvaluatorPage(currentEvaluatorPage - 1)}>上一页</Button>
+                  <span aria-live="polite">{currentEvaluatorPage} / {evaluatorPageCount}</span>
+                  <Button type="button" variant="outline" size="sm" disabled={currentEvaluatorPage === evaluatorPageCount} onClick={() => setEvaluatorPage(currentEvaluatorPage + 1)}>下一页</Button>
+                </div>
+              </div>}
+              {evaluatorConfigLoaded && <EvaluatorExecutionSettings
+                cards={allEvaluators.filter((card) => selectedEvaluators.has(card.id))} capabilities={executionCapabilities}
+                value={evaluatorExecutionDraft} onChange={setEvaluatorExecutionDraft} />}
+              {(evaluatorLoadError || evaluatorExecutionState.error) && <p role="alert" className="mt-3 text-xs" style={{ color: 'var(--error)' }}>
+                {evaluatorLoadError || evaluatorExecutionState.error}
+              </p>}
               {submitError && (
                 <div style={{ marginTop: 12, fontSize: 12, color: 'var(--error)' }}>{submitError}</div>
               )}
 
               {footer({
-                nextDisabled: selectedEvaluators.size < 1 || submitting,
+                nextDisabled: selectedEvaluators.size < 1 || submitting || !evaluatorConfigLoaded || Boolean(evaluatorExecutionState.error),
                 nextLabel: submitting ? '创建中…' : '🚀 开始实验',
                 onNext: submit,
               })}

@@ -18,7 +18,7 @@
 // 写入路径（saveExecutionRecord）对内存中的 interactions 做一次 O(n) 遍历，产出
 // 固定体积、可跨 trace 合并的统计摘要——per-call 原始数组刻意不存（体积随 trace
 // 线性膨胀，会把大 JSON 问题从 Session 搬到 Execution）。
-// 设计决策与风险边界见 docs/design/fleet-dashboard-tier-b-preparse-risk.md。
+// 设计决策与风险边界见 design/platform/fleet-dashboard-tier-b-preparse-risk.md。
 
 export const CALL_STATS_VERSION = 1;
 

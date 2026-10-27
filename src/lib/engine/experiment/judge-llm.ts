@@ -17,16 +17,20 @@
 /**
  * 实验引擎的 LLM Judge 薄封装：发一段 system+user prompt，拿回完整文本。
  *
- * 对齐任务完成度 / 轨迹评估器（opencode-*-evaluator）的现行传输层：
+ * 未保存评估运行策略时，对齐任务完成度 / 轨迹评估器的旧传输层：
  * - 默认直连 ChatOpenAI（无 ephemeral opencode 进程）
  * - EVAL_FORCE_OPENCODE_TRANSPORT=1 强制走旧 ephemeral opencode
  * - 直连失败时回退 opencode（与 task-completion 一致）
+ * 新策略只走直连，由尝试调度层统一控制预算和重试。
  * - 测试可 setJudgeLlmCallerForTest 注入
  */
 
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { experimentSignal } from './cancellation-context';
 import type { ToolCallEvent } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
+import { hasEvaluatorExecutionPolicy, withConfiguredEvaluationTimeout } from './evaluator-execution-policy';
+import { evaluationAttemptSignal, remainingEvaluationTimeMs, trackEvaluationRequest } from './evaluation-attempt';
+import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 
 export type JudgeSamplingProfile = 'canonical-trajectory';
 
@@ -96,6 +100,12 @@ export function hasJudgeLlmTestInjection(): boolean {
 /** 统一入口：引擎只认这一个函数，实现可被测试替换。 */
 export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Promise<string> {
   experimentSignal()?.throwIfAborted();
+  const remaining = remainingEvaluationTimeMs();
+  if (remaining !== undefined) {
+    const configured = { ...req, timeoutMs: remaining, signal: experimentSignal() };
+    // 配置后的尝试只走直连；完整评分的回退不能绕过引擎重试预算。
+    return trackEvaluationRequest(() => injectedCaller ? injectedCaller(username, configured) : directJudgeCaller(username, configured));
+  }
   if (injectedCaller) return injectedCaller(username, req);
 
   const { shouldForceOpencodeEvalTransport } = await import(
@@ -136,7 +146,7 @@ const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
   }
 
   const modelId = (config.model || 'deepseek-v4-flash').trim() || 'deepseek-v4-flash';
-  const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = remainingEvaluationTimeMs() ?? req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const model = new ChatOpenAI({
     apiKey: config.apiKey || 'no-api-key',
     model: modelId,
@@ -146,23 +156,29 @@ const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
     },
     ...buildDirectJudgeSamplingOptions(modelId, req.samplingProfile),
     timeout: timeoutMs,
-    maxRetries: 2,
+    maxRetries: remainingEvaluationTimeMs() === undefined ? 2 : 0,
   });
 
   const response = await model.invoke([
     new SystemMessage(req.system),
     new HumanMessage(req.user),
-  ], { signal: experimentSignal() });
+  ], { signal: req.signal || experimentSignal() });
   const raw = typeof response.content === 'string'
     ? response.content
     : JSON.stringify(response.content);
 
-  if (!String(raw).trim()) throw new Error('judge 未返回任何文本输出');
+  if (!String(raw).trim()) {
+    if (remainingEvaluationTimeMs() !== undefined) throw new JudgeOutputParseError('judge 未返回任何文本输出', '');
+    throw new Error('judge 未返回任何文本输出');
+  }
   return String(raw);
 };
 
 /** 旧路径 / 强制回退：per-call 临时 opencode server。 */
 export const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
+  const configured = hasEvaluatorExecutionPolicy();
+  const executionController = new AbortController();
+  const runtimeSignal = AbortSignal.any([executionController.signal, ...[req.signal, experimentSignal()].filter((s): s is AbortSignal => Boolean(s))]);
   const [
     { AgentInsight },
     { runWithEphemeralOpencodeServer },
@@ -180,7 +196,7 @@ export const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
   ]);
 
   return withBackgroundOpencodeSlot(async () =>
-    runWithEphemeralOpencodeServer({ user: username, verbose: false, isolateHome: true, signal: req.signal }, async (serverUrl: string) => {
+    runWithEphemeralOpencodeServer({ user: username, verbose: false, isolateHome: true, signal: runtimeSignal, requireCleanup: configured }, async (serverUrl: string) => {
       const config = await getActiveConfig(username);
       if (!config || !isModelConnectionReady(config)) {
         throw new Error('未配置可用的评测模型，请到「模型注册」页完善连接信息');
@@ -209,43 +225,55 @@ export const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
       let executionFailure: unknown;
       let timer: ReturnType<typeof setTimeout> | null = null;
       try {
-        const result = await Promise.race([
-          insight.chat(
-            sessionId,
-            {
-              text: req.user,
-              directory: req.directory,
-              agent: 'build',
-              model: {
-                providerID,
-                modelID,
-                apiKey: config.apiKey,
-                baseURL: config.baseUrl,
-                headers: config.headers,
-              },
-              ...(req.modelOptions ? { modelOptions: req.modelOptions } : {}),
-              system: req.system,
-              permission: buildEvaluatorPermissions(),
-            },
-            {
-              onText: (e: { delta: string }) => { raw += e.delta; },
-              onError: (e: Error) => { runtimeError = e; },
-              onTool: (e) => {
-                const secrets = [config.apiKey, ...Object.values(config.headers || {})].filter((s): s is string => typeof s === 'string' && s.length > 4);
-                let encoded = JSON.stringify(e);
-                for (const secret of secrets) encoded = encoded.split(secret).join('[REDACTED]');
-                req.onTool?.(JSON.parse(encoded));
-              },
-            },
-            { streamTimeoutMs: timeoutMs, idleTimeoutMs: timeoutMs, signal: req.signal || experimentSignal() },
-          ),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`LLM 调用超时（${timeoutMs}ms）`)),
-              timeoutMs,
-            );
-          }),
-        ]);
+        const execute = async () => {
+          const attemptSignal = evaluationAttemptSignal();
+          const stop = () => executionController.abort(attemptSignal?.reason);
+          attemptSignal?.addEventListener('abort', stop, { once: true });
+          const executionTimeout = remainingEvaluationTimeMs() ?? timeoutMs;
+          try {
+            return await Promise.race([
+              insight.chat(
+                sessionId,
+                {
+                  text: req.user,
+                  directory: req.directory,
+                  agent: 'build',
+                  model: {
+                    providerID,
+                    modelID,
+                    apiKey: config.apiKey,
+                    baseURL: config.baseUrl,
+                    headers: config.headers,
+                  },
+                  ...(req.modelOptions ? { modelOptions: req.modelOptions } : {}),
+                  system: req.system,
+                  permission: buildEvaluatorPermissions(),
+                },
+                {
+                  onText: (e: { delta: string }) => { raw += e.delta; },
+                  onError: (e: Error) => { runtimeError = e; },
+                  onTool: (e) => {
+                    const secrets = [config.apiKey, ...Object.values(config.headers || {})].filter((s): s is string => typeof s === 'string' && s.length > 4);
+                    let encoded = JSON.stringify(e);
+                    for (const secret of secrets) encoded = encoded.split(secret).join('[REDACTED]');
+                    req.onTool?.(JSON.parse(encoded));
+                  },
+                },
+                { streamTimeoutMs: executionTimeout, idleTimeoutMs: executionTimeout, signal: attemptSignal || runtimeSignal },
+              ),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                  () => { executionController.abort(); reject(new Error(`LLM 调用超时（${executionTimeout}ms）`)); },
+                  executionTimeout,
+                );
+              }),
+            ]);
+          } finally {
+            attemptSignal?.removeEventListener('abort', stop);
+            if (timer) { clearTimeout(timer); timer = null; }
+          }
+        };
+        const result = configured ? await withConfiguredEvaluationTimeout(execute) : await execute();
         raw = (result as { text?: string }).text || raw;
         if (runtimeError) throw runtimeError;
       } catch (error) {
@@ -275,7 +303,10 @@ export const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
       }
 
       if (runtimeError) throw runtimeError;
-      if (!raw.trim()) throw new Error('judge 未返回任何文本输出');
+      if (!raw.trim()) {
+        if (configured) throw new JudgeOutputParseError('judge 未返回任何文本输出', raw);
+        throw new Error('judge 未返回任何文本输出');
+      }
       return raw;
     }),
   {
@@ -283,6 +314,6 @@ export const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
     user: username,
     label: `experiment-judge: ${req.sessionTitle ?? ''}`.trim(),
     silent: true,
-    signal: req.signal || experimentSignal(),
+    signal: runtimeSignal,
   });
 };

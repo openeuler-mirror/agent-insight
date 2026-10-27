@@ -58,6 +58,7 @@ const nextConfig: NextConfig = {
       'features/**',
       'tools/**',
       'docs/**',
+      'design/**',
       'data/**',
     ],
   },

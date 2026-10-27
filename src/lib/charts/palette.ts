@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/foundations.md §2 (图表配色) — Chart Palette (categorical, max 8).
+// design/foundations.md §2 (图表配色) — Chart Palette (categorical, max 8).
 // Used by AgentTraceView for span-type colors and any future chart.
 //
 // SEMANTIC-RESERVED SLOTS — do not assign to non-status categories:

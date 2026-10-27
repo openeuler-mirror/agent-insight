@@ -16,7 +16,7 @@
 
 'use client';
 
-// docs/design/patterns.md §A.5 — unified PageHeader with 4 variants.
+// design/patterns.md §A.5 — unified PageHeader with 4 variants.
 // Slot ⓪ sidebar-toggle is auto-rendered (do not pass).
 // Existing libraries only: lucide-react, @radix-ui/react-dropdown-menu, shadcn Button, date-fns.
 

@@ -26,6 +26,7 @@ import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
 import { normalizeEvaluatorSkillCards } from '@/lib/evaluators/evaluator-skill-service';
 import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
+import { getEvaluatorExecutionCapabilities } from '@/lib/evaluators/evaluator-execution-config.server';
 
 export const dynamic = 'force-dynamic';
 
@@ -74,6 +75,9 @@ export async function GET(request: Request) {
     }
 
     const evaluators = await readUserCustomEvaluators(user);
+    if (searchParams.get('view') === 'execution-config') {
+      return NextResponse.json({ evaluators, executionCapabilities: getEvaluatorExecutionCapabilities(evaluators as EvaluatorCard[]) });
+    }
     return NextResponse.json(evaluators);
   } catch (error) {
     console.error('user-evaluators GET error:', error);

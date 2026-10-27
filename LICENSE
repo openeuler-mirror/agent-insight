@@ -214,8 +214,8 @@ Separately licensed components retain their original terms:
 - integrations/qoder-desktop/: MulanPSL-2.0; see its LICENSE file. The shared
   collector scripts under scripts/ retain the repository license.
 - packages/project-config/yaml.cjs: MIT; see packages/project-config/YAML-LICENSE.
-- docs/developer-guide/vendor/mermaid.min.js and
-  docs/user-guide/vendor/mermaid.min.js: upstream third-party code; see
+- docs/assets/developer-guide/vendor/mermaid.min.js and
+  docs/assets/user-guide/vendor/mermaid.min.js: upstream third-party code; see
   licenses/mermaid-bundle.txt and the notices embedded in these files.
 - src/lib/engine/skill-generation/skills/skill-creator/: retains its upstream
   Apache-2.0 license and existing attribution; see that directory's LICENSE.txt.

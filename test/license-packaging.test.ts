@@ -50,6 +50,46 @@ test('standalone packaging refuses to omit required license material', t => {
   assert.throws(() => prepare.copyLegalFiles(root, path.join(root, 'standalone')), /Missing legal file.*LICENSE/)
 })
 
+test('standalone packaging excludes migrated design files and preserves runtime files', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-docs-package-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const standalone = path.join(root, '.next', 'standalone')
+  const fixtureFiles = {
+    'LICENSE': 'Apache-2.0 fixture',
+    'NOTICE': 'notice fixture',
+    'LICENSE-MIT-Historical': 'historical fixture',
+    'Third_Party_Open_Source_Software_Notice.txt': 'third-party fixture',
+    'licenses/fixture.txt': 'dependency license',
+    'design/platform/example.md': 'internal design retained in source',
+    '.next/standalone/design/platform/example.md': 'traced internal design',
+    '.next/standalone/docs/example.md': 'traced public documentation',
+    '.next/standalone/server.js': 'server fixture',
+    '.next/static/runtime.js': 'static fixture',
+    'scripts/llamaindex_extension/src/agent_insight_llamaindex/__init__.py': 'collector fixture',
+    'scripts/llamaindex_extension/src/agent_insight_llamaindex/_bootstrap/sitecustomize.py': 'bootstrap fixture',
+    'docs/zh/how-to/observability/llamaindex-trace-collector.md': 'collector README fixture',
+  }
+  for (const [relative, content] of Object.entries(fixtureFiles)) {
+    const file = path.join(root, relative)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, content)
+  }
+  fs.cpSync(
+    path.join(process.cwd(), 'skills', 'agent-debug-diagnosis'),
+    path.join(root, 'skills', 'agent-debug-diagnosis'),
+    { recursive: true },
+  )
+
+  assert.equal(prepare.ensureStandalonePackage(root), standalone)
+  assert.equal(fs.existsSync(path.join(standalone, 'design')), false, 'internal designs must not be shipped')
+  assert.equal(fs.existsSync(path.join(standalone, 'docs')), false)
+  assert.equal(fs.readFileSync(path.join(root, 'design/platform/example.md'), 'utf8'), fixtureFiles['design/platform/example.md'])
+  assert.equal(fs.readFileSync(path.join(standalone, 'server.js'), 'utf8'), 'server fixture')
+  assert.equal(fs.readFileSync(path.join(standalone, 'scripts/llamaindex_extension/README.md'), 'utf8'), 'collector README fixture')
+  assert.equal(fs.existsSync(path.join(standalone, 'skills/agent-debug-diagnosis/scripts/detector_runner.py')), true)
+  assert.equal(fs.readFileSync(path.join(standalone, 'licenses/fixture.txt'), 'utf8'), 'dependency license')
+})
+
 test('Qoder VSIX keeps its Mulan license and carries the collector Apache and historical MIT notices', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qoder-licenses-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))

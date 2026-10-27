@@ -219,3 +219,24 @@ describe('ras-reliability-evaluator', () => {
     assert.match(String(output.summary || ''), /Judge 未能产出有效判定/)
   })
 })
+
+it('configured RAS retries technical/parse errors but not fault-not-confirmed results', async () => {
+  const { withEvaluatorExecution } = await import('@/lib/engine/experiment/evaluator-execution-policy')
+  let calls = 0
+  setJudgeLlmCallerForTest(async () => {
+    calls++
+    if (calls === 1) throw Object.assign(new Error('评测模型 judge 临时不可用'), { status: 503 })
+    if (calls === 2) return 'invalid-json'
+    return judgmentJson('detection-recovery', {}, '没有故障证据', 'missing')
+  })
+  const result = await withEvaluatorExecution({ attemptTimeoutSeconds: 30, maxRetries: 2 }, new AbortController().signal,
+    () => runRasReliabilityPreset(RAS_DETECTION_RECOVERY_PRESET_ID, 'ras-config-test', baseCtx), { retryDelaysMs: [0, 0] })
+  assert.equal(calls, 3)
+  assert.equal(result.score, undefined)
+  assert.equal((result.evidence as { json?: Record<string, unknown> })?.json?.note, 'fault_not_detected_no_score')
+  calls = 0
+  setJudgeLlmCallerForTest(async () => { calls++; return 'invalid-json' })
+  await assert.rejects(withEvaluatorExecution({ attemptTimeoutSeconds: 30, maxRetries: 0 }, new AbortController().signal,
+    () => runRasReliabilityPreset(RAS_DETECTION_RECOVERY_PRESET_ID, 'ras-config-test', baseCtx)))
+  assert.equal(calls, 1)
+})

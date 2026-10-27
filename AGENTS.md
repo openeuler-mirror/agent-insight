@@ -48,18 +48,18 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 
 两个层级：
 
-- **必须写设计文档**：涉及数据模型变更（Prisma schema）或新增 API 路由。落到 [`docs/design/<topic>/`](docs/design/)（按 `phase1 需求分析 / phase2 需求设计 / phase3 开发计划` 组织），并在 [需求清单](docs/design/README.md) 追加一行，对齐后再动手。**Agent RAS 相关需求**写到 [`docs/agent-ras/designs/features/`](docs/agent-ras/designs/features/)（扁平 `*.md`），并在 [`docs/agent-ras/README.md`](docs/agent-ras/README.md) 与全仓 [需求清单](docs/design/README.md) 同步登记。
+- **必须写设计文档**：涉及数据模型变更（Prisma schema）或新增 API 路由。落到 [`design/<业务领域>/<topic>/`](design/)（按 `phase1 需求分析 / phase2 需求设计 / phase3 开发计划` 组织），并在 [需求清单](design/README.md) 追加一行，对齐后再动手。**Agent RAS 相关需求**写到 [`design/reliability/agent-ras/`](design/reliability/agent-ras/)，已有单篇保留单篇，新主题按需建目录；在 [RAS 导航](docs/zh/explanation/reliability/agent-ras/README.md) 与全仓 [需求清单](design/README.md) 同步登记。
 - **先讲思路对齐**（不一定写文档）：实现路径有多种合理选择、跨多个模块、需要引入新抽象、或自己感到"这事不止改几行"—— 先简述方案 + 列 trade-off，等用户确认再写代码。用户也会主动说"这是大需求"作为信号。
 
 小改动（bug fix、文案、单文件局部调整）直接动手，事后说明即可。
 
-**改完功能后，必须同步刷新对应指南。** `docs/` 下有两套面向读者的文档，功能变更只要波及它们就要连带更新，别让读者读到过期信息：
+**改完功能后，必须同步刷新对应指南。** 公开文档按 `docs/<语言>/<类别>/<业务领域>/` 组织：中文为权威源，英文跟随；类别为 tutorial、how-to、reference、explanation，业务领域为 observability、evaluation、diagnosis、optimization、reliability、platform。迁移遗留的翻译、拆分和内容问题见 [迁移审查清单](design/platform/docs-migration/migration-review.md)。
 
-- 改动影响**用户能感知的东西**（新功能 / 交互或流程变化 / 新增配置项 / 概念或术语调整）→ 更新 [`docs/user-guide/`](docs/user-guide/) 对应页。
-- 改动影响**架构 / 模块 / API 与契约 / 数据流 / 扩展方式** → 更新 [`docs/developer-guide/`](docs/developer-guide/) 对应页（可先看 [`INDEX.md`](docs/developer-guide/INDEX.md) 找页）。
+- 改动影响**用户能感知的东西**（新功能 / 交互或流程变化 / 新增配置项 / 概念或术语调整）→ 更新 [教程](docs/zh/tutorial/README.md)、[操作指南](docs/zh/how-to/README.md)；参数与概念分别更新参考和解释。
+- 改动影响**架构 / 模块 / API 与契约 / 数据流 / 扩展方式** → 更新 [解释](docs/zh/explanation/README.md)、[参考](docs/zh/reference/README.md) 或开发操作指南（可先看 [开发者导航](docs/zh/explanation/platform/developer-index.md) 找页）。
 - 两边都影响就两边都改。判断口径很简单：**别人照旧文档去操作 / 理解会被带偏，就必须改。**
 
-**开发者指南索引保持稳定**：`docs/developer-guide/INDEX.md` 只维护目录导航和术语表。仅当指南页面增删、重命名、导航目标或术语本身变化时修改它；一般功能变更只更新对应指南页。不要在 INDEX 中记录 commit / 分支 / 日期、working-tree overlay 或逐次变更摘要。审查 MR 时按此规则检查 INDEX 的改动，不符合条件的改动请作者移回对应指南页。
+**开发者指南索引保持稳定**：`docs/zh/explanation/platform/developer-index.md` 只维护目录导航和术语表。仅当指南页面增删、重命名、导航目标或术语本身变化时修改它；一般功能变更只更新对应指南页。不要在 INDEX 中记录 commit / 分支 / 日期、working-tree overlay 或逐次变更摘要。审查 MR 时按此规则检查 INDEX 的改动，不符合条件的改动请作者移回对应指南页。
 
 ## 5. 改动验证
 
@@ -76,11 +76,11 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 
 ### 设计系统：用共享令牌，别再造局部色板
 
-前端视觉规范见 [`docs/developer-guide/08-design-system.md`](docs/developer-guide/08-design-system.md)，机器可读令牌见 [`docs/developer-guide/design-tokens.json`](docs/developer-guide/design-tokens.json)。**唯一真源是** [`src/app/globals.css`](src/app/globals.css) 的 `:root` / `[data-theme='dark']`（中性灰阶 + 单一 indigo 主色 + 3 个语义状态色）。
+前端视觉规范见 [`docs/zh/reference/platform/design-system.md`](docs/zh/reference/platform/design-system.md)，机器可读令牌见 [`docs/zh/reference/platform/design-tokens.json`](docs/zh/reference/platform/design-tokens.json)。**唯一真源是** [`src/app/globals.css`](src/app/globals.css) 的 `:root` / `[data-theme='dark']`（中性灰阶 + 单一 indigo 主色 + 3 个语义状态色）。
 
 - 写新样式一律引用共享令牌（`var(--foreground*)` / `--color-*` / `--radius-*` / `--primary` …），优先复用 [`ui/*`](src/components/ui) 组件与 `globals.css` 里的 `.ai-*` 工具类。
 - **不要新建** `--<feature>-*` 局部色板（历史遗留的 `--sk-*` / `--ev-*` / `--sa-*` / `--gh-*` 是设计漂移，正在收敛，别再加）。主色只用于交互态，不要拿来做装饰。
-- 改了令牌或视觉规范 → 同步 `08-design-system.md` 与 `design-tokens.json`。
+- 改了令牌或视觉规范 → 同步 `docs/zh/reference/platform/design-system.md` 与同目录 `design-tokens.json`。
 
 ### Skill 用 `name` 而非 `id` 做对外 key
 
@@ -94,9 +94,9 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 标准 Next.js 结构（`src/app` / `src/components` / `src/lib` / `prisma/`）按常规理解即可。下列是项目特有的：
 
 - `skills/` —— 内置 Skill 定义，每个 skill 一个子目录，含 `SKILL.md`。
-- `docs/developer-guide/` —— 面向开发者 / LLM 的架构与契约指南（入口 [`INDEX.md`](docs/developer-guide/INDEX.md)）；`docs/user-guide/` —— 面向使用者的操作指南；`docs/design/` —— 需求 / 设计文档（见 [需求清单](docs/design/README.md)）。
-- `docs/agent-ras/` —— Agent RAS 文档统一入口（`designs/` 架构与特性、`guides/` 使用指导）；源码在仓根 `agent_ras/`。
-- `docs/agent-fault-injection/` —— 故障注入文档；源码在仓根 `agent_fault_injection/`。
+- `docs/` —— 公开文档统一入口（[导航](docs/README.md)），按语言、四类用途和业务领域组织。只有 tutorial 正文用数字前缀，其余使用小写英文语义名；一个主题一份正文，跨分类通过链接关联。
+- `design/` —— 内部需求、设计、开发计划和历史资料（[需求清单](design/README.md)），按相同业务领域组织；实现完成后设计原地保留，当前行为同步到公开文档。
+- [Agent RAS 导航](docs/zh/explanation/reliability/agent-ras/README.md) 与 [故障注入导航](docs/zh/explanation/reliability/agent-fault-injection/README.md) —— 串联四类文档中 reliability 下的专题；内部设计在 `design/reliability/`，源码仍为仓根 `agent_ras/`、`agent_fault_injection/`。
 - `features/` —— 单 feature 的设计草稿（比 plan 更轻量）。
 - `scripts/develop_start.sh` —— 验证流程要用，不要换别的方式启 dev server。
 

@@ -27,7 +27,7 @@ const { collectorEnvironment, traceApiKey } = require('../xgovernor/credentials.
 const { command } = require('../xgovernor/dependency-manager.cjs')
 const { artifactIdentity } = require('../xgovernor/artifact-identity.cjs')
 const installedConnectionConfig = path.resolve(__dirname, '../../opencode-connection-config.cjs')
-const { readOpenCodeConfig, checkOpenCodeV2Model } = require(fs.existsSync(installedConnectionConfig)
+const { checkOpenCodeModelConfig } = require(fs.existsSync(installedConnectionConfig)
   ? installedConnectionConfig : path.resolve(__dirname, '../../../../scripts/opencode-connection-config.cjs'))
 
 const issue = (code, message) => ({ code, message })
@@ -54,6 +54,7 @@ function piSdkModule() {
   return null
 }
 function createServices({ cfg, client, signal, env = process.env, command: runCommand = command } = {}) {
+  const nativeEnv = { ...env }
   const setup = readSetup()
   env = collectorEnvironment({ ...env, ...Object.fromEntries(Object.entries(setup.context || {}).filter(([k]) => k !== 'home')),
     ...(setup.context?.home ? { HOME: setup.context.home, AGENT_INSIGHT_USER_HOME: setup.context.home } : {}) })
@@ -114,28 +115,10 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
           }
         }
       } else if (context.platform === 'opencode') {
-        if (runtime?.major === 2) {
-          checkOpenCodeV2Model(which('opencode'), context.model, { env, home })
-          return issues
-        }
-        const config = readOpenCodeConfig(which('opencode'), { env, home })
-        const selected = context.model || config.model
-        if (!selected) issues.push(issue('MODEL_CONFIGURATION_MISSING', '请为实验选择模型，或在执行机 OpenCode 中配置默认模型。'))
-        else {
-          const provider = selected.split('/')[0]
-          const authFile = path.join(env.XDG_DATA_HOME || path.join(home, '.local/share'), 'opencode/auth.json')
-          let auth = {}
-          try { auth = JSON.parse(fs.readFileSync(authFile, 'utf8')) } catch {}
-          const configured = config.provider?.[provider]?.options
-          const variable = `${provider.replace(/[^a-z0-9]/gi, '_').toUpperCase()}_API_KEY`
-          const nonempty = value => typeof value === 'string' && Boolean(value.trim())
-          const credential = auth[provider]
-          const authenticated = credential?.type === 'oauth' ? nonempty(credential.refresh) || nonempty(credential.access)
-            : credential?.type === 'wellknown' ? nonempty(credential.key) && nonempty(credential.token) : nonempty(credential?.key)
-          if (!authenticated && !nonempty(configured?.apiKey) && !nonempty(env[variable]) && !configured?.baseURL?.match(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::|\/)/)) {
-            issues.push(issue('MODEL_CREDENTIAL_MISSING', '执行机未找到所选模型的认证配置，请使用客户端运行账号执行 opencode auth login 或配置对应 provider。'))
-          }
-        }
+        const nativeHome = nativeEnv.AGENT_INSIGHT_USER_HOME || nativeEnv.HOME || os.homedir()
+        let cwd = cfg.workspaceBase || nativeHome
+        while (!fs.existsSync(cwd) && path.dirname(cwd) !== cwd) cwd = path.dirname(cwd)
+        checkOpenCodeModelConfig(which('opencode'), { agent: context.agent, model: context.model }, { env: nativeEnv, home: nativeHome, cwd })
       }
     } catch (cause) {
       signal?.throwIfAborted()

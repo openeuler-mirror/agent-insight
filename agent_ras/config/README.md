@@ -4,8 +4,8 @@
 
 | 文件 | 用途 |
 |------|------|
-| [`agent_ras_config.default.yaml`](./agent_ras_config.default.yaml) | 跨平台能力默认（`enabled` / `detectors` / `recovery`）；**新增能力时改此文件** |
-| [`agent_ras.inproc.example.json`](./agent_ras.inproc.example.json) | 同进程配置**形状**说明；`service.*` 使用占位路径；加域时**不要**改 |
+| [`agent_ras_config.default.yaml`](agent_ras_config.default.yaml) | 跨平台能力默认（`enabled` / `detectors` / `recovery`）；**新增能力时改此文件** |
+| [`agent_ras.inproc.example.json`](agent_ras.inproc.example.json) | 同进程配置**形状**说明；`service.*` 使用占位路径；加域时**不要**改 |
 
 正常情况下不要手工复制本机配置，直接执行：
 

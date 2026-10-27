@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
+import { EvaluatorRunConfigValidationError } from '@/lib/evaluators/evaluator-run-config';
 import { TraceGenerationError } from '@/lib/engine/experiment/trace-generation';
 import {
   DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
@@ -82,6 +83,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
       name: typeof body.name === 'string' ? body.name : undefined,
       agentName: typeof body.agentName === 'string' ? body.agentName : undefined,
       evaluatorIds: Array.isArray(body.evaluatorIds) ? body.evaluatorIds.map(String) : undefined,
+      evaluatorConfigs: body.evaluatorConfigs,
+      evaluatorExecutionConfig: body.evaluatorExecutionConfig,
       caseIds: Array.isArray(body.caseIds) ? body.caseIds.map(String) : undefined,
       traceSource: body.traceSource === 'existing' ? 'existing' : 'generate',
       traceGenerationTarget: body.traceSource === 'existing' || !body.traceGenerationTarget
@@ -113,6 +116,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
     console.error('[skill-workbench experiments POST] failed:', error);
+    if (error instanceof EvaluatorRunConfigValidationError) return NextResponse.json({ error: error.message }, { status: 400 });
     if (error instanceof TraceGenerationError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.httpStatus });
     return NextResponse.json({ error: '创建 Skill 实验失败' }, { status: 500 });
   }

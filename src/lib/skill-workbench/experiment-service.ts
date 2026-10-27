@@ -16,6 +16,7 @@
 
 import { freezeCustomEvaluators, customEvaluatorsForReuse, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service';
 import { randomUUID } from 'crypto';
+import { prepareExperimentEvaluatorConfigs } from '@/lib/evaluators/evaluator-execution-config.server';
 
 import { DEFAULT_SELECTED_PRESET_IDS } from '@/lib/evaluators/preset-evaluators';
 import { defaultSkillExperimentName } from '@/lib/engine/experiment/experiment-name';
@@ -163,6 +164,8 @@ export async function createWorkbenchExperiment(input: {
   name?: string;
   agentName?: string;
   evaluatorIds?: string[];
+  evaluatorConfigs?: unknown;
+  evaluatorExecutionConfig?: unknown;
   caseIds?: string[];
   traceSource?: 'existing' | 'generate';
   traceGenerationTarget?: { host: string; platform: string; model: string | null } | null;
@@ -227,6 +230,7 @@ export async function createWorkbenchExperiment(input: {
   if (evaluatorIds.some((id) => !isSkillExperimentEvaluatorEligible(input.preset, id))) {
     return { kind: 'invalid_evaluators' as const };
   }
+  const evaluatorConfigsJson = await prepareExperimentEvaluatorConfigs(input.user, evaluatorIds, input.evaluatorConfigs, input.evaluatorExecutionConfig);
   const executionTarget = await validateSkillExecutionTarget(input.user, input.executionTarget, input.preset === 'trigger');
   if (input.preset === 'trigger' && !executionTarget.model) return { kind: 'invalid_trigger_model' as const };
   const triggerSkills = input.preset === 'trigger'
@@ -273,6 +277,7 @@ export async function createWorkbenchExperiment(input: {
         type: input.preset === 'skill-ab' ? 'skill' : 'single',
         agentName: input.agentName?.trim() || input.skillName,
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
+        evaluatorConfigsJson,
         status: 'draft',
         scope: 'skill-workbench',
         skillName: input.skillName,
@@ -400,7 +405,7 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
     where: { id: sourceExperimentId, user, scope: 'skill-workbench', deletedAt: null },
     select: {
       id: true, skillName: true, skillVersion: true, preset: true,
-      agentName: true, configSnapshotJson: true, evaluatorIdsJson: true,
+      agentName: true, configSnapshotJson: true, evaluatorIdsJson: true, evaluatorConfigsJson: true,
     },
   });
   if (!source || !WORKBENCH_EXPERIMENT_PRESETS.includes(source.preset as WorkbenchExperimentPreset)) {
@@ -470,6 +475,7 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
       where: { id: result.experiment.id },
       data: {
         sourceExperimentId: source.id,
+        evaluatorConfigsJson: source.evaluatorConfigsJson,
         configSnapshotJson: JSON.stringify({ ...snapshot, boundSide: result.configSnapshot.boundSide, caseIds, grayscaleTaskId: result.grayscaleTask.id }),
       },
     }),

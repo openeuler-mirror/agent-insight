@@ -83,6 +83,39 @@ async function assertStatus(id: string, status: string) {
   assert.equal((await prisma.benchmarkExperimentBinding.findUnique({ where: { experimentId: id } }))?.schedulerStatus, status)
 }
 
+test('experiment detail projects current execution and latest evaluation progress without raw payloads', async (t) => {
+  const f = await fixture(t, [{ run: 'evaluation_failed', result: 'failed' }])
+  const reportedAt = new Date('2026-10-26T06:00:00Z')
+  await prisma.benchmarkCaseRun.update({ where: { id: f.runIds[0] }, data: {
+    lastProgressAt: reportedAt,
+    progressJson: JSON.stringify({ stage: 'cleaning', progress: { message: 'private execution message', stageStartedAt: reportedAt.toISOString() } }),
+  } })
+  for (const attemptNo of [1, 2]) {
+    await prisma.benchmarkEvaluation.create({ data: {
+      id: `${f.id}-evaluation-${attemptNo}`, caseRunId: f.runIds[0], attemptNo,
+      status: 'normalization_failed', adapterKey: 'swe-bench', evaluatorKey: 'swe-bench',
+      requestJson: '{}', requestDigest: 'fixture', callbackBaseUrl: 'http://fixture.invalid', timeoutSeconds: 60,
+      progressJson: JSON.stringify({ stage: attemptNo === 2 ? 'uploading_evidence' : 'running_harness', progress: { message: 'private evaluation message' } }),
+      lastProgressAt: reportedAt, finishedAt: reportedAt, failureMessage: `attempt ${attemptNo} failed`,
+    } })
+  }
+  const { GET } = await import('../src/app/api/experiments/[id]/route')
+  const response = await GET(new Request(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`),
+    { params: Promise.resolve({ id: f.id }) })
+  assert.equal(response.status, 200)
+  const detail = await response.json()
+  const benchmark = detail.cases[0].benchmark
+  assert.equal(benchmark.progressStage, 'cleaning')
+  assert.equal(benchmark.progressDetails.execution.lastProgressAt, reportedAt.toISOString())
+  assert.equal(benchmark.progressDetails.execution.stageStartedAt, reportedAt.toISOString())
+  assert.equal(benchmark.progressDetails.evaluation.stage, 'uploading_evidence')
+  assert.equal(benchmark.progressDetails.evaluation.failureMessage, 'attempt 2 failed')
+  assert.equal(benchmark.progressDetails.evaluation.finishedAt, reportedAt.toISOString())
+  assert.ok(benchmark.reference)
+  assert.equal(JSON.stringify(benchmark).includes('private execution message'), false)
+  assert.equal(JSON.stringify(benchmark).includes('private evaluation message'), false)
+})
+
 for (const scenario of [
   { name: 'the only Case failed', cases: [{ run: 'execution_failed', result: 'failed' }], status: 'failed' },
   { name: 'successful evaluations and execution failures coexist', cases: [{ run: 'evaluated', result: 'done' }, { run: 'execution_failed', result: 'failed' }], status: 'partial' },
@@ -174,6 +207,8 @@ for (const legacy of [false, true]) {
       assert.equal(detail.reusableConfig.executionTarget.platform, 'pi-mcts')
       assert.equal(detail.cases[0].taskId, sessionId)
       assert.equal(detail.cases[0].executionId, execution.id)
+      assert.equal(detail.cases[0].benchmark.traceId, traceId)
+      assert.equal(detail.cases[0].benchmark.traceTaskId, sessionId)
       assert.equal((await prisma.experimentCase.findUniqueOrThrow({ where: { id: run.experimentCaseId } })).taskId, traceId)
     }
     await lifecycle.finalizeBenchmarkCase({ caseRunId: run.id, runSupplementalEvaluators: false, continueCases: false })

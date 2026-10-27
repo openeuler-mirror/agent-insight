@@ -19,7 +19,7 @@
 /**
  * Skills 分析 — header-context strip
  *
- * 依据 docs/design/patterns.md §A.5.3 `detail-object` 变体 + 原型
+ * 依据 design/patterns.md §A.5.3 `detail-object` 变体 + 原型
  * refs/ui-2026-05/.../agent-insight-prototype-统一导航栏和skill选项.html
  * `data-page="analysis"` 的 .header-context 段落。
  *

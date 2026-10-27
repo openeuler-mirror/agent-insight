@@ -402,7 +402,7 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(generation, /select: \{ interactions: true, endTime: true \}/);
   assert.doesNotMatch(generation, /query:\s*input\.item\.input/);
   assert.doesNotMatch(generation, /if \(!dispatched\.delivered\)/);
-  assert.match(retryRoute, /generateExperimentTraces\(genericRequest, \{ forceNewTrace: true \}\)/);
+  assert.match(retryRoute, /generateExperimentTraces\(genericRequest, \{ forceNewTrace: true, reservedAttemptIds \}\)/);
   assert.match(retryRoute, /prepareGeneratedTraceRetry\(id, caseId\)/);
   assert.ok(
     retryRoute.indexOf('if (genericRequest)') < retryRoute.indexOf('const failedResults'),

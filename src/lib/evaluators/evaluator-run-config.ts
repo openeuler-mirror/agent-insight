@@ -301,7 +301,7 @@ export function parseStoredEvaluatorRunConfigs(
     throw new EvaluatorRunConfigValidationError('实验评估器配置必须是对象');
   }
   if ('schemaVersion' in parsed || 'configs' in parsed) {
-    if (parsed.schemaVersion !== 1) {
+    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) {
       throw new EvaluatorRunConfigValidationError('不支持的实验评估器配置版本');
     }
     return normalizeEvaluatorRunConfigs(parsed.configs, selectedEvaluatorIds);

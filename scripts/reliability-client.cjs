@@ -39,6 +39,7 @@ const { connectWebSocket } = require('./ws-client.cjs')
 const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 const { prepareSkillExperimentWorkspace } = require('./skill-experiment-workspace.cjs')
 const { inspectOpencodeRuntime } = require('./opencode-runtime.cjs')
+const { checkOpenCodeModelConfigAsync } = require('./opencode-connection-config.cjs')
 const { prepareOpencodeEventChannel, createOpencodeEventReader } = require('./opencode-experiment-events.cjs')
 const { createOrdinaryExperimentStore } = require('./ordinary-experiment-state.cjs')
 const { extractStructuredAgentError, sanitizeAgentDiagnostic, classifyAgentExitFailure, createAgentRunError, createOpencodeFailureMonitor } = require('./agent-run-diagnostics.cjs')
@@ -1673,9 +1674,19 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   }
   let discardWorkspace = false
   try {
+    if (payload.platform === 'opencode' && executable) {
+      const cwd = isolated?.cwd || path.resolve(payload.cwd || cfg.workspaceBase)
+      fs.mkdirSync(cwd, { recursive: true })
+      const checked = await checkOpenCodeModelConfigAsync(executable, { agent: payload.agent, model: payload.model }, {
+        cwd, env: { ...process.env, ...isolated?.env, PWD: cwd }, signal: payload.signal,
+      })
+      payload = { ...payload, model: checked.model }
+      payload.signal?.throwIfAborted()
+    }
     return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
   } catch (error) {
     discardWorkspace = error.code === 'MODEL_UNAVAILABLE'
+    if (payload.signal?.aborted && error.code !== 'EXECUTION_CANCELLED') throw createAgentRunError('EXECUTION_CANCELLED', '实验已取消')
     throw error
   } finally { isolated?.cleanup(discardWorkspace || Boolean(payload.signal?.aborted)) }
 }
@@ -2613,9 +2624,9 @@ async function main() {
     tryAcquireSlot: tryAcquireExecutionSlot,
     releaseSlot: releaseExecutionSlot,
     agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
-    runAgent: (payload) => payload.platform === 'pi-mcts'
+    runAgent: (payload) => ['pi-mcts', 'xiao-mcts'].includes(payload.platform)
       ? mctsRuntime().runMctsBenchmarkCase(cfg, payload)
-      : runExperimentCase(cfg, payload),
+      : runExperimentCase(cfg, payload, payload.onTraceId),
     logError: (...args) => logErr(...args),
   })
   await benchmarkExecutor.recover()

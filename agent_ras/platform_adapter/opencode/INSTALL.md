@@ -2,9 +2,9 @@
 
 ## Capability
 
-See [docs/agent-ras/designs/modules/platform-adapter.md](../../../docs/agent-ras/designs/modules/platform-adapter.md) and [docs/agent-ras/designs/architecture.md](../../../docs/agent-ras/designs/architecture.md).
+See [docs/zh/explanation/reliability/agent-ras/modules/platform-adapter.md](../../../docs/zh/explanation/reliability/agent-ras/modules/platform-adapter.md) and [docs/zh/explanation/reliability/agent-ras/architecture.md](../../../docs/zh/explanation/reliability/agent-ras/architecture.md).
 
-- **Has**: `message.part.updated` / tool hooks → `ras_runtime`/`core`（L1/L2）；恢复经 L3 [`host_control.js`](./host_control.js)：
+- **Has**: `message.part.updated` / tool hooks → `ras_runtime`/`core`（L1/L2）；恢复经 L3 [`host_control.js`](host_control.js)：
   - `abort_stream` → `session.abort`（兼容 SDK **v2** `{ sessionID }` 与 **v1** `{ path: { id } }`，按序尝试）+ 可选 `session.interrupt` API + 双次 `tui.executeCommand(session.interrupt)`；限频重试与升级告警
   - `emit_notice` → `tui.showToast({ message, variant, title?, duration? })`（扁平字段）→ fallback `tui.publish` / `noReply` prompt；**正文原样来自 core**，禁止展示 anomaly.summary
   - `push_steering` → idle 后 `session.prompt({ sessionID, parts })`（正文原样，含 `<system-reminder>`）；若 abort 已先到 idle，则立即注入（避免竞态丢恢复）
@@ -90,7 +90,7 @@ opencode    # 可直接启动；桥接层会 RTLD_GLOBAL 加载 libpython，无�
 ### L3 语义判定（仅 inproc）
 
 1. `transport: inproc`；`semantic_content_enabled` **默认 true**（显式 `false` 才关 L3）
-2. 安装脚本已写入 `agent.ras-judge`（或手动合并 [`ras_judge_agent.json`](./ras_judge_agent.json)）
+2. 安装脚本已写入 `agent.ras-judge`（或手动合并 [`ras_judge_agent.json`](ras_judge_agent.json)）
 3. 观察 `observe` → `skill_requests` → 独立 Judge session → `skill_result` → abort/notice/steer  
    （Judge **后台单飞**，不阻塞主会话流式输出；同 request 只下发一次）
 > OpenCode **1.18+** 流式正文走 `message.part.delta`；仅订阅 `part.updated` 会在整段结束才检测，无法及时 `abort`。当前插件两者都听。

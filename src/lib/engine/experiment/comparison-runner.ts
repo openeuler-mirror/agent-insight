@@ -259,6 +259,7 @@ export interface CreateComparisonParams {
   variableDimension: string;
   groups: ComparisonGroupInput[];
   evaluatorIds: string[];
+  evaluatorConfigsJson?: string;
   watchMode?: boolean;
 }
 
@@ -290,6 +291,7 @@ export async function createComparisonExperiment(params: CreateComparisonParams)
       configSnapshotJson: JSON.stringify({ ...params.configSnapshot, customEvaluatorSnapshots: params.frozenCustomEvaluators ?? await freezeCustomEvaluators(user, evaluatorIds) }),
       scope: '',
       evaluatorIdsJson: JSON.stringify(evaluatorIds),
+      evaluatorConfigsJson: params.evaluatorConfigsJson ?? '{}',
       status: 'draft',
       groups: {
         create: groups.map((g) => ({ key: g.key, variableValue: g.value })),
