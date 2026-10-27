@@ -103,7 +103,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
     })
     await prisma.experiment.update({
       where: { id: result.id },
-      data: { sourceExperimentId: source.id },
+      data: { sourceExperimentId: source.id, evaluatorConfigsJson: source.evaluatorConfigsJson },
     })
     return { id: result.id, scope: 'benchmark' }
   }

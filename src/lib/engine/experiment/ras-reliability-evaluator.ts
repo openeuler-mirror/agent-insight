@@ -19,6 +19,7 @@
  * 无活跃评测模型或 Judge 失败时返回 warn（无总分），不静默规则满分。
  */
 import { z } from 'zod'
+import { hasEvaluatorExecutionPolicy, runConfiguredEvaluationStage } from './evaluator-execution-policy'
 import { prisma } from '@/lib/storage/prisma'
 import {
   normalizeEvaluatorOutput,
@@ -325,9 +326,12 @@ export async function runRasReliabilityPreset(
   }, profile)
 
   try {
-    const judgment = await invokeSpecializedJudge(user, prompt, rasReliabilityJudgeSchema(profile))
-    return buildRasReliabilityEvaluatorOutput({ evaluatorId, expectedFault, events, judgment })
+    return await runConfiguredEvaluationStage(async () => {
+      const judgment = await invokeSpecializedJudge(user, prompt, rasReliabilityJudgeSchema(profile))
+      return buildRasReliabilityEvaluatorOutput({ evaluatorId, expectedFault, events, judgment })
+    })
   } catch (error) {
+    if (hasEvaluatorExecutionPolicy()) throw error
     const message = error instanceof Error ? error.message : String(error || '')
     if (
       /未配置可用的评测模型|No active model|模型注册/i.test(message)
