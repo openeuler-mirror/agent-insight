@@ -44,3 +44,9 @@
 - 第 7–15 项按当前源码更新说明；历史问题与现行行为分开，缺失的测量依据明确标记，业务代码、依赖、接口和配置逻辑保持不变。
 - 与本阶段开始时的文件摘要比较，确认仅指定四项删除；检查本地引用与活动导航，验证 LlamaIndex ZIP README、standalone 文档复制及 npm 包清单，并运行隔离全量测试。
 - 首次迁移路径映射和测试证据保留为历史记录，清理结果写入 migration-review.md 及 verification.json 的 approvedCleanup；不自动提交或推送。
+
+## 6. 提交前审查补充
+
+- 合入明确目标 upstream/master 的最新示例数据脱敏提交，保留其脚本与数据清理。
+- 为迁出的根 design 同步 Next 文件追踪排除和 prepack 清理规则；用真实 standalone 目录验证排除内部设计而不删除源码、运行文件和许可材料。
+- 完成独立审查与同步后全量验证，结果记录到 verification.json 的 submissionValidation。

@@ -133,5 +133,58 @@
     "browserVerified": false,
     "dockerImageBuilt": false,
     "published": false
+  },
+  "submissionValidation": {
+    "baseCommit": "4e878243821ba59c8db99e17332218e5c85e0b86",
+    "testedCommit": "bd7c892107123d51a86c3f87a62f4af1b382d07d",
+    "fullSuite": {
+      "tests": 4330,
+      "pass": 4309,
+      "fail": 3,
+      "cancelled": 0,
+      "skipped": 18
+    },
+    "knownFailingTests": [
+      "页面禁用编辑入口，公开 PATCH 执行服务端保护",
+      "OTel trace adapter registry selects Hermes before the generic fallback",
+      "Qoder framework and OTLP registries expose plugin onboarding and snapshot replacement"
+    ],
+    "docsAndPackagingFocused": {
+      "tests": 22,
+      "pass": 21,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1
+    },
+    "npmPack": {
+      "files": 726,
+      "designFiles": [],
+      "llamaIndexGuide": true
+    },
+    "documentation": {
+      "brokenLocalReferences": 80,
+      "newBrokenLocalReferences": 0,
+      "navigationPages": 98,
+      "missingNavigationPages": []
+    },
+    "scope": {
+      "base": "4e878243821ba59c8db99e17332218e5c85e0b86",
+      "head": "bd7c892107123d51a86c3f87a62f4af1b382d07d",
+      "commentOnly": 40,
+      "executableChanges": [
+        "next.config.ts",
+        "scripts/prepare-npm-package.js",
+        "src/app/api/ingest/setup/llamaindex-collector/archive.ts"
+      ]
+    },
+    "standaloneDesignRegression": {
+      "failedBeforeFix": true,
+      "passedAfterFix": true,
+      "sourceDesignAndRuntimeFilesPreserved": true
+    },
+    "review": "No remaining blocking findings after tracing and standalone exclusion fix",
+    "browserVerified": false,
+    "fullNextBuildPerformed": false,
+    "dockerImageBuilt": false
   }
 }

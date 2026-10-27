@@ -128,3 +128,13 @@
 - npm dry-run 共 728 个文件，LlamaIndex 指南仍包含在包中，内部 design 和本次删除文件均未进入包。
 - 本地目标引用、98 个活动导航与授权删除范围的检查结果见 verification.json 的 approvedCleanup；检查不包含所有外部 URL 和浏览器锚点解析。
 - 文档站页脚按 [Mintlify footer 配置](https://www.mintlify.com/docs/organize/settings-structure#footer)使用文本链接；未启动文档站或应用 dev server，未在浏览器中验证，也未重新构建 Docker 镜像。
+
+## 提交前同步与独立审查
+
+已合入 `upstream/master` 的 `4e878243`，保留上游示例数据脱敏和旧 mock 脚本清理。本次 PR 相对该基线的 package.json 差异仅为 LlamaIndex 文档 files 路径，scripts 和依赖没有新增改动。
+
+审查发现内部设计移到根 `design/` 后遗漏 standalone 排除：源码文件追踪确实捕获了该目录内两份 YAML，且 prepack 原先不会清理该目录。已在 `next.config.ts` 的文件追踪规则与 `scripts/prepare-npm-package.js` 的产物清理列表中补齐 design。新增真实目录打包用例先复现问题，再验证设计资料不进入产物，同时保留源码设计、server.js、采集器 README、诊断运行文件和许可材料。没有修改业务流程。
+
+最终代码验证基线为 `bd7c8921`：全量 4330 项，4309 通过、3 失败、0 取消、18 跳过；3 个断言失败仍为此前已在上游基线复现的用例。文档和打包专项 22 项，21 通过、1 个 Windows 专用用例跳过。最终 npm dry-run 726 个文件，数量减少来自上游删除的两个 mock 脚本；迁移后的采集器指南仍在包中，design 未进入包。98 个活动导航均存在，没有新增本地目标失效。
+
+相对最新上游，40 个源码或 CSS 文件的变更仅为注释引用，非注释变更限定于 Next 追踪排除、打包脚本文档复制/清理以及 LlamaIndex README 读取路径。独立差异审查无剩余阻塞项。未执行完整 Next/Docker 构建或浏览器验收；详情见 verification.json 的 submissionValidation。
