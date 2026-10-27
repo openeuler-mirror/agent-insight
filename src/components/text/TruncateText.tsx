@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/patterns.md §2 — single-line truncate + tooltip with full content.
+// design/patterns.md §2 — single-line truncate + tooltip with full content.
 'use client';
 
 import * as React from 'react';

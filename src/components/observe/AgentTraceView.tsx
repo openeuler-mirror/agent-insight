@@ -89,14 +89,14 @@ function getStatus(node: AgentNode): NodeStatus {
     return 'ok';
 }
 
-// docs/design/foundations.md §2 B.4 — status uses semantic tokens, never hardcoded hex.
+// design/foundations.md §2 B.4 — status uses semantic tokens, never hardcoded hex.
 const STATUS_DOT: Record<NodeStatus, string> = {
     ok:    'bg-foreground-muted',
     slow:  'bg-warning',
     error: 'bg-error',
 };
 
-// docs/design/components.md §2 E.13 — span types color-coded per chart palette 1-4 (+ violet for Skill).
+// design/components.md §2 E.13 — span types color-coded per chart palette 1-4 (+ violet for Skill).
 const KIND_META: Record<string, { label: string; chip: string; bar: string; text: string }> = {
     agent: { label: 'AGENT', ...SPAN_KIND_CLASSES.agent },
     task:  { label: 'TASK',  ...SPAN_KIND_CLASSES.task },
@@ -596,7 +596,7 @@ export default function AgentTraceView({
     const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
     const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('overview');
     const [eventTypeFilter, setEventTypeFilter] = useState<EventTypeFilter>('all');
-    // docs/design/patterns.md §11 — slow-only flag persisted to URL so reload preserves user intent.
+    // design/patterns.md §11 — slow-only flag persisted to URL so reload preserves user intent.
     const [slowOnlyParam, setSlowOnlyParam] = useQueryState('slowOnly', parseAsString);
     const slowOnly = slowOnlyParam === '1';
     const setSlowOnly = (v: boolean | ((p: boolean) => boolean)) => {

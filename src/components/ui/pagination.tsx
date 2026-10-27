@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/components.md §2 E.9 — pagination component used by list pages.
+// design/components.md §2 E.9 — pagination component used by list pages.
 'use client';
 
 import * as React from 'react';

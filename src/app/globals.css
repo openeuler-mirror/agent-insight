@@ -27,7 +27,7 @@
  * Token values live in `:root` / `[data-theme="dark"]` below (single source of
  * truth). This block only **registers** them so `bg-card`, `text-foreground-muted`,
  * `border-card-border`, `rounded-md`, `text-sm`, etc. resolve to real CSS.
- * See docs/design/foundations.md §10.
+ * See design/foundations.md §10.
  * ======================================================================== */
 @theme {
   /* Neutral grays */

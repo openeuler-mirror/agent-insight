@@ -27,7 +27,7 @@
  *   返回该会话的 plan + items（无则 { plan: null }）。前端据 plan.status 轮询到非 running 为止。
  *
  * SkillIssue 台账只读不写；resolve 回标发生在 iteration 落库时（见 iterations 路由）。
- * 设计：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
+ * 设计：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
  */
 
 import { NextRequest, NextResponse } from 'next/server';

@@ -64,6 +64,7 @@ const STANDALONE_JUNK_DIRS = [
   'features',
   'tools',
   'docs',
+  'design',
   'data',
   'logs',
   'src',
@@ -166,7 +167,8 @@ function copyLlamaIndexCollector(packageRoot, standaloneDir) {
   const sourceReadme = path.join(
     packageRoot,
     'docs',
-    'user-guide',
+    'zh',
+    'how-to',
     'observability',
     'llamaindex-trace-collector.md',
   )

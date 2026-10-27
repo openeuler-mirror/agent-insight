@@ -17,7 +17,7 @@
 /**
  * 静态评估器 orchestrator。
  *
- * 写入分工见 docs/plans/2026-05-08-skill-opt-issues-api-design.md：
+ * 写入分工见 design/2026-05-08-skill-opt-issues-api-design.md：
  *   - 创建 Evaluation(type='static') 一行
  *   - 把 L1 linter + L2 LLM 的产出统一转成 SkillIssue 行（source='static'，FK = evaluation.id）
  *

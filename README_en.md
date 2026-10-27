@@ -49,7 +49,7 @@ The platform has three main parts:
 - **Application services** use Next.js, React, and TypeScript to provide the Web dashboard and APIs for tracing, evaluation, diagnosis, Skill generation, and optimization.
 - **Data storage** uses Prisma and database adapters to manage execution records and task data. Local SQLite is the default; see the developer guide for other database configurations.
 
-Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/developer-guide/INDEX.md) for module and API details.
+Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/zh/explanation/platform/developer-index.md) for module and API details.
 
 <p align="center">
   <img src="docs/images/architecture.png" alt="Agent Insight architecture" />
@@ -130,7 +130,7 @@ docker run -d \
   karaggagent/agent-insight:latest
 ```
 
-Use a fixed published image tag when you need a repeatable deployment. Keep the mounted data directory when upgrading. See the [deployment guide](docs/user-guide/quickstart.md) for offline images, mounting source code, and troubleshooting.
+Use a fixed published image tag when you need a repeatable deployment. Keep the mounted data directory when upgrading. See the [deployment guide](docs/zh/tutorial/platform/01-quick-start.md) for offline images, mounting source code, and troubleshooting.
 
 ### 2. Open the dashboard and connect an Agent
 
@@ -151,19 +151,20 @@ Run a small task in the connected Agent, then open the execution list in Agent I
 3. **Evaluate**: configure a dataset and evaluators, run the task, and inspect execution details and evaluation results.
 4. **Optimize**: select an existing Skill and use the findings to create an improved version. Re-run the same task or dataset to compare behavior.
 
-Start with the [built-in example walkthrough](docs/user-guide/example-walkthrough.md) for a concrete workflow. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
+Start with the [built-in example walkthrough](docs/zh/tutorial/platform/02-example-walkthrough.md) for a concrete workflow. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
 
 ## Documentation
 
-| Path | Contents |
-|:-----|:---------|
-| [User guide](docs/user-guide/) | Installation, example walkthrough, concepts, and FAQ |
-| [Developer guide](docs/developer-guide/INDEX.md) | Architecture, modules, APIs, and development conventions |
-| [Agent RAS](docs/agent-ras/) | Reliability, anomaly detection, and recovery |
-| [Agent fault injection](docs/agent-fault-injection/) | Fault injection and collection |
-| [Reusable snippets](docs/snippets/) | SDK installation and environment setup |
-| [Q&A](docs/qa.md) | Installation, integrations, evaluation, and troubleshooting |
-| [Skill generation](docs/skill-generation-principle-and-pipeline.md) | Generation pipeline and capability boundaries |
+Start at the [documentation index](docs/README.md). Existing documentation is primarily Chinese; see the [English translation status](docs/en/README.md).
+
+| Category | Contents |
+| --- | --- |
+| [Tutorials](docs/zh/tutorial/README.md) | Guided first tasks and complete examples |
+| [How-to guides](docs/zh/how-to/README.md) | Installation, configuration, operation, and extension |
+| [Reference](docs/zh/reference/README.md) | APIs, configuration, protocols, and data fields |
+| [Explanation](docs/zh/explanation/README.md) | Concepts, architecture, and responsibility boundaries |
+| [Agent RAS](docs/zh/explanation/reliability/agent-ras/README.md) / [Fault injection](docs/zh/explanation/reliability/agent-fault-injection/README.md) | Reliability documentation |
+| [Internal designs](design/README.md) | Requirements, proposals, plans, and historical material |
 
 ## Contributing
 

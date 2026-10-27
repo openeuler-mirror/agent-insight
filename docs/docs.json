@@ -11,138 +11,229 @@
   "navigation": {
     "tabs": [
       {
-        "tab": "用户指南",
+        "tab": "入门教程",
         "groups": [
           {
-            "group": "入门",
+            "group": "阅读入口",
             "pages": [
-              "user-guide/home",
-              "user-guide/quickstart",
-              "user-guide/example-walkthrough",
-              "user-guide/example-walkthrough-cost",
-              "user-guide/concepts",
-              "user-guide/faq"
+              "zh/tutorial/README"
             ]
           },
           {
-            "group": "Workspace",
+            "group": "平台公共",
             "pages": [
-              "user-guide/workspace-overview",
-              "user-guide/agent-management"
+              "zh/tutorial/platform/01-quick-start",
+              "zh/tutorial/platform/02-example-walkthrough"
             ]
           },
           {
-            "group": "运行观测",
+            "group": "评测",
             "pages": [
-              "user-guide/observability/index",
-              "user-guide/observability/view-traces",
-              "user-guide/observability/fault-injection",
-              "user-guide/observability/diagnosis",
-              "user-guide/observability/quality-monitoring"
+              "zh/tutorial/evaluation/01-first-experiment"
             ]
           },
           {
-            "group": "评估与实验",
+            "group": "可靠性",
             "pages": [
-              "user-guide/evaluation/index",
-              "user-guide/evaluation/quickstart",
-              "user-guide/evaluation/datasets",
-              "user-guide/evaluation/evaluators",
-              "user-guide/evaluation/experiments"
-            ]
-          },
-          {
-            "group": "Skill 工作台",
-            "pages": [
-              "user-guide/skills/index",
-              "user-guide/skills/manage",
-              "user-guide/skills/generate",
-              {
-                "group": "Skill 评估与实验",
-                "pages": [
-                  "user-guide/skills/evaluation/overview",
-                  "user-guide/skills/evaluation/static-compliance",
-                  "user-guide/skills/evaluation/trigger-analysis",
-                  "user-guide/skills/evaluation/use-case-analysis",
-                  "user-guide/skills/evaluation/ab-test"
-                ]
-              },
-              "user-guide/skills/optimize"
-            ]
-          },
-          {
-            "group": "平台设置",
-            "pages": [
-              "user-guide/settings/model-registry",
-              "user-guide/settings/web-search",
-              "user-guide/settings/access-control",
-              "user-guide/settings/usage-analytics"
+              "zh/tutorial/reliability/agent-fault-injection/01-getting-started",
+              "zh/tutorial/reliability/agent-ras/01-getting-started"
             ]
           }
         ]
       },
       {
-        "tab": "开发者指南",
+        "tab": "操作指南",
         "groups": [
           {
-            "group": "入门",
+            "group": "阅读入口",
             "pages": [
-              "developer-guide/overview",
-              "developer-guide/sdk-overview",
-              "developer-guide/trace-with-sdk"
+              "zh/how-to/README"
             ]
           },
           {
-            "group": "系统架构",
+            "group": "平台公共",
             "pages": [
-              "developer-guide/architecture/index",
-              "developer-guide/architecture/data-model",
-              "developer-guide/architecture/design-decisions",
-              "developer-guide/architecture/static-evaluator"
+              "zh/how-to/platform/build-rpm",
+              "zh/how-to/platform/conventions-and-extension",
+              "zh/how-to/platform/deploy-shared-account",
+              "zh/how-to/platform/docker-testing",
+              "zh/how-to/platform/faq",
+              "zh/how-to/platform/manage-agents",
+              "zh/how-to/platform/qa",
+              "zh/how-to/platform/release-docker-image",
+              "zh/how-to/platform/settings/access-control",
+              "zh/how-to/platform/settings/model-registry",
+              "zh/how-to/platform/settings/usage-analytics",
+              "zh/how-to/platform/settings/web-search",
+              "zh/how-to/platform/workspace-overview"
             ]
           },
           {
-            "group": "框架集成",
+            "group": "观测",
             "pages": [
-              {
-                "group": "LLM 提供商",
-                "pages": [
-                  "developer-guide/integrations/openai",
-                  "developer-guide/integrations/anthropic"
-                ]
-              },
-              {
-                "group": "Agent 框架",
-                "pages": [
-                  "developer-guide/integrations/langchain",
-                  "developer-guide/integrations/langgraph"
-                ]
-              },
-              "developer-guide/integrations/opentelemetry"
+              "zh/how-to/observability/develop-trace-collector",
+              "zh/how-to/observability/goal-plus",
+              "zh/how-to/observability/llamaindex-trace-collector",
+              "zh/how-to/observability/mcts-xgovernor",
+              "zh/how-to/observability/quality-monitoring",
+              "zh/how-to/observability/qwenpaw-trace-collector",
+              "zh/how-to/observability/trae-integration",
+              "zh/how-to/observability/view-traces",
+              "zh/how-to/observability/workbuddy-trace-collector"
             ]
           },
           {
-            "group": "API & SDK 参考",
+            "group": "评测",
             "pages": [
-              "developer-guide/reference/api",
-              "developer-guide/reference/sdk-python",
-              "developer-guide/reference/sdk-js",
-              "developer-guide/reference/trace-data-format",
-              "developer-guide/reference/evaluation-data-format"
+              "zh/how-to/evaluation/benchmarks/deploy-services",
+              "zh/how-to/evaluation/benchmarks/deploy-swe-bench",
+              "zh/how-to/evaluation/benchmarks/deploy-zsoft",
+              "zh/how-to/evaluation/benchmarks/develop-benchmark",
+              "zh/how-to/evaluation/benchmarks/onboard-custom-benchmark",
+              "zh/how-to/evaluation/benchmarks/release-zsoft-assets",
+              "zh/how-to/evaluation/datasets",
+              "zh/how-to/evaluation/develop-evaluator",
+              "zh/how-to/evaluation/evaluators",
+              "zh/how-to/evaluation/experiments",
+              "zh/how-to/evaluation/mcts-experiments",
+              "zh/how-to/evaluation/skills/ab-test",
+              "zh/how-to/evaluation/skills/static-compliance",
+              "zh/how-to/evaluation/skills/trigger-analysis",
+              "zh/how-to/evaluation/skills/use-case-analysis"
             ]
           },
           {
-            "group": "部署与运维",
+            "group": "诊断",
             "pages": [
-              "developer-guide/deployment/installation",
-              "developer-guide/deployment/self-hosted",
-              "developer-guide/deployment/upgrade"
+              "zh/how-to/diagnosis/agent-debug/diagnosis"
             ]
           },
           {
-            "group": "贡献",
+            "group": "优化",
             "pages": [
-              "developer-guide/contributing"
+              "zh/how-to/optimization/skills/generate",
+              "zh/how-to/optimization/skills/manage",
+              "zh/how-to/optimization/skills/optimize",
+              "zh/how-to/optimization/skills/skill-workflow"
+            ]
+          },
+          {
+            "group": "可靠性",
+            "pages": [
+              "zh/how-to/reliability/agent-fault-injection/local-install-process",
+              "zh/how-to/reliability/agent-fault-injection/run-injection",
+              "zh/how-to/reliability/agent-ras/local-install-process",
+              "zh/how-to/reliability/agent-ras/platform-opencode",
+              "zh/how-to/reliability/agent-ras/platform-openjiuwen",
+              "zh/how-to/reliability/agent-ras/platform-xiaoo"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "参考文档",
+        "groups": [
+          {
+            "group": "阅读入口",
+            "pages": [
+              "zh/reference/README"
+            ]
+          },
+          {
+            "group": "平台公共",
+            "pages": [
+              "zh/reference/platform/api-and-contracts",
+              "zh/reference/platform/design-system",
+              "zh/reference/platform/example-cost",
+              "zh/reference/platform/file-map"
+            ]
+          },
+          {
+            "group": "观测",
+            "pages": [
+              "zh/reference/observability/otlp-attribute-contract"
+            ]
+          },
+          {
+            "group": "可靠性",
+            "pages": [
+              "zh/reference/reliability/agent-fault-injection/fault-catalog"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "概念与原理",
+        "groups": [
+          {
+            "group": "阅读入口",
+            "pages": [
+              "zh/explanation/README"
+            ]
+          },
+          {
+            "group": "平台公共",
+            "pages": [
+              "zh/explanation/platform/architecture",
+              "zh/explanation/platform/core-concepts",
+              "zh/explanation/platform/data-control-flow",
+              "zh/explanation/platform/developer-index",
+              "zh/explanation/platform/frontend",
+              "zh/explanation/platform/modules",
+              "zh/explanation/platform/positioning",
+              "zh/explanation/platform/product-overview",
+              "zh/explanation/platform/usage-analytics"
+            ]
+          },
+          {
+            "group": "观测",
+            "pages": [
+              "zh/explanation/observability/cross-session-collaboration",
+              "zh/explanation/observability/goal-plus",
+              "zh/explanation/observability/hermes-storage-analysis",
+              "zh/explanation/observability/overview",
+              "zh/explanation/observability/trae-collector"
+            ]
+          },
+          {
+            "group": "评测",
+            "pages": [
+              "zh/explanation/evaluation/benchmarks/README",
+              "zh/explanation/evaluation/overview",
+              "zh/explanation/evaluation/skills/overview",
+              "zh/explanation/evaluation/skills/static-evaluator"
+            ]
+          },
+          {
+            "group": "诊断",
+            "pages": [
+              "zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis"
+            ]
+          },
+          {
+            "group": "优化",
+            "pages": [
+              "zh/explanation/optimization/skills/generation-pipeline",
+              "zh/explanation/optimization/skills/optimization-loop",
+              "zh/explanation/optimization/skills/workbench-overview"
+            ]
+          },
+          {
+            "group": "可靠性",
+            "pages": [
+              "zh/explanation/reliability/agent-fault-injection/README",
+              "zh/explanation/reliability/agent-fault-injection/architecture",
+              "zh/explanation/reliability/agent-fault-injection/modules/opencode-platform-adaptation",
+              "zh/explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship",
+              "zh/explanation/reliability/agent-fault-injection/modules/xiaoo-platform-adaptation",
+              "zh/explanation/reliability/agent-ras/README",
+              "zh/explanation/reliability/agent-ras/architecture",
+              "zh/explanation/reliability/agent-ras/modules/detectors",
+              "zh/explanation/reliability/agent-ras/modules/monitor",
+              "zh/explanation/reliability/agent-ras/modules/platform-adapter",
+              "zh/explanation/reliability/agent-ras/modules/ras-runtime",
+              "zh/explanation/reliability/agent-ras/modules/recovery",
+              "zh/explanation/reliability/agent-ras/modules/review"
             ]
           }
         ]
@@ -150,8 +241,16 @@
     ]
   },
   "footer": {
-    "socials": {
-      "github": "https://github.com/your-org/agent-insight"
-    }
+    "links": [
+      {
+        "header": "项目",
+        "items": [
+          {
+            "label": "GitCode · agent-insight",
+            "href": "https://gitcode.com/openeuler/agent-insight"
+          }
+        ]
+      }
+    ]
   }
 }

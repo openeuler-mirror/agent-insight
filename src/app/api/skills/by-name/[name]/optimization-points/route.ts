@@ -33,7 +33,7 @@ export const dynamic = 'force-dynamic';
  * 再把 IssueWithPrevalence 映射成 OptIssue 形态（category / improvementSuggestion /
  * occurrence / source）。前端只认 OptIssue。
  *
- * 设计文档：docs/plans/2026-05-08-skill-opt-issues-api-design.md
+ * 设计文档：design/2026-05-08-skill-opt-issues-api-design.md
  */
 export async function GET(
   request: NextRequest,

@@ -58,7 +58,7 @@
 - **应用服务**：使用 Next.js、React 和 TypeScript 提供 Web 看板与 API，组织链路查询、评测、诊断、Skill 生成和优化流程。
 - **数据存储**：通过 Prisma 和数据库适配层管理运行记录与任务数据，默认使用本地 SQLite；其他数据库配置见开发者指南。
 
-需要模型推理的步骤调用用户配置的模型服务，平台不内置 AI 模型。架构与模块说明见[开发者指南](docs/developer-guide/INDEX.md)。
+需要模型推理的步骤调用用户配置的模型服务，平台不内置 AI 模型。架构与模块说明见[开发者指南](docs/zh/explanation/platform/developer-index.md)。
 
 <p align="center">
   <img src="docs/images/architecture.png" alt="Agent-Insight 架构图" />
@@ -206,7 +206,7 @@ cd /srv/agent-insight && git pull
 docker restart agent-insight
 ```
 
-不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/user-guide/quickstart.md)。
+不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/zh/tutorial/platform/01-quick-start.md)。
 
 容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
 
@@ -217,7 +217,7 @@ OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行�
 只读预检 RAS 事件端点。源码联调若使用尚未发布的版本，可在平台进程设置
 `AGENT_INSIGHT_CLIENT_PACKAGE_SPEC=<可由 Agent 主机访问的 .tgz URL>`。
 
-更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。
+更多部署、升级和排查说明见 [5 分钟上手](docs/zh/tutorial/platform/01-quick-start.md)。
 
 **启动服务**
 
@@ -230,7 +230,7 @@ bash scripts/start.sh
 
 默认使用 `~/.agent-insight/data/witty_insight.db`；如需自定义数据库路径，可在 `~/.agent-insight/.env` 中设置 `DATABASE_URL="file:/absolute/path/to/witty_insight.db"`。
 
-如需安装和配置 SWE-bench 等 Benchmark，请参阅[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)。
+如需安装和配置 SWE-bench 等 Benchmark，请参阅[《Benchmark 整体服务安装指南》](docs/zh/how-to/evaluation/benchmarks/deploy-services.md)。
 
 **停止服务**
 
@@ -280,9 +280,9 @@ bash scripts/stop.sh
 
 完整体验在 Agent Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的闭环流程。
 
-> 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
+> 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/zh/tutorial/platform/02-example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
 
-> 🧩 **自定义 Benchmark**：如需接入新的 Benchmark 评测，请从 [Benchmark 文档关系与开发指南](docs/developer-guide/benchmark/README.md) 开始。客户只需用自然语言描述评测目标并提供已有材料，AI 会协助完成需求确认、接入包开发和验证。接入包完成后，按[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)部署 Agent Insight、Agent 执行端、Evaluator 和数据集。
+> 🧩 **自定义 Benchmark**：如需接入新的 Benchmark 评测，请从 [Benchmark 文档关系与开发指南](docs/zh/explanation/evaluation/benchmarks/README.md) 开始。客户只需用自然语言描述评测目标并提供已有材料，AI 会协助完成需求确认、接入包开发和验证。接入包完成后，按[《Benchmark 整体服务安装指南》](docs/zh/how-to/evaluation/benchmarks/deploy-services.md)部署 Agent Insight、Agent 执行端、Evaluator 和数据集。
 
 ### 注册模型
 
@@ -356,19 +356,20 @@ bash scripts/stop.sh
 
 ## 📚 文档
 
-完整文档位于 [`docs/`](docs/) 目录，主要包含以下内容：
+文档统一入口为 [docs/README.md](docs/README.md)，按用途与业务领域组织：
 
-| 路径                                                                                                   | 说明                                  |
-|:---------------------------------------------------------------------------------------------------- |:----------------------------------- |
-| [`docs/user-guide/`](docs/user-guide/)                                                               | 用户使用指南：快速上手、示例走查、核心概念、FAQ           |
-| [`docs/developer-guide/`](docs/developer-guide/)                                                     | 开发者指南：架构、模块、API、约定等                 |
-| [`docs/agent-ras/`](docs/agent-ras/)                                                                 | Agent RAS 环内可靠性：异常检测 + 自动恢复的设计与使用   |
-| [`docs/agent-fault-injection/`](docs/agent-fault-injection/)                                         | Agent 故障注入：注入 + 采集引擎的设计与使用          |
-| [`docs/snippets/`](docs/snippets/)                                                                   | 可复用文档片段：SDK 安装、环境配置                 |
-| [`docs/qa.md`](docs/qa.md)                                                                           | 平台常见问答：覆盖概念、安装、接入、Skill、评测、观测、架构与排障 |
-| [`docs/skill-generation-principle-and-pipeline.md`](docs/skill-generation-principle-and-pipeline.md) | Skill 生成原理、流水线与能力边界                 |
+| 入口 | 内容 |
+| --- | --- |
+| [入门教程](docs/zh/tutorial/README.md) | 快速开始、完整示例与第一次评测 |
+| [操作指南](docs/zh/how-to/README.md) | 安装、配置、使用、开发与扩展操作 |
+| [参考文档](docs/zh/reference/README.md) | API、配置、协议与数据字段 |
+| [概念与原理](docs/zh/explanation/README.md) | 概念、架构、数据流与职责边界 |
+| [Agent RAS](docs/zh/explanation/reliability/agent-ras/README.md) / [故障注入](docs/zh/explanation/reliability/agent-fault-injection/README.md) | 可靠性专题导航 |
+| [英文文档状态](docs/en/README.md) | 英文目录已建立，正文翻译待补齐 |
+| [内部需求与设计](design/README.md) | 需求、方案、开发计划和历史资料 |
 
-> 新用户推荐从 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通「智能诊断 → Skill 生成 → 评测 → 优化」完整闭环。
+
+> 新用户推荐从 [内置示例端到端走查](docs/zh/tutorial/platform/02-example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通「智能诊断 → Skill 生成 → 评测 → 优化」完整闭环。
 
 ## 🤝 参与贡献
 

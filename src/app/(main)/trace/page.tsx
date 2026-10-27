@@ -563,7 +563,7 @@ function TracePageContent() {
         setData(previous => previous.map(item => item.upload_id === latest.upload_id ? latest : item));
     }, []);
 
-    // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
+    // URL-persisted filter / sort / paging state (design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', traceFilterParsers.time);
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', traceFilterParsers.status);
     const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
