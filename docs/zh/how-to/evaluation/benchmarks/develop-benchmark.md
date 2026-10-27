@@ -981,6 +981,8 @@ Doctor 验证依赖可用性，Smoke 必须使用已知结果的最小样例穿�
 
 ### 12.4 公共一致性与回归
 
+使用临时 SQLite 的 Benchmark 下发测试，收尾必须先 `await stopBenchmarkBackgroundWorkForTest()`，再恢复命令 dispatcher、断开 Prisma，最后恢复环境并删除临时目录。该方法停止 watchdog 和延迟重试，等待已开始的下发及其派生任务、镜像预热刷新结束；不应仅依据 Case 的终态字段判断后台工作已结束。只需等待镜像预热时可使用 `waitForBenchmarkImagePreparation()`，它不会触发新的刷新。文件删除重试或固定延时不能代替这个收尾顺序。
+
 ```bash
 node --import tsx --test \
   test/benchmark-extension-conformance.test.ts \

@@ -153,7 +153,12 @@ test('platform freezes recursive parameters and retains them through details, cl
   const { cloneExperimentFromFrozenConfig } = await import('../src/lib/engine/experiment/reuse-config')
   const { prepareNextBenchmarkCaseRun } = await import('../src/lib/benchmark/orchestrator')
   const { normalizeCapabilities } = await import('../src/lib/reliability/client-registry')
-  t.after(async () => { await prisma.$disconnect(); database.dispose() })
+  const { stopBenchmarkBackgroundWorkForTest } = await import('../src/lib/benchmark/scheduler')
+  t.after(async () => {
+    await stopBenchmarkBackgroundWorkForTest()
+    await prisma.$disconnect()
+    database.dispose()
+  })
   const { definition, options } = runtimeFixture()
   const capabilities = { actions: ['RUN_BENCHMARK_CASE'], platforms: [{ id: 'opencode', agents: ['build'],
     parameterDefinitions: [definition], runBenchmarkCase: { version: 1, returnsTraceId: true } }],

@@ -68,6 +68,10 @@ export async function retireImagePreparationWindows(isActive: (experimentId: str
 let refreshing: Promise<void> | null = null
 let refreshAgain = false
 
+export async function waitForBenchmarkImagePreparation(): Promise<void> {
+  while (refreshing) await Promise.allSettled([refreshing])
+}
+
 export function refreshBenchmarkImagePreparation(): Promise<void> {
   if (refreshing) { refreshAgain = true; return refreshing }
   refreshing = (async () => {

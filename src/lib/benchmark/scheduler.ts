@@ -29,7 +29,7 @@ import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-confi
 import { prepareBenchmarkEvaluation } from './evaluation-preparation-service'
 import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
 import { prepareNextBenchmarkCaseRun } from './orchestrator'
-import { retireImagePreparationWindows, refreshBenchmarkImagePreparation } from './image-preparation'
+import { retireImagePreparationWindows, refreshBenchmarkImagePreparation, waitForBenchmarkImagePreparation } from './image-preparation'
 
 type BenchmarkCommandOutcome = {
   commandId: string
@@ -57,6 +57,30 @@ const BENCHMARK_POST_AGENT_STALE_MS = 5 * 60_000
 const BENCHMARK_RUN_WATCHDOG_INTERVAL_MS = 30_000
 let benchmarkRunWatchdogTimer: ReturnType<typeof setInterval> | null = null
 let benchmarkRunWatchdogSweep: Promise<number> | null = null
+const dispatchWork = new Set<Promise<void>>()
+const dispatchTimers = new Set<ReturnType<typeof setTimeout>>()
+let stoppingBackgroundWork: Promise<void> | null = null
+
+function trackDispatchWork(work: Promise<void>): Promise<void> {
+  dispatchWork.add(work)
+  void work.then(() => dispatchWork.delete(work), () => dispatchWork.delete(work))
+  return work
+}
+
+export function stopBenchmarkBackgroundWorkForTest(): Promise<void> {
+  if (stoppingBackgroundWork) return stoppingBackgroundWork
+  if (benchmarkRunWatchdogTimer) clearInterval(benchmarkRunWatchdogTimer)
+  benchmarkRunWatchdogTimer = null
+  for (const timer of dispatchTimers) clearTimeout(timer)
+  dispatchTimers.clear()
+  stoppingBackgroundWork = (async () => {
+    await benchmarkRunWatchdogSweep
+    // A rejected dispatch can start the next Case before its own promise settles.
+    while (dispatchWork.size) await Promise.allSettled([...dispatchWork])
+    await waitForBenchmarkImagePreparation()
+  })().finally(() => { stoppingBackgroundWork = null })
+  return stoppingBackgroundWork
+}
 
 function parseJsonRecord(value: string | null): Record<string, unknown> {
   try {
@@ -151,7 +175,7 @@ export async function reapStaleBenchmarkRuns(options: {
 export function startBenchmarkRunWatchdog(
   intervalMs = BENCHMARK_RUN_WATCHDOG_INTERVAL_MS,
 ): void {
-  if (benchmarkRunWatchdogTimer) return
+  if (benchmarkRunWatchdogTimer || stoppingBackgroundWork) return
   const tick = () => {
     if (benchmarkRunWatchdogSweep) return
     benchmarkRunWatchdogSweep = reapStaleBenchmarkRuns()
@@ -247,11 +271,14 @@ export function setBenchmarkCommandDispatcherForTest(
 }
 
 function scheduleBenchmarkDispatch(runId: string, delayMs: number): void {
+  if (stoppingBackgroundWork) return
   const timer = setTimeout(() => {
+    dispatchTimers.delete(timer)
     void dispatchBenchmarkRun(runId).catch((error) => {
       console.error('[benchmark/scheduler] delayed dispatch failed', error)
     })
   }, delayMs)
+  dispatchTimers.add(timer)
   timer.unref?.()
 }
 
@@ -294,7 +321,11 @@ async function markDispatchFailed(
   })
 }
 
-export async function dispatchBenchmarkRun(runId: string): Promise<void> {
+export function dispatchBenchmarkRun(runId: string): Promise<void> {
+  return trackDispatchWork(dispatchBenchmarkRunInternal(runId))
+}
+
+async function dispatchBenchmarkRunInternal(runId: string): Promise<void> {
   const targetRun = await prisma.benchmarkCaseRun.findUnique({ where: { id: runId } });
   if (!targetRun || targetRun.status === 'cancelled') return;
   const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
@@ -491,7 +522,7 @@ export async function startBenchmarkExperiment(input: {
     select: { id: true, status: true },
   })
   const completions: Promise<void>[] = active.map((run: { id: string; status: string }) => run.status === 'submitted'
-    ? resumeSubmittedBenchmarkEvaluation(run.id) : dispatchBenchmarkRun(run.id))
+    ? trackDispatchWork(resumeSubmittedBenchmarkEvaluation(run.id)) : dispatchBenchmarkRun(run.id))
   let firstRunId = active[0]?.id || null
   for (;;) {
     let prepared
