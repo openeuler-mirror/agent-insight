@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 实验 API 冒烟：POST 创建 → GET 列表 → GET 详情（落在仓库 data/witty_insight.db）。
 // 显式钉住 DATABASE_URL：loadAgentInsightEnv 不覆盖已存在的 env，避免测试写到 ~/.agent-insight。
 import path from 'node:path';
@@ -20,6 +36,25 @@ function postReq(body: unknown): Request {
     body: JSON.stringify(body),
   });
 }
+
+test('experiments API stores execution policy and exposes it for reuse; invalid overrides return 400', async (t) => {
+  const user = `${TEST_USER}-execution-config`;
+  t.after(() => prisma.experiment.deleteMany({ where: { user } }));
+  const config = { mode: 'system', overrides: { 'preset-result-answer': { attemptTimeoutSeconds: 900, maxRetries: 0 } } };
+  const body = { user, name: '配置测试', agentName: 'build', evaluatorIds: ['preset-result-answer'],
+    evaluatorExecutionConfig: config, cases: [{ input: 'question', actualOutput: 'answer' }] };
+  const response = await createExperiment(postReq(body));
+  assert.equal(response.status, 200);
+  const { id } = await response.json();
+  const detailResponse = await getExperiment(new Request(`http://localhost/api/experiments/${id}?user=${user}`), { params: Promise.resolve({ id }) });
+  assert.equal(detailResponse.status, 200);
+  const detail = await detailResponse.json();
+  assert.deepEqual(detail.evaluatorExecutionConfig, config);
+  assert.deepEqual(detail.evaluatorExecutionResolved['preset-result-answer'], { attemptTimeoutSeconds: 900, maxRetries: 0, source: 'override' });
+  assert.deepEqual(detail.reusableConfig.evaluatorExecutionConfig, config);
+  const bad = await createExperiment(postReq({ ...body, evaluatorExecutionConfig: { ...config, overrides: { 'custom-not-owned': { attemptTimeoutSeconds: 600, maxRetries: 2 } } } }));
+  assert.equal(bad.status, 400);
+});
 
 test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   t.after(async () => {

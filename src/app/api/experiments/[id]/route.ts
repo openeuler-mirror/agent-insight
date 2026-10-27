@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { agentEvaluationTraceId } from '@/lib/evaluators/evaluator-skills';
 import { casePagination, locateCasePage } from '@/lib/engine/experiment/case-navigation';
 import { normalizeAgentOptions, validateDefinition } from '../../../../../packages/agent-runtime/index.cjs';
@@ -22,6 +38,7 @@ import {
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
+import { parseStoredEvaluatorExecutionConfig } from '@/lib/evaluators/evaluator-execution-config';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
 import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
@@ -130,6 +147,7 @@ export async function GET(
       experiment.evaluatorConfigsJson,
       evaluatorIds,
     );
+    const evaluatorExecution = parseStoredEvaluatorExecutionConfig(experiment.evaluatorConfigsJson);
     const benchmarkAdapterKey = experiment.benchmarkBinding?.adapterKey || '';
     let benchmarkManifest: BenchmarkManifest | null = null;
     if (benchmarkAdapterKey) {
@@ -666,6 +684,8 @@ export async function GET(
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
       evaluatorConfigs,
+      evaluatorExecutionConfig: evaluatorExecution?.config ?? null,
+      evaluatorExecutionResolved: evaluatorExecution?.resolved ?? null,
       createdAt: experiment.createdAt,
       scope: experiment.scope,
       skillName: experiment.skillName,
@@ -700,6 +720,7 @@ export async function GET(
         agentName: displayAgentName,
         evaluatorIds,
         evaluatorConfigs,
+        evaluatorExecutionConfig: evaluatorExecution?.config ?? null,
         executionTarget: configSnapshot?.runConfig && typeof configSnapshot.runConfig === 'object'
           ? {
               workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,

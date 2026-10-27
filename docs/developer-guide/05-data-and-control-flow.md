@@ -260,6 +260,18 @@ flowchart TD
 
 平台通过 `opencode-manager.ts` 启动的内置 OpenCode 子进程使用独立 spawn 环境。当前为兼容 OpenCode 1.14.39 与部分新证书链，子进程环境固定注入 `NODE_TLS_REJECT_UNAUTHORIZED=0`；该设置不修改 Next.js 父进程或系统 Node 环境。此为临时兼容策略，升级并验证 OpenCode 证书链后应恢复 TLS 校验。
 
+### 实验评估尝试的超时与重试
+
+实验创建接口新增可选 `evaluatorExecutionConfig`，包含 `mode: system | uniform`、统一模式的 `uniform` 与按 evaluator ID 索引的 `overrides`。每组参数为 `attemptTimeoutSeconds`（30～3600 整数）和 `maxRetries`（0～3 整数）。普通实验、对比实验、Skill 工作台和 Benchmark 混合评估入口共用 `evaluator-execution-config.server.ts` 校验当前用户可用性、已选集合及配置能力，并按单独配置、统一配置、系统默认的优先级解析。
+
+沿用 `Experiment.evaluatorConfigsJson`：新配置存为 `{ schemaVersion: 2, configs, execution: { policyVersion: 1, config, resolved } }`；`configs` 仍为 Exact Match/F1 的规则映射，`resolved` 由服务端生成各评估器的两项数值及来源。详情 API 返回 `evaluatorExecutionConfig`、`evaluatorExecutionResolved`，`reusableConfig` 含表单策略。向导复用配置后重新创建时会重新校验并解析当前默认值；冻结配置克隆和手动重评使用已存快照。`{}`、旧映射及 v1 保持兼容，不传新字段仍走旧执行语义。
+
+`GET /api/user-evaluators?view=execution-config` 返回 `{ evaluators, executionCapabilities }`，每个能力项包含自己的系统默认两项数值，特殊作用范围通过 `scopeNote` 提供给前端（不写入运行参数快照）；不带该参数仍返回原数组。能力清单由服务端维护，不能仅凭 `evaluatorType: LLM` 推断。
+
+`executeResultRow` 对已保存策略的评估器建立 `withEvaluatorExecution` 上下文，由 `runConfiguredEvaluationStage` 统一拥有重试预算，内部 `withEvaluationAttempt` 传播截止时间和取消信号。普通路径包住完整评估；任务完成度、轨迹质量在既有分析之后只包住评分，RAS 在读取同一份事件证据后包住模型判定和计分。带 Skills 的自定义项在完整调用外控制重试，在 OpenCode 服务和会话就绪后才对执行计时。必要子请求共享剩余预算，评分 SDK 重试关闭，最多尝试 `maxRetries + 1` 次，退避为 2/8/20 秒并支持取消。超时、临时网络、429/5xx（不可恢复配额除外）和输出解析错误可重试。成功、失败结果的 `evidenceJson.executionConfig` 保存参数、来源和本运行周期尝试数；结果行 `attempts` 继续累计历史次数。
+
+新策略的通用 Judge 使用直连模型请求，关闭 OpenCode 强制传输及失败后隐式回退，避免一次尝试内额外完整评分和不可控子进程重试；历史实验和不支持新策略的特殊评估器保留原传输行为。新增适配路径必须让请求接受取消信号并通过 `trackEvaluationRequest` 登记。超时/失败后取消同次请求，并等待本地工作及并行请求结束；5 秒内无法确认停止则保留清理标记、返回 `EVALUATION_CLEANUP_UNCONFIRMED` 并停止自动重试。仅结束本地请求不保证 Provider 停止远端计算。
+
 ### 质量监控与评测中心边界
 
 上传、proxy end 与 `OtelSpoolConsumer` 只负责 trace 落库和既有的流程/失败分析，不调度结果评估器，也不写 `TraceEvaluation`。质量监控的 `collectTraces → buildProblemSummary → scoreDimensions → bucketTrends` 只读取 `Execution`、`Session`、轨迹分析、问题和诊断数据，聚合过程、成本与错误三维。
@@ -574,6 +586,6 @@ Trace 评测集在生成阶段仅做结构提取，不改采集/入库，不验�
 
 普通实验、对比实验、Benchmark 追加评估器、工作台、eval-traces backing 实验与轨迹任务在创建时冻结自建卡片。行执行优先读取任务冻结配置，重试/追加/监听不重读最新卡片；复用同配置复制冻结内容。历史无快照任务使用旧 Prompt 解析且 skills 为空，新任务缺失已声明的冻结卡片时明确失败。
 
-无 Skills 沿用原传输。有 Skills 进入 custom-evaluator-runtime，校验快照摘要，为每个 Case/evaluator/attempt 建立独立临时目录，将所有 SKILL.md 原文加入请求，并挂载完整 scripts/references/assets，Case 写入 inputs/case.json。强制 OpenCode，不走直连 Judge 或无 Skill 降级；透传所属实验取消及总超时，排队可取消，进程结束后清理运行目录，持久快照保留。
+无 Skills 沿用原传输。有 Skills 进入 custom-evaluator-runtime，校验快照摘要，为每个 Case/evaluator/attempt 建立独立临时目录，将所有 SKILL.md 原文加入请求，并挂载完整 scripts/references/assets，Case 写入 inputs/case.json。强制 OpenCode，不走直连 Judge 或无 Skill 降级；透传所属实验取消，排队可取消，进程结束后清理运行目录，持久快照保留。有实验运行策略时只限制 OpenCode 模型及工具执行时间，准备和服务启动不计入；失败重试创建新目录和新会话，使用冻结输入及 Skills。`CustomEvaluatorExecutionError.cause` 保留原始错误类型，进程组清理未确认时以 `EVALUATION_CLEANUP_UNCONFIRMED` 停止重试。无新策略的历史任务保留原 180 秒保护。
 
 全局实验返回统一 EvaluatorOutput；旧轨迹接口适配 score/reason 并保留完整 output/runtime。工具事件来自 OpenCode onTool，独立于模型声称的调用。证据容器保留原评分依据与运行元数据，结果详情仅渲染原依据。Agent 会话删除前读取真实消息，复用 evaluator-execution-recorder 保存加载指令和工具调用；使用 skip_evaluation/skip_internal_judgment 防止监听循环，保存成功后写入 evaluationTraceId。详情 API 再校验 Execution 存在且属于当前用户，满足条件才返回评估链路入口；空会话、普通 LLM、历史无记录或已失效引用均不显示。HOME 与工作目录隔离不等于操作系统沙箱，沿用已有 read/bash 等权限。

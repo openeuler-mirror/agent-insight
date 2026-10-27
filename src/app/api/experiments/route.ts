@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { withFrozenCustomEvaluators } from '@/lib/evaluators/evaluator-skill-service';
 import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
 import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
@@ -19,8 +35,8 @@ import {
 } from '@/lib/evaluators/evaluator-case-context';
 import {
   EvaluatorRunConfigValidationError,
-  serializeEvaluatorRunConfigs,
 } from '@/lib/evaluators/evaluator-run-config';
+import { prepareExperimentEvaluatorConfigs } from '@/lib/evaluators/evaluator-execution-config.server';
 import {
   normalizeTerminalExperimentStatus,
   publishedOverallAverage,
@@ -249,6 +265,8 @@ export async function POST(req: Request) {
             : { mode: 'all' },
           clientId: String(executionTarget.workerId || ''),
           evaluatorIds,
+          evaluatorConfigs: body.evaluatorConfigs,
+          evaluatorExecutionConfig: body.evaluatorExecutionConfig,
           runConfig: {
             platform: String(executionTarget.platform || ''),
             agent: executionAgent,
@@ -322,6 +340,8 @@ export async function POST(req: Request) {
               : Number(runConfig.maxParallelAgentCases),
           },
           evaluatorIds: Array.isArray(body.evaluatorIds) ? body.evaluatorIds.map(String) : undefined,
+          evaluatorConfigs: body.evaluatorConfigs,
+          evaluatorExecutionConfig: body.evaluatorExecutionConfig,
         });
         recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
         return NextResponse.json(result, { status: 201 });
@@ -385,6 +405,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Skill 实验缺少 Skill、版本或预设上下文' }, { status: 400 });
     }
 
+    let evaluatorConfigsJson: string;
+    try {
+      evaluatorConfigsJson = await prepareExperimentEvaluatorConfigs(username, evaluatorIds, body.evaluatorConfigs, body.evaluatorExecutionConfig);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof EvaluatorRunConfigValidationError ? error.message : 'invalid evaluatorConfigs' }, { status: 400 });
+    }
+
     // 对比实验：type='llm' → createComparisonExperiment + autoPairGroups
     if (type === 'llm') {
       if (scope) {
@@ -407,6 +434,7 @@ export async function POST(req: Request) {
             value: String(g.value ?? ''),
           })),
           evaluatorIds,
+          evaluatorConfigsJson,
         });
         // autoPairGroups 查候选 trace + 为可比配对创建 case
         await autoPairGroups(id);
@@ -425,17 +453,6 @@ export async function POST(req: Request) {
     }
     if (watchMode && !agentName) {
       return NextResponse.json({ error: 'watch mode requires agentName' }, { status: 400 });
-    }
-
-    let evaluatorConfigsJson: string;
-    try {
-      evaluatorConfigsJson = serializeEvaluatorRunConfigs(body.evaluatorConfigs, evaluatorIds);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'invalid evaluatorConfigs';
-      return NextResponse.json(
-        { error: error instanceof EvaluatorRunConfigValidationError ? message : 'invalid evaluatorConfigs' },
-        { status: 400 },
-      );
     }
 
     for (const item of cases) {

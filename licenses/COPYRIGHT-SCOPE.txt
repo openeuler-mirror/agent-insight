@@ -1,0 +1,27 @@
+Copyright statement coverage
+
+Project-maintained source code carries the Huawei Technologies Co., Ltd.
+copyright statement and its applicable license header. Generated Benchmark
+catalog code also carries a copyright line and SPDX-License-Identifier;
+the generator retains these lines when rebuilding the catalog.
+
+Preserved upstream code
+- packages/project-config/yaml.cjs: original MIT terms and copyright are in
+  packages/project-config/YAML-LICENSE.
+- docs/developer-guide/vendor/mermaid.min.js and
+  docs/user-guide/vendor/mermaid.min.js: upstream bundle notices are preserved;
+  additional collected attributions are in licenses/mermaid-bundle.txt.
+- src/lib/engine/skill-generation/skills/skill-creator/: upstream source and
+  LICENSE.txt are retained. No Huawei ownership is asserted over these files
+  and no missing upstream copyright holder or year is invented.
+
+Historical compatibility fixtures
+The five released collector snapshots listed in test/fixtures/collectors/NOTICE
+retain their exact bytes because their fingerprints are test inputs. Their
+original MIT copyright and permission notice is preserved in that NOTICE.
+
+Formats that do not support comments
+JSON, JSONL and binary assets do not receive syntactically invalid source
+headers. Project files remain within the root LICENSE scope unless their
+own component license states otherwise. Short reader documentation is also
+covered by that scope without a compulsory code-style header.

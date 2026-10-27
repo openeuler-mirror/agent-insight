@@ -18,6 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 实验评估器超时与重试配置 | [evaluator-execution-settings](evaluator-execution-settings/phase1-requirements-analysis.md) | 实验级 LLM 超时与重试统一配置、评估器行内单独配置及逐行恢复，并以最小界面改动增加搜索、来源筛选和分页 | Feature | 2026-10-26 | 🟡 已扩展全部 31 个预置 LLM 与 Skills 自定义项；176 项专项及类型检查通过，隔离浏览器实验 6 项完成；全量 40 项基线失败未新增 | 待补 |
 | 自建评估器 Prompt + Skills | [custom-evaluator-skills](custom-evaluator-skills/phase1-requirements-analysis.md) | 支持从 Skill 库选固定版本或从电脑导入，后者不自动入库；统一冻结文件并通过 OpenCode 执行，全部添加项参与评估，不设启停 | Feature | 2026-10-23 | 🟡 原配置流程已验收；本轮结果/卡片/选择器调整、39 项专项测试及真实模型链路持久化验证通过（100 分、7 次工具调用，脚本凭据一致）；本轮浏览器复查受安全策略阻止，既有类型门禁问题未全绿 | —（待补） |
 | 实验执行环境准备 | [experiment-environment-preparation](experiment-environment-preparation/phase2-requirements-design.md) | 第二步点击下一步时按数据集、Agent 与执行上下文检查并自动准备环境；底部统一反馈，准备逻辑归属执行端数据集接入协议，移出客户端安装中的 xGovernor 编译 | Feature / Refactor | 2026-10-23 | 🟡 代码与专项自动化回归完成；全量含既有失败，未在浏览器及真实 Linux Docker/模型环境验收 | — |
 | Benchmark xGovernor 本地 Docker 接入 | [benchmark-xgovernor-local-docker](benchmark-xgovernor-local-docker/phase2-requirements-design.md) | 将原生 Pi/xiaoO 的 SWE-bench 执行切换到 xGovernor 本地 Docker，以完整执行后端合同保留 OpenCode 与沙箱替换扩展点 | Feature / Refactor | 2026-10-20 | 🟡 核心实现、配置分发与专项自动化测试完成；待真实 Linux Docker 与模型联调，按用户要求不做浏览器验收 | — |
@@ -61,7 +62,7 @@
 | LLM 思考死循环检测与恢复 | [`../agent-ras/designs/features/thinking-loop.md`](../agent-ras/designs/features/thinking-loop.md) | L1/L2 字面 + L3 语义 + review skill；流中 abort | Feature | 2026-07-15 | ✅ 已实现 | — |
 | Stream Abort 停流 | [`../agent-ras/designs/features/stream-abort.md`](../agent-ras/designs/features/stream-abort.md) | 环内打断 `llm.stream`；依赖宿主 abort 契约 | Feature | 2026-07-15 | ✅ 已实现 | — |
 | Provider 断连停推理调研 | [`../agent-ras/designs/features/provider-disconnect.md`](../agent-ras/designs/features/provider-disconnect.md) | Provider 断连能力调研 | Spike | 2026-07-20 | ✅ 调研完成 | — |
-| Agent RAS 可靠性检测恢复评估器门控 | [`../agent-ras/designs/features/ras-reliability-evaluator-split.md`](../agent-ras/designs/features/ras-reliability-evaluator-split.md) | 新实验移除故障注入评估器；检测恢复评估器仅在确认故障发生后评分，未确认时输出无分理由 | Refactor / Feature | 2026-08-15 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
+| Agent RAS 可靠性检测恢复评估器门控 | [`../agent-ras/designs/features/ras-reliability-evaluator-split.md`](../agent-ras/designs/features/ras-reliability-evaluator-split.md) | 新实验移除故障注入评估器；检测恢复评估器仅在确认故障发生后评分，未确认时输出无分理由；第 6 节补充评分超时与重试配置 | Refactor / Feature | 2026-08-15 | 🟡 门控代码与自动化验证已完成，浏览器验收待确认；运行配置已实现并通过专项测试 | —（待补） |
 | 仪表盘可靠性与性能拆分 | [`../agent-ras/designs/features/dashboard-reliability-performance.md`](../agent-ras/designs/features/dashboard-reliability-performance.md) | 将原可靠性与性能页签拆开，基于根 Trace 与 RAS 事件展示故障恢复、级别和 Agent 可靠性，并保留执行失败补充 | Feature | 2026-08-20 | 🟢 开发完成，待 UI 验收 | —（待补） |
 | LLM 过度思考（Analysis Paralysis）二阶段检测 | [`../agent-ras/designs/features/analysis-paralysis.md`](../agent-ras/designs/features/analysis-paralysis.md) | 触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道 | Feature | 2026-07-29 | ⬜ 未实现（规划中） | —（待补） |
 | LLM Agent 规划错误（Planning Error）检测 | [`../agent-ras/designs/features/planning-error.md`](../agent-ras/designs/features/planning-error.md) | 策略层规划错误；按信息完备度分层检测与恢复 | Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |

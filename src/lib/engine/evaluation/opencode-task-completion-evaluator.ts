@@ -1,9 +1,24 @@
-import {
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type {
     AgentInsight,
-    type SendPromptPayload,
-    type ChatHandlers,
+    SendPromptPayload,
+    ChatHandlers,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { buildEvaluatorPermissions } from '@/lib/engine/general-agent/workspace';
 import { getActiveConfig, type ModelConfig } from '@/lib/storage/server-config';
@@ -16,6 +31,10 @@ import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
 import { type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import { ChatOpenAI } from '@langchain/openai';
+import { hasEvaluatorExecutionPolicy, runConfiguredEvaluationStage } from '../experiment/evaluator-execution-policy';
+import { remainingEvaluationTimeMs, trackEvaluationRequest } from '../experiment/evaluation-attempt';
+import { experimentSignal } from '../experiment/cancellation-context';
+import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { randomUUID } from 'node:crypto';
 import {
@@ -288,10 +307,8 @@ function makeDirectModel(config: ModelConfig) {
         },
         temperature: 0,
         topP: 1,
-        // 显式超时 + 重试，对齐 opencode 路径（idleTimeoutMs 3min / streamTimeoutMs 10min）。
-        // 单轮 judge 正常 <10s，180s 兜住卡死调用；瞬时错误自动重试 2 次。
-        timeout: 180_000,
-        maxRetries: 2,
+        timeout: remainingEvaluationTimeMs() ?? 180_000,
+        maxRetries: hasEvaluatorExecutionPolicy() ? 0 : 2,
         modelKwargs: {
             seed: 42,
         },
@@ -333,18 +350,17 @@ async function evaluateTaskCompletionDirectAndRecord(
     const userMsg = buildUserMessage(input, rootCauses);
     const systemPrompt = buildCoordinatorSystemPrompt(input.skillAttributionMode || 'skill-aware');
     const startedAt = new Date();
-    const { experimentSignal } = await import('@/lib/engine/experiment/cancellation-context');
-    const response = await model.invoke([
+    const response = await trackEvaluationRequest(() => model.invoke([
         new SystemMessage(systemPrompt),
         new HumanMessage(userMsg),
-    ], { signal: experimentSignal() });
+    ], { signal: experimentSignal() }));
     const completedAt = new Date();
     const assistantText = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
     const parsed = parseLooseJson(assistantText);
     if (!parsed || !isTaskCompletionPayload(parsed)) {
-        throw new Error(`任务完成度直接 LLM 评测未产出有效 JSON。模型输出前 800 字符：${assistantText.slice(0, 800)}`);
+        throw new JudgeOutputParseError('任务完成度直接 LLM 评测未产出有效 JSON', assistantText);
     }
     const normalized = normalizeOutput(parsed, input.skillAttributionMode || 'skill-aware');
     const evaluatorSessionId = `${TASK_COMPLETION_EVALUATOR_NAME}-${randomUUID()}`;
@@ -383,6 +399,16 @@ export async function evaluateTaskCompletionViaOpencode(
 ): Promise<TaskCompletionEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
    const resolvedRootCauses = resolveRootCauses(input, user);
+   if (hasEvaluatorExecutionPolicy()) {
+     const { rootCauses, source } = await resolvedRootCauses;
+     const config = await getActiveConfig(user);
+     if (!config) throw new Error('未配置评测模型');
+     return runConfiguredEvaluationStage(() => evaluateTaskCompletionDirectAndRecord(input, config, rootCauses, source, user));
+   }
+   const [{ AgentInsight }, { runWithEphemeralOpencodeServer }] = await Promise.all([
+     import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-client'),
+     import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager'),
+   ]);
    // PRIMARY: 直连 LLM 单轮 judge —— 不起 opencode 进程、不建 session（省 ~1.6s 固定开销/次）。
    // 评测 trace 由 recordDirectEvaluatorExecution 合成落库。EVAL_FORCE_OPENCODE_TRANSPORT=1 回退旧路径。
    if (!shouldForceOpencodeEvalTransport()) {
@@ -576,6 +602,7 @@ export async function evaluateTaskCompletionViaOpencode(
     // 用户视角下"用例分析评测"是一个 row-level 任务(由 runOneEvaluation 注册 displayOnly),
     // 这里的 task-completion 是它内部的一个步骤, 不再单独显示。
     silent: true,
+    signal: experimentSignal(),
   });
 }
 

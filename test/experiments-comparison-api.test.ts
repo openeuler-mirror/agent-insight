@@ -1,8 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 对比实验 API 冒烟：POST 创建（type=llm + groups）→ POST 运行（type 分流）→ POST rescan。
 // 覆盖：AC-002 分组落库 / AC-008 空组校验 / AC-017 增量补评 / type 缺省走单组（AC-019）。
-// 落仓库 data/witty_insight.db（同 experiments-api.test.ts：钉住 DATABASE_URL）。
+// 可通过 AGENT_INSIGHT_TEST_DATABASE_URL 使用隔离测试数据库。
 import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL
+  ?? `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -55,9 +72,14 @@ test('AC-002: POST /api/experiments type=llm + groups → 创建实验+分组记
     type: 'llm', variableDimension: 'llm',
     groups: [{ key: 'A', value: 'glm' }, { key: 'B', value: 'qwen' }],
     evaluatorIds: [CUSTOM_LLM_ID],
+    evaluatorExecutionConfig: { mode: 'uniform', uniform: { attemptTimeoutSeconds: 900, maxRetries: 0 }, overrides: {} },
   }));
   assert.equal(res.status, 200);
   const { id } = await res.json();
+  const stored = await prisma.experiment.findUniqueOrThrow({ where: { id } });
+  assert.deepEqual(JSON.parse(stored.evaluatorConfigsJson).execution.resolved[CUSTOM_LLM_ID], {
+    attemptTimeoutSeconds: 900, maxRetries: 0, source: 'uniform',
+  });
   t.after(async () => {
     await prisma.experiment.delete({ where: { id } }).catch(() => {});
     await prisma.execution.deleteMany({ where: { id: { in: execIds } } });

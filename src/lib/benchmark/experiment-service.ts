@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { freezeCustomEvaluators, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service'
 import { resolveAgentOptions } from '../../../packages/agent-runtime/index.cjs'
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
@@ -13,6 +29,8 @@ import { prisma } from '@/lib/storage/prisma'
 import { benchmarkEvaluatorId, getBenchmarkAdapter } from './adapter-registry'
 import { benchmarkDatasetOwners } from './dataset-ownership'
 import { assertBenchmarkExecutionTarget } from './execution-targets'
+import { prepareExperimentEvaluatorConfigs } from '@/lib/evaluators/evaluator-execution-config.server'
+import { EvaluatorRunConfigValidationError } from '@/lib/evaluators/evaluator-run-config'
 
 type BenchmarkCaseSelection =
   | { mode: 'all' }
@@ -28,6 +46,8 @@ export type CreateBenchmarkExperimentInput = {
   caseSelection: BenchmarkCaseSelection
   clientId: string
   evaluatorIds?: string[]
+  evaluatorConfigs?: unknown
+  evaluatorExecutionConfig?: unknown
   runConfig: {
     platform: string
     agent: string
@@ -189,6 +209,14 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   })
 
   const customEvaluatorSnapshots = input.frozenCustomEvaluators ?? await freezeCustomEvaluators(user, evaluatorIds)
+  let evaluatorConfigsJson: string
+  try {
+    evaluatorConfigsJson = await prepareExperimentEvaluatorConfigs(user, evaluatorIds, input.evaluatorConfigs, input.evaluatorExecutionConfig)
+  } catch (error) {
+    if (error instanceof EvaluatorRunConfigValidationError) throw new BenchmarkProtocolError('EVALUATOR_CONFIG_INVALID', error.message, 400)
+    throw error
+  }
+
   const experiment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const created = await tx.experiment.create({
       data: {
@@ -197,6 +225,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
         type: 'single',
         agentName: canonicalExperimentAgentName(platform, input.agentName?.trim() || agent),
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
+        evaluatorConfigsJson,
         status: 'draft',
         scope: 'benchmark',
         configSnapshotJson: JSON.stringify({

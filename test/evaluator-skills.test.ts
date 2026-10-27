@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
@@ -353,4 +369,30 @@ test('Agent 评估仅在真实会话保存后提供可访问链路，普通 LLM�
   assert.equal((await read()).evaluationTraceId, null);
   assert.equal(agentEvaluationTraceId({ json: { ...evidence.json, customEvaluatorRuntime: { ...evidence.json.customEvaluatorRuntime, transport: 'direct' } } }), null);
   assert.equal(agentEvaluationTraceId({ json: { ...evidence.json, customEvaluatorRuntime: { ...evidence.json.customEvaluatorRuntime, evaluationTraceId: undefined } } }), null);
+});
+
+test('configured Skills retries preserve frozen input and use fresh workspaces with original error classification', async () => {
+  const { withEvaluatorExecution, runConfiguredEvaluationStage } = await import('@/lib/engine/experiment/evaluator-execution-policy');
+  const item = card();
+  const store = new EvaluatorSkillStore();
+  item.llmConfig!.skills = [await store.publish(user, packageFiles(), { kind: 'local' })];
+  const workspaces: string[] = [];
+  const inputs: string[] = [];
+  const result = await withEvaluatorExecution({ attemptTimeoutSeconds: 600, maxRetries: 1 }, new AbortController().signal,
+    () => runConfiguredEvaluationStage(() => runCustomEvaluatorWithSkills(user, item, { input: 'frozen input', output: '42' }, {
+      store, caller: async (_user, req) => {
+        assert.equal(req.timeoutMs, 600_000);
+        if (workspaces.length) await assert.rejects(fs.stat(workspaces[0]), /ENOENT/);
+        workspaces.push(req.directory!);
+        inputs.push(await fs.readFile(path.join(req.directory!, 'inputs/case.json'), 'utf8'));
+        assert.match(req.system, /VALIDATE-validator/);
+        if (workspaces.length === 1) throw Object.assign(new Error('service unavailable'), { status: 503 });
+        return JSON.stringify({ verdict: 'pass', summary: '通过', score: 90, points: [] });
+      },
+    }), { deferTimeout: true }), { retryDelaysMs: [0] });
+  assert.equal(result.output.score, 90);
+  assert.equal(workspaces.length, 2);
+  assert.notEqual(workspaces[0], workspaces[1]);
+  assert.equal(inputs[0], inputs[1]);
+  for (const workspace of workspaces) await assert.rejects(fs.stat(workspace), /ENOENT/);
 });
