@@ -428,7 +428,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         }
 
         const isProjectedSubUser = it.role === 'user' && !!it.trace_relation;
-        const isSub = (isProjectedSubUser || it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
+        const isSub = (isProjectedSubUser || it.trace_kind === 'user' || it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
         const sid = isSub ? (it.subagent_session_id as string) : 'TOP';
         const agentName = it.agent || (isSub ? (it.subagent_name || 'Subagent') : rootAgentName);
 
@@ -548,7 +548,12 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
 }
 
 function extractSessionIdFromTaskEvent(ev: AgentEvent): string | undefined {
-    return extractSessionIdValue(ev.args) ?? extractSessionIdValue(ev.output);
+    const part = ev.toolCallId && ev.interaction.parts?.find(p =>
+        p.type === 'tool' && (p.callID === ev.toolCallId || p.id === ev.toolCallId),
+    );
+    const childSession = part && part.state?.sessionID;
+    return (typeof childSession === 'string' && childSession.trim() ? childSession.trim() : undefined)
+        ?? extractSessionIdValue(ev.args) ?? extractSessionIdValue(ev.output);
 }
 
 function extractSessionIdValue(value: any, depth = 0): string | undefined {
@@ -702,7 +707,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     }
 
     // user message → user event
-    if (it.role === 'user' && contentText.trim()) {
+    if ((it.role === 'user' || it.trace_kind === 'user') && contentText.trim()) {
         out.push({
             kind: 'user',
             interaction: it,
@@ -720,7 +725,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     // the event summary. Without this, tool-only turns produce no llm event, the
     // tool calls orphan-attach to an earlier turn, and the LLM steps disappear
     // from the timeline entirely.
-    const isAssistantLike = !it.trace_synthetic
+    const isAssistantLike = !it.trace_synthetic && it.trace_kind !== 'user'
         && (it.role === 'assistant' || it.role === 'subagent' || it.role === 'opencode');
     // Summary fallback chain: visible text → reasoning → tool names. Tool-only turns
     // with no reasoning (content deliberately left empty by adapters) otherwise render
@@ -736,16 +741,15 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         : extractPartsText(it.parts, 'reasoning') || toolNamesSummary() || errorSummaryOf(it);
 
     if (calls.length === 0) {
-        // Pure LLM response with no tool calls — emit an llm event if it produced
-        // any output (visible text or just reasoning).
-        if (isAssistantLike && llmSummary.trim()) {
+        // Explicit LLM spans remain observable when only metadata was captured.
+        if (isAssistantLike && (llmSummary.trim() || it.trace_kind === 'llm')) {
             out.push({
                 kind: 'llm',
                 interaction: it,
                 interactionIndex: idx,
                 startedAt: baseTs,
                 completedAt,
-                summary: llmSummary,
+                summary: llmSummary || '未采集到模型输出',
                 usage: it.usage,
             });
         }

@@ -37,6 +37,7 @@ const WHITELIST = new Set([
   'RUN_BENCHMARK_CASE',
   'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
+  'PREPARE_EXECUTION_ENVIRONMENT',
 ])
 
 // 配置类 action 禁止携带下载地址/路径/完整配置；运行类禁止携带自由执行字段。
@@ -114,6 +115,17 @@ function mctsRuntime() {
   ]
   const runtimePath = candidates.find(candidate => fs.existsSync(candidate))
   return runtimePath ? require(runtimePath) : null
+}
+
+function executionRuntimePath() {
+  const candidates = [path.join(__dirname, 'executor', 'execution-config.cjs'), path.join(__dirname, '..', 'services', 'executor', 'src', 'execution-config.cjs')]
+  return candidates.find(candidate => fs.existsSync(candidate))
+}
+function executionRuntime() { return require(executionRuntimePath()) }
+function clearEnvironmentProbeCache() {
+  cachedProbe = null
+  cachedFiCwd = undefined
+  piRuntimeProbeCache.clear()
 }
 
 /**
@@ -906,7 +918,23 @@ function buildCapabilities(cfg, opts) {
   for (const platform of platforms) {
     platform.parameterDefinitions = definitions.filter(definition => definition.targets.some(target => target.platform === platform.id))
   }
+  const execution = executionRuntime().executionCapabilities()
+  components['execution-backend/v1'] = { ready: true }
+  for (const capability of execution.profiles) {
+    for (const target of capability.profile.targets) {
+      let platform = platforms.find(item => item.id === target.platform)
+      if (!platform) {
+        const runtime = execution.config.profiles[capability.profile.key]?.runtimes[target.platform]
+        const binary = runtime?.kind === 'pi' ? 'pi' : target.platform
+        if (!which(binary) && !runtime?.workerExecutable) continue
+        platform = { id: target.platform, agents: target.agents, models: capability.profile.models, actions: ['RUN_BENCHMARK_CASE'] }
+        platforms.push(platform)
+      }
+      platform.runBenchmarkCase = { version: 1, returnsTraceId: true }
+    }
+  }
   return {
+    executionProfiles: execution.profiles,
     platforms,
     actions: [...WHITELIST],
     components,
@@ -922,6 +950,9 @@ function benchmarkAgentPlatformsFromCapabilities(capabilities) {
   const components = capabilities?.components || {}
   return [...new Set((capabilities?.platforms || [])
     .filter((platform) => {
+      const execution = capabilities.executionProfiles?.find(item => item.profile.targets.some(target => target.platform === platform.id))
+      const readiness = execution?.targetReadiness?.[platform.id] || execution
+      if (readiness?.ready && platform.runBenchmarkCase?.returnsTraceId === true) return true
       const component = components[`agent-runtime/${platform.id}/v1`]
       const ready = component === true
         || (component && typeof component === 'object' && component.ready !== false)
@@ -1263,7 +1294,7 @@ async function executeAction(cfg, frame, sendStatus) {
     await sendStatus('FAILED', { error: { code: 'ACTION_NOT_ALLOWED', message: `未知 action: ${action}` } })
     return
   }
-  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'].includes(action)
+  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE', 'PREPARE_EXECUTION_ENVIRONMENT'].includes(action)
     ? RUN_FORBIDDEN
     : CONFIG_FORBIDDEN
   for (const key of Object.keys(payload)) {
@@ -1273,6 +1304,26 @@ async function executeAction(cfg, frame, sendStatus) {
       })
       return
     }
+  }
+
+  if (action === 'PREPARE_EXECUTION_ENVIRONMENT') {
+    await sendStatus('RUNNING', { result: { state: 'checking' } })
+    try {
+      const { executePreparation, markPreparationReported } = require(path.join(path.dirname(require.resolve(executionRuntimePath())), 'environment/task-runner.cjs'))
+      const result = await executePreparation(frame, { cfg, baseDir: CLIENT_HOME,
+        report: progress => sendStatus('RUNNING', { result: progress }) })
+      if (result.state === 'ready') {
+        Object.assign(cfg, loadConfig())
+        try { await reportEnvironmentCapabilities(cfg, result) }
+        catch (cause) { logErr('environment capability report deferred until reconnect', cause.message); return }
+      }
+      const reported = await sendStatus(result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result,
+        ...(result.state === 'failed' ? { error: { code: result.issues[0]?.code, message: result.issues[0]?.message } } : {}) })
+      if (reported !== false) await markPreparationReported(CLIENT_HOME, payload.contextDigest, frame.commandId)
+    } catch {
+      await sendStatus('FAILED', { error: { code: 'ENVIRONMENT_PREPARATION_FAILED', message: '运行环境准备中断或超时，请检查执行机后再次点击“下一步”。' } })
+    }
+    return
   }
 
   if (action === 'REFRESH_CAPABILITIES') {
@@ -2218,6 +2269,7 @@ async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
     platforms: capabilities.platforms,
     actions: capabilities.actions,
     components: capabilities.components,
+    executionProfiles: capabilities.executionProfiles,
     faultInjection: capabilities.faultInjection,
   })
   log(
@@ -2231,6 +2283,31 @@ async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
 
 let lastCapabilityFingerprint = null
 let capabilityRefreshInFlight = null
+
+async function reportEnvironmentCapabilities(cfg, result) {
+  const capabilities = result.capabilities
+  if (capabilities) {
+    capabilitiesRevision += 1
+    await api(cfg, 'PUT', '/api/reliability/client/v1/capabilities', {
+      revision: `cap_${REVISION_EPOCH}_${capabilitiesRevision}`, partial: true, ...capabilities,
+    })
+    const ready = benchmarkAgentPlatformsFromCapabilities(capabilities)
+    benchmarkExecutor?.setAgentPlatforms([...new Set([...benchmarkExecutor.agentPlatforms, ...ready])])
+  }
+  if (result.fiInventory) {
+    const platforms = { ...cachedProbe?.platforms }
+    const mergeRows = (left, right) => [...new Map([...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])].map(item => [typeof item === 'string' ? item : item?.id || item?.name, item])).values()]
+    for (const [key, platform] of Object.entries(result.fiInventory.platforms)) {
+      const previous = platforms[key]
+      platforms[key] = { ...previous, ...platform, agents: mergeRows(previous?.agents, platform.agents), models: mergeRows(previous?.models, platform.models) }
+    }
+    cacheSuccessfulProbe({ ready: true, platforms })
+    await api(cfg, 'POST', '/api/fault-injection/worker/heartbeat', {
+      workerId: cfg.clientId, hostname: os.hostname(), version: AGENT_VERSION,
+      partial: true, inventory: result.fiInventory, busySlots: fiBusy,
+    })
+  }
+}
 
 function syncBenchmarkExecutorCapabilities(executor, capabilities) {
   const platforms = benchmarkAgentPlatformsFromCapabilities(capabilities)
@@ -2377,6 +2454,28 @@ async function flushSpool(cfg) {
 
 // ---------------------------------------------------------------- main loop
 
+let environmentRecoveryInFlight = null
+function recoverEnvironmentTasks(cfg) {
+  if (environmentRecoveryInFlight) return environmentRecoveryInFlight
+  const runtime = require(path.join(path.dirname(executionRuntimePath()), 'environment/task-runner.cjs'))
+  environmentRecoveryInFlight = runtime.recoverPreparations(CLIENT_HOME, async (commandId, result) => {
+    if (result.state === 'ready') {
+      Object.assign(cfg, loadConfig())
+      await reportEnvironmentCapabilities(cfg, result)
+    }
+    try { await sendCommandStatus(cfg, commandId, result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result }, { spool: false }) }
+    catch (cause) { if (![404, 410].includes(cause.status)) throw cause }
+  }, { isActive: commandId => executingCommands.has(commandId), recheck: saved => {
+    Object.assign(cfg, loadConfig())
+    return runtime.executePreparation({ commandId: saved.taskId, createdAt: new Date().toISOString(), expiresAt: new Date(Math.min(Date.parse(saved.expiresAt), Date.now() + 120000)).toISOString(),
+      payload: { context: saved.context, contextDigest: saved.contextDigest } }, {
+      cfg, baseDir: CLIENT_HOME, report: async () => {},
+      worker: (context, config, signal, report, lease) => runtime.runWorker(context, config, signal, report, { ...lease, checkOnly: true }),
+    })
+  } }).finally(() => { environmentRecoveryInFlight = null })
+  return environmentRecoveryInFlight
+}
+
 async function main() {
   const cfg = loadConfig()
   if (!cfg.insightBaseUrl || !cfg.clientId || !cfg.deviceCredential) {
@@ -2401,6 +2500,8 @@ async function main() {
   notifyReady()
   setInterval(notifyWatchdog, WATCHDOG_MS)
   notifyWatchdog()
+
+  recoverEnvironmentTasks(cfg).catch(error => logErr('environment task recovery failed', error.message))
 
   const runtimeCandidates = [
     path.join(__dirname, 'executor', 'index.cjs'),
@@ -2444,6 +2545,7 @@ async function main() {
 
   setInterval(() => {
     flushSpool(cfg).catch(() => {})
+    recoverEnvironmentTasks(cfg).catch(error => logErr('environment task recovery failed', error.message))
   }, 15_000)
 
   // 能力探测可能 spawn opencode / FI inventory，耗时长；不得阻塞 systemd 就绪与喂狗。
@@ -2465,7 +2567,7 @@ async function main() {
   pollLoop(cfg)
 }
 
-async function sendCommandStatus(cfg, commandId, status, extra = {}) {
+async function sendCommandStatus(cfg, commandId, status, extra = {}, { spool = true } = {}) {
   const body = {
     type: 'COMMAND_STATUS',
     commandId,
@@ -2476,7 +2578,7 @@ async function sendCommandStatus(cfg, commandId, status, extra = {}) {
   try {
     await api(cfg, 'POST', `/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`, body)
   } catch (err) {
-    if (err.status !== 404 && err.status !== 410) spoolReceipt({ commandId, body })
+    if (spool && err.status !== 404 && err.status !== 410) spoolReceipt({ commandId, body })
     throw err
   }
 }
@@ -2496,9 +2598,12 @@ async function handleCommand(cfg, frame, sendVia) {
 
   const sendStatus = async (status, extra) => {
     try {
-      await sendVia(frame.commandId, status, extra)
+      if (frame.action === 'PREPARE_EXECUTION_ENVIRONMENT' && ['SUCCEEDED', 'FAILED'].includes(status)) await sendCommandStatus(cfg, frame.commandId, status, extra, { spool: false })
+      else await sendVia(frame.commandId, status, extra)
+      return true
     } catch (err) {
       logErr(`status ${status} failed for ${frame.commandId}:`, err.message)
+      return false
     }
   }
 
@@ -2690,6 +2795,7 @@ let shuttingDown = false
 async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
+  require(path.join(path.dirname(require.resolve(executionRuntimePath())), 'environment/task-runner.cjs')).stopPreparations()
   for (const child of piModelProbeChildren) signalProcessTree(child, 'SIGKILL')
   for (const controller of experimentControllers.values()) controller.abort()
   const settled = [...experimentSettled.values()]
@@ -2703,8 +2809,10 @@ process.on('SIGTERM', () => void shutdown())
 process.on('SIGINT', () => void shutdown())
 
 module.exports = {
+  clearEnvironmentProbeCache,
   loadConfig,
   executeAction,
+  handleCommand,
   buildAgentProcessLaunch,
   controlUrls,
   rasRuntimeConfigPath,
@@ -2716,6 +2824,7 @@ module.exports = {
   cleanupStaleInventoryOpencodeServers,
   buildFiInventory,
   buildCapabilities,
+  reportCapabilities,
   mergePiRuntimeCapability,
   benchmarkAgentPlatformsFromCapabilities,
   syncBenchmarkExecutorCapabilities,
@@ -2726,6 +2835,8 @@ module.exports = {
   parseOpencodeSlashCommand,
   capabilityDiscoveryFingerprint,
   refreshCapabilityReports,
+  reportEnvironmentCapabilities,
+  recoverEnvironmentTasks,
   normalizeModelIds,
   extractTraceIdFromJsonLine,
   extractStructuredAgentError,

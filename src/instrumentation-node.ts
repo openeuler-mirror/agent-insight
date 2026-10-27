@@ -199,7 +199,7 @@ export async function setupNodeRuntime(): Promise<void> {
     const { startOtelSpoolConsumer } = await import('@/lib/ingest/otel-consumer/consumer');
     startOtelSpoolConsumer();
   } catch (err) {
-    console.warn(
+    console.error(
       '[instrumentation] otel spool consumer start failed:',
       (err as Error)?.message,
     );

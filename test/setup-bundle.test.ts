@@ -12,6 +12,7 @@ const clientFiles = [
   'scripts/agent-insight-home.cjs',
   'scripts/install-ras-client.js',
   'scripts/reliability-client.cjs',
+  'scripts/xgovernor.cjs',
   'scripts/ordinary-experiment-state.cjs',
   'scripts/skill-experiment-workspace.cjs',
   'scripts/agent-run-diagnostics.cjs',
@@ -23,9 +24,28 @@ const clientFiles = [
   'scripts/fi-worker.js',
   'packages/project-config/index.cjs',
   'packages/project-config/yaml.cjs',
+  'packages/benchmark-protocol/execution.cjs',
+  'packages/benchmark-protocol/environment.cjs',
+  'scripts/agent-trace-collectors/shared/trace-transport.cjs',
   'config/benchmark/executor.yaml',
   'services/executor/src/index.cjs',
   'services/executor/src/runtime-options.cjs',
+  'services/executor/src/execution-backend.cjs',
+  'services/executor/src/execution-config.cjs',
+  'services/executor/src/environment/worker.cjs',
+  'services/executor/src/environment/task-runner.cjs',
+  'services/executor/src/environment/services.cjs',
+  'services/executor/src/environment/datasets/reliability.cjs',
+  'services/executor/src/execution-images.cjs',
+  'services/executor/src/execution-workspace.cjs',
+  'services/executor/src/xgovernor/backend.cjs',
+  'services/executor/src/xgovernor/dependency-manager.cjs',
+  'services/executor/src/xgovernor/installation.cjs',
+  'services/executor/src/xgovernor/artifact-identity.cjs',
+  'services/executor/src/xgovernor/client.cjs',
+  'services/executor/src/xgovernor/command-diagnostics.cjs',
+  'services/executor/src/xgovernor/trace.cjs',
+  'services/executor/src/xgovernor/capture-worker.cjs',
   'packages/agent-runtime/index.cjs',
   'packages/agent-runtime/loader.cjs',
   'services/executor/runtimes/mcts/runtime.yaml',
@@ -36,8 +56,11 @@ const clientFiles = [
   'services/executor/src/git-source-workspace.cjs',
   'services/executor/src/source-policy-registry.cjs',
   'services/executor/src/benchmarks/swe-bench.cjs',
+  'services/executor/src/benchmarks/swe-bench-images.cjs',
   'generated/benchmark-catalog/executors.cjs',
   'benchmarks/swe-bench/executor/git-source-policy.cjs',
+  'benchmarks/swe-bench/executor/environment.cjs',
+  'benchmarks/zsoft-l1/executor/environment.cjs',
   'agent_ras/platform_adapter/opencode/config_sync.js',
   'agent_fault_injection/pyproject.toml',
 ]
@@ -140,6 +163,12 @@ test('installed executor loads package policies after the installation source mo
     assert.deepEqual([...policies.keys()], ['swe-bench'])
     assert.equal(policies.get('swe-bench').home, ${JSON.stringify(home)})
     const legacy = require(path.join(dir, 'benchmarks/swe-bench.cjs'))
+    const { loadEnvironmentAdapter } = require(path.join(dir, 'environment/registry.cjs'))
+    assert.equal(typeof loadEnvironmentAdapter('swe-bench').checkEnvironment, 'function')
+    assert.equal(typeof loadEnvironmentAdapter('zsoft-l1').prepareEnvironment, 'function')
+    assert.equal(typeof loadEnvironmentAdapter('reliability').checkEnvironment, 'function')
+    assert.equal(typeof require(path.join(dir, 'environment/services.cjs')).createServices, 'function')
+    assert.equal(typeof require(path.join(dir, '../lib/fi-python-runtime.js')).ensureManagedFiRuntime, 'function')
     assert.equal(new legacy.SweBenchGitSourcePolicy({ home: ${JSON.stringify(home)}, env: { SWE_BENCH_GIT_SOURCE: '' } })
       .resolve({ repository: 'https://github.com/pallets/flask.git' }).remotes[0].name, 'gitee')
     executor.close()

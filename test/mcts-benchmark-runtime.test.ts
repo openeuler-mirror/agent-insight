@@ -435,7 +435,11 @@ for (const scenario of [
     assert.equal(response.status, 200)
     const body = await response.json()
     if (!scenario.ready) {
-      assert.deepEqual(body.agents, [])
+      assert.equal(body.agents.length, 1)
+      assert.equal(body.agents[0].executable, false)
+      assert.equal(body.agents[0].targets[0].supportsBenchmark, false)
+      assert.deepEqual(body.agents[0].targets[0].benchmarkKeys, [])
+      assert.match(body.agents[0].targets[0].benchmarkUnavailableReasons['swe-bench'], /缺少 agent-runtime\/pi-mcts\/v1/)
       return
     }
     assert.equal(body.agents.length, 1)

@@ -23,12 +23,15 @@ Usage:
 
 The start command builds and starts the Evaluator Controller from the current Git
 checkout on Linux or macOS. The stop command stops it immediately. Image commands
-keep the Controller running and operate only on the shared Benchmark image pool.
+keep the Controller running and manage the shared Case image pool and old managed
+Runtime images. Current Catalog runtimes and container-referenced images are kept.
 Defaults: --bind-address 0.0.0.0 --port 3001.
 Port precedence: --port > AGENT_INSIGHT_EVALUATOR_PORT in process environment
 > $AGENT_INSIGHT_HOME/.env (default: $HOME/.agent-insight/.env) > 3001.
 The container always listens on 8080. Legacy PORT is not supported.
 Business settings come from config/benchmark/evaluator.yaml and config/benchmark/evaluator.local.yaml.
+Explicit --evaluator-env business settings override YAML for this start only.
+Example: --evaluator-env EVALUATOR_MAX_CONCURRENCY=4
 AGENT_INSIGHT_CONFIG_DIR can select another configuration directory.
 The command always builds the generic Controller image. Benchmark runtimes are resolved
 from the generated Catalog only when an evaluation task requires them.
@@ -147,15 +150,15 @@ images_evaluator() {
     || fail '缺少包含管理工具的 Controller 镜像'
   MANAGEMENT_READONLY=,readonly
   if [ "$action" = list ]; then
-    evaluator_management_run "$MANAGEMENT_IMAGE" --images-list
+    evaluator_management_online --images-list
     return
   fi
   if [ "$dry_run" = true ]; then
-    evaluator_management_run "$MANAGEMENT_IMAGE" --images-purge --dry-run
+    evaluator_management_online --images-purge --dry-run
     return
   fi
   evaluator_management_lock || fail '管理操作冲突'
-  evaluator_management_run "$MANAGEMENT_IMAGE" --images-purge
+  evaluator_management_online --images-purge
 }
 
 status_evaluator() {
@@ -258,8 +261,8 @@ case "$PLATFORM_BASE_URL" in
   *) fail '--platform-base-url 必须是 HTTP(S) URL' ;;
 esac
 if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
-  RETAINED_EVALUATOR_ENV=()
   for evaluator_env in "${EVALUATOR_ENV[@]}"; do
+    case "$evaluator_env" in *$'\n'*|*$'\r'*) fail '--evaluator-env 必须是单行 NAME=VALUE' ;; esac
     printf '%s' "$evaluator_env" | LC_ALL=C grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=.*$' \
       || fail '--evaluator-env 必须是 NAME=VALUE'
     case "$evaluator_env" in
@@ -267,19 +270,15 @@ if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
         fail '配置快照由启动脚本生成，不接受 --evaluator-env 覆盖' ;;
       PORT=*|EVALUATOR_PORT=*|AGENT_INSIGHT_PORT=*|AGENT_INSIGHT_EVALUATOR_PORT=*)
         fail '端口不能通过 --evaluator-env 设置；请使用 --port 或 AGENT_INSIGHT_EVALUATOR_PORT' ;;
-      SWE_BENCH_*=*|SWEBENCH_*=*|EVALUATOR_MAX_CONCURRENCY=*|IMAGE_POOL_ENABLED=*|IMAGE_POOL_PREFETCH_ENABLED=*|IMAGE_POOL_RESERVE_RATIO=*|IMAGE_POOL_HIGH_WATERMARK=*|IMAGE_POOL_MAX_PULLS=*|IMAGE_POOL_WAIT_SECONDS=*|IMAGE_POOL_MAC_DISK_PATH=*)
-        printf '警告：%s 已迁移至 config/benchmark/evaluator.local.yaml，不再生效。\n' "${evaluator_env%%=*}" >&2
-        continue ;;
+      IMAGE_POOL_DISK_MODE=*|IMAGE_POOL_DISK_PATH=*|IMAGE_POOL_HOST_DISK_PATH=*|IMAGE_POOL_CONTAINERD_PATH=*)
+        fail '镜像池内部磁盘配置由启动脚本检测，不接受 --evaluator-env 覆盖' ;;
     esac
-    RETAINED_EVALUATOR_ENV+=("$evaluator_env")
   done
-  EVALUATOR_ENV=()
-  if [ "${#RETAINED_EVALUATOR_ENV[@]}" -gt 0 ]; then EVALUATOR_ENV=("${RETAINED_EVALUATOR_ENV[@]}"); fi
 fi
 
 for legacy_name in EVALUATOR_MAX_CONCURRENCY SWE_BENCH_PYTHON SWE_BENCH_IMAGE_SOURCE SWE_BENCH_IMAGE_ARCH SWE_BENCH_ALLOW_NON_OFFICIAL SWE_BENCH_IMAGE_PROXY_PREFIX SWE_BENCH_VERIFIED_MIRROR_REPOS SWEBENCH_DOCKER_TIMEOUT SWEBENCH_DOCKER_POOL_SIZE IMAGE_POOL_ENABLED IMAGE_POOL_PREFETCH_ENABLED IMAGE_POOL_RESERVE_RATIO IMAGE_POOL_HIGH_WATERMARK IMAGE_POOL_MAX_PULLS IMAGE_POOL_WAIT_SECONDS IMAGE_POOL_MAC_DISK_PATH; do
   if [ "${!legacy_name+x}" = x ]; then
-    printf '警告：%s 已迁移至 config/benchmark/evaluator.local.yaml，不再生效。\n' "$legacy_name" >&2
+    printf '警告：进程环境中的 %s 不再隐式覆盖 YAML；请使用 config/benchmark/evaluator.local.yaml 或显式 --evaluator-env。\n' "$legacy_name" >&2
   fi
 done
 
@@ -360,15 +359,19 @@ IMAGE_ID=$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}')
 
 PROJECT_CONFIG_DIR=${AGENT_INSIGHT_CONFIG_DIR:-$REPOSITORY_ROOT/config/benchmark}
 PROJECT_CONFIG_DIR=$(CDPATH= cd -- "$PROJECT_CONFIG_DIR" && pwd) || fail '配置目录不存在'
-PROJECT_CONFIG_OUTPUT=$(docker run --rm --pull never --network none --read-only \
+PROJECT_CONFIG_OUTPUT=$({ if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then printf '%s\n' "${EVALUATOR_ENV[@]}"; fi; } | docker run --interactive --rm --pull never --network none --read-only \
   --mount "type=bind,src=$PROJECT_CONFIG_DIR,dst=/project-config,readonly" \
-  --entrypoint node "$IMAGE_ID" /app/packages/project-config/index.cjs evaluator /project-config "$PROJECT_CONFIG_DIR" --deployment) \
-  || fail 'Evaluator 配置无效，未停止旧服务；请检查 config/benchmark/evaluator.yaml 和本地覆盖文件'
+  --entrypoint node "$IMAGE_ID" /app/packages/project-config/index.cjs evaluator /project-config "$PROJECT_CONFIG_DIR" --deployment --env-overrides) \
+  || fail 'Evaluator 配置无效，未停止旧服务；请检查 YAML 配置和 --evaluator-env 参数'
 PROJECT_CONFIG_LINES=()
 while IFS= read -r config_line; do PROJECT_CONFIG_LINES+=("$config_line"); done <<< "$PROJECT_CONFIG_OUTPUT"
 PROJECT_CONFIG_JSON=${PROJECT_CONFIG_LINES[0]}
 POOL_ENABLED=${PROJECT_CONFIG_LINES[1]}
 POOL_MAC_DISK_PATH=${PROJECT_CONFIG_LINES[2]:-}
+EVALUATOR_ENV=()
+for ((config_index=3; config_index<${#PROJECT_CONFIG_LINES[@]}; config_index++)); do
+  [ -z "${PROJECT_CONFIG_LINES[$config_index]}" ] || EVALUATOR_ENV+=("${PROJECT_CONFIG_LINES[$config_index]}")
+done
 evaluator_image_pool_mounts
 
 EVALUATOR_HOME=${AGENT_INSIGHT_EVALUATOR_HOME:-$HOME/.agent-insight/evaluator}
@@ -422,9 +425,9 @@ CONFIG_DIGEST=$(git_checkout hash-object --no-filters "$CONFIG_FILE")
 
 docker volume create "$DATA_VOLUME" >/dev/null
 if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-  evaluator_management_run "$IMAGE_ID"
+  evaluator_management_run "$IMAGE_ID" --summary
 fi
-evaluator_management_run "$IMAGE_ID" --start
+evaluator_management_run "$IMAGE_ID" --start --summary
 printf '启动 Evaluator Controller 容器：%s\n' "$CONTAINER_NAME"
 docker run --detach --pull never \
   --name "$CONTAINER_NAME" \
@@ -441,7 +444,12 @@ docker run --detach --pull never \
 bash "$SCRIPT_DIR/evaluator-doctor.sh" \
   --container "$CONTAINER_NAME" \
   --config "$CONFIG_FILE" \
-  --expected-image-id "$IMAGE_ID"
+  --expected-image-id "$IMAGE_ID" \
+  --summary
+
+if ! evaluator_management_online --runtimes-purge --summary; then
+  printf '警告：旧 Runtime 镜像清理未全部完成；Controller 继续运行，请检查清理输出。\n' >&2
+fi
 
 while IFS='|' read -r CONTROLLER_REPOSITORY CONTROLLER_TAG; do
   [ "$CONTROLLER_REPOSITORY" = "$IMAGE_REPOSITORY" ] || continue

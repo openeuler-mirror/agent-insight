@@ -1,3 +1,10 @@
+---
+title: "Positioning"
+description: "介绍 Agent Insight 的项目定位、目标用户、核心能力和成熟度，帮助开发者理解平台适用范围。"
+keywords: ["Agent Insight", "智能体工程", "可观测性", "Skill 优化"]
+changefreq: monthly
+---
+
 # Positioning
 
 > Agent-Insight 是一个开源、自托管的工程平台，让任意 Agent 变得可观测、可评测、可自我改进——并将 Skill 作为一等的、可优化的资产。

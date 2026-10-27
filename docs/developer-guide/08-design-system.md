@@ -1,3 +1,10 @@
+---
+title: "Design System & Frontend Style"
+description: "说明 Agent Insight 的共享设计令牌、排版、组件尺寸与视觉审查规则，帮助前端保持一致的界面风格。"
+keywords: ["Agent Insight", "设计系统", "设计令牌", "前端样式", "视觉审查"]
+changefreq: monthly
+---
+
 # Design System & Frontend Style
 
 > 对 Agent-Insight 前端的逆向设计审计。配套阅读 [06-frontend.md](06-frontend.md)（它讲的是路由与组件接线）。本页讲的是**视觉语言**：设计令牌、排版、控件尺寸，以及一份带漂移检测的 UI/UX 审计。

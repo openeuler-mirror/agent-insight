@@ -1,3 +1,10 @@
+---
+title: "MCTS xGovernor Trace 非侵入式接入"
+description: "介绍通过透明代理接入 MCTS 与 xGovernor 的方法，以及 Runtime 链路展示、隐私边界和排障步骤。"
+keywords: ["Agent Insight", "MCTS", "xGovernor", "透明代理", "链路追踪"]
+changefreq: monthly
+---
+
 # MCTS xGovernor Trace 非侵入式接入
 
 本指南面向已经部署好 MCTS 和 xGovernor 的用户。Agent Insight 接入由外部启动器完成：启动器在 MCTS 执行机的回环地址创建透明代理，给 MCTS 子进程注入 `XGOVERNOR_BASE_URL`，采集 xGovernor HTTP/SSE 数据并上传。Pi 由 xGovernor 执行，因此这条链路使用 MCTS 专用代理采集。
@@ -88,6 +95,10 @@ cd /path/to/MCTS
 ```bash
 agent-insight-mcts-run --upstream http://127.0.0.1:8787 -- <原 MCTS 命令>
 ```
+
+采集 Key 的读取顺序为：显式进程环境变量 `AGENT_INSIGHT_API_KEY` → 采集器所属安装目录的 `.env` → 旧版采集器 `config.json`。因此公共 Key 更新后，新启动的 MCTS 会自动使用新值，无需手工同步 MCTS JSON；显式设置的进程环境变量仍需自行同步。Benchmark 的每 Case 输出目录只存轨迹，读取凭据时根据安装版 `--config` 路径定位公共配置，不读取 Case 目录中的 `.env`。公共配置显式清空 Key 时，不回退到旧 Key。
+
+安装及每次启动采集前，会向配置的 OTLP 接口发送空事件请求，校验平台鉴权，不生成任务 Trace。Key 无效、平台不可达或响应异常时立即报错，不启动 MCTS；安装鉴权失败不覆盖已有采集器配置。这只验证采集入口，不代替模型或 xGovernor 可用性验证。运行中的采集进程不会热更新 Key，历史上传失败数据也不会自动补传；需要在任务结束后单独恢复。
 
 默认是 fail-open：缺少 API Key 或本地代理启动失败时，启动器提示原因并直接执行原命令。要求观测不可用时拒绝启动，可增加 `--strict`。推理正文默认不采集；明确需要时增加 `--capture-reasoning`。
 

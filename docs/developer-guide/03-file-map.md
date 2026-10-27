@@ -1,3 +1,10 @@
+---
+title: "File Map"
+description: "按模块整理 Agent Insight 的源码文件与关键符号，提供引擎、数据接入和 API 实现的查找入口。"
+keywords: ["Agent Insight", "源码索引", "模块导航", "API 实现"]
+changefreq: monthly
+---
+
 # File Map
 
 > 查找表：文件 → 模块 → 关键符号。内容经过筛选（仓库共有 454 个已分析的 TS 文件）；覆盖你实际会查找的导航目标。所有路径均真实存在。完整的 UI 路由清单见 [06-frontend.md](06-frontend.md)；HTTP 处理器见下方的 "API routes" 一节。

@@ -37,8 +37,9 @@ function logFailure(logs: Map<string, FailureLog>, key: string, error: string, n
     consecutiveFailures: (previous?.consecutiveFailures ?? 0) + 1, suppressed: 0,
   };
   logs.set(key, next);
-  console.warn(endpoint ? '[infra-poller] source error:' : '[infra-poller] tick error:', JSON.stringify({
+  console.error(endpoint ? '[infra-poller] source error:' : '[infra-poller] tick error:', JSON.stringify({
     endpoint, error, consecutiveFailures: next.consecutiveFailures,
+    firstFailedAt: new Date(next.firstFailedAt).toISOString(), lastFailedAt: new Date(nowMs).toISOString(),
     suppressed: previous?.suppressed ?? 0,
     previousError: previous && previous.error !== error ? previous.error : undefined,
   }));

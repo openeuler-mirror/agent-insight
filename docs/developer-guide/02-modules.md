@@ -1,8 +1,18 @@
+---
+title: "Modules"
+description: "梳理 Agent Insight 各模块的职责、依赖关系和关键实现，帮助开发者定位业务与基础设施代码。"
+keywords: ["Agent Insight", "模块划分", "依赖关系", "代码导航"]
+changefreq: monthly
+---
+
 # Modules
 
 > 该代码库共有 12 个顶层模块。下文的分级来自跨模块 fan-in（`moduleRanking`）：跨模块入度越高 = 越核心。请先阅读核心模块。
 
 ## Core vs peripheral
+
+实验执行环境准备由三个部分组成：`src/lib/engine/experiment/environment-preparation.ts` 处理权限、上下文和任务状态；执行端数据集接入实现决定公共要求及当前 Agent 的额外要求；`services/executor/src/environment/services.cjs` 提供可复用检查与安装。Benchmark 的业务组合位于各接入包 `executor/environment.cjs`，由 Catalog 分发；普通和可靠性数据集实现位于 `services/executor/src/environment/datasets/`。前端 Hook 只在第二步下一步触发，公共服务不包含具体 Benchmark 安装分支。
+
 | Module | Dir | Tier | Functions | Fan-in | Depends on | Depended on by |
 |---|---|---|---|---|---|---|
 | `lib` | `src/lib/` | **core** | 992 | 1882 | prompts, server | app, components, providers, scripts, server |

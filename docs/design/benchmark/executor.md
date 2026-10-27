@@ -6,6 +6,8 @@
 
 状态：步骤 04～07 后端已实现并通过客户端控制通道测试；步骤 01～07 已使用本地 SWE-bench Verified 真实 Case 串联验证；真实 OpenCode generate-only Smoke 已通过。
 
+实验创建前的环境检查使用独立的 `execution-environment/v1` 协议，由现有客户端处理 `PREPARE_EXECUTION_ENVIRONMENT`。接入实现放在 `benchmarks/<key>/executor/environment.cjs`，按数据集与所选 Agent 提供 `checkEnvironment`、`prepareEnvironment`，不在本节的每 Case 工作区准备中进行共享运行组件安装。正式合同见[接入开发规范第 5.5 节](../../developer-guide/benchmark/benchmark-integration-development-guide.md#55-执行环境准备协议)，任务编排见[实验执行环境准备设计](../experiment-environment-preparation/phase2-requirements-design.md)。
+
 ## 1. 结论
 
 执行器不另起一套 Agent 执行实现，而是在现有 `agent-insight-client` 常驻进程中增加 Benchmark 白名单指令和编排层：

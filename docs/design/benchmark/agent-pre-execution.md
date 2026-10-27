@@ -6,6 +6,8 @@
 
 ## 1. 主流程
 
+以下流程从创建实验开始。在此之前，向导第二步点击“下一步”通过 `POST /api/experiments/environment-preparations` 检查、准备当前数据集、主机与 Agent 的执行环境，查询任务直到就绪后继续向导。该检查不要求已存在 Experiment，不代替实验创建时的能力校验与配置冻结。协议见[接入开发规范第 5.5 节](../../developer-guide/benchmark/benchmark-integration-development-guide.md#55-执行环境准备协议)。
+
 ```text
 POST /api/experiments (scope=benchmark)
   └─ BenchmarkExperimentService.create()

@@ -1,3 +1,10 @@
+---
+title: "快速开始"
+description: "介绍 FI Worker 的安装、平台准备和首次故障注入流程，帮助用户查看运行与评判结果。"
+keywords: ["Agent FI", "故障注入", "Worker 安装", "可靠性评测"]
+changefreq: monthly
+---
+
 # 快速开始
 
 在本机启用 Agent FI（故障注入 + 采集）的最短路径。远程 Insight 负责任务 / Judge / 展示；本机 **FI Worker** 认领任务并驱动同机的 OpenCode / xiaoO。

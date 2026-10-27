@@ -156,6 +156,7 @@ export async function POST(req: Request) {
     const receivedAt = new Date().toISOString();
     const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser })
       .map(isolateQwenCodeOtelEvent);
+    diagnostic.mapped(events);
     const rejectedQwenEvents = hasInvalidApiKey
       ? events.filter(isQwenCodeOtelEvent)
       : [];

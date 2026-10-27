@@ -1,3 +1,10 @@
+---
+title: "Benchmark 通用服务部署指南"
+description: "介绍 Agent Insight、Agent 执行客户端和 Evaluator 的公共服务部署、互访配置与验收步骤，并提供各 Benchmark 的专属部署入口。"
+keywords: ["Agent Insight", "Benchmark", "Evaluator", "服务部署", "环境验收"]
+changefreq: monthly
+---
+
 # Benchmark 通用服务部署指南
 
 本指南部署 Agent Insight、执行客户端和 Evaluator 的公共服务。完成公共安装后，按所选 Benchmark 阅读同级的 [SWE-bench 部署指南](swe-bench-deployment-guide.md) 或 [ZSoft 部署指南](zsoft-deployment-guide.md)，完成数据、执行环境和评测资产配置。架构与实现细节见 [`docs/design/benchmark/`](../../design/benchmark/README.md)。
@@ -180,7 +187,19 @@ bash scripts/evaluator.sh start \
 | `--platform-base-url URL` | Evaluator 回访 Agent Insight 的地址 |
 | `--port PORT` | Evaluator 对外端口，默认 `3001` |
 | `--bind-address ADDRESS` | Evaluator 监听地址，默认 `0.0.0.0` |
-| `--evaluator-env NAME=VALUE` | 传入环境参数；业务配置改用 `config/benchmark/evaluator.local.yaml` |
+| `--evaluator-env NAME=VALUE` | 可重复传入；已知业务变量转换为本次启动的配置覆盖，其他变量传入 Controller/Runtime |
+
+原有并发命令可直接使用，无需创建 YAML 文件：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url http://host.docker.internal:3000 \
+  --evaluator-env EVALUATOR_MAX_CONCURRENCY=4
+```
+
+优先级为显式 `--evaluator-env` > `evaluator.local.yaml` > `evaluator.yaml` > 默认值；同一变量重复传入时最后一个生效，仅影响本次启动，不改写 YAML。业务覆盖在合并后统一校验，非法值在替换旧服务前报错。日志打印最终并发、镜像池和预取配置；`/health.maxConcurrency` 应为 4。普通进程环境里的旧变量仍不隐式覆盖 YAML，端口继续使用 `--port`，配置快照和镜像池内部磁盘参数禁止直接覆盖。
+
+SWE-bench 同样支持 `SWE_BENCH_PYTHON`、`SWE_BENCH_IMAGE_SOURCE`、`SWE_BENCH_IMAGE_ARCH`、`SWE_BENCH_ALLOW_NON_OFFICIAL`、`SWE_BENCH_IMAGE_PROXY_PREFIX`、`SWE_BENCH_VERIFIED_MIRROR_REPOS`、`SWEBENCH_DOCKER_TIMEOUT` 和 `SWEBENCH_DOCKER_POOL_SIZE` 的显式覆盖。镜像仓库列表接受逗号分隔或 JSON 字符串数组，空字符串关闭额外仓库，`null` 恢复内置仓库；未知 SWE-bench/镜像池配置变量明确报错，不再忽略。
 
 验证 Evaluator：
 
@@ -204,6 +223,8 @@ imagePool:
 
 修改后重新执行 `bash scripts/evaluator.sh start`，按 5.1/5.2 节补充通信地址与端口参数。启动脚本在 Controller 镜像内校验配置，不要求宿主安装 Node.js；配置无效时不会停止旧服务。校验后的 JSON 快照传给 Controller 和 Benchmark Runtime，禁止用 `--evaluator-env` 覆盖快照。
 
+也支持显式传入 `--evaluator-env IMAGE_POOL_ENABLED=false`、`IMAGE_POOL_PREFETCH_ENABLED=false`，以及 `IMAGE_POOL_RESERVE_RATIO`、`IMAGE_POOL_HIGH_WATERMARK`、`IMAGE_POOL_MAX_PULLS`、`IMAGE_POOL_WAIT_SECONDS`、`IMAGE_POOL_MAC_DISK_PATH`。布尔值接受 `true/false/1/0`，路径相对所选配置目录解析。参数通过 stdin 交给容器内校验器，不出现在辅助 Docker 命令参数中；日志只打印固定配置摘要，不输出非业务 Runtime 凭据。
+
 镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。平台通过 `/health` 发现预取状态，无需额外令牌。Evaluator 端口应只允许平台访问。
 
 ### 5.4 评测并发与 Case 数量上限
@@ -223,7 +244,7 @@ imagePool:
 maxConcurrency: 2
 ```
 
-平台侧未覆盖时保持默认值。修改平台配置后重启平台；修改评测配置后重新运行 Evaluator 启动命令。旧并发/待评测上限环境变量不再生效。
+平台侧未覆盖时保持默认值。修改平台配置后重启平台；修改评测配置后重新运行 Evaluator 启动命令。旧进程环境中的并发/待评测上限变量不再隐式覆盖 YAML；评测并发可用显式 `--evaluator-env EVALUATOR_MAX_CONCURRENCY=4` 覆盖。
 
 启动后验证：
 
@@ -283,7 +304,7 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 
 ### 7.1 执行机配置与 Runtime 接入
 
-Benchmark 执行配置位于执行机的 `config/benchmark/executor.local.yaml`；安装版目录为 `$AGENT_INSIGHT_HOME/client/runtime/config/benchmark/`。安装升级更新默认文件、保留 local 文件；旧 `config/executor.local.yaml` 在新位置没有覆盖文件时迁移，并保留相对 Git 路径的实际位置。也可通过 `AGENT_INSIGHT_CONFIG_DIR` 指定配置目录。
+源码运行时在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；curl 安装版统一使用 `~/.agent-insight/config/executor.local.yaml`，自定义根目录时为 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`。安装器自动准备用户配置目录并打印路径，不要求创建配置文件。安装升级只更新运行时内置的 `executor.yaml`，不覆盖用户配置。安装版不读取、迁移或回退到 `client/runtime/config/benchmark/executor.local.yaml` 或更早的 `client/runtime/config/executor.local.yaml`；旧文件保留但不生效，需要的配置请自行写入新路径。配置中的相对路径以新配置文件所在目录为基准。显式设置 `AGENT_INSIGHT_CONFIG_DIR` 时仍从指定目录读取 `executor.yaml` 与 `executor.local.yaml`，不叠加上述用户配置。
 
 执行机的 Benchmark 专属准备分别见 [SWE-bench](swe-bench-deployment-guide.md#3-执行端准备) 和 [ZSoft](zsoft-deployment-guide.md#3-执行端准备)。MCTS 是 Agent Runtime，接入与连接预检见 [MCTS xGovernor 接入](../../user-guide/observability/mcts-xgovernor.md#用于平台-benchmark-实验)，不按 Benchmark 另建安装流程。
 
@@ -300,6 +321,61 @@ node scripts/install-ras-client.js
 安装器保留绑定与 `executor.local.yaml`，复制新版运行时并重启。只更新 checkout 或重启旧服务不会更新安装目录副本。Runtime YAML 定制应在源码或配置仓维护并随安装发布，安装目录中的定义会被升级覆盖。客户端约每 30 秒重新读取并上报定义，修改后等待上报并刷新页面，或重启客户端。
 
 首次启用新协议时先升级平台，再升级执行客户端。历史实验快照保留原值；契约变化时使用匹配客户端或确认原配置后新建实验，不回写历史快照。
+
+### 7.3 原生 Pi/xiaoO 的 SWE-bench：xGovernor 本地 Docker
+
+`swe-bench + pi-agent/xiaoo` 默认使用 `xgovernor-local-docker`，环境未就绪时不会回退宿主机执行。平台和 Evaluator 无需安装 xGovernor；MCTS 使用自己的独立服务。
+
+**准备与安装**
+
+执行机需为 Linux x64/arm64，Docker 可用且使用 cgroup v2，并具备原生 Agent 的模型配置。Git、C/C++、make、pkg-config、OpenSSL 开发库、curl、tar、xz 和 Python/TOML 读取能力由管理员提前准备；实验环境检查不会隐式执行系统包管理器或提权。执行机还需能访问 GitCode、Rust/Cargo、Node 与 npm 下载源；不足的 Node/Rust 工具链安装到独立依赖目录。
+
+1. 在平台 **配置 → 客户端安装** 选择 Pi/xiaoO，执行页面生成的一条 curl 命令（见第 7 节）。
+2. 安装仅接入链路采集和基础客户端，不因选择 Pi/xiaoO 就编译 xGovernor。确认客户端在线后创建单 Case 实验。
+3. 在实验第二步选择主机、模型及 Case，点击下一步后检查环境；缺少受管理组件时自动编译 xGovernor、配套组件和 xiaoO 凭据桥接，通过复查后自动进入第三步。首次编译期间底部提示可能需要几分钟。需要配置模型凭据或系统依赖时，按底部说明在执行机处理，再次点击下一步。
+4. 开始实验后检查 Trace、`model.patch` 和官方评测结果。准备复用原生 Agent 模型配置，无需另配 xGovernor Key；已有有效安装不会重复编译。
+
+安装状态可在执行机查看；自定义 `AGENT_INSIGHT_HOME` 时相应替换路径：
+
+```bash
+node ~/.agent-insight/client/runtime/xgovernor.cjs status
+```
+
+**默认行为**
+
+| 项目 | 默认值或行为 |
+|---|---|
+| 模型与凭据 | 沿用实验选择及原生 Agent 配置，每个 Case 准备时读取；无需另配 xGovernor Key |
+| 隔离 | 每 Case 独立服务和工具容器，监听端口动态分配；工具容器断网，模型请求由宿主机控制器发出 |
+| 工具容器资源 | 2 CPU、4 GiB 内存、512 PID |
+| 本地记录 | 默认保留 7 天，只清理已结束且上传、资源清理均已确认的记录；镜像另行管理 |
+| Case 镜像 | 使用镜像内源码；来源和架构配置见 [SWE-bench 镜像配置](swe-bench-deployment-guide.md#原生-pixiaoo-的-case-镜像) |
+
+**可选配置**
+
+curl 安装版编辑 `~/.agent-insight/config/executor.local.yaml`；源码运行编辑仓库 `config/benchmark/executor.local.yaml`。自定义配置目录规则见 7.1。以下为默认值，按需覆盖即可：
+
+```yaml
+retention:
+  days: 7
+execution:
+  profiles:
+    xgovernor-local-docker:
+      resources: { cpu: 2, memoryMiB: 4096, pids: 512 }
+```
+
+**更新与排障**
+
+更新平台后，重新执行安装页生成的 curl 命令，等待安装完成及客户端重新上报能力。匹配版本会复用；缺少组件、旧布局或目录曾被移动时自动重建。执行环境摘要变化后需新建实验并重新选择环境，历史记录不会自动重跑。
+
+| 现象 | 处理 |
+|---|---|
+| Docker / cgroup v2 未就绪 | 管理员修复宿主机，再重跑安装命令 |
+| 构建失败或凭据桥接缺失 | 查看安装输出及 `status`，修复构建依赖、下载网络或权限后重跑 curl |
+| 模型配置或凭据解析失败 | 按 Case 中的具体原因检查原生 Agent 配置、凭据库及运行账号 |
+| 已有 Patch，但评测失败 | 按 [SWE-bench 排查与更新](swe-bench-deployment-guide.md#6-排查与更新) 检查 Evaluator |
+
+手动版本更新、回退及安装实现见 [受管理安装与版本](benchmark-integration-development-guide.md#受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](benchmark-integration-development-guide.md#原生执行高级配置)。
 
 ## 8. 整体验收
 
@@ -366,13 +442,13 @@ bash scripts/evaluator.sh start \
 # 查看服务状态
 bash scripts/evaluator.sh status
 
-# 查看镜像池管理的镜像
+# 查看镜像池与受管 Runtime 镜像的清理预览
 bash scripts/evaluator.sh images list
 
-# 预览可清理的空闲镜像
+# 预览可清理的空闲 Case 镜像与旧 Runtime
 bash scripts/evaluator.sh images purge --dry-run
 
-# 保持服务运行，清理空闲镜像
+# 保持服务运行，清理空闲 Case 镜像与旧 Runtime
 bash scripts/evaluator.sh images purge
 
 # 立即停止服务，保留镜像
@@ -391,5 +467,9 @@ bash scripts/evaluator.sh stop --purge-images
 | `--purge-images` | 停止服务时同时清理评测服务管理的镜像 |
 
 停止服务不需要传端口参数，自定义端口启动的服务也使用相同命令。
+
+`start` 在新 Controller 通过 Doctor 后自动清理旧 Runtime；正常启动只显示 Doctor 和清理数量摘要，不逐项打印镜像 ID、摘要和 JSON。失败仍显示具体原因；Runtime 清理失败只打印警告，不停止已启动的服务。手动执行 `bash scripts/evaluator-doctor.sh`、`images list/purge` 保留完整诊断结果。在线 `images list/purge` 使用运行中 Controller 内的 Catalog 和配置，不使用宿主工作区的 Catalog；旧版 Controller 需先执行 `start` 升级。关闭 Case 镜像池时，Runtime 清理仍可使用。
+
+Runtime 清理只处理同一 Docker daemon、同一数据卷中已登记且身份确认的 Runtime。始终保留当前 Catalog 所需引用及相同 Image ID、被任何容器（包括已停止容器）引用的镜像、未确认操作、被改写的引用及存在额外标签/其他仓库 digest 的镜像。删除不使用强制模式，不停止任务，也不执行全局 prune。输出的 `runtimes` 包含候选、删除、保留原因和失败项；`--dry-run` 不删除镜像或归属记录。预装/手工构建且未登记的历史 Runtime、Case 资产镜像及构建缓存不在 Runtime 清理范围内。
 
 完成公共服务安装后，分别按 [SWE-bench 部署指南](swe-bench-deployment-guide.md) 或 [ZSoft 部署指南](zsoft-deployment-guide.md) 验收所选 Benchmark。
