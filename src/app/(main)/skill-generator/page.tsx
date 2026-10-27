@@ -2010,16 +2010,22 @@ export default function PlaygroundPage() {
  * 用 `any` 是为了避开 react-markdown 在不同版本里 Components 类型签名不一致
  * 的小坑——components map 里只用 node + props，跑时取出来用就行。
  */
-const blockWithLineAttrs = (Tag: any) => (props: any) => {
-    const pos = props?.node?.position;
-    const { node, ...rest } = props;
-    return (
-        <Tag
-            data-line-start={pos?.start?.line}
-            data-line-end={pos?.end?.line}
-            {...rest}
-        />
-    );
+const blockWithLineAttrs = (Tag: any) => {
+    const BlockWithLineAttrs = (props: any) => {
+        const pos = props?.node?.position;
+        const { node, ...rest } = props;
+        return (
+            <Tag
+                data-line-start={pos?.start?.line}
+                data-line-end={pos?.end?.line}
+                {...rest}
+            />
+        );
+    };
+    BlockWithLineAttrs.displayName = `blockWithLineAttrs(${
+        typeof Tag === "string" ? Tag : Tag?.displayName || Tag?.name || "Component"
+    })`;
+    return BlockWithLineAttrs;
 };
 
 const markdownComponentsWithLineAttrs: Record<string, any> = {
@@ -2339,6 +2345,22 @@ function ThinkingBlock({ block, locale }: { block: Extract<Block, { kind: 'think
     );
 }
 
+// 必须在模块作用域定义：原先写在 ToolBlock 函数体内，每次渲染都生成新的组件类型，
+// React 会把图标子树整棵卸载再重挂，running 态的 spinner 动画因此反复重置。
+function StatusIcon({ status }: { status: Extract<Block, { kind: 'tool' }>['status'] }) {
+    if (status === 'running') return <span className="inline-block-spinner" />;
+    if (status === 'ok') return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+        </svg>
+    );
+    return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+    );
+}
+
 /**
  * Collapsible tool-call block. Routes web_search/web_fetch to a special card;
  * all other tools render as a minimal collapsible row.
@@ -2371,20 +2393,6 @@ function ToolBlock({
     const filePath = block.args?.filePath ?? block.args?.file_path ?? block.args?.path ?? block.args?.filename;
     // 文件写工具：deepagents 用 write_file、opencode 用 write，args 都带 path/file_path/filePath。
     const isFileWrite = (block.name === 'write_file' || block.name === 'write' || block.name === 'create_file') && filePath;
-
-    const StatusIcon = () => {
-        if (block.status === 'running') return <span className="inline-block-spinner" />;
-        if (block.status === 'ok') return (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-            </svg>
-        );
-        return (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-        );
-    };
 
     // 给折叠状态下生成"一眼看清这次到底跑了什么"的预览。每个工具挑最有信息量的那个 arg
     // 字段：bash 看 command、write/read/edit 看路径文件名、其他降级到 summary。
@@ -2429,7 +2437,7 @@ function ToolBlock({
     return (
         <div className={`inline-block tool status-${block.status}`}>
             <button className="inline-block-header" onClick={() => setOpen(o => !o)}>
-                <span className="inline-block-icon" aria-hidden><StatusIcon /></span>
+                <span className="inline-block-icon" aria-hidden><StatusIcon status={block.status} /></span>
                 <span className="inline-block-label">{label}</span>
                 {headerPreview && !open && (
                     <span className="inline-block-summary">{headerPreview}</span>
