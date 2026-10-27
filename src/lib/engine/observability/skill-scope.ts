@@ -109,7 +109,8 @@ function skillRefFromArgs(args: unknown): TraceSkillRef | null {
   const name = stringValue(record.name)
     || stringValue(record.skill)
     || stringValue(record.skillName)
-    || stringValue(record.skill_name);
+    || stringValue(record.skill_name)
+    || stringValue(record.id);
   if (!name) return null;
   return {
     name,

@@ -148,7 +148,9 @@ export function extractExplicitSkillsFromNode(node: AgentNode): InvokedSkill[] {
     for (const ev of node.events || []) {
         if (ev.kind !== 'skill') continue;
         const a = (ev.args && typeof ev.args === 'object') ? ev.args : {};
-        const rawName = a.name ?? a.skill_name ?? a.skillName ?? a.skill;
+        // Accept id only when the call-tree classifier resolved it as a Skill name.
+        const idName = typeof a.id === 'string' && ev.name === a.id.trim() ? a.id : undefined;
+        const rawName = a.name ?? a.skill_name ?? a.skillName ?? a.skill ?? idName;
         if (rawName == null || !String(rawName).trim()) continue;
         const s = String(rawName).trim().replace(/^['"]+|['"]+$/g, '');
         if (!SKILL_NAME_PATTERN.test(s) || seen.has(s)) continue;

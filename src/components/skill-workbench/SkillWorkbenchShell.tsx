@@ -1305,17 +1305,17 @@ export function SkillWorkbenchShell() {
         </header>
 
         {selectedAsset && !viewingSessionAsset && (
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-warning-border bg-warning-subtle px-5 text-[11px] text-warning">
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-background-secondary px-5 text-[11px] text-foreground-secondary">
             <span className="min-w-0 flex-1 truncate">
               {active?.skillName
                 ? `右栏使用 ${selectedAsset.skillName} · v${selectedAsset.version}，不会改变当前会话 ${active.skillName} · v${active.workVersion ?? 0}`
-                : `右栏使用 ${selectedAsset.skillName} · v${selectedAsset.version}，当前会话尚未绑定 Skill`}
+                : `正在浏览 ${selectedAsset.skillName} · v${selectedAsset.version}，查看资产无需绑定工作会话`}
             </span>
             {active?.skillName && (
               <button
                 type="button"
                 onClick={() => void showSessionAsset(active)}
-                className="h-6 shrink-0 rounded-md border border-warning-border px-2 font-medium hover:bg-card"
+                className="h-6 shrink-0 rounded-md border border-border px-2 font-medium hover:bg-card"
               >
                 回到会话版本
               </button>
