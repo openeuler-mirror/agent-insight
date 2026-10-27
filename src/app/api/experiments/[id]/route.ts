@@ -53,6 +53,8 @@ import {
 } from '@/lib/skill-workbench/item-progress';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
+import { loadCaseExecutionProgress } from '@/lib/engine/experiment/execution-progress-service';
+
 export const dynamic = 'force-dynamic';
 
 function parseJsonValue(value: string | null): unknown {
@@ -191,8 +193,21 @@ export async function GET(
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
+    const caseExecutionProgress = !experiment.scope && experiment.type !== 'llm'
+      ? await loadCaseExecutionProgress(id, experiment.user, pagedCases.map(c => c.id), evaluatorIds, configSnapshot?.traceSource === 'generate')
+      : null;
+
+    const benchmarkAttemptByRun = new Map<string, number>();
+    const benchmarkExecutionsByTrace = new Map<string, Array<{ id: string; taskId: string | null }>>();
     const benchmarkRunByCase = new Map<string, {
+      id: string;
+      retryOfRunId: string | null;
+      updatedAt: Date;
       submissionSource: string;
+      createdAt: Date;
+      startedAt: Date | null;
+      finishedAt: Date | null;
+      lastProgressAt: Date | null;
       status: string;
       failureCode: string | null;
       failureMessage: string | null;
@@ -205,8 +220,16 @@ export async function GET(
       artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
       evaluations: Array<{
         id: string;
+        attemptNo: number;
+        updatedAt: Date;
         status: string;
         failureCode: string | null;
+        failureMessage: string | null;
+        progressJson: string | null;
+        createdAt: Date;
+        startedAt: Date | null;
+        finishedAt: Date | null;
+        lastProgressAt: Date | null;
         normalizedResultJson: string | null;
         artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
       }>;
@@ -214,7 +237,7 @@ export async function GET(
     if (experiment.scope === 'benchmark' && pagedCases.length) {
       const runs = await prisma.benchmarkCaseRun.findMany({
         where: { experimentId: id, experimentCaseId: { in: pagedCases.map((item) => item.id) } },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: {
           datasetCase: { select: { externalCaseId: true } },
           artifacts: {
@@ -226,8 +249,16 @@ export async function GET(
             take: 1,
             select: {
               id: true,
+              attemptNo: true,
+              updatedAt: true,
               status: true,
               failureCode: true,
+              failureMessage: true,
+              progressJson: true,
+              createdAt: true,
+              startedAt: true,
+              finishedAt: true,
+              lastProgressAt: true,
               normalizedResultJson: true,
               artifacts: {
                 orderBy: { createdAt: 'asc' },
@@ -237,8 +268,30 @@ export async function GET(
           },
         },
       });
+      const runParents = new Map<string, string | null>(runs.map((run: { id: string; retryOfRunId: string | null }) => [run.id, run.retryOfRunId]));
       for (const run of runs) {
+        let attemptNo = 1;
+        let parent = runParents.get(run.id);
+        const visited = new Set<string>([run.id]);
+        while (parent && !visited.has(parent)) { visited.add(parent); attemptNo += 1; parent = runParents.get(parent); }
+        benchmarkAttemptByRun.set(run.id, attemptNo);
+      }
+      const retried = new Set(runs.map((run: { retryOfRunId: string | null }) => run.retryOfRunId).filter(Boolean));
+      for (const run of runs) {
+        if (retried.has(run.id)) continue;
         if (!benchmarkRunByCase.has(run.experimentCaseId)) benchmarkRunByCase.set(run.experimentCaseId, run);
+      }
+      const traceIds = [...benchmarkRunByCase.values()].map(run => asRecord(parseJsonValue(run.runFactsJson))?.traceId).filter((value): value is string => typeof value === 'string' && Boolean(value));
+      if (traceIds.length) {
+        const roots = await prisma.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: { in: traceIds } }, select: { id: true, taskId: true } });
+        for (const root of roots) if (root.taskId) benchmarkExecutionsByTrace.set(root.taskId, [...(benchmarkExecutionsByTrace.get(root.taskId) || []), root]);
+        for (const traceId of traceIds.filter(value => /^[0-9a-f]{32}$/.test(value) && !benchmarkExecutionsByTrace.has(value))) {
+          const legacy = await findBenchmarkExecution(experiment.user, traceId);
+          if (legacy?.taskId) {
+            const matches = await prisma.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: legacy.taskId }, select: { id: true, taskId: true }, take: 2 });
+            if (matches.length === 1) benchmarkExecutionsByTrace.set(traceId, matches);
+          }
+        }
       }
     }
 
@@ -591,7 +644,7 @@ export async function GET(
     }
 
     const results = pagedCases.flatMap((c) =>
-      (invalidGeneratedCaseIds.has(c.id) ? [] : c.results).map((r) => ({
+      (caseExecutionProgress?.get(c.id)?.results ?? (invalidGeneratedCaseIds.has(c.id) ? [] : c.results)).map((r) => ({
         id: r.id,
         caseId: r.caseId,
         evaluatorId: r.evaluatorId,
@@ -693,7 +746,15 @@ export async function GET(
           legacyFi.faultInjectionType ||
           null;
         const benchmarkRun = benchmarkRunByCase.get(c.id);
+        const benchmarkTraceId = asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.traceId;
+        const reportedTraceId = typeof benchmarkTraceId === 'string' ? benchmarkTraceId : null;
+        const benchmarkRoots = reportedTraceId ? benchmarkExecutionsByTrace.get(reportedTraceId) || [] : [];
+        const benchmarkRoot = benchmarkRoots.length === 1 ? benchmarkRoots[0] : null;
+        const currentTraceId = benchmarkRoot?.taskId || reportedTraceId;
         const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
+        const benchmarkEvaluation = benchmarkRun?.evaluations[0];
+        const evaluationProgress = asRecord(parseJsonValue(benchmarkEvaluation?.progressJson || null));
+        const executionProgressDetail = asRecord(benchmarkProgress?.progress);
         const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
         const environmentFacts = asRecord(asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.execution);
         const cleanupFacts = asRecord(parseJsonValue(benchmarkRun?.cleanupJson || null));
@@ -711,8 +772,8 @@ export async function GET(
         const benchmarkTraceStatus = deriveBenchmarkTraceStatus({
           runStatus: benchmarkRun?.status || null,
           hasSubmission: submissions.length > 0,
-          hasExecution: Boolean(c.executionId || legacyReference?.id),
-          hasTask: Boolean(effectiveTaskId),
+          hasExecution: Boolean(benchmarkRoot),
+          hasTask: Boolean(currentTraceId),
         });
         let caseValues: Record<string, unknown> | null = null;
         if (c.caseValuesJson) {
@@ -729,6 +790,7 @@ export async function GET(
         }
         return {
           id: c.id,
+          ...(caseExecutionProgress ? { executionProgress: caseExecutionProgress.get(c.id)?.progress || null } : {}),
           executionId: c.executionId || legacyReference?.id || traceState?.executionId || null,
           taskId: effectiveTaskId,
           input: c.input || ex?.query || '',
@@ -749,8 +811,28 @@ export async function GET(
           traceError: benchmarkRun ? benchmarkRun.failureMessage : traceState?.error || null,
           traceAttemptNo: traceState?.attemptNo || null,
           traceAttemptStatus: traceState?.attemptStatus || null,
+          ...(caseExecutionProgress?.get(c.id) ? {
+            taskId: caseExecutionProgress.get(c.id)!.taskId,
+            executionId: caseExecutionProgress.get(c.id)!.executionId,
+            actualOutput: caseExecutionProgress.get(c.id)!.actualOutput,
+            traceStatus: caseExecutionProgress.get(c.id)!.progress.source === 'existing' ? null
+              : caseExecutionProgress.get(c.id)!.progress.stage >= 3 ? 'ready'
+              : ['failed', 'cancelled'].includes(caseExecutionProgress.get(c.id)!.progress.status) ? 'failed' : 'pending',
+            traceError: caseExecutionProgress.get(c.id)!.progress.error,
+            traceAttemptNo: caseExecutionProgress.get(c.id)!.progress.attemptNo || null,
+          } : {}),
           ...(benchmarkRun ? {
+            taskId: currentTraceId,
+            executionId: benchmarkRoot?.id || null,
             benchmark: {
+              runId: benchmarkRun.id,
+              runAttemptNo: benchmarkAttemptByRun.get(benchmarkRun.id) || 1,
+              generation: benchmarkRun.createdAt.getTime(),
+              revision: Math.max(benchmarkRun.updatedAt.getTime(), benchmarkEvaluation?.updatedAt.getTime() || 0),
+              evaluationAttemptNo: benchmarkEvaluation?.attemptNo || 0,
+              traceId: reportedTraceId,
+              traceTaskId: currentTraceId,
+              executionId: benchmarkRoot?.id || null,
               submissionSource: benchmarkRun.submissionSource,
               adapterKey: benchmarkAdapterKey,
               displayName: benchmarkManifest?.displayName || benchmarkAdapterKey,
@@ -787,6 +869,23 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              progressDetails: {
+                createdAt: benchmarkRun.createdAt.toISOString(),
+                finishedAt: benchmarkRun.finishedAt?.toISOString() || null,
+                execution: {
+                  startedAt: benchmarkRun.startedAt?.toISOString() || null,
+                  lastProgressAt: benchmarkRun.lastProgressAt?.toISOString() || null,
+                  stageStartedAt: typeof executionProgressDetail?.stageStartedAt === 'string' ? executionProgressDetail.stageStartedAt : null,
+                },
+                evaluation: benchmarkEvaluation ? {
+                  stage: typeof evaluationProgress?.stage === 'string' ? evaluationProgress.stage : null,
+                  createdAt: benchmarkEvaluation.createdAt.toISOString(),
+                  startedAt: benchmarkEvaluation.startedAt?.toISOString() || null,
+                  finishedAt: benchmarkEvaluation.finishedAt?.toISOString() || null,
+                  lastProgressAt: benchmarkEvaluation.lastProgressAt?.toISOString() || null,
+                  failureMessage: benchmarkEvaluation.failureMessage,
+                } : null,
+              },
               environmentFacts: environmentFacts ? {
                 imageId: typeof environmentFacts.imageId === 'string' ? environmentFacts.imageId : null,
                 toolBoundary: typeof environmentFacts.toolBoundary === 'string' ? environmentFacts.toolBoundary : null,

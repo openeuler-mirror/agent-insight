@@ -200,6 +200,8 @@ changefreq: monthly
 
 生产入口 `sampling/production.ts` 保留 v6.35 和已冻结任务所需的 v4/v5 分派；`sampling/` 仅保留生产及类型依赖链，不按文件名中的历史版本删公共实现。签名固定向量位于 `test/fixtures/trace-datasets/`，公开对照和签名缓存辅助代码位于 `test/helpers/trace-datasets/`，随测试维护，不随 `scripts/` 发布。历史实验数据、逐轮脚本、未使用的采样策略及其专属测试归档在 Git 提交 `742502d8bb2495bb0311b31f02c353f2e07d6b7d`；效果与复现限制见[对比报告](../design/trace-eval-dataset/eight-datasets-comparison-report.md#6-验证材料与历史归档)。数据库升级仍由 `scripts/db_push.sh` 调用 `scripts/trace-datasets/remove-legacy-summary.cjs`，Worker 构建仍使用 `scripts/build-trace-dataset-worker.cjs`。
 
+`scripts/start.sh` 在构建指纹检查前调用 `scripts/build-trace-dataset-worker.cjs`，与 Benchmark 目录生成一起提前准备产物；生成失败立即退出。Next 配置保留生成入口以支持直接构建和开发模式，后续生成的相同内容不会改变指纹。不要把新生成产物排除出指纹，也不要在构建后覆盖构建前快照，否则会漏检真实的构建期间源码变更。
+
 增量SQL见`prisma/trace-dataset-generation.sql`；正常部署仍由既有安全db-push流程同步schema。新列可空，旧记录不回填Trace状态。回退前应排空运行、删除和待清理任务，保留新增列和回执；不要用旧代码把未发布占位当普通空数据集。
 
 扩展 Trace 多轮提取应在生成时复用已有 Execution/Session 的角色、消息顺序、关联标识、工具事件和终态做结构检查；不得新增采集字段或持久证据存储。当前不验证上下文语义独立性，不将多轮/历史消息/缺少原始请求作为排除条件，不调用模型或通过关键词猜测独立性。新增结构原因同步 EXCLUSION_REASONS 和用户指南，覆盖逐轮配对、无原始 spool、部分保留/全排除、跨用户隔离与临时明细生命周期。
