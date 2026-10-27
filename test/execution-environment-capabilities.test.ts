@@ -133,10 +133,10 @@ test('ordinary checks reject empty OpenCode credentials instead of accepting an 
   try {
     process.env.PATH = root
     process.env.AGENT_INSIGHT_HOME = root
-    fs.writeFileSync(path.join(root, 'opencode'), '#!/bin/sh\n', { mode: 0o755 })
+    fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(1, JSON.stringify({ model: 'provider/model' }))\n`, { mode: 0o755 })
     fs.mkdirSync(path.join(root, 'opencode-data/opencode'), { recursive: true })
     fs.writeFileSync(path.join(root, 'opencode-data/opencode/auth.json'), JSON.stringify({ provider: { type: 'api', key: '   ' } }))
-    const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: path.join(root, 'opencode-data'), PROVIDER_API_KEY: '   ' }, client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true }) }, command: async () => JSON.stringify({ model: 'provider/model' }) })
+    const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: path.join(root, 'opencode-data'), PROVIDER_API_KEY: '   ' }, client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true }) } })
     const issues = await services.checkAgent(context)
     assert(issues.some((item: { code: string }) => item.code === 'MODEL_CREDENTIAL_MISSING'))
     fs.writeFileSync(path.join(root, 'opencode-data/opencode/auth.json'), JSON.stringify({ provider: { type: 'oauth', refresh: 'fixture-refresh' } }))
@@ -145,6 +145,34 @@ test('ordinary checks reject empty OpenCode credentials instead of accepting an 
     if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath
     if (oldHome === undefined) delete process.env.AGENT_INSIGHT_HOME; else process.env.AGENT_INSIGHT_HOME = oldHome
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('OpenCode environment checks accept plugin-prefixed config and reject ambiguous or incomplete output', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-opencode-output-'))
+  const oldPath = process.env.PATH
+  const oldHome = process.env.AGENT_INSIGHT_HOME
+  t.after(() => {
+    if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath
+    if (oldHome === undefined) delete process.env.AGENT_INSIGHT_HOME; else process.env.AGENT_INSIGHT_HOME = oldHome
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+  process.env.PATH = root
+  process.env.AGENT_INSIGHT_HOME = root
+  const outputFile = path.join(root, 'config-output')
+  fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nconst fs = require('node:fs'); require('node:assert/strict').equal(fs.fstatSync(1).isFile(), true); fs.writeFileSync(1, fs.readFileSync(${JSON.stringify(outputFile)}));\n`, { mode: 0o755 })
+  const config = JSON.stringify({ model: 'provider/model' })
+  const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: root, PROVIDER_API_KEY: 'fixture-key' },
+    client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true }) } })
+  for (const valid of [config, `[plugin] ready\n${config}`, `{"level":"info","message":"plugin ready"}\n${config}`,
+    `[plugin] ready\n${JSON.stringify({ model: 'provider/model', agent: { build: { prompt: 'x'.repeat(256 * 1024) } } })}`]) {
+    fs.writeFileSync(outputFile, valid)
+    assert.deepEqual(await services.checkAgent(context), [])
+  }
+  for (const invalid of [config.slice(0, -1), `${config}\n${config}`, `${config}\nunexpected output`, '{"model":42}']) {
+    fs.writeFileSync(outputFile, invalid)
+    const issues = await services.checkAgent(context)
+    assert(issues.some((item: { code: string }) => item.code === 'MODEL_CONFIGURATION_UNREADABLE'))
   }
 })
 

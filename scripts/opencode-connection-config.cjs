@@ -258,13 +258,17 @@ function parseOpenCodeConfigOutput(output) {
 }
 
 
+function readOpenCodeConfig(executable, options = {}) {
+  return parseOpenCodeConfigOutput(privateCommand(executable, ['debug', 'config'], contextFor(options)))
+}
+
 function loadOpenCodeConnectionConfig(executable, selection, options = {}) {
   const context = contextFor(options)
   for (let attempt = 0; attempt < 2; attempt++) {
     let before, snapshotError
     try { before = snapshot(context) } catch (error) { snapshotError = error }
     let config
-    try { config = parseOpenCodeConfigOutput(privateCommand(executable, ['debug', 'config'], context)) }
+    try { config = readOpenCodeConfig(executable, context) }
     catch (error) {
       if (error.code === 'MODEL_UNAVAILABLE') throw error
       throw configError('OpenCode 配置无法解析，不允许使用默认模型替代')
@@ -299,4 +303,4 @@ function assertNoMaskedConnections(config, selection) {
   if (hasMasked(connectionConfig(config, selection))) throw configError('不接受未恢复的脱敏连接配置')
 }
 
-module.exports = { loadOpenCodeConnectionConfig, assertNoMaskedConnections, parseJsonc }
+module.exports = { loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, parseJsonc }

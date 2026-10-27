@@ -10,6 +10,9 @@ const { readSetup, COMPATIBLE_REVISION } = require('../xgovernor/setup.cjs')
 const { collectorEnvironment, traceApiKey } = require('../xgovernor/credentials.cjs')
 const { command } = require('../xgovernor/dependency-manager.cjs')
 const { artifactIdentity } = require('../xgovernor/artifact-identity.cjs')
+const installedConnectionConfig = path.resolve(__dirname, '../../opencode-connection-config.cjs')
+const { readOpenCodeConfig } = require(fs.existsSync(installedConnectionConfig)
+  ? installedConnectionConfig : path.resolve(__dirname, '../../../../scripts/opencode-connection-config.cjs'))
 
 const issue = (code, message) => ({ code, message })
 const readable = file => { try { fs.accessSync(file, fs.constants.R_OK); return true } catch { return false } }
@@ -94,7 +97,7 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
           }
         }
       } else if (context.platform === 'opencode') {
-        const config = JSON.parse(await run(which('opencode'), ['debug', 'config']))
+        const config = readOpenCodeConfig(which('opencode'), { env, home })
         const selected = context.model || config.model
         if (!selected) issues.push(issue('MODEL_CONFIGURATION_MISSING', '请为实验选择模型，或在执行机 OpenCode 中配置默认模型。'))
         else {
