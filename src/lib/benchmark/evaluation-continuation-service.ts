@@ -17,6 +17,16 @@
 import { prisma } from '@/lib/storage/prisma'
 
 const CONTINUATION_LEASE_MS = 30_000
+const scheduledContinuations = new Set<Promise<void>>()
+const continuationTimers = new Set<ReturnType<typeof setTimeout>>()
+
+export async function waitForBenchmarkEvaluationContinuationsForTest(): Promise<void> {
+  while (scheduledContinuations.size) {
+    for (const timer of continuationTimers) timer.ref?.()
+    await Promise.allSettled([...scheduledContinuations])
+  }
+}
+
 const TERMINAL_EVALUATION_STATUSES = [
   'completed',
   'failed',
@@ -134,12 +144,20 @@ export async function runBenchmarkEvaluationContinuation(evaluationId: string): 
 }
 
 export function scheduleBenchmarkEvaluationContinuation(evaluationId: string): void {
-  const timer = setTimeout(() => {
-    void runBenchmarkEvaluationContinuation(evaluationId).catch((error) => {
-      console.error('[benchmark/evaluation-continuation] continuation failed', error)
-    })
-  }, 0)
-  timer.unref?.()
+  const work = new Promise<void>(resolve => {
+    const timer = setTimeout(() => {
+      continuationTimers.delete(timer)
+      void runBenchmarkEvaluationContinuation(evaluationId).catch((error) => {
+        console.error('[benchmark/evaluation-continuation] continuation failed', error)
+      }).finally(() => {
+        scheduledContinuations.delete(work)
+        resolve()
+      })
+    }, 0)
+    continuationTimers.add(timer)
+    timer.unref?.()
+  })
+  scheduledContinuations.add(work)
 }
 
 export async function resumeBenchmarkEvaluationContinuations(limit = 100): Promise<number> {

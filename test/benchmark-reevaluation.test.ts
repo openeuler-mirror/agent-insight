@@ -29,6 +29,7 @@ const { zsoftL1Adapter } = require('../benchmarks/zsoft-l1/adapter') as typeof i
 const preparation = require('@/lib/benchmark/evaluation-preparation-service') as typeof import('@/lib/benchmark/evaluation-preparation-service')
 const scheduler = require('@/lib/benchmark/evaluation-scheduler') as typeof import('@/lib/benchmark/evaluation-scheduler')
 const { stopBenchmarkBackgroundWorkForTest } = require('@/lib/benchmark/scheduler') as typeof import('@/lib/benchmark/scheduler')
+const { waitForBenchmarkEvaluationContinuationsForTest } = require('@/lib/benchmark/evaluation-continuation-service') as typeof import('@/lib/benchmark/evaluation-continuation-service')
 const { refreshBenchmarkImagePreparation } = require('@/lib/benchmark/image-preparation') as typeof import('@/lib/benchmark/image-preparation')
 
 test.after(async () => { await stopBenchmarkBackgroundWorkForTest(); await prisma.$disconnect(); database.dispose() })
@@ -165,6 +166,7 @@ test('permanent metadata rejection fails visibly without retrying or blocking an
   f.terminalCode = 'ZSOFT_TASK_DIGEST_LEGACY'
   const rejected = await preparation.retryBenchmarkEvaluation(f.cases[0])
   await preparation.waitForBenchmarkReevaluationsForTest()
+  await waitForBenchmarkEvaluationContinuationsForTest()
   const failed = await prisma.benchmarkEvaluation.findUniqueOrThrow({ where: { id: rejected.evaluationRunId } })
   assert.equal(failed.status, 'dispatch_failed')
   assert.equal(failed.failureCode, 'ZSOFT_TASK_DIGEST_LEGACY')
@@ -177,7 +179,10 @@ test('permanent metadata rejection fails visibly without retrying or blocking an
   assert.equal((await prisma.benchmarkEvaluationDispatchOutbox.findUniqueOrThrow({ where: { evaluationId: rejected.evaluationRunId } })).attemptCount, outbox.attemptCount)
   const good = await preparation.retryBenchmarkEvaluation(f.cases[1])
   await preparation.waitForBenchmarkReevaluationsForTest()
-  assert.ok(f.accepted.includes(good.evaluationRunId))
+  assert.ok(f.accepted.includes(good.evaluationRunId), JSON.stringify({
+    outbox: await prisma.benchmarkEvaluationDispatchOutbox.findUnique({ where: { evaluationId: good.evaluationRunId }, select: { status: true, errorCode: true, errorMessage: true, attemptCount: true } }),
+    windows: [...f.windows], waitingCount: f.waitingCount,
+  }))
   assert.equal(f.accepted.includes(rejected.evaluationRunId), false)
 })
 

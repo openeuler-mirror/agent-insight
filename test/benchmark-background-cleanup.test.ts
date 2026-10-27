@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { setImmediate } from 'node:timers/promises'
+import { scheduleBenchmarkEvaluationContinuation } from '@/lib/benchmark/evaluation-continuation-service'
 import { prisma } from '@/lib/storage/prisma'
 import { defaultEvaluatorTargetResolver } from '@/lib/benchmark/evaluator-target'
 import { refreshBenchmarkImagePreparation, waitForBenchmarkImagePreparation } from '@/lib/benchmark/image-preparation'
@@ -144,4 +145,24 @@ test('a failed dispatch is released from cleanup and subsequent work can still r
   await dispatchBenchmarkRun('next')
   await stopBenchmarkBackgroundWorkForTest()
   assert.equal(lookup.mock.callCount(), 2)
+})
+
+
+test('cleanup includes deferred evaluation continuation database work', async t => {
+  const entered = gate()
+  const finish = gate()
+  stubMethod(t, prisma.benchmarkEvaluation, 'updateMany', async () => {
+    entered.release()
+    await finish.promise
+    return { count: 0 }
+  })
+  scheduleBenchmarkEvaluationContinuation('terminal-evaluation')
+  let cleaned = false
+  const cleanup = stopBenchmarkBackgroundWorkForTest().then(() => { cleaned = true })
+  await entered.promise
+  await setImmediate()
+  assert.equal(cleaned, false)
+  finish.release()
+  await cleanup
+  assert.equal(cleaned, true)
 })
