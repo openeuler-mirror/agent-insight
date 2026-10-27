@@ -15,6 +15,7 @@
  */
 
 import { withFrozenCustomEvaluators, resolveFrozenCustomEvaluator } from '@/lib/evaluators/evaluator-skill-service';
+import { runConfiguredEvaluationStage, withEvaluatorExecution } from './evaluator-execution-policy';
 import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError } from '@/lib/engine/evaluation/custom-evaluator-runtime';
 /**
  * 单组实验执行引擎（M5）。
@@ -116,8 +117,9 @@ import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 import { deriveSettledExperimentStatus } from './detail-agg';
 import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
 import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
-import { activeCaseOperations, assertExperimentActive, withExperimentCancellation } from './cancellation-context';
 import { isSimilarityPresetId, runSimilarityPreset } from './similarity-preset-evaluators';
+import { activeCaseOperations, assertExperimentActive, markExperimentCleanupUnconfirmed, withExperimentCancellation } from './cancellation-context';
+import { parseStoredEvaluatorExecutionConfig, type EvaluatorExecutionSnapshot } from '@/lib/evaluators/evaluator-execution-config';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -438,7 +440,8 @@ async function evaluateOnce(
       };
     }
   }
-  if (card.llmConfig.skills?.length) return (await runCustomEvaluatorWithSkills(user, card, runtime.judgeCtx)).output;
+  if (card.llmConfig.skills?.length) return runConfiguredEvaluationStage(async () =>
+    (await runCustomEvaluatorWithSkills(user, card, runtime.judgeCtx)).output, { deferTimeout: true });
   const prompt = buildJudgePrompt(card, runtime.judgeCtx);
   const text = await callJudgeLlm(user, {
     system: prompt.system,
@@ -475,7 +478,15 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   });
 
   const startedAt = Date.now();
-  const maxAttempts = experimentEngineConfig.retryDelaysMs.length + 1;
+  let executionConfig: EvaluatorExecutionSnapshot['resolved'][string] | undefined;
+  try {
+    executionConfig = parseStoredEvaluatorExecutionConfig(row.case.experiment.evaluatorConfigsJson)?.resolved[row.evaluatorId];
+  } catch (error) {
+    await prisma.experimentEvalResult.updateMany({ where: { id: resultId, status: 'running' },
+      data: { status: 'failed', errorMessage: error instanceof Error ? error.message : '评估运行配置无效' } });
+    return 'failed';
+  }
+  const maxAttempts = executionConfig ? 1 : experimentEngineConfig.retryDelaysMs.length + 1;
   let localAttempts = 0;
   let lastError: unknown = null;
 
@@ -506,8 +517,17 @@ export async function executeResultRow(user: string, resultId: string): Promise<
           evaluatorIds,
         );
       }
-      const out = await withTimeout(
-        withExperimentCancellation(row.experimentId, row.caseId, () => evaluateOnce(user, row.evaluatorId, runtime, configs, JSON.parse(row.case.experiment.configSnapshotJson || '{}'))),
+      const evaluate = () => evaluateOnce(user, row.evaluatorId, runtime, configs, JSON.parse(row.case.experiment.configSnapshotJson || '{}'));
+      const out = executionConfig ? await withExperimentCancellation(row.experimentId, row.caseId, (signal) =>
+        withEvaluatorExecution(executionConfig!, signal, async () => {
+          const card = evaluatorId.startsWith('custom-')
+            ? await resolveFrozenCustomEvaluator(user, evaluatorId, JSON.parse(row.case.experiment.configSnapshotJson || '{}')) : null;
+          const managesStage = isFaithfulPresetId(evaluatorId) || isRasReliabilityPresetId(evaluatorId)
+            || isAgentTrajectoryPresetId(evaluatorId) || Boolean(card?.llmConfig?.skills?.length);
+          return managesStage ? evaluate() : runConfiguredEvaluationStage(evaluate);
+        }, { onAttempt: (count) => { localAttempts = count; }, onCleanupUnconfirmed: markExperimentCleanupUnconfirmed,
+          retryDelaysMs: experimentEngineConfig.retryDelaysMs })) : await withTimeout(
+        withExperimentCancellation(row.experimentId, row.caseId, evaluate),
         row.evaluatorId === 'preset-agent-trace-quality'
           ? EXPERIMENT_TRAJECTORY_TIMEOUTS.resultRowMs
           : experimentEngineConfig.rowTimeoutMs,
@@ -520,7 +540,9 @@ export async function executeResultRow(user: string, resultId: string): Promise<
           summary: out.summary ?? null,
           score: out.score ?? null,
           pointsJson: out.points ? JSON.stringify(out.points) : null,
-          evidenceJson: out.evidence ? JSON.stringify(out.evidence) : null,
+          evidenceJson: executionConfig
+            ? JSON.stringify({ ...out.evidence, executionConfig: { ...executionConfig, attempts: localAttempts } })
+            : out.evidence ? JSON.stringify(out.evidence) : null,
           errorMessage: null,
           attempts: row.attempts + localAttempts,
           durationMs: Date.now() - startedAt,
@@ -538,11 +560,19 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError || '未知错误');
+  const failureEvidence = {
+    ...(lastError instanceof CustomEvaluatorExecutionError
+      ? { json: { type: 'custom-evaluator-runtime-v1', customEvaluatorRuntime: lastError.runtime } } : {}),
+    ...(executionConfig ? { executionConfig: { ...executionConfig, attempts: localAttempts },
+      errorCode: (lastError as { code?: string } | null)?.code
+        ?? (lastError instanceof CustomEvaluatorExecutionError ? (lastError.cause as { code?: string } | null)?.code : undefined)
+        ?? 'EVALUATION_FAILED' } : {}),
+  };
   await prisma.experimentEvalResult.updateMany({
     where: { id: resultId, status: 'running', case: { deletedAt: null, experiment: { deletedAt: null } } },
     data: {
       status: 'failed',
-      ...(lastError instanceof CustomEvaluatorExecutionError ? { evidenceJson: JSON.stringify({ json: { type: 'custom-evaluator-runtime-v1', customEvaluatorRuntime: lastError.runtime } }) } : {}),
+      ...(Object.keys(failureEvidence).length ? { evidenceJson: JSON.stringify(failureEvidence) } : {}),
       errorMessage: message.slice(0, 2000),
       attempts: row.attempts + localAttempts,
       durationMs: Date.now() - startedAt,

@@ -430,5 +430,10 @@
   "docs/images/tracedetail.png": "docs/images/tracedetail.png",
   "docs/images/workspace_overreview.png": "docs/images/workspace_overreview.png",
   "docs/snippets/install-sdk.mdx": "docs/snippets/install-sdk.mdx",
-  "docs/snippets/setup-env.mdx": "docs/snippets/setup-env.mdx"
+  "docs/snippets/setup-env.mdx": "docs/snippets/setup-env.mdx",
+  "docs/design/evaluator-execution-settings/phase1-requirements-analysis.md": "design/evaluation/evaluator-execution-settings/phase1-requirements-analysis.md",
+  "docs/design/evaluator-execution-settings/phase2-requirements-design.md": "design/evaluation/evaluator-execution-settings/phase2-requirements-design.md",
+  "docs/design/evaluator-execution-settings/phase3-development-plan.md": "design/evaluation/evaluator-execution-settings/phase3-development-plan.md",
+  "docs/design/evaluator-execution-settings/unsupported-evaluators.md": "design/evaluation/evaluator-execution-settings/unsupported-evaluators.md",
+  "docs/images/agent/evaluation/eval_experiment_evaluator_skills_settings.png": "docs/images/agent/evaluation/eval_experiment_evaluator_skills_settings.png"
 }
