@@ -545,6 +545,16 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 
 ---
 
+### 6.7 实验评估运行配置能力
+
+支持清单与默认值在 `src/lib/evaluators/evaluator-execution-config.server.ts`。仅使用 Prompt 的自定义 LLM Judge 和已适配的通用 Judge 默认使用 180 秒、2 次；四个结果指标默认 300 秒、2 次，可分别由现有 `EXPERIMENT_JUDGE_TIMEOUT_MS`、`RESULT_QUALITY_TIMEOUT_MS`（回退 `JUDGMENT_TIMEOUT_MS`）提供 30～3600 秒范围内的默认值。缺失或超范围时使用上述标准值。新策略的数值是整次尝试预算；旧实验的请求超时、SDK 重试与外层结果行超时不被迁移或重新解释。
+
+新增内置评估器不能只标记 LLM 就自动加入清单。所有必要模型调用、解析及子阶段必须消费 `remainingEvaluationTimeMs()` 和 `experimentSignal()`，请求用 `trackEvaluationRequest` 登记，SDK `maxRetries` 设为 0。同次尝试内不能另设固定 180/300 秒截止时间、赠送解析修复调用或隐式完整评分回退。结构化输出错误用 `JudgeOutputParseError` 交给结果行统一判定重试。评估失败必须抛错，不返回零分占位。
+
+通用 Judge 的新策略只使用直连；OpenCode 的强制传输/自动回退仅保留给未配置策略的旧链路。带 Skills 的自定义评估器保留现有 OpenCode 运行策略，能力清单不包含它们。轨迹质量等多阶段或进程型适配器应先补齐资源排队、共享预算、取消清理及评分成功后附加建议失败的语义，再声明能力。Benchmark 官方运行参数与确定性代码规则不属于这份 LLM 配置。
+
+配置冻结、API 和重试生命周期见[数据与控制流](05-data-and-control-flow.md#实验评估尝试的超时与重试)。扩展能力时至少验证取消终止、并行请求共享预算、无隐藏重试、0 次重试、清理无法确认时停止重试，以及 legacy 不变。
+
 ## 7. 自测清单
 
 提交前逐条过：

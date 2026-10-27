@@ -38,6 +38,7 @@ import {
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
+import { parseStoredEvaluatorExecutionConfig } from '@/lib/evaluators/evaluator-execution-config';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
 import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
@@ -144,6 +145,7 @@ export async function GET(
       experiment.evaluatorConfigsJson,
       evaluatorIds,
     );
+    const evaluatorExecution = parseStoredEvaluatorExecutionConfig(experiment.evaluatorConfigsJson);
     const benchmarkAdapterKey = experiment.benchmarkBinding?.adapterKey || '';
     let benchmarkManifest: BenchmarkManifest | null = null;
     if (benchmarkAdapterKey) {
@@ -629,6 +631,8 @@ export async function GET(
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
       evaluatorConfigs,
+      evaluatorExecutionConfig: evaluatorExecution?.config ?? null,
+      evaluatorExecutionResolved: evaluatorExecution?.resolved ?? null,
       createdAt: experiment.createdAt,
       scope: experiment.scope,
       skillName: experiment.skillName,
@@ -663,6 +667,7 @@ export async function GET(
         agentName: displayAgentName,
         evaluatorIds,
         evaluatorConfigs,
+        evaluatorExecutionConfig: evaluatorExecution?.config ?? null,
         executionTarget: configSnapshot?.runConfig && typeof configSnapshot.runConfig === 'object'
           ? {
               workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,

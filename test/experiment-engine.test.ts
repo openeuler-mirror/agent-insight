@@ -23,6 +23,8 @@ process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 import { prisma } from '@/lib/storage/prisma';
 import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
@@ -41,6 +43,8 @@ import {
 import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
 import { createAgentDatasetRecord, findAgentDataset } from '@/server/agent_datasets_storage';
 import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
+import { resolveEvaluatorExecutionConfig, serializeExperimentEvaluatorConfigs } from '@/lib/evaluators/evaluator-execution-config';
+import { experimentSignal } from '@/lib/engine/experiment/cancellation-context';
 
 const TEST_USER = `exp-engine-${Date.now()}`;
 
@@ -140,6 +144,87 @@ test.after(async () => {
   await cleanup();
   setJudgeLlmCallerForTest(null);
   setFaithfulPresetRunnerForTest(null);
+});
+
+test('configured execution uses frozen budgets, exact retries and persists policy through manual retry', async () => {
+  const executionId = await createExecution();
+  for (const retries of [0, 1, 2]) {
+    const snapshot = resolveEvaluatorExecutionConfig({ mode: 'uniform', uniform: { attemptTimeoutSeconds: 600, maxRetries: retries }, overrides: {} },
+      [CUSTOM_LLM_ID], { [CUSTOM_LLM_ID]: { attemptTimeoutSeconds: 180, maxRetries: 2 } });
+    const stored = serializeExperimentEvaluatorConfigs({}, [CUSTOM_LLM_ID], snapshot);
+    const { experimentId } = await createExperiment(executionId, [CUSTOM_LLM_ID], null, null, stored);
+    let calls = 0;
+    setJudgeLlmCallerForTest(async (_user, request) => {
+      calls++;
+      assert.ok(request.timeoutMs! > 590_000 && request.timeoutMs! <= 600_000);
+      assert.ok(experimentSignal());
+      throw Object.assign(new Error('temporary failure'), { status: 503 });
+    });
+    const start = await startExperimentRun(experimentId, TEST_USER);
+    await start!.completion;
+    const row = await prisma.experimentEvalResult.findFirstOrThrow({ where: { experimentId } });
+    assert.equal(calls, retries + 1);
+    assert.equal(row.attempts, retries + 1);
+    assert.equal(row.status, 'failed');
+    assert.equal(JSON.parse(row.evidenceJson!).executionConfig.attemptTimeoutSeconds, 600);
+    setJudgeLlmCallerForTest(async (_user, request) => {
+      assert.ok(request.timeoutMs! > 590_000);
+      return VALID_JUDGE_JSON;
+    });
+    assert.equal(await retryResultRow(experimentId, row.id, TEST_USER), 'done');
+    const rerun = await prisma.experimentEvalResult.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(rerun.attempts, retries + 2);
+    assert.equal(JSON.parse(rerun.evidenceJson!).executionConfig.attempts, 1);
+  }
+});
+
+test('configured attempt is not truncated by the legacy result-row timeout', async () => {
+  const oldTimeout = experimentEngineConfig.rowTimeoutMs;
+  try {
+    experimentEngineConfig.rowTimeoutMs = 1;
+    const snapshot = resolveEvaluatorExecutionConfig({ mode: 'system', overrides: {} }, [CUSTOM_LLM_ID],
+      { [CUSTOM_LLM_ID]: { attemptTimeoutSeconds: 600, maxRetries: 0 } });
+    const { experimentId } = await createExperiment(await createExecution(), [CUSTOM_LLM_ID], null, null,
+      serializeExperimentEvaluatorConfigs({}, [CUSTOM_LLM_ID], snapshot));
+    setJudgeLlmCallerForTest(async () => { await new Promise(resolve => setTimeout(resolve, 15)); return VALID_JUDGE_JSON; });
+    const start = await startExperimentRun(experimentId, TEST_USER);
+    await start!.completion;
+    const row = await prisma.experimentEvalResult.findFirstOrThrow({ where: { experimentId } });
+    assert.equal(row.status, 'done');
+    assert.equal(row.attempts, 1);
+  } finally { experimentEngineConfig.rowTimeoutMs = oldTimeout; }
+});
+
+test('configured zero-retry policy makes one real HTTP request on service failure', async () => {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    response.writeHead(503, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: { message: 'temporary failure', type: 'server_error' } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    const settingsJson = JSON.stringify({ activeConfigId: 'retry-http-fixture', configs: [{
+      id: 'retry-http-fixture', name: 'fixture', provider: 'openai', model: 'fixture-model',
+      baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'synthetic-test-key',
+    }] });
+    await prisma.userSettings.create({ data: { user: TEST_USER, settingsJson } });
+    const snapshot = resolveEvaluatorExecutionConfig({ mode: 'system', overrides: {} }, [CUSTOM_LLM_ID],
+      { [CUSTOM_LLM_ID]: { attemptTimeoutSeconds: 30, maxRetries: 0 } });
+    const { experimentId } = await createExperiment(await createExecution(), [CUSTOM_LLM_ID], null, null,
+      serializeExperimentEvaluatorConfigs({}, [CUSTOM_LLM_ID], snapshot));
+    setJudgeLlmCallerForTest(null);
+    const started = await startExperimentRun(experimentId, TEST_USER);
+    await started!.completion;
+    const row = await prisma.experimentEvalResult.findFirstOrThrow({ where: { experimentId } });
+    assert.equal(row.status, 'failed');
+    assert.equal(row.attempts, 1);
+    assert.equal(requests, 1, 'SDK retries or transport fallbacks must not add uncounted requests');
+  } finally {
+    await prisma.userSettings.deleteMany({ where: { user: TEST_USER } });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test('engine: 忠实版预置 + 自建 LLM 两行成功落库，实验终态 done', async () => {

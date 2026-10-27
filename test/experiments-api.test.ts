@@ -37,6 +37,25 @@ function postReq(body: unknown): Request {
   });
 }
 
+test('experiments API stores execution policy and exposes it for reuse; invalid overrides return 400', async (t) => {
+  const user = `${TEST_USER}-execution-config`;
+  t.after(() => prisma.experiment.deleteMany({ where: { user } }));
+  const config = { mode: 'system', overrides: { 'preset-result-answer': { attemptTimeoutSeconds: 900, maxRetries: 0 } } };
+  const body = { user, name: '配置测试', agentName: 'build', evaluatorIds: ['preset-result-answer'],
+    evaluatorExecutionConfig: config, cases: [{ input: 'question', actualOutput: 'answer' }] };
+  const response = await createExperiment(postReq(body));
+  assert.equal(response.status, 200);
+  const { id } = await response.json();
+  const detailResponse = await getExperiment(new Request(`http://localhost/api/experiments/${id}?user=${user}`), { params: Promise.resolve({ id }) });
+  assert.equal(detailResponse.status, 200);
+  const detail = await detailResponse.json();
+  assert.deepEqual(detail.evaluatorExecutionConfig, config);
+  assert.deepEqual(detail.evaluatorExecutionResolved['preset-result-answer'], { attemptTimeoutSeconds: 900, maxRetries: 0, source: 'override' });
+  assert.deepEqual(detail.reusableConfig.evaluatorExecutionConfig, config);
+  const bad = await createExperiment(postReq({ ...body, evaluatorExecutionConfig: { ...config, overrides: { 'custom-not-owned': { attemptTimeoutSeconds: 600, maxRetries: 2 } } } }));
+  assert.equal(bad.status, 400);
+});
+
 test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   t.after(async () => {
     await prisma.experiment.deleteMany({ where: { user: TEST_USER } });

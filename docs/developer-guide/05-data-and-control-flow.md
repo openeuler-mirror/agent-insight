@@ -260,6 +260,18 @@ flowchart TD
 
 平台通过 `opencode-manager.ts` 启动的内置 OpenCode 子进程使用独立 spawn 环境。当前为兼容 OpenCode 1.14.39 与部分新证书链，子进程环境固定注入 `NODE_TLS_REJECT_UNAUTHORIZED=0`；该设置不修改 Next.js 父进程或系统 Node 环境。此为临时兼容策略，升级并验证 OpenCode 证书链后应恢复 TLS 校验。
 
+### 实验评估尝试的超时与重试
+
+实验创建接口新增可选 `evaluatorExecutionConfig`，包含 `mode: system | uniform`、统一模式的 `uniform` 与按 evaluator ID 索引的 `overrides`。每组参数为 `attemptTimeoutSeconds`（30～3600 整数）和 `maxRetries`（0～3 整数）。普通实验、对比实验、Skill 工作台和 Benchmark 混合评估入口共用 `evaluator-execution-config.server.ts` 校验当前用户可用性、已选集合及配置能力，并按单独配置、统一配置、系统默认的优先级解析。
+
+沿用 `Experiment.evaluatorConfigsJson`：新配置存为 `{ schemaVersion: 2, configs, execution: { policyVersion: 1, config, resolved } }`；`configs` 仍为 Exact Match/F1 的规则映射，`resolved` 由服务端生成各评估器的两项数值及来源。详情 API 返回 `evaluatorExecutionConfig`、`evaluatorExecutionResolved`，`reusableConfig` 含表单策略。向导复用配置后重新创建时会重新校验并解析当前默认值；冻结配置克隆和手动重评使用已存快照。`{}`、旧映射及 v1 保持兼容，不传新字段仍走旧执行语义。
+
+`GET /api/user-evaluators?view=execution-config` 返回 `{ evaluators, executionCapabilities }`，每个能力项包含自己的系统默认两项数值；不带该参数仍返回原数组。能力清单由服务端维护，不能仅凭 `evaluatorType: LLM` 推断。
+
+`executeResultRow` 对已保存策略的评估器调用 `withEvaluationAttempt`，实际开始评分后才计时；通过 AsyncLocalStorage 传播截止时间和组合后的取消信号。必要子请求共享剩余预算，SDK 重试关闭，由结果行统一执行最多 `maxRetries + 1` 次完整尝试，退避为 2/8/20 秒并支持取消。超时、临时网络、429/5xx（不可恢复配额除外）和输出解析错误可重试。成功、失败结果的 `evidenceJson.executionConfig` 保存参数、来源和本运行周期尝试数；结果行 `attempts` 继续累计历史次数。
+
+新策略的通用 Judge 使用直连模型请求，关闭 OpenCode 强制传输及失败后隐式回退，避免一次尝试内额外完整评分和不可控子进程重试；历史实验和不支持新策略的特殊评估器保留原传输行为。新增适配路径必须让请求接受取消信号并通过 `trackEvaluationRequest` 登记。超时/失败后取消同次请求，并等待本地工作及并行请求结束；5 秒内无法确认停止则保留清理标记、返回 `EVALUATION_CLEANUP_UNCONFIRMED` 并停止自动重试。仅结束本地请求不保证 Provider 停止远端计算。
+
 ### 质量监控与评测中心边界
 
 上传、proxy end 与 `OtelSpoolConsumer` 只负责 trace 落库和既有的流程/失败分析，不调度结果评估器，也不写 `TraceEvaluation`。质量监控的 `collectTraces → buildProblemSummary → scoreDimensions → bucketTrends` 只读取 `Execution`、`Session`、轨迹分析、问题和诊断数据，聚合过程、成本与错误三维。

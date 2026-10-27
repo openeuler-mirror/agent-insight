@@ -116,8 +116,10 @@ import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 import { deriveSettledExperimentStatus } from './detail-agg';
 import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
 import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
-import { activeCaseOperations, assertExperimentActive, withExperimentCancellation } from './cancellation-context';
 import { isSimilarityPresetId, runSimilarityPreset } from './similarity-preset-evaluators';
+import { activeCaseOperations, assertExperimentActive, markExperimentCleanupUnconfirmed, withExperimentCancellation } from './cancellation-context';
+import { parseStoredEvaluatorExecutionConfig, type EvaluatorExecutionSnapshot } from '@/lib/evaluators/evaluator-execution-config';
+import { isRetryableEvaluationFailure, waitForEvaluationRetry, withEvaluationAttempt } from './evaluation-attempt';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -475,7 +477,15 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   });
 
   const startedAt = Date.now();
-  const maxAttempts = experimentEngineConfig.retryDelaysMs.length + 1;
+  let executionConfig: EvaluatorExecutionSnapshot['resolved'][string] | undefined;
+  try {
+    executionConfig = parseStoredEvaluatorExecutionConfig(row.case.experiment.evaluatorConfigsJson)?.resolved[row.evaluatorId];
+  } catch (error) {
+    await prisma.experimentEvalResult.updateMany({ where: { id: resultId, status: 'running' },
+      data: { status: 'failed', errorMessage: error instanceof Error ? error.message : '评估运行配置无效' } });
+    return 'failed';
+  }
+  const maxAttempts = executionConfig ? executionConfig.maxRetries + 1 : experimentEngineConfig.retryDelaysMs.length + 1;
   let localAttempts = 0;
   let lastError: unknown = null;
 
@@ -506,8 +516,12 @@ export async function executeResultRow(user: string, resultId: string): Promise<
           evaluatorIds,
         );
       }
-      const out = await withTimeout(
-        withExperimentCancellation(row.experimentId, row.caseId, () => evaluateOnce(user, row.evaluatorId, runtime, configs, JSON.parse(row.case.experiment.configSnapshotJson || '{}'))),
+      const evaluate = () => evaluateOnce(user, row.evaluatorId, runtime, configs, JSON.parse(row.case.experiment.configSnapshotJson || '{}'));
+      const out = executionConfig ? await withExperimentCancellation(row.experimentId, row.caseId, (signal) =>
+        withEvaluationAttempt(executionConfig!.attemptTimeoutSeconds * 1000, signal,
+          evaluate,
+          { onCleanupUnconfirmed: markExperimentCleanupUnconfirmed })) : await withTimeout(
+        withExperimentCancellation(row.experimentId, row.caseId, evaluate),
         row.evaluatorId === 'preset-agent-trace-quality'
           ? EXPERIMENT_TRAJECTORY_TIMEOUTS.resultRowMs
           : experimentEngineConfig.rowTimeoutMs,
@@ -520,7 +534,9 @@ export async function executeResultRow(user: string, resultId: string): Promise<
           summary: out.summary ?? null,
           score: out.score ?? null,
           pointsJson: out.points ? JSON.stringify(out.points) : null,
-          evidenceJson: out.evidence ? JSON.stringify(out.evidence) : null,
+          evidenceJson: executionConfig
+            ? JSON.stringify({ ...out.evidence, executionConfig: { ...executionConfig, attempts: localAttempts } })
+            : out.evidence ? JSON.stringify(out.evidence) : null,
           errorMessage: null,
           attempts: row.attempts + localAttempts,
           durationMs: Date.now() - startedAt,
@@ -529,8 +545,11 @@ export async function executeResultRow(user: string, resultId: string): Promise<
       return 'done';
     } catch (e) {
       lastError = e;
-      if (attempt < maxAttempts && isRetryableRowFailure(e)) {
-        await sleep(experimentEngineConfig.retryDelaysMs[attempt - 1] ?? 0);
+      if (attempt < maxAttempts && (executionConfig ? isRetryableEvaluationFailure(e) : isRetryableRowFailure(e))) {
+        if (executionConfig) {
+          await withExperimentCancellation(row.experimentId, row.caseId, (signal) =>
+            waitForEvaluationRetry(experimentEngineConfig.retryDelaysMs[attempt - 1] ?? 20_000, signal));
+        } else await sleep(experimentEngineConfig.retryDelaysMs[attempt - 1] ?? 0);
         continue;
       }
       break;
@@ -544,6 +563,8 @@ export async function executeResultRow(user: string, resultId: string): Promise<
       status: 'failed',
       ...(lastError instanceof CustomEvaluatorExecutionError ? { evidenceJson: JSON.stringify({ json: { type: 'custom-evaluator-runtime-v1', customEvaluatorRuntime: lastError.runtime } }) } : {}),
       errorMessage: message.slice(0, 2000),
+      ...(executionConfig ? { evidenceJson: JSON.stringify({ executionConfig: { ...executionConfig, attempts: localAttempts },
+        errorCode: (lastError as { code?: string } | null)?.code ?? 'EVALUATION_FAILED' }) } : {}),
       attempts: row.attempts + localAttempts,
       durationMs: Date.now() - startedAt,
     },
