@@ -99,7 +99,10 @@ test('OpenCode 退出且 spool 未变化：补报结束、失败可重试、成�
   assert.equal(received[1].opencode_cli_completed, true);
   assert.ok(pending().ses_target, 'failed final upload remains eligible without new spool writes');
   fail = false;
-  await run();
+  const lockFile = path.join(root, '.uploader.lock');
+  const holder = spawn(process.execPath, ['-e', `const fs=require('fs');fs.writeFileSync(${JSON.stringify(lockFile)},String(process.pid));console.log('ready');setTimeout(()=>fs.rmSync(${JSON.stringify(lockFile)}),500)`]);
+  await new Promise<void>((resolve, reject) => { holder.stdout.once('data', () => resolve()); holder.once('error', reject); });
+  await run({ AGENT_INSIGHT_UPLOADER_FORCE_SESSION: 'ses_target', AGENT_INSIGHT_UPLOADER_RECHECK_ONLY: '1' });
   assert.equal(received.length, 3);
   assert.equal(received[2].opencode_cli_completed, true);
   assert.equal(pending().ses_target, undefined);

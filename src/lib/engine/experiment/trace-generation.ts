@@ -25,7 +25,7 @@ import {
   MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
   TRIGGER_STARTUP_TIMEOUT_SECONDS,
 } from '@/lib/engine/experiment/constants';
-import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
+import { listClientTraceGenerationTargets, listClientTraceGenerationAvailability } from '@/lib/engine/experiment/execution-targets';
 import { createCommand, getCommand, markSent } from '@/lib/reliability/command-bus';
 import { dispatchCommand } from '@/lib/reliability/control-dispatch';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
@@ -195,7 +195,7 @@ export async function assertTraceGenerationTarget(input: {
   agent: string;
   agentOptions?: unknown;
 }) {
-  const targets = await listClientTraceGenerationTargets(input.user);
+  const { targets, diagnostics } = await listClientTraceGenerationAvailability(input.user);
   const target = targets.find((item) =>
     item.workerId === input.workerId
     && item.platform === input.platform
@@ -203,7 +203,8 @@ export async function assertTraceGenerationTarget(input: {
   if (!target) {
     throw new TraceGenerationError(
       'execution_target_unavailable',
-      '所选运行主机已离线，或客户端不支持回传 Trace ID',
+      diagnostics.find(item => (!item.clientId || item.clientId === input.workerId) && (!item.platform || item.platform === input.platform))?.message
+        || '所选客户端未发现该 Agent，或客户端归属已变化；请刷新执行目标后重试',
     );
   }
   return resolveAgentOptions(target.parameterDefinitions || [], input.platform, input.agent, input.agentOptions);

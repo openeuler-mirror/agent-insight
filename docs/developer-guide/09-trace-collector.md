@@ -511,3 +511,17 @@ AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和
 回归入口：`test/opencode-v2-adapter.test.ts`、`test/opencode-plugin-distribution.test.ts`，以及原有
 OpenCode uploader / Trace 树测试。真实验证使用 OpenCode 2.0.32 + 本地 OpenAI-compatible SSE
 模拟服务，覆盖多次调用、并发子会话和 503 后重试；不代表其他版本、传输模式或 Windows 已完成实测。
+
+### 普通实验生成 Trace 的版本适配
+
+客户端 `opencode-runtime.cjs` 检查 CLI 主版本及 `run --help` 的必要参数，支持 1.x / 2.x；不能仅凭 PATH 中存在可执行文件就声明可运行。Agent 发现由 FI catalog 启动临时 loopback 服务，1.x 请求 `/agent`，失败时保留 `agent list` 回退；2.x 请求 `/api/agent` 并使用本次探测随机生成的 Basic 凭证，不回退到已移除的 CLI 命令。v2 Agent 使用 `id` 作为执行标识，不能把显示名称 `Build` 当作 `build`。服务退出时清理整个进程组。
+
+`runExperimentCase` 能力增加可选的 `ready`、`unavailableReason`；运行时检查与 Agent 列表均就绪才声明 ready。服务端仍兼容没有这些字段的旧客户端，但必须满足既有 action、Trace ID 能力和 Agent 列表要求。已有 `/api/experiments/agents` 响应附带 `traceGenerationDiagnostics`，按当前账号返回未绑定、离线、探测未完成或运行时不可用等原因，前端与执行前校验共用这些结果。
+
+1.x 保留 `run --format json` 和原生 `--command` 路径；2.x 使用 `--standalone`、独立的 `--session` ID 和字面输入。监测插件按版本使用函数插件或原生 `{ id, setup }` 定义，2.x 配置中的 `plugins` 引用目录。监测事件写入每次执行独占的临时文件，目录权限 0700、文件权限 0600，使用随机 token 和根会话 ID 隔离；这样 npm CLI 包装器不继承额外 fd 时也能工作。只传递模型活动标记与脱敏诊断，不传递用户正文。任务结束清理临时目录，不改全局配置。
+
+v2 在启动前分配会话 ID，以免订阅晚于 `session.created` 时丢失关联；只接受该会话的事件和 Trace ID，并要求 `session.execution.succeeded` 才视作正常结束。原生 retry attempt 从 2 开始，转换为共享失败监测器的首轮 attempt=1。鉴权失败、持续断连和取消沿用现有终止及回报流程。采集器仍经 JSONL/uploader 上传，服务端以真实入库记录校验归属并绑定 Case；执行结果不能直接替代入库证据。v2 不上报 `skillSnapshotVersion`，且执行端拒绝未适配的冻结快照与只读触发模式，1.x 保留原能力。
+
+监测插件发布到临时目录时，把共享诊断模块转为 ESM，兼容旧版 OpenCode 无法加载 CJS 导出的情况。v1 受控实验按事件同步写入 spool，避免 CLI 退出丢失异步缓冲；手动会话仍沿用异步 writer，v2 使用原生插件清理生命周期。uploader 使用原子 PID 锁，普通重复触发仍直接让位，客户端最终 recheck 最多等待 15 秒取得锁，防止前一次进行中上传占锁时漏掉完成快照。
+
+回归入口还包括 `test/opencode-runtime.test.ts`、`test/opencode-event-channel.test.ts`、`test/opencode-native-trace-generation.test.ts` 和 Python `test_opencode_catalog`。原生事件测试通过 `OPENCODE_EVENT_TEST_CLI` 指定二进制；完整上传及 Case 绑定测试使用 `OPENCODE_TRACE_TEST_CLI`、`OPENCODE_TRACE_TEST_MAJOR=1|2`，运行本地模拟模型和隔离数据库，不需要真实模型凭证。

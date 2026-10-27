@@ -278,6 +278,24 @@ function readOpenCodeConfig(executable, options = {}) {
   return parseOpenCodeConfigOutput(privateCommand(executable, ['debug', 'config'], contextFor(options)))
 }
 
+function checkOpenCodeV2Model(executable, selected, options = {}) {
+  let data
+  try {
+    const output = privateCommand(executable, ['api', '--standalone', selected ? 'model.list' : 'model.default'], contextFor(options))
+    data = JSON.parse(output).data
+    const valid = model => record(model) && typeof model.providerID === 'string' && typeof model.id === 'string' && typeof model.enabled === 'boolean'
+    if (selected ? !Array.isArray(data) || !data.every(valid) : data !== null && !valid(data)) throw new Error('invalid model response')
+  } catch {
+    throw Object.assign(new Error('无法读取 OpenCode v2 的原生模型目录，请使用客户端运行账号执行 opencode api --standalone model.list，检查配置、插件加载和客户端日志后重试。'), { code: 'MODEL_CONFIGURATION_UNREADABLE' })
+  }
+  const model = selected ? data.find(item => `${item.providerID}/${item.id}` === selected) : data
+  if (!model?.enabled) {
+    throw Object.assign(new Error(selected
+      ? '执行机 OpenCode v2 的可用模型目录中没有所选模型，请使用客户端运行账号检查 provider 认证、模型是否启用及模型 ID；更新后重新选择模型并点击“下一步”。'
+      : '执行机 OpenCode v2 没有可用的默认模型，请配置并启用模型，或为实验选择可用模型。'), { code: selected ? 'MODEL_UNAVAILABLE' : 'MODEL_CONFIGURATION_MISSING' })
+  }
+}
+
 function loadOpenCodeConnectionConfig(executable, selection, options = {}) {
   const context = contextFor(options)
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -319,4 +337,4 @@ function assertNoMaskedConnections(config, selection) {
   if (hasMasked(connectionConfig(config, selection))) throw configError('不接受未恢复的脱敏连接配置')
 }
 
-module.exports = { loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, parseJsonc }
+module.exports = { loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, checkOpenCodeV2Model, parseJsonc }

@@ -33,10 +33,12 @@ const os = require('os')
 const path = require('path')
 const { spawn, spawnSync } = require('child_process')
 const { createHash, randomBytes } = require('crypto')
+const { StringDecoder } = require('node:string_decoder')
 
 const { connectWebSocket } = require('./ws-client.cjs')
 const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 const { prepareSkillExperimentWorkspace } = require('./skill-experiment-workspace.cjs')
+const { inspectOpencodeRuntime } = require('./opencode-runtime.cjs')
 const { prepareOpencodeEventChannel, createOpencodeEventReader } = require('./opencode-experiment-events.cjs')
 const { createOrdinaryExperimentStore } = require('./ordinary-experiment-state.cjs')
 const { extractStructuredAgentError, sanitizeAgentDiagnostic, classifyAgentExitFailure, createAgentRunError, createOpencodeFailureMonitor } = require('./agent-run-diagnostics.cjs')
@@ -864,13 +866,16 @@ function buildCapabilities(cfg, opts) {
     const runtime = runtimeFor(id)
     return {
       id,
-      version: info?.version ? String(info.version) : undefined,
+      version: runtime.version || (info?.version ? String(info.version) : undefined),
       models: normalizeModelIds(info?.models),
       agents: normalizeModelIds(info?.agents),
       runExperimentCase: {
         version: 2,
         returnsTraceId: runtime.canResolveTraceId,
-        ...(id === 'opencode' ? { skillSnapshotVersion: 4 } : {}),
+        ready: Boolean(runtime.ready && normalizeModelIds(info?.agents).length),
+        unavailableReason: !runtime.ready ? runtime.reason || '运行时尚未就绪'
+          : !normalizeModelIds(info?.agents).length ? sanitizeAgentDiagnostic(info?.note) || `${id} Agent 列表为空，请检查探测结果` : undefined,
+        ...(id === 'opencode' && runtime.major === 1 ? { skillSnapshotVersion: 4 } : {}),
       },
       actions: [...WHITELIST],
     }
@@ -883,8 +888,11 @@ function buildCapabilities(cfg, opts) {
         platforms.push({
           id,
           models: [],
-          agents: id === 'xiaoo' ? ['defaultagent'] : ['build'],
-          runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(id === 'opencode' ? { skillSnapshotVersion: 4 } : {}) },
+          agents: id === 'xiaoo' ? ['defaultagent'] : [],
+          runExperimentCase: { version: 2, returnsTraceId: id !== 'opencode' && runtime.canResolveTraceId,
+            ready: id !== 'opencode' && runtime.ready,
+            ...(id === 'opencode' ? { unavailableReason: runtime.reason || '尚未取得权威 Agent 列表，请检查客户端探测结果' } : {}),
+            ...(id === 'opencode' && runtime.major === 1 ? { skillSnapshotVersion: 4 } : {}) },
           actions: [...WHITELIST],
         })
       }
@@ -1623,7 +1631,8 @@ const runtimeAdapters = {
   opencode: {
     inspectEvent: inspectOpencodeRunEvent,
     buildInvocation: buildOpencodeInvocation,
-    probe: (executable) => ({ canResolveTraceId: true, ready: Boolean(executable) }),
+    probe: inspectOpencodeRuntime,
+    requireReady: true,
     noOutputCode: 'MODEL_NO_RESPONSE',
     firstResponseTimeoutSeconds: DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS,
   },
@@ -1652,6 +1661,9 @@ const runtimeAdapters = {
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   payload.signal?.throwIfAborted()
   const executable = which(runtimeAdapters[String(payload.platform)]?.executableName || String(payload.platform))
+  if (payload.platform === 'opencode' && payload.skillExecution && inspectOpencodeRuntime(executable).major === 2) {
+    throw createAgentRunError('SKILL_EXECUTION_UNSUPPORTED', 'OpenCode v2 支持普通数据集生成 Trace；Skill 冻结快照与只读触发分析尚未适配，请使用 v1 执行此模式')
+  }
   let isolated = payload.skillExecution && executable ? prepareSkillExperimentWorkspace(executable, payload, undefined, cfg.clientId) : null
   if (!payload.skillExecution && !payload.cwd) {
     const root = path.join(cfg.workspaceBase || CLIENT_HOME, 'experiment-workspaces')
@@ -1710,8 +1722,9 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     err.code = 'PLATFORM_NOT_AVAILABLE'
     throw err
   }
-  if (runtime?.requireReady && !runtime.probe(executable).ready) {
-    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', `${platform} CLI 或 Trace Collector 未就绪，请检查安装注册与上传配置`)
+  if (runtime?.requireReady) {
+    const availability = runtime.probe(executable)
+    if (!availability.ready) throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', availability.reason || `${platform} CLI 或 Trace Collector 未就绪，请检查安装注册与上传配置`)
   }
 
   const cwd = isolated?.cwd || (payload.cwd ? path.resolve(String(payload.cwd)) : cfg.workspaceBase)
@@ -1735,14 +1748,16 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     literalInput: triggerRouting,
     correlation,
   })
+  if (invocation.sessionId && platform === 'opencode') env.AGENT_INSIGHT_EXPERIMENT_SESSION_ID = invocation.sessionId
   const runtimePlan = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
   const effectiveAgentOptions = runtimePlan.agentOptions
   const preparedRuntime = agentRuntimeOptions().prepareRuntimeInvocation(runtimePlan, cwd)
+  let eventChannel
   try {
   invocation.args.push(...preparedRuntime.args)
   Object.assign(env, preparedRuntime.env)
   const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
-  const eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env) : null
+  eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env, inspectOpencodeRuntime(executable).major) : null
   if (eventChannel) {
     Object.assign(env, eventChannel.env)
     launch.stdio = [...launch.stdio, 'pipe']
@@ -1809,6 +1824,24 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     let hardStopTimer = null
     let failureMonitor = null
     let eventReader = null
+    let eventPoll = null
+    let eventOffset = 0
+    const eventDecoder = new StringDecoder('utf8')
+    const drainEventFile = () => {
+      if (!eventChannel?.eventFile || !eventReader) return
+      let fd
+      try {
+        fd = fs.openSync(eventChannel.eventFile, 'r')
+        const end = fs.fstatSync(fd).size
+        const buffer = Buffer.alloc(Math.min(64 * 1024, Math.max(0, end - eventOffset)))
+        while (eventOffset < end) {
+          const size = fs.readSync(fd, buffer, 0, Math.min(buffer.length, end - eventOffset), eventOffset)
+          if (!size) break
+          eventOffset += size
+          eventReader.push(eventDecoder.write(buffer.subarray(0, size)))
+        }
+      } catch {} finally { if (fd !== undefined) fs.closeSync(fd) }
+    }
     let eventReadyTimer = null
     let startupTimer = null
     let routingStartedAt = null
@@ -1823,13 +1856,14 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       child.stdin.end(invocation.stdin, 'utf8')
     }
     const captureTraceId = (candidate) => {
-      if (traceId || !candidate) return
+      if (traceId || !candidate || (platform === 'opencode' && invocation.sessionId && candidate !== invocation.sessionId)) return
       traceId = candidate
       traceReport = Promise.resolve(onTraceId({ traceId, startedAt })).catch((err) => {
         logErr(`early trace id report failed (${traceId}):`, err.message)
       })
     }
     const clearTimers = () => {
+      if (eventPoll) clearInterval(eventPoll)
       if (startupTimer) clearTimeout(startupTimer)
       if (eventReadyTimer) clearTimeout(eventReadyTimer)
       failureMonitor?.dispose()
@@ -1966,6 +2000,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
           ? `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，尚未创建根会话；请查看启动日志`
           : `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，尚未收到监测通道就绪信号；请查看启动日志`,
       ), startupTimeoutSeconds * 1000)
+      if (eventChannel.eventFile) eventPoll = setInterval(drainEventFile, 25)
       child.stdio[3].setEncoding('utf8')
       child.stdio[3].on('data', (chunk) => eventReader.push(String(chunk)))
       child.stdio[3].on('error', () => terminateForEarlyFailure('EVENT_MONITOR_UNAVAILABLE', 'OpenCode 失败监测通道异常断开'))
@@ -2110,6 +2145,9 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
           runFacts,
         )
       }
+      if (!failure && platform === 'opencode' && invocation.sessionId && (!eventReader?.sessionId || !eventReader.completed) && !triggerHit) {
+        failure = createAgentRunError('AGENT_INCOMPLETE', 'OpenCode v2 未确认当前会话正常结束，不进入评测', runFacts)
+      }
       if (!failure && triggerTarget && (!eventReader?.sessionId || !observedModel || (!triggerHit && !eventReader.completed))) {
         failure = createAgentRunError('TRIGGER_EVIDENCE_MISSING', '触发分析缺少会话、实际模型或正常结束证据，无法判定', runFacts)
       }
@@ -2147,10 +2185,11 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       reject(err)
     })
     child.on('close', (code, signal) => {
+      drainEventFile()
       void finishAgentRun(code, signal)
     })
   })
-  } finally { preparedRuntime.cleanup() }
+  } finally { eventChannel?.cleanup(); preparedRuntime.cleanup() }
 }
 
 function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
@@ -2187,11 +2226,10 @@ function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
 
 function buildExperimentCaseArgs(executable, input) {
   if (input.platform === 'opencode') {
+    const cli = inspectOpencodeRuntime(executable)
     const args = ['run', '--format', 'json', '--agent', input.agent]
-    try {
-      const help = spawnSync(executable, ['run', '--help'], { encoding: 'utf8', timeout: 15_000 })
-      if (`${help.stdout || ''}\n${help.stderr || ''}`.includes('--auto')) args.push('--auto')
-    } catch {}
+    if (cli.major === 2) args.push('--standalone')
+    if (cli.supportsAuto) args.push('--auto')
     if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
     if (input.model) args.push('--model', input.model)
     return args
@@ -2219,6 +2257,11 @@ function buildExperimentCaseInvocation(executable, input) {
 
 function buildOpencodeInvocation(executable, input) {
   const args = buildExperimentCaseArgs(executable, input)
+  if (inspectOpencodeRuntime(executable).major === 2) {
+    const sessionId = `ses_${randomBytes(13).toString('hex')}`
+    args.push('--session', sessionId)
+    return { args, stdin: input.input, sessionId }
+  }
   const slashCommand = input.literalInput ? null : parseOpencodeSlashCommand(input.input)
   if (slashCommand) {
     args.push('--command', slashCommand.command)

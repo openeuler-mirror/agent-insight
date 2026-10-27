@@ -448,3 +448,27 @@ test('ordinary trace generation admits two attempts, refills one slot and keeps 
     assert.equal(await prisma.experimentTraceAttempt.count({ where: { experimentId: experiment.id } }), 3);
   } finally { controller.abort(); await work.catch(() => undefined); }
 });
+
+
+test('Trace availability explains account binding, offline state, empty catalogs and unsupported runtimes', async () => {
+  const { listClientTraceGenerationAvailability } = require('@/lib/engine/experiment/execution-targets');
+  const user = `availability-${Date.now()}`;
+  const clientId = `availability-client-${Date.now()}`;
+  assert.equal((await listClientTraceGenerationAvailability(user)).diagnostics[0].code, 'NO_BOUND_CLIENT');
+  try {
+    const capability = { platforms: [{ id: 'opencode', agents: ['build'], actions: ['RUN_EXPERIMENT_CASE'], runExperimentCase: { version: 2, returnsTraceId: true } }] };
+    await prisma.reliabilityClient.create({ data: { clientId, user, name: 'host', status: 'online', lastSeenAt: new Date(Date.now() - 600_000), capabilitiesJson: JSON.stringify(capability) } });
+    assert.equal((await listClientTraceGenerationAvailability(user)).diagnostics[0].code, 'CLIENT_NOT_ONLINE');
+    await prisma.reliabilityClient.update({ where: { clientId }, data: { lastSeenAt: new Date(), capabilitiesJson: JSON.stringify({ platforms: [{ ...capability.platforms[0], agents: [] }] }) } });
+    let availability = await listClientTraceGenerationAvailability(user);
+    assert.equal(availability.targets.length, 0);
+    assert.equal(availability.diagnostics[0].code, 'NO_AGENTS');
+    await prisma.reliabilityClient.update({ where: { clientId }, data: { capabilitiesJson: JSON.stringify({ platforms: [{ ...capability.platforms[0], runExperimentCase: { version: 2, returnsTraceId: true, ready: false, unavailableReason: 'v2 Agent discovery failed' } }] }) } });
+    availability = await listClientTraceGenerationAvailability(user);
+    assert.equal(availability.targets.length, 0);
+    assert.equal(availability.diagnostics[0].message, 'v2 Agent discovery failed');
+    assert.equal((await listClientTraceGenerationAvailability(user + '-other')).diagnostics[0].code, 'NO_BOUND_CLIENT');
+    await prisma.reliabilityClient.update({ where: { clientId }, data: { capabilitiesJson: JSON.stringify(capability) } });
+    assert.equal((await listClientTraceGenerationAvailability(user)).targets[0].agent, 'build');
+  } finally { await prisma.reliabilityClient.deleteMany({ where: { clientId } }); }
+});

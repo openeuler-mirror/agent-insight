@@ -43,6 +43,8 @@ changefreq: monthly
 
 准备请求的 `requestId` 统一使用 `safeUUID()`，兼容通过局域网 HTTP 访问时浏览器未提供 `crypto.randomUUID()` 的情况；网络不确定时复用原请求 ID，明确结束后重试生成新 ID。
 
+普通 OpenCode 模型预检按运行时主版本分流：v1 保留 `debug config` 与认证来源检查；v2 调用 `api --standalone model.list`（未选模型时为 `model.default`），以原生目录中的 `providerID/id` 和 `enabled` 判断可用性，不解析 v2 `debug config` 的配置来源数组，也不套用 v1 认证文件格式。CLI 输出只进入权限为 `0600` 的临时文件并在检查后清理，不将配置或底层异常透传到页面。目录读取失败为 `MODEL_CONFIGURATION_UNREADABLE`，所选模型不可用为 `MODEL_UNAVAILABLE`，缺少可用默认模型为 `MODEL_CONFIGURATION_MISSING`；不发起模型推理请求。预检增量能力上报仅为 v1 声明 `skillSnapshotVersion: 4`。
+
 任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
 
 检查和重启恢复不触发全量能力扫描。执行端复用本轮已验证事实，通过现有 `PUT /api/reliability/client/v1/capabilities` 的 `partial: true` 增量同步平台、组件和最终执行 Profile；服务端合并更新，保留其他 Agent、模型与组件。Profile 摘要改变时，未检查 Runtime 的旧就绪状态失效。可靠性数据集额外通过现有 Worker heartbeat 的 `partial: true` 合并所选平台 inventory，不枚举其他 Agent 或模型目录；普通全量上报语义不变。增量同步成功后才回报环境 `ready`，避免后续实验冻结安装前的身份。

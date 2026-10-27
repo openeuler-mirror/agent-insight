@@ -1278,25 +1278,37 @@ async function main() {
 
   cleanupOldFiles(spoolDir, retentionDays)
 
-  // 单例锁: 同一时刻只允许一个 uploader 真正干活。plugin 每个 opencode event 都会 kick 一个
-  // FORCE 实例, 叠加 5min cron, 高峰能堆出几十个进程啃同一份积压、吃爆内存(实测 75 个)。
-  // 用 pid 锁文件去重: 已有存活 uploader 持锁就直接退出; 陈旧锁(pid 已死)则接管; 退出时释放自己的锁。
+  // Final rechecks must wait for an earlier in-progress upload instead of losing the final snapshot.
   const lockFile = path.join(getPreferredInsightDir(), ".uploader.lock")
-  try {
-    const prevPid = Number((fs.readFileSync(lockFile, "utf8") || "").trim())
-    if (prevPid && prevPid !== process.pid) {
-      try {
-        process.kill(prevPid, 0) // 存活 → 让位
-        appendUploaderLog(`main.skip alreadyRunning pid=${prevPid}`)
-        process.exit(0)
-      } catch {
-        /* prevPid 已死, 锁陈旧, 接管 */
-      }
+  const waitForLock = process.env.AGENT_INSIGHT_UPLOADER_RECHECK_ONLY === "1"
+  const lockDeadline = Date.now() + 15_000
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true })
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockFile, "wx", 0o600)
+      try { fs.writeSync(fd, String(process.pid)) } finally { fs.closeSync(fd) }
+      break
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error
     }
-  } catch {
-    /* 无锁文件, 继续 */
+    try {
+      const previous = fs.readFileSync(lockFile, "utf8")
+      const prevPid = Number(previous.trim())
+      let stale = !prevPid && Date.now() - fs.statSync(lockFile).mtimeMs > 30_000
+      if (prevPid) {
+        try { process.kill(prevPid, 0) } catch (error) { stale = error.code === "ESRCH" }
+      }
+      if (stale && fs.readFileSync(lockFile, "utf8") === previous) {
+        fs.rmSync(lockFile, { force: true })
+        continue
+      }
+    } catch (error) { if (error.code === "ENOENT") continue }
+    if (!waitForLock || Date.now() >= lockDeadline) {
+      appendUploaderLog(`main.skip uploaderLockBusy finalRecheck=${waitForLock ? "1" : "0"}`)
+      process.exit(waitForLock ? 1 : 0)
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
   }
-  try { fs.writeFileSync(lockFile, String(process.pid)) } catch {}
   process.on("exit", () => {
     try {
       if (Number((fs.readFileSync(lockFile, "utf8") || "").trim()) === process.pid) {

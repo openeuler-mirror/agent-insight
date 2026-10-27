@@ -243,19 +243,22 @@ test('manual action, refresh failure or leaving during refresh cannot navigate a
 test('late host refreshes cannot overwrite a newer result or mutate state after invalidation', async () => {
   const responses: Array<(response: Response) => void> = []
   const snapshots: unknown[][] = []
+  const diagnostics: unknown[][] = []
   const sequence = { current: 0 }
   const preparation = { current: false }
   const refresh = evaluate<(confirmPreparation?: boolean) => Promise<unknown[]>>(wizardFunctions.refreshAgents, {
     user: 'user', agentsRequestIdRef: sequence, traceAdvanceRef: preparation, apiFetch: () => new Promise(resolve => responses.push(resolve)),
     setAgents: (value: unknown[]) => snapshots.push(value),
+    setTraceGenerationDiagnostics: (value: unknown[]) => diagnostics.push(value),
   })
   const old = refresh()
   const ready = refresh()
-  responses[1](new Response(JSON.stringify({ agents: [{ name: 'ready-host' }] })))
+  responses[1](new Response(JSON.stringify({ agents: [{ name: 'ready-host' }], traceGenerationDiagnostics: [{ code: 'READY_FIXTURE' }] })))
   await ready
   responses[0](new Response(JSON.stringify({ agents: [{ name: 'old-host' }] })))
   await old
   assert.deepEqual(snapshots, [[{ name: 'ready-host' }]])
+  assert.deepEqual(diagnostics, [[{ code: 'READY_FIXTURE' }]])
   const unmounted = refresh()
   sequence.current += 1
   responses[2](new Response(JSON.stringify({ agents: [] })))

@@ -62,7 +62,8 @@ test('真实 OpenCode：用例分析冷启动、触发分析工作区复用、�
     const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'opencode'), `#!${process.execPath}
 if(process.argv.includes('debug')) { console.log(${JSON.stringify(JSON.stringify(config))}); process.exit(0); }
-if(process.argv.includes('--help')) { console.log('opencode run --format json'); process.exit(0); }
+if(process.argv.includes('--version')) { console.log('1.14.39'); process.exit(0); }
+if(process.argv.includes('--help')) { console.log('opencode run --format json --agent --model --title'); process.exit(0); }
 const child=require('node:child_process').spawn(${JSON.stringify(cli)},process.argv.slice(2),{stdio:['inherit','inherit','inherit',3]});
 child.on('error',()=>process.exit(1)); child.on('exit',code=>process.exit(code||0));
 `, { mode: 0o700 });

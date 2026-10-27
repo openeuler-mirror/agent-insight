@@ -217,8 +217,19 @@ function buildOutFile(spoolDir: string): string {
   return path.join(dayDir, `opencode-otel-${runId}.jsonl`)
 }
 
-function createWriter(outFile: string): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string } {
+function createWriter(outFile: string, synchronous = false): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string } {
   safeMkdirp(path.dirname(outFile))
+  if (synchronous) {
+    let closed = false
+    return {
+      enqueue: (obj: any) => {
+        if (closed) return
+        try { fs.appendFileSync(outFile, JSON.stringify(obj) + "\n") } catch {}
+      },
+      close: async () => { closed = true },
+      outFile,
+    }
+  }
   const stream = fs.createWriteStream(outFile, { flags: "a" })
   const queue: any[] = []
   let flushing: Promise<void> | undefined
@@ -408,7 +419,8 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
   const maxToolIo = asInt(env.AGENT_INSIGHT_MAX_TOOL_IO, 4000)
   const maxEventString = asInt(env.AGENT_INSIGHT_MAX_EVENT_STRING, 20000)
   const outFile = buildOutFile(spoolDir)
-  const writer = createWriter(outFile)
+  // v1 CLI can exit before async hooks drain; controlled experiments must retain the final snapshot.
+  const writer = createWriter(outFile, !lifecycle && Boolean(process.env.AGENT_INSIGHT_EVENT_TOKEN))
   if (lifecycle) lifecycle.emit = writer.enqueue
 
   const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")

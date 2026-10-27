@@ -35,6 +35,8 @@ export type ClientPlatformCapability = {
   runExperimentCase?: {
     version: number
     returnsTraceId: boolean
+    ready?: boolean
+    unavailableReason?: string
     skillSnapshotVersion?: number
   }
   runBenchmarkCase?: {
@@ -329,6 +331,9 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
                     ? Number(rec.runExperimentCase.version)
                     : 1,
                   returnsTraceId: rec.runExperimentCase.returnsTraceId === true,
+                  ...(typeof rec.runExperimentCase.ready === 'boolean' ? { ready: rec.runExperimentCase.ready } : {}),
+                  ...(typeof rec.runExperimentCase.unavailableReason === 'string'
+                    ? { unavailableReason: rec.runExperimentCase.unavailableReason.slice(0, 1000) } : {}),
                   ...(Number(rec.runExperimentCase.skillSnapshotVersion) > 0 ? { skillSnapshotVersion: Number(rec.runExperimentCase.skillSnapshotVersion) } : {}),
                 }
               : undefined,

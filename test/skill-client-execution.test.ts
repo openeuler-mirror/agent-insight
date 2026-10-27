@@ -180,7 +180,8 @@ test('触发启动与路由分别计时，路径输入原样传递，超时后�
   fs.writeFileSync(path.join(root, 'opencode'), `#!/usr/bin/env node
 const fs = require('fs');
 if (process.argv.includes('debug')) { console.log('{"provider":{}}'); process.exit(0); }
-if (process.argv.includes('--help')) { console.log('opencode run --format json'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log('1.14.39'); process.exit(0); }
+if (process.argv.includes('--help')) { console.log('opencode run --format json --agent --model --title --command'); process.exit(0); }
 const send = (kind, extra={}) => fs.writeSync(3, JSON.stringify({protocol:1,token:process.env.AGENT_INSIGHT_EVENT_TOKEN,kind,sessionId:'timing-session',...extra})+'\\n');
 let input=''; process.stdin.on('data', chunk => input+=chunk); process.stdin.on('end', () => {
  fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({input,args:process.argv.slice(2)}));
@@ -264,7 +265,8 @@ test('真实客户端启动参数使用所选模型；模型错误不会返回�
   fs.writeFileSync(executable, `#!/usr/bin/env node
 const fs = require('fs');
 if (process.argv.includes('debug')) { console.log(JSON.stringify({provider:{},model:'other/default'})); process.exit(0); }
-if (process.argv.includes('--help')) { console.log('opencode run --format json'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log('1.14.39'); process.exit(0); }
+if (process.argv.includes('--help')) { console.log('opencode run --format json --agent --model --title --command'); process.exit(0); }
 fs.writeSync(3, JSON.stringify({ protocol: 1, token: process.env.AGENT_INSIGHT_EVENT_TOKEN, kind: 'ready' }) + '\\n');
 fs.writeSync(3, JSON.stringify({ protocol: 1, token: process.env.AGENT_INSIGHT_EVENT_TOKEN, kind: 'session', sessionId: 'test-trace' }) + '\\n');
 fs.writeSync(3, JSON.stringify({ protocol: 1, token: process.env.AGENT_INSIGHT_EVENT_TOKEN, kind: 'model', sessionId: 'test-trace', model: 'csi-provider/GLM-5.2' }) + '\\n');
