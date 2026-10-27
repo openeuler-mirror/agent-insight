@@ -18,6 +18,8 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 实验执行环境准备 | [experiment-environment-preparation](experiment-environment-preparation/phase2-requirements-design.md) | 第二步点击下一步时按数据集、Agent 与执行上下文检查并自动准备环境；底部统一反馈，准备逻辑归属执行端数据集接入协议，移出客户端安装中的 xGovernor 编译 | Feature / Refactor | 2026-10-23 | 🟡 代码与专项自动化回归完成；全量含既有失败，未在浏览器及真实 Linux Docker/模型环境验收 | — |
+| Benchmark xGovernor 本地 Docker 接入 | [benchmark-xgovernor-local-docker](benchmark-xgovernor-local-docker/phase2-requirements-design.md) | 将原生 Pi/xiaoO 的 SWE-bench 执行切换到 xGovernor 本地 Docker，以完整执行后端合同保留 OpenCode 与沙箱替换扩展点 | Feature / Refactor | 2026-10-20 | 🟡 核心实现、配置分发与专项自动化测试完成；待真实 Linux Docker 与模型联调，按用户要求不做浏览器验收 | — |
 | Benchmark 业务配置文件 | [benchmark-runtime-config](benchmark-runtime-config/phase1-requirements-analysis.md) | 平台、Evaluator 与执行客户端按进程使用项目 YAML 配置及本地覆盖，迁移 SWE-bench 与调度业务环境变量 | Refactor | 2026-10-14 | ✅ 已实现，专项测试通过；未运行真实 Docker 部署及浏览器验收 | — |
 | MCTS 执行 Trace 非侵入式接入 | [mcts-trace-observability](mcts-trace-observability/) | 不修改 MCTS 代码，由独立安装的外部启动器和透明 xGovernor 观测网关采集精确 Runtime Trace 与 checkpoint 血缘；MCTS node/score/final tree 仅按 stdout 权威边界独立展示 | Feature / Observability | 2026-09-23 | 🟡 核心实现、独立安装分发与自动化测试完成；待真实 MCTS golden path 和浏览器验收 | —（待补） |
 | 实验删除与评测服务停止清理 | [experiment-cancellation](experiment-cancellation/phase1-requirements.md) | 实验及 Case 定向停止和逻辑删除、立即停服、离线镜像清理，保留共享资源及未确认取消记录 | Feature | 2026-09-23 | 🟡 工作区实现，专项通过，待全量与部署验收 | — |
@@ -83,7 +85,7 @@
 | LlamaIndex Trace 采集器 | [llamaindex-trace-collector](llamaindex-trace-collector/) | 从 LlamaIndex Dispatcher 获取原始调用信息，由 Agent Insight 自定义 Handler 继承官方 `llama-index-observability-otel` Handler 基类并补充 Agent、子 Agent、Tool、LLM、RAG 与 Workflow 语义，以可靠本地 spool 异步上传至现有 OTLP 接口，并提供服务端直接部署、配置和隔离清理能力 | Feature | 2026-08-03 | 🟢 已实现，待扩展 CI/长期 soak | —（待补） |
 | WorkBuddy (Windows 桌面版) Trace 采集器 | [workbuddy-trace-collector](workbuddy-trace-collector/) | 无 Hook/插件扩展点的闭源 Electron 客户端，通过文件监听采集本地 trace（含 generation.toolOutput 内嵌的逐轮精确 token）+SQLite 只读关联会话元数据，经共享 spool/Adapter 接入平台；客户端安装通过 Windows Task Scheduler 登录触发+崩溃自愈实现免手动启动，补齐平台此前只覆盖 Linux/macOS 的常驻客户端自启动能力 | Feature | 2026-09-06 | 🟡 实现中（采集器/Adapter/独立安装器/一键安装入口/用户指南/测试均已落地，并完成多轮真机反馈修复：Agent 命名、工具就近归属、完成状态、子 Agent 命名、路径保留、latency 毫秒、免装 Node+自愈启动器、跳过标题生成器；待 CI 跑通完整套件） | —（待补） |
 
-| Runtime 启动参数 YAML 配置 | [runtime-parameters](runtime-parameters/) | 通用参数定义、客户端能力上报、动态表单与 argv 映射；直接切换新协议 | Refactor | 2026-10-16 | ✅ 已实现，相关自动化测试通过；未进行浏览器验证 | 待补 |
+| Runtime 启动参数 YAML 配置 | [runtime-parameters](runtime-parameters/) | 通用嵌套编辑、独立草稿、完整快照与原样下发；默认值仅初始化，执行参数由客户端消费 | Refactor | 2026-10-16 | ✅ 通用草稿与原样下发已实现，105 项专项回归通过；全量测试及类型检查仍有既有基线问题；用户选择暂不进行浏览器验证 | 待补 |
 
 ## 字段口径
 

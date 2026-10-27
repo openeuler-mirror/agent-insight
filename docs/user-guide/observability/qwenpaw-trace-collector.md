@@ -1,6 +1,8 @@
 ---
 title: "QwenPaw Trace Collector"
-description: "QwenPaw 采集器的安装、验证、Trace 展示、排障与卸载指南"
+description: "介绍 QwenPaw 采集器的安装验证、Trace 展示、故障排查与卸载方法。"
+keywords: ["Agent Insight", "QwenPaw", "链路采集", "故障排查"]
+changefreq: monthly
 ---
 
 # QwenPaw Trace Collector

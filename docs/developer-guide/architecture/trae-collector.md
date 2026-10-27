@@ -1,3 +1,10 @@
+---
+title: "TRAE Collector 架构说明"
+description: "说明 TRAE Collector 如何采集 Hook 事件、持久化日志并增量上传，以及相关模块与测试发布流程。"
+keywords: ["Agent Insight", "Trae IDE", "Trace 采集器", "增量上传"]
+changefreq: monthly
+---
+
 # TRAE Collector 架构说明
 
 > Trae IDE 采集器的内部架构、数据流与关键设计决策。面向维护 `scripts/trae-collector/` 的开发者。

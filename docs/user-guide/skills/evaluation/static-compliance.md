@@ -1,6 +1,8 @@
 ---
 title: "Skill 评估"
 description: "运行静态质量评估、查看质量门禁并修复高风险问题"
+keywords: ["Agent Insight", "Skill", "静态评估", "质量门禁", "风险修复"]
+changefreq: monthly
 ---
 
 # Skill 评估

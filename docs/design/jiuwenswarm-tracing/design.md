@@ -206,7 +206,7 @@ UI 时长来自：tool_call 的 `timing.{started_at, completed_at}`、interactio
 
 ### 8) 重验结果 + 模块化目标
 
-- **三形态全部 POST 200 入库、UI 渲染正确**（顺序、时长、子 agent 下钻都对）。119 上 `demo@huawei.com` 下三条 demo：`jiuwen-team-demo` / `jiuwen-task-92a62308` / `jiuwen-spike-725295b4`（看链接带 `ownership=all&scope=all&time=all&user=demo@huawei.com`）。
+- **三形态验收**：分别检查 POST 入库成功、顺序、时长与子 Agent 下钻。具体环境、账号和演示记录由验收方单独保存。
 - **模块化目标 = Hermes 式服务端 OTEL adapter**：`src/lib/ingest/otel/adapters/jiuwen.ts`（把 `OtelTraceEvent[]` 归一化成 `ExecutionRecord`，`traces-aggregator.ts` 按 `service.name=jiuwenswarm` 路由）+ `adapters/jiuwen.ts`（FrameworkDescriptor，`sessionMergeStrategy:'snapshot-replace'`）注册进 `adapters/registry.ts`。**spike 当年否掉 OTLP 直连的 protobuf 拦路虎已通**（`src/lib/ingest/otel/decode.ts` 现支持 `application/x-protobuf`）→ jiuwen 侧可用 agent-core 自带 OTLP exporter（`init_observability(exporter="otlp_http", endpoint=...)`）近乎零代码直连，归一化全交给 TS adapter。本 `insight_bridge.py`（批量 InMemory → transform → 富 `/upload`）只是 spike/demo 形态，**不是模块化目标**，但它的属性映射 + 联动/顺序/timing 规则可直接搬进 TS adapter。
 
 ---

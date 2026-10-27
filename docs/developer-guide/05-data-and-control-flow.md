@@ -1,8 +1,28 @@
+---
+title: "数据与控制流"
+description: "说明 Agent Insight 从数据接入到评测、Skill 生成和优化的数据流及控制流程。"
+keywords: ["Agent Insight", "数据流", "链路接入", "评测流水线", "Skill 优化"]
+changefreq: monthly
+---
+
 # 数据与控制流
 
 > 两个视角：（1）分析器从页面/组件入口点出发，沿 React 调用图追踪出的前端流程；（2）从 API 路由处理器和引擎入口函数重建出的后端流水线。前端追踪使用真实的调用边；后端流水线则是从入口点 + 调用图与命名推导而来（确切的内部调用边可能有所不同——在需要时请核对源码）。
 
 ## Entry points
+
+### 实验第二步环境准备
+
+```text
+第二步下一步 → 表单校验 → 固定当前数据集/主机/Agent/模型/参数/Case 范围
+  → 创建或复用环境任务 → 现有客户端指令通道
+  → 独立进程调用数据集 checkEnvironment
+      ├→ 人工问题 → needs_action → 底部提示 → 用户配置后再次点击下一步
+      ├→ 已满足 → ready → 刷新执行目标 → 自动进入第三步
+      └→ 自动准备 → prepareEnvironment → 复查 → ready 或明确问题
+```
+
+选择主机或修改字段本身不触发检查。准备期间第二步字段与导航锁定；纯已有 Trace 评测直接跳过，仍重新执行 Agent 的 Skill A/B 不跳过。长编译不阻塞客户端心跳，进度和结果沿原控制通道回报；同上下文任务去重，共享组件复用安装锁。断连或重启通过本地任务记录核对，不由页面关闭推断安装取消；最终开始执行仍保留原有能力与 Profile 校验，不在第四步自动安装。
 
 ### 实验取消与本机停服
 
@@ -16,16 +36,18 @@
 evaluator.sh stop → 与启动互斥 → 持久化停止标记 → 关闭 Controller
                    → 再次扫描作业 → 定向清理容器 → 可选清理登记镜像
 
-evaluator.sh images {list|purge} → 管理容器 → 数据卷内 manager.sock
-                                      → 当前 Controller 镜像池互斥
-                                      → 列表或逐个清理空闲自有 Case 镜像
+evaluator.sh images {list|purge} → docker exec 当前 Controller（部署 Catalog/配置）
+                                → manager.sock 镜像池互斥 → 空闲自有 Case 镜像
+                                → 归属记录与 Docker 引用检查 → 旧受管 Runtime
+
+evaluator.sh start → 新 Controller 通过 Doctor → 同一 Runtime 清理策略（失败只警告）
 ```
 
 本地取消检查周期 500ms，后台取消对账周期 3 秒，页面待确认列表每 5 秒刷新。轮询不是等待实验自然结束；收到信号后立即请求退出。删除最后一个有效 Case 时，同一事务会将实验标记为已删除并关闭监听；Case 删除响应将此状态返回页面，以便跳转实验列表。后台对账也会收敛此前遗留的普通及 Benchmark 零 Case 实验。仍有有效 Case 时，Case 取消确认后 Benchmark 推进下一 Case，普通实验重新结算；没有有效结果不能判成功。新派发、重试、出队、恢复和回调均检查删除/取消状态。
 
 本地执行记录不按超时擅自过期：平台进程崩溃可能留下尚未确认的执行或子进程，重启后仍显示待确认，需要运维核对。远端离线则自动重发取消指令；旧客户端明确拒绝停止指令时保留待确认并提示升级，在客户端进程重启后再重发，避免每轮对账重复投递。首版不自动推断“心跳消失等于任务已死”，也不提供批量抹除未确认记录的入口。
 
-评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。在线镜像命令不新增 HTTP 管理接口，必须挂载同一命名卷，并由正在运行的 Controller 执行；管理容器不直接并发改写 `image-pool/state.json`。
+评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。在线镜像命令不新增 HTTP 管理接口，由正在运行的 Controller 执行，不直接并发改写 `image-pool/state.json`。Runtime 清理只删除同 daemon、同数据卷登记的已确认旧镜像，保留当前 Catalog 引用与 Image ID、容器引用及归属/操作不确定项，按 Image ID 非强制删除，避免标签改写时误删新镜像。
 | Entry | File | Kind |
 |---|---|---|
 | `POST` ingest upload | `src/app/api/ingest/upload/route.ts` | HTTP |
@@ -110,6 +132,10 @@ Pi、Codex 与 Goal Plus native 导入复用 `scripts/agent-trace-collectors/sha
 MCTS xGovernor 非侵入式接入也复用同一 writer/uploader，并额外复用 `collaboration-transport.cjs`。`agent-insight-mcts-run` 在回环地址启动透明 HTTP/SSE 代理，只覆盖子进程的 `XGOVERNOR_BASE_URL`；请求和响应字节先透传，观测回调异步处理。`core.cjs` 只读取 open/load/checkpoint/turns/close/cancel/heartbeat/files-read 白名单 JSON 与 turn SSE，不读取 exec、files-write 正文。`tool_activity(begin)` 的 summary 解析为工具 arguments，`tool_activity(end)` 的 summary 解析为 result；两者按 activity ID 合并，晚到的 begin 会刷新同一稳定 span，缺失或截断状态通过 `mcts.tool.*` 属性显式标记。checkpoint 以 `runKey + checkpointId` 摘要建立 ledger；只有实际出现 turn 的 Runtime 才生成父级合成 `task` span及 collaboration event。`task` span 使用稳定 ID，后续 checkpoint、load 或文件读取确认角色时以快照更新同一 span，关系事件仍保持不可变且只上报一次。MCTS adapter 以结束时间最新的非 `unknown` Agent 快照作为角色真源，其他事件只能兜底，旧 Tool/LLM 快照不能把已确认角色降回 `unknown`。stdout parser 只接收稳定调度摘要，同时标记 `mcts.summary.unbound=true` 与 `mcts.synthetic=true`；adapter 将其保留为合成 Tool 观测，但不生成 LLM 事件，也不得把并发 node 输出按时间猜测绑定到 Runtime。launcher 在子进程存活期间每 60 秒调用 `core.pulse()`，以相同 coordinator span ID 写入更晚的 Agent 快照；聚合器按 span ID 保留结束时间更新的快照，因此只刷新 `lastIngestedAt` 和 coordinator 时长，不增加可见节点或调用统计。退出清理位于 `finally`，正常退出和 `SIGHUP`、`SIGINT`、`SIGTERM` 都停止保活、写 terminal snapshot 并有界刷新；无法执行清理的硬退出仍由 10 分钟无遥测规则标记为“观测超时”，该状态不等价于业务执行已经终止。
 
 CodeAgent setup 在 Unix 安装 `~/.agent-insight/bin/codeagent` 并通过 shell profile 前置其目录，在 Windows 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` + `codeagent-wrapper.ps1` 并前置持久化的用户级 PATH；两端包装器运行时都从排除自身目录后的 PATH 动态解析真实 CodeAgent，并以安装时记录的路径兜底，因此继承 PATH 的 Shell、PowerShell、CMD、Python、Node 等非交互子进程能获得同一套 OTel 环境且不会递归调用包装器。CodeAgent 通过 `service.name=CodeAgentOC` 分流：Logs 进入 `codeagent-otel` 独立聚合器，Traces/Metrics 返回 accepted 后在规范化和持久化前丢弃；聚合器根据 `query_source` 识别 `extract_memories` 和 `auto_dream`，并按其独立 `execution.agent_run_id` 排除整组后台记忆事件，原始 spool 不删除，正常子 Agent 不受影响；非 Langfuse 路径不读写 `langfuseTraceNodes`。
+
+OpenCode 1.x 使用原有采集工厂，2.x 安装时选择原生插件定义与会话事件适配器，沿用 JSONL → uploader → `/api/ingest/upload` 链路。版本识别接受裸版本号及带 `opencode`、可选 `v` 和首尾空白的输出；Unix、PowerShell 与 RAS 安装器保持相同规则。2.x 模型 Hook 在记录系统提示词后立即返回，快照在后台读取，每个会话只保留一个在途读取；会话结束时最多等待 250ms，迟到快照在追加快照事件后再次触发终态上传，插件关闭后不再写入。异常载荷缺少模型元数据时仍保留系统提示词。
+
+OpenCode 2.x 的原生用户消息带 `trace_kind=user`，合并子会话后即使 `role=opencode` 也仍表示输入。Trace 树、调试轮次与评估输出提取均优先遵循这一标记，不将其计为模型回复；不带此标记的历史 `opencode` 回复保持原有解释。2.x 不装配 1.x RAS，安装和状态检查只提示全局旧插件及配置残留，不删除或改写用户内容。
 
 OpenClaw 的主接入路径是 setup 生成的同名命令包装函数：它向原始 `openclaw` 命令注入 OTLP/HTTP JSON 配置，watcher 仅作为互斥的兼容路径。OpenClaw trace adapter 重建 agent/LLM/tool/skill 与子 Agent 关系，并按 `traceId + spanId` 去重；模型请求仍由 OpenClaw 直接发送给模型供应商。
 
@@ -230,7 +256,7 @@ flowchart TD
     judge --> persist["persist Evaluation / TrajectoryEvalResult"]
     derive --> issues[("SkillIssue (Prisma)")]
 ```
-入口路由：`eval/config/*`、`eval/trajectory/run`、`eval/rejudge`、`debug/batch-tasks/*`、`debug/grayscale-tasks/*`（A/B 经由 `ab-scoring.ts`）。引擎：`evaluation/judge.ts:judgeAnswer`、`trajectory-evaluator.ts:evaluateTrajectory`、`semantic-dataset-match.ts`、`derive-skill-opt-points.ts`、`result-artifact-extractor.ts`。轨迹评测的实际 trace 证据由 `trace-summarizer.ts` 基于 `Session.interactions` 生成事件级步骤；`ExecutionMatch.extractedSteps` 仍用于 Skill 流程对齐/可视化缓存，不作为轨迹评测唯一输入。任务完成度与轨迹质量的直连预置评估器会在 `model.invoke` 前后采集同一次调用的开始/完成时间，`evaluator-execution-recorder.ts` 将这组边界同时写入 assistant `timeInfo`、`Execution.timestamp/latency` 和 `Session.startTime/endTime`。结果评测会在运行前按轨迹评测同口径解析 trace 关联 Skill（含 `execution.skill` fallback）并写入 `rawAnalysis.resultSkillMode`；`no-skill` 分支不生成 Skill 归因、改进建议或 `SkillIssue`。任务完成度评测优先使用数据项内与当前预期输出匹配的关键观点缓存；缓存缺失、过期、上次提取失败或 `ready` 但没有观点时实时提取，并将成功结果按 case 懒写回。非空预期输出的实时提取结果为空时，`resolveRootCauses` 用完整预期输出构造一个确定性兜底观点，保证任务完成度的逐观点评分契约仍成立。普通实验创建 Case 时把数据集与数据项身份保存在 `ExperimentCase.caseValuesJson` 的内部元数据中，详情 API 会在返回用户字段前剥离它；`eval-traces` 入口也写入同一绑定。实验引擎只在 `preset-agent-task-completion` 行解析该绑定，重新校验用户、case ID 与预期输出原文后才复用或写回缓存，其他评估器不增加数据集读取。直连评测回退到 opencode 传输时复用同一次提取 Promise，避免重复提取和重复写回。写回失败仅记录警告，不中断已拿到关键观点的当次评测。`rawAnalysis.key_point_findings` 负责关键观点覆盖与等权算分；`rawAnalysis.result_issues` 单独承载关键观点之外的事实错误、编造内容、冗余或格式问题，只作为可归因的动态优化点输入，不直接参与任务完成度分数。
+入口路由：`eval/config/*`、`eval/trajectory/run`、`eval/rejudge`、`debug/batch-tasks/*`、`debug/grayscale-tasks/*`（A/B 经由 `ab-scoring.ts`）。引擎：`evaluation/judge.ts:judgeAnswer`、`trajectory-evaluator.ts:evaluateTrajectory`、`semantic-dataset-match.ts`、`derive-skill-opt-points.ts`、`result-artifact-extractor.ts`。轨迹评测的实际 trace 证据由 `trace-summarizer.ts` 基于 `Session.interactions` 生成事件级步骤；`ExecutionMatch.extractedSteps` 仍用于 Skill 流程对齐/可视化缓存，不作为轨迹评测唯一输入。任务完成度与轨迹质量的直连预置评估器会在 `model.invoke` 前后采集同一次调用的开始/完成时间，`evaluator-execution-recorder.ts` 将这组边界同时写入 assistant `timeInfo`、`Execution.timestamp/latency` 和 `Session.startTime/endTime`。结果评测会在运行前按轨迹评测同口径解析 trace 关联 Skill（含 `execution.skill` fallback）并写入 `rawAnalysis.resultSkillMode`；`no-skill` 分支不生成 Skill 归因、改进建议或 `SkillIssue`。数据集 `POST/PATCH /api/agent-datasets` 的保存预处理只规范化样本和管理关键观点缓存，不调用模型：仅复用服务端已有、预期输出未变且哈希匹配的非空 `ready` 缓存；新增或预期输出改变、缓存失效时清空 `rootCauses/rootCauseMeta`，空答案标记为 `empty`。客户端提交的缓存不作为可信来源。保存响应保留 `warnings` 数组。显式离线回填脚本 `scripts/backfill_dataset_case_root_causes.ts` 单独注入提取器，保留 `--force` 刷新和 `--retry-failed` 重试能力；HTTP 保存路径不注入提取器。任务完成度评测优先使用数据项内与当前预期输出匹配的关键观点缓存；缓存缺失、过期、上次提取失败或 `ready` 但没有观点时实时提取，并将成功结果按 case 懒写回。非空预期输出的实时提取结果为空时，`resolveRootCauses` 用完整预期输出构造一个确定性兜底观点，保证任务完成度的逐观点评分契约仍成立。普通实验创建 Case 时把数据集与数据项身份保存在 `ExperimentCase.caseValuesJson` 的内部元数据中，详情 API 会在返回用户字段前剥离它；`eval-traces` 入口也写入同一绑定。实验引擎只在 `preset-agent-task-completion` 行解析该绑定，重新校验用户、case ID 与预期输出原文后才复用或写回缓存，其他评估器不增加数据集读取。直连评测回退到 opencode 传输时复用同一次提取 Promise，避免重复提取和重复写回。写回失败仅记录警告，不中断已拿到关键观点的当次评测。`rawAnalysis.key_point_findings` 负责关键观点覆盖与等权算分；`rawAnalysis.result_issues` 单独承载关键观点之外的事实错误、编造内容、冗余或格式问题，只作为可归因的动态优化点输入，不直接参与任务完成度分数。
 
 平台通过 `opencode-manager.ts` 启动的内置 OpenCode 子进程使用独立 spawn 环境。当前为兼容 OpenCode 1.14.39 与部分新证书链，子进程环境固定注入 `NODE_TLS_REJECT_UNAUTHORIZED=0`；该设置不修改 Next.js 父进程或系统 Node 环境。此为临时兼容策略，升级并验证 OpenCode 证书链后应恢复 TLS 校验。
 
@@ -402,7 +428,9 @@ Pi 使用每次运行独立的 `createEventInspector`，只消费完整 JSON 行
 
 CLI/Collector 就绪检查保持 3 秒单命令超时及 5 分钟缓存，文件指纹变化即时失效；30 秒能力扫描只检查 settings/models/auth、Collector 与可执行文件，不扫描 Pi 历史 Sessions。`probePiRuntime()` 不再同步调用模型目录，只读取就绪信息和已缓存目录。`refreshCapabilityReports()` 并行等待隔离 FI inventory 与 `refreshPiModelCatalog()`，完成后才上报能力。模型目录通过异步 `spawn` 执行 `--no-approve --list-models`，允许 20 秒，不阻塞主进程心跳；输出合计限制 1 MiB，超时/输出超限杀进程组，服务退出也清理未完成探测。同一配置的并发探测合并为一次；成功缓存 5 分钟，失败保留同指纹上次成功列表并在 30 秒后允许重试，无旧列表时保留“平台默认”，配置变更不沿用旧目录。有效空目录与超时、异常退出、格式错误明确区分，日志 `Pi model catalog` 只记录固定错误码、数量、耗时和重试周期，不记录原始 stdout/stderr 或密钥。模型发现不影响 Collector 就绪判定。
 
-Benchmark runtime 列表仍在客户端启动时固定，安装或修复后重启客户端。`test/reliability-client-pi.test.ts` 覆盖慢于 3 秒时仍可发现模型且定时器持续运行、并发去重、失败重试与成功缓存保留，以及隔离启动、重试、能力合并及真实 Collector→normalize→aggregate 契约；设置 `PI_EXPERIMENT_TEST_CLI=/absolute/path/to/pi` 可额外运行隔离本地 HTTP provider + 真实 Pi/Collector 的测试，不使用真实模型凭据。
+实验第二步的环境检查不调用或等待上述全量刷新；它只检查本次数据集与所选 Agent，复用已验证事实增量同步相关能力和 Profile，随后回报就绪。可靠性检查只读取所选平台的 FI 适配和所需故障定义，不扫描其他平台或完整模型目录。恢复时依据持久化上下文对当前组合做只读复查，再增量同步；不会直接回放旧的就绪结论，也不会在恢复时自动重装。终态通过 HTTP 确认，未确认结果保留并定期重试，已过期或不存在的服务端任务停止补报。Benchmark Runtime 列表在能力同步后动态更新，安装或修复后无需为此重启客户端。
+
+`test/reliability-client-pi.test.ts` 覆盖慢于 3 秒时仍可发现模型且定时器持续运行、并发去重、失败重试与成功缓存保留，以及隔离启动、重试、能力合并及真实 Collector→normalize→aggregate 契约；设置 `PI_EXPERIMENT_TEST_CLI=/absolute/path/to/pi` 可额外运行隔离本地 HTTP provider + 真实 Pi/Collector 的测试，不使用真实模型凭据。
 
 模型目录探测也通过 `buildAgentProcessLaunch()` 启动，复用执行时的用户 shell、环境与启动输出隔离，并从 `child.stdio[stdoutIndex]` 而非固定 stdout 读取结果。bash 交互登录会关闭 fd 3–19，因此无 profile 的引导 shell 先将私有管道移至 fd 20/21，再 exec 登录 shell；实际 CLI 启动前还原 stdout/stderr 并关闭额外描述符，进程组管理不变。缓存 key 包含 supervisor、shell、HOME/ZDOTDIR；shell 配置变更需要重启服务。客户端完整接受 Pi 列出的模型，不做额外白名单、凭据有效性/余额/权限探测或逐模型调用。
 

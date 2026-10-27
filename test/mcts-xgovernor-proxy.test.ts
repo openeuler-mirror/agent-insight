@@ -247,6 +247,7 @@ test('MCTS observer installer creates an isolated 0600 config and managed wrappe
       homeDir: temporaryHome,
       sourceDir: path.resolve('scripts/agent-trace-collectors/mcts-xgovernor-proxy'),
       skipVersionCheck: true,
+      fetchImpl: async () => new Response(JSON.stringify({ status: 'accepted', received: 0 })),
     });
     assert.equal((await fs.stat(result.configPath)).mode & 0o777, 0o600);
     assert.match(await fs.readFile(result.commandPath, 'utf8'), /managed-by-agent-insight-mcts-xgovernor-proxy/);

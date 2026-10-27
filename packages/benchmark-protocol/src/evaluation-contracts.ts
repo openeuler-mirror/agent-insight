@@ -18,8 +18,17 @@ export type ReadonlySubmissionArtifact = {
   readBytes(): Promise<Uint8Array>
 }
 
-export type ValidateSubmissionInput = {
+export type ValidateSubmissionInput = ({
   task: AgentTaskEnvelope
+  submission?: never
+} | {
+  task?: never
+  submission: {
+    runId: string
+    publicPayload: JsonValue
+    privatePayload: JsonValue
+  }
+}) & {
   artifacts: readonly ReadonlySubmissionArtifact[]
 }
 

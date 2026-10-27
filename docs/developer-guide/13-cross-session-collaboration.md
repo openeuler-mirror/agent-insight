@@ -1,3 +1,10 @@
+---
+title: "跨 Session 协作 Trace"
+description: "说明跨 Session 协作关系的事件、查询与 Trace 投影机制，以及 Goal Plus 和 MCTS 的接入边界。"
+keywords: ["Agent Insight", "跨会话协作", "Trace 投影", "关系事件"]
+changefreq: monthly
+---
+
 # 跨 Session 协作 Trace
 
 跨 Session 协作层把分散的 Session 关系作为独立覆盖层保存。它与 Execution 原生父子树并存：关系可以先于 Trace 到达，端点关联随新 Execution 重算，但任何结果都不会写回 `parentExecutionId` 或 `rootExecutionId`。
@@ -81,11 +88,13 @@ MCTS collector 不增加关系 API 或 Prisma 模型，直接使用公开 bindin
 
 `full`、`structure`、`interactions` 和单条 interaction 读取使用一致投影。普通合并交互保留 `_collaboration` 源 Session/索引/版本，所有 Session 响应保留 `_payloadVersion`；前端拒绝刷新前发起或版本不匹配的异步加载结果。`source=raw` 绕过展示投影，读取仍验证当前用户。
 
-Session 的 `full` 与 `structure` 响应增加 `parentAgent`：无已声明 Goal Plus 父关系时为 `null`；`resolved` 包含 `taskId`、`executionId`、`agentName`、`framework`，其它状态为 `pending`、`ambiguous`、`unavailable`。仅向通过认证且拥有当前 Session 的用户返回父信息；`source=raw` 不提供关系导航。同一请求生成一次投影计划，同时用于主从正文投影与反向父查询；父摘要复用就绪性查询，不另行加载父正文，也不缓存进原生 Session 解析缓存。
+Session 的 `full` 与 `structure` 响应提供 `parentAgent` 和 `traceRelations`。后者按当前 Trace 及本次投影实际包含的成员 taskId 索引，条目包含 `parent`、直接 `children`，故障时附 `unavailable`；不返回账号其它协作组的关系表。`parentAgent` 保留为当前 Trace 父引用的兼容字段。引用状态为 `resolved`、`pending`、`ambiguous`、`unavailable`；`resolved` 包含 `taskId`、`executionId`、`agentName`、`framework`，可选 `stats.durationMs/totalTokens`。仅顺序关联标记 `reported`，不能解读为已确认调用位置。仅向通过认证且拥有当前 Session 的用户返回关系；`source=raw` 不提供关系导航。
 
-父查询使用 Goal Plus binding/event 声明及同用户唯一端点，保留完整 Pi `__taskN`。声明先参与冲突和环路检查，即使另一个声明父级正文尚未到达，也不能只选择当前已就绪的父级。重复同父声明去重，定位到具体 tool 的 anchor 是否明确不影响已确认父子关系的导航。`parentAgents` 与最终 `links` 同源，未知父绑定保持 pending；解析故障或安全上限触发返回 unavailable。原生 `Execution.parentExecutionId` 不写入。
+MCTS 与 Goal Plus 共用投影计划中的父级索引及直接子级索引，保留完整 Pi `__taskN`。同一请求只生成一次计划，用于正文投影及双向关系查询，父摘要复用就绪性查询，不加载父正文。Goal Plus 声明先参与冲突和环路检查，父级正文尚未到达也不能绕过冲突。重复同父声明去重，未就绪成员显示 pending，不输出未验证的目标标识；解析失败及超限的相关链路显示 unavailable。`Execution.parentExecutionId` 作为原生父子导航的兼容来源，只查询同用户 Execution，不改写该字段。关系信息不缓存进原生 Session 解析缓存。
 
-`AgentTraceView` 在独立 worker 根节点使用 `parentAgent`；在组合 Trace 中优先使用 `_collaboration.parent`，避免把并列展示用的虚拟根当成真实父 Agent。卡片不进入树或统计。Trace 页面和抽屉传入完整 taskId 与导航回调；切换详情会丢弃旧请求，等待父级的已结束 worker 也可轮询恢复，用户关闭自动刷新后停止详情轮询。
+`AgentTraceView` 的关系卡片优先读取 `traceRelations`；无服务端索引时使用 `_collaboration.parent` 与原生树。直接子级按逻辑关系取值，不按并列展示树推断。虚拟 `COLLABORATION` 根只展示“集合成员”，没有父跳转；真实根显示“无父 Trace”，叶子显示“无子 Trace”。父子卡片共享样式和单个原生按钮，已有独立 Session 时打开对应 Trace，否则保留树内选择。卡片不进入调用树或统计。
+
+Trace 页面和抽屉传入完整 taskId 与导航回调。页面精确匹配目标 taskId，切换时取消旧查询且不展示上一个 Trace；失败保留目标 URL 并提供重试。返回当前已加载的根 Trace 会重置选中节点和概览。等待父级或子级的已结束 Trace 仍可轮询恢复，用户关闭自动刷新后停止详情轮询。
 
 ## 列表折叠与 pending
 
@@ -93,7 +102,7 @@ Trace 列表显式请求协作 worker 折叠。默认“仅主 Agent”范围排
 
 Goal Plus 投影计划把列表隐藏与详情合并分开：`hiddenChildren` 包含已声明 worker 与已合并子节点；其中尚未合并的已声明 worker 进入 `pendingChildren`；`links` 只包含当前可读的主从关系。main binding、主 Trace 或 worker 正文仍 pending 时，已声明 worker 不回退成默认主记录，详情也不会凭空生成正文。
 
-过滤发生在数据库分页和聚合之前，保证 page size、total 与统计一致；不改写 `Execution.isSubagent`。普通 reported 只有成功投影才隐藏，查询失败保留原列表。已识别 Goal Plus 声明后发生解析查询失败时保留该隐藏集合；全局投影安全限制触发时回退原列表。全局上限为 200 个协作组、2000 条关系、200 个 Session、32 MiB 正文。
+过滤发生在数据库分页和聚合之前，保证 page size、total 与统计一致；不改写 `Execution.isSubagent`。普通 reported 只有成功投影才隐藏，查询失败保留原列表。协作组按 collaborationId 游标每批 200 组读取，不限制账号的历史协作组总数。2000 条关系、200 个 Session、32 MiB 正文的投影上限按单个协作组检查，不跨组累计。单组超限或解析失败只让该组及共享 Trace 的关联组回退原列表，其余 MCTS / Goal Plus 组继续合并。异常组通过同用户绑定和事件端点元数据确定影响范围；无法读取这些元数据或协作组列表时才全局回退。失败链路中已声明的 Goal Plus worker 不再隐藏，父导航标记 unavailable；普通正文晚到仍按原有 pending 规则处理。
 
 ## 独立协作图
 

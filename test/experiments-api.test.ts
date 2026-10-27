@@ -333,6 +333,46 @@ test('experiments API: persist and return normalized evaluator configs', async (
   assert.deepEqual(clonedDetail.evaluatorConfigs, detail.evaluatorConfigs);
 });
 
+test('experiments API: evaluatorConfigs 相似度阈值校验与持久化', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  });
+
+  // 越界阈值 → 400
+  const bad = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a' }],
+    evaluatorIds: ['preset-similarity-text'],
+    evaluatorConfigs: { 'preset-similarity-text': { threshold: 150 } },
+  }));
+  assert.equal(bad.status, 400);
+  assert.match(String((await bad.json()).error), /0 到 100/);
+
+  // 非数字阈值 → 400
+  const badType = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a' }],
+    evaluatorIds: ['preset-similarity-text'],
+    evaluatorConfigs: { 'preset-similarity-text': { threshold: 'high' } },
+  }));
+  assert.equal(badType.status, 400);
+
+  // 合法阈值 → 落库（版本化 JSON，小数取整）
+  const ok = await createExperiment(postReq({
+    user: TEST_USER, name: '阈值实验', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a', referenceOutput: 'ref' }],
+    evaluatorIds: ['preset-similarity-text'],
+    evaluatorConfigs: { 'preset-similarity-text': { threshold: 60.4 } },
+  }));
+  assert.equal(ok.status, 200);
+  const { id } = await ok.json();
+  const exp = await prisma.experiment.findUnique({ where: { id } });
+  assert.deepEqual(JSON.parse(exp!.evaluatorConfigsJson), {
+    schemaVersion: 1,
+    configs: { 'preset-similarity-text': { threshold: 60 } },
+  });
+});
+
 test('experiments API: detail 404 for missing experiment', async () => {
   const res = await getExperiment(
     new Request(`http://localhost/api/experiments/nope?user=${TEST_USER}`),

@@ -1,6 +1,8 @@
 ---
 title: "内置示例端到端走查"
 description: "用注册即得的内置 messages 日志示例，跑通 智能诊断 → Skill 生成 → 评测 → 优化 的完整闭环。"
+keywords: ["Agent Insight", "内置示例", "日志诊断", "Skill 生成", "评测优化"]
+changefreq: monthly
 ---
 
 # 内置示例端到端走查

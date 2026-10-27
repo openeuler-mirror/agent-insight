@@ -30,6 +30,7 @@ export type CreateBenchmarkExperimentInput = {
     platform: string
     agent: string
     model?: string
+    executionProfileDigest?: string
     agentOptions?: unknown
     agentTimeoutSeconds?: number
     executionConcurrency?: number
@@ -114,6 +115,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', 'Benchmark 数据集不存在或未就绪', 404)
   }
   const adapter = getBenchmarkAdapter(dataset.adapterKey)
+  if (adapter.manifest.supportsAgentExecution === false) {
+    throw new BenchmarkProtocolError('BENCHMARK_AGENT_EXECUTION_UNSUPPORTED', '该 Benchmark 不支持 Agent 执行', 409)
+  }
   const catalogInputs = new Map<string, string>()
   try {
     const catalogCases = JSON.parse(dataset.agentEvalDataset.casesJson) as Array<{
@@ -143,6 +147,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
   const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
+  if (input.runConfig.executionProfileDigest !== undefined && input.runConfig.executionProfileDigest !== target.executionProfile?.definitionDigest) {
+    throw new BenchmarkProtocolError('EXECUTION_PROFILE_CHANGED', '执行环境已变化，请刷新后重新确认', 409)
+  }
   const resolved = resolveAgentOptions(target.parameterDefinitions, platform, agent, agentOptions)
   agentOptions = resolved.agentOptions
   if (executionConcurrency > 1 && JSON.parse(client.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
@@ -150,6 +157,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   }
 
   const runConfig = {
+    ...(target.executionProfile ? { executionProfile: target.executionProfile, executionArch: ['arm64', 'aarch64'].includes(client.arch || '') ? 'arm64' as const : 'amd64' as const } : {}),
     platform,
     agent,
     ...(agentOptions ? { agentOptions, agentParameterDefinition: resolved.definition } : {}),
@@ -163,12 +171,18 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   ]))
   const preparedCases = cases.map((datasetCase, ordinal) => {
     const publicPayload = parsePublicPayload(datasetCase.publicPayloadJson)
+    const runId = newRunId()
+    const experimentCaseId = newExperimentCaseId()
+    adapter.buildAgentTask({
+      publicPayload, runConfig,
+      context: { runId, experimentId: 'preflight', caseId: experimentCaseId },
+    })
     return {
       datasetCase,
       ordinal,
       publicPayload,
-      experimentCaseId: newExperimentCaseId(),
-      runId: newRunId(),
+      experimentCaseId,
+      runId,
     }
   })
 

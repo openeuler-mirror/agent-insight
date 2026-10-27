@@ -252,7 +252,9 @@ test('OTel trace aggregation streams 200,000 duplicate Pi rows into one retained
   }
 });
 
-test('OTel trace aggregation discards a session that exceeds its unique-event limit', () => {
+test('OTel trace aggregation discards a session that exceeds its unique-event limit and logs an error', t => {
+  const errors: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => errors.push(args));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otel-trace-limit-'));
   const previous = process.env.AGENT_INSIGHT_OTEL_AGG_MAX_UNIQUE_EVENTS;
   try {
@@ -266,6 +268,7 @@ test('OTel trace aggregation discards a session that exceeds its unique-event li
     assert.equal(result.disposition, 'discard');
     assert.equal(result.record, null);
     assert.equal(result.reason, 'aggregation-limit');
+    assert.ok(errors.some(args => String(args[0]).includes('Discarding oversized trace session')));
   } finally {
     if (previous === undefined) delete process.env.AGENT_INSIGHT_OTEL_AGG_MAX_UNIQUE_EVENTS;
     else process.env.AGENT_INSIGHT_OTEL_AGG_MAX_UNIQUE_EVENTS = previous;

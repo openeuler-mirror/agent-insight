@@ -1,6 +1,8 @@
 ---
 title: "运行观测"
-description: "Agent 概览、链路追踪与推理基础设施总览"
+description: "介绍运行观测的模块入口、使用顺序及平台接入方式，帮助用户定位 Agent 的运行状态与链路问题。"
+keywords: ["Agent Insight", "运行观测", "链路追踪", "平台接入"]
+changefreq: monthly
 ---
 
 # 运行观测
@@ -108,6 +110,8 @@ Trace：安装脚本从当前 Agent Insight 服务端下载内置 collector zip�
 
 
 CodeAgent 当前会同时发出 Logs、Traces 和 Metrics，且内部配置会覆盖常规 exporter 关闭变量。Agent Insight 因此只把 `service.name=CodeAgentOC` 的 Logs 写入 `~/.agent-insight/otel_data/codeagent` 并聚合为 `framework=codeagent`；同来源的 Traces/Metrics 返回成功后直接丢弃，不写 trace spool、InfraSource 或指标样本。Skill 调用会映射为标准 `skill` 事件；`Agent`/`Task` 调用会映射为 `task`，用于生成子 Agent Trace 和按节点隔离 Skill。CodeAgent 在主回答结束后发起的 `extract_memories` 和 `auto_dream` 内部记忆维护仍保留在原始 Logs spool 中，但不会进入用户 Trace 的调用树、耗时及 Token/LLM/工具统计。
+
+CodeAgent 会话在用户输入到达前可能暂时显示 `CodeAgent Session <会话 UUID>`；收到用户消息后，任务内容会自动更新为首条非空用户输入。已有的真实任务标题会保留。升级前已保存的占位标题需要在该会话重新聚合并保存后才会更新，仅重启服务不会自动修正全部历史记录。
 
 ## LlamaIndex 接入
 

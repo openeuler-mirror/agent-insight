@@ -2,16 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { OtelIngestDiagnostics } from '@/lib/ingest/otel/diagnostics';
 
-function fixture() {
+function fixture(debug = false) {
   let now = 1_000;
   const lines: Array<{ level: string; data: any; text: string }> = [];
   const timers: Array<() => void> = [];
   const logger = new OtelIngestDiagnostics({
+    debug: () => debug,
     now: () => now,
     emit: (level, text) => lines.push({ level, text, data: JSON.parse(text.slice('[OTelIngest] '.length)) }),
     schedule: callback => { timers.push(callback); },
   });
-  return { logger, lines, timers, advance(ms = 60_000) { now += ms; timers.shift()?.(); } };
+  return { logger, lines, timers, elapse(ms: number) { now += ms; }, advance(ms = 60_000) { now += ms; timers.shift()?.(); } };
 }
 
 function request(headers: Record<string, string> = {}) {
@@ -160,4 +161,60 @@ test('finishing is idempotent and logging failures never fail the request', () =
   assert.equal(f.lines.at(-1)!.data.completed, 1);
   const broken = new OtelIngestDiagnostics({ emit: () => { throw new Error('logger failed'); }, schedule: () => {} });
   assert.doesNotThrow(() => broken.begin(request()).finish(500, { reason: 'handler-error' }));
+});
+
+test('debug records every request, stage and trace identity beyond the normal sample budget', () => {
+  const f = fixture(true);
+  const ids = Array.from({ length: 150 }, (_, i) => i.toString(16).padStart(32, '0'));
+  for (let i = 0; i < 20; i++) {
+    const item = f.logger.begin(request());
+    item.stage('decode');
+    f.elapse(7);
+    item.decoded({ resourceSpans: [{ scopeSpans: [{ spans: ids.map(traceId => ({ traceId, attributes: 'SECRET_BODY' })) }] }] });
+    item.stage('spool');
+    f.elapse(11);
+    item.finish(i % 2 ? 500 : 200, { reason: i % 2 ? 'handler-error' : 'accepted', error: { code: 'P1008' } });
+  }
+  assert.equal(f.lines.filter(x => x.data.event === 'received').length, 20);
+  assert.equal(f.lines.filter(x => x.data.event === 'completed').length, 10);
+  assert.equal(f.lines.filter(x => x.data.event === 'failed').length, 10);
+  const completed = f.lines.find(x => x.data.event === 'completed')!.data;
+  assert.equal(completed.stageDurationsMs.decode, 7);
+  assert.equal(completed.stageDurationsMs.spool, 11);
+  for (const id of ids) assert.ok(f.lines.some(x => x.data.event === 'trace-ids' && x.data.traceIds.includes(id)), id);
+  assert.ok(f.lines.some(x => x.data.event === 'stage-start' && x.data.stage === 'spool'));
+  assert.ok(f.lines.every(x => x.text.length < 4096));
+  assert.doesNotMatch(f.lines.map(x => x.text).join('\n'), /SECRET_BODY/);
+});
+
+test('production failures and their summary use error severity', () => {
+  const f = fixture();
+  f.logger.begin(request()).finish(500, { reason: 'handler-error' });
+  f.advance();
+  assert.equal(f.lines.find(x => x.data.event === 'failed')?.level, 'error');
+  assert.equal(f.lines.find(x => x.data.event === 'summary')?.level, 'error');
+});
+
+test('debug inspection tolerates malformed OTLP collections without changing request handling', () => {
+  const f = fixture(true);
+  for (const body of [{ resourceSpans: {} }, { resourceSpans: [null, { scopeSpans: {} }] },
+    { resourceSpans: [{ scopeSpans: [null, { spans: {} }] }] }]) {
+    assert.doesNotThrow(() => f.logger.begin(request()).decoded(body));
+  }
+});
+
+
+test('debug preserves failure details and stack but excludes decoder payload excerpts', () => {
+  const f = fixture(true);
+  const failed = f.logger.begin(request());
+  failed.stage('spool');
+  failed.finish(500, { reason: 'handler-error', error: new Error('write failed apiKey=SECRET_CREDENTIAL') });
+  const detail = f.lines.at(-1)!.data.errorDetails;
+  assert.match(detail.message, /write failed/);
+  assert.ok(detail.stack.length > 0);
+  const invalid = f.logger.begin(request());
+  invalid.stage('decode');
+  invalid.finish(400, { reason: 'decode-failed', error: new Error('invalid JSON SECRET_BODY') });
+  assert.equal(f.lines.at(-1)!.data.errorDetails.name, 'Error');
+  assert.doesNotMatch(f.lines.map(x => x.text).join('\n'), /SECRET_/);
 });

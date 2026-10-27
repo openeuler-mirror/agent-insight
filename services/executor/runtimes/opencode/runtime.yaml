@@ -5,3 +5,8 @@ targets:
 parameterGroups: []
 parameters: []
 presets: []
+configuration:
+  version: 2
+  delivery: argv
+  binding:
+    mode: passthrough

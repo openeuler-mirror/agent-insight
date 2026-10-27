@@ -26,6 +26,7 @@ const ENTRIES = [
   'mcts-xgovernor-proxy/gateway.cjs',
   'mcts-xgovernor-proxy/install.cjs',
   'mcts-xgovernor-proxy/mcts-config.cjs',
+  'mcts-xgovernor-proxy/mcts-failure.cjs',
   'mcts-xgovernor-proxy/run.cjs',
   'shared/collaboration-transport.cjs',
   'shared/trace-transport.cjs',
@@ -207,6 +208,7 @@ test('MCTS installer writes an idempotent account-bound proxy configuration', as
     homeDir,
     sourceDir: path.join(process.cwd(), 'scripts', 'agent-trace-collectors', 'mcts-xgovernor-proxy'),
     skipVersionCheck: true,
+    fetchImpl: async () => new Response(JSON.stringify({ status: 'accepted', received: 0 })),
   };
   const result = await install(options);
   const config = JSON.parse(await fsp.readFile(result.configPath, 'utf8'));
@@ -218,4 +220,7 @@ test('MCTS installer writes an idempotent account-bound proxy configuration', as
   const reinstalled = await install(options);
   assert.equal(reinstalled.commandPath, result.commandPath);
   assert.deepEqual(JSON.parse(await fsp.readFile(result.configPath, 'utf8')), config);
+  process.env.AGENT_INSIGHT_API_KEY = 'invalid-replacement';
+  await assert.rejects(install({ ...options, fetchImpl: async () => new Response('rejected', { status: 401 }) }), /authentication failed/);
+  assert.deepEqual(JSON.parse(await fsp.readFile(result.configPath, 'utf8')), config, 'failed authentication must preserve installed config');
 });

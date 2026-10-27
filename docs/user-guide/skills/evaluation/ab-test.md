@@ -1,6 +1,8 @@
 ---
 title: "A/B 测试"
 description: "在相同 Case 和评估器下比较两个 Skill 版本或无 Skill 基线"
+keywords: ["Agent Insight", "Skill", "A/B 测试", "版本对比"]
+changefreq: monthly
 ---
 
 # A/B 测试

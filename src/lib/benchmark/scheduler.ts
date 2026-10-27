@@ -94,9 +94,14 @@ export async function reapStaleBenchmarkRuns(options: {
         : BENCHMARK_POST_AGENT_STALE_MS
     const staleBefore = new Date(now.getTime() - staleMs)
     const lastActivityAt = run.lastProgressAt || run.startedAt || run.updatedAt
-    if (lastActivityAt > staleBefore) continue
+    const detail = parseJsonRecord(JSON.stringify(progress.progress || {}))
+    const deadline = Date.parse(String(detail.stageDeadlineAt || ''))
+    const request = parseJsonRecord(run.dispatch?.requestJson)
+    const hasEnvironment = Boolean((request.task as { execution?: unknown } | undefined)?.execution)
+    const expired = hasEnvironment && Number.isFinite(deadline) && now.getTime() > deadline + graceMs
+    if (!expired && lastActivityAt > staleBefore) continue
 
-    const message = isPreparing
+    const message = expired ? '执行阶段超过冻结的绝对期限，平台已结束任务' : isPreparing
       ? 'Git 工作区准备超过 420 秒未完成，平台已自动结束任务'
       : run.status === 'running_agent'
         ? `Agent 执行超过 ${timeoutSeconds} 秒且宽限期内未上报进度，平台已自动结束任务`
@@ -105,11 +110,11 @@ export async function reapStaleBenchmarkRuns(options: {
       where: {
         id: run.id,
         status: run.status,
-        OR: [
+        ...(expired ? { progressJson: run.progressJson } : { OR: [
           { lastProgressAt: { lte: staleBefore } },
           { lastProgressAt: null, startedAt: { lte: staleBefore } },
           { lastProgressAt: null, startedAt: null, updatedAt: { lte: staleBefore } },
-        ],
+        ] }),
       },
       data: {
         status: 'execution_failed',
@@ -139,7 +144,7 @@ export function startBenchmarkRunWatchdog(
         return count
       })
       .then(async (count) => {
-        await refreshBenchmarkImagePreparation()
+        await refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool]', error))
         await resumeBenchmarkDispatchesAtStartup()
 
         await retireImagePreparationWindows(async (experimentId) => {
@@ -166,11 +171,12 @@ async function dispatchThroughClientControl(input: {
   request: Record<string, unknown>
 }): Promise<BenchmarkCommandOutcome> {
   const timeoutSeconds = Math.max(1, Number(input.request.timeoutSeconds) || 600)
+  const profile = (input.request.task as { execution?: { profile?: { timeouts?: { prepareSeconds?: number; cleanupSeconds?: number } } } } | undefined)?.execution?.profile
   const frame = await createCommand({
     user: input.user,
     clientId: input.clientId,
     action: 'RUN_BENCHMARK_CASE',
-    ttlMs: (timeoutSeconds + 90) * 1_000,
+    ttlMs: (timeoutSeconds + (profile?.timeouts?.prepareSeconds || 0) + (profile?.timeouts?.cleanupSeconds || 0) + 90) * 1_000,
     payload: { request: input.request },
   })
   const dispatched = await dispatchCommand(input.clientId, frame)
@@ -303,6 +309,7 @@ export async function dispatchBenchmarkRun(runId: string): Promise<void> {
     if (
       request.runId !== runId
       || request.requestDigest !== outbox.requestDigest
+      || !outbox.run.clientId
     ) {
       await markDispatchFailed(runId, {
         code: 'DISPATCH_REQUEST_INVALID',
@@ -509,7 +516,7 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
     where: {
       schedulerStatus: 'running',
       callbackOrigin: { not: null },
-      experiment: { status: 'running', scope: 'benchmark' },
+      experiment: { status: 'running', scope: 'benchmark', deletedAt: null },
     },
     orderBy: { updatedAt: 'asc' },
     take: Math.min(100, Math.max(1, limit)),
@@ -517,15 +524,19 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
   let resumed = 0
   const executorCallbackBaseUrl = defaultEvaluatorRuntimeConfigProvider.snapshot().executorCallbackBaseUrl
   for (const binding of bindings) {
-    const { settleBenchmarkExperimentStatus } = await import('./experiment-lifecycle')
-    await settleBenchmarkExperimentStatus(binding.experimentId)
-    const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
-    if (!experiment || !binding.callbackOrigin) continue
-    const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
-      publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
-      resumeOnly: true })
-    if (result?.runId) resumed++
-    void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
+    try {
+      const { settleBenchmarkExperimentStatus } = await import('./experiment-lifecycle')
+      await settleBenchmarkExperimentStatus(binding.experimentId)
+      const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
+      if (!experiment || !binding.callbackOrigin) continue
+      const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
+        publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
+        resumeOnly: true })
+      if (result?.runId) resumed++
+      void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
+    } catch (error) {
+      console.error(`[benchmark/scheduler] recovery failed for ${binding.experimentId}`, error)
+    }
   }
   return resumed
 }

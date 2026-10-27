@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { ParentAgentReference } from '@/lib/trace/parent-agent';
+import type { ParentAgentReference, TraceRelations } from '@/lib/trace/parent-agent';
 import AgentTraceView from '@/components/observe/AgentTraceView';
 import { copyText } from '@/lib/copy-text';
 import { useLocale } from '@/lib/client/locale-context';
@@ -15,6 +15,7 @@ const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 interface SessionPayload {
     taskId?: string;
     parentAgent?: ParentAgentReference | null;
+    traceRelations?: TraceRelations;
     interactions?: any[];
     langfuseTraceNodes?: LangfuseTraceNode[];
     error?: string;
@@ -343,6 +344,7 @@ function Body({
                     traceIdentity={taskId}
                     rootSessionId={taskId}
                     parentAgent={session.taskId === taskId ? session.parentAgent : null}
+                    traceRelations={session.taskId === taskId ? session.traceRelations : undefined}
                     onSubagentNavigate={id => router.push(`/trace?taskId=${encodeURIComponent(id)}`)}
                 />
             )}

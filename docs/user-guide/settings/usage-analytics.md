@@ -1,6 +1,8 @@
 ---
 title: "用量统计"
 description: "平台管理员查看所有用户对平台功能的有效使用情况"
+keywords: ["Agent Insight", "用量统计", "平台管理", "使用分析"]
+changefreq: monthly
 ---
 
 # 用量统计
