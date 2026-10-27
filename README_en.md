@@ -1,180 +1,180 @@
 <p align="center">
-  <a href="https://gitcode.com/openeuler/agent-insight">
-    <strong style="font-size: 2em;">Agent Insight</strong>
-  </a>
-</p>
-<p align="center">Transform Agent Skills from "usable" to "excellent" — a full lifecycle platform for Skill generation, evaluation, and optimization based on execution data</p>
-<p align="center">
-  <a href="https://www.npmjs.com/package/agent-insight"><img alt="npm" src="https://img.shields.io/npm/v/agent-insight?style=flat-square" /></a>
-  <a href="https://gitcode.com/openeuler/agent-insight/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/npm/l/agent-insight?style=flat-square" /></a>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="public/brand/logo-horizontal-dark.svg" />
+    <img src="public/brand/logo-horizontal-light.svg" alt="Agent Insight" width="400" />
+  </picture>
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> |
+  <strong>Observe, evaluate, diagnose, and improve Agent execution.</strong><br/>
+  An open-source AgentOps platform for the Agent lifecycle.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" /></a>
+  <a href="https://nodejs.org/"><img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20.9.0-43853d.svg" /></a>
+  <a href="https://gitcode.com/openJiuwen/agent-insight">Repository</a>
+</p>
+
+<p align="center">
+  <a href="README.zh.md">简体中文</a> |
   <a href="README_en.md">English</a>
 </p>
 
-[![Agent Insight Dashboard](docs/images/dashboard_main.png)](https://gitcode.com/openeuler/agent-insight)
+## Disclaimer
 
----
+This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance obligations under the EU AI Act and other relevant regulatory frameworks.
 
-## Why Agent Insight
+## Overview
 
-Skills are becoming a key enabler for Agent adoption, but three common problems arise in practice:
+Agent Insight is an open-source AgentOps platform that helps teams understand Agent execution, evaluate results, diagnose failures, and improve Skills using execution data. It brings observability, evaluation, diagnosis, optimization, and reliability workflows into a self-hosted application.
 
-- **More Skills, worse experience**: Similar documents generate redundant Skills. Studies show recall drops from 95% to below 30% when Skills exceed 40-50
-- **Execution process invisible**: Evaluation only checks "task completion" — even correct results may skip critical steps, hiding risks
-- **Optimization by guesswork**: Without execution data, improvement relies on trial-and-error based on outcomes, unable to pinpoint bottlenecks
+It integrates with multiple Agent platforms through native plugins, hooks, file collectors, or OTLP, depending on the platform. Steps that require model inference use model services configured by the user; Agent Insight does not include an AI model.
 
-Agent Insight is designed to solve these problems.
+## Features
 
-## Core Features
+- **Execution tracing**: inspect Agent call trees, execution timelines, tool calls, and model interactions.
+- **Evaluation**: run benchmark, result, trajectory, and reliability evaluations with built-in or custom evaluators.
+- **Diagnosis**: investigate failures using execution evidence, deterministic checks, and user-configured model services.
+- **Skill generation and optimization**: create Skills from user input or documents, manage versions, evaluate changes, and iterate on identified issues.
+- **Reliability**: use Agent fault injection, anomaly detection, and recovery workflows to assess and improve behavior.
+- **Multiple integrations**: connect supported Agent frameworks using their available collection mechanisms.
+- **Self-hosted deployment**: deploy locally or on a server and control where execution data is stored.
 
-### 🔨 Skill Generation — One-liner generation, batch deduplication
+## Architecture Overview
 
-- Generate Skills with a single sentence
-- Automatically deduplicate, merge similar content, and extract patterns during batch generation to reduce Skill proliferation
-- Support multiple data sources: Markdown, PDF, directories, URLs, etc.
+The platform has three main parts:
 
-### 📊 Multi-dimensional Evaluation & Execution Tracing
+- **Agent integrations** collect execution data through native plugins, hooks, file collectors, or OTLP. Collection paths differ between platforms.
+- **Application services** use Next.js, React, and TypeScript to provide the Web dashboard and APIs for tracing, evaluation, diagnosis, Skill generation, and optimization.
+- **Data storage** uses Prisma and database adapters to manage execution records and task data. Local SQLite is the default; see the developer guide for other database configurations.
 
-- Cover multiple dimensions: effectiveness (accuracy, Skill recall, Skill improvement rate), efficiency (latency, call count), cost (Token, model cost, CPSR)
-- Automatically generate execution flowcharts, compare step-by-step with expected Skill workflow, mark deviations, redundancies, and skips
-- Support cross-comparison analysis from four dimensions: Skill, framework, model, and task
-- More metrics in [Metrics Details](docs/metrics.md)
+Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/developer-guide/INDEX.md) for module and API details.
 
-### 🔄 Data-driven Skill Self-optimization
+<p align="center">
+  <img src="docs/images/architecture.png" alt="Agent Insight architecture" />
+</p>
 
-- Based on evaluation attribution results, automatically locate Skill defects and apply targeted fixes
-- Distinguish Skill design issues from model capability issues to avoid "fixing the wrong direction"
-- Form a continuous improvement loop: **Evaluate → Attribute → Optimize → Re-evaluate**
+## Supported Platforms
 
-## Supported Frameworks
-
-| Agent Framework | Collection Method |
-|:---------------|:-----------------|
-| OpenCode       | Native plugin    |
-| Claude Code    | OTLP export      |
-| Hermes         | Native plugin    |
-| JiuwenSwarm    | OTLP export      |
-
-## Installation
-
-```bash
-# One-line install
-npx agent-insight install
-
-# Package manager
-npm i -g agent-insight
-```
-
-> [!TIP]
-> After installation, visit the dashboard at `http://localhost:3000` with default account `admin`.
-
-### Install from Source
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git
-cd agent-insight
-npm install
-
-# Development mode
-bash scripts/restart_dev.sh
-
-# Production mode
-bash scripts/restart.sh
-
-# Configure data reporting path
-curl -sSf http://<IP>:<PORT>/api/setup | bash
-```
-
-### Mock Data for Development (Optional)
-
-To populate `/skill-opt` with sample skills + issues for local dev (without
-running real evaluators or collecting traces):
-
-```bash
-# Seed mock data: 3 skills + 5 issues
-# (pdf-extractor / doc-summarizer / chart-gen, all source='static')
-npm run seed:skill-opt
-
-# Clean mock data (cascade-deletes SkillVersion / Evaluation / SkillIssue)
-npm run clean:skill-opt
-```
-
-All seeded rows are owned by `user='skill-insight@huawei.com'` (the default
-account). Both scripts are idempotent — safe to re-run. See script headers for
-implementation details.
+| Agent platform | Collection method |
+|:---------------|:------------------|
+| OpenCode | Native plugin |
+| Claude Code | OTLP |
+| Qwen Code | Hook collector |
+| QwenPaw | Hook plugin |
+| Hermes | Native plugin |
+| Trae IDE | VS Code extension |
+| JiuwenSwarm | OTLP |
+| LangChain / LangGraph | OTLP |
+| LlamaIndex | OTLP |
+| OpenClaw | OTLP |
+| Codex | Hook collector |
+| Pi Agent | Hook collector |
+| Qoder CN | Native plugin |
+| DeepSeek Harness | Native plugin |
+| xiaoO | Hook collector |
+| CodeAgent | OTLP |
+| AcTrail | OTLP |
+| WorkBuddy | File collector |
 
 ## Quick Start
 
-The following example uses OpenCode to demonstrate the complete Generate → Evaluate → Optimize workflow.
+### 1. Install and start the server
 
-**Prerequisites**: Agent Insight platform and OpenCode installed.
+For a local Node.js deployment, use Node.js 20.9 or later and an available port, normally `3000`. Check any additional runtime requirements reported by the dependencies for optional features.
 
-### Step 1: Install Skill Toolkit
+**npm installation**
 
 ```bash
-npx skills add https://gitcode.com/openeuler/agent-insight.git
+npx agent-insight install
 ```
 
-### Step 2: Generate Skill
+The installer starts the platform and guides you through Agent integration. You can also manage the service with:
 
-In OpenCode terminal, enter:
-
-```
-Generate a Skill from the case document Docker-application-hang-case.pdf
-```
-
-### Step 3: Execute Task
-
-Place the generated Skill in OpenCode's Skill directory, then execute:
-
-```
-My locally deployed Docker application sometimes hangs. Use the relevant skill to analyze the cause and provide a report
+```bash
+npx agent-insight start
+npx agent-insight status
+npx agent-insight logs
+npx agent-insight stop --port 3000
 ```
 
-### Step 4: View Results
+**Installation from source**
 
-After task completion, click **View Details** in the Agent Insight card on the top-right of OpenCode terminal to jump to the platform and view execution details.
+```bash
+git clone https://gitcode.com/openJiuwen/agent-insight.git
+cd agent-insight
+npm install
 
-### Step 5: Deep Evaluation (optional)
+# Optional: build the Trae IDE collector extension.
+(cd scripts/trae-collector && npm install && npm run build)
 
-To use deep evaluation capabilities like accuracy, Skill recall, and failure attribution:
-
-1. Click **⚙️ Eval Config** on the top-left of the platform homepage, add evaluation model configuration (supports DeepSeek / OpenAI / Anthropic / custom)
-2. Click **Dataset Management** on the top-right, configure user questions, expected answers, and expected Skills
-
-### Step 6: Optimize Skill
-
-In OpenCode terminal, enter:
-
-```
-/si-optimizer <path-to-Skill-to-optimize>
+# Start the service from the repository root.
+bash scripts/start.sh
 ```
 
-After optimization, the Skill will be automatically loaded into OpenCode's Skill directory. Restart OpenCode and execute the same task again to compare before/after optimization results on the platform.
+For development, use `bash scripts/develop_start.sh`. Stop a source installation with `bash scripts/stop.sh`.
+
+**Docker deployment**
+
+```bash
+docker pull karaggagent/agent-insight:latest
+mkdir -p ~/.agent-insight/data
+chmod -R 777 ~/.agent-insight
+
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v ~/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:latest
+```
+
+Use a fixed published image tag when you need a repeatable deployment. Keep the mounted data directory when upgrading. See the [deployment guide](docs/user-guide/quickstart.md) for offline images, mounting source code, and troubleshooting.
+
+### 2. Open the dashboard and connect an Agent
+
+Open `http://localhost:3000`. In the default standalone login mode, sign in with your email address; deployments configured for organization authentication use their configured login flow.
+
+In **Installation Guide**, select your Agent platform and run the generated command on the machine or container where that Agent actually runs. A server running in Docker does not automatically configure an Agent on the host.
+
+For OpenCode, the integration also installs the Agent RAS in-process plugin. You can install or update RAS separately with `npx agent-insight install-ras`.
+
+### 3. Run a task and inspect its execution
+
+Run a small task in the connected Agent, then open the execution list in Agent Insight and inspect the trace. The default source/npm data directory is `~/.agent-insight/data`, including `witty_insight.db`; the Docker mount above preserves the equivalent data outside the container.
+
+## Guided Workflow: Generate, Evaluate, and Optimize
+
+1. **Configure a model**: register the external model service needed by generation, evaluation, or optimization workflows.
+2. **Generate a Skill**: use the Skill workspace to describe a task or supply a document. Inspect and save the generated content.
+3. **Evaluate**: configure a dataset and evaluators, run the task, and inspect execution details and evaluation results.
+4. **Optimize**: select an existing Skill and use the findings to create an improved version. Re-run the same task or dataset to compare behavior.
+
+Start with the [built-in example walkthrough](docs/user-guide/example-walkthrough.md) for a concrete workflow. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
 
 ## Documentation
 
-Full documentation lives in the [`docs/`](docs/) directory, which mainly includes:
-
-| Path | Description |
-|:---|:---|
-| [`docs/user-guide/`](docs/user-guide/) | User guide: quickstart, example walkthrough, core concepts, FAQ |
-| [`docs/developer-guide/`](docs/developer-guide/) | Developer guide: architecture, modules, API, conventions |
-| [`docs/agent-ras/`](docs/agent-ras/) | Agent RAS in-loop reliability: anomaly detection + auto-recovery design and usage |
-| [`docs/agent-fault-injection/`](docs/agent-fault-injection/) | Agent fault injection: injection + collection engine design and usage |
-| [`docs/snippets/`](docs/snippets/) | Reusable doc snippets: SDK install, environment setup |
-| [`docs/qa.md`](docs/qa.md) | Platform Q&A: concepts, install, integration, Skill, evaluation, observability, architecture, troubleshooting |
-| [`docs/skill-generation-principle-and-pipeline.md`](docs/skill-generation-principle-and-pipeline.md) | Skill generation principle, pipeline and capability boundary |
-
-> New users can start with the [built-in example walkthrough](docs/user-guide/example-walkthrough.md) — run the full "diagnosis → Skill generation → evaluation → optimization" loop with zero config using the built-in example you get on registration.
+| Path | Contents |
+|:-----|:---------|
+| [User guide](docs/user-guide/) | Installation, example walkthrough, concepts, and FAQ |
+| [Developer guide](docs/developer-guide/INDEX.md) | Architecture, modules, APIs, and development conventions |
+| [Agent RAS](docs/agent-ras/) | Reliability, anomaly detection, and recovery |
+| [Agent fault injection](docs/agent-fault-injection/) | Fault injection and collection |
+| [Reusable snippets](docs/snippets/) | SDK installation and environment setup |
+| [Q&A](docs/qa.md) | Installation, integrations, evaluation, and troubleshooting |
+| [Skill generation](docs/skill-generation-principle-and-pipeline.md) | Generation pipeline and capability boundaries |
 
 ## Contributing
 
-Before contributing code, please sign the [CLA](https://clasign.osinfra.cn/sign/6983225bdcbb19710248ccf0) and follow the [Code Contribution Guide](https://www.openeuler.org/en/community/contribution/).
+Contributions through bug reports, documentation, tests, and code are welcome.
 
----
+1. Open an [issue](https://gitcode.com/openJiuwen/agent-insight/issues) with the version, reproduction steps, and sanitized logs. Discuss larger feature changes before implementing them.
+2. Before contributing code, sign the [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee) and read the [community contribution guide](https://gitcode.com/openJiuwen/community/blob/main/README.md) and this repository's [AGENTS.md](AGENTS.md).
+3. Fork the repository, create a working branch, make the change, update the relevant documentation, and run `npm run test`. Submit a PR to `openJiuwen/agent-insight` describing the purpose and validation results.
 
-**Join the Community** [Issue](https://atomgit.com/openeuler/agent-insight/issues) | <intelligence@openeuler.org>
+## Open-source License
+
+Agent Insight is licensed under [Apache-2.0](LICENSE). The original MIT copyright and permission notice is retained in [LICENSE-MIT-Historical](LICENSE-MIT-Historical) for historical code.
+
+Independently licensed components retain their own terms. See [Third_Party_Open_Source_Software_Notice.txt](Third_Party_Open_Source_Software_Notice.txt) and the [license materials](licenses/INDEX.txt) for dependency versions, notices, license texts, and source references.

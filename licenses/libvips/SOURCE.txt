@@ -1,0 +1,28 @@
+sharp-libvips 1.2.4 upstream source and build references
+
+Packaging and build scripts:
+https://github.com/lovell/sharp-libvips/tree/v1.2.4
+Pinned third-party notice:
+https://github.com/lovell/sharp-libvips/blob/v1.2.4/THIRD-PARTY-NOTICES.md
+Source download versions and applied patches:
+https://github.com/lovell/sharp-libvips/blob/v1.2.4/build/posix.sh
+Windows build route:
+https://github.com/lovell/sharp-libvips/blob/v1.2.4/build/win.sh
+
+The published darwin-arm64 and linux-arm64 package metadata both identify
+commit 20b5e899954907a3039d6e3d4c200aaa0ec52c4c. source-manifest.json records
+the build repository archive, 28 direct component sources, five external
+patches and the forced GLib gvdb subproject. The full recipe retains its
+in-place source edits and platform toolchain definitions.
+
+../source-archives.json additionally records the original librsvg and
+lightningcss Cargo.lock dependency archives, verified against their lockfile
+checksums. These are source-material supersets, not a binary component SBOM.
+The material bundle is prepared separately from the application package.
+The distribution process must provide the selected source access route;
+preparing a local archive is not the same as publishing it to recipients.
+
+See RELINKING.txt for the shared-library layout and isolated checks. The
+versions JSON files agree with both inspected native libraries. This does
+not establish a reproducible rebuild, coverage of other platforms, or
+completed community special-license approval.

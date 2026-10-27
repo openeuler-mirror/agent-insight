@@ -1,4 +1,18 @@
 #!/bin/bash
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # _lib.sh — 排查型 Skill 辅助函数目录
 # 本文件不会被复制到生成的 Skill 中，而是作为函数目录供生成器参考。
 # 生成脚本时，按需选取下列函数内联到每个脚本头部（仅内联实际调用的函数）。

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // pull 源的鉴权 header：DB 里以 JSON 对象字符串存（`InfraSource.authHeaders`），
 // 抓取时展开成 fetch 的 header 对象，回给前端时必须脱敏 —— 里面是明文凭证，
 // 而 GET /api/observe/infra/sources 谁都能读。

@@ -1,0 +1,32 @@
+Agent Insight third-party license materials
+
+Third_Party_Open_Source_Software_Notice.txt at the repository/package root
+identifies the dependency inventory and contains collected license texts.
+KaTeX-fonts-OFL.txt retains the separate font copyright and OFL terms.
+mermaid-bundle.txt retains notices from the documentation JavaScript bundle.
+libvips/ contains the pinned upstream notice, LGPL text, inspected platform
+versions and source/build references. See its SOURCE.txt for the boundary
+between these references and a complete release-specific source delivery.
+source-index.json records exact source locations for the inspected MPL
+components; the optional Python dependency versions are environment
+snapshots and must be refreshed if that environment is redistributed.
+
+SOURCE-CODE.txt explains source availability. source-archives.json lists
+downloaded, checksum-verified source materials. libvips/source-manifest.json
+ties native sources and patches to the published package build revision;
+libvips/RELINKING.txt describes build and shared-library replacement paths.
+The separate source materials bundle must be made available through the
+chosen release distribution route; local preparation is not publication.
+
+dependency-scope.json maps the remaining notice-provenance questions to
+application features, build tooling and target-specific native dependency
+chains. REVIEW-ITEMS.txt distinguishes these questions from special-license
+review and records the remaining release checks.
+
+COPYRIGHT-SCOPE.txt describes source headers and preserved upstream or
+byte-identical historical fixture notices.
+OPTIONAL-TOOLING.txt distinguishes retained optional tools from the separately
+prepared replacement-environment inventories.
+
+These files provide attribution and license information. They do not assert
+that an OAT/ScanCode audit or an openJiuwen special-license review is complete.

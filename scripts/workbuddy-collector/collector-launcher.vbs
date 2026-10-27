@@ -1,3 +1,6 @@
+' Copyright (c) 2026 Huawei Technologies Co., Ltd.
+' SPDX-License-Identifier: Apache-2.0
+
 ' WorkBuddy Collector hidden-window launcher (template / reference).
 '
 ' Running node.exe directly from Task Scheduler flashes a console window at logon.

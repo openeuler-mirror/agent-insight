@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 跨机端到端(服务端全链路):OTLP wire JSON → 归一化 → 落 spool 文件 → 补传落同一份 spool
 // → 按 sessionId 重聚合 → interactions → agent 树。
 // 走的是真实文件读写与真实聚合入口(aggregateClaudeOtelSession),不是把事件数组直接喂给纯函数;

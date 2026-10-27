@@ -1,0 +1,70 @@
+[
+  {
+    "name": "lightningcss",
+    "version": "1.32.0",
+    "license": "MPL-2.0",
+    "source": "https://github.com/parcel-bundler/lightningcss/tree/7f8a861bdee476fe90c89a8badeb3fd33a99c51a",
+    "binaryOrPackage": "https://registry.npmjs.org/lightningcss/-/lightningcss-1.32.0.tgz",
+    "integrity": "sha512-NXYBzinNrblfraPGyrbPoD19C1h9lfI/1mzgWYvXUTe414Gz/X1FD2XBZSZM7rRTrMA8JL3OtAaGifrIKhQ5yQ==",
+    "sourceArchive": {
+      "url": "https://codeload.github.com/parcel-bundler/lightningcss/tar.gz/7f8a861bdee476fe90c89a8badeb3fd33a99c51a",
+      "sha256": "b9451f8a7bb1a9cf0cd905af3a23db2e963a6c3171a9272633e5fd03f2842198",
+      "bytes": 7565797,
+      "archiveMember": "mpl/lightningcss-1.32.0.tar.gz",
+      "retrievedOn": "2026-10-26"
+    }
+  },
+  {
+    "name": "axe-core",
+    "version": "4.12.1",
+    "license": "MPL-2.0",
+    "source": "https://github.com/dequelabs/axe-core/tree/5d002cca1f862a0699d9f1bb7b5a1ec334fa1b22",
+    "binaryOrPackage": "https://registry.npmjs.org/axe-core/-/axe-core-4.12.1.tgz",
+    "integrity": "sha512-s7iGf5GaVMxEG0ENN9x+xTr7GFZCb1ZP/1uATUpCEK2X78nDB3RwbtFCo9pGAf9ru+VwoQ464DkaLEeRM08wJA==",
+    "sourceArchive": {
+      "url": "https://codeload.github.com/dequelabs/axe-core/tar.gz/5d002cca1f862a0699d9f1bb7b5a1ec334fa1b22",
+      "sha256": "7c29b93fca17942c5f10a6798a472b292326e21af31aa415fb2dc167e98ffc4d",
+      "bytes": 4436549,
+      "archiveMember": "mpl/axe-core-4.12.1.tar.gz",
+      "retrievedOn": "2026-10-26"
+    },
+    "notices": [
+      "axe-core-MPL-2.0.txt",
+      "axe-core-third-party.txt"
+    ]
+  },
+  {
+    "name": "certifi",
+    "version": "2026.10.19",
+    "license": "MPL-2.0",
+    "source": "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz",
+    "sha256": "035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae",
+    "sourceArchive": {
+      "url": "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz",
+      "sha256": "035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae",
+      "bytes": 137598,
+      "archiveMember": "mpl/certifi-2026.10.19.tar.gz",
+      "retrievedOn": "2026-10-26"
+    }
+  },
+  {
+    "name": "axe-core",
+    "version": "4.14.0",
+    "license": "MPL-2.0",
+    "source": "https://github.com/dequelabs/axe-core/tree/e797173108eadfa4355fe06af331791734e1757f",
+    "binaryOrPackage": "https://registry.npmjs.org/axe-core/-/axe-core-4.14.0.tgz",
+    "integrity": "sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==",
+    "scope": "Linux ARM64 Docker source-mode dependency installation observed on 2026-10-26; range resolution, not the root lockfile version.",
+    "sourceArchive": {
+      "url": "https://codeload.github.com/dequelabs/axe-core/tar.gz/e797173108eadfa4355fe06af331791734e1757f",
+      "sha256": "f2107c68cc363016aeae66683a484d416b22bdc24184c03d8cf6e9283b7cbe50",
+      "bytes": 6315680,
+      "archiveMember": "mpl/axe-core-4.14.0.tar.gz",
+      "retrievedOn": "2026-10-26"
+    },
+    "notices": [
+      "axe-core-MPL-2.0.txt",
+      "axe-core-third-party.txt"
+    ]
+  }
+]

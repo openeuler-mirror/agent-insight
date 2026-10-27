@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // OTLP/HTTP 默认用 protobuf 传输（collector 的 otlphttp exporter 常忽略 encoding:json 仍发 protobuf）。
 // 这里用 protobufjs + 最小 OTLP metrics schema 解码 ExportMetricsServiceRequest，产出与 JSON 路径
 // 同形的对象交给 normalizeOtlpMetrics。字段号取自 opentelemetry-proto v1（只声明本服务消费的字段）。

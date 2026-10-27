@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 瓶颈诊断内核（项目核心价值）：纯函数、源无关 —— Path A（拉）/ Path C（推）共用一份。
 // 心智模型：prefill 计算受限、decode 显存带宽受限；TTFT≈prefill、TPOT≈decode。
 // 规则在 .spike/infra-observability/03-diagnose.mjs 上跨 idle/queue/kv/preempt/cache/bandwidth 真机验证。

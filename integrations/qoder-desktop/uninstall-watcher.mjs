@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * This component is licensed under MulanPSL-2.0.
+ * See LICENSE in this directory for the full license text.
+ */
+
 import { execFile } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"

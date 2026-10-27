@@ -1,0 +1,79 @@
+Release verification items
+
+1. libvips source materials have been downloaded and checksum-verified for
+   the inspected 1.2.4 darwin-arm64 and linux-arm64 packages: build revision,
+   28 direct sources, five external patches, gvdb, and original Rust lockfile
+   source supersets. See libvips/source-manifest.json and RELINKING.txt.
+   Publish the selected source delivery route with the final release; verify
+   other platforms, unresolved source notices and community review. The local
+   bundle and identical-file replacement checks are not a modified rebuild
+   or proof of an exact embedded native component inventory.
+
+2. Downloaded MPL source archives and checksums are recorded in source-index.json
+   for lightningcss 1.32.0, axe-core 4.12.1/4.14.0 and optional certifi 2026.10.19.
+   The 4.14.0 axe-core record matches the inspected Docker source-mode install;
+   its license and third-party notice bytes match the retained copies. Refresh
+   this mapping when range resolution or the final distributed version changes.
+
+3. The following npm packages did not provide a recoverable full notice in
+   the inspected package or version-specific upstream paths. Later notices
+   may be included as references without asserting retroactive scope. The file
+   retains their published declarations/credits and standard license terms.
+   Confirm missing attribution with the upstream source/maintainer before
+   claiming a fully reconciled release notice:
+
+   - @tybys/wasm-util@0.10.2: Full version-specific upstream notice still requires confirmation. A later upstream notice is included for reference; its applicability to this earlier version is not asserted.
+   - node-ensure@0.0.0: Full version-specific upstream notice still requires confirmation.
+   - react-remove-scroll-bar@2.3.8: Full version-specific upstream notice still requires confirmation. A later upstream notice is included for reference; its applicability to this earlier version is not asserted.
+   - remark-github-blockquote-alert@1.3.1: Full version-specific upstream notice still requires confirmation. A later upstream notice is included for reference; its applicability to this earlier version is not asserted.
+   - stable-hash@0.0.5: Full version-specific upstream notice still requires confirmation.
+   - use-composed-ref@1.4.0: Full version-specific upstream notice still requires confirmation.
+
+   Additional source-bundle notice review (Cargo.lock supersets, not a claim
+   that every source is linked into each runtime binary):
+   - block@0.1.6
+   - malloc_buf@0.0.6
+   - objc-foundation@0.1.1
+   - objc_id@0.1.1
+   - parcel_sourcemap@2.1.1
+   - seahash@4.1.0
+   Published MIT declarations and original source files are retained. Full
+   version-specific upstream attribution still requires confirmation; check
+   actual target/feature inclusion before treating these as binary obligations.
+
+   Scope review (2026-10-26; details in dependency-scope.json):
+   - All twelve entries above declare MIT. These are attribution/provenance
+     questions, not twelve new special-license dependencies or a finding that
+     they must be removed before changing the application's license.
+   - node-ensure, react-remove-scroll-bar, remark-github-blockquote-alert and
+     use-composed-ref support PDF parsing, shared modal UI, Markdown previews
+     and assistant input respectively. Retain their existing functionality.
+   - stable-hash belongs to the locked ESLint toolchain; wasm-util 0.10.2
+     belongs to Tailwind's optional Wasm backend. Neither was established to
+     be a retired feature. Installation scope depends on the chosen route.
+   - block, malloc_buf, objc-foundation and objc_id are reached through
+     locale_config's target_os = macos dependencies. This particular chain
+     is disabled for Linux. Their original sources remain in the source
+     bundle, so that source-distribution review is still relevant.
+   - parcel_sourcemap and seahash are in the Lightning CSS Node binding's
+     dependency chain. parcel_sourcemap is unconditional in lightningcss-napi;
+     it uses rkyv, which unconditionally depends on seahash. The inspected
+     Darwin binary also contains parcel_sourcemap-2.1.1 source path strings.
+     This evidence does not establish an exact final native binary SBOM.
+   - Existing upstream license issues/PRs were inspected read-only. The
+     wasm-util owner identifies 0.10.4 as carrying the fix, without explicit
+     historical attribution for 0.10.2. Unmerged license PRs and other users'
+     proposed notices are not treated as maintainer confirmation. No upstream
+     messages were sent and no dependencies were changed during this review.
+
+4. Python requirements outside the document-parser snapshot, native executables
+   (including optional OpenCode platform packages), and OS/Node dependencies
+   in final Docker images require release-specific resolved inventories. A
+   wrapper package license does not prove every embedded component license.
+
+5. ScanCode reports and their reviewed findings are recorded separately.
+   Tool reports do not establish completed community approval. There is no
+   record here of
+   openJiuwen special-license approval, or contributor patent authorization.
+   Preserve historical MIT rights and confirm organizational release approval.
+   No new third-party rights are asserted by adding the Huawei copyright.

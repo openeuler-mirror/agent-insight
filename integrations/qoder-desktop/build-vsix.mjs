@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * This component is licensed under MulanPSL-2.0.
+ * See LICENSE in this directory for the full license text.
+ */
+
 import fs from "node:fs"
 import path from "node:path"
 import process from "node:process"
@@ -102,7 +109,9 @@ export function buildDesktopVsix(outputPath) {
   addFile(zip, "extension/package.json", extensionPackagePath)
   addFile(zip, "extension/extension.js", path.join(integrationRoot, "extension.js"))
   addFile(zip, "extension/uninstall-watcher.mjs", path.join(integrationRoot, "uninstall-watcher.mjs"))
-  addFile(zip, "extension/LICENSE.txt", path.join(repositoryRoot, "LICENSE"))
+  addFile(zip, "extension/LICENSE.txt", path.join(integrationRoot, "LICENSE"))
+  addFile(zip, "extension/collector/LICENSE", path.join(repositoryRoot, "LICENSE"))
+  addFile(zip, "extension/LICENSE-MIT-Historical", path.join(repositoryRoot, "LICENSE-MIT-Historical"))
 
   for (const script of [
     "qoder_trace_collector.mjs",

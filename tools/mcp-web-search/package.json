@@ -7,5 +7,6 @@
   "main": "index.ts",
   "scripts": {
     "start": "tsx index.ts"
-  }
+  },
+  "license": "Apache-2.0"
 }
