@@ -26,7 +26,7 @@ import { dispatchCommand } from '@/lib/reliability/control-dispatch'
 import { prisma } from '@/lib/storage/prisma'
 
 import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-config'
-import { prepareBenchmarkEvaluation } from './evaluation-preparation-service'
+import { prepareBenchmarkEvaluation, waitForBenchmarkReevaluationsForTest } from './evaluation-preparation-service'
 import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
 import { prepareNextBenchmarkCaseRun } from './orchestrator'
 import { retireImagePreparationWindows, refreshBenchmarkImagePreparation, waitForBenchmarkImagePreparation } from './image-preparation'
@@ -75,6 +75,7 @@ export function stopBenchmarkBackgroundWorkForTest(): Promise<void> {
   dispatchTimers.clear()
   stoppingBackgroundWork = (async () => {
     await benchmarkRunWatchdogSweep
+    await waitForBenchmarkReevaluationsForTest()
     // A rejected dispatch can start the next Case before its own promise settles.
     while (dispatchWork.size) await Promise.allSettled([...dispatchWork])
     await waitForBenchmarkImagePreparation()
