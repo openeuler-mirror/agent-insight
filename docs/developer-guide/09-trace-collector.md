@@ -473,3 +473,34 @@ AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和
 - `integrations/qoder-jetbrains/`：JetBrains Plugin SDK 插件、状态栏、设置、IDE marker 和动态卸载清理。
 - `src/lib/ingest/otel/adapters/qoder.ts`：服务端 Qoder OTLP 聚合。
 - `test/qoder-trace-collector.test.ts` / `test/qoder-desktop-extension.test.ts` / `test/qoder-performance.test.ts`：确定性、账号/产品隔离、重试、Skill/MCP/连接器、最新版 snapshot、多层 Subagent、安装卸载、四端启动预算和首 Token 开销验证。
+
+
+## OpenCode 1.x / 2.x 采集兼容
+
+`/api/ingest/setup/opencode` 默认下发 1.x 的函数插件；传入 `apiVersion=2` 时下发只有一个
+默认导出的 `{ id: "agent-insight.trace", setup }` 原生定义。Unix 和 PowerShell 安装器根据本机
+`opencode --version` 选择制品。2.x 跳过旧 TUI 附件；仅选择 OpenCode 2.x 时不安装 RAS，
+混选其他框架时仍安装它们的 RAS runtime，但 RAS 安装器不再给 2.x 写入 1.x OpenCode 插件。
+旧插件文件不自动清理，升级前的手工停用步骤见用户快速开始指南。
+
+两版复用同一 JSONL writer、脱敏、心跳和 uploader：插件事件 → 本地 JSONL →
+`opencode_uploader_client.js` → `/api/ingest/upload` → Execution / Trace。
+这是自定义 JSON 上传链路，不是 OTLP。2.x 只注册 `context`、`compaction`、`generate`、`title`
+四类观察 hook，并订阅原生会话事件；不注册 Provider/HTTP 请求改写，也不实现模型转发。
+
+2.x 的 session/step/text/reasoning/tool 事件先规范化为现有 `message.updated`、
+`message.part.updated` / `delta` 结构。首次 delta 补充带类型的空 part，保证中断时仍能恢复累计文本；
+事件 ID 去重和 snapshot 指纹避免重放叠加。会话快照同时补齐用户输入和流结束后的最终内容，
+快照 RPC 每会话至多一个在途请求，每次等待上限为 250ms；异常或超时只记录采集错误。
+超时后正常返回的快照仍在后台补齐一次，终态补偿完成后再次触发强制上传；插件卸载后的迟到结果不再写入。
+订阅失败时记录日志，后续快照 hook 仍可工作；插件卸载会终止订阅并等待 writer 完成落盘，再触发最终上传。
+
+用户消息标记 `trace_kind=user`，助手消息标记 `trace_kind=llm`。前者不会因旧协议的
+`role=opencode` 被误算为 LLM；后者即使没有输出，也保留模型节点及错误摘要。
+`subagent` 工具规范化为 `task`，使用父会话 ID 和工具 metadata 中的 child session ID
+匹配具体子 Agent，优先于名称和输出文本。并发同名 Agent 的输入、输出和 Token 分别归属自己的节点。
+同一 native message 的失败、重试和成功更新同一 LLM 节点，HTTP 尝试不另造模型调用 ID。
+
+回归入口：`test/opencode-v2-adapter.test.ts`、`test/opencode-plugin-distribution.test.ts`，以及原有
+OpenCode uploader / Trace 树测试。真实验证使用 OpenCode 2.0.32 + 本地 OpenAI-compatible SSE
+模拟服务，覆盖多次调用、并发子会话和 503 后重试；不代表其他版本、传输模式或 Windows 已完成实测。

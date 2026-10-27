@@ -126,6 +126,10 @@ MCTS xGovernor 非侵入式接入也复用同一 writer/uploader，并额外复�
 
 CodeAgent setup 在 Unix 安装 `~/.agent-insight/bin/codeagent` 并通过 shell profile 前置其目录，在 Windows 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` + `codeagent-wrapper.ps1` 并前置持久化的用户级 PATH；两端包装器运行时都从排除自身目录后的 PATH 动态解析真实 CodeAgent，并以安装时记录的路径兜底，因此继承 PATH 的 Shell、PowerShell、CMD、Python、Node 等非交互子进程能获得同一套 OTel 环境且不会递归调用包装器。CodeAgent 通过 `service.name=CodeAgentOC` 分流：Logs 进入 `codeagent-otel` 独立聚合器，Traces/Metrics 返回 accepted 后在规范化和持久化前丢弃；聚合器根据 `query_source` 识别 `extract_memories` 和 `auto_dream`，并按其独立 `execution.agent_run_id` 排除整组后台记忆事件，原始 spool 不删除，正常子 Agent 不受影响；非 Langfuse 路径不读写 `langfuseTraceNodes`。
 
+OpenCode 1.x 使用原有采集工厂，2.x 安装时选择原生插件定义与会话事件适配器，沿用 JSONL → uploader → `/api/ingest/upload` 链路。版本识别接受裸版本号及带 `opencode`、可选 `v` 和首尾空白的输出；Unix、PowerShell 与 RAS 安装器保持相同规则。2.x 模型 Hook 在记录系统提示词后立即返回，快照在后台读取，每个会话只保留一个在途读取；会话结束时最多等待 250ms，迟到快照在追加快照事件后再次触发终态上传，插件关闭后不再写入。异常载荷缺少模型元数据时仍保留系统提示词。
+
+OpenCode 2.x 的原生用户消息带 `trace_kind=user`，合并子会话后即使 `role=opencode` 也仍表示输入。Trace 树、调试轮次与评估输出提取均优先遵循这一标记，不将其计为模型回复；不带此标记的历史 `opencode` 回复保持原有解释。2.x 不装配 1.x RAS，安装和状态检查只提示全局旧插件及配置残留，不删除或改写用户内容。
+
 OpenClaw 的主接入路径是 setup 生成的同名命令包装函数：它向原始 `openclaw` 命令注入 OTLP/HTTP JSON 配置，watcher 仅作为互斥的兼容路径。OpenClaw trace adapter 重建 agent/LLM/tool/skill 与子 Agent 关系，并按 `traceId + spanId` 去重；模型请求仍由 OpenClaw 直接发送给模型供应商。
 
 AcTrail 已由用户独立安装并通过 `actrailctl launch` 启动 Agent，Agent Insight setup 不安装或包装 AcTrail。Unix/WSL setup 为现有 AcTrail 官方 `otel-http` 插件生成带当前用户 `x-witty-api-key` 的完整属性配置，通过 `actraild plugin load --persist` 加载后，AcTrail 直接向 `/api/ingest/otel/v1/traces` 上报 protobuf。接收端将 AcTrail 从共享 OTel Trace 中分流，写入 `~/.agent-insight/otel_data/actrail/` 下按日期和 session 分片的独立 spool，并由独立消费源维护检查点；其他框架继续使用 `otel_data/traces/`。AcTrail adapter 按动作关系合并 `llm.call/request/response`，从请求头和明确身份字段确定 Agent 名称，按角色有界保留每次模型调用的系统提示、历史消息与本轮输入；模型输入中的内容块会整理为可读文本，并按工具调用标识识别本轮“调用—结果”组合。独立 `llm.tool_result` 缺失时，adapter 可从后续请求中的相同调用标识精确回填结果及连续文本块，再将工具、Skill、子 Agent 与 token 投影为公共 `ExecutionRecord`；重复 span 按最后到达版本覆盖。
