@@ -140,6 +140,66 @@ function outputText(payload) {
   return text(raw);
 }
 
+/** 0.164 起 reasoning 正文从 summary 改名为 summary_text/raw_content。 */
+function reasoningText(payload) {
+  for (const key of ["summary_text", "raw_content", "summary", "text", "content"]) {
+    const value = payload?.[key];
+    if (Array.isArray(value)) {
+      const parts = value
+        .map((item) => (item && typeof item === "object" ? text(item.text ?? item.content) : text(item)))
+        .filter(Boolean);
+      if (parts.length > 0) return parts.join("\n") || undefined;
+    } else if (typeof value === "string") {
+      const single = text(value);
+      if (single) return single;
+    }
+  }
+  return undefined;
+}
+
+/** item_completed 的 item.content[].text（UserMessage/AgentMessage 同形）。 */
+function itemContentText(item) {
+  const content = Array.isArray(item?.content) ? item.content : [];
+  const parts = content
+    .map((part) => (part && typeof part === "object" ? text(part.text) : undefined))
+    .filter(Boolean);
+  if (parts.length > 0) return parts.join("\n") || undefined;
+  return text(item?.text ?? item?.message);
+}
+
+function usageRecord(payload) {
+  const usage = payload?.usage && typeof payload.usage === "object" ? payload.usage : undefined;
+  if (!usage) return undefined;
+  const pick = (...keys) => {
+    for (const key of keys) {
+      const value = Number(usage[key]);
+      if (Number.isFinite(value)) return value;
+    }
+    return undefined;
+  };
+  const inputTokens = pick("input_tokens", "inputTokens", "prompt_tokens");
+  const outputTokens = pick("output_tokens", "outputTokens", "completion_tokens");
+  const reasoningTokens = pick("reasoning_output_tokens", "reasoning_tokens", "reasoningTokens");
+  const cacheReadTokens = pick("cached_input_tokens", "cache_read_input_tokens", "cached_tokens");
+  const cacheWriteTokens = pick("cache_write_input_tokens", "cache_creation_input_tokens");
+  const totalTokens = pick("total_tokens", "totalTokens")
+    ?? ((inputTokens || 0) + (outputTokens || 0) || undefined);
+  if ([inputTokens, outputTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, totalTokens]
+    .every((value) => value === undefined)) {
+    return undefined;
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens,
+    responseId: text(payload.response_id ?? payload.responseId),
+    model: text(payload.model ?? payload.model_name),
+  };
+}
+
 function extractRolloutContentEvents(record, context) {
   const type = recordType(record);
   const payload = payloadOf(record);
@@ -175,6 +235,20 @@ function extractRolloutContentEvents(record, context) {
           callId,
           toolName: context.toolNames.get(callId),
           output,
+        }));
+      }
+    }
+  } else if (type === "item_completed" || type === "itemCompleted") {
+    // 0.164 把助手消息搬到 item_completed。UserMessage 由 lifecycle 分支承担
+    // （带 turn id，不重复提取）；工具执行已由 response_item 工具通道覆盖。
+    // reasoning 在 0.164 只有 encrypted_content / 空 summary_text，无可采正文。
+    const item = payload.item && typeof payload.item === "object" ? payload.item : {};
+    if (text(item.type) === "AgentMessage") {
+      const body = itemContentText(item);
+      if (body) {
+        events.push(contentEvent(base, record, "llm_text", {
+          itemId: text(item.id),
+          text: body,
         }));
       }
     }
@@ -235,6 +309,47 @@ function recordsToLifecycleEvents(record, context) {
       payload: { content },
     }));
     return { events: started, context: { ...context, activeExecutionId: id, activeTaskHadUserInput: true } };
+  }
+  // 0.164：用户输入改由 item_completed 的 UserMessage 条目承载，rollout 不再写
+  // user_message。缺失时整轮没有 execution_started，随后 task_complete 因
+  // activeTaskHadUserInput=false 被丢弃 → 桌面 trace 完全不落库（Bug 446-9）。
+  if (type === "item_completed" || type === "itemCompleted") {
+    const item = payload.item && typeof payload.item === "object" ? payload.item : {};
+    if (text(item.type) !== "UserMessage") return { events: [], context };
+    const id = text(payload.turn_id || payload.turnId) || context.activeExecutionId;
+    const content = itemContentText(item);
+    if (!id || !content) return { events: [], context: { ...context, unknownRecords: context.unknownRecords + 1 } };
+    const isFollowUp = context.activeExecutionId === id && context.activeTaskHadUserInput;
+    return {
+      events: [
+        ...(isFollowUp ? [] : [sourceEvent({ ...base, sourceExecutionId: id }, "execution_started", record, {
+          sourceExecutionId: id,
+          timestampMs: context.taskStartedAt || timestampMs,
+          payload: { input: content },
+        })]),
+        sourceEvent({ ...base, sourceExecutionId: id }, "user_input_accepted", record, {
+          sourceExecutionId: id,
+          inputKind: isFollowUp ? "follow_up_unknown" : "initial",
+          payload: { content },
+        }),
+      ],
+      context: { ...context, activeExecutionId: id, activeTaskHadUserInput: true },
+    };
+  }
+  // 0.164：每轮 LLM 调用的 token 用量记在顶层 token_usage_record（含 cached/
+  // reasoning 分项），旧 reader 完全忽略 → LLM 节点全部无 usage。
+  if (type === "token_usage_record" || type === "tokenUsageRecord") {
+    const usage = usageRecord(payload);
+    if (!usage) return { events: [], context: { ...context, unknownRecords: context.unknownRecords + 1 } };
+    const id = text(payload.turn_id || payload.turnId || payload.root_turn_id) || context.activeExecutionId;
+    if (!id) return { events: [], context: { ...context, unknownRecords: context.unknownRecords + 1 } };
+    return {
+      events: [sourceEvent({ ...base, sourceExecutionId: id }, "rollout_usage", record, {
+        sourceExecutionId: id,
+        payload: usage,
+      })],
+      context,
+    };
   }
   if (type === "turn_aborted" || type === "turnAborted") {
     const id = taskIdOf(payload) || context.activeExecutionId;

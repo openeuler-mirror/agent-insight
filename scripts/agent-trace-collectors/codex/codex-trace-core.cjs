@@ -1293,15 +1293,18 @@ class CodexTraceCore {
       return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
     }
 
-    // llm_text / agent_message → 独立 llm 正文事件
+    // llm_text / agent_message → 独立 llm 正文事件（Bug 56 契约：正文必须直接落
+    // llm 节点，供 OTLP usage span 按 spanId 合并；正文不得删除或延迟到轮次结束）。
     const textValue = asString(payload.text);
     if (!textValue) return { attributed: false };
     turn.llmSequence += 1;
     const messageId = asString(payload.itemId) || `msg-${turn.llmSequence}`;
+    const spanId = stableSpanId(session.sessionId, turn.turnId, "llm", messageId);
+    const parentSpanId = this.toolParent(session, turn);
     await this.append(session, turn, {
       eventId: stableEventId("codex", session.sessionId, turn.turnId, "llm-content", messageId),
-      spanId: stableSpanId(session.sessionId, turn.turnId, "llm", messageId),
-      parentSpanId: this.toolParent(session, turn),
+      spanId,
+      parentSpanId,
       kind: "llm",
       name: `llm.${session.model || "codex"}`,
       startTimeMs: timestampMs,
@@ -1315,10 +1318,78 @@ class CodexTraceCore {
       },
     });
     return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
+  }  /** 把 0.164 的 token_usage_record 写成一次 LLM 调用（Bug 446-9）。
+   *
+   * 0.164 起 rollout 不再发 OTel `codex.sse_event`，改由顶层
+   * `token_usage_record` 逐次记录模型响应用量。真实样本里一个 turn 有 33 条
+   * usage 但只有 5 条 assistant 正文，说明 **一条 usage 记录 = 一次模型响应**
+   * （与旧路径 `sse_event(response.completed)` 一一对应），因此一个 usage 落一个
+   * llm span。顺序上与 usage 相邻的正文消息作为该调的 output 一并写入同一 span，
+   * 不额外造节点，也不把多条 usage 挤进同一个 span（那会丢 token）。
+   * usage 与正文的 response_id 互不等值（真实样本仅共享会话级十六进制前缀），
+   * 只能按到达顺序配对；每条 usage 恰好消费最近一条尚未绑定的正文。 */
+  async processRolloutUsage(event) {
+    const threadId = asString(event.sourceThreadId);
+    const turnId = asString(event.sourceExecutionId);
+    if (!threadId) return { attributed: false };
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    const timestampMs = asNumber(event.timestampMs) || this.now();
+    const session = this.ensureSession(threadId, {
+      timestampMs,
+      originator: "Codex Desktop",
+    });
+    const turn = this.turnFor(session, turnId, Boolean(turnId), { timestampMs });
+    if (!turn) return { attributed: false };
+    turn.updatedAt = timestampMs;
+    // 双通道去重：OTel sse_event 已为本 turn 计过用量时，rollout usage 只做
+    // 结构确认，不再累加 token（两通道记的是同一批响应）。反过来若先到
+    // rollout 再收到 OTel，OTel 路径不检查该标记——积压回放时 rollout 通常
+    // 后到，实测顺序稳定；两种来源下"每 turn 只计一次"仍成立。
+    if (turn.otelUsageSeen) {
+      return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId, deduplicated: true };
+    }
+    const usage = {
+      input: asNumber(payload.inputTokens) || 0,
+      output: asNumber(payload.outputTokens) || 0,
+      reasoning: asNumber(payload.reasoningTokens) || 0,
+      total: asNumber(payload.totalTokens)
+        || (asNumber(payload.inputTokens) || 0) + (asNumber(payload.outputTokens) || 0),
+    };
+    const responseId = asString(payload.responseId)
+      || `${turn.turnId}:${asNumber(event.timestampMs) || timestampMs}`;
+    // 446-9：一条 usage = 一次模型响应，一个独立 llm span。
+    // 实测（0.164 真实 rollout，单 turn 33 条 usage）：32 条紧跟在工具调用之后、
+    // 仅 1 条紧跟 assistant 正文，说明 usage 不能安全绑到正文 span 上——强行绑定
+    // 会让多条 usage 撞同一 spanId 互相覆盖（丢 token）。正文另由 rollout_content
+    // 落自己的节点（Bug 56 契约），两者都算 LLM 节点、都不带对方的字段。
+    const spanId = stableSpanId(session.sessionId, turn.turnId, "llm", `usage:${responseId}`);
+    const startTimeMs = turn.lastLlmAt ?? turn.startedAt;
+    turn.lastLlmAt = timestampMs;
+    turn.llmSequence += 1;
+    await this.append(session, turn, {
+      eventId: stableEventId("codex", session.sessionId, turn.turnId, "llm-usage", responseId),
+      spanId,
+      parentSpanId: this.toolParent(session, turn),
+      kind: "llm",
+      name: `llm.${session.model || "codex"}`,
+      startTimeMs,
+      endTimeMs: timestampMs,
+      model: session.model,
+      usage,
+      attributes: {
+        "codex.turn.id": turn.turnId,
+        "codex.source.kind": session.sourceKind || "desktop",
+        "codex.usage.source": "rollout",
+        "codex.usage.cache_read": asNumber(payload.cacheReadTokens) || 0,
+        "codex.usage.cache_write": asNumber(payload.cacheWriteTokens) || 0,
+      },
+    });
+    return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
   }
 
   async processLifecycleEvent(event) {
     if (event?.eventType === "rollout_content") return this.processRolloutContent(event);
+    if (event?.eventType === "rollout_usage") return this.processRolloutUsage(event);
     const result = this.lifecycleReducer.apply(event);
     if (result.duplicate || result.pending) return result;
     const threadId = event.sourceThreadId;

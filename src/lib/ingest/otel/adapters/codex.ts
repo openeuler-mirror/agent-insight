@@ -573,6 +573,50 @@ function mergeDirectCallIdTools(events: OtelTraceEvent[]): OtelTraceEvent[] {
   });
 }
 
+/**
+ * Codex Desktop 0.164 同时发 OTel `codex.sse_event` 与 rollout
+ * `token_usage_record`，两条通道描述同一批模型响应。实测（2026-10-28 真实
+ * 单 turn）：rollout 33 条 usage 覆盖全部响应、总额等于原始真值 3856883；
+ * OTel 只有 20/33 条带 usage、总额 2821159。两者相加会把 token 虚增到
+ * 6678042（1.73 倍）。
+ *
+ * rollout usage 是完整权威计量源，因此同一 turn 出现 rollout usage 时，
+ * 把该 turn 内 OTel 事件的 usage 字段清零——节点与正文保留（正文来自 OTel），
+ * 只是不再重复计量。
+ */
+function preferRolloutUsage(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  // 判定键用 codex.execution.id：OTel 的 codex.turn.id 可能是内部 turn id
+  // （如 8afbed...），而 rollout 用的是框架 turn id，两者不等，按 turn id 匹配
+  // 会漏掉正好是要去重的那批 LLM 事件。execution id 是两条通道共同的归属键
+  // （实测 20/20 命中）。
+  const rolloutExecutions = new Set<string>();
+  for (const event of events) {
+    if (attrs(event)['codex.usage.source'] !== 'rollout') continue;
+    const execution = content(attrs(event)['codex.execution.id']);
+    if (execution) rolloutExecutions.add(execution);
+  }
+  if (rolloutExecutions.size === 0) return events;
+  return events.flatMap((event) => {
+    // 只有「带 usage 又来自非 rollout 通道」的 LLM 快照才是重复计量候选。
+    // 工具、agent、span 与无 usage 的事件一律原样保留——早期实现按
+    // 无 body 判定丢弃，把同 turn 的 1239 个 tool 与 63 个 agent 一起删掉，
+    // 导致该 turn 没有 agent 根事件而不落库。
+    if (!event.usage) return [event];
+    if (semanticKind(event) !== 'llm') return [event];
+    if (attrs(event)['codex.usage.source'] === 'rollout') return [event];
+    const execution = content(attrs(event)['codex.execution.id']);
+    if (!execution || !rolloutExecutions.has(execution)) return [event];
+    // 去掉重复计量；若该 LLM 快照本身没有正文，它只是同一响应的空壳，
+    // 保留会虚增 LLM 节点数并在 UI 显示「未采集到模型输出」，直接丢弃。
+    const hasBody = Boolean(event.output || event.input);
+    if (hasBody) {
+      const { usage: _drop, ...rest } = event as AnyObj;
+      return [rest as OtelTraceEvent];
+    }
+    return [];
+  });
+}
+
 export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[] {
   const latest = new Map<string, OtelTraceEvent>();
   const withoutSpan: OtelTraceEvent[] = [];
@@ -584,7 +628,7 @@ export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTrac
     const existing = latest.get(event.spanId);
     if (!existing || eventEndMs(event) >= eventEndMs(existing)) latest.set(event.spanId, event);
   }
-  const snapshots = mergeDirectCallIdTools([...latest.values(), ...withoutSpan]);
+  const snapshots = preferRolloutUsage(mergeDirectCallIdTools([...latest.values(), ...withoutSpan]));
   const hookTools = snapshots.filter((event) =>
     hasToolSource(event, 'hook') &&
     ['tool', 'mcp'].includes(semanticKind(event)));
