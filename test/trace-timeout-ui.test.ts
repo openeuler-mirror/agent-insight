@@ -76,7 +76,7 @@ test('detail refresh updates timeout metadata independently of the pending sessi
 test('running and timed-out detail traces refresh only while visible and remove their listeners', () => {
     const node = find(n => ts.isCallExpression(n) && n.expression.getText(ast) === 'useEffect'
         && n.arguments[0]?.getText(ast).includes('!autoRefresh')) as ts.CallExpression;
-    for (const [status, waitingForParent] of [
+    for (const [status, waitingForRelations] of [
         ['running', false], ['timed_out', false], ['success', false], ['failed', false],
         ['success', true], ['failed', true],
     ] as const) {
@@ -95,7 +95,7 @@ test('running and timed-out detail traces refresh only while visible and remove 
         };
         const run = evaluate<() => (() => void) | undefined>(node.arguments[0].getText(ast), {
             autoRefresh: true, execStatus: status, refreshIntervalSec: 5,
-            waitingForParent,
+            waitingForRelations,
             fetchSession: () => { requests++; },
             window: timer, ...timer,
             document: {
@@ -108,7 +108,7 @@ test('running and timed-out detail traces refresh only while visible and remove 
             },
         });
         const cleanup = run();
-        if (!waitingForParent && (status === 'success' || status === 'failed')) {
+        if (!waitingForRelations && (status === 'success' || status === 'failed')) {
             assert.equal(intervals.length, 0);
             continue;
         }
@@ -144,4 +144,12 @@ test('late session and parent metadata responses cannot replace a newly selected
     for (const resolve of pending) resolve({ ok: true, json: async () => ({ taskId: 'old-worker', parentAgent: { state: 'resolved', taskId: 'old-parent' } }) });
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(updates, []);
+});
+
+
+test('completed traces with pending relations keep the refresh control available for manual pause', () => {
+    const node = find(n => ts.isVariableDeclaration(n) && n.name.getText(ast) === 'canAutoRefresh') as ts.VariableDeclaration;
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'success', waitingForRelations: true }), true);
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'success', waitingForRelations: false }), false);
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'running', waitingForRelations: false }), true);
 });

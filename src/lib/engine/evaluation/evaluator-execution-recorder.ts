@@ -296,6 +296,22 @@ export async function recordEvaluatorExecution(
   return interactions.length;
 }
 
+export async function recordAgentJudgeExecution(
+  client: MessageListClientLike,
+  input: RecordEvaluatorExecutionInput & { systemPrompt: string },
+): Promise<string | null> {
+  const messages = await client.listMessages(input.taskId);
+  const interactions = normalizeEvaluatorExecutionInteractions(messages);
+  if (!interactions.some(item => item.role === 'assistant' && (item.content || item.tool_calls?.length || item.error))) return null;
+  const record = buildOpencodeExecutionRecord(messages, input);
+  record.interactions = [
+    { role: 'system', content: input.systemPrompt, agent: input.agentName, timestamp: input.startedAt },
+    ...(record.interactions as EvaluatorTraceInteraction[]),
+  ];
+  const saved = await saveExecutionRecord(record);
+  return saved.success ? input.taskId : null;
+}
+
 export function buildOpencodeExecutionRecord(rawMessages: unknown[], input: RecordEvaluatorExecutionInput): ExecutionRecord {
   const interactions = ensureEvaluatorExecutionInteractions(
     normalizeEvaluatorExecutionInteractions(rawMessages),

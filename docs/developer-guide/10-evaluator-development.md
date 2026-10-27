@@ -1,3 +1,10 @@
+---
+title: "评估器开发指南"
+description: "介绍评估器的数据契约、评分方法、扩展步骤与自测要求，指导开发者实现预置和自建评估器。"
+keywords: ["Agent Insight", "评估器开发", "评分方法", "质量评测"]
+changefreq: monthly
+---
+
 # 评估器开发指南
 
 > 适用于给「评测中心 / 实验」新增或改造评估器的同学。
@@ -29,6 +36,7 @@
 | `preset-fluency-text` / `preset-hallucination-text` | `experiment/fluency-preset-evaluators.ts` / `experiment/hallucination-preset-evaluators.ts`（run-experiment 直接分发） |
 | `preset-rigor-content` | `experiment/rigor-preset-evaluators.ts` |
 | `preset-text-*` | `experiment/text-preset-evaluators.ts` |
+| `preset-similarity-*` | `experiment/similarity-preset-evaluators.ts`（文本相似度 / 客观答案匹配） |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -602,6 +610,8 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
 | Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
+| 文本相似度 `preset-similarity-text` | Agent 输出与参考答案 | 语义相似度（同义改写 · 语序变化 · 细节增减判定）；合格阈值可由实验运行配置覆盖（默认 80） |
+| 客观答案匹配 `preset-similarity-answer-match` | 用户问题、Agent 输出与参考答案 | 关键信息点覆盖（数值 · 专有名词 · 核心结论 · 必要条件） |
 
 回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
 
@@ -621,3 +631,16 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 政治社会敏感 / 争议性 | 与「歧视」和「有害性」三方交叠。 |
 | 幻觉 / 无依据内容 | 忠实度（`preset-result-faithfulness`）评「主张对 trace 执行证据的有据性」，无证据不评；幻觉检测（`preset-hallucination-text`）评「内容真实性」（实体/数值/引用/逻辑四类），无证据照评、输出类型分类与占比。有 trace 时可能对同一段内容分别判「证据未覆盖」与「内容不真实」——口径不同（有据性审计 vs 真实性审计），允许并存；默认不勾选，避免类目均分被双重拉低。 |
 | 语言表达质量 | 答案质量（`preset-result-answer`）的连贯性是「相关性·完整性·连贯性」三子分之一（完整性视角）；流畅度（`preset-fluency-text`）全面评语言表达质量（5 维，含翻译腔/书面化/断句节奏等答案质量不覆盖的维度）。边界：答案质量管「答没答到、答全、连贯」，流畅度管「读起来顺不顺」。 |
+
+
+## 自建评估器的 Skills 扩展
+
+创建与编辑表单共用 `EvaluatorPointsEditor` 管理 `card.pointsDef`，保存时共用 `normalizeEvaluatorPoints` 去除首尾空白、忽略空名称行。编辑页直接回显 GET 返回的清单；清空后明确提交空数组，重新加载后保持清空状态，不从旧卡片恢复评分点。评分点变更沿用原有实验冻结规则。
+
+自建评估器仍使用 LLM 类型和 custom-* id，Prompt/评分点定义判定标准，可在 llmConfig.skills 添加 library/local 来源。所有添加的主指令会确定性进入请求；无需为纯指令 Skill 虚构工具调用，也不强制无条件运行每个脚本。Skill 文件中的模板不替换为 Case 变量，只有评估器 Prompt 做变量替换。
+
+有 Skills 时使用 custom-evaluator-runtime.ts，不能走 callJudgeLlm 的 direct 路径。复用 judge-assembly 输出约束和评分点 label；Skill 默认格式不能覆盖平台结果契约。运行失败不是被评测 Agent 的 0 分，必须记录失败；原始评分证据与平台 runtime 元数据分别保存，禁止依赖模型自行上报“用了哪些 Skill”。
+
+Agent 路径通过 JudgeLlmRequest.recordTrace 显式开启会话保存；recordAgentJudgeExecution 只接受实际会话消息，不使用评分摘要构造历史链路。保存异常不覆盖评分，只有保存成功才调用 onTraceSaved。结果 API 结合 runtime transport/skills 和当前用户的 Execution 查询派生 evaluationTraceId；前端只据此展示链接，Skills 与工具内容留在链路页。
+
+evaluator-skills.test.ts 覆盖真实消息保存与入口授权、空会话/历史/失效引用、仅文件夹导入与非法来源拒绝、本地导入不入库、库 v0、字节/执行位、路径校验、冻结复用和并发工作目录；模拟 Agent transport 同时运行本地测试脚本，不能将其描述为真实模型端到端验收。新增来源或运行时应复用保存/冻结/执行契约，不在两个评测入口复制文件挂载逻辑。

@@ -46,6 +46,7 @@ type CapturedEvent = {
     serverName: string
     toolName: string
   }
+  status?: string
   attributes?: Record<string, unknown>
 }
 

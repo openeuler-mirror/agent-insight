@@ -31,7 +31,7 @@ test("Hermes setup paths install the first-party plugin without GitHub or venv d
 
   for (const file of files) {
     const source = fs.readFileSync(path.join(process.cwd(), file), "utf8")
-    assert.match(source, /api\/ingest\/setup\/hermes-plugin/)
+    assert.match(source, /api\/setup\/hermes-plugin/)
     assert.match(source, /plugins[\\/]agent_insight_hermes/)
     assert.doesNotMatch(source, /briancaffey\/hermes-otel/)
     assert.doesNotMatch(source, /opentelemetry-exporter-otlp-proto-http/)

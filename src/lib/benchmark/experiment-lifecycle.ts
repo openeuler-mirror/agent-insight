@@ -99,6 +99,7 @@ export async function continueExperiment(experimentId: string): Promise<void> {
   })
   const callbackOrigin = experiment?.benchmarkBinding?.callbackOrigin
   if (!experiment || !callbackOrigin || experiment.status !== 'running') return
+  if (parsedObject(experiment.benchmarkBinding?.runConfigJson || null).submissionSource === 'imported') return
   const runtime = defaultEvaluatorRuntimeConfigProvider.snapshot()
   const next = await startBenchmarkExperiment({
     experimentId,

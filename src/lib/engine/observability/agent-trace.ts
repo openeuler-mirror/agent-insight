@@ -33,9 +33,16 @@ export interface ToolCall {
     name?: string;
     arguments?: string;
     state?: string;
+    exit_code?: number | string;
+    error?: string | { message?: string };
     timing?: { started_at?: number; completed_at?: number };
     output?: any;
     result?: any;
+    skill?: {
+        name?: string;
+        version?: string | number | null;
+        trigger?: string | null;
+    };
     trace_split_parallel_task?: boolean;
 }
 
@@ -136,6 +143,8 @@ export interface AgentEvent {
     treeHidden?: boolean;
     /** Adapter-provided tool state, for example success/error/completed. */
     toolStatus?: string;
+    toolExitCode?: number;
+    toolError?: string;
     /** ms since epoch */
     startedAt?: number;
     completedAt?: number;
@@ -419,7 +428,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         }
 
         const isProjectedSubUser = it.role === 'user' && !!it.trace_relation;
-        const isSub = (isProjectedSubUser || it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
+        const isSub = (isProjectedSubUser || it.trace_kind === 'user' || it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
         const sid = isSub ? (it.subagent_session_id as string) : 'TOP';
         const agentName = it.agent || (isSub ? (it.subagent_name || 'Subagent') : rootAgentName);
 
@@ -539,7 +548,12 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
 }
 
 function extractSessionIdFromTaskEvent(ev: AgentEvent): string | undefined {
-    return extractSessionIdValue(ev.args) ?? extractSessionIdValue(ev.output);
+    const part = ev.toolCallId && ev.interaction.parts?.find(p =>
+        p.type === 'tool' && (p.callID === ev.toolCallId || p.id === ev.toolCallId),
+    );
+    const childSession = part && part.state?.sessionID;
+    return (typeof childSession === 'string' && childSession.trim() ? childSession.trim() : undefined)
+        ?? extractSessionIdValue(ev.args) ?? extractSessionIdValue(ev.output);
 }
 
 function extractSessionIdValue(value: any, depth = 0): string | undefined {
@@ -608,11 +622,64 @@ function makeNode(init: {
 }
 
 function finalizeStats(node: AgentNode): void {
-    if (Number.isFinite(node.startedAt) && Number.isFinite(node.endedAt)) {
-        const duration = (node.endedAt as number) - (node.startedAt as number);
+    for (const child of node.children) finalizeStats(child);
+
+    let start = Number.isFinite(node.startedAt) ? (node.startedAt as number) : undefined;
+    let end = Number.isFinite(node.endedAt) ? (node.endedAt as number) : undefined;
+    for (const child of node.children) {
+        if (Number.isFinite(child.startedAt) && (start == null || (child.startedAt as number) < start)) {
+            start = child.startedAt as number;
+        }
+        if (Number.isFinite(child.endedAt) && (end == null || (child.endedAt as number) > end)) {
+            end = child.endedAt as number;
+        }
+    }
+    node.startedAt = start;
+    node.endedAt = end;
+    if (start != null && end != null) {
+        const duration = end - start;
         node.stats.durationMs = duration >= 0 ? duration : undefined;
     }
-    for (const c of node.children) finalizeStats(c);
+}
+
+export interface TraceTimelineBounds {
+    start?: number;
+    end?: number;
+    durationMs?: number;
+}
+
+export function resolveTraceTimelineBounds(
+    root: AgentNode | null | undefined,
+    executionDurationMs?: number,
+): TraceTimelineBounds | null {
+    if (!root) return null;
+
+    let start: number | undefined;
+    let end: number | undefined;
+    walkTree(root, node => {
+        if (Number.isFinite(node.startedAt) && (start == null || (node.startedAt as number) < start)) {
+            start = node.startedAt as number;
+        }
+        if (Number.isFinite(node.endedAt) && (end == null || (node.endedAt as number) > end)) {
+            end = node.endedAt as number;
+        }
+        for (const event of node.events) {
+            if (Number.isFinite(event.startedAt) && (start == null || (event.startedAt as number) < start)) {
+                start = event.startedAt as number;
+            }
+            if (Number.isFinite(event.completedAt) && (end == null || (event.completedAt as number) > end)) {
+                end = event.completedAt as number;
+            }
+        }
+    });
+
+    if (start == null) return null;
+    if (end == null && typeof executionDurationMs === 'number' && Number.isFinite(executionDurationMs) && executionDurationMs > 0) {
+        end = start + executionDurationMs;
+    }
+    if (end == null || end < start) end = start;
+
+    return { start, end, durationMs: end - start };
 }
 
 function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
@@ -640,7 +707,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     }
 
     // user message → user event
-    if (it.role === 'user' && contentText.trim()) {
+    if ((it.role === 'user' || it.trace_kind === 'user') && contentText.trim()) {
         out.push({
             kind: 'user',
             interaction: it,
@@ -658,7 +725,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     // the event summary. Without this, tool-only turns produce no llm event, the
     // tool calls orphan-attach to an earlier turn, and the LLM steps disappear
     // from the timeline entirely.
-    const isAssistantLike = !it.trace_synthetic
+    const isAssistantLike = !it.trace_synthetic && it.trace_kind !== 'user'
         && (it.role === 'assistant' || it.role === 'subagent' || it.role === 'opencode');
     // Summary fallback chain: visible text → reasoning → tool names. Tool-only turns
     // with no reasoning (content deliberately left empty by adapters) otherwise render
@@ -679,15 +746,17 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         // often carry usage but empty text — the model turn that decided to call
         // a tool. Dropping those strands the usage so per-node LLM tokens no
         // longer sum to the root aggregate (Bug 59, same as WorkBuddy P8).
+        // Explicit llm trace_kind spans also stay observable when only metadata
+        // was captured (upstream master).
         const hasUsageOrModel = !!it.usage?.total || !!it.model || !!it.modelID || !!it.model_id;
-        if (isAssistantLike && (llmSummary.trim() || hasUsageOrModel)) {
+        if (isAssistantLike && (llmSummary.trim() || hasUsageOrModel || it.trace_kind === 'llm')) {
             out.push({
                 kind: 'llm',
                 interaction: it,
                 interactionIndex: idx,
                 startedAt: baseTs,
                 completedAt,
-                summary: llmSummary || String(it.model || it.modelID || it.model_id || 'LLM'),
+                summary: llmSummary || '未采集到模型输出',
                 usage: it.usage,
             });
         }
@@ -723,31 +792,45 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         }
 
         const normalizedName = name.toLowerCase();
+        const skillMeta = tc.skill;
+        const prefixedSkillName = normalizedName.startsWith('skill.') ? name.slice('skill.'.length) : undefined;
         // `skill_tool` is jiuwen's dedicated skill-invocation tool; count it as a skill call
         // (drives the per-agent Skill stat / timeline). Other frameworks don't emit it.
         const kind: CallKind = normalizedName === 'task'
             ? 'task'
-            : isSkillLoaderToolName(normalizedName)
+            : isSkillLoaderToolName(normalizedName) || skillMeta?.name || prefixedSkillName
                 ? 'skill'
                 : 'tool';
-        const skillDisplayName = kind === 'skill' && args && typeof args === 'object'
-            ? args.skill ?? args.name ?? args.skill_name ?? args.skillName
+        const skillDisplayName = kind === 'skill'
+            ? skillMeta?.name ?? (args && typeof args === 'object'
+                ? args.skill ?? args.name ?? args.skill_name ?? args.skillName
+                : undefined) ?? prefixedSkillName
             : undefined;
         const displayName = typeof skillDisplayName === 'string' && skillDisplayName.trim()
             ? skillDisplayName.trim()
             : name;
+        const eventArgs = kind === 'skill' && skillMeta?.name
+            ? {
+                ...(args && typeof args === 'object' && !Array.isArray(args) ? args : { input: args }),
+                name: skillMeta.name,
+                version: skillMeta.version ?? null,
+            }
+            : args;
+        const exitCode = tc.exit_code != null && tc.exit_code !== '' ? Number(tc.exit_code) : undefined;
         const ev: AgentEvent = {
             kind,
             name: displayName,
-            args,
+            args: eventArgs,
             output: tc.output ?? tc.result,
             toolCallId: tc.id,
             toolStatus: tc.state,
+            toolExitCode: exitCode !== undefined && Number.isFinite(exitCode) ? exitCode : undefined,
+            toolError: typeof tc.error === 'string' ? tc.error : tc.error?.message,
             interaction: it,
             interactionIndex: idx,
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,
             completedAt: toMsTimestamp(tc.timing?.completed_at),
-            summary: summarizeToolCall(displayName, args),
+            summary: summarizeToolCall(displayName, eventArgs),
             relation: it.trace_relation,
         };
         (ev as any)._toolCallId = tc.id;

@@ -1,6 +1,8 @@
 ---
 title: "WorkBuddy Trace Collector"
-description: "腾讯 WorkBuddy（Windows 桌面版）采集器的安装、管理、数据范围与卸载指南"
+description: "介绍腾讯 WorkBuddy Windows 桌面版采集器的安装管理、数据范围及卸载方法。"
+keywords: ["Agent Insight", "WorkBuddy", "Windows", "链路采集"]
+changefreq: monthly
 ---
 
 # WorkBuddy Trace Collector

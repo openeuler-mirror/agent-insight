@@ -284,3 +284,15 @@ test("specialized diagnosis orchestration stays inside the unified Skill", () =>
     assert.equal(fs.existsSync(path.join(root, "src", "lib", "engine", "agent-debug", file)), false);
   }
 });
+
+
+test('agent-debug excludes explicit child input while retaining legacy OpenCode replies', () => {
+  const turns = buildDebugTurns([
+    { role: 'opencode', trace_kind: 'user', content: 'child input', subagent_session_id: 'child' },
+    { role: 'subagent', trace_kind: 'llm', content: 'child answer' },
+    { role: 'opencode', content: 'legacy answer' },
+    { responseMessage: { role: 'assistant', content: 'wrapped answer' } },
+  ]);
+  assert.deepEqual(turns.map(t => t.text), ['child answer', 'legacy answer', 'wrapped answer']);
+  assert.deepEqual(turns.map(t => t.sourceInteractionIndex), [1, 2, 3]);
+});

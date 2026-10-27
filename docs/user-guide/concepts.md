@@ -1,6 +1,8 @@
 ---
 title: "核心概念"
-description: "Agent、Trace、Skill、Evaluator 等核心概念"
+description: "解释 Agent Insight 中 Agent、Trace、Skill 和 Evaluator 等概念及其关系，帮助用户理解平台工作流。"
+keywords: ["Agent Insight", "核心概念", "Trace", "Skill", "Evaluator"]
+changefreq: monthly
 ---
 
 # 核心概念

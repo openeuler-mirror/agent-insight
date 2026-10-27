@@ -196,7 +196,7 @@ export function aggregateOtelTraceSession(
     eventCount = visitResult.eventCount;
   } catch (error) {
     if (!(error instanceof OtelTraceAggregationLimitError)) throw error;
-    console.warn('[OTel] Discarding oversized trace session', {
+    console.error('[OTel] Discarding oversized trace session', {
       sessionId,
       limit: error.limit,
       actual: error.actual,

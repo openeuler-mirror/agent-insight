@@ -828,7 +828,7 @@ export function SkillWorkbenchShell() {
   };
 
   const startOptimization = async ({
-    autoRun = true,
+    autoRun = false,
     record,
     targetAsset,
   }: {
@@ -957,7 +957,7 @@ export function SkillWorkbenchShell() {
     if (!active) return;
     const targetAsset = await showSessionAsset(active);
     if (!targetAsset) return;
-    await startOptimization({ autoRun: true, targetAsset });
+    await startOptimization({ targetAsset });
   };
 
   const generationBusy = generationRunning || Boolean(active?.tasks.some((task) => (
@@ -1181,7 +1181,7 @@ export function SkillWorkbenchShell() {
                   <ActionButton
                     icon={startingOptimization ? Loader2 : WandSparkles}
                     label={startingOptimization ? '正在准备优化会话…' : 'Skill 优化'}
-                    onClick={() => void startOptimization({ autoRun: true })}
+                    onClick={() => void startOptimization()}
                   />
                 </div>
               )}

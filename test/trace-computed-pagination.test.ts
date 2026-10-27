@@ -86,7 +86,8 @@ test('computed trace filters preserve results while enriching only the requested
         { status: 'all', anomaly: 'detecting', sort: 'timestamp', dir: 'desc', page: 1 },
         { status: 'failed', sort: 'timestamp', dir: 'asc', page: 999 },
     ];
-    const ranks = { running: 0, timed_out: 1, failed: 2, success: 3 };
+    // 与 execution-list-sql 的 CASE 排序一致：interrupted 与 timed_out 同级（rank 1）。
+    const ranks = { running: 0, timed_out: 1, interrupted: 1, failed: 2, success: 3 };
     for (const input of cases) await context.test(JSON.stringify(input), async () => {
         enrichedRows = 0;
         largestEvaluationLookup = 0;

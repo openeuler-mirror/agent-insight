@@ -330,6 +330,7 @@ test("uploader advances checkpoint only after a 2xx response and replays without
 })
 
 test("Goal Plus uploader can prioritize the newest partition with a bounded flush", async (t) => {
+  t.mock.method(Date, "now", () => Date.parse("2026-09-10T12:00:00.000Z"))
   const dir = await tempDir(t)
   await transport.appendJsonl(path.join(dir, "2026-09-09", "events.jsonl"), event({
     eventId: "old",

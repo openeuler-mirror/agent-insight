@@ -1,7 +1,8 @@
 import type { ReliabilityClient } from '@prisma/client'
 
-import { normalizeBenchmarkAgentOptions, type BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
-import { MCTS_SEARCH_OPTIONS_CAPABILITY } from '../../../services/executor/src/mcts-options.cjs'
+import type { BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
+import { DEFAULT_BINDINGS, bindingFor, type ExecutionProfile } from '../../../packages/benchmark-protocol/execution.cjs'
+import { resolveAgentOptions, type RuntimeDefinition } from '../../../packages/agent-runtime/index.cjs'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import {
   deriveServiceHealth,
@@ -13,6 +14,7 @@ import {
 import { prisma } from '@/lib/storage/prisma'
 
 export type BenchmarkExecutionTarget = {
+  executionProfile?: ExecutionProfile
   clientId: string
   name: string
   hostname: string | null
@@ -21,10 +23,11 @@ export type BenchmarkExecutionTarget = {
   platform: string
   agents: string[]
   models: string[]
-  agentOptionCapabilities: string[]
+  parameterDefinitions: RuntimeDefinition[]
   status: ClientStatus
   serviceHealth: ServiceHealth
   ready: boolean
+  canPrepare: boolean
   unavailableReasons: string[]
   missingCapabilities: string[]
   lastSeenAt: Date
@@ -44,6 +47,7 @@ export function inspectBenchmarkExecutionTargets(
   client: ReliabilityClient,
   manifest: BenchmarkManifest,
 ): BenchmarkExecutionTarget[] {
+  if (manifest.supportsAgentExecution === false) return []
   const capabilities = parseCapabilities(client.capabilitiesJson)
   const status = deriveStatus(client)
   const serviceHealth = deriveServiceHealth(client)
@@ -55,12 +59,18 @@ export function inspectBenchmarkExecutionTargets(
       || platform.runExperimentCase?.returnsTraceId === true
     )
   }).flatMap((platform) => {
-    const agents = [...new Set(platform.agents || [])]
-    if (!agents.length) return []
     const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
+    const profileCapability = capabilities.executionProfiles?.find(item => item.benchmarks.includes(manifest.adapterKey) && item.profile.targets.some(target => target.platform === platform.id))
+    const readiness = profileCapability?.targetReadiness?.[platform.id] || profileCapability
+    const agents = [...new Set(profileCapability?.profile.targets.find(target => target.platform === platform.id)?.agents || platform.agents || [])]
+    if (!agents.length) return []
+    const requiresProfile = Boolean(profileCapability || bindingFor(DEFAULT_BINDINGS, manifest.adapterKey, platform.id))
     const requiredCapabilities = [
       ...manifest.requiredCapabilities,
-      benchmarkAgentRuntimeCapability(platform.id),
+      ...(requiresProfile ? ['execution-backend/v1'] : [benchmarkAgentRuntimeCapability(platform.id)]),
+      ...(manifest.adapterKey === 'zsoft-l1' && platform.id.endsWith('-mcts') ? ['mcts-zsoft-export/v1'] : []),
+      ...(manifest.adapterKey === 'swe-bench' && platform.id.endsWith('-mcts')
+        && Object.hasOwn(capabilities.components || {}, 'mcts-swe-bench/v1') ? ['mcts-swe-bench/v1'] : []),
     ]
     const missingCapabilities = [...new Set(requiredCapabilities)].filter(
       capability => !componentReady(capabilities.components?.[capability]),
@@ -69,10 +79,13 @@ export function inspectBenchmarkExecutionTargets(
       status !== 'online' ? `客户端状态不可用：${status}` : '',
       serviceHealth !== 'healthy' ? '客户端服务未就绪' : '',
       !actions.has('RUN_BENCHMARK_CASE') ? '客户端版本不支持 Benchmark 控制指令' : '',
+      readiness && !readiness.ready ? readiness.note || '执行环境未就绪' : '',
+      requiresProfile && !profileCapability ? '该 Benchmark 需要升级客户端并配置沙箱执行环境' : '',
       ...missingCapabilities.map(capability => `缺少 ${capability}`),
     ].filter(Boolean)
 
     return [{
+      ...(profileCapability ? { executionProfile: profileCapability.profile } : {}),
       clientId: client.clientId,
       name: client.name,
       hostname: client.hostname,
@@ -80,12 +93,12 @@ export function inspectBenchmarkExecutionTargets(
       arch: client.arch,
       platform: platform.id,
       agents,
-      models: [...new Set(platform.models || [])],
-      agentOptionCapabilities: (platform.runBenchmarkCase?.agentOptionCapabilities || [])
-        .filter(capability => componentReady(capabilities.components?.[capability])),
+      models: [...new Set(profileCapability?.profile.models.length ? profileCapability.profile.models : platform.models || [])],
+      parameterDefinitions: platform.parameterDefinitions || [],
       status,
       serviceHealth,
       ready: unavailableReasons.length === 0,
+      canPrepare: status === 'online' && serviceHealth === 'healthy' && Boolean(capabilities.actions?.includes('PREPARE_EXECUTION_ENVIRONMENT')),
       unavailableReasons,
       missingCapabilities,
       lastSeenAt: client.lastSeenAt,
@@ -136,9 +149,9 @@ export function assertBenchmarkExecutionTarget(
       409,
     )
   }
-  const options = normalizeBenchmarkAgentOptions(input.agentOptions)
-  if (options?.mcts && !target.agentOptionCapabilities.includes(MCTS_SEARCH_OPTIONS_CAPABILITY)) {
-    throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '所选客户端不支持 MCTS 搜索参数，请升级客户端', 409)
+  try { resolveAgentOptions(target.parameterDefinitions, input.platform, input.agent, input.agentOptions) }
+  catch (error) {
+    throw new BenchmarkProtocolError((error as { code?: string }).code || 'AGENT_OPTIONS_INVALID', (error as Error).message, 409)
   }
   return target
 }

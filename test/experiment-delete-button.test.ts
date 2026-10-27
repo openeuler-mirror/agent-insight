@@ -15,6 +15,11 @@ test('触发分析按单条 Case 状态显示删除，不跟随其他 Case 的�
   assert.match(emptyCaseEvaluationMessage('running', { traceStatus: 'failed' }), /执行失败，未进入评测/);
   assert.match(emptyCaseEvaluationMessage('running', { traceStatus: 'ready' }), /等待评测/);
   assert.match(emptyCaseEvaluationMessage('done', { traceStatus: 'ready' }), /实验已结束/);
+  assert.equal(emptyCaseEvaluationMessage('running', { traceStatus: 'pending', traceAttemptStatus: 'waiting_trace' }),
+    '执行已结束，等待 Trace 完成上报，尚未进入评测。');
+  assert.equal(isCompletedExperimentCase('running', null, { traceStatus: 'pending', traceAttemptStatus: 'waiting_trace' }), false);
+  assert.match(emptyCaseEvaluationMessage('running', { traceStatus: 'pending', traceAttemptStatus: 'running' }), /正在执行/);
+  assert.match(emptyCaseEvaluationMessage('running', { traceStatus: 'pending', traceAttemptStatus: 'queued' }), /等待执行/);
 });
 
 test('resolved Benchmark Case shows 删除 while active Case shows 停止并删除', () => {

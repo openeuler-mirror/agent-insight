@@ -37,6 +37,7 @@ export async function POST(req: Request) {
       hostname: body.hostname || null,
       version: body.version || null,
       inventory,
+      partial: body.partial === true,
       busySlots: typeof body.busySlots === 'number' ? body.busySlots : 0,
     })
     return NextResponse.json({

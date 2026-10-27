@@ -167,7 +167,7 @@ git add scripts/claude_context_uploader.js test/claude-context-uploader.test.ts
 git commit -m "perf: 合并 Claude 高频补传 worker"
 ```
 
-### Task 5: 文档、全量验证和 119 端到端
+### Task 5: 文档、全量验证和部署环境端到端
 
 **Files:**
 - Modify: `docs/user-guide/observability/view-traces.md`
@@ -199,7 +199,7 @@ Run: `npm run test`
 
 Expected: 0 failures；仅允许仓库既有的外部 API Key 条件跳过。
 
-**Step 4: Run live E2E on 119**
+**Step 4: Run live E2E in the deployment environment**
 
 - 在测试 Claude 会话中产生两条真实 user 任务、两个子 Agent、prompt suggestion 和 away summary。
 - Claude 进程不 `/exit` 时确认数据已可见。

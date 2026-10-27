@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { benchmarkEvaluationProgressLabel } from '@/lib/benchmark/detail-status';
 
 const root = process.cwd();
 
@@ -11,7 +12,7 @@ test('全局实验详情是纯进度视图，并提供返回实验列表入口',
     'utf8',
   );
 
-  assert.match(detailPage, /<AppTopBar title=\{detail \? detail\.name : '实验详情'\} \/>/);
+  assert.match(detailPage, /<AppTopBar\s+title=\{detail \? displayedExperimentName\(detail\.name, detail\.createdAt\) : '实验详情'\}/);
   assert.match(detailPage, /<PageContainer[\s\S]*!embedded && \([\s\S]*<Link href="\/experiments">[\s\S]*返回实验列表[\s\S]*<\/Link>/);
   assert.doesNotMatch(detailPage, /<AppTopBar[\s\S]*title=\{\([\s\S]*返回实验列表/);
   assert.doesNotMatch(detailPage, /开始执行/);
@@ -83,7 +84,11 @@ test('Benchmark 提交物已提交但 Evaluator 未完成时展示评测中', ()
   );
 
   assert.match(detailPage, /isBenchmarkEvaluationInProgress\(c\.benchmark\)/);
-  assert.match(detailPage, /Benchmark 评测中…/);
+  assert.match(detailPage, /benchmarkEvaluationProgressLabel\(c\.benchmark\)/);
+  assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'running' }), 'Benchmark 评测中…');
+  assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'queued' }), '等待评测配额…');
+  assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'queued', evaluationWaitCode: 'IMAGE_POOL_PREPARING' }), '等待镜像准备…');
+  assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'queued', evaluationWaitCode: 'IMAGE_POOL_SPACE_LOW' }), '等待镜像空间…');
   assert.match(detailPage, /提交物已生成，等待执行器确认…/);
   assert.match(detailPage, /c\.benchmark\.submissions/);
   assert.doesNotMatch(detailPage, /c\.benchmark\.submission\b/);

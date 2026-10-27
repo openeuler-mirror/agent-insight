@@ -283,7 +283,10 @@ test('summarizes LlamaIndex Skill versions and custom Tool arguments', () => {
     ],
   }]);
   assert.ok(tree);
-  assert.equal(tree.events.find(event => event.kind === 'skill')?.summary, 'skill: calculation-workflow@1');
+  const skill = tree.events.find(event => event.kind === 'skill');
+  assert.equal(skill?.name, 'calculation-workflow');
+  assert.equal(skill?.args.version, 1);
+  assert.equal(skill?.summary, 'calculation-workflow (name=calculation-workflow, version=1)');
   assert.equal(tree.events.find(event => event.kind === 'tool')?.summary, 'multiply (a=6, b=7)');
 });
 

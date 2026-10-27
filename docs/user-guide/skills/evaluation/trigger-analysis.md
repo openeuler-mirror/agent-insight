@@ -1,6 +1,8 @@
 ---
 title: "触发分析"
 description: "用正反样本验证 Skill 的命中、误选和漏选"
+keywords: ["Agent Insight", "Skill", "触发分析", "正反样本", "路由评测"]
+changefreq: monthly
 ---
 
 # 触发分析

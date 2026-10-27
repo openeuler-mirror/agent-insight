@@ -19,6 +19,8 @@ export function getPlatformLabel(platform?: string | null): string {
       return "OpenClaw";
     case "xiaoo":
       return "xiaoO";
+    case "qwenpaw":
+      return "QwenPaw";
     case "workbuddy":
       return "WorkBuddy";
     default:

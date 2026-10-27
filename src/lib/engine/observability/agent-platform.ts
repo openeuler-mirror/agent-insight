@@ -5,6 +5,7 @@ export const AGENT_PLATFORMS = [
   'llamaindex',
   'trae',
   'qoder',
+  'qwenpaw',
   'codex',
   'qwencode',
   'pi-agent',

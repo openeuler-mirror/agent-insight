@@ -1,3 +1,10 @@
+---
+title: "Hermes / OpenCode / ClaudeCode Trace 数据流与落盘问题分析"
+description: "分析 Hermes、OpenCode 与 ClaudeCode 的 Trace 落盘数据流及文件膨胀原因，并提出存储改进建议。"
+keywords: ["Agent Insight", "Hermes", "Trace 存储", "OpenTelemetry", "数据膨胀"]
+changefreq: monthly
+---
+
 # Hermes / OpenCode / ClaudeCode Trace 数据流与落盘问题分析
 
 > 讨论稿，基于 2026-06-16/17 对本地 `~/.agent-insight` 数据、Hermes 插件、OpenCode uploader、OTel consumer 的排查。

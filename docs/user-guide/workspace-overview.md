@@ -1,6 +1,8 @@
 ---
 title: "概览面板"
-description: "Workspace 总览页的指标口径、卡片含义与日常使用方式"
+description: "说明 Workspace 概览面板的指标口径、卡片含义和日常操作方式，帮助用户判断 Agent 运行状况。"
+keywords: ["Agent Insight", "Workspace", "概览面板", "运行指标"]
+changefreq: monthly
 ---
 
 # 概览面板

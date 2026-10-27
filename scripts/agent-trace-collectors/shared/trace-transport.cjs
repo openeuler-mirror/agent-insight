@@ -694,6 +694,7 @@ class DurableTraceUploader {
       ? options.maxBatchesPerFlush
       : Number.POSITIVE_INFINITY;
     this.timer = null;
+    this.cleanupRetention = options.cleanupRetention !== false;
     if (typeof this.fetch !== "function") throw new Error("A fetch implementation is required");
     if (!this.endpoint) throw new Error("Agent Insight OTLP endpoint is required");
   }
@@ -776,7 +777,7 @@ class DurableTraceUploader {
           uploadedBatches += 1;
         }
       }
-      await cleanupRetention(this.stateDir);
+      if (this.cleanupRetention) await cleanupRetention(this.stateDir);
       return { acquired: true, uploadedEvents, uploadedBatches, deferred };
     } finally {
       await releaseProcessLock(lock);

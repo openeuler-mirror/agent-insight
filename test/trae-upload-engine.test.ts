@@ -222,7 +222,8 @@ test("AC5/AC14/AC15/AC16: 上传载荷包含 model/tokens/latency 与模型切�
     const body = JSON.parse(calls[0].init!.body!)
 
     assert.equal(body.model, "gpt-4o", "AC5: model 应取首个 llm.call 的模型")
-    assert.equal(body.tokens, 150, "AC5: totalTokens 应取首个 llm.call 的 totalTokens")
+    assert.equal(body.tokens, 380, "AC5: totalTokens 应累计全部 llm.call 的输入与输出")
+    assert.equal(body.tokens, body.input_tokens + body.output_tokens)
     assert.equal(body.latency, 2, "AC5: latency 应为 start→response 秒级差")
     assert.equal(body.final_result, "hi", "AC5: result 应包含最终结果")
 

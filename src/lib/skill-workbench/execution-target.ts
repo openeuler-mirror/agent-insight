@@ -1,3 +1,4 @@
+import { resolveAgentOptions, type AgentOptions, type RuntimeDefinition } from '../../../packages/agent-runtime/index.cjs';
 import { listClientTraceGenerationTargets, type ClientTraceGenerationTarget } from '@/lib/engine/experiment/execution-targets';
 import { TraceGenerationError } from '@/lib/engine/experiment/trace-generation';
 
@@ -7,6 +8,8 @@ export interface SkillExecutionTarget {
   platform: string;
   agent: string;
   model: string | null;
+  agentOptions?: AgentOptions;
+  agentParameterDefinition?: RuntimeDefinition;
 }
 
 export interface SkillExecutionSnapshot {
@@ -38,5 +41,7 @@ export function selectSkillExecutionTarget(value: unknown, targets: ClientTraceG
   if (model && !target.models.some((item) => item.id === model)) {
     throw new TraceGenerationError('MODEL_UNAVAILABLE', `所选客户端未提供模型 ${model}，不会回退默认模型`, 400);
   }
-  return { workerId: target.workerId, host: target.host, platform: target.platform, agent: target.agent, model };
+  const resolved = resolveAgentOptions(target.parameterDefinitions || [], target.platform, target.agent, input.agentOptions);
+  return { workerId: target.workerId, host: target.host, platform: target.platform, agent: target.agent, model,
+    ...(resolved.agentOptions ? { agentOptions: resolved.agentOptions, agentParameterDefinition: resolved.definition } : {}) };
 }

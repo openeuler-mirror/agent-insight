@@ -9,6 +9,8 @@ export async function register() {
   // 路由。这样 Next.js 的 Edge 静态分析器看到的只是个 dynamic import 字符串，不会去扫
   // node:fs / node:child_process 这些 import 然后给你刷一屏 warning。
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { installServerLogging } = await import('./lib/logger/server');
+    installServerLogging();
     const { setupNodeRuntime } = await import('./instrumentation-node');
     await setupNodeRuntime();
     void import('./lib/runtime-cleanup')

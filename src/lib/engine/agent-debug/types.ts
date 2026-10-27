@@ -1,3 +1,5 @@
+import type { DiagnosisProgressSnapshot } from './progress-types';
+
 export type AgentDebugModule = 'memory' | 'reflection' | 'planning' | 'action' | 'system' | 'others' | 'unknown';
 export type AgentDebugSeverity = 'high' | 'medium' | 'low';
 export type AgentDebugStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -266,6 +268,8 @@ export interface AgentDebugSkillSuggestion {
 }
 
 export interface AgentDebugSkillsAnalysis {
+  runId?: string;
+  progress?: DiagnosisProgressSnapshot | null;
   status: AgentDebugSkillsAnalysisStatus;
   source: 'agent-debug';
   generatedAt?: string;

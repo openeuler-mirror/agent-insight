@@ -1,6 +1,8 @@
 ---
 title: "评测数据集"
 description: "创建、导入与版本化管理离线评测所需的样本数据"
+keywords: ["Agent Insight", "评测数据集", "样本管理", "数据导入"]
+changefreq: monthly
 ---
 
 # 评测数据集
@@ -20,37 +22,68 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 
 ## 管理员导入 Benchmark 数据集
 
-SWE-bench Verified 随 Agent Insight 服务启动完成准备和导入。持续启用时，在 `~/.agent-insight/.env` 中配置：
-
-```dotenv
-AGENT_INSIGHT_BENCHMARK=swe-bench
-```
-
-之后使用统一启动命令：
+SWE-bench Verified 默认随 Agent Insight 服务启动自动准备和导入。配置位于项目 `config/benchmark/platform.yaml`，本机覆盖写入 `config/benchmark/platform.local.yaml`；没有版本字段。`benchmarks.swe-bench.dataset.autoImport` 默认 `true`，设置为 `false` 只跳过启动时自动导入，已有数据集与管理员手动导入仍可使用。直接执行：
 
 ```bash
 bash scripts/start.sh
 ```
 
-也可用 `bash scripts/start.sh --benchmark swe-bench` 仅对本次启动临时启用，命令行优先于环境配置。
+首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查当前数据库，完整、可用的数据集已经存在时会跳过全部准备和导入步骤。
 
-首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查数据库，数据集已经存在时会跳过全部准备和导入步骤。网络受限时，可在同一配置文件中设置内网镜像地址：
+准备或导入失败会显示简短警告，继续启动服务；SWE-bench Verified 相关实验暂不可用。详细错误记录在 `~/.agent-insight/logs/swe-bench-bootstrap.log`（配置 `AGENT_INSIGHT_HOME` 时随之调整），下次启动自动重试。修复后也可在项目根目录运行 `npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts` 单独重试。
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE=http://intranet.example/swe-bench/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=http://intranet.example/swe-bench/source.tar.gz
+网络受限时，可在平台项目的 `config/benchmark/platform.local.yaml` 中设置内网镜像地址或本机文件：
+
+```yaml
+benchmarks:
+  swe-bench:
+    dataset:
+      source: /srv/datasets/test.parquet
+    loader:
+      sourceArchive: /srv/datasets/source.tar.gz
+      python: /srv/python/bin/python
 ```
 
-这两项也可以直接填写本机文件路径：
+`source` 和 `sourceArchive` 均支持 HTTP(S) 下载地址。路径是平台所在机器上的路径，相对路径按配置文件目录解析；推荐使用绝对路径。`null` 使用默认官方来源或自动创建 Python 环境。完全离线时，`loader.python` 必须指向已安装官方 Loader 的 Python 可执行文件，否则首次安装依赖仍需要可用的 pip 软件源。
 
-```dotenv
-SWE_BENCH_DATASET_SOURCE="/srv/datasets/test.parquet"
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE="/srv/datasets/source.tar.gz"
+本机文件与下载文件均按固定官方 SHA-256 校验，校验失败不会覆盖本机文件。成功导入后，后续运行从数据库读取数据，不依赖原始 Parquet；更换或清空数据库后重新导入需要再次提供数据文件。
+
+旧 `AGENT_INSIGHT_BENCHMARK`、`SWE_BENCH_DATASET_SOURCE`、`SWE_BENCH_SOURCE_ARCHIVE_SOURCE`、`SWE_BENCH_PYTHON` 及旧路径/URL变量均不再控制导入，发现残留变量会提示迁移至配置文件。
+
+ZSoft L1 也默认随服务启动自动获取官方题目并导入数据库。在项目 `config/benchmark/platform.local.yaml` 设置 `benchmarks.zsoft-l1.dataset.autoImport: false` 可单独关闭；不影响已有数据集和手动导入，也不影响 SWE-bench 的开关。直接执行：
+
+```bash
+bash scripts/start.sh
 ```
 
-路径是 Agent Insight 服务所在机器上的路径，推荐使用绝对路径。本机文件与下载文件均按固定的官方 SHA-256 校验；本机文件缺失或校验失败会停止准备，不覆盖原文件。两项留空时使用官方来源，已安装的数据集和可用的受管缓存优先复用。Python 依赖首次安装仍需要可用的 pip 软件源，或通过 `SWE_BENCH_PYTHON` 指定已有环境。
+首次执行按接入包固定的官方提交拉取仓库，解析 30 道正式题（24 道 userspace、6 道内核题）；后续执行先查当前数据库，已安装时跳过来源读取和下载。缓存位于平台机器的 `~/.agent-insight/benchmark-assets/zsoft-l1/`（自定义 `AGENT_INSIGHT_HOME` 时跟随该目录）。数据准备只读取题目元数据和公开资料，不需要 Docker、镜像或评测资产，也不会自动启动 Evaluator。不再设置 `AGENT_INSIGHT_BENCHMARK` 或使用启动参数 `--benchmark`。
 
-旧的 `SWE_BENCH_DATASET_PATH`、`SWE_BENCH_DATASET_URL` 和 `SWE_BENCH_SOURCE_ARCHIVE_URL` 暂时兼容；新变量存在时优先使用新变量，显式留空表示使用官方来源。
+ZSoft 准备或导入失败只警告，继续启动服务，详细输出写入 `~/.agent-insight/logs/zsoft-l1-bootstrap.log`（随 `AGENT_INSIGHT_HOME` 调整），下次启动重试。启动会同步等待本次准备结束；已有数据集不会因修改来源而自动刷新。
+
+离线时，将官方 ZSoft L1 目录或完整官方仓库放在平台机器的一个目录，在项目 `config/benchmark/platform.local.yaml` 中设置：
+
+```yaml
+benchmarks:
+  zsoft-l1:
+    dataset:
+      autoImport: true
+      source: /srv/datasets/zsoft-l1
+      revision: null
+```
+
+目录应包含 `tasks/<task-id>/task.json` 和 `public/README.md`；完整仓库根目录也可自动识别。配置后正常启动服务即可，不需要预先导出或处理数据。在线镜像可将 `dataset.source` 设置为 HTTP(S) Git 仓库地址；`dataset.revision` 可指定完整 40 位小写提交哈希，`null` 使用接入包固定版本。两项均为 `null` 时使用固定的官方来源和版本。离线目录按实际内容识别，不由此配置伪造版本。相对路径按配置文件所在目录解析；旧 `ZSOFT_DATASET_SOURCE`、`ZSOFT_DATASET_REVISION` 只提示迁移，不再生效。
+
+只安装数据、不重启服务时使用：
+
+```bash
+npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
+```
+
+显式更新来源时加 `--refresh`；已被实验引用的数据集不能覆盖，可同时加 `--name "ZSoft L1 新版本"` 导入独立数据集。旧 P2 JSON/JSONL 不再接受，需要从官方目录重新导入；历史实验记录不会自动迁移。此前已安装的 24 题数据集不会自动扩展为 30 题，需要用 `--refresh --name "ZSoft L1 全量"` 显式安装新数据集。
+
+若升级后旧 ZSoft 实验提示 `ZSOFT_TASK_DIGEST_LEGACY`，表示旧版导入程序与评测端采用了不同的文件名排序，并非题目文件一定被修改。管理员应在更新平台与评测服务后，执行 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1 --refresh --name "ZSoft L1 摘要修正版"`，再选择新数据集新建实验。旧实验身份不自动修改，直接重评仍使用旧摘要；正常摘要无需迁移。此类错误会显示为评测失败，不再无限等待镜像，也不阻塞同窗口其他合法 Case。
+
+平台、执行客户端和评测服务可以在不同机器。自动生成实验时选择执行客户端即可；该机器的 ZSoft 任务目录仍配置在 MCTS 仓库 `testcases_union/config.env` 的 `ZSOFT_TASKS_DIR` 中，本次不迁移此项。平台按 Case 自动下发题目 ID，无需在前端填写目录或额外导入公开资料包。评测服务启动后自动从公有 SWR 下载并校验接入包固定版本的完整资产，安装到共享数据卷，后续启动复用，无需手动解压。可在评测机项目 `config/benchmark/evaluator.local.yaml` 设置 `benchmarks.zsoft-l1.assetsDir`（默认 `null`，使用托管目录）和 `kernelAccel`（默认 `tcg`，可选 `kvm`），修改后重新启动评测服务。旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再覆盖这些配置。评测服务不访问平台数据库。ZSoft 属于 Benchmark，执行器可以选择 MCTS。具体准备见 [ZSoft 部署指南](../../developer-guide/benchmark/zsoft-deployment-guide.md)。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 
@@ -156,7 +189,7 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 
 > **Note**
 > `reference_output` 是可选的预期输出字段。没有该字段或字段值为空不影响样本保存；只有依赖预期输出的评测指标会缺少对比基线。
-> 新增样本或修改预期输出时，系统会缓存从预期输出提取的关键观点。历史样本没有有效缓存时，无论从“实验”还是已有 Trace 评测入口运行任务完成度评测，系统都会实时提取并在成功后回写当前样本；无关的数据集编辑不会批量处理全部历史数据。非空预期输出如果没有拆出独立观点，会把完整预期输出作为一个兜底观点，避免短答案无法参与任务完成度评测。
+> 单条录入、批量导入和实验标注存入数据集时，保存只执行校验与存储，无需等待模型提取关键观点，也无需先配置评测模型。预期输出未变时保留有效缓存，新增样本或修改预期输出后，在首次任务完成度评测时提取关键观点并回写当前样本；后续评测复用缓存。从“实验”和已有 Trace 评测入口运行时均适用，因此首次评测会包含关键观点提取耗时。非空预期输出如果没有拆出独立观点，会把完整预期输出作为一个兜底观点，避免短答案无法参与任务完成度评测。
 
 ## 维护数据项
 
@@ -198,6 +231,8 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 - **编辑**：更新单条数据项的所有字段值，包括自定义字段。
 - **删除**：移除错误、重复或失效的样例。
 - **刷新**：重新拉取当前评测集的数据项。
+
+单条录入和批量导入弹窗支持右键菜单与文本选择。未保存时，左键直接按下遮罩或点击取消可关闭弹窗；保存期间取消及遮罩关闭均不可用。
 
 ### 查看可靠性故障模式说明
 
@@ -303,6 +338,47 @@ trace 只能说明 Agent 实际调用了哪些能力，不能说明当时还有�
 
 > **Tip**
 > 批量导入默认识别 `input` 与 `expected_output`，并兼容 `output`、`reference_output` 等别名；轨迹评测集额外识别 `trajectory`、`trace` 与 `agent_trace`。字段对应关系详见下方「数据项字段说明」。
+
+## 基于 Trace 自动生成
+
+从已有 Trace 中自动整理用户输入和历史回答，生成**理想输出评测集**，用于后续评测。系统使用**智能采样**，在生成条数上限内综合考虑输入覆盖、长度分布和已观测执行行为；同一问题存在多个历史回答时，也会选择参考回答。每条数据包含「输入」和「预期输出」两个字段。智能采样依据文本与结构特征选择样本，不判断语义、事实或回答正确性。
+
+### 操作步骤
+
+1. 进入 **评估与实验 → 评测数据集**，打开 **新建评测集** 下拉菜单，选择 **基于 Trace 生成**。
+2. 填写以下配置：
+
+   | 配置 | 操作说明 |
+   | --- | --- |
+   | 名称 | 必填，1–50 字。 |
+   | 描述 | 可选，最多 200 字。 |
+   | Agent 平台 | 选择已有 Trace 的平台。 |
+   | Agent | 选择需要生成评测集的 Agent；选项旁显示所选时间范围内的 Trace 数量。 |
+   | 时间范围 | 最近 24 小时、7 天或 30 天，默认最近 7 天。 |
+   | 生成条数上限 | 1–500，默认 20。 |
+
+3. 点击 **开始生成**。红色星号表示必填项；选择有效 Agent 并填写完整后，按钮才可点击。切换平台或时间范围后，需要重新选择 Agent。
+4. 在进度窗口查看生成状态。成功后点击 **完成**，再打开数据集卡片查看生成的数据项。
+
+服务刚启动时，窗口可能显示「评测集生成服务正在初始化」。等待完成后即可选择 Agent 并生成，无需刷新页面；已填写的配置会保留。如果提示初始化失败，可点击 **重新加载**，持续失败时联系管理员。
+
+如果 Agent 列表提示「所选时间内没有 Trace」，可扩大时间范围，或在该平台产生并上报新的 Trace 后重试。
+
+### 查看与使用结果
+
+- 一条多轮 Trace 可以生成多条问答；重复问答会合并，最终数量也可能小于设置的上限。例如 3 条 Trace 分别包含 2、1、2 轮有效问答时，最多可生成 5 条数据。
+- 候选多于上限时，智能采样会综合输入覆盖、长度分布及已有执行行为选择样本；同一问题存在多个历史回答时，也可能选取不同的参考回答。升级后已有数据集不变，需要采用新策略时重新生成。
+- 本次进度窗口的 **筛选明细** 展示读取、提取、去重和未入选数量，帮助理解实际生成条数。关闭窗口后不再提供明细回看。
+- 生成的预期输出来自历史回答。可在 **数据项** 页查看、修改、添加、删除或批量导入问答，再点击 **发起评测**。
+- **编辑信息** 可修改名称和描述；此类数据集固定为理想输出类型和两个字段。
+- **删除** 数据集不会删除原始 Trace。
+
+### 中断与失败处理
+
+- 生成过程中关闭窗口或刷新页面，任务仍会继续；点击生成中的卡片可再次查看进度。需要停止时，点击 **取消**。
+- 生成失败时，点击 **返回** 清理失败任务并回到配置，调整后重新生成；点击 **取消** 则清理并退出。
+- 也可从失败卡片的 **编辑信息** 进入配置。取消编辑会保留原失败记录，重新提交后才替换它。
+- 如果提示清理失败，请按提示重试。
 
 ## 从 Trace 回流数据项
 

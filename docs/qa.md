@@ -1,3 +1,10 @@
+---
+title: "Q&A"
+description: "解答 Agent Insight 在概念、安装接入、Skill 管理、评测观测和开发排障中的常见问题。"
+keywords: ["Agent Insight", "常见问题", "安装接入", "评测观测", "故障排查"]
+changefreq: weekly
+---
+
 # Q&A
 
 本文档汇总 Agent Insight 平台的常见问答，覆盖平台概念、安装部署、框架接入、Skill 全生命周期、评测中心、运行观测、架构数据模型、开发约定与运维排障等内容，帮助开发者快速理解平台定位并定位使用过程中的常见问题。
@@ -70,7 +77,7 @@ CLI 支持 `start`、`stop`、`restart`、`status`、`logs`、`install` 子命�
 
 ### Q16. Agent Insight 当前已接入哪些 Agent 运行时/框架？各自的采集方式是什么？
 
-已接入 OpenCode（原生插件）、Claude Code（OTLP 上报）、Qwen Code（Hook 采集器）、Hermes（原生插件）、Trae IDE（VS Code 插件）、JiuwenSwarm（OTLP 上报）、Langgraph（OTLP 上报）、LlamaIndex（OTLP 上报）。更多平台持续接入中。
+已接入 OpenCode（原生插件）、Claude Code（OTLP 上报）、Qwen Code（Hook 采集器）、QwenPaw（Hook 插件）、Hermes（原生插件）、Trae IDE（VS Code 插件）、JiuwenSwarm（OTLP 上报）、Langgraph（OTLP 上报）、LlamaIndex（OTLP 上报）。更多平台持续接入中。
 
 ### Q17. 默认接入使用什么协议和端点上报 Logs 和 Traces？旧版 watcher 的兼容性如何？
 

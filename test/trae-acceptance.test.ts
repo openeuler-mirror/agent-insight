@@ -897,46 +897,53 @@ test("AC23: UploadEngine exponential backoff delay calculation", () => {
 // ============================================================================
 // AC8/AC9: Skill trace fields completeness
 // ============================================================================
-test("AC8: Skill trace generated from post-tool-use contains all required fields", () => {
-  const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
-  try {
-    const sessionId = "ac8-fields"
+for (const [label, detail, version] of [
+  ["English version", "version: 1.2.0", "1.2.0"],
+  ["English title version", "Version 2.3.4", "2.3.4"],
+  ["Chinese version", "版本：3.4.5", "3.4.5"],
+  ["missing version", "No version metadata.", undefined],
+] as const) {
+  test(`AC8: Skill trace contains required fields with ${label}`, () => {
+    const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
+    try {
+      const sessionId = "ac8-fields"
 
-    runHookScript("pre-tool-use.sh", JSON.stringify({
-      session_id: sessionId, hook_event_name: "PreToolUse",
-      tool_use_id: "call_ac8_skill", tool_name: "Skill",
-      llm_tool_name: "Skill",
-      tool_input: { name: "deep-analyzer" },
-      agent_id: "solo_agent", agent_type: "solo_agent",
-    }), tempEnvFile)
+      runHookScript("pre-tool-use.sh", JSON.stringify({
+        session_id: sessionId, hook_event_name: "PreToolUse",
+        tool_use_id: "call_ac8_skill", tool_name: "Skill",
+        llm_tool_name: "Skill",
+        tool_input: { name: "deep-analyzer" },
+        agent_id: "solo_agent", agent_type: "solo_agent",
+      }), tempEnvFile)
 
-    runHookScript("post-tool-use.sh", JSON.stringify({
-      session_id: sessionId, hook_event_name: "PostToolUse",
-      tool_use_id: "call_ac8_skill", tool_name: "Skill",
-      llm_tool_name: "Skill",
-      tool_input: { name: "deep-analyzer" },
-      tool_response: {
-        skill_path: "/home/.trae-cn/builtin_skills/deep-analyzer",
-        skill_detail: "# Deep Analyzer\n\nversion: 1.2.0\n\nAnalyzes code deeply.",
-        skill_type: "skill",
-      },
-      agent_id: "solo_agent", agent_type: "solo_agent",
-    }), tempEnvFile)
+      runHookScript("post-tool-use.sh", JSON.stringify({
+        session_id: sessionId, hook_event_name: "PostToolUse",
+        tool_use_id: "call_ac8_skill", tool_name: "Skill",
+        llm_tool_name: "Skill",
+        tool_input: { name: "deep-analyzer" },
+        tool_response: {
+          skill_path: "/home/.trae-cn/builtin_skills/deep-analyzer",
+          skill_detail: `# Deep Analyzer\n\n${detail}\n\nAnalyzes code deeply.`,
+          skill_type: "skill",
+        },
+        agent_id: "solo_agent", agent_type: "solo_agent",
+      }), tempEnvFile)
 
-    const events = readSpoolEvents(tempSpoolDir)
-    const skillEvent = events.find(e => e.kind === "skill.call.end")
+      const events = readSpoolEvents(tempSpoolDir)
+      const skillEvent = events.find(e => e.kind === "skill.call.end")
 
-    assert.ok(skillEvent, "AC8: skill trace generated")
-    assert.ok(skillEvent.payload.skillName, "AC8: skillName present")
-    assert.equal(skillEvent.payload.skillVersion, "1.2.0", "AC8: skillVersion present")
-    assert.ok(skillEvent.payload.triggerMode, "AC8: triggerMode present")
-    assert.ok(skillEvent.payload.params, "AC8: params present")
-    assert.ok(skillEvent.payload.skillPath, "AC8: skillPath present")
-    assert.equal(skillEvent.sessionID, sessionId, "AC9: linked to parent session")
-  } finally {
-    cleanupTest(tempSpoolDir, tempEnvFile, tempToolStateDir)
-  }
-})
+      assert.ok(skillEvent, "AC8: skill trace generated")
+      assert.ok(skillEvent.payload.skillName, "AC8: skillName present")
+      assert.equal(skillEvent.payload.skillVersion, version, "AC8: preserve the provided version without inventing one")
+      assert.ok(skillEvent.payload.triggerMode, "AC8: triggerMode present")
+      assert.ok(skillEvent.payload.params, "AC8: params present")
+      assert.ok(skillEvent.payload.skillPath, "AC8: skillPath present")
+      assert.equal(skillEvent.sessionID, sessionId, "AC9: linked to parent session")
+    } finally {
+      cleanupTest(tempSpoolDir, tempEnvFile, tempToolStateDir)
+    }
+  })
+}
 
 // ============================================================================
 // 调试: TRAE_DEBUG_RAW=1 原始输入保存

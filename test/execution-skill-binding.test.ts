@@ -89,6 +89,70 @@ test('binding: LlamaIndex root ownSkills 不包含子 Agent skill', () => {
     assert.ok(!names.includes('skill-b'), 'LlamaIndex parent must NOT inherit the sub-agent skill');
 });
 
+for (const framework of ['llamaindex', 'llama-index', 'qoder', 'qoder-cn', 'qoder-desktop', 'qoder-jetbrains', 'qoder-work']) {
+    test(`binding: ${framework} preserves root skill versions and child ownership`, () => {
+        assert.deepEqual(computeOwnSkills(framework, nestedFixture()), [
+            { name: 'skill-a', version: 1 },
+            { name: 'skill-c', version: null },
+        ]);
+        const tree = buildAgentCallTree(nestedFixture());
+        assert.ok(tree);
+        const child = subagentNode(tree, 'ses_kuafu');
+        assert.ok(child);
+        assert.deepEqual(extractExplicitSkillsFromNode(child), [{ name: 'skill-b', version: 2 }]);
+    });
+}
+
+for (const framework of ['qoder', 'qoder-cn', 'qwencode', 'qwen-code']) {
+    for (const shape of ['flat', 'request-history', 'response-messages', 'mixed', 'toolCalls-alias'] as const) {
+        test(`binding: ${framework} keeps root skill versions and child scope in ${shape} interactions`, () => {
+            const messages = nestedFixture();
+            const input = shape === 'request-history'
+                ? [{ requestMessages: messages.slice(0, -1), responseMessage: messages.at(-1) }]
+                : shape === 'response-messages'
+                    ? messages.map(responseMessage => ({ requestMessages: [], responseMessage }))
+                    : shape === 'mixed'
+                        ? [messages[0], { requestMessages: messages.slice(1, 4), responseMessage: messages[4] }, messages[5]]
+                        : shape === 'toolCalls-alias'
+                            ? messages.map(({ tool_calls, ...message }) => ({ requestMessages: [], responseMessage: { ...message, toolCalls: tool_calls } }))
+                            : messages;
+            const before = structuredClone(input);
+            assert.deepEqual(computeOwnSkills(framework, input), [
+                { name: 'skill-a', version: 1 },
+                { name: 'skill-c', version: null },
+            ]);
+            const child = messages[4];
+            const childInput = shape === 'flat'
+                ? [child]
+                : shape === 'request-history'
+                    ? [{ requestMessages: [child], responseMessage: null }]
+                    : [{ requestMessages: [], responseMessage: child }];
+            assert.deepEqual(computeOwnSkills(framework, childInput), [{ name: 'skill-b', version: 2 }]);
+            assert.deepEqual(input, before, 'skill extraction must not mutate the input');
+        });
+    }
+}
+
+for (const framework of ['langfuse-langgraph', 'llamaindex', 'qoder', 'qwencode']) {
+    test(`binding: ${framework} does not turn raw LLM prompt snapshots into Skill invocations`, () => {
+        const history = [{
+            role: 'assistant',
+            tool_calls: [{ function: { name: 'skill', arguments: JSON.stringify({ name: 'historical-skill', version: 7 }) } }],
+        }];
+        assert.deepEqual(computeOwnSkills(framework, [{
+            role: 'assistant', content: 'current reply', requestMessages: history,
+        }]), []);
+        const messages = nestedFixture();
+        messages[1].requestMessages = history;
+        messages[4].requestMessages = history;
+        assert.deepEqual(computeOwnSkills(framework, messages), [
+            { name: 'skill-a', version: 1 },
+            { name: 'skill-c', version: null },
+        ]);
+        assert.deepEqual(computeOwnSkills(framework, [messages[4]]), [{ name: 'skill-b', version: 2 }]);
+    });
+}
+
 test('binding: OpenClaw ownSkills keeps its content-block extractor', () => {
     assert.deepEqual(
         computeOwnSkills('openclaw', openclawSkillMessages as any[]),
@@ -101,6 +165,35 @@ test('binding: Qoder scopes root skills to the root Agent and excludes Subagent 
     const names = own.map(skill => skill.name).sort();
     assert.deepEqual(names, ['skill-a', 'skill-c']);
     assert.ok(!names.includes('skill-b'));
+});
+
+test('binding: QwenPaw root ownSkills excludes subagent skill spans', () => {
+    const own = computeOwnSkills('qwenpaw', [
+        {
+            role: 'assistant',
+            content: 'root answer',
+            tool_calls: [{
+                id: 'root-skill',
+                type: 'function',
+                state: 'success',
+                function: { name: 'skill.root-skill', arguments: '{}' },
+                skill: { name: 'root-skill', version: 1 },
+            }],
+        },
+        {
+            role: 'subagent',
+            subagent_session_id: 'sub-1',
+            content: 'worker answer',
+            tool_calls: [{
+                id: 'child-skill',
+                type: 'function',
+                state: 'success',
+                function: { name: 'skill.child-skill', arguments: '{}' },
+                skill: { name: 'child-skill', version: 2 },
+            }],
+        },
+    ]);
+    assert.deepEqual(own, [{ name: 'root-skill', version: 1 }]);
 });
 
 test('snapshot shrink: only trusted server-side framework capabilities can enable Qoder replacement', () => {

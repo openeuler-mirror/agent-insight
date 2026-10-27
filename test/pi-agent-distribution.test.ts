@@ -284,20 +284,26 @@ test("PowerShell bootstrap installs a valid Pi bundle end to end", async (t) => 
       fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), JSON.stringify({ packages: [process.argv[3]] }));
     }
   `)
-  fs.writeFileSync(
-    path.join(binDir, "pi.cmd"),
-    '@echo off\r\nnode "%~dp0pi-stub.cjs" %*\r\nexit /b %errorlevel%\r\n',
-  )
+  if (process.platform === "win32") {
+    fs.writeFileSync(
+      path.join(binDir, "pi.cmd"),
+      '@echo off\r\nnode "%~dp0pi-stub.cjs" %*\r\nexit /b %errorlevel%\r\n',
+    )
+  } else {
+    fs.writeFileSync(
+      path.join(binDir, "pi"),
+      '#!/bin/sh\nexec node "$(dirname "$0")/pi-stub.cjs" "$@"\n',
+      { mode: 0o700 },
+    )
+  }
   const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
     const encodedInstaller = Buffer.from(installer, "utf16le").toString("base64")
     const child = spawn("pwsh", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodedInstaller], {
       env: {
-        ...process.env,
+        ...isolatedHomeEnv(homeDir),
         AGENT_INSIGHT_API_KEY: "test-pi-key",
         AGENT_INSIGHT_BASE_URL: origin,
         AGENT_INSIGHT_HOME: agentInsightHome,
-        HOME: homeDir,
-        USERPROFILE: homeDir,
         PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
       },
       windowsHide: true,

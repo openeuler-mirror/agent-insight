@@ -1,6 +1,8 @@
 ---
 title: "Agent Insight"
-description: "面向智能体应用的可观测、评测与 Skill 优化平台"
+description: "介绍 Agent Insight 的核心能力、平台结构和典型工作流，帮助用户了解智能体观测、评测与 Skill 优化的使用入口。"
+keywords: ["Agent Insight", "智能体平台", "可观测性", "评测", "Skill 优化"]
+changefreq: monthly
 ---
 
 # Agent Insight

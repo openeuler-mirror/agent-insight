@@ -1,6 +1,8 @@
 ---
 title: "联网搜索"
-description: "联网搜索 Provider 与密钥管理"
+description: "介绍联网搜索的 Provider、密钥和工具配置，以及启用方式与能力边界。"
+keywords: ["Agent Insight", "联网搜索", "搜索配置", "Tavily"]
+changefreq: monthly
 ---
 
 # 联网搜索

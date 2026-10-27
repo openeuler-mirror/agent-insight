@@ -57,6 +57,7 @@ async function fixture(t: TestContext) {
         else if (url.pathname.endsWith('mcts-xgovernor-collector.zip')) res.end(mctsXgovernorCollectorBundle(repository).buffer);
         else if (url.pathname === '/api/reliability/install-tokens') res.end('{"installToken":"fixture-token","user":"fixture-user"}');
         else if (url.pathname === '/api/ingest/setup/bundle' && url.searchParams.get('name') === 'client') res.end(clientBundle);
+        else if (url.pathname === '/api/ingest/otel/v1/traces') res.end('{"status":"accepted","received":0}');
         else if (url.pathname.includes('/api/ingest/')) res.end('{}');
         else res.end('fixture');
     });
@@ -83,7 +84,7 @@ async function fixture(t: TestContext) {
     const response = await getSetup(new Request(`${origin}/api/ingest/setup?yes=1&nokey=1&frameworks=mcts-xgovernor&key=synthetic-key`, { headers: { 'x-platform': 'unix', host: new URL(origin).host, 'x-forwarded-proto': 'http' } }));
     setup = (await response.text()).replace('FORCE_NO_KEY=true', 'FORCE_NO_KEY=false');
     installer = await (await getInstaller(new Request(`${origin}/api/ingest/setup/mcts-xgovernor`))).text();
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, AGENT_INSIGHT_HOME: insight };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, AGENT_INSIGHT_HOME: insight, AGENT_INSIGHT_BASE_URL: origin, AGENT_INSIGHT_OTLP_ENDPOINT: `${origin}/api/ingest/otel/v1/traces` };
     for (const key of ['AGENT_INSIGHT_DATA_DIR', 'AGENT_INSIGHT_MCTS_REPO_DIR', 'AGENT_INSIGHT_MCTS_PYTHON', 'AGENT_INSIGHT_MCTS_TRACE_LAUNCHER', 'AGENT_INSIGHT_MCTS_REQUIRE_REPO', 'AGENT_INSIGHT_NO_KEY', 'AGENT_INSIGHT_FRAMEWORKS', 'AGENT_INSIGHT_CLIENT_SOURCE']) delete env[key];
     return { root, repoDir, insight, origin, configEnv, requests, env };
 }
@@ -136,10 +137,10 @@ test('one copied command persists configuration before client startup, supports 
 
 test('invalid MCTS environment stops the one-command installer before registration or startup', async t => {
     const f = await fixture(t);
-    await fs.writeFile(path.join(f.repoDir, '.venv/bin/python'), '#!/bin/sh\necho 3.11\nexit 42\n', { mode: 0o700 });
+    await fs.writeFile(path.join(f.repoDir, '.venv/bin/python'), '#!/bin/sh\necho 3.10\n', { mode: 0o700 });
     let result = await execute(mctsInstallCommand(`${f.origin}/setup`, f.repoDir), f.env, f.root);
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /datasets/);
+    assert.match(result.stderr, /3.11/);
     assert.equal(f.requests.includes('/api/reliability/install-tokens'), false);
     assert.equal(readMctsEnvFile(f.insight).AGENT_INSIGHT_MCTS_REPO_DIR, '/old/path');
     await fs.writeFile(path.join(f.repoDir, '.venv/bin/python'), '#!/bin/sh\necho 3.11\n', { mode: 0o700 });
@@ -153,6 +154,19 @@ test('invalid MCTS environment stops the one-command installer before registrati
     assert.match(result.stderr, /无法连接.*xGovernor/);
     assert.equal(f.requests.includes('/api/reliability/install-tokens'), false);
     await assert.rejects(fs.access(path.join(f.insight, 'client-started')));
+});
+
+test('collector installation only checks common MCTS dependencies without the SWE launcher or datasets', async t => {
+    const f = await fixture(t);
+    await fs.rm(path.join(f.repoDir, 'testcases_union/run_union.sh'));
+    await fs.writeFile(path.join(f.repoDir, '.venv/bin/python'), '#!/bin/sh\ncase "$2" in *find_spec*) exit 42;; esac\necho 3.11\n', { mode: 0o700 });
+    const result = await execute(`node scripts/agent-trace-collectors/mcts-xgovernor-proxy/install.cjs --home '${f.env.HOME}'`, {
+        ...f.env, AGENT_INSIGHT_API_KEY: 'synthetic-key', AGENT_INSIGHT_MCTS_REPO_DIR: f.repoDir,
+    }, repository);
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    assert.equal(readMctsEnvFile(f.insight).AGENT_INSIGHT_MCTS_REPO_DIR, f.repoDir);
+    const cfg = JSON.parse(await fs.readFile(path.join(f.insight, 'collectors/mcts-xgovernor-proxy/config.json'), 'utf8'));
+    assert.equal(cfg.mctsRepoDir, f.repoDir);
 });
 
 test('client registration failure is not reported as a ready MCTS experiment client', async t => {

@@ -1,4 +1,5 @@
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
+import { sessionTraceRelations } from '@/lib/trace/session-relations';
 import { resolveUser } from '@/lib/auth/auth';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
@@ -273,8 +274,6 @@ export async function GET(request: Request) {
         const rawInteraction = searchParams.get('source') === 'raw';
         const relationPlan = !rawInteraction && username && username === session.user
             ? await collaborationTraceProjection.plan(username) : null;
-        const parentAgent = relationPlan?.unavailable ? { state: 'unavailable' }
-            : relationPlan?.parentAgents?.[taskId] ?? null;
         const reportedInteractions = relationPlan && username
             ? await collaborationTraceProjection.interactions(username, taskId, (id: string) => loadParsedSession(id, username || undefined), relationPlan) : null;
         const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
@@ -294,6 +293,11 @@ export async function GET(request: Request) {
             });
         }
 
+        const traceRelations = relationPlan && username && (view === 'structure' || view === 'full')
+            ? await sessionTraceRelations(db, username, [...new Set<string>([taskId, ...displayInteractions.flatMap(item =>
+                item._collaboration?.taskId ? [item._collaboration.taskId] : [])])], relationPlan) : undefined;
+        const parentAgent = traceRelations?.[taskId]?.parent ?? null;
+
         if (view === 'structure') {
             return NextResponse.json({
                 taskId: session.taskId,
@@ -307,6 +311,7 @@ export async function GET(request: Request) {
                 ...(execution ? { execution } : {}),
                 ...(thread ? { thread } : {}),
                 parentAgent,
+                traceRelations,
                 ...(collaborationProjection ? {
                     collaborationProjection: {
                         sourceType: collaborationProjection.sourceType,
@@ -359,6 +364,7 @@ export async function GET(request: Request) {
             startTime: session.startTime.getTime(),
             interactions: displayInteractions,
             parentAgent,
+            traceRelations,
             ...(collaborationProjection ? {
                 collaborationProjection: {
                     sourceType: collaborationProjection.sourceType,

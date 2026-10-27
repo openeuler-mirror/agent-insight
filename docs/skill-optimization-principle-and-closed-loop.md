@@ -1,3 +1,10 @@
+---
+title: "Skill 优化：工作原理、闭环验证机制与能力边界"
+description: "说明 Skill 优化中的问题归并、编辑约束和自验证闭环，以及候选版本生成的能力边界。"
+keywords: ["Agent Insight", "Skill 优化", "问题归并", "自验证", "版本迭代"]
+changefreq: monthly
+---
+
 # Skill 优化：工作原理、闭环验证机制与能力边界
 
 > 适用版本：平台内置「Skill 优化」特性（`skill-optimizer-chat` agent，见 `src/lib/skill-opt-bridge.ts:34`）

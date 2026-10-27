@@ -1,3 +1,10 @@
+---
+title: "TRAE Collector 架构说明"
+description: "说明 TRAE Collector 如何采集 Hook 事件、持久化日志并增量上传，以及相关模块与测试发布流程。"
+keywords: ["Agent Insight", "Trae IDE", "Trace 采集器", "增量上传"]
+changefreq: monthly
+---
+
 # TRAE Collector 架构说明
 
 > Trae IDE 采集器的内部架构、数据流与关键设计决策。面向维护 `scripts/trae-collector/` 的开发者。
@@ -115,6 +122,8 @@ scripts/trae-collector/
 - **零侵入**：Hook 脚本由 TRAE IDE 在生命周期节点自动调用，无需修改 IDE 源码
 - **快速返回**：脚本只做 JSON 序列化 + 文件追加，不阻塞 IDE 主流程
 - **跨平台**：Linux/macOS 使用 Bash 脚本；Windows 使用 PowerShell 脚本；功能完全镜像
+
+Bash `post-tool-use.sh` 从 `tool_response.skill_detail` 提取中英文版本字段，复用 Hook 已依赖的 Python 正则，兼容 macOS 自带工具链；无版本时不生成 `skillVersion`。
 
 **事件流转**：
 ```

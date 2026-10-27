@@ -1,6 +1,8 @@
 ---
 title: "Skill 生成"
 description: "在 Skill 工作台会话中通过对话生成并发布 Skill"
+keywords: ["Agent Insight", "Skill 生成", "对话工作台", "版本发布"]
+changefreq: monthly
 ---
 
 # Skill 生成

@@ -171,7 +171,7 @@ export function normalizeLangfuseOtlpTraces(
             attributes,
           });
         } catch (err) {
-          console.warn('[Langfuse] Failed to normalize span', {
+          console.error('[Langfuse] Failed to normalize span', {
             traceId: asString(span?.traceId),
             spanId: asString(span?.spanId),
             name: asString(span?.name),

@@ -53,8 +53,10 @@ test('benchmark result counts only the latest run after a Case retry', async () 
   const { getBenchmarkExperimentResult } = await import('@/lib/benchmark/experiment-result-service')
   const experimentDelegate = storage.prisma.experiment as object
   const runDelegate = storage.prisma.benchmarkCaseRun as object
+  const caseDelegate = storage.prisma.experimentCase as object
   const originalFindExperiment = Reflect.get(experimentDelegate, 'findFirst')
   const originalFindRuns = Reflect.get(runDelegate, 'findMany')
+  const originalCountCases = Reflect.get(caseDelegate, 'count')
   const sharedResult = {
     status: 'done',
     verdict: 'pass',
@@ -106,12 +108,17 @@ test('benchmark result counts only the latest run after a Case retry', async () 
     }],
   })
   let observedOrderBy: unknown
+  let observedCaseFilter: unknown
 
   Reflect.set(experimentDelegate, 'findFirst', async () => ({
     id: 'experiment-1',
     status: 'done',
-    benchmarkBinding: { adapterKey: 'swe-bench', expectedCaseCount: 1 },
+    benchmarkBinding: { adapterKey: 'swe-bench', expectedCaseCount: 500 },
   }))
+  Reflect.set(caseDelegate, 'count', async (args: { where?: unknown }) => {
+    observedCaseFilter = args.where
+    return 1
+  })
   Reflect.set(runDelegate, 'findMany', async (args: { orderBy?: unknown }) => {
     observedOrderBy = args.orderBy
     return [
@@ -128,6 +135,7 @@ test('benchmark result counts only the latest run after a Case retry', async () 
       pageSize: 20,
     })
     assert.deepEqual(observedOrderBy, [{ createdAt: 'desc' }, { id: 'desc' }])
+    assert.deepEqual(observedCaseFilter, { experimentId: 'experiment-1', deletedAt: null })
     assert.deepEqual(result.progress, { total: 1, completed: 1, pending: 0, coverageRate: 100 })
     assert.deepEqual(result.outcomes, { pass: 1, warn: 0, fail: 0, unknown: 0 })
     assert.deepEqual(result.metrics.primary, {
@@ -146,6 +154,7 @@ test('benchmark result counts only the latest run after a Case retry', async () 
   } finally {
     Reflect.set(experimentDelegate, 'findFirst', originalFindExperiment)
     Reflect.set(runDelegate, 'findMany', originalFindRuns)
+    Reflect.set(caseDelegate, 'count', originalCountCases)
   }
 })
 

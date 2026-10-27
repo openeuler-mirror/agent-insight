@@ -1,3 +1,10 @@
+---
+title: "Docker 镜像发布"
+description: "介绍 Agent Insight 多架构 Docker 镜像的构建、发布验证及离线镜像包生成流程。"
+keywords: ["Agent Insight", "Docker", "多架构镜像", "镜像发布", "离线部署"]
+changefreq: monthly
+---
+
 # Docker 镜像发布
 
 本文面向维护者，说明如何基于已发布的 npm 包构建并发布 Docker 镜像。用户部署镜像时请看 README 或用户指南，不需要执行本文命令。
@@ -29,6 +36,8 @@ docker buildx build \
 ```
 
 本地镜像只用于测试和交付候选版本。正式发布仍使用根目录 `Dockerfile`，并从 npm 安装明确的 `AGENT_INSIGHT_VERSION`。
+
+已启用源码挂载的离线部署可使用 `bash scripts/update-source.sh --zip <源码.zip>` 更新应用，使用方式见 [用户指南](../user-guide/quickstart.md)。脚本在宿主机解压并识别源码根目录，通过 `SOURCE_RELEASE` 为 Compose 提供源码路径，再按手动命令执行 `up -d --force-recreate --pull never --no-build`，不额外校验 Compose 挂载，也不等待健康检查。Compose 的源码挂载必须引用该变量；镜像依赖及已安装的 entrypoint 不变，数据库准备和 schema 同步仍由该入口执行。新源码必须兼容镜像依赖与现有数据库契约，脚本不自动备份或回滚数据库。
 
 ## 前置条件
 

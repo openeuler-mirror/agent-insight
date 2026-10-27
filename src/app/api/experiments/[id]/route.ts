@@ -1,3 +1,6 @@
+import { agentEvaluationTraceId } from '@/lib/evaluators/evaluator-skills';
+import { casePagination, locateCasePage } from '@/lib/engine/experiment/case-navigation';
+import { normalizeAgentOptions, validateDefinition } from '../../../../../packages/agent-runtime/index.cjs';
 // 实验详情：实验元信息 + 服务端聚合（整体均分 overall / 评估器分解 breakdown /
 // 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
 // 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
@@ -78,8 +81,8 @@ export async function GET(
     const url = new URL(req.url);
     const q = url.searchParams;
     const { username } = await resolveUser(req, q.get('user'));
-    const casePageSize = Math.min(Math.max(Number(q.get('casePageSize')) || 20, 1), 100);
-    const casePageRaw = Math.max(Number(q.get('casePage')) || 1, 1);
+    const { casePage: casePageRaw, casePageSize } = casePagination(q.get('casePage'), q.get('casePageSize'));
+    const locateCaseId = q.get('locateCaseId') || '';
     const wantCaseId = q.get('caseId') || '';
 
     const experimentMeta = await prisma.experiment.findFirst({
@@ -131,10 +134,15 @@ export async function GET(
       try { benchmarkManifest = getBenchmarkAdapter(benchmarkAdapterKey).manifest; } catch { benchmarkManifest = null; }
     }
     const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
-    const savedAgentOptions = asRecord(asRecord(configSnapshot?.runConfig)?.agentOptions);
-    const savedMctsOptions = asRecord(savedAgentOptions?.mcts);
-    const executionAgentOptions = experiment.scope === 'benchmark' && benchmarkAdapterKey === 'swe-bench'
-      && savedMctsOptions && Object.keys(savedMctsOptions).length > 0 ? savedAgentOptions : null;
+    const executionConfig = asRecord(configSnapshot?.runConfig) || asRecord(configSnapshot?.executionTarget);
+    let executionAgentOptions = null;
+    let executionParameterDefinition = null;
+    if (executionConfig?.agentParameterDefinition) {
+      try {
+        executionParameterDefinition = validateDefinition(executionConfig.agentParameterDefinition);
+        executionAgentOptions = normalizeAgentOptions(executionConfig.agentOptions, executionParameterDefinition) || null;
+      } catch { executionParameterDefinition = null; }
+    }
     const baselineTrendPromise = ['', 'benchmark'].includes(experiment.scope)
       ? getExperimentBaselineTrend({ experimentId: experiment.id, user: experiment.user }).catch((error) => {
           console.error('[Experiment baseline trend]', error);
@@ -153,25 +161,28 @@ export async function GET(
     const allExperimentCases = await prisma.experimentCase.findMany({
       where: { experimentId: id, deletedAt: null },
       select: { id: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     const allExperimentCaseIds = allExperimentCases.map((item: Pick<ExperimentCase, 'id'>) => item.id);
     const caseTotal = allExperimentCaseIds.length;
-    const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
-    const casePage = Math.min(casePageRaw, casePages);
+    const { casePage, locatedCaseId } = locateCasePage(allExperimentCaseIds, casePageRaw, casePageSize, wantCaseId || locateCaseId);
     const pagedCases = await prisma.experimentCase.findMany({
       where: { experimentId: id, deletedAt: null, ...(wantCaseId ? { id: wantCaseId } : {}) },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
     const benchmarkRunByCase = new Map<string, {
+      submissionSource: string;
       status: string;
       failureCode: string | null;
       failureMessage: string | null;
       progressJson: string | null;
       taskEnvelopeJson: string | null;
       publicPayloadJson: string | null;
+      runFactsJson: string | null;
+      cleanupJson: string | null;
       datasetCase: { externalCaseId: string } | null;
       artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
       evaluations: Array<{
@@ -581,6 +592,15 @@ export async function GET(
         durationMs: r.durationMs,
       })),
     );
+    const traceIds = results.map(result => agentEvaluationTraceId(result.evidence)).filter((id): id is string => Boolean(id));
+    const recordedTraces = username && traceIds.length ? await prisma.execution.findMany({
+      where: { user: username, taskId: { in: traceIds } }, select: { taskId: true },
+    }) : [];
+    const availableTraces = new Set(recordedTraces.map((trace: { taskId: string | null }) => trace.taskId));
+    const resultsWithTraces = results.map(result => {
+      const traceId = agentEvaluationTraceId(result.evidence);
+      return { ...result, evaluationTraceId: traceId && availableTraces.has(traceId) ? traceId : null };
+    });
     const baselineTrend = await baselineTrendPromise;
 
     return NextResponse.json({
@@ -600,11 +620,12 @@ export async function GET(
       preset: experiment.preset,
       skillContext: parseJsonValue(experiment.skillContextJson),
       configSnapshot: experiment.scope === 'benchmark' ? null : configSnapshot,
-      executionConcurrency: experiment.scope === 'benchmark'
+      executionConcurrency: configSnapshot?.submissionSource === 'imported' ? null : experiment.scope === 'benchmark'
         ? Number((configSnapshot?.runConfig as Record<string, unknown> | undefined)?.executionConcurrency) || 1
         : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
           ? Number(configSnapshot.executionConcurrency) || 1 : null,
       executionAgentOptions,
+      executionParameterDefinition,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
@@ -630,11 +651,13 @@ export async function GET(
           ? {
               workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,
               platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
-              agentOptions: (configSnapshot.runConfig as Record<string, unknown>).agentOptions || null,
+              agent: String((configSnapshot.runConfig as Record<string, unknown>).agent || ''),
+              agentOptions: executionAgentOptions,
+              executionProfile: (configSnapshot.runConfig as Record<string, unknown>).executionProfile || null,
               model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
               timeoutSeconds: Number((configSnapshot.runConfig as Record<string, unknown>).timeoutSeconds) || null,
             }
-          : configSnapshot?.executionTarget || null,
+          : configSnapshot?.executionTarget ? { ...asRecord(configSnapshot.executionTarget), agentOptions: executionAgentOptions } : null,
       },
       cases: pagedCases.map((c) => {
         const traceState = traceStateByCase.get(c.id);
@@ -651,6 +674,8 @@ export async function GET(
         const benchmarkRun = benchmarkRunByCase.get(c.id);
         const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
         const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
+        const environmentFacts = asRecord(asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.execution);
+        const cleanupFacts = asRecord(parseJsonValue(benchmarkRun?.cleanupJson || null));
         const benchmarkWorkspace = asRecord(benchmarkTask?.workspace);
         const benchmarkPayload = benchmarkRun
           ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
@@ -705,6 +730,7 @@ export async function GET(
           traceAttemptStatus: traceState?.attemptStatus || null,
           ...(benchmarkRun ? {
             benchmark: {
+              submissionSource: benchmarkRun.submissionSource,
               adapterKey: benchmarkAdapterKey,
               displayName: benchmarkManifest?.displayName || benchmarkAdapterKey,
               presentation: benchmarkManifest?.presentation || null,
@@ -740,6 +766,13 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              environmentFacts: environmentFacts ? {
+                imageId: typeof environmentFacts.imageId === 'string' ? environmentFacts.imageId : null,
+                toolBoundary: typeof environmentFacts.toolBoundary === 'string' ? environmentFacts.toolBoundary : null,
+                controllerBoundary: typeof environmentFacts.controllerBoundary === 'string' ? environmentFacts.controllerBoundary : null,
+                network: typeof environmentFacts.network === 'string' ? environmentFacts.network : null,
+              } : null,
+              cleanupStatus: typeof cleanupFacts?.status === 'string' ? cleanupFacts.status : null,
               progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
               workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
@@ -754,7 +787,7 @@ export async function GET(
           } : {}),
         };
       }),
-      results,
+      results: resultsWithTraces,
       progress,
       traceProgress,
       executionProgress: itemProgress?.executionProgress || null,
@@ -763,6 +796,7 @@ export async function GET(
       caseTotal,
       casePage,
       casePageSize,
+      locatedCaseId,
     });
   } catch (error) {
     console.error('[Experiment Detail Error]', error);

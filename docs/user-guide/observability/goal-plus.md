@@ -1,3 +1,10 @@
+---
+title: "Goal Plus 观测接入"
+description: "介绍 Goal Plus 在 Pi 中的采集器安装、自动激活、主从链路展示及诊断卸载方法。"
+keywords: ["Agent Insight", "Goal Plus", "Pi", "主从链路", "观测接入"]
+changefreq: monthly
+---
+
 # Goal Plus 观测接入
 
 Agent Insight 对 Goal Plus 的当前接入目标是：当 Goal Plus 运行在 Pi 中时，链路追踪保留 Pi 原生主 Trace，并把 Goal Plus 启动的 Pi worker 作为子 Agent 展示在该主 Trace 下。

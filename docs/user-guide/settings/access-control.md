@@ -1,6 +1,8 @@
 ---
 title: "客户端安装"
 description: "生成客户端接入命令并获取当前账号 API Key"
+keywords: ["Agent Insight", "客户端安装", "访问控制", "身份认证"]
+changefreq: monthly
 ---
 
 # 客户端安装

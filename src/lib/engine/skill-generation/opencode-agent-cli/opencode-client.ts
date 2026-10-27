@@ -870,8 +870,9 @@ export class AgentInsight {
       const diagnostic = extractStructuredAgentError(value);
       if (!diagnostic) return;
       const classified = classifyAgentExitFailure({ platform: 'opencode', diagnostic, structured: true });
-      failExecution(classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR',
-        `opencode 会话报告模型错误: ${sanitizeAgentDiagnostic(diagnostic)}`);
+      failExecution(classified.code === 'AGENT_EXIT_NONZERO' ? 'MODEL_ERROR' : classified.code,
+        classified.code === 'AGENT_EXIT_NONZERO'
+          ? `opencode 会话报告运行错误: ${sanitizeAgentDiagnostic(diagnostic)}` : classified.message);
     };
     let promptResponseText = "";
     let hasNonHeartbeatEvent = false;

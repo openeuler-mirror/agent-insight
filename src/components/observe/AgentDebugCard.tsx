@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -24,6 +24,10 @@ import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { ExpandableText } from '@/components/text/ExpandableText';
 import { TermPopover } from '@/components/text/TermPopover';
 import { apiFetch } from '@/lib/client/api';
+import { DiagnosisProgressFeed } from './DiagnosisProgressFeed';
+import type { DiagnosisProgressSnapshot } from '@/lib/engine/agent-debug/progress-types';
+import { getModuleActivity, getModulePresentation, getNewModuleSequences, preserveDiagnosisProgress } from './agent-debug-presentation';
+import { DiagnosisModuleStatus } from './DiagnosisModuleStatus';
 import type {
   AgentDebugFinding,
   AgentDebugIssue,
@@ -56,10 +60,13 @@ export interface TraceExplicitError {
 }
 
 interface AgentDebugResponse {
+  progress?: DiagnosisProgressSnapshot | null;
   report?: AgentDebugReportPayload | null;
   row?: {
+    id?: string;
     status?: string;
     errorMessage?: string | null;
+    ranAt?: string;
   } | null;
   reportId?: string;
   status?: string;
@@ -225,27 +232,46 @@ function optimisticSkillsAnalysisFailed(errorMessage: string, interactionHash?: 
   };
 }
 
-export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors = [], onNodeRefClick }: AgentDebugCardProps) {
+export function AgentDebugCard(props: AgentDebugCardProps) {
+  return <AgentDebugCardContent key={props.executionId} {...props} />;
+}
+
+function AgentDebugCardContent({ executionId, user, locale, traceExplicitErrors = [], onNodeRefClick }: AgentDebugCardProps) {
   const zh = locale === 'zh';
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AgentDebugReportPayload | null>(null);
   const [skillsAnalysis, setSkillsAnalysis] = useState<AgentDebugSkillsAnalysis | null>(null);
   const [error, setError] = useState('');
+  const [requestError, setRequestError] = useState(false);
+  const [progress, setProgress] = useState<DiagnosisProgressSnapshot | null>(null);
+  const requestVersion = useRef(0);
+  const submittingRef = useRef(false);
+  const skillsRequestVersion = useRef(0);
+  const [skillsSubmitting, setSkillsSubmitting] = useState(false);
+  const updateSkillsAnalysis = useCallback((next: AgentDebugSkillsAnalysis | null) => {
+    skillsRequestVersion.current += 1;
+    setSkillsAnalysis(next);
+  }, []);
+  const [taskStatus, setTaskStatus] = useState('');
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const observedRunningRef = useRef(false);
   const requestedSkillsAnalysisRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!executionId) return;
     let cancelled = false;
+    const version = requestVersion.current;
     apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug`)
       .then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
       .then((data: AgentDebugResponse) => {
-        if (cancelled) return;
+        if (cancelled || version !== requestVersion.current) return;
         applyAgentDebugResponse(data);
       })
       .catch(err => {
-        if (cancelled) return;
+        if (cancelled || version !== requestVersion.current) return;
         setLoading(false);
+        setRequestError(true);
         setError(err instanceof Error ? err.message : String(err));
       });
     return () => { cancelled = true; };
@@ -253,17 +279,16 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
 
   useEffect(() => {
     if (!executionId) return;
-    setSkillsAnalysis(null);
-    requestedSkillsAnalysisRef.current.clear();
     let cancelled = false;
+    const version = skillsRequestVersion.current;
     apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`)
       .then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
       .then((data: AgentDebugSkillsAnalysisResponse) => {
-        if (cancelled) return;
+        if (cancelled || version !== skillsRequestVersion.current) return;
         applySkillsAnalysisResponse(data);
       })
       .catch(() => {
-        if (!cancelled) setSkillsAnalysis(null);
+        if (!cancelled && version === skillsRequestVersion.current) setSkillsAnalysis(null);
       });
     return () => { cancelled = true; };
   }, [executionId]);
@@ -272,17 +297,23 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
     if (!executionId || !loading) return;
     let cancelled = false;
 
+    let inFlight = false;
     const poll = async () => {
+      if (inFlight || submittingRef.current) return;
+      inFlight = true;
+      const version = requestVersion.current;
       try {
         const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug`);
         const data = await res.json().catch(() => ({})) as AgentDebugResponse;
-        if (cancelled) return;
+        if (cancelled || version !== requestVersion.current) return;
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         applyAgentDebugResponse(data);
       } catch (err) {
-        if (cancelled) return;
-        setLoading(false);
+        if (cancelled || version !== requestVersion.current) return;
+        setRequestError(true);
         setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        inFlight = false;
       }
     };
 
@@ -295,9 +326,17 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
 
   async function run(force = false) {
     if (!executionId || loading) return;
+    requestVersion.current += 1;
+    submittingRef.current = true;
+    setProgress(null);
+    setReport(null);
     observedRunningRef.current = true;
     setLoading(true);
     setError('');
+    setRequestError(false);
+    setTaskStatus('submitting');
+    setStartedAt(Date.now());
+    setLastSyncedAt(null);
     requestSkillsAnalysis(force);
     try {
       const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug`, {
@@ -314,12 +353,21 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
       applyAgentDebugResponse(data);
     } catch (err) {
       setLoading(false);
+      setRequestError(true);
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      submittingRef.current = false;
     }
   }
 
   function applyAgentDebugResponse(data: AgentDebugResponse) {
     const status = agentDebugStatus(data);
+    setProgress(previous => preserveDiagnosisProgress(previous, data.progress || null, data.row?.id || data.reportId));
+    setTaskStatus(status);
+    setRequestError(false);
+    setLastSyncedAt(Date.now());
+    const timestamp = data.row?.ranAt ? Date.parse(data.row.ranAt) : NaN;
+    if (Number.isFinite(timestamp)) setStartedAt(timestamp);
     const nextReport = data.report || null;
     if (status === 'running') {
       observedRunningRef.current = true;
@@ -360,6 +408,8 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
   async function ensureSkillsAnalysis(force = false) {
     if (!executionId || !user) return;
     const currentHash = skillsAnalysis?.interactionHash;
+    const version = ++skillsRequestVersion.current;
+    setSkillsSubmitting(true);
     setSkillsAnalysis(optimisticSkillsAnalysisRunning(currentHash));
     try {
       const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`, {
@@ -368,17 +418,22 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
         body: JSON.stringify({ user, force }),
       });
       const data = await res.json().catch(() => ({})) as AgentDebugSkillsAnalysisResponse;
+      if (version !== skillsRequestVersion.current) return;
       applySkillsAnalysisResponse(data);
+      if (res.status === 409 && isSkillsAnalysisRunningResponse(data)) return;
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     } catch (err) {
+      if (version !== skillsRequestVersion.current) return;
       const message = err instanceof Error ? err.message : String(err);
       setSkillsAnalysis(prev => optimisticSkillsAnalysisFailed(message, prev?.interactionHash || currentHash));
+    } finally {
+      setSkillsSubmitting(false);
     }
   }
 
   return (
     <div className="mb-6 space-y-4">
-      {!report && !error && !loading && (
+      {!report && !error && !loading && !taskStatus && (
         <AssistantArticle>
           <div className="relative overflow-hidden rounded-lg border border-card-border bg-card shadow-sm">
             <div className="relative p-5">
@@ -401,7 +456,7 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
               </div>
 
               <div className="mt-4 flex flex-wrap items-center gap-4 text-[11.5px] text-foreground-muted">
-                <span className="inline-flex items-center gap-1"><Clock className="size-3" /> {zh ? '预计 8-30s' : '8-30s expected'}</span>
+                <span className="inline-flex items-center gap-1"><Clock className="size-3" /> {zh ? '按实际进展分段更新' : 'Updates as work progresses'}</span>
                 <span className="inline-flex items-center gap-1"><BrainCircuit className="size-3" /> {zh ? '初筛 + 根因定位' : 'Phase 1 + Phase 2'}</span>
                 <span className="inline-flex items-center gap-1"><FileText className="size-3" /> {zh ? '报告自动归档' : 'Report archived'}</span>
               </div>
@@ -417,89 +472,251 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
         </AssistantArticle>
       )}
 
-      {loading && (
-        <>
-          <UserArticle>{zh ? '启动智能诊断（四个认知模块 + System 异常检查）' : 'Start AgentDebug diagnosis'}</UserArticle>
-          <AssistantArticle meta={zh ? '诊断进行中' : 'Running diagnosis'}>
-            <div className="rounded-lg border border-card-border bg-card p-5 shadow-sm">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-[14.5px] font-bold tracking-tight text-foreground">AgentDebug · {zh ? '初筛 + 根因定位' : 'Original two-phase pipeline'}</div>
-                  <div className="mt-0.5 text-[11.5px] text-foreground-muted">{zh ? '正在抽取 Memory / Reflection / Planning / Action 与 System 模块，并进入根因联合定位。' : 'Extracting Memory / Reflection / Planning / Action and System modules, then Phase 2 critical-error analysis.'}</div>
-                </div>
-                <Loader2 className="size-5 animate-spin text-primary" />
-              </div>
-              <div className="space-y-2">
-                {MODULES.map((item) => (
-                  <ProgressRow key={item.key} label={`${item.en} · ${zh ? item.zh : item.key}`} />
-                ))}
-              </div>
-              <div className="mt-4 border-t border-border pt-3 text-[11.5px] text-foreground-muted">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="size-1.5 rounded-full bg-primary" />
-                  {zh ? '载入 Execution.interactions · 映射左侧节点 · 调用 AgentDebug detector' : 'Loading interactions · mapping trace nodes · calling AgentDebug detectors'}
-                </span>
-              </div>
-            </div>
-          </AssistantArticle>
-          {skillsAnalysis && (
-            <AssistantArticle meta={zh ? 'Skills 分析' : 'Skills analysis'}>
-              <SkillsAnalysisSection
-                executionId={executionId}
-                user={user}
-                zh={zh}
-                analysis={skillsAnalysis}
-                onAnalysisUpdate={setSkillsAnalysis}
-              />
-            </AssistantArticle>
-          )}
-        </>
-      )}
-
-      {error && !loading && (
-        <AssistantArticle meta={zh ? '诊断失败' : 'Diagnosis failed'}>
-          <div className="flex items-start gap-2 rounded-lg border border-error-border bg-error-subtle p-4 text-sm text-error">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="font-semibold">{zh ? 'AgentDebug 运行失败' : 'AgentDebug failed'}</div>
-              <div className="mt-1 break-words text-xs leading-5">{error}</div>
-              <Button className="mt-3" variant="outline" size="sm" onClick={() => run(true)}>
-                <RefreshCw className="size-3.5" />
-                {zh ? '重试' : 'Retry'}
-              </Button>
-            </div>
+      {(loading || error || report || taskStatus) && (
+        <AssistantArticle meta={zh ? '智能诊断' : 'Diagnosis'}>
+          <div className="space-y-3">
+            <DiagnosisTaskSummary
+              loading={loading} status={taskStatus} requestError={requestError} error={error}
+              report={loading || error ? null : report} startedAt={startedAt} lastSyncedAt={lastSyncedAt}
+              progress={progress} zh={zh} onRetry={() => run(true)}
+            />
+            <DiagnosisModuleCards key={progress?.runId || "legacy"}
+              loading={loading} failed={!requestError && (Boolean(error) || taskStatus === 'failed')} requestError={requestError}
+              report={loading || error ? null : report} progress={progress} zh={zh} onNodeRefClick={onNodeRefClick}
+            />
+            {report && !loading && !error && (
+              <ReportView key={report.generatedAt} report={report} zh={zh} traceExplicitErrors={traceExplicitErrors}
+                onNodeRefClick={onNodeRefClick} onRerun={() => run(true)} />
+            )}
           </div>
         </AssistantArticle>
       )}
-
-      {report && !loading && (
-        <AssistantArticle meta={`${zh ? '诊断完成' : 'Done'} · ${formatDuration(report.stats.durationMs, zh)} · ${zh ? '智能诊断 Agent' : 'diagnosis agent'}`}>
-          <ReportView
-            report={report}
-            zh={zh}
-            executionId={executionId}
-            user={user}
-            traceExplicitErrors={traceExplicitErrors}
-            onNodeRefClick={onNodeRefClick}
-            skillsAnalysis={skillsAnalysis}
-            onSkillsAnalysisUpdate={setSkillsAnalysis}
-            onRerun={() => run(true)}
-          />
+      {(skillsAnalysis || report || loading || error) && (
+        <AssistantArticle meta={zh ? 'Skills 步骤核验 · 独立任务' : 'Skills step review · Independent task'}>
+          <SkillsAnalysisSection executionId={executionId} user={user} zh={zh}
+            analysis={skillsAnalysis} submitting={skillsSubmitting} onAnalysisUpdate={updateSkillsAnalysis} />
         </AssistantArticle>
       )}
     </div>
   );
 }
 
-function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNodeRefClick, skillsAnalysis, onSkillsAnalysisUpdate, onRerun }: {
+export function DiagnosisTaskSummary({ loading, status, requestError, error, report, startedAt, lastSyncedAt, progress, zh, onRetry }: {
+  loading: boolean;
+  status: string;
+  requestError: boolean;
+  error: string;
+  report: AgentDebugReportPayload | null;
+  startedAt: number | null;
+  lastSyncedAt: number | null;
+  progress?: DiagnosisProgressSnapshot | null;
+  zh: boolean;
+  onRetry: () => void;
+}) {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [loading]);
+  const elapsed = startedAt == null ? null : Math.max(0, (now ?? startedAt) - startedAt);
+  const latest = progress?.events.at(-1);
+  const quietSince = progress?.lastProgressAt ? Date.parse(progress.lastProgressAt) : startedAt;
+  const waitingForUpdate = loading && now != null && quietSince != null && now - quietSince >= 60_000;
+  const failed = !requestError && (Boolean(error) || status === 'failed');
+  const skipped = Boolean(report?.skippedReason);
+  const label = requestError ? (zh ? '状态获取失败' : 'Status unavailable')
+    : failed ? (zh ? '诊断失败' : 'Diagnosis failed')
+      : loading ? (status === 'submitting' ? (zh ? '正在提交' : 'Submitting') : (zh ? '任务处理中' : 'Processing'))
+        : skipped ? (zh ? '未运行' : 'Not run')
+          : report ? (zh ? '报告已返回' : 'Report received') : (zh ? '等待任务状态' : 'Awaiting task status');
+  const description = requestError
+    ? (zh ? '未能获取本次请求的有效结果，当前无法确认后台任务状态。刷新页面可重新获取状态。' : 'No valid response was received. The background task status is unknown. Reload the page to check again.')
+    : failed ? (zh ? '后台报告诊断失败。已获得的过程内容与 Skills 核验结果仍可查看。' : 'The diagnosis failed. Received progress and Skills results remain accessible.')
+      : report?.skippedReason || (loading
+        ? (status === 'submitting' ? (zh ? '正在提交诊断请求，等待后台确认。' : 'Submitting the request and waiting for confirmation.')
+          : (latest ? latest.summary : (zh ? '任务已接收，等待首条执行进展。尚无进展不代表模块已经开始或完成。' : 'Request accepted. Waiting for the first execution update. Module status is not yet known.')))
+        : report ? (zh ? '以下展示报告提供的分析与执行证据；缺少结果的维度会单独标明。' : 'Analysis and execution evidence from the report are shown below. Missing module results are marked explicitly.')
+          : (zh ? '尚未获得可用的诊断报告。' : 'No diagnosis report is available yet.'));
+  return (
+    <section className="rounded-lg border border-card-border bg-card p-4 shadow-sm" aria-label={zh ? '诊断任务概况' : 'Diagnosis task overview'}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold text-foreground">AgentDebug</h3>
+          <StatusBadge status={requestError || skipped ? 'warning' : failed ? 'error' : loading ? 'running' : report ? 'success' : 'pending'} label={label} />
+        </div>
+        <div className="text-xs tabular-nums text-foreground-muted">
+          {loading && elapsed != null && (zh ? `已等待 ${formatDuration(elapsed, zh)}` : `Waiting ${formatDuration(elapsed, zh)}`)}
+          {!loading && report && !skipped && (zh ? `诊断耗时 ${formatDuration(report.stats.durationMs, zh)}` : `Duration ${formatDuration(report.stats.durationMs, zh)}`)}
+        </div>
+      </div>
+      <p className="mt-3 text-xs leading-6 text-foreground-secondary" aria-live="polite">{description}</p>
+      {waitingForUpdate && (
+        <p className="mt-2 text-xs leading-6 text-foreground-muted">{zh ? '超过 1 分钟没有新过程内容，仍在等待后台更新。状态查询成功不代表诊断有新进展。' : 'No new progress for over a minute. Waiting for backend updates; a successful poll does not indicate new progress.'}</p>
+      )}
+      {progress?.lastProgressAt && <p className="mt-2 text-xs text-foreground-muted">{zh ? '最近真实进展：' : 'Last progress: '}<time dateTime={progress.lastProgressAt}>{new Date(progress.lastProgressAt).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</time></p>}
+      {progress?.unavailable && <p role="status" className="mt-2 text-xs text-warning">{zh ? '部分过程记录不可用，诊断任务仍按原流程执行。' : 'Some progress is unavailable; diagnosis continues independently.'}</p>}
+      {progress?.truncated && <p className="mt-2 text-xs text-foreground-muted">{zh ? '过程记录已达到上限，当前保留最近 200 条。' : 'Showing the most recent 200 progress events.'}</p>}
+      {Boolean(progress?.events.some(event => !event.module)) && <details className="mt-3 border-t border-border pt-3"><summary className="cursor-pointer text-xs text-foreground-secondary">{zh ? '执行活动 · ' : 'Execution activity · '}{latest?.title}</summary><div className="mt-3"><DiagnosisProgressFeed events={progress!.events.filter(event => !event.module)} zh={zh} /></div></details>}
+      {lastSyncedAt != null && (
+        <p className="mt-2 text-xs text-foreground-muted">
+          {zh ? '最近成功获取状态：' : 'Last successful status check: '}
+          <time dateTime={new Date(lastSyncedAt).toISOString()} className="tabular-nums">{new Date(lastSyncedAt).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</time>
+          <span>{zh ? ' · 不代表诊断有新进展' : ' · Not a diagnosis progress event'}</span>
+        </p>
+      )}
+      {error && <p role="alert" className="mt-3 break-words text-xs text-error">{error}</p>}
+      {failed && !loading && (
+        <Button className="mt-3" variant="outline" size="sm" onClick={onRetry}><RefreshCw className="size-3.5" />{zh ? '重新诊断' : 'Retry diagnosis'}</Button>
+      )}
+    </section>
+  );
+}
+
+export function DiagnosisModuleCards({ loading, failed, requestError, report, progress, zh, onNodeRefClick }: {
+  loading: boolean;
+  failed: boolean;
+  requestError: boolean;
+  report: AgentDebugReportPayload | null;
+  progress?: DiagnosisProgressSnapshot | null;
+  zh: boolean;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<AgentDebugModule>>(() => new Set());
+  const [now, setNow] = useState(() => Date.now());
+  const [arrivals, setArrivals] = useState<Partial<Record<AgentDebugModule, number>>>({});
+  const previousProgress = useRef(progress ?? null);
+  useEffect(() => {
+    if (!loading || failed || requestError || progress?.unavailable) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [loading, failed, requestError, progress?.unavailable]);
+  useEffect(() => {
+    const next = getNewModuleSequences(previousProgress.current, progress ?? null);
+    previousProgress.current = progress ?? null;
+    if (!Object.keys(next).length || !loading || failed || requestError || report) return;
+    setArrivals(next);
+  }, [progress, loading, failed, requestError, report]);
+  useEffect(() => {
+    if (!Object.keys(arrivals).length) return;
+    const timer = setTimeout(() => setArrivals({}), 750);
+    return () => clearTimeout(timer);
+  }, [arrivals]);
+  const events = progress?.events || [];
+  const visibleModules = MODULES.filter(module => {
+    const data = getModulePresentation(report, module.key);
+    return events.some(event => event.module === module.key) || data.status === 'result' || data.records.length > 0;
+  }).sort((a, b) => {
+    const first = (key: AgentDebugModule) => events.find(event => event.module === key)?.seq ?? Number.MAX_SAFE_INTEGER;
+    return first(a.key) - first(b.key);
+  });
+  const pendingModules = MODULES.filter(module => !visibleModules.includes(module));
+  return (
+    <section className="space-y-2" aria-label={zh ? '诊断维度' : 'Diagnosis dimensions'}>
+      <h3 className="px-1 text-xs font-medium text-foreground-muted">{zh ? '模块过程 · 按内容到达顺序展示' : 'Module progress · In order of first update'}</h3>
+      {visibleModules.map(module => {
+        const data = getModulePresentation(report, module.key);
+        const moduleEvents = events.filter(event => event.module === module.key);
+        const latest = moduleEvents.at(-1);
+        const open = !collapsed.has(module.key);
+        const Icon = MODULE_ICONS[module.key];
+        const activity = getModuleActivity({ events: moduleEvents, loading, failed, unavailable: requestError || Boolean(progress?.unavailable), reportStatus: report ? data.status : undefined, now });
+        const summary = latest && !report ? (failed ? (zh ? '任务中断，已保留阶段内容；尚无最终结论。' : 'Task interrupted. Partial updates retained; no final conclusion.') : (zh ? '按实际返回内容逐段更新，阶段分析待最终报告确认。' : 'Updates arrive as available. Stage analysis awaits the final report.')) : loading ? (zh ? '尚未返回该维度的分析结果，无法确认执行进度。' : 'No analysis has been returned for this dimension; its execution progress is unknown.')
+          : requestError ? (zh ? '状态读取失败，无法确认此维度是否完成。' : 'The status could not be retrieved; completion cannot be confirmed.')
+            : failed ? (zh ? '主诊断失败，未获得该维度的结果。' : 'The main diagnosis failed without returning results for this dimension.')
+              : data.status === 'skipped' ? report!.skippedReason!
+                : data.status === 'result' ? (data.hasError ? (zh ? '报告包含异常记录，请结合证据查看。' : 'The report contains issues; review the supporting evidence.')
+                  : data.explicitlyClear ? (zh ? '已返回的检查项未发现明确问题，不代表所有步骤均已覆盖。' : 'Returned checks found no clear issue; this does not imply complete coverage.')
+                    : (zh ? '报告已提供分析依据。' : 'Analysis is available in the report.'))
+                  : data.status === 'early_end' ? (zh ? '主诊断已提前结束，报告未提供此维度的独立结果。' : 'The diagnosis ended early without a separate result for this dimension.')
+                    : (zh ? '报告未提供有效分析结论；不能据此判断正常或已跳过。' : 'No usable conclusion was provided; this does not mean normal or skipped.');
+        return (
+          <section key={module.key} className="rounded-lg border border-card-border bg-card shadow-sm">
+            <button type="button" aria-expanded={open} onClick={() => setCollapsed(prev => {
+              const next = new Set(prev);
+              if (next.has(module.key)) next.delete(module.key); else next.add(module.key);
+              return next;
+            })} className="flex w-full items-start gap-3 rounded-lg p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+              {open ? <ChevronDown className="mt-0.5 size-4 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-0.5 size-4 shrink-0 text-foreground-muted" />}
+              <Icon className="mt-0.5 size-4 shrink-0 text-foreground-secondary" />
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-foreground">{module.en}{zh && ` · ${module.zh}`}</span>
+                  <DiagnosisModuleStatus activity={activity} arrivalSeq={arrivals[module.key]} zh={zh} />
+                  {data.status === 'result' && data.hasError && <span className="text-xs text-error">{zh ? '发现异常' : 'Issues found'}</span>}
+                </span>
+                <span className="mt-1 block break-words text-xs leading-5 text-foreground-muted">{activity === 'awaiting_analysis' ? (zh ? '已收到证据或阶段内容，结论待最终报告确认；超过一分钟没有新的模块进展，当前检查状态待确认。' : 'Evidence or stage content received; no module update for over a minute. Current activity is unconfirmed.') : summary}</span>
+                {latest && <span className="mt-1 block text-xs text-foreground-muted">{zh ? '模块最近更新：' : 'Last module update: '}<time dateTime={latest.at} className="tabular-nums">{new Date(latest.at).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</time></span>}
+              </span>
+            </button>
+            {open && (
+              <div className="mx-4 space-y-4 border-t border-border py-4">
+                <DiagnosisProgressFeed events={moduleEvents} zh={zh} onNodeRefClick={onNodeRefClick} />
+                <details className="text-xs text-foreground-muted"><summary className="cursor-pointer">{zh ? '检查范围' : 'Scope'}</summary><p className="mt-2 leading-6 text-foreground-secondary">{zh ? MODULE_HELP[module.key].zh : MODULE_HELP[module.key].en}</p></details>
+                {(data.records.length > 0 || data.cells.length > 0 || data.issues.length > 0) && (
+                  <div>
+                    <h4 className="text-xs font-medium text-foreground">{zh ? '执行证据与分析依据' : 'Execution evidence and analysis'}</h4>
+                    <p className="mb-3 mt-1 text-xs text-foreground-muted">{zh ? '按原 Trace 步骤展示，并非诊断模型的实时处理日志。' : 'Ordered by original Trace steps, not a live diagnosis log.'}</p>
+                    <div className="space-y-3">
+                      {[
+                        ...data.issues.map(issue => ({ ...issue, key: issue.id })),
+                        ...data.cells.filter(cell => !data.issues.some(issue => issue.step === cell.step && issue.errorType === cell.errorType))
+                          .map((cell, index) => ({ ...cell, key: `cell-${cell.step}-${index}` })),
+                      ].sort((a, b) => (a.traceStepIndex ?? a.step) - (b.traceStepIndex ?? b.step)).map(evidence => (
+                        <div key={evidence.key} className="border-l border-border pl-3">
+                          <ModuleEvidenceLocation step={evidence.step} traceStepIndex={evidence.traceStepIndex} anchorId={evidence.anchorId} zh={zh} onNodeRefClick={onNodeRefClick} />
+                          {evidence.evidence && <DiagnosisEvidenceText zh={zh}>{sanitizeReportText(evidence.evidence)}</DiagnosisEvidenceText>}
+                          {evidence.reasoning && <DiagnosisEvidenceText zh={zh}>{sanitizeReportText(evidence.reasoning)}</DiagnosisEvidenceText>}
+                        </div>
+                      ))}
+                      {data.records.length > 0 && (
+                        <details className="rounded-md border border-border p-3">
+                          <summary className="cursor-pointer text-xs text-foreground-secondary">{zh ? `相关执行记录（${data.records.length}）` : `Related execution records (${data.records.length})`}</summary>
+                          <div className="mt-3 space-y-4">{data.records.map((record, index) => (
+                            <div key={`${record.step}-${index}`} className="border-l border-border pl-3">
+                              <ModuleEvidenceLocation step={record.step} traceStepIndex={record.traceStepIndex} anchorId={record.anchorId} zh={zh} onNodeRefClick={onNodeRefClick} />
+                              <DiagnosisEvidenceText zh={zh}>{sanitizeReportText(record.content)}</DiagnosisEvidenceText>
+                              {record.inputContext && <details className="mt-2 text-xs text-foreground-muted"><summary className="cursor-pointer">{zh ? '输入上下文' : 'Input context'}</summary><DiagnosisEvidenceText zh={zh}>{sanitizeReportText(record.inputContext)}</DiagnosisEvidenceText></details>}
+                              {record.environmentResponse && <details className="mt-2 text-xs text-foreground-muted"><summary className="cursor-pointer">{zh ? '环境返回' : 'Environment response'}</summary><DiagnosisEvidenceText zh={zh}>{sanitizeReportText(record.environmentResponse)}</DiagnosisEvidenceText></details>}
+                            </div>
+                          ))}</div>
+                        </details>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {report && <div className="rounded-md bg-background-secondary p-3"><h4 className="mb-1 text-xs font-medium text-foreground">{zh ? '诊断结果' : 'Diagnosis result'}</h4><p className="text-xs leading-6 text-foreground-secondary">{summary}</p></div>}
+              </div>
+            )}
+          </section>
+        );
+      })}
+      {pendingModules.length > 0 && <div className="rounded-md border border-dashed border-border px-4 py-3 text-xs leading-6 text-foreground-muted">
+        <p>{pendingModules.map(module => zh ? `${module.en} · ${module.zh}` : module.en).join(' / ')}</p>
+        <p>{report?.skippedReason || (report ? (zh ? '这些维度未提供独立分析结论，不能据此判断正常或已跳过。' : 'No separate conclusions for these dimensions; normal or skipped cannot be inferred.') : failed ? (zh ? '任务已中断，以上模块没有返回内容。' : 'Task interrupted without updates from these modules.') : requestError ? (zh ? '状态暂不可用，尚未收到以上模块的过程内容。' : 'Status unavailable; no module updates received.') : (zh ? '尚未收到这些模块的过程内容；有内容后自动展开。' : 'Awaiting module updates; cards appear when content arrives.'))}</p>
+      </div>}
+    </section>
+  );
+}
+
+function DiagnosisEvidenceText({ children, zh }: { children: ReactNode; zh: boolean }) {
+  return <ExpandableText className="mt-1 text-xs leading-6 text-foreground-secondary" maxLines={4} expandLabel={zh ? '展开完整内容' : 'Show full content'} collapseLabel={zh ? '收起' : 'Collapse'}>{children}</ExpandableText>;
+}
+
+function ModuleEvidenceLocation({ step, traceStepIndex, anchorId, zh, onNodeRefClick }: {
+  step: number; traceStepIndex?: number; anchorId?: string; zh: boolean; onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const label = traceStepIndex != null ? `Trace #${traceStepIndex}` : (zh ? `诊断记录 #${step}` : `Diagnostic record #${step}`);
+  return anchorId && onNodeRefClick
+    ? <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => onNodeRefClick(anchorId)}>{label}<Eye className="size-3" /></Button>
+    : <span className="text-xs tabular-nums text-foreground-muted">{label}</span>;
+}
+
+function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }: {
   report: AgentDebugReportPayload;
   zh: boolean;
-  executionId: string;
-  user: string;
   traceExplicitErrors: TraceExplicitError[];
   onNodeRefClick?: (nodeId: string) => void;
-  skillsAnalysis: AgentDebugSkillsAnalysis | null;
-  onSkillsAnalysisUpdate: (analysis: AgentDebugSkillsAnalysis | null) => void;
   onRerun: () => void;
 }) {
   const findings = useMemo(() => normalizeReportFindings(report), [report]);
@@ -511,21 +728,7 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
   const issueCount = report.issues.length + traceExplicitErrors.length;
   const totalFindings = findings.length + detectorFindings.length;
 
-  useEffect(() => {
-    setExpandedFindingIds(new Set(findings[0] ? [findings[0].id] : []));
-  }, [findings]);
-
-  if (report.skippedReason) {
-    return (
-      <div className="rounded-lg border border-card-border bg-card p-4 shadow-sm">
-        <div className="mb-2 flex items-center gap-2">
-          <StatusBadge status="warning" label={zh ? '未运行' : 'Skipped'} />
-          <span className="text-sm font-semibold text-foreground">AgentDebug</span>
-        </div>
-        <p className="text-sm leading-6 text-foreground-muted">{report.skippedReason}</p>
-      </div>
-    );
-  }
+  if (report.skippedReason) return null;
 
   if (report.triage?.shortCircuited && report.triage.fatalDiagnosis) {
     return (
@@ -535,13 +738,6 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
           zh={zh}
           onNodeRefClick={onNodeRefClick}
           onRerun={onRerun}
-        />
-        <SkillsAnalysisSection
-          executionId={executionId}
-          user={user}
-          zh={zh}
-          analysis={skillsAnalysis}
-          onAnalysisUpdate={onSkillsAnalysisUpdate}
         />
       </div>
     );
@@ -616,14 +812,6 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
           <p className="text-sm text-foreground-muted">{zh ? '初筛未检测到足够明确的问题。' : 'Phase 1 did not find a clear issue.'}</p>
         )}
       </div>
-
-      <SkillsAnalysisSection
-        executionId={executionId}
-        user={user}
-        zh={zh}
-        analysis={skillsAnalysis}
-        onAnalysisUpdate={onSkillsAnalysisUpdate}
-      />
     </div>
   );
 }
@@ -1073,37 +1261,46 @@ function formatKeyActionStatus(status: string, zh: boolean): string {
   return status;
 }
 
-function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpdate }: {
+export function SkillsAnalysisSection({ executionId, user, zh, analysis, submitting, onAnalysisUpdate }: {
   executionId: string;
   user: string;
   zh: boolean;
   analysis: AgentDebugSkillsAnalysis | null;
+  submitting: boolean;
   onAnalysisUpdate: (analysis: AgentDebugSkillsAnalysis | null) => void;
 }) {
   const [generating, setGenerating] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [keyActionsExpanded, setKeyActionsExpanded] = useState(false);
+  const contentId = useId();
+  const [wasRunning, setWasRunning] = useState(analysis?.status === 'running');
   const [error, setError] = useState('');
-  const [localAnalysis, setLocalAnalysis] = useState<AgentDebugSkillsAnalysis | null>(analysis);
-
-  useEffect(() => {
-    setLocalAnalysis(analysis);
-  }, [analysis]);
+  const localAnalysis = analysis;
 
   const keyActions = extractSkillsKeyActions(localAnalysis as Record<string, unknown> | null);
   const skillSuggestions = extractSkillsSuggestions(localAnalysis as Record<string, unknown> | null);
   const summaryText = summarizeSkillsReason(localAnalysis?.reasonText || '');
   const status = localAnalysis?.status || 'pending';
+  if (wasRunning !== (status === 'running')) {
+    setWasRunning(status === 'running');
+    if (status === 'running') {
+      setExpanded(true);
+      setKeyActionsExpanded(false);
+    }
+  }
   const hasUsableData = status === 'done' && keyActions.length > 0;
-  const canGenerate = status !== 'running';
+  const canGenerate = status !== 'running' && !submitting;
   const failed = status === 'failed';
   const attentionCount = keyActions.filter(item => item.status === 'partial' || item.status === 'missing' || item.status === 'not_applicable').length;
 
   useEffect(() => {
-    if (!executionId || status !== 'running') return;
+    if (!executionId || status !== 'running' || submitting || generating) return;
     let cancelled = false;
 
+    let inFlight = false;
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`);
         const data = await res.json().catch(() => ({})) as AgentDebugSkillsAnalysisResponse;
@@ -1112,11 +1309,12 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
         const nextAnalysis = skillsAnalysisFromResponse(data);
         if (nextAnalysis) {
           onAnalysisUpdate(nextAnalysis);
-          setLocalAnalysis(nextAnalysis);
           if (nextAnalysis.status !== 'failed') setError('');
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        inFlight = false;
       }
     };
 
@@ -1125,14 +1323,14 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [executionId, onAnalysisUpdate, status]);
+  }, [executionId, onAnalysisUpdate, status, analysis?.runId, submitting, generating]);
 
   async function generateSkillsAnalysis(force = true) {
     if (!executionId || !user || generating) return;
     setGenerating(true);
+    setExpanded(true);
     setError('');
     const optimistic = optimisticSkillsAnalysisRunning(localAnalysis?.interactionHash);
-    setLocalAnalysis(optimistic);
     onAnalysisUpdate(optimistic);
     try {
       const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`, {
@@ -1147,12 +1345,10 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
       };
       if (res.status === 409 && isSkillsAnalysisRunningResponse(data)) {
         applySkillsAnalysisResponse(data);
-        if (!expanded) setExpanded(true);
         return;
       }
       applySkillsAnalysisResponse(data);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      if (!expanded) setExpanded(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1163,10 +1359,8 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
   function applySkillsAnalysisResponse(data: AgentDebugSkillsAnalysisResponse) {
     const nextAnalysis = skillsAnalysisFromResponse(data);
     if (nextAnalysis) {
-      setLocalAnalysis(nextAnalysis);
       onAnalysisUpdate(nextAnalysis);
     } else if (!data.error) {
-      setLocalAnalysis(prev => prev?.status === 'running' ? prev : null);
       if (localAnalysis?.status !== 'running') onAnalysisUpdate(null);
     }
     if (!data.error || isSkillsAnalysisRunningResponse(data)) {
@@ -1180,12 +1374,16 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
         <button
           type="button"
           aria-expanded={expanded}
+          aria-controls={contentId}
           onClick={() => setExpanded(value => !value)}
           className="flex min-w-0 flex-1 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
           <div className="min-w-0">
-            <div className="text-[10.5px] font-bold tracking-[0.14em] text-primary">{zh ? '\u0053\u006b\u0069\u006c\u006c\u0073 \u5206\u6790' : 'SKILLS ANALYSIS'}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-foreground">{zh ? 'Skills 步骤核验' : 'Skills step review'}</span>
+              <StatusBadge status={failed ? 'error' : status === 'running' || generating ? 'running' : status === 'done' ? 'success' : 'pending'} label={failed ? (zh ? '失败' : 'Failed') : status === 'running' || generating ? (zh ? '处理中' : 'Processing') : status === 'done' ? (zh ? '已有结果' : 'Result available') : (zh ? '待核验' : 'Pending')} />
+            </div>
             {(generating || status === 'running' || !hasUsableData) && (
               <div className="mt-0.5 text-sm font-bold tracking-tight text-foreground">
                 {generating || status === 'running'
@@ -1195,7 +1393,7 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
             )}
             {hasUsableData && (
               <div className="mt-0.5 text-[11px] text-foreground-muted">
-                {zh ? `${keyActions.length} 个 Skill 步骤` : `${keyActions.length} Skill steps`}
+                {zh ? `${keyActions.length} 个 Skill 步骤 · ${skillSuggestions.length} 条建议` : `${keyActions.length} Skill steps · ${skillSuggestions.length} suggestions`}
               </div>
             )}
           </div>
@@ -1208,8 +1406,13 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
         )}
       </div>
 
-      {expanded && (
-        <div className="mt-3">
+      {localAnalysis?.progress?.unavailable && !expanded && <p className="mt-2 text-xs text-warning">{zh ? '部分核验过程记录不可用。' : 'Some review progress is unavailable.'}</p>}
+      {(error || localAnalysis?.errorMessage) && !expanded && (
+        <p role="alert" className="mt-3 break-words text-xs text-error">{error || localAnalysis?.errorMessage}</p>
+      )}
+        <div id={contentId} hidden={!expanded} className="mt-3">
+          {localAnalysis?.progress?.unavailable && <p className="mb-2 text-xs text-warning">{zh ? '部分核验过程记录不可用。' : 'Some review progress is unavailable.'}</p>}
+          {status !== 'done' && Boolean(localAnalysis?.progress?.events.length) && <div className="mb-4 border-t border-border pt-4"><DiagnosisProgressFeed key={localAnalysis?.runId} events={localAnalysis!.progress!.events} zh={zh} /></div>}
           {error && (
             <div className="mb-3 rounded-md border border-error-border bg-error-subtle p-2 text-[12px] text-error">{error}</div>
           )}
@@ -1301,27 +1504,11 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
               )}
             </div>
           )}
+          {status === 'done' && Boolean(localAnalysis?.progress?.events.length) && <details className="mt-4 border-t border-border pt-4" key={localAnalysis?.runId}>
+            <summary className="cursor-pointer text-xs text-foreground-secondary">{zh ? `核验过程（共 ${localAnalysis!.progress!.events.length} 段）` : `Review progress (${localAnalysis!.progress!.events.length} updates)`}</summary>
+            <div className="mt-3"><DiagnosisProgressFeed events={localAnalysis!.progress!.events} zh={zh} /></div>
+          </details>}
         </div>
-      )}
-    </div>
-  );
-}
-
-function ProgressRow({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background-secondary text-primary">
-        <Loader2 className="size-3.5 animate-spin" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="mb-1 flex items-baseline justify-between gap-2">
-          <span className="truncate text-[12.5px] font-bold text-foreground">{label}</span>
-          <span className="text-[11px] text-primary">分析中</span>
-        </div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-background-secondary">
-          <div className="h-full w-2/3 rounded-full bg-primary" />
-        </div>
-      </div>
     </div>
   );
 }
@@ -1335,16 +1522,6 @@ function AssistantArticle({ children, meta }: { children: ReactNode; meta?: stri
       <div className="min-w-0 flex-1">
         {meta && <div className="mb-1.5 text-[11px] text-foreground-muted">{meta}</div>}
         <div className="max-w-[860px]">{children}</div>
-      </div>
-    </article>
-  );
-}
-
-function UserArticle({ children }: { children: ReactNode }) {
-  return (
-    <article className="flex justify-end gap-3">
-      <div className="max-w-[80%] rounded-2xl rounded-tr-md bg-primary px-4 py-2.5 text-[13.5px] leading-6 text-primary-foreground">
-        {children}
       </div>
     </article>
   );

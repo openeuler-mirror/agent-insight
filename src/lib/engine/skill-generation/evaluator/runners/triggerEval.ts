@@ -348,7 +348,6 @@ async function evalOne(
     logger.log('chat() returned', {
       sessionId,
       textLen: chatResult?.text?.length ?? 0,
-      textPreview: (chatResult?.text || '').slice(0, 120),
       stats: chatResult?.stats,
       triggered,
       competingSkill: competingSkill ?? null,

@@ -11,6 +11,8 @@ import { db } from '@/lib/storage/prisma'
 import { isModelConnectionReady } from '@/lib/shared/model-connection'
 import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
 import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
+import { runtimePackageRoot } from '@/lib/runtime/package-root'
+import { isLogEnabled } from '@/lib/logger/server'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -154,17 +156,17 @@ async function waitForServer(
 /**
  * 解析 opencode 二进制的实际路径。优先级：
  *  1. OPENCODE_BIN 环境变量（部署侧覆盖，例如 /opt/opencode/bin/opencode）
- *  2. 项目 node_modules/.bin/opencode（来自 opencode-ai npm 包，服务自包含部署的首选）
+ *  2. 项目根目录 node_modules/.bin/opencode（standalone 下通过 AGENT_INSIGHT_PACKAGE_ROOT 定位）
  *  3. 直接 PATH 上的 opencode（dev 环境用全局 npm 装的那个）
  *
  * 部署生产环境时建议在 package.json 加 `opencode-ai` 依赖，让方案 2 生效，
  * 这样不依赖部署机器上有 opencode 命令。
  */
-function resolveOpencodeBinary(): string {
+export function resolveOpencodeBinary(): string {
   if (process.env.OPENCODE_BIN && fs.existsSync(process.env.OPENCODE_BIN)) {
     return process.env.OPENCODE_BIN
   }
-  const localBin = path.join(process.cwd(), 'node_modules', '.bin', 'opencode')
+  const localBin = path.join(runtimePackageRoot(), 'node_modules', '.bin', 'opencode')
   if (fs.existsSync(localBin)) return localBin
   return 'opencode'
 }
@@ -962,12 +964,12 @@ async function startServerForUser(
   if (typeof proc.pid === 'number') registerOpencodePgid(proc.pid, user)
 
   // 转发日志(可选)。生产环境可以写到文件。
-  if (verbose) {
+  if (verbose || isLogEnabled('debug')) {
     proc.stdout?.on('data', (b: Buffer) =>
-      process.stderr.write(`[opencode:${user}] ${b.toString()}`),
+      console.debug(`[opencode:${user}] ${b.toString()}`),
     )
     proc.stderr?.on('data', (b: Buffer) =>
-      process.stderr.write(`[opencode:${user}] ${b.toString()}`),
+      console.debug(`[opencode:${user}] ${b.toString()}`),
     )
   } else {
     // 即使不转发日志也必须消费 pipe，否则父进程不读 → ~64KB pipe buffer 撑满 →
@@ -1203,6 +1205,7 @@ export function getActiveServerCount(): number {
  */
 export async function runWithEphemeralOpencodeServer<T>(
   opts: {
+    signal?: AbortSignal
     user?: string
     verbose?: boolean
     /**
@@ -1228,7 +1231,8 @@ export async function runWithEphemeralOpencodeServer<T>(
   const verbose = opts.verbose ?? false
   const telemetryEnabled = opts.telemetryEnabled ?? !opts.isolateHome
   const { experimentSignal, markExperimentCleanupUnconfirmed } = await import('@/lib/engine/experiment/cancellation-context')
-  const cancellation = experimentSignal()
+  const parentSignal = experimentSignal()
+  const cancellation = opts.signal && parentSignal ? AbortSignal.any([opts.signal, parentSignal]) : opts.signal || parentSignal
   cancellation?.throwIfAborted()
   // 准备隔离 HOME (如启用), 拿 cleanup 在 finally 里调
   let homeCleanup: (() => Promise<void>) | null = null

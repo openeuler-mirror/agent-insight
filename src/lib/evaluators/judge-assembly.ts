@@ -126,6 +126,10 @@ export function parseJudgeText(
     );
   }
   const out = normalizeEvaluatorOutput(parsed);
+  if (out.evidence && 'json' in out.evidence && out.evidence.json && typeof out.evidence.json === 'object'
+    && (out.evidence.json as { type?: unknown }).type === 'custom-evaluator-runtime-v1') {
+    throw new JudgeOutputParseError('评估器响应不能包含平台保留的运行元数据', rawText);
+  }
   if (pointsDef && pointsDef.length && out.points) {
     const allowed = new Set(pointsDef.map((p) => p.label));
     const filtered: EvalPoint[] = out.points.filter((p) => allowed.has(p.label));
