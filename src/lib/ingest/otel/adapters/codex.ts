@@ -608,7 +608,7 @@ function preferRolloutUsage(events: OtelTraceEvent[]): OtelTraceEvent[] {
     if (!execution || !rolloutExecutions.has(execution)) return [event];
     // 去掉重复计量；若该 LLM 快照本身没有正文，它只是同一响应的空壳，
     // 保留会虚增 LLM 节点数并在 UI 显示「未采集到模型输出」，直接丢弃。
-    const hasBody = Boolean(event.output || event.input);
+    const hasBody = Boolean(eventOutput(event) || eventInput(event));
     if (hasBody) {
       const { usage: _drop, ...rest } = event as AnyObj;
       return [rest as OtelTraceEvent];
