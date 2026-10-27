@@ -475,3 +475,24 @@ Trace 生成不检查上下文语义独立性，不再产生 CONTEXT_* 排除；
 成功发布且临时目录清理后删除 TraceDatasetGenerationJob（包括旧版 cleanupPending=false 的成功任务），同一事务将 create 回执置 succeeded 并保留 requestHash/datasetId/jobId 和有界期限。失败/未完成任务继续保留；文件清理或事务失败不得提前删任务。成功任务不存在时，同一 requestId/配置通过有效回执返回原数据集，配置冲突 409，已删/到期 410；过期回执清除后由请求时间窗和持久时钟水位阻止重建。DELETE 已发布数据集不依赖任务记录，原子删数据集并写删除回执。当前窗口明细独立于成功任务保留到关闭/空闲过期。
 
 Trace 生成特性的采样方案称为智能采样，服务端当前固定实现版本为 `trace-coverage-v6.35`，客户端不可指定；新任务保存生产策略，未完成的旧 v4/v5 任务按其原配置恢复。已发布数据集不重采样。
+
+## 自建评估器 Skills 契约
+
+`LlmEvaluatorConfig.skills` 可为空，持久化项包含 name、source、snapshotHash、fileCount、totalBytes。source 为 library（owner、固定非负整数 version）或 local（可选原文件名）；本地导入不写 Skill/SkillVersion。客户端新增绑定分别提交 `{kind:'library',name,sourceOwner,version}` 或 `{kind:'local',name,importToken,fileCount}`，服务端规范化为固定快照。更新卡片省略 skills 表示保留，显式空数组表示移除全部；已绑定快照只可由所属用户和原评估器复用。
+
+| 接口 | 契约 |
+|---|---|
+| GET `/api/skills/by-name/:name/versions` | user、sourceOwner（空字符串代表共享来源）必需；返回版本；可用 version 参数读取所选包 manifest |
+| GET `/api/skills/by-name/:name/versions/:version/files/:path` | 按来源授权，返回文本预览或二进制元数据 |
+| POST `/api/user-evaluators/skill-imports` | multipart：user、kind=folder、files 和等长 paths；仅接受单个目录，各路径必须位于同一目录且与文件名匹配；返回临时凭证、到期时间及 manifest |
+| GET `/api/user-evaluators/skill-imports/:importToken/files` | user 授权，path 可选；临时凭证有效 24 小时，过期返回 410 |
+| GET `/api/user-evaluators/:evaluatorId/skills/:name/files` | 由所属用户的已绑定快照读取，path 可选 |
+| PUT `/api/user-evaluators` | 校验并冻结全部绑定后整体保存，成功返回 success 和规范化 evaluators；失败保留原卡片 |
+
+包限制为 8 个 Skill/评估器、256 个文件及 10 MiB/包、64 KiB 主指令合计。本地导入拒绝 ZIP/单文件及伪造目录路径，检查根目录主文件、路径、多个 Skill 根与总容量。预览最大 512 KiB 并标记 truncated，运行文件不截断。快照文件在 `<data>/evaluator-skills/<user-key>/<hash>/`，临时导入在 `evaluator-skill-imports`；备份需覆盖数据库及持久快照，临时上传无需备份。
+
+Benchmark 错误适配器 `benchmarkErrorResponse` 将 `EvaluatorSkillError` 映射为 `{error:{code:'EVALUATOR_SKILL_ERROR',message,retryable:false}}`，保留原始 HTTP 状态码与可读错误信息。评估器冻结时的配置校验、权限或快照缺失错误不会被转换为通用 500；其他未识别异常仍返回脱敏的 `INTERNAL_ERROR`。
+
+文件夹上传在 multipart filename 中可能携带完整相对路径。前端显式提交 file.name；服务端兼容末段文件名与完整相对路径两种形式，后者必须与同项 paths 完全一致，不允许仅截取 basename 后放行其他目录的文件名。
+
+新任务的 configSnapshotJson.customEvaluatorSnapshots 为 `{schemaVersion:1,cards:{[evaluatorId]:card}}`，轨迹入口在 rawAnalysisJson 使用同一字段。服务端冻结，不能信任调用者自带该字段。结果 evidence.json 用 `type:'custom-evaluator-runtime-v1'` 容器保存原 evaluationEvidence 和平台生成 customEvaluatorRuntime，后者独立于模型输出归一化，包含来源、实际模型、工具摘要与耗时。 Agent 会话真实记录保存成功后还可含 evaluationTraceId。GET /api/experiments/:id 在 results 中返回经当前用户归属与存在性校验后的 evaluationTraceId（不可用为 null）；普通 LLM 与无记录历史结果不返回入口。结果详情仅渲染 evaluationEvidence，运行过程通过评估链路查看。

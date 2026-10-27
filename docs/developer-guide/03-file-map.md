@@ -17,6 +17,7 @@ changefreq: monthly
 | `trajectory-evaluator.ts` | `evaluateTrajectory`、`aggregateTrajectoryScore`；`TrajectoryEvalInput/Output`、`TrajectoryDeviationStep` |
 | `opencode-trajectory-evaluator.ts` | 基于 deepagents 的轨迹评测执行器 |
 | `opencode-task-completion-evaluator.ts` | `TaskCompletionEvalInput/Output` |
+| `custom-evaluator-runtime.ts` | `runCustomEvaluatorWithSkills`，完整 Skill 挂载、全部主指令加载及运行证据 |
 | `custom-llm-evaluator.ts` | `CustomEvaluatorInput/Result`（用户自定义的 LLM 评测器） |
 | `semantic-dataset-match.ts` | `SemanticConfigMatchResult`、`SemanticCaseMatchResult`、`ExtractedUserInput` |
 | `config-target.ts` / `config-dataset.ts` | `normalizeConfigSkillName`、`normalizeConfigQuery`、`normalizeConfigDatasetType`、`ConfigDatasetType` |

@@ -1,3 +1,4 @@
+import { agentEvaluationTraceId } from '@/lib/evaluators/evaluator-skills';
 import { casePagination, locateCasePage } from '@/lib/engine/experiment/case-navigation';
 import { normalizeAgentOptions, validateDefinition } from '../../../../../packages/agent-runtime/index.cjs';
 // 实验详情：实验元信息 + 服务端聚合（整体均分 overall / 评估器分解 breakdown /
@@ -591,6 +592,15 @@ export async function GET(
         durationMs: r.durationMs,
       })),
     );
+    const traceIds = results.map(result => agentEvaluationTraceId(result.evidence)).filter((id): id is string => Boolean(id));
+    const recordedTraces = username && traceIds.length ? await prisma.execution.findMany({
+      where: { user: username, taskId: { in: traceIds } }, select: { taskId: true },
+    }) : [];
+    const availableTraces = new Set(recordedTraces.map((trace: { taskId: string | null }) => trace.taskId));
+    const resultsWithTraces = results.map(result => {
+      const traceId = agentEvaluationTraceId(result.evidence);
+      return { ...result, evaluationTraceId: traceId && availableTraces.has(traceId) ? traceId : null };
+    });
     const baselineTrend = await baselineTrendPromise;
 
     return NextResponse.json({
@@ -777,7 +787,7 @@ export async function GET(
           } : {}),
         };
       }),
-      results,
+      results: resultsWithTraces,
       progress,
       traceProgress,
       executionProgress: itemProgress?.executionProgress || null,

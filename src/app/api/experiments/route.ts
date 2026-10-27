@@ -1,3 +1,5 @@
+import { withFrozenCustomEvaluators } from '@/lib/evaluators/evaluator-skill-service';
+import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
 import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { findAgentDataset } from '@/server/agent_datasets_storage';
@@ -397,6 +399,7 @@ export async function POST(req: Request) {
       }
       try {
         const { id } = await createComparisonExperiment({
+          configSnapshot: configSnapshot || undefined,
           user: username, name, agentName,
           variableDimension: String(body.variableDimension || 'llm'),
           groups: groups.map((g: { key?: unknown; value?: unknown }) => ({
@@ -405,12 +408,6 @@ export async function POST(req: Request) {
           })),
           evaluatorIds,
         });
-        if (configSnapshot) {
-          await prisma.experiment.update({
-            where: { id },
-            data: { configSnapshotJson: JSON.stringify(configSnapshot) },
-          });
-        }
         // autoPairGroups 查候选 trace + 为可比配对创建 case
         await autoPairGroups(id);
         return NextResponse.json({ id });
@@ -511,7 +508,7 @@ export async function POST(req: Request) {
         skillVersion,
         preset,
         skillContextJson: skillContext ? JSON.stringify(skillContext) : null,
-        configSnapshotJson: configSnapshot ? JSON.stringify(configSnapshot) : null,
+        configSnapshotJson: JSON.stringify(await withFrozenCustomEvaluators(username, evaluatorIds, configSnapshot || {})),
         watchMode,
         watchEnabledAt: watchMode ? new Date() : null,
         cases: {
@@ -543,6 +540,7 @@ export async function POST(req: Request) {
   } catch (error) {
     if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('[Experiments POST Error]', error);
+    if (error instanceof EvaluatorSkillError) return NextResponse.json({ error: error.message }, { status: error.status });
     return NextResponse.json({ error: 'Failed to create experiment' }, { status: 500 });
   }
 }

@@ -1,3 +1,4 @@
+import { freezeCustomEvaluators, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service'
 import { resolveAgentOptions } from '../../../packages/agent-runtime/index.cjs'
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity'
@@ -18,6 +19,7 @@ type BenchmarkCaseSelection =
   | { mode: 'explicit'; caseIds: string[] }
 
 export type CreateBenchmarkExperimentInput = {
+  frozenCustomEvaluators?: CustomSnapshots
   user: string
   name: string
   agentName?: string
@@ -186,6 +188,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     }
   })
 
+  const customEvaluatorSnapshots = input.frozenCustomEvaluators ?? await freezeCustomEvaluators(user, evaluatorIds)
   const experiment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const created = await tx.experiment.create({
       data: {
@@ -197,6 +200,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
         status: 'draft',
         scope: 'benchmark',
         configSnapshotJson: JSON.stringify({
+          customEvaluatorSnapshots,
           datasetId: dataset.id,
           agentEvalDatasetId: input.agentEvalDatasetId || dataset.agentEvalDatasetId,
           datasetContentHash: dataset.contentHash,

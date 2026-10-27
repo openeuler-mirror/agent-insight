@@ -98,6 +98,8 @@ Benchmark 评估器目录由服务端 `app/(main)/metrics/page.tsx` 遍历 `list
 
 全局实验默认名称由 `engine/experiment/experiment-name.ts` 统一生成。“同配置实验”的服务端复制和“复用评测配置”的客户端向导都使用当前时间生成新名称，不继承原实验名称；配置复用与来源关联保持原流程。列表和详情对带旧复用后缀的存量名称，按实验 `createdAt` 投影标准标题，不改写数据库中的原名称。
 
+`/experiments` 列表由 `PageContainer` 统一承载纵向滚动。表格容器和分页栏设置 `flex-shrink: 0`，避免纵向 Flex 布局压缩表格并裁掉末尾记录；表格容器通过 `overflow-x: auto` 承载窄屏横向滚动，分页栏允许换行。表格高度随当前页实际记录数自然展开，不设置固定高度或内部纵向滚动区。
+
 `ExperimentRenameButton` 复用同一 `PATCH /api/experiments/:id` 名称更新契约，在普通实验与 Skill 实验的列表、详情入口使用；保存成功后各视图更新本地名称，下一次列表或详情读取以数据库值为准。重命名不触发评测重跑。
 
 - **应用外壳** — `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader,providers}.tsx`。页面在 `<PageContainer>` 内渲染（左对齐、全幅——不要手写居中）。

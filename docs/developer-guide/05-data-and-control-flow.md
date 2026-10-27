@@ -538,3 +538,13 @@ Trace 评测集在生成阶段仅做结构提取，不改采集/入库，不验�
 效果验证与生产执行分开：`prepare-v635-confirmation.py` 固定来源及算法指纹，并将文本与人工评分分离；`run-v635-confirmation.ts` 完成选样后，`audit-v635-confirmation.ts` 才读取评分。`verify-v635-source-isolation.py` 检查新旧来源及输入词项近重复。研究用签名缓存不进入产品存储，标签不进入生产选择函数。
 
 当前开发池与五个新来源的适用效果均值目标通过；独立统计确认、全平台真实 Trace、完整浏览器操作链路和生产压力验证仍有缺口。五源只与同池随机采样比较。冻结实验附件中的历史默认、旧门槛和通过字段不作为现行结论，见[最终对比报告](../design/trace-eval-dataset/eight-datasets-comparison-report.md)与[开发计划](../design/trace-eval-dataset/phase3-development-plan.md)。仓库保留指定指标与审计摘要，不包含全部原始数据及逐轮运行产物；重放历史脚本需另行准备其要求的数据与附件。
+
+## 自建评估器 Prompt + Skills
+
+创建或编辑时，从库中选固定版本或通过系统选择器直接上传 Skill 文件夹；本地项更新通过移除后重新添加完成，不提供重新导入按钮；库文件从 SkillVersion 读取，本地文件只暂存，均经 evaluator-skill-store 校验后冻结完整字节。PUT 成功才替换卡片，返回持久绑定；本地来源不经过 Skill 库写入链路。
+
+普通实验、对比实验、Benchmark 追加评估器、工作台、eval-traces backing 实验与轨迹任务在创建时冻结自建卡片。行执行优先读取任务冻结配置，重试/追加/监听不重读最新卡片；复用同配置复制冻结内容。历史无快照任务使用旧 Prompt 解析且 skills 为空，新任务缺失已声明的冻结卡片时明确失败。
+
+无 Skills 沿用原传输。有 Skills 进入 custom-evaluator-runtime，校验快照摘要，为每个 Case/evaluator/attempt 建立独立临时目录，将所有 SKILL.md 原文加入请求，并挂载完整 scripts/references/assets，Case 写入 inputs/case.json。强制 OpenCode，不走直连 Judge 或无 Skill 降级；透传所属实验取消及总超时，排队可取消，进程结束后清理运行目录，持久快照保留。
+
+全局实验返回统一 EvaluatorOutput；旧轨迹接口适配 score/reason 并保留完整 output/runtime。工具事件来自 OpenCode onTool，独立于模型声称的调用。证据容器保留原评分依据与运行元数据，结果详情仅渲染原依据。Agent 会话删除前读取真实消息，复用 evaluator-execution-recorder 保存加载指令和工具调用；使用 skip_evaluation/skip_internal_judgment 防止监听循环，保存成功后写入 evaluationTraceId。详情 API 再校验 Execution 存在且属于当前用户，满足条件才返回评估链路入口；空会话、普通 LLM、历史无记录或已失效引用均不显示。HOME 与工作目录隔离不等于操作系统沙箱，沿用已有 read/bash 等权限。
