@@ -373,6 +373,8 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 ### FI 统一任务提示与主动拦截结果
 
+OpenCode uploader 使用排他创建的 PID 锁串行处理上传及 checkpoint；竞争者等待持有者结束，不能直接丢弃触发。单 spool 扫描只更新该文件水位，不能推进共享全局扫描水位；上传失败不确认文件扫描完成，防止并行短任务遗漏或 checkpoint 覆盖。
+
 OpenCode 采集插件在 session.idle / session.status idle 触发上传前，必须先同步刷新此前消息和结束事件到 spool；普通事件仍按批写入。不能依赖 CLI 的 beforeExit 或异步流尾部完成，否则已结束的 FI 任务可能只有进行中快照，Session.endTime 永不落库。
 
 FI 批量绑定启用 waitForActiveRuns：queued/collecting/judging 等活动 Run 不受初始收集窗口限制；全部 Run 进入终态后，迟到 Trace 最多等待 180 秒，取消或删除实验立即退出。collect 回填、FI 评分入口、实验绑定与详情页统一校验 platform/Agent 身份、Session 结束标记和非空 assistant 响应或工具调用；内部 ras-judge 不会被业务 Case 接受。普通数据集保持原 Trace 判据。

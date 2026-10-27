@@ -1191,6 +1191,46 @@ function cleanupOldFiles(spoolDir, retentionDays) {
   } catch {}
 }
 
+/** Serialize upload/checkpoint updates; contention must not discard another CLI's spool. */
+async function acquireUploaderLock(lockFile) {
+  safeMkdirp(path.dirname(lockFile))
+  let reportedWait = false
+  while (true) {
+    try {
+      const fd = fs.openSync(lockFile, "wx", 0o600)
+      try { fs.writeFileSync(fd, String(process.pid)) } finally { fs.closeSync(fd) }
+      const release = () => {
+        try {
+          if (Number(fs.readFileSync(lockFile, "utf8").trim()) === process.pid) {
+            fs.unlinkSync(lockFile)
+          }
+        } catch {}
+      }
+      process.once("exit", release)
+      return () => { process.off("exit", release); release() }
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+      try {
+        const owner = Number(fs.readFileSync(lockFile, "utf8").trim())
+        // Allow a newly created lock to publish its PID before considering it stale.
+        if ((owner > 0 && !isPidAlive(owner))
+          || (!(owner > 0) && Date.now() - fs.statSync(lockFile).mtimeMs > 5000)) {
+          fs.unlinkSync(lockFile)
+          continue
+        }
+      } catch (readError) {
+        if (readError?.code === "ENOENT") continue
+        throw readError
+      }
+      if (!reportedWait) {
+        appendUploaderLog("main.wait uploader lock busy; keeping spool request pending")
+        reportedWait = true
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+}
+
 async function main() {
   const env = loadSkillInsightEnv()
   const apiKey = env.AGENT_INSIGHT_API_KEY
@@ -1254,201 +1294,190 @@ async function main() {
 
   cleanupOldFiles(spoolDir, retentionDays)
 
-  const ckpt = loadCheckpoint(checkpointFile)
-
-  // Fast-skip gate: if no spool file has been touched since the last scan, exit
-  // immediately without reading/parsing any data. This keeps the polling daemon
-  // cheap (~5ms) when opencode is idle. Force=1 bypasses for manual debugging.
-  const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
-  const lastScanMtime = ckpt.__lastScanMtime || 0
-  if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
-    appendUploaderLog(
-      `main.fastSkip newestMtime=${newestMtime} lastScanMtime=${lastScanMtime} spoolDir=${spoolDir}`,
-    )
-    process.exit(0)
-  }
-
-  // 单例锁: 同一时刻只允许一个 uploader 真正干活。plugin 每个 opencode event 都会 kick 一个
-  // FORCE 实例, 叠加 5min cron, 高峰能堆出几十个进程啃同一份积压、吃爆内存(实测 75 个)。
-  // 用 pid 锁文件去重: 已有存活 uploader 持锁就直接退出; 陈旧锁(pid 已死)则接管; 退出时释放自己的锁。
   const lockFile = path.join(getPreferredInsightDir(), ".uploader.lock")
+  const releaseLock = await acquireUploaderLock(lockFile)
   try {
-    const prevPid = Number((fs.readFileSync(lockFile, "utf8") || "").trim())
-    if (prevPid && prevPid !== process.pid) {
-      try {
-        process.kill(prevPid, 0) // 存活 → 让位
-        appendUploaderLog(`main.skip alreadyRunning pid=${prevPid}`)
-        process.exit(0)
-      } catch {
-        /* prevPid 已死, 锁陈旧, 接管 */
-      }
-    }
-  } catch {
-    /* 无锁文件, 继续 */
-  }
-  try { fs.writeFileSync(lockFile, String(process.pid)) } catch {}
-  process.on("exit", () => {
-    try {
-      if (Number((fs.readFileSync(lockFile, "utf8") || "").trim()) === process.pid) {
-        fs.rmSync(lockFile, { force: true })
-      }
-    } catch {}
-  })
-
-  const candidateFiles = selectJsonlFiles(spoolDir, spoolFile)
-  const files = selectJsonlFilesForUpload(candidateFiles, { forceSessions, lastScanMtime })
-  appendUploaderLog(
-    `main.scan files=${files.length}/${candidateFiles.length} ` +
-    `mode=${spoolFile ? "spool-file" : forceSessions.size ? "force-session" : "changed-session-files"} ` +
-    `newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`,
-  )
-
-  // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
-  // "Maximum call stack size exceeded"——args 数量受调用栈限制。
-  // playground 一次会话经常落 30K+ 条事件到 jsonl，必须逐条 push。
-  const allRecords = []
-  for (const f of files) {
-    const records = readJsonl(f)
-    appendUploaderLog(`main.read file=${f} records=${records.length}`)
-    for (const r of records) allRecords.push(r)
-  }
-  appendUploaderLog(`main.records total=${allRecords.length}`)
-
-  const state = buildState(allRecords)
-
-  const roots = []
-  for (const sid of state.sessions.keys()) {
-    if (!state.sessionParent.get(sid)) roots.push(sid)
-  }
-  appendUploaderLog(`main.sessions total=${state.sessions.size} roots=${roots.length}`)
-
-  for (const rootSid of roots) {
-    if (deletedSessionIds.has(rootSid)) {
-      appendUploaderLog(`session.skip deleted task_id=${rootSid}`)
-      continue
-    }
-    const interactions = mergeGraph(state, rootSid)
-    if (!interactions.length) {
-      appendUploaderLog(`session.skip emptyInteractions task_id=${rootSid}`)
-      continue
-    }
-    const query = interactions.find((m) => m.role === "user" && m.content)?.content || `OpenCode Session ${rootSid}`
-    const derived = deriveFields(interactions)
-
-    // System prompts are now unshifted inside mergeGraph() per session
-    // (root + sub-agents), so no extra unshift needed here. Keep `sys` for
-    // backward-compatibility on payload.system_prompts metadata.
-    const sys = state.sysPrompts.get(rootSid) || []
-    const pids = Array.from(state.sessionPids.get(rootSid) || [])
-    const opencodeCliCompleted = state.cliCompletedSessions.has(rootSid)
-      || (pids.length > 0 && pids.every((pid) => !isPidAlive(pid)))
-    const idleMs = state.sessionIdleAt.get(rootSid) || 0
-    let lastTs = 0
-    for (const m of interactions) {
-      const t1 = toMsTimestamp(m.timestamp) || 0
-      const t2 = toMsTimestamp(m.timeInfo?.completed) || 0
-      const t3 = toMsTimestamp(m.timeInfo?.created) || 0
-      lastTs = Math.max(lastTs, t1, t2, t3)
-    }
-    const traceCompletedAt = isRoundCompleted({ finalResult: derived.final_result, idleMs, lastTs })
-      ? new Date(idleMs).toISOString()
-      : undefined
-    const payload = {
-      task_id: rootSid,
-      query,
-      framework: "opencode",
-      ...(clientIdentity?.clientId ? { client_id: clientIdentity.clientId } : {}),
-      host: {
-        hostname: os.hostname() || clientIdentity?.hostname || undefined,
-        ...(reportedIp ? { reported_ip: reportedIp } : {}),
-      },
-      model: derived.model,
-      tokens: derived.tokens,
-      latency: derived.latency,
-      input_tokens: derived.input_tokens,
-      output_tokens: derived.output_tokens,
-      tool_call_count: derived.tool_call_count,
-      tool_call_error_count: derived.tool_call_error_count,
-      llm_call_count: derived.llm_call_count,
-      cache_read_input_tokens: derived.cache_read_input_tokens,
-      cache_creation_input_tokens: derived.cache_creation_input_tokens,
-      max_single_call_tokens: derived.max_single_call_tokens,
-      reasoning_tokens: derived.reasoning_tokens,
-      final_result: derived.final_result,
-      interactions,
-      system_prompts: sys,
-      trace: { trace_id: rootSid },
-      trace_completed_at: traceCompletedAt,
-      opencode_cli_completed: opencodeCliCompleted,
-      timestamp: new Date().toISOString(),
+    // Reload under the lock: another CLI may have advanced its session checkpoints.
+    const ckpt = loadCheckpoint(checkpointFile)
+    const fileScanMtimes = ckpt.__fileScanMtimes || {}
+    const scopedFile = spoolFile ? path.resolve(spoolFile) : ""
+    const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
+    const lastScanMtime = scopedFile
+      ? Number(fileScanMtimes[scopedFile] || 0)
+      : Number(ckpt.__lastScanMtime || 0)
+    if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
+      appendUploaderLog(
+        "main.fastSkip newestMtime=" + newestMtime + " lastScanMtime=" + lastScanMtime + " spoolDir=" + spoolDir,
+      )
+      return
     }
 
-    const lastAssistant = String(payload.final_result || "")
-    const sig = buildSignature({
-      interactionCount: interactions.length,
-      finalResultLength: lastAssistant.length,
-      lastTs,
-      traceCompletedAt: payload.trace_completed_at,
-      cliCompleted: payload.opencode_cli_completed,
-      toolCallCount: derived.tool_call_count,
-      tokens: derived.tokens,
-      recordCount: subtreeRecordCount(state, rootSid),
-      // 已结束的会话回到旧的 5 段式指纹：单调量只在"进行中"才需要。否则一条已完成的
-      // trace 只要 spool 里再落进任何杂事件（recordCount+1）就会重传，而它带着
-      // trace_completed_at，服务端会再跑一整轮 LLM 分析。
-      completed: Boolean(payload.trace_completed_at) || Boolean(payload.opencode_cli_completed),
-    })
+    const candidateFiles = selectJsonlFiles(spoolDir, spoolFile)
+    const files = selectJsonlFilesForUpload(candidateFiles, { forceSessions, lastScanMtime })
+    const scannedMtimes = new Map(files.map(file => {
+      try { return [file, fs.statSync(file).mtimeMs] } catch { return [file, 0] }
+    }))
+    let uploadFailed = false
     appendUploaderLog(
-      `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
-      `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
+      `main.scan files=${files.length}/${candidateFiles.length} ` +
+      `mode=${spoolFile ? "spool-file" : forceSessions.size ? "force-session" : "changed-session-files"} ` +
+      `newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`,
     )
 
-    // 账号级时间门: session 最后活动时间早于本账号安装时间(uploadSinceMs)就 skip,
-    // 防止切账号后历史 trace 被当前 key 回放。写入 checkpoint 以免每次扫描重复评估。
-    // 仅在能解析出活动时间(activityMs>0)时启用门, 解析不到时不拦截、走正常上传, 避免误杀。
-    const activityMs = Math.max(lastTs, idleMs)
-    if (uploadSinceMs > 0 && activityMs > 0 && activityMs < uploadSinceMs) {
-      appendUploaderLog(
-        `session.skip before-upload-since task_id=${rootSid} activityMs=${activityMs} sinceMs=${uploadSinceMs} sig=${sig}`,
-      )
-      ckpt[rootSid] = sig
-      saveCheckpoint(checkpointFile, ckpt)
-      continue
+    // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
+    // "Maximum call stack size exceeded"——args 数量受调用栈限制。
+    // playground 一次会话经常落 30K+ 条事件到 jsonl，必须逐条 push。
+    const allRecords = []
+    for (const f of files) {
+      const records = readJsonl(f)
+      appendUploaderLog(`main.read file=${f} records=${records.length}`)
+      for (const r of records) allRecords.push(r)
     }
+    appendUploaderLog(`main.records total=${allRecords.length}`)
 
-    // 强推信号之前只绕过 fastSkip，到这里照样被 checkpoint 拦掉，Ctrl+C 兜底和手动
-    // 排障都推不上去。这里放行，但**只对指定 session**——FORCE=1 是进程级的，如果让它
-    // 绕过所有 session 的 checkpoint，shutdown 那一次强推会把 spool 里保留期内的所有
-    // 历史会话重传一遍，并在服务端触发一整轮 LLM 分析。
-    if (!forceSessions.has(rootSid) && isSignatureUnchanged(ckpt[rootSid], sig)) {
-      appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig} prevSig=${ckpt[rootSid]}`)
-      // 老格式 checkpoint 原地升级成新格式（见 isSignatureUnchanged 的注释）。
-      if (ckpt[rootSid] !== sig) {
+    const state = buildState(allRecords)
+
+    const roots = []
+    for (const sid of state.sessions.keys()) {
+      if (!state.sessionParent.get(sid)) roots.push(sid)
+    }
+    appendUploaderLog(`main.sessions total=${state.sessions.size} roots=${roots.length}`)
+
+    for (const rootSid of roots) {
+      if (deletedSessionIds.has(rootSid)) {
+        appendUploaderLog(`session.skip deleted task_id=${rootSid}`)
+        continue
+      }
+      const interactions = mergeGraph(state, rootSid)
+      if (!interactions.length) {
+        appendUploaderLog(`session.skip emptyInteractions task_id=${rootSid}`)
+        continue
+      }
+      const query = interactions.find((m) => m.role === "user" && m.content)?.content || `OpenCode Session ${rootSid}`
+      const derived = deriveFields(interactions)
+
+      // System prompts are now unshifted inside mergeGraph() per session
+      // (root + sub-agents), so no extra unshift needed here. Keep `sys` for
+      // backward-compatibility on payload.system_prompts metadata.
+      const sys = state.sysPrompts.get(rootSid) || []
+      const pids = Array.from(state.sessionPids.get(rootSid) || [])
+      const opencodeCliCompleted = state.cliCompletedSessions.has(rootSid)
+        || (pids.length > 0 && pids.every((pid) => !isPidAlive(pid)))
+      const idleMs = state.sessionIdleAt.get(rootSid) || 0
+      let lastTs = 0
+      for (const m of interactions) {
+        const t1 = toMsTimestamp(m.timestamp) || 0
+        const t2 = toMsTimestamp(m.timeInfo?.completed) || 0
+        const t3 = toMsTimestamp(m.timeInfo?.created) || 0
+        lastTs = Math.max(lastTs, t1, t2, t3)
+      }
+      const traceCompletedAt = isRoundCompleted({ finalResult: derived.final_result, idleMs, lastTs })
+        ? new Date(idleMs).toISOString()
+        : undefined
+      const payload = {
+        task_id: rootSid,
+        query,
+        framework: "opencode",
+        ...(clientIdentity?.clientId ? { client_id: clientIdentity.clientId } : {}),
+        host: {
+          hostname: os.hostname() || clientIdentity?.hostname || undefined,
+          ...(reportedIp ? { reported_ip: reportedIp } : {}),
+        },
+        model: derived.model,
+        tokens: derived.tokens,
+        latency: derived.latency,
+        input_tokens: derived.input_tokens,
+        output_tokens: derived.output_tokens,
+        tool_call_count: derived.tool_call_count,
+        tool_call_error_count: derived.tool_call_error_count,
+        llm_call_count: derived.llm_call_count,
+        cache_read_input_tokens: derived.cache_read_input_tokens,
+        cache_creation_input_tokens: derived.cache_creation_input_tokens,
+        max_single_call_tokens: derived.max_single_call_tokens,
+        reasoning_tokens: derived.reasoning_tokens,
+        final_result: derived.final_result,
+        interactions,
+        system_prompts: sys,
+        trace: { trace_id: rootSid },
+        trace_completed_at: traceCompletedAt,
+        opencode_cli_completed: opencodeCliCompleted,
+        timestamp: new Date().toISOString(),
+      }
+
+      const lastAssistant = String(payload.final_result || "")
+      const sig = buildSignature({
+        interactionCount: interactions.length,
+        finalResultLength: lastAssistant.length,
+        lastTs,
+        traceCompletedAt: payload.trace_completed_at,
+        cliCompleted: payload.opencode_cli_completed,
+        toolCallCount: derived.tool_call_count,
+        tokens: derived.tokens,
+        recordCount: subtreeRecordCount(state, rootSid),
+        // 已结束的会话回到旧的 5 段式指纹：单调量只在"进行中"才需要。否则一条已完成的
+        // trace 只要 spool 里再落进任何杂事件（recordCount+1）就会重传，而它带着
+        // trace_completed_at，服务端会再跑一整轮 LLM 分析。
+        completed: Boolean(payload.trace_completed_at) || Boolean(payload.opencode_cli_completed),
+      })
+      appendUploaderLog(
+        `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
+        `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
+      )
+
+      // 账号级时间门: session 最后活动时间早于本账号安装时间(uploadSinceMs)就 skip,
+      // 防止切账号后历史 trace 被当前 key 回放。写入 checkpoint 以免每次扫描重复评估。
+      // 仅在能解析出活动时间(activityMs>0)时启用门, 解析不到时不拦截、走正常上传, 避免误杀。
+      const activityMs = Math.max(lastTs, idleMs)
+      if (uploadSinceMs > 0 && activityMs > 0 && activityMs < uploadSinceMs) {
+        appendUploaderLog(
+          `session.skip before-upload-since task_id=${rootSid} activityMs=${activityMs} sinceMs=${uploadSinceMs} sig=${sig}`,
+        )
         ckpt[rootSid] = sig
         saveCheckpoint(checkpointFile, ckpt)
-        appendUploaderLog(`session.checkpointUpgraded task_id=${rootSid} sig=${sig}`)
+        continue
       }
-      continue
+
+      // 强推信号之前只绕过 fastSkip，到这里照样被 checkpoint 拦掉，Ctrl+C 兜底和手动
+      // 排障都推不上去。这里放行，但**只对指定 session**——FORCE=1 是进程级的，如果让它
+      // 绕过所有 session 的 checkpoint，shutdown 那一次强推会把 spool 里保留期内的所有
+      // 历史会话重传一遍，并在服务端触发一整轮 LLM 分析。
+      if (!forceSessions.has(rootSid) && isSignatureUnchanged(ckpt[rootSid], sig)) {
+        appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig} prevSig=${ckpt[rootSid]}`)
+        // 老格式 checkpoint 原地升级成新格式（见 isSignatureUnchanged 的注释）。
+        if (ckpt[rootSid] !== sig) {
+          ckpt[rootSid] = sig
+          saveCheckpoint(checkpointFile, ckpt)
+          appendUploaderLog(`session.checkpointUpgraded task_id=${rootSid} sig=${sig}`)
+        }
+        continue
+      }
+
+      const res = await postJson(host, apiKey, payload, clientIdentity)
+      if (res.ok) {
+        ckpt[rootSid] = sig
+        saveCheckpoint(checkpointFile, ckpt)
+        appendUploaderLog(`session.uploaded task_id=${rootSid} status=${res.status} sig=${sig}`)
+      } else {
+        uploadFailed = true
+        appendUploaderLog(
+          `session.uploadFailed task_id=${rootSid} status=${res.status} body=${String(res.body || "").slice(0, 1000) || "(empty)"}`,
+        )
+      }
     }
 
-    const res = await postJson(host, apiKey, payload, clientIdentity)
-    if (res.ok) {
-      ckpt[rootSid] = sig
+    // Scoped scans only acknowledge files they read. A different CLI's newer mtime
+    // must never hide an older file that lost an earlier race for the uploader lock.
+    if (newestMtime > 0 && !uploadFailed) {
+      for (const [file, mtime] of scannedMtimes) {
+        if (mtime > 0) fileScanMtimes[path.resolve(file)] = mtime
+      }
+      ckpt.__fileScanMtimes = fileScanMtimes
+      if (!scopedFile) ckpt.__lastScanMtime = newestMtime
       saveCheckpoint(checkpointFile, ckpt)
-      appendUploaderLog(`session.uploaded task_id=${rootSid} status=${res.status} sig=${sig}`)
-    } else {
-      appendUploaderLog(
-        `session.uploadFailed task_id=${rootSid} status=${res.status} body=${String(res.body || "").slice(0, 1000) || "(empty)"}`,
-      )
+      appendUploaderLog("main.checkpointUpdated lastScanMtime=" + newestMtime)
     }
-  }
-
-  // Record that we've scanned up to this mtime. Next invocation will short-circuit
-  // unless a JSONL file has been modified after this point.
-  if (newestMtime > 0) {
-    ckpt.__lastScanMtime = newestMtime
-    saveCheckpoint(checkpointFile, ckpt)
-    appendUploaderLog(`main.checkpointUpdated lastScanMtime=${newestMtime}`)
+  } finally {
+    releaseLock()
   }
 }
 
