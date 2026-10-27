@@ -129,6 +129,10 @@ Linux 会按实际权限与既有安装选择 systemd 层级：root 安装或检
 systemd manager 可用；普通用户若遇到历史系统级服务，会先退出并提示使用 root 重跑，避免旧进程
 继续持有随后被撤销的凭证。macOS 仍使用当前用户的 `~/Library/LaunchAgents`。
 
+WSL 或切换 Linux 用户后，终端可能缺少 `XDG_RUNTIME_DIR`、`DBUS_SESSION_BUS_ADDRESS`。安装器会为用户级 `systemctl` 自动补全缺失值：默认使用当前进程 UID 对应的 `/run/user/<uid>` 及其 `bus`，并检查目录和 Unix socket 均属于该用户；已有配置保持不变。这适用于注册前检查、安装、重启、状态查询与卸载，无需先手动 export，也不写入 shell 配置或 `.env`。
+
+若仍出现 `Failed to connect to bus`，请确认当前用户的 systemd user manager 已启动、bus 存在，或检查已有会话环境变量是否指向了其他用户。自动补全不会创建缺失的 user manager；预检失败时不会刷新设备凭证。注册输出中的 `user=` 才是绑定的平台账号，不要求它与 Linux 用户名一致。
+
 安装完成后客户端会：
 
 - 注册为系统服务，崩溃后由操作系统自动拉起，不随 Agent 平台启停

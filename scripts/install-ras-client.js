@@ -453,8 +453,31 @@ function systemctlArgs(scope, ...args) {
   return scope === 'user' ? ['--user', ...args] : args
 }
 
+function systemdEnvironment(scope, {
+  env = process.env,
+  uid = process.geteuid ? process.geteuid() : null,
+  statSync = fs.statSync,
+} = {}) {
+  const result = { ...env }
+  if (scope !== 'user' || !Number.isInteger(uid) || uid < 0) return result
+  if (result.XDG_RUNTIME_DIR && result.DBUS_SESSION_BUS_ADDRESS) return result
+  const runtimeDir = result.XDG_RUNTIME_DIR || `/run/user/${uid}`
+  if (!path.isAbsolute(runtimeDir)) return result
+  try {
+    const directory = statSync(runtimeDir)
+    const busPath = path.join(runtimeDir, 'bus')
+    const bus = statSync(busPath)
+    if (!directory.isDirectory() || directory.uid !== uid || !bus.isSocket() || bus.uid !== uid) return result
+    result.XDG_RUNTIME_DIR ||= runtimeDir
+    result.DBUS_SESSION_BUS_ADDRESS ||= `unix:path=${busPath}`
+  } catch {}
+  return result
+}
+
 function systemctl(scope, ...args) {
-  return spawnSync('systemctl', systemctlArgs(scope, ...args), { encoding: 'utf8', stdio: 'pipe' })
+  return spawnSync('systemctl', systemctlArgs(scope, ...args), {
+    encoding: 'utf8', stdio: 'pipe', env: systemdEnvironment(scope),
+  })
 }
 
 function systemdCommand(scope, command) {
@@ -469,9 +492,12 @@ function preflightSystemd(target, runner = systemctl) {
     }
   }
   const result = runner(target.scope, 'show-environment')
+  const detail = (result.stderr || result.stdout || '').trim()
   return {
     ok: result.status === 0,
-    detail: (result.stderr || result.stdout || '').trim(),
+    detail: result.status !== 0 && target.scope === 'user'
+      ? `${detail}\n安装器会自动补全缺失的用户会话环境；请确认当前用户的 systemd user manager 已启动且 /run/user/${target.uid}/bus 可访问。若已设置 XDG_RUNTIME_DIR 或 DBUS_SESSION_BUS_ADDRESS，请确认其属于当前用户。`
+      : detail,
   }
 }
 
@@ -782,6 +808,7 @@ module.exports = {
   writeSystemdUnit,
   resolveSystemdTarget,
   systemctlArgs,
+  systemdEnvironment,
   preflightSystemd,
   writeLaunchdPlist,
   bootstrapLaunchdService,

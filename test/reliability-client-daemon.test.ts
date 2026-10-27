@@ -1168,6 +1168,39 @@ test('systemd preflight rejects an unprivileged legacy migration before registra
   )
 })
 
+test('systemd fills missing user bus variables only for the current UID and preserves explicit settings', () => {
+  const { systemdEnvironment } = require_('../scripts/install-ras-client.js')
+  const statSync = (file: string) => ({ uid: 1001,
+    isDirectory: () => file === '/run/user/1001' || file === '/custom/runtime',
+    isSocket: () => file === '/run/user/1001/bus' || file === '/custom/runtime/bus',
+  })
+  const env = { PATH: '/usr/bin', SUDO_UID: '2000' }
+  const expected = { ...env, XDG_RUNTIME_DIR: '/run/user/1001', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1001/bus' }
+  assert.deepEqual(systemdEnvironment('user', { env, uid: 1001, statSync }), expected)
+  assert.deepEqual(env, { PATH: '/usr/bin', SUDO_UID: '2000' })
+  assert.deepEqual(systemdEnvironment('system', { env, uid: 1001, statSync }), env)
+  assert.deepEqual(systemdEnvironment('user', { env, uid: null, statSync }), env)
+  assert.equal(systemdEnvironment('user', { env: { XDG_RUNTIME_DIR: '/custom/runtime' }, uid: 1001, statSync }).DBUS_SESSION_BUS_ADDRESS, 'unix:path=/custom/runtime/bus')
+  assert.equal(systemdEnvironment('user', { env: { DBUS_SESSION_BUS_ADDRESS: 'unix:abstract=custom' }, uid: 1001, statSync }).DBUS_SESSION_BUS_ADDRESS, 'unix:abstract=custom')
+  const explicit = { XDG_RUNTIME_DIR: '/custom/runtime', DBUS_SESSION_BUS_ADDRESS: 'unix:abstract=custom' }
+  assert.deepEqual(systemdEnvironment('user', { env: explicit, uid: 1001, statSync: () => { throw new Error('must not inspect explicit settings') } }), explicit)
+  for (const inspect of [
+    () => { throw new Error('ENOENT') },
+    () => ({ uid: 2000, isDirectory: () => true, isSocket: () => true }),
+    () => ({ uid: 1001, isDirectory: () => true, isSocket: () => false }),
+  ]) assert.deepEqual(systemdEnvironment('user', { env, uid: 1001, statSync: inspect }), env)
+})
+
+test('missing systemd user manager remains a pre-registration failure with actionable guidance', () => {
+  const result = installer.preflightSystemd?.(
+    { scope: 'user', uid: 1001, unitPath: '/fixture/user.service', legacySystemUnit: false },
+    () => ({ status: 1, stderr: 'Failed to connect to bus: No medium found' }),
+  )
+  assert.equal(result?.ok, false)
+  assert.match(result?.detail || '', /No medium found/)
+  assert.match(result?.detail || '', /systemd user manager.*\/run\/user\/1001\/bus/)
+})
+
 test('system-level unit uses multi-user target while user unit keeps default target', () => {
   assert.match(installer.buildSystemdUnit?.('system') || '', /WantedBy=multi-user\.target/)
   assert.match(installer.buildSystemdUnit?.('user') || '', /WantedBy=default\.target/)
