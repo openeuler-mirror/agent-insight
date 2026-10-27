@@ -364,6 +364,8 @@ Case 行的 **重试** 由 Trace 来源决定：
 
 Trace 评测详情把输入、输出和评分依据放在同一页，适合核查一次具体判断。
 
+普通实验执行失败时，Case 详情顶部直接展示失败原因；Benchmark 详情按当前执行和评测状态展示失败原因，即使已经生成提交物或关联 Trace 也会显示。失败信息同时保留在执行进度弹窗中；重试或重评开始后不再展示上一轮的失败提示。
+
 <p align="center">
   <img src="../../images/agent/evaluation/eval_experiment_case_detail.png" alt="Trace 评测详情，展示任务输入、参考答案、实际输出、结果评测总分、评分点证据、人工修正和评论" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>

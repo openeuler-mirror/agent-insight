@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { BenchmarkArtifactActions, type BenchmarkArtifactRef } from '@/components/eval/BenchmarkArtifactActions';
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
+import { benchmarkExecutionProgress, type BenchmarkProgressDetails } from '@/lib/benchmark/execution-progress';
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -87,7 +88,10 @@ interface ExperimentDetail {
       submissions: Array<BenchmarkArtifactRef & { sha256: string }>;
       evidenceArtifacts: Array<BenchmarkArtifactRef & { sha256: string }>;
       runStatus: string;
+      progressStage: string | null;
+      progressDetails?: BenchmarkProgressDetails;
       evaluationStatus: string | null;
+      evaluationWaitCode?: string | null;
       failure?: { code: string; message: string | null } | null;
     };
   }>;
@@ -570,6 +574,13 @@ export function ExperimentCaseDetail({
 
   const inputSummary = (caseRow?.input || '').replace(/\s+/g, ' ').trim();
   const isBenchmark = detail?.scope === 'benchmark' && Boolean(caseRow?.benchmark);
+  // 这里只读取状态和失败原因，不计算实时耗时。
+  const benchmarkProgress = isBenchmark && caseRow?.benchmark
+    ? benchmarkExecutionProgress(caseRow.benchmark, 0) : null;
+  const benchmarkEvaluationFailure = benchmarkProgress?.failed && Boolean(
+    ['evaluation_failed', 'submission_invalid'].includes(caseRow?.benchmark?.runStatus || '')
+    || ['failed', 'normalization_failed', 'submission_invalid'].includes(caseRow?.benchmark?.evaluationStatus || ''),
+  );
   const benchmarkReferenceText = (() => {
     const benchmark = caseRow?.benchmark;
     if (!benchmark) return '';
@@ -658,10 +669,18 @@ export function ExperimentCaseDetail({
               )}
             </div>
 
-            {isBenchmark && caseRow.traceStatus === 'failed' && (
+            {(isBenchmark ? benchmarkProgress?.failed : caseRow.traceStatus === 'failed') && (
               <BenchmarkFailureNotice
-                code={caseRow.benchmark?.failure?.code}
-                message={caseRow.benchmark?.failure?.message || caseRow.traceError}
+                code={isBenchmark
+                  ? benchmarkEvaluationFailure
+                    ? caseRow.benchmark?.evaluationWaitCode || caseRow.benchmark?.failure?.code || 'EVALUATION_FAILED'
+                    : caseRow.benchmark?.failure?.code
+                  : undefined}
+                label={benchmarkEvaluationFailure
+                  ? caseRow.benchmark?.runStatus === 'submission_invalid' || caseRow.benchmark?.evaluationStatus === 'submission_invalid'
+                    ? '提交物无效' : 'Benchmark 评测失败'
+                  : undefined}
+                message={isBenchmark ? benchmarkProgress?.failureMessage : caseRow.traceError || '未收到详细失败原因'}
               />
             )}
 

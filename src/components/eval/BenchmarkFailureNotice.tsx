@@ -3,20 +3,23 @@ import { benchmarkFailurePresentation } from '@/lib/benchmark/failure-presentati
 export function BenchmarkFailureNotice({
   code,
   message,
+  label,
   compact = false,
 }: {
   code?: string | null;
   message?: string | null;
+  label?: string;
   compact?: boolean;
 }) {
   const failure = benchmarkFailurePresentation(code, message);
   if (!failure) return null;
+  const displayedLabel = label || failure.label;
   const displayedCode = `${failure.code || 'EXECUTION_FAILED'}${failure.originalCode ? `（原始码：${failure.originalCode}）` : ''}`;
 
   if (compact) {
     return (
-      <div title={`${failure.label}（${displayedCode}）：${failure.message}`} style={{ display: 'grid', gap: 2 }}>
-        <span style={{ color: 'var(--error)', fontSize: 11, fontWeight: 600 }}>{failure.label}</span>
+      <div title={`${displayedLabel}（${displayedCode}）：${failure.message}`} style={{ display: 'grid', gap: 2 }}>
+        <span style={{ color: 'var(--error)', fontSize: 11, fontWeight: 600 }}>{displayedLabel}</span>
         <span style={{ color: 'var(--foreground-muted)', fontSize: 10.5, fontFamily: 'var(--font-mono, monospace)' }}>
           {displayedCode}
         </span>
@@ -38,7 +41,7 @@ export function BenchmarkFailureNotice({
       }}
     >
       <span style={{ color: 'var(--error)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
-        {failure.label}
+        {displayedLabel}
       </span>
       <span style={{ color: 'var(--foreground-secondary)', fontSize: 12, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
         {failure.message}
