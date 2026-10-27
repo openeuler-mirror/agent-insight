@@ -29,7 +29,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   t.after(async () => {
     await fsp.rm(temporary, { recursive: true, force: true });
   });
-  execFileSync('/usr/bin/sqlite3', [databasePath, `
+  execFileSync('sqlite3', [databasePath, `
     CREATE TABLE "Execution" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "taskId" TEXT,

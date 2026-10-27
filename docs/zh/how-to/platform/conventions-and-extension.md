@@ -104,7 +104,8 @@ changefreq: monthly
   普通启动仅在没有成功记录、输入变化或产物不完整时重建。直接运行 `npm run build` 不会创建可复用记录。
   启动脚本始终执行数据库同步和首页、数据集、故障页面健康检查，并输出各阶段与总耗时。
 - **Test**：`npm run test` 先检查 Trae 采集器类型，再执行 `node --import tsx --test "test/**/*.test.ts"`；它不替代根项目和 Next 应用的类型检查。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
-- **测试前置条件**：Python 环境需安装 `agent_ras/pyproject.toml` 和 `agent_fault_injection/pyproject.toml` 声明的运行依赖；PowerShell 脚本解析与安装测试需要 PATH 中存在 `pwsh`。Trae 产物检查前执行 `npm run compile --prefix scripts/trae-collector`。数据库测试使用独立 SQLite 库和当前 Prisma schema，数据目录使用隔离的 `AGENT_INSIGHT_HOME`，不得指向个人日常数据；环境缺失应单列为验证阻塞，不能据此认定产品功能失败。
+- **测试前置条件**：Python 环境需安装 `agent_ras/pyproject.toml` 和 `agent_fault_injection/pyproject.toml` 声明的运行依赖；PowerShell 脚本解析与安装测试需要 PATH 中存在 `pwsh`，协作持久化测试还需 `sqlite3` CLI。无管理员权限时可解压官方发行包到用户目录并加入 PATH。Trae 产物检查前执行 `npm run compile --prefix scripts/trae-collector`。RAS 测试可通过 `AGENT_INSIGHT_RAS_PYTHON` 指向已安装依赖的独立 venv。数据库测试使用独立 SQLite 库和当前 Prisma schema，数据目录使用隔离的 `AGENT_INSIGHT_HOME`，不得指向个人日常数据；环境缺失应单列为验证阻塞，不能据此认定产品功能失败。
+- **并发测试**：资源受限环境可运行 `npm run test -- --test-concurrency=2`，仍执行全部测试文件；文件内的并发、取消和防重用例仍保留。定位时序问题时用任务门闩或可控时钟，避免以固定 sleep 推断任务已开始/完成。API 异步受理测试应在评估器尚未释放时断言响应和持久状态，并在退出前等待后台任务收尾。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。
 
 ### 生产启动构建复用
