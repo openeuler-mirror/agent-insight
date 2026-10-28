@@ -80,7 +80,7 @@ MCTS collector 不增加关系 API 或 Prisma 模型，直接使用公开 bindin
 
 ## Goal Plus 专用投影与正文读取
 
-历史 Goal Plus 语义数据继续通过 `GoalPlusExecutionLink` 选择当前 run 的明确成员，并由 `composeCollaborationTrace` 追加带 `trace_synthetic`、`trace_relation` 元数据的只读 TASK / 子 Agent 展示流。当前活跃主 Session、唯一 main link、worker 的 source/goal/run/candidate/session 身份和 owner 仍是成员边界；历史 run、歧义端点或普通 Pi 任务不借用该投影。详见 [Goal Plus 观测契约](goal-plus.md)。
+历史 Goal Plus 语义数据继续通过 `GoalPlusExecutionLink` 选择当前 run 的明确成员，并由 `composeCollaborationTrace` 追加带 `trace_synthetic`、`trace_relation` 元数据的只读 TASK / 子 Agent 展示流。当前活跃主 Session、唯一 main link、worker 的 source/goal/run/candidate/session 身份和 owner 仍是成员边界；历史 run、歧义端点或普通 Pi 任务不借用该投影。详见 [Goal Plus 观测契约](./goal-plus.md)。
 
 虚拟 TASK 追加在主 Trace 原生交互之后，标注“Goal Plus 编排”。关系可证明成员身份，不一定证明具体启动位置；`anchorState != confirmed` 时必须显示未确认定位。专用投影单次最多 50 个 worker、20000 条 worker 交互，超限或关联正文暂不可读时 `collaborationProjection.truncated=true`。子 Agent 保留 worker taskId，可继续打开独立详情。reported 关系投影优先；没有可用 reported 合并结果时才回退历史 semantic 专用投影。同一响应不叠加两套成员副本，避免重复显示。
 

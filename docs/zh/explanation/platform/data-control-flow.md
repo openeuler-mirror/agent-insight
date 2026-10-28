@@ -302,6 +302,11 @@ OpenCode 的 `session.error`、assistant `info.error` 和 prompt 响应中的结
 
 三个 Skill 实验的进度区统一使用 `executionProgress` 与 `evaluationProgress`；A/B 额外消费详情接口 `sideProgress.a/b`，两侧与汇总值从同一份 `caseStatesJson` 和冻结轮次计算。每条进度的已结束数为 `total - pending`，包括失败、跳过评测和未计分项；显式 `pending/running` 的评估器优先于同项的失败结果，运行中尚未登记完整评估结果的项继续等待，防止提前满格。进度百分比向下取整，空工作量显示 0，不把运行、判定和结果展示虚构为顺序阶段。已有 Trace 显示“Trace 就绪”，触发分析显示“触发判定”；取消状态单独展示，不依靠百分比推断成功。
 
+Skill 触发、用例与 A/B 的 Case 步骤进度复用 `CaseExecutionProgress`，A/B 按侧、重复轮次独立展示。现有实验详情接口增加 `skillExecutionSnapshot`，在同一读取事务中解析冻结 Case、GrayscaleTask 运行状态、当前 Trace Attempt 和主 Execution；不另建进度接口或表。触发分析使用“触发判定”步骤，并继续允许基于可信客户端证据在 Trace 未入库时完成；已有 Trace 跳过执行阶段。失败原因继续保留在原明细。
+
+每个 `datasetCaseId + side + runIndex` 使用 `executionClaimId/executionGeneration` 区分重新执行，`traceAttemptId/traceAttemptNo` 锁定本轮 Trace 尝试，`evaluationClaimId/evaluationAttempts` 区分仅重评。重新执行的身份预占、Case 输出清理和评估行失效在同一事务完成；创建 Trace Attempt、下发、绑定及失败回填均校验所属执行身份。单 run CAS 合并使用 `progressRevision` 并保留兄弟 run；阶段与终态不可被旧回调回退。评测批次也按 run 提交，避免整份 JSON 覆盖其他侧或重试。只有更高执行代际可以从头显示；仅重评通过更高评测版本回到评测阶段并保留原主链路。前端逐 run 拒绝旧执行代际、旧 Attempt、低 revision 和阶段回退，刷新失败保留已确认状态并继续轮询。客户端上报和 Benchmark 接入协议本次无新增字段，执行身份与回调均由服务端维护。
+
+
 已有 Trace 的用例分析不创建 `GrayscaleTask`。结果页按真实 `ExperimentCase.id` 关联详情 API 的 `cases` 与 `results`，通过 `use-case-results.ts` 派生单项状态和评分，不从空的 `caseStates` 推断“等待执行”。生成 Trace 与 A/B 仍使用原灰度运行投影。用例分析的结果分和轨迹分按已选评估器类别分别聚合，未选维度显示“未评测”，不得回退到 `overall`；仅轨迹类评分的结论限定在轨迹评测范围。已有 Trace 的重评复用 `POST /api/experiments/:id/results/:resultId/retry`，失败时只选失败行，全完成时确认后重评全部已选行；前端防重复提交，底层沿用行级执行锁。详情和删除传真实 Case ID，列表数量取未软删除 Case 数，而不是冻结的初始 Trace ID 数量。
 
 Skill A/B 创建契约使用 `versionAEnabled` / `versionBEnabled`（缺省均为 true）区分无 Skill 与未选择版本；禁用侧冻结为 `version*Id='__NONE__'`、`skillContext.version*=null`、`skillSnapshots.*=null`。A 启用时使用当前工作版本，B 启用时必须指定存在的 `compareVersion`；拒绝两侧均禁用及相同版本。`GrayscaleTask.boundSide` 选择 A（A 启用）或 B（A 禁用），任务 `skillVersion/skillVersionId` 绑定该侧实际版本，而不是固定绑定工作台版本；实验的 `skillVersion` 仍记录工作台上下文。启动时继续严格校验绑定，不放宽不可变约束。同配置复制保留冻结文件及无 Skill 侧，并重建正确的绑定侧；向导复用不得把 null 版本转换成 V0。
@@ -351,6 +356,8 @@ OpenCode、xiaoO、Pi 客户端发现本次根会话后，通过 `RUNNING(state=
 
 
 现有 `GET /api/experiments/:id` 在普通单组实验的 `cases[].executionProgress` 返回当前执行身份、轮次、阶段、更新时间、精确主执行 ID 和各评估器状态。`execution-progress-service.ts` 在只读事务中读取同一份 Case、最新 Attempt、结果及主 Execution，并同步投影当前行的实际输出、链路和评分行，避免拼接不同轮次的数据。生成流程使用 `ExperimentTraceAttempt`，FI 使用当前 `fiRunId`，已有 Trace 直接进入评测；主记录查询按当前用户限定且排除子 Agent。没有唯一主记录时不生成链接。Attempt 已下发时继续读取对应命令：`CREATED/SENT/RECEIVED` 显示等待客户端开始，`RUNNING` 显示 Agent 执行，`SUCCEEDED` 显示等待 Trace 入库；不把服务端下发当作客户端已开始执行。
+
+提前回传的 Trace ID 或已入库的部分根链路只用于关联，不作为 Agent 成功完成的证据。普通实验与 Skill 触发、用例、A/B 共用的阶段投影中，执行失败、取消或待重试仍停留 Agent 阶段；只有成功命令、明确的 `waiting_trace` 状态或 `TRACE_INGEST_TIMEOUT` 才证明已进入入库阶段。历史命令记录缺失时，明确的入库超时仍保留在等待 Trace 入库步骤。失败后的迟到链路可补充查看入口，不改变失败阶段或启动评测；重试身份与进度不回退规则保持不变。Benchmark 继续按执行器上报的业务阶段定位失败，不根据是否有关联链路推进阶段。
 
 普通 Trace 重试通过 `reserveTraceRetry` 在同一事务中锁定实验、校验调用方看到的旧 Attempt、创建新 `queued` Attempt、清空 Case 旧链路和重置结果。执行调度消费这个预占 Attempt，不额外创建一轮。数据库事务和 `(caseId, attemptNo)` 唯一约束负责多进程互斥；进程内锁只用于快速拒绝重复请求。最新 Attempt 无论处于排队、失败还是取消状态，旧 Attempt 均不得绑定当前 Case；历史回收也只检查最新 Attempt。客户端返回历史 Attempt 的 Trace ID 时以 `TRACE_ID_REUSED` 终止，不自动重试，也不按输入文本或最新记录猜测主链路。
 
@@ -485,15 +492,19 @@ Skill 实验列表的“同配置实验”复用 `/api/experiments` 的 `createM
 
 OpenCode 环境预检与客户端执行前共用 `scripts/opencode-connection-config.cjs` 的 `checkOpenCodeModelConfig()`。`services.checkAgent()` 供普通、Skill 和原生 Benchmark 环境适配器复用；`runExperimentCase()` 覆盖实际客户端执行，并在 Skill 隔离或缓存工作区准备后使用该工作区的 cwd/env 检查，将解析后的模型固定到本次调用。模型优先级为显式选择、Agent 默认、全局默认；未选 Provider 和 MCP 不参与模型连接的脱敏恢复。所选 Agent 被禁用或仅为子 Agent、Provider 被禁用、连接地址无效、Key/请求头为空或引用未解析、认证记录不完整时返回脱敏的 `MODEL_UNAVAILABLE`。
 
-公共检查以 `opencode models` 返回的完整 ID 验证所选模型，子进程设置 `OPENCODE_DISABLE_MODELS_FETCH=1` 和 `OPENCODE_DISABLE_AUTOUPDATE=1`，不传 `--refresh`，不执行 `run` 或真实推理探测；内置 Provider 的注册及原生认证能力交由原生目录判断，自定义 Provider 额外校验配置、认证存储、环境变量或认证请求头，本地回环免密连接保留。检查只返回解析后的模型 ID，不向服务端传递凭据，不保证远端 Key、权限、余额或网络可用。
+1.x 公共检查按完整 ID 接受生效配置 `provider.<id>.models` 中明确声明的自定义模型，前提是所选连接、认证、Provider 开关及模型黑白名单校验通过；未声明的模型再用 `opencode models` 确认。配置声明使用模型键而非展示名称，不依赖 CLI 必须列出自定义模型，与候选发现的合并口径一致。2.x 保持原生 `api --standalone model.list/model.default` 检查，仅接受原生目录中启用的模型，不回退到 1.x 配置或文本目录。1.x 目录子进程设置 `OPENCODE_DISABLE_MODELS_FETCH=1` 和 `OPENCODE_DISABLE_AUTOUPDATE=1`，不传 `--refresh`，不执行 `run` 或真实推理探测；内置 Provider 的注册及原生认证能力交由原生目录判断，自定义 Provider 额外校验配置、认证存储、环境变量或认证请求头，本地回环免密连接保留。检查只返回解析后的模型 ID，不向服务端传递凭据，不保证远端 Key、权限、余额或网络可用。
 
-环境准备原本在独立 Worker 中执行同步检查；实际 Case 执行通过同模块的 `checkOpenCodeModelConfigAsync()` 在独立子进程检查，整体上限 30 秒，支持取消并终止检查进程组，避免额外 CLI 等待阻塞常驻客户端心跳。子进程只回传模型 ID 或脱敏错误；CLI 的配置输出仍留在私有临时文件中。
+环境准备原本在独立 Worker 中执行同步检查；实际 Case 执行通过同模块的 `checkOpenCodeModelConfigAsync()` 在独立子进程检查，整体上限 120 秒，为依次读取版本、配置及模型目录预留时间，支持取消并终止检查进程组，避免额外 CLI 等待阻塞常驻客户端心跳。子进程只回传模型 ID 或脱敏错误；CLI 的配置输出仍留在私有临时文件中。
 
-底层仍复用 `readOpenCodeConfig()` 与现有本地连接恢复规则。配置和目录命令输出写入权限为 `0600` 的临时文件，避免 stdout 管道截断；限制为 8 MiB 和 15 秒，读取后清理文件。配置解析允许前置插件日志，拒绝多个配置对象、不完整 JSON 和尾部杂项。需要恢复的脱敏连接继续遵守已验证版本与本地来源限制；安装包分发同一模块，源码和安装目录使用同一规则。
+底层仍复用 `readOpenCodeConfig()` 与现有本地连接恢复规则。配置和目录命令输出写入权限为 `0600` 的临时文件，避免 stdout 管道截断；限制为 8 MiB，每条命令最多等待 60 秒，读取后清理文件。配置解析允许前置插件日志，拒绝多个配置对象、不完整 JSON 和尾部杂项。需要恢复的脱敏连接继续遵守已验证版本与本地来源限制；安装包分发同一模块，源码和安装目录使用同一规则。
+
+Skill 的 1.x 隔离工作区在写入配置前，从客户端账号的 `OPENCODE_CONFIG_DIR`、XDG OpenCode 配置目录或用户 `.opencode` 中选择一套完整的 `@opencode-ai/plugin`、`@opencode-ai/sdk`、`zod`。只复制这三个包的实体文件到隔离配置目录与工作目录的 `.opencode`，并生成仅声明插件依赖的 package/lock 元数据，避免 OpenCode 在新目录中重复自动安装；写时复制可用时由文件系统优化，每个副本保持独立可写。找不到完整依赖时返回 `SKILL_ISOLATION_UNAVAILABLE` 并提示补齐依赖，失败工作区立即清理。用户配置、其他插件与其他依赖不会复制；不引入额外缓存或安装锁，2.x 继续原生隔离流程。
 
 OpenCode 实验进程关闭后，常驻客户端调用本机上传器，以 `AGENT_INSIGHT_UPLOADER_FORCE_SESSION` 限定本次 Trace，最多等待 20 秒；补报失败不改变 Agent 的执行结果，服务器仍通过 Trace 完整性检查后才绑定用例。上传器在账号对应的 checkpoint 中保存 `__pendingSessions`（会话到 spool 文件的映射），未完成 CLI 结束上报或 HTTP 上传失败时继续重检这些文件，进程退出不再依赖 mtime 变化。结束上传成功后移除待处理记录，内容指纹抑制重复上传；指定会话的补报不重传同文件内其他根会话。`waiting_trace` 在详情页显示为“执行已结束，等待 Trace 完成上报”，不再落到“等待执行”。
 
 工作台会话首次从管理中心选择时写入固定 `skillName` 和起始 `workVersion`。会话内每次成功发布只推进 `workVersion`，不会改变 `skillName`；历史任务和优化记录继续保存各轮精确基线。顶部资产选择器是独立的右栏资产状态，不持久化到会话；详情、正式评估、实验和优化记录都读取该 `skillName + version`。正式评估和实验不为资产创建过程会话。重新打开历史会话、开始生成或开始优化时，前端才以过程会话保存的 `skillName + workVersion` 恢复右侧资产。
+
+工作台的“Skill 优化”快捷操作直接提交当前输入框的诉求，准备优化会话成功后才触发执行。生成与优化对话通过快捷操作回调传递各自的输入及忙碌状态，准备阶段使用同步锁拦截重复点击；归并和执行期间复用现有运行锁、取消与质量门禁。没有人工诉求时，正式版本归并已有评估与实验问题，工作快照使用当前有效的静态问题；无可执行依据时明确提示，不构造占位诉求绕过前后端空请求校验。
 
 ```mermaid
 flowchart LR
@@ -536,7 +547,7 @@ AgentDebug 主诊断后端只向诊断 Agent 提供执行元数据、turn/node/a
 普通实验与 Benchmark 实验冻结的 Agent 默认执行上限均为 600 秒。实验向导允许用户配置 30～3600 之间的整数秒数，创建时分别写入普通实验的 `executionTarget.timeoutSeconds` 或 Benchmark 的 `runConfig.timeoutSeconds`；复用实验时会回填冻结值。该值只控制执行器运行 Agent 的时间；Benchmark Evaluator/Harness 使用独立的评测超时配置。
 
 ## 跨模块流程说明
-每条后端流水线都跨越 `app`（路由）→ `lib`（引擎/存储），并经常涉及 `prompts`（LLM 模板）和 `server`（Prisma 仓库）。`lib ↔ server` 循环（见 [architecture.md](architecture.md#layering--pattern)）意味着存储辅助函数与仓库会相互调用；应将它们视为同一个持久化核心。
+每条后端流水线都跨越 `app`（路由）→ `lib`（引擎/存储），并经常涉及 `prompts`（LLM 模板）和 `server`（Prisma 仓库）。`lib ↔ server` 循环（见 [architecture.md](./architecture.md#layering--pattern)）意味着存储辅助函数与仓库会相互调用；应将它们视为同一个持久化核心。
 
 
 
@@ -557,7 +568,7 @@ flowchart LR
 ```
 
 实现入口为 `src/lib/trace-transfer.ts`（Bundle 校验、排序与 ID 重映射）和 `src/lib/trace-transfer-service.ts`（所有权、完整树查询、持久化与失败清理）。Session 的 `interactions` 随树迁移；Langfuse Session 同时迁移完整 `langfuseTraceNodes`，冲突重映射只改其中的 `subagentSessionId`，保留 OTel trace/span 父子标识。导入目标 user 始终取当前请求身份，不信任 Bundle 中的来源用户。任一节点写入或 Skill 重算失败时，服务会清理本次已创建的 Session 与 Execution，避免保留可见的半棵树。
-<!-- Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics. -->
+[//]: # (Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics.)
 
 ### Trace 数据集生成与清理
 
@@ -580,7 +591,7 @@ Trace 评测集在生成阶段仅做结构提取，不改采集/入库，不验�
 
 效果验证与生产执行分开：`prepare-v635-confirmation.py` 固定来源及算法指纹，并将文本与人工评分分离；`run-v635-confirmation.ts` 完成选样后，`audit-v635-confirmation.ts` 才读取评分。`verify-v635-source-isolation.py` 检查新旧来源及输入词项近重复。研究用签名缓存不进入产品存储，标签不进入生产选择函数。
 
-当前开发池与五个新来源的适用效果均值目标通过；独立统计确认、全平台真实 Trace、完整浏览器操作链路和生产压力验证仍有缺口。五源只与同池随机采样比较。冻结实验附件中的历史默认、旧门槛和通过字段不作为现行结论，见[最终对比报告](../../../../design/evaluation/trace-eval-dataset/eight-datasets-comparison-report.md)与[开发计划](../../../../design/evaluation/trace-eval-dataset/phase3-development-plan.md)。仓库保留指定指标与审计摘要，不包含全部原始数据及逐轮运行产物；重放历史脚本需另行准备其要求的数据与附件。
+当前开发池与五个新来源的适用效果均值目标通过；独立统计确认、全平台真实 Trace、完整浏览器操作链路和生产压力验证仍有缺口。五源只与同池随机采样比较。冻结实验附件中的历史默认、旧门槛和通过字段不作为现行结论，见[最终对比报告](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/trace-eval-dataset/eight-datasets-comparison-report.md)与[开发计划](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/trace-eval-dataset/phase3-development-plan.md)。仓库保留指定指标与审计摘要，不包含全部原始数据及逐轮运行产物；重放历史脚本需另行准备其要求的数据与附件。
 
 ## 自建评估器 Prompt + Skills
 

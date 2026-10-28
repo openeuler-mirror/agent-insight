@@ -155,12 +155,15 @@ export function SkillWorkbenchShell() {
   const [publishing, setPublishing] = useState(false);
   const [startingOptimization, setStartingOptimization] = useState(false);
   const [autoStartOptimization, setAutoStartOptimization] = useState(false);
+  const [optimizationFeedback, setOptimizationFeedback] = useState('');
   const [useOptimizationPlan, setUseOptimizationPlan] = useState(false);
   const [optimizationIssueOverride, setOptimizationIssueOverride] = useState<OptimizationRecordView['blockingIssues'] | null>(null);
   const [optimizationBaselineOverride, setOptimizationBaselineOverride] = useState<Record<string, string> | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const selectedAssetRef = useRef<SelectedSkillAsset | null>(null);
   const activeSessionRef = useRef<SessionDetail | null>(null);
+  const startingOptimizationRef = useRef(false);
+  const optimizationQuickActionRef = useRef(false);
   const [error, setError] = useState('');
   const [copilotWidth, setCopilotWidth] = useState(COPILOT_DEFAULT_WIDTH);
   const [workbenchWidth, setWorkbenchWidth] = useState(
@@ -844,18 +847,22 @@ export function SkillWorkbenchShell() {
   };
 
   const startOptimization = async ({
-    autoRun = false,
+    autoRun = true,
+    feedback = '',
     record,
     targetAsset,
   }: {
     autoRun?: boolean;
+    feedback?: string;
     record?: OptimizationRecordView;
     targetAsset?: SelectedSkillAsset;
   } = {}) => {
     const optimizationAsset = targetAsset || selectedAsset;
-    if (!user || !optimizationAsset || startingOptimization) return;
+    if (!user || !optimizationAsset || startingOptimizationRef.current) return;
+    startingOptimizationRef.current = true;
     setStartingOptimization(true);
-    setAutoStartOptimization(autoRun);
+    setAutoStartOptimization(false);
+    setOptimizationFeedback(feedback);
     setUseOptimizationPlan(!record && optimizationAsset.kind === 'formal');
     setOptimizationIssueOverride(record?.blockingIssues || null);
     setOptimizationBaselineOverride(record?.candidateFiles || null);
@@ -877,6 +884,7 @@ export function SkillWorkbenchShell() {
       const next = data.session as SessionDetail;
       setActive(next);
       setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
+      setAutoStartOptimization(autoRun);
     } catch (optimizationError) {
       setAutoStartOptimization(false);
       setUseOptimizationPlan(false);
@@ -884,6 +892,7 @@ export function SkillWorkbenchShell() {
       setOptimizationBaselineOverride(null);
       setError(optimizationError instanceof Error ? optimizationError.message : '启动优化会话失败');
     } finally {
+      startingOptimizationRef.current = false;
       setStartingOptimization(false);
     }
   };
@@ -969,11 +978,20 @@ export function SkillWorkbenchShell() {
     await switchView(view);
   };
 
-  const startActiveSessionOptimization = async () => {
-    if (!active) return;
-    const targetAsset = await showSessionAsset(active);
-    if (!targetAsset) return;
-    await startOptimization({ targetAsset });
+  const startActiveSessionOptimization = async (feedback = '') => {
+    if (!active || optimizationQuickActionRef.current || startingOptimizationRef.current) return;
+    optimizationQuickActionRef.current = true;
+    setStartingOptimization(true);
+    try {
+      const targetAsset = await showSessionAsset(active);
+      if (!targetAsset) throw new Error('无法准备当前 Skill 的优化会话');
+      await startOptimization({ targetAsset, feedback });
+    } catch (optimizationError) {
+      setError(optimizationError instanceof Error ? optimizationError.message : '启动优化会话失败');
+    } finally {
+      optimizationQuickActionRef.current = false;
+      setStartingOptimization(false);
+    }
   };
 
   const generationBusy = generationRunning || Boolean(active?.tasks.some((task) => (
@@ -982,13 +1000,13 @@ export function SkillWorkbenchShell() {
   const optimizationBusy = startingOptimization || Boolean(active?.tasks.some((task) => (
     task.type === 'optimization' && ['pending', 'running'].includes(task.status)
   )));
-  const workflowActions = active?.skillName && active.workVersion !== null && !generationBusy
+  const workflowActions = (feedback = '', busy = false) => active?.skillName && active.workVersion !== null && !generationBusy
     ? (
       <ConversationQuickActions
-        optimizationBusy={optimizationBusy}
+        optimizationBusy={optimizationBusy || busy}
         onEvaluation={() => void openActiveSessionView('evaluation')}
         onExperiment={() => void openActiveSessionView('experiment')}
-        onOptimization={() => void startActiveSessionOptimization()}
+        onOptimization={() => void startActiveSessionOptimization(feedback)}
       />
     )
     : null;
@@ -1132,7 +1150,8 @@ export function SkillWorkbenchShell() {
                   baselineFiles={optimizationBaselineOverride || active.files || {}}
                   issues={optimizationIssueOverride || evaluationOverview?.evaluation?.issues || []}
                   autoStart={autoStartOptimization}
-                  useMergePlan={useOptimizationPlan}
+                  autoStartFeedback={optimizationFeedback}
+                  useMergePlan={useOptimizationPlan || (active.source === 'management' && !optimizationIssueOverride)}
                   backgroundRunning={active.tasks.some((task) => task.type === 'optimization' && ['pending', 'running'].includes(task.status))}
                   tasks={active.tasks.filter((task) => task.type === 'optimization')}
                   records={active.optimizations}
@@ -1143,6 +1162,7 @@ export function SkillWorkbenchShell() {
                   onRepair={(record) => void startOptimization({ autoRun: true, record })}
                   onAutoStartConsumed={() => {
                     setAutoStartOptimization(false);
+                    setOptimizationFeedback('');
                     setUseOptimizationPlan(false);
                     setOptimizationIssueOverride(null);
                     setOptimizationBaselineOverride(null);

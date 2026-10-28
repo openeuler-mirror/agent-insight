@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { ownsSkillExecution } from '@/lib/grayscale/execution-fence';
+import type { SkillExecutionFence } from '@/lib/grayscale/run-progress';
 import { normalizeAgentOptions, resolveAgentOptions, type AgentOptions } from '../../../../packages/agent-runtime/index.cjs';
 import { withExperimentCancellation } from './cancellation-context';
 import { mapConcurrent, parseExecutionConcurrency } from './execution-concurrency';
@@ -51,6 +53,8 @@ export type TraceGenerationRequest = {
     | { version: 2; mode: 'trigger'; targetSkillName: string; skills: SkillExecutionSnapshot[] };
   signal?: AbortSignal;
   retryFromAttemptId?: string | null;
+  skillRun?: SkillExecutionFence;
+  onAttemptCreated?: (attempt: { caseId: string; attemptId: string; attemptNo: number }) => Promise<boolean | void>;
 };
 
 export type TriggerDecision = {
@@ -280,13 +284,14 @@ async function bindExecution(input: {
   attemptId: string;
   traceId: string;
   execution: { id: string; taskId: string | null; finalResult: string | null };
+  skillRun?: SkillExecutionFence;
 }): Promise<boolean> {
   return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const locked = await tx.experimentCase.updateMany({
       where: { id: input.caseId, deletedAt: null, experiment: { deletedAt: null, status: { not: 'cancelled' } } },
       data: { id: input.caseId },
     });
-    if (!locked.count) return false;
+    if (!locked.count || !await ownsSkillExecution(tx, input.skillRun)) return false;
     const attempt = await tx.experimentTraceAttempt.findUnique({ where: { id: input.attemptId } });
     if (!attempt || attempt.traceId && attempt.traceId !== input.traceId || ['cancelled', 'superseded'].includes(attempt.status) || attempt.failureCode === 'EXPERIMENT_CANCELLED') return false;
     const newer = await tx.experimentTraceAttempt.count({ where: { caseId: input.caseId,
@@ -446,7 +451,12 @@ async function runAttempt(input: {
       ? tx.experimentTraceAttempt.update({ where: { id: input.item.reservedAttemptId }, data: { status: 'dispatching', startedAt: new Date() } })
       : tx.experimentTraceAttempt.create({ data: { ...createAttempt.data, startedAt: new Date() } });
   });
-  let attempt = input.req.skillExecution && !input.item.reservedAttemptId ? await prisma.experimentTraceAttempt.create(createAttempt) : await claimAttempt();
+  let attempt = input.req.skillExecution && !input.item.reservedAttemptId
+    ? await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.experimentCase.updateMany({ where: { id: input.item.caseId }, data: { id: input.item.caseId } });
+      if (!await ownsSkillExecution(tx, input.req.skillRun)) throw new TraceGenerationError('EXECUTION_SUPERSEDED', '该执行已被新的重试替换', 409);
+      return tx.experimentTraceAttempt.create(createAttempt);
+    }) : await claimAttempt();
   while (!attempt) {
     input.req.signal?.throwIfAborted();
     await sleep(100);
@@ -461,9 +471,12 @@ async function runAttempt(input: {
   const startupSeconds = input.req.skillExecution?.version === 2 ? TRIGGER_STARTUP_TIMEOUT_SECONDS : 0;
   const commandWaitMs = (input.timeoutSeconds + startupSeconds + 90) * 1_000;
   try {
+    if (await input.req.onAttemptCreated?.({ caseId: input.item.caseId, attemptId: attempt.id, attemptNo: attempt.attemptNo }) === false) {
+      throw new TraceGenerationError('EXECUTION_SUPERSEDED', '该执行已被新的重试替换', 409);
+    }
     const frame = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const activeCase = await tx.experimentCase.findFirst({ where: { id: input.item.caseId, deletedAt: null, experiment: { deletedAt: null, status: { not: 'cancelled' } } } });
-      if (!activeCase || await tx.experimentTraceAttempt.count({ where: { caseId: input.item.caseId, attemptNo: { gt: attempt.attemptNo } } })) throw Object.assign(new Error('实验或 Case 已取消'), { code: 'EXPERIMENT_CANCELLED' });
+      if (!activeCase || !await ownsSkillExecution(tx, input.req.skillRun) || await tx.experimentTraceAttempt.count({ where: { caseId: input.item.caseId, attemptNo: { gt: attempt.attemptNo } } })) throw Object.assign(new Error('实验或 Case 已取消'), { code: 'EXPERIMENT_CANCELLED' });
       const command = await createCommand({
       user: input.req.user,
       clientId: input.req.workerId,
@@ -529,16 +542,22 @@ async function runAttempt(input: {
       const decision = readTriggerDecision(command.resultJson, input.req.skillExecution.targetSkillName, input.req.model);
       await assertExperimentActive(input.req.experimentId, input.item.caseId);
       input.req.signal?.throwIfAborted();
-      await prisma.$transaction([
-        prisma.experimentTraceAttempt.update({
+      const applied = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await tx.experimentCase.updateMany({ where: { id: input.item.caseId }, data: { id: input.item.caseId } });
+        if (!await ownsSkillExecution(tx, input.req.skillRun)) return false;
+        await Promise.all([
+        tx.experimentTraceAttempt.update({
           where: { id: attempt.id },
           data: { status: 'ready', traceId: traceId || null, failureCode: null, errorMessage: null, finishedAt: new Date() },
         }),
-        prisma.experimentCase.update({
+        tx.experimentCase.update({
           where: { id: input.item.caseId },
           data: { actualOutput: decision.triggered ? 'Skill 已触发' : 'Skill 未触发', traceGenerationError: null },
         }),
-      ]);
+        ]);
+        return true;
+      });
+      if (!applied) return { ready: false };
       return { ready: true, triggerDecision: decision };
     } else {
       if (!traceId) {
@@ -568,6 +587,7 @@ async function runAttempt(input: {
             attemptId: attempt.id,
             traceId,
             execution,
+            skillRun: input.req.skillRun,
           });
           return { ready: bound };
         }
@@ -596,8 +616,9 @@ async function runAttempt(input: {
     retryable: true,
   };
   const retrying = settledFailure.retryable && input.canRetry;
-  await prisma.$transaction([
-    prisma.experimentTraceAttempt.updateMany({
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.experimentCase.updateMany({ where: { id: input.item.caseId }, data: { id: input.item.caseId } });
+    await tx.experimentTraceAttempt.updateMany({
       where: { id: attempt.id, status: { in: ['dispatching', 'running', 'waiting_trace'] } },
       data: {
         status: retrying ? 'retry_wait' : 'failed',
@@ -606,12 +627,13 @@ async function runAttempt(input: {
         errorMessage: settledFailure.message.slice(0, 2_000),
         finishedAt: retrying ? null : new Date(),
       },
-    }),
-    prisma.experimentCase.updateMany({
+    });
+    if (!await ownsSkillExecution(tx, input.req.skillRun)) return;
+    await tx.experimentCase.updateMany({
       where: { id: input.item.caseId, traceGenerationCommandId: attempt.commandId || undefined, deletedAt: null, experiment: { deletedAt: null, status: { not: 'cancelled' } }, traceAttempts: { none: { attemptNo: { gt: attempt.attemptNo } } } },
       data: { traceGenerationError: retrying ? null : settledFailure.message.slice(0, 2_000) },
-    }),
-  ]);
+    });
+  });
   return { ready: false, failure: settledFailure };
 }
 

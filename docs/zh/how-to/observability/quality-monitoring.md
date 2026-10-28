@@ -20,6 +20,6 @@ changefreq: monthly
 
 ## 相关能力
 
-- 单次执行过程：[链路追踪](view-traces.md)
+- 单次执行过程：[链路追踪](./view-traces.md)
 - 异常样本归因：[智能诊断](../diagnosis/agent-debug/diagnosis.md)
 - 主动评测结果：[评估器](../evaluation/evaluators.md)

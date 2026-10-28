@@ -79,7 +79,7 @@ Workspace 当前状态用于呈现当前工作区在接入完成度、运行可�
 
 快捷入口把最高频的动作前置到首屏，让你从“看板”一步跳到“操作页”。常见入口包括：
 
-- **新建 Agent** → [Agent 管理](manage-agents.md)
+- **新建 Agent** → [Agent 管理](./manage-agents.md)
 - **Skill 工作台** → [Skill 生成](../optimization/skills/generate.md)
 - **运行评测** → [实验](../evaluation/experiments.md)
 - **链路分析** → [链路追踪](../observability/view-traces.md)
@@ -171,13 +171,13 @@ P95 时延用于观察慢请求与长尾体验：
 | 逐条排查失败执行 | [运行观测](../../explanation/observability/overview.md) |
 | 建立评测集与评测任务 | [评估与实验](../../explanation/evaluation/overview.md) |
 | 创建或优化 Skill | [Skill 工作台](../../explanation/optimization/skills/workbench-overview.md) |
-| 登记或整理 Agent 资产 | [Agent 管理](manage-agents.md) |
+| 登记或整理 Agent 资产 | [Agent 管理](./manage-agents.md) |
 
 概览面板的定位是“发现与分流”，真正的“分析与处置”交给对应专业模块。
 
 ## 下一步
 
-- 想正式纳管 Agent → [Agent 管理](manage-agents.md)
+- 想正式纳管 Agent → [Agent 管理](./manage-agents.md)
 - 想查看具体执行链路 → [链路追踪](../observability/view-traces.md)
 - 想统一名词口径 → [核心概念](../../explanation/platform/core-concepts.md)
 - 想从 Workspace 首页开始上手 → [5 分钟上手](../../tutorial/platform/01-quick-start.md)

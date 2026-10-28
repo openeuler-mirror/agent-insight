@@ -72,6 +72,8 @@ test('v2 A/B and baseline isolate files, permissions, project discovery and mode
     const c = JSON.parse(w.env.OPENCODE_CONFIG_CONTENT);
     assert.equal(w.env.PWD, w.cwd);
     assert.equal(w.env.OPENCODE_CONFIG_PROJECT_DISABLE, 'true');
+    assert.equal(fs.existsSync(path.join(path.dirname(w.env.OPENCODE_CONFIG), 'node_modules')), false);
+    assert.equal(fs.existsSync(path.join(w.cwd, '.opencode', 'node_modules')), false);
     assert.equal(c.model, 'local/model');
     assert.match(c.agents.build.system, /Keep system/);
     assert.equal(c.permission, undefined);

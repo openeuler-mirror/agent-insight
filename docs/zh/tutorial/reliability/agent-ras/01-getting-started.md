@@ -42,9 +42,9 @@ npx agent-insight install-ras
 
 | 资源 | 说明 |
 |------|------|
-| [`agent_ras/config/agent_ras_config.default.yaml`](../../../../../agent_ras/config/agent_ras_config.default.yaml) | 跨平台能力默认（`enabled` / `detectors` / `recovery`）；**新增检测域时改此文件** |
-| [`agent_ras/config/agent_ras.inproc.example.json`](../../../../../agent_ras/config/agent_ras.inproc.example.json) | 同进程形状说明（`service.*` 占位路径；加域时不要改） |
-| [`agent_ras/config/README.md`](../../../../../agent_ras/config/README.md) | 安装器与校验命令 |
+| [`agent_ras/config/agent_ras_config.default.yaml`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/config/agent_ras_config.default.yaml) | 跨平台能力默认（`enabled` / `detectors` / `recovery`）；**新增检测域时改此文件** |
+| [`agent_ras/config/agent_ras.inproc.example.json`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/config/agent_ras.inproc.example.json) | 同进程形状说明（`service.*` 占位路径；加域时不要改） |
+| [`agent_ras/config/README.md`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/config/README.md) | 安装器与校验命令 |
 
 openjiuwen / jiuwenclaw：宿主 `config.yaml` 中的 `agent_ras:` 段会校验为 `AgentRASConfig` 并透传工厂。字段与片段见 [platform-openjiuwen.md](../../../how-to/reliability/agent-ras/platform-openjiuwen.md)。
 

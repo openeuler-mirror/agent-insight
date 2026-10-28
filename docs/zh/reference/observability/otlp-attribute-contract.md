@@ -290,4 +290,4 @@ LLM、Tool、MCP 和 Skill 仍使用本页既有 canonical 属性；读取 `SKIL
 | 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义；补充 RAS 旁路 ingest（非 OTLP） |
 | 1.2 | 2026-08-11 | 新增 Pi Agent canonical span 与 Adapter 映射 |
 | 1.0 | 2026-07-14 | 初版，定义 OTLP 属性契约 (FR-011) |
-<!-- Codex canonical traces use agent.insight.framework=codex and redact inline secrets and local paths before spool persistence while preserving numeric usage fields. -->
+[//]: # (Codex canonical traces use agent.insight.framework=codex and redact inline secrets and local paths before spool persistence while preserving numeric usage fields.)

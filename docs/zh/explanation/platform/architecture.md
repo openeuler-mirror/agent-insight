@@ -18,13 +18,13 @@ changefreq: monthly
 | 状态 | 持续维护；历史推断和待确认项不代表已完成验收 |
 | 本次核对 | 2026-10-27：包名、安装入口、Skill 导航及测试说明；其余按各节来源判断 |
 
-> 配套文档：项目定位见 [positioning.md](positioning.md)，模块细节见 [modules.md](modules.md)，API 契约见 [api-and-contracts.md](../../reference/platform/api-and-contracts.md)，数据与控制流见 [data-control-flow.md](data-control-flow.md)。
+> 配套文档：项目定位见 [positioning.md](./positioning.md)，模块细节见 [modules.md](./modules.md)，API 契约见 [api-and-contracts.md](../../reference/platform/api-and-contracts.md)，数据与控制流见 [data-control-flow.md](./data-control-flow.md)。
 
 ---
 
 ## 1. 背景与问题（Background）
 
-`[确证]`（来源 [README.md](../../../../README.md)、[positioning.md](positioning.md)）随着 Agent 在各行业落地，开发者面临三个反复出现的痛点：
+`[确证]`（来源 [README.md](https://gitcode.com/openeuler/agent-insight/blob/master/README.md)、[positioning.md](./positioning.md)）随着 Agent 在各行业落地，开发者面临三个反复出现的痛点：
 
 1. **Agent 运行是黑盒** —— 难以定位失败的根因。
 2. **Skill 质量参差不齐** —— 缺乏系统化的方式评测和迭代 Skill。
@@ -94,7 +94,7 @@ Skill 生成、评估、实验和优化由工作台承接；`/skill-generator`�
 
 **数据接入（由“客户端安装”分发的客户端回传）** `[确证]`：`api/ingest/**`（otel `/v1/{traces,logs,metrics}`、upload、proxy、setup、sync）+ `scripts/*watcher*` / `opencode_plugin*` / `public/sync_skills.ts`。
 
-**已存在但未挂载到导航的页面** `[确证]`：`/quality`、`/eval`、`/memory`、`/optapi`、`/security`、`/skill-release`、`/modelconfig`（index）、`/accessconfig/{channels,webhooks,health}`。`/version-analysis` 是运行观测下的版本能力入口，`/version-management` 由该页面顶部页签进入；完整导航 IA 与可达性标注详见 [frontend.md](frontend.md#导航信息架构功能模块)。
+**已存在但未挂载到导航的页面** `[确证]`：`/quality`、`/eval`、`/memory`、`/optapi`、`/security`、`/skill-release`、`/modelconfig`（index）、`/accessconfig/{channels,webhooks,health}`。`/version-analysis` 是运行观测下的版本能力入口，`/version-management` 由该页面顶部页签进入；完整导航 IA 与可达性标注详见 [frontend.md](./frontend.md#导航信息架构功能模块)。
 
 ### 3.2 关键质量属性（NFR）—— 推断节
 
@@ -349,12 +349,12 @@ flowchart LR
 ## 附录
 
 - **关键文件索引（本次重建实际读过）**：
-  - [prisma/schema.prisma](../../../../prisma/schema.prisma) — 数据模型
-  - [next.config.ts](../../../../next.config.ts) — 重写规则、standalone 输出
-  - [package.json](../../../../package.json) — 依赖与脚本
+  - [prisma/schema.prisma](https://gitcode.com/openeuler/agent-insight/blob/master/prisma/schema.prisma) — 数据模型
+  - [next.config.ts](https://gitcode.com/openeuler/agent-insight/blob/master/next.config.ts) — 重写规则、standalone 输出
+  - [package.json](https://gitcode.com/openeuler/agent-insight/blob/master/package.json) — 依赖与脚本
   - `src/lib/storage/db-interface.ts:1059` — `getDatabaseAdapter()` 适配器选择
   - `src/instrumentation.ts` / `src/instrumentation-node.ts` — 可观测性启动
-  - [design/observability/framework-adapter-registry/phase2-requirements-design.md](../../../../design/observability/framework-adapter-registry/phase2-requirements-design.md) — 适配器注册表设计
-  - [README.md](../../../../README.md) / [positioning.md](positioning.md) — 背景与定位
-- **术语**：Skill（带版本能力）· Execution/trace（一次接入的 Agent 运行）· Config（标准答案数据集条目）· Evaluation（static/dynamic/trigger）· SkillIssue（优化点）· FrameworkAdapter（框架接入适配器）· DatabaseAdapter（存储适配器）。详见 [developer-index.md](developer-index.md)。
+  - [design/observability/framework-adapter-registry/phase2-requirements-design.md](https://gitcode.com/openeuler/agent-insight/blob/master/design/observability/framework-adapter-registry/phase2-requirements-design.md) — 适配器注册表设计
+  - [README.md](https://gitcode.com/openeuler/agent-insight/blob/master/README.md) / [positioning.md](./positioning.md) — 背景与定位
+- **术语**：Skill（带版本能力）· Execution/trace（一次接入的 Agent 运行）· Config（标准答案数据集条目）· Evaluation（static/dynamic/trigger）· SkillIssue（优化点）· FrameworkAdapter（框架接入适配器）· DatabaseAdapter（存储适配器）。详见 [developer-index.md](./developer-index.md)。
 - **证据来源**：本文 `[确证]` 项均可追溯到上述文件；`[推断]`/`[待确认]` 已在 §9 汇总。

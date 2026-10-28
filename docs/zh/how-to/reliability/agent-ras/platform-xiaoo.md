@@ -9,12 +9,12 @@ changefreq: monthly
 
 **原则**：检测与恢复走协议 inproc（`ras_runtime`）。stock master 上 mid-stream 思考/工具环与 abort/steer 以 **官方 Daemon SSE 控制面** 为主；插件 hooks 仍负责 Chat/Tool/lifecycle。**不改 FI**。
 
-设计真源：[opencode-xiaoo-integration.md](../../../../../design/reliability/agent-ras/opencode-xiaoo-integration.md) §4。\
-源码旁命令：[INSTALL.md](../../../../../agent_ras/platform_adapter/xiaoo/INSTALL.md)。
+设计真源：[opencode-xiaoo-integration.md](https://gitcode.com/openeuler/agent-insight/blob/master/design/reliability/agent-ras/opencode-xiaoo-integration.md) §4。\
+源码旁命令：[INSTALL.md](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/platform_adapter/xiaoo/INSTALL.md)。
 
 ## 最短路径
 
-1. Insight setup 勾选 **xiaoO**，或 `node scripts/install-ras.js`（本机过程见 [local-install-process.md](local-install-process.md)）  
+1. Insight setup 勾选 **xiaoO**，或 `node scripts/install-ras.js`（本机过程见 [local-install-process.md](./local-install-process.md)）\
 2. 确保 subprocess IPC worker（安装后从 `install.json` 拼 `PYTHONPATH`）：
    ```bash
    export AGENT_INSIGHT_RAS_HOME=$HOME/.agent-insight/ras
