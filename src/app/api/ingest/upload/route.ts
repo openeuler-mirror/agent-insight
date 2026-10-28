@@ -14,7 +14,7 @@ import { clientIpFromRequest } from '@/lib/reliability/client-ip';
 import { normalizeTraceClientMetadata } from '@/lib/reliability/trace-client';
 import { authenticateDevice } from '@/lib/reliability/client-registry';
 import { reliabilityErrorResponse } from '@/lib/reliability/api-error';
-import { isInProgressOpencodeSnapshot, isInternalRasJudgeSnapshot } from '@/lib/ingest/opencode-snapshot';
+import { isInProgressOpencodeSnapshot } from '@/lib/ingest/opencode-snapshot';
 
 /**
  * 这一发 opencode 上报是不是"进行中快照"——是的话只落库，不跑异步 LLM 分析。
@@ -363,19 +363,6 @@ export async function POST(request: Request) {
             auto_evaluation: false,
             background_analysis: false,
             in_progress: true,
-        }, { status: 200 });
-    }
-
-    // Persist reviewer evidence, but do not spend model quota analyzing the analyzer itself.
-    if (isInternalRasJudgeSnapshot(data)) {
-        console.log('[Upload-API] Internal RAS reviewer saved without automatic model analysis');
-        return NextResponse.json({
-            success: true,
-            message: 'Internal RAS reviewer trace saved; automatic model analysis skipped',
-            upload_id: data.task_id,
-            auto_evaluation: false,
-            background_analysis: false,
-            analysis_skip_reason: 'internal_ras_reviewer',
         }, { status: 200 });
     }
 

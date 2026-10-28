@@ -37,6 +37,12 @@ export interface SystemAgentDefinition {
 export const SYSTEM_AGENTS: SystemAgentDefinition[] = [
   {
     platform: 'opencode',
+    name: 'ras-judge',
+    description: '内置：RAS 运行时故障检测与恢复复核的语义判定 Agent',
+    agentType: 'subagent',
+  },
+  {
+    platform: 'opencode',
     name: 'skill-generator-agent',
     description:
       '内置：基于 opencode + skills/skill-generator/SKILL.md 的 Skill 生成 Agent（Skills 生成页后端）',

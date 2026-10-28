@@ -17,6 +17,7 @@ export const SYSTEM_AGENT_NAMES: readonly string[] = [
   'skill-optimizer-chat',  // skill 优化对话(改 skill, 不消费)
 
   // 评测器 agent: 它们的工作是评估别的 trace, 自己产的 trace 不是"对 skill 的真实调用"。
+  'ras-judge', // RAS 运行时语义判定，原始证据保留在系统轨迹。
   'trace-quality-evaluator',  // 轨迹质量评估
   'task-completion-evaluator', // 任务完成度评估
   'skill-trigger-analyzer',    // 触发分析评测 ← 用户特别提到的"做触发分析时跑的用例"
@@ -55,6 +56,7 @@ const HIDDEN_FROM_CASE_ANALYSIS = new Set<string>([
   'skill-generator-agent',
   'fault-diagnosis-agent',
   'skill-optimizer-chat',
+  'ras-judge',
   'trace-quality-evaluator',
   'task-completion-evaluator',
   'skill-trigger-analyzer',

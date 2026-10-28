@@ -139,3 +139,48 @@ test('experiment candidates, traces, and watch mode exclude system-owned agents'
     0,
   );
 });
+
+
+test('RAS reviewer traces appear under all and system ownership while user lists and experiment selectors exclude them', async () => {
+  const owner = 'ras-reviewer-owner';
+  const { GET: listTraces } = await import('@/app/api/observe/data/route');
+  const { shouldHideFromCaseAnalysis, classifyTraceSource } = await import('@/lib/system-agent-names');
+  // 模拟旧版本已误归属为 user 的记录，无需迁移即可按用户归属过滤。
+  await prisma.registeredAgent.create({ data: {
+    platform: 'opencode', name: 'ras-judge', user: owner, agentOwnership: 'user',
+  } });
+  await prisma.execution.createMany({ data: [
+    { taskId: 'ras-internal', user: owner, framework: 'opencode', agentName: 'ras-judge', query: 'judge' },
+    { taskId: 'ras-business', user: owner, framework: 'opencode', agentName: 'build', query: 'business with ras-judge child',
+      observedAgents: '["build","ras-judge"]' },
+    { taskId: 'ras-legacy', user: owner, framework: 'opencode', agentName: null, query: 'legacy business' },
+  ] });
+  const base = 'http://localhost/api/observe/data?user=' + owner
+    + '&paginated=1&databasePagination=1&fields=light&skipAutoEvalReady=1';
+  for (const [suffix, total] of [['', 3], ['&ownership=all', 3], ['&ownership=user', 2], ['&sort=status', 3], ['&anomaly=none', 3]] as const) {
+    const response = await listTraces(new Request(base + suffix + '&pageSize=1'));
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.total, total, suffix);
+    assert.equal(body.stats.total, total, suffix);
+    assert.equal(body.records.length, 1, suffix);
+    if (suffix === '&ownership=user') assert.notEqual(body.records[0].task_id, 'ras-internal');
+  }
+  const all = await (await listTraces(new Request(base + '&ownership=all'))).json();
+  assert.equal(all.total, 3);
+  assert.ok(all.records.some((record: { task_id: string }) => record.task_id === 'ras-internal'));
+  const system = await (await listTraces(new Request(base + '&ownership=system'))).json();
+  assert.equal(system.total, 1);
+  assert.equal(system.records[0].task_id, 'ras-internal');
+  const evidence = await (await listTraces(new Request(base + '&taskId=ras-internal'))).json();
+  assert.equal(evidence.total, 1);
+  assert.equal(evidence.records[0].task_id, 'ras-internal');
+  assert.equal(await prisma.execution.count({ where: { user: owner } }), 3);
+  const selection = await (await listExperimentTraces(new Request(
+    'http://localhost/api/experiments/traces?user=' + owner + '&agent=ras-judge',
+  ))).json();
+  assert.equal(selection.total, 0);
+  assert.equal(shouldHideFromCaseAnalysis('ras-judge'), true);
+  assert.equal(shouldHideFromCaseAnalysis('build'), false);
+  assert.equal(classifyTraceSource('ras-judge'), 'system');
+});
