@@ -494,7 +494,9 @@ export default function AgentTraceView({
     const stableTraceIdentity = traceIdentity ?? rootExecutionId;
     const previousTraceIdentityRef = React.useRef(stableTraceIdentity);
     const sourceInteractionsRef = React.useRef(sourceInteractions);
-    sourceInteractionsRef.current = sourceInteractions;
+    // 渲染期写 ref 违反 react-hooks/refs；用 layout effect 在提交阶段同步，
+    // 时序上等价于原渲染期写入，异步回调里的竞态守卫（对比 ref 是否变化）不受影响。
+    React.useLayoutEffect(() => { sourceInteractionsRef.current = sourceInteractions; }, [sourceInteractions]);
     const treeIdentityInitializedRef = React.useRef(false);
     const previousTreeIdentityRef = React.useRef(stableTraceIdentity);
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
