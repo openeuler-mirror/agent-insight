@@ -43,7 +43,7 @@ changefreq: monthly
 
 准备请求的 `requestId` 统一使用 `safeUUID()`，兼容通过局域网 HTTP 访问时浏览器未提供 `crypto.randomUUID()` 的情况；网络不确定时复用原请求 ID，明确结束后重试生成新 ID。
 
-OpenCode 向导预检与执行前校验共用按运行时主版本分流的入口：v1 保留 `debug config`、认证来源和 `models` 目录检查；v2 调用 `api --standalone model.list`（未选模型时为 `model.default`），以原生目录中的 `providerID/id` 和 `enabled` 判断可用性，不解析 v2 `debug config` 的配置来源数组，也不套用 v1 认证文件格式。CLI 输出只进入权限为 `0600` 的临时文件并在检查后清理，不将配置或底层异常透传到页面。目录读取失败为 `MODEL_CONFIGURATION_UNREADABLE`，所选模型不可用为 `MODEL_UNAVAILABLE`，缺少可用默认模型为 `MODEL_CONFIGURATION_MISSING`；不发起模型推理请求。执行前通过可取消子进程检查，保留 v2 错误分类并返回解析后的模型标识；预检增量能力上报仅为 v1 声明 `skillSnapshotVersion: 4`。
+OpenCode 向导预检与执行前校验共用按运行时主版本分流的入口：v1 保留 `debug config`、认证来源和 `models` 目录检查；v2 调用 `api --standalone model.list`（未选模型时为 `model.default`），以原生目录中的 `providerID/id` 和 `enabled` 判断可用性，不解析 v2 `debug config` 的配置来源数组，也不套用 v1 认证文件格式。CLI 输出只进入权限为 `0600` 的临时文件并在检查后清理，不将配置或底层异常透传到页面。目录读取失败为 `MODEL_CONFIGURATION_UNREADABLE`，所选模型不可用为 `MODEL_UNAVAILABLE`，缺少可用默认模型为 `MODEL_CONFIGURATION_MISSING`；不发起模型推理请求。执行前通过可取消子进程检查，保留 v2 错误分类并返回解析后的模型标识；预检增量能力上报与常规探测一致，为已就绪的 v1/v2 声明 `skillSnapshotVersion: 4`。Skill 用例生成与 A/B 使用共享能力策略校验 `supportsSkillSnapshot`，触发分析额外校验 `supportsTriggerRouting`；前端筛选、提交和服务端校验保持一致。缺失能力返回对应错误并提示检查常驻客户端与能力探测结果，不依据缺失字段直接推断 OpenCode 版本过旧。
 
 任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
 
@@ -499,3 +499,5 @@ Benchmark 错误适配器 `benchmarkErrorResponse` 将 `EvaluatorSkillError` 映
 文件夹上传在 multipart filename 中可能携带完整相对路径。前端显式提交 file.name；服务端兼容末段文件名与完整相对路径两种形式，后者必须与同项 paths 完全一致，不允许仅截取 basename 后放行其他目录的文件名。
 
 新任务的 configSnapshotJson.customEvaluatorSnapshots 为 `{schemaVersion:1,cards:{[evaluatorId]:card}}`，轨迹入口在 rawAnalysisJson 使用同一字段。服务端冻结，不能信任调用者自带该字段。结果 evidence.json 用 `type:'custom-evaluator-runtime-v1'` 容器保存原 evaluationEvidence 和平台生成 customEvaluatorRuntime，后者独立于模型输出归一化，包含来源、实际模型、工具摘要与耗时。 Agent 会话真实记录保存成功后还可含 evaluationTraceId。GET /api/experiments/:id 在 results 中返回经当前用户归属与存在性校验后的 evaluationTraceId（不可用为 null）；普通 LLM 与无记录历史结果不返回入口。结果详情仅渲染 evaluationEvidence，运行过程通过评估链路查看。
+
+实验详情的 `traceProgress.waitingTrace` 为最新 Attempt 处于 `waiting_trace` 的待入库 Case 数；每条 Case 的 `traceAttemptStatus` 保留原始阶段。Agent 执行成功后的入库等待为独立 60 秒，超时以 `TRACE_INGEST_TIMEOUT` 结束当前 Attempt 并保留 Trace ID，不自动下发新的执行命令。

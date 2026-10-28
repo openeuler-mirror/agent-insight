@@ -68,3 +68,23 @@ export function isSkillExperimentEvaluatorEligible(preset: SkillExperimentPreset
     ? evaluatorId === SKILL_TRIGGER_ANALYZER_EVALUATOR_ID
     : evaluatorId !== SKILL_TRIGGER_ANALYZER_EVALUATOR_ID;
 }
+
+export function skillExecutionCapabilityIssue(target: {
+  platform: string;
+  supportsSkillSnapshot?: boolean;
+  supportsTriggerRouting?: boolean;
+}, requireTriggerRouting = false): { code: string; message: string } | null {
+  if (target.platform !== 'opencode') return {
+    code: 'skill_execution_unsupported',
+    message: 'Skill 实验需要支持版本隔离的 OpenCode 执行目标，请选择 OpenCode 客户端。',
+  };
+  if (!target.supportsSkillSnapshot) return {
+    code: 'skill_execution_unsupported',
+    message: '当前客户端未上报 Skill 版本隔离能力，请检查常驻客户端版本和能力探测结果，或选择支持该能力的执行目标。',
+  };
+  if (requireTriggerRouting && !target.supportsTriggerRouting) return {
+    code: 'trigger_execution_unsupported',
+    message: '当前客户端未上报只读触发分析能力，请检查常驻客户端版本和能力探测结果，或选择支持触发分析的执行目标。',
+  };
+  return null;
+}

@@ -520,8 +520,12 @@ OpenCode uploader / Trace 树测试。真实验证使用 OpenCode 2.0.32 + 本�
 
 1.x 保留 `run --format json` 和原生 `--command` 路径；2.x 使用 `--standalone`、独立的 `--session` ID 和字面输入。监测插件按版本使用函数插件或原生 `{ id, setup }` 定义，2.x 配置中的 `plugins` 引用目录。监测事件写入每次执行独占的临时文件，目录权限 0700、文件权限 0600，使用随机 token 和根会话 ID 隔离；这样 npm CLI 包装器不继承额外 fd 时也能工作。只传递模型活动标记与脱敏诊断，不传递用户正文。任务结束清理临时目录，不改全局配置。
 
-v2 在启动前分配会话 ID，以免订阅晚于 `session.created` 时丢失关联；只接受该会话的事件和 Trace ID，并要求 `session.execution.succeeded` 才视作正常结束。原生 retry attempt 从 2 开始，转换为共享失败监测器的首轮 attempt=1。鉴权失败、持续断连和取消沿用现有终止及回报流程。采集器仍经 JSONL/uploader 上传，服务端以真实入库记录校验归属并绑定 Case；执行结果不能直接替代入库证据。v2 不上报 `skillSnapshotVersion`，且执行端拒绝未适配的冻结快照与只读触发模式，1.x 保留原能力。
+v2 在启动前分配会话 ID，以免订阅晚于 `session.created` 时丢失关联；只接受该会话的事件和 Trace ID，并要求 `session.execution.succeeded` 才视作正常结束。原生 retry attempt 从 2 开始，转换为共享失败监测器的首轮 attempt=1。鉴权失败、持续断连和取消沿用现有终止及回报流程。采集器仍经 JSONL/uploader 上传，服务端以真实入库记录校验归属并绑定 Case；执行结果不能直接替代入库证据。v1/v2 就绪运行时均可上报 `skillSnapshotVersion: 4`。v2 使用原生配置来源和模型目录读取连接配置，在独立工作区禁用项目配置发现并限制 Skill 白名单，以 `permissions` 控制工具权限；仍发现工作区外的系统或组织配置来源时返回 `SKILL_ISOLATION_UNAVAILABLE`。v2 的 Skill 路由以成功工具事件中的 `input.id` 为主，兼容历史 `name/skill` 字段；只处理当前根会话。1.x 保留原配置和执行路径。
 
 监测插件发布到临时目录时，把共享诊断模块转为 ESM，兼容旧版 OpenCode 无法加载 CJS 导出的情况。v1 受控实验按事件同步写入 spool，避免 CLI 退出丢失异步缓冲；手动会话仍沿用异步 writer，v2 使用原生插件清理生命周期。uploader 使用原子 PID 锁，普通重复触发仍直接让位，客户端最终 recheck 最多等待 15 秒取得锁，防止前一次进行中上传占锁时漏掉完成快照。
 
 回归入口还包括 `test/opencode-runtime.test.ts`、`test/opencode-event-channel.test.ts`、`test/opencode-native-trace-generation.test.ts` 和 Python `test_opencode_catalog`。原生事件测试通过 `OPENCODE_EVENT_TEST_CLI` 指定二进制；完整上传及 Case 绑定测试使用 `OPENCODE_TRACE_TEST_CLI`、`OPENCODE_TRACE_TEST_MAJOR=1|2`，运行本地模拟模型和隔离数据库，不需要真实模型凭证。
+
+Skill v2 配置、权限与能力门禁回归见 `test/opencode-v2-skill.test.ts`。使用 `OPENCODE_V2_SKILL_TEST_CLI=/absolute/path/to/opencode node --import tsx --test test/opencode-v2-skill-native.test.ts` 可运行原生隔离测试（已验证 2.1.4）：真实 CLI 连接本地模拟模型，覆盖 A/B 不同快照、宿主 Skill 排除、无 Skill 基线与只读触发事件。该测试不验证采集上传入库；未指定二进制时跳过。
+
+OpenCode 2.x 的显式 `plugins` 条目必须指向目录；原生加载器会跳过文件路径。Skill 隔离工作区将已安装的单文件采集器包装成临时目录插件，入口转导出原采集器，保留其相对依赖解析。不能以事件监测插件返回 Trace ID 代替采集器上传证据。`test/opencode-native-trace-generation.test.ts` 同时验证普通运行及 Skill 隔离运行的真实采集、上传和入库。

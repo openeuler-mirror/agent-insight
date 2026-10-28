@@ -340,5 +340,26 @@
       "note": "Failure set matches pre-change run; includes missing yaml/pydantic/pwsh and registration fixture assertion. No claim of all-green tests."
     },
     "publication": "Local changes only; not committed or pushed"
+  },
+  "docsFollowupSubmission20261028": {
+    "upstreamCommit": "10c8cc652279b4a8153a4d2a90ce48e037a7f5b2",
+    "scope": "Only docs/ and design/ differ from upstream; upstream runtime and test updates retained",
+    "resolvedNavigationConflicts": 6,
+    "navigationTargets": 100,
+    "localMarkdownTargets": 1194,
+    "missingLocalTargets": 0,
+    "mintlifyStrictBuildPassed": true,
+    "mintlifyBrokenLinks": 0,
+    "mintlifyDuplicateHeadingWarnings": 75,
+    "fullUnitTests": {
+      "tests": 4447,
+      "pass": 4409,
+      "fail": 15,
+      "cancelled": 0,
+      "skipped": 23
+    },
+    "failureNamesMatchPrevious": true,
+    "productBrowserRerun": false,
+    "note": "Prior document browser evidence retained; no product UI change in this PR."
   }
 }

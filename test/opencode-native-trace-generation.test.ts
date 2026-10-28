@@ -75,10 +75,15 @@ test('native OpenCode generates, uploads and binds the exact Trace to its experi
     const pluginDir = path.join(root, 'collector'); fs.mkdirSync(pluginDir);
     const pluginFile = path.join(pluginDir, 'index.ts');
     fs.writeFileSync(pluginFile, await (await pluginArtifact(new Request(`http://fixture/api/ingest/setup/opencode?apiVersion=${major}`))).text());
+    if (major === 2) {
+      const installedPlugins = path.join(root, 'config', 'opencode', 'plugins');
+      fs.mkdirSync(installedPlugins, { recursive: true });
+      fs.copyFileSync(pluginFile, path.join(installedPlugins, 'Witty-Skill-Insight.ts'));
+    }
     const uploader = path.resolve('scripts/opencode_uploader_client.js');
     fs.writeFileSync(path.join(home, 'opencode_uploader_client.js'), `require(${JSON.stringify(uploader)});`);
     const config = { model: 'mock/mock', small_model: 'mock/mock', permission: { '*': 'deny' },
-      ...(major === 2 ? { plugins: [pluginDir] } : { plugin: [pluginFile] }),
+      ...(major === 2 ? {} : { plugin: [pluginFile] }),
       provider: { mock: { npm: '@ai-sdk/openai-compatible', name: 'Mock', options: { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: 'test-only' }, models: { mock: { name: 'Mock', limit: { context: 8192, output: 128 } } } } } };
     const env: NodeJS.ProcessEnv = { NODE_ENV: 'test', PATH: `${path.dirname(cli!)}:${process.env.PATH}`, HOME: root, USERPROFILE: root,
       XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_CACHE_HOME: path.join(root, 'cache'), XDG_STATE_HOME: path.join(root, 'state'),
@@ -95,12 +100,12 @@ test('native OpenCode generates, uploads and binds the exact Trace to its experi
         child.once('close', code => code === 0 ? resolve() : reject(new Error(`OpenCode v1 fixture initialization failed: ${code}`)));
       });
     }
-    const run = async (cancel = false) => {
+    const run = async (cancel = false, skill = false) => {
       const code = `const c=require(${JSON.stringify(runner)});const a=new AbortController();let timer;
 const services=require(${JSON.stringify(servicesFile)}).createServices({cfg:{},client:c});
 services.checkAgent({platform:'opencode',agent:'build',model:'mock/mock'}).then(issues=>{
 require('node:assert/strict').deepEqual(issues,[]);
-c.runExperimentCase({clientId:${JSON.stringify(clientId)},workspaceBase:process.cwd()},{platform:'opencode',agent:'build',model:'mock/mock',input:'Reply TRACE_FIXTURE_OK.',timeoutSeconds:60,signal:a.signal},()=>{${cancel ? "timer=setTimeout(()=>a.abort(),500)" : ''}}).then(r=>console.log(JSON.stringify({ok:true,...r})),e=>console.log(JSON.stringify({ok:false,code:e.code,...e.runFacts}))).finally(()=>clearTimeout(timer));
+c.runExperimentCase({clientId:${JSON.stringify(clientId)},workspaceBase:process.cwd()},{platform:'opencode',agent:'build',model:'mock/mock',input:'Reply TRACE_FIXTURE_OK.',timeoutSeconds:60,signal:a.signal,${skill ? `skillExecution:{version:1,skill:{name:'fixture',version:1,files:{'SKILL.md':'---\\nname: fixture\\ndescription: fixture\\n---\\nReply TRACE_FIXTURE_OK.'}}}` : ''}},()=>{${cancel ? "timer=setTimeout(()=>a.abort(),500)" : ''}}).then(r=>console.log(JSON.stringify({ok:true,...r})),e=>console.log(JSON.stringify({ok:false,code:e.code,...e.runFacts}))).finally(()=>clearTimeout(timer));
 });`;
       return await new Promise<any>((resolve, reject) => {
         const child = spawn(process.execPath, ['-e', code], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -139,6 +144,19 @@ c.runExperimentCase({clientId:${JSON.stringify(clientId)},workspaceBase:process.
     await prisma.experimentTraceAttempt.create({ data: { experimentId: experiment.id, caseId: item.id, attemptNo: 1, workerId: clientId, platform: 'opencode', agent: 'build', traceId: result.traceId, status: 'waiting_trace' } });
     assert.equal(await reconcileGeneratedTraceCase({ user, caseId: item.id }), true);
     assert.equal((await prisma.experimentCase.findUnique({ where: { id: item.id } })).executionId, execution.id);
+    if (major === 2) {
+      const isolated = await run(false, true);
+      assert.equal(isolated.ok, true, JSON.stringify(isolated));
+      let isolatedTrace;
+      for (let i = 0; i < 60; i++) {
+        isolatedTrace = await findExecutionByTraceId({ user, traceId: isolated.traceId });
+        if (isolatedTrace?.finalResult?.includes('TRACE_FIXTURE_OK')) break;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      assert.ok(uploads.includes(isolated.traceId), 'isolated Skill execution uploads its Trace through the installed collector');
+      assert.match(isolatedTrace?.finalResult || '', /TRACE_FIXTURE_OK/);
+      assert.equal(isolatedTrace.clientId, clientId);
+    }
     mode = 'hang';
     const cancelled = await run(true);
     assert.equal(cancelled.ok, false);

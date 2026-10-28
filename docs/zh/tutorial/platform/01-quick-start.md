@@ -370,7 +370,10 @@ OpenCode 1.x 继续安装原有 TUI 附件和 Agent RAS，使用当前登录账�
 2.x 支持 Trace 采集和普通数据集「生成 Trace」，跳过不兼容的 1.x TUI 附件和 OpenCode RAS 插件。
 生成 Trace 还需要常驻客户端注册成功、在线并发现可用 Agent；仅出现 `Telemetry: READY` 不代表这些条件已经满足。
 更新服务端后，请重新执行当前账号的一键接入命令以更新常驻客户端，再刷新实验页面。
-Skill 冻结快照和只读触发分析继续使用 1.x；2.x 不声明这些能力。
+更新后的常驻客户端支持 OpenCode 1.x 与 2.x 的 Skill 冻结快照和只读触发分析（2.x 原生验证版本为 2.1.4）。
+用例分析生成 Trace 和 A/B 测试需要客户端上报版本隔离能力；触发分析还需要只读路由能力。
+若提示未上报能力，请更新并重启 Agent Insight 常驻客户端、等待能力重新上报，再刷新执行目标；仅升级 OpenCode 不会更新常驻客户端。
+实验显示“等待 Trace 入库”表示 Agent 已结束但上传尚未完成；超过独立的 60 秒期限会明确报错，不会自动重跑 Agent。请检查采集器及上传日志，详见[用例分析](../../how-to/evaluation/skills/use-case-analysis.md)。
 若从已安装 RAS 的 1.x 环境升级，安装脚本会检测全局插件目录及 `opencode.json` / `opencode.jsonc` 中的旧 RAS 引用，
 发现残留时显示备份与迁移提示；`install-ras --check` 也会明确报告 OpenCode 2.x 不支持 RAS，而不会将其显示为已就绪。
 旧文件和用户配置会保留：请先备份提示的 OpenCode 配置及插件目录，再移走 `plugins/agent-insight-ras.js`，

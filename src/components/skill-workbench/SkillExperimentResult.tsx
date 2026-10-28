@@ -30,6 +30,7 @@ import {
   formatWorkbenchScore as scoreText,
   isCompletedWorkbenchCase,
   summarizeAbSide,
+  withWorkbenchTraceProgress,
   type AbCaseStates,
   type AbOutcome,
   type AbSideState,
@@ -58,7 +59,7 @@ interface DetailPayload {
   overall: number | null;
   breakdown: Array<{ evaluatorId: string; avg: number | null; scored: number; total: number; failed: number }>;
   progress: { total: number; done: number; failed: number; pending: number };
-  traceProgress: { total: number; ready: number; failed: number; pending: number } | null;
+  traceProgress: { total: number; ready: number; failed: number; pending: number; waitingTrace?: number } | null;
   executionProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
   evaluationProgress: { total: number; succeeded: number; failed: number; pending: number; skipped?: number; unscored?: number } | null;
   sideProgress?: SkillExperimentProgressProps['sideProgress'];
@@ -74,6 +75,7 @@ interface DetailPayload {
     referenceOutput?: string | null;
     caseValues?: Record<string, unknown> | null;
     skillTriggered?: boolean | null;
+    traceAttemptStatus?: string | null;
   }>;
   configSnapshot?: Record<string, unknown> | null;
   skillContext?: Record<string, unknown> | null;
@@ -127,7 +129,7 @@ function terminal(status?: string) {
 }
 
 function runIsActive(run: { status?: string; score?: number | null }) {
-  return ['running', 'evaluating', 'pending'].includes(run.status || '')
+  return ['running', 'waiting_trace', 'evaluating', 'pending'].includes(run.status || '')
     && !(typeof run.score === 'number' && Number.isFinite(run.score));
 }
 
@@ -163,6 +165,8 @@ function summaryScoreStatus(summary: AbSideSummary) {
 }
 
 function activeAbPairLabel(a: AbSideSummary, b: AbSideSummary) {
+  if (a.status === 'waiting_trace' || b.status === 'waiting_trace') return a.status === 'running' || b.status === 'running'
+    ? '执行中 · 部分等待 Trace 入库' : '等待 Trace 入库';
   if (a.status === 'running' || b.status === 'running') return '执行中';
   if (a.status === 'pending' || b.status === 'pending') return '等待执行';
   return '评测中';
@@ -192,7 +196,7 @@ function RunOutput({ run, output }: { run?: import('@/lib/skill-workbench/ab-com
   const unscored = run?.evaluations?.filter(item => item.unscored || (item.status === 'done' && item.score == null)) || [];
   return <>
     {run?.failureType
-      ? <p className="whitespace-pre-wrap break-words text-error">执行失败{run.failureCode ? `（${run.failureCode}）` : ''}：{run.failureDetail || output || '未生成有效输出'}<br />未进入评测</p>
+      ? <p className="whitespace-pre-wrap break-words text-error">{run.failureCode === 'TRACE_INGEST_TIMEOUT' ? 'Trace 入库失败' : '执行失败'}{run.failureCode ? `（${run.failureCode}）` : ''}：{run.failureDetail || output || '未生成有效输出'}<br />未进入评测</p>
       : <ExpandableCellText value={output} muted />}
     {!run?.failureType && evaluationErrors.length > 0 && <p className="mt-1 whitespace-pre-wrap break-words text-error">评测失败：{evaluationErrors.join('；')}</p>}
     {!run?.failureType && unscored.length > 0 && <p className="mt-1 whitespace-pre-wrap break-words text-foreground-muted">未计分：{unscored.map(item => item.summary || '评估器未返回分数').join('；')}</p>}
@@ -304,7 +308,7 @@ export function SkillExperimentResult({
     };
   }, [detail, load, workbenchExperiment]);
 
-  const states = useMemo(() => workbenchExperiment?.grayscaleTask?.caseStates || {}, [workbenchExperiment]);
+  const states = useMemo(() => withWorkbenchTraceProgress(workbenchExperiment?.grayscaleTask?.caseStates || {}, detail?.cases || []), [workbenchExperiment, detail?.cases]);
   const hasActiveRuns = useMemo(() => Object.values(states).some((state) => (
     [...sideRuns(state.a), ...sideRuns(state.b)].some(runIsActive)
   )), [states]);
@@ -680,6 +684,7 @@ export function SkillExperimentResult({
           status={displayStatus}
           preset={detail.preset}
           traceSource={snapshot.traceSource as string | undefined}
+          waitingTrace={detail.traceProgress?.waitingTrace}
           executionProgress={detail.executionProgress}
           evaluationProgress={detail.evaluationProgress}
           sideProgress={detail.sideProgress}
@@ -835,14 +840,14 @@ export function SkillExperimentResult({
                           <td className="sticky right-64 bg-card px-2 py-3">
                             <div className="flex items-center gap-2">
                               <button type="button" disabled={!aExperimentCaseId} onClick={() => aExperimentCaseId && setCaseDetailId(aExperimentCaseId)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                              <button type="button" disabled={retryBusy || aBusy} onClick={() => void retryRun(comparison.caseId, 'a')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:a` ? '提交中' : aBusy ? (aRetryMode === 'evaluation' ? '评测中' : '执行中') : aRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
+                              <button type="button" disabled={retryBusy || aBusy} onClick={() => void retryRun(comparison.caseId, 'a')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:a` ? '提交中' : aBusy ? (comparison.a.status === 'waiting_trace' ? '等待 Trace 入库' : aRetryMode === 'evaluation' ? '评测中' : '执行中') : aRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                             </div>
                             {retryError.key === `${comparison.caseId}:a` && <small className="mt-1 block whitespace-normal text-sm leading-4 text-error">{retryError.message}</small>}
                           </td>
                           <td className="sticky right-32 bg-card px-2 py-3">
                             <div className="flex items-center gap-2">
                               <button type="button" disabled={!bExperimentCaseId} onClick={() => bExperimentCaseId && setCaseDetailId(bExperimentCaseId)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                              <button type="button" disabled={retryBusy || bBusy} onClick={() => void retryRun(comparison.caseId, 'b')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:b` ? '提交中' : bBusy ? (bRetryMode === 'evaluation' ? '评测中' : '执行中') : bRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
+                              <button type="button" disabled={retryBusy || bBusy} onClick={() => void retryRun(comparison.caseId, 'b')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:b` ? '提交中' : bBusy ? (comparison.b.status === 'waiting_trace' ? '等待 Trace 入库' : bRetryMode === 'evaluation' ? '评测中' : '执行中') : bRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                             </div>
                             {retryError.key === `${comparison.caseId}:b` && <small className="mt-1 block whitespace-normal text-sm leading-4 text-error">{retryError.message}</small>}
                           </td>
@@ -931,7 +936,7 @@ export function SkillExperimentResult({
                               <td className="sticky right-0 bg-card px-3 py-3">
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                   <button type="button" disabled={!experimentCase?.id} onClick={() => experimentCase?.id && setCaseDetailId(experimentCase.id)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                                  <button type="button" disabled={!canRetry || busy} onClick={() => void (existingTrace ? retryExistingCase(caseId) : retryRun(caseId, 'b'))} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === retryKey ? '提交中' : existingTrace ? (summary.status === 'evaluating' ? '评测中' : summary.status === 'executed' ? '待评测' : '重新评测') : busy ? (retryMode === 'evaluation' ? '评测中' : '执行中') : retryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
+                                  <button type="button" disabled={!canRetry || busy} onClick={() => void (existingTrace ? retryExistingCase(caseId) : retryRun(caseId, 'b'))} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === retryKey ? '提交中' : existingTrace ? (summary.status === 'evaluating' ? '评测中' : summary.status === 'executed' ? '待评测' : '重新评测') : busy ? (summary.status === 'waiting_trace' ? '等待 Trace 入库' : retryMode === 'evaluation' ? '评测中' : '执行中') : retryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                                   <DeleteExperimentButton user={user} experimentId={experimentId} caseId={existingTrace ? caseId : `dataset:${caseId}`} completed={existingTrace ? !['executed', 'evaluating'].includes(summary.status) : isCompletedWorkbenchCase(detail.status, [sideState])} className="text-sm" onDeleted={(experimentDeleted) => experimentDeleted ? onBack() : load(true)} />
                                 </div>
                                 {retryError.key === retryKey && <small className="mt-1 block whitespace-normal text-sm leading-4 text-error">{retryError.message}</small>}

@@ -16,6 +16,7 @@
 
 import { resolveAgentOptions, type AgentOptions, type RuntimeDefinition } from '../../../packages/agent-runtime/index.cjs';
 import { listClientTraceGenerationTargets, type ClientTraceGenerationTarget } from '@/lib/engine/experiment/execution-targets';
+import { skillExecutionCapabilityIssue } from './experiment-policy';
 import { TraceGenerationError } from '@/lib/engine/experiment/trace-generation';
 
 export interface SkillExecutionTarget {
@@ -47,12 +48,8 @@ export function selectSkillExecutionTarget(value: unknown, targets: ClientTraceG
     item.workerId === input.workerId && item.platform === input.platform && item.agent === input.agent
   ));
   if (!target) throw new TraceGenerationError('execution_target_unavailable', '所选执行目标已离线或不可用');
-  if (target.platform !== 'opencode' || !target.supportsSkillSnapshot) {
-    throw new TraceGenerationError('skill_execution_unsupported', 'Skill 实验需要支持版本隔离的 OpenCode 客户端，请升级客户端后重试', 409);
-  }
-  if (requireTriggerRouting && !target.supportsTriggerRouting) {
-    throw new TraceGenerationError('trigger_execution_unsupported', '触发分析需要支持只读路由评测的新版 OpenCode 客户端，请升级客户端后重试', 409);
-  }
+  const issue = skillExecutionCapabilityIssue(target, requireTriggerRouting);
+  if (issue) throw new TraceGenerationError(issue.code, issue.message, 409);
   const model = typeof input.model === 'string' ? input.model.trim() || null : null;
   if (model && !target.models.some((item) => item.id === model)) {
     throw new TraceGenerationError('MODEL_UNAVAILABLE', `所选客户端未提供模型 ${model}，不会回退默认模型`, 400);

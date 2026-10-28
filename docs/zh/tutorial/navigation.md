@@ -8,7 +8,7 @@ title: "入门教程"
 
 ## 平台公共
 
-- [5 分钟上手](./platform/01-quick-start.md)
+- [5 分钟上手](./platform/01-quick-start.md)（含 OpenCode 1.x / 2.x 接入与 Skill 实验准备）
 - [内置示例端到端走查](./platform/02-example-walkthrough.md)
 
 ## 评测

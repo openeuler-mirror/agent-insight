@@ -53,6 +53,15 @@ export interface AbSideState extends AbRunState {
 }
 
 export type AbCaseStates = Record<string, { a?: AbSideState; b?: AbSideState }>;
+
+export function withWorkbenchTraceProgress(states: AbCaseStates, cases: Array<{ id: string; traceAttemptStatus?: string | null }>): AbCaseStates {
+  const waiting = new Set(cases.filter(item => item.traceAttemptStatus === 'waiting_trace').map(item => item.id));
+  const run = (item: AbRunState): AbRunState => item.status === 'running' && item.experimentCaseId && waiting.has(item.experimentCaseId)
+    ? { ...item, status: 'waiting_trace' } : item;
+  const side = (item?: AbSideState): AbSideState | undefined => item
+    ? { ...run(item), ...(item.runs ? { runs: item.runs.map(run) } : {}) } : undefined;
+  return Object.fromEntries(Object.entries(states).map(([id, item]) => [id, { a: side(item.a), b: side(item.b) }]));
+}
 export type AbOutcome = 'a' | 'b' | 'tie' | 'unpaired';
 
 export interface AbSideSummary {
@@ -87,6 +96,7 @@ export function formatWorkbenchScore(score: number | null | undefined, status?: 
   if (status === 'not-evaluated') return '未评测';
   if (status === 'pending') return '等待执行';
   if (status === 'running') return '执行中';
+  if (status === 'waiting_trace') return '等待 Trace 入库';
   if (status === 'executed') return '待评测';
   if (status === 'evaluating') return '评测中';
   if (status === 'fail' || status === 'failed') return '失败';
