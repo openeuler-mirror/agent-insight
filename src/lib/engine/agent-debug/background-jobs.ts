@@ -27,7 +27,6 @@ export interface ActiveAgentDebugBackgroundJob {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __agentDebugBackgroundJobs: Map<string, ActiveAgentDebugBackgroundJob> | undefined;
 }
 
