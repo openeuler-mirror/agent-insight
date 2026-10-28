@@ -54,7 +54,7 @@ export async function GET(request: Request) {
             if (config.keyActions) keyActions = JSON.parse(config.keyActions);
             if (config.routingAnchors) routingAnchors = JSON.parse(config.routingAnchors);
             if (config.extractedKeyActions) extractedKeyActions = JSON.parse(config.extractedKeyActions);
-        } catch (e) {}
+        } catch {}
 
         return NextResponse.json({
             id: config.id,

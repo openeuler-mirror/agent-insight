@@ -57,7 +57,7 @@ export default function LoginPage() {
           // login() 已按 returnTo 回跳；仅在无 returnTo 时维持历史组织集成的落 / 行为。
           if (!getSafeReturnTo()) router.replace('/');
         }
-      } catch (e) {
+      } catch {
         if (!cancelled) {
           window.location.href = organizationLoginRedirectUrl;
         }

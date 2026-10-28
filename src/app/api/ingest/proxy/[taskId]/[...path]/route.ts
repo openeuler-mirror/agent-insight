@@ -63,7 +63,7 @@ export async function POST(
   const clonedRequest = request.clone();
   try {
       body = await clonedRequest.json();
-  } catch (e) {
+  } catch {
       console.error('Failed to parse request body');
   }
 
@@ -222,7 +222,7 @@ export async function POST(
                                         interactionData.usage.total_tokens = input + output + cacheRead + cacheCreate;
                                     }
 
-                                } catch (e) {}
+                                } catch {}
                             }
                          }
                     }

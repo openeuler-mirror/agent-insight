@@ -113,7 +113,7 @@ export class ClaudeParser {
       if (!line.trim()) continue;
       try {
         entries.push(JSON.parse(line));
-      } catch (e) {
+      } catch {
         // syntax error for the JSON line, ignore safely
       }
     }
