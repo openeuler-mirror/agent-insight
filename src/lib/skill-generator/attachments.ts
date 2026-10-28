@@ -101,8 +101,8 @@ async function extractTextSidecar(filePath: string): Promise<string | null> {
   const ext = path.extname(filePath).toLowerCase();
   try {
     if (ext === '.pdf') {
-      // pdf-parse 是 CommonJS 包且没出 .d.ts，用 // @ts-ignore + 动态 import 兜过 TS。
-      // @ts-ignore - no types ship with pdf-parse
+      // pdf-parse 是 CommonJS 包且没出 .d.ts，用 @ts-expect-error + 动态 import 兜过 TS。
+      // @ts-expect-error pdf-parse 不随包提供类型声明
       const pdfParseMod: any = await import('pdf-parse');
       const pdfParse = pdfParseMod.default || pdfParseMod;
       const buf = fs.readFileSync(filePath);
