@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
+import textwrap
+import time
 import os
 import sys
 import tempfile
@@ -24,8 +27,10 @@ from unittest.mock import patch
 
 from agent_fault_injection.fault_inject.injection.installer import InstallSession
 from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
-from agent_fault_injection.pipeline.exceptions import PluginStartupError
+from agent_fault_injection.pipeline.exceptions import ExperimentTimeoutError, PluginStartupError
+from agent_fault_injection.pipeline.artifact_store import ArtifactStore
 from agent_fault_injection.pipeline.models import RunArtifacts, RunRequest
+from agent_fault_injection.platform_adapters.lifecycle import AdapterRunContext
 from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter
 
 
@@ -571,3 +576,147 @@ class OpenCodeAdapterTests(TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpenCodeStartupRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    """Exercise real subprocess cleanup and retry before business execution."""
+
+    async def exercise(self, scenario, *, retries=1, timeout=3):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            plugin = workspace / ".opencode" / "plugins" / "agent-fault-injection.ts"
+            plugin.parent.mkdir(parents=True)
+            plugin.write_text("// fixture plugin", encoding="utf-8")
+            request = RunRequest(
+                platform="opencode", agent="build", fault="thinking-dead-loop",
+                prompt="fixture", workspace=workspace, output_dir=root / "artifacts",
+                timeout_seconds=timeout,
+                platform_options={
+                    "_resolved_executable": sys.executable,
+                    "plugin_startup_timeout": 0.15,
+                    "plugin_startup_retries": retries,
+                    "database_lock_retries": 0,
+                },
+            )
+            store = ArtifactStore(request.output_dir)
+            artifacts = store.create(request)
+            script = root / "platform.py"
+            script.write_text(textwrap.dedent(r"""
+                import json, os, sys, time
+                from pathlib import Path
+                raw = Path(os.environ["AGENT_FI_RAW_DIR"])
+                attempts = raw / "attempts.jsonl"
+                number = len(attempts.read_text().splitlines()) + 1 if attempts.exists() else 1
+                with attempts.open("a") as out:
+                    out.write(json.dumps({"pid": os.getpid(), "attempt": number}) + "\n")
+                scenario = sys.argv[1]
+                if scenario == "permanent":
+                    print("invalid plugin configuration", file=sys.stderr, flush=True)
+                    sys.exit(3)
+                if scenario == "stdout":
+                    print(json.dumps({"sessionID": "ses_existing"}), flush=True)
+                    time.sleep(60)
+                if scenario == "partial":
+                    (raw / "events.jsonl").write_text(json.dumps({
+                        "kind": "run.session.bound", "payload": {"sessionID": "ses_existing"}
+                    }) + "\n")
+                    time.sleep(60)
+                if scenario == "always" or number == 1:
+                    time.sleep(60)
+                (raw / "plugin-ready.json").write_text(json.dumps({
+                    "cachedModels": os.environ.get("OPENCODE_DISABLE_MODELS_FETCH")
+                }))
+                (raw / "events.jsonl").write_text(json.dumps({
+                    "kind": "fault.activation.completed", "payload": {"sessionID": "ses_recovered"}
+                }) + "\n")
+                time.sleep(0.08)
+            """), encoding="utf-8")
+            cache = root / "cache" / "opencode" / "models.json"
+            cache.parent.mkdir(parents=True)
+            cache.write_text('{"fixture": {"models": {}}}', encoding="utf-8")
+            context = AdapterRunContext(
+                request=request, fault=FaultRegistry().get("thinking-dead-loop"),
+                artifacts=artifacts, store=store, workspace=workspace,
+            )
+            environment = dict(os.environ)
+            environment.update({
+                "AGENT_FI_RAW_DIR": str(artifacts.raw_dir),
+                "AGENT_FI_RUN_ID": artifacts.run_id,
+                "XDG_CACHE_HOME": str(root / "cache"),
+            })
+            environment.pop("OPENCODE_DISABLE_MODELS_FETCH", None)
+            adapter = OpenCodeAdapter()
+            started = time.monotonic()
+            result = None
+            error = None
+            with patch.object(adapter, "_build_command", return_value=[sys.executable, str(script), scenario]):
+                try:
+                    result = await adapter.run_platform_session(context, environment)
+                except (PluginStartupError, ExperimentTimeoutError) as exc:
+                    error = exc
+            attempts = [json.loads(line) for line in (artifacts.raw_dir / "attempts.jsonl").read_text().splitlines()]
+            for attempt in attempts:
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(attempt["pid"], 0)
+            manifest = json.loads(artifacts.manifest_file.read_text())
+            ready = json.loads(artifacts.plugin_ready_file.read_text()) if artifacts.plugin_ready_file.exists() else {}
+            return result, error, attempts, manifest, ready, time.monotonic() - started
+
+    async def test_transient_startup_recovers_after_stopping_first_process(self):
+        result, error, attempts, manifest, ready, _ = await self.exercise("recover")
+        self.assertIsNone(error)
+        self.assertEqual(result.session_id, "ses_recovered")
+        self.assertTrue(result.fault_activated)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(manifest["startup_attempt"], 2)
+        self.assertEqual(ready["cachedModels"], "1")
+
+    async def test_repeated_startup_timeout_is_bounded(self):
+        _, error, attempts, manifest, _, _ = await self.exercise("always")
+        self.assertIsInstance(error, PluginStartupError)
+        self.assertEqual(len(attempts), 2)
+        self.assertIn("did not become ready", manifest["startup_last_error"])
+        self.assertIsNone(manifest["startup_retry_reason"])
+
+    async def test_permanent_early_exit_is_not_retried(self):
+        _, error, attempts, _, _, _ = await self.exercise("permanent")
+        self.assertIsInstance(error, PluginStartupError)
+        self.assertEqual(len(attempts), 1)
+        self.assertIn("invalid plugin configuration", str(error))
+
+    async def test_existing_business_session_is_never_replayed(self):
+        _, error, attempts, _, _, _ = await self.exercise("partial")
+        self.assertIsInstance(error, PluginStartupError)
+        self.assertEqual(len(attempts), 1)
+
+    async def test_stdout_evidence_also_blocks_automatic_replay(self):
+        _, error, attempts, _, _, _ = await self.exercise("stdout")
+        self.assertIsInstance(error, PluginStartupError)
+        self.assertEqual(len(attempts), 1)
+
+    async def test_zero_retries_does_not_restart(self):
+        _, error, attempts, _, _, _ = await self.exercise("always", retries=0)
+        self.assertIsInstance(error, PluginStartupError)
+        self.assertEqual(len(attempts), 1)
+
+    async def test_overall_budget_covers_backoff_and_startup(self):
+        _, error, attempts, _, _, elapsed = await self.exercise("always", timeout=0.35)
+        self.assertIsInstance(error, ExperimentTimeoutError)
+        self.assertEqual(len(attempts), 1)
+        self.assertLess(elapsed, 0.9)
+
+    def test_cache_fallback_respects_overrides_and_validates_catalog(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = {"XDG_CACHE_HOME": temporary, "OPENCODE_DISABLE_MODELS_FETCH": "0"}
+            self.assertEqual(OpenCodeAdapter._startup_retry_environment(environment), environment)
+            environment.pop("OPENCODE_DISABLE_MODELS_FETCH")
+            self.assertEqual(OpenCodeAdapter._startup_retry_environment(environment), environment)
+            cache = Path(temporary) / "opencode" / "models.json"
+            cache.parent.mkdir()
+            cache.write_text("not json")
+            self.assertEqual(OpenCodeAdapter._startup_retry_environment(environment), environment)
+            cache.write_text("[]")
+            self.assertEqual(OpenCodeAdapter._startup_retry_environment(environment), environment)
+            cache.write_text("{}")
+            self.assertEqual(OpenCodeAdapter._startup_retry_environment(environment), environment)

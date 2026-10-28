@@ -397,6 +397,8 @@ configuration:
 
 ### FI Trace 回传与内部判定归属
 
+OpenCode FI 启动超时的有限恢复：默认 plugin_startup_timeout=120 秒、plugin_startup_retries=1（内部参数允许 0～2），与原 SQLite 锁重试分别计数。仅在超时进程仍存活、插件存在、AGENT_FI 运行环境完整且没有 Session/激活/标准输出证据时重试；必须先停止并回收旧进程，再随机退避。有效 models.json 缓存存在且未显式设置 OPENCODE_DISABLE_MODELS_FETCH 时，仅重试进程跳过目录在线刷新，保持业务模型与 provider 原值。startup_attempt / startup_last_error / startup_retry_reason 保存在原 manifest；启动、退避、业务执行共用 RunRequest.timeout_seconds 预算，已有业务证据或明确退出不重复执行。
+
 常驻客户端在读取无 Session、无激活信号的 collect-result 时，会携带同目录失败 manifest 的真实原因并脱敏。现有 collect-result 接口直接记录 failed，不进入 Judge，也不将 plugin_start_failed 覆盖成 session_unaligned；有真实 Session 或激活证据的部分轨迹保留原处理流程。
 
 OpenCode 沿用 v1/v2 采集入口和迟到快照处理。OpenCode v1 不保证退出前等待事件钩子：事件同步写入 spool，idle 分支在首次异步让出之前触发上传；v2 保留异步背压，等待写盘后上传。避免仅在主动 await 钩子的测试中通过，却在真实 CLI 退出时丢失上传触发。上传器在排他锁内读取和保存 checkpoint；保留源仓库的未完成会话追踪与最终重检，单文件扫描只推进对应文件的水位，上传失败不确认扫描完成。

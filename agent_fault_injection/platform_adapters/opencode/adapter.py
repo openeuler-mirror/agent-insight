@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -92,6 +93,8 @@ class OpenCodeAdapter(PlatformAdapter):
         ctx: AdapterRunContext,
         environment: dict[str, str],
     ) -> PlatformRunResult:
+        """Share one deadline across startup, bounded unstarted retries, and execution."""
+
         request = ctx.request
         artifacts = ctx.artifacts
         store = ctx.store
@@ -101,6 +104,8 @@ class OpenCodeAdapter(PlatformAdapter):
             or self._resolve_executable(request)
         )
         process: asyncio.subprocess.Process | None = None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + request.timeout_seconds
         try:
             command = self._build_command(
                 executable=executable,
@@ -119,11 +124,25 @@ class OpenCodeAdapter(PlatformAdapter):
             lock_retries = max(
                 0, int(request.platform_options.get("database_lock_retries", 3))
             )
+            startup_retries = min(
+                2, max(0, int(request.platform_options.get("plugin_startup_retries", 1)))
+            )
+            startup_retries_used = 0
+            lock_retries_used = 0
+            retry_reason = ""
+            launch_environment = dict(environment)
             attempt = 0
             exit_code = 1
             timed_out = False
             while True:
+                if loop.time() >= deadline:
+                    raise ExperimentTimeoutError("Platform startup exhausted the run timeout")
                 attempt += 1
+                store.update_manifest(
+                    artifacts,
+                    status=RunStatus.PLATFORM_STARTING,
+                    startup_attempt=attempt,
+                )
                 with (
                     artifacts.stdout_file.open(
                         "wb" if attempt == 1 else "ab", buffering=0
@@ -134,21 +153,24 @@ class OpenCodeAdapter(PlatformAdapter):
                 ):
                     if attempt > 1:
                         stderr.write(
-                            f"\n--- retry {attempt} after database is locked ---\n".encode()
+                            f"\n--- retry {attempt} after {retry_reason} ---\n".encode()
                         )
                     process = await asyncio.create_subprocess_exec(
                         *command,
                         cwd=workspace,
-                        env=environment,
+                        env=launch_environment,
                         stdout=stdout,
                         stderr=stderr,
                     )
 
+                    attempt_startup_timeout = min(
+                        startup_timeout, max(0.0, deadline - loop.time())
+                    )
                     try:
                         await self.monitor.wait_for_file(
                             process,
                             artifacts.plugin_ready_file,
-                            startup_timeout,
+                            attempt_startup_timeout,
                         )
                     except PluginStartupError as exc:
                         exit_before_stop = process.returncode
@@ -165,7 +187,7 @@ class OpenCodeAdapter(PlatformAdapter):
                         message = self._startup_failure_message(
                             exc=exc,
                             artifacts=artifacts,
-                            startup_timeout=startup_timeout,
+                            startup_timeout=attempt_startup_timeout,
                             process_exit_code=exit_before_stop
                             if exit_before_stop is not None
                             else stopped_code,
@@ -173,11 +195,45 @@ class OpenCodeAdapter(PlatformAdapter):
                             agent_fi_raw_dir=environment.get("AGENT_FI_RAW_DIR"),
                             agent_fi_run_id=environment.get("AGENT_FI_RUN_ID"),
                         )
+                        capture = self.mapper.inspect(artifacts.events_file)
+                        # A business session or activation is never safe to replay.
+                        unstarted = (
+                            not capture.session_id
+                            and not capture.fault_activated
+                            and artifacts.stdout_file.stat().st_size == 0
+                        )
+                        retry_reason = ""
                         if (
-                            attempt <= lock_retries
+                            unstarted
+                            and lock_retries_used < lock_retries
                             and self._is_database_locked_failure(message, artifacts)
                         ):
-                            await asyncio.sleep(min(2.0, 0.4 * attempt))
+                            lock_retries_used += 1
+                            retry_reason = "database is locked"
+                        elif (
+                            unstarted
+                            and exit_before_stop is None
+                            and plugin_installed
+                            and environment.get("AGENT_FI_RAW_DIR")
+                            and environment.get("AGENT_FI_RUN_ID")
+                            and not artifacts.plugin_ready_file.exists()
+                            and startup_retries_used < startup_retries
+                        ):
+                            startup_retries_used += 1
+                            retry_reason = "plugin startup timeout"
+                            launch_environment = self._startup_retry_environment(
+                                launch_environment
+                            )
+                        store.update_manifest(
+                            artifacts,
+                            startup_last_error=message,
+                            startup_retry_reason=retry_reason or None,
+                        )
+                        if retry_reason and loop.time() < deadline:
+                            delay = min(
+                                2.0, 0.4 * attempt + random.uniform(0.1, 0.5)
+                            )
+                            await asyncio.sleep(min(delay, max(0.0, deadline - loop.time())))
                             continue
                         raise PluginStartupError(message) from exc
 
@@ -191,7 +247,7 @@ class OpenCodeAdapter(PlatformAdapter):
                     try:
                         exit_code = await self.monitor.wait_for_exit(
                             process,
-                            request.timeout_seconds,
+                            max(0.0, deadline - loop.time()),
                         )
                     except ExperimentTimeoutError:
                         exit_code = 124
@@ -223,6 +279,26 @@ class OpenCodeAdapter(PlatformAdapter):
         finally:
             if process is not None and process.returncode is None:
                 await self.monitor.stop(process)
+
+    @staticmethod
+    def _startup_retry_environment(environment: dict[str, str]) -> dict[str, str]:
+        """Use a valid local model catalog on retry without changing model/provider settings."""
+
+        retry_environment = dict(environment)
+        if "OPENCODE_DISABLE_MODELS_FETCH" in retry_environment:
+            return retry_environment
+        cache_home = Path(
+            environment.get("XDG_CACHE_HOME")
+            or str(Path(environment.get("HOME") or Path.home()) / ".cache")
+        )
+        cache_file = cache_home / "opencode" / "models.json"
+        try:
+            catalog = json.loads(cache_file.read_text(encoding="utf-8"))
+            if isinstance(catalog, dict) and catalog:
+                retry_environment["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
+        except (OSError, ValueError):
+            pass
+        return retry_environment
 
     @staticmethod
     def _was_fault_intercepted(

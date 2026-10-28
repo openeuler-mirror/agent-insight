@@ -279,7 +279,7 @@ Benchmark 实验的 Case 列表按实际执行阶段显示进度：尚未轮到�
 
 #### 生成 Trace：检查已有数据集
 
-若 Agent 在创建 Session 前启动失败，Case 展示 plugin_start_failed 等实际平台错误；这类任务不会进入评分，原始启动日志保存在执行机的运行 artifacts 中。
+若 Agent 在创建 Session 前启动失败，Case 展示 plugin_start_failed 等实际平台错误；这类任务不会进入评分，原始启动日志保存在执行机的运行 artifacts 中。 OpenCode 插件启动默认等待 120 秒；若仍在运行、插件已安装且没有业务 Session、激活或标准输出证据，会先停止旧进程，再随机退避后重试一次。已有有效本地模型目录时，重试优先使用缓存，不改模型或 provider 配置；已有执行证据或明确退出的错误不自动重放。启动、退避和执行共用本次超时预算，重试用尽后明确失败。
 
 OpenCode v1 会在退出前保存结束事件并触发 Trace 上传，不必等待下一次启动补传。
 
