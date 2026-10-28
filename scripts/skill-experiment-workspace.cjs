@@ -24,6 +24,45 @@ const { inspectOpencodeRuntime } = require('./opencode-runtime.cjs')
 
 const triggerWorkspaces = new Map()
 const WORKSPACE_IDLE_MS = 120_000
+const PLUGIN_DEPENDENCIES = ['@opencode-ai/plugin', '@opencode-ai/sdk', 'zod']
+
+function copyPluginDependencies(targets) {
+  const home = process.env.AGENT_INSIGHT_USER_HOME || os.homedir()
+  const sources = [process.env.OPENCODE_CONFIG_DIR,
+    path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'opencode'), path.join(home, '.opencode')].filter(Boolean)
+  let packages
+  for (const source of new Set(sources)) {
+    try {
+      const found = PLUGIN_DEPENDENCIES.map(name => {
+        const directory = fs.realpathSync(path.join(source, 'node_modules', name))
+        const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'))
+        const entry = manifest.exports?.['.']
+        const main = typeof entry === 'string' ? entry : entry?.import || entry?.default || manifest.module || manifest.main
+        if (manifest.name !== name || typeof manifest.version !== 'string' || typeof main !== 'string'
+          || !fs.statSync(path.resolve(directory, main)).isFile()
+          || Object.keys(manifest.dependencies || {}).some(dependency => !PLUGIN_DEPENDENCIES.includes(dependency))) throw new Error('incomplete dependencies')
+        return { name, directory, manifest }
+      })
+      packages = found
+      break
+    } catch {}
+  }
+  if (!packages) throw Object.assign(new Error('OpenCode 1.x 插件运行依赖缺失或不完整：需要 @opencode-ai/plugin、@opencode-ai/sdk 和 zod。请使用客户端运行账号在 OpenCode 配置目录补齐依赖后重试。'), { code: 'SKILL_ISOLATION_UNAVAILABLE' })
+  const dependencies = { '@opencode-ai/plugin': packages[0].manifest.version }
+  for (const target of new Set(targets)) {
+    fs.mkdirSync(target, { recursive: true })
+    for (const item of packages) fs.cpSync(item.directory, path.join(target, 'node_modules', item.name), {
+      recursive: true, dereference: true, mode: fs.constants.COPYFILE_FICLONE,
+    })
+    // OpenCode checks these manifests before deciding whether to install dependencies again.
+    fs.writeFileSync(path.join(target, 'package.json'), JSON.stringify({ private: true, dependencies }), { mode: 0o600 })
+    fs.writeFileSync(path.join(target, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: {
+      '': { dependencies }, ...Object.fromEntries(packages.map(({ name, manifest }) => [`node_modules/${name}`, {
+        version: manifest.version, ...(manifest.dependencies ? { dependencies: manifest.dependencies } : {}),
+      }])),
+    } }), { mode: 0o600 })
+  }
+}
 
 function releaseCachedWorkspace(key, entry) {
   if (triggerWorkspaces.get(key) === entry) triggerWorkspaces.delete(key)
@@ -190,6 +229,7 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
         mcp: triggerRouting ? { servers: {} } : resolvedConfig.mcp || {},
       }
     }
+    if (major === 1) copyPluginDependencies([configRoot, path.join(workspace, '.opencode')])
     const configPath = path.join(configRoot, 'opencode.json')
     fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 })
     const prepared = {

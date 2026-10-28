@@ -19,13 +19,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { selectSkillExecutionTarget } from '@/lib/skill-workbench/execution-target';
 import { executionModelMismatch } from '@/lib/skill-workbench/execution-model';
 import { withSkillClientSlot } from '@/lib/skill-workbench/client-execution-slot';
 import { assertSkillExecutionOutput, assertTriggerExecutionEvidence, isTraceGenerationFailureRetryable } from '@/lib/engine/experiment/trace-generation';
 import { classifyTriggerExecution, shouldStopTriggerBatch } from '@/lib/skill-workbench/trigger-execution';
 import { parseCapabilities } from '@/lib/reliability/client-registry';
+import { withOpenCodePluginDependencies, writeOpenCodePluginDependencies } from './fixtures/opencode-plugin-dependencies';
+
+test.beforeEach(t => { withOpenCodePluginDependencies(t as TestContext); });
 
 const require = createRequire(import.meta.url);
 const workspace = require('../scripts/skill-experiment-workspace.cjs');
@@ -109,6 +112,83 @@ test('Skill 两侧快照和无 Skill 对照组使用独立目录；文件路径�
   for (const file of ['../escape', '/absolute', 'C:/windows', 'refs/../../escape', 'refs\\escape']) {
     assert.throws(() => workspace.validateSkillSnapshot({ ...skill, files: { ...skill.files, [file]: 'bad' } }), /不安全/);
   }
+});
+
+test('Skill 用例、A/B 对照与触发工作区只复制三个插件依赖，副本相互独立且不带用户配置', () => {
+  const source = path.join(process.env.XDG_CONFIG_HOME!, 'opencode');
+  fs.writeFileSync(path.join(source, 'opencode.json'), '{"privateKey":"must-not-copy"}');
+  fs.writeFileSync(path.join(source, '.npmrc'), 'secret=must-not-copy');
+  fs.mkdirSync(path.join(source, 'node_modules', 'unrelated'));
+  const workspaces = [
+    { version: 1, skill },
+    { version: 1, skill: { ...skill, version: 3 } },
+    { version: 1, skill: null },
+    { version: 2, mode: 'trigger', targetSkillName: skill.name, skills: [skill] },
+  ].map(skillExecution => workspace.prepareSkillExperimentWorkspace('unused', {
+    platform: 'opencode', agent: 'build', model: selection.model, skillExecution,
+  }, { provider: {} }));
+  try {
+    for (const isolated of workspaces) for (const directory of [path.dirname(isolated.env.OPENCODE_CONFIG), path.join(isolated.cwd, '.opencode')]) {
+      assert.deepEqual(fs.readdirSync(path.join(directory, 'node_modules')).sort(), ['@opencode-ai', 'zod']);
+      assert.deepEqual(fs.readdirSync(path.join(directory, 'node_modules', '@opencode-ai')).sort(), ['plugin', 'sdk']);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')).dependencies, { '@opencode-ai/plugin': '1.0.0' });
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'package-lock.json'), 'utf8')).packages[''].dependencies, { '@opencode-ai/plugin': '1.0.0' });
+      assert.equal(fs.existsSync(path.join(directory, '.npmrc')), false);
+      assert.ok(!fs.readFileSync(isolated.env.OPENCODE_CONFIG, 'utf8').includes('must-not-copy'));
+    }
+    const relative = 'node_modules/@opencode-ai/plugin/index.js';
+    fs.writeFileSync(path.join(workspaces[0].cwd, '.opencode', relative), 'experiment changed dependency');
+    for (const directory of [source, path.dirname(workspaces[0].env.OPENCODE_CONFIG), path.join(workspaces[1].cwd, '.opencode')]) {
+      assert.match(fs.readFileSync(path.join(directory, relative), 'utf8'), /module.exports/);
+    }
+    workspaces[0].cleanup();
+    assert.ok(fs.existsSync(path.join(source, relative)));
+    assert.ok(fs.existsSync(path.join(workspaces[1].cwd, '.opencode', relative)));
+  } finally { for (const isolated of workspaces) isolated.cleanup(); }
+});
+
+test('缺失或损坏的插件依赖明确阻止 Skill 执行，完整备用目录仍可复用', () => {
+  const source = path.join(process.env.XDG_CONFIG_HOME!, 'opencode');
+  const make = () => workspace.prepareSkillExperimentWorkspace('unused', {
+    platform: 'opencode', agent: 'build', skillExecution: { version: 1, skill },
+  }, { provider: {} });
+  for (const name of ['@opencode-ai/plugin', '@opencode-ai/sdk', 'zod']) {
+    const entry = path.join(source, 'node_modules', name, 'index.js');
+    const saved = fs.readFileSync(entry);
+    fs.rmSync(entry);
+    assert.throws(make, (error: unknown) => {
+      assert.ok(error instanceof Error && 'code' in error);
+      assert.equal(error.code, 'SKILL_ISOLATION_UNAVAILABLE');
+      assert.match(error.message, /插件运行依赖缺失或不完整/);
+      assert.match(error.message, /客户端运行账号.*补齐依赖/);
+      assert.equal(isTraceGenerationFailureRetryable(error.code), false);
+      return true;
+    });
+    fs.writeFileSync(entry, saved);
+  }
+  fs.writeFileSync(path.join(source, 'node_modules/@opencode-ai/plugin/package.json'), 'broken JSON');
+  assert.throws(make, { code: 'SKILL_ISOLATION_UNAVAILABLE' });
+  writeOpenCodePluginDependencies(path.join(process.env.AGENT_INSIGHT_USER_HOME!, '.opencode'));
+  const isolated = make();
+  try { assert.ok(fs.existsSync(path.join(isolated.cwd, '.opencode/node_modules/@opencode-ai/plugin/index.js'))); }
+  finally { isolated.cleanup(); }
+});
+
+test('本机依赖使用符号链接时复制实体文件，实验写入不会修改原始依赖', () => {
+  const source = path.join(process.env.XDG_CONFIG_HOME!, 'opencode');
+  const sdk = path.join(source, 'node_modules/@opencode-ai/sdk');
+  const store = path.join(process.env.AGENT_INSIGHT_USER_HOME!, 'sdk-store');
+  fs.renameSync(sdk, store);
+  fs.symlinkSync(store, sdk, process.platform === 'win32' ? 'junction' : 'dir');
+  const isolated = workspace.prepareSkillExperimentWorkspace('unused', {
+    platform: 'opencode', agent: 'build', skillExecution: { version: 1, skill },
+  }, { provider: {} });
+  try {
+    const copied = path.join(isolated.cwd, '.opencode/node_modules/@opencode-ai/sdk');
+    assert.equal(fs.lstatSync(copied).isSymbolicLink(), false);
+    fs.writeFileSync(path.join(copied, 'index.js'), 'changed');
+    assert.match(fs.readFileSync(path.join(store, 'index.js'), 'utf8'), /module.exports/);
+  } finally { isolated.cleanup(); }
 });
 
 test('触发分析客户端工作区只读、允许 Skill 自主路由，且不强制加载被测 Skill', () => {

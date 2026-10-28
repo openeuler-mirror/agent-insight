@@ -18,6 +18,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { randomUUID } from 'node:crypto'
 import { createIsolatedDatabase } from './helpers/isolated-database'
+import { acceptCaseProgress } from '@/lib/engine/experiment/execution-progress'
+import { benchmarkExecutionProgress } from '@/lib/benchmark/execution-progress'
 
 const database = createIsolatedDatabase()
 const { prisma } = require('@/lib/storage/prisma') as typeof import('@/lib/storage/prisma')
@@ -76,6 +78,65 @@ test('普通实验同轮绑定幂等、冲突不可覆盖，终态不回退', as
   assert.equal((await prisma.experimentTraceAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).traceId, 'ordinary-fixed')
 })
 
+test('各平台提前关联链路后执行失败仍定位 Agent 阶段，迟到入库不改变失败或推进阶段', async () => {
+  for (const platform of ['opencode', 'xiaoo', 'pi-agent', 'mcts']) {
+    const f = await fixture(), attempt = await ordinary(f, 1)
+    await prisma.experimentTraceAttempt.update({ where: { id: attempt.id }, data: { platform } })
+    const traceId = `${platform}-${randomUUID()}`
+    await receipt(attempt.commandId!, traceId)
+    const before = (await loadCaseExecutionProgress(f.experimentId, user, [f.caseId], [])).get(f.caseId)!.progress
+    await applyCommandStatus({ commandId: attempt.commandId!, clientId, status: 'FAILED', error: { code: 'MODEL_ERROR', message: 'model unavailable' }, result: { state: 'AGENT_EXITED', traceId, exitCode: 1 } })
+    await prisma.experimentTraceAttempt.update({ where: { id: attempt.id }, data: { status: 'failed', failureCode: 'MODEL_ERROR', errorMessage: 'model unavailable', finishedAt: new Date() } })
+    const failed = (await loadCaseExecutionProgress(f.experimentId, user, [f.caseId], [])).get(f.caseId)!.progress
+    assert.equal(failed.stage, 1, platform)
+    assert.equal(failed.status, 'failed')
+    assert.equal(failed.error, 'model unavailable')
+    assert.equal(failed.traceId, traceId)
+    assert.equal(acceptCaseProgress(before, failed), failed)
+    const execution = await root(traceId)
+    const linked = (await loadCaseExecutionProgress(f.experimentId, user, [f.caseId], [])).get(f.caseId)!.progress
+    assert.equal(linked.stage, 1)
+    assert.equal(linked.status, 'failed')
+    assert.equal(linked.executionId, execution.id)
+    assert.equal(acceptCaseProgress(linked, before), linked)
+    const next = await ordinary(f, 2)
+    const retry = (await loadCaseExecutionProgress(f.experimentId, user, [f.caseId], [])).get(f.caseId)!.progress
+    assert.equal(retry.identity, next.id)
+    assert.equal(retry.traceId, null)
+    assert.equal(retry.executionId, null)
+    assert.equal(acceptCaseProgress(linked, retry), retry)
+    assert.equal(acceptCaseProgress(retry, linked), retry)
+  }
+})
+
+test('早期 Trace ID 不把取消、被替换和等待重试误判为已完成 Agent 执行', async () => {
+  for (const status of ['cancelled', 'superseded', 'retry_wait']) {
+    const f = await fixture(), attempt = await ordinary(f, 1)
+    await receipt(attempt.commandId!, randomUUID())
+    await prisma.reliabilityCommand.update({ where: { commandId: attempt.commandId! }, data: { status: 'FAILED' } })
+    await prisma.experimentTraceAttempt.update({ where: { id: attempt.id }, data: { status } })
+    const snapshot = (await loadCaseExecutionProgress(f.experimentId, user, [f.caseId], [])).get(f.caseId)!
+    assert.equal(snapshot.progress.stage, 1, status)
+    assert.equal(snapshot.progress.status, status === 'retry_wait' ? 'retry_wait' : 'cancelled')
+  }
+})
+
+test('成功结束及明确的入库超时仍进入 Trace 阶段，不依赖链路是否已到达', async () => {
+  const f = await fixture(), attempt = await ordinary(f, 1)
+  await receipt(attempt.commandId!, randomUUID())
+  await applyCommandStatus({ commandId: attempt.commandId!, clientId, status: 'SUCCEEDED', result: { state: 'AGENT_EXITED', exitCode: 0 } })
+  let snapshot = (await loadCaseExecutionProgress(f.experimentId, user, [f.caseId], [])).get(f.caseId)!
+  assert.equal(snapshot.progress.stage, 2)
+  assert.equal(snapshot.progress.status, 'waiting')
+  await prisma.experimentTraceAttempt.update({ where: { id: attempt.id }, data: { status: 'failed', failureCode: 'TRACE_INGEST_TIMEOUT', errorMessage: 'trace upload timeout' } })
+  snapshot = (await loadCaseExecutionProgress(f.experimentId, user, [f.caseId], [])).get(f.caseId)!
+  assert.equal(snapshot.progress.stage, 2)
+  assert.equal(snapshot.progress.status, 'failed')
+  await prisma.experimentTraceAttempt.update({ where: { id: attempt.id }, data: { commandId: null } })
+  snapshot = (await loadCaseExecutionProgress(f.experimentId, user, [f.caseId], [])).get(f.caseId)!
+  assert.equal(snapshot.progress.stage, 2, '历史命令缺失时明确的入库超时仍足以定位阶段')
+})
+
 test('普通实验重试后丢弃旧轮绑定，拒绝复用历史 ID，迟到入库不能带回旧链路', async () => {
   const f = await fixture(), old = await ordinary(f, 1)
   await receipt(old.commandId!, 'ordinary-old')
@@ -122,6 +183,18 @@ test('Benchmark 并发重复回调与完成回调保持唯一绑定且终态不�
   await assert.rejects(progress(run.id, 'agent_running', 'benchmark-changed'), code('TRACE_ID_CONFLICT'))
   stored = await prisma.benchmarkCaseRun.findUniqueOrThrow({ where: { id: run.id } })
   assert.equal(stored.status, 'execution_failed')
+})
+
+test('Benchmark 提前关联主链路后执行失败停留 Agent 阶段，不误判为已整理提交物', async () => {
+  const f = await fixture('benchmark'), run = await benchmark(f)
+  await progress(run.id, 'agent_running', randomUUID())
+  await completeBenchmarkRun({ runId: run.id, clientId, completion: { kind: 'execution', status: 'failed', artifacts: [], runFacts: { exitCode: 1 }, cleanup: { status: 'succeeded' }, error: { code: 'MODEL_ERROR', message: 'model unavailable' } } })
+  const stored = await prisma.benchmarkCaseRun.findUniqueOrThrow({ where: { id: run.id } })
+  assert.ok(JSON.parse(stored.runFactsJson!).traceId)
+  const projected = benchmarkExecutionProgress({ runStatus: stored.status, progressStage: JSON.parse(stored.progressJson!).stage, evaluationStatus: null, failure: { code: stored.failureCode!, message: stored.failureMessage } }, Date.now())
+  assert.equal(projected.steps[2].state, 'failed')
+  assert.equal(projected.steps[3].state, 'unreached')
+  assert.equal(projected.failureMessage, 'model unavailable')
 })
 
 test('Benchmark 重试隐藏历史链接，旧回调和迟到失败不能覆盖新轮 Case', async () => {

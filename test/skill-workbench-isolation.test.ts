@@ -82,7 +82,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(grayscaleRoute, /targets:\s*evaluationTargets/);
   assert.match(grayscaleRoute, /target\.run\.experimentCaseId = experimentCaseId/);
   assert.match(grayscaleRoute, /const experimentSettled = experiment\.status === 'done'[\s\S]*experiment\.status === 'partial'/);
-  assert.match(grayscaleRoute, /!experimentSettled && \(run\.status === 'pending'/);
+  assert.match(grayscaleRoute, /\(!experimentSettled \|\| run\.executionClaimId\) && \(run\.status === 'pending'/);
   assert.match(grayscaleRoute, /loadServerModelForUserById/);
   assert.match(grayscaleRoute, /modelOptions:\s*args\.config\.modelOptions/);
   assert.match(retestService, /snapshot\.runtime\?\.modelConfigId/);
@@ -463,16 +463,22 @@ test('优化候选发布或放弃后通知其他页面，并由空闲轮询兜�
   assert.match(shell, /shouldFollowPublishedVersion[\s\S]*selectFormalAsset/);
 });
 
-test('Skill 优化入口等待确认，提交后保留归并、自验证和静态质量门禁', () => {
+test('Skill 优化点击即提交当前诉求，保留空请求拦截、归并、自验证和静态质量门禁', () => {
   const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
   const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
   const adapter = readFileSync('src/lib/skill-workbench/optimization-adapter.ts', 'utf8');
   const records = readFileSync('src/components/skill-workbench/OptimizationRecordsPanel.tsx', 'utf8');
   const optimizerRoute = readFileSync('src/app/api/skill-opt/chat/route.ts', 'utf8');
   const optimizerBridge = readFileSync('src/lib/skill-opt-bridge.ts', 'utf8');
-  assert.match(shell, /autoRun = false/);
+  assert.match(shell, /autoRun = true/);
   assert.match(shell, /label=\{startingOptimization \? '正在准备优化会话…' : 'Skill 优化'\}[\s\S]*?startOptimization\(\)/);
-  assert.match(shell, /startOptimization\(\{ targetAsset \}\)/);
+  assert.match(shell, /startOptimization\(\{ targetAsset, feedback \}\)/);
+  assert.match(shell, /autoStartFeedback=\{optimizationFeedback\}/);
+  assert.match(shell, /optimizationBusy=\{optimizationBusy \|\| busy\}/);
+  assert.match(shell, /optimizationQuickActionRef\.current = true/);
+  assert.match(conversation, /quickActions\(feedback, busy \|\| loading\)/);
+  assert.match(conversation, /void runRequest\(autoStartFeedback, \{ mergeIssues: useMergePlan && !autoStartFeedback\.trim\(\) \}\)/);
+  assert.match(conversation, /当前没有待优化问题，可补充优化诉求后重试/);
   assert.match(conversation, /void runRequest\(feedback/);
   assert.doesNotMatch(conversation, /根据这些问题优化 Skill/);
   assert.match(conversation, /\/api\/skill-opt\/plan/);

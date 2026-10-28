@@ -59,47 +59,65 @@ changefreq: monthly
 - 各 Agent 的执行环境要求、可自动准备项、需用户配置项及耗时动作；
 - Evaluator 的权威判定依据、运行环境和 Evidence；
 - 主指标、聚合方式、评分点及页面展示；
-- V1 能力判断和可能的公共扩展。
+- 按第 3 节查询得到的能力匹配结论、证据和待验证项，以及可能的公共扩展。
 
 没有权威成功标准、数据授权或关键私有边界时，不得把假设写成正式实现。
 
 ### 2.3 判断接入包还是公共扩展
 
-满足以下条件时，只开发 `benchmarks/<key>`：
+先按[第 3 节](#3-能力发现与兼容性判断)查询，再判断接入范围。任务、工作区、执行策略、提交物和评测输入输出能够由目标版本的协议表达，且对应公共组件已有实现时，只开发 `benchmarks/<key>`。执行机尚未安装依赖、缺少配置或服务未就绪，应先走已有部署和环境准备流程，不能直接判为缺少公共能力。
 
-- Git Workspace 可以承载任务；
-- 仓库是无凭据的 GitHub HTTPS 地址；
-- 基线是完整 40 位 commit SHA；
-- 已注册的 Agent Runtime 可以执行任务；
-- 已注册的 Artifact Collector 可以收集全部必需提交物；
-- Evaluator Entrypoint 和现有文件协议可以承载判定逻辑。
-
-任一条件不满足时，先提交公共能力扩展设计，说明协议变化、复用对象、安全边界、兼容性和测试。未经确认不要在实例 Adapter、公共 API 或 React 页面中绕过限制。
+协议无法表达需求，或确实缺少可复用组件时，先提交公共能力扩展设计，说明查询依据、协议变化、复用对象、安全边界、兼容性和测试。未经确认不要在实例 Adapter、公共 API 或 React 页面中绕过限制。证据不足时标记待验证，不凭文档示例宣称已支持或不支持。
 
 ### 2.4 实现与验证
 
 确认后按顺序完成：Schema → Manifest → Adapter → 执行端环境模块 → Evaluator → Dataset Loader → Presentation → 单元测试 → Smoke → 端到端验收。
 
-## 3. V1 支持边界
+## 3. 能力发现与兼容性判断
 
-`agent-task/v1` 当前硬边界：
+本规范维护架构、接入契约、查询方法和验收要求。可选 Workspace、Agent Runtime、Collector、执行后端及其版本以目标版本的代码和部署状态为准，不在本文维护完整能力清单。后文配置示例用于说明契约，不代表全部支持范围，也不保证某台机器已经可用。
 
-- `workspace.provider` 只能为 `git`；
-- 仓库必须是 `https://github.com/...`，不得包含账号、密码、查询参数或锚点；
-- `workspace.revision` 必须是完整 40 位 commit SHA；
-- `workspaceWrite` 为 `allow`，`hiddenDataAccess` 为 `deny`；
-- Agent 网络策略为 `deny` 或 `client-default`；
-- 每个 Benchmark 至少声明一个 Artifact；
-- Artifact 必须由已注册 Collector 产生；
-- 执行目标还必须上报 `agent-runtime/<platform>/v1` 和 `RUN_BENCHMARK_CASE`。
+### 3.1 从需求定位实现
 
-当前默认本地执行器提供：
+先把 Benchmark 的要求拆成工作区输入、Agent 运行方式、网络与数据隔离、提交物、评测环境和结果格式，再逐项核对以下入口。类型声明说明可以表达什么；校验器和实际执行路径决定是否接受、如何执行，必须一起阅读。
 
-- `git-workspace/v1`；
-- `agent-runtime/opencode/v1`；
-- `git-patch/v1`。
+| 要确认的问题 | 查询入口 | 必须核对的内容 |
+|---|---|---|
+| 任务与工作区能否表达 | [任务契约与校验器](../../../../../packages/benchmark-protocol/src/contracts.ts)、[执行 Profile 契约](../../../../../packages/benchmark-protocol/execution.cjs) | `AgentTaskEnvelope`、`validateTaskEnvelope` 及其调用的校验函数；所选工作区的字段、来源与版本限制，Profile 与 Agent、策略的匹配要求 |
+| 是否有实际执行和采集实现 | [执行器装配入口](../../../../../services/executor/src/index.cjs) | `createBenchmarkExecutor` 中的 Provider、Runtime、Collector、Backend 注册与配置覆盖；沿所选实现追踪准备、执行、采集及清理路径 |
+| Git 等输入来源如何解析 | 所选 Provider 的校验与准备实现；Git 来源策略从 [git-source-workspace.cjs](../../../../../services/executor/src/git-source-workspace.cjs) 继续追踪 | 任务允许声明的来源、实际下载来源、认证及固定版本校验；来源映射不能绕过任务信封的校验限制 |
+| 能力如何上报与匹配 | [客户端能力装配](../../../../../scripts/reliability-client.cjs)、[执行 Profile 探测](../../../../../services/executor/src/execution-config.cjs)、[目标匹配](../../../../../src/lib/benchmark/execution-targets.ts) | Manifest 要求如何与组件、动作、Agent 和 Profile 匹配；组件存在、已启用和运行就绪分别依据什么判断 |
+| Evaluator 能否承载官方判定 | [Catalog 生成与校验](../../../../../scripts/benchmark/generate-catalog.cjs)、[Evaluator 注册与运行](../../../../../services/evaluator/src/evaluator-registry.cjs) | 描述文件可用字段、运行方式、依赖与资源约束，以及 Entrypoint 的输入输出和隔离实现 |
+| 上述结论如何验证 | [协议测试](../../../../../packages/benchmark-protocol/tests/)、[公共测试](../../../../../test/)、[接入包](../../../../../benchmarks/)内的测试 | 已覆盖的正常与拒绝路径、测试是否使用真实组件；Mock 通过不能证明部署就绪 |
 
-其他 Workspace、Agent Runtime 或 Collector 属于公共能力扩展，不是 Manifest 中写一个新字符串就会自动获得实现。
+在仓库根目录可以先用以下只读查询定位，再阅读命中的函数及调用链：
+
+```bash
+git rev-parse HEAD
+rg -n 'AgentTaskEnvelope|validateTaskEnvelope|validateExecution|validateProfile' packages/benchmark-protocol
+rg -n 'createBenchmarkExecutor|workspaceProviders|agentRuntimes|collectors|executionBackends' services/executor/src
+rg -n 'requiredCapabilities|missingCapabilities|targetReadiness|RUN_BENCHMARK_CASE' src/lib/benchmark/execution-targets.ts scripts/reliability-client.cjs
+```
+
+记录所查代码的 commit 和相关本地改动，并核对平台、客户端及 Evaluator 的实际部署版本。开发仓库里存在实现，不代表已发布或已部署；入口移动时按符号继续检索。配置字段和枚举须以所选版本的校验器为准，不能通过在 Manifest 中填写新字符串获得实现。
+
+### 3.2 核对目标机器和本次运行
+
+1. **接入前做静态匹配。** 尚未安装数据集时，先核对协议、注册实现、分发内容与现有测试，部署可用性标记为待验证。
+2. **安装后查执行目标。** 在平台已认证的上下文中调用 `GET /api/benchmark/v1/execution-targets?datasetId=<数据集ID>`；[接口实现](../../../../../src/app/api/benchmark/v1/execution-targets/route.ts)要求数据集已就绪且用户可访问。检查返回的 Agent、模型、`executionProfile`、`ready`、`canPrepare`、`missingCapabilities` 和 `unavailableReasons`。空结果或不可用结果需结合客户端上报与匹配逻辑定位，不能直接推断平台没有此能力。
+3. **检查选定 Case 的环境。** 按[第 5.5 节](#55-执行环境准备协议)，使用本次数据集、执行机、Agent、模型及参数触发检查；需要准备时完成准备并复查。目标能力匹配通过不代替 Case 依赖、模型凭据和评测资产检查，`canPrepare` 也不表示已经就绪。
+4. **验证执行与评测链路。** 按[第 12 节](#12-测试与验收)验证提交物与权威判定，分别完成执行端检查及 Evaluator Doctor/Smoke。网络和隐藏数据隔离要核对实际后端并验证；任务中声明策略、使用独立目录或执行评测分进程，本身不能证明隔离生效。
+
+没有部署环境时仍可完成静态分析与接入包测试，但须保留运行验证待办，不能写成端到端验收通过。
+
+### 3.3 留下可复核的判断
+
+接入确认单按每项需求记录：采用的组件与配置、源码/测试依据及版本、目标机检查结果、待验证项与下一步。查询结论保存在本次接入或验收记录中，不回填成本文的全量能力清单。
+
+- **已有实现且满足需求**：复用公共组件，开发接入包并完成验收。
+- **已有实现但部署未就绪**：列出版本、依赖、配置或权限问题，按已有流程准备后重新检查。
+- **协议或实现确有缺口**：说明不能表达或执行的具体要求，进入公共扩展设计。
+- **证据不足**：明确还需查询或运行什么，完成验证后再作结论。
 
 ## 4. 接入包目录
 
@@ -132,7 +150,7 @@ benchmarks/<key>/
 
 ## 5. `benchmark.yaml`
 
-下面是使用现有 Git Patch 能力的最小参考结构：
+下面以 Git 工作区和 Patch 提交物说明 Manifest 结构。使用前须按第 3 节确认目标版本及执行机适用；能力标识、提交物、资源和展示字段应根据实际任务填写，不要将此例复制为所有 Benchmark 的默认方案：
 
 ```yaml
 key: repository-quality
@@ -501,16 +519,14 @@ Manifest 声明、执行端方法、返回值、进度和分发约定统一见[�
 
 curl 安装所选 Pi/xiaoO 时，`install-ras-client.js` 仅通过 `saveSetupContext` 保存配置查找上下文。实验第二步下一步触发 SWE-bench 执行端接入检查，需要安装时调用 `xgovernor/setup.cjs` 准备固定兼容源码版本；同版本且制品校验通过时复用，构建限并行，工具链和制品均独立于 MCTS。xGovernor 依赖仍可由 `scripts/xgovernor.cjs` 手动管理，`update [--version <tag或commit>]` 从官方源码构建配套组件，`status` 校验版本，`rollback` 回退。安装版客户端分发该脚本和后端管理模块，安装位置为 `AGENT_INSIGHT_HOME/dependencies/xgovernor`，不占用平台、Evaluator 或全局 Agent 安装。`installation.cjs` 校验原子 current/previous 指针、清单、架构和实际制品摘要；没有手动组件路径的 Profile 自动解析受管理组件，随后由 `executionCapabilities()` 生成带实际 commit 与 `artifactDigest` 的公开摘要。现有客户端 PUT capabilities 与平台接收路由均须保留 `executionProfiles` 与 `targetReadiness`，否则实际版本或对应 Runtime 就绪结果会丢失。
 
-固定版本及工具链定义集中在执行端源码，当前值如下；变更兼容版本前应验证适配协议：
+固定版本及工具链要求从目标客户端版本的源码查询，不在此复制版本值：
 
-| 定义 | 当前值 / 行为 |
-|---|---|
-| `setup.cjs` 的 `COMPATIBLE_REVISION` | `d08e67e366b89e622af9383383e251c4f40eb728` |
-| Node.js | 要求 >=22.19；不足时安装独立 Node 22.19.0 并校验下载摘要 |
-| Rust / Cargo | 缺失或版本不足时安装独立 Rust 1.97.1；构建并行度为 2 |
-| 系统依赖 | 实验准备只检查 Git、C/C++ 构建工具、pkg-config 等，缺少时提示管理员处理；不隐式执行系统包管理器 |
-| 凭据桥接版本 | `native-credentials-build.cjs` 的 `BRIDGE_VERSION: 1`，状态中对应 `components.xiaooCredentials.version` |
-| 工具链目录 | `dependencies/xgovernor/toolchain/`，不修改用户 shell 配置 |
+- [setup.cjs](../../../../../services/executor/src/xgovernor/setup.cjs) 的 `COMPATIBLE_REVISION` 定义自动准备使用的兼容源码版本；
+- [toolchain.cjs](../../../../../services/executor/src/xgovernor/toolchain.cjs) 定义 Node.js、Rust/Cargo、系统依赖及安装检查规则；
+- [native-credentials-build.cjs](../../../../../services/executor/src/xgovernor/native-credentials-build.cjs) 的 `BRIDGE_VERSION` 定义凭据桥接版本；
+- 部署机通过下述 `status` 命令核对实际安装版本与制品，结合环境检查确认是否满足本次运行要求。
+
+变更兼容版本前应验证适配协议；源码中的期望版本不能代替部署机的实际检查结果。
 
 安装器注册并启动客户端；耗时构建推迟到实验环境准备阶段，不占用一次性安装令牌的有效期。`setup.lock` 防止重复准备工具链，`update.lock` 保护更新、回退与版本回收；实验准备通过锁的 PID 核对进程，确认已退出后清理遗留锁，存活时等待并在获得锁后重新验证兼容安装，避免重复编译。失败保留工具链、构建或 Docker 阶段及安全错误分类，写入 `setup.json` 并报告未就绪，客户端仍可在线。`setup.json` 仅保存 Runtime、原配置路径与状态，不保存模型凭据。MCTS 使用自己的检查流程，不接管同机 MCTS 的服务、配置或仓库。
 
@@ -997,6 +1013,8 @@ npm run test
 最后使用真实或脱敏 Case 完成：数据集安装、实验创建、Agent 执行、全部 Submission 上传、Evaluator 判定、Evidence 查看、重评和趋势展示。
 
 ### 12.5 验收矩阵
+
+验收记录应关联第 3 节的能力查询结论，记录实际版本、目标配置和测试结果。未验证的能力或环境单独列出，不将静态匹配、Mock 测试或组件注册当作端到端通过。
 
 | 场景 | 必须观察到的结果 |
 |---|---|

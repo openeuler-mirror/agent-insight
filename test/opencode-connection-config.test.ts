@@ -22,6 +22,9 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import test, { type TestContext } from 'node:test';
+import { withOpenCodePluginDependencies, writeOpenCodePluginDependencies } from './fixtures/opencode-plugin-dependencies';
+
+test.beforeEach(t => { withOpenCodePluginDependencies(t as TestContext); });
 
 const require = createRequire(import.meta.url);
 const { loadOpenCodeConnectionConfig: load, checkOpenCodeModelConfig: checkModel, checkOpenCodeModelConfigAsync: checkModelAsync, parseJsonc } = require('../scripts/opencode-connection-config.cjs');
@@ -43,6 +46,7 @@ function fixture(t: TestContext, output: unknown = masked) {
     OPENCODE_CONFIG_DIR: undefined, OPENCODE_DISABLE_PROJECT_CONFIG: undefined, OPENCODE_AUTH_CONTENT: undefined,
   };
   const configFile = path.join(env.XDG_CONFIG_HOME!, 'opencode', 'opencode.json');
+  writeOpenCodePluginDependencies(path.dirname(configFile));
   const outputFile = path.join(root, 'output');
   const modelsFile = path.join(root, 'models');
   const callsFile = path.join(root, 'calls');
@@ -106,6 +110,54 @@ test('公共预检解析原始认证、读取原生模型目录，返回结果�
   const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert(calls.some(call => call.args[0] === 'models' && call.offline === '1' && call.cwd === fs.realpathSync(f.cwd)));
   assert(calls.every(call => !call.args.includes('run') && !call.args.includes('--refresh')));
+});
+
+test('1.x 自定义模型未出现在 CLI 目录时仍通过同步和异步检查，不改模型 ID', async t => {
+  const config = { provider: { test: { ...raw('custom-key').provider.test, models: { model: { name: '展示名称', options: { baseURL: 'https://custom.test/v1' } } } } } };
+  const f = fixture(t, config);
+  f.write(f.modelsFile, 'test/other\n');
+  assert.deepEqual(f.check(), { model: 'test/model' });
+  assert.deepEqual(await checkModelAsync(f.executable, selection, f.options), { model: 'test/model' });
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert(calls.every(call => !['models', 'run', 'api'].includes(call.args[0])));
+  assert.throws(() => f.check({ ...selection, model: 'test/missing' }), /模型目录/);
+});
+
+test('显式自定义模型仍检查认证、禁用状态与模型黑白名单，拒绝无效声明', t => {
+  const f = fixture(t);
+  const custom = () => ({ provider: { test: { ...raw('private-key').provider.test, models: { model: {} } } } });
+  f.write(f.modelsFile, 'test/other\n');
+  const base = custom();
+  for (const config of [
+    { ...base, disabled_providers: ['test'] }, { ...base, enabled_providers: ['other'] },
+    { provider: { test: { ...base.provider.test, blacklist: ['model'] } } },
+    { provider: { test: { ...base.provider.test, whitelist: ['other'] } } },
+    { provider: { test: { ...base.provider.test, options: { baseURL: 'https://custom.test/v1' } } } },
+    { provider: { test: { ...base.provider.test, options: { apiKey: '' } } } },
+    { provider: { test: { ...base.provider.test, models: { model: null } } } },
+    { provider: { test: { ...base.provider.test, models: { model: { options: { headers: { Authorization: '' } } } } } } },
+  ]) {
+    f.write(f.outputFile, config);
+    assert.throws(f.check, (error: unknown) => error instanceof Error && 'code' in error && error.code === 'MODEL_UNAVAILABLE' && !error.message.includes('private-key'));
+  }
+  f.write(f.outputFile, { provider: { test: { ...base.provider.test, whitelist: ['model'] } } });
+  assert.deepEqual(f.check(), { model: 'test/model' });
+});
+
+test('2.x 自定义模型以原生 enabled 目录为准，绝不回退 1.x 声明或 models 命令', async t => {
+  const f = fixture(t, { data: [{ providerID: 'test', id: 'model', enabled: true }] });
+  f.env.FIXTURE_VERSION = '2.1.4';
+  f.write(f.configFile, { provider: { test: { ...raw('private-key').provider.test, models: { model: {} } } } });
+  f.write(f.modelsFile, 'test/other\n');
+  assert.deepEqual(f.check(), { model: 'test/model' });
+  assert.deepEqual(await checkModelAsync(f.executable, selection, f.options), { model: 'test/model' });
+  for (const data of [[], [{ providerID: 'test', id: 'model', enabled: false }]]) {
+    f.write(f.outputFile, { data });
+    assert.throws(f.check, { code: 'MODEL_UNAVAILABLE' });
+    await assert.rejects(checkModelAsync(f.executable, selection, f.options), { code: 'MODEL_UNAVAILABLE' });
+  }
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert(calls.every(call => call.args[0] === '--version' || (call.args.join(' ') === 'api --standalone model.list')));
 });
 
 test('执行前异步检查不阻塞常驻客户端，可取消正在读取的模型目录', { timeout: 10000 }, async t => {
@@ -199,7 +251,13 @@ test('普通、Skill 和 Benchmark 的环境适配器复用公共检查；执行
   for (const mode of ['generate', 'skill-ab', 'trigger']) {
     const context = { platform: 'opencode', agent: 'build', model: 'test/model', experiment: { mode }, dataset: { adapterKey: 'generic' } };
     assert.deepEqual(await services.checkAgent(context), []);
+    f.write(f.outputFile, { provider: { test: { ...raw('private-key').provider.test, models: { model: {} } } } });
     f.write(f.modelsFile, 'test/other\n');
+    for (const adapter of ['generic', 'swe-bench', 'zsoft-l1']) {
+      const result = await loadEnvironmentAdapter(adapter).checkEnvironment(context, { ...services, executionBinding: () => null, checkZsoftSource: async () => [] });
+      assert.deepEqual(result.issues, []);
+    }
+    f.write(f.outputFile, masked);
     for (const adapter of ['generic', 'swe-bench', 'zsoft-l1']) {
       const result = await loadEnvironmentAdapter(adapter).checkEnvironment(context, { ...services, executionBinding: () => null, checkZsoftSource: async () => [] });
       assert.equal(result.issues[0].code, 'MODEL_UNAVAILABLE');
