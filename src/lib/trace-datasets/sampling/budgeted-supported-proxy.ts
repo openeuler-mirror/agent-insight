@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { lengthBucket, type Candidate, type Policy, type Selection } from './index';
+import { lengthBucket, type Candidate, type Selection } from './index';
 import { type AgreementFeatures } from './answer-consensus';
 
 const tv = (counts: number[], size: number, pool: number[]) => counts.reduce((n,v,i) => n + Math.abs(v/size-pool[i]),0)/2;
