@@ -58,7 +58,7 @@
 
 - [Skill 生成](optimization/skills/generate.md)
 - [Skills 管理](optimization/skills/manage.md)
-- [Skill 优化](optimization/skills/optimize.md)
+- [Skill 优化](optimization/skills/optimize.md)（含执行期间查看前文与恢复输出跟随）
 - [Skill 生成、评估与优化使用指南](optimization/skills/skill-workflow.md)
 
 ## 可靠性

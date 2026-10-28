@@ -13,6 +13,10 @@
 
 - [跑通第一次评测](evaluation/01-first-experiment.md)
 
+## 优化
+
+Skill 优化期间可以向上滚动查看前文，新输出不会打断阅读；回到底部后恢复跟随。操作步骤见 [Skill 优化](../how-to/optimization/skills/optimize.md)。
+
 ## 可靠性
 
 - [快速开始](reliability/agent-fault-injection/01-getting-started.md)
