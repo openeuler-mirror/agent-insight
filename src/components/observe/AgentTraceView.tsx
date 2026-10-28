@@ -552,8 +552,7 @@ export default function AgentTraceView({
             const requestedTraceId = previousTraceIdentityRef.current;
             const requestedSource = sourceInteractionsRef.current;
             setFullInteractionLoadError(null);
-            let promise: Promise<RawInteraction[]>;
-            promise = loadAllInteractions()
+            const promise: Promise<RawInteraction[]> = loadAllInteractions()
                 .then(loaded => {
                     if (previousTraceIdentityRef.current === requestedTraceId && sourceInteractionsRef.current === requestedSource
                         && loaded.length === requestedSource.length

@@ -63,7 +63,7 @@ function normalizeContentHolder<T extends Record<string, any>>(holder: T): T {
 function normalizeInteraction(interaction: any): any {
     if (!interaction || typeof interaction !== 'object') return interaction;
 
-    let normalized = normalizeContentHolder({ ...interaction });
+    const normalized = normalizeContentHolder({ ...interaction });
 
     if (normalized.message && typeof normalized.message === 'object') {
         normalized.message = normalizeContentHolder({ ...normalized.message });
