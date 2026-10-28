@@ -75,7 +75,7 @@ function GuideBubble({
     const [arrowPosition, setArrowPosition] = useState<ArrowPositionState>({ top: 0, left: 0 });
     const bubbleRef = useRef<HTMLDivElement>(null);
     const mounted = typeof window !== 'undefined';
-    const { isDark } = useTheme();
+    useTheme();
     const { t } = useLocale();
     const c = useThemeColors();
 

@@ -19,7 +19,7 @@ import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions } from
 import { analyzeExecutionMatch, analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
 import { analyzeFailures, analyzeSession } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
-import { db, prisma } from '@/lib/storage/prisma';
+import { db } from '@/lib/storage/prisma';
 import { endSession } from '@/lib/ingest/proxy-store';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { resolveFrameworkId } from '@/lib/ingest/adapters/registry';
@@ -266,7 +266,6 @@ export async function POST(
     }
 
     const primarySkillName = skillsWithVersions.length > 0 ? skillsWithVersions[0].name : undefined;
-    const primarySkillVersion = skillsWithVersions.length > 0 ? skillsWithVersions[0].version : null;
 
     let skillDef = undefined;
     let skillVersion = null;
@@ -299,7 +298,7 @@ export async function POST(
     let body = {};
     try {
       body = await request.json();
-    } catch (e) {}
+    } catch {}
 
     const skillsToSave = skillsWithVersions.length > 0 
       ? skillsWithVersions.map(s => s.name)

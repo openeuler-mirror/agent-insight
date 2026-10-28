@@ -161,63 +161,6 @@ const MODULE_ICONS: Record<string, typeof Clock> = {
   system: FileText,
 };
 
-const MODULE_LABEL_ZH: Record<string, string> = {
-  memory: '记忆',
-  reflection: '反思',
-  planning: '计划',
-  action: '行动',
-  system: '系统',
-  others: '其他',
-  unknown: '未知',
-};
-
-const ERROR_TYPE_LABEL_ZH: Record<string, string> = {
-  over_simplification: '关键信息过度压缩',
-  memory_retrieval_failure: '关键信息未召回',
-  hallucination: '记忆幻觉',
-  hallucinated_file_content: '臆造文件内容',
-  stale_file_reference: '引用旧文件内容',
-  forgot_user_constraint: '遗忘用户约束',
-  progress_misjudge: '进展误判',
-  progress_misjudgement: '进展误判',
-  outcome_misinterpretation: '结果误读',
-  causal_misattribution: '原因误判',
-  reflection_hallucination: '反思幻觉',
-  false_success_claim: '误报成功',
-  missed_test_failure: '漏看测试失败',
-  premature_completion: '过早完成',
-  ignored_warning: '忽略重要警告',
-  constraint_ignorance: '忽略约束',
-  impossible_action: '不可行计划',
-  inefficient_plan: '低效排查路径',
-  wrong_file_target: '目标文件选错',
-  missing_test_step: '缺少验证步骤',
-  over_engineering: '过度设计',
-  no_explicit_plan: '缺少显式计划',
-  plan_action_mismatch: '计划与行动不一致',
-  unsafe_destructive_action: '未确认高风险操作',
-  misalignment: '动作偏离目标',
-  invalid_action: '动作无法执行',
-  format_error: '格式错误',
-  parameter_error: '参数选择错误',
-  nonexistent_path: '路径不存在',
-  wrong_diff_anchor: '编辑锚点不匹配',
-  dangerous_command: '危险命令',
-  redundant_call: '重复调用',
-  tool_misuse: '工具选择不当',
-  step_limit: '步数限制',
-  tool_execution_error: '工具执行错误',
-  llm_limit: '模型输出限制',
-  environment_error: '运行环境异常',
-  context_overflow: '上下文超限',
-  user_aborted: '用户/系统中断',
-  auth_failure: '认证失败',
-  schema_violation: '结构化输出违规',
-  step_timeout: '单步超时',
-  others: '其他问题',
-  no_error: '未发现问题',
-};
-
 function hasUsableSkillsAnalysis(analysis?: AgentDebugSkillsAnalysis | null): boolean {
   return analysis?.status === 'done' && extractSkillsKeyActions(analysis as unknown as Record<string, unknown>).length > 0;
 }
@@ -1190,7 +1133,7 @@ function EvidenceModuleCard({ module, zh, globalSystem, issues, traceExplicitErr
   );
 }
 
-function IssueEvidenceItem({ issue, role, zh, onNodeRefClick }: {
+function IssueEvidenceItem({ issue, zh, onNodeRefClick }: {
   issue: AgentDebugIssue;
   role?: string;
   zh: boolean;
@@ -1691,10 +1634,6 @@ function formatNodeIndex(index: number, zh: boolean): string {
   return zh ? `节点 #${index}` : `Node #${index}`;
 }
 
-function locationKey(item: AgentDebugTraceLocation & { step?: number }): string {
-  return String(locationIndex(item) ?? item.step ?? 'unknown');
-}
-
 function locationIndex(item: AgentDebugTraceLocation): number | null {
   return item.traceStepIndex ?? null;
 }
@@ -1763,21 +1702,10 @@ function severityRank(severity: AgentDebugIssue['severity']): number {
   return 1;
 }
 
-function formatModule(module: AgentDebugModule, zh: boolean) {
-  if (zh) return MODULE_LABEL_ZH[module] || module;
-  return module;
-}
-
 function formatTriageCategory(category: string, zh: boolean) {
   if (!zh) return category;
   if (category === 'infra') return '基础设施级失败';
   if (category === 'tool_systemic') return '工具系统性失败';
   if (category === 'early_fatal') return '早期不可恢复失败';
   return '正常预检';
-}
-
-function formatErrorType(errorType: string, zh: boolean) {
-  if (!zh) return errorType;
-  const label = ERROR_TYPE_LABEL_ZH[errorType] || errorType;
-  return label;
 }
