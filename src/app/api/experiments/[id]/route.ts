@@ -474,6 +474,7 @@ export async function GET(
       ready: traceStates.filter((item) => item.status === 'ready').length,
       failed: traceStates.filter((item) => item.status === 'failed').length,
       pending: traceStates.filter((item) => item.status === 'pending').length,
+      waitingTrace: traceStates.filter((item) => item.status === 'pending' && item.attemptStatus === 'waiting_trace').length,
     } : null;
     const invalidGeneratedCaseIds = new Set(
       Array.from(traceStateByCase.entries())

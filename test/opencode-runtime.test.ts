@@ -77,7 +77,7 @@ test('v2 event channel packages a private plugin directory, preserves user confi
   assert.equal(fs.existsSync(directory), false);
 });
 
-test('capabilities require discovered Agents and separate ordinary v2 execution from v1 Skill modes', () => {
+test('capabilities require discovered Agents and support v1/v2 Skill isolation', () => {
   const previousPath = process.env.PATH;
   for (const major of [1, 2]) {
     const f = fixture(`${major}.1.4`, 'run --format json --agent --model --title --standalone --session');
@@ -87,7 +87,7 @@ test('capabilities require discovered Agents and separate ordinary v2 execution 
         probe: { ready: true, platforms: { opencode: { agents, models: [] } } },
       }).platforms.find((item: { id: string }) => item.id === 'opencode').runExperimentCase;
       assert.equal(capabilities(['build']).ready, true);
-      assert.equal(capabilities(['build']).skillSnapshotVersion, major === 1 ? 4 : undefined);
+      assert.equal(capabilities(['build']).skillSnapshotVersion, 4);
       assert.equal(capabilities([]).ready, false);
       assert.match(capabilities([]).unavailableReason, /Agent/);
     } finally {

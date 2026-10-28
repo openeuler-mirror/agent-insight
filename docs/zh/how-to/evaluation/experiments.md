@@ -90,7 +90,7 @@ changefreq: monthly
 
 **生成 Trace** 使用数据集 Case 重新运行 Agent，再对新产生的 Trace 执行评估。
 
-OpenCode 1.x 和 2.x 均支持普通数据集生成 Trace，客户端按本机版本选择执行方式。1.x 保留原有命令和插件接口；2.x 通过独立服务创建本次 Case 的新会话，使用原生插件事件回传会话 ID。两版均等待对应 Trace 上传并校验账号、客户端和模型后绑定 Case，进程结束本身不表示 Trace 已入库。2.x 输入以原文传入，不转换为 1.x 的 `--command`；Skill 冻结快照与只读触发分析仍需 1.x。
+OpenCode 1.x 和 2.x 均支持普通数据集生成 Trace，客户端按本机版本选择执行方式。1.x 保留原有命令和插件接口；2.x 通过独立服务创建本次 Case 的新会话，使用原生插件事件回传会话 ID。两版均等待对应 Trace 上传并校验账号、客户端和模型后绑定 Case，进程结束本身不表示 Trace 已入库。2.x 输入以原文传入，不转换为 1.x 的 `--command`。更新后的常驻客户端也支持两版的 Skill 冻结快照与只读触发分析，详见 [Skill 执行兼容性](../../explanation/evaluation/skills/overview.md#opencode-执行兼容性)。
 
 服务端更新后，在运行 OpenCode 的 Linux/macOS 用户下重新执行当前平台账号的一键接入命令，更新采集器与常驻客户端。操作系统用户名可以与平台账号不同，绑定以安装命令中的平台账号凭证为准。确认「客户端配置」中本机在线且 Agent 列表非空后再选择执行目标。
 
@@ -483,3 +483,5 @@ Trace 评测详情把输入、输出和评分依据放在同一页，适合核�
 - 准备和维护 Case：[评测数据集](datasets.md)
 - 查看评估器前置条件：[评估器](evaluators.md)
 - 返回总览：[评估与实验](../../explanation/evaluation/overview.md)
+
+普通数据集及 Skill 生成 Trace 的入库等待独立限制为 60 秒。`TRACE_INGEST_TIMEOUT` 保留本次 Trace ID，停止自动执行重试；修复采集或上传后再选择恢复或手动重新执行，避免因上传延迟反复调用 Agent。Skill 结果页将此阶段显示为“等待 Trace 入库”。

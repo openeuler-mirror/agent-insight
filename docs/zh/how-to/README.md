@@ -48,7 +48,7 @@
 - [A/B 测试](evaluation/skills/ab-test.md)
 - [Skill 评估](evaluation/skills/static-compliance.md)
 - [触发分析](evaluation/skills/trigger-analysis.md)
-- [用例分析](evaluation/skills/use-case-analysis.md)
+- [用例分析](evaluation/skills/use-case-analysis.md)（含 OpenCode 1.x / 2.x 执行能力要求与 Trace 入库排障）
 
 ## 诊断
 

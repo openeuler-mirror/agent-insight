@@ -19,7 +19,8 @@ const os = require('node:os')
 const path = require('node:path')
 const { createHash } = require('node:crypto')
 const { getAgentInsightHome } = require('./agent-insight-home.cjs')
-const { loadOpenCodeConnectionConfig, assertNoMaskedConnections } = require('./opencode-connection-config.cjs')
+const { loadOpenCodeConnectionConfig, loadOpenCodeV2ConnectionConfig, readOpenCodeV2Api, assertNoMaskedConnections } = require('./opencode-connection-config.cjs')
+const { inspectOpencodeRuntime } = require('./opencode-runtime.cjs')
 
 const triggerWorkspaces = new Map()
 const WORKSPACE_IDLE_MS = 120_000
@@ -75,6 +76,7 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
   if (payload.platform !== 'opencode' || (!triggerRouting && payload.skillExecution.version !== 1)) {
     throw Object.assign(new Error('客户端不支持此 Skill 执行协议'), { code: 'SKILL_EXECUTION_UNSUPPORTED' })
   }
+  const major = inspectOpencodeRuntime(executable).major === 2 ? 2 : 1
   const skill = triggerRouting ? null : payload.skillExecution.skill
   const triggerSkills = triggerRouting ? payload.skillExecution.skills : []
   if (triggerRouting) {
@@ -86,7 +88,7 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
   } else validateSkillSnapshot(skill)
   const cacheKey = triggerRouting && payload.correlation?.experimentId
     ? createHash('sha256').update(JSON.stringify({
-        clientId, experimentId: payload.correlation.experimentId, executable,
+        clientId, experimentId: payload.correlation.experimentId, executable, major,
         agent: payload.agent, model: payload.model, snapshot: payload.skillExecution,
       })).digest('hex') : null
   const cached = cacheKey && triggerWorkspaces.get(cacheKey)
@@ -98,9 +100,11 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
   }
   // 只在客户端解析连接配置；密钥不经过实验 payload，也不返回服务端。
   const selection = { agent: payload.agent, model: payload.model, trigger: triggerRouting }
-  if (resolvedConfig) assertNoMaskedConnections(resolvedConfig, selection)
-  else resolvedConfig = loadOpenCodeConnectionConfig(executable, selection)
-  if (!['build', 'plan'].includes(payload.agent) && !resolvedConfig.agent?.[payload.agent]) throw new Error('所选 Agent 的配置不存在')
+  if (resolvedConfig && major === 1) assertNoMaskedConnections(resolvedConfig, selection)
+  else if (!resolvedConfig) resolvedConfig = major === 2
+    ? loadOpenCodeV2ConnectionConfig(executable, selection) : loadOpenCodeConnectionConfig(executable, selection)
+  const agents = major === 2 ? resolvedConfig.agents : resolvedConfig.agent
+  if (!['build', 'plan'].includes(payload.agent) && !agents?.[payload.agent]) throw new Error('所选 Agent 的配置不存在')
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'insight-skill-run-')))
   const workspace = path.join(root, 'workspace')
   const configRoot = path.join(root, 'config', 'opencode')
@@ -122,7 +126,7 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
       : skill
       ? `本次实验只能使用当前工作目录 .opencode/skills/${skill.name}/SKILL.md 中的 ${skill.name} v${skill.version} 及其附属文件。先加载该 Skill，再执行用户任务；禁止使用其他 Skill。`
       : '本次实验为无 Skill 对照组。禁止加载或读取任何 Skill，仅依靠模型及普通工具执行用户任务。'
-    const agent = { ...(resolvedConfig.agent?.[payload.agent] || {}) }
+    const agent = { ...(agents?.[payload.agent] || {}) }
     if (payload.model) delete agent.model
     delete agent.permission
     agent.prompt = triggerRouting
@@ -131,7 +135,7 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
     const plugins = (resolvedConfig.plugin || []).filter(item => typeof item === 'string' && /(?:Witty-Skill-Insight|agent-insight)/i.test(item))
     const collector = path.join(os.homedir(), '.opencode', 'plugins', 'Witty-Skill-Insight.ts')
     if (fs.existsSync(collector)) plugins.push(require('node:url').pathToFileURL(collector).href)
-    const config = {
+    let config = {
       provider: resolvedConfig.provider || {},
       model: payload.model || resolvedConfig.model,
       small_model: payload.model || resolvedConfig.small_model,
@@ -148,11 +152,50 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
         skill: { '*': 'deny', ...(skill ? { [skill.name]: 'allow' } : {}) },
       },
     }
+    if (major === 2) {
+      const permissions = [{ action: '*', resource: '*', effect: 'deny' }]
+      for (const action of ['read', 'glob', 'grep', 'list']) permissions.push({ action, resource: '*', effect: 'allow' })
+      if (!triggerRouting) {
+        for (const action of ['shell', 'webfetch', 'external_directory']) permissions.push({ action, resource: '*', effect: 'allow' })
+        permissions.push({ action: 'edit', resource: `${workspace.replace(/\\/g, '/')}/*`, effect: 'allow' })
+      }
+      const allowedSkills = triggerRouting ? triggerSkills : skill ? [skill] : []
+      for (const snapshot of allowedSkills) permissions.push({ action: 'skill', resource: snapshot.name, effect: 'allow' })
+      const policies = [
+        { action: 'integration.use', resource: 'skill:*', effect: 'deny' },
+        ...allowedSkills.map(snapshot => ({ action: 'integration.use', resource: `skill:${snapshot.name}`, effect: 'allow' })),
+        ...(triggerRouting ? [{ action: 'integration.use', resource: 'mcp:*', effect: 'deny' }] : []),
+      ]
+      const nativeAgent = { ...agents?.[payload.agent] }
+      delete nativeAgent.model
+      delete nativeAgent.permissions
+      const system = [nativeAgent.system || '', instruction,
+        ...(triggerRouting ? [] : [`用户输入中的 ~/ 指客户端真实用户目录 ${os.homedir()}，读取时转换为该绝对路径。`]),
+        '这是非交互实验，不得提问或等待人工确认。'].join('\n')
+      const nativePlugins = (resolvedConfig.plugins || []).map((plugin, index) => {
+        const { fileURLToPath, pathToFileURL } = require('node:url')
+        const file = plugin.startsWith('file://') ? fileURLToPath(plugin) : plugin
+        if (!path.isAbsolute(file) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return plugin
+        // v2 ignores explicit file entries; wrap installed single-file collectors as directory plugins.
+        const directory = path.join(root, 'plugins', String(index))
+        fs.mkdirSync(directory, { recursive: true })
+        fs.writeFileSync(path.join(directory, 'index.ts'), `export { default } from ${JSON.stringify(pathToFileURL(file).href)};\n`, { mode: 0o600 })
+        return directory
+      })
+      config = {
+        providers: resolvedConfig.providers || {}, model: payload.model || resolvedConfig.model,
+        agents: { [payload.agent]: { ...nativeAgent, system, permissions } },
+        permissions, policies, plugins: nativePlugins,
+        skills: [path.join(workspace, '.opencode', 'skills')],
+        mcp: triggerRouting ? { servers: {} } : resolvedConfig.mcp || {},
+      }
+    }
     const configPath = path.join(configRoot, 'opencode.json')
     fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 })
     const prepared = {
       cwd: workspace, cleanup,
       env: {
+        PWD: workspace,
         HOME: isolatedHome,
         USERPROFILE: isolatedHome,
         OPENCODE_TEST_HOME: isolatedHome,
@@ -161,9 +204,24 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
         XDG_CACHE_HOME: process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
         AGENT_INSIGHT_HOME: getAgentInsightHome(),
         OPENCODE_CONFIG: configPath,
-        OPENCODE_CONFIG_DIR: triggerRouting ? configRoot : path.join(workspace, '.opencode'),
+        OPENCODE_CONFIG_DIR: major === 2 || triggerRouting ? configRoot : path.join(workspace, '.opencode'),
+        ...(major === 2 ? { OPENCODE_CONFIG_PROJECT_DISABLE: 'true', OPENCODE_DISABLE_PROJECT_CONFIG: 'true', OPENCODE_DISABLE_CLAUDE_CODE: 'true', XDG_STATE_HOME: path.join(root, 'state') } : {}),
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
       },
+    }
+    if (major === 2) {
+      const entries = readOpenCodeV2Api(executable, 'config.get', { cwd: workspace, env: prepared.env })
+      const inside = file => {
+        if (typeof file !== 'string' || !path.isAbsolute(file)) return false
+        const relative = path.relative(root, file)
+        return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)
+      }
+      const unsafe = entry => !entry || !['document', 'directory'].includes(entry.type)
+        || (entry.path && !inside(entry.path))
+        || (entry.info?.skills && (!Array.isArray(entry.info.skills) || entry.info.skills.some(source => !inside(source))))
+      if (!Array.isArray(entries) || entries.some(unsafe)) {
+        throw Object.assign(new Error('OpenCode v2 隔离环境仍加载外部配置来源，无法保证 Skill 版本隔离；请检查系统或组织配置。'), { code: 'SKILL_ISOLATION_UNAVAILABLE' })
+      }
     }
     if (cacheKey && !cached?.busy) {
       const entry = { workspace: prepared, busy: false, timer: null }
