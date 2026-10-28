@@ -51,7 +51,7 @@ export async function setup(context) {
         } else if (event.type === 'session.tool.success') {
           const tool = tools.get(d.id) || {}
           const input = tool.input || {}
-          const skill = ['skill', 'load_skill'].includes(tool.name) ? input.skill || input.name
+          const skill = ['skill', 'load_skill'].includes(tool.name) ? input.id || input.skill || input.name
             : ['read', 'read_file'].includes(tool.name) ? String(input.path || input.filePath || '').match(/(?:^|[\\/])skills[\\/]([^\\/]+)[\\/]SKILL\.md$/i)?.[1] : null
           if (typeof skill === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(skill)) {
             send({ kind: 'trigger', sessionId: rootSession, skillName: skill })

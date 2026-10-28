@@ -220,7 +220,7 @@ fs.writeFileSync(1, process.argv.includes('--version') ? fs.readFileSync(${JSON.
   const model = { providerID: 'deepseek', id: 'deepseek-flash', modelID: 'upstream-model', enabled: true }
   fs.writeFileSync(outputFile, JSON.stringify({ data: [model] }))
   assert.deepEqual(await services.checkAgent(selected), [])
-  assert.deepEqual(services.capabilityUpdate().capabilities.platforms[0].runExperimentCase, { version: 2, returnsTraceId: true })
+  assert.deepEqual(services.capabilityUpdate().capabilities.platforms[0].runExperimentCase, { version: 2, returnsTraceId: true, skillSnapshotVersion: 4 })
   for (const data of [[], [{ ...model, enabled: false }], [{ ...model, providerID: 'other' }]]) {
     fs.writeFileSync(outputFile, JSON.stringify({ data }))
     assert.equal((await services.checkAgent(selected))[0].code, 'MODEL_UNAVAILABLE')

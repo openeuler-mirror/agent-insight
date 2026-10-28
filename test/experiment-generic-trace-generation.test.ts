@@ -140,8 +140,9 @@ test('generic trace binding consumes the client Trace ID and never normalizes us
   assert.equal(isTraceGenerationCommandTerminal('RUNNING'), false);
   assert.equal(isTraceGenerationCommandTerminal('FAILED'), true);
   assert.equal(canReconcileGeneratedTraceAttempt('DELIVERY_FAILED'), true);
+  assert.equal(canReconcileGeneratedTraceAttempt('TRACE_INGEST_TIMEOUT'), true);
   assert.equal(canReconcileGeneratedTraceAttempt('MODEL_UNAVAILABLE'), false);
-  assert.equal(isTraceGenerationFailureRetryable('TRACE_INGEST_TIMEOUT'), true);
+  assert.equal(isTraceGenerationFailureRetryable('TRACE_INGEST_TIMEOUT'), false);
   assert.equal(isTraceGenerationFailureRetryable('CLIENT_BUSY'), true);
   assert.equal(isTraceGenerationFailureRetryable('TRACE_ID_MISSING'), false);
   assert.equal(isTraceGenerationFailureRetryable('PLATFORM_NOT_AVAILABLE'), false);
@@ -187,7 +188,7 @@ test('experiment detail exposes a failed generic trace generation state', async 
   const body = await response.json();
 
   assert.equal(response.status, 200);
-  assert.deepEqual(body.traceProgress, { total: 1, ready: 0, failed: 1, pending: 0 });
+  assert.deepEqual(body.traceProgress, { total: 1, ready: 0, failed: 1, pending: 0, waitingTrace: 0 });
   assert.equal(body.cases[0].input, 'dataset user input');
   assert.equal(body.cases[0].traceStatus, 'failed');
   assert.equal(body.cases[0].traceError, 'trace generation timed out');
@@ -235,13 +236,14 @@ test('experiment detail keeps an automatic retry in pending state', async (t) =>
   const body = await response.json();
 
   assert.equal(response.status, 200);
-  assert.deepEqual(body.traceProgress, { total: 1, ready: 0, failed: 0, pending: 1 });
+  assert.deepEqual(body.traceProgress, { total: 1, ready: 0, failed: 0, pending: 1, waitingTrace: 0 });
   assert.equal(body.cases[0].traceStatus, 'pending');
   assert.equal(body.cases[0].traceAttemptNo, 2);
   assert.equal(body.cases[0].traceAttemptStatus, 'retry_wait');
 });
 
-test('late long-poll command success is reconciled into the failed Attempt and Case', async (t) => {
+for (const failureCode of ['DELIVERY_FAILED', 'TRACE_INGEST_TIMEOUT']) {
+test(`late Trace reconciles the failed Attempt and Case after ${failureCode} without rerunning`, async (t) => {
   const stamp = Date.now();
   const user = `generic-late-command-${stamp}`;
   const clientId = `generic-late-client-${stamp}`;
@@ -298,7 +300,7 @@ test('late long-poll command success is reconciled into the failed Attempt and C
       agent: 'build',
       commandId,
       status: 'failed',
-      failureCode: 'DELIVERY_FAILED',
+      failureCode,
       errorMessage: '客户端控制连接已断开',
     },
   });
@@ -344,6 +346,8 @@ test('late long-poll command success is reconciled into the failed Attempt and C
   assert.equal(reconciledCase?.traceGenerationError, null);
   assert.equal(reconciledAttempt?.traceId, traceId);
   assert.equal(reconciledAttempt?.status, 'ready');
+  assert.equal(await prisma.reliabilityCommand.count({ where: { user, action: 'RUN_EXPERIMENT_CASE' } }), 1);
+  assert.equal(await prisma.experimentTraceAttempt.count({ where: { experimentId: experiment.id } }), 1);
 
   const retryRequest = await loadTraceGenerationRetryRequest({
     user,
@@ -353,6 +357,7 @@ test('late long-poll command success is reconciled into the failed Attempt and C
   assert.equal(retryRequest?.workerId, clientId);
   assert.equal(retryRequest?.cases[0]?.input, 'the user input');
 });
+}
 
 test('experiment wizard and run route split generic generation from reliability FI', () => {
   const wizard = fs.readFileSync(
@@ -446,6 +451,46 @@ test('ordinary trace generation admits two attempts, refills one slot and keeps 
     const result = await work;
     assert.equal(result.failedCaseIds.length, 3);
     assert.equal(await prisma.experimentTraceAttempt.count({ where: { experimentId: experiment.id } }), 3);
+  } finally { controller.abort(); await work.catch(() => undefined); }
+});
+
+test('Skill 执行成功后独立等待入库，超时保留 Trace ID 且不再次下发执行命令', { timeout: 90_000 }, async t => {
+  const { generateExperimentTraces } = require('@/lib/engine/experiment/trace-generation');
+  const user = `${TEST_USER}-ingest-timeout`;
+  const clientId = `${user}-client`;
+  await prisma.reliabilityClient.create({ data: { clientId, user, name: 'ingest-test', lastSeenAt: new Date() } });
+  const experiment = await prisma.experiment.create({ data: { user, name: 'ingest timeout', status: 'running', scope: 'skill-workbench', preset: 'use-case', cases: { create: { input: 'run once' } } }, include: { cases: true } });
+  t.after(async () => { await prisma.experiment.delete({ where: { id: experiment.id } }); await prisma.reliabilityClient.delete({ where: { clientId } }); });
+  const controller = new AbortController();
+  const work = generateExperimentTraces({ user, experimentId: experiment.id, workerId: clientId, platform: 'opencode', agent: 'build', timeoutSeconds: 600,
+    signal: controller.signal, skillExecution: { version: 1, skill: null }, cases: [{ caseId: experiment.cases[0].id, input: 'run once' }] });
+  try {
+    let command;
+    for (let i = 0; i < 100 && !command; i++) {
+      command = await prisma.reliabilityCommand.findFirst({ where: { user, action: 'RUN_EXPERIMENT_CASE' } });
+      if (!command) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.ok(command);
+    const traceId = 'ses_ingest_timeout_fixture';
+    await prisma.reliabilityCommand.update({ where: { commandId: command.commandId }, data: { status: 'SUCCEEDED', resultJson: JSON.stringify({ state: 'AGENT_EXITED', traceId }) } });
+    let attempt;
+    for (let i = 0; i < 100; i++) {
+      attempt = await prisma.experimentTraceAttempt.findFirst({ where: { experimentId: experiment.id } });
+      if (attempt?.status === 'waiting_trace') break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.equal(attempt?.status, 'waiting_trace');
+    const detail = await (await getExperiment(new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`), { params: Promise.resolve({ id: experiment.id }) })).json();
+    assert.equal(detail.traceProgress.waitingTrace, 1);
+    const result = await work;
+    assert.deepEqual(result.failedCaseIds, [experiment.cases[0].id]);
+    assert.equal(await prisma.reliabilityCommand.count({ where: { user, action: 'RUN_EXPERIMENT_CASE' } }), 1);
+    const attempts = await prisma.experimentTraceAttempt.findMany({ where: { experimentId: experiment.id } });
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].status, 'failed');
+    assert.equal(attempts[0].failureCode, 'TRACE_INGEST_TIMEOUT');
+    assert.equal(attempts[0].traceId, traceId);
+    assert.match(attempts[0].errorMessage || '', /不会自动重新执行/);
   } finally { controller.abort(); await work.catch(() => undefined); }
 });
 

@@ -144,7 +144,7 @@ export function isTraceGenerationCommandTerminal(status: string): boolean {
 }
 
 export function canReconcileGeneratedTraceAttempt(failureCode: string | null | undefined): boolean {
-  return !failureCode || isTraceGenerationFailureRetryable(failureCode);
+  return !failureCode || failureCode === 'TRACE_INGEST_TIMEOUT' || isTraceGenerationFailureRetryable(failureCode);
 }
 
 export function assertSkillExecutionOutput(execution: { finalResult?: string | null; model?: string | null }, requestedModel?: string | null) {
@@ -557,10 +557,7 @@ async function runAttempt(input: {
           user: input.req.user,
           traceId,
           signal: input.req.signal,
-          timeoutMs: Math.max(
-            TRACE_INGEST_TIMEOUT_MS,
-            (input.timeoutSeconds + 90) * 1_000,
-          ),
+          timeoutMs: TRACE_INGEST_TIMEOUT_MS,
         });
         if (execution) {
           if (input.req.skillExecution) assertSkillExecutionOutput(execution, input.req.model);
@@ -576,8 +573,8 @@ async function runAttempt(input: {
         }
         failure = {
           code: 'TRACE_INGEST_TIMEOUT',
-          message: `Trace ${traceId} 已生成，但未在等待时间内完成入库`,
-          retryable: true,
+          message: `Agent 已执行结束，但 Trace ${traceId} 未在 60 秒内完成入库。请检查采集器和上传日志；本次不会自动重新执行 Agent。`,
+          retryable: false,
         };
       }
     }

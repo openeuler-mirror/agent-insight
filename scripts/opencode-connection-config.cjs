@@ -167,7 +167,7 @@ function privateCommand(executable, args, context, subject = '配置') {
   try {
     fd = fs.openSync(path.join(root, 'output'), 'wx+', 0o600)
     const result = spawnSync(executable, args, {
-      cwd: context.cwd, env: context.env, stdio: ['ignore', fd, 'pipe'], timeout: 15000, maxBuffer: LIMIT,
+      cwd: context.cwd, env: { ...context.env, PWD: context.cwd }, stdio: ['ignore', fd, 'pipe'], timeout: 15000, maxBuffer: LIMIT,
     })
     if (result.error || result.status !== 0) throw configError(`读取${subject}命令失败或超时`)
     if (fs.fstatSync(fd).size > LIMIT) throw configError('配置输出超过 8 MiB')
@@ -314,6 +314,54 @@ function checkOpenCodeV2Model(executable, selected, options = {}) {
       : '执行机 OpenCode v2 没有可用的默认模型，请配置并启用模型，或为实验选择可用模型。'), { code: selected ? 'MODEL_UNAVAILABLE' : 'MODEL_CONFIGURATION_MISSING' })
   }
   return { model: `${model.providerID}/${model.id}` }
+}
+
+function readOpenCodeV2Api(executable, operation, options = {}, params = []) {
+  try {
+    const result = JSON.parse(privateCommand(executable, ['api', '--standalone', operation, ...params], contextFor(options)))
+    return record(result) && Object.hasOwn(result, 'data') ? result.data : result
+  } catch {
+    throw Object.assign(new Error('无法读取 OpenCode v2 的原生执行配置，请检查客户端运行账号的配置、插件和凭据。'), { code: 'MODEL_CONFIGURATION_UNREADABLE' })
+  }
+}
+
+function loadOpenCodeV2ConnectionConfig(executable, selection, options = {}) {
+  const entries = readOpenCodeV2Api(executable, 'config.get', options)
+  if (!Array.isArray(entries) || entries.some(entry => !record(entry) || !['document', 'directory'].includes(entry.type))) {
+    throw configError('OpenCode v2 配置来源格式无效')
+  }
+  let config = {}
+  const directories = [], plugins = []
+  for (const entry of entries) {
+    if (entry.type === 'directory') { if (typeof entry.path === 'string') directories.push(entry.path); continue }
+    if (!record(entry.info)) throw configError('OpenCode v2 配置文档无效')
+    config = merge(config, entry.info)
+    for (const plugin of entry.info.plugins || []) {
+      if (typeof plugin === 'string' && /(?:Witty-Skill-Insight|agent-insight)/i.test(plugin) && !/agent-insight-ras/i.test(plugin)) {
+        plugins.push(plugin.startsWith('.') && entry.path ? path.resolve(path.dirname(entry.path), plugin) : plugin)
+      }
+    }
+  }
+  for (const directory of directories) {
+    const collector = path.join(directory, 'plugins', 'Witty-Skill-Insight.ts')
+    if (fs.existsSync(collector)) plugins.push(collector)
+  }
+  const agents = readOpenCodeV2Api(executable, 'agent.list', options)
+  const nativeAgent = Array.isArray(agents) ? agents.find(agent => agent.id === selection.agent) : null
+  const agent = nativeAgent || config.agents?.[selection.agent]
+  if ((!agent && !['build', 'plan'].includes(selection.agent)) || agent?.disabled || agent?.mode === 'subagent') {
+    throw configError('所选 Agent 不存在、已禁用或仅支持子 Agent 调用')
+  }
+  const configuredModel = agent?.model
+  const agentModel = typeof configuredModel === 'string' ? configuredModel
+    : configuredModel?.providerID && (configuredModel.model || configuredModel.id)
+      ? `${configuredModel.providerID}/${configuredModel.model || configuredModel.id}` : undefined
+  const model = checkOpenCodeV2Model(executable, selection.model || agentModel, options).model
+  const agentConfig = Object.fromEntries(['system', 'description', 'mode', 'request', 'hidden', 'color', 'steps']
+    .filter(key => agent?.[key] !== undefined).map(key => [key, agent[key]]))
+  const connections = { providers: config.providers || {}, mcp: selection.trigger ? {} : config.mcp || {} }
+  if (hasMasked(connections)) throw configError('OpenCode v2 连接配置包含脱敏占位符，无法创建隔离环境')
+  return { ...connections, model, agents: { [selection.agent]: agentConfig }, plugins: [...new Set(plugins)] }
 }
 
 function loadOpenCodeConnectionConfig(executable, selection, options = {}) {
@@ -468,7 +516,7 @@ function checkOpenCodeModelConfigAsync(executable, selection, { cwd, env, signal
   })
 }
 
-module.exports = { loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, checkOpenCodeV2Model, checkOpenCodeModelConfig, checkOpenCodeModelConfigAsync, parseJsonc }
+module.exports = { readOpenCodeV2Api, loadOpenCodeV2ConnectionConfig, loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, checkOpenCodeV2Model, checkOpenCodeModelConfig, checkOpenCodeModelConfigAsync, parseJsonc }
 
 if (require.main === module && process.argv[2] === '--check-model') {
   let input = ''
