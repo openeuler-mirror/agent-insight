@@ -50,7 +50,7 @@ curl -fsSL "$HOST/api/fault-injection/setup?key=$API_KEY" | bash
 - 无在线 Worker 时，新建任务向导中平台不可选、无法下一步。
 
 最短启用：[FI getting-started](../../../tutorial/reliability/agent-fault-injection/01-getting-started.md)。\
-本机 curl 逐步说明（落盘目录、Worker 生命周期、排障）：[FI local-install-process](local-install-process.md)。\
+本机 curl 逐步说明（落盘目录、Worker 生命周期、排障）：[FI local-install-process](./local-install-process.md)。\
 RAS 侧对应说明：[RAS local-install-process](../agent-ras/local-install-process.md)。
 
 ### 2. 新建注入任务
@@ -117,5 +117,5 @@ RAS 侧对应说明：[RAS local-install-process](../agent-ras/local-install-pro
 ## 下一步
 
 - 环内异常回放： [链路追踪 / 可靠性观测](../../observability/view-traces.md)
-- 开发者新增故障模式： [故障模式插件化](../../../../../design/reliability/agent-fault-injection/fault-mode-plugins.md)
-- 模块设计入口： [docs/zh/explanation/reliability/agent-fault-injection](../../../explanation/reliability/agent-fault-injection/README.md)
+- 开发者新增故障模式： [故障模式插件化](https://gitcode.com/openeuler/agent-insight/blob/master/design/reliability/agent-fault-injection/fault-mode-plugins.md)
+- 模块设计入口： [docs/zh/explanation/reliability/agent-fault-injection](../../../explanation/reliability/agent-fault-injection/navigation.md)

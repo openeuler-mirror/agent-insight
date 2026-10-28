@@ -284,7 +284,7 @@ async function checkEnvironment(context, services) { /* ... */ }
 async function prepareEnvironment(context, services, reportProgress) { /* ... */ }
 ```
 
-`context` 来自平台校验后的选择快照，字段以 [`EnvironmentContext`](../../../../../packages/benchmark-protocol/environment.d.cts) 为准：
+`context` 来自平台校验后的选择快照，字段以 [`EnvironmentContext`](https://gitcode.com/openeuler/agent-insight/blob/master/packages/benchmark-protocol/environment.d.cts) 为准：
 
 | 字段 | 含义 |
 |---|---|
@@ -355,7 +355,7 @@ Catalog 校验协议和包内 `.cjs` 入口，并将执行端文件纳入接入�
 
 此环节准备执行主机的共享运行环境；Case 工作区、Case 容器等仍由执行后端按任务生命周期管理。它也不同于第 7.1 节的平台数据集来源准备，以及 Evaluator 的评测 Runtime 准备。客户端安装只完成客户端及链路跟踪接入，保存配置上下文，不提前编译本次实验可能用不到的执行后端。
 
-通用实现见 [`services/executor/src/environment/`](../../../../../services/executor/src/environment/)，完整设计见[实验执行环境准备](../../../../../design/evaluation/experiment-environment-preparation/phase2-requirements-design.md)。
+通用实现见 [`services/executor/src/environment/`](https://gitcode.com/openeuler/agent-insight/tree/master/services/executor/src/environment)，完整设计见[实验执行环境准备](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/experiment-environment-preparation/phase2-requirements-design.md)。
 
 ## 6. Case Schema 与数据边界
 
@@ -548,7 +548,7 @@ node ~/.agent-insight/client/runtime/xgovernor.cjs rollback
 
 安装版配置加载器读取运行时内置 `config/benchmark/executor.yaml` 后，只合并 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`（默认 `~/.agent-insight/config/executor.local.yaml`）。执行 Profile、镜像策略、Git 源和 Runtime 默认参数使用同一入口；旧运行时目录的 local 文件不读取、不迁移。源码运行仍合并仓库 `config/benchmark/executor.local.yaml`。显式 `AGENT_INSIGHT_CONFIG_DIR` 保留原语义，指定目录中的文件独立生效。用户配置按声明文件解析相对路径，升级只更新内置默认文件并保留用户配置。
 
-常规 curl 安装无需填写 Profile。下例用于手动部署或显式模型覆盖，示例可执行路径、模型和 endpoint 需替换为实际值；镜像配置独立见 [SWE-bench 部署指南](deploy-swe-bench.md#原生-pixiaoo-的-case-镜像)。
+常规 curl 安装无需填写 Profile。下例用于手动部署或显式模型覆盖，示例可执行路径、模型和 endpoint 需替换为实际值；镜像配置独立见 [SWE-bench 部署指南](./deploy-swe-bench.md#原生-pixiaoo-的-case-镜像)。
 
 ```yaml
 execution:
@@ -628,7 +628,7 @@ xiaoo 凭据由安装时构建的 `insight-xiaoo-credentials` 解析：从 `carg
 
 凭据诊断区分 `MODEL_CREDENTIAL_MISSING`、`MODEL_CREDENTIAL_STORE_UNREADABLE`、`MODEL_CREDENTIAL_ADAPTER_UNAVAILABLE`；配置错误仍用 `MODEL_CONFIGURATION_INVALID`。跨登录 Shell 的私有解析进程保留这些错误码，公开消息仅采用固定原因和合法的凭据引用名，不回传原始解析/解密异常。Case 详情和列表显示具体原因及处理方式，明确本地失败尚未发出模型请求。原生允许免 Key 而当前 xGovernor 会话协议要求非空凭据的模型，明确报适配限制，不注入虚构 Key。Pi 保留 SDK ModelRuntime/ModelRegistry 解析及 OAuth/订阅限制。MCTS 仍使用自身已配置的服务环境与 XGOVERNOR_LLM_KEY_ENV 引用，不接入这个凭据读取过程。
 
-升级仅切换后续任务的版本指针，执行句柄固定本次 Runtime/模型凭据引用和组件路径，运行与 Trace 导出不依赖新的 current；旧版本目录保留供在途任务及恢复使用。任务受理前仍核对冻结摘要，不自动迁移旧实验。安装 smoke 只检查源码布局、扩展类型和 server 基础协议，实际模型、工具隔离、完整 Trace 仍需执行链路验证。安装步骤见[部署指南 7.3](deploy-services.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
+升级仅切换后续任务的版本指针，执行句柄固定本次 Runtime/模型凭据引用和组件路径，运行与 Trace 导出不依赖新的 current；旧版本目录保留供在途任务及恢复使用。任务受理前仍核对冻结摘要，不自动迁移旧实验。安装 smoke 只检查源码布局、扩展类型和 server 基础协议，实际模型、工具隔离、完整 Trace 仍需执行链路验证。安装步骤见[部署指南 7.3](./deploy-services.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
 
 #### 镜像与 Runtime 扩展
 
@@ -646,7 +646,7 @@ SWE-bench 执行端在 `services/executor/src/benchmarks/swe-bench-images.cjs` �
 | `--export` | stdin 接收本次 runId/runtimeId/stateDirectory 及 `partial` 元数据；`partial=true` 返回当前可用的完整快照（可仅含根会话），`partial=false` 返回最终完整 canonical events；均须同版本、full=true、匹配 runId/runtimeId |
 | 事件校验 | 唯一根会话为 `xgovernor:<runId>`；最终导出包含模型正文，运行中导出不提前声明会话完成；还须实现上游会话参数映射并验证 Trace 语义 |
 
-后续接 OpenCode 时，在 xGovernor 支持的前提下新增受信 Runtime 注册、模型/参数映射及完整 Trace 转换，再增加目标 binding；公共 Runner、SWE-bench 业务任务与 Evaluator 无需增加 OpenCode 分支。连 xGovernor 一起替换时，实现同一六方法合同、配置/能力描述及独立 Trace/产物适配，注册新 `backendKey`。目前 YAML 配置解析与预探测实现针对 xGovernor；增加其他后端须补充对应配置和能力装配。通用合同不代表其他后端已经完成适配。配置与导出合同见本节的 [原生执行高级配置](#原生执行高级配置) 与 Trace 导出说明；部署操作见 [通用部署指南 7.3](deploy-services.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
+后续接 OpenCode 时，在 xGovernor 支持的前提下新增受信 Runtime 注册、模型/参数映射及完整 Trace 转换，再增加目标 binding；公共 Runner、SWE-bench 业务任务与 Evaluator 无需增加 OpenCode 分支。连 xGovernor 一起替换时，实现同一六方法合同、配置/能力描述及独立 Trace/产物适配，注册新 `backendKey`。目前 YAML 配置解析与预探测实现针对 xGovernor；增加其他后端须补充对应配置和能力装配。通用合同不代表其他后端已经完成适配。配置与导出合同见本节的 [原生执行高级配置](#原生执行高级配置) 与 Trace 导出说明；部署操作见 [通用部署指南 7.3](./deploy-services.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。
 
 ### 8.3 `validateBenchmarkSubmission`
 
@@ -756,7 +756,7 @@ Runtime 镜像是可重新拉取或构建的评测制品，不是永久缓存，
 - **保护边界**：只清理同一 Docker daemon、同一数据目录内归属已确认的旧 Runtime。当前 Catalog 所需的原始/有效镜像引用及相同 Image ID、被任意容器（包括已停止容器）引用、操作未确认、引用已改写或存在额外标签/其他仓库 digest 的镜像均保留。删除前重新核对归属，按已确认 Image ID 非强制删除；Docker 检查或删除发生冲突时报告并保留，不为清理而停止任务、删除容器或强制解除引用。
 - **接入职责与范围**：实例运行和恢复必须沿用公共容器标签与独立工作目录，不能绕过公共入口创建无归属的 Runtime。此策略不接管 Case Runner、`assets` 资产镜像、未登记的历史镜像、无标签镜像或构建缓存；Case 镜像的保护和回收遵循第 9.5 节镜像池协议，不能把这些对象当作旧 Runtime 一并删除。
 
-操作命令与保留原因见[部署指南：立即停止与镜像清理](deploy-services.md#11-立即停止与镜像清理)。不新增 Benchmark Manifest 字段或 HTTP 管理接口。
+操作命令与保留原因见[部署指南：立即停止与镜像清理](./deploy-services.md#11-立即停止与镜像清理)。不新增 Benchmark Manifest 字段或 HTTP 管理接口。
 
 ### 9.2 Entrypoint 命令
 
@@ -856,7 +856,7 @@ ZSoft 不再把平台的任务哈希摘要作为官方报告。独立工作目�
 
 Image Provider 可抛出带 `code/status=422/retryable=false` 的确定性元数据错误，由通用 Entrypoint 转为协议错误。完整预取快照仅排除出错 Case，其余 Case 的镜像与窗口继续发布；入场检查在窗口选择之前再次验证元数据并返回 HTTP 422，使平台结束该 Case 的等待。暂态和未知错误不被吞掉，资产未就绪等可重试状态仍按原协议处理。
 
-后台准备不占评测执行槽。重评创建新 Evaluation 后先尝试刷新窗口再下发评测；收到 `IMAGE_POOL_PREPARING` 时也刷新窗口，避免只重试评测而未触发准备。准备请求失败保留评测队列，后续重试及评测 watchdog 定期补偿。执行 watchdog 在启动恢复前注册，历史实验恢复逐条隔离异常，避免单条已取消任务阻断后续恢复或后台调度。无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](deploy-services.md#53-可选跨-benchmark-共享镜像池)。
+后台准备不占评测执行槽。重评创建新 Evaluation 后先尝试刷新窗口再下发评测；收到 `IMAGE_POOL_PREPARING` 时也刷新窗口，避免只重试评测而未触发准备。准备请求失败保留评测队列，后续重试及评测 watchdog 定期补偿。执行 watchdog 在启动恢复前注册，历史实验恢复逐条隔离异常，避免单条已取消任务阻断后续恢复或后台调度。无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./deploy-services.md#53-可选跨-benchmark-共享镜像池)。
 
 首次评测与重评共用 `evaluation-scheduler` 的服务容量与单用户配额；重评不设全平台单独并发上限。服务容量读取 `/health.maxConcurrency`，单用户配额通过 `config/benchmark/platform.local.yaml` 的 `benchmarks.scheduling.maxEvaluationConcurrencyPerUser` 限制。相同 Case 的重评使用进程内锁及数据库 Run 状态、`updatedAt` 条件更新认领，防止并发请求重复创建 attempt；不同 Case 可独立入队。
 
@@ -1065,19 +1065,19 @@ npm run test
 
 SWE-bench 是当前完整参考实例：
 
-- [Manifest](../../../../../benchmarks/swe-bench/benchmark.yaml)
-- [Adapter](../../../../../benchmarks/swe-bench/adapter/index.ts)
-- [执行端环境模块](../../../../../benchmarks/swe-bench/executor/environment.cjs)
-- [Evaluator 配置](../../../../../benchmarks/swe-bench/evaluator/evaluator.yaml)
-- [Evaluator Entrypoint](../../../../../benchmarks/swe-bench/evaluator/entrypoint.cjs)
-- [Case Schema](../../../../../benchmarks/swe-bench/schemas/case.schema.json)
-- [Raw Result Schema](../../../../../benchmarks/swe-bench/schemas/result.schema.json)
-- [Adapter 测试](../../../../../benchmarks/swe-bench/tests/adapter.test.ts)
-- [部署 Smoke](../../../../../benchmarks/swe-bench/smoke/index.cjs)
+- [Manifest](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/benchmark.yaml)
+- [Adapter](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/adapter/index.ts)
+- [执行端环境模块](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/executor/environment.cjs)
+- [Evaluator 配置](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/evaluator/evaluator.yaml)
+- [Evaluator Entrypoint](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/evaluator/entrypoint.cjs)
+- [Case Schema](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/schemas/case.schema.json)
+- [Raw Result Schema](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/schemas/result.schema.json)
+- [Adapter 测试](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/tests/adapter.test.ts)
+- [部署 Smoke](https://gitcode.com/openeuler/agent-insight/blob/master/benchmarks/swe-bench/smoke/index.cjs)
 
 参考它的目录和生命周期，不要复制它的 `model.patch`、Resolved、FAIL_TO_PASS、镜像或 Evidence 业务语义。新的 Benchmark 必须使用自己的实例代码表达这些差异。
 
-客户侧的自然语言协作方式见[《自定义 Benchmark 接入指南》](onboard-custom-benchmark.md)，各指南的使用顺序见[《Benchmark 文档关系与开发指南》](../../../explanation/evaluation/benchmarks/README.md)。
+客户侧的自然语言协作方式见[《自定义 Benchmark 接入指南》](./onboard-custom-benchmark.md)，各指南的使用顺序见[《Benchmark 文档关系与开发指南》](../../../explanation/evaluation/benchmarks/navigation.md)。
 
 ### ZSoft 接入前的本机验证
 
@@ -1129,7 +1129,7 @@ MCTS 输出 `platform-export.json`（`mcts-poc-export/v1`），包含 `taskId`�
 
 ZSoft 的 MCTS 目标需额外就绪能力 `mcts-zsoft-export/v1`。公共依赖不含 SWE 的 `datasets` 和启动脚本；SWE 另行检查这些依赖，新客户端声明 `mcts-swe-bench/v1` 时该能力必须就绪，未声明的旧客户端沿用原规则。上传、取消、工作区清理和恢复继续复用通用执行器状态机；上传失败前先持久化产物，恢复上传不会重跑搜索。MCTS 输出及 Trace 位于外部 MCTS 仓库的运行输出目录，沿用现有 MCTS 的保留策略，公开工作区由通用清理器移除。
 
-合成数据、伪插件和伪运行器测试只能验证契约；真实判题需按 [ZSoft 部署验收](deploy-zsoft.md#5-部署验收) 执行并保留部署环境的验收记录。
+合成数据、伪插件和伪运行器测试只能验证契约；真实判题需按 [ZSoft 部署验收](./deploy-zsoft.md#5-部署验收) 执行并保留部署环境的验收记录。
 
 ### ZSoft 公有镜像与冻结资产
 
@@ -1137,7 +1137,7 @@ ZSoft 接入包声明 `imageProvider: ./images.cjs`。Adapter 的 `imagePreparat
 
 `zsoft-assets/v1` 新增可选 `tasks[taskId].registryImages`，键与 `images` 完全一致，值为公有仓库的固定 `repo@sha256`；该字段参与 task/bundle 摘要。原 `images` 保存 Docker config Image ID。公共镜像池冻结 `preparedImages`，Python 入口核对题目 key 与实际 Image ID，Compose 代理使用固定 ID 和 `pull_policy=never`。未配置 `registryImages` 的当前清单要求本地已装镜像；缺少 `sourceTaskDigest` 的旧清单不再支持。平台题目身份与评测机私有资产构建摘要分别管理，Evaluator 不连接平台数据库。
 
-Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构建端可使用 `--image-prefix`，Controller 配置 `EVALUATOR_RUNTIME_IMAGE_PREFIX`；显式 `--push` 才上传。ZSoft 默认复用本地 Runtime，缺失时尝试 pull，失败后自动 build，仍核对 Catalog artifact 标签。本部署方案将 Case 镜像和完整冻结资产镜像上传公有 SWR；Controller 启动后自动安装资产，自动构建 Runtime 不会重新构建题目环境。镜像池保持公有匿名 Docker API 拉取，不读取宿主 `docker login` 凭据。构建与发布流程见 [ZSoft 评测资产发布指南](release-zsoft-assets.md)，评测机安装见 [ZSoft 部署指南](deploy-zsoft.md#4-评测端准备)。
+Runtime 发布与解析共用 `services/evaluator/src/runtime-image.cjs`。构建端可使用 `--image-prefix`，Controller 配置 `EVALUATOR_RUNTIME_IMAGE_PREFIX`；显式 `--push` 才上传。ZSoft 默认复用本地 Runtime，缺失时尝试 pull，失败后自动 build，仍核对 Catalog artifact 标签。本部署方案将 Case 镜像和完整冻结资产镜像上传公有 SWR；Controller 启动后自动安装资产，自动构建 Runtime 不会重新构建题目环境。镜像池保持公有匿名 Docker API 拉取，不读取宿主 `docker login` 凭据。构建与发布流程见 [ZSoft 评测资产发布指南](./release-zsoft-assets.md)，评测机安装见 [ZSoft 部署指南](./deploy-zsoft.md#4-评测端准备)。
 
 内核题复用同一个 ZSoft Evaluator Runtime、任务协议和结果归一化。接入包将 `runner_image` 交给通用镜像池；`.task-state/<task-id>/{vuln,fix}/artifacts/` 中的 `bzImage`、metadata 和模块作为独立的冻结文件资产，按流式 SHA-256 校验，不作为 Docker 引用。资产打包支持合并同官方 revision、同框架摘要的冻结快照，评测机始终不访问数据库。
 
@@ -1151,7 +1151,7 @@ MCTS 采集启动器将凭据来源与 Case spool 分开：对于安装布局 `c
 
 `preflightTrace` 复用现有 OTLP POST 接口，以 `{resourceSpans: []}` 验证采集鉴权，5 秒超时、拒绝重定向，检查平台 accepted/received=0 响应；不增加 API 路由或真实 Trace。安装写入前和 MCTS 子进程启动前均执行此检查；失败信息不包含 Key 或服务端响应正文。就绪能力探测仍是本地依赖检查，不能等同于已通过实时上传鉴权。运行中的凭据不热更新，历史 rejected/spool 的补传属于独立恢复操作。
 
-部署操作见 [MCTS xGovernor 接入](../../observability/mcts-xgovernor.md#用于平台-benchmark-实验)，Benchmark 环境分别见 [SWE-bench](deploy-swe-bench.md) 与 [ZSoft](deploy-zsoft.md)。
+部署操作见 [MCTS xGovernor 接入](../../observability/mcts-xgovernor.md#用于平台-benchmark-实验)，Benchmark 环境分别见 [SWE-bench](./deploy-swe-bench.md) 与 [ZSoft](./deploy-zsoft.md)。
 
 实验候选接口会独立合并已就绪的 Benchmark 执行目标，因此仅声明 `runBenchmarkCase` 的 `pi-mcts` 可直接出现在 Agent 列表；它不依赖普通执行能力或历史 Trace。同一客户端、平台和 Agent 的目标合并后保留各自的执行能力标记。
 

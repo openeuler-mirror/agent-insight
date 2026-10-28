@@ -11,7 +11,7 @@ changefreq: monthly
 
 WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，**不提供 Hook/插件扩展点，也没有原生 OpenTelemetry 上报**。因此采集器不嵌入 WorkBuddy，而是作为一个独立的常驻进程，**监听 WorkBuddy 落盘到 `~/.workbuddy/` 的本地数据**（trace 文件 + SQLite 会话库），转换成 Agent Insight 标准 OTLP trace 后上传。采集器与 WorkBuddy 完全解耦：任一方崩溃、重启、升级都不影响另一方。
 
-> 平台内部设计文档见 [`design/observability/workbuddy-trace-collector/`](../../../../design/observability/workbuddy-trace-collector/)。
+> 平台内部设计文档见 [`design/observability/workbuddy-trace-collector/`](https://gitcode.com/openeuler/agent-insight/tree/master/design/observability/workbuddy-trace-collector)。
 
 ## 前提条件
 

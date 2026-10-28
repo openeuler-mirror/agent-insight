@@ -215,4 +215,4 @@ AI 可以设计接入方案，但不能自行创造以下事实：
 
 ## 9. 下一步
 
-将自然语言需求和已有材料交给 AI 后，要求它按[《Benchmark 接入开发规范》](develop-benchmark.md)完成需求发现、接入实现和验证。完整使用路径见[《Benchmark 文档关系与开发指南》](../../../explanation/evaluation/benchmarks/README.md)。
+将自然语言需求和已有材料交给 AI 后，要求它按[《Benchmark 接入开发规范》](./develop-benchmark.md)完成需求发现、接入实现和验证。完整使用路径见[《Benchmark 文档关系与开发指南》](../../../explanation/evaluation/benchmarks/navigation.md)。

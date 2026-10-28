@@ -4,7 +4,7 @@
 最后更新：2026-07-28
 状态：**已实现并端到端压测验证**（分支 `claude/otel-backlog-e2e-fix`，验证结果见 §4.2）
 
-> 文档类型：修复方案（干活清单）｜ 关联 [incident-2026-07-28](incident-2026-07-28-langfuse-trace-gap.md) / [Phase2](phase2-requirements-design.md) / [Phase3](phase3-development-plan.md)
+> 文档类型：修复方案（干活清单）｜ 关联 incident-2026-07-28（历史引用未收录：`incident-2026-07-28-langfuse-trace-gap.md`） / [Phase2](phase2-requirements-design.md) / [Phase3](phase3-development-plan.md)
 > base_commit：`b960f56`（master）｜ 类型：性能缺陷修复 ｜ 工作量：Medium（约 2～3 人日 + 压测）
 
 ---

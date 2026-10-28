@@ -19,7 +19,7 @@
 
 当前实现入口：
 
-- 编排与落库：[result-quality-evaluator.ts](../../../src/lib/engine/evaluation/result-quality-evaluator.ts)
+- 编排与落库：[result-quality-evaluator.ts（历史源码）](https://gitcode.com/openeuler/agent-insight/blob/707672398380d203468486e33084a9d306100800/src/lib/engine/evaluation/result-quality-evaluator.ts)
 - 忠实度：[faithfulness-evaluator.ts](../../../src/lib/engine/evaluation/faithfulness-evaluator.ts)
 - 指令遵循：[instruction-adherence-evaluator.ts](../../../src/lib/engine/evaluation/instruction-adherence-evaluator.ts)
 - 答案质量：[answer-quality-evaluator.ts](../../../src/lib/engine/evaluation/answer-quality-evaluator.ts)
@@ -82,7 +82,7 @@ dimension-scorer 聚合结果维、趋势和问题摘要
 - 上传入口：[upload/route.ts](../../../src/app/api/ingest/upload/route.ts)
 - proxy end 入口：[end/route.ts](../../../src/app/api/ingest/proxy/[taskId]/end/route.ts)
 - OTel consumer：[consumer.ts](../../../src/lib/ingest/otel-consumer/consumer.ts)
-- 质量监控回填：[sampling.ts](../../../src/lib/engine/quality-monitoring/sampling.ts)
+- 质量监控回填：[sampling.ts（历史源码）](https://gitcode.com/openeuler/agent-insight/blob/ba0f885cf9a7d20a4f7cc7d9095a175c96bf6071/src/lib/engine/quality-monitoring/sampling.ts)
 
 ## 3. 四项指标边界
 
@@ -597,8 +597,8 @@ result = mean(valid faithfulness, instructionAdherence, answerQuality, accuracy)
 
 前端组件：
 
-- [ResultPanel.tsx](../../../src/components/quality/ResultPanel.tsx)
-- [result-detail-tables.ts](../../../src/components/quality/result-detail-tables.ts)
+- [ResultPanel.tsx（历史源码）](https://gitcode.com/openeuler/agent-insight/blob/ba0f885cf9a7d20a4f7cc7d9095a175c96bf6071/src/components/quality/ResultPanel.tsx)
+- [result-detail-tables.ts（历史源码）](https://gitcode.com/openeuler/agent-insight/blob/ba0f885cf9a7d20a4f7cc7d9095a175c96bf6071/src/components/quality/result-detail-tables.ts)
 
 ## 9. 幂等、版本与失败隔离
 

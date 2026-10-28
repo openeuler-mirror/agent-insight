@@ -195,7 +195,7 @@ Skills 管理适用于 Skill 资产的检索、创建、详情查看与版本管
 
 ## 下一步
 
-- 想从需求直接起草新 Skill： [Skill 生成](generate.md)
+- 想从需求直接起草新 Skill： [Skill 生成](./generate.md)
 - 想验证当前 Skill 的效果： [Skill 评估与实验](../../../explanation/evaluation/skills/overview.md)
-- 想继续迭代现有版本： [Skill 优化](optimize.md)
+- 想继续迭代现有版本： [Skill 优化](./optimize.md)
 - 想回到一站式入口： [Skill 工作台](../../../explanation/optimization/skills/workbench-overview.md)

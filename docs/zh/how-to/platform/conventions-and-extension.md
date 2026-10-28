@@ -22,7 +22,7 @@ changefreq: monthly
 - **Lint**：ESLint 9 扁平配置（`eslint.config.mjs`、`eslint-config-next`）。运行 `npm run lint`。
 - **Comments**：项目约定是*默认不加注释*——只有当 WHY 不显而易见时（隐藏的约束或反直觉的变通）才写一行注释。不要写"它做了什么"这类注释。
 - **Don't create docs/README files**，除非被明确要求。
-- **以 markdown 链接的形式沟通文件路径** `[name](../../explanation/path:line)`。
+- **以 markdown 链接的形式沟通文件路径** `[name](path:line)`。
 
 ## UI rules (hard constraints — from `AGENTS.md` §6, enforced in review)
 对页面/组件/交互/视觉的任何改动，都必须先与 `design/`（`README.md`、`foundations.md`、`components.md`、`patterns.md`）对齐。红线：
@@ -49,7 +49,7 @@ changefreq: monthly
 - **新增预置评估器**：实现放 `src/lib/engine/experiment/<族>-preset-evaluators.ts`（一族一文件），另需在卡片/元数据/分发/守卫测试四处登记。落点、命名与打分方法论见 [develop-evaluator.md](../evaluation/develop-evaluator.md)——**动手前必读**，这条路径上的坑基本都记在那里了。
 - **新增框架接入路径**：在 `src/lib/ingest/*` 下加 parser/watcher 或 OTel 聚合器，并在 `src/lib/ingest/adapters/` 注册 `FrameworkAdapter`（descriptor、skill 抽取、必要的 `normalizeForStorage`）。路由层不要再手写框架分支；通过 `saveExecutionRecord` 归一化为 `Execution`。安装脚本框架清单仍是后续治理范围。
 - **新增 Runtime 参数**：执行客户端的 `services/executor/runtimes/<key>/runtime.yaml` 维护原生默认配置、预设、业务 Schema 和交付绑定；上报只包含通用 `configuration: { version: 2, defaults }`，无默认值时为 `{}`。平台统一支持嵌套编辑和完整值下发，不按 Agent 名称或 flat/nested 声明定制格式。默认模板、本次草稿、冻结实验快照独立，显式值不补回默认字段；旧契约确认不改参数名。CLI passthrough 按根 key 原名交付，额外业务参数无需逐字段映射；不能消费的对象、非法 CLI key 或保留 flag 在执行客户端报错。JSON/YAML 等原生文件入口由客户端适配，平台不转换格式。新版客户端约每 30 秒重读并上报配置，默认值更新不覆盖已初始化草稿；更新执行代码需重新安装和重启客户端。完整契约见 [API 与契约指南](../../reference/platform/api-and-contracts.md#runtime-json-参数接入)。
-- **新增 Benchmark**：目标是统一开发规范，不是零代码、纯配置接入。通常只新增 `benchmarks/<key>/` 接入包：`benchmark.yaml`、实现五个业务 hook 的 `adapter/index.ts`、`schemas/{case,result}.schema.json`、`evaluator/evaluator.yaml`、遵循 `doctor` / `evaluate --request ... --output ...` 文件契约的 Entrypoint，以及需要独立依赖时的 `evaluator/Dockerfile`。`adapterKey` 与 `evaluation.evaluatorKey` 是不同身份，不能假设相等。Adapter 生成完整 Agent Prompt；判分语义留在实例 Evaluator；执行器只按 workspace provider、Agent platform 和 Artifact collector 选择通用能力。增加真实 Case smoke 和 conformance 后运行 `npm run benchmark:catalog`、相关 API 测试及 `npm run test`。禁止手改 `generated/benchmark-catalog/*`，也不在公共 API、调度器、Runner 或 Controller 中增加具体 Benchmark 分支。只有现有工作区、Agent Runtime 或 Artifact Collector 无法表达需求时，才新增可跨 Benchmark 复用的能力组件。完整设计见 [`design/evaluation/benchmark/`](../../../../design/evaluation/benchmark/)。
+- **新增 Benchmark**：目标是统一开发规范，不是零代码、纯配置接入。通常只新增 `benchmarks/<key>/` 接入包：`benchmark.yaml`、实现五个业务 hook 的 `adapter/index.ts`、`schemas/{case,result}.schema.json`、`evaluator/evaluator.yaml`、遵循 `doctor` / `evaluate --request ... --output ...` 文件契约的 Entrypoint，以及需要独立依赖时的 `evaluator/Dockerfile`。`adapterKey` 与 `evaluation.evaluatorKey` 是不同身份，不能假设相等。Adapter 生成完整 Agent Prompt；判分语义留在实例 Evaluator；执行器只按 workspace provider、Agent platform 和 Artifact collector 选择通用能力。增加真实 Case smoke 和 conformance 后运行 `npm run benchmark:catalog`、相关 API 测试及 `npm run test`。禁止手改 `generated/benchmark-catalog/*`，也不在公共 API、调度器、Runner 或 Controller 中增加具体 Benchmark 分支。只有现有工作区、Agent Runtime 或 Artifact Collector 无法表达需求时，才新增可跨 Benchmark 复用的能力组件。完整设计见 [`design/evaluation/benchmark/`](https://gitcode.com/openeuler/agent-insight/tree/master/design/evaluation/benchmark)。
 - **Benchmark 数据集与展示**：有官方数据集时，在 `benchmark.yaml` 声明 `dataset.profiles` 和受控 `presentation`；特殊格式再提供 `dataset/index.ts` 的 `BenchmarkDatasetLoader`。Adapter 的 `validateAndSplitCase()` 返回公开 `catalogProjection`，其中业务字段走完整 `values.*` 路径。导入时后端把 `caseTable.columns` 冻结为 `fieldsJson`，包含 `path/label/type` 及可选 `width/format/truncate/description`；Manifest 后续变化不会静默覆盖已发布数据集，需要管理员运行 `scripts/benchmark/refresh-dataset-presentation.ts` 显式刷新。`presentation.artifacts` 只配置 Submission/Evidence 的标签与顺序，不能改变校验或过滤结果；结果 API 始终返回完整文件列表。禁止接入包注入 React、HTML 或 JavaScript。
 - **流程闸门**（`AGENTS.md` §4）：对 **Prisma schema** 的任何改动，或任何**新增 API 路由**，都需要先在 `design/YYYY-MM-DD-<topic>-design.md` 下产出一份 Plan 文档，对齐后再编码。
 
@@ -199,7 +199,7 @@ changefreq: monthly
 
 策略、签名和测试分别位于`src/lib/trace-datasets/sampling/`、`test/trace-datasets-*.test.ts`。修改签名、排序、任务归类或行为比例都必须提升策略版本并重新跑确定性、误差及性能验证。默认行为比例0.20是经过逻辑验证的启发式保留比例，不代表已证明最优；公开聊天数据不包含真实行为，不能用它们宣称行为收益。
 
-生产入口 `sampling/production.ts` 保留 v6.35 和已冻结任务所需的 v4/v5 分派；`sampling/` 仅保留生产及类型依赖链，不按文件名中的历史版本删公共实现。签名固定向量位于 `test/fixtures/trace-datasets/`，公开对照和签名缓存辅助代码位于 `test/helpers/trace-datasets/`，随测试维护，不随 `scripts/` 发布。历史实验数据、逐轮脚本、未使用的采样策略及其专属测试归档在 Git 提交 `742502d8bb2495bb0311b31f02c353f2e07d6b7d`；效果与复现限制见[对比报告](../../../../design/evaluation/trace-eval-dataset/eight-datasets-comparison-report.md#6-验证材料与历史归档)。数据库升级仍由 `scripts/db_push.sh` 调用 `scripts/trace-datasets/remove-legacy-summary.cjs`，Worker 构建仍使用 `scripts/build-trace-dataset-worker.cjs`。
+生产入口 `sampling/production.ts` 保留 v6.35 和已冻结任务所需的 v4/v5 分派；`sampling/` 仅保留生产及类型依赖链，不按文件名中的历史版本删公共实现。签名固定向量位于 `test/fixtures/trace-datasets/`，公开对照和签名缓存辅助代码位于 `test/helpers/trace-datasets/`，随测试维护，不随 `scripts/` 发布。历史实验数据、逐轮脚本、未使用的采样策略及其专属测试归档在 Git 提交 `742502d8bb2495bb0311b31f02c353f2e07d6b7d`；效果与复现限制见[对比报告](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/trace-eval-dataset/eight-datasets-comparison-report.md#6-验证材料与历史归档)。数据库升级仍由 `scripts/db_push.sh` 调用 `scripts/trace-datasets/remove-legacy-summary.cjs`，Worker 构建仍使用 `scripts/build-trace-dataset-worker.cjs`。
 
 `scripts/start.sh` 在构建指纹检查前调用 `scripts/build-trace-dataset-worker.cjs`，与 Benchmark 目录生成一起提前准备产物；生成失败立即退出。Next 配置保留生成入口以支持直接构建和开发模式，后续生成的相同内容不会改变指纹。不要把新生成产物排除出指纹，也不要在构建后覆盖构建前快照，否则会漏检真实的构建期间源码变更。
 

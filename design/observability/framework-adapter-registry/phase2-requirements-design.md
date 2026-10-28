@@ -109,10 +109,10 @@ src/lib/ingest/adapters/
 | `…FromClaudeSession` | `claude.ts` | 同上 |
 | `…FromOpenClawSession` | `openclaw.ts` | 同上 |
 | `interaction-content.ts::normalizeClaudeCodeInteractionsForStorage` | `claude.ts` 的 `normalizeForStorage` | 保留原 export,adapter 挂它;原 5 个调用点分轮迁,本轮先迁 1 个 |
-| [data-service.ts:476 dispatcher](../../../docs/src/lib/storage/data-service.ts) | —— | 函数体换成 `getAdapter(fw).extractSkills?.(n) ?? null`,缩成 3 行 |
-| [upload/route.ts:167](../../../docs/src/app/api/ingest/upload/route.ts) + :292 | —— | 两段重复 if/else 删掉,改调 dispatcher |
-| [rejudge/route.ts:61](../../../docs/src/app/api/eval/rejudge/route.ts) | —— | 改调 dispatcher,**顺手补回漏掉的 openclaw**(AC-02) |
-| [proxy/end/route.ts:82](../../../docs/src/app/api/ingest/proxy/[taskId]/end/route.ts) / :138 / :311 | —— | **删掉它自己抄的那份函数体**,改调 dispatcher |
+| [data-service.ts:476 dispatcher](../../../src/lib/storage/data-service.ts) | —— | 函数体换成 `getAdapter(fw).extractSkills?.(n) ?? null`,缩成 3 行 |
+| [upload/route.ts:167](../../../src/app/api/ingest/upload/route.ts) + :292 | —— | 两段重复 if/else 删掉,改调 dispatcher |
+| [rejudge/route.ts:61](../../../src/app/api/eval/rejudge/route.ts) | —— | 改调 dispatcher,**顺手补回漏掉的 openclaw**(AC-02) |
+| [proxy/end/route.ts:82](../../../src/app/api/ingest/proxy/[taskId]/end/route.ts) / :138 / :311 | —— | **删掉它自己抄的那份函数体**,改调 dispatcher |
 | data-service claude 归一化 :1556/:1566/:1575 | —— | 换成 `getAdapter(fw).normalizeForStorage?.(x) ?? x`,本轮**只切这一处**(D-03) |
 
 ## §5 不变量（红线，违反就不能合）

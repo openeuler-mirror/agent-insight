@@ -156,8 +156,8 @@ Case 明细的 **执行进度**分 A、B 两侧展示，并标明版本；有多
 ## 下一步
 
 - 返回实验入口：[Skill 评估与实验](../../../explanation/evaluation/skills/overview.md)
-- 先验证路由边界：[触发分析](trigger-analysis.md)
-- 深入查看结果与轨迹：[用例分析](use-case-analysis.md)
+- 先验证路由边界：[触发分析](./trigger-analysis.md)
+- 深入查看结果与轨迹：[用例分析](./use-case-analysis.md)
 - 根据退步 Case 优化 Skill：[Skill 优化](../../optimization/skills/optimize.md)
 
 执行客户端兼容 OpenCode 1.x 与 2.x（原生验证 2.1.4）。能力缺失时请检查 Agent Insight 常驻客户端版本及上报结果，详见 [执行兼容性](../../../explanation/evaluation/skills/overview.md#opencode-执行兼容性)。

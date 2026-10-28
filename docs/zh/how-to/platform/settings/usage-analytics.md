@@ -81,5 +81,5 @@ changefreq: monthly
 
 ## 相关文档
 
-- [安装指导](access-control.md)
-- [模型注册](model-registry.md)
+- [安装指导](./access-control.md)
+- [模型注册](./model-registry.md)

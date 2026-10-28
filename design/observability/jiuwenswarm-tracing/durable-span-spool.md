@@ -31,10 +31,10 @@ related_design:
 3. 还有一个**触发器**容易被忽略：内存 Map 无界增长，大 trace 本身就是「撑爆内存→重启」的起因。所以光「抗重启」不够，得让 span 根本不常驻堆内存。
 
 **不重新造轮子** —— 修复所需的两块拼图，仓库里都已经有、且已在 claude-otel / hermes 两条路上线验证过：
-- 磁盘 JSONL spool：[`claude-otel/spool.ts`](../../../../src/lib/ingest/claude-otel/spool.ts) 的 `appendJsonlBySession` / `readNewLinesSince`。
-- 后台再聚合消费者：[`otel-consumer/consumer.ts`](../../../../src/lib/ingest/otel-consumer/consumer.ts)，已有 checkpoint、双 debounce、park、retention。
+- 磁盘 JSONL spool：[`claude-otel/spool.ts`](../../../src/lib/ingest/claude-otel/spool.ts) 的 `appendJsonlBySession` / `readNewLinesSince`。
+- 后台再聚合消费者：[`otel-consumer/consumer.ts`](../../../src/lib/ingest/otel-consumer/consumer.ts)，已有 checkpoint、双 debounce、park、retention。
 
-jiuwen 这条路当初就是原型态留下的技术债——代码注释自己写了修法（[`ingest.ts:18-19`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts)）：
+jiuwen 这条路当初就是原型态留下的技术债——代码注释自己写了修法（[`ingest.ts:18-19`](../../../src/lib/ingest/otel/jiuwen/ingest.ts)）：
 
 > *Prototype note: the spool is in-memory (per dev process). Productionizing would move it to the same durable spool the claude-otel path uses.*
 
@@ -68,8 +68,8 @@ exporter 批量推送 step1..4 的 span ──► /api/ingest/otel/v1/traces
 
 | 找回路径 | 为什么断 | 证据 |
 |---|---|---|
-| 落盘重读 | jiuwen 摄取从不写盘，只 `spool.set()` 进内存 Map | [`ingest.ts:24,59-61`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts)；`~/.agent-insight/otel_data/` 下只有 `claude/ opencode/ traces/`，无 `jiuwen/` |
-| 库里残留旧版 | `snapshot-replace` 跳过 monotonic 合并，直接整条覆盖，无版本无备份 | [`data-service.ts:2023-2034`](../../../../src/lib/storage/data-service.ts) + [`jiuwen.ts:26`](../../../../src/lib/ingest/adapters/jiuwen.ts) |
+| 落盘重读 | jiuwen 摄取从不写盘，只 `spool.set()` 进内存 Map | [`ingest.ts:24,59-61`](../../../src/lib/ingest/otel/jiuwen/ingest.ts)；`~/.agent-insight/otel_data/` 下只有 `claude/ opencode/ traces/`，无 `jiuwen/` |
+| 库里残留旧版 | `snapshot-replace` 跳过 monotonic 合并，直接整条覆盖，无版本无备份 | [`data-service.ts:2023-2034`](../../../src/lib/storage/data-service.ts) + [`jiuwen.ts:26`](../../../src/lib/ingest/adapters/jiuwen.ts) |
 | 源端重发 | OTLP `BatchSpanProcessor` 每个 span 结束时只发一次，jiuwen 不会重发已结束的 step1–4 | OTLP 导出语义 |
 
 底层原始数据大概率还在 jiuwen 侧（`~/.jiuwenswarm/agent/sessions/...`、`~/.jiuwenswarm/.agent_teams/...`），但格式私有、无自动回流，只能手工重建导入——不作为常规链路。
@@ -84,9 +84,9 @@ exporter 批量推送 step1..4 的 span ──► /api/ingest/otel/v1/traces
 | **jiuwen** | ❌ 仅内存 Map | ❌ snapshot-replace（整条覆盖） | **会丢** |
 
 - **持久化 spool**：claude/hermes/opencode 在聚合前先把 span 落盘 JSONL，重启后从磁盘重读 → 抗重启。jiuwen 没有。
-- **monotonic 合并**：默认策略（[`data-service.ts:2023`](../../../../src/lib/storage/data-service.ts) `|| 'monotonic'`），新批次即便残缺也会和库里已有记录合并，不会盖没完整版。只有 jiuwen 显式设了 `snapshot-replace`。
+- **monotonic 合并**：默认策略（[`data-service.ts:2023`](../../../src/lib/storage/data-service.ts) `|| 'monotonic'`），新批次即便残缺也会和库里已有记录合并，不会盖没完整版。只有 jiuwen 显式设了 `snapshot-replace`。
 
-> **注意**：`snapshot-replace` 本身没错。jiuwen 的设计是「每批都重新聚合全量 span」（[`ingest.ts:5-7`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts)），如果再叠 monotonic 合并会把 turn 重复计两遍——在「全量重聚合」的前提下，覆盖是对的。**问题不在覆盖，在于「全量」只存在内存里**。让「全量」落盘，覆盖出来的就仍是完整 trace。
+> **注意**：`snapshot-replace` 本身没错。jiuwen 的设计是「每批都重新聚合全量 span」（[`ingest.ts:5-7`](../../../src/lib/ingest/otel/jiuwen/ingest.ts)），如果再叠 monotonic 合并会把 turn 重复计两遍——在「全量重聚合」的前提下，覆盖是对的。**问题不在覆盖，在于「全量」只存在内存里**。让「全量」落盘，覆盖出来的就仍是完整 trace。
 
 ---
 
@@ -101,7 +101,7 @@ exporter 批量推送 step1..4 的 span ──► /api/ingest/otel/v1/traces
 
 **非目标**
 - 不做跨机分布式存储 / 多副本（单进程定位，与 otel-spool-consumer 现状一致）。
-- 不改 jiuwen 的聚合语义（agent 树重建、token 归位等保持 [`aggregate.ts`](../../../../src/lib/ingest/otel/jiuwen/aggregate.ts) 现状）。
+- 不改 jiuwen 的聚合语义（agent 树重建、token 归位等保持 [`aggregate.ts`](../../../src/lib/ingest/otel/jiuwen/aggregate.ts) 现状）。
 - 不负责把 `~/.jiuwenswarm/...` 的历史产物回流（一次性手工迁移，另议）。
 
 ---
@@ -117,7 +117,7 @@ exporter 批量推送 step1..4 的 span ──► /api/ingest/otel/v1/traces
 - **抗重启**：✅ span 落盘，consumer 重启后从 checkpoint 续读、重聚合。
 - **抗大 trace**：✅ span 不常驻堆，只在再聚合那一刻按 trace/session 读回来。
 - **改动面**：中。复用 spool/consumer/checkpoint/retention，新增「jiuwen span 行的写盘」+「一个 jiuwen source 的再聚合适配」。
-- **关键难点**：jiuwen 按 `traceId` 分桶并对 team/fan-out 按 `session.id` 跨 trace 缝合（[`ingest.ts:26-114`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts)），而现有 consumer 是按 `event.sessionId` 分组的——再聚合 source 需要把这套缝合逻辑搬到「从磁盘读回 span 后」执行（详见 §4.3）。
+- **关键难点**：jiuwen 按 `traceId` 分桶并对 team/fan-out 按 `session.id` 跨 trace 缝合（[`ingest.ts:26-114`](../../../src/lib/ingest/otel/jiuwen/ingest.ts)），而现有 consumer 是按 `event.sessionId` 分组的——再聚合 source 需要把这套缝合逻辑搬到「从磁盘读回 span 后」执行（详见 §4.3）。
 - **与现有架构契合度**：最高，正是注释里写的修法。
 
 ### 方案 B —— 原始 OTLP 请求体 WAL（最小改动的兜底）
@@ -181,35 +181,35 @@ exporter ──► /api/ingest/otel/v1/traces
         saveExecutionRecord(record)  + snapshot-replace 防退化护栏
 ```
 
-请求处理器退化成「收下→写 spool→200」，与 logs/traces 端点现状一致（[`traces/route.ts:43-45`](../../../../src/app/api/ingest/otel/v1/traces/route.ts) 已是这个形态）。
+请求处理器退化成「收下→写 spool→200」，与 logs/traces 端点现状一致（[`traces/route.ts:43-45`](../../../src/app/api/ingest/otel/v1/traces/route.ts) 已是这个形态）。
 
 ### 4.2 spool 落盘格式
 
-- 目录：`otel_data/jiuwen/<day>/...`，沿用 [`spool.ts`](../../../../src/lib/ingest/claude-otel/spool.ts) 的 `getExistingInsightDir()/otel_data` 根 + 按天分目录 + 处理后 retention 归档（`compactProcessedSpoolFiles`）。
-- 每行 = 一个 `JiuwenSpan`（[`aggregate.ts:19-27`](../../../../src/lib/ingest/otel/jiuwen/aggregate.ts) 的形状：`name/traceId/spanId/parentSpanId/attrs/startNs/endNs`）。`collectJiuwenSpans` 已经能把 body 展平成这个结构，直接序列化即可。
+- 目录：`otel_data/jiuwen/<day>/...`，沿用 [`spool.ts`](../../../src/lib/ingest/claude-otel/spool.ts) 的 `getExistingInsightDir()/otel_data` 根 + 按天分目录 + 处理后 retention 归档（`compactProcessedSpoolFiles`）。
+- 每行 = 一个 `JiuwenSpan`（[`aggregate.ts:19-27`](../../../src/lib/ingest/otel/jiuwen/aggregate.ts) 的形状：`name/traceId/spanId/parentSpanId/attrs/startNs/endNs`）。`collectJiuwenSpans` 已经能把 body 展平成这个结构，直接序列化即可。
 - **去重**：spanId 去重不在写盘时做（JSONL 只追加），而在再聚合「读回后」用 `Map<spanId, span>` 去重——和现状 `spool.get(key).set(s.spanId, s)` 的语义一致，迁移成本最低。
 - **分桶键（落盘路径段）**：用 `traceId`（单 agent 一条 trace 一桶），与 `traceKeyFor` 现状一致；team/fan-out 的跨 trace 缝合在再聚合阶段按 `session.id` 完成（见 §4.3）。
   - ⚠️ 现有 consumer 的「脏单位」是 `event.sessionId`，jiuwen 的脏单位是 `traceId/bucket`。落盘行里要带一个 consumer 能识别的「分组字段」。两条实现路线：
-    - **(i) 复用现有 consumer**：给每行写一个 `sessionId = <bucketKey>` 字段，让 `runOtelSpoolConsumerTick` 的 `event.sessionId` 提取逻辑（[`consumer.ts:256-260`](../../../../src/lib/ingest/otel-consumer/consumer.ts)）天然把同 bucket 的行归到一起；jiuwen source 的 `aggregate(bucketKey)` 再做 trace 缝合。
+    - **(i) 复用现有 consumer**：给每行写一个 `sessionId = <bucketKey>` 字段，让 `runOtelSpoolConsumerTick` 的 `event.sessionId` 提取逻辑（[`consumer.ts:256-260`](../../../src/lib/ingest/otel-consumer/consumer.ts)）天然把同 bucket 的行归到一起；jiuwen source 的 `aggregate(bucketKey)` 再做 trace 缝合。
     - **(ii) jiuwen 专用 consumer 实例**：若缝合逻辑与「按 sessionId 分组」冲突太大，就用 `startOtelSpoolConsumer({ sources:[jiuwenSource] })` 起一个 jiuwen 专属实例，分组键定义为 jiuwen 自己的 bucket。
   - 倾向 (i)：尽量不复制 consumer 的调度/park/checkpoint 代码。
 
 ### 4.3 再聚合 source（jiuwen 的难点所在）
 
-新增一个 `SpoolSource`（[`sources.ts:16-22`](../../../../src/lib/ingest/otel-consumer/sources.ts) 的形状），`aggregate(bucketKey)` 做三件事：
+新增一个 `SpoolSource`（[`sources.ts:16-22`](../../../src/lib/ingest/otel-consumer/sources.ts) 的形状），`aggregate(bucketKey)` 做三件事：
 
 1. **读回**：从磁盘读出该 bucket 的全部 span 行，用 `Map<spanId>` 去重，得到 `JiuwenSpan[]`。
-2. **缝合**：把 [`ingest.ts:64-93`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts) 现在「在内存里跨 trace 缝合」的逻辑搬过来——
+2. **缝合**：把 [`ingest.ts:64-93`](../../../src/lib/ingest/otel/jiuwen/ingest.ts) 现在「在内存里跨 trace 缝合」的逻辑搬过来——
    - 判断本 bucket 是否属于一个多 trace run（team `team.*` / fan-out `tool.task*` / `agent.*.task_iteration.*`，见 `isMultiTraceSpan`）；
    - 若是，按 `agentteam.session.id` 把同 session 的多个 trace 桶一起读回再聚合；若否，单桶独立聚合。
    - 这要求 source 能「按 session 列出兄弟 trace 桶」——落盘时把 `session.id` 也写进行里（或写进桶的 sidecar 索引），再聚合时据此找齐兄弟桶。
-3. **聚合 + 孤儿清理**：调 `aggregateJiuwenOtlpFromSpans(all)`（复用），得到 `ExecutionRecord`；保留现有「team/fan-out 落库后删 `jiuwen-<traceId>` 孤儿」的清理（[`ingest.ts:99-110`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts)）。
+3. **聚合 + 孤儿清理**：调 `aggregateJiuwenOtlpFromSpans(all)`（复用），得到 `ExecutionRecord`；保留现有「team/fan-out 落库后删 `jiuwen-<traceId>` 孤儿」的清理（[`ingest.ts:99-110`](../../../src/lib/ingest/otel/jiuwen/ingest.ts)）。
 
 > 这一步是整个迁移的核心工作量：**聚合本身不动**，动的是「span 从哪来」——从内存 Map 改成从磁盘读回。缝合/孤儿清理逻辑原样平移。
 
 ### 4.4 snapshot-replace 防退化护栏
 
-在 [`data-service.ts`](../../../../src/lib/storage/data-service.ts) 走 `snapshot-replace` 分支（`mergeStrategy === 'snapshot-replace'`，即跳过 monotonic 那段的 else 情形）时，新增比较：
+在 [`data-service.ts`](../../../src/lib/storage/data-service.ts) 走 `snapshot-replace` 分支（`mergeStrategy === 'snapshot-replace'`，即跳过 monotonic 那段的 else 情形）时，新增比较：
 
 - 取库里现有记录的计量基线（优先 interaction 数 / turn 数；辅以 `tokens`、`llm_call_count`、`tool_call_count`）。
 - 若 incoming 在这些维度上**严格小于**现有记录 → 判为退化快照：
@@ -221,7 +221,7 @@ exporter ──► /api/ingest/otel/v1/traces
 
 ### 4.5 重启恢复时序
 
-1. 进程起来 → `instrumentation-node.ts` 拉起 `startOtelSpoolConsumer()`（[现状 141-142 行](../../../../src/instrumentation-node.ts)）。
+1. 进程起来 → `instrumentation-node.ts` 拉起 `startOtelSpoolConsumer()`（[现状 141-142 行](../../../src/instrumentation-node.ts)）。
 2. `seedOnStart` + checkpoint：consumer 读 `consumer-checkpoint.json` 续读游标；**但 jiuwen 要的是「重启后把已落盘但未聚合的 bucket 重新聚合一遍」**——这里要确认 seed 行为：默认 `seedToEof` 会把游标推到 EOF（避免重复处理），对 jiuwen 我们需要的是「重启后对未确认聚合的 bucket 至少再聚合一次」。因为 `snapshot-replace` 幂等（同一份 span 聚合出同一条记录），**让 jiuwen source 在重启后对磁盘上所有 bucket 各跑一次再聚合是安全且自愈的**——重复聚合不会污染（覆盖成相同结果），缺失才会丢。
 3. 由 §4.4 护栏兜底：重聚合即便先落了个偏小的快照，后续更全的也能盖回去；而偏小的不会盖掉已有更全的。
 
@@ -247,7 +247,7 @@ exporter ──► /api/ingest/otel/v1/traces
 - **单元**：`aggregateJiuwenOtlpFromSpans` 对「从磁盘读回的 span」与「内存 Map 的 span」产出一致（聚合不变性）。
 - **重启注入**：灌入 step1–4 → 杀进程（模拟内存重启）→ 重启 → 灌 step5–6 → 断言库里记录含 step1–6（而非只剩 5–6）。这是事故的直接回归测试。
 - **退化护栏**：先落一条 6-step 记录，再灌一条只含 2 step 的残缺快照 → 断言库里仍是 6-step，且打了 warn。
-- **缝合不回归**：team / fan-out 多 trace run 经磁盘往返后，仍正确按 session 缝合、孤儿 `jiuwen-<traceId>` 被清理（覆盖 [`ingest.ts:99-110`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts) 现有行为）。
+- **缝合不回归**：team / fan-out 多 trace run 经磁盘往返后，仍正确按 session 缝合、孤儿 `jiuwen-<traceId>` 被清理（覆盖 [`ingest.ts:99-110`](../../../src/lib/ingest/otel/jiuwen/ingest.ts) 现有行为）。
 - **内存**：灌一条大 trace，观察堆内存不再随 span 数线性常驻（G2）。
 - **retention**：处理后的 jiuwen spool 文件按 `AGENT_INSIGHT_OTEL_SPOOL_RETENTION_DAYS` 被归档。
 
@@ -267,15 +267,15 @@ exporter ──► /api/ingest/otel/v1/traces
 
 | 关注点 | 位置 |
 |---|---|
-| jiuwen 内存 spool（要替换） | [`ingest.ts:24,48-114`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts) |
-| 「productionize 即换 durable spool」注释 | [`ingest.ts:18-19`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts) |
-| 可复用磁盘 JSONL spool | [`claude-otel/spool.ts`](../../../../src/lib/ingest/claude-otel/spool.ts)（`appendJsonlBySession` / `readNewLinesSince`） |
-| 可复用后台消费者 | [`otel-consumer/consumer.ts`](../../../../src/lib/ingest/otel-consumer/consumer.ts) |
-| source 注册入口 | [`otel-consumer/sources.ts:28-45`](../../../../src/lib/ingest/otel-consumer/sources.ts) |
-| 消费者启动钩子 | [`instrumentation-node.ts:141-142`](../../../../src/instrumentation-node.ts) |
-| span 展平 / JiuwenSpan 形状 | [`aggregate.ts:19-62`](../../../../src/lib/ingest/otel/jiuwen/aggregate.ts) |
-| snapshot-replace 落库（要加护栏） | [`data-service.ts:2023-2034`](../../../../src/lib/storage/data-service.ts) |
-| jiuwen 用 snapshot-replace 的原因 | [`adapters/jiuwen.ts:12-26`](../../../../src/lib/ingest/adapters/jiuwen.ts) |
+| jiuwen 内存 spool（要替换） | [`ingest.ts:24,48-114`](../../../src/lib/ingest/otel/jiuwen/ingest.ts) |
+| 「productionize 即换 durable spool」注释 | [`ingest.ts:18-19`](../../../src/lib/ingest/otel/jiuwen/ingest.ts) |
+| 可复用磁盘 JSONL spool | [`claude-otel/spool.ts`](../../../src/lib/ingest/claude-otel/spool.ts)（`appendJsonlBySession` / `readNewLinesSince`） |
+| 可复用后台消费者 | [`otel-consumer/consumer.ts`](../../../src/lib/ingest/otel-consumer/consumer.ts) |
+| source 注册入口 | [`otel-consumer/sources.ts:28-45`](../../../src/lib/ingest/otel-consumer/sources.ts) |
+| 消费者启动钩子 | [`instrumentation-node.ts:141-142`](../../../src/instrumentation-node.ts) |
+| span 展平 / JiuwenSpan 形状 | [`aggregate.ts:19-62`](../../../src/lib/ingest/otel/jiuwen/aggregate.ts) |
+| snapshot-replace 落库（要加护栏） | [`data-service.ts:2023-2034`](../../../src/lib/storage/data-service.ts) |
+| jiuwen 用 snapshot-replace 的原因 | [`adapters/jiuwen.ts:12-26`](../../../src/lib/ingest/adapters/jiuwen.ts) |
 
 ---
 
@@ -345,10 +345,10 @@ client POST ──► /api/public/ingestion
 本分支落地了方案 A 的**核心**（消除数据丢失）+ 横切护栏，但对 §4.1 的「后台消费者 + 双 debounce」做了**降级简化**，原因见下。
 
 **已实现**
-- **持久化 span spool**（§4.2）：新增 [`jiuwen/spool.ts`](../../../../src/lib/ingest/otel/jiuwen/spool.ts)。每个 span 作为一行 JSONL 落到 `otel_data/jiuwen/buckets/<traceKey>.jsonl`；另有一份轻量 `session-index.jsonl`（每 `(traceKey, session, marker)` 一行）记录跨 trace 缝合所需的 session→buckets 关系。spanId 去重在读回时做。
-- **从磁盘读回再聚合**（§4.3）：[`ingest.ts`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts) 退役内存 Map，改为 append→从 index 解析分组→**只读回受影响组的 bucket 文件**→复用 `aggregateJiuwenOtlpFromSpans`→`snapshot-replace` 落库。缝合判定 / 孤儿清理逻辑原样平移。重启后磁盘 spool 仍在，下一批（或手动重放）即可重聚合出完整 trace。
+- **持久化 span spool**（§4.2）：新增 [`jiuwen/spool.ts`](../../../src/lib/ingest/otel/jiuwen/spool.ts)。每个 span 作为一行 JSONL 落到 `otel_data/jiuwen/buckets/<traceKey>.jsonl`；另有一份轻量 `session-index.jsonl`（每 `(traceKey, session, marker)` 一行）记录跨 trace 缝合所需的 session→buckets 关系。spanId 去重在读回时做。
+- **从磁盘读回再聚合**（§4.3）：[`ingest.ts`](../../../src/lib/ingest/otel/jiuwen/ingest.ts) 退役内存 Map，改为 append→从 index 解析分组→**只读回受影响组的 bucket 文件**→复用 `aggregateJiuwenOtlpFromSpans`→`snapshot-replace` 落库。缝合判定 / 孤儿清理逻辑原样平移。重启后磁盘 spool 仍在，下一批（或手动重放）即可重聚合出完整 trace。
 - **内存有界**（G2）：再聚合只加载「当前组」的 span（一条 trace 或一个 team session），用完即释放，不再跨请求常驻全量——根除「无界 Map → OOM 重启」这个触发器。
-- **snapshot-replace 防退化护栏**（§4.4）：[`data-service.ts`](../../../../src/lib/storage/data-service.ts) 在 snapshot-replace 分支比较 incoming 与库里现有记录的 interaction 数，**更小则拒绝覆盖**并打 warn；可用 `AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true` 放行。
+- **snapshot-replace 防退化护栏**（§4.4）：[`data-service.ts`](../../../src/lib/storage/data-service.ts) 在 snapshot-replace 分支比较 incoming 与库里现有记录的 interaction 数，**更小则拒绝覆盖**并打 warn；可用 `AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true` 放行。
 - **spool 过期清理**：`pruneJiuwenSpool()` 按文件 mtime 删除超 `AGENT_INSIGHT_JIUWEN_SPOOL_RETENTION_DAYS`（默认 7 天）的 bucket，并同步重写 index；ingest 时按节流（每进程最多每 30 分钟一次）触发。
 
 **降级 / 暂缓（后续）**

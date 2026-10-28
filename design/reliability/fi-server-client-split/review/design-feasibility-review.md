@@ -8,25 +8,25 @@
 
 ## Fact
 
-- [ERROR] [Fact] IF-N01 写成「CLI `run --run-id`」易被读成「仅凭 runId 即可采集」。现网 [`cli.py`](../../../../docs/agent_fault_injection/cli.py) 中 `--run-id` 只是产物 ID；`--platform/--agent/--fault/--prompt/--workspace` 等仍为必填（除非 YAML config）。Worker 必须按 claim 回包拼齐参数，与 [`engine.runCollector`](../../../../docs/src/lib/fault-injection/engine.ts) 一致。
-- [WARNING] [Fact] IF-E01b 写 `taskId`，现网 [`tasks/stop/route.ts`](../../../../docs/src/app/api/fault-injection/tasks/stop/route.ts) 契约是 `taskIds: string[]`，且仅当 `task.status === 'running'` 才处理；目标态若引入 Task `queued`，现 stop 门闩会直接跳过未开跑任务。
-- [WARNING] [Fact] §5.3 称创建后 Task 可为 `queued`，并「沿用 `refreshTaskProgress`」。现 [`store.createTaskWithRuns`](../../../../docs/src/lib/fault-injection/store.ts) 固定 `status: 'running'`，且 `refreshTaskProgress` 在未全部终态时一律写成 `running`——「全 queued」展示不会自然出现，必须改聚合规则，不能只扩枚举。
-- [WARNING] [Fact] 状态机 §3.3 缺现网已存在的 Run/Task 状态 `dry_run`（[`ingestCollectAndJudge`](../../../../docs/src/lib/fault-injection/store.ts) / `refreshTaskProgress` 已统计）。冻结 Judge 契约的同时漏掉 stub 终态会误导实现与 UI。
-- [INFO] [Fact] 对现状瓶颈的判断正确：[`tasks/route.ts`](../../../../docs/src/app/api/fault-injection/tasks/route.ts) → `enqueueFaultInjectionRuns` / 同步 `runCollector`；[`platforms.ts`](../../../../docs/src/lib/fault-injection/platforms.ts) / health 用服务端 `which`；`package.json` `files` 已含 `agent_fault_injection/`；Prisma 尚无 Worker 表与 Run 租约字段——与 IR/SDD 一致。
+- [ERROR] [Fact] IF-N01 写成「CLI `run --run-id`」易被读成「仅凭 runId 即可采集」。现网 [`cli.py`](../../../../agent_fault_injection/cli.py) 中 `--run-id` 只是产物 ID；`--platform/--agent/--fault/--prompt/--workspace` 等仍为必填（除非 YAML config）。Worker 必须按 claim 回包拼齐参数，与 [`engine.runCollector`](../../../../src/lib/fault-injection/engine.ts) 一致。
+- [WARNING] [Fact] IF-E01b 写 `taskId`，现网 [`tasks/stop/route.ts`](../../../../src/app/api/fault-injection/tasks/stop/route.ts) 契约是 `taskIds: string[]`，且仅当 `task.status === 'running'` 才处理；目标态若引入 Task `queued`，现 stop 门闩会直接跳过未开跑任务。
+- [WARNING] [Fact] §5.3 称创建后 Task 可为 `queued`，并「沿用 `refreshTaskProgress`」。现 [`store.createTaskWithRuns`](../../../../src/lib/fault-injection/store.ts) 固定 `status: 'running'`，且 `refreshTaskProgress` 在未全部终态时一律写成 `running`——「全 queued」展示不会自然出现，必须改聚合规则，不能只扩枚举。
+- [WARNING] [Fact] 状态机 §3.3 缺现网已存在的 Run/Task 状态 `dry_run`（[`ingestCollectAndJudge`](../../../../src/lib/fault-injection/store.ts) / `refreshTaskProgress` 已统计）。冻结 Judge 契约的同时漏掉 stub 终态会误导实现与 UI。
+- [INFO] [Fact] 对现状瓶颈的判断正确：[`tasks/route.ts`](../../../../src/app/api/fault-injection/tasks/route.ts) → `enqueueFaultInjectionRuns` / 同步 `runCollector`；`platforms.ts`（历史引用未收录：`../../../../docs/src/lib/fault-injection/platforms.ts`） / health 用服务端 `which`；`package.json` `files` 已含 `agent_fault_injection/`；Prisma 尚无 Worker 表与 Run 租约字段——与 IR/SDD 一致。
 
 ## Omission
 
-- [ERROR] [Omission] **Workspace 本机解析未定义**。UI 对 `~` 路径传 `undefined`，服务端用 `os.homedir()` 展开并写入 `FaultInjectionTask.workspace`（[`tasks/route.ts`](../../../../docs/src/app/api/fault-injection/tasks/route.ts) + [`tasks/new/page.tsx`](../../../../docs/src/app/(main)/agent-ras/fault-injection/tasks/new/page.tsx)）。分离后该绝对路径属于**服务器用户家目录**，Worker 在用户本机执行会指向错误目录甚至无权限。仅列 `workspaceBase` 配置不够，必须规定：服务端禁止展开 `~`、Worker 用本机 `workspaceBase` 解析、存量绝对路径如何迁移。
+- [ERROR] [Omission] **Workspace 本机解析未定义**。UI 对 `~` 路径传 `undefined`，服务端用 `os.homedir()` 展开并写入 `FaultInjectionTask.workspace`（[`tasks/route.ts`](../../../../src/app/api/fault-injection/tasks/route.ts) + `tasks/new/page.tsx`（历史引用未收录：`../../../../docs/src/app/(main)/agent-ras/fault-injection/tasks/new/page.tsx`））。分离后该绝对路径属于**服务器用户家目录**，Worker 在用户本机执行会指向错误目录甚至无权限。仅列 `workspaceBase` 配置不够，必须规定：服务端禁止展开 `~`、Worker 用本机 `workspaceBase` 解析、存量绝对路径如何迁移。
 - [ERROR] [Omission] **Dry-run / 同步 stub 路径未设计**。现网 `dryRun:true` 与 `AGENT_INSIGHT_FI_DRY_RUN=1` 在 Next 内 `buildStubCollectPayload` 或同步 `runCollector`，不经队列。D-001 禁止服务端 spawn 后，E2E/联调 stub 落在 Worker 还是服务端无进程 stub，设计未选边；测试与验收会悬空。
 - [WARNING] [Omission] **Claim 超时回收缺少执行主体**。§2.2.1 要求 BFF 回收 `collecting`，但 §6.3 把 `claimTimeoutSec` 放进 Worker `config.json`；未说明 cron / 每次 claim|heartbeat 顺带 sweep / 独立 job。无调度点则租约泄漏，任务永久卡在 `collecting`。
 - [WARNING] [Omission] **Stop 竞态未钉死**。现 stop 立即 `updateMany` 把 `queued|collecting|…` 标 `stopped` 并进程内 `killCollector`。目标态若仍抢先改终态，会与 Worker 稍后 `collect-result` 上传冲突（设计提 409 但未规定 stop 后是否允许 partial ingest、Task 何时从 `running` 变 `stopped`）。
-- [WARNING] [Omission] **入口面覆盖不全**：[`task/.../rerun`](../../../../docs/src/app/api/fault-injection/task/[taskId]/rerun/route.ts) 仍同步 `runCollector`（迁移 §8.2 点到但模块表未列）；[`health`](../../../../docs/src/app/api/fault-injection/health/route.ts) 仍 `listPlatformsPreflight`（UI 创建页依赖）；[`faults`](../../../../docs/src/app/api/fault-injection/faults/route.ts) 仍服务端 `listFaultsViaPython`——远程部署无 Python/包路径时 catalog 也会挂，设计未声明「faults 留服务端包内」或「改静态/缓存」。
+- [WARNING] [Omission] **入口面覆盖不全**：[`task/.../rerun`](../../../../src/app/api/fault-injection/task/[taskId]/rerun/route.ts) 仍同步 `runCollector`（迁移 §8.2 点到但模块表未列）；[`health`](../../../../src/app/api/fault-injection/health/route.ts) 仍 `listPlatformsPreflight`（UI 创建页依赖）；[`faults`](../../../../src/app/api/fault-injection/faults/route.ts) 仍服务端 `listFaultsViaPython`——远程部署无 Python/包路径时 catalog 也会挂，设计未声明「faults 留服务端包内」或「改静态/缓存」。
 
 ## Feasibility
 
 - [ERROR] [Feasibility] Workspace 未本机化时，默认 golden path（UI 留空/`~` → 建任务 → Worker claim → CLI `--workspace`）在远程 Insight 上**必然失败**；这不是边角，是主路径可行性缺口，开发前必须补契约。
 - [WARNING] [Feasibility] §4.1「先取 `queued` LIMIT 1 再按 `runId` 更新」存在 TOCTOU；真正防双领需单语句条件更新（`updateMany` where `status=queued` 且校验 `count`）或事务内「读改写」并接受 SQLite 写串行。伪代码两写法并列，实现易选错。
-- [WARNING] [Feasibility] [`install-fault-injection.js`](../../../../docs/scripts/install-fault-injection.js) 现状只 `pip install -e $cwd/agent_fault_injection`，无 `insightBaseUrl`/`apiKey`/`--start`、无 npm 包内路径解析；设计目标正确但相对现状落差大，且 **Worker 常驻**无 systemd/launchd/用户级 supervisor，仅「可选启」在登出/关机后不可用——可用性与安装验收成本被低估。
+- [WARNING] [Feasibility] [`install-fault-injection.js`](../../../../scripts/install-fault-injection.js) 现状只 `pip install -e $cwd/agent_fault_injection`，无 `insightBaseUrl`/`apiKey`/`--start`、无 npm 包内路径解析；设计目标正确但相对现状落差大，且 **Worker 常驻**无 systemd/launchd/用户级 supervisor，仅「可选启」在登出/关机后不可用——可用性与安装验收成本被低估。
 - [WARNING] [Feasibility] `engine.ts` 的 `packageRoot()=process.cwd()/agent_fault_injection` 与进程组杀逻辑迁到 Worker 后，若「共享 lib 拷贝」落地成双份，kill/artifact 查找易漂移；应明确单一模块归属（Worker 脚本引用打包路径，Next 仅保留 stub/faults 所需最小面）。
 - [INFO] [Feasibility] 短轮询 + Prisma 条件更新 + 复用 CLI + Judge 留服务端，技术栈成熟，与 ingest apiKey 模型一致；`collect-result` 路由确为新增（当前无该 API），MVP 不分片可接受但需文档化 payload 上限预期。
 

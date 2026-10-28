@@ -115,11 +115,11 @@ class Detector(Protocol):  # base.py:22
 
 ### 注册（P2：DomainLoader + DETECTOR_PLUGIN）
 
-Monitor（含 openjiuwen factory）与 SessionHub **共用** [`detectors.loader.build_member_detectors`](../../../../../../agent_ras/detectors/loader.py)（经 [`registry.py`](../../../../../../agent_ras/detectors/registry.py) 再导出）。按 `config.detectors.<domain>.enabled` 门控；`SessionState.detectors: list` 首命中分发。
+Monitor（含 openjiuwen factory）与 SessionHub **共用** [`detectors.loader.build_member_detectors`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/detectors/loader.py)（经 [`registry.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/detectors/registry.py) 再导出）。按 `config.detectors.<domain>.enabled` 门控；`SessionState.detectors: list` 首命中分发。
 
 **新域**：只新增 `detectors/<domain>.py`（导出 `DETECTOR_PLUGIN`）+ 可选 `detectors/skills/<id>/SKILL.md`；**不再**改 registry / 静态 `DETECTOR_BUILDERS`。
 
-模板：[`detectors/_template_domain.py.example`](../../../../../../agent_ras/detectors/_template_domain.py.example)。
+模板：[`detectors/_template_domain.py.example`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/detectors/_template_domain.py.example)。
 
 ---
 
