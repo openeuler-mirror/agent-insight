@@ -51,7 +51,7 @@ export async function cleanTraceDataset(id: string, user: string, cancel = false
 export default function TraceDatasetFlow({ initialId, initialName, initialConfig, replaceId, onClose, onChange }: { initialId?: string; initialName?: string; initialConfig?: GenerationConfig; replaceId?: string; onClose: () => void; onChange: () => void }) {
   const { apiKey, user } = useAuth();
   const [id, setId] = useState(initialId);
-  const currentId = useRef(id); currentId.current = id;
+  const currentId = useRef(id);
   const releaseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [name, setName] = useState(initialConfig?.name || initialName || '');
   const [description, setDescription] = useState(initialConfig?.description || '');
@@ -74,7 +74,11 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
   const cleanupIntent = useRef<'back' | 'close'>('close');
   const oldId = useRef(replaceId);
   const pending = useRef<{ fingerprint: string; config: GenerationConfig } | null>(null);
-  const changeRef = useRef(onChange); changeRef.current = onChange;
+  const changeRef = useRef(onChange);
+  // 渲染期写 ref 违反 react-hooks/refs（并发渲染下被丢弃的 render 也会写入）；
+  // 这两个 ref 只在 effect/事件回调里读取，提交后同步即可。
+  useEffect(() => { currentId.current = id; }, [id]);
+  useEffect(() => { changeRef.current = onChange; });
   useEffect(() => {
     clearTimeout(releaseTimer.current);
     const release = () => {
@@ -104,15 +108,17 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
     finally { setClosing(false); setBusy(false); }
   };
   const finishCleanup = useRef<() => void>(() => {});
-  finishCleanup.current = () => {
-    changeRef.current(); setExternalDeleting(false); setCleanupFailed(false);
-    const c = progress?.generationConfig;
-    if (cleanupIntent.current === 'back' && c) {
-      setName(c.name); setDescription(c.description); setPlatform(c.platform); setAgentKey(c.agentKey);
-      setDays(String((Date.parse(c.to) - Date.parse(c.from)) / 86400000)); setLimit(String(c.limit));
-      setId(undefined); setProgress(null); setLoadedScope(''); pending.current = null;
-    } else onClose();
-  };
+  useEffect(() => {
+    finishCleanup.current = () => {
+      changeRef.current(); setExternalDeleting(false); setCleanupFailed(false);
+      const c = progress?.generationConfig;
+      if (cleanupIntent.current === 'back' && c) {
+        setName(c.name); setDescription(c.description); setPlatform(c.platform); setAgentKey(c.agentKey);
+        setDays(String((Date.parse(c.to) - Date.parse(c.from)) / 86400000)); setLimit(String(c.limit));
+        setId(undefined); setProgress(null); setLoadedScope(''); pending.current = null;
+      } else onClose();
+    };
+  });
   useEffect(() => {
     if (id || !apiKey) return;
     const controller = new AbortController();
