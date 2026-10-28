@@ -53,6 +53,7 @@ import {
 } from '@/lib/skill-workbench/item-progress';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
+import { loadSkillExecutionProgress } from '@/lib/skill-workbench/execution-progress-service';
 import { loadCaseExecutionProgress } from '@/lib/engine/experiment/execution-progress-service';
 
 export const dynamic = 'force-dynamic';
@@ -193,6 +194,9 @@ export async function GET(
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
+    const skillExecutionSnapshot = experiment.scope === 'skill-workbench' ? await loadSkillExecutionProgress(id, experiment.user) : null;
+    const skillRowProgress = new Map(Object.values(skillExecutionSnapshot?.progress || {}).flatMap(sides => Object.values(sides).flatMap(runs => runs || []))
+      .filter(run => run.experimentCaseId).map(run => [run.experimentCaseId!, run]));
     const caseExecutionProgress = !experiment.scope && experiment.type !== 'llm'
       ? await loadCaseExecutionProgress(id, experiment.user, pagedCases.map(c => c.id), evaluatorIds, configSnapshot?.traceSource === 'generate')
       : null;
@@ -515,7 +519,7 @@ export async function GET(
           where: { id: grayscaleTaskId, ...(username ? { user: username } : {}) },
           select: { caseStatesJson: true },
         });
-        const caseStates = parseJsonValue(grayscaleTask?.caseStatesJson || null) as Record<string, unknown> | null;
+        const caseStates = (skillExecutionSnapshot?.caseStates || parseJsonValue(grayscaleTask?.caseStatesJson || null)) as Record<string, unknown> | null;
         if (supportsItemProgress) {
           const progressInput = {
             caseIds: frozenCaseIds,
@@ -791,7 +795,7 @@ export async function GET(
         }
         return {
           id: c.id,
-          ...(caseExecutionProgress ? { executionProgress: caseExecutionProgress.get(c.id)?.progress || null } : {}),
+          ...(caseExecutionProgress ? { executionProgress: caseExecutionProgress.get(c.id)?.progress || null } : skillExecutionSnapshot ? { executionProgress: skillRowProgress.get(c.id) || null } : {}),
           executionId: c.executionId || legacyReference?.id || traceState?.executionId || null,
           taskId: effectiveTaskId,
           input: c.input || ex?.query || '',
@@ -911,6 +915,7 @@ export async function GET(
       results: resultsWithTraces,
       progress,
       traceProgress,
+      skillExecutionSnapshot,
       executionProgress: itemProgress?.executionProgress || null,
       evaluationProgress: itemProgress?.evaluationProgress || null,
       sideProgress,

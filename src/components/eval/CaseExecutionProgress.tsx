@@ -25,9 +25,9 @@ import { progressDuration } from '@/lib/benchmark/execution-progress';
 
 const STAGES = ['等待调度', 'Agent 执行', '等待 Trace 入库', '执行评测', '结果就绪'];
 
-export function CaseExecutionProgress({ progress, title, refreshingFailed, retrying, evaluatorName, onRefresh }: {
+export function CaseExecutionProgress({ progress, title, refreshingFailed, retrying, evaluatorName, onRefresh, evaluationTitle = '执行评测' }: {
   progress: Progress; title: string; refreshingFailed: boolean; retrying: boolean;
-  evaluatorName: (id: string) => string; onRefresh: () => void;
+  evaluatorName: (id: string) => string; onRefresh: () => void; evaluationTitle?: string;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const terminal = ['done', 'failed', 'cancelled'].includes(progress.status);
@@ -59,7 +59,8 @@ export function CaseExecutionProgress({ progress, title, refreshingFailed, retry
         {progress.error && !retrying && <p role="alert" className="break-words" style={{ color: 'var(--error)' }}>{progress.error}</p>}
       </div>
       <ol className="divide-y divide-border">
-        {STAGES.map((name, index) => {
+        {STAGES.map((stageName, index) => {
+          const name = index === 3 ? evaluationTitle : stageName;
           const skipped = progress.source === 'existing' && index < 3;
           const done = index < progress.stage || progress.status === 'done';
           const current = index === progress.stage;

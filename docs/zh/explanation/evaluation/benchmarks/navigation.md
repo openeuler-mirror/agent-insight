@@ -8,6 +8,8 @@ changefreq: monthly
 
 这是 Benchmark 接入开发与部署的文档入口。自定义接入从需求确认开始；部署已有接入包时先安装公共服务，再选择同级的 SWE-bench 或 ZSoft 部署指南。
 
+接入文档维护架构、契约和验证流程；当前可用组件及执行机状态按[能力发现与兼容性判断](../../../how-to/evaluation/benchmarks/develop-benchmark.md#3-能力发现与兼容性判断)查询。文中的具体 Benchmark 和运行配置是示例，不作为完整支持清单。
+
 ## 文档关系
 
 | 文档 | 用途 |

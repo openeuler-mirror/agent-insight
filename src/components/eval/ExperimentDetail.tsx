@@ -28,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
+import { acceptSkillRunProgress, type SkillRunProgress } from '@/lib/skill-workbench/execution-progress';
 import { CaseExecutionProgress } from '@/components/eval/CaseExecutionProgress';
 import { acceptBenchmarkProgress } from '@/lib/benchmark/execution-progress';
 import { acceptCaseProgress, type CaseExecutionProgress as CaseProgress } from '@/lib/engine/experiment/execution-progress';
@@ -77,6 +78,7 @@ interface ExperimentDetail {
     executionTarget?: { model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; resources: { cpu: number; memoryMiB: number } } | null } | null;
   };
   preset?: string | null;
+  configSnapshot?: { grayscaleTaskId?: string };
   watchMode?: boolean;
   watchEnabledAt?: string | null;
   evaluatorIds: string[];
@@ -279,7 +281,7 @@ export function ExperimentDetail({
         const retained = new Set<string>();
         const cases = (data.cases as ExperimentDetail['cases']).map(next => {
           const old = previous.cases.find(item => item.id === next.id);
-          const ordinary = old?.executionProgress && next.executionProgress ? acceptCaseProgress(old.executionProgress, next.executionProgress) : next.executionProgress;
+          const ordinary = old?.executionProgress && next.executionProgress ? (data.scope === 'skill-workbench' ? acceptSkillRunProgress(old.executionProgress as SkillRunProgress, next.executionProgress as SkillRunProgress) : acceptCaseProgress(old.executionProgress, next.executionProgress)) : next.executionProgress;
           const benchmark = old?.benchmark && next.benchmark ? acceptBenchmarkProgress(old.benchmark, next.benchmark) : next.benchmark;
           if (old && (old.executionProgress && ordinary === old.executionProgress || old.benchmark && benchmark === old.benchmark)) {
             retained.add(next.id);
@@ -364,9 +366,13 @@ export function ExperimentDetail({
     setRetryingCaseId(caseId);
     loadSequence.current += 1;
     try {
+      const progress = detail.cases.find(item => item.id === caseId)?.executionProgress as SkillRunProgress | undefined;
+      const taskId = detail.configSnapshot?.grayscaleTaskId;
+      const skillRetry = detail.scope === 'skill-workbench' && detail.preset === 'trigger' && taskId && progress;
       const res = await apiFetch(
-        `/api/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(caseId)}/retry?user=${encodeURIComponent(user)}`,
-        { method: 'POST' },
+        skillRetry ? `/api/debug/grayscale-tasks/${encodeURIComponent(String(taskId))}`
+          : `/api/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(caseId)}/retry?user=${encodeURIComponent(user)}`,
+        skillRetry ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user, action: 'retry-run', caseId: progress.datasetCaseId, side: 'b', runIndex: progress.runIndex }) } : { method: 'POST' },
       );
       const data = await res.json();
       if (!res.ok) throw new Error(responseError(data, '重试失败'));
@@ -728,7 +734,7 @@ export function ExperimentDetail({
                           ))
                         : <th style={STICKY_TH}>输入</th>}
                       <th style={STICKY_TH}>{detail.scope === 'benchmark' ? '执行进度' : '预期输出'}</th>
-                      {!detail.scope && <th style={STICKY_TH}>执行进度</th>}
+                      {(!detail.scope || detail.scope === 'skill-workbench') && <th style={STICKY_TH}>执行进度</th>}
                       <th style={STICKY_TH}>{detail.scope === 'benchmark' ? '提交物' : '实际输出'}</th>
                       {detail.scope === 'benchmark' && (
                         <th style={STICKY_TH}>{benchmarkMetricPresentation?.label || '主指标'}</th>
@@ -776,9 +782,9 @@ export function ExperimentDetail({
                             : c.referenceOutput ? truncate(c.referenceOutput, 60)
                               : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}
                         </td>
-                        {!detail.scope && <td style={{ ...TD, maxWidth: 240 }}>
+                        {(!detail.scope || detail.scope === 'skill-workbench') && <td style={{ ...TD, maxWidth: 240 }}>
                           {c.executionProgress ? <CaseExecutionProgress progress={c.executionProgress} title={c.input || 'Case'} refreshingFailed={refreshFailed}
-                            retrying={retryingCaseId === c.id} evaluatorName={lookup.nameOf} onRefresh={() => { void load(true, true); }} />
+                            evaluationTitle={detail.preset === 'trigger' ? '触发判定' : '执行评测'} retrying={retryingCaseId === c.id} evaluatorName={lookup.nameOf} onRefresh={() => { void load(true, true); }} />
                             : <span className="text-foreground-muted">进度暂不可用</span>}
                         </td>}
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
@@ -885,7 +891,7 @@ export function ExperimentDetail({
                     {pagedRows.length === 0 && (
                       <tr>
                         <td
-                          colSpan={detail.scope === 'benchmark' ? benchmarkCaseColumns.length + 7 : detail.scope ? 7 : 8}
+                          colSpan={detail.scope === 'benchmark' ? benchmarkCaseColumns.length + 7 : detail.scope && detail.scope !== 'skill-workbench' ? 7 : 8}
                           style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}
                         >
                           无有效 Case，暂无评测结果

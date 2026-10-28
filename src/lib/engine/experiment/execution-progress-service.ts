@@ -27,7 +27,10 @@ export type CaseExecutionSnapshot = {
 }
 
 export async function loadCaseExecutionProgress(experimentId: string, user: string, caseIds: string[], evaluatorIds: string[], generatesTrace = false): Promise<Map<string, CaseExecutionSnapshot>> {
-  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  return prisma.$transaction((tx: Prisma.TransactionClient) => loadCaseExecutionProgressInTransaction(tx, experimentId, user, caseIds, evaluatorIds, generatesTrace))
+}
+
+export async function loadCaseExecutionProgressInTransaction(tx: Prisma.TransactionClient, experimentId: string, user: string, caseIds: string[], evaluatorIds: string[], generatesTrace = false): Promise<Map<string, CaseExecutionSnapshot>> {
     const cases = await tx.experimentCase.findMany({
       where: { experimentId, id: { in: caseIds }, deletedAt: null, experiment: { user } },
       include: { traceAttempts: { orderBy: { attemptNo: 'desc' }, take: 1 }, results: true },
@@ -51,9 +54,11 @@ export async function loadCaseExecutionProgress(experimentId: string, user: stri
       let error = attempt?.errorMessage || attempt?.failureCode || fi?.error || row.traceGenerationError
       const traceReady = attempt ? attempt.status === 'ready' : source === 'existing' || Boolean(execution && row.executionId === execution.id)
       if (attempt) {
-        if (['running', 'retry_wait'].includes(attempt.status)) stage = 1
-        if (attempt.status === 'waiting_trace' || ['retry_wait', 'failed', 'cancelled', 'superseded'].includes(attempt.status) && (attempt.traceId || command?.status === 'SUCCEEDED')) stage = 2
-        if (attempt.status === 'failed' && !attempt.traceId && attempt.commandId && command?.status !== 'SUCCEEDED') stage = 1
+        const settledAttempt = ['retry_wait', 'failed', 'cancelled', 'superseded'].includes(attempt.status)
+        const executionSucceeded = command?.status === 'SUCCEEDED' || attempt.failureCode === 'TRACE_INGEST_TIMEOUT'
+        if (['running', 'retry_wait'].includes(attempt.status) || settledAttempt && attempt.traceId) stage = 1
+        if (attempt.status === 'waiting_trace' || settledAttempt && executionSucceeded) stage = 2
+        if (attempt.status === 'failed' && attempt.commandId && !executionSucceeded) stage = 1
         if (attempt.status === 'running') {
           status = 'running'; label = 'Agent 执行中'
           if (!command || ['CREATED', 'SENT', 'RECEIVED'].includes(command.status)) {
@@ -106,5 +111,4 @@ export async function loadCaseExecutionProgress(experimentId: string, user: stri
       })
     }
     return snapshots
-  })
 }
