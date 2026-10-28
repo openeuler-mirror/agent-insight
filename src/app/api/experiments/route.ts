@@ -139,7 +139,7 @@ export async function GET(req: Request) {
         fiRunId: { not: null }, executionId: null, traceGenerationError: { not: null } },
       select: { experimentId: true },
     }) : [];
-    const failedFiExperiments = new Set(failedFiCases.map(row => row.experimentId));
+    const failedFiExperiments = new Set(failedFiCases.map((row: { experimentId: string }) => row.experimentId));
 
     const items = rows.map((r) => {
       const resultRows = scoreRowsByExperiment.get(r.id) || [];
