@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { isInProgressOpencodeSnapshot } from "../src/lib/ingest/opencode-snapshot"
+import { isInProgressOpencodeSnapshot, isInternalRasJudgeSnapshot } from "../src/lib/ingest/opencode-snapshot"
 
 // 回归护栏：这个门曾经用 opencode_cli_completed 判定，导致正常交互式使用（CLI 一直开着）
 // 的每一条 trace 都被当成"进行中"，评分/诊断/流程图要等用户退出 opencode 才出。
@@ -48,4 +48,20 @@ test("upload: 非 opencode 框架永远不走轻通道", () => {
       `${framework} 不应受 opencode 轻通道影响`,
     )
   }
+})
+
+
+test('upload: internal RAS roots skip automatic analysis without excluding business roots', () => {
+  assert.equal(isInternalRasJudgeSnapshot({ framework: 'opencode', agentName: 'ras-judge' }), true)
+  assert.equal(isInternalRasJudgeSnapshot({ framework: 'opencode', interactions: [
+    { role: 'system', content: 'policy' }, { role: 'user', agent: 'ras-judge', content: 'judge prompt' },
+  ] }), true)
+  assert.equal(isInternalRasJudgeSnapshot({ framework: 'opencode', interactions: [
+    { role: 'user', agent: 'build', content: 'inspect ras-judge' },
+    { role: 'assistant', agent: 'ras-judge', subagent_session_id: 'ses_child' },
+  ] }), false)
+  assert.equal(isInternalRasJudgeSnapshot({ framework: 'opencode', agentName: 'build', interactions: [
+    { role: 'user', agent: 'ras-judge', subagent_session_id: 'ses_child' },
+  ] }), false)
+  assert.equal(isInternalRasJudgeSnapshot({ framework: 'xiaoo', agentName: 'ras-judge' }), false)
 })

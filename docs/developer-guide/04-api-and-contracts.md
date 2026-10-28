@@ -373,6 +373,8 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 ### FI 统一任务提示与主动拦截结果
 
+OpenCode 根 Agent 为 ras-judge 的内部判定 Trace 继续入库，但在上传入口跳过自动模型分析（含流程图和故障归因），避免“判定会话再分析”占用实验额度；业务根携带内部子会话时不跳过。
+
 OpenCode uploader 使用排他创建的 PID 锁串行处理上传及 checkpoint；竞争者等待持有者结束，不能直接丢弃触发。单 spool 扫描只更新该文件水位，不能推进共享全局扫描水位；上传失败不确认文件扫描完成，防止并行短任务遗漏或 checkpoint 覆盖。
 
 OpenCode 采集插件在 session.idle / session.status idle 触发上传前，必须先同步刷新此前消息和结束事件到 spool；普通事件仍按批写入。不能依赖 CLI 的 beforeExit 或异步流尾部完成，否则已结束的 FI 任务可能只有进行中快照，Session.endTime 永不落库。
