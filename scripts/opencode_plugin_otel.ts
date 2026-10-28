@@ -424,8 +424,8 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
   const maxToolIo = asInt(env.AGENT_INSIGHT_MAX_TOOL_IO, 4000)
   const maxEventString = asInt(env.AGENT_INSIGHT_MAX_EVENT_STRING, 20000)
   const outFile = buildOutFile(spoolDir)
-  // v1 CLI can exit before async hooks drain; controlled experiments must retain the final snapshot.
-  const writer = createWriter(outFile, !lifecycle && Boolean(process.env.AGENT_INSIGHT_EVENT_TOKEN))
+  // v1 may exit without awaiting event hooks; persist before yielding or scheduling upload.
+  const writer = createWriter(outFile, !lifecycle)
   if (lifecycle) lifecycle.emit = writer.enqueue
 
   const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
@@ -747,7 +747,8 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
               pluginLogPath,
               `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
             )
-            await writer.flush()
+            if (lifecycle) await writer.flush()
+            else void writer.flush()
             kickUploader(sid, true, `event:${type}`)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
