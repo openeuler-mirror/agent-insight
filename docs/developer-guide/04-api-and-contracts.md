@@ -373,6 +373,8 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 ### FI 统一任务提示与主动拦截结果
 
+终态 FI（含 judge_skipped/completed）无可用 Trace，超过统一 180 秒回传宽限即显示失败，与父实验是否 running 无关；绑定等待将原因写入 Case.traceGenerationError。已有评估完成但存在生成失败的 FI Case 时，实验结算及列表/详情保留 partial。
+
 OpenCode 根 Agent 为 ras-judge 的内部判定 Trace 继续入库，但在上传入口跳过自动模型分析（含流程图和故障归因），避免“判定会话再分析”占用实验额度；业务根携带内部子会话时不跳过。
 
 OpenCode uploader 使用排他创建的 PID 锁串行处理上传及 checkpoint；竞争者等待持有者结束，不能直接丢弃触发。单 spool 扫描只更新该文件水位，不能推进共享全局扫描水位；上传失败不确认文件扫描完成，防止并行短任务遗漏或 checkpoint 覆盖。

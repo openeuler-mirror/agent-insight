@@ -595,7 +595,11 @@ export async function settleExperimentStatus(experimentId: string): Promise<void
       emptyAfterDeletion = snapshot.caseIds.every((id: string) => removed.has(`dataset:${id}`));
     }
   }
-  const status = emptyAfterDeletion ? 'cancelled' : deriveSettledExperimentStatus(rows);
+  let status = emptyAfterDeletion ? 'cancelled' : deriveSettledExperimentStatus(rows);
+  if (status === 'done' && await prisma.experimentCase.count({
+    where: { experimentId, deletedAt: null, fiRunId: { not: null },
+      executionId: null, traceGenerationError: { not: null } },
+  }) > 0) status = 'partial';
   if (!status) return; // 尚未全部终态（单项 retry 场景下可能仍有 running）
   await prisma.experiment.updateMany({
     where: { id: experimentId, deletedAt: null, status: { not: 'cancelled' } },

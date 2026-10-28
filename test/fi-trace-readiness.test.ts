@@ -134,3 +134,43 @@ test('collect ingress and FI judge both reject internal sessions and prompt-only
     }
   } finally { delete process.env.FI_JUDGE_SESSION_WAIT_MS }
 })
+
+
+test('terminal empty FI traces fail after uploader grace even while the parent remains running', async () => {
+  for (const status of ['judge_skipped', 'completed']) {
+    const data = await fixture(status, 'build', [{ role: 'user', content: 'no response' }])
+    await prisma.experiment.update({ where: { id: data.experiment.id }, data: { status: 'running' } })
+    await prisma.faultInjectionRun.update({ where: { id: data.run.id },
+      data: { updatedAt: new Date(Date.now() - 240_000) } })
+    const response = await detail(new Request('http://localhost/api/experiments/' + data.experiment.id + '?user=' + user),
+      { params: Promise.resolve({ id: data.experiment.id }) })
+    const body = await response.json()
+    assert.equal(body.traceProgress.failed, 1)
+    assert.equal(body.traceProgress.pending, 0)
+  }
+})
+
+test('finished FI batches persist generation failures and settle as partial alongside completed evaluations', async () => {
+  const good = await fixture('completed', 'build', [{ role: 'assistant', content: 'valid response' }])
+  const bad = await fixture('judge_skipped', 'build', [{ role: 'user', content: 'empty' }])
+  await prisma.experimentCase.update({ where: { id: bad.row.id }, data: { experimentId: good.experiment.id } })
+  const bound = await fi.awaitFiSessionsAndBindExperimentCases({
+    runIds: [good.run.runId, bad.run.runId], waitForActiveRuns: true, traceWaitMs: 0,
+  })
+  assert.deepEqual(bound.failedRunIds, [bad.run.runId])
+  const failed = await prisma.experimentCase.findUniqueOrThrow({ where: { id: bad.row.id } })
+  assert.ok(failed.traceGenerationError)
+  await prisma.experimentEvalResult.create({ data: {
+    experimentId: good.experiment.id, caseId: good.row.id,
+    evaluatorId: 'preset-ras-reliability-detection-recovery', status: 'done', score: 50,
+  } })
+  const { settleExperimentStatus } = await import('@/lib/engine/experiment/run-experiment')
+  await settleExperimentStatus(good.experiment.id)
+  assert.equal((await prisma.experiment.findUniqueOrThrow({ where: { id: good.experiment.id } })).status, 'partial')
+  const response = await detail(new Request('http://localhost/api/experiments/' + good.experiment.id + '?user=' + user),
+    { params: Promise.resolve({ id: good.experiment.id }) })
+  const body = await response.json()
+  assert.equal(body.status, 'partial')
+  assert.equal(body.traceProgress.failed, 1)
+  assert.equal(body.overall, 50)
+})

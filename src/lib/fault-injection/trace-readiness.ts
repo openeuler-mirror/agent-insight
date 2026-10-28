@@ -37,3 +37,13 @@ export function isFiBusinessTraceUsable(input: {
   })
 }
 
+
+
+export const FI_TRACE_ARRIVAL_GRACE_MS = 180_000
+
+/** Terminal collect results have a finite window for the independent trace uploader. */
+export function isFiTraceWaitExpired(status: string, updatedAt: Date | string | number, graceMs = FI_TRACE_ARRIVAL_GRACE_MS): boolean {
+  if (!['completed', 'judge_skipped', 'failed', 'stopped'].includes(status)) return false
+  const updated = new Date(updatedAt).getTime()
+  return Number.isFinite(updated) && Date.now() - updated >= graceMs
+}

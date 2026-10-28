@@ -14,7 +14,7 @@ import { normalizeFiWorkspaceInput } from '@/lib/fault-injection/workspace'
 import { prisma } from '@/lib/storage/prisma'
 import { resolveCaseFaultInjectionType } from '@/lib/engine/experiment/case-fi-meta'
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants'
-import { isFiBusinessTraceUsable } from '@/lib/fault-injection/trace-readiness'
+import { isFiBusinessTraceUsable, isFiTraceWaitExpired, FI_TRACE_ARRIVAL_GRACE_MS } from '@/lib/fault-injection/trace-readiness'
 export { isFiBusinessTraceUsable } from '@/lib/fault-injection/trace-readiness'
 
 export type FiOrchestrateCaseSpec = {
@@ -290,7 +290,7 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
 
   const timeoutMs = Math.max(5_000, input.timeoutMs ?? 240_000)
   const pollMs = Math.max(50, input.pollMs ?? 2_000)
-  const traceWaitMs = Math.max(0, input.traceWaitMs ?? 180_000)
+  const traceWaitMs = Math.max(0, input.traceWaitMs ?? FI_TRACE_ARRIVAL_GRACE_MS)
   const started = Date.now()
   const ready = new Set<string>()
   const failed = new Set<string>()
@@ -322,7 +322,7 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
       const terminal = ['completed', 'judge_skipped', 'failed', 'stopped'].includes(run.status)
       if (terminal && !run.sessionTaskId) {
         failed.add(runKey)
-      } else if (terminal && Date.now() - run.updatedAt.getTime() >= traceWaitMs) {
+      } else if (isFiTraceWaitExpired(run.status, run.updatedAt, traceWaitMs)) {
         failed.add(runKey)
       } else {
         waitingForWork = true
@@ -331,6 +331,16 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
     if (ready.size + failed.size >= runIds.length) break
     if (expired && !waitingForWork) break
     await sleep(pollMs)
+  }
+
+  // Preserve a reason on the Case so terminal empty runs do not remain generating forever.
+  for (const runKey of failed) {
+    const run = await findFiRunByKey(runKey)
+    if (!run) continue
+    await prisma.experimentCase.updateMany({
+      where: { fiRunId: { in: [run.runId, run.id] }, executionId: null },
+      data: { traceGenerationError: run.error || 'FI 执行已结束，但未产生可用的业务 Trace（无实际回复、未上报或回传等待超时）' },
+    })
   }
 
   const pendingRunIds = runIds.filter((id) => !ready.has(id) && !failed.has(id))
