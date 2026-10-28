@@ -397,6 +397,8 @@ configuration:
 
 ### FI Trace 回传与内部判定归属
 
+常驻客户端在读取无 Session、无激活信号的 collect-result 时，会携带同目录失败 manifest 的真实原因并脱敏。现有 collect-result 接口直接记录 failed，不进入 Judge，也不将 plugin_start_failed 覆盖成 session_unaligned；有真实 Session 或激活证据的部分轨迹保留原处理流程。
+
 OpenCode 沿用 v1/v2 采集入口和迟到快照处理。OpenCode v1 不保证退出前等待事件钩子：事件同步写入 spool，idle 分支在首次异步让出之前触发上传；v2 保留异步背压，等待写盘后上传。避免仅在主动 await 钩子的测试中通过，却在真实 CLI 退出时丢失上传触发。上传器在排他锁内读取和保存 checkpoint；保留源仓库的未完成会话追踪与最终重检，单文件扫描只推进对应文件的水位，上传失败不确认扫描完成。
 
 FI 绑定等待 queued/collecting/judging 等活动任务结束；全部进入终态后保留 180 秒回传宽限。终态空 Trace 的失败原因写入 Case.traceGenerationError，存在生成失败 Case 时，已完成的有效评估结算为 partial。内部判定会话不会被绑定为业务 Case 的有效 Trace。

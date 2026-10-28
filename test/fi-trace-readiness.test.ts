@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -202,4 +203,38 @@ test('an existing pending FI evaluation starts and settles without rerunning its
     clearTimeout(timer)
     setJudgeLlmCallerForTest(null)
   }
+})
+
+
+test('a startup failure survives client collection, upload, and business Trace failure reporting', async () => {
+  const data = await fixture('collecting')
+  const artifacts = path.join(root, 'artifacts', data.run.runId)
+  mkdirSync(artifacts, { recursive: true })
+  writeFileSync(path.join(artifacts, 'collect-result.json'), JSON.stringify({
+    runId: data.run.runId, taskId: null, sessionAligned: false, faultActivated: false, interactions: [], markers: [],
+  }))
+  writeFileSync(path.join(artifacts, 'manifest.json'), JSON.stringify({
+    status: 'failed', termination_reason: 'plugin_start_failed',
+    error: 'PluginStartupError: plugin did not become ready; api_key=sk-fi-test-secret-value',
+  }))
+  const { readCollectResult } = createRequire(import.meta.url)('../scripts/reliability-client.cjs')
+  const payload = readCollectResult(path.join(root, 'artifacts'), data.run.runId)
+  assert.match(payload.error, /^plugin_start_failed:/)
+  assert.doesNotMatch(payload.error, /sk-fi-test-secret-value/)
+  const apiKey = 'fi-startup-error-api-key'
+  await prisma.user.create({ data: { username: user, apiKey } })
+  const { POST } = await import('@/app/api/fault-injection/runs/[runId]/collect-result/route')
+  const response = await POST(new Request('http://localhost/api/fault-injection/runs/' + data.run.runId + '/collect-result', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-witty-api-key': apiKey },
+    body: JSON.stringify(payload),
+  }), { params: Promise.resolve({ runId: data.run.runId }) })
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).status, 'failed')
+  const saved = await prisma.faultInjectionRun.findUniqueOrThrow({ where: { id: data.run.id } })
+  assert.match(saved.error || '', /^plugin_start_failed:/)
+  assert.doesNotMatch(saved.error || '', /session_unaligned/)
+  await fi.awaitFiSessionsAndBindExperimentCases({ runIds: [data.run.runId], traceWaitMs: 0 })
+  const failedCase = await prisma.experimentCase.findUniqueOrThrow({ where: { id: data.row.id } })
+  assert.match(failedCase.traceGenerationError || '', /^plugin_start_failed:/)
+  assert.equal(await prisma.experimentEvalResult.count({ where: { experimentId: data.experiment.id } }), 0)
 })

@@ -279,6 +279,8 @@ Benchmark 实验的 Case 列表按实际执行阶段显示进度：尚未轮到�
 
 #### 生成 Trace：检查已有数据集
 
+若 Agent 在创建 Session 前启动失败，Case 展示 plugin_start_failed 等实际平台错误；这类任务不会进入评分，原始启动日志保存在执行机的运行 artifacts 中。
+
 OpenCode v1 会在退出前保存结束事件并触发 Trace 上传，不必等待下一次启动补传。
 
 FI 任务全部结束后，无有效 Trace 的 Case 会标记生成失败；有效 Case 的评估仍会完成，实验显示部分完成。RAS 内部判定轨迹归属系统，Trace 列表选择用户时不展示，选择全部或系统时展示；它不参与业务 Trace 选择，已完成的判定轨迹仍按账号设置进行二次分析。

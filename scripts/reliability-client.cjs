@@ -1229,14 +1229,31 @@ function buildCollectorArgs(run, workspace, artifactsDir) {
   return args
 }
 
+/** Preserve a pre-session platform failure instead of uploading an empty success payload. */
 function readCollectResult(artifactsDir, runId) {
   const root = path.join(artifactsDir, runId)
+  const readArtifact = (file) => {
+    const payload = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const hasSignal = payload.taskId || payload.sessionTaskId || payload.faultActivated === true
+      || (Array.isArray(payload.markers) && payload.markers.length > 0)
+    if (!hasSignal) {
+      const manifestFile = path.join(path.dirname(file), 'manifest.json')
+      if (fs.existsSync(manifestFile)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'))
+        if (manifest.status === 'failed' && manifest.error) {
+          const reason = String(manifest.termination_reason || 'platform_error')
+          return { ...payload, error: reason + ': ' + sanitizeAgentDiagnostic(manifest.error, 4000) }
+        }
+      }
+    }
+    return payload
+  }
   const direct = path.join(root, 'collect-result.json')
-  if (fs.existsSync(direct)) return JSON.parse(fs.readFileSync(direct, 'utf8'))
+  if (fs.existsSync(direct)) return readArtifact(direct)
   if (!fs.existsSync(root)) throw new Error(`artifact dir missing: ${root}`)
   for (const entry of fs.readdirSync(root)) {
     const candidate = path.join(root, entry, 'collect-result.json')
-    if (fs.existsSync(candidate)) return JSON.parse(fs.readFileSync(candidate, 'utf8'))
+    if (fs.existsSync(candidate)) return readArtifact(candidate)
   }
   throw new Error(`collect-result.json not found under ${root}`)
 }
