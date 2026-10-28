@@ -34,6 +34,8 @@ npx agent-insight install-ras
 安装器写入 `~/.agent-insight/ras/`，合并 `ras-judge` 等到 OpenCode 配置。详细步骤见源码旁 [`platform_adapter/opencode/INSTALL.md`](../../../../../agent_ras/platform_adapter/opencode/INSTALL.md)。\
 看板 curl / `npm pack` / 本机目录树与数据源见 [local-install-process.md](local-install-process.md)。
 
+判定 Agent 的模型由 OpenCode 的 agent.ras-judge.model 独立指定，当前模板使用 zhipuai-coding-plan/GLM-5.2。该模型需在本机 provider 中可用；业务默认模型变化不会自动覆盖已有判定模型配置。修改后新建会话生效。
+
 ## 注意
 
 - 仅 inproc；不启本地 RAS 端口或守护进程
