@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
@@ -11,8 +27,8 @@ const configModule = fs.existsSync(path.join(__dirname, "mcts-config.cjs"))
   ? path.join(__dirname, "mcts-config.cjs")
   : path.resolve(__dirname, "../../../services/executor/src/mcts-config.cjs");
 const { installationMctsConfig, checkMctsRepository, mctsUpstream, saveMctsRepoDir, shellQuote } = require(configModule);
-const { preflightUpstream } = require("./run.cjs");
-const PACKAGE_FILES = ["core.cjs", "gateway.cjs", "run.cjs", "install.cjs", "mcts-config.cjs"];
+const { preflightUpstream, preflightTrace } = require("./run.cjs");
+const PACKAGE_FILES = ["core.cjs", "gateway.cjs", "run.cjs", "install.cjs", "mcts-config.cjs", "mcts-failure.cjs"];
 const SHARED_FILES = ["trace-transport.cjs", "collaboration-transport.cjs"];
 const WRAPPER_MARKER = "# managed-by-agent-insight-mcts-xgovernor-proxy";
 
@@ -49,14 +65,18 @@ async function install(options) {
   let paths;
   let upstreamUrl = process.env.AGENT_INSIGHT_MCTS_UPSTREAM_URL || "http://127.0.0.1:8787";
   if (process.env.AGENT_INSIGHT_MCTS_REQUIRE_REPO === "1" || mcts.mctsRepoDir) {
-    paths = checkMctsRepository(mcts);
+    paths = checkMctsRepository(mcts, 'common');
     upstreamUrl = mctsUpstream(paths);
     try { await preflightUpstream(upstreamUrl); }
     catch { throw new Error("无法连接 MCTS config.env 配置的 xGovernor，请确认原有 MCTS 服务可用后重新执行安装命令"); }
   }
+  await preflightTrace({
+    apiKey,
+    otlpEndpoint: process.env.AGENT_INSIGHT_OTLP_ENDPOINT || `${baseUrl}/api/ingest/otel/v1/traces`,
+  }, options.fetchImpl);
   for (const relative of PACKAGE_FILES) {
-    const source = relative === "mcts-config.cjs" && !fs.existsSync(path.join(options.sourceDir, relative))
-      ? configModule : path.join(options.sourceDir, relative);
+    const source = !fs.existsSync(path.join(options.sourceDir, relative)) && ["mcts-config.cjs", "mcts-failure.cjs"].includes(relative)
+      ? path.join(path.dirname(configModule), relative) : path.join(options.sourceDir, relative);
     await copyFile(source, path.join(packageDir, relative), 0o700);
   }
   for (const sharedFile of SHARED_FILES) {

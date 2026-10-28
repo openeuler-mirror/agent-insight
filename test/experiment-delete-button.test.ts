@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -15,6 +31,11 @@ test('触发分析按单条 Case 状态显示删除，不跟随其他 Case 的�
   assert.match(emptyCaseEvaluationMessage('running', { traceStatus: 'failed' }), /执行失败，未进入评测/);
   assert.match(emptyCaseEvaluationMessage('running', { traceStatus: 'ready' }), /等待评测/);
   assert.match(emptyCaseEvaluationMessage('done', { traceStatus: 'ready' }), /实验已结束/);
+  assert.equal(emptyCaseEvaluationMessage('running', { traceStatus: 'pending', traceAttemptStatus: 'waiting_trace' }),
+    '执行已结束，等待 Trace 完成上报，尚未进入评测。');
+  assert.equal(isCompletedExperimentCase('running', null, { traceStatus: 'pending', traceAttemptStatus: 'waiting_trace' }), false);
+  assert.match(emptyCaseEvaluationMessage('running', { traceStatus: 'pending', traceAttemptStatus: 'running' }), /正在执行/);
+  assert.match(emptyCaseEvaluationMessage('running', { traceStatus: 'pending', traceAttemptStatus: 'queued' }), /等待执行/);
 });
 
 test('resolved Benchmark Case shows 删除 while active Case shows 停止并删除', () => {

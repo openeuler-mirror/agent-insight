@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 import { DeleteExperimentButton, PendingExperimentCancellations, isCompletedExperimentCase } from './DeleteExperimentButton';
 
@@ -12,12 +28,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
-import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
+import { CaseExecutionProgress } from '@/components/eval/CaseExecutionProgress';
+import { acceptBenchmarkProgress } from '@/lib/benchmark/execution-progress';
+import { acceptCaseProgress, type CaseExecutionProgress as CaseProgress } from '@/lib/engine/experiment/execution-progress';
+import { BenchmarkExecutionProgress } from '@/components/eval/BenchmarkExecutionProgress';
+import { benchmarkExecutionProgress, type BenchmarkProgressDetails } from '@/lib/benchmark/execution-progress';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTrend';
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import type { AgentOptions, RuntimeDefinition } from '@/lib/engine/experiment/runtime-options';
+import { RuntimeParameterSnapshot } from '@/components/eval/RuntimeParameterSnapshot';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -31,12 +52,6 @@ import {
   type EvaluatorRunConfigMap,
 } from '@/lib/evaluators/evaluator-run-config';
 import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/experiment/baseline-trend';
-import {
-  benchmarkCaseProgressLabel,
-  isBenchmarkEvaluationInProgress,
-  benchmarkEvaluationProgressLabel,
-  isBenchmarkSubmissionAwaitingCompletion,
-} from '@/lib/benchmark/detail-status';
 import type {
   BenchmarkPresentation,
   BenchmarkPresentationColumn,
@@ -59,7 +74,7 @@ interface ExperimentDetail {
   executionParameterDefinition?: RuntimeDefinition | null;
   reusableConfig?: {
     traceSource?: string | null;
-    executionTarget?: { model?: string | null; timeoutSeconds?: number | null } | null;
+    executionTarget?: { model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; resources: { cpu: number; memoryMiB: number } } | null } | null;
   };
   preset?: string | null;
   watchMode?: boolean;
@@ -79,7 +94,10 @@ interface ExperimentDetail {
     traceAttemptNo: number | null;
     traceAttemptStatus: string | null;
     caseValues?: Record<string, unknown> | null;
+    executionProgress?: CaseProgress | null;
     benchmark?: {
+      runId?: string; runAttemptNo?: number; generation?: number; revision?: number; evaluationAttemptNo?: number; traceId?: string | null; traceTaskId?: string | null; executionId?: string | null;
+      submissionSource?: string;
       adapterKey: string;
       displayName: string;
       externalCaseId: string;
@@ -106,6 +124,9 @@ interface ExperimentDetail {
         contentUrl: string;
       }>;
       runStatus: string;
+      progressDetails?: BenchmarkProgressDetails;
+      environmentFacts?: { imageId: string | null; toolBoundary: string | null; controllerBoundary: string | null; network: string | null } | null;
+      cleanupStatus?: string | null;
       progressStage: string | null;
       workspaceProvider: string | null;
       evaluationStatus: string | null;
@@ -214,6 +235,7 @@ export function ExperimentDetail({
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const [retryingCaseId, setRetryingCaseId] = useState('');
   const { casePage, casePageSize, focusCaseId, updatePagination, acceptPagination } = useExperimentCasePagination(embedded);
   const [highlightedCaseId, setHighlightedCaseId] = useState('');
@@ -221,6 +243,7 @@ export function ExperimentDetail({
   const [notice, setNotice] = useState('');
   const [comments, setComments] = useState<EvalCommentRow[]>([]);
   const loadSequence = useRef(0);
+  const loadFlight = useRef<Promise<void> | null>(null);
 
   const loadComments = useCallback(async () => {
     if (!user) return;
@@ -240,7 +263,7 @@ export function ExperimentDetail({
     return () => window.clearTimeout(timer);
   }, [loadComments]);
 
-  const load = useCallback(async (silent = false) => {
+  const fetchDetail = useCallback(async (silent = false) => {
     if (!user) return;
     const sequence = ++loadSequence.current;
     if (!silent) setLoading(true);
@@ -251,10 +274,28 @@ export function ExperimentDetail({
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
       if (sequence !== loadSequence.current) return;
-      setDetail(data);
+      setDetail(previous => {
+        if (!previous || previous.id !== data.id || !Array.isArray(data.cases)) return data;
+        const retained = new Set<string>();
+        const cases = (data.cases as ExperimentDetail['cases']).map(next => {
+          const old = previous.cases.find(item => item.id === next.id);
+          const ordinary = old?.executionProgress && next.executionProgress ? acceptCaseProgress(old.executionProgress, next.executionProgress) : next.executionProgress;
+          const benchmark = old?.benchmark && next.benchmark ? acceptBenchmarkProgress(old.benchmark, next.benchmark) : next.benchmark;
+          if (old && (old.executionProgress && ordinary === old.executionProgress || old.benchmark && benchmark === old.benchmark)) {
+            retained.add(next.id);
+            return old;
+          }
+          if (ordinary && ordinary !== next.executionProgress) return { ...next, executionProgress: ordinary, executionId: ordinary.executionId, taskId: ordinary.traceId };
+          if (benchmark && benchmark !== next.benchmark) return { ...next, benchmark, executionId: benchmark.executionId || null, taskId: benchmark.traceTaskId || benchmark.traceId || null };
+          return next;
+        });
+        return { ...data, cases, results: [...data.results.filter((result: { caseId: string }) => !retained.has(result.caseId)), ...previous.results.filter(result => retained.has(result.caseId))] };
+      });
+      setRefreshFailed(false);
       acceptPagination(data);
       setError('');
     } catch (e: unknown) {
+      if (silent && sequence === loadSequence.current) setRefreshFailed(true);
       if (!silent && sequence === loadSequence.current) {
         setError(errorMessage(e, '加载实验失败'));
         setDetail(null);
@@ -263,6 +304,26 @@ export function ExperimentDetail({
       if (!silent && sequence === loadSequence.current) setLoading(false);
     }
   }, [user, id, casePage, casePageSize, focusCaseId, acceptPagination]);
+
+  const load = useCallback(async (silent = false, force = false) => {
+    const sequenceBeforeWait = loadSequence.current;
+    if (loadFlight.current) {
+      await loadFlight.current;
+      if (silent && !force) return;
+    }
+    while (loadFlight.current) await loadFlight.current;
+    if (sequenceBeforeWait !== loadSequence.current) return;
+    const request = fetchDetail(silent);
+    loadFlight.current = request;
+    try { await request; } finally { if (loadFlight.current === request) loadFlight.current = null; }
+  }, [fetchDetail]);
+
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === 'visible') void load(true, true); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [load]);
 
   useEffect(() => () => { loadSequence.current += 1; }, []);
 
@@ -278,6 +339,9 @@ export function ExperimentDetail({
       && detail.progress.pending === 0
       && !detail.traceProgress?.pending
       && !detail.watchMode
+      && !refreshFailed
+      && !detail.cases.some(item => item.executionProgress && ['running', 'waiting', 'retry_wait'].includes(item.executionProgress.status))
+      && !detail.cases.some((item) => item.benchmark && benchmarkExecutionProgress(item.benchmark, Date.now()).active)
     )) return;
     let cancelled = false;
     let timer = 0;
@@ -285,19 +349,20 @@ export function ExperimentDetail({
       timer = window.setTimeout(async () => {
         await load(true);
         if (!cancelled) schedule();
-      }, 5000);
+      }, detail.scope ? 5000 : 2000);
     };
     schedule();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [detail, load]);
+  }, [detail, load, refreshFailed]);
 
   // 同一入口由服务端判断：Trace 未生成则重跑并绑定；否则重试失败的评估行。
   const retryCase = useCallback(async (caseId: string) => {
     if (!user || retryingCaseId || !detail) return;
     setRetryingCaseId(caseId);
+    loadSequence.current += 1;
     try {
       const res = await apiFetch(
         `/api/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(caseId)}/retry?user=${encodeURIComponent(user)}`,
@@ -305,7 +370,8 @@ export function ExperimentDetail({
       );
       const data = await res.json();
       if (!res.ok) throw new Error(responseError(data, '重试失败'));
-      await load(true);
+      loadSequence.current += 1;
+      await load(true, true);
     } catch (e: unknown) {
       setError(errorMessage(e, '重试失败'));
     } finally {
@@ -369,8 +435,6 @@ export function ExperimentDetail({
   const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || DEFAULT_BENCHMARK_CASE_COLUMNS;
   const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
-  const runtimeParameters = detail?.executionAgentOptions?.values;
-  const runtimeParameterFields = detail?.executionParameterDefinition?.parameters.filter(field => runtimeParameters?.[field.key] !== undefined) || [];
   const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
   const focusVisible = Boolean(!loading && focusCaseId && detail?.id === id && detail.casePage === casePage
     && detail.casePageSize === casePageSize && detail.cases.some(item => item.id === focusCaseId));
@@ -480,11 +544,12 @@ export function ExperimentDetail({
               }}>
                 {status.label}
               </span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
+              <span><span style={{ color: 'var(--foreground-muted)' }}>{detail.reusableConfig?.traceSource === 'import' ? '提交来源：' : '待评测 Agent：'}</span>{detail.agentName || '—'}</span>
               {detail.reusableConfig?.traceSource === 'generate' && detail.reusableConfig.executionTarget && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
+              {detail.reusableConfig?.executionTarget?.executionProfile && <span><span style={{ color: 'var(--foreground-muted)' }}>执行环境：</span>{detail.reusableConfig.executionTarget.executionProfile.key}{detail.reusableConfig.executionTarget.executionProfile.sourceRevision && ` · ${detail.reusableConfig.executionTarget.executionProfile.sourceRevision.slice(0, 12)}`} · 工具断网 · {detail.reusableConfig.executionTarget.executionProfile.resources.cpu} CPU / {detail.reusableConfig.executionTarget.executionProfile.resources.memoryMiB} MiB</span>}
               {Number.isSafeInteger(executionTimeoutSeconds) && executionTimeoutSeconds > 0 && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>Agent 单次执行上限：</span>{executionTimeoutSeconds} 秒</span>
               )}
@@ -517,19 +582,7 @@ export function ExperimentDetail({
                 </span>
               )}
               </div>
-              {runtimeParameterFields.length > 0 && (
-                <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 border-t border-[var(--border)] pt-3">
-                  <span className="font-semibold">{detail.executionParameterDefinition?.displayName} 运行参数</span>
-                  <dl className="flex flex-wrap gap-x-5 gap-y-2">
-                    {runtimeParameterFields.map((field) => (
-                      <div key={field.key} className="flex">
-                        <dt className="text-[var(--foreground-muted)]">{field.label}：</dt>
-                        <dd>{String(runtimeParameters![field.key])}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              )}
+              <RuntimeParameterSnapshot definition={detail.executionParameterDefinition} options={detail.executionAgentOptions} />
             </div>
 
             {detail.traceProgress && detail.traceProgress.failed > 0 && (
@@ -674,7 +727,8 @@ export function ExperimentDetail({
                             </th>
                           ))
                         : <th style={STICKY_TH}>输入</th>}
-                      <th style={STICKY_TH}>{detail.scope === 'benchmark' ? '参考契约' : '预期输出'}</th>
+                      <th style={STICKY_TH}>{detail.scope === 'benchmark' ? '执行进度' : '预期输出'}</th>
+                      {!detail.scope && <th style={STICKY_TH}>执行进度</th>}
                       <th style={STICKY_TH}>{detail.scope === 'benchmark' ? '提交物' : '实际输出'}</th>
                       {detail.scope === 'benchmark' && (
                         <th style={STICKY_TH}>{benchmarkMetricPresentation?.label || '主指标'}</th>
@@ -717,91 +771,43 @@ export function ExperimentDetail({
                           : <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>}
                         <td style={{ ...TD, maxWidth: 220 }}>
                           {detail.scope === 'benchmark'
-                            ? <span style={{ color: 'var(--foreground-secondary)', fontSize: 11 }}>
-                                {c.benchmark?.presentation?.referencePanel?.title
-                                  || `${c.benchmark?.displayName || 'Benchmark'} 评测契约`} · 内容隐藏
-                              </span>
-                            : c.referenceOutput
-                            ? truncate(c.referenceOutput, 60)
-                            : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}
+                            ? c.benchmark ? <BenchmarkExecutionProgress benchmark={c.benchmark} caseTitle={c.benchmark.externalCaseId || c.input || 'Case'} refreshFailed={refreshFailed} />
+                              : <span className="text-foreground-muted">进度暂不可用</span>
+                            : c.referenceOutput ? truncate(c.referenceOutput, 60)
+                              : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}
                         </td>
+                        {!detail.scope && <td style={{ ...TD, maxWidth: 240 }}>
+                          {c.executionProgress ? <CaseExecutionProgress progress={c.executionProgress} title={c.input || 'Case'} refreshingFailed={refreshFailed}
+                            retrying={retryingCaseId === c.id} evaluatorName={lookup.nameOf} onRefresh={() => { void load(true, true); }} />
+                            : <span className="text-foreground-muted">进度暂不可用</span>}
+                        </td>}
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
-                          {detail.scope === 'benchmark' && c.benchmark?.submissions.length ? (
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                <span title={c.benchmark.submissions.map((item) => item.name).join('\n')}>
-                                  {c.benchmark.submissions.length} 个提交物 · {c.benchmark.submissions.map((item) => item.name).join('、')}
-                                </span>
-                                {isBenchmarkEvaluationInProgress(c.benchmark) && (
-                                  <span style={{
-                                    display: 'inline-flex', alignItems: 'center', gap: 5,
-                                    padding: '2px 7px', borderRadius: 999,
-                                    border: '1px solid var(--primary-subtle-border)',
-                                    background: 'var(--primary-subtle)', color: 'var(--primary)',
-                                    fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
-                                  }}>
-                                    <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
-                                    {benchmarkEvaluationProgressLabel(c.benchmark)}
-                                  </span>
-                                )}
-                                {!c.benchmark.failure && isBenchmarkSubmissionAwaitingCompletion({
-                                  runStatus: c.benchmark.runStatus,
-                                  hasSubmission: true,
-                                }) && (
-                                  <span style={{ color: 'var(--warning)', fontSize: 10, fontWeight: 600 }}>
-                                    提交物已生成，等待执行器确认…
-                                  </span>
-                                )}
-                                {c.benchmark.failure && !isBenchmarkEvaluationInProgress(c.benchmark) && (
-                                  <span
-                                    title={c.benchmark.failure.message || undefined}
-                                    style={{ color: 'var(--error)', fontSize: 10, fontWeight: 600 }}
-                                  >
-                                    处理失败
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{
-                                marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                color: 'var(--foreground-muted)', fontSize: 10.5,
-                              }}>
-                                {c.benchmark.submissions
-                                  .map((item) => `${item.name} sha256:${item.sha256}`)
-                                  .join(' · ')}
-                              </div>
-                            </div>
-                          ) : c.traceStatus === 'failed' ? (
-                            detail.scope === 'benchmark' ? (
-                              <BenchmarkFailureNotice
-                                compact
-                                code={c.benchmark?.failure?.code}
-                                message={c.benchmark?.failure?.message || c.traceError}
-                              />
-                            ) : (
-                              <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
-                                {detail.scope === 'skill-workbench' && detail.preset === 'trigger'
-                                  ? truncate(c.actualOutput || `执行失败：${c.traceError || '未生成有效 Trace'}`, 100)
-                                  : <>Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}</>}
+                          {detail.scope === 'benchmark' ? (
+                            c.benchmark?.submissions.length ? <div>
+                              {c.benchmark.environmentFacts && <div style={{ fontSize: 10, color: 'var(--foreground-muted)', overflowWrap: 'anywhere', marginBottom: 6 }}>
+                                工具边界：{c.benchmark.environmentFacts.toolBoundary} · 控制器：{c.benchmark.environmentFacts.controllerBoundary} · 网络：{c.benchmark.environmentFacts.network} · 清理：{c.benchmark.cleanupStatus || '待确认'}<br />
+                                镜像：{c.benchmark.environmentFacts.imageId || '—'}
+                              </div>}
+                              <span title={c.benchmark.submissions.map((item) => item.name).join('\n')}>
+                                {c.benchmark.submissions.length} 个提交物 · {c.benchmark.submissions.map((item) => item.name).join('、')}
                               </span>
-                            )
+                              <div className="mt-1 truncate text-xs text-foreground-muted" title={c.benchmark.submissions.map((item) => `${item.name} sha256:${item.sha256}`).join('\n')}>
+                                {c.benchmark.submissions.map((item) => `${item.name} sha256:${item.sha256}`).join(' · ')}
+                              </div>
+                            </div> : <span className="text-foreground-muted">尚未生成</span>
+                          ) : !detail.scope ? (c.actualOutput ? truncate(c.actualOutput, 80) : <span className="text-foreground-muted">尚未生成</span>) : c.traceStatus === 'failed' ? (
+                            <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
+                              {detail.scope === 'skill-workbench' && detail.preset === 'trigger'
+                                ? truncate(c.actualOutput || `执行失败：${c.traceError || '未生成有效 Trace'}`, 100)
+                                : <>Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}</>}
+                            </span>
                           ) : c.traceStatus === 'pending' ? (
-                            <span style={{ color: detail.scope === 'benchmark' && c.benchmark?.runStatus === 'pending' ? 'var(--foreground-muted)' : 'var(--warning)', fontSize: 11 }}>
-                              {detail.scope === 'benchmark'
-                                ? benchmarkCaseProgressLabel({
-                                    runStatus: c.benchmark?.runStatus,
-                                    progressStage: c.benchmark?.progressStage,
-                                    workspaceProvider: c.benchmark?.workspaceProvider,
-                                  })
-                                : detail.scope === 'skill-workbench' && detail.preset === 'trigger' && !c.traceAttemptNo
-                                  ? '等待执行'
-                                  : `正在生成 Trace${c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…`}
+                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>
+                              {detail.scope === 'skill-workbench' && detail.preset === 'trigger' && !c.traceAttemptNo
+                                ? '等待执行' : `正在生成 Trace${c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…`}
                             </span>
                           ) : c.traceStatus === 'ready' && !c.actualOutput ? (
-                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>
-                              {detail.scope === 'benchmark'
-                                ? benchmarkCaseProgressLabel({ runStatus: c.benchmark?.runStatus })
-                                : 'Trace 已生成（无最终输出）'}
-                            </span>
+                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
                           ) : truncate(c.actualOutput, 80)}
                         </td>
                         {detail.scope === 'benchmark' && (
@@ -859,7 +865,7 @@ export function ExperimentDetail({
                                 ...c, evaluatorIds: detail.evaluatorIds, results: detail.results.filter((row) => row.caseId === c.id),
                               })}
                               onDeleted={(experimentDeleted) => experimentDeleted ? router.replace('/experiments') : load(true)} />}
-                            {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
+                            {c.benchmark?.submissionSource !== 'imported' && (c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
                                 disabled={!!retryingCaseId}
@@ -879,7 +885,7 @@ export function ExperimentDetail({
                     {pagedRows.length === 0 && (
                       <tr>
                         <td
-                          colSpan={detail.scope === 'benchmark' ? benchmarkCaseColumns.length + 7 : 7}
+                          colSpan={detail.scope === 'benchmark' ? benchmarkCaseColumns.length + 7 : detail.scope ? 7 : 8}
                           style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}
                         >
                           无有效 Case，暂无评测结果

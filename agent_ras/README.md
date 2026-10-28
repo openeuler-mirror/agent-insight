@@ -18,14 +18,14 @@ pyproject.toml
 
 ## 文档
 
-统一入口：**[`docs/agent-ras/`](../docs/agent-ras/README.md)**
+统一入口：**[`docs/zh/explanation/reliability/agent-ras/`](../docs/zh/explanation/reliability/agent-ras/README.md)**
 
 | 文档 | 说明 |
 |------|------|
-| [designs/architecture.md](../docs/agent-ras/designs/architecture.md) | 整体架构 |
-| [designs/modules/](../docs/agent-ras/designs/modules/) | 模块设计 |
-| [docs/agent-ras/README.md](../docs/agent-ras/README.md) | 文档入口与清单 |
-| [guides/getting-started.md](../docs/agent-ras/guides/getting-started.md) | 使用入门 |
+| [designs/architecture.md](../docs/zh/explanation/reliability/agent-ras/architecture.md) | 整体架构 |
+| [designs/modules/](../docs/zh/explanation/reliability/agent-ras/modules/) | 模块设计 |
+| [docs/zh/explanation/reliability/agent-ras/README.md](../docs/zh/explanation/reliability/agent-ras/README.md) | 文档入口与清单 |
+| [guides/getting-started.md](../docs/zh/tutorial/reliability/agent-ras/01-getting-started.md) | 使用入门 |
 
 ## 使用
 
@@ -37,7 +37,7 @@ pyproject.toml
 from platform_adapter.openjiuwen.factory import build_agent_ras_rail
 ```
 
-详见 [guides/platform-openjiuwen.md](../docs/agent-ras/guides/platform-openjiuwen.md)。
+详见 [guides/platform-openjiuwen.md](../docs/zh/how-to/reliability/agent-ras/platform-openjiuwen.md)。
 
 ### OpenCode
 
@@ -45,7 +45,7 @@ from platform_adapter.openjiuwen.factory import build_agent_ras_rail
 node scripts/install-ras.js
 ```
 
-或 `npx agent-insight install-ras`。详见 [guides/platform-opencode.md](../docs/agent-ras/guides/platform-opencode.md) 与 [platform_adapter/opencode/INSTALL.md](platform_adapter/opencode/INSTALL.md)。
+或 `npx agent-insight install-ras`。详见 [guides/platform-opencode.md](../docs/zh/how-to/reliability/agent-ras/platform-opencode.md) 与 [platform_adapter/opencode/INSTALL.md](platform_adapter/opencode/INSTALL.md)。
 
 ### xiaoO
 
@@ -53,7 +53,7 @@ node scripts/install-ras.js
 node scripts/install-ras.js   # 同时写入 xiaoo hooker + config.toml
 ```
 
-详见 [guides/platform-xiaoo.md](../docs/agent-ras/guides/platform-xiaoo.md)。
+详见 [guides/platform-xiaoo.md](../docs/zh/how-to/reliability/agent-ras/platform-xiaoo.md)。
 
 ## 测试
 

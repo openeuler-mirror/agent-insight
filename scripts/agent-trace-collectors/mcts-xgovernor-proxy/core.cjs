@@ -1,7 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
 const { createHmac } = require("node:crypto");
+const { failureCodes, summarizeFailures } = require(require("node:fs").existsSync(`${__dirname}/mcts-failure.cjs`)
+  ? "./mcts-failure.cjs" : "../../../services/executor/src/mcts-failure.cjs");
 
 const {
   atomicWriteJson,
@@ -161,7 +179,9 @@ class MctsProxyCore {
 
   observeSse(message) {
     const kind = text(object(message.event).kind);
-    const priority = kind === "turn_completed" || kind === "turn_failed";
+    const event = object(message.event);
+    const priority = kind === "turn_completed" || kind === "turn_failed"
+      || (kind === "tool_activity" && event.phase === "end" && event.status === "failed" && failureCodes(event.summary).length > 0);
     if (!priority && this.queuedObservations >= this.maxQueuedObservations) {
       this.droppedObservations += 1;
       return Promise.resolve(undefined);
@@ -320,9 +340,17 @@ class MctsProxyCore {
     const context = this.requests.get(response.id);
     if (!context) return;
     this.requests.delete(response.id);
-    if (Number(response.status) < 200 || Number(response.status) >= 300) return;
     const run = this.runs.get(context.runKey);
     if (!run) return;
+    if (Number(response.status) < 200 || Number(response.status) >= 300) {
+      if (["open", "load", "turns"].includes(context.operation)) {
+        const target = context.runtimeId ? this.ensureRuntime(run, context.runtimeId) : run;
+        target.failureCodes = failureCodes(response.body);
+        await this.persist();
+      }
+      return;
+    }
+    if (["open", "load", "turns"].includes(context.operation) && context.runtimeId) this.ensureRuntime(run, context.runtimeId).failureCodes = [];
     const body = object(response.body);
     if (context.operation === "checkpoint" && context.runtimeId && text(body.checkpoint_id)) {
       const runtime = this.ensureRuntime(run, context.runtimeId);
@@ -403,9 +431,15 @@ class MctsProxyCore {
         result: event.phase === "end" && summary.value !== undefined ? summary.value : previous.result,
         inputTruncated: event.phase === "begin" && summary.value !== undefined ? summary.truncated : previous.inputTruncated,
         resultTruncated: event.phase === "end" && summary.value !== undefined ? summary.truncated : previous.resultTruncated,
+        failureCodes: event.phase === "end" ? failureCodes(event.summary) : previous.failureCodes,
         endedAt: event.phase === "end" ? message.receivedAt || this.now() : previous.endedAt,
       };
       turn.tools.set(key, tool);
+      const pendingTools = new Map();
+      for (const item of [...turn.tools.values()].filter(item => item.endedAt).sort((a, b) => a.endedAt - b.endedAt)) {
+        pendingTools.set(item.name, item.status === "failed" ? item.failureCodes || [] : []);
+      }
+      turn.failureCodes = [...new Set([...pendingTools.values()].flat())];
       turn.degraded = turn.degraded || summary.truncated;
       if (event.phase === "end" || (event.phase === "begin" && tool.endedAt)) {
         await this.emitTool(run, runtime, turn, tool);
@@ -415,10 +449,13 @@ class MctsProxyCore {
       turn.error = "xGovernor requested unsupported interactive input";
     } else if (kind === "turn_completed" || kind === "turn_failed") {
       turn.terminal = true;
-      turn.status = kind === "turn_failed" ? "error" : event.outcome === "cancelled" ? "error" : "success";
+      turn.failureCodes = [...new Set([...(turn.failureCodes || []), ...failureCodes(event.error)])];
+      const failed = kind === "turn_failed" || ["cancelled", "failed", "error"].includes(event.outcome) || event.error != null;
+      turn.status = failed || turn.failureCodes.length ? "error" : "success";
       turn.usage = usageOf(event);
       turn.endedAt = message.receivedAt || this.now();
       if (kind === "turn_failed") turn.error = JSON.stringify(object(event.error)).slice(0, 2_000);
+      if (turn.failureCodes.length) turn.error = summarizeFailures(turn.failureCodes);
       await this.emitTurn(run, runtime, turn);
       await this.emitAgent(run, runtime);
     }
@@ -535,6 +572,7 @@ class MctsProxyCore {
         "mcts.capture.mode": "reverse-proxy",
         "mcts.capture.fidelity": turn.degraded || this.droppedObservations > 0 ? "degraded" : "xgovernor-sse",
         "mcts.turn.incomplete": turn.terminal !== true,
+        "mcts.failure.codes": turn.failureCodes,
         ...(this.captureReasoning && turn.reasoning ? { "mcts.reasoning": turn.reasoning } : {}),
       },
     });
@@ -590,6 +628,7 @@ class MctsProxyCore {
       collaborationId: run.collaborationId,
       startedAt: run.startedAt,
       updatedAt: run.updatedAt,
+      failureCodes: run.failureCodes,
       checkpoints: [...run.checkpoints.entries()],
       taskEdges: [...run.taskEdges.entries()],
       runtimes: [...run.runtimes.values()].map(runtime => ({
@@ -606,6 +645,7 @@ class MctsProxyCore {
         hasTurn: runtime.hasTurn,
         hasCheckpoint: runtime.hasCheckpoint,
         closed: runtime.closed,
+        failureCodes: runtime.failureCodes,
         turns: [...runtime.turns.values()].map(turn => ({
           key: turn.key,
           turnIdHash: turn.turnIdHash,
@@ -613,6 +653,8 @@ class MctsProxyCore {
           endedAt: turn.endedAt,
           terminal: turn.terminal,
           status: turn.status,
+          failureCodes: turn.failureCodes,
+          hasOutput: Boolean(turn.output),
           usage: turn.usage,
           tools: [...turn.tools.values()].map(tool => ({
             key: tool.key,

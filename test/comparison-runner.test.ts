@@ -1,10 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 对比 runner 测试：create/pair/detail 路径（T003）+ run/rescan 路径（T004）。
 // 覆盖：AC-004 三条件判定 / AC-021 不可比未配对不进分母 / AC-022 100 case 配对 ≤100ms /
 // AC-009 复用 executeResultRow / AC-017 增量补评 / AC-018 单侧失败容忍 / AC-023 得分偏差=0 /
 // 空组校验 / A/B 取值相同校验 / createComparisonExperiment 创建+groups / getComparisonDetail 聚合。
-// 落仓库 data/witty_insight.db（同 experiment-engine.test.ts：钉住 DATABASE_URL）。
-import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+import { createIsolatedDatabase } from './helpers/isolated-database';
+const database = createIsolatedDatabase();
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -498,3 +513,5 @@ test('rescanComparison: 运行中调用 → 抛 409 互斥', async (t) => {
   );
   await start!.completion!;
 });
+
+test.after(async () => { await prisma.$disconnect(); database.dispose(); });

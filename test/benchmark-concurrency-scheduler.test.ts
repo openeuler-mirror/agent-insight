@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import fs from 'node:fs'
@@ -10,7 +26,43 @@ const { prisma } = require('@/lib/storage/prisma') as typeof import('@/lib/stora
 const scheduler = require('@/lib/benchmark/evaluation-scheduler') as typeof import('@/lib/benchmark/evaluation-scheduler')
 test.after(async () => { await prisma.$disconnect(); database.dispose() })
 
-test('concurrent dispatchers respect service capacity and per-user quota across experiments', async () => {
+test('asset health readiness keeps preparation retryable and installation failure terminal', async () => {
+  let postCount = 0
+  scheduler.setEvaluatorTargetResolverForTest({ resolve: (evaluatorKey) => ({ targetKey: 'assets', baseUrl: 'http://assets.test', evaluatorKey }) })
+  let assetCode = 'EVALUATOR_ASSETS_DOWNLOADING'
+  scheduler.setBenchmarkEvaluationDispatchFetchForTest(async (input) => {
+    if (!String(input).endsWith('/health')) { postCount++; throw new Error('must not dispatch before assets ready') }
+    return new Response(JSON.stringify({ status: 'healthy', busy: false, evaluators: [{ key: 'zsoft-l1', ready: false,
+      bindings: [{ benchmarkKey: 'zsoft-l1', ready: false, reason: 'asset detail from controller', runtimeFacts: { assetErrorCode: assetCode } }] }] }))
+  })
+  const experiment = await prisma.experiment.create({ data: { user: 'assets', name: 'asset-health', scope: 'benchmark', status: 'running', cases: { create: { input: 'case' } } }, include: { cases: true } })
+  try {
+    const run = await prisma.benchmarkCaseRun.create({ data: { id: 'asset-health-run', experimentId: experiment.id, experimentCaseId: experiment.cases[0].id,
+      ordinal: 0, adapterKey: 'zsoft-l1', clientId: 'test-client', status: 'submitted' } })
+    const request = JSON.stringify({ runId: 'asset-health-evaluation', requestDigest: 'asset-digest' })
+    const evaluation = await prisma.benchmarkEvaluation.create({ data: { id: 'asset-health-evaluation', caseRunId: run.id, adapterKey: 'zsoft-l1', evaluatorKey: 'zsoft-l1',
+      requestJson: request, requestDigest: 'asset-digest', callbackBaseUrl: 'http://platform.test', timeoutSeconds: 60,
+      dispatch: { create: { requestJson: request, requestDigest: 'asset-digest' } } } })
+    await scheduler.dispatchBenchmarkEvaluation(evaluation.id)
+    let state = await prisma.benchmarkEvaluation.findUniqueOrThrow({ where: { id: evaluation.id } })
+    assert.equal(state.status, 'queued')
+    assert.equal(state.failureCode, 'EVALUATOR_ASSETS_DOWNLOADING')
+    assert.equal(state.failureMessage, 'asset detail from controller')
+    assetCode = 'EVALUATOR_ASSETS_DOWNLOAD_FAILED'
+    await prisma.benchmarkEvaluationDispatchOutbox.update({ where: { evaluationId: evaluation.id }, data: { nextAttemptAt: new Date(0) } })
+    await scheduler.dispatchBenchmarkEvaluation(evaluation.id)
+    state = await prisma.benchmarkEvaluation.findUniqueOrThrow({ where: { id: evaluation.id } })
+    assert.equal(state.status, 'dispatch_failed')
+    assert.equal(state.failureCode, 'EVALUATOR_ASSETS_DOWNLOAD_FAILED')
+    assert.equal(postCount, 0)
+  } finally {
+    await prisma.experiment.delete({ where: { id: experiment.id } })
+    scheduler.setBenchmarkEvaluationDispatchFetchForTest()
+    scheduler.setEvaluatorTargetResolverForTest()
+  }
+})
+
+test('initial evaluations and reevaluations share service capacity and per-user quota across experiments', async () => {
   const posted: string[] = []
   const previousConfigDir = process.env.AGENT_INSIGHT_CONFIG_DIR
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-quota-config-'))
@@ -31,7 +83,7 @@ test('concurrent dispatchers respect service capacity and per-user quota across 
       const run = await prisma.benchmarkCaseRun.create({ data: { id: `quota-run-${i}`, experimentId: experiment.id, experimentCaseId: experiment.cases[0].id, ordinal: 0, adapterKey: 'swe-bench', clientId: 'test-client', status: 'submitted' } })
       const id = `quota-evaluation-${i}`
       const request = JSON.stringify({ runId: id, requestDigest: `digest-${i}` })
-      await prisma.benchmarkEvaluation.create({ data: { id, caseRunId: run.id, adapterKey: 'swe-bench', evaluatorKey: 'swe-bench', requestJson: request, requestDigest: `digest-${i}`, callbackBaseUrl: 'http://platform.test', timeoutSeconds: 60,
+      await prisma.benchmarkEvaluation.create({ data: { id, caseRunId: run.id, attemptNo: i % 2 + 1, adapterKey: 'swe-bench', evaluatorKey: 'swe-bench', requestJson: request, requestDigest: `digest-${i}`, callbackBaseUrl: 'http://platform.test', timeoutSeconds: 60,
         dispatch: { create: { requestJson: request, requestDigest: `digest-${i}` } } } })
       ids.push(id)
     }

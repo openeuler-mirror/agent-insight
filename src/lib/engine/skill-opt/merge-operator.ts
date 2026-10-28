@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 优化点归并算子（merge operator）。
  *
@@ -10,7 +26,7 @@
  * SkillIssue 是不可变台账，算子只读不写；plan 的生命周期 = 一轮会话 + 一个 baseVersion。
  * 规模：单 skill 优化点可达 240 条 → 分批（B≈30）+ 树归并（⌈log_B N⌉ 层）。
  *
- * 设计文档：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
+ * 设计文档：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
  */
 
 import { OpenAI } from 'openai';

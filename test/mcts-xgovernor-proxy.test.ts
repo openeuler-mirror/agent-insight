@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -247,6 +263,7 @@ test('MCTS observer installer creates an isolated 0600 config and managed wrappe
       homeDir: temporaryHome,
       sourceDir: path.resolve('scripts/agent-trace-collectors/mcts-xgovernor-proxy'),
       skipVersionCheck: true,
+      fetchImpl: async () => new Response(JSON.stringify({ status: 'accepted', received: 0 })),
     });
     assert.equal((await fs.stat(result.configPath)).mode & 0o777, 0o600);
     assert.match(await fs.readFile(result.commandPath, 'utf8'), /managed-by-agent-insight-mcts-xgovernor-proxy/);

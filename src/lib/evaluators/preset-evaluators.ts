@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 预置评估器元数据目录：定义评估器列表页和实验选择步骤使用的稳定 ID、名称、摘要、
  * 评估目标、适用场景、分数范围及运行实现提示。
@@ -562,6 +578,38 @@ export const presetEvaluators: EvaluatorCard[] = [
     mappedMetrics: ['显式需求完成', '隐含约束满足', '信息充分性'],
     status: 'ready',
     runtimeNote: 'task-completion-preset-evaluators.ts',
+  },
+  {
+    id: 'preset-similarity-text',
+    name: '文本相似度',
+    description: '调用 LLM Judge 从语义层面衡量生成文本与参考文本的相似度；合格阈值可在创建实验时按实验配置（默认 80）。',
+    evaluatorType: 'LLM',
+    source: 'preset',
+    targetTypes: ['结果'],
+    objectives: ['内容质量', '任务完成'],
+    scenarios: ['文本相似度评估', '答案一致性评估'],
+    runMode: 'LLM Judge (直连)',
+    scoreRange: '0-100',
+    popularity: 75,
+    mappedMetrics: ['语义相似度', '阈值判定'],
+    status: 'ready',
+    runtimeNote: 'similarity-text-evaluator.ts',
+  },
+  {
+    id: 'preset-similarity-answer-match',
+    name: '客观答案匹配',
+    description: '从关键数值、专有名词、核心结论、必要条件四个角度，判断客观问答中 Agent 回答是否与标准答案核心内容一致。',
+    evaluatorType: 'LLM',
+    source: 'preset',
+    targetTypes: ['结果'],
+    objectives: ['任务完成', '内容质量'],
+    scenarios: ['有标准答案的结果验收', '客观问答评估'],
+    runMode: 'LLM Judge (混合：代码 + 离散 rubric)',
+    scoreRange: '0-100',
+    popularity: 74,
+    mappedMetrics: ['信息点覆盖', '数值匹配', '同义判同'],
+    status: 'ready',
+    runtimeNote: 'similarity-answer-match-evaluator.ts',
   },
 ];
 

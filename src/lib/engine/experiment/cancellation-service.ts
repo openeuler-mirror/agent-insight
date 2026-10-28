@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { randomUUID } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
 import { createCommand, markSent } from '@/lib/reliability/command-bus';
@@ -63,7 +79,7 @@ export async function deleteExperimentExecution(user: string, experimentId: stri
       ...attempts.filter((item: any) => item.commandId).map((item: any) => ({ kind: 'ordinary' as const, runId: item.commandId, clientId: item.workerId })),
     ];
     for (const run of runs) {
-      if (!terminalRun.includes(run.status) && run.status !== 'pending') targets.push({ kind: 'benchmark', runId: run.id, clientId: run.clientId });
+      if (run.clientId && !terminalRun.includes(run.status) && run.status !== 'pending') targets.push({ kind: 'benchmark', runId: run.id, clientId: run.clientId });
       for (const evaluation of run.evaluations) {
         if (!terminalEvaluation.includes(evaluation.status)) targets.push({ kind: 'evaluation', runId: evaluation.id,
           baseUrl: evaluation.evaluatorBaseUrl || undefined, requestDigest: evaluation.requestDigest });

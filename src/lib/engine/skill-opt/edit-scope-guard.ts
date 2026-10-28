@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 优化器编辑范围硬约束（结构性，不靠 prompt）。
  *
@@ -7,7 +23,7 @@
  *   - 禁删基线文件：被删就用基线快照还原到 workspace；
  *   - 改动行数预算：超 maxChangedLines 标 overBudget（不自动回滚——交 held-out gate / 用户裁决）。
  *
- * 设计：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md（优化回路改进）
+ * 设计：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md（优化回路改进）
  * 独立模块（不依赖 opencode SDK），便于单测。
  */
 

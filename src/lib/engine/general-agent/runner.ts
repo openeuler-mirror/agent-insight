@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { withSessionCancellation } from './session-cancellation';
 import { createAgentRunError, sanitizeAgentDiagnostic, type AgentRunError } from '../../../../scripts/agent-run-diagnostics.cjs';
 import { randomUUID } from 'node:crypto';
 import { Agent, setGlobalDispatcher } from 'undici';
@@ -178,6 +195,8 @@ export interface RunGeneralAgentInput {
   systemAgentName?: string;
   handlers?: ChatHandlers;
   chatOptions?: ChatOptions;
+  /** 用户取消须等待服务端 session abort 确认，不能只断开流。 */
+  cancelSignal?: AbortSignal;
   timeoutMs?: number;
   /** 连续多久没有非心跳事件就中止底层 prompt；0 或未传表示不启用。 */
   progressTimeoutMs?: number;
@@ -266,6 +285,9 @@ export async function runGeneralAgent(
   cancellation?.throwIfAborted();
   if (cancellation) input = { ...input, chatOptions: { ...input.chatOptions,
     signal: input.chatOptions?.signal ? AbortSignal.any([input.chatOptions.signal, cancellation]) : cancellation } };
+  input.cancelSignal?.throwIfAborted();
+  if (input.cancelSignal) input = { ...input, chatOptions: { ...input.chatOptions,
+    signal: input.chatOptions?.signal ? AbortSignal.any([input.chatOptions.signal, input.cancelSignal]) : input.cancelSignal } };
   const user = String(input.user || '').trim();
   if (!user) throw new Error('user is required');
   // 把 query 里的 `~/` 展开成执行机绝对 HOME, 再交给 agent —— `~` 是 shell 语法糖, agent 用
@@ -523,7 +545,8 @@ async function runGeneralAgentWithClient(
   resetProgressWatchdog();
   const result = await (async () => {
     try {
-      const response = await client.chat(sessionId, payload, mergedHandlers, chatOptions);
+      const response = await withSessionCancellation(input.cancelSignal, () => client.abortSession(sessionId),
+        () => client.chat(sessionId, payload, mergedHandlers, chatOptions));
       if (progressTimedOut) throw createAgentRunError('AGENT_TIMEOUT', `general agent made no progress for ${progressTimeoutMs}ms`);
       return response;
     } catch (error) {

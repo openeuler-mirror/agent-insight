@@ -1,7 +1,22 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
-import { Button } from '@/components/ui/button';
-import { getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
+import { AgentRelationCard } from './AgentRelationCard';
 import type { ParentAgentReference } from '@/lib/trace/parent-agent';
 
 export function ParentAgentCard({ parent, onNavigate, locale }: {
@@ -9,7 +24,7 @@ export function ParentAgentCard({ parent, onNavigate, locale }: {
     onNavigate?: (taskId: string) => void;
     locale: string;
 }) {
-    if (!parent) return null;
+
     const zh = locale === 'zh';
     const messages = {
         pending: zh ? '等待父 Trace' : 'Waiting for parent Trace',
@@ -19,18 +34,17 @@ export function ParentAgentCard({ parent, onNavigate, locale }: {
     return (
         <section aria-label={zh ? '父 Agent' : 'Parent Agent'}>
             <h4 className="mb-2 text-xs font-semibold text-foreground-muted">{zh ? '父 Agent' : 'Parent Agent'}</h4>
-            <div className="flex items-center gap-2 rounded-md border border-border bg-background-secondary p-2">
-                {parent.state === 'resolved' ? <>
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{getAgentNodeDisplayLabel(parent.agentName)}</span>
-                    {parent.framework && <span className="text-xs text-foreground-muted">{parent.framework}</span>}
-                    {onNavigate && <Button type="button" variant="outline" size="sm"
-                        className="h-6 border-primary px-2 text-xs text-primary"
-                        title={zh ? '打开父 Agent 的 Trace' : 'Open parent Agent Trace'}
-                        onClick={() => onNavigate(parent.taskId)}>
-                        Trace
-                    </Button>}
-                </> : <span role="status" className="text-sm text-foreground-muted">{messages[parent.state]}</span>}
-            </div>
+            {parent?.state === 'resolved' ? <AgentRelationCard
+                agentName={parent.agentName}
+                stats={parent.stats}
+                reported={parent.reported}
+                locale={locale}
+                durationBasisMs={parent.stats?.durationMs}
+                onNavigate={onNavigate ? () => onNavigate(parent.taskId) : undefined}
+                label={zh ? '打开父 Agent 的 Trace' : 'Open parent Agent Trace'}
+            /> : <div className="rounded-md border border-border bg-background-secondary p-2">
+                <span role="status" className="text-sm text-foreground-muted">{parent ? messages[parent.state] : zh ? '无父 Trace' : 'No parent Trace'}</span>
+            </div>}
         </section>
     );
 }

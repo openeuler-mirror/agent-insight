@@ -1,8 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import type {
   BenchmarkArtifactPresentation,
   BenchmarkPresentationColumn,
   BenchmarkPresentationFormat,
 } from '../../../packages/benchmark-protocol/src/contracts';
+import { isEvidencePath } from '../../../packages/benchmark-protocol/artifact-path.cjs';
 
 export interface BenchmarkPresentationRecord {
   input?: unknown;
@@ -189,4 +206,34 @@ export function canPreviewBenchmarkArtifact(artifact: Pick<BenchmarkArtifactLike
     || artifact.name.endsWith('.json')
     || artifact.name.endsWith('.diff')
     || artifact.name.endsWith('.patch');
+}
+
+export type BenchmarkArtifactTreeNode<T extends BenchmarkArtifactLike = BenchmarkArtifactLike> =
+  | { name: string; path: string; item: PresentedBenchmarkArtifact<T>; children?: never }
+  | { name: string; path: string; children: BenchmarkArtifactTreeNode<T>[]; item?: never };
+
+export function benchmarkArtifactTree<T extends BenchmarkArtifactLike>(
+  items: readonly PresentedBenchmarkArtifact<T>[],
+): BenchmarkArtifactTreeNode<T>[] {
+  const roots: BenchmarkArtifactTreeNode<T>[] = [];
+  const directories = new Map<string, BenchmarkArtifactTreeNode<T>[]>();
+  directories.set('', roots);
+  for (const item of items) {
+    const segments = isEvidencePath(item.artifact.name) ? item.artifact.name.split('/') : [item.artifact.name];
+    let parent = '';
+    for (let index = 0; index < segments.length; index += 1) {
+      const name = segments[index];
+      const path = parent ? `${parent}/${name}` : name;
+      const siblings = directories.get(parent)!;
+      if (index === segments.length - 1) {
+        siblings.push({ name, path, item });
+      } else if (!directories.has(path)) {
+        const children: BenchmarkArtifactTreeNode<T>[] = [];
+        siblings.push({ name, path, children });
+        directories.set(path, children);
+      }
+      parent = path;
+    }
+  }
+  return roots;
 }

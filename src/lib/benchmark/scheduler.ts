@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import {
   ackTimeoutMs,
@@ -10,10 +26,11 @@ import { dispatchCommand } from '@/lib/reliability/control-dispatch'
 import { prisma } from '@/lib/storage/prisma'
 
 import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-config'
-import { prepareBenchmarkEvaluation } from './evaluation-preparation-service'
+import { prepareBenchmarkEvaluation, waitForBenchmarkReevaluationsForTest } from './evaluation-preparation-service'
 import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
+import { waitForBenchmarkEvaluationContinuationsForTest } from './evaluation-continuation-service'
 import { prepareNextBenchmarkCaseRun } from './orchestrator'
-import { retireImagePreparationWindows, refreshBenchmarkImagePreparation } from './image-preparation'
+import { retireImagePreparationWindows, refreshBenchmarkImagePreparation, waitForBenchmarkImagePreparation } from './image-preparation'
 
 type BenchmarkCommandOutcome = {
   commandId: string
@@ -41,6 +58,34 @@ const BENCHMARK_POST_AGENT_STALE_MS = 5 * 60_000
 const BENCHMARK_RUN_WATCHDOG_INTERVAL_MS = 30_000
 let benchmarkRunWatchdogTimer: ReturnType<typeof setInterval> | null = null
 let benchmarkRunWatchdogSweep: Promise<number> | null = null
+const dispatchWork = new Set<Promise<void>>()
+const dispatchTimers = new Set<ReturnType<typeof setTimeout>>()
+let stoppingBackgroundWork: Promise<void> | null = null
+
+function trackDispatchWork(work: Promise<void>): Promise<void> {
+  dispatchWork.add(work)
+  void work.then(() => dispatchWork.delete(work), () => dispatchWork.delete(work))
+  return work
+}
+
+export function stopBenchmarkBackgroundWorkForTest(): Promise<void> {
+  if (stoppingBackgroundWork) return stoppingBackgroundWork
+  if (benchmarkRunWatchdogTimer) clearInterval(benchmarkRunWatchdogTimer)
+  benchmarkRunWatchdogTimer = null
+  for (const timer of dispatchTimers) clearTimeout(timer)
+  dispatchTimers.clear()
+  stoppingBackgroundWork = (async () => {
+    await benchmarkRunWatchdogSweep
+    await waitForBenchmarkReevaluationsForTest()
+    // A rejected dispatch can start the next Case before its own promise settles.
+    do {
+      while (dispatchWork.size) await Promise.allSettled([...dispatchWork])
+      await waitForBenchmarkEvaluationContinuationsForTest()
+    } while (dispatchWork.size)
+    await waitForBenchmarkImagePreparation()
+  })().finally(() => { stoppingBackgroundWork = null })
+  return stoppingBackgroundWork
+}
 
 function parseJsonRecord(value: string | null): Record<string, unknown> {
   try {
@@ -94,9 +139,14 @@ export async function reapStaleBenchmarkRuns(options: {
         : BENCHMARK_POST_AGENT_STALE_MS
     const staleBefore = new Date(now.getTime() - staleMs)
     const lastActivityAt = run.lastProgressAt || run.startedAt || run.updatedAt
-    if (lastActivityAt > staleBefore) continue
+    const detail = parseJsonRecord(JSON.stringify(progress.progress || {}))
+    const deadline = Date.parse(String(detail.stageDeadlineAt || ''))
+    const request = parseJsonRecord(run.dispatch?.requestJson)
+    const hasEnvironment = Boolean((request.task as { execution?: unknown } | undefined)?.execution)
+    const expired = hasEnvironment && Number.isFinite(deadline) && now.getTime() > deadline + graceMs
+    if (!expired && lastActivityAt > staleBefore) continue
 
-    const message = isPreparing
+    const message = expired ? '执行阶段超过冻结的绝对期限，平台已结束任务' : isPreparing
       ? 'Git 工作区准备超过 420 秒未完成，平台已自动结束任务'
       : run.status === 'running_agent'
         ? `Agent 执行超过 ${timeoutSeconds} 秒且宽限期内未上报进度，平台已自动结束任务`
@@ -105,11 +155,11 @@ export async function reapStaleBenchmarkRuns(options: {
       where: {
         id: run.id,
         status: run.status,
-        OR: [
+        ...(expired ? { progressJson: run.progressJson } : { OR: [
           { lastProgressAt: { lte: staleBefore } },
           { lastProgressAt: null, startedAt: { lte: staleBefore } },
           { lastProgressAt: null, startedAt: null, updatedAt: { lte: staleBefore } },
-        ],
+        ] }),
       },
       data: {
         status: 'execution_failed',
@@ -130,7 +180,7 @@ export async function reapStaleBenchmarkRuns(options: {
 export function startBenchmarkRunWatchdog(
   intervalMs = BENCHMARK_RUN_WATCHDOG_INTERVAL_MS,
 ): void {
-  if (benchmarkRunWatchdogTimer) return
+  if (benchmarkRunWatchdogTimer || stoppingBackgroundWork) return
   const tick = () => {
     if (benchmarkRunWatchdogSweep) return
     benchmarkRunWatchdogSweep = reapStaleBenchmarkRuns()
@@ -139,7 +189,7 @@ export function startBenchmarkRunWatchdog(
         return count
       })
       .then(async (count) => {
-        await refreshBenchmarkImagePreparation()
+        await refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool]', error))
         await resumeBenchmarkDispatchesAtStartup()
 
         await retireImagePreparationWindows(async (experimentId) => {
@@ -166,11 +216,12 @@ async function dispatchThroughClientControl(input: {
   request: Record<string, unknown>
 }): Promise<BenchmarkCommandOutcome> {
   const timeoutSeconds = Math.max(1, Number(input.request.timeoutSeconds) || 600)
+  const profile = (input.request.task as { execution?: { profile?: { timeouts?: { prepareSeconds?: number; cleanupSeconds?: number } } } } | undefined)?.execution?.profile
   const frame = await createCommand({
     user: input.user,
     clientId: input.clientId,
     action: 'RUN_BENCHMARK_CASE',
-    ttlMs: (timeoutSeconds + 90) * 1_000,
+    ttlMs: (timeoutSeconds + (profile?.timeouts?.prepareSeconds || 0) + (profile?.timeouts?.cleanupSeconds || 0) + 90) * 1_000,
     payload: { request: input.request },
   })
   const dispatched = await dispatchCommand(input.clientId, frame)
@@ -225,11 +276,14 @@ export function setBenchmarkCommandDispatcherForTest(
 }
 
 function scheduleBenchmarkDispatch(runId: string, delayMs: number): void {
+  if (stoppingBackgroundWork) return
   const timer = setTimeout(() => {
+    dispatchTimers.delete(timer)
     void dispatchBenchmarkRun(runId).catch((error) => {
       console.error('[benchmark/scheduler] delayed dispatch failed', error)
     })
   }, delayMs)
+  dispatchTimers.add(timer)
   timer.unref?.()
 }
 
@@ -272,7 +326,11 @@ async function markDispatchFailed(
   })
 }
 
-export async function dispatchBenchmarkRun(runId: string): Promise<void> {
+export function dispatchBenchmarkRun(runId: string): Promise<void> {
+  return trackDispatchWork(dispatchBenchmarkRunInternal(runId))
+}
+
+async function dispatchBenchmarkRunInternal(runId: string): Promise<void> {
   const targetRun = await prisma.benchmarkCaseRun.findUnique({ where: { id: runId } });
   if (!targetRun || targetRun.status === 'cancelled') return;
   const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
@@ -303,6 +361,7 @@ export async function dispatchBenchmarkRun(runId: string): Promise<void> {
     if (
       request.runId !== runId
       || request.requestDigest !== outbox.requestDigest
+      || !outbox.run.clientId
     ) {
       await markDispatchFailed(runId, {
         code: 'DISPATCH_REQUEST_INVALID',
@@ -468,7 +527,7 @@ export async function startBenchmarkExperiment(input: {
     select: { id: true, status: true },
   })
   const completions: Promise<void>[] = active.map((run: { id: string; status: string }) => run.status === 'submitted'
-    ? resumeSubmittedBenchmarkEvaluation(run.id) : dispatchBenchmarkRun(run.id))
+    ? trackDispatchWork(resumeSubmittedBenchmarkEvaluation(run.id)) : dispatchBenchmarkRun(run.id))
   let firstRunId = active[0]?.id || null
   for (;;) {
     let prepared
@@ -509,7 +568,7 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
     where: {
       schedulerStatus: 'running',
       callbackOrigin: { not: null },
-      experiment: { status: 'running', scope: 'benchmark' },
+      experiment: { status: 'running', scope: 'benchmark', deletedAt: null },
     },
     orderBy: { updatedAt: 'asc' },
     take: Math.min(100, Math.max(1, limit)),
@@ -517,15 +576,19 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
   let resumed = 0
   const executorCallbackBaseUrl = defaultEvaluatorRuntimeConfigProvider.snapshot().executorCallbackBaseUrl
   for (const binding of bindings) {
-    const { settleBenchmarkExperimentStatus } = await import('./experiment-lifecycle')
-    await settleBenchmarkExperimentStatus(binding.experimentId)
-    const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
-    if (!experiment || !binding.callbackOrigin) continue
-    const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
-      publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
-      resumeOnly: true })
-    if (result?.runId) resumed++
-    void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
+    try {
+      const { settleBenchmarkExperimentStatus } = await import('./experiment-lifecycle')
+      await settleBenchmarkExperimentStatus(binding.experimentId)
+      const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
+      if (!experiment || !binding.callbackOrigin) continue
+      const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
+        publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
+        resumeOnly: true })
+      if (result?.runId) resumed++
+      void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
+    } catch (error) {
+      console.error(`[benchmark/scheduler] recovery failed for ${binding.experimentId}`, error)
+    }
   }
   return resumed
 }

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 import { useSearchParams } from 'next/navigation';
 import { casePagination, experimentDetailHref } from '@/lib/engine/experiment/case-navigation';
@@ -18,6 +34,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { BenchmarkArtifactActions, type BenchmarkArtifactRef } from '@/components/eval/BenchmarkArtifactActions';
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
+import { benchmarkExecutionProgress, type BenchmarkProgressDetails } from '@/lib/benchmark/execution-progress';
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -39,6 +56,7 @@ import {
 } from '@/lib/benchmark/presentation';
 
 interface ResultRow {
+  evaluationTraceId?: string | null;
   id: string;
   caseId: string;
   evaluatorId: string;
@@ -75,6 +93,7 @@ interface ExperimentDetail {
     traceAttemptStatus?: string | null;
     caseValues?: Record<string, unknown> | null;
     benchmark?: {
+      submissionSource?: string;
       adapterKey: string;
       displayName: string;
       presentation: BenchmarkPresentation | null;
@@ -85,7 +104,10 @@ interface ExperimentDetail {
       submissions: Array<BenchmarkArtifactRef & { sha256: string }>;
       evidenceArtifacts: Array<BenchmarkArtifactRef & { sha256: string }>;
       runStatus: string;
+      progressStage: string | null;
+      progressDetails?: BenchmarkProgressDetails;
       evaluationStatus: string | null;
+      evaluationWaitCode?: string | null;
       failure?: { code: string; message: string | null } | null;
     };
   }>;
@@ -568,6 +590,13 @@ export function ExperimentCaseDetail({
 
   const inputSummary = (caseRow?.input || '').replace(/\s+/g, ' ').trim();
   const isBenchmark = detail?.scope === 'benchmark' && Boolean(caseRow?.benchmark);
+  // 这里只读取状态和失败原因，不计算实时耗时。
+  const benchmarkProgress = isBenchmark && caseRow?.benchmark
+    ? benchmarkExecutionProgress(caseRow.benchmark, 0) : null;
+  const benchmarkEvaluationFailure = benchmarkProgress?.failed && Boolean(
+    ['evaluation_failed', 'submission_invalid'].includes(caseRow?.benchmark?.runStatus || '')
+    || ['failed', 'normalization_failed', 'submission_invalid'].includes(caseRow?.benchmark?.evaluationStatus || ''),
+  );
   const benchmarkReferenceText = (() => {
     const benchmark = caseRow?.benchmark;
     if (!benchmark) return '';
@@ -636,7 +665,7 @@ export function ExperimentCaseDetail({
                 {inputSummary.length > 60 ? `${inputSummary.slice(0, 60)}…` : inputSummary || '—'}
               </span>
               <span style={{ flex: 1 }} />
-              {isBenchmark && (
+              {isBenchmark && caseRow?.benchmark?.submissionSource !== 'imported' && (
                 <button
                   type="button"
                   disabled={Boolean(retryingId)}
@@ -651,15 +680,23 @@ export function ExperimentCaseDetail({
                   href={`/trace?taskId=${encodeURIComponent(caseRow.taskId)}`}
                   style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}
                 >
-                  前往链路观测 →
+                  查看执行链路 →
                 </Link>
               )}
             </div>
 
-            {isBenchmark && caseRow.traceStatus === 'failed' && (
+            {(isBenchmark ? benchmarkProgress?.failed : caseRow.traceStatus === 'failed') && (
               <BenchmarkFailureNotice
-                code={caseRow.benchmark?.failure?.code}
-                message={caseRow.benchmark?.failure?.message || caseRow.traceError}
+                code={isBenchmark
+                  ? benchmarkEvaluationFailure
+                    ? caseRow.benchmark?.evaluationWaitCode || caseRow.benchmark?.failure?.code || 'EVALUATION_FAILED'
+                    : caseRow.benchmark?.failure?.code
+                  : undefined}
+                label={benchmarkEvaluationFailure
+                  ? caseRow.benchmark?.runStatus === 'submission_invalid' || caseRow.benchmark?.evaluationStatus === 'submission_invalid'
+                    ? '提交物无效' : 'Benchmark 评测失败'
+                  : undefined}
+                message={isBenchmark ? benchmarkProgress?.failureMessage : caseRow.traceError || '未收到详细失败原因'}
               />
             )}
 
@@ -851,6 +888,11 @@ export function ExperimentCaseDetail({
                             <span style={{ fontSize: 12.5, fontWeight: 600 }}>{lookup.nameOf(r.evaluatorId)}</span>
                             {tags.map((t) => <TagChip key={t} text={t} />)}
                             <span style={{ flex: 1 }} />
+                            {r.evaluationTraceId && (
+                              <Link href={`/trace?taskId=${encodeURIComponent(r.evaluationTraceId)}`} onClick={event => event.stopPropagation()} className="text-xs text-primary hover:underline">
+                                查看评估链路 ↗
+                              </Link>
+                            )}
                             {failed ? (
                               <span style={{
                                 fontSize: 11, padding: '1px 8px', borderRadius: 8, fontWeight: 500,

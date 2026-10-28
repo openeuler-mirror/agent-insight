@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
 import { platformBenchmarkConfig } from './project-config'
 import type {
@@ -111,12 +127,15 @@ export async function prepareNextBenchmarkCaseRun(input: {
       'BENCHMARK_RUN_CONFIG_INVALID',
     )
     const agentOptions = normalizeBenchmarkAgentOptions(runConfig.agentOptions)
-    if (agentOptions) {
+    if (agentOptions || runConfig.executionProfile) {
       const client = await prisma.reliabilityClient.findFirst({ where: {
         clientId: run.clientId, user: run.experiment.user, unboundAt: null,
       } })
       if (!client) throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
-      assertBenchmarkExecutionTarget(client, adapter.manifest, { ...runConfig, agentOptions })
+      const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { ...runConfig, agentOptions })
+      if (target.executionProfile?.definitionDigest !== runConfig.executionProfile?.definitionDigest) {
+        throw new BenchmarkProtocolError('EXECUTION_PROFILE_CHANGED', '执行环境已变化，请重新创建实验')
+      }
     }
     const task = adapter.buildAgentTask({
       publicPayload: split.publicPayload,

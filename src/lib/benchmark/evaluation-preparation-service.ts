@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -17,6 +33,13 @@ import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
 import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
+import { refreshBenchmarkImagePreparation } from './image-preparation'
+
+const backgroundReevaluations = new Set<Promise<void>>()
+
+export async function waitForBenchmarkReevaluationsForTest(): Promise<void> {
+  while (backgroundReevaluations.size) await Promise.allSettled([...backgroundReevaluations])
+}
 
 function parseJson<T>(value: string | null, code: string): T {
   if (!value) throw new BenchmarkProtocolError(code, '评测所需的冻结数据不存在', 409)
@@ -41,6 +64,81 @@ function storedArtifactPath(storagePath: string): string {
 
 export function benchmarkArtifactAbsolutePath(storagePath: string): string {
   return storedArtifactPath(storagePath)
+}
+
+type StoredSubmissionRun = {
+  id: string
+  submissionSource: string
+  taskEnvelopeJson: string | null
+  submissionContractJson: string | null
+  publicPayloadJson: string | null
+  privatePayloadJson: string | null
+  artifacts: Array<{ id: string; name: string; mediaType: string; sha256: string; sizeBytes: number; storagePath: string }>
+  adapterKey: string
+}
+
+async function readValidatedSubmission(run: StoredSubmissionRun) {
+  const imported = run.submissionSource === 'imported'
+  const task = imported ? undefined : parseJson<AgentTaskEnvelope>(run.taskEnvelopeJson, 'RUN_TASK_MISSING')
+  const publicPayload = parseJson<JsonValue>(run.publicPayloadJson, 'RUN_PUBLIC_PAYLOAD_MISSING')
+  const privatePayload = parseJson<JsonValue>(run.privatePayloadJson, 'RUN_PRIVATE_PAYLOAD_MISSING')
+  const adapter = getBenchmarkAdapter(run.adapterKey)
+  const currentContract = canonicalJson(adapter.manifest.requiredArtifacts as unknown as JsonValue)
+  const legacyZsoftImportContract = run.adapterKey === 'zsoft-l1'
+    ? canonicalJson(adapter.manifest.requiredArtifacts.map(item => ({ ...item, collector: 'imported-submission/v1' })) as unknown as JsonValue)
+    : undefined
+  if (imported && run.submissionContractJson !== currentContract && run.submissionContractJson !== legacyZsoftImportContract) {
+    throw new BenchmarkProtocolError('SUBMISSION_CONTRACT_CHANGED', '历史提交契约已变更，无法继续评测', 409)
+  }
+  const artifactReaders: ReadonlySubmissionArtifact[] = run.artifacts.map((artifact: {
+    id: string
+    name: string
+    mediaType: string
+    sha256: string
+    sizeBytes: number
+    storagePath: string
+  }) => {
+    const descriptor: ArtifactDescriptor = {
+      artifactId: artifact.id,
+      executionRunId: run.id,
+      name: artifact.name,
+      mediaType: artifact.mediaType,
+      sha256: artifact.sha256 as `sha256:${string}`,
+      sizeBytes: artifact.sizeBytes,
+    }
+    let cached: Uint8Array | undefined
+    return {
+      descriptor,
+      async readBytes() {
+        if (!cached) {
+          try { cached = new Uint8Array(await fs.readFile(storedArtifactPath(artifact.storagePath))) }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+            throw new BenchmarkProtocolError('ARTIFACT_CONTENT_MISSING', '提交物文件不存在', 409)
+          }
+        }
+        return cached
+      },
+    }
+  })
+  try {
+    await adapter.validateSubmission(task
+      ? { task, artifacts: artifactReaders }
+      : { submission: { runId: run.id, publicPayload, privatePayload }, artifacts: artifactReaders })
+  } catch (error) {
+    if (error instanceof BenchmarkProtocolError) {
+      throw new BenchmarkProtocolError(
+        error.code,
+        error.message,
+        error.httpStatus,
+        error.retryable,
+        { ...error.details, phase: 'submission-validation' },
+      )
+    }
+    throw error
+  }
+
+  return { task, publicPayload, privatePayload, adapter, artifactReaders }
 }
 
 export async function prepareBenchmarkEvaluation(
@@ -74,49 +172,7 @@ export async function prepareBenchmarkEvaluation(
   if (!binding || binding.adapterKey !== run.adapterKey) {
     throw new BenchmarkProtocolError('BENCHMARK_EVALUATION_SNAPSHOT_MISSING', '实验评测快照不存在或 Adapter 不一致', 409)
   }
-  const task = parseJson<AgentTaskEnvelope>(run.taskEnvelopeJson, 'RUN_TASK_MISSING')
-  const publicPayload = parseJson<JsonValue>(run.publicPayloadJson, 'RUN_PUBLIC_PAYLOAD_MISSING')
-  const privatePayload = parseJson<JsonValue>(run.privatePayloadJson, 'RUN_PRIVATE_PAYLOAD_MISSING')
-  const adapter = getBenchmarkAdapter(run.adapterKey)
-  const artifactReaders: ReadonlySubmissionArtifact[] = run.artifacts.map((artifact: {
-    id: string
-    name: string
-    mediaType: string
-    sha256: string
-    sizeBytes: number
-    storagePath: string
-  }) => {
-    const descriptor: ArtifactDescriptor = {
-      artifactId: artifact.id,
-      executionRunId: run.id,
-      name: artifact.name,
-      mediaType: artifact.mediaType,
-      sha256: artifact.sha256 as `sha256:${string}`,
-      sizeBytes: artifact.sizeBytes,
-    }
-    let cached: Uint8Array | undefined
-    return {
-      descriptor,
-      async readBytes() {
-        if (!cached) cached = new Uint8Array(await fs.readFile(storedArtifactPath(artifact.storagePath)))
-        return cached
-      },
-    }
-  })
-  try {
-    await adapter.validateSubmission({ task, artifacts: artifactReaders })
-  } catch (error) {
-    if (error instanceof BenchmarkProtocolError) {
-      throw new BenchmarkProtocolError(
-        error.code,
-        error.message,
-        error.httpStatus,
-        error.retryable,
-        { ...error.details, phase: 'submission-validation' },
-      )
-    }
-    throw error
-  }
+  const { task, publicPayload, privatePayload, adapter, artifactReaders } = await readValidatedSubmission(run)
 
   const evaluationRunId = `veval_${randomUUID().replaceAll('-', '')}`
   const defaults = adapter.manifest.evaluation
@@ -136,7 +192,7 @@ export async function prepareBenchmarkEvaluation(
       timeoutSeconds: defaults.defaultTimeoutSeconds,
       cpu: defaults.defaultResources.cpu,
       memoryMiB: defaults.defaultResources.memoryMiB,
-      agentModel: task.agentConfig.model || `${task.agentConfig.platform}/${task.agentConfig.agent}`,
+      agentModel: task ? task.agentConfig.model || `${task.agentConfig.platform}/${task.agentConfig.agent}` : undefined,
     },
   })
   const configuredPlatformBaseUrl = String(binding.callbackOrigin || '').trim()
@@ -206,7 +262,6 @@ export async function prepareBenchmarkEvaluation(
   return { evaluationRunId, status: 'queued', created: true }
 }
 
-const BENCHMARK_REEVALUATION_MAX_CONCURRENCY = 1
 const REEVALUATION_LOCK = Symbol.for('agent-insight.benchmark.reevaluation-lock')
 
 function reevaluationLocks(): Set<string> {
@@ -221,9 +276,6 @@ export async function retryBenchmarkEvaluation(input: {
   user: string
 }): Promise<{ status: 'running'; evaluationRunId: string }> {
   const lock = reevaluationLocks()
-  if (lock.size >= BENCHMARK_REEVALUATION_MAX_CONCURRENCY) {
-    throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '已有 Benchmark 重评正在执行，请稍后再试', 409)
-  }
   const result = await prisma.experimentEvalResult.findFirst({
     where: {
       id: input.resultId,
@@ -236,47 +288,53 @@ export async function retryBenchmarkEvaluation(input: {
     throw new BenchmarkProtocolError('BENCHMARK_RESULT_NOT_FOUND', 'Benchmark 评测结果不存在', 404)
   }
 
-  const activeCount = await prisma.benchmarkEvaluation.count({
-    where: {
-      attemptNo: { gt: 1 },
-      status: { in: ['queued', 'dispatch_unknown', 'running_evaluator', 'normalizing'] },
-    },
-  })
-  if (activeCount >= BENCHMARK_REEVALUATION_MAX_CONCURRENCY) {
-    throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '已有 Benchmark 重评正在执行，请稍后再试', 409)
-  }
-  const run = await prisma.benchmarkCaseRun.findFirst({
-    where: { experimentId: input.experimentId, experimentCaseId: result.caseId },
-    orderBy: { createdAt: 'desc' },
-    include: {
-      evaluations: { orderBy: { attemptNo: 'desc' }, take: 1 },
-      artifacts: { select: { name: true } },
-    },
-  })
-  const requiredNames = run
-    ? getBenchmarkAdapter(run.adapterKey).manifest.requiredArtifacts.map((artifact) => artifact.name)
-    : []
-  const submittedNames = new Set(run?.artifacts.map((artifact: { name: string }) => artifact.name) || [])
-  if (
-    !run
-    || requiredNames.some((name) => !submittedNames.has(name))
-    || !['evaluated', 'evaluation_failed'].includes(run.status)
-  ) {
-    throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_NOT_READY', '当前 Case 没有可复用的有效提交物', 409)
-  }
-  if (run.evaluations[0]?.continuationStatus !== 'completed') {
-    throw new BenchmarkProtocolError(
-      'BENCHMARK_REEVALUATION_BUSY',
-      '当前 Benchmark 结果仍在收敛，请稍后重评',
-      409,
-    )
-  }
-
   const lockKey = `${input.experimentId}:${result.caseId}`
+  if (lock.has(lockKey)) {
+    throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '当前 Case 已有 Benchmark 重评正在执行', 409)
+  }
   lock.add(lockKey)
   try {
-    await prisma.$transaction([
-      prisma.experimentEvalResult.update({
+    const run = await prisma.benchmarkCaseRun.findFirst({
+      where: { experimentId: input.experimentId, experimentCaseId: result.caseId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        evaluations: { orderBy: { attemptNo: 'desc' }, take: 1 },
+        artifacts: true,
+      },
+    })
+    if (run && (run.status === 'submitted' || ['queued', 'dispatch_unknown', 'running_evaluator', 'normalizing'].includes(run.evaluations[0]?.status))) {
+      throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '当前 Case 正在执行或评测，请稍后重评', 409)
+    }
+    const requiredNames = run
+      ? getBenchmarkAdapter(run.adapterKey).manifest.requiredArtifacts.map((artifact) => artifact.name)
+      : []
+    const submittedNames = new Set(run?.artifacts.map((artifact: { name: string }) => artifact.name) || [])
+    if (
+      !run
+      || requiredNames.some((name) => !submittedNames.has(name))
+      || !['evaluated', 'evaluation_failed'].includes(run.status)
+    ) {
+      throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_NOT_READY', '当前 Case 没有可复用的有效提交物', 409)
+    }
+    if (run.evaluations[0]?.continuationStatus !== 'completed') {
+      throw new BenchmarkProtocolError(
+        'BENCHMARK_REEVALUATION_BUSY',
+        '当前 Benchmark 结果仍在收敛，请稍后重评',
+        409,
+      )
+    }
+
+    await readValidatedSubmission(run)
+
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const claimed = await tx.benchmarkCaseRun.updateMany({
+        where: { id: run.id, status: run.status, updatedAt: run.updatedAt },
+        data: { status: 'submitted', failureCode: null, failureMessage: null },
+      })
+      if (claimed.count !== 1) {
+        throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '当前 Case 已有 Benchmark 重评正在执行', 409)
+      }
+      await tx.experimentEvalResult.update({
         where: { id: input.resultId },
         data: {
           status: 'pending',
@@ -292,27 +350,28 @@ export async function retryBenchmarkEvaluation(input: {
           humanBy: null,
           humanAt: null,
         },
-      }),
-      prisma.benchmarkCaseRun.update({
-        where: { id: run.id },
-        data: { status: 'submitted', failureCode: null, failureMessage: null },
-      }),
-      prisma.experiment.update({
+      })
+      await tx.experiment.update({
         where: { id: input.experimentId },
         data: { status: 'running' },
-      }),
-      prisma.benchmarkExperimentBinding.update({
+      })
+      await tx.benchmarkExperimentBinding.update({
         where: { experimentId: input.experimentId },
         data: { schedulerStatus: 'running' },
-      }),
-    ])
+      })
+    })
     const prepared = await prepareBenchmarkEvaluation(run.id, {
       forceNewAttempt: true,
       retryOfEvaluationId: run.evaluations[0]?.id,
     })
-    void dispatchBenchmarkEvaluation(prepared.evaluationRunId).catch((error) => {
-      console.error('[benchmark/reevaluation] dispatch failed', error)
-    })
+    const completion = refreshBenchmarkImagePreparation()
+      .catch((error) => console.warn('[benchmark/image-pool]', error))
+      .then(() => dispatchBenchmarkEvaluation(prepared.evaluationRunId))
+      .catch((error) => {
+        console.error('[benchmark/reevaluation] dispatch failed', error)
+      })
+    backgroundReevaluations.add(completion)
+    void completion.then(() => backgroundReevaluations.delete(completion), () => backgroundReevaluations.delete(completion))
     return { status: 'running', evaluationRunId: prepared.evaluationRunId }
   } finally {
     lock.delete(lockKey)

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fsp from 'node:fs/promises';
@@ -13,7 +29,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   t.after(async () => {
     await fsp.rm(temporary, { recursive: true, force: true });
   });
-  execFileSync('/usr/bin/sqlite3', [databasePath, `
+  execFileSync('sqlite3', [databasePath, `
     CREATE TABLE "Execution" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "taskId" TEXT,

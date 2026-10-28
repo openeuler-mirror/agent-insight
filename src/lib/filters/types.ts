@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 统一过滤器模型(operator 模型)—— 对齐 langfuse 的 "back half"。
  *
@@ -5,7 +21,7 @@
  * (≈ adapter→FilterState→SQL)。每个可过滤列声明一个 FilterType,FilterType 决定它
  * 可用哪些操作符(OPERATORS_BY_TYPE)。前端据此渲染控件,后端据此校验 + 翻译成 Prisma where。
  *
- * 设计与取舍见 docs/design/langfuse-style-trace-search/design.md §2.5 / §5。
+ * 设计与取舍见 design/observability/langfuse-style-trace-search/design.md §2.5 / §5。
  */
 
 export type FilterType =

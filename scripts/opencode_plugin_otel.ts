@@ -1,8 +1,26 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
 import { spawn } from "node:child_process"
+import { once } from "node:events"
+import { finished } from "node:stream/promises"
 
 function getPreferredInsightDir() {
   if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
@@ -199,43 +217,67 @@ function buildOutFile(spoolDir: string): string {
   return path.join(dayDir, `opencode-otel-${runId}.jsonl`)
 }
 
-/** Flush terminal events synchronously so an immediate CLI exit cannot drop them. */
-function createWriter(outFile: string): {
-  enqueue: (obj: any) => void
-  flush: () => void
-  close: () => Promise<void>
-  outFile: string
-} {
+function createWriter(outFile: string, synchronous = false): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string; flush: () => Promise<void> } {
   safeMkdirp(path.dirname(outFile))
-  const queue: string[] = []
+  if (synchronous) {
+    let closed = false
+    return {
+      enqueue: (obj: any) => {
+        if (closed) return
+        try { fs.appendFileSync(outFile, JSON.stringify(obj) + "\n") } catch {}
+      },
+      flush: async () => {},
+      close: async () => { closed = true },
+      outFile,
+    }
+  }
+  const stream = fs.createWriteStream(outFile, { flags: "a" })
+  const queue: any[] = []
+  let flushing: Promise<void> | undefined
+  let closing: Promise<void> | undefined
   let stopped = false
   let pending: NodeJS.Timeout | null = null
-
-  const flush = (): void => {
-    if (pending) clearTimeout(pending)
-    pending = null
-    if (stopped || queue.length === 0) return
-    // Batch ordinary events; avoid an async stream whose tail can outlive the CLI.
-    fs.appendFileSync(outFile, queue.join(""))
+  const completion = finished(stream, { cleanup: true }).catch(() => {
+    stopped = true
     queue.length = 0
+  })
+
+  const flush = (): Promise<void> => {
+    if (flushing) return flushing
+    if (stopped) return Promise.resolve()
+    flushing = (async () => {
+      try {
+        while (queue.length > 0 && !stopped) {
+          if (!stream.write(queue.shift())) await once(stream, "drain")
+        }
+        // 等待底层写回调，避免 uploader 或立即退出读到尚未落盘的流尾部。
+        await new Promise<void>((resolve, reject) => {
+          stream.write("", error => error ? reject(error) : resolve())
+        })
+      } catch {}
+    })().finally(() => { flushing = undefined })
+    return flushing
   }
 
   const enqueue = (obj: any): void => {
-    if (stopped) return
+    if (stopped || closing) return
     try { queue.push(JSON.stringify(obj) + "\n") } catch { return }
     if (!pending) {
-      pending = setTimeout(() => {
-        pending = null
-        try { flush() } catch {}
-      }, 0)
+      pending = setTimeout(() => { pending = null; void flush() }, 0)
       pending.unref?.()
     }
   }
 
-  const close = async (): Promise<void> => {
-    if (stopped) return
-    flush()
-    stopped = true
+  const close = (): Promise<void> => {
+    if (closing) return closing
+    closing = (async () => {
+      if (pending) clearTimeout(pending)
+      await flush()
+      stopped = true
+      stream.end()
+      await completion
+    })()
+    return closing
   }
 
   return { enqueue, flush, close, outFile }
@@ -369,6 +411,10 @@ export function formatUploaderRuntimeForLog(runtime: UploaderRuntime | null): {
 }
 
 export default async function WittySkillInsightOtelPlugin() {
+  return createOpenCodeCollector()
+}
+
+async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => void, close?: () => Promise<void> }) {
   const env = loadSkillInsightEnv()
   const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
   if (!enabled) return {}
@@ -378,7 +424,9 @@ export default async function WittySkillInsightOtelPlugin() {
   const maxToolIo = asInt(env.AGENT_INSIGHT_MAX_TOOL_IO, 4000)
   const maxEventString = asInt(env.AGENT_INSIGHT_MAX_EVENT_STRING, 20000)
   const outFile = buildOutFile(spoolDir)
-  const writer = createWriter(outFile)
+  // v1 CLI can exit before async hooks drain; controlled experiments must retain the final snapshot.
+  const writer = createWriter(outFile, !lifecycle && Boolean(process.env.AGENT_INSIGHT_EVENT_TOKEN))
+  if (lifecycle) lifecycle.emit = writer.enqueue
 
   const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
   const uploaderCooldownMs = asInt(env.AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS, 15000)
@@ -574,9 +622,12 @@ export default async function WittySkillInsightOtelPlugin() {
     }
   }
   try {
-    process.once("beforeExit", shutdown)
-    process.once("SIGINT", shutdown)
-    process.once("SIGTERM", shutdown)
+    if (lifecycle) lifecycle.close = shutdown
+    else {
+      process.once("beforeExit", shutdown)
+      process.once("SIGINT", shutdown)
+      process.once("SIGTERM", shutdown)
+    }
   } catch {}
 
   try {
@@ -696,7 +747,7 @@ export default async function WittySkillInsightOtelPlugin() {
               pluginLogPath,
               `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
             )
-            writer.flush()
+            await writer.flush()
             kickUploader(sid, true, `event:${type}`)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
@@ -726,4 +777,166 @@ export default async function WittySkillInsightOtelPlugin() {
       } catch {}
     },
   }
+}
+
+export function createOpenCodeV2Adapter(context: any, record: (value: any) => void, forward: (event: any) => Promise<void>) {
+  const messages = new Map<string, any>()
+  const tools = new Map<string, any>()
+  const streamedParts = new Set<string>()
+  const pendingSnapshots = new Map<string, Promise<void>>()
+  let disposed = false
+  const lateTerminalUploads = new Set<string>()
+  const fingerprints = new Map<string, string>()
+  const seen = new Set<string>()
+  const emit = (sessionID: string, kind: string, payload: any) => record({ t: nowIso(), sessionID, kind, payload })
+  const event = (type: string, sessionID: string, properties: any, id?: string) => forward({ type, id, properties: { sessionID, ...properties } })
+  const message = async (sessionID: string, info: any) => {
+    const value = { ...info, sessionID, ...(['assistant', 'user'].includes(info.role) ? { trace_kind: info.role === 'assistant' ? 'llm' : 'user' } : {}) }
+    messages.set(info.id, value)
+    await event('message.updated', sessionID, { info: value })
+  }
+  const part = (sessionID: string, messageID: string, value: any) => event('message.part.updated', sessionID, { part: { ...value, sessionID, messageID } })
+  const toolPart = (sessionID: string, messageID: string, value: any) => {
+    const state = value.state || {}
+    return part(sessionID, messageID, {
+      id: `${messageID}:tool:${value.id}`, type: 'tool', callID: value.id,
+      tool: value.name === 'subagent' ? 'task' : value.name,
+      state: { ...state, input: { ...state.input, ...(value.name === 'subagent' ? { subagent_type: state.input?.agent } : {}) },
+        output: (state.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'),
+        sessionID: state.metadata?.sessionID,
+        time: { start: value.time?.ran || value.time?.created, end: value.time?.completed } },
+    })
+  }
+  const snapshot = async (sessionID: string, values: any[]) => {
+    for (const value of values) {
+      if (disposed) return
+      if (!['user', 'assistant'].includes(value.type)) continue
+      const key = `${sessionID}:${value.id}`, fingerprint = sha256Hex(JSON.stringify(value))
+      if (fingerprints.get(key) === fingerprint) continue
+      fingerprints.set(key, fingerprint)
+      if (fingerprints.size > 4096) fingerprints.delete(fingerprints.keys().next().value!)
+      await message(sessionID, { ...value, role: value.type, agent: value.agent, modelID: value.model?.id, providerID: value.model?.providerID })
+      if (value.type === 'user') await part(sessionID, value.id, { id: `${value.id}:text`, type: 'text', text: value.text || '', time: value.time })
+      const ordinals: Record<string, number> = {}
+      for (const content of value.content || []) {
+        const i = ordinals[content.type] || 0
+        ordinals[content.type] = i + 1
+        if (content.type === 'tool') await toolPart(sessionID, value.id, content)
+        else if (['text', 'reasoning'].includes(content.type)) await part(sessionID, value.id, { ...content, id: `${value.id}:${content.type}:${i}`, time: value.time })
+      }
+    }
+  }
+  const startSnapshot = (sessionID: string) => {
+    let pending = pendingSnapshots.get(sessionID)
+    if (!pending) {
+      pending = Promise.resolve().then(() => context.session.context({ sessionID })).then(values => snapshot(sessionID, values))
+        .catch(error => { if (!disposed) emit(sessionID, 'collector.error', { phase: 'snapshot', message: String(error) }) })
+      pendingSnapshots.set(sessionID, pending)
+      void pending.then(() => pendingSnapshots.delete(sessionID))
+    }
+    return pending
+  }
+  const refresh = async (sessionID: string) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        startSnapshot(sessionID),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Snapshot timed out')), 250) }),
+      ])
+    } catch (error) { emit(sessionID, 'collector.error', { phase: 'snapshot', message: String(error) }) }
+    finally { clearTimeout(timer) }
+  }
+  return {
+    close: () => { disposed = true; pendingSnapshots.clear() },
+    event: async (input: any) => {
+      if (disposed) return
+      const d = input?.data, sid = d?.sessionID, mid = d?.assistantMessageID, type = input?.type
+      if (!sid) return
+      if (input.id && seen.has(input.id)) return
+      if (input.id) { seen.add(input.id); if (seen.size > 8192) seen.delete(seen.values().next().value!) }
+      if (type === 'session.created') {
+        await event('session.created', sid, { info: { ...d, id: sid, time: { created: input.created } } })
+      } else if (type === 'session.step.started') {
+        const previous = messages.get(mid)
+        await message(sid, { id: mid, role: 'assistant', agent: d.agent, modelID: d.model?.id, providerID: d.model?.providerID, time: { created: previous?.time?.created ?? d.started } })
+      } else if (type === 'session.step.ended' || type === 'session.step.failed') {
+        const previous = messages.get(mid)
+        if (previous) await message(sid, { ...previous, finish: d.finish || 'error', error: d.error, tokens: d.tokens, cost: d.cost, time: { ...previous.time, completed: input.created } })
+      } else if (/^session\.(text|reasoning)\.(delta|ended)$/.test(type)) {
+        const kind = type.split('.')[1], id = `${mid}:${kind}:${d.ordinal}`
+        if (type.endsWith('.delta')) {
+          const key = `${sid}:${id}`
+          if (!streamedParts.has(key)) {
+            streamedParts.add(key)
+            await part(sid, mid, { id, type: kind, text: '' })
+          }
+          await event('message.part.delta', sid, { messageID: mid, partID: id, field: 'text', delta: d.delta }, input.id)
+        }
+        else await part(sid, mid, { id, type: kind, text: d.text, time: { end: input.created } })
+      } else if (type === 'session.tool.input.started') {
+        tools.set(`${sid}:${mid}:${d.id}`, { id: d.id, name: d.name, state: { status: 'pending' }, time: { created: input.created } })
+      } else if (['session.tool.called', 'session.tool.success', 'session.tool.failed'].includes(type)) {
+        const value = tools.get(`${sid}:${mid}:${d.id}`)
+        if (!value) return
+        if (type.endsWith('.called')) { value.state = { ...value.state, status: 'running', input: d.input }; value.time.ran = input.created }
+        else { value.state = { ...value.state, status: d.error ? 'error' : 'completed', content: d.content, metadata: d.metadata, error: d.error }; value.time.completed = input.created }
+        await toolPart(sid, mid, value)
+      } else if (['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted', 'session.idle'].includes(type)) {
+        await refresh(sid)
+        await event('session.idle', sid, {})
+        const pending = pendingSnapshots.get(sid)
+        if (pending && !lateTerminalUploads.has(sid)) {
+          lateTerminalUploads.add(sid)
+          void pending.then(async () => {
+            if (!disposed) await event('session.idle', sid, {})
+          }).catch(() => {}).finally(() => lateTerminalUploads.delete(sid))
+        }
+        for (const [key, value] of messages) if (value.sessionID === sid) messages.delete(key)
+        for (const key of tools.keys()) if (key.startsWith(sid + ':')) tools.delete(key)
+        for (const key of streamedParts) if (key.startsWith(sid + ':')) streamedParts.delete(key)
+      }
+    },
+    context: async (input: any) => {
+      if (disposed) return
+      void startSnapshot(input.sessionID)
+      const system = (input.system || []).map((value: any) => typeof value === 'string' ? value : value.text).filter((value: any) => typeof value === 'string')
+      const joined = system.join('\n')
+      record({ t: nowIso(), kind: 'system.prompt', sessionID: input.sessionID, providerID: input.model?.providerID,
+        modelID: input.model?.id, trace_id: input.sessionID, payload: { system, length: joined.length, sha256: sha256Hex(joined) } })
+    },
+  }
+}
+
+export async function setupOpenCodeV2(context: any) {
+  const lifecycle: { emit?: (record: any) => void, close?: () => Promise<void> } = {}
+  const hooks = await createOpenCodeCollector(lifecycle)
+  if (!lifecycle.emit || !hooks.event) return
+  const adapter = createOpenCodeV2Adapter(context, lifecycle.emit, event => hooks.event!({ event }))
+  const abort = new AbortController()
+  const report = (error: unknown) => appendLogLine(path.join(getPreferredInsightDir(), 'logs/opencode_plugin.log'), `v2.collector.error ${String(error)}`)
+  const events = (async () => {
+    try {
+      for await (const event of context.event.subscribe({ signal: abort.signal })) {
+        try { await adapter.event(event) } catch (error) { report(error) }
+      }
+      if (!abort.signal.aborted) report(new Error('Event stream ended'))
+    } catch (error) { if (!abort.signal.aborted) report(error) }
+  })()
+  let closed = false
+  const close = async () => {
+    if (closed) return
+    closed = true
+    adapter.close()
+    abort.abort()
+    await events
+    await lifecycle.close?.()
+  }
+  try {
+    for (const kind of ['context', 'compaction', 'generate', 'title']) {
+      await context.session.hook(kind, async (input: any) => {
+        try { await adapter.context(input) } catch (error) { report(error) }
+      })
+    }
+  } catch (error) { await close(); throw error }
+  return close
 }

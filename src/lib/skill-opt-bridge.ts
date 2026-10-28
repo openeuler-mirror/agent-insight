@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
@@ -73,6 +89,7 @@ export interface StreamSkillOptOpts {
   planItems?: SkillOptPlanItemLite[];
   userFeedback: string;
   modelId?: string;
+  signal?: AbortSignal;
   /**
    * Dev fallback：当 data/storage/ 里没有真 skill 文件时（mock 数据场景），
    * 用 caller 提供的这份"基线快照"预填 workspace。键是相对路径（如 "SKILL.md"、
@@ -98,7 +115,8 @@ export function streamSkillOptOpencode(
 async function streamSkillOptOpencodeImpl(
   opts: StreamSkillOptOpts,
 ): Promise<StreamSkillOptResult> {
-  const { user, threadId, skillName, baseVersion, checkedIssues, planItems, userFeedback, modelId, baselineFiles, send } = opts;
+  const { user, threadId, skillName, baseVersion, checkedIssues, planItems, userFeedback, modelId, baselineFiles, send, signal } = opts;
+  signal?.throwIfAborted();
 
   console.log('[skill-opt-bridge] start', {
     user, threadId, skillName, baseVersion,
@@ -161,7 +179,7 @@ async function streamSkillOptOpencodeImpl(
   const errorsSent = new Set<string>();
   const sendErrorOnce = (msg: string) => {
     // 连接前的瞬时错误会在 runGeneralAgent 外层自动重试；不要先把原始错误写进对话。
-    if (isTransientModelConnectionError(msg)) return;
+    if (signal?.aborted || isTransientModelConnectionError(msg)) return;
     if (errorsSent.has(msg)) return;
     errorsSent.add(msg);
     try { send('error', msg); } catch { /* stream closed */ }
@@ -330,6 +348,7 @@ async function streamSkillOptOpencodeImpl(
   const executeAgent = (sessionId?: string) => withBackgroundOpencodeSlot(
     () => runGeneralAgent({
       user,
+      cancelSignal: signal,
       query: composeUserQuery(checkedIssues, userFeedback, planItems),
       ...(sessionId ? { sessionId } : {}),
       workspaceTag: threadId,
@@ -351,6 +370,9 @@ async function streamSkillOptOpencodeImpl(
   try {
     result = await executeAgent(cachedSessionId);
   } catch (err) {
+    if (idleWatchdog) clearTimeout(idleWatchdog);
+    if (err instanceof Error && err.message.includes('停止 OpenCode 执行未确认')) throw err;
+    signal?.throwIfAborted();
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[skill-opt-bridge] runGeneralAgent threw:', msg);
     const staleSession = Boolean(cachedSessionId && /session/i.test(msg));
@@ -374,6 +396,7 @@ async function streamSkillOptOpencodeImpl(
   }
 
   if (idleWatchdog) clearTimeout(idleWatchdog);
+  signal?.throwIfAborted();
   threadSessionMap.set(threadId, result.sessionId);
   closeThinkingIfOpen();
 
@@ -401,6 +424,7 @@ async function streamSkillOptOpencodeImpl(
   if (process.env.SKILL_OPT_NO_VERIFY !== '1') {
     try {
       for (let attempt = 0; attempt <= VERIFY_REPAIR_K; attempt++) {
+        signal?.throwIfAborted();
         const current = scanWorkspaceFiles(result.workspaceDir);
         // FileData.content 是 string[]，归一成字符串并适配 findSkillMd 的 PlaygroundFiles 形态
         const vfs: Record<string, { content: string }> = {};
@@ -422,9 +446,10 @@ async function streamSkillOptOpencodeImpl(
         const verdict: SelfVerifyResult = await runSelfVerification({
           user, skillName, baseVersion,
           candidateSkillMd: skillMd.content, candidateFiles,
-          maxCases: VERIFY_MAX_CASES, budgetYuan: VERIFY_BUDGET_YUAN,
+          maxCases: VERIFY_MAX_CASES, budgetYuan: VERIFY_BUDGET_YUAN, signal,
           onProgress: (m) => send('verify_progress', { message: m }),
         });
+        signal?.throwIfAborted();
         if (verdict.ok) {
           const beh = verdict.behavioral;
           send('verify_ok', {
@@ -442,7 +467,7 @@ async function streamSkillOptOpencodeImpl(
         try {
           await withBackgroundOpencodeSlot(
             () => runGeneralAgent({
-              user, query: buildSelfVerifyRepairQuery(verdict),
+              user, query: buildSelfVerifyRepairQuery(verdict), cancelSignal: signal,
               sessionId: result.sessionId, workspaceTag: threadId,
               sessionTitle: `skill-opt repair · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
               system: systemPrompt, interactionPolicy: 'auto-allow',
@@ -452,16 +477,21 @@ async function streamSkillOptOpencodeImpl(
             slotMeta,
           );
         } catch (e) {
+          if (e instanceof Error && e.message.includes('停止 OpenCode 执行未确认')) throw e;
+          signal?.throwIfAborted();
           console.warn('[skill-opt-bridge] repair turn failed:', (e as Error)?.message);
           send('warning', { kind: 'self_verify', message: 'repair 回合执行失败，保留当前结果' });
           break;
         }
       }
     } catch (e) {
+      if (e instanceof Error && e.message.includes('停止 OpenCode 执行未确认')) throw e;
+      signal?.throwIfAborted();
       console.warn('[skill-opt-bridge] self-verify errored (non-blocking):', (e as Error)?.message);
     }
   }
 
+  signal?.throwIfAborted();
   // 兜底全量扫描，最终一次 VFS 推送
   vfsAccum = scanWorkspaceFiles(result.workspaceDir);
   send('vfs_patch', { files: vfsAccum });

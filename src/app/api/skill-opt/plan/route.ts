@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 优化计划（归并算子）API。
  *
@@ -11,7 +27,7 @@
  *   返回该会话的 plan + items（无则 { plan: null }）。前端据 plan.status 轮询到非 running 为止。
  *
  * SkillIssue 台账只读不写；resolve 回标发生在 iteration 落库时（见 iterations 路由）。
- * 设计：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
+ * 设计：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
  */
 
 import { NextRequest, NextResponse } from 'next/server';

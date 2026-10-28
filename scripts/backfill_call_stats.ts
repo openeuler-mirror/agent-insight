@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 一次性回填 Execution.callStats（大盘 B 档 per-call 摘要，写入路径已对新 trace 自动填充）。
  *
@@ -15,7 +31,7 @@
  *   node --import tsx scripts/backfill_call_stats.ts --retry-failed  # 连同哨兵失败行一起重试
  *   DATABASE_URL="file:/abs/path.db" node --import tsx scripts/backfill_call_stats.ts   # 指定库
  *
- * 资源边界（对齐 docs/design/fleet-dashboard-tier-b-preparse-risk.md R5）：
+ * 资源边界（对齐 design/platform/fleet-dashboard-tier-b-preparse-risk.md R5）：
  * 分批游标 + 逐条加载单个 session（不整表拉 interactions），批间 sleep 让写锁给 ingest 穿插。
  */
 import { prismaRaw } from '@/lib/storage/prisma';

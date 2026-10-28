@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -12,20 +28,43 @@ const clientFiles = [
   'scripts/agent-insight-home.cjs',
   'scripts/install-ras-client.js',
   'scripts/reliability-client.cjs',
+  'scripts/xgovernor.cjs',
   'scripts/ordinary-experiment-state.cjs',
   'scripts/skill-experiment-workspace.cjs',
+  'scripts/opencode-connection-config.cjs',
   'scripts/agent-run-diagnostics.cjs',
   'scripts/opencode-experiment-events.cjs',
   'scripts/opencode-experiment-events.mjs',
+  'scripts/opencode-experiment-events-v2.mjs',
+  'scripts/opencode-runtime.cjs',
   'scripts/ws-client.cjs',
   'scripts/install-fault-injection.js',
   'scripts/lib/fi-python-runtime.js',
   'scripts/fi-worker.js',
   'packages/project-config/index.cjs',
   'packages/project-config/yaml.cjs',
+  'packages/benchmark-protocol/execution.cjs',
+  'packages/benchmark-protocol/environment.cjs',
+  'scripts/agent-trace-collectors/shared/trace-transport.cjs',
   'config/benchmark/executor.yaml',
   'services/executor/src/index.cjs',
   'services/executor/src/runtime-options.cjs',
+  'services/executor/src/execution-backend.cjs',
+  'services/executor/src/execution-config.cjs',
+  'services/executor/src/environment/worker.cjs',
+  'services/executor/src/environment/task-runner.cjs',
+  'services/executor/src/environment/services.cjs',
+  'services/executor/src/environment/datasets/reliability.cjs',
+  'services/executor/src/execution-images.cjs',
+  'services/executor/src/execution-workspace.cjs',
+  'services/executor/src/xgovernor/backend.cjs',
+  'services/executor/src/xgovernor/dependency-manager.cjs',
+  'services/executor/src/xgovernor/installation.cjs',
+  'services/executor/src/xgovernor/artifact-identity.cjs',
+  'services/executor/src/xgovernor/client.cjs',
+  'services/executor/src/xgovernor/command-diagnostics.cjs',
+  'services/executor/src/xgovernor/trace.cjs',
+  'services/executor/src/xgovernor/capture-worker.cjs',
   'packages/agent-runtime/index.cjs',
   'packages/agent-runtime/loader.cjs',
   'services/executor/runtimes/mcts/runtime.yaml',
@@ -34,7 +73,13 @@ const clientFiles = [
   'services/executor/src/mcts-runtime.cjs',
   'services/executor/src/git-source.cjs',
   'services/executor/src/git-source-workspace.cjs',
+  'services/executor/src/source-policy-registry.cjs',
   'services/executor/src/benchmarks/swe-bench.cjs',
+  'services/executor/src/benchmarks/swe-bench-images.cjs',
+  'generated/benchmark-catalog/executors.cjs',
+  'benchmarks/swe-bench/executor/git-source-policy.cjs',
+  'benchmarks/swe-bench/executor/environment.cjs',
+  'benchmarks/zsoft-l1/executor/environment.cjs',
   'agent_ras/platform_adapter/opencode/config_sync.js',
   'agent_fault_injection/pyproject.toml',
 ]
@@ -103,6 +148,53 @@ test('incomplete client bundle returns missing entries instead of a partial arch
   const response = await GET(new Request('http://localhost/api/ingest/setup/bundle?name=client'))
   assert.equal(response.status, 503)
   assert.deepEqual((await response.json()).missing, ['services/executor/src'])
+})
+
+test('installed executor loads package policies after the installation source moves away', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-executor-policy-'))
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+  usePackageRoot(t, repositoryRoot)
+  const source = path.join(temporary, 'source')
+  const home = path.join(temporary, 'home')
+  fs.mkdirSync(source)
+  const response = await GET(new Request('http://localhost/api/ingest/setup/bundle?name=client'))
+  assert.equal(response.status, 200)
+  const archive = Buffer.from(await response.arrayBuffer())
+  const extraction = spawnSync('tar', ['-xzf', '-', '-C', source], { input: archive })
+  assert.equal(extraction.status, 0, extraction.stderr.toString())
+  const installed = spawnSync(process.execPath, ['-e', `require(${JSON.stringify(path.join(source, 'scripts/install-ras-client.js'))}).installRuntime()`], {
+    env: { ...process.env, AGENT_INSIGHT_HOME: home }, encoding: 'utf8',
+  })
+  assert.equal(installed.status, 0, installed.stderr)
+  fs.renameSync(source, path.join(temporary, 'moved-source'))
+  const executorDir = path.join(home, 'client', 'runtime', 'executor')
+  const loaded = spawnSync(process.execPath, ['-e', `
+    const assert = require('node:assert/strict')
+    const path = require('node:path')
+    const dir = ${JSON.stringify(executorDir)}
+    assert.equal(typeof require(path.join(dir, '../opencode-connection-config.cjs')).loadOpenCodeConnectionConfig, 'function')
+    assert.equal(typeof require(path.join(dir, '../xgovernor.cjs')).run, 'function')
+    const { createBenchmarkExecutor } = require(path.join(dir, 'index.cjs'))
+    const executor = createBenchmarkExecutor({
+      clientId: 'fixture', deviceCredential: 'fixture', insightBaseUrl: 'http://localhost',
+      baseDir: ${JSON.stringify(path.join(home, 'client'))}, agentInsightHome: ${JSON.stringify(home)},
+      runAgent: async () => { throw new Error('Agent must not execute') },
+    })
+    const policies = executor.runner.workspaceProviders.get('git').sourcePolicies
+    assert.deepEqual([...policies.keys()], ['swe-bench'])
+    assert.equal(policies.get('swe-bench').home, ${JSON.stringify(home)})
+    const legacy = require(path.join(dir, 'benchmarks/swe-bench.cjs'))
+    const { loadEnvironmentAdapter } = require(path.join(dir, 'environment/registry.cjs'))
+    assert.equal(typeof loadEnvironmentAdapter('swe-bench').checkEnvironment, 'function')
+    assert.equal(typeof loadEnvironmentAdapter('zsoft-l1').prepareEnvironment, 'function')
+    assert.equal(typeof loadEnvironmentAdapter('reliability').checkEnvironment, 'function')
+    assert.equal(typeof require(path.join(dir, 'environment/services.cjs')).createServices, 'function')
+    assert.equal(typeof require(path.join(dir, '../lib/fi-python-runtime.js')).ensureManagedFiRuntime, 'function')
+    assert.equal(new legacy.SweBenchGitSourcePolicy({ home: ${JSON.stringify(home)}, env: { SWE_BENCH_GIT_SOURCE: '' } })
+      .resolve({ repository: 'https://github.com/pallets/flask.git' }).remotes[0].name, 'gitee')
+    executor.close()
+  `], { encoding: 'utf8' })
+  assert.equal(loaded.status, 0, loaded.stderr)
 })
 
 test('an existing RAS installer alone cannot produce a successful RAS bundle', async (t) => {

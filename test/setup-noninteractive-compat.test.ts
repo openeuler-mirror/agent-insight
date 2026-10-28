@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -166,5 +182,17 @@ test('OpenClaw 纯配置输出与已安装 wrapper 使用相同的 JSON logs/tra
     assert.match(configBlock, /OTEL_EXPORTER_OTLP_TRACES_PROTOCOL[^\n]*http\/json/);
     assert.match(configBlock, /OTEL_EXPORTER_OTLP_TRACES_ENDPOINT[^\n]*\/api\/ingest\/otel\/v1\/traces/);
     assert.doesNotMatch(configBlock, /http\/protobuf/);
+  }
+});
+
+test('Pi/xiaoO selections reach every client installation source and auto setup registers the same installer', async () => {
+  const { GET: autoSetup } = await import('@/app/api/ingest/setup/auto/route');
+  const normal = await getScript('yes=1&frameworks=pi-agent,xiaoo', 'unix');
+  const auto = await (await autoSetup(new Request('http://localhost/api/ingest/setup/auto?apiKey=fixture&host=http://localhost&frameworks=pi-agent,xiaoo', { headers: { 'x-platform': 'unix', host: 'localhost' } }))).text();
+  for (const script of [normal, auto]) {
+    assert.equal((script.match(/--frameworks "\$SELECTED_FRAMEWORKS"/g) || []).length, 3);
+    const parsed = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
+    assert.equal(parsed.status, 0, parsed.stderr);
+    assert.match(script, /install_agent_insight_client "\$(?:FINAL_HOST|AGENT_INSIGHT_HOST)"/);
   }
 });

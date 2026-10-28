@@ -1,4 +1,21 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { readSavedOptions } from './runtime-options'
+import { customEvaluatorsForReuse } from '@/lib/evaluators/evaluator-skill-service'
 import { prisma } from '@/lib/storage/prisma'
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service'
 import { assertTraceGenerationTarget, loadTraceGenerationRetryRequest } from '@/lib/engine/experiment/trace-generation'
@@ -42,6 +59,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
   if (!source) throw new Error('source experiment not found')
   const evaluatorIds = parseStringArray(source.evaluatorIdsJson)
   const snapshot = parseObject(source.configSnapshotJson)
+  snapshot.customEvaluatorSnapshots = await customEvaluatorsForReuse(input.user, evaluatorIds, snapshot)
   const name = source.scope === 'skill-workbench' && source.skillName && source.skillVersion != null
     ? defaultSkillExperimentName(source.skillName, 'use-case', source.skillVersion)
     : defaultExperimentName()
@@ -57,8 +75,10 @@ export async function cloneExperimentFromFrozenConfig(input: {
     const binding = source.benchmarkBinding
     if (!binding) throw new Error('Benchmark 实验缺少冻结配置')
     const runConfig = parseObject(binding.runConfigJson)
+    if (runConfig.submissionSource === 'imported') throw new Error('历史导入提交实验不支持复用配置')
     const selection = parseObject(binding.selectionJson)
     const result = await createBenchmarkExperiment({
+      frozenCustomEvaluators: await customEvaluatorsForReuse(input.user, evaluatorIds, snapshot),
       user: input.user,
       name,
       agentName: source.agentName,
@@ -83,13 +103,14 @@ export async function cloneExperimentFromFrozenConfig(input: {
     })
     await prisma.experiment.update({
       where: { id: result.id },
-      data: { sourceExperimentId: source.id },
+      data: { sourceExperimentId: source.id, evaluatorConfigsJson: source.evaluatorConfigsJson },
     })
     return { id: result.id, scope: 'benchmark' }
   }
 
   if (source.type === 'llm') {
     const created = await createComparisonExperiment({
+      frozenCustomEvaluators: await customEvaluatorsForReuse(input.user, evaluatorIds, snapshot),
       user: input.user,
       name,
       agentName: source.agentName,
@@ -101,7 +122,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
       where: { id: created.id },
       data: {
         sourceExperimentId: source.id,
-        configSnapshotJson: source.configSnapshotJson,
+        configSnapshotJson: JSON.stringify(snapshot),
         evaluatorConfigsJson: source.evaluatorConfigsJson,
       },
     })

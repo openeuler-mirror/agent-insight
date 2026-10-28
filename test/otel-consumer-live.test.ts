@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -192,4 +208,23 @@ test('streaming routing rejects extra roots and honors duplicate fields whose la
     for (const byte of Buffer.from(row)) parser.push(byte);
     assert.equal(parser.finish(), undefined, row);
   }
+});
+
+
+test('live accepts new legacy rows when file mtime rounds below the startup cutoff', async t => {
+  const f = fixture(t);
+  const cutoff = Math.floor(Date.now() / 1000) * 1000 + 900;
+  const file = path.join(f.root, currentSpoolDay(), 'traces.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, [
+    { sessionId: 'old', receivedAt: new Date(cutoff - 1).toISOString() },
+    { sessionId: 'new', receivedAt: new Date(cutoff).toISOString() },
+  ].map(event => JSON.stringify(event)).join('\n') + '\n');
+  fs.utimesSync(file, Math.floor(cutoff / 1000), Math.floor(cutoff / 1000));
+  const accepted = new Set<string>();
+  const discovery = new LiveSpoolDiscovery([f.source], cutoff, 10,
+    (_candidate, sessionId) => { accepted.add(sessionId); return true; }, () => cutoff + 1);
+  t.after(() => discovery.stop());
+  await discovery.tick();
+  assert.deepEqual([...accepted], ['new']);
 });

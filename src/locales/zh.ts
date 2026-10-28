@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 export const zh = {
   app: {
     title: 'Agent-insight',
@@ -195,6 +211,11 @@ export const zh = {
     statFailed: '执行失败数',
     statAvgLatency: '平均延迟',
     statToolErrorRate: '工具错误率',
+    statsLoading: '统计更新中，列表可正常浏览',
+    statsError: '统计暂不可用；已有统计值可能尚未更新，列表可继续浏览',
+    listError: '记录加载失败，请重试',
+    retry: '重试',
+    pageUnknownTotal: '第 {{page}} 页 · 总数统计中',
     columnTraceId: 'Trace ID',
     columnAgent: 'Agent',
     columnIp: 'IP',

@@ -1,0 +1,138 @@
+[
+  {
+    "package": "@tybys/wasm-util@0.10.2",
+    "status": "needs_upstream_confirmation",
+    "evidence": "Full version-specific upstream notice still requires confirmation. A later upstream notice is included for reference; its applicability to this earlier version is not asserted.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/toyobayashi/wasm-util/a16b188d44ae43cc91edb71996ba2b43ff0996d9/LICENSE",
+        "sha256": "09e436100bf926e78df875ec80cf3d0c643dfec779b52cfe2aa96afa0de714cb"
+      }
+    ]
+  },
+  {
+    "package": "@tybys/wasm-util@0.10.3",
+    "status": "resolved",
+    "evidence": "Full upstream notice added while package version remained 0.10.3.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/toyobayashi/wasm-util/a16b188d44ae43cc91edb71996ba2b43ff0996d9/LICENSE",
+        "sha256": "09e436100bf926e78df875ec80cf3d0c643dfec779b52cfe2aa96afa0de714cb"
+      }
+    ]
+  },
+  {
+    "package": "@types/json5@0.0.29",
+    "status": "resolved",
+    "evidence": "Project-wide MIT notice has been unchanged since 2012; published declaration file identifies its contributor.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/DefinitelyTyped/DefinitelyTyped/64aa1bd3835afccb0a17f636d973c68aaa566eed/LICENSE",
+        "sha256": "0a48f63d7d32a49d196dce4b2e0cbc236c2cc8fef42cb20e005e4d5f813cc8f6"
+      },
+      {
+        "url": "Published npm package @types/json5@0.0.29, index.d.ts",
+        "sha256": "f55d810f9007dfddf471fa6a4256d24028febcf4ff650a4168b2e527a37efc75"
+      }
+    ]
+  },
+  {
+    "package": "boolbase@1.0.0",
+    "status": "resolved",
+    "evidence": "Upstream licensed commit declares 1.0.0; index.js is byte-identical to the published package.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/fb55/boolbase/be0bcd8a4e917a0a5895e95b523fbbed05a64871/LICENSE",
+        "sha256": "cdf4d87ae0a6c160227263bf4e39a0a10e30e89ae7256e0f7ac7bde0836552c6"
+      }
+    ]
+  },
+  {
+    "package": "dingbat-to-unicode@1.0.1",
+    "status": "resolved",
+    "evidence": "Full notice under js/LICENSE in upstream commit declaring version 1.0.1.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/mwilliamson/dingbat-to-unicode/a89b69198c2dd030b097cbf44b4eb7dd8b85722d/js/LICENSE",
+        "sha256": "1013cef4b629a3c7eaf737c110fb5bebbf3abbc16e154d769468d71c3653fa37"
+      }
+    ]
+  },
+  {
+    "package": "eastasianwidth@0.2.0",
+    "status": "resolved",
+    "evidence": "Upstream LICENSE-NOTES explicitly identifies the complete historical 0.2.0 notice and original-author permission for earlier versions.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/komagata/eastasianwidth/1d41951a59d63fb2d77cda021050fc070cae424a/MIT-LICENSE.txt",
+        "sha256": "94aa6016fb9d436508366433e9caba061443ca58f4c7eb515caec7badf90ae5a"
+      },
+      {
+        "url": "https://api.github.com/repos/komagata/eastasianwidth/git/blobs/ad971a6f5a606838d9f1082452080acb0e6b4e73",
+        "sha256": "652d0486b433ecd1e91c2a933f6d320f651bda1d7bb32ba50a48cf7329bb81b3"
+      }
+    ]
+  },
+  {
+    "package": "keyv@4.5.4",
+    "status": "resolved",
+    "evidence": "Pinned upstream license revision from 2022 covers the 2023 publication interval; the license history shows no subsequent change until 2025.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/jaredwray/keyv/e02ef9b9271fe48d8e1da6561f18e055995bfb1f/LICENSE",
+        "sha256": "1f7dca26d2d328c3dbb9b6fe3b15ec3cda08ffe2288e47b73d617454b256f959"
+      }
+    ]
+  },
+  {
+    "package": "node-ensure@0.0.0",
+    "status": "needs_upstream_confirmation",
+    "evidence": "Full version-specific upstream notice still requires confirmation.",
+    "sources": []
+  },
+  {
+    "package": "react-remove-scroll-bar@2.3.8",
+    "status": "needs_upstream_confirmation",
+    "evidence": "Full version-specific upstream notice still requires confirmation. A later upstream notice is included for reference; its applicability to this earlier version is not asserted.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/theKashey/react-remove-scroll-bar/7301c160fda44cb8cf2b9fdfde61efad35736196/LICENSE",
+        "sha256": "a79aae0c0f21990d9d963bb3c5a79cdcea9a46f8523ba55c58d7fe776b6ebc84"
+      }
+    ]
+  },
+  {
+    "package": "remark-github-blockquote-alert@1.3.1",
+    "status": "needs_upstream_confirmation",
+    "evidence": "Full version-specific upstream notice still requires confirmation. A later upstream notice is included for reference; its applicability to this earlier version is not asserted.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/jaywcjlove/remark-github-blockquote-alert/34cf98284d2a974cf42a093aa3530c9b7eb9ab68/LICENSE",
+        "sha256": "8b4a567b4c21cfac4807267eb23fa981adc3b23260643e67165ba68943fdc5fa"
+      }
+    ]
+  },
+  {
+    "package": "stable-hash@0.0.5",
+    "status": "needs_upstream_confirmation",
+    "evidence": "Full version-specific upstream notice still requires confirmation.",
+    "sources": []
+  },
+  {
+    "package": "toggle-selection@1.0.6",
+    "status": "resolved",
+    "evidence": "Upstream licensed commit declares 1.0.6; index.js is byte-identical to the published package.",
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/sudodoki/toggle-selection/538dc4e9de40b8aee41f1e9066a4c5de3f4adc0a/LICENSE",
+        "sha256": "771e50e27b24269923639e8e0cc650e7187ffeab5726f6a6f47d9ea83865089d"
+      }
+    ]
+  },
+  {
+    "package": "use-composed-ref@1.4.0",
+    "status": "needs_upstream_confirmation",
+    "evidence": "Full version-specific upstream notice still requires confirmation.",
+    "sources": []
+  }
+]

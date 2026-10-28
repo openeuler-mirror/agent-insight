@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import fs from 'node:fs';
 import { LiveRowParser } from './live-row';
 import * as fsp from 'node:fs/promises';
@@ -146,9 +162,10 @@ export class LiveSpoolDiscovery {
     try {
       const info = await fsp.lstat(candidate.file);
       if (this.stopped || !info.isFile()) return;
+      // File timestamps may be rounded; receivedAt still fences each row at the exact cutoff.
       if (path.basename(path.dirname(path.dirname(candidate.file))) === 'sessions') {
-        if (!await this.modern(candidate, info) && info.mtimeMs >= this.cutoff) await this.legacy(candidate, info, deadline);
-      } else if (info.mtimeMs >= this.cutoff) {
+        if (!await this.modern(candidate, info) && info.mtimeMs >= Math.floor(this.cutoff / 1000) * 1000) await this.legacy(candidate, info, deadline);
+      } else if (info.mtimeMs >= Math.floor(this.cutoff / 1000) * 1000) {
         await this.legacy(candidate, info, deadline);
       }
     } catch {}

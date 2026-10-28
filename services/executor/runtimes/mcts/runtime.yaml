@@ -1,21 +1,40 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 key: mcts
 displayName: MCTS
 targets:
   - { platform: pi-mcts, agent: pi-mcts }
   - { platform: xiao-mcts, agent: xiao-mcts }
-parameterGroups:
-  - key: search
-    label: MCTS 搜索参数
-    description: 已填入默认值，可直接调整。Token 熔断阈值为 0 时关闭熔断；Agent 超时独立生效。
-parameters:
-  - { key: maxIters, group: search, label: 最大迭代次数, type: integer, minimum: 1, required: true, default: 5, binding: { kind: argv, flag: --max-iters } }
-  - { key: branching, group: search, label: 分支数, type: integer, minimum: 1, required: true, default: 3, binding: { kind: argv, flag: --branching } }
-  - { key: maxTurnsInit, group: search, label: Solver 初始最大轮数, type: integer, minimum: 1, required: true, default: 160, binding: { kind: argv, flag: --max-turns-init } }
-  - { key: maxTurnsStep, group: search, label: Solver 后续最大轮数, type: integer, minimum: 1, required: true, default: 80, binding: { kind: argv, flag: --max-turns-step } }
-  - { key: maxTurnsAuthor, group: search, label: Author 初始最大轮数, type: integer, minimum: 1, required: true, default: 160, binding: { kind: argv, flag: --max-turns-author } }
-  - { key: maxTurnsAuthorStep, group: search, label: Author 后续最大轮数, type: integer, minimum: 1, required: true, default: 80, binding: { kind: argv, flag: --max-turns-author-step } }
-  - { key: tokenFuseLimit, group: search, label: Token 熔断阈值, type: integer, minimum: 0, required: true, default: 30000000, binding: { kind: argv, flag: --token-fuse-limit } }
-presets:
-  - key: quick
-    label: 填入联调参数
-    values: { maxIters: 1, branching: 1, maxTurnsInit: 20, maxTurnsStep: 10, maxTurnsAuthor: 20, maxTurnsAuthorStep: 10, tokenFuseLimit: 0 }
+parameterGroups: []
+parameters: []
+presets: []
+
+configuration:
+  version: 2
+  delivery: argv
+  defaults: { max-iters: 5, branching: 3, max-turns-init: 160, max-turns-step: 80, max-turns-author: 160, max-turns-author-step: 80, token-fuse-limit: 30000000 }
+  schema:
+    type: object
+    additionalProperties: true
+    properties:
+      max-iters: { type: integer, minimum: 1 }
+      branching: { type: integer, minimum: 1 }
+      max-turns-init: { type: integer, minimum: 1 }
+      max-turns-step: { type: integer, minimum: 1 }
+      max-turns-author: { type: integer, minimum: 1 }
+      max-turns-author-step: { type: integer, minimum: 1 }
+      token-fuse-limit: { type: integer, minimum: 0 }
+  binding:
+    mode: passthrough

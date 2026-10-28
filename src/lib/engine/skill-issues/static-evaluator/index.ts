@@ -1,7 +1,23 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 静态评估器 orchestrator。
  *
- * 写入分工见 docs/plans/2026-05-08-skill-opt-issues-api-design.md：
+ * 写入分工见 design/2026-05-08-skill-opt-issues-api-design.md：
  *   - 创建 Evaluation(type='static') 一行
  *   - 把 L1 linter + L2 LLM 的产出统一转成 SkillIssue 行（source='static'，FK = evaluation.id）
  *

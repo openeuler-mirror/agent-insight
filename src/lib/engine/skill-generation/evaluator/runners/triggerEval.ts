@@ -1,7 +1,23 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 触发评测 runner（opencode-live 路线）。
  *
- * 设计来源：docs/design/skill-eval-datasets/design.md。
+ * 设计来源：design/skill-eval-datasets/design.md。
  * 灵感：anthropic skill-creator `scripts/run_eval.py`——spawn 真实 agent runtime，
  *      流式抓 tool_use 事件，命中即 abort 节省 token。
  *
@@ -348,7 +364,6 @@ async function evalOne(
     logger.log('chat() returned', {
       sessionId,
       textLen: chatResult?.text?.length ?? 0,
-      textPreview: (chatResult?.text || '').slice(0, 120),
       stats: chatResult?.stats,
       triggered,
       competingSkill: competingSkill ?? null,

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use strict'
 /* eslint-disable @typescript-eslint/no-require-imports */
 
@@ -45,8 +61,10 @@ function mctsPaths(config) {
   }
 }
 
-function checkMctsPython(python) {
-  const result = spawnSync(python, ['-c', 'import sys, importlib.util; print(f"{sys.version_info.major}.{sys.version_info.minor}"); sys.exit(0 if importlib.util.find_spec("datasets") is not None else 42)'], {
+function checkMctsPython(python, benchmarkKey = 'swe-bench') {
+  const script = 'import sys, importlib.util; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+    + (benchmarkKey === 'swe-bench' ? '; sys.exit(0 if importlib.util.find_spec("datasets") is not None else 42)' : '')
+  const result = spawnSync(python, ['-c', script], {
     encoding: 'utf8', timeout: 5_000,
   })
   if (result.error?.code === 'ETIMEDOUT') throw new Error('MCTS Python 环境检查超过 5 秒，请检查客户端负载后重试')
@@ -60,16 +78,19 @@ function checkMctsPython(python) {
   }
 }
 
-function checkMctsRepository(config) {
+function checkMctsRepository(config, benchmarkKey = 'swe-bench') {
   const paths = mctsPaths(config)
   if (!path.isAbsolute(paths.repoDir) || /[\0\r\n]/.test(paths.repoDir)) throw new Error('请填写 MCTS 仓库的绝对路径')
   if (!path.isAbsolute(paths.python)) throw new Error('MCTS Python 路径必须是绝对路径')
-  for (const [target, label] of [[paths.entrypoint, 'MCTS 启动脚本'], [paths.configEnv, 'MCTS config.env'], [paths.main, 'MCTS 主程序'], [paths.python, 'MCTS Python 虚拟环境']]) {
+  for (const [target, label] of [
+    ...(benchmarkKey === 'swe-bench' ? [[paths.entrypoint, 'MCTS 启动脚本']] : []),
+    [paths.configEnv, 'MCTS config.env'], [paths.main, 'MCTS 主程序'], [paths.python, 'MCTS Python 虚拟环境'],
+  ]) {
     try { if (!fs.statSync(target).isFile()) throw new Error() }
     catch { throw new Error(`${label} 不存在`) }
   }
   if (!fs.readFileSync(paths.main, 'utf8').includes('--output-dir')) throw new Error('MCTS 未支持 --output-dir')
-  checkMctsPython(paths.python)
+  checkMctsPython(paths.python, benchmarkKey)
   return paths
 }
 
@@ -88,6 +109,20 @@ function mctsUpstream(paths, env = process.env) {
     throw new Error('MCTS config.env 中的 xGovernor 地址必须为不含凭据、查询或片段的 HTTP(S) 地址')
   }
   return url.toString().replace(/\/+$/, '')
+}
+
+function mctsZsoftTasksDir(config, env = process.env) {
+  const paths = mctsPaths(config)
+  const result = spawnSync('bash', ['-c', 'set -e; source "$1" >/dev/null 2>&1; printf "%s" "${ZSOFT_TASKS_DIR:-}" >&3', 'mcts-zsoft-config', paths.configEnv], {
+    cwd: paths.repoDir, env, stdio: ['ignore', 'ignore', 'ignore', 'pipe'], encoding: 'utf8', timeout: 5_000,
+  })
+  if (result.error?.code === 'ETIMEDOUT') throw new Error('MCTS ZSoft 任务目录配置读取超过 5 秒')
+  if (result.error || result.status !== 0) throw new Error('MCTS config.env 加载失败，请检查 ZSoft 任务目录配置')
+  const tasksDir = String(result.output[3] || '').trim()
+  if (!path.isAbsolute(tasksDir) || tasksDir.length > 4096 || /[\0\r\n]/.test(tasksDir)) {
+    throw new Error('请在 MCTS testcases_union/config.env 中将 ZSOFT_TASKS_DIR 配置为绝对路径')
+  }
+  return tasksDir
 }
 
 function saveMctsRepoDir(home, repoDir, python) {
@@ -116,4 +151,4 @@ function proxyPythonScript(python) {
   return `#!/bin/sh\nif [ -n "\${AGENT_INSIGHT_MCTS_PROXY_URL:-}" ]; then\n  export XGOVERNOR_BASE_URL="$AGENT_INSIGHT_MCTS_PROXY_URL"\nfi\nexec ${quotedPython} "$@"\n`
 }
 
-module.exports = { readMctsEnvFile, installationMctsConfig, mctsPaths, checkMctsPython, checkMctsRepository, mctsUpstream, saveMctsRepoDir, shellQuote, proxyPythonScript }
+module.exports = { readMctsEnvFile, installationMctsConfig, mctsPaths, checkMctsPython, checkMctsRepository, mctsUpstream, mctsZsoftTasksDir, saveMctsRepoDir, shellQuote, proxyPythonScript }

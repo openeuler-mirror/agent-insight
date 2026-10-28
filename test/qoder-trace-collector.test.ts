@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- OTLP fixtures intentionally exercise loosely typed external payloads. */
 import assert from "node:assert/strict"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
@@ -2580,7 +2596,7 @@ test("Qoder framework and OTLP registries expose plugin onboarding and snapshot 
   assert.equal(framework.capabilities?.skills, true)
   assert.equal(framework.capabilities?.subagentTree, true)
   assert.equal(framework.capabilities?.allowSnapshotShrink, true)
-  assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["actrail", "langfuse-langgraph", "hermes", "qwencode", "openclaw", "qwenpaw", "codex", "llamaindex", "qoder", "pi-agent", "workbuddy", "mcts-xgovernor", "generic"])
+  assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["xgovernor-agent", "actrail", "langfuse-langgraph", "hermes", "qwencode", "openclaw", "qwenpaw", "codex", "llamaindex", "qoder", "pi-agent", "workbuddy", "mcts-xgovernor", "generic"])
 })
 
 test("Qoder setup merges idempotently and removes only Agent Insight hooks", () => {

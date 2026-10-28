@@ -1,9 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
 /**
  * Skills 分析 — header-context strip
  *
- * 依据 docs/design/patterns.md §A.5.3 `detail-object` 变体 + 原型
+ * 依据 design/patterns.md §A.5.3 `detail-object` 变体 + 原型
  * refs/ui-2026-05/.../agent-insight-prototype-统一导航栏和skill选项.html
  * `data-page="analysis"` 的 .header-context 段落。
  *

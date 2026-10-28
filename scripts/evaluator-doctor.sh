@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 set -euo pipefail
 
 CONTAINER_NAME=agent-insight-benchmark-evaluator
 CONFIG_FILE=${AGENT_INSIGHT_EVALUATOR_HOME:-$HOME/.agent-insight/evaluator}/evaluator.env
 EXPECTED_IMAGE_ID=
 SMOKE=
+SUMMARY=false
 
 fail() {
   printf 'Evaluator Doctor 失败：%s\n' "$1" >&2
@@ -23,8 +38,9 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2
       ;;
+    --summary) SUMMARY=true; shift ;;
     --help|-h)
-      printf 'Usage: bash scripts/evaluator-doctor.sh [--smoke <evaluator-key>]\n'
+      printf 'Usage: bash scripts/evaluator-doctor.sh [--smoke <evaluator-key>] [--summary]\n'
       exit 0
       ;;
     *) fail "不支持的参数：$1" ;;
@@ -49,7 +65,10 @@ if [ -n "$EXPECTED_IMAGE_ID" ] && [ "$ACTUAL_IMAGE_ID" != "$EXPECTED_IMAGE_ID" ]
   fail "Controller image ID 不匹配：$ACTUAL_IMAGE_ID"
 fi
 
-if ! DOCTOR_OUTPUT=$(docker exec "$CONTAINER_NAME" node services/evaluator/src/cli.cjs doctor); then
+DOCTOR_ARGS=(doctor)
+if [ "$SUMMARY" = true ]; then DOCTOR_ARGS+=(--summary); fi
+if ! DOCTOR_OUTPUT=$(docker exec "$CONTAINER_NAME" node services/evaluator/src/cli.cjs "${DOCTOR_ARGS[@]}"); then
+  if [ -n "$DOCTOR_OUTPUT" ]; then printf '%s\n' "$DOCTOR_OUTPUT" >&2; fi
   docker logs --tail 50 "$CONTAINER_NAME" >&2 || true
   fail '容器内 Doctor 未通过'
 fi

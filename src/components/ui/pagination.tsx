@@ -1,4 +1,20 @@
-// docs/design/components.md §2 E.9 — pagination component used by list pages.
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// design/components.md §2 E.9 — pagination component used by list pages.
 'use client';
 
 import * as React from 'react';
@@ -10,7 +26,9 @@ import { cn } from '@/lib/utils';
 export interface PaginationProps {
     page: number;
     pageSize: number;
-    total: number;
+    total: number | null;
+    hasMore?: boolean;
+    unknownTotalSummary?: React.ReactNode;
     onPageChange: (p: number) => void;
     onPageSizeChange?: (size: number) => void;
     pageSizes?: ReadonlyArray<number>;
@@ -30,6 +48,8 @@ export function Pagination({
     page,
     pageSize,
     total,
+    hasMore,
+    unknownTotalSummary,
     onPageChange,
     onPageSizeChange,
     pageSizes = [20, 50, 100],
@@ -37,15 +57,16 @@ export function Pagination({
     pageSizeLabel = n => `${n} / page`,
     className,
 }: PaginationProps) {
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const totalPages = total === null ? page : Math.max(page, 1, Math.ceil(total / pageSize));
     const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
-    const end = Math.min(page * pageSize, total);
-    const pages = getPageNumbers(page, totalPages);
+    const end = Math.min(page * pageSize, total ?? page * pageSize);
+    const pages = total === null ? [page] : getPageNumbers(page, totalPages);
 
     return (
         <div className={cn('flex items-center justify-between gap-3', className)}>
             <p className="text-xs text-foreground-muted">
-                {summary ? summary(start, end, total) : `${start}–${end} of ${total}`}
+                {total === null ? (unknownTotalSummary ?? `Page ${page}`)
+                    : summary ? summary(start, end, total) : `${start}–${end} of ${total}`}
             </p>
             <div className="flex items-center gap-1.5">
                 <Button
@@ -78,7 +99,7 @@ export function Pagination({
                     variant="outline"
                     size="sm"
                     onClick={() => onPageChange(page + 1)}
-                    disabled={page >= totalPages}
+                    disabled={hasMore === undefined ? page >= totalPages : !hasMore}
                     className="size-8 p-0"
                     aria-label="Next page"
                 >

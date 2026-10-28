@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { resolveModelTestTimeoutMs } from '@/lib/shared/model-connection-test';
 import { db } from '@/lib/storage/prisma';
 import { loadDefaultModelConfigs } from '@/lib/shared/default-model-config';
@@ -5,6 +21,12 @@ import {
     normalizeCustomHeaders,
     supportsCustomHeaders,
 } from '@/lib/shared/model-connection';
+import { randomUUID } from 'node:crypto';
+import {
+    appendRuntimeParameterTemplate,
+    readRuntimeParameterTemplates,
+    type RuntimeParameterTemplate,
+} from '@/lib/engine/experiment/runtime-parameter-templates';
 
 export interface ModelConfig {
     id: string;
@@ -25,6 +47,18 @@ export interface UserSettings {
     searchProvider?: 'tavily' | 'none';
     /** 联网搜索 API key（明文存 JSON blob，跟模型 apiKey 同等敏感度处理） */
     searchApiKey?: string;
+    runtimeParameterTemplates?: RuntimeParameterTemplate[];
+}
+
+const settingsWrites = new Map<string, Promise<void>>();
+
+async function writeUserSettings<T>(user: string, write: () => Promise<T>): Promise<T> {
+    const previous = settingsWrites.get(user) ?? Promise.resolve();
+    const result = previous.catch(() => {}).then(write);
+    const settled = result.then(() => {}, () => {});
+    settingsWrites.set(user, settled);
+    try { return await result; }
+    finally { if (settingsWrites.get(user) === settled) settingsWrites.delete(user); }
 }
 
 /**
@@ -105,12 +139,13 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
     let autoEvaluationEnabled = true;
     let searchProvider: 'tavily' | 'none' | undefined;
     let searchApiKey: string | undefined;
+    let runtimeParameterTemplates: RuntimeParameterTemplate[] = [];
 
     try {
         const record = await db.findUserSettings(user);
         if (record?.settingsJson) {
             const settings = JSON.parse(record.settingsJson);
-            userConfigs = settings.configs.filter((c: ModelConfig) => !c.id.startsWith('default_'));
+            userConfigs = (settings.configs || []).filter((c: ModelConfig) => !c.id.startsWith('default_'));
             activeConfigId = settings.activeConfigId;
             if (typeof settings.autoEvaluationEnabled === 'boolean') {
                 autoEvaluationEnabled = settings.autoEvaluationEnabled;
@@ -121,6 +156,7 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
             if (typeof settings.searchApiKey === 'string') {
                 searchApiKey = settings.searchApiKey;
             }
+            runtimeParameterTemplates = readRuntimeParameterTemplates(settings.runtimeParameterTemplates);
         }
     } catch (e) {
         console.error('Failed to load user settings:', e);
@@ -138,10 +174,15 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
         autoEvaluationEnabled,
         searchProvider,
         searchApiKey,
+        ...(runtimeParameterTemplates.length ? { runtimeParameterTemplates } : {}),
     };
 }
 
 export async function saveUserSettings(user: string, settings: UserSettings): Promise<void> {
+    return writeUserSettings(user, () => persistUserSettings(user, settings));
+}
+
+async function persistUserSettings(user: string, settings: UserSettings): Promise<void> {
     // The client only ever receives masked keys (see maskUserSettings), so an
     // unchanged config round-trips back here with a masked apiKey. Restore the
     // stored original for those, so saving never clobbers a real key with a mask.
@@ -175,7 +216,24 @@ export async function saveUserSettings(user: string, settings: UserSettings): Pr
         autoEvaluationEnabled: settings.autoEvaluationEnabled ?? true,
         searchProvider: settings.searchProvider ?? 'none',
         searchApiKey: restoredSearchApiKey,
+        runtimeParameterTemplates: existing.runtimeParameterTemplates ?? [],
     });
 
     await db.upsertUserSettings(user, settingsJson);
+}
+
+export async function getRuntimeParameterTemplates(user: string | null): Promise<RuntimeParameterTemplate[]> {
+    if (!user) return [];
+    const record = await db.findUserSettings(user);
+    return readRuntimeParameterTemplates(record?.settingsJson ? JSON.parse(record.settingsJson).runtimeParameterTemplates : []);
+}
+
+export async function saveRuntimeParameterTemplate(user: string, input: unknown): Promise<RuntimeParameterTemplate> {
+    return writeUserSettings(user, async () => {
+        const record = await db.findUserSettings(user);
+        const stored = record?.settingsJson ? JSON.parse(record.settingsJson) : { activeConfigId: null, configs: [] };
+        const result = appendRuntimeParameterTemplate(readRuntimeParameterTemplates(stored.runtimeParameterTemplates), input, randomUUID());
+        await db.upsertUserSettings(user, JSON.stringify({ ...stored, runtimeParameterTemplates: result.templates }));
+        return result.template;
+    });
 }

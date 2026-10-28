@@ -1,3 +1,17 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # 源码挂载模式：容器启动时按挂载进来的源码重新构建再运行，改完代码只需重启容器。
 #
 # 服务器上的使用步骤：
@@ -24,6 +38,7 @@ services:
       - "3000:3000"                              # 端口按需改，仓库里其它 compose 用的是 3033
     environment:
       - AGENT_INSIGHT_SOURCE_DIR=/src            # 关键：配了才走源码模式，去掉即回到镜像内置版本
+      - AGENT_INSIGHT_LOG_LEVEL=${AGENT_INSIGHT_LOG_LEVEL:-error} # 临时排查设为 debug
       - NODE_OPTIONS=--max-old-space-size=2048   # 小内存机器上防止 next build 被 OOM kill
     volumes:
       - /srv/agent-insight:/src:ro               # 源码，只读即可

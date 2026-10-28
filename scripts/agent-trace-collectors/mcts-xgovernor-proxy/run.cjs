@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
@@ -8,6 +24,7 @@ const os = require("node:os");
 const path = require("node:path");
 const net = require("node:net");
 const tls = require("node:tls");
+const { parseEnv } = require("node:util");
 const { spawn } = require("node:child_process");
 const { StringDecoder } = require("node:string_decoder");
 
@@ -60,6 +77,19 @@ async function loadConfig(args, env = process.env) {
     : path.join(os.homedir(), ".agent-insight");
   const configPath = args.configPath || path.join(agentInsightHome, "collectors", "mcts-xgovernor-proxy", "config.json");
   const file = await readConfig(configPath);
+  // Benchmark runs use a private spool HOME; credentials belong to the installed collector.
+  const packageDir = path.dirname(configPath);
+  const installationHome = path.basename(packageDir) === "mcts-xgovernor-proxy"
+    && path.basename(path.dirname(packageDir)) === "collectors"
+    ? path.dirname(path.dirname(packageDir)) : agentInsightHome;
+  let shared = {};
+  try { shared = parseEnv(await fsp.readFile(path.join(installationHome, ".env"), "utf8")); }
+  catch (error) {
+    if (error.code !== "ENOENT") throw new Error("Cannot read MCTS shared collector credentials");
+  }
+  const apiKey = String(env.AGENT_INSIGHT_API_KEY
+    || (Object.hasOwn(shared, "AGENT_INSIGHT_API_KEY") ? shared.AGENT_INSIGHT_API_KEY : file.apiKey)
+    || "").trim();
   const mcts = installationMctsConfig(agentInsightHome, env);
   const paths = mctsPaths({
     mctsRepoDir: mcts.mctsRepoDir || file.mctsRepoDir,
@@ -75,7 +105,7 @@ async function loadConfig(args, env = process.env) {
     configPath,
     mctsRepoDir: paths.repoDir,
     mctsPython: paths.python,
-    apiKey: String(env.AGENT_INSIGHT_API_KEY || file.apiKey || "").trim(),
+    apiKey,
     upstreamUrl: String(args.upstream || (paths.repoDir ? mctsUpstream(paths, env) : env.AGENT_INSIGHT_MCTS_UPSTREAM_URL || env.XGOVERNOR_BASE_URL || file.upstreamUrl || "http://127.0.0.1:8787")).replace(/\/+$/, ""),
     otlpEndpoint: env.AGENT_INSIGHT_OTLP_ENDPOINT || file.otlpEndpoint || `${baseUrl}/api/ingest/otel/v1/traces`,
     collaborationSessionsEndpoint: env.AGENT_INSIGHT_MCTS_COLLABORATION_SESSIONS_ENDPOINT || file.collaborationSessionsEndpoint || `${baseUrl}/api/ingest/collaborations/sessions`,
@@ -84,6 +114,32 @@ async function loadConfig(args, env = process.env) {
     captureReasoning: args.captureReasoning || bool(env.AGENT_INSIGHT_MCTS_CAPTURE_REASONING, file.captureReasoning === true),
     strict: args.strict || bool(env.AGENT_INSIGHT_MCTS_STRICT, file.strict === true) || !bypassOnStartFailure,
   };
+}
+
+async function preflightTrace(config, fetchImpl = fetch) {
+  if (!config.apiKey) throw new Error("MCTS Trace credential missing; rerun the client installer for the intended platform account");
+  let response;
+  try {
+    response = await fetchImpl(config.otlpEndpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-witty-api-key": config.apiKey },
+      body: JSON.stringify({ resourceSpans: [] }),
+      signal: AbortSignal.timeout(5000),
+      redirect: "error",
+    });
+  } catch {
+    throw new Error("MCTS Trace preflight failed: platform unreachable or request timed out; MCTS was not started");
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error([401, 403].includes(response.status)
+      ? "MCTS Trace authentication failed (HTTP " + response.status + "); check AGENT_INSIGHT_API_KEY in the process environment or installation .env; MCTS was not started"
+      : "MCTS Trace preflight failed (HTTP " + response.status + "); MCTS was not started");
+  }
+  const result = await response.json().catch(() => null);
+  if (result?.status !== "accepted" || result.received !== 0) {
+    throw new Error("MCTS Trace preflight returned an unexpected response; check the platform endpoint; MCTS was not started");
+  }
 }
 
 async function preflightUpstream(upstreamUrl, timeoutMs = 1_500) {
@@ -190,6 +246,8 @@ async function runConfiguredCommand(args, config, pythonBin) {
     return;
   }
 
+  await preflightTrace(config);
+
   const stateDir = path.join(config.agentInsightHome, "otel_data", FRAMEWORK, apiKeyHash(config.apiKey));
   const writer = new DurableTraceWriter({ framework: FRAMEWORK, apiKey: config.apiKey, stateDir });
   const uploader = new DurableTraceUploader({
@@ -285,4 +343,4 @@ if (require.main === module) main().catch(error => {
   process.exitCode = 1;
 });
 
-module.exports = { LIVENESS_INTERVAL_MS, bounded, childResult, loadConfig, main, parseArgs, preflightUpstream, runChild, signalExitCode, teeLines };
+module.exports = { LIVENESS_INTERVAL_MS, bounded, childResult, loadConfig, main, parseArgs, preflightTrace, preflightUpstream, runChild, signalExitCode, teeLines };

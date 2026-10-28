@@ -1,6 +1,23 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
 import Link from 'next/link';
+import { traceRelationsPending } from '@/lib/trace/parent-agent';
 import { useRouter, useSearchParams } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import {
@@ -22,7 +39,7 @@ import {
     ChevronDown,
     Database,
 } from 'lucide-react';
-import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
+import { parseAsInteger, parseAsString, useQueryState, useQueryStates } from 'nuqs';
 import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -152,10 +169,9 @@ interface TraceListStats {
 
 interface TracePageResponse {
     records: Execution[];
-    total: number;
+    hasMore: boolean;
     page: number;
     pageSize: number;
-    stats?: TraceListStats;
 }
 
 interface FacetValueRow {
@@ -169,6 +185,7 @@ type SortDir = 'asc' | 'desc';
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
 const TRACE_LIST_REFRESH_MS = 5_000;
+const TRACE_STATS_REFRESH_MS = 30_000;
 
 type TraceColumnKey = 'traceId' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
 type ResizableColKey = TraceColumnKey;
@@ -505,13 +522,14 @@ function TracePageContent() {
     const { user, apiKey } = useAuth();
     const { t, locale } = useLocale();
     const [data, setData] = useState<Execution[]>([]);
-    const [total, setTotal] = useState(0);
-    const [stats, setStats] = useState<TraceListStats>({
-        total: 0,
-        failedCount: 0,
-        avgLatencyMs: 0,
-        toolErrorRate: 0,
-    });
+    const [stats, setStats] = useState<TraceListStats | null>(null);
+    const [statsRequest, setStatsRequest] = useState<string | null>(null);
+    const [statsLoading, setStatsLoading] = useState(false);
+    const [statsError, setStatsError] = useState(false);
+    const [statsRetry, setStatsRetry] = useState(0);
+    const [hasMore, setHasMore] = useState(false);
+    const [listError, setListError] = useState(false);
+    const total = stats?.total ?? null;
     const [loading, setLoading] = useState(true);
     const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
     const [selectedTracesByKey, setSelectedTracesByKey] = useState<Map<string, Execution>>(() => new Map());
@@ -545,7 +563,7 @@ function TracePageContent() {
         setData(previous => previous.map(item => item.upload_id === latest.upload_id ? latest : item));
     }, []);
 
-    // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
+    // URL-persisted filter / sort / paging state (design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', traceFilterParsers.time);
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', traceFilterParsers.status);
     const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
@@ -560,7 +578,7 @@ function TracePageContent() {
     const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
-    const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
+    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString });
     const [search, setSearch] = useQueryState('q', traceFilterParsers.q);
     const [showFilters, setShowFilters] = useState(false);
     const [clausesRaw, setClausesRaw] = useQueryState('f', traceFilterParsers.f);
@@ -690,15 +708,20 @@ function TracePageContent() {
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
-        void setTaskIdParam(id, { history: id ? 'push' : 'replace' });
+        void setTraceTarget({ taskId: id, executionId: null }, { history: id ? 'push' : 'replace' });
         if (id) reportTraceDetailView(id);
-    }, [setTaskIdParam, reportTraceDetailView]);
+    }, [setTraceTarget, reportTraceDetailView]);
 
     // Resolve selectedExecution from URL on data load or URL change.
     //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)
-    const fetchGuardRef = useRef<string | null>(null);
+    const executionLookupRequestRef = useRef(0);
+    const [executionLookupError, setExecutionLookupError] = useState<string | null>(null);
+    const [executionLookupRetry, setExecutionLookupRetry] = useState(0);
     const listRequestIdRef = useRef(0);
     const listFilterKey = useMemo(() => JSON.stringify([
+        user,
+        apiKey,
+        reliabilityAnomalyFilter,
         agentScopeFilter,
         skillFilter,
         selectedUserTagIds,
@@ -713,6 +736,9 @@ function TracePageContent() {
         sortDir,
         pageSize,
     ]), [
+        user,
+        apiKey,
+        reliabilityAnomalyFilter,
         agentScopeFilter,
         skillFilter,
         selectedUserTagIds,
@@ -736,46 +762,47 @@ function TracePageContent() {
     const previousListFilterKeyRef = useRef(listFilterKey);
     const previousListRequestKeyRef = useRef<string | null>(null);
     useEffect(() => {
-        if (!taskIdParam) {
-            if (selectedExecution) setSelectedExecution(null);
-            fetchGuardRef.current = null;
+        const requestId = ++executionLookupRequestRef.current;
+        setExecutionLookupError(null);
+        if (!taskIdParam && !executionIdParam) {
+            setSelectedExecution(null);
             return;
         }
-        const exec = data.find(e => e.task_id === taskIdParam || e.upload_id === taskIdParam);
+        const matchesTask = (item: Execution) => executionIdParam ? item.upload_id === executionIdParam : item.task_id === taskIdParam || item.upload_id === taskIdParam;
+        const exec = data.find(matchesTask);
         if (exec) {
-            fetchGuardRef.current = null;
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }
-        if (fetchGuardRef.current === taskIdParam) return;
-        fetchGuardRef.current = taskIdParam;
-        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`)
+        if (selectedExecution && matchesTask(selectedExecution)) return;
+        const controller = new AbortController();
+        setSelectedExecution(null);
+        apiFetch(`/api/observe/data?${executionIdParam ? `executionId=${encodeURIComponent(executionIdParam)}` : `taskId=${encodeURIComponent(taskIdParam || '')}`}&includeEvaluations=0&skipAutoEvalReady=1`, { signal: controller.signal })
             .then(async r => ({ ok: r.ok, status: r.status, body: await r.json() }))
             .then(({ ok, status, body }) => {
-                if (fetchGuardRef.current !== taskIdParam) return;
+                if (controller.signal.aborted || requestId !== executionLookupRequestRef.current) return;
                 if (!ok && status !== 404) throw new Error('Trace lookup failed');
-                const d = body as Execution[];
-                if (Array.isArray(d) && d.length > 0) {
-                    setSelectedExecution(d[0]);
+                const target = ok && Array.isArray(body) ? body.find(matchesTask) : null;
+                if (target) {
+                    setSelectedExecution(target);
                     return;
                 }
-                setSelectedExecution(null);
-                void setTaskIdParam(null);
-                toast.error(locale === 'zh' ? '未找到对应的子 Agent Trace' : 'Sub-agent trace not found');
+                setExecutionLookupError(locale === 'zh' ? '未找到对应的 Agent Trace' : 'Agent Trace not found');
             })
             .catch(() => {
-                if (fetchGuardRef.current !== taskIdParam) return;
-                fetchGuardRef.current = null;
-                toast.error(locale === 'zh' ? '子 Agent Trace 加载失败' : 'Failed to load sub-agent trace');
+                if (controller.signal.aborted || requestId !== executionLookupRequestRef.current) return;
+                setExecutionLookupError(locale === 'zh' ? 'Agent Trace 加载失败' : 'Failed to load Agent Trace');
             });
+        return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [taskIdParam, data]);
+    }, [taskIdParam, executionIdParam, data, executionLookupRetry]);
 
     useEffect(() => {
         if (!filtersReady) return;
         const requestId = ++listRequestIdRef.current;
         const filtersChanged = previousListFilterKeyRef.current !== listFilterKey;
         previousListFilterKeyRef.current = listFilterKey;
+        if (filtersChanged) setStatsRequest(null);
         if (filtersChanged && page !== 1) {
             void setPage(1);
             return;
@@ -785,7 +812,12 @@ function TracePageContent() {
         listRequestPendingRef.current = true;
         const silentRefresh = previousListRequestKeyRef.current === listRequestKey;
         previousListRequestKeyRef.current = listRequestKey;
-        if (!silentRefresh) setLoading(true);
+        if (!silentRefresh) {
+            setLoading(true);
+            setData([]);
+            setHasMore(false);
+            setListError(false);
+        }
         const scopeParam = agentScopeFilter === 'subagent'
             ? '&onlySubagents=1'
             : agentScopeFilter === 'all'
@@ -800,27 +832,25 @@ function TracePageContent() {
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
-            .then(r => r.json())
+        const listUrl = `/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`;
+        apiFetch(listUrl + '&listPart=records', { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+            .then(response => {
+                if (!response.ok) throw new Error('Trace list request failed');
+                return response.json();
+            })
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
-                const records = Array.isArray(response?.records) ? response.records : [];
-                setData(records);
-                setTotal(typeof response?.total === 'number' ? response.total : 0);
-                setStats(response?.stats ?? {
-                    total: typeof response?.total === 'number' ? response.total : 0,
-                    failedCount: 0,
-                    avgLatencyMs: 0,
-                    toolErrorRate: 0,
-                });
+                if (!Array.isArray(response?.records)) throw new Error('Invalid Trace list response');
+                setListError(false);
+                setData(response.records);
+                setHasMore(response.hasMore === true);
+                const params = new URLSearchParams(listUrl.split('?')[1]);
+                params.set('listPart', 'stats');
+                setStatsRequest('/api/observe/data?' + params.toString());
             })
             .catch(() => {
                 if (listRequestIdRef.current !== requestId) return;
-                if (!silentRefresh) {
-                    setData([]);
-                    setTotal(0);
-                    setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
-                }
+                setListError(true);
             })
             .finally(() => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -858,6 +888,49 @@ function TracePageContent() {
         setPage,
         filtersReady,
     ]);
+
+    useEffect(() => {
+        setStats(null);
+        setStatsError(false);
+        setStatsLoading(false);
+        if (!statsRequest) return;
+        const controller = new AbortController();
+        let active = true;
+        let pending = false;
+        const refresh = async () => {
+            if (pending || document.visibilityState !== 'visible') return;
+            pending = true;
+            setStatsLoading(true);
+            try {
+                const response = await apiFetch(statsRequest, {
+                    cache: 'no-store', signal: controller.signal,
+                    headers: apiKey ? { 'x-witty-api-key': apiKey } : {},
+                });
+                if (!response.ok) throw new Error('Trace statistics request failed');
+                const payload = await response.json();
+                if (!payload?.stats || !['total', 'failedCount', 'avgLatencyMs', 'toolErrorRate']
+                    .every(key => typeof payload.stats[key] === 'number' && Number.isFinite(payload.stats[key]))) {
+                    throw new Error('Invalid Trace statistics response');
+                }
+                if (!active) return;
+                setStats(payload.stats);
+                setStatsError(false);
+            } catch {
+                if (active) setStatsError(true);
+            } finally {
+                pending = false;
+                if (active) setStatsLoading(false);
+            }
+        };
+        void refresh();
+        const timer = window.setInterval(refresh, TRACE_STATS_REFRESH_MS);
+        return () => {
+            active = false;
+            controller.abort();
+            window.clearInterval(timer);
+        };
+    }, [statsRequest, apiKey, statsRetry]);
+
 
     const handleImportFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -900,7 +973,7 @@ function TracePageContent() {
         }
     };
 
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const totalPages = total === null ? null : Math.max(1, Math.ceil(total / pageSize));
     const pageItems = data;
 
     const selectedTraceKeys = useMemo(
@@ -947,8 +1020,8 @@ function TracePageContent() {
     const clearTraceSelection = useCallback(() => setSelectedTracesByKey(new Map()), []);
 
     useEffect(() => {
-        if (page > totalPages) setPage(totalPages);
-    }, [page, totalPages, setPage]);
+        if (!loading && !listError && data.length === 0 && totalPages !== null && page > totalPages) setPage(totalPages);
+    }, [page, totalPages, setPage, loading, listError, data.length]);
 
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || selectedUserTagIds.length > 0
         || anomalyFilter !== 'all' || reliabilityAnomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
@@ -997,7 +1070,7 @@ function TracePageContent() {
         <>
             <AppTopBar
                 title={<Term id="trace" label={t('nav.trace')} />}
-                actions={!selectedExecution ? (
+                actions={!taskIdParam && !executionIdParam ? (
                     <>
                         <Button variant="outline" size="sm" asChild><Link href="/observe/collaborations">协作图</Link></Button>
                         <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
@@ -1010,9 +1083,21 @@ function TracePageContent() {
                 showDefaultActions={false}
             />
             <PageContainer>
-                {selectedExecution ? (
+                {(taskIdParam || executionIdParam) && (!selectedExecution || (executionIdParam ? selectedExecution.upload_id !== executionIdParam : selectedExecution.task_id !== taskIdParam && selectedExecution.upload_id !== taskIdParam)) ? (
+                    executionLookupError ? <div role="alert" className="rounded-md border border-border p-6 space-y-3">
+                        <p>{executionLookupError}</p>
+                        <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => setExecutionLookupRetry(value => value + 1)}>{locale === 'zh' ? '重试' : 'Retry'}</Button>
+                            <Button variant="ghost" onClick={() => handleSelectExecution(null)}>{t('tracePage.backToList')}</Button>
+                        </div>
+                    </div> : <div role="status" className="space-y-4 p-6">
+                        <p className="text-sm text-foreground-muted">{locale === 'zh' ? '正在加载目标 Trace…' : 'Loading target Trace…'}</p>
+                        <Skeleton className="h-12 w-full" />
+                        <Skeleton className="h-64 w-full" />
+                    </div>
+                ) : selectedExecution ? (
                     <TraceDetailView
-                        key={selectedExecution.task_id || selectedExecution.upload_id}
+                        key={selectedExecution.upload_id || selectedExecution.task_id}
                         execution={selectedExecution}
                         onExecutionRefresh={handleExecutionRefresh}
                         onBack={() => handleSelectExecution(null)}
@@ -1025,19 +1110,26 @@ function TracePageContent() {
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                             <StatCard
                                 label={<Term id="trace" label={t('tracePage.statTotal')} />}
-                                value={stats.total.toLocaleString()}
+                                value={stats ? stats.total.toLocaleString() : '—'}
                             />
                             <StatCard
                                 label={<Term id="fault-item" label={t('tracePage.statFailed')} />}
-                                value={String(stats.failedCount)}
-                                accent={stats.failedCount > 0 ? 'error' : undefined}
+                                value={stats ? String(stats.failedCount) : '—'}
+                                accent={stats && stats.failedCount > 0 ? 'error' : undefined}
                             />
-                            <StatCard label={t('tracePage.statAvgLatency')} value={formatDurationMs(stats.avgLatencyMs)} />
+                            <StatCard label={t('tracePage.statAvgLatency')} value={stats ? formatDurationMs(stats.avgLatencyMs) : '—'} />
                             <StatCard
                                 label={<Term id="tool-error-rate" label={t('tracePage.statToolErrorRate')} align="end" />}
-                                value={`${stats.toolErrorRate}%`}
+                                value={stats ? `${stats.toolErrorRate}%` : '—'}
                             />
                         </div>
+
+                        {(statsLoading || statsError) && (
+                            <div role="status" className="mb-3 text-xs text-foreground-muted flex items-center gap-2">
+                                {t(statsError ? 'tracePage.statsError' : 'tracePage.statsLoading')}
+                                {statsError && <Button variant="ghost" size="sm" onClick={() => setStatsRetry(value => value + 1)}>{t('tracePage.retry')}</Button>}
+                            </div>
+                        )}
 
                         {user && (
                             <div className="mb-3">
@@ -1162,7 +1254,7 @@ function TracePageContent() {
                             ) : (
                                 <h2 className="text-sm font-semibold text-foreground">
                                     {t('tracePage.listTitle')}
-                                    <span className="ml-2 text-foreground-muted font-normal tabular-nums">{total}</span>
+                                    <span className="ml-2 text-foreground-muted font-normal tabular-nums">{total ?? '—'}</span>
                                 </h2>
                             )}
                             <div className="flex items-center gap-3">
@@ -1216,6 +1308,12 @@ function TracePageContent() {
                         </div>
 
                         <PageContent className="flex flex-col">
+                            {listError && (
+                                <div role="alert" className="mb-3 flex items-center gap-2 text-sm text-foreground-muted">
+                                    {t('tracePage.listError')}
+                                    <Button variant="outline" size="sm" onClick={() => setReloadKey(value => value + 1)}>{t('tracePage.retry')}</Button>
+                                </div>
+                            )}
                             <div className="flex-1 min-h-0 rounded-md border border-card-border bg-card overflow-auto">
                                 {loading ? (
                                     <div className="p-4 space-y-2">
@@ -1223,9 +1321,9 @@ function TracePageContent() {
                                     </div>
                                 ) : pageItems.length === 0 ? (
                                     <EmptyState
-                                        title={t('tracePage.emptyTitle')}
-                                        description={hasActiveFilters ? t('tracePage.emptyDescription') : undefined}
-                                        action={hasActiveFilters ? (
+                                        title={t(listError ? 'tracePage.listError' : 'tracePage.emptyTitle')}
+                                        description={!listError && hasActiveFilters ? t('tracePage.emptyDescription') : undefined}
+                                        action={!listError && hasActiveFilters ? (
                                             <Button variant="outline" size="sm" onClick={resetFilters}>
                                                 {t('tracePage.resetFilters')}
                                             </Button>
@@ -1329,13 +1427,15 @@ function TracePageContent() {
                             </div>
                         </PageContent>
 
-                        {total > 0 && (
+                        {(data.length > 0 || page > 1) && (
                             <PageFooter className="border-0 mt-3 pt-0 shrink-0">
                                 <Pagination
                                     className="w-full"
                                     page={page}
                                     pageSize={pageSize}
                                     total={total}
+                                    hasMore={hasMore}
+                                    unknownTotalSummary={t('tracePage.pageUnknownTotal', { page: String(page) })}
                                     onPageChange={setPage}
                                     onPageSizeChange={setPageSize}
                                     pageSizes={PAGE_SIZE_OPTIONS}
@@ -1393,7 +1493,7 @@ function TracePageContent() {
                         <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
                             const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
                             setImportResult(null);
-                            if (targetId) void setTaskIdParam(targetId, { history: 'push' });
+                            if (targetId) void setTraceTarget({ taskId: targetId, executionId: null }, { history: 'push' });
                         }}>
                             {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
                         </Button>
@@ -1495,8 +1595,8 @@ function TraceDetailView({
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => {
                 if (requestId !== sessionRequestRef.current) return;
-                const wasWaiting = ['pending', 'unavailable'].includes(sessionRef.current?.parentAgent?.state);
-                if (!wasWaiting && ['pending', 'unavailable'].includes(j.parentAgent?.state)) setAutoRefresh(true);
+                const wasWaiting = traceRelationsPending(sessionRef.current);
+                if (!wasWaiting && traceRelationsPending(j)) setAutoRefresh(true);
                 setSession(j);
                 setSecondsSinceRefresh(0);
             })
@@ -1508,10 +1608,10 @@ function TraceDetailView({
 
     useEffect(() => { fetchSession(false); }, [fetchSession]);
 
-    const waitingForParent = session?.parentAgent?.state === 'pending' || session?.parentAgent?.state === 'unavailable';
+    const waitingForRelations = traceRelationsPending(session);
 
     useEffect(() => {
-        if (!autoRefresh || (!waitingForParent && execStatus !== 'running' && execStatus !== 'timed_out')) return;
+        if (!autoRefresh || (!waitingForRelations && execStatus !== 'running' && execStatus !== 'timed_out')) return;
         const refreshWhenVisible = () => {
             if (document.visibilityState === 'visible') fetchSession(true);
         };
@@ -1521,7 +1621,7 @@ function TraceDetailView({
             window.clearInterval(id);
             document.removeEventListener('visibilitychange', refreshWhenVisible);
         };
-    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus, waitingForParent]);
+    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus, waitingForRelations]);
 
     useEffect(() => {
         const id = setInterval(() => setSecondsSinceRefresh(s => s + 1), 1000);
@@ -1562,7 +1662,7 @@ function TraceDetailView({
     const cost = typeof latestExecution?.cost === 'number'
         ? latestExecution.cost
         : execution.cost;
-    const isRunning = execStatus === 'running' || execStatus === 'timed_out';
+    const canAutoRefresh = waitingForRelations || execStatus === 'running' || execStatus === 'timed_out';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
     const downloadSessionJson = async () => {
@@ -1670,24 +1770,24 @@ function TraceDetailView({
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <Button
-                                    variant={autoRefresh && isRunning ? 'default' : 'outline'}
+                                    variant={autoRefresh && canAutoRefresh ? 'default' : 'outline'}
                                     size="sm"
-                                    disabled={!isRunning}
-                                    onClick={() => isRunning && setAutoRefresh(v => !v)}
-                                    aria-pressed={autoRefresh && isRunning}
+                                    disabled={!canAutoRefresh}
+                                    onClick={() => canAutoRefresh && setAutoRefresh(v => !v)}
+                                    aria-pressed={autoRefresh && canAutoRefresh}
                                     className="h-7 px-2.5 text-xs"
                                 >
-                                    <RefreshCw className={cn('size-3.5', autoRefresh && isRunning && 'animate-spin')} />
-                                    {autoRefresh && isRunning ? t('tracePage.autoRefresh') : t('tracePage.paused')}
+                                    <RefreshCw className={cn('size-3.5', autoRefresh && canAutoRefresh && 'animate-spin')} />
+                                    {autoRefresh && canAutoRefresh ? t('tracePage.autoRefresh') : t('tracePage.paused')}
                                 </Button>
                             </TooltipTrigger>
                             <TooltipContent side="bottom" className="text-xs">
-                                {!isRunning ? t('tracePage.autoRefreshUnavailable') : t('tracePage.autoRefresh')}
+                                {!canAutoRefresh ? t('tracePage.autoRefreshUnavailable') : t('tracePage.autoRefresh')}
                             </TooltipContent>
                         </Tooltip>
                     </TooltipProvider>
 
-                    {autoRefresh && isRunning && (
+                    {autoRefresh && canAutoRefresh && (
                         <Select
                             value={String(refreshIntervalSec)}
                             onChange={v => setRefreshIntervalSec(Number(v))}
@@ -1775,6 +1875,7 @@ function TraceDetailView({
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
                         parentAgent={session?.taskId === taskId ? session.parentAgent : null}
+                        traceRelations={session?.taskId === taskId ? session.traceRelations : undefined}
                         rootSessionId={taskId}
                         traceIdentity={taskId}
                         rootExecutionId={execution.upload_id || execution.task_id}

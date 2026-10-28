@@ -1,6 +1,23 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { benchmarkExecutionProgress } from '@/lib/benchmark/execution-progress';
 import test from 'node:test';
 import { benchmarkEvaluationProgressLabel } from '@/lib/benchmark/detail-status';
 
@@ -83,13 +100,16 @@ test('Benchmark 提交物已提交但 Evaluator 未完成时展示评测中', ()
     'utf8',
   );
 
-  assert.match(detailPage, /isBenchmarkEvaluationInProgress\(c\.benchmark\)/);
-  assert.match(detailPage, /benchmarkEvaluationProgressLabel\(c\.benchmark\)/);
+  assert.match(detailPage, /<BenchmarkExecutionProgress benchmark=\{c\.benchmark\}/);
+  const progress = benchmarkExecutionProgress({ runStatus: 'submitted', progressStage: null, evaluationStatus: 'running' }, Date.now());
+  assert.equal(progress.active, true);
+  assert.equal(progress.completed, false);
+  assert.equal(progress.label, 'Benchmark 评测中');
   assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'running' }), 'Benchmark 评测中…');
   assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'queued' }), '等待评测配额…');
   assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'queued', evaluationWaitCode: 'IMAGE_POOL_PREPARING' }), '等待镜像准备…');
   assert.equal(benchmarkEvaluationProgressLabel({ evaluationStatus: 'queued', evaluationWaitCode: 'IMAGE_POOL_SPACE_LOW' }), '等待镜像空间…');
-  assert.match(detailPage, /提交物已生成，等待执行器确认…/);
+  assert.equal(benchmarkExecutionProgress({ runStatus: 'submitted', progressStage: null, evaluationStatus: null }, Date.now()).label, '等待评测');
   assert.match(detailPage, /c\.benchmark\.submissions/);
   assert.doesNotMatch(detailPage, /c\.benchmark\.submission\b/);
 });

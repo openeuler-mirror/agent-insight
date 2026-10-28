@@ -1,6 +1,23 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
+import { evaluationAttemptSignal } from './evaluation-attempt';
 
 type Scope = { experimentId: string; caseId?: string; signal: AbortSignal; cleanupUnconfirmed?: boolean };
 const key = Symbol.for('agent-insight.experiment-cancellation-context');
@@ -12,7 +29,7 @@ const active = activeGlobals[activeKey] ||= new Map<string, number>();
 const operationKey = (experimentId: string, caseId: string) => `${experimentId}\0${caseId}`;
 export function activeCaseOperations(caseId: string, experimentId: string): number { return active.get(operationKey(experimentId, caseId)) || 0; }
 
-export function experimentSignal(): AbortSignal | undefined { return context.getStore()?.signal; }
+export function experimentSignal(): AbortSignal | undefined { return evaluationAttemptSignal() ?? context.getStore()?.signal; }
 export function markExperimentCleanupUnconfirmed(): void {
   const scope = context.getStore();
   if (scope) scope.cleanupUnconfirmed = true;

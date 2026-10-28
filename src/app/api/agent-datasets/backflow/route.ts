@@ -1,3 +1,21 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
@@ -61,6 +79,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'datasetName is required' }, { status: 400 });
     }
 
+    if (mode === 'existing' && await guardTraceDataset(request, datasetId, user, true)) throw new GenerationError('INVALID_CONFIG', 'Trace 生成的数据集请在详情页使用双字段导入', 422);
     let current: AgentDatasetRecord | null = null;
     let fields: DatasetField[];
     try {
@@ -191,6 +210,7 @@ export async function POST(request: Request) {
         : fields.length,
     });
   } catch (error) {
+    if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('agent-datasets backflow POST error:', error);
     return NextResponse.json({ error: 'failed to save trace to dataset' }, { status: 500 });
   }

@@ -1,8 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * Agent RAS 可靠性评估器：证据包（Trace + RasAnomalyEvent）→ 独立维度 Judge。
  * 无活跃评测模型或 Judge 失败时返回 warn（无总分），不静默规则满分。
  */
 import { z } from 'zod'
+import { hasEvaluatorExecutionPolicy, runConfiguredEvaluationStage } from './evaluator-execution-policy'
 import { prisma } from '@/lib/storage/prisma'
 import {
   normalizeEvaluatorOutput,
@@ -309,9 +326,12 @@ export async function runRasReliabilityPreset(
   }, profile)
 
   try {
-    const judgment = await invokeSpecializedJudge(user, prompt, rasReliabilityJudgeSchema(profile))
-    return buildRasReliabilityEvaluatorOutput({ evaluatorId, expectedFault, events, judgment })
+    return await runConfiguredEvaluationStage(async () => {
+      const judgment = await invokeSpecializedJudge(user, prompt, rasReliabilityJudgeSchema(profile))
+      return buildRasReliabilityEvaluatorOutput({ evaluatorId, expectedFault, events, judgment })
+    })
   } catch (error) {
+    if (hasEvaluatorExecutionPolicy()) throw error
     const message = error instanceof Error ? error.message : String(error || '')
     if (
       /未配置可用的评测模型|No active model|模型注册/i.test(message)

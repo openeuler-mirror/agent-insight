@@ -1,9 +1,27 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 export const EXACT_MATCH_EVALUATOR_ID = 'preset-text-exact-match' as const;
 export const ENTITY_F1_EVALUATOR_ID = 'preset-text-entity-f1' as const;
+export const SIMILARITY_TEXT_EVALUATOR_ID = 'preset-similarity-text' as const;
 
 export const CONFIGURABLE_TEXT_EVALUATOR_IDS = [
   EXACT_MATCH_EVALUATOR_ID,
   ENTITY_F1_EVALUATOR_ID,
+  SIMILARITY_TEXT_EVALUATOR_ID,
 ] as const;
 
 export type ConfigurableTextEvaluatorId = (typeof CONFIGURABLE_TEXT_EVALUATOR_IDS)[number];
@@ -26,9 +44,14 @@ export interface EntityF1RunConfig {
   whitespaceNormalization: boolean;
 }
 
+export interface SimilarityTextRunConfig {
+  threshold: number;
+}
+
 export interface EvaluatorRunConfigMap {
   [EXACT_MATCH_EVALUATOR_ID]?: ExactMatchRunConfig;
   [ENTITY_F1_EVALUATOR_ID]?: EntityF1RunConfig;
+  [SIMILARITY_TEXT_EVALUATOR_ID]?: SimilarityTextRunConfig;
 }
 
 interface StoredEvaluatorRunConfigsV1 {
@@ -52,6 +75,10 @@ export const DEFAULT_ENTITY_F1_RUN_CONFIG: Readonly<EntityF1RunConfig> = Object.
   whitespaceNormalization: false,
 });
 
+export const DEFAULT_SIMILARITY_TEXT_RUN_CONFIG: Readonly<SimilarityTextRunConfig> = Object.freeze({
+  threshold: 80,
+});
+
 export class EvaluatorRunConfigValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -61,6 +88,18 @@ export class EvaluatorRunConfigValidationError extends Error {
 
 export function isConfigurableTextEvaluatorId(id: string): id is ConfigurableTextEvaluatorId {
   return (CONFIGURABLE_TEXT_EVALUATOR_IDS as readonly string[]).includes(id);
+}
+
+/**
+ * 取某个评估器自己的运行配置；该评估器不支持运行配置 → undefined。
+ * 按 id 取键，因此不可能把 A 的配置交给 B——**不要**改成按字段特征猜配置类型
+ * （例如 `'threshold' in config`）：那会让新增字段变成隐式的评估器身份判断。
+ */
+export function evaluatorRunConfigOf(
+  configs: EvaluatorRunConfigMap,
+  evaluatorId: string,
+): EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | undefined {
+  return isConfigurableTextEvaluatorId(evaluatorId) ? configs[evaluatorId] : undefined;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -189,6 +228,21 @@ export function normalizeEntityF1RunConfig(value: unknown): EntityF1RunConfig {
   };
 }
 
+export function normalizeSimilarityTextRunConfig(value: unknown): SimilarityTextRunConfig {
+  if (value === undefined || value === null) return { ...DEFAULT_SIMILARITY_TEXT_RUN_CONFIG };
+  if (!isPlainObject(value)) {
+    throw new EvaluatorRunConfigValidationError(`${SIMILARITY_TEXT_EVALUATOR_ID} 配置必须是对象`);
+  }
+  assertKnownFields(SIMILARITY_TEXT_EVALUATOR_ID, value, ['threshold']);
+  const raw = value.threshold ?? DEFAULT_SIMILARITY_TEXT_RUN_CONFIG.threshold;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 100) {
+    throw new EvaluatorRunConfigValidationError(
+      `${SIMILARITY_TEXT_EVALUATOR_ID}.threshold 必须是 0 到 100 之间的数`,
+    );
+  }
+  return { threshold: Math.round(raw) };
+}
+
 export function normalizeEvaluatorRunConfigs(
   value: unknown,
   selectedEvaluatorIds: readonly string[],
@@ -214,6 +268,9 @@ export function normalizeEvaluatorRunConfigs(
   }
   if (selected.has(ENTITY_F1_EVALUATOR_ID)) {
     configs[ENTITY_F1_EVALUATOR_ID] = normalizeEntityF1RunConfig(raw[ENTITY_F1_EVALUATOR_ID]);
+  }
+  if (selected.has(SIMILARITY_TEXT_EVALUATOR_ID)) {
+    configs[SIMILARITY_TEXT_EVALUATOR_ID] = normalizeSimilarityTextRunConfig(raw[SIMILARITY_TEXT_EVALUATOR_ID]);
   }
   return configs;
 }
@@ -244,7 +301,7 @@ export function parseStoredEvaluatorRunConfigs(
     throw new EvaluatorRunConfigValidationError('实验评估器配置必须是对象');
   }
   if ('schemaVersion' in parsed || 'configs' in parsed) {
-    if (parsed.schemaVersion !== 1) {
+    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) {
       throw new EvaluatorRunConfigValidationError('不支持的实验评估器配置版本');
     }
     return normalizeEvaluatorRunConfigs(parsed.configs, selectedEvaluatorIds);
@@ -283,6 +340,10 @@ export function summarizeEvaluatorRunConfig(
       normalized.widthNormalization ? '统一全半角' : null,
     ].filter(Boolean);
     return [modes[normalized.matchMode], ...normalization].join(' · ');
+  }
+  if (id === SIMILARITY_TEXT_EVALUATOR_ID) {
+    const normalized = normalizeSimilarityTextRunConfig(config);
+    return `合格阈值 ${normalized.threshold}`;
   }
   return null;
 }

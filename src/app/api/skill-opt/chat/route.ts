@@ -1,7 +1,26 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { hasOptimizationInput } from '@/lib/skill-workbench/optimization-request';
+import { withOptimizationCancellation } from '@/lib/skill-workbench/optimization-execution-control';
 import { NextRequest } from 'next/server';
 import { streamSkillOptOpencode } from '@/lib/skill-opt-bridge';
 import type { SkillOptIssueLite, SkillOptPlanItemLite } from '@/lib/engine/general-agent/skill-opt-prompt';
 import { prismaRaw } from '@/lib/storage/prisma';
+import { settleProcessBlocks } from '@/lib/chat/process-block-state';
 import { createBlockMirror } from '@/lib/chat/block-mirror';
 import { createStreamCheckpointWriter } from '@/lib/chat/stream-checkpoint';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
@@ -169,6 +188,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  if (!hasOptimizationInput(feedback, issuesNormalized, planItems)) {
+    return new Response(JSON.stringify({ error: '请补充优化诉求或选择有效的评估问题' }), { status: 400 });
+  }
+
   // baselineFiles 只接 string→string，剔掉非法值；体积上限 2MB（防滥用）
   const baselineFilesNormalized: Record<string, string> | undefined = (() => {
     if (!baselineFiles || typeof baselineFiles !== 'object') return undefined;
@@ -299,10 +322,45 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  const execute = async (controller: ReadableStreamDefaultController, work: (signal?: AbortSignal) => Promise<void>) => {
+    try {
+      await withOptimizationCancellation(workbenchRun?.taskId, work, async () => {
+        const text = '优化已停止，可补充诉求后重新提交。';
+        if (sessionExists) {
+          const messages = await prismaRaw.skillOptMessage.findMany({
+            where: { sessionId: threadId, role: 'agent' }, orderBy: { createdAt: 'asc' },
+          });
+          const current = messages.filter((message) => {
+            const blocks = JSON.parse(message.blocks || '[]');
+            return blocks.some((block: { kind?: string; runId?: string }) => block.kind === 'optimization_meta' && block.runId === normalizedRunId);
+          });
+          await prismaRaw.$transaction(current.map((message, index) => {
+            const blocks = settleProcessBlocks(JSON.parse(message.blocks || '[]'), 'error');
+            const last = index === current.length - 1;
+            return prismaRaw.skillOptMessage.update({
+              where: { id: message.id },
+              data: {
+                content: last ? `${message.content}\n\n${text}`.trim() : message.content,
+                blocks: JSON.stringify([...blocks, ...(last ? [{ kind: 'text', id: `cancelled-${normalizedRunId}`, text }] : [])]),
+              },
+            });
+          }));
+        }
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode: 'cancelled' })}\n\n`)); } catch { /* disconnected */ }
+      });
+    } catch (error) {
+      console.error('[skill-opt route] execution failed:', error);
+      try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode: 'error', payload: error instanceof Error ? error.message : String(error) })}\n\n`)); } catch { /* disconnected */ }
+    } finally {
+      try { controller.close(); } catch { /* disconnected */ }
+    }
+  };
+
   // ── mock 模式：固定脚本回放，不调 LLM。让前端在没有真实模型配置时也能联调 ──
   if (mock) {
     const readable = new ReadableStream({
-      async start(controller) {
+      start: (controller) => execute(controller, async (signal) => {
+        signal?.throwIfAborted();
         const mirror = createBlockMirror(controller, encoder);
         let agentText = '';
         let finalFiles: Record<string, any> = parseFilesSnapshot(session?.files);
@@ -327,6 +385,7 @@ export async function POST(req: NextRequest) {
           onError: (error) => console.warn('[skill-opt route] checkpoint failed:', error),
         }) : null;
         const send = (mode: string, payload: any) => {
+          signal?.throwIfAborted();
           if (mode === 'text' && typeof payload === 'string') agentText += payload;
           if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
           mirror.send(mode, payload);
@@ -348,7 +407,7 @@ export async function POST(req: NextRequest) {
           send('done', { reason: 'completed' });
         } catch (err: any) {
           chatError = err?.message || String(err);
-          try { send('error', err?.message || String(err)); } catch { /* closed */ }
+          try { if (!signal?.aborted) send('error', err?.message || String(err)); } catch { /* closed */ }
         }
 
         await taskProgress.flush();
@@ -359,6 +418,8 @@ export async function POST(req: NextRequest) {
           console.warn('[skill-opt route] mock post-stream persistence failed:', err?.message || err);
           chatError ||= err?.message || String(err);
         }
+        if (chatError?.includes('停止 OpenCode 执行未确认')) throw new Error(chatError);
+        signal?.throwIfAborted();
         if (workbenchRun) {
           await finishWorkbenchOptimizationRun({
             user,
@@ -368,17 +429,18 @@ export async function POST(req: NextRequest) {
             sourceRefs: optimizationSourceRefs,
             recordId: workbenchRun.recordId,
             error: chatError,
+            signal,
           });
         }
-        try { controller.close(); } catch { /* already closed */ }
-      },
+      }),
     });
     return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
   }
 
   // ── 真实模式：跑 opencode + runGeneralAgent ──
   const readable = new ReadableStream({
-    async start(controller) {
+    start: (controller) => execute(controller, async (signal) => {
+      signal?.throwIfAborted();
       const mirror = createBlockMirror(controller, encoder);
       let agentText = '';
       let finalFiles: Record<string, any> = parseFilesSnapshot(session?.files);
@@ -431,12 +493,13 @@ export async function POST(req: NextRequest) {
           modelId,
           baselineFiles: baselineFilesNormalized,
           send: trackedSend,
+          signal,
         });
       } catch (err: any) {
         const rawError = err?.message || String(err);
         chatError = presentSkillOptError(rawError);
         console.error('[skill-opt route] streamSkillOptOpencode threw:', rawError);
-        try { send('error', chatError); } catch { /* closed */ }
+        try { if (!signal?.aborted) send('error', chatError); } catch { /* closed */ }
       }
 
       await taskProgress.flush();
@@ -447,6 +510,8 @@ export async function POST(req: NextRequest) {
         console.warn('[skill-opt route] post-stream persistence failed:', err?.message || err);
         chatError ||= err?.message || String(err);
       }
+      if (chatError?.includes('停止 OpenCode 执行未确认')) throw new Error(chatError);
+      signal?.throwIfAborted();
       if (workbenchRun) {
         await finishWorkbenchOptimizationRun({
           user,
@@ -456,6 +521,7 @@ export async function POST(req: NextRequest) {
           sourceRefs: optimizationSourceRefs,
           recordId: workbenchRun.recordId,
           error: chatError,
+          signal,
           repair: chatError ? undefined : async (blockingIssues) => {
             const repairMeta = {
               kind: 'optimization_meta',
@@ -526,20 +592,20 @@ export async function POST(req: NextRequest) {
                 modelId,
                 baselineFiles: baselineFilesNormalized,
                 send: repairSend,
+                signal,
               });
               repairText = repairResult.agentText;
               repairFiles = repairResult.files;
             } catch (error) {
               repairError = error;
-              repairSend('error', error instanceof Error ? error.message : String(error));
+              if (!signal?.aborted) repairSend('error', error instanceof Error ? error.message : String(error));
             }
             await repairCheckpoint.flush();
             if (repairError) throw repairError;
           },
         });
       }
-      try { controller.close(); } catch { /* already closed */ }
-    },
+    }),
   });
 
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * Node.js-only instrumentation：所有要 import node:* 模块或调用 prisma/child_process
  * 的启动逻辑都放在这个文件里。
@@ -111,6 +127,7 @@ export async function setupNodeRuntime(): Promise<void> {
       resumeBenchmarkDispatchesAtStartup,
       startBenchmarkRunWatchdog,
     } = await import('@/lib/benchmark/scheduler');
+    startBenchmarkRunWatchdog();
     const reaped = await reapStaleBenchmarkRuns();
     if (reaped > 0) {
       console.warn(`[instrumentation] 回收超时 Benchmark 执行: ${reaped} 条`);
@@ -119,7 +136,6 @@ export async function setupNodeRuntime(): Promise<void> {
     if (resumed > 0) {
       console.warn(`[instrumentation] 恢复 Benchmark 下发: ${resumed} 条`);
     }
-    startBenchmarkRunWatchdog();
   } catch (err) {
     console.warn('[instrumentation] benchmark dispatch resume failed:', (err as Error)?.message);
   }
@@ -199,7 +215,7 @@ export async function setupNodeRuntime(): Promise<void> {
     const { startOtelSpoolConsumer } = await import('@/lib/ingest/otel-consumer/consumer');
     startOtelSpoolConsumer();
   } catch (err) {
-    console.warn(
+    console.error(
       '[instrumentation] otel spool consumer start failed:',
       (err as Error)?.message,
     );
@@ -218,4 +234,10 @@ export async function setupNodeRuntime(): Promise<void> {
   } catch (err) {
     console.warn('[instrumentation] startExperimentWatcher failed (non-fatal):', (err as Error)?.message);
   }
+
+  setImmediate(() => {
+    void import('@/server/trace-datasets/manager')
+      .then(({ startTraceDatasetManager }) => startTraceDatasetManager())
+      .catch(() => { console.warn('[trace-datasets] generation unavailable'); });
+  }).unref();
 }

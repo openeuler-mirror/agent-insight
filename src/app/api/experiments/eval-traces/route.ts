@@ -1,3 +1,21 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
 // 共享评测入口：把「一批已产生的 trace + 评估器」评测这件事交给实验引擎。
 // 供 skill 概览页 / 用例分析等**客户端直连**路径调用，取代直接打 /eval/trajectory/run——
 // 评测结果统一落 ExperimentEvalResult（一次调用 ↔ 一个 backing 单组实验，可复用 experimentId）。
@@ -185,6 +203,7 @@ export async function POST(req: Request) {
     if (evaluators.length === 0) return NextResponse.json({ error: 'evaluators is required' }, { status: 400 });
 
     const datasetIds = asStrArr(body.datasetIds);
+    for (const id of datasetIds) await guardTraceDataset(req, id, username, true);
     const customEvaluators = (await readUserCustomEvaluators(username)) as EvaluatorCard[];
     const evaluatorCatalog = new Map(
       [...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]),
@@ -331,6 +350,7 @@ export async function POST(req: Request) {
       { status: 202 },
     );
   } catch (error) {
+    if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('[eval-traces POST Error]', error);
     if (error instanceof EvaluatorContextValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * Skill 改进建议 agent —— 轨迹评测的「建议流」。
  *
@@ -452,9 +468,7 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
       );
       const suggestions = parseSkillSuggestions(agentText);
       if (suggestions.length === 0) {
-        // 跑完但没解析出建议：打印原始输出预览，便于区分"解析问题"还是"真没建议"。
-        const preview = String(agentText || '').slice(0, 800);
-        console.warn(`[skill-suggestion-agent] empty parse for ${executionId} (attempt ${attempt}); raw output preview:\n${preview}`);
+        console.warn(`[skill-suggestion-agent] empty parse for ${executionId} (attempt ${attempt}); outputLength=${agentText?.length || 0}`);
       }
       // 成功跑完（无论是否空）不再重试——重试只针对错误。
       return suggestions;

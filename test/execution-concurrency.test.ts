@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mapConcurrent, parseExecutionConcurrency } from '../src/lib/engine/experiment/execution-concurrency';
@@ -10,13 +26,16 @@ test('execution concurrency validates explicit values and preserves the legacy d
   }
 });
 
-test('bounded execution overlaps jobs, refills free slots and preserves result order', async () => {
+test('bounded execution overlaps jobs, refills free slots and preserves result order', { timeout: 10_000 }, async () => {
   let active = 0, peak = 0;
   const completion: number[] = [];
-  const results = await mapConcurrent([40, 5, 5, 5], 2, async (delay, index) => {
+  let releaseFirst!: () => void;
+  const first = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const results = await mapConcurrent([0, 1, 2, 3], 2, async (_item, index) => {
     active++; peak = Math.max(peak, active);
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (index === 0) await first;
     completion.push(index); active--;
+    if (index === 3) releaseFirst();
     return index;
   });
   assert.equal(peak, 2);

@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { freezeCustomEvaluators, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service';
 /**
  * 对比 runner：在冻结的单组引擎之上加「对比」层。
  *
@@ -234,12 +251,15 @@ export async function computePairs(
 // ─── createComparisonExperiment ─────────────────────────────────────────────
 
 export interface CreateComparisonParams {
+  frozenCustomEvaluators?: CustomSnapshots;
+  configSnapshot?: Record<string, unknown>;
   user: string;
   name: string;
   agentName: string;
   variableDimension: string;
   groups: ComparisonGroupInput[];
   evaluatorIds: string[];
+  evaluatorConfigsJson?: string;
   watchMode?: boolean;
 }
 
@@ -268,8 +288,10 @@ export async function createComparisonExperiment(params: CreateComparisonParams)
       name,
       agentName,
       type: 'llm',
+      configSnapshotJson: JSON.stringify({ ...params.configSnapshot, customEvaluatorSnapshots: params.frozenCustomEvaluators ?? await freezeCustomEvaluators(user, evaluatorIds) }),
       scope: '',
       evaluatorIdsJson: JSON.stringify(evaluatorIds),
+      evaluatorConfigsJson: params.evaluatorConfigsJson ?? '{}',
       status: 'draft',
       groups: {
         create: groups.map((g) => ({ key: g.key, variableValue: g.value })),

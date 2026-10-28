@@ -12,35 +12,53 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-43853d.svg" alt="Node" /></a>
-  <a href="https://gitcode.com/openeuler/agent-insight"><img src="https://img.shields.io/badge/repo-gitcode-1f7ae0.svg" alt="Repo" /></a>
-  <a href="mailto:intelligence@openeuler.org"><img src="https://img.shields.io/badge/contact-intelligence%40openeuler.org-orange.svg" alt="Contact" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20.9.0-43853d.svg" alt="Node" /></a>
+  <a href="https://gitcode.com/openJiuwen/agent-insight"><img src="https://img.shields.io/badge/repo-gitcode-1f7ae0.svg" alt="Repo" /></a>
+</p>
+
+<p align="center">
+  <a href="README.zh.md">简体中文</a> |
+  <a href="README_en.md">English</a>
 </p>
 
 ---
 
-## 📖 什么是 Agent Insight？
+## 免责声明
+
+本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。
+
+---
+
+## 📖 简介
 
 随着 Agent 在各行业的落地，开发者面临五大痛点：① Agent 运行链路如同黑盒，难以追溯完整执行过程；② 可靠性缺少体系化量化评估，业务可用度难以判定；③ 隐性质量退化无法提前感知，多为事后才发现问题；④ 故障根因定位全靠人工，诊断经验无法沉淀复用；⑤ 缺少评测与自动化优化闭环，Agent 无法实现持续进化。
 
-**Agent Insight** 是openEuler社区孵化的开源AgentOps平台，致力于构建「观测 → 评测 → 诊断 → 优化」持续运转的能力闭环，以及贯穿全流程的可靠性保障能力，将黑盒化的Agent转化为可观测、可度量、可治理的可信资产，使生产级Agent做到"行为看得清、故障诊得准、服务跑得稳"，并持续进化。目前，Agent Insight已适配OpenCode、Claude Code、Hermes、Trae IDE、JiuwenSwarm等10+个主流Agent平台。
+**Agent Insight** 是开源 AgentOps 平台，致力于构建「观测 → 评测 → 诊断 → 优化」持续运转的能力闭环，以及贯穿全流程的可靠性保障能力，将黑盒化的Agent转化为可观测、可度量、可治理的可信资产，使生产级Agent做到"行为看得清、故障诊得准、服务跑得稳"，并持续进化。目前，Agent Insight已适配OpenCode、Claude Code、Hermes、Trae IDE、JiuwenSwarm等10+个主流Agent平台。
 
 ---
 
-## ✨ 核心能力
+## ✨ 功能特性
 
 - 🔭 **链路追踪** · 采用白盒追踪机制完整还原Agent端到端执行链路，提供调用树、时序时间线等视图，全局视角分析Agent行为轨迹。
-- 🛠️ **多维评测** · 覆盖MenchMark、结果、轨迹、可靠性四大评估维度，预置 20 + 评估器，支持自定义扩展，实现全面、精准评测，支撑 Agent 上线质量校验。
+- 🛠️ **多维评测** · 覆盖Benchmark、结果、轨迹、可靠性四大评估维度，预置 20 + 评估器，支持自定义扩展，实现全面、精准评测，支撑 Agent 上线质量校验。
 - 🧠 **智能诊断** · 记忆、反思、规划、行动、系统五维认知归因，搭配预检‑检测‑归因三阶段分析，融合确定性规则与 LLM 语义判别，实现分钟级故障精准定位。
 - 🔁 **闭环优化** · 以问题为驱动，融合问题归并（问题去重排序，降本提效）、编辑范围约束（规避优化器误删、大幅改动基线脚本）、自验证闭环能力，实现 Skill 持续迭代，保障优化后效果不劣于基线。
-- 🛡️ **可靠保障** · 盖事前 Agent 故障注入与可靠性评估、事中故障检测与恢复、事后可靠性自演进，保障 Agent 稳定可靠运行。
+- 🛡️ **可靠保障** · 覆盖事前 Agent 故障注入与可靠性评估、事中故障检测与恢复、事后可靠性自演进，保障 Agent 稳定可靠运行。
 - 🔌 **生态兼容** · 基于 OpenTelemetry 等业界标准协议，通过原生插件或 OTLP 上报无缝兼容 OpenCode、Claude Code、Hermes、JiuwenSwarm 等多种 Agent 平台。
-- 🏠 **完全自托管** · 一键安装，全栈本地化部署，数据完全自主可控，无外部依赖。
+- 🏠 **自主部署** · 支持本地或服务器部署，运行数据自主可控；需要模型推理的功能连接用户配置的外部模型服务。
 
 ---
 
-## 🏗️ 架构
+## 🏗️ 架构简介
+
+平台由 Agent 接入、应用服务和数据存储三部分组成：
+
+- **Agent 接入**：通过原生插件、Hook、文件采集器或 OTLP 接收 Agent 执行数据，不同平台采用各自支持的接入方式。
+- **应用服务**：使用 Next.js、React 和 TypeScript 提供 Web 看板与 API，组织链路查询、评测、诊断、Skill 生成和优化流程。
+- **数据存储**：通过 Prisma 和数据库适配层管理运行记录与任务数据，默认使用本地 SQLite；其他数据库配置见开发者指南。
+
+需要模型推理的步骤调用用户配置的模型服务，平台不内置 AI 模型。架构与模块说明见[开发者指南](docs/zh/explanation/platform/developer-index.md)。
 
 <p align="center">
   <img src="docs/images/architecture.png" alt="Agent-Insight 架构图" />
@@ -79,7 +97,7 @@ Agent Insight 已接入以下 Agent 平台，更多平台持续接入中：
 
 **环境要求**
 
-- Node.js >= 20.0.0
+- Node.js >= 20.9.0
 - 3000 端口未被占用
 
 提供以下三种安装方式，可根据实际应用场景任选其一：
@@ -116,11 +134,11 @@ Agent RAS inproc 插件。RAS runtime 保存到 `~/.agent-insight/ras/runtime/`�
 适用于需要二次开发或深度定制的场景。
 
 ```bash
-git clone https://gitcode.com/openeuler/agent-insight.git
+git clone https://gitcode.com/openJiuwen/agent-insight.git
 cd agent-insight
 npm install
 # 构建 Trae IDE 采集器插件（生成 scripts/trae-collector/agent-insight-trae-collector-0.1.0.vsix）
-cd scripts/trae-collector && npm install && npm run build
+(cd scripts/trae-collector && npm install && npm run build)
 ```
 
 #### 方式三：使用 Docker 镜像部署
@@ -169,7 +187,7 @@ docker run -d \
 适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
 
 ```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
+git clone https://gitcode.com/openJiuwen/agent-insight.git /srv/agent-insight
 
 docker run -d \
   --name agent-insight \
@@ -188,7 +206,7 @@ cd /srv/agent-insight && git pull
 docker restart agent-insight
 ```
 
-不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/user-guide/quickstart.md)。
+不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/zh/tutorial/platform/01-quick-start.md)。
 
 容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
 
@@ -199,22 +217,20 @@ OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行�
 只读预检 RAS 事件端点。源码联调若使用尚未发布的版本，可在平台进程设置
 `AGENT_INSIGHT_CLIENT_PACKAGE_SPEC=<可由 Agent 主机访问的 .tgz URL>`。
 
-更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。
+更多部署、升级和排查说明见 [5 分钟上手](docs/zh/tutorial/platform/01-quick-start.md)。
 
 **启动服务**
 
-安装完成后，在工作目录下执行以下命令启动服务：
+源码安装完成后，在仓库根目录执行以下命令启动服务；npm 安装使用前文的 `npx agent-insight start`：
 
 ```bash
-cd agent-insight
-
 # 启动服务端，默认端口是3000
 bash scripts/start.sh
 ```
 
 默认使用 `~/.agent-insight/data/witty_insight.db`；如需自定义数据库路径，可在 `~/.agent-insight/.env` 中设置 `DATABASE_URL="file:/absolute/path/to/witty_insight.db"`。
 
-如需安装和配置 SWE-bench 等 Benchmark，请参阅[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)。
+如需安装和配置 SWE-bench 等 Benchmark，请参阅[《Benchmark 整体服务安装指南》](docs/zh/how-to/evaluation/benchmarks/deploy-services.md)。
 
 **停止服务**
 
@@ -264,9 +280,9 @@ bash scripts/stop.sh
 
 完整体验在 Agent Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的闭环流程。
 
-> 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
+> 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/zh/tutorial/platform/02-example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
 
-> 🧩 **自定义 Benchmark**：如需接入新的 Benchmark 评测，请从 [Benchmark 文档关系与开发指南](docs/developer-guide/benchmark/README.md) 开始。客户只需用自然语言描述评测目标并提供已有材料，AI 会协助完成需求确认、接入包开发和验证。接入包完成后，按[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)部署 Agent Insight、Agent 执行端、Evaluator 和数据集。
+> 🧩 **自定义 Benchmark**：如需接入新的 Benchmark 评测，请从 [Benchmark 文档关系与开发指南](docs/zh/explanation/evaluation/benchmarks/README.md) 开始。客户只需用自然语言描述评测目标并提供已有材料，AI 会协助完成需求确认、接入包开发和验证。接入包完成后，按[《Benchmark 整体服务安装指南》](docs/zh/how-to/evaluation/benchmarks/deploy-services.md)部署 Agent Insight、Agent 执行端、Evaluator 和数据集。
 
 ### 注册模型
 
@@ -279,15 +295,15 @@ bash scripts/stop.sh
    <p align="center"><img src="docs/images/model-provider.png" alt="选择模型供应商" /></p>
 
 3. 配置 API 密钥，单击 **测试连接并保存**。
-   
+
    <p align="center"><img src="docs/images/model-configkey.png" alt="配置 API Key" /></p>
 
 ### 生成 Skill
 
 1. 进入 **Skill**，单击 **新建会话**，选择 **生成一个 Skill**，提交需求描述，例如：
-   
+
    > 创建一个 Skill，当用户请求查看系统信息时，自动执行 shell 脚本收集当前系统的关键信息（操作系统、CPU、内存、磁盘、网络等），以 Markdown 报告呈现给用户。
-   
+
    <p align="center"><img src="docs/images/skill-gen.png" alt="生成 Skill" /></p>
 
 2. 单击 **保存并发布**。
@@ -324,49 +340,47 @@ bash scripts/stop.sh
 
 8. 浏览实验结果。
 
-   <p align="center"><img src="docs/images/skill_exp_resultr.png" alt="实验结果" /></p>
+   <p align="center"><img src="docs/images/skill_exp_result.png" alt="实验结果" /></p>
 
 ### 优化 Skill
 
 1. 单击 **Skill 优化**，系统将基于评估与实验结果启动优化流程。
-   
+
    <p align="center"><img src="docs/images/skill-optimization.png" alt="优化 Skill" /></p>
 
 2. 优化完成后，可以查看优化结果，确认无误后，单击 **发布为 v1**，系统将自动保存为新版本。
-   
+
    <p align="center"><img src="docs/images/skill-optimization-result.png" alt="优化结果" /></p>
 
 ---
 
 ## 📚 文档
 
-完整文档位于 [`docs/`](docs/) 目录，主要包含以下内容：
+文档统一入口为 [docs/README.md](docs/README.md)，按用途与业务领域组织：
 
-| 路径                                                                                                   | 说明                                  |
-|:---------------------------------------------------------------------------------------------------- |:----------------------------------- |
-| [`docs/user-guide/`](docs/user-guide/)                                                               | 用户使用指南：快速上手、示例走查、核心概念、FAQ           |
-| [`docs/developer-guide/`](docs/developer-guide/)                                                     | 开发者指南：架构、模块、API、约定等                 |
-| [`docs/agent-ras/`](docs/agent-ras/)                                                                 | Agent RAS 环内可靠性：异常检测 + 自动恢复的设计与使用   |
-| [`docs/agent-fault-injection/`](docs/agent-fault-injection/)                                         | Agent 故障注入：注入 + 采集引擎的设计与使用          |
-| [`docs/snippets/`](docs/snippets/)                                                                   | 可复用文档片段：SDK 安装、环境配置                 |
-| [`docs/qa.md`](docs/qa.md)                                                                           | 平台常见问答：覆盖概念、安装、接入、Skill、评测、观测、架构与排障 |
-| [`docs/skill-generation-principle-and-pipeline.md`](docs/skill-generation-principle-and-pipeline.md) | Skill 生成原理、流水线与能力边界                 |
+| 入口 | 内容 |
+| --- | --- |
+| [入门教程](docs/zh/tutorial/README.md) | 快速开始、完整示例与第一次评测 |
+| [操作指南](docs/zh/how-to/README.md) | 安装、配置、使用、开发与扩展操作 |
+| [参考文档](docs/zh/reference/README.md) | API、配置、协议与数据字段 |
+| [概念与原理](docs/zh/explanation/README.md) | 概念、架构、数据流与职责边界 |
+| [Agent RAS](docs/zh/explanation/reliability/agent-ras/README.md) / [故障注入](docs/zh/explanation/reliability/agent-fault-injection/README.md) | 可靠性专题导航 |
+| [英文文档状态](docs/en/README.md) | 英文目录已建立，正文翻译待补齐 |
+| [内部需求与设计](design/README.md) | 需求、方案、开发计划和历史资料 |
 
-> 新用户推荐从 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通「智能诊断 → Skill 生成 → 评测 → 优化」完整闭环。
 
-## 🤝 如何贡献
+> 新用户推荐从 [内置示例端到端走查](docs/zh/tutorial/platform/02-example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通「智能诊断 → Skill 生成 → 评测 → 优化」完整闭环。
 
-我们诚挚欢迎新贡献者加入项目，也会为新加入者提供全面的指导与帮助。
+## 🤝 参与贡献
 
-贡献代码前，请先签署 [CLA](https://clasign.osinfra.cn/sign/6983225bdcbb19710248ccf0)，再参考 [代码贡献指引](https://www.openeuler.org/zh/community/contribution/detail#_4-2-代码类贡献) 提交代码。
+欢迎通过问题反馈、文档改进、测试和代码提交参与项目：
 
-如有任何疑问、建议或讨论需求，欢迎通过以下方式联系我们：
-
-- 提交 [Issue](https://atomgit.com/openeuler/agent-insight/issues)
-- 发送邮件至 <intelligence@openeuler.org>
+1. 在 [Issue](https://gitcode.com/openJiuwen/agent-insight/issues) 中反馈问题，附上版本、复现步骤和已脱敏日志；较大的功能改动请先讨论方案。
+2. 提交代码前签署 [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee)，阅读[社区贡献指南](https://gitcode.com/openJiuwen/community/blob/main/README_CN.md)及仓库 [AGENTS.md](AGENTS.md)。
+3. Fork 仓库并创建工作分支，完成改动及相关文档更新，运行 `npm run test`，然后向 `openJiuwen/agent-insight` 提交 PR，说明改动目的和验证结果。
 
 ---
 
-## 📝 License
+## 📝 开源许可证
 
-本项目采用 [MIT](LICENSE) 开源协议。
+本项目采用 [Apache-2.0](LICENSE) 开源协议。历史 MIT 声明保留于 [LICENSE-MIT-Historical](LICENSE-MIT-Historical)，独立组件按各自许可证分发；第三方信息见 [Third_Party_Open_Source_Software_Notice.txt](Third_Party_Open_Source_Software_Notice.txt)。

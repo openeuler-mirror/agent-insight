@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -37,7 +53,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentService, /evaluationConcurrency:\s*runtime\.evaluationConcurrency/);
   assert.match(experimentService, /triggerConcurrency:\s*runtime\.triggerConcurrency/);
   assert.match(experimentService, /executionSides:\s*input\.preset === 'skill-ab' \? \['a', 'b'\] : \['b'\]/);
-  assert.match(experimentService, /boundSide:\s*input\.preset === 'skill-ab' \? 'a' : 'b'/);
+  assert.match(experimentService, /const boundSide = versionA \? 'a' : 'b'/);
   assert.match(experimentService, /triggerRouting:\s*input\.preset === 'trigger'/);
   assert.match(grayscaleRoute, /configuredExecutionSides/);
   assert.match(grayscaleRoute, /isGrayscaleTaskBindingValid/);
@@ -358,7 +374,7 @@ test('生成和优化由服务端完成工作台同步，客户端断开 SSE 不
   assert.match(generationConversation, /runId: safeUUID\(\)/);
   assert.doesNotMatch(generationConversation, /crypto\.randomUUID\(\)/);
   assert.match(generationConversation, /后台执行中/);
-  assert.match(optimizationConversation, /后台执行中/);
+  assert.match(optimizationConversation, /停止优化/);
 });
 
 test('Skill 工作台用 URL 固定会话，并从服务端 checkpoint 同步其他页面', () => {
@@ -418,7 +434,7 @@ test('Skill 优化实时工具状态按调用 ID 收敛，并在流结束后用�
   assert.match(conversation, /if \(!\['ok', 'error'\]\.includes\(block\.status \|\| ''\)\)/);
   assert.match(conversation, /if \(payload\.done\) \{[\s\S]*block\.done = true;[\s\S]*block\.status = 'done'/);
   assert.match(conversation, /Promise\.all\(\[[\s\S]*\/optimization\?user=/);
-  assert.match(conversation, /hydrateOptimizationMessages\(optimizationData\.optimization\.messages \|\| \[\], 'complete'\)/);
+  assert.match(conversation, /hydrateOptimizationMessages\(optimizationData\.optimization\.messages \|\| \[\], processOutcome\)/);
 });
 
 test('行为重评开始即持久化为质量校验阶段，新页面不会停留在生成候选版本', () => {
@@ -447,15 +463,18 @@ test('优化候选发布或放弃后通知其他页面，并由空闲轮询兜�
   assert.match(shell, /shouldFollowPublishedVersion[\s\S]*selectFormalAsset/);
 });
 
-test('Skill 优化固定入口执行归并、自验证和静态质量门禁，通过后可直接发布', () => {
+test('Skill 优化入口等待确认，提交后保留归并、自验证和静态质量门禁', () => {
   const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
   const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
   const adapter = readFileSync('src/lib/skill-workbench/optimization-adapter.ts', 'utf8');
   const records = readFileSync('src/components/skill-workbench/OptimizationRecordsPanel.tsx', 'utf8');
   const optimizerRoute = readFileSync('src/app/api/skill-opt/chat/route.ts', 'utf8');
   const optimizerBridge = readFileSync('src/lib/skill-opt-bridge.ts', 'utf8');
-  assert.match(shell, /Skill 优化[\s\S]*startOptimization\(\{ autoRun: true \}\)/);
-  assert.match(conversation, /根据这些问题优化 Skill/);
+  assert.match(shell, /autoRun = false/);
+  assert.match(shell, /label=\{startingOptimization \? '正在准备优化会话…' : 'Skill 优化'\}[\s\S]*?startOptimization\(\)/);
+  assert.match(shell, /startOptimization\(\{ targetAsset \}\)/);
+  assert.match(conversation, /void runRequest\(feedback/);
+  assert.doesNotMatch(conversation, /根据这些问题优化 Skill/);
   assert.match(conversation, /\/api\/skill-opt\/plan/);
   assert.match(conversation, /planId: plan\.id/);
   assert.match(conversation, /optimization_plan/);

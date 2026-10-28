@@ -1,10 +1,26 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * LLM 起草触发评价集草稿。
  *
  * 输入：skillName + user（从 DB 拉 active SKILL.md 内容）。
  * 输出：~18 条 TriggerItem 草稿（9 正例 + 9 反例 near-miss），落给上游写入 DB。
  *
- * Prompt 模板：docs/design/skill-eval-datasets/assets/trigger-draft-prompt-template.md。
+ * Prompt 模板：design/skill-eval-datasets/assets/trigger-draft-prompt-template.md。
  * 实证参考：assets/sample-trigger-draft-skill-generator.json。
  *
  * 重点：
@@ -267,7 +283,7 @@ export async function draftTriggerEvalSet(args: DraftTriggerEvalSetArgs): Promis
   // 3. 解析
   const rawArr = extractJsonArray(text);
   if (!rawArr) {
-    logger.warn('Failed to parse LLM draft output as JSON array', { textHead: text.slice(0, 200) });
+    logger.warn('Failed to parse LLM draft output as JSON array', { textLength: text.length });
     throw new Error('LLM 起草输出无法解析为 JSON 数组；查看 server 日志');
   }
   const draftItems: TriggerItem[] = [];

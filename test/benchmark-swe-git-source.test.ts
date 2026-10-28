@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
@@ -8,6 +24,7 @@ import { pathToFileURL } from 'node:url'
 const { GitWorkspaceProvider, GitPatchCollector, createBenchmarkExecutor, runProcess } = require('../services/executor/src/index.cjs')
 const { SweBenchGitSourcePolicy, MIRRORS } = require('../services/executor/src/benchmarks/swe-bench.cjs')
 const { readLocalSetting } = require('../services/executor/src/git-source.cjs')
+const { SweBenchGitSourcePolicy: PackagePolicy } = require('../benchmarks/swe-bench/executor/git-source-policy.cjs')
 const repository = 'https://github.com/pallets/flask.git'
 
 test('default executor registers only the SWE-bench policy with the explicit client home', async (t) => {
@@ -20,7 +37,7 @@ test('default executor registers only the SWE-bench policy with the explicit cli
   t.after(() => executor.close())
   const policies = executor.runner.workspaceProviders.get('git').sourcePolicies
   assert.deepEqual([...policies.keys()], ['swe-bench'])
-  assert.ok(policies.get('swe-bench') instanceof SweBenchGitSourcePolicy)
+  assert.ok(policies.get('swe-bench') instanceof PackagePolicy)
   assert.equal(policies.get('swe-bench').home, root)
 })
 

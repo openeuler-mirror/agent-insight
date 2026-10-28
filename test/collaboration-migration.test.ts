@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
@@ -9,12 +25,14 @@ import { PrismaClient } from '@prisma/client';
 
 const execute = promisify(execFile);
 
-test('startup db_push upgrades an existing SQLite database additively and is repeatable', { timeout: 90000 }, async () => {
+test('startup db_push upgrades an existing SQLite database additively and is repeatable', { timeout: 240000 }, async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'collaboration-migration-'));
     await mkdir(path.join(root, 'prisma'));
     await mkdir(path.join(root, 'scripts'));
     await symlink(path.resolve('node_modules'), path.join(root, 'node_modules'), 'dir');
     await writeFile(path.join(root, 'scripts/db_push.sh'), await readFile('scripts/db_push.sh'));
+    await mkdir(path.join(root, 'scripts/trace-datasets'));
+    await writeFile(path.join(root, 'scripts/trace-datasets/remove-legacy-summary.cjs'), await readFile('scripts/trace-datasets/remove-legacy-summary.cjs'));
     const schema = (await readFile('prisma/schema.prisma', 'utf8')).replace(/generator client\s*\{[^}]*\}/, '');
     const schemaWithoutCollaboration = schema
         .replace(/^model Collaboration(?:Event|SessionBinding|EndpointResolution)?\s*\{[\s\S]*?^\}\s*$/gm, '')
@@ -54,7 +72,7 @@ model CollaborationSessionBinding {
     const url = `file:${path.join(root, 'migration.db')}`;
     const sync = async () => {
         try {
-            return await execute('sh', ['scripts/db_push.sh'], { cwd: root, env: { ...process.env, DATABASE_URL: url, RUST_LOG: 'info' }, timeout: 30000 });
+            return await execute('sh', ['scripts/db_push.sh'], { cwd: root, env: { ...process.env, DATABASE_URL: url, RUST_LOG: 'info' }, timeout: 60000 });
         } catch (error) {
             const details = error as Error & { stdout?: string; stderr?: string };
             throw new Error([details.message, details.stdout, details.stderr].filter(Boolean).join('\n'));

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { getActiveConfig } from '@/lib/storage/server-config';
@@ -11,6 +27,9 @@ import {
 import { evaluateAnswerQuality } from './answer-quality-evaluator';
 import { evaluateFaithfulness } from './faithfulness-evaluator';
 import { parseLooseJson } from './task-completion-json';
+import { remainingEvaluationTimeMs, trackEvaluationRequest } from '../experiment/evaluation-attempt';
+import { experimentSignal } from '../experiment/cancellation-context';
+import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 
 export { scoreInstructionVerdicts } from './instruction-adherence-evaluator';
 export { scoreAnswerQuality } from './answer-quality-evaluator';
@@ -84,7 +103,8 @@ async function createClient(user?: string | null): Promise<{ client: OpenAI; mod
       baseURL: String(config.baseUrl || 'https://api.deepseek.com').replace(/\/chat\/completions\/?$/, ''),
       defaultHeaders: config.headers,
       fetch: customFetch,
-      timeout: Number(process.env.RESULT_QUALITY_TIMEOUT_MS || process.env.JUDGMENT_TIMEOUT_MS || 300000),
+      timeout: remainingEvaluationTimeMs() ?? Number(process.env.RESULT_QUALITY_TIMEOUT_MS || process.env.JUDGMENT_TIMEOUT_MS || 300000),
+      ...(remainingEvaluationTimeMs() === undefined ? {} : { maxRetries: 0 }),
     }),
     model: config.model || 'deepseek-chat',
   };
@@ -100,16 +120,23 @@ async function invokeStructured<S extends z.ZodTypeAny>(
   const messages: Array<{ role: 'system' | 'user'; content: string }> = typeof prompt === 'string'
     ? [{ role: 'user', content: prompt }]
     : [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }];
-  const response = await llm.client.chat.completions.create({
+  const response = await trackEvaluationRequest(() => llm.client.chat.completions.create({
     model: llm.model,
     temperature: 0,
     top_p: 1,
     seed: 42,
     messages,
-  }, { signal: (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal() });
+  }, { signal: experimentSignal(), timeout: remainingEvaluationTimeMs() }));
   const content = response.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error('评测模型返回空内容');
-  return schema.parse(parseJson(content));
+  if (!content) {
+    if (remainingEvaluationTimeMs() !== undefined) throw new JudgeOutputParseError('评测模型返回空内容', '');
+    throw new Error('评测模型返回空内容');
+  }
+  try { return schema.parse(parseJson(content)); }
+  catch (error) {
+    if (remainingEvaluationTimeMs() !== undefined) throw new JudgeOutputParseError('评测模型输出不符合 JSON 契约', content);
+    throw error;
+  }
 }
 
 export interface ResultMetricInputs {

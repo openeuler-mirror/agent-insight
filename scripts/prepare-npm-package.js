@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 
 const fs = require('fs')
 const path = require('path')
@@ -12,6 +28,25 @@ function copyDirIfMissing(sourceDir, targetDir, label) {
   fs.cpSync(sourceDir, targetDir, { recursive: true })
   console.log(`✓ ${label} copied to standalone`)
   return true
+}
+
+function copyBenchmarkExecutionRuntime(packageRoot, standaloneDir) {
+  for (const directory of ['packages/project-config', 'packages/benchmark-protocol', 'packages/agent-runtime', 'services/executor/src', 'services/executor/runtimes', 'agent_fault_injection']) {
+    const source = path.join(packageRoot, directory)
+    if (!fs.existsSync(source)) continue
+    const destination = path.join(standaloneDir, directory)
+    fs.mkdirSync(path.dirname(destination), { recursive: true })
+    fs.cpSync(source, destination, { recursive: true })
+  }
+  const executorCatalog = path.join(packageRoot, 'generated/benchmark-catalog/executors.cjs')
+  const executorFiles = fs.existsSync(executorCatalog) ? require(executorCatalog).generatedExecutorPackageFiles : []
+  for (const file of ['scripts/xgovernor.cjs', 'scripts/reliability-client.cjs', 'scripts/install-ras-client.js', 'scripts/agent-insight-home.cjs', 'scripts/lib/fi-python-runtime.js', 'scripts/agent-trace-collectors/shared/trace-transport.cjs', 'generated/benchmark-catalog/executors.cjs', ...executorFiles]) {
+    const source = path.join(packageRoot, file)
+    if (!fs.existsSync(source)) continue
+    const destination = path.join(standaloneDir, file)
+    fs.mkdirSync(path.dirname(destination), { recursive: true })
+    fs.copyFileSync(source, destination)
+  }
 }
 
 // Local/temp & non-runtime project dirs that `next build` sweeps into standalone.
@@ -29,6 +64,7 @@ const STANDALONE_JUNK_DIRS = [
   'features',
   'tools',
   'docs',
+  'design',
   'data',
   'logs',
   'src',
@@ -131,7 +167,8 @@ function copyLlamaIndexCollector(packageRoot, standaloneDir) {
   const sourceReadme = path.join(
     packageRoot,
     'docs',
-    'user-guide',
+    'zh',
+    'how-to',
     'observability',
     'llamaindex-trace-collector.md',
   )
@@ -171,6 +208,18 @@ function assertRuntimeSystemSkills(standaloneDir) {
   }
 }
 
+function copyLegalFiles(packageRoot, standaloneDir) {
+  const files = ['LICENSE', 'NOTICE', 'LICENSE-MIT-Historical', 'Third_Party_Open_Source_Software_Notice.txt', 'licenses']
+  for (const file of files) {
+    const source = path.join(packageRoot, file)
+    if (!fs.existsSync(source)) throw new Error(`Missing legal file: ${source}`)
+  }
+  fs.mkdirSync(standaloneDir, { recursive: true })
+  for (const file of files) {
+    fs.cpSync(path.join(packageRoot, file), path.join(standaloneDir, file), { recursive: true })
+  }
+}
+
 function ensureStandalonePackage(packageRoot = process.cwd()) {
   const standaloneDir = path.join(packageRoot, '.next', 'standalone')
   if (!fs.existsSync(standaloneDir)) {
@@ -178,6 +227,7 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   }
 
   pruneStandaloneJunk(standaloneDir)
+  copyLegalFiles(packageRoot, standaloneDir)
   copyRuntimeSystemSkills(packageRoot, standaloneDir)
 
   const staticDir = path.join(packageRoot, '.next', 'static')
@@ -191,11 +241,7 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   const scriptsDir = path.join(packageRoot, 'scripts')
   const standaloneScriptsDir = path.join(standaloneDir, 'scripts')
   copyDirIfMissing(scriptsDir, standaloneScriptsDir, 'Scripts')
-  const configurationRuntime = path.join(packageRoot, 'packages', 'project-config')
-  copyDirIfMissing(configurationRuntime, path.join(standaloneDir, 'packages', 'project-config'), 'Project configuration runtime')
-  for (const directory of ['packages/agent-runtime', 'services/executor/runtimes']) {
-    copyDirIfMissing(path.join(packageRoot, directory), path.join(standaloneDir, directory), directory)
-  }
+  copyBenchmarkExecutionRuntime(packageRoot, standaloneDir)
   fs.mkdirSync(path.join(standaloneDir, 'config', 'benchmark'), { recursive: true })
   for (const scope of ['platform', 'evaluator', 'executor']) {
     const source = path.join(packageRoot, 'config', 'benchmark', `${scope}.yaml`)
@@ -243,6 +289,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  copyLegalFiles,
+  copyBenchmarkExecutionRuntime,
   copyLlamaIndexCollector,
   ensureStandalonePackage,
 }

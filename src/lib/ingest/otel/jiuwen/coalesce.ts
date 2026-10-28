@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * jiuwen 摄入的按组节流（coalesce）。
  *
@@ -5,7 +21,7 @@
  * （durable spool 设计，保重启不丢），单批成本 = O(session 大小) → 整个 run 累积 O(N²)。
  * 12M-token 级的 team run 后期单批要秒级，几十批串行排队时 exporter 的完成信号
  * （team root span）被压到几十分钟后才落库（实验记录见
- * docs/design/…（spike jiuwen-exporter-latency）/ IDEAS.md [B12]）。
+ * design/…（spike jiuwen-exporter-latency）/ IDEAS.md [B12]）。
  *
  * 策略：span 照旧每批增量落盘（appendJiuwenSpans 不受影响，掉电不丢）；「重读+重聚合+
  * 落库」按组节流——

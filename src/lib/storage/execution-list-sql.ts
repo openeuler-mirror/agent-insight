@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Prisma } from '@prisma/client';
 import { TRACE_INACTIVITY_TIMEOUT_MS } from '@/lib/observe/trace-lifecycle';
 import { BUILTIN_MODEL_PRICING, DEFAULT_CACHE_CREATION_RATIO, DEFAULT_CACHE_READ_RATIO, getCustomModels } from '@/lib/shared/model-config';
@@ -168,7 +184,7 @@ function cost(): Prisma.Sql {
         CASE ${Prisma.join(branches, ' ')} ELSE 0 END ELSE 0 END)`;
 }
 
-export async function selectExecutionListPage(where: Prisma.ExecutionWhereInput, options: ComputedRecordPageOptions) {
+export async function selectExecutionListIds(where: Prisma.ExecutionWhereInput, options: ComputedRecordPageOptions, take = options.pageSize) {
     if (!['timestamp', 'agentName', 'latency', 'tokens', 'cost', 'status'].includes(options.sortKey)) {
         throw new Error(`Unsupported Execution sort field: ${options.sortKey}`);
     }
@@ -179,11 +195,15 @@ export async function selectExecutionListPage(where: Prisma.ExecutionWhereInput,
         : options.sortKey === 'cost' ? cost()
             : options.sortKey === 'timestamp' || options.sortKey === 'agentName' ? Prisma.raw(`e."${options.sortKey}"`)
                 : Prisma.sql`COALESCE(${Prisma.raw(`e."${options.sortKey}"`)}, 0)`;
-    return prismaRaw.$transaction(async transaction => {
-        const stats = await aggregateExecutionList(where, { ...fixedOptions, avgNullAsZero: true }, transaction);
-        const rows = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT e.id ${from} WHERE ${predicate(where, fixedOptions)}
-            ORDER BY ${sort} ${Prisma.raw(options.sortDir === 'asc' ? 'ASC' : 'DESC')}, e.timestamp DESC, e.id DESC
-            LIMIT ${options.pageSize} OFFSET ${(options.page - 1) * options.pageSize}`);
-        return { ids: rows.map(row => row.id), total: stats.total, stats };
-    });
+    const rows = await prismaRaw.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT e.id ${from} WHERE ${predicate(where, fixedOptions)}
+        ORDER BY ${sort} ${Prisma.raw(options.sortDir === 'asc' ? 'ASC' : 'DESC')}, e.timestamp DESC, e.id DESC
+        LIMIT ${take} OFFSET ${(options.page - 1) * options.pageSize}`);
+    return rows.map(row => row.id);
+}
+
+export async function selectExecutionListPage(where: Prisma.ExecutionWhereInput, options: ComputedRecordPageOptions) {
+    const fixedOptions = { ...options, lifecycleNow: options.lifecycleNow ?? Date.now() };
+    const stats = await aggregateExecutionList(where, { ...fixedOptions, avgNullAsZero: true });
+    const ids = await selectExecutionListIds(where, fixedOptions);
+    return { ids, total: stats.total, stats };
 }

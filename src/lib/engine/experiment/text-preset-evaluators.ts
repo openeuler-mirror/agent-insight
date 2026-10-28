@@ -1,9 +1,27 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { normalizeEvaluatorOutput, type EvalPoint, type EvalPointStatus, type EvaluatorOutput } from '@/lib/evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 import {
   normalizeEntityF1RunConfig,
   normalizeExactMatchRunConfig,
+  type ConfigurableTextEvaluatorId,
   type EntityF1RunConfig,
+  type EvaluatorRunConfigMap,
   type ExactMatchRunConfig,
 } from '@/lib/evaluators/evaluator-run-config';
 import { runTextAiFlavorPreset, TEXT_AI_FLAVOR_PRESET_ID } from './text-ai-flavor-preset-evaluator';
@@ -39,7 +57,7 @@ export function runTextPreset(
   id: TextPresetId,
   user: string,
   ctx: FaithfulPresetContext,
-  config?: ExactMatchRunConfig | EntityF1RunConfig,
+  config?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
   switch (id) {
     case TEXT_AI_FLAVOR_PRESET_ID: return runTextAiFlavorPreset(user, ctx);
@@ -94,7 +112,7 @@ const REFERENCE_TEXT_PRESET_NAMES: Record<ReferenceTextPresetId, string> = {
 async function runReferenceTextPreset(
   id: ReferenceTextPresetId,
   ctx: FaithfulPresetContext,
-  config?: ExactMatchRunConfig | EntityF1RunConfig,
+  config?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
   if (ctx.referenceOutput === null || !ctx.referenceOutput.trim()) {
     return missingReference(REFERENCE_TEXT_PRESET_NAMES[id]);

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions, getDefaultIngestUser } from '@/lib/storage/data-service';
 import { isDeletedOpencodeSessionId } from '@/lib/ingest/opencode-deleted-sessions';
 import { analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
@@ -33,8 +49,7 @@ export async function POST(request: Request) {
     try {
         data = JSON.parse(rawBody);
     } catch (e) {
-        console.error('JSON Parse Error:', e);
-        console.error('Raw Body:', rawBody);
+        console.error('[Upload-API] Invalid JSON body', { errorName: e instanceof Error ? e.name : 'unknown', bodyBytes: Buffer.byteLength(rawBody) });
         return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
     }
     const headers = request.headers;
@@ -111,10 +126,8 @@ export async function POST(request: Request) {
     }
 
     if (apiKey && !apiKeyUser && !deviceIdentity) {
-      const keyPrefix = apiKey.slice(0, 12);
       console.error(
         `[Upload-API] ❌ Rejecting upload (HTTP 401): API key not found in User table.\n` +
-        `  Key prefix: ${keyPrefix}...\n` +
         `  task_id: ${data.task_id}\n` +
         `  framework: ${data.framework || 'unknown'}\n` +
         `  payload.user (untrusted): ${data.user || '(none)'}\n` +
@@ -124,7 +137,7 @@ export async function POST(request: Request) {
         {
           error: 'Invalid API key',
           detail: 'API Key 在 User 表里没匹配。Server 拒绝接收以避免数据跑到错误账号。',
-          keyPrefix: keyPrefix + '...',
+          keyPrefix: '[REDACTED]',
           hint: '检查 AGENT_INSIGHT_API_KEY env 与 server DB 里目标 User.apiKey 是否一致',
         },
         { status: 401 },
@@ -183,7 +196,7 @@ export async function POST(request: Request) {
         }
     }
 
-    console.log(`[Upload-API] 📥 Received data from ${data.framework || 'unknown'}: task_id=${data.task_id}, query=${data.query?.substring(0, 50)}..., user=${username} (via ${userResolutionPath})`);
+    console.log(`[Upload-API] 📥 Received data from ${data.framework || 'unknown'}: task_id=${data.task_id}, queryLength=${data.query?.length || 0}, user=${username} (via ${userResolutionPath})`);
 
     if (data.endpoint) {
         data.endpoint = normalizeEndpointUrl(data.endpoint) ?? undefined;

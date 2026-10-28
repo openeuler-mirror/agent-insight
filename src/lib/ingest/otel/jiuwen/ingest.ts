@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * jiuwen OTLP ingest: agent-core's OTLP exporter pushes spans in BATCHES (the
  * BatchSpanProcessor flushes several times during a run), so we can't one-shot
@@ -13,7 +29,7 @@
  * replay) re-reads the on-disk spool and snapshot-replace overwrites with the
  * complete trace again. Memory stays bounded: each re-aggregation loads only the
  * spans of the touched group, then releases them — the old unbounded in-memory Map
- * is gone. See spool.ts and docs/design/jiuwenswarm-tracing/durable-span-spool.md.
+ * is gone. See spool.ts and design/observability/jiuwenswarm-tracing/durable-span-spool.md.
  *
  * Why key by traceId, not agentteam.session.id: single-agent runs reuse a
  * process-wide session id (the ACP CLI hard-codes "acp_cli_session"), so keying
@@ -118,7 +134,7 @@ const coalescer = new JiuwenBatchCoalescer(
     try {
       await flushGroupByKey(key, user);
     } catch (error) {
-      console.warn(`[jiuwen-ingest] deferred flush failed for ${key}`, error);
+      console.error(`[jiuwen-ingest] deferred flush failed for ${key}`, error);
     }
   },
   { intervalMs: coalesceIntervalMs() },

@@ -1,8 +1,27 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 幻觉检测的联网核实证据：按用户联网搜索配置（Tavily）检索回答中的关键事实断言。
  * 仅当 Settings 启用联网搜索（searchProvider=tavily 且有 apiKey）时生效；
- * 搜索失败静默降级（返回 null），绝不阻断评估；fake judge 单测自动跳过。
+ * 搜索局部失败可降级；整轮超时与用户取消必须向外传播。fake judge 单测自动跳过。
  */
+import { experimentSignal } from './cancellation-context';
+import { hasEvaluatorExecutionPolicy } from './evaluator-execution-policy';
+import { trackEvaluationRequest } from './evaluation-attempt';
 import { hasJudgeLlmTestInjection } from './judge-llm';
 
 export interface WebSearchHit {
@@ -13,6 +32,7 @@ export interface WebSearchHit {
 }
 
 export interface WebSearchEvidence {
+  status?: 'success' | 'partial_failure' | 'degraded';
   queries: string[];
   hits: WebSearchHit[];
 }
@@ -44,13 +64,17 @@ export function extractFactClaims(answer: string): string[] {
 
 async function tavilySearch(apiKey: string, query: string): Promise<WebSearchHit[]> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error(`timeout after ${REQUEST_TIMEOUT_MS}ms`)), REQUEST_TIMEOUT_MS);
+  const parent = experimentSignal();
+  parent?.throwIfAborted();
+  const timeout = REQUEST_TIMEOUT_MS;
+  const signal = parent ? AbortSignal.any([parent, ctrl.signal]) : ctrl.signal;
+  const timer = setTimeout(() => ctrl.abort(new Error(`timeout after ${timeout}ms`)), timeout);
   try {
     const res = await fetch(TAVILY_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key: apiKey, query, max_results: MAX_RESULTS_PER_SEARCH, include_answer: false }),
-      signal: ctrl.signal,
+      signal,
     });
     if (!res.ok) throw new Error(`Tavily ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
     const json = (await res.json()) as { results?: Array<{ title?: string; url?: string; content?: string }> };
@@ -67,10 +91,15 @@ async function tavilySearch(apiKey: string, query: string): Promise<WebSearchHit
 
 /**
  * 联网核实入口：配置启用（tavily + apiKey）时，对回答中的事实断言做联网检索。
- * 未启用 / fake judge 单测 / 配置读取失败 / 搜索全部失败 → 返回 null（评估器降级为无联网证据）。
+ * 无可用证据时走知识路径；配置策略下记录降级状态，历史链路仍返回 null。
  */
 export async function gatherWebSearchEvidence(user: string, question: string, answer: string): Promise<WebSearchEvidence | null> {
-  if (gatherOverride) return gatherOverride(user, question, answer);
+  experimentSignal()?.throwIfAborted();
+  if (gatherOverride) {
+    const evidence = await trackEvaluationRequest(() => gatherOverride!(user, question, answer));
+    experimentSignal()?.throwIfAborted();
+    return evidence;
+  }
   if (hasJudgeLlmTestInjection()) return null;
   try {
     const { getUserSettings } = await import('@/lib/storage/server-config');
@@ -81,17 +110,22 @@ export async function gatherWebSearchEvidence(user: string, question: string, an
     const claims = extractFactClaims(answer);
     const queries = claims.length > 0 ? claims : [`${question} ${answer.slice(0, 60)}`.trim()];
     const hits: WebSearchHit[] = [];
+    let failures = 0;
     for (const query of queries.slice(0, MAX_SEARCHES)) {
       try {
-        hits.push(...await tavilySearch(apiKey, query));
+        experimentSignal()?.throwIfAborted();
+        hits.push(...await trackEvaluationRequest(() => tavilySearch(apiKey, query)));
       } catch (err) {
-        console.warn(`[hallucination-web-search] "${query.slice(0, 30)}" 搜索失败，跳过:`, (err as Error)?.message);
+        experimentSignal()?.throwIfAborted();
+        failures++;
+        console.warn(`[hallucination-web-search] (queryLength=${query.length}) 搜索失败，跳过:`, (err as Error)?.message);
       }
     }
-    if (hits.length === 0) return null;
-    return { queries, hits };
+    if (hits.length === 0 && !hasEvaluatorExecutionPolicy()) return null;
+    return { queries, hits, status: !hits.length ? 'degraded' : failures ? 'partial_failure' : 'success' };
   } catch (err) {
+    experimentSignal()?.throwIfAborted();
     console.warn('[hallucination-web-search] 联网核实降级（配置读取失败或搜索异常）:', (err as Error)?.message);
-    return null;
+    return hasEvaluatorExecutionPolicy() ? { queries: [], hits: [], status: 'degraded' } : null;
   }
 }

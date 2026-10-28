@@ -1,3 +1,22 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { withFrozenCustomEvaluators, resolveFrozenCustomEvaluator } from '@/lib/evaluators/evaluator-skill-service';
+import { runConfiguredEvaluationStage, withEvaluatorExecution } from './evaluator-execution-policy';
+import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError } from '@/lib/engine/evaluation/custom-evaluator-runtime';
 /**
  * 单组实验执行引擎（M5）。
  *
@@ -26,6 +45,7 @@
 
 import { createHash } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
+import type { Prisma } from '@prisma/client';
 import {
   buildJudgePrompt,
   parseJudgeText,
@@ -66,9 +86,9 @@ import {
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
 import {
+  evaluatorRunConfigOf,
   isConfigurableTextEvaluatorId,
   parseStoredEvaluatorRunConfigs,
-  type ConfigurableTextEvaluatorId,
   type EvaluatorRunConfigMap,
 } from '@/lib/evaluators/evaluator-run-config';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
@@ -98,7 +118,9 @@ import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 import { deriveSettledExperimentStatus } from './detail-agg';
 import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
 import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
-import { activeCaseOperations, assertExperimentActive, withExperimentCancellation } from './cancellation-context';
+import { isSimilarityPresetId, runSimilarityPreset } from './similarity-preset-evaluators';
+import { activeCaseOperations, assertExperimentActive, markExperimentCleanupUnconfirmed, withExperimentCancellation } from './cancellation-context';
+import { parseStoredEvaluatorExecutionConfig, type EvaluatorExecutionSnapshot } from '@/lib/evaluators/evaluator-execution-config';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -345,7 +367,8 @@ async function evaluateOnce(
   user: string,
   evaluatorId: string,
   runtime: CaseRuntime,
-  evaluatorConfig?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
+  configs: EvaluatorRunConfigMap,
+  frozenSnapshot: Record<string, unknown> = {},
 ): Promise<EvaluatorOutput> {
   if (isSkillTriggerAnalyzerId(evaluatorId)) {
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
@@ -363,7 +386,7 @@ async function evaluateOnce(
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isTextPresetId(evaluatorId)) {
-    return runTextPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorConfig);
+    return runTextPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorRunConfigOf(configs, evaluatorId));
   }
   // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
@@ -398,7 +421,12 @@ async function evaluateOnce(
   if (isHallucinationPresetId(evaluatorId)) {
     return runHallucinationPreset(evaluatorId, user, runtime.faithfulCtx);
   }
-  const card = await resolveEvaluatorCard(user, evaluatorId);
+  if (isSimilarityPresetId(evaluatorId)) {
+    return runSimilarityPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorRunConfigOf(configs, evaluatorId));
+  }
+  const card = evaluatorId.startsWith('custom-')
+    ? await resolveFrozenCustomEvaluator(user, evaluatorId, frozenSnapshot)
+    : await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
   if (card.evaluatorType !== 'LLM' || !card.llmConfig?.systemPrompt) {
     throw new Error(`评估器 ${evaluatorId} 缺少可执行的 LLM 配置`);
@@ -413,6 +441,8 @@ async function evaluateOnce(
       };
     }
   }
+  if (card.llmConfig.skills?.length) return runConfiguredEvaluationStage(async () =>
+    (await runCustomEvaluatorWithSkills(user, card, runtime.judgeCtx)).output, { deferTimeout: true });
   const prompt = buildJudgePrompt(card, runtime.judgeCtx);
   const text = await callJudgeLlm(user, {
     system: prompt.system,
@@ -433,8 +463,9 @@ export async function executeResultRow(user: string, resultId: string): Promise<
     include: {
       case: {
         include: {
+          traceAttempts: { orderBy: { attemptNo: 'desc' }, take: 1 },
           experiment: {
-            select: { evaluatorIdsJson: true, evaluatorConfigsJson: true, skillName: true },
+            select: { evaluatorIdsJson: true, evaluatorConfigsJson: true, skillName: true, configSnapshotJson: true },
           },
         },
       },
@@ -443,28 +474,43 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   if (!row) throw new Error(`ExperimentEvalResult ${resultId} 不存在`);
   await assertExperimentActive(row.experimentId, row.caseId);
 
-  await prisma.experimentEvalResult.update({
-    where: { id: resultId },
-    data: { status: 'running', errorMessage: null },
+  if (row.status === 'running' || row.status === 'cancelled') return 'failed';
+  const traceAttempt = row.case.traceAttempts[0];
+  if (traceAttempt && traceAttempt.status !== 'ready') return 'failed';
+  const caseFence = {
+    deletedAt: null, experiment: { deletedAt: null }, executionId: row.case.executionId, taskId: row.case.taskId, fiRunId: row.case.fiRunId,
+    traceAttempts: traceAttempt
+      ? { none: { attemptNo: { gt: traceAttempt.attemptNo } } }
+      : { none: {} },
+  };
+  const claim = await prisma.experimentEvalResult.updateMany({
+    where: { id: resultId, updatedAt: row.updatedAt, status: row.status, attempts: row.attempts, case: caseFence },
+    data: { status: 'running', errorMessage: null, attempts: { increment: 1 } },
   });
+  if (!claim.count) return 'failed';
+  const writeFence = { id: resultId, status: 'running', attempts: row.attempts + 1, case: caseFence };
 
   const startedAt = Date.now();
-  const maxAttempts = experimentEngineConfig.retryDelaysMs.length + 1;
+  let executionConfig: EvaluatorExecutionSnapshot['resolved'][string] | undefined;
+  try {
+    executionConfig = parseStoredEvaluatorExecutionConfig(row.case.experiment.evaluatorConfigsJson)?.resolved[row.evaluatorId];
+  } catch (error) {
+    await prisma.experimentEvalResult.updateMany({ where: { id: resultId, status: 'running' },
+      data: { status: 'failed', errorMessage: error instanceof Error ? error.message : '评估运行配置无效' } });
+    return 'failed';
+  }
+  const maxAttempts = executionConfig ? 1 : experimentEngineConfig.retryDelaysMs.length + 1;
   let localAttempts = 0;
   let lastError: unknown = null;
-
-  const runtime = await loadCaseRuntime(
-    row.case,
-    user,
-    row.case.experiment.skillName,
-    row.evaluatorId === 'preset-agent-task-completion',
-  );
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await assertExperimentActive(row.experimentId, row.caseId);
     localAttempts = attempt;
     try {
-      let evaluatorConfig: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | undefined;
+      const runtime = await loadCaseRuntime(
+        row.case, user, row.case.experiment.skillName, row.evaluatorId === 'preset-agent-task-completion',
+      );
+      let configs: EvaluatorRunConfigMap = {};
       const evaluatorId = String(row.evaluatorId);
       if (isConfigurableTextEvaluatorId(evaluatorId)) {
         let evaluatorIds: string[];
@@ -475,27 +521,37 @@ export async function executeResultRow(user: string, resultId: string): Promise<
         } catch {
           throw new Error('实验评估器列表不是有效 JSON 数组');
         }
-        const configs = parseStoredEvaluatorRunConfigs(
+        configs = parseStoredEvaluatorRunConfigs(
           row.case.experiment.evaluatorConfigsJson,
           evaluatorIds,
         );
-        evaluatorConfig = configs[evaluatorId];
       }
-      const out = await withTimeout(
-        withExperimentCancellation(row.experimentId, row.caseId, () => evaluateOnce(user, row.evaluatorId, runtime, evaluatorConfig)),
+      const evaluate = () => evaluateOnce(user, row.evaluatorId, runtime, configs, JSON.parse(row.case.experiment.configSnapshotJson || '{}'));
+      const out = executionConfig ? await withExperimentCancellation(row.experimentId, row.caseId, (signal) =>
+        withEvaluatorExecution(executionConfig!, signal, async () => {
+          const card = evaluatorId.startsWith('custom-')
+            ? await resolveFrozenCustomEvaluator(user, evaluatorId, JSON.parse(row.case.experiment.configSnapshotJson || '{}')) : null;
+          const managesStage = isFaithfulPresetId(evaluatorId) || isRasReliabilityPresetId(evaluatorId)
+            || isAgentTrajectoryPresetId(evaluatorId) || Boolean(card?.llmConfig?.skills?.length);
+          return managesStage ? evaluate() : runConfiguredEvaluationStage(evaluate);
+        }, { onAttempt: (count) => { localAttempts = count; }, onCleanupUnconfirmed: markExperimentCleanupUnconfirmed,
+          retryDelaysMs: experimentEngineConfig.retryDelaysMs })) : await withTimeout(
+        withExperimentCancellation(row.experimentId, row.caseId, evaluate),
         row.evaluatorId === 'preset-agent-trace-quality'
           ? EXPERIMENT_TRAJECTORY_TIMEOUTS.resultRowMs
           : experimentEngineConfig.rowTimeoutMs,
       );
       await prisma.experimentEvalResult.updateMany({
-        where: { id: resultId, status: 'running', case: { deletedAt: null, experiment: { deletedAt: null } } },
+        where: writeFence,
         data: {
           status: 'done',
           verdict: out.verdict ?? null,
           summary: out.summary ?? null,
           score: out.score ?? null,
           pointsJson: out.points ? JSON.stringify(out.points) : null,
-          evidenceJson: out.evidence ? JSON.stringify(out.evidence) : null,
+          evidenceJson: executionConfig
+            ? JSON.stringify({ ...out.evidence, executionConfig: { ...executionConfig, attempts: localAttempts } })
+            : out.evidence ? JSON.stringify(out.evidence) : null,
           errorMessage: null,
           attempts: row.attempts + localAttempts,
           durationMs: Date.now() - startedAt,
@@ -513,10 +569,19 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError || '未知错误');
+  const failureEvidence = {
+    ...(lastError instanceof CustomEvaluatorExecutionError
+      ? { json: { type: 'custom-evaluator-runtime-v1', customEvaluatorRuntime: lastError.runtime } } : {}),
+    ...(executionConfig ? { executionConfig: { ...executionConfig, attempts: localAttempts },
+      errorCode: (lastError as { code?: string } | null)?.code
+        ?? (lastError instanceof CustomEvaluatorExecutionError ? (lastError.cause as { code?: string } | null)?.code : undefined)
+        ?? 'EVALUATION_FAILED' } : {}),
+  };
   await prisma.experimentEvalResult.updateMany({
-    where: { id: resultId, status: 'running', case: { deletedAt: null, experiment: { deletedAt: null } } },
+    where: writeFence,
     data: {
       status: 'failed',
+      ...(Object.keys(failureEvidence).length ? { evidenceJson: JSON.stringify(failureEvidence) } : {}),
       errorMessage: message.slice(0, 2000),
       attempts: row.attempts + localAttempts,
       durationMs: Date.now() - startedAt,
@@ -695,15 +760,6 @@ function getOrStartResultRun(user: string, resultId: string): Promise<void> {
     } catch (e) {
       // executeResultRow 内部已写 failed；这里兜底行本身不存在等意外
       console.error(`[experiment-engine] row ${resultId} failed:`, (e as Error)?.message);
-      try {
-        await prisma.experimentEvalResult.updateMany({
-          where: { id: resultId, status: { in: ['pending', 'running'] }, case: { deletedAt: null, experiment: { deletedAt: null } } },
-          data: {
-            status: 'failed',
-            errorMessage: ((e as Error)?.message || '未知错误').slice(0, 2000),
-          },
-        });
-      } catch { /* 行不存在时放弃 */ }
     } finally {
       try {
         const row = await prisma.experimentEvalResult.findUnique({ where: { id: resultId }, select: { caseId: true, experimentId: true } });
@@ -745,17 +801,20 @@ async function resetResultRun(params: {
   user: string;
 }): Promise<{ resultId: string; completion?: Promise<void> }> {
   await assertExperimentActive(params.experimentId, params.caseId);
-  return withKeyedLock(`eval-result:${params.caseId}:${params.evaluatorId}`, async () => {
-    const existingRow = await prisma.experimentEvalResult.findUnique({
+  return withKeyedLock(`eval-result:${params.caseId}:${params.evaluatorId}`, async () => prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.experimentCase.updateMany({ where: { id: params.caseId, deletedAt: null }, data: { id: params.caseId } });
+    const existingRow = await tx.experimentEvalResult.findUnique({
       where: { caseId_evaluatorId: { caseId: params.caseId, evaluatorId: params.evaluatorId } },
-      select: { id: true },
+      select: { id: true, status: true },
     });
     const existingRun = existingRow ? getResultRuns().get(existingRow.id) : undefined;
     if (existingRow && existingRun) {
       return { resultId: existingRow.id, completion: existingRun };
     }
 
-    const row = await prisma.experimentEvalResult.upsert({
+    if (existingRow?.status === 'running') return { resultId: existingRow.id, completion: Promise.resolve() };
+
+    const row = await tx.experimentEvalResult.upsert({
       where: { caseId_evaluatorId: { caseId: params.caseId, evaluatorId: params.evaluatorId } },
       create: {
         experimentId: params.experimentId,
@@ -772,7 +831,7 @@ async function resetResultRun(params: {
       select: { id: true },
     });
     return { resultId: row.id };
-  });
+  }));
 }
 
 async function prepareAndScheduleResultRuns(
@@ -865,6 +924,7 @@ export async function ensureEvalExperiment(params: {
       type: 'single',
       agentName: params.agentName ?? '',
       evaluatorIdsJson: JSON.stringify(params.evaluatorIds),
+      configSnapshotJson: JSON.stringify(await withFrozenCustomEvaluators(params.user, params.evaluatorIds)),
       // 建出来时还没有任何 case/结果，不是「运行中」——空评测任务(createOnly 0 trace)
       // 若建成 running 会永久卡住（尚无结果行可供 settleExperimentStatus 结算）。
       // 真正评估时由同步 case 调用或批次收尾统一落到 done/failed。

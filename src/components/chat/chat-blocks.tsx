@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -128,6 +144,22 @@ export function ChatThinkingBlock({ block, locale }: { block: ThinkingBlockData;
 
 // ─── ToolBlock（routes to TodoBlock / WebSearchBlock for special tools） ────
 
+// 必须在模块作用域定义：原先写在 ChatToolBlock 函数体内，每次渲染都生成新的组件
+// 类型，React 会把图标子树整棵卸载再重挂，running 态的 spinner 动画因此反复重置。
+function StatusIcon({ status }: { status: ToolBlockData['status'] }) {
+  if (status === 'running') return <span className="inline-block-spinner" />;
+  if (status === 'ok') return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
 export function ChatToolBlock({
   block, onOpenFile, locale,
 }: {
@@ -149,20 +181,6 @@ export function ChatToolBlock({
   const label = getToolLabel(block.name, block.args, locale);
   const filePath = block.args?.filePath ?? block.args?.file_path ?? block.args?.path ?? block.args?.filename;
   const isFileWrite = (block.name === 'write_file' || block.name === 'write' || block.name === 'create_file') && filePath;
-
-  const StatusIcon = () => {
-    if (block.status === 'running') return <span className="inline-block-spinner" />;
-    if (block.status === 'ok') return (
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="20 6 9 17 4 12" />
-      </svg>
-    );
-    return (
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-        <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-      </svg>
-    );
-  };
 
   const fpArg = filePath;
   const headerPreview = (() => {
@@ -199,7 +217,7 @@ export function ChatToolBlock({
   return (
     <div className={`inline-block tool status-${block.status}`}>
       <button className="inline-block-header" onClick={() => setOpen(o => !o)}>
-        <span className="inline-block-icon" aria-hidden><StatusIcon /></span>
+        <span className="inline-block-icon" aria-hidden><StatusIcon status={block.status} /></span>
         <span className="inline-block-label">{label}</span>
         {headerPreview && !open && (
           <span className="inline-block-summary">{headerPreview}</span>

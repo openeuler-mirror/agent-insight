@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { listObservedAgentNames, listObservedFieldValues, listObservedSkills, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
@@ -261,6 +277,9 @@ export async function GET(request: Request) {
     const paginated = searchParams.get('paginated') === '1' || searchParams.get('paginated') === 'true';
     const databasePagination = searchParams.get('databasePagination') === '1'
         || searchParams.get('databasePagination') === 'true';
+    const requestedPart = searchParams.get('listPart');
+    const listPart = paginated && databasePagination && (requestedPart === 'records' || requestedPart === 'stats')
+        ? requestedPart : undefined;
     // 轻量返回:只给 denormalized 元数据,不读 finalResult/不解析 session,根治非分页路径堆 OOM。
     const lightweight = searchParams.get('fields') === 'light' || searchParams.get('lightweight') === '1';
     const page = parsePositiveInt(searchParams.get('page'), 1);
@@ -387,8 +406,11 @@ export async function GET(request: Request) {
                 anomaly: anomalyParam,
                 sortKey: sortParam === 'status' ? 'status' as const : sortKey,
             } } : {}),
-        })
+        }, process.env.DB_HOST ? undefined : listPart)
         : null;
+    if (listPart === 'stats' && pageResult && !process.env.DB_HOST) {
+        return NextResponse.json({ stats: pageResult.stats });
+    }
     const data = pageResult
         ? pageResult.records
         : await readRecords(user, recordFilters, { attachEvaluations, lightweight, includeTags });
@@ -613,6 +635,11 @@ export async function GET(request: Request) {
         console.log(`[Data-API] 📤 Sending ${responseRecords.length} records. Top record skills: ${JSON.stringify(responseRecords[0].skills)}, is_evaluating: ${responseRecords[0].is_evaluating}`);
     }
     if (paginated) {
+        if (listPart === 'stats') return NextResponse.json({ stats: responseStats });
+        if (listPart === 'records') return NextResponse.json({
+            records: responseRecords, page, pageSize,
+            hasMore: pageResult?.hasMore ?? page * pageSize < responseTotal,
+        });
         return NextResponse.json({
             records: responseRecords,
             total: responseTotal,

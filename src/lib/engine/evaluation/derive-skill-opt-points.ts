@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 评测产出 → Skill 优化点（写入 Evaluation + SkillIssue 两表）。
  *
@@ -8,7 +24,7 @@
  *   - 任务完成度评测产出（rawAnalysis.key_point_findings —— 来自主评估器）
  *   - Execution 行（拿 invokedSkills + skillVersion + id）
  *
- * 写入分工（详见 docs/plans/2026-05-08-skill-opt-issues-api-design.md）：
+ * 写入分工（详见 design/2026-05-08-skill-opt-issues-api-design.md）：
  *   - 每个被评测涉及的 skill：建一行 Evaluation(type='dynamic', skillId, version, user,
  *     executionId, runId=evaluatorRunId, generator='trajectory-evaluator@1.0')
  *   - Evaluation 下挂 N 行 SkillIssue：source='dynamic', dedupKey=hash6(category+normSummary),

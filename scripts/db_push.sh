@@ -1,4 +1,18 @@
 #!/bin/sh
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # prisma db push 的安全包装，供 start.sh / develop_start.sh / docker-entrypoint.sh 共用。
 #
 # 默认**不带** --accept-data-loss：真正会丢数据的 schema 变更必须由人来判断，
@@ -23,6 +37,9 @@ case "$#:$*" in
   0:|1:--skip-generate) ;;
   *) echo "Usage: sh scripts/db_push.sh [--skip-generate]" >&2; exit 1 ;;
 esac
+
+# 用户要求撤销旧版派生统计；仅移除该列，其他破坏性 schema 变更仍由下方护栏拦截。
+node scripts/trace-datasets/remove-legacy-summary.cjs
 
 if output=$(npx prisma db push "$@" < /dev/null 2>&1); then
   printf '%s\n' "$output"

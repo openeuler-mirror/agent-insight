@@ -1,4 +1,18 @@
 #!/bin/bash
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 
 # Enable verbose mode to see what's happening
 # set -x
@@ -25,7 +39,9 @@ Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--por
 Reuses a verified unchanged build; otherwise rebuilds with cache preserved.
 --force-rebuild always rebuilds, keeping the incremental cache.
 SWE-bench Verified is prepared automatically with its official loader unless
-already installed. Preparation failures warn and do not prevent startup.
+already installed. ZSoft L1 is also prepared automatically unless installed.
+Each benchmark can opt out via dataset.autoImport in config/benchmark/platform.local.yaml.
+Preparation failures warn and do not prevent startup.
 EOF
 }
 
@@ -395,11 +411,15 @@ stage_begin "benchmark preparation"
 if ! node scripts/benchmark/bootstrap-swe-bench-dataset.cjs; then
   echo "⚠ SWE-bench Verified 自动准备脚本执行失败，将继续启动服务；下次启动自动重试。" >&2
 fi
+if ! node scripts/benchmark/bootstrap-zsoft-dataset.cjs; then
+  echo "⚠ ZSoft L1 自动准备脚本执行失败，将继续启动服务；下次启动自动重试。" >&2
+fi
 
 stage_done
 stage_begin "build fingerprint and artifact check"
-# Prebuild generates these files; prepare them before fingerprinting as well.
+# Next.js 构建也会生成这些文件，必须在记录指纹前准备齐全。
 node scripts/benchmark/generate-catalog.cjs || exit 1
+node scripts/build-trace-dataset-worker.cjs || exit 1
 node scripts/start-build-state.cjs check $FORCE_REBUILD
 BUILD_STATUS=$?
 [ "$BUILD_STATUS" -le 1 ] || exit "$BUILD_STATUS"

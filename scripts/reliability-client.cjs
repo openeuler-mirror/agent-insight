@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * Agent Insight 常驻客户端服务。
  *
@@ -17,10 +33,13 @@ const os = require('os')
 const path = require('path')
 const { spawn, spawnSync } = require('child_process')
 const { createHash, randomBytes } = require('crypto')
+const { StringDecoder } = require('node:string_decoder')
 
 const { connectWebSocket } = require('./ws-client.cjs')
 const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 const { prepareSkillExperimentWorkspace } = require('./skill-experiment-workspace.cjs')
+const { inspectOpencodeRuntime } = require('./opencode-runtime.cjs')
+const { checkOpenCodeModelConfigAsync } = require('./opencode-connection-config.cjs')
 const { prepareOpencodeEventChannel, createOpencodeEventReader } = require('./opencode-experiment-events.cjs')
 const { createOrdinaryExperimentStore } = require('./ordinary-experiment-state.cjs')
 const { extractStructuredAgentError, sanitizeAgentDiagnostic, classifyAgentExitFailure, createAgentRunError, createOpencodeFailureMonitor } = require('./agent-run-diagnostics.cjs')
@@ -37,6 +56,7 @@ const WHITELIST = new Set([
   'RUN_BENCHMARK_CASE',
   'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
+  'PREPARE_EXECUTION_ENVIRONMENT',
 ])
 
 // 配置类 action 禁止携带下载地址/路径/完整配置；运行类禁止携带自由执行字段。
@@ -99,6 +119,7 @@ function loadConfig() {
     fiCwd: process.env.AGENT_INSIGHT_FI_CWD || raw.fiCwd || '',
     // 安装器始终写入版本化 managed venv 的绝对解释器路径。
     fiPython: process.env.AGENT_FI_PYTHON || raw.fiPython || '',
+    publicBundleDir: process.env.AGENT_INSIGHT_PUBLIC_BUNDLES_DIR || raw.publicBundleDir || '',
     mctsRepoDir: process.env.AGENT_INSIGHT_MCTS_REPO_DIR || fileEnv.AGENT_INSIGHT_MCTS_REPO_DIR || raw.mctsRepoDir || '',
     mctsPython: process.env.AGENT_INSIGHT_MCTS_PYTHON || fileEnv.AGENT_INSIGHT_MCTS_PYTHON || raw.mctsPython || '',
     mctsTraceLauncher: process.env.AGENT_INSIGHT_MCTS_TRACE_LAUNCHER || fileEnv.AGENT_INSIGHT_MCTS_TRACE_LAUNCHER || raw.mctsTraceLauncher
@@ -113,6 +134,17 @@ function mctsRuntime() {
   ]
   const runtimePath = candidates.find(candidate => fs.existsSync(candidate))
   return runtimePath ? require(runtimePath) : null
+}
+
+function executionRuntimePath() {
+  const candidates = [path.join(__dirname, 'executor', 'execution-config.cjs'), path.join(__dirname, '..', 'services', 'executor', 'src', 'execution-config.cjs')]
+  return candidates.find(candidate => fs.existsSync(candidate))
+}
+function executionRuntime() { return require(executionRuntimePath()) }
+function clearEnvironmentProbeCache() {
+  cachedProbe = null
+  cachedFiCwd = undefined
+  piRuntimeProbeCache.clear()
 }
 
 /**
@@ -519,6 +551,8 @@ function capabilityDiscoveryFingerprint(cfg = {}) {
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'config.env'),
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'core', 'main.py'),
     path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'xgovernor_client.py'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'task_plugins', 'zsoft'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'mode.py'),
     mctsPython,
     mctsTraceLauncher,
     path.join(path.dirname(mctsTraceLauncher), 'config.json'),
@@ -833,13 +867,16 @@ function buildCapabilities(cfg, opts) {
     const runtime = runtimeFor(id)
     return {
       id,
-      version: info?.version ? String(info.version) : undefined,
+      version: runtime.version || (info?.version ? String(info.version) : undefined),
       models: normalizeModelIds(info?.models),
       agents: normalizeModelIds(info?.agents),
       runExperimentCase: {
         version: 2,
         returnsTraceId: runtime.canResolveTraceId,
-        ...(id === 'opencode' ? { skillSnapshotVersion: 4 } : {}),
+        ready: Boolean(runtime.ready && normalizeModelIds(info?.agents).length),
+        unavailableReason: !runtime.ready ? runtime.reason || '运行时尚未就绪'
+          : !normalizeModelIds(info?.agents).length ? sanitizeAgentDiagnostic(info?.note) || `${id} Agent 列表为空，请检查探测结果` : undefined,
+        ...(id === 'opencode' && runtime.major === 1 ? { skillSnapshotVersion: 4 } : {}),
       },
       actions: [...WHITELIST],
     }
@@ -852,8 +889,11 @@ function buildCapabilities(cfg, opts) {
         platforms.push({
           id,
           models: [],
-          agents: id === 'xiaoo' ? ['defaultagent'] : ['build'],
-          runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(id === 'opencode' ? { skillSnapshotVersion: 4 } : {}) },
+          agents: id === 'xiaoo' ? ['defaultagent'] : [],
+          runExperimentCase: { version: 2, returnsTraceId: id !== 'opencode' && runtime.canResolveTraceId,
+            ready: id !== 'opencode' && runtime.ready,
+            ...(id === 'opencode' ? { unavailableReason: runtime.reason || '尚未取得权威 Agent 列表，请检查客户端探测结果' } : {}),
+            ...(id === 'opencode' && runtime.major === 1 ? { skillSnapshotVersion: 4 } : {}) },
           actions: [...WHITELIST],
         })
       }
@@ -875,15 +915,23 @@ function buildCapabilities(cfg, opts) {
       actions: ['RUN_BENCHMARK_CASE'],
     })
   }
+  const zsoftProbe = mctsConfigured && mcts?.probeMctsZsoftRuntime
+    ? mcts.probeMctsZsoftRuntime(cfg) : { ready: false }
+  const mctsReady = mctsProbe.ready || zsoftProbe.ready
   const components = {
     clientVersion: AGENT_VERSION,
+    'mcts-zsoft-export/v1': { ready: zsoftProbe.ready, ...(zsoftProbe.reason ? { note: zsoftProbe.reason } : {}) },
+    'mcts-swe-bench/v1': { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) },
     'git-workspace/v1': { ready: true },
     'concurrent-execution/v1': { ready: true },
     'git-patch/v1': { ready: true },
+    'public-bundle-workspace/v1': { ready: true },
+    'zsoft-tasks-workspace/v3': { ready: true },
+    'single-file/v1': { ready: true },
   }
   for (const platform of platforms) {
     if (platform.id === 'pi-mcts') {
-      components['agent-runtime/pi-mcts/v1'] = { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
+      components['agent-runtime/pi-mcts/v1'] = { ready: mctsReady, ...(!mctsReady && mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
       continue
     }
     const runtime = runtimeFor(platform.id)
@@ -895,7 +943,23 @@ function buildCapabilities(cfg, opts) {
   for (const platform of platforms) {
     platform.parameterDefinitions = definitions.filter(definition => definition.targets.some(target => target.platform === platform.id))
   }
+  const execution = executionRuntime().executionCapabilities()
+  components['execution-backend/v1'] = { ready: true }
+  for (const capability of execution.profiles) {
+    for (const target of capability.profile.targets) {
+      let platform = platforms.find(item => item.id === target.platform)
+      if (!platform) {
+        const runtime = execution.config.profiles[capability.profile.key]?.runtimes[target.platform]
+        const binary = runtime?.kind === 'pi' ? 'pi' : target.platform
+        if (!which(binary) && !runtime?.workerExecutable) continue
+        platform = { id: target.platform, agents: target.agents, models: capability.profile.models, actions: ['RUN_BENCHMARK_CASE'] }
+        platforms.push(platform)
+      }
+      platform.runBenchmarkCase = { version: 1, returnsTraceId: true }
+    }
+  }
   return {
+    executionProfiles: execution.profiles,
     platforms,
     actions: [...WHITELIST],
     components,
@@ -911,6 +975,9 @@ function benchmarkAgentPlatformsFromCapabilities(capabilities) {
   const components = capabilities?.components || {}
   return [...new Set((capabilities?.platforms || [])
     .filter((platform) => {
+      const execution = capabilities.executionProfiles?.find(item => item.profile.targets.some(target => target.platform === platform.id))
+      const readiness = execution?.targetReadiness?.[platform.id] || execution
+      if (readiness?.ready && platform.runBenchmarkCase?.returnsTraceId === true) return true
       const component = components[`agent-runtime/${platform.id}/v1`]
       const ready = component === true
         || (component && typeof component === 'object' && component.ready !== false)
@@ -1253,7 +1320,7 @@ async function executeAction(cfg, frame, sendStatus) {
     await sendStatus('FAILED', { error: { code: 'ACTION_NOT_ALLOWED', message: `未知 action: ${action}` } })
     return
   }
-  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'].includes(action)
+  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE', 'PREPARE_EXECUTION_ENVIRONMENT'].includes(action)
     ? RUN_FORBIDDEN
     : CONFIG_FORBIDDEN
   for (const key of Object.keys(payload)) {
@@ -1263,6 +1330,26 @@ async function executeAction(cfg, frame, sendStatus) {
       })
       return
     }
+  }
+
+  if (action === 'PREPARE_EXECUTION_ENVIRONMENT') {
+    await sendStatus('RUNNING', { result: { state: 'checking' } })
+    try {
+      const { executePreparation, markPreparationReported } = require(path.join(path.dirname(require.resolve(executionRuntimePath())), 'environment/task-runner.cjs'))
+      const result = await executePreparation(frame, { cfg, baseDir: CLIENT_HOME,
+        report: progress => sendStatus('RUNNING', { result: progress }) })
+      if (result.state === 'ready') {
+        Object.assign(cfg, loadConfig())
+        try { await reportEnvironmentCapabilities(cfg, result) }
+        catch (cause) { logErr('environment capability report deferred until reconnect', cause.message); return }
+      }
+      const reported = await sendStatus(result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result,
+        ...(result.state === 'failed' ? { error: { code: result.issues[0]?.code, message: result.issues[0]?.message } } : {}) })
+      if (reported !== false) await markPreparationReported(CLIENT_HOME, payload.contextDigest, frame.commandId)
+    } catch {
+      await sendStatus('FAILED', { error: { code: 'ENVIRONMENT_PREPARATION_FAILED', message: '运行环境准备中断或超时，请检查执行机后再次点击“下一步”。' } })
+    }
+    return
   }
 
   if (action === 'REFRESH_CAPABILITIES') {
@@ -1546,7 +1633,8 @@ const runtimeAdapters = {
   opencode: {
     inspectEvent: inspectOpencodeRunEvent,
     buildInvocation: buildOpencodeInvocation,
-    probe: (executable) => ({ canResolveTraceId: true, ready: Boolean(executable) }),
+    probe: inspectOpencodeRuntime,
+    requireReady: true,
     noOutputCode: 'MODEL_NO_RESPONSE',
     firstResponseTimeoutSeconds: DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS,
   },
@@ -1575,6 +1663,9 @@ const runtimeAdapters = {
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   payload.signal?.throwIfAborted()
   const executable = which(runtimeAdapters[String(payload.platform)]?.executableName || String(payload.platform))
+  if (payload.platform === 'opencode' && payload.skillExecution && inspectOpencodeRuntime(executable).major === 2) {
+    throw createAgentRunError('SKILL_EXECUTION_UNSUPPORTED', 'OpenCode v2 支持普通数据集生成 Trace；Skill 冻结快照与只读触发分析尚未适配，请使用 v1 执行此模式')
+  }
   let isolated = payload.skillExecution && executable ? prepareSkillExperimentWorkspace(executable, payload, undefined, cfg.clientId) : null
   if (!payload.skillExecution && !payload.cwd) {
     const root = path.join(cfg.workspaceBase || CLIENT_HOME, 'experiment-workspaces')
@@ -1582,9 +1673,44 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     const cwd = fs.mkdtempSync(path.join(root, 'case-'))
     isolated = { cwd, env: {}, cleanup() { fs.rmSync(cwd, { recursive: true, force: true }) } }
   }
+  let discardWorkspace = false
   try {
+    if (payload.platform === 'opencode' && executable) {
+      const cwd = isolated?.cwd || path.resolve(payload.cwd || cfg.workspaceBase)
+      fs.mkdirSync(cwd, { recursive: true })
+      const checked = await checkOpenCodeModelConfigAsync(executable, { agent: payload.agent, model: payload.model }, {
+        cwd, env: { ...process.env, ...isolated?.env, PWD: cwd }, signal: payload.signal,
+      })
+      payload = { ...payload, model: checked.model }
+      payload.signal?.throwIfAborted()
+    }
     return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
-  } finally { isolated?.cleanup(Boolean(payload.signal?.aborted)) }
+  } catch (error) {
+    discardWorkspace = error.code === 'MODEL_UNAVAILABLE'
+    if (payload.signal?.aborted && error.code !== 'EXECUTION_CANCELLED') throw createAgentRunError('EXECUTION_CANCELLED', '实验已取消')
+    throw error
+  } finally { isolated?.cleanup(discardWorkspace || Boolean(payload.signal?.aborted)) }
+}
+
+function flushOpencodeTrace(traceId, { home = getAgentInsightHome(), timeoutMs = 20_000 } = {}) {
+  const uploader = path.join(home, 'opencode_uploader_client.js')
+  if (!/^ses_[a-zA-Z0-9_-]+$/.test(traceId || '') || !fs.existsSync(uploader)) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(process.execPath, [uploader], {
+        cwd: home,
+        env: { ...process.env, AGENT_INSIGHT_HOME: home, AGENT_INSIGHT_UPLOADER_NO_MAIN: '0',
+          AGENT_INSIGHT_UPLOADER_FORCE: '1', AGENT_INSIGHT_UPLOADER_FORCE_SESSION: traceId,
+          AGENT_INSIGHT_UPLOADER_RECHECK_ONLY: '1',
+          AGENT_INSIGHT_UPLOADER_SPOOL_FILE: '' },
+        stdio: 'ignore',
+      })
+    } catch { resolve(false); return }
+    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(false) }, timeoutMs)
+    child.once('error', () => { clearTimeout(timer); resolve(false) })
+    child.once('close', code => { clearTimeout(timer); resolve(code === 0) })
+  })
 }
 
 async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
@@ -1608,8 +1734,9 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     err.code = 'PLATFORM_NOT_AVAILABLE'
     throw err
   }
-  if (runtime?.requireReady && !runtime.probe(executable).ready) {
-    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', `${platform} CLI 或 Trace Collector 未就绪，请检查安装注册与上传配置`)
+  if (runtime?.requireReady) {
+    const availability = runtime.probe(executable)
+    if (!availability.ready) throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', availability.reason || `${platform} CLI 或 Trace Collector 未就绪，请检查安装注册与上传配置`)
   }
 
   const cwd = isolated?.cwd || (payload.cwd ? path.resolve(String(payload.cwd)) : cfg.workspaceBase)
@@ -1633,10 +1760,16 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     literalInput: triggerRouting,
     correlation,
   })
-  const { args: runtimeArgs, agentOptions: effectiveAgentOptions } = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
-  invocation.args.push(...runtimeArgs)
+  if (invocation.sessionId && platform === 'opencode') env.AGENT_INSIGHT_EXPERIMENT_SESSION_ID = invocation.sessionId
+  const runtimePlan = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
+  const effectiveAgentOptions = runtimePlan.agentOptions
+  const preparedRuntime = agentRuntimeOptions().prepareRuntimeInvocation(runtimePlan, cwd)
+  let eventChannel
+  try {
+  invocation.args.push(...preparedRuntime.args)
+  Object.assign(env, preparedRuntime.env)
   const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
-  const eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env) : null
+  eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env, inspectOpencodeRuntime(executable).major) : null
   if (eventChannel) {
     Object.assign(env, eventChannel.env)
     launch.stdio = [...launch.stdio, 'pipe']
@@ -1655,7 +1788,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
   const firstModelResponseTimeoutMs = firstModelResponseTimeoutSeconds * 1000
   const startedAt = new Date().toISOString()
 
-  return new Promise((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     fs.mkdirSync(cwd, { recursive: true })
     const activityEvidence = runtime?.createActivityEvidence?.()
     let child
@@ -1703,6 +1836,24 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     let hardStopTimer = null
     let failureMonitor = null
     let eventReader = null
+    let eventPoll = null
+    let eventOffset = 0
+    const eventDecoder = new StringDecoder('utf8')
+    const drainEventFile = () => {
+      if (!eventChannel?.eventFile || !eventReader) return
+      let fd
+      try {
+        fd = fs.openSync(eventChannel.eventFile, 'r')
+        const end = fs.fstatSync(fd).size
+        const buffer = Buffer.alloc(Math.min(64 * 1024, Math.max(0, end - eventOffset)))
+        while (eventOffset < end) {
+          const size = fs.readSync(fd, buffer, 0, Math.min(buffer.length, end - eventOffset), eventOffset)
+          if (!size) break
+          eventOffset += size
+          eventReader.push(eventDecoder.write(buffer.subarray(0, size)))
+        }
+      } catch {} finally { if (fd !== undefined) fs.closeSync(fd) }
+    }
     let eventReadyTimer = null
     let startupTimer = null
     let routingStartedAt = null
@@ -1717,13 +1868,14 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       child.stdin.end(invocation.stdin, 'utf8')
     }
     const captureTraceId = (candidate) => {
-      if (traceId || !candidate) return
+      if (traceId || !candidate || (platform === 'opencode' && invocation.sessionId && candidate !== invocation.sessionId)) return
       traceId = candidate
       traceReport = Promise.resolve(onTraceId({ traceId, startedAt })).catch((err) => {
         logErr(`early trace id report failed (${traceId}):`, err.message)
       })
     }
     const clearTimers = () => {
+      if (eventPoll) clearInterval(eventPoll)
       if (startupTimer) clearTimeout(startupTimer)
       if (eventReadyTimer) clearTimeout(eventReadyTimer)
       failureMonitor?.dispose()
@@ -1860,6 +2012,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
           ? `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，尚未创建根会话；请查看启动日志`
           : `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，尚未收到监测通道就绪信号；请查看启动日志`,
       ), startupTimeoutSeconds * 1000)
+      if (eventChannel.eventFile) eventPoll = setInterval(drainEventFile, 25)
       child.stdio[3].setEncoding('utf8')
       child.stdio[3].on('data', (chunk) => eventReader.push(String(chunk)))
       child.stdio[3].on('error', () => terminateForEarlyFailure('EVENT_MONITOR_UNAVAILABLE', 'OpenCode 失败监测通道异常断开'))
@@ -1926,6 +2079,10 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       }
       activityEvidence?.cleanup()
       await waitForTraceReport()
+      if (platform === 'opencode' && traceId) {
+        const flushed = await flushOpencodeTrace(traceId)
+        if (!flushed) logErr(`OpenCode Trace 收尾上传未完成，等待采集器重试 (${traceId})`)
+      }
       const finishedAt = new Date().toISOString()
       const runFacts = {
         state: 'AGENT_EXITED',
@@ -2000,6 +2157,9 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
           runFacts,
         )
       }
+      if (!failure && platform === 'opencode' && invocation.sessionId && (!eventReader?.sessionId || !eventReader.completed) && !triggerHit) {
+        failure = createAgentRunError('AGENT_INCOMPLETE', 'OpenCode v2 未确认当前会话正常结束，不进入评测', runFacts)
+      }
       if (!failure && triggerTarget && (!eventReader?.sessionId || !observedModel || (!triggerHit && !eventReader.completed))) {
         failure = createAgentRunError('TRIGGER_EVIDENCE_MISSING', '触发分析缺少会话、实际模型或正常结束证据，无法判定', runFacts)
       }
@@ -2037,9 +2197,11 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       reject(err)
     })
     child.on('close', (code, signal) => {
+      drainEventFile()
       void finishAgentRun(code, signal)
     })
   })
+  } finally { eventChannel?.cleanup(); preparedRuntime.cleanup() }
 }
 
 function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
@@ -2076,11 +2238,10 @@ function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
 
 function buildExperimentCaseArgs(executable, input) {
   if (input.platform === 'opencode') {
+    const cli = inspectOpencodeRuntime(executable)
     const args = ['run', '--format', 'json', '--agent', input.agent]
-    try {
-      const help = spawnSync(executable, ['run', '--help'], { encoding: 'utf8', timeout: 15_000 })
-      if (`${help.stdout || ''}\n${help.stderr || ''}`.includes('--auto')) args.push('--auto')
-    } catch {}
+    if (cli.major === 2) args.push('--standalone')
+    if (cli.supportsAuto) args.push('--auto')
     if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
     if (input.model) args.push('--model', input.model)
     return args
@@ -2108,6 +2269,11 @@ function buildExperimentCaseInvocation(executable, input) {
 
 function buildOpencodeInvocation(executable, input) {
   const args = buildExperimentCaseArgs(executable, input)
+  if (inspectOpencodeRuntime(executable).major === 2) {
+    const sessionId = `ses_${randomBytes(13).toString('hex')}`
+    args.push('--session', sessionId)
+    return { args, stdin: input.input, sessionId }
+  }
   const slashCommand = input.literalInput ? null : parseOpencodeSlashCommand(input.input)
   if (slashCommand) {
     args.push('--command', slashCommand.command)
@@ -2203,6 +2369,7 @@ async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
     platforms: capabilities.platforms,
     actions: capabilities.actions,
     components: capabilities.components,
+    executionProfiles: capabilities.executionProfiles,
     faultInjection: capabilities.faultInjection,
   })
   log(
@@ -2216,6 +2383,31 @@ async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
 
 let lastCapabilityFingerprint = null
 let capabilityRefreshInFlight = null
+
+async function reportEnvironmentCapabilities(cfg, result) {
+  const capabilities = result.capabilities
+  if (capabilities) {
+    capabilitiesRevision += 1
+    await api(cfg, 'PUT', '/api/reliability/client/v1/capabilities', {
+      revision: `cap_${REVISION_EPOCH}_${capabilitiesRevision}`, partial: true, ...capabilities,
+    })
+    const ready = benchmarkAgentPlatformsFromCapabilities(capabilities)
+    benchmarkExecutor?.setAgentPlatforms([...new Set([...benchmarkExecutor.agentPlatforms, ...ready])])
+  }
+  if (result.fiInventory) {
+    const platforms = { ...cachedProbe?.platforms }
+    const mergeRows = (left, right) => [...new Map([...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])].map(item => [typeof item === 'string' ? item : item?.id || item?.name, item])).values()]
+    for (const [key, platform] of Object.entries(result.fiInventory.platforms)) {
+      const previous = platforms[key]
+      platforms[key] = { ...previous, ...platform, agents: mergeRows(previous?.agents, platform.agents), models: mergeRows(previous?.models, platform.models) }
+    }
+    cacheSuccessfulProbe({ ready: true, platforms })
+    await api(cfg, 'POST', '/api/fault-injection/worker/heartbeat', {
+      workerId: cfg.clientId, hostname: os.hostname(), version: AGENT_VERSION,
+      partial: true, inventory: result.fiInventory, busySlots: fiBusy,
+    })
+  }
+}
 
 function syncBenchmarkExecutorCapabilities(executor, capabilities) {
   const platforms = benchmarkAgentPlatformsFromCapabilities(capabilities)
@@ -2362,6 +2554,28 @@ async function flushSpool(cfg) {
 
 // ---------------------------------------------------------------- main loop
 
+let environmentRecoveryInFlight = null
+function recoverEnvironmentTasks(cfg) {
+  if (environmentRecoveryInFlight) return environmentRecoveryInFlight
+  const runtime = require(path.join(path.dirname(executionRuntimePath()), 'environment/task-runner.cjs'))
+  environmentRecoveryInFlight = runtime.recoverPreparations(CLIENT_HOME, async (commandId, result) => {
+    if (result.state === 'ready') {
+      Object.assign(cfg, loadConfig())
+      await reportEnvironmentCapabilities(cfg, result)
+    }
+    try { await sendCommandStatus(cfg, commandId, result.state === 'failed' ? 'FAILED' : 'SUCCEEDED', { result }, { spool: false }) }
+    catch (cause) { if (![404, 410].includes(cause.status)) throw cause }
+  }, { isActive: commandId => executingCommands.has(commandId), recheck: saved => {
+    Object.assign(cfg, loadConfig())
+    return runtime.executePreparation({ commandId: saved.taskId, createdAt: new Date().toISOString(), expiresAt: new Date(Math.min(Date.parse(saved.expiresAt), Date.now() + 120000)).toISOString(),
+      payload: { context: saved.context, contextDigest: saved.contextDigest } }, {
+      cfg, baseDir: CLIENT_HOME, report: async () => {},
+      worker: (context, config, signal, report, lease) => runtime.runWorker(context, config, signal, report, { ...lease, checkOnly: true }),
+    })
+  } }).finally(() => { environmentRecoveryInFlight = null })
+  return environmentRecoveryInFlight
+}
+
 async function main() {
   const cfg = loadConfig()
   if (!cfg.insightBaseUrl || !cfg.clientId || !cfg.deviceCredential) {
@@ -2387,6 +2601,8 @@ async function main() {
   setInterval(notifyWatchdog, WATCHDOG_MS)
   notifyWatchdog()
 
+  recoverEnvironmentTasks(cfg).catch(error => logErr('environment task recovery failed', error.message))
+
   const runtimeCandidates = [
     path.join(__dirname, 'executor', 'index.cjs'),
     path.join(__dirname, '..', 'services', 'executor', 'src', 'index.cjs'),
@@ -2403,13 +2619,15 @@ async function main() {
     insightBaseUrl: cfg.insightBaseUrl,
     baseDir: CLIENT_HOME,
     agentInsightHome: getAgentInsightHome(),
+    mctsConfig: { mctsRepoDir: cfg.mctsRepoDir },
+    publicBundleDir: cfg.publicBundleDir,
     log: (...args) => log(...args),
     tryAcquireSlot: tryAcquireExecutionSlot,
     releaseSlot: releaseExecutionSlot,
     agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
-    runAgent: (payload) => payload.platform === 'pi-mcts'
+    runAgent: (payload) => ['pi-mcts', 'xiao-mcts'].includes(payload.platform)
       ? mctsRuntime().runMctsBenchmarkCase(cfg, payload)
-      : runExperimentCase(cfg, payload),
+      : runExperimentCase(cfg, payload, payload.onTraceId),
     logError: (...args) => logErr(...args),
   })
   await benchmarkExecutor.recover()
@@ -2427,6 +2645,7 @@ async function main() {
 
   setInterval(() => {
     flushSpool(cfg).catch(() => {})
+    recoverEnvironmentTasks(cfg).catch(error => logErr('environment task recovery failed', error.message))
   }, 15_000)
 
   // 能力探测可能 spawn opencode / FI inventory，耗时长；不得阻塞 systemd 就绪与喂狗。
@@ -2448,7 +2667,7 @@ async function main() {
   pollLoop(cfg)
 }
 
-async function sendCommandStatus(cfg, commandId, status, extra = {}) {
+async function sendCommandStatus(cfg, commandId, status, extra = {}, { spool = true } = {}) {
   const body = {
     type: 'COMMAND_STATUS',
     commandId,
@@ -2459,7 +2678,7 @@ async function sendCommandStatus(cfg, commandId, status, extra = {}) {
   try {
     await api(cfg, 'POST', `/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`, body)
   } catch (err) {
-    if (err.status !== 404 && err.status !== 410) spoolReceipt({ commandId, body })
+    if (spool && err.status !== 404 && err.status !== 410) spoolReceipt({ commandId, body })
     throw err
   }
 }
@@ -2479,9 +2698,12 @@ async function handleCommand(cfg, frame, sendVia) {
 
   const sendStatus = async (status, extra) => {
     try {
-      await sendVia(frame.commandId, status, extra)
+      if (frame.action === 'PREPARE_EXECUTION_ENVIRONMENT' && ['SUCCEEDED', 'FAILED'].includes(status)) await sendCommandStatus(cfg, frame.commandId, status, extra, { spool: false })
+      else await sendVia(frame.commandId, status, extra)
+      return true
     } catch (err) {
       logErr(`status ${status} failed for ${frame.commandId}:`, err.message)
+      return false
     }
   }
 
@@ -2680,6 +2902,7 @@ let shuttingDown = false
 async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
+  require(path.join(path.dirname(require.resolve(executionRuntimePath())), 'environment/task-runner.cjs')).stopPreparations()
   for (const child of piModelProbeChildren) signalProcessTree(child, 'SIGKILL')
   for (const controller of experimentControllers.values()) controller.abort()
   const settled = [...experimentSettled.values()]
@@ -2693,8 +2916,10 @@ process.on('SIGTERM', () => void shutdown())
 process.on('SIGINT', () => void shutdown())
 
 module.exports = {
+  clearEnvironmentProbeCache,
   loadConfig,
   executeAction,
+  handleCommand,
   buildAgentProcessLaunch,
   controlUrls,
   rasRuntimeConfigPath,
@@ -2706,16 +2931,20 @@ module.exports = {
   cleanupStaleInventoryOpencodeServers,
   buildFiInventory,
   buildCapabilities,
+  reportCapabilities,
   mergePiRuntimeCapability,
   benchmarkAgentPlatformsFromCapabilities,
   syncBenchmarkExecutorCapabilities,
   buildExperimentCaseInvocation,
   runExperimentCase,
+  flushOpencodeTrace,
   tryAcquireExecutionSlot,
   releaseExecutionSlot,
   parseOpencodeSlashCommand,
   capabilityDiscoveryFingerprint,
   refreshCapabilityReports,
+  reportEnvironmentCapabilities,
+  recoverEnvironmentTasks,
   normalizeModelIds,
   extractTraceIdFromJsonLine,
   extractStructuredAgentError,

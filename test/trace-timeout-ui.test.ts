@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -76,7 +92,7 @@ test('detail refresh updates timeout metadata independently of the pending sessi
 test('running and timed-out detail traces refresh only while visible and remove their listeners', () => {
     const node = find(n => ts.isCallExpression(n) && n.expression.getText(ast) === 'useEffect'
         && n.arguments[0]?.getText(ast).includes('!autoRefresh')) as ts.CallExpression;
-    for (const [status, waitingForParent] of [
+    for (const [status, waitingForRelations] of [
         ['running', false], ['timed_out', false], ['success', false], ['failed', false],
         ['success', true], ['failed', true],
     ] as const) {
@@ -95,7 +111,7 @@ test('running and timed-out detail traces refresh only while visible and remove 
         };
         const run = evaluate<() => (() => void) | undefined>(node.arguments[0].getText(ast), {
             autoRefresh: true, execStatus: status, refreshIntervalSec: 5,
-            waitingForParent,
+            waitingForRelations,
             fetchSession: () => { requests++; },
             window: timer, ...timer,
             document: {
@@ -108,7 +124,7 @@ test('running and timed-out detail traces refresh only while visible and remove 
             },
         });
         const cleanup = run();
-        if (!waitingForParent && (status === 'success' || status === 'failed')) {
+        if (!waitingForRelations && (status === 'success' || status === 'failed')) {
             assert.equal(intervals.length, 0);
             continue;
         }
@@ -144,4 +160,12 @@ test('late session and parent metadata responses cannot replace a newly selected
     for (const resolve of pending) resolve({ ok: true, json: async () => ({ taskId: 'old-worker', parentAgent: { state: 'resolved', taskId: 'old-parent' } }) });
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(updates, []);
+});
+
+
+test('completed traces with pending relations keep the refresh control available for manual pause', () => {
+    const node = find(n => ts.isVariableDeclaration(n) && n.name.getText(ast) === 'canAutoRefresh') as ts.VariableDeclaration;
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'success', waitingForRelations: true }), true);
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'success', waitingForRelations: false }), false);
+    assert.equal(evaluate(node.initializer!.getText(ast), { execStatus: 'running', waitingForRelations: false }), true);
 });

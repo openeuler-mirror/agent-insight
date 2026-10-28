@@ -2,12 +2,17 @@
   "name": "agent-insight",
   "version": "0.9.0",
   "description": "Agent Skill 评估与观测平台 — 量化评估 Skills 在 Agent 上的实际运行效果",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": false,
   "bin": {
     "agent-insight": "./bin/cli.js"
   },
   "files": [
+    "NOTICE",
+    "LICENSE-MIT-Historical",
+    "Third_Party_Open_Source_Software_Notice.txt",
+    "licenses/",
+    "integrations/qoder-desktop/LICENSE",
     "bin/",
     "integrations/qoder-desktop/build-vsix.mjs",
     "integrations/qoder-desktop/build-vsix.ps1",
@@ -38,7 +43,7 @@
     "!scripts/otel_data/",
     "!scripts/**/*.jsonl",
     "!scripts/**/*.jsonl.*",
-    "docs/user-guide/observability/llamaindex-trace-collector.md",
+    "docs/zh/how-to/observability/llamaindex-trace-collector.md",
     "!scripts/trae-collector/package-lock.json",
     "prisma/",
     "agent_ras/",
@@ -68,7 +73,9 @@
     "!scripts/llamaindex_extension/**/*.pyc",
     "!scripts/llamaindex_extension/**/*.pyo",
     "!scripts/llamaindex_extension/pyproject.toml",
-    "!scripts/llamaindex_extension/tests/**"
+    "!scripts/llamaindex_extension/tests/**",
+    "README.zh.md",
+    "README_en.md"
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
@@ -84,8 +91,6 @@
     "test": "tsc --noEmit -p scripts/trae-collector/tsconfig.json && node --import tsx --test \"test/**/*.test.ts\"",
     "test:skill": "node --import tsx --test --test-reporter=spec test/skill-generation.test.ts",
     "skill:gen": "node --import tsx src/lib/engine/skill-generation/cli.ts",
-    "seed:skill-opt": "node --import tsx scripts/seed_skill_opt_mock.ts",
-    "clean:skill-opt": "node --import tsx scripts/clean_skill_opt_mock.ts",
     "deepagent:ex1": "node --import tsx src/example/deepagent/01-basic-agent.ts",
     "deepagent:ex2": "node --import tsx src/example/deepagent/02-skills-agent.ts",
     "deepagent:ex3": "node --import tsx src/example/deepagent/03-subagent-agent.ts",

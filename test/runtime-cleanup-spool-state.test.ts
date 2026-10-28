@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -118,7 +134,7 @@ test('stale canonical lock reclamation excludes another cleaner until fresh owne
   assert.equal(result, 'owner');
 }));
 
-test('pending purge intent suppresses tombstone until raw removal and survives a fresh receipt', () => fixture(root => {
+test('pending purge intent suppresses tombstone until raw removal and survives a fresh receipt', t => fixture(root => {
   const file = path.join(root, 'raw.jsonl');
   fs.writeFileSync(file, 'raw');
   const info = fs.statSync(file);
@@ -130,6 +146,11 @@ test('pending purge intent suppresses tombstone until raw removal and survives a
   fs.unlinkSync(file);
   assert.equal(readSpoolState(root, 'session')?.purgedAt, 200);
   fs.writeFileSync(file, 'later raw');
+  const lstat = fs.lstatSync;
+  t.mock.method(fs, 'lstatSync', (...args: Parameters<typeof fs.lstatSync>) => {
+    const current = lstat(...args);
+    return args[0] === file && current ? Object.assign(current, { ino: info.ino, birthtimeMs: info.birthtimeMs + 1, ctimeMs: info.ctimeMs + 1 }) : current;
+  });
   const later = fs.statSync(file);
   trySpoolMaintenance(root, () => markSpoolPurged(root, 'session', 400, { path: file, ino: later.ino, dev: later.dev }));
   assert.equal(readSpoolState(root, 'session')?.purgedAt, 200);

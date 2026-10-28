@@ -1,7 +1,23 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for OpenCode CLI agent/model catalog parsing."""
 
 from __future__ import annotations
 
+import base64
+import json
 from unittest import TestCase
 from unittest.mock import MagicMock, call, patch
 
@@ -68,6 +84,54 @@ _AGENT_API = [
 
 
 class OpenCodeCatalogParseTests(TestCase):
+    def test_v2_catalog_uses_agent_id_instead_of_display_name(self) -> None:
+        self.assertEqual(
+            parse_opencode_agent_api_payload({"data": [{"id": "build", "name": "Build"}]}),
+            [{"id": "build", "name": "build"}],
+        )
+
+    def test_server_uses_versioned_endpoint_and_private_v2_credentials(self) -> None:
+        for major in (1, 2):
+            with self.subTest(major=major), \
+                patch.object(catalog, "_resolve_executable", return_value="/fixture/opencode"), \
+                patch.object(catalog, "_run_opencode_cli", return_value=(f"opencode v{major}.1.4", None)), \
+                patch.object(catalog, "_reserve_loopback_port", return_value=12345), \
+                patch.object(catalog, "_AGENT_SERVER_SETTLE_SECONDS", 0), \
+                patch.object(catalog.subprocess, "Popen") as popen, \
+                patch.object(catalog.urllib.request, "urlopen") as urlopen, \
+                patch.object(catalog, "_stop_process_tree") as stop:
+                popen.return_value.poll.return_value = None
+                payload = {"data": [{"id": "build", "name": "Build"}]} if major == 2 else _AGENT_API
+                urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+                agents, error = catalog._list_agents_via_server()
+                self.assertIsNone(error)
+                self.assertEqual(agents[0]["id"], "build")
+                request = urlopen.call_args.args[0]
+                self.assertEqual(request.full_url, "http://127.0.0.1:12345" + ("/api/agent" if major == 2 else "/agent"))
+                env = popen.call_args.kwargs["env"]
+                if major == 2:
+                    credentials = base64.b64decode(request.get_header("Authorization").split()[1]).decode()
+                    self.assertEqual(credentials, "opencode:" + env["OPENCODE_PASSWORD"])
+                else:
+                    self.assertNotIn("OPENCODE_PASSWORD", env)
+                    self.assertIsNone(request.get_header("Authorization"))
+                stop.assert_called_once_with(popen.return_value)
+
+    def test_v2_does_not_fall_back_to_removed_agent_list_command(self) -> None:
+        with patch.object(catalog, "_list_agents_via_server", return_value=(None, "connection refused")), \
+            patch.object(catalog, "_run_opencode_cli", return_value=("opencode v2.1.4", None)) as cli:
+            result = list_opencode_agents(oh_my_keys=set())
+            self.assertEqual(result["agents"], [])
+            self.assertIn("v2 Agent API", result["note"])
+            cli.assert_called_once_with(["--version"], executable=None)
+
+    def test_v1_keeps_cli_fallback(self) -> None:
+        with patch.object(catalog, "_list_agents_via_server", return_value=(None, "connection refused")), \
+            patch.object(catalog, "_run_opencode_cli", side_effect=[("1.14.39", None), (_AGENT_CLI, None)]):
+            result = list_opencode_agents(oh_my_keys=set())
+            self.assertEqual(result["default"], "build")
+            self.assertTrue(result["agents"])
+
     @patch.object(catalog.os, "name", "posix")
     @patch.object(catalog, "_wait_for_process_group_exit", return_value=True)
     @patch.object(catalog.os, "killpg", create=True)

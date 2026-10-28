@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use strict'
 
 const { generatedEvaluatorDescriptors } = require('../../../generated/benchmark-catalog/evaluators.cjs')
@@ -72,13 +88,28 @@ function option(args, name) {
   return index >= 0 ? args[index + 1] : undefined
 }
 
+function formatDoctorOutput(output, summary = false) {
+  if (!summary) return JSON.stringify(output)
+  const evaluators = output.evaluators || []
+  const ready = evaluators.filter((item) => item.ready === true).length
+  const lines = [`Doctor 检查${output.ok ? '通过' : '失败'}：评测器就绪 ${ready}/${evaluators.length}。`]
+  if (output.reason) lines.push(`Controller：${output.reason}`)
+  for (const [check, passed] of Object.entries(output.checks || {})) {
+    if (!passed) lines.push(`检查未通过：${check}`)
+  }
+  for (const evaluator of evaluators.filter((item) => item.ready !== true)) {
+    lines.push(`评测器 ${evaluator.key} 未就绪：${evaluator.reason || '请手动执行 Doctor 查看详情'}`)
+  }
+  return lines.join('\n')
+}
+
 async function main(args = process.argv.slice(2)) {
   const command = args[0] || 'doctor'
   let output
   if (command === 'doctor') output = await doctor()
   else if (command === 'smoke') output = await smoke(option(args, '--evaluator'))
   else throw new Error('usage: cli.cjs doctor | cli.cjs smoke --evaluator <key>')
-  process.stdout.write(`${JSON.stringify(output)}\n`)
+  process.stdout.write(`${command === 'doctor' ? formatDoctorOutput(output, args.includes('--summary')) : JSON.stringify(output)}\n`)
   return output.ok === false || output.succeeded === false ? 1 : 0
 }
 
@@ -89,4 +120,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { doctor, fetchHealth, main, smoke }
+module.exports = { doctor, fetchHealth, main, smoke, formatDoctorOutput }

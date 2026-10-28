@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { prisma } from '@/lib/storage/prisma'
 import { evaluateEvalExperimentCase } from '@/lib/engine/experiment/run-experiment'
 import { deriveSettledExperimentStatus } from '@/lib/engine/experiment/detail-agg'
@@ -99,6 +115,7 @@ export async function continueExperiment(experimentId: string): Promise<void> {
   })
   const callbackOrigin = experiment?.benchmarkBinding?.callbackOrigin
   if (!experiment || !callbackOrigin || experiment.status !== 'running') return
+  if (parsedObject(experiment.benchmarkBinding?.runConfigJson || null).submissionSource === 'imported') return
   const runtime = defaultEvaluatorRuntimeConfigProvider.snapshot()
   const next = await startBenchmarkExperiment({
     experimentId,
@@ -133,6 +150,7 @@ export async function finalizeBenchmarkCase(input: {
     },
   })
   if (!run) return true
+  if (await prisma.benchmarkCaseRun.count({ where: { retryOfRunId: run.id } })) return true
 
   const facts = parsedObject(run.runFactsJson)
   const traceId = typeof facts.traceId === 'string' ? facts.traceId.trim() : ''
@@ -148,8 +166,8 @@ export async function finalizeBenchmarkCase(input: {
     const artifactSummary = run.artifacts
       .map((artifact: { name: string; sha256: string }) => `${artifact.name} · ${artifact.sha256}`)
       .join('\n')
-    await prisma.experimentCase.update({
-      where: { id: run.experimentCaseId },
+    await prisma.experimentCase.updateMany({
+      where: { id: run.experimentCaseId, benchmarkRuns: { none: { retryOfRunId: run.id } } },
       data: {
         executionId: execution.id,
         taskId: execution.taskId || traceId,
@@ -159,8 +177,8 @@ export async function finalizeBenchmarkCase(input: {
     })
   } else if (traceId && run.status === 'execution_failed') {
     if (!(await shouldContinue())) return false
-    await prisma.experimentCase.update({
-      where: { id: run.experimentCaseId },
+    await prisma.experimentCase.updateMany({
+      where: { id: run.experimentCaseId, benchmarkRuns: { none: { retryOfRunId: run.id } } },
       data: { taskId: traceId },
     })
   }
@@ -238,7 +256,7 @@ export async function failBenchmarkCaseResults(caseRunId: string, message: strin
       where: {
         experimentId: run.experimentId,
         caseId: run.experimentCaseId,
-        case: { deletedAt: null, experiment: { deletedAt: null } },
+        case: { deletedAt: null, benchmarkRuns: { none: { retryOfRunId: caseRunId } }, experiment: { deletedAt: null } },
         status: { in: ['pending', 'running'] },
       },
       data: { status: 'failed', errorMessage: message },

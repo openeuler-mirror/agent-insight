@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { createHash } from 'node:crypto'
 
 import {
@@ -70,6 +86,9 @@ export abstract class AbstractBenchmarkAdapter<
   }
 
   buildAgentTask(input: BuildAgentTaskInput<TPublic>): AgentTaskEnvelope {
+    if (this.manifest.supportsAgentExecution === false) {
+      throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_ONLY', '该 Benchmark 当前仅支持导入已有提交', 409)
+    }
     const task = this.createAgentTask(input)
     validateTaskEnvelope(task, input.context, this.manifest)
     return task
@@ -80,7 +99,7 @@ export abstract class AbstractBenchmarkAdapter<
     const seen = new Set<string>()
     for (const artifact of input.artifacts) {
       const descriptor = artifact.descriptor
-      if (descriptor.executionRunId !== input.task.context.runId) {
+      if (descriptor.executionRunId !== (input.task?.context.runId ?? input.submission?.runId)) {
         throw new BenchmarkProtocolError('ARTIFACT_RUN_MISMATCH', 'Artifact 不属于当前 Run')
       }
       if (seen.has(descriptor.name)) {

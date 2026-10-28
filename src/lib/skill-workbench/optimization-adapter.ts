@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { claimOptimizationFinalization, OptimizationCancelledError } from './optimization-cancellation';
 import { findSkillMd, type PlaygroundFiles } from '@/lib/skill-generator/skill-files';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { resolveRetestableExperimentBaseline } from './experiment-baseline';
@@ -128,6 +145,8 @@ export async function syncWorkbenchOptimization(input: {
   sourceRefs?: unknown[];
   sourceExperimentId?: string;
   recordId?: string;
+  taskId?: string;
+  signal?: AbortSignal;
 }) {
   const session = await prismaRaw.skillWorkbenchSession.findFirst({
     where: { id: input.sessionId, user: input.user, optSessionId: { not: null } },
@@ -161,6 +180,7 @@ export async function syncWorkbenchOptimization(input: {
   const skillMd = findSkillMd(rawFiles);
   if (!skillMd) return { kind: 'incomplete' as const, reason: '优化结果没有 SKILL.md' };
   const candidateFiles = normalizeOptimizationCandidate(rawFiles, skillMd.path);
+  input.signal?.throwIfAborted();
   const quality = await runSnapshotStaticEvaluation({
     user: input.user,
     sessionId: session.id,
@@ -174,6 +194,8 @@ export async function syncWorkbenchOptimization(input: {
     evidence?: string;
     reasoning?: string;
   }>;
+  input.signal?.throwIfAborted();
+  if (input.taskId) await claimOptimizationFinalization(input.taskId);
   const qualityPassed = (quality.status === 'ok' || quality.status === 'partial')
     && !issues.some(isBlockingStaticQualityIssue);
   if (updatesWorkingSnapshot) {
@@ -324,10 +346,15 @@ export async function updateWorkbenchOptimizationProgress(input: {
   activeStep: number;
   percent: number;
 }) {
-  return updateSkillWorkbenchTask({
-    taskId: input.taskId,
-    status: 'running',
-    progress: { stage: input.stage, activeStep: input.activeStep, percent: input.percent },
+  return prismaRaw.$transaction(async (tx) => {
+    const task = await tx.skillWorkbenchTask.findUnique({ where: { id: input.taskId } });
+    if (!task || !['pending', 'running'].includes(task.status)) return;
+    const progress = parseObject(task.progressJson || '{}');
+    if (progress.cancelRequested) return;
+    return tx.skillWorkbenchTask.update({
+      where: { id: task.id },
+      data: { status: 'running', progressJson: JSON.stringify({ ...progress, stage: input.stage, activeStep: input.activeStep, percent: input.percent }) },
+    });
   });
 }
 
@@ -339,9 +366,12 @@ export async function finishWorkbenchOptimizationRun(input: {
   sourceRefs: unknown[];
   recordId?: string;
   error?: string | null;
+  signal?: AbortSignal;
   repair?: (issues: WorkbenchOptimizationIssue[]) => Promise<void>;
 }) {
+  input.signal?.throwIfAborted();
   if (input.error) {
+    await claimOptimizationFinalization(input.taskId);
     const currentTask = await prismaRaw.skillWorkbenchTask.findUnique({
       where: { id: input.taskId },
       select: { progressJson: true },
@@ -388,6 +418,7 @@ export async function finishWorkbenchOptimizationRun(input: {
         user: input.user,
         sessionId: input.workbenchSessionId,
       });
+      input.signal?.throwIfAborted();
       if (inspection?.blockingIssues.length) {
         await updateWorkbenchOptimizationProgress({
           taskId: input.taskId,
@@ -399,6 +430,8 @@ export async function finishWorkbenchOptimizationRun(input: {
         try {
           await input.repair(inspection.blockingIssues);
         } catch (error) {
+          if (error instanceof Error && error.message.includes('停止 OpenCode 执行未确认')) throw error;
+          input.signal?.throwIfAborted();
           repairError = error instanceof Error ? error.message : String(error);
         }
         sourceRefs = [
@@ -418,12 +451,15 @@ export async function finishWorkbenchOptimizationRun(input: {
         });
       }
     }
+    input.signal?.throwIfAborted();
     const result = await syncWorkbenchOptimization({
       user: input.user,
       sessionId: input.workbenchSessionId,
       sourceKind: input.sourceKind,
       sourceRefs,
       recordId: input.recordId,
+      taskId: input.taskId,
+      signal: input.signal,
     });
     if (result.kind === 'not_found' || result.kind === 'incomplete') {
       const reason = result.kind === 'incomplete' ? result.reason : '优化会话不存在';
@@ -473,6 +509,8 @@ export async function finishWorkbenchOptimizationRun(input: {
     });
     return result;
   } catch (error) {
+    if (error instanceof OptimizationCancelledError || (error instanceof Error && error.message.includes('停止 OpenCode 执行未确认'))) throw error;
+    input.signal?.throwIfAborted();
     const message = error instanceof Error ? error.message : String(error);
     await Promise.all([
       updateSkillWorkbenchTask({

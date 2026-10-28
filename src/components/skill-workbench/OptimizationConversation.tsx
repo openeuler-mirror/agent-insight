@@ -1,9 +1,26 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
+import { hasOptimizationInput } from '@/lib/skill-workbench/optimization-request';
 import { safeUUID } from '@/lib/safe-uuid';
 import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { getOptimizationTargetVersion, getOptimizationTransitionLabel } from '@/lib/skill-workbench/optimization-display';
@@ -55,7 +72,7 @@ interface ChatMessage { id?: string; role: string; content: string; blocks: Chat
 interface OptimizationTaskView {
   id?: string;
   status: string;
-  progress?: { stage?: string; activeStep?: number; percent?: number };
+  progress?: { stage?: string; activeStep?: number; percent?: number; cancelRequested?: boolean };
   errorMessage?: string | null;
   resultId?: string | null;
   createdAt?: string;
@@ -203,6 +220,10 @@ export function OptimizationConversation({
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(backgroundRunning);
   const [liveTasks, setLiveTasks] = useState(tasks);
+  const [stopping, setStopping] = useState(false);
+  const stopRequestedRef = useRef(false);
+  const planningControllerRef = useRef<AbortController | null>(null);
+  const runTaskIdRef = useRef<string | null>(null);
   const [planning, setPlanning] = useState(false);
   const [localStep, setLocalStep] = useState(backgroundRunning ? 1 : 0);
   const busy = planning || running || backgroundRunning;
@@ -271,7 +292,7 @@ export function OptimizationConversation({
         const nextTasks = (data.session.tasks || []).filter((item: { type: string }) => item.type === 'optimization');
         const task = [...nextTasks]
           .reverse()
-          .find((item: { id?: string; status: string; errorMessage?: string }) => item.status !== 'cancelled') as OptimizationTaskView | undefined;
+          .at(0) as OptimizationTaskView | undefined;
         active = Boolean(task && ['pending', 'running'].includes(task.status));
         const previous = observedTaskRef.current;
         const taskChanged = Boolean(task && task.id !== previous?.id);
@@ -291,11 +312,14 @@ export function OptimizationConversation({
           );
           const optimizationData = await optimizationResponse.json();
           if (!stopped && !ownsStreamRef.current && requestId === snapshotRequestRef.current && optimizationResponse.ok) {
-            const outcome = active ? undefined : task?.status === 'failed' ? 'error' : 'complete';
+            const outcome = active ? undefined : ['failed', 'cancelled'].includes(task?.status || '') ? 'error' : 'complete';
             setMessages(hydrateOptimizationMessages(optimizationData.optimization.messages || [], outcome));
           }
         }
-        if (!ownsStreamRef.current) setRunning(active);
+        if (!ownsStreamRef.current) {
+          setRunning(active);
+          if (!active) setStopping(false);
+        }
         if (justStarted || justSettled || recordsChanged) {
           if (!ownsStreamRef.current && task?.status === 'failed' && task.errorMessage) onError(task.errorMessage);
           onSynced(data.session);
@@ -330,10 +354,11 @@ export function OptimizationConversation({
     return next;
   }), []);
 
-  const prepareMergePlan = useCallback(async (): Promise<OptimizationPlanView | null> => {
+  const prepareMergePlan = useCallback(async (signal: AbortSignal): Promise<OptimizationPlanView | null> => {
     setPlanning(true);
     try {
       const response = await apiFetch('/api/skill-opt/plan', {
+        signal,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user, skillName, baseVersion, sessionId: optSessionId }),
@@ -342,10 +367,12 @@ export function OptimizationConversation({
       if (!response.ok) throw new Error(data.error || '归并优化依据失败');
       let plan = data.plan as OptimizationPlanView | null;
       for (let attempt = 0; plan?.status === 'running' && attempt < 180; attempt += 1) {
+        signal.throwIfAborted();
         await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        signal.throwIfAborted();
         const pollResponse = await apiFetch(
           `/api/skill-opt/plan?sessionId=${encodeURIComponent(optSessionId)}&user=${encodeURIComponent(user)}`,
-          { cache: 'no-store' },
+          { cache: 'no-store', signal },
         );
         const pollData = await pollResponse.json();
         if (!pollResponse.ok) throw new Error(pollData.error || '读取优化计划失败');
@@ -364,13 +391,44 @@ export function OptimizationConversation({
     }
   }, [baseVersion, optSessionId, skillName, user]);
 
+  const cancelTask = useCallback(async (taskId: string) => {
+    try {
+      const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, action: 'cancel', taskId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '停止优化失败');
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'optimization', kind: 'run-settled' });
+    } catch (error) {
+      stopRequestedRef.current = false;
+      setStopping(false);
+      onError(error instanceof Error ? error.message : '停止优化失败');
+    }
+  }, [onError, user, workbenchSessionId]);
+
+  const stop = () => {
+    stopRequestedRef.current = true;
+    setStopping(true);
+    if (planningControllerRef.current) {
+      planningControllerRef.current.abort();
+      return;
+    }
+    const taskId = ownsStreamRef.current ? runTaskIdRef.current : activeTask?.id;
+    if (taskId) void cancelTask(taskId);
+  };
+
   const runRequest = useCallback(async (requestText: string, options?: { mergeIssues?: boolean }) => {
-    if (busy || (!requestText.trim() && issues.length === 0)) return;
-    const normalizedRequest = requestText.trim() || `根据 ${issues.length} 个静态评估问题优化`;
+    if (busy || ownsStreamRef.current || (!hasOptimizationInput(requestText, issues) && !options?.mergeIssues)) return;
+    const normalizedRequest = requestText.trim() || (issues.length ? `根据 ${issues.length} 个静态评估问题优化` : '根据已确认的评估问题优化');
     const runId = safeUUID();
     const runMeta: ChatBlock = { kind: 'optimization_meta', id: `optimization-${runId}`, runId };
     let processOutcome: ProcessOutcome = 'error';
     onError('');
+    stopRequestedRef.current = false;
+    runTaskIdRef.current = null;
+    setStopping(false);
+    setRunning(true);
     ownsStreamRef.current = true;
     snapshotRequestRef.current += 1;
     setLocalStep(1);
@@ -382,8 +440,11 @@ export function OptimizationConversation({
     ]);
     const controller = new AbortController();
     try {
-      const plan = options?.mergeIssues ? await prepareMergePlan() : null;
-      setRunning(true);
+      planningControllerRef.current = controller;
+      const plan = options?.mergeIssues ? await prepareMergePlan(controller.signal) : null;
+      controller.signal.throwIfAborted();
+      if (!hasOptimizationInput(requestText, issues, plan?.items)) throw new Error('请补充优化诉求或选择有效的评估问题');
+      planningControllerRef.current = null;
       const response = await apiFetch('/api/skill-opt/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
         body: JSON.stringify({
@@ -393,7 +454,7 @@ export function OptimizationConversation({
             summary: issue.summary, evidence: issue.evidence || issue.reasoning || undefined,
             improvementSuggestion: issue.suggestedFix || undefined,
           })),
-          userFeedback: normalizedRequest,
+          userFeedback: requestText.trim(),
           baselineFiles,
           ...(plan ? { planId: plan.id } : {}),
           mock: false,
@@ -462,13 +523,19 @@ export function OptimizationConversation({
             if (block) Object.assign(block, next);
             else message.blocks.push(next);
           });
-          else if (data.mode === 'optimization_meta') patchAgent((message) => {
-            const id = `optimization-${payload.runId || payload.recordId || payload.taskId || runId}`;
-            const block = message.blocks.find((item) => item.kind === 'optimization_meta' && item.id === id);
-            const next = { kind: 'optimization_meta', id, runId: payload.runId || runId, recordId: payload.recordId, taskId: payload.taskId };
-            if (block) Object.assign(block, next);
-            else message.blocks.push(next);
-          });
+          else if (data.mode === 'optimization_meta') {
+            if (payload.taskId) {
+              runTaskIdRef.current = payload.taskId;
+              if (stopRequestedRef.current) void cancelTask(payload.taskId);
+            }
+            patchAgent((message) => {
+              const id = `optimization-${payload.runId || payload.recordId || payload.taskId || runId}`;
+              const block = message.blocks.find((item) => item.kind === 'optimization_meta' && item.id === id);
+              const next = { kind: 'optimization_meta', id, runId: payload.runId || runId, recordId: payload.recordId, taskId: payload.taskId };
+              if (block) Object.assign(block, next);
+              else message.blocks.push(next);
+            });
+          }
           else if (data.mode === 'verify_progress') {
             setLocalStep((current) => Math.max(current, 3));
             patchAgent((message) => {
@@ -490,6 +557,14 @@ export function OptimizationConversation({
           else if (data.mode === 'warning') patchAgent((message) => message.blocks.push({
             kind: 'warning', id: `warning-${message.blocks.length}`, text: String(payload.message || data.payload || ''),
           }));
+          else if (data.mode === 'cancelled') {
+            processOutcome = 'error';
+            patchAgent((message) => {
+              message.blocks = settleProcessBlocks(message.blocks, 'error');
+              message.blocks.push({ kind: 'text', id: `cancelled-${runId}`, text: '优化已停止，可补充诉求后重新提交。' });
+              message.streaming = false;
+            });
+          }
           else if (data.mode === 'done') {
             processOutcome = 'complete';
             patchAgent((message) => {
@@ -503,7 +578,6 @@ export function OptimizationConversation({
           }
         }
       }
-      processOutcome = 'complete';
       const requestId = ++snapshotRequestRef.current;
       const [sessionResponse, optimizationResponse] = await Promise.all([
         apiFetch(
@@ -520,12 +594,14 @@ export function OptimizationConversation({
       if (!sessionResponse.ok) throw new Error(sessionData.error || '加载优化结果失败');
       if (!optimizationResponse.ok) throw new Error(optimizationData.error || '校准优化会话失败');
       if (requestId === snapshotRequestRef.current) {
-        setMessages(hydrateOptimizationMessages(optimizationData.optimization.messages || [], 'complete'));
+        setMessages(hydrateOptimizationMessages(optimizationData.optimization.messages || [], processOutcome));
       }
       setLocalStep(4);
       onSynced(sessionData.session);
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        patchAgent((agent) => agent.blocks.push({ kind: 'text', id: `cancelled-${runId}`, text: '已停止本次优化请求，可补充诉求后重新提交。' }));
+      } else {
         const message = error instanceof Error ? error.message : '优化失败';
         patchAgent((agent) => {
           agent.content ||= message;
@@ -535,6 +611,9 @@ export function OptimizationConversation({
       }
     } finally {
       ownsStreamRef.current = false;
+      planningControllerRef.current = null;
+      runTaskIdRef.current = null;
+      setStopping(false);
       setRunning(false);
       patchAgent((message) => {
         message.blocks = settleProcessBlocks(message.blocks, processOutcome);
@@ -542,7 +621,7 @@ export function OptimizationConversation({
       });
       publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'optimization', kind: 'run-settled' });
     }
-  }, [baseVersion, baselineFiles, busy, issues, onError, onSynced, optSessionId, patchAgent, prepareMergePlan, skillName, user, workbenchSessionId]);
+  }, [baseVersion, baselineFiles, busy, cancelTask, issues, onError, onSynced, optSessionId, patchAgent, prepareMergePlan, skillName, user, workbenchSessionId]);
 
   useEffect(() => {
     if (!autoStart) {
@@ -552,12 +631,12 @@ export function OptimizationConversation({
     if (loading || busy || autoStartedRef.current) return;
     autoStartedRef.current = true;
     onAutoStartConsumed();
-    void runRequest('根据这些问题优化 Skill', { mergeIssues: useMergePlan });
+    void runRequest('', { mergeIssues: useMergePlan });
   }, [autoStart, busy, issues.length, loading, onAutoStartConsumed, runRequest, useMergePlan]);
 
   const run = (event: FormEvent) => {
     event.preventDefault();
-    void runRequest(feedback);
+    void runRequest(feedback, { mergeIssues: useMergePlan && !feedback.trim() });
   };
 
   const recordsAtMessage = useMemo(() => recordMessageIndexes(messages, records), [messages, records]);
@@ -614,6 +693,7 @@ export function OptimizationConversation({
                 <p className="whitespace-pre-wrap break-words leading-5 [overflow-wrap:anywhere]">{block.text}</p>
               </ConversationProcessDisclosure>
                 : block.kind === 'optimization_plan' ? <OptimizationPlanCard key={`${block.id}-${blockIndex}`} block={block} />
+                  : block.kind === 'verification' && messageTask?.status === 'cancelled' && block.status !== 'ok' ? <p key={`${block.id}-${blockIndex}`} className="my-1 text-xs text-foreground-muted">自验证已停止</p>
                   : block.kind === 'verification' ? <div key={`${block.id}-${blockIndex}`} className="my-1 flex min-w-0 items-start gap-2 overflow-hidden rounded border border-success-border bg-success-subtle px-2 py-1.5 text-[11px] text-success">{block.status === 'running' ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />}<span className="min-w-0 break-words [overflow-wrap:anywhere]">{block.text}</span></div>
                     : block.kind === 'warning' ? <div key={`${block.id}-${blockIndex}`} className="my-1 min-w-0 overflow-hidden whitespace-pre-wrap break-words rounded border border-warning-border bg-warning-subtle px-2 py-1.5 text-[11px] text-warning [overflow-wrap:anywhere]">{block.text}</div>
                       : <p key={`${block.id}-${blockIndex}`} className="max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-foreground-secondary [overflow-wrap:anywhere]">{block.text}</p>)
@@ -648,10 +728,10 @@ export function OptimizationConversation({
       </div>
       {quickActions}
       <form onSubmit={run} className="rounded-lg border border-border bg-card p-2">
-        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={3} disabled={busy} placeholder="补充优化诉求…" className="w-full resize-none bg-transparent px-1 text-xs leading-5 text-foreground outline-none placeholder:text-foreground-muted" />
+        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={3} placeholder={busy ? "可编辑补充诉求，停止或完成后提交…" : "补充优化诉求…"} className="w-full resize-none bg-transparent px-1 text-xs leading-5 text-foreground outline-none placeholder:text-foreground-muted" />
         <div className="flex justify-end">{busy
-          ? <span className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2 text-[10px] text-foreground-muted"><Loader2 className="size-3.5 animate-spin" />后台执行中</span>
-          : <button type="submit" disabled={!feedback.trim() && issues.length === 0} className="inline-flex size-8 items-center justify-center rounded bg-primary text-primary-foreground disabled:opacity-40"><Send className="size-3.5" /></button>}</div>
+          ? <button type="button" onClick={stop} disabled={stopping || Boolean(activeTask?.progress?.cancelRequested) || (!ownsStreamRef.current && !activeTask?.id)} className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2 text-xs text-foreground-secondary disabled:opacity-50">{stopping || activeTask?.progress?.cancelRequested ? '正在停止…' : '停止优化'}</button>
+          : <button type="submit" aria-label="开始优化" disabled={!hasOptimizationInput(feedback, issues)} className="inline-flex size-8 items-center justify-center rounded bg-primary text-primary-foreground disabled:opacity-40"><Send className="size-3.5" /></button>}</div>
       </form>
     </div>
   );
@@ -660,9 +740,10 @@ export function OptimizationConversation({
 function OptimizationProgressCard({ task, record, localStep, planning, showError = true }: { task?: OptimizationTaskView; record?: OptimizationRecordView; localStep: number; planning: boolean; showError?: boolean }) {
   const taskStep = Number(task?.progress?.activeStep || 0);
   const activeStep = task?.status === 'done' ? 5 : Math.max(taskStep, localStep);
+  if (task?.status === 'cancelled') return <p className="mt-3 text-xs text-foreground-muted">优化已停止，可补充诉求后重新提交。</p>;
   const qualityFailed = record?.status === 'optimization_failed' && Boolean(record.blockingIssues?.length);
   return <div className="mt-3 min-w-0 max-w-full overflow-hidden rounded-md border border-border">
-    <p className="px-3 py-2 text-xs leading-5 text-foreground-secondary">{planning ? '正在归并、去重并排序优化依据，完成后会自动开始修改。' : '我会基于评估与实验结果生成候选版本，当前版本不会被覆盖。'}</p>
+    <p className="px-3 py-2 text-xs leading-5 text-foreground-secondary">{task?.progress?.cancelRequested ? task.progress.stage || '正在停止优化…' : planning ? '正在归并、去重并排序优化依据，完成后会自动开始修改。' : '我会基于评估与实验结果生成候选版本，当前版本不会被覆盖。'}</p>
     <div className="divide-y divide-border border-t border-border">
       {PROGRESS_STEPS.map(([label, description], index) => {
         const step = index + 1;
@@ -679,7 +760,7 @@ function OptimizationProgressCard({ task, record, localStep, planning, showError
         </div>;
       })}
     </div>
-    {showError && task?.status === 'failed' && task.errorMessage && <p className="break-words border-t border-border px-3 py-2 text-[11px] text-error [overflow-wrap:anywhere]">{displayOptimizationError(task.errorMessage)}</p>}
+    {showError && (task?.status === 'failed' || task?.progress?.cancelRequested) && task?.errorMessage && <p className="break-words border-t border-border px-3 py-2 text-[11px] text-error [overflow-wrap:anywhere]">{displayOptimizationError(task.errorMessage)}</p>}
   </div>;
 }
 
@@ -694,7 +775,8 @@ function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPub
   const qualityPassed = ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(record.status);
   const executionFailed = record.status === 'optimization_failed' && !record.blockingIssues?.length && Boolean(record.errorMessage);
   const hasCandidate = Boolean(record.staticEvaluationId && Object.keys(record.candidateFiles || {}).length);
-  const status = record.status === 'optimizing' ? '优化中'
+  const cancelled = record.status === 'optimization_cancelled';
+  const status = cancelled ? '优化已停止' : record.status === 'optimizing' ? '优化中'
     : qualityPassed ? '质量规则已通过'
       : executionFailed ? '优化执行失败'
         : record.status === 'optimization_failed' ? '质量校验未通过'
@@ -702,15 +784,15 @@ function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPub
           : record.status === 'abandoned' ? '已放弃' : '需处理';
   return <div className="mt-3 min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-background p-3">
     <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-foreground">
-      {record.status === 'optimization_failed' ? <X className="size-4 shrink-0 text-error" /> : record.status === 'optimizing' ? <Loader2 className="size-4 shrink-0 animate-spin text-primary" /> : <CheckCircle2 className="size-4 shrink-0 text-success" />}
-      <span className="min-w-0 truncate">{executionFailed && !hasCandidate ? '本轮优化失败' : getOptimizationTransitionLabel(record)}</span>
+      {cancelled ? <Circle className="size-4 shrink-0 text-foreground-muted" /> : record.status === 'optimization_failed' ? <X className="size-4 shrink-0 text-error" /> : record.status === 'optimizing' ? <Loader2 className="size-4 shrink-0 animate-spin text-primary" /> : <CheckCircle2 className="size-4 shrink-0 text-success" />}
+      <span className="min-w-0 truncate">{cancelled ? '本轮优化已停止' : executionFailed && !hasCandidate ? '本轮优化失败' : getOptimizationTransitionLabel(record)}</span>
       <span className="ml-auto shrink-0 rounded bg-background-secondary px-1.5 py-0.5 text-[10px] text-foreground-muted">{status}</span>
     </div>
     <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-[11px] leading-4 text-foreground-secondary [overflow-wrap:anywhere]">{executionFailed && !hasCandidate ? `尚未生成 ${getOptimizationTargetVersion(record)} 候选。${displayOptimizationError(record.errorMessage)}` : record.summary}</p>
     <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-foreground-secondary">
       {hasCandidate && <span className="rounded bg-background-secondary px-1.5 py-1">候选版本 {getOptimizationTargetVersion(record)}</span>}
       {hasCandidate && <span className="rounded bg-background-secondary px-1.5 py-1">修改 {record.diff?.length || 0} 项</span>}
-      {!hasCandidate && executionFailed
+      {cancelled ? <span className="rounded bg-background-secondary px-1.5 py-1 text-foreground-muted">未保存可发布候选</span> : !hasCandidate && executionFailed
         ? <span className="rounded bg-error-subtle px-1.5 py-1 text-error">未生成候选</span>
         : record.status === 'optimization_failed'
         ? <span className="rounded bg-error-subtle px-1.5 py-1 text-error">{executionFailed ? '优化执行失败' : '质量校验未通过'}</span>

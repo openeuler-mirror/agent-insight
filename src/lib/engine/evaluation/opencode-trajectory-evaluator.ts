@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * 预置轨迹评估器实现。
  *
@@ -19,12 +35,11 @@
  * 输入：单个 (case × actualTrace) 对（离线模式 = trace 已存在于 Session.interactions）。
  * 输出：dimensionScores + trajectoryScore + deviationSteps + rootCauseStep + reasonText。
  */
-import {
+import type {
     AgentInsight,
-    type SendPromptPayload,
-    type ChatHandlers,
+    SendPromptPayload,
+    ChatHandlers,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { getActiveConfig, type ModelConfig } from '@/lib/storage/server-config';
 import {
@@ -33,6 +48,10 @@ import {
     normalizeProviderID,
 } from '@/lib/engine/general-agent/server-model-config';
 import { ChatOpenAI } from '@langchain/openai';
+import { hasEvaluatorExecutionPolicy, runConfiguredEvaluationStage } from '../experiment/evaluator-execution-policy';
+import { remainingEvaluationTimeMs, trackEvaluationRequest } from '../experiment/evaluation-attempt';
+import { experimentSignal } from '../experiment/cancellation-context';
+import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { randomUUID } from 'node:crypto';
 import {
@@ -493,10 +512,8 @@ function makeDirectModel(config: ModelConfig) {
         },
         temperature: 0,
         topP: 1,
-        // 显式超时 + 重试，对齐 opencode 路径（idleTimeoutMs 3min / streamTimeoutMs 10min）。
-        // 单轮 judge 正常 <10s，180s 兜住卡死调用；瞬时错误自动重试 2 次。
-        timeout: 180_000,
-        maxRetries: 2,
+        timeout: remainingEvaluationTimeMs() ?? 180_000,
+        maxRetries: hasEvaluatorExecutionPolicy() ? 0 : 2,
         modelKwargs: {
             seed: 42,
         },
@@ -508,10 +525,10 @@ async function evaluateTrajectoryDirect(
     config: ModelConfig,
 ): Promise<TrajectoryEvalOutput> {
     const model = makeDirectModel(config);
-    const response = await model.invoke([
+    const response = await trackEvaluationRequest(() => model.invoke([
         new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
         new HumanMessage(buildDirectUserMessage(input)),
-    ], { signal: (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal() });
+    ], { signal: experimentSignal() }));
     const content = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
@@ -560,10 +577,10 @@ async function evaluateTrajectoryDirectAndRecord(
     const model = makeDirectModel(config);
     const userMsg = buildUserMessage(input);
     const startedAt = new Date();
-    const response = await model.invoke([
+    const response = await trackEvaluationRequest(() => model.invoke([
         new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
         new HumanMessage(userMsg),
-    ], { signal: (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal() });
+    ], { signal: experimentSignal() }));
     const completedAt = new Date();
     const assistantText = typeof response.content === 'string'
         ? response.content
@@ -571,14 +588,19 @@ async function evaluateTrajectoryDirectAndRecord(
     // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
     const parsed = extractFinalResultFromText(assistantText);
     if (!parsed) {
-        throw new Error(`直接 LLM 轨迹评测未产出有效 JSON。模型输出前 800 字符：${assistantText.slice(0, 800)}`);
+        throw new JudgeOutputParseError('直接 LLM 轨迹评测未产出有效 JSON', assistantText);
     }
-    const normalized = normalizeOutput(
+    let normalized: TrajectoryEvalOutput;
+    try {
+      normalized = normalizeOutput(
         asRecord(parsed),
         Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
         input.comparisonMode,
         input.actualExtractedSteps,
     );
+    } catch (error) {
+      throw new JudgeOutputParseError(error instanceof Error ? error.message : String(error), assistantText);
+    }
     const evaluatorSessionId = `${EVALUATOR_AGENT_NAME}-${(input.caseId || 'case').slice(0, 24)}-${randomUUID()}`;
     const def = findSystemAgentDefinition('opencode', EVALUATOR_AGENT_NAME);
     await recordDirectEvaluatorExecution({
@@ -670,6 +692,15 @@ export async function evaluateTrajectoryViaOpencode(
     skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TrajectoryEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
+   if (hasEvaluatorExecutionPolicy()) {
+     const config = await getActiveConfig(user);
+     if (!config) throw new TrajectoryEvalConfigError('未配置评测模型');
+     return runConfiguredEvaluationStage(() => evaluateTrajectoryDirectAndRecord(input, config, user));
+   }
+   const [{ AgentInsight }, { runWithEphemeralOpencodeServer }] = await Promise.all([
+     import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-client'),
+     import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager'),
+   ]);
    // PRIMARY: 直连 LLM 单轮 judge —— 不起 opencode 进程、不建 session（省 ~1.6s 固定开销/次）。
    // 评测 trace 由 recordDirectEvaluatorExecution 合成落库（含 system rubric），与走 opencode 等价。
    // 设 EVAL_FORCE_OPENCODE_TRANSPORT=1 可一键回到旧 opencode 路径。
@@ -866,6 +897,7 @@ export async function evaluateTrajectoryViaOpencode(
     label: `trajectory: ${(input.caseInput || '').slice(0, 40)}`,
     // silent: 同 task-completion 注释,内部子步骤不单独显示。
     silent: true,
+    signal: experimentSignal(),
   });
 }
 

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { spawn, type ChildProcess } from 'child_process'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -12,6 +28,7 @@ import { isModelConnectionReady } from '@/lib/shared/model-connection'
 import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
 import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
 import { runtimePackageRoot } from '@/lib/runtime/package-root'
+import { isLogEnabled } from '@/lib/logger/server'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -963,12 +980,12 @@ async function startServerForUser(
   if (typeof proc.pid === 'number') registerOpencodePgid(proc.pid, user)
 
   // 转发日志(可选)。生产环境可以写到文件。
-  if (verbose) {
+  if (verbose || isLogEnabled('debug')) {
     proc.stdout?.on('data', (b: Buffer) =>
-      process.stderr.write(`[opencode:${user}] ${b.toString()}`),
+      console.debug(`[opencode:${user}] ${b.toString()}`),
     )
     proc.stderr?.on('data', (b: Buffer) =>
-      process.stderr.write(`[opencode:${user}] ${b.toString()}`),
+      console.debug(`[opencode:${user}] ${b.toString()}`),
     )
   } else {
     // 即使不转发日志也必须消费 pipe，否则父进程不读 → ~64KB pipe buffer 撑满 →
@@ -1204,6 +1221,7 @@ export function getActiveServerCount(): number {
  */
 export async function runWithEphemeralOpencodeServer<T>(
   opts: {
+    signal?: AbortSignal
     user?: string
     verbose?: boolean
     /**
@@ -1214,6 +1232,7 @@ export async function runWithEphemeralOpencodeServer<T>(
      *               用于"用户实时对话"等需要看到 user skill 的场景 (skill-generator 等)。
      */
     isolateHome?: boolean
+    requireCleanup?: boolean
     /**
      * false: 不让隔离 OpenCode 进程里的 Witty-Skill-Insight plugin 采集/上传。
      * 适用于评测器/建议器/recordTraceAs 执行：这些内部执行已通过后端显式落库，
@@ -1229,7 +1248,8 @@ export async function runWithEphemeralOpencodeServer<T>(
   const verbose = opts.verbose ?? false
   const telemetryEnabled = opts.telemetryEnabled ?? !opts.isolateHome
   const { experimentSignal, markExperimentCleanupUnconfirmed } = await import('@/lib/engine/experiment/cancellation-context')
-  const cancellation = experimentSignal()
+  const parentSignal = experimentSignal()
+  const cancellation = opts.signal && parentSignal ? AbortSignal.any([opts.signal, parentSignal]) : opts.signal || parentSignal
   cancellation?.throwIfAborted()
   // 准备隔离 HOME (如启用), 拿 cleanup 在 finally 里调
   let homeCleanup: (() => Promise<void>) | null = null
@@ -1250,9 +1270,11 @@ export async function runWithEphemeralOpencodeServer<T>(
     return await fn(inst.baseUrl)
   } finally {
     cancellation?.removeEventListener('abort', cancel)
+    let cleanupUnconfirmed = false
     try {
       await terminateOpencodeProcess(inst.process, `ephemeral cleanup for ${userKey}`)
     } catch (cleanupErr) {
+      cleanupUnconfirmed = true
       markExperimentCleanupUnconfirmed()
       // cleanup 失败不应该掩盖 fn 的真错误,只 warn 不抛
       console.warn(
@@ -1261,11 +1283,15 @@ export async function runWithEphemeralOpencodeServer<T>(
       )
     }
     if (typeof inst.process.pid === 'number' && processGroupExists(inst.process.pid)) {
+      cleanupUnconfirmed = true
       markExperimentCleanupUnconfirmed()
     }
     // 隔离 HOME 临时目录在 server 死透之后清, 避免 server 还在引用文件被 unlink
     if (homeCleanup) {
       await homeCleanup()
+    }
+    if (opts.requireCleanup && cleanupUnconfirmed) {
+      throw Object.assign(new Error('OpenCode 执行未能确认停止，已停止重试'), { code: 'EVALUATION_CLEANUP_UNCONFIRMED' })
     }
   }
 }

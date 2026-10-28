@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import type { RuntimeDefinition } from '../../../../../packages/agent-runtime/index.cjs';
 // 实验向导 ① 步：候选 Agent 下拉 —— distinct Execution.agentName（root trace），按出现次数降序。
 import { NextResponse } from 'next/server';
@@ -5,7 +21,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { listWorkerExecutionTargets } from '@/lib/fault-injection/worker-protocol';
-import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
+import { listClientTraceGenerationAvailability } from '@/lib/engine/experiment/execution-targets';
 import { listBenchmarkAdapters } from '@/lib/benchmark/adapter-registry';
 import { listBenchmarkExecutionTargets } from '@/lib/benchmark/execution-targets';
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
@@ -19,7 +35,7 @@ export async function GET(req: Request) {
     const userFilter = username ? { user: username } : {};
     const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
 
-    const [grouped, faultInjectionTargets, genericTraceTargets, benchmarkTargets] = await Promise.all([
+    const [grouped, faultInjectionTargets, genericTraceAvailability, benchmarkTargets] = await Promise.all([
       prisma.execution.groupBy({
       by: ['agentName', 'framework'],
       where: {
@@ -33,7 +49,7 @@ export async function GET(req: Request) {
       take: 200,
       }),
       listWorkerExecutionTargets(username),
-      listClientTraceGenerationTargets(username),
+      listClientTraceGenerationAvailability(username),
       username
         ? Promise.all(listBenchmarkAdapters().map(async (manifest) => (
             (await listBenchmarkExecutionTargets(username, manifest)).map((target) => ({
@@ -46,12 +62,17 @@ export async function GET(req: Request) {
 
     type CandidateTarget = (typeof faultInjectionTargets)[number] & {
       supportsGenericTrace: boolean;
+      supportsSkillSnapshot?: boolean;
       supportsTriggerRouting?: boolean;
       supportsFaultInjection: boolean;
       supportsBenchmark: boolean;
       benchmarkKeys: string[];
+      preparableBenchmarkKeys: string[];
+      supportsEnvironmentPreparation: boolean;
       benchmarkUnavailableReason: string | null;
+      benchmarkUnavailableReasons: Record<string, string>;
       parameterDefinitions: RuntimeDefinition[];
+      benchmarkEnvironments?: Record<string, { profile: NonNullable<(typeof benchmarkTargets)[number]['executionProfile']>; models: Array<{ id: string; label: string }> }>;
     };
     type Candidate = {
       name: string;
@@ -75,7 +96,7 @@ export async function GET(req: Request) {
       byName.set(name, current);
     }
     const attachTarget = (
-      target: (typeof faultInjectionTargets)[number] & { parameterDefinitions?: RuntimeDefinition[] },
+      target: (typeof faultInjectionTargets)[number] & { parameterDefinitions?: RuntimeDefinition[]; supportsEnvironmentPreparation?: boolean },
       capability: 'generic' | 'fault-injection' | 'benchmark',
     ) => {
       const name = canonicalExperimentAgentName(target.platform, target.agent);
@@ -92,33 +113,40 @@ export async function GET(req: Request) {
       if (existing) {
         existing.supportsGenericTrace ||= capability === 'generic';
         if (capability === 'generic') existing.parameterDefinitions = target.parameterDefinitions || [];
+        if (capability === 'generic') existing.supportsSkillSnapshot = Boolean((target as { supportsSkillSnapshot?: boolean }).supportsSkillSnapshot);
         if (capability === 'generic') existing.supportsTriggerRouting = Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting);
         existing.supportsFaultInjection ||= capability === 'fault-injection';
-        const models = new Map(existing.models.map((model) => [model.id, model]));
-        for (const model of target.models) models.set(model.id, model);
-        existing.models = Array.from(models.values());
+        existing.supportsEnvironmentPreparation ||= target.supportsEnvironmentPreparation === true;
+        if (capability !== 'benchmark') {
+          const models = new Map(existing.models.map((model) => [model.id, model]));
+          for (const model of target.models) models.set(model.id, model);
+          existing.models = Array.from(models.values());
+        }
       } else {
         current.targets.push({
           ...target,
           supportsGenericTrace: capability === 'generic',
+          supportsSkillSnapshot: capability === 'generic' && Boolean((target as { supportsSkillSnapshot?: boolean }).supportsSkillSnapshot),
           supportsTriggerRouting: capability === 'generic' && Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting),
           supportsFaultInjection: capability === 'fault-injection',
           supportsBenchmark: false,
           benchmarkKeys: [],
+          preparableBenchmarkKeys: [],
+          supportsEnvironmentPreparation: target.supportsEnvironmentPreparation === true,
           benchmarkUnavailableReason: '该执行目标未上报 Benchmark 所需能力',
+          benchmarkUnavailableReasons: {},
           parameterDefinitions: target.parameterDefinitions || [],
         });
       }
       byName.set(name, current);
     };
-    for (const target of genericTraceTargets) {
+    for (const target of genericTraceAvailability.targets) {
       attachTarget(target, 'generic');
     }
     for (const target of faultInjectionTargets) {
       attachTarget(target, 'fault-injection');
     }
     for (const target of benchmarkTargets) {
-      if (!target.ready) continue;
       for (const agent of target.agents) {
         attachTarget({
           workerId: target.clientId,
@@ -145,10 +173,21 @@ export async function GET(req: Request) {
         ));
         if (!matchingBenchmarks.length) continue;
         for (const benchmark of matchingBenchmarks) {
+          if (benchmark.canPrepare) {
+            target.supportsEnvironmentPreparation = true;
+            if (!target.preparableBenchmarkKeys.includes(benchmark.adapterKey)) target.preparableBenchmarkKeys.push(benchmark.adapterKey);
+          }
+          if (!benchmark.ready) {
+            target.benchmarkUnavailableReasons[benchmark.adapterKey] = [...new Set(benchmark.unavailableReasons)].join('；') || 'Benchmark 执行目标未就绪';
+          }
           if (benchmark.ready && !target.benchmarkKeys.includes(benchmark.adapterKey)) {
             target.benchmarkKeys.push(benchmark.adapterKey);
           }
-          if (benchmark.ready) target.parameterDefinitions = benchmark.parameterDefinitions;
+          if (benchmark.ready || benchmark.canPrepare) target.parameterDefinitions = benchmark.parameterDefinitions;
+          if ((benchmark.ready || benchmark.canPrepare) && benchmark.executionProfile) {
+            target.benchmarkEnvironments ||= {};
+            target.benchmarkEnvironments[benchmark.adapterKey] = { profile: benchmark.executionProfile, models: [{ id: '', label: '平台默认' }, ...benchmark.models.map(id => ({ id, label: id }))] };
+          }
         }
         target.supportsBenchmark = target.benchmarkKeys.length > 0;
         target.benchmarkUnavailableReason = target.supportsBenchmark
@@ -164,7 +203,7 @@ export async function GET(req: Request) {
         name: item.name,
         traces: item.traces,
         frameworks: Array.from(item.frameworks).sort(),
-        executable: item.targets.length > 0,
+        executable: item.targets.some(target => target.supportsGenericTrace || target.supportsFaultInjection || target.supportsBenchmark || target.preparableBenchmarkKeys.length > 0),
         targets: item.targets.map((target) => ({
           workerId: target.workerId,
           host: target.host,
@@ -174,16 +213,21 @@ export async function GET(req: Request) {
           models: target.models,
           lastSeenAt: target.lastSeenAt,
           supportsGenericTrace: target.supportsGenericTrace,
+          supportsSkillSnapshot: target.supportsSkillSnapshot,
           supportsTriggerRouting: target.supportsTriggerRouting,
           supportsFaultInjection: target.supportsFaultInjection,
           supportsBenchmark: target.supportsBenchmark,
           benchmarkKeys: target.benchmarkKeys,
+          preparableBenchmarkKeys: target.preparableBenchmarkKeys,
+          supportsEnvironmentPreparation: target.supportsEnvironmentPreparation,
           benchmarkUnavailableReason: target.benchmarkUnavailableReason,
+          benchmarkUnavailableReasons: target.benchmarkUnavailableReasons,
           parameterDefinitions: target.parameterDefinitions,
+          benchmarkEnvironments: target.benchmarkEnvironments,
         })),
       }));
 
-    return NextResponse.json({ agents });
+    return NextResponse.json({ agents, traceGenerationDiagnostics: genericTraceAvailability.diagnostics });
   } catch (error) {
     console.error('[Experiment Agents Error]', error);
     return NextResponse.json({ error: 'Failed to load agents' }, { status: 500 });

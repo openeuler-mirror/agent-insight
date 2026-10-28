@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -828,7 +844,7 @@ export function SkillWorkbenchShell() {
   };
 
   const startOptimization = async ({
-    autoRun = true,
+    autoRun = false,
     record,
     targetAsset,
   }: {
@@ -957,7 +973,7 @@ export function SkillWorkbenchShell() {
     if (!active) return;
     const targetAsset = await showSessionAsset(active);
     if (!targetAsset) return;
-    await startOptimization({ autoRun: true, targetAsset });
+    await startOptimization({ targetAsset });
   };
 
   const generationBusy = generationRunning || Boolean(active?.tasks.some((task) => (
@@ -1181,7 +1197,7 @@ export function SkillWorkbenchShell() {
                   <ActionButton
                     icon={startingOptimization ? Loader2 : WandSparkles}
                     label={startingOptimization ? '正在准备优化会话…' : 'Skill 优化'}
-                    onClick={() => void startOptimization({ autoRun: true })}
+                    onClick={() => void startOptimization()}
                   />
                 </div>
               )}
@@ -1289,17 +1305,17 @@ export function SkillWorkbenchShell() {
         </header>
 
         {selectedAsset && !viewingSessionAsset && (
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-warning-border bg-warning-subtle px-5 text-[11px] text-warning">
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-background-secondary px-5 text-[11px] text-foreground-secondary">
             <span className="min-w-0 flex-1 truncate">
               {active?.skillName
                 ? `右栏使用 ${selectedAsset.skillName} · v${selectedAsset.version}，不会改变当前会话 ${active.skillName} · v${active.workVersion ?? 0}`
-                : `右栏使用 ${selectedAsset.skillName} · v${selectedAsset.version}，当前会话尚未绑定 Skill`}
+                : `正在浏览 ${selectedAsset.skillName} · v${selectedAsset.version}，查看资产无需绑定工作会话`}
             </span>
             {active?.skillName && (
               <button
                 type="button"
                 onClick={() => void showSessionAsset(active)}
-                className="h-6 shrink-0 rounded-md border border-warning-border px-2 font-medium hover:bg-card"
+                className="h-6 shrink-0 rounded-md border border-border px-2 font-medium hover:bg-card"
               >
                 回到会话版本
               </button>

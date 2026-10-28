@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 
 import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
 import { analyzeExecutionMatch, analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
@@ -218,7 +234,7 @@ export async function POST(
     if (!session.query && analysis.query) {
         try {
             await db.updateSession(taskId, { query: analysis.query });
-            console.log(`[End] Updated session query for ${taskId}: ${analysis.query.substring(0, 50)}...`);
+            console.log(`[End] Updated session query for ${taskId}: queryLength=${analysis.query.length}`);
         } catch (e) {
             console.warn(`[End] Failed to update session query: ${e}`);
         }

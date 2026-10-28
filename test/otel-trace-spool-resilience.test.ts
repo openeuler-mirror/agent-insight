@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -252,7 +268,9 @@ test('OTel trace aggregation streams 200,000 duplicate Pi rows into one retained
   }
 });
 
-test('OTel trace aggregation discards a session that exceeds its unique-event limit', () => {
+test('OTel trace aggregation discards a session that exceeds its unique-event limit and logs an error', t => {
+  const errors: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => errors.push(args));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otel-trace-limit-'));
   const previous = process.env.AGENT_INSIGHT_OTEL_AGG_MAX_UNIQUE_EVENTS;
   try {
@@ -266,6 +284,7 @@ test('OTel trace aggregation discards a session that exceeds its unique-event li
     assert.equal(result.disposition, 'discard');
     assert.equal(result.record, null);
     assert.equal(result.reason, 'aggregation-limit');
+    assert.ok(errors.some(args => String(args[0]).includes('Discarding oversized trace session')));
   } finally {
     if (previous === undefined) delete process.env.AGENT_INSIGHT_OTEL_AGG_MAX_UNIQUE_EVENTS;
     else process.env.AGENT_INSIGHT_OTEL_AGG_MAX_UNIQUE_EVENTS = previous;

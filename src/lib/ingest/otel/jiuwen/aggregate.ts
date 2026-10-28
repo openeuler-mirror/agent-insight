@@ -1,10 +1,26 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * jiuwen (openJiuwen / JiuwenSwarm via agent-core) OTLP → agent-insight ExecutionRecord.
  *
  * agent-core's built-in OTLP exporter pushes its OTEL spans straight to
  * /api/ingest/otel/v1/traces; the route branches on resource service.name ===
  * "jiuwenswarm" and calls this aggregator. This is the TS port of the validated
- * Python bridge (`docs/design/jiuwenswarm-tracing/assets/insight_bridge.py`):
+ * Python bridge (`design/observability/jiuwenswarm-tracing/assets/insight_bridge.py`):
  * it rebuilds the agent tree from the (single-trace, nested) span set agent-core
  * emits since the develop rework (8b2a384) and maps it to an ExecutionRecord.
  *

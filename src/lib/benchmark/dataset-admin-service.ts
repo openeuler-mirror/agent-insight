@@ -1,10 +1,26 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
-import { canonicalJson } from '../../../packages/benchmark-protocol/src/contracts'
+import { canonicalJson, type JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
@@ -67,14 +83,14 @@ export async function findInstalledSystemBenchmarkDataset(input: {
 
   for (const candidate of candidates) {
     try {
-      const source = JSON.parse(candidate.sourceJson) as { profileKey?: unknown }
-      if (source.profileKey === profile.key) return candidate
+      const source = JSON.parse(candidate.sourceJson) as { profileKey?: unknown; profileVersion?: unknown }
+      if (source.profileKey === profile.key && (!profile.version || source.profileVersion === profile.version)) return candidate
     } catch {
       // Legacy rows can have non-profile source metadata; the fallback below handles them.
     }
   }
 
-  if (profiles.length === 1 && candidates.length > 0) return candidates[0]
+  if (!profile.version && profiles.length === 1 && candidates.length > 0) return candidates[0]
   return null
 }
 
@@ -98,10 +114,7 @@ export async function installBenchmarkDataset(input: {
   try {
     stat = await fs.promises.lstat(sourcePath)
   } catch {
-    throw new BenchmarkProtocolError('DATASET_SOURCE_NOT_FOUND', `数据集文件不存在：${sourcePath}`, 404)
-  }
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new BenchmarkProtocolError('DATASET_SOURCE_INVALID', '--source 必须是普通文件，不能是目录或符号链接', 400)
+    throw new BenchmarkProtocolError('DATASET_SOURCE_NOT_FOUND', `数据集来源不存在：${sourcePath}`, 404)
   }
 
   const adapter = getBenchmarkAdapter(input.benchmarkKey)
@@ -113,8 +126,15 @@ export async function installBenchmarkDataset(input: {
       404,
     )
   }
+  const sourceKind = stat.isFile() ? 'file' : stat.isDirectory() ? 'directory' : null
+  if (stat.isSymbolicLink() || !sourceKind || !(profile.acceptedSourceKinds || ['file']).includes(sourceKind)) {
+    throw new BenchmarkProtocolError('DATASET_SOURCE_INVALID', `该数据集只接受 ${(profile.acceptedSourceKinds || ['file']).join('/')} 来源`, 400)
+  }
+  if (sourceKind === 'directory' && input.deleteSourceAfterImport) {
+    throw new BenchmarkProtocolError('DATASET_SOURCE_INVALID', '官方数据目录不支持导入后删除', 400)
+  }
   const extension = path.extname(sourcePath).toLowerCase()
-  if (!profile.acceptedExtensions.includes(extension)) {
+  if (sourceKind === 'file' && !profile.acceptedExtensions.includes(extension)) {
     throw new BenchmarkProtocolError(
       'DATASET_SOURCE_FORMAT_INVALID',
       `${profile.displayName} 只接受 ${profile.acceptedExtensions.join(', ')} 文件`,
@@ -123,7 +143,7 @@ export async function installBenchmarkDataset(input: {
   }
 
   const [fileSha256, loader] = await Promise.all([
-    sourceSha256(sourcePath),
+    sourceKind === 'file' ? sourceSha256(sourcePath) : Promise.resolve(null),
     Promise.resolve(getBenchmarkDatasetLoader(input.benchmarkKey, sourcePath)),
   ])
   const cases: unknown[] = []
@@ -136,6 +156,7 @@ export async function installBenchmarkDataset(input: {
     )
   }
 
+  const checksum = fileSha256 || `sha256:${createHash('sha256').update(canonicalJson(cases as JsonValue)).digest('hex')}`
   const imported = await importBenchmarkDataset({
     user: SYSTEM_BENCHMARK_DATASET_OWNER,
     name: input.name?.trim() || profile.displayName,
@@ -144,8 +165,10 @@ export async function installBenchmarkDataset(input: {
     source: {
       kind: 'benchmark-dataset-import',
       profileKey: profile.key,
+      ...(profile.version ? { profileVersion: profile.version } : {}),
+      sourceKind,
       fileName: path.basename(sourcePath),
-      sha256: fileSha256,
+      sha256: checksum,
     },
     cases,
   })
@@ -155,7 +178,7 @@ export async function installBenchmarkDataset(input: {
     await fs.promises.unlink(sourcePath)
     sourceDeleted = true
   }
-  return { ...imported, sourceSha256: fileSha256, sourceDeleted }
+  return { ...imported, sourceSha256: checksum, sourceDeleted }
 }
 
 export async function removeSystemBenchmarkDataset(datasetId: string): Promise<{

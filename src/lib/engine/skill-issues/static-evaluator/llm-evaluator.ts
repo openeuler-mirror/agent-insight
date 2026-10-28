@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * L2 LLM 评估器：4 维 SKILL.md + 1 维 工程健壮性 + 1 维 安全风险性。
  * 调用用户配置的 LLM（复用 getActiveConfig + OpenAI 客户端）。
@@ -93,10 +109,10 @@ function tryParseJson(text: string): any {
     // 兜底：jsonrepair 修不规范 JSON
     try {
       const repaired = jsonrepair(s);
-      console.warn(`[static-eval] JSON.parse failed (${e1.message}), recovered by jsonrepair (len=${s.length})`);
+      console.warn(`[static-eval] JSON.parse failed (${e1.name}), recovered by jsonrepair (len=${s.length})`);
       return JSON.parse(repaired);
     } catch (e2: any) {
-      console.warn(`[static-eval] jsonrepair also failed: ${e2.message}; raw len=${s.length}, head=${s.slice(0, 120)}`);
+      console.warn(`[static-eval] jsonrepair also failed: ${e2.name}; raw len=${s.length}`);
       throw e1;
     }
   }
@@ -399,11 +415,11 @@ export async function runLlmStaticEvaluation(args: {
     const raw = await callLlm(client, model, prompt);
     let parsed = parseDimensions(raw, defaultDim);
     if (parsed.dims.length === 0) {
-      console.warn(`[static-eval] ${label} empty dims on attempt 1 (raw len=${raw.length}, head="${raw.slice(0, 80)}"), retrying`);
+      console.warn(`[static-eval] ${label} empty dims on attempt 1 (raw len=${raw.length}), retrying`);
       const raw2 = await callLlm(client, model, prompt);
       parsed = parseDimensions(raw2, defaultDim);
       if (parsed.dims.length === 0) {
-        console.warn(`[static-eval] ${label} still empty after retry (raw len=${raw2.length}, head="${raw2.slice(0, 80)}")`);
+        console.warn(`[static-eval] ${label} still empty after retry (raw len=${raw2.length})`);
       }
     }
     return parsed;

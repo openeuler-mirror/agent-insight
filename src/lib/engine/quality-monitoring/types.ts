@@ -1,5 +1,21 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // 质量监控（Quality Monitoring）领域引擎 — 内存数据契约（非持久化）。
-// 字段形状对齐 docs/design/quality-monitoring/quality-monitoring-design.md §5.2。
+// 字段形状对齐 design/evaluation/quality-monitoring/quality-monitoring-design.md §5.2。
 // 引擎为纯聚合函数：collect → problem → score(错误维消费问题汇总) → trend。
 
 import type { FailureItem, SkillImprovementItem } from '@/lib/engine/evaluation/judge';

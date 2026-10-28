@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
@@ -7,6 +23,7 @@ import test from "node:test"
 import { loadCheckpoint, toCheckpointRelPath } from "@/lib/ingest/otel-consumer/checkpoint"
 import {
   getOtelSpoolConsumerForTest,
+  globalGateRemaining,
   startOtelSpoolConsumer,
   stopOtelSpoolConsumer,
 } from "@/lib/ingest/otel-consumer/consumer"
@@ -53,46 +70,17 @@ function makeSource(dir: string, files: string[], onAggregate?: (sessionId: stri
   }
 }
 
-test("全局冷却必须有绝对上限：一轮慢聚合不能按倍数把整条流水线冻住", async () => {
-  // 2026-07-28 事故的直接回归：旧实现的全局冷却 = 上轮耗时 × factor（只受 5 分钟封顶约束），
-  // 线上单轮 51s 直接让所有会话停摆 153s，吞吐塌到 0.3 条/分钟。
-  const { dir, files } = makeSpool("otel-gate-cap-", ["session-a", "session-b"])
-  stopOtelSpoolConsumer()
-  try {
-    const calls: number[] = []
-    startOtelSpoolConsumer({
-      sources: [makeSource(dir, files)],
-      saveExecution: async (data) => {
-        calls.push(Date.now())
-        await wait(60)
-        return { success: true, record: data }
-      },
-      shortMs: 10,
-      longMs: 100000,
-      maxWaitMs: 100000,
-      tickMs: 5,
-      aggCooldownFactor: 1,
-      aggCooldownCapMs: 100000,
-      aggGlobalFactor: 100,      // 不封顶的话：60ms × 100 = 6000ms 全局冻结
-      aggGlobalMaxWaitMs: 200,   // 封顶 200ms
-      drainBacklog: 1000,        // 关掉排空模式，单独验证封顶这一条
-      seedOnStart: false,
-      log: () => {},
-      warn: () => {},
-    })
-
-    await waitFor(() => calls.length >= 2, 8000)
-    assert.ok(calls.length >= 2, "两个会话都应完成聚合")
-    const gap = calls[1] - calls[0]
-    // 阈值给得宽，是为了在全量测试并发跑、机器负载高时也稳定；判别力仍然充足：
-    // 不封顶的话这里必然 ≥6000ms。
-    assert.ok(gap < 3000, `第二轮不应被倍数冻住，实际间隔 ${gap}ms（不封顶会是 6000ms 以上）`)
-    assert.ok(gap >= 200, `封顶之内仍要保留占空比保护，实际间隔 ${gap}ms`)
-  } finally {
-    stopOtelSpoolConsumer()
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
+test("全局冷却必须有绝对上限：一轮慢聚合不能按倍数把整条流水线冻住", () => {
+  const state = {
+    pendingFiles: new Map(), draining: false, drainBacklog: 1000,
+    lastGlobalAggEndedAt: 10_000, lastGlobalAggCostMs: 60,
+    aggGlobalFactor: 100, aggGlobalMaxWaitMs: 200,
+  };
+  assert.equal(globalGateRemaining(state, 10_000), 200);
+  assert.equal(globalGateRemaining(state, 10_199), 1);
+  assert.equal(globalGateRemaining(state, 10_200), 0);
+  assert.equal(globalGateRemaining({ ...state, lastGlobalAggCostMs: 1 }, 10_000), 100);
+});
 
 test("backlog 越过阈值进排空模式：此时不再限流，积压能排空", async () => {
   const sessions = Array.from({ length: 8 }, (_, i) => `session-${i}`)

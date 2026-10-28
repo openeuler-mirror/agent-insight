@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { normalizeTraceCases } from '@/lib/trace-datasets/contracts';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
@@ -11,7 +28,6 @@ import {
   type DatasetCaseRootCauseMeta,
   type RootCauseItem,
 } from '@/lib/dataset-case-root-causes';
-import { extractRootCausesFromExpected } from '@/lib/engine/evaluation/root-cause-extractor';
 import { resolveAgentInsightDataPath } from '@/lib/env';
 import { SYSTEM_BENCHMARK_DATASET_OWNER } from '@/lib/benchmark/dataset-ownership';
 
@@ -77,6 +93,8 @@ export interface DatasetCase {
 }
 
 export interface AgentDatasetRecord {
+  generationSource?: string | null;
+  generationStatus?: string | null;
   id: string;
   user: string;
   name: string;
@@ -146,11 +164,11 @@ export function buildAgentDatasetItemsView(dataset: AgentDatasetRecord): AgentDa
   };
 }
 
-export function buildAgentDatasetProjection(cases: DatasetCase[]): {
+export function buildAgentDatasetProjection(cases: DatasetCase[], trace = false): {
   caseCount: number;
   referenceCasesJson: string;
 } {
-  const normalized = normalizeCases(cases);
+  const normalized = trace ? normalizeTraceCases(cases) : normalizeCases(cases);
   return {
     caseCount: normalized.length,
     referenceCasesJson: JSON.stringify(normalized.map(item => ({
@@ -471,6 +489,8 @@ function recordFromDbRow(row: {
   description: string;
   targetAgent: string;
   targetSkill?: string;
+  generationSource?: string | null;
+  generationStatus?: string | null;
   tagsJson: string;
   fieldsJson: string;
   casesJson: string;
@@ -498,6 +518,8 @@ function recordFromDbRow(row: {
   }
   return {
     id: row.id,
+    generationSource: row.generationSource,
+    generationStatus: row.generationStatus,
     user: row.user,
     name: row.name,
     description: row.description,
@@ -505,7 +527,7 @@ function recordFromDbRow(row: {
     targetSkill: row.targetSkill ?? '',
     tags: normalizeTags(tags),
     fields: normalizeFields(fieldsRaw, normalizeDatasetKind(row.datasetKind)),
-    cases: normalizeCases(casesRaw),
+    cases: row.generationSource === 'trace' ? normalizeTraceCases(casesRaw) : normalizeCases(casesRaw),
     datasetKind: normalizeDatasetKind(row.datasetKind),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -519,6 +541,8 @@ function summaryFromDbRow(row: {
   description: string;
   targetAgent: string;
   targetSkill?: string;
+  generationSource?: string | null;
+  generationStatus?: string | null;
   tagsJson: string;
   fieldsJson: string;
   datasetKind: string;
@@ -532,6 +556,8 @@ function summaryFromDbRow(row: {
   try { fields = JSON.parse(row.fieldsJson || '[]'); } catch { fields = []; }
   return {
     id: row.id,
+    generationSource: row.generationSource,
+    generationStatus: row.generationStatus,
     user: row.user,
     name: row.name,
     description: row.description,
@@ -665,12 +691,12 @@ function canReadAgentDataset(user: string, item: Pick<AgentDatasetRecord, 'user'
     || (item.user === SYSTEM_BENCHMARK_DATASET_OWNER && item.datasetKind === 'benchmark');
 }
 
-export async function readUserAgentDatasets(user: string): Promise<AgentDatasetRecord[]> {
+export async function readUserAgentDatasets(user: string, includeTrace = true): Promise<AgentDatasetRecord[]> {
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: agentDatasetVisibilityWhere(user),
+      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}) },
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(recordFromDbRow);
@@ -681,7 +707,7 @@ export async function readUserAgentDatasets(user: string): Promise<AgentDatasetR
 
 async function ensureAgentDatasetProjectionsForUser(prisma: PrismaClient, user: string): Promise<void> {
   const pending = await prisma.agentEvalDataset.findMany({
-    where: { ...agentDatasetVisibilityWhere(user), projectionReady: false },
+    where: { ...agentDatasetVisibilityWhere(user), projectionReady: false, generationSource: null },
     select: { id: true, casesJson: true, updatedAt: true },
   });
   for (const row of pending) {
@@ -698,17 +724,18 @@ async function ensureAgentDatasetProjectionsForUser(prisma: PrismaClient, user: 
 export async function readAgentDatasetSummaries(
   user: string,
   targetSkill?: string,
+  includeTrace = true,
 ): Promise<AgentDatasetSummary[]> {
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     await ensureAgentDatasetProjectionsForUser(prisma, user);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { ...agentDatasetVisibilityWhere(user), ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}), ...(targetSkill !== undefined ? { targetSkill } : {}) },
       select: {
         id: true, user: true, name: true, description: true, targetAgent: true,
         targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
-        caseCount: true, createdAt: true, updatedAt: true,
+        generationSource: true, generationStatus: true, caseCount: true, createdAt: true, updatedAt: true,
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -723,17 +750,18 @@ export async function readAgentDatasetSummaries(
 export async function readAgentDatasetReferences(
   user: string,
   targetSkill?: string,
+  includeTrace = true,
 ): Promise<AgentDatasetReference[]> {
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     await ensureAgentDatasetProjectionsForUser(prisma, user);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { ...agentDatasetVisibilityWhere(user), ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}), ...(targetSkill !== undefined ? { targetSkill } : {}) },
       select: {
         id: true, user: true, name: true, description: true, targetAgent: true,
         targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
-        caseCount: true, referenceCasesJson: true, createdAt: true, updatedAt: true,
+        generationSource: true, generationStatus: true, caseCount: true, referenceCasesJson: true, createdAt: true, updatedAt: true,
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -812,9 +840,9 @@ export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Pro
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
-    const projection = buildAgentDatasetProjection(updated.cases);
+    const projection = buildAgentDatasetProjection(updated.cases, updated.generationSource === 'trace');
     const res = await prisma.agentEvalDataset.updateMany({
-      where: { id: updated.id, user: updated.user },
+      where: { id: updated.id, user: updated.user, ...(updated.generationSource === 'trace' ? { generationStatus: 'published', OR: [{ generationJob: { is: null } }, { generationJob: { is: { status: 'succeeded' } } }] } : {}) },
       data: {
         name: updated.name,
         description: updated.description,
@@ -843,19 +871,6 @@ export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Pro
 export interface DatasetRootCauseWarning {
   caseId: string;
   message: string;
-}
-
-function buildRootCauseFailureMeta(
-  expectedOutput: string,
-  nowIso: string,
-  error: string,
-): DatasetCaseRootCauseMeta {
-  return {
-    status: 'failed',
-    expectedOutputHash: hashExpectedOutput(expectedOutput),
-    updatedAt: nowIso,
-    error,
-  };
 }
 
 function buildRootCauseEmptyMeta(nowIso: string): DatasetCaseRootCauseMeta {
@@ -971,15 +986,10 @@ export async function cacheLiveRootCausesForDatasetCase(options: {
 export interface PrepareDatasetCasesOptions {
   nextCases: DatasetCase[];
   previousCases?: DatasetCase[];
-  user?: string | null;
   now?: Date;
   forceRefresh?: boolean;
   retryFailed?: boolean;
-  extractor?: (
-    caseInput: string,
-    expectedOutput: string,
-    user?: string | null,
-  ) => Promise<RootCauseItem[]>;
+  extractor?: (caseInput: string, expectedOutput: string) => Promise<RootCauseItem[]>;
 }
 
 export interface PrepareDatasetCasesResult {
@@ -993,11 +1003,10 @@ export async function prepareDatasetCasesForPersistence(
   const {
     nextCases,
     previousCases = [],
-    user,
     now = new Date(),
     forceRefresh = false,
     retryFailed = false,
-    extractor = extractRootCausesFromExpected,
+    extractor,
   } = options;
   const nowIso = now.toISOString();
   const previousById = new Map(previousCases.map(item => [item.id, normalizeCase(item)]));
@@ -1017,16 +1026,13 @@ export async function prepareDatasetCasesForPersistence(
       continue;
     }
 
-    const expectedOutputChanged = prevCase
-      ? prevCase.expectedOutput !== nextCase.expectedOutput
-      : true;
-    const shouldRetryFailed = retryFailed && prevCase?.rootCauseMeta?.status === 'failed';
     const canReusePrev =
       !forceRefresh &&
-      !expectedOutputChanged &&
-      !shouldRetryFailed &&
       prevCase &&
-      canReuseRootCauseCache(prevCase.expectedOutput, prevCase.rootCauseMeta);
+      prevCase.expectedOutput === nextCase.expectedOutput &&
+      canReuseRootCauseCache(nextCase.expectedOutput, prevCase.rootCauseMeta) &&
+      prevCase.rootCauseMeta?.status === 'ready' &&
+      (prevCase.rootCauses?.length || 0) > 0;
 
     if (canReusePrev) {
       cases.push({
@@ -1037,36 +1043,40 @@ export async function prepareDatasetCasesForPersistence(
       continue;
     }
 
-    if (prevCase && !expectedOutputChanged && !shouldRetryFailed) {
-      cases.push({
-        ...nextCase,
-        rootCauses: normalizeRootCauseItems(prevCase.rootCauses),
-        rootCauseMeta: prevCase.rootCauseMeta,
-      });
+    if (extractor) {
+      if (
+        !forceRefresh && !retryFailed && prevCase?.rootCauseMeta?.status === 'failed' &&
+        prevCase.expectedOutput === nextCase.expectedOutput &&
+        canReuseRootCauseCache(nextCase.expectedOutput, prevCase.rootCauseMeta)
+      ) {
+        cases.push({ ...nextCase, rootCauses: [], rootCauseMeta: prevCase.rootCauseMeta });
+        continue;
+      }
+      try {
+        const rootCauses = normalizeRootCauseItems(await extractor(nextCase.input, nextCase.expectedOutput));
+        cases.push({ ...nextCase, rootCauses, rootCauseMeta: buildRootCauseReadyMeta(nextCase.expectedOutput, nowIso) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '关键观点提取失败';
+        warnings.push({ caseId: nextCase.id, message });
+        cases.push({
+          ...nextCase,
+          rootCauses: [],
+          rootCauseMeta: {
+            status: 'failed',
+            expectedOutputHash: hashExpectedOutput(nextCase.expectedOutput),
+            updatedAt: nowIso,
+            error: message,
+          },
+        });
+      }
       continue;
     }
 
-    try {
-      const rootCauses = normalizeRootCauseItems(
-        await extractor(nextCase.input, nextCase.expectedOutput, user),
-      );
-      cases.push({
-        ...nextCase,
-        rootCauses,
-        rootCauseMeta: buildRootCauseReadyMeta(nextCase.expectedOutput, nowIso),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '关键观点提取失败';
-      warnings.push({
-        caseId: nextCase.id,
-        message,
-      });
-      cases.push({
-        ...nextCase,
-        rootCauses: [],
-        rootCauseMeta: buildRootCauseFailureMeta(nextCase.expectedOutput, nowIso, message),
-      });
-    }
+    cases.push({
+      ...nextCase,
+      rootCauses: [],
+      rootCauseMeta: undefined,
+    });
   }
 
   return { cases, warnings };

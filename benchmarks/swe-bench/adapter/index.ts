@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { z } from 'zod'
 
 import { getGeneratedBenchmarkManifest } from '../../../generated/benchmark-catalog/manifests'
@@ -275,7 +291,17 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
 
   protected createAgentTask(input: BuildAgentTaskInput<SweBenchPublicCase>): AgentTaskEnvelope {
     const payload = input.publicPayload
+    const execution = input.runConfig.executionProfile ? {
+      profile: input.runConfig.executionProfile,
+      environment: {
+        kind: 'oci-image' as const,
+        image: `swebench/sweb.eval.${input.runConfig.executionArch === 'arm64' ? 'arm64' : 'x86_64'}.${payload.instanceId.replace('__', '_1776_').toLowerCase()}:latest`,
+        arch: input.runConfig.executionArch || 'amd64' as const,
+        workspaceRoot: '/testbed',
+      },
+    } : undefined
     return {
+      ...(execution ? { execution } : {}),
       schemaVersion: 'agent-task/v1',
       benchmark: { key: this.manifest.adapterKey },
       context: input.context,
@@ -297,7 +323,7 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
       policy: {
         workspaceWrite: 'allow',
         hiddenDataAccess: 'deny',
-        network: 'client-default',
+        network: execution ? 'deny' : 'client-default',
       },
       submission: {
         requiredArtifacts: this.manifest.requiredArtifacts.map((item) => ({ ...item })),

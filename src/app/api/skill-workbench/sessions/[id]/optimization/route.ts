@@ -1,6 +1,23 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
+import { requestOptimizationCancellation } from '@/lib/skill-workbench/optimization-cancellation';
 import {
   getWorkbenchOptimization,
   startWorkbenchOptimization,
@@ -27,6 +44,15 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const { username } = await resolveUser(request, body.user);
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const { id } = await context.params;
+    if (body.action === 'cancel') {
+      if (typeof body.taskId !== 'string' || !body.taskId.trim()) {
+        return NextResponse.json({ error: '缺少优化任务 ID' }, { status: 400 });
+      }
+      const result = await requestOptimizationCancellation(username, id, body.taskId);
+      if (result.kind === 'not_found') return NextResponse.json({ error: '优化任务不存在' }, { status: 404 });
+      if (result.kind === 'finalizing') return NextResponse.json({ error: '优化结果正在保存，请等待完成' }, { status: 409 });
+      return NextResponse.json(result);
+    }
     if (body.action === 'sync') {
       const sourceKind = body.sourceKind === 'experiment' || body.sourceKind === 'evaluation' ? body.sourceKind : 'user';
       const result = await syncWorkbenchOptimization({

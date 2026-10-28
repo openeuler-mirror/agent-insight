@@ -1,9 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { spawnSync } = require('node:child_process')
 const { createHash } = require('node:crypto')
 const { getAgentInsightHome } = require('./agent-insight-home.cjs')
+const { loadOpenCodeConnectionConfig, assertNoMaskedConnections } = require('./opencode-connection-config.cjs')
 
 const triggerWorkspaces = new Map()
 const WORKSPACE_IDLE_MS = 120_000
@@ -81,11 +97,9 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
     }
   }
   // 只在客户端解析连接配置；密钥不经过实验 payload，也不返回服务端。
-  if (!resolvedConfig) {
-    const result = spawnSync(executable, ['debug', 'config'], { encoding: 'utf8', timeout: 15000, maxBuffer: 8 * 1024 * 1024 })
-    if (result.status !== 0) throw new Error('无法读取所选客户端的 OpenCode 配置')
-    try { resolvedConfig = JSON.parse(result.stdout) } catch { throw new Error('OpenCode 配置无法解析，不允许使用默认模型替代') }
-  }
+  const selection = { agent: payload.agent, model: payload.model, trigger: triggerRouting }
+  if (resolvedConfig) assertNoMaskedConnections(resolvedConfig, selection)
+  else resolvedConfig = loadOpenCodeConnectionConfig(executable, selection)
   if (!['build', 'plan'].includes(payload.agent) && !resolvedConfig.agent?.[payload.agent]) throw new Error('所选 Agent 的配置不存在')
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'insight-skill-run-')))
   const workspace = path.join(root, 'workspace')
@@ -141,6 +155,7 @@ function prepareSkillExperimentWorkspace(executable, payload, resolvedConfig, cl
       env: {
         HOME: isolatedHome,
         USERPROFILE: isolatedHome,
+        OPENCODE_TEST_HOME: isolatedHome,
         XDG_CONFIG_HOME: path.dirname(configRoot),
         XDG_DATA_HOME: process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
         XDG_CACHE_HOME: process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),

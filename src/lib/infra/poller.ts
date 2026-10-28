@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // Path A 拉取器：遍历已注册、启用的 pull 源，抓一次 /metrics 落 InfraMetricSample。
 // pollOnce 设计成可被定时器/路由触发；fetch 可注入便于测试。
 
@@ -37,8 +53,9 @@ function logFailure(logs: Map<string, FailureLog>, key: string, error: string, n
     consecutiveFailures: (previous?.consecutiveFailures ?? 0) + 1, suppressed: 0,
   };
   logs.set(key, next);
-  console.warn(endpoint ? '[infra-poller] source error:' : '[infra-poller] tick error:', JSON.stringify({
+  console.error(endpoint ? '[infra-poller] source error:' : '[infra-poller] tick error:', JSON.stringify({
     endpoint, error, consecutiveFailures: next.consecutiveFailures,
+    firstFailedAt: new Date(next.firstFailedAt).toISOString(), lastFailedAt: new Date(nowMs).toISOString(),
     suppressed: previous?.suppressed ?? 0,
     previousError: previous && previous.error !== error ? previous.error : undefined,
   }));

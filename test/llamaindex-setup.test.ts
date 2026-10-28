@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
@@ -308,6 +324,10 @@ test('collector endpoint serves a directly deployable Python runtime archive', a
   assert.ok(entries.includes('agent_insight_llamaindex/__init__.py'));
   assert.ok(entries.includes('README.md'));
   assert.match(archive.readAsText('README.md'), /# LlamaIndex Trace Collector/);
+  assert.equal(
+    archive.readAsText('README.md'),
+    readFileSync('docs/zh/how-to/observability/llamaindex-trace-collector.md', 'utf8'),
+  );
   assert.ok(!entries.includes('pyproject.toml'));
   assert.ok(!entries.some((name) => name.startsWith('src/')));
   assert.ok(!entries.includes('install.py'));
@@ -343,7 +363,7 @@ test('collector archive cache invalidates when bundled source changes', (t) => {
 test('local npm server package carries collector source and the relocated README', async (t) => {
   const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as { files: string[] };
   assert.ok(manifest.files.includes('scripts/'));
-  assert.ok(manifest.files.includes('docs/user-guide/observability/llamaindex-trace-collector.md'));
+  assert.ok(manifest.files.includes('docs/zh/how-to/observability/llamaindex-trace-collector.md'));
   assert.ok(!manifest.files.includes('scripts/llamaindex_extension/tests/**'));
   assert.ok(manifest.files.includes('!scripts/llamaindex_extension/tests/**'));
   assert.ok(manifest.files.includes('!scripts/llamaindex_extension/pyproject.toml'));
@@ -366,7 +386,8 @@ test('local npm server package carries collector source and the relocated README
   const readme = path.join(
     packageRoot,
     'docs',
-    'user-guide',
+    'zh',
+    'how-to',
     'observability',
     'llamaindex-trace-collector.md',
   );

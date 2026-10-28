@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // Session↔Infra 关联（方式①：时间窗 join）。把一次调用的时间窗对齐到该源的 infra 采样，
 // 复用诊断内核得 infra 上下文，再判定延迟主因在底层(INFRA-BOUND)/固有(INHERENT)/agent 侧(APP-BOUND)。
 // 在 spike 06 真机验证：误差<0.3%；同一 session 落到受压窗口会翻转为 INFRA-BOUND。

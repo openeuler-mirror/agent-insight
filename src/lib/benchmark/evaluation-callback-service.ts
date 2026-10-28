@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -10,6 +26,7 @@ import type {
   NormalizedBenchmarkResult,
 } from '../../../packages/benchmark-protocol/src/evaluator-contracts'
 import type { EvaluationJob } from '../../../packages/benchmark-protocol/src/evaluation-contracts'
+import { isEvidencePath } from '../../../packages/benchmark-protocol/artifact-path.cjs'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { resolveAgentInsightDataPath } from '@/lib/env'
 import { prisma } from '@/lib/storage/prisma'
@@ -188,7 +205,7 @@ export async function storeBenchmarkEvaluationArtifact(input: {
   if (!ACTIVE_STATUSES.has(evaluation.status)) {
     throw new BenchmarkProtocolError('EVALUATION_NOT_ACTIVE', '评测 Run 已不接受证据 Artifact', 409)
   }
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.name)) {
+  if (!isEvidencePath(input.name)) {
     throw new BenchmarkProtocolError('EVALUATION_ARTIFACT_NAME_INVALID', '证据 Artifact 名称不合法', 400)
   }
   if (!/^[a-z][a-z0-9._-]{0,63}$/.test(input.kind)) {
@@ -197,8 +214,8 @@ export async function storeBenchmarkEvaluationArtifact(input: {
   if (!input.mediaType.trim() || input.mediaType.length > 128) {
     throw new BenchmarkProtocolError('EVALUATION_ARTIFACT_MEDIA_TYPE_INVALID', '证据 Artifact mediaType 不合法', 400)
   }
-  if (input.bytes.byteLength < 1 || input.bytes.byteLength > MAX_EVIDENCE_BYTES) {
-    throw new BenchmarkProtocolError('EVALUATION_ARTIFACT_SIZE_INVALID', '证据 Artifact 为空或超过 64 MiB', 422)
+  if (input.bytes.byteLength > MAX_EVIDENCE_BYTES) {
+    throw new BenchmarkProtocolError('EVALUATION_ARTIFACT_SIZE_INVALID', '证据 Artifact 超过 64 MiB', 422)
   }
   const digest = sha256(input.bytes)
   if (digest !== input.expectedSha256) {
@@ -221,7 +238,7 @@ export async function storeBenchmarkEvaluationArtifact(input: {
   const relativePath = path.join(
     'benchmark-evaluation-artifacts',
     input.evaluationId,
-    `${artifactId}-${input.name}`,
+    artifactId,
   )
   const absolutePath = resolveAgentInsightDataPath(relativePath)
   await fs.mkdir(path.dirname(absolutePath), { recursive: true, mode: 0o700 })

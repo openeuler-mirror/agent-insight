@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import path from 'node:path';
 import { createIsolatedDatabase } from './helpers/isolated-database';
 const database = createIsolatedDatabase();
@@ -386,7 +402,7 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(generation, /select: \{ interactions: true, endTime: true \}/);
   assert.doesNotMatch(generation, /query:\s*input\.item\.input/);
   assert.doesNotMatch(generation, /if \(!dispatched\.delivered\)/);
-  assert.match(retryRoute, /generateExperimentTraces\(genericRequest, \{ forceNewTrace: true \}\)/);
+  assert.match(retryRoute, /generateExperimentTraces\(genericRequest, \{ forceNewTrace: true, reservedAttemptIds \}\)/);
   assert.match(retryRoute, /prepareGeneratedTraceRetry\(id, caseId\)/);
   assert.ok(
     retryRoute.indexOf('if (genericRequest)') < retryRoute.indexOf('const failedResults'),
@@ -431,4 +447,28 @@ test('ordinary trace generation admits two attempts, refills one slot and keeps 
     assert.equal(result.failedCaseIds.length, 3);
     assert.equal(await prisma.experimentTraceAttempt.count({ where: { experimentId: experiment.id } }), 3);
   } finally { controller.abort(); await work.catch(() => undefined); }
+});
+
+
+test('Trace availability explains account binding, offline state, empty catalogs and unsupported runtimes', async () => {
+  const { listClientTraceGenerationAvailability } = require('@/lib/engine/experiment/execution-targets');
+  const user = `availability-${Date.now()}`;
+  const clientId = `availability-client-${Date.now()}`;
+  assert.equal((await listClientTraceGenerationAvailability(user)).diagnostics[0].code, 'NO_BOUND_CLIENT');
+  try {
+    const capability = { platforms: [{ id: 'opencode', agents: ['build'], actions: ['RUN_EXPERIMENT_CASE'], runExperimentCase: { version: 2, returnsTraceId: true } }] };
+    await prisma.reliabilityClient.create({ data: { clientId, user, name: 'host', status: 'online', lastSeenAt: new Date(Date.now() - 600_000), capabilitiesJson: JSON.stringify(capability) } });
+    assert.equal((await listClientTraceGenerationAvailability(user)).diagnostics[0].code, 'CLIENT_NOT_ONLINE');
+    await prisma.reliabilityClient.update({ where: { clientId }, data: { lastSeenAt: new Date(), capabilitiesJson: JSON.stringify({ platforms: [{ ...capability.platforms[0], agents: [] }] }) } });
+    let availability = await listClientTraceGenerationAvailability(user);
+    assert.equal(availability.targets.length, 0);
+    assert.equal(availability.diagnostics[0].code, 'NO_AGENTS');
+    await prisma.reliabilityClient.update({ where: { clientId }, data: { capabilitiesJson: JSON.stringify({ platforms: [{ ...capability.platforms[0], runExperimentCase: { version: 2, returnsTraceId: true, ready: false, unavailableReason: 'v2 Agent discovery failed' } }] }) } });
+    availability = await listClientTraceGenerationAvailability(user);
+    assert.equal(availability.targets.length, 0);
+    assert.equal(availability.diagnostics[0].message, 'v2 Agent discovery failed');
+    assert.equal((await listClientTraceGenerationAvailability(user + '-other')).diagnostics[0].code, 'NO_BOUND_CLIENT');
+    await prisma.reliabilityClient.update({ where: { clientId }, data: { capabilitiesJson: JSON.stringify(capability) } });
+    assert.equal((await listClientTraceGenerationAvailability(user)).targets[0].agent, 'build');
+  } finally { await prisma.reliabilityClient.deleteMany({ where: { clientId } }); }
 });

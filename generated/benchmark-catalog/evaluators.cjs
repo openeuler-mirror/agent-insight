@@ -1,6 +1,8 @@
 'use strict'
 
 // AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// SPDX-License-Identifier: Apache-2.0
 
 const path = require('node:path')
 
@@ -12,11 +14,11 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": "/app/benchmarks/swe-bench/evaluator/entrypoint.cjs",
     "imageProvider": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/images.cjs"),
-    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-f405d624a0dda73126b057b75708b48f3c40ada38031677ce1a60e921fa95b7f",
+    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-41882cd577054b59a5cc535875ab9161e1b35b09debf5043e169c5b74a1dca8c",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/Dockerfile"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
     "runtimeSmokeEntrypoint": "/app/benchmarks/swe-bench/smoke/index.cjs",
-    "artifactDigest": "sha256:f405d624a0dda73126b057b75708b48f3c40ada38031677ce1a60e921fa95b7f",
+    "artifactDigest": "sha256:41882cd577054b59a5cc535875ab9161e1b35b09debf5043e169c5b74a1dca8c",
     "network": "deny",
     "resources": {
       "cpu": 4,
@@ -92,6 +94,85 @@ const generatedEvaluatorDescriptors = [
         },
         "officialReport": {
           "type": "object"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "key": "zsoft-l1",
+    "benchmarkKey": "zsoft-l1",
+    "runtime": "oci-container",
+    "command": "python3",
+    "entrypoint": "/opt/agent-insight/zsoft/entrypoint.py",
+    "imageProvider": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/images.cjs"),
+    "assets": {
+      "image": "swr.cn-east-3.myhuaweicloud.com/agent-insight/zsoft-l1-userspace-x86-64@sha256:af1e63c5cacb1753ceec85de245f129bdc63bb3ae15dca961248d17fa7e27a3b",
+      "sourcePath": "/opt/agent-insight/zsoft-l1/20261019-full-v1",
+      "releaseId": "20261019-full-v1",
+      "bundleDigest": "sha256:d73939d50ff543cbbe7a5a23e15ece361ed89d0dd998ab0f3cdace63e23621f9",
+      "verifyCommand": "python3",
+      "verifyEntrypoint": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/verify_assets.py")
+    },
+    "image": "agent-insight-benchmark-runtime-zsoft-l1:artifact-6b0aa4da7be9b070ef4da90398d46f284b2b79f0a439da2fd8d03069e8f487aa",
+    "dockerfile": path.resolve(__dirname, "../../benchmarks/zsoft-l1/evaluator/Dockerfile"),
+    "artifactDigest": "sha256:6b0aa4da7be9b070ef4da90398d46f284b2b79f0a439da2fd8d03069e8f487aa",
+    "network": "deny",
+    "resources": {
+      "cpu": 4,
+      "memoryMiB": 8192,
+      "timeoutSeconds": 900
+    },
+    "requiredArtifacts": [
+      {
+        "name": "poc",
+        "mediaType": "application/octet-stream",
+        "collector": "single-file/v1",
+        "maxBytes": 1048576
+      }
+    ],
+    "rawResultSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "taskId",
+        "submissionSha256",
+        "bundleDigest",
+        "taskDigest",
+        "status",
+        "success",
+        "sourceTaskDigest"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"
+        },
+        "submissionSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "bundleDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "taskDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "invalid_submission",
+            "infrastructure_error"
+          ]
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "sourceTaskDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         }
       },
       "additionalProperties": false

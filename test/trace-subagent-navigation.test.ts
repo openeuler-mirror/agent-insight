@@ -1,46 +1,106 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
+
 const source = fs.readFileSync(new URL('../src/app/(main)/trace/page.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('trace.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let callback: ts.Node | undefined;
 function visit(node: ts.Node) {
     if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useEffect'
-        && node.arguments[0]?.getText(ast).includes('fetchGuardRef.current === taskIdParam')) callback = node.arguments[0];
+        && node.arguments[0]?.getText(ast).includes('++executionLookupRequestRef.current')) callback = node.arguments[0];
     ts.forEachChild(node, visit);
 }
 visit(ast);
 assert.ok(callback);
 const js = ts.transpileModule(`const run = ${callback.getText(ast)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function harness() {
-    const root = { task_id: 'root' }, child = { task_id: 'child' };
-    const guard = { current: null as string | null };
+    const root = { task_id: 'root', upload_id: 'root-execution' }, child = { task_id: 'child' }, other = { task_id: 'other' };
+    const requestRef = { current: 0 };
     let selected: unknown = root;
-    const pending: Array<(value: unknown) => void> = [];
-    let requests = 0;
-    const scope = { data: [root], fetchGuardRef: guard,
+    let error: string | null = null;
+    let cleanup: (() => void) | undefined;
+    const pending: Array<{ resolve: (value: unknown) => void; signal: AbortSignal; url: string }> = [];
+    const scope = { data: [root], executionLookupRequestRef: requestRef,
         setSelectedExecution: (value: unknown) => { selected = value; },
-        setTaskIdParam: () => {}, locale: 'zh', toast: { error: () => {} },
-        apiFetch: () => { requests++; return new Promise(resolve => pending.push(resolve)); },
+        setExecutionLookupError: (value: string | null) => { error = value; }, locale: 'zh', AbortController,
+        apiFetch: (url: string, options: { signal: AbortSignal }) => new Promise(resolve => pending.push({ resolve, url, signal: options.signal })),
     };
-    return { root, child, selected: () => selected, requests: () => requests,
-        navigate: (taskIdParam: string) => {
-            const args = { ...scope, taskIdParam, selectedExecution: selected };
-            new Function(...Object.keys(args), `${js}; run();`)(...Object.values(args));
+    return { root, child, other, selected: () => selected, error: () => error, requests: () => pending.length,
+        url: (index: number) => pending[index].url,
+        navigate: (taskIdParam: string | null, executionIdParam: string | null = null) => {
+            cleanup?.();
+            const args = { ...scope, taskIdParam, executionIdParam, selectedExecution: selected };
+            cleanup = new Function(...Object.keys(args), `${js}; return run();`)(...Object.values(args));
         },
-        resolve: async () => { pending.shift()!({ ok: true, status: 200, json: async () => [child] }); await new Promise(resolve => setImmediate(resolve)); },
+        aborted: (index: number) => pending[index].signal.aborted,
+        resolve: async (index: number, records: unknown = [child], status = 200) => {
+            pending[index].resolve({ ok: status < 400, status, json: async () => records });
+            await new Promise(resolve => setImmediate(resolve));
+        },
     };
 }
-test('parent -> child -> parent -> same child can navigate repeatedly', async () => {
+test('thirty parent/child round trips load the target and never leave old content selected while loading', async () => {
     const h = harness();
-    for (let i = 0; i < 3; i++) {
-        h.navigate('child'); assert.equal(h.requests(), i + 1, 'revisiting a child must start a new lookup'); await h.resolve(); assert.equal(h.selected(), h.child);
+    for (let i = 0; i < 30; i++) {
+        h.navigate('child'); assert.equal(h.requests(), i + 1); assert.equal(h.selected(), null);
+        await h.resolve(i); assert.equal(h.selected(), h.child);
         h.navigate('root'); assert.equal(h.selected(), h.root);
     }
-    assert.equal(h.requests(), 3);
 });
 test('late child response cannot replace a parent selected from the list', async () => {
-    const h = harness(); h.navigate('child'); h.navigate('root'); await h.resolve();
+    const h = harness(); h.navigate('child'); h.navigate('root'); await h.resolve(0);
     assert.equal(h.selected(), h.root);
+    assert.equal(h.aborted(0), true);
+});
+test('child -> parent -> same child rejects the first visit response even when taskId matches again', async () => {
+    const h = harness(); h.navigate('child'); h.navigate('root'); h.navigate('child');
+    await h.resolve(1, [{ ...h.child, query: 'new' }]);
+    await h.resolve(0, [{ ...h.child, query: 'old' }]);
+    assert.deepEqual(h.selected(), { ...h.child, query: 'new' });
+});
+test('switching workers and returning to the list discard outstanding responses', async () => {
+    const h = harness(); h.navigate('child'); h.navigate('other');
+    await h.resolve(1, [h.other]); await h.resolve(0); assert.equal(h.selected(), h.other);
+    h.navigate('child'); h.navigate(null); await h.resolve(2); assert.equal(h.selected(), null);
+});
+test('failed target lookup shows an error and can retry instead of retaining the parent trace', async () => {
+    const h = harness(); h.navigate('child'); await h.resolve(0, {}, 500);
+    assert.equal(h.selected(), null); assert.match(h.error()!, /加载失败/);
+    h.navigate('child'); assert.equal(h.error(), null); await h.resolve(1); assert.equal(h.selected(), h.child);
+});
+test('missing or mismatched target is not displayed as the requested trace', async () => {
+    const h = harness(); h.navigate('child'); await h.resolve(0, [h.root]);
+    assert.equal(h.selected(), null); assert.match(h.error()!, /未找到/);
+});
+
+test('exact execution identity wins over a matching task ID and cannot fall back to an older record', async () => {
+    const h = harness();
+    h.navigate('root', 'new-execution');
+    assert.equal(h.selected(), null);
+    assert.match(h.url(0), /executionId=new-execution/);
+    assert.doesNotMatch(h.url(0), /taskId=/);
+    await h.resolve(0, [h.root]);
+    assert.equal(h.selected(), null);
+    assert.match(h.error()!, /未找到/);
+    h.navigate('root', 'new-execution');
+    const current = { task_id: 'root', upload_id: 'new-execution' };
+    await h.resolve(1, [current]);
+    assert.deepEqual(h.selected(), current);
 });

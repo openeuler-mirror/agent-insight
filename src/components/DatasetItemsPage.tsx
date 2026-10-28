@@ -1,4 +1,21 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
+import { parseTraceBatch } from '@/lib/trace-datasets/import';
 
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -294,6 +311,8 @@ export default function DatasetItemsPage() {
       const d = data as AgentDataset & { user?: string };
       setDataset({
         id: d.id,
+        generationSource: d.generationSource,
+        generationStatus: d.generationStatus,
         name: d.name,
         description: d.description || '',
         targetAgent: d.targetAgent || '',
@@ -432,7 +451,7 @@ export default function DatasetItemsPage() {
       const payload = {
         user,
         id: dataset.id,
-        fields: withEvaluatorCatalogFields(dataset.fields, cases),
+        fields: dataset.generationSource === 'trace' ? dataset.fields : withEvaluatorCatalogFields(dataset.fields, cases),
         cases: cases.map(item => ({
           id: item.id,
           input: fieldText(item, 'input').trim(),
@@ -445,7 +464,7 @@ export default function DatasetItemsPage() {
           values: Object.fromEntries(
             Object.entries(item.values || {}).map(([key, value]) => [
               key,
-              typeof value === 'string' ? value.trim() : value,
+              typeof value === 'string' && dataset.generationSource !== 'trace' ? value.trim() : value,
             ]),
           ),
           source: item.source,
@@ -459,7 +478,7 @@ export default function DatasetItemsPage() {
       });
       const result = await res.json();
       if (!res.ok || !result?.success) {
-        throw new Error(result?.error || '保存失败');
+        throw new Error(result?.error?.message || result?.error || '保存失败');
       }
       await load();
       setRowEditor(null);
@@ -532,6 +551,7 @@ export default function DatasetItemsPage() {
   };
 
   const addField = async () => {
+    if (dataset?.generationSource === 'trace') return;
     if (!dataset) return;
     const label = fieldDraft.label.trim();
     if (!label) {
@@ -577,7 +597,8 @@ export default function DatasetItemsPage() {
   };
 
   const saveRowFromModal = async () => {
-    if (!rowEditor || !dataset) return;
+    if (!rowEditor || !dataset || saving) return;
+    if (dataset.generationSource === 'trace' && (!fieldText(rowEditor.row, 'input').trim() || !fieldText(rowEditor.row, 'reference_output').trim())) { toast.error('input 与 reference_output 均为必填'); return; }
     if (!hasMeaningfulDatasetCaseValue(rowEditor.row, dataset.fields)) {
       toast.error('请至少填写一个字段');
       return;
@@ -604,18 +625,19 @@ export default function DatasetItemsPage() {
       }
     }
     const row = { ...rowEditor.row, values };
-    let full: AgentDataset;
+    setSaving(true);
     try {
-      full = await loadFullDataset();
+      const full = await loadFullDataset();
+      const next =
+        mode === 'add'
+          ? [...full.cases, row]
+          : full.cases.map(c => (c.id === row.id ? row : c));
+      await persistCases(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : '完整数据加载失败');
-      return;
+    } finally {
+      setSaving(false);
     }
-    const next =
-      mode === 'add'
-        ? [...full.cases, row]
-        : full.cases.map(c => (c.id === row.id ? row : c));
-    await persistCases(next);
   };
 
   const closeBatchModal = () => {
@@ -629,12 +651,13 @@ export default function DatasetItemsPage() {
   };
 
   const runBatchImport = async () => {
-    if (!dataset || !user) return;
+    if (!dataset || !user || saving) return;
     if (isReadOnly) {
       setBatchModalError('内置可靠性评测集由系统维护，不可导入数据');
       return;
     }
     setBatchModalError('');
+    setSaving(true);
     try {
       let text = '';
       if (batchImportMethod === 'paste') {
@@ -643,7 +666,7 @@ export default function DatasetItemsPage() {
           setBatchModalError('请先粘贴 JSON 或 CSV 内容');
           return;
         }
-        const result = parseBatchAuto(text, dataset.datasetKind);
+        const result = dataset.generationSource === 'trace' ? parseTraceBatch(text) : parseBatchAuto(text, dataset.datasetKind);
         if (result.cases.length === 0) {
           setBatchModalError(result.message || '未能解析出有效数据');
           return;
@@ -664,7 +687,7 @@ export default function DatasetItemsPage() {
         return;
       }
       text = await readFileAsText(batchFile);
-      const result = parseBatchFromFileContent(text, batchFile.name, dataset.datasetKind);
+      const result = dataset.generationSource === 'trace' ? parseTraceBatch(text) : parseBatchFromFileContent(text, batchFile.name, dataset.datasetKind);
       if (result.cases.length === 0) {
         setBatchModalError(result.message || '未能解析出有效数据');
         return;
@@ -682,6 +705,8 @@ export default function DatasetItemsPage() {
       closeBatchModal();
     } catch (e) {
       setBatchModalError(e instanceof Error ? e.message : '导入失败');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -814,8 +839,8 @@ export default function DatasetItemsPage() {
                 type="button"
                 className={styles.refreshGhost}
                 onClick={openFieldEditor}
-                disabled={saving || isReadOnly}
-                title={isReadOnly ? '内置可靠性评测集不可新增字段' : '新增字段'}
+                disabled={saving || isReadOnly || dataset.generationSource === 'trace'}
+                title={dataset.generationSource === 'trace' ? 'Trace 数据集固定为双字段' : isReadOnly ? '内置可靠性评测集不可新增字段' : '新增字段'}
               >
                 <Plus size={15} aria-hidden />
                 新增字段
@@ -994,14 +1019,15 @@ export default function DatasetItemsPage() {
         <div
           role="presentation"
           className={styles.modalBackdrop}
-          onClick={() => !saving && closeBatchModal()}
+          onMouseDown={event => {
+            if (event.button === 0 && event.target === event.currentTarget && !saving) closeBatchModal();
+          }}
         >
           <div
             role="dialog"
             aria-modal
             aria-labelledby="batch-import-title"
             className={styles.modalPanel}
-            onClick={e => e.stopPropagation()}
           >
             <div className={styles.modalHeader}>
               <div className={styles.modalTitleWrap}>
@@ -1108,17 +1134,19 @@ export default function DatasetItemsPage() {
                       <IconUploadTray size={22} />
                     </div>
                     <p className={styles.dropZoneTitle}>点击选择或拖拽文件到此处</p>
-                    <p className={styles.dropZoneHint}>支持 .json、.csv、.txt · 单行表头可选</p>
+                    <p className={styles.dropZoneHint}>{dataset.generationSource === 'trace' ? '支持 .json、.csv、.txt · CSV 须有双字段表头' : '支持 .json、.csv、.txt · 单行表头可选'}</p>
                     {batchFile ? <div className={styles.dropZoneFileName}>{batchFile.name}</div> : null}
                   </div>
                 </div>
               )}
 
               <div className={styles.hintCard}>
+                {dataset.generationSource === 'trace' ? <>每条仅包含必填文本 <strong>input</strong> 与 <strong>reference_output</strong>。支持 JSON 数组或带这两个表头的 CSV；保留正文中的空白与换行。</> : <>
                 自动识别字段：<strong>input</strong> 与 <strong>expected_output</strong>（兼容 <strong>output</strong>、
                 reference_output 等）。内容以 <strong>[</strong> 开头按 JSON，否则按 CSV。轨迹集可含{' '}
                 <strong>trajectory</strong> 或 CSV 第三列。JSON 中的 <strong>available_tools</strong> 与{' '}
                 <strong>available_skills</strong> 会自动新增为目录字段。
+                </>}
               </div>
 
               {batchModalError ? <div className={styles.modalError}>{batchModalError}</div> : null}
@@ -1211,9 +1239,11 @@ export default function DatasetItemsPage() {
             justifyContent: 'center',
             padding: 20,
           }}
-          onClick={() => setRowEditor(null)}
+          onMouseDown={event => {
+            if (event.button === 0 && event.target === event.currentTarget && !saving) setRowEditor(null);
+          }}
         >
-          <div className="ai-card" style={{ width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', padding: 16 }} onClick={e => e.stopPropagation()}>
+          <div className="ai-card" style={{ width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', padding: 16 }}>
             <div style={{ fontWeight: 600, marginBottom: 12 }}>{rowEditor.mode === 'add' ? '添加数据' : '编辑数据'}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {dataset.fields.map(field => (
@@ -1261,7 +1291,7 @@ export default function DatasetItemsPage() {
               ))}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-              <button type="button" className="ai-btn-s" onClick={() => setRowEditor(null)}>
+              <button type="button" className="ai-btn-s" onClick={() => setRowEditor(null)} disabled={saving}>
                 取消
               </button>
               <button type="button" className="ai-btn-p" onClick={() => void saveRowFromModal()} disabled={saving}>

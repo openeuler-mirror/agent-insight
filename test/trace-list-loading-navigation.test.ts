@@ -1,9 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
-import { parseAsString, useQueryState } from 'nuqs';
+import { parseAsString, useQueryStates } from 'nuqs';
 import { NuqsTestingAdapter } from 'nuqs/adapters/testing';
 import ts from 'typescript';
 
@@ -43,6 +59,8 @@ function listHarness(initialFiltersReady = true) {
     let loading = true;
     let records: unknown[] = [];
     let reloadKey = 0;
+    let listError = false;
+    let statsRequest = '';
     let tick: (() => void) | undefined;
     let cleanup: (() => void) | undefined;
     const pending: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void; signal?: AbortSignal }> = [];
@@ -58,6 +76,8 @@ function listHarness(initialFiltersReady = true) {
         setPage: () => {},
         setData: (value: unknown[]) => { records = value; },
         setTotal: () => {}, setStats: () => {},
+        setHasMore: () => {}, setStatsRequest: (url: string) => { statsRequest = url; },
+        setListError: (value: boolean) => { listError = value; },
         setLoading: (value: boolean) => { loading = value; },
         setReloadKey: (update: (current: number) => number) => { reloadKey = update(reloadKey); },
         TRACE_LIST_REFRESH_MS: 5_000,
@@ -77,6 +97,8 @@ function listHarness(initialFiltersReady = true) {
         pending,
         loading: () => loading,
         records: () => records,
+        error: () => listError,
+        statsRequest: () => statsRequest,
         tick: () => {
             const previous = reloadKey;
             tick!();
@@ -86,7 +108,7 @@ function listHarness(initialFiltersReady = true) {
         restoreFilters: () => { scope.filtersReady = true; render(); },
         changePage: () => { scope.page = 2; scope.listRequestKey = 'page-2'; render(); },
         resolve: async (index: number, id: string) => {
-            pending[index].resolve({ json: async () => ({ records: [{ task_id: id }], total: 1 }) });
+            pending[index].resolve({ ok: true, json: async () => ({ records: [{ task_id: id }], hasMore: false }) });
             await flush();
         },
         reject: async (index: number) => { pending[index].reject(new Error('network failed')); await flush(); },
@@ -115,6 +137,70 @@ test('slow initial Trace request survives repeated polling ticks and releases th
     assert.equal(h.loading(), false, 'background refresh keeps the populated list visible');
     await h.reject(1);
     assert.deepEqual(h.records(), [{ task_id: 'initial' }], 'a background error preserves the last list');
+});
+
+test('HTTP 500 is a list error and must not silently replace visible records with an empty list', async () => {
+    const h = listHarness();
+    await h.resolve(0, 'visible');
+    h.tick();
+    h.pending[1].resolve({ ok: false, status: 500, json: async () => ({ error: 'Failed to read data' }) });
+    await flush();
+    assert.deepEqual(h.records(), [{ task_id: 'visible' }]);
+    assert.equal(h.error(), true);
+    assert.equal(h.loading(), false);
+});
+
+test('independent statistics retain page parameters for the OpenGauss compatibility path', async () => {
+    const h = listHarness();
+    h.changePage();
+    await h.resolve(1, 'page-2');
+    const url = new URL(h.statsRequest(), 'http://localhost');
+    assert.equal(url.searchParams.get('listPart'), 'stats');
+    assert.equal(url.searchParams.get('page'), '2');
+    assert.equal(url.searchParams.get('pageSize'), '20');
+});
+
+test('statistics refresh independently, avoid overlapping requests and ignore obsolete results', async () => {
+    const statsEffect = effectContaining('TRACE_STATS_REFRESH_MS');
+    const pending: Array<{ resolve: (value: unknown) => void; reject: (reason: Error) => void }> = [];
+    let stats: unknown = null;
+    let error = false;
+    let loading = false;
+    let tick!: () => void;
+    const scope = {
+        statsRequest: '/api/observe/data?listPart=stats', apiKey: null,
+        setStats: (value: unknown) => { stats = value; },
+        setStatsError: (value: boolean) => { error = value; },
+        setStatsLoading: (value: boolean) => { loading = value; },
+        TRACE_STATS_REFRESH_MS: 30_000,
+        document: { visibilityState: 'visible' },
+        window: { setInterval: (callback: () => void) => { tick = callback; return 1; }, clearInterval: () => {} },
+        apiFetch: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    };
+    const stop = expression(statsEffect, scope)();
+    assert.equal(loading, true);
+    tick(); tick();
+    assert.equal(pending.length, 1, 'slow statistics must not enqueue another query');
+    const value = { total: 25, failedCount: 0, avgLatencyMs: 10, toolErrorRate: 0 };
+    pending[0].resolve({ ok: true, json: async () => ({ stats: value }) });
+    await flush();
+    assert.deepEqual(stats, value);
+    assert.equal(loading, false);
+    tick();
+    pending[1].reject(new Error('stats timeout'));
+    await flush();
+    assert.equal(error, true);
+    assert.deepEqual(stats, value, 'failed refresh keeps the last successful statistics');
+    tick();
+    stop();
+    const stopNew = expression(statsEffect, scope)();
+    pending[2].resolve({ ok: true, json: async () => ({ stats: { ...value, total: 999 } }) });
+    await flush();
+    assert.notEqual((stats as any)?.total, 999, 'old filter statistics cannot overwrite new filter state');
+    pending[3].resolve({ ok: false, status: 500 });
+    await flush();
+    assert.equal(error, true);
+    stopNew();
 });
 
 test('a replacement request releases initial loading even when its request key is unchanged', async () => {
@@ -152,13 +238,15 @@ test('initial errors release loading and permit the next refresh', async () => {
     assert.equal(h.loading(), false);
     h.tick();
     assert.equal(h.pending.length, 2);
+    assert.equal(h.error(), true, 'a pending retry must not disguise the failed request as an empty list');
     await h.resolve(1, 'recovered');
     assert.deepEqual(h.records(), [{ task_id: 'recovered' }]);
+    assert.equal(h.error(), false);
 });
 
 const taskIdHook = findNode(node => ts.isCallExpression(node)
-    && node.expression.getText(ast) === 'useQueryState'
-    && node.arguments[0]?.getText(ast) === "'taskId'");
+    && node.expression.getText(ast) === 'useQueryStates'
+    && Boolean(node.arguments[0]?.getText(ast).includes('executionId')));
 const selectDeclaration = findNode(node => ts.isVariableDeclaration(node)
     && node.name.getText(ast) === 'handleSelectExecution') as ts.VariableDeclaration;
 const selectCallback = (selectDeclaration.initializer as ts.CallExpression).arguments[0];
@@ -171,10 +259,10 @@ async function navigationHarness(run: (scope: Record<string, unknown>) => void, 
     Object.defineProperty(globalThis, 'window', { configurable: true, value: {} });
     Object.defineProperty(globalThis, 'location', { configurable: true, value: new URL('http://example.test/trace' + initialQuery) });
     try {
-        let setter: (value: string | null, options?: { history?: 'push' | 'replace' }) => Promise<URLSearchParams>;
+        let setter: (value: { taskId: string | null; executionId: string | null }, options?: { history?: 'push' | 'replace' }) => Promise<URLSearchParams>;
         const updates: Array<{ queryString: string; options: { history: string } }> = [];
         function Harness() {
-            const [, update] = expression(taskIdHook, { useQueryState, parseAsString });
+            const [, update] = expression(taskIdHook, { useQueryStates, parseAsString });
             setter = update;
             return null;
         }
@@ -187,7 +275,7 @@ async function navigationHarness(run: (scope: Record<string, unknown>) => void, 
         run({
             setSelectedExecution: () => {}, reportTraceDetailView: () => {}, setImportResult: () => {},
             importResult: { rootTaskId: 'trace-123' },
-            setTaskIdParam: (value: string | null, options?: { history?: 'push' | 'replace' }) => {
+            setTraceTarget: (value: { taskId: string | null; executionId: string | null }, options?: { history?: 'push' | 'replace' }) => {
                 pending = setter(value, options);
                 return pending;
             },
@@ -220,7 +308,15 @@ test('opening an imported Trace adds a detail history entry', async () => {
 });
 
 test('the in-page return-to-list action replaces detail state instead of adding another entry', async () => {
-    const updates = await navigationHarness(scope => expression(selectCallback, scope)(null), '?page=3&status=failed&taskId=trace-123');
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)(null), '?page=3&status=failed&taskId=trace-123&executionId=execution-123');
+    assert.equal(updates.length, 1);
     assert.equal(updates[0].options.history, 'replace');
     assert.equal(updates[0].queryString, '?page=3&status=failed');
+});
+
+test('switching away from an exact execution clears its identity in the same history update', async () => {
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)({ task_id: 'trace-456' }), '?taskId=trace-123&executionId=execution-123');
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].options.history, 'push');
+    assert.equal(updates[0].queryString, '?taskId=trace-456');
 });

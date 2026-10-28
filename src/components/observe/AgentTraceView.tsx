@@ -1,8 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
-import { selectedParentAgent, type ParentAgentReference } from '@/lib/trace/parent-agent';
+import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
+import { AgentRelationCard } from './AgentRelationCard';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
@@ -72,14 +89,14 @@ function getStatus(node: AgentNode): NodeStatus {
     return 'ok';
 }
 
-// docs/design/foundations.md §2 B.4 — status uses semantic tokens, never hardcoded hex.
+// design/foundations.md §2 B.4 — status uses semantic tokens, never hardcoded hex.
 const STATUS_DOT: Record<NodeStatus, string> = {
     ok:    'bg-foreground-muted',
     slow:  'bg-warning',
     error: 'bg-error',
 };
 
-// docs/design/components.md §2 E.13 — span types color-coded per chart palette 1-4 (+ violet for Skill).
+// design/components.md §2 E.13 — span types color-coded per chart palette 1-4 (+ violet for Skill).
 const KIND_META: Record<string, { label: string; chip: string; bar: string; text: string }> = {
     agent: { label: 'AGENT', ...SPAN_KIND_CLASSES.agent },
     task:  { label: 'TASK',  ...SPAN_KIND_CLASSES.task },
@@ -422,6 +439,7 @@ const defaultCtx: TraceCtxValue = {
 const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
+    traceRelations?: TraceRelations;
     parentAgent?: ParentAgentReference | null;
     interactions: RawInteraction[];
     framework?: string;
@@ -461,6 +479,7 @@ export default function AgentTraceView({
     loadAllInteractions,
     onSubagentNavigate,
     parentAgent,
+    traceRelations,
     rootSessionId,
     rootExecutionId,
     traceIdentity,
@@ -577,7 +596,7 @@ export default function AgentTraceView({
     const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
     const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('overview');
     const [eventTypeFilter, setEventTypeFilter] = useState<EventTypeFilter>('all');
-    // docs/design/patterns.md §11 — slow-only flag persisted to URL so reload preserves user intent.
+    // design/patterns.md §11 — slow-only flag persisted to URL so reload preserves user intent.
     const [slowOnlyParam, setSlowOnlyParam] = useQueryState('slowOnly', parseAsString);
     const slowOnly = slowOnlyParam === '1';
     const setSlowOnly = (v: boolean | ((p: boolean) => boolean)) => {
@@ -901,12 +920,22 @@ export default function AgentTraceView({
         [rasMarkers],
     );
 
+    const navigateToAgentTrace = useCallback((taskId: string) => {
+        if (taskId === rootSessionId && tree) {
+            const target = [...nodeMap.values()].find(node => node.sessionId === taskId) ?? tree;
+            setSelectedKey(agentKey(target.id));
+            setExpandedKeys(defaultExpandedKeys);
+            setActiveDetailTab('overview');
+        }
+        onSubagentNavigate?.(taskId);
+    }, [rootSessionId, tree, nodeMap, defaultExpandedKeys, onSubagentNavigate]);
+
     const ctxValue: TraceCtxValue = {
         framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
-        onSubagentNavigate,
+        onSubagentNavigate: onSubagentNavigate ? navigateToAgentTrace : undefined,
         findEventAnomalies,
     };
 
@@ -1145,7 +1174,9 @@ export default function AgentTraceView({
                     ) : selectedAgentNode ? (
                         <AgentDetail
                             node={selectedAgentNode}
-                            parentAgent={selectedParentAgent(selectedAgentNode, tree, nodeMap, displayInteractions, rootSessionId, parentAgent)}
+                            parentAgent={selectedParentAgent(selectedAgentNode, tree, nodeMap, displayInteractions, rootSessionId, parentAgent, traceRelations)}
+                            childAgents={selectedChildAgents(selectedAgentNode, tree, nodeMap, displayInteractions, rootSessionId, traceRelations)}
+                            relationsUnavailable={traceRelations?.[selectedAgentNode === tree ? rootSessionId ?? "" : selectedAgentNode.sessionId ?? ""]?.unavailable}
                             highlightEvent={null}
                             activeTab={activeDetailTab}
                             onTabChange={setActiveDetailTab}
@@ -3004,7 +3035,7 @@ function EmptyDetail() {
 // ─── AgentDetail (right panel) ────────────────────────────────────────────────
 function AgentDetail({
     node, highlightEvent, activeTab, onTabChange, eventTypeFilter, onEventTypeFilterChange,
-    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId, parentAgent
+    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId, parentAgent, childAgents, relationsUnavailable
 }: {
     node: AgentNode;
     highlightEvent: AgentEvent | null;
@@ -3019,6 +3050,8 @@ function AgentDetail({
     currentUser?: string | null;
     rootExecutionId?: string;
     parentAgent?: ParentAgentReference | null;
+    childAgents: ChildAgentReference[];
+    relationsUnavailable?: boolean;
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
@@ -3094,7 +3127,7 @@ function AgentDetail({
             </div>
 
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.75rem 1rem' }}>
-                {activeTab === 'overview' && <OverviewTab node={node} status={status} onSelectChild={onSelectChild} parentAgent={parentAgent} />}
+                {activeTab === 'overview' && <OverviewTab node={node} status={status} onSelectChild={onSelectChild} parentAgent={parentAgent} childAgents={childAgents} relationsUnavailable={relationsUnavailable} />}
                 {activeTab === 'timeline' && (
                     <TimelineTab
                         events={visibleEvents}
@@ -3524,7 +3557,7 @@ function SkillUsageCard({ skill, currentUser }: { skill: TraceSkillUsage; curren
 }
 
 // ─── OverviewTab ──────────────────────────────────────────────────────────────
-function OverviewTab({ node, status, onSelectChild, parentAgent }: { node: AgentNode; status: NodeStatus; onSelectChild: (id: string) => void; parentAgent?: ParentAgentReference | null }) {
+function OverviewTab({ node, status, onSelectChild, parentAgent, childAgents, relationsUnavailable }: { childAgents: ChildAgentReference[]; relationsUnavailable?: boolean; node: AgentNode; status: NodeStatus; onSelectChild: (id: string) => void; parentAgent?: ParentAgentReference | null }) {
     const overviewCtx = React.useContext(TraceCtx);
     const { locale } = useLocale();
     const stats = aggregateSubtreeStats(node);
@@ -3571,58 +3604,38 @@ function OverviewTab({ node, status, onSelectChild, parentAgent }: { node: Agent
                 </div>
             </div>
 
-            <ParentAgentCard parent={parentAgent ?? null} onNavigate={overviewCtx.onSubagentNavigate} locale={locale} />
+            {node.sessionId !== 'COLLABORATION' && <ParentAgentCard parent={parentAgent ?? null} onNavigate={overviewCtx.onSubagentNavigate} locale={locale} />}
 
-            {node.children.length > 0 && (
-                <div>
-                    <SectionTitle>子 Agent ({node.children.length})</SectionTitle>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-                        {node.children.map(child => {
-                            const childStatus = getStatus(child);
-                            const pct = node.stats.durationMs && child.stats.durationMs != null
-                                ? Math.min(100, (child.stats.durationMs / node.stats.durationMs) * 100) : 0;
-                            return (
-                                <div
-                                    key={child.id}
-                                    onClick={() => onSelectChild(child.id)}
-                                    tabIndex={0}
-                                    role="button"
-                                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onSelectChild(child.id); } }}
-                                    className="p-2 rounded-md border border-border bg-background-secondary hover:bg-background-tertiary cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                >
-                                    <div className={cn('flex items-center gap-2', pct > 0 && 'mb-1.5')}>
-                                        {childStatus !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[childStatus])} />}
-                                        <span className="flex-1 text-sm font-medium truncate">{getAgentNodeDisplayLabel(child.agentName, child.subagentType)}</span>
-                                        <span className={cn('text-xs tabular-nums shrink-0 font-mono', childStatus === 'slow' ? 'text-warning' : 'text-foreground-muted')}>{formatDuration(child.stats.durationMs)}</span>
-                                        <span className="text-xs text-foreground-muted tabular-nums shrink-0 font-mono">{exactTokens(child.stats.totalTokens)}</span>
-                                        {child.sessionId && overviewCtx.onSubagentNavigate && (
-                                            <button
-                                                type="button"
-                                                title="在独立 Trace 视图中打开此 Sub-Agent"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    overviewCtx.onSubagentNavigate?.(child.sessionId!);
-                                                }}
-                                                className="px-2 py-0.5 text-xs font-semibold tracking-wider rounded-sm border border-primary text-primary bg-primary/10 hover:bg-primary/20 shrink-0 cursor-pointer"
-                                            >
-                                                Trace
-                                            </button>
-                                        )}
-                                    </div>
-                                    {pct > 0 && (
-                                        <div className="h-[3px] bg-background-tertiary rounded-sm overflow-hidden">
-                                            <div
-                                                className={cn('h-full rounded-sm', childStatus === 'slow' ? 'bg-warning' : 'bg-foreground-muted')}
-                                                style={{ width: `${pct}%` }}
-                                            />
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
+            <section aria-label={node.sessionId === 'COLLABORATION' ? 'Trace members' : 'Child Agents'}>
+                <h4 className="mb-2 text-xs font-semibold text-foreground-muted">
+                    {node.sessionId === 'COLLABORATION' ? (locale === 'zh' ? '集合成员' : 'Trace members') : (locale === 'zh' ? '子 Agent' : 'Child Agents')} ({childAgents.length})
+                </h4>
+                <div className="flex flex-col gap-1.5">
+                    {childAgents.map((child, index) => child.state === 'resolved' ? <AgentRelationCard
+                        key={child.taskId || child.nodeId}
+                        agentName={child.agentName}
+                        subagentType={child.subagentType}
+                        stats={child.stats}
+                        reported={child.reported}
+                        locale={locale}
+                        durationBasisMs={node.stats.durationMs}
+                        onNavigate={child.taskId && overviewCtx.onSubagentNavigate
+                            ? () => overviewCtx.onSubagentNavigate?.(child.taskId) : undefined}
+                        onSelect={child.nodeId ? () => onSelectChild(child.nodeId!) : undefined}
+                        label={child.taskId && overviewCtx.onSubagentNavigate
+                            ? locale === 'zh' ? '打开子 Agent 的 Trace' : 'Open child Agent Trace'
+                            : locale === 'zh' ? '选择子 Agent' : 'Select child Agent'}
+                    /> : <div key={index} role="status" className="rounded-md border border-border bg-background-secondary p-2 text-sm text-foreground-muted">
+                        {child.state === 'pending' ? (locale === 'zh' ? '等待子 Trace' : 'Waiting for child Trace')
+                            : child.state === 'ambiguous' ? (locale === 'zh' ? '子 Agent 关系存在冲突' : 'Conflicting child Agent relationships')
+                            : (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')}
+                    </div>)}
+                    {!childAgents.length && <p className="text-sm text-foreground-muted">
+                        {relationsUnavailable ? (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')
+                            : (locale === 'zh' ? '无子 Trace' : 'No child Trace')}
+                    </p>}
                 </div>
-            )}
+            </section>
 
             {/* TopN quick navigation panel — shown only for root agent or when tree context has data */}
             <TopNPanel />
@@ -3825,7 +3838,7 @@ function TimelineTree({ events, onSelectChild, node, interactions }: { events: A
                 return (
                     <div key={tNode.index}>
                         <TimelineEventRow event={tNode.event} hasChildren={hasChildren} isExpanded={isExpanded}
-                            onToggle={() => setExpandedIdx(s => { const n = new Set(s); n.has(tNode.index) ? n.delete(tNode.index) : n.add(tNode.index); return n; })}
+                            onToggle={() => setExpandedIdx(s => { const n = new Set(s); if (n.has(tNode.index)) { n.delete(tNode.index); } else { n.add(tNode.index); } return n; })}
                             onSelectChild={onSelectChild} indent={0} isLast={ti === tree.length - 1 && (!hasChildren || !isExpanded)} showVerticalLine={ti !== tree.length - 1 || (hasChildren && isExpanded)} node={node} interactions={interactions} />
                         {hasChildren && isExpanded && (
                             <div style={{ borderLeft: '1px solid var(--border)', marginLeft: 18 }}>

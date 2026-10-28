@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { readConfig, saveExecutionRecord, findBestMatchConfig, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
 import { analyzeFailures, InvokedSkill, judgeAnswer, normalizeInteractions } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
@@ -108,7 +124,7 @@ export async function POST(request: Request) {
     const cfg = findBestMatchConfig(configs, query, 'outcome');
     
     if (!cfg) {
-        console.warn(`[Rejudge] No matching evaluation configuration found for query: ${query}`);
+        console.warn(`[Rejudge] No matching evaluation configuration found (queryLength=${query.length})`);
         finish(actionUser, taskId, runId);
         return NextResponse.json({ 
             error: 'No matching evaluation configuration found for this query. Please ensure a valid configuration exists before re-judging.' 
@@ -139,7 +155,6 @@ export async function POST(request: Request) {
     const score = typeof judgment?.score === 'number' ? judgment.score : 0;
     
     console.log(`[Rejudge] Judgment result - score: ${score}, is_correct: ${judgment?.is_correct}, reason length: ${judgment?.reason?.length || 0}`);
-    console.log(`[Rejudge] Judgment reason preview: ${judgment?.reason?.substring(0, 200) || 'none'}...`);
     
     if (score === 0 && (judgment.reason?.includes('failed') || judgment.reason?.includes('disabled') || judgment.reason?.includes('禁用'))) {
           finish(actionUser, taskId, runId);
