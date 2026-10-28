@@ -124,9 +124,9 @@ node "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/xgovernor.cjs" 
 
 普通实验会等待本批 Trace 生成和重试完成，再评估成功的 Case；普通评估器继续使用共享的 4 条结果行并发。Benchmark 的执行与评测分别调度，执行结束即可释放执行名额，后续 Case 可继续运行；评测容量由管理员设置。评测服务默认会在 Agent 执行期间提前准备镜像，空间不足时仍可能等待镜像或镜像空间；镜像仓库连接临时中断时会等待重试。页面会区分等待配额、等待镜像、等待镜像空间与评测中。执行中或尚未完成评测的 Benchmark Case 数达到平台上限时，暂停启动新的 Case；已有任务继续运行，腾出名额后恢复。
 
-Benchmark 官方评测并发独立于 Agent 执行并发，默认是 1。管理员可沿用原启动命令中的 `--evaluator-env EVALUATOR_MAX_CONCURRENCY=4` 将本次启动容量设为 4，无需修改命令格式或创建 YAML；启动日志与 `/health` 会显示生效值。已有 YAML 配置会被该显式参数覆盖，但文件本身不改写。镜像池和预取开关也可通过显式启动参数设置，详见[评测服务部署](benchmarks/deploy-services.md#5-安装-evaluator)。
+Benchmark 官方评测并发独立于 Agent 执行并发，默认是 1。管理员可沿用原启动命令中的 `--evaluator-env EVALUATOR_MAX_CONCURRENCY=4` 将本次启动容量设为 4，无需修改命令格式或创建 YAML；启动日志与 `/health` 会显示生效值。已有 YAML 配置会被该显式参数覆盖，但文件本身不改写。镜像池和预取开关也可通过显式启动参数设置，详见[评测服务部署](./benchmarks/deploy-services.md#5-安装-evaluator)。
 
-评测服务启动成功后会自动清理已登记、不再被当前版本需要的旧 Runtime 镜像，启动输出只显示检查和清理摘要，异常会显示原因；管理员也可在评测机项目目录执行 `bash scripts/evaluator.sh images purge`，在线清理空闲 Case 镜像和旧 Runtime，不停止正在运行的任务。加 `--dry-run` 可先预览，手动命令保留完整结果；当前版本需要、被容器引用或归属不明确的镜像会保留，详见[镜像清理](benchmarks/deploy-services.md#11-立即停止与镜像清理)。
+评测服务启动成功后会自动清理已登记、不再被当前版本需要的旧 Runtime 镜像，启动输出只显示检查和清理摘要，异常会显示原因；管理员也可在评测机项目目录执行 `bash scripts/evaluator.sh images purge`，在线清理空闲 Case 镜像和旧 Runtime，不停止正在运行的任务。加 `--dry-run` 可先预览，手动命令保留完整结果；当前版本需要、被容器引用或归属不明确的镜像会保留，详见[镜像清理](./benchmarks/deploy-services.md#11-立即停止与镜像清理)。
 
 每个 Case 的 Agent 执行上限默认是 10 分钟，可在实验向导中配置为 30～3600 秒；达到上限仍未结束时，本次 Trace 生成按超时失败处理。该上限只约束 Agent 运行，不改变后续评估器各自的超时与重试规则。
 
@@ -244,9 +244,9 @@ Case 详情完整展示本次运行的所有提交物与评测证据：配置命
 
 进度弹窗显示总耗时和当前流程最近上报时间；只有存在可靠的阶段开始时间才显示阶段耗时。执行中连续 5 分钟没有新上报时提示“进度更新延迟”，尚未首次上报时从该流程启动时间计时，正常排队不触发此提示。阶段上报不等于心跳，延迟不代表任务失败，最终失败或超时以服务端状态为准。页面轮询失败时显示“状态刷新失败”，保留上次状态并继续尝试刷新。
 
-归一化评分点直接按 `label/value/total/format` 展示，不从证据内容推断业务指标。重试 Case 会重新执行完整 Agent 与评测链路；单独重评 Benchmark Evaluator 时复用该 Case 最新有效提交物。Agent 执行和 Evaluator 使用各自冻结的超时。需要部署独立 Evaluator Controller 时，参见 [Benchmark 服务安装指南](benchmarks/deploy-services.md)。
+归一化评分点直接按 `label/value/total/format` 展示，不从证据内容推断业务指标。重试 Case 会重新执行完整 Agent 与评测链路；单独重评 Benchmark Evaluator 时复用该 Case 最新有效提交物。Agent 执行和 Evaluator 使用各自冻结的超时。需要部署独立 Evaluator Controller 时，参见 [Benchmark 服务安装指南](./benchmarks/deploy-services.md)。
 
-ZSoft 已生成 PoC，但评测镜像安装 Python 依赖失败时，请管理员按 [ZSoft 部署指南](benchmarks/deploy-zsoft.md) 检查包源并更新评测服务。修复后点击“Benchmark 重评”即可复用现有 PoC。
+ZSoft 已生成 PoC，但评测镜像安装 Python 依赖失败时，请管理员按 [ZSoft 部署指南](./benchmarks/deploy-zsoft.md) 检查包源并更新评测服务。修复后点击“Benchmark 重评”即可复用现有 PoC。
 
 若提示“ZSoft 提交物描述与当前任务不匹配”，请管理员检查平台与评测服务的版本及提交物交接配置；若提示提交物大小或 SHA-256 不一致，则检查文件下载和存储完整性。修复后可用“Benchmark 重评”复用原 PoC，这类错误不代表 PoC 已被正式判定无效。
 
@@ -328,7 +328,7 @@ Benchmark 实验的 Case 列表按实际执行阶段显示进度：尚未轮到�
 
 **评估超时** 为每条 Case、每个评估器的单次尝试上限，具体作用范围见评估器行内说明，允许 30～3600 秒整数；**重试次数** 为失败后额外尝试次数，允许 0～3 次整数。600 秒、2 次表示最多尝试 3 次，每次重新获得 600 秒。成功评分（包括低分）不会重试；取消、鉴权及不可恢复配置错误也不会自动重试。输入无效时会提示并阻止开始实验。手工重评继续累计实际执行次数，重置为待执行状态本身不增加次数；联网核实的单次搜索失败可降级，但整轮评估超时或取消仍会终止该次尝试。
 
-单独配置区域包含全部预置 LLM 和自定义 LLM 评估器，包括带 Skills 的自定义项。任务完成度、轨迹质量和 RAS 的配置只作用于评分阶段；带 Skills 自定义项只限制 OpenCode 评估执行时间，不含排队、准备和服务启动。代码和 Benchmark 官方评估器显示不支持配置的原因，混选时仍保留提示，详见[评估器运行配置范围](evaluators.md#实验中的超时与重试)。Agent 执行上限与这里的评估超时分别配置。
+单独配置区域包含全部预置 LLM 和自定义 LLM 评估器，包括带 Skills 的自定义项。任务完成度、轨迹质量和 RAS 的配置只作用于评分阶段；带 Skills 自定义项只限制 OpenCode 评估执行时间，不含排队、准备和服务启动。代码和 Benchmark 官方评估器显示不支持配置的原因，混选时仍保留提示，详见[评估器运行配置范围](./evaluators.md#实验中的超时与重试)。Agent 执行上限与这里的评估超时分别配置。
 
 <p align="center">
   <img src="../../../images/agent/evaluation/eval_experiment_evaluator_skills_settings.png" alt="带 Skills 的自定义评估器使用统一配置，超时 600 秒、重试 2 次，行内可单独修改并恢复统一配置" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
@@ -476,12 +476,12 @@ Trace 评测详情把输入、输出和评分依据放在同一页，适合核�
 
 这是逻辑删除：源数据集、Skill 版本、共享 Trace、日志和缓存镜像保留。被删除的 Case 不计入本实验成绩；删除最后一个 Case 后，实验也会自动删除，页面返回实验列表。只评测已有 Trace 时，不会终止产生该 Trace 的原业务进程。
 
-长期不用 Benchmark 评测服务时，可在评测机停止服务并清理受管镜像，见[部署指南](benchmarks/deploy-services.md#11-立即停止与镜像清理)。这与删除平台实验是两个独立操作。
+长期不用 Benchmark 评测服务时，可在评测机停止服务并清理受管镜像，见[部署指南](./benchmarks/deploy-services.md#11-立即停止与镜像清理)。这与删除平台实验是两个独立操作。
 
 ## 后续阅读
 
-- 准备和维护 Case：[评测数据集](datasets.md)
-- 查看评估器前置条件：[评估器](evaluators.md)
+- 准备和维护 Case：[评测数据集](./datasets.md)
+- 查看评估器前置条件：[评估器](./evaluators.md)
 - 返回总览：[评估与实验](../../explanation/evaluation/overview.md)
 
 普通数据集及 Skill 生成 Trace 的入库等待独立限制为 60 秒。`TRACE_INGEST_TIMEOUT` 保留本次 Trace ID，停止自动执行重试；修复采集或上传后再选择恢复或手动重新执行，避免因上传延迟反复调用 Agent。Skill 结果页将此阶段显示为“等待 Trace 入库”。

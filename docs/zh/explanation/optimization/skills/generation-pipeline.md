@@ -10,7 +10,7 @@ changefreq: monthly
 > 适用版本：平台内置「Skill 生成」特性（`skill-generator-agent`，见 `src/lib/skill-generator-opencode-bridge.ts:47`）
 > 撰写日期：2026-06-27
 > 关联设计：内置 skill `skills/skill-generator/SKILL.md`。
-> 配套文档：[Skill 优化](optimization-loop.md)（本特性的下游——生成出来的 skill 之后由优化链路迭代）。
+> 配套文档：[Skill 优化](./optimization-loop.md)（本特性的下游——生成出来的 skill 之后由优化链路迭代）。
 
 ---
 
@@ -27,7 +27,7 @@ changefreq: monthly
 
 **这篇写给谁**：想搞懂这条流水线**怎么实现**的工程师。只想**用它生成 skill** 的话，跳到 [§五 使用者视角](#五使用者视角一次生成长什么样)。
 
-**先认识几个贯穿全文的词**（前几个与 [Skill 优化文档](optimization-loop.md) 共用，那里有更全的术语表）：
+**先认识几个贯穿全文的词**（前几个与 [Skill 优化文档](./optimization-loop.md) 共用，那里有更全的术语表）：
 
 | 概念 | 一句话 |
 | --- | --- |
@@ -36,7 +36,7 @@ changefreq: monthly
 | **workspace（cwd）** | 每个会话一个**隔离沙箱**目录，agent 只能在里面读写、读不到仓库源码（这是 §1.2 要把资源挂进来的根本原因）。 |
 | **VFS / `vfs_patch` / SSE** | VFS=工作目录文件快照（路径→内容）；后端扫出来后用 `vfs_patch` 这个 **SSE**（服务端→浏览器单向流式）事件推给前端渲染。 |
 | **Agent Skill** | 给 AI agent 动态加载的「指令目录」（遵循 agentskills.io 标准）：一个 `SKILL.md` + 可选 `scripts/` `references/`。**本特性生成的产物就是这种目录**。 |
-| **渐进式加载 (Progressive Disclosure)** | Agent Skill 的核心机制：agent 先只读 `name`+`description`(~100 tokens) 决定要不要激活；激活后才读 SKILL.md 主体(<500 行)；再按需懒加载 scripts/references。**生成出来的 skill 也被要求遵守这套结构**，好让它将来被加载时省 token。 |
+| **渐进式加载 (Progressive Disclosure)** | Agent Skill 的核心机制：agent 先只读 `name`+`description`(~100 tokens) 决定要不要激活；激活后才读 SKILL.md 主体（少于 500 行）；再按需懒加载 scripts/references。**生成出来的 skill 也被要求遵守这套结构**，好让它将来被加载时省 token。 |
 
 **这篇在整条链路的位置**（生成是最左端，产物向右流入评估、优化）：
 
@@ -164,7 +164,7 @@ Step 5 · 验证输出
 
 ### 4.1 生成时完全不碰数据集
 
-生成链路**不读写 `agent_datasets`**。所以「生成即带评测集 / 把测试作者前移到生成」是空愿景：相关的 `skill-gen-draft` 源是占位、未接线。现实是**数据集多由用户事后手建**，行为级评测要等 skill 进入下游优化/评估链路（见 [Skill 优化文档](optimization-loop.md) 的行为门，它依赖该 skill 的评测集）才发生。真正的关键触发点是「dataset-edit」这个 seam，而不是生成时刻。
+生成链路**不读写 `agent_datasets`**。所以「生成即带评测集 / 把测试作者前移到生成」是空愿景：相关的 `skill-gen-draft` 源是占位、未接线。现实是**数据集多由用户事后手建**，行为级评测要等 skill 进入下游优化/评估链路（见 [Skill 优化文档](./optimization-loop.md) 的行为门，它依赖该 skill 的评测集）才发生。真正的关键触发点是「dataset-edit」这个 seam，而不是生成时刻。
 
 ### 4.2 演示（mock）模式 vs 真生成
 

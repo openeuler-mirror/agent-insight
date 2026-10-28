@@ -1,6 +1,6 @@
 # SWE-bench 部署指南
 
-本指南与 [ZSoft 部署指南](deploy-zsoft.md) 同级，说明 SWE-bench 的数据、执行工作区、镜像配置和验收。平台、执行客户端和 Evaluator 的安装、互访地址及共享镜像池见 [Benchmark 通用服务部署指南](deploy-services.md)。
+本指南与 [ZSoft 部署指南](./deploy-zsoft.md) 同级，说明 SWE-bench 的数据、执行工作区、镜像配置和验收。平台、执行客户端和 Evaluator 的安装、互访地址及共享镜像池见 [Benchmark 通用服务部署指南](./deploy-services.md)。
 
 ## 1. 部署前提
 
@@ -76,7 +76,7 @@ xGovernor、Pi/E2B 和 Trace 代理的部署属于 Runtime 接入，不属于 SW
 
 ### 原生 Pi/xiaoO 的 Case 镜像
 
-客户端安装与更新见 [通用部署指南 7.3](deploy-services.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。xGovernor 在实验第二步点击下一步时按所选 Agent/执行方式检查并自动准备，不在链路采集器安装时编译。模型凭据、Docker 权限及系统编译依赖需要人工处理时，页面底部给出说明；修复后再次点击下一步。该主机级准备不提前下载全部 Case 镜像，镜像仍在各 Case 执行准备阶段按需获取。
+客户端安装与更新见 [通用部署指南 7.3](./deploy-services.md#73-原生-pixiaoo-的-swe-benchxgovernor-本地-docker)。xGovernor 在实验第二步点击下一步时按所选 Agent/执行方式检查并自动准备，不在链路采集器安装时编译。模型凭据、Docker 权限及系统编译依赖需要人工处理时，页面底部给出说明；修复后再次点击下一步。该主机级准备不提前下载全部 Case 镜像，镜像仍在各 Case 执行准备阶段按需获取。
 
 以下为执行机 `executor.local.yaml` 中的可选覆盖，配置路径同本节前文；不填写时使用默认值：
 
@@ -102,9 +102,9 @@ benchmarks:
 | `proxyPrefix` | 配置镜像代理前缀，默认不使用代理 |
 | `allowNonOfficial` | 默认关闭；Epoch 仅用于显式许可的 ARM64 冒烟，不能替代正式结果 |
 
-执行端访问私有 SWR 时，通过客户端运行账号及对应 Docker daemon 的现有认证配置准备，不在任务或 YAML 中填写密钥。执行端使用 Docker 本地缓存；[镜像池与预取](deploy-services.md#53-可选跨-benchmark-共享镜像池) 由 Evaluator 管理。
+执行端访问私有 SWR 时，通过客户端运行账号及对应 Docker daemon 的现有认证配置准备，不在任务或 YAML 中填写密钥。执行端使用 Docker 本地缓存；[镜像池与预取](./deploy-services.md#53-可选跨-benchmark-共享镜像池) 由 Evaluator 管理。
 
-执行与评测使用独立容器，分别选择镜像，不强制两端 digest、image ID 或架构相同，也不保证环境内容完全一致。执行端直接使用镜像内源码，不 reset/clean；记录本次镜像身份与来源，官方安装提交与 Patch 基线处理见 [工作区、提交与诊断](develop-benchmark.md#工作区提交与诊断)。
+执行与评测使用独立容器，分别选择镜像，不强制两端 digest、image ID 或架构相同，也不保证环境内容完全一致。执行端直接使用镜像内源码，不 reset/clean；记录本次镜像身份与来源，官方安装提交与 Patch 基线处理见 [工作区、提交与诊断](./develop-benchmark.md#工作区提交与诊断)。
 
 ## 4. 评测端准备
 
@@ -127,7 +127,7 @@ benchmarks:
 
 `images` 的字段及拉取顺序同上方 [Case 镜像配置](#原生-pixiaoo-的-case-镜像)，此处独立控制评测端。正式评测前核对所选来源、架构与接入包支持边界。
 
-修改后按通用指南重启 Evaluator。公共镜像池按需拉取、缓存和回收 Case 镜像；预取与容量配置见 [共享镜像池](deploy-services.md#53-可选跨-benchmark-共享镜像池)。首次运行还可能等待 Evaluator Runtime 准备，离线环境应提前准备匹配版本的 Runtime 和 Case 镜像。
+修改后按通用指南重启 Evaluator。公共镜像池按需拉取、缓存和回收 Case 镜像；预取与容量配置见 [共享镜像池](./deploy-services.md#53-可选跨-benchmark-共享镜像池)。首次运行还可能等待 Evaluator Runtime 准备，离线环境应提前准备匹配版本的 Runtime 和 Case 镜像。
 
 ## 5. 部署验收
 
@@ -149,4 +149,4 @@ bash scripts/evaluator-doctor.sh --smoke swe-bench
 - MCTS 未就绪：核对执行机 Python、`datasets`、启动脚本及 Trace 连接；预检通过仍需实际 Case 验收。
 - 评测等待或失败：检查镜像来源、架构、网络、磁盘和 `/health` 中的准备状态。
 - 已有 `model.patch`，但评测报 `Evaluator Entrypoint` / `Cannot find module './runtime-image.cjs'`：这是旧 SWE-bench Runtime 镜像漏包，不是 Agent 权限或断网导致。更新代码和生成的 Catalog 后，重新运行原有 `bash scripts/evaluator.sh start` 命令及部署参数；新摘要会触发准备完整依赖的 Runtime。远程预构建镜像部署须先发布同摘要的新制品。随后在 Case 页面点击“Benchmark 重评”，复用已有 Patch；无需重跑 Agent、重新安装客户端或放开网络。
-- 更新执行适配时重新安装客户端；更新平台或 Evaluator 按 [更新与回滚](deploy-services.md#9-更新与回滚) 操作，保留历史实验快照。
+- 更新执行适配时重新安装客户端；更新平台或 Evaluator 按 [更新与回滚](./deploy-services.md#9-更新与回滚) 操作，保留历史实验快照。

@@ -164,10 +164,10 @@ TRAE IDE Hook Event
 
 ## 服务端对接
 
-TRAE Collector 上报到 `/api/ingest/upload`，服务端通过 `traeAdapter` ([`src/lib/ingest/adapters/trae.ts`](../../../src/lib/ingest/adapters/trae.ts:1)) 处理：
+TRAE Collector 上报到 `/api/ingest/upload`，服务端通过 `traeAdapter` ([`src/lib/ingest/adapters/trae.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/adapters/trae.ts#L1)) 处理：
 
 - **Framework ID**: `trae`，别名 `trae-cn`、`trae-ide`、`trae-ai`
-- **Skills 提取**: `extractSkillsWithVersionsFromTraeSession`（定义在 [`src/lib/shared/interaction-utils.ts`](../../../src/lib/shared/interaction-utils.ts:1)），从 TRAE 特有的 interaction 格式中识别 tool call 并提取 Skill 名称与版本
+- **Skills 提取**: `extractSkillsWithVersionsFromTraeSession`（定义在 [`src/lib/shared/interaction-utils.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/shared/interaction-utils.ts#L1)），从 TRAE 特有的 interaction 格式中识别 tool call 并提取 Skill 名称与版本
 - **Subagent Tree**: 支持子 Agent 调用树
 - **Session Merge**: 使用 `snapshot-replace` 策略（每次上传全量替换 session 数据）
 

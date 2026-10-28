@@ -126,7 +126,7 @@ changefreq: monthly
 ## 怎么继续读
 
 - 想先跑通第一次接入： [5 分钟上手](../../tutorial/platform/01-quick-start.md)
-- 想看平台首页与模块结构： [Agent Insight](product-overview.md)
+- 想看平台首页与模块结构： [Agent Insight](./product-overview.md)
 - 想理解真实执行是怎么记录的： [运行观测](../observability/overview.md)
 - 想建立离线质量回归： [评估与实验](../evaluation/overview.md)
 - 想管理和优化能力资产： [Skill 工作台](../optimization/skills/workbench-overview.md)

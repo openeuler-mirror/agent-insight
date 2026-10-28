@@ -1,6 +1,6 @@
 # ZSoft 部署指南
 
-本指南与 [SWE-bench 部署指南](deploy-swe-bench.md) 同级，说明 ZSoft 的数据、执行任务目录、评测资产和验收。平台、执行客户端与 Evaluator 的公共安装见 [Benchmark 通用服务部署指南](deploy-services.md)。资产构建与发布由维护者按 [ZSoft 评测资产发布指南](release-zsoft-assets.md) 完成。
+本指南与 [SWE-bench 部署指南](./deploy-swe-bench.md) 同级，说明 ZSoft 的数据、执行任务目录、评测资产和验收。平台、执行客户端与 Evaluator 的公共安装见 [Benchmark 通用服务部署指南](./deploy-services.md)。资产构建与发布由维护者按 [ZSoft 评测资产发布指南](./release-zsoft-assets.md) 完成。
 
 ## 1. 部署前提
 
@@ -61,7 +61,7 @@ ZSOFT_TASKS_DIR=/srv/zsoft/tasks
 
 可以沿用已有上游目录；平台不需要访问执行机路径。内核题与 userspace 共用目录，任务 ID 由平台自动下发。实验向导只选择数据集和执行客户端，无需填写任务目录或额外导入公开资料包。
 
-没有 `public/repo-vul/` 的题目还需保留原生 `<task-id>/private/source-manifest.json` 和 `<tasks-dir>/../source-locks/<source-id>.json`。源码来源须锁定到完整提交或带 SHA-256 的归档；MCTS 在沙箱中下载，需预留网络和执行预算。隐藏测试、参考 PoC、修复补丁与 Judge 配置不交给 Agent。公开工作区与源码裁剪契约见 [接入开发规范](develop-benchmark.md#zsoft-自动生成-poc-的执行契约)。
+没有 `public/repo-vul/` 的题目还需保留原生 `<task-id>/private/source-manifest.json` 和 `<tasks-dir>/../source-locks/<source-id>.json`。源码来源须锁定到完整提交或带 SHA-256 的归档；MCTS 在沙箱中下载，需预留网络和执行预算。隐藏测试、参考 PoC、修复补丁与 Judge 配置不交给 Agent。公开工作区与源码裁剪契约见 [接入开发规范](./develop-benchmark.md#zsoft-自动生成-poc-的执行契约)。
 
 客户端须上报 `zsoft-tasks-workspace/v3` 和 `single-file/v1`；MCTS 还需 `mcts-zsoft-export/v1`。ZSoft 不要求 SWE 专属的 `datasets` 和 `run_union.sh`；MCTS 插件需支持当前源码下载与 `bundle_bytes` 接口，未就绪时执行目标不可用。升级后重新安装客户端，不能只更新平台代码。
 
@@ -102,7 +102,7 @@ Case 镜像由公共镜像池按固定 digest 拉取、缓存和回收，Compose
 node scripts/benchmark/build-evaluator-runtime.cjs zsoft-l1
 ```
 
-不传 `--push`、`--image-prefix` 时只准备本地 Runtime；跨机可用 `docker save/load` 搬运匹配镜像。构建和发布流程的区别见 [资产发布指南](release-zsoft-assets.md)。
+不传 `--push`、`--image-prefix` 时只准备本地 Runtime；跨机可用 `docker save/load` 搬运匹配镜像。构建和发布流程的区别见 [资产发布指南](./release-zsoft-assets.md)。
 
 ### 内核加速与资源
 
@@ -124,7 +124,7 @@ bash scripts/evaluator-doctor.sh
 3. 检查编译失败、超时、取消的终态和错误详情，以及容器、网络和临时工作区清理。
 4. 重启服务或清理受管镜像后重评已有提交，确认固定版本可恢复且历史实验快照未变。
 
-原生对照验证工具的前提与操作见 [ZSoft 本机验证](develop-benchmark.md#zsoft-接入前的本机验证)。只有镜像拉取或摘要校验通过，不能判定完整链路验收成功。
+原生对照验证工具的前提与操作见 [ZSoft 本机验证](./develop-benchmark.md#zsoft-接入前的本机验证)。只有镜像拉取或摘要校验通过，不能判定完整链路验收成功。
 
 ## 6. 排查与更新
 
@@ -143,4 +143,4 @@ bash scripts/evaluator-doctor.sh
 
 旧摘要排序问题通过新解析缓存版本修正；正确摘要不受影响，无需因此重发题目镜像。正式错误与可重试下载、空间等待分开处理，不应持续等待不可恢复的元数据错误。
 
-更新 Runtime Dockerfile 或校验实现后，由维护者重新生成 Catalog，部署匹配平台和 Controller。已有 PoC 的 Case 可用“Benchmark 重评”复用提交。执行端更新需重新安装客户端；通用回滚见 [更新与回滚](deploy-services.md#9-更新与回滚)。
+更新 Runtime Dockerfile 或校验实现后，由维护者重新生成 Catalog，部署匹配平台和 Controller。已有 PoC 的 Case 可用“Benchmark 重评”复用提交。执行端更新需重新安装客户端；通用回滚见 [更新与回滚](./deploy-services.md#9-更新与回滚)。

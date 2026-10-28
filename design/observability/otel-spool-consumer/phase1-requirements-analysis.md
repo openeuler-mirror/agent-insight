@@ -8,7 +8,7 @@
 > 关联设计：
 > - [`design/observability/framework-adapter-registry/`](../framework-adapter-registry/) —— **不合并**。关注点正交：那条线管「数据怎么转换」(纯函数 transformation 层)，本设计管「处理在何时何地跑」(scheduling/execution 层)。仅在「消费者聚合时复用 adapter」一处相交，详见 §5.2。
 > - [`design/observability/hermes-otel-adapter/`](../hermes-otel-adapter/) —— 并行，互不阻塞。
-> - 现有 [`ClaudeLogWatcher`](../../../docs/src/lib/ingest/claude-watcher.ts) —— **共存**（本轮决策），本设计只负责 OTel spool 一路；两路重复处理同一 Claude 会话的风险仅记录为 NFR/风险，不在本轮消除。
+> - 现有 [`ClaudeLogWatcher`（历史源码）](https://gitcode.com/openeuler/agent-insight/blob/6c280e3aea380ac6a2f0c1226258b964b2d14c05/src/lib/ingest/claude-watcher.ts) —— **共存**（本轮决策），本设计只负责 OTel spool 一路；两路重复处理同一 Claude 会话的风险仅记录为 NFR/风险，不在本轮消除。
 
 ---
 
@@ -16,9 +16,9 @@
 
 **这是什么** —— 把 OTel 摄取的「聚合 + 落库 + 评估」从 HTTP 请求里搬出来，改由一个**进程内的后台 loop** 异步消费 spool。HTTP 端点退化成薄壳：**收下 → 写 spool → 立即返回 200**。
 
-**为什么要做** —— 现在 [traces 端点](../../../docs/src/app/api/ingest/otel/v1/traces/route.ts) 对**每个 span** 同步做「读 session → 全量 JSON.parse/stringify 回写 → `saveExecutionRecord`」，而 `saveExecutionRecord` 内部还会**同步 `await judgeAnswer`（一次 LLM 调用）**。一个几百 span 的会话 = 上千次 DB 往返 + 可能上百次 LLM 调用，全卡在 exporter 那个 POST 里 → 超时重试 → 重复上报，雪上加霜。[logs 端点](../../../docs/src/app/api/ingest/otel/v1/logs/route.ts) 虽已落 spool，但聚合/落库/评估仍在请求内同步跑。
+**为什么要做** —— 现在 [traces 端点](../../../src/app/api/ingest/otel/v1/traces/route.ts) 对**每个 span** 同步做「读 session → 全量 JSON.parse/stringify 回写 → `saveExecutionRecord`」，而 `saveExecutionRecord` 内部还会**同步 `await judgeAnswer`（一次 LLM 调用）**。一个几百 span 的会话 = 上千次 DB 往返 + 可能上百次 LLM 调用，全卡在 exporter 那个 POST 里 → 超时重试 → 重复上报，雪上加霜。[logs 端点](../../../src/app/api/ingest/otel/v1/logs/route.ts) 虽已落 spool，但聚合/落库/评估仍在请求内同步跑。
 
-**不重新造轮子** —— 项目已有一套**完全可复用**的模式：[`ClaudeLogWatcher`](../../../docs/src/lib/ingest/claude-watcher.ts) 的**双 debounce**（短 debounce 快落库 `skip_evaluation:true` 供 UI 实时看；长 debounce 空闲后再 `force_judgment` 跑 LLM）。本设计把同一套模式换个数据源——从「监听 `~/.claude/projects` 文件」改成「消费 OTel 端点写的 spool JSONL」。启动落点也已现成：[`instrumentation-node.ts`](../../../docs/src/instrumentation-node.ts) 的 `setupNodeRuntime()` 钩子（Next.js 官方启动机制，单进程内最地道，**不动 start.sh**）。
+**不重新造轮子** —— 项目已有一套**完全可复用**的模式：[`ClaudeLogWatcher`（历史源码）](https://gitcode.com/openeuler/agent-insight/blob/6c280e3aea380ac6a2f0c1226258b964b2d14c05/src/lib/ingest/claude-watcher.ts) 的**双 debounce**（短 debounce 快落库 `skip_evaluation:true` 供 UI 实时看；长 debounce 空闲后再 `force_judgment` 跑 LLM）。本设计把同一套模式换个数据源——从「监听 `~/.claude/projects` 文件」改成「消费 OTel 端点写的 spool JSONL」。启动落点也已现成：[`instrumentation-node.ts`](../../../src/instrumentation-node.ts) 的 `setupNodeRuntime()` 钩子（Next.js 官方启动机制，单进程内最地道，**不动 start.sh**）。
 
 **这一轮做到哪**
 1. 两个 OTel 端点（logs + traces）统一改为「落 spool → 立即返回」。

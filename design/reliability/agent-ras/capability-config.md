@@ -15,7 +15,7 @@ Insight「可靠性能力」目录与平台配置表单改为消费 `agent_ras` 
 - 在「故障模式」页内配置：总开关、detector 启停/阈值、recovery 开关。
 - 每平台一份配置；`syncEnabled` 控制是否向客户端下发生效。
 - OpenCode / xiaoO 客户端自动拉取合并；openjiuwen 导出 YAML。
-- 新增域：只新增 `detectors|review|recovery/<domain>.py`（含 `presentation`）+ 改 [`agent_ras_config.default.yaml`](../../../docs/agent_ras/config/agent_ras_config.default.yaml)。
+- 新增域：只新增 `detectors|review|recovery/<domain>.py`（含 `presentation`）+ 改 [`agent_ras_config.default.yaml`](../../../agent_ras/config/agent_ras_config.default.yaml)。
 - 能力模板与 `inproc.example` 职责分离：模板无 `service.*`；example 仅占位形状。
 
 **非目标**
@@ -33,8 +33,8 @@ Insight「可靠性能力」目录与平台配置表单改为消费 `agent_ras` 
 
 | 文件 | 职责 |
 |------|------|
-| [`agent_ras/config/agent_ras_config.default.yaml`](../../../docs/agent_ras/config/agent_ras_config.default.yaml) | `enabled` / `detectors` / `recovery` 跨平台默认；**新增检测域时改此文件** |
-| [`agent_ras/config/agent_ras.inproc.example.json`](../../../docs/agent_ras/config/agent_ras.inproc.example.json) | 含 `service` 占位；加域不改 |
+| [`agent_ras/config/agent_ras_config.default.yaml`](../../../agent_ras/config/agent_ras_config.default.yaml) | `enabled` / `detectors` / `recovery` 跨平台默认；**新增检测域时改此文件** |
+| [`agent_ras/config/agent_ras.inproc.example.json`](../../../agent_ras/config/agent_ras.inproc.example.json) | 含 `service` 占位；加域不改 |
 
 ---
 
@@ -55,7 +55,7 @@ Insight「可靠性能力」目录与平台配置表单改为消费 `agent_ras` 
 - `DetectorPlugin.presentation`：父级标签、子模式（含 `runtime_keys`）、detects/recovery 文案、prompt 键或内联模板。
 - `GET /api/agent-ras/catalog`：返回 `domains` + `configSchema` + `configDefaults` + 展平 `submodes`。
 - 配置表单按 `configSchema` 动态渲染；PUT 按 catalog schema 校验（无 schema 则浅合并透传）。
-- Insight 默认值解析 `agent_ras_config.default.yaml`；`presentation` 写在各 `detectors/<id>.py`，由 [`detectors/catalog.py`](../../../docs/agent_ras/detectors/catalog.py) `build_capability_catalog` 组装（不再有独立 `agent_ras/catalog/` 包）。
+- Insight 默认值解析 `agent_ras_config.default.yaml`；`presentation` 写在各 `detectors/<id>.py`，由 [`detectors/catalog.py`](../../../agent_ras/detectors/catalog.py) `build_capability_catalog` 组装（不再有独立 `agent_ras/catalog/` 包）。
 - overrideDiff / 表单路径键为 catalog 嵌套 path（`detectors.<id>.*`、`recovery.*`、顶层 `enabled`）。旧 IF-N10 扁平键（`textLoop.*` / `toolRepeat.*`）已移除，不再做别名映射。
 - L3 skill 路径按 `skill_name` 解析：`detectors/skills/<name>/SKILL.md` 与 `review/skills/<name>/SKILL.md`。未知 skill 走通用 `{abnormal,confidence,rationale}` 解析；专用 parser 挂在对应 `DETECTOR_PLUGIN` / `REVIEW_PLUGIN.verdict_parser`。
 - Kind 展示文案只来自 catalog `kindLabels`（`rasKindLabel` 无覆盖则显示 kind id）。
@@ -125,14 +125,14 @@ type RasCapabilityConfigEnvelope = {
 
 | 职责 | 文件 |
 |------|------|
-| catalog 组装 | [`agent_ras/detectors/catalog.py`](../../../docs/agent_ras/detectors/catalog.py) |
-| 校验 / 默认 | [`src/lib/ingest/ras/capability-config.ts`](../../../docs/src/lib/ingest/ras/capability-config.ts) |
-| 持久化 | [`src/lib/ingest/ras/capability-config-store.ts`](../../../docs/src/lib/ingest/ras/capability-config-store.ts) |
-| 旧扁平键别名 | [`src/lib/ingest/ras/insight-legacy-flat-aliases.ts`](../../../docs/src/lib/ingest/ras/insight-legacy-flat-aliases.ts) |
-| catalog API | [`src/app/api/agent-ras/catalog/route.ts`](../../../docs/src/app/api/agent-ras/catalog/route.ts) |
-| 配置读写 API | [`src/app/api/agent-ras/config/route.ts`](../../../docs/src/app/api/agent-ras/config/route.ts) |
-| OpenCode 合并 | [`agent_ras/platform_adapter/opencode/config_sync.js`](../../../docs/agent_ras/platform_adapter/opencode/config_sync.js) |
-| xiaoO 合并 | [`agent_ras/platform_adapter/xiaoo/config_sync.py`](../../../docs/agent_ras/platform_adapter/xiaoo/config_sync.py) |
+| catalog 组装 | [`agent_ras/detectors/catalog.py`](../../../agent_ras/detectors/catalog.py) |
+| 校验 / 默认 | [`src/lib/ingest/ras/capability-config.ts`](../../../src/lib/ingest/ras/capability-config.ts) |
+| 持久化 | [`src/lib/ingest/ras/capability-config-store.ts`](../../../src/lib/ingest/ras/capability-config-store.ts) |
+| 旧扁平键别名 | [`src/lib/ingest/ras/insight-legacy-flat-aliases.ts`（历史源码）](https://gitcode.com/openeuler/agent-insight/blob/fae88b344d3b7db0f68a2e76d9ccca5db52b7102/src/lib/ingest/ras/insight-legacy-flat-aliases.ts) |
+| catalog API | [`src/app/api/agent-ras/catalog/route.ts`](../../../src/app/api/agent-ras/catalog/route.ts) |
+| 配置读写 API | [`src/app/api/agent-ras/config/route.ts`](../../../src/app/api/agent-ras/config/route.ts) |
+| OpenCode 合并 | [`agent_ras/platform_adapter/opencode/config_sync.js`](../../../agent_ras/platform_adapter/opencode/config_sync.js) |
+| xiaoO 合并 | [`agent_ras/platform_adapter/xiaoo/config_sync.py`](../../../agent_ras/platform_adapter/xiaoo/config_sync.py) |
 
 ---
 

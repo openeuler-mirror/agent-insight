@@ -536,7 +536,7 @@ AgentDebug 主诊断后端只向诊断 Agent 提供执行元数据、turn/node/a
 普通实验与 Benchmark 实验冻结的 Agent 默认执行上限均为 600 秒。实验向导允许用户配置 30～3600 之间的整数秒数，创建时分别写入普通实验的 `executionTarget.timeoutSeconds` 或 Benchmark 的 `runConfig.timeoutSeconds`；复用实验时会回填冻结值。该值只控制执行器运行 Agent 的时间；Benchmark Evaluator/Harness 使用独立的评测超时配置。
 
 ## 跨模块流程说明
-每条后端流水线都跨越 `app`（路由）→ `lib`（引擎/存储），并经常涉及 `prompts`（LLM 模板）和 `server`（Prisma 仓库）。`lib ↔ server` 循环（见 [architecture.md](architecture.md#layering--pattern)）意味着存储辅助函数与仓库会相互调用；应将它们视为同一个持久化核心。
+每条后端流水线都跨越 `app`（路由）→ `lib`（引擎/存储），并经常涉及 `prompts`（LLM 模板）和 `server`（Prisma 仓库）。`lib ↔ server` 循环（见 [architecture.md](./architecture.md#layering--pattern)）意味着存储辅助函数与仓库会相互调用；应将它们视为同一个持久化核心。
 
 
 
@@ -557,7 +557,7 @@ flowchart LR
 ```
 
 实现入口为 `src/lib/trace-transfer.ts`（Bundle 校验、排序与 ID 重映射）和 `src/lib/trace-transfer-service.ts`（所有权、完整树查询、持久化与失败清理）。Session 的 `interactions` 随树迁移；Langfuse Session 同时迁移完整 `langfuseTraceNodes`，冲突重映射只改其中的 `subagentSessionId`，保留 OTel trace/span 父子标识。导入目标 user 始终取当前请求身份，不信任 Bundle 中的来源用户。任一节点写入或 Skill 重算失败时，服务会清理本次已创建的 Session 与 Execution，避免保留可见的半棵树。
-<!-- Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics. -->
+[//]: # (Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics.)
 
 ### Trace 数据集生成与清理
 
@@ -580,7 +580,7 @@ Trace 评测集在生成阶段仅做结构提取，不改采集/入库，不验�
 
 效果验证与生产执行分开：`prepare-v635-confirmation.py` 固定来源及算法指纹，并将文本与人工评分分离；`run-v635-confirmation.ts` 完成选样后，`audit-v635-confirmation.ts` 才读取评分。`verify-v635-source-isolation.py` 检查新旧来源及输入词项近重复。研究用签名缓存不进入产品存储，标签不进入生产选择函数。
 
-当前开发池与五个新来源的适用效果均值目标通过；独立统计确认、全平台真实 Trace、完整浏览器操作链路和生产压力验证仍有缺口。五源只与同池随机采样比较。冻结实验附件中的历史默认、旧门槛和通过字段不作为现行结论，见[最终对比报告](../../../../design/evaluation/trace-eval-dataset/eight-datasets-comparison-report.md)与[开发计划](../../../../design/evaluation/trace-eval-dataset/phase3-development-plan.md)。仓库保留指定指标与审计摘要，不包含全部原始数据及逐轮运行产物；重放历史脚本需另行准备其要求的数据与附件。
+当前开发池与五个新来源的适用效果均值目标通过；独立统计确认、全平台真实 Trace、完整浏览器操作链路和生产压力验证仍有缺口。五源只与同池随机采样比较。冻结实验附件中的历史默认、旧门槛和通过字段不作为现行结论，见[最终对比报告](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/trace-eval-dataset/eight-datasets-comparison-report.md)与[开发计划](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/trace-eval-dataset/phase3-development-plan.md)。仓库保留指定指标与审计摘要，不包含全部原始数据及逐轮运行产物；重放历史脚本需另行准备其要求的数据与附件。
 
 ## 自建评估器 Prompt + Skills
 

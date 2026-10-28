@@ -95,6 +95,6 @@ changefreq: monthly
 ## 下一步
 
 - 查看实验入口与记录：[Skill 评估与实验](../../../explanation/evaluation/skills/overview.md)
-- 验证触发边界：[触发分析](trigger-analysis.md)
-- 验证任务结果与轨迹：[用例分析](use-case-analysis.md)
+- 验证触发边界：[触发分析](./trigger-analysis.md)
+- 验证任务结果与轨迹：[用例分析](./use-case-analysis.md)
 - 修复问题并生成候选：[Skill 优化](../../optimization/skills/optimize.md)

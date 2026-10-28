@@ -388,6 +388,6 @@ A/B 测试主要用于判断两个版本的相对表现。请查看具体退步�
 ## 10. 延伸阅读
 
 - [Skill 工作台用户指南](../../../explanation/optimization/skills/workbench-overview.md)
-- [Skill 生成用户指南](generate.md)
-- [Skill 优化用户指南](optimize.md)
+- [Skill 生成用户指南](./generate.md)
+- [Skill 优化用户指南](./optimize.md)
 - [Skill 评测总览](../../../explanation/evaluation/skills/overview.md)

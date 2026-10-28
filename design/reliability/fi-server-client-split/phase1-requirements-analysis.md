@@ -8,7 +8,7 @@
 
 ## 1. 问题陈述
 
-当前故障注入（FI）在 Insight **Next 进程内** `spawn` Python collector（[`queue.ts`](../../../src/lib/fault-injection/queue.ts) → [`engine.ts`](../../../src/lib/fault-injection/engine.ts)）。这要求被测 Agent（OpenCode / xiaoO）与 Insight **同机**，与平台既定拓扑——**远程 Insight 服务 + 用户本机薄客户端**——冲突。
+当前故障注入（FI）在 Insight **Next 进程内** `spawn` Python collector（`queue.ts`（历史引用未收录：`../../../src/lib/fault-injection/queue.ts`） → [`engine.ts`](../../../src/lib/fault-injection/engine.ts)）。这要求被测 Agent（OpenCode / xiaoO）与 Insight **同机**，与平台既定拓扑——**远程 Insight 服务 + 用户本机薄客户端**——冲突。
 
 agent-ras 已证明可行路径：本机安装能力（`install-ras` / setup curl），服务端只做配置与观测。
 

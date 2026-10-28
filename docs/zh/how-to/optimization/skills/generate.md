@@ -107,4 +107,4 @@ Copilot 会持续展示思考过程、工具调用、问题确认和文件生成
 - 了解工作台整体流程：[Skill 工作台](../../../explanation/optimization/skills/workbench-overview.md)
 - 检查静态质量门禁：[Skill 评估](../../evaluation/skills/static-compliance.md)
 - 验证真实运行效果：[Skill 实验](../../../explanation/evaluation/skills/overview.md)
-- 根据问题生成候选版本：[Skill 优化](optimize.md)
+- 根据问题生成候选版本：[Skill 优化](./optimize.md)

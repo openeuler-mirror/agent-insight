@@ -9,7 +9,7 @@ changefreq: monthly
 
 > **读者**：需要理解「执行安装命令后，用户机器上发生了什么」的使用者与排障者。  
 > **范围**：环内 RAS（`agent_ras`）的**安装面**与本机落盘；不含检测器算法细节。  
-> **真源**：[`scripts/install-ras.js`](../../../../../scripts/install-ras.js)、[`src/lib/ingest/setup-package.ts`](../../../../../src/lib/ingest/setup-package.ts)、看板 [`/api/ingest/setup`](../../../../../src/app/api/ingest/setup/route.ts)。\
+> **真源**：[`scripts/install-ras.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-ras.js)、[`src/lib/ingest/setup-package.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/setup-package.ts)、看板 [`/api/ingest/setup`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/ingest/setup/route.ts)。\
 > **关系总览**：[Insight · RAS · FI](../../../explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship.md)。
 
 ---
@@ -158,7 +158,7 @@ INSTALL_OPENCODE || INSTALL_HERMES || INSTALL_OPENCLAW || INSTALL_XIAOO
 
 ## 5. `install_agent_insight_ras`（bash 内嵌函数）逐步说明
 
-实现：[`getAgentInsightRasBashInstaller()`](../../../../../src/lib/ingest/setup-package.ts)。
+实现：[`getAgentInsightRasBashInstaller()`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/setup-package.ts)。
 
 | 步 | 动作 | 细节 |
 |----|------|------|
@@ -182,7 +182,7 @@ INSTALL_OPENCODE || INSTALL_HERMES || INSTALL_OPENCLAW || INSTALL_XIAOO
 
 ## 6. `install-ras.js` 本机落盘逐步说明
 
-实现：[`scripts/install-ras.js`](../../../../../scripts/install-ras.js) → `installRas()`。
+实现：[`scripts/install-ras.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-ras.js) → `installRas()`。
 
 ```mermaid
 flowchart TD
@@ -368,7 +368,7 @@ flowchart LR
 
 这不会新增守护进程或插件；uploader 与旧 FI Worker 使用同一套身份优先级。IP 是 Trace 产生时的历史快照，变化后只影响新 Trace。
 
-详见 [architecture.md](../../../explanation/reliability/agent-ras/architecture.md)、[platform-opencode.md](platform-opencode.md)、[platform-xiaoo.md](platform-xiaoo.md)。
+详见 [architecture.md](../../../explanation/reliability/agent-ras/architecture.md)、[platform-opencode.md](./platform-opencode.md)、[platform-xiaoo.md](./platform-xiaoo.md)。
 
 ---
 
@@ -417,10 +417,10 @@ test -f ~/.config/opencode/plugins/agent-insight-ras.js && echo opencode_plugin_
 
 | 文件 | 说明 |
 |------|------|
-| [`src/lib/ingest/setup-package.ts`](../../../../../src/lib/ingest/setup-package.ts) | bash 内嵌 `install_agent_insight_ras`（三级回退） |
-| [`src/app/api/ingest/setup/bundle/route.ts`](../../../../../src/app/api/ingest/setup/bundle/route.ts) | `GET /api/ingest/setup/bundle?name=ras\|client` 白名单 tar |
-| [`src/app/api/ingest/setup/route.ts`](../../../../../src/app/api/ingest/setup/route.ts) | 安装指导脚本（含框架勾选、RAS 触发、常驻客户端服务端 bundle 优先与 npm 兜底） |
-| [`src/app/api/ingest/setup/auto/route.ts`](../../../../../src/app/api/ingest/setup/auto/route.ts) | 一键部署 auto_setup |
-| [`scripts/install-ras.js`](../../../../../scripts/install-ras.js) | 本机 RAS 安装器 |
-| [`agent_ras/platform_adapter/opencode/INSTALL.md`](../../../../../agent_ras/platform_adapter/opencode/INSTALL.md) | OpenCode 适配安装摘要 |
+| [`src/lib/ingest/setup-package.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/setup-package.ts) | bash 内嵌 `install_agent_insight_ras`（三级回退） |
+| [`src/app/api/ingest/setup/bundle/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/ingest/setup/bundle/route.ts) | `GET /api/ingest/setup/bundle?name=ras\|client` 白名单 tar |
+| [`src/app/api/ingest/setup/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/ingest/setup/route.ts) | 安装指导脚本（含框架勾选、RAS 触发、常驻客户端服务端 bundle 优先与 npm 兜底） |
+| [`src/app/api/ingest/setup/auto/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/ingest/setup/auto/route.ts) | 一键部署 auto_setup |
+| [`scripts/install-ras.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-ras.js) | 本机 RAS 安装器 |
+| [`agent_ras/platform_adapter/opencode/INSTALL.md`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/platform_adapter/opencode/INSTALL.md) | OpenCode 适配安装摘要 |
 | [01-getting-started.md](../../../tutorial/reliability/agent-ras/01-getting-started.md) | 按平台最短路径与配置项 |
