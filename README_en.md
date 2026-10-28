@@ -170,9 +170,16 @@ Start at the [documentation index](docs/README.md). Existing documentation is pr
 
 Contributions through bug reports, documentation, tests, and code are welcome.
 
-1. Open an [issue](https://gitcode.com/openJiuwen/agent-insight/issues) with the version, reproduction steps, and sanitized logs. Discuss larger feature changes before implementing them.
-2. Before contributing code, sign the [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee) and read the [community contribution guide](https://gitcode.com/openJiuwen/community/blob/main/README.md) and this repository's [AGENTS.md](AGENTS.md).
-3. Fork the repository, create a working branch, make the change, update the relevant documentation, and run `npm run test`. Submit a PR to `openJiuwen/agent-insight` describing the purpose and validation results.
+Choose the CLA and contribution guide for the community receiving your PR: **sign the openEuler CLA when contributing to openEuler, or the openJiuwen CLA when contributing to openJiuwen.**
+
+| Target community and repository | CLA signing page | Community contribution guide |
+| --- | --- | --- |
+| [openEuler/agent-insight](https://gitcode.com/openeuler/agent-insight) | [openEuler CLA](https://clasign.osinfra.cn/sign/6983225bdcbb19710248ccf0) | [openEuler contribution guide](https://www.openeuler.org/en/community/contribution/detail.html) |
+| [openJiuwen/agent-insight](https://gitcode.com/openJiuwen/agent-insight) | [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee) | [openJiuwen contribution guide](https://gitcode.com/openJiuwen/community/blob/main/README.md) |
+
+1. Open an issue in the target community's repository with the version, reproduction steps, and sanitized logs. Discuss larger feature changes before implementing them.
+2. Before contributing code, sign that community's CLA and read its contribution guide and this repository's [AGENTS.md](AGENTS.md).
+3. Fork the target community's repository, create a working branch, make the change, update the relevant documentation, and run `npm run test`. Submit a PR to the same community's repository describing the purpose and validation results.
 
 ## Open-source License
 

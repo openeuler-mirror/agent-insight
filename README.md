@@ -373,11 +373,18 @@ bash scripts/stop.sh
 
 ## 🤝 参与贡献
 
-欢迎通过问题反馈、文档改进、测试和代码提交参与项目：
+欢迎通过问题反馈、文档改进、测试和代码提交参与项目。
 
-1. 在 [Issue](https://gitcode.com/openJiuwen/agent-insight/issues) 中反馈问题，附上版本、复现步骤和已脱敏日志；较大的功能改动请先讨论方案。
-2. 提交代码前签署 [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee)，阅读[社区贡献指南](https://gitcode.com/openJiuwen/community/blob/main/README_CN.md)及仓库 [AGENTS.md](AGENTS.md)。
-3. Fork 仓库并创建工作分支，完成改动及相关文档更新，运行 `npm run test`，然后向 `openJiuwen/agent-insight` 提交 PR，说明改动目的和验证结果。
+请根据 PR 的目标社区选择对应的 CLA 和贡献指南：**向 openEuler 社区提交贡献，就签署 openEuler CLA；向 openJiuwen 社区提交贡献，就签署 openJiuwen CLA。**
+
+| 目标社区与仓库 | CLA 签署入口 | 社区贡献指南 |
+| --- | --- | --- |
+| [openEuler/agent-insight](https://gitcode.com/openeuler/agent-insight) | [openEuler CLA](https://clasign.osinfra.cn/sign/6983225bdcbb19710248ccf0) | [openEuler 贡献指南](https://www.openeuler.org/zh/community/contribution/detail.html) |
+| [openJiuwen/agent-insight](https://gitcode.com/openJiuwen/agent-insight) | [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee) | [openJiuwen 贡献指南](https://gitcode.com/openJiuwen/community/blob/main/README_CN.md) |
+
+1. 在目标社区仓库的 Issue 中反馈问题，附上版本、复现步骤和已脱敏日志；较大的功能改动请先讨论方案。
+2. 提交代码前完成对应社区的 CLA 签署，阅读该社区的贡献指南及仓库 [AGENTS.md](AGENTS.md)。
+3. Fork 目标社区仓库并创建工作分支，完成改动及相关文档更新，运行 `npm run test`，然后向同一社区仓库提交 PR，说明改动目的和验证结果。
 
 ---
 
