@@ -188,28 +188,32 @@ export default function DashboardPage() {
     }, [tab, win, user, platformFilter, agentFilter]);
 
     const refreshRef = React.useRef<() => void>(() => { });
-    refreshRef.current = () => {
-        if (!user) return;
-        apiFetch(`/api/fleet/trends?window=${win}&user=${encodeURIComponent(user)}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => { if (d) setTrends(d); })
-            .catch(() => { });
-        if (bd) {
-            apiFetch(`/api/fleet/breakdowns?window=${win}&user=${encodeURIComponent(user)}`)
+    // 渲染期写 ref 违反 react-hooks/refs；这里只是给 30s 定时器保存最新闭包，
+    // 无依赖数组 = 每次提交后同步，时序与原行为一致。
+    useEffect(() => {
+        refreshRef.current = () => {
+            if (!user) return;
+            apiFetch(`/api/fleet/trends?window=${win}&user=${encodeURIComponent(user)}`)
                 .then((r) => (r.ok ? r.json() : null))
-                .then((d) => { if (d) setBd(d); })
+                .then((d) => { if (d) setTrends(d); })
                 .catch(() => { });
-        }
-        if (reliability) {
-            const params = new URLSearchParams({ window: win, user });
-            if (platformFilter !== "all") params.set("platform", platformFilter);
-            if (agentFilter !== "all") params.set("agent", agentFilter);
-            apiFetch(`/api/fleet/reliability?${params.toString()}`)
-                .then((r) => (r.ok ? r.json() : null))
-                .then((d) => { if (d) setReliability(d); })
-                .catch(() => { });
-        }
-    };
+            if (bd) {
+                apiFetch(`/api/fleet/breakdowns?window=${win}&user=${encodeURIComponent(user)}`)
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((d) => { if (d) setBd(d); })
+                    .catch(() => { });
+            }
+            if (reliability) {
+                const params = new URLSearchParams({ window: win, user });
+                if (platformFilter !== "all") params.set("platform", platformFilter);
+                if (agentFilter !== "all") params.set("agent", agentFilter);
+                apiFetch(`/api/fleet/reliability?${params.toString()}`)
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((d) => { if (d) setReliability(d); })
+                    .catch(() => { });
+            }
+        };
+    });
     useEffect(() => {
         const id = setInterval(() => refreshRef.current(), 30_000);
         return () => clearInterval(id);
