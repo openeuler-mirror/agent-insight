@@ -366,6 +366,12 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 
 确认两个 profile 均已移除后，可再手工清理 `~/.agent-insight/deepseek-harness/` 中的历史版本目录，并按需从 `~/.dsh/.env` 删除 `AGENT_INSIGHT_BASE_URL`、`AGENT_INSIGHT_API_KEY`。
 
+## Trace 中的 Skill 关联
+
+选中 Agent 节点后，右侧 **Skills** 页签从该节点及其子树的实际调用中识别 Skill。OpenCode v1 的 `skill({name: "..."})` 和 v2 的 `skill({id: "..."})` 均可识别；这里的 `id` 是 OpenCode 的 Skill 名称参数，不是平台的数据库 ID。
+
+旧 Trace 即使没有保存 Skill 关联字段，只要交互中保留了调用参数，详情页也能读取，无需重新执行任务。故障诊断的 **Skills 步骤核验** 按根 Agent 自己调用的 Skill 选择分析目标，不会把仅由子 Agent 调用的 Skill 绑定到根节点。此前因未识别 Skill 而失败的核验，需要在更新服务后重新运行；资产还须对当前账号可见并具有可分析的内容。
+
 ## 推荐使用路径
 
 ### 场景一：确认接入是否成功

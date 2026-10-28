@@ -54,6 +54,7 @@ let listExecutionTargets: typeof import('@/app/api/benchmark/v1/execution-target
 let setCommandDispatcher: typeof import('@/lib/benchmark/scheduler').setBenchmarkCommandDispatcherForTest
 let resumeDispatches: typeof import('@/lib/benchmark/scheduler').resumeBenchmarkDispatchesAtStartup
 let reapStaleRuns: typeof import('@/lib/benchmark/scheduler').reapStaleBenchmarkRuns
+let stopBackgroundWork: typeof import('@/lib/benchmark/scheduler').stopBenchmarkBackgroundWorkForTest
 
 test.before(async () => {
   const schema = spawnSync(process.execPath, [path.resolve('node_modules/prisma/build/index.js'), 'db', 'push',
@@ -85,13 +86,15 @@ test.before(async () => {
   setCommandDispatcher = scheduler.setBenchmarkCommandDispatcherForTest
   resumeDispatches = scheduler.resumeBenchmarkDispatchesAtStartup
   reapStaleRuns = scheduler.reapStaleBenchmarkRuns
+  stopBackgroundWork = scheduler.stopBenchmarkBackgroundWorkForTest
 })
 
 test.after(async () => {
+  await stopBackgroundWork?.()
   setCommandDispatcher?.()
+  await prisma?.$disconnect()
   delete process.env.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL
   delete process.env.AGENT_INSIGHT_HOME
-  await prisma?.$disconnect()
   fs.rmSync(testDir, { recursive: true, force: true })
 })
 
@@ -734,6 +737,7 @@ test('real SWE-bench Verified data crosses create/run APIs and the client comman
   })
   assert.equal(rejectedOutbox?.commandId, 'cmd_rejected')
   assert.equal(rejectedOutbox?.status, 'failed')
+  await stopBackgroundWork()
   setCommandDispatcher()
 })
 

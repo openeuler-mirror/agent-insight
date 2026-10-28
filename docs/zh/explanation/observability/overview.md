@@ -69,6 +69,12 @@ Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；随 Pi 内置的只�
 
 升级 Pi Agent、Codex 或 Goal Plus 时，重新执行页面生成的安装命令即可。已识别的原版旧上传模块和共享安装器会自动备份并升级，包括尚无升级凭据的旧安装；已有采集数据保留。若提示 `Refusing to overwrite a different shared collector module`，更新并重新部署平台安装器后重试。仍然报错时保留原文件，交由部署者核对版本或本地修改，避免影响其他采集器。
 
+## OpenCode Skill 调用识别
+
+OpenCode 采集器保留原始工具参数。平台在采集入库、Trace 展示和根 Agent 的 Skill 步骤核验中同时识别 v1 的 `name` 与 v2 的 `id` 参数；`id` 仅在 `skill` / `load_skill` 调用中作为名称回退，不读取普通工具的 ID、tool call ID 或输出文本来推断 Skill。Trace 的结构预览也保留该参数，保证懒加载前后结果一致。
+
+入库关联按 Agent 作用域提取，子 Agent 的 Skill 不向父节点继承。历史记录的详情和步骤核验直接从交互读取，不要求先回填 Execution 的 Skill 字段，也不会自动改写既有核验结果。
+
 ## MCTS xGovernor 接入
 
 MCTS 可通过外部启动器和本机透明 xGovernor 代理接入，无需修改 MCTS 源码。平台展示 coordinator、Runtime、标准化 LLM turn、工具活动和 checkpoint 派生关系；安装、运行、隐私边界及已知限制见 [MCTS xGovernor Trace 非侵入式接入](../../how-to/observability/mcts-xgovernor.md)。

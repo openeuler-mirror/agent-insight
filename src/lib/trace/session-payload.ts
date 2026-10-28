@@ -35,7 +35,7 @@ function pickTaskOrSkillArguments(name: string, raw: unknown): unknown {
         const source = parsed as Record<string, unknown>;
         const keys = normalizedName === 'task'
             ? ['subagent_type', 'subagentType', 'session_id', 'sessionId', 'subagent_session_id', 'subagentSessionId', 'description']
-            : ['name', 'skill_name', 'skillName', 'skill', 'version'];
+            : ['name', 'skill_name', 'skillName', 'skill', 'version', ...(['skill', 'load_skill'].includes(normalizedName) ? ['id'] : [])];
         const picked: Record<string, unknown> = {};
         for (const key of keys) {
             if (source[key] !== undefined) picked[key] = source[key];

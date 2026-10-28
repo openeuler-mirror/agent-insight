@@ -813,6 +813,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         const skillDisplayName = kind === 'skill'
             ? skillMeta?.name ?? (args && typeof args === 'object'
                 ? args.skill ?? args.name ?? args.skill_name ?? args.skillName
+                    ?? (['skill', 'load_skill'].includes(normalizedName) ? args.id : undefined)
                 : undefined) ?? prefixedSkillName
             : undefined;
         const displayName = typeof skillDisplayName === 'string' && skillDisplayName.trim()

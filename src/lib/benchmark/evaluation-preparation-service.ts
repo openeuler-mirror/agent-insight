@@ -35,6 +35,12 @@ import { getBenchmarkAdapter } from './adapter-registry'
 import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
 import { refreshBenchmarkImagePreparation } from './image-preparation'
 
+const backgroundReevaluations = new Set<Promise<void>>()
+
+export async function waitForBenchmarkReevaluationsForTest(): Promise<void> {
+  while (backgroundReevaluations.size) await Promise.allSettled([...backgroundReevaluations])
+}
+
 function parseJson<T>(value: string | null, code: string): T {
   if (!value) throw new BenchmarkProtocolError(code, '评测所需的冻结数据不存在', 409)
   try {
@@ -358,12 +364,14 @@ export async function retryBenchmarkEvaluation(input: {
       forceNewAttempt: true,
       retryOfEvaluationId: run.evaluations[0]?.id,
     })
-    void refreshBenchmarkImagePreparation()
+    const completion = refreshBenchmarkImagePreparation()
       .catch((error) => console.warn('[benchmark/image-pool]', error))
       .then(() => dispatchBenchmarkEvaluation(prepared.evaluationRunId))
       .catch((error) => {
         console.error('[benchmark/reevaluation] dispatch failed', error)
       })
+    backgroundReevaluations.add(completion)
+    void completion.then(() => backgroundReevaluations.delete(completion), () => backgroundReevaluations.delete(completion))
     return { status: 'running', evaluationRunId: prepared.evaluationRunId }
   } finally {
     lock.delete(lockKey)
