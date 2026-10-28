@@ -174,3 +174,32 @@ test('finished FI batches persist generation failures and settle as partial alon
   assert.equal(body.traceProgress.failed, 1)
   assert.equal(body.overall, 50)
 })
+
+
+test('an existing pending FI evaluation starts and settles without rerunning its Agent', async () => {
+  const data = await fixture('completed', 'build', [{ role: 'assistant', content: 'business output' }])
+  await fi.bindExperimentCaseToFiSession({ fiRunKey: data.run.runId, sessionTaskId: data.run.sessionTaskId! })
+  const row = await prisma.experimentEvalResult.create({ data: {
+    experimentId: data.experiment.id, caseId: data.row.id,
+    evaluatorId: 'preset-ras-reliability-detection-recovery', status: 'pending',
+  } })
+  const { setJudgeLlmCallerForTest } = await import('@/lib/engine/experiment/judge-llm')
+  const { retryResultRow } = await import('@/lib/engine/experiment/run-experiment')
+  setJudgeLlmCallerForTest(async () => JSON.stringify({
+    summary: 'test evidence', faultOccurred: { verdict: 'met', reason: 'observed', suggestion: '' },
+    dimensions: ['fault_detected', 'mitigation_triggered', 'fault_mitigated'].map(dimension => ({
+      dimension, verdict: 'met', reason: 'observed', suggestion: '',
+    })),
+  }))
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const result = await Promise.race([
+      retryResultRow(data.experiment.id, row.id, user),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('pending evaluator did not start')), 2500) }),
+    ])
+    assert.equal(result, 'done')
+  } finally {
+    clearTimeout(timer)
+    setJudgeLlmCallerForTest(null)
+  }
+})
