@@ -16,7 +16,7 @@
           {
             "group": "阅读入口",
             "pages": [
-              "zh/tutorial/README"
+              "zh/tutorial/navigation"
             ]
           },
           {
@@ -47,13 +47,14 @@
           {
             "group": "阅读入口",
             "pages": [
-              "zh/how-to/README"
+              "zh/how-to/navigation"
             ]
           },
           {
             "group": "平台公共",
             "pages": [
-              "zh/how-to/platform/build-rpm",
+              "zh/how-to/platform/upgrade-and-rollback",
+              "zh/how-to/platform/backup-and-restore",
               "zh/how-to/platform/conventions-and-extension",
               "zh/how-to/platform/deploy-shared-account",
               "zh/how-to/platform/docker-testing",
@@ -136,12 +137,13 @@
           {
             "group": "阅读入口",
             "pages": [
-              "zh/reference/README"
+              "zh/reference/navigation"
             ]
           },
           {
             "group": "平台公共",
             "pages": [
+              "zh/reference/platform/configuration",
               "zh/reference/platform/api-and-contracts",
               "zh/reference/platform/design-system",
               "zh/reference/platform/example-cost",
@@ -168,7 +170,7 @@
           {
             "group": "阅读入口",
             "pages": [
-              "zh/explanation/README"
+              "zh/explanation/navigation"
             ]
           },
           {
@@ -198,7 +200,7 @@
           {
             "group": "评测",
             "pages": [
-              "zh/explanation/evaluation/benchmarks/README",
+              "zh/explanation/evaluation/benchmarks/navigation",
               "zh/explanation/evaluation/overview",
               "zh/explanation/evaluation/skills/overview",
               "zh/explanation/evaluation/skills/static-evaluator"
@@ -221,12 +223,12 @@
           {
             "group": "可靠性",
             "pages": [
-              "zh/explanation/reliability/agent-fault-injection/README",
+              "zh/explanation/reliability/agent-fault-injection/navigation",
               "zh/explanation/reliability/agent-fault-injection/architecture",
               "zh/explanation/reliability/agent-fault-injection/modules/opencode-platform-adaptation",
               "zh/explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship",
               "zh/explanation/reliability/agent-fault-injection/modules/xiaoo-platform-adaptation",
-              "zh/explanation/reliability/agent-ras/README",
+              "zh/explanation/reliability/agent-ras/navigation",
               "zh/explanation/reliability/agent-ras/architecture",
               "zh/explanation/reliability/agent-ras/modules/detectors",
               "zh/explanation/reliability/agent-ras/modules/monitor",
@@ -252,5 +254,35 @@
         ]
       }
     ]
-  }
+  },
+  "redirects": [
+    {
+      "source": "/zh/tutorial/README",
+      "destination": "/zh/tutorial/navigation"
+    },
+    {
+      "source": "/zh/how-to/README",
+      "destination": "/zh/how-to/navigation"
+    },
+    {
+      "source": "/zh/reference/README",
+      "destination": "/zh/reference/navigation"
+    },
+    {
+      "source": "/zh/explanation/README",
+      "destination": "/zh/explanation/navigation"
+    },
+    {
+      "source": "/zh/explanation/evaluation/benchmarks/README",
+      "destination": "/zh/explanation/evaluation/benchmarks/navigation"
+    },
+    {
+      "source": "/zh/explanation/reliability/agent-fault-injection/README",
+      "destination": "/zh/explanation/reliability/agent-fault-injection/navigation"
+    },
+    {
+      "source": "/zh/explanation/reliability/agent-ras/README",
+      "destination": "/zh/explanation/reliability/agent-ras/navigation"
+    }
+  ]
 }

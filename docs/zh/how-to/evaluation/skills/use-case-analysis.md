@@ -138,8 +138,8 @@ Case 与评估明细默认展开，执行过程中也可查看；可点击 **收
 ## 下一步
 
 - 返回实验入口：[Skill 评估与实验](../../../explanation/evaluation/skills/overview.md)
-- 检查是否正确触发：[触发分析](trigger-analysis.md)
-- 比较两个版本的真实收益：[A/B 测试](ab-test.md)
+- 检查是否正确触发：[触发分析](./trigger-analysis.md)
+- 比较两个版本的真实收益：[A/B 测试](./ab-test.md)
 - 根据低分 Case 生成候选：[Skill 优化](../../optimization/skills/optimize.md)
 
 实验结束不等于执行成功。有失败项时显示“实验失败”或“已结束，存在失败项”；没有有效分数时显示“暂无评分结论”。OpenCode 失败 Trace 保留结束时间和错误信息，并标为失败。历史错误数据不会仅凭输出包含 `Connection error` 自动改写；修复模型连接后可重新执行验证。

@@ -259,5 +259,86 @@
     "browserVerified": false,
     "fullNextBuildPerformed": false,
     "dockerImageBuilt": false
+  },
+  "docsFollowup20261028": {
+    "baseCommit": "f285b93bc66cc2e5e9e89e3220aac94d36a337cf",
+    "scope": "Documentation, navigation and copied existing brand assets only; no business source or dependency changes",
+    "deleted": [
+      "docs/zh/how-to/platform/build-rpm.md"
+    ],
+    "developerHtmlUnchanged": true,
+    "newGuides": [
+      "docs/zh/how-to/platform/upgrade-and-rollback.md",
+      "docs/zh/how-to/platform/backup-and-restore.md",
+      "docs/zh/reference/platform/configuration.md"
+    ],
+    "legacyLinkResolutions": "link-resolutions.json",
+    "missingHistoricalMaterials": 8,
+    "localMarkdownTargets": {
+      "checked": 1185,
+      "missing": 0,
+      "excludes": [
+        "HTML legacy files",
+        "external URL reachability",
+        "all fragment anchors"
+      ]
+    },
+    "navigation": {
+      "pages": 100,
+      "targetsExist": true,
+      "readmeEntrypointsRetained": 7,
+      "canonicalFilename": "navigation.md",
+      "oldSiteRoutesRedirected": true
+    },
+    "mintlify": {
+      "strictBuildPassed": true,
+      "syntaxErrors": 0,
+      "brokenInternalLinks": 0,
+      "warnings": 75,
+      "warningRule": "duplicate-h1",
+      "externalLinksChecked": false
+    },
+    "browser": {
+      "verified": true,
+      "scope": [
+        "new operations pages",
+        "directory body link to backup guide",
+        "backup page section anchor",
+        "old how-to README route",
+        "product overview logo",
+        "previously invalid MDX generation-pipeline page"
+      ],
+      "consoleErrorsOnSampledPages": 0,
+      "fullSiteVisualAudit": false,
+      "productUiTested": false
+    },
+    "backupExample": {
+      "shellBlocksSyntaxChecked": 3,
+      "syntheticColdBackupRestore": "passed",
+      "comparedFiles": 4,
+      "sqliteIntegrity": "ok",
+      "productionRestoreTested": false,
+      "appStarted": false
+    },
+    "packagingFocused": {
+      "tests": 6,
+      "pass": 6,
+      "fail": 0
+    },
+    "unitTests": {
+      "command": "npm run test",
+      "counts": {
+        "tests": 4437,
+        "pass": 4400,
+        "fail": 15,
+        "cancelled": 0,
+        "skipped": 22
+      },
+      "exit": 1,
+      "isolatedRuntime": true,
+      "failureNamesMatchPrevious": true,
+      "note": "Failure set matches pre-change run; includes missing yaml/pydantic/pwsh and registration fixture assertion. No claim of all-green tests."
+    },
+    "publication": "Local changes only; not committed or pushed"
   }
 }

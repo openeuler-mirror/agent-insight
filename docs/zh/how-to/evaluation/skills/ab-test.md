@@ -152,6 +152,6 @@ A、B 每侧的每个 Case 都使用同一个 **Agent 单次执行上限**配置
 ## 下一步
 
 - 返回实验入口：[Skill 评估与实验](../../../explanation/evaluation/skills/overview.md)
-- 先验证路由边界：[触发分析](trigger-analysis.md)
-- 深入查看结果与轨迹：[用例分析](use-case-analysis.md)
+- 先验证路由边界：[触发分析](./trigger-analysis.md)
+- 深入查看结果与轨迹：[用例分析](./use-case-analysis.md)
 - 根据退步 Case 优化 Skill：[Skill 优化](../../optimization/skills/optimize.md)

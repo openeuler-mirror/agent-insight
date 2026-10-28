@@ -137,6 +137,6 @@ ZSoft 的提交物为 **`poc`**。“评测证据”保留官方原始 `evaluati
 
 ## 相关指南
 
-- [实验功能说明](experiments.md)
+- [实验功能说明](./experiments.md)
 - [MCTS xGovernor Trace 接入指南](../observability/mcts-xgovernor.md)
-- [Benchmark 服务安装指南](benchmarks/deploy-services.md)
+- [Benchmark 服务安装指南](./benchmarks/deploy-services.md)

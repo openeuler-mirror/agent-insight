@@ -107,14 +107,14 @@ Trace 会先快速落库展示，最终阶段保存成功后才确认消费进�
 - 复制安装命令前没有刷新当前登录状态
 - 不同环境复用了错误配置
 
-这类问题优先从 [安装指导](settings/access-control.md) 和当前 API Key 归属检查起。
+这类问题优先从 [安装指导](./settings/access-control.md) 和当前 API Key 归属检查起。
 
 ### 为什么已经有 Trace，但 Agent 管理里看起来没有对应 Agent？
 
 通常说明这个对象还是**未注册 Agent**：
 
 - 数据已经上报
-- 但尚未在 [Agent 管理](manage-agents.md) 中正式登记
+- 但尚未在 [Agent 管理](./manage-agents.md) 中正式登记
 
 这种情况不是不能用，但会影响资产治理和理解成本，建议尽快补登记。
 
@@ -395,7 +395,7 @@ bash scripts/db_archive.sh import \
 ## 下一步
 
 - 想先跑通接入： [5 分钟上手](../../tutorial/platform/01-quick-start.md)
-- 想正式纳管 Agent： [Agent 管理](manage-agents.md)
+- 想正式纳管 Agent： [Agent 管理](./manage-agents.md)
 - 想排查真实问题： [运行观测](../../explanation/observability/overview.md)
 - 想建立回归验证： [评估与实验](../../explanation/evaluation/overview.md)
 - 想管理和优化 Skill： [Skill 工作台](../../explanation/optimization/skills/workbench-overview.md)

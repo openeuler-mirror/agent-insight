@@ -7,7 +7,7 @@ changefreq: monthly
 
 # Benchmark 通用服务部署指南
 
-本指南部署 Agent Insight、执行客户端和 Evaluator 的公共服务。完成公共安装后，按所选 Benchmark 阅读同级的 [SWE-bench 部署指南](deploy-swe-bench.md) 或 [ZSoft 部署指南](deploy-zsoft.md)，完成数据、执行环境和评测资产配置。架构与实现细节见 [`design/evaluation/benchmark/`](../../../../../design/evaluation/benchmark/README.md)。
+本指南部署 Agent Insight、执行客户端和 Evaluator 的公共服务。完成公共安装后，按所选 Benchmark 阅读同级的 [SWE-bench 部署指南](./deploy-swe-bench.md) 或 [ZSoft 部署指南](./deploy-zsoft.md)，完成数据、执行环境和评测资产配置。架构与实现细节见 [`design/evaluation/benchmark/`](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/benchmark/README.md)。
 
 ## 1. 部署结构
 
@@ -39,7 +39,7 @@ benchmarks/<benchmark-key>/evaluator/
 generated/benchmark-catalog/
 ```
 
-接入包开发和 Catalog 生成由发布者完成，参见 [Benchmark 接入开发规范](develop-benchmark.md)。部署者使用包含匹配 Catalog 的代码版本。
+接入包开发和 Catalog 生成由发布者完成，参见 [Benchmark 接入开发规范](./develop-benchmark.md)。部署者使用包含匹配 Catalog 的代码版本。
 
 ### 2.2 运行环境
 
@@ -134,10 +134,10 @@ npx tsx scripts/benchmark/ensure-dataset.ts --benchmark <benchmark-key>
 
 | Benchmark | 部署说明 |
 |---|---|
-| SWE-bench | [数据集安装](deploy-swe-bench.md#2-数据集安装) |
-| ZSoft | [数据集安装](deploy-zsoft.md#2-数据集安装) |
+| SWE-bench | [数据集安装](./deploy-swe-bench.md#2-数据集安装) |
+| ZSoft | [数据集安装](./deploy-zsoft.md#2-数据集安装) |
 
-未注册准备器的接入包可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录，参见 [接入开发规范](develop-benchmark.md)。普通数据集页面导入不能替代 Benchmark 数据集安装。
+未注册准备器的接入包可通过 `install-dataset.ts` 导入其 Profile 接受的文件或目录，参见 [接入开发规范](./develop-benchmark.md)。普通数据集页面导入不能替代 Benchmark 数据集安装。
 
 启动时重新生成 Catalog。源码与配置不变时，生成内容应保持一致；Python 缓存和 `.DS_Store` 不参与摘要，无需手动恢复生成文件。真实源码变更会更新摘要与 Runtime 镜像标签。
 
@@ -225,7 +225,7 @@ imagePool:
 
 也支持显式传入 `--evaluator-env IMAGE_POOL_ENABLED=false`、`IMAGE_POOL_PREFETCH_ENABLED=false`，以及 `IMAGE_POOL_RESERVE_RATIO`、`IMAGE_POOL_HIGH_WATERMARK`、`IMAGE_POOL_MAX_PULLS`、`IMAGE_POOL_WAIT_SECONDS`、`IMAGE_POOL_MAC_DISK_PATH`。布尔值接受 `true/false/1/0`，路径相对所选配置目录解析。参数通过 stdin 交给容器内校验器，不出现在辅助 Docker 命令参数中；日志只打印固定配置摘要，不输出非业务 Runtime 凭据。
 
-镜像池详细设计见[镜像池设计方案](../../../../../design/evaluation/benchmark/image-pool.md)。平台通过 `/health` 发现预取状态，无需额外令牌。Evaluator 端口应只允许平台访问。
+镜像池详细设计见[镜像池设计方案](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/benchmark/image-pool.md)。平台通过 `/health` 发现预取状态，无需额外令牌。Evaluator 端口应只允许平台访问。
 
 ### 5.4 评测并发与 Case 数量上限
 
@@ -306,7 +306,7 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 
 源码运行时在 Agent 执行机项目的 `config/benchmark/executor.local.yaml` 配置；curl 安装版统一使用 `~/.agent-insight/config/executor.local.yaml`，自定义根目录时为 `$AGENT_INSIGHT_HOME/config/executor.local.yaml`。安装器自动准备用户配置目录并打印路径，不要求创建配置文件。安装升级只更新运行时内置的 `executor.yaml`，不覆盖用户配置。安装版不读取、迁移或回退到 `client/runtime/config/benchmark/executor.local.yaml` 或更早的 `client/runtime/config/executor.local.yaml`；旧文件保留但不生效，需要的配置请自行写入新路径。配置中的相对路径以新配置文件所在目录为基准。显式设置 `AGENT_INSIGHT_CONFIG_DIR` 时仍从指定目录读取 `executor.yaml` 与 `executor.local.yaml`，不叠加上述用户配置。
 
-执行机的 Benchmark 专属准备分别见 [SWE-bench](deploy-swe-bench.md#3-执行端准备) 和 [ZSoft](deploy-zsoft.md#3-执行端准备)。MCTS 是 Agent Runtime，接入与连接预检见 [MCTS xGovernor 接入](../../observability/mcts-xgovernor.md#用于平台-benchmark-实验)，不按 Benchmark 另建安装流程。
+执行机的 Benchmark 专属准备分别见 [SWE-bench](./deploy-swe-bench.md#3-执行端准备) 和 [ZSoft](./deploy-zsoft.md#3-执行端准备)。MCTS 是 Agent Runtime，接入与连接预检见 [MCTS xGovernor 接入](../../observability/mcts-xgovernor.md#用于平台-benchmark-实验)，不按 Benchmark 另建安装流程。
 
 配置加载器也会被平台的 Next.js 服务导入。安装版专用的 `agent-insight-home.cjs` 通过 Node `createRequire` 在运行时加载，避免 Turbopack 将安装路径当作源码依赖解析；源码运行时不加载该安装目录模块。
 
@@ -351,7 +351,7 @@ node ~/.agent-insight/client/runtime/xgovernor.cjs status
 | 隔离 | 每 Case 独立服务和工具容器，监听端口动态分配；工具容器断网，模型请求由宿主机控制器发出 |
 | 工具容器资源 | 2 CPU、4 GiB 内存、512 PID |
 | 本地记录 | 默认保留 7 天，只清理已结束且上传、资源清理均已确认的记录；镜像另行管理 |
-| Case 镜像 | 使用镜像内源码；来源和架构配置见 [SWE-bench 镜像配置](deploy-swe-bench.md#原生-pixiaoo-的-case-镜像) |
+| Case 镜像 | 使用镜像内源码；来源和架构配置见 [SWE-bench 镜像配置](./deploy-swe-bench.md#原生-pixiaoo-的-case-镜像) |
 
 **可选配置**
 
@@ -375,9 +375,9 @@ execution:
 | Docker / cgroup v2 未就绪 | 管理员修复宿主机，再重跑安装命令 |
 | 构建失败或凭据桥接缺失 | 查看安装输出及 `status`，修复构建依赖、下载网络或权限后重跑 curl |
 | 模型配置或凭据解析失败 | 按 Case 中的具体原因检查原生 Agent 配置、凭据库及运行账号 |
-| 已有 Patch，但评测失败 | 按 [SWE-bench 排查与更新](deploy-swe-bench.md#6-排查与更新) 检查 Evaluator |
+| 已有 Patch，但评测失败 | 按 [SWE-bench 排查与更新](./deploy-swe-bench.md#6-排查与更新) 检查 Evaluator |
 
-手动版本更新、回退及安装实现见 [受管理安装与版本](develop-benchmark.md#受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](develop-benchmark.md#原生执行高级配置)。
+手动版本更新、回退及安装实现见 [受管理安装与版本](./develop-benchmark.md#受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](./develop-benchmark.md#原生执行高级配置)。
 
 ## 8. 整体验收
 
@@ -474,4 +474,4 @@ bash scripts/evaluator.sh stop --purge-images
 
 Runtime 清理只处理同一 Docker daemon、同一数据卷中已登记且身份确认的 Runtime。始终保留当前 Catalog 所需引用及相同 Image ID、被任何容器（包括已停止容器）引用的镜像、未确认操作、被改写的引用及存在额外标签/其他仓库 digest 的镜像。删除不使用强制模式，不停止任务，也不执行全局 prune。输出的 `runtimes` 包含候选、删除、保留原因和失败项；`--dry-run` 不删除镜像或归属记录。预装/手工构建且未登记的历史 Runtime、Case 资产镜像及构建缓存不在 Runtime 清理范围内。
 
-完成公共服务安装后，分别按 [SWE-bench 部署指南](deploy-swe-bench.md) 或 [ZSoft 部署指南](deploy-zsoft.md) 验收所选 Benchmark。
+完成公共服务安装后，分别按 [SWE-bench 部署指南](./deploy-swe-bench.md) 或 [ZSoft 部署指南](./deploy-zsoft.md) 验收所选 Benchmark。

@@ -144,4 +144,4 @@ Copilot 会先对问题归并、去重和排序，再决定哪些内容进入本
 - 了解一站式工作流：[Skill 工作台](../../../explanation/optimization/skills/workbench-overview.md)
 - 检查发布门禁：[Skill 评估](../../evaluation/skills/static-compliance.md)
 - 运行真实效果验证：[Skill 实验](../../../explanation/evaluation/skills/overview.md)
-- 管理正式版本：[Skills 管理](manage.md)
+- 管理正式版本：[Skills 管理](./manage.md)

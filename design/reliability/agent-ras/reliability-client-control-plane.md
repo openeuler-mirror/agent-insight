@@ -41,7 +41,7 @@ written    ← 客户端 COMMAND_STATUS: SUCCEEDED(WRITTEN)
 ras_loaded ← RAS 独立回报 config-loads
 ```
 
-同时删除 [`clients-from-workers.ts`](../../../src/lib/reliability/clients-from-workers.ts) —— 客户端不再从 FI Worker 心跳镜像伪造。
+同时删除 `clients-from-workers.ts`（历史引用未收录：`../../../src/lib/reliability/clients-from-workers.ts`） —— 客户端不再从 FI Worker 心跳镜像伪造。
 
 ## 数据模型
 

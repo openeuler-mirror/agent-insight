@@ -110,6 +110,6 @@ changefreq: monthly
 ## 下一步
 
 - 返回实验入口：[Skill 评估与实验](../../../explanation/evaluation/skills/overview.md)
-- 验证触发后的任务质量：[用例分析](use-case-analysis.md)
-- 比较修复前后版本：[A/B 测试](ab-test.md)
+- 验证触发后的任务质量：[用例分析](./use-case-analysis.md)
+- 比较修复前后版本：[A/B 测试](./ab-test.md)
 - 根据失败 Case 优化 Skill：[Skill 优化](../../optimization/skills/optimize.md)

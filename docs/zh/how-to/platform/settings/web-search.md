@@ -180,6 +180,6 @@ Provider 配置区通常包含：
 
 ## 下一步
 
-- 完成基础模型配置： [模型注册](model-registry.md)
+- 完成基础模型配置： [模型注册](./model-registry.md)
 - 使用联网能力增强 Skill 起草： [Skill 生成](../../optimization/skills/generate.md)
 - 返回平台入口页： [Agent Insight](../../../explanation/platform/product-overview.md)

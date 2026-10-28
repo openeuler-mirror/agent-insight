@@ -44,7 +44,7 @@ src/lib/usage-analytics/
 
 ## 新增一个统计事件
 
-1. 在 [`catalog.ts`](../../../../src/lib/usage-analytics/catalog.ts) 对应功能的 `uses` 里加一条，声明 `key` / `label` / `source` / `countWhen`。
+1. 在 [`catalog.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/usage-analytics/catalog.ts) 对应功能的 `uses` 里加一条，声明 `key` / `label` / `source` / `countWhen`。
 2. 在业务成功分支调用：
 
 ```ts
@@ -62,7 +62,7 @@ recordUsageEvent({
 
 ## 硬性约束（改代码前先读）
 
-- **不得 `await recordUsageEvent()`**，也不得 `.then()`。它同步返回 `void`，异常全部内部吞掉。测试 [`instrumentation.test.ts`](../../../../test/usage-analytics/instrumentation.test.ts) 会扫描源码强制这一点。
+- **不得 `await recordUsageEvent()`**，也不得 `.then()`。它同步返回 `void`，异常全部内部吞掉。测试 [`instrumentation.test.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/test/usage-analytics/instrumentation.test.ts) 会扫描源码强制这一点。
 - **不得把统计写入并进业务事务** —— 统计失败绝不能回滚业务。
 - **不得在业务成功响应前同步写统计库**。
 - **管理 API 只能 `resolveUser(request)`**，禁止传 `explicitUser`，否则 `?user=admin` 就能提权。
@@ -79,7 +79,7 @@ recordUsageEvent({
 
 ## 双数据库
 
-`UsageStorage` 有三个实现：`PrismaUsageStorage`（SQLite）、`OpenGaussUsageStorage`、`InMemoryUsageStorage`（测试）。三者跑同一份 [`storage-contract.test.ts`](../../../../test/usage-analytics/storage-contract.test.ts)。
+`UsageStorage` 有三个实现：`PrismaUsageStorage`（SQLite）、`OpenGaussUsageStorage`、`InMemoryUsageStorage`（测试）。三者跑同一份 [`storage-contract.test.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/test/usage-analytics/storage-contract.test.ts)。
 
 SQLite 侧因为 `createMany(skipDuplicates)` 不返回实际插入行，先按 `eventId` 过滤已存在项再累加聚合；OpenGauss 侧直接用 `ON CONFLICT DO NOTHING RETURNING`。两者都保证**重放同一批不重复计数**。
 
