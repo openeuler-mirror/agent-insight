@@ -17,7 +17,7 @@
 'use client';
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
 import { hasOptimizationInput } from '@/lib/skill-workbench/optimization-request';
@@ -30,6 +30,7 @@ import {
   subscribeWorkbenchSync,
 } from '@/lib/skill-workbench/sync-channel';
 import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
+import { verificationDisplay } from '@/lib/skill-workbench/verification-display';
 import { GenerationHistory } from './GenerationConversation';
 import type { OptimizationRecordView } from './OptimizationRecordsPanel';
 
@@ -111,7 +112,7 @@ function hydrateOptimizationMessages(
 const PROGRESS_STEPS = [
   ['分析优化依据', '汇总评估问题与实验结论'],
   ['生成候选版本', '修改候选边界与诊断顺序'],
-  ['执行质量校验', '检查结构、描述与安全规则'],
+  ['执行质量校验', '检查文件质量与行为回归，优先复用旧版结果'],
   ['整理优化报告', '生成版本差异与发布说明'],
 ] as const;
 
@@ -455,7 +456,8 @@ export function OptimizationConversation({
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
         body: JSON.stringify({
           user, threadId: optSessionId, skillName, baseVersion,
-          checkedIssues: issues.map((issue) => ({
+          optimizationScope: requestText.trim() && !plan ? 'targeted' : 'issues',
+          checkedIssues: (requestText.trim() && !plan ? [] : issues).map((issue) => ({
             id: issue.id, severity: issue.severity, category: issue.dimension,
             summary: issue.summary, evidence: issue.evidence || issue.reasoning || undefined,
             improvementSuggestion: issue.suggestedFix || undefined,
@@ -555,7 +557,7 @@ export function OptimizationConversation({
             setLocalStep((current) => Math.max(current, 3));
             patchAgent((message) => {
               const block = message.blocks.find((item) => item.kind === 'verification' && item.id === 'self-verify');
-              const next = { kind: 'verification', id: 'self-verify', status: 'ok', text: '结构门、脚本真值门与行为门已完成' };
+              const next = { kind: 'verification', id: 'self-verify', ...verificationDisplay(payload) };
               if (block) Object.assign(block, next);
               else message.blocks.push(next);
             });
@@ -700,7 +702,7 @@ export function OptimizationConversation({
               </ConversationProcessDisclosure>
                 : block.kind === 'optimization_plan' ? <OptimizationPlanCard key={`${block.id}-${blockIndex}`} block={block} />
                   : block.kind === 'verification' && messageTask?.status === 'cancelled' && block.status !== 'ok' ? <p key={`${block.id}-${blockIndex}`} className="my-1 text-xs text-foreground-muted">自验证已停止</p>
-                  : block.kind === 'verification' ? <div key={`${block.id}-${blockIndex}`} className="my-1 flex min-w-0 items-start gap-2 overflow-hidden rounded border border-success-border bg-success-subtle px-2 py-1.5 text-[11px] text-success">{block.status === 'running' ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />}<span className="min-w-0 break-words [overflow-wrap:anywhere]">{block.text}</span></div>
+                  : block.kind === 'verification' ? <div key={`${block.id}-${blockIndex}`} className={`my-1 flex min-w-0 items-start gap-2 overflow-hidden rounded border px-2 py-1.5 text-[11px] ${block.status === 'ok' ? 'border-success-border bg-success-subtle text-success' : 'border-warning-border bg-warning-subtle text-warning'}`}>{block.status === 'running' ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : block.status === 'ok' ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" /> : <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />}<span className="min-w-0 break-words [overflow-wrap:anywhere]">{block.text}</span></div>
                     : block.kind === 'warning' ? <div key={`${block.id}-${blockIndex}`} className="my-1 min-w-0 overflow-hidden whitespace-pre-wrap break-words rounded border border-warning-border bg-warning-subtle px-2 py-1.5 text-[11px] text-warning [overflow-wrap:anywhere]">{block.text}</div>
                       : <p key={`${block.id}-${blockIndex}`} className="max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-foreground-secondary [overflow-wrap:anywhere]">{block.text}</p>)
               : <p className="max-w-full whitespace-pre-wrap break-words text-xs leading-5 [overflow-wrap:anywhere]">{message.content}</p>}
@@ -734,7 +736,7 @@ export function OptimizationConversation({
       </div>
       {typeof quickActions === 'function' ? quickActions(feedback, busy || loading) : quickActions}
       <form onSubmit={run} className="rounded-lg border border-border bg-card p-2">
-        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={3} placeholder={busy ? "可编辑补充诉求，停止或完成后提交…" : "补充优化诉求…"} className="w-full resize-none bg-transparent px-1 text-xs leading-5 text-foreground outline-none placeholder:text-foreground-muted" />
+        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={3} placeholder={busy ? "可编辑补充诉求，停止或完成后提交…" : "填写本轮定向诉求；留空则优化当前问题…"} className="w-full resize-none bg-transparent px-1 text-xs leading-5 text-foreground outline-none placeholder:text-foreground-muted" />
         <div className="flex justify-end">{busy
           ? <button type="button" onClick={stop} disabled={stopping || Boolean(activeTask?.progress?.cancelRequested) || (!ownsStreamRef.current && !activeTask?.id)} className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2 text-xs text-foreground-secondary disabled:opacity-50">{stopping || activeTask?.progress?.cancelRequested ? '正在停止…' : '停止优化'}</button>
           : <button type="submit" aria-label="开始优化" disabled={loading || (!hasOptimizationInput(feedback, issues) && !useMergePlan)} className="inline-flex size-8 items-center justify-center rounded bg-primary text-primary-foreground disabled:opacity-40"><Send className="size-3.5" /></button>}</div>
@@ -783,14 +785,14 @@ function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPub
   const hasCandidate = Boolean(record.staticEvaluationId && Object.keys(record.candidateFiles || {}).length);
   const cancelled = record.status === 'optimization_cancelled';
   const status = cancelled ? '优化已停止' : record.status === 'optimizing' ? '优化中'
-    : qualityPassed ? '质量规则已通过'
+    : qualityPassed ? ({ pending_retest: '静态通过，待完整复测', retesting: '行为验证中', retest_passed: '行为验证通过', retest_failed: '行为验证未通过', retest_cancelled: '行为验证已停止' } as Record<string, string>)[record.status]
       : executionFailed ? '优化执行失败'
         : record.status === 'optimization_failed' ? '质量校验未通过'
         : record.status === 'published' ? '已发布'
           : record.status === 'abandoned' ? '已放弃' : '需处理';
   return <div className="mt-3 min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-background p-3">
     <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-foreground">
-      {cancelled ? <Circle className="size-4 shrink-0 text-foreground-muted" /> : record.status === 'optimization_failed' ? <X className="size-4 shrink-0 text-error" /> : record.status === 'optimizing' ? <Loader2 className="size-4 shrink-0 animate-spin text-primary" /> : <CheckCircle2 className="size-4 shrink-0 text-success" />}
+      {cancelled ? <Circle className="size-4 shrink-0 text-foreground-muted" /> : record.status.endsWith('_failed') ? <X className="size-4 shrink-0 text-error" /> : record.status === 'optimizing' ? <Loader2 className="size-4 shrink-0 animate-spin text-primary" /> : record.status === 'retest_passed' || record.status === 'published' ? <CheckCircle2 className="size-4 shrink-0 text-success" /> : <Circle className="size-4 shrink-0 text-warning" />}
       <span className="min-w-0 truncate">{cancelled ? '本轮优化已停止' : executionFailed && !hasCandidate ? '本轮优化失败' : getOptimizationTransitionLabel(record)}</span>
       <span className="ml-auto shrink-0 rounded bg-background-secondary px-1.5 py-0.5 text-[10px] text-foreground-muted">{status}</span>
     </div>
@@ -804,10 +806,12 @@ function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPub
         ? <span className="rounded bg-error-subtle px-1.5 py-1 text-error">{executionFailed ? '优化执行失败' : '质量校验未通过'}</span>
         : record.status === 'optimizing'
           ? null
-          : <span className="rounded bg-success-subtle px-1.5 py-1 text-success">质量规则已通过</span>}
+          : <span className="rounded bg-success-subtle px-1.5 py-1 text-success">静态质量已通过</span>}
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
       <button type="button" onClick={() => onViewRecords(record)} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-[10px] text-foreground-secondary"><FileSearch className="size-3" />{executionFailed && !hasCandidate ? '查看失败详情' : '查看优化报告'}</button>
+      {record.retestExperimentId && <a href={`/experiments/${encodeURIComponent(record.retestExperimentId)}`} className="inline-flex h-7 items-center text-[10px] text-primary hover:underline">查看行为验证实验</a>}
+      {record.sourceRefs?.some((ref) => ref.type === 'verification-cleanup') && <span className="self-center text-[10px] text-foreground-muted">临时实验已清理，验证结果已保留</span>}
       {qualityPassed && <button type="button" disabled={publishing} onClick={() => onPublish(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50">{publishing ? <Loader2 className="size-3 animate-spin" /> : <Upload className="size-3" />}发布为 {getOptimizationTargetVersion(record)}</button>}
       {record.status === 'optimization_failed' && <button type="button" disabled={busy} onClick={() => onRepair(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50"><Wrench className="size-3" />{executionFailed ? '重新优化' : '修复阻断问题'}</button>}
     </div>

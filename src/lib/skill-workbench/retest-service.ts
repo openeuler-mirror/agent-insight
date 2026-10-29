@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { linkCandidateVerification } from './verification-evidence';
+import { verifyFromSourceExperiment } from '@/lib/engine/skill-opt/experiment-verification';
+import type { SkillExecutionSnapshot } from './execution-target';
 import fs from 'fs';
 import path from 'path';
 
@@ -66,8 +69,15 @@ export async function retestOptimizationCandidate(input: {
     where: { id: input.recordId, user: input.user, skillName: input.skillName },
   });
   if (!record) throw new RetestError('优化候选不存在', 404);
-  if (!['pending_retest', 'retest_failed', 'retest_cancelled'].includes(record.status)) {
+  const candidateFiles = parseJson<Record<string, string>>(record.candidateFilesJson, {});
+  if (!candidateFiles['SKILL.md']) throw new RetestError('候选快照缺少 SKILL.md', 422);
+  if (!['pending_retest', 'retest_failed', 'retest_cancelled', 'retest_passed'].includes(record.status)) {
     throw new RetestError(`候选当前状态 ${record.status} 不能复测`);
+  }
+  const evidenceInput = { ...input, baseVersion: record.baseVersion, files: candidateFiles, sourceExperimentId: record.sourceExperimentId };
+  const reused = await linkCandidateVerification(evidenceInput);
+  if (reused?.result.fullCoverage && !reused.result.incomplete) {
+    return { experimentId: reused.archived ? null : reused.experimentId, sourceScore: reused.result.baseMean, candidateScore: reused.result.candMean, passed: reused.result.ok, reused: true };
   }
   const baseline = await resolveRetestableExperimentBaseline({
     user: input.user,
@@ -96,6 +106,25 @@ export async function retestOptimizationCandidate(input: {
       },
     });
   }
+  const task = snapshot.grayscaleTaskId ? await prismaRaw.grayscaleTask.findFirst({ where: { id: snapshot.grayscaleTaskId, user: input.user } }) : null;
+  const frozen = parseJson<{ executionTarget?: unknown; boundSide?: 'a' | 'b'; skillSnapshots?: { a?: SkillExecutionSnapshot; b?: SkillExecutionSnapshot } }>(task?.configJson || null, {});
+  if (frozen.executionTarget) {
+    const original = frozen.skillSnapshots?.[frozen.boundSide || 'b'];
+    if (!original) throw new RetestError('来源实验缺少原版 Skill 快照');
+    const claimed = await prismaRaw.skillOptimizationRecord.updateMany({ where: { id: record.id, status: { in: ['pending_retest', 'retest_failed', 'retest_cancelled', 'retest_passed'] }, candidateContentHash: record.candidateContentHash }, data: { status: 'retesting' } });
+    if (!claimed.count) throw new RetestError('候选正在复测或已发生变化');
+    try {
+      const result = await verifyFromSourceExperiment({ user: input.user, skillName: input.skillName, baseVersion: record.baseVersion,
+        baseFiles: original.files, candidateFiles, sourceExperimentId: source.id, optimizationRecordId: record.id, maxCases: snapshot.caseIds!.length, verificationPurpose: 'retest' });
+      const linked = await linkCandidateVerification({ ...evidenceInput, sourceExperimentId: source.id });
+      if (!linked || !result) throw new RetestError(result?.incomplete || '来源实验无法形成有效行为对比');
+      return { experimentId: linked.experimentId, sourceScore: result.baseMean, candidateScore: result.candMean,
+        passed: result.ok && !result.incomplete && Boolean(result.fullCoverage), reused: false };
+    } catch (error) {
+      await prismaRaw.skillOptimizationRecord.updateMany({ where: { id: record.id, status: 'retesting' }, data: { status: 'retest_failed', errorMessage: error instanceof Error ? error.message : String(error) } });
+      throw error;
+    }
+  }
   const datasetId = snapshot.datasetId as string;
   const caseIds = snapshot.caseIds as string[];
   const dataset = await findAgentDataset(input.user, datasetId);
@@ -110,8 +139,6 @@ export async function retestOptimizationCandidate(input: {
     throw new RetestError(`来源实验冻结的模型配置已不可用：${snapshot.runtime.modelConfigId}`);
   }
 
-  const candidateFiles = parseJson<Record<string, string>>(record.candidateFilesJson, {});
-  if (!candidateFiles['SKILL.md']) throw new RetestError('候选快照缺少 SKILL.md', 422);
   const retest = await prismaRaw.experiment.create({
     data: {
       user: input.user,
@@ -141,6 +168,7 @@ export async function retestOptimizationCandidate(input: {
   await prismaRaw.skillOptimizationRecord.update({ where: { id: record.id }, data: { retestExperimentId: retest.id } });
 
   const scores: number[] = [];
+  let allPassed = true;
   try {
     const repeatRounds = Math.max(1, Math.floor(snapshot.repeatRounds || 1));
     for (const item of orderedCases) {
@@ -172,12 +200,13 @@ export async function retestOptimizationCandidate(input: {
           referenceOutput: item.expectedOutput || null,
         });
         const rows = await evaluateEvalExperimentCase(retest.id, caseId, input.user);
+        if (!rows.length || rows.some((row) => row.status !== 'done' || row.score == null || row.verdict === 'fail' || sourceScore === 0 && row.verdict !== 'pass')) allPassed = false;
         const score = average(rows.filter((row) => row.status === 'done').map((row) => row.score));
         if (score != null) scores.push(score);
       }
     }
     const candidateScore = average(scores);
-    const passed = candidateScore != null && candidateScore >= sourceScore;
+    const passed = allPassed && candidateScore != null && candidateScore >= sourceScore;
     await prismaRaw.experiment.update({ where: { id: retest.id }, data: { status: 'done' } });
     const latestRecord = await prismaRaw.skillOptimizationRecord.findUnique({
       where: { id: record.id },

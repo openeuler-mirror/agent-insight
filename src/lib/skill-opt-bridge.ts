@@ -32,6 +32,8 @@ import {
 import { scanWorkspaceFiles, type FileData } from '@/lib/skill-generator-opencode-bridge';
 import { enforceEditScope } from '@/lib/engine/skill-opt/edit-scope-guard';
 import { runSelfVerification, type SelfVerifyResult } from '@/lib/engine/skill-opt/self-verify';
+import { installOptimizationOutputLimit, optimizationContinuity } from '@/lib/engine/skill-opt/optimization-context';
+import { normalizeOptimizationCandidate } from '@/lib/skill-workbench/optimization-candidate';
 import { findSkillMd } from '@/lib/skill-generator/skill-files';
 import type {
   ChatHandlers,
@@ -45,19 +47,16 @@ import type {
  *     让 agent read-then-edit 现有文件。同 thread 复用 workspace（多轮 follow-up）。
  *  2. system prompt 走 skill-opt-prompt.ts，把用户勾选的 issues 结构化注入。
  *  3. 不发 download 卡片——前端用 vfs_patch 的最终 files 拼 OptimizationIteration。
- *  4. 进程内 sessionId 缓存（不持久化）——本期不做对话历史。
+ *  4. 每轮创建新 Agent 会话，保留候选工作区与既往用户约束。
  */
 
 const SKILL_OPT_AGENT_NAME = 'skill-optimizer-chat';
 
 // 优化器改完后的【自验证】配置。SKILL_OPT_NO_VERIFY=1 整体关。
-// 行为门每例 ~1 rollout（含基线共 ~2×，基线带进程缓存），故 MAX_CASES + BUDGET 双重封顶成本。
+// 行为门可复用来源实验或持久化基线，每例仅执行候选，故 MAX_CASES + BUDGET 双重封顶成本。
 const VERIFY_REPAIR_K = Number(process.env.SKILL_OPT_VERIFY_REPAIR_K) || 1;       // 自验证失败后最多 repair 几轮
 const VERIFY_MAX_CASES = Number(process.env.SKILL_OPT_VERIFY_MAX_CASES) || 5;     // 行为门最多量几例
 const VERIFY_BUDGET_YUAN = Number(process.env.SKILL_OPT_VERIFY_BUDGET_YUAN) || 8; // 行为门 ¥ 软上限
-
-/** threadId → opencode sessionId 进程内缓存。重启即失（本期不持久化）。 */
-const threadSessionMap = new Map<string, string>();
 
 /** threadId 级串行锁，避免同一 session 并发请求互相踩。 */
 const threadInflight = new Map<string, Promise<unknown>>();
@@ -89,6 +88,7 @@ export interface StreamSkillOptOpts {
   planItems?: SkillOptPlanItemLite[];
   userFeedback: string;
   modelId?: string;
+  optimizationRecordId?: string;
   signal?: AbortSignal;
   /**
    * Dev fallback：当 data/storage/ 里没有真 skill 文件时（mock 数据场景），
@@ -153,9 +153,10 @@ async function streamSkillOptOpencodeImpl(
   const modelOverride = await resolveModelOverride(user, modelId);
 
   // ── 3. system prompt ───────────────────────────────────────────────────────
+  installOptimizationOutputLimit(workspaceDir);
   const systemPrompt = buildSkillOptSystemPrompt({
     skillName, baseVersion, checkedIssues, userFeedback, planItems,
-  });
+  }) + await optimizationContinuity(user, threadId);
 
   // ── 4. SSE handlers + watchdog（直接抄 skill-generator 的）──────────────────────
   // watchdog：第一个业务事件来了才计时；空闲一段时间自动 abort 让 chat() 立即收尾。
@@ -332,8 +333,6 @@ async function streamSkillOptOpencodeImpl(
   };
 
   // ── 5. 调 runGeneralAgent ──────────────────────────────────────────────────
-  const cachedSessionId = threadSessionMap.get(threadId);
-  console.log('[skill-opt-bridge] cachedSessionId:', cachedSessionId || '(none)');
 
   // 前台 skill-opt 交互式: displayOnly=true, 仅 dashboard 可见, 不占 5-slot 配额。
   // skill-opt 是用户在 web 端编辑 skill 时实时跑的, 不能被后台 A/B 批量卡住。
@@ -345,12 +344,11 @@ async function streamSkillOptOpencodeImpl(
     skillVersion: baseVersion,
     displayOnly: true,
   };
-  const executeAgent = (sessionId?: string) => withBackgroundOpencodeSlot(
+  const executeAgent = () => withBackgroundOpencodeSlot(
     () => runGeneralAgent({
       user,
       cancelSignal: signal,
       query: composeUserQuery(checkedIssues, userFeedback, planItems),
-      ...(sessionId ? { sessionId } : {}),
       workspaceTag: threadId,
       sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
       system: systemPrompt,
@@ -368,19 +366,17 @@ async function streamSkillOptOpencodeImpl(
   );
   let result;
   try {
-    result = await executeAgent(cachedSessionId);
+    result = await executeAgent();
   } catch (err) {
     if (idleWatchdog) clearTimeout(idleWatchdog);
     if (err instanceof Error && err.message.includes('停止 OpenCode 执行未确认')) throw err;
     signal?.throwIfAborted();
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[skill-opt-bridge] runGeneralAgent threw:', msg);
-    const staleSession = Boolean(cachedSessionId && /session/i.test(msg));
     const connectionFailedBeforeWork = isTransientModelConnectionError(msg)
       && agentText.length === 0
       && announcedTools.size === 0;
-    if (staleSession || connectionFailedBeforeWork) {
-      threadSessionMap.delete(threadId);
+    if (connectionFailedBeforeWork) {
       if (connectionFailedBeforeWork) {
         send('warning', { kind: 'model_connection_retry', message: '模型服务连接中断，正在自动重试（1/1）…' });
         if (idleWatchdog) clearTimeout(idleWatchdog);
@@ -388,7 +384,6 @@ async function streamSkillOptOpencodeImpl(
         chatAbortController = new AbortController();
         await new Promise((resolve) => setTimeout(resolve, 750));
       }
-      console.log('[skill-opt-bridge] retrying without cachedSessionId...');
       result = await executeAgent();
     } else {
       throw err;
@@ -397,7 +392,6 @@ async function streamSkillOptOpencodeImpl(
 
   if (idleWatchdog) clearTimeout(idleWatchdog);
   signal?.throwIfAborted();
-  threadSessionMap.set(threadId, result.sessionId);
   closeThinkingIfOpen();
 
   // ── 编辑范围硬约束（结构性，不依赖 prompt——实测强模型会无视"别删脚本"的提示）──
@@ -418,9 +412,10 @@ async function streamSkillOptOpencodeImpl(
     }
   }
 
-  // ── 自验证（自动）：结构门 + 行为重评，失败则 repair（复用同一 opencode session）──
+  // ── 自验证（自动）：结构门 + 行为重评，失败则在同一工作区用新会话 repair──
   // 开环链路的补门：优化器「改完直接落版本、从不校验对不对」是年份 bug 等「编译过却答错」
   // 回归的温床。这里在收尾前自动验一遍，回归就把具体问题喂回还活着的 session 让 agent 修。
+  let finalVerification: SelfVerifyResult | undefined;
   if (process.env.SKILL_OPT_NO_VERIFY !== '1') {
     try {
       for (let attempt = 0; attempt <= VERIFY_REPAIR_K; attempt++) {
@@ -446,15 +441,18 @@ async function streamSkillOptOpencodeImpl(
         const verdict: SelfVerifyResult = await runSelfVerification({
           user, skillName, baseVersion,
           candidateSkillMd: skillMd.content, candidateFiles,
+          baseFiles: storageDirOverride ? normalizeOptimizationCandidate(Object.fromEntries(Object.entries(scanWorkspaceFiles(storageDirOverride)).map(([key, value]) => [key, { content: value.content }]))) : undefined,
+          issueIds: checkedIssues.map((issue) => issue.id), optimizationRecordId: opts.optimizationRecordId,
           maxCases: VERIFY_MAX_CASES, budgetYuan: VERIFY_BUDGET_YUAN, signal,
           onProgress: (m) => send('verify_progress', { message: m }),
         });
         signal?.throwIfAborted();
+        finalVerification = verdict;
         if (verdict.ok) {
           const beh = verdict.behavioral;
           send('verify_ok', {
             structural: verdict.structural.ok,
-            behavioral: beh ? { baseMean: beh.baseMean, candMean: beh.candMean, delta: beh.delta, measured: beh.measured, skipped: beh.skipped } : null,
+            behavioral: beh,
           });
           break;
         }
@@ -462,13 +460,13 @@ async function streamSkillOptOpencodeImpl(
           send('warning', { kind: 'self_verify', message: `自验证仍未通过（已 repair ${VERIFY_REPAIR_K} 轮），保留当前结果供你裁决：${verdict.failures.join('；')}` });
           break;
         }
-        // 还有 repair 额度：把失败喂回同一 session 让 agent 修
+        // 还有 repair 额度：用新会话传入失败证据让 agent 修
         send('warning', { kind: 'self_verify', message: `自验证未通过，自动 repair（第 ${attempt + 1}/${VERIFY_REPAIR_K} 轮）：${verdict.failures.join('；')}` });
         try {
           await withBackgroundOpencodeSlot(
             () => runGeneralAgent({
               user, query: buildSelfVerifyRepairQuery(verdict), cancelSignal: signal,
-              sessionId: result.sessionId, workspaceTag: threadId,
+              workspaceTag: threadId,
               sessionTitle: `skill-opt repair · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
               system: systemPrompt, interactionPolicy: 'auto-allow',
               ...(modelOverride ? { model: modelOverride } : {}),
@@ -491,6 +489,7 @@ async function streamSkillOptOpencodeImpl(
     }
   }
 
+  if (finalVerification && !finalVerification.ok) send('verify_ok', { structural: finalVerification.structural.ok, behavioral: finalVerification.behavioral, message: finalVerification.failures.join('；') });
   signal?.throwIfAborted();
   // 兜底全量扫描，最终一次 VFS 推送
   vfsAccum = scanWorkspaceFiles(result.workspaceDir);
@@ -544,14 +543,15 @@ async function resolveAuthoritativeStorageDir(
 
 // ── 辅助函数 ─────────────────────────────────────────────────────────────────
 
-/** 把自验证失败拼成给优化器 agent 的 repair 指令（喂回还活着的 session）。 */
+/** 把自验证失败拼成给优化器 agent 的 repair 指令（新会话读取当前候选）。 */
 function buildSelfVerifyRepairQuery(v: SelfVerifyResult): string {
   const parts: string[] = ['你刚才的修改没通过自验证，请据下面的问题修复（修完我会再自动验一遍）：'];
   if (!v.structural.ok) {
     parts.push('【结构问题】\n' + v.structural.failures.map((f) => '- ' + f).join('\n'));
   }
   if (v.behavioral && !v.behavioral.ok) {
-    parts.push(`【行为回归】在评测用例上净分 ${v.behavioral.baseMean}→${v.behavioral.candMean}（Δ${v.behavioral.delta}）。以下用例改后掉分（含原本答对的）：`);
+    parts.push(`【行为验收未通过】在评测用例上均分 ${v.behavioral.baseMean}→${v.behavioral.candMean}（Δ${v.behavioral.delta}）。以下为未达成目标或退步用例的证据：`);
+    for (const r of v.behavioral.targetFailures || []) parts.push(`目标验收未通过 ${r.caseId}: ${r.reason}`);
     for (const r of v.behavioral.regressions) parts.push(`- ${r.caseId.slice(0, 8)} ${r.base}→${r.cand}：${r.reason}`);
   }
   parts.push(
