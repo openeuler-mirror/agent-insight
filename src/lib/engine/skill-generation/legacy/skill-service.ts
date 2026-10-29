@@ -17,7 +17,7 @@
 import fs from 'fs';
 import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
-import { SkillMetadata, SkillRegistrationRequest, SkillUpdateRequest, SkillSearchParams, SkillUsageStats, VersionChange } from '@/lib/engine/skill-generation/legacy/skill-types';
+import { SkillMetadata, SkillRegistrationRequest, SkillUpdateRequest, SkillSearchParams, SkillUsageStats } from '@/lib/engine/skill-generation/legacy/skill-types';
 
 const DATA_DIR = resolveAgentInsightDataPath();
 const SKILLS_FILE = path.join(DATA_DIR, 'skills.jsonl');

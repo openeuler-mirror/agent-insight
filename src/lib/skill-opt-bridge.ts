@@ -15,7 +15,6 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { getUserSettings, type ModelConfig as ServerModelConfig } from '@/lib/storage/server-config';
