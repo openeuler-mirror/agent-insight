@@ -39,6 +39,8 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -646,6 +648,18 @@ export function ExperimentWizard({
     if (!skillPreset) return true;
     return isSkillExperimentDatasetEligible(skillPreset, dataset, skillContext.skillName);
   }), [skillContext, skillPreset, wizardDatasets]);
+  const datasetPlaceholder = skillPreset === 'skill-ab'
+    ? '暂无可用数据集'
+    : skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集';
+  const wizardDatasetOptions = eligibleWizardDatasets.map((dataset) => ({
+    value: dataset.id,
+    label: `${dataset.name} · ${DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（${dataset.cases?.length ?? dataset.caseCount ?? 0}）${
+      skillPreset !== 'trigger' && dataset.targetSkill && dataset.targetSkill !== skillContext?.skillName
+        ? ` · 来源 Skill：${dataset.targetSkill}` : ''
+    }`,
+  }));
+  const selectedDatasetLabel = wizardDatasetOptions.find((option) => option.value === selectedDatasetId)?.label
+    || datasetPlaceholder;
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const isBenchmarkDataset = selectedDataset?.datasetKind === 'benchmark';
   const executionConcurrency = Number(executionConcurrencyInput);
@@ -2003,26 +2017,43 @@ export function ExperimentWizard({
               <div style={{ marginBottom: 16 }}>
                 <label style={FIELDLBL}>评测数据集{skillPreset === 'skill-ab' ? ' *' : '（可选）'}</label>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <select
-                    style={{ ...INPUT, cursor: 'pointer', flex: 1 }}
-                    value={selectedDatasetId}
-                    disabled={skillPreset === 'skill-ab' && eligibleWizardDatasets.length === 0}
-                    onChange={(e) => {
-                      void selectWizardDataset(e.target.value);
-                    }}
-                  >
-                    {skillPreset === 'skill-ab'
-                      ? eligibleWizardDatasets.length === 0 && <option value="" disabled>暂无可用数据集</option>
-                      : <option value="">{skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集'}</option>}
-                    {eligibleWizardDatasets.map((dataset) => (
-                      <option key={dataset.id} value={dataset.id}>
-                        {dataset.name} · {DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
-                        {skillPreset !== 'trigger' && dataset.targetSkill && dataset.targetSkill !== skillContext?.skillName
-                          ? ` · 来源 Skill：${dataset.targetSkill}`
-                          : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="评测数据集"
+                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                        style={INPUT}
+                        disabled={skillPreset === 'skill-ab' && eligibleWizardDatasets.length === 0}
+                      >
+                        <span className="min-w-0 flex-1 truncate" title={selectedDatasetLabel}>{selectedDatasetLabel}</span>
+                        <ChevronDown size={14} className="shrink-0 text-foreground-muted" aria-hidden />
+                      </button>
+                    </DropdownMenuTrigger>
+                    {/* Portal 避开向导滚动容器；按触发框宽度和视口剩余空间约束列表。 */}
+                    <DropdownMenuContent
+                      align="start"
+                      side="bottom"
+                      collisionPadding={8}
+                      className="overflow-y-auto"
+                      style={{
+                        width: 'var(--radix-dropdown-menu-trigger-width)',
+                        maxWidth: 'var(--radix-dropdown-menu-content-available-width)',
+                        maxHeight: 'min(320px, var(--radix-dropdown-menu-content-available-height))',
+                      }}
+                    >
+                      <DropdownMenuRadioGroup value={selectedDatasetId} onValueChange={(value) => void selectWizardDataset(value)}>
+                        {skillPreset !== 'skill-ab' && (
+                          <DropdownMenuRadioItem value="">{datasetPlaceholder}</DropdownMenuRadioItem>
+                        )}
+                        {wizardDatasetOptions.map((option) => (
+                          <DropdownMenuRadioItem key={option.value} value={option.value} textValue={option.label} className="items-start">
+                            <span className="min-w-0 whitespace-normal break-words">{option.label}</span>
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   {skillPreset === 'trigger' && (
                     <button type="button" style={{ ...BTN_OUTLINE_SM, height: 34 }} disabled={generatingTriggerDataset} onClick={() => void generateTriggerDataset()}>
                       {generatingTriggerDataset ? '生成中…' : 'AI 新建触发分析数据集'}
