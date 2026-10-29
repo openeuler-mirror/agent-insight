@@ -16,7 +16,8 @@
 
 'use client';
 
-import { DiffEditor } from '@monaco-editor/react';
+import { useEffect, useRef } from 'react';
+import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
 
 export type DiffViewMode = 'side' | 'inline';
 
@@ -44,13 +45,25 @@ export function MonacoDiffEditor({
   mode: DiffViewMode;
   height?: string | number;
 }) {
+  const editorRef = useRef<Parameters<DiffOnMount>[0] | null>(null);
+  useEffect(() => () => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (editor && model) {
+      // Detach before the React wrapper disposes the models on unmount.
+      editor.setModel(null);
+      model.original.dispose();
+      model.modified.dispose();
+    }
+    editorRef.current = null;
+  }, []);
   return (
     <DiffEditor
-      key={`${path}::${mode}`}
       height={height}
       language={detectDiffLanguage(path)}
       original={before}
       modified={after}
+      onMount={(editor) => { editorRef.current = editor; }}
       theme="light"
       options={{
         fontSize: 12,
