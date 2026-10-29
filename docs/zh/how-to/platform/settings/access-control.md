@@ -420,4 +420,4 @@ API Key 和端点覆盖两者的 managed config，并重启已有 Goal Plus watc
 - 完成 Agent 资产登记： [Agent 概览](../manage-agents.md)
 - 验证链路是否成功上报： [链路追踪](../../observability/view-traces.md)
 - 继续完成整体接入流程： [5 分钟上手](../../../tutorial/platform/01-quick-start.md)
-- 配置后续模型能力： [模型注册](model-registry.md)
+- 配置后续模型能力： [模型注册](./model-registry.md)

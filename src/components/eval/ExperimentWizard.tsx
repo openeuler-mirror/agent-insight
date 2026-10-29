@@ -86,6 +86,7 @@ import {
   truncateBenchmarkText,
 } from '@/lib/benchmark/presentation';
 import {
+  skillExecutionCapabilityIssue,
   isSkillExperimentDatasetEligible,
   isSkillExperimentEvaluatorEligible,
 } from '@/lib/skill-workbench/experiment-policy';
@@ -687,18 +688,18 @@ export function ExperimentWizard({
     [agentName, agents],
   );
   const targetOptions = useMemo(
-    () => (selectedAgent?.targets || []).filter((target) =>
-      skillPreset === 'trigger'
-        ? target.supportsTriggerRouting
-        : isBenchmarkDataset
+    () => (selectedAgent?.targets || []).filter((target) => {
+      if (skillContext && skillExecutionCapabilityIssue(target, skillPreset === 'trigger')) return false;
+      return isBenchmarkDataset
         ? target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '') || target.preparableBenchmarkKeys?.includes(selectedDataset?.benchmark?.adapterKey || '')
         : isReliabilityDataset
           ? target.supportsFaultInjection || (target.supportsEnvironmentPreparation && ['opencode', 'xiaoo'].includes(target.platform))
-          : target.supportsGenericTrace && (skillPreset !== 'skill-ab' || target.supportsSkillSnapshot)).map(target => {
+          : target.supportsGenericTrace;
+    }).map(target => {
             const environment = isBenchmarkDataset ? target.benchmarkEnvironments?.[selectedDataset?.benchmark?.adapterKey || ''] : null;
             return environment ? { ...target, executionProfile: environment.profile, models: environment.models } : target;
           }),
-    [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey, skillPreset],
+    [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey, skillPreset, skillContext],
   );
   const selectedTarget = targetOptions.find(
     (target) => `${target.workerId}::${target.platform}` === selectedTargetKey,
@@ -707,6 +708,15 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const skillTargetRequired = Boolean(skillContext && (traceMode === 'generate' || skillPreset === 'skill-ab'));
+  const skillTargetError = skillTargetRequired
+    ? (!selectedTarget ? '没有满足当前 Skill 实验能力要求的在线执行目标，请检查客户端状态和能力探测结果。'
+      : skillExecutionCapabilityIssue(selectedTarget, skillPreset === 'trigger')?.message || '')
+    : '';
+  const unavailableSkillTargets = skillContext ? (selectedAgent?.targets || []).flatMap(target => {
+    const issue = skillExecutionCapabilityIssue(target, skillPreset === 'trigger');
+    return issue ? [{ target, message: issue.message }] : [];
+  }) : [];
   const unavailableBenchmarkTargets = isBenchmarkDataset
     ? (selectedAgent?.targets || []).filter(target => !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))
     : [];
@@ -1578,6 +1588,7 @@ export function ExperimentWizard({
     setSubmitting(true);
     setSubmitError('');
     try {
+      if (skillTargetError) throw new Error(skillTargetError);
       if (!evaluatorConfigLoaded) throw new Error(evaluatorLoadError || '正在加载评估器配置');
       if (evaluatorExecutionState.error) throw new Error(evaluatorExecutionState.error);
       if (executionConcurrencyRequired && !executionConcurrencyValid) throw new Error('执行并发必须为正整数');
@@ -1870,6 +1881,11 @@ export function ExperimentWizard({
           const updated = await refreshAgents(true);
           if (!environment.isCurrent()) return;
           const target = updated.flatMap(item => item.targets).find(item => item.workerId === environmentSelection.clientId && item.platform === environmentSelection.platform && item.agent === environmentSelection.agent);
+          const capabilityIssue = target && skillContext ? skillExecutionCapabilityIssue(target, skillPreset === 'trigger') : null;
+          if (capabilityIssue) {
+            environment.fail(capabilityIssue.message);
+            return;
+          }
           if (!target || (isBenchmarkDataset && !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))) {
             environment.fail('刚检查的执行目标已变化或不再就绪，请确认主机与 Agent 后再次点击“下一步”。');
             return;
@@ -2318,14 +2334,21 @@ export function ExperimentWizard({
                   {!selectedDataset
                     ? '生成 Trace 需要数据集 Case，请返回第一步选择评测数据集。'
                     : skillPreset === 'trigger'
-                      ? '没有支持只读触发分析的在线 OpenCode 客户端，请升级并连接客户端后重试。'
+                      ? '没有上报只读触发分析能力的在线 OpenCode 客户端，请检查客户端状态和能力探测结果。'
                     : isBenchmarkDataset
                       ? '当前 Agent 没有满足该 Benchmark 执行要求的在线客户端，请检查客户端状态和执行目标配置。'
                     : isReliabilityDataset
                       ? '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'
-                    : skillPreset === 'skill-ab'
-                      ? '当前 Agent 没有支持 Skill 冻结快照的在线客户端。OpenCode v2 当前支持普通数据集生成 Trace，此模式需要 OpenCode v1。'
+                    : skillContext
+                      ? '当前 Agent 没有上报 Skill 版本隔离能力的在线 OpenCode 客户端，请检查常驻客户端版本和能力探测结果。'
                       : '所选 Agent 当前没有可用于生成 Trace 的运行主机。请检查下方客户端诊断，或选择客户端已扫描到的 Agent。'}
+                  {unavailableSkillTargets.length > 0 && (
+                    <ul aria-label="Skill 执行目标不可用原因" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
+                      {unavailableSkillTargets.map(({ target, message }) => (
+                        <li key={`${target.workerId}::${target.platform}`}>{target.host} · {target.platform}：{message}</li>
+                      ))}
+                    </ul>
+                  )}
                   {!isBenchmarkDataset && !isReliabilityDataset && traceGenerationDiagnostics.length > 0 && (
                     <ul aria-label="Trace 生成客户端诊断" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
                       {traceGenerationDiagnostics.filter(item => !item.platform || !selectedAgent?.frameworks.length || selectedAgent.frameworks.includes(item.platform)).map((item, index) => (
@@ -2734,7 +2757,7 @@ export function ExperimentWizard({
                   <select style={INPUT} value={effectiveTargetKey} onChange={(event) => { setSelectedTargetKey(event.target.value); setGenModel(''); }}>
                     {targetOptions.map((target) => <option key={`${target.workerId}::${target.platform}`} value={`${target.workerId}::${target.platform}`}>{target.host} · {target.platform}</option>)}
                   </select>
-                  {!selectedTarget && <p className="text-sm text-error">没有可用的在线执行目标</p>}
+                  {skillTargetError && <p className="text-sm text-error">{skillTargetError}</p>}
                   <label htmlFor="ab-existing-runtime-model" style={FIELDLBL}>运行模型 *</label>
                   <RuntimeModelSelect id="ab-existing-runtime-model" models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                   <AgentTimeoutField
@@ -3541,12 +3564,13 @@ export function ExperimentWizard({
               {(evaluatorLoadError || evaluatorExecutionState.error) && <p role="alert" className="mt-3 text-xs" style={{ color: 'var(--error)' }}>
                 {evaluatorLoadError || evaluatorExecutionState.error}
               </p>}
+              {skillTargetError && <p role="alert" style={{ color: 'var(--error)', fontSize: 12 }}>{skillTargetError}</p>}
               {submitError && (
                 <div style={{ marginTop: 12, fontSize: 12, color: 'var(--error)' }}>{submitError}</div>
               )}
 
               {footer({
-                nextDisabled: selectedEvaluators.size < 1 || submitting || !evaluatorConfigLoaded || Boolean(evaluatorExecutionState.error),
+                nextDisabled: selectedEvaluators.size < 1 || submitting || !evaluatorConfigLoaded || Boolean(evaluatorExecutionState.error) || Boolean(skillTargetError),
                 nextLabel: submitting ? '创建中…' : '🚀 开始实验',
                 onNext: submit,
               })}

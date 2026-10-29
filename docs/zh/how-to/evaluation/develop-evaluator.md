@@ -407,7 +407,7 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 
 `preset-agent-process-quality` 与 `preset-agent-step-efficiency` 共用一套 canonical 轨迹能力，由实验评测链路执行；它们的卡片可在通用实验和三个既有 Skill 评测选择器中按统一的 `status === 'ready'` 规则展示。原 `preset-agent-trace-quality` 仍由 faithful/opencode runner 实现，并继续服务旧 `/eval/trajectory` 入口；不要为复用而把两个语义不同的质量评估器合并。
 
-需求背景、冻结契约与逐项实施计划分别见 [Phase 1 需求分析](../../../../design/evaluation/agent-trajectory-evaluation/phase1-requirements-analysis.md)、[Phase 2 需求设计](../../../../design/evaluation/agent-trajectory-evaluation/phase2-requirements-design.md)、[Phase 3 开发计划](../../../../design/evaluation/agent-trajectory-evaluation/phase3-development-plan.md)。
+需求背景、冻结契约与逐项实施计划分别见 [Phase 1 需求分析](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/agent-trajectory-evaluation/phase1-requirements-analysis.md)、[Phase 2 需求设计](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/agent-trajectory-evaluation/phase2-requirements-design.md)、[Phase 3 开发计划](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/agent-trajectory-evaluation/phase3-development-plan.md)。
 
 #### canonical 模块分工
 

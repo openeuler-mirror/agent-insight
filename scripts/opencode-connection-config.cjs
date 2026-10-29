@@ -167,7 +167,7 @@ function privateCommand(executable, args, context, subject = '配置') {
   try {
     fd = fs.openSync(path.join(root, 'output'), 'wx+', 0o600)
     const result = spawnSync(executable, args, {
-      cwd: context.cwd, env: context.env, stdio: ['ignore', fd, 'pipe'], timeout: 15000, maxBuffer: LIMIT,
+      cwd: context.cwd, env: { ...context.env, PWD: context.cwd }, stdio: ['ignore', fd, 'pipe'], timeout: 60000, maxBuffer: LIMIT,
     })
     if (result.error || result.status !== 0) throw configError(`读取${subject}命令失败或超时`)
     if (fs.fstatSync(fd).size > LIMIT) throw configError('配置输出超过 8 MiB')
@@ -316,6 +316,54 @@ function checkOpenCodeV2Model(executable, selected, options = {}) {
   return { model: `${model.providerID}/${model.id}` }
 }
 
+function readOpenCodeV2Api(executable, operation, options = {}, params = []) {
+  try {
+    const result = JSON.parse(privateCommand(executable, ['api', '--standalone', operation, ...params], contextFor(options)))
+    return record(result) && Object.hasOwn(result, 'data') ? result.data : result
+  } catch {
+    throw Object.assign(new Error('无法读取 OpenCode v2 的原生执行配置，请检查客户端运行账号的配置、插件和凭据。'), { code: 'MODEL_CONFIGURATION_UNREADABLE' })
+  }
+}
+
+function loadOpenCodeV2ConnectionConfig(executable, selection, options = {}) {
+  const entries = readOpenCodeV2Api(executable, 'config.get', options)
+  if (!Array.isArray(entries) || entries.some(entry => !record(entry) || !['document', 'directory'].includes(entry.type))) {
+    throw configError('OpenCode v2 配置来源格式无效')
+  }
+  let config = {}
+  const directories = [], plugins = []
+  for (const entry of entries) {
+    if (entry.type === 'directory') { if (typeof entry.path === 'string') directories.push(entry.path); continue }
+    if (!record(entry.info)) throw configError('OpenCode v2 配置文档无效')
+    config = merge(config, entry.info)
+    for (const plugin of entry.info.plugins || []) {
+      if (typeof plugin === 'string' && /(?:Witty-Skill-Insight|agent-insight)/i.test(plugin) && !/agent-insight-ras/i.test(plugin)) {
+        plugins.push(plugin.startsWith('.') && entry.path ? path.resolve(path.dirname(entry.path), plugin) : plugin)
+      }
+    }
+  }
+  for (const directory of directories) {
+    const collector = path.join(directory, 'plugins', 'Witty-Skill-Insight.ts')
+    if (fs.existsSync(collector)) plugins.push(collector)
+  }
+  const agents = readOpenCodeV2Api(executable, 'agent.list', options)
+  const nativeAgent = Array.isArray(agents) ? agents.find(agent => agent.id === selection.agent) : null
+  const agent = nativeAgent || config.agents?.[selection.agent]
+  if ((!agent && !['build', 'plan'].includes(selection.agent)) || agent?.disabled || agent?.mode === 'subagent') {
+    throw configError('所选 Agent 不存在、已禁用或仅支持子 Agent 调用')
+  }
+  const configuredModel = agent?.model
+  const agentModel = typeof configuredModel === 'string' ? configuredModel
+    : configuredModel?.providerID && (configuredModel.model || configuredModel.id)
+      ? `${configuredModel.providerID}/${configuredModel.model || configuredModel.id}` : undefined
+  const model = checkOpenCodeV2Model(executable, selection.model || agentModel, options).model
+  const agentConfig = Object.fromEntries(['system', 'description', 'mode', 'request', 'hidden', 'color', 'steps']
+    .filter(key => agent?.[key] !== undefined).map(key => [key, agent[key]]))
+  const connections = { providers: config.providers || {}, mcp: selection.trigger ? {} : config.mcp || {} }
+  if (hasMasked(connections)) throw configError('OpenCode v2 连接配置包含脱敏占位符，无法创建隔离环境')
+  return { ...connections, model, agents: { [selection.agent]: agentConfig }, plugins: [...new Set(plugins)] }
+}
+
 function loadOpenCodeConnectionConfig(executable, selection, options = {}) {
   const context = contextFor(options)
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -365,12 +413,17 @@ function checkOpenCodeModelConfig(executable, selection, options = {}) {
   const config = loadOpenCodeConnectionConfig(executable, selection, { ...options, modelOnly: true })
   const model = selectedModel(config, selection)
   const split = model.indexOf('/')
-  const provider = model.slice(0, split)
+  const provider = model.slice(0, split), modelId = model.slice(split + 1)
   const providerConfig = config.provider?.[provider]
   if (config.disabled_providers?.includes(provider) || (config.enabled_providers && !config.enabled_providers.includes(provider))) {
     throw configError('所选 Provider 已被禁用或未包含在启用列表中')
   }
-  const modelConfig = providerConfig?.models?.[model.slice(split + 1)]
+  if (providerConfig?.blacklist?.includes(modelId) || (providerConfig?.whitelist && !providerConfig.whitelist.includes(modelId))) {
+    throw configError('所选模型被 Provider 的模型黑名单或白名单禁用')
+  }
+  const configuredModel = Object.hasOwn(providerConfig?.models || {}, modelId)
+  const modelConfig = providerConfig?.models?.[modelId]
+  if (configuredModel && !record(modelConfig)) throw configError('所选自定义模型的配置必须为对象')
   const connection = merge(providerConfig?.options || {}, modelConfig?.options || {})
   const nonempty = value => typeof value === 'string' && Boolean(value.trim()) && value !== '***' && !/\{(?:env|file):/.test(value)
   let local = false
@@ -408,6 +461,9 @@ function checkOpenCodeModelConfig(executable, selection, options = {}) {
     || Object.entries(headers).some(([name, value]) => SECRET.test(name) && nonempty(value))
   if (providerConfig && !credential && !local) throw configError('未找到所选模型的认证配置，请使用客户端运行账号配置 API Key、认证请求头或执行 opencode auth login')
 
+  // 1.x 的 models 命令可能遗漏已显式配置的自定义模型；候选发现也合并了这部分配置。
+  if (configuredModel) return { model }
+
   // 只读取原生模型目录，禁止目录刷新和自动升级，不执行 run 或推理请求。
   const catalog = privateCommand(executable, ['models'], { ...context, env: { ...context.env, OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_AUTOUPDATE: '1' } }, '模型目录')
   const models = catalog.replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map(line => line.trim()).filter(line => /^[a-zA-Z0-9_.-]+\/[^\s]+$/.test(line))
@@ -444,7 +500,7 @@ function checkOpenCodeModelConfigAsync(executable, selection, { cwd, env, signal
     }
     const cancel = error => { stoppedError ||= error; stop() }
     const abort = () => cancel(signal.reason)
-    const timer = setTimeout(() => cancel(configError('模型配置检查超时，请检查 CLI 与本机配置后重试')), 30000)
+    const timer = setTimeout(() => cancel(configError('模型配置检查超时，请检查 CLI 与本机配置后重试')), 120000)
     signal?.addEventListener('abort', abort, { once: true })
     child.stdout.on('data', chunk => {
       output += chunk
@@ -468,7 +524,7 @@ function checkOpenCodeModelConfigAsync(executable, selection, { cwd, env, signal
   })
 }
 
-module.exports = { loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, checkOpenCodeV2Model, checkOpenCodeModelConfig, checkOpenCodeModelConfigAsync, parseJsonc }
+module.exports = { readOpenCodeV2Api, loadOpenCodeV2ConnectionConfig, loadOpenCodeConnectionConfig, assertNoMaskedConnections, readOpenCodeConfig, checkOpenCodeV2Model, checkOpenCodeModelConfig, checkOpenCodeModelConfigAsync, parseJsonc }
 
 if (require.main === module && process.argv[2] === '--check-model') {
   let input = ''

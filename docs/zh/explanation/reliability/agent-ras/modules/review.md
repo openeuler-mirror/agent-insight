@@ -18,7 +18,7 @@ agent_ras/review/
   _template_domain.py.example
 ```
 
-由 [`detectors/loader.py`](../../../../../../agent_ras/detectors/loader.py) 扫描；与同 `domain_id` 的 DETECTOR/RECOVERY 插件 join。
+由 [`detectors/loader.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/detectors/loader.py) 扫描；与同 `domain_id` 的 DETECTOR/RECOVERY 插件 join。
 
 ## 扩展
 

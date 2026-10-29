@@ -20,6 +20,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import test from 'node:test';
 
 import { SkillExperimentProgress, type SkillExperimentProgressProps } from '@/components/skill-workbench/SkillExperimentProgress';
+import { withWorkbenchTraceProgress, summarizeAbSide, formatWorkbenchScore } from '@/lib/skill-workbench/ab-comparison';
 
 const finished = { total: 3, succeeded: 3, failed: 0, pending: 0 };
 const evaluating = { total: 3, succeeded: 1, failed: 0, pending: 2 };
@@ -42,6 +43,21 @@ test('执行结束但评测未结束时，两个进度独立显示', () => {
     { label: '结果评测', percent: 33, text: '已结束 1 / 3 项' },
   ]);
   assert.doesNotMatch(html, /第一批|剩余任务|反向用例|冻结实验配置|生成实验结论/);
+});
+
+test('等待入库使用真实 Attempt 阶段，保留原运行状态且不误报正在执行', () => {
+  const states = { case1: { b: { status: 'running', runs: [{ status: 'running', experimentCaseId: 'exp-case' }] } } };
+  const projected = withWorkbenchTraceProgress(states, [{ id: 'exp-case', traceAttemptStatus: 'waiting_trace' }]);
+  assert.equal(summarizeAbSide(projected.case1.b).status, 'waiting_trace');
+  assert.equal(states.case1.b.runs[0].status, 'running');
+  assert.equal(formatWorkbenchScore(null, summarizeAbSide(projected.case1.b).status), '等待 Trace 入库');
+  const html = render({ executionProgress: evaluating, waitingTrace: 2 });
+  assert.match(html, />等待 Trace 入库</);
+  assert.match(html, /2 项 Agent 已执行结束/);
+  assert.match(html, /入库超时不会自动重新执行 Agent/);
+  assert.doesNotMatch(html, /正在执行用例/);
+  assert.match(render({ executionProgress: evaluating, waitingTrace: 1 }), /执行中 · 部分等待 Trace 入库/);
+  assert.equal(summarizeAbSide(withWorkbenchTraceProgress(states, [{ id: 'exp-case', traceAttemptStatus: 'ready' }]).case1.b).status, 'running');
 });
 
 test('触发分析使用触发判定，已有 Trace 不暗示重新执行 Agent', () => {

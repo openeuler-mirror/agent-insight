@@ -48,7 +48,7 @@ export function evaluationScoreState(
   const selected = evaluatorIds.map((id) => byId.get(id));
   if (fallbackStatus === 'cancelled' && selected.some((item) => !item || ['pending', 'running'].includes(item.status || ''))) return { score: null, status: 'cancelled' };
   if (selected.some((item) => item?.status === 'running')) return { score: null, status: 'evaluating' };
-  if (selected.some((item) => item?.status === 'pending')) return { score: null, status: ['pending', 'running', 'evaluating'].includes(fallbackStatus) ? fallbackStatus : 'executed' };
+  if (selected.some((item) => item?.status === 'pending')) return { score: null, status: ['pending', 'running', 'waiting_trace', 'evaluating'].includes(fallbackStatus) ? fallbackStatus : 'executed' };
   if (selected.some((item) => !item)) return { score: null, status: fallbackStatus };
   if (selected.some((item) => item?.status === 'failed')) return { score: null, status: 'failed' };
   if (selected.every((item) => item?.status === 'done')) {

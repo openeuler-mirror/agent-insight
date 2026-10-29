@@ -230,7 +230,7 @@ changefreq: monthly
 - 用户反馈或实际运行记录。
 - 你补充的目标与限制。
 
-如果问题较多，平台会帮助合并相似问题并安排优先级。开始优化前，请确认计划没有把互相冲突的要求同时执行。
+点击 **Skill 优化**会直接提交输入框中的诉求；没有输入时，正式版本先归并当前版本的评估与实验问题，有可执行项就继续，无需再次确认。归并过程会识别冲突，不能执行的条目会单独保留；没有待优化问题时会提示补充诉求。
 
 ### 5.2 推荐的优化诉求模板
 
@@ -388,6 +388,6 @@ A/B 测试主要用于判断两个版本的相对表现。请查看具体退步�
 ## 10. 延伸阅读
 
 - [Skill 工作台用户指南](../../../explanation/optimization/skills/workbench-overview.md)
-- [Skill 生成用户指南](generate.md)
-- [Skill 优化用户指南](optimize.md)
+- [Skill 生成用户指南](./generate.md)
+- [Skill 优化用户指南](./optimize.md)
 - [Skill 评测总览](../../../explanation/evaluation/skills/overview.md)

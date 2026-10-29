@@ -7,7 +7,7 @@ changefreq: monthly
 
 # Agent Insight
 
-![Agent Insight](/brand/logo-horizontal-light.svg)
+![Agent Insight](../../../images/logo-horizontal-light.svg)
 
 让每一个 Agent 都可被观测、可被评估、可自我进化。
 
@@ -42,7 +42,7 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 
 > **Tip**
 > 如果你是第一次使用，建议按
-> [5 分钟上手](../../tutorial/platform/01-quick-start.md) → [核心概念](core-concepts.md) →
+> [5 分钟上手](../../tutorial/platform/01-quick-start.md) → [核心概念](./core-concepts.md) →
 > 目标模块文档 的顺序阅读。
 
 ## 主要模块
@@ -108,7 +108,7 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 - [5 分钟上手](../../tutorial/platform/01-quick-start.md)
 - [客户端安装](../../how-to/platform/settings/access-control.md)
 - [运行观测](../observability/overview.md)
-- [核心概念](core-concepts.md)
+- [核心概念](./core-concepts.md)
 
 ### 评测与质量负责人
 
@@ -144,7 +144,7 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 - 第一次接入平台： [5 分钟上手](../../tutorial/platform/01-quick-start.md)
 - 先完成平台基础配置： [模型注册](../../how-to/platform/settings/model-registry.md)
 - 想直接复制接入命令： [客户端安装](../../how-to/platform/settings/access-control.md)
-- 先理解名词和关系： [核心概念](core-concepts.md)
+- 先理解名词和关系： [核心概念](./core-concepts.md)
 - 想从 Agent 资产开始： [Agent 概览](../../how-to/platform/manage-agents.md)
 - 想先看运行数据： [运行观测](../observability/overview.md)
 - 想建立离线评测： [评估与实验](../evaluation/overview.md)

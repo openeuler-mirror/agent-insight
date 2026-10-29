@@ -525,11 +525,11 @@ SessionHub 检出/恢复
 
 | 步骤 | 路径 | 符号 |
 |------|------|------|
-| 触发推送 | [`agent_ras/ras_runtime/session_hub.py`](../../../../../../agent_ras/ras_runtime/session_hub.py) | 调用 `fire_push_anomaly` / `fire_push_action_result` |
-| 组包与 HTTP | [`agent_ras/ras_runtime/insight_push.py`](../../../../../../agent_ras/ras_runtime/insight_push.py) | `fire_push_*` → `push_anomaly` / `push_action_result` → `push_event` |
-| 路由 | [`src/app/api/ingest/ras-events/route.ts`](../../../../../../src/app/api/ingest/ras-events/route.ts) | `POST` |
-| 归一化 | [`src/lib/ingest/ras/normalize.ts`](../../../../../../src/lib/ingest/ras/normalize.ts) | `normalizeRasIngestBody` |
-| 落库 | [`src/lib/ingest/ras/store.ts`](../../../../../../src/lib/ingest/ras/store.ts) | `upsertRasIngestRecords`（内可 `findRootExecutionId`） |
+| 触发推送 | [`agent_ras/ras_runtime/session_hub.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/ras_runtime/session_hub.py) | 调用 `fire_push_anomaly` / `fire_push_action_result` |
+| 组包与 HTTP | [`agent_ras/ras_runtime/insight_push.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/ras_runtime/insight_push.py) | `fire_push_*` → `push_anomaly` / `push_action_result` → `push_event` |
+| 路由 | [`src/app/api/ingest/ras-events/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/ingest/ras-events/route.ts) | `POST` |
+| 归一化 | [`src/lib/ingest/ras/normalize.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/ras/normalize.ts) | `normalizeRasIngestBody` |
+| 落库 | [`src/lib/ingest/ras/store.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/ras/store.ts) | `upsertRasIngestRecords`（内可 `findRootExecutionId`） |
 
 载荷：`{ events: [{ taskId, type, deliveryId, framework, anomalyKind, severity, summary, actionTypes, payload }] }`。契约见 [OTLP 文档 RAS 旁路节](../../../../reference/observability/otlp-attribute-contract.md#ras-旁路属性)。
 
@@ -553,12 +553,12 @@ fi-worker tick: claim
 
 | 步骤 | 路径 | 符号 |
 |------|------|------|
-| 轮询认领/上传 | [`scripts/fi-worker.js`](../../../../../../scripts/fi-worker.js) | `tick` → `runCollector` → `uploadResult` |
-| CLI / 编排 | [`agent_fault_injection/.../cli.py`](../../../../../../agent_fault_injection/cli.py)、[`pipeline/runner.py`](../../../../../../agent_fault_injection/pipeline/runner.py) | `ExperimentRunner.run` |
-| 映射 markers + taskId（interactions=[]） | [`.../pipeline/interactions_mapper.py`](../../../../../../agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
-| 组装/写盘 | [`.../pipeline/collect_payload.py`](../../../../../../agent_fault_injection/pipeline/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
-| 路由 | [`src/app/api/fault-injection/runs/[runId]/collect-result/route.ts`](../../../../../../src/app/api/fault-injection/runs/[runId]/collect-result/route.ts) | `POST` |
-| 采集入库（不评判） | [`src/lib/fault-injection/store.ts`](../../../../../../src/lib/fault-injection/store.ts) | `persistFiCollectIngress` |
+| 轮询认领/上传 | [`scripts/fi-worker.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/fi-worker.js) | `tick` → `runCollector` → `uploadResult` |
+| CLI / 编排 | [`agent_fault_injection/.../cli.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_fault_injection/cli.py)、[`pipeline/runner.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_fault_injection/pipeline/runner.py) | `ExperimentRunner.run` |
+| 映射 markers + taskId（interactions=[]） | [`.../pipeline/interactions_mapper.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
+| 组装/写盘 | [`.../pipeline/collect_payload.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_fault_injection/pipeline/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
+| 路由 | [`src/app/api/fault-injection/runs/[runId]/collect-result/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/fault-injection/runs/%5BrunId%5D/collect-result/route.ts) | `POST` |
+| 入库+评判 | [`src/lib/fault-injection/store.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/fault-injection/store.ts) | `ingestCollectAndJudge` |
 | ~~④ bridge~~ | **已移除**（原 `ras-bridge.ts`） | — |
 
 运行中插件只往本机 `raw/` append；**对 Insight 的 ③ 是 Run 结束一次 POST**。控制面 ②（heartbeat/claim）与 ③ 分开，可周期发生。
@@ -567,8 +567,8 @@ fi-worker tick: claim
 
 | 步骤 | 路径（示意） | 说明 |
 |------|----------------|------|
-| 接入 | [`src/app/api/ingest/otel/v1/traces/route.ts`](../../../../../../src/app/api/ingest/otel/v1/traces/route.ts) 等 | OTLP/HTTP |
-| 消费 | [`src/lib/ingest/otel-consumer/`](../../../../../../src/lib/ingest/otel-consumer/) | spool → `Execution` |
+| 接入 | [`src/app/api/ingest/otel/v1/traces/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/ingest/otel/v1/traces/route.ts) 等 | OTLP/HTTP |
+| 消费 | [`src/lib/ingest/otel-consumer/`](https://gitcode.com/openeuler/agent-insight/tree/master/src/lib/ingest/otel-consumer) | spool → `Execution` |
 
 与 ①/③ 仅靠 `taskId` 对齐展示，互不替代。
 

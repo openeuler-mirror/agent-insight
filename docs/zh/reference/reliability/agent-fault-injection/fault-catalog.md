@@ -1,6 +1,6 @@
 # 内置故障覆盖矩阵
 
-> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../../../agent_fault_injection/) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。
+> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](https://gitcode.com/openeuler/agent-insight/tree/master/agent_fault_injection) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。
 
 
 > 权威发现方式：`python -m agent_fault_injection.cli fault list`。每个故障目录**必须**含 `SKILL.md`（YAML frontmatter 必填 `name` / `description`）。多数故障仅需该文件；若需声明 tools / `agent_tools` 或机械注入步骤，可另加**可选**的 `fault.json`。
@@ -43,7 +43,7 @@
 本仓隔离 Judge 对照 **Skill 规范 ↔ 实际轨迹**，输出四元组。  
 这**不等于** agent-insight / `agent_ras` 检测器是否报警；检测器对齐需另接 RAS 观测链路。
 
-TOKEN 探针（旧 `tool-result-corruption` / `prompt-system-override` / `interception-*`）已迁至 [`tests/fixtures/injection-smoke/`](../../../../../agent_fault_injection/tests/fixtures/injection-smoke/)，**不**出现在 `fault list`。
+TOKEN 探针（旧 `tool-result-corruption` / `prompt-system-override` / `interception-*`）已迁至 [`tests/fixtures/injection-smoke/`](https://gitcode.com/openeuler/agent-insight/tree/master/agent_fault_injection/tests/fixtures/injection-smoke)，**不**出现在 `fault list`。
 
 ## 修订记录
 

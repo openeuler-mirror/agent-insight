@@ -876,7 +876,7 @@ function buildCapabilities(cfg, opts) {
         ready: Boolean(runtime.ready && normalizeModelIds(info?.agents).length),
         unavailableReason: !runtime.ready ? runtime.reason || '运行时尚未就绪'
           : !normalizeModelIds(info?.agents).length ? sanitizeAgentDiagnostic(info?.note) || `${id} Agent 列表为空，请检查探测结果` : undefined,
-        ...(id === 'opencode' && runtime.major === 1 ? { skillSnapshotVersion: 4 } : {}),
+        ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}),
       },
       actions: [...WHITELIST],
     }
@@ -893,7 +893,7 @@ function buildCapabilities(cfg, opts) {
           runExperimentCase: { version: 2, returnsTraceId: id !== 'opencode' && runtime.canResolveTraceId,
             ready: id !== 'opencode' && runtime.ready,
             ...(id === 'opencode' ? { unavailableReason: runtime.reason || '尚未取得权威 Agent 列表，请检查客户端探测结果' } : {}),
-            ...(id === 'opencode' && runtime.major === 1 ? { skillSnapshotVersion: 4 } : {}) },
+            ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}) },
           actions: [...WHITELIST],
         })
       }
@@ -1680,9 +1680,6 @@ const runtimeAdapters = {
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   payload.signal?.throwIfAborted()
   const executable = which(runtimeAdapters[String(payload.platform)]?.executableName || String(payload.platform))
-  if (payload.platform === 'opencode' && payload.skillExecution && inspectOpencodeRuntime(executable).major === 2) {
-    throw createAgentRunError('SKILL_EXECUTION_UNSUPPORTED', 'OpenCode v2 支持普通数据集生成 Trace；Skill 冻结快照与只读触发分析尚未适配，请使用 v1 执行此模式')
-  }
   let isolated = payload.skillExecution && executable ? prepareSkillExperimentWorkspace(executable, payload, undefined, cfg.clientId) : null
   if (!payload.skillExecution && !payload.cwd) {
     const root = path.join(cfg.workspaceBase || CLIENT_HOME, 'experiment-workspaces')

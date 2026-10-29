@@ -22,6 +22,7 @@ export interface SkillExperimentProgressProps {
   status: string;
   preset: string | null;
   traceSource?: string;
+  waitingTrace?: number;
   executionProgress: ExperimentItemProgress | null;
   evaluationProgress: EvaluationProgress | null;
   sideProgress?: Partial<Record<'a' | 'b', {
@@ -55,7 +56,7 @@ function ProgressRow({ label, progress }: { label: string; progress: EvaluationP
 }
 
 export function SkillExperimentProgress({
-  status, preset, traceSource, executionProgress, evaluationProgress, sideProgress, versionALabel, versionBLabel,
+  status, preset, traceSource, waitingTrace = 0, executionProgress, evaluationProgress, sideProgress, versionALabel, versionBLabel,
 }: SkillExperimentProgressProps) {
   const isAb = preset === 'skill-ab';
   const existingTrace = !isAb && traceSource === 'existing';
@@ -71,7 +72,8 @@ export function SkillExperimentProgress({
     : status === 'draft' ? '准备中'
     : settled ? hasFailures ? '已结束 · 存在失败项' : hasUnscored ? '已结束 · 存在未计分项' : '已完成'
       : !hasProgress ? '运行中'
-      : pendingExecution ? existingTrace ? '等待 Trace' : '执行中'
+      : pendingExecution ? existingTrace ? '等待 Trace' : waitingTrace > 0
+        ? waitingTrace >= (executionProgress?.pending || 0) ? '等待 Trace 入库' : '执行中 · 部分等待 Trace 入库' : '执行中'
         : pendingEvaluation ? '评测中' : '汇总中';
   const issues = [
     executionProgress?.failed ? `${executionProgress.failed} 项执行失败` : '',
@@ -84,7 +86,8 @@ export function SkillExperimentProgress({
     : settled ? issues.length ? `${issues.join('，')}；请在下方明细中查看原因。`
       : hasFailures ? '请在下方明细中查看失败原因。' : `${evaluationLabel}已结束。`
       : !hasProgress ? '等待进度数据更新。'
-      : pendingExecution ? existingTrace ? '等待所选 Trace 就绪。' : '正在执行用例。'
+      : pendingExecution ? existingTrace ? '等待所选 Trace 就绪。' : waitingTrace > 0
+        ? `${waitingTrace} 项 Agent 已执行结束，正在等待 Trace 上传入库；入库超时不会自动重新执行 Agent。` : '正在执行用例。'
         : pendingEvaluation ? preset === 'trigger' ? '正在判定 Skill 触发结果。' : '正在评测执行结果。'
           : '正在整理实验结果。';
 

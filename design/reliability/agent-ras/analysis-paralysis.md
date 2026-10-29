@@ -500,4 +500,4 @@ flowchart TD
 | **Degenerate Output Detection** | Agent Patterns Catalog | Ring Buffer（最近 8 条输出）+ Jaccard token overlap ≥0.7 判定重复 + escalation | 针对输出端重复，非推理阶段过度思考检测 |
 | **AlexCuadron/Overthinking** | GitHub 开源 | LLM-as-judge 对 trajectory 打分 0-10（含 analysis_paralysis 指标），用于离线和后处理选优 | 评估框架而非在线检测器，但 scoring logic 可为本方案 Skill prompt 设计提供参考 |
 
-> 故障注入技术调研（AutoTransform/AutoInject、MAS-FIRE 深度拆解）已移至独立文档：[semantic-fault-injection-survey.md](../../../docs/zh/explanation/reliability/agent-fault-injection/modules/semantic-fault-injection-survey.md)
+> 故障注入技术调研（AutoTransform/AutoInject、MAS-FIRE 深度拆解）已移至独立文档：semantic-fault-injection-survey.md（历史引用未收录：`../../../docs/zh/explanation/reliability/agent-fault-injection/modules/semantic-fault-injection-survey.md`）

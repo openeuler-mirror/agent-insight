@@ -8,9 +8,9 @@ changefreq: monthly
 # Agent FI：本机安装过程详解
 
 > **读者**：需要理解「执行 FI setup curl 后，用户机器上发生了什么」的使用者与排障者。  
-> **范围**：本机 **FI Client / Worker** 的安装、落盘与常驻进程；不含故障 Skill 内容与实验评估器算法。
-> **真源**：[`src/app/api/fault-injection/setup/route.ts`](../../../../../src/app/api/fault-injection/setup/route.ts)、[`scripts/install-fault-injection.js`](../../../../../scripts/install-fault-injection.js)、[`scripts/fi-worker.js`](../../../../../scripts/fi-worker.js)。\
-> **产品操作**：[user-guide/observability/fault-injection.md](run-injection.md)。
+> **范围**：本机 **FI Client / Worker** 的安装、落盘与常驻进程；不含故障 Skill 内容与服务端 Judge 算法。  
+> **真源**：[`src/app/api/fault-injection/setup/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/fault-injection/setup/route.ts)、[`scripts/install-fault-injection.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-fault-injection.js)、[`scripts/fi-worker.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/fi-worker.js)。\
+> **产品操作**：[user-guide/observability/fault-injection.md](./run-injection.md)。
 
 ---
 
@@ -142,7 +142,7 @@ sequenceDiagram
 
 ## 5. setup 路由返回的 bash 逐步说明
 
-实现：[`src/app/api/fault-injection/setup/route.ts`](../../../../../src/app/api/fault-injection/setup/route.ts)。
+实现：[`src/app/api/fault-injection/setup/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/fault-injection/setup/route.ts)。
 
 | 步 | 脚本行为 | 说明 |
 |----|----------|------|
@@ -160,7 +160,7 @@ sequenceDiagram
 
 ## 6. `install-fault-injection.js` 逐步说明
 
-实现：[`scripts/install-fault-injection.js`](../../../../../scripts/install-fault-injection.js)。
+实现：[`scripts/install-fault-injection.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-fault-injection.js)。
 
 ```mermaid
 flowchart TD
@@ -356,9 +356,9 @@ tail -n 50 ~/.agent-insight/fault-injection/worker.log
 
 | 文件 | 说明 |
 |------|------|
-| [`src/app/api/fault-injection/setup/route.ts`](../../../../../src/app/api/fault-injection/setup/route.ts) | curl 安装脚本 |
-| [`scripts/install-fault-injection.js`](../../../../../scripts/install-fault-injection.js) | 目录、config、managed venv 安装、启停 Worker |
-| [`scripts/fi-worker.js`](../../../../../scripts/fi-worker.js) | 心跳 / claim / CLI / collect |
-| [`bin/cli.js`](../../../../../bin/cli.js) | `install-fault-injection` / `fi-worker` 子命令 |
+| [`src/app/api/fault-injection/setup/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/fault-injection/setup/route.ts) | curl 安装脚本 |
+| [`scripts/install-fault-injection.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-fault-injection.js) | 目录、config、managed venv 安装、启停 Worker |
+| [`scripts/fi-worker.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/fi-worker.js) | 心跳 / claim / CLI / collect |
+| [`bin/cli.js`](https://gitcode.com/openeuler/agent-insight/blob/master/bin/cli.js) | `install-fault-injection` / `fi-worker` 子命令 |
 | [01-getting-started.md](../../../tutorial/reliability/agent-fault-injection/01-getting-started.md) | 最短启用 |
-| [user-guide · 故障注入](run-injection.md) | 向导、停止、冒烟与本地 CLI |
+| [user-guide · 故障注入](./run-injection.md) | 向导、停止、冒烟与本地 CLI |

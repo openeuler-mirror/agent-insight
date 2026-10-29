@@ -14,7 +14,7 @@
 
 **在范围内**：环内异常检测与恢复；多平台 HostControl / AgentAdapter；同进程 `ras_runtime`；① `ras-events` 旁路与能力配置拉取。
 
-**不在范围内**：用 OTLP **替代**环内恢复；RAS/FI 承担日常完整 ⓪ Trace（xiaoO 走 Insight collector）；为每个平台重写检测算法；fork openjiuwen.core；Insight 看板实现（见 [`design/`](../../../../../design/) 与 developer-guide）；运行时人工 HITL 确认（现行为自动 L3 Reviewer / wire 投递）；独立 RAS HTTP 守护进程。
+**不在范围内**：用 OTLP **替代**环内恢复；RAS/FI 承担日常完整 ⓪ Trace（xiaoO 走 Insight collector）；为每个平台重写检测算法；fork openjiuwen.core；Insight 看板实现（见 [`design/`](https://gitcode.com/openeuler/agent-insight/tree/master/design) 与 developer-guide）；运行时人工 HITL 确认（现行为自动 L3 Reviewer / wire 投递）；独立 RAS HTTP 守护进程。
 
 ## 2. 四层逻辑架构
 
@@ -138,7 +138,7 @@ openjiuwen **深挂载不走本节**（进程内已是 Python，直连 `core/mon
 2. Bun 的 `bun:ffi` `dlopen` 默认是 **局部符号绑定**。若只靠它加载 libpython，随后解释器再加载 `_opcode.so` 时会出现 `undefined symbol: PyList_New`。
 3. 因此桥接层先用 **libc `dlopen(libpython, RTLD_NOW | RTLD_GLOBAL)`** 把 `Py*` 挂到进程全局符号表，再 `bun:ffi` 绑定 `Py_Initialize` / `PyRun_SimpleString`。初始化和 import 完成后以 `PyEval_SaveThread` 释放 GIL；每次 `embedCall` 通过成对的 `PyGILState_Ensure` / `PyGILState_Release` 进入 Python。这样**无需** `LD_PRELOAD=libpython` 即可直接跑 `opencode`，且 Python runtime loop / HTTP worker 能在两次 FFI 调用之间继续运行（见 `scripts/smoke_inproc.sh`）。
 
-配置字段（示例见 [`agent_ras/config/agent_ras.inproc.example.json`](../../../../../agent_ras/config/agent_ras.inproc.example.json)）：
+配置字段（示例见 [`agent_ras/config/agent_ras.inproc.example.json`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/config/agent_ras.inproc.example.json)）：
 
 | 字段 | 含义 |
 |------|------|
@@ -150,7 +150,7 @@ openjiuwen **深挂载不走本节**（进程内已是 Python，直连 `core/mon
 
 ### 4.2 初始化与一次 `call` 如何落地
 
-实现文件：[`platform_adapter/common/python_bridge.js`](../../../../../agent_ras/platform_adapter/common/python_bridge.js)。
+实现文件：[`platform_adapter/common/python_bridge.js`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/platform_adapter/common/python_bridge.js)。
 
 ```mermaid
 sequenceDiagram
@@ -192,13 +192,13 @@ sequenceDiagram
 
 ### 4.3 进程内 runtime（Python 侧）
 
-[`ras_runtime/runtime.py`](../../../../../agent_ras/ras_runtime/runtime.py) 在首次 `call` 时：
+[`ras_runtime/runtime.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/ras_runtime/runtime.py) 在首次 `call` 时：
 
 - 创建全局 `SessionHub`
 - 起守护线程 `ras_runtime_loop`，跑独立 `asyncio` event loop
 - `run_coro(hub.observe(...))`：`asyncio.run_coroutine_threadsafe` + 默认超时 8s，把异步检测桥成 FFI 同步调用
 
-[`ras_runtime/facade.py`](../../../../../agent_ras/ras_runtime/facade.py) 是稳定对外 API：`call(op, session_id, payload_json) -> str`。\
+[`ras_runtime/facade.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/ras_runtime/facade.py) 是稳定对外 API：`call(op, session_id, payload_json) -> str`。\
 ops：`health` | `hello` | `observe` | `reset` | `action_result` | `skill_result` | `flush` | `bye`。其中 `flush` 有界等待当前 session 的 anomaly/action_result HTTP receipt；超时保持 fail-open 且不取消仍在发送的任务。
 
 ### 4.4 模块关系与代码文件调用图
@@ -307,7 +307,7 @@ L3 语义判定（协议 inproc：OpenCode / xiaoO）：Detector 经 `HostCallba
 
 ### 4.6 Python 宿主 inproc（无 FFI）
 
-[`platform_adapter/common/ras_client.py`](../../../../../agent_ras/platform_adapter/common/ras_client.py) 同进程 `import ras_runtime`，JSON 编解码与 JS client 对齐；xiaoO Daemon 路径用它 + `CallableHostControl`。不加载 `python_bridge.js`，也**不**再 dlopen libpython（解释器已是宿主）。L3 Judge 与 OpenCode 同协议：observe 可带 `skill_requests`，宿主 `RasClient.skill_result` 回灌 Hub。
+[`platform_adapter/common/ras_client.py`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/platform_adapter/common/ras_client.py) 同进程 `import ras_runtime`，JSON 编解码与 JS client 对齐；xiaoO Daemon 路径用它 + `CallableHostControl`。不加载 `python_bridge.js`，也**不**再 dlopen libpython（解释器已是宿主）。L3 Judge 与 OpenCode 同协议：observe 可带 `skill_requests`，宿主 `RasClient.skill_result` 回灌 Hub。
 
 验证：`bash agent_ras/scripts/smoke_inproc.sh`（显式 `unset LD_PRELOAD`，证明 RTLD_GLOBAL 路径成立）。
 
@@ -321,7 +321,7 @@ xiaoO gateway 会为 hook 场景 fork 短生命周期 Python 子进程。若每�
 2. worker 进程 `python -m platform_adapter.common.transport.subprocess_ipc` 持有**唯一** SessionHub；启动时设 `RAS_EMBED_IPC_FORCE_LOCAL=1`，避免 worker 再转发自己。
 3. 可用 `RAS_EMBED_USE_IPC=0` 关闭转发（仅调试）。Daemon SSE 路径本身已是长生命周期 Python 进程，一般走 §4.6 直连，不依赖 hooker IPC。
 
-实现：[`platform_adapter/common/transport/subprocess_ipc/`](../../../../../agent_ras/platform_adapter/common/transport/subprocess_ipc/)。操作见 `guides/platform-xiaoo.md`。
+实现：[`platform_adapter/common/transport/subprocess_ipc/`](https://gitcode.com/openeuler/agent-insight/tree/master/agent_ras/platform_adapter/common/transport/subprocess_ipc)。操作见 `guides/platform-xiaoo.md`。
 
 ---
 
@@ -402,7 +402,7 @@ sequenceDiagram
 
 **实验 / 不做**：独立 RAS HTTP 端口或 sidecar 守护进程不在稳定承诺内。`subprocess_ipc` **不属于**这类实验项。
 
-Insight 看板与 `POST /api/ingest/ras-events` 契约见 [developer-guide](../../../reference/observability/otlp-attribute-contract.md) 与 [design/reliability/reliability-standalone-ui](../../../../../design/reliability/reliability-standalone-ui/)。
+Insight 看板与 `POST /api/ingest/ras-events` 契约见 [developer-guide](../../../reference/observability/otlp-attribute-contract.md) 与 [design/reliability/reliability-standalone-ui](https://gitcode.com/openeuler/agent-insight/tree/master/design/reliability/reliability-standalone-ui)。
 
 ## 8. 加新平台
 

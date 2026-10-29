@@ -174,7 +174,7 @@ changefreq: monthly
 
 ## 下一步
 
-- 配置外部检索能力： [联网搜索](web-search.md)
-- 完成 Agent 接入准备： [安装指导](access-control.md)
+- 配置外部检索能力： [联网搜索](./web-search.md)
+- 完成 Agent 接入准备： [安装指导](./access-control.md)
 - 使用模型完成首轮评测： [跑通第一次评测](../../../tutorial/evaluation/01-first-experiment.md)
 - 返回用户指南入口： [Agent Insight](../../../explanation/platform/product-overview.md)

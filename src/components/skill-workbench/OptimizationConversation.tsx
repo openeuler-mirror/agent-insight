@@ -16,7 +16,7 @@
 
 'use client';
 
-import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
@@ -180,6 +180,7 @@ export function OptimizationConversation({
   baselineFiles,
   issues,
   autoStart,
+  autoStartFeedback = '',
   useMergePlan,
   backgroundRunning,
   tasks,
@@ -202,12 +203,13 @@ export function OptimizationConversation({
   baselineFiles: Record<string, string>;
   issues: Array<{ id: string; severity: string; summary: string; dimension: string; evidence?: string | null; reasoning?: string | null; suggestedFix: string | null }>;
   autoStart: boolean;
+  autoStartFeedback?: string;
   useMergePlan: boolean;
   backgroundRunning: boolean;
   tasks: OptimizationTaskView[];
   records: OptimizationRecordView[];
   publishing: boolean;
-  quickActions?: ReactNode;
+  quickActions?: ReactNode | ((feedback: string, busy: boolean) => ReactNode);
   onViewRecords: (record: OptimizationRecordView) => void;
   onPublish: (record: OptimizationRecordView) => void;
   onRepair: (record: OptimizationRecordView) => void;
@@ -228,7 +230,8 @@ export function OptimizationConversation({
   const [localStep, setLocalStep] = useState(backgroundRunning ? 1 : 0);
   const busy = planning || running || backgroundRunning;
   const autoStartedRef = useRef(false);
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const followOutputRef = useRef(true);
   const ownsStreamRef = useRef(false);
   const snapshotRequestRef = useRef(0);
   const backgroundRunningRef = useRef(backgroundRunning);
@@ -240,9 +243,16 @@ export function OptimizationConversation({
   useEffect(() => { backgroundRunningRef.current = backgroundRunning; }, [backgroundRunning]);
   useEffect(() => { observedRecordsRef.current = optimizationRecordsSyncKey(records); }, [records]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: busy ? 'auto' : 'smooth' });
-  }, [busy, messages, records]);
+  useLayoutEffect(() => {
+    followOutputRef.current = true;
+  }, [workbenchSessionId]);
+
+  useLayoutEffect(() => {
+    const viewport = scrollRef.current;
+    if (viewport && followOutputRef.current) {
+      viewport.scrollTop = viewport.scrollHeight;
+    }
+  }, [busy, loading, messages, records, liveTasks, localStep, workbenchSessionId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -380,7 +390,7 @@ export function OptimizationConversation({
       }
       if (plan?.status === 'running') throw new Error('归并优化依据超时，请稍后重试');
       if (plan?.status === 'failed') throw new Error(plan.operatorMeta?.error || '归并优化依据失败');
-      if (!plan) return null;
+      if (!plan) throw new Error('当前没有待优化问题，可补充优化诉求后重试。');
       const executable = plan.items.some((item) => (
         (item.route === 'core' || item.route === 'reference') && item.status === 'pending'
       ));
@@ -419,8 +429,12 @@ export function OptimizationConversation({
   };
 
   const runRequest = useCallback(async (requestText: string, options?: { mergeIssues?: boolean }) => {
-    if (busy || ownsStreamRef.current || (!hasOptimizationInput(requestText, issues) && !options?.mergeIssues)) return;
-    const normalizedRequest = requestText.trim() || (issues.length ? `根据 ${issues.length} 个静态评估问题优化` : '根据已确认的评估问题优化');
+    if (busy || ownsStreamRef.current) return;
+    if (!hasOptimizationInput(requestText, issues) && !options?.mergeIssues) {
+      onError('当前没有待优化问题，可补充优化诉求后重试。');
+      return;
+    }
+    const normalizedRequest = requestText.trim() || (options?.mergeIssues ? '根据当前版本的评估与实验问题优化' : `根据 ${issues.length} 个静态评估问题优化`);
     const runId = safeUUID();
     const runMeta: ChatBlock = { kind: 'optimization_meta', id: `optimization-${runId}`, runId };
     let processOutcome: ProcessOutcome = 'error';
@@ -631,8 +645,8 @@ export function OptimizationConversation({
     if (loading || busy || autoStartedRef.current) return;
     autoStartedRef.current = true;
     onAutoStartConsumed();
-    void runRequest('', { mergeIssues: useMergePlan });
-  }, [autoStart, busy, issues.length, loading, onAutoStartConsumed, runRequest, useMergePlan]);
+    void runRequest(autoStartFeedback, { mergeIssues: useMergePlan && !autoStartFeedback.trim() });
+  }, [autoStart, autoStartFeedback, busy, issues.length, loading, onAutoStartConsumed, runRequest, useMergePlan]);
 
   const run = (event: FormEvent) => {
     event.preventDefault();
@@ -654,7 +668,15 @@ export function OptimizationConversation({
   if (loading) return <div className="m-auto flex items-center text-xs text-foreground-muted"><Loader2 className="mr-2 size-4 animate-spin" />加载优化会话</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pb-3" style={{ scrollbarGutter: 'stable' }}>
+      <div
+        ref={scrollRef}
+        onScroll={(event) => {
+          const viewport = event.currentTarget;
+          followOutputRef.current = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 1;
+        }}
+        className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pb-3"
+        style={{ scrollbarGutter: 'stable' }}
+      >
         {generatorSessionId && (
           <GenerationHistory
             user={user}
@@ -663,7 +685,7 @@ export function OptimizationConversation({
             onError={onError}
           />
         )}
-        {messages.length === 0 && !autoStart && <div className="rounded-lg bg-background-secondary p-3 text-xs leading-5 text-foreground-secondary"><b className="text-foreground">优化依据已准备。</b><br />{issues.length ? `将使用当前静态评估的 ${issues.length} 个问题。` : '可以补充明确的优化诉求。'}</div>}
+        {messages.length === 0 && !autoStart && <div className="rounded-lg bg-background-secondary p-3 text-xs leading-5 text-foreground-secondary"><b className="text-foreground">可以提交优化诉求。</b><br />{issues.length ? `未填写诉求时，将使用当前有效的评估问题。` : useMergePlan ? '点击“Skill 优化”或发送，将整理当前版本的评估与实验问题并执行；也可以填写具体诉求。' : '填写具体诉求后，点击“Skill 优化”或发送即可开始。'}</div>}
         {messages.map((message, index) => {
           const meta = optimizationMeta(message);
           const messageRecords = recordsAtMessage.get(index) || [];
@@ -724,14 +746,13 @@ export function OptimizationConversation({
             <OptimizationResultCard record={record} busy={busy} publishing={publishing} onViewRecords={onViewRecords} onPublish={onPublish} onRepair={onRepair} />
           </div>;
         })}
-        <div ref={endRef} />
       </div>
-      {quickActions}
+      {typeof quickActions === 'function' ? quickActions(feedback, busy || loading) : quickActions}
       <form onSubmit={run} className="rounded-lg border border-border bg-card p-2">
         <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={3} placeholder={busy ? "可编辑补充诉求，停止或完成后提交…" : "补充优化诉求…"} className="w-full resize-none bg-transparent px-1 text-xs leading-5 text-foreground outline-none placeholder:text-foreground-muted" />
         <div className="flex justify-end">{busy
           ? <button type="button" onClick={stop} disabled={stopping || Boolean(activeTask?.progress?.cancelRequested) || (!ownsStreamRef.current && !activeTask?.id)} className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2 text-xs text-foreground-secondary disabled:opacity-50">{stopping || activeTask?.progress?.cancelRequested ? '正在停止…' : '停止优化'}</button>
-          : <button type="submit" aria-label="开始优化" disabled={!hasOptimizationInput(feedback, issues)} className="inline-flex size-8 items-center justify-center rounded bg-primary text-primary-foreground disabled:opacity-40"><Send className="size-3.5" /></button>}</div>
+          : <button type="submit" aria-label="开始优化" disabled={loading || (!hasOptimizationInput(feedback, issues) && !useMergePlan)} className="inline-flex size-8 items-center justify-center rounded bg-primary text-primary-foreground disabled:opacity-40"><Send className="size-3.5" /></button>}</div>
       </form>
     </div>
   );

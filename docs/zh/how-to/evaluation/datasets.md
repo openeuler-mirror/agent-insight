@@ -83,7 +83,7 @@ npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1
 
 若升级后旧 ZSoft 实验提示 `ZSOFT_TASK_DIGEST_LEGACY`，表示旧版导入程序与评测端采用了不同的文件名排序，并非题目文件一定被修改。管理员应在更新平台与评测服务后，执行 `npx tsx scripts/benchmark/ensure-dataset.ts --benchmark zsoft-l1 --refresh --name "ZSoft L1 摘要修正版"`，再选择新数据集新建实验。旧实验身份不自动修改，直接重评仍使用旧摘要；正常摘要无需迁移。此类错误会显示为评测失败，不再无限等待镜像，也不阻塞同窗口其他合法 Case。
 
-平台、执行客户端和评测服务可以在不同机器。自动生成实验时选择执行客户端即可；该机器的 ZSoft 任务目录仍配置在 MCTS 仓库 `testcases_union/config.env` 的 `ZSOFT_TASKS_DIR` 中，本次不迁移此项。平台按 Case 自动下发题目 ID，无需在前端填写目录或额外导入公开资料包。评测服务启动后自动从公有 SWR 下载并校验接入包固定版本的完整资产，安装到共享数据卷，后续启动复用，无需手动解压。可在评测机项目 `config/benchmark/evaluator.local.yaml` 设置 `benchmarks.zsoft-l1.assetsDir`（默认 `null`，使用托管目录）和 `kernelAccel`（默认 `tcg`，可选 `kvm`），修改后重新启动评测服务。旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再覆盖这些配置。评测服务不访问平台数据库。ZSoft 属于 Benchmark，执行器可以选择 MCTS。具体准备见 [ZSoft 部署指南](benchmarks/deploy-zsoft.md)。
+平台、执行客户端和评测服务可以在不同机器。自动生成实验时选择执行客户端即可；该机器的 ZSoft 任务目录仍配置在 MCTS 仓库 `testcases_union/config.env` 的 `ZSOFT_TASKS_DIR` 中，本次不迁移此项。平台按 Case 自动下发题目 ID，无需在前端填写目录或额外导入公开资料包。评测服务启动后自动从公有 SWR 下载并校验接入包固定版本的完整资产，安装到共享数据卷，后续启动复用，无需手动解压。可在评测机项目 `config/benchmark/evaluator.local.yaml` 设置 `benchmarks.zsoft-l1.assetsDir`（默认 `null`，使用托管目录）和 `kernelAccel`（默认 `tcg`，可选 `kvm`），修改后重新启动评测服务。旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再覆盖这些配置。评测服务不访问平台数据库。ZSoft 属于 Benchmark，执行器可以选择 MCTS。具体准备见 [ZSoft 部署指南](./benchmarks/deploy-zsoft.md)。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 
@@ -433,6 +433,6 @@ trace 只能说明 Agent 实际调用了哪些能力，不能说明当时还有�
 ## 下一步
 
 - 从真实执行沉淀样本：参见本页 [从 Trace 回流数据项](#从-trace-回流数据项)
-- 继续配置评分逻辑：[评估器](evaluators.md)
-- 直接运行评测任务：[实验](experiments.md)
+- 继续配置评分逻辑：[评估器](./evaluators.md)
+- 直接运行评测任务：[实验](./experiments.md)
 - 返回评测总览：[评估与实验](../../explanation/evaluation/overview.md)

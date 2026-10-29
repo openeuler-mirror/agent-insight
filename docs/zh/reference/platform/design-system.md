@@ -8,29 +8,29 @@ changefreq: monthly
 # Design System & Frontend Style
 
 > 对 Agent-Insight 前端的逆向设计审计。配套阅读 [frontend.md](../../explanation/platform/frontend.md)（它讲的是路由与组件接线）。本页讲的是**视觉语言**：设计令牌、排版、控件尺寸，以及一份带漂移检测的 UI/UX 审计。
-> 令牌的单一真源：[`src/app/globals.css`](../../../../src/app/globals.css)（`:root` + `[data-theme='dark']`）。机器可读的导出：[design-tokens.json](design-tokens.json)（W3C Design Tokens 格式）。
+> 令牌的单一真源：[`src/app/globals.css`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/globals.css)（`:root` + `[data-theme='dark']`）。机器可读的导出：[design-tokens.json](./design-tokens.json)（W3C Design Tokens 格式）。
 > 方法：对 582 个含样式的文件做静态分析。下文每个值都可追溯到源码；置信度低的条目已标注。对比度依据 WCAG 2.1 计算。
 
 ## 1. Design language
 
-一种 **"95% 灰阶 + 1 个强调色 + 3 个状态色"** 的信息密集型美学——代码内注释明确点出了它的渊源：*"Langfuse / Linear / Vercel 中性灰阶范式"*（[globals.css:89](../../../../src/app/globals.css)）。特征：
+一种 **"95% 灰阶 + 1 个强调色 + 3 个状态色"** 的信息密集型美学——代码内注释明确点出了它的渊源：*"Langfuse / Linear / Vercel 中性灰阶范式"*（[globals.css:89](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/globals.css)）。特征：
 
 - **克制。** 近乎单色的 Zinc 灰阶承载结构；唯一的靛蓝强调色（`#4F46E5`）仅保留给交互状态（选中、链接、主按钮）——明确*不*用于装饰。
-- **密度。** 字号阶梯有意设定为**比 Tailwind 默认值低一级**（`--text-base: 14px`，正文 `13px`），以营造数据看板/可观测性的观感（[globals.css:78](../../../../src/app/globals.css)）。
+- **密度。** 字号阶梯有意设定为**比 Tailwind 默认值低一级**（`--text-base: 14px`，正文 `13px`），以营造数据看板/可观测性的观感（[globals.css:78](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/globals.css)）。
 - **安静的表面。** 扁平的白色卡片、1px 发丝边框（`#E4E4E7`），以及极低不透明度的阴影（`rgba(0,0,0,0.04)`）。层级靠边框 + 几乎看不见的阴影来传达，而非厚重的投影。
 - **数据用等宽。** 等宽字体（JetBrains Mono / `ui-monospace`）用于 ID、指标、tokens/cost/latency 徽章——这是 Langfuse 的标志性做法。
 
-**技术栈**（来自 [package.json](../../../../package.json)、`scan_stack.py`）：
+**技术栈**（来自 [package.json](https://gitcode.com/openeuler/agent-insight/blob/master/package.json)、`scan_stack.py`）：
 
 | Layer | Choice |
 |---|---|
 | Framework | Next.js 16 (App Router) + React 19 |
 | CSS | Tailwind CSS 4（globals.css 中的 `@theme`，无 `tailwind.config`）+ 纯 CSS 文件 |
-| Primitives | Radix UI（`@radix-ui/react-*`）+ shadcn/ui 模式（[`ui/*`](../../../../src/components/ui) 中的 `cva` + `clsx` + `tailwind-merge`） |
+| Primitives | Radix UI（`@radix-ui/react-*`）+ shadcn/ui 模式（[`ui/*`](https://gitcode.com/openeuler/agent-insight/tree/master/src/components/ui) 中的 `cva` + `clsx` + `tailwind-merge`） |
 | Icons | `lucide-react` |
 | Motion | `framer-motion` |
 | Charts | `recharts`；图/流程图：`@xyflow/react` + `@dagrejs/dagre` |
-| Theming | 在 `<html data-theme>` 上的 `next-themes` 风格属性切换（[theme-context.tsx](../../../../src/lib/client/theme-context.tsx)） |
+| Theming | 在 `<html data-theme>` 上的 `next-themes` 风格属性切换（[theme-context.tsx](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/client/theme-context.tsx)） |
 
 > 注意：`scan_stack` 报告 `shadcn_signal: false`（无 `components.json`），但 `ui/*` 组件明显源自 shadcn（cva 变体、`data-slot`、Radix `Slot`）。可视为"没有 CLI 的 shadcn"。
 
@@ -74,15 +74,15 @@ Trace 类型色由 `src/lib/charts/palette.ts` 统一管理：AGENT=indigo、TAS
 
 ## 5. Components & control sizing
 
-可复用的原始组件位于 [`src/components/ui/*`](../../../../src/components/ui)（button、input、badge、card、dialog、select、switch、tooltip、popover、dropdown-menu、…）。实测的控件尺寸：
+可复用的原始组件位于 [`src/components/ui/*`](https://gitcode.com/openeuler/agent-insight/tree/master/src/components/ui)（button、input、badge、card、dialog、select、switch、tooltip、popover、dropdown-menu、…）。实测的控件尺寸：
 
 | Control | Size | Source |
 |---|---|---|
-| Button（default） | 高 **36px**（`h-9`）、`px-4`、`text-sm`、`font-medium`、`rounded-md` | [button.tsx:25](../../../../src/components/ui/button.tsx) |
-| Button sm / lg | 32px / 40px | [button.tsx:26](../../../../src/components/ui/button.tsx) |
+| Button（default） | 高 **36px**（`h-9`）、`px-4`、`text-sm`、`font-medium`、`rounded-md` | [button.tsx:25](https://gitcode.com/openeuler/agent-insight/blob/master/src/components/ui/button.tsx) |
+| Button sm / lg | 32px / 40px | [button.tsx:26](https://gitcode.com/openeuler/agent-insight/blob/master/src/components/ui/button.tsx) |
 | Button variants | default · destructive · outline · secondary · ghost · link · **brand**（`#2F6868`） | button.tsx |
-| Input | 高 **36px**（`h-9`）、`px-3`、`rounded-md` | [input.tsx:11](../../../../src/components/ui/input.tsx) |
-| Badge | `rounded-full`、`px-2.5 py-0.5`、`text-xs`、`font-semibold` | [badge.tsx:7](../../../../src/components/ui/badge.tsx) |
+| Input | 高 **36px**（`h-9`）、`px-3`、`rounded-md` | [input.tsx:11](https://gitcode.com/openeuler/agent-insight/blob/master/src/components/ui/input.tsx) |
+| Badge | `rounded-full`、`px-2.5 py-0.5`、`text-xs`、`font-semibold` | [badge.tsx:7](https://gitcode.com/openeuler/agent-insight/blob/master/src/components/ui/badge.tsx) |
 | 默认图标 | 16px（`size-4`） | button.tsx |
 | 焦点环 | `ring-[3px]`（shadcn）/ `0 0 0 2px var(--ring)`（自定义 CSS） | mixed |
 
@@ -111,12 +111,12 @@ Trace 类型色由 `src/lib/charts/palette.ts` 统一管理：AGENT=indigo、TAS
 | 不同圆角数 | 47 | ❌ |
 | 不同阴影数 | 110 | ❌ |
 
-根因：在治理良好的 `globals.css` 体系之外，**许多页面在本地 CSS 文件里另起了一套并行的、硬编码的令牌命名空间**——例如 `--sk-*`（[skill-opt.css](../../../../src/app/(main)/skill-opt/skill-opt.css)）、`--ev-*`（eval）、`--sa-*`（[skill-analysis.css](../../../../src/app/(main)/skill-eval/skill-analysis.css)）、`--gh-*`、`--stage-*`，外加单字母别名（`--c/--cs/--cl`）。其中数个在新名字下重新定义了*相同*的靛蓝/zinc 值，还有一些引入了调色板外的色相（例如 `#2F6868` 品牌按钮、青绿/紫色的阶段色、`Songti SC`、`Instrument Serif` 这类衬线展示字体）。
+根因：在治理良好的 `globals.css` 体系之外，**许多页面在本地 CSS 文件里另起了一套并行的、硬编码的令牌命名空间**——例如 `--sk-*`（[skill-opt.css](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/%28main%29/skill-opt/skill-opt.css)）、`--ev-*`（eval）、`--sa-*`（[skill-analysis.css](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/%28main%29/skill-eval/skill-analysis.css)）、`--gh-*`、`--stage-*`，外加单字母别名（`--c/--cs/--cl`）。其中数个在新名字下重新定义了*相同*的靛蓝/zinc 值，还有一些引入了调色板外的色相（例如 `#2F6868` 品牌按钮、青绿/紫色的阶段色、`Songti SC`、`Instrument Serif` 这类衬线展示字体）。
 
 **解读：** *预期*的设计系统（globals.css + `.ai-*` 工具类）是连贯且文档完善的。漂移集中在那些自己长出了一套微型系统、而非消费共享令牌的功能页面上。这是收益最高的清理目标。
 
 **建议**
-1. 将 [`src/app/globals.css`](../../../../src/app/globals.css) 的 `:root` + [design-tokens.json](design-tokens.json) 视为单一真源。
+1. 将 [`src/app/globals.css`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/globals.css) 的 `:root` + [design-tokens.json](./design-tokens.json) 视为单一真源。
 2. 新的功能 CSS 必须引用共享的 `--color-*` / `--foreground-*` / `--radius-*` 令牌——**不要**定义新的 `--<feature>-*` 调色板。
 3. 把现有的 `--sk-*` / `--ev-*` / `--sa-*` / `--gh-*` 别名映射回规范令牌，然后删除重复项（许多已经是规范令牌的 `var()` 别名——那些是轻松可得的成果）。
 4. 优先使用 `ui/*` 原始组件和 `.ai-*` 工具类，而不是每个页面各自重做按钮/卡片。
