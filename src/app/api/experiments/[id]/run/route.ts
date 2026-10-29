@@ -20,8 +20,8 @@ import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-con
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { startExperimentRun } from '@/lib/engine/experiment/run-experiment';
+import { ensureFiExperimentContinuation } from '@/lib/engine/experiment/fi-experiment-continuation';
 import {
-  awaitFiSessionsAndBindExperimentCases,
   collectFiCasesFromExperiment,
   FiOrchestrateError,
   orchestrateFaultInjection,
@@ -104,6 +104,8 @@ export async function POST(
       }
     }
     if (currentExperiment.status === 'running') {
+      // Reconnect persisted FI work after a crash; the continuation itself checks ownership and scope.
+      void ensureFiExperimentContinuation(id, username);
       return NextResponse.json({ status: 'running', alreadyRunning: true });
     }
 
@@ -275,69 +277,12 @@ export async function POST(
         // 设计契约：FI → 对齐 sessionTaskId/Case.taskId → 再评测。
         // 等待放后台，避免 HTTP 阻塞数分钟；勿在空轨迹上立刻 Judge。
         if (fi && !fi.skipped && fi.runIds.length) {
-          const waitMs = Math.max(60_000, (timeoutSeconds + 180) * 1000);
-          const runIds = fi.runIds;
           await prisma.experiment.updateMany({
             where: { id, user: username },
             data: { status: 'running' },
           });
           recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
-          void (async () => {
-            try {
-              let stillActive = true;
-              const bound = await awaitFiSessionsAndBindExperimentCases({
-                runIds,
-                timeoutMs: waitMs,
-                waitForActiveRuns: true,
-                shouldContinue: async () => {
-                  stillActive = Boolean(await prisma.experiment.findFirst({
-                    where: { id, user: username, deletedAt: null, status: { not: 'cancelled' } },
-                    select: { id: true },
-                  }));
-                  return stillActive;
-                },
-              });
-              if (!stillActive) return;
-              if (bound.pendingRunIds.length || bound.failedRunIds.length) {
-                console.warn('[experiment-run] FI session bind incomplete', {
-                  experimentId: id,
-                  bound: bound.bound,
-                  ready: bound.readyRunIds.length,
-                  pending: bound.pendingRunIds,
-                  failed: bound.failedRunIds,
-                });
-              }
-              const readyRunIds = new Set(bound.readyRunIds);
-              const readyCaseIds = fi.caseFaults
-                .filter((item) => item.runId && readyRunIds.has(item.runId))
-                .map((item) => item.caseId);
-              if (!readyCaseIds.length) {
-                await prisma.experiment.updateMany({
-                  where: { id, user: username, deletedAt: null, status: { not: 'cancelled' } },
-                  data: { status: 'failed' },
-                });
-                return;
-              }
-              const result = await startExperimentRun(id, username, {
-                allowPersistedRunning: true,
-                caseIds: readyCaseIds,
-              });
-              if (!result) return;
-              await result.completion?.catch((e) => {
-                console.error('[Experiment Run Error]', e);
-              });
-            } catch (e) {
-              console.error('[experiment-run] FI await/start failed', e);
-              try {
-                await prisma.experiment.updateMany({
-                  where: { id, user: username, deletedAt: null, status: { not: 'cancelled' } },
-                  data: { status: 'failed' },
-                });
-              } catch {
-                /* ignore */
-              }
-            }
-          })();
+          void ensureFiExperimentContinuation(id, username);
           return NextResponse.json({
             status: 'running',
             awaitingFiSession: true,

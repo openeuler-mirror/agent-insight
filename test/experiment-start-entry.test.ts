@@ -61,15 +61,16 @@ test('生成 Trace 先进入 running，绑定完成后显式继续调度评估',
     'utf8',
   );
   const markRunning = runRoute.indexOf("data: { status: 'running' }");
-  const continueEvaluation = runRoute.indexOf('allowPersistedRunning: true', markRunning);
+  const continueEvaluation = runRoute.indexOf('void ensureFiExperimentContinuation(id, username)', markRunning);
   const runningResponse = runRoute.indexOf("status: 'running'", continueEvaluation);
 
   assert.ok(markRunning >= 0);
   assert.ok(continueEvaluation > markRunning);
   assert.ok(runningResponse > continueEvaluation);
-  assert.match(runRoute, /if \(!readyCaseIds\.length\)/);
-  assert.match(runRoute, /caseIds: readyCaseIds/);
-  assert.match(runRoute, /data: \{ status: 'failed' \}/);
+  const continuation = fs.readFileSync(path.join(root, 'src/lib/engine/experiment/fi-experiment-continuation.ts'), 'utf8');
+  assert.match(continuation, /if \(!caseIds\.length\)/);
+  assert.match(continuation, /allowPersistedRunning: true, caseIds, resumeIncomplete: true/);
+  assert.match(continuation, /data: \{ status: 'failed' \}/);
 });
 
 test('实验详情展示 Trace 生成进度和失败 Case，失败 Trace 不显示为实际输出', () => {

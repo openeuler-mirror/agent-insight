@@ -690,11 +690,12 @@ export interface StartExperimentRunResult {
 /**
  * 触发实验执行。同 experiment 已在 running（内存或 DB 状态）时直接返回当前状态，不重复起跑；
  * 生成 Trace 的后台绑定流程可在 DB 已提前标记 running 后显式继续调度。
+ * resumeIncomplete 只补缺失/中断行，保留终态结果、累计尝试次数及人工修正。
  */
 export async function startExperimentRun(
   experimentId: string,
   user: string,
-  options: { allowPersistedRunning?: boolean; caseIds?: string[] } = {},
+  options: { allowPersistedRunning?: boolean; caseIds?: string[]; resumeIncomplete?: boolean } = {},
 ): Promise<StartExperimentRunResult | null> {
   await assertExperimentActive(experimentId);
   const running = getRunningSet();
@@ -735,7 +736,7 @@ export async function startExperimentRun(
         rowsToSchedule.push({ experimentId, caseId: c.id, evaluatorId, user });
       }
     }
-    const scheduledRows = await prepareAndScheduleResultRuns(rowsToSchedule);
+    const scheduledRows = await prepareAndScheduleResultRuns(rowsToSchedule, options.resumeIncomplete);
 
     const completion = Promise.all(scheduledRows.map((row) => row.completion))
       .then(() => settleExperimentStatus(experimentId))
@@ -799,6 +800,7 @@ async function resetResultRun(params: {
   caseId: string;
   evaluatorId: string;
   user: string;
+  resumeIncomplete?: boolean;
 }): Promise<{ resultId: string; completion?: Promise<void> }> {
   await assertExperimentActive(params.experimentId, params.caseId);
   return withKeyedLock(`eval-result:${params.caseId}:${params.evaluatorId}`, async () => prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -810,6 +812,18 @@ async function resetResultRun(params: {
     const existingRun = existingRow ? getResultRuns().get(existingRow.id) : undefined;
     if (existingRow && existingRun) {
       return { resultId: existingRow.id, completion: existingRun };
+    }
+
+    // Crash recovery only resumes unfinished rows; completed judgments and human edits are immutable here.
+    if (params.resumeIncomplete && existingRow) {
+      if (!['pending', 'running'].includes(existingRow.status)) {
+        return { resultId: existingRow.id, completion: Promise.resolve() };
+      }
+      await tx.experimentEvalResult.update({
+        where: { id: existingRow.id },
+        data: { status: 'pending' },
+      });
+      return { resultId: existingRow.id };
     }
 
     if (existingRow?.status === 'running') return { resultId: existingRow.id, completion: Promise.resolve() };
@@ -836,10 +850,11 @@ async function resetResultRun(params: {
 
 async function prepareAndScheduleResultRuns(
   rows: Array<{ experimentId: string; caseId: string; evaluatorId: string; user: string }>,
+  resumeIncomplete = false,
 ): Promise<ScheduledResultRun[]> {
   const prepared: Array<{ resultId: string; completion?: Promise<void>; user: string }> = [];
   for (const row of rows) {
-    prepared.push({ ...(await resetResultRun(row)), user: row.user });
+    prepared.push({ ...(await resetResultRun({ ...row, resumeIncomplete })), user: row.user });
   }
   return prepared.map((row) => ({
     resultId: row.resultId,

@@ -235,6 +235,13 @@ export async function setupNodeRuntime(): Promise<void> {
     console.warn('[instrumentation] startExperimentWatcher failed (non-fatal):', (err as Error)?.message);
   }
 
+  try {
+    const { startFiExperimentRecovery } = await import('@/lib/engine/experiment/fi-experiment-continuation');
+    startFiExperimentRecovery();
+  } catch (err) {
+    console.warn('[instrumentation] FI experiment recovery registration failed:', (err as Error)?.message);
+  }
+
   setImmediate(() => {
     void import('@/server/trace-datasets/manager')
       .then(({ startTraceDatasetManager }) => startTraceDatasetManager())

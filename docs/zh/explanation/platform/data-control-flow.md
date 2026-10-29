@@ -331,7 +331,7 @@ Skill 用例分析生成 Trace、A/B 和触发分析创建时将 `workerId/host/
 
 实验建议同步按稳定 `runId + dedupKey` 更新已有派生行，保留 SkillIssue ID 与优化写入的解决状态。候选质量通过且产生真实文件差异后，执行项、归并计划与相同 dedupKey 的源问题在同一事务中完成状态回写；失败、冲突与 backlog 保持待处理。
 
-FI 采集链路为 Worker 执行注入 → `collect-result` → `persistFiCollectIngress` 保存事实并结束采集。独立 FI Judge 已移除；采集不会隐式调用评测模型、等待 Judge 轨迹或生成评价标记，客户端槽位在上传确认后释放。业务 Trace 仍由普通采集器独立入库，实验编排等待本批 Case 的 Trace 就绪或失败收口，再运行用户显式选择的评估器。历史 FI 判定数据只读保留，旧重评接口返回 410；新 FI 采集完成不代表故障发生或恢复成功。RAS 环内模型判定与恢复链路保持原有行为。
+FI 采集链路为 Worker 执行注入 → `collect-result` → `persistFiCollectIngress` 保存事实并结束采集。独立 FI Judge 已移除；采集不会隐式调用评测模型、等待 Judge 轨迹或生成评价标记，客户端槽位在上传确认后释放。业务 Trace 仍由普通采集器独立入库，实验编排等待本批 Case 的 Trace 就绪或失败收口，再运行用户显式选择的评估器。启动与周期恢复扫描从持久化的运行中 Experiment、Case.fiRunId 和 FI Run 重建该续接过程；请求与扫描共用进程内按实验去重的 continuation。恢复先绑定可用 Trace、记录不可用 Case，再以 resumeIncomplete 模式调度评估：保留终态结果及人工修正，继续缺失/pending 行，将本进程没有执行任务的残留 running 行恢复为 pending。扫描不重新创建 FI 任务，且排除已取消、删除及其他类型实验。历史 FI 判定数据只读保留，旧重评接口返回 410；新 FI 采集完成不代表故障发生或恢复成功。RAS 环内模型判定与恢复链路保持原有行为。
 
 RAS 可靠性执行由 `run-experiment.ts` 将可靠性 ID 分发到 `ras-reliability-evaluator.ts`。新实验只暴露检测恢复 profile：Judge 先通过 `faultOccurred` 判断预期故障是否真实发生；仅当 verdict 为 `met` 时，Zod 契约才接受齐全的 `fault_detected/mitigation_triggered/fault_mitigated` 三维结果并等权计分。门控为 `partial/missing` 时契约要求 `dimensions=[]`，适配器输出三个带原因但无 `score/status` 的评分点，评估器总分为空，通用 `overallAverage` 不把它计入分母。`preset-ras-reliability-fault-injection` 和旧 `preset-ras-reliability` 仅保留历史运行、名称解析与结果展示兼容，不进入新建实验的预置目录；`task_outcome` 也只保留给旧五维历史重评。
 
