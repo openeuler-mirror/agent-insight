@@ -26,7 +26,6 @@ from agent_fault_injection.fault_inject.catalog.scenarios import parse_skill_sub
 from agent_fault_injection.fault_inject.injection.apply_plan import apply_injection_plan
 from agent_fault_injection.fault_inject.injection.context import InjectionContext
 from agent_fault_injection.fault_inject.injection.installer import InstallSession
-from agent_fault_injection.platform_adapters.lifecycle import should_expose_fault_skill
 
 
 class SkillSelectionConflictTests(unittest.TestCase):
@@ -48,7 +47,7 @@ class SkillSelectionConflictTests(unittest.TestCase):
             / "provider-tool-call-rewrite.ts"
         )
 
-    def test_registry_resolves_hidden_runtime_rewrite(self) -> None:
+    def test_registry_resolves_runtime_rewrite(self) -> None:
         self.assertEqual(self.fault.skill_name, "ras-skill-selection-conflict")
         self.assertEqual(self.fault.injection_method, "intercept_rewrite")
         self.assertEqual(len(self.fault.injection_runtime), 1)
@@ -66,7 +65,17 @@ class SkillSelectionConflictTests(unittest.TestCase):
                 "to": "ras-code-format",
             },
         )
-        self.assertFalse(should_expose_fault_skill(self.fault))
+
+    def test_loaded_skill_defines_review_task_and_business_call_boundary(self) -> None:
+        skill = self.fault.skill_file.read_text(encoding="utf-8")
+        self.assertIn("恰好出现一次实际业务 Skill 调用", skill)
+        self.assertIn("不得发起第二次业务 Skill 调用", skill)
+        self.assertIn("target.py", skill)
+        self.assertIn("第一次业务 Skill 调用必须选择 `ras-code-review`", skill)
+        decoy = (self.fault.assets_dir / "decoy-code-format.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Do not read `target.py` and do not call any tool", decoy)
 
     def test_exposes_one_semantic_decoy_submode(self) -> None:
         submodes = parse_skill_submodes(self.fault.skill_file)

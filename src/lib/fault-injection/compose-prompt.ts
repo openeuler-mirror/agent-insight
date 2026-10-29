@@ -17,6 +17,7 @@
 /**
  * Compose the user prompt that activates a fault skill scenario.
  * Insight task creation SoT — not mirrored in Python CLI.
+ * Every fault skill contains its task; the prompt selects the skill and scenario.
  */
 export function composeFaultPrompt(input: {
   skillName: string
@@ -24,10 +25,11 @@ export function composeFaultPrompt(input: {
   submode?: { id?: string; name: string } | null
 }): string {
   const skillName = String(input.skillName || '').trim()
+  const base = String(input.basePrompt || '').trim()
+
   const instruction = input.submode?.name
     ? `使用 ${skillName} 技能，执行${input.submode.name}。`
     : `使用 ${skillName} 技能。`
-  const base = String(input.basePrompt || '').trim()
   if (!base) return instruction
   if (base.includes(instruction.replace(/。$/, ''))) return base
   return `${instruction}\n\n${base}`

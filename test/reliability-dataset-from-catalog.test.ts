@@ -99,3 +99,33 @@ test('buildCasesFromCatalog emits one case per expanded row with composeFaultPro
   assert.equal(cases[2].values?.submode, undefined)
   assert.equal(cases[2].input, '使用 ras-tool-selection-error 技能。')
 })
+
+test('all fault types use skill activation and preserve business additions', () => {
+  for (const [skillName, name] of [
+    ['ras-skill-selection-conflict', '代码审查语义诱饵'],
+    ['ras-tool-argument-error', '文件名参数替换'],
+    ['ras-skill-rule-conflict', 'CSV 规范化冲突'],
+  ]) {
+    const instruction = `使用 ${skillName} 技能，执行${name}。`
+    const input = { skillName, submode: { id: '1', name }, basePrompt: '' }
+    assert.equal(composeFaultPrompt(input), instruction)
+    assert.equal(
+      composeFaultPrompt({ ...input, basePrompt: 'Use the security checklist.' }),
+      `${instruction}\n\nUse the security checklist.`,
+    )
+    const existing = `${instruction} Use the security checklist.`
+    assert.equal(composeFaultPrompt({ ...input, basePrompt: existing }), existing)
+  }
+})
+
+test('catalog cases activate the selected injection skill and scenario', () => {
+  const fault = normalizeFault({
+    id: 'skill-rule-conflict',
+    skill_name: 'ras-skill-rule-conflict',
+    submodes: [{ id: '1', name: 'CSV 规范化冲突' }],
+  })
+  const [generated] = buildCasesFromCatalog([fault])
+  assert.equal(generated.input, '使用 ras-skill-rule-conflict 技能，执行CSV 规范化冲突。')
+  assert.equal(generated.values?.fault_injection_type, 'skill-rule-conflict')
+  assert.equal(generated.values?.submode, '1')
+})

@@ -155,9 +155,17 @@ export async function GET(req: Request) {
       scoreRowsByExperiment.set(row.experimentId, list);
     }
 
+    const failedFiCases = experimentIds.length ? await prisma.experimentCase.findMany({
+      where: { experimentId: { in: experimentIds }, deletedAt: null,
+        fiRunId: { not: null }, executionId: null, traceGenerationError: { not: null } },
+      select: { experimentId: true },
+    }) : [];
+    const failedFiExperiments = new Set(failedFiCases.map((row: { experimentId: string }) => row.experimentId));
+
     const items = rows.map((r) => {
       const resultRows = scoreRowsByExperiment.get(r.id) || [];
-      const status = normalizeTerminalExperimentStatus(r.status, resultRows);
+      const settledStatus = normalizeTerminalExperimentStatus(r.status, resultRows);
+      const status = settledStatus === 'done' && failedFiExperiments.has(r.id) ? 'partial' : settledStatus;
       let evaluatorCount = 0;
       try {
         const ids = JSON.parse(r.evaluatorIdsJson || '[]');

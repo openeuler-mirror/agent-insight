@@ -45,13 +45,10 @@ class FaultDefinition:
     description: str
     tool_files: tuple[Path, ...] = ()
     agent_tool_files: tuple[Path, ...] = ()
-    authoritative_verifier_command: tuple[str, ...] | None = None
-    authoritative_verifier_timeout_seconds: float = 30
     injection_method: str | None = None
     injection_plan: tuple[InjectionStep, ...] = ()
     injection_runtime: tuple[InjectionStep, ...] = ()
     assets_dir: Path | None = None
-    expose_skill_to_agent: bool = True
 
 
 @dataclass(frozen=True, slots=True)

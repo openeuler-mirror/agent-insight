@@ -9,6 +9,12 @@ changefreq: monthly
 
 > 引擎从 `lib` 暴露约 380 个函数，从 `server` 暴露约 29 个，外加 14 个 prompt 构建器；代码库声明了约 890 个类型和约 290 个扩展点（接口/抽象类）。本页列出高信噪比的引擎 API、持久化 + 内存数据模型，以及扩展点。仅包含签名与调用关系 —— 不描述行为。所有签名均来自静态分析。
 
+## FI 采集与独立评判移除
+
+`POST /api/fault-injection/runs/:runId/collect-result` 通过 `persistFiCollectIngress` 保存注入事实、markers 和平台 Session ID；不读取评测模型、不调用 FI Judge，也不等待业务 Trace 回传轮询。有效 Session ID 的采集进入 `completed`，缺少合法平台 Session ID 时进入 `failed`，用户停止进入 `stopped`。已有业务 Trace 可立即绑定；迟到 Trace 由实验编排继续等待，仅就绪 Case 进入显式选择的评估器。
+
+`POST /api/fault-injection/runs/:runId/rejudge` 已退役，返回 `410` 和 `code=FI_JUDGE_REMOVED`。历史数据库判定字段不迁移或清空，FI 详情接口可继续读取；新 Run 的 Trace 响应 `judge=null`，不会为 `completed` 自动合成评价标记或占位 Judge 阶段。`judge_skipped` 与 `judging` 仅兼容历史状态，新采集不再产生这两个状态。
+
 ## Engine API — anchor index
 | Function | Anchor | Module |
 |---|---|---|
@@ -58,7 +64,6 @@ OpenCode 向导预检与执行前校验共用按运行时主版本分流的入�
 - 响应包含 `{ success, elapsedMs, timeoutMs, code?, error? }`。失败 `code` 为 `timeout | cancelled | authentication | rate_limit | network | invalid_request | server | invalid_response | unknown`；供应商原始异常不透传，避免 URL、凭据或请求头泄漏。模型鉴权失败映射为 `422`，不冒充平台登录态失效。
 - 独立截止时间覆盖模型请求及响应体解析，超时和客户端取消都会 abort 底层请求，结束后释放定时器和监听器。取消表示终止本地等待及传输，不保证供应商立即停止推理。
 - 前端只有测试成功且未取消时才调用设置保存接口，测试中冻结表单、阻止重复提交。保存阶段不提供取消，避免误报“未保存”。健康检查区分超时、取消与其他失败；失败信息持续显示并支持显式关闭或重试。
-
 
 ### 实验重命名
 
@@ -396,6 +401,17 @@ configuration:
 
 
 
+### FI Trace 回传与内部判定归属
+
+OpenCode FI 启动超时的有限恢复：默认 plugin_startup_timeout=120 秒、plugin_startup_retries=1（内部参数允许 0～2），与原 SQLite 锁重试分别计数。仅在超时进程仍存活、插件存在、AGENT_FI 运行环境完整且没有 Session/激活/标准输出证据时重试；必须先停止并回收旧进程，再随机退避。有效 models.json 缓存存在且未显式设置 OPENCODE_DISABLE_MODELS_FETCH 时，仅重试进程跳过目录在线刷新，保持业务模型与 provider 原值。startup_attempt / startup_last_error / startup_retry_reason 保存在原 manifest；启动、退避、业务执行共用 RunRequest.timeout_seconds 预算，已有业务证据或明确退出不重复执行。
+
+常驻客户端在读取无 Session、无激活信号的 collect-result 时，会携带同目录失败 manifest 的真实原因并脱敏。现有 collect-result 接口直接记录 failed，不进入 Judge，也不将 plugin_start_failed 覆盖成 session_unaligned；有真实 Session 或激活证据的部分轨迹保留原处理流程。
+
+OpenCode 沿用 v1/v2 采集入口和迟到快照处理。OpenCode v1 不保证退出前等待事件钩子：事件同步写入 spool，idle 分支在首次异步让出之前触发上传；v2 保留异步背压，等待写盘后上传。避免仅在主动 await 钩子的测试中通过，却在真实 CLI 退出时丢失上传触发。上传器在排他锁内读取和保存 checkpoint；保留源仓库的未完成会话追踪与最终重检，单文件扫描只推进对应文件的水位，上传失败不确认扫描完成。
+
+FI 绑定等待 queued/collecting/judging 等活动任务结束；全部进入终态后保留 180 秒回传宽限。终态空 Trace 的失败原因写入 Case.traceGenerationError，存在生成失败 Case 时，已完成的有效评估结算为 partial。内部判定会话不会被绑定为业务 Case 的有效 Trace。
+
+ras-judge 归属系统，用户归属筛选排除，全部和系统归属展示。完成态上传仍按账号自动分析设置执行二次分析，原始 Session 与 Execution 保留。
 
 ## Trace Bundle 导入导出契约
 
@@ -404,7 +420,6 @@ configuration:
 - v1 Bundle 顶层字段为 `format`、`version`、`exportedAt`、`rootExecutionId`、`executions`；每个节点包含 portable Execution 与可空 Session。Session `interactions` 保留规范化原始值，不做面向展示的时间格式化；Langfuse Session 还可携带完整 `langfuseTraceNodes`，旧版未包含该可选字段的 v1 Bundle 仍可导入。
 - `Execution.id` 与 Execution/Session `taskId` 共享冲突检测空间。无冲突 ID 原样保留；有冲突 ID 才生成 `import_<uuid>`，并同步更新父子 ID、root ID、`agentSessionId`、interactions 中已知的 session/execution 引用及 Langfuse 节点的 `subagentSessionId`。OTel `traceId` / `spanId` / `parentSpanId` 不参与重映射。
 - 导入只创建 Execution、Session 和可重算的 ExecutionSkill；不迁移 Evaluation、TraceEvaluation、AgentDebugReport、ExecutionTag 或基础设施关联，也不调度 LLM 评测。
-
 
 ## Cross-session collaboration graph and Trace projection
 

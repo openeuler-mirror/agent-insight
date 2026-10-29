@@ -42,43 +42,46 @@ export async function sweepStaleClaims(user: string | null) {
     take: 50,
   })
   const touchedTasks = new Set<string>()
+  let reclaimed = 0
   for (const run of stale) {
     if (run.workerId) {
       const worker = await prisma.faultInjectionWorker.findUnique({
         where: { workerId: run.workerId },
       })
-      if (worker && worker.lastSeenAt >= cutoff) {
-        // Worker still heartbeating; only reclaim if claimedAt itself is ancient
-        if (run.claimedAt && run.claimedAt >= cutoff) continue
+      // claimedAt is a start time. Renew protection only for live work;
+      // a restarted client can heartbeat while its previous collectors are gone.
+      if (worker && worker.lastSeenAt >= new Date(Date.now() - workerOnlineMs())) {
+        let activeRunIds: unknown
+        try {
+          activeRunIds = JSON.parse(worker.inventoryJson || '{}').activeRunIds
+        } catch { /* Legacy workers do not report individual active runs. */ }
+        if (!Array.isArray(activeRunIds) || activeRunIds.includes(run.runId)) continue
       }
     }
-    if (run.stopRequested) {
-      await prisma.faultInjectionRun.update({
-        where: { id: run.id },
-        data: {
-          status: 'stopped',
-          error: run.error || 'stopped by user',
-          workerId: null,
-          claimedAt: null,
-        },
-      })
-    } else {
-      await prisma.faultInjectionRun.update({
-        where: { id: run.id },
-        data: {
-          status: 'queued',
-          workerId: null,
-          claimedAt: null,
-          error: 'claim timeout; requeued',
-        },
-      })
+    const result = await prisma.faultInjectionRun.updateMany({
+      where: {
+        id: run.id,
+        status: 'collecting',
+        workerId: run.workerId,
+        claimedAt: run.claimedAt,
+      },
+      data: {
+        status: run.stopRequested ? 'stopped' : 'queued',
+        workerId: null,
+        claimedAt: null,
+        error: run.stopRequested ? run.error || 'stopped by user' : 'claim timeout; requeued',
+      },
+    })
+    // A completion or a fresh claim can win while the worker is checked.
+    if (result.count) {
+      reclaimed += result.count
+      if (run.fiTaskId) touchedTasks.add(run.fiTaskId)
     }
-    if (run.fiTaskId) touchedTasks.add(run.fiTaskId)
   }
   for (const taskId of touchedTasks) {
     await refreshTaskProgress(taskId).catch(() => undefined)
   }
-  return stale.length
+  return reclaimed
 }
 
 export type ClaimedRunPayload = {

@@ -1,13 +1,13 @@
 ---
 title: "故障注入与评测"
-description: "安装 FI Worker、创建注入任务、查看 Run 与 Judge，并与环内 RAS 能力区分。"
+description: "安装 FI Worker、创建注入任务、查看采集事实，并通过实验选择评估器评分。"
 keywords: ["Agent Insight", "故障注入", "FI Worker", "可靠性评测"]
 changefreq: monthly
 ---
 
 # 故障注入与评测
 
-故障注入（Agent FI）用于在**真实 Agent 宿主**上主动植入故障模式，采集轨迹后由 Insight **服务端 Judge** 给出可信结论。编排与展示在平台侧；注入执行在本机 **FI Worker**。
+故障注入（Agent FI）用于在**真实 Agent 宿主**上主动植入故障模式，FI 仅记录注入与采集事实，评分由实验中**显式选择的评估器**完成，不再自动运行独立 FI Judge。编排与展示在平台侧；注入执行在本机 **FI Worker**。
 
 > **Note**
 > 侧栏入口在 **AgentRAS 可靠性** 下的「故障注入与评测」（`/agent-ras/fault-injection/tasks`）。  
@@ -20,7 +20,7 @@ changefreq: monthly
 | 目的 | 主动注入故障，验证检测/恢复与 Agent 行为 | 环内实时检测与自动恢复；事后回放异常 |
 | 入口 | `/agent-ras/fault-injection/tasks`、`/faults` | `/agent-ras/fault-modes`、`/agent-ras/trace` |
 | 执行位置 | 本机 FI Worker + 被测 Agent | Agent 进程内 RAS（inproc） |
-| 评判 | Insight 服务端 Judge（轨迹证据） | RAS 处置列 / 异常摘要条（非 FI Judge） |
+| 评判 | 在实验中选择评估器；FI 采集自身不调用 LLM | 环内检测与处置保持原有链路 |
 
 注入实验**不依赖**是否已安装 RAS：FI Worker 只跑本机 FI CLI，不会为评测去启动 RAS。若本机已挂 RAS，宿主侧可自然旁路检测/恢复，那是安装面结果，不是 FI 任务的一部分。
 
@@ -29,7 +29,7 @@ changefreq: monthly
 ## 前置条件
 
 1. 可访问 Insight 看板，并已登录（standalone 使用邮箱账号；IDaaS 内部使用 UUID 归属数据，侧边栏可显示人员账号别名）
-2. 在 **模型注册** 中配置激活模型（Judge 依赖；无模型时仍可 collect，评判可能为 `judge_skipped`）
+2. 被测 Agent 的模型连接可用；只有选用 LLM 评估器时，才需要额外配置 Insight 评测模型，FI 采集不依赖它
 3. 本机已安装 **OpenCode** 和/或 **xiaoO**（须与 Worker 同机）
 4. 当前账号的 **API Key**（设置 / 安装指导中创建；Worker 心跳按用户隔离）
 5. 本机有支持 `venv` 的 Python 3.11+；安装器只用它创建 FI 专用虚拟环境，不向系统 Python 安装包
@@ -63,14 +63,28 @@ RAS 侧对应说明：[RAS local-install-process](../agent-ras/local-install-pro
 
 创建后任务一律 `queued`，由本机 Worker claim 后执行。任务列表支持行级 **停 / 再跑 / 删**。
 
+所有故障统一使用「使用 <Skill 名称> 技能，执行<子模式名称>。」生成执行提示词；未选择子模式时只指定 Skill，用户补充要求追加在后面。所有注入 Skill 都会安装并提供给 Agent，不再使用 `task_prompt` 或隐藏开关。审查 `target.py`、读取 `a.txt`、执行 `report.csv` 流水线等具体任务写在对应 Skill 的执行步骤中，加载后即可执行。
+
+健康客户端执行中的长任务会保留认领，不会仅因领取已超过 5 分钟而重复启动；客户端也会忽略同一 Run 的重复活动领取。
+
+FI 运行只关联本次业务 Agent 的主会话；RAS 内部判定或标题生成会话不会替代业务 Trace。
+
+故障目录新增 `skill-rule-conflict`（CSV 规范化规则冲突）和 `reasoning-no-progress`（真值者双解、汉诺塔约束、路径规划复核三个回环），原 `analysis-paralysis` 保留。`thinking-dead-loop` 三个子模式统一为字符重复死循环、语义重复死循环和逻辑连续崩溃。
+
+旧 `compositional-implicit-intent` 场景和机械 verifier 已移除。检测与恢复效果由所选可靠性评估器结合业务 Trace 和 RAS 事件判定；注入完成不代表故障已恢复。工具参数与 Skill 选择改写只触发第一次匹配调用，内部改写诊断不会作为工具结果暴露给 Agent。
+
 ### 3. 看故障目录（可选）
 
 标题右上角 **故障目录** → `/agent-ras/fault-injection/faults`：按子模式拆行；点「注入方式」可看 Skill 说明。  
 不要与侧栏「可靠性能力」混淆。
 
-### 4. 查看 Run 与 Judge
+### 4. 查看采集进度与实验评测
 
-进入任务详情，轮询进度。Run 页展示「注入流程」**四节点**与调用树；注入细节只在 **FI Run** 看。Judge 在服务端基于**已落库**轨迹给出结论（含 `inconclusive` 等语义），不以本机上传包直读。
+实验详情先展示 Agent 执行与 Trace 入库进度，再展示本实验选择的评估器结果。FI 的 `completed` 仅表示带有平台 Session ID 的采集结果已接收，不表示故障发生、恢复成功或评分通过；`faultActivated` 仅记录注入是否激活。FI 采集不生成额外判定，不再因等待 FI Judge 而持有客户端槽位。
+
+业务 Trace 仍由普通采集器独立上传。实验编排按原有业务 Agent、有效回复和结束状态检查 Trace，就绪后才启动所选评估器；终态采集的 Trace 回传宽限期仍为 180 秒。采集完成但 Trace 迟到期间显示等待 Trace，最终缺失仍作为 Trace 生成失败处理。
+
+OpenCode 的 `MessageAbortedError` 与采集产物中的 `fault_intercepted` 只说明生成被中断，不单独证明检测正确或恢复成功。新 FI 流水线只有请求、开始、完成三个注入节点；历史评判数据和标记只读保留。旧 `POST /api/fault-injection/runs/:runId/rejudge` 返回 `410 FI_JUDGE_REMOVED`，不会再发模型请求。
 
 本机产物目录（排障用；权威数据在平台 DB）：
 
@@ -87,8 +101,8 @@ RAS 侧对应说明：[RAS local-install-process](../agent-ras/local-install-pro
 
 | 平台 | fault | submode |
 |------|-------|---------|
-| opencode | `thinking-dead-loop` | `2`（逻辑死循环） |
-| xiaoo | `thinking-dead-loop` | `2`（逻辑死循环；期望 `faultActivated` + abort + Judge `recovered`） |
+| opencode | `thinking-dead-loop` | `2`（语义重复死循环） |
+| xiaoo | `thinking-dead-loop` | `2`（语义重复死循环；核对 `faultActivated`、RAS 事件与业务 Trace，再运行所选评估器） |
 | xiaoo | `tool_repeat_dead_loop` | `2`（unknown） |
 
 超时建议 60–180s。本地 CLI 排障也可用（不经 Worker）：
@@ -98,7 +112,7 @@ RAS 侧对应说明：[RAS local-install-process](../agent-ras/local-install-pro
   -m agent_fault_injection.cli run \
   --platform opencode --agent build \
   --fault thinking-dead-loop --submode 2 \
-  --prompt "执行场景2 / case2 / 逻辑死循环" \
+  --prompt "执行场景2 / case2 / 语义重复死循环" \
   --workspace ~/.agent-insight/fault-injection/workspaces \
   --output-dir ~/.agent-insight/fault-injection/artifacts \
   --timeout-seconds 90
