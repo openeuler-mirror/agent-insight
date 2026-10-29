@@ -16,7 +16,7 @@
 
 'use client';
 
-import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
@@ -230,7 +230,8 @@ export function OptimizationConversation({
   const [localStep, setLocalStep] = useState(backgroundRunning ? 1 : 0);
   const busy = planning || running || backgroundRunning;
   const autoStartedRef = useRef(false);
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const followOutputRef = useRef(true);
   const ownsStreamRef = useRef(false);
   const snapshotRequestRef = useRef(0);
   const backgroundRunningRef = useRef(backgroundRunning);
@@ -242,9 +243,16 @@ export function OptimizationConversation({
   useEffect(() => { backgroundRunningRef.current = backgroundRunning; }, [backgroundRunning]);
   useEffect(() => { observedRecordsRef.current = optimizationRecordsSyncKey(records); }, [records]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: busy ? 'auto' : 'smooth' });
-  }, [busy, messages, records]);
+  useLayoutEffect(() => {
+    followOutputRef.current = true;
+  }, [workbenchSessionId]);
+
+  useLayoutEffect(() => {
+    const viewport = scrollRef.current;
+    if (viewport && followOutputRef.current) {
+      viewport.scrollTop = viewport.scrollHeight;
+    }
+  }, [busy, loading, messages, records, liveTasks, localStep, workbenchSessionId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -660,7 +668,15 @@ export function OptimizationConversation({
   if (loading) return <div className="m-auto flex items-center text-xs text-foreground-muted"><Loader2 className="mr-2 size-4 animate-spin" />加载优化会话</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pb-3" style={{ scrollbarGutter: 'stable' }}>
+      <div
+        ref={scrollRef}
+        onScroll={(event) => {
+          const viewport = event.currentTarget;
+          followOutputRef.current = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 1;
+        }}
+        className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pb-3"
+        style={{ scrollbarGutter: 'stable' }}
+      >
         {generatorSessionId && (
           <GenerationHistory
             user={user}
@@ -730,7 +746,6 @@ export function OptimizationConversation({
             <OptimizationResultCard record={record} busy={busy} publishing={publishing} onViewRecords={onViewRecords} onPublish={onPublish} onRepair={onRepair} />
           </div>;
         })}
-        <div ref={endRef} />
       </div>
       {typeof quickActions === 'function' ? quickActions(feedback, busy || loading) : quickActions}
       <form onSubmit={run} className="rounded-lg border border-border bg-card p-2">
