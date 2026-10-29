@@ -32,6 +32,7 @@ import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { VersionWorkspaceTabs } from '@/components/observe/VersionWorkspaceTabs';
+import { ExperimentAssetVersionAnalysis } from '@/components/observe/ExperimentAssetVersionAnalysis';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageHeader, PageToolbar } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
@@ -313,6 +314,23 @@ async function readApiError(res: Response, fallback: string) {
 }
 
 export default function VersionAnalysisPage() {
+  const { locale } = useLocale();
+  const [source, setSource] = useState<'trace' | 'experiment'>('trace');
+  const zh = locale.toLowerCase().startsWith('zh');
+  return <>
+    <AppTopBar title={strings(locale).title} showDefaultActions={false} />
+    <VersionWorkspaceTabs />
+    <div role="tablist" aria-label={zh ? '版本分析来源' : 'Version analysis source'} className="flex shrink-0 gap-2 border-b border-border bg-background px-8 py-2">
+      <Button id="version-source-trace" role="tab" aria-selected={source === 'trace'} aria-controls="version-analysis-panel" variant={source === 'trace' ? 'secondary' : 'ghost'} size="sm" onClick={() => setSource('trace')}>{zh ? 'Trace 标签' : 'Trace tags'}</Button>
+      <Button id="version-source-experiment" role="tab" aria-selected={source === 'experiment'} aria-controls="version-analysis-panel" variant={source === 'experiment' ? 'secondary' : 'ghost'} size="sm" onClick={() => setSource('experiment')}>{zh ? '实验资产' : 'Experiment assets'}</Button>
+    </div>
+    <div id="version-analysis-panel" role="tabpanel" aria-labelledby={`version-source-${source}`} className="flex min-h-0 flex-1 flex-col">
+      {source === 'trace' ? <TraceVersionAnalysisContent /> : <PageContainer variant="wide" className="bg-background"><ExperimentAssetVersionAnalysis /></PageContainer>}
+    </div>
+  </>;
+}
+
+function TraceVersionAnalysisContent() {
   const { user } = useAuth();
   const { locale } = useLocale();
   const copy = strings(locale);
@@ -505,8 +523,6 @@ export default function VersionAnalysisPage() {
 
   return (
     <>
-      <AppTopBar title={copy.title} showDefaultActions={false} />
-      <VersionWorkspaceTabs />
       <PageContainer variant="wide" className="bg-background">
         <PageHeader
           title={copy.title}
