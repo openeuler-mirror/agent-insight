@@ -47,9 +47,6 @@ export const VERDICT_LABELS: Record<EvalVerdict, string> = {
   fail: '未达成',
 };
 
-/** summary 上限：一句话结论，超出截断（提示词里要求 ≤80 字，这里留余量兜住话痨模型）。 */
-const SUMMARY_MAX = 200;
-
 /**
  * 由分数派生结论——评估器没上报 verdict 时呈现层的兜底。
  * 80 分线沿用平台既有的「答对」口径。
@@ -96,7 +93,7 @@ export type EvalPoint = z.infer<typeof EvalPointSchema>;
 
 export const EvaluatorOutputSchema = z.object({
   verdict: EvalVerdictSchema.optional(),
-  summary: z.string().min(1).max(SUMMARY_MAX).optional(),
+  summary: z.string().min(1).optional(),
   score: z.number().min(0).max(100).optional(),
   points: z.array(EvalPointSchema).max(64).optional(),
   evidence: EvidenceSchema.optional(),
@@ -108,7 +105,7 @@ export type EvaluatorOutput = z.infer<typeof EvaluatorOutputSchema>;
  * - score 越界 → clamp 到 [0,100]；非数值 → 丢弃（等价"无分"）
  * - 0-1 量纲自动放大：score ∈ (0,1] 时按 ×100 处理（兼容旧评估器 0.0~1.0 约定）
  * - verdict 容忍中英文同义词；识别不了 → 丢弃（呈现层按 score 派生）
- * - summary 压平换行并截断到 200 字
+ * - summary 压平空白，完整保留结论文本
  * - 非法评分点逐条丢弃而非整体失败
  */
 export function normalizeEvaluatorOutput(raw: unknown): EvaluatorOutput {
@@ -174,12 +171,12 @@ function coerceVerdict(v: unknown): EvalVerdict | undefined {
   return VERDICT_ALIASES[v.trim().toLowerCase()];
 }
 
-/** summary 归一化：压平空白 + 截断。空串视为未提供。 */
+/** 规范摘要空白并完整保留文本；空串视为未提供，长度不影响评估有效性。 */
 function coerceSummary(v: unknown): string | undefined {
   if (typeof v !== 'string') return undefined;
   const s = v.replace(/\s+/g, ' ').trim();
   if (!s) return undefined;
-  return s.length > SUMMARY_MAX ? `${s.slice(0, SUMMARY_MAX - 1)}…` : s;
+  return s;
 }
 
 function coerceScore(v: unknown): number | undefined {

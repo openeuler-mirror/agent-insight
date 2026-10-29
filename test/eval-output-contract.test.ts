@@ -120,15 +120,19 @@ describe('结论字段 verdict / summary', () => {
     assert.equal(mk(42), undefined);
   });
 
-  it('summary 压平换行并截断；空白视为未提供', () => {
+  it('summary 压平空白但完整保留长文本；空白视为未提供', () => {
     assert.equal(
       normalizeEvaluatorOutput({ summary: '  任务已完成，\n但漏了第三步。 ' }).summary,
       '任务已完成， 但漏了第三步。',
     );
     assert.equal(normalizeEvaluatorOutput({ summary: '   ' }).summary, undefined);
-    const long = normalizeEvaluatorOutput({ summary: 'x'.repeat(500) }).summary!;
-    assert.equal(long.length, 200);
-    assert.ok(long.endsWith('…'));
+    const summary = '完整评估结论。'.repeat(100) + '最后一条关键信息。';
+    const output = normalizeEvaluatorOutput({ summary });
+    assert.equal(output.summary, summary);
+    assert.doesNotThrow(() => EvaluatorOutputSchema.parse(output));
+    assert.equal(displaySummary(output.summary, null), summary);
+    assert.equal(displaySummary(null, { md: summary }), summary);
+    assert.equal(isEvidenceRedundant(summary, { md: summary }), true);
   });
 
   it('结论字段可选，且不破坏既有退化组合', () => {

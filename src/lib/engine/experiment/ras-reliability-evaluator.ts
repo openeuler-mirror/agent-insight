@@ -98,10 +98,11 @@ const faultOccurredSchema = z.object({
   }
 })
 
+/** Validate scoring evidence without rejecting or truncating the Judge summary. */
 function rasReliabilityJudgeSchema(profile: RasReliabilityProfile) {
   const keys = rasReliabilityDimensionsForProfile(profile).map((dimension) => dimension.key)
   return z.object({
-    summary: z.string().trim().min(1).max(200).optional(),
+    summary: z.string().trim().min(1).optional(),
     faultOccurred: profile === 'detection-recovery' ? faultOccurredSchema : z.never().optional(),
     dimensions: z.array(dimensionSchema),
   }).superRefine((value, ctx) => {
@@ -198,7 +199,7 @@ export function buildRasReliabilityEvaluatorOutput(input: {
     const noScoreReason = '未检测到故障发生，因此该维度不适用，本次评估不产生分数。'
     return normalizeEvaluatorOutput({
       verdict: 'warn',
-      summary: `${gateReason} 未检测到故障发生，故障检测、触发处置和故障消解均不评分。`,
+      summary: `${input.judgment.summary?.trim() || gateReason} 未检测到故障发生，故障检测、触发处置和故障消解均不评分。`,
       points: dimensionKeys.map((key) => ({
         label: RAS_RELIABILITY_POINT_LABELS[key],
         evidence: { md: `${gateReason}\n\n${noScoreReason}` },
