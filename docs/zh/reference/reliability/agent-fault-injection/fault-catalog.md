@@ -28,6 +28,12 @@
 | `tool-observation-delta` | `ras-tool-observation-delta` | 1 → 工具观测似真偏移 | 工具噪声干扰 | Insight FI 任务表单 |
 | `intermediate-conclusion-drift` | `ras-intermediate-conclusion-drift` | 1 → 中间结论漂移 | 推理错误 / 中间结论漂移 | Insight FI 任务表单 |
 
+## CSV 规则冲突的运行状态
+
+`skill-rule-conflict` 的观测工具按运行环境中的 `AGENT_FI_RUN_ID` 隔离状态：状态、事件日志、原始文件哈希和分析结果写入 `skill-rule-conflict-output/runs/<run ID 的 SHA-256 十六进制摘要>/`。复用工作区执行新 run 时，不会继承旧 run 的完成标记或调用次数，旧记录也会保留。同一 run 重复 `init` 仍为幂等操作，不清空 normalize / analyze 次数或 finish 状态。
+
+脱离实验平台手动运行且未设置 `AGENT_FI_RUN_ID` 时，沿用 `skill-rule-conflict-output/`；手动重复独立实验应为每次实验设置不同的 `AGENT_FI_RUN_ID`，并在该次实验的所有命令中保持一致。该隔离仅针对观测状态；`report.csv` 和 `report.normalized.csv` 仍位于工作区，不支持多个实验同时操作同一份 CSV。
+
 ## 尚未落地（仅有检测/注入设计）
 
 | 主题 | 本仓状态 |

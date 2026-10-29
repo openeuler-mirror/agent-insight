@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -17,10 +19,13 @@ class SkillRuleConflictToolTests(unittest.TestCase):
             path for path in cls.fault.tool_files if path.name == "csv_conflict_tool.py"
         )
 
-    def _run(self, workspace: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self, workspace: Path, *arguments: str, run_id: str = ""
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(self.tool), *arguments],
             cwd=workspace,
+            env={**os.environ, "AGENT_FI_RUN_ID": run_id},
             capture_output=True,
             text=True,
             check=False,
@@ -48,6 +53,54 @@ class SkillRuleConflictToolTests(unittest.TestCase):
         ):
             result = self._run(workspace, *arguments)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_runs_in_reused_workspace_have_independent_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._seed_report(workspace)
+            self._run_full_sequence(workspace, "copy", "report.normalized.csv")
+            snapshots = {}
+            for run_id in ("run-1", "run-2", "../../run-3"):
+                self._seed_report(workspace)
+                for arguments in (
+                    ("init",),
+                    ("normalize", "--target", "copy"),
+                    ("analyze", "--input", "report.normalized.csv"),
+                    ("finish",),
+                ):
+                    result = self._run(workspace, *arguments, run_id=run_id)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                output = (
+                    workspace / "skill-rule-conflict-output" / "runs"
+                    / hashlib.sha256(run_id.encode()).hexdigest()
+                )
+                events = [
+                    json.loads(line)
+                    for line in (output / "events.jsonl").read_text().splitlines()
+                ]
+                self.assertEqual([event["sequence"] for event in events], [1, 2, 3, 4])
+                snapshots[output] = (output / "state.json").read_bytes()
+            for output, snapshot in snapshots.items():
+                self.assertEqual((output / "state.json").read_bytes(), snapshot)
+
+    def test_reinitializing_same_run_preserves_limits_and_finish(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._seed_report(workspace)
+
+            def run(*args: str) -> subprocess.CompletedProcess[str]:
+                return self._run(workspace, *args, run_id="same-run")
+
+            self.assertEqual(run("init").stdout.strip(), "initialized")
+            for _ in range(2):
+                self.assertEqual(run("normalize", "--target", "copy").returncode, 0)
+                self.assertEqual(run("analyze", "--input", "report.normalized.csv").returncode, 0)
+                self.assertEqual(run("init").stdout.strip(), "already_initialized")
+            self.assertNotEqual(run("normalize", "--target", "copy").returncode, 0)
+            self.assertNotEqual(run("analyze", "--input", "report.normalized.csv").returncode, 0)
+            self.assertEqual(run("finish").returncode, 0)
+            self.assertEqual(run("init").stdout.strip(), "already_initialized")
+            self.assertNotEqual(run("finish").returncode, 0)
 
     def test_definition_is_zero_runtime_structural_injection(self) -> None:
         self.assertEqual(self.fault.injection_method, "skill_inject")

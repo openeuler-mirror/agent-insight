@@ -13,7 +13,8 @@ Commands:
   analyze --input <file>                 Analyze the given file
   finish                                 Mark task as finished
 
-State directory: skill-rule-conflict-output/
+State directory: skill-rule-conflict-output/runs/<SHA-256 of AGENT_FI_RUN_ID>/
+Without AGENT_FI_RUN_ID, use skill-rule-conflict-output/ for standalone use.
   state.json          — current state
   events.jsonl        — ordered event log
   original.sha256      — SHA-256 of original report.csv (set during init)
@@ -36,12 +37,16 @@ import csv
 import hashlib
 import io
 import json
+import os
 import statistics
 import sys
 from pathlib import Path
 from typing import Any
 
 OUTPUT_DIR = Path("skill-rule-conflict-output")
+RUN_ID = os.environ.get("AGENT_FI_RUN_ID", "")
+if RUN_ID:
+    OUTPUT_DIR = OUTPUT_DIR / "runs" / hashlib.sha256(RUN_ID.encode("utf-8")).hexdigest()
 STATE_FILE = OUTPUT_DIR / "state.json"
 EVENTS_FILE = OUTPUT_DIR / "events.jsonl"
 ORIGINAL_HASH_FILE = OUTPUT_DIR / "original.sha256"
