@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Benchmark onboarding run",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "runId",
+    "project",
+    "source",
+    "createdAt",
+    "budget",
+    "status",
+    "stage",
+    "baselines",
+    "attempts",
+    "checkpoints",
+    "jobs"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "benchmark-onboarding-run/v1"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$"
+    },
+    "project": {
+      "type": "object",
+      "required": [
+        "repo",
+        "address",
+        "identity",
+        "head",
+        "remotes"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "address": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "head": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remotes": {
+          "type": "array"
+        }
+      }
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "budget": {
+      "type": "object",
+      "required": [
+        "maxAttempts",
+        "maxSeconds"
+      ],
+      "properties": {
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "maxSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 604800
+        }
+      }
+    },
+    "status": {
+      "enum": [
+        "running",
+        "accepted",
+        "needs_action",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1
+    },
+    "baselines": {
+      "type": "array"
+    },
+    "attempts": {
+      "type": "array"
+    },
+    "checkpoints": {
+      "type": "array"
+    },
+    "jobs": {
+      "type": "array"
+    }
+  }
+}

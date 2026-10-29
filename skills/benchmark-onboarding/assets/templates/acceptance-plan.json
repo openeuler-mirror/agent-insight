@@ -1,0 +1,103 @@
+{
+  "schemaVersion": "benchmark-onboarding-plan/v1",
+  "benchmarkKey": "replace-me",
+  "scope": {
+    "label": "替换为已授权的小样本试验范围",
+    "mode": "fixture",
+    "caseIds": [
+      "replace-case-id"
+    ]
+  },
+  "source": {
+    "url": "https://example.org/benchmark",
+    "codeRevision": "replace-with-pinned-revision",
+    "dataRevision": "replace-with-data-revision",
+    "split": "replace-with-split",
+    "license": "replace-with-verified-license",
+    "caseCount": 1
+  },
+  "baselineInputs": [
+    "{skill}/references/benchmark-protocol.md",
+    "{skill}/references/benchmark-protocol.sources.json",
+    "{run}/protocol-check.json",
+    "{run}/protocol-review.json",
+    "{repo}/docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md",
+    "{repo}/packages/benchmark-protocol/src/contracts.ts",
+    "{repo}/packages/benchmark-protocol/src/evaluation-contracts.ts",
+    "{repo}/packages/benchmark-protocol/src/evaluator-contracts.ts",
+    "{repo}/packages/benchmark-protocol/src/json-schema.ts",
+    "{repo}/packages/benchmark-protocol/environment.d.cts",
+    "{repo}/src/lib/benchmark/adapter-base.ts",
+    "{repo}/scripts/benchmark/generate-catalog.cjs",
+    "{repo}/services/evaluator/src/evaluator-registry.cjs",
+    "{repo}/path-to-source-lock.json",
+    "{repo}/path-to-frozen-submissions.json",
+    "{repo}/path-to-official-score-wrapper.cjs",
+    "{skill}/references/live-validation.md",
+    "{run}/validation-matrix.md"
+  ],
+  "implementationInputs": [
+    "{repo}/src/lib/benchmark/adapter-base.ts",
+    "{repo}/path-to-generated-live-validation-driver.cjs",
+    "{repo}/path-to-generated-interface-contract-tests.ts",
+    "{repo}/path-to-generated-dataset-source-check.cjs"
+  ],
+  "baseline": {
+    "argv": [],
+    "cwd": "{repo}",
+    "timeoutSeconds": 120
+  },
+  "candidate": {
+    "argv": [],
+    "cwd": "{repo}",
+    "timeoutSeconds": 120
+  },
+  "tolerances": {},
+  "checks": [
+    {
+      "id": "interface-contracts",
+      "category": "regression",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "exit-code"
+    },
+    {
+      "id": "source",
+      "category": "source",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "check"
+    },
+    {
+      "id": "visibility",
+      "category": "visibility",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "check"
+    },
+    {
+      "id": "regression",
+      "category": "regression",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "exit-code"
+    },
+    {
+      "id": "runtime",
+      "category": "runtime",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "check"
+    }
+  ]
+}

@@ -41,7 +41,7 @@ title: "操作指南"
 - [SWE-bench 部署指南](./evaluation/benchmarks/deploy-swe-bench.md)
 - [ZSoft 部署指南](./evaluation/benchmarks/deploy-zsoft.md)
 - [Benchmark 接入开发规范](./evaluation/benchmarks/develop-benchmark.md)
-- [自定义 Benchmark 接入指南](./evaluation/benchmarks/onboard-custom-benchmark.md)
+- [自定义 Benchmark 接入指南](./evaluation/benchmarks/onboard-custom-benchmark.md)（含项目地址与 Benchmark 来源驱动的自动接入 Skill）
 - [ZSoft 评测资产发布指南](./evaluation/benchmarks/release-zsoft-assets.md)
 - [评测数据集](./evaluation/datasets.md)
 - [评估器开发指南](./evaluation/develop-evaluator.md)

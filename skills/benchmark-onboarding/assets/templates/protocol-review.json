@@ -1,0 +1,25 @@
+{
+  "snapshotVersion": "2026-10-29.3",
+  "comparisonFile": "protocol-check.json",
+  "target": {
+    "project": "replace-with-user-project-address",
+    "revision": "replace-with-target-head"
+  },
+  "resolution": "unreviewed",
+  "sources": [
+    {
+      "path": "replace-with-actual-target-protocol-path",
+      "sha256": "replace-with-actual-file-digest"
+    }
+  ],
+  "differences": [
+    {
+      "path": "replace-with-changed-or-moved-source-path",
+      "classification": "unreviewed",
+      "evidence": "replace-with-target-code-and-test-evidence",
+      "action": "replace-with-template-adaptation-or-gap"
+    }
+  ],
+  "templateAdaptations": [],
+  "capabilityEvidence": "replace-with-separate-dynamic-capability-record"
+}

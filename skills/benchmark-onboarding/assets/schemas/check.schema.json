@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Benchmark onboarding check",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "evidence"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "benchmark-onboarding-check/v1"
+    },
+    "status": {
+      "enum": [
+        "pass",
+        "fail",
+        "blocked",
+        "skipped"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "facts": {
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Benchmark onboarding plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmarkKey",
+    "scope",
+    "source",
+    "baselineInputs",
+    "implementationInputs",
+    "baseline",
+    "candidate",
+    "tolerances",
+    "checks"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "benchmark-onboarding-plan/v1"
+    },
+    "benchmarkKey": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "mode",
+        "caseIds"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "enum": [
+            "live",
+            "fixture"
+          ]
+        },
+        "caseIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "codeRevision",
+        "dataRevision",
+        "split",
+        "license",
+        "caseCount"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "codeRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "split": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caseCount": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "baselineInputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "implementationInputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "baseline": {
+      "type": "object",
+      "required": [
+        "argv",
+        "cwd",
+        "timeoutSeconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 256
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "argv",
+        "cwd",
+        "timeoutSeconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 256
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        }
+      }
+    },
+    "tolerances": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "category",
+          "required",
+          "argv",
+          "cwd",
+          "timeoutSeconds",
+          "resultMode"
+        ],
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 256
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
+          "category": {
+            "enum": [
+              "source",
+              "visibility",
+              "runtime",
+              "regression"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "resultMode": {
+            "enum": [
+              "check",
+              "exit-code"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

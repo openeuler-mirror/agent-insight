@@ -14,6 +14,7 @@ title: "入门教程"
 ## 评测
 
 - [跑通第一次评测](./evaluation/01-first-experiment.md)
+- 接入新的 Benchmark：按[自动接入 Skill 发起说明](../how-to/evaluation/benchmarks/onboard-custom-benchmark.md#21-使用自动接入-skill)提供 Agent Insight 项目地址和 Benchmark 来源；Skill 会核对包内协议快照与目标版本，再查询实际能力；验收依次验证接口、真实分段与完整端到端。
 
 ## 优化
 

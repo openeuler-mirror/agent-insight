@@ -1,0 +1,66 @@
+# 本次 Benchmark 分层验证计划
+
+本文件填写计划并随官方基线冻结，实际结果写到每次 attempt 的证据目录。所有空项和 replace 值须由目标项目查询结果补齐；本模板不提供可直接执行的平台命令。
+
+## 范围与前置条件
+
+- 项目身份、目标源码/协议版本、实际平台/执行端/Evaluator 版本与接入包摘要：
+- 数据锁、数据集版本、Case ID（external/internal 映射）、样本覆盖理由：
+- Agent、模型、运行配置、评分配置与既有授权：
+- L1 隔离夹具/Mock 范围与 L2/L3 真实依赖：
+- 执行与评分可拆分性；需保留的环境状态/反馈，不能独立分段的理由和耦合验证方案：
+- 真实试验总预算、最大尝试、单次请求/各阶段/清理期限、轮询间隔及退避上限：
+- 复用的官方评分、回归测试与目标入口来源（路径、符号、版本、鉴权引用；无密钥）：
+
+## 数据集安装检查
+
+- 实际 Loader/安装入口、事务/重复导入/恢复合同及源码版本：
+- 数据库表/关联或替代索引、查询接口/只读 ORM、实际文件/对象存储位置与配置引用（无凭据）：
+- 来源全量、声明安装范围、执行子集及各自的数量/Case 集合；预期清单和 baselineInputs：
+- 来源记录到持久化记录、公开/私有字段、资源引用及指纹的转换规则：
+
+| 必检项 | 检查命令/程序及层次 | 预期值与实际读取/查询方式 | 断言与差异输出 | 独立证据与清理 |
+|---|---|---|---|---|
+| 文件/对象内容完整性：解析、Schema、摘要、数量、ID 唯一性 | replace | replace | replace | replace |
+| 落库/索引正确性：状态、版本、归属、Case 映射和关联 | replace | replace | replace | replace |
+| 记录与文件一致性：转换后内容/指纹、集合与资源引用 | replace | replace | replace | replace |
+| 重复导入与失败恢复：预期合同、修复重试、残留与锁 | replace | replace | replace | replace |
+
+- 分页/流式完整覆盖方案；各项证据为真实存储还是隔离 Mock，语义不适用项及等价校验依据：
+- 隔离试验数据集与失败输入、导入前后记录和文件清单、保留项及清理查询：
+- source 检查程序/配置的 implementationInputs，以及 L2/L3 对数据检查结果与版本的前置校验；重装后重新检查：
+
+数据检查必须覆盖声明安装范围；执行子集通过不能冒充全量安装验收。访问不足或必要字段无法验证记为 blocked，不用文件存在、接口 200 或仅数量相等代替完整检查。无需把运行中数据库文件作为冻结输入。
+
+## 接口契约矩阵 L1
+
+| 阶段/场景 | 实际方法/入口及源码依据 | 调用身份/前置记录 | 输入及正常/异常样例 | HTTP、状态、文件/摘要断言 | 异步终态/期限 | 执行命令与证据输出 | 资源清理 |
+|---|---|---|---|---|---|---|---|
+| 数据安装/查询 | replace | replace | replace | replace | replace | replace | replace |
+| 目标匹配/环境准备 | replace | replace | replace | replace | replace | replace | replace |
+| 创建/启动/进度/完成 | replace | replace | replace | replace | replace | replace | replace |
+| Artifact 上传/读取 | replace | replace | replace | replace | replace | replace | replace |
+| 评测/结果/Evidence | replace | replace | replace | replace | replace | replace | replace |
+| 适用的重评/取消/恢复 | replace | replace | replace | replace | replace | replace | replace |
+
+## 分段与端到端计划
+
+| 层次 | 前置结果与输入摘要核对 | 本次真实操作/Case/提交 | 关键断言 | 任务等待/截止与失败处理 | 证据输出/ID 关联 | 清理/保留项 | 命令与检查项映射 |
+|---|---|---|---|---|---|---|---|
+| L2 执行段 | replace | replace | replace | replace | replace | replace | replace |
+| L2 评分段（或事先说明的耦合验证） | replace | replace | replace | replace | replace | replace | replace |
+| L3 从创建到清理 | replace | replace | replace | replace | replace | replace | replace |
+
+## 驱动程序与通过条件
+
+- 本次生成的测试驱动程序位置、实际 argv、cwd、配置引用，以及 implementationInputs：
+- 进入 L3 前如何确认依赖的 L1/L2 已通过且仍对应本次输入；前置失败时如何停止后续：
+- 各阶段返回接受态、运行态、需处理态和终态的实际判定代码：
+- runtime 命令的外层期限、内部工作期限与预留清理时间：
+- onboardingRunId 与平台 dataset/Case/experiment/executionRun/Artifact/evaluation/attempt/Evidence 的关联规则：
+- 网络结果未知时的查询、实际幂等依据、有限重试及中断恢复：
+- 成功、断言失败、超时、取消和异常退出的清理及收敛查询：
+- 至少一个本次相关边界/失败场景及其实际覆盖层次：
+- 必需、可选、语义不适用和缺条件项的理由；每层结果与最终范围分别报告：
+
+L1 可用构造回调验证合同；L3 的进度和完成由实际执行器/Evaluator 上报。不能由测试程序补写终态、替换真实提交或拼接独立分段结果声称端到端通过。

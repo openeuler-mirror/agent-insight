@@ -10,6 +10,8 @@ changefreq: monthly
 
 接入文档维护架构、契约和验证流程；当前可用组件及执行机状态按[能力发现与兼容性判断](../../../how-to/evaluation/benchmarks/develop-benchmark.md#3-能力发现与兼容性判断)查询。文中的具体 Benchmark 和运行配置是示例，不作为完整支持清单。
 
+自动开发入口为 [benchmark-onboarding Skill](../../../../../skills/benchmark-onboarding/SKILL.md)：用户提供 Agent Insight 项目地址与 Benchmark 来源，宿主 Agent 分析并实现接入，包内脚本执行验收与生成报告。包内协议快照记录稳定架构与契约、来源和版本，运行前对照目标项目；动态能力继续查询代码和部署。它使用现有平台运行角色，阶段记录保存在包外；不引入独立编排服务。验证分为接口契约、分段真实集成和完整端到端，依赖结果与输入摘要核对后再进入下一层；详细要求见[接入规范第 12.6 节](../../../how-to/evaluation/benchmarks/develop-benchmark.md#126-分层验证顺序与测试矩阵)。发起方式见[自动接入说明](../../../how-to/evaluation/benchmarks/onboard-custom-benchmark.md#21-使用自动接入-skill)。
+
 ## 文档关系
 
 | 文档 | 用途 |
