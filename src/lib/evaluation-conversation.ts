@@ -48,7 +48,7 @@ export type ExecutionConversation = z.infer<typeof executionConversationSchema>;
 
 export function normalizeConversationTurns(item: {input:string;expectedOutput?:string;turns?:unknown}): ConversationTurn[] {
   const raw = item.turns === undefined ? [{id:'turn-1',input:item.input,expectedOutput:item.expectedOutput || ''}] : item.turns;
-  if (!Array.isArray(raw)) throw new Error('逐轮配置必须为数组');
+  if (!Array.isArray(raw)) throw new z.ZodError([{code:'custom',path:['turns'],message:'逐轮配置必须为数组'}]);
   return turnsSchema.parse(raw.map((turn,index)=>turn && typeof turn==='object' && !Array.isArray(turn) ? {...turn,id:turn.id || `turn-${index+1}`} : turn));
 }
 

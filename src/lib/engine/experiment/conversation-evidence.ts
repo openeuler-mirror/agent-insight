@@ -5,13 +5,19 @@
  * You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
  */
 
+import {attachConversationAnchors} from './conversation-anchors';
+import {toRawTraceInteractions} from '@/lib/engine/observability/fault-path';
+
 export interface ConversationEvidence {
   input: string;
   output: string;
   messageIndex: number;
   assistantMessageIndex?: number;
-  tools?: Array<{name:string;arguments:Record<string,unknown>;result?:unknown}>;
+  complete?: boolean;
+  traceAnchors?: string[];
+  tools?: Array<{name:string;arguments:Record<string,unknown>;result?:unknown;status?:string}>;
   skill?: string;
+  skills?: string[];
   state?: string;
 }
 
@@ -30,30 +36,34 @@ function json(value:unknown):unknown {
 
 export function replayConversation(messages:unknown[]):ConversationEvidence[] {
   const turns:ConversationEvidence[]=[];
-  let current:ConversationEvidence|undefined, responded=false, invalidTools=false;
+  let current:ConversationEvidence|undefined, invalidTools=false;
   let calls=new Map<string,NonNullable<ConversationEvidence['tools']>[number]>();
-  const finish=()=>{if(current&&responded){if(invalidTools)delete current.tools;turns.push(current);}};
-  for(const [index,raw] of messages.entries()){
+  const finish=()=>{if(current){if(invalidTools)delete current.tools;turns.push(current);}};
+  for(const [index,raw] of toRawTraceInteractions(messages).entries()){
     const message=record(raw), role=message.role || message.type;
     if(role==='user'){
-      finish();responded=false;invalidTools=false;calls=new Map();
-      current={input:text(message.content),output:'',messageIndex:index};
+      finish();invalidTools=false;calls=new Map();
+      current={input:text(message.content),output:'',messageIndex:index,complete:false};
       continue;
     }
     if(!current)continue;
     if(role==='assistant'){
-      responded=true;
       const output=text(message.content);
       if(output){current.output=output;current.assistantMessageIndex=index;}
       const facts=record(record(message.metadata).evaluation);
       if(typeof facts.skill==='string')current.skill=facts.skill;
       if(typeof facts.state==='string')current.state=facts.state;
-      if(Array.isArray(message.tool_calls)){
+      if(Array.isArray(message.parts))current.tools??=[];
+      const nativeParts=Array.isArray(message.parts)?message.parts.filter(p=>record(p).type==='tool').map(raw=>{const part=record(raw),state=record(part.state);return {id:part.callID||part.id,function:{name:part.tool,arguments:state.input},state:state.status,output:state.output};}):undefined;
+      const toolCalls=Array.isArray(message.tool_calls)?message.tool_calls:nativeParts;
+      current.complete=Boolean(output.trim())&&(!toolCalls||toolCalls.length===0);
+      if(toolCalls){
         current.tools??=[];
-        for(const rawCall of message.tool_calls){
+        for(const rawCall of toolCalls){
           const call=record(rawCall), fn=record(call.function || call), argumentsValue=json(fn.arguments);
           if(typeof fn.name!=='string' || !argumentsValue || typeof argumentsValue!=='object' || Array.isArray(argumentsValue)){invalidTools=true;continue;}
-          const tool={name:fn.name,arguments:argumentsValue as Record<string,unknown>};
+          const tool:NonNullable<ConversationEvidence['tools']>[number]={name:fn.name,arguments:argumentsValue as Record<string,unknown>,...(Object.hasOwn(call,'output')?{result:json(call.output)}:{}),...(typeof call.state==='string'?{status:call.state}:{})};
+          if(fn.name==='skill'&&typeof tool.arguments.name==='string'&&tool.status==='completed'){current.skills??=[];if(!current.skills.includes(tool.arguments.name))current.skills.push(tool.arguments.name);}
           current.tools.push(tool);
           if(typeof call.id==='string')calls.set(call.id,tool);
         }
@@ -64,5 +74,5 @@ export function replayConversation(messages:unknown[]):ConversationEvidence[] {
     }
   }
   finish();
-  return turns;
+  return attachConversationAnchors(messages,turns);
 }

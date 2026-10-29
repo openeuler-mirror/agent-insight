@@ -22,6 +22,8 @@ import path from 'node:path'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { canonicalJson, type JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
 import { prisma } from '@/lib/storage/prisma'
+import { recordPublishedDatasetVersion } from '@/server/agent_datasets_storage'
+import type { Prisma } from '@prisma/client'
 
 import { getBenchmarkAdapter } from './adapter-registry'
 import { getBenchmarkDatasetLoader } from './dataset-loader-registry'
@@ -223,9 +225,14 @@ export async function refreshSystemBenchmarkDatasetPresentation(datasetId: strin
     throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', '平台 Benchmark 数据集不存在', 404)
   }
   const adapter = getBenchmarkAdapter(dataset.adapterKey)
-  await prisma.agentEvalDataset.update({
-    where: { id: dataset.agentEvalDatasetId },
-    data: { fieldsJson: canonicalJson(buildBenchmarkDatasetFields(dataset.adapterKey, adapter)) },
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const previous = await tx.agentEvalDataset.findUnique({ where: { id: dataset.agentEvalDatasetId } })
+    if (previous) await recordPublishedDatasetVersion(tx, previous, 'benchmark-fields')
+    const publishedDataset = await tx.agentEvalDataset.update({
+      where: { id: dataset.agentEvalDatasetId },
+      data: { fieldsJson: canonicalJson(buildBenchmarkDatasetFields(dataset.adapterKey, adapter)) },
+    })
+    await recordPublishedDatasetVersion(tx, publishedDataset, 'benchmark-fields')
   })
   return dataset
 }

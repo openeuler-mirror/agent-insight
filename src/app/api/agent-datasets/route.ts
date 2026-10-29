@@ -15,6 +15,7 @@
  */
 
 import { traceIdentity, guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { ZodError } from 'zod';
 import { GenerationError, normalizeTraceCases, TRACE_FIELDS } from '@/lib/trace-datasets/contracts';
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
@@ -161,6 +162,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, dataset, warnings });
   } catch (error) {
+    if(error instanceof ZodError)return NextResponse.json({error:'逐轮配置无效：'+error.issues.map(issue=>issue.message).join('；')},{status:422});
+    if(error instanceof GenerationError)return generationErrorResponse(error);
     console.error('agent-datasets POST error:', error);
     return NextResponse.json({ error: 'failed to create dataset' }, { status: 500 });
   }
@@ -271,6 +274,7 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ success: true, dataset: updated, warnings: preparedCasesResult.warnings });
   } catch (error) {
+    if(error instanceof ZodError)return NextResponse.json({error:'逐轮配置无效：'+error.issues.map(issue=>issue.message).join('；')},{status:422});
     if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('agent-datasets PATCH error:', error);
     return NextResponse.json({ error: 'failed to update dataset' }, { status: 500 });

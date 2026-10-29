@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { recordPublishedDatasetVersion } from '@/server/agent_datasets_storage'
 import { randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
@@ -229,8 +230,10 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
 
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     if (existing) {
+      const previous = await tx.agentEvalDataset.findUnique({ where: { id: existing.agentEvalDatasetId } })
+      if (previous) await recordPublishedDatasetVersion(tx, previous, 'benchmark-import')
       await tx.benchmarkDatasetCase.deleteMany({ where: { datasetId: existing.id } })
-      await tx.agentEvalDataset.update({
+      const publishedDataset = await tx.agentEvalDataset.update({
         where: { id: existing.agentEvalDatasetId },
         data: {
           description: input.description || '',
@@ -243,6 +246,7 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
           projectionReady: true,
         },
       })
+      await recordPublishedDatasetVersion(tx, publishedDataset, 'benchmark-import')
       const dataset = await tx.benchmarkDataset.update({
         where: { id: existing.id },
         data: {
@@ -258,7 +262,7 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
     }
 
     const agentEvalDatasetId = `aeds_${randomUUID().replaceAll('-', '')}`
-    await tx.agentEvalDataset.create({
+    const publishedDataset = await tx.agentEvalDataset.create({
       data: {
         id: agentEvalDatasetId,
         user,
@@ -273,6 +277,7 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
         projectionReady: true,
       },
     })
+    await recordPublishedDatasetVersion(tx, publishedDataset, 'benchmark-import')
     return tx.benchmarkDataset.create({
       data: {
         agentEvalDatasetId,

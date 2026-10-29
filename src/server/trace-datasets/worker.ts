@@ -15,6 +15,7 @@
  */
 
 import { transaction } from './transaction';
+import { recordPublishedDatasetVersion } from '../agent_datasets_storage';
 import { parentPort, workerData } from 'node:worker_threads';
 import { PrismaClient } from '@prisma/client';
 import fs from 'node:fs/promises';
@@ -135,7 +136,8 @@ port.on('message', async (message: { type?: string; jobId: string; epoch: number
     await transaction(db, async tx => {
       const claimed = await tx.traceDatasetGenerationJob.updateMany({ where: valid, data: { status: 'succeeded', stage: 'complete', stageIndex: 6, generatedCount: cases.length, cleanupPending: true, leaseUntil: null } });
       if (!claimed.count) throw new Error('CANCELLED');
-      await tx.agentEvalDataset.update({ where: { id: job.datasetId }, data: { casesJson: JSON.stringify(cases), referenceCasesJson: JSON.stringify(reference), caseCount: cases.length, projectionReady: true, generationStatus: 'published' } });
+      const publishedDataset = await tx.agentEvalDataset.update({ where: { id: job.datasetId }, data: { casesJson: JSON.stringify(cases), referenceCasesJson: JSON.stringify(reference), caseCount: cases.length, projectionReady: true, generationStatus: 'published' } });
+      await recordPublishedDatasetVersion(tx, publishedDataset, 'trace-generation');
       await tx.traceDatasetOperationReceipt.updateMany({ where: { jobId, kind: 'create', expiresAt: { lt: receiptExpiry(job.requestId, Date.now()) } }, data: { expiresAt: receiptExpiry(job.requestId, Date.now()) } });
     }, { timeout: 30000, maxWait: 30000 });
   } catch (error) {

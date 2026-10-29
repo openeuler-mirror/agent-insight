@@ -44,6 +44,9 @@ import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError } from '@/l
  */
 
 import { createHash } from 'node:crypto';
+import { normalizeConversationTurns, type ConversationTurn } from '@/lib/evaluation-conversation';
+import { replayConversation } from './conversation-evidence';
+import { CONVERSATION_RULES_EVALUATOR_ID, evaluateConversationRules } from './conversation-rules';
 import { prisma } from '@/lib/storage/prisma';
 import type { Prisma } from '@prisma/client';
 import {
@@ -147,6 +150,7 @@ async function resolveEvaluatorCard(user: string, evaluatorId: string): Promise<
 // ── case 运行时上下文（Execution + 可选 interactions 工具序列）─────────────
 
 interface CaseRuntime {
+  conversation?: ConversationTurn[];
   judgeCtx: JudgeCaseContext;
   /** 忠实版预置评估器（复用原 opencode 评估器）所需的原始上下文；
    *  安全与创意评估器也共用此类型（见 §4.3 实现签名）。 */
@@ -337,6 +341,7 @@ async function loadCaseRuntime(caseRow: {
   return {
     judgeCtx,
     faithfulCtx,
+    ...(caseValues?.turns !== undefined ? { conversation: normalizeConversationTurns({ input: caseInput, expectedOutput: caseRow.referenceOutput ?? undefined, turns: caseValues.turns }) } : {}),
     ...(typeof shouldTrigger === 'boolean'
       ? { trigger: { shouldTrigger, skillTriggered: targetSkillInvoked, ...(triggerReason ? { reason: triggerReason } : {}) } }
       : {}),
@@ -370,6 +375,10 @@ async function evaluateOnce(
   configs: EvaluatorRunConfigMap,
   frozenSnapshot: Record<string, unknown> = {},
 ): Promise<EvaluatorOutput> {
+  if (evaluatorId === CONVERSATION_RULES_EVALUATOR_ID) {
+    if (!runtime.conversation) return { summary: '不适用：Case未配置逐轮业务规则' };
+    return evaluateConversationRules(runtime.conversation, replayConversation(runtime.faithfulCtx.interactions ?? []));
+  }
   if (isSkillTriggerAnalyzerId(evaluatorId)) {
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
     return evaluateSkillTriggerAnalysis(runtime.trigger);
