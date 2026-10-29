@@ -9,6 +9,12 @@ changefreq: monthly
 
 > 引擎从 `lib` 暴露约 380 个函数，从 `server` 暴露约 29 个，外加 14 个 prompt 构建器；代码库声明了约 890 个类型和约 290 个扩展点（接口/抽象类）。本页列出高信噪比的引擎 API、持久化 + 内存数据模型，以及扩展点。仅包含签名与调用关系 —— 不描述行为。所有签名均来自静态分析。
 
+## FI 采集与独立评判移除
+
+`POST /api/fault-injection/runs/:runId/collect-result` 通过 `persistFiCollectIngress` 保存注入事实、markers 和平台 Session ID；不读取评测模型、不调用 FI Judge，也不等待业务 Trace 回传轮询。有效 Session ID 的采集进入 `completed`，缺少合法平台 Session ID 时进入 `failed`，用户停止进入 `stopped`。已有业务 Trace 可立即绑定；迟到 Trace 由实验编排继续等待，仅就绪 Case 进入显式选择的评估器。
+
+`POST /api/fault-injection/runs/:runId/rejudge` 已退役，返回 `410` 和 `code=FI_JUDGE_REMOVED`。历史数据库判定字段不迁移或清空，FI 详情接口可继续读取；新 Run 的 Trace 响应 `judge=null`，不会为 `completed` 自动合成评价标记或占位 Judge 阶段。`judge_skipped` 与 `judging` 仅兼容历史状态，新采集不再产生这两个状态。
+
 ## Engine API — anchor index
 | Function | Anchor | Module |
 |---|---|---|

@@ -1,5 +1,7 @@
 # xiaoO 平台适配方案
 
+> **当前契约（FI Judge 已移除）**：FI 结果接收只保存注入事实与平台 Session ID，不再自动判定、不等待 Judge 轨迹轮询、不生成评价标记。客户端槽位在采集上传完成后释放；实验仍等待独立业务 Trace 就绪，再运行显式选择的评估器。RAS 环内判定与恢复不变。历史判定字段和标记只读保留，旧 FI `rejudge` 接口返回 410。本文下述涉及独立 FI Judge 的旧设计、图示与阶段记录仅作历史背景，当前使用以[操作指南](../../../../how-to/reliability/agent-fault-injection/run-injection.md)为准。
+
 > **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../../../../agent_fault_injection/) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。
 
 

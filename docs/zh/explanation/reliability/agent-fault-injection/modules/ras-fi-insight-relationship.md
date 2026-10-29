@@ -1,5 +1,7 @@
 # Agent Insight · RAS · FI 关系设计说明
 
+> **当前契约（FI Judge 已移除）**：FI 结果接收只保存注入事实与平台 Session ID，不再自动判定、不等待 Judge 轨迹轮询、不生成评价标记。客户端槽位在采集上传完成后释放；实验仍等待独立业务 Trace 就绪，再运行显式选择的评估器。RAS 环内判定与恢复不变。历史判定字段和标记只读保留，旧 FI `rejudge` 接口返回 410。本文下述涉及独立 FI Judge 的旧设计、图示与阶段记录仅作历史背景，当前使用以[操作指南](../../../../how-to/reliability/agent-fault-injection/run-injection.md)为准。
+
 > **文档性质**：说明既有平台 **agent-insight** 与新增功能模块 **agent-ras**、**agent-fi** 的边界、部署与数据关系  
 > **对齐实现**：2026-08-05（FI 已切 Insight 服务端 + 本机 FI Client；RAS 环内旁路上报已落地）  
 > **图示约定**：节点一律 **「功能简述 · 角色/模块名」**（功能在前）；优先写**角色**，实现进程名仅作注记。  
@@ -543,9 +545,10 @@ fi-worker tick: claim
        map_trajectory / InsightInteractionsMapper.map
        build_collect_payload → write_collect_payload（collect-result.json）
   → uploadResult: POST …/collect-result
-  → ingestCollectAndJudge
+  → persistFiCollectIngress
        persistFiCollectIngress（只更新 FaultInjectionRun：sessionTaskId / markers / faultActivated…；不写 Session）
-       → finishFiJudgeFromDb（sessionAligned 且已激活时轮询等 ⓪ Session.interactions 就绪；再只读 Prisma 评判）
+       → 采集有有效平台 Session ID：Run completed；缺少 ID：failed；停止：stopped
+       → 无 FI Judge；独立业务 Trace 由实验编排等待，随后运行所选评估器
 ```
 
 | 步骤 | 路径 | 符号 |
@@ -555,7 +558,7 @@ fi-worker tick: claim
 | 映射 markers + taskId（interactions=[]） | [`.../pipeline/interactions_mapper.py`](../../../../../../agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
 | 组装/写盘 | [`.../pipeline/collect_payload.py`](../../../../../../agent_fault_injection/pipeline/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
 | 路由 | [`src/app/api/fault-injection/runs/[runId]/collect-result/route.ts`](../../../../../../src/app/api/fault-injection/runs/[runId]/collect-result/route.ts) | `POST` |
-| 入库+评判 | [`src/lib/fault-injection/store.ts`](../../../../../../src/lib/fault-injection/store.ts) | `ingestCollectAndJudge` |
+| 采集入库（不评判） | [`src/lib/fault-injection/store.ts`](../../../../../../src/lib/fault-injection/store.ts) | `persistFiCollectIngress` |
 | ~~④ bridge~~ | **已移除**（原 `ras-bridge.ts`） | — |
 
 运行中插件只往本机 `raw/` append；**对 Insight 的 ③ 是 Run 结束一次 POST**。控制面 ②（heartbeat/claim）与 ③ 分开，可周期发生。

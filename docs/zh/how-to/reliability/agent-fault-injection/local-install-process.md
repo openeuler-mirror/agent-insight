@@ -8,7 +8,7 @@ changefreq: monthly
 # Agent FI：本机安装过程详解
 
 > **读者**：需要理解「执行 FI setup curl 后，用户机器上发生了什么」的使用者与排障者。  
-> **范围**：本机 **FI Client / Worker** 的安装、落盘与常驻进程；不含故障 Skill 内容与服务端 Judge 算法。  
+> **范围**：本机 **FI Client / Worker** 的安装、落盘与常驻进程；不含故障 Skill 内容与实验评估器算法。
 > **真源**：[`src/app/api/fault-injection/setup/route.ts`](../../../../../src/app/api/fault-injection/setup/route.ts)、[`scripts/install-fault-injection.js`](../../../../../scripts/install-fault-injection.js)、[`scripts/fi-worker.js`](../../../../../scripts/fi-worker.js)。\
 > **产品操作**：[user-guide/observability/fault-injection.md](run-injection.md)。
 
@@ -16,7 +16,7 @@ changefreq: monthly
 
 ## 1. 一句话
 
-FI 安装命令在用户本机启用 **FI Client**：把 Python 包 `agent_fault_injection` 装好、写好 Worker 配置，并（默认）**后台常驻** `fi-worker`。Worker 向远程 Insight **心跳 / claim / 回传 collect-result**；真正注入由本机 CLI 驱动 OpenCode / xiaoO。**服务端**负责任务编排与 Judge，不在用户机跑注入算法。
+FI 安装命令在用户本机启用 **FI Client**：把 Python 包 `agent_fault_injection` 装好、写好 Worker 配置，并（默认）**后台常驻** `fi-worker`。Worker 向远程 Insight **心跳 / claim / 回传 collect-result**；真正注入由本机 CLI 驱动 OpenCode / xiaoO。**服务端**负责任务编排与采集记录，不在用户机跑注入算法。
 
 旧 Worker 启动时优先读取正式客户端 `~/.agent-insight/client/config.json`，未安装正式客户端时才读取或创建 `~/.agent-insight/client.json`，并在心跳中携带稳定 `clientId`。它与 OpenCode uploader 共用身份优先级；`workerId` 仍只标识 Worker 实例。该变化不新增安装项或进程。
 
@@ -27,7 +27,7 @@ flowchart TB
     SetupAPI["GET /api/fault-injection/setup?key=…"]
     FIAPI["/api/fault-injection/*<br/>heartbeat · claim · collect-result"]
     DB[(Prisma)]
-    Judge["服务端 Judge"]
+    Evaluator["实验所选评估器（Trace 就绪后）"]
   end
   subgraph userHost ["用户本机 · 与被测 Agent 同机"]
     Curl["curl …/setup \| bash"]
@@ -48,7 +48,8 @@ flowchart TB
   Worker -->|"heartbeat / claim"| FIAPI
   Worker --> CLI --> Agents
   Worker -->|"collect-result"| FIAPI
-  FIAPI --> DB --> Judge
+  FIAPI --> DB
+  DB --> Evaluator
 ```
 
 ---
@@ -251,7 +252,7 @@ flowchart LR
 
 - **inventory**：Worker 启动时用配置中的 managed `fiPython` 跑 `-I -m agent_fault_injection.cli platform inventory --json`，把本机真实 agents/models 经 heartbeat 上报。无 Worker 时 Insight health/platforms 只返回安装引导，**不**静默填假目录。
 - **claim**：领取 `queued` 任务，在隔离 workspace 注入并采集。
-- **collect-result**：回传 markers / `faultActivated` / Trace ID，由 **Insight 服务端 Judge** 评判（本机不再跑产品 Judge）。**不**写 `Session.interactions`，**不**合成 `RasAnomalyEvent`。
+- **collect-result**：回传 markers / `faultActivated` / Trace ID，只保存采集事实并完成 Run，不调用 FI Judge；评分由实验所选评估器承担。**不**写 `Session.interactions`，**不**合成 `RasAnomalyEvent`。
 - **不**启动 RAS；若宿主已挂 RAS，那是安装指导 / `install-ras` 的结果，与 FI 任务解耦。
 
 本机排障产物（权威仍在 Prisma）：
@@ -274,7 +275,7 @@ flowchart LR
 | 故障 Skill / catalog | Python 包内 `fault_inject/skills/` 等（随包） |
 | API Key / Host | setup query → env → `config.json` |
 | Agent / Model 列表 | Worker 启动后对本机平台做 inventory，经 heartbeat 上报 Insight |
-| Judge 结论 | **仅服务端**；不从本机上传包直读为权威 |
+| 采集结果 | `faultActivated`、markers 与 Session ID；新 Run 不产生 FI Judge 结论 |
 
 ```mermaid
 flowchart LR

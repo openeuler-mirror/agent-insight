@@ -112,30 +112,25 @@ test('terminal empty traces stop waiting after grace, and cancellation ends acti
   assert.deepEqual(cancelled.pendingRunIds, [queued.run.runId])
 })
 
-test('collect ingress and FI judge both reject internal sessions and prompt-only traces', async () => {
-  process.env.FI_JUDGE_SESSION_WAIT_MS = '0'
-  try {
-    for (const [agent, messages, expected] of [
-      ['ras-judge', [{ role: 'assistant', content: 'internal verdict' }], false],
-      ['build', [{ role: 'user', content: 'prompt only' }], false],
-      ['build', [{ role: 'assistant', content: 'business response' }], true],
-    ] as const) {
-      const data = await fixture('collecting', agent, [...messages])
-      await prisma.experimentCase.update({ where: { id: data.row.id }, data: { taskId: null } })
-      await store.persistFiCollectIngress({ runId: data.run.runId, user, payload: {
-        runId: data.run.runId, taskId: data.run.sessionTaskId!, framework: 'opencode',
-        fault: 'thinking-dead-loop', injectionMethod: 'skill_inject',
-        faultActivated: true, interactions: [], markers: [],
-      } })
-      const row = await prisma.experimentCase.findUniqueOrThrow({ where: { id: data.row.id } })
-      assert.equal(Boolean(row.executionId), expected)
-      const loaded = await store.loadPersistedFiCollectForJudge(data.run.runId)
-      assert.equal(loaded.sessionTraceReady, expected)
-      assert.equal(loaded.interactions.length > 0, expected)
-    }
-  } finally { delete process.env.FI_JUDGE_SESSION_WAIT_MS }
+test('collection completes but binds only valid business traces', async () => {
+  for (const [agent, messages, expected] of [
+    ['ras-judge', [{ role: 'assistant', content: 'internal verdict' }], false],
+    ['build', [{ role: 'user', content: 'prompt only' }], false],
+    ['build', [{ role: 'assistant', content: 'business response' }], true],
+  ] as const) {
+    const data = await fixture('collecting', agent, [...messages])
+    await prisma.experimentCase.update({ where: { id: data.row.id }, data: { taskId: null } })
+    const collected = await store.persistFiCollectIngress({ runId: data.run.runId, user, payload: {
+      runId: data.run.runId, taskId: data.run.sessionTaskId!, framework: 'opencode',
+      fault: 'thinking-dead-loop', injectionMethod: 'skill_inject',
+      faultActivated: true, interactions: [], markers: [],
+    } })
+    assert.equal(collected.status, 'completed')
+    assert.equal(collected.judgedAt, null)
+    const row = await prisma.experimentCase.findUniqueOrThrow({ where: { id: data.row.id } })
+    assert.equal(Boolean(row.executionId), expected)
+  }
 })
-
 
 test('terminal empty FI traces fail after uploader grace even while the parent remains running', async () => {
   for (const status of ['judge_skipped', 'completed']) {

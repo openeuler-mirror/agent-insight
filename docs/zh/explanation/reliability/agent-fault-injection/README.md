@@ -8,13 +8,15 @@ changefreq: monthly
 # Agent Fault Injection 文档
 
 仓根 [`agent_fault_injection/`](../../../../../agent_fault_injection/)：**agent-fi 功能实现模块**（注入 + 采集）。\
-**前端 / DB / Worker 协议 / Judge** 属既有平台 [agent-insight](../../../../..)；环内检测见 [`agent_ras/`](../../../../../agent_ras/)。
+**前端 / DB / Worker 协议 / 实验评估器** 属既有平台 [agent-insight](../../../../..)；环内检测见 [`agent_ras/`](../../../../../agent_ras/)。
+
+> 当前 FI 只注入、采集和关联独立业务 Trace，不再自动调用 FI Judge。评分由实验所选评估器执行，RAS 运行时检测与恢复不变。历史判定数据只读保留，旧 FI 重评接口返回 410。
 
 ## 关系说明（先读）
 
 | | agent-insight（平台） | agent-ras（模块） | agent-fi（模块） |
 |--|---------------------|-------------------|------------------|
-| 职责 | UI · API/协议 · DB · Judge | 环内检测 + 恢复实现 | 注入 + 采集实现 |
+| 职责 | UI · API/协议 · DB · 实验所选评估器 | 环内检测 + 恢复实现 | 注入 + 采集实现 |
 | 部署 | 服务端（可远程） | 用户本机 · 宿主同进程 | 用户本机 · Worker/CLI |
 | 不含 | — | 前端 / schema / 契约设计 | 前端 / FaultInjection* 表 / Judge |
 
@@ -33,7 +35,7 @@ changefreq: monthly
 | 内置故障覆盖矩阵 | [fault-catalog.md](../../../reference/reliability/agent-fault-injection/fault-catalog.md) |
 | **新增故障模式** | [fault-mode-plugins.md](../../../../../design/reliability/agent-fault-injection/fault-mode-plugins.md) |
 | 运行时注入（prompt / tool_result / intercept） | [runtime-middleware-fault-injection.md](../../../../../design/reliability/agent-fault-injection/runtime-middleware-fault-injection.md) |
-| Task / Worker / Judge（Insight） | [server-client-split.md](../../../../../design/reliability/agent-fault-injection/server-client-split.md) |
+| Task / Worker 历史设计（FI Judge 已移除） | [server-client-split.md](../../../../../design/reliability/agent-fault-injection/server-client-split.md) |
 | 最短启用 | [01-getting-started.md](../../../tutorial/reliability/agent-fault-injection/01-getting-started.md) |
 | **用户指南（产品路径）** | [user-guide/observability/fault-injection.md](../../../how-to/reliability/agent-fault-injection/run-injection.md) |
 
@@ -62,7 +64,7 @@ changefreq: monthly
 
 | 文档 | 内容 | 状态 |
 |------|------|------|
-| [server-client-split.md](../../../../../design/reliability/agent-fault-injection/server-client-split.md) | 远程任务 + 本机 Worker；collect/Judge/Trace join | ✅ 已落地（2026-08-05 浏览器 E2E） |
+| [server-client-split.md](../../../../../design/reliability/agent-fault-injection/server-client-split.md) | 远程任务 + 本机 Worker；collect/Trace join（其中独立 FI Judge 已移除） | ✅ 已落地（2026-08-05 浏览器 E2E） |
 | [runtime-middleware-fault-injection.md](../../../../../design/reliability/agent-fault-injection/runtime-middleware-fault-injection.md) | 运行时数据面注入方案：挂点、步骤契约、表驱动同源 | ✅ |
 | [platform-adapter.md](../../../../../design/reliability/agent-fault-injection/platform-adapter.md) | Adapter SPI 与最小接入 | ✅ |
 | [fault-mode-plugins.md](../../../../../design/reliability/agent-fault-injection/fault-mode-plugins.md) | 故障模式插件化：五类 method、能力面、配方契约 | ✅ 已落地（2026-08-10） |
