@@ -2,6 +2,8 @@
 
 English translations for this category are pending. This page is a navigation and status entry, not a translation of the existing Chinese documents.
 
+During Skill optimization, scrolling up pauses automatic output following, including progress and completion updates. Scroll back to the bottom to resume. See the [Chinese Skill optimization guide](../../zh/how-to/optimization/skills/optimize.md).
+
 - [Chinese documentation](../../zh/how-to/navigation.md)
 - [English documentation status](https://gitcode.com/openeuler/agent-insight/blob/master/docs/en/README.md)
 - [Migration review (Chinese)](https://gitcode.com/openeuler/agent-insight/blob/master/design/platform/docs-migration/migration-review.md)
