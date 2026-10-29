@@ -80,9 +80,9 @@ export async function GET(request: NextRequest) {
     // 多 skill 同名的情况由 skill.name 自然聚合（业务上不允许同 user 同名）。
     const skillNames = skills.map((s: any) => s.name).filter(Boolean);
     const since7d = new Date(Date.now() - 7 * 24 * 3600 * 1000);
-    let execAggMap: Map<string, { calls: number; agents: Set<string>; success: number; total: number }> = new Map();
-    let issueAggMap: Map<string, { high: number; medium: number; low: number }> = new Map();
-    let evaluatedSkillIds = new Set<string>();
+    const execAggMap: Map<string, { calls: number; agents: Set<string>; success: number; total: number }> = new Map();
+    const issueAggMap: Map<string, { high: number; medium: number; low: number }> = new Map();
+    const evaluatedSkillIds = new Set<string>();
 
     if (skillNames.length > 0) {
         try {

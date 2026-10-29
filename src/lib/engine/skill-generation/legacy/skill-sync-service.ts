@@ -172,7 +172,7 @@ async function storeSkillFromExtracted(
   fs.mkdirSync(storageBase, { recursive: true });
 
   let skillContent = '';
-  let fileList: string[] = [];
+  const fileList: string[] = [];
 
   console.log('[Enterprise-Sync] 开始保存文件，总数:', extractedFiles.size);
   for (const [filePath, buffer] of extractedFiles) {
