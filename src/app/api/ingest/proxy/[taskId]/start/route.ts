@@ -27,7 +27,7 @@ export async function POST(
   let body: any = {};
   try {
       body = await request.json();
-  } catch (e) {
+  } catch {
   }
   if (!body || typeof body !== 'object') body = {};
   

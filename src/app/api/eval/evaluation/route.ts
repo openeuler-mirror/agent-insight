@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     if (fs.existsSync(EVALUATION_FILE)) {
         try {
             currentResults = JSON.parse(fs.readFileSync(EVALUATION_FILE, 'utf-8'));
-        } catch (e) {
+        } catch {
             // If corrupt, overwrite
         }
     }
