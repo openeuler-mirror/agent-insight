@@ -21,6 +21,7 @@ import { type ExecutionIdentity } from '@/lib/grayscale/run-progress';
 import type { AgentRunError } from '../../../../../../scripts/agent-run-diagnostics.cjs';
 import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
 import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/storage/prisma';
@@ -2675,6 +2676,11 @@ async function runGrayscaleTask(args: {
     }
 }
 
+function assertLegacyDatasetBacking(snapshotJson: string | null | undefined) {
+    const snapshot = safeParse<{ assetVersions?: { dataset?: unknown } }>(snapshotJson || '{}', {});
+    if (snapshot?.assetVersions?.dataset != null) throw new EvaluationAssetError('固定数据集版本的实验不能作为 Skill 专用重执行容器。请使用原实验详情中的重试入口；新题请先发布新版本并创建新实验。', 409, 'ASSET_BACKING_FORBIDDEN');
+}
+
 async function prepareExperimentCasesForExecutionRetry(args: {
     experimentId: string;
     user: string;
@@ -2689,6 +2695,9 @@ async function prepareExperimentCasesForExecutionRetry(args: {
     evaluatorIds: string[];
 }) {
     return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const experiment = await tx.experiment.findFirst({ where: { id: args.experimentId, user: args.user }, select: { configSnapshotJson: true } });
+        if (!experiment) throw new Error('Skill 实验不存在');
+        assertLegacyDatasetBacking(experiment.configSnapshotJson);
         const claimed = await tx.grayscaleTask.updateMany({
             where: { id: args.taskId, user: args.user, caseStatesJson: args.expectedCaseStatesJson },
             data: { caseStatesJson: args.expectedCaseStatesJson },
@@ -2830,9 +2839,10 @@ async function runGrayscaleExecutionRetry(args: {
             scope: 'skill-workbench',
             preset: { in: ['trigger', 'use-case', 'skill-ab'] },
         },
-        select: { id: true, status: true },
+        select: { id: true, status: true, configSnapshotJson: true },
     });
     if (!experiment) throw new Error('Skill 实验不存在或不支持重新执行');
+    assertLegacyDatasetBacking(experiment.configSnapshotJson);
     const retryTargets = args.targets.filter((target, index, all) => (
         all.findIndex(item => item.side === target.side) === index
     ));

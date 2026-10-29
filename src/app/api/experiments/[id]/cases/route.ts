@@ -14,33 +14,22 @@
  * limitations under the License.
  */
 
-// 往已建实验追加 case（建实验向导之外的第二个入口）。
-//
-// 复用监听模式同一套积木：addEvalExperimentCase（按 taskId 幂等，重复圈选同一条 trace
-// 只会复用已有 case 并回填参考答案）+ evaluateEvalExperimentCase（按实验既定的
-// evaluatorIds 评这一条）。评测在后台 fire-and-forget 跑，接口只回"收了几条"。
-//
-// 注意：新 case 走的是**实验创建时定下的评估器**，不重新做 ④ 步门控。若实验里含依赖
-// 参考数据的评估器而新 case 没标注参考答案，那一行会落到评估器自己的"未标注→不记分"
-// 兜底（见 result-preset-evaluators）。入口 UI 负责把这个提示前置给用户。
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { addEvalExperimentCase, evaluateEvalExperimentCase } from '@/lib/engine/experiment/run-experiment';
-
+import { assertExperimentActive } from '@/lib/engine/experiment/cancellation-context';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
+import { requireExperimentVersionActor } from '@/lib/evaluation-assets/experiment-versions';
+import { appendVersionedCases, frozenAppendDataset, type CaseInput } from '@/lib/evaluation-assets/append-experiment-cases';
 export const dynamic = 'force-dynamic';
 
 /** 单次追加上限：与向导跨页全选的 SELECT_ALL_CAP 同量级，避免一次灌爆评测队列。 */
 const MAX_CASES_PER_CALL = 200;
 
-interface CaseInput {
-  executionId?: string;
-  taskId?: string;
-  input?: string;
-  datasetInput?: string | null;
-  actualOutput?: string;
-  referenceOutput?: string | null;
+function parse(value: string | null): Record<string, unknown> {
+  try { const parsed = JSON.parse(value || '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; }
 }
 
 export async function POST(
@@ -70,7 +59,7 @@ export async function POST(
 
     const experiment = await prisma.experiment.findFirst({
       where: { id, user: username },
-      select: { id: true, evaluatorIdsJson: true },
+      select: { id: true, evaluatorIdsJson: true, agentName: true, configSnapshotJson: true, deletedAt: true, status: true },
     });
     if (!experiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
@@ -80,6 +69,21 @@ export async function POST(
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String).filter(Boolean);
     } catch { /* 忽略脏数据 */ }
+    const snapshot = parse(experiment.configSnapshotJson);
+    if (snapshot.assetVersions) await requireExperimentVersionActor(req, username);
+    const frozen = frozenAppendDataset(snapshot);
+    if (frozen) {
+      const outcome = await appendVersionedCases(username, experiment, cases, frozen, autoRun, evaluatorIds);
+      if (outcome.evaluating) void (async () => {
+        for (const caseId of outcome.newCaseIds) {
+          try { await assertExperimentActive(experiment.id, caseId); await evaluateEvalExperimentCase(experiment.id, caseId, username); }
+          catch (error) { console.warn('[experiment-cases] versioned evaluation stopped', error instanceof Error ? error.message : 'evaluation failed'); }
+        }
+      })();
+
+      if (outcome.added) recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.case.create' });
+      return NextResponse.json(outcome);
+    }
     if (autoRun && !evaluatorIds.length) {
       return NextResponse.json({ error: '该实验未配置评估器，无法评测新增 case' }, { status: 409 });
     }
@@ -156,6 +160,7 @@ export async function POST(
       evaluating: autoRun,
     });
   } catch (error) {
+    if (error instanceof EvaluationAssetError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     console.error('[Experiment Cases POST Error]', error);
     return NextResponse.json({ error: 'Failed to add cases' }, { status: 500 });
   }

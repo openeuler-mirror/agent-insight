@@ -121,6 +121,7 @@ import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 import { deriveSettledExperimentStatus } from './detail-agg';
 import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
 import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
 import { isSimilarityPresetId, runSimilarityPreset } from './similarity-preset-evaluators';
 import { activeCaseOperations, assertExperimentActive, markExperimentCleanupUnconfirmed, withExperimentCancellation } from './cancellation-context';
 import { parseStoredEvaluatorExecutionConfig, type EvaluatorExecutionSnapshot } from '@/lib/evaluators/evaluator-execution-config';
@@ -918,9 +919,17 @@ export async function ensureEvalExperiment(params: {
   if (params.existingId) {
     const found = await prisma.experiment.findFirst({
       where: { id: params.existingId, user: params.user },
-      select: { id: true },
+      select: { id: true, configSnapshotJson: true },
     });
-    if (found) { await assertExperimentActive(found.id); return found.id; }
+    if (found) {
+      let snapshot: unknown;
+      try { snapshot = JSON.parse(found.configSnapshotJson || '{}'); } catch { snapshot = null; }
+      if (snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'assetVersions')) {
+        throw new EvaluationAssetError('该实验已冻结资产版本，不能作为 Skill 或批量评测容器复用。请到原实验详情追加该版本已有 Case；新题请先发布评测集新版本并创建新实验。', 409, 'ASSET_BACKING_FORBIDDEN');
+      }
+      await assertExperimentActive(found.id);
+      return found.id;
+    }
   }
   const exp = await prisma.experiment.create({
     data: {
@@ -966,6 +975,13 @@ export async function addEvalExperimentCase(
   options?: { onlyIfNew: true },
 ): Promise<string | null> {
   await assertExperimentActive(experimentId);
+  const container = await prisma.experiment.findUnique({ where: { id: experimentId }, select: { configSnapshotJson: true } });
+  let snapshot: Record<string, unknown> = {};
+  try { snapshot = JSON.parse(container?.configSnapshotJson || '{}'); } catch { /* Legacy snapshots can be absent. */ }
+  const refs = snapshot?.assetVersions as Record<string, unknown> | undefined;
+  if (refs && refs.dataset !== undefined && refs.dataset !== null) {
+    throw new EvaluationAssetError('固定数据集版本的实验只能在实验详情中追加该版本的 Case，不能作为专用评测容器', 409, 'ASSET_BACKING_FORBIDDEN');
+  }
   const createOrReuse = async (): Promise<string | null> => {
     if (c.datasetBinding) await assertExperimentActive(experimentId, `dataset:${c.datasetBinding.caseId}`);
     if (c.taskId) {

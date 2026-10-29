@@ -16,6 +16,7 @@
 
 import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
 // 共享评测入口：把「一批已产生的 trace + 评估器」评测这件事交给实验引擎。
 // 供 skill 概览页 / 用例分析等**客户端直连**路径调用，取代直接打 /eval/trajectory/run——
 // 评测结果统一落 ExperimentEvalResult（一次调用 ↔ 一个 backing 单组实验，可复用 experimentId）。
@@ -351,6 +352,7 @@ export async function POST(req: Request) {
     );
   } catch (error) {
     if (error instanceof GenerationError) return generationErrorResponse(error);
+    if (error instanceof EvaluationAssetError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     console.error('[eval-traces POST Error]', error);
     if (error instanceof EvaluatorContextValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

@@ -286,7 +286,7 @@ flowchart TD
 
 查询按执行记录 ID 分页，每页默认 100 条；分页结束后回到起点，不能使用单向上传/完成时间水位线，以免遗漏晚到或后续完成的 Trace。用 `NOT EXISTS ExperimentCase` 排除实验里已有的 taskId/executionId。实验轮转扫描，单进程最多同时评测 4 个新 Case，不等待模型返回再继续发现其他候选；达到并发上限时后续候选留在数据库等待下一轮，不建立无界内存队列。
 
-匹配后调用与手动追加相同的 `addEvalExperimentCase` / `evaluateEvalExperimentCase`，只传 executionId/taskId，不重复实现 input/output/轨迹加载及评估器重试。带 taskId 的新 Case 以 experimentId + taskId 的 SHA-256 生成稳定主键，利用现有主键唯一约束处理并发；历史随机 ID Case 仍按 taskId 查重。自动调用使用 `onlyIfNew`，已有或竞争失败时返回 null，不重置结果或人工评分；手动追加仍复用并回填参考数据。不新增表、迁移或监听专用评测重试规则。
+匹配后调用与手动追加相同的 `addEvalExperimentCase` / `evaluateEvalExperimentCase`，只传 executionId/taskId，不重复实现 input/output/轨迹加载及评估器重试。带 taskId 的新 Case 以 experimentId + taskId 的 SHA-256 生成稳定主键，利用现有主键唯一约束处理并发；历史随机 ID Case 仍按 taskId 查重。自动调用使用 `onlyIfNew`，已有或竞争失败时返回 null，不重置结果或人工评分；未冻结评测集版本的手动追加仍复用并回填参考数据。冻结版本的手动追加只接纳快照已有 Case，并以真实账号及 Trace 校验绑定；同一 Trace 重复追加仅复用，不回填、不重评。整批校验通过后才提交新 Case 和待评估记录，既有结果不变。不新增表、迁移或监听专用评测重试规则。
 
 `ingest/upload` 和 OpenCode `session-complete` 只保留原有上传、落库、完成状态更新，不再直接调用实验监听。停止监听后不再接纳新的 Case，已启动的评测按原流程完成；服务重启后扫描从头发现尚未加入实验的 Trace，不自动重跑已有 Case。详情页在 `watchMode=true` 或实验运行中时每 5 秒刷新。
 

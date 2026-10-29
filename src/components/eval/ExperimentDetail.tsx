@@ -976,6 +976,7 @@ export function ExperimentDetail({
                 user={user}
                 needsReference={needsReference}
                 needsDatasetInput={needsDatasetInput}
+                configSnapshot={detail.configSnapshot}
               />
             )}
           </>
