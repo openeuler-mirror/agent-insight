@@ -165,7 +165,6 @@ export type OtelSpoolConsumerOptions = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
   var __otelSpoolConsumer: OtelSpoolConsumerState | undefined;
 }
 
