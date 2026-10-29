@@ -578,7 +578,7 @@ function TracePageContent() {
     const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
-    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString });
+    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString, step: parseAsString });
     const [search, setSearch] = useQueryState('q', traceFilterParsers.q);
     const [showFilters, setShowFilters] = useState(false);
     const [clausesRaw, setClausesRaw] = useQueryState('f', traceFilterParsers.f);
@@ -708,7 +708,7 @@ function TracePageContent() {
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
-        void setTraceTarget({ taskId: id, executionId: null }, { history: id ? 'push' : 'replace' });
+        void setTraceTarget({ taskId: id, executionId: null, step: null }, { history: id ? 'push' : 'replace' });
         if (id) reportTraceDetailView(id);
     }, [setTraceTarget, reportTraceDetailView]);
 
@@ -1493,7 +1493,7 @@ function TracePageContent() {
                         <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
                             const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
                             setImportResult(null);
-                            if (targetId) void setTraceTarget({ taskId: targetId, executionId: null }, { history: 'push' });
+                            if (targetId) void setTraceTarget({ taskId: targetId, executionId: null, step: null }, { history: 'push' });
                         }}>
                             {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
                         </Button>
@@ -1538,6 +1538,7 @@ function TraceDetailView({
         if (!newTaskId) return;
         const params = new URLSearchParams(searchParams?.toString() ?? '');
         params.set('taskId', newTaskId);
+        params.delete('step');
         router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
     }, [router, searchParams]);
 
@@ -1878,6 +1879,7 @@ function TraceDetailView({
                         traceRelations={session?.taskId === taskId ? session.traceRelations : undefined}
                         rootSessionId={taskId}
                         traceIdentity={taskId}
+                        initialStep={searchParams?.get('step') || undefined}
                         rootExecutionId={execution.upload_id || execution.task_id}
                         rasMarkers={rasMarkers}
                     />

@@ -47,6 +47,10 @@ import { safeUUID } from '@/lib/safe-uuid';
 import { useAuth } from '@/lib/auth/auth-context';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Input } from '@/components/ui/input';
+import {AssetVersionPicker} from '@/components/eval/AssetVersionPicker';
+import {ConversationEditor,newConversationTurn} from '@/components/eval/ConversationEditor';
+import {normalizeConversationTurns,projectConversationCase} from '@/lib/evaluation-conversation';
+import {evaluationAssetRequest,type AssetVersionView} from '@/lib/client/evaluation-assets';
 import { Select } from '@/components/ui/select';
 import styles from '@/components/DatasetItemsPage.module.css';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
@@ -238,16 +242,30 @@ export default function DatasetItemsPage() {
   const params = useParams();
   const router = useRouter();
   const id = typeof params?.id === 'string' ? params.id : '';
-  const { user } = useAuth();
+  const { user, apiKey } = useAuth();
 
-  const [dataset, setDataset] = useState<AgentDataset | null>(null);
-  const isReadOnly = Boolean(dataset?.readOnly) || isBuiltinReliabilityDataset(dataset || {});
+  const [sourceDataset, setDataset] = useState<AgentDataset | null>(null);
+  const [assetView,setAssetView]=useState<AssetVersionView|null>(null);
+  const [versionStatus,setVersionStatus]=useState<'loading'|'ready'|'unsupported'|'error'>('loading');
+  const [versionId,setVersionId]=useState('');
+  const [versionRevision,setVersionRevision]=useState(0);
+  const [viewDraft,setViewDraft]=useState(true);
+  const [conversationValid,setConversationValid]=useState(true);
+  const historical=Boolean(assetView&&assetView.selectedVersion.version!==assetView.head.publishedVersion);
+  const dataset=useMemo(()=>{
+    if(!sourceDataset||!assetView)return sourceDataset;
+    const content=viewDraft&&!historical&&assetView.draft?assetView.draft.content:assetView.selectedVersion.content;
+    return {...sourceDataset,...content,benchmark:sourceDataset.benchmark} as unknown as AgentDataset;
+  },[sourceDataset,assetView,viewDraft,historical]);
+  const isReadOnly = versionStatus==='loading' || versionStatus==='error' || historical || Boolean(assetView?.readOnly) || Boolean(dataset?.readOnly) || isBuiltinReliabilityDataset(dataset || {});
   const fullDatasetRef = useRef<AgentDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   // ?case=<caseId> 入参支持: 别处(如 grayscale 执行记录 modal 的 Case ID 链接)
   // 跳过来时滚动到对应行并短暂高亮, 让用户一眼定位。
   const searchParams = useSearchParams();
+  const requestedVersionId = searchParams?.get('version') || '';
+  useEffect(()=>{setVersionId(requestedVersionId);setAssetView(null);setVersionStatus('loading');setViewDraft(!requestedVersionId);},[id,requestedVersionId]);
   const highlightCaseId = searchParams?.get('case') || '';
   const [highlightActive, setHighlightActive] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -398,6 +416,7 @@ export default function DatasetItemsPage() {
   );
 
   const loadFullDataset = async (): Promise<AgentDataset> => {
+    if(assetView&&dataset){const content=!historical&&assetView.draft?assetView.draft.content:assetView.selectedVersion.content;return {...dataset,...content} as unknown as AgentDataset;}
     if (!user || !id) throw new Error('缺少数据集信息');
     if (fullDatasetRef.current) return fullDatasetRef.current;
     const res = await apiFetch(`/api/agent-datasets/${id}?user=${encodeURIComponent(user)}`);
@@ -409,6 +428,7 @@ export default function DatasetItemsPage() {
   };
 
   const loadFullCase = async (caseId: string): Promise<DatasetCase> => {
+    if(assetView){const full=await loadFullDataset();const item=full.cases.find(c=>c.id===caseId);if(!item)throw new Error('Case不存在');return item;}
     if (!user || !id) throw new Error('缺少数据集信息');
     const res = await apiFetch(
       `/api/agent-datasets/${id}?user=${encodeURIComponent(user)}&view=case&caseId=${encodeURIComponent(caseId)}`,
@@ -439,7 +459,7 @@ export default function DatasetItemsPage() {
     return () => clearTimeout(tid);
   }, [highlightCaseId, dataset]);
 
-  const persistCases = async (cases: DatasetCase[]): Promise<boolean> => {
+  const persistCases = async (cases: DatasetCase[], changedIds?:string[]): Promise<boolean> => {
     if (!user || !dataset) return false;
     if (isReadOnly) {
       setError('内置可靠性评测集由系统维护，不可编辑');
@@ -469,8 +489,20 @@ export default function DatasetItemsPage() {
           ),
           source: item.source,
           traceSource: item.traceSource,
+          ...(item.turns?{turns:item.turns}:{}),
         })),
       };
+      if(assetView&&apiKey){
+        let draft:AssetVersionView['draft']=assetView.draft;
+        if(!draft)({draft}=await evaluationAssetRequest<{draft:NonNullable<AssetVersionView['draft']>}>(apiKey,{body:{action:'draft-create',kind:'dataset',businessId:dataset.id}}));
+        const desired=new Map(payload.cases.map(item=>[item.id,item]));
+        const ids=changedIds||[...new Set([...(draft!.content.cases as DatasetCase[]).map(item=>item.id),...desired.keys()])];
+        for(const caseId of ids){
+          const next:{draft:NonNullable<AssetVersionView['draft']>}=await evaluationAssetRequest<{draft:NonNullable<AssetVersionView['draft']>}>(apiKey,{body:{action:'case-save',kind:'dataset',businessId:dataset.id,caseId,case:desired.get(caseId)||null,revision:draft!.revision}});
+          draft=next.draft;setAssetView(view=>view?{...view,draft:next.draft}:view);setViewDraft(true);
+        }
+        setAssetView({...assetView,draft});setViewDraft(true);setVersionRevision(v=>v+1);setRowEditor(null);return true;
+      }
       const res = await apiFetch('/api/agent-datasets', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -510,6 +542,7 @@ export default function DatasetItemsPage() {
 
   const openEdit = async (row: DatasetCase) => {
     if (isReadOnly) return;
+    setViewDraft(true);setConversationValid(true);
     setSaving(true);
     setError('');
     try {
@@ -523,6 +556,7 @@ export default function DatasetItemsPage() {
   };
 
   const persistFields = async (fields: DatasetField[]) => {
+    if(assetView?.draft){setError('请先发布或放弃Case草稿，再保存字段变更');return false;}
     if (!user || !dataset) return false;
     if (isReadOnly) {
       setError('内置可靠性评测集由系统维护，不可编辑');
@@ -539,6 +573,7 @@ export default function DatasetItemsPage() {
       const result = await res.json();
       if (!res.ok || !result?.success) throw new Error(result?.error || '字段保存失败');
       await load();
+      setVersionId('');setAssetView(null);setVersionStatus('loading');setVersionRevision(value=>value+1);
       return true;
     } catch (e) {
       const message = e instanceof Error ? e.message : '字段保存失败';
@@ -590,7 +625,7 @@ export default function DatasetItemsPage() {
     if (isReadOnly) return;
     try {
       const full = await loadFullDataset();
-      await persistCases(full.cases.filter(c => c.id !== rowId));
+      await persistCases(full.cases.filter(c => c.id !== rowId),[rowId]);
     } catch (e) {
       setError(e instanceof Error ? e.message : '完整数据加载失败');
     }
@@ -624,7 +659,14 @@ export default function DatasetItemsPage() {
         return;
       }
     }
-    const row = { ...rowEditor.row, values };
+    let row={...rowEditor.row,values};
+    try{
+      if(row.turns){
+        row=projectConversationCase({...row,input:fieldText(row,'input'),expectedOutput:fieldText(row,'reference_output'),turns:normalizeConversationTurns(row)});
+        row.values={...row.values,input:row.input,reference_output:row.expectedOutput};
+      }
+    }catch(e){setError(e instanceof Error?e.message:'逐轮配置无效');return;}
+    if(!conversationValid){setError('请修正逐轮规则中的无效值');return;}
     setSaving(true);
     try {
       const full = await loadFullDataset();
@@ -632,12 +674,23 @@ export default function DatasetItemsPage() {
         mode === 'add'
           ? [...full.cases, row]
           : full.cases.map(c => (c.id === row.id ? row : c));
-      await persistCases(next);
+      await persistCases(next,[row.id]);
     } catch (e) {
       setError(e instanceof Error ? e.message : '完整数据加载失败');
     } finally {
       setSaving(false);
     }
+  };
+
+  const datasetVersionAction=async(action:'dataset-publish'|'draft-discard'|'case-revert',caseId?:string)=>{
+    if(!apiKey||!assetView?.draft||!dataset||saving)return;
+    if(action==='draft-discard'&&!window.confirm('放弃全部Case草稿修改？已发布版本不受影响。'))return;
+    setSaving(true);setError('');
+    try{
+      const response=await evaluationAssetRequest<{version?:{id:string;version:number}}>(apiKey,{body:{action,kind:'dataset',businessId:dataset.id,revision:assetView.draft.revision,caseId,note:'发布Case修改'}});
+      if(response.version){setVersionId(response.version.id);toast.success(`已发布 v${response.version.version}`);}
+      setVersionRevision(v=>v+1);await load();
+    }catch(e){setError(e instanceof Error?e.message:'版本操作失败');}finally{setSaving(false);}
   };
 
   const closeBatchModal = () => {
@@ -783,10 +836,15 @@ export default function DatasetItemsPage() {
             {isBenchmark ? 'Benchmark 数据集' : isTraj ? '轨迹评测集' : isReliability ? '可靠性评测集' : '理想输出评测集'}
           </span>
           {isReadOnly && (
-            <span className={styles.readOnlyBadge} title={isBenchmark ? '内容由 Benchmark 导入流程维护' : '内容由系统故障目录统一维护'}>
+            <span className={styles.readOnlyBadge} title={historical ? '历史版本只读' : versionStatus==='loading'?'正在加载版本':versionStatus==='error'?'版本加载失败，请刷新':isBenchmark ? '内容由 Benchmark 导入流程维护' : '内容由系统故障目录统一维护'}>
               只读
             </span>
           )}
+        </div>
+        <div className="mb-2 flex flex-wrap items-center gap-3">
+          <AssetVersionPicker kind="dataset" businessId={id} value={versionId||undefined} revision={versionRevision} onStatus={setVersionStatus} onLoad={setAssetView} onChange={(version)=>{setVersionId(version.id);setViewDraft(false);setRowEditor(null);}}/>
+          {assetView?.draft&&!historical&&<><span className="text-xs text-foreground-muted">草稿基于 v{assetView.draft.baseVersion}，保存草稿后需发布才用于新实验</span><button type="button" className="ai-btn-s" onClick={()=>setViewDraft(v=>!v)}>{viewDraft?'查看已发布内容':'继续编辑草稿'}</button><button type="button" className="ai-btn-p" disabled={saving} onClick={()=>void datasetVersionAction('dataset-publish')}>发布为新版本</button><button type="button" className="ai-btn-s" disabled={saving} onClick={()=>void datasetVersionAction('draft-discard')}>放弃草稿</button></>}
+          {historical&&<span className="text-xs text-foreground-muted">历史版本只读，请选择最新版编辑</span>}
         </div>
         <div style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>
           更新于 {formatDateFull(dataset.updatedAt)} · 共 {dataset.cases.length} 条数据项
@@ -877,11 +935,13 @@ export default function DatasetItemsPage() {
             </div>}
           </div>
 
+          {assetView?.draft&&!historical&&<div className="flex flex-wrap gap-2 text-xs">{((assetView.selectedVersion.content.cases||[]) as DatasetCase[]).filter(original=>!((assetView.draft!.content.cases||[]) as DatasetCase[]).some(current=>current.id===original.id)).map(original=><span key={original.id} className="rounded border border-border px-2 py-1">草稿已删除：{shorten(original.input||original.id,40)} <button type="button" className="text-primary" disabled={saving} onClick={()=>void datasetVersionAction('case-revert',original.id)}>恢复此Case</button></span>)}</div>}
           {selectedTab === 'items' ? <div className={styles.tableScroll}>
             <table className={`${styles.dataTable} ${styles.itemsTable}`}>
               <thead>
                 <tr>
                   <th>ID</th>
+                  {!isBenchmark&&!isReliability&&<th>类别</th>}
                   {dataset.fields.map(field => (
                     <th
                       key={field.id}
@@ -897,7 +957,7 @@ export default function DatasetItemsPage() {
               <tbody>
                 {dataset.cases.length === 0 ? (
                   <tr>
-                    <td colSpan={dataset.fields.length + 2} style={{ padding: 36, textAlign: 'center', color: 'var(--foreground-muted)' }}>
+                    <td colSpan={dataset.fields.length + (isBenchmark||isReliability?2:3)} style={{ padding: 36, textAlign: 'center', color: 'var(--foreground-muted)' }}>
                       暂无数据，使用右侧「批量导入」或「单个添加」录入。
                     </td>
                   </tr>
@@ -917,6 +977,7 @@ export default function DatasetItemsPage() {
                       <td title={row.id}>
                         <span className={styles.idTag}>{shorten(row.id, 10)}</span>
                       </td>
+                      {!isBenchmark&&!isReliability&&<td>{row.turns&&row.turns.length>1?'多轮':'单轮'}</td>}
                       {dataset.fields.map(field => {
                         const fullText = displayFieldText(row, field);
                         const displayText = field.key === 'fault_injection_type' && isReliability
@@ -963,6 +1024,7 @@ export default function DatasetItemsPage() {
                         >
                           删除
                         </button>
+                        {assetView?.draft&&!historical&&<button type="button" className={styles.linkBtn} disabled={saving} onClick={()=>void datasetVersionAction('case-revert',row.id)}>回退</button>}
                       </td>
                     </tr>
                     );
@@ -1243,7 +1305,7 @@ export default function DatasetItemsPage() {
             if (event.button === 0 && event.target === event.currentTarget && !saving) setRowEditor(null);
           }}
         >
-          <div className="ai-card" style={{ width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', padding: 16 }}>
+          <div className="ai-card" style={{ width: '100%', maxWidth: rowEditor.row.turns?840:560, maxHeight: '90vh', overflowY: 'auto', padding: 16 }}>
             <div style={{ fontWeight: 600, marginBottom: 12 }}>{rowEditor.mode === 'add' ? '添加数据' : '编辑数据'}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {dataset.fields.map(field => (
@@ -1276,6 +1338,7 @@ export default function DatasetItemsPage() {
                       value={fieldText(rowEditor.row, field.key)}
                       onChange={e => setEditorFieldValue(field, e.target.value)}
                       rows={field.type === 'json' ? 6 : 3}
+                      disabled={Boolean(rowEditor.row.turns)&&['input','reference_output'].includes(field.key)}
                       spellCheck={field.type !== 'json'}
                       placeholder={field.key === 'trajectory' ? TRAJECTORY_PLACEHOLDER : undefined}
                       style={{
@@ -1290,12 +1353,19 @@ export default function DatasetItemsPage() {
                 </label>
               ))}
             </div>
+            {assetView&&!isBenchmark&&!isReliability&&<div className="mt-4 grid gap-3">
+              <label className="text-sm"><input type="checkbox" checked={Boolean(rowEditor.row.turns)} onChange={event=>{
+                setConversationValid(true);
+                setRowEditor({...rowEditor,row:{...rowEditor.row,turns:event.target.checked?[newConversationTurn(fieldText(rowEditor.row,'input'),fieldText(rowEditor.row,'reference_output'))]:undefined}});
+              }}/> 配置逐轮对话与业务规则</label>
+              {rowEditor.row.turns&&<ConversationEditor turns={rowEditor.row.turns} onChange={turns=>setRowEditor({...rowEditor,row:{...rowEditor.row,turns,input:turns[0].input,expectedOutput:turns.at(-1)!.expectedOutput,values:{...rowEditor.row.values,input:turns[0].input,reference_output:turns.at(-1)!.expectedOutput}}})} onValid={setConversationValid}/>}
+            </div>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
               <button type="button" className="ai-btn-s" onClick={() => setRowEditor(null)} disabled={saving}>
                 取消
               </button>
-              <button type="button" className="ai-btn-p" onClick={() => void saveRowFromModal()} disabled={saving}>
-                {saving ? '保存中…' : '保存'}
+              <button type="button" className="ai-btn-p" onClick={() => void saveRowFromModal()} disabled={saving||!conversationValid}>
+                {saving ? '保存中…' : assetView?'保存草稿':'保存'}
               </button>
             </div>
           </div>

@@ -17,6 +17,7 @@
 'use client';
 import { useSearchParams } from 'next/navigation';
 import { casePagination, experimentDetailHref } from '@/lib/engine/experiment/case-navigation';
+import { conversationTraceHref } from '@/lib/engine/experiment/conversation-anchors';
 import { emptyCaseEvaluationMessage } from './DeleteExperimentButton';
 
 // Trace 评测详情：任务输入/预期输出/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
@@ -35,6 +36,7 @@ import { EvalComments, filterComments, type EvalCommentRow } from '@/components/
 import { BenchmarkArtifactActions, type BenchmarkArtifactRef } from '@/components/eval/BenchmarkArtifactActions';
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { benchmarkExecutionProgress, type BenchmarkProgressDetails } from '@/lib/benchmark/execution-progress';
+import { ExperimentReferenceOverride } from '@/components/eval/ExperimentReferenceOverride';
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -74,6 +76,7 @@ interface ResultRow {
 }
 
 interface ExperimentDetail {
+  configSnapshot?: Record<string,unknown>;
   id: string;
   name: string;
   status: string;
@@ -267,7 +270,9 @@ function PointEvidence({ point, taskId, evaluatorId }: { point: PointRow; taskId
           相关步骤：{point.anchors.map((a) => (
             <a
               key={a}
-              href={taskId ? `/trace?taskId=${encodeURIComponent(taskId)}` : undefined}
+              href={evaluatorId === 'preset-conversation-rules'
+                ? conversationTraceHref(taskId, a, process.env.NEXT_PUBLIC_URL_PREFIX || '')
+                : taskId ? `/trace?taskId=${encodeURIComponent(taskId)}` : undefined}
               style={{
                 fontFamily: 'var(--font-mono, monospace)', fontSize: 10.5,
                 background: 'var(--background-secondary)', border: '1px solid var(--border)',
@@ -472,8 +477,8 @@ export function ExperimentCaseDetail({
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const { casePage, casePageSize } = casePagination(searchParams.get('casePage'), searchParams.get('casePageSize'));
-  const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
+  const lookup = useEvaluatorLookup(user,detail?.configSnapshot);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryingId, setRetryingId] = useState('');
@@ -700,6 +705,7 @@ export function ExperimentCaseDetail({
               />
             )}
 
+            <ExperimentReferenceOverride values={caseRow.caseValues}/>
             {/* 任务输入 / 参考契约 / 实际输出 三框 */}
             <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
               {([

@@ -123,7 +123,7 @@ const wizardFunctions: Record<string, string> = {}
 let backClickCode = ''
 let backDisabledCode = ''
 function visit(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && ['advanceFromTrace', 'refreshAgents', 'goTo'].includes(node.name.getText(wizard))) {
+  if (ts.isVariableDeclaration(node) && ['advanceFromTrace', 'refreshAgents', 'goTo', 'multiTurnModeError'].includes(node.name.getText(wizard))) {
     const initializer = node.initializer!
     wizardFunctions[node.name.getText(wizard)] = (ts.isCallExpression(initializer) ? initializer.arguments[0] : initializer).getText(wizard)
   }
@@ -137,7 +137,7 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit)
 }
 visit(wizard)
-function advanceHarness(targets: unknown[], current = true, requiresExecution = true, overrides: { check?: () => Promise<boolean>; refresh?: () => Promise<unknown[]>; skillContext?: unknown; skillPreset?: string } = {}) {
+function advanceHarness(targets: unknown[], current = true, requiresExecution = true, overrides: { check?: () => Promise<boolean>; refresh?: () => Promise<unknown[]>; skillContext?: unknown; skillPreset?: string; multiTurnSelected?: boolean; multiTurnModeError?: string } = {}) {
   const steps: number[] = []
   const keys: string[] = []
   const errors: string[] = []
@@ -148,6 +148,8 @@ function advanceHarness(targets: unknown[], current = true, requiresExecution = 
     environment: { check: overrides.check || (async () => true), isCurrent: () => current, fail: (message: string) => errors.push(message) },
     refreshAgents: overrides.refresh || (async () => [{ targets }]), isBenchmarkDataset: false, selectedDataset: null,
     skillContext: overrides.skillContext || null, skillPreset: overrides.skillPreset || 'use-case', skillExecutionCapabilityIssue,
+    multiTurnSelected: overrides.multiTurnSelected ?? false,
+    multiTurnModeError: overrides.multiTurnModeError ?? '',
     router: { push: (path: string) => routes.push(path), replace: (path: string) => routes.push(path), refresh: () => routes.push('refresh') },
     onBack: () => routes.push('back'),
     setStep: (step: number) => steps.push(step), setMaxVisited: () => {},
@@ -189,6 +191,49 @@ test('Skill capability lost during preparation prevents advancing to the next st
     if (!allowed) assert.match(view.errors[0], /未上报/)
   }
 })
+
+test('multi-turn capability lost during preparation prevents advancing, while single-turn remains available', async () => {
+  const target = { workerId: selection.clientId, platform: selection.platform, agent: selection.agent };
+  const unavailable = advanceHarness([{ ...target, supportsMultiTurn: false }], true, true, { multiTurnSelected: true });
+  await unavailable.advance();
+  assert.deepEqual(unavailable.steps, []);
+  assert.match(unavailable.errors[0], /未上报多轮会话能力/);
+  const available = advanceHarness([{ ...target, supportsMultiTurn: true }], true, true, { multiTurnSelected: true });
+  await available.advance();
+  assert.deepEqual(available.steps, [3]);
+  const single = advanceHarness([target]);
+  await single.advance();
+  assert.deepEqual(single.steps, [3]);
+});
+
+test('multi-turn mode guard blocks FI/Skill execution including A/B Trace inputs, but allows pure existing-Trace evaluation', async () => {
+  for (const [multiTurnSelected, traceMode, isReliabilityDataset, skillPreset, blocked] of [
+    [false, 'generate', true, undefined, false],
+    [true, 'generate', false, undefined, false],
+    [true, 'generate', true, undefined, true],
+    [true, 'existing', true, undefined, false],
+    [true, 'generate', false, 'use-case', true],
+    [true, 'existing', false, 'use-case', false],
+    [true, 'generate', false, 'skill-ab', true],
+    [true, 'existing', false, 'skill-ab', true],
+  ] as const) {
+    const error = evaluate<string>(wizardFunctions.multiTurnModeError, {
+      multiTurnSelected, traceMode, isReliabilityDataset, skillPreset,
+      skillContext: skillPreset ? { skillName: 'fixture', skillVersion: 1 } : null,
+    });
+    assert.equal(Boolean(error), blocked, `${traceMode}/${isReliabilityDataset}/${skillPreset}`);
+  }
+  let checks = 0;
+  const target = { workerId: selection.clientId, platform: selection.platform, agent: selection.agent, supportsMultiTurn: true };
+  const view = advanceHarness([target], true, true, {
+    multiTurnSelected: true, multiTurnModeError: '此入口暂不支持多轮执行，请使用普通单组实验或已有 Trace 评测。',
+    check: async () => { checks++; return true; },
+  });
+  await view.advance();
+  assert.deepEqual(view.steps, []);
+  assert.equal(checks, 0);
+  assert.match(view.errors[0], /此入口暂不支持多轮执行/);
+});
 
 test('HTTP browsers without randomUUID can submit, retry and recover environment checks', async () => {
   const browserCrypto = { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) }

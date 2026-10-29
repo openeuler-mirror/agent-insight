@@ -21,6 +21,8 @@
 // 对照仓库根目录「评测实验-高保真.html」的单组流程。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { normalizeConversationTurns } from '@/lib/evaluation-conversation';
 import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -47,6 +49,10 @@ import { TextEvaluatorConfigDialog } from '@/components/eval/TextEvaluatorConfig
 import { RuntimeModelSelect } from '@/components/eval/RuntimeModelSelect';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { AssetVersionPicker } from '@/components/eval/AssetVersionPicker';
+import { evaluationAssetRequest, type AssetVersionView } from '@/lib/client/evaluation-assets';
+import { mergeWizardDatasetVersion, readReusableAssetVersionRefs, validateReusableTraceIds, type WizardDatasetVersionSelection, type WizardAssetVersionRefs } from '@/lib/client/wizard-asset-versions';
+import { agentAssetBusinessId } from '@/lib/evaluation-assets/identity';
 import { useExecutionEnvironment, type EnvironmentSelection } from '@/lib/client/use-execution-environment';
 import {
   describeMatchResult,
@@ -100,6 +106,7 @@ interface AgentTargetOption {
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
   supportsGenericTrace: boolean;
+  supportsMultiTurn?: boolean;
   supportsSkillSnapshot?: boolean;
   supportsTriggerRouting?: boolean;
   supportsFaultInjection: boolean;
@@ -138,6 +145,13 @@ interface TraceTagOption {
   usageCount: number;
 }
 
+interface ReferenceOverride {
+  value: string | null;
+  source: 'manual' | 'dataset-import';
+  sourceDatasetId?: string;
+  sourceCaseId?: string;
+}
+
 interface SelectedCase {
   executionId: string;
   taskId: string | null;
@@ -151,6 +165,7 @@ interface SelectedCase {
   values?: Record<string, unknown>;
   datasetId?: string;
   datasetCaseId?: string;
+  referenceOverride?: ReferenceOverride;
 }
 
 interface DatasetOption {
@@ -178,6 +193,7 @@ interface DatasetOption {
     input?: string;
     expectedOutput?: string;
     evaluationFocus?: string;
+    turns?: unknown[];
     values?: Record<string, unknown>;
   }>;
 }
@@ -254,7 +270,7 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
       input: String(item.input || ''),
       datasetInput: String(item.input || '').trim() || null,
       actualOutput: '',
-      referenceOutput: match.updates[key] || null,
+      referenceOutput: String(item.expectedOutput || '').trim() ? String(item.expectedOutput) : null,
       evaluatorContext: match.contextUpdates[key] || null,
       faultInjectionType: fault || null,
       externalCaseId: typeof item.values?.externalCaseId === 'string'
@@ -262,6 +278,7 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
         : undefined,
       values: {
         ...(item.values || {}),
+        ...(item.turns !== undefined ? { turns: item.turns } : {}),
         ...(item.evaluationFocus ? { trigger_rationale: item.evaluationFocus } : {}),
         ...(fault ? { fault_injection_type: fault } : {}),
       },
@@ -269,6 +286,79 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
       datasetCaseId: item.id,
     };
   });
+}
+
+function selectedCaseFromTrace(t: TraceItem, dataset: DatasetOption | null): SelectedCase {
+    const base: SelectedCase = {
+      executionId: t.id,
+      taskId: t.taskId,
+      input: t.query || '',
+      datasetInput: null,
+      actualOutput: t.finalResult || '',
+      referenceOutput: null,
+      evaluatorContext: null,
+    };
+    const datasetCase = findBestDatasetInputMatch(base.input, dataset?.cases || []);
+    if (!datasetCase) return base;
+    const match = matchDatasetCases(
+      [{ key: base.executionId, input: base.input }],
+      [{
+        input: String(datasetCase.input || ''),
+        expectedOutput: String(datasetCase.expectedOutput || ''),
+        values: datasetCase.values,
+      }],
+      true,
+    );
+    const fault = String(datasetCase.values?.fault_injection_type || '').trim();
+    return {
+      ...base,
+      datasetInput: match.datasetInputUpdates?.[base.executionId] || null,
+      referenceOutput: String(datasetCase.expectedOutput || '').trim() ? String(datasetCase.expectedOutput) : null,
+      evaluatorContext: match.contextUpdates[base.executionId] || null,
+      faultInjectionType: fault || null,
+      values: {
+        ...(datasetCase.values || {}),
+        ...(datasetCase.turns !== undefined ? { turns: datasetCase.turns } : {}),
+        ...(datasetCase.evaluationFocus ? { trigger_rationale: datasetCase.evaluationFocus } : {}),
+      },
+      datasetId: dataset?.id,
+      datasetCaseId: datasetCase.id,
+    };
+}
+
+function ConversationRulesPreview({ item }: { item: SelectedCase }) {
+  if (item.values?.turns === undefined) return null;
+  let turns;
+  try { turns = normalizeConversationTurns({ input: item.input, turns: item.values.turns }); }
+  catch { return <span className="text-xs text-error">逐轮配置无效，请到评测数据集修正</span>; }
+  return <Popover>
+    <PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className="mt-1">查看逐轮规则 · {turns.length} 轮</Button></PopoverTrigger>
+    <PopoverContent align="start" className="w-[min(90vw,42rem)] max-h-[70vh] overflow-y-auto">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <b className="text-sm">逐轮对话与业务规则</b>
+        {item.datasetId && <Link href={`/dataset/${encodeURIComponent(item.datasetId)}`} className="text-xs text-primary">到评测数据集修改</Link>}
+      </div>
+      <p className="mb-3 text-xs text-foreground-muted">这里只读查看本次实验选定的 Case；修改需在数据集中保存并发布新版本。</p>
+      <div className="grid gap-3">{turns.map((turn, index) => {
+        const rule = turn.expectation;
+        const checks = [
+          ...(rule.contains !== undefined ? [`回复包含：${rule.contains}`] : []),
+          ...(rule.pattern ? [`回复正则：${rule.pattern}`] : []),
+          ...(rule.expectedSkill ? [`Skill 路由：${rule.expectedSkill}`] : []),
+          ...(rule.state ? [`结束状态：${rule.state}`] : []),
+          ...rule.requiredTools.map(tool => `必须调用：${tool.name}${tool.arguments ? `；参数：${JSON.stringify(tool.arguments)}` : ''}`),
+          ...(rule.forbiddenTools.length ? [`禁止调用：${rule.forbiddenTools.join('、')}`] : []),
+          ...(rule.toolOrder.length ? [`工具顺序：${rule.toolOrder.join(' → ')}`] : []),
+          ...rule.fields.map(field => `输出字段 ${field.path}：${field.required ? '必填' : '可选'}${field.type ? `，${field.type}` : ''}${Object.hasOwn(field, 'equals') ? `，等于 ${JSON.stringify(field.equals)}` : ''}${field.min !== undefined ? `，最小 ${field.min}` : ''}${field.max !== undefined ? `，最大 ${field.max}` : ''}${field.enum ? `，取值 ${JSON.stringify(field.enum)}` : ''}`),
+        ];
+        return <section key={turn.id} className="rounded-md border border-border p-3 text-xs">
+          <div className="mb-2 flex flex-wrap items-center gap-2"><b>第 {index + 1} 轮</b>{checks.length > 0 && <span className="text-foreground-muted">{rule.blocking ? '未满足时标记为业务红线' : '普通业务规则'}</span>}</div>
+          <dl className="grid gap-1.5"><dt className="text-foreground-muted">用户输入</dt><dd className="whitespace-pre-wrap break-words">{turn.input}</dd><dt className="text-foreground-muted">预期输出</dt><dd className="whitespace-pre-wrap break-words">{turn.expectedOutput || '未配置'}</dd></dl>
+          <div className="mt-2 border-t border-border pt-2">{checks.length ? <ul className="grid list-disc gap-1 pl-4">{checks.map((text, i) => <li key={i} className="whitespace-pre-wrap break-words">{text}</li>)}</ul> : <span className="text-foreground-muted">本轮未配置确定性业务规则</span>}</div>
+        </section>;
+      })}</div>
+    </PopoverContent>
+  </Popover>;
 }
 
 const STEPS = ['实验设计', 'Trace 来源', '预期答案', '评估器与执行'];
@@ -533,8 +623,9 @@ export function ExperimentWizard({
   reuseFromExperimentId = '',
 }: ExperimentWizardProps = {}) {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, apiKey } = useAuth();
   const skillPreset = skillContext?.preset;
+  const versionedFlow = !skillContext;
 
   const [step, setStep] = useState(1);
   const [maxVisited, setMaxVisited] = useState(1);
@@ -554,6 +645,16 @@ export function ExperimentWizard({
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
   const [selectedDatasetDetail, setSelectedDatasetDetail] = useState<DatasetOption | null>(null);
   const [selectedDatasetLoading, setSelectedDatasetLoading] = useState(false);
+  const [datasetVersionId, setDatasetVersionId] = useState<string>();
+  const [datasetVersionNumber, setDatasetVersionNumber] = useState<number>();
+  const [datasetVersionSelection, setDatasetVersionSelection] = useState<WizardDatasetVersionSelection | null>(null);
+  const datasetVersionSelectionRef = useRef<WizardDatasetVersionSelection | null>(null);
+  const [versionBackendUnsupported, setVersionBackendUnsupported] = useState(false);
+  const [datasetVersionStatus, setDatasetVersionStatus] = useState('loading');
+  const [versionErrors, setVersionErrors] = useState<Record<string, string>>({});
+  const [agentVersionChoice, setAgentVersionChoice] = useState<{ businessId: string; versionId: string } | null>(null);
+  const [evaluatorVersionIds, setEvaluatorVersionIds] = useState<Record<string, string>>({});
+  const [evaluatorVersionCards, setEvaluatorVersionCards] = useState<Record<string, EvaluatorCard>>({});
   const datasetRequestIdRef = useRef(0);
   const initialConfigLoadedRef = useRef(false);
   const [genModel, setGenModel] = useState('');
@@ -636,10 +737,10 @@ export function ExperimentWizard({
     && (!versionAEnabled || compareVersion !== skillContext?.skillVersion);
 
   const selectedDataset = useMemo(
-    () => selectedDatasetDetail?.id === selectedDatasetId
+    () => mergeWizardDatasetVersion(selectedDatasetDetail?.id === selectedDatasetId
       ? selectedDatasetDetail
-      : wizardDatasets.find((d) => d.id === selectedDatasetId) || null,
-    [selectedDatasetDetail, wizardDatasets, selectedDatasetId],
+      : wizardDatasets.find((d) => d.id === selectedDatasetId) || null, datasetVersionSelection),
+    [selectedDatasetDetail, wizardDatasets, selectedDatasetId, datasetVersionSelection],
   );
   const eligibleWizardDatasets = useMemo(() => wizardDatasets.filter((dataset) => {
     if (dataset.datasetKind === 'benchmark' && dataset.benchmark?.status !== 'ready') return false;
@@ -694,6 +795,16 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const agentVersionBusinessId = versionedFlow && !isBenchmarkDataset && traceMode === 'generate' && selectedTarget
+    ? agentAssetBusinessId(selectedTarget.platform, selectedTarget.agent) : '';
+  const activeAgentVersionId = agentVersionChoice?.businessId === agentVersionBusinessId
+    ? agentVersionChoice.versionId : undefined;
+  const multiTurnSelected = Array.from((traceMode === 'generate' ? selectedGenerated : selected).values()).some(item => Array.isArray(item.values?.turns) && item.values.turns.length > 1);
+  const multiTurnModeError = multiTurnSelected && (traceMode === 'generate' && isReliabilityDataset
+    || skillContext && (traceMode === 'generate' || skillPreset === 'skill-ab'))
+    ? '此入口暂不支持多轮执行，请使用普通单组实验或已有 Trace 评测。' : '';
+  const multiTurnTargetError = multiTurnModeError || (traceMode === 'generate' && multiTurnSelected && !selectedTarget?.supportsMultiTurn
+    ? '已选 Case 包含多轮对话。请选择已上报多轮会话能力的 OpenCode v2 执行目标，或改用已有 Trace 评测。' : '');
   const skillTargetRequired = Boolean(skillContext && (traceMode === 'generate' || skillPreset === 'skill-ab'));
   const skillTargetError = skillTargetRequired
     ? (!selectedTarget ? '没有满足当前 Skill 实验能力要求的在线执行目标，请检查客户端状态和能力探测结果。'
@@ -833,15 +944,48 @@ export function ExperimentWizard({
     return () => window.clearTimeout(timer);
   }, [agentName, agents, skillContext]);
 
+  const handleVersionError = (identity: string, error: Error & { status?: number }) => {
+    if (error.status === 501) setVersionBackendUnsupported(true);
+    else setVersionErrors(current => ({ ...current, [identity]: error.message }));
+  };
+  const clearVersionError = (identity: string) => setVersionErrors(current => {
+    if (!current[identity]) return current;
+    const next = { ...current }; delete next[identity]; return next;
+  });
+  const applyDatasetVersion = useCallback((view: AssetVersionView) => {
+    const next = { businessId: view.head.businessId, versionId: view.selectedVersion.id, content: view.selectedVersion.content };
+    const changed = datasetVersionSelectionRef.current?.versionId !== next.versionId;
+    datasetVersionSelectionRef.current = next;
+    setDatasetVersionSelection(next);
+    setDatasetVersionId(next.versionId);
+    setDatasetVersionNumber(view.selectedVersion.version);
+    setDatasetVersionStatus('ready');
+    setVersionErrors(current => { const next = { ...current }; delete next[`dataset:${view.head.businessId}`]; return next; });
+    if (!changed) return;
+    const versionedDataset = { ...next.content, id: next.businessId } as unknown as DatasetOption;
+    const cases = generationCasesFromDataset(versionedDataset);
+    setSelectedGenerated(new Map(cases.map(item => [item.executionId, item])));
+    setSelected(previous => new Map(Array.from(previous.values()).map(item => [item.executionId, selectedCaseFromTrace({
+      id: item.executionId, taskId: item.taskId, query: item.input, finalResult: item.actualOutput,
+      latency: null, tokens: null, timestamp: '',
+    }, versionedDataset)])));
+  }, []);
+
   const selectWizardDataset = useCallback(async (
     nextId: string,
     traceSource?: 'existing' | 'generate',
+    requestedVersionId?: string,
   ): Promise<DatasetOption | null> => {
     const requestId = ++datasetRequestIdRef.current;
     const nextTraceMode = expType === 'llm' ? 'existing' : traceSource ?? (nextId ? 'generate' : 'existing');
     setTraceMode(nextTraceMode);
     if (nextTraceMode === 'generate') setWatchMode(false);
     setSelectedDatasetId(nextId);
+    setDatasetVersionId(requestedVersionId);
+    setDatasetVersionNumber(undefined);
+    setDatasetVersionStatus('loading');
+    setDatasetVersionSelection(null);
+    datasetVersionSelectionRef.current = null;
     setSelectedDatasetDetail(null);
     setSelected(new Map());
     setSelectedGenerated(new Map());
@@ -862,9 +1006,23 @@ export function ExperimentWizard({
       const detail = await response.json() as DatasetOption;
       if (datasetRequestIdRef.current !== requestId) return null;
       setSelectedDatasetDetail(detail);
-      const generatedCases = generationCasesFromDataset(detail);
+      let chosenDataset = detail;
+      if (versionedFlow && expType === 'single' && detail.datasetKind !== 'benchmark' && apiKey) {
+        try {
+          const query = new URLSearchParams({ kind: 'dataset', businessId: nextId, ...(requestedVersionId ? { versionId: requestedVersionId } : {}) });
+          const view = await evaluationAssetRequest<AssetVersionView>(apiKey, { query });
+          if (datasetRequestIdRef.current !== requestId) return null;
+          if (!datasetVersionSelectionRef.current) applyDatasetVersion(view);
+          chosenDataset = mergeWizardDatasetVersion(detail, datasetVersionSelectionRef.current)!;
+        } catch (error) {
+          if (datasetRequestIdRef.current !== requestId) return null;
+          if ((error as { status?: number }).status === 501) setVersionBackendUnsupported(true);
+          else { setDatasetVersionStatus('error'); throw error; }
+        }
+      }
+      const generatedCases = generationCasesFromDataset(chosenDataset);
       setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
-      return detail;
+      return chosenDataset;
     } catch {
       if (datasetRequestIdRef.current !== requestId) return null;
       setSelectedDatasetDetail(null);
@@ -873,7 +1031,7 @@ export function ExperimentWizard({
     } finally {
       if (datasetRequestIdRef.current === requestId) setSelectedDatasetLoading(false);
     }
-  }, [expType, user]);
+  }, [expType, user, apiKey, applyDatasetVersion, versionedFlow]);
 
   useEffect(() => {
     if (
@@ -916,6 +1074,9 @@ export function ExperimentWizard({
         : {};
       const sourceSnapshot = detail?.configSnapshot && typeof detail.configSnapshot === 'object'
         ? detail.configSnapshot as Record<string, unknown> : {};
+      const assetRefs = readReusableAssetVersionRefs(config.assetVersions ?? sourceSnapshot.assetVersions);
+      setEvaluatorVersionIds(assetRefs.evaluators || {});
+      setAgentVersionChoice(null);
       const restoredConcurrency = detail.executionConcurrency ?? sourceSnapshot.executionConcurrency ?? (sourceSnapshot.runConfig as Record<string, unknown> | undefined)?.executionConcurrency;
       setExecutionConcurrencyInput(String(restoredConcurrency ?? 1));
       const restoredDatasetId = typeof config.datasetId === 'string' ? config.datasetId : '';
@@ -933,7 +1094,25 @@ export function ExperimentWizard({
         String(restoredTarget.platform || ''),
         typeof config.agentName === 'string' ? config.agentName : '',
       );
-      if (!skillContext) setName(defaultExperimentName());
+      if (!skillContext) {
+        setName(defaultExperimentName());
+        setExpType(detail.type === 'llm' ? 'llm' : 'single');
+        if (detail.type === 'llm' && Array.isArray(detail.groups)) {
+          const groups = detail.groups as Array<Record<string, unknown>>;
+          setGroupAValue(String(groups.find(group => group.key === 'A')?.variableValue || ''));
+          setGroupBValue(String(groups.find(group => group.key === 'B')?.variableValue || ''));
+        }
+        const frozenAssets = sourceSnapshot.assetVersions && typeof sourceSnapshot.assetVersions === 'object'
+          ? sourceSnapshot.assetVersions as Record<string, unknown> : {};
+        const evaluatorAssets = frozenAssets.evaluators && typeof frozenAssets.evaluators === 'object'
+          ? frozenAssets.evaluators as Record<string, unknown> : {};
+        const frozenCards = Object.fromEntries(Object.entries(evaluatorAssets).flatMap(([id, value]) => {
+          const definition = value && typeof value === 'object' ? (value as Record<string, unknown>).definition : null;
+          return definition && typeof definition === 'object' && (definition as Record<string, unknown>).id === id
+            ? [[id, definition as EvaluatorCard]] : [];
+        }));
+        setEvaluatorVersionCards(frozenCards);
+      }
       setAgentName(restoredAgentName);
       setTraceMode(restoredTraceSource);
       setWatchMode(false);
@@ -945,6 +1124,7 @@ export function ExperimentWizard({
       const workerId = String(restoredTarget.workerId || '');
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
+      if (platform && assetRefs.agent) setAgentVersionChoice({ businessId: agentAssetBusinessId(platform, String(restoredTarget.agent || restoredAgentName)), versionId: assetRefs.agent });
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
       const savedOptions = readSavedOptions(restoredTarget.agentOptions);
       const savedDefinition = readSavedDefinition(detail.executionParameterDefinition);
@@ -968,7 +1148,7 @@ export function ExperimentWizard({
         setVersionBEnabled(sourceSnapshot.versionBId !== '__NONE__');
       }
       if (restoredDatasetId && wizardDatasets.some((dataset) => dataset.id === restoredDatasetId)) {
-        const restoredDataset = await selectWizardDataset(restoredDatasetId, restoredTraceSource);
+        const restoredDataset = await selectWizardDataset(restoredDatasetId, restoredTraceSource, assetRefs.dataset);
         if (restoredDataset && restoredCaseIds.size > 0) {
           const restoredCases = generationCasesFromDataset(restoredDataset)
             .filter((item) => restoredCaseIds.has(item.executionId));
@@ -977,10 +1157,10 @@ export function ExperimentWizard({
           }
         }
         setSelectedEvaluators(new Set(restoredEvaluators));
-      } else if (skillContext && (restoredDatasetId || skillPreset !== 'use-case' || restoredTraceSource !== 'existing')) {
-        throw new Error('原实验的数据集已不可用，请重新选择数据集');
+      } else if (restoredDatasetId || skillContext && (skillPreset !== 'use-case' || restoredTraceSource !== 'existing')) {
+        throw new Error('原实验的评测集已不可用，无法恢复原条件；请明确重新选择数据集。');
       }
-      if (skillContext && restoredTraceSource === 'existing') {
+      if (restoredTraceSource === 'existing' && detail.type !== 'llm') {
         const cases = Array.isArray(detail.cases) ? [...detail.cases] as Array<Record<string, unknown>> : [];
         const pages = Math.ceil(Number(detail.caseTotal || cases.length) / 100);
         for (let page = 2; page <= pages; page += 1) {
@@ -991,6 +1171,13 @@ export function ExperimentWizard({
         }
         const restoredCases = cases.filter((item) => typeof item.executionId === 'string' && item.executionId);
         if (!restoredCases.length) throw new Error('原实验没有可复用的已有 Trace');
+        await validateReusableTraceIds(restoredCases.map(item => String(item.executionId)), async executionId => {
+          const query = new URLSearchParams({ user, search: executionId, pageSize: '100' });
+          const response = await apiFetch(`/api/experiments/traces?${query.toString()}`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
+          if (!response.ok) throw new Error(`校验原实验 Trace ${executionId} 失败，请稍后重试`);
+          const data = await response.json();
+          return Array.isArray(data.items) ? data.items : [];
+        });
         setSelected(new Map(restoredCases.map((item) => [String(item.executionId), {
           executionId: String(item.executionId),
           taskId: typeof item.taskId === 'string' ? item.taskId : null,
@@ -1002,13 +1189,27 @@ export function ExperimentWizard({
             ? item.evaluatorContext as EvaluatorCaseContext : null,
           values: item.caseValues && typeof item.caseValues === 'object'
             ? item.caseValues as Record<string, unknown> : undefined,
+          datasetId: typeof item.datasetId === 'string' ? item.datasetId : undefined,
+          datasetCaseId: typeof item.datasetCaseId === 'string' ? item.datasetCaseId : undefined,
+          ...(() => {
+            const metadata = item.caseValues && typeof item.caseValues === 'object'
+              ? (item.caseValues as Record<string, unknown>).__agentInsightReferenceOverride : null;
+            if (!metadata || typeof metadata !== 'object') return {};
+            const source = metadata as Record<string, unknown>;
+            if (source.source !== 'manual' && source.source !== 'dataset-import') return {};
+            return { referenceOverride: { value: typeof item.referenceOutput === 'string' ? item.referenceOutput : null,
+              source: source.source,
+              ...(typeof source.sourceDatasetId === 'string' ? { sourceDatasetId: source.sourceDatasetId } : {}),
+              ...(typeof source.sourceCaseId === 'string' ? { sourceCaseId: source.sourceCaseId } : {}),
+            } as ReferenceOverride };
+          })(),
         }])));
       }
     };
     void loadInitialConfig().catch((error) => {
       setSubmitError(error instanceof Error ? error.message : '读取原实验配置失败');
     });
-  }, [initialDatasetId, reuseFromExperimentId, selectWizardDataset, skillContext, skillPreset, user, wizardDatasets, wizardDatasetsLoaded]);
+  }, [initialDatasetId, reuseFromExperimentId, selectWizardDataset, skillContext, skillPreset, user, apiKey, wizardDatasets, wizardDatasetsLoaded]);
 
   useEffect(() => {
     if (!isBenchmarkDataset || !benchmarkEvaluatorId) return;
@@ -1225,42 +1426,7 @@ export function ExperimentWizard({
   };
 
   // 全选：表头复选框控当前页；总数超过一页时另给「选择全部 N 条」跨页入口
-  const toSelectedCase = (t: TraceItem): SelectedCase => {
-    const base: SelectedCase = {
-      executionId: t.id,
-      taskId: t.taskId,
-      input: t.query || '',
-      datasetInput: null,
-      actualOutput: t.finalResult || '',
-      referenceOutput: null,
-      evaluatorContext: null,
-    };
-    const datasetCase = findBestDatasetInputMatch(base.input, selectedDataset?.cases || []);
-    if (!datasetCase) return base;
-    const match = matchDatasetCases(
-      [{ key: base.executionId, input: base.input }],
-      [{
-        input: String(datasetCase.input || ''),
-        expectedOutput: String(datasetCase.expectedOutput || ''),
-        values: datasetCase.values,
-      }],
-      true,
-    );
-    const fault = String(datasetCase.values?.fault_injection_type || '').trim();
-    return {
-      ...base,
-      datasetInput: match.datasetInputUpdates?.[base.executionId] || null,
-      referenceOutput: match.updates[base.executionId] || null,
-      evaluatorContext: match.contextUpdates[base.executionId] || null,
-      faultInjectionType: fault || null,
-      values: {
-        ...(datasetCase.values || {}),
-        ...(datasetCase.evaluationFocus ? { trigger_rationale: datasetCase.evaluationFocus } : {}),
-      },
-      datasetId: selectedDataset?.id,
-      datasetCaseId: datasetCase.id,
-    };
-  };
+  const toSelectedCase = (t: TraceItem): SelectedCase => selectedCaseFromTrace(t, selectedDataset);
 
   const pageAllSelected = traces.length > 0 && traces.every((t) => selected.has(t.id));
   const pageSomeSelected = traces.some((t) => selected.has(t.id));
@@ -1372,11 +1538,31 @@ export function ExperimentWizard({
   const capabilityCatalogAnnotated = selectedList.filter((c) => c.evaluatorContext !== null).length;
   const persistable = selectedList.filter((c) => c.datasetInput || c.referenceOutput || c.evaluatorContext).length;
 
+  const originalVersionCase = (item: SelectedCase) => versionedFlow && datasetVersionSelection
+    && item.datasetId === selectedDatasetId
+    ? selectedDataset?.cases?.find(row => row.id === item.datasetCaseId) : undefined;
+  const referenceOverrideFor = (item: SelectedCase): ReferenceOverride | undefined => {
+    const baseline = originalVersionCase(item);
+    if (!baseline || String(item.referenceOutput ?? '') === String(baseline.expectedOutput ?? '')) return undefined;
+    return { ...(item.referenceOverride || { source: 'manual' as const }), value: item.referenceOutput };
+  };
+  const referenceOverrideNotice = (item: SelectedCase) => {
+    const override = referenceOverrideFor(item), baseline = originalVersionCase(item);
+    if (!override || !baseline) return null;
+    return <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-foreground-secondary">
+      <span>覆盖评测集 v{datasetVersionNumber ?? '—'} 原答案（仅本次实验）</span>
+      <Popover><PopoverTrigger asChild><Button type="button" variant="ghost" size="sm">查看原答案</Button></PopoverTrigger><PopoverContent align="start" className="w-[min(90vw,32rem)] max-h-[60vh] overflow-y-auto"><b className="text-xs">评测集 v{datasetVersionNumber ?? '—'} 原答案</b><p className="mt-2 whitespace-pre-wrap break-words text-xs">{baseline.expectedOutput || '原答案为空'}</p></PopoverContent></Popover>
+    </div>;
+  };
+
   const setReference = (executionId: string, value: string | null) => {
     setSelected((prev) => {
       const next = new Map(prev);
       const c = next.get(executionId);
-      if (c) next.set(executionId, { ...c, referenceOutput: value && value.trim() ? value : null });
+      if (c) {
+        const referenceOutput = value && value.trim() ? value : null;
+        next.set(executionId, { ...c, referenceOutput, referenceOverride: { value: referenceOutput, source: 'manual' } });
+      }
       return next;
     });
   };
@@ -1385,6 +1571,7 @@ export function ExperimentWizard({
   const openImport = () => {
     setDatasetHint('');
     setImportOpen(true);
+    if (versionedFlow && datasetVersionSelection) setDatasetHint('已固定版本的 Case 只导入本次答案，逐轮与 Tool/Skill 配置沿用所选版本。');
     if (!user) return;
     apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`)
       .then((r) => (r.ok ? r.json() : []))
@@ -1398,7 +1585,7 @@ export function ExperimentWizard({
         selectedList.map((c) => ({
           key: c.executionId,
           input: c.input,
-          referenceOutput: c.referenceOutput,
+          referenceOutput: originalVersionCase(c) && !referenceOverrideFor(c) ? null : c.referenceOutput,
           evaluatorContext: c.evaluatorContext,
         })),
         (ds.cases ?? []).map((x) => ({
@@ -1415,11 +1602,11 @@ export function ExperimentWizard({
         }
         for (const [key, evaluatorContext] of Object.entries(result.contextUpdates)) {
           const c = next.get(key);
-          if (c) next.set(key, { ...c, evaluatorContext });
+          if (c && !originalVersionCase(c)) next.set(key, { ...c, evaluatorContext });
         }
         for (const [key, datasetInput] of Object.entries(result.datasetInputUpdates || {})) {
           const c = next.get(key);
-          if (c) next.set(key, { ...c, datasetInput });
+          if (c && !originalVersionCase(c)) next.set(key, { ...c, datasetInput });
         }
         for (const [key, c] of next) {
           const datasetCase = findBestDatasetInputMatch(c.input, ds.cases || []);
@@ -1428,12 +1615,14 @@ export function ExperimentWizard({
             datasetCase?.id
             && normalizeDatasetInput(referenceOutput) === normalizeDatasetInput(datasetCase.expectedOutput)
           ) {
-            next.set(key, {
-              ...c,
-              referenceOutput,
-              datasetId: ds.id,
-              datasetCaseId: datasetCase.id,
-            });
+            if (originalVersionCase(c)) {
+              if (Object.hasOwn(result.updates, key)) {
+                const importedAnswer = String(datasetCase.expectedOutput || '');
+                next.set(key, { ...c, referenceOutput: importedAnswer, referenceOverride: { value: importedAnswer, source: 'dataset-import', sourceDatasetId: ds.id, sourceCaseId: datasetCase.id } });
+              }
+            } else {
+              next.set(key, { ...c, referenceOutput, datasetId: ds.id, datasetCaseId: datasetCase.id });
+            }
           }
         }
         return next;
@@ -1501,7 +1690,7 @@ export function ExperimentWizard({
 
   const allEvaluators = useMemo(() => {
     if (!skillPreset) {
-      const cards = [...presetEvaluators, ...customEvaluators];
+      const cards = Array.from(new Map([...presetEvaluators, ...customEvaluators, ...Object.values(evaluatorVersionCards)].map(card => [card.id, evaluatorVersionCards[card.id] || card])).values());
       if (!isBenchmarkDataset || !benchmarkEvaluatorId) {
         return cards.filter((card) => !card.id.startsWith('benchmark:'));
       }
@@ -1515,7 +1704,7 @@ export function ExperimentWizard({
     const catalog = new Map([...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]));
     return Array.from(catalog.values())
       .filter((card) => card.status === 'ready' && isSkillExperimentEvaluatorEligible(skillPreset, card.id));
-  }, [benchmarkEvaluatorId, customEvaluators, isBenchmarkDataset, selectedDataset, skillPreset]);
+  }, [benchmarkEvaluatorId, customEvaluators, isBenchmarkDataset, selectedDataset, skillPreset, evaluatorVersionCards]);
 
   useEffect(() => {
     if (!skillContext || selectedEvaluators.size > 0 || allEvaluators.length === 0) return;
@@ -1568,6 +1757,13 @@ export function ExperimentWizard({
     return () => window.clearTimeout(timer);
   }, [watchMode, allEvaluators]);
 
+  const selectedVersionError = versionedFlow && !isBenchmarkDataset && !versionBackendUnsupported
+    ? [
+      ...(expType === 'single' && selectedDatasetId ? [`dataset:${selectedDatasetId}`] : []),
+      ...(agentVersionBusinessId ? [`agent:${agentVersionBusinessId}`] : []),
+      ...Array.from(selectedEvaluators).map(id => `evaluator:${id}`),
+    ].map(identity => versionErrors[identity]).find(Boolean) || '' : '';
+
   const submit = async () => {
 
     if (!user || submitting) return;
@@ -1575,6 +1771,7 @@ export function ExperimentWizard({
     setSubmitError('');
     try {
       if (skillTargetError) throw new Error(skillTargetError);
+      if (selectedVersionError) throw new Error(`版本尚未成功加载：${selectedVersionError}。请重新选择对应版本后再开始实验。`);
       if (!evaluatorConfigLoaded) throw new Error(evaluatorLoadError || '正在加载评估器配置');
       if (evaluatorExecutionState.error) throw new Error(evaluatorExecutionState.error);
       if (executionConcurrencyRequired && !executionConcurrencyValid) throw new Error('执行并发必须为正整数');
@@ -1582,6 +1779,26 @@ export function ExperimentWizard({
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
       }
       if (runtimeState.error) throw new Error(runtimeState.error);
+      if (multiTurnTargetError) throw new Error(multiTurnTargetError);
+      let assetVersions: WizardAssetVersionRefs | undefined;
+      if (versionedFlow && !isBenchmarkDataset && !versionBackendUnsupported) {
+        if (!apiKey) throw new Error('登录凭证未就绪，请刷新后重试');
+        const resolveVersion = async (kind: 'agent' | 'dataset' | 'evaluator', businessId: string, versionId?: string) => {
+          const query = new URLSearchParams({ kind, businessId, ...(versionId ? { versionId } : {}) });
+          return evaluationAssetRequest<AssetVersionView>(apiKey, { query });
+        };
+        try {
+          const evaluatorEntries = await Promise.all(Array.from(selectedEvaluators).filter(id => !id.startsWith('benchmark:')).map(async id => [id, (await resolveVersion('evaluator', id, evaluatorVersionIds[id])).selectedVersion.id] as const));
+          assetVersions = {
+            ...(expType === 'single' && selectedDatasetId ? { dataset: (await resolveVersion('dataset', selectedDatasetId, datasetVersionId)).selectedVersion.id } : {}),
+            ...(agentVersionBusinessId ? { agent: (await resolveVersion('agent', agentVersionBusinessId, activeAgentVersionId)).selectedVersion.id } : {}),
+            evaluators: Object.fromEntries(evaluatorEntries),
+          };
+        } catch (error) {
+          if ((error as { status?: number }).status === 501) setVersionBackendUnsupported(true);
+          else throw error;
+        }
+      }
       const casesPayload = selectedList.map((c) => ({
         executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
@@ -1594,6 +1811,7 @@ export function ExperimentWizard({
         values: c.values,
         datasetId: c.datasetId,
         datasetCaseId: c.datasetCaseId,
+        ...(referenceOverrideFor(c) ? { referenceOverride: referenceOverrideFor(c) } : {}),
       }));
       const selectedEvaluatorConfigs = Object.fromEntries(
         Object.entries(evaluatorConfigs).filter(([id]) => selectedEvaluators.has(id)),
@@ -1698,11 +1916,12 @@ export function ExperimentWizard({
       }
       const res = await apiFetch('/api/experiments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(apiKey ? { 'x-witty-api-key': apiKey } : {}) },
         body: JSON.stringify({
           user,
           name,
           agentName,
+          ...(assetVersions ? { assetVersions } : {}),
           watchMode: expType === 'single' && traceMode === 'existing' ? watchMode : false,
           datasetId: selectedDatasetId || undefined,
           datasetCaseIds: traceMode === 'generate' ? Array.from(selectedGenerated.keys()) : undefined,
@@ -1841,21 +2060,23 @@ export function ExperimentWizard({
     && (selectedDatasetDetail.cases || []).some((item) => Boolean(item.values?.should_trigger))
     && (selectedDatasetDetail.cases || []).some((item) => !Boolean(item.values?.should_trigger)),
   );
-  const step1Valid = name.trim() !== '' && agentName !== '' && triggerDatasetReady
+  const datasetVersionReady = !versionedFlow || expType === 'llm' || isBenchmarkDataset || !selectedDatasetId || versionBackendUnsupported || datasetVersionStatus === 'ready';
+  const step1Valid = name.trim() !== '' && agentName !== '' && triggerDatasetReady && datasetVersionReady && !selectedDatasetLoading
     && (skillPreset !== 'skill-ab' || eligibleWizardDatasets.some((dataset) => dataset.id === selectedDatasetId))
     && (skillPreset !== 'skill-ab' || validAbComparison)
     && (expType === 'single' || (groupAValue.trim() !== '' && groupBValue.trim() !== '' && groupAValue.trim() !== groupBValue.trim()));
   // 对比模式：case 由 autoPairGroups 自动产生（POST /api/experiments 内部调），无需手选 trace
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
   const step2SelectionValid = traceMode === 'generate'
-    ? generateAvailable && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
+    ? generateAvailable && !multiTurnTargetError && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
     : (watchMode || selected.size >= 1);
   const step2Valid = expType === 'llm'
-    || (step2SelectionValid && !runtimeState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
+    || (!multiTurnModeError && step2SelectionValid && !runtimeState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const advanceFromTrace = async () => {
     if (!step2Valid || environmentBusy || traceAdvanceRef.current) return;
+    if (multiTurnModeError) { environment.fail(multiTurnModeError); return; }
     traceAdvanceRef.current = true;
     agentsRequestIdRef.current += 1;
     setAdvancingTrace(true);
@@ -1867,7 +2088,9 @@ export function ExperimentWizard({
           const updated = await refreshAgents(true);
           if (!environment.isCurrent()) return;
           const target = updated.flatMap(item => item.targets).find(item => item.workerId === environmentSelection.clientId && item.platform === environmentSelection.platform && item.agent === environmentSelection.agent);
-          const capabilityIssue = target && skillContext ? skillExecutionCapabilityIssue(target, skillPreset === 'trigger') : null;
+          const capabilityIssue = target && multiTurnSelected && !target.supportsMultiTurn
+            ? { message: '当前客户端未上报多轮会话能力，请重新选择支持多轮的执行目标。' }
+            : target && skillContext ? skillExecutionCapabilityIssue(target, skillPreset === 'trigger') : null;
           if (capabilityIssue) {
             environment.fail(capabilityIssue.message);
             return;
@@ -1983,6 +2206,7 @@ export function ExperimentWizard({
                     value={agentName}
                     onChange={(e) => {
                       setAgentName(e.target.value);
+                      setAgentVersionChoice(null);
                       setSelected(new Map());
                       setSelectedTargetKey('');
                       setGenModel('');
@@ -2045,6 +2269,10 @@ export function ExperimentWizard({
                     </button>
                   )}
                 </div>
+                {versionedFlow && expType === 'single' && !isBenchmarkDataset && selectedDatasetId && <div className="mt-2">
+                  <AssetVersionPicker kind="dataset" businessId={selectedDatasetId} value={datasetVersionId}
+                    onLoad={applyDatasetVersion} onStatus={setDatasetVersionStatus} onError={error => handleVersionError(`dataset:${selectedDatasetId}`, error)} />
+                </div>}
                 <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
                   {selectedDatasetLoading
                     ? '正在加载数据集 Case…'
@@ -2353,8 +2581,8 @@ export function ExperimentWizard({
                     }}
                   >
                     {targetOptions.map((target) => (
-                      <option key={`${target.workerId}::${target.platform}`} value={`${target.workerId}::${target.platform}`}>
-                        {target.host} · {target.platform}
+                      <option key={`${target.workerId}::${target.platform}`} value={`${target.workerId}::${target.platform}`} disabled={multiTurnSelected && !target.supportsMultiTurn}>
+                        {target.host} · {target.platform}{multiTurnSelected && !target.supportsMultiTurn ? ' · 不支持多轮' : ''}
                       </option>
                     ))}
                   </select>
@@ -2382,6 +2610,13 @@ export function ExperimentWizard({
                     onChange={setAgentTimeoutInput}
                   />
               </div>
+              {versionedFlow && agentVersionBusinessId && <div className="mb-3">
+                <AssetVersionPicker key={agentVersionBusinessId} kind="agent" businessId={agentVersionBusinessId}
+                  value={activeAgentVersionId} allowNewAgent onError={error => handleVersionError(`agent:${agentVersionBusinessId}`, error)}
+                  onLoad={view => { clearVersionError(`agent:${view.head.businessId}`); setAgentVersionChoice({ businessId: view.head.businessId, versionId: view.selectedVersion.id }); }} />
+                <p className="mt-1 text-xs text-foreground-muted">版本用于记录用户登记的 Agent 定义；实际代码由以上执行目标提供。</p>
+              </div>}
+              {multiTurnTargetError && <p role="alert" className="mb-3 text-sm text-error">{multiTurnTargetError}</p>}
               {isBenchmarkDataset && traceMode === 'generate' && benchmarkPresentation?.execution?.notice && (
                 <p className="mb-4 text-xs text-foreground-muted">{benchmarkPresentation.execution.notice}</p>
               )}
@@ -2737,6 +2972,7 @@ export function ExperimentWizard({
                   />
                 </div>
               )}
+              {multiTurnModeError && <p role="alert" className="mb-3 text-sm text-error">{multiTurnModeError}</p>}
             </div>
             <label style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', marginBottom: 12,
@@ -3200,7 +3436,7 @@ export function ExperimentWizard({
                   <tbody>
                     {selectedList.map((item) => (
                       <tr key={item.executionId}>
-                        <td style={{ ...TD, color: 'var(--foreground)', maxWidth: 320 }}>{truncate(item.input, 90)}</td>
+                        <td style={{ ...TD, color: 'var(--foreground)', maxWidth: 320 }}>{truncate(item.input, 90)}<ConversationRulesPreview item={item} /></td>
                         {isReliabilityDataset && (
                           <td style={TD}>{formatReliabilityFaultTypeFromCaseValues(item.values, { faultId: item.faultInjectionType }) || item.faultInjectionType || '—'}</td>
                         )}
@@ -3273,6 +3509,7 @@ export function ExperimentWizard({
                           <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2, color: 'var(--foreground)' }}>
                             {truncate(c.input, 70)}
                           </div>
+                          <ConversationRulesPreview item={c} />
                           <div style={{ fontSize: 11, color: 'var(--foreground-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             实际输出：{truncate(c.actualOutput, 90)}
                           </div>
@@ -3281,6 +3518,7 @@ export function ExperimentWizard({
                               预期输出：{truncate(c.referenceOutput, 90)}
                             </div>
                           )}
+                          {referenceOverrideNotice(c)}
                         </div>
                         <span style={c.referenceOutput
                           ? { ...CHIP, background: 'var(--success-subtle)', color: 'var(--success)', border: '1px solid var(--success-subtle-border)' }
@@ -3490,6 +3728,14 @@ export function ExperimentWizard({
                           <span key={tag} style={CHIP_MUT}>{tag}</span>
                         ))}
                       </div>
+                      {versionedFlow && !isBenchmarkDataset && checked && !isBoundBenchmarkEvaluator && <div className="mt-3 border-t border-border pt-2" onClick={event => event.stopPropagation()}>
+                        <AssetVersionPicker kind="evaluator" businessId={card.id} value={evaluatorVersionIds[card.id]}
+                          onError={error => handleVersionError(`evaluator:${card.id}`, error)} onLoad={view => {
+                            clearVersionError(`evaluator:${card.id}`);
+                            setEvaluatorVersionIds(current => current[card.id] === view.selectedVersion.id ? current : { ...current, [card.id]: view.selectedVersion.id });
+                            setEvaluatorVersionCards(current => ({ ...current, [card.id]: view.selectedVersion.content as unknown as EvaluatorCard }));
+                          }} />
+                      </div>}
                       {configurableId && gate.usable && (
                         <div style={{
                           marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)',
@@ -3534,12 +3780,13 @@ export function ExperimentWizard({
                 {evaluatorLoadError || evaluatorExecutionState.error}
               </p>}
               {skillTargetError && <p role="alert" style={{ color: 'var(--error)', fontSize: 12 }}>{skillTargetError}</p>}
+              {selectedVersionError && <p role="alert" className="mt-3 text-sm text-error">版本加载失败：{selectedVersionError}。请重新选择对应版本。</p>}
               {submitError && (
                 <div style={{ marginTop: 12, fontSize: 12, color: 'var(--error)' }}>{submitError}</div>
               )}
 
               {footer({
-                nextDisabled: selectedEvaluators.size < 1 || submitting || !evaluatorConfigLoaded || Boolean(evaluatorExecutionState.error) || Boolean(skillTargetError),
+                nextDisabled: selectedEvaluators.size < 1 || submitting || !evaluatorConfigLoaded || Boolean(evaluatorExecutionState.error) || Boolean(skillTargetError) || Boolean(selectedVersionError),
                 nextLabel: submitting ? '创建中…' : '🚀 开始实验',
                 onNext: submit,
               })}
