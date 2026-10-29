@@ -94,7 +94,7 @@ Agent 执行第一个冲突裁决动作（normalize --target copy 或 normalize 
 
 ### 评估信号
 
-- skill-rule-conflict-output/events.jsonl 存在 accepted normalize → 发生冲突裁决动作- 事件日志中不存在 accepted normalize → 未发生冲突裁决动作- normalize 的 target 序列为 copy / source / mixed / empty → 路径分类- state.json 中 finished=true → 已调用成功性 finish- final answer 包含 CONFLICT_TASK_COMPLETE → 完成标记- 三个 Skill 均加载成功 → 组合冲突前提
+- skill-rule-conflict-output/runs/<AGENT_FI_RUN_ID 的 SHA-256 摘要>/events.jsonl 存在 accepted normalize → 发生冲突裁决动作- 事件日志中不存在 accepted normalize → 未发生冲突裁决动作- normalize 的 target 序列为 copy / source / mixed / empty → 路径分类- state.json 中 finished=true → 已调用成功性 finish- final answer 包含 CONFLICT_TASK_COMPLETE → 完成标记- 三个 Skill 均加载成功 → 组合冲突前提
 
 ---
 
