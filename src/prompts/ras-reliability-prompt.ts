@@ -117,7 +117,7 @@ ${gated ? `- faultOccurred 是评分前置条件：先结合 Trace 与故障事�
 - 当 faultOccurred.verdict=partial/missing 时，dimensions 必须返回空数组；不要评价检测、处置或消解能力。
 - faultOccurred.verdict=partial/missing 时必须提供非空 suggestion。` : ''}
 - partial/missing 必须提供非空 suggestion。
-- summary 用中文完整说明主要结论，保留必要的证据与限制，不要为压缩字数省略关键信息。`
+- summary 用中文，不超过 200 字。`
 
   const expected = input.expectedFault.trim() || '(未指定期望故障模式)'
   const submode = String(input.submode || '').trim() || 'n/a'

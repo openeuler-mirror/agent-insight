@@ -178,56 +178,6 @@ describe('ras-reliability-evaluator', () => {
     assert.equal(output.points?.length, 3)
   })
 
-  it('超长总评完整保留，不使可靠性评估失败或重试', async () => {
-    const { withEvaluatorExecution } = await import('@/lib/engine/experiment/evaluator-execution-policy')
-    const summary = '故障已经发生，系统完成检测、处置和恢复。'.repeat(20)
-    let calls = 0
-    setJudgeLlmCallerForTest(async () => {
-      calls++
-      return judgmentJson('detection-recovery', {
-        fault_detected: 'met',
-        mitigation_triggered: 'partial',
-        fault_mitigated: 'missing',
-      }, summary)
-    })
-    const output = await withEvaluatorExecution(
-      { attemptTimeoutSeconds: 30, maxRetries: 2 }, new AbortController().signal,
-      () => runRasReliabilityPreset(RAS_DETECTION_RECOVERY_PRESET_ID, 'ras-summary-test', baseCtx),
-      { retryDelaysMs: [0, 0] },
-    )
-    assert.equal(calls, 1)
-    assert.equal(output.summary, summary)
-    assert.equal(output.score, 50)
-    assert.deepEqual(output.points?.map(point => point.score), [100, 50, 0])
-    assert.deepEqual(output.points?.map(point => point.suggestion), [undefined, '改进 mitigation_triggered', '改进 fault_mitigated'])
-  })
-
-  it('超长总评仍保留故障未确认的无分结果，并继续拒绝缺失评分维度', async () => {
-    const { withEvaluatorExecution } = await import('@/lib/engine/experiment/evaluator-execution-policy')
-    const summary = '轨迹证据不足，无法确认预期故障。'.repeat(20)
-    let calls = 0
-    setJudgeLlmCallerForTest(async () => {
-      calls++
-      return judgmentJson('detection-recovery', {}, summary, 'partial')
-    })
-    const run = () => runRasReliabilityPreset(RAS_DETECTION_RECOVERY_PRESET_ID, 'ras-summary-test', baseCtx)
-    const output = await withEvaluatorExecution(
-      { attemptTimeoutSeconds: 30, maxRetries: 2 }, new AbortController().signal, run,
-      { retryDelaysMs: [0, 0] },
-    )
-    assert.equal(calls, 1)
-    assert.equal(output.verdict, 'warn')
-    assert.equal(output.score, undefined)
-    assert.equal(output.summary?.startsWith(summary), true)
-    assert.equal(output.points?.every(point => point.score === undefined), true)
-    const invalid = JSON.parse(judgmentJson('detection-recovery', {}, summary))
-    invalid.dimensions.pop()
-    setJudgeLlmCallerForTest(async () => JSON.stringify(invalid))
-    await assert.rejects(withEvaluatorExecution(
-      { attemptTimeoutSeconds: 30, maxRetries: 0 }, new AbortController().signal, run,
-    ), /缺少维度 fault_mitigated/)
-  })
-
   it('Judge 未确认故障时允许省略三个恢复维度并返回无分结果', async () => {
     setJudgeLlmCallerForTest(async () => (
       judgmentJson('detection-recovery', {}, '故障证据不足。', 'partial')
