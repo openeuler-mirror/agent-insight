@@ -44,3 +44,24 @@ for (const terminal of [
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 }
+
+test('async writer drains events queued during an active flush before closing', async () => {
+  const { createWriter } = await import('../scripts/opencode_plugin_otel')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-writer-'))
+  const outFile = path.join(root, 'events.jsonl')
+  const writer = createWriter(outFile)
+  try {
+    writer.enqueue({ sequence: 1 })
+    const activeFlush = writer.flush()
+    writer.enqueue({ sequence: 2 })
+    const closing = writer.close()
+    assert.equal(writer.close(), closing)
+    writer.enqueue({ sequence: 3 })
+    await Promise.all([activeFlush, closing])
+    const events = fs.readFileSync(outFile, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+    assert.deepEqual(events, [{ sequence: 1 }, { sequence: 2 }])
+  } finally {
+    await writer.close()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

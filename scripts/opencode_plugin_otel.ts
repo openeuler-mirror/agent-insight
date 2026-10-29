@@ -217,7 +217,7 @@ function buildOutFile(spoolDir: string): string {
   return path.join(dayDir, `opencode-otel-${runId}.jsonl`)
 }
 
-function createWriter(outFile: string, synchronous = false): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string; flush: () => Promise<void> } {
+export function createWriter(outFile: string, synchronous = false): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string; flush: () => Promise<void> } {
   safeMkdirp(path.dirname(outFile))
   if (synchronous) {
     let closed = false
@@ -272,7 +272,9 @@ function createWriter(outFile: string, synchronous = false): { enqueue: (obj: an
     if (closing) return closing
     closing = (async () => {
       if (pending) clearTimeout(pending)
-      await flush()
+      do {
+        await flush()
+      } while (queue.length > 0 && !stopped)
       stopped = true
       stream.end()
       await completion
