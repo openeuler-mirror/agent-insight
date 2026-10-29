@@ -34,9 +34,11 @@ import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestra
 import type { SkillExecutionSnapshot } from '@/lib/skill-workbench/execution-target';
 import { executionModelMatches } from '@/lib/skill-workbench/execution-model';
 import { isTraceGenerationFailureRetryable } from './trace-retry-policy';
+import { normalizeConversationTurns, toExecutionConversation, executionConversationSchema, type ExecutionConversation } from '@/lib/evaluation-conversation';
+import { replayConversation } from './conversation-evidence';
 export { isTraceGenerationFailureRetryable } from './trace-retry-policy';
 
-export type TraceGenerationCaseSpec = { caseId: string; input: string };
+export type TraceGenerationCaseSpec = { caseId: string; input: string; conversation?: ExecutionConversation };
 
 export type TraceGenerationRequest = {
   user: string;
@@ -143,6 +145,22 @@ export function parseTraceIdFromCommandResult(resultJson: string | null | undefi
   return typeof traceId === 'string' && traceId.trim() ? traceId.trim() : null;
 }
 
+function caseConversation(input: string, caseValuesJson: string | null): ExecutionConversation | undefined {
+  const values = parseObject(caseValuesJson);
+  if (values.turns === undefined) return undefined;
+  return toExecutionConversation(normalizeConversationTurns({ input, turns: values.turns }));
+}
+
+export function assertConversationReceipt(conversation: ExecutionConversation, traceId: string, resultJson: string | null | undefined) {
+  const receipt = parseObject(JSON.stringify(parseObject(resultJson).conversation));
+  const completed = receipt.completedTurnIds;
+  if (receipt.version !== 1 || receipt.sessionId !== traceId || !Array.isArray(completed)
+    || completed.length !== conversation.turns.length
+    || conversation.turns.some((turn, index) => completed[index] !== turn.id)) {
+    throw new TraceGenerationError('CONVERSATION_INCOMPLETE', '执行端未确认同一会话已完成所有配置轮次，不进入评测', 409);
+  }
+}
+
 export function isTraceGenerationCommandTerminal(status: string): boolean {
   return TERMINAL_COMMAND_STATUSES.has(status);
 }
@@ -188,10 +206,13 @@ export async function collectTraceGenerationCases(
   const rows = await prisma.experimentCase.findMany({
     where: { experimentId, executionId: null },
     orderBy: { createdAt: 'asc' },
-    select: { id: true, input: true },
+    select: { id: true, input: true, caseValuesJson: true },
   });
   return rows
-    .map((row: { id: string; input: string }) => ({ caseId: row.id, input: row.input.trim() }))
+    .map((row: { id: string; input: string; caseValuesJson: string | null }) => {
+      const conversation = caseConversation(row.input, row.caseValuesJson);
+      return { caseId: row.id, input: row.input.trim(), ...(conversation ? { conversation } : {}) };
+    })
     .filter((row: TraceGenerationCaseSpec) => Boolean(row.input));
 }
 
@@ -201,6 +222,8 @@ export async function assertTraceGenerationTarget(input: {
   platform: string;
   agent: string;
   agentOptions?: unknown;
+  multiTurn?: boolean;
+  cases?: TraceGenerationCaseSpec[];
 }) {
   const { targets, diagnostics } = await listClientTraceGenerationAvailability(input.user);
   const target = targets.find((item) =>
@@ -214,6 +237,7 @@ export async function assertTraceGenerationTarget(input: {
         || '所选客户端未发现该 Agent，或客户端归属已变化；请刷新执行目标后重试',
     );
   }
+  if ((input.multiTurn || input.cases?.some(item => item.conversation)) && !target.supportsMultiTurn) throw new TraceGenerationError('MULTI_TURN_UNSUPPORTED', '所选客户端未确认支持多轮会话续接，请更新客户端或改用支持的执行目标', 409);
   return resolveAgentOptions(target.parameterDefinitions || [], input.platform, input.agent, input.agentOptions);
 }
 
@@ -237,12 +261,22 @@ export async function findExecutionByTraceId(input: {
   user: string;
   traceId: string;
   completedTriggerCommand?: { status: string; resultJson: string | null };
+  conversation?: ExecutionConversation;
 }) {
   const session = await prisma.session.findFirst({
     where: { user: input.user, taskId: input.traceId },
     select: { interactions: true, endTime: true },
   });
   if (!session || !hasUsableTraceInteractions(session.interactions)) return null;
+  let finalConversationOutput: string | undefined;
+  if (input.conversation) {
+    let raw;
+    try { raw = JSON.parse(session.interactions || '[]'); } catch { return null; }
+    const turns = replayConversation(Array.isArray(raw) ? raw : raw.interactions || []);
+    const normalize = (value: string) => value.replace(/\r\n/g, '\n').trim();
+    if (turns.length !== input.conversation.turns.length || turns.some((turn, index) => turn.complete !== true || normalize(turn.input) !== normalize(input.conversation!.turns[index].input))) return null;
+    finalConversationOutput = normalize(turns.at(-1)!.output);
+  }
   const facts = parseObject(input.completedTriggerCommand?.resultJson);
   const completedTriggerRun = input.completedTriggerCommand?.status === 'SUCCEEDED'
     && facts.state === 'AGENT_EXITED'
@@ -258,6 +292,7 @@ export async function findExecutionByTraceId(input: {
     take: 2,
   });
   const execution = executions.length === 1 ? executions[0] : null;
+  if (finalConversationOutput !== undefined && execution?.finalResult?.replace(/\r\n/g, '\n').trim() !== finalConversationOutput) return null;
   if (!session.endTime && !execution?.finalResult?.trim()) return null;
   return execution;
 }
@@ -268,6 +303,7 @@ async function waitForExecutionByTraceId(input: {
   timeoutMs: number;
   signal?: AbortSignal;
   completedTriggerCommand?: { status: string; resultJson: string | null };
+  conversation?: ExecutionConversation;
 }) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < input.timeoutMs) {
@@ -318,6 +354,8 @@ export async function reconcileGeneratedTraceCase(input: {
   caseId: string;
   minAttemptNo?: number;
 }): Promise<boolean> {
+  const currentCase = await prisma.experimentCase.findUnique({ where: { id: input.caseId }, select: { input: true, caseValuesJson: true } });
+  const conversation = currentCase ? caseConversation(currentCase.input, currentCase.caseValuesJson) : undefined;
   const previous = await prisma.experimentTraceAttempt.findMany({
     where: {
       caseId: input.caseId,
@@ -346,7 +384,12 @@ export async function reconcileGeneratedTraceCase(input: {
       }
     }
     if (!traceId) continue;
-    const execution = await findExecutionByTraceId({ user: input.user, traceId });
+    if (conversation) {
+      const command = attempt.commandId ? await getCommand(attempt.commandId) : null;
+      if (command?.status !== 'SUCCEEDED') continue;
+      try { assertConversationReceipt(conversation, traceId, command.resultJson); } catch { continue; }
+    }
+    const execution = await findExecutionByTraceId({ user: input.user, traceId, conversation });
     if (!execution) continue;
     const bound = await bindExecution({
       caseId: input.caseId,
@@ -488,6 +531,7 @@ async function runAttempt(input: {
         model: input.req.model || null,
         ...(input.req.agentOptions ? { agentOptions: input.req.agentOptions } : {}),
         input: input.item.input,
+        ...(input.item.conversation ? { conversation: input.item.conversation } : {}),
         timeoutSeconds: input.timeoutSeconds,
         ...(startupSeconds ? { startupTimeoutSeconds: startupSeconds } : {}),
         ...(input.req.skillExecution ? { skillExecution: input.req.skillExecution } : {}),
@@ -567,6 +611,7 @@ async function runAttempt(input: {
           retryable: false,
         };
       } else {
+        if (input.item.conversation) assertConversationReceipt(input.item.conversation, traceId, command.resultJson);
         const advanced = await prisma.experimentTraceAttempt.updateMany({
           where: { id: attempt.id, status: 'running', OR: [{ traceId: null }, { traceId }], case: { traceAttempts: { none: { attemptNo: { gt: attempt.attemptNo } } } } },
           data: { traceId, status: 'waiting_trace' },
@@ -577,6 +622,7 @@ async function runAttempt(input: {
           traceId,
           signal: input.req.signal,
           timeoutMs: TRACE_INGEST_TIMEOUT_MS,
+          conversation: input.item.conversation,
         });
         if (execution) {
           if (input.req.skillExecution) assertSkillExecutionOutput(execution, input.req.model);
@@ -641,6 +687,11 @@ export async function generateExperimentTraces(
   req: TraceGenerationRequest,
   options: TraceGenerationOptions = {},
 ): Promise<TraceGenerationResult> {
+  if (req.cases.some(item => item.conversation)) {
+    for (const item of req.cases) if (item.conversation) executionConversationSchema.parse(item.conversation);
+    await assertTraceGenerationTarget({ ...req, multiTurn: true });
+    if (req.skillExecution?.version === 2) throw new TraceGenerationError('MULTI_TURN_UNSUPPORTED', 'Skill 触发分析不支持多轮对话', 409);
+  }
   const timeoutSeconds = Math.max(
     MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
     Math.min(
@@ -718,6 +769,7 @@ export async function loadTraceGenerationRetryRequest(input: {
     select: {
       id: true,
       input: true,
+      caseValuesJson: true,
       traceGenerationCommandId: true,
       experiment: { select: { scope: true, configSnapshotJson: true } },
       traceAttempts: {
@@ -737,6 +789,7 @@ export async function loadTraceGenerationRetryRequest(input: {
     },
   });
   if (!row || !row.input.trim()) return null;
+  const conversation = caseConversation(row.input, row.caseValuesJson);
   const attempt = row.traceAttempts[0];
   if (attempt) {
     if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(attempt.status)) {
@@ -755,7 +808,7 @@ export async function loadTraceGenerationRetryRequest(input: {
       agentOptions: normalizeAgentOptions(payload.agentOptions),
       ...(payload.skillExecution ? { skillExecution: payload.skillExecution as NonNullable<TraceGenerationRequest['skillExecution']> } : {}),
       timeoutSeconds: attempt.timeoutSeconds,
-      cases: [{ caseId: row.id, input: row.input.trim() }],
+      cases: [{ caseId: row.id, input: row.input.trim(), ...(conversation ? { conversation } : {}) }],
     };
   }
 
@@ -785,6 +838,6 @@ export async function loadTraceGenerationRetryRequest(input: {
     model: typeof payload.model === 'string' ? payload.model : null,
     agentOptions: normalizeAgentOptions(payload.agentOptions),
     timeoutSeconds: Number(payload.timeoutSeconds) || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
-    cases: [{ caseId: row.id, input: row.input.trim() }],
+    cases: [{ caseId: row.id, input: row.input.trim(), ...(conversation ? { conversation } : {}) }],
   };
 }

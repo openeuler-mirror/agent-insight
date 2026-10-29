@@ -87,7 +87,12 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
       runtime = client.probeExperimentRuntime(context.platform)
       if (!runtime.ready) issues.push(issue('AGENT_TRACE_NOT_READY', '所选 Agent 的执行或链路回传组件未就绪，请重新执行该 Agent 的链路跟踪安装命令。'))
       else {
-        recordPlatform(context, { runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 4 } : {}) } })
+        recordPlatform(context, { version: runtime.version, runExperimentCase: {
+          version: 2, returnsTraceId: runtime.canResolveTraceId, ready: runtime.ready === true && runtime.canResolveTraceId === true,
+          ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 4 } : {}),
+          ...(context.platform === 'opencode' && runtime.major === 2 && runtime.canResolveTraceId === true
+            ? { multiTurn: true, sessionContinuation: true, conversationVersion: 1 } : {}),
+        } })
         capabilities.components[`agent-runtime/${context.platform}/v1`] = { ready: true }
       }
     }

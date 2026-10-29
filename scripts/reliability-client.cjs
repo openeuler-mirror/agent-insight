@@ -877,6 +877,7 @@ function buildCapabilities(cfg, opts) {
         unavailableReason: !runtime.ready ? runtime.reason || '运行时尚未就绪'
           : !normalizeModelIds(info?.agents).length ? sanitizeAgentDiagnostic(info?.note) || `${id} Agent 列表为空，请检查探测结果` : undefined,
         ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}),
+        ...(id === 'opencode' && runtime.major === 2 && runtime.ready ? { multiTurn: true, sessionContinuation: true, conversationVersion: 1 } : {}),
       },
       actions: [...WHITELIST],
     }
@@ -1661,7 +1662,14 @@ const runtimeAdapters = {
 
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   payload.signal?.throwIfAborted()
+  const conversation = normalizeExecutionConversation(payload.conversation)
+  const { conversationSessionId: ignoredSessionId, ...safePayload } = payload
+  payload = safePayload
+  if (conversation && (payload.platform !== 'opencode' || payload.skillExecution?.version === 2)) {
+    throw createAgentRunError('MULTI_TURN_UNSUPPORTED', '当前执行端或评测模式不支持多轮对话')
+  }
   const executable = which(runtimeAdapters[String(payload.platform)]?.executableName || String(payload.platform))
+  if (conversation && inspectOpencodeRuntime(executable).major !== 2) throw createAgentRunError('MULTI_TURN_UNSUPPORTED', '多轮执行需要支持会话续接的 OpenCode v2')
   let isolated = payload.skillExecution && executable ? prepareSkillExperimentWorkspace(executable, payload, undefined, cfg.clientId) : null
   if (!payload.skillExecution && !payload.cwd) {
     const root = path.join(cfg.workspaceBase || CLIENT_HOME, 'experiment-workspaces')
@@ -1680,12 +1688,48 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       payload = { ...payload, model: checked.model }
       payload.signal?.throwIfAborted()
     }
-    return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
+    if (!conversation) return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
+    if (String(payload.input || '').trim() !== conversation.turns[0].input.trim()) throw createAgentRunError('INVALID_CONVERSATION', 'Case 输入与首轮输入不一致')
+    const sessionId = `ses_${randomBytes(13).toString('hex')}`
+    const completedTurnIds = []
+    const startedAt = new Date().toISOString()
+    const deadline = Date.now() + Math.max(1, Number(payload.timeoutSeconds) || 600) * 1000
+    let result, reported = false
+    for (const turn of conversation.turns) {
+      payload.signal?.throwIfAborted()
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw createAgentRunError('AGENT_TIMEOUT', '多轮 Case 执行超时')
+      result = await runExperimentCaseImpl(cfg, { ...payload, conversationSessionId: sessionId,
+        input: turn.input, timeoutSeconds: remaining / 1000,
+      }, async facts => {
+        if (!reported) { reported = true; await onTraceId(facts) }
+      }, isolated)
+      if (result.traceId !== sessionId) throw createAgentRunError('TRACE_ID_MISMATCH', '逐轮执行返回了不同的会话')
+      completedTurnIds.push(turn.id)
+    }
+    return { ...result, startedAt, conversation: { version: 1, sessionId, completedTurnIds } }
   } catch (error) {
     discardWorkspace = error.code === 'MODEL_UNAVAILABLE'
     if (payload.signal?.aborted && error.code !== 'EXECUTION_CANCELLED') throw createAgentRunError('EXECUTION_CANCELLED', '实验已取消')
     throw error
   } finally { isolated?.cleanup(discardWorkspace || Boolean(payload.signal?.aborted)) }
+}
+
+function normalizeExecutionConversation(value) {
+  if (value === undefined) return undefined
+  const invalid = () => { throw createAgentRunError('INVALID_CONVERSATION', '无效的逐轮 conversation 合同，只允许版本、轮次标识和输入') }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 1
+    || Object.keys(value).some(key => !['version', 'turns'].includes(key)) || !Array.isArray(value.turns)
+    || value.turns.length < 1 || value.turns.length > 20) invalid()
+  const ids = new Set()
+  const turns = value.turns.map(turn => {
+    if (!turn || typeof turn !== 'object' || Array.isArray(turn) || Object.keys(turn).some(key => !['id', 'input'].includes(key))
+      || typeof turn.id !== 'string' || !turn.id || turn.id.length > 100 || ids.has(turn.id)
+      || typeof turn.input !== 'string' || !turn.input.trim() || turn.input.length > 20000) invalid()
+    ids.add(turn.id)
+    return { id: turn.id, input: turn.input }
+  })
+  return { version: 1, turns }
 }
 
 function flushOpencodeTrace(traceId, { home = getAgentInsightHome(), timeoutMs = 20_000 } = {}) {
@@ -1755,6 +1799,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     input,
     literalInput: triggerRouting,
     correlation,
+    conversationSessionId: payload.conversationSessionId,
   })
   if (invocation.sessionId && platform === 'opencode') env.AGENT_INSIGHT_EXPERIMENT_SESSION_ID = invocation.sessionId
   const runtimePlan = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
@@ -2266,7 +2311,7 @@ function buildExperimentCaseInvocation(executable, input) {
 function buildOpencodeInvocation(executable, input) {
   const args = buildExperimentCaseArgs(executable, input)
   if (inspectOpencodeRuntime(executable).major === 2) {
-    const sessionId = `ses_${randomBytes(13).toString('hex')}`
+    const sessionId = input.conversationSessionId || `ses_${randomBytes(13).toString('hex')}`
     args.push('--session', sessionId)
     return { args, stdin: input.input, sessionId }
   }
@@ -2381,7 +2426,18 @@ let lastCapabilityFingerprint = null
 let capabilityRefreshInFlight = null
 
 async function reportEnvironmentCapabilities(cfg, result) {
-  const capabilities = result.capabilities
+  const capabilities = result.capabilities && { ...result.capabilities,
+    platforms: (result.capabilities.platforms || []).map(platform => {
+      if (!platform.runExperimentCase) return platform
+      const run = { ...platform.runExperimentCase }
+      const supportsConversation = platform.id === 'opencode' && /^v?2(?:\.|$)/.test(String(platform.version || ''))
+        && run.ready === true && run.returnsTraceId === true && run.multiTurn === true
+        && run.sessionContinuation === true && run.conversationVersion === 1
+      for (const key of ['multiTurn', 'sessionContinuation', 'conversationVersion']) delete run[key]
+      if (supportsConversation) Object.assign(run, { multiTurn: true, sessionContinuation: true, conversationVersion: 1 })
+      return { ...platform, runExperimentCase: run }
+    }),
+  }
   if (capabilities) {
     capabilitiesRevision += 1
     await api(cfg, 'PUT', '/api/reliability/client/v1/capabilities', {
@@ -2926,6 +2982,7 @@ module.exports = {
   syncBenchmarkExecutorCapabilities,
   buildExperimentCaseInvocation,
   runExperimentCase,
+  normalizeExecutionConversation,
   flushOpencodeTrace,
   tryAcquireExecutionSlot,
   releaseExecutionSlot,

@@ -39,6 +39,8 @@ import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { startBenchmarkExperiment } from '@/lib/benchmark/scheduler';
 import { defaultEvaluatorRuntimeConfigProvider } from '@/lib/benchmark/evaluator-runtime-config';
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
+import { assertFrozenAgentTarget, assertFrozenFiDispatch, requireExperimentVersionActor } from '@/lib/evaluation-assets/experiment-versions';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,11 +74,14 @@ export async function POST(
 
     const currentExperiment = await prisma.experiment.findFirst({
       where: { id, user: username, deletedAt: null },
-      select: { status: true, type: true, scope: true },
+      select: { status: true, type: true, scope: true, configSnapshotJson: true },
     });
     if (!currentExperiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
     }
+    let versioned = false;
+    try { versioned = Boolean(JSON.parse(currentExperiment.configSnapshotJson || '{}')?.assetVersions); } catch { /* Legacy snapshots may be incomplete. */ }
+    if (versioned) await requireExperimentVersionActor(req, username);
     if (currentExperiment.scope === 'benchmark') {
       try {
         const callbackUrls = callbackServiceBaseUrls(req);
@@ -181,11 +186,12 @@ export async function POST(
       });
       const agent = String(generateTrace?.agent || experiment?.agentName || '').trim();
       const snapshot = frozen?.configSnapshotJson ? JSON.parse(frozen.configSnapshotJson) : {};
+      assertFrozenAgentTarget(snapshot, platform, agent);
       const savedTarget = snapshot.executionTarget;
       const savedOptions = savedTarget?.workerId === workerId && savedTarget?.platform === platform && savedTarget?.agent === agent
         ? savedTarget.agentOptions : undefined;
       const resolvedOptions = await assertTraceGenerationTarget({ user: username, workerId, platform, agent,
-        agentOptions: generateTrace?.agentOptions ?? savedOptions });
+        agentOptions: generateTrace?.agentOptions ?? savedOptions, cases });
       const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
         ? generateTrace.timeoutSeconds
         : DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
@@ -251,6 +257,9 @@ export async function POST(
 
     let fi: Awaited<ReturnType<typeof orchestrateFaultInjection>> | null = null;
     if (wantFi) {
+      if ((await collectTraceGenerationCases(id)).some(item => item.conversation)) {
+        throw new TraceGenerationError('MULTI_TURN_UNSUPPORTED', '首版可靠性故障注入不支持多轮生成，请使用普通单组多轮实验或关联已有 Trace', 409);
+      }
       const cases = await collectFiCasesFromExperiment(id);
       if (cases.length) {
         const experiment = await prisma.experiment.findFirst({
@@ -260,6 +269,12 @@ export async function POST(
         const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
           ? generateTrace.timeoutSeconds
           : DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
+        assertFrozenAgentTarget(frozen?.configSnapshotJson ? JSON.parse(frozen.configSnapshotJson) : {},
+          String(generateTrace?.platform || body.platform || 'opencode'), String(generateTrace?.agent || experiment?.agentName || 'default'));
+        assertFrozenFiDispatch(frozen?.configSnapshotJson ? JSON.parse(frozen.configSnapshotJson) : {}, {
+          ...generateTrace, platform: String(generateTrace?.platform || body.platform || 'opencode'),
+          agent: String(generateTrace?.agent || experiment?.agentName || 'default'), timeoutSeconds,
+        });
         fi = await orchestrateFaultInjection({
           user: username,
           experimentId: id,
@@ -369,6 +384,7 @@ export async function POST(
       ...(fi ? { fiOrchestrate: fi } : {}),
     });
   } catch (error) {
+    if (error instanceof EvaluationAssetError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error instanceof TraceGenerationError) {
       return NextResponse.json(
         { error: error.message, code: error.code },

@@ -52,6 +52,20 @@ import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { cloneExperimentFromFrozenConfig } from '@/lib/engine/experiment/reuse-config';
 import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership';
 import { benchmarkEvaluatorId } from '@/lib/benchmark/adapter-registry';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
+import { assertVersionBackend } from '@/lib/evaluation-assets/service';
+import {
+  applyExperimentReferenceOverrides,
+  assertExperimentCaseTraceOwnership,
+  bindVersionedExperimentCases,
+  confirmsCurrentDatasetVersion,
+  experimentCaseValues,
+  parseExperimentAssetVersionRefs,
+  prepareFrozenEvaluatorConfigs,
+  requireExperimentVersionActor,
+  resolveExperimentAssetVersions,
+  withoutExperimentReferenceOverride,
+} from '@/lib/evaluation-assets/experiment-versions';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,6 +80,8 @@ interface CaseInput {
   /** IF-M02：可靠性 case 的故障模式 id，落盘到 ExperimentCase.faultInjectionType */
   faultInjectionType?: string;
   values?: Record<string, unknown>;
+  turns?: unknown;
+  referenceOverride?: unknown;
   datasetId?: string;
   datasetCaseId?: string;
 }
@@ -202,11 +218,23 @@ export async function POST(req: Request) {
     if (!username) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
+    const requestedVersions = parseExperimentAssetVersionRefs(body.assetVersions);
+    if (requestedVersions) {
+      await requireExperimentVersionActor(req, username);
+      assertVersionBackend();
+    }
 
     if (body.createMode === 'same-config') {
       const sourceExperimentId = String(body.sourceExperimentId || '').trim();
       if (!sourceExperimentId) {
         return NextResponse.json({ error: 'sourceExperimentId is required' }, { status: 400 });
+      }
+      if (requestedVersions) throw new EvaluationAssetError('按原条件复测不能覆盖资产版本，请通过复用配置明确切换版本');
+      const source = await prisma.experiment.findFirst({ where: { id: sourceExperimentId, user: username }, select: { configSnapshotJson: true } });
+      if (source?.configSnapshotJson) {
+        let snapshot: Record<string, unknown> = {};
+        try { snapshot = JSON.parse(source.configSnapshotJson); } catch { /* Original clone validation handles legacy snapshots. */ }
+        if (snapshot?.assetVersions) await requireExperimentVersionActor(req, username);
       }
       try {
         const cloned = await cloneExperimentFromFrozenConfig({ sourceExperimentId, user: username });
@@ -231,6 +259,7 @@ export async function POST(req: Request) {
         })
       : null;
     if (publicBenchmarkDataset) {
+      if (requestedVersions) throw new EvaluationAssetError('Benchmark 沿用原有私有数据与运行快照，首版不支持 assetVersions');
       try {
         if (!publicBenchmarkDataset.benchmarkDataset || publicBenchmarkDataset.benchmarkDataset.status !== 'ready') {
           return NextResponse.json({ error: 'Benchmark 数据集尚未就绪' }, { status: 409 });
@@ -290,6 +319,7 @@ export async function POST(req: Request) {
     }
 
     if (body.scope === 'benchmark') {
+      if (requestedVersions) throw new EvaluationAssetError('Benchmark 沿用原有私有数据与运行快照，首版不支持 assetVersions');
       try {
         const benchmark = body.benchmark && typeof body.benchmark === 'object'
           ? body.benchmark as Record<string, unknown>
@@ -369,8 +399,9 @@ export async function POST(req: Request) {
       ? body.skillContext
       : null;
     let configSnapshot = body.configSnapshot && typeof body.configSnapshot === 'object' && !Array.isArray(body.configSnapshot)
-      ? body.configSnapshot
+      ? { ...body.configSnapshot }
       : null;
+    if (configSnapshot) delete configSnapshot.assetVersions;
 
     if (!scope && body.traceSource === 'generate' && configSnapshot?.fiOrchestrate !== true) {
       let executionConcurrency: number;
@@ -404,10 +435,20 @@ export async function POST(req: Request) {
     if (scope && (!skillName || skillVersion == null || !preset)) {
       return NextResponse.json({ error: 'Skill 实验缺少 Skill、版本或预设上下文' }, { status: 400 });
     }
+    if (type === 'llm' && requestedVersions?.dataset) throw new EvaluationAssetError('原 LLM Trace 配对流程不绑定数据集版本，请使用单组数据集评测');
+    const versions = await resolveExperimentAssetVersions({ request: req, user: username, refs: requestedVersions,
+      datasetId: type === 'llm' ? '' : agentEvalDatasetId, evaluatorIds, agentName, executionTarget: body.executionTarget || configSnapshot?.executionTarget });
+    if (versions.assetVersions?.dataset && !requestedVersions?.dataset
+      && !confirmsCurrentDatasetVersion(Array.isArray(body.cases) ? body.cases : [], versions.assetVersions.dataset)) delete versions.assetVersions.dataset;
+    if (versions.assetVersions) configSnapshot = { ...configSnapshot, assetVersions: versions.assetVersions,
+      ...(versions.assetVersions.dataset ? { datasetId: versions.assetVersions.dataset.businessId } : {}) };
+    const frozenSnapshot = await withFrozenCustomEvaluators(username, evaluatorIds, configSnapshot || {}, versions.evaluatorRefs);
 
     let evaluatorConfigsJson: string;
     try {
-      evaluatorConfigsJson = await prepareExperimentEvaluatorConfigs(username, evaluatorIds, body.evaluatorConfigs, body.evaluatorExecutionConfig);
+      evaluatorConfigsJson = Object.keys(versions.evaluatorRefs).length
+        ? prepareFrozenEvaluatorConfigs(evaluatorIds, frozenSnapshot.customEvaluatorSnapshots.cards, body.evaluatorConfigs, body.evaluatorExecutionConfig)
+        : await prepareExperimentEvaluatorConfigs(username, evaluatorIds, body.evaluatorConfigs, body.evaluatorExecutionConfig);
     } catch (error) {
       return NextResponse.json({ error: error instanceof EvaluatorRunConfigValidationError ? error.message : 'invalid evaluatorConfigs' }, { status: 400 });
     }
@@ -426,7 +467,8 @@ export async function POST(req: Request) {
       }
       try {
         const { id } = await createComparisonExperiment({
-          configSnapshot: configSnapshot || undefined,
+          configSnapshot: frozenSnapshot,
+          frozenCustomEvaluators: frozenSnapshot.customEvaluatorSnapshots,
           user: username, name, agentName,
           variableDimension: String(body.variableDimension || 'llm'),
           groups: groups.map((g: { key?: unknown; value?: unknown }) => ({
@@ -446,7 +488,7 @@ export async function POST(req: Request) {
     }
 
     // 单组实验（type 缺省='single'）
-    const cases: CaseInput[] = Array.isArray(body.cases) ? body.cases : [];
+    let cases: CaseInput[] = Array.isArray(body.cases) ? body.cases.map((item: CaseInput) => ({ ...item, values: withoutExperimentReferenceOverride(item.values) })) : [];
     // 监听模式允许 0 条 case 起步（纯监听，后续该 Agent 新 trace 自动进来评）
     if (!watchMode && cases.length < 1) {
       return NextResponse.json({ error: 'at least one case is required' }, { status: 400 });
@@ -454,11 +496,16 @@ export async function POST(req: Request) {
     if (watchMode && !agentName) {
       return NextResponse.json({ error: 'watch mode requires agentName' }, { status: 400 });
     }
+    if (requestedVersions) await assertExperimentCaseTraceOwnership(username, cases);
+    if (requestedVersions?.dataset && versions.assetVersions?.dataset) {
+      cases = bindVersionedExperimentCases(cases, versions.assetVersions.dataset);
+      cases = await applyExperimentReferenceOverrides(username, cases, versions.assetVersions.dataset);
+    } else if (cases.some(item => item.referenceOverride !== undefined)) throw new EvaluationAssetError('本次实验答案覆盖必须关联所选数据集版本');
 
     for (const item of cases) {
       const datasetId = String(item.datasetId || agentEvalDatasetId || '');
       if (!datasetId) continue;
-      if (await guardTraceDataset(req, datasetId, username, true)) {
+      if (await guardTraceDataset(req, datasetId, username, true) && !requestedVersions?.dataset) {
         const dataset = await findAgentDataset(username, datasetId);
         const source = dataset?.cases.find(c => c.id === item.datasetCaseId);
         if (!source) throw new GenerationError('INVALID_CONFIG', '请选择有效的数据项', 422);
@@ -466,6 +513,7 @@ export async function POST(req: Request) {
         item.datasetInput = source.input;
         item.referenceOutput = source.expectedOutput;
         item.values = source.values;
+        item.turns = source.turns;
         item.datasetId = datasetId;
       }
     }
@@ -484,7 +532,7 @@ export async function POST(req: Request) {
             : '') ||
           null;
         const visibleValues = {
-          ...(item.values && typeof item.values === 'object' ? item.values : {}),
+          ...experimentCaseValues(item),
           ...(fault ? { fault_injection_type: fault } : {}),
         };
         const datasetId = String(item.datasetId || '').trim();
@@ -504,6 +552,7 @@ export async function POST(req: Request) {
         };
       });
     } catch (error) {
+      if (error instanceof EvaluationAssetError) throw error;
       const message = error instanceof Error ? error.message : 'invalid evaluatorContext';
       return NextResponse.json(
         { error: error instanceof EvaluatorContextValidationError ? message : 'invalid evaluatorContext' },
@@ -525,7 +574,7 @@ export async function POST(req: Request) {
         skillVersion,
         preset,
         skillContextJson: skillContext ? JSON.stringify(skillContext) : null,
-        configSnapshotJson: JSON.stringify(await withFrozenCustomEvaluators(username, evaluatorIds, configSnapshot || {})),
+        configSnapshotJson: JSON.stringify(frozenSnapshot),
         watchMode,
         watchEnabledAt: watchMode ? new Date() : null,
         cases: {
@@ -555,6 +604,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ id: experiment.id });
   } catch (error) {
+    if (error instanceof EvaluationAssetError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error instanceof GenerationError) return generationErrorResponse(error);
     console.error('[Experiments POST Error]', error);
     if (error instanceof EvaluatorSkillError) return NextResponse.json({ error: error.message }, { status: error.status });

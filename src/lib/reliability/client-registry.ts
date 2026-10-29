@@ -38,6 +38,9 @@ export type ClientPlatformCapability = {
     ready?: boolean
     unavailableReason?: string
     skillSnapshotVersion?: number
+    multiTurn?: boolean
+    sessionContinuation?: boolean
+    conversationVersion?: number
   }
   runBenchmarkCase?: {
     version: number
@@ -335,6 +338,9 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
                   ...(typeof rec.runExperimentCase.unavailableReason === 'string'
                     ? { unavailableReason: rec.runExperimentCase.unavailableReason.slice(0, 1000) } : {}),
                   ...(Number(rec.runExperimentCase.skillSnapshotVersion) > 0 ? { skillSnapshotVersion: Number(rec.runExperimentCase.skillSnapshotVersion) } : {}),
+                  ...(rec.runExperimentCase.multiTurn === true ? { multiTurn: true } : {}),
+                  ...(rec.runExperimentCase.sessionContinuation === true ? { sessionContinuation: true } : {}),
+                  ...(rec.runExperimentCase.conversationVersion === 1 ? { conversationVersion: 1 } : {}),
                 }
               : undefined,
             runBenchmarkCase: rec.runBenchmarkCase

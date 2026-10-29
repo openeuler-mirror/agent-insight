@@ -36,6 +36,7 @@ export type ClientTraceGenerationTarget = {
   parameterDefinitions?: RuntimeDefinition[];
   supportsSkillSnapshot?: boolean;
   supportsTriggerRouting?: boolean;
+  supportsMultiTurn?: boolean;
   supportsEnvironmentPreparation?: boolean;
 };
 
@@ -107,6 +108,8 @@ export async function listClientTraceGenerationAvailability(
           parameterDefinitions: definitionsForTarget(platform.parameterDefinitions || [], platform.id, agent),
           supportsSkillSnapshot: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 1,
           supportsTriggerRouting: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 4,
+          supportsMultiTurn: platform.id === 'opencode' && platform.runExperimentCase?.multiTurn === true
+            && platform.runExperimentCase.sessionContinuation === true && platform.runExperimentCase.conversationVersion === 1,
           supportsEnvironmentPreparation: capabilities.actions?.includes('PREPARE_EXECUTION_ENVIRONMENT') === true,
         });
       }

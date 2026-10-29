@@ -145,7 +145,7 @@ test('autoPairGroups: 按 query 跨组配对 + 为可比配对创建两侧 case'
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
     for (const q of ['q1', 'q2']) {
       const e = await prisma.execution.create({
-        data: { agentName: agent, model, query: q, taskId: `t-${model}-${q}` },
+        data: { user: TEST_USER, agentName: agent, model, query: q, taskId: `t-${model}-${q}` },
       });
       execIds.push(e.id);
     }
@@ -173,7 +173,7 @@ test('autoPairGroups: 按 query 跨组配对 + 为可比配对创建两侧 case'
 test('autoPairGroups: 一组无候选 trace → 拒绝并指明哪组', async (t) => {
   const agent = `cmp-empty-${Date.now()}`;
   // 只创建 A 组 trace，B 组无
-  const e = await prisma.execution.create({ data: { agentName: agent, model: 'glm', query: 'q1' } });
+  const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'glm', query: 'q1' } });
   const { id } = await createComparisonExperiment({
     user: TEST_USER, name: 'empty-b', agentName: agent,
     variableDimension: 'llm',
@@ -198,7 +198,7 @@ test('autoPairGroups: AC-022 100 case 配对耗时 ≤ 100ms', async (t) => {
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
     for (let i = 0; i < 100; i++) {
       const e = await prisma.execution.create({
-        data: { agentName: agent, model, query: `q-${i}`, taskId: `t-${model}-${i}` },
+        data: { user: TEST_USER, agentName: agent, model, query: `q-${i}`, taskId: `t-${model}-${i}` },
       });
       execIds.push(e.id);
     }
@@ -229,15 +229,15 @@ test('getComparisonDetail: AC-021 不可比/未配对不进 overall 分母', asy
   const execIds: string[] = [];
   // q1: 可比；q2: B 组无 trace（未配对）；q3: 受控字段不一致（不可比）
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   // q2: 只 A 组
-  const e2 = await prisma.execution.create({ data: { agentName: agent, model: 'glm', query: 'q2', skill: 's', skillVersion: 1 } });
+  const e2 = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'glm', query: 'q2', skill: 's', skillVersion: 1 } });
   execIds.push(e2.id);
   // q3: A/B 都有但 skillVersion 不同
-  const e3a = await prisma.execution.create({ data: { agentName: agent, model: 'glm', query: 'q3', skill: 's', skillVersion: 1 } });
-  const e3b = await prisma.execution.create({ data: { agentName: agent, model: 'qwen', query: 'q3', skill: 's', skillVersion: 2 } });
+  const e3a = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'glm', query: 'q3', skill: 's', skillVersion: 1 } });
+  const e3b = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'qwen', query: 'q3', skill: 's', skillVersion: 2 } });
   execIds.push(e3a.id, e3b.id);
 
   const { id } = await createComparisonExperiment({
@@ -267,7 +267,7 @@ test('getComparisonDetail: 无评估结果时 overall=null + progress 全 pendin
   const agent = `cmp-noeval-${Date.now()}`;
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const { id } = await createComparisonExperiment({
@@ -326,7 +326,7 @@ test('startComparisonRun: 创建 pending 行 + 逐行执行 + 终态 done（AC-0
   const agent = `cmp-run-${Date.now()}`;
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const { id } = await createComparisonExperiment({
@@ -361,7 +361,7 @@ test('startComparisonRun: 防重入——运行中再次调用返回 alreadyRunn
   const agent = `cmp-dedup-${Date.now()}`;
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const { id } = await createComparisonExperiment({
@@ -387,7 +387,7 @@ test('startComparisonRun: 防重入——运行中再次调用返回 alreadyRunn
 test('AC-023: 同评估器同 case 在对比模式得分=JUDGE_SCORE（与单组口径一致）', async (t) => {
   setJudgeLlmCallerForTest(async () => VALID_JUDGE_JSON);
   const agent = `cmp-parity-${Date.now()}`;
-  const e = await prisma.execution.create({ data: { agentName: agent, model: 'glm', query: 'q1', skill: 's', skillVersion: 1, finalResult: 'output-1' } });
+  const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'glm', query: 'q1', skill: 's', skillVersion: 1, finalResult: 'output-1' } });
   const { id } = await createComparisonExperiment({
     user: TEST_USER, name: 'parity-test', agentName: agent,
     variableDimension: 'llm',
@@ -400,7 +400,7 @@ test('AC-023: 同评估器同 case 在对比模式得分=JUDGE_SCORE（与单组
   });
 
   // 补 B 组 trace 后调 autoPairGroups（之前 B 组无 trace 会抛错）
-  const e2 = await prisma.execution.create({ data: { agentName: agent, model: 'qwen', query: 'q1', skill: 's', skillVersion: 1, finalResult: 'output-2' } });
+  const e2 = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'qwen', query: 'q1', skill: 's', skillVersion: 1, finalResult: 'output-2' } });
   t.after(async () => { await prisma.execution.delete({ where: { id: e2.id } }).catch(() => {}); });
   await autoPairGroups(id);
 
@@ -424,7 +424,7 @@ test('AC-018: 单侧评估失败容忍——失败侧无分不进分母，配对
   const agent = `cmp-fail-${Date.now()}`;
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const { id } = await createComparisonExperiment({
@@ -459,7 +459,7 @@ test('rescanComparison: 增量补评——B 组补 trace 后重扫发现新可�
   setJudgeLlmCallerForTest(async () => VALID_JUDGE_JSON);
   const agent = `cmp-rescan-${Date.now()}`;
   // 初始：A 组 q1，B 组无 → 未配对
-  const e1 = await prisma.execution.create({ data: { agentName: agent, model: 'glm', query: 'q1', skill: 's', skillVersion: 1 } });
+  const e1 = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'glm', query: 'q1', skill: 's', skillVersion: 1 } });
   const { id } = await createComparisonExperiment({
     user: TEST_USER, name: 'rescan-test', agentName: agent,
     variableDimension: 'llm',
@@ -468,7 +468,7 @@ test('rescanComparison: 增量补评——B 组补 trace 后重扫发现新可�
   });
   // autoPairGroups 会因 B 组无 trace 而抛错——改为先建实验，手动跳过 autoPairGroups
   // 直接补 B 组 trace 后调 rescan
-  const e2 = await prisma.execution.create({ data: { agentName: agent, model: 'qwen', query: 'q1', skill: 's', skillVersion: 1 } });
+  const e2 = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'qwen', query: 'q1', skill: 's', skillVersion: 1 } });
   t.after(async () => {
     await prisma.experiment.delete({ where: { id } }).catch(() => {});
     await prisma.execution.deleteMany({ where: { id: { in: [e1.id, e2.id] } } });
@@ -490,7 +490,7 @@ test('rescanComparison: 运行中调用 → 抛 409 互斥', async (t) => {
   const agent = `cmp-rescan409-${Date.now()}`;
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const { id } = await createComparisonExperiment({

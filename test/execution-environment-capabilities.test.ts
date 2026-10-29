@@ -215,12 +215,14 @@ fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(process.argv.slic
 fs.writeFileSync(1, process.argv.includes('--version') ? fs.readFileSync(${JSON.stringify(versionFile)}) : process.argv[2] === 'models' ? 'provider/model' : fs.readFileSync(${JSON.stringify(outputFile)}));
 `, { mode: 0o755 })
   const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: root },
-    client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true, major: 2 }) } })
+    client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true, major: 2, version: '2.1.4' }) } })
   const selected = { ...context, model: 'deepseek/deepseek-flash' }
   const model = { providerID: 'deepseek', id: 'deepseek-flash', modelID: 'upstream-model', enabled: true }
   fs.writeFileSync(outputFile, JSON.stringify({ data: [model] }))
   assert.deepEqual(await services.checkAgent(selected), [])
-  assert.deepEqual(services.capabilityUpdate().capabilities.platforms[0].runExperimentCase, { version: 2, returnsTraceId: true, skillSnapshotVersion: 4 })
+  assert.deepEqual(services.capabilityUpdate().capabilities.platforms[0].runExperimentCase, { version: 2, returnsTraceId: true, ready: true, skillSnapshotVersion: 4, multiTurn: true, sessionContinuation: true, conversationVersion: 1 })
+  const before:ClientCapabilities={platforms:[{id:'opencode',version:'2.1.4',agents:['build'],runExperimentCase:{version:2,returnsTraceId:true,ready:true,multiTurn:true,sessionContinuation:true,conversationVersion:1}}]}
+  assert.equal(mergeCapabilities(before,services.capabilityUpdate().capabilities).platforms[0].runExperimentCase?.multiTurn,true)
   for (const data of [[], [{ ...model, enabled: false }], [{ ...model, providerID: 'other' }]]) {
     fs.writeFileSync(outputFile, JSON.stringify({ data }))
     assert.equal((await services.checkAgent(selected))[0].code, 'MODEL_UNAVAILABLE')
@@ -244,6 +246,8 @@ fs.writeFileSync(1, process.argv.includes('--version') ? fs.readFileSync(${JSON.
     client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true, major: 1 }) } })
   assert.deepEqual(await v1.checkAgent(context), [])
   assert.equal(v1.capabilityUpdate().capabilities.platforms[0].runExperimentCase.skillSnapshotVersion, 4)
+  const downgraded=mergeCapabilities(before,v1.capabilityUpdate().capabilities).platforms[0].runExperimentCase
+  assert.equal(downgraded?.multiTurn,undefined);assert.equal(downgraded?.sessionContinuation,undefined);assert.equal(downgraded?.conversationVersion,undefined)
   assert.deepEqual(JSON.parse(fs.readFileSync(callsFile, 'utf8').trim().split('\n').at(-1)!), ['models'])
 })
 
@@ -318,6 +322,17 @@ test('normal preparation and restart recovery complete without full discovery or
     const fi = reports.at(-1)!
     assert(fi.url.endsWith('/worker/heartbeat'))
     assert.equal(fi.body.partial, true)
+    const native={version:2,returnsTraceId:true,ready:true,multiTurn:true,sessionContinuation:true,conversationVersion:1}
+    for(const [platform,version,expected] of [['opencode','2.1.4',true],['opencode','1.14.39',false],['pi-agent','2.1.4',false],['xiaoo','2.1.4',false],['opencode',undefined,false]] as const){
+      await daemon.reportEnvironmentCapabilities(daemon.loadConfig(),{state:'ready',capabilities:{platforms:[{id:platform,version,agents:['build'],runExperimentCase:{...native}}]}})
+      const sent=(reports.at(-1)!.body.platforms as Array<{runExperimentCase:Record<string,unknown>}>)[0].runExperimentCase
+      assert.equal(sent.multiTurn===true,expected);assert.equal(sent.sessionContinuation===true,expected);assert.equal(sent.conversationVersion===1,expected)
+    }
+    for(const override of [{ready:false},{returnsTraceId:false},{sessionContinuation:false},{conversationVersion:2}]){
+      await daemon.reportEnvironmentCapabilities(daemon.loadConfig(),{state:'ready',capabilities:{platforms:[{id:'opencode',version:'2.1.4',runExperimentCase:{...native,...override}}]}})
+      const sent=(reports.at(-1)!.body.platforms as Array<{runExperimentCase:Record<string,unknown>}>)[0].runExperimentCase
+      assert.equal(sent.multiTurn,undefined);assert.equal(sent.sessionContinuation,undefined);assert.equal(sent.conversationVersion,undefined)
+    }
   } finally {
     taskRunner.executePreparation = previousExecute
     taskRunner.markPreparationReported = previousMark

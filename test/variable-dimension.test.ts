@@ -19,7 +19,7 @@
 // framework/skill stub queryCandidateTraces 抛 NotImplemented / getDimension 映射。
 // DB 测试（queryCandidateTraces）落在仓库 data/witty_insight.db（同 experiment-engine.test.ts）。
 import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

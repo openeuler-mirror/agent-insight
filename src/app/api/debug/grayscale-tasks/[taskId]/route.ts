@@ -27,10 +27,11 @@ import { prisma } from '@/lib/storage/prisma';
 import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { executeSkillCaseOnClient } from '@/lib/skill-workbench/client-execution';
+import { assertSkillSingleTurnCases } from '@/lib/skill-workbench/experiment-service';
 import { withSkillClientSlot } from '@/lib/skill-workbench/client-execution-slot';
 import { validateSkillExecutionTarget } from '@/lib/skill-workbench/execution-target';
 import { ensureTriggerExperimentCases, shouldStopTriggerBatch } from '@/lib/skill-workbench/trigger-execution';
-import { generateExperimentTraces } from '@/lib/engine/experiment/trace-generation';
+import { generateExperimentTraces, TraceGenerationError } from '@/lib/engine/experiment/trace-generation';
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import type { SkillExecutionTarget, SkillExecutionSnapshot } from '@/lib/skill-workbench/execution-target';
@@ -2532,6 +2533,7 @@ async function runGrayscaleTask(args: {
     for (const caseId of caseIds) {
         if (!caseConfigMap.get(caseId)?.caseEntry.input?.trim()) throw new Error(`case ${caseId} not found or missing input`);
     }
+    assertSkillSingleTurnCases(caseIds.map(caseId => caseConfigMap.get(caseId)!.caseEntry));
 
     const versionA = await resolveVersion(config.skillId, config.versionAId);
     const versionB = await resolveVersion(config.skillId, config.versionBId);
@@ -2844,6 +2846,7 @@ async function runGrayscaleExecutionRetry(args: {
     const caseConfigMap = await loadConfiguredCaseMap(args.user, config);
     const datasetCase = caseConfigMap.get(args.caseId)?.caseEntry;
     if (!datasetCase?.input?.trim()) throw new Error('数据集 Case 不存在或输入为空');
+    assertSkillSingleTurnCases([datasetCase]);
     const versionA = await resolveVersion(config.skillId, config.versionAId);
     const versionB = await resolveVersion(config.skillId, config.versionBId);
     const retryItems = retryTargets.map(({ side, runIndex }) => {
@@ -3556,6 +3559,11 @@ export async function POST(
         } catch (err) {
             return NextResponse.json({ error: err instanceof Error ? err.message : 'invalid task skill binding' }, { status: 400 });
         }
+        if (action === 'start') {
+            const configuredCases = await loadConfiguredCaseMap(user, task.configJson);
+            assertSkillSingleTurnCases(caseIds.slice(0, Math.max(1, Number(task.configJson.runCount || caseIds.length)))
+                .flatMap((caseId: string) => configuredCases.get(caseId)?.caseEntry ? [configuredCases.get(caseId)!.caseEntry] : []));
+        }
         if (action === 'start' && task.configJson.evalExperimentId) {
             await prisma.experiment.updateMany({
                 where: { id: task.configJson.evalExperimentId, user, status: 'draft', deletedAt: null },
@@ -3620,6 +3628,7 @@ export async function POST(
     } catch (err) {
         console.error('[GRAYSCALE_TASKS_POST] Failed:', err);
         if (err instanceof GenerationError) return generationErrorResponse(err);
+        if (err instanceof TraceGenerationError) return NextResponse.json({ error: err.message, code: err.code }, { status: err.httpStatus });
         return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed to start task' }, { status: 500 });
     }
 }
