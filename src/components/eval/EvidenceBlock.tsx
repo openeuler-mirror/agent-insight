@@ -18,6 +18,7 @@
 
 // 证据渲染小组件：默认折叠单行预览，点击展开后按内容格式自动渲染
 // （{md} → 轻量 Markdown：**粗体** / `code` / - 列表；{json} → 缩进代码块）。
+import type { EvaluationAttemptDiagnostic } from '@/lib/engine/experiment/evaluator-execution-policy';
 import { useState, type ReactNode } from 'react';
 import { isCustomEvaluatorRuntime } from './CustomEvaluatorRuntimeDetails';
 import type { CustomEvaluatorRuntime } from '@/lib/engine/evaluation/custom-evaluator-runtime';
@@ -438,17 +439,22 @@ export function EvidenceBlock({
   supplementalMarkdown?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const ev = coerce(evidence);
+  const diagnostics = (evidence as { executionConfig?: { attemptDiagnostics?: EvaluationAttemptDiagnostic[] } } | null)?.executionConfig?.attemptDiagnostics;
+  const diagnosticText = diagnostics?.length ? '**评估执行记录**\n' + diagnostics.map((item) =>
+    `- 阶段 ${item.stage} · 第 ${item.attempt} 次 · ${(item.durationMs / 1000).toFixed(1)} 秒 · ${item.status === 'success' ? '完成' : `${item.errorCode || '失败'}：${item.errorMessage || ''}；${item.willRetry ? '重试' : '不重试'}`}`).join('\n') : '';
+  const ev = coerce(evidence) || (diagnosticText ? { md: diagnosticText } : null);
   if (!ev) return null;
   const envelope = ev.json as { type?: string; evaluationEvidence?: unknown; customEvaluatorRuntime?: CustomEvaluatorRuntime } | undefined;
   if (envelope?.type === 'custom-evaluator-runtime-v1' && isCustomEvaluatorRuntime(envelope.customEvaluatorRuntime)) {
-    return <EvidenceBlock evidence={envelope.evaluationEvidence} evaluatorId={evaluatorId} supplementalMarkdown={supplementalMarkdown} />;
+    return <EvidenceBlock evidence={{ ...(envelope.evaluationEvidence as object || {}), executionConfig: { attemptDiagnostics: diagnostics } }} evaluatorId={evaluatorId} supplementalMarkdown={supplementalMarkdown} />;
   }
   const suggestion = supplementalMarkdown?.trim() || '';
+  const diagnosticSection = ev.md === diagnosticText ? '' : diagnosticText;
   const md = ev.md
     ? [
         `**证据**\n${ev.md}`,
         suggestion ? `**Skill 改进建议**\n${suggestion}` : '',
+        diagnosticSection,
       ].filter(Boolean).join('\n\n')
     : undefined;
   const previewText = [
@@ -509,6 +515,7 @@ export function EvidenceBlock({
               )}
             </>
           )}
+          {!ev.md && diagnosticSection && <div style={{ marginTop: 9 }}>{renderMd(diagnosticSection)}</div>}
           {!ev.md && suggestion && (
             <div style={{ marginTop: 9, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
               {renderMd(`**Skill 改进建议**\n${suggestion}`)}

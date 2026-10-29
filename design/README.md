@@ -20,6 +20,8 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| Skill 优化校验效率 | [verification-efficiency](optimization/verification-efficiency/phase1-requirements-analysis.md) | 有效用例筛选、可比基线复用、静态评估去重与诚实进度 | Fix / Perf | 2026-10-28 | 已实现，已验证 UI | — |
+| Skill 优化验收闭环 | [verification-closure](optimization/verification-closure/phase1-requirements-analysis.md) | 目标验收、证据复用、定向范围、上下文减量与重试诊断 | Fix / Perf | 2026-10-29 | 已实现并验证 | — |
 | 实验评估器超时与重试配置 | [evaluator-execution-settings](evaluation/evaluator-execution-settings/phase1-requirements-analysis.md) | 实验级 LLM 超时与重试统一配置、评估器行内单独配置及逐行恢复，并以最小界面改动增加搜索、来源筛选和分页 | Feature | 2026-10-26 | 🟡 已扩展全部 31 个预置 LLM 与 Skills 自定义项；176 项专项及类型检查通过，隔离浏览器实验 6 项完成；全量 40 项基线失败未新增 | 待补 |
 | 自建评估器 Prompt + Skills | [custom-evaluator-skills](evaluation/custom-evaluator-skills/phase1-requirements-analysis.md) | 支持从 Skill 库选固定版本或从电脑导入，后者不自动入库；统一冻结文件并通过 OpenCode 执行，全部添加项参与评估，不设启停 | Feature | 2026-10-23 | 🟡 原配置流程已验收；本轮结果/卡片/选择器调整、39 项专项测试及真实模型链路持久化验证通过（100 分、7 次工具调用，脚本凭据一致）；本轮浏览器复查受安全策略阻止，既有类型门禁问题未全绿 | —（待补） |
 | 实验执行环境准备 | [experiment-environment-preparation](evaluation/experiment-environment-preparation/phase2-requirements-design.md) | 第二步点击下一步时按数据集、Agent 与执行上下文检查并自动准备环境；底部统一反馈，准备逻辑归属执行端数据集接入协议，移出客户端安装中的 xGovernor 编译 | Feature / Refactor | 2026-10-23 | 🟡 代码与专项自动化回归完成；全量含既有失败，未在浏览器及真实 Linux Docker/模型环境验收 | — |

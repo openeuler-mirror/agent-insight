@@ -16,7 +16,7 @@
 
 import path from 'node:path';
 
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -27,7 +27,7 @@ import { applyCompletedOptimizationPlan } from '@/lib/skill-workbench/optimizati
 const USER = `optimization-plan-state-${Date.now()}@test.local`;
 const SKILL_NAME = `optimization-plan-state-${Date.now()}`;
 
-test('候选成功后应用计划，并按 dedupKey 一次解决全部重复来源', async () => {
+test('候选应用计划不等于问题已解决；缺少验证证据时保留全部重复来源', async () => {
   const skill = await prismaRaw.skill.create({
     data: {
       name: SKILL_NAME,
@@ -112,14 +112,14 @@ test('候选成功后应用计划，并按 dedupKey 一次解决全部重复来�
       resolvedRunId: 'optimization-record-1',
     });
     assert.equal(applied.appliedItems, 1);
-    assert.equal(applied.resolvedIssues, 2);
+    assert.equal(applied.resolvedIssues, 0);
     assert.equal((await prismaRaw.skillOptPlan.findUniqueOrThrow({ where: { id: plan.id } })).status, 'applied');
     const items = await prismaRaw.skillOptPlanItem.findMany({ where: { planId: plan.id }, orderBy: { rank: 'asc' } });
     assert.equal(items[0].status, 'applied');
     assert.equal(items[1].status, 'pending');
     assert.equal(await prismaRaw.skillIssue.count({
       where: { id: { in: duplicateIssues.map((item) => item.id) }, resolvedRunId: 'optimization-record-1' },
-    }), 2);
+    }), 0);
     assert.equal((await prismaRaw.skillIssue.findUniqueOrThrow({ where: { id: backlogIssue.id } })).resolvedAt, null);
 
     const repeated = await applyCompletedOptimizationPlan({

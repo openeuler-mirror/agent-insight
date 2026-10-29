@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: `Missing fields: ${missing.join(', ')}` }), { status: 400 });
   }
 
-  const issuesNormalized: SkillOptIssueLite[] = Array.isArray(checkedIssues)
+  const issuesNormalized: SkillOptIssueLite[] = body.optimizationScope !== 'targeted' && Array.isArray(checkedIssues)
     ? checkedIssues
         .filter((it: any) => it && typeof it.id === 'string' && typeof it.summary === 'string')
         .map((it: any) => ({
@@ -352,6 +352,11 @@ export async function POST(req: NextRequest) {
       console.error('[skill-opt route] execution failed:', error);
       try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode: 'error', payload: error instanceof Error ? error.message : String(error) })}\n\n`)); } catch { /* disconnected */ }
     } finally {
+      if (workbenchRun?.recordId) {
+        const { cleanupOptimizationVerificationExperiments } = await import('@/lib/skill-workbench/verification-evidence');
+        await cleanupOptimizationVerificationExperiments({ user, recordId: workbenchRun.recordId })
+          .catch((error) => console.error('[optimization verification cleanup]', error));
+      }
       try { controller.close(); } catch { /* disconnected */ }
     }
   };
@@ -488,6 +493,7 @@ export async function POST(req: NextRequest) {
           skillName,
           baseVersion,
           checkedIssues: issuesNormalized,
+          optimizationRecordId: workbenchRun?.recordId,
           planItems,
           userFeedback: feedback,
           modelId,
@@ -580,6 +586,7 @@ export async function POST(req: NextRequest) {
                 threadId,
                 skillName,
                 baseVersion,
+                optimizationRecordId: workbenchRun.recordId,
                 checkedIssues: blockingIssues.map((issue) => ({
                   id: issue.id,
                   severity: issue.severity,
