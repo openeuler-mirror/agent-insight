@@ -212,7 +212,7 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 
 ### 5.3 可选：跨 Benchmark 共享镜像池
 
-镜像池和提前准备默认开启，同一 Docker daemon 上的不同 Benchmark 和用户共享镜像池。策略在评测机项目 `config/benchmark/evaluator.local.yaml` 设置，例如关闭预取：
+镜像池和提前准备默认开启，同一 Docker daemon 上的不同 Benchmark 和用户共享镜像池。是否进入镜像窗口由评分器实际返回的镜像需求决定：需求为空的评分任务跳过镜像准备，不占用 Case 镜像窗口或创建镜像准备条目，窗口刷新不影响其正常评分；任务校验、评测资产检查、并发和幂等仍生效。需要镜像的任务继续使用窗口、拉取与空间检查；评分器必须返回数组，无镜像时返回空数组，非法返回值报 `IMAGE_POOL_METADATA_INVALID`（HTTP 422，不可重试）。这不表示 Evaluator 服务自身无需容器，也无需为无镜像评分器关闭全局镜像池。策略在评测机项目 `config/benchmark/evaluator.local.yaml` 设置，例如关闭预取：
 
 ```yaml
 imagePool:
@@ -426,6 +426,8 @@ bash scripts/evaluator.sh start \
 如果更新包含 Agent Runtime 或 Collector，在每台执行机重新运行页面生成的客户端安装命令。
 
 回滚时，Agent Insight、Evaluator 和 Agent 执行客户端应回到相互兼容的版本。
+
+停止服务或取消任务的持久化标记不会因重启自动清除。评分接口遇到这些状态返回 HTTP 409，保留 `SERVICE_STOPPED` / `EVALUATION_CANCELLED` 等实际控制原因，`retryable: false`，不应按内部 500 或镜像等待无限重发旧请求。恢复服务后，新任务可正常提交，已取消的旧评测仍须通过平台正式重评/重试入口处理；支持复用既有提交时无需重跑 Agent，不手动删除取消记录绕过状态检查。
 
 ## 10. 安装完成标准
 

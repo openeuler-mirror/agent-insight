@@ -249,7 +249,7 @@ test('a transient image pull failure stays retryable when an evaluation is submi
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'image-pull-retry-api-'))
   const pool = { config: { prefetch: false }, state: { images: {}, operations: {} },
     async initialize() {}, async release() {}, async close() {} }
-  const evaluator = { key: 'swe-bench', benchmarkKey: 'swe-bench', validateJob() {}, describeImages() { return [] } }
+  const evaluator = { key: 'swe-bench', benchmarkKey: 'swe-bench', validateJob() {}, describeImages() { return [{ key: 'pull-retry-image' }] } }
   const service = new BenchmarkEvaluatorService({ dataDir: directory, imagePool: pool,
     registry: new EvaluatorRegistry([evaluator]) }) as any
   let attempts = 0
@@ -1089,7 +1089,7 @@ test('only confirmed disk exhaustion with no other owners or reclaimable images 
   const service = new BenchmarkEvaluatorService({ dataDir: directory, imagePool: pool }) as any
   service.acquireJobImages = async () => { throw Object.assign(new Error('disk full'), { code: 'IMAGE_POOL_SPACE_LOW', actualDiskFull: true }) }
   const request = requestFor('confirmed-space')
-  const evaluator = { describeImages() {} }
+  const evaluator = { describeImages() { return [{ key: 'space-check-image' }] } }
   await assert.rejects(service.prepareBeforeAdmission(request, evaluator), { code: 'IMAGE_POOL_PREPARING' })
   await service.imagePreparations.get(request.runId).task
   await assert.rejects(service.prepareBeforeAdmission(request, evaluator), { code: 'IMAGE_POOL_CASE_CAPACITY_EXCEEDED' })
@@ -1098,4 +1098,122 @@ test('only confirmed disk exhaustion with no other owners or reclaimable images 
   await assert.rejects(service.prepareBeforeAdmission(uncertain, evaluator), { code: 'IMAGE_POOL_PREPARING' })
   await service.imagePreparations.get(uncertain.runId).task
   await assert.rejects(service.prepareBeforeAdmission(uncertain, evaluator), { code: 'IMAGE_POOL_SPACE_LOW' })
+})
+
+test('image-free evaluations complete through HTTP despite occupied and refreshed image windows', { timeout: 10_000 }, async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'evaluator-image-free-'))
+  const { fingerprintJson } = await import('../packages/benchmark-protocol/src/contracts')
+  let release!: () => void
+  const evaluating = new Promise<void>(resolve => { release = resolve })
+  let runs = 0, acquisitions = 0
+  const completions: any[] = []
+  const pool = {
+    config: { prefetch: true }, arch: 'x86_64',
+    state: { windowRevision: 1, windows: { other: { caseIds: ['another-execution'], expiresAt: Date.now() + 60_000 } } },
+    async initialize() {}, async close() {}, async release() {},
+    async acquire() { acquisitions++; throw new Error('image-free task must not acquire images') },
+    async replaceWindows(revision: number) { pool.state = { windowRevision: revision, windows: {} as any }; return { accepted: true } },
+  }
+  const evaluator = {
+    key: 'swe-bench', benchmarkKey: 'swe-bench', validateJob() {}, assertAssetsReady() {},
+    describeImages(payload: any) { return payload.instance.instance_id === 'needs-image' ? [{ key: 'required-image' }] : [] },
+    async evaluate(input: any) {
+      runs++; assert.equal(input.preparedImages, undefined)
+      await evaluating
+      return { completion: { status: 'completed', rawResult: { correct: true }, runtimeFacts: {}, cleanup: { status: 'succeeded' } }, evidenceFiles: [] }
+    },
+  }
+  const service = new BenchmarkEvaluatorService({ dataDir: directory, imagePool: pool,
+    registry: new EvaluatorRegistry([evaluator]),
+    platformClient: {
+      async downloadArtifact() { return Buffer.from('patch') }, async progress() {},
+      async complete(_request: unknown, completion: unknown) { completions.push(completion) },
+    }, cleanupContainers: async () => ({ status: 'succeeded', removedContainerIds: [] }),
+  }) as any
+  const listener = await listen(service.createServer())
+  t.after(async () => { release(); await Promise.allSettled([...service.active.values()]); await listener.close(); await fsp.rm(directory, { recursive: true, force: true }) })
+  const request = requestFor('image-free')
+  const submit = (value = request) => fetch(`${listener.origin}/api/v1/evaluations`, { method: 'POST', headers: headers(value), body: JSON.stringify(value) })
+  assert.equal((await submit()).status, 202)
+  await waitFor(() => runs === 1)
+  assert.equal(service.imagePreparations.size, 0)
+  assert.equal((await submit()).status, 202)
+  const busy = await submit(requestFor('image-free-busy'))
+  assert.equal(busy.status, 409)
+  assert.equal((await busy.json()).error.code, 'SERVICE_BUSY')
+  const refresh = { operation: 'prepare-images', revision: 2, windows: [] }
+  const digest = fingerprintJson(refresh)
+  await service.prepareImageWindow({ ...refresh, requestDigest: digest }, { 'x-agent-insight-request-digest': digest })
+  assert.equal(service.controllers.get(request.runId).signal.aborted, false)
+  release()
+  await waitFor(async () => (await service.journal.state(request.runId))?.stage === 'completed' && service.active.size === 0)
+  assert.equal(completions.length, 1)
+  assert.equal(completions[0].status, 'completed')
+  assert.equal(completions[0].cleanup.controller.status, 'succeeded')
+  assert.equal(acquisitions, 0)
+  assert.equal(runs, 1)
+  const conflict = requestFor(request.runId)
+  conflict.evaluationJob.payload.instance.eval_script = 'changed'
+  conflict.requestDigest = evaluationDispatchDigest(conflict)
+  assert.equal((await submit(conflict)).status, 409)
+  const requiresImage = requestFor('window-required')
+  requiresImage.evaluationJob.payload.instance.instance_id = 'needs-image'
+  requiresImage.requestDigest = evaluationDispatchDigest(requiresImage)
+  const waiting = await submit(requiresImage)
+  assert.equal(waiting.status, 409)
+  assert.equal((await waiting.json()).error.code, 'IMAGE_POOL_PREPARING')
+  assert.equal(acquisitions, 0)
+})
+
+test('malformed image declarations fail explicitly and image-free tasks still validate assets', { timeout: 10_000 }, async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'evaluator-image-declaration-'))
+  const { EvaluatorProtocolError } = loadModule('../services/evaluator/src/evaluator-registry.cjs')
+  const evaluator = { key: 'swe-bench', benchmarkKey: 'swe-bench', validateJob() {}, describeImages(): unknown { return undefined }, assertAssetsReady() {} }
+  const pool = { arch: 'x86_64', state: {}, async initialize() {}, async close() {} }
+  const service = new BenchmarkEvaluatorService({ dataDir: directory, imagePool: pool, registry: new EvaluatorRegistry([evaluator]) }) as any
+  let starts = 0
+  service.start = async () => { starts++ }
+  const listener = await listen(service.createServer())
+  t.after(async () => { await listener.close(); await fsp.rm(directory, { recursive: true, force: true }) })
+  const request = requestFor('invalid-image-declaration')
+  const submit = () => fetch(`${listener.origin}/api/v1/evaluations`, { method: 'POST', headers: headers(request), body: JSON.stringify(request) })
+  for (const value of [undefined, null, {}]) {
+    evaluator.describeImages = () => value
+    const response = await submit()
+    assert.equal(response.status, 422)
+    assert.equal((await response.json()).error.code, 'IMAGE_POOL_METADATA_INVALID')
+  }
+  evaluator.describeImages = () => []
+  evaluator.assertAssetsReady = () => { throw new EvaluatorProtocolError('ASSETS_NOT_READY', 'assets pending', 503, true) }
+  const pending = await submit()
+  assert.equal(pending.status, 503)
+  assert.equal((await pending.json()).error.code, 'ASSETS_NOT_READY')
+  assert.equal(starts, 0)
+})
+
+test('stopped and cancelled tasks retain explicit HTTP errors after Controller restart', { timeout: 10_000 }, async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'evaluator-control-errors-'))
+  const options = { dataDir: directory, imagePoolConfig: { enabled: false }, registry: new EvaluatorRegistry([{ key: 'swe-bench', benchmarkKey: 'swe-bench', validateJob() {} }]) }
+  const previous = new BenchmarkEvaluatorService(options) as any
+  await previous.control.cancel('old-stopped-task', 'SERVICE_STOPPED')
+  await previous.control.cancel('old-cancelled-task')
+  await previous.control.stop()
+  const service = new BenchmarkEvaluatorService(options) as any
+  let starts = 0
+  service.start = async () => { starts++ }
+  const listener = await listen(service.createServer())
+  t.after(async () => { await listener.close(); await fsp.rm(directory, { recursive: true, force: true }) })
+  const submit = (id: string) => { const request = requestFor(id); return fetch(`${listener.origin}/api/v1/evaluations`, { method: 'POST', headers: headers(request), body: JSON.stringify(request) }) }
+  const stopped = await submit('new-task')
+  assert.equal(stopped.status, 409)
+  assert.deepEqual((await stopped.json()).error, { code: 'SERVICE_STOPPED', message: '评测服务或任务已主动停止', retryable: false })
+  await service.control.resume()
+  for (const [id, code] of [['old-stopped-task', 'SERVICE_STOPPED'], ['old-cancelled-task', 'EVALUATION_CANCELLED']]) {
+    const response = await submit(id)
+    assert.equal(response.status, 409)
+    assert.equal((await response.json()).error.code, code)
+  }
+  assert.equal(starts, 0)
+  assert.equal((await submit('new-task')).status, 202)
+  assert.equal(starts, 1)
 })

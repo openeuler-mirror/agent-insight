@@ -31,7 +31,7 @@ const {
 } = require('./evaluator-registry.cjs')
 const { EvaluationJobJournal, atomicWriteJson } = require('./job-journal.cjs')
 const { BenchmarkImagePool, imagePoolConfig } = require('./image-pool.cjs')
-const { ServiceControl } = require('./service-control.cjs')
+const { ServiceControl, ServiceControlError } = require('./service-control.cjs')
 const { EvaluatorAssetError } = require('./evaluator-assets.cjs')
 const { AgentInsightPlatformClient, PlatformClientError, sha256 } = require('./platform-client.cjs')
 
@@ -75,6 +75,12 @@ function evaluationDispatchDigest(request) {
 
 function evaluatorError(code, message, status = 422, retryable = false) {
   return new EvaluatorProtocolError(code, message, status, retryable)
+}
+
+async function describeRequiredImages(evaluator, payload, arch) {
+  const specs = await evaluator.describeImages(payload, arch)
+  if (!Array.isArray(specs)) throw evaluatorError('IMAGE_POOL_METADATA_INVALID', '评分器镜像需求必须为数组；无需镜像时返回空数组')
+  return specs
 }
 
 function validateOriginUrl(value, code) {
@@ -163,7 +169,7 @@ function json(res, status, value) {
 function errorResponse(res, error) {
   const imagePoolError = error instanceof Error && /^IMAGE_POOL_[A-Z_]+$/.test(error.code)
     && error.status === 503 && typeof error.retryable === 'boolean'
-  const known = error instanceof EvaluatorProtocolError || error instanceof PlatformClientError || error instanceof EvaluatorAssetError || imagePoolError
+  const known = error instanceof EvaluatorProtocolError || error instanceof PlatformClientError || error instanceof EvaluatorAssetError || error instanceof ServiceControlError || imagePoolError
   if (!known) console.error('[benchmark/evaluator]', error)
   json(res, imagePoolError && !error.retryable ? 422 : known ? error.status : 500, {
     error: {
@@ -314,7 +320,7 @@ class BenchmarkEvaluatorService {
         const cases = []
         for (let index = 0; index < window.cases.length; index++) {
           try {
-            specs.push(...await evaluator.describeImages(window.cases[index], this.imagePool.arch))
+            specs.push(...await describeRequiredImages(evaluator, window.cases[index], this.imagePool.arch))
             caseIds.push(window.caseIds[index])
             cases.push(window.cases[index])
           } catch (error) {
@@ -346,7 +352,7 @@ class BenchmarkEvaluatorService {
     const evaluator = this.registry.get(request.evaluatorKey, request.benchmarkKey)
     await this.imagePool.initialize()
     const specs = []
-    for (const item of request.cases) specs.push(...await evaluator.describeImages(item, this.imagePool.arch))
+    for (const item of request.cases) specs.push(...await describeRequiredImages(evaluator, item, this.imagePool.arch))
     return this.withAdmission(async () => {
       const key = JSON.stringify([request.benchmarkKey, request.experimentId])
       const reserved = Object.entries(this.imagePool.state?.windows || {}).filter(([other, window]) => other !== key && window.expiresAt > Date.now())
@@ -361,7 +367,8 @@ class BenchmarkEvaluatorService {
     if (!this.imagePool || !evaluator.describeImages) return
     await this.imagePool.initialize?.()
     // Validate permanent metadata errors before window selection, or an excluded Case waits forever.
-    await evaluator.describeImages(request.evaluationJob.payload, this.imagePool.arch)
+    const specs = await describeRequiredImages(evaluator, request.evaluationJob.payload, this.imagePool.arch)
+    if (!specs.length) return
     if (this.imagePool.state?.windowRevision !== undefined) {
       const selected = Object.values(this.imagePool.state.windows).some((window) => window.expiresAt > Date.now() && window.caseIds?.includes(request.evaluationJob.executionRunId))
       if (!selected) throw evaluatorError('IMAGE_POOL_PREPARING', '等待进入镜像准备窗口', 409, true)
@@ -403,7 +410,7 @@ class BenchmarkEvaluatorService {
   async acquireJobImages(request, evaluator, signal) {
     if (!this.imagePool || !evaluator.describeImages) return undefined
     await this.imagePool.initialize()
-    let specs = await evaluator.describeImages(request.evaluationJob.payload, this.imagePool.arch)
+    let specs = await describeRequiredImages(evaluator, request.evaluationJob.payload, this.imagePool.arch)
     if (!specs.length) return undefined
     const frozenPath = path.join(this.journal.jobDir(request.runId), 'pool-images.json')
     const frozen = await this.journal.readJson(frozenPath)
