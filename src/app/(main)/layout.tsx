@@ -20,7 +20,7 @@ import { AppSidebar } from '@/components/shell/AppSidebar';
 import { useSidebar } from '@/lib/client/sidebar-context';
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
-    const { isCollapsed } = useSidebar();
+    useSidebar();
     
     return (
         <div style={{ display: 'flex', height: '100vh', background: 'var(--background)', overflow: 'hidden' }}>
