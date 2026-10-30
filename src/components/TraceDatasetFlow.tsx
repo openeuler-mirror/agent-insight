@@ -15,7 +15,7 @@
  */
 
 'use client';
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { apiFetch } from '@/lib/client/api';
 import { EXCLUSION_REASONS, STAGE_LABELS, type GenerationConfig, type GenerationProgress } from '@/lib/trace-datasets/contracts';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -75,10 +75,11 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
   const oldId = useRef(replaceId);
   const pending = useRef<{ fingerprint: string; config: GenerationConfig } | null>(null);
   const changeRef = useRef(onChange);
-  // 渲染期写 ref 违反 react-hooks/refs（并发渲染下被丢弃的 render 也会写入）；
-  // 这两个 ref 只在 effect/事件回调里读取，提交后同步即可。
-  useEffect(() => { currentId.current = id; }, [id]);
-  useEffect(() => { changeRef.current = onChange; });
+  // 渲染期写 ref 违反 react-hooks/refs（并发渲染下被丢弃的 render 也会写入）。
+  // 用 useLayoutEffect 在提交阶段同步：pagehide 处理器与轮询/提交的异步续体
+  // 都可能在新状态提交后、passive effect 执行前读取这些 ref。
+  useLayoutEffect(() => { currentId.current = id; }, [id]);
+  useLayoutEffect(() => { changeRef.current = onChange; });
   useEffect(() => {
     clearTimeout(releaseTimer.current);
     const release = () => {
@@ -108,7 +109,7 @@ export default function TraceDatasetFlow({ initialId, initialName, initialConfig
     finally { setClosing(false); setBusy(false); }
   };
   const finishCleanup = useRef<() => void>(() => {});
-  useEffect(() => {
+  useLayoutEffect(() => {
     finishCleanup.current = () => {
       changeRef.current(); setExternalDeleting(false); setCleanupFailed(false);
       const c = progress?.generationConfig;
