@@ -25,7 +25,7 @@ import { TraeConfig } from '../extension'
 // Lazy-loaded (see countTokens) — the cl100k_base ranks file is ~1MB and only
 // needed when building usage; falls back to language-aware estimation if the
 // model registry is unavailable.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const tiktoken = require('js-tiktoken')
 
 export interface UploadResult { ok: boolean; status: number; body: string }
