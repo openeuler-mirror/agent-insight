@@ -291,3 +291,39 @@ LLM、Tool、MCP 和 Skill 仍使用本页既有 canonical 属性；读取 `SKIL
 | 1.2 | 2026-08-11 | 新增 Pi Agent canonical span 与 Adapter 映射 |
 | 1.0 | 2026-07-14 | 初版，定义 OTLP 属性契约 (FR-011) |
 [//]: # (Codex canonical traces use agent.insight.framework=codex and redact inline secrets and local paths before spool persistence while preserving numeric usage fields.)
+
+## Dify 原生 Workflow 属性映射
+
+Dify 1.18.0 原生 OTLP（非应用内 Langfuse SDK）由 `service.name=langgenius/dify` 或 `gen_ai.framework=dify` 识别；显式声明其他 `agent.insight.framework` 的 Span 保留其原归属，混合请求按 Span 分流。
+
+| 原生字段 | Agent Insight 语义 |
+| --- | --- |
+| `traceId` / `spanId` / `parentSpanId` | 以 `dify:<traceId>` 隔离聚合，保留原始 Trace ID、节点身份与父子关系；不按 `node.id` 去重 |
+| `node.type` / `node.execution_id` | 业务节点类型及执行身份；LLM、Tool、控制流分别处理 |
+| `gen_ai.input.messages`，回退 `gen_ai.prompt` | 保留 role 的文本请求消息 |
+| `gen_ai.completion` / `output.value.text` | 模型正文；End 节点输出作为工作流结果 |
+| `gen_ai.request.model`、`gen_ai.usage.input_tokens/output_tokens/total_tokens` | 模型和 LLM 节点用量；控制流不累加 Token |
+| `status.code/message`、`events` | 节点状态、错误描述与原始事件；缓存在规范事件中 |
+| Start `output.value` 中 `sys.*` | 原生运行与会话标识，保留于节点输出，当前不跨 Trace 合并 |
+| `services.workflow_run_agg.WorkflowRunAgg.run` | Workflow 执行范围；根 Span 结束并有 End 节点或显式错误才标记完成 |
+
+接收归属使用服务端验证过的 API Key 用户，客户端的 `gen_ai.user.id` 不覆盖该归属。无内容时不生成模型正文；未收到根结束证据时不从最后一个子 Span 推断完成。配置、范围与待验证场景见 [Dify 原生 OTLP 接入](../../how-to/observability/develop-trace-collector.md#dify-原生-otlp-接入)。
+
+补充实测限制：Chatflow 通过 Answer 节点返回回答，当前完成判定尚不接受该节点。两轮真实任务的消息、历史和用量已验证，但 Session 完成时间为空，界面会显示执行中/观测超时；不能把消息和 Token 正常视为该场景已完成验收。
+
+
+### Dify Agent trajectory 属性映射
+
+识别 `service.name=dify-agent-trajectory`，或带有 `dify.agent_id` 的 Span；显式其他框架归属优先。基础设施和 Logfire `pending_span` 不计入 Dify 业务轨迹。
+
+| 原生字段 | Agent Insight 语义 |
+| --- | --- |
+| `gen_ai.operation.name=invoke_agent/chat/execute_tool` | Agent 执行范围、模型调用、工具执行 |
+| `gen_ai.agent.name`、`final_result` | Agent 名称与最终结果 |
+| `gen_ai.system_instructions`、`gen_ai.input.messages[].parts` | 系统提示、文本、模型发起的工具调用及 `tool_call_response`；响应转为带调用 ID 的 tool 消息 |
+| `gen_ai.output.messages[].parts` | `text` 作为正文，`thinking`/`reasoning` 作为独立推理详情，`tool_call` 作为模型的工具请求 |
+| `gen_ai.tool.name`、`gen_ai.tool.call.id/arguments/result` | 工具名、调用 ID、参数、结果；唯一匹配模型输出的调用 ID 才建立展示归属，原始父 Span 仍保留 |
+| `gen_ai.usage.*` | 仅模型节点计量；`gen_ai.aggregated_usage.*` 不重复累计 |
+| `dify.trace_id`、`dify.agent_id` | 关联与身份元数据；不替代实际 OTLP Trace ID；Workflow 关联另用节点执行 ID |
+
+已结束的 `invoke_agent` 根 Span 提供完成证据；无根节点时保留部分轨迹。内容导出关闭时仍保留调用数、用量及状态，不生成虚构消息或工具结果。范围为已检出版本的原生 trajectory 管线；SDK 单 Agent 已实测；跨 Trace 关联使用同用户、租户、应用与 `node.execution_id` / `dify.node.execution_id` 精确匹配，并保留独立 Trace 与重试身份。详情查询的 JSON 投影不改写原始记录；已通过原生 Workflow 中两名 Agent v2 串行编排的真实 DeepSeek 运行及浏览器验证；环境为支持 Landlock ABI 8 的 Docker Desktop 4.97.0。工具 Workflow 自身的内部 Trace 仍独立保存，不递归挂到 Agent 的工具节点之下。

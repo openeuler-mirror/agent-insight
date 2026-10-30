@@ -220,18 +220,140 @@ interface AgentEventTreeEntry {
 
 function buildAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
     const entries = events.map((event, eventIndex) => ({ event, eventIndex, children: [] as AgentEventTreeEntry[] }));
+    type Entry = typeof entries[number];
+    type SourceInteraction = RawInteraction & { traceId?: string; spanId?: string; parentSpanId?: string; content_blocks?: unknown[] };
+    const source = (entry: Entry): SourceInteraction => entry.event.interaction || {} as RawInteraction;
+    const trace = (entry: Entry) => source(entry).traceId;
+    const sameTrace = (left: Entry, right: Entry) => !trace(left) || !trace(right) || trace(left) === trace(right);
     const bySpanId = new Map(entries
         .filter(entry => entry.event.sourceSpanId)
         .map(entry => [entry.event.sourceSpanId as string, entry]));
-    const roots: AgentEventTreeEntry[] = [];
+    const parents = new Map<Entry, Entry>();
     for (const entry of entries) {
         const parent = entry.event.parentSourceSpanId
             ? bySpanId.get(entry.event.parentSourceSpanId)
             : undefined;
-        if (parent && parent !== entry) parent.children.push(entry);
+        if (parent && parent !== entry) parents.set(entry, parent);
+    }
+    const byCall = new Map<string, Array<{ entry: Entry; name?: string }>>();
+    const byMessage = new Map<RawInteraction, Map<string, Array<{ entry: Entry; name?: string }>>>();
+    const byRawSpan = new Map<string, Entry[]>();
+    const spanKey = (traceId: string, spanId: string) => JSON.stringify([traceId, spanId]);
+    for (const entry of entries) {
+        if (entry.event.kind !== 'llm' || source(entry).trace_synthetic) continue;
+        const interaction = source(entry);
+        const blocks = [...(interaction.parts || []), ...(Array.isArray(interaction.content_blocks) ? interaction.content_blocks : [])];
+        const declarations: Array<{ id: string; name?: string }> = [];
+        for (const block of blocks) {
+            if (!block || typeof block !== 'object') continue;
+            const value = block as Record<string, unknown>;
+            const id = value.type === 'tool' ? value.callID : value.type === 'tool_use' ? value.id : undefined;
+            const name = value.type === 'tool' ? value.tool : value.name;
+            if (typeof id === 'string' && id) declarations.push({ id, name: typeof name === 'string' ? name : undefined });
+        }
+        // Projection LLM tool_calls come from the response; ordinary adapter groupings may be time-based.
+        if (entry.event.sourceSpanId) {
+            for (const call of interaction.tool_calls || []) {
+                if (call.id) declarations.push({ id: call.id, name: call.function?.name || call.name });
+            }
+        }
+        if (interaction.traceId && interaction.spanId
+            && (!interaction.tool_calls?.length || entry.event.sourceSpanId || declarations.length)) {
+            const key = spanKey(interaction.traceId, interaction.spanId);
+            byRawSpan.set(key, [...(byRawSpan.get(key) || []), entry]);
+        }
+        const declaredKeys = new Set<string>();
+        for (const declaration of declarations) {
+            const key = JSON.stringify([declaration.id, declaration.name]);
+            if (declaredKeys.has(key)) continue;
+            declaredKeys.add(key);
+            const candidate = { entry, name: declaration.name };
+            const candidates = byCall.get(declaration.id) || [];
+            candidates.push(candidate);
+            byCall.set(declaration.id, candidates);
+            const message = byMessage.get(entry.event.interaction) || new Map();
+            message.set(declaration.id, [...(message.get(declaration.id) || []), candidate]);
+            byMessage.set(entry.event.interaction, message);
+        }
+    }
+    for (const entry of entries) {
+        if (entry.event.kind !== 'tool' || entry.event.spawnedChildId) continue;
+        const candidates = new Set<Entry>();
+        const existing = parents.get(entry);
+        if (existing?.event.kind === 'llm') candidates.add(existing);
+        const interaction = source(entry);
+        if (interaction.traceId && interaction.parentSpanId) {
+            const spans = byRawSpan.get(spanKey(interaction.traceId, interaction.parentSpanId)) || [];
+            if (spans.length === 1 && spans[0] !== entry) candidates.add(spans[0]);
+        }
+        const callId = entry.event.toolCallId;
+        const matches = (candidate: { entry: Entry; name?: string }) => sameTrace(candidate.entry, entry)
+            && (!candidate.name || !entry.event.name || candidate.name === entry.event.name);
+        const local = (callId ? byMessage.get(entry.event.interaction)?.get(callId) || [] : [])
+            .filter(candidate => candidate.entry.event.interactionIndex === entry.event.interactionIndex && sameTrace(candidate.entry, entry));
+        const owners = new Set<Entry>();
+        let conflict = false;
+        for (const candidate of local.length ? local : callId ? byCall.get(callId) || [] : []) {
+            if (!sameTrace(candidate.entry, entry)) continue;
+            if (matches(candidate)) owners.add(candidate.entry);
+            else conflict = true;
+            if (owners.size > 1) break;
+        }
+        if (conflict || owners.size > 1) continue;
+        if (owners.size === 1) candidates.add([...owners][0]);
+        if (candidates.size !== 1) continue;
+        const parent = [...candidates][0];
+        const seen = new Set<Entry>([entry]);
+        let ancestor: Entry | undefined = parent;
+        while (ancestor && !seen.has(ancestor)) {
+            seen.add(ancestor);
+            ancestor = parents.get(ancestor);
+        }
+        if (!ancestor) parents.set(entry, parent);
+    }
+    const roots: AgentEventTreeEntry[] = [];
+    for (const entry of entries) {
+        const parent = parents.get(entry);
+        if (parent) parent.children.push(entry);
         else roots.push(entry);
     }
     return roots;
+}
+
+type TraceTreeFilters = { treeKindFilter: string; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
+
+function traceAgentMatchesFilters(node: AgentNode, filters: TraceTreeFilters): boolean {
+    if (filters.treeKindFilter !== 'all' || !filters.searchQuery || !filters.matchedKeys.has(agentKey(node.id))) return false;
+    const duration = node.stats.durationMs;
+    if (filters.minDurationMs > 0 && (duration == null || duration <= filters.minDurationMs)) return false;
+    if (filters.ctxSlowOnly && !(duration != null && duration > SLOW_MS)) return false;
+    if (filters.minTokenK > 0 && aggregateSubtreeStats(node).totalTokens < filters.minTokenK * 1000) return false;
+    return true;
+}
+
+function traceEventMatchesFilters(
+    event: AgentEvent, index: number, owner: string, nodes: ReadonlyMap<string, AgentNode>, filters: TraceTreeFilters,
+): boolean {
+    const child = event.spawnedChildId ? nodes.get(event.spawnedChildId) : undefined;
+    const duration = event.kind === 'task' ? child?.stats?.durationMs
+        : event.startedAt != null && event.completedAt != null ? event.completedAt - event.startedAt : undefined;
+    if (filters.treeKindFilter !== 'all' && event.kind !== filters.treeKindFilter) return false;
+    if (filters.minDurationMs > 0 && (duration == null || duration <= filters.minDurationMs)) return false;
+    if (filters.minTokenK > 0 && (event.usage?.total || 0) < filters.minTokenK * 1000) return false;
+    if (filters.ctxSlowOnly && !(duration != null && duration > SLOW_MS)) return false;
+    if (filters.searchQuery && !filters.matchedKeys.has(eventKey(owner, index))) return false;
+    return true;
+}
+
+function agentEventTreeMatches(
+    entry: AgentEventTreeEntry, owner: string, nodes: ReadonlyMap<string, AgentNode>,
+    matches: (event: AgentEvent, index: number, owner: string) => boolean,
+    matchesAgent: (node: AgentNode) => boolean = () => false,
+): boolean {
+    if (matches(entry.event, entry.eventIndex, owner)) return true;
+    if (entry.children.some(child => agentEventTreeMatches(child, owner, nodes, matches, matchesAgent))) return true;
+    const agent = entry.event.spawnedChildId ? nodes.get(entry.event.spawnedChildId) : undefined;
+    return !!agent && (matchesAgent(agent) || buildAgentEventTree(agent.events).some(child => agentEventTreeMatches(child, agent.id, nodes, matches, matchesAgent)));
 }
 
 // 复制统一走共享 util(modern clipboard + execCommand fallback,兼容 http 部署)
@@ -1385,16 +1507,11 @@ function UnifiedSpanTree({
 
         const hasChildren = entry.children.length > 0 || !!childNode;
         const isEvExpanded = hasChildren && expandedKeys.has(evKey);
-        const evDur = ev.kind === 'task'
-            ? childNode?.stats.durationMs
-            : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
-        const evTok = ev.usage?.total || 0;
-        const evIsSlow = (evDur ?? 0) > SLOW_MS;
-        if (treeKindFilter !== 'all' && ev.kind !== treeKindFilter) return null;
-        if (minDurationMs > 0 && (evDur == null || evDur <= minDurationMs)) return null;
-        if (minTokenK > 0 && evTok < minTokenK * 1000) return null;
-        if (ctxSlowOnly && !evIsSlow) return null;
-        if (searchQuery && !matchedKeys.has(evKey)) return null;
+        const filters = { treeKindFilter, minDurationMs, minTokenK, ctxSlowOnly, searchQuery, matchedKeys };
+        if (!agentEventTreeMatches(entry, node.id, nodeMap,
+            (event, index, owner) => traceEventMatchesFilters(event, index, owner, nodeMap, filters),
+            agent => traceAgentMatchesFilters(agent, filters),
+        )) return null;
 
         const descendantPrefixBits = [...eventPrefixBits, !eventIsLast];
         return (
@@ -2118,7 +2235,7 @@ function buildLlmPromptSnapshot(
 function reportedRequestMessagesSourceForFramework(framework?: string): 'langfuse' | 'actrail' | null {
     const normalized = framework?.trim().toLowerCase();
     if (normalized === 'actrail') return 'actrail';
-    if (normalized === 'langfuse-langgraph') return 'langfuse';
+    if (normalized === 'langfuse-langgraph' || normalized === 'dify') return 'langfuse';
     if (normalized === 'qwenpaw') return null;
     return null;
 }
@@ -2646,7 +2763,16 @@ function formatClockMs(ts?: number): string | null {
     return `${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
-/** 可点击复制的 id 芯片(toolCallId 等)。 */
+function eventDetailIdentifier(event: AgentEvent): { label: string; value: string } | null {
+    if (['tool', 'skill', 'task'].includes(event.kind) && event.toolCallId) {
+        return { label: 'Tool Call ID', value: event.toolCallId };
+    }
+    const spanId = event.sourceSpanId || (event.interaction as RawInteraction & { spanId?: string } | undefined)?.spanId;
+    if (!spanId) return null;
+    const prefix = event.sourceTraceId ? `${event.sourceTraceId}:` : '';
+    return { label: 'Span ID', value: prefix && spanId.startsWith(prefix) ? spanId.slice(prefix.length) : spanId };
+}
+
 function CopyableId({ label, value }: { label: string; value: string }) {
     const [copied, setCopied] = useState(false);
     return (
@@ -2662,7 +2788,7 @@ function CopyableId({ label, value }: { label: string; value: string }) {
             }}
             className="font-mono text-[0.625rem] px-1.5 py-px rounded-sm border border-border bg-background-secondary text-foreground-secondary hover:border-primary hover:text-primary cursor-pointer shrink-0"
         >
-            {value} {copied ? '✓' : '⧉'}
+            {label}: {value} {copied ? '✓' : '⧉'}
         </button>
     );
 }
@@ -2769,6 +2895,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
     const endClock = formatClockMs(event.completedAt);
     const title = event.name || firstMeaningfulLine(event.summary) || km.label;
     const hasError = isErrorToolStatus(event.toolStatus);
+    const identifier = eventDetailIdentifier(event);
     const spawnedChild = event.kind === 'task' && event.spawnedChildId
         ? node.children.find(c => c.id === event.spawnedChildId)
         : undefined;
@@ -2819,7 +2946,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                             <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
                         </span>
                     )}
-                    {event.toolCallId && <CopyableId label="toolCallId" value={event.toolCallId} />}
+                    {identifier && <CopyableId label={identifier.label} value={identifier.value} />}
                 </div>
             </div>
 

@@ -21,6 +21,26 @@ export type FrameworkOption = {
 
 export type GoalPlusHost = 'pi';
 
+export function difyOtlpConfiguration(endpoint: string, apiKey: string) {
+  if (!endpoint || !apiKey) return { workflow: '', agent: '' };
+  return {
+    workflow: [
+      'ENABLE_OTEL=true',
+      'OTEL_EXPORTER_OTLP_PROTOCOL=http',
+      `OTLP_TRACE_ENDPOINT=${JSON.stringify(endpoint)}`,
+      'OTLP_API_KEY=',
+      `OTEL_EXPORTER_OTLP_TRACES_HEADERS=${JSON.stringify(`x-witty-api-key=${encodeURIComponent(apiKey)}`)}`,
+      'OTEL_SAMPLING_RATE=1.0',
+    ].join('\n'),
+    agent: [
+      'DIFY_AGENT_TRAJECTORY_ENABLED=true',
+      `DIFY_AGENT_TRAJECTORY_OTLP_TRACES_ENDPOINT=${JSON.stringify(endpoint)}`,
+      `DIFY_AGENT_TRAJECTORY_OTLP_HEADERS=${JSON.stringify(JSON.stringify({ 'x-witty-api-key': apiKey }))}`,
+      'DIFY_AGENT_TRAJECTORY_INCLUDE_CONTENT=true',
+    ].join('\n'),
+  };
+}
+
 export const FRAMEWORK_OPTIONS: readonly FrameworkOption[] = [
   { value: 'opencode', label: 'OpenCode' },
   { value: 'openclaw', label: 'OpenClaw' },
