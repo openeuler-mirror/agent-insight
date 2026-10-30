@@ -27,7 +27,7 @@ import {
   MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
   TRIGGER_STARTUP_TIMEOUT_SECONDS,
 } from '@/lib/engine/experiment/constants';
-import { listClientTraceGenerationTargets, listClientTraceGenerationAvailability } from '@/lib/engine/experiment/execution-targets';
+import { listClientTraceGenerationAvailability } from '@/lib/engine/experiment/execution-targets';
 import { createCommand, getCommand, markSent } from '@/lib/reliability/command-bus';
 import { dispatchCommand } from '@/lib/reliability/control-dispatch';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';

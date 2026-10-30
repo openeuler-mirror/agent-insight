@@ -178,7 +178,6 @@ export function ExecutionRecordsTable({
                 }
             }
         } catch {/* ignore */}
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
     const startResize = (key: ColKey) => (e: React.MouseEvent) => {
         e.preventDefault();

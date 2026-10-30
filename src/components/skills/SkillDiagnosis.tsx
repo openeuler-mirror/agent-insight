@@ -77,9 +77,10 @@ export function SkillDiagnosis({ taskId }: Props) {
             .catch(() => setState('error'));
     }, [user, taskId]);
 
+    const judgmentReason = record?.judgment_reason;
     const evalItems = useMemo(
-        () => (record?.judgment_reason ? parseEvaluationItemsFromReason(record.judgment_reason) : []),
-        [record?.judgment_reason],
+        () => (judgmentReason ? parseEvaluationItemsFromReason(judgmentReason) : []),
+        [judgmentReason],
     );
 
     const invokedSkills = useMemo(() => {

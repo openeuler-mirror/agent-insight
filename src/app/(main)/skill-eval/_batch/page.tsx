@@ -82,34 +82,6 @@ interface SkillVersionOption {
     isCurrent?: boolean;
 }
 
-interface GrayscaleTask {
-    id: string;
-    user: string;
-    taskName: string;
-    createdAt: string;
-    configJson?: {
-        skillId?: string;
-        versionAId?: string;
-        versionBId?: string;
-        queryMode?: 'manual' | 'dataset';
-        query?: string;
-        selectedDatasetId?: string;
-        selectedCaseId?: string;
-        taskDescription?: string;
-    };
-    caseStatesJson?: { a: PerVersionState; b: PerVersionState };
-}
-
-interface PerVersionState {
-    status: CaseStatus;
-    jobId?: string;
-    timeCost?: string;
-    tokenUsage?: number;
-    output?: string;
-    sessionId?: string;
-    score?: number;
-}
-
 type CaseStatus = 'pending' | 'running' | 'executed' | 'evaluating' | 'pass' | 'fail';
 
 interface CaseState {
@@ -235,7 +207,6 @@ export function BatchEvaluation({
     const [isEditingTask, setIsEditingTask] = useState(false);
     const [taskNameInput, setTaskNameInput] = useState('');
     const [taskDescInput, setTaskDescInput] = useState('');
-    const [isEditingDesc, setIsEditingDesc] = useState(false);
     const [isCreatingTask, setIsCreatingTask] = useState(false);
 
 
@@ -274,7 +245,6 @@ export function BatchEvaluation({
     const [selectedEvaluatorIds, setSelectedEvaluatorIds] = useState<string[]>(
         () => [...DEFAULT_SELECTED_PRESET_IDS],
     );
-    const [showEvalDropdown, setShowEvalDropdown] = useState(false);
 
     // 评测任务(批次)列表 —— 供"选历史评测任务" (EvalTaskPicker)。
     const [evalTasks, setEvalTasks] = useState<Array<{ runId: string; taskTitle?: string; traceCount?: number; doneCount?: number; runningCount?: number; createdAt?: string }>>([]);
@@ -319,7 +289,6 @@ export function BatchEvaluation({
 
     // Source mode: 'dataset' (existing flow) | 'trace' (evaluate from real executions)
     const [sourceMode, setSourceMode] = useState<'dataset' | 'trace'>('dataset');
-    const [showSourceDropdown, setShowSourceDropdown] = useState(false);
 
     // Trace mode filters
     const [traceSkillId, setTraceSkillId] = useState('');
@@ -333,7 +302,7 @@ export function BatchEvaluation({
     // Modal state
     const [showDatasetModal, setShowDatasetModal] = useState(false);
     const [showSkillModal, setShowSkillModal] = useState(false);
-    const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
+    const [, setShowHistoryDropdown] = useState(false);
     const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
     const [showTraceDatasetModal, setShowTraceDatasetModal] = useState(false);
     const [showTraceSkillModal, setShowTraceSkillModal] = useState(false);
@@ -345,12 +314,6 @@ export function BatchEvaluation({
     const [configSecOpen, setConfigSecOpen] = useState(true);
     const [execSecOpen, setExecSecOpen] = useState(false);
     const [resultSecOpen, setResultSecOpen] = useState(true);
-
-    // Refs for dropdown fixed positioning (avoids overflow:hidden clipping)
-    const sourceChipRef = useRef<HTMLButtonElement>(null);
-    const evalChipRef = useRef<HTMLButtonElement>(null);
-    const [sourceDropdownPos, setSourceDropdownPos] = useState({ top: 0, left: 0 });
-    const [evalDropdownPos, setEvalDropdownPos] = useState({ top: 0, left: 0 });
 
     // Filter & selection
     const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'executed' | 'evaluated' | 'failed'>('all');
@@ -620,15 +583,6 @@ export function BatchEvaluation({
             setShowHistoryDrawer(true);
         }
     }, [historyPanelTrigger]);
-
-    const handleSaveDesc = async () => {
-        if (!currentTask || !user) return;
-        const desc = taskDescInput.trim();
-        const cfg = { ...currentConfigRef.current, taskDescription: desc };
-        setIsEditingDesc(false);
-        await persistTaskUpdate(currentTask.id, cfg).catch(() => {});
-        setCurrentTask(prev => prev ? { ...prev, configJson: { ...(prev.configJson || {}), taskDescription: desc } } : prev);
-    };
 
     const handleSelectHistoryTask = (t: BatchEvalTask) => {
         setCurrentTask(t);
@@ -1604,7 +1558,6 @@ export function BatchEvaluation({
             : selectedDatasetIds.length === 1
                 ? (datasets.find(d => d.id === selectedDatasetIds[0])?.name || '未选数据集')
                 : `${selectedDatasetIds.length} 个数据集`);
-    const evaluatorName = [...BUILT_IN_EVALUATORS, ...userEvaluators].find(e => e.id === selectedEvaluatorId)?.name || selectedEvaluatorId;
     const totalCount = sourceMode === 'trace' ? traceRecords.length : allCases.length;
 
     // ② 执行块 summary：已执行/已评测/通过率
@@ -2037,9 +1990,6 @@ export function BatchEvaluation({
                             ) : traceRecords.filter(r => !searchQuery || r.query?.toLowerCase().includes(searchQuery.toLowerCase())).map((record, idx) => {
                                 const key = record.upload_id || record.task_id || `trace_${idx}`;
                                 const evalState = traceEvalStates[key];
-                                const isEvaluating = evalState?.status === 'evaluating';
-                                const isDone = evalState?.status === 'done';
-                                const isFail = evalState?.status === 'fail';
                                 const skillNames: string[] = (() => {
                                     try { const s = typeof record.skills === 'string' ? JSON.parse(record.skills) : record.skills; return Array.isArray(s) ? s.map((x: any) => typeof x === 'string' ? x : x?.name || '').filter(Boolean) : []; } catch { return []; }
                                 })();
@@ -2119,15 +2069,7 @@ export function BatchEvaluation({
                                 const state = caseStates[c.id];
                                 const status: CaseStatus = state?.status || 'pending';
                                 const isRunning = status === 'running';
-                                const isEvaluating = status === 'evaluating';
-                                const isPass = status === 'pass';
                                 const isFail = status === 'fail';
-                                const isExecuted = status === 'executed';
-                                const isDone = isPass || isFail;
-                                const canExecute = status === 'pending';
-                                // allow re-execute from completed states, but not while running or evaluating
-                                const canReExecute = isExecuted || isDone;
-                                const canEvaluate = isExecuted;
 
                                 return (
                                     <tr key={c.id} className={!controlled && isFail ? 'row-fail' : ''}>

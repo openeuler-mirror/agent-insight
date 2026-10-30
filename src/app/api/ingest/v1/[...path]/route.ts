@@ -51,7 +51,7 @@ export async function POST(
             method: 'POST',
             headers: headers,
             body: request.body as any,
-            // @ts-ignore
+            // @ts-expect-error duplex 是 Node fetch 流式上传选项，TS 的 RequestInit 类型尚未收录
             duplex: 'half'
         });
 

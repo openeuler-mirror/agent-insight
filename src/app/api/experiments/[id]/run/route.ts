@@ -284,10 +284,20 @@ export async function POST(
           recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
           void (async () => {
             try {
+              let stillActive = true;
               const bound = await awaitFiSessionsAndBindExperimentCases({
                 runIds,
                 timeoutMs: waitMs,
+                waitForActiveRuns: true,
+                shouldContinue: async () => {
+                  stillActive = Boolean(await prisma.experiment.findFirst({
+                    where: { id, user: username, deletedAt: null, status: { not: 'cancelled' } },
+                    select: { id: true },
+                  }));
+                  return stillActive;
+                },
               });
+              if (!stillActive) return;
               if (bound.pendingRunIds.length || bound.failedRunIds.length) {
                 console.warn('[experiment-run] FI session bind incomplete', {
                   experimentId: id,
@@ -303,7 +313,7 @@ export async function POST(
                 .map((item) => item.caseId);
               if (!readyCaseIds.length) {
                 await prisma.experiment.updateMany({
-                  where: { id, user: username },
+                  where: { id, user: username, deletedAt: null, status: { not: 'cancelled' } },
                   data: { status: 'failed' },
                 });
                 return;
@@ -319,8 +329,8 @@ export async function POST(
             } catch (e) {
               console.error('[experiment-run] FI await/start failed', e);
               try {
-                await prisma.experiment.update({
-                  where: { id },
+                await prisma.experiment.updateMany({
+                  where: { id, user: username, deletedAt: null, status: { not: 'cancelled' } },
                   data: { status: 'failed' },
                 });
               } catch {

@@ -1053,7 +1053,6 @@ export default function SkillOptimizePage() {
         })();
         return () => { cancelled = true; };
     // 只在切换会话时跑；pollPlanReady/buildPlanCardTurn 是稳定闭包，不进依赖避免重复触发。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [currentSessionId]);
 
     const sendMessage = () => {

@@ -38,6 +38,10 @@ import {
     normalizeInteractions as normalizeInteractionsCore,
     type InvokedSkill
 } from '@/lib/shared/interaction-utils';
+import { generateJudgePrompt } from '@/prompts/judge-prompt';
+import { generateSkillIssuePrompt } from '@/prompts/item-attribution-prompt';
+import { generateFailureAnalysisPrompt } from '@/prompts/failure-analysis-prompt';
+import { generateExtractionPrompt } from '@/prompts/extraction-prompt';
 
 export type { InvokedSkill } from '@/lib/shared/interaction-utils';
 export {
@@ -147,8 +151,6 @@ export async function judgeAnswer(
     
     const rcList = rootCauses.map((rc, i) => ({ id: `RC-${i}`, ...rc }));
     const kaList = keyActions.map((ka, i) => ({ id: `KA-${i}`, ...ka }));
-    
-    const { generateJudgePrompt } = require('@/prompts/judge-prompt');
 
     const evaluations: any[] = [];
 
@@ -503,7 +505,6 @@ export async function analyzeEvaluationItems(
     }
     
     // 3. 逐项分析
-    const { generateSkillIssuePrompt } = require('@/prompts/item-attribution-prompt');
     const results: SkillImprovementItem[] = [];
     
     for (const item of imperfectItems) {
@@ -614,7 +615,6 @@ export async function analyzeFailures(
              history += `[SYSTEM/TOOL OUTPUTS]: (Check raw logs for full details)\n`;
         }
 
-        const { generateFailureAnalysisPrompt } = require('@/prompts/failure-analysis-prompt');
         const stepCandidates = faultPathSteps.map(formatFaultPathStepForPrompt).join('\n');
         const prompt = generateFailureAnalysisPrompt(history, stepCandidates);
 
@@ -1088,7 +1088,6 @@ export async function analyzeSession(input: any[], user?: string | null): Promis
                  }
              });
 
-             const { generateExtractionPrompt } = require('@/prompts/extraction-prompt');
              const prompt = generateExtractionPrompt(history);
 
              const response = await withTimeout(

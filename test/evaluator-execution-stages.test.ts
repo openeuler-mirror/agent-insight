@@ -76,3 +76,16 @@ test('parse-error subclasses and wrapped transport errors retry, while cancellat
   assert.equal(isRetryableEvaluationFailure(new CustomEvaluatorExecutionError('wrapped', runtime, { status: 401 })), false);
   assert.equal(isRetryableEvaluationFailure({ name: 'AbortError' }), false);
 });
+
+
+test('each retry records its cause, duration and retry decision', async () => {
+  const diagnostics: import('@/lib/engine/experiment/evaluator-execution-policy').EvaluationAttemptDiagnostic[] = [];
+  let calls = 0;
+  await withEvaluatorExecution({ attemptTimeoutSeconds: 1, maxRetries: 1 }, new AbortController().signal,
+    () => runConfiguredEvaluationStage(async () => { if (++calls === 1) throw new JudgeOutputParseError('invalid JSON api_key=test-secret-value', ''); return 1; }),
+    { retryDelaysMs: [0], onAttemptResult: item => diagnostics.push(item) });
+  assert.deepEqual(diagnostics.map(item => [item.stage, item.attempt, item.status, item.willRetry]), [[1, 1, 'failed', true], [1, 2, 'success', false]]);
+  assert.match(diagnostics[0].errorMessage!, /invalid JSON/);
+  assert.doesNotMatch(diagnostics[0].errorMessage!, /test-secret-value/);
+  assert.ok(diagnostics.every(item => item.durationMs >= 0));
+});

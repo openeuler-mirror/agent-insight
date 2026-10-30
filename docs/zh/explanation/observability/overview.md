@@ -71,6 +71,8 @@ Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；随 Pi 内置的只�
 
 ## OpenCode Skill 调用识别
 
+OpenCode v2 采集器关闭时会停止接收新事件，等待正在进行的写入，并继续排空此前已接收的事件队列，再结束 JSONL 输出流。等待底层写回调期间入队的尾部事件也会写入。
+
 OpenCode 采集器保留原始工具参数。平台在采集入库、Trace 展示和根 Agent 的 Skill 步骤核验中同时识别 v1 的 `name` 与 v2 的 `id` 参数；`id` 仅在 `skill` / `load_skill` 调用中作为名称回退，不读取普通工具的 ID、tool call ID 或输出文本来推断 Skill。Trace 的结构预览也保留该参数，保证懒加载前后结果一致。
 
 入库关联按 Agent 作用域提取，子 Agent 的 Skill 不向父节点继承。历史记录的详情和步骤核验直接从交互读取，不要求先回填 Execution 的 Skill 字段，也不会自动改写既有核验结果。

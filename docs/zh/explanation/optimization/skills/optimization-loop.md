@@ -92,7 +92,7 @@ changefreq: monthly
    4.1 enforceEditScope()                            → 误删基线文件就还原 + 发 warning(见 §三)
    4.2 runSelfVerification() 循环 ≤ VERIFY_REPAIR_K  → 结构门→脚本真值门→行为门(见 §四)
         ├─ 通过 → send('verify_ok')
-        └─ 不通过且有 repair 额度 → 把失败拼成指令，喂回同一 agent 会话让它再改 → 回到 4.2
+        └─ 不通过且有 repair 额度 → 把失败拼成指令，在同一工作区用新 agent 会话定向修复 → 回到 4.2
    4.3 send('vfs_patch' 最终态) + send('done')
 
 【阶段 5 · 用户确认 → 落版本】
@@ -185,17 +185,16 @@ agent 的指令由 `buildSkillOptSystemPrompt`（`src/lib/engine/general-agent/s
         │ pass
         ▼
 ② 行为门  verifyBehavioral()
-   · 拿几道题让新旧两版各真跑一遍、比分：
-       base = 在原版本上跑，cand = 在改完的版本上跑
-       每次 = runGeneralAgent 真答一道题 → judgeAnswer 对照标准答案打 0-100 分
-   · 判据：新版本均分 ≥ 旧版本即过；掉分的题进 regressions 供 repair 参考
+   · 优先复用同配置来源实验或持久化旧版结果，仅执行候选；没有可用旧版证据才补运行。
+       有来源实验：原客户端执行 + 冻结评估器；无来源：本地 runGeneralAgent + judgeAnswer。
+   · 判据：每个对比用例不退步；来源失败目标还需明确 pass。失败评分点传回 repair。
    · 成本封顶：最多量 maxCases(默认 5) 题 + 预算软门，到顶提前停（行为门最贵，真跑 agent）
         │
         ▼
   通过？
    ├─ 是 → send('verify_ok')，收尾
    └─ 否 → 还有 repair 额度(VERIFY_REPAIR_K，默认 1)？
-            ├─ 有 → 把失败拼成指令 → 喂回【同一个 agent 会话】
+            ├─ 有 → 把失败拼成指令 → 在同一工作区开启【新 agent 会话】
             │        → agent 重新 edit 出【新候选】→ 拿新候选回到 ①（不是重验旧的，不会死循环）
             └─ 无 → 保留当前结果 + warning，交用户裁决（不阻断确认）
 ```
@@ -239,9 +238,9 @@ agent 的指令由 `buildSkillOptSystemPrompt`（`src/lib/engine/general-agent/s
    - 或直接打字提诉求（如「description 太长帮我精简」）。
 3. **点开始**，然后看实时流：agent 在读哪个文件、改了什么、它的思考，接着是**自验证进度**（会显示新旧版本的比分）。
 4. **看 diff**：跑完出现改动前后对比。
-5. **拍板**：满意点 **Accept**（落成新版本）；不满意直接在对话里说「再把 X 改成 Y」，它复用同一会话继续改。
+5. **拍板**：满意点 **Accept**（落成新版本）；不满意直接在对话里说「再把 X 改成 Y」，它在同一候选工作区以新的 Agent 会话继续改。
 
-**耗时预期**：完整一轮可能 **>10 分钟**——agent 是多轮 read→edit，行为门还要真跑几道题打分。看到「卡着不动」先想想是不是在跑行为门。
+**耗时预期**：耗时取决于实际需要执行的候选用例；旧版结果可复用时不会重复运行，候选未变时静态评估也只跑一次。多轮 Agent 或缺少可复用基线时仍可能超过 10 分钟。看到「卡着不动」先想想是不是在跑行为门。
 
 **排查小抄**：
 
@@ -253,6 +252,26 @@ agent 的指令由 `buildSkillOptSystemPrompt`（`src/lib/engine/general-agent/s
 | 想临时关掉某道门做实验 | `SKILL_OPT_NO_VERIFY=1`（关自验证）/ `SKILL_OPT_NO_PROTECT=1`（关编辑范围约束）/ `SKILL_OPT_MAX_CHANGED_LINES`（行数预算） |
 
 ---
+
+## 校验复用与可比性
+
+自验证首先排除数据集 trigger 标签、should_trigger 字段、用例触发标签以及历史 `Skill should trigger / should not trigger` 标准答案。无有效标准答案/评分要点的普通用例不执行。只提供标准答案时，将其转为一个明确的评分要点，避免旧评分器在 rootCauses 为空时返回默认零分。
+
+来源实验按用户、Skill 与旧版查找，勾选问题关联的实验和用例优先。只有完整成功的逐用例结果，且冻结 Skill 文件、执行目标、输入和标准答案一致时才复用。候选通过原客户端执行，使用同一冻结评估器；新验证实验保留来源引用，不重新评旧版。任何不完整、取消或失配均显式报告未完成，不以默认模型替代原实验。
+
+无可用来源实验的本地验证保留最多 5 个有效用例。旧版证据存于数据目录 `skill-verification-cache/`，有效期 7 天，内容寻址包含用户、完整 Skill 文件、输入、运行配置和环境摘要。文件输入摘要变化会失效；远程地址、目录、缺失文件及无法定位的相对路径不跨轮复用。评分配置或评分依据变化时，只重评已缓存输出；执行条件变化才重跑旧版。失败、取消及评分服务异常不缓存。用例仍串行执行，避免共享测试目录被并发污染。
+
+没有脚本或可用实际输入时，不调用模型推导脚本断言。静态评估仅在本轮检查修复与收尾之间传递完整成功的结果，同时核对用户、会话、版本、内容哈希、评估器版本及模型配置。内容改变或第一次评估未成功时重新运行。
+
+前端及消息持久化共用校验文案：通过显示测量与复用数量，跳过/未完成显示黄色提示并要求实验复测。部分样本失败或预算不足不得显示为全部验证通过；非回归要求每个对比用例不掉分，来源明确失败的目标还要求明确 pass；整体均分上升不能掩盖单用例退步。
+
+验证实验在 `configSnapshotJson.verification` 中保存版本化证据，通过 `optimizationRecordId` 和 `retestExperimentId` 关联候选。复用检查完整文件哈希、来源配置、基线与候选评分、用例输入及取消状态；静态修复改动文件后旧证据失效。完整覆盖且通过才进入 `retest_passed`，失败进入 `retest_failed`，部分覆盖保留 `pending_retest`。既有人工发布能力不变。
+
+优化任务收尾完成后，`verificationOnly=true` 的临时校验实验按用户、优化记录和 Skill 版本范围软删除；运行中及停止未确认时不清理。`verificationPurpose=retest` 的正式复测和来源实验保留。清理事务同时在优化记录 `sourceRefsJson` 写入 `verification-cleanup` 清单、更新摘要提示并清空已删除实验的 `retestExperimentId`。内部原始结果继续保留，仅清单中的自动清理记录可参与证据复核；用户手动删除、取消或后续输入/评分变化仍使证据失效。清理不调用模型，也不重新运行用例。
+
+动态问题只关闭已通过用例对应的原始 Issue ID，不按 dedupKey 关闭未测用例。静态问题只根据同一最终候选的完整评估、稳定 ruleId 消失来关闭；无稳定对应关系的语义问题保留。计划 applied 与问题 resolved 是两个独立状态。
+
+每轮优化建立新 Agent 会话，读取同一工作区并携带既往用户约束，避免重放长工具历史。仅优化器工作区的 bash 输出超过 8192 字符时存全文到私有文件，返回头尾和路径；被测 Agent 输出不截断。评分器保持原有异常重试分类，业务 fail 不重试；每次尝试的阶段、耗时、脱敏错误和重试决定持久化在 `evidenceJson.executionConfig.attemptDiagnostics`，实验详情可查看。
 
 ## 附录：关键文件索引
 

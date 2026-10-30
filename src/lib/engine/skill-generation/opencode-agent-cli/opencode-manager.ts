@@ -20,7 +20,6 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-// @ts-ignore
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk'
 import { resolveAgentInsightDataPath, getAgentInsightHome } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'

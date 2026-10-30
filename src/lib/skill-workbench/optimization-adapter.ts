@@ -25,10 +25,14 @@ import {
   transitionSkillOptimizationRecord,
 } from './optimization-service';
 import { runSnapshotStaticEvaluation } from './snapshot-evaluator';
-import { isBlockingStaticQualityIssue } from './domain';
+import { computeSkillSnapshotHash, isBlockingStaticQualityIssue } from './domain';
+import { STATIC_EVAL_GENERATOR_L1_L2 } from '@/lib/engine/skill-issues/static-evaluator';
+import { getActiveConfig } from '@/lib/storage/server-config';
+import { verificationHash } from '@/lib/engine/skill-opt/verification-policy';
 import { getSkillWorkbenchSession } from './session-service';
 import { createOrReuseSkillWorkbenchTask, updateSkillWorkbenchTask } from './task-service';
 import { normalizeOptimizationCandidate } from './optimization-candidate';
+import { cleanupOptimizationVerificationExperiments, linkCandidateVerification } from './verification-evidence';
 import { applyCompletedOptimizationPlan } from './optimization-plan-state';
 
 function parseObject(value: string): Record<string, unknown> {
@@ -147,6 +151,8 @@ export async function syncWorkbenchOptimization(input: {
   recordId?: string;
   taskId?: string;
   signal?: AbortSignal;
+  previousQuality?: Awaited<ReturnType<typeof runSnapshotStaticEvaluation>>;
+  qualityConfigHash?: string;
 }) {
   const session = await prismaRaw.skillWorkbenchSession.findFirst({
     where: { id: input.sessionId, user: input.user, optSessionId: { not: null } },
@@ -181,11 +187,17 @@ export async function syncWorkbenchOptimization(input: {
   if (!skillMd) return { kind: 'incomplete' as const, reason: '优化结果没有 SKILL.md' };
   const candidateFiles = normalizeOptimizationCandidate(rawFiles, skillMd.path);
   input.signal?.throwIfAborted();
-  const quality = await runSnapshotStaticEvaluation({
+  const proposedVersion = updatesWorkingSnapshot ? session.workVersion : session.workVersion + 1;
+  const previous = input.previousQuality;
+  const canReuse = previous?.status === 'ok' && previous.user === input.user && previous.sessionId === session.id
+    && previous.skillName === session.skillName && previous.proposedVersion === proposedVersion
+    && previous.contentHash === computeSkillSnapshotHash(candidateFiles) && previous.generator === STATIC_EVAL_GENERATOR_L1_L2
+    && input.qualityConfigHash === verificationHash(await getActiveConfig(input.user));
+  const quality = canReuse ? previous : await runSnapshotStaticEvaluation({
     user: input.user,
     sessionId: session.id,
     skillName: session.skillName,
-    proposedVersion: updatesWorkingSnapshot ? session.workVersion : session.workVersion + 1,
+    proposedVersion,
     files: candidateFiles,
     trigger: 'optimization',
   });
@@ -234,6 +246,17 @@ export async function syncWorkbenchOptimization(input: {
       initialStatus: recordInput.status,
     });
   if (!record) return { kind: 'not_found' as const };
+  if (qualityPassed) {
+    const evidence = await linkCandidateVerification({ user: input.user, recordId: record.id,
+      skillName: session.skillName, baseVersion: session.workVersion, files: candidateFiles, sourceExperimentId: input.sourceExperimentId });
+    if (evidence) {
+      record.status = evidence.status;
+      record.errorMessage = evidence.errorMessage;
+      record.retestExperimentId = evidence.archived ? null : evidence.experimentId;
+      record.sourceExperimentId = evidence.sourceExperimentId;
+      record.sourceRefs = evidence.sourceRefs;
+    }
+  }
   await prismaRaw.skillWorkbenchSession.updateMany({
     where: { id: session.id, user: input.user }, data: { stage: 'ready' },
   });
@@ -403,6 +426,8 @@ export async function finishWorkbenchOptimizationRun(input: {
         errorMessage: input.error,
       }).catch(() => undefined) : Promise.resolve(),
     ]);
+    if (input.recordId) await cleanupOptimizationVerificationExperiments({ user: input.user, recordId: input.recordId })
+      .catch((error) => console.error('[optimization verification cleanup]', error));
     return { kind: 'failed' as const };
   }
   try {
@@ -413,11 +438,14 @@ export async function finishWorkbenchOptimizationRun(input: {
       percent: 70,
     });
     let sourceRefs = input.sourceRefs;
+    let previousQuality: Awaited<ReturnType<typeof runSnapshotStaticEvaluation>> | undefined;
+    const qualityConfigHash = verificationHash(await getActiveConfig(input.user));
     if (input.repair) {
       const inspection = await inspectWorkbenchOptimizationForRepair({
         user: input.user,
         sessionId: input.workbenchSessionId,
       });
+      previousQuality = inspection?.quality;
       input.signal?.throwIfAborted();
       if (inspection?.blockingIssues.length) {
         await updateWorkbenchOptimizationProgress({
@@ -460,6 +488,8 @@ export async function finishWorkbenchOptimizationRun(input: {
       recordId: input.recordId,
       taskId: input.taskId,
       signal: input.signal,
+      previousQuality,
+      qualityConfigHash,
     });
     if (result.kind === 'not_found' || result.kind === 'incomplete') {
       const reason = result.kind === 'incomplete' ? result.reason : '优化会话不存在';
@@ -490,6 +520,8 @@ export async function finishWorkbenchOptimizationRun(input: {
         user: input.user,
         workbenchSessionId: input.workbenchSessionId,
         sourceRefs,
+        staticEvaluationId: result.quality?.id,
+        verificationExperimentId: optimizationRecord.retestExperimentId || undefined,
         resolvedRunId: optimizationRecord.id || input.taskId,
       });
     }
@@ -525,5 +557,8 @@ export async function finishWorkbenchOptimizationRun(input: {
       }),
     ]);
     return { kind: 'failed' as const, reason: message };
+  } finally {
+    if (input.recordId) await cleanupOptimizationVerificationExperiments({ user: input.user, recordId: input.recordId })
+      .catch((error) => console.error('[optimization verification cleanup]', error));
   }
 }

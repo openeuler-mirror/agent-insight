@@ -761,7 +761,7 @@ function SkillCard({
                 <input
                     ref={fileInputRef}
                     type="file"
-                    // @ts-ignore - webkitdirectory 是非标准属性
+                    // @ts-expect-error webkitdirectory 是非标准属性
                     webkitdirectory=""
                     directory=""
                     multiple

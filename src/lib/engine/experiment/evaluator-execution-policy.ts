@@ -14,11 +14,16 @@
  * limitations under the License.
  */
 
+import { sanitizeAgentDiagnostic } from '../../../../scripts/agent-run-diagnostics.cjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { EvaluatorAttemptConfig } from '@/lib/evaluators/evaluator-execution-config';
 import { isRetryableEvaluationFailure, waitForEvaluationRetry, withEvaluationAttempt } from './evaluation-attempt';
 
+export type EvaluationAttemptDiagnostic = { stage: number; attempt: number; durationMs: number; status: 'success' | 'failed'; errorCode?: string; errorMessage?: string; willRetry: boolean };
+
 type Execution = {
+  stage: number;
+  onAttemptResult: (diagnostic: EvaluationAttemptDiagnostic) => void;
   config: EvaluatorAttemptConfig;
   signal: AbortSignal;
   onAttempt: (attempt: number) => void;
@@ -35,9 +40,9 @@ export function evaluatorExecutionTimeoutMs(): number | undefined {
 
 export function withEvaluatorExecution<T>(
   config: EvaluatorAttemptConfig, signal: AbortSignal, work: () => Promise<T>,
-  options: Partial<Pick<Execution, 'onAttempt' | 'onCleanupUnconfirmed' | 'retryDelaysMs'>> = {},
+  options: Partial<Pick<Execution, 'onAttempt' | 'onAttemptResult' | 'onCleanupUnconfirmed' | 'retryDelaysMs'>> = {},
 ): Promise<T> {
-  return context.run({ config, signal, onAttempt: options.onAttempt ?? (() => {}),
+  return context.run({ config, signal, stage: 0, onAttemptResult: options.onAttemptResult ?? (() => {}), onAttempt: options.onAttempt ?? (() => {}),
     onCleanupUnconfirmed: options.onCleanupUnconfirmed ?? (() => {}), retryDelaysMs: options.retryDelaysMs ?? [2000, 8000, 20000] }, work);
 }
 
@@ -51,14 +56,23 @@ export function withConfiguredEvaluationTimeout<T>(work: () => Promise<T>): Prom
 export async function runConfiguredEvaluationStage<T>(work: () => Promise<T>, options: { deferTimeout?: boolean } = {}): Promise<T> {
   const execution = context.getStore();
   if (!execution) return work();
+  const stage = ++execution.stage;
   for (let attempt = 1; ; attempt++) {
     execution.signal.throwIfAborted();
     execution.onAttempt(attempt);
+    const startedAt = Date.now();
     try {
-      return await (options.deferTimeout ? work() : withConfiguredEvaluationTimeout(work));
+      const result = await (options.deferTimeout ? work() : withConfiguredEvaluationTimeout(work));
+      execution.onAttemptResult({ stage, attempt, durationMs: Date.now() - startedAt, status: 'success', willRetry: false });
+      return result;
     } catch (error) {
+      const willRetry = !execution.signal.aborted && attempt <= execution.config.maxRetries && isRetryableEvaluationFailure(error);
+      const failure = error as { code?: string; name?: string; cause?: { code?: string } } | null;
+      execution.onAttemptResult({ stage, attempt, durationMs: Date.now() - startedAt, status: 'failed', willRetry,
+        errorCode: sanitizeAgentDiagnostic(failure?.code || failure?.cause?.code || failure?.name || 'EVALUATION_FAILED', 100),
+        errorMessage: sanitizeAgentDiagnostic(error instanceof Error ? error.message : String(error), 300) });
       execution.signal.throwIfAborted();
-      if (attempt > execution.config.maxRetries || !isRetryableEvaluationFailure(error)) throw error;
+      if (!willRetry) throw error;
       await waitForEvaluationRetry(execution.retryDelaysMs[attempt - 1] ?? 20000, execution.signal);
     }
   }

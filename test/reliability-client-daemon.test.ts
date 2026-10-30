@@ -1349,3 +1349,22 @@ test('long-poll cadence stays under the server command TTL', () => {
   const pollBody = /async function pollLoop[\s\S]*?\n}/.exec(src)?.[0] || ''
   assert.doesNotMatch(pollBody, /backoff|RECONNECT_MAX_MS/, '轮询不得受重连退避影响')
 })
+
+
+test('readCollectResult preserves partial evidence and finds failures in nested manifests', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fi-startup-reason-'))
+  try {
+    const artifact = path.join(root, 'ras-failure', 'nested')
+    fs.mkdirSync(artifact, { recursive: true })
+    const collect = path.join(artifact, 'collect-result.json')
+    const payload = { taskId: null, faultActivated: false, interactions: [], markers: [] }
+    fs.writeFileSync(collect, JSON.stringify(payload))
+    fs.writeFileSync(path.join(artifact, 'manifest.json'), JSON.stringify({
+      status: 'failed', termination_reason: 'plugin_start_failed', error: 'platform startup timed out',
+    }))
+    assert.match((client.readCollectResult(root, 'ras-failure') as { error: string }).error, /^plugin_start_failed:/)
+    const partial = { ...payload, taskId: 'ses_real_business', faultActivated: true }
+    fs.writeFileSync(collect, JSON.stringify(partial))
+    assert.deepEqual(client.readCollectResult(root, 'ras-failure'), partial)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})

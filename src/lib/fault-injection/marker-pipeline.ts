@@ -228,7 +228,7 @@ function evalSlotLabel(evalKey: string | null, locale: FiPipelineLocale): string
   return zh ? '评判' : 'Judge'
 }
 
-/** Build fixed 4-node pipeline; pending steps stay hollow until markers arrive. */
+/** Build three injection stages; append a Judge stage only for stored historical markers. */
 export function buildMarkerPipeline(
   markers: FiPipelineMarker[],
   locale: FiPipelineLocale = 'zh',
@@ -267,12 +267,9 @@ export function buildMarkerPipeline(
       label: zh ? '故障注入完成' : 'Injection completed',
       markerKey: 'fault_completed',
     },
-    {
-      key: 'evaluation',
-      label: evalSlotLabel(evalKey, locale),
-      markerKey: evalKey,
-    },
   ]
+
+  if (evalKey) slots.push({ key: 'evaluation', label: evalSlotLabel(evalKey, locale), markerKey: evalKey })
 
   return slots.map((slot) => {
     const marker = slot.markerKey ? byKey.get(slot.markerKey) : undefined

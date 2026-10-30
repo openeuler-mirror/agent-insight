@@ -511,7 +511,9 @@ test('Skill 优化点击即提交当前诉求，保留空请求拦截、归并�
   assert.match(conversation, /qualityFailed[\s\S]*qualityBlocked[\s\S]*未通过/);
   assert.match(adapter, /buildCandidateDiff/);
   assert.match(adapter, /beginSkillOptimizationRecord/);
-  assert.match(records, /质量规则已通过/);
+  assert.match(records, /行为验证通过/);
+  assert.match(records, /行为验证未通过/);
+  assert.match(records, /静态通过，待完整复测/);
   assert.match(records, /发布为 \{getOptimizationTargetVersion\(selected\)\}/);
   assert.doesNotMatch(shell, /\/retest|optimizationRecordId=/);
   assert.match(shell, /role="dialog"[\s\S]*确认发布/);

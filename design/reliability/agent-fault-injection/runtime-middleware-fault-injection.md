@@ -93,7 +93,7 @@ sequenceDiagram
 
 - 无 `AGENT_FI_RUN_ID` + `AGENT_FI_FAULT_SKILL` + `AGENT_FI_RAW_DIR` → 插件 / Hooker **空实现**，不影响日常宿主。
 - `when_submode` 在组 env 时过滤（`filter_runtime_steps_for_submode`），热路径不再看子模式。
-- 含 `assistant.tool_call.*` 时 `AGENT_FI_EXPOSE_FAULT_SKILL=0`，不把故障 Skill 指令推给 Agent。
+- 所有故障均安装并请求加载注入 Skill；加载注入 Skill 的准备调用不占用业务 `assistant.tool_call.*` 改写计数。
 - OpenCode 必须 **mutate in place**（`output.system.push` / splice `messages`）；对 `output.system = …` 赋值是静默空操作。
 
 ---
@@ -253,7 +253,7 @@ runtime_ops:
   - assistant.tool_call.replace_argument
 ```
 
-`replace_text` 与 `replace_all` 现网语义相同（全局 `replace`）；保留两个名字是能力面稳定，配方不要当成「只换一次 vs 全换」。`assistant.tool_call.replace_argument` 的 `path` 是点分字段（禁 `__proto__` / `prototype` / `constructor`）；仅当叶值 **全等** `from` 且不同于 `to` 才改。含此 op 时不向 Agent 暴露故障 Skill（`AGENT_FI_EXPOSE_FAULT_SKILL=0`），否则模型会按剧本「故意选错」，与拦截改写叠床架屋。
+`replace_text` 与 `replace_all` 现网语义相同（全局 `replace`）；保留两个名字是能力面稳定，配方不要当成「只换一次 vs 全换」。`assistant.tool_call.replace_argument` 的 `path` 是点分字段（禁 `__proto__` / `prototype` / `constructor`）；仅当叶值 **全等** `from` 且不同于 `to` 才改。含此 op 时同样向 Agent 提供注入 Skill。Skill 应要求 Agent 规划健康调用，实际错误参数由响应拦截器改写；加载注入 Skill 不推进业务调用计数，因此 `call_index=1` 对应第一次业务调用。改写是否发生仍须核验 `fault.injection.applied`，不能仅凭 Skill 已加载判断。
 
 ### 6.4 产品边界（method × 挂点）
 

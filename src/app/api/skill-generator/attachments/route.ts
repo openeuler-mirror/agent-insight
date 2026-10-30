@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
   let form: FormData;
   try {
     form = await req.formData();
-  } catch (err) {
+  } catch {
     return NextResponse.json({ error: 'invalid multipart' }, { status: 400 });
   }
 

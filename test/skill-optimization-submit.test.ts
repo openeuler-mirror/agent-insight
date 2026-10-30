@@ -83,6 +83,8 @@ test('点击优化携带当前诉求，不归并问题；第二次提交保留�
   assert.equal(requests.length, 2);
   assert.equal(requests[0].body?.userFeedback, '保留脚本，只补充 FTP 分析步骤');
   assert.equal(requests[1].body?.userFeedback, '再补充失败退出条件');
+  assert.equal(requests[0].body?.optimizationScope, 'targeted');
+  assert.deepEqual(requests[0].body?.checkedIssues, []);
   assert.deepEqual(requests[0].body?.baselineFiles, { 'SKILL.md': 'baseline' });
   assert.equal(f.calls.some(call => call.url === '/api/skill-opt/plan'), false);
   assert.equal(f.errors.some(Boolean), false);

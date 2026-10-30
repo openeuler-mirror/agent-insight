@@ -35,7 +35,8 @@ import {
   publishedOverallAverage,
   evaluatorBreakdown,
 } from '@/lib/engine/experiment/detail-agg';
-import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
+import { isFiTraceWaitExpired } from '@/lib/fault-injection/trace-readiness';
+import { hasUsableTraceInteractions, isFiBusinessTraceUsable } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
 import { parseStoredEvaluatorExecutionConfig } from '@/lib/evaluators/evaluator-execution-config';
@@ -75,6 +76,7 @@ function deriveGeneratedTraceStatus(input: {
   usable: boolean;
   triggerDecisionReady?: boolean;
   runStatus?: string | null;
+  runUpdatedAt?: Date | null;
   commandStatus?: string | null;
   attemptStatus?: string | null;
   generationError?: string | null;
@@ -84,9 +86,11 @@ function deriveGeneratedTraceStatus(input: {
   if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(input.attemptStatus || '')) {
     return 'pending';
   }
+  if (['queued', 'collecting', 'running', 'judging'].includes(input.runStatus || '')) return 'pending';
   if (input.generationError) return 'failed';
   if (input.attemptStatus === 'failed') return 'failed';
   if (input.runStatus === 'failed' || input.runStatus === 'stopped') return 'failed';
+  if (input.runUpdatedAt && isFiTraceWaitExpired(input.runStatus || '', input.runUpdatedAt)) return 'failed';
   if (['FAILED', 'EXPIRED', 'DELIVERY_FAILED'].includes(input.commandStatus || '')) return 'failed';
   if (['failed', 'partial', 'done'].includes(input.experimentStatus)) return 'failed';
   return 'pending';
@@ -359,7 +363,7 @@ export async function GET(
           ...generatedUserWhere,
           OR: [{ id: { in: fiRunKeys } }, { runId: { in: fiRunKeys } }],
         },
-        select: { id: true, runId: true, status: true, sessionTaskId: true, error: true },
+        select: { id: true, runId: true, status: true, sessionTaskId: true, error: true, agent: true, platform: true, updatedAt: true },
       }) : [],
       commandIds.length ? prisma.reliabilityCommand.findMany({
         where: { ...generatedUserWhere, commandId: { in: commandIds } },
@@ -372,6 +376,9 @@ export async function GET(
       status: string;
       sessionTaskId: string | null;
       error: string | null;
+      agent: string;
+      platform: string;
+      updatedAt: Date;
     }>;
     const generationCommands = generationCommandsRaw as Array<{
       commandId: string;
@@ -397,13 +404,13 @@ export async function GET(
         ? prisma.execution.findMany({
           where: { ...generatedUserWhere, taskId: { in: generatedTaskIds }, isSubagent: false },
           orderBy: { timestamp: 'desc' },
-          select: { id: true, taskId: true, query: true, finalResult: true },
+          select: { id: true, taskId: true, query: true, finalResult: true, agentName: true },
         })
         : [],
       generatedTaskIds.length
         ? prisma.session.findMany({
           where: { ...generatedUserWhere, taskId: { in: generatedTaskIds } },
-          select: { taskId: true, interactions: true },
+          select: { taskId: true, interactions: true, endTime: true },
         })
         : [],
     ]);
@@ -412,10 +419,12 @@ export async function GET(
       taskId: string | null;
       query: string | null;
       finalResult: string | null;
+      agentName: string | null;
     }>;
     const generatedSessions = generatedSessionsRaw as Array<{
       taskId: string;
       interactions: string | null;
+      endTime: Date | null;
     }>;
     const generatedExecutionByTask = new Map<string, typeof generatedExecutions[number]>();
     for (const execution of generatedExecutions) {
@@ -443,11 +452,17 @@ export async function GET(
       const taskId = item.taskId || run?.sessionTaskId || null;
       const execution = taskId ? generatedExecutionByTask.get(taskId) : undefined;
       const session = taskId ? generatedSessionByTask.get(taskId) : undefined;
-      const usable = Boolean(execution && hasUsableTraceInteractions(session?.interactions));
+      const usable = Boolean(execution && (run
+        ? isFiBusinessTraceUsable({
+            platform: run.platform, agent: run.agent, executionAgent: execution.agentName,
+            interactions: session?.interactions, endTime: session?.endTime,
+          })
+        : hasUsableTraceInteractions(session?.interactions)));
       const status = deriveGeneratedTraceStatus({
         usable,
         triggerDecisionReady: experiment.scope === 'skill-workbench' && experiment.preset === 'trigger' && attempt?.status === 'ready',
         runStatus: run?.status,
+        runUpdatedAt: run?.updatedAt,
         commandStatus: command?.status,
         attemptStatus: attempt?.status,
         generationError: item.traceGenerationError,
@@ -568,10 +583,12 @@ export async function GET(
       failed,
       pending: Math.max(0, expectedResultTotal - doneResultCount - failed),
     };
-    const normalizedStatus = normalizeTerminalExperimentStatus(experiment.status, effectiveAllResults);
+    const normalizedResultStatus = normalizeTerminalExperimentStatus(experiment.status, effectiveAllResults);
+    const normalizedStatus = normalizedResultStatus === 'done' && traceProgress?.failed
+      ? 'partial' : normalizedResultStatus;
     const aggregateStatus = itemProgress ? workbenchCompletionStatus(normalizedStatus, itemProgress.executionProgress, itemProgress.evaluationProgress) : normalizedStatus;
-    const responseStatus = aggregateStatus === 'done'
-      && (progress.pending > 0 || Boolean(traceProgress?.pending))
+    const responseStatus = (aggregateStatus === 'done' && progress.pending > 0)
+      || (aggregateStatus !== 'cancelled' && Boolean(traceProgress?.pending))
       ? 'running'
       : aggregateStatus;
     const overall = publishedOverallAverage(responseStatus, effectiveAllResults);

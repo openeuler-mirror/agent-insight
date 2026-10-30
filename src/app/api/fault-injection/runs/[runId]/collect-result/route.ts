@@ -18,7 +18,7 @@ import { NextResponse } from 'next/server'
 import { resolveWorkerCaller } from '@/lib/reliability/worker-dual-auth'
 import { prisma } from '@/lib/storage/prisma'
 import type { CollectPayload } from '@/lib/fault-injection/engine'
-import { ingestCollectAndJudge, refreshTaskProgress } from '@/lib/fault-injection/store'
+import { persistFiCollectIngress, refreshTaskProgress } from '@/lib/fault-injection/store'
 
 export const dynamic = 'force-dynamic'
 
@@ -98,12 +98,12 @@ export async function POST(
       faultActivated: body.faultActivated,
       faultActivatedAt: body.faultActivatedAt,
       interactions: Array.isArray(body.interactions) ? body.interactions : [],
-      markers: body.markers || [],
+      markers: Array.isArray(body.markers) ? body.markers : [],
     } as CollectPayload
 
     if (stopped) {
       // Partial ingest then force stopped (do not leave as completed green).
-      await ingestCollectAndJudge({ runId, user: username, payload })
+      await persistFiCollectIngress({ runId, user: username, payload, stopped: true })
       await prisma.faultInjectionRun.update({
         where: { runId },
         data: {
@@ -126,7 +126,7 @@ export async function POST(
       return NextResponse.json({ ok: true, status: 'failed' })
     }
 
-    const updated = await ingestCollectAndJudge({ runId, user: username, payload })
+    const updated = await persistFiCollectIngress({ runId, user: username, payload })
     if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId)
     return NextResponse.json({
       ok: true,
