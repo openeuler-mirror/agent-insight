@@ -39,6 +39,8 @@ changefreq: monthly
 
 Trace 投影以 endpoint/anchor resolver 的持久化结果为真源，不得用查询期临时结果覆盖已保存的 `anchorState`、`matchedRecord` 和 `position`。独立协作图会按当前原始调用重新核验普通 reported 关系，避免已变化或歧义的原生目标被旧父子关系覆盖；带 locator 且已由持久化 resolver 直接确认为目标 Session 的调用继续使用精确位置，历史 `goal-plus-semantic` 仍回退持久化结果。
 
+OpenCode 的原生 `task` 还支持工具状态 `metadata` 中的结构化会话编号，以及输出首行的 `task_id: ses_…`、完整 `<task id="ses_…" state="…">` 信封、输出末尾的 `<task_metadata>` / `session_id` 块。解析只作用于 `task`、`spawn_agent`、`subagent`，不扫描结果正文或普通工具输出；非 OpenCode 框架不启用这些文本格式。多个来源给出不同编号时保留全部候选，失败调用或目标不唯一时不产生自动边。
+
 自动边只来自成功原始调用中的唯一明确目标。仅当上报关系与原始调用位置、目标均唯一对应时才合并 `reported` / `trace` 来源。循环、自联系、重复联系、多父级和回传消息保留为图中的事件，不强制解释为新的子 Agent。
 
 历史 `goal-plus-semantic` 关系可以保留持久化端点解析的关联与步骤状态；该回退限定于 semantic 来源，不能用历史 linked 状态覆盖普通 reported 当前身份歧义，也不构造不存在的原 Trace 正文。

@@ -48,6 +48,16 @@ function targetIds(value: unknown, depth = 0): string[] {
     const direct = ['session_id', 'sessionId', 'subagent_session_id', 'subagentSessionId'].flatMap(key => typeof record[key] === 'string' && record[key] ? [record[key] as string] : []);
     return [...new Set([...direct, ...['data', 'result', 'output'].flatMap(key => targetIds(record[key], depth + 1))])];
 }
+function opencodeTaskTargets(output: unknown): string[] {
+    if (typeof output !== 'string') return [];
+    const header = output.match(/^\s*task_id:[\t ]*(ses_[A-Za-z0-9_-]+)(?=[\t ]*(?:\(|\r?\n|$))/);
+    const ids = header ? [header[1]] : [];
+    const envelope = output.match(/^\s*<task id="(ses_[A-Za-z0-9_-]+)" state="(?:running|completed|error)">[\s\S]*<\/task>\s*$/);
+    if (envelope) return [envelope[1]];
+    if (/<task_result\b/i.test(output)) return ids;
+    const metadata = output.match(/(?:^|\n)<task_metadata>\s*\n[\t ]*session_id:[\t ]*(ses_[A-Za-z0-9_-]+)[\t ]*\r?\n<\/task_metadata>\s*$/i);
+    return metadata ? [...ids, metadata[1]] : ids;
+}
 function timestamp(value: unknown): number | undefined {
     const n = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
     return Number.isFinite(n) && n > 0 ? n : undefined;
@@ -77,6 +87,9 @@ export function extractCalls(interactions: unknown[], traceSessionId: string, fr
             const args = decoded(part ? state.input : fn.arguments ?? raw.arguments);
             const argRecord = args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {};
             const output = part ? state.output : raw.output ?? raw.result;
+            const targets = ['task', 'spawn_agent', 'subagent'].includes(name)
+                ? [...targetIds(output), ...targetIds(args), ...(framework === 'opencode' ? [...opencodeTaskTargets(output), ...targetIds(state.metadata)] : [])]
+                : [];
             const id = part ? raw.callID : raw.id;
             const recordId = typeof id === 'string' && id ? id : undefined;
             const key = recordId ? `id:${recordId}` : `position:${interactionIndex}:${callIndex}`;
@@ -88,7 +101,7 @@ export function extractCalls(interactions: unknown[], traceSessionId: string, fr
                 previous.command ??= typeof argRecord[shellFields[name]] === 'string' ? argRecord[shellFields[name]] as string : undefined;
                 if (start !== undefined) { previous.startedAt = start; previous.timeSource = part ? 'opencode.part.state.time.start' : 'tool.timing.execution'; }
                 previous.failed ||= ['error', 'failed', 'cancelled'].includes(status);
-                previous.targets = [...new Set([...previous.targets, ...(['task', 'spawn_agent', 'subagent'].includes(name) ? [...targetIds(output), ...targetIds(args)] : [])])];
+                previous.targets = [...new Set([...previous.targets, ...targets])];
                 continue;
             }
             const call: Call = {
@@ -96,7 +109,7 @@ export function extractCalls(interactions: unknown[], traceSessionId: string, fr
                 callIndex: callIndex < calls.length ? callIndex : typeof raw.originalPartIndex === 'number' ? raw.originalPartIndex : callIndex,
                 name, command: typeof argRecord[shellFields[name]] === 'string' ? argRecord[shellFields[name]] as string : undefined,
                 startedAt: start, timeSource: start === undefined ? undefined : part ? 'opencode.part.state.time.start' : 'tool.timing.execution',
-                targets: ['task', 'spawn_agent', 'subagent'].includes(name) ? [...new Set([...targetIds(output), ...targetIds(args)])] : [],
+                targets: [...new Set(targets)],
                 failed: ['error', 'failed', 'cancelled'].includes(status),
             };
             result.push(call); seen.set(key, call);
