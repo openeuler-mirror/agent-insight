@@ -22,7 +22,7 @@
 // 口径见 src/lib/fleet/agg.ts / 《视图数据计算口径说明》；硬错误口径，软错误(judge)未叠加。
 // 缺埋点的面板（per-tool 延迟、TTFT、箱线、self-time、协作网络）以占位卡诚实标注。
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
     ResponsiveContainer, ComposedChart, BarChart, LineChart,
     Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend,
@@ -188,28 +188,32 @@ export default function DashboardPage() {
     }, [tab, win, user, platformFilter, agentFilter]);
 
     const refreshRef = React.useRef<() => void>(() => { });
-    refreshRef.current = () => {
-        if (!user) return;
-        apiFetch(`/api/fleet/trends?window=${win}&user=${encodeURIComponent(user)}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => { if (d) setTrends(d); })
-            .catch(() => { });
-        if (bd) {
-            apiFetch(`/api/fleet/breakdowns?window=${win}&user=${encodeURIComponent(user)}`)
+    // 渲染期写 ref 违反 react-hooks/refs；useLayoutEffect 把同步放在提交阶段，
+    // 避免已注册的 30s interval 在新状态提交后、passive effect 执行前调到旧闭包。
+    useLayoutEffect(() => {
+        refreshRef.current = () => {
+            if (!user) return;
+            apiFetch(`/api/fleet/trends?window=${win}&user=${encodeURIComponent(user)}`)
                 .then((r) => (r.ok ? r.json() : null))
-                .then((d) => { if (d) setBd(d); })
+                .then((d) => { if (d) setTrends(d); })
                 .catch(() => { });
-        }
-        if (reliability) {
-            const params = new URLSearchParams({ window: win, user });
-            if (platformFilter !== "all") params.set("platform", platformFilter);
-            if (agentFilter !== "all") params.set("agent", agentFilter);
-            apiFetch(`/api/fleet/reliability?${params.toString()}`)
-                .then((r) => (r.ok ? r.json() : null))
-                .then((d) => { if (d) setReliability(d); })
-                .catch(() => { });
-        }
-    };
+            if (bd) {
+                apiFetch(`/api/fleet/breakdowns?window=${win}&user=${encodeURIComponent(user)}`)
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((d) => { if (d) setBd(d); })
+                    .catch(() => { });
+            }
+            if (reliability) {
+                const params = new URLSearchParams({ window: win, user });
+                if (platformFilter !== "all") params.set("platform", platformFilter);
+                if (agentFilter !== "all") params.set("agent", agentFilter);
+                apiFetch(`/api/fleet/reliability?${params.toString()}`)
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((d) => { if (d) setReliability(d); })
+                    .catch(() => { });
+            }
+        };
+    });
     useEffect(() => {
         const id = setInterval(() => refreshRef.current(), 30_000);
         return () => clearInterval(id);
