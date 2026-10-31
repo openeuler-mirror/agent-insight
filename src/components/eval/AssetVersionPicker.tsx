@@ -16,8 +16,9 @@ import {Textarea} from '@/components/ui/textarea';
 import {Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription,DialogFooter} from '@/components/ui/dialog';
 import {safeUUID} from '@/lib/safe-uuid';
 
-export function AssetVersionPicker({kind,businessId,value,onChange,onLoad,onError,onStatus,revision=0,allowNewAgent=false}: {
+export function AssetVersionPicker({kind,businessId,value,onChange,onLoad,onError,onStatus,revision=0,allowNewAgent=false,selectModal=true,selectContentClassName}: {
   kind:AssetKind;businessId?:string;value?:string;revision?:number;allowNewAgent?:boolean;
+  selectModal?:boolean;selectContentClassName?:string;
   onChange?:(version:PublishedAssetVersion,view:AssetVersionView)=>void;
   onLoad?:(view:AssetVersionView)=>void;
   onError?:(error:Error & {status?:number})=>void;
@@ -56,7 +57,7 @@ export function AssetVersionPicker({kind,businessId,value,onChange,onLoad,onErro
     }catch(e){setError(e instanceof Error?e.message:'登记失败');}finally{setSaving(false);}
   };
   return <div className="flex flex-wrap items-center gap-2">
-    {view?<Select aria-label={label} label={label} value={view.selectedVersion.id} options={view.versions.map(v=>({value:v.id,label:`v${v.version}${v.version===view.head.publishedVersion?' · 最新':''}`}))} onChange={id=>void load(id,true)}/>:<span className="text-xs text-foreground-muted">{label}加载中…</span>}
+    {view?<Select modal={selectModal} contentClassName={selectContentClassName} aria-label={label} label={label} value={view.selectedVersion.id} options={view.versions.map(v=>({value:v.id,label:`v${v.version}${v.version===view.head.publishedVersion?' · 最新':''}`}))} onChange={id=>void load(id,true)}/>:<span className="text-xs text-foreground-muted">{label}加载中…</span>}
     {allowNewAgent&&view&&!view.readOnly&&<Button type="button" variant="outline" size="sm" onClick={()=>setOpen(true)}>新增版本</Button>}
     {view?.selectedVersion.note&&<span className="max-w-xs truncate text-xs text-foreground-muted" title={view.selectedVersion.note}>{view.selectedVersion.note}</span>}
     {error&&<span role="alert" className="text-xs text-error">{error}</span>}
