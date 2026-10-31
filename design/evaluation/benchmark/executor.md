@@ -316,3 +316,21 @@ OpenCode Runtime 直接消费 `--format json` 的结构化事件：会话错误�
 真实 OpenCode + 一个 SWE-bench Case 作为人工 Smoke，会产生调用成本，因此保留为显式测试而不放进默认单元测试。执行器默认测试不运行 SWE-bench Harness；Harness 由评测服务的显式 Docker 测试覆盖。执行器范围不包含前端、多任务并发和网络 sandbox。
 
 执行器阶段不需要再下载数据集：接口测试直接复用已导入的 `~/.agent-insight/data/imports/swe-bench-verified/test.parquet` 和 `~/.agent-insight/vendor/SWE-bench`。官方仓库是 Case 字段、`base_commit` 与后续 Harness 语义的第一依据；OpenHands 仅辅助参考“Agent 结束后从基线 commit 收集 diff”的边界。
+
+## 11. ZSoft 与 MCTS 实例实现
+
+本节供修改接入代码时使用；部署操作分别见 [ZSoft 指南](../../../docs/zh/how-to/evaluation/benchmarks/deploy-zsoft.md)与 [MCTS 指南](../../../docs/zh/how-to/observability/mcts-xgovernor.md)。这些实例约定不作为其他 Benchmark 的默认接入要求。
+
+### ZSoft 公开工作区与提交
+
+平台只下发题目身份与公开任务，不持久化执行机任务目录。`zsoft-tasks.cjs` 按所选 Case 从原生任务目录构造公开工作区，核对题目内容身份；隐藏判题材料、参考提交和修复补丁不得进入 Agent 输入。公开源码缺失时，`zsoft-source.cjs` 根据固定版本的来源清单生成最小下载信息，沙箱下载与解包由 `mcts-zsoft-source.py` 处理。公开包必须与已准备的公开树逐文件一致，拒绝额外文件、链接、越界路径及超限内容；来源控制文件和 Judge 材料不进入沙箱包。
+
+ZSoft 普通 Agent 通过 `single-file/v1` 收集 `submission/poc`。MCTS 桥接只导出最终选中 PoC 的原始字节，核对题目、提交类型、大小、摘要和插件契约后统一收集；正式 Judge 留给平台 Evaluator。Python、C、binary 按各自公开提交要求处理，不能用 UTF-8 文本读取替代二进制采集，也不能把候选反馈当作正式评分。具体字段和提示适配从 `services/executor/src/mcts-zsoft-export.py`、`mcts-zsoft-source.py` 及 `benchmarks/zsoft-l1/adapter/index.ts` 定向查询。
+
+### MCTS 能力、执行与恢复
+
+MCTS 的公共运行前提与 Benchmark 专用依赖分别探测，SWE-bench 缺少专属依赖不能阻止已经就绪的 ZSoft；执行目标匹配仍须检查本次 Benchmark 的能力。安装、能力上报与执行分支应保持一致，源码入口为 `services/executor/src/mcts-config.cjs`、`execution-config.cjs`、`mcts-runtime.cjs` 和 `src/lib/benchmark/execution-targets.ts`。组件存在、客户端就绪、采集鉴权通过和本次任务可执行是不同结论。
+
+SWE-bench 的 MCTS 实现使用已配置的 Python 解释器运行搜索，读取最终选中 Patch，再通过 Git Collector 生成提交。不能通过把虚拟环境解释器链接到外部目录破坏其依赖解析。执行器按本次运行关联 coordinator 根 Session，OTLP 传输 ID 不直接作为页面跳转 ID，不按时间邻近猜测关联；停止先给进程组清理和 Trace 刷新机会，再终止未退出进程。
+
+提交物先持久化，再上传和回调；上传重试或恢复不得重新运行搜索，临时公开工作区按通用清理合同回收，外部 MCTS 输出按原有保留策略处理。Trace 采集的安装、凭据和代理边界见 [MCTS 开发设计](../../observability/mcts-trace-observability/phase2-requirements-design.md#23-安装与运行边界)。Runtime 参数继续遵循[公共参数合同](../../../docs/zh/reference/platform/api-and-contracts.md#runtime-json-参数接入)，不在实例文档复制字段映射和默认值清单。

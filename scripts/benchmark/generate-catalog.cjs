@@ -474,6 +474,14 @@ function toImportPath(fromDir, targetPath) {
   return value.startsWith('.') ? value : `./${value}`
 }
 
+function loadPackageForOnboarding(packageDir) {
+  const result = loadPackage(packageDir)
+  if (result.manifest.supportsAgentExecution !== false && !result.environmentPreparationPath) {
+    fail(`${result.key} 的新接入验收必须声明 executor.environmentPreparation，并提供 execution-environment/v1 的执行端入口；仅导入已有提交的接入可设置 executor.supported: false`)
+  }
+  return result
+}
+
 function generate(rootDir = path.resolve(__dirname, '../..')) {
   const benchmarksDir = path.join(rootDir, 'benchmarks')
   const outputDir = path.join(rootDir, 'generated', 'benchmark-catalog')
@@ -627,4 +635,4 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
 
 if (require.main === module) console.log(`[benchmark catalog] generated: ${generate().join(', ')}`)
 
-module.exports = { generate, loadPackage }
+module.exports = { generate, loadPackage, loadPackageForOnboarding }

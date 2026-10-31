@@ -104,7 +104,7 @@ benchmarks:
 
 执行端访问私有 SWR 时，通过客户端运行账号及对应 Docker daemon 的现有认证配置准备，不在任务或 YAML 中填写密钥。执行端使用 Docker 本地缓存；[镜像池与预取](./deploy-services.md#53-可选跨-benchmark-共享镜像池) 由 Evaluator 管理。
 
-执行与评测使用独立容器，分别选择镜像，不强制两端 digest、image ID 或架构相同，也不保证环境内容完全一致。执行端直接使用镜像内源码，不 reset/clean；记录本次镜像身份与来源，官方安装提交与 Patch 基线处理见 [工作区、提交与诊断](./develop-benchmark.md#工作区提交与诊断)。
+执行与评测使用独立容器，分别选择镜像，不强制两端 digest、image ID 或架构相同，也不保证环境内容完全一致。执行端直接使用镜像内源码，不 reset/clean；记录本次镜像身份与来源，官方安装提交与 Patch 基线处理见 [工作区、提交与诊断](../../../../../design/evaluation/benchmark-xgovernor-local-docker/phase2-requirements-design.md#工作区提交与诊断)。
 
 ## 4. 评测端准备
 

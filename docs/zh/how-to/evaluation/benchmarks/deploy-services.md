@@ -285,6 +285,14 @@ node scripts/configure-evaluator-target.js \
 
 配置会自动保存并在后续请求中生效，无需重启 Agent Insight。
 
+### 6.3 Evaluator 回调 Agent Insight 的地址
+
+除平台调用 Evaluator 外，Evaluator 还需要回传进度、证据和判定结果。平台在启动实验时，按该请求的 Host（或反向代理提供的 `x-forwarded-host`）冻结回调地址，所以这个地址必须能被 Evaluator 访问。
+
+本机把 Controller 装进 Docker 时，容器内的 `127.0.0.1` 指向容器自身，不能回连宿主上的 `3000` 端口。此时应通过反向代理或显式指定 `x-forwarded-host`，让平台记录的对外地址在容器内可解析，例如 `http://host.docker.internal:3000`。`scripts/evaluator.sh start` 已为 Controller 注入 `host.docker.internal` 主机映射。
+
+回调地址不可达的典型表现是评测任务长时间停留在下发阶段，最终以 `EVALUATION_TIMEOUT` 结束，而 Controller 侧没有对应请求记录。
+
 ## 7. 安装 Agent 执行客户端
 
 在 Agent Insight 页面进入 **配置 → 客户端安装**，选择 Agent Runtime，并在执行机运行页面生成的命令：
@@ -376,7 +384,7 @@ execution:
 | 模型配置或凭据解析失败 | 按 Case 中的具体原因检查原生 Agent 配置、凭据库及运行账号 |
 | 已有 Patch，但评测失败 | 按 [SWE-bench 排查与更新](./deploy-swe-bench.md#6-排查与更新) 检查 Evaluator |
 
-手动版本更新、回退及安装实现见 [受管理安装与版本](./develop-benchmark.md#受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](./develop-benchmark.md#原生执行高级配置)。
+手动版本更新、回退及安装实现见 [受管理安装与版本](../../../../../design/evaluation/benchmark-xgovernor-local-docker/phase2-requirements-design.md#411-受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](../../../../../design/evaluation/benchmark-xgovernor-local-docker/phase2-requirements-design.md#原生执行高级配置)。
 
 ## 8. 整体验收
 

@@ -108,6 +108,10 @@ changefreq: monthly
 - **并发测试**：资源受限环境可运行 `npm run test -- --test-concurrency=2`，仍执行全部测试文件；文件内的并发、取消和防重用例仍保留。定位时序问题时用任务门闩、实际状态或可控时钟，避免以固定 sleep 推断任务已开始/完成；测试等待期限使用单调时钟，避免系统时间调整导致提前超时。API 异步受理测试应在评估器尚未释放时断言响应和持久状态，并在退出前等待后台任务收尾。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。
 
+### Benchmark 测试的后台任务收尾
+
+使用临时 SQLite 的 Benchmark 下发测试，收尾必须先 `await stopBenchmarkBackgroundWorkForTest()`，再恢复命令 dispatcher、断开 Prisma，最后恢复环境并删除临时目录。该方法停止 watchdog 和延迟重试，等待已开始的重评下发、执行下发及其派生任务、评测终态后的 Case 收敛和镜像预热刷新结束；不应仅依据 Case 的终态字段判断后台工作已结束。重评测试在观察终态后继续下一步前，可使用 `waitForBenchmarkReevaluationsForTest()` 等待下发链结束；终态失败后还需 `waitForBenchmarkEvaluationContinuationsForTest()` 等待 Case 收敛。只需等待镜像预热时可使用 `waitForBenchmarkImagePreparation()`，它不会触发新的刷新。文件删除重试或固定延时不能代替这个收尾顺序。
+
 ### 生产启动构建复用
 
 `scripts/start-build-state.cjs` 对文件内容、路径、权限及符号链接目标计算 SHA-256，不只比较 Git 提交号或源码修改时间。

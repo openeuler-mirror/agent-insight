@@ -273,6 +273,8 @@ HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../obse
 
 客户端上报 `configuration: { version: 2, defaults }`，没有默认配置时使用 `{}`。交付方式、绑定和业务 Schema 保留在客户端 YAML，不再作为前端编辑或平台提交约束。客户端从这些私有配置计算契约摘要，平台将摘要作为不透明标识检查兼容性。旧快照中的 delivery/structure/schema 元数据可读取，但不约束 v2 参数内容；旧版逐字段协议仅作兼容，使用通用配置需升级客户端。
 
+Runtime 源码定义位于 `services/executor/runtimes/`，安装后实际读取 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/`。新客户端约每 30 秒重新读取并上报定义，改 YAML 后等待上报并刷新页面，或重启客户端加速生效。客户端在每个 platform 的 `parameterDefinitions` 上报描述和 `definitionDigest`，不包含执行绑定。共享模块为 `packages/agent-runtime/index.cjs`（协议、校验）、`parameter-json.cjs`（递归 JSON）与 `loader.cjs`（YAML、覆盖、交付）。任务使用 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }`；平台和执行端按选定 platform/agent 验证，契约不一致返回 `AGENT_DEFINITION_CHANGED`。
+
 以 MCTS 为例，客户端配置如下。默认值保留 CLI 原名，平台初始展示七个平铺字段，用户仍可在本次草稿中添加嵌套对象。
 
 ```yaml

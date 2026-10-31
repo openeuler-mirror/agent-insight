@@ -61,7 +61,7 @@ ZSOFT_TASKS_DIR=/srv/zsoft/tasks
 
 可以沿用已有上游目录；平台不需要访问执行机路径。内核题与 userspace 共用目录，任务 ID 由平台自动下发。实验向导只选择数据集和执行客户端，无需填写任务目录或额外导入公开资料包。
 
-没有 `public/repo-vul/` 的题目还需保留原生 `<task-id>/private/source-manifest.json` 和 `<tasks-dir>/../source-locks/<source-id>.json`。源码来源须锁定到完整提交或带 SHA-256 的归档；MCTS 在沙箱中下载，需预留网络和执行预算。隐藏测试、参考 PoC、修复补丁与 Judge 配置不交给 Agent。公开工作区与源码裁剪契约见 [接入开发规范](./develop-benchmark.md#zsoft-自动生成-poc-的执行契约)。
+没有 `public/repo-vul/` 的题目还需保留原生 `<task-id>/private/source-manifest.json` 和 `<tasks-dir>/../source-locks/<source-id>.json`。源码来源须锁定到完整提交或带 SHA-256 的归档；MCTS 在沙箱中下载，需预留网络和执行预算。隐藏测试、参考 PoC、修复补丁与 Judge 配置不交给 Agent。
 
 客户端须上报 `zsoft-tasks-workspace/v3` 和 `single-file/v1`；MCTS 还需 `mcts-zsoft-export/v1`。ZSoft 不要求 SWE 专属的 `datasets` 和 `run_union.sh`；MCTS 插件需支持当前源码下载与 `bundle_bytes` 接口，未就绪时执行目标不可用。升级后重新安装客户端，不能只更新平台代码。
 
@@ -88,9 +88,9 @@ benchmarks:
 
 `assetsDir: null` 使用默认根目录；自定义目录须处于 Controller 与 Runtime 共享且可写的 bind/volume 内，通常在 `/data` 下，不会自动新增宿主挂载。实际版本目录自动追加镜像摘要，重启复用已校验版本；不同摘要分别保存，不覆盖历史版本。安装失败最多重试三次，排除网络、权限或摘要问题后重启 Controller 重试。旧手动解压目录不会被自动识别为托管版本。
 
-普通进程环境中的旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再隐式覆盖 YAML；可显式使用 `--evaluator-env ZSOFT_L1_ASSETS_DIR=/data/custom-assets` 或 `--evaluator-env ZSOFT_KERNEL_ACCEL=kvm` 覆盖本次启动配置。启动器会转换为配置快照并校验，不修改 YAML；共享目录和 KVM 权限检查仍然生效。平台和评测机分别维护各自配置；评测端不连接平台数据库。
+普通进程环境中的旧 `ZSOFT_L1_ASSETS_DIR`、`ZSOFT_KERNEL_ACCEL` 不再隐式覆盖 YAML；可显式使用 `--evaluator-env ZSOFT_L1_ASSETS_DIR=/data/custom-assets` 或 `--evaluator-env ZSOFT_KERNEL_ACCEL=kvm` 覆盖本次启动配置。启动器会转换为配置快照并校验，不修改 YAML；共享目录和 KVM 权限检查仍然生效。平台和评测机分别维护各自配置。
 
-Case 镜像由公共镜像池按固定 digest 拉取、缓存和回收，Compose 使用已校验 Image ID 并禁止自动 pull。没有 `registryImages` 的冻结清单要求本机预装固定 Image ID；缺少 `sourceTaskDigest` 的旧清单需由维护者重新冻结。离线部署需提前搬运匹配版本的完整资产镜像、题目镜像及 Runtime。
+使用接入包匹配的固定资产版本，不手工替换题目镜像或跳过摘要检查。离线部署需提前搬运匹配版本的完整资产镜像、题目镜像及 Runtime；旧资产版本无法使用时，联系维护者重新发布。
 
 ### 准备 Evaluator Runtime
 
@@ -106,7 +106,7 @@ node scripts/benchmark/build-evaluator-runtime.cjs zsoft-l1
 
 ### 内核加速与资源
 
-默认 `kernelAccel: tcg` 无需 `/dev/kvm`，但应按真实耗时调整超时。使用 `kvm` 前，先在宿主开启虚拟化或嵌套虚拟化，再修改 YAML 并重启 Evaluator。平台 Runtime 不需要 privileged；受控代理仅对实际 runner 开放 `/dev/kvm:rw`。实际评测会检查 KVM API；doctor 不代表已验证 KVM 或 QEMU 启动。
+默认 `kernelAccel: tcg` 无需 `/dev/kvm`，但应按真实耗时调整超时。使用 `kvm` 前，先在宿主开启虚拟化或嵌套虚拟化，再修改 YAML 并重启 Evaluator。仅实际 runner 需要 `/dev/kvm` 设备权限，无需将平台 Runtime 设置为 privileged。KVM 必须通过实际评测验证，doctor 通过不能代替该验证。
 
 CPU、内存使用平台现有评测资源预算。两版服务均分预算，总 CPU 至少为两版 metadata 中最大 `smp` 的两倍，总内存至少为 `2 × (最大 memory_mb + 512)` MiB。当前官方题目每版内存 2048 MiB、CPU 为 1 或 2，默认 4 CPU / 8192 MiB 可通过启动资源检查；并发容量与 TCG 耗时需部署后实测。
 
@@ -121,10 +121,10 @@ bash scripts/evaluator-doctor.sh
 
 1. 用已知正确和错误提交运行判题，确认结果与预期一致，基础设施错误不能当作错误提交通过。
 2. 创建单 Case 自动生成实验，确认客户端产出单文件 PoC（内核题为 C 源码）、根 Trace、提交物上传和独立 Evaluator 评测。
-3. 检查编译失败、超时、取消的终态和错误详情，以及容器、网络和临时工作区清理。
+3. 检查编译失败、超时、取消的终态和错误详情，以及容器、网络和临时工作区清理；提交编译失败保持 `submission_invalid`。
 4. 重启服务或清理受管镜像后重评已有提交，确认固定版本可恢复且历史实验快照未变。
 
-原生对照验证工具的前提与操作见 [ZSoft 本机验证](./develop-benchmark.md#zsoft-接入前的本机验证)。只有镜像拉取或摘要校验通过，不能判定完整链路验收成功。
+只有镜像拉取或摘要校验通过，不能判定完整链路验收成功。
 
 ## 6. 排查与更新
 
@@ -138,9 +138,11 @@ bash scripts/evaluator-doctor.sh
 | `ZSOFT_TASK_MISMATCH` | 核对平台、执行机任务和评测资产的题目内容与 revision，不跳过摘要校验 |
 | `ZSOFT_KERNEL_KVM_UNAVAILABLE` | 检查宿主虚拟化和设备，或按实际条件切换 TCG 后重启 |
 | `ZSOFT_KERNEL_RESOURCES_INSUFFICIENT` | 根据题目 metadata 提高评测 CPU、内存预算 |
-| Runtime 依赖下载失败 | 检查构建网络与包源；默认华为云 PyPI、固定 `pydantic==2.10.6`，单次超时 60 秒、重试 5 次。`PIP_INDEX_URL` 是 Docker 构建参数，不能用 `--evaluator-env` 修改 |
+| Runtime 依赖下载失败 | 检查构建网络与包源，使用与当前接入包匹配的 Runtime；构建问题由维护者处理，不能用 `--evaluator-env` 修改 Docker 构建参数 |
 | `ZSOFT_ARTIFACT_INVALID` / `ZSOFT_ARTIFACT_DIGEST_MISMATCH` | 检查三端版本与提交物归属、文件大小及 SHA-256，按错误日志定位，勿跳过校验 |
 
-旧摘要排序问题通过新解析缓存版本修正；正确摘要不受影响，无需因此重发题目镜像。正式错误与可重试下载、空间等待分开处理，不应持续等待不可恢复的元数据错误。
+遇到明确的版本、摘要或元数据错误时先修复，不持续等待或反复重试。
 
 更新 Runtime Dockerfile 或校验实现后，由维护者重新生成 Catalog，部署匹配平台和 Controller。已有 PoC 的 Case 可用“Benchmark 重评”复用提交。执行端更新需重新安装客户端；通用回滚见 [更新与回滚](./deploy-services.md#9-更新与回滚)。
+
+开发维护参考：[执行器实例实现](../../../../../design/evaluation/benchmark/executor.md#11-zsoft-与-mcts-实例实现)、[Evaluator 与原生对照工具](../../../../../design/evaluation/benchmark/evaluator.md#10-zsoft-实例开发与对照验证)。

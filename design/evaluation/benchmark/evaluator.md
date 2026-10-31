@@ -345,3 +345,27 @@ test/benchmark-evaluator-api.test.ts
 - 不执行来自请求拼接出的 Shell 命令；
 - 不用第三方 ARM64 结果冒充正式 SWE-bench 成绩；
 - 不建立 Benchmark、数据集或评估器业务版本概念。
+
+## 10. ZSoft 实例开发与对照验证
+
+本节供维护 ZSoft Evaluator、资产格式和验收工具时使用。常规安装与发布分别见 [ZSoft 部署指南](../../../docs/zh/how-to/evaluation/benchmarks/deploy-zsoft.md)和[资产发布指南](../../../docs/zh/how-to/evaluation/benchmarks/release-zsoft-assets.md)。
+
+### 题目身份与冻结资产
+
+ZSoft 的 `sourceTaskDigest` 专门对原始 `task.json` 对象与 `public/` 文件字节摘要清单计算 SHA-256，键按固定 Unicode 字符顺序序列化；平台导入与 Node Provider 共用 `source-identity.cjs`，与 Python 冻结端保持一致，不复用通用协议中基于 `localeCompare` 的 JSON 排序。跨语言测试须包含多文件、大小写、标点和数字字符串键。只在实际资产及公开元数据全部验证通过后识别旧排序摘要，并以 `ZSOFT_TASK_DIGEST_LEGACY` 拒绝，不接受任意历史哈希；管理员显式导入新名称的数据集并新建实验，不静默改写冻结身份。通用请求摘要规则不变。
+
+平台题目内容身份与评测机私有资产构建摘要分别管理。接入包的 Image Provider 根据题目身份和可选官方 revision 校验冻结清单，再交由公共镜像池准备固定引用；不得接受任务指定任意镜像。`registryImages` 使用固定仓库摘要，`images` 记录本地 Docker config Image ID，两者角色一致并参与资产校验。内核的 `bzImage`、metadata 和模块属于逐文件校验的冻结资产，不作为 Docker 镜像引用；合并快照须匹配官方 revision 与框架摘要。具体格式以 `benchmarks/zsoft-l1/evaluator/images.cjs`、`assets.py`、`source-identity.cjs` 和资产构建脚本为准。
+
+Controller 通过已校验的内部配置快照向 Runtime 交付配置，Evaluator 不连接平台数据库。平台 Judge 容器与实际 runner 的设备权限分开；仅实际 runner 在 KVM 模式获得所需设备并验证可用性。提交编译失败归为 `submission_invalid`，基础设施、超时和清理故障按各自状态保留，不能混作业务未通过。
+
+### 官方结果与证据
+
+正式评分来自官方执行记录；Adapter 核对题目、提交摘要及大小、阶段、最终判定与清理/超时事实，不能用平台自行生成的摘要替代官方报告。成功时必须有官方报告和执行记录；失败时保留已经产生的官方输出，不伪造缺失报告或清空证据。原始输出按字节保留，异常 JSON 不得阻止整个失败回调。
+
+证据收集仅允许白名单文件与目录，拒绝符号链接、特殊文件和越界路径，不导出隐藏判题源码、工作配置或提交副本。文件、总量和归档限制及采集失败事实以 `benchmarks/zsoft-l1/evaluator/evidence.py`、`entrypoint.py` 和对应测试为准，避免在文档维护另一份易漂移的数值清单。
+
+### 原生对照工具
+
+维护者使用 [`zsoft-preflight.py`](../../../scripts/benchmark/zsoft-preflight.py) 检查环境，使用 [`zsoft-validate.py`](../../../scripts/benchmark/zsoft-validate.py) 对照官方判题；这些工具不注册平台接入，也不运行 Agent、MCTS、模型或 E2B。源码、Python 环境和输出目录独立准备，固定官方 revision；内核构建依赖和实际加速能力按所选任务验证。参数以脚本帮助和实现为准。
+
+P0 冻结正式题目、来源锁与控制提交，逐题核对公开导出内容，不执行 Judge；指定任务后的 P1 运行正确和错误控制提交，准备动作可能构建镜像与内核。正确提交须成功、错误提交须正常完成且业务失败，基础设施错误不算负例通过。保留原生报告、日志、资产身份及清理证据；输出目录不得覆盖旧证据，同题避免并发准备，私有控制材料不交给执行 Agent。原生对照通过仍不代替平台完整链路验收。
