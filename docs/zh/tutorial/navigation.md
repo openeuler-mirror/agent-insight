@@ -24,4 +24,4 @@ Skill 优化期间可以向上滚动查看前文，新输出不会打断阅读�
 - [快速开始](./reliability/agent-fault-injection/01-getting-started.md)
 - [快速开始](./reliability/agent-ras/01-getting-started.md)
 
-[中文总览](https://gitcode.com/openeuler/agent-insight/blob/master/docs/zh/README.md) · [English status](https://gitcode.com/openeuler/agent-insight/blob/master/docs/en/tutorial/README.md)
+[中文总览](https://gitcode.com/openeuler/agent-insight/blob/master/docs/zh/README.md) · [English documentation](../../en/tutorial/navigation.md)

@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "前端架构", "Next.js", "路由导航", "状态�
 changefreq: monthly
 ---
 
-# Frontend
-
+<a id="frontend"></a>
 > 框架：Next.js 16 App Router + React 19（RSC + 客户端组件）。样式：Tailwind CSS 4，在 `src/app/globals.css` 中带有一套令牌系统；基础组件构建于 Radix UI 之上。状态：React Context（`src/lib/client/*`）+ Zustand + 经由 `nuqs` 的 URL 状态。Agent 聊天 UI：assistant-ui（`src/providers/*`）。数据获取：`apiFetch`（`src/lib/client/api.ts`）请求应用自身的 API 路由。
 
 ## 路由

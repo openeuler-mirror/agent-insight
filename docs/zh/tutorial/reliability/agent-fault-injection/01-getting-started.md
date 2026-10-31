@@ -5,8 +5,7 @@ keywords: ["Agent FI", "故障注入", "Worker 安装", "可靠性评测"]
 changefreq: monthly
 ---
 
-# 快速开始
-
+<a id="快速开始"></a>
 在本机启用 Agent FI（故障注入 + 采集）的最短路径。远程 Insight 负责任务 / 采集记录 / 展示；本机 **FI Worker** 认领任务并驱动同机的 OpenCode / xiaoO。
 
 ## 流程

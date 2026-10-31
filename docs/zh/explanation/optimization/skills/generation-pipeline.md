@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "Skill 生成", "生成流水线", "产物校验"]
 changefreq: monthly
 ---
 
-# Skill 生成：工作原理、流水线与能力边界
-
+<a id="skill-生成：工作原理、流水线与能力边界"></a>
+<a id="skill-生成工作原理流水线与能力边界"></a>
 > 适用版本：平台内置「Skill 生成」特性（`skill-generator-agent`，见 `src/lib/skill-generator-opencode-bridge.ts:47`）
 > 撰写日期：2026-06-27
 > 关联设计：内置 skill `skills/skill-generator/SKILL.md`。
