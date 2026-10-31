@@ -1,3 +1,10 @@
+---
+title: "Review 模块"
+description: "说明语义评审模块如何通过 Review Skill 复核疑似异常，并以结构化判定支持后续决策。"
+keywords: ["Agent Insight", "Agent RAS", "语义评审", "异常复核"]
+changefreq: "monthly"
+---
+
 # Review 模块
 
 > L3 语义评审（judge），与 detectors / recovery 平级。P2 自 `recovery/skills` 迁出。

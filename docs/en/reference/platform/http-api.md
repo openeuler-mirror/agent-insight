@@ -1,6 +1,8 @@
 ---
 title: "HTTP APIs and user identity"
 description: "API families, user resolution, responses, and integration boundaries."
+keywords: ["Agent Insight", "HTTP APIs", "user identity", "platform integration"]
+changefreq: "monthly"
 ---
 
 This page is the entry point for existing HTTP interfaces. Identity handling and response shapes vary by endpoint. The documentation describes the current implementation; it does not promise uniform authentication, a universal error envelope, or versioned stability for every route.

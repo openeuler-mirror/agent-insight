@@ -14,7 +14,7 @@ changefreq: monthly
 > 如果你刚接入平台，建议先通过本页确认 Agent、Trace 与各模块入口是否已经可用。
 
 <p align="center">
-  <img src="../../../images/workspace_overreview.png" alt="概览面板总览界面" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/workspace_overreview.png" alt="概览面板展示 Agent 状态、调用统计与活动分布" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 

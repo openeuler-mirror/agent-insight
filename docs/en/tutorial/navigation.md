@@ -1,6 +1,8 @@
 ---
 title: "Tutorials"
-description: "English coverage for tutorial."
+description: "Provides step-by-step tutorials for connecting an Agent, inspecting a Trace, and running an initial evaluation."
+keywords: ["Agent Insight", "getting started", "Agent integration", "evaluation"]
+changefreq: "monthly"
 ---
 
 Follow a complete first-use workflow.

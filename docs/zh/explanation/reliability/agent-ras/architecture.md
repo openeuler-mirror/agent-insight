@@ -1,3 +1,10 @@
+---
+title: "Agent RAS 整体架构"
+description: "阐述 Agent RAS 四层同进程架构、平台挂载方式及检测恢复流程，并说明与观测和故障注入的通道边界。"
+keywords: ["Agent Insight", "Agent RAS", "同进程架构", "故障检测", "故障恢复"]
+changefreq: "monthly"
+---
+
 # Agent RAS 整体架构
 
 环内可靠性包 `agent_ras/` 的唯一架构真源：目标与边界、四层同进程、拓扑、**协议 inproc（JS 宿主 libpython / Python 宿主直连 / 子进程 IPC 共享 Hub）**、主流程、与 Insight·FI 的通道不变量、当前能力摘要。

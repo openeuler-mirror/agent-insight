@@ -1,3 +1,10 @@
+---
+title: "xiaoO 平台适配方案"
+description: "说明 xiaoO 作为故障注入被测平台时的接入方式、执行链路与适配实现。"
+keywords: ["Agent Insight", "xiaoO", "故障注入", "平台适配"]
+changefreq: "monthly"
+---
+
 # xiaoO 平台适配方案
 
 > **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](https://gitcode.com/openeuler/agent-insight/tree/master/agent_fault_injection) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。

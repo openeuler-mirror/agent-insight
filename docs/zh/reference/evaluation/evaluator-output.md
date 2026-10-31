@@ -1,6 +1,8 @@
 ---
 title: "评估器运行与输出契约"
 description: "输出字段、归一化、人工修正及运行状态的边界。"
+keywords: ["Agent Insight", "评估器", "评分输出", "运行契约"]
+changefreq: "monthly"
 ---
 
 本页适用于平台内置和自建评估器的单次结果。设计可信评分方法及工程接入见[评估器开发指南](../../how-to/evaluation/develop-evaluator.md)。

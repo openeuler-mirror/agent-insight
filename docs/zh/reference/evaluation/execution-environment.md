@@ -1,6 +1,8 @@
 ---
 title: "实验执行环境准备接口"
 description: "准备任务、幂等上下文与执行环境就绪判定。"
+keywords: ["Agent Insight", "执行环境", "环境准备", "幂等请求"]
+changefreq: "monthly"
 ---
 
 用户身份及调用范围见 [HTTP 接口与用户身份](../platform/http-api.md)。

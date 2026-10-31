@@ -1,6 +1,8 @@
 ---
 title: "Run your first evaluation"
 description: "Evaluate one existing Trace or run a Benchmark Case."
+keywords: ["Agent Insight", "evaluation", "Trace scoring", "Benchmark"]
+changefreq: "monthly"
 ---
 
 There are two initial paths: score an existing Trace with one evaluator, or select a Benchmark dataset/Case, execute it through an Agent, and run its official judging workflow. UI names below include Chinese labels where useful.

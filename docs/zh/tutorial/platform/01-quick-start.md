@@ -71,7 +71,7 @@ changefreq: monthly
 1. 打开你的 Agent Insight 看板地址。
 
    <p align="center">
-     <img src="../../../images/home.png" alt="Agent Insight 看板首页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../../../images/home.png" alt="首页展示 Agent 数量、调用次数与平均耗时" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 2. 根据部署模式完成登录，进入默认 Workspace。
@@ -110,7 +110,7 @@ changefreq: monthly
 4. 点击 **测试连接并保存**
 
    <p align="center">
-     <img src="../../../images/llm.png" alt="Agent Insight 模型注册页面" style="width: 100%; max-width: 1040px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../../../images/llm.png" alt="模型配置页展示供应商与已注册模型" style="width: 100%; max-width: 1040px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 完成后，你的 Workspace 就具备了后续执行生成、诊断、评测等能力所需的模型依赖。
@@ -130,7 +130,7 @@ changefreq: monthly
 4. 保存后进入 Agent 详情页
 
    <p align="center">
-     <img src="../../../images/agent_signup.png" alt="Agent 注册弹窗" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../../../images/agent_signup.png" alt="注册弹窗填写平台名称、Agent 名称与描述" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 注册agent是把客户端实际使用的 Agent 注册到平台。只有注册后的 Agent，平台才会展示它的执行数据。
@@ -148,7 +148,7 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 2. 复制页面生成的 **Linux curl** 命令
 
    <p align="center">
-     <img src="../../../images/install_guide.png" alt="客户端安装页面" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../../../images/install_guide.png" alt="客户端安装页提供不同系统的接入命令" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 3. 在 Agent 所在 Linux 主机的 Bash / Zsh 终端执行该命令
@@ -157,7 +157,7 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
    下面以 `opencode` 作为客户端为例：
 
    <p align="center">
-     <img src="../../../images/install_client.png" alt="以 opencode 为例的客户端安装输出" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../../../images/install_client.png" alt="终端显示 OpenCode 采集组件安装与启动结果" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
@@ -175,13 +175,13 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
    下面以 `opencode` 为例：
 
    <p align="center">
-     <img src="../../../images/opencode_example.png" alt="opencode 请求示例" style="width: 100%; max-width: 1040px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../../../images/opencode_example.png" alt="OpenCode 对话中发送请求以触发链路采集" style="width: 100%; max-width: 1040px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 2. 回到平台，进入 **运行观测 → 链路追踪**，确认是否出现新的 Trace。
 
    <p align="center">
-     <img src="../../../images/example_trace.png" alt="链路追踪中的 Trace 示例" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../../../images/example_trace.png" alt="Trace 详情展示调用时间线与消息内容" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 验证时优先确认这些信息：

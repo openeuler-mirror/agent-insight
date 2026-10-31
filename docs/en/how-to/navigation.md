@@ -1,6 +1,8 @@
 ---
 title: "How-to guides"
-description: "English coverage for how-to."
+description: "Organizes available English procedures for platform maintenance and Agent integration, with links to Chinese guides."
+keywords: ["Agent Insight", "how-to guides", "platform maintenance", "Agent integration"]
+changefreq: "monthly"
 ---
 
 Operational procedures currently available in English:

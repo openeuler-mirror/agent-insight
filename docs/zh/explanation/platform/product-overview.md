@@ -23,7 +23,7 @@ changefreq: monthly
 - 把 Skill 当成版本化资产，完成生成、分析、A/B 测试和优化迭代
 
 <p align="center">
-  <img src="../../../images/home.png" alt="Agent Insight 首页概览" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/home.png" alt="首页汇总 Agent 状态、运行指标与调用趋势" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 ## 平台结构

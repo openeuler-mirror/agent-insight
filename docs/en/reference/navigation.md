@@ -1,6 +1,8 @@
 ---
 title: "Reference"
-description: "English coverage for reference."
+description: "Indexes API inputs, outputs, runtime configuration, and evaluation contracts for platform integrations."
+keywords: ["Agent Insight", "API reference", "runtime configuration", "evaluation contracts"]
+changefreq: "monthly"
 ---
 
 Check input, output, configuration, identity, and asynchronous behavior.

@@ -1,6 +1,8 @@
 ---
 title: "Evaluator output and runtime contract"
 description: "Output fields, normalization, human corrections, and execution-state boundaries."
+keywords: ["Agent Insight", "evaluators", "scoring output", "runtime contracts"]
+changefreq: "monthly"
 ---
 
 This contract applies to one result from a built-in or custom platform evaluator. For scoring methodology, identity, registration, and implementation steps, see the [evaluator development guide, Chinese](../../../zh/how-to/evaluation/develop-evaluator.md).

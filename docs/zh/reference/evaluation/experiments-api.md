@@ -1,6 +1,8 @@
 ---
 title: "实验 HTTP 接口"
 description: "普通实验的创建、启动、查询、重命名及取消删除约定。"
+keywords: ["Agent Insight", "实验接口", "评测任务", "异步执行"]
+changefreq: "monthly"
 ---
 
 本页覆盖普通实验的常用调用及异步语义。Benchmark、Skill、LLM 对比实验走同一平台的不同分支，不能假定请求和响应完全相同；界面操作见[实验指南](../../how-to/evaluation/experiments.md)。用户解析见 [HTTP 接口与用户身份](../platform/http-api.md)。

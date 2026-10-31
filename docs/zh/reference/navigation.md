@@ -1,5 +1,8 @@
 ---
 title: "参考文档"
+description: "汇总接口、配置、协议与数据字段文档，便于核对平台接入和开发契约。"
+keywords: ["Agent Insight", "接口参考", "运行配置", "数据协议"]
+changefreq: "monthly"
 ---
 
 查找 API、配置、协议和数据字段。
