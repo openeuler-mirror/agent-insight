@@ -127,32 +127,56 @@ opencode run "hello"
 | 200 但登录看不到 | 登录用的账号名与 `AGENT_INSIGHT_DEFAULT_INGEST_USER` 不一致（注意大小写）；或数据在"安装时间门"之前被跳过（跑个新任务） |
 | 客户端没上传 | 看 `~/.agent-insight/logs/opencode_uploader.log`：`main.skip missingConfig` 说明缺 host；正常应有 `postJson.response status=200` |
 | Windows 装完卡住（安装阶段） | 确认用的是 `iex (irm "...?yes=1&nokey=1")`，且镜像含 PowerShell 非交互（最新 master 构建） |
-| **opencode desktop 打不开 / 一直"本地连接中"** | **离线/内网**特有，是 opencode 自身 bug（强装联网依赖超时）。见下方「八、离线/内网修复」，跑一次 `opencode-offline-fix.ps1` 即可 |
+| **OpenCode 启动慢 / 一直“本地连接中”** | 可能在等待插件依赖；先确认版本、日志和包源可达性。见下方临时排查，不能将所有启动失败归因为同一问题 |
 
 ---
 
-## 八、离线 / 内网：opencode desktop 打不开（"本地连接中"）
+## 八、离线 / 内网：OpenCode 启动慢
 
-**现象**：离线或内网机器上，opencode desktop 装了插件后打不开、卡在"本地连接中"，大部分时间连不上本地服务（偶尔能开）。
+安装采集插件后，OpenCode 可能按宿主版本、配置和缓存状态检查、安装或更新依赖。客户端能正常访问所配置的 npm 包仓时，通常无需额外设置；首次安装或依赖变化仍可能需要下载时间。包仓不可达或网络异常时，部分版本可能等待重试 / 超时，表现为界面打开前启动变慢。
 
-**原因**（opencode 自身已知 bug，非本平台）：opencode 启动时会 `bun add --force` 安装一个 npm 上根本不存在的 `@opencode-ai/plugin@local`。联网机器能秒拿到"无此版本"的应答、放行；但**离线/内网**（bun 走不了系统代理）连不上 registry → 每次卡在 ~60s 网络超时并反复重试 → 本地服务起不来。
+用户可自行选择对本次启动设置 `npm_config_offline=true`。安装器不会自动设置该变量、改写 `.npmrc` 或切换 npm 包仓；使用前请了解下文的影响范围。
 
-**解法**：下发一个独立的修复脚本，把 bun 的 registry 请求改成"**秒失败**"（复刻联网时"秒放行"的效果），opencode 即可正常启动、插件照常上报。
+Linux/macOS 单次启动：
 
-```powershell
-# 1) 从平台下载（注意：脚本带参数，不能 irm | iex，要下成文件再跑）
-irm "http://<平台地址>:3000/api/setup/opencode-offline-fix" -OutFile opencode-offline-fix.ps1
-
-# 2) 运行（自动检测能否直连 npm，够不到才应用）
-powershell -ExecutionPolicy Bypass -File .\opencode-offline-fix.ps1
-
-# 3) 彻底退出并重开 opencode desktop
+```bash
+npm_config_offline=true opencode
 ```
 
-**要点**
+当前终端持续生效，之后只需执行 `opencode`：
 
-- **自动检测**：脚本先直连测 `registry.npmjs.org:443`；能直连说明不会卡，会自动跳过、不改动。
-- **可恢复**：`powershell -ExecutionPolicy Bypass -File .\opencode-offline-fix.ps1 -Restore` 一键还原（应用前会备份原 `~/.npmrc`）。
-- **内网有 npm 镜像**：加 `-Registry "http://你的镜像/"`，用镜像替代默认死地址，这样该机**真包仍可正常安装**。
-- **强制应用**：透明代理等极端情况检测可能误判，可加 `-Force`。
-- **影响**：默认会把该机 npm registry 指到一个"死地址"，让联网装包立即失败——离线机本来就装不了，无实际损失；若该机还要正常用 npm，请用 `-Registry` 指到内网镜像。
+```bash
+export npm_config_offline=true
+opencode
+```
+
+恢复普通启动：
+
+```bash
+unset npm_config_offline
+opencode
+```
+
+这会影响当前终端后续启动的 npm / npx 等进程；已运行的子进程需退出后重启。关闭终端后，独立新开的终端不会继承本次设置；原先已有该变量时应恢复原值。不要写入 shell 配置文件。
+
+PowerShell：仅在当前终端临时设置，退出后恢复原值。
+
+```powershell
+$previous = $env:npm_config_offline
+try {
+    $env:npm_config_offline = 'true'
+    opencode
+} finally {
+    if ($null -eq $previous) {
+        Remove-Item Env:npm_config_offline -ErrorAction SilentlyContinue
+    } else {
+        $env:npm_config_offline = $previous
+    }
+}
+```
+
+遵循该变量的 npm 相关流程只用本地资源：不能联网下载依赖或获取包元数据，可访问的内网 npm 源也受限制。只有依赖这些操作的功能可能受影响，例如通过 `npx` 首次下载的 MCP 或工具；依赖已齐全、运行时无需这类联网获取的功能，不会因该配置本身受到影响。它本身不直接阻断模型调用和 Trace 上报，也不是关闭 OpenCode 全部更新的开关。
+
+不同版本是否生效需要现场验证。固定离线环境且依赖齐全时，可在确认模型调用、Trace 和常用工具正常后选择使用；启动变快不代表需要联网获取依赖的操作已经成功。关闭相关进程；若使用了 `export`，先执行 `unset npm_config_offline`（或恢复原值），再直接执行 `opencode` 恢复普通启动。GUI 从桌面图标启动通常不会继承终端变量，不能直接用 CLI 结果替代 Desktop 验证。
+
+安装器不将变量写入永久启动器、shell 配置或 `.npmrc`，不关闭默认插件或全局更新。历史 `opencode-offline-fix.ps1` 会持久修改用户级 npm registry，不属于本方案；已经使用过的环境应对照原备份和用户后续修改核查包源配置。
