@@ -441,21 +441,6 @@ function StatusBadge({ active, calls7d }: { active: boolean; calls7d: number }) 
     return null
 }
 
-function Sparkline({ data, color = 'var(--sk-success)', width = 100, height = 32 }: { data?: number[]; color?: string; width?: number; height?: number }) {
-    if (!data || data.length === 0) return null;
-    const max = Math.max(...data);
-    const min = Math.min(...data);
-    const range = max - min || 1;
-    const step = data.length > 1 ? width / (data.length - 1) : width;
-    const points = data.map((v, i) => `${i * step},${height - ((v - min) / range) * (height - 4) - 2}`).join(' ');
-    return (
-        <svg width={width} height={height} style={{ display: 'block' }}>
-            <polyline points={points} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-            <polyline points={`${points} ${width},${height} 0,${height}`} fill={color} opacity={0.08} />
-        </svg>
-    );
-}
-
 function formatDate(iso?: string): string {
     if (!iso) return '—';
     try {
@@ -567,8 +552,6 @@ function SkillCard({
 }) {
     const { user } = useAuth();
     const active = skill.activeVersion ?? 0;
-    const issues = skill.qualityIssues || { high: 0, medium: 0, low: 0 };
-    const total = issues.high + issues.medium + issues.low;
     const calls = skill.calls7d ?? 0;
     const agents = skill.agentsUsing ?? 0;
     const isActive = !!skill.isUploaded || calls > 0 || agents > 0;

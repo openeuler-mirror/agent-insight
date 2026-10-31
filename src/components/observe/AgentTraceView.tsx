@@ -36,7 +36,7 @@ import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
 import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
-import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
+import { getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
 import {
     AgentEvent,
     AgentNode,
@@ -3035,7 +3035,7 @@ function EmptyDetail() {
 
 // ─── AgentDetail (right panel) ────────────────────────────────────────────────
 function AgentDetail({
-    node, highlightEvent, activeTab, onTabChange, eventTypeFilter, onEventTypeFilterChange,
+    node, activeTab, onTabChange, eventTypeFilter, onEventTypeFilterChange,
     totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId, parentAgent, childAgents, relationsUnavailable
 }: {
     node: AgentNode;
@@ -3558,7 +3558,7 @@ function SkillUsageCard({ skill, currentUser }: { skill: TraceSkillUsage; curren
 }
 
 // ─── OverviewTab ──────────────────────────────────────────────────────────────
-function OverviewTab({ node, status, onSelectChild, parentAgent, childAgents, relationsUnavailable }: { childAgents: ChildAgentReference[]; relationsUnavailable?: boolean; node: AgentNode; status: NodeStatus; onSelectChild: (id: string) => void; parentAgent?: ParentAgentReference | null }) {
+function OverviewTab({ node, onSelectChild, parentAgent, childAgents, relationsUnavailable }: { childAgents: ChildAgentReference[]; relationsUnavailable?: boolean; node: AgentNode; status: NodeStatus; onSelectChild: (id: string) => void; parentAgent?: ParentAgentReference | null }) {
     const overviewCtx = React.useContext(TraceCtx);
     const { locale } = useLocale();
     const stats = aggregateSubtreeStats(node);
@@ -3858,7 +3858,7 @@ function TimelineTree({ events, onSelectChild, node, interactions }: { events: A
 }
 
 // ─── TimelineEventRow ─────────────────────────────────────────────────────────
-function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectChild, indent, isLast, showVerticalLine, node, interactions }: {
+function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectChild, indent, isLast, node, interactions }: {
     event: AgentEvent; hasChildren: boolean; isExpanded: boolean;
     onToggle: () => void; onSelectChild: (id: string) => void;
     indent: number; isLast: boolean; showVerticalLine: boolean;
@@ -3867,7 +3867,6 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
     const [modalOpen, setModalOpen] = useState(false);
     const { findEventAnomalies } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
-    const meta = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null) ? formatDuration(event.completedAt - event.startedAt) : null;
     const time = event.startedAt != null ? new Date(event.startedAt).toLocaleTimeString() : '';
     const showDetail = !!(event.args !== undefined || event.output !== undefined || event.interaction?.content || event.summary);
