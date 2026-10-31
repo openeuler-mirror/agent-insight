@@ -38,6 +38,7 @@ import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
 import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
 import {
+    getAgentActiveDurationMs,
     AgentEvent,
     AgentNode,
     findNode,
@@ -85,7 +86,7 @@ function sameStringSet(left: Set<string>, right: Set<string>): boolean {
 type NodeStatus = 'error' | 'slow' | 'ok';
 
 function getStatus(node: AgentNode): NodeStatus {
-    if (node.stats?.durationMs !== undefined && node.stats.durationMs > SLOW_MS) return 'slow';
+    if ((getAgentActiveDurationMs(node) ?? 0) > SLOW_MS) return 'slow';
     return 'ok';
 }
 
@@ -585,10 +586,10 @@ export default function AgentTraceView({
         const aligned = rasMarkers.length
             ? alignInteractionsToRasAnchors(displayInteractions || [], rasMarkers)
             : (displayInteractions || [])
-        const base = langfuseProjection?.tree || buildCollaborationTraceTree(aligned)
+        const base = langfuseProjection?.tree || buildCollaborationTraceTree(aligned, rootSessionId)
         if (!base) return base
         return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers, locale) : base
-    }, [interactions, langfuseProjection, displayInteractions, rasMarkers, locale]);
+    }, [interactions, langfuseProjection, displayInteractions, rasMarkers, locale, rootSessionId]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(displayInteractions || []), [displayInteractions]);
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
@@ -682,6 +683,7 @@ export default function AgentTraceView({
     );
     const totalStart = traceTimeline?.start;
     const totalDuration = traceTimeline?.durationMs;
+    const totalActiveDuration = getAgentActiveDurationMs(tree) ?? executionDurationMs;
 
     // Resolve selected node/event for right panel
     const { selectedAgentNode, selectedEvent } = useMemo(() => {
@@ -770,7 +772,7 @@ export default function AgentTraceView({
 
     const slowCount = useMemo(() => {
         let n = 0;
-        if (tree) walkTree(tree, node => { if (getStatus(node) !== 'ok') n++; });
+        if (tree) walkTree(tree, node => { if ((getAgentActiveDurationMs(node) ?? 0) > SLOW_MS) n++; });
         return n;
     }, [tree]);
 
@@ -789,9 +791,9 @@ export default function AgentTraceView({
             const aKey = agentKey(node.id);
             spans.push({
                 key: aKey, label: getAgentNodeDisplayLabel(node.agentName, node.subagentType), kind: 'agent',
-                durationMs: node.stats.durationMs ?? undefined,
+                durationMs: getAgentActiveDurationMs(node),
                 tokens: node.stats.totalTokens || undefined,
-                isSlow: (node.stats.durationMs ?? 0) > SLOW_MS,
+                isSlow: (getAgentActiveDurationMs(node) ?? 0) > SLOW_MS,
                 searchText: [node.agentName, node.subagentType, node.id].filter(Boolean).join(' ').toLowerCase(),
                 parentKeys,
             });
@@ -810,7 +812,7 @@ export default function AgentTraceView({
                 }
                 const evKey = eventKey(node.id, idx);
                 const dur = ev.kind === 'task'
-                    ? childNode?.stats.durationMs
+                    ? getAgentActiveDurationMs(childNode)
                     : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
                 const tok = ev.usage?.total || 0;
                 const label = ev.kind === 'task' && ev.spawnedChildId
@@ -1183,7 +1185,7 @@ export default function AgentTraceView({
                             onTabChange={setActiveDetailTab}
                             eventTypeFilter={eventTypeFilter}
                             onEventTypeFilterChange={setEventTypeFilter}
-                            totalDurationMs={totalDuration}
+                            totalDurationMs={totalActiveDuration}
                             onSelectChild={(id) => {
                                 const n = findNode(tree, id);
                                 if (n) setSelectedKey(agentKey(n.id));
@@ -1338,8 +1340,9 @@ function UnifiedSpanTree({
     // Gantt bar for this agent
     const barLeft = (totalStart != null && totalDuration && node.startedAt != null)
         ? Math.max(0, ((node.startedAt - totalStart) / totalDuration) * 100) : 0;
-    const barWidth = (totalDuration && node.stats.durationMs != null)
-        ? Math.min(100 - barLeft, (node.stats.durationMs / totalDuration) * 100) : (depth === 0 ? 100 : 0);
+    const elapsedDurationMs = node.stats.elapsedDurationMs ?? node.stats.durationMs;
+    const barWidth = (totalDuration && elapsedDurationMs != null)
+        ? Math.min(100 - barLeft, (elapsedDurationMs / totalDuration) * 100) : (depth === 0 ? 100 : 0);
 
     const ctx = React.useContext(TraceCtx);
     const { matchedKeys, activeMatchKey, searchQuery, treeKindFilter, minDurationMs, minTokenK, slowOnly: ctxSlowOnly } = ctx;
@@ -1386,7 +1389,7 @@ function UnifiedSpanTree({
         const hasChildren = entry.children.length > 0 || !!childNode;
         const isEvExpanded = hasChildren && expandedKeys.has(evKey);
         const evDur = ev.kind === 'task'
-            ? childNode?.stats.durationMs
+            ? getAgentActiveDurationMs(childNode)
             : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
         const evTok = ev.usage?.total || 0;
         const evIsSlow = (evDur ?? 0) > SLOW_MS;
@@ -1541,7 +1544,7 @@ function UnifiedSpanTree({
                     'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
                     status === 'slow' ? 'text-warning' : 'text-foreground-muted',
                 )}>
-                    {formatDuration(node.stats.durationMs)}
+                    {formatDuration(getAgentActiveDurationMs(node))}
                 </span>
                 <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
                     {formatTokens(displayStats.totalTokens)}
@@ -1591,7 +1594,7 @@ function UnifiedEventRow({
 
     // Duration: for task events, use child agent duration
     const spanDurationMs = event.kind === 'task'
-        ? childNode?.stats.durationMs
+        ? getAgentActiveDurationMs(childNode)
         : (event.startedAt != null && event.completedAt != null)
             ? event.completedAt - event.startedAt
             : undefined;
@@ -1608,10 +1611,14 @@ function UnifiedEventRow({
     const spanStart = event.kind === 'task' && childNode ? childNode.startedAt : event.startedAt;
     const barLeft = (totalStart != null && totalDuration && spanStart != null)
         ? Math.max(0, ((spanStart - totalStart) / totalDuration) * 100) : 0;
-    const barWidth = (totalDuration && spanDurationMs != null)
-        ? Math.min(100 - barLeft, (spanDurationMs / totalDuration) * 100) : 0;
+    const elapsedDurationMs = event.kind === 'task' && childNode
+        ? childNode.stats.elapsedDurationMs ?? childNode.stats.durationMs
+        : spanDurationMs;
+    const barWidth = (totalDuration && elapsedDurationMs != null)
+        ? Math.min(100 - barLeft, (elapsedDurationMs / totalDuration) * 100) : 0;
 
     const isSlow = spanDurationMs != null && spanDurationMs > SLOW_MS;
+    const hasError = isErrorToolStatus(event.toolStatus);
 
     const { matchedKeys: ctxMatchedKeys, activeMatchKey: ctxActiveMatchKey, searchQuery: ctxSearch } = React.useContext(TraceCtx);
     const evKey = eventKey(parentNodeId, evIdx);
@@ -2773,7 +2780,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
         ? node.children.find(c => c.id === event.spawnedChildId)
         : undefined;
     const durationMs = event.kind === 'task'
-        ? spawnedChild?.stats.durationMs
+        ? getAgentActiveDurationMs(spawnedChild)
         : (event.startedAt != null && event.completedAt != null)
             ? event.completedAt - event.startedAt
             : undefined;
@@ -3090,17 +3097,17 @@ function AgentDetail({
                 </div>
 
                 {/* Duration bar */}
-                {totalDurationMs && node.stats.durationMs != null && (
+                {totalDurationMs && getAgentActiveDurationMs(node) != null && (
                     <div className="mb-2">
                         <div className="h-1 bg-background-secondary rounded-sm overflow-hidden">
                             <div
                                 className={cn('h-full rounded-sm transition-[width]', status === 'slow' ? 'bg-warning' : 'bg-primary')}
-                                style={{ width: `${Math.min(100, (node.stats.durationMs / totalDurationMs) * 100)}%` }}
+                                style={{ width: `${Math.min(100, ((getAgentActiveDurationMs(node) ?? 0) / totalDurationMs) * 100)}%` }}
                             />
                         </div>
                         <div className="flex justify-between text-xs text-foreground-muted mt-0.5">
-                            <span className={cn('font-semibold', status === 'slow' ? 'text-warning' : 'text-foreground')}>{formatDuration(node.stats.durationMs)}</span>
-                            <span>{Math.round((node.stats.durationMs / totalDurationMs) * 100)}% of total</span>
+                            <span className={cn('font-semibold', status === 'slow' ? 'text-warning' : 'text-foreground')}>{formatDuration(getAgentActiveDurationMs(node))}</span>
+                            <span>{Math.round(((getAgentActiveDurationMs(node) ?? 0) / totalDurationMs) * 100)}% of total</span>
                         </div>
                     </div>
                 )}
@@ -3619,7 +3626,7 @@ function OverviewTab({ node, status, onSelectChild, parentAgent, childAgents, re
                         stats={child.stats}
                         reported={child.reported}
                         locale={locale}
-                        durationBasisMs={node.stats.durationMs}
+                        durationBasisMs={getAgentActiveDurationMs(node)}
                         onNavigate={child.taskId && overviewCtx.onSubagentNavigate
                             ? () => overviewCtx.onSubagentNavigate?.(child.taskId) : undefined}
                         onSelect={child.nodeId ? () => onSelectChild(child.nodeId!) : undefined}

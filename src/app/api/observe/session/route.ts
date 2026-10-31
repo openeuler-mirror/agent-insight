@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { deriveExecutionTiming } from '@/lib/engine/observability/execution-timing';
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { sessionTraceRelations } from '@/lib/trace/session-relations';
 import { resolveUser } from '@/lib/auth/auth';
@@ -110,7 +111,9 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
         : rawInteractions;
     const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
     const executionSummary = latestExecution ? {
-        latency: latestExecution.latency ?? null,
+        latency: framework === 'opencode'
+            ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? latestExecution.latency ?? null
+            : latestExecution.latency ?? null,
         tokens: latestExecution.tokens ?? null,
         cost: latestExecution.cost ?? null,
         timestamp: latestExecution.timestamp ?? null,

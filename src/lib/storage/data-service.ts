@@ -53,7 +53,7 @@ import { chooseExecutionLabel } from '@/lib/engine/evaluation/label-utils';
 import { parseLabelSkillVersionBinding } from '@/lib/engine/evaluation/label-skill-binding';
 import { extractKeyActionsFromFlow, mergeKeyActionsFromMultipleSkills, type ExtractedKeyAction, type ParsedFlowResult } from '@/lib/engine/observability/flow-parser';
 import { mergeSessionInteractionsMonotonic } from '@/lib/engine/observability/session-interactions-merge';
-import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, getAgentActiveDurationMs, inferSubagentType, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
@@ -2634,7 +2634,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         }
 
         if (targetRecord.framework === 'opencode' && Array.isArray(mergedInteractionsForSession)) {
-            const derived = deriveOpencodeExecutionFields(mergedInteractionsForSession);
+            const derived = deriveOpencodeExecutionFields(mergedInteractionsForSession, targetRecord.task_id);
             if (derived.model) targetRecord.model = derived.model;
             if (derived.final_result) targetRecord.final_result = derived.final_result;
             if (derived.agentName && !targetRecord.agentName) targetRecord.agentName = derived.agentName;
@@ -3373,7 +3373,7 @@ export function projectAgentNodeExecution(node: AgentNode, interactions: any[]):
         cacheCreationInputTokens: node.stats.cacheWriteTokens,
         // 与主记录 Execution.latency 统一为毫秒（此前派生子记录存的是秒，
         // 导致调用方无法区分单位，见 docs/tasks/bugs/issue-159-codex-open.md Bug 2）。
-        latency: node.stats.durationMs != null ? node.stats.durationMs : null,
+        latency: getAgentActiveDurationMs(node) ?? null,
         llmCallCount: meteredLlmEvents.length || fallbackLlmCalls,
         toolCallCount: toolEvents.length,
         toolCallErrorCount: toolEvents.filter(isFailedAgentToolEvent).length,

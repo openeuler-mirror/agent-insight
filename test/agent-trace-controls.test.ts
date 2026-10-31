@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 import React from 'react';
+import { getAgentActiveDurationMs } from '../src/lib/engine/observability/agent-trace';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const source = fs.readFileSync(new URL('../src/components/observe/AgentTraceView.tsx', import.meta.url), 'utf8');
@@ -43,7 +44,7 @@ function evaluate<T>(expression: string, scope: Record<string, unknown>): T {
 }
 function variable<T>(name: string, scope: Record<string, unknown>): T {
     const node = findNode(n => ts.isVariableDeclaration(n) && n.name.getText(ast) === name) as ts.VariableDeclaration;
-    return evaluate<T>(node.initializer!.getText(ast), scope);
+    return evaluate<T>(node.initializer!.getText(ast), { getAgentActiveDurationMs, ...scope });
 }
 function functionValue<T>(name: string, scope: Record<string, unknown>): T {
     const node = findNode(n => ts.isFunctionDeclaration(n) && n.name?.text === name);
@@ -159,6 +160,8 @@ test('TASK rows use child duration and leave unresolved coordination events with
     });
     assert.equal(unresolved, undefined);
     assert.equal(linked, 44_000);
+    assert.equal(variable<number>('spanDurationMs', { event: { kind: 'task' },
+        childNode: { stats: { activeDurationMs: 50_000, elapsedDurationMs: 3_650_000, durationMs: 3_650_000 } } }), 50_000);
     assert.equal(regular, 250);
 });
 

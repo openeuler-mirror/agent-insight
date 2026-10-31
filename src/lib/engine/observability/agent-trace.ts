@@ -25,6 +25,7 @@
  * 上层 UI 组件（AgentTraceView）无需感知。
  */
 
+import { deriveExecutionTiming } from './execution-timing';
 import { stringifyClaudeContent } from '@/lib/shared/interaction-content';
 import { isSkillLoaderToolName } from '@/lib/evaluators/evaluator-case-context';
 
@@ -191,6 +192,8 @@ export interface AgentNodeStats {
     reasoningTokens: number;
     totalTokens: number;
     durationMs?: number;
+    activeDurationMs?: number;
+    elapsedDurationMs?: number;
 }
 
 export interface AgentNode {
@@ -289,7 +292,7 @@ export interface CompactionBoundary {
  *      product requirement: 4 calls to Dayu = 4 parallel nodes, not one).
  *   4. Tool calls / skill calls / LLM responses become events on the current node.
  */
-export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | null {
+export function buildAgentCallTree(interactions: RawInteraction[], rootSessionId?: string): AgentNode | null {
     if (!interactions || interactions.length === 0) return null;
 
     let nodeIdCounter = 0;
@@ -300,7 +303,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         id: nextId(),
         agentName: rootAgentName,
         subagentType: null,
-        sessionId: 'TOP',
+        sessionId: rootSessionId || 'TOP',
         parentId: null,
         depth: 0,
     });
@@ -365,6 +368,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
     /** session_id → active child node currently receiving interactions */
     const sessionToNode = new Map<string, AgentNode>();
     sessionToNode.set('TOP', root);
+    if (rootSessionId) sessionToNode.set(rootSessionId, root);
 
     /** subagent_session_id → buffered system prompts waiting for node creation */
     const pendingSysPrompts = new Map<string, SystemPromptEntry[]>();
@@ -383,6 +387,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         pendingSysPrompts.delete(sid);
     }
 
+    const timingInputs = new Map<string, RawInteraction[]>();
     for (let idx = 0; idx < interactions.length; idx++) {
         const it = interactions[idx];
 
@@ -392,6 +397,12 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         // non-system interaction in the sub-session slice), buffer it; the
         // buffer is drained when the node is born.
         if (it.role === 'system') {
+            if (it.error && it.timeInfo?.completed != null) {
+                const owner = sessionToNode.get(it.subagent_session_id || '') || root;
+                const inputs = timingInputs.get(owner.id) || [];
+                inputs.push(it);
+                timingInputs.set(owner.id, inputs);
+            }
             const entry: SystemPromptEntry = {
                 text: stringifyClaudeContent(it.content),
                 sha256: (it as any).system_prompt_sha256,
@@ -444,7 +455,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         }
 
         const isProjectedSubUser = it.role === 'user' && !!it.trace_relation;
-        const isSub = (isProjectedSubUser || it.trace_kind === 'user' || it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
+        const isSub = (isProjectedSubUser || it.trace_kind === 'user' || it.role === 'opencode' || it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
         const sid = isSub ? (it.subagent_session_id as string) : 'TOP';
         const agentName = it.agent || (isSub ? (it.subagent_name || 'Subagent') : rootAgentName);
 
@@ -495,6 +506,10 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         if (isCompactionTrigger(it)) {
             continue;
         }
+
+        const ownTimingInputs = timingInputs.get(host.id) || [];
+        ownTimingInputs.push(it);
+        timingInputs.set(host.id, ownTimingInputs);
 
         // Time + token aggregation always runs (compaction has real cost the
         // user paid for, and we want the node's startedAt/endedAt to span it).
@@ -559,7 +574,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
     }
 
     // Compute durations
-    finalizeStats(root);
+    finalizeStats(root, timingInputs);
     return root;
 }
 
@@ -637,8 +652,15 @@ function makeNode(init: {
     };
 }
 
-function finalizeStats(node: AgentNode): void {
-    for (const child of node.children) finalizeStats(child);
+export function getAgentActiveDurationMs(node?: AgentNode | null): number | undefined {
+    return node?.stats.activeDurationMs ?? node?.stats.durationMs;
+}
+
+function finalizeStats(node: AgentNode, timingInputs: Map<string, RawInteraction[]>): RawInteraction[] {
+    const inputs = [...(timingInputs.get(node.id) || [])];
+    for (const child of node.children) {
+        for (const input of finalizeStats(child, timingInputs)) inputs.push(input);
+    }
 
     let start = Number.isFinite(node.startedAt) ? (node.startedAt as number) : undefined;
     let end = Number.isFinite(node.endedAt) ? (node.endedAt as number) : undefined;
@@ -650,12 +672,17 @@ function finalizeStats(node: AgentNode): void {
             end = child.endedAt as number;
         }
     }
+    const timing = deriveExecutionTiming(inputs, node.sessionId);
+    if (timing.startedAt !== undefined) start = Math.min(start ?? timing.startedAt, timing.startedAt);
+    if (timing.endedAt !== undefined) end = Math.max(end ?? timing.endedAt, timing.endedAt);
     node.startedAt = start;
     node.endedAt = end;
     if (start != null && end != null) {
         const duration = end - start;
         node.stats.durationMs = duration >= 0 ? duration : undefined;
     }
+    Object.assign(node.stats, { activeDurationMs: timing.activeDurationMs, elapsedDurationMs: timing.elapsedDurationMs });
+    return inputs;
 }
 
 export interface TraceTimelineBounds {

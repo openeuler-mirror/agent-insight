@@ -303,7 +303,7 @@ export const en = {
     filterToken: 'Token',
     filterAll: 'All',
     spanColumn: 'Span',
-    spanShare: 'Share',
+    spanShare: 'Timeline',
     spanDuration: 'Duration',
     spanTokens: 'Tokens',
     clearFilter: 'Clear filter',

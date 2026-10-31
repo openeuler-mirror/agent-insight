@@ -65,6 +65,7 @@ test('standalone packaging excludes migrated design files and preserves runtime 
     '.next/standalone/docs/example.md': 'traced public documentation',
     '.next/standalone/server.js': 'server fixture',
     '.next/static/runtime.js': 'static fixture',
+    'scripts/repair_trace_latency.ts': 'console.log("repair fixture")',
     'scripts/llamaindex_extension/src/agent_insight_llamaindex/__init__.py': 'collector fixture',
     'scripts/llamaindex_extension/src/agent_insight_llamaindex/_bootstrap/sitecustomize.py': 'bootstrap fixture',
     'docs/zh/how-to/observability/llamaindex-trace-collector.md': 'collector README fixture',
@@ -83,6 +84,7 @@ test('standalone packaging excludes migrated design files and preserves runtime 
   assert.equal(prepare.ensureStandalonePackage(root), standalone)
   assert.equal(fs.existsSync(path.join(standalone, 'design')), false, 'internal designs must not be shipped')
   assert.equal(fs.existsSync(path.join(standalone, 'docs')), false)
+  assert.equal(fs.existsSync(path.join(standalone, 'scripts/repair_trace_latency.cjs')), true)
   assert.equal(fs.readFileSync(path.join(root, 'design/platform/example.md'), 'utf8'), fixtureFiles['design/platform/example.md'])
   assert.equal(fs.readFileSync(path.join(standalone, 'server.js'), 'utf8'), 'server fixture')
   assert.equal(fs.readFileSync(path.join(standalone, 'scripts/llamaindex_extension/README.md'), 'utf8'), 'collector README fixture')
