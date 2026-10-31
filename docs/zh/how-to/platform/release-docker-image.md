@@ -114,3 +114,14 @@ gzip -9 agent-insight-0.5.0-amd64-image.tar
 ```
 
 用户收到 `.tar` 或 `.tar.gz` 后，按 README 的离线导入流程部署。
+
+### 升级后重算历史 OpenCode 耗时
+
+先备份原数据卷，再在新容器中预览并应用 SQLite 历史耗时重算。镜像打包时已将命令编译，现场不需要下载开发依赖：
+
+```bash
+docker exec agent-insight node /app/node_modules/agent-insight/scripts/repair_trace_latency.cjs
+docker exec agent-insight node /app/node_modules/agent-insight/scripts/repair_trace_latency.cjs --apply
+```
+
+容器名称按实际部署替换。该命令只更新有效执行耗时，可重复运行，保留原始 Trace、Token 和时间戳；缺失数据跳过，并发修改计入 `conflicts` 后可重跑。Compose 部署可使用 `docker compose exec -T agent-insight node /app/node_modules/agent-insight/scripts/repair_trace_latency.cjs`，确认后附加 `--apply`。

@@ -40,6 +40,8 @@ test('Trace status exposes failed work in the current Agent and descendants befo
     assert.equal(status({ events: [], children: [leaf('failed')], stats: { durationMs: 120000 } }), 'error');
     assert.equal(status(leaf('completed')), 'slow');
     assert.equal(status({ events: [], children: [], stats: { durationMs: 1000 } }), 'ok');
+    assert.equal(status({ events: [], children: [], stats: { durationMs: 3_650_000, activeDurationMs: 50_000 } }), 'ok');
+    assert.equal(status({ ...leaf('error'), stats: { durationMs: 3_650_000, activeDurationMs: 50_000 } }), 'error');
 });
 
 test('Histogram merges percentile labels when they fall in the same bucket', () => {

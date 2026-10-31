@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 import React from 'react';
+import { getAgentActiveDurationMs } from '../src/lib/engine/observability/agent-trace';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
 
@@ -44,11 +45,11 @@ function evaluate<T>(expression: string, scope: Record<string, unknown>): T {
 }
 function variable<T>(name: string, scope: Record<string, unknown>): T {
     const node = findNode(n => ts.isVariableDeclaration(n) && n.name.getText(ast) === name) as ts.VariableDeclaration;
-    return evaluate<T>(node.initializer!.getText(ast), scope);
+    return evaluate<T>(node.initializer!.getText(ast), { getAgentActiveDurationMs, ...scope });
 }
 function functionValue<T>(name: string, scope: Record<string, unknown>): T {
     const node = findNode(n => ts.isFunctionDeclaration(n) && n.name?.text === name);
-    return evaluate<T>(node.getText(ast), scope);
+    return evaluate<T>(node.getText(ast), { getAgentActiveDurationMs, ...scope });
 }
 function expansion(initial: string[]) {
     let keys = new Set(initial);
@@ -150,6 +151,8 @@ test('TASK rows use child duration and leave unresolved coordination events with
     });
     assert.equal(unresolved, undefined);
     assert.equal(linked, 44_000);
+    assert.equal(variable<number>('spanDurationMs', { event: { kind: 'task' },
+        childNode: { stats: { activeDurationMs: 50_000, elapsedDurationMs: 3_650_000, durationMs: 3_650_000 } } }), 50_000);
     assert.equal(regular, 250);
 });
 
@@ -441,4 +444,35 @@ test('LLM details identify the original Span ID rather than a tool call, includi
     assert.deepEqual(identifier({ kind: 'tool', toolCallId: 'call-1', sourceSpanId: 'tool-span' }), { label: 'Tool Call ID', value: 'call-1' });
     assert.deepEqual(identifier({ kind: 'tool', sourceSpanId: 'tool-span' }), { label: 'Span ID', value: 'tool-span' });
     assert.deepEqual(identifier({ kind: 'chain', sourceSpanId: 'workflow-span', toolCallId: 'legacy' }), { label: 'Span ID', value: 'workflow-span' });
+});
+
+
+test('recursive Agent and TASK duration filters use active time while preserving legacy fallback', () => {
+    type NodeFixture = { id: string; stats: { durationMs: number; activeDurationMs?: number; totalTokens: number } };
+    type FilterFixture = { treeKindFilter: string; minDurationMs: number; minTokenK: number;
+        ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
+    const matchAgent = functionValue<(node: NodeFixture, filters: FilterFixture) => boolean>('traceAgentMatchesFilters', {
+        agentKey: (id: string) => `a:${id}`, aggregateSubtreeStats: (n: NodeFixture) => n.stats, SLOW_MS: 60_000,
+    });
+    const matchEvent = functionValue<(event: { kind: string; spawnedChildId: string }, index: number,
+        owner: string, nodes: ReadonlyMap<string, NodeFixture>, filters: FilterFixture) => boolean>(
+        'traceEventMatchesFilters', { eventKey: () => 'task:0', SLOW_MS: 60_000 });
+    const child = { id: 'child', stats: { durationMs: 3_650_000, activeDurationMs: 50_000, totalTokens: 0 } };
+    const nodes = new Map([['child', child]]);
+    const event = { kind: 'task', spawnedChildId: 'child' };
+    for (const ctxSlowOnly of [false, true]) {
+        const filters = { treeKindFilter: 'all', minDurationMs: ctxSlowOnly ? 0 : 60_000,
+            minTokenK: 0, ctxSlowOnly, searchQuery: 'child', matchedKeys: new Set(['a:child', 'task:0']) };
+        assert.equal(matchAgent(child, filters), false, 'user idle must not make an Agent match a slow filter');
+        assert.equal(matchEvent(event, 0, 'root', nodes, filters), false, 'TASK uses its child active time');
+        child.stats.activeDurationMs = 60_001;
+        assert.equal(matchAgent(child, filters), true);
+        assert.equal(matchEvent(event, 0, 'root', nodes, filters), true);
+        child.stats.activeDurationMs = 50_000;
+    }
+    const legacy = { ...child, stats: { durationMs: 61_000, totalTokens: 0 } };
+    const filters = { treeKindFilter: 'all', minDurationMs: 60_000, minTokenK: 0,
+        ctxSlowOnly: true, searchQuery: 'child', matchedKeys: new Set(['a:child', 'task:0']) };
+    assert.equal(matchAgent(legacy, filters), true);
+    assert.equal(matchEvent(event, 0, 'root', new Map([['child', legacy]]), filters), true);
 });
