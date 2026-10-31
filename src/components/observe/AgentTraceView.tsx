@@ -2756,7 +2756,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
                         <b className="font-semibold text-foreground">{status === 'error' ? '失败' : '慢'}</b>
                     </span>
                 )}
-                <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(s.durationMs)}</b></span>
+                <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(getAgentActiveDurationMs(child))}</b></span>
                 <span>Token <b className="font-semibold text-foreground tabular-nums">{exactTokens(s.totalTokens)}</b></span>
                 <span>LLM 调用 <b className="font-semibold text-foreground tabular-nums">{s.llmCalls}</b></span>
                 <span>工具调用 <b className="font-semibold text-foreground tabular-nums">{s.toolCalls}</b></span>

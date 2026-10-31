@@ -16,9 +16,13 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import ts from 'typescript';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { deriveExecutionTiming } from '@/lib/engine/observability/execution-timing';
 import { deriveOpencodeExecutionFields } from '@/lib/engine/observability/opencode-derived-metrics';
-import { buildAgentCallTree, resolveTraceTimelineBounds, type RawInteraction } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, getAgentActiveDurationMs, formatDuration, resolveTraceTimelineBounds, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { toTraceStructureInteractions } from '@/lib/trace/session-payload';
 
 const base = Date.parse('2026-10-29T01:00:00Z');
@@ -114,4 +118,37 @@ test('An independently opened child Trace uses its own input boundaries', () => 
   ];
   assert.equal(buildAgentCallTree(rows, 'child')!.stats.activeDurationMs, 50000);
   assert.equal(deriveOpencodeExecutionFields(rows, 'child').latency, 50000);
+});
+
+
+test('Spawned child summary displays effective time and preserves legacy timing fallback', () => {
+  const source = fs.readFileSync('src/components/observe/AgentTraceView.tsx', 'utf8');
+  const ast = ts.createSourceFile('AgentTraceView.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const names = ['SpawnedChildSummary', 'getStatus', 'isErrorToolStatus'];
+  const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name?.text || ''));
+  assert.equal(functions.length, names.length);
+  const code = ts.transpileModule(functions.map(node => node.getText(ast)).join('\n'), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React },
+  }).outputText;
+  const scope = {
+    React, TraceCtx: React.createContext({}), getAgentActiveDurationMs, formatDuration,
+    useLocale: () => ({ locale: 'zh' }), SLOW_MS: 60000, STATUS_DOT: { error: 'bg-error', slow: 'bg-warning' },
+    cn: (...values: unknown[]) => values.filter(Boolean).join(' '),
+    KindBadge: () => null, getAgentNodeDisplayLabel: () => 'worker', exactTokens: (n: number) => String(n),
+  };
+  const Summary = new Function(...Object.keys(scope), code + '\nreturn SpawnedChildSummary;')(...Object.values(scope));
+  const rows = [
+    { ...user(0), role: 'opencode', subagent_session_id: 'child' },
+    answer(0, 20000, { role: 'subagent', subagent_session_id: 'child' }),
+    { ...user(3620000), role: 'opencode', subagent_session_id: 'child' },
+    answer(3620000, 3650000, { role: 'subagent', subagent_session_id: 'child' }),
+  ];
+  const child = buildAgentCallTree(rows, 'child')!;
+  assert.equal(child.stats.activeDurationMs, 50000);
+  assert.equal(child.stats.durationMs, 3650000);
+  const html = renderToStaticMarkup(React.createElement(Summary, { child }));
+  assert.match(html, />50s<\/b>/);
+  assert.ok(!html.includes(formatDuration(3650000)), 'the child card must not display user idle as execution time');
+  const legacy = { ...child, stats: { ...child.stats, activeDurationMs: undefined, durationMs: 20000 } };
+  assert.match(renderToStaticMarkup(React.createElement(Summary, { child: legacy })), />20s<\/b>/);
 });
