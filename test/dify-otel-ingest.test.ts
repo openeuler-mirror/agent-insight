@@ -54,11 +54,11 @@ test('Dify HTTP handler, spool aggregation and storage retain a single trace and
   assert.equal((await send([llm])).status, 200);
   const source = listSources().find(s => s.id === 'otel-traces')!;
   startOtelSpoolConsumer({ sources: [source], startMode: 'resume', seedOnStart: false, shortMs: 5, longMs: 10, maxWaitMs: 15, tickMs: 5, aggCooldownFactor: 0, aggGlobalFactor: 0, log: () => {} });
-  async function waitForSession(nodes: number) {
+  async function waitForSession(nodes: number, completed = false) {
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
       const session = await prismaRaw.session.findUnique({ where: { taskId: sessionId } });
-      if (session && JSON.parse(session.langfuseTraceNodes || '[]').length === nodes) return;
+      if (session && JSON.parse(session.langfuseTraceNodes || '[]').length === nodes && (!completed || session.endTime)) return;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.fail('Automatic consumer did not persist the expected Dify node tree');
@@ -69,7 +69,7 @@ test('Dify HTTP handler, spool aggregation and storage retain a single trace and
   const start = span('start', { 'node.type': 'start', 'output.value': '{"question":"hello","sys.workflow_run_id":"run-1"}' });
   const end = span('end', { 'node.type': 'end', 'output.value': '{"answer":"answer"}' });
   assert.equal((await send([root, start, end])).status, 200);
-  await waitForSession(4);
+  await waitForSession(4, true);
   await send([llm, root, start, end]);
   await saveExecutionRecord({ ...source.aggregate(sessionId).record!, skip_evaluation: true });
   const execution = await prismaRaw.execution.findFirstOrThrow({ where: { taskId: sessionId } });
@@ -99,11 +99,11 @@ test('Dify Agent native OTLP automatically persists model and tool details with 
   await prismaRaw.user.upsert({ where: { username: 'admin' }, create: { username: 'admin', apiKey: 'dify-agent-fixture-key' }, update: { apiKey: 'dify-agent-fixture-key' } });
   const source = listSources().find(s => s.id === 'otel-traces')!;
   startOtelSpoolConsumer({ sources: [source], startMode: 'resume', seedOnStart: false, shortMs: 5, longMs: 10, maxWaitMs: 15, tickMs: 5, aggCooldownFactor: 0, aggGlobalFactor: 0, log: () => {} });
-  async function waitForNodes(count: number) {
+  async function waitForNodes(count: number, completed = false) {
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
       const session = await prismaRaw.session.findUnique({ where: { taskId: difyAgentSessionId } });
-      if (session && JSON.parse(session.langfuseTraceNodes || '[]').length === count) return session;
+      if (session && JSON.parse(session.langfuseTraceNodes || '[]').length === count && (!completed || session.endTime)) return session;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.fail('Automatic consumer did not persist the Agent trajectory');
@@ -111,7 +111,7 @@ test('Dify Agent native OTLP automatically persists model and tool details with 
   await send(spans.filter(s => s !== root));
   assert.equal((await waitForNodes(3)).endTime, null);
   await send([root]);
-  const session = await waitForNodes(4);
+  const session = await waitForNodes(4, true);
   assert.equal(session.endTime!.getTime(), 3000);
   await send(spans);
   const record = source.aggregate(difyAgentSessionId).record!;
