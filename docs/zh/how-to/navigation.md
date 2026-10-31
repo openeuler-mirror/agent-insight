@@ -8,6 +8,7 @@ title: "操作指南"
 
 ## 平台公共
 
+- [用 Docker 部署服务端](./platform/deploy-docker.md)
 - [升级与回滚](./platform/upgrade-and-rollback.md)
 - [备份与恢复](./platform/backup-and-restore.md)
 - [Conventions & Extension](./platform/conventions-and-extension.md)
@@ -75,4 +76,4 @@ title: "操作指南"
 - [openjiuwen / jiuwenclaw 接入](./reliability/agent-ras/platform-openjiuwen.md)
 - [xiaoO 平台接入](./reliability/agent-ras/platform-xiaoo.md)
 
-[中文总览](https://gitcode.com/openeuler/agent-insight/blob/master/docs/zh/README.md) · [English status](https://gitcode.com/openeuler/agent-insight/blob/master/docs/en/how-to/README.md)
+[中文总览](https://gitcode.com/openeuler/agent-insight/blob/master/docs/zh/README.md) · [English documentation](../../en/how-to/navigation.md)

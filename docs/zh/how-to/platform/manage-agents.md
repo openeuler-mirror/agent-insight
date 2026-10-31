@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Agent 管理", "平台注册", "主子关系"]
 changefreq: monthly
 ---
 
-# Agent 概览
-
+<a id="agent-概览"></a>
 Agent 概览页位于 **运行观测** 下，沿用原 Agent 管理页面的能力，负责查看并管理平台已识别的真实运行 Agent。
 
 > **Note**

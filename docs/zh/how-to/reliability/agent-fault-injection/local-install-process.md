@@ -5,8 +5,8 @@ keywords: ["Agent FI", "客户端安装", "故障注入", "Worker 运维"]
 changefreq: monthly
 ---
 
-# Agent FI：本机安装过程详解
-
+<a id="agent-fi：本机安装过程详解"></a>
+<a id="agent-fi本机安装过程详解"></a>
 > **读者**：需要理解「执行 FI setup curl 后，用户机器上发生了什么」的使用者与排障者。  
 > **范围**：本机 **FI Client / Worker** 的安装、落盘与常驻进程；不含故障 Skill 内容与服务端 Judge 算法。  
 > **真源**：[`src/app/api/fault-injection/setup/route.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/fault-injection/setup/route.ts)、[`scripts/install-fault-injection.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-fault-injection.js)、[`scripts/fi-worker.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/fi-worker.js)。\

@@ -5,8 +5,7 @@ keywords: ["Agent RAS", "xiaoO", "平台接入", "故障验收"]
 changefreq: monthly
 ---
 
-# xiaoO 平台接入
-
+<a id="xiaoo-平台接入"></a>
 **原则**：检测与恢复走协议 inproc（`ras_runtime`）。stock master 上 mid-stream 思考/工具环与 abort/steer 以 **官方 Daemon SSE 控制面** 为主；插件 hooks 仍负责 Chat/Tool/lifecycle。**不改 FI**。
 
 设计真源：[opencode-xiaoo-integration.md](https://gitcode.com/openeuler/agent-insight/blob/master/design/reliability/agent-ras/opencode-xiaoo-integration.md) §4。\

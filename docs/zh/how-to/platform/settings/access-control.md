@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "客户端安装", "访问控制", "身份认证"]
 changefreq: monthly
 ---
 
-# 客户端安装
-
+<a id="客户端安装"></a>
 客户端安装用于生成客户端接入命令、提供当前账号的接入凭证，并明确平台地址与上报路径，是运行数据能否进入 Agent Insight 的关键配置页面。
 
 > **Note**

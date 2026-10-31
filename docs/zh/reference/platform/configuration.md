@@ -54,3 +54,5 @@ SWE-bench 和 ZSoft 的自动导入可分别通过对应 `dataset.autoImport` �
 - [升级与回滚](../../how-to/platform/upgrade-and-rollback.md)：安装时数据库同步和版本配套要求。
 
 本页未穷举所有采集器、性能与诊断参数；应使用对应功能指南以及当前安装版本的配置模板，不要把未列出解释为已废弃。
+
+[English](../../../en/reference/platform/configuration.md)

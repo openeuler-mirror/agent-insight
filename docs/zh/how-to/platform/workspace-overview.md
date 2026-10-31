@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Workspace", "概览面板", "运行指标"]
 changefreq: monthly
 ---
 
-# 概览面板
-
+<a id="概览面板"></a>
 概览面板是你进入 Agent Workspace 后看到的第一屏。它把分散在各模块的关键信号汇聚到一处，让你在几秒内回答三个问题：**当前 Workspace 是否健康、有没有需要立即关注的 Agent、接下来应该从哪里下钻。**
 
 > **Note**

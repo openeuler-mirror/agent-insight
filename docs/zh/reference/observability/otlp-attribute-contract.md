@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "OpenTelemetry", "OTLP", "属性契约", "链路采�
 changefreq: monthly
 ---
 
-# OTLP 属性契约 (FR-011)
-
+<a id="otlp-属性契约-fr-011"></a>
 > 本文档定义 OpenClaw 及其他 OTLP/HTTP 客户端向 Agent Insight 上报 trace/log 时必须遵守的属性契约。服务端依据此契约解析、归一化并存储为 `Execution` / `Session` 记录。
 
 ## 传输层
