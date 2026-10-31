@@ -62,7 +62,7 @@ test('Histogram merges percentile labels when they fall in the same bucket', () 
 for (const locale of ['zh', 'en']) {
     test(`Completed child summary describes failed calls without claiming a failed session (${locale})`, () => {
         const summary = productionFunction('src/components/observe/AgentTraceView.tsx', ['SpawnedChildSummary', 'getStatus', 'isErrorToolStatus'], {
-            React, TraceCtx: React.createContext({}), SLOW_MS: 60000,
+            ...traceEngine, React, TraceCtx: React.createContext({}), SLOW_MS: 60000,
             useLocale: () => ({ locale }), STATUS_DOT: { error: 'text-error' },
             cn: (...values: unknown[]) => values.filter(Boolean).join(' '),
             KindBadge: () => null, getAgentNodeDisplayLabel: () => 'explore',
