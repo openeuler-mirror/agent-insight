@@ -345,7 +345,7 @@ function ConversationRulesPreview({ item }: { item: SelectedCase }) {
           ...(rule.contains !== undefined ? [`回复包含：${rule.contains}`] : []),
           ...(rule.pattern ? [`回复正则：${rule.pattern}`] : []),
           ...(rule.expectedSkill ? [`Skill 路由：${rule.expectedSkill}`] : []),
-          ...(rule.state ? [`结束状态：${rule.state}`] : []),
+          ...(rule.state ? [`业务状态：${rule.state}`] : []),
           ...rule.requiredTools.map(tool => `必须调用：${tool.name}${tool.arguments ? `；参数：${JSON.stringify(tool.arguments)}` : ''}`),
           ...(rule.forbiddenTools.length ? [`禁止调用：${rule.forbiddenTools.join('、')}`] : []),
           ...(rule.toolOrder.length ? [`工具顺序：${rule.toolOrder.join(' → ')}`] : []),

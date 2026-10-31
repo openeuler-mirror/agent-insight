@@ -36,3 +36,14 @@ test('没有最终回复或存在额外未回复用户轮次时不能判通过',
  const partial=await evaluateConversationRules(toolOnly,replayConversation([{role:'user',content:'q'},{role:'assistant',content:'',tool_calls:[{id:'one',function:{name:'lookup',arguments:'{}'}}]}]));
  assert.equal(partial.score,undefined);assert.notEqual(partial.verdict,'pass');
 });
+
+test('包含和正则同时配置时独立判断，矛盾规则不会互相覆盖或优先放行', async () => {
+ const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{contains:'approved',pattern:'^rejected$'}}]});
+ for(const output of ['approved','rejected']){
+  const result=await evaluateConversationRules(turns,[{input:'q',output,messageIndex:0,complete:true}]);
+  assert.equal(result.verdict,'fail');assert.equal(result.score,50);
+  assert.equal(((result.evidence as any)?.json).checks.length,2);
+ }
+ const compatible=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{contains:'ORDER-',pattern:'^ORDER-[0-9]{6}$'}}]});
+ assert.equal((await evaluateConversationRules(compatible,[{input:'q',output:'ORDER-123456',messageIndex:0,complete:true}])).score,100);
+});

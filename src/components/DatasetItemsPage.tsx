@@ -1327,6 +1327,8 @@ export default function DatasetItemsPage() {
                     />
                   ) : field.key === 'fault_injection_type' && isReliability ? (
                     <Select
+                      modal={false}
+                      contentClassName="z-[1200]"
                       value={fieldText(rowEditor.row, field.key)}
                       onChange={value => setEditorFieldValue(field, value)}
                       options={[

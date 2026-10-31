@@ -42,7 +42,7 @@ export async function evaluateConversationRules(turns:ConversationTurn[],evidenc
     if(want.contains!==undefined)add('文本包含',actual.output.includes(want.contains),`要求包含：${want.contains}`);
     if(want.pattern)add('正则匹配',await regex(want.pattern,actual.output),'按配置正则检查；超时为未评完整');
     if(want.expectedSkill)add('Skill路由',actual.skills?actual.skills.includes(want.expectedSkill):actual.skill?actual.skill===want.expectedSkill:null,`预期：${want.expectedSkill}；实际：${actual.skills?.join(', ')||actual.skill||'未采集'}`);
-    if(want.state)add('结束状态',actual.state?actual.state===want.state:null,`预期：${want.state}；实际：${actual.state||'未采集'}`);
+    if(want.state)add('业务状态',actual.state?actual.state===want.state:null,`预期：${want.state}；实际：${actual.state||'未采集'}`);
     for(const tool of want.requiredTools){
       const calls=actual.tools?.filter(call=>call.name===tool.name);
       add('必须工具',actual.tools?Boolean(calls?.length):null,tool.name);
