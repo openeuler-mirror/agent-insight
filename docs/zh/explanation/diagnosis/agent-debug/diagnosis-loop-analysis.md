@@ -5,8 +5,7 @@ keywords: ["AgentDebug", "智能诊断", "循环检测", "执行轨迹"]
 changefreq: monthly
 ---
 
-# AgentDebug 轨迹诊断现状与历史循环漏检分析
-
+<a id="agentdebug-轨迹诊断现状与历史循环漏检分析"></a>
 > 历史分析版本：`agent-debug-diagnosis-skill@0.1`，撰写于 2026-06-26。
 > 现状核对：2026-10-27。下方历史分析中的行号、截断阈值和“无法检测循环”结论仅描述当时版本，不能直接用于判断当前能力。
 > 关联案例：jiuwenswarm 设计评审（design-review）阶段因上下文 offload 形成的 livelock 长跑十几小时，AgentDebug 将其误报为「pre-flight 低效探索」。

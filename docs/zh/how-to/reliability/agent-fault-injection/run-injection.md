@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "故障注入", "FI Worker", "可靠性评测"]
 changefreq: monthly
 ---
 
-# 故障注入与评测
-
+<a id="故障注入与评测"></a>
 故障注入（Agent FI）用于在**真实 Agent 宿主**上主动植入故障模式，FI 仅记录注入与采集事实，评分由实验中**显式选择的评估器**完成，不再自动运行独立 FI Judge。编排与展示在平台侧；注入执行在本机 **FI Worker**。
 
 > **Note**
@@ -63,7 +62,7 @@ RAS 侧对应说明：[RAS local-install-process](../agent-ras/local-install-pro
 
 创建后任务一律 `queued`，由本机 Worker claim 后执行。任务列表支持行级 **停 / 再跑 / 删**。
 
-所有故障统一使用「使用 <Skill 名称> 技能，执行<子模式名称>。」生成执行提示词；未选择子模式时只指定 Skill，用户补充要求追加在后面。所有注入 Skill 都会安装并提供给 Agent，不再使用 `task_prompt` 或隐藏开关。审查 `target.py`、读取 `a.txt`、执行 `report.csv` 流水线等具体任务写在对应 Skill 的执行步骤中，加载后即可执行。
+所有故障统一使用`使用 <Skill 名称> 技能，执行<子模式名称>。`生成执行提示词；未选择子模式时只指定 Skill，用户补充要求追加在后面。所有注入 Skill 都会安装并提供给 Agent，不再使用 `task_prompt` 或隐藏开关。审查 `target.py`、读取 `a.txt`、执行 `report.csv` 流水线等具体任务写在对应 Skill 的执行步骤中，加载后即可执行。
 
 健康客户端执行中的长任务会保留认领，不会仅因领取已超过 5 分钟而重复启动；客户端也会忽略同一 Run 的重复活动领取。
 

@@ -361,5 +361,158 @@
     "failureNamesMatchPrevious": true,
     "productBrowserRerun": false,
     "note": "Prior document browser evidence retained; no product UI change in this PR."
+  },
+  "contractsAndBilingual20261031": {
+    "baseCommit": "e763ad245536316342304018954f10aeabdcaf50",
+    "scope": "Documentation and navigation only; no runtime, dependency, CI, packaging implementation or database schema changes",
+    "contracts": [
+      "HTTP identity",
+      "Trace ingestion",
+      "experiments",
+      "environment preparation",
+      "model test",
+      "evaluator output and runtime settings",
+      "independent Benchmark evaluation"
+    ],
+    "englishBodies": 12,
+    "translationCoverage": "translation-coverage.json",
+    "splitTopics": [
+      "Docker deployment from quick start",
+      "framework compatibility from quick start",
+      "environment and model-test contracts from API overview",
+      "evaluator output from development guide"
+    ],
+    "titleCleanup": {
+      "processedDiagnostics": 75,
+      "remainingDuplicateHeadingWarnings": 0,
+      "oldHeadingAnchorsRetained": true,
+      "offlineReadmeException": "LlamaIndex retains a real H1 for ZIP README; site title uses its Chinese onboarding name"
+    },
+    "syntax": {
+      "baselineParseErrors": 1,
+      "finalParseErrors": 0,
+      "bareRuntimeMdxExpressions": 0,
+      "fixedRuntimeReferenceError": "Unquoted exclusions[{code,traceCount,turnCount}] in API overview"
+    },
+    "mintlify": {
+      "contentValidationPassed": true,
+      "officialStrictPrebuildPassed": true,
+      "clientVersion": "0.0.4004",
+      "errors": 0,
+      "warnings": 0,
+      "brokenInternalLinks": 0,
+      "automaticClientUpdateInitiallyDelayed": true
+    },
+    "navigation": {
+      "languages": [
+        "zh",
+        "en"
+      ],
+      "targets": 126,
+      "missing": 0,
+      "legacyReadmeRedirectsRetained": true
+    },
+    "sourceLinks": {
+      "httpChecked": 101,
+      "http200": 101,
+      "gitTargetsPresent": true,
+      "note": "Only GitCode project-source URLs in changed documentation; HTTP success alone is not content validation. Not a full audit of all external URLs."
+    },
+    "browser": {
+      "verified": true,
+      "scope": [
+        "English evaluator contract and code/table display",
+        "English-to-Chinese language selector",
+        "English coverage table",
+        "English first Trace tutorial",
+        "Chinese Docker guide via tutorial body link",
+        "legacy English README redirect",
+        "legacy H1 and API section anchors",
+        "API overview reload after runtime expression repair"
+      ],
+      "allPagesAndDiagramsTested": false,
+      "businessUiTested": false,
+      "realModelsCalled": false
+    },
+    "focusedTests": [
+      {
+        "scope": "Benchmark Evaluator API and model-connection timeout/headers",
+        "counts": {
+          "tests": 44,
+          "pass": 44,
+          "fail": 0,
+          "skipped": 0
+        }
+      },
+      {
+        "scope": "Evaluator output/runtime settings and packaging/LlamaIndex ZIP",
+        "counts": {
+          "tests": 45,
+          "pass": 44,
+          "fail": 0,
+          "skipped": 1
+        }
+      }
+    ],
+    "fullUnitTests": {
+      "command": "npm run test",
+      "counts": {
+        "tests": 4524,
+        "pass": 4464,
+        "fail": 37,
+        "cancelled": 0,
+        "skipped": 23
+      },
+      "exit": 1,
+      "isolatedRuntime": true
+    },
+    "upstreamFailureProbe": {
+      "counts": {
+        "tests": 104,
+        "pass": 68,
+        "fail": 36,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sameFailedNames": 36,
+      "fullUntouchedUpstreamSuiteRerun": false
+    },
+    "unreproducedFullSuiteFailure": {
+      "name": "a missing unselected Runtime does not block the selected Runtime readiness",
+      "currentFocused": {
+        "tests": 17,
+        "pass": 17,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "upstreamFocused": {
+        "tests": 17,
+        "pass": 17,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "classification": "Observed in final full suite only; both focused files pass. Cause unconfirmed."
+    },
+    "packagedReadmeRegression": {
+      "introducedBy": "Removing the offline README H1 during title cleanup",
+      "fixed": true,
+      "focusedArchiveTestPassed": true,
+      "absentFromFinalFullSuiteFailures": true
+    },
+    "longDocumentCandidates": 29,
+    "missingHistoricalMaterials": 8,
+    "deletedFiles": 0,
+    "developerHtmlUnchanged": true,
+    "publication": "Validation completed before submission; current PR publication state is tracked in GitCode.",
+    "localMarkdownTargets": {
+      "checked": 1399,
+      "missing": 0,
+      "excluded": [
+        "legacy HTML",
+        "complete fragment-anchor audit"
+      ]
+    }
   }
 }

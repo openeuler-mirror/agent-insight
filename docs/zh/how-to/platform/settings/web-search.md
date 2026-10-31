@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "联网搜索", "搜索配置", "Tavily"]
 changefreq: monthly
 ---
 
-# 联网搜索
-
+<a id="联网搜索"></a>
 联网搜索用于配置平台访问外部公开信息源的方式，为需要补充公共资料的生成流程提供搜索与网页抓取能力。
 
 > **Note**

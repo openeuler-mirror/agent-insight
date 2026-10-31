@@ -168,7 +168,7 @@ collect **不**写/覆盖 `Session.interactions`，**不** `saveExecutionRecord`
 
 ### 5.3.2 服务端 Judge
 
-实现：[`judge.ts`](../../../src/lib/fault-injection/judge.ts) + [`fault-injection-judge.ts`](../../../src/prompts/fault-injection-judge.ts)；模型 `getActiveConfig`。本机 Python Judge / CLI `--judge*` 已删除。
+实现：[`judge.ts`](https://gitcode.com/openeuler/agent-insight/blob/b029946f47bad8d0701658e58eae420c5e1ee9b2/src/lib/fault-injection/judge.ts) + [`fault-injection-judge.ts`](https://gitcode.com/openeuler/agent-insight/blob/b029946f47bad8d0701658e58eae420c5e1ee9b2/src/prompts/fault-injection-judge.ts)；模型 `getActiveConfig`。本机 Python Judge / CLI `--judge*` 已删除。
 
 | 项 | 约定 |
 |----|------|

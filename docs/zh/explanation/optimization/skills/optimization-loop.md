@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "Skill 优化", "问题归并", "自验证", "版本
 changefreq: monthly
 ---
 
-# Skill 优化：工作原理、闭环验证机制与能力边界
-
+<a id="skill-优化：工作原理、闭环验证机制与能力边界"></a>
+<a id="skill-优化工作原理闭环验证机制与能力边界"></a>
 > 适用版本：平台内置「Skill 优化」特性（`skill-optimizer-chat` agent，见 `src/lib/skill-opt-bridge.ts:34`）
 > 撰写日期：2026-06-27
 > 关联设计：`design/2026-05-08-skill-opt-chat-backend-design.md`（chat 后端）、`design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md`（归并算子）、`.spike/skill-opt-closed-loop/` 与 `.spike/skill-opt-self-verify/`（自验证闭环实验，结论汇总见 `IDEAS.md` 行 A1）。

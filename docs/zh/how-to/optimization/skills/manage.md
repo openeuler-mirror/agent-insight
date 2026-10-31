@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Skill 管理", "资产管理", "版本管理"]
 changefreq: monthly
 ---
 
-# Skills 管理
-
+<a id="skills-管理"></a>
 Skills 管理页是 Skill 资产的统一入口，用于查看当前 Workspace 下的 Skill、创建新 Skill、进入详情、管理版本，并衔接后续分析与优化流程。
 
 当前入口为 **配置 → Skill 管理中心**。侧边栏的 **持续优化 → Skill** 已进入对话工作台；工作台中的“从 Skill 管理中心选择”也会打开带服务端搜索、筛选、每页 9 条分页和精确版本选择的资产选择器。旧 `/skills` 地址在兼容期继续保留。

@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Skill 生成", "对话工作台", "版本发布"]
 changefreq: monthly
 ---
 
-# Skill 生成
-
+<a id="skill-生成"></a>
 Skill 生成已经集成到一站式工作台。生成对话位于左侧 **Skill Copilot**，生成的文件立即成为当前会话的工作快照，并显示在右侧 **Skill 详情**；随后可直接运行静态评估、实验和优化，无需把结果转移到其他页面。
 
 ## 开始生成

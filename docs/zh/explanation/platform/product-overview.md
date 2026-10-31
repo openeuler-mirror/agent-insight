@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "智能体平台", "可观测性", "评测", "Skill 
 changefreq: monthly
 ---
 
-# Agent Insight
-
+<a id="agent-insight"></a>
 ![Agent Insight](../../../images/logo-horizontal-light.svg)
 
 让每一个 Agent 都可被观测、可被评估、可自我进化。

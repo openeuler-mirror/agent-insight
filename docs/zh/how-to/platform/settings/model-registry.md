@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "模型注册", "供应商配置", "密钥管理"]
 changefreq: monthly
 ---
 
-# 模型注册
-
+<a id="模型注册"></a>
 模型注册用于统一管理平台依赖的外部 LLM 配置，是评测、诊断、Skill 生成与优化等能力的基础配置中心。
 
 > **Note**

@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "开发规范", "模块扩展", "代码协作"]
 changefreq: monthly
 ---
 
-# Conventions & Extension
-
+<a id="conventions-&amp;-extension"></a>
+<a id="conventions--extension"></a>
 > 本代码库实际遵循的模式——包括一些不那么显而易见、Agent 容易搞错的项目规则。遵循它们，新代码才能保持一致。最权威的协作约定是仓库根目录的 `AGENTS.md`；最权威的架构文档是 `docs/PROJECT.md`。本文件总结了编写代码时最需要关注的内容。
 
 ## Core frameworks & roles

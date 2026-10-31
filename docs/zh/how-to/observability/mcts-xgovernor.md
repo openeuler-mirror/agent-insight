@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "MCTS", "xGovernor", "透明代理", "链路追踪"]
 changefreq: monthly
 ---
 
-# MCTS xGovernor Trace 非侵入式接入
-
+<a id="mcts-xgovernor-trace-非侵入式接入"></a>
 本指南面向已经部署好 MCTS 和 xGovernor 的用户。Agent Insight 接入由外部启动器完成：启动器在 MCTS 执行机的回环地址创建透明代理，给 MCTS 子进程注入 `XGOVERNOR_BASE_URL`，采集 xGovernor HTTP/SSE 数据并上传。Pi 由 xGovernor 执行，因此这条链路使用 MCTS 专用代理采集。
 
 接入过程无需修改 MCTS 源码，也无需重新部署已有的 xGovernor 服务；需要在 MCTS 的连接配置中保留代理注入的地址。所有仓库路径都填写执行机上的实际目录。

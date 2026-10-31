@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Trace 采集器", "框架接入", "客户端开发"
 changefreq: monthly
 ---
 
-# 新增第三方Agent框架Trace采集开发方案
-
+<a id="新增第三方agent框架trace采集开发方案"></a>
 ## 一、整体架构概览
 
 当前平台的Trace采集采用**OTLP标准协议**作为接入层，内部通过**Adapter模式**实现框架特有的语义解析：

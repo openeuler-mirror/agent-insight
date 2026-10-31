@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Goal Plus", "Pi", "主从链路", "观测接入"]
 changefreq: monthly
 ---
 
-# Goal Plus Pi 主从 Trace 接入
-
+<a id="goal-plus-pi-主从-trace-接入"></a>
 本适配面向重构后的 Goal Plus：Pi 和 Goal Plus 使用统一的 session 描述，Agent Insight 复用已有 OTLP Trace ingest 与跨 Session 关系 ingest，把 Pi 原生主 Trace 和 Goal Plus Pi worker Trace 合成为只读的主从展示。
 
 新版 collector 不再向 Goal Plus semantic snapshot 接口上传数据，也不兼容旧 `host` / `host_handle` session 格式。服务端已有语义模型和接口可以继续读取历史数据，但不属于当前采集路径。

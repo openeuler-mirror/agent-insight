@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "共享账户", "OpenCode", "部署配置"]
 changefreq: monthly
 ---
 
-# Agent-insight 共享账户接入说明
-
+<a id="agent-insight-共享账户接入说明"></a>
 > 面向：把 Agent-insight 部署给一个团队共用的运维/接入方。
 > 目标：一批用户各自在自己电脑上用 opencode，数据**统一上报到一个公共账户**——用户侧**零配置、无需 API key**，只在 opencode 安装脚本里加一行命令即可。
 > 适用版本：包含「无 key 默认归属 + 免交互安装」的镜像（最新 master 构建）。

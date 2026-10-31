@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "评测实验", "Trace", "用例分析"]
 changefreq: monthly
 ---
 
-# 实验
-
+<a id="实验"></a>
 实验用于把待评测 Agent、Case 和评估器组织成一次可追踪的质量验证。实验创建后立即开始执行，结果按实验汇总，并可继续下钻到单条 Case 的评估证据。
 
 ## 实验列表

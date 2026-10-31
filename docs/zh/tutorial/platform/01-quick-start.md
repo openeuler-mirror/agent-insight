@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "智能体接入", "部署配置", "链路追踪"]
 changefreq: monthly
 ---
 
-# 5 分钟上手
 
+<a id="5-分钟上手"></a>
 本指南带你用最短路径跑通 Agent Insight 的第一条完整闭环：完成基础配置、接入一个 Agent，并在平台里看到真实链路。
 
 登录后可直接点击左侧 **快速开始**。页面按 **快速接入、运行观测、评估与实验、诊断分析、持续优化** 五个阶段汇总当前可用入口；下面的步骤是“快速接入”阶段的完整操作说明。
@@ -26,217 +26,22 @@ changefreq: monthly
 - 你可以访问 Agent Insight 看板
 - 你拥有一个可用的模型 API Key，例如 OpenAI、DeepSeek 或其他兼容供应商
 - 你有一个准备接入的 Agent 运行环境
-- 如果要走代码集成路径，准备好 Python 3.9+ 或 Node.js 18+
+- 按所选框架安装指南准备对应运行时
 
 ---
 
-## 可选：用 Docker 部署服务端
+<a id="可选：用-docker-部署服务端"></a>
+<a id="可选用-docker-部署服务端"></a>
+<a id="用法一：在线拉取-docker-hub-镜像"></a>
+<a id="用法一在线拉取-docker-hub-镜像"></a>
+<a id="用法二：离线导入-`-tar`-镜像"></a>
+<a id="用法二离线导入-tar-镜像"></a>
+<a id="用法三：挂载源码运行，代码更新后重启即可生效"></a>
+<a id="用法三挂载源码运行代码更新后重启即可生效"></a>
 
-如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
+## 可选：部署服务端
 
-### 用法一：在线拉取 Docker Hub 镜像
-
-```bash
-docker pull karaggagent/agent-insight:latest
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker stop agent-insight 2>/dev/null || true
-docker rm agent-insight 2>/dev/null || true
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-
-curl -i http://localhost:3000/
-```
-
-这条命令会把容器内的 `/data/agent-insight` 挂到服务器宿主机当前用户的 `~/.agent-insight`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启、删除、重拉镜像后仍可复用。默认数据库路径是：
-
-```text
-~/.agent-insight/data/witty_insight.db
-```
-
-### 用法二：离线导入 `.tar` 镜像
-
-如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
-
-```bash
-docker load -i agent-insight-0.5.0-image.tar
-docker images | grep agent-insight
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker stop agent-insight 2>/dev/null || true
-docker rm agent-insight 2>/dev/null || true
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-
-curl -i http://localhost:3000/
-```
-
-如果 `docker load` 输出的镜像 tag 不是 `karaggagent/agent-insight:0.5.0`，请以 `docker images | grep agent-insight` 看到的实际镜像名为准。
-
-如果你不想直接挂宿主机目录，也可以使用 Docker volume：
-
-```bash
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v agent-insight-data:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-如果生产环境需要锁定版本号，可以把 `latest` 换成固定版本，例如 `0.5.0`：
-
-```bash
-docker pull karaggagent/agent-insight:0.5.0
-docker stop agent-insight
-docker rm agent-insight
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-```
-
-服务器上用哪个用户运行 Docker，就会挂载哪个用户的 home 目录。升级到新版本时，保留同一个挂载目录即可，容器数据不会随镜像更新丢失。
-
-### 用法三：挂载源码运行，代码更新后重启即可生效
-
-适用于服务器要跟着最新代码跑的场景：不用每次改代码都重新发 npm 包、重新打镜像，`git pull` 之后重启容器即可生效。
-
-给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
-
-# 数据目录要在首次启动前建好并交给容器内的 node 用户(uid 1000),否则 prisma 建表会报
-# "attempt to write a readonly database"——容器自动创建的挂载目录属主是 root。
-mkdir -p ~/.agent-insight/data
-chown -R 1000:1000 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -e AGENT_INSIGHT_SOURCE_DIR=/src \
-  -v /srv/agent-insight:/src:ro \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-对应的 compose 写法（`compose.yaml`），镜像构建也可以一并交给 compose：
-
-```yaml
-services:
-  agent-insight:
-    image: agent-insight:src
-    build:
-      context: /srv/agent-insight              # 用源码仓库根目录的 Dockerfile 构建
-      args:
-        AGENT_INSIGHT_VERSION: "0.5.4"         # 镜像内预装依赖对应的 npm 版本
-    container_name: agent-insight
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      AGENT_INSIGHT_SOURCE_DIR: /src
-      NODE_OPTIONS: --max-old-space-size=2048  # 小内存机器上防止构建被 OOM kill
-    volumes:
-      - /srv/agent-insight:/src:ro             # 源码，只读
-      - ${HOME}/.agent-insight:/data/agent-insight
-      - agent-insight-build:/app/source        # 构建目录，让缓存跨容器重建保留
-
-volumes:
-  agent-insight-build:
-```
-
-更新代码的流程：
-
-```bash
-cd /srv/agent-insight && git pull
-docker compose restart agent-insight   # 非 compose 场景：docker restart agent-insight
-docker compose logs -f agent-insight   # 看到 "Building from source..." 到构建结束即可
-```
-
-注意用 `restart` 而不是 `up -d`：容器配置没变时 `up -d` 什么都不做，不会触发重新构建。只有改了 `package.json` 依赖、需要连镜像一起重建时才用 `docker compose up -d --build`。
-
-离线服务器也可以通过源码 ZIP 更新。更新脚本的帮助、进度与错误提示使用英文，避免服务器终端中文乱码。先把现有 Compose 的源码挂载改为 `${SOURCE_RELEASE:?SOURCE_RELEASE is required}:/src:ro`，保留 `AGENT_INSIGHT_SOURCE_DIR=/src` 和原有数据挂载。将 `scripts/update-source.sh` 放到服务器，修改顶部 `DEFAULT_COMPOSE_FILE`（默认 `/srv/agent-insight/compose.yml`），然后执行：
-
-```bash
-bash update-source.sh --zip /path/to/agent-insight.zip
-# 临时覆盖 Compose 路径；RELEASES_DIR 可覆盖解压目录（默认 /srv/agent-insight/releases）
-RELEASES_DIR=/srv/agent-insight/releases bash update-source.sh \
-  --zip /path/to/agent-insight.zip --compose /srv/agent-insight/compose.yml
-```
-
-脚本需要宿主机安装 Bash、Python 3 和 Docker Compose v2，并具有解压目录和 Docker 的操作权限。它会解压到新的版本目录，自动识别网页 ZIP 的外层目录，导出 `SOURCE_RELEASE`，然后执行与手动更新相同的 `docker compose -f <配置文件> up -d --force-recreate --pull never --no-build`。它不额外校验 Compose 的源码挂载，也不等待健康检查；命令返回后应用可能仍在构建，请查看日志并检查页面与业务功能。Compose 中的源码挂载仍需引用 `SOURCE_RELEASE`；若路径写死，导出的变量不会改变挂载位置。使用管理原容器的同一份 Compose 和项目名（自定义项目名可通过 `COMPOSE_PROJECT_NAME` 传入）。脚本不拉取或构建镜像，不清理旧版本目录。失败时保留源码并输出错误；不会自动备份或回滚数据库。脚本内导出的 `SOURCE_RELEASE` 不会保存到调用者的终端，后续单独执行 Compose 时需先设置脚本输出的源码路径。
-
-ZIP 更新前请备份数据库，并确认新分支的依赖、数据库 schema 和升级逻辑兼容现有部署。依赖变更仍需更新镜像。入口脚本会执行数据库准备脚本和 schema 同步，即使本次 schema 文件没变，也不能把 ZIP 更新视为绝不会修改数据库；修改源码中的 `docker-entrypoint.sh` 也不会替换镜像已安装的入口脚本。
-
-需要了解的行为：
-
-- **不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致**，容器直接运行镜像里打好的 `agent-insight` npm 包。
-- 配置之后，容器启动时会把源码复制到容器内的 `/app/source`（跳过 `node_modules`、`.next`、`.git`、`data/`、`exclude/`），再依次执行 `prisma db push`、`prisma generate`、`npm run build`，最后和默认模式一样跑 `node .next/standalone/server.js`。宿主机源码目录以只读挂载即可，不会被写入构建产物，也不需要迁就容器里 `node` 用户的属主。
-- 依赖用的是镜像预装的那一份（含 `tailwindcss`、`typescript` 等构建期依赖），源码目录不需要 `npm install`。**因此源码改了 `package.json` 新增依赖时必须重新构建镜像**；启动日志会打印镜像里缺失的依赖清单作为告警。
-- 首次启动是冷构建，需要几分钟；构建期间端口还没起，容器健康状态显示 `health: starting` 属正常。之后重启会保留 `.next/cache` 走增量构建；容器被删掉重建时，只有像上面那样给 `/app/source` 挂了 volume 才保得住缓存。
-- 构建期间服务不可用（分钟级）。不能停机的话，先用另一个端口起一份新容器验证通过，再切端口或流量。
-- 路径写错（拼错、忘了挂 volume、误填宿主机路径）时容器会**直接报错退出，不会静默回退到镜像内置版本**。配了 `restart: unless-stopped` 就表现为反复重启，`docker logs` 里第一行就是原因。校验在复制源码之前完成，失败时数据目录和上一次的构建缓存都不受影响。
-- 数据目录属主必须是容器里的 uid 1000，且要在**首次启动前**准备好——目录由 Docker 自动创建时属主是 root，`prisma db push` 会报 `attempt to write a readonly database`。
-- 这个变量必须通过容器环境变量传入（`-e` 或 compose `environment`），写进 `~/.agent-insight/.env` 不生效——entrypoint 在读取该文件之前就要决定跑哪份代码。
-
-如果容器启动后访问不到 `3000`，先看容器状态和日志：
-
-```bash
-docker ps -a --filter name=agent-insight
-docker logs --tail=200 agent-insight
-curl -i http://127.0.0.1:3000/
-```
-
-常见的 `unable to open database file` 通常是宿主机挂载目录不存在或权限不足。确认目录已创建，并且容器内的 `node` 用户可以写入 `/data/agent-insight/data`。
-
-如果你需要自己构建镜像，可以直接用仓库根目录的 `Dockerfile`。镜像默认从 npm 拉取 `agent-insight@latest`，不会把源码复制进镜像：
-
-```bash
-docker build --pull --no-cache -t agent-insight:npm-latest .
-docker run -d --name agent-insight -p 3000:3000 -v agent-insight-data:/data/agent-insight agent-insight:npm-latest
-curl -i http://localhost:3000/
-```
-
-需要固定某个 npm 版本时：
-
-```bash
-docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5.0 .
-```
-
-如果你只是想在服务器上快速验证本地改动，不想每次都先发布 npm 包，可以用上面的[用法三：挂载源码运行](#用法三挂载源码运行代码更新后重启即可生效)，或走“`npm pack` + 上传 `.tgz` + Docker 缓存构建”的测试流程，见 [Docker 测试构建](../../how-to/platform/docker-testing.md)。
-
-容器只负责运行 Agent Insight 服务端。OpenCode、Claude Code、OpenClaw、LangChain 等框架的接入命令仍应在对应 Agent 实际运行的机器或容器里执行。当前仓库里的这份 `Dockerfile` 走 **SQLite 优先** 路线，不内置 OpenGauss 运行时依赖。
-
-OpenCode 接入命令还会在 Agent 所在机器使用与服务端匹配的 Agent Insight 包版本执行
-`install-ras`，把 Agent RAS runtime 安装到 `~/.agent-insight/ras/runtime/`。
-安装脚本通过隔离的 npm cache 只下载发布 `.tgz`，不会用 `npx` 临时安装整套看板依赖；
-安装完成后还会只读预检 RAS 事件接收地址，提前完成源码开发服务的路由编译并验证当前
-API Key。预检失败会明确告警，但不会阻断普通链路插件和看板服务。
-容器化部署看板时，不要在看板容器内安装 OpenCode RAS 插件；插件必须和 OpenCode
-位于同一运行环境。
-
-如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
-
----
+尚未部署看板时，先按 [Docker 部署指南](../../how-to/platform/deploy-docker.md)完成部署，再继续本教程。已有服务的用户直接使用管理员提供的地址。
 
 ## 推荐路径
 
@@ -251,12 +56,11 @@ API Key。预检失败会明确告警，但不会阻断普通链路插件和看�
 6. 在 **链路追踪** 中确认第一条 Trace
 
 > **Tip**
-> 如果你是开发者，且希望直接在代码里手工埋点，可以直接查看文末的
-> “可选：通过 SDK 直接接入” 一节。
+> 如果需要在代码中接入，请先查[Trace HTTP 接入](../../reference/observability/trace-ingestion.md)和对应框架指南，确认使用的协议及身份。
 
 > **Agent RAS 前置条件**
 >
-> Linux、WSL 或 macOS 上需要 Python 3.10+、pip 和共享 libpython。OpenCode 安装指导
+> Linux、WSL 或 macOS 上需要 Python 3.10+、pip 和共享 libpython。OpenCode 1.x 安装指导
 > 默认安装 RAS，可设置 `AGENT_INSIGHT_RAS=0` 跳过。原生 Windows 暂不启用 inproc，
 > 请在 WSL 中运行 OpenCode 和安装命令。
 
@@ -357,45 +161,7 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
    </p>
 
 安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
-Pi Agent、Codex 和 Goal Plus 共用采集传输模块。重新安装时，已校验的官方旧版会先备份到
-`$AGENT_INSIGHT_HOME/collectors/shared/*.bak` 再原子替换，同版本不重复备份。
-若提示 `Refusing to overwrite a different shared collector module`，说明文件不是已知可升级版本；
-请保留文件并核对本地改动，不要直接删除整个采集目录。共享模块冲突会在写入框架文件和配置前拦截。
-选择 OpenCode 时，脚本通过 `opencode --version` 自动选择采集插件：1.x 使用原有插件接口，
-2.x 使用原生插件定义和会话事件接口。请先安装 OpenCode 并确保命令在当前终端可用，再运行采集安装命令；
-OpenCode 跨大版本升级或降级后，重新执行安装命令并重启 OpenCode。采集安装不修改模型 Provider、
-模型地址或请求路由。
-
-OpenCode 1.x 继续安装原有 TUI 附件和 Agent RAS，使用当前登录账号 API Key；
-2.x 支持 Trace 采集和普通数据集「生成 Trace」，跳过不兼容的 1.x TUI 附件和 OpenCode RAS 插件。
-生成 Trace 还需要常驻客户端注册成功、在线并发现可用 Agent；仅出现 `Telemetry: READY` 不代表这些条件已经满足。
-更新服务端后，请重新执行当前账号的一键接入命令以更新常驻客户端，再刷新实验页面。
-更新后的常驻客户端支持 OpenCode 1.x 与 2.x 的 Skill 冻结快照和只读触发分析（2.x 原生验证版本为 2.1.4）。
-用例分析生成 Trace 和 A/B 测试需要客户端上报版本隔离能力；触发分析还需要只读路由能力。
-若提示未上报能力，请更新并重启 Agent Insight 常驻客户端、等待能力重新上报，再刷新执行目标；仅升级 OpenCode 不会更新常驻客户端。
-实验显示“等待 Trace 入库”表示 Agent 已结束但上传尚未完成；超过独立的 60 秒期限会明确报错，不会自动重跑 Agent。请检查采集器及上传日志，详见[用例分析](../../how-to/evaluation/skills/use-case-analysis.md)。
-若从已安装 RAS 的 1.x 环境升级，安装脚本会检测全局插件目录及 `opencode.json` / `opencode.jsonc` 中的旧 RAS 引用，
-发现残留时显示备份与迁移提示；`install-ras --check` 也会明确报告 OpenCode 2.x 不支持 RAS，而不会将其显示为已就绪。
-旧文件和用户配置会保留：请先备份提示的 OpenCode 配置及插件目录，再移走 `plugins/agent-insight-ras.js`，
-并从配置的 `plugin` 列表中移除对应条目；保留其他插件、模型和自行修改的 `ras-judge` Agent 配置。
-项目内单独配置的旧 RAS 插件也需要按同样方式迁移。
-之后重启 Agent Insight 只会同步平台地址，不会把客户端身份覆盖成内部 `admin` 账号。
-
-2.x 已用 OpenCode 2.0.32 在 macOS ARM64 和本地模拟模型服务验证多次调用、并发子 Agent 与失败重试的
-采集数据；普通数据集生成 Trace 已在 Linux/WSL 使用 1.14.39、2.1.4 和本地模拟模型验证执行、上传、Case 绑定、取消与失败回报。其他版本及 Windows 原生运行仍需对应环境验证；脚本的版本选择不等于所有版本均已实测。
-
-你也可以选择 **OpenClaw**。安装脚本会生成一个同名命令包装函数，在调用原始 `openclaw` 命令时注入 OTel 环境变量；OpenClaw 仍直接访问自己的模型供应商，Agent Insight 只接收遥测数据，不代理模型请求。
-
-如果使用 **AcTrail**，先自行完成 AcTrail 安装并启动守护进程，再在安装指导中选择 AcTrail，并于 AcTrail 所在的 Linux 环境运行页面生成的 curl 命令。脚本不会安装或包装 AcTrail，而是完成两项配置：合并更新 AcTrail 守护进程配置，启用完整请求、结构化工具调用、工具结果和子 Agent 关系；生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给官方 `otel-http` 插件。修改守护进程配置前，脚本会备份原文件；若守护进程正在运行则自动重启，然后持久化加载 `agent-insight.otel-http` 实例。之后继续使用原来的 `sudo actrailctl launch --name <名称> -- <Agent 命令>`，AcTrail 会自动上报。默认守护进程配置为 `/etc/actrail/actraild.conf`；非默认部署可在运行脚本前设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
-
-OTLP Logs 上报到 `/api/ingest/otel/v1/logs`，Traces 上报到 `/api/ingest/otel/v1/traces`；AcTrail 默认使用 OTLP/HTTP Protobuf。安装脚本末尾也会输出一份可手动复制的纯配置环境变量块。旧版 watcher 仅作为兼容方式保留；同一 OpenClaw 实例只能选择 OTel 或 watcher 其中一种，避免重复 Trace。
-
-如果使用 **QwenPaw**，在安装指导中勾选 QwenPaw 并执行对应系统的一行命令。脚本会下载
-`agent-insight-qwenpaw` collector zip，安装 Python 包，并把 `agent-insight-qwenpaw` 插件注册到
-QwenPaw plugins 目录。安装后必须重启 QwenPaw；新建对话时会在链路追踪中生成一条 Trace，同一
-对话继续提问会追加新的 USER 和 LLM/Tool 调用，新建对话才新增 Trace。详情页中的子 Agent 会按
-`AGENT -> TASK -> AGENT` 树展示。完整说明见
-[QwenPaw Trace Collector 接入指南](../../how-to/observability/qwenpaw-trace-collector.md)。
+框架和版本差异、共享模块升级与 OpenCode 1.x/2.x 迁移说明见[客户端兼容性参考](../../reference/observability/client-compatibility.md)。遇到能力未上报或 Trace 入库超时，按该参考和对应框架指南排查。
 
 
 ---
@@ -435,7 +201,7 @@ QwenPaw plugins 目录。安装后必须重启 QwenPaw；新建对话时会在�
 > 1. 先查看客户端日志文件 `~/.agent-insight/logs/opencode_uploader.log`
 > 2. 确认客户端到服务端的网络是否通顺
 > 3. 是否选中了正确的 Workspace
-> 4. Agent 使用的 API Key / 配置是否来自当前 Agent
+> 4. 客户端使用的 API Key / 配置是否属于当前登录账号
 >
 > 仍无法解决时，可继续参考 [常见问题](../../how-to/platform/faq.md)。
 
@@ -447,3 +213,5 @@ QwenPaw plugins 目录。安装后必须重启 QwenPaw；新建对话时会在�
 - 想继续排查和分析线上执行 → [运行观测](../../explanation/observability/overview.md)
 - 想建立第一套离线评测 → [评估与实验](../../explanation/evaluation/overview.md)
 - 想沉淀可复用能力 → [Skill 工作台](../../explanation/optimization/skills/workbench-overview.md)
+
+[English](../../../en/tutorial/platform/01-quick-start.md)

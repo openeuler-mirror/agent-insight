@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Skill", "用例分析", "执行轨迹", "任务结�
 changefreq: monthly
 ---
 
-# 用例分析
-
+<a id="用例分析"></a>
 用例分析验证某个 Skill 版本在真实任务中的表现，重点回答：
 
 - 最终结果是否完成用户目标。
