@@ -75,7 +75,7 @@ changefreq: monthly
    </p>
 
 2. 根据部署模式完成登录，进入默认 Workspace。
-   - 默认 `LOGIN_MODE=standalone`：在登录页输入邮箱。
+   - 默认 `LOGIN_MODE=standalone`：在登录页输入邮箱，按 Enter 或点击 **Sign In** 完成登录。登录失败时按页面提示检查输入后重试。
    - `LOGIN_MODE=idaas_oauth`：点击“统一身份登录”，在 IDaaS 完成认证；平台使用 IDaaS 返回的唯一 UUID 作为本地账号和数据归属；人员接口返回账号别名时，侧边栏优先显示该别名，否则显示 UUID；用户可从侧边栏退出当前网页账号，再次登录仍进入统一身份授权。
    - 历史 `ORGANIZATION_MODE=true`：继续使用原组织网关和 Cookie 登录，不等同于 IDaaS OAuth 登录。
 

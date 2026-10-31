@@ -27,7 +27,7 @@ changefreq: monthly
 
 | 名称 | 配置 | 用户行为 |
 | --- | --- | --- |
-| 本地登录 | `LOGIN_MODE=standalone`（默认） | 用户输入邮箱，登录即注册，可以主动退出 |
+| 本地登录 | `LOGIN_MODE=standalone`（默认） | 输入邮箱后按 Enter 或点击 **Sign In**，登录即注册，可以主动退出 |
 | 历史组织集成 | `ORGANIZATION_MODE=true`、`ORG_*` | 依赖上游网关 Cookie，并可联动组织 Skill 接口 |
 | IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，以 UUID 归属数据，侧边栏优先显示人员账号，可退出当前网页账号 |
 
