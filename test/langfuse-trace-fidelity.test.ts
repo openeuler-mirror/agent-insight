@@ -51,6 +51,21 @@ function event(overrides: Partial<OtelTraceEvent>): OtelTraceEvent {
   };
 }
 
+test('projected model Spans retain source identity without inventing a tool call ID', () => {
+  const nodes = buildLangfuseTraceNodes([
+    event({}),
+    event({ kind: 'llm', spanId: 'model', parentSpanId: 'root', attributes: {} }),
+    event({ kind: 'tool', spanId: 'tool', parentSpanId: 'model', attributes: { 'langfuse.observation.metadata.tool_call_id': 'real-call' } }),
+  ]);
+  const projection = buildLangfuseAgentTrace(nodes);
+  const model = projection.tree!.events.find(item => item.kind === 'llm')!;
+  assert.equal(model.toolCallId, undefined);
+  assert.equal((model as any).sourceTraceId, nodes[0].traceId);
+  assert.equal(model.sourceSpanId, 'model');
+  const tool = projection.tree!.events.find(item => item.kind === 'tool')!;
+  assert.equal(tool.toolCallId, 'real-call');
+});
+
 test('Langfuse projection preserves every observation and only collapses framework wrappers', () => {
   const events = [
     event({}),

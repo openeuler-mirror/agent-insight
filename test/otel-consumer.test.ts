@@ -450,48 +450,53 @@ test("OTel consumer: session limit chunks a multi-session file without losing re
   }
 })
 
-test("OTel consumer: accepts credential-authenticated Qoder traces owned by admin", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-qoder-admin-"))
-  stopOtelSpoolConsumer()
-  try {
-    const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
-    fs.mkdirSync(dayDir, { recursive: true })
-    const file = path.join(dayDir, "traces.jsonl")
-    fs.writeFileSync(file, "{\"sessionId\":\"qoder-admin-session\"}\n", "utf8")
-
-    const calls: ExecutionRecord[] = []
-    const source = makeSource(dir, file, {
-      task_id: "qoder-admin-session",
-      user: "admin",
-      query: "hello",
-      framework: "qoder",
-      final_result: "done",
-      authenticated_ingest: true,
-    })
-
-    startOtelSpoolConsumer({
-      sources: [source],
-      saveExecution: async (data) => {
-        calls.push(data)
-        return { success: true, record: data }
-      },
-      shortMs: 10,
-      longMs: 10000,
-      maxWaitMs: 10000,
-      tickMs: 5,
-      seedOnStart: false,
-      log: () => {},
-      warn: () => {},
-    })
-
-    await waitFor(() => calls.length > 0)
-    assert.equal(calls[0]?.framework, "qoder")
-    assert.equal(calls[0]?.user, "admin")
-  } finally {
+for (const [framework, authenticated, accepted] of [["qoder", true, true], ["dify", true, true], ["dify", false, false]] as const) {
+  test(`OTel consumer: ${framework} admin credential provenance=${authenticated} accepted=${accepted}`, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-qoder-admin-"))
     stopOtelSpoolConsumer()
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
+    try {
+      const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
+      fs.mkdirSync(dayDir, { recursive: true })
+      const file = path.join(dayDir, "traces.jsonl")
+      fs.writeFileSync(file, "{\"sessionId\":\"qoder-admin-session\"}\n", "utf8")
+
+      const calls: ExecutionRecord[] = []
+      const source = makeSource(dir, file, {
+        task_id: "qoder-admin-session",
+        user: "admin",
+        query: "hello",
+        framework,
+        final_result: "done",
+        authenticated_ingest: authenticated,
+      })
+
+      startOtelSpoolConsumer({
+        sources: [source],
+        saveExecution: async (data) => {
+          calls.push(data)
+          return { success: true, record: data }
+        },
+        shortMs: 10,
+        longMs: 10000,
+        maxWaitMs: 10000,
+        tickMs: 5,
+        seedOnStart: false,
+        log: () => {},
+        warn: () => {},
+      })
+
+      await waitFor(() => getFileCursor(dir, toCheckpointRelPath(dir, file)).bytes >= fs.statSync(file).size)
+      assert.equal(calls.length > 0, accepted)
+      if (accepted) {
+        assert.equal(calls[0]?.framework, framework)
+        assert.equal(calls[0]?.user, "admin")
+      }
+    } finally {
+      stopOtelSpoolConsumer()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
 
 test("OTel consumer: aggregate cooldown throttles rapid re-aggregation of active sessions", async () => {
   // 线上事故回归:活跃 session 持续追加数据时,每来一批就全量重聚合,

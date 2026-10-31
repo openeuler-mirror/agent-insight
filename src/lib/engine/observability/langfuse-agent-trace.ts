@@ -321,7 +321,7 @@ function namedQuestion(value: unknown, depth = 0): string | undefined {
 
 export function extractLangfuseUserQuestion(nodes: LangfuseTraceNode[]): string | undefined {
     const ordered = [...nodes].sort((a, b) => a.startedAt - b.startedAt || a.spanId.localeCompare(b.spanId));
-    const rootInputs = ordered.filter(node => !node.sourceParentSpanId).map(node => node.input);
+    const rootInputs = ordered.filter(node => !node.displayParentSpanId).map(node => node.input);
     for (const input of rootInputs) {
         const found = lastUserMessage(input) || namedQuestion(input);
         if (found) return found;
@@ -441,6 +441,9 @@ export function buildLangfuseAgentTrace(
         const outputToolCalls = observation.kind === 'llm'
             ? llmOutputToolCalls(observation.output)
             : [];
+        const reasoning = observation.kind === 'llm' && observation.output && typeof observation.output === 'object'
+            ? (observation.output as Record<string, unknown>).reasoning_content
+            : undefined;
         const interaction: RawInteraction = {
             role: observation.kind === 'tool' ? 'opencode' : 'assistant',
             content: observation.kind === 'llm' ? llmOutputText(observation.output) : contentText(observation.output),
@@ -449,6 +452,7 @@ export function buildLangfuseAgentTrace(
             agent: host.agentName,
             model: observation.model,
             usage,
+            ...(typeof reasoning === 'string' && reasoning ? { parts: [{ type: 'reasoning', text: reasoning }] } : {}),
             ...(requestMessages.length ? { requestMessages } : {}),
             ...(outputToolCalls.length ? { tool_calls: outputToolCalls } : {}),
         };
@@ -473,7 +477,7 @@ export function buildLangfuseAgentTrace(
             name: observation.name,
             args: observation.input,
             output: observation.output,
-            toolCallId: observation.toolCallId || observation.spanId,
+            toolCallId: observation.kind === 'tool' ? observation.toolCallId : undefined,
             toolStatus: observation.status,
             startedAt: observation.startedAt,
             completedAt: observation.completedAt,
@@ -481,6 +485,7 @@ export function buildLangfuseAgentTrace(
             interactionIndex,
             spawnedChildId,
             sourceSpanId: observation.spanId,
+            sourceTraceId: observation.traceId,
             parentSourceSpanId,
             treeHidden: observation.kind === 'agent' && !!spawnedChildId,
             summary: observation.name,
