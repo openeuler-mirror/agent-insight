@@ -29,6 +29,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { TermPopover } from '@/components/text/TermPopover';
 import { SmartViewer, SmartViewerConfigProvider } from '@/components/SmartViewer';
+import { useTheme } from '@/lib/client/theme-context';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -85,6 +86,7 @@ function sameStringSet(left: Set<string>, right: Set<string>): boolean {
 type NodeStatus = 'error' | 'slow' | 'ok';
 
 function getStatus(node: AgentNode): NodeStatus {
+    if (node.events.some(event => isErrorToolStatus(event.toolStatus)) || node.children.some(child => getStatus(child) === 'error')) return 'error';
     if (node.stats?.durationMs !== undefined && node.stats.durationMs > SLOW_MS) return 'slow';
     return 'ok';
 }
@@ -426,6 +428,7 @@ interface TraceCtxValue {
     /** sub-agent 节点上"打开独立 trace"按钮的点击回调；未注入则不渲染按钮 */
     onSubagentNavigate?: (sessionId: string) => void;
     findEventAnomalies?: (event: AgentEvent) => RasTraceMarker[];
+    loadFullContext?: () => Promise<RawInteraction[]>;
 }
 
 const defaultCtx: TraceCtxValue = {
@@ -770,7 +773,7 @@ export default function AgentTraceView({
 
     const slowCount = useMemo(() => {
         let n = 0;
-        if (tree) walkTree(tree, node => { if (getStatus(node) !== 'ok') n++; });
+        if (tree) walkTree(tree, node => { if ((node.stats.durationMs ?? 0) > SLOW_MS) n++; });
         return n;
     }, [tree]);
 
@@ -937,6 +940,7 @@ export default function AgentTraceView({
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
         onSubagentNavigate: onSubagentNavigate ? navigateToAgentTrace : undefined,
+        loadFullContext: ensureAllInteractionsLoaded,
         findEventAnomalies,
     };
 
@@ -1329,6 +1333,7 @@ function UnifiedSpanTree({
     isLast: boolean;
     prefixBits: boolean[];
 }) {
+    const { locale } = useLocale();
     const aKey = agentKey(node.id);
     const isExpanded = expandedKeys.has(aKey);
     const isSelected = selectedKey === aKey;
@@ -1486,6 +1491,7 @@ function UnifiedSpanTree({
                     depth === 0 ? 'font-semibold' : 'font-medium',
                 )}>
                     {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}
+                    {status === 'error' && <span className="ml-2 text-xs text-error">{locale === 'zh' ? '含失败调用' : 'Contains failed calls'}</span>}
                     {node.parallelCallCount && node.parallelCallCount > 1 && (
                         <span className="ml-1.5 text-xs px-1 bg-background-tertiary border border-border rounded-full text-foreground-muted">
                             ×{node.parallelCallCount}
@@ -1525,7 +1531,7 @@ function UnifiedSpanTree({
                     left={barLeft}
                     width={barWidth}
                     barClass={cn(
-                        isSelected ? 'bg-primary'
+                        status === 'error' ? 'bg-error' : isSelected ? 'bg-primary'
                             : status === 'slow' ? 'bg-warning'
                             : KIND_META.agent.bar,
                     )}
@@ -1585,6 +1591,7 @@ function UnifiedEventRow({
     onSelect: () => void; onToggle?: () => void;
     totalStart?: number; totalDuration?: number;
 }) {
+    const { locale } = useLocale();
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const { findEventAnomalies } = React.useContext(TraceCtx);
     const evAnomalyHits = findEventAnomalies?.(event) ?? [];
@@ -1612,6 +1619,7 @@ function UnifiedEventRow({
         ? Math.min(100 - barLeft, (spanDurationMs / totalDuration) * 100) : 0;
 
     const isSlow = spanDurationMs != null && spanDurationMs > SLOW_MS;
+    const hasError = isErrorToolStatus(event.toolStatus);
 
     const { matchedKeys: ctxMatchedKeys, activeMatchKey: ctxActiveMatchKey, searchQuery: ctxSearch } = React.useContext(TraceCtx);
     const evKey = eventKey(parentNodeId, evIdx);
@@ -1670,6 +1678,7 @@ function UnifiedEventRow({
 
             {/* Kind badge */}
             <KindBadge kind={event.kind} className="ml-0.5" />
+            {hasError && <span className="ml-1 inline-flex items-center gap-1 text-xs text-error shrink-0" title={`${locale === 'zh' ? '执行失败' : 'Failed'}: ${event.toolStatus}`}><AlertIcon className="size-3" aria-hidden />{locale === 'zh' ? '失败' : 'Failed'}</span>}
 
             {/* Name + secondary */}
             <span className={cn(
@@ -1694,7 +1703,7 @@ function UnifiedEventRow({
                 left={barLeft}
                 width={barWidth}
                 barClass={cn(
-                    isSelected ? 'bg-primary'
+                    hasError ? 'bg-error' : isSelected ? 'bg-primary'
                         : isSlow ? 'bg-warning'
                         : km.bar,
                 )}
@@ -1712,7 +1721,7 @@ function UnifiedEventRow({
                 {spanTokens ? `${spanTokensEstimated ? '≈' : ''}${formatTokens(spanTokens)}` : ''}
             </span>
             <span className="w-2 ml-1 flex items-center justify-center">
-                {isSlow && <span className="size-1.5 rounded-full bg-warning" />}
+                {hasError ? <span className="size-1.5 rounded-full bg-error" /> : isSlow && <span className="size-1.5 rounded-full bg-warning" />}
             </span>
         </div>
     );
@@ -1792,6 +1801,7 @@ function CompactSection({ label, raw, modalTitle, emptyText, accentColor }: { la
 // ─── ContentModal: full SmartViewer display ───────────────────────────────────
 function ContentModal({ title, raw, onClose }: { title: string; raw: string; onClose: () => void }) {
     const [copied, setCopied] = useState(false);
+    const { theme } = useTheme();
     const copy = async () => {
         try {
             await copyText(raw);
@@ -1821,8 +1831,8 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
                         {copied ? <><Check className="size-3" />Copied</> : <><CopyIcon className="size-3" />Copy</>}
                     </Button>
                 </DialogHeader>
-                <div className="overflow-auto flex-1">
-                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme="light" fullContent />
+                <div className="min-h-0 overflow-auto flex-1">
+                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme={theme} fullContent />
                 </div>
             </DialogContent>
         </Dialog>
@@ -2316,11 +2326,11 @@ function SnapshotMessageRow({
     return (
         <>
             {/* L3 "Message" — highlighted (tinted bg + left accent) while expanded so its parts read as a unit */}
-            <div className={cn('border-t border-border first:border-t-0', expanded ? 'bg-primary/[0.08] border-l-2 border-l-primary' : 'bg-card')}>
+            <div className={cn('border-t border-border first:border-t-0', expanded ? 'bg-primary-subtle border-l-2 border-l-primary' : 'bg-card')}>
                 <button
                     type="button"
                     onClick={() => hasBody && setExpanded(v => !v)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-amber-400/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-background-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                     <span className={cn('inline-flex min-w-[70px] justify-center rounded-sm border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider', roleClasses)}>
                         {roleLabel}
@@ -2409,8 +2419,21 @@ function FoldedMessagesBlock({
     defaultOpen?: boolean;
     expandLast?: boolean;
 }) {
+    const { locale } = useLocale();
     const [expanded, setExpanded] = useState(defaultOpen);
     const [showModal, setShowModal] = useState(false);
+    const [loadingFullText, setLoadingFullText] = useState(false);
+    const { loadFullContext } = React.useContext(TraceCtx);
+    const openFullText = async () => {
+        setLoadingFullText(true);
+        try {
+            const loaded = await loadFullContext?.();
+            if (loaded?.some(item => (item as RawInteraction & { _payloadDeferred?: boolean })._payloadDeferred)) return;
+            setShowModal(true);
+        } finally {
+            setLoadingFullText(false);
+        }
+    };
     const raw = messages
         .map(m => `#${m.position} [${m.role}]\n${m.content}`)
         .join('\n\n---\n\n');
@@ -2442,8 +2465,8 @@ function FoldedMessagesBlock({
                             />
                         ))}
                         <div className="border-t border-border px-3 py-1.5 text-right">
-                            <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
-                                查看合并文本
+                            <Button variant="ghost" size="sm" onClick={() => void openFullText()} disabled={loadingFullText} className="h-6 px-2 text-xs">
+                                {loadingFullText ? (locale === 'zh' ? '正在加载全文…' : 'Loading full text…') : (locale === 'zh' ? '查看合并文本' : 'View merged text')}
                             </Button>
                         </div>
                     </div>
@@ -2713,6 +2736,7 @@ function SpanErrorBlock({ status, reason, exitCode }: { status?: string; reason?
 
 /** task span 的子 Agent 汇总卡 —— 不离开面板即可看到子 Agent 概况。 */
 function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSelectChild?: (id: string) => void }) {
+    const { locale } = useLocale();
     const ctx = React.useContext(TraceCtx);
     const status = getStatus(child);
     const s = child.stats;
@@ -2746,7 +2770,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
                 {status !== 'ok' && (
                     <span className="inline-flex items-center gap-1.5">
                         状态 <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
-                        <b className="font-semibold text-foreground">{status === 'error' ? '失败' : '慢'}</b>
+                        <b className="font-semibold text-foreground">{status === 'error' ? (locale === 'zh' ? '含失败调用' : 'Contains failed calls') : '慢'}</b>
                     </span>
                 )}
                 <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(s.durationMs)}</b></span>
@@ -2902,6 +2926,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
     interactions: RawInteraction[];
     node: AgentNode;
 }) {
+    const { locale } = useLocale();
     const { framework } = React.useContext(TraceCtx);
     const it = event.interaction as RawInteraction & {
         model?: string;
@@ -3013,12 +3038,11 @@ function LLMEventBody({ event, responseText, interactions, node }: {
             />
 
             {snapshot.activeCompaction && snapshot.foldedOriginalRaw && snapshot.foldedOriginalCount > 0 && (
-                <CompactSection
-                    label={`Compaction Folded Originals (${snapshot.foldedOriginalCount})`}
-                    raw={snapshot.foldedOriginalRaw}
-                    modalTitle="Compaction Folded Originals"
-                    emptyText="(empty)"
-                />
+                <details className="rounded-md border border-border bg-background-secondary p-3">
+                    <summary className="cursor-pointer text-xs font-semibold text-foreground-secondary">{locale === 'zh' ? '已压缩的历史消息' : 'Compacted history'} ({snapshot.foldedOriginalCount})</summary>
+                    <p className="my-2 text-xs text-foreground-muted">{locale === 'zh' ? '上下文压缩前的历史原文，仅供回溯；本次调用使用压缩摘要，这些内容不属于本次模型输出。' : 'Original history before compaction, retained for inspection. This call uses the summary; these messages are not the current model output.'}</p>
+                    <CompactSection label={locale === 'zh' ? '历史原文' : 'Original history'} raw={snapshot.foldedOriginalRaw} modalTitle={locale === 'zh' ? '上下文压缩前的历史原文' : 'Original history before compaction'} />
+                </details>
             )}
 
         </>
@@ -3583,7 +3607,7 @@ function OverviewTab({ node, onSelectChild, parentAgent, childAgents, relationsU
 
             <div>
                 <SectionTitle>Token 消耗</SectionTitle>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.5rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))', gap: '0.5rem' }}>
                     {[
                         { label: 'Input',  value: stats.inputTokens },
                         { label: 'Output', value: stats.outputTokens },
@@ -3592,12 +3616,9 @@ function OverviewTab({ node, onSelectChild, parentAgent, childAgents, relationsU
                         { label: 'Total',  value: stats.totalTokens },
                     ].filter(({ value, label }) => value > 0 || label === 'Total').map(({ label, value }) => {
                         const text = exactTokens(value);
-                        // Five fixed columns: an exact 7-figure count ("1,594,375") overruns the
-                        // cell at 1rem, so step the size down once it gets that long.
-                        const size = text.length > 8 ? '0.75rem' : text.length > 6 ? '0.875rem' : '1rem';
                         return (
                             <div key={label} style={{ padding: '0.5rem 0.5rem', minWidth: 0, background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6, textAlign: 'center' }}>
-                                <div style={{ fontSize: size, fontWeight: 700, color: 'var(--foreground)', fontVariantNumeric: 'tabular-nums' }}>{text}</div>
+                                <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--foreground)', fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere' }}>{text}</div>
                                 <div style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{label}</div>
                             </div>
                         );
@@ -3864,6 +3885,7 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
     indent: number; isLast: boolean; showVerticalLine: boolean;
     node: AgentNode; interactions: RawInteraction[];
 }) {
+    const { locale } = useLocale();
     const [modalOpen, setModalOpen] = useState(false);
     const { findEventAnomalies } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
@@ -3892,6 +3914,7 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
                     {hasChildren ? (isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />) : null}
                 </button>
                 <KindBadge kind={event.kind} className="mt-0.5" />
+                {isErrorToolStatus(event.toolStatus) && <span className="text-xs text-error shrink-0">{locale === 'zh' ? '失败' : 'Failed'}</span>}
                 <div
                     className={cn('flex-1 min-w-0', showDetail ? 'cursor-pointer' : 'cursor-default')}
                     onClick={() => { if (showDetail) setModalOpen(true); }}
