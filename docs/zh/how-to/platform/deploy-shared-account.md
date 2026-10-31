@@ -126,32 +126,4 @@ opencode run "hello"
 | 200 但登录看不到 | 登录用的账号名与 `AGENT_INSIGHT_DEFAULT_INGEST_USER` 不一致（注意大小写）；或数据在"安装时间门"之前被跳过（跑个新任务） |
 | 客户端没上传 | 看 `~/.agent-insight/logs/opencode_uploader.log`：`main.skip missingConfig` 说明缺 host；正常应有 `postJson.response status=200` |
 | Windows 装完卡住（安装阶段） | 确认用的是 `iex (irm "...?yes=1&nokey=1")`，且镜像含 PowerShell 非交互（最新 master 构建） |
-| **opencode desktop 打不开 / 一直"本地连接中"** | **离线/内网**特有，是 opencode 自身 bug（强装联网依赖超时）。见下方「八、离线/内网修复」，跑一次 `opencode-offline-fix.ps1` 即可 |
-
----
-
-## 八、离线 / 内网：opencode desktop 打不开（"本地连接中"）
-
-**现象**：离线或内网机器上，opencode desktop 装了插件后打不开、卡在"本地连接中"，大部分时间连不上本地服务（偶尔能开）。
-
-**原因**（opencode 自身已知 bug，非本平台）：opencode 启动时会 `bun add --force` 安装一个 npm 上根本不存在的 `@opencode-ai/plugin@local`。联网机器能秒拿到"无此版本"的应答、放行；但**离线/内网**（bun 走不了系统代理）连不上 registry → 每次卡在 ~60s 网络超时并反复重试 → 本地服务起不来。
-
-**解法**：下发一个独立的修复脚本，把 bun 的 registry 请求改成"**秒失败**"（复刻联网时"秒放行"的效果），opencode 即可正常启动、插件照常上报。
-
-```powershell
-# 1) 从平台下载（注意：脚本带参数，不能 irm | iex，要下成文件再跑）
-irm "http://<平台地址>:3000/api/setup/opencode-offline-fix" -OutFile opencode-offline-fix.ps1
-
-# 2) 运行（自动检测能否直连 npm，够不到才应用）
-powershell -ExecutionPolicy Bypass -File .\opencode-offline-fix.ps1
-
-# 3) 彻底退出并重开 opencode desktop
-```
-
-**要点**
-
-- **自动检测**：脚本先直连测 `registry.npmjs.org:443`；能直连说明不会卡，会自动跳过、不改动。
-- **可恢复**：`powershell -ExecutionPolicy Bypass -File .\opencode-offline-fix.ps1 -Restore` 一键还原（应用前会备份原 `~/.npmrc`）。
-- **内网有 npm 镜像**：加 `-Registry "http://你的镜像/"`，用镜像替代默认死地址，这样该机**真包仍可正常安装**。
-- **强制应用**：透明代理等极端情况检测可能误判，可加 `-Force`。
-- **影响**：默认会把该机 npm registry 指到一个"死地址"，让联网装包立即失败——离线机本来就装不了，无实际损失；若该机还要正常用 npm，请用 `-Registry` 指到内网镜像。
+| **OpenCode 在网络受限环境下启动慢 / 一直“本地连接中”** | 参见 [Q&A：OpenCode 启动排查](./qa.md#q15a-安装采集插件后opencode-在网络受限环境下启动缓慢怎么办)，核查版本、日志、包源可达性及临时选项的影响 |
