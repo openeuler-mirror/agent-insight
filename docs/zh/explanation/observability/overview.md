@@ -144,6 +144,10 @@ LlamaIndex、模型 SDK 和 MCP Tool 依赖继续由业务项目管理。Functio
 
 四种产品形态使用同一套 OTLP Trace 结构，但安装入口和 spool 相互隔离。CLI、Desktop、JetBrains 和 Work 的数据统一位于 `~/.agent-insight/otel_data/qoder/<product>/<api-key-hash>/`。切换 API Key 后会自动使用新的摘要子目录，不会混用不同产品、不同账号的 pending、retry 或 uploader lock。升级前的 `qoder-{product}` 目录只作为兼容清理目标，不再写入新数据。
 
+子 Agent 的本地会话记录可通过 `SubagentStop` Hook 或父 Agent 的工具结果中的 `transcriptPath` 补充读取。平台按 Agent 归属分别合并流式消息，保留各子 Agent 的多次 LLM 调用及工具归属，子任务的提示词和最终输出不会覆盖主任务摘要。
+
+详情保留采集到的原生模型消息 ID；本地错误提示的消息 ID 不作为模型消息标识。Desktop / JetBrains 的本地消息 ID 只用于 Trace 展示，不能据此认定它与模型服务的响应 ID 相同。
+
 平台把“产品来源”和“Agent 名称”分开记录。默认命名如下：
 
 | 产品/模式 | 产品来源 | 根 Agent 名称 |
