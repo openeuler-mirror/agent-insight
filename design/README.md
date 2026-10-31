@@ -20,6 +20,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 执行 Profile 后端解耦 | [设计](evaluation/execution-profile-decoupling/phase2-requirements-design.md) | 分离公共配置、后端探测与实际执行，兼容 xGovernor 与原生本地执行 | Refactor | 2026-10-31 | 已实现；新增 8 项解耦回归通过，全仓无新增失败；未在浏览器或真实 Docker/模型环境验证 | — |
 | Benchmark 自动接入 Skill | [需求分析](evaluation/benchmark-onboarding-automation/phase1-requirements-analysis.md) · [需求设计](evaluation/benchmark-onboarding-automation/phase2-requirements-design.md) · [开发计划](evaluation/benchmark-onboarding-automation/phase3-development-plan.md) | 以 Agent Insight 项目地址与 Benchmark 来源为入口，单 Skill 完成能力查询、接入开发及有界修复；验收脚本和模板随包分发，以三类试验验证评分一致性与真实链路 | Feature / Evaluation | 2026-10-28 | 🟡 Skill 包、版本化协议快照、核对/验收 CLI、模板及自测已实现；三类 Benchmark 与跨宿主真实验收待执行 | — |
 | Skill 优化校验效率 | [verification-efficiency](optimization/verification-efficiency/phase1-requirements-analysis.md) | 有效用例筛选、可比基线复用、静态评估去重与诚实进度 | Fix / Perf | 2026-10-28 | 已实现，已验证 UI | — |
 | Skill 优化验收闭环 | [verification-closure](optimization/verification-closure/phase1-requirements-analysis.md) | 目标验收、证据复用、定向范围、上下文减量与重试诊断 | Fix / Perf | 2026-10-29 | 已实现并验证 | — |

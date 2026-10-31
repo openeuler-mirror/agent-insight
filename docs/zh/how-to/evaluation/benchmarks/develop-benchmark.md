@@ -518,7 +518,11 @@ Runtime 参数沿用[公共参数合同](../../../reference/platform/api-and-con
 
 #### 执行后端与能力
 
-可选 `AgentTaskEnvelope.execution` 表达冻结的公开 Profile、OCI 镜像引用、架构与工作目录。仅在目标声明 `execution-backend/v1` 且 Profile/Runtime 就绪时生成；旧信封可解析不表示旧客户端支持新执行方式，也不能通过剥离字段改变已冻结的执行策略。
+可选 `AgentTaskEnvelope.execution` 表达冻结的公开 Profile 与环境：`oci-image` 包含镜像、架构与工作目录，`workspace` 复用任务已有的工作区声明。公共层验证结构、身份和摘要；后端验证能否兑现网络、资源和环境要求。仅在目标声明 `execution-backend/v1` 且 Profile/Runtime 就绪时生成；旧信封可解析不表示旧客户端支持新执行方式，也不能通过剥离字段改变已冻结的执行策略。
+
+执行配置采用 `profiles.<key>.backend/options`，后端专属字段由对应配置模块校验，执行端按后端探测并汇总。`xgovernor` 负责 Docker/cgroup、安装、Worker 与 Trace 检查；`local` 复用原生 Runtime 和工作区，要求可回传 Trace，只接受 `client-default` 网络和无沙箱声明，不宣称 Docker 资源隔离。独立后端的失败不阻断其他就绪目标。具体配置与旧格式兼容见[部署指南](./deploy-services.md#执行-profile-的后端配置)。
+
+客户端上报 `executionBindings` 与公开 Profile；平台据此匹配，缺少必需 Profile 不回退到本地。只有旧客户端未提供 bindings 时才使用旧 SWE-bench 默认约束。配置阶段拒绝同一 Benchmark/平台的多个绑定；异常重复候选明确为不可用，不按数组第一项选择。新增后端须在配置解析、探测与实际执行注册处实现并分发，不接受 YAML 指向任意代码。
 
 执行后端实现 `prepare/runAgent/collect/cancel/close/recover` 六方法。Runner 只持久化不透明句柄，统一管理阶段期限、产物、上传和清理；资源创建前记录归属，取消及恢复只处理本次资源，状态不明时不得假定清理完成。提交物和 Trace 先持久化再上传，恢复上传不得重跑 Agent。
 

@@ -56,3 +56,5 @@ SWE-bench and ZSoft auto-import can be disabled separately through each `dataset
 This page does not enumerate every collector, performance, or diagnostic parameter. Consult its feature guide and current template; omission here does not mean deprecation.
 
 [中文权威版本](../../../zh/reference/platform/configuration.md)
+
+Execution Profiles use `execution.profiles.<key>.backend/options` with explicit bindings. Supported backends validate their own settings; local uses native workspaces and client-default networking, while xGovernor validates its Docker requirements. Legacy flat Profiles retain xGovernor semantics. New explicit configurations do not inject an extra xGovernor Profile. Duplicate Benchmark/platform bindings and unknown fields are rejected. See the [Chinese guide](../../../zh/how-to/evaluation/benchmarks/deploy-services.md#执行-profile-的后端配置).

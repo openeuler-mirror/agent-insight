@@ -119,6 +119,32 @@ bash scripts/start.sh --port 3100
 |---|---|
 | `--port` | 本次启动使用的 Agent Insight 端口 |
 
+### 执行 Profile 的后端配置
+
+在 `executor.local.yaml` 显式声明后端与专属选项。以下示例绑定一个使用原生工作区的自定义 Benchmark；它不表示任意 Benchmark 均可使用此环境：
+
+```yaml
+execution:
+  profiles:
+    native:
+      backend: local
+      options:
+        targets:
+          - platform: pi-agent
+            agents: [pi-agent]
+        models: []
+  bindings:
+    - benchmarks: [example-task]
+      platforms: [pi-agent]
+      profile: native
+```
+
+Agent/模型从客户端支持 Trace 的候选中确认；`models: []` 表示不额外限制原生模型目录。该接入的 Adapter 应生成 `execution.environment: {kind: workspace}`，网络为 `client-default`，不声明沙箱或资源隔离。若官方需要容器、断网或持续状态，选择并验证能满足要求的后端，不直接套用此示例。
+
+`backend: xgovernor` 的 `options` 接受原先的 Server、Docker、Runtime、模型等专属字段。未指定 backend 的旧 flat Profile 继续按 xGovernor 解析；原 SWE-bench 默认绑定及旧冻结摘要保持兼容。显式新格式只创建声明的 Profile，不隐式添加 xGovernor；bindings 须完整配置，数组覆盖旧值。同一 Benchmark/平台不能同时绑定多个 Profile，未知后端和未知字段会报错。
+
+本地能力探测不要求安装 xGovernor；xGovernor Profile 仍执行其 Linux、Docker/cgroup 和 Trace 检查。执行前重新核对冻结配置；所选后端不支持的环境或策略明确拒绝，不自动降级。界面按实际 Profile 显示网络及适用资源，未在页面验证时不能据后端测试宣称交互已通过。
+
 ## 4. 安装 Benchmark 数据集
 
 自动安装能力由接入包的 Dataset Preparer 在 Catalog 中注册，平台不内置各 Benchmark 的下载和解析逻辑。启动脚本按已支持的 Benchmark 顺序独立检查并导入；对应 `dataset.autoImport` 为 `false` 时跳过启动导入，不影响已有数据集或管理员手动安装。

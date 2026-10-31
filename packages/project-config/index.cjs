@@ -305,7 +305,7 @@ function loadProjectConfig(scope, options = {}) {
     if (images.source === 'epoch' && (!images.allowNonOfficial || images.arch === 'x86_64')) {
       throw new Error('config/benchmark/executor.yaml: benchmarks.swe-bench.images.source=epoch 需要允许非官方镜像且使用 ARM64')
     }
-    config.execution = require('../benchmark-protocol/execution.cjs').normalizeExecutionConfig(config.execution)
+    config.execution = require('./execution.cjs').normalizeExecutionConfig(config.execution)
   }
   return config
 }

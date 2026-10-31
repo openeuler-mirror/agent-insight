@@ -61,3 +61,5 @@ Service errors use `{ error: { code, message, retryable } }`. Preserve the same 
 - [Service validation and handler](https://gitcode.com/openeuler/agent-insight/blob/master/services/evaluator/src/service.cjs)
 
 [中文权威版本](../../../zh/reference/evaluation/benchmark-protocol.md)
+
+Execution Profile identity and environment structure are validated by the shared protocol; each backend validates actual policy support. The existing OCI environment remains supported, and `workspace` uses the task workspace for native local execution. Resource limits are declared only when enforced. Clients report explicit execution bindings; missing required Profiles do not silently fall back. See the [Chinese development contract](../../../zh/how-to/evaluation/benchmarks/develop-benchmark.md).

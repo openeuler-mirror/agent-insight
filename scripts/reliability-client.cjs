@@ -943,23 +943,22 @@ function buildCapabilities(cfg, opts) {
   for (const platform of platforms) {
     platform.parameterDefinitions = definitions.filter(definition => definition.targets.some(target => target.platform === platform.id))
   }
-  const execution = executionRuntime().executionCapabilities()
+  const execution = executionRuntime().executionCapabilities({ runtimeProbe: runtimeFor, nativePlatforms: platforms })
   components['execution-backend/v1'] = { ready: true }
   for (const capability of execution.profiles) {
     for (const target of capability.profile.targets) {
       let platform = platforms.find(item => item.id === target.platform)
+      const trace = capability.targetCapabilities?.[target.platform]?.returnsTraceId === true
       if (!platform) {
-        const runtime = execution.config.profiles[capability.profile.key]?.runtimes[target.platform]
-        const binary = runtime?.kind === 'pi' ? 'pi' : target.platform
-        if (!which(binary) && !runtime?.workerExecutable) continue
         platform = { id: target.platform, agents: target.agents, models: capability.profile.models, actions: ['RUN_BENCHMARK_CASE'] }
         platforms.push(platform)
       }
-      platform.runBenchmarkCase = { version: 1, returnsTraceId: true }
+      if (trace) platform.runBenchmarkCase = { version: 1, returnsTraceId: true }
     }
   }
   return {
     executionProfiles: execution.profiles,
+    executionBindings: execution.config.bindings,
     platforms,
     actions: [...WHITELIST],
     components,
@@ -975,9 +974,9 @@ function benchmarkAgentPlatformsFromCapabilities(capabilities) {
   const components = capabilities?.components || {}
   return [...new Set((capabilities?.platforms || [])
     .filter((platform) => {
-      const execution = capabilities.executionProfiles?.find(item => item.profile.targets.some(target => target.platform === platform.id))
-      const readiness = execution?.targetReadiness?.[platform.id] || execution
-      if (readiness?.ready && platform.runBenchmarkCase?.returnsTraceId === true) return true
+      const executionReady = capabilities.executionProfiles?.some(item => item.profile.targets.some(target => target.platform === platform.id)
+        && (item.targetReadiness?.[platform.id] || item).ready)
+      if (executionReady && platform.runBenchmarkCase?.returnsTraceId === true) return true
       const component = components[`agent-runtime/${platform.id}/v1`]
       const ready = component === true
         || (component && typeof component === 'object' && component.ready !== false)
@@ -2384,6 +2383,7 @@ async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
     actions: capabilities.actions,
     components: capabilities.components,
     executionProfiles: capabilities.executionProfiles,
+    executionBindings: capabilities.executionBindings,
     faultInjection: capabilities.faultInjection,
   })
   log(
