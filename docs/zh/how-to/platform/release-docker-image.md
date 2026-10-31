@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Docker", "多架构镜像", "镜像发布", "离线
 changefreq: monthly
 ---
 
-# Docker 镜像发布
-
+<a id="docker-镜像发布"></a>
 本文面向维护者，说明如何基于已发布的 npm 包构建并发布 Docker 镜像。用户部署镜像时请看 README 或用户指南，不需要执行本文命令。
 
 ## 从本地源码构建测试镜像

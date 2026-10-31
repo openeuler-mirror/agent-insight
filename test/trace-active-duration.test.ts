@@ -22,7 +22,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { deriveExecutionTiming } from '@/lib/engine/observability/execution-timing';
 import { deriveOpencodeExecutionFields } from '@/lib/engine/observability/opencode-derived-metrics';
-import { buildAgentCallTree, getAgentActiveDurationMs, formatDuration, resolveTraceTimelineBounds, type RawInteraction } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, getAgentActiveDurationMs, formatDuration, resolveTraceTimelineBounds, type RawInteraction, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { toTraceStructureInteractions } from '@/lib/trace/session-payload';
 
 const base = Date.parse('2026-10-29T01:00:00Z');
@@ -151,4 +151,9 @@ test('Spawned child summary displays effective time and preserves legacy timing 
   assert.ok(!html.includes(formatDuration(3650000)), 'the child card must not display user idle as execution time');
   const legacy = { ...child, stats: { ...child.stats, activeDurationMs: undefined, durationMs: 20000 } };
   assert.match(renderToStaticMarkup(React.createElement(Summary, { child: legacy })), />20s<\/b>/);
+});
+
+
+test('Unresolved Agent summaries keep timing unknown until stats arrive', () => {
+  assert.equal(getAgentActiveDurationMs({ id: 'pending-agent' } as AgentNode), undefined);
 });

@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "用量统计", "事件采集", "数据存储"]
 changefreq: monthly
 ---
 
-# 平台用量统计（usage-analytics）
-
+<a id="平台用量统计（usage-analytics）"></a>
+<a id="平台用量统计usage-analytics"></a>
 管理员专用的功能采用度统计。设计原则一句话：**统计绝不进入业务热路径，绝不改变业务结果，随时可关。**
 
 关联需求文档：`User Requirements/phase{1,2,3}-*.md`。

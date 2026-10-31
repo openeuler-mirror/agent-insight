@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "评估器开发", "评分方法", "质量评测"]
 changefreq: monthly
 ---
 
-# 评估器开发指南
-
+<a id="评估器开发指南"></a>
 > 适用于给「评测中心 / 实验」新增或改造评估器的同学。
 > 前置阅读：[api-and-contracts.md](../../reference/platform/api-and-contracts.md)、[conventions-and-extension.md](../platform/conventions-and-extension.md)。
 
@@ -60,70 +59,7 @@ changefreq: monthly
 
 ### 2.1 输出契约
 
-定义在 `src/lib/evaluators/eval-output.ts`，五个字段**全可选**、任意组合合法：
-
-```ts
-EvaluatorOutput = {
-  verdict?: 'pass' | 'warn' | 'fail'  // 结论判定 → 卡头 chip（达成/部分达成/未达成）
-  summary?: string        // 一句话结论，≤200 字（提示词里要求 ≤80）→ 卡头正文
-  score?: number          // 0-100，卡片总分。纯定性评估器可省
-  points?: EvalPoint[]    // 评分点（最多 64）
-  evidence?: {md} | {json} // 卡级证据
-}
-
-EvalPoint = {
-  label: string           // 必填，≤120 字
-  score?: number          // 0-100，该点得分
-  status?: 'covered' | 'partial' | 'missing'  // 状态 chip
-  evidence?: {md} | {json}
-  skillAttributable?: boolean  // 可归因 skill → skill 优化闭环据此挑 finding
-  suggestion?: string
-  anchors?: string[]      // 'step-N'，可跳链路观测
-}
-```
-
-**`verdict` / `summary` 是呈现层的主信息，请务必上报。** Trace 评测详情是**两级折叠**：
-
-```
-卡片（默认）    结论 chip + 一句话结论 + 得分
-  └ 展开卡片    完整判断依据（与结论重复则不渲染）+ 人工修正 + 评论
-       └ 再展开  评分点明细表
-```
-
-也就是说，**大多数使用者只会看到 `summary` 那一句**。评分点写得再细，不点两次展不开。
-不给结论，卡片就只剩一个孤零零的数字。
-
-- `summary` 的要求是**说人话、讲具体问题**，让人看完不用再翻明细就知道发生了什么：
-  不要用"覆盖率/维度/评分点/整体完成度偏低"这类评测术语，不要罗列各维度，只讲最要命的
-  那一条，讲具体的东西（少了哪个数、答错成什么、漏了哪一步），≤80 字。
-  反例：「关键观点覆盖率偏低，多个维度未达标。」正例：「攻击类型判对了，但没给出来源 IP，
-  也漏了 root 爆破次数，运维拿着没法直接处置。」各预置评估器的提示词里都写了这条约束，
-  新写评估器时照抄。
-- `verdict` 不填时呈现层按 `deriveVerdict(score)` 派生（≥80 pass / ≥60 warn / 其余 fail）。
-  派生值**不落库**，所以调整阈值口径不需要重刷历史数据。有比分数更准的达成判定时（例如
-  任务完成度评估器的 `isCorrect`）应显式上报，别让它退化成分数分档。
-- `summary` 不填时呈现层回退到 `evidence.md` 的首段（`displaySummary()`）——这是给存量数据
-  留的兼容路径，新评估器别依赖它。
-- 若 `evidence.md` 与 `summary` 逐字相同，展开区不再重复渲染证据（`isEvidenceRedundant()`）。
-  想让展开后有额外信息可看，`evidence` 就要比 `summary` 多写点东西，而不是把同一句复制两遍。
-
-> 已有评估器的结论字段来源：任务完成度 = `reason`（同时写进 `Execution.judgmentReason`）；
-> 轨迹质量 = 专设的 `conclusion` 字段，**不是** `reason_text` —— 后者是「执行路径分析」绿框的
-> 正文，有固定的完整性/工具选择/冗余分段结构，当结论读着费劲，故两者分开、取不到才回落。
-
-**归一化 `normalizeEvaluatorOutput()` 的行为**（务必知道，否则会被"吞字段"坑到）：
-
-- `score` 越界 clamp 到 [0,100]；非数值丢弃。
-- **0-1 量纲自动放大**：`score ∈ (0,1]` 时 ×100，因此历史评估器输出 `0.85` 与 `1` 会分别归一化为 85 分与 100 分。
-- `verdict` 容忍英文别名与中文说法（`passed`/`达成`/`partial`/`未通过`…），**未识别的值直接丢弃**而不报错。
-- `summary` 压平换行并截断到 200 字（超出补 `…`）。
-- 非法评分点逐条丢弃，不会让整次评估失败。
-
-> **人工修正分不属于本契约。** 用户可以在详情页把某一行的分改掉，写的是平台侧的
-> `ExperimentEvalResult.humanScore`（连同必填的 `humanReason`），机器分 `score` 原样只读留存，
-> 聚合按**生效分 = `humanScore ?? score`** 算（`detail-agg.ts` 的 `effectiveScore`）。
-> 评估器只管上报自己的判断，不需要、也不应该感知人工意见——两者的差值正是校准评估器的依据。
-> 注意重评会清除该行的人工修正（`run-experiment.ts` 的 `RESET_RESULT_FIELDS`）。
+字段定义、归一化、结论回退与人工修正规则集中在[评估器运行与输出契约](../../reference/evaluation/evaluator-output.md)。本指南继续说明评估器设计、身份与注册以及工程接入，不再重复维护字段正文。
 
 ### 2.2 `evaluatorId` 是永久契约，命名一次定死
 

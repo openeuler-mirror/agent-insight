@@ -3133,7 +3133,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
     finishPostExecution();
     const finishSession = beginTraceStage('session-save');
     if (targetRecord.task_id && mergedInteractionsForSession) {
-        const isLangfuseTrace = targetRecord.framework === 'langfuse' || targetRecord.framework === 'langfuse-langgraph';
+        const isLangfuseTrace = ['langfuse', 'langfuse-langgraph', 'dify'].includes(targetRecord.framework || '');
         let langfuseTraceNodesJson: string | undefined;
         if (isLangfuseTrace && Array.isArray(targetRecord.langfuseTraceNodes)) {
             const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));

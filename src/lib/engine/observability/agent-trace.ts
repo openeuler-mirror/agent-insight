@@ -154,6 +154,7 @@ export interface AgentEvent {
     toolCallId?: string;
     /** Langfuse-only source span identity used to preserve observation nesting. */
     sourceSpanId?: string;
+    sourceTraceId?: string;
     /** Langfuse-only visible parent span after framework wrappers are collapsed. */
     parentSourceSpanId?: string;
     /** Structural link rendered through its child node instead of as a duplicate row. */
@@ -653,7 +654,7 @@ function makeNode(init: {
 }
 
 export function getAgentActiveDurationMs(node?: AgentNode | null): number | undefined {
-    return node?.stats.activeDurationMs ?? node?.stats.durationMs;
+    return node?.stats?.activeDurationMs ?? node?.stats?.durationMs;
 }
 
 function finalizeStats(node: AgentNode, timingInputs: Map<string, RawInteraction[]>): RawInteraction[] {

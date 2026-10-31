@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Trace 采集器", "框架接入", "客户端开发"
 changefreq: monthly
 ---
 
-# 新增第三方Agent框架Trace采集开发方案
-
+<a id="新增第三方agent框架trace采集开发方案"></a>
 ## 一、整体架构概览
 
 当前平台的Trace采集采用**OTLP标准协议**作为接入层，内部通过**Adapter模式**实现框架特有的语义解析：
@@ -40,6 +39,69 @@ changefreq: monthly
 ```
 
 ---
+
+
+## Dify 原生 OTLP 接入
+
+可在「客户端安装」页顶部的 Dify 入口复制两组当前账号配置；身份刷新完成后才提供复制。
+
+自建 Dify 可使用已有 OpenTelemetry 导出能力，无需修改 Dify 源码或安装 Agent Insight 采集插件。以下配置已在 Dify 1.18.0 的原生 Workflow（Start → LLM → End）与 DeepSeek 实际调用中验证；它与应用内配置的 Langfuse 观测服务是不同入口。
+
+在运行 Dify API 与 Worker 的进程环境中设置，并重启相应进程：
+
+```bash
+ENABLE_OTEL=true
+OTEL_EXPORTER_OTLP_PROTOCOL=http
+OTLP_TRACE_ENDPOINT=http://<agent-insight-host>:3000/api/ingest/otel/v1/traces
+OTLP_API_KEY=
+OTEL_EXPORTER_OTLP_TRACES_HEADERS=x-witty-api-key=<your-agent-insight-api-key>
+OTEL_SAMPLING_RATE=1.0
+```
+
+`OTLP_TRACE_ENDPOINT` 是完整 Trace URL；容器内须填写容器可达的 Agent Insight 地址。`OTLP_API_KEY` 留空，让 Python OTLP Exporter 从标准环境变量读取鉴权头。使用安装指导中属于当前用户的 API Key，接收端按该用户归属数据。验证时设置全采样，之后可按流量调整；Dify 此版本默认采样率为 0.1。Dify 的 Metrics 使用独立的 `OTLP_METRIC_ENDPOINT`，应指向支持 Metrics 的 Collector；Agent Insight 此入口仅接收 Traces。
+
+数据走现有「OTLP HTTP 接收 → Trace 缓存 → 消费聚合 → Execution/Session」链路。服务端 Dify 适配器负责：
+
+- 使用 `dify:<traceId>` 作为固定聚合键，隔离同 Trace 的其他框架；按 `traceId` 固定分组，分批到达与重复投递使用同一条 Trace；不会按静态 `service.instance.id` 合并不同执行。
+- 保留 Workflow 根 Span 和业务节点，过滤 SQL、Redis、HTTP 等基础设施 Span；只有 `llm` / `tool` 节点分别计入对应调用数。
+- 恢复文本消息角色、模型、Token、工具输入输出及错误，并将控制流节点保留在轨迹树中。Dify 的运行 ID 等系统字段保留于 Start 节点输出。
+- 收到已结束的 Workflow 根 Span，且存在 End 节点或根 Span 显式失败时，记录完成时间。缺少根 Span、缺少结束证据时不推断完成。
+
+在链路追踪页按 `dify` 框架查看，检查实际消息、调用数与 Token。HTTP 200 仅表示接收成功，还需确认消费和入库。当前通过完整验收的范围包括原生 Workflow 文本模型调用，以及下述原生 Workflow 内两名 Agent v2 的串行编排。补充 Chatflow 两轮真实验证已确认消息角色、历史上下文、回答和 Token 正常；但 Answer 节点未被现有完成判定接受，任务成功后界面仍显示“执行中”，之后变为“观测超时”，该场景尚未通过完整验收。Agent v2 运行环境需要支持 Landlock；本地 Docker Desktop 从 4.41.0 升级至 4.97.0 后，实测内核支持 ABI 8，原生应用验证已解除该环境阻塞。循环/并发/重试、暂停恢复、多模态及失败工作流仍需真实任务验证。工具和错误映射已有合成回归测试。不同 Trace 不会按 `sys.conversation_id` 或 `sys.workflow_run_id` 自动跨 Trace 合并，暂停恢复不在本轮保证范围内。
+
+
+### Agent 内部执行轨迹
+
+Dify Agent 运行服务使用独立的原生 trajectory OTLP 管线。仅配置 API/Worker 的 `ENABLE_OTEL` 不足以导出 Agent 内部模型与工具调用；在 Agent 运行服务的部署环境中配置并重启：
+
+```bash
+DIFY_AGENT_TRAJECTORY_ENABLED=true
+DIFY_AGENT_TRAJECTORY_OTLP_TRACES_ENDPOINT=http://<agent-insight-host>:3000/api/ingest/otel/v1/traces
+DIFY_AGENT_TRAJECTORY_OTLP_HEADERS='{"x-witty-api-key":"<your-agent-insight-api-key>"}'
+DIFY_AGENT_TRAJECTORY_INCLUDE_CONTENT=true
+```
+
+保留默认 `DIFY_AGENT_TRAJECTORY_SERVICE_NAME=dify-agent-trajectory` 和 `DIFY_AGENT_TRAJECTORY_TRACE_CONTEXT_MODE=isolated` 即可。内容采集默认关闭；需要展示模型请求、回答、已上报的 reasoning、工具参数和结果时才启用 `INCLUDE_CONTENT`。无需修改 Dify 源码或安装我们的插件。该配置适用于当前检出的 Dify 1.18.0 Agent 运行服务，不代表所有旧版 Agent 应用都提供同一管线。
+
+服务端识别 `invoke_agent`、`chat`、`execute_tool`，展示 Agent → 模型 → 工具 → 模型的执行顺序。工具通过调用 ID 关联到发起调用的模型，保留原始父 Span；只累加模型 Span 的 Token，避免与 Agent 根节点的聚合用量重复。只有收到已结束的 Agent 根 Span 才标记完成。保留不同 OTLP Trace 的原始身份；Workflow 详情按执行标识关联内部轨迹，不按共享的 `dify.trace_id` 推测多 Agent 父子关系。
+
+已使用官方 Dify LLM 网关 SDK、原生 AgentObservability、DeepSeek 和真实 Dify Workflow 工具完成单 Agent 运行，并验证 OTLP 自动消费、入库及浏览器详情：2 次模型调用、1 次工具调用，第二次模型输入含工具结果。此外，已通过已发布 Workflow 的服务 API 完成原生 Agent v2 双 Agent 运行，并在浏览器验证模型历史上下文、工具参数/结果及独立 Agent Trace 跳转。Shell 仅通过隔离运行探测，不代表 Agent 自主 Shell 工具场景已验收。模型未上报的内部状态不会由平台补造。
+
+
+### Workflow 与内部 Agent 的关联展示
+
+当前关联查询适用于 SQLite 部署；配置 `DB_HOST` 的 OpenGauss 部署继续返回原始单 Trace，不跨库查询本地 SQLite。无需修改 Dify 源码。启用 Workflow 和 Agent 两条现有 OTLP 管线后，Agent Insight 将租户、应用和节点执行标识保存到既有节点 JSON，并在查询 Workflow 详情时关联内部轨迹：
+
+- 主关联键为同一接收用户、`dify.tenant_id`、`dify.app_id`，以及外层 `node.execution_id` 与内部 `dify.node.execution_id` 的精确匹配。双方都有 Workflow 运行 ID、Workflow ID 或节点 ID 时，值冲突则拒绝关联。
+- 同一个节点多次执行由执行 ID 区分；同次节点执行的多个重试 Trace 分别保留，不按 Agent 名称或时间猜测。内部 Agent 根 Span 尚未到达时等待后续数据，Workflow 已完成后的晚到数据可点击“立即刷新”查看。
+- 展示节点用 Trace ID 与 Span ID 组合区分，原始父 Span 和独立 Session 保留；可从关联 Agent 跳到其原始 Trace。`/api/observe/session?taskId=<id>&source=raw` 返回原始范围。
+- 详情页汇总已关联的模型节点 Token；数据库里的原始 Execution、任务列表和单条 Trace 统计保持各自口径，避免重复写入统计。
+- 每次最多查询 100 条候选 Trace、64 个节点执行标识；单条关联节点 JSON 最多 4 MiB，累计最多 16 MiB、5000 个节点。超限时显示部分结果提示，可打开独立 Trace 查看。
+
+关联隔离、晚到刷新、重试、原始模式和超大正文由服务端回归验证。原生应用验收使用 Dify 1.18.0、DeepSeek 和已发布 Workflow 的服务 API：开始 → 规划 Agent v2 → 复核 Agent v2 → DeepSeek 汇总 → 结束。两名 Agent 各执行 3 次模型调用、2 次 Workflow 工具调用，外层另执行 1 次汇总模型调用；查询时关联 2 条内部 Agent Trace，共展示 7 次模型调用、4 次工具调用、28,716 Tokens，与 Dify 本次返回的 Workflow 用量一致，耗时约 38 秒。两条原生 OTLP 管线经转发接收后自动消费入库，浏览器已验证层级、下一轮模型输入中的工具结果、工具参数/结果及独立 Trace 跳转。整个过程未修改 Dify 源码。
+
+上述计数范围为外层 Workflow 与两条内部 Agent Trace。示例工具本身也是 DeepSeek Workflow，其内部模型调用仍保存为独立 Trace，当前不会继续挂载到工具之下，也不计入该详情的 7 次模型调用。界面的 `AGENTS 3` 包含 Workflow 的根容器和两名 Agent。原生上报的内部 Agent 名称为 `dify-agent`，可通过外层“规划 Agent / 复核 Agent”节点区分。此例不覆盖并发、重试、暂停恢复或自主 Shell 工具场景。
+
 
 ## 二、服务端开发工作
 
@@ -453,7 +515,11 @@ Qoder CN CLI 与 Qoder CN Desktop 的用户级 Hook 写入 `~/.qoder-cn/settings
 
 数据处理顺序为：Hook JSON 原子落盘 → Stop/SessionEnd 读取 transcript、diagnostics 与适用的本地 Token 数据 → 生成完整 OTLP snapshot → 写入账号隔离 pending 目录 → 立即拉起一次 one-shot uploader 上传 `/api/ingest/otel/v1/traces` → 服务端 Qoder adapter 选择最新 snapshot 并生成 `ExecutionRecord`。该事件触发路径不等待常驻 uploader 的定时扫描；自动化验收使用真实本地 HTTP 接收端，硬性断言 SessionEnd 到 OTLP 请求到达小于 3000ms。Tool 依靠 `tool_use_id` 配对而不是文件顺序；通常使用 Pre/Post Hook 计算耗时，异步 Hook 的采集时间戳重合为零时回退到 transcript 的 `tool_use/tool_result` 时间戳，避免把真实 MCP 等短调用显示为 `0ms`。Qoder CN Desktop 通过 `/skill-name` 触发 Skill 时不产生独立 Skill Tool Hook，采集器读取 transcript 的 `session_meta/slash_command`（`content.type=skill`）合成 Skill Span；Qoder CN CLI 对应读取 `system/informational` 的 `Skill **name** activated.` 记录。两种形式都还原 name、version、triggerMode、params 和 result，并避免与显式 Skill Tool 重复。Task 的 `subagent_type` 与输出中的 child session id 用于还原多层 Subagent 调用树；Qoder CN CLI 的 `agent-result` 使用驼峰字段 `agentId`、`agentType`、`transcriptPath`，采集器以真实 `agentId` 合成子 Agent Span，并保留状态、结果和 transcript 路径，支持多个并发 Agent 的稳定关联。Qoder Work 的 `qw_mcp_call` 会解包为真实 MCP server/tool/arguments；`builtin_*` 服务同时标记为 `connector`，保留连接器名称、工具、参数、结果、错误和耗时。
 
-Token 按 `diagnostics/Hook 精确值 > Desktop/JetBrains 本地 SQLite 精确值 >（显式开启时）可见 transcript 本地估算 > 不可用` 取值。Qoder CN Desktop 在 Windows 的数据库位于 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db`，会话 transcript 位于 `~/.qoder-cn/cache/projects/.../conversation-history/.../*.jsonl`；JetBrains 数据库仍位于 `~/.qoder/shared_client/cache/db/local.db`。采集器以只读和 `query_only` 模式访问 `chat_message`，读取 `id/session_id/request_id/token_info/model_info/gmt_create`；Schema 不兼容、锁等待超过短超时或运行时无 `node:sqlite` 时返回空结果，不影响 Hook。CN Desktop 的无 `type` 会话记录会先从 `{role,message}` 规范化，再按会话 ID 和时间戳与 SQLite 请求逐条关联。`prompt_tokens` 与 `completion_tokens` 写入 `gen_ai.usage.*`，`cached_tokens` 单独写入缓存属性且不重复计入总 Token；来源标记为 `local_sqlite`，不带估算标记。该 Schema 属于 Qoder 内部存储，必须保留探测和回退，不能视为稳定公开 API。
+并发子 Agent 的 transcript 仅从当前父会话的 `<sessionId>/subagents/` 目录读取。采集器使用 Hook 的 `agent_transcript_path` 或完成工具结果的 `transcriptPath` 发现文件，并按 `sessionId + agentId` 过滤、按真实文件路径去重；同目录之外的路径或符号链接目标、其他会话和其他 Agent 的记录不会合入。流式合并键包含 Agent 归属，因此不同 Agent 即使复用 `message.id` 也不会合为同一次 LLM 调用。主查询、根输出和主 Skill 命令仅从根 Agent 记录生成。
+
+模型 diagnostics 优先使用 transcript 的 `requestTokenAnchor.requestId` 或 `message.usage.request_id` 关联对应回复；已有不同请求标识的回复不会再按相近时间强行配对。没有请求锚点的旧记录仍保留有界的时间匹配。`message.id` 随 LLM Span 的 `qoder.llm.message_id` 保留并投影到交互的 `messageID`；`isApiErrorMessage` 或 `<synthetic>` 的本地错误记录仍显示错误正文，但不提供模型消息标识。工具优先根据真实 `parentSpanId` 挂到对应 LLM，再按子 Agent 归属回退，避免多轮子 Agent 的工具全部集中在最后一次回复下。
+
+Token 按 `diagnostics/Hook 精确值 > Desktop/JetBrains 本地 SQLite 精确值 >（显式开启时）可见 transcript 本地估算 > 不可用` 取值。Qoder CN Desktop 在 Windows 的数据库位于 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db`，会话 transcript 位于 `~/.qoder-cn/cache/projects/.../conversation-history/.../*.jsonl`；JetBrains 优先探测已存在的 `~/.qoder-cn/shared_client/cache/db/local.db`，不存在时回退 `~/.qoder/shared_client/cache/db/local.db`；显式 `AGENT_INSIGHT_QODER_TOKEN_DB` 路径始终优先。采集器以只读和 `query_only` 模式访问 `chat_message`，读取 `id/session_id/request_id/token_info/model_info/gmt_create`；Schema 不兼容、锁等待超过短超时或运行时无 `node:sqlite` 时返回空结果，不影响 Hook。CN Desktop 的无 `type` 会话记录会先从 `{role,message}` 规范化，再按会话 ID 和时间戳与 SQLite 请求逐条关联。`prompt_tokens` 与 `completion_tokens` 写入 `gen_ai.usage.*`，`cached_tokens` 单独写入缓存属性且不重复计入总 Token；来源标记为 `local_sqlite`，不带估算标记。该 Schema 属于 Qoder 内部存储，必须保留探测和回退，不能视为稳定公开 API。
 
 AC35 只比较 Qoder 内置精确计量源，不使用 Credits 换算，也不把带 `estimated=true`/`≈` 的可见文本估算值当作通过依据。误差公式为 `abs(Agent Insight - Qoder) / Qoder`，分别校验 input、output 和 total，三项均须小于 5%。Desktop/JetBrains 以同一 session 的 SQLite `prompt_tokens + completion_tokens` 为 total；`cached_tokens` 是 prompt 的子集，禁止再次相加。CLI/Work 以 `model.response.completed` diagnostics 的 input/output（以及存在时独立的 reasoning）为准。自动化用例将四端原始计量依次经过读取器、OTLP snapshot、normalize 和 Qoder Adapter 后比较；2026-07-24 本机真实样本复核 Desktop 2 条、JetBrains 2 条、CLI 2 条、Work 6 条，12 条精确记录的 input/output/total 误差均为 0%。
 

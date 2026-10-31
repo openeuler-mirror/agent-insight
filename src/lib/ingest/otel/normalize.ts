@@ -18,11 +18,21 @@ import { normalizeClaudeOtlpTraces } from '@/lib/ingest/claude-otel/otlp-json';
 import { isActrailOtlpTraceBody, normalizeActrailOtlpTraces } from './actrail';
 import { isLangfuseOtlpTraceBody, normalizeLangfuseOtlpTraces } from './langfuse';
 import { isLlamaIndexOtlpTraceBody, normalizeLlamaIndexOtlpTraces } from './llamaindex';
+import { normalizeDifyOtlpTraces, splitDifyOtlpTraces } from './dify';
+import type { OtelTraceEvent } from './types';
 
 export function normalizeOtlpTraces(
   body: any,
   opts: { receivedAt?: string; authenticatedUser?: string } = {},
-) {
+): OtelTraceEvent[] {
+  const split = splitDifyOtlpTraces(body);
+  if (split.dify.resourceSpans.length) {
+    return [
+      ...normalizeDifyOtlpTraces(split.dify, opts),
+      ...(split.other.resourceSpans.length ? normalizeOtlpTraces(split.other, opts) : []),
+    ];
+  }
+  body = split.other;
   if (isActrailOtlpTraceBody(body)) {
     return normalizeActrailOtlpTraces(body, opts);
   }

@@ -21,6 +21,7 @@ import ts from 'typescript';
 import React from 'react';
 import { getAgentActiveDurationMs } from '../src/lib/engine/observability/agent-trace';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
 
 const source = fs.readFileSync(new URL('../src/components/observe/AgentTraceView.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('AgentTraceView.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -48,7 +49,7 @@ function variable<T>(name: string, scope: Record<string, unknown>): T {
 }
 function functionValue<T>(name: string, scope: Record<string, unknown>): T {
     const node = findNode(n => ts.isFunctionDeclaration(n) && n.name?.text === name);
-    return evaluate<T>(node.getText(ast), scope);
+    return evaluate<T>(node.getText(ast), { getAgentActiveDurationMs, ...scope });
 }
 function expansion(initial: string[]) {
     let keys = new Set(initial);
@@ -125,20 +126,10 @@ test('manual duration filtering offers >60s without enabling slow-only', () => {
 });
 
 function eventVisible(durationMs: number | undefined, slowOnly: boolean, minDurationMs: number) {
-    const callback = findNode(n => ts.isVariableDeclaration(n) && n.name.getText(ast) === 'renderEventEntry') as ts.VariableDeclaration;
-    const body = (callback.initializer as ts.ArrowFunction).body as ts.Block;
-    const start = body.statements.findIndex(n => ts.isVariableStatement(n)
-        && n.declarationList.declarations[0].name.getText(ast) === 'evDur');
-    const end = body.statements.findIndex(n => ts.isVariableStatement(n)
-        && n.declarationList.declarations[0].name.getText(ast) === 'descendantPrefixBits');
-    assert.ok(start >= 0 && end > start);
-    const expression = `() => { ${body.statements.slice(start, end).map(n => n.getText(ast)).join('\n')} return true; }`;
-    return evaluate<() => boolean | null>(expression, {
-        childNode: undefined,
-        ev: { startedAt: 0, completedAt: durationMs, usage: { total: 0 }, kind: 'tool' },
-        SLOW_MS: 60_000, treeKindFilter: 'all', minDurationMs, minTokenK: 0,
-        ctxSlowOnly: slowOnly, searchQuery: '',
-    })() === true;
+    const matches = functionValue<any>('traceEventMatchesFilters', { eventKey: () => 'event', SLOW_MS: 60_000 });
+    return matches({ startedAt: 0, completedAt: durationMs, usage: { total: 0 }, kind: 'tool' }, 0, 'root', new Map(), {
+        treeKindFilter: 'all', minDurationMs, minTokenK: 0, ctxSlowOnly: slowOnly, searchQuery: '', matchedKeys: new Set(),
+    });
 }
 
 test('slow-only and manual >60s agree at missing, 59999ms, 60000ms and 60001ms boundaries', () => {
@@ -176,6 +167,7 @@ function eventDetailMarkup(status: string, output: string, exitCode?: number, re
         KIND_META: { tool: { label: 'TOOL' }, skill: { label: 'SKILL' } }, formatClockMs: () => null,
         firstMeaningfulLine: (value: string) => value, formatDuration: () => '',
         KindBadge: () => null, CopyableId: () => null, RasReliabilityDetails: () => null,
+        eventDetailIdentifier: (event: any) => event.toolCallId ? { label: 'Tool Call ID', value: event.toolCallId } : null,
         getAgentNodeDisplayLabel: () => 'Default', SpanErrorBlock,
         CompactSection: ({ label, raw }: { label: string; raw: string }) => React.createElement('section', { 'data-section': label }, raw),
         EmptyDetail: () => null,
@@ -242,4 +234,245 @@ test('opening the current Trace from a nested Agent resets to the root and still
     assert.deepEqual(opened, ['parent-task']);
     navigate('child-task');
     assert.deepEqual(opened, ['parent-task', 'child-task']);
+});
+
+test('nested Workflow containers survive Tool filtering when their linked Agent contains a matching tool', () => {
+    const matches = functionValue<(event: any, index: number, owner: string, nodes: Map<string, any>, filters: any) => boolean>('traceEventMatchesFilters', { eventKey: (owner: string, index: number) => `${owner}:${index}`, SLOW_MS: 60_000 });
+    const build = functionValue<any>('buildAgentEventTree', {});
+    const contains = functionValue<any>('agentEventTreeMatches', { buildAgentEventTree: build });
+    const child = { id: 'child', events: [{ kind: 'tool', name: 'lookup', startedAt: 1, completedAt: 2 }], children: [] };
+    const nodes = new Map([['child', child]]);
+    const entry = { event: { kind: 'chain' }, eventIndex: 0, children: [{ event: { kind: 'task', treeHidden: true, spawnedChildId: 'child' }, eventIndex: 1, children: [] }] };
+    const predicate = (event: any, index: number, owner: string) => matches(event, index, owner, nodes, { treeKindFilter: 'tool', minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: '', matchedKeys: new Set() });
+    assert.equal(contains(entry, 'root', nodes, predicate), true);
+    child.events = [];
+    assert.equal(contains(entry, 'root', nodes, predicate), false);
+});
+
+test('searching only a linked Agent name retains its Workflow ancestor without bypassing Tool filters', () => {
+    const key = (id: string) => `a:${id}`;
+    const matchAgent = functionValue<any>('traceAgentMatchesFilters', { agentKey: key, aggregateSubtreeStats: (n: any) => n.stats, SLOW_MS: 60_000 });
+    const contains = functionValue<any>('agentEventTreeMatches', { buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}) });
+    const agent = { id: 'child', events: [], children: [], stats: { totalTokens: 2000, durationMs: 3000 } };
+    const nodes = new Map([['child', agent]]);
+    const entry = { event: { kind: 'chain' }, eventIndex: 0, children: [{ event: { kind: 'task', spawnedChildId: 'child' }, eventIndex: 1, children: [] }] };
+    const filters = { treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: 'child name', matchedKeys: new Set(['a:child']) };
+    assert.equal(contains(entry, 'root', nodes, () => false, (node: any) => matchAgent(node, filters)), true);
+    assert.equal(contains(entry, 'root', nodes, () => false, (node: any) => matchAgent(node, { ...filters, treeKindFilter: 'tool' })), false);
+});
+
+const displayEvents = (events: any[]) => functionValue<any>('buildAgentEventTree', {})(events);
+const responseCall = (id: string, name = 'read') => ({ id, function: { name, arguments: '{}' }, state: 'success' });
+function messageEvents(proof: 'parts' | 'content_blocks' | 'none' = 'parts') {
+    const calls = [responseCall('read-call'), responseCall('bash-call', 'bash')];
+    const interaction = {
+        role: 'assistant', content: 'Inspect the files', tool_calls: calls, usage: { input: 5, output: 2, total: 7 },
+        ...(proof === 'parts' ? { parts: calls.map(call => ({ type: 'tool', callID: call.id, tool: call.function.name })) } : {}),
+        ...(proof === 'content_blocks' ? { content_blocks: calls.map(call => ({ type: 'tool_use', id: call.id, name: call.function.name, input: {} })) } : {}),
+    };
+    return buildAgentCallTree([interaction])!.events;
+}
+
+test('ordinary OpenCode tools nest under their own model response without changing events, counters or selection indexes', () => {
+    const events = messageEvents();
+    const before = structuredClone(events);
+    const entries = displayEvents(events);
+    assert.deepEqual(entries.map((entry: any) => entry.event.kind), ['llm']);
+    assert.deepEqual(entries[0].children.map((entry: any) => entry.event.name), ['read', 'bash']);
+    assert.deepEqual(entries[0].children.map((entry: any) => entry.eventIndex), [1, 2]);
+    assert.equal(entries[0].event, events[0]);
+    assert.equal(entries[0].children[0].event, events[1]);
+    assert.deepEqual(events, before);
+});
+
+test('Claude response tool_use blocks prove the same model-tool relationship', () => {
+    const entries = displayEvents(messageEvents('content_blocks'));
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0].children.map((entry: any) => entry.event.toolCallId), ['read-call', 'bash-call']);
+});
+
+test('tools grouped by an adapter without original response evidence remain at their current level', () => {
+    const events = messageEvents('none');
+    assert.deepEqual(displayEvents(events).map((entry: any) => entry.eventIndex), [0, 1, 2]);
+});
+
+test('Skill, TASK and child Agent anchors keep their original positions beside newly nested ordinary tools', () => {
+    const calls = [responseCall('read-call'), responseCall('skill-call', 'skill'), {
+        ...responseCall('task-call', 'task'), function: { name: 'task', arguments: JSON.stringify({ subagent_type: 'worker', subagent_session_id: 'child-session' }) },
+    }];
+    const tree = buildAgentCallTree([
+        { role: 'assistant', content: '', tool_calls: calls, parts: calls.map(call => ({ type: 'tool', callID: call.id, tool: call.function.name })), usage: { total: 7 } },
+        { role: 'subagent', agent: 'worker', subagent_session_id: 'child-session', content: 'done', usage: { total: 3 } },
+    ])!;
+    const before = structuredClone(tree);
+    const entries = displayEvents(tree.events);
+    assert.deepEqual(entries.map((entry: any) => entry.event.kind), ['llm', 'skill', 'task']);
+    assert.deepEqual(entries[0].children.map((entry: any) => entry.event.kind), ['tool']);
+    assert.equal(entries[2].event.spawnedChildId, tree.children[0].id);
+    assert.equal(entries[2].eventIndex, 3);
+    assert.equal(tree.stats.totalTokens, 7);
+    assert.equal(tree.stats.llmCalls, 1);
+    assert.equal(tree.stats.toolCalls, 1);
+    assert.equal(tree.stats.skillCalls, 1);
+    assert.equal(tree.stats.taskCalls, 1);
+    assert.deepEqual(tree, before);
+});
+
+test('independent OTLP tools use an exact parent span in the same trace even when they arrive before the model event', () => {
+    const events = [
+        { kind: 'tool', name: 'read', toolCallId: 'call', interactionIndex: 0, interaction: { traceId: 'trace', spanId: 'tool', parentSpanId: 'model' } },
+        { kind: 'llm', interactionIndex: 1, interaction: { traceId: 'trace', spanId: 'model' } },
+    ];
+    const entries = displayEvents(events);
+    assert.deepEqual(entries.map((entry: any) => entry.eventIndex), [1]);
+    assert.equal(entries[0].children[0].eventIndex, 0);
+    events[0].interaction.traceId = 'another-trace';
+    assert.equal(displayEvents(events).length, 2);
+});
+
+test('tool call IDs from projected model outputs can link independent failed or running tools without touching status or timing', () => {
+    const events = [
+        { kind: 'llm', sourceSpanId: 'model', interactionIndex: 0, interaction: { tool_calls: [responseCall('call')] } },
+        { kind: 'tool', name: 'read', toolCallId: 'call', toolStatus: 'error', startedAt: 20, completedAt: 30, interactionIndex: 1, interaction: {} },
+        { kind: 'tool', name: 'unrelated', toolCallId: 'unknown', toolStatus: 'running', interactionIndex: 2, interaction: {} },
+    ];
+    const before = structuredClone(events);
+    const entries = displayEvents(events);
+    assert.deepEqual(entries.map((entry: any) => entry.eventIndex), [0, 2]);
+    assert.equal(entries[0].children[0].event.toolStatus, 'error');
+    assert.deepEqual(events, before);
+});
+
+test('ambiguous call IDs, tool-name conflicts and conflicting parent evidence do not create a guessed LLM parent', () => {
+    const model = (spanId: string) => ({ kind: 'llm', sourceSpanId: spanId, interactionIndex: spanId === 'a' ? 0 : 1, interaction: { tool_calls: [responseCall('reused')] } });
+    const tool = { kind: 'tool', name: 'read', toolCallId: 'reused', interactionIndex: 2, interaction: {} };
+    assert.equal(displayEvents([model('a'), model('b'), tool]).length, 3);
+    assert.equal(displayEvents([model('a'), { ...tool, name: 'write' }]).length, 2);
+    const events = [model('a'), { ...model('b'), interaction: {} }, { ...tool, parentSourceSpanId: 'b' }];
+    const entries = displayEvents(events);
+    assert.equal(entries.find((entry: any) => entry.event.sourceSpanId === 'b').children[0].event, events[2]);
+    assert.equal(entries.find((entry: any) => entry.event.sourceSpanId === 'a').children.length, 0);
+});
+
+test('a native message resolves a reused call ID locally while unrelated traces remain isolated', () => {
+    const events = [...messageEvents(), ...messageEvents()];
+    events.slice(3).forEach(event => { event.interactionIndex += 1; });
+    const entries = displayEvents(events);
+    assert.equal(entries.length, 2);
+    assert.deepEqual(entries.map((entry: any) => entry.children.map((child: any) => child.eventIndex)), [[1, 2], [4, 5]]);
+});
+
+test('an absent or synthetic model response never becomes a new tool parent', () => {
+    const events = messageEvents();
+    assert.equal(displayEvents(events.slice(1)).length, 2);
+    events[0].interaction.trace_synthetic = true;
+    assert.equal(displayEvents(events).length, 3);
+});
+
+test('display-only linking cannot introduce a cycle into an existing span hierarchy', () => {
+    const events = [
+        { kind: 'tool', name: 'read', sourceSpanId: 'tool', toolCallId: 'call', interactionIndex: 0, interaction: {} },
+        { kind: 'llm', sourceSpanId: 'model', parentSourceSpanId: 'tool', interactionIndex: 1, interaction: { tool_calls: [responseCall('call')] } },
+    ];
+    const entries = displayEvents(events);
+    assert.equal(entries[0].event, events[0]);
+    assert.equal(entries[0].children[0].event, events[1]);
+});
+
+test('Tool filtering and tool-name search retain the new model ancestor without changing the selected tool key', () => {
+    const entries = displayEvents(messageEvents());
+    const matches = functionValue<any>('traceEventMatchesFilters', { eventKey: (owner: string, index: number) => `${owner}:${index}`, SLOW_MS: 60_000 });
+    const contains = functionValue<any>('agentEventTreeMatches', { buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}) });
+    const filters = { treeKindFilter: 'tool', minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: 'read', matchedKeys: new Set(['root:1']) };
+    assert.equal(contains(entries[0], 'root', new Map(), (event: any, index: number, owner: string) => matches(event, index, owner, new Map(), filters)), true);
+    assert.equal(entries[0].children[0].eventIndex, 1);
+});
+
+test('a tool that already anchors a child Agent is not moved below an LLM', () => {
+    const events = messageEvents();
+    events[1].spawnedChildId = 'worker';
+    const entries = displayEvents(events);
+    assert.deepEqual(entries.map((entry: any) => entry.eventIndex), [0, 1]);
+    assert.deepEqual(entries[0].children.map((entry: any) => entry.eventIndex), [2]);
+    assert.equal(entries[1].event.spawnedChildId, 'worker');
+});
+
+test('duplicate parent spans and missing tool IDs stay flat instead of relying on time order', () => {
+    const interaction = { traceId: 't', spanId: 'same' };
+    const tool = { kind: 'tool', name: 'read', startedAt: 2, interactionIndex: 2, interaction: { traceId: 't', parentSpanId: 'same' } };
+    assert.equal(displayEvents([
+        { kind: 'llm', startedAt: 1, interactionIndex: 0, interaction },
+        { kind: 'llm', startedAt: 1, interactionIndex: 1, interaction: { ...interaction } },
+        tool,
+    ]).length, 3);
+    const events = messageEvents();
+    events[1].toolCallId = undefined;
+    assert.deepEqual(displayEvents(events).map((entry: any) => entry.eventIndex), [0, 1]);
+});
+
+test('the new nesting is expanded by default and collapse/expand still covers the parent model', () => {
+    const tree = buildAgentCallTree([{ role: 'assistant', content: '', tool_calls: [responseCall('read-call')], parts: [{ type: 'tool', callID: 'read-call', tool: 'read' }] }])!;
+    const defaults = functionValue<any>('buildDefaultExpandedKeys', {
+        buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}),
+        agentKey: (id: string) => `a:${id}`, eventKey: (id: string, index: number) => `e:${id}:${index}`,
+    })(tree);
+    assert.ok(defaults.has(`a:${tree.id}`));
+    assert.ok(defaults.has(`e:${tree.id}:0`));
+});
+
+test('an exact raw parent does not override a conflicting tool name in the model response', () => {
+    const events = [
+        { kind: 'llm', sourceSpanId: 'model', interactionIndex: 0, interaction: { traceId: 't', spanId: 'model', tool_calls: [responseCall('call', 'write')] } },
+        { kind: 'tool', name: 'read', toolCallId: 'call', interactionIndex: 1, interaction: { traceId: 't', spanId: 'tool', parentSpanId: 'model' } },
+    ];
+    assert.deepEqual(displayEvents(events).map((entry: any) => entry.eventIndex), [0, 1]);
+});
+
+test('an assistant-like tool wrapper is not accepted as a new model parent for another tool span', () => {
+    const events = buildAgentCallTree([
+        { role: 'assistant', content: '', traceId: 't', spanId: 'wrapper', tool_calls: [responseCall('outer', 'delegate')] },
+        { role: 'assistant', content: '', traceId: 't', spanId: 'child', parentSpanId: 'wrapper', tool_calls: [responseCall('inner')] },
+    ] as any)!.events;
+    assert.deepEqual(displayEvents(events).map((entry: any) => entry.eventIndex), [0, 1, 2, 3]);
+});
+
+test('LLM details identify the original Span ID rather than a tool call, including qualified Dify display IDs', () => {
+    const identifier = functionValue<any>('eventDetailIdentifier', {});
+    assert.deepEqual(identifier({ kind: 'llm', sourceSpanId: 'trace:model', sourceTraceId: 'trace', toolCallId: 'legacy-wrong-label' }), { label: 'Span ID', value: 'model' });
+    assert.deepEqual(identifier({ kind: 'llm', interaction: { spanId: 'native-model' } }), { label: 'Span ID', value: 'native-model' });
+    assert.equal(identifier({ kind: 'llm', toolCallId: 'not-model-evidence' }), null);
+    assert.deepEqual(identifier({ kind: 'tool', toolCallId: 'call-1', sourceSpanId: 'tool-span' }), { label: 'Tool Call ID', value: 'call-1' });
+    assert.deepEqual(identifier({ kind: 'tool', sourceSpanId: 'tool-span' }), { label: 'Span ID', value: 'tool-span' });
+    assert.deepEqual(identifier({ kind: 'chain', sourceSpanId: 'workflow-span', toolCallId: 'legacy' }), { label: 'Span ID', value: 'workflow-span' });
+});
+
+
+test('recursive Agent and TASK duration filters use active time while preserving legacy fallback', () => {
+    type NodeFixture = { id: string; stats: { durationMs: number; activeDurationMs?: number; totalTokens: number } };
+    type FilterFixture = { treeKindFilter: string; minDurationMs: number; minTokenK: number;
+        ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
+    const matchAgent = functionValue<(node: NodeFixture, filters: FilterFixture) => boolean>('traceAgentMatchesFilters', {
+        agentKey: (id: string) => `a:${id}`, aggregateSubtreeStats: (n: NodeFixture) => n.stats, SLOW_MS: 60_000,
+    });
+    const matchEvent = functionValue<(event: { kind: string; spawnedChildId: string }, index: number,
+        owner: string, nodes: ReadonlyMap<string, NodeFixture>, filters: FilterFixture) => boolean>(
+        'traceEventMatchesFilters', { eventKey: () => 'task:0', SLOW_MS: 60_000 });
+    const child = { id: 'child', stats: { durationMs: 3_650_000, activeDurationMs: 50_000, totalTokens: 0 } };
+    const nodes = new Map([['child', child]]);
+    const event = { kind: 'task', spawnedChildId: 'child' };
+    for (const ctxSlowOnly of [false, true]) {
+        const filters = { treeKindFilter: 'all', minDurationMs: ctxSlowOnly ? 0 : 60_000,
+            minTokenK: 0, ctxSlowOnly, searchQuery: 'child', matchedKeys: new Set(['a:child', 'task:0']) };
+        assert.equal(matchAgent(child, filters), false, 'user idle must not make an Agent match a slow filter');
+        assert.equal(matchEvent(event, 0, 'root', nodes, filters), false, 'TASK uses its child active time');
+        child.stats.activeDurationMs = 60_001;
+        assert.equal(matchAgent(child, filters), true);
+        assert.equal(matchEvent(event, 0, 'root', nodes, filters), true);
+        child.stats.activeDurationMs = 50_000;
+    }
+    const legacy = { ...child, stats: { durationMs: 61_000, totalTokens: 0 } };
+    const filters = { treeKindFilter: 'all', minDurationMs: 60_000, minTokenK: 0,
+        ctxSlowOnly: true, searchQuery: 'child', matchedKeys: new Set(['a:child', 'task:0']) };
+    assert.equal(matchAgent(legacy, filters), true);
+    assert.equal(matchEvent(event, 0, 'root', new Map([['child', legacy]]), filters), true);
 });

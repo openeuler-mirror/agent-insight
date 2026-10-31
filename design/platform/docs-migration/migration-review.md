@@ -12,7 +12,7 @@
 | 内部设计区域 | 首次迁入 217 个原文件；随后清理 1 份退役档案并同步新增 4 篇设计，保留 220 个原文件 |
 | 支撑资源 | 首次保留 117 个原文件；随后清理 2 个未引用片段并同步新增 1 张图片，保留 116 个原文件，第三方 bundle 未变 |
 | 中文正文分类 | 首次教程 5、操作指南 48、参考 6、解释 35；本轮删 1 篇操作指南、新增 2 篇操作指南与 1 篇参考；不含导航页 |
-| 英文 | 已建立四类目录及翻译待补齐入口；未新增正文译文，不视为双语达标 |
+| 英文 | 首次仅建立状态入口；2026-10-31 新增 12 篇对应英文正文及语言切换，剩余范围见英文覆盖表 |
 
 旧路径逐文件对应关系见 [path-map.json](path-map.json)，已补齐同步上游时新增的 5 个条目；删除结果以本页处理结果及 verification.json 各阶段记录为准。共享图片和片段保留原位置；两份第三方 Mermaid bundle 各自保留并调整许可清单中的位置，没有去重或重新打包。
 
@@ -24,14 +24,14 @@
 
 | 项目 | 当前情况 | 后续可做的工作 |
 | --- | --- | --- |
-| 英文正式文档 | 当前迁入的 94 篇正文主要为中文，英文入口明确标记待补齐 | 先确定对外范围，再按中文权威版本逐篇翻译和校对 |
-| 服务 API 参考 | [API 与契约](../../../docs/zh/reference/platform/api-and-contracts.md)混合 HTTP 端点、内部函数、数据模型与实现说明 | 将对外 REST API 按业务拆分，补齐鉴权、请求、响应和错误；不能把旧导航缺失的 SDK 页面当成已存在 SDK 的证明 |
-| 评测协议与配置参考 | 契约散落在[评估器开发](../../../docs/zh/how-to/evaluation/develop-evaluator.md)、[Benchmark 开发](../../../docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md)和 API 总览 | 抽取输出契约、参数、状态/错误码到 reference/evaluation，操作步骤保留 how-to |
+| 英文正式文档 | 首批 12 篇正文已完成，覆盖首次接入、首次评测、升级备份、配置和核心契约；[逐页覆盖表](../../../docs/en/navigation.md)明确未翻译范围 | 继续翻译 Docker、框架兼容性、各业务操作与架构正文，不把导航页计作译文 |
+| 服务 API 参考 | 已新增[HTTP 身份约定](../../../docs/zh/reference/platform/http-api.md)、Trace 接入、实验、环境准备及模型测试参考；原总览保留内部接口和稳定入口 | 后续补数据集、Skill 与可靠性控制等领域的完整接口参考，仍不宣称覆盖所有路由或存在独立 SDK |
+| 评测协议与配置参考 | 评估器输出与运行参数、实验 API、环境准备、独立 Benchmark 协议已有集中参考，且首批有英文对应页；开发步骤仍在 how-to | 随协议演进维护；详细插件 payload、各 Benchmark 专用 Schema 继续以注册类型为准 |
 | 运行和部署配置 | 已新增[运行配置参考](../../../docs/zh/reference/platform/configuration.md)，集中运行根、端口、数据库、模型和评测配置 | 后续随功能变更维护；不宣称穷举所有采集器与调优参数 |
 | 升级、回滚、备份恢复 | 已新增[升级与回滚](../../../docs/zh/how-to/platform/upgrade-and-rollback.md)和[备份与恢复](../../../docs/zh/how-to/platform/backup-and-restore.md) | 生产环境、外部数据库与容器恢复仍需按实际部署演练，不将文档示例检查当成真实恢复验证 |
 | 独立观测入门教程 | 首次接入和查看 Trace 已包含在[快速开始](../../../docs/zh/tutorial/platform/01-quick-start.md)中，没有单独 tutorial/observability 教程 | 可从现有内容提炼，不需要新造功能或立即为每个领域创建教程 |
 | 三模块职责说明 | 原外部设计是目标结构，当前源码位置尚未整体迁移 | 更新公开架构说明时区分当前实现与目标结构，平台内置评估不归为独立 evaluator 服务 |
-| 混合主题与篇幅 | 30 篇公开正文超过 20 个 Markdown 标题；部分同时包含教程、操作、契约和原理 | 逐篇拆分和互链，本轮保留原文，见下方完整清单 |
+| 混合主题与篇幅 | 已拆分快速开始中的部署/兼容附录、总览中的环境/模型接口、开发指南中的输出契约；当前仍有 29 篇正文超过 20 个标题 | 继续按读者任务评估拆分；不按标题数量机械处理，见最新清单 |
 | 历史坏链接 | 原 80 处已分类处理：63 处路径修复、1 处指向当前数据模型、7 处历史源码固定提交、8 处缺失材料标注、1 处为代码示例误报 | 原始记录见 [existing-link-gaps.json](existing-link-gaps.json)，处理结果见下方；8 处缺失原件未恢复 |
 | 旧站点占位导航 | 原导航中 19 个页面目标不存在 | 新导航已按实际文档重建；原目标及核对建议见 [previous-navigation-gaps.json](previous-navigation-gaps.json) |
 
@@ -78,36 +78,35 @@
 
 | 文档 | 标题数 |
 | --- | --- |
-| [qa](../../../docs/zh/how-to/platform/qa.md) | 79 |
-| [develop-benchmark](../../../docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md) | 64 |
+| [qa](../../../docs/zh/how-to/platform/qa.md) | 78 |
+| [develop-benchmark](../../../docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md) | 67 |
 | [ras-fi-insight-relationship](../../../docs/zh/explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship.md) | 47 |
 | [view-traces](../../../docs/zh/how-to/observability/view-traces.md) | 44 |
-| [develop-evaluator](../../../docs/zh/how-to/evaluation/develop-evaluator.md) | 42 |
-| [skill-workflow](../../../docs/zh/how-to/optimization/skills/skill-workflow.md) | 39 |
-| [api-and-contracts](../../../docs/zh/reference/platform/api-and-contracts.md) | 37 |
-| [faq](../../../docs/zh/how-to/platform/faq.md) | 36 |
-| [datasets](../../../docs/zh/how-to/evaluation/datasets.md) | 35 |
-| [diagnosis](../../../docs/zh/how-to/diagnosis/agent-debug/diagnosis.md) | 34 |
-| [deploy-services](../../../docs/zh/how-to/evaluation/benchmarks/deploy-services.md) | 30 |
-| [experiments](../../../docs/zh/how-to/evaluation/experiments.md) | 29 |
-| [access-control](../../../docs/zh/how-to/platform/settings/access-control.md) | 26 |
-| [static-evaluator](../../../docs/zh/explanation/evaluation/skills/static-evaluator.mdx) | 26 |
-| [llamaindex-trace-collector](../../../docs/zh/how-to/observability/llamaindex-trace-collector.md) | 25 |
-| [overview](../../../docs/zh/explanation/observability/overview.md) | 24 |
-| [manage](../../../docs/zh/how-to/optimization/skills/manage.md) | 24 |
+| [develop-evaluator](../../../docs/zh/how-to/evaluation/develop-evaluator.md) | 41 |
+| [skill-workflow](../../../docs/zh/how-to/optimization/skills/skill-workflow.md) | 38 |
+| [api-and-contracts](../../../docs/zh/reference/platform/api-and-contracts.md) | 38 |
+| [faq](../../../docs/zh/how-to/platform/faq.md) | 35 |
+| [datasets](../../../docs/zh/how-to/evaluation/datasets.md) | 34 |
+| [diagnosis](../../../docs/zh/how-to/diagnosis/agent-debug/diagnosis.md) | 33 |
+| [deploy-services](../../../docs/zh/how-to/evaluation/benchmarks/deploy-services.md) | 29 |
+| [experiments](../../../docs/zh/how-to/evaluation/experiments.md) | 28 |
+| [static-evaluator](../../../docs/zh/explanation/evaluation/skills/static-evaluator.mdx) | 25 |
 | [data-control-flow](../../../docs/zh/explanation/platform/data-control-flow.md) | 25 |
+| [llamaindex-trace-collector](../../../docs/zh/how-to/observability/llamaindex-trace-collector.md) | 25 |
+| [access-control](../../../docs/zh/how-to/platform/settings/access-control.md) | 25 |
+| [diagnosis-loop-analysis](../../../docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md) | 24 |
+| [overview](../../../docs/zh/explanation/observability/overview.md) | 24 |
 | [recovery](../../../docs/zh/explanation/reliability/agent-ras/modules/recovery.md) | 24 |
-| [diagnosis-loop-analysis](../../../docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md) | 25 |
-| [web-search](../../../docs/zh/how-to/platform/settings/web-search.md) | 23 |
-| [architecture](../../../docs/zh/explanation/platform/architecture.md) | 23 |
 | [develop-trace-collector](../../../docs/zh/how-to/observability/develop-trace-collector.md) | 23 |
-| [evaluators](../../../docs/zh/how-to/evaluation/evaluators.md) | 23 |
-| [model-registry](../../../docs/zh/how-to/platform/settings/model-registry.md) | 22 |
-| [otlp-attribute-contract](../../../docs/zh/reference/observability/otlp-attribute-contract.md) | 22 |
+| [manage](../../../docs/zh/how-to/optimization/skills/manage.md) | 23 |
+| [architecture](../../../docs/zh/explanation/platform/architecture.md) | 22 |
 | [detectors](../../../docs/zh/explanation/reliability/agent-ras/modules/detectors.md) | 22 |
 | [platform-adapter](../../../docs/zh/explanation/reliability/agent-ras/modules/platform-adapter.md) | 22 |
+| [evaluators](../../../docs/zh/how-to/evaluation/evaluators.md) | 22 |
+| [web-search](../../../docs/zh/how-to/platform/settings/web-search.md) | 22 |
 | [monitor](../../../docs/zh/explanation/reliability/agent-ras/modules/monitor.md) | 21 |
-| [local-install-process](../../../docs/zh/how-to/reliability/agent-ras/local-install-process.md) | 21 |
+| [model-registry](../../../docs/zh/how-to/platform/settings/model-registry.md) | 21 |
+| [otlp-attribute-contract](../../../docs/zh/reference/observability/otlp-attribute-contract.md) | 21 |
 
 ## 迁移验证
 
@@ -197,3 +196,34 @@
 已同步 `upstream/master` 的 `10c8cc65`，解决 6 处导航冲突：保留新增的 OpenCode 1.x/2.x 兼容性、Trace 入库和全量测试准备说明，并同步到新的导航正文。相对上游仍仅变更 docs/ 与 design/。
 
 合并后重新验证：Mintlify 严格构建通过、站内失效链接 0，100 个导航与 1194 处本地引用目标有效；全量 UT 共 4447 项，4409 通过、15 失败、23 跳过、0 取消，失败用例名称与合并前相同。此前的文档浏览器抽查记录保留，本次未重跑产品业务 UI。
+
+## 核心契约与双语正文（2026-10-31）
+
+### 已完成的内容整理
+
+- 新增平台 HTTP 用户身份、Trace 接入、实验 API、环境准备、模型连接测试、评估器输出与运行参数、独立 Benchmark 评测协议七份契约页，核对路由、类型和错误处理。
+- 新增 12 篇对应英文正文：上述七页，加运行配置、升级回滚、备份恢复、首次接入和首次评测；[英文目录与覆盖表](../../../docs/en/navigation.md)列出中英文对应关系。导航与状态页单独计数，不冒充正式译文。
+- 快速开始中的 Docker 部署操作和框架兼容细节迁至专页；API 总览和评估器开发指南保留旧章节入口，链接到唯一的契约正文。源码、配置逻辑、打包实现未修改。
+- 使用语言导航提供中文与英文切换，保留旧 README 路径重定向；原有英文兼容性与验证说明集中保留，未丢弃上游新增信息。
+- 清理重复 H1，同时保留旧标题及迁出章节锚点。LlamaIndex 指南继续作为 ZIP README 分发，保留实际一级标题并以中文接入名称作为站点标题，避免破坏离线文档。
+- 修复上游故障提示词的裸尖括号与旧 API 总览的裸 MDX 表达式；后者会在浏览器中执行变量，而不一定被静态构建发现。对公开正文补做了 MDX 表达式检查。
+- 修复新增的 16 处文档站外层源码引用，将两处已移除的 FI Judge 源码链接固定到可核对历史版本。原有 8 处历史材料缺口继续保留，不声称已经补档。
+
+### 剩余范围
+
+1. Docker 部署、客户端兼容性、各业务操作和架构原理等英文正文仍待逐篇翻译。
+2. 本轮仅覆盖核心 HTTP/评测契约；数据集、Skill 管理、可靠性控制及其他接口尚未形成完整逐端点参考。
+3. 29 篇长文候选仍需按内容评估拆分；8 处历史材料仍待原作者提供或确认去向。
+4. 外部 URL 全量可达性、所有图表与浏览器锚点、真实生产升级/恢复及各操作系统部署仍需相应环境验证。
+
+详细验证分层记录在 verification.json 的 contractsAndBilingual20261031；运行中的产品业务 UI、真实模型和生产恢复不属于本轮文档验证。
+
+### 本阶段验证结果（2026-10-31）
+
+- Mintlify 内容检查与官方严格预构建通过，解析错误与重复标题告警均为 0；站内失效链接为 0。客户端自动更新曾延迟，另以已缓存的官方客户端 0.0.4004 完成严格预构建与实际预览。
+- 126 个中英文导航目标均存在，12 对正式正文与覆盖表一致。75 项重复标题诊断已处理，保留旧锚点；LlamaIndex 离线 README 的实际一级标题保留，相关 ZIP 回归通过。
+- 101 个变更文档中的 GitCode 源码链接 HEAD 请求返回 200，目标在当前或明确历史 Git 版本存在；不据此声称所有外部网站与所有锚点均已验证。
+- 浏览器验证了英中切换、英文覆盖表、英文契约与入门页、迁出部署正文链接、旧 README 重定向和旧标题/章节锚点。旧 API 总览的裸表达式运行时错误修复后，重新加载未出现新增控制台错误；公开 Markdown/MDX 表达式检查未发现裸表达式。
+- 契约相关现有测试 44/44 通过；输出、运行参数与打包相关 45 项中 44 通过、1 跳过。未新增镜像文本断言的测试，也未执行真实模型请求或生产恢复。
+- 最终隔离全量 UT 共 4524 项：4464 通过、37 失败、23 跳过、0 取消。未改动的上游失败文件对照共 104 项，其中复现相同的 36 个失败；额外 xGovernor 用例仅在最终全量出现，当前/上游该文件各 17 项单跑均通过，原因仍未确认。不能报告全量通过或把这 37 项全部认定为产品缺陷。
+- 本阶段仅文档/导航变更，没有删除文件；开发者 HTML、第三方 bundle、业务代码与依赖保持一致。历史阶段的测试结果原样保留，不能和本阶段数量合并比较。

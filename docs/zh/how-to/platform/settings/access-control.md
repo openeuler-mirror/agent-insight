@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "客户端安装", "访问控制", "身份认证"]
 changefreq: monthly
 ---
 
-# 客户端安装
-
+<a id="客户端安装"></a>
 客户端安装用于生成客户端接入命令、提供当前账号的接入凭证，并明确平台地址与上报路径，是运行数据能否进入 Agent Insight 的关键配置页面。
 
 > **Note**
@@ -15,6 +14,12 @@ changefreq: monthly
 页面不会直接信任浏览器保存的历史登录信息。进入平台后会先向当前服务刷新账号和 API Key，
 刷新完成前不生成可复制的一键安装命令；因此服务重建、数据库切换或平台地址变化后，无需先
 手工退出登录，但必须重新打开本页并复制一条新命令。
+
+## Dify 原生 OTLP 配置
+
+在安装页顶部点击 **Dify：原生 OTLP 配置**，可跳到独立配置区。Dify 使用已有导出能力，无需安装采集插件或修改 Dify 源码，因此不参与命令行 Agent 的一键安装选择。
+
+身份刷新完成后，分别复制 **Dify API / Worker** 与 **Dify Agent 运行服务** 的配置，加入对应进程环境并重启。前者导出 Workflow / Chatflow 的外层节点，后者导出 Agent 内部模型与工具；只配一组不能覆盖两层。两组配置使用当前平台地址及当前账号 API Key，身份未就绪时不提供复制。容器内须改为 Dify 能访问的平台地址；`localhost` 指向容器自身。Agent 内容采集、Metrics 与 Landlock 环境要求见 [Dify 原生 OTLP 接入](../../observability/develop-trace-collector.md#dify-原生-otlp-接入)。
 
 ## 平台登录模式
 
@@ -98,7 +103,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 客户端安装页面由两个主要区域组成：
 
 1. **安装命令区**
-   选择框架并复制 Linux curl 或 Windows PowerShell 接入命令；保留 LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
+   选择框架并复制 Linux curl 或 Windows PowerShell 接入命令；另提供 Dify 原生 OTLP、LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
 2. **凭证与接入信息区**
    展示当前 API Key、账号信息、平台地址与所选框架的上报路径。
 

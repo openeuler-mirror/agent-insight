@@ -68,6 +68,7 @@ Model-dependent steps call user-configured external services. No AI model is emb
 | JiuwenSwarm | OTLP |
 | LangChain / LangGraph | OTLP |
 | LlamaIndex | OTLP |
+| Dify (Workflow / Agent trajectory) | OTLP |
 | OpenClaw | OTLP |
 | Codex | Hook collector |
 | Pi Agent | Hook collector |

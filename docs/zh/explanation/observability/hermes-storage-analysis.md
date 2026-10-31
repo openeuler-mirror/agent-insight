@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Hermes", "Trace 存储", "OpenTelemetry", "数据�
 changefreq: monthly
 ---
 
-# Trace 落盘机制与 Hermes 文件膨胀历史分析
-
+<a id="trace-落盘机制与-hermes-文件膨胀历史分析"></a>
 > 历史样本来自 2026-06-16/17 的本地排查；2026-10-27 重新核对源码。历史文件大小和放大倍数不是当前版本的性能测量。
 
 ## 实现状态

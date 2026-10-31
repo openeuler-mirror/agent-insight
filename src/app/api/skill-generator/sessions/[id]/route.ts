@@ -53,7 +53,7 @@ export async function PATCH(
     try {
         const { id } = await params;
         const body = await req.json();
-        const { title, files, messages } = body;
+        const { title, files } = body;
 
         const data: any = {};
         if (title !== undefined) data.title = title;

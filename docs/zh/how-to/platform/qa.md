@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "常见问题", "安装接入", "评测观测", "故
 changefreq: weekly
 ---
 
-# Q&A
-
+<a id="q&amp;a"></a>
+<a id="qa"></a>
 本文档汇总 Agent Insight 平台的常见问答，覆盖平台概念、安装部署、框架接入、Skill 全生命周期、评测中心、运行观测、架构数据模型、开发约定与运维排障等内容，帮助开发者快速理解平台定位并定位使用过程中的常见问题。
 
 ## 平台概览与核心概念
@@ -72,6 +72,56 @@ CLI 支持 `start`、`stop`、`restart`、`status`、`logs`、`install` 子命�
 ### Q15. `--frameworks` 选项可以预选哪些遥测框架？传错会怎样？
 
 可预选的框架有：`opencode`、`openclaw`、`claude`、`codeagent`、`hermes`、`jiuwen`、`llamaindex`、`qoder`、`trae`、`actrail`、`pi-agent`、`codex`（逗号分隔，大小写不敏感）。若缺省或传入了不在此清单的框架名，CLI 会报 `Invalid framework list: <无效项>` 并以 exit code 1 退出。
+
+### Q15a. 安装采集插件后，OpenCode 在网络受限环境下启动缓慢怎么办？
+
+安装采集插件后，OpenCode 可能按宿主版本、配置和缓存状态检查、安装或更新依赖。客户端能正常访问所配置的 npm 包仓时，通常无需额外设置；首次安装或依赖变化仍可能需要下载时间。网络受限、包仓不可达或代理等访问策略限制时，部分版本可能等待重试 / 超时，表现为界面打开前启动变慢。
+
+用户可自行选择对本次启动设置 `npm_config_offline=true`。安装器不会自动设置该变量、改写 `.npmrc` 或切换 npm 包仓；使用前请了解下文的影响范围。
+
+Linux/macOS 单次启动：
+
+```bash
+npm_config_offline=true opencode
+```
+
+当前终端持续生效，之后只需执行 `opencode`：
+
+```bash
+export npm_config_offline=true
+opencode
+```
+
+恢复普通启动：
+
+```bash
+unset npm_config_offline
+opencode
+```
+
+这会影响当前终端后续启动的 npm / npx 等进程；已运行的子进程需退出后重启。关闭终端后，独立新开的终端不会继承本次设置；原先已有该变量时应恢复原值。不要写入 shell 配置文件。
+
+PowerShell：仅在当前终端临时设置，退出后恢复原值。
+
+```powershell
+$previous = $env:npm_config_offline
+try {
+    $env:npm_config_offline = 'true'
+    opencode
+} finally {
+    if ($null -eq $previous) {
+        Remove-Item Env:npm_config_offline -ErrorAction SilentlyContinue
+    } else {
+        $env:npm_config_offline = $previous
+    }
+}
+```
+
+遵循该变量的 npm 相关流程只用本地资源：不能联网下载依赖或获取包元数据，可访问的内网 npm 源也受限制。只有依赖这些操作的功能可能受影响，例如通过 `npx` 首次下载的 MCP 或工具；依赖已齐全、运行时无需这类联网获取的功能，不会因该配置本身受到影响。它本身不直接阻断模型调用和 Trace 上报，也不是关闭 OpenCode 全部更新的开关。
+
+不同版本是否生效需要现场验证。网络受限且依赖齐全的环境中，可在确认模型调用、Trace 和常用工具正常后选择使用；启动变快不代表需要联网获取依赖的操作已经成功。关闭相关进程；若使用了 `export`，先执行 `unset npm_config_offline`（或恢复原值），再直接执行 `opencode` 恢复普通启动。GUI 从桌面图标启动通常不会继承终端变量，不能直接用 CLI 结果替代 Desktop 验证。
+
+安装器不将变量写入永久启动器、shell 配置或 `.npmrc`，不关闭默认插件或全局更新。历史 `opencode-offline-fix.ps1` 会持久修改用户级 npm registry，不属于本方案；已经使用过的环境应对照原备份和用户后续修改核查包源配置。
 
 ## Agent 框架接入
 

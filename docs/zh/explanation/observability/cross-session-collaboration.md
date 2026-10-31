@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "跨会话协作", "Trace 投影", "关系事件"]
 changefreq: monthly
 ---
 
-# 跨 Session 协作 Trace
-
+<a id="跨-session-协作-trace"></a>
 跨 Session 协作层把分散的 Session 关系作为独立覆盖层保存。它与 Execution 原生父子树并存：关系可以先于 Trace 到达，端点关联随新 Execution 重算，但任何结果都不会写回 `parentExecutionId` 或 `rootExecutionId`。
 
 ## 模块
@@ -38,6 +37,8 @@ changefreq: monthly
 `fromLocator` 只搜索当前源 Trace 的原始工具记录。唯一工具名或 Shell 命令匹配为 candidate；若命中的 `task`/spawn 调用参数或结果携带的 `session_id`、`sessionId`、`subagent_session_id`、`subagentSessionId` 与事件 `toSessionId` 一致，则属于原始调用直接证据，保存为 confirmed。无 locator 且已有 Execution 直接父子关系时也可返回 confirmed。多个事件只有在数量相等、时间无缺失或并列、事件时钟可信且调用时间来自执行端等条件均满足时才返回 time_ordered。未知事件时钟不参与时间推定，交互时间不代替工具开始时间；类型/FIFO 和 description 不作为调用证据，不得只根据时间接近度选择父级。
 
 Trace 投影以 endpoint/anchor resolver 的持久化结果为真源，不得用查询期临时结果覆盖已保存的 `anchorState`、`matchedRecord` 和 `position`。独立协作图会按当前原始调用重新核验普通 reported 关系，避免已变化或歧义的原生目标被旧父子关系覆盖；带 locator 且已由持久化 resolver 直接确认为目标 Session 的调用继续使用精确位置，历史 `goal-plus-semantic` 仍回退持久化结果。
+
+OpenCode 的原生 `task` 还支持工具状态 `metadata` 中的结构化会话编号，以及输出首行的 `task_id: ses_…`、完整 `<task id="ses_…" state="…">` 信封、输出末尾的 `<task_metadata>` / `session_id` 块。解析只作用于 `task`、`spawn_agent`、`subagent`，不扫描结果正文或普通工具输出；非 OpenCode 框架不启用这些文本格式。多个来源给出不同编号时保留全部候选，失败调用或目标不唯一时不产生自动边。
 
 自动边只来自成功原始调用中的唯一明确目标。仅当上报关系与原始调用位置、目标均唯一对应时才合并 `reported` / `trace` 来源。循环、自联系、重复联系、多父级和回传消息保留为图中的事件，不强制解释为新的子 Agent。
 
