@@ -941,7 +941,7 @@ export default function DatasetItemsPage() {
 
           {assetView?.draft&&!historical&&<div className="flex flex-wrap gap-2 text-xs">{((assetView.selectedVersion.content.cases||[]) as DatasetCase[]).filter(original=>!((assetView.draft!.content.cases||[]) as DatasetCase[]).some(current=>current.id===original.id)).map(original=><span key={original.id} className="rounded border border-border px-2 py-1">草稿已删除：{shorten(original.input||original.id,40)} <button type="button" className="text-primary" disabled={saving} onClick={()=>void datasetVersionAction('case-revert',original.id)}>恢复此Case</button></span>)}</div>}
           {selectedTab === 'items' ? <div className={styles.tableScroll}>
-            <table className={`${styles.dataTable} ${styles.itemsTable}`}>
+            <table className={`${styles.dataTable} ${styles.itemsTable} ${assetView?.draft&&!historical?styles.itemsTableDraft:''}`}>
               <thead>
                 <tr>
                   <th>ID</th>
@@ -1010,6 +1010,7 @@ export default function DatasetItemsPage() {
                         );
                       })}
                       <td style={{ whiteSpace: 'nowrap' }}>
+                        <div className={styles.rowActions}>
                         <button
                           type="button"
                           className={styles.linkBtn}
@@ -1028,7 +1029,8 @@ export default function DatasetItemsPage() {
                         >
                           删除
                         </button>
-                        {assetView?.draft&&!historical&&<button type="button" className={styles.linkBtn} disabled={saving} onClick={()=>void datasetVersionAction('case-revert',row.id)}>回退</button>}
+                        {assetView?.draft&&!historical&&<button type="button" className={styles.linkBtn} disabled={saving} title="撤销这条 Case 的未发布修改，恢复已发布内容；草稿新增的 Case 将撤销新增。其他 Case 不受影响。" onClick={()=>void datasetVersionAction('case-revert',row.id)}>撤销修改</button>}
+                        </div>
                       </td>
                     </tr>
                     );
