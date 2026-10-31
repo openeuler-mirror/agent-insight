@@ -20,6 +20,7 @@ import test from 'node:test';
 import ts from 'typescript';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import * as traceEngine from '../src/lib/engine/observability/agent-trace';
 
 function productionFunction(file: string, names: string[], scope: Record<string, unknown>) {
     const source = fs.readFileSync(file, 'utf8');
@@ -33,7 +34,7 @@ function productionFunction(file: string, names: string[], scope: Record<string,
 }
 
 test('Trace status exposes failed work in the current Agent and descendants before slow status', () => {
-    const status = productionFunction('src/components/observe/AgentTraceView.tsx', ['getStatus', 'isErrorToolStatus'], { SLOW_MS: 60000 });
+    const status = productionFunction('src/components/observe/AgentTraceView.tsx', ['getStatus', 'isErrorToolStatus'], { ...traceEngine, SLOW_MS: 60000 });
     const leaf = (toolStatus: string) => ({ events: [{ toolStatus }], children: [], stats: { durationMs: 120000 } });
     assert.equal(status(leaf('error')), 'error');
     assert.equal(status({ events: [], children: [leaf('failed')], stats: { durationMs: 120000 } }), 'error');
@@ -75,5 +76,20 @@ for (const locale of ['zh', 'en']) {
         const html = renderToStaticMarkup(React.createElement(summary, { child }));
         assert.match(html, locale === 'zh' ? /含失败调用/ : /Contains failed calls/);
         assert.doesNotMatch(html, />失败<\/b>|>Failed<\/b>/);
+    });
+}
+
+for (const theme of ['light', 'dark']) {
+    test(`Full text modal follows the active ${theme} theme`, () => {
+        const box = (tag: string) => function Box(props: { children?: React.ReactNode }) { return React.createElement(tag, null, props.children); };
+        const Modal = productionFunction('src/components/observe/AgentTraceView.tsx', ['ContentModal'], {
+            React, useState: React.useState, useTheme: () => ({ theme }),
+            Dialog: box('section'), DialogContent: box('div'), DialogHeader: box('header'), DialogTitle: box('h2'),
+            Button: box('button'), Check: () => null, CopyIcon: () => null,
+            SmartViewer: (props: { theme: string; text: string }) => React.createElement('pre', { 'data-theme': props.theme }, props.text),
+        });
+        const html = renderToStaticMarkup(React.createElement(Modal, { title: 'full input', raw: 'TAIL_MARKER', onClose() {} }));
+        assert.match(html, new RegExp(`data-theme="${theme}"`));
+        assert.match(html, /TAIL_MARKER/);
     });
 }

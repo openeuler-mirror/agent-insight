@@ -29,6 +29,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { TermPopover } from '@/components/text/TermPopover';
 import { SmartViewer, SmartViewerConfigProvider } from '@/components/SmartViewer';
+import { useTheme } from '@/lib/client/theme-context';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -1800,6 +1801,7 @@ function CompactSection({ label, raw, modalTitle, emptyText, accentColor }: { la
 // ─── ContentModal: full SmartViewer display ───────────────────────────────────
 function ContentModal({ title, raw, onClose }: { title: string; raw: string; onClose: () => void }) {
     const [copied, setCopied] = useState(false);
+    const { theme } = useTheme();
     const copy = async () => {
         try {
             await copyText(raw);
@@ -1830,7 +1832,7 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
                     </Button>
                 </DialogHeader>
                 <div className="min-h-0 overflow-auto flex-1">
-                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme="light" fullContent />
+                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme={theme} fullContent />
                 </div>
             </DialogContent>
         </Dialog>
