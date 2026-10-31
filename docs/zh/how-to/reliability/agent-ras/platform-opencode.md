@@ -5,8 +5,7 @@ keywords: ["Agent RAS", "OpenCode", "同进程集成", "可靠性"]
 changefreq: monthly
 ---
 
-# OpenCode 接入
-
+<a id="opencode-接入"></a>
 同进程：`ras_runtime` + bun:ffi；能力为 partial（非 jiuwen 同级 chunk abort）。
 
 **inproc 如何加载 libpython、模块如何互相调用**：见 [architecture.md §4](../../../explanation/reliability/agent-ras/architecture.md)。

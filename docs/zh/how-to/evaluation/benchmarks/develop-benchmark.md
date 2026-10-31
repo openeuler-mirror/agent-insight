@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Benchmark", "接入开发", "数据契约", "评测
 changefreq: monthly
 ---
 
-# Benchmark 接入开发规范
-
+<a id="benchmark-接入开发规范"></a>
 > 面向 AI 编码 Agent 和 Benchmark 接入开发者。当前协议版本：`execution-environment/v1`、`agent-task/v1`、`benchmark-evaluation/v1`。
 
 ## 1. 目标与非目标
@@ -83,12 +82,12 @@ changefreq: monthly
 
 | 要确认的问题 | 查询入口 | 必须核对的内容 |
 |---|---|---|
-| 任务与工作区能否表达 | [任务契约与校验器](../../../../../packages/benchmark-protocol/src/contracts.ts)、[执行 Profile 契约](../../../../../packages/benchmark-protocol/execution.cjs) | `AgentTaskEnvelope`、`validateTaskEnvelope` 及其调用的校验函数；所选工作区的字段、来源与版本限制，Profile 与 Agent、策略的匹配要求 |
-| 是否有实际执行和采集实现 | [执行器装配入口](../../../../../services/executor/src/index.cjs) | `createBenchmarkExecutor` 中的 Provider、Runtime、Collector、Backend 注册与配置覆盖；沿所选实现追踪准备、执行、采集及清理路径 |
-| Git 等输入来源如何解析 | 所选 Provider 的校验与准备实现；Git 来源策略从 [git-source-workspace.cjs](../../../../../services/executor/src/git-source-workspace.cjs) 继续追踪 | 任务允许声明的来源、实际下载来源、认证及固定版本校验；来源映射不能绕过任务信封的校验限制 |
-| 能力如何上报与匹配 | [客户端能力装配](../../../../../scripts/reliability-client.cjs)、[执行 Profile 探测](../../../../../services/executor/src/execution-config.cjs)、[目标匹配](../../../../../src/lib/benchmark/execution-targets.ts) | Manifest 要求如何与组件、动作、Agent 和 Profile 匹配；组件存在、已启用和运行就绪分别依据什么判断 |
-| Evaluator 能否承载官方判定 | [Catalog 生成与校验](../../../../../scripts/benchmark/generate-catalog.cjs)、[Evaluator 注册与运行](../../../../../services/evaluator/src/evaluator-registry.cjs) | 描述文件可用字段、运行方式、依赖与资源约束，以及 Entrypoint 的输入输出和隔离实现 |
-| 上述结论如何验证 | [协议测试](../../../../../packages/benchmark-protocol/tests/)、[公共测试](../../../../../test/)、[接入包](../../../../../benchmarks/)内的测试 | 已覆盖的正常与拒绝路径、测试是否使用真实组件；Mock 通过不能证明部署就绪 |
+| 任务与工作区能否表达 | [任务契约与校验器](https://gitcode.com/openeuler/agent-insight/blob/master/packages/benchmark-protocol/src/contracts.ts)、[执行 Profile 契约](https://gitcode.com/openeuler/agent-insight/blob/master/packages/benchmark-protocol/execution.cjs) | `AgentTaskEnvelope`、`validateTaskEnvelope` 及其调用的校验函数；所选工作区的字段、来源与版本限制，Profile 与 Agent、策略的匹配要求 |
+| 是否有实际执行和采集实现 | [执行器装配入口](https://gitcode.com/openeuler/agent-insight/blob/master/services/executor/src/index.cjs) | `createBenchmarkExecutor` 中的 Provider、Runtime、Collector、Backend 注册与配置覆盖；沿所选实现追踪准备、执行、采集及清理路径 |
+| Git 等输入来源如何解析 | 所选 Provider 的校验与准备实现；Git 来源策略从 [git-source-workspace.cjs](https://gitcode.com/openeuler/agent-insight/blob/master/services/executor/src/git-source-workspace.cjs) 继续追踪 | 任务允许声明的来源、实际下载来源、认证及固定版本校验；来源映射不能绕过任务信封的校验限制 |
+| 能力如何上报与匹配 | [客户端能力装配](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/reliability-client.cjs)、[执行 Profile 探测](https://gitcode.com/openeuler/agent-insight/blob/master/services/executor/src/execution-config.cjs)、[目标匹配](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/benchmark/execution-targets.ts) | Manifest 要求如何与组件、动作、Agent 和 Profile 匹配；组件存在、已启用和运行就绪分别依据什么判断 |
+| Evaluator 能否承载官方判定 | [Catalog 生成与校验](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/benchmark/generate-catalog.cjs)、[Evaluator 注册与运行](https://gitcode.com/openeuler/agent-insight/blob/master/services/evaluator/src/evaluator-registry.cjs) | 描述文件可用字段、运行方式、依赖与资源约束，以及 Entrypoint 的输入输出和隔离实现 |
+| 上述结论如何验证 | [协议测试](https://gitcode.com/openeuler/agent-insight/tree/master/packages/benchmark-protocol/tests)、[公共测试](https://gitcode.com/openeuler/agent-insight/tree/master/test)、[接入包](https://gitcode.com/openeuler/agent-insight/tree/master/benchmarks)内的测试 | 已覆盖的正常与拒绝路径、测试是否使用真实组件；Mock 通过不能证明部署就绪 |
 
 在仓库根目录可以先用以下只读查询定位，再阅读命中的函数及调用链：
 
@@ -104,7 +103,7 @@ rg -n 'requiredCapabilities|missingCapabilities|targetReadiness|RUN_BENCHMARK_CA
 ### 3.2 核对目标机器和本次运行
 
 1. **接入前做静态匹配。** 尚未安装数据集时，先核对协议、注册实现、分发内容与现有测试，部署可用性标记为待验证。
-2. **安装后查执行目标。** 在平台已认证的上下文中调用 `GET /api/benchmark/v1/execution-targets?datasetId=<数据集ID>`；[接口实现](../../../../../src/app/api/benchmark/v1/execution-targets/route.ts)要求数据集已就绪且用户可访问。检查返回的 Agent、模型、`executionProfile`、`ready`、`canPrepare`、`missingCapabilities` 和 `unavailableReasons`。空结果或不可用结果需结合客户端上报与匹配逻辑定位，不能直接推断平台没有此能力。
+2. **安装后查执行目标。** 在平台已认证的上下文中调用 `GET /api/benchmark/v1/execution-targets?datasetId=<数据集ID>`；[接口实现](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/benchmark/v1/execution-targets/route.ts)要求数据集已就绪且用户可访问。检查返回的 Agent、模型、`executionProfile`、`ready`、`canPrepare`、`missingCapabilities` 和 `unavailableReasons`。空结果或不可用结果需结合客户端上报与匹配逻辑定位，不能直接推断平台没有此能力。
 3. **检查选定 Case 的环境。** 按[第 5.5 节](#55-执行环境准备协议)，使用本次数据集、执行机、Agent、模型及参数触发检查；需要准备时完成准备并复查。目标能力匹配通过不代替 Case 依赖、模型凭据和评测资产检查，`canPrepare` 也不表示已经就绪。
 4. **验证执行与评测链路。** 按[第 12 节](#12-测试与验收)验证提交物与权威判定，分别完成执行端检查及 Evaluator Doctor/Smoke。网络和隐藏数据隔离要核对实际后端并验证；任务中声明策略、使用独立目录或执行评测分进程，本身不能证明隔离生效。
 
@@ -521,9 +520,9 @@ curl 安装所选 Pi/xiaoO 时，`install-ras-client.js` 仅通过 `saveSetupCon
 
 固定版本及工具链要求从目标客户端版本的源码查询，不在此复制版本值：
 
-- [setup.cjs](../../../../../services/executor/src/xgovernor/setup.cjs) 的 `COMPATIBLE_REVISION` 定义自动准备使用的兼容源码版本；
-- [toolchain.cjs](../../../../../services/executor/src/xgovernor/toolchain.cjs) 定义 Node.js、Rust/Cargo、系统依赖及安装检查规则；
-- [native-credentials-build.cjs](../../../../../services/executor/src/xgovernor/native-credentials-build.cjs) 的 `BRIDGE_VERSION` 定义凭据桥接版本；
+- [setup.cjs](https://gitcode.com/openeuler/agent-insight/blob/master/services/executor/src/xgovernor/setup.cjs) 的 `COMPATIBLE_REVISION` 定义自动准备使用的兼容源码版本；
+- [toolchain.cjs](https://gitcode.com/openeuler/agent-insight/blob/master/services/executor/src/xgovernor/toolchain.cjs) 定义 Node.js、Rust/Cargo、系统依赖及安装检查规则；
+- [native-credentials-build.cjs](https://gitcode.com/openeuler/agent-insight/blob/master/services/executor/src/xgovernor/native-credentials-build.cjs) 的 `BRIDGE_VERSION` 定义凭据桥接版本；
 - 部署机通过下述 `status` 命令核对实际安装版本与制品，结合环境检查确认是否满足本次运行要求。
 
 变更兼容版本前应验证适配协议；源码中的期望版本不能代替部署机的实际检查结果。

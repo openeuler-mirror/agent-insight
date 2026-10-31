@@ -5,8 +5,8 @@ keywords: ["Agent RAS", "客户端安装", "平台适配", "安装排障"]
 changefreq: monthly
 ---
 
-# Agent RAS：本机安装过程详解
-
+<a id="agent-ras：本机安装过程详解"></a>
+<a id="agent-ras本机安装过程详解"></a>
 > **读者**：需要理解「执行安装命令后，用户机器上发生了什么」的使用者与排障者。  
 > **范围**：环内 RAS（`agent_ras`）的**安装面**与本机落盘；不含检测器算法细节。  
 > **真源**：[`scripts/install-ras.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-ras.js)、[`src/lib/ingest/setup-package.ts`](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/setup-package.ts)、看板 [`/api/ingest/setup`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/ingest/setup/route.ts)。\

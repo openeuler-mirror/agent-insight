@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Skill 优化", "候选版本", "评测反馈"]
 changefreq: monthly
 ---
 
-# Skill 优化
-
+<a id="skill-优化"></a>
 Skill 优化已经集成到同一个工作台会话中。左侧 **Skill Copilot**负责归并问题、修改文件和展示执行过程；右侧 **优化记录**保存每一次候选版本、静态质量校验、文件差异和发布状态。
 
 优化始终以顶部选中的 Skill 版本为基线。系统生成候选版本，不会直接覆盖正式版本。

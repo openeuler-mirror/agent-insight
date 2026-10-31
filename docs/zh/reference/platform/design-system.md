@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "设计系统", "设计令牌", "前端样式", "视
 changefreq: monthly
 ---
 
-# Design System & Frontend Style
-
+<a id="design-system-&amp;-frontend-style"></a>
+<a id="design-system--frontend-style"></a>
 > 对 Agent-Insight 前端的逆向设计审计。配套阅读 [frontend.md](../../explanation/platform/frontend.md)（它讲的是路由与组件接线）。本页讲的是**视觉语言**：设计令牌、排版、控件尺寸，以及一份带漂移检测的 UI/UX 审计。
 > 令牌的单一真源：[`src/app/globals.css`](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/globals.css)（`:root` + `[data-theme='dark']`）。机器可读的导出：[design-tokens.json](./design-tokens.json)（W3C Design Tokens 格式）。
 > 方法：对 582 个含样式的文件做静态分析。下文每个值都可追溯到源码；置信度低的条目已标注。对比度依据 WCAG 2.1 计算。

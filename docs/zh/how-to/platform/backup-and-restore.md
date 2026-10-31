@@ -71,3 +71,5 @@ AGENT_INSIGHT_HOME="$restored_home" agent-insight start --port 3100
 恢复验证至少包括：服务启动无数据库错误、原有用户可登录、抽样历史 Trace 和实验可打开、附件可读取，以及重新启用采集后新数据可见。检查恢复目录内的实际数据库发生了预期更新，避免误连旧库。
 
 本指南提供操作步骤，不代表已在你的生产环境完成恢复演练；外部数据库、Windows 服务和容器挂载需按实际部署验证。升级时的版本与数据配套要求见[升级与回滚](./upgrade-and-rollback.md)。
+
+[English](../../../en/how-to/platform/backup-and-restore.md)

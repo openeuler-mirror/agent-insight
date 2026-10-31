@@ -9,233 +9,335 @@
   },
   "favicon": "/images/favicon.svg",
   "navigation": {
-    "tabs": [
+    "languages": [
       {
-        "tab": "入门教程",
-        "groups": [
+        "language": "zh",
+        "default": true,
+        "tabs": [
           {
-            "group": "阅读入口",
-            "pages": [
-              "zh/tutorial/navigation"
+            "tab": "入门教程",
+            "groups": [
+              {
+                "group": "阅读入口",
+                "pages": [
+                  "zh/tutorial/navigation"
+                ]
+              },
+              {
+                "group": "平台公共",
+                "pages": [
+                  "zh/tutorial/platform/01-quick-start",
+                  "zh/tutorial/platform/02-example-walkthrough"
+                ]
+              },
+              {
+                "group": "评测",
+                "pages": [
+                  "zh/tutorial/evaluation/01-first-experiment"
+                ]
+              },
+              {
+                "group": "可靠性",
+                "pages": [
+                  "zh/tutorial/reliability/agent-fault-injection/01-getting-started",
+                  "zh/tutorial/reliability/agent-ras/01-getting-started"
+                ]
+              }
             ]
           },
           {
-            "group": "平台公共",
-            "pages": [
-              "zh/tutorial/platform/01-quick-start",
-              "zh/tutorial/platform/02-example-walkthrough"
+            "tab": "操作指南",
+            "groups": [
+              {
+                "group": "阅读入口",
+                "pages": [
+                  "zh/how-to/navigation"
+                ]
+              },
+              {
+                "group": "平台公共",
+                "pages": [
+                  "zh/how-to/platform/deploy-docker",
+                  "zh/how-to/platform/upgrade-and-rollback",
+                  "zh/how-to/platform/backup-and-restore",
+                  "zh/how-to/platform/conventions-and-extension",
+                  "zh/how-to/platform/deploy-shared-account",
+                  "zh/how-to/platform/docker-testing",
+                  "zh/how-to/platform/faq",
+                  "zh/how-to/platform/manage-agents",
+                  "zh/how-to/platform/qa",
+                  "zh/how-to/platform/release-docker-image",
+                  "zh/how-to/platform/settings/access-control",
+                  "zh/how-to/platform/settings/model-registry",
+                  "zh/how-to/platform/settings/usage-analytics",
+                  "zh/how-to/platform/settings/web-search",
+                  "zh/how-to/platform/workspace-overview"
+                ]
+              },
+              {
+                "group": "观测",
+                "pages": [
+                  "zh/how-to/observability/develop-trace-collector",
+                  "zh/how-to/observability/goal-plus",
+                  "zh/how-to/observability/llamaindex-trace-collector",
+                  "zh/how-to/observability/mcts-xgovernor",
+                  "zh/how-to/observability/quality-monitoring",
+                  "zh/how-to/observability/qwenpaw-trace-collector",
+                  "zh/how-to/observability/trae-integration",
+                  "zh/how-to/observability/view-traces",
+                  "zh/how-to/observability/workbuddy-trace-collector"
+                ]
+              },
+              {
+                "group": "评测",
+                "pages": [
+                  "zh/how-to/evaluation/benchmarks/deploy-services",
+                  "zh/how-to/evaluation/benchmarks/deploy-swe-bench",
+                  "zh/how-to/evaluation/benchmarks/deploy-zsoft",
+                  "zh/how-to/evaluation/benchmarks/develop-benchmark",
+                  "zh/how-to/evaluation/benchmarks/onboard-custom-benchmark",
+                  "zh/how-to/evaluation/benchmarks/release-zsoft-assets",
+                  "zh/how-to/evaluation/datasets",
+                  "zh/how-to/evaluation/develop-evaluator",
+                  "zh/how-to/evaluation/evaluators",
+                  "zh/how-to/evaluation/experiments",
+                  "zh/how-to/evaluation/mcts-experiments",
+                  "zh/how-to/evaluation/skills/ab-test",
+                  "zh/how-to/evaluation/skills/static-compliance",
+                  "zh/how-to/evaluation/skills/trigger-analysis",
+                  "zh/how-to/evaluation/skills/use-case-analysis"
+                ]
+              },
+              {
+                "group": "诊断",
+                "pages": [
+                  "zh/how-to/diagnosis/agent-debug/diagnosis"
+                ]
+              },
+              {
+                "group": "优化",
+                "pages": [
+                  "zh/how-to/optimization/skills/generate",
+                  "zh/how-to/optimization/skills/manage",
+                  "zh/how-to/optimization/skills/optimize",
+                  "zh/how-to/optimization/skills/skill-workflow"
+                ]
+              },
+              {
+                "group": "可靠性",
+                "pages": [
+                  "zh/how-to/reliability/agent-fault-injection/local-install-process",
+                  "zh/how-to/reliability/agent-fault-injection/run-injection",
+                  "zh/how-to/reliability/agent-ras/local-install-process",
+                  "zh/how-to/reliability/agent-ras/platform-opencode",
+                  "zh/how-to/reliability/agent-ras/platform-openjiuwen",
+                  "zh/how-to/reliability/agent-ras/platform-xiaoo"
+                ]
+              }
             ]
           },
           {
-            "group": "评测",
-            "pages": [
-              "zh/tutorial/evaluation/01-first-experiment"
+            "tab": "参考文档",
+            "groups": [
+              {
+                "group": "阅读入口",
+                "pages": [
+                  "zh/reference/navigation"
+                ]
+              },
+              {
+                "group": "平台公共",
+                "pages": [
+                  "zh/reference/platform/http-api",
+                  "zh/reference/platform/model-connection-test",
+                  "zh/reference/platform/configuration",
+                  "zh/reference/platform/api-and-contracts",
+                  "zh/reference/platform/design-system",
+                  "zh/reference/platform/example-cost",
+                  "zh/reference/platform/file-map"
+                ]
+              },
+              {
+                "group": "观测",
+                "pages": [
+                  "zh/reference/observability/trace-ingestion",
+                  "zh/reference/observability/client-compatibility",
+                  "zh/reference/observability/otlp-attribute-contract"
+                ]
+              },
+              {
+                "group": "评测",
+                "pages": [
+                  "zh/reference/evaluation/experiments-api",
+                  "zh/reference/evaluation/execution-environment",
+                  "zh/reference/evaluation/evaluator-output",
+                  "zh/reference/evaluation/benchmark-protocol"
+                ]
+              },
+              {
+                "group": "可靠性",
+                "pages": [
+                  "zh/reference/reliability/agent-fault-injection/fault-catalog"
+                ]
+              }
             ]
           },
           {
-            "group": "可靠性",
-            "pages": [
-              "zh/tutorial/reliability/agent-fault-injection/01-getting-started",
-              "zh/tutorial/reliability/agent-ras/01-getting-started"
+            "tab": "概念与原理",
+            "groups": [
+              {
+                "group": "阅读入口",
+                "pages": [
+                  "zh/explanation/navigation"
+                ]
+              },
+              {
+                "group": "平台公共",
+                "pages": [
+                  "zh/explanation/platform/architecture",
+                  "zh/explanation/platform/core-concepts",
+                  "zh/explanation/platform/data-control-flow",
+                  "zh/explanation/platform/developer-index",
+                  "zh/explanation/platform/frontend",
+                  "zh/explanation/platform/modules",
+                  "zh/explanation/platform/positioning",
+                  "zh/explanation/platform/product-overview",
+                  "zh/explanation/platform/usage-analytics"
+                ]
+              },
+              {
+                "group": "观测",
+                "pages": [
+                  "zh/explanation/observability/cross-session-collaboration",
+                  "zh/explanation/observability/goal-plus",
+                  "zh/explanation/observability/hermes-storage-analysis",
+                  "zh/explanation/observability/overview",
+                  "zh/explanation/observability/trae-collector"
+                ]
+              },
+              {
+                "group": "评测",
+                "pages": [
+                  "zh/explanation/evaluation/benchmarks/navigation",
+                  "zh/explanation/evaluation/overview",
+                  "zh/explanation/evaluation/skills/overview",
+                  "zh/explanation/evaluation/skills/static-evaluator"
+                ]
+              },
+              {
+                "group": "诊断",
+                "pages": [
+                  "zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis"
+                ]
+              },
+              {
+                "group": "优化",
+                "pages": [
+                  "zh/explanation/optimization/skills/generation-pipeline",
+                  "zh/explanation/optimization/skills/optimization-loop",
+                  "zh/explanation/optimization/skills/workbench-overview"
+                ]
+              },
+              {
+                "group": "可靠性",
+                "pages": [
+                  "zh/explanation/reliability/agent-fault-injection/navigation",
+                  "zh/explanation/reliability/agent-fault-injection/architecture",
+                  "zh/explanation/reliability/agent-fault-injection/modules/opencode-platform-adaptation",
+                  "zh/explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship",
+                  "zh/explanation/reliability/agent-fault-injection/modules/xiaoo-platform-adaptation",
+                  "zh/explanation/reliability/agent-ras/navigation",
+                  "zh/explanation/reliability/agent-ras/architecture",
+                  "zh/explanation/reliability/agent-ras/modules/detectors",
+                  "zh/explanation/reliability/agent-ras/modules/monitor",
+                  "zh/explanation/reliability/agent-ras/modules/platform-adapter",
+                  "zh/explanation/reliability/agent-ras/modules/ras-runtime",
+                  "zh/explanation/reliability/agent-ras/modules/recovery",
+                  "zh/explanation/reliability/agent-ras/modules/review"
+                ]
+              }
             ]
           }
         ]
       },
       {
-        "tab": "操作指南",
-        "groups": [
+        "language": "en",
+        "tabs": [
           {
-            "group": "阅读入口",
-            "pages": [
-              "zh/how-to/navigation"
+            "tab": "Tutorials",
+            "groups": [
+              {
+                "group": "Start here",
+                "pages": [
+                  "en/navigation",
+                  "en/tutorial/navigation"
+                ]
+              },
+              {
+                "group": "First workflows",
+                "pages": [
+                  "en/tutorial/platform/01-quick-start",
+                  "en/tutorial/evaluation/01-first-experiment"
+                ]
+              }
             ]
           },
           {
-            "group": "平台公共",
-            "pages": [
-              "zh/how-to/platform/upgrade-and-rollback",
-              "zh/how-to/platform/backup-and-restore",
-              "zh/how-to/platform/conventions-and-extension",
-              "zh/how-to/platform/deploy-shared-account",
-              "zh/how-to/platform/docker-testing",
-              "zh/how-to/platform/faq",
-              "zh/how-to/platform/manage-agents",
-              "zh/how-to/platform/qa",
-              "zh/how-to/platform/release-docker-image",
-              "zh/how-to/platform/settings/access-control",
-              "zh/how-to/platform/settings/model-registry",
-              "zh/how-to/platform/settings/usage-analytics",
-              "zh/how-to/platform/settings/web-search",
-              "zh/how-to/platform/workspace-overview"
+            "tab": "How-to",
+            "groups": [
+              {
+                "group": "Operations",
+                "pages": [
+                  "en/how-to/navigation",
+                  "en/how-to/platform/upgrade-and-rollback",
+                  "en/how-to/platform/backup-and-restore"
+                ]
+              }
             ]
           },
           {
-            "group": "观测",
-            "pages": [
-              "zh/how-to/observability/develop-trace-collector",
-              "zh/how-to/observability/goal-plus",
-              "zh/how-to/observability/llamaindex-trace-collector",
-              "zh/how-to/observability/mcts-xgovernor",
-              "zh/how-to/observability/quality-monitoring",
-              "zh/how-to/observability/qwenpaw-trace-collector",
-              "zh/how-to/observability/trae-integration",
-              "zh/how-to/observability/view-traces",
-              "zh/how-to/observability/workbuddy-trace-collector"
+            "tab": "Reference",
+            "groups": [
+              {
+                "group": "Index",
+                "pages": [
+                  "en/reference/navigation"
+                ]
+              },
+              {
+                "group": "Platform",
+                "pages": [
+                  "en/reference/platform/http-api",
+                  "en/reference/platform/configuration",
+                  "en/reference/platform/model-connection-test"
+                ]
+              },
+              {
+                "group": "Observability",
+                "pages": [
+                  "en/reference/observability/trace-ingestion"
+                ]
+              },
+              {
+                "group": "Evaluation",
+                "pages": [
+                  "en/reference/evaluation/experiments-api",
+                  "en/reference/evaluation/execution-environment",
+                  "en/reference/evaluation/evaluator-output",
+                  "en/reference/evaluation/benchmark-protocol"
+                ]
+              }
             ]
           },
           {
-            "group": "评测",
-            "pages": [
-              "zh/how-to/evaluation/benchmarks/deploy-services",
-              "zh/how-to/evaluation/benchmarks/deploy-swe-bench",
-              "zh/how-to/evaluation/benchmarks/deploy-zsoft",
-              "zh/how-to/evaluation/benchmarks/develop-benchmark",
-              "zh/how-to/evaluation/benchmarks/onboard-custom-benchmark",
-              "zh/how-to/evaluation/benchmarks/release-zsoft-assets",
-              "zh/how-to/evaluation/datasets",
-              "zh/how-to/evaluation/develop-evaluator",
-              "zh/how-to/evaluation/evaluators",
-              "zh/how-to/evaluation/experiments",
-              "zh/how-to/evaluation/mcts-experiments",
-              "zh/how-to/evaluation/skills/ab-test",
-              "zh/how-to/evaluation/skills/static-compliance",
-              "zh/how-to/evaluation/skills/trigger-analysis",
-              "zh/how-to/evaluation/skills/use-case-analysis"
-            ]
-          },
-          {
-            "group": "诊断",
-            "pages": [
-              "zh/how-to/diagnosis/agent-debug/diagnosis"
-            ]
-          },
-          {
-            "group": "优化",
-            "pages": [
-              "zh/how-to/optimization/skills/generate",
-              "zh/how-to/optimization/skills/manage",
-              "zh/how-to/optimization/skills/optimize",
-              "zh/how-to/optimization/skills/skill-workflow"
-            ]
-          },
-          {
-            "group": "可靠性",
-            "pages": [
-              "zh/how-to/reliability/agent-fault-injection/local-install-process",
-              "zh/how-to/reliability/agent-fault-injection/run-injection",
-              "zh/how-to/reliability/agent-ras/local-install-process",
-              "zh/how-to/reliability/agent-ras/platform-opencode",
-              "zh/how-to/reliability/agent-ras/platform-openjiuwen",
-              "zh/how-to/reliability/agent-ras/platform-xiaoo"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "参考文档",
-        "groups": [
-          {
-            "group": "阅读入口",
-            "pages": [
-              "zh/reference/navigation"
-            ]
-          },
-          {
-            "group": "平台公共",
-            "pages": [
-              "zh/reference/platform/configuration",
-              "zh/reference/platform/api-and-contracts",
-              "zh/reference/platform/design-system",
-              "zh/reference/platform/example-cost",
-              "zh/reference/platform/file-map"
-            ]
-          },
-          {
-            "group": "观测",
-            "pages": [
-              "zh/reference/observability/otlp-attribute-contract"
-            ]
-          },
-          {
-            "group": "可靠性",
-            "pages": [
-              "zh/reference/reliability/agent-fault-injection/fault-catalog"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "概念与原理",
-        "groups": [
-          {
-            "group": "阅读入口",
-            "pages": [
-              "zh/explanation/navigation"
-            ]
-          },
-          {
-            "group": "平台公共",
-            "pages": [
-              "zh/explanation/platform/architecture",
-              "zh/explanation/platform/core-concepts",
-              "zh/explanation/platform/data-control-flow",
-              "zh/explanation/platform/developer-index",
-              "zh/explanation/platform/frontend",
-              "zh/explanation/platform/modules",
-              "zh/explanation/platform/positioning",
-              "zh/explanation/platform/product-overview",
-              "zh/explanation/platform/usage-analytics"
-            ]
-          },
-          {
-            "group": "观测",
-            "pages": [
-              "zh/explanation/observability/cross-session-collaboration",
-              "zh/explanation/observability/goal-plus",
-              "zh/explanation/observability/hermes-storage-analysis",
-              "zh/explanation/observability/overview",
-              "zh/explanation/observability/trae-collector"
-            ]
-          },
-          {
-            "group": "评测",
-            "pages": [
-              "zh/explanation/evaluation/benchmarks/navigation",
-              "zh/explanation/evaluation/overview",
-              "zh/explanation/evaluation/skills/overview",
-              "zh/explanation/evaluation/skills/static-evaluator"
-            ]
-          },
-          {
-            "group": "诊断",
-            "pages": [
-              "zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis"
-            ]
-          },
-          {
-            "group": "优化",
-            "pages": [
-              "zh/explanation/optimization/skills/generation-pipeline",
-              "zh/explanation/optimization/skills/optimization-loop",
-              "zh/explanation/optimization/skills/workbench-overview"
-            ]
-          },
-          {
-            "group": "可靠性",
-            "pages": [
-              "zh/explanation/reliability/agent-fault-injection/navigation",
-              "zh/explanation/reliability/agent-fault-injection/architecture",
-              "zh/explanation/reliability/agent-fault-injection/modules/opencode-platform-adaptation",
-              "zh/explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship",
-              "zh/explanation/reliability/agent-fault-injection/modules/xiaoo-platform-adaptation",
-              "zh/explanation/reliability/agent-ras/navigation",
-              "zh/explanation/reliability/agent-ras/architecture",
-              "zh/explanation/reliability/agent-ras/modules/detectors",
-              "zh/explanation/reliability/agent-ras/modules/monitor",
-              "zh/explanation/reliability/agent-ras/modules/platform-adapter",
-              "zh/explanation/reliability/agent-ras/modules/ras-runtime",
-              "zh/explanation/reliability/agent-ras/modules/recovery",
-              "zh/explanation/reliability/agent-ras/modules/review"
+            "tab": "Explanation",
+            "groups": [
+              {
+                "group": "Translation status",
+                "pages": [
+                  "en/explanation/navigation"
+                ]
+              }
             ]
           }
         ]
@@ -283,6 +385,26 @@
     {
       "source": "/zh/explanation/reliability/agent-ras/README",
       "destination": "/zh/explanation/reliability/agent-ras/navigation"
+    },
+    {
+      "source": "/en/README",
+      "destination": "/en/navigation"
+    },
+    {
+      "source": "/en/tutorial/README",
+      "destination": "/en/tutorial/navigation"
+    },
+    {
+      "source": "/en/how-to/README",
+      "destination": "/en/how-to/navigation"
+    },
+    {
+      "source": "/en/reference/README",
+      "destination": "/en/reference/navigation"
+    },
+    {
+      "source": "/en/explanation/README",
+      "destination": "/en/explanation/navigation"
     }
   ]
 }
