@@ -49,6 +49,7 @@ import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Input } from '@/components/ui/input';
 import {AssetVersionPicker} from '@/components/eval/AssetVersionPicker';
 import {ConversationEditor,newConversationTurn} from '@/components/eval/ConversationEditor';
+import { ToolCatalogEditor } from '@/components/eval/ToolCatalogEditor';
 import {normalizeConversationTurns,projectConversationCase} from '@/lib/evaluation-conversation';
 import {evaluationAssetRequest,type AssetVersionView} from '@/lib/client/evaluation-assets';
 import { Select } from '@/components/ui/select';
@@ -251,6 +252,7 @@ export default function DatasetItemsPage() {
   const [versionRevision,setVersionRevision]=useState(0);
   const [viewDraft,setViewDraft]=useState(true);
   const [conversationValid,setConversationValid]=useState(true);
+  const [toolCatalogValid,setToolCatalogValid]=useState(true);
   const historical=Boolean(assetView&&assetView.selectedVersion.version!==assetView.head.publishedVersion);
   const dataset=useMemo(()=>{
     if(!sourceDataset||!assetView)return sourceDataset;
@@ -525,6 +527,8 @@ export default function DatasetItemsPage() {
 
   const openAdd = () => {
     if (isReadOnly) return;
+    setConversationValid(true);
+    setToolCatalogValid(true);
     setRowEditor({ mode: 'add', row: createEmptyCase() });
   };
 
@@ -542,7 +546,7 @@ export default function DatasetItemsPage() {
 
   const openEdit = async (row: DatasetCase) => {
     if (isReadOnly) return;
-    setViewDraft(true);setConversationValid(true);
+    setViewDraft(true);setConversationValid(true);setToolCatalogValid(true);
     setSaving(true);
     setError('');
     try {
@@ -632,7 +636,7 @@ export default function DatasetItemsPage() {
   };
 
   const saveRowFromModal = async () => {
-    if (!rowEditor || !dataset || saving) return;
+    if (!rowEditor || !dataset || saving || !toolCatalogValid) return;
     if (dataset.generationSource === 'trace' && (!fieldText(rowEditor.row, 'input').trim() || !fieldText(rowEditor.row, 'reference_output').trim())) { toast.error('input 与 reference_output 均为必填'); return; }
     if (!hasMeaningfulDatasetCaseValue(rowEditor.row, dataset.fields)) {
       toast.error('请至少填写一个字段');
@@ -1309,11 +1313,14 @@ export default function DatasetItemsPage() {
             <div style={{ fontWeight: 600, marginBottom: 12 }}>{rowEditor.mode === 'add' ? '添加数据' : '编辑数据'}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {dataset.fields.map(field => (
-                <label key={field.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div key={field.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>{field.label} · {field.key}</span>
-                  {field.type === 'boolean' ? (
+                  {field.key === 'available_tools' ? (
+                    <ToolCatalogEditor key={rowEditor.row.id + field.id} value={fieldValue(rowEditor.row, field.key)} onChange={value => setEditorFieldValue(field, value)} onValid={setToolCatalogValid}/>
+                  ) : field.type === 'boolean' ? (
                     <input
                       type="checkbox"
+                      aria-label={`${field.label} · ${field.key}`}
                       checked={Boolean(fieldValue(rowEditor.row, field.key))}
                       onChange={e => setEditorFieldValue(field, e.target.checked)}
                       style={{ width: 18, height: 18 }}
@@ -1335,6 +1342,7 @@ export default function DatasetItemsPage() {
                     />
                   ) : (
                     <textarea
+                      aria-label={`${field.label} · ${field.key}`}
                       value={fieldText(rowEditor.row, field.key)}
                       onChange={e => setEditorFieldValue(field, e.target.value)}
                       rows={field.type === 'json' ? 6 : 3}
@@ -1350,7 +1358,7 @@ export default function DatasetItemsPage() {
                       }}
                     />
                   )}
-                </label>
+                </div>
               ))}
             </div>
             {assetView&&!isBenchmark&&!isReliability&&<div className="mt-4 grid gap-3">
@@ -1364,7 +1372,7 @@ export default function DatasetItemsPage() {
               <button type="button" className="ai-btn-s" onClick={() => setRowEditor(null)} disabled={saving}>
                 取消
               </button>
-              <button type="button" className="ai-btn-p" onClick={() => void saveRowFromModal()} disabled={saving||!conversationValid}>
+              <button type="button" className="ai-btn-p" onClick={() => void saveRowFromModal()} disabled={saving||!conversationValid||!toolCatalogValid}>
                 {saving ? '保存中…' : assetView?'保存草稿':'保存'}
               </button>
             </div>

@@ -7,6 +7,7 @@
 'use client';
 
 import {useEffect,useRef,useState} from 'react';
+import {Plus} from 'lucide-react';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Textarea} from '@/components/ui/textarea';
@@ -61,7 +62,12 @@ export function ConversationEditor({turns,onChange,onValid}:{turns:ConversationT
         <label className="grid gap-1 text-xs">用户输入<Textarea aria-label={`第${index+1}轮输入`} value={turn.input} onChange={e=>update(turn.id,{input:e.target.value})}/></label>
         <label className="grid gap-1 text-xs">预期输出<Textarea aria-label={`第${index+1}轮预期输出`} value={turn.expectedOutput} onChange={e=>update(turn.id,{expectedOutput:e.target.value})}/></label>
         <details className="grid gap-3"><summary className="cursor-pointer text-xs font-medium">本轮规则与工具要求</summary><div className="mt-3 grid gap-3">
-          <div className="grid grid-cols-2 gap-2">{([['contains','输出必须包含'],['pattern','输出正则'],['expectedSkill','预期 Skill 路由'],['state','预期结束状态']] as const).map(([key,label])=><label key={key} className="grid gap-1 text-xs">{label}<Input aria-label={label} value={expected[key]||''} onChange={e=>rules(turn,{[key]:e.target.value||undefined})}/></label>)}</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{([
+            ['contains','输出必须包含','如：已提交审批','逐字检查是否出现这段固定文字，不检查含义是否相近。'],
+            ['pattern','输出正则（高级）','如：^ORDER-[0-9]{6}$','按格式规则匹配输出；与“必须包含”同时填写时，两项都检查。'],
+            ['expectedSkill','预期 Skill 路由','如：loan-approval','检查本轮实际加载的 Skill 名称，不是工具目录或提示词里提到的名称。'],
+            ['state','预期业务状态','填写 Trace 实际上报的业务状态值','仅比较 Trace 明确上报的业务状态；未采集时显示“未评完整”，不会从回答文字推断。'],
+          ] as const).map(([key,label,placeholder,hint])=><label key={key} className="grid content-start gap-1 text-xs">{label}<Input aria-label={label} placeholder={placeholder} value={expected[key]||''} onChange={e=>rules(turn,{[key]:e.target.value||undefined})}/><span className="text-foreground-muted leading-relaxed">{hint}</span></label>)}</div>
           <fieldset className="grid gap-3 rounded border border-border p-2"><legend className="text-xs">必须调用的工具与参数</legend>
             {expected.requiredTools.map((tool,toolIndex)=><div key={ids.tools[toolIndex]} className="grid gap-2 border-b border-border pb-2"><Input aria-label="工具名称" placeholder="工具名称" value={tool.name} onChange={e=>changeTool(toolIndex,{name:e.target.value})}/>
               {Object.entries(tool.arguments||{}).map(([key,value])=><div key={key} className="grid grid-cols-[1fr_2fr_auto] items-end gap-2">
@@ -71,7 +77,7 @@ export function ConversationEditor({turns,onChange,onValid}:{turns:ConversationT
               </div>)}
               <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={()=>{let name='parameter';while(Object.hasOwn(tool.arguments||{},name))name+='1';changeTool(toolIndex,{arguments:{...tool.arguments,[name]:''}});}}>添加参数</Button><Button type="button" size="sm" variant="ghost" onClick={()=>{removeKey('tools',toolIndex);rules(turn,{requiredTools:expected.requiredTools.filter((_,i)=>i!==toolIndex)});}}>移除工具</Button></div>
             </div>)}
-            <Button type="button" size="sm" variant="outline" onClick={()=>rules(turn,{requiredTools:[...expected.requiredTools,{name:'',arguments:{}}]})}>添加工具要求</Button>
+            <button type="button" className="ai-btn-s inline-flex w-fit items-center gap-1.5 justify-self-start" onClick={()=>rules(turn,{requiredTools:[...expected.requiredTools,{name:'',arguments:{}}]})}><Plus size={12}/>添加工具要求</button>
           </fieldset>
           <label className="grid gap-1 text-xs">禁止工具（逗号分隔）<NameList value={expected.forbiddenTools} onChange={forbiddenTools=>rules(turn,{forbiddenTools})}/></label>
           <label className="grid gap-1 text-xs">工具调用顺序（逗号分隔）<NameList value={expected.toolOrder} onChange={toolOrder=>rules(turn,{toolOrder})}/></label>
@@ -79,11 +85,11 @@ export function ConversationEditor({turns,onChange,onValid}:{turns:ConversationT
             <div className="flex flex-wrap items-center gap-2"><Input aria-label="字段路径" placeholder="字段路径，如 result.amount" value={field.path} onChange={e=>changeField(fieldIndex,{path:e.target.value})}/><Select aria-label="字段类型" value={field.type||''} options={[{value:'',label:'不限制类型'},...(['string','number','boolean','array','object'] as const).map(value=>({value,label:value}))]} onChange={type=>changeField(fieldIndex,{type:type as typeof field.type || undefined})}/><label className="text-xs"><input type="checkbox" checked={field.required} onChange={e=>changeField(fieldIndex,{required:e.target.checked})}/>必填</label></div>
             <div className="flex gap-2"><Input type="number" aria-label="最小值" placeholder="最小值" value={field.min??''} onChange={e=>changeField(fieldIndex,{min:e.target.value===''?undefined:Number(e.target.value)})}/><Input type="number" aria-label="最大值" placeholder="最大值" value={field.max??''} onChange={e=>changeField(fieldIndex,{max:e.target.value===''?undefined:Number(e.target.value)})}/></div>
             <label className="text-xs"><input type="checkbox" checked={field.equals!==undefined} onChange={e=>changeField(fieldIndex,{equals:e.target.checked?'':undefined})}/> 必须等于指定值</label>{field.equals!==undefined&&<TypedValue value={field.equals} onChange={equals=>changeField(fieldIndex,{equals})} onValid={valid=>mark(`${turn.id}:${ids.fields[fieldIndex]}:equals`,valid)}/>}<Button type="button" variant="ghost" size="sm" onClick={()=>{removeKey('fields',fieldIndex);rules(turn,{fields:expected.fields.filter((_,i)=>i!==fieldIndex)});}}>移除字段</Button>
-          </div>)}<Button type="button" variant="outline" size="sm" onClick={()=>rules(turn,{fields:[...expected.fields,{path:'',required:true}]})}>添加字段约束</Button></fieldset>
+          </div>)}<button type="button" className="ai-btn-s inline-flex w-fit items-center gap-1.5 justify-self-start" onClick={()=>rules(turn,{fields:[...expected.fields,{path:'',required:true}]})}><Plus size={12}/>添加字段约束</button></fieldset>
           <label className="text-xs"><input type="checkbox" checked={expected.blocking} onChange={e=>rules(turn,{blocking:e.target.checked})}/> 本轮规则属于业务红线</label>
         </div></details>
       </section>;
     })}
-    <Button type="button" size="sm" variant="outline" disabled={turns.length>=20} onClick={()=>onChange([...turns,newConversationTurn()])}>添加一轮</Button>
+    <button type="button" className="ai-btn-s inline-flex w-fit items-center gap-1.5 justify-self-start" disabled={turns.length>=20} onClick={()=>onChange([...turns,newConversationTurn()])}><Plus size={12}/>添加一轮</button>
   </div>;
 }
