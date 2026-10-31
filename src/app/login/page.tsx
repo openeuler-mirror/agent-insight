@@ -237,7 +237,7 @@ export default function LoginPage() {
             </button>
           </div>
         ) : (
-          <form className="login-form">
+          <form className="login-form" onSubmit={handleLogin} noValidate>
           <div style={{ marginBottom: '0.875rem' }}>
             <label className="login-label" htmlFor="username">
               {t('login.emailLabel')}
@@ -268,8 +268,7 @@ export default function LoginPage() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <button
               className="login-btn"
-              type="button"
-              onClick={handleLogin}
+              type="submit"
             >
               {t('login.signIn')}
             </button>
