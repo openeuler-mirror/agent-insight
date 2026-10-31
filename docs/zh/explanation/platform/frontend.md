@@ -155,3 +155,9 @@ flowchart TD
 - **开发**：`npm run dev`（或 `bash scripts/restart_dev.sh`——项目规范的开发启动方式）。端口 3000。
 - **构建**：`npm run build`（`next build`）。**启动**：`npm run start`。
 - **根布局 / 启动**：`src/app/layout.tsx`（`RootLayout`）；OpenTelemetry 在 `src/instrumentation.ts` / `instrumentation-node.ts` 中注册。
+
+## Trace 长文本、失败状态与弹窗
+
+Trace 输入输出中的“查看合并文本”会先调用完整上下文加载器，加载期间禁用按钮，失败时保留错误提示而不将摘要当作全文打开。压缩前历史单独折叠展示并说明其与当前模型输出的区别。长文本弹窗的正文使用独立滚动容器，窄面板 Token 统一字号并自动换行。
+
+共享 Dialog 使用现有 `--overlay-bg` 令牌和标准 `transform` 居中，减少对较新混色及独立 translate 属性的依赖。这些局部修复不代表 Tailwind 4 全站支持旧浏览器，仍需按实际浏览器版本验证。失败工具在树及时间线标记，父 Agent 显示“含失败调用”，不将该标记等同于会话最终失败。仪表盘同一分桶内的 P50/P95 标签合并，指标文案明确区分“无错误 Trace 比例”和最终状态。

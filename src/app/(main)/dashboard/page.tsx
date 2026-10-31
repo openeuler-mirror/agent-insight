@@ -1147,10 +1147,10 @@ function CollabNetwork({ data, onNodeClick }: { data: BreakdownsResp['orchestrat
 
 // ─── KPI 卡组 ─────────────────────────────────────────────────────────────────
 type Tone = 'count' | 'good' | 'latency' | 'error';
-interface CardDef { label: string; key: keyof Kpi; fmt: (n: number) => string; goodWhenUp: boolean | null; tone: Tone; group: string }
+interface CardDef { label: string; key: keyof Kpi; fmt: (n: number) => string; goodWhenUp: boolean | null; tone: Tone; group: string; info?: string }
 const CARDS: CardDef[] = [
     { label: '总 Trace', key: 'traces', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '系统' },
-    { label: '成功率', key: 'successRate', fmt: fmtPct, goodWhenUp: true, tone: 'good', group: '系统' },
+    { label: '无错误 Trace 比例', key: 'successRate', fmt: fmtPct, goodWhenUp: true, tone: 'good', group: '系统', info: '当前时间窗口内，未记录工具错误且 failures 为空的主 Trace 占比。会话最终正常结束但中途发生工具错误，也不计入无错误 Trace；与链路页的最终执行失败数口径不同。' },
     { label: 'P95 端到端时延', key: 'p95Latency', fmt: fmtSec, goodWhenUp: false, tone: 'latency', group: '系统' },
     { label: '活跃 Agent', key: 'activeAgents', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '系统' },
     { label: '活跃模型', key: 'activeModels', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '系统' },
@@ -1173,7 +1173,8 @@ function KpiCard({ def, cur, prev }: { def: CardDef; cur: number; prev: number }
     return (
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--foreground-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 9, opacity: 0.7 }}>{def.group}</span>{def.label}
+                <span style={{ fontSize: 9, opacity: 0.7, flexShrink: 0, whiteSpace: 'nowrap' }}>{def.group}</span>{def.label}
+                {def.info && <Info text={def.info} />}
             </span>
             <span style={{ fontSize: 22, fontWeight: 800, color: TONE_COLOR[def.tone], fontFamily: 'var(--font-mono, monospace)', lineHeight: 1.1 }}>{def.fmt(cur ?? 0)}</span>
             <Delta cur={cur} prev={prev} goodWhenUp={def.goodWhenUp} />
@@ -1237,6 +1238,11 @@ function Histogram({ data, color, marks, height }: {
     marks?: { label: string; text: string; color: string }[]; height?: number;
 }) {
     const c = useThemeColors();
+    const groupedMarks = new Map<string, { label: string; text: string; color: string }>();
+    for (const mark of marks ?? []) {
+        const previous = groupedMarks.get(mark.label);
+        groupedMarks.set(mark.label, previous ? { ...previous, text: `${previous.text} / ${mark.text}` } : mark);
+    }
     return (
         <ResponsiveContainer width="100%" height={height ?? CHART_H}>
             <BarChart data={data} margin={mgn}>
@@ -1244,9 +1250,9 @@ function Histogram({ data, color, marks, height }: {
                 <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} />
                 <YAxis width={52} stroke={c.fgMuted} tick={ax} allowDecimals={false} />
                 <Tooltip contentStyle={tipStyle} />
-                {(marks ?? []).map((m) => (
+                {[...groupedMarks.values()].map((m) => (
                     <ReferenceLine key={m.text} x={m.label} stroke={m.color} strokeWidth={1.5} strokeDasharray="5 4"
-                        label={{ value: m.text, position: 'top', fill: m.color, fontSize: 10 }} />
+                        label={{ value: m.text, position: 'insideTop', fill: m.color, fontSize: 10 }} />
                 ))}
                 <Bar dataKey="count" name="trace 数" fill={color} radius={[2, 2, 0, 0]} />
             </BarChart>
@@ -1381,7 +1387,7 @@ function AgentDetailDrawer({ name, win, user, onClose }: { name: string; win: st
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
                                 <Mini label="参与 Trace" v={fmtInt(s.traces)} />
                                 <Mini label="执行次数" v={fmtInt(s.executions)} />
-                                <Mini label="成功率" v={`${s.successRate}%`} tone="good" />
+                                <Mini label="无错误执行比例" v={`${s.successRate}%`} tone="good" />
                                 <Mini label="P95 时延" v={`${s.p95Latency}s`} tone="latency" />
                                 <Mini label="Token(self)" v={fmtInt(s.totalTokens)} />
                                 <Mini label={`成本(${data.currency})`} v={fmtCost(s.cost)} tone="latency" />
