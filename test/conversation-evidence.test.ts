@@ -28,3 +28,31 @@ test('原生parts提供完整空工具证据，成功Skill调用与内嵌工具�
  assert.deepEqual(rows[0].skills,['loan']);assert.equal(rows[0].tools?.[0].result,'loaded');
  assert.deepEqual(rows[1].tools,[]);
 });
+
+test('复用跨平台Skill入口及参数名，成功/失败/未知状态与轮次隔离',()=>{
+ for(const [name,key] of [['load_skill','skill_name'],['skill_view','skill'],['skill_tool','skillName'],['skill.loan','unused']]){
+  const args=key==='unused'?{}:{[key]:'loan'};
+  const turns=replayConversation([{role:'user',content:'q'},{role:'assistant',tool_calls:[{id:'load',function:{name,arguments:args}}]},{role:'tool',tool_call_id:'load',content:'loaded'},{role:'assistant',content:'done',tool_calls:[]},{role:'user',content:'next'},{role:'assistant',content:'done',tool_calls:[]}]);
+  assert.deepEqual(turns[0].loadedSkills,['loan']);assert.equal(turns[0].skillsComplete,true);
+  assert.deepEqual(turns[1].loadedSkills,[]);assert.equal(turns[1].skillsComplete,true);
+ }
+ const state=(state:string)=>replayConversation([{role:'user',content:'q'},{role:'assistant',tool_calls:[{function:{name:'skill',arguments:{name:'loan'}},state}]},{role:'assistant',content:'done',tool_calls:[]}])[0];
+ assert.deepEqual(state('error').loadedSkills,[]);assert.equal(state('error').skillsComplete,true);
+ assert.equal(state('running').skillsComplete,false);
+ const metadata=replayConversation([{role:'user',content:'q'},{role:'assistant',content:'done',metadata:{evaluation:{skill:'loan'}},tool_calls:[]}])[0];
+ assert.deepEqual(metadata.loadedSkills,[]);
+});
+
+test('Skill关联返回的显式失败优先于completed，不把MCP错误当成功加载',()=>{
+ for(const [state,result] of [['completed',{is_error:true,content:'failed'}],['completed',{content:JSON.stringify({isError:true,content:[]})}],[undefined,{isError:true,content:'failed'}]] as const){
+  const [turn]=replayConversation([{role:'user',content:'q'},{role:'assistant',tool_calls:[{id:'load',function:{name:'load_skill',arguments:{name:'loan'}},...(state?{state}:{})}]},{role:'tool',tool_call_id:'load',...result},{role:'assistant',content:'done',tool_calls:[]}]);
+  assert.deepEqual(turn.loadedSkills,[]);assert.equal(turn.skillsComplete,true);
+ }
+});
+
+
+test('内嵌MCP失败结果不算成功加载，旧Skill证据保持原口径',()=>{
+ const [turn]=replayConversation([{role:'user',content:'q'},{role:'assistant',tool_calls:[{id:'load',function:{name:'skill',arguments:{name:'loan'}},state:'completed',output:JSON.stringify({isError:true,content:[]})}]},{role:'assistant',content:'done',tool_calls:[]}]);
+ assert.deepEqual(turn.loadedSkills,[]);assert.equal(turn.skillsComplete,true);
+ assert.deepEqual(turn.skills,['loan']);
+});

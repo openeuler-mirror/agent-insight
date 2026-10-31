@@ -88,3 +88,25 @@ test('草稿导入的工具目录字段与Case在同一新版本发布',async()=
  const published=await response.json();assert(published.version.content.fields.some((field:any)=>field.key==='available_tools'));
  assert(JSON.parse((await prisma.agentEvalDataset.findUnique({where:{id}})).fieldsJson).some((field:any)=>field.key==='available_tools'));
 });
+
+test('简化逐轮规则经原实验引擎评分并冻结保存，无模型及业务字段依赖',async()=>{
+ const {normalizeConversationTurns}=await import('@/lib/evaluation-conversation');
+ const {executeResultRow}=await import('@/lib/engine/experiment/run-experiment');
+ const turns=normalizeConversationTurns({input:'记住AB',turns:[
+  {input:'记住AB',expectedOutput:'ACK',expectation:{outputMatch:'exact',expectedSkill:'memo',requiredTools:[{name:'lookup',arguments:{key:'AB'}}],forbiddenTools:['pay']}},
+  {input:'返回',expectedOutput:'AB',expectation:{outputMatch:'contains',forbiddenTools:['pay']}},
+ ]});
+ const trace='simple-conversation-engine-trace';
+ const messages=[{role:'user',content:'记住AB'},{role:'assistant',content:'',tool_calls:[{id:'s',function:{name:'load_skill',arguments:{skill_name:'memo'}}},{id:'t',function:{name:'lookup',arguments:{key:'AB',extra:true}}}]},{role:'tool',tool_call_id:'s',content:'loaded'},{role:'tool',tool_call_id:'t',content:'AB'},{role:'assistant',content:'ACK',tool_calls:[]},{role:'user',content:'返回'},{role:'assistant',content:'答案 AB',tool_calls:[]}];
+ await prisma.session.create({data:{taskId:trace,user,interactions:JSON.stringify(messages),endTime:new Date()}});
+ await prisma.execution.create({data:{id:trace,taskId:trace,user,query:'记住AB',finalResult:'答案 AB'}});
+ const exp=await prisma.experiment.create({data:{user,name:'Simple round rules',status:'running',evaluatorIdsJson:'["preset-conversation-rules"]',cases:{create:{input:'记住AB',actualOutput:'答案 AB',executionId:trace,taskId:trace,caseValuesJson:JSON.stringify({turns})}}},include:{cases:true}});
+ const result=await prisma.experimentEvalResult.create({data:{experimentId:exp.id,caseId:exp.cases[0].id,evaluatorId:'preset-conversation-rules',status:'pending'}});
+ assert.equal(await executeResultRow(user,result.id),'done');
+ const saved=await prisma.experimentEvalResult.findUnique({where:{id:result.id}});
+ assert.equal(saved.score,100);assert.equal(saved.verdict,'pass');assert.equal(JSON.parse(saved.pointsJson).length,2);
+ const evidence=JSON.parse(saved.evidenceJson);assert.equal(evidence.json.checks.length,7);
+ assert(evidence.json.checks.some((check:any)=>check.name==='输出精确匹配'));
+ assert(evidence.json.checks.some((check:any)=>check.name==='Skill使用'));
+ assert.deepEqual(JSON.parse((await prisma.experimentCase.findUnique({where:{id:exp.cases[0].id}})).caseValuesJson).turns,turns);
+});

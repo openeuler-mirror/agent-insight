@@ -33,15 +33,20 @@ export async function evaluateConversationRules(turns:ConversationTurn[],evidenc
   const checks:Check[]=[];
   for(const [index,turn] of turns.entries()){
     const actual=evidence[index],want=turn.expectation;
-    const add=(name:string,value:boolean|null,reason:string)=>checks.push({turn:index+1,name,verdict:value===null?'unknown':value?'pass':'fail',reason,blocking:want.blocking,messageIndex:actual?.messageIndex});
+    const add=(name:string,value:boolean|null,reason:string)=>checks.push({turn:index+1,name,verdict:value===null?'unknown':value?'pass':'fail',reason,blocking:!want.outputMatch&&want.blocking,messageIndex:actual?.messageIndex});
     if(!actual){add('执行证据',null,'未收到该轮的完整输入与回复');continue;}
     if(actual.complete===false){add('执行证据',null,'本轮尚无可确认的最终回复，不能判定规则通过');continue;}
     if(turn.input.replace(/\r\n/g,'\n').trim()!==actual.input.replace(/\r\n/g,'\n').trim()){
       add('轮次关联',null,'该轮实际输入与用例输入不同，不能确认此Trace对应当前Case');continue;
     }
+    if(want.outputMatch && turn.expectedOutput.length)add(want.outputMatch==='exact'?'输出精确匹配':'输出包含',want.outputMatch==='exact'?actual.output===turn.expectedOutput:actual.output.includes(turn.expectedOutput),`预期文本：${turn.expectedOutput}`);
     if(want.contains!==undefined)add('文本包含',actual.output.includes(want.contains),`要求包含：${want.contains}`);
     if(want.pattern)add('正则匹配',await regex(want.pattern,actual.output),'按配置正则检查；超时为未评完整');
-    if(want.expectedSkill)add('Skill路由',actual.skills?actual.skills.includes(want.expectedSkill):actual.skill?actual.skill===want.expectedSkill:null,`预期：${want.expectedSkill}；实际：${actual.skills?.join(', ')||actual.skill||'未采集'}`);
+    if(want.expectedSkill){
+      const simple=Boolean(want.outputMatch);
+      const matched=simple?(actual.loadedSkills?.includes(want.expectedSkill)?true:actual.skillsComplete?false:null):(actual.skills?actual.skills.includes(want.expectedSkill):actual.skill?actual.skill===want.expectedSkill:null);
+      add(simple?'Skill使用':'Skill路由',matched,`预期：${want.expectedSkill}；实际：${simple?(actual.loadedSkills?.join(', ')||(actual.skillsComplete?'未加载':'未采集完整加载证据')):actual.skills?.join(', ')||actual.skill||'未采集'}`);
+    }
     if(want.state)add('业务状态',actual.state?actual.state===want.state:null,`预期：${want.state}；实际：${actual.state||'未采集'}`);
     for(const tool of want.requiredTools){
       const calls=actual.tools?.filter(call=>call.name===tool.name);

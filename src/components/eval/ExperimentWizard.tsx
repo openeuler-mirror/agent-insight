@@ -338,13 +338,14 @@ function ConversationRulesPreview({ item }: { item: SelectedCase }) {
         <b className="text-sm">逐轮对话与业务规则</b>
         {item.datasetId && <Link href={`/dataset/${encodeURIComponent(item.datasetId)}`} className="text-xs text-primary">到评测数据集修改</Link>}
       </div>
-      <p className="mb-3 text-xs text-foreground-muted">这里只读查看本次实验选定的 Case；修改需在数据集中保存并发布新版本。</p>
+      <p className="mb-3 text-xs text-foreground-muted">这里只读查看选定版本的逐轮规则；本次实验修改最终预期答案，不会改写这些规则。修改规则需在数据集中保存并发布新版本。</p>
       <div className="grid gap-3">{turns.map((turn, index) => {
         const rule = turn.expectation;
         const checks = [
+          ...(rule.outputMatch && turn.expectedOutput ? [`输出匹配：${rule.outputMatch === 'exact' ? '精确匹配' : '包含文本'}`] : []),
           ...(rule.contains !== undefined ? [`回复包含：${rule.contains}`] : []),
           ...(rule.pattern ? [`回复正则：${rule.pattern}`] : []),
-          ...(rule.expectedSkill ? [`Skill 路由：${rule.expectedSkill}`] : []),
+          ...(rule.expectedSkill ? [`预期使用的 Skill：${rule.expectedSkill}`] : []),
           ...(rule.state ? [`业务状态：${rule.state}`] : []),
           ...rule.requiredTools.map(tool => `必须调用：${tool.name}${tool.arguments ? `；参数：${JSON.stringify(tool.arguments)}` : ''}`),
           ...(rule.forbiddenTools.length ? [`禁止调用：${rule.forbiddenTools.join('、')}`] : []),
@@ -352,7 +353,7 @@ function ConversationRulesPreview({ item }: { item: SelectedCase }) {
           ...rule.fields.map(field => `输出字段 ${field.path}：${field.required ? '必填' : '可选'}${field.type ? `，${field.type}` : ''}${Object.hasOwn(field, 'equals') ? `，等于 ${JSON.stringify(field.equals)}` : ''}${field.min !== undefined ? `，最小 ${field.min}` : ''}${field.max !== undefined ? `，最大 ${field.max}` : ''}${field.enum ? `，取值 ${JSON.stringify(field.enum)}` : ''}`),
         ];
         return <section key={turn.id} className="rounded-md border border-border p-3 text-xs">
-          <div className="mb-2 flex flex-wrap items-center gap-2"><b>第 {index + 1} 轮</b>{checks.length > 0 && <span className="text-foreground-muted">{rule.blocking ? '未满足时标记为业务红线' : '普通业务规则'}</span>}</div>
+          <div className="mb-2 flex flex-wrap items-center gap-2"><b>第 {index + 1} 轮</b>{!rule.outputMatch && checks.length > 0 && <span className="text-foreground-muted">历史规则{rule.blocking ? ' · 含业务红线' : ''}</span>}</div>
           <dl className="grid gap-1.5"><dt className="text-foreground-muted">用户输入</dt><dd className="whitespace-pre-wrap break-words">{turn.input}</dd><dt className="text-foreground-muted">预期输出</dt><dd className="whitespace-pre-wrap break-words">{turn.expectedOutput || '未配置'}</dd></dl>
           <div className="mt-2 border-t border-border pt-2">{checks.length ? <ul className="grid list-disc gap-1 pl-4">{checks.map((text, i) => <li key={i} className="whitespace-pre-wrap break-words">{text}</li>)}</ul> : <span className="text-foreground-muted">本轮未配置确定性业务规则</span>}</div>
         </section>;

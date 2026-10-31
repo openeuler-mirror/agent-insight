@@ -7,6 +7,7 @@
 
 import {attachConversationAnchors} from './conversation-anchors';
 import {toRawTraceInteractions} from '@/lib/engine/observability/fault-path';
+import {isSkillLoaderToolName} from '@/lib/evaluators/evaluator-case-context';
 
 export interface ConversationEvidence {
   input: string;
@@ -18,6 +19,8 @@ export interface ConversationEvidence {
   tools?: Array<{name:string;arguments:Record<string,unknown>;result?:unknown;status?:string}>;
   skill?: string;
   skills?: string[];
+  loadedSkills?: string[];
+  skillsComplete?: boolean;
   state?: string;
 }
 
@@ -38,11 +41,23 @@ export function replayConversation(messages:unknown[]):ConversationEvidence[] {
   const turns:ConversationEvidence[]=[];
   let current:ConversationEvidence|undefined, invalidTools=false;
   let calls=new Map<string,NonNullable<ConversationEvidence['tools']>[number]>();
-  const finish=()=>{if(current){if(invalidTools)delete current.tools;turns.push(current);}};
+  let skillCalls:Array<{name?:string;resultStatus?:string;tool:NonNullable<ConversationEvidence['tools']>[number]}>=[];
+  const finish=()=>{if(current){
+    if(invalidTools)delete current.tools;
+    if(current.tools){
+      current.loadedSkills=[];current.skillsComplete=true;
+      for(const {name,tool,resultStatus} of skillCalls){
+        const status=record(tool.result).isError===true?'error':(resultStatus||tool.status)?.toLowerCase();
+        if(!name || !status || !['completed','success','succeeded','done','error','failed','cancelled','canceled'].includes(status))current.skillsComplete=false;
+        else if(['completed','success','succeeded','done'].includes(status)&&!current.loadedSkills.includes(name))current.loadedSkills.push(name);
+      }
+    }
+    turns.push(current);
+  }};
   for(const [index,raw] of toRawTraceInteractions(messages).entries()){
     const message=record(raw), role=message.role || message.type;
     if(role==='user'){
-      finish();invalidTools=false;calls=new Map();
+      finish();invalidTools=false;calls=new Map();skillCalls=[];
       current={input:text(message.content),output:'',messageIndex:index,complete:false};
       continue;
     }
@@ -64,13 +79,26 @@ export function replayConversation(messages:unknown[]):ConversationEvidence[] {
           if(typeof fn.name!=='string' || !argumentsValue || typeof argumentsValue!=='object' || Array.isArray(argumentsValue)){invalidTools=true;continue;}
           const tool:NonNullable<ConversationEvidence['tools']>[number]={name:fn.name,arguments:argumentsValue as Record<string,unknown>,...(Object.hasOwn(call,'output')?{result:json(call.output)}:{}),...(typeof call.state==='string'?{status:call.state}:{})};
           if(fn.name==='skill'&&typeof tool.arguments.name==='string'&&tool.status==='completed'){current.skills??=[];if(!current.skills.includes(tool.arguments.name))current.skills.push(tool.arguments.name);}
+          const meta=record(call.skill), prefixed=fn.name.toLowerCase().startsWith('skill.')?fn.name.slice(6):undefined;
+          if(isSkillLoaderToolName(fn.name)||prefixed||typeof meta.name==='string'){
+            const name=[meta.name,tool.arguments.skill,tool.arguments.name,tool.arguments.skill_name,tool.arguments.skillName,...(['skill','load_skill'].includes(fn.name.toLowerCase())?[tool.arguments.id]:[]),prefixed].find(value=>typeof value==='string'&&value.trim());
+            skillCalls.push({name:typeof name==='string'?name.trim():undefined,tool});
+          }
           current.tools.push(tool);
           if(typeof call.id==='string')calls.set(call.id,tool);
         }
       }
     } else if(role==='tool' && typeof message.tool_call_id==='string'){
       const call=calls.get(message.tool_call_id);
-      if(call)call.result=json(message.content);
+      if(call){
+        call.result=json(message.content);
+        const skill=skillCalls.find(fact=>fact.tool===call);
+        if(skill){
+          const result=record(call.result);
+          if(message.is_error===true||message.isError===true||message.error||result.isError===true)skill.resultStatus='error';
+          else if(!call.status||['running','pending'].includes(call.status))skill.resultStatus='completed';
+        }
+      }
     }
   }
   finish();

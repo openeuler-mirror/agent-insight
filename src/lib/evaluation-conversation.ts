@@ -10,6 +10,7 @@ import { z } from 'zod';
 const text = z.string().max(20000);
 const tool = z.object({ name: z.string().trim().min(1).max(200), arguments: z.record(z.string(), z.unknown()).optional() });
 export const turnExpectationSchema = z.object({
+  outputMatch: z.enum(['exact', 'contains']).optional(),
   contains: text.optional(),
   pattern: z.string().max(2000).optional(),
   expectedSkill: z.string().max(200).optional(),
@@ -26,6 +27,7 @@ export const turnExpectationSchema = z.object({
   })).max(50).default([]),
   blocking: z.boolean().default(true),
 }).superRefine((value, ctx) => {
+  if (value.outputMatch && (value.contains !== undefined || value.pattern || value.state || value.toolOrder.length || value.fields.length)) ctx.addIssue({code:'custom',message:'简化规则不能与历史高级规则混用，请先明确转换历史规则'});
   if (value.requiredTools.some(t => value.forbiddenTools.includes(t.name))) ctx.addIssue({code:'custom',message:'同一工具不能同时必须调用和禁止调用'});
   if (value.pattern) try { new RegExp(value.pattern); } catch { ctx.addIssue({code:'custom',path:['pattern'],message:'无效正则表达式'}); }
 });
@@ -38,6 +40,18 @@ export const conversationTurnSchema = z.object({
 });
 export type ConversationTurn = z.infer<typeof conversationTurnSchema>;
 export type TurnExpectation = ConversationTurn['expectation'];
+
+export function hasLegacyTurnRules(rule: TurnExpectation): boolean {
+  return rule.contains !== undefined || Boolean(rule.pattern || rule.state || rule.toolOrder.length || rule.fields.length);
+}
+
+export function simplifyConversationTurn(turn: ConversationTurn): ConversationTurn {
+  return {...turn, expectedOutput: turn.expectation.contains ?? turn.expectedOutput, expectation: {
+    outputMatch: 'contains', expectedSkill: turn.expectation.expectedSkill,
+    requiredTools: turn.expectation.requiredTools, forbiddenTools: turn.expectation.forbiddenTools,
+    toolOrder: [], fields: [], blocking: true,
+  }};
+}
 
 const turnsSchema = z.array(conversationTurnSchema).min(1).max(20).refine(turns => new Set(turns.map(turn=>turn.id)).size===turns.length,'轮次标识不能重复');
 export const executionConversationSchema = z.object({

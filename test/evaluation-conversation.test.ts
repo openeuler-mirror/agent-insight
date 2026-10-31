@@ -24,3 +24,13 @@ test('非法逐轮定义不能退化成一条单轮任务', () => {
   for(const turns of [[],[{input:''}],Array.from({length:21},()=>({input:'x'})),[{id:'same',input:'a'},{id:'same',input:'b'}]])assert.throws(()=>normalizeConversationTurns({input:'valid',expectedOutput:'',turns}));
   assert.throws(()=>normalizeConversationTurns({input:'',expectedOutput:'',turns:[{input:'a',expectation:{requiredTools:[{name:'pay'}],forbiddenTools:['pay']}}]}));
 });
+
+test('简化规则显式启用且不能暗含旧高级约束，转换不修改原版本',async()=>{
+ const {simplifyConversationTurn}=await import('@/lib/evaluation-conversation');
+ const [old]=normalizeConversationTurns({input:'q',turns:[{input:'q',expectedOutput:'旧参考',expectation:{contains:'应包含',pattern:'x',state:'submitted',fields:[{path:'status'}],toolOrder:['check'],requiredTools:[{name:'check'}],expectedSkill:'loan'}}]});
+ const frozen=structuredClone(old),simple=simplifyConversationTurn(old);
+ assert.deepEqual(old,frozen);assert.equal(simple.expectedOutput,'应包含');assert.equal(simple.expectation.outputMatch,'contains');
+ assert.equal(simple.expectation.state,undefined);assert.deepEqual(simple.expectation.fields,[]);assert.deepEqual(simple.expectation.requiredTools,old.expectation.requiredTools);
+ assert.doesNotThrow(()=>normalizeConversationTurns({input:'q',turns:[simple]}));
+ for(const advanced of [{contains:'x'},{pattern:'x'},{state:'done'},{fields:[{path:'x'}]},{toolOrder:['x']}])assert.throws(()=>normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{outputMatch:'contains',...advanced}}]}));
+});

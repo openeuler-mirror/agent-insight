@@ -43,7 +43,7 @@ export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-conversation-rules',
     name: '逐轮业务规则',
-    description: '按 Case 中的逐轮规则核对回复、Skill 路由、工具参数与顺序，并保留每轮评分点、证据和建议。缺少证据时不计分。',
+    description: '按每轮输入核对回复的精确／包含文本匹配、必须／禁止调用的工具与参数，以及实际 Skill 加载证据。不调用模型，缺少证据时不计分；历史规则按原定义执行。',
     evaluatorType: 'Code',
     source: 'preset',
     category: 'traj',

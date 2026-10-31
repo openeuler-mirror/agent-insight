@@ -47,3 +47,30 @@ test('包含和正则同时配置时独立判断，矛盾规则不会互相覆�
  const compatible=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{contains:'ORDER-',pattern:'^ORDER-[0-9]{6}$'}}]});
  assert.equal((await evaluateConversationRules(compatible,[{input:'q',output:'ORDER-123456',messageIndex:0,complete:true}])).score,100);
 });
+
+test('简化规则逐轮匹配预期输出，不依赖JSON、业务状态或模型',async()=>{
+ for(const mode of ['exact','contains'] as const){
+  const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectedOutput:'已收到',expectation:{outputMatch:mode}}]});
+  const check=(output:string)=>evaluateConversationRules(turns,[{input:'q',output,messageIndex:0,complete:true}]);
+  assert.equal((await check('已收到')).score,100);
+  assert.equal((await check('申请已收到。')).verdict,mode==='contains'?'pass':'fail');
+  assert.equal((await check('已收妥')).verdict,'fail');
+  const empty=normalizeConversationTurns({input:'q',turns:[{input:'q',expectedOutput:'',expectation:{outputMatch:mode}}]});
+  assert.equal((await evaluateConversationRules(empty,[{input:'q',output:'anything',messageIndex:0}])).score,undefined);
+ }
+ const legacy=normalizeConversationTurns({input:'q',turns:[{input:'q',expectedOutput:'从不自动参与旧规则'}]});
+ assert.equal((await evaluateConversationRules(legacy,[{input:'q',output:'other',messageIndex:0}])).score,undefined);
+});
+
+test('简化Skill检查只采信真实加载证据，私有metadata不能代替且各轮独立',async()=>{
+ const {replayConversation}=await import('@/lib/engine/experiment/conversation-evidence');
+ const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{outputMatch:'contains',expectedSkill:'loan'}}]});
+ const check=(messages:unknown[])=>evaluateConversationRules(turns,replayConversation(messages));
+ const input={role:'user',content:'q'};
+ assert.equal((await check([input,{role:'assistant',content:'loan已使用',metadata:{evaluation:{skill:'loan'}},tool_calls:[]}])).verdict,'fail');
+ assert.equal((await check([input,{role:'assistant',content:'loan已使用',metadata:{evaluation:{skill:'loan'}}}])).verdict,'warn');
+ assert.equal((await check([input,{role:'assistant',content:'done',tool_calls:[{function:{name:'load_skill',arguments:{skill_name:'loan'}},state:'completed'}]}])).verdict,'warn');
+ // A call-only message is not a final reply; the final assistant response closes the round.
+ const loaded=await check([input,{role:'assistant',content:'',tool_calls:[{function:{name:'load_skill',arguments:{skill_name:'loan'}},state:'completed'}]},{role:'assistant',content:'done',tool_calls:[]}]);
+ assert.equal(loaded.verdict,'pass');assert.doesNotMatch(loaded.summary||'',/业务红线/);
+});

@@ -58,9 +58,13 @@ Agent 版本控件放在原执行目标选择之后，按具体 platform/agent �
 
 ## 6. 多轮 Case 与规则
 
-`DatasetCase` 增加可选 turns；旧无 turns 数据按单轮理解，不强制改写。逐轮包含 id、input、expectedOutput、expectation；expectation 支持 contains/pattern、expectedSkill/state、requiredTools(name,arguments)、forbiddenTools、toolOrder、JSON fields、blocking。
+`DatasetCase` 增加可选 turns；旧无 turns 数据按单轮理解，不强制改写。逐轮包含 id、input、expectedOutput、expectation。2026-10-31 按用户确认收敛为通用约束：每轮输入与输出、必须/禁止工具及参数、实际 Skill 使用；输出仅做精确或包含文本匹配，不调用模型，不要求业务 JSON、状态字段、私有 metadata 或额外 Agent 协议。
 
-输入长度、轮数、工具数量、字段数量有统一服务端上限，正则在受限执行环境内判断。必须工具与禁止工具冲突在保存时拒绝。顶层 input 来自首轮，expectedOutput 来自末轮；多轮规则详细配置放在单 Case 对话框，主表仍是一行。
+新配置使用可选 `expectation.outputMatch=exact|contains` 显式启用；匹配对象为本轮最终助手回复，精确匹配不修剪空白、不忽略大小写，包含匹配要求连续出现完整文本；空预期不检查输出。参数沿用对象部分匹配，未指定的额外参数不影响通过；工具要求检查调用记录，成功率仍可用原评估器。Skill 复用平台已有加载入口名称/Skill 元信息，按本轮真实加载调用及其完成/返回证据判断；成功加载通过，明确失败或完整采集中未加载不通过，未知状态/缺失采集为未评完整。回答或提示中提及 Skill 不计为使用，不能把一轮加载归给后续所有轮。
+
+历史 expectation 的 contains/pattern/state/toolOrder/fields/blocking 及私有证据兼容逻辑仅用于旧定义，保持原评分。新表单不提供这些高级编辑项，旧 Case 显示只读历史规则及“改用简化规则”；用户明确转换才移除高级约束，保留工具/Skill 要求，原 contains 移入 expectedOutput。保存草稿后仍须发布新版本；不可就地改写历史版本、旧实验或静默将原本不参与逐轮匹配的 expectedOutput 激活。服务端拒绝 outputMatch 与旧高级规则混用，避免隐藏约束仍在新模式生效。
+
+输入长度、轮数、工具数量沿用统一上限。必须工具与禁止工具冲突在保存时拒绝。顶层 input 来自首轮，expectedOutput 来自末轮；主表每个 Case 仍是一行，详细配置及第三步只读预览复用原组件。评估器稳定 ID、Code 类型、评分点结构、版本冻结和无证据不计分口径不变。
 
 ## 7. 原生多轮执行合同
 
