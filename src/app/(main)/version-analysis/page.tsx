@@ -426,11 +426,6 @@ export default function VersionAnalysisPage() {
     ...frameworks.map(item => ({ value: item.value, label: `${item.value} (${item.count})` })),
   ], [copy.allFrameworks, frameworks]);
 
-  const questionOptions: SelectOption[] = useMemo(() => [
-    { value: 'all', label: copy.allQuestions },
-    ...((data?.questions ?? []).slice(0, 80).map(item => ({ value: item.key, label: `${item.label} (${item.traceCount})` }))),
-  ], [copy.allQuestions, data?.questions]);
-
   const versions = data?.versions ?? [];
   const summary = data?.summary ?? null;
   const activeWindowLabel = windowOptions(copy).find(option => option.value === windowKey)?.label ?? copy.allTime;
@@ -701,7 +696,7 @@ export default function VersionAnalysisPage() {
                         <XAxis dataKey="index" tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} />
                         <YAxis tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} tickFormatter={(value) => formatChartTick(Number(value), metric, locale)} width={64} />
                         <Tooltip
-                          content={<TraceMetricTooltip metric={metric} copy={copy} locale={locale} />}
+                          content={<TraceMetricTooltip copy={copy} locale={locale} />}
                           cursor={{ stroke: 'var(--border-dark)', strokeDasharray: '4 4' }}
                         />
                         <Line type='monotone' dataKey='value' stroke={metricColor(metric)} strokeWidth={2.8} dot={<TraceDot metric={metric} />} activeDot={<TraceDot metric={metric} active />} connectNulls />
@@ -843,11 +838,10 @@ function CompactMetric({ label, help, value }: { label: string; help?: string; v
   );
 }
 
-function TraceMetricTooltip({ active, payload, label, metric, copy, locale }: {
+function TraceMetricTooltip({ active, payload, label, copy, locale }: {
   active?: boolean;
   payload?: Array<{ payload?: any }>;
   label?: string | number;
-  metric: MetricKey;
   copy: ReturnType<typeof strings>;
   locale: string;
 }) {

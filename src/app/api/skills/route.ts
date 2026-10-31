@@ -15,7 +15,7 @@
  */
 
 import { resolveUser } from '@/lib/auth/auth';
-import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
+import { db, prismaRaw } from '@/lib/storage/prisma';
 import { getSkillStorageRoot } from '@/lib/env';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
