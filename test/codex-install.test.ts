@@ -230,7 +230,7 @@ async function assertInstallerLifecycle(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const installed = await runInstaller(source, homeDir)
     assert.equal(installed.code, 0, installed.stderr || installed.stdout)
-    assert.match(installed.stdout, /Agent Insight Codex collector installed/)
+    assert.match(installed.stdout, /Agent Insight Codex collector(?: \d+\.\d+\.\d+)? installed/)
     assert.equal(
       await fsp.readFile(path.join(collectorDir, "vscode-extension", "[Content_Types].xml"), "utf8")
         .then(() => true, () => false),

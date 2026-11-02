@@ -416,3 +416,33 @@ test("Bug 446-9 红灯：正文与 usage 不互相吞并（正文保留输出，
     .reduce((sum: number, event: any) => sum + (event.usage?.total || 0), 0)
   assert.equal(total, 5000, "usage 不得因正文存在而丢失")
 })
+
+test("0.166 CLI rollout 必须保持 sourceKind=cli，不得被 usage 路径改判为 desktop", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => BASE_TS })
+  const cliThread = "01a19a8d-9fa6-7052-8007-92768b9a42cf"
+  const cliTurn = "01a19a8d-a4ac-7ba1-8f23-1bf37a8a1fe8"
+  await core.processRolloutContent({
+    eventId: "cli-content-1",
+    eventType: "rollout_content",
+    source: "desktop_rollout",
+    sourceKind: "cli",
+    sourceThreadId: cliThread,
+    sourceExecutionId: cliTurn,
+    contentKind: "llm_text",
+    timestampMs: BASE_TS + 5,
+    payload: { itemId: "msg-cli-1", text: "CLI answer" },
+  })
+  await core.processLifecycleEvent({
+    ...usageEvent("resp-cli", 1234, 10),
+    sourceKind: "cli",
+    sourceThreadId: cliThread,
+    sourceExecutionId: cliTurn,
+  })
+
+  const llms = writer.events.filter((event: any) => event.kind === "llm")
+  assert.ok(llms.length >= 2)
+  for (const event of llms) {
+    assert.equal(event.attributes["codex.source.kind"], "cli", "CLI rollout 的所有 LLM 节点都必须保持 cli")
+  }
+})

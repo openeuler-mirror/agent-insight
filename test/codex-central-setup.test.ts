@@ -41,6 +41,7 @@ function read(relativePath: string): string {
 
 function parsePowerShell(source: string): void {
   const command = [
+    "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
     "$source = [Console]::In.ReadToEnd()",
     "$tokens = $null",
     "$errors = $null",

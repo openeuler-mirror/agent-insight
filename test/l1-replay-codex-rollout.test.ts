@@ -16,18 +16,19 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * L1 组件回放：Codex Desktop 0.164 单 turn 真实 rollout（Bug 446-9）。
+ * L1 组件回放：Codex Desktop 真实单 turn rollout。
  *
- * cassette 本体放根管理仓 `test-cassettes/codex-desktop-0164/`
- * （`parent-turn.jsonl` = 真实 rollout 单 turn 切片，正文已脱敏；`manifest.json`
- * 记录 usage 记录数与真值 token 总额）。本测试进程内直跑 rollout reader →
- * CodexTraceCore → codex adapter 聚合，断言：
+ * cassette 本体放根管理仓 `test-cassettes/codex-desktop-0166/`（优先）或
+ * `codex-desktop-0164/`；`manifest.json` 记录 usage 记录数与真值 token 总额。
+ * 测试进程内直跑 rollout reader → CodexTraceCore → codex adapter 聚合，断言：
  *  - 该 turn 落成一次执行，带用户 query、带终态；
  *  - token 总额等于 manifest 的 expected_total_tokens（真值，取自原始
  *    `token_usage_record.usage.total_tokens` 之和）；
  *  - LLM span 数等于 usage 记录数（不虚增、不互相覆盖）。
  *
- * cassette 缺失时跳过：fixture 属根仓资产，社区 clone 不应因缺它而失败。
+ * 为覆盖 0.164+ 的真实 `.jsonl.zst` 形态，plain cassette 会在测试内压缩；
+ * Node 不支持 zstd 时退回 plain，仍保留真实数据回归。cassette 缺失时跳过：
+ * fixture 属根仓资产，社区 clone 不应因缺它而失败。
  */
 import assert from "node:assert/strict"
 import fsp from "node:fs/promises"
@@ -37,6 +38,7 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 
 const require = createRequire(import.meta.url)
+const zlib = require("node:zlib")
 const { createDesktopRolloutReader } = require("../scripts/agent-trace-collectors/codex/rollout-reader.cjs")
 const { CodexTraceCore } = require("../scripts/agent-trace-collectors/codex/codex-trace-core.cjs")
 const {
@@ -44,12 +46,15 @@ const {
   keepLatestCodexSpanSnapshots,
 } = require("../src/lib/ingest/otel/adapters/codex.ts")
 
-const CASSETTE_ROOT = path.resolve(
+const CASSETTE_ROOT_BASE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../../test-cassettes/codex-desktop-0164",
+  "../../../test-cassettes",
 )
-const SOURCE = path.join(CASSETTE_ROOT, "parent-turn.jsonl")
-const MANIFEST = path.join(CASSETTE_ROOT, "manifest.json")
+const CASSETTE_ROOTS = [
+  path.join(CASSETTE_ROOT_BASE, "codex-desktop-0166"),
+  path.join(CASSETTE_ROOT_BASE, "codex-desktop-0164"),
+]
+const ZSTD_AVAILABLE = typeof zlib.zstdCompressSync === "function"
 
 class MemoryWriter {
   events: Array<Record<string, any>> = []
@@ -62,21 +67,43 @@ class MemoryWriter {
   async flush() {}
 }
 
-async function cassetteAvailable(): Promise<boolean> {
-  return fsp.stat(SOURCE).then(() => true, () => false)
+async function resolveCassette(): Promise<{ root: string; source: string; compressed: boolean } | undefined> {
+  for (const root of CASSETTE_ROOTS) {
+    for (const name of ["parent-turn.jsonl.zst", "parent-turn.jsonl"]) {
+      const source = path.join(root, name);
+      if (await fsp.stat(source).then(() => true, () => false)) {
+        return { root, source, compressed: name.endsWith(".zst") };
+      }
+    }
+  }
+  return undefined
 }
 
-test("L1 0.164 回放：真实单 turn rollout 落成一次完整执行且 token 等于真值", async (t) => {
-  if (!(await cassetteAvailable())) {
-    t.skip("cassette test-cassettes/codex-desktop-0164 缺失，跳过 L1 回放")
+test("L1 回放：真实 Desktop rollout 落成一次完整执行且 token 等于真值", async (t) => {
+  const cassette = await resolveCassette()
+  if (!cassette) {
+    t.skip("cassette test-cassettes/codex-desktop-0166 或 0164 缺失，跳过 L1 回放")
     return
   }
-  const manifest = JSON.parse(await fsp.readFile(MANIFEST, "utf8"))
-  const stateDir = await fsp.mkdtemp(path.join(process.env.TEMP || "/tmp", "codex-0164-l1-"))
+  const manifest = JSON.parse(await fsp.readFile(path.join(cassette.root, "manifest.json"), "utf8"))
+  const stateDir = await fsp.mkdtemp(path.join(process.env.TEMP || "/tmp", "codex-rollout-l1-"))
   const sessionsDir = path.join(stateDir, "sessions")
   await fsp.mkdir(sessionsDir, { recursive: true })
+  t.after(() => fsp.rm(stateDir, { recursive: true, force: true }))
+
   // reader 按文件名里的 rollout 起始时间判断回填边界，保留真实文件名语义。
-  await fsp.copyFile(SOURCE, path.join(sessionsDir, "rollout-2026-10-25T11-58-43-01a17135-f417-7ce0-b5f9-56ad5e6805d0.jsonl"))
+  const rolloutBase = manifest.rollout_name
+    || "rollout-2026-10-25T11-58-43-01a17135-f417-7ce0-b5f9-56ad5e6805d0.jsonl"
+  const useCompressed = cassette.compressed || ZSTD_AVAILABLE
+  const target = path.join(sessionsDir, useCompressed ? `${rolloutBase}.zst` : rolloutBase)
+  if (cassette.compressed) {
+    await fsp.copyFile(cassette.source, target)
+  } else if (ZSTD_AVAILABLE) {
+    const plain = await fsp.readFile(cassette.source)
+    await fsp.writeFile(target, zlib.zstdCompressSync(plain))
+  } else {
+    await fsp.copyFile(cassette.source, target)
+  }
 
   const writer = new MemoryWriter()
   const core = new CodexTraceCore({
@@ -95,7 +122,6 @@ test("L1 0.164 回放：真实单 turn rollout 落成一次完整执行且 token
     },
   })
   await reader.scan()
-  t.after(() => fsp.rm(stateDir, { recursive: true, force: true }))
 
   // 该 turn 的 sessionId 形如 `<threadId>:turn:<turnId>`；直接从事件里取唯一值。
   const executionSessionIds = [...new Set(
@@ -126,13 +152,13 @@ test("L1 0.164 回放：真实单 turn rollout 落成一次完整执行且 token
 
   const aggregated = keepLatestCodexSpanSnapshots(turnEvents)
   const record = aggregateCodexTraceEvents(resolvedSessionId, aggregated)
-  assert.ok(record, "真实 0.164 turn 必须聚合成一条执行记录")
+  assert.ok(record, `真实 ${manifest.cli_version || "Codex"} turn 必须聚合成一条执行记录`)
   assert.equal(
     record.tokens,
     manifest.expected_total_tokens,
     `token 总额必须等于原始 usage 真值（${manifest.expected_total_tokens}）`,
   )
   assert.ok(record.query, "执行必须带用户 query")
-  assert.match(String(record.query), /DIY ZCode|补丁/, "query 必须来自 0.164 的 item_completed(UserMessage)")
+  assert.match(String(record.query), /DIY ZCode|补丁/, "query 必须来自 0.164+ 的 item_completed(UserMessage)")
   assert.ok(record.executionStatus, "执行必须有终态")
 })
