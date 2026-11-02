@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import test from 'node:test'
 import ts from 'typescript'
 import type { EnvironmentSelection } from '../src/lib/client/use-execution-environment'
+import { skillExecutionCapabilityIssue } from '../src/lib/skill-workbench/experiment-policy'
 
 const hookCode = ts.transpileModule(fs.readFileSync('src/lib/client/use-execution-environment.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
 const selection: EnvironmentSelection = { datasetId: 'dataset', clientId: 'host-a', platform: 'opencode', agent: 'build', model: '', caseIds: ['case'], mode: 'generate', timeoutSeconds: 600, concurrency: 1 }
@@ -136,7 +137,7 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit)
 }
 visit(wizard)
-function advanceHarness(targets: unknown[], current = true, requiresExecution = true, overrides: { check?: () => Promise<boolean>; refresh?: () => Promise<unknown[]> } = {}) {
+function advanceHarness(targets: unknown[], current = true, requiresExecution = true, overrides: { check?: () => Promise<boolean>; refresh?: () => Promise<unknown[]>; skillContext?: unknown; skillPreset?: string } = {}) {
   const steps: number[] = []
   const keys: string[] = []
   const errors: string[] = []
@@ -146,6 +147,7 @@ function advanceHarness(targets: unknown[], current = true, requiresExecution = 
     environmentSelection: requiresExecution ? selection : null, setSelectedTargetKey: (key: string) => keys.push(key),
     environment: { check: overrides.check || (async () => true), isCurrent: () => current, fail: (message: string) => errors.push(message) },
     refreshAgents: overrides.refresh || (async () => [{ targets }]), isBenchmarkDataset: false, selectedDataset: null,
+    skillContext: overrides.skillContext || null, skillPreset: overrides.skillPreset || 'use-case', skillExecutionCapabilityIssue,
     router: { push: (path: string) => routes.push(path), replace: (path: string) => routes.push(path), refresh: () => routes.push('refresh') },
     onBack: () => routes.push('back'),
     setStep: (step: number) => steps.push(step), setMaxVisited: () => {},
@@ -173,6 +175,20 @@ test('post-check target refresh keeps the checked host and rejects disappearing 
   assert.deepEqual(traces.steps, [3])
 })
 
+
+test('Skill capability lost during preparation prevents advancing to the next step', async () => {
+  for (const [snapshot, routing, preset, allowed] of [
+    [false, false, 'use-case', false], [true, false, 'use-case', true],
+    [true, false, 'trigger', false], [true, true, 'trigger', true],
+  ] as const) {
+    const view = advanceHarness([{ workerId: selection.clientId, platform: 'opencode', agent: selection.agent,
+      supportsSkillSnapshot: snapshot, supportsTriggerRouting: routing }], true, true,
+    { skillContext: { name: 'fixture', version: 1 }, skillPreset: preset })
+    await view.advance()
+    assert.deepEqual(view.steps, allowed ? [3] : [])
+    if (!allowed) assert.match(view.errors[0], /未上报/)
+  }
+})
 
 test('HTTP browsers without randomUUID can submit, retry and recover environment checks', async () => {
   const browserCrypto = { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) }
@@ -243,19 +259,22 @@ test('manual action, refresh failure or leaving during refresh cannot navigate a
 test('late host refreshes cannot overwrite a newer result or mutate state after invalidation', async () => {
   const responses: Array<(response: Response) => void> = []
   const snapshots: unknown[][] = []
+  const diagnostics: unknown[][] = []
   const sequence = { current: 0 }
   const preparation = { current: false }
   const refresh = evaluate<(confirmPreparation?: boolean) => Promise<unknown[]>>(wizardFunctions.refreshAgents, {
     user: 'user', agentsRequestIdRef: sequence, traceAdvanceRef: preparation, apiFetch: () => new Promise(resolve => responses.push(resolve)),
     setAgents: (value: unknown[]) => snapshots.push(value),
+    setTraceGenerationDiagnostics: (value: unknown[]) => diagnostics.push(value),
   })
   const old = refresh()
   const ready = refresh()
-  responses[1](new Response(JSON.stringify({ agents: [{ name: 'ready-host' }] })))
+  responses[1](new Response(JSON.stringify({ agents: [{ name: 'ready-host' }], traceGenerationDiagnostics: [{ code: 'READY_FIXTURE' }] })))
   await ready
   responses[0](new Response(JSON.stringify({ agents: [{ name: 'old-host' }] })))
   await old
   assert.deepEqual(snapshots, [[{ name: 'ready-host' }]])
+  assert.deepEqual(diagnostics, [[{ code: 'READY_FIXTURE' }]])
   const unmounted = refresh()
   sequence.current += 1
   responses[2](new Response(JSON.stringify({ agents: [] })))

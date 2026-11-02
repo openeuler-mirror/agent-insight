@@ -20,6 +20,9 @@ import { DeleteExperimentButton } from '@/components/eval/DeleteExperimentButton
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 
+import { SkillCaseExecutionProgress } from './SkillCaseExecutionProgress';
+import { acceptSkillSnapshot, type SkillExecutionSnapshot } from '@/lib/skill-workbench/execution-progress';
+import { summarizeWorkbenchItemProgress, workbenchCompletionStatus } from '@/lib/skill-workbench/item-progress';
 import { ExperimentDetail } from '@/components/eval/ExperimentDetail';
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { ExperimentCaseDetail } from '@/components/eval/ExperimentCaseDetail';
@@ -30,6 +33,7 @@ import {
   formatWorkbenchScore as scoreText,
   isCompletedWorkbenchCase,
   summarizeAbSide,
+  withWorkbenchTraceProgress,
   type AbCaseStates,
   type AbOutcome,
   type AbSideState,
@@ -58,10 +62,11 @@ interface DetailPayload {
   overall: number | null;
   breakdown: Array<{ evaluatorId: string; avg: number | null; scored: number; total: number; failed: number }>;
   progress: { total: number; done: number; failed: number; pending: number };
-  traceProgress: { total: number; ready: number; failed: number; pending: number } | null;
+  traceProgress: { total: number; ready: number; failed: number; pending: number; waitingTrace?: number } | null;
   executionProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
   evaluationProgress: { total: number; succeeded: number; failed: number; pending: number; skipped?: number; unscored?: number } | null;
   sideProgress?: SkillExperimentProgressProps['sideProgress'];
+  skillExecutionSnapshot?: SkillExecutionSnapshot | null;
   caseTotal: number;
   results?: CaseEvaluationResult[];
   cases?: Array<{
@@ -74,6 +79,7 @@ interface DetailPayload {
     referenceOutput?: string | null;
     caseValues?: Record<string, unknown> | null;
     skillTriggered?: boolean | null;
+    traceAttemptStatus?: string | null;
   }>;
   configSnapshot?: Record<string, unknown> | null;
   skillContext?: Record<string, unknown> | null;
@@ -127,7 +133,7 @@ function terminal(status?: string) {
 }
 
 function runIsActive(run: { status?: string; score?: number | null }) {
-  return ['running', 'evaluating', 'pending'].includes(run.status || '')
+  return ['running', 'waiting_trace', 'evaluating', 'pending'].includes(run.status || '')
     && !(typeof run.score === 'number' && Number.isFinite(run.score));
 }
 
@@ -163,6 +169,8 @@ function summaryScoreStatus(summary: AbSideSummary) {
 }
 
 function activeAbPairLabel(a: AbSideSummary, b: AbSideSummary) {
+  if (a.status === 'waiting_trace' || b.status === 'waiting_trace') return a.status === 'running' || b.status === 'running'
+    ? '执行中 · 部分等待 Trace 入库' : '等待 Trace 入库';
   if (a.status === 'running' || b.status === 'running') return '执行中';
   if (a.status === 'pending' || b.status === 'pending') return '等待执行';
   return '评测中';
@@ -192,7 +200,7 @@ function RunOutput({ run, output }: { run?: import('@/lib/skill-workbench/ab-com
   const unscored = run?.evaluations?.filter(item => item.unscored || (item.status === 'done' && item.score == null)) || [];
   return <>
     {run?.failureType
-      ? <p className="whitespace-pre-wrap break-words text-error">执行失败{run.failureCode ? `（${run.failureCode}）` : ''}：{run.failureDetail || output || '未生成有效输出'}<br />未进入评测</p>
+      ? <p className="whitespace-pre-wrap break-words text-error">{run.failureCode === 'TRACE_INGEST_TIMEOUT' ? 'Trace 入库失败' : '执行失败'}{run.failureCode ? `（${run.failureCode}）` : ''}：{run.failureDetail || output || '未生成有效输出'}<br />未进入评测</p>
       : <ExpandableCellText value={output} muted />}
     {!run?.failureType && evaluationErrors.length > 0 && <p className="mt-1 whitespace-pre-wrap break-words text-error">评测失败：{evaluationErrors.join('；')}</p>}
     {!run?.failureType && unscored.length > 0 && <p className="mt-1 whitespace-pre-wrap break-words text-foreground-muted">未计分：{unscored.map(item => item.summary || '评估器未返回分数').join('；')}</p>}
@@ -225,6 +233,7 @@ export function SkillExperimentResult({
   const [retryingRunState, setRetryingRunState] = useState<{ experimentId: string; value: string }>({ experimentId, value: '' });
   const [retryErrorState, setRetryErrorState] = useState<{ experimentId: string; key: string; message: string }>({ experimentId, key: '', message: '' });
   const loadSequence = useRef(0);
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const retryInFlight = useRef(false);
   const abFilter = abFilterState.experimentId === experimentId ? abFilterState.value : 'all';
   const retryingRun = retryingRunState.experimentId === experimentId ? retryingRunState.value : '';
@@ -258,7 +267,26 @@ export function SkillExperimentResult({
       const nextWorkbench = (Array.isArray(contextResult.experiments) ? contextResult.experiments : [])
         .find((item: WorkbenchExperiment) => item.id === experimentId) || null;
       if (sequence !== loadSequence.current) return;
-      setDetail(nextDetail);
+      setDetail(previous => {
+        if (!previous || previous.id !== nextDetail.id || !nextDetail.skillExecutionSnapshot) return nextDetail;
+        const accepted = acceptSkillSnapshot(previous.skillExecutionSnapshot || undefined, nextDetail.skillExecutionSnapshot);
+        const config = (nextDetail.configSnapshot || {}) as Record<string, unknown>;
+        if (!accepted.taskId) return { ...nextDetail, skillExecutionSnapshot: accepted };
+        const active = Object.values(accepted.progress).some(sides => Object.values(sides).some(runs => runs?.some(run => ['running', 'waiting', 'retry_wait'].includes(run.status))));
+        const input = { caseIds: Object.keys(accepted.progress), repeatRounds: Number(config.repeatRounds) || 1,
+          evaluatorIds: nextDetail.evaluatorIds, caseStates: accepted.caseStates,
+          settled: !active && ['failed', 'cancelled'].includes(nextDetail.status) };
+        const metrics = summarizeWorkbenchItemProgress({ ...input,
+          executionSides: Array.isArray(config.executionSides) ? config.executionSides.filter((side): side is 'a' | 'b' => side === 'a' || side === 'b') : nextDetail.preset === 'skill-ab' ? ['a', 'b'] : ['b'] });
+        const sideProgress = nextDetail.preset === 'skill-ab' ? {
+          a: summarizeWorkbenchItemProgress({ ...input, executionSides: ['a'] }),
+          b: summarizeWorkbenchItemProgress({ ...input, executionSides: ['b'] }),
+        } : nextDetail.sideProgress;
+        const status = !active && ['done', 'partial', 'failed', 'cancelled'].includes(previous.status) && nextDetail.status === 'running'
+          ? previous.status : workbenchCompletionStatus(active ? 'running' : nextDetail.status, metrics.executionProgress, metrics.evaluationProgress);
+        return { ...nextDetail, status, executionProgress: metrics.executionProgress, evaluationProgress: metrics.evaluationProgress, sideProgress, skillExecutionSnapshot: accepted };
+      });
+      setRefreshFailed(false);
       setWorkbenchExperiment(nextWorkbench);
       const snapshot = (nextWorkbench?.configSnapshot || nextDetail.configSnapshot || {}) as Record<string, unknown>;
       const datasetId = typeof snapshot.datasetId === 'string' ? snapshot.datasetId : '';
@@ -270,6 +298,7 @@ export function SkillExperimentResult({
       }
       if (sequence === loadSequence.current) setError('');
     } catch (loadError) {
+      if (sequence === loadSequence.current) setRefreshFailed(true);
       if (!silent && sequence === loadSequence.current) setError(loadError instanceof Error ? loadError.message : '加载实验失败');
     } finally {
       if (!silent && sequence === loadSequence.current) setLoading(false);
@@ -284,11 +313,11 @@ export function SkillExperimentResult({
   }, [load]);
 
   useEffect(() => {
-    const caseStates = workbenchExperiment?.grayscaleTask?.caseStates || {};
+    const caseStates = detail?.skillExecutionSnapshot?.caseStates || workbenchExperiment?.grayscaleTask?.caseStates || {};
     const hasUnfinishedRuns = (detail?.preset === 'skill-ab' || detail?.preset === 'use-case') && Object.values(caseStates).some((state) =>
       [...sideRuns(state.a), ...sideRuns(state.b)].some((run) => !terminal(run.status)),
     );
-    if (!detail || (!['draft', 'running'].includes(detail.status) && !hasUnfinishedRuns)) return;
+    if (!detail || (!['draft', 'running'].includes(detail.status) && !hasUnfinishedRuns && !refreshFailed)) return;
     let cancelled = false;
     let timer = 0;
     const schedule = () => {
@@ -302,14 +331,22 @@ export function SkillExperimentResult({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [detail, load, workbenchExperiment]);
+  }, [detail, load, workbenchExperiment, refreshFailed]);
 
-  const states = useMemo(() => workbenchExperiment?.grayscaleTask?.caseStates || {}, [workbenchExperiment]);
+  const states = useMemo(() => {
+    const execution = detail?.skillExecutionSnapshot;
+    const traceCases = execution
+      ? Object.values(execution.progress).flatMap(sides => Object.values(sides).flatMap(runs => runs || []))
+        .filter(run => run.experimentCaseId)
+        .map(run => ({ id: run.experimentCaseId!, traceAttemptStatus: run.stage === 2 && run.status === 'waiting' ? 'waiting_trace' : null }))
+      : detail?.cases || [];
+    return withWorkbenchTraceProgress(execution?.caseStates || workbenchExperiment?.grayscaleTask?.caseStates || {}, traceCases);
+  }, [detail?.skillExecutionSnapshot, detail?.cases, workbenchExperiment]);
   const hasActiveRuns = useMemo(() => Object.values(states).some((state) => (
     [...sideRuns(state.a), ...sideRuns(state.b)].some(runIsActive)
   )), [states]);
   const snapshot = useMemo(
-    () => (workbenchExperiment?.configSnapshot || detail?.configSnapshot || {}) as Record<string, unknown>,
+    () => (detail?.configSnapshot || workbenchExperiment?.configSnapshot || {}) as Record<string, unknown>,
     [detail?.configSnapshot, workbenchExperiment?.configSnapshot],
   );
   const caseIds = useMemo(
@@ -576,6 +613,7 @@ export function SkillExperimentResult({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background p-6">
       <div className="w-full space-y-4">
+        {refreshFailed && <p role="alert" className="text-sm text-foreground-muted">进度刷新失败，正在重试。当前保留最近一次已确认的进度。</p>}
         <div className="flex items-start gap-3">
           <button type="button" onClick={onBack} className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground-secondary">‹ 返回</button>
           <div>
@@ -680,6 +718,7 @@ export function SkillExperimentResult({
           status={displayStatus}
           preset={detail.preset}
           traceSource={snapshot.traceSource as string | undefined}
+          waitingTrace={detail.skillExecutionSnapshot ? Object.values(detail.skillExecutionSnapshot.progress).flatMap(sides => Object.values(sides).flatMap(runs => runs || [])).filter(run => run.stage === 2 && run.status === 'waiting').length : detail.traceProgress?.waitingTrace}
           executionProgress={detail.executionProgress}
           evaluationProgress={detail.evaluationProgress}
           sideProgress={detail.sideProgress}
@@ -766,12 +805,13 @@ export function SkillExperimentResult({
               <div className="max-h-[520px] overflow-x-auto overflow-y-auto [scrollbar-gutter:stable]">
                 <table
                   className="w-full table-fixed text-left text-sm"
-                  style={{ minWidth: 1608 }}
+                  style={{ minWidth: 1816 }}
                 >
                   <thead className="sticky top-0 z-10 bg-background-secondary text-foreground-muted">
                     <tr>
                       <th className="w-40 px-3 py-2 font-medium">输入</th>
                       <th className="w-40 px-3 py-2 font-medium">预期输出</th>
+                      <th className="w-52 px-3 py-2 font-medium">执行进度</th>
                       <th className="w-48 px-3 py-2 font-medium">A · {versionALabel} 实际输出</th>
                       <th className="w-[72px] px-2 py-2 font-medium">综合得分</th>
                       <th className="w-[72px] px-2 py-2 font-medium">结果得分</th>
@@ -823,6 +863,11 @@ export function SkillExperimentResult({
                         <tr key={comparison.caseId} className="align-top hover:bg-background-secondary/60">
                           <td className="px-3 py-3"><ExpandableCellText value={input} /></td>
                           <td className="px-3 py-3"><ExpandableCellText value={reference} muted /></td>
+                          <td className="space-y-3 px-3 py-3">{(['a', 'b'] as const).map(side => <SkillCaseExecutionProgress key={side}
+                            runs={detail.skillExecutionSnapshot?.progress[comparison.caseId]?.[side]} title={input || 'Case'}
+                            versionLabel={`${side.toUpperCase()} · ${side === 'a' ? versionALabel : versionBLabel}`}
+                            refreshingFailed={refreshFailed} retrying={retryingRun === `${comparison.caseId}:${side}` || retryingRun === `${comparison.caseId}:both`}
+                            evaluatorName={evaluatorLookup.nameOf} onRefresh={() => { void load(true); }} />)}</td>
                           <td className="px-3 py-3"><RunOutput run={aRun} output={comparison.a.output} /></td>
                           <td className="px-2 py-3 font-semibold text-foreground">{scoreText(comparison.a.score, summaryScoreStatus(comparison.a))}</td>
                           <td className="px-2 py-3 text-foreground">{scoreText(aResultScore, comparison.a.status)}</td>
@@ -835,14 +880,14 @@ export function SkillExperimentResult({
                           <td className="sticky right-64 bg-card px-2 py-3">
                             <div className="flex items-center gap-2">
                               <button type="button" disabled={!aExperimentCaseId} onClick={() => aExperimentCaseId && setCaseDetailId(aExperimentCaseId)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                              <button type="button" disabled={retryBusy || aBusy} onClick={() => void retryRun(comparison.caseId, 'a')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:a` ? '提交中' : aBusy ? (aRetryMode === 'evaluation' ? '评测中' : '执行中') : aRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
+                              <button type="button" disabled={retryBusy || aBusy} onClick={() => void retryRun(comparison.caseId, 'a')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:a` ? '提交中' : aBusy ? (comparison.a.status === 'waiting_trace' ? '等待 Trace 入库' : aRetryMode === 'evaluation' ? '评测中' : '执行中') : aRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                             </div>
                             {retryError.key === `${comparison.caseId}:a` && <small className="mt-1 block whitespace-normal text-sm leading-4 text-error">{retryError.message}</small>}
                           </td>
                           <td className="sticky right-32 bg-card px-2 py-3">
                             <div className="flex items-center gap-2">
                               <button type="button" disabled={!bExperimentCaseId} onClick={() => bExperimentCaseId && setCaseDetailId(bExperimentCaseId)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                              <button type="button" disabled={retryBusy || bBusy} onClick={() => void retryRun(comparison.caseId, 'b')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:b` ? '提交中' : bBusy ? (bRetryMode === 'evaluation' ? '评测中' : '执行中') : bRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
+                              <button type="button" disabled={retryBusy || bBusy} onClick={() => void retryRun(comparison.caseId, 'b')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:b` ? '提交中' : bBusy ? (comparison.b.status === 'waiting_trace' ? '等待 Trace 入库' : bRetryMode === 'evaluation' ? '评测中' : '执行中') : bRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                             </div>
                             {retryError.key === `${comparison.caseId}:b` && <small className="mt-1 block whitespace-normal text-sm leading-4 text-error">{retryError.message}</small>}
                           </td>
@@ -881,11 +926,12 @@ export function SkillExperimentResult({
                     <h3 className="text-base font-semibold text-foreground">Case 明细</h3>
                   </div>
                   <div className="max-h-[520px] overflow-x-auto overflow-y-auto [scrollbar-gutter:stable]">
-                    <table className="w-full table-fixed text-left text-sm" style={{ minWidth: 1080 }}>
+                    <table className="w-full table-fixed text-left text-sm" style={{ minWidth: 1288 }}>
                       <thead className="sticky top-0 z-10 bg-background-secondary text-foreground-muted">
                         <tr>
                           <th className="w-48 px-3 py-2 font-medium">输入</th>
                           <th className="w-48 px-3 py-2 font-medium">预期输出</th>
+                          <th className="w-52 px-3 py-2 font-medium">执行进度</th>
                           <th className="w-64 px-3 py-2 font-medium">实际输出</th>
                           <th className="w-20 px-2 py-2 font-medium">综合得分</th>
                           <th className="w-20 px-2 py-2 font-medium">结果得分</th>
@@ -924,6 +970,9 @@ export function SkillExperimentResult({
                             <tr key={caseId} className="align-top hover:bg-background-secondary/60">
                               <td className="px-3 py-3"><ExpandableCellText value={input} /></td>
                               <td className="px-3 py-3"><ExpandableCellText value={reference} muted /></td>
+                              <td className="px-3 py-3"><SkillCaseExecutionProgress runs={detail.skillExecutionSnapshot?.progress[caseId]?.b}
+                                title={input || 'Case'} refreshingFailed={refreshFailed} retrying={retryingRun === retryKey}
+                                evaluatorName={evaluatorLookup.nameOf} onRefresh={() => { void load(true); }} /></td>
                               <td className="px-3 py-3"><RunOutput run={latestRun} output={summary.output} /></td>
                               <td className="px-2 py-3 font-semibold text-foreground">{scoreText(summary.score, existingTrace ? summary.status : summaryScoreStatus(summary))}</td>
                               <td className="px-2 py-3 text-foreground">{scoreText(resultScore.score, resultScore.status)}</td>
@@ -931,7 +980,7 @@ export function SkillExperimentResult({
                               <td className="sticky right-0 bg-card px-3 py-3">
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                   <button type="button" disabled={!experimentCase?.id} onClick={() => experimentCase?.id && setCaseDetailId(experimentCase.id)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                                  <button type="button" disabled={!canRetry || busy} onClick={() => void (existingTrace ? retryExistingCase(caseId) : retryRun(caseId, 'b'))} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === retryKey ? '提交中' : existingTrace ? (summary.status === 'evaluating' ? '评测中' : summary.status === 'executed' ? '待评测' : '重新评测') : busy ? (retryMode === 'evaluation' ? '评测中' : '执行中') : retryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
+                                  <button type="button" disabled={!canRetry || busy} onClick={() => void (existingTrace ? retryExistingCase(caseId) : retryRun(caseId, 'b'))} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === retryKey ? '提交中' : existingTrace ? (summary.status === 'evaluating' ? '评测中' : summary.status === 'executed' ? '待评测' : '重新评测') : busy ? (summary.status === 'waiting_trace' ? '等待 Trace 入库' : retryMode === 'evaluation' ? '评测中' : '执行中') : retryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                                   <DeleteExperimentButton user={user} experimentId={experimentId} caseId={existingTrace ? caseId : `dataset:${caseId}`} completed={existingTrace ? !['executed', 'evaluating'].includes(summary.status) : isCompletedWorkbenchCase(detail.status, [sideState])} className="text-sm" onDeleted={(experimentDeleted) => experimentDeleted ? onBack() : load(true)} />
                                 </div>
                                 {retryError.key === retryKey && <small className="mt-1 block whitespace-normal text-sm leading-4 text-error">{retryError.message}</small>}

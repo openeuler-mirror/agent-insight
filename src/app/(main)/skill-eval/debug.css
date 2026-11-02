@@ -4164,7 +4164,7 @@
 .ab-page-v2 .winner-indicator .ti { font-size: 12px; }
 
 /* ─────────────────────────────────────────────────────────────────────────
- * A/B columns — recolored per docs/design/foundations.md §B.6.1 chart palette.
+ * A/B columns — recolored per design/foundations.md §B.6.1 chart palette.
  * A (control)  = Sky    (slot 2) — cool, distinct from primary
  * B (experiment) = Violet (slot 6) — AI/model semantic
  * Replaces previous amber (warning-reserved) / blue (running-reserved) usage.

@@ -212,7 +212,7 @@ fi
   ])
 })
 
-test('start.sh integration: reuse, source change, forced and failed rebuilds', { timeout: 90000 }, async t => {
+test('start.sh integration: first worker generation, reuse, source change, forced and failed rebuilds', { timeout: 90000 }, async t => {
   const f = fixture(t)
   const net = await import('node:net')
   const probe = net.createServer()
@@ -221,18 +221,27 @@ test('start.sh integration: reuse, source change, forced and failed rebuilds', {
   await new Promise<void>(resolve => probe.close(() => resolve()))
   const pids = new Set<number>()
   t.after(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch {} } })
-  for (const file of ['start.sh', 'start-build-state.cjs', 'verify-standalone.cjs', 'db_push.sh']) {
+  for (const file of ['start.sh', 'start-build-state.cjs', 'verify-standalone.cjs', 'db_push.sh', 'build-trace-dataset-worker.cjs']) {
     f.write(`scripts/${file}`, fs.readFileSync(`scripts/${file}`, 'utf8'))
   }
   for (const file of ['prepare-ras-sqlite-schema.js', 'stop-orphan-trace-consumer.cjs', 'benchmark/generate-catalog.cjs', 'trace-datasets/remove-legacy-summary.cjs']) f.write(`scripts/${file}`, '')
   f.write('home/.env', '')
   f.write('public/logo.svg', 'logo')
   f.write('prisma/schema.prisma', 'schema')
+  f.write('src/server/trace-datasets/worker.ts', 'worker runtime')
+  f.write('node_modules/esbuild/index.js', `
+const fs = require('node:fs');
+exports.buildSync = ({ entryPoints, outfile }) => {
+  if (process.env.FAIL_WORKER) throw new Error('worker generation failed');
+  fs.writeFileSync(outfile, fs.readFileSync(entryPoints[0]));
+};
+`)
   f.write('fixture-build.cjs', `
 const fs = require('node:fs'); const path = require('node:path');
 function write(file, content = '') { fs.mkdirSync(path.dirname(file), {recursive:true}); fs.writeFileSync(file, content); }
 fs.appendFileSync(process.env.CALLS, 'build\\n');
 if (process.env.FAIL_BUILD) process.exit(1);
+require('./scripts/build-trace-dataset-worker.cjs').buildTraceDatasetWorker();
 write('.next/BUILD_ID', 'build-1');
 write('.next/standalone/server.js', "require('node:http').createServer((req,res)=>res.end(String(process.pid))).listen(Number(process.env.PORT), '0.0.0.0')");
 write('.next/standalone/.next/BUILD_ID', 'build-1');
@@ -253,16 +262,19 @@ if (process.argv[3] === 'generate') {
     fs.chmodSync(path.join(f.root, 'bin', name), 0o755)
   }
   const calls = path.join(f.root, 'commands.log')
-  const run = (args: string[] = [], fail = false) => {
+  const run = (args: string[] = [], fail = false, failWorker = false) => {
     const env = { ...process.env, ...f.env, PATH: `${path.join(f.root, 'bin')}:${process.env.PATH}`, DATABASE_URL: `file:${f.root}/home/test.db`, CALLS: calls } as NodeJS.ProcessEnv
     for (const key of ['PORT', 'DB_HOST', 'AGENT_INSIGHT_DATA_DIR', 'AGENT_INSIGHT_BENCHMARK']) delete env[key]
     if (fail) env.FAIL_BUILD = '1'
+    if (failWorker) env.FAIL_WORKER = '1'
     const result = spawnSync('bash', [path.join(f.root, 'scripts/start.sh'), '--port', String(port), ...args], { env, encoding: 'utf8', timeout: 15000 })
     for (const match of result.stdout.matchAll(/^PID: (\d+)/gm)) pids.add(Number(match[1]))
     return result
   }
+  assert.equal(fs.existsSync(path.join(f.root, 'generated/trace-datasets/worker.cjs')), false)
   const first = run()
   assert.equal(first.status, 0, first.stdout + first.stderr)
+  assert.equal(fs.readFileSync(path.join(f.root, 'generated/trace-datasets/worker.cjs'), 'utf8'), 'worker runtime')
   const second = run()
   assert.equal(second.status, 0, second.stdout + second.stderr)
   assert.match(second.stdout, /skipping Next.js build/)
@@ -276,8 +288,12 @@ if (process.argv[3] === 'generate') {
   assert.equal(fs.existsSync(state.statePaths(f.root).build), false)
   const recovered = run()
   assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr)
+  const workerFailed = run([], false, true)
+  assert.equal(workerFailed.status, 1)
+  assert.match(workerFailed.stderr, /worker generation failed/)
+  assert.doesNotMatch(workerFailed.stdout, /\[stage\] Next.js build|Server started successfully/)
   const commands = fs.readFileSync(calls, 'utf8').trim().split('\n')
   assert.equal(commands.filter(s => s === 'build').length, 5)
   assert.equal(commands.filter(s => s === 'prisma generate').length, 1)
-  assert.equal(commands.filter(s => s === 'prisma db push --skip-generate').length, 6)
+  assert.equal(commands.filter(s => s === 'prisma db push --skip-generate').length, 7)
 })

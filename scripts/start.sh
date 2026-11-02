@@ -417,8 +417,9 @@ fi
 
 stage_done
 stage_begin "build fingerprint and artifact check"
-# Prebuild generates these files; prepare them before fingerprinting as well.
+# Next.js 构建也会生成这些文件，必须在记录指纹前准备齐全。
 node scripts/benchmark/generate-catalog.cjs || exit 1
+node scripts/build-trace-dataset-worker.cjs || exit 1
 node scripts/start-build-state.cjs check $FORCE_REBUILD
 BUILD_STATUS=$?
 [ "$BUILD_STATUS" -le 1 ] || exit "$BUILD_STATUS"

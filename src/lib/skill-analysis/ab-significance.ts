@@ -53,9 +53,9 @@ function betacf(a: number, b: number, x: number): number {
   const maxIterations = 200;
   const epsilon = 3e-7;
   const tiny = 1e-30;
-  let qab = a + b;
-  let qap = a + 1;
-  let qam = a - 1;
+  const qab = a + b;
+  const qap = a + 1;
+  const qam = a - 1;
   let c = 1;
   let d = 1 - (qab * x) / qap;
   if (Math.abs(d) < tiny) d = tiny;

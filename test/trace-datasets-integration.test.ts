@@ -304,11 +304,11 @@ test('manager admission, FIFO, restart, stale messages, clock rollback and orpha
     await mkdir(protectedPath); await writeFile(path.join(protectedPath, 'body'), 'keep');
     await symlink(protectedPath, manager.dir('alice', unsafe.jobId));
     const cleanup = await manager.remove('alice', unsafe.datasetId);
-    assert.equal((await manager.deletion('alice', cleanup!.deletionId)).status, 'cleanup_failed');
+    await waitUntil(() => manager.deletion('alice', cleanup!.deletionId), result => result.status === 'cleanup_failed');
     assert.equal(await readFile(path.join(protectedPath, 'body'), 'utf8'), 'keep');
     await unlink(manager.dir('alice', unsafe.jobId));
     await manager.remove('alice', unsafe.datasetId);
-    assert.equal((await manager.deletion('alice', cleanup!.deletionId)).status, 'deleted');
+    await waitUntil(() => manager.deletion('alice', cleanup!.deletionId), result => result.status === 'deleted');
     await manager.close();
     const retired: (Awaited<ReturnType<typeof manager.create>> & { replayConfig: typeof config & { description: string } })[] = [];
     const { validateConfig } = await import('../src/lib/trace-datasets/contracts');

@@ -1307,6 +1307,7 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
     assert.deepEqual(
       listOtelTraceAdapters().map(adapter => adapter.id),
       [
+        "xgovernor-agent",
         "actrail",
         "langfuse-langgraph",
         "hermes",
@@ -1319,6 +1320,7 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
         "pi-agent",
         "workbuddy",
         "mcts-xgovernor",
+        "dify",
         "generic",
       ],
     );

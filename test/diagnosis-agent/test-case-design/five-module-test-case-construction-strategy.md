@@ -125,7 +125,7 @@
 | **真实 trace 改造**（从 jiuwenswarm 模板注入错误） | 第 3-4 层时序和边界，真实度高 | 约 20% |
 | **真实故障 trace**（从实际诊断中收集） | 第 5-6 层协议验证，含真实噪声 | 约 10% |
 
-合成 trace 的骨架参考 [test/agent-debug-diagnosis/](../../../test/agent-debug-diagnosis/) 现有 jiuwenswarm 方言格式，保持字段结构一致。
+合成 trace 的骨架参考 [test/agent-debug-diagnosis/](../../agent-debug-diagnosis/) 现有 jiuwenswarm 方言格式，保持字段结构一致。
 
 ---
 

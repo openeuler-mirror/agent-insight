@@ -15,7 +15,6 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
 import { invalidateCursor, loadCheckpoint, toCheckpointRelPath } from './checkpoint';
 import { removeLegacySessionIndex } from '@/lib/ingest/claude-otel/legacy-session-index';
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { Prisma } from '@prisma/client';
 import { NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
@@ -29,6 +30,7 @@ import {
   assertTraceGenerationTarget,
   generateExperimentTraces,
   loadTraceGenerationRetryRequest,
+  reserveTraceRetry,
   TraceGenerationError,
 } from '@/lib/engine/experiment/trace-generation';
 import { prisma } from '@/lib/storage/prisma';
@@ -89,7 +91,7 @@ async function prepareGeneratedTraceRetry(experimentId: string, caseId: string):
         pointsJson: null,
         evidenceJson: null,
         errorMessage: null,
-        attempts: 0,
+        attempts: { increment: 1 },
         durationMs: null,
         humanScore: null,
         humanReason: null,
@@ -171,53 +173,62 @@ export async function POST(
         return NextResponse.json({ error: '该 Benchmark Case 正在收敛结果，请稍后重跑' }, { status: 409 });
       }
       const runId = `erun_${randomUUID().replaceAll('-', '')}`;
-      await prisma.$transaction([
-        prisma.benchmarkCaseRun.create({
-          data: {
-            id: runId,
-            experimentId: id,
-            experimentCaseId: caseId,
-            datasetCaseId: previous.datasetCaseId,
-            ordinal: previous.ordinal,
-            status: 'pending',
-            adapterKey: previous.adapterKey,
-            clientId: previous.clientId,
-            publicPayloadJson: previous.publicPayloadJson,
-            retryOfRunId: previous.id,
-          },
-        }),
-        prisma.experimentCase.update({
-          where: { id: caseId },
-          data: {
-            executionId: null,
-            taskId: null,
-            actualOutput: '',
-            traceGenerationError: null,
-          },
-        }),
-        prisma.experimentEvalResult.updateMany({
-          where: { experimentId: id, caseId },
-          data: {
-            status: 'pending',
-            verdict: null,
-            summary: null,
-            score: null,
-            pointsJson: null,
-            evidenceJson: null,
-            errorMessage: null,
-            durationMs: null,
-            humanScore: null,
-            humanReason: null,
-            humanBy: null,
-            humanAt: null,
-          },
-        }),
-        prisma.experiment.update({ where: { id }, data: { status: 'running' } }),
-        prisma.benchmarkExperimentBinding.update({
-          where: { experimentId: id },
-          data: { schedulerStatus: 'running' },
-        }),
-      ]);
+      const accepted = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const locked = await tx.experimentCase.updateMany({
+          where: { id: caseId, deletedAt: null, benchmarkRuns: { none: { retryOfRunId: previous.id } } },
+          data: { id: caseId },
+        });
+        if (!locked.count) return false;
+        await Promise.all([
+          tx.benchmarkCaseRun.create({
+            data: {
+              id: runId,
+              experimentId: id,
+              experimentCaseId: caseId,
+              datasetCaseId: previous.datasetCaseId,
+              ordinal: previous.ordinal,
+              status: 'pending',
+              adapterKey: previous.adapterKey,
+              clientId: previous.clientId,
+              publicPayloadJson: previous.publicPayloadJson,
+              retryOfRunId: previous.id,
+            },
+          }),
+          tx.experimentCase.update({
+            where: { id: caseId },
+            data: {
+              executionId: null,
+              taskId: null,
+              actualOutput: '',
+              traceGenerationError: null,
+            },
+          }),
+          tx.experimentEvalResult.updateMany({
+            where: { experimentId: id, caseId },
+            data: {
+              status: 'pending',
+              verdict: null,
+              summary: null,
+              score: null,
+              pointsJson: null,
+              evidenceJson: null,
+              errorMessage: null,
+              durationMs: null,
+              humanScore: null,
+              humanReason: null,
+              humanBy: null,
+              humanAt: null,
+            },
+          }),
+          tx.experiment.update({ where: { id }, data: { status: 'running' } }),
+          tx.benchmarkExperimentBinding.update({
+            where: { experimentId: id },
+            data: { schedulerStatus: 'running' },
+          }),
+        ]);
+        return true;
+      });
+      if (!accepted) return NextResponse.json({ error: '该 Case 已开始新的执行，请刷新后查看' }, { status: 409 });
       const runtime = defaultEvaluatorRuntimeConfigProvider.snapshot();
       const requestUrl = new URL(req.url);
       const callbackHost = req.headers.get('x-forwarded-host') || requestUrl.host;
@@ -248,11 +259,11 @@ export async function POST(
       : null;
     if (genericRequest) {
       await assertTraceGenerationTarget(genericRequest);
-      await prepareGeneratedTraceRetry(id, caseId);
+      const reservedAttemptIds = await reserveTraceRetry(genericRequest);
       backgroundOwnsLock = true;
       void (async () => {
         try {
-          const generated = await generateExperimentTraces(genericRequest, { forceNewTrace: true });
+          const generated = await generateExperimentTraces(genericRequest, { forceNewTrace: true, reservedAttemptIds });
           if (!generated.readyCaseIds.length) {
             await settleAfterTraceRetryFailure(id);
             return;
@@ -266,7 +277,7 @@ export async function POST(
           active.delete(lockKey);
         }
       })();
-      return NextResponse.json({ kind: 'trace', status: 'running' });
+      return NextResponse.json({ kind: 'trace', status: 'running', attemptId: reservedAttemptIds[caseId] });
     }
 
     if (row.fiTaskId && row.fiRunId && row.faultInjectionType) {

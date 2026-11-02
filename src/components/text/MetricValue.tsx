@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/foundations.md §0.2 anchor ③ + §C.3 — tabular-nums + 单位下标 + Intl.NumberFormat。
+// design/foundations.md §0.2 anchor ③ + §C.3 — tabular-nums + 单位下标 + Intl.NumberFormat。
 // 极简首版：满足 KPI 卡 / 表格数值列的对位需求；compact 用 Intl 缩写（1.23M）。
 import * as React from 'react';
 import { cn } from '@/lib/utils';

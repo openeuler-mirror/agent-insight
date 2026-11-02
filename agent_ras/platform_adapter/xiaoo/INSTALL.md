@@ -2,7 +2,7 @@
 
 Protocol inproc L3 + Daemon SSE（stock master）。`tool_post` 不得 hello；plugin hooker Host unwired。
 
-约束见 [opencode-xiaoo-integration.md](../../../docs/agent-ras/designs/features/opencode-xiaoo-integration.md) §4；操作见 [`platform-xiaoo.md`](../../../docs/agent-ras/guides/platform-xiaoo.md)。
+约束见 [opencode-xiaoo-integration.md](../../../design/reliability/agent-ras/opencode-xiaoo-integration.md) §4；操作见 [`platform-xiaoo.md`](../../../docs/zh/how-to/reliability/agent-ras/platform-xiaoo.md)。
 
 ## 文件地图
 

@@ -1,0 +1,3 @@
+# Agent RAS 文档
+
+正文与导航已迁至 [Agent RAS 文档](./navigation.md)。保留本入口，供仓库目录浏览和旧链接继续使用。

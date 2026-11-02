@@ -201,7 +201,7 @@ export function decodeOtlpProtobuf(
   let decoded: any;
   try {
     // 延迟加载 protobuf root（避免模块初始化时加载 protobuf 依赖）
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const root = require('@opentelemetry/otlp-transformer/build/src/generated/root');
     const traceRequestType = root.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
     decoded = traceRequestType.decode(buf);

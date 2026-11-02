@@ -324,6 +324,10 @@ test('collector endpoint serves a directly deployable Python runtime archive', a
   assert.ok(entries.includes('agent_insight_llamaindex/__init__.py'));
   assert.ok(entries.includes('README.md'));
   assert.match(archive.readAsText('README.md'), /# LlamaIndex Trace Collector/);
+  assert.equal(
+    archive.readAsText('README.md'),
+    readFileSync('docs/zh/how-to/observability/llamaindex-trace-collector.md', 'utf8'),
+  );
   assert.ok(!entries.includes('pyproject.toml'));
   assert.ok(!entries.some((name) => name.startsWith('src/')));
   assert.ok(!entries.includes('install.py'));
@@ -359,7 +363,7 @@ test('collector archive cache invalidates when bundled source changes', (t) => {
 test('local npm server package carries collector source and the relocated README', async (t) => {
   const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as { files: string[] };
   assert.ok(manifest.files.includes('scripts/'));
-  assert.ok(manifest.files.includes('docs/user-guide/observability/llamaindex-trace-collector.md'));
+  assert.ok(manifest.files.includes('docs/zh/how-to/observability/llamaindex-trace-collector.md'));
   assert.ok(!manifest.files.includes('scripts/llamaindex_extension/tests/**'));
   assert.ok(manifest.files.includes('!scripts/llamaindex_extension/tests/**'));
   assert.ok(manifest.files.includes('!scripts/llamaindex_extension/pyproject.toml'));
@@ -382,7 +386,8 @@ test('local npm server package carries collector source and the relocated README
   const readme = path.join(
     packageRoot,
     'docs',
-    'user-guide',
+    'zh',
+    'how-to',
     'observability',
     'llamaindex-trace-collector.md',
   );

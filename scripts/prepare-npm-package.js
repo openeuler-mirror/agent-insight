@@ -19,6 +19,19 @@
 const fs = require('fs')
 const path = require('path')
 
+function buildTraceLatencyRepair(packageRoot, outputFile = path.join(packageRoot, 'scripts', 'repair_trace_latency.cjs')) {
+  require('esbuild').buildSync({
+    absWorkingDir: packageRoot,
+    entryPoints: ['scripts/repair_trace_latency.ts'],
+    outfile: outputFile,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node20',
+    external: ['@prisma/client'],
+  })
+}
+
 function copyDirIfMissing(sourceDir, targetDir, label) {
   if (!fs.existsSync(sourceDir) || fs.existsSync(targetDir)) {
     return false
@@ -64,6 +77,7 @@ const STANDALONE_JUNK_DIRS = [
   'features',
   'tools',
   'docs',
+  'design',
   'data',
   'logs',
   'src',
@@ -166,7 +180,8 @@ function copyLlamaIndexCollector(packageRoot, standaloneDir) {
   const sourceReadme = path.join(
     packageRoot,
     'docs',
-    'user-guide',
+    'zh',
+    'how-to',
     'observability',
     'llamaindex-trace-collector.md',
   )
@@ -224,6 +239,8 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
     throw new Error('Missing .next/standalone. Run `npm run build` before packaging.')
   }
 
+  buildTraceLatencyRepair(packageRoot)
+
   pruneStandaloneJunk(standaloneDir)
   copyLegalFiles(packageRoot, standaloneDir)
   copyRuntimeSystemSkills(packageRoot, standaloneDir)
@@ -245,6 +262,8 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
     const source = path.join(packageRoot, 'config', 'benchmark', `${scope}.yaml`)
     if (fs.existsSync(source)) fs.copyFileSync(source, path.join(standaloneDir, 'config', 'benchmark', `${scope}.yaml`))
   }
+  fs.mkdirSync(standaloneScriptsDir, { recursive: true })
+  fs.copyFileSync(path.join(scriptsDir, 'repair_trace_latency.cjs'), path.join(standaloneScriptsDir, 'repair_trace_latency.cjs'))
   copyLlamaIndexCollector(packageRoot, standaloneDir)
 
   const prismaDir = path.join(packageRoot, 'prisma')
@@ -289,6 +308,7 @@ if (require.main === module) {
 module.exports = {
   copyLegalFiles,
   copyBenchmarkExecutionRuntime,
+  buildTraceLatencyRepair,
   copyLlamaIndexCollector,
   ensureStandalonePackage,
 }

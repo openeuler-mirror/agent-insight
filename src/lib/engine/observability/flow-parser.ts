@@ -457,7 +457,7 @@ export function generateMermaidCode(flow: ParsedFlowResult): string {
 
       if (currentIsBranch && nextIsBranch) {
         let sameBranch = false;
-        for (const [_, stepIds] of branchStepsMap) {
+        for (const [, stepIds] of branchStepsMap) {
           const currentIndex = stepIds.indexOf(currentStep.id);
           const nextIndex = stepIds.indexOf(nextStep.id);
           if (currentIndex !== -1 && nextIndex !== -1 && nextIndex === currentIndex + 1) {
@@ -1815,53 +1815,12 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function summarizeInteractions(interactions: InteractionMessage[]): string {
-  if (!Array.isArray(interactions) || interactions.length === 0) {
-    return "无交互记录";
-  }
-
-  const summaries: string[] = [];
-  
-  interactions.forEach((interaction, index) => {
-    const msg = interaction;
-    const role = msg.role || 'unknown';
-    
-    let content = '';
-    if (typeof msg.content === 'string') {
-      content = msg.content.substring(0, 200);
-    } else if (Array.isArray(msg.content)) {
-      const textParts = msg.content
-        .filter((c: InteractionContent) => c.type === 'text')
-        .map((c: InteractionContent) => c.text || '')
-        .join(' ');
-      content = textParts.substring(0, 200);
-      
-      const toolCalls = msg.content.filter((c: InteractionContent) => 
-        c.type === 'toolCall' || c.type === 'tool_use'
-      );
-      if (toolCalls.length > 0) {
-        content += ` [工具调用: ${toolCalls.map((t: InteractionContent) => t.name).join(', ')}]`;
-      }
-    }
-    
-    summaries.push(`[${index}] ${role.toUpperCase()}: ${content}${content.length >= 200 ? '...' : ''}`);
-  });
-
-  return summaries.join('\n');
-}
-
 export async function getParsedFlow(skillId: string, version: number, user?: string | null) {
   return db.findParsedFlow(skillId, version, user || null);
 }
 
 export async function getExecutionMatch(executionId: string) {
   return db.findExecutionMatch(executionId);
-}
-
-interface DynamicStep {
-  id: string;
-  name: string;
-  type: 'action' | 'decision' | 'output';
 }
 
 export interface ExtractedStep {
@@ -1883,11 +1842,6 @@ interface EvaluationStep {
 
 interface BatchExtractResult {
   steps: ExtractedStep[];
-}
-
-interface DynamicAnalysisResult {
-  steps: DynamicStep[];
-  analysis: string;
 }
 
 export async function analyzeDynamicOnly(
@@ -2041,98 +1995,6 @@ function generateActualTrajectoryMermaidCode(
     const nodeId = `S${index + 1}`;
     const color = '#38bdf8'; // 蓝色
     lines.push(`    style ${nodeId} fill:${color},color:#0f172a`);
-  });
-
-  return lines.join('\n');
-}
-
-function generateDynamicOnlyPrompt(interactions: string): string {
-  return `
-你是一个专家，擅长分析 Agent 执行轨迹并提取执行流程。
-
-实际执行轨迹：
----
-${interactions}
----
-
-你的任务是：
-1. 分析执行轨迹，提取实际执行的步骤序列
-2. 为每个步骤命名（具体、明确的中文描述）
-3. 提供整体分析
-
-步骤提取规则：
-
-一、步骤划分原则
-1. 完整性：一个步骤完成一个完整的子任务
-2. 独立性：一个步骤可以独立理解和描述
-3. 目的性：每个步骤有明确的业务目标
-4. 原子性：步骤内部的操作是紧密相关的，不应再拆分
-
-二、命名规范
-1. 格式：动词 + 对象 + （可选）目的/结果
-2. 必须具体、明确，禁止模糊命名
-3. 正确示例：
-   - "读取配置文件获取数据库连接参数"
-   - "调用天气API获取城市天气数据"
-   - "解析用户输入提取意图和实体"
-4. 禁止示例：
-   - "检查配置"（太模糊，应说明检查什么）
-   - "分析结果"（太抽象，应说明分析什么结果）
-   - "处理数据"（太笼统，应说明处理什么数据）
-
-三、步骤类型
-- action：执行操作（如：读取文件、调用API、写入数据库）
-- decision：做出判断（如：判断权限、检查条件、验证数据）
-- output：输出结果（如：生成报告、返回结果、输出错误信息）
-
-四、步骤数量
-- 不限制数量，但相似的连续操作应合并为一个步骤
-- 同一操作多次执行（可能因为某些报错）应总结成一个步骤
-- 每个步骤都应该有独立存在的价值
-
-请只用 JSON 对象回复，格式如下：
-{
-  "steps": [
-    {
-      "id": "step-1",
-      "name": "具体的步骤名称（动词+对象格式）",
-      "type": "action"
-    }
-  ],
-  "analysis": "详细分析执行过程，包括：执行的主要步骤、是否有异常操作、执行效率评估、改进建议等。"
-}
-`;
-}
-
-function generateDynamicOnlyMermaidCode(steps: DynamicStep[]): string {
-  const lines: string[] = ['flowchart LR'];
-  
-  steps.forEach((step, index) => {
-    const nodeId = `S${index + 1}`;
-    const label = sanitizeMermaidLabel(`${index + 1}. ${step.name}`);
-    const nodeType = step.type === 'decision' ? '{' + label + '}' : 
-                     step.type === 'output' ? '((' + label + '))' :
-                     '[' + label + ']';
-    lines.push(`    ${nodeId}${nodeType}`);
-  });
-
-  for (let i = 0; i < steps.length - 1; i++) {
-    const currentNode = `S${i + 1}`;
-    const nextNode = `S${i + 2}`;
-    lines.push(`    ${currentNode} --> ${nextNode}`);
-  }
-
-  lines.push('');
-  
-  steps.forEach((step, index) => {
-    const nodeId = `S${index + 1}`;
-    if (step.type === 'output') {
-      lines.push(`    style ${nodeId} fill:#4ade80,color:#0f172a`);
-    } else if (step.type === 'decision') {
-      lines.push(`    style ${nodeId} fill:#fbbf24,color:#0f172a`);
-    } else {
-      lines.push(`    style ${nodeId} fill:#38bdf8,color:#0f172a`);
-    }
   });
 
   return lines.join('\n');

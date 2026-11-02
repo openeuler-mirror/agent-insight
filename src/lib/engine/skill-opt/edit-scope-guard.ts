@@ -23,7 +23,7 @@
  *   - 禁删基线文件：被删就用基线快照还原到 workspace；
  *   - 改动行数预算：超 maxChangedLines 标 overBudget（不自动回滚——交 held-out gate / 用户裁决）。
  *
- * 设计：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md（优化回路改进）
+ * 设计：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md（优化回路改进）
  * 独立模块（不依赖 opencode SDK），便于单测。
  */
 

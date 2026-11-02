@@ -15838,7 +15838,7 @@ END L-25bd22427e27b0d3
 
 BEGIN L-25f4da9c795a5425
 Mermaid 11.16.0 documentation bundle
-Files: docs/user-guide/vendor/mermaid.min.js; docs/developer-guide/vendor/mermaid.min.js
+Files: docs/assets/user-guide/vendor/mermaid.min.js; docs/assets/developer-guide/vendor/mermaid.min.js
 SHA-256: 74d7c46dabca328c2294733910a8aa1ed0c37451776e8d5295da38a2b758fb9b
 
 Original embedded third-party notices:

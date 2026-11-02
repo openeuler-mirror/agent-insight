@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/components.md §2 E.2 — no native <select>. This is a lightweight Select built on
+// design/components.md §2 E.2 — no native <select>. This is a lightweight Select built on
 // existing Radix DropdownMenu (RadioGroup pattern) so we don't add a new package.
 'use client';
 

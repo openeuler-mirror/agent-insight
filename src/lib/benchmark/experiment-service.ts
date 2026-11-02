@@ -29,6 +29,8 @@ import { prisma } from '@/lib/storage/prisma'
 import { benchmarkEvaluatorId, getBenchmarkAdapter } from './adapter-registry'
 import { benchmarkDatasetOwners } from './dataset-ownership'
 import { assertBenchmarkExecutionTarget } from './execution-targets'
+import { prepareExperimentEvaluatorConfigs } from '@/lib/evaluators/evaluator-execution-config.server'
+import { EvaluatorRunConfigValidationError } from '@/lib/evaluators/evaluator-run-config'
 
 type BenchmarkCaseSelection =
   | { mode: 'all' }
@@ -44,6 +46,8 @@ export type CreateBenchmarkExperimentInput = {
   caseSelection: BenchmarkCaseSelection
   clientId: string
   evaluatorIds?: string[]
+  evaluatorConfigs?: unknown
+  evaluatorExecutionConfig?: unknown
   runConfig: {
     platform: string
     agent: string
@@ -205,6 +209,14 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   })
 
   const customEvaluatorSnapshots = input.frozenCustomEvaluators ?? await freezeCustomEvaluators(user, evaluatorIds)
+  let evaluatorConfigsJson: string
+  try {
+    evaluatorConfigsJson = await prepareExperimentEvaluatorConfigs(user, evaluatorIds, input.evaluatorConfigs, input.evaluatorExecutionConfig)
+  } catch (error) {
+    if (error instanceof EvaluatorRunConfigValidationError) throw new BenchmarkProtocolError('EVALUATOR_CONFIG_INVALID', error.message, 400)
+    throw error
+  }
+
   const experiment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const created = await tx.experiment.create({
       data: {
@@ -213,6 +225,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
         type: 'single',
         agentName: canonicalExperimentAgentName(platform, input.agentName?.trim() || agent),
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
+        evaluatorConfigsJson,
         status: 'draft',
         scope: 'benchmark',
         configSnapshotJson: JSON.stringify({
@@ -240,43 +253,38 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
         },
       },
     })
-    for (const row of preparedCases) {
-      const fallbackInput = row.publicPayload.input
-      await tx.experimentCase.create({
-        data: {
-          id: row.experimentCaseId,
+    await tx.experimentCase.createMany({
+      data: preparedCases.map(row => ({
+        id: row.experimentCaseId,
+        experimentId: created.id,
+        input: catalogInputs.get(row.datasetCase.id)
+          || (typeof row.publicPayload.input === 'string' ? row.publicPayload.input : JSON.stringify(row.publicPayload)),
+        datasetInput: JSON.stringify(row.publicPayload),
+        caseValuesJson: JSON.stringify(row.publicPayload),
+      })),
+    })
+    await tx.benchmarkCaseRun.createMany({
+      data: preparedCases.map(row => ({
+        id: row.runId,
+        experimentId: created.id,
+        experimentCaseId: row.experimentCaseId,
+        datasetCaseId: row.datasetCase.id,
+        ordinal: row.ordinal,
+        status: 'pending',
+        adapterKey: dataset.adapterKey,
+        clientId,
+        publicPayloadJson: row.datasetCase.publicPayloadJson,
+      })),
+    })
+    if (input.agentEvalDatasetId) {
+      await tx.experimentEvalResult.createMany({
+        data: preparedCases.flatMap(row => evaluatorIds.map(evaluatorId => ({
           experimentId: created.id,
-          input: catalogInputs.get(row.datasetCase.id)
-            || (typeof fallbackInput === 'string' ? fallbackInput : JSON.stringify(row.publicPayload)),
-          datasetInput: JSON.stringify(row.publicPayload),
-          caseValuesJson: JSON.stringify(row.publicPayload),
-        },
-      })
-      await tx.benchmarkCaseRun.create({
-        data: {
-          id: row.runId,
-          experimentId: created.id,
-          experimentCaseId: row.experimentCaseId,
-          datasetCaseId: row.datasetCase.id,
-          ordinal: row.ordinal,
+          caseId: row.experimentCaseId,
+          evaluatorId,
           status: 'pending',
-          adapterKey: dataset.adapterKey,
-          clientId,
-          publicPayloadJson: row.datasetCase.publicPayloadJson,
-        },
+        }))),
       })
-      if (input.agentEvalDatasetId) {
-        for (const evaluatorId of evaluatorIds) {
-          await tx.experimentEvalResult.create({
-            data: {
-              experimentId: created.id,
-              caseId: row.experimentCaseId,
-              evaluatorId,
-              status: 'pending',
-            },
-          })
-        }
-      }
     }
     return created
   })

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/patterns.md §2 — long ID display: head 6 + ... + tail 4, hover tooltip + copy.
+// design/patterns.md §2 — long ID display: head 6 + ... + tail 4, hover tooltip + copy.
 'use client';
 
 import * as React from 'react';

@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import test, { type TestContext } from 'node:test';
 import { getFileCursor, toCheckpointRelPath } from '@/lib/ingest/otel-consumer/checkpoint';
 import { getOtelSpoolConsumerForTest, runOtelSpoolConsumerTick, startOtelSpoolConsumer, stopOtelSpoolConsumer } from '@/lib/ingest/otel-consumer/consumer';
@@ -25,8 +26,8 @@ import type { SpoolSource } from '@/lib/ingest/otel-consumer/sources';
 import { acquireSpoolUse } from '@/lib/runtime-cleanup/spool-state';
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1500): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return true;
     await new Promise(resolve => setTimeout(resolve, 5));
   }
@@ -88,7 +89,8 @@ test('OTel consumer resumes unchanged pending files after maintenance releases i
     sources: [source],
     saveExecution: async data => { saved += 1; return { success: true, record: data }; },
   });
-  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(await waitUntil(() => (getOtelSpoolConsumerForTest()?.deferredFiles.size ?? 0) > 0),
+    'maintenance must defer the pending file before its lock is released');
   assert.equal(saved, 0);
   assert.equal(getFileCursor(root, toCheckpointRelPath(root, file)).bytes, 0);
   fs.unlinkSync(lock);

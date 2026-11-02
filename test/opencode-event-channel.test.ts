@@ -58,9 +58,43 @@ test('事件通道保留原配置、隔离运行标识，并拒绝其他 Session
   assert.equal(reader.completed, true);
   assert.deepEqual(events, ['ready', 'root', { type: 'session.status' }, 'test/model', 'target-skill']);
   assert.throws(() => prepareOpencodeEventChannel({ OPENCODE_CONFIG_CONTENT: 'broken' }), { code: 'EVENT_MONITOR_UNAVAILABLE' });
+  a.cleanup();
+  b.cleanup();
 });
 
 const cli = process.env.OPENCODE_EVENT_TEST_CLI;
+
+test('v2 native events isolate the requested session, normalize retries and sanitize diagnostics', async () => {
+  const channel = prepareOpencodeEventChannel({}, 2);
+  const plugin = pathToFileURL(path.join(path.dirname(channel.eventFile), 'plugin.mjs')).href;
+  try {
+    const script = `import plugin from ${JSON.stringify(plugin)};
+      const events = [
+        {type:'session.execution.failed',data:{sessionID:'child',error:{message:'wrong-session'}}},
+        {type:'session.step.started',data:{sessionID:'root',model:{providerID:'local',id:'model'}}},
+        {type:'session.retry.scheduled',data:{sessionID:'root',attempt:2,message:'api_key=private-secret'}},
+        {type:'session.text.delta',data:{sessionID:'root',delta:'private model response'}},
+        {type:'session.execution.succeeded',data:{sessionID:'root'}},
+      ];
+      const close = await plugin.setup({event:{subscribe:async function*(){for(const e of events) yield e;}}});
+      await new Promise(resolve=>setImmediate(resolve)); await close();`;
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+        env: { ...process.env, ...channel.env, AGENT_INSIGHT_EXPERIMENT_SESSION_ID: 'root' }, stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let error = ''; child.stderr.on('data', chunk => { error += chunk; });
+      child.once('error', reject); child.once('close', code => code === 0 ? resolve() : reject(new Error(error)));
+    });
+    const output = fs.readFileSync(channel.eventFile, 'utf8');
+    const frames = output.trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(frames[0].kind, 'ready');
+    assert.ok(frames.slice(1).every(frame => frame.sessionId === 'root'));
+    assert.equal(frames.find(frame => frame.signal?.properties?.status?.type === 'retry').signal.properties.status.attempt, 1);
+    assert.equal(frames.find(frame => frame.kind === 'model').model, 'local/model');
+    assert.equal(frames.at(-1).kind, 'finished');
+    assert.doesNotMatch(output, /wrong-session|private-secret|private model response/);
+  } finally { channel.cleanup(); }
+});
 
 test('真实插件仅转发当前根会话，用户输入不算模型活动，诊断脱敏且不转发正文', async () => {
   const plugin = pathToFileURL(path.resolve('scripts/opencode-experiment-events.mjs')).href;
@@ -137,7 +171,7 @@ test('真实 OpenCode 原始事件通道：本地模型鉴权失败、断连和�
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const port = (server.address() as { port: number }).port;
     const runner = path.resolve('scripts/reliability-client.cjs');
-    for (const current of ['auth', 'disconnect', 'recover']) {
+    for (const current of ['success', 'auth', 'disconnect', 'recover']) {
       mode = current;
       attempts.clear(); requests = 0; firstRequestAt = 0;
       const work = path.join(root, current);
@@ -162,15 +196,15 @@ test('真实 OpenCode 原始事件通道：本地模型鉴权失败、断连和�
         child.once('close', code => code === 0 ? resolve(out) : reject(new Error(`runner exit ${code}: ${err.slice(-1000)}`)));
       });
       const result = JSON.parse(output.trim().split('\n').at(-1)!);
-      if (!requests || result.code === 'EVENT_MONITOR_UNAVAILABLE') {
+      if (!requests || !result.eventMonitorReady || result.code === 'EVENT_MONITOR_UNAVAILABLE') {
         const logs = fs.readdirSync(root, { recursive: true }).map(String).filter(name => name.endsWith('.log'));
-        for (const log of logs) t.diagnostic(fs.readFileSync(path.join(root, log), 'utf8').slice(-2200));
+        for (const log of logs) t.diagnostic(fs.readFileSync(path.join(root, log), 'utf8').split('\n').filter(line => /plugin|error|failed/i.test(line)).slice(-15).join('\n').slice(-5000));
       }
       assert.ok(requests > 0, `${current}: ${JSON.stringify(result)}`);
       assert.ok(result.traceId, `${current}: ${JSON.stringify(result)}`);
       assert.equal(result.eventMonitorReady, true, JSON.stringify(result));
-      assert.ok(result.eventSignalCount > 0, JSON.stringify(result));
-      if (current === 'recover') assert.equal(result.ok, true, JSON.stringify(result));
+      if (current !== 'auth') assert.ok(result.eventSignalCount > 0, JSON.stringify(result));
+      if (current === 'recover' || current === 'success') assert.equal(result.ok, true, JSON.stringify(result));
       else {
         assert.equal(result.code, current === 'auth' ? 'MODEL_UNAVAILABLE' : 'MODEL_ERROR', JSON.stringify(result));
         assert.ok(Date.now() - firstRequestAt < 20_000, current);

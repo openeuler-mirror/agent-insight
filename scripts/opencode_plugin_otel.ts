@@ -217,8 +217,20 @@ function buildOutFile(spoolDir: string): string {
   return path.join(dayDir, `opencode-otel-${runId}.jsonl`)
 }
 
-function createWriter(outFile: string): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string } {
+export function createWriter(outFile: string, synchronous = false): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string; flush: () => Promise<void> } {
   safeMkdirp(path.dirname(outFile))
+  if (synchronous) {
+    let closed = false
+    return {
+      enqueue: (obj: any) => {
+        if (closed) return
+        try { fs.appendFileSync(outFile, JSON.stringify(obj) + "\n") } catch {}
+      },
+      flush: async () => {},
+      close: async () => { closed = true },
+      outFile,
+    }
+  }
   const stream = fs.createWriteStream(outFile, { flags: "a" })
   const queue: any[] = []
   let flushing: Promise<void> | undefined
@@ -238,6 +250,10 @@ function createWriter(outFile: string): { enqueue: (obj: any) => void; close: ()
         while (queue.length > 0 && !stopped) {
           if (!stream.write(queue.shift())) await once(stream, "drain")
         }
+        // 等待底层写回调，避免 uploader 或立即退出读到尚未落盘的流尾部。
+        await new Promise<void>((resolve, reject) => {
+          stream.write("", error => error ? reject(error) : resolve())
+        })
       } catch {}
     })().finally(() => { flushing = undefined })
     return flushing
@@ -256,7 +272,9 @@ function createWriter(outFile: string): { enqueue: (obj: any) => void; close: ()
     if (closing) return closing
     closing = (async () => {
       if (pending) clearTimeout(pending)
-      await flush()
+      do {
+        await flush()
+      } while (queue.length > 0 && !stopped)
       stopped = true
       stream.end()
       await completion
@@ -264,7 +282,7 @@ function createWriter(outFile: string): { enqueue: (obj: any) => void; close: ()
     return closing
   }
 
-  return { enqueue, close, outFile }
+  return { enqueue, flush, close, outFile }
 }
 
 function extractTextFromParts(parts: any): string {
@@ -310,7 +328,7 @@ export function getSessionEventUploadMode(
   type: string,
   status: string,
 ): "force" | "none" {
-  return type === "session.idle" || (type === "session.updated" && status === "idle")
+  return type === "session.idle" || (["session.updated", "session.status"].includes(type) && status === "idle")
     ? "force"
     : "none"
 }
@@ -408,7 +426,8 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
   const maxToolIo = asInt(env.AGENT_INSIGHT_MAX_TOOL_IO, 4000)
   const maxEventString = asInt(env.AGENT_INSIGHT_MAX_EVENT_STRING, 20000)
   const outFile = buildOutFile(spoolDir)
-  const writer = createWriter(outFile)
+  // v1 may exit without awaiting event hooks; persist before yielding or scheduling upload.
+  const writer = createWriter(outFile, !lifecycle)
   if (lifecycle) lifecycle.emit = writer.enqueue
 
   const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
@@ -706,13 +725,22 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
           trace_id: sessionID ? String(sessionID) : undefined,
         }
 
+        writer.enqueue({
+          ...base,
+          payload: {
+            type,
+            event: type.startsWith("tool") || type.includes("tool")
+              ? safeToolIoPayload(event) : safeEventPayload(event),
+          },
+        })
+
         try {
           // Trigger uploader on idle signal:
           //   - `session.idle` is the idle signal itself; it doesn't carry a status field
           //   - `session.updated` may fire many times during a session — only kick when
           //     properties.info.status === "idle" so we don't spam mid-conversation
           const status = String(
-            event?.properties?.info?.status || event?.properties?.status || ""
+            event?.properties?.info?.status || event?.properties?.status?.type || event?.properties?.status || ""
           ).toLowerCase()
           const sessionEventUploadMode = getSessionEventUploadMode(type, status)
           if (sessionEventUploadMode === "force") {
@@ -721,6 +749,8 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
               pluginLogPath,
               `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
             )
+            if (lifecycle) await writer.flush()
+            else void writer.flush()
             kickUploader(sid, true, `event:${type}`)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
@@ -747,11 +777,6 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
           }
         } catch {}
 
-        if (type.startsWith("tool") || type.includes("tool")) {
-          writer.enqueue({ ...base, payload: { type, event: safeToolIoPayload(event) } })
-          return
-        }
-        writer.enqueue({ ...base, payload: { type, event: safeEventPayload(event) } })
       } catch {}
     },
   }

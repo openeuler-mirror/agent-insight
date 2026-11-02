@@ -303,7 +303,7 @@ export const zh = {
     filterToken: 'Token',
     filterAll: '全部',
     spanColumn: 'Span',
-    spanShare: '时长占比',
+    spanShare: '时间轴',
     spanDuration: '耗时',
     spanTokens: 'Tokens',
     clearFilter: '清除过滤',

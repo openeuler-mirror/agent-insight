@@ -45,7 +45,6 @@
  * --------------------------------------------------------------------------
  */
 
-// @ts-ignore
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { fileURLToPath } from "node:url";
 import { extractCoreOutput } from "./core-output";

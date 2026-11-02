@@ -82,16 +82,26 @@ test('invalid manifest and missing CLI degrade to an internal estimate without b
   }
 })
 
-test('a stalled metadata subprocess is killed at the overall budget, not left running', async () => {
+test('a stalled metadata subprocess is killed at the overall budget, not left running', { timeout: 15_000 }, async () => {
   const execute = promisify(execFile)
-  let calls = 0
-  const estimator = new ImageSizeEstimator({ execute: async (_command: string, _args: string[], options: any) => {
+  let calls = 0, now = 0
+  let pid: number | undefined
+  let failure: { killed?: boolean; signal?: string } | undefined
+  const timeouts: number[] = []
+  const estimator = new ImageSizeEstimator({ now: () => now, execute: async (_command: string, _args: string[], options: any) => {
     calls++
-    return execute(process.execPath, ['-e', 'setInterval(()=>{},1000)'], options)
+    timeouts.push(options.timeout)
+    const running = execute(process.execPath, ['-e', 'setInterval(()=>{},1000)'], options)
+    pid = running.child.pid
+    try { return await running }
+    catch (error) { failure = error as typeof failure; now = ESTIMATE_TIMEOUT_MS; throw error }
   } })
-  const started = Date.now()
   assert.equal((await estimator.estimate(spec)).source, 'fallback')
-  assert.ok(Date.now() - started < ESTIMATE_TIMEOUT_MS + 1500)
+  assert.deepEqual(timeouts, [ESTIMATE_TIMEOUT_MS])
+  assert.equal(failure?.killed, true)
+  assert.equal(failure?.signal, 'SIGKILL')
+  assert.ok(pid)
+  assert.throws(() => process.kill(pid!, 0), { code: 'ESRCH' })
   assert.equal(calls, 1)
 })
 

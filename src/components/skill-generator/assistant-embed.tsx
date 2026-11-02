@@ -18,17 +18,15 @@
 
 import {
     ComposerPrimitive,
-    MessagePartPrimitive,
     MessagePrimitive,
     ThreadPrimitive,
     type ToolCallMessagePartProps,
     useThread,
     useMessage,
 } from '@assistant-ui/react';
-import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message';
-import { Tool, ToolHeader, ToolInput, ToolTitle, ToolTrigger } from '@/components/ai-elements/tool';
+import { Tool, ToolHeader, ToolInput, ToolTitle } from '@/components/ai-elements/tool';
 import { Children, isValidElement, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { Wrench, Bot, GitCommit, ChevronDown, CheckCircle2, AlertCircle, Loader2, ChevronRight, Folder, FolderOpen, FileCode, FileSpreadsheet, FileText, Download, X, Copy, Sparkles, Globe, Database, Calculator } from 'lucide-react';
+import { Wrench, Bot, GitCommit, Loader2, ChevronRight, Folder, FolderOpen, FileCode, FileSpreadsheet, FileText, Download, X, Copy, Sparkles } from 'lucide-react';
 import MDEditor from '@uiw/react-md-editor';
 import {
     useGeneratedSkillsStore,
@@ -222,25 +220,6 @@ function UserMessageText() {
         </div>
     );
 }
-
-const TOOL_META: Record<string, any> = {
-    web_search: { icon: Globe, label: "Web search", color: "blue" },
-    read_file: { icon: FileText, label: "Read file", color: "gray" },
-    run_code: { icon: FileCode, label: "Run code", color: "purple" },
-    query_db: { icon: Database, label: "Query database", color: "teal" },
-    calculator: { icon: Calculator, label: "Calculator", color: "amber" },
-    sub_agent: { icon: Bot, label: "Sub-agent", color: "coral" },
-};
-
-const COLOR_TOKENS: Record<string, any> = {
-    blue: { bg: "#E6F1FB", text: "#0C447C", border: "#B5D4F4", solid: "#378ADD" },
-    gray: { bg: "#F1EFE8", text: "#444441", border: "#D3D1C7", solid: "#888780" },
-    purple: { bg: "#EEEDFE", text: "#3C3489", border: "#CECBF6", solid: "#7F77DD" },
-    teal: { bg: "#E1F5EE", text: "#085041", border: "#9FE1CB", solid: "#1D9E75" },
-    amber: { bg: "#FAEEDA", text: "#633806", border: "#FAC775", solid: "#EF9F27" },
-    coral: { bg: "#FAECE7", text: "#712B13", border: "#F5C4B3", solid: "#D85A30" },
-    green: { bg: "#EAF3DE", text: "#27500A", border: "#C0DD97", solid: "#639922" },
-};
 
 function ToolGroupPart({
     children,
@@ -1043,13 +1022,6 @@ const normalizeDisplayName = (name: string): string => {
     return cleaned || name;
 };
 
-const toTaskState = (status: string): 'running' | 'completed' | 'failed' => {
-    const statusType = toStatusType(status);
-    if (statusType === 'complete') return 'completed';
-    if (statusType === 'incomplete') return 'failed';
-    return 'running';
-};
-
 const getKindIcon = (kind: string) => {
     const normalized = kind.trim().toLowerCase();
     if (normalized === 'tool') return <Wrench className="skill-generator-tool-fallback-kind-icon" size={14} />;
@@ -1057,29 +1029,11 @@ const getKindIcon = (kind: string) => {
     return <GitCommit className="skill-generator-tool-fallback-kind-icon" size={14} />;
 };
 
-const getStatusIcon = (statusType: 'running' | 'complete' | 'incomplete') => {
-    if (statusType === 'running') return <Loader2 className="ae-task-icon animate-spin" size={12} />;
-    if (statusType === 'complete') return <CheckCircle2 className="ae-task-icon" size={12} />;
-    return <AlertCircle className="ae-task-icon" size={12} />;
-};
-
 const toStatusType = (status: string): 'running' | 'complete' | 'incomplete' => {
     const normalized = normalizeStatus(status);
     if (/(error|failed|cancel|incomplete|timeout)/i.test(normalized)) return 'incomplete';
     if (/(complete|completed|done|success|ok)/i.test(normalized)) return 'complete';
     return 'running';
-};
-
-const getStatusLabel = (status: string, locale: string): string => {
-    const statusType = toStatusType(status);
-    if (locale === 'zh') {
-        if (statusType === 'running') return '运行中';
-        if (statusType === 'complete') return '已完成';
-        return '异常';
-    }
-    if (statusType === 'running') return 'Running';
-    if (statusType === 'complete') return 'Completed';
-    return 'Failed';
 };
 
 function ToolEventPart({ toolName, args, argsText, result, locale }: ToolCallMessagePartProps & { locale: string }) {

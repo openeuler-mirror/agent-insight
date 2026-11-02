@@ -32,7 +32,7 @@ export function triggerExperimentCaseData(experimentId: string, datasetId: strin
 }
 
 export function shouldStopTriggerBatch(failureCode: string | null | undefined): boolean {
-  return ['MODEL_UNAVAILABLE', 'MODEL_MISMATCH', 'CLIENT_MISMATCH'].includes(failureCode || '');
+  return ['MODEL_UNAVAILABLE', 'MODEL_MISMATCH', 'CLIENT_MISMATCH', 'SKILL_ISOLATION_UNAVAILABLE', 'MODEL_CONFIGURATION_UNREADABLE', 'MODEL_CONFIGURATION_MISSING'].includes(failureCode || '');
 }
 
 export async function ensureTriggerExperimentCases(user: string, experimentId: string, datasetId: string, cases: Pick<DatasetCase, 'id' | 'input' | 'values'>[]) {

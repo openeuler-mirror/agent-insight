@@ -29,7 +29,8 @@ import { deriveRoutingSignature } from '@/lib/ingest/routing-signature';
 import { extractKeyActionsFromFlow, mergeKeyActionsFromMultipleSkills, type ExtractedKeyAction, type ParsedFlowResult } from '@/lib/engine/observability/flow-parser';
 import { NextResponse } from 'next/server';
 import { OpenAI } from "openai";
-const pdfParse = require('pdf-parse/lib/pdf-parse.js');
+// @ts-expect-error pdf-parse 不随包提供类型声明
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 export const dynamic = 'force-dynamic';
 

@@ -17,6 +17,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
+import { evaluationAttemptSignal } from './evaluation-attempt';
 
 type Scope = { experimentId: string; caseId?: string; signal: AbortSignal; cleanupUnconfirmed?: boolean };
 const key = Symbol.for('agent-insight.experiment-cancellation-context');
@@ -28,7 +29,7 @@ const active = activeGlobals[activeKey] ||= new Map<string, number>();
 const operationKey = (experimentId: string, caseId: string) => `${experimentId}\0${caseId}`;
 export function activeCaseOperations(caseId: string, experimentId: string): number { return active.get(operationKey(experimentId, caseId)) || 0; }
 
-export function experimentSignal(): AbortSignal | undefined { return context.getStore()?.signal; }
+export function experimentSignal(): AbortSignal | undefined { return evaluationAttemptSignal() ?? context.getStore()?.signal; }
 export function markExperimentCleanupUnconfirmed(): void {
   const scope = context.getStore();
   if (scope) scope.cleanupUnconfirmed = true;

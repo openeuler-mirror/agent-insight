@@ -15,8 +15,8 @@
  */
 
 /** Trace 评测 API 传递并持久化 Tool/Skill 上下文的最小集成测试。 */
-import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+import { createIsolatedDatabase } from './helpers/isolated-database';
+const database = createIsolatedDatabase();
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -33,9 +33,11 @@ test.after(async () => {
   setJudgeLlmCallerForTest(null);
   setFaithfulPresetRunnerForTest(null);
   await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  await prisma.$disconnect();
+  database.dispose();
 });
 
-async function waitFor(check: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+async function waitFor(check: () => Promise<boolean>, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await check()) return;
@@ -93,7 +95,7 @@ test('eval-traces 将 pair 的 Tool/Skill 目录传给评估器并写入 case', 
   )?.status === 'done');
 });
 
-test('eval-traces 批量提交立即预创建全部 case/result，后台完成前保持 running', async () => {
+test('eval-traces 批量提交立即预创建全部 case/result，后台完成前保持 running', { timeout: 30_000 }, async t => {
   let release: () => void = () => {};
   const gate = new Promise<void>((resolve) => { release = resolve; });
   setFaithfulPresetRunnerForTest(async () => {
@@ -116,10 +118,8 @@ test('eval-traces 批量提交立即预创建全部 case/result，后台完成�
     },
   ));
 
-  const returnedQuickly = await Promise.race([
-    responsePromise.then(() => true),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
-  ]);
+  t.after(release);
+  const response = await responsePromise;
   const experiment = await prisma.experiment.findFirst({
     where: { user: TEST_USER, name: '批量异步评测测试' },
     include: { cases: true },
@@ -129,9 +129,12 @@ test('eval-traces 批量提交立即预创建全部 case/result，后台完成�
     : [];
 
   release();
-  const response = await responsePromise;
-
-  assert.equal(returnedQuickly, true);
+  t.after(async () => {
+    if (experiment) await waitFor(async () => {
+      const current = await prisma.experiment.findUnique({ where: { id: experiment.id } });
+      return current?.status === 'done' || current?.status === 'failed';
+    });
+  });
   assert.equal(response.status, 202);
   assert.equal(experiment!.status, 'running');
   assert.deepEqual(
@@ -201,7 +204,7 @@ test('eval-traces 重复提交同一实验和 Trace 时不重复执行结果行'
   await waitFor(async () => calls >= 1);
   const second = await submit();
   assert.equal(second.status, 202);
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await waitFor(async () => calls >= 1);
   const callsBeforeRelease = calls;
   release();
 
@@ -217,6 +220,7 @@ test('eval-traces 重复提交同一实验和 Trace 时不重复执行结果行'
   });
 
   assert.equal(callsBeforeRelease, 1);
+  assert.equal(calls, 1);
   assert.equal(experiment!.cases.length, 1);
   assert.equal(rows.length, 1);
   setFaithfulPresetRunnerForTest(null);

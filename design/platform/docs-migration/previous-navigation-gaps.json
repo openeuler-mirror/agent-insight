@@ -1,0 +1,78 @@
+[
+  {
+    "previousPage": "developer-guide/sdk-overview",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/trace-with-sdk",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/architecture/index",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  },
+  {
+    "previousPage": "developer-guide/architecture/data-model",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  },
+  {
+    "previousPage": "developer-guide/architecture/design-decisions",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  },
+  {
+    "previousPage": "developer-guide/integrations/openai",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/integrations/anthropic",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/integrations/langchain",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/integrations/langgraph",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/integrations/opentelemetry",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/reference/api",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  },
+  {
+    "previousPage": "developer-guide/reference/sdk-python",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/reference/sdk-js",
+    "assessment": "能力范围待核实：可能是模板占位，不自动判定缺少产品文档"
+  },
+  {
+    "previousPage": "developer-guide/reference/trace-data-format",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  },
+  {
+    "previousPage": "developer-guide/reference/evaluation-data-format",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  },
+  {
+    "previousPage": "developer-guide/deployment/installation",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  },
+  {
+    "previousPage": "developer-guide/deployment/self-hosted",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  },
+  {
+    "previousPage": "developer-guide/deployment/upgrade",
+    "assessment": "独立升级操作指南缺口，相关内容已有分散说明"
+  },
+  {
+    "previousPage": "developer-guide/contributing",
+    "assessment": "已有相关内容，需核对是否归并到当前教程、参考或解释入口"
+  }
+]

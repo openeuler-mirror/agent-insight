@@ -68,7 +68,7 @@ class CliTests(TestCase):
                     "--plugin-startup-timeout",
                     "--run-id",
                     "available names",
-                    "server-side",
+                    "does not invoke a fault-outcome Judge",
                 ],
             ),
             (

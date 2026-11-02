@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { deriveExecutionTiming } from '@/lib/engine/observability/execution-timing';
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { sessionTraceRelations } from '@/lib/trace/session-relations';
 import { resolveUser } from '@/lib/auth/auth';
@@ -31,8 +32,10 @@ import {
     type CollaborationTraceMember,
 } from '@/lib/ingest/collaboration/trace-projection';
 import { toTraceStructureInteractions, withTracePayloadVersions } from '@/lib/trace/session-payload';
+import { loadDifyWorkflowProjection } from '@/lib/ingest/otel/dify-workflow-projection';
 
 type ParsedSession = {
+    framework?: string | null;
     session: any;
     execution?: {
         status?: string;
@@ -218,12 +221,14 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
         timestamp: executionRow.timestamp ?? null,
     } : undefined;
     const executionSummary = executionRow ? {
-        latency: executionRow.latency ?? null,
+        latency: framework === 'opencode'
+            ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? executionRow.latency ?? null
+            : executionRow.latency ?? null,
         tokens: executionRow.tokens ?? null,
         cost: executionRow.cost ?? null,
         timestamp: executionRow.timestamp ?? null,
-    } : undefined;
-    const value = { session, execution, executionSummary, thread, interactions, langfuseTraceNodes };
+    } : null;
+    const value = { session, execution, executionSummary, thread, interactions, langfuseTraceNodes, framework };
     rememberParsedSession(taskId, signature, value);
     return value;
 }
@@ -288,6 +293,16 @@ export async function GET(request: Request) {
         const { username } = await resolveUser(request);
         if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         const rawInteraction = searchParams.get('source') === 'raw';
+        const difyProjection = !rawInteraction && parsed.framework === 'dify' && username && username === session.user
+            ? await loadDifyWorkflowProjection(username, taskId, langfuseTraceNodes) : null;
+        const displayTraceNodes = difyProjection?.nodes || langfuseTraceNodes;
+        const displayExecution = difyProjection?.linkedTraces && executionSummary ? {
+            ...executionSummary,
+            tokens: displayTraceNodes.filter(node => node.kind === 'llm').reduce((sum, node) => sum + (node.usage?.totalTokens || 0), 0),
+        } : executionSummary;
+        const difyProjectionSummary = difyProjection ? {
+            linkedTraces: difyProjection.linkedTraces, truncated: difyProjection.truncated,
+        } : undefined;
         const relationPlan = !rawInteraction && username && username === session.user
             ? await collaborationTraceProjection.plan(username) : null;
         const reportedInteractions = relationPlan && username
@@ -323,8 +338,10 @@ export async function GET(request: Request) {
                 startTime: session.startTime.getTime(),
                 interactionCount: displayInteractions.length,
                 interactions: toTraceStructureInteractions(displayInteractions),
-                execution: executionSummary,
-                ...(execution ? { execution } : {}),
+                execution: displayExecution
+                    ? { ...displayExecution, ...(execution || {}), tokens: displayExecution.tokens }
+                    : execution,
+                ...(difyProjectionSummary ? { difyProjection: difyProjectionSummary } : {}),
                 ...(thread ? { thread } : {}),
                 parentAgent,
                 traceRelations,
@@ -337,7 +354,7 @@ export async function GET(request: Request) {
                         truncated: collaborationProjection.truncated,
                     },
                 } : {}),
-                ...(langfuseTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes } : {}),
+                ...(displayTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes: displayTraceNodes } : {}),
             });
         }
 
@@ -390,7 +407,8 @@ export async function GET(request: Request) {
                     truncated: collaborationProjection.truncated,
                 },
             } : {}),
-            ...(langfuseTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes } : {}),
+            ...(displayTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes: displayTraceNodes } : {}),
+            ...(difyProjectionSummary ? { difyProjection: difyProjectionSummary } : {}),
             ...(execution ? { execution } : {}),
             ...(thread ? { thread } : {}),
         });

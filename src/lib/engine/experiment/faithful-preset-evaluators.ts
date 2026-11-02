@@ -32,6 +32,8 @@
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint, type EvalPointStatus } from '../../evaluators/eval-output';
 import type { EvaluatorCaseContext } from '../../evaluators/evaluator-case-context';
 import type { SkillSuggestion } from '../evaluation/skill-suggestion-agent';
+import { hasEvaluatorExecutionPolicy } from './evaluator-execution-policy';
+import { experimentSignal } from './cancellation-context';
 import type { RootCauseResolutionInput } from '../evaluation/root-cause-resolution';
 
 export const FAITHFUL_PRESET_IDS = ['preset-agent-task-completion', 'preset-agent-trace-quality'] as const;
@@ -242,7 +244,7 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
   const hasKeyActions = keyActionRef.status === 'ok' && extractedSteps.length > 0;
   const skillTarget = getPrimaryExecutionSkillTargets(ctx.execution ?? null, ctx.interactions)[0];
 
-  const out = await withStageTimeout(evaluateTrajectoryViaOpencode(
+  const scoring = evaluateTrajectoryViaOpencode(
     {
       caseId: ctx.executionId ?? ctx.taskId ?? 'exp-case',
       caseInput: ctx.caseInput,
@@ -258,11 +260,14 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
       executionId: ctx.executionId ?? undefined,
     },
     user,
-  ), EXPERIMENT_TRAJECTORY_TIMEOUTS.scoreMs, '轨迹质量评分');
+  );
+  const out = hasEvaluatorExecutionPolicy() ? await scoring
+    : await withStageTimeout(scoring, EXPERIMENT_TRAJECTORY_TIMEOUTS.scoreMs, '轨迹质量评分');
 
   const dims = out.dimensionScores ?? { completeness: null, toolChoice: 0, redundancy: 0 };
   const deviations = Array.isArray(out.deviationSteps) ? out.deviationSteps : [];
   let skillSuggestions: SkillSuggestion[] = [];
+  let suggestionFailed = false;
   const suggestionExecutionId = ctx.executionId || ctx.execution?.id || ctx.taskId;
   if (skillTarget && suggestionExecutionId) {
     try {
@@ -283,6 +288,8 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
         });
       }
     } catch (error) {
+      experimentSignal()?.throwIfAborted();
+      suggestionFailed = true;
       console.warn(
         '[experiment-trajectory-eval] skill suggestion agent failed (non-fatal):',
         error instanceof Error ? error.message : String(error),
@@ -344,7 +351,7 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
   // summary 取 conclusionText（说人话的一句话结论）；模型没给才回落 reasonText——
   // 后者是「执行路径分析」绿框的正文，带完整性/工具选择/冗余分段结构，当结论读着费劲。
   return normalizeEvaluatorOutput({
-    summary: out.conclusionText || out.reasonText,
+    summary: [out.conclusionText || out.reasonText, suggestionFailed ? '评分已完成，附加建议生成失败' : ''].filter(Boolean).join('；'),
     score: to100(out.trajectoryScore),
     points: points.length ? points : undefined,
     evidence: out.reasonText ? { md: out.reasonText } : undefined,

@@ -165,7 +165,6 @@ export type OtelSpoolConsumerOptions = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
   var __otelSpoolConsumer: OtelSpoolConsumerState | undefined;
 }
 
@@ -251,20 +250,20 @@ function wrapSaveExecutionWithAttributionGuard(
   log: (...args: any[]) => void,
 ): SaveExecution {
   return async (data, options) => {
-    // Qoder uploads carry server-stamped credential provenance. In a
+    // Qoder and Dify uploads carry server-stamped credential provenance. In a
     // single-user installation the valid API key commonly belongs to `admin`,
     // which the generic guard otherwise treats as an internal service owner.
     // Keep this exception framework-scoped so every existing collector retains
     // the original attribution policy.
-    const authenticatedQoderIngest =
-      data.framework === 'qoder' && data.authenticated_ingest === true;
+    const authenticatedFrameworkIngest =
+      ['qoder', 'dify'].includes(data.framework || '') && data.authenticated_ingest === true;
     const result = guardAttribution({
       user: data.user,
       taskId: data.task_id,
       framework: data.framework,
     });
 
-    if (!result.pass && !authenticatedQoderIngest) {
+    if (!result.pass && !authenticatedFrameworkIngest) {
       traceTimingEvent('save-skipped', { traceId: data.task_id, reason: 'attribution' });
       log('[AttributionGuard] dropping unattributed session', {
         taskId: result.taskId,
@@ -445,7 +444,7 @@ function sessionCooldownRemaining(state: OtelSpoolConsumerState, session: Sessio
  *   1) 倍数封顶到 aggGlobalMaxWaitMs —— 慢聚合不再能把整条流水线按比例冻住;
  *   2) backlog 越过阈值进排空模式 —— 此时单飞已经把 CPU 锁在 1 核以内,再节流只会让积压更久。
  */
-function globalGateRemaining(state: OtelSpoolConsumerState, now: number): number {
+export function globalGateRemaining(state: Pick<OtelSpoolConsumerState, 'pendingFiles' | 'draining' | 'drainBacklog' | 'lastGlobalAggEndedAt' | 'lastGlobalAggCostMs' | 'aggGlobalMaxWaitMs' | 'aggGlobalFactor'>, now: number): number {
   const backlog = state.pendingFiles.size;
   if (state.draining) {
     if (backlog < state.drainBacklog / 2) state.draining = false;

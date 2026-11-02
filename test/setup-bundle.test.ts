@@ -35,6 +35,8 @@ const clientFiles = [
   'scripts/agent-run-diagnostics.cjs',
   'scripts/opencode-experiment-events.cjs',
   'scripts/opencode-experiment-events.mjs',
+  'scripts/opencode-experiment-events-v2.mjs',
+  'scripts/opencode-runtime.cjs',
   'scripts/ws-client.cjs',
   'scripts/install-fault-injection.js',
   'scripts/lib/fi-python-runtime.js',

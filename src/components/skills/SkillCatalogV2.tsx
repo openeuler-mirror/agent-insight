@@ -35,7 +35,7 @@ import { copyText } from '@/lib/copy-text';
 import { STATIC_EVAL_STANDARDS } from '@/components/evaluation';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { diffLines } from 'diff';
@@ -441,21 +441,6 @@ function StatusBadge({ active, calls7d }: { active: boolean; calls7d: number }) 
     return null
 }
 
-function Sparkline({ data, color = 'var(--sk-success)', width = 100, height = 32 }: { data?: number[]; color?: string; width?: number; height?: number }) {
-    if (!data || data.length === 0) return null;
-    const max = Math.max(...data);
-    const min = Math.min(...data);
-    const range = max - min || 1;
-    const step = data.length > 1 ? width / (data.length - 1) : width;
-    const points = data.map((v, i) => `${i * step},${height - ((v - min) / range) * (height - 4) - 2}`).join(' ');
-    return (
-        <svg width={width} height={height} style={{ display: 'block' }}>
-            <polyline points={points} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-            <polyline points={`${points} ${width},${height} 0,${height}`} fill={color} opacity={0.08} />
-        </svg>
-    );
-}
-
 function formatDate(iso?: string): string {
     if (!iso) return '—';
     try {
@@ -567,8 +552,6 @@ function SkillCard({
 }) {
     const { user } = useAuth();
     const active = skill.activeVersion ?? 0;
-    const issues = skill.qualityIssues || { high: 0, medium: 0, low: 0 };
-    const total = issues.high + issues.medium + issues.low;
     const calls = skill.calls7d ?? 0;
     const agents = skill.agentsUsing ?? 0;
     const isActive = !!skill.isUploaded || calls > 0 || agents > 0;
@@ -761,7 +744,7 @@ function SkillCard({
                 <input
                     ref={fileInputRef}
                     type="file"
-                    // @ts-ignore - webkitdirectory 是非标准属性
+                    // @ts-expect-error webkitdirectory 是非标准属性
                     webkitdirectory=""
                     directory=""
                     multiple
@@ -1087,7 +1070,11 @@ function normalizeMermaidCode(raw: string): string {
 function SkillMermaidFlow({ code }: { code: string }) {
     const [svg, setSvg] = useState('');
     const [error, setError] = useState('');
-    const idRef = useRef(`sk-mermaid-${Math.random().toString(36).slice(2)}`);
+    // useId() 给出稳定、SSR/CSR 一致的实例标识；原先在 render 期调用 Math.random()
+    // 属于非纯渲染（react-hooks/purity），既浪费每次渲染的计算，也让 React Compiler
+    // 跳过该组件的优化。分隔符替换成 '-'（而不是删掉）以保留 id 之间的区分度，
+    // 外层 `sk-mermaid-` 前缀保证结果不会以 '-' 开头，可安全用作 DOM/CSS id。
+    const mermaidId = useId().replace(/[^a-zA-Z0-9]/g, '-');
 
     useEffect(() => {
         let cancelled = false;
@@ -1120,7 +1107,7 @@ function SkillMermaidFlow({ code }: { code: string }) {
                         htmlLabels: true,
                     },
                 });
-                return mermaid.render(`${idRef.current}-${Date.now()}`, normalized);
+                return mermaid.render(`sk-mermaid-${mermaidId}-${Date.now()}`, normalized);
             })
             .then(({ svg }) => {
                 if (cancelled) return;
@@ -1128,7 +1115,7 @@ function SkillMermaidFlow({ code }: { code: string }) {
             })
             .catch((e) => { if (!cancelled) setError(e?.message || '流程图渲染失败'); });
         return () => { cancelled = true; };
-    }, [code]);
+    }, [code, mermaidId]);
 
     if (error) return <div style={{ padding: 16, fontSize: 12, color: 'var(--sk-danger)' }}>流程图渲染失败：{error}</div>;
     if (!svg) return <div style={{ padding: 24, textAlign: 'center', color: 'var(--sk-fg3)', fontSize: 12 }}>正在渲染流程图…</div>;

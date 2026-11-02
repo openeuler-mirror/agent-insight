@@ -18,9 +18,8 @@
 // 覆盖：AC-004 三条件判定 / AC-021 不可比未配对不进分母 / AC-022 100 case 配对 ≤100ms /
 // AC-009 复用 executeResultRow / AC-017 增量补评 / AC-018 单侧失败容忍 / AC-023 得分偏差=0 /
 // 空组校验 / A/B 取值相同校验 / createComparisonExperiment 创建+groups / getComparisonDetail 聚合。
-// 落仓库 data/witty_insight.db（同 experiment-engine.test.ts：钉住 DATABASE_URL）。
-import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+import { createIsolatedDatabase } from './helpers/isolated-database';
+const database = createIsolatedDatabase();
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -514,3 +513,5 @@ test('rescanComparison: 运行中调用 → 抛 409 互斥', async (t) => {
   );
   await start!.completion!;
 });
+
+test.after(async () => { await prisma.$disconnect(); database.dispose(); });

@@ -116,7 +116,7 @@ export function extractSkillsWithVersionsFromOpencodeSession(interactions: any[]
         const args = typeof raw === "string" ? JSON.parse(raw) : raw
 
         if (name === "skill" || name === "load_skill") {
-          const skillName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill
+          const skillName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill ?? args?.id
           if (skillName != null && String(skillName).trim()) {
             const s = String(skillName).trim().replace(/^['"]+|['"]+$/g, "")
             if (skillNamePattern.test(s) && !seen.has(s)) {
@@ -173,7 +173,7 @@ export function extractSkillsWithVersionsFromToolInteractions(interactions: any[
       const raw = tc?.function?.arguments ?? tc?.arguments ?? ""
       try {
         const args = typeof raw === "string" ? JSON.parse(raw) : raw
-        const rawName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill
+        const rawName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill ?? args?.id
         if (rawName == null || !String(rawName).trim()) continue
         const name = String(rawName).trim().replace(/^['"]+|['"]+$/g, "")
         if (!SKILL_NAME_PATTERN.test(name) || seen.has(name)) continue

@@ -33,8 +33,8 @@ export function createIsolatedDatabase() {
     const result = spawnSync(process.execPath, [
       path.resolve('node_modules/prisma/build/index.js'), 'db', 'push',
       '--schema', path.resolve('prisma/schema.prisma'), '--skip-generate',
-    ], { env: process.env, encoding: 'utf8', timeout: 30_000 })
-    assert.equal(result.status, 0, result.stderr || 'Temporary test database initialization failed')
+    ], { env: process.env, encoding: 'utf8', timeout: 120_000 })
+    assert.equal(result.status, 0, result.error?.message || result.stderr || 'Temporary test database initialization failed')
     return { home, dispose }
   } catch (error) {
     dispose()

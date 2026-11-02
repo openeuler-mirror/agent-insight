@@ -18,7 +18,7 @@
 ## 🌓 双主题截图门（UI 改动必填）
 
 > **任何 PR 触碰了 `src/components/`、`src/app/`、`globals.css` 或会被用户看到的视觉/交互**——必须同时提供 **Light + Dark** 两张截图。
-> 仅截亮色或仅截暗色的 PR **会被直接打回**（见 [`docs/design/foundations.md`](../docs/design/foundations.md) §1.2 第 5 条）。
+> 仅截亮色或仅截暗色的 PR **会被直接打回**（见 [`design/foundations.md`](../design/foundations.md) §1.2 第 5 条）。
 
 ### 截图
 
@@ -45,7 +45,7 @@
 
 ## 设计规范自查（UI 改动必填）
 
-> 完整清单见 [`docs/design/components.md`](../docs/design/components.md) §6。这里只列必查项。
+> 完整清单见 [`design/components.md`](../design/components.md) §6。这里只列必查项。
 
 - [ ] 没有自己写 Button —— 用 `<Button variant="default|secondary|outline|ghost|destructive|link">`
 - [ ] 没有自己写状态徽章 —— 用 `<StatusBadge>`

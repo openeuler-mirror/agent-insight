@@ -34,7 +34,7 @@ function collectorRoot(): string {
 
 function collectorReadme(root: string): string | undefined {
     const candidates = [
-        path.resolve(root, '..', '..', 'docs', 'user-guide', 'observability', 'llamaindex-trace-collector.md'),
+        path.resolve(root, '..', '..', 'docs', 'zh', 'how-to', 'observability', 'llamaindex-trace-collector.md'),
         path.join(root, 'README.md'),
     ];
     return candidates.find((candidate) =>

@@ -35,8 +35,8 @@ import {
 } from '@/lib/evaluators/evaluator-case-context';
 import {
   EvaluatorRunConfigValidationError,
-  serializeEvaluatorRunConfigs,
 } from '@/lib/evaluators/evaluator-run-config';
+import { prepareExperimentEvaluatorConfigs } from '@/lib/evaluators/evaluator-execution-config.server';
 import {
   normalizeTerminalExperimentStatus,
   publishedOverallAverage,
@@ -155,9 +155,17 @@ export async function GET(req: Request) {
       scoreRowsByExperiment.set(row.experimentId, list);
     }
 
+    const failedFiCases = experimentIds.length ? await prisma.experimentCase.findMany({
+      where: { experimentId: { in: experimentIds }, deletedAt: null,
+        fiRunId: { not: null }, executionId: null, traceGenerationError: { not: null } },
+      select: { experimentId: true },
+    }) : [];
+    const failedFiExperiments = new Set(failedFiCases.map((row: { experimentId: string }) => row.experimentId));
+
     const items = rows.map((r) => {
       const resultRows = scoreRowsByExperiment.get(r.id) || [];
-      const status = normalizeTerminalExperimentStatus(r.status, resultRows);
+      const settledStatus = normalizeTerminalExperimentStatus(r.status, resultRows);
+      const status = settledStatus === 'done' && failedFiExperiments.has(r.id) ? 'partial' : settledStatus;
       let evaluatorCount = 0;
       try {
         const ids = JSON.parse(r.evaluatorIdsJson || '[]');
@@ -265,6 +273,8 @@ export async function POST(req: Request) {
             : { mode: 'all' },
           clientId: String(executionTarget.workerId || ''),
           evaluatorIds,
+          evaluatorConfigs: body.evaluatorConfigs,
+          evaluatorExecutionConfig: body.evaluatorExecutionConfig,
           runConfig: {
             platform: String(executionTarget.platform || ''),
             agent: executionAgent,
@@ -338,6 +348,8 @@ export async function POST(req: Request) {
               : Number(runConfig.maxParallelAgentCases),
           },
           evaluatorIds: Array.isArray(body.evaluatorIds) ? body.evaluatorIds.map(String) : undefined,
+          evaluatorConfigs: body.evaluatorConfigs,
+          evaluatorExecutionConfig: body.evaluatorExecutionConfig,
         });
         recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
         return NextResponse.json(result, { status: 201 });
@@ -401,6 +413,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Skill 实验缺少 Skill、版本或预设上下文' }, { status: 400 });
     }
 
+    let evaluatorConfigsJson: string;
+    try {
+      evaluatorConfigsJson = await prepareExperimentEvaluatorConfigs(username, evaluatorIds, body.evaluatorConfigs, body.evaluatorExecutionConfig);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof EvaluatorRunConfigValidationError ? error.message : 'invalid evaluatorConfigs' }, { status: 400 });
+    }
+
     // 对比实验：type='llm' → createComparisonExperiment + autoPairGroups
     if (type === 'llm') {
       if (scope) {
@@ -423,6 +442,7 @@ export async function POST(req: Request) {
             value: String(g.value ?? ''),
           })),
           evaluatorIds,
+          evaluatorConfigsJson,
         });
         // autoPairGroups 查候选 trace + 为可比配对创建 case
         await autoPairGroups(id);
@@ -441,17 +461,6 @@ export async function POST(req: Request) {
     }
     if (watchMode && !agentName) {
       return NextResponse.json({ error: 'watch mode requires agentName' }, { status: 400 });
-    }
-
-    let evaluatorConfigsJson: string;
-    try {
-      evaluatorConfigsJson = serializeEvaluatorRunConfigs(body.evaluatorConfigs, evaluatorIds);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'invalid evaluatorConfigs';
-      return NextResponse.json(
-        { error: error instanceof EvaluatorRunConfigValidationError ? message : 'invalid evaluatorConfigs' },
-        { status: 400 },
-      );
     }
 
     for (const item of cases) {

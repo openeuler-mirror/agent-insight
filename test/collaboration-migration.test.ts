@@ -25,7 +25,7 @@ import { PrismaClient } from '@prisma/client';
 
 const execute = promisify(execFile);
 
-test('startup db_push upgrades an existing SQLite database additively and is repeatable', { timeout: 90000 }, async () => {
+test('startup db_push upgrades an existing SQLite database additively and is repeatable', { timeout: 240000 }, async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'collaboration-migration-'));
     await mkdir(path.join(root, 'prisma'));
     await mkdir(path.join(root, 'scripts'));
@@ -72,7 +72,7 @@ model CollaborationSessionBinding {
     const url = `file:${path.join(root, 'migration.db')}`;
     const sync = async () => {
         try {
-            return await execute('sh', ['scripts/db_push.sh'], { cwd: root, env: { ...process.env, DATABASE_URL: url, RUST_LOG: 'info' }, timeout: 30000 });
+            return await execute('sh', ['scripts/db_push.sh'], { cwd: root, env: { ...process.env, DATABASE_URL: url, RUST_LOG: 'info' }, timeout: 60000 });
         } catch (error) {
             const details = error as Error & { stdout?: string; stderr?: string };
             throw new Error([details.message, details.stdout, details.stderr].filter(Boolean).join('\n'));

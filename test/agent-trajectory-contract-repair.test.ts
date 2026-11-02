@@ -394,3 +394,25 @@ test('repair request crossing the prompt limit is rejected before a second infer
   );
   assert.equal(attempts, 1);
 });
+
+test('configured retry budget counts contract repair and transient failures together', async () => {
+  const { withEvaluatorExecution } = await import('@/lib/engine/experiment/evaluator-execution-policy');
+  for (const maxRetries of [0, 1, 2]) {
+    const requests: JudgeLlmRequest[] = [];
+    const run = withEvaluatorExecution({ attemptTimeoutSeconds: 30, maxRetries }, new AbortController().signal,
+      () => runAgentTrajectoryJudge({ kind: 'step-efficiency', task: '直接回答。', interactions: interactions() }, async (_user, req) => {
+        requests.push(req);
+        if (requests.length === 1) return 'invalid-secret-output';
+        if (requests.length === 2) throw Object.assign(new Error('temporary network failure'), { status: 503 });
+        return JSON.stringify(validJudgment());
+      }), { retryDelaysMs: [0, 0] });
+    if (maxRetries < 2) await assert.rejects(run);
+    else assert.equal((await run).score, 100);
+    assert.equal(requests.length, maxRetries + 1);
+    if (maxRetries) {
+      assert.match(requests[1].user, /contract repair/);
+      assert.doesNotMatch(requests[1].user, /invalid-secret-output/);
+      assert.equal(requests[1].system, requests[0].system);
+    }
+  }
+});

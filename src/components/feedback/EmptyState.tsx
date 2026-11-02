@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/components.md §2 E.8 — explicit empty state with icon + title + description + action.
+// design/components.md §2 E.8 — explicit empty state with icon + title + description + action.
 import * as React from 'react';
 import { Inbox, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';

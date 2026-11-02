@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import secrets
 import os
 import re
 import signal
@@ -107,7 +109,7 @@ def parse_opencode_agent_api_payload(payload: Any) -> list[dict[str, Any]]:
     for raw in raw_agents:
         if not isinstance(raw, dict) or raw.get("hidden") is True:
             continue
-        name = strip_zero_width(str(raw.get("name") or raw.get("id") or ""))
+        name = strip_zero_width(str(raw.get("id") or raw.get("name") or ""))
         if not name or name in seen or name in _EXCLUDED_AGENTS:
             continue
         seen.add(name)
@@ -133,7 +135,7 @@ def merge_agent_snapshots(
     positions: dict[str, int] = {}
     for snapshot in snapshots:
         for raw in snapshot:
-            name = strip_zero_width(str(raw.get("name") or raw.get("id") or ""))
+            name = strip_zero_width(str(raw.get("id") or raw.get("name") or ""))
             if not name or name in _EXCLUDED_AGENTS:
                 continue
             item = dict(raw)
@@ -521,9 +523,21 @@ def _list_agents_via_server(
     if resolved is None:
         return None, f"OpenCode executable {(executable or 'opencode')!r} not found"
 
+    version, version_error = _run_opencode_cli(["--version"], executable=resolved)
+    match = re.search(r"(?:^|\s)v?(\d+)\.\d+\.\d+", version or "")
+    major = int(match.group(1)) if match else None
+    if major not in (1, 2):
+        return None, version_error or "无法识别或尚不支持此 OpenCode 版本"
+    endpoint = "/api/agent" if major == 2 else "/agent"
     port = _reserve_loopback_port()
     env = dict(os.environ)
     env.pop("OPENCODE_SERVER_PASSWORD", None)
+    env.pop("OPENCODE_PASSWORD", None)
+    headers = {}
+    if major == 2:
+        password = secrets.token_urlsafe(24)
+        env["OPENCODE_PASSWORD"] = password
+        headers["Authorization"] = "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()
     popen_kwargs: dict[str, Any] = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
@@ -561,7 +575,7 @@ def _list_agents_via_server(
                 return None, f"OpenCode agent server exited with code {process.returncode}"
             try:
                 with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/agent",
+                    urllib.request.Request(f"http://127.0.0.1:{port}{endpoint}", headers=headers),
                     timeout=1.0,
                 ) as response:
                     payload = json.loads(response.read().decode("utf-8"))
@@ -614,8 +628,8 @@ def _run_opencode_cli(
         return None, str(exc)
     stdout = completed.stdout or ""
     stderr = completed.stderr or ""
-    if completed.returncode != 0 and not stdout.strip():
-        detail = stderr.strip() or f"exit code {completed.returncode}"
+    if completed.returncode != 0:
+        detail = stderr.strip() or stdout.strip() or f"exit code {completed.returncode}"
         return None, detail
     return stdout, None
 
@@ -731,6 +745,10 @@ def list_opencode_agents(
                 "agents": agents,
                 "note": "Showing resolved non-hidden agents from OpenCode /agent.",
             }
+        version, _ = _run_opencode_cli(["--version"], executable=executable)
+        if re.search(r"(?:^|\s)v?2\.\d+\.\d+", version or ""):
+            return {"platform": "opencode", "default": None, "agents": [],
+                    "note": f"OpenCode v2 Agent API 探测失败：{server_error}；请检查本机配置与插件日志"}
         stdout, error = _run_opencode_cli(
             ["agent", "list"],
             executable=executable,
@@ -759,7 +777,9 @@ def list_opencode_agents(
     )
     default = choose_default_agent(agents)
     if not agents:
-        note = "No usable agents after filtering."
+        note = "; ".join(filter(None, [server_error if cli_output is None else None,
+                                      "OpenCode Agent 探测未返回可用 Agent；请检查版本、配置与插件启动日志。不是客户端离线。"
+                                      ]))
     else:
         note = (
             "OpenCode /agent unavailable; showing built-in agents, non-hidden "

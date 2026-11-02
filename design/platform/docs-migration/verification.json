@@ -1,0 +1,518 @@
+{
+  "baselineCommit": "1bb2585c66aaea37b5b668409cfc80be2f8389b7",
+  "branch": "codex/docs-layout-migration",
+  "scope": {
+    "commentOnlyCodeFiles": 37,
+    "executableChanges": [
+      "scripts/prepare-npm-package.js",
+      "src/app/api/ingest/setup/llamaindex-collector/archive.ts"
+    ],
+    "prismaModelUnchanged": true
+  },
+  "docsFocused": {
+    "tests": 18,
+    "pass": 17,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 1
+  },
+  "fullSuite": {
+    "tests": 4329,
+    "pass": 4306,
+    "fail": 3,
+    "cancelled": 2,
+    "skipped": 18
+  },
+  "upstreamKnownFailures": {
+    "tests": 92,
+    "pass": 88,
+    "fail": 3,
+    "cancelled": 0,
+    "skipped": 1
+  },
+  "upstreamCancellationReproduction": {
+    "tests": 2,
+    "pass": 0,
+    "fail": 0,
+    "cancelled": 2,
+    "skipped": 0
+  },
+  "npmPack": {
+    "newGuideIncluded": true,
+    "oldGuideIncluded": false,
+    "designFilesIncluded": 0,
+    "fileCount": 728
+  },
+  "browserVerified": false,
+  "dockerImageBuilt": false,
+  "published": false,
+  "notes": [
+    "全量三个断言失败与未迁移上游基线同名失败一致。",
+    "两个实验取消用例在当前环境和未迁移基线均因 event loop 已结束而 Promise 未完成被取消；未修改相关业务代码。",
+    "专项验证包括下载 ZIP 内 README 与迁移后的源文档逐字一致，以及 standalone 准备流程。"
+  ],
+  "documentation": {
+    "originalFiles": 432,
+    "movedFiles": 317,
+    "unmodifiedContentFiles": 277,
+    "allFilesRetained": true,
+    "missingFiles": [],
+    "changedBinaryOrVendorFiles": [],
+    "preservedLocalLinksChecked": 1066,
+    "linkRegressions": [],
+    "preexistingBrokenLinks": 80,
+    "currentBrokenLinks": 80,
+    "navigationPages": 98,
+    "navigationMissing": [],
+    "longPublicDocuments": 30
+  },
+  "packageScriptsUnchanged": true,
+  "dependenciesUnchanged": true,
+  "requiredDisclaimersPreserved": true,
+  "verificationStage": "Top-level results describe the initial migration before approved cleanup; approvedCleanup describes the follow-up.",
+  "approvedCleanup": {
+    "date": "2026-10-27",
+    "approvedRemovedFiles": [
+      "design/platform/legacy/eval-dashboard.md",
+      "docs/snippets/install-sdk.mdx",
+      "docs/snippets/setup-env.mdx",
+      "docs/zh/explanation/platform/user-overview.html"
+    ],
+    "retainedWithoutChanges": [
+      "docs/zh/explanation/platform/developer-overview.html",
+      "docs/zh/how-to/platform/build-rpm.md"
+    ],
+    "changedDocumentationFiles": [
+      "design/optimization/skill-workbench-refactor/phase2-requirements-design.md",
+      "design/platform/docs-migration/implementation-plan.md",
+      "design/platform/docs-migration/long-documents.json",
+      "design/platform/docs-migration/migration-review.md",
+      "design/platform/docs-migration/verification.json",
+      "docs/README.md",
+      "docs/docs.json",
+      "docs/zh/explanation/README.md",
+      "docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md",
+      "docs/zh/explanation/observability/hermes-storage-analysis.md",
+      "docs/zh/explanation/platform/architecture.md",
+      "docs/zh/explanation/platform/developer-index.md",
+      "docs/zh/explanation/platform/positioning.md",
+      "docs/zh/how-to/observability/llamaindex-trace-collector.md",
+      "docs/zh/reference/platform/example-cost.md"
+    ],
+    "changedNonDocumentationFiles": [],
+    "vendorAndLicenseFilesUnchanged": true,
+    "originalMigrationFilesAccountedFor": 432,
+    "originalFilesRemaining": 428,
+    "unapprovedRemovals": [],
+    "preCleanupBrokenLocalReferences": 80,
+    "currentBrokenLocalReferences": 80,
+    "newBrokenLocalReferences": [],
+    "navigationPages": 98,
+    "navigationMissing": [],
+    "docsFocused": {
+      "tests": 18,
+      "pass": 17,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1
+    },
+    "fullSuite": {
+      "tests": 4329,
+      "pass": 4306,
+      "fail": 3,
+      "cancelled": 2,
+      "skipped": 18
+    },
+    "sameFailuresAndCancellationsAsBeforeCleanup": true,
+    "npmPack": {
+      "guideIncluded": true,
+      "removedFilesIncluded": [],
+      "designFilesIncluded": 0,
+      "fileCount": 728
+    },
+    "browserVerified": false,
+    "dockerImageBuilt": false,
+    "published": false
+  },
+  "submissionValidation": {
+    "baseCommit": "4e878243821ba59c8db99e17332218e5c85e0b86",
+    "testedCommit": "bd7c892107123d51a86c3f87a62f4af1b382d07d",
+    "fullSuite": {
+      "tests": 4330,
+      "pass": 4309,
+      "fail": 3,
+      "cancelled": 0,
+      "skipped": 18
+    },
+    "knownFailingTests": [
+      "页面禁用编辑入口，公开 PATCH 执行服务端保护",
+      "OTel trace adapter registry selects Hermes before the generic fallback",
+      "Qoder framework and OTLP registries expose plugin onboarding and snapshot replacement"
+    ],
+    "docsAndPackagingFocused": {
+      "tests": 22,
+      "pass": 21,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1
+    },
+    "npmPack": {
+      "files": 726,
+      "designFiles": [],
+      "llamaIndexGuide": true
+    },
+    "documentation": {
+      "brokenLocalReferences": 80,
+      "newBrokenLocalReferences": 0,
+      "navigationPages": 98,
+      "missingNavigationPages": []
+    },
+    "scope": {
+      "base": "4e878243821ba59c8db99e17332218e5c85e0b86",
+      "head": "bd7c892107123d51a86c3f87a62f4af1b382d07d",
+      "commentOnly": 40,
+      "executableChanges": [
+        "next.config.ts",
+        "scripts/prepare-npm-package.js",
+        "src/app/api/ingest/setup/llamaindex-collector/archive.ts"
+      ]
+    },
+    "standaloneDesignRegression": {
+      "failedBeforeFix": true,
+      "passedAfterFix": true,
+      "sourceDesignAndRuntimeFilesPreserved": true
+    },
+    "review": "No remaining blocking findings after tracing and standalone exclusion fix",
+    "browserVerified": false,
+    "fullNextBuildPerformed": false,
+    "dockerImageBuilt": false
+  },
+  "latestUpstreamSync": {
+    "baseCommit": "62b9bbfb5c345eaf49549bd7ed4fc16529ee7ddb",
+    "testedCommit": "f03df1580f9d7ff6459f28c437be6dc2eed3fe27",
+    "documentation": {
+      "base": "62b9bbfb5c345eaf49549bd7ed4fc16529ee7ddb",
+      "mappedOriginalFiles": 437,
+      "retainedOriginalFiles": 433,
+      "approvedRemovedFiles": [
+        "design/platform/legacy/eval-dashboard.md",
+        "docs/snippets/install-sdk.mdx",
+        "docs/snippets/setup-env.mdx",
+        "docs/zh/explanation/platform/user-overview.html"
+      ],
+      "brokenLocalReferences": 80,
+      "newBrokenLocalReferences": 0,
+      "navigationPages": 98,
+      "retainedItems5and6Unchanged": true,
+      "upstreamNewDesigns": 4,
+      "upstreamNewImages": 1
+    },
+    "fullSuite": {
+      "tests": 4356,
+      "pass": 4334,
+      "fail": 4,
+      "cancelled": 0,
+      "skipped": 18
+    },
+    "upstreamFullSuite": {
+      "tests": 4355,
+      "pass": 4333,
+      "fail": 4,
+      "cancelled": 0,
+      "skipped": 18
+    },
+    "commonFailingTests": [
+      "页面禁用编辑入口，公开 PATCH 执行服务端保护",
+      "OTel trace adapter registry selects Hermes before the generic fallback",
+      "Qoder framework and OTLP registries expose plugin onboarding and snapshot replacement"
+    ],
+    "currentFullSuiteOnlyFailure": {
+      "name": "search failures degrade locally but the evaluation deadline cancels in-flight search",
+      "assertion": "Missing expected rejection: 评估尝试超时",
+      "currentIsolated": {
+        "tests": 2,
+        "pass": 2,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "upstreamIsolated": {
+        "tests": 2,
+        "pass": 2,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "upstreamFullSuitePassed": true,
+      "classification": "Not consistently reproduced. Related source and test match upstream byte-for-byte; root cause remains unconfirmed."
+    },
+    "upstreamSnapshotOnlyFailure": {
+      "name": "AC1: dist/extension.js 构建产物存在且非空（可被打包安装）",
+      "reason": "The git archive snapshot does not include generated scripts/trae-collector/dist/extension.js. The current workspace includes this build artifact."
+    },
+    "npmPack": {
+      "files": 726,
+      "designFiles": [],
+      "llamaIndexGuide": true
+    },
+    "mergeReview": "No blocking findings: latest evaluator docs, images and design status retained; 40 non-documentation files changed by the latest upstream merge match upstream byte-for-byte.",
+    "browserVerified": false,
+    "fullNextBuildPerformed": false,
+    "dockerImageBuilt": false
+  },
+  "docsFollowup20261028": {
+    "baseCommit": "f285b93bc66cc2e5e9e89e3220aac94d36a337cf",
+    "scope": "Documentation, navigation and copied existing brand assets only; no business source or dependency changes",
+    "deleted": [
+      "docs/zh/how-to/platform/build-rpm.md"
+    ],
+    "developerHtmlUnchanged": true,
+    "newGuides": [
+      "docs/zh/how-to/platform/upgrade-and-rollback.md",
+      "docs/zh/how-to/platform/backup-and-restore.md",
+      "docs/zh/reference/platform/configuration.md"
+    ],
+    "legacyLinkResolutions": "link-resolutions.json",
+    "missingHistoricalMaterials": 8,
+    "localMarkdownTargets": {
+      "checked": 1185,
+      "missing": 0,
+      "excludes": [
+        "HTML legacy files",
+        "external URL reachability",
+        "all fragment anchors"
+      ]
+    },
+    "navigation": {
+      "pages": 100,
+      "targetsExist": true,
+      "readmeEntrypointsRetained": 7,
+      "canonicalFilename": "navigation.md",
+      "oldSiteRoutesRedirected": true
+    },
+    "mintlify": {
+      "strictBuildPassed": true,
+      "syntaxErrors": 0,
+      "brokenInternalLinks": 0,
+      "warnings": 75,
+      "warningRule": "duplicate-h1",
+      "externalLinksChecked": false
+    },
+    "browser": {
+      "verified": true,
+      "scope": [
+        "new operations pages",
+        "directory body link to backup guide",
+        "backup page section anchor",
+        "old how-to README route",
+        "product overview logo",
+        "previously invalid MDX generation-pipeline page"
+      ],
+      "consoleErrorsOnSampledPages": 0,
+      "fullSiteVisualAudit": false,
+      "productUiTested": false
+    },
+    "backupExample": {
+      "shellBlocksSyntaxChecked": 3,
+      "syntheticColdBackupRestore": "passed",
+      "comparedFiles": 4,
+      "sqliteIntegrity": "ok",
+      "productionRestoreTested": false,
+      "appStarted": false
+    },
+    "packagingFocused": {
+      "tests": 6,
+      "pass": 6,
+      "fail": 0
+    },
+    "unitTests": {
+      "command": "npm run test",
+      "counts": {
+        "tests": 4437,
+        "pass": 4400,
+        "fail": 15,
+        "cancelled": 0,
+        "skipped": 22
+      },
+      "exit": 1,
+      "isolatedRuntime": true,
+      "failureNamesMatchPrevious": true,
+      "note": "Failure set matches pre-change run; includes missing yaml/pydantic/pwsh and registration fixture assertion. No claim of all-green tests."
+    },
+    "publication": "Local changes only; not committed or pushed"
+  },
+  "docsFollowupSubmission20261028": {
+    "upstreamCommit": "10c8cc652279b4a8153a4d2a90ce48e037a7f5b2",
+    "scope": "Only docs/ and design/ differ from upstream; upstream runtime and test updates retained",
+    "resolvedNavigationConflicts": 6,
+    "navigationTargets": 100,
+    "localMarkdownTargets": 1194,
+    "missingLocalTargets": 0,
+    "mintlifyStrictBuildPassed": true,
+    "mintlifyBrokenLinks": 0,
+    "mintlifyDuplicateHeadingWarnings": 75,
+    "fullUnitTests": {
+      "tests": 4447,
+      "pass": 4409,
+      "fail": 15,
+      "cancelled": 0,
+      "skipped": 23
+    },
+    "failureNamesMatchPrevious": true,
+    "productBrowserRerun": false,
+    "note": "Prior document browser evidence retained; no product UI change in this PR."
+  },
+  "contractsAndBilingual20261031": {
+    "baseCommit": "e763ad245536316342304018954f10aeabdcaf50",
+    "scope": "Documentation and navigation only; no runtime, dependency, CI, packaging implementation or database schema changes",
+    "contracts": [
+      "HTTP identity",
+      "Trace ingestion",
+      "experiments",
+      "environment preparation",
+      "model test",
+      "evaluator output and runtime settings",
+      "independent Benchmark evaluation"
+    ],
+    "englishBodies": 12,
+    "translationCoverage": "translation-coverage.json",
+    "splitTopics": [
+      "Docker deployment from quick start",
+      "framework compatibility from quick start",
+      "environment and model-test contracts from API overview",
+      "evaluator output from development guide"
+    ],
+    "titleCleanup": {
+      "processedDiagnostics": 75,
+      "remainingDuplicateHeadingWarnings": 0,
+      "oldHeadingAnchorsRetained": true,
+      "offlineReadmeException": "LlamaIndex retains a real H1 for ZIP README; site title uses its Chinese onboarding name"
+    },
+    "syntax": {
+      "baselineParseErrors": 1,
+      "finalParseErrors": 0,
+      "bareRuntimeMdxExpressions": 0,
+      "fixedRuntimeReferenceError": "Unquoted exclusions[{code,traceCount,turnCount}] in API overview"
+    },
+    "mintlify": {
+      "contentValidationPassed": true,
+      "officialStrictPrebuildPassed": true,
+      "clientVersion": "0.0.4004",
+      "errors": 0,
+      "warnings": 0,
+      "brokenInternalLinks": 0,
+      "automaticClientUpdateInitiallyDelayed": true
+    },
+    "navigation": {
+      "languages": [
+        "zh",
+        "en"
+      ],
+      "targets": 126,
+      "missing": 0,
+      "legacyReadmeRedirectsRetained": true
+    },
+    "sourceLinks": {
+      "httpChecked": 101,
+      "http200": 101,
+      "gitTargetsPresent": true,
+      "note": "Only GitCode project-source URLs in changed documentation; HTTP success alone is not content validation. Not a full audit of all external URLs."
+    },
+    "browser": {
+      "verified": true,
+      "scope": [
+        "English evaluator contract and code/table display",
+        "English-to-Chinese language selector",
+        "English coverage table",
+        "English first Trace tutorial",
+        "Chinese Docker guide via tutorial body link",
+        "legacy English README redirect",
+        "legacy H1 and API section anchors",
+        "API overview reload after runtime expression repair"
+      ],
+      "allPagesAndDiagramsTested": false,
+      "businessUiTested": false,
+      "realModelsCalled": false
+    },
+    "focusedTests": [
+      {
+        "scope": "Benchmark Evaluator API and model-connection timeout/headers",
+        "counts": {
+          "tests": 44,
+          "pass": 44,
+          "fail": 0,
+          "skipped": 0
+        }
+      },
+      {
+        "scope": "Evaluator output/runtime settings and packaging/LlamaIndex ZIP",
+        "counts": {
+          "tests": 45,
+          "pass": 44,
+          "fail": 0,
+          "skipped": 1
+        }
+      }
+    ],
+    "fullUnitTests": {
+      "command": "npm run test",
+      "counts": {
+        "tests": 4524,
+        "pass": 4464,
+        "fail": 37,
+        "cancelled": 0,
+        "skipped": 23
+      },
+      "exit": 1,
+      "isolatedRuntime": true
+    },
+    "upstreamFailureProbe": {
+      "counts": {
+        "tests": 104,
+        "pass": 68,
+        "fail": 36,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sameFailedNames": 36,
+      "fullUntouchedUpstreamSuiteRerun": false
+    },
+    "unreproducedFullSuiteFailure": {
+      "name": "a missing unselected Runtime does not block the selected Runtime readiness",
+      "currentFocused": {
+        "tests": 17,
+        "pass": 17,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "upstreamFocused": {
+        "tests": 17,
+        "pass": 17,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "classification": "Observed in final full suite only; both focused files pass. Cause unconfirmed."
+    },
+    "packagedReadmeRegression": {
+      "introducedBy": "Removing the offline README H1 during title cleanup",
+      "fixed": true,
+      "focusedArchiveTestPassed": true,
+      "absentFromFinalFullSuiteFailures": true
+    },
+    "longDocumentCandidates": 29,
+    "missingHistoricalMaterials": 8,
+    "deletedFiles": 0,
+    "developerHtmlUnchanged": true,
+    "publication": "Validation completed before submission; current PR publication state is tracked in GitCode.",
+    "localMarkdownTargets": {
+      "checked": 1399,
+      "missing": 0,
+      "excluded": [
+        "legacy HTML",
+        "complete fragment-anchor audit"
+      ]
+    }
+  }
+}

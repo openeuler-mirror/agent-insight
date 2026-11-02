@@ -149,12 +149,12 @@ test('ordinary checks reject empty OpenCode credentials instead of accepting an 
   try {
     process.env.PATH = root
     process.env.AGENT_INSIGHT_HOME = root
-    fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(1, JSON.stringify({ model: 'provider/model' }))\n`, { mode: 0o755 })
+    fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(1, process.argv[2] === 'models' ? 'provider/model' : JSON.stringify({ model: 'provider/model' }))\n`, { mode: 0o755 })
     fs.mkdirSync(path.join(root, 'opencode-data/opencode'), { recursive: true })
     fs.writeFileSync(path.join(root, 'opencode-data/opencode/auth.json'), JSON.stringify({ provider: { type: 'api', key: '   ' } }))
     const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: path.join(root, 'opencode-data'), PROVIDER_API_KEY: '   ' }, client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true }) } })
     const issues = await services.checkAgent(context)
-    assert(issues.some((item: { code: string }) => item.code === 'MODEL_CREDENTIAL_MISSING'))
+    assert(issues.some((item: { code: string; message: string }) => item.code === 'MODEL_UNAVAILABLE' && item.message.includes('认证记录为空或不完整')))
     fs.writeFileSync(path.join(root, 'opencode-data/opencode/auth.json'), JSON.stringify({ provider: { type: 'oauth', refresh: 'fixture-refresh' } }))
     assert.deepEqual(await services.checkAgent(context), [])
   } finally {
@@ -176,7 +176,7 @@ test('OpenCode environment checks accept plugin-prefixed config and reject ambig
   process.env.PATH = root
   process.env.AGENT_INSIGHT_HOME = root
   const outputFile = path.join(root, 'config-output')
-  fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nconst fs = require('node:fs'); require('node:assert/strict').equal(fs.fstatSync(1).isFile(), true); fs.writeFileSync(1, fs.readFileSync(${JSON.stringify(outputFile)}));\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}\nconst fs = require('node:fs'); require('node:assert/strict').equal(fs.fstatSync(1).isFile(), true); fs.writeFileSync(1, process.argv[2] === 'models' ? 'provider/model' : fs.readFileSync(${JSON.stringify(outputFile)}));\n`, { mode: 0o755 })
   const config = JSON.stringify({ model: 'provider/model' })
   const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: root, PROVIDER_API_KEY: 'fixture-key' },
     client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true }) } })
@@ -188,8 +188,63 @@ test('OpenCode environment checks accept plugin-prefixed config and reject ambig
   for (const invalid of [config.slice(0, -1), `${config}\n${config}`, `${config}\nunexpected output`, '{"model":42}']) {
     fs.writeFileSync(outputFile, invalid)
     const issues = await services.checkAgent(context)
-    assert(issues.some((item: { code: string }) => item.code === 'MODEL_CONFIGURATION_UNREADABLE'))
+    assert(issues.some((item: { code: string }) => item.code === 'MODEL_UNAVAILABLE'))
   }
+})
+
+test('OpenCode v2 precheck uses the standalone native model catalog and preserves versioned capabilities', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-opencode-v2-'))
+  const oldPath = process.env.PATH
+  const oldHome = process.env.AGENT_INSIGHT_HOME
+  t.after(() => {
+    if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath
+    if (oldHome === undefined) delete process.env.AGENT_INSIGHT_HOME; else process.env.AGENT_INSIGHT_HOME = oldHome
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+  process.env.PATH = root
+  process.env.AGENT_INSIGHT_HOME = root
+  const outputFile = path.join(root, 'output')
+  const callsFile = path.join(root, 'calls')
+  const versionFile = path.join(root, 'version')
+  fs.writeFileSync(versionFile, '2.1.4')
+  fs.writeFileSync(path.join(root, 'opencode'), `#!${process.execPath}
+const fs = require('node:fs'), assert = require('node:assert/strict');
+assert.equal(fs.fstatSync(1).isFile(), true);
+assert.equal(fs.fstatSync(1).mode & 0o777, 0o600);
+fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(process.argv.slice(2)) + '\\n');
+fs.writeFileSync(1, process.argv.includes('--version') ? fs.readFileSync(${JSON.stringify(versionFile)}) : process.argv[2] === 'models' ? 'provider/model' : fs.readFileSync(${JSON.stringify(outputFile)}));
+`, { mode: 0o755 })
+  const services = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: root },
+    client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true, major: 2 }) } })
+  const selected = { ...context, model: 'deepseek/deepseek-flash' }
+  const model = { providerID: 'deepseek', id: 'deepseek-flash', modelID: 'upstream-model', enabled: true }
+  fs.writeFileSync(outputFile, JSON.stringify({ data: [model] }))
+  assert.deepEqual(await services.checkAgent(selected), [])
+  assert.deepEqual(services.capabilityUpdate().capabilities.platforms[0].runExperimentCase, { version: 2, returnsTraceId: true, skillSnapshotVersion: 4 })
+  for (const data of [[], [{ ...model, enabled: false }], [{ ...model, providerID: 'other' }]]) {
+    fs.writeFileSync(outputFile, JSON.stringify({ data }))
+    assert.equal((await services.checkAgent(selected))[0].code, 'MODEL_UNAVAILABLE')
+  }
+  fs.writeFileSync(outputFile, JSON.stringify({ data: model }))
+  assert.deepEqual(await services.checkAgent({ ...context, model: '' }), [])
+  fs.writeFileSync(outputFile, JSON.stringify({ data: null }))
+  assert.equal((await services.checkAgent({ ...context, model: '' }))[0].code, 'MODEL_CONFIGURATION_MISSING')
+  for (const output of ['[{"type":"document","info":{}}]', '{"data":[{}]}', '{"data":[]', '{"data":[]}\n{"data":[]}', 'private-fixture-token']) {
+    fs.writeFileSync(outputFile, output)
+    const issues = await services.checkAgent(selected)
+    assert.equal(issues[0].code, 'MODEL_CONFIGURATION_UNREADABLE')
+    assert.match(issues[0].message, /OpenCode v2/)
+    assert.doesNotMatch(issues[0].message, /private-fixture-token/)
+  }
+  const calls = fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert(calls.every(args => args[0] === '--version' || (args[0] === 'api' && args[1] === '--standalone' && ['model.list', 'model.default'].includes(args[2]))))
+  fs.writeFileSync(versionFile, '1.14.39')
+  fs.writeFileSync(outputFile, JSON.stringify({ model: context.model, provider: { provider: { options: { apiKey: 'fixture-key' } } } }))
+  const v1 = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: root },
+    client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true, major: 1 }) } })
+  assert.deepEqual(await v1.checkAgent(context), [])
+  assert.equal(v1.capabilityUpdate().capabilities.platforms[0].runExperimentCase.skillSnapshotVersion, 4)
+  assert.deepEqual(JSON.parse(fs.readFileSync(callsFile, 'utf8').trim().split('\n').at(-1)!), ['models'])
 })
 
 test('normal preparation and restart recovery complete without full discovery or unrelated processes', async () => {

@@ -785,7 +785,7 @@ class BenchmarkExecutionRunner {
   async progress(request, stage, message, seconds) {
     if (await this.store.cancellation?.(request.runId)) throw new BenchmarkExecutorError('EXECUTION_CANCELLED', '实验已取消', 409)
     this.currentProgress = this.currentProgress || new Map()
-    const progress = { message, stageStartedAt: new Date().toISOString(), ...(seconds ? { stageDeadlineAt: new Date(Date.now() + seconds * 1000).toISOString() } : {}) }
+    const progress = { ...(this.currentProgress?.get(request.runId)?.progress.traceId ? { traceId: this.currentProgress.get(request.runId).progress.traceId } : {}), message, stageStartedAt: new Date().toISOString(), ...(seconds ? { stageDeadlineAt: new Date(Date.now() + seconds * 1000).toISOString() } : {}) }
     this.currentProgress.set(request.runId, { stage, progress })
     await this.store.writeState(request.runId, { stage, progress })
     await this.callback.progress(request, stage, progress).catch(() => undefined)
@@ -813,6 +813,15 @@ class BenchmarkExecutionRunner {
     const context = {
       runId: request.runId, signal, insightBaseUrl: this.insightBaseUrl,
       persist: async (next) => { handle = next; await this.store.writeState(request.runId, { executionHandle: next }) },
+      onTraceId: async ({ traceId }) => {
+        if (typeof traceId !== 'string' || !traceId.trim()) return
+        const latest = this.currentProgress?.get(request.runId)
+        if (!latest) return
+        if (latest.progress.traceId && latest.progress.traceId !== traceId) throw new BenchmarkExecutorError('TRACE_ID_CONFLICT', '本次执行已绑定其他主链路')
+        latest.progress = { ...latest.progress, traceId }
+        await this.store.writeState(request.runId, { stage: latest.stage, progress: latest.progress })
+        await this.callback.progress(request, latest.stage, latest.progress).catch(() => {})
+      },
       heartbeat: async () => {
         const latest = this.currentProgress?.get(request.runId)
         if (latest) await this.callback.progress(request, latest.stage, latest.progress).catch(() => {})
@@ -838,7 +847,8 @@ class BenchmarkExecutionRunner {
         correlation: { experimentId: task.context.experimentId, caseRunId: request.runId },
         timeoutSeconds: agentSeconds, signal: stageSignal,
       }, context)
-      runFacts = { ...result, platform: task.agentConfig.platform, agent: task.agentConfig.agent, ...(task.agentConfig.model ? { model: task.agentConfig.model } : {}) }
+      if (result?.traceId) await context.onTraceId({ traceId: result.traceId })
+      runFacts = { ...(this.currentProgress?.get(request.runId)?.progress.traceId ? { traceId: this.currentProgress.get(request.runId).progress.traceId } : {}), ...result, platform: task.agentConfig.platform, agent: task.agentConfig.agent, ...(task.agentConfig.model ? { model: task.agentConfig.model } : {}) }
       await this.store.writeState(request.runId, { runFacts })
       if (result?.timedOut) throw new BenchmarkExecutorError('AGENT_TIMEOUT', 'Agent 执行超过任务上限并已被终止')
       if ((result?.exitCode != null && result.exitCode !== 0) || (result?.exitCode === null && result?.signal)) throw new BenchmarkExecutorError('AGENT_EXIT_NONZERO', 'Agent 异常退出')
@@ -879,7 +889,7 @@ class BenchmarkExecutionRunner {
         await this.store.writeState(request.runId, { stage: 'complete_pending', completion, callbackError: cause.message })
         return
       }
-      runFacts = { ...(runFacts || { finishedAt: new Date().toISOString() }), ...(cause.runFacts || {}), platform: task.agentConfig.platform, agent: task.agentConfig.agent }
+      runFacts = { ...(this.currentProgress?.get(request.runId)?.progress.traceId ? { traceId: this.currentProgress.get(request.runId).progress.traceId } : {}), ...(runFacts || { finishedAt: new Date().toISOString() }), ...(cause.runFacts || {}), platform: task.agentConfig.platform, agent: task.agentConfig.agent }
       if (handle && (!cleanup || cleanup.status !== 'succeeded')) {
         await backend.cancel(handle).catch(() => {})
         cleanup = await this.cleanup(backend, handle, request)

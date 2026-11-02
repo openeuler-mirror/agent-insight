@@ -21,7 +21,6 @@ import type { DebugJob } from '@/lib/debug-job';
 export const dynamic = 'force-dynamic';
 
 declare global {
-  // eslint-disable-next-line no-var
   var __debugJobStore: Map<string, DebugJob> | undefined;
 }
 

@@ -130,7 +130,7 @@ export function GenerationConversation({
   workbenchSessionId: string;
   generatorSessionId: string;
   backgroundRunning: boolean;
-  quickActions?: ReactNode;
+  quickActions?: ReactNode | ((input: string, busy: boolean) => ReactNode);
   onRunningChange: (running: boolean) => void;
   onSynced: (session: unknown) => void;
   onError: (message: string) => void;
@@ -486,7 +486,7 @@ export function GenerationConversation({
         <GenerationMessageList messages={messages} user={user} />
         <div ref={endRef} />
       </div>
-      {quickActions}
+      {typeof quickActions === 'function' ? quickActions(input, running || backgroundRunning || loading) : quickActions}
       <form onSubmit={send} className="shrink-0 rounded-lg border border-border bg-card p-2">
         {attachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-1.5">

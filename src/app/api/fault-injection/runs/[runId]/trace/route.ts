@@ -20,7 +20,6 @@ import { prisma } from '@/lib/storage/prisma'
 import {
   buildFiPipelineMarkers,
   buildFiTraceMarkers,
-  mergeEvaluationMarkers,
 } from '@/lib/fault-injection/trace-markers'
 import { getLatestWorkerInventory } from '@/lib/fault-injection/worker-protocol'
 import type { RasEventRow } from '@/lib/ingest/ras/normalize'
@@ -154,18 +153,8 @@ export async function GET(
   interactions = stampAssistantModel(interactions, model)
 
   const rawMarkers = JSON.parse(run.markersJson || '[]')
-  let markersList = Array.isArray(rawMarkers) ? [...rawMarkers] : []
-  const hasEval = markersList.some(
-    (m) => m && typeof m === 'object' && (m as { kind?: string }).kind === 'evaluation',
-  )
-  if (!hasEval && (run.status === 'judge_skipped' || run.status === 'completed' || run.outcome)) {
-    markersList = mergeEvaluationMarkers(markersList, {
-      skipped: run.status === 'judge_skipped' || !run.outcome,
-      outcome: run.outcome,
-      reason: run.judgeReason,
-      model: null,
-    })
-  }
+  // Existing evaluation markers are historical evidence, never synthesize new ones.
+  const markersList = Array.isArray(rawMarkers) ? rawMarkers : []
   const markers = buildFiTraceMarkers(markersList)
   const pipelineMarkers = buildFiPipelineMarkers(markersList)
 
@@ -208,11 +197,11 @@ export async function GET(
     runId: run.runId,
     status: run.status,
     error: run.error,
-    judge: {
+    judge: run.judgedAt ? {
       outcome: run.outcome,
       faultContainmentStatus: run.faultContainmentStatus,
       reason: run.judgeReason,
-    },
+    } : null,
     interactions,
     markers,
     pipelineMarkers,

@@ -370,3 +370,29 @@ test('Agent 评估仅在真实会话保存后提供可访问链路，普通 LLM�
   assert.equal(agentEvaluationTraceId({ json: { ...evidence.json, customEvaluatorRuntime: { ...evidence.json.customEvaluatorRuntime, transport: 'direct' } } }), null);
   assert.equal(agentEvaluationTraceId({ json: { ...evidence.json, customEvaluatorRuntime: { ...evidence.json.customEvaluatorRuntime, evaluationTraceId: undefined } } }), null);
 });
+
+test('configured Skills retries preserve frozen input and use fresh workspaces with original error classification', async () => {
+  const { withEvaluatorExecution, runConfiguredEvaluationStage } = await import('@/lib/engine/experiment/evaluator-execution-policy');
+  const item = card();
+  const store = new EvaluatorSkillStore();
+  item.llmConfig!.skills = [await store.publish(user, packageFiles(), { kind: 'local' })];
+  const workspaces: string[] = [];
+  const inputs: string[] = [];
+  const result = await withEvaluatorExecution({ attemptTimeoutSeconds: 600, maxRetries: 1 }, new AbortController().signal,
+    () => runConfiguredEvaluationStage(() => runCustomEvaluatorWithSkills(user, item, { input: 'frozen input', output: '42' }, {
+      store, caller: async (_user, req) => {
+        assert.equal(req.timeoutMs, 600_000);
+        if (workspaces.length) await assert.rejects(fs.stat(workspaces[0]), /ENOENT/);
+        workspaces.push(req.directory!);
+        inputs.push(await fs.readFile(path.join(req.directory!, 'inputs/case.json'), 'utf8'));
+        assert.match(req.system, /VALIDATE-validator/);
+        if (workspaces.length === 1) throw Object.assign(new Error('service unavailable'), { status: 503 });
+        return JSON.stringify({ verdict: 'pass', summary: '通过', score: 90, points: [] });
+      },
+    }), { deferTimeout: true }), { retryDelaysMs: [0] });
+  assert.equal(result.output.score, 90);
+  assert.equal(workspaces.length, 2);
+  assert.notEqual(workspaces[0], workspaces[1]);
+  assert.equal(inputs[0], inputs[1]);
+  for (const workspace of workspaces) await assert.rejects(fs.stat(workspace), /ENOENT/);
+});

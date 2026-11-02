@@ -47,7 +47,7 @@ test('fault diagnosis header exposes a persistent capability sheet entry', () =>
 });
 
 test('diagnosis guide documents the same unified fault pattern catalog', () => {
-  const guide = fs.readFileSync(path.join(root, 'docs/user-guide/observability/diagnosis.md'), 'utf8');
+  const guide = fs.readFileSync(path.join(root, 'docs/zh/how-to/diagnosis/agent-debug/diagnosis.md'), 'utf8');
 
   for (const mode of AGENT_DEBUG_FAULT_MODES) {
     assert.match(guide, new RegExp(mode.zh.title));

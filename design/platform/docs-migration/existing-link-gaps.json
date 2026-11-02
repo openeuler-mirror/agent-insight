@@ -1,0 +1,562 @@
+[
+  {
+    "old": "docs/developer-guide/07-conventions-and-extension.md",
+    "new": "docs/zh/how-to/platform/conventions-and-extension.md",
+    "url": "path:line",
+    "line": 25,
+    "target": "docs/developer-guide/path:line"
+  },
+  {
+    "old": "docs/developer-guide/architecture/static-evaluator.mdx",
+    "new": "docs/zh/explanation/evaluation/skills/static-evaluator.mdx",
+    "url": "/developer-guide/architecture/data-model",
+    "line": 334,
+    "target": "docs/developer-guide/architecture/data-model"
+  },
+  {
+    "old": "docs/developer-guide/architecture/trae-collector.md",
+    "new": "docs/zh/explanation/observability/trae-collector.md",
+    "url": "../../src/lib/ingest/adapters/trae.ts:1",
+    "line": 167,
+    "target": "docs/src/lib/ingest/adapters/trae.ts"
+  },
+  {
+    "old": "docs/developer-guide/architecture/trae-collector.md",
+    "new": "docs/zh/explanation/observability/trae-collector.md",
+    "url": "../../src/lib/shared/interaction-utils.ts:1",
+    "line": 170,
+    "target": "docs/src/lib/shared/interaction-utils.ts"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/analysis-paralysis.md",
+    "new": "design/reliability/agent-ras/analysis-paralysis.md",
+    "url": "../../../agent-fault-injection/designs/modules/semantic-fault-injection-survey.md",
+    "line": 503,
+    "target": "docs/agent-fault-injection/designs/modules/semantic-fault-injection-survey.md"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../agent_ras/config/agent_ras_config.default.yaml",
+    "line": 18,
+    "target": "docs/agent_ras/config/agent_ras_config.default.yaml"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../agent_ras/config/agent_ras_config.default.yaml",
+    "line": 36,
+    "target": "docs/agent_ras/config/agent_ras_config.default.yaml"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../agent_ras/config/agent_ras.inproc.example.json",
+    "line": 37,
+    "target": "docs/agent_ras/config/agent_ras.inproc.example.json"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../agent_ras/detectors/catalog.py",
+    "line": 58,
+    "target": "docs/agent_ras/detectors/catalog.py"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../agent_ras/detectors/catalog.py",
+    "line": 128,
+    "target": "docs/agent_ras/detectors/catalog.py"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../src/lib/ingest/ras/capability-config.ts",
+    "line": 129,
+    "target": "docs/src/lib/ingest/ras/capability-config.ts"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../src/lib/ingest/ras/capability-config-store.ts",
+    "line": 130,
+    "target": "docs/src/lib/ingest/ras/capability-config-store.ts"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../src/lib/ingest/ras/insight-legacy-flat-aliases.ts",
+    "line": 131,
+    "target": "docs/src/lib/ingest/ras/insight-legacy-flat-aliases.ts"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../src/app/api/agent-ras/catalog/route.ts",
+    "line": 132,
+    "target": "docs/src/app/api/agent-ras/catalog/route.ts"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../src/app/api/agent-ras/config/route.ts",
+    "line": 133,
+    "target": "docs/src/app/api/agent-ras/config/route.ts"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../agent_ras/platform_adapter/opencode/config_sync.js",
+    "line": 134,
+    "target": "docs/agent_ras/platform_adapter/opencode/config_sync.js"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/capability-config.md",
+    "new": "design/reliability/agent-ras/capability-config.md",
+    "url": "../../../agent_ras/platform_adapter/xiaoo/config_sync.py",
+    "line": 135,
+    "target": "docs/agent_ras/platform_adapter/xiaoo/config_sync.py"
+  },
+  {
+    "old": "docs/agent-ras/designs/features/reliability-client-control-plane.md",
+    "new": "design/reliability/agent-ras/reliability-client-control-plane.md",
+    "url": "../../../../src/lib/reliability/clients-from-workers.ts",
+    "line": 44,
+    "target": "src/lib/reliability/clients-from-workers.ts"
+  },
+  {
+    "old": "docs/design/README.md",
+    "new": "design/README.md",
+    "url": "agentdebug-parallel-skills-analysis/",
+    "line": 41,
+    "target": "docs/design/agentdebug-parallel-skills-analysis"
+  },
+  {
+    "old": "docs/design/experiment-cancellation/phase1-requirements.md",
+    "new": "design/evaluation/experiment-cancellation/phase1-requirements.md",
+    "url": "../../../评测服务文档/实验删除与评测服务停止清理方案.md",
+    "line": 3,
+    "target": "评测服务文档/实验删除与评测服务停止清理方案.md"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/phase1-requirements-analysis.md",
+    "new": "design/reliability/fi-server-client-split/phase1-requirements-analysis.md",
+    "url": "../../../src/lib/fault-injection/queue.ts",
+    "line": 11,
+    "target": "src/lib/fault-injection/queue.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../agent_fault_injection/cli.py",
+    "line": 11,
+    "target": "docs/agent_fault_injection/cli.py"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/lib/fault-injection/engine.ts",
+    "line": 11,
+    "target": "docs/src/lib/fault-injection/engine.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/app/api/fault-injection/tasks/stop/route.ts",
+    "line": 12,
+    "target": "docs/src/app/api/fault-injection/tasks/stop/route.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/lib/fault-injection/store.ts",
+    "line": 13,
+    "target": "docs/src/lib/fault-injection/store.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/lib/fault-injection/store.ts",
+    "line": 14,
+    "target": "docs/src/lib/fault-injection/store.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/app/api/fault-injection/tasks/route.ts",
+    "line": 15,
+    "target": "docs/src/app/api/fault-injection/tasks/route.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/lib/fault-injection/platforms.ts",
+    "line": 15,
+    "target": "docs/src/lib/fault-injection/platforms.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/app/(main)/agent-ras/fault-injection/tasks/new/page.tsx",
+    "line": 19,
+    "target": "docs/src/app/(main)/agent-ras/fault-injection/tasks/new/page.tsx"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/app/api/fault-injection/tasks/route.ts",
+    "line": 19,
+    "target": "docs/src/app/api/fault-injection/tasks/route.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/app/api/fault-injection/faults/route.ts",
+    "line": 23,
+    "target": "docs/src/app/api/fault-injection/faults/route.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/app/api/fault-injection/health/route.ts",
+    "line": 23,
+    "target": "docs/src/app/api/fault-injection/health/route.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../src/app/api/fault-injection/task/[taskId]/rerun/route.ts",
+    "line": 23,
+    "target": "docs/src/app/api/fault-injection/task/[taskId]/rerun/route.ts"
+  },
+  {
+    "old": "docs/design/fi-server-client-split/review/design-feasibility-review.md",
+    "new": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+    "url": "../../../scripts/install-fault-injection.js",
+    "line": 29,
+    "target": "docs/scripts/install-fault-injection.js"
+  },
+  {
+    "old": "docs/design/framework-adapter-registry/phase2-requirements-design.md",
+    "new": "design/observability/framework-adapter-registry/phase2-requirements-design.md",
+    "url": "../../src/lib/storage/data-service.ts",
+    "line": 112,
+    "target": "docs/src/lib/storage/data-service.ts"
+  },
+  {
+    "old": "docs/design/framework-adapter-registry/phase2-requirements-design.md",
+    "new": "design/observability/framework-adapter-registry/phase2-requirements-design.md",
+    "url": "../../src/app/api/ingest/upload/route.ts",
+    "line": 113,
+    "target": "docs/src/app/api/ingest/upload/route.ts"
+  },
+  {
+    "old": "docs/design/framework-adapter-registry/phase2-requirements-design.md",
+    "new": "design/observability/framework-adapter-registry/phase2-requirements-design.md",
+    "url": "../../src/app/api/eval/rejudge/route.ts",
+    "line": 114,
+    "target": "docs/src/app/api/eval/rejudge/route.ts"
+  },
+  {
+    "old": "docs/design/framework-adapter-registry/phase2-requirements-design.md",
+    "new": "design/observability/framework-adapter-registry/phase2-requirements-design.md",
+    "url": "../../src/app/api/ingest/proxy/[taskId]/end/route.ts",
+    "line": 115,
+    "target": "docs/src/app/api/ingest/proxy/[taskId]/end/route.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/claude-otel/spool.ts",
+    "line": 34,
+    "target": "../src/lib/ingest/claude-otel/spool.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel-consumer/consumer.ts",
+    "line": 35,
+    "target": "../src/lib/ingest/otel-consumer/consumer.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 37,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 71,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/adapters/jiuwen.ts",
+    "line": 72,
+    "target": "../src/lib/ingest/adapters/jiuwen.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/storage/data-service.ts",
+    "line": 72,
+    "target": "../src/lib/storage/data-service.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/storage/data-service.ts",
+    "line": 87,
+    "target": "../src/lib/storage/data-service.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 89,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/aggregate.ts",
+    "line": 104,
+    "target": "../src/lib/ingest/otel/jiuwen/aggregate.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 120,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/app/api/ingest/otel/v1/traces/route.ts",
+    "line": 184,
+    "target": "../src/app/api/ingest/otel/v1/traces/route.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/claude-otel/spool.ts",
+    "line": 188,
+    "target": "../src/lib/ingest/claude-otel/spool.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/aggregate.ts",
+    "line": 189,
+    "target": "../src/lib/ingest/otel/jiuwen/aggregate.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel-consumer/consumer.ts",
+    "line": 193,
+    "target": "../src/lib/ingest/otel-consumer/consumer.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel-consumer/sources.ts",
+    "line": 199,
+    "target": "../src/lib/ingest/otel-consumer/sources.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 202,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 206,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/storage/data-service.ts",
+    "line": 212,
+    "target": "../src/lib/storage/data-service.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/instrumentation-node.ts",
+    "line": 224,
+    "target": "../src/instrumentation-node.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 250,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 270,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 271,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/claude-otel/spool.ts",
+    "line": 272,
+    "target": "../src/lib/ingest/claude-otel/spool.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel-consumer/consumer.ts",
+    "line": 273,
+    "target": "../src/lib/ingest/otel-consumer/consumer.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel-consumer/sources.ts",
+    "line": 274,
+    "target": "../src/lib/ingest/otel-consumer/sources.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/instrumentation-node.ts",
+    "line": 275,
+    "target": "../src/instrumentation-node.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/aggregate.ts",
+    "line": 276,
+    "target": "../src/lib/ingest/otel/jiuwen/aggregate.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/storage/data-service.ts",
+    "line": 277,
+    "target": "../src/lib/storage/data-service.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/adapters/jiuwen.ts",
+    "line": 278,
+    "target": "../src/lib/ingest/adapters/jiuwen.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/spool.ts",
+    "line": 348,
+    "target": "../src/lib/ingest/otel/jiuwen/spool.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+    "line": 349,
+    "target": "../src/lib/ingest/otel/jiuwen/ingest.ts"
+  },
+  {
+    "old": "docs/design/jiuwenswarm-tracing/durable-span-spool.md",
+    "new": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+    "url": "../../../../src/lib/storage/data-service.ts",
+    "line": 351,
+    "target": "../src/lib/storage/data-service.ts"
+  },
+  {
+    "old": "docs/design/otel-spool-consumer/fix-2026-07-28-trace-backlog-plan.md",
+    "new": "design/observability/otel-spool-consumer/fix-2026-07-28-trace-backlog-plan.md",
+    "url": "incident-2026-07-28-langfuse-trace-gap.md",
+    "line": 7,
+    "target": "docs/design/otel-spool-consumer/incident-2026-07-28-langfuse-trace-gap.md"
+  },
+  {
+    "old": "docs/design/otel-spool-consumer/phase1-requirements-analysis.md",
+    "new": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+    "url": "../../src/lib/ingest/claude-watcher.ts",
+    "line": 11,
+    "target": "docs/src/lib/ingest/claude-watcher.ts"
+  },
+  {
+    "old": "docs/design/otel-spool-consumer/phase1-requirements-analysis.md",
+    "new": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+    "url": "../../src/app/api/ingest/otel/v1/logs/route.ts",
+    "line": 19,
+    "target": "docs/src/app/api/ingest/otel/v1/logs/route.ts"
+  },
+  {
+    "old": "docs/design/otel-spool-consumer/phase1-requirements-analysis.md",
+    "new": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+    "url": "../../src/app/api/ingest/otel/v1/traces/route.ts",
+    "line": 19,
+    "target": "docs/src/app/api/ingest/otel/v1/traces/route.ts"
+  },
+  {
+    "old": "docs/design/otel-spool-consumer/phase1-requirements-analysis.md",
+    "new": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+    "url": "../../src/instrumentation-node.ts",
+    "line": 21,
+    "target": "docs/src/instrumentation-node.ts"
+  },
+  {
+    "old": "docs/design/otel-spool-consumer/phase1-requirements-analysis.md",
+    "new": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+    "url": "../../src/lib/ingest/claude-watcher.ts",
+    "line": 21,
+    "target": "docs/src/lib/ingest/claude-watcher.ts"
+  },
+  {
+    "old": "docs/design/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+    "new": "design/evaluation/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+    "url": "../../../src/lib/engine/evaluation/result-quality-evaluator.ts",
+    "line": 22,
+    "target": "src/lib/engine/evaluation/result-quality-evaluator.ts"
+  },
+  {
+    "old": "docs/design/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+    "new": "design/evaluation/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+    "url": "../../../src/lib/engine/quality-monitoring/sampling.ts",
+    "line": 85,
+    "target": "src/lib/engine/quality-monitoring/sampling.ts"
+  },
+  {
+    "old": "docs/design/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+    "new": "design/evaluation/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+    "url": "../../../src/components/quality/ResultPanel.tsx",
+    "line": 600,
+    "target": "src/components/quality/ResultPanel.tsx"
+  },
+  {
+    "old": "docs/design/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+    "new": "design/evaluation/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+    "url": "../../../src/components/quality/result-detail-tables.ts",
+    "line": 601,
+    "target": "src/components/quality/result-detail-tables.ts"
+  }
+]

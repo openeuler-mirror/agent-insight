@@ -51,7 +51,7 @@ function piEvents(records, metadata) {
   const traceId = stableTraceId('pi-agent', sessionId)
   const root = stableSpanId(sessionId, 'agent')
   const messages = records.filter(item => item.type === 'message' && item.message).map(item => item.message)
-  if (!messages.some(item => item.role === 'assistant') || !messages.some(item => item.role === 'user')) throw error('TRACE_INCOMPLETE', 'Pi 原生轨迹缺少用户或模型消息')
+  if ((!metadata.partial && !messages.some(item => item.role === 'assistant')) || !messages.some(item => item.role === 'user')) throw error('TRACE_INCOMPLETE', 'Pi 原生轨迹缺少用户或模型消息')
   const events = []
   const pending = new Map()
   let previous = metadata.startedAt
@@ -75,9 +75,9 @@ function piEvents(records, metadata) {
     }
     previous = end
   }
-  if (pending.size) throw error('TRACE_INCOMPLETE', 'Pi 工具调用缺少结果')
-  events.push({ sessionId, traceId, spanId: root, kind: 'agent', name: 'agent.pi-agent', input: metadata.input, output, startTimeMs: metadata.startedAt, endTimeMs: previous, status: metadata.failed ? 'error' : 'success' })
-  return events.map(event => ({ ...event, eventId: stableEventId(sessionId, event.spanId), attributes: { 'benchmark.run_id': metadata.runId, 'xgovernor.runtime_id': metadata.runtimeId } }))
+  if (pending.size && !metadata.partial) throw error('TRACE_INCOMPLETE', 'Pi 工具调用缺少结果')
+  events.push({ sessionId, traceId, spanId: root, kind: 'agent', name: 'agent.pi-agent', input: metadata.input, output, startTimeMs: metadata.startedAt, endTimeMs: Math.max(previous, Date.now()), status: metadata.partial ? 'running' : metadata.failed ? 'error' : 'success' })
+  return events.map(event => ({ ...event, eventId: stableEventId(sessionId, event.spanId), attributes: { 'benchmark.run_id': metadata.runId, 'xgovernor.runtime_id': metadata.runtimeId, ...(event.kind === 'agent' ? { 'agent.insight.trace.completed': !metadata.partial } : {}) } }))
 }
 
 function xiaooEvents(snapshot, metadata) {
@@ -105,26 +105,40 @@ function xiaooEvents(snapshot, metadata) {
 
 async function exportTrace(handle, runtime, config, context, processRunner) {
   const model = handle.opaque.resolvedModel || config.models[handle.opaque.modelId] || {}
-  const metadata = { model: model.model || context.model, provider: model.provider, runId: handle.runId, runtimeId: handle.opaque.runtimeId, stateDirectory: path.join(handle.opaque.directory, 'state'), startedAt: handle.opaque.startedAt, input: context.input, failed: Boolean(context.failed) }
+  const metadata = { model: model.model || context.model, provider: model.provider, runId: handle.runId, runtimeId: handle.opaque.runtimeId, stateDirectory: path.join(handle.opaque.directory, 'state'), startedAt: handle.opaque.startedAt, input: context.input, failed: Boolean(context.failed), partial: Boolean(context.partial) }
   let events
-  if (runtime.traceExporter) {
-    const result = await processRunner(runtime.traceExporter, ['--export'], { input: JSON.stringify(metadata), timeoutMs: 30000, maxOutputBytes: 64 * 1024 * 1024 })
-    const exported = JSON.parse(result.stdout)
-    if (exported.schemaVersion !== 'execution-trace/v1' || exported.full !== true || exported.runtimeId !== metadata.runtimeId || exported.runId !== metadata.runId || !Array.isArray(exported.events)) throw error('TRACE_INCOMPLETE', 'Trace 导出器返回了不兼容或不完整的数据')
-    events = exported.events
-  } else if (runtime.kind === 'xiaoo') {
-    const snapshot = JSON.parse(await fsp.readFile(path.join(handle.opaque.directory, 'worker-state.json'), 'utf8'))
-    events = xiaooEvents(snapshot, metadata)
-  } else {
-    const directory = path.join(metadata.stateDirectory, 'pi-sessions', metadata.runtimeId)
-    const files = (await fsp.readdir(directory, { withFileTypes: true })).filter(item => item.isFile() && item.name.endsWith('.jsonl'))
-    if (files.length !== 1) throw error('TRACE_INCOMPLETE', '本次 Pi 会话没有唯一的原生 JSONL')
-    const text = await fsp.readFile(path.join(directory, files[0].name), 'utf8')
-    events = piEvents(text.trim().split('\n').map(line => JSON.parse(line)), metadata)
+  try {
+    if (runtime.traceExporter) {
+      const result = await processRunner(runtime.traceExporter, ['--export'], { input: JSON.stringify(metadata), timeoutMs: 30000, maxOutputBytes: 64 * 1024 * 1024 })
+      const exported = JSON.parse(result.stdout)
+      if (exported.schemaVersion !== 'execution-trace/v1' || exported.full !== true || exported.runtimeId !== metadata.runtimeId || exported.runId !== metadata.runId || !Array.isArray(exported.events)) throw error('TRACE_INCOMPLETE', 'Trace 导出器返回了不兼容或不完整的数据')
+      events = exported.events
+    } else if (runtime.kind === 'xiaoo') {
+      const snapshot = JSON.parse(await fsp.readFile(path.join(handle.opaque.directory, 'worker-state.json'), 'utf8'))
+      events = xiaooEvents(snapshot, metadata)
+    } else {
+      const directory = path.join(metadata.stateDirectory, 'pi-sessions', metadata.runtimeId)
+      const files = (await fsp.readdir(directory, { withFileTypes: true })).filter(item => item.isFile() && item.name.endsWith('.jsonl'))
+      if (files.length !== 1) throw error('TRACE_INCOMPLETE', '本次 Pi 会话没有唯一的原生 JSONL')
+      const text = await fsp.readFile(path.join(directory, files[0].name), 'utf8')
+      events = piEvents(text.split('\n').filter(line => line.trim()).map((line, index, lines) => { try { return JSON.parse(line) } catch (cause) { if (metadata.partial && index === lines.length - 1 && !text.endsWith('\n')) return null; throw cause } }).filter(Boolean), metadata)
+    }
+  } catch (cause) {
+    if (!metadata.partial || runtime.traceExporter || !['ENOENT', 'TRACE_INCOMPLETE'].includes(cause.code)) throw cause
+    const { stableSpanId, stableTraceId, stableEventId } = transport()
+    const sessionId = `xgovernor:${handle.runId}`
+    const spanId = stableSpanId(sessionId, 'agent')
+    events = [{ kind: 'agent', sessionId, spanId, eventId: stableEventId(sessionId, spanId), traceId: stableTraceId(context.platform, sessionId), name: `agent.${context.platform}`,
+      input: metadata.input, startTimeMs: metadata.startedAt, endTimeMs: Date.now(), status: 'running' }]
   }
+  events = events.map(event => ({ ...event,
+    ...(metadata.partial && event.kind === 'agent' && !event.parentSpanId ? { status: 'running' } : {}),
+    attributes: { ...event.attributes, 'xgovernor.runtime_id': metadata.runtimeId, 'benchmark.run_id': metadata.runId,
+      ...(event.kind === 'agent' && !event.parentSpanId ? { 'agent.insight.trace.completed': !metadata.partial } : {}) },
+  }))
   const roots = events.filter(event => event.kind === 'agent' && !event.parentSpanId)
   const root = roots[0]
-  if (roots.length !== 1 || root.sessionId !== `xgovernor:${handle.runId}` || !events.some(event => event.kind === 'llm') || events.some(event => event.sessionId !== root.sessionId)) throw error('TRACE_INCOMPLETE', 'Trace 必须包含唯一根会话及模型正文')
+  if (roots.length !== 1 || root.sessionId !== `xgovernor:${handle.runId}` || !metadata.partial && !events.some(event => event.kind === 'llm') || events.some(event => event.sessionId !== root.sessionId)) throw error('TRACE_INCOMPLETE', 'Trace 必须包含唯一根会话及模型正文')
   const { DurableTraceWriter } = transport()
   const apiKey = traceApiKey(config)
   const stateDir = path.join(handle.opaque.directory, 'trace-spool')
@@ -138,4 +152,21 @@ async function exportTrace(handle, runtime, config, context, processRunner) {
   return { traceId: root.sessionId }
 }
 
-module.exports = { exportTrace, piEvents, xiaooEvents, transport, resumeUpload, hasActiveUpload: directory => uploaders.has(path.join(directory, 'trace-spool')) }
+function liveTraceReporter(handle, runtime, config, context, processRunner, options = {}) {
+  let pending = null
+  let stopped = false
+  const tick = () => {
+    if (stopped || pending) return pending
+    pending = (options.exportTrace || exportTrace)(handle, runtime, config, { ...context, partial: true }, processRunner)
+      .then(trace => context.onTraceId?.(trace))
+      .catch(cause => options.log?.('运行中 Trace 上传暂未完成', cause.message))
+      .finally(() => { pending = null })
+    return pending
+  }
+  const timer = setInterval(tick, options.intervalMs || 1000)
+  timer.unref?.()
+  void tick()
+  return { tick, async stop() { stopped = true; clearInterval(timer); await pending } }
+}
+
+module.exports = { liveTraceReporter, exportTrace, piEvents, xiaooEvents, transport, resumeUpload, hasActiveUpload: directory => uploaders.has(path.join(directory, 'trace-spool')) }

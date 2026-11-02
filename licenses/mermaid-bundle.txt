@@ -1,5 +1,5 @@
 Mermaid 11.16.0 documentation bundle
-Files: docs/user-guide/vendor/mermaid.min.js; docs/developer-guide/vendor/mermaid.min.js
+Files: docs/assets/user-guide/vendor/mermaid.min.js; docs/assets/developer-guide/vendor/mermaid.min.js
 SHA-256: 74d7c46dabca328c2294733910a8aa1ed0c37451776e8d5295da38a2b758fb9b
 
 Original embedded third-party notices:

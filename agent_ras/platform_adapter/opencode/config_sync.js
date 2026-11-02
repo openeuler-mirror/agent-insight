@@ -187,7 +187,7 @@ function isLoopbackUrl(urlStr) {
 export const RAS_CONFIG_CURL_CONNECT_S = 2
 /** Loopback ras-config curl total timeout (seconds). */
 export const RAS_CONFIG_CURL_MAX_S = 3
-/** execFileSync hard cap (ms); slightly above curl max so curl exits first. */
+/** Child process hard cap (ms); slightly above curl max so curl exits first. */
 export const RAS_CONFIG_CURL_EXEC_MS = 4000
 /** Fallback fetch AbortSignal timeout when curl binary is missing (ms). */
 export const RAS_CONFIG_FETCH_FALLBACK_MS = 3000
@@ -200,7 +200,8 @@ export const RAS_CONFIG_FETCH_FALLBACK_MS = 3000
 export async function defaultRasConfigFetch(url, init = {}) {
   if (isLoopbackUrl(url)) {
     try {
-      const { execFileSync } = await import("node:child_process")
+      const { execFile } = await import("node:child_process")
+      const { promisify } = await import("node:util")
       const headers = init.headers || {}
       const args = [
         "--noproxy",
@@ -218,9 +219,10 @@ export async function defaultRasConfigFetch(url, init = {}) {
         args.push("-H", `${k}: ${v}`)
       }
       args.push(String(url))
-      const out = execFileSync("curl", args, {
+      const { stdout: out } = await promisify(execFile)("curl", args, {
         encoding: "utf8",
         timeout: RAS_CONFIG_CURL_EXEC_MS,
+        signal: init.signal,
         env: {
           ...process.env,
           http_proxy: "",
@@ -285,6 +287,7 @@ export function resolveRasConfigUrl(insight) {
  * @param {typeof fetch} [opts.fetchImpl]
  * @param {string} [opts.rasHome]
  * @param {string} [opts.platform]
+ * @param {number} [opts.timeoutMs]
  * @param {(msg: string) => void} [opts.log]
  * @returns {Promise<{ applied: boolean, reason: string, revision?: number, contentHash?: string }>}
  */
@@ -331,19 +334,30 @@ export async function syncCapabilityConfigFromInsight(opts = {}) {
       url.searchParams.set("platform", platform)
     }
 
-    const res = await fetchImpl(url.toString(), {
-      method: "GET",
-      headers: {
-        "x-witty-api-key": apiKey,
-        Accept: "application/json",
-      },
-    })
+    const controller = new AbortController()
+    let timer
+    const timeoutMs = Math.max(1, Number(opts.timeoutMs) || 3000)
+    const { res, payload } = await Promise.race([
+      (async () => {
+        const res = await fetchImpl(url.toString(), {
+          method: "GET",
+          headers: { "x-witty-api-key": apiKey, Accept: "application/json" },
+          signal: controller.signal,
+        })
+        return { res, payload: res.ok ? await res.json() : null }
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort()
+          reject(new Error("ras_config_timeout"))
+        }, timeoutMs)
+      }),
+    ]).finally(() => clearTimeout(timer))
     if (!res.ok) {
       log(`[insight-ras] ras-config HTTP ${res.status}`)
       return { applied: false, reason: `http_${res.status}` }
     }
 
-    const payload = await res.json()
     if (!payload || payload.syncEnabled !== true || !payload.config) {
       return { applied: false, reason: "sync_disabled_or_empty", revision: payload?.revision }
     }

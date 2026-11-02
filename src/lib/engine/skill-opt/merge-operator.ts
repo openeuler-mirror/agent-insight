@@ -26,7 +26,7 @@
  * SkillIssue 是不可变台账，算子只读不写；plan 的生命周期 = 一轮会话 + 一个 baseVersion。
  * 规模：单 skill 优化点可达 240 条 → 分批（B≈30）+ 树归并（⌈log_B N⌉ 层）。
  *
- * 设计文档：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
+ * 设计文档：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
  */
 
 import { OpenAI } from 'openai';

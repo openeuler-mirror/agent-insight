@@ -15,6 +15,7 @@
  */
 
 import { prisma } from '@/lib/storage/prisma';
+import type { SkillExecutionFence } from '@/lib/grayscale/run-progress';
 import { generateExperimentTraces, TraceGenerationError } from '@/lib/engine/experiment/trace-generation';
 import { validateSkillExecutionTarget, type SkillExecutionTarget, type SkillExecutionSnapshot } from './execution-target';
 import { withSkillClientSlot } from './client-execution-slot';
@@ -34,6 +35,8 @@ interface ClientCaseInput {
   timeoutMs: number;
   signal: AbortSignal;
   onCaseCreated: (caseId: string) => Promise<void>;
+  skillRun?: SkillExecutionFence;
+  onAttemptCreated?: (attempt: { caseId: string; attemptId: string; attemptNo: number }) => Promise<boolean | void>;
 }
 
 export async function executeSkillCaseOnClient(input: ClientCaseInput) {
@@ -63,6 +66,8 @@ async function executeClientCase(input: ClientCaseInput) {
     timeoutSeconds: Math.round(input.timeoutMs / 1000),
     cases: [{ caseId: row.id, input: input.query }],
     skillExecution: { version: 1, skill: input.skill },
+    onAttemptCreated: input.onAttemptCreated,
+    skillRun: input.skillRun,
     signal: input.signal,
   }, { forceNewTrace: true });
   input.signal.throwIfAborted();

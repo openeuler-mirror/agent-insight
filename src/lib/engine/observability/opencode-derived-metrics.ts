@@ -14,23 +14,9 @@
  * limitations under the License.
  */
 
-type AnyObj = Record<string, any>
+import { deriveExecutionTiming } from './execution-timing'
 
-function toMsTimestamp(v: any): number | null {
-  if (v == null) return null
-  if (typeof v === "number" && Number.isFinite(v)) return v
-  if (typeof v === "string") {
-    const s = v.trim()
-    if (!s) return null
-    if (/^\d+$/.test(s)) {
-      const n = Number(s)
-      return Number.isFinite(n) ? n : null
-    }
-    const t = Date.parse(s)
-    return Number.isFinite(t) ? t : null
-  }
-  return null
-}
+type AnyObj = Record<string, any>
 
 function usageTotals(u: any) {
   const input = Number(u?.input_tokens ?? u?.input ?? 0) || 0
@@ -58,9 +44,8 @@ function usageTotals(u: any) {
   }
 }
 
-export function deriveOpencodeExecutionFields(interactions: AnyObj[]) {
+export function deriveOpencodeExecutionFields(interactions: AnyObj[], sessionId?: string) {
   let totalTokens = 0
-  let totalLatencyMs = 0
   let model = ""
   let finalResult = ""
   let agentName = ""
@@ -74,9 +59,6 @@ export function deriveOpencodeExecutionFields(interactions: AnyObj[]) {
   let toolCallCount = 0
   let toolCallErrorCount = 0
   let maxSingleCallTokens = 0
-
-  let firstTs = Number.MAX_SAFE_INTEGER
-  let lastTs = 0
 
   for (const m of interactions || []) {
     if (!m) continue
@@ -92,22 +74,6 @@ export function deriveOpencodeExecutionFields(interactions: AnyObj[]) {
 
     if (m.agent && typeof m.agent === "string" && !agentName) {
       agentName = m.agent;
-    }
-
-    const created = toMsTimestamp(m.timeInfo?.created)
-    const completed = toMsTimestamp(m.timeInfo?.completed)
-    const ts = toMsTimestamp(m.timestamp)
-
-    if (created) {
-      firstTs = Math.min(firstTs, created)
-      lastTs = Math.max(lastTs, created)
-    }
-    if (completed) {
-      lastTs = Math.max(lastTs, completed)
-    }
-    if (ts) {
-      firstTs = Math.min(firstTs, ts)
-      lastTs = Math.max(lastTs, ts)
     }
 
     if (!isCompletion) continue
@@ -134,16 +100,12 @@ export function deriveOpencodeExecutionFields(interactions: AnyObj[]) {
     }
   }
 
-  if (firstTs !== Number.MAX_SAFE_INTEGER && lastTs > firstTs) {
-    totalLatencyMs = lastTs - firstTs
-  }
-
   return {
     model: model || undefined,
     agentName: agentName || undefined,
     final_result: finalResult || undefined,
     tokens: Math.round(totalTokens),
-    latency: totalLatencyMs,
+    latency: deriveExecutionTiming(interactions, sessionId).activeDurationMs ?? 0,
     input_tokens: Math.round(totalInputTokens),
     output_tokens: Math.round(totalOutputTokens),
     tool_call_count: toolCallCount,

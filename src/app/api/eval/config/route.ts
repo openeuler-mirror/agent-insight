@@ -19,6 +19,7 @@ import { normalizeConfigDatasetType } from '@/lib/engine/evaluation/config-datas
 import { normalizeConfigQuery, normalizeConfigSkillName, normalizeOptionalSkillVersion } from '@/lib/engine/evaluation/config-target';
 import { db, prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
+import { v4 as uuidv4 } from 'uuid';
 
 export const dynamic = 'force-dynamic';
 const AUDIT_CONFIG_MUTATIONS = process.env.AUDIT_CONFIG_MUTATIONS === '1' || process.env.AUDIT_CONFIG_MUTATIONS === 'true';
@@ -100,7 +101,7 @@ export async function POST(request: Request) {
             }
             
             for (const item of newConfig) {
-                const id = require('uuid').v4();
+                const id = uuidv4();
                 const datasetType = normalizeConfigDatasetType(item.dataset_type || item.datasetType);
                 const normalizedQuery = normalizeConfigQuery(item.query);
                 await pgClient.query(

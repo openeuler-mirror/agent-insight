@@ -18,7 +18,7 @@
  * Skill 优化点聚合：从 SkillIssue + Evaluation 两张表读出 issues，
  * 跨 evaluation 按 dedupKey 去重 + 计 prevalence + 抬升 severity。
  *
- * 详细设计：docs/plans/2026-05-08-skill-opt-issues-api-design.md
+ * 详细设计：design/2026-05-08-skill-opt-issues-api-design.md
  */
 
 import { bumpSeverityByPrevalence, type Severity } from './prevalence';

@@ -100,7 +100,7 @@ git diff <base>...HEAD
 ### 10. 产物与文档
 - 有没有把构建产物（.vsix/.zip/.jar/打包结果）提交进 git？应改为按需构建或走 release。
 - 构建脚本能在 Linux 上跑吗？（本项目上游是 openEuler，只有 .ps1 等于没人能维护）
-- 用户能感知的变化更新了 `docs/user-guide/` 吗？架构/契约变化更新了 `docs/developer-guide/` 吗？
+- 用户能感知的变化更新了 `docs/zh/tutorial/` 或 `docs/zh/how-to/` 吗？架构/契约变化更新了 `docs/zh/explanation/` 或 `docs/zh/reference/` 吗？
 - 一次性的验收报告不要入库，贴 PR 描述里。
 
 ## Step 4：最容易走过场的 5 类问题（专项复核）
@@ -145,5 +145,5 @@ for (const combo of allCombos(dims, LEVELS))
 
 ## 边界
 
-- 本技能是**提交前自检**，不替代评审流程，也不替代领域清单（评估器看 `docs/developer-guide/10-evaluator-development.md` §7，采集器看 `docs/developer-guide/09-trace-collector.md` §五）。
+- 本技能是**提交前自检**，不替代评审流程，也不替代领域清单（评估器看 `docs/zh/how-to/evaluation/develop-evaluator.md` §7，采集器看 `docs/zh/how-to/observability/develop-trace-collector.md` §五）。
 - 机械脚本能抓：生产构建失败、Turbopack warning、merge commit 夹带、UTF-16/BOM/lockfile 损坏、接入配对点漏改。**抓不到**：分层、公式正确性、「不适用给满分」、提示词写死用例、静默兜底、基线框架自己就漏的地方。所以脚本输出的是「先怀疑再排除」的清单，判断题必须逐项人工/AI 复核。

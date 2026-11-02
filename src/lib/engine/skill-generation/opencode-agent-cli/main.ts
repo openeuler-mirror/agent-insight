@@ -19,7 +19,7 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Agent, setGlobalDispatcher } from "undici";
 
-import { ensureOpencodeServer, stopOpencodeServer, getServerUrl } from "./opencode-manager.js";
+import { ensureOpencodeServer, stopOpencodeServer } from "./opencode-manager.js";
 import { AgentInsight, type SendPromptPayload } from "./opencode-client.js";
 
 // 关键:扩大 undici 连接池上限。
@@ -140,7 +140,7 @@ async function main() {
         });
         sessionID = String(newResp?.id ?? "");
         console.log(`  ▸ new session: ${sessionID}`);
-      } catch (err) {
+      } catch {
         console.error("  failed to create new session");
       }
       continue;

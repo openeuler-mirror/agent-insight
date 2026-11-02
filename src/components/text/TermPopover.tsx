@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// docs/design/components.md §E.14 — 术语提示组件。
+// design/components.md §E.14 — 术语提示组件。
 // 用于 KPI 卡指标名 / 表头列名 / 卡片标题领域术语 / 长文本叙述首次出现的术语。
 // 不允许在列表行、按钮文案、Toast、Dialog Title 内出现。
 //

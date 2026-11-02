@@ -35,9 +35,11 @@ import {
   publishedOverallAverage,
   evaluatorBreakdown,
 } from '@/lib/engine/experiment/detail-agg';
-import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
+import { isFiTraceWaitExpired } from '@/lib/fault-injection/trace-readiness';
+import { hasUsableTraceInteractions, isFiBusinessTraceUsable } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
+import { parseStoredEvaluatorExecutionConfig } from '@/lib/evaluators/evaluator-execution-config';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
 import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
@@ -51,6 +53,9 @@ import {
   workbenchCompletionStatus,
 } from '@/lib/skill-workbench/item-progress';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
+
+import { loadSkillExecutionProgress } from '@/lib/skill-workbench/execution-progress-service';
+import { loadCaseExecutionProgress } from '@/lib/engine/experiment/execution-progress-service';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,6 +76,7 @@ function deriveGeneratedTraceStatus(input: {
   usable: boolean;
   triggerDecisionReady?: boolean;
   runStatus?: string | null;
+  runUpdatedAt?: Date | null;
   commandStatus?: string | null;
   attemptStatus?: string | null;
   generationError?: string | null;
@@ -80,9 +86,11 @@ function deriveGeneratedTraceStatus(input: {
   if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(input.attemptStatus || '')) {
     return 'pending';
   }
+  if (['queued', 'collecting', 'running', 'judging'].includes(input.runStatus || '')) return 'pending';
   if (input.generationError) return 'failed';
   if (input.attemptStatus === 'failed') return 'failed';
   if (input.runStatus === 'failed' || input.runStatus === 'stopped') return 'failed';
+  if (input.runUpdatedAt && isFiTraceWaitExpired(input.runStatus || '', input.runUpdatedAt)) return 'failed';
   if (['FAILED', 'EXPIRED', 'DELIVERY_FAILED'].includes(input.commandStatus || '')) return 'failed';
   if (['failed', 'partial', 'done'].includes(input.experimentStatus)) return 'failed';
   return 'pending';
@@ -144,6 +152,7 @@ export async function GET(
       experiment.evaluatorConfigsJson,
       evaluatorIds,
     );
+    const evaluatorExecution = parseStoredEvaluatorExecutionConfig(experiment.evaluatorConfigsJson);
     const benchmarkAdapterKey = experiment.benchmarkBinding?.adapterKey || '';
     let benchmarkManifest: BenchmarkManifest | null = null;
     if (benchmarkAdapterKey) {
@@ -189,8 +198,24 @@ export async function GET(
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
+    const skillExecutionSnapshot = experiment.scope === 'skill-workbench' ? await loadSkillExecutionProgress(id, experiment.user) : null;
+    const skillRowProgress = new Map(Object.values(skillExecutionSnapshot?.progress || {}).flatMap(sides => Object.values(sides).flatMap(runs => runs || []))
+      .filter(run => run.experimentCaseId).map(run => [run.experimentCaseId!, run]));
+    const caseExecutionProgress = !experiment.scope && experiment.type !== 'llm'
+      ? await loadCaseExecutionProgress(id, experiment.user, pagedCases.map(c => c.id), evaluatorIds, configSnapshot?.traceSource === 'generate')
+      : null;
+
+    const benchmarkAttemptByRun = new Map<string, number>();
+    const benchmarkExecutionsByTrace = new Map<string, Array<{ id: string; taskId: string | null }>>();
     const benchmarkRunByCase = new Map<string, {
+      id: string;
+      retryOfRunId: string | null;
+      updatedAt: Date;
       submissionSource: string;
+      createdAt: Date;
+      startedAt: Date | null;
+      finishedAt: Date | null;
+      lastProgressAt: Date | null;
       status: string;
       failureCode: string | null;
       failureMessage: string | null;
@@ -203,8 +228,16 @@ export async function GET(
       artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
       evaluations: Array<{
         id: string;
+        attemptNo: number;
+        updatedAt: Date;
         status: string;
         failureCode: string | null;
+        failureMessage: string | null;
+        progressJson: string | null;
+        createdAt: Date;
+        startedAt: Date | null;
+        finishedAt: Date | null;
+        lastProgressAt: Date | null;
         normalizedResultJson: string | null;
         artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
       }>;
@@ -212,7 +245,7 @@ export async function GET(
     if (experiment.scope === 'benchmark' && pagedCases.length) {
       const runs = await prisma.benchmarkCaseRun.findMany({
         where: { experimentId: id, experimentCaseId: { in: pagedCases.map((item) => item.id) } },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: {
           datasetCase: { select: { externalCaseId: true } },
           artifacts: {
@@ -224,8 +257,16 @@ export async function GET(
             take: 1,
             select: {
               id: true,
+              attemptNo: true,
+              updatedAt: true,
               status: true,
               failureCode: true,
+              failureMessage: true,
+              progressJson: true,
+              createdAt: true,
+              startedAt: true,
+              finishedAt: true,
+              lastProgressAt: true,
               normalizedResultJson: true,
               artifacts: {
                 orderBy: { createdAt: 'asc' },
@@ -235,8 +276,30 @@ export async function GET(
           },
         },
       });
+      const runParents = new Map<string, string | null>(runs.map((run: { id: string; retryOfRunId: string | null }) => [run.id, run.retryOfRunId]));
       for (const run of runs) {
+        let attemptNo = 1;
+        let parent = runParents.get(run.id);
+        const visited = new Set<string>([run.id]);
+        while (parent && !visited.has(parent)) { visited.add(parent); attemptNo += 1; parent = runParents.get(parent); }
+        benchmarkAttemptByRun.set(run.id, attemptNo);
+      }
+      const retried = new Set(runs.map((run: { retryOfRunId: string | null }) => run.retryOfRunId).filter(Boolean));
+      for (const run of runs) {
+        if (retried.has(run.id)) continue;
         if (!benchmarkRunByCase.has(run.experimentCaseId)) benchmarkRunByCase.set(run.experimentCaseId, run);
+      }
+      const traceIds = [...benchmarkRunByCase.values()].map(run => asRecord(parseJsonValue(run.runFactsJson))?.traceId).filter((value): value is string => typeof value === 'string' && Boolean(value));
+      if (traceIds.length) {
+        const roots = await prisma.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: { in: traceIds } }, select: { id: true, taskId: true } });
+        for (const root of roots) if (root.taskId) benchmarkExecutionsByTrace.set(root.taskId, [...(benchmarkExecutionsByTrace.get(root.taskId) || []), root]);
+        for (const traceId of traceIds.filter(value => /^[0-9a-f]{32}$/.test(value) && !benchmarkExecutionsByTrace.has(value))) {
+          const legacy = await findBenchmarkExecution(experiment.user, traceId);
+          if (legacy?.taskId) {
+            const matches = await prisma.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: legacy.taskId }, select: { id: true, taskId: true }, take: 2 });
+            if (matches.length === 1) benchmarkExecutionsByTrace.set(traceId, matches);
+          }
+        }
       }
     }
 
@@ -300,7 +363,7 @@ export async function GET(
           ...generatedUserWhere,
           OR: [{ id: { in: fiRunKeys } }, { runId: { in: fiRunKeys } }],
         },
-        select: { id: true, runId: true, status: true, sessionTaskId: true, error: true },
+        select: { id: true, runId: true, status: true, sessionTaskId: true, error: true, agent: true, platform: true, updatedAt: true },
       }) : [],
       commandIds.length ? prisma.reliabilityCommand.findMany({
         where: { ...generatedUserWhere, commandId: { in: commandIds } },
@@ -313,6 +376,9 @@ export async function GET(
       status: string;
       sessionTaskId: string | null;
       error: string | null;
+      agent: string;
+      platform: string;
+      updatedAt: Date;
     }>;
     const generationCommands = generationCommandsRaw as Array<{
       commandId: string;
@@ -338,13 +404,13 @@ export async function GET(
         ? prisma.execution.findMany({
           where: { ...generatedUserWhere, taskId: { in: generatedTaskIds }, isSubagent: false },
           orderBy: { timestamp: 'desc' },
-          select: { id: true, taskId: true, query: true, finalResult: true },
+          select: { id: true, taskId: true, query: true, finalResult: true, agentName: true },
         })
         : [],
       generatedTaskIds.length
         ? prisma.session.findMany({
           where: { ...generatedUserWhere, taskId: { in: generatedTaskIds } },
-          select: { taskId: true, interactions: true },
+          select: { taskId: true, interactions: true, endTime: true },
         })
         : [],
     ]);
@@ -353,10 +419,12 @@ export async function GET(
       taskId: string | null;
       query: string | null;
       finalResult: string | null;
+      agentName: string | null;
     }>;
     const generatedSessions = generatedSessionsRaw as Array<{
       taskId: string;
       interactions: string | null;
+      endTime: Date | null;
     }>;
     const generatedExecutionByTask = new Map<string, typeof generatedExecutions[number]>();
     for (const execution of generatedExecutions) {
@@ -384,11 +452,17 @@ export async function GET(
       const taskId = item.taskId || run?.sessionTaskId || null;
       const execution = taskId ? generatedExecutionByTask.get(taskId) : undefined;
       const session = taskId ? generatedSessionByTask.get(taskId) : undefined;
-      const usable = Boolean(execution && hasUsableTraceInteractions(session?.interactions));
+      const usable = Boolean(execution && (run
+        ? isFiBusinessTraceUsable({
+            platform: run.platform, agent: run.agent, executionAgent: execution.agentName,
+            interactions: session?.interactions, endTime: session?.endTime,
+          })
+        : hasUsableTraceInteractions(session?.interactions)));
       const status = deriveGeneratedTraceStatus({
         usable,
         triggerDecisionReady: experiment.scope === 'skill-workbench' && experiment.preset === 'trigger' && attempt?.status === 'ready',
         runStatus: run?.status,
+        runUpdatedAt: run?.updatedAt,
         commandStatus: command?.status,
         attemptStatus: attempt?.status,
         generationError: item.traceGenerationError,
@@ -419,6 +493,7 @@ export async function GET(
       ready: traceStates.filter((item) => item.status === 'ready').length,
       failed: traceStates.filter((item) => item.status === 'failed').length,
       pending: traceStates.filter((item) => item.status === 'pending').length,
+      waitingTrace: traceStates.filter((item) => item.status === 'pending' && item.attemptStatus === 'waiting_trace').length,
     } : null;
     const invalidGeneratedCaseIds = new Set(
       Array.from(traceStateByCase.entries())
@@ -459,7 +534,7 @@ export async function GET(
           where: { id: grayscaleTaskId, ...(username ? { user: username } : {}) },
           select: { caseStatesJson: true },
         });
-        const caseStates = parseJsonValue(grayscaleTask?.caseStatesJson || null) as Record<string, unknown> | null;
+        const caseStates = (skillExecutionSnapshot?.caseStates || parseJsonValue(grayscaleTask?.caseStatesJson || null)) as Record<string, unknown> | null;
         if (supportsItemProgress) {
           const progressInput = {
             caseIds: frozenCaseIds,
@@ -508,10 +583,12 @@ export async function GET(
       failed,
       pending: Math.max(0, expectedResultTotal - doneResultCount - failed),
     };
-    const normalizedStatus = normalizeTerminalExperimentStatus(experiment.status, effectiveAllResults);
+    const normalizedResultStatus = normalizeTerminalExperimentStatus(experiment.status, effectiveAllResults);
+    const normalizedStatus = normalizedResultStatus === 'done' && traceProgress?.failed
+      ? 'partial' : normalizedResultStatus;
     const aggregateStatus = itemProgress ? workbenchCompletionStatus(normalizedStatus, itemProgress.executionProgress, itemProgress.evaluationProgress) : normalizedStatus;
-    const responseStatus = aggregateStatus === 'done'
-      && (progress.pending > 0 || Boolean(traceProgress?.pending))
+    const responseStatus = (aggregateStatus === 'done' && progress.pending > 0)
+      || (aggregateStatus !== 'cancelled' && Boolean(traceProgress?.pending))
       ? 'running'
       : aggregateStatus;
     const overall = publishedOverallAverage(responseStatus, effectiveAllResults);
@@ -589,7 +666,7 @@ export async function GET(
     }
 
     const results = pagedCases.flatMap((c) =>
-      (invalidGeneratedCaseIds.has(c.id) ? [] : c.results).map((r) => ({
+      (caseExecutionProgress?.get(c.id)?.results ?? (invalidGeneratedCaseIds.has(c.id) ? [] : c.results)).map((r) => ({
         id: r.id,
         caseId: r.caseId,
         evaluatorId: r.evaluatorId,
@@ -629,6 +706,8 @@ export async function GET(
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
       evaluatorConfigs,
+      evaluatorExecutionConfig: evaluatorExecution?.config ?? null,
+      evaluatorExecutionResolved: evaluatorExecution?.resolved ?? null,
       createdAt: experiment.createdAt,
       scope: experiment.scope,
       skillName: experiment.skillName,
@@ -663,6 +742,7 @@ export async function GET(
         agentName: displayAgentName,
         evaluatorIds,
         evaluatorConfigs,
+        evaluatorExecutionConfig: evaluatorExecution?.config ?? null,
         executionTarget: configSnapshot?.runConfig && typeof configSnapshot.runConfig === 'object'
           ? {
               workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,
@@ -688,7 +768,15 @@ export async function GET(
           legacyFi.faultInjectionType ||
           null;
         const benchmarkRun = benchmarkRunByCase.get(c.id);
+        const benchmarkTraceId = asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.traceId;
+        const reportedTraceId = typeof benchmarkTraceId === 'string' ? benchmarkTraceId : null;
+        const benchmarkRoots = reportedTraceId ? benchmarkExecutionsByTrace.get(reportedTraceId) || [] : [];
+        const benchmarkRoot = benchmarkRoots.length === 1 ? benchmarkRoots[0] : null;
+        const currentTraceId = benchmarkRoot?.taskId || reportedTraceId;
         const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
+        const benchmarkEvaluation = benchmarkRun?.evaluations[0];
+        const evaluationProgress = asRecord(parseJsonValue(benchmarkEvaluation?.progressJson || null));
+        const executionProgressDetail = asRecord(benchmarkProgress?.progress);
         const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
         const environmentFacts = asRecord(asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.execution);
         const cleanupFacts = asRecord(parseJsonValue(benchmarkRun?.cleanupJson || null));
@@ -706,8 +794,8 @@ export async function GET(
         const benchmarkTraceStatus = deriveBenchmarkTraceStatus({
           runStatus: benchmarkRun?.status || null,
           hasSubmission: submissions.length > 0,
-          hasExecution: Boolean(c.executionId || legacyReference?.id),
-          hasTask: Boolean(effectiveTaskId),
+          hasExecution: Boolean(benchmarkRoot),
+          hasTask: Boolean(currentTraceId),
         });
         let caseValues: Record<string, unknown> | null = null;
         if (c.caseValuesJson) {
@@ -724,6 +812,7 @@ export async function GET(
         }
         return {
           id: c.id,
+          ...(caseExecutionProgress ? { executionProgress: caseExecutionProgress.get(c.id)?.progress || null } : skillExecutionSnapshot ? { executionProgress: skillRowProgress.get(c.id) || null } : {}),
           executionId: c.executionId || legacyReference?.id || traceState?.executionId || null,
           taskId: effectiveTaskId,
           input: c.input || ex?.query || '',
@@ -744,8 +833,28 @@ export async function GET(
           traceError: benchmarkRun ? benchmarkRun.failureMessage : traceState?.error || null,
           traceAttemptNo: traceState?.attemptNo || null,
           traceAttemptStatus: traceState?.attemptStatus || null,
+          ...(caseExecutionProgress?.get(c.id) ? {
+            taskId: caseExecutionProgress.get(c.id)!.taskId,
+            executionId: caseExecutionProgress.get(c.id)!.executionId,
+            actualOutput: caseExecutionProgress.get(c.id)!.actualOutput,
+            traceStatus: caseExecutionProgress.get(c.id)!.progress.source === 'existing' ? null
+              : caseExecutionProgress.get(c.id)!.progress.stage >= 3 ? 'ready'
+              : ['failed', 'cancelled'].includes(caseExecutionProgress.get(c.id)!.progress.status) ? 'failed' : 'pending',
+            traceError: caseExecutionProgress.get(c.id)!.progress.error,
+            traceAttemptNo: caseExecutionProgress.get(c.id)!.progress.attemptNo || null,
+          } : {}),
           ...(benchmarkRun ? {
+            taskId: currentTraceId,
+            executionId: benchmarkRoot?.id || null,
             benchmark: {
+              runId: benchmarkRun.id,
+              runAttemptNo: benchmarkAttemptByRun.get(benchmarkRun.id) || 1,
+              generation: benchmarkRun.createdAt.getTime(),
+              revision: Math.max(benchmarkRun.updatedAt.getTime(), benchmarkEvaluation?.updatedAt.getTime() || 0),
+              evaluationAttemptNo: benchmarkEvaluation?.attemptNo || 0,
+              traceId: reportedTraceId,
+              traceTaskId: currentTraceId,
+              executionId: benchmarkRoot?.id || null,
               submissionSource: benchmarkRun.submissionSource,
               adapterKey: benchmarkAdapterKey,
               displayName: benchmarkManifest?.displayName || benchmarkAdapterKey,
@@ -782,6 +891,23 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              progressDetails: {
+                createdAt: benchmarkRun.createdAt.toISOString(),
+                finishedAt: benchmarkRun.finishedAt?.toISOString() || null,
+                execution: {
+                  startedAt: benchmarkRun.startedAt?.toISOString() || null,
+                  lastProgressAt: benchmarkRun.lastProgressAt?.toISOString() || null,
+                  stageStartedAt: typeof executionProgressDetail?.stageStartedAt === 'string' ? executionProgressDetail.stageStartedAt : null,
+                },
+                evaluation: benchmarkEvaluation ? {
+                  stage: typeof evaluationProgress?.stage === 'string' ? evaluationProgress.stage : null,
+                  createdAt: benchmarkEvaluation.createdAt.toISOString(),
+                  startedAt: benchmarkEvaluation.startedAt?.toISOString() || null,
+                  finishedAt: benchmarkEvaluation.finishedAt?.toISOString() || null,
+                  lastProgressAt: benchmarkEvaluation.lastProgressAt?.toISOString() || null,
+                  failureMessage: benchmarkEvaluation.failureMessage,
+                } : null,
+              },
               environmentFacts: environmentFacts ? {
                 imageId: typeof environmentFacts.imageId === 'string' ? environmentFacts.imageId : null,
                 toolBoundary: typeof environmentFacts.toolBoundary === 'string' ? environmentFacts.toolBoundary : null,
@@ -806,6 +932,7 @@ export async function GET(
       results: resultsWithTraces,
       progress,
       traceProgress,
+      skillExecutionSnapshot,
       executionProgress: itemProgress?.executionProgress || null,
       evaluationProgress: itemProgress?.evaluationProgress || null,
       sideProgress,

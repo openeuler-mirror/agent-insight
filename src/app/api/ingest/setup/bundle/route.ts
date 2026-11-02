@@ -54,6 +54,8 @@ const BUNDLES: Record<string, string[]> = {
     'scripts/agent-run-diagnostics.cjs',
     'scripts/opencode-experiment-events.cjs',
     'scripts/opencode-experiment-events.mjs',
+    'scripts/opencode-experiment-events-v2.mjs',
+    'scripts/opencode-runtime.cjs',
     'scripts/agent-insight-home.cjs',
     'scripts/ws-client.cjs',
     'scripts/install-fault-injection.js',

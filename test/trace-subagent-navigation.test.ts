@@ -31,21 +31,22 @@ visit(ast);
 assert.ok(callback);
 const js = ts.transpileModule(`const run = ${callback.getText(ast)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function harness() {
-    const root = { task_id: 'root' }, child = { task_id: 'child' }, other = { task_id: 'other' };
+    const root = { task_id: 'root', upload_id: 'root-execution' }, child = { task_id: 'child' }, other = { task_id: 'other' };
     const requestRef = { current: 0 };
     let selected: unknown = root;
     let error: string | null = null;
     let cleanup: (() => void) | undefined;
-    const pending: Array<{ resolve: (value: unknown) => void; signal: AbortSignal }> = [];
+    const pending: Array<{ resolve: (value: unknown) => void; signal: AbortSignal; url: string }> = [];
     const scope = { data: [root], executionLookupRequestRef: requestRef,
         setSelectedExecution: (value: unknown) => { selected = value; },
         setExecutionLookupError: (value: string | null) => { error = value; }, locale: 'zh', AbortController,
-        apiFetch: (_: string, options: { signal: AbortSignal }) => new Promise(resolve => pending.push({ resolve, signal: options.signal })),
+        apiFetch: (url: string, options: { signal: AbortSignal }) => new Promise(resolve => pending.push({ resolve, url, signal: options.signal })),
     };
     return { root, child, other, selected: () => selected, error: () => error, requests: () => pending.length,
-        navigate: (taskIdParam: string | null) => {
+        url: (index: number) => pending[index].url,
+        navigate: (taskIdParam: string | null, executionIdParam: string | null = null) => {
             cleanup?.();
-            const args = { ...scope, taskIdParam, selectedExecution: selected };
+            const args = { ...scope, taskIdParam, executionIdParam, selectedExecution: selected };
             cleanup = new Function(...Object.keys(args), `${js}; return run();`)(...Object.values(args));
         },
         aborted: (index: number) => pending[index].signal.aborted,
@@ -87,4 +88,57 @@ test('failed target lookup shows an error and can retry instead of retaining the
 test('missing or mismatched target is not displayed as the requested trace', async () => {
     const h = harness(); h.navigate('child'); await h.resolve(0, [h.root]);
     assert.equal(h.selected(), null); assert.match(h.error()!, /未找到/);
+});
+
+test('exact execution identity wins over a matching task ID and cannot fall back to an older record', async () => {
+    const h = harness();
+    h.navigate('root', 'new-execution');
+    assert.equal(h.selected(), null);
+    assert.match(h.url(0), /executionId=new-execution/);
+    assert.doesNotMatch(h.url(0), /taskId=/);
+    await h.resolve(0, [h.root]);
+    assert.equal(h.selected(), null);
+    assert.match(h.error()!, /未找到/);
+    h.navigate('root', 'new-execution');
+    const current = { task_id: 'root', upload_id: 'new-execution' };
+    await h.resolve(1, [current]);
+    assert.deepEqual(h.selected(), current);
+});
+
+function detailNavigation(query: string, current = 'dify:workflow', framework = 'dify', linkedTraces = 2) {
+    let declaration: ts.VariableDeclaration | undefined;
+    function find(node: ts.Node) {
+        if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'navigateToTaskId') declaration = node;
+        ts.forEachChild(node, find);
+    }
+    find(ast);
+    assert.ok(declaration);
+    const fn = (declaration.initializer as ts.CallExpression).arguments[0];
+    const code = ts.transpileModule(`const navigate = ${fn.getText(ast)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    let url = '';
+    const scope = {
+        taskId: current, execution: { framework }, session: { taskId: current, difyProjection: { linkedTraces } },
+        searchParams: new URLSearchParams(query), URLSearchParams, window: { location: { pathname: '/trace' } },
+        router: { push: (value: string) => { url = value; } },
+    };
+    const navigate = new Function(...Object.keys(scope), `${code}; return navigate;`)(...Object.values(scope));
+    return (target: string) => { navigate(target); return new URL(url, 'http://localhost'); };
+}
+
+test('Dify child navigation preserves the Workflow origin across reload and clears an old execution target', () => {
+    const child = detailNavigation('framework=dify&taskId=dify:workflow&executionId=outer-execution&page=3')('dify:planner');
+    assert.equal(child.searchParams.get('workflowTaskId'), 'dify:workflow');
+    assert.equal(child.searchParams.get('taskId'), 'dify:planner');
+    assert.equal(child.searchParams.get('executionId'), null);
+    assert.equal(child.searchParams.get('page'), '3');
+    const returned = detailNavigation(child.search, 'dify:planner', 'dify', 0)('dify:workflow');
+    assert.equal(returned.searchParams.get('taskId'), 'dify:workflow');
+    assert.equal(returned.searchParams.get('workflowTaskId'), null);
+});
+
+test('Dify origin survives another child jump without being invented for an independent Trace', () => {
+    const next = detailNavigation('framework=dify&workflowTaskId=dify:workflow', 'dify:planner', 'dify', 0)('dify:reviewer');
+    assert.equal(next.searchParams.get('workflowTaskId'), 'dify:workflow');
+    assert.equal(detailNavigation('', 'dify:planner', 'dify', 0)('dify:reviewer').searchParams.get('workflowTaskId'), null);
+    assert.equal(detailNavigation('', 'opencode-task', 'opencode', 2)('opencode-child').searchParams.get('workflowTaskId'), null);
 });

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { findCandidateVerification } from './verification-evidence';
 import { prismaRaw } from '@/lib/storage/prisma';
 
 function planIdsFromSourceRefs(sourceRefs: unknown[]): string[] {
@@ -38,9 +39,29 @@ export async function applyCompletedOptimizationPlan(input: {
   workbenchSessionId: string;
   sourceRefs: unknown[];
   resolvedRunId: string;
+  staticEvaluationId?: string;
+  verificationExperimentId?: string;
 }): Promise<{ planId: string | null; appliedItems: number; resolvedIssues: number }> {
   const planIds = planIdsFromSourceRefs(input.sourceRefs);
-  if (!planIds.length) return { planId: null, appliedItems: 0, resolvedIssues: 0 };
+  const record = await prismaRaw.skillOptimizationRecord.findFirst({ where: { id: input.resolvedRunId, user: input.user, sessionId: input.workbenchSessionId } });
+  const proof = record && input.verificationExperimentId ? await findCandidateVerification({ user: input.user, recordId: record.id,
+    skillName: record.skillName, baseVersion: record.baseVersion, files: JSON.parse(record.candidateFilesJson), sourceExperimentId: record.sourceExperimentId }) : null;
+  const verifiedIds = new Set(proof?.result.verifiedIssueIds || []);
+  const quality = input.staticEvaluationId ? await prismaRaw.skillSnapshotEvaluation.findFirst({
+    where: { id: input.staticEvaluationId, user: input.user, sessionId: input.workbenchSessionId, status: 'ok' } }) : null;
+  const remainingRules = new Set<string>((JSON.parse(quality?.issuesJson || '[]') as Array<{ ruleId?: string }>).flatMap((issue) => issue.ruleId ? [issue.ruleId] : []));
+  const requestedIds = input.sourceRefs.flatMap((item) => item && typeof item === 'object' && (item as { type?: string }).type === 'issue'
+    && typeof (item as { id?: unknown }).id === 'string' ? [(item as { id: string }).id] : []);
+  const canResolve = (issue: { id: string; source: string; ruleId: string | null }) => verifiedIds.has(issue.id)
+    || Boolean(quality && record && quality.contentHash === record.candidateContentHash && issue.source === 'static' && issue.ruleId && !issue.ruleId.startsWith('dim:') && !remainingRules.has(issue.ruleId));
+  if (!planIds.length) {
+    if (!record) return { planId: null, appliedItems: 0, resolvedIssues: 0 };
+    const issues = await prismaRaw.skillIssue.findMany({ where: { user: input.user, version: record.baseVersion,
+      Skill: { name: record.skillName }, id: { in: [...new Set([...requestedIds, ...verifiedIds])] } } });
+    const resolved = await prismaRaw.skillIssue.updateMany({ where: { id: { in: issues.filter(canResolve).map((issue) => issue.id) }, user: input.user, resolvedAt: null },
+      data: { resolvedAt: new Date(), resolvedRunId: input.resolvedRunId } });
+    return { planId: null, appliedItems: 0, resolvedIssues: resolved.count };
+  }
 
   return prismaRaw.$transaction(async (tx) => {
     const session = await tx.skillWorkbenchSession.findFirst({
@@ -76,17 +97,17 @@ export async function applyCompletedOptimizationPlan(input: {
           version: plan.baseVersion,
           user: input.user,
         },
-        select: { dedupKey: true },
+        select: { id: true, source: true, ruleId: true },
       })
       : [];
-    const dedupKeys = [...new Set(sourceIssues.map((issue) => issue.dedupKey))];
-    const resolvedIssues = dedupKeys.length
+    const resolvedIds = sourceIssues.filter(canResolve).map((issue) => issue.id);
+    const resolvedIssues = resolvedIds.length
       ? (await tx.skillIssue.updateMany({
         where: {
           skillId: plan.skillId,
           version: plan.baseVersion,
           user: input.user,
-          dedupKey: { in: dedupKeys },
+          id: { in: resolvedIds },
           resolvedAt: null,
         },
         data: { resolvedAt: new Date(), resolvedRunId: input.resolvedRunId },

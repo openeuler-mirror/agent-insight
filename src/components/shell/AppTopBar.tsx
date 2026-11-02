@@ -19,7 +19,7 @@
 /**
  * AppTopBar — v2.1 兼容层（2026-05-27）
  *
- * `docs/design/patterns.md` §A.1 v2.1 起废弃独立 AppTopBar 行。本组件保留旧
+ * `design/patterns.md` §A.1 v2.1 起废弃独立 AppTopBar 行。本组件保留旧
  * API（title / actions / showDefaultActions）让 27 个调用点继续工作，但内部
  * 渲染已切换为新统一 header（h=56, sidebar-toggle 在左, lucide 图标, 单行
  * 容器）—— 全站视觉立刻一致。

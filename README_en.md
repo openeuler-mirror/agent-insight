@@ -49,7 +49,7 @@ The platform has three main parts:
 - **Application services** use Next.js, React, and TypeScript to provide the Web dashboard and APIs for tracing, evaluation, diagnosis, Skill generation, and optimization.
 - **Data storage** uses Prisma and database adapters to manage execution records and task data. Local SQLite is the default; see the developer guide for other database configurations.
 
-Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/developer-guide/INDEX.md) for module and API details.
+Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/zh/explanation/platform/developer-index.md) for module and API details.
 
 <p align="center">
   <img src="docs/images/architecture.png" alt="Agent Insight architecture" />
@@ -68,6 +68,7 @@ Model-dependent steps call user-configured external services. No AI model is emb
 | JiuwenSwarm | OTLP |
 | LangChain / LangGraph | OTLP |
 | LlamaIndex | OTLP |
+| Dify (Workflow / Agent trajectory) | OTLP |
 | OpenClaw | OTLP |
 | Codex | Hook collector |
 | Pi Agent | Hook collector |
@@ -130,7 +131,7 @@ docker run -d \
   karaggagent/agent-insight:latest
 ```
 
-Use a fixed published image tag when you need a repeatable deployment. Keep the mounted data directory when upgrading. See the [deployment guide](docs/user-guide/quickstart.md) for offline images, mounting source code, and troubleshooting.
+Use a fixed published image tag when you need a repeatable deployment. Keep the mounted data directory when upgrading. See the [deployment guide](docs/zh/tutorial/platform/01-quick-start.md) for offline images, mounting source code, and troubleshooting.
 
 ### 2. Open the dashboard and connect an Agent
 
@@ -151,27 +152,35 @@ Run a small task in the connected Agent, then open the execution list in Agent I
 3. **Evaluate**: configure a dataset and evaluators, run the task, and inspect execution details and evaluation results.
 4. **Optimize**: select an existing Skill and use the findings to create an improved version. Re-run the same task or dataset to compare behavior.
 
-Start with the [built-in example walkthrough](docs/user-guide/example-walkthrough.md) for a concrete workflow. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
+Start with the [built-in example walkthrough](docs/zh/tutorial/platform/02-example-walkthrough.md) for a concrete workflow. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
 
 ## Documentation
 
-| Path | Contents |
-|:-----|:---------|
-| [User guide](docs/user-guide/) | Installation, example walkthrough, concepts, and FAQ |
-| [Developer guide](docs/developer-guide/INDEX.md) | Architecture, modules, APIs, and development conventions |
-| [Agent RAS](docs/agent-ras/) | Reliability, anomaly detection, and recovery |
-| [Agent fault injection](docs/agent-fault-injection/) | Fault injection and collection |
-| [Reusable snippets](docs/snippets/) | SDK installation and environment setup |
-| [Q&A](docs/qa.md) | Installation, integrations, evaluation, and troubleshooting |
-| [Skill generation](docs/skill-generation-principle-and-pipeline.md) | Generation pipeline and capability boundaries |
+Start at the [documentation index](docs/README.md). Existing documentation is primarily Chinese; see the [English translation status](docs/en/README.md).
+
+| Category | Contents |
+| --- | --- |
+| [Tutorials](docs/zh/tutorial/README.md) | Guided first tasks and complete examples |
+| [How-to guides](docs/zh/how-to/README.md) | Installation, configuration, operation, and extension |
+| [Reference](docs/zh/reference/README.md) | APIs, configuration, protocols, and data fields |
+| [Explanation](docs/zh/explanation/README.md) | Concepts, architecture, and responsibility boundaries |
+| [Agent RAS](docs/zh/explanation/reliability/agent-ras/README.md) / [Fault injection](docs/zh/explanation/reliability/agent-fault-injection/README.md) | Reliability documentation |
+| [Internal designs](design/README.md) | Requirements, proposals, plans, and historical material |
 
 ## Contributing
 
 Contributions through bug reports, documentation, tests, and code are welcome.
 
-1. Open an [issue](https://gitcode.com/openJiuwen/agent-insight/issues) with the version, reproduction steps, and sanitized logs. Discuss larger feature changes before implementing them.
-2. Before contributing code, sign the [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee) and read the [community contribution guide](https://gitcode.com/openJiuwen/community/blob/main/README.md) and this repository's [AGENTS.md](AGENTS.md).
-3. Fork the repository, create a working branch, make the change, update the relevant documentation, and run `npm run test`. Submit a PR to `openJiuwen/agent-insight` describing the purpose and validation results.
+Choose the CLA and contribution guide for the community receiving your PR: **sign the openEuler CLA when contributing to openEuler, or the openJiuwen CLA when contributing to openJiuwen.**
+
+| Target community and repository | CLA signing page | Community contribution guide |
+| --- | --- | --- |
+| [openEuler/agent-insight](https://gitcode.com/openeuler/agent-insight) | [openEuler CLA](https://clasign.osinfra.cn/sign/6983225bdcbb19710248ccf0) | [openEuler contribution guide](https://www.openeuler.org/en/community/contribution/detail.html) |
+| [openJiuwen/agent-insight](https://gitcode.com/openJiuwen/agent-insight) | [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee) | [openJiuwen contribution guide](https://gitcode.com/openJiuwen/community/blob/main/README.md) |
+
+1. Open an issue in the target community's repository with the version, reproduction steps, and sanitized logs. Discuss larger feature changes before implementing them.
+2. Before contributing code, sign that community's CLA and read its contribution guide and this repository's [AGENTS.md](AGENTS.md).
+3. Fork the target community's repository, create a working branch, make the change, update the relevant documentation, and run `npm run test`. Submit a PR to the same community's repository describing the purpose and validation results.
 
 ## Open-source License
 

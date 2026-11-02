@@ -251,7 +251,7 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
           status: 'ready',
           caseCount: rows.length,
           sourceJson,
-          cases: { create: persistenceRows },
+          cases: { createMany: { data: persistenceRows } },
         },
       })
       return dataset
@@ -283,7 +283,7 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
         status: 'ready',
         caseCount: rows.length,
         sourceJson,
-        cases: { create: persistenceRows },
+        cases: { createMany: { data: persistenceRows } },
       },
     })
   })

@@ -26,6 +26,10 @@ import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { EvaluatorExecutionSettings } from '@/components/eval/EvaluatorExecutionSettings';
+import { buildExecutionConfig, executionDraft, filterEvaluatorCards, type EvaluatorSourceFilter } from '@/lib/evaluators/evaluator-execution-draft';
+import type { EvaluatorExecutionCapabilities, EvaluatorExecutionConfig } from '@/lib/evaluators/evaluator-execution-config';
 import { RuntimeOptionsFields } from '@/components/eval/RuntimeOptionsFields';
 import { RuntimeParameterTemplates } from '@/components/eval/RuntimeParameterTemplates';
 import { RuntimeOptionMigration } from '@/components/eval/RuntimeOptionMigration';
@@ -35,6 +39,8 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -80,6 +86,7 @@ import {
   truncateBenchmarkText,
 } from '@/lib/benchmark/presentation';
 import {
+  skillExecutionCapabilityIssue,
   isSkillExperimentDatasetEligible,
   isSkillExperimentEvaluatorEligible,
 } from '@/lib/skill-workbench/experiment-policy';
@@ -95,6 +102,7 @@ interface AgentTargetOption {
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
   supportsGenericTrace: boolean;
+  supportsSkillSnapshot?: boolean;
   supportsTriggerRouting?: boolean;
   supportsFaultInjection: boolean;
   supportsBenchmark: boolean;
@@ -542,6 +550,7 @@ export function ExperimentWizard({
     : defaultExperimentName());
   const [agentName, setAgentName] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [traceGenerationDiagnostics, setTraceGenerationDiagnostics] = useState<Array<{ clientId?: string; host?: string; platform?: string; code: string; message: string }>>([]);
   const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
   const [wizardDatasetsLoaded, setWizardDatasetsLoaded] = useState(false);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
@@ -605,6 +614,13 @@ export function ExperimentWizard({
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
   const [selectedEvaluators, setSelectedEvaluators] = useState<Set<string>>(new Set());
   const [evaluatorConfigs, setEvaluatorConfigs] = useState<EvaluatorRunConfigMap>({});
+  const [evaluatorExecutionDraft, setEvaluatorExecutionDraft] = useState(() => executionDraft());
+  const [executionCapabilities, setExecutionCapabilities] = useState<EvaluatorExecutionCapabilities>({});
+  const [evaluatorConfigLoaded, setEvaluatorConfigLoaded] = useState(false);
+  const [evaluatorLoadError, setEvaluatorLoadError] = useState('');
+  const [evaluatorSearch, setEvaluatorSearch] = useState('');
+  const [evaluatorSource, setEvaluatorSource] = useState<EvaluatorSourceFilter>('all');
+  const [evaluatorPage, setEvaluatorPage] = useState(1);
   const [configuringEvaluatorId, setConfiguringEvaluatorId] = useState<ConfigurableTextEvaluatorId | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -633,6 +649,18 @@ export function ExperimentWizard({
     if (!skillPreset) return true;
     return isSkillExperimentDatasetEligible(skillPreset, dataset, skillContext.skillName);
   }), [skillContext, skillPreset, wizardDatasets]);
+  const datasetPlaceholder = skillPreset === 'skill-ab'
+    ? '暂无可用数据集'
+    : skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集';
+  const wizardDatasetOptions = eligibleWizardDatasets.map((dataset) => ({
+    value: dataset.id,
+    label: `${dataset.name} · ${DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（${dataset.cases?.length ?? dataset.caseCount ?? 0}）${
+      skillPreset !== 'trigger' && dataset.targetSkill && dataset.targetSkill !== skillContext?.skillName
+        ? ` · 来源 Skill：${dataset.targetSkill}` : ''
+    }`,
+  }));
+  const selectedDatasetLabel = wizardDatasetOptions.find((option) => option.value === selectedDatasetId)?.label
+    || datasetPlaceholder;
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const isBenchmarkDataset = selectedDataset?.datasetKind === 'benchmark';
   const executionConcurrency = Number(executionConcurrencyInput);
@@ -660,18 +688,18 @@ export function ExperimentWizard({
     [agentName, agents],
   );
   const targetOptions = useMemo(
-    () => (selectedAgent?.targets || []).filter((target) =>
-      skillPreset === 'trigger'
-        ? target.supportsTriggerRouting
-        : isBenchmarkDataset
+    () => (selectedAgent?.targets || []).filter((target) => {
+      if (skillContext && skillExecutionCapabilityIssue(target, skillPreset === 'trigger')) return false;
+      return isBenchmarkDataset
         ? target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '') || target.preparableBenchmarkKeys?.includes(selectedDataset?.benchmark?.adapterKey || '')
         : isReliabilityDataset
           ? target.supportsFaultInjection || (target.supportsEnvironmentPreparation && ['opencode', 'xiaoo'].includes(target.platform))
-          : target.supportsGenericTrace).map(target => {
+          : target.supportsGenericTrace;
+    }).map(target => {
             const environment = isBenchmarkDataset ? target.benchmarkEnvironments?.[selectedDataset?.benchmark?.adapterKey || ''] : null;
             return environment ? { ...target, executionProfile: environment.profile, models: environment.models } : target;
           }),
-    [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey, skillPreset],
+    [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey, skillPreset, skillContext],
   );
   const selectedTarget = targetOptions.find(
     (target) => `${target.workerId}::${target.platform}` === selectedTargetKey,
@@ -680,6 +708,15 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const skillTargetRequired = Boolean(skillContext && (traceMode === 'generate' || skillPreset === 'skill-ab'));
+  const skillTargetError = skillTargetRequired
+    ? (!selectedTarget ? '没有满足当前 Skill 实验能力要求的在线执行目标，请检查客户端状态和能力探测结果。'
+      : skillExecutionCapabilityIssue(selectedTarget, skillPreset === 'trigger')?.message || '')
+    : '';
+  const unavailableSkillTargets = skillContext ? (selectedAgent?.targets || []).flatMap(target => {
+    const issue = skillExecutionCapabilityIssue(target, skillPreset === 'trigger');
+    return issue ? [{ target, message: issue.message }] : [];
+  }) : [];
   const unavailableBenchmarkTargets = isBenchmarkDataset
     ? (selectedAgent?.targets || []).filter(target => !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))
     : [];
@@ -734,7 +771,10 @@ export function ExperimentWizard({
     if (!response.ok) throw new Error('Agent 列表刷新失败');
     const data = await response.json();
     const updated: AgentOption[] = Array.isArray(data?.agents) ? data.agents : [];
-    if (agentsRequestIdRef.current === requestId) setAgents(updated);
+    if (agentsRequestIdRef.current === requestId) {
+      setAgents(updated);
+      setTraceGenerationDiagnostics(Array.isArray(data?.traceGenerationDiagnostics) ? data.traceGenerationDiagnostics : []);
+    }
     return updated;
   }, [user]);
 
@@ -764,10 +804,16 @@ export function ExperimentWizard({
 
   useEffect(() => {
     if (!user) return;
-    apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`)
-      .then((r) => r.json())
-      .then((d) => setCustomEvaluators(Array.isArray(d) ? d : []))
-      .catch(() => setCustomEvaluators([]));
+    apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}&view=execution-config`)
+      .then((r) => { if (!r.ok) throw new Error('评估器配置加载失败，请刷新页面重试'); return r.json(); })
+      .then((d) => {
+        if (!Array.isArray(d.evaluators) || !d.executionCapabilities) throw new Error('评估器配置加载失败，请刷新页面重试');
+        setCustomEvaluators(d.evaluators);
+        setExecutionCapabilities(d.executionCapabilities);
+        setEvaluatorConfigLoaded(true);
+        setEvaluatorLoadError('');
+      })
+      .catch((error) => { setEvaluatorLoadError(error.message); setEvaluatorConfigLoaded(false); });
     apiFetch(`/api/tags?user=${encodeURIComponent(user)}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setTraceTags(Array.isArray(d) ? d : []))
@@ -909,6 +955,7 @@ export function ExperimentWizard({
       setEvaluatorConfigs(config.evaluatorConfigs && typeof config.evaluatorConfigs === 'object'
         ? config.evaluatorConfigs as EvaluatorRunConfigMap
         : {});
+      setEvaluatorExecutionDraft(executionDraft(config.evaluatorExecutionConfig as EvaluatorExecutionConfig | null));
       const workerId = String(restoredTarget.workerId || '');
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
@@ -1504,6 +1551,22 @@ export function ExperimentWizard({
     });
   };
 
+  useEffect(() => {
+    setEvaluatorExecutionDraft((previous) => {
+      const entries = Object.entries(previous.overrides).filter(([id]) => selectedEvaluators.has(id));
+      return entries.length === Object.keys(previous.overrides).length ? previous : { ...previous, overrides: Object.fromEntries(entries) };
+    });
+  }, [selectedEvaluators]);
+
+  const filteredEvaluators = filterEvaluatorCards(allEvaluators, evaluatorSearch, evaluatorSource);
+  const evaluatorPageCount = Math.max(1, Math.ceil(filteredEvaluators.length / 12));
+  const currentEvaluatorPage = Math.min(evaluatorPage, evaluatorPageCount);
+  const visibleEvaluators = filteredEvaluators.slice((currentEvaluatorPage - 1) * 12, currentEvaluatorPage * 12);
+  const evaluatorExecutionState = useMemo(() => {
+    try { return { config: buildExecutionConfig(evaluatorExecutionDraft, selectedEvaluators, executionCapabilities), error: '' }; }
+    catch (error) { return { config: undefined, error: (error as Error).message }; }
+  }, [evaluatorExecutionDraft, selectedEvaluators, executionCapabilities]);
+
   // 监听 trace 不携带逐条预期输出、数据集输入或 Tool/Skill 目录，移除带前置条件的评估器。
   useEffect(() => {
     if (!watchMode) return;
@@ -1525,6 +1588,9 @@ export function ExperimentWizard({
     setSubmitting(true);
     setSubmitError('');
     try {
+      if (skillTargetError) throw new Error(skillTargetError);
+      if (!evaluatorConfigLoaded) throw new Error(evaluatorLoadError || '正在加载评估器配置');
+      if (evaluatorExecutionState.error) throw new Error(evaluatorExecutionState.error);
       if (executionConcurrencyRequired && !executionConcurrencyValid) throw new Error('执行并发必须为正整数');
       if (agentTimeoutRequired && !agentTimeoutValid) {
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
@@ -1595,6 +1661,8 @@ export function ExperimentWizard({
             name,
             agentName,
             evaluatorIds: Array.from(selectedEvaluators),
+            evaluatorConfigs: selectedEvaluatorConfigs,
+            evaluatorExecutionConfig: evaluatorExecutionState.config,
             caseIds: abCaseIds,
             traceSource: traceMode,
             executionTarget: selectedTarget ? {
@@ -1672,6 +1740,7 @@ export function ExperimentWizard({
           }),
           evaluatorIds: Array.from(selectedEvaluators),
           evaluatorConfigs: selectedEvaluatorConfigs,
+          evaluatorExecutionConfig: evaluatorExecutionState.config,
           ...(!skillContext ? {
             configSnapshot: {
               schemaVersion: 1,
@@ -1812,6 +1881,11 @@ export function ExperimentWizard({
           const updated = await refreshAgents(true);
           if (!environment.isCurrent()) return;
           const target = updated.flatMap(item => item.targets).find(item => item.workerId === environmentSelection.clientId && item.platform === environmentSelection.platform && item.agent === environmentSelection.agent);
+          const capabilityIssue = target && skillContext ? skillExecutionCapabilityIssue(target, skillPreset === 'trigger') : null;
+          if (capabilityIssue) {
+            environment.fail(capabilityIssue.message);
+            return;
+          }
           if (!target || (isBenchmarkDataset && !target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || ''))) {
             environment.fail('刚检查的执行目标已变化或不再就绪，请确认主机与 Agent 后再次点击“下一步”。');
             return;
@@ -1941,6 +2015,13 @@ export function ExperimentWizard({
                   <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
                     候选项为具有历史 Trace 的 Agent 与所有在线客户端可执行 Agent 的并集
                   </div>
+                  {agents.length === 0 && traceGenerationDiagnostics.length > 0 && (
+                    <ul aria-label="Agent 探测诊断" style={{ fontSize: 12, color: 'var(--foreground-secondary)', paddingLeft: 18 }}>
+                      {traceGenerationDiagnostics.map((item, index) => (
+                        <li key={index}>{item.host ? `${item.host}：` : ''}{item.message}</li>
+                      ))}
+                    </ul>
+                  )}
                   {agentName && !selectedAgent && (
                     <div style={{ fontSize: 10, color: 'var(--error)', marginTop: 5 }}>
                       当前 Agent 已不在最新候选中，请重新选择
@@ -1952,26 +2033,43 @@ export function ExperimentWizard({
               <div style={{ marginBottom: 16 }}>
                 <label style={FIELDLBL}>评测数据集{skillPreset === 'skill-ab' ? ' *' : '（可选）'}</label>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <select
-                    style={{ ...INPUT, cursor: 'pointer', flex: 1 }}
-                    value={selectedDatasetId}
-                    disabled={skillPreset === 'skill-ab' && eligibleWizardDatasets.length === 0}
-                    onChange={(e) => {
-                      void selectWizardDataset(e.target.value);
-                    }}
-                  >
-                    {skillPreset === 'skill-ab'
-                      ? eligibleWizardDatasets.length === 0 && <option value="" disabled>暂无可用数据集</option>
-                      : <option value="">{skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集'}</option>}
-                    {eligibleWizardDatasets.map((dataset) => (
-                      <option key={dataset.id} value={dataset.id}>
-                        {dataset.name} · {DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
-                        {skillPreset !== 'trigger' && dataset.targetSkill && dataset.targetSkill !== skillContext?.skillName
-                          ? ` · 来源 Skill：${dataset.targetSkill}`
-                          : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="评测数据集"
+                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                        style={INPUT}
+                        disabled={skillPreset === 'skill-ab' && eligibleWizardDatasets.length === 0}
+                      >
+                        <span className="min-w-0 flex-1 truncate" title={selectedDatasetLabel}>{selectedDatasetLabel}</span>
+                        <ChevronDown size={14} className="shrink-0 text-foreground-muted" aria-hidden />
+                      </button>
+                    </DropdownMenuTrigger>
+                    {/* Portal 避开向导滚动容器；按触发框宽度和视口剩余空间约束列表。 */}
+                    <DropdownMenuContent
+                      align="start"
+                      side="bottom"
+                      collisionPadding={8}
+                      className="overflow-y-auto"
+                      style={{
+                        width: 'var(--radix-dropdown-menu-trigger-width)',
+                        maxWidth: 'var(--radix-dropdown-menu-content-available-width)',
+                        maxHeight: 'min(320px, var(--radix-dropdown-menu-content-available-height))',
+                      }}
+                    >
+                      <DropdownMenuRadioGroup value={selectedDatasetId} onValueChange={(value) => void selectWizardDataset(value)}>
+                        {skillPreset !== 'skill-ab' && (
+                          <DropdownMenuRadioItem value="">{datasetPlaceholder}</DropdownMenuRadioItem>
+                        )}
+                        {wizardDatasetOptions.map((option) => (
+                          <DropdownMenuRadioItem key={option.value} value={option.value} textValue={option.label} className="items-start">
+                            <span className="min-w-0 whitespace-normal break-words">{option.label}</span>
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   {skillPreset === 'trigger' && (
                     <button type="button" style={{ ...BTN_OUTLINE_SM, height: 34 }} disabled={generatingTriggerDataset} onClick={() => void generateTriggerDataset()}>
                       {generatingTriggerDataset ? '生成中…' : 'AI 新建触发分析数据集'}
@@ -2236,12 +2334,30 @@ export function ExperimentWizard({
                   {!selectedDataset
                     ? '生成 Trace 需要数据集 Case，请返回第一步选择评测数据集。'
                     : skillPreset === 'trigger'
-                      ? '没有支持只读触发分析的在线 OpenCode 客户端，请升级并连接客户端后重试。'
+                      ? '没有上报只读触发分析能力的在线 OpenCode 客户端，请检查客户端状态和能力探测结果。'
                     : isBenchmarkDataset
                       ? '当前 Agent 没有满足该 Benchmark 执行要求的在线客户端，请检查客户端状态和执行目标配置。'
                     : isReliabilityDataset
                       ? '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'
-                      : '当前 Agent 没有在线且支持回传 Trace ID 的客户端，请检查客户端状态；旧客户端需要升级后才能用于普通数据集生成 Trace。'}
+                    : skillContext
+                      ? '当前 Agent 没有上报 Skill 版本隔离能力的在线 OpenCode 客户端，请检查常驻客户端版本和能力探测结果。'
+                      : '所选 Agent 当前没有可用于生成 Trace 的运行主机。请检查下方客户端诊断，或选择客户端已扫描到的 Agent。'}
+                  {unavailableSkillTargets.length > 0 && (
+                    <ul aria-label="Skill 执行目标不可用原因" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
+                      {unavailableSkillTargets.map(({ target, message }) => (
+                        <li key={`${target.workerId}::${target.platform}`}>{target.host} · {target.platform}：{message}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {!isBenchmarkDataset && !isReliabilityDataset && traceGenerationDiagnostics.length > 0 && (
+                    <ul aria-label="Trace 生成客户端诊断" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
+                      {traceGenerationDiagnostics.filter(item => !item.platform || !selectedAgent?.frameworks.length || selectedAgent.frameworks.includes(item.platform)).map((item, index) => (
+                        <li key={`${item.clientId || item.code}:${item.platform || ''}:${index}`}>
+                          {item.host ? `${item.host}${item.platform ? ` · ${item.platform}` : ''}：` : ''}{item.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {isBenchmarkDataset && unavailableBenchmarkTargets.length > 0 && (
                     <ul aria-label="Benchmark 执行环境未就绪原因" style={{ margin: '10px 0 0', paddingLeft: 20 }}>
                       {unavailableBenchmarkTargets.map(target => (
@@ -2621,11 +2737,11 @@ export function ExperimentWizard({
                 <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('existing')}>选择 Trace</button>
                 <button
                   type="button"
-                  disabled={!selectedDataset || targetOptions.length === 0}
-                  title={!selectedDataset ? '请先在第一步选择数据集' : targetOptions.length === 0 ? '该 Agent 没有在线可执行主机' : '按数据集 Case 生成 Trace'}
-                  style={{ ...BTN_GHOST, height: 30, opacity: !selectedDataset || targetOptions.length === 0 ? 0.45 : 1, cursor: !selectedDataset || targetOptions.length === 0 ? 'not-allowed' : 'pointer' }}
+                  disabled={!selectedDataset}
+                  title={!selectedDataset ? '请先在第一步选择数据集' : targetOptions.length === 0 ? '查看生成 Trace 不可用原因' : '按数据集 Case 生成 Trace'}
+                  style={{ ...BTN_GHOST, height: 30, opacity: !selectedDataset ? 0.45 : 1, cursor: !selectedDataset ? 'not-allowed' : 'pointer' }}
                   onClick={() => {
-                    if (selectedDataset && targetOptions.length > 0) {
+                    if (selectedDataset) {
                       setTraceMode('generate');
                       setWatchMode(false);
                     }
@@ -2641,7 +2757,7 @@ export function ExperimentWizard({
                   <select style={INPUT} value={effectiveTargetKey} onChange={(event) => { setSelectedTargetKey(event.target.value); setGenModel(''); }}>
                     {targetOptions.map((target) => <option key={`${target.workerId}::${target.platform}`} value={`${target.workerId}::${target.platform}`}>{target.host} · {target.platform}</option>)}
                   </select>
-                  {!selectedTarget && <p className="text-sm text-error">没有可用的在线执行目标</p>}
+                  {skillTargetError && <p className="text-sm text-error">{skillTargetError}</p>}
                   <label htmlFor="ab-existing-runtime-model" style={FIELDLBL}>运行模型 *</label>
                   <RuntimeModelSelect id="ab-existing-runtime-model" models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                   <AgentTimeoutField
@@ -3318,8 +3434,21 @@ export function ExperimentWizard({
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
                 为本次实验挑选评估器（可多选）。依赖预期输出、数据集输入或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
               </div>
+              <div className="mb-3 flex flex-wrap items-center gap-3">
+                <Input className="max-w-sm" type="search" aria-label="搜索评估器" placeholder="搜索评估器名称或描述……"
+                  value={evaluatorSearch} onChange={(event) => { setEvaluatorSearch(event.target.value); setEvaluatorPage(1); }} />
+                <label className="flex items-center gap-2 text-xs">来源
+                  <select value={evaluatorSource} style={{ ...INPUT, width: 'auto' }} aria-label="评估器来源"
+                    onChange={(event) => { setEvaluatorSource(event.target.value as EvaluatorSourceFilter); setEvaluatorPage(1); }}>
+                    <option value="all">全部来源</option><option value="preset">内置</option><option value="custom">自定义</option>
+                    {isBenchmarkDataset && <option value="benchmark">Benchmark</option>}
+                  </select>
+                </label>
+                <span className="ml-auto text-xs" style={{ color: 'var(--foreground-muted)' }}>已选 {selectedEvaluators.size} 个</span>
+              </div>
+              {!filteredEvaluators.length && <p className="py-4 text-sm" style={{ color: 'var(--foreground-muted)' }}>未找到匹配的评估器</p>}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
-                {allEvaluators.map((card) => {
+                {visibleEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
                   const isBoundBenchmarkEvaluator = isBenchmarkDataset && card.id === benchmarkEvaluatorId;
                   // 监听模式的新 trace 没有逐条预期输出或 Tool/Skill 目录，带前置条件的评估器不可用。
@@ -3421,12 +3550,27 @@ export function ExperimentWizard({
                 })}
               </div>
 
+              {evaluatorPageCount > 1 && <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                <span style={{ color: 'var(--foreground-muted)' }}>共 {filteredEvaluators.length} 个评估器</span>
+                <div className="ml-auto flex items-center gap-3">
+                  <Button type="button" variant="outline" size="sm" disabled={currentEvaluatorPage === 1} onClick={() => setEvaluatorPage(currentEvaluatorPage - 1)}>上一页</Button>
+                  <span aria-live="polite">{currentEvaluatorPage} / {evaluatorPageCount}</span>
+                  <Button type="button" variant="outline" size="sm" disabled={currentEvaluatorPage === evaluatorPageCount} onClick={() => setEvaluatorPage(currentEvaluatorPage + 1)}>下一页</Button>
+                </div>
+              </div>}
+              {evaluatorConfigLoaded && <EvaluatorExecutionSettings
+                cards={allEvaluators.filter((card) => selectedEvaluators.has(card.id))} capabilities={executionCapabilities}
+                value={evaluatorExecutionDraft} onChange={setEvaluatorExecutionDraft} />}
+              {(evaluatorLoadError || evaluatorExecutionState.error) && <p role="alert" className="mt-3 text-xs" style={{ color: 'var(--error)' }}>
+                {evaluatorLoadError || evaluatorExecutionState.error}
+              </p>}
+              {skillTargetError && <p role="alert" style={{ color: 'var(--error)', fontSize: 12 }}>{skillTargetError}</p>}
               {submitError && (
                 <div style={{ marginTop: 12, fontSize: 12, color: 'var(--error)' }}>{submitError}</div>
               )}
 
               {footer({
-                nextDisabled: selectedEvaluators.size < 1 || submitting,
+                nextDisabled: selectedEvaluators.size < 1 || submitting || !evaluatorConfigLoaded || Boolean(evaluatorExecutionState.error) || Boolean(skillTargetError),
                 nextLabel: submitting ? '创建中…' : '🚀 开始实验',
                 onNext: submit,
               })}

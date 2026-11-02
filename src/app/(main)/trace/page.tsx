@@ -39,7 +39,7 @@ import {
     ChevronDown,
     Database,
 } from 'lucide-react';
-import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
+import { parseAsInteger, parseAsString, useQueryState, useQueryStates } from 'nuqs';
 import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -593,7 +593,7 @@ function TracePageContent() {
         setData(previous => previous.map(item => item.upload_id === latest.upload_id ? latest : item));
     }, []);
 
-    // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
+    // URL-persisted filter / sort / paging state (design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', traceFilterParsers.time);
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', traceFilterParsers.status);
     const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
@@ -609,7 +609,7 @@ function TracePageContent() {
     const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
-    const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
+    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString, workflowTaskId: parseAsString });
     const [search, setSearch] = useQueryState('q', traceFilterParsers.q);
     const [showFilters, setShowFilters] = useState(false);
     const [clausesRaw, setClausesRaw] = useQueryState('f', traceFilterParsers.f);
@@ -745,9 +745,9 @@ function TracePageContent() {
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
-        void setTaskIdParam(id, { history: id ? 'push' : 'replace' });
+        void setTraceTarget({ taskId: id, executionId: null, workflowTaskId: null }, { history: id ? 'push' : 'replace' });
         if (id) reportTraceDetailView(id);
-    }, [setTaskIdParam, reportTraceDetailView]);
+    }, [setTraceTarget, reportTraceDetailView]);
 
     // Resolve selectedExecution from URL on data load or URL change.
     //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)
@@ -803,11 +803,11 @@ function TracePageContent() {
     useEffect(() => {
         const requestId = ++executionLookupRequestRef.current;
         setExecutionLookupError(null);
-        if (!taskIdParam) {
+        if (!taskIdParam && !executionIdParam) {
             setSelectedExecution(null);
             return;
         }
-        const matchesTask = (item: Execution) => item.task_id === taskIdParam || item.upload_id === taskIdParam;
+        const matchesTask = (item: Execution) => executionIdParam ? item.upload_id === executionIdParam : item.task_id === taskIdParam || item.upload_id === taskIdParam;
         const exec = data.find(matchesTask);
         if (exec) {
             if (selectedExecution !== exec) setSelectedExecution(exec);
@@ -816,7 +816,7 @@ function TracePageContent() {
         if (selectedExecution && matchesTask(selectedExecution)) return;
         const controller = new AbortController();
         setSelectedExecution(null);
-        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`, { signal: controller.signal })
+        apiFetch(`/api/observe/data?${executionIdParam ? `executionId=${encodeURIComponent(executionIdParam)}` : `taskId=${encodeURIComponent(taskIdParam || '')}`}&includeEvaluations=0&skipAutoEvalReady=1`, { signal: controller.signal })
             .then(async r => ({ ok: r.ok, status: r.status, body: await r.json() }))
             .then(({ ok, status, body }) => {
                 if (controller.signal.aborted || requestId !== executionLookupRequestRef.current) return;
@@ -834,7 +834,7 @@ function TracePageContent() {
             });
         return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [taskIdParam, data, executionLookupRetry]);
+    }, [taskIdParam, executionIdParam, data, executionLookupRetry]);
 
     useEffect(() => {
         if (!filtersReady) return;
@@ -1117,7 +1117,7 @@ function TracePageContent() {
         <>
             <AppTopBar
                 title={<Term id="trace" label={t('nav.trace')} />}
-                actions={!taskIdParam ? (
+                actions={!taskIdParam && !executionIdParam ? (
                     <>
                         <Button variant="outline" size="sm" asChild><Link href="/observe/collaborations">协作图</Link></Button>
                         <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
@@ -1130,7 +1130,7 @@ function TracePageContent() {
                 showDefaultActions={false}
             />
             <PageContainer>
-                {taskIdParam && (!selectedExecution || (selectedExecution.task_id !== taskIdParam && selectedExecution.upload_id !== taskIdParam)) ? (
+                {(taskIdParam || executionIdParam) && (!selectedExecution || (executionIdParam ? selectedExecution.upload_id !== executionIdParam : selectedExecution.task_id !== taskIdParam && selectedExecution.upload_id !== taskIdParam)) ? (
                     executionLookupError ? <div role="alert" className="rounded-md border border-border p-6 space-y-3">
                         <p>{executionLookupError}</p>
                         <div className="flex gap-2">
@@ -1144,7 +1144,7 @@ function TracePageContent() {
                     </div>
                 ) : selectedExecution ? (
                     <TraceDetailView
-                        key={selectedExecution.task_id || selectedExecution.upload_id}
+                        key={selectedExecution.upload_id || selectedExecution.task_id}
                         execution={selectedExecution}
                         onExecutionRefresh={handleExecutionRefresh}
                         onBack={() => handleSelectExecution(null)}
@@ -1547,7 +1547,7 @@ function TracePageContent() {
                         <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
                             const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
                             setImportResult(null);
-                            if (targetId) void setTaskIdParam(targetId, { history: 'push' });
+                            if (targetId) void setTraceTarget({ taskId: targetId, executionId: null, workflowTaskId: null }, { history: 'push' });
                         }}>
                             {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
                         </Button>
@@ -1587,13 +1587,21 @@ function TraceDetailView({
     const parentExecutionId: string | null = execAny.parent_execution_id || null;
     const subagentType: string | null = execAny.subagent_type || null;
     const subagentName: string | null = execAny.subagent_name || null;
+    const workflowOrigin = searchParams?.get('workflowTaskId');
+    const workflowReturnTaskId = execution.framework === 'dify' && workflowOrigin?.startsWith('dify:') && workflowOrigin !== taskId ? workflowOrigin : null;
 
     const navigateToTaskId = useCallback((newTaskId: string) => {
         if (!newTaskId) return;
         const params = new URLSearchParams(searchParams?.toString() ?? '');
+        if (newTaskId === params.get('workflowTaskId')) params.delete('workflowTaskId');
+        else if (newTaskId !== taskId && execution.framework === 'dify'
+            && session?.taskId === taskId && session.difyProjection?.linkedTraces > 0 && !params.has('workflowTaskId')) {
+            params.set('workflowTaskId', taskId);
+        }
         params.set('taskId', newTaskId);
+        params.delete('executionId');
         router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
-    }, [router, searchParams]);
+    }, [router, searchParams, taskId, execution.framework, session]);
 
     const navigateToParent = useCallback(async () => {
         if (!parentExecutionId) return;
@@ -1761,6 +1769,12 @@ function TraceDetailView({
                     <ArrowLeft className="size-3.5" aria-hidden />
                     {t('tracePage.backToList')}
                 </Button>
+                {workflowReturnTaskId && (
+                    <Button variant="ghost" size="sm" onClick={() => navigateToTaskId(workflowReturnTaskId)} className="text-foreground-muted h-7 px-2">
+                        <ArrowLeft className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '返回 Workflow' : 'Back to Workflow'}
+                    </Button>
+                )}
                 {isSubagentTrace && parentExecutionId && (
                     <Button
                         variant="ghost"
@@ -1930,6 +1944,10 @@ function TraceDetailView({
                         {session.error}
                     </div>
                 ) : (session?.interactions?.length || 0) > 0 || (session?.langfuseTraceNodes?.length || 0) > 0 ? (
+                    <>
+                    {session?.difyProjection?.truncated && <div role="status" className="mb-3 rounded-md border border-card-border bg-card p-3 text-sm text-foreground-secondary">
+                        {locale === 'zh' ? '部分关联轨迹超过展示限制，请打开各自的 Trace 查看完整内容。' : 'Some linked traces exceed display limits. Open their individual traces to view the full content.'}
+                    </div>}
                     <AgentTraceView
                         interactions={session.interactions || []}
                         framework={execution.framework}
@@ -1945,6 +1963,7 @@ function TraceDetailView({
                         rootExecutionId={execution.upload_id || execution.task_id}
                         rasMarkers={rasMarkers}
                     />
+                    </>
                 ) : (
                     <div className="rounded-md border border-card-border bg-card">
                         <EmptyState title={t('tracePage.noTrace')} />

@@ -28,9 +28,9 @@ class SkillSubmodeParseTests(TestCase):
         submodes = parse_skill_submodes(fault.skill_file)
 
         self.assertEqual([item["id"] for item in submodes], ["1", "2", "3"])
-        self.assertEqual(submodes[0]["name"], "字面重复死循环")
-        self.assertEqual(submodes[1]["name"], "逻辑死循环")
-        self.assertEqual(submodes[2]["name"], "计划-执行死循环")
+        self.assertEqual(submodes[0]["name"], "字符重复死循环")
+        self.assertEqual(submodes[1]["name"], "语义重复死循环")
+        self.assertEqual(submodes[2]["name"], "逻辑连续崩溃")
 
     def test_parses_planning_logic_error_overview_table(self) -> None:
         fault = FaultRegistry().get("planning-logic-error")

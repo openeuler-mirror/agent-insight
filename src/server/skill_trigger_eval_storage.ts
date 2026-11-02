@@ -18,7 +18,7 @@
  * Skill 触发评价集（TriggerTestSet）存储层。
  *
  * 模型：SkillTriggerEvalSet + SkillTriggerEvalRun（见 prisma/schema.prisma）。
- * 设计：docs/design/skill-eval-datasets/design.md。
+ * 设计：design/skill-eval-datasets/design.md。
  *
  * 为什么不复用 AgentEvalDataset：触发集 case 形态是 {query, shouldTrigger}，
  * 跟 ideal_output 的 {input, expectedOutput} 完全不是一码事——强塞会让

@@ -33,10 +33,13 @@ const os = require('os')
 const path = require('path')
 const { spawn, spawnSync } = require('child_process')
 const { createHash, randomBytes } = require('crypto')
+const { StringDecoder } = require('node:string_decoder')
 
 const { connectWebSocket } = require('./ws-client.cjs')
 const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 const { prepareSkillExperimentWorkspace } = require('./skill-experiment-workspace.cjs')
+const { inspectOpencodeRuntime } = require('./opencode-runtime.cjs')
+const { checkOpenCodeModelConfigAsync } = require('./opencode-connection-config.cjs')
 const { prepareOpencodeEventChannel, createOpencodeEventReader } = require('./opencode-experiment-events.cjs')
 const { createOrdinaryExperimentStore } = require('./ordinary-experiment-state.cjs')
 const { extractStructuredAgentError, sanitizeAgentDiagnostic, classifyAgentExitFailure, createAgentRunError, createOpencodeFailureMonitor } = require('./agent-run-diagnostics.cjs')
@@ -864,13 +867,16 @@ function buildCapabilities(cfg, opts) {
     const runtime = runtimeFor(id)
     return {
       id,
-      version: info?.version ? String(info.version) : undefined,
+      version: runtime.version || (info?.version ? String(info.version) : undefined),
       models: normalizeModelIds(info?.models),
       agents: normalizeModelIds(info?.agents),
       runExperimentCase: {
         version: 2,
         returnsTraceId: runtime.canResolveTraceId,
-        ...(id === 'opencode' ? { skillSnapshotVersion: 4 } : {}),
+        ready: Boolean(runtime.ready && normalizeModelIds(info?.agents).length),
+        unavailableReason: !runtime.ready ? runtime.reason || '运行时尚未就绪'
+          : !normalizeModelIds(info?.agents).length ? sanitizeAgentDiagnostic(info?.note) || `${id} Agent 列表为空，请检查探测结果` : undefined,
+        ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}),
       },
       actions: [...WHITELIST],
     }
@@ -883,8 +889,11 @@ function buildCapabilities(cfg, opts) {
         platforms.push({
           id,
           models: [],
-          agents: id === 'xiaoo' ? ['defaultagent'] : ['build'],
-          runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(id === 'opencode' ? { skillSnapshotVersion: 4 } : {}) },
+          agents: id === 'xiaoo' ? ['defaultagent'] : [],
+          runExperimentCase: { version: 2, returnsTraceId: id !== 'opencode' && runtime.canResolveTraceId,
+            ready: id !== 'opencode' && runtime.ready,
+            ...(id === 'opencode' ? { unavailableReason: runtime.reason || '尚未取得权威 Agent 列表，请检查客户端探测结果' } : {}),
+            ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}) },
           actions: [...WHITELIST],
         })
       }
@@ -1162,6 +1171,7 @@ async function writeRasRuntimeConfig(snapshot) {
 // ---------------------------------------------------------------- FI collector
 
 const activeChildren = new Map()
+const activeFiRuns = new Set()
 /** 可靠性 Case 独占槽：持有期间不领 FI run，避免多个故障注入互相污染。 */
 let reliabilitySlotHeld = false
 const parallelExecutionSlots = new Set()
@@ -1219,14 +1229,31 @@ function buildCollectorArgs(run, workspace, artifactsDir) {
   return args
 }
 
+/** Preserve a pre-session platform failure instead of uploading an empty success payload. */
 function readCollectResult(artifactsDir, runId) {
   const root = path.join(artifactsDir, runId)
+  const readArtifact = (file) => {
+    const payload = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const hasSignal = payload.taskId || payload.sessionTaskId || payload.faultActivated === true
+      || (Array.isArray(payload.markers) && payload.markers.length > 0)
+    if (!hasSignal) {
+      const manifestFile = path.join(path.dirname(file), 'manifest.json')
+      if (fs.existsSync(manifestFile)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'))
+        if (manifest.status === 'failed' && manifest.error) {
+          const reason = String(manifest.termination_reason || 'platform_error')
+          return { ...payload, error: reason + ': ' + sanitizeAgentDiagnostic(manifest.error, 4000) }
+        }
+      }
+    }
+    return payload
+  }
   const direct = path.join(root, 'collect-result.json')
-  if (fs.existsSync(direct)) return JSON.parse(fs.readFileSync(direct, 'utf8'))
+  if (fs.existsSync(direct)) return readArtifact(direct)
   if (!fs.existsSync(root)) throw new Error(`artifact dir missing: ${root}`)
   for (const entry of fs.readdirSync(root)) {
     const candidate = path.join(root, entry, 'collect-result.json')
-    if (fs.existsSync(candidate)) return JSON.parse(fs.readFileSync(candidate, 'utf8'))
+    if (fs.existsSync(candidate)) return readArtifact(candidate)
   }
   throw new Error(`collect-result.json not found under ${root}`)
 }
@@ -1623,7 +1650,8 @@ const runtimeAdapters = {
   opencode: {
     inspectEvent: inspectOpencodeRunEvent,
     buildInvocation: buildOpencodeInvocation,
-    probe: (executable) => ({ canResolveTraceId: true, ready: Boolean(executable) }),
+    probe: inspectOpencodeRuntime,
+    requireReady: true,
     noOutputCode: 'MODEL_NO_RESPONSE',
     firstResponseTimeoutSeconds: DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS,
   },
@@ -1661,9 +1689,19 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   }
   let discardWorkspace = false
   try {
+    if (payload.platform === 'opencode' && executable) {
+      const cwd = isolated?.cwd || path.resolve(payload.cwd || cfg.workspaceBase)
+      fs.mkdirSync(cwd, { recursive: true })
+      const checked = await checkOpenCodeModelConfigAsync(executable, { agent: payload.agent, model: payload.model }, {
+        cwd, env: { ...process.env, ...isolated?.env, PWD: cwd }, signal: payload.signal,
+      })
+      payload = { ...payload, model: checked.model }
+      payload.signal?.throwIfAborted()
+    }
     return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
   } catch (error) {
     discardWorkspace = error.code === 'MODEL_UNAVAILABLE'
+    if (payload.signal?.aborted && error.code !== 'EXECUTION_CANCELLED') throw createAgentRunError('EXECUTION_CANCELLED', '实验已取消')
     throw error
   } finally { isolated?.cleanup(discardWorkspace || Boolean(payload.signal?.aborted)) }
 }
@@ -1710,8 +1748,9 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     err.code = 'PLATFORM_NOT_AVAILABLE'
     throw err
   }
-  if (runtime?.requireReady && !runtime.probe(executable).ready) {
-    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', `${platform} CLI 或 Trace Collector 未就绪，请检查安装注册与上传配置`)
+  if (runtime?.requireReady) {
+    const availability = runtime.probe(executable)
+    if (!availability.ready) throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', availability.reason || `${platform} CLI 或 Trace Collector 未就绪，请检查安装注册与上传配置`)
   }
 
   const cwd = isolated?.cwd || (payload.cwd ? path.resolve(String(payload.cwd)) : cfg.workspaceBase)
@@ -1735,14 +1774,16 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     literalInput: triggerRouting,
     correlation,
   })
+  if (invocation.sessionId && platform === 'opencode') env.AGENT_INSIGHT_EXPERIMENT_SESSION_ID = invocation.sessionId
   const runtimePlan = agentRuntimeOptions().runtimeInvocationOptions(platform, agent, payload.agentOptions)
   const effectiveAgentOptions = runtimePlan.agentOptions
   const preparedRuntime = agentRuntimeOptions().prepareRuntimeInvocation(runtimePlan, cwd)
+  let eventChannel
   try {
   invocation.args.push(...preparedRuntime.args)
   Object.assign(env, preparedRuntime.env)
   const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
-  const eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env) : null
+  eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env, inspectOpencodeRuntime(executable).major) : null
   if (eventChannel) {
     Object.assign(env, eventChannel.env)
     launch.stdio = [...launch.stdio, 'pipe']
@@ -1809,6 +1850,24 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
     let hardStopTimer = null
     let failureMonitor = null
     let eventReader = null
+    let eventPoll = null
+    let eventOffset = 0
+    const eventDecoder = new StringDecoder('utf8')
+    const drainEventFile = () => {
+      if (!eventChannel?.eventFile || !eventReader) return
+      let fd
+      try {
+        fd = fs.openSync(eventChannel.eventFile, 'r')
+        const end = fs.fstatSync(fd).size
+        const buffer = Buffer.alloc(Math.min(64 * 1024, Math.max(0, end - eventOffset)))
+        while (eventOffset < end) {
+          const size = fs.readSync(fd, buffer, 0, Math.min(buffer.length, end - eventOffset), eventOffset)
+          if (!size) break
+          eventOffset += size
+          eventReader.push(eventDecoder.write(buffer.subarray(0, size)))
+        }
+      } catch {} finally { if (fd !== undefined) fs.closeSync(fd) }
+    }
     let eventReadyTimer = null
     let startupTimer = null
     let routingStartedAt = null
@@ -1823,13 +1882,14 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       child.stdin.end(invocation.stdin, 'utf8')
     }
     const captureTraceId = (candidate) => {
-      if (traceId || !candidate) return
+      if (traceId || !candidate || (platform === 'opencode' && invocation.sessionId && candidate !== invocation.sessionId)) return
       traceId = candidate
       traceReport = Promise.resolve(onTraceId({ traceId, startedAt })).catch((err) => {
         logErr(`early trace id report failed (${traceId}):`, err.message)
       })
     }
     const clearTimers = () => {
+      if (eventPoll) clearInterval(eventPoll)
       if (startupTimer) clearTimeout(startupTimer)
       if (eventReadyTimer) clearTimeout(eventReadyTimer)
       failureMonitor?.dispose()
@@ -1966,6 +2026,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
           ? `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，尚未创建根会话；请查看启动日志`
           : `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，尚未收到监测通道就绪信号；请查看启动日志`,
       ), startupTimeoutSeconds * 1000)
+      if (eventChannel.eventFile) eventPoll = setInterval(drainEventFile, 25)
       child.stdio[3].setEncoding('utf8')
       child.stdio[3].on('data', (chunk) => eventReader.push(String(chunk)))
       child.stdio[3].on('error', () => terminateForEarlyFailure('EVENT_MONITOR_UNAVAILABLE', 'OpenCode 失败监测通道异常断开'))
@@ -2110,6 +2171,9 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
           runFacts,
         )
       }
+      if (!failure && platform === 'opencode' && invocation.sessionId && (!eventReader?.sessionId || !eventReader.completed) && !triggerHit) {
+        failure = createAgentRunError('AGENT_INCOMPLETE', 'OpenCode v2 未确认当前会话正常结束，不进入评测', runFacts)
+      }
       if (!failure && triggerTarget && (!eventReader?.sessionId || !observedModel || (!triggerHit && !eventReader.completed))) {
         failure = createAgentRunError('TRIGGER_EVIDENCE_MISSING', '触发分析缺少会话、实际模型或正常结束证据，无法判定', runFacts)
       }
@@ -2147,10 +2211,11 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       reject(err)
     })
     child.on('close', (code, signal) => {
+      drainEventFile()
       void finishAgentRun(code, signal)
     })
   })
-  } finally { preparedRuntime.cleanup() }
+  } finally { eventChannel?.cleanup(); preparedRuntime.cleanup() }
 }
 
 function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
@@ -2187,11 +2252,10 @@ function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
 
 function buildExperimentCaseArgs(executable, input) {
   if (input.platform === 'opencode') {
+    const cli = inspectOpencodeRuntime(executable)
     const args = ['run', '--format', 'json', '--agent', input.agent]
-    try {
-      const help = spawnSync(executable, ['run', '--help'], { encoding: 'utf8', timeout: 15_000 })
-      if (`${help.stdout || ''}\n${help.stderr || ''}`.includes('--auto')) args.push('--auto')
-    } catch {}
+    if (cli.major === 2) args.push('--standalone')
+    if (cli.supportsAuto) args.push('--auto')
     if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
     if (input.model) args.push('--model', input.model)
     return args
@@ -2219,6 +2283,11 @@ function buildExperimentCaseInvocation(executable, input) {
 
 function buildOpencodeInvocation(executable, input) {
   const args = buildExperimentCaseArgs(executable, input)
+  if (inspectOpencodeRuntime(executable).major === 2) {
+    const sessionId = `ses_${randomBytes(13).toString('hex')}`
+    args.push('--session', sessionId)
+    return { args, stdin: input.input, sessionId }
+  }
   const slashCommand = input.literalInput ? null : parseOpencodeSlashCommand(input.input)
   if (slashCommand) {
     args.push('--command', slashCommand.command)
@@ -2416,7 +2485,7 @@ async function sendFiHeartbeat(cfg) {
       workerId: cfg.clientId,
       hostname: os.hostname(),
       version: AGENT_VERSION,
-      inventory: buildFiInventory(cfg),
+      inventory: { ...buildFiInventory(cfg), activeRunIds: Array.from(activeFiRuns) },
       busySlots: fiBusy,
     })
   } catch (err) {
@@ -2570,9 +2639,9 @@ async function main() {
     tryAcquireSlot: tryAcquireExecutionSlot,
     releaseSlot: releaseExecutionSlot,
     agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
-    runAgent: (payload) => payload.platform === 'pi-mcts'
+    runAgent: (payload) => ['pi-mcts', 'xiao-mcts'].includes(payload.platform)
       ? mctsRuntime().runMctsBenchmarkCase(cfg, payload)
-      : runExperimentCase(cfg, payload),
+      : runExperimentCase(cfg, payload, payload.onTraceId),
     logError: (...args) => logErr(...args),
   })
   await benchmarkExecutor.recover()
@@ -2779,6 +2848,36 @@ async function pollOnce(cfg) {
 }
 
 /**
+ * Hold one FI slot through collection and upload; duplicate claims never spawn
+ * another collector or write concurrently into the same artifacts directory.
+ */
+async function executeClaimedFiRun(cfg, run, options = {}) {
+  if (activeFiRuns.has(run.runId)) return false
+  activeFiRuns.add(run.runId)
+  fiBusy += 1
+  const collect = options.collect || runCollector
+  const postResult = options.postResult || ((payload) => api(
+    cfg, 'POST',
+    '/api/fault-injection/runs/' + encodeURIComponent(run.runId) + '/collect-result',
+    payload,
+  ))
+  try {
+    const payload = await collect(cfg, run)
+    await postResult(payload)
+    log('fi run completed: ' + run.runId)
+  } catch (err) {
+    logErr('fi run failed ' + run.runId + ':', err.message)
+    await postResult({ error: err.message, interactions: [] }).catch((uploadErr) => {
+      logErr('fi result upload failed ' + run.runId + ':', uploadErr.message)
+    })
+  } finally {
+    activeFiRuns.delete(run.runId)
+    fiBusy = Math.max(0, fiBusy - 1)
+  }
+  return true
+}
+
+/**
  * FI run 领取循环：可靠性 Case 持槽时不领，避免故障注入互相污染。
  *
  * FI 组件不可用时只跳过 claim，**不影响心跳** —— 心跳由 main 的
@@ -2801,32 +2900,9 @@ async function fiLoop(cfg) {
           if (cmd.type === 'stop' && cmd.runId) killRun(cmd.runId)
         }
         for (const run of claim?.runs || []) {
-          fiBusy += 1
-          void (async () => {
-            try {
-              const payload = await runCollector(cfg, run)
-              await api(
-                cfg,
-                'POST',
-                `/api/fault-injection/runs/${encodeURIComponent(run.runId)}/collect-result`,
-                payload,
-              )
-              log(`fi run completed: ${run.runId}`)
-            } catch (err) {
-              logErr(`fi run failed ${run.runId}:`, err.message)
-              await api(
-                cfg,
-                'POST',
-                `/api/fault-injection/runs/${encodeURIComponent(run.runId)}/collect-result`,
-                { error: err.message, interactions: [] },
-              ).catch((uploadErr) => {
-                // 别静默：上传失败会让 run 永远卡在 collecting，必须留下线索。
-                logErr(`fi result upload failed ${run.runId}:`, uploadErr.message)
-              })
-            } finally {
-              fiBusy = Math.max(0, fiBusy - 1)
-            }
-          })()
+          void executeClaimedFiRun(cfg, run).catch((error) => {
+            logErr('fi run handler failed ' + run.runId + ':', error.message)
+          })
         }
       }
     } catch (err) {
@@ -2896,6 +2972,7 @@ module.exports = {
   classifyAgentExitFailure,
   buildCollectorArgs,
   readCollectResult,
+  executeClaimedFiRun,
   configTargetPath,
   atomicWriteJson,
   probeFaultInjection,
