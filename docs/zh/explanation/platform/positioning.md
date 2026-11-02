@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "智能体工程", "可观测性", "Skill 优化"]
 changefreq: monthly
 ---
 
-# Positioning
-
+<a id="positioning"></a>
 > Agent-Insight 是一个开源、自托管的工程平台，让任意 Agent 变得可观测、可评测、可自我改进——并将 Skill 作为一等的、可优化的资产。
 
 ## What & why

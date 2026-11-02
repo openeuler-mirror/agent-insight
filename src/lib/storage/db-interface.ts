@@ -17,7 +17,7 @@
 import { loadAgentInsightEnv } from '@/lib/env';
 loadAgentInsightEnv();
 
-import { Pool, PoolClient, QueryResult } from 'pg';
+import { Pool, QueryResult } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { createPrismaClient, ExtendedPrismaClient } from '@/lib/storage/prisma-client';
 

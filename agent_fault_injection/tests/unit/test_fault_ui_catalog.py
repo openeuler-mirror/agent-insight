@@ -17,6 +17,9 @@ from pathlib import Path
 from unittest import TestCase
 
 from agent_fault_injection.pipeline.exceptions import ConfigurationError
+from agent_fault_injection.fault_inject.catalog.definition import (
+    FaultRegistry,
+)
 from agent_fault_injection.fault_inject.catalog.presentation import (
     load_fault_ui_catalog,
     resolve_fault_labels,
@@ -80,7 +83,23 @@ class FaultUiCatalogTests(TestCase):
         )
         self.assertEqual(len(submodes), 3)
         self.assertEqual(submodes[0]["id"], "1")
-        self.assertEqual(submodes[0]["name"], "字面重复死循环")
+        self.assertEqual(submodes[0]["name"], "字符重复死循环")
+
+    def test_builtin_reasoning_no_progress_submodes(self) -> None:
+        catalog = load_fault_ui_catalog()
+
+        fault = FaultRegistry().get("reasoning-no-progress")
+        submodes = resolve_fault_submodes(
+            fault_id=fault.name,
+            skill_file=fault.skill_file,
+            catalog=catalog,
+        )
+
+        self.assertEqual(fault.injection_method, "skill_inject")
+        self.assertEqual(
+            [submode["name"] for submode in submodes],
+            ["真值者双解回环", "汉诺塔约束回环", "路径规划复核回环"],
+        )
 
     def test_orders_discovered_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

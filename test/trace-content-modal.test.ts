@@ -41,7 +41,7 @@ const SmartViewer = component('components/SmartViewer/index.tsx', 'SmartViewer',
     JsonRenderer,
 });
 const Modal = component('components/observe/AgentTraceView.tsx', 'ContentModal', {
-    React, useState: React.useState, SmartViewer,
+    React, useState: React.useState, SmartViewer, useTheme: () => ({ theme: 'light' }),
     Dialog: ({ children }: any) => React.createElement(React.Fragment, null, children),
     DialogContent: 'section', DialogHeader: 'header', DialogTitle: 'h2', Button: 'button',
     Check: () => null, CopyIcon: () => null,

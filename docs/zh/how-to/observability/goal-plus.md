@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Goal Plus", "Pi", "主从链路", "观测接入"]
 changefreq: monthly
 ---
 
-# Goal Plus 观测接入
-
+<a id="goal-plus-观测接入"></a>
 Agent Insight 对 Goal Plus 的当前接入目标是：当 Goal Plus 运行在 Pi 中时，链路追踪保留 Pi 原生主 Trace，并把 Goal Plus 启动的 Pi worker 作为子 Agent 展示在该主 Trace 下。
 
 Agent Insight 只读采集 Pi session，并在真实 `/goal-plus` 启动后自动登记对应的 `.gp` 目录；不会修改 Goal Plus 状态、工作区文件或 Pi 原始 session。

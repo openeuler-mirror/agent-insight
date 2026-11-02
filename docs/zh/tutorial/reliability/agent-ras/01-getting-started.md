@@ -5,8 +5,7 @@ keywords: ["Agent RAS", "可靠性", "安装配置", "异常恢复"]
 changefreq: monthly
 ---
 
-# 快速开始
-
+<a id="快速开始"></a>
 在宿主中启用 Agent RAS（环内检测 + 恢复）的最短路径。RAS 随宿主进程运行，**不**启独立 RAS HTTP 端口。人机查看走 Agent Insight 旁路事件，失败不挡环内 abort/notice。
 
 ## 流程

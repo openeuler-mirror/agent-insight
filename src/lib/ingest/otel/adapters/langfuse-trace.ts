@@ -18,6 +18,17 @@ import type { OtelTraceEvent } from '../types';
 
 export type LangfuseTraceNodeKind = 'llm' | 'tool' | 'agent' | 'chain' | 'span';
 
+export interface DifyTraceContext {
+  tenantId?: string;
+  appId?: string;
+  workflowId?: string;
+  workflowRunId?: string;
+  nodeId?: string;
+  nodeExecutionId?: string;
+  nodeType?: string;
+  trajectory?: boolean;
+}
+
 export interface LangfuseTraceNode {
   traceId: string;
   spanId: string;
@@ -46,6 +57,7 @@ export interface LangfuseTraceNode {
   toolCallId?: string;
   linkedGenerationSpanId?: string;
   orphanTool?: boolean;
+  dify?: DifyTraceContext;
 }
 
 export interface LangfuseRequestMessage {

@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "常见问题", "接入排障", "数据维护"]
 changefreq: weekly
 ---
 
-# 常见问题
-
+<a id="常见问题"></a>
 这里汇总了用户第一次接入、日常使用和问题排查时最常遇到的高频问题。
 
 > **Note**

@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Skill 工作台", "质量评估", "持续优化"]
 changefreq: monthly
 ---
 
-# Skill 工作台
-
+<a id="skill-工作台"></a>
 Skill 工作台把一个 Skill 从创建到发布后的持续改进放在同一界面中完成。你不需要在“生成”“评测”“优化”几个独立模块之间搬运上下文；工作台会保存当前会话、Skill、工作版本以及后续任务状态。
 
 ## 工作台布局

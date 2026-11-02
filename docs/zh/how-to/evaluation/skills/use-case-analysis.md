@@ -5,7 +5,7 @@ keywords: ["Agent Insight", "Skill", "用例分析", "执行轨迹", "任务结�
 changefreq: monthly
 ---
 
-# 用例分析
+<a id="用例分析"></a>
 
 首版多轮执行请使用普通单组实验。本页的 Skill 专用生成与 A/B 会重新下发任务，仅支持单轮 Case；即使以已有 Trace 作为 A/B 输入也会重新执行，不能据此绕过限制。纯已有 Trace 的用例评测保持原流程。
 

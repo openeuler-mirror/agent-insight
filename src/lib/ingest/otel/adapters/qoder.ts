@@ -292,6 +292,7 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     const agentName = firstText(attrs['qoder.expert.name'], attrs['qoder.subagent.name'], explicitAgent, rootAgent) || rootAgent;
     const interaction: AnyObj = {
       role: subagentSessionId ? 'subagent' : 'assistant',
+      trace_kind: 'llm',
       content: firstText(attrs['output.value'], attrs['gen_ai.completion'], '') || '',
       model: firstText(event.model, attrs['gen_ai.request.model'], 'unknown'),
       providerID: firstText(attrs['gen_ai.system'], 'qoder'),
@@ -303,6 +304,10 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
       traceId: event.traceId,
       agent: agentName,
     };
+    const synthetic = attrs['qoder.llm.synthetic'] === true || attrs['qoder.llm.synthetic'] === 'true'
+      || interaction.model === '<synthetic>';
+    const messageId = firstText(attrs['qoder.llm.message_id']);
+    if (messageId && !synthetic) interaction.messageID = messageId;
     const input = firstText(attrs['input.value']);
     if (input) interaction.requestMessages = [{ role: 'user', content: input }];
     if (subagentSessionId) {
@@ -356,8 +361,8 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     : toolEvents;
   const attachCall = (event: OtelTraceEvent, call: AnyObj) => {
     const ownerSubagentId = firstText(event.attributes?.['qoder.subagent.session_id']);
-    const host = (ownerSubagentId ? subagentBySessionId.get(ownerSubagentId) : undefined) ||
-      (event.parentSpanId ? assistantBySpanId.get(event.parentSpanId) : undefined) ||
+    const host = (event.parentSpanId ? assistantBySpanId.get(event.parentSpanId) : undefined) ||
+      (ownerSubagentId ? subagentBySessionId.get(ownerSubagentId) : undefined) ||
       [...interactions].reverse().find((interaction) => {
         if (interaction.role !== 'assistant' && interaction.role !== 'subagent') return false;
         return Date.parse(String(interaction.timestamp || '')) <= (event.startTimeMs || Number.POSITIVE_INFINITY);

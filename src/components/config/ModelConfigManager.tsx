@@ -110,9 +110,7 @@ function toBackendProvider(catalogId: string): EvalConfigItem['provider'] {
     return 'custom';
 }
 
-export interface ModelConfigManagerProps {}
-
-export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
+export function ModelConfigManager() {
     const { user } = useAuth();
     const { t, locale } = useLocale();
 

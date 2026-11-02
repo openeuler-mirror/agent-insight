@@ -1,0 +1,105 @@
+{
+  "date": "2026-10-31",
+  "authority": "zh",
+  "bodyPairs": [
+    {
+      "zh": "docs/zh/how-to/platform/backup-and-restore.md",
+      "en": "docs/en/how-to/platform/backup-and-restore.md",
+      "zhTitle": "备份与恢复",
+      "enTitle": "Backup and restore"
+    },
+    {
+      "zh": "docs/zh/how-to/platform/upgrade-and-rollback.md",
+      "en": "docs/en/how-to/platform/upgrade-and-rollback.md",
+      "zhTitle": "升级与回滚",
+      "enTitle": "Upgrade and rollback"
+    },
+    {
+      "zh": "docs/zh/reference/evaluation/benchmark-protocol.md",
+      "en": "docs/en/reference/evaluation/benchmark-protocol.md",
+      "zhTitle": "独立 Benchmark 评测协议",
+      "enTitle": "Independent Benchmark evaluation protocol"
+    },
+    {
+      "zh": "docs/zh/reference/evaluation/evaluator-output.md",
+      "en": "docs/en/reference/evaluation/evaluator-output.md",
+      "zhTitle": "评估器运行与输出契约",
+      "enTitle": "Evaluator output and runtime contract"
+    },
+    {
+      "zh": "docs/zh/reference/evaluation/execution-environment.md",
+      "en": "docs/en/reference/evaluation/execution-environment.md",
+      "zhTitle": "实验执行环境准备接口",
+      "enTitle": "Execution-environment preparation API"
+    },
+    {
+      "zh": "docs/zh/reference/evaluation/experiments-api.md",
+      "en": "docs/en/reference/evaluation/experiments-api.md",
+      "zhTitle": "实验 HTTP 接口",
+      "enTitle": "Experiment HTTP API"
+    },
+    {
+      "zh": "docs/zh/reference/observability/trace-ingestion.md",
+      "en": "docs/en/reference/observability/trace-ingestion.md",
+      "zhTitle": "Trace HTTP 接入",
+      "enTitle": "Trace HTTP ingestion"
+    },
+    {
+      "zh": "docs/zh/reference/platform/configuration.md",
+      "en": "docs/en/reference/platform/configuration.md",
+      "zhTitle": "运行配置参考",
+      "enTitle": "Runtime configuration"
+    },
+    {
+      "zh": "docs/zh/reference/platform/http-api.md",
+      "en": "docs/en/reference/platform/http-api.md",
+      "zhTitle": "HTTP 接口与用户身份",
+      "enTitle": "HTTP APIs and user identity"
+    },
+    {
+      "zh": "docs/zh/reference/platform/model-connection-test.md",
+      "en": "docs/en/reference/platform/model-connection-test.md",
+      "zhTitle": "模型连接测试接口",
+      "enTitle": "Model-connection test API"
+    },
+    {
+      "zh": "docs/zh/tutorial/evaluation/01-first-experiment.md",
+      "en": "docs/en/tutorial/evaluation/01-first-experiment.md",
+      "zhTitle": "跑通第一次评测",
+      "enTitle": "Run your first evaluation"
+    },
+    {
+      "zh": "docs/zh/tutorial/platform/01-quick-start.md",
+      "en": "docs/en/tutorial/platform/01-quick-start.md",
+      "zhTitle": "5 分钟上手",
+      "enTitle": "Your first Trace"
+    }
+  ],
+  "englishBodyCount": 12,
+  "excludedFromCount": [
+    "navigation.md",
+    "README.md"
+  ],
+  "remaining": [
+    "Docker deployment",
+    "client compatibility",
+    "feature operations",
+    "architecture and concepts"
+  ],
+  "reviewedCommit": "e763ad245536316342304018954f10aeabdcaf50",
+  "sourceFiles": {
+    "src/lib/auth/auth.ts": "b4ffc18c59b92b837020e30d3ce89f72c392d4c4084fea5d4ba59d855567f3e9",
+    "src/app/api/experiments/route.ts": "ac77e715167a209383cc9be8c837b2ba8a27bddefc7cf50f782f5fe3bf5d855a",
+    "src/app/api/experiments/[id]/route.ts": "66e89f1f4db985d041e29244b862f59ed787f7eff3709e4c80801f113c77c6b3",
+    "src/app/api/experiments/[id]/run/route.ts": "02a281d8fd0253ab5e2e242ce9a8da651e58c44ef1e7e1ab995e6ee0997f3f87",
+    "src/app/api/ingest/upload/route.ts": "30b9480a37ee34a7ba72869742c2289f384a53764f58cb1c11dd2dd267393447",
+    "src/app/api/ingest/otel/v1/traces/route.ts": "08c34e9660a64ef1a00f9f59dfa7a52fe663ef30d58a3d1bb501c5ed7e12d8db",
+    "src/lib/engine/experiment/environment-preparation.ts": "278e9f8b07b3f7f2587fd24ae13517809cd5d3a66ef3248ff9279888bf6a17a3",
+    "src/app/api/eval/settings/test/route.ts": "1b9a73ca66ecb087ac4ce63204f3813b279f04f5e3dbc89bb8dfe056d32a3d01",
+    "src/lib/evaluators/eval-output.ts": "9b3f1d78787f47a9b387391c4607dad6b12b959e213c5af41e095dc37fc88d46",
+    "src/lib/evaluators/evaluator-execution-config.ts": "6a0937455d15dbb4dde41a9295a6337419c629d7d2de0f50e767ba9562907fae",
+    "packages/benchmark-protocol/src/evaluation-contracts.ts": "180e895c50361648ba47f64726b13341ecbfce108df4915217f35eeed2722a36",
+    "packages/benchmark-protocol/src/evaluator-contracts.ts": "80a39763fc859cee28aaaaa8c62ad4abcf1c3571fcb9953d0aef827ff360893e",
+    "services/evaluator/src/service.cjs": "2e80ece59a024f9a49555b5c5ba23f20eff32f6f038da5897c65953474d6c155"
+  }
+}

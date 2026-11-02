@@ -81,6 +81,7 @@ Agent Insight 已接入以下 Agent 平台，更多平台持续接入中：
 | JiuwenSwarm           | OTLP 上报    |
 | LangChain / Langgraph | OTLP 上报    |
 | LlamaIndex            | OTLP 上报    |
+| Dify（Workflow / Agent 轨迹） | OTLP 上报 |
 | OpenClaw              | OTLP 上报    |
 | Codex                 | Hook 采集器   |
 | Pi Agent              | Hook 采集器   |

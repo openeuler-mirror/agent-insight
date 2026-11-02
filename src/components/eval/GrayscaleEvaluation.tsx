@@ -963,18 +963,6 @@ function getFailedOrMissingEvaluatorIds(run: Pick<RunResult, 'evaluations'> | un
 const HistoryIcon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
 );
-const PlusIcon = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-);
-const DatabaseIcon = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
-);
-const ScaleIcon = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v1"/><path d="M18 8h4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-4"/></svg>
-);
-const ChevronDownIcon = () => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-);
 const PlayIcon = () => (
     <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
 );
@@ -987,22 +975,12 @@ const CheckIcon = () => (
 const GearIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
 );
-const CalendarIcon = () => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-);
-const UserIcon = () => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-);
-const SparklesIcon = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.3-6.3l-.7.7M6.7 17.3l-.7.7m12.6 0l-.7-.7M6.7 6.7l-.7-.7N12 8a4 4 0 0 0-4 4 4 4 0 0 0 8 0 4 4 0 0 0-4-4z"/></svg>
-);
 const FolderIcon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
 );
 
 function GrayscalePageInner() {
     const { locale } = useLocale();
-    const router = useRouter();
     const [newTaskTrigger, setNewTaskTrigger] = useState(0);
     const [historyPanelTrigger, setHistoryPanelTrigger] = useState(0);
     const mainAreaRef = useRef<HTMLDivElement>(null);
@@ -1039,14 +1017,9 @@ function GrayscalePageInner() {
 export function GrayscaleEvaluation({
     newTaskTrigger,
     historyPanelTrigger,
-    pageTitle,
-    pageDescription,
-    pageBadge,
     onBack,
-    onOptimize,
     parentSkillId,
     parentSkillVersion,
-    skillSelectorSlot,
     hifi = false,
 }: {
     newTaskTrigger: number;
@@ -1104,7 +1077,7 @@ export function GrayscaleEvaluation({
     // Trace mode
     const [traceTimeRange, setTraceTimeRange] = useState<'1d' | '3d' | '7d'>('7d');
     const [traceRecords, setTraceRecords] = useState<TraceRecord[]>([]);
-    const [traceLoading, setTraceLoading] = useState(false);
+    const [, setTraceLoading] = useState(false);
     const [selectedTraceAId, setSelectedTraceAId] = useState('');
     const [selectedTraceBId, setSelectedTraceBId] = useState('');
 
@@ -1118,7 +1091,6 @@ export function GrayscaleEvaluation({
     const [showNewDatasetModal, setShowNewDatasetModal] = useState(false);
     const [newDatasetName, setNewDatasetName] = useState('');
     const [isCreatingDataset, setIsCreatingDataset] = useState(false);
-    const [showLinkDatasetDropdown, setShowLinkDatasetDropdown] = useState(false);
 
     // History drawer
     const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
@@ -1140,9 +1112,6 @@ export function GrayscaleEvaluation({
     // the three dim rows). Default collapsed; users open it when they want
     // to inspect the calculation.
     const [hifiRawOpen, setHifiRawOpen] = useState(false);
-
-    // Modals
-    const [showSkillModal, setShowSkillModal] = useState(false);
 
     // 「新增评测任务」对话框开关。点确认后通过 onCreated 把新批次 ID 写回当前 task config,
     // 启动评测时透传给 /api/eval/trajectory/run append 落到同一批次。
@@ -1195,8 +1164,8 @@ export function GrayscaleEvaluation({
         setInFlightRetries(next);
     };
     const [lastRunConfigSignature, setLastRunConfigSignature] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
-    const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'executed' | 'evaluated'>('all');
+    const [searchQuery] = useState('');
+    const [filterTab] = useState<'all' | 'pending' | 'executed' | 'evaluated'>('all');
 
     const activePollsRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
@@ -2047,17 +2016,6 @@ export function GrayscaleEvaluation({
         return () => window.cancelAnimationFrame(frame);
     }, [isEditingTask]);
 
-    const runCaseSide = async (caseId: string, side: 'a' | 'b') => {
-        if (!currentTask) return;
-        const sideState = caseStatesRef.current[caseId]?.[side];
-        const latestRunIndex = findLatestRunnableRunIndex(sideState?.runs);
-        if (latestRunIndex == null) {
-            alert(locale === 'zh' ? '当前侧暂无可重跑的执行记录。' : 'No execution record is available to rerun for this side.');
-            return;
-        }
-        await retryExecution(caseId, side, latestRunIndex);
-    };
-
     // Evaluate single side —— 统一走 backend reconcile 路径(retryEvaluation)。
     // 评测结果以 evaluationResultId + grayscaleBinding 为唯一绑定键, 由 pollCurrentTask
     // 这唯一一个写入器把状态/分数/trace reconcile 进 caseStates。
@@ -2361,26 +2319,6 @@ export function GrayscaleEvaluation({
         finally { setIsCreatingDataset(false); }
     };
 
-    const handleLinkDataset = (dsId: string) => {
-        if (linkedDatasetIds.includes(dsId)) return;
-        const newLinked = [...linkedDatasetIds, dsId];
-        setLinkedDatasetIds(newLinked);
-        setSelectedDatasetId(newLinked[0] || '');
-        setShowLinkDatasetDropdown(false);
-        if (currentTaskRef.current) {
-            persistTaskUpdate(currentTaskRef.current.id, { ...currentConfigRef.current, selectedDatasetId: newLinked[0] || '', linkedDatasetIds: newLinked });
-        }
-    };
-
-    const handleUnlinkDataset = (dsId: string) => {
-        const newLinked = linkedDatasetIds.filter(id => id !== dsId);
-        setLinkedDatasetIds(newLinked);
-        setSelectedDatasetId(newLinked[0] || '');
-        if (currentTaskRef.current) {
-            persistTaskUpdate(currentTaskRef.current.id, { ...currentConfigRef.current, selectedDatasetId: newLinked[0] || '', linkedDatasetIds: newLinked });
-        }
-    };
-
     const getVersionLabel = (v: SkillVersionOption | string | undefined) => {
         if (v === NONE_VERSION_ID) return locale === 'zh' ? '无 Skill' : 'No Skill';
         return v && typeof v !== 'string' ? (v.semanticVersion || `v${v.version}`) : (typeof v === 'string' ? v : '--');
@@ -2456,11 +2394,6 @@ export function GrayscaleEvaluation({
         return true;
     });
 
-    const countAll = allCases.length;
-    const countPending = allCases.filter(c => {
-        const state = caseStates[c.id] || { a: { status: 'pending' }, b: { status: 'pending' } };
-        return state.a.status === 'pending' && state.b.status === 'pending';
-    }).length;
     const countExecuted = allCases.filter(c => {
         const state = caseStates[c.id] || { a: { status: 'pending' }, b: { status: 'pending' } };
         return (state.a.status === 'executed' || state.a.status === 'evaluating' || state.a.status === 'running') ||
@@ -2476,18 +2409,8 @@ export function GrayscaleEvaluation({
     const checkedVisibleIds = checkedCaseIds.filter(id => allCases.some(c => c.id === id));
     const selectedSampleCount = checkedVisibleIds.length;
 
-    const bWins = allCases.filter(c => {
-        const state = caseStates[c.id];
-        if (!state || state.a.status !== 'pass' || state.b.status !== 'pass') return false;
-        return (state.b.score ?? 0) > (state.a.score ?? 0);
-    }).length;
-
     const selectedSkill = skills.find(s => s.id === selectedSkillId);
     const versionA = versions.find(v => v.id === versionAId);
-    const versionB = versions.find(v => v.id === versionBId);
-
-    const linkedDatasets = linkedDatasetIds.map(id => datasets.find(d => d.id === id)).filter(Boolean) as any[];
-    const unlinkableDatasets = datasets.filter(d => !linkedDatasetIds.includes(d.id));
 
     // Simulation mapping details for high-fidelity fallback when no real run exists
     const hasActiveCaseRun = caseStates[activeCase?.id]?.a?.status === 'pass' || caseStates[activeCase?.id]?.a?.status === 'executed';
@@ -2786,9 +2709,6 @@ export function GrayscaleEvaluation({
         if (tone === 'amber') return '#FAEEDA';
         return '#F5F4EE';
     };
-    const fmtPct = (value: number | null | undefined, suffix = '%') => value == null ? '—' : `${value > 0 ? '+' : ''}${value}${suffix}`;
-    const fmtRate = (value: number | null | undefined) => value == null ? '—' : `${value}%`;
-    const fmtScore = (value: number | null | undefined) => value == null ? '—' : String(value);
     const decisionTitle = !decisionReady
         ? (locale === 'zh' ? '等待评估完成' : 'Waiting for evaluation')
         : abScoring.decisionLabel;

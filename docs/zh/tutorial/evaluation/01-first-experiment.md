@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "评测入门", "Trace", "Benchmark"]
 changefreq: monthly
 ---
 
-# 跑通第一次评测
-
+<a id="跑通第一次评测"></a>
 本指南提供两条最短路径：
 
 - 普通评测：选择一条已有 Trace，使用一个评估器完成评分；
@@ -119,3 +118,5 @@ Agent 版本是用户登记的外部变化；选择版本不会替你部署或�
 - 了解完整实验功能：[实验](../../how-to/evaluation/experiments.md)
 - 把代表性样本沉淀为数据集：[评测数据集](../../how-to/evaluation/datasets.md)
 - 查看和创建评分标准：[评估器](../../how-to/evaluation/evaluators.md)
+
+[English](../../../en/tutorial/evaluation/01-first-experiment.md)

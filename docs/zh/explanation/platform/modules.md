@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "模块划分", "依赖关系", "代码导航"]
 changefreq: monthly
 ---
 
-# Modules
-
+<a id="modules"></a>
 > 该代码库共有 12 个顶层模块。下文的分级来自跨模块 fan-in（`moduleRanking`）：跨模块入度越高 = 越核心。请先阅读核心模块。
 
 ## Core vs peripheral

@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-import type { BaseMessage } from "@langchain/core/messages";
-
 export interface SkillSpec {
   name: string;
   intent: string;

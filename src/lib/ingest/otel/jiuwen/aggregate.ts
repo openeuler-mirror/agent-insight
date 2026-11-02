@@ -291,7 +291,6 @@ type Turn = { st: number; member: string; frag: any };
 // ---- single agent --------------------------------------------------------
 
 function transformSingle(spans: JiuwenSpan[], taskId: string, query: string, user?: string): ExecutionRecord {
-  const idx = new Map(spans.filter((s) => s.spanId).map((s) => [s.spanId!, s] as const));
   const toolByParent = new Map<string, JiuwenSpan[]>();
   for (const s of spans) {
     if (isTool(s) && s.parentSpanId) {

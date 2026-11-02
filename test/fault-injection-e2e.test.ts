@@ -24,7 +24,7 @@ import { prisma } from '../src/lib/storage/prisma'
 import type { CollectPayload } from '../src/lib/fault-injection/engine'
 import {
   createTaskWithRuns,
-  ingestCollectAndJudge,
+  persistFiCollectIngress,
   refreshTaskProgress,
 } from '../src/lib/fault-injection/store'
 import { buildFiTraceMarkers } from '../src/lib/fault-injection/trace-markers'
@@ -64,7 +64,7 @@ describe('fault-injection e2e ingest', () => {
     assert.ok(prisma.faultInjectionRun)
   })
 
-  it('runs collect ingest + judge_skipped/completed without writing Session', async () => {
+  it('completes collection without a Judge or Session write', async () => {
     const user = 'fi-e2e-user'
     const { task, runs } = await createTaskWithRuns({
       user,
@@ -86,33 +86,32 @@ describe('fault-injection e2e ingest', () => {
     assert.equal(payload.interactions.length, 0)
     assert.equal(payload.faultActivated, false)
 
-    const judged = await ingestCollectAndJudge({
+    const collected = await persistFiCollectIngress({
       runId: run.runId,
       user,
       payload,
     })
-    assert.ok(['completed', 'judge_skipped'].includes(judged.status))
-    assert.equal(judged.status, 'judge_skipped')
-    assert.ok(judged.sessionTaskId)
+    assert.equal(collected.status, 'completed')
+    assert.ok(collected.sessionTaskId)
 
     // FI ③ must not mint Session — main tree is Insight ⓪ only.
     const session = await prisma.session.findUnique({
-      where: { taskId: judged.sessionTaskId! },
+      where: { taskId: collected.sessionTaskId! },
     })
     assert.equal(session, null)
 
     const execution = await prisma.execution.findFirst({
-      where: { OR: [{ id: judged.sessionTaskId! }, { taskId: judged.sessionTaskId! }] },
+      where: { OR: [{ id: collected.sessionTaskId! }, { taskId: collected.sessionTaskId! }] },
     })
     assert.equal(execution, null)
 
-    const markers = buildFiTraceMarkers(JSON.parse(judged.markersJson || '[]'))
+    const markers = buildFiTraceMarkers(JSON.parse(collected.markersJson || '[]'))
     assert.ok(markers.length >= 1)
     assert.ok(markers.every((m) => m.source === 'fi'))
 
     const updatedTask = await refreshTaskProgress(task.id)
     assert.ok(updatedTask)
-    assert.ok(['completed', 'judge_skipped', 'failed'].includes(updatedTask!.status))
+    assert.equal(updatedTask!.status, 'completed')
 
     await prisma.faultInjectionRun.deleteMany({ where: { fiTaskId: task.id } })
     await prisma.faultInjectionTask.delete({ where: { id: task.id } })

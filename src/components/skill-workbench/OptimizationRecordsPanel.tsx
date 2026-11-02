@@ -57,11 +57,11 @@ export interface OptimizationRecordView {
 
 const STATUS_COPY: Record<string, { label: string; tone: string }> = {
   optimizing: { label: '优化中', tone: 'text-primary bg-primary-subtle' },
-  pending_retest: { label: '质量规则已通过', tone: 'text-success bg-success-subtle' },
-  retesting: { label: '质量规则已通过', tone: 'text-success bg-success-subtle' },
-  retest_passed: { label: '质量规则已通过', tone: 'text-success bg-success-subtle' },
-  retest_failed: { label: '质量规则已通过', tone: 'text-success bg-success-subtle' },
-  retest_cancelled: { label: '质量规则已通过', tone: 'text-success bg-success-subtle' },
+  pending_retest: { label: '静态通过，待完整复测', tone: 'text-warning bg-warning-subtle' },
+  retesting: { label: '行为验证中', tone: 'text-primary bg-primary-subtle' },
+  retest_passed: { label: '行为验证通过', tone: 'text-success bg-success-subtle' },
+  retest_failed: { label: '行为验证未通过', tone: 'text-error bg-error-subtle' },
+  retest_cancelled: { label: '行为验证已停止', tone: 'text-warning bg-warning-subtle' },
   published: { label: '已发布', tone: 'text-success bg-success-subtle' },
   abandoned: { label: '已放弃', tone: 'text-foreground-muted bg-background-secondary' },
   optimization_failed: { label: '优化失败', tone: 'text-error bg-error-subtle' },
@@ -102,6 +102,7 @@ export function OptimizationRecordsPanel({
   if (!selected) return null;
   const selectedStatus = STATUS_COPY[selected.status] || { label: selected.status, tone: 'text-foreground-muted bg-background-secondary' };
   const publishable = ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(selected.status);
+  const verification = selected.sourceRefs?.find((ref) => ref.type === 'verification-result');
   const executionFailed = selected.status === 'optimization_failed' && !selected.staticEvaluationId;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background p-6">
@@ -130,7 +131,7 @@ export function OptimizationRecordsPanel({
           <article className="min-w-0 p-5">
             <div className="flex flex-wrap items-start gap-3">
               <span className="flex size-9 items-center justify-center rounded-md bg-primary-subtle text-primary">
-                {selected.status === 'published' || publishable ? <CheckCircle2 className="size-4" /> : selected.status.includes('failed') ? <CircleX className="size-4" /> : <Clock3 className="size-4" />}
+                {selected.status === 'published' || selected.status === 'retest_passed' ? <CheckCircle2 className="size-4" /> : selected.status.includes('failed') ? <CircleX className="size-4" /> : <Clock3 className="size-4" />}
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold text-foreground">优化报告 · {getOptimizationTransitionLabel(selected)}</h3><span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', selectedStatus.tone)}>{selectedStatus.label}</span></div>
@@ -175,8 +176,11 @@ export function OptimizationRecordsPanel({
             <div className="grid grid-cols-3 gap-3 py-4">
               <Metric label="基线版本" value={`v${selected.baseVersion}`} />
               <Metric label="候选版本" value={getOptimizationTargetVersion(selected)} />
-              <Metric label="质量校验" value={selected.status === 'optimization_cancelled' ? '已停止' : executionFailed ? '未执行' : selected.status === 'optimization_failed' ? '未通过' : selected.staticEvaluationId ? '已通过' : '待完成'} />
+              <Metric label="静态质量" value={selected.status === 'optimization_cancelled' ? '已停止' : executionFailed ? '未执行' : selected.status === 'optimization_failed' ? '未通过' : selected.staticEvaluationId ? '已通过' : '待完成'} />
             </div>
+            {selected.retestExperimentId && <a href={`/experiments/${encodeURIComponent(selected.retestExperimentId)}`} className="mb-3 inline-block text-xs text-primary hover:underline">查看行为验证实验</a>}
+            {verification && <p className="mb-2 text-xs text-foreground-secondary">行为验证：{String(verification.sourceScore ?? '—')} → {String(verification.candidateScore ?? '—')} 分，{String(verification.measured ?? 0)} 个用例{verification.fullCoverage ? '，完整覆盖' : '，部分覆盖'}。</p>}
+            {selected.sourceRefs?.some((ref) => ref.type === 'verification-cleanup') && <p className="mb-3 text-xs text-foreground-muted">优化临时实验已自动清理，验证摘要和复用证据已保留。</p>}
             <section className="rounded-md border border-border">
               <div className="flex items-center border-b border-border px-3 py-2"><b className="text-xs text-foreground">版本差异</b><span className="ml-auto text-[10px] text-foreground-muted">{selected.diff?.length || 0} 个文件变更</span></div>
               {selected.diff?.length

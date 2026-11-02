@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "Skill 生成", "质量评估", "Skill 优化"]
 changefreq: monthly
 ---
 
-# Skill 生成、评估与优化使用指南
-
+<a id="skill-生成、评估与优化使用指南"></a>
+<a id="skill-生成评估与优化使用指南"></a>
 > 本指南面向 Agent Insight 使用者，介绍如何在工作台中创建、检查、测试和持续改进 Skill。下文将 Skill 简称为“能力”。
 
 ## 1. 你可以完成什么

@@ -2012,8 +2012,8 @@ export default function PlaygroundPage() {
  */
 const blockWithLineAttrs = (Tag: any) => {
     const BlockWithLineAttrs = (props: any) => {
-        const pos = props?.node?.position;
         const { node, ...rest } = props;
+        const pos = node?.position;
         return (
             <Tag
                 data-line-start={pos?.start?.line}
@@ -2282,7 +2282,7 @@ function ChatMessage({ msg, user, onOpenFile, onDebug, onDownload, onPreview, lo
             ) : msg.role === 'user' ? (
                 // 用户气泡：把 [引用 N] 渲成 chip，footer 的原文清单不显示
                 // （那部分只给模型看，气泡里展开既挤又难读）。
-                <UserMessageContent content={textPart} locale={locale} />
+                <UserMessageContent content={textPart} />
             ) : (
                 <MarkdownText>{textPart}</MarkdownText>
             )}
@@ -3112,7 +3112,7 @@ function parseUserMessageContent(content: string): {
  * 把用户消息渲成"文本 + inline chip"。chip 用复用的 .chat-chip 样式，
  * 比 markdown 化的纯文本可读性高一档（文件名 + 行号一眼能扫到）。
  */
-function UserMessageContent({ content, locale }: { content: string; locale: string }) {
+function UserMessageContent({ content }: { content: string }) {
     const { body, refsByIdx } = useMemo(() => parseUserMessageContent(content), [content]);
     const REF_RE = /\[(?:引用|Ref\s+)(\d+)\]/g;
     const nodes: React.ReactNode[] = [];

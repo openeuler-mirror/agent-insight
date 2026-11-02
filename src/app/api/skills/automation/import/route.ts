@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
         const savedFilesList: string[] = [];
         copyFolderSync(localPath, storageBase, savedFilesList, storageBase);
 
-        const skillVersion = await db.createSkillVersion({
+        await db.createSkillVersion({
             skillId: skill.id,
             version: nextVersionNum,
             content: skillContent,

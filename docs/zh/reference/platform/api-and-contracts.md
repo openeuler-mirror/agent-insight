@@ -5,9 +5,16 @@ keywords: ["Agent Insight", "API 契约", "数据模型", "模块扩展"]
 changefreq: monthly
 ---
 
-# API & Contracts
 
-> 引擎从 `lib` 暴露约 380 个函数，从 `server` 暴露约 29 个，外加 14 个 prompt 构建器；代码库声明了约 890 个类型和约 290 个扩展点（接口/抽象类）。本页列出高信噪比的引擎 API、持久化 + 内存数据模型，以及扩展点。仅包含签名与调用关系 —— 不描述行为。所有签名均来自静态分析。
+<a id="api-&amp;-contracts"></a>
+<a id="api--contracts"></a>
+本页汇总内部引擎签名、持久化与内存数据模型、扩展点及相关契约入口。历史静态分析中的数量不作为当前覆盖承诺；具体实现以对应源码为准。HTTP 请求、响应和身份处理请从下方参考页查阅。
+
+## FI 采集与独立评判移除
+
+`POST /api/fault-injection/runs/:runId/collect-result` 通过 `persistFiCollectIngress` 保存注入事实、markers 和平台 Session ID；不读取评测模型、不调用 FI Judge，也不等待业务 Trace 回传轮询。有效 Session ID 的采集进入 `completed`，缺少合法平台 Session ID 时进入 `failed`，用户停止进入 `stopped`。已有业务 Trace 可立即绑定；迟到 Trace 由实验编排继续等待，仅就绪 Case 进入显式选择的评估器。
+
+`POST /api/fault-injection/runs/:runId/rejudge` 已退役，返回 `410` 和 `code=FI_JUDGE_REMOVED`。历史数据库判定字段不迁移或清空，FI 详情接口可继续读取；新 Run 的 Trace 响应 `judge=null`，不会为 `completed` 自动合成评价标记或占位 Judge 阶段。`judge_skipped` 与 `judging` 仅兼容历史状态，新采集不再产生这两个状态。
 
 ## Engine API — anchor index
 | Function | Anchor | Module |
@@ -25,46 +32,28 @@ changefreq: monthly
 | `resolveUser` / `canAccessSkill` | [#resolve-user](#resolve-user) | lib/auth |
 | `getActiveConfig` / `getUserSettings` | [#get-active-config](#get-active-config) | lib/storage |
 
-## Public API
+<a id="public-api"></a>
+
+## HTTP 接口与内部引擎
+
+HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../observability/trace-ingestion.md)、[实验接口](../evaluation/experiments-api.md)和[独立 Benchmark 协议](../evaluation/benchmark-protocol.md)。本页后续的函数签名是仓内开发接口，不能作为 HTTP 端点调用。
 
 ### 实验执行环境准备
 
-| 接口 / 合同 | 输入与输出 |
-| --- | --- |
-| `POST /api/experiments/environment-preparations` | 接收 `requestId/datasetId/clientId/platform/agent/model/caseIds/mode/timeoutSeconds/concurrency` 及可选 `agentOptions`；同配置入口改为仅传 `requestId/sourceExperimentId`，禁止混入执行目标覆盖；服务端解析数据集接入标识与版本，返回 `202` 和准备任务 |
-| `GET /api/experiments/environment-preparations/:taskId` | 按当前用户与仍有效的客户端归属查询任务 |
-| 准备任务 | `{ taskId, contextDigest, state, message, issues, durationHint? }`；状态为 `checking/preparing/needs_action/ready/failed` |
-| `execution-environment/v1` | `packages/benchmark-protocol/environment.cjs` 及 `.d.cts`，严格校验上下文与摘要 |
-| 执行端接入方法 | `checkEnvironment(context, services)` 返回 `{ issues, prepare }`；`prepareEnvironment(context, services, reportProgress)` 执行准备，调用方再次检查 |
-
-实验列表与 Skill 工作台按实验 ID 独立保存忙状态，仅禁用当前行操作，某行完成或失败不解除其他仍在处理的行；两处共用 `SameConfigExperimentAction`，复用 `useExecutionEnvironment` 轮询及恢复逻辑，环境通过后才复制、启动并跳转。服务端 `resolveReuseEnvironment` 按归属读取原实验冻结配置：Benchmark 从绑定恢复运行参数与 Case 选择，普通/可靠性数据集从未删除 Case 的数据集绑定恢复范围，Skill 从快照和取消记录恢复范围。缺少可靠绑定的旧记录提示通过向导重新确认，不猜测主机或扫描全量能力。纯已有 Trace/LLM 对比返回 `{ state: 'skipped' }`，不创建执行端任务；需要客户端执行的 Skill A/B 不跳过。`skipped` 仅是同配置 POST 的无任务响应，不属于执行端状态协议。准备接口不创建实验；启动仍使用原有实验/Skill 任务 API 并保留其就绪校验。
-
-向导环境检查成功后只执行步骤切换：先刷新执行目标并核对原主机/Agent，确认通过后进入第三步；失败留在第二步提示。整个过程不调用路由跳转或整页刷新。后台主机轮询与窗口聚焦刷新在准备期间暂停，进入门禁时使旧请求失效，刷新结果按请求序号防止乱序覆盖，页面卸载同样使未完成刷新失效。页头返回及步骤导航锁定到目标复核结束。向导步骤保存在组件内存，浏览器整页重载会从第一步开始，相同配置再次检查时恢复已有环境任务。
-
-准备请求的 `requestId` 统一使用 `safeUUID()`，兼容通过局域网 HTTP 访问时浏览器未提供 `crypto.randomUUID()` 的情况；网络不确定时复用原请求 ID，明确结束后重试生成新 ID。
-
-OpenCode 向导预检与执行前校验共用按运行时主版本分流的入口：v1 保留 `debug config`、认证来源和 `models` 目录检查；v2 调用 `api --standalone model.list`（未选模型时为 `model.default`），以原生目录中的 `providerID/id` 和 `enabled` 判断可用性，不解析 v2 `debug config` 的配置来源数组，也不套用 v1 认证文件格式。CLI 输出只进入权限为 `0600` 的临时文件并在检查后清理，不将配置或底层异常透传到页面。目录读取失败为 `MODEL_CONFIGURATION_UNREADABLE`，所选模型不可用为 `MODEL_UNAVAILABLE`，缺少可用默认模型为 `MODEL_CONFIGURATION_MISSING`；不发起模型推理请求。执行前通过可取消子进程检查，保留 v2 错误分类并返回解析后的模型标识；预检增量能力上报与常规探测一致，为已就绪的 v1/v2 声明 `skillSnapshotVersion: 4`。Skill 用例生成与 A/B 使用共享能力策略校验 `supportsSkillSnapshot`，触发分析额外校验 `supportsTriggerRouting`；前端筛选、提交和服务端校验保持一致。缺失能力返回对应错误并提示检查常驻客户端与能力探测结果，不依据缺失字段直接推断 OpenCode 版本过旧。
-
-任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
-
-检查和重启恢复不触发全量能力扫描。执行端复用本轮已验证事实，通过现有 `PUT /api/reliability/client/v1/capabilities` 的 `partial: true` 增量同步平台、组件和最终执行 Profile；服务端合并更新，保留其他 Agent、模型与组件。Profile 摘要改变时，未检查 Runtime 的旧就绪状态失效。可靠性数据集额外通过现有 Worker heartbeat 的 `partial: true` 合并所选平台 inventory，不枚举其他 Agent 或模型目录；普通全量上报语义不变。增量同步成功后才回报环境 `ready`，避免后续实验冻结安装前的身份。
-
-环境终态通过 HTTP 确认，未确认结果由环境任务记录负责恢复，不能用通用回执队列直接回放过时的 `ready`。恢复前按原上下文只读复查，过期或缺少上下文则要求重新检查。指令回执通过带状态条件的原子更新防止晚到 ACK/进度覆盖已完成结果；查询就绪结果时再次核对数据集身份和主机健康。
+契约正文见 [实验执行环境准备接口](../evaluation/execution-environment.md)。
 
 ### 模型连接测试
 
-- `ModelConfig.testTimeoutMs?: number` 存于现有用户设置 JSON；缺省为 `60000`，范围 `10000～300000` 整数毫秒。保存设置和测试接口均校验，非法值返回 `400`；无需 Prisma schema 迁移。该字段不改变评测、生成或优化的业务超时。
-- `POST /api/eval/settings/test` 在现有连接参数上接受 `testTimeoutMs`。保存前使用表单值，健康检查发送已保存值。请求执行一次 `chat.completions`（`Hi`，`max_tokens: 5`），`maxRetries: 0`。
-- 响应包含 `{ success, elapsedMs, timeoutMs, code?, error? }`。失败 `code` 为 `timeout | cancelled | authentication | rate_limit | network | invalid_request | server | invalid_response | unknown`；供应商原始异常不透传，避免 URL、凭据或请求头泄漏。模型鉴权失败映射为 `422`，不冒充平台登录态失效。
-- 独立截止时间覆盖模型请求及响应体解析，超时和客户端取消都会 abort 底层请求，结束后释放定时器和监听器。取消表示终止本地等待及传输，不保证供应商立即停止推理。
-- 前端只有测试成功且未取消时才调用设置保存接口，测试中冻结表单、阻止重复提交。保存阶段不提供取消，避免误报“未保存”。健康检查区分超时、取消与其他失败；失败信息持续显示并支持显式关闭或重试。
-
+契约正文见 [模型连接测试接口](./model-connection-test.md)。
 
 ### 实验重命名
 
 `PATCH /api/experiments/:id` 接收 `{ user, name }`，只更新当前用户未删除的普通或 Skill 实验。名称会去除首尾空白，长度须为 1～120 个字符；成功返回 `{ success: true, name }`，不存在或无权访问返回 `404`。该接口原有的 `{ user, watchMode: false }` 停止监听契约保留，两类修改不能合并在一次请求中。重命名只修改 `Experiment.name`，不改冻结配置、执行状态或评测结果。
 
-### 实验停止与逻辑删除（2026-09-23 working-tree overlay）
+<a id="实验停止与逻辑删除（2026-09-23-working-tree-overlay）"></a>
+<a id="实验停止与逻辑删除2026-09-23-working-tree-overlay"></a>
+
+### 实验停止与逻辑删除
 
 | 接口 | 契约 |
 |---|---|
@@ -407,6 +396,17 @@ configuration:
 
 
 
+### FI Trace 回传与内部判定归属
+
+OpenCode FI 启动超时的有限恢复：默认 plugin_startup_timeout=120 秒、plugin_startup_retries=1（内部参数允许 0～2），与原 SQLite 锁重试分别计数。仅在超时进程仍存活、插件存在、AGENT_FI 运行环境完整且没有 Session/激活/标准输出证据时重试；必须先停止并回收旧进程，再随机退避。有效 models.json 缓存存在且未显式设置 OPENCODE_DISABLE_MODELS_FETCH 时，仅重试进程跳过目录在线刷新，保持业务模型与 provider 原值。startup_attempt / startup_last_error / startup_retry_reason 保存在原 manifest；启动、退避、业务执行共用 RunRequest.timeout_seconds 预算，已有业务证据或明确退出不重复执行。
+
+常驻客户端在读取无 Session、无激活信号的 collect-result 时，会携带同目录失败 manifest 的真实原因并脱敏。现有 collect-result 接口直接记录 failed，不进入 Judge，也不将 plugin_start_failed 覆盖成 session_unaligned；有真实 Session 或激活证据的部分轨迹保留原处理流程。
+
+OpenCode 沿用 v1/v2 采集入口和迟到快照处理。OpenCode v1 不保证退出前等待事件钩子：事件同步写入 spool，idle 分支在首次异步让出之前触发上传；v2 保留异步背压，等待写盘后上传。避免仅在主动 await 钩子的测试中通过，却在真实 CLI 退出时丢失上传触发。上传器在排他锁内读取和保存 checkpoint；保留源仓库的未完成会话追踪与最终重检，单文件扫描只推进对应文件的水位，上传失败不确认扫描完成。
+
+FI 绑定等待 queued/collecting/judging 等活动任务结束；全部进入终态后保留 180 秒回传宽限。终态空 Trace 的失败原因写入 Case.traceGenerationError，存在生成失败 Case 时，已完成的有效评估结算为 partial。内部判定会话不会被绑定为业务 Case 的有效 Trace。
+
+ras-judge 归属系统，用户归属筛选排除，全部和系统归属展示。完成态上传仍按账号自动分析设置执行二次分析，原始 Session 与 Execution 保留。
 
 ## Trace Bundle 导入导出契约
 
@@ -415,7 +415,6 @@ configuration:
 - v1 Bundle 顶层字段为 `format`、`version`、`exportedAt`、`rootExecutionId`、`executions`；每个节点包含 portable Execution 与可空 Session。Session `interactions` 保留规范化原始值，不做面向展示的时间格式化；Langfuse Session 还可携带完整 `langfuseTraceNodes`，旧版未包含该可选字段的 v1 Bundle 仍可导入。
 - `Execution.id` 与 Execution/Session `taskId` 共享冲突检测空间。无冲突 ID 原样保留；有冲突 ID 才生成 `import_<uuid>`，并同步更新父子 ID、root ID、`agentSessionId`、interactions 中已知的 session/execution 引用及 Langfuse 节点的 `subagentSessionId`。OTel `traceId` / `spanId` / `parentSpanId` 不参与重映射。
 - 导入只创建 Execution、Session 和可重算的 ExecutionSkill；不迁移 Evaluation、TraceEvaluation、AgentDebugReport、ExecutionTag 或基础设施关联，也不调度 LLM 评测。
-
 
 ## Cross-session collaboration graph and Trace projection
 
@@ -480,7 +479,7 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 `generationSource=trace` 固定为ideal_output与双字段，后端不接受额外业务列。内部同步input/expectedOutput别名和values，并原子更新referenceCasesJson/caseCount；NFC/LF之外不trim正文。生成及后续新增、编辑、导入跳过关键观点模型提取，不写伪造的派生缓存。此来源应通过显式caseId绑定评测；自动按输入寻找第一条答案的旧匹配器不纳入Trace生成集，避免同输入回答变体串用。旧单条Trace回流入口不向此来源追加可变字段，改用详情页双字段导入。
 
-Trace 生成进度包含 `summary: GenerationSummary | null`：version=1、sourceTraces、retainedTraces、candidateCount、duplicateCount、sampledOutCount（采样前为 null）和 exclusions[{code,traceCount,turnCount}]。只返回原因代码与计数，不返回源内容。Worker 在发布前向 Manager 发送统计并等待确认；Manager 仅为本次新建任务的查看窗口中转统计，按 jobId/leaseEpoch 保存；GET 轮询续期 60 秒，停止轮询后自动清理。窗口关闭通过同一路径 DELETE 立即释放，组件卸载/pagehide 使用 keepalive 尽力释放；释放后后续 Worker 消息仍确认但不重新缓存，旧任务重读或幂等重放不恢复明细。前端保留已收到的结果至关闭；换代清空旧结果，删除/服务关闭清理。NO_VALID_SAMPLES 同样可展示原因。summary=null 表示临时明细不可用，不代表没有跳过样本。
+Trace 生成进度包含 `summary: GenerationSummary | null`：version=1、sourceTraces、retainedTraces、candidateCount、duplicateCount、sampledOutCount（采样前为 null）和 `exclusions[{code,traceCount,turnCount}]`。只返回原因代码与计数，不返回源内容。Worker 在发布前向 Manager 发送统计并等待确认；Manager 仅为本次新建任务的查看窗口中转统计，按 jobId/leaseEpoch 保存；GET 轮询续期 60 秒，停止轮询后自动清理。窗口关闭通过同一路径 DELETE 立即释放，组件卸载/pagehide 使用 keepalive 尽力释放；释放后后续 Worker 消息仍确认但不重新缓存，旧任务重读或幂等重放不恢复明细。前端保留已收到的结果至关闭；换代清空旧结果，删除/服务关闭清理。NO_VALID_SAMPLES 同样可展示原因。summary=null 表示临时明细不可用，不代表没有跳过样本。
 
 不为多轮提取增加 Trace 元数据或数据库列。旧版 summaryJson 由 scripts/db_push.sh 调用 scripts/trace-datasets/remove-legacy-summary.cjs 精确移除；迁移在启动脚本停服后的 schema 同步阶段运行，保留中断任务的状态及其余任务/数据集/Trace，新 Manager 负责恢复。新库不会创建该列。schema/契约见 design/evaluation/trace-eval-dataset/。
 

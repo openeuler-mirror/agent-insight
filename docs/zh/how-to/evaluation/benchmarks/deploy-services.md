@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Benchmark", "Evaluator", "服务部署", "环境验
 changefreq: monthly
 ---
 
-# Benchmark 通用服务部署指南
-
+<a id="benchmark-通用服务部署指南"></a>
 本指南部署 Agent Insight、执行客户端和 Evaluator 的公共服务。完成公共安装后，按所选 Benchmark 阅读同级的 [SWE-bench 部署指南](./deploy-swe-bench.md) 或 [ZSoft 部署指南](./deploy-zsoft.md)，完成数据、执行环境和评测资产配置。架构与实现细节见 [`design/evaluation/benchmark/`](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/benchmark/README.md)。
 
 ## 1. 部署结构

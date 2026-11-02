@@ -70,6 +70,34 @@ import { createCollaborationHandlers } from '../src/lib/collaboration/http';
         assert.equal(native.events.length, 0);
         assert.deepEqual(native.automaticEvents.map(edge => [edge.fromSessionId, edge.toSessionId]), [['root', 'middle'], ['middle', 'leaf']]);
         assert.equal(native.nodes.length, 3);
+        await addTrace('ses_text_A', []);
+        await addTrace('ses_text_B', []);
+        await addTrace('text-root', [
+            call('text-spawn-1', 'task', { subagent_type: 'explore' }, '<task_metadata>\nsession_id: ses_text_A\n</task_metadata>'),
+            call('text-spawn-2', 'task', { subagent_type: 'explore' }, 'task_id: ses_text_B (for resuming)\n<task_result>done</task_result>'),
+        ]);
+        const textNative = await service.nativeGraph('alice', 'text-root');
+        assert.deepEqual(textNative.automaticEvents.filter(edge => edge.fromSessionId === 'text-root').map(edge => edge.toSessionId).sort(), ['ses_text_A', 'ses_text_B']);
+        await addTrace('envelope-root', [
+            { ...call('envelope', 'task', {}, '<task id="ses_text_A" state="completed">\n<task_result>done</task_result>\n</task>') },
+            { ...call('metadata', 'task', {}, 'plain result'), state: { status: 'completed', metadata: { sessionId: 'ses_text_B', parentSessionId: 'envelope-root' } } },
+        ]);
+        const envelopeNative = await service.nativeGraph('alice', 'envelope-root');
+        assert.deepEqual(envelopeNative.automaticEvents.map(edge => edge.toSessionId).sort(), ['ses_text_A', 'ses_text_B']);
+        await addTrace('failed-text-root', [
+            { ...call('failed-text', 'task', {}, '<task_metadata>\nsession_id: ses_text_A\n</task_metadata>'), state: 'error' },
+        ]);
+        assert.equal((await service.nativeGraph('alice', 'failed-text-root')).automaticEvents.length, 0);
+        await addTrace('ambiguous-text-root', [
+            call('ambiguous-text', 'task', { session_id: 'ses_text_A' }, '<task_metadata>\nsession_id: ses_text_B\n</task_metadata>'),
+        ]);
+        assert.equal((await service.nativeGraph('alice', 'ambiguous-text-root')).automaticEvents.length, 0);
+        await addTrace('pending-text-root', [call('pending-text', 'task', {}, 'task_id: ses_late_child (for resuming)')]);
+        const pendingText = await service.nativeGraph('alice', 'pending-text-root');
+        assert.equal(pendingText.automaticEvents.length, 1);
+        assert.equal(pendingText.nodes.find(node => node.sessionId === 'ses_late_child')?.traceResolution, 'unresolved');
+        await addTrace('ses_late_child', []);
+        assert.equal((await service.nativeGraph('alice', 'pending-text-root')).nodes.find(node => node.sessionId === 'ses_late_child')?.traceResolution, 'resolved');
         assert.equal(await client.collaborationEvent.count(), 4);
         await assert.rejects(service.nativeGraph('bob', 'root'), /不存在或无权/);
         await handlers.report(request(event('native-report', 'root', 'middle')));

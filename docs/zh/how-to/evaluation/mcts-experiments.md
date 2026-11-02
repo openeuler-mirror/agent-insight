@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "MCTS", "SWE-bench", "ZSoft", "评测实验"]
 changefreq: monthly
 ---
 
-# MCTS 实验用户使用说明书
-
+<a id="mcts-实验用户使用说明书"></a>
 适用于已部署 MCTS 和 xGovernor 的使用者。**所有终端命令在 MCTS 执行机上执行**；文中及截图中的地址、目录和主机均为示例，请使用自己的配置。
 
 ## 1. 接入前准备

@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Skill", "静态评估", "运行实验"]
 changefreq: monthly
 ---
 
-# Skill 评估与实验
-
+<a id="skill-评估与实验"></a>
 Skill 工作台把质量验证分成两个页签：
 
 - **Skill 评估**：检查当前快照或正式版本的内容质量，承担发布前静态质量门禁。

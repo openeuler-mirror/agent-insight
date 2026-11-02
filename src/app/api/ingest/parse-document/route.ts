@@ -15,9 +15,8 @@
  */
 
 import { NextResponse } from 'next/server';
-
- 
-const pdfParse = require('pdf-parse/lib/pdf-parse.js');
+// @ts-expect-error pdf-parse 不随包提供类型声明
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 export const dynamic = 'force-dynamic';
 

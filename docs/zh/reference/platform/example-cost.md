@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "内置示例", "模型成本", "Skill 优化"]
 changefreq: monthly
 ---
 
-# 内置示例走查的成本参考
-
+<a id="内置示例走查的成本参考"></a>
 [内置示例端到端走查](../../tutorial/platform/02-example-walkthrough.md) 会带你用内置示例把核心闭环跑一遍。本页
 保留原文记录的 **deepseek-v4-flash** 模型下 **Skill 生成 → 评测 → Skill 优化** 三个阶段的历史花费，
 用于说明成本构成，不作为当前版本或服务商报价。

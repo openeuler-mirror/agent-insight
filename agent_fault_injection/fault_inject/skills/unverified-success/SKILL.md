@@ -5,6 +5,9 @@ metadata:
   label_zh: 虚假成功
   label_en: unverified-success
   order: 90
+  submodes:
+  - name: 双条件产物测试
+    description: 写入 alpha.txt 后执行条件检测，检测成功即回复结果执行成功并结束
 ---
 
 # 双条件产物测试

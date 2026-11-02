@@ -48,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
         prog="agent-fault-injection",
         description=(
             "Run controlled fault-injection experiments, collect execution "
-            "trajectories. Fault judging runs in Insight after collect."
+            "trajectories. Scoring uses explicitly selected Insight experiment evaluators."
         ),
         epilog=(
             "Use 'agent-fault-injection run --help' for experiment options, "
@@ -63,10 +63,10 @@ def _parser() -> argparse.ArgumentParser:
         help="Start a fault-injection experiment on the selected platform",
         description=(
             "Run one agent with an injected fault skill and capture its "
-            "trajectory. Fault outcome judging runs in Insight (server-side)."
+            "trajectory. FI collection does not invoke a fault-outcome Judge."
         ),
         epilog="""examples:
-  # Capture injection + trajectory (Insight judges after collect)
+  # Capture injection + trajectory for selected Insight experiment evaluators
   agent-fault-injection run --platform opencode --agent build \
     --fault thinking-dead-loop --prompt "execute case2" \
     --workspace /tmp/ras-workspace --output-dir /tmp/ras-artifacts
@@ -78,7 +78,7 @@ defaults:
   --auto is enabled by default. Use --no-auto to disable.
   Prefer a dedicated base workspace directory, not the repository root.
   Each run allocates a fresh subdirectory under ``.ras-runs/single/``.
-  Fault outcome judging runs in Insight after collect-result upload.""",
+  Collect-result upload records FI facts without invoking a Judge.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     run.add_argument(

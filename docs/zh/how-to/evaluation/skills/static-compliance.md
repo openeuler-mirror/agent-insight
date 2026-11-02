@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Skill", "静态评估", "质量门禁", "风险修�
 changefreq: monthly
 ---
 
-# Skill 评估
-
+<a id="skill-评估"></a>
 **Skill 评估**对顶部选中的 Skill 文件快照执行静态质量检查。它关注 Skill 是否写得清晰、完整、安全且可执行，不运行真实任务；真实效果需要到 **Skill 实验**验证。
 
 该页既支持正式版本，也支持生成或优化产生的未发布快照。

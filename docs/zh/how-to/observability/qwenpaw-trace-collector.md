@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "QwenPaw", "链路采集", "故障排查"]
 changefreq: monthly
 ---
 
-# QwenPaw Trace Collector
-
+<a id="qwenpaw-trace-collector"></a>
 本文同时作为安装器生成的运行时 ZIP 的 `README.md` 内容源；当前发布版本为 `1.0.0`。
 
 `agent-insight-qwenpaw` 是 Agent Insight 的 QwenPaw Trace 采集器。它以 QwenPaw hook 插件

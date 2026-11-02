@@ -21,7 +21,7 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import test from 'node:test'
 
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`
+process.env.DATABASE_URL ||= `file:${path.resolve(__dirname, '../data/witty_insight.db')}`
 
 import { prisma } from '../src/lib/storage/prisma'
 import {
@@ -109,6 +109,7 @@ test('bindExperimentCaseToFiSession: 按业务 runId 与历史 cuid 均可回填
       taskId: sessionTaskId,
       user,
       query: 'ping',
+      agentName: 'default',
       finalResult: 'pong',
       isSubagent: false,
     },
@@ -210,6 +211,7 @@ test('failed FI run with sessionTaskId waits for a late completed Session and bi
           taskId: sessionTaskId,
           user,
           query: 'ping',
+          agentName: 'build',
           finalResult: 'pong',
           isSubagent: false,
         },

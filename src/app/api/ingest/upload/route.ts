@@ -54,7 +54,6 @@ export async function POST(request: Request) {
     }
     const headers = request.headers;
     const apiKey = headers.get('x-witty-api-key');
-    const requestOrigin = new URL(request.url).origin;
     const isOpenCodeTrace = String(data.framework || '').toLowerCase() === 'opencode';
     const authorization = headers.get('authorization') || '';
     const deviceAuthRequested = isOpenCodeTrace && Boolean(
@@ -401,7 +400,7 @@ export async function POST(request: Request) {
         const clonedData = JSON.parse(JSON.stringify(data));
         const clonedNormalized = JSON.parse(JSON.stringify(normalized));
         const clonedInteractions = JSON.parse(JSON.stringify(interactions));
-        processUploadAsync(clonedData, username, clonedNormalized, clonedInteractions, requestOrigin).catch(e => {
+        processUploadAsync(clonedData, username, clonedNormalized, clonedInteractions).catch(e => {
             if (e instanceof EvaluationCancelledError) {
                 console.log(`[Upload-API] Async analysis cancelled for task_id=${clonedData.task_id}: ${e.message}`);
             } else {
@@ -424,7 +423,7 @@ export async function POST(request: Request) {
   }
 }
 
-async function processUploadAsync(data: any, username: any, normalized: any, interactions: any, requestOrigin: string) {
+async function processUploadAsync(data: any, username: any, normalized: any, interactions: any) {
     const taskId = String(data.task_id || '');
     if (!username) {
         console.log(`[Upload-Async] No username, skipping evaluation for task_id=${taskId}`);

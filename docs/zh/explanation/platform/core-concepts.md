@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "核心概念", "Trace", "Skill", "Evaluator"]
 changefreq: monthly
 ---
 
-# 核心概念
-
+<a id="核心概念"></a>
 理解这些概念后，你会更容易读懂 Agent Insight 的页面结构、指标口径和工作流。本页按核心模块重构，重点把 `user-guide` 里的高频专有名词集中整理成术语表，方便你在阅读其它页面前先建立统一语义。
 
 > **Note**

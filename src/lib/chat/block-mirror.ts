@@ -15,6 +15,7 @@
  */
 
 import { settleProcessBlocks } from './process-block-state';
+import { verificationDisplay } from '@/lib/skill-workbench/verification-display';
 
 /**
  * 流式 SSE 事件 → 持久化 Block[] 镜像。
@@ -128,7 +129,7 @@ export function createBlockMirror(
       else blocks[idx] = { ...blocks[idx], ...next };
     } else if (mode === 'verify_ok') {
       const idx = blocks.findIndex((b: any) => b.kind === 'verification' && b.id === 'self-verify');
-      const next = { kind: 'verification', id: 'self-verify', status: 'ok', text: '结构门、脚本真值门与行为门已完成', detail: payload || {} };
+      const next = { kind: 'verification', id: 'self-verify', ...verificationDisplay(payload || {}), detail: payload || {} };
       if (idx === -1) blocks.push(next);
       else blocks[idx] = { ...blocks[idx], ...next };
     } else if (mode === 'warning') {

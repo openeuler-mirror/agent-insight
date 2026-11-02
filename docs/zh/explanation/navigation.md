@@ -59,4 +59,4 @@ title: "概念与原理"
 - [Recovery 模块](./reliability/agent-ras/modules/recovery.md)
 - [Review 模块](./reliability/agent-ras/modules/review.md)
 
-[中文总览](https://gitcode.com/openeuler/agent-insight/blob/master/docs/zh/README.md) · [English status](https://gitcode.com/openeuler/agent-insight/blob/master/docs/en/explanation/README.md)
+[中文总览](https://gitcode.com/openeuler/agent-insight/blob/master/docs/zh/README.md) · [English documentation](../../en/explanation/navigation.md)

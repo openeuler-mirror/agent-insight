@@ -102,3 +102,9 @@ test("skill-opt prompt: includes 修改总结 template with stable section heade
   assert.match(out, /### 暂未处理/);
   assert.match(out, /### 改动要点/);
 });
+
+
+test('user scope constrains evaluator repair suggestions', () => {
+  const prompt = buildSkillOptSystemPrompt({ skillName: 'fixture', baseVersion: 0, checkedIssues: [], userFeedback: '只改 SKILL.md' });
+  assert.match(prompt, /无法在限定范围内修复的问题应保留/);
+});

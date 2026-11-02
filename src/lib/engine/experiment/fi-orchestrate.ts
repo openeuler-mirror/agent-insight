@@ -30,6 +30,8 @@ import { normalizeFiWorkspaceInput } from '@/lib/fault-injection/workspace'
 import { prisma } from '@/lib/storage/prisma'
 import { resolveCaseFaultInjectionType } from '@/lib/engine/experiment/case-fi-meta'
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants'
+import { isFiBusinessTraceUsable, isFiTraceWaitExpired, FI_TRACE_ARRIVAL_GRACE_MS } from '@/lib/fault-injection/trace-readiness'
+export { isFiBusinessTraceUsable } from '@/lib/fault-injection/trace-readiness'
 
 export type FiOrchestrateCaseSpec = {
   caseId: string
@@ -198,11 +200,6 @@ export async function orchestrateFaultInjection(
   }
 }
 
-const FI_TERMINAL_WITHOUT_SESSION = new Set([
-  'failed',
-  'stopped',
-])
-
 export function hasUsableTraceInteractions(value: string | null | undefined): boolean {
   if (!value) return false
   try {
@@ -228,12 +225,15 @@ async function findFiRunByKey(runKey: string) {
       sessionTaskId: true,
       error: true,
       user: true,
+      agent: true,
+      platform: true,
+      updatedAt: true,
     },
   })
 }
 
 /**
- * 仅当 sessionTaskId 已经对应到非空 Session trace 与 Execution 时，才把它们回填到 Case。
+ * 仅当 sessionTaskId 对应到已结束的业务 Session 与同 Agent 的 Execution 时，才把它们回填到 Case。
  * 兼容历史 fiRunId=cuid 与正确的 ras- runId。
  */
 export async function bindExperimentCaseToFiSession(input: {
@@ -244,6 +244,7 @@ export async function bindExperimentCaseToFiSession(input: {
   if (!sessionTaskId) return 0
 
   const run = await findFiRunByKey(input.fiRunKey)
+  if (!run) return 0
   const keys = Array.from(
     new Set([input.fiRunKey, run?.runId, run?.id].filter((v): v is string => Boolean(v))),
   )
@@ -253,14 +254,17 @@ export async function bindExperimentCaseToFiSession(input: {
     prisma.execution.findFirst({
       where: { taskId: sessionTaskId, isSubagent: false, ...(run?.user ? { user: run.user } : {}) },
       orderBy: { timestamp: 'desc' },
-      select: { id: true },
+      select: { id: true, agentName: true },
     }),
-    prisma.session.findUnique({
-      where: { taskId: sessionTaskId },
+    prisma.session.findFirst({
+      where: { taskId: sessionTaskId, ...(run.user ? { user: run.user } : {}) },
       select: { interactions: true, endTime: true },
     }),
   ])
-  if (!execution || !session?.endTime || !hasUsableTraceInteractions(session.interactions)) return 0
+  if (!execution || !isFiBusinessTraceUsable({
+    platform: run.platform, agent: run.agent, executionAgent: execution.agentName,
+    interactions: session?.interactions, endTime: session?.endTime,
+  })) return 0
 
   const result = await prisma.experimentCase.updateMany({
     where: {
@@ -269,6 +273,7 @@ export async function bindExperimentCaseToFiSession(input: {
     data: {
       taskId: sessionTaskId,
       executionId: execution.id,
+      traceGenerationError: null,
     },
   })
   return result.count
@@ -276,12 +281,18 @@ export async function bindExperimentCaseToFiSession(input: {
 
 /**
  * 等待 FI collect 对齐平台 Session，并在 Trace 完整可用后回填 ExperimentCase。
- * 超时不抛错：调用方只允许 readyRunIds 对应的 Case 进入评估。
+ * 默认等待窗口到期即返回；批量模式持续等待活动 Run，终态仅保留有限回传宽限期。
+ * 取消/删除通过 shouldContinue 中止；调用方只允许 readyRunIds 对应的 Case 进入评估。
  */
 export async function awaitFiSessionsAndBindExperimentCases(input: {
   runIds: string[]
   timeoutMs?: number
   pollMs?: number
+  /** Keep queued/running work alive beyond the initial collection window. */
+  waitForActiveRuns?: boolean
+  /** Bound the wait for an already finished run whose trace arrives late. */
+  traceWaitMs?: number
+  shouldContinue?: () => Promise<boolean>
 }): Promise<{
   bound: number
   readyRunIds: string[]
@@ -294,13 +305,18 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
   }
 
   const timeoutMs = Math.max(5_000, input.timeoutMs ?? 240_000)
-  const pollMs = Math.max(500, input.pollMs ?? 2_000)
+  const pollMs = Math.max(50, input.pollMs ?? 2_000)
+  const traceWaitMs = Math.max(0, input.traceWaitMs ?? FI_TRACE_ARRIVAL_GRACE_MS)
   const started = Date.now()
   const ready = new Set<string>()
   const failed = new Set<string>()
   let bound = 0
 
-  while (Date.now() - started < timeoutMs) {
+  while (true) {
+    const expired = Date.now() - started >= timeoutMs
+    if (expired && !input.waitForActiveRuns) break
+    if (input.shouldContinue && !(await input.shouldContinue())) break
+    let waitingForWork = false
     for (const runKey of runIds) {
       if (ready.has(runKey) || failed.has(runKey)) continue
       const run = await findFiRunByKey(runKey)
@@ -319,12 +335,28 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
           continue
         }
       }
-      if (FI_TERMINAL_WITHOUT_SESSION.has(run.status) && !run.sessionTaskId) {
+      const terminal = ['completed', 'judge_skipped', 'failed', 'stopped'].includes(run.status)
+      if (terminal && !run.sessionTaskId) {
         failed.add(runKey)
+      } else if (isFiTraceWaitExpired(run.status, run.updatedAt, traceWaitMs)) {
+        failed.add(runKey)
+      } else {
+        waitingForWork = true
       }
     }
     if (ready.size + failed.size >= runIds.length) break
+    if (expired && !waitingForWork) break
     await sleep(pollMs)
+  }
+
+  // Preserve a reason on the Case so terminal empty runs do not remain generating forever.
+  for (const runKey of failed) {
+    const run = await findFiRunByKey(runKey)
+    if (!run) continue
+    await prisma.experimentCase.updateMany({
+      where: { fiRunId: { in: [run.runId, run.id] }, executionId: null },
+      data: { traceGenerationError: run.error || 'FI 执行已结束，但未产生可用的业务 Trace（无实际回复、未上报或回传等待超时）' },
+    })
   }
 
   const pendingRunIds = runIds.filter((id) => !ready.has(id) && !failed.has(id))

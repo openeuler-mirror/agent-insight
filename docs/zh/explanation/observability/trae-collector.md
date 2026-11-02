@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Trae IDE", "Trace 采集器", "增量上传"]
 changefreq: monthly
 ---
 
-# TRAE Collector 架构说明
-
+<a id="trae-collector-架构说明"></a>
 > Trae IDE 采集器的内部架构、数据流与关键设计决策。面向维护 `scripts/trae-collector/` 的开发者。
 
 ## 概述

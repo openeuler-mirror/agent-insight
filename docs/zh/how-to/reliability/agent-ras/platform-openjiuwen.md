@@ -5,8 +5,8 @@ keywords: ["Agent RAS", "openjiuwen", "jiuwenclaw", "异常恢复"]
 changefreq: monthly
 ---
 
-# openjiuwen / jiuwenclaw 接入
-
+<a id="openjiuwen-/-jiuwenclaw-接入"></a>
+<a id="openjiuwen--jiuwenclaw-接入"></a>
 深挂载：L3 Rail 直连 L0，流内 abort / steer / notice；thinking-loop 含 L3 自动 Reviewer。
 
 ## 架构

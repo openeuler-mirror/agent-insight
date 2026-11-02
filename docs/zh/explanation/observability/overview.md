@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "运行观测", "链路追踪", "平台接入"]
 changefreq: monthly
 ---
 
-# 运行观测
-
+<a id="运行观测"></a>
 运行观测用于还原 Agent 在真实环境中的执行事实，并支撑问题定位、样本筛选与后续分析。其核心关注点包括：一次执行具体发生了什么、异常更可能出在哪里、哪些样本值得继续沉淀，以及推理基础设施是否参与了异常。
 
 > **Note**
@@ -70,6 +69,8 @@ Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；随 Pi 内置的只�
 升级 Pi Agent、Codex 或 Goal Plus 时，重新执行页面生成的安装命令即可。已识别的原版旧上传模块和共享安装器会自动备份并升级，包括尚无升级凭据的旧安装；已有采集数据保留。若提示 `Refusing to overwrite a different shared collector module`，更新并重新部署平台安装器后重试。仍然报错时保留原文件，交由部署者核对版本或本地修改，避免影响其他采集器。
 
 ## OpenCode Skill 调用识别
+
+OpenCode v2 采集器关闭时会停止接收新事件，等待正在进行的写入，并继续排空此前已接收的事件队列，再结束 JSONL 输出流。等待底层写回调期间入队的尾部事件也会写入。
 
 OpenCode 采集器保留原始工具参数。平台在采集入库、Trace 展示和根 Agent 的 Skill 步骤核验中同时识别 v1 的 `name` 与 v2 的 `id` 参数；`id` 仅在 `skill` / `load_skill` 调用中作为名称回退，不读取普通工具的 ID、tool call ID 或输出文本来推断 Skill。Trace 的结构预览也保留该参数，保证懒加载前后结果一致。
 
@@ -142,6 +143,10 @@ LlamaIndex、模型 SDK 和 MCP Tool 依赖继续由业务项目管理。Functio
 ## Qoder CN 产品家族接入
 
 四种产品形态使用同一套 OTLP Trace 结构，但安装入口和 spool 相互隔离。CLI、Desktop、JetBrains 和 Work 的数据统一位于 `~/.agent-insight/otel_data/qoder/<product>/<api-key-hash>/`。切换 API Key 后会自动使用新的摘要子目录，不会混用不同产品、不同账号的 pending、retry 或 uploader lock。升级前的 `qoder-{product}` 目录只作为兼容清理目标，不再写入新数据。
+
+子 Agent 的本地会话记录可通过 `SubagentStop` Hook 或父 Agent 的工具结果中的 `transcriptPath` 补充读取。平台按 Agent 归属分别合并流式消息，保留各子 Agent 的多次 LLM 调用及工具归属，子任务的提示词和最终输出不会覆盖主任务摘要。
+
+详情保留采集到的原生模型消息 ID；本地错误提示的消息 ID 不作为模型消息标识。Desktop / JetBrains 的本地消息 ID 只用于 Trace 展示，不能据此认定它与模型服务的响应 ID 相同。
 
 平台把“产品来源”和“Agent 名称”分开记录。默认命名如下：
 
@@ -243,3 +248,9 @@ WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，不提供 Hook/插件扩展
 采集覆盖 Agent（内部名 `cli` 归一化为 `WorkBuddy`）、用户输入（取自 SDK 会话日志 D3 的 `userContent`，干净、未截断、逐轮——因为 trace 的 `generation.toolInput` 会被 WorkBuddy 截断在 ~100KB，长对话当前轮提问会丢失，故不以它为主）、LLM（逐轮 input/output/reasoning/cache 精确 Token 取自 trace 文件的 `generation.toolOutput`）、真实工具调用（Read/Write/Edit/Bash 等，**保留真实文件路径**，仅脱敏密钥/token/邮箱）。通过名为 `Agent` 的工具派发的子 Agent 本质也是一次工具调用，**按普通 TOOL 节点显示**（可查看派发参数与子 Agent 返回的报告），不单独渲染成子 Agent 节点。会话级“当前上下文占用/窗口上限”来自 SQLite，与逐轮 Token 分开呈现。WorkBuddy 内部的 `terminalTitleGenerator`/`contentAnalyzer` 等工具类 trace 会被跳过。重装采集器会自动停掉旧进程再起新的（热更新）。已知边界：子 Agent 的内部执行步骤由 WorkBuddy 在独立 worker 进程运行、未落盘到可关联的本地文件，因此无法展开其内部链路。
 
 详见 [WorkBuddy Trace Collector 接入指南](../../how-to/observability/workbuddy-trace-collector.md)。
+
+## OpenCode 有效执行时延
+
+`execution-timing.ts` 从用户轮次边界和模型、工具执行区间计算 `activeDurationMs`，合并重叠区间，排除轮次间用户空闲；`elapsedDurationMs` 表示原始时间跨度。`opencode-derived-metrics.ts` 将有效耗时写入 `Execution.latency`，主/子 Trace 使用各自 Session ID 选择边界。调用树保留原始起止时间和 `durationMs` 供真实时间轴使用，前端耗时、慢节点筛选和耗时比例使用有效耗时。
+
+轻量结构与 uploader 保留工具起止时间，防止按需加载前后计时不一致。详情读取时会重算历史 OpenCode 的耗时；列表及聚合仍读取已保存的 `Execution.latency`。`repair_trace_latency.ts` 默认只预览，`--apply` 分页重算 SQLite 历史记录，仅更新耗时；事务内核对原始 Session 和记录版本，避免覆盖并发上报。`npm pack` 将该命令编译为 `scripts/repair_trace_latency.cjs`，预编译镜像中可用普通 Node 运行，无需 TypeScript 源码或 tsx。

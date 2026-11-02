@@ -89,6 +89,8 @@ opencode    # 可直接启动；桥接层会 RTLD_GLOBAL 加载 libpython，无�
 
 ### L3 语义判定（仅 inproc）
 
+判定 Agent 的模板模型为 zhipuai-coding-plan/GLM-5.2，需在本机 provider 中可用。业务默认模型与 agent.ras-judge.model 独立；已有配置须显式更新，修改后新会话生效。
+
 1. `transport: inproc`；`semantic_content_enabled` **默认 true**（显式 `false` 才关 L3）
 2. 安装脚本已写入 `agent.ras-judge`（或手动合并 [`ras_judge_agent.json`](ras_judge_agent.json)）
 3. 观察 `observe` → `skill_requests` → 独立 Judge session → `skill_result` → abort/notice/steer  

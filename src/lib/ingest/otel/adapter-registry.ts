@@ -15,6 +15,7 @@
  */
 
 import { genericOtelTraceAdapter } from './adapters/generic';
+import { difyOtelTraceAdapter } from './adapters/dify';
 import { actrailOtelTraceAdapter } from './adapters/actrail';
 import { openclawOtelTraceAdapter } from './adapters/openclaw';
 import { hermesOtelTraceAdapter } from './adapters/hermes';
@@ -45,6 +46,7 @@ const frameworkAdapters: readonly OtelTraceAdapter[] = [
   piAgentOtelTraceAdapter,
   workbuddyOtelTraceAdapter,
   mctsXgovernorOtelTraceAdapter,
+  difyOtelTraceAdapter,
 ];
 
 const adapters: readonly OtelTraceAdapter[] = [

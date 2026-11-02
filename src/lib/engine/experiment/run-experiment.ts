@@ -15,7 +15,7 @@
  */
 
 import { withFrozenCustomEvaluators, resolveFrozenCustomEvaluator } from '@/lib/evaluators/evaluator-skill-service';
-import { runConfiguredEvaluationStage, withEvaluatorExecution } from './evaluator-execution-policy';
+import { runConfiguredEvaluationStage, withEvaluatorExecution, type EvaluationAttemptDiagnostic } from './evaluator-execution-policy';
 import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError } from '@/lib/engine/evaluation/custom-evaluator-runtime';
 /**
  * 单组实验执行引擎（M5）。
@@ -511,6 +511,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   }
   const maxAttempts = executionConfig ? 1 : experimentEngineConfig.retryDelaysMs.length + 1;
   let localAttempts = 0;
+  const attemptDiagnostics: EvaluationAttemptDiagnostic[] = [];
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -544,7 +545,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
           const managesStage = isFaithfulPresetId(evaluatorId) || isRasReliabilityPresetId(evaluatorId)
             || isAgentTrajectoryPresetId(evaluatorId) || Boolean(card?.llmConfig?.skills?.length);
           return managesStage ? evaluate() : runConfiguredEvaluationStage(evaluate);
-        }, { onAttempt: (count) => { localAttempts = count; }, onCleanupUnconfirmed: markExperimentCleanupUnconfirmed,
+        }, { onAttempt: (count) => { localAttempts = count; }, onAttemptResult: (result) => { attemptDiagnostics.push(result); }, onCleanupUnconfirmed: markExperimentCleanupUnconfirmed,
           retryDelaysMs: experimentEngineConfig.retryDelaysMs })) : await withTimeout(
         withExperimentCancellation(row.experimentId, row.caseId, evaluate),
         row.evaluatorId === 'preset-agent-trace-quality'
@@ -560,7 +561,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
           score: out.score ?? null,
           pointsJson: out.points ? JSON.stringify(out.points) : null,
           evidenceJson: executionConfig
-            ? JSON.stringify({ ...out.evidence, executionConfig: { ...executionConfig, attempts: localAttempts } })
+            ? JSON.stringify({ ...out.evidence, executionConfig: { ...executionConfig, attempts: localAttempts, attemptDiagnostics } })
             : out.evidence ? JSON.stringify(out.evidence) : null,
           errorMessage: null,
           attempts: row.attempts + localAttempts,
@@ -582,7 +583,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   const failureEvidence = {
     ...(lastError instanceof CustomEvaluatorExecutionError
       ? { json: { type: 'custom-evaluator-runtime-v1', customEvaluatorRuntime: lastError.runtime } } : {}),
-    ...(executionConfig ? { executionConfig: { ...executionConfig, attempts: localAttempts },
+    ...(executionConfig ? { executionConfig: { ...executionConfig, attempts: localAttempts, attemptDiagnostics },
       errorCode: (lastError as { code?: string } | null)?.code
         ?? (lastError instanceof CustomEvaluatorExecutionError ? (lastError.cause as { code?: string } | null)?.code : undefined)
         ?? 'EVALUATION_FAILED' } : {}),
@@ -670,7 +671,11 @@ export async function settleExperimentStatus(experimentId: string): Promise<void
       emptyAfterDeletion = snapshot.caseIds.every((id: string) => removed.has(`dataset:${id}`));
     }
   }
-  const status = emptyAfterDeletion ? 'cancelled' : deriveSettledExperimentStatus(rows);
+  let status = emptyAfterDeletion ? 'cancelled' : deriveSettledExperimentStatus(rows);
+  if (status === 'done' && await prisma.experimentCase.count({
+    where: { experimentId, deletedAt: null, fiRunId: { not: null },
+      executionId: null, traceGenerationError: { not: null } },
+  }) > 0) status = 'partial';
   if (!status) return; // 尚未全部终态（单项 retry 场景下可能仍有 running）
   await prisma.experiment.updateMany({
     where: { id: experimentId, deletedAt: null, status: { not: 'cancelled' } },
@@ -891,6 +896,8 @@ export async function retryResultRow(
 
 /** 单个 case 评测读回结构（每个评估器一行）。 */
 export interface EvalCaseResultRow {
+  verdict?: string | null;
+  summary?: string | null;
   evaluatorId: string;
   status: string;
   score: number | null;
@@ -1163,7 +1170,7 @@ export async function evaluateEvalExperimentCase(
   await Promise.all(scheduledRows.map((row) => row.completion));
   const out = await prisma.experimentEvalResult.findMany({
     where: { id: { in: scheduledRows.map((row) => row.resultId) } },
-    select: { evaluatorId: true, status: true, score: true, pointsJson: true, evidenceJson: true, errorMessage: true },
+    select: { evaluatorId: true, status: true, score: true, verdict: true, summary: true, pointsJson: true, evidenceJson: true, errorMessage: true },
   });
   if (options.settleExperiment !== false) await settleExperimentStatus(experimentId);
   return out;

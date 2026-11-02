@@ -17,14 +17,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  isValidOutcomeContainmentPair,
-  parseFaultJudgeResponse,
-  skippedJudgeResult,
-} from '../src/lib/fault-injection/judge-result'
-import {
   buildFiPipelineMarkers,
   buildFiTraceMarkers,
-  mergeEvaluationMarkers,
 } from '../src/lib/fault-injection/trace-markers'
 import { buildMarkerPipeline } from '../src/lib/fault-injection/marker-pipeline'
 import { listFaultsViaPython } from '../src/lib/fault-injection/engine'
@@ -35,40 +29,6 @@ import {
 } from '../src/lib/fault-injection/workspace'
 import { composeFaultPrompt, findSubmode } from '../src/lib/fault-injection/compose-prompt'
 import { normalizeFault } from '../src/lib/fault-injection/types'
-
-describe('fault-injection judge-result', () => {
-  it('accepts valid pairs', () => {
-    assert.equal(isValidOutcomeContainmentPair('occurred', 'unresolved'), true)
-    assert.equal(isValidOutcomeContainmentPair('not_occurred', 'prevented'), true)
-    assert.equal(isValidOutcomeContainmentPair('occurred', 'prevented'), false)
-  })
-
-  it('parses judge JSON from noisy text', () => {
-    const parsed = parseFaultJudgeResponse(`Here you go:
-{"outcome":"occurred","fault_containment_status":"unresolved","reason":"agent followed bad tool output"}
-`)
-    assert.equal(parsed.outcome, 'occurred')
-    assert.equal(parsed.fault_containment_status, 'unresolved')
-  })
-
-  it('rejects invalid pairs', () => {
-    assert.throws(() =>
-      parseFaultJudgeResponse(
-        JSON.stringify({
-          outcome: 'occurred',
-          fault_containment_status: 'prevented',
-          reason: 'bad',
-        }),
-      ),
-    )
-  })
-
-  it('builds skipped result', () => {
-    const skipped = skippedJudgeResult('not activated')
-    assert.equal(skipped.outcome, 'not_occurred')
-    assert.equal(skipped.fault_containment_status, 'inconclusive')
-  })
-})
 
 describe('fault-injection markers', () => {
   it('maps FI markers with anchors and payload', () => {
@@ -111,13 +71,14 @@ describe('fault-injection markers', () => {
     assert.equal(steps[3].skipped, true)
   })
 
-  it('merges evaluation markers after judge', () => {
-    const merged = mergeEvaluationMarkers(
-      [{ id: '1', kind: 'fault_activation', label: 'Fault activation requested' }],
-      { skipped: true, reason: 'No active model configured in Insight settings.' },
-    )
-    assert.equal(merged.length, 2)
-    assert.equal((merged[1] as { kind: string }).kind, 'evaluation')
+  it('new injection pipelines have no pending Judge stage', () => {
+    const steps = buildMarkerPipeline(buildFiPipelineMarkers([
+      { kind: 'fault_activation', label: 'Fault activation requested' },
+      { kind: 'fault_activation', label: 'Fault activation started' },
+      { kind: 'fault_activation', label: 'Fault activation completed' },
+    ]))
+    assert.deepEqual(steps.map(step => step.key), ['fault_requested', 'fault_started', 'fault_completed'])
+    assert.equal(steps.every(step => step.done), true)
   })
 })
 

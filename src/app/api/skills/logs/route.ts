@@ -15,7 +15,6 @@
  */
 
 import { readRecords, type OutcomeSkillBreakdown, type RoutingSkillBreakdown } from '@/lib/storage/data-service';
-import { db } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { NextResponse } from 'next/server';
 

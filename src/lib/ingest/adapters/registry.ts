@@ -15,6 +15,7 @@
  */
 
 import { traeAdapter } from "./trae"
+import { difyAdapter } from './dify'
 import { actrailAdapter } from "./actrail"
 import { claudeAdapter } from "./claude"
 import { codeagentAdapter } from "./codeagent"
@@ -51,6 +52,7 @@ const adapters = [
   actrailAdapter,
   piAgentAdapter,
   mctsXgovernorAdapter,
+  difyAdapter,
 ] as const
 
 const fallbackAdapter: FrameworkAdapter = {

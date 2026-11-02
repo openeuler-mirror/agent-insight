@@ -4,17 +4,9 @@
   "category": "planning",
   "description": "条件满足后未恢复原始目标，继续执行已经过期的临时行为模式。",
   "tools": [
-    "goal_state_tool.py",
-    "verify_goal_recovery.py"
+    "goal_state_tool.py"
   ],
   "agent_tools": [
     "goal_state_tool.py"
-  ],
-  "authoritative_verifier": {
-    "command": [
-      "python3",
-      "{tool:verify_goal_recovery.py}"
-    ],
-    "timeout_seconds": 30
-  }
+  ]
 }

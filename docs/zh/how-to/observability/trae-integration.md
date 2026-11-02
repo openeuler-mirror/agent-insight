@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "Trae IDE", "插件安装", "运行观测"]
 changefreq: monthly
 ---
 
-# Trae IDE 接入指南
-
+<a id="trae-ide-接入指南"></a>
 Trae IDE 通过 VS Code 插件方式接入 Agent Insight 平台。插件安装后自动部署 Hook 脚本，监听 session-start、pre-tool-use、post-tool-use、prompt-submit、stop、subagent-detect 等生命周期事件，实时采集运行数据并上报。
 
 ## 前置条件

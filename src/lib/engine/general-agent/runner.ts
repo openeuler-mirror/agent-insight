@@ -30,7 +30,7 @@ import {
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
 import { ensureOpencodeServer, runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
 
-import { resolveSkill, skillToSystemPrompt } from './skill-resolver';
+import { resolveSkill } from './skill-resolver';
 import { expandHomePathsInText } from './expand-home';
 import { loadServerModelForUser } from './server-model-config';
 import {

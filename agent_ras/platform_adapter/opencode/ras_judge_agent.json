@@ -17,6 +17,6 @@
       "webfetch": "deny",
       "websearch": "deny"
     },
-    "model": "personal/Minimax-M3"
+    "model": "zhipuai-coding-plan/GLM-5.2"
   }
 }

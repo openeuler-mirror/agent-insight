@@ -73,7 +73,7 @@ export function getProxyConfig(): ProxyConfig {
             if (!pattern.startsWith('.') && (host === pattern || host.endsWith('.' + pattern))) return true;
             return false;
           });
-        } catch (e) {
+        } catch {
           // Fallback if URL parsing fails
         }
       }

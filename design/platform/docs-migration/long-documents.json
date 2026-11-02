@@ -1,11 +1,11 @@
 [
   {
     "path": "docs/zh/how-to/platform/qa.md",
-    "headings": 79
+    "headings": 78
   },
   {
     "path": "docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md",
-    "headings": 64
+    "headings": 67
   },
   {
     "path": "docs/zh/explanation/reliability/agent-fault-injection/modules/ras-fi-insight-relationship.md",
@@ -17,59 +17,55 @@
   },
   {
     "path": "docs/zh/how-to/evaluation/develop-evaluator.md",
-    "headings": 42
+    "headings": 41
   },
   {
     "path": "docs/zh/how-to/optimization/skills/skill-workflow.md",
-    "headings": 39
+    "headings": 38
   },
   {
     "path": "docs/zh/reference/platform/api-and-contracts.md",
-    "headings": 37
+    "headings": 38
   },
   {
     "path": "docs/zh/how-to/platform/faq.md",
-    "headings": 36
-  },
-  {
-    "path": "docs/zh/how-to/evaluation/datasets.md",
     "headings": 35
   },
   {
-    "path": "docs/zh/how-to/diagnosis/agent-debug/diagnosis.md",
+    "path": "docs/zh/how-to/evaluation/datasets.md",
     "headings": 34
   },
   {
-    "path": "docs/zh/how-to/evaluation/benchmarks/deploy-services.md",
-    "headings": 30
+    "path": "docs/zh/how-to/diagnosis/agent-debug/diagnosis.md",
+    "headings": 33
   },
   {
-    "path": "docs/zh/how-to/evaluation/experiments.md",
+    "path": "docs/zh/how-to/evaluation/benchmarks/deploy-services.md",
     "headings": 29
   },
   {
-    "path": "docs/zh/how-to/platform/settings/access-control.md",
-    "headings": 26
+    "path": "docs/zh/how-to/evaluation/experiments.md",
+    "headings": 28
   },
   {
     "path": "docs/zh/explanation/evaluation/skills/static-evaluator.mdx",
-    "headings": 26
+    "headings": 25
+  },
+  {
+    "path": "docs/zh/explanation/platform/data-control-flow.md",
+    "headings": 25
   },
   {
     "path": "docs/zh/how-to/observability/llamaindex-trace-collector.md",
     "headings": 25
   },
   {
+    "path": "docs/zh/how-to/platform/settings/access-control.md",
+    "headings": 25
+  },
+  {
     "path": "docs/zh/explanation/diagnosis/agent-debug/diagnosis-loop-analysis.md",
-    "headings": 25
-  },
-  {
-    "path": "docs/zh/how-to/optimization/skills/manage.md",
     "headings": 24
-  },
-  {
-    "path": "docs/zh/explanation/platform/data-control-flow.md",
-    "headings": 25
   },
   {
     "path": "docs/zh/explanation/observability/overview.md",
@@ -84,23 +80,11 @@
     "headings": 23
   },
   {
-    "path": "docs/zh/how-to/platform/settings/web-search.md",
+    "path": "docs/zh/how-to/optimization/skills/manage.md",
     "headings": 23
   },
   {
     "path": "docs/zh/explanation/platform/architecture.md",
-    "headings": 23
-  },
-  {
-    "path": "docs/zh/reference/observability/otlp-attribute-contract.md",
-    "headings": 22
-  },
-  {
-    "path": "docs/zh/how-to/evaluation/evaluators.md",
-    "headings": 23
-  },
-  {
-    "path": "docs/zh/how-to/platform/settings/model-registry.md",
     "headings": 22
   },
   {
@@ -112,11 +96,23 @@
     "headings": 22
   },
   {
-    "path": "docs/zh/how-to/reliability/agent-ras/local-install-process.md",
-    "headings": 21
+    "path": "docs/zh/how-to/evaluation/evaluators.md",
+    "headings": 22
+  },
+  {
+    "path": "docs/zh/how-to/platform/settings/web-search.md",
+    "headings": 22
   },
   {
     "path": "docs/zh/explanation/reliability/agent-ras/modules/monitor.md",
+    "headings": 21
+  },
+  {
+    "path": "docs/zh/how-to/platform/settings/model-registry.md",
+    "headings": 21
+  },
+  {
+    "path": "docs/zh/reference/observability/otlp-attribute-contract.md",
     "headings": 21
   }
 ]

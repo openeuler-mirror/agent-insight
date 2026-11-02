@@ -5,8 +5,8 @@ keywords: ["Agent Insight", "开发者指南", "文档导航", "术语表"]
 changefreq: monthly
 ---
 
-# Agent-Insight — 开发者指南
-
+<a id="agent-insight-—-开发者指南"></a>
+<a id="agent-insight--开发者指南"></a>
 > Agent-Insight（npm 包 `agent-insight`）是一个框架无关、自托管的平台，用于**观测**、**评测**和**优化** AI Agent 及其 Skill。
 > 技术栈：Next.js 16（App Router）+ React 19 + TypeScript + Prisma + Tailwind，内部 Agent 使用 LangChain/LangGraph + deepagents，trace 接入使用 OpenTelemetry。受众：开发者与 LLM 编码 Agent。
 > 本页用于查找开发者指南和常用术语；按需阅读对应页面。
@@ -69,3 +69,11 @@ changefreq: monthly
 - **智能采样**：Agent Insight 基于 Trace 生成评测数据集时使用的生产采样能力；当前策略实现版本为 `trace-coverage-v6.35`，名称不表示与其他产品采用同一算法。
 - **Collaboration trace**：独立于原生 Execution 树的跨 Session 关系覆盖层；事件正文不可变，端点到 Execution 的关联可随 Trace 到达重算。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。
+
+## HTTP 与评测契约导航
+
+- [平台 HTTP 接口与身份](../../reference/platform/http-api.md)
+- [Trace 接入](../../reference/observability/trace-ingestion.md)
+- [实验接口](../../reference/evaluation/experiments-api.md)
+- [评估器输出](../../reference/evaluation/evaluator-output.md)
+- [独立 Benchmark 协议](../../reference/evaluation/benchmark-protocol.md)

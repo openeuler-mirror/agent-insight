@@ -64,7 +64,7 @@ test('AC-002: POST /api/experiments type=llm + groups → 创建实验+分组记
   // 为两组各建一条 trace（autoPairGroups 会查候选）
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const res = await createExperiment(postReq('http://localhost/api/experiments', {
@@ -97,7 +97,7 @@ test('AC-002: POST /api/experiments type=llm + groups → 创建实验+分组记
 test('AC-008: POST /api/experiments 某组无候选 trace → 400 + 指明哪组', async (t) => {
   const agent = `cmp-api-empty-${Date.now()}`;
   // 只建 A 组 trace，B 组无
-  const e = await prisma.execution.create({ data: { agentName: agent, model: 'glm', query: 'q1' } });
+  const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'glm', query: 'q1' } });
   const res = await createExperiment(postReq('http://localhost/api/experiments', {
     user: TEST_USER, name: '空组实验', agentName: agent,
     type: 'llm', variableDimension: 'llm',
@@ -139,7 +139,7 @@ test('POST /api/experiments/[id]/run type=llm → 分流 startComparisonRun', as
   const agent = `cmp-api-run-${Date.now()}`;
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const createRes = await createExperiment(postReq('http://localhost/api/experiments', {
@@ -175,10 +175,10 @@ test('AC-017: POST /api/experiments/[id]/rescan 增量补评', async (t) => {
   setJudgeLlmCallerForTest(async () => JSON.stringify({ score: 80, points: [], evidence: { md: 'ok' } }));
   const agent = `cmp-api-rescan-${Date.now()}`;
   // 初始只有 A 组 trace
-  const e1 = await prisma.execution.create({ data: { agentName: agent, model: 'glm', query: 'q1', skill: 's', skillVersion: 1 } });
+  const e1 = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'glm', query: 'q1', skill: 's', skillVersion: 1 } });
   // create 会因 B 组无 trace 而抛 400 —— 改为先 create（用单组绕过），再手动改 type？
   // 实际流程：先建对比实验（需要两组 trace），所以这里先建两组
-  const e2 = await prisma.execution.create({ data: { agentName: agent, model: 'qwen', query: 'q1', skill: 's', skillVersion: 1 } });
+  const e2 = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'qwen', query: 'q1', skill: 's', skillVersion: 1 } });
   const createRes = await createExperiment(postReq('http://localhost/api/experiments', {
     user: TEST_USER, name: '重扫测试', agentName: agent,
     type: 'llm', variableDimension: 'llm',
@@ -192,8 +192,8 @@ test('AC-017: POST /api/experiments/[id]/rescan 增量补评', async (t) => {
   });
 
   // 补一条新 query 的 trace（两组都补）→ rescan 应发现新可比配对
-  const e3 = await prisma.execution.create({ data: { agentName: agent, model: 'glm', query: 'q2', skill: 's', skillVersion: 1 } });
-  const e4 = await prisma.execution.create({ data: { agentName: agent, model: 'qwen', query: 'q2', skill: 's', skillVersion: 1 } });
+  const e3 = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'glm', query: 'q2', skill: 's', skillVersion: 1 } });
+  const e4 = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model: 'qwen', query: 'q2', skill: 's', skillVersion: 1 } });
   t.after(async () => { await prisma.execution.deleteMany({ where: { id: { in: [e3.id, e4.id] } } }); });
 
   const rescanRes = await rescanExperiment(
@@ -210,7 +210,7 @@ test('POST /api/experiments/[id]/rescan 运行中 → 409', async (t) => {
   const agent = `cmp-api-rescan409-${Date.now()}`;
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const createRes = await createExperiment(postReq('http://localhost/api/experiments', {
@@ -250,7 +250,7 @@ test('AC-003: GET /api/experiments/[id] type=llm → 响应含 groups + pairing'
   const agent = `cmp-api-detail-${Date.now()}`;
   const execIds: string[] = [];
   for (const [, model] of [['A', 'glm'], ['B', 'qwen']] as const) {
-    const e = await prisma.execution.create({ data: { agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
+    const e = await prisma.execution.create({ data: { user: TEST_USER, agentName: agent, model, query: 'q1', skill: 's', skillVersion: 1 } });
     execIds.push(e.id);
   }
   const createRes = await createExperiment(postReq('http://localhost/api/experiments', {
@@ -321,4 +321,16 @@ test('GET /api/experiments/traces 加 model 过滤 + 返回 model/skill/skillVer
   const filteredBody = await filteredRes.json();
   assert.ok(filteredBody.items.length >= 1);
   assert.equal(filteredBody.items.every((i: { model?: string }) => i.model === 'glm-4.7'), true);
+});
+
+
+test('LLM对比候选按账号隔离，同名Agent的其他用户Trace不参与配对',async(t)=>{
+  const agent=`cmp-api-owner-${Date.now()}`;
+  const foreign=await Promise.all(['glm','qwen'].map(model=>prisma.execution.create({data:{user:TEST_USER+'-foreign',agentName:agent,model,query:'q1'}})));
+  t.after(async()=>{await prisma.execution.deleteMany({where:{id:{in:foreign.map(item=>item.id)}}});});
+  const response=await createExperiment(postReq('http://localhost/api/experiments',{
+    user:TEST_USER,name:'隔离对比',agentName:agent,type:'llm',variableDimension:'llm',
+    groups:[{key:'A',value:'glm'},{key:'B',value:'qwen'}],evaluatorIds:[CUSTOM_LLM_ID],
+  }));
+  assert.equal(response.status,400);assert.match((await response.json()).error,/无.*trace/);
 });

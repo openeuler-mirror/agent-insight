@@ -20,14 +20,10 @@
  * this test only gates Execution synthesis.
  */
 import assert from 'node:assert/strict'
-import { describe, it, after, before } from 'node:test'
+import { describe, it, after } from 'node:test'
 import { prisma } from '../src/lib/storage/prisma'
-import { ingestCollectAndJudge, newRunId, newTaskKey } from '../src/lib/fault-injection/store'
+import { persistFiCollectIngress, newRunId, newTaskKey } from '../src/lib/fault-injection/store'
 import type { CollectPayload } from '../src/lib/fault-injection/engine'
-
-before(() => {
-  process.env.FI_JUDGE_SESSION_WAIT_MS = '0'
-})
 
 describe('FI collect does not synthesize Execution', () => {
   const user = 'fi-no-exec-user'
@@ -80,9 +76,9 @@ describe('FI collect does not synthesize Execution', () => {
       markers: [],
     }
 
-    const judged = await ingestCollectAndJudge({ runId, user, payload })
-    assert.equal(judged.sessionTaskId, sessionTaskId)
-    assert.equal(judged.status, 'judge_skipped')
+    const collected = await persistFiCollectIngress({ runId, user, payload })
+    assert.equal(collected.sessionTaskId, sessionTaskId)
+    assert.equal(collected.status, 'completed')
 
     const session = await prisma.session.findUnique({ where: { taskId: sessionTaskId } })
     assert.equal(session, null)

@@ -142,7 +142,7 @@ self.register("xiaoo", XiaoOAdapter)
 
 | `kind` | 含义 |
 |--------|------|
-| `fault.activation.started` | 开始要求加载故障 skill（或等价隐藏激活） |
+| `fault.activation.started` | 开始要求加载故障 skill |
 | `fault.activation.completed` | 已成功加载一次 → collect 侧 `faultActivated=True` |
 
 `execution.jsonl` 每行一对象，常用 `type`：`assistant` / `tool` / `final_answer` / `session_error` / `platform_protection`。OpenCode 映射写 `trajectory.jsonl`（FI kinds），不依赖旧 `opencode.event` / `raw/session.json`（后者不是 Trace ID 契约）。

@@ -36,6 +36,7 @@ import { getSelectedReportingChannels } from '@/lib/ingest/framework-reporting-c
 import {
     FRAMEWORK_OPTIONS,
     resolveInstallProfile,
+    difyOtlpConfiguration,
 } from '@/lib/ingest/setup/install-profile';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
@@ -151,6 +152,10 @@ export default function AccessInstallPage() {
         `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
     ].join('\n');
     const llamaIndexSetupCode = 'import agent_insight_llamaindex; agent_insight_llamaindex.setup()';
+    const difyEnv = difyOtlpConfiguration(
+        host ? `${host}${getApiUrl('/api/ingest/otel/v1/traces')}` : '',
+        keyReady ? apiKey! : '',
+    );
 
     return (
         <>
@@ -189,6 +194,12 @@ export default function AccessInstallPage() {
                                             ? <><b style={descStrong}>LangChain / LangGraph</b> 的 Python 项目:无需安装,只改环境变量;Windows / Linux / macOS 写法相同。</>
                                             : <><b style={descStrong}>LangChain / LangGraph</b> Python projects: no install needed — just set environment variables; identical on Windows, Linux and macOS.</>}
                                     </span>
+                                </li>
+                                <li style={introItem}>
+                                    <span style={introDot} />
+                                    <a href="#dify-otlp" className="text-primary underline underline-offset-2">
+                                        {isZh ? 'Dify：原生 OTLP 配置，无需安装采集插件' : 'Dify: native OTLP configuration, no collector plugin'}
+                                    </a>
                                 </li>
                             </ul>
                         </div>
@@ -250,6 +261,38 @@ export default function AccessInstallPage() {
                                 onCopy={() => handleCopy(windowsCmd, 'windows')}
                                 locale={locale}
                             />}
+
+                            <section id="dify-otlp" aria-label={isZh ? 'Dify 原生 OTLP 接入' : 'Dify native OTLP integration'}>
+                                <div style={{ ...sectionHeading, marginTop: 8 }}>
+                                    <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                                    <h2 className="text-sm font-semibold text-foreground">{isZh ? 'Dify 原生 OTLP 接入' : 'Dify native OTLP integration'}</h2>
+                                    <span style={countPill}>OTLP</span>
+                                </div>
+                                <p className="mb-3 text-sm text-foreground-secondary">
+                                    {isZh ? '无需安装采集插件或修改 Dify 源码。将以下配置分别加入 Dify 进程环境，并重启对应服务。' : 'No collector plugin or Dify source changes required. Add each configuration to the corresponding Dify process environment and restart that service.'}
+                                </p>
+                                <CommandCard
+                                    icon={<Cloud size={14} strokeWidth={2.2} />}
+                                    label="Dify API / Worker"
+                                    hint={isZh ? 'Workflow / Chatflow 的外层节点轨迹；API 和 Worker 均需配置' : 'Outer Workflow / Chatflow node traces; configure both API and Worker'}
+                                    cmd={difyEnv.workflow}
+                                    copied={copied === 'dify-workflow'}
+                                    onCopy={() => handleCopy(difyEnv.workflow, 'dify-workflow')}
+                                    locale={locale}
+                                />
+                                <CommandCard
+                                    icon={<Cloud size={14} strokeWidth={2.2} />}
+                                    label={isZh ? 'Dify Agent 运行服务' : 'Dify Agent run service'}
+                                    hint={isZh ? 'Agent 内部模型与工具轨迹；需单独启用 trajectory 管线' : 'Internal model and tool traces; enable the separate trajectory pipeline'}
+                                    cmd={difyEnv.agent}
+                                    copied={copied === 'dify-agent'}
+                                    onCopy={() => handleCopy(difyEnv.agent, 'dify-agent')}
+                                    locale={locale}
+                                />
+                                <p className="mb-3 text-xs leading-relaxed text-foreground-muted">
+                                    {isZh ? '平台地址须可从 Dify 容器或主机访问；容器内的 localhost 指向容器自身。INCLUDE_CONTENT 会采集模型消息和工具内容，确认需要后启用。此入口仅接收 Traces；Metrics 应配置到独立 Collector。Agent v2 运行环境还须支持 Landlock。' : 'Use a platform address reachable from the Dify host or containers; localhost inside a container refers to that container. INCLUDE_CONTENT captures model messages and tool content; enable it when needed. This endpoint accepts traces only; send metrics to a separate Collector. Agent v2 also requires Landlock support.'}
+                                </p>
+                            </section>
 
                             <div style={{ ...sectionHeading, marginTop: 8 }}>
                                 <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />

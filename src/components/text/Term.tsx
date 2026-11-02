@@ -55,7 +55,6 @@ export function Term({
   if (!entry) {
     // 不抛错，便于词典缺项的渐进式补全（dev 下 warn 一次）。
     if (process.env.NODE_ENV !== 'production') {
-      // eslint-disable-next-line no-console
       console.warn(`[Term] missing glossary entry: ${id}`);
     }
     return <span className={className}>{label ?? id}</span>;

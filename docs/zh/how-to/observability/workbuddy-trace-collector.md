@@ -5,8 +5,7 @@ keywords: ["Agent Insight", "WorkBuddy", "Windows", "链路采集"]
 changefreq: monthly
 ---
 
-# WorkBuddy Trace Collector
-
+<a id="workbuddy-trace-collector"></a>
 本文是 Agent Insight 的 WorkBuddy（Windows 桌面版）采集器用户指南。
 
 WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，**不提供 Hook/插件扩展点，也没有原生 OpenTelemetry 上报**。因此采集器不嵌入 WorkBuddy，而是作为一个独立的常驻进程，**监听 WorkBuddy 落盘到 `~/.workbuddy/` 的本地数据**（trace 文件 + SQLite 会话库），转换成 Agent Insight 标准 OTLP trace 后上传。采集器与 WorkBuddy 完全解耦：任一方崩溃、重启、升级都不影响另一方。
