@@ -638,5 +638,70 @@
     "realClientE2EVerified": false,
     "businessSourceDependenciesPackagingChanged": false,
     "previousEnglishDeploymentEditsPreserved": true
+  },
+  "docsApiSubmission20261102": {
+    "date": "2026-11-02",
+    "upstreamBase": "eabde5b02f69797fe7e09b446b3f178374325d82",
+    "testedTree": "acef16f289a78c21d1f6c8beb70750f815854239 + synchronized Docker and dataset documentation fixes",
+    "filesComparedWithUpstream": 28,
+    "scope": "docs and migration tracking only",
+    "englishBodies": 17,
+    "coveredMethods": 56,
+    "independentStaticReview": "passed after clarifying PATCH omitted fields and Docker dependency validation",
+    "upstreamPreserved": "Normal merge; upstream English navigation and quick-start changes retained",
+    "dockerGuidance": "Missing packages or exact-version mismatches exit source startup; commands match between languages",
+    "contentValidation": {
+      "errors": 0,
+      "warnings": 0,
+      "byRule": {}
+    },
+    "strictPrebuild": {
+      "passed": true,
+      "strict": true,
+      "officialPrebuild": true,
+      "clientVersion": "0.0.4004",
+      "warnings": []
+    },
+    "localLinks": {
+      "method": "Markdown AST link/image targets; excludes external URLs and fragment resolution",
+      "targets": 882,
+      "missing": 0
+    },
+    "navigation": {
+      "targets": 134,
+      "missing": 0
+    },
+    "mdxExpressionIssues": 0,
+    "fixedCommitApiSourceTargetsVerified": 24,
+    "fullTests": {
+      "command": [
+        "npm",
+        "run",
+        "test"
+      ],
+      "exit": 1,
+      "seconds": 274,
+      "tests": 4642,
+      "pass": 4580,
+      "fail": 39,
+      "cancelled": 0,
+      "skipped": 23,
+      "assessment": "Full suite did not pass; failures were not individually reclassified or attributed in this documentation submission."
+    },
+    "dependencyEnvironment": {
+      "next": {
+        "declared": "16.4.3",
+        "installed": "16.1.4"
+      },
+      "eslint-config-next": {
+        "declared": "16.4.3",
+        "installed": "16.1.4"
+      }
+    },
+    "dependencyBoundary": "Installed Next.js and eslint-config-next remain 16.1.4 while upstream declares 16.4.3. This run does not validate a fresh 16.4.3 installation or application build.",
+    "browserVerified": false,
+    "realClientE2EVerified": false,
+    "realDockerDeploymentVerified": false,
+    "businessSourceDependenciesPackagingChangedComparedWithUpstream": false
   }
 }

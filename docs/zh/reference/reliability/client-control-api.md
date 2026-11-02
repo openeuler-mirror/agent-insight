@@ -3,7 +3,7 @@ title: "可靠性客户端与配置控制接口"
 description: "安装令牌、设备身份、能力上报、配置快照和控制通道的 HTTP 契约。"
 ---
 
-本页说明 `/api/reliability/` 下现有 HTTP 方法及 `/api/agent-ras/config`、`/api/agent-ras/catalog`。基线为 `ccf6bcf8`。配置保存、通知、写入和 RAS 加载是不同阶段；接口成功不能直接解释为配置已生效。安装操作见[本机安装过程](../../how-to/reliability/agent-ras/local-install-process.md)，平台身份解析见 [HTTP 接口与用户身份](../platform/http-api.md)。
+本页说明 `/api/reliability/` 下现有 HTTP 方法及 `/api/agent-ras/config`、`/api/agent-ras/catalog`。基线为 `eabde5b0`。配置保存、通知、写入和 RAS 加载是不同阶段；接口成功不能直接解释为配置已生效。安装操作见[本机安装过程](../../how-to/reliability/agent-ras/local-install-process.md)，平台身份解析见 [HTTP 接口与用户身份](../platform/http-api.md)。
 
 故障注入任务创建、停止、重跑和旧 Worker 的 `/api/fault-injection/` 接口不属于本页覆盖范围，参见[执行故障注入](../../how-to/reliability/agent-fault-injection/run-injection.md)。RAS 事件接入也不是本页的客户端控制协议。
 
@@ -135,6 +135,6 @@ WebSocket 写入成功只表示写入 socket，送达需客户端 `RECEIVED`。A
 
 设备、令牌和列表接口通常返回 `{ error: { code, message, details? } }`。客户端配置接口使用 `{ error, code, revision?, details? }`；agent-ras 接口另有 `{ error, detail/message }`，不能统一解析。未知异常常为 `500`。先判断 HTTP 状态和所属接口，再决定修参数、刷新 revision、重装设备或检查 delivery；写操作没有通用幂等键承诺。
 
-按基线核对的源码：[设备注册与身份](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/lib/reliability/client-registry.ts)、[客户端配置服务](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/lib/reliability/client-config-service.ts)、[命令总线](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/lib/reliability/command-bus.ts)、[回执处理](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/lib/reliability/command-receipt.ts)、[WebSocket 服务](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/scripts/control-server.js)、[RAS 配置模型](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/lib/ingest/ras/capability-config.ts)。本页说明代码契约，不构成真实设备/网络的端到端验收结果。
+按基线核对的源码：[设备注册与身份](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/lib/reliability/client-registry.ts)、[客户端配置服务](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/lib/reliability/client-config-service.ts)、[命令总线](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/lib/reliability/command-bus.ts)、[回执处理](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/lib/reliability/command-receipt.ts)、[WebSocket 服务](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/scripts/control-server.js)、[RAS 配置模型](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/lib/ingest/ras/capability-config.ts)。本页说明代码契约，不构成真实设备/网络的端到端验收结果。
 
 [English](../../../en/reference/reliability/client-control-api.md)

@@ -147,7 +147,7 @@
     {
       "date": "2026-11-02",
       "topic": "http-api-domains",
-      "reviewedCommit": "ccf6bcf80fe7c4831d20448b329f137ed5285edd",
+      "reviewedCommit": "eabde5b02f69797fe7e09b446b3f178374325d82",
       "bodyPairs": [
         "reference/evaluation/datasets-api.md",
         "reference/optimization/skills-api.md",
@@ -195,17 +195,32 @@
         "src/app/api/skills/[id]/versions/[version]/files/[...path]/route.ts": "961b10ec4255a2bbe36dde3cfb7429456207de3af26a579113a9e6d6014c1f05",
         "src/app/api/skills/[id]/versions/[version]/route.ts": "7df3677448ff17bccb414e41e6b56731135b5fce1e9c7d6d8cfe20498f2b4afe",
         "src/app/api/skills/[id]/versions/route.ts": "b990c2aeac9173b55e66105690a6235476512cacccf07a0d84eb98ac9d1f3f96",
-        "src/app/api/skills/automation/import/route.ts": "bfcd7b0ea6489336e781adefc32c9c4a2e8989ba03399f7d5b6cc4f00de67e16",
+        "src/app/api/skills/automation/import/route.ts": "7b2b1822f0588e7673374237d95ad55f535bb0d81114c6a00c6e2fdb2e388286",
         "src/app/api/skills/automation/push/route.ts": "ffa6b09585080ccd91643b3b9346a3833cb916d027d12e755c9abf3c0dae9bb4",
         "src/app/api/skills/by-name/[name]/versions/[version]/files/[...path]/route.ts": "c31ef8381d3ba2858eae4eb8987ec5e4f662c6a716d41537bace1162f8c56fe8",
         "src/app/api/skills/by-name/[name]/versions/route.ts": "e524ea770c3244f73037494953178ada7c20dd6af987b18d4a83e6a394c1261c",
         "src/app/api/skills/by-name/route.ts": "783a536988cb31610a804b20168e0e30db2fa0fc34cb68105d2a92bda0b3e494",
         "src/app/api/skills/logs/route.ts": "86da668b0d85ac22dca7c9c08708566055928cb08fcb256e2dc453bcd733c3a3",
         "src/app/api/skills/publish/route.ts": "34ae2a4658d9cf28311104c5d599d17ee1f154a381e097bd9c8a9c0ebfffdaa5",
-        "src/app/api/skills/route.ts": "139ecfdc9a4bbe20f9dcf2052feb546a7f13047164852c70ae06436717215152",
+        "src/app/api/skills/route.ts": "76e17e623cd20c92c6bcd5106acfec2c6e97858011f243a8c161702e2d55d299",
         "src/app/api/skills/sync-enterprise/route.ts": "95a62c0b99253551d448baa538a794fd2ada323ebbafd8e67f09950cf519b1a4",
         "src/app/api/skills/upload/route.ts": "ed488d77c75e4d9d9bcb42d3ac04a601229d7c85926caf9133e2b9511a4e0936"
-      }
+      },
+      "submissionReview": "Rechecked against upstream/master before submission; two Skill source changes only remove unused bindings."
+    },
+    {
+      "date": "2026-11-02",
+      "topic": "pre-submission-upstream-sync",
+      "reviewedCommit": "eabde5b02f69797fe7e09b446b3f178374325d82",
+      "bodyPairs": [
+        "how-to/platform/deploy-docker.md"
+      ],
+      "sourceFiles": {
+        "Dockerfile": "35146a295ac789a309ea7cdc8dd4230ac666df2f74d85342288ec32dec2c3a33",
+        "scripts/docker-entrypoint.sh": "ca9ef7565ab0aad2ff84a3b12a52cb163f635e00057f04067a0757033db33027",
+        "scripts/update-source.sh": "1ae7251b2f0c539664f6dc1c9061492e3ad3a3edffd6a91d6b4510105cea55a9"
+      },
+      "change": "Source mode now exits on missing packages or exact-version mismatches; Chinese and English instructions updated."
     }
   ]
 }

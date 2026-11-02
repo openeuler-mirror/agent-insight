@@ -27,7 +27,7 @@ description: "数据集读写、Trace 回流、历史 Trace 自动生成及取�
 | `GET /api/agent-datasets/:id` | 必填查询 `user`；可选 `view=items` 或 `view=case&caseId=<Case ID>` | 默认完整数据集；`items` 将轨迹字段转为前 600 字符并附省略号的预览；`case` 返回单个完整 Case。不要把 `items` 预览写回全量数据 |
 | `DELETE /api/agent-datasets/:id` | 必填查询 `user` | 普通数据集返回 `{ success: true }`；不存在为 `404`。Trace 生成集可能返回 `202 { deletionId, status }` 或无正文 `204`，须按下文查询删除状态 |
 
-普通创建/更新的 `name` 去首尾空白后不能为空。`fields` 的每项使用 `key/label/type`，可含 `id/path/displayType/width/format/truncate/description/system`；`key` 须匹配 `^[A-Za-z][A-Za-z0-9_]*$` 且唯一，字段名称按忽略大小写去重。类型为 `text/number/boolean/json`，省略或空字段数组使用类型默认字段。可靠性集会补回系统字段。
+普通创建/更新的 `name` 去首尾空白后不能为空。`fields` 的每项使用 `key/label/type`，可含 `id/path/displayType/width/format/truncate/description/system`；`key` 须匹配 `^[A-Za-z][A-Za-z0-9_]*$` 且唯一，字段名称按忽略大小写去重。类型为 `text/number/boolean/json`，创建时省略 `fields`，或写请求显式传空数组时，使用类型默认字段；`PATCH` 省略 `fields` 则保留原定义。可靠性集会补回系统字段。
 
 Case 使用 `id/input/expectedOutput/evaluationFocus/tags/trajectory/values`；未传 `id` 时普通样本生成 UUID。自定义字段存于 `values`，标准预期输出键为 `reference_output`。普通样本不强制有非空参考答案；可靠性样本要求非空 `input` 和已注册的 `values.fault_injection_type`，失败返回 `422` 和 `details: [{ caseId, field }]`。保存本身不触发模型提取关键观点；首次相关评测再按需计算缓存。
 
@@ -93,10 +93,10 @@ Case 使用 `id/input/expectedOutput/evaluationFocus/tags/trajectory/values`；�
 
 普通路由常用 `{ error: "说明" }`，可靠性样本校验另有 `details`；Trace 生成相关错误使用 `{ error: { code, message, details? } }`，删除中的 `details` 可含 `deletionId`。JSON 解析错误在 Trace 错误处理器中为 `400 INVALID_CONFIG`，不能假定普通分支也使用这一结构。普通参数问题为 `400`，查找失败为 `404`，存储/未知服务问题可为 `500`。
 
-本页按本地实现基线 `ccf6bcf8` 核对现有行为，不声明所有部署或后续版本均相同：
+本页按本地实现基线 `eabde5b0` 核对现有行为，不声明所有部署或后续版本均相同：
 
-- [集合读写路由](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/app/api/agent-datasets/route.ts)、[详情与删除](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/app/api/agent-datasets/%5Bid%5D/route.ts)
-- [回流路由](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/app/api/agent-datasets/backflow/route.ts)、[数据集字段与持久化](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/server/agent_datasets_storage.ts)
-- [Trace 身份与错误](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/server/trace-datasets/http.ts)、[配置契约](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/lib/trace-datasets/contracts.ts)、[生成、幂等与清理](https://gitcode.com/openeuler/agent-insight/blob/ccf6bcf80fe7c4831d20448b329f137ed5285edd/src/server/trace-datasets/manager.ts)
+- [集合读写路由](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/app/api/agent-datasets/route.ts)、[详情与删除](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/app/api/agent-datasets/%5Bid%5D/route.ts)
+- [回流路由](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/app/api/agent-datasets/backflow/route.ts)、[数据集字段与持久化](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/server/agent_datasets_storage.ts)
+- [Trace 身份与错误](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/server/trace-datasets/http.ts)、[配置契约](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/lib/trace-datasets/contracts.ts)、[生成、幂等与清理](https://gitcode.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/server/trace-datasets/manager.ts)
 
 [English](../../../en/reference/evaluation/datasets-api.md)
