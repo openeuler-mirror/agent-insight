@@ -565,13 +565,23 @@ Codex 的 CLI、IDE、Desktop rollout 和 App Server proxy 必须先归一化为
   顺序和幂等键。
 - compaction 使用 `threadOnly` batch，不能创建假 Execution，也不能增加用户 Tool/LLM/Token 或
   latency；`TraceThreadEvent` 保存 transition、interrupt、steer 和 compaction 的时间线。
+- 0.164+ 的冷 rollout 可能被压缩为 `rollout-*.jsonl.zst`，恢复会话时再 materialize 回
+  `.jsonl` 追加。reader 必须同时扫描 plain/zst，plain 优先；checkpoint 使用去掉 `.zst` 的稳定
+  文件键和 `recordsProcessed`/`mtimeMs` 游标，保证压缩、恢复、追加都不重复上报。Node < 22.15
+  不支持 zstd 时由 self-check 明确报告，不得静默丢会话。
+- 0.164+ 的 `task_complete` 字段为 `last_agent_message`（并接受 `turn_complete` 别名）；
+  0.166 新增 `dynamic_tools_updated` 等顶层类型，reader 必须跳过未知类型而不是报错。
+- rollout content/usage 必须保留 reader 解析出的 `sourceKind`，不能硬编码 Desktop；0.166 OTel
+  `exec` 的包装输出需解转义后再与 Hook `Bash` 合并，同一 execution 的 Hook 生命周期根与 OTel
+  根也需合并，避免重复工具/USER 节点。
 
 实现入口：`scripts/agent-trace-collectors/codex/rollout-reader.cjs`、
 `scripts/agent-trace-collectors/codex/lifecycle-reducer.cjs`、
 `scripts/agent-trace-collectors/codex/app-server-proxy.cjs`、
 `src/lib/ingest/otel/adapters/codex.ts`、`src/lib/storage/data-service.ts` 和
 `src/components/observe/CodexThreadTimeline.tsx`。回归入口为
-`test/codex-desktop-rollout.test.ts`。
+`test/codex-desktop-rollout.test.ts`、`test/codex-rollout-zstd.test.ts` 和
+`test/l1-replay-codex-rollout.test.ts`。
 
 ## OpenCode 1.x / 2.x 采集兼容
 

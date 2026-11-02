@@ -1181,3 +1181,23 @@ Execution 的 steer phase。
 2. 在 openEuler 24.03 LTS SP4 上完成 Agent Insight 服务端与 Windows collector 的非 loopback
    跨机采集、上传和数据库证据；
 3. 将最终候选与社区 PR #233/#239 的实际合入状态重新对齐，再按 GitCode 写前授权流程执行社区写入。
+
+### 35.4 0.166 压缩 rollout 与来源/根节点修正（2026-11-02）
+
+Codex 0.164+ 的后台压缩会把 7 天未修改的冷 rollout 写成 `rollout-*.jsonl.zst`，恢复会话时
+再 materialize 回 `.jsonl` 追加；0.166 仍保持该行为，并新增 `dynamic_tools_updated` 顶层记录。
+本轮在原有契约上补三条：
+
+1. **压缩会话**：reader 同时扫描 `.jsonl` 与 `.jsonl.zst`，plain 优先；checkpoint 使用去掉
+   `.zst` 的稳定文件键，记录 `recordsProcessed`/`lastOrdinal`/`mtimeMs`/`size`。压缩、恢复、
+   追加三种迁移都按记录数续读，不重复上报；旧 checkpoint 只有字节偏移时保守跳过压缩文件，
+   materialize 后沿用旧偏移。Node < 22.15 时不崩溃，self-check 报 `zstdSupported=false`。
+2. **CLI 来源**：rollout content/usage 接受 reader 的 `sourceKind`，不得硬编码
+   `Codex Desktop`；0.166 CLI 会话因此保持 `sourceKind=cli`。
+3. **根与工具合并**：0.166 OTel `exec` 把嵌套结果包成
+   `{"output":"<escaped>"}`，adapter 先解转义再与 Hook `Bash` 做输出包含比较；Hook
+   `execution_snapshot` 根与 OTel `agent.codex` 根按 `codex.execution.id` 合并，保留 OTel
+   根的 span/输出并合并生命周期状态，消除重复 USER 节点。
+
+回归入口：`test/codex-rollout-zstd.test.ts`、`test/l1-replay-codex-rollout.test.ts`、
+`test/codex-desktop-0164-rollout.test.ts` 与 `test/codex-adapter.test.ts`。
