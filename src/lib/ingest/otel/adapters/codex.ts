@@ -388,6 +388,25 @@ function normalizedToolOutput(event: OtelTraceEvent): string {
   return (eventOutput(event) || '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Codex 0.166 的 OTel `exec` 工具会把嵌套工具结果再包一层 JSON：
+ * `Script completed ... Output: {"output":"<escaped inner result>"}`。
+ * Hook 侧拿到的是内层原始输出；直接做字符串包含会因转义差异漏合并。
+ */
+function comparableToolOutput(event: OtelTraceEvent): string {
+  const raw = normalizedToolOutput(event);
+  if (!raw) return '';
+  const match = /"output"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw);
+  if (match) {
+    try {
+      return (JSON.parse(`"${match[1]}"`) as string).replace(/\s+/g, ' ').trim();
+    } catch {
+      // Fall through to the raw wrapper when the payload is not valid JSON.
+    }
+  }
+  return raw;
+}
+
 function shellOutputPayload(event: OtelTraceEvent): string {
   const output = eventOutput(event) || '';
   const matches = [...output.matchAll(/(?:^|\r?\n)Output:\s*(?:\r?\n)?/gi)];
@@ -508,8 +527,8 @@ function isHookOtelToolPair(left: OtelTraceEvent, right: OtelTraceEvent): boolea
 
   if (!toolIntervalsOverlap(left, right)) return false;
 
-  const leftOutput = normalizedToolOutput(left);
-  const rightOutput = normalizedToolOutput(right);
+  const leftOutput = comparableToolOutput(left);
+  const rightOutput = comparableToolOutput(right);
   if (leftOutput && rightOutput &&
     (leftOutput.includes(rightOutput) || rightOutput.includes(leftOutput))) return true;
 
@@ -617,6 +636,70 @@ function preferRolloutUsage(events: OtelTraceEvent[]): OtelTraceEvent[] {
   });
 }
 
+/**
+ * Hook 生命周期快照与 OTel `agent.codex` 根描述同一个 execution，但 spanId 不同。
+ * 两条根同时存在会在 UI 里生成重复的 USER 节点。保留 OTel/agent 根（它带
+ * 输出与子 span 归属），把生命周期快照的输入历史/状态合并进来，其余根丢弃。
+ */
+function mergeExecutionRootSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  const groups = new Map<string, OtelTraceEvent[]>();
+  for (const event of events) {
+    if (semanticKind(event) !== 'agent' || event.parentSpanId) continue;
+    const execution = content(attrs(event)['codex.execution.id']) || event.sessionId || '';
+    if (!execution) continue;
+    const isLifecycle = attrs(event)['agent.insight.lifecycle'] === 'execution';
+    const isRoot = attrs(event)['codex.agent.id'] === 'root';
+    if (!isLifecycle && !isRoot) continue;
+    const group = groups.get(execution) || [];
+    group.push(event);
+    groups.set(execution, group);
+  }
+
+  const replacements = new Map<OtelTraceEvent, OtelTraceEvent>();
+  const removed = new Set<OtelTraceEvent>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const primary = group.find((event) =>
+      attrs(event)['codex.agent.id'] === 'root' && attrs(event)['agent.insight.lifecycle'] !== 'execution')
+      || group.find((event) => attrs(event)['agent.insight.lifecycle'] !== 'execution')
+      || group[0];
+    if (!primary) continue;
+    const lifecycle = group.filter((event) => attrs(event)['agent.insight.lifecycle'] === 'execution');
+    const attributes = { ...attrs(primary) };
+    for (const snapshot of lifecycle) {
+      for (const key of [
+        'codex.input.history',
+        'codex.input.phases',
+        'codex.execution.status',
+        'codex.source.thread_id',
+        'codex.source.execution_id',
+      ]) {
+        if (attributes[key] === undefined && attrs(snapshot)[key] !== undefined) {
+          attributes[key] = attrs(snapshot)[key];
+        }
+      }
+    }
+    const startedAt = Math.min(...group.map((event) => event.startTimeMs || Infinity));
+    const endedAt = Math.max(...group.map((event) => eventEndMs(event)));
+    const merged = {
+      ...primary,
+      ...(eventInput(primary) ? {} : { input: group.map(eventInput).find(Boolean) }),
+      ...(eventOutput(primary) ? {} : { output: group.map(eventOutput).find(Boolean) }),
+      startTimeMs: Number.isFinite(startedAt) ? startedAt : primary.startTimeMs,
+      attributes,
+    } as OtelTraceEvent;
+    (merged as AnyObj).endTimeMs = endedAt;
+    replacements.set(primary, merged);
+    for (const event of group) if (event !== primary) removed.add(event);
+  }
+
+  return events.flatMap((event) => {
+    const merged = replacements.get(event);
+    if (merged) return [merged];
+    return removed.has(event) ? [] : [event];
+  });
+}
+
 export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[] {
   const latest = new Map<string, OtelTraceEvent>();
   const withoutSpan: OtelTraceEvent[] = [];
@@ -628,7 +711,9 @@ export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTrac
     const existing = latest.get(event.spanId);
     if (!existing || eventEndMs(event) >= eventEndMs(existing)) latest.set(event.spanId, event);
   }
-  const snapshots = preferRolloutUsage(mergeDirectCallIdTools([...latest.values(), ...withoutSpan]));
+  const snapshots = mergeExecutionRootSnapshots(
+    preferRolloutUsage(mergeDirectCallIdTools([...latest.values(), ...withoutSpan])),
+  );
   const hookTools = snapshots.filter((event) =>
     hasToolSource(event, 'hook') &&
     ['tool', 'mcp'].includes(semanticKind(event)));
