@@ -19,9 +19,109 @@
 
 const fsp = require("node:fs/promises");
 const path = require("node:path");
+const zlib = require("node:zlib");
 
 const { readJsonlBatch, readCheckpoint, atomicWriteJson, redactValue, stableEventId } = require("../shared/trace-transport.cjs");
 const { classifyCodexSource } = require("./source-classifier.cjs");
+
+const COMPRESSED_ROLLOUT_SUFFIX = ".zst";
+const ROLLOUT_FILE_PATTERN = /^rollout-.*\.jsonl(?:\.zst)?$/i;
+const DEFAULT_SCAN_BUDGET_MS = 5000;
+const MAX_COMPRESSED_ROLLOUT_BYTES = 256 * 1024 * 1024;
+
+function isCompressedRolloutPath(filePath) {
+  return /\.jsonl\.zst$/i.test(filePath);
+}
+
+function plainRolloutPath(filePath) {
+  return isCompressedRolloutPath(filePath)
+    ? filePath.slice(0, -COMPRESSED_ROLLOUT_SUFFIX.length)
+    : filePath;
+}
+
+/** Codex 压缩前后保持同一逻辑会话键，避免 .jsonl -> .jsonl.zst 被当成新文件整段重放。 */
+function rolloutStateKey(sessionsDir, filePath) {
+  return path.relative(sessionsDir, plainRolloutPath(filePath)).replaceAll(path.sep, "/");
+}
+
+function zstdSupported() {
+  return typeof zlib.zstdDecompressSync === "function" || typeof zlib.zstdDecompress === "function";
+}
+
+async function decompressZstd(buffer) {
+  if (typeof zlib.zstdDecompressSync === "function") {
+    return zlib.zstdDecompressSync(buffer);
+  }
+  if (typeof zlib.zstdDecompress === "function") {
+    return new Promise((resolve, reject) => {
+      zlib.zstdDecompress(buffer, (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      });
+    });
+  }
+  throw new Error("Codex compressed rollout requires Node.js >= 22.15 (zlib zstd support)");
+}
+
+async function readCompressedRolloutRecords(filePath) {
+  const stat = await fsp.stat(filePath);
+  if (stat.size > MAX_COMPRESSED_ROLLOUT_BYTES) {
+    throw new Error(`Compressed rollout is too large to read: ${stat.size} bytes`);
+  }
+  const compressed = await fsp.readFile(filePath);
+  const decompressed = await decompressZstd(compressed);
+  const lines = decompressed.toString("utf8").split(/\r?\n/);
+  const records = [];
+  let invalid = 0;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line));
+    } catch {
+      invalid += 1;
+    }
+  }
+  return { records, invalid, compressedBytes: stat.size };
+}
+
+function lastOrdinalOf(records) {
+  let result;
+  for (const record of records) {
+    const ordinal = Number(record?.ordinal);
+    if (Number.isFinite(ordinal)) result = ordinal;
+  }
+  return result;
+}
+
+/** 旧 checkpoint 只有字节偏移；压缩后按记录数续读前先把偏移换算成记录数。 */
+async function countRecordsBeforeOffset(filePath, offset) {
+  let current = 0;
+  let count = 0;
+  while (current < offset) {
+    const batch = await readJsonlBatch(filePath, current, { maxEvents: 1000, maxBytes: 4 * 1024 * 1024 });
+    if (batch.events.length === 0) break;
+    count += batch.events.length;
+    current = batch.nextOffset;
+    if (batch.tornTailBytes > 0) break;
+  }
+  return count;
+}
+
+async function offsetAfterRecords(filePath, count) {
+  let offset = 0;
+  let seen = 0;
+  while (seen < count) {
+    const batch = await readJsonlBatch(filePath, offset, {
+      maxEvents: Math.min(1000, count - seen),
+      maxBytes: 4 * 1024 * 1024,
+    });
+    if (batch.events.length === 0) break;
+    seen += batch.events.length;
+    offset = batch.nextOffset;
+    if (batch.tornTailBytes > 0) break;
+  }
+  return offset;
+}
 
 function text(value) {
   if (value === undefined || value === null) return undefined;
@@ -359,14 +459,15 @@ function recordsToLifecycleEvents(record, context) {
       payload: { reason: payload.reason || "interrupted" },
     })], context: { ...context, activeExecutionId: id } };
   }
-  if (type === "task_complete" || type === "taskComplete") {
+  if (type === "task_complete" || type === "taskComplete" || type === "turn_complete" || type === "turnComplete") {
     const id = taskIdOf(payload) || context.activeExecutionId;
     if (!id || !context.activeTaskHadUserInput) return { events: [], context: { ...context, activeExecutionId: undefined } };
     const status = /fail|error/i.test(String(payload.status || payload.outcome || "")) ? "failed" : "completed";
     return { events: [sourceEvent({ ...base, sourceExecutionId: id }, "execution_completed", record, {
       sourceExecutionId: id,
       status,
-      payload: { status, output: payload.last_assistant_message || payload.output || payload.result },
+      // 0.164+ 的真实字段是 last_agent_message；旧字段保留兼容。
+      payload: { status, output: payload.last_agent_message || payload.last_assistant_message || payload.output || payload.result },
     })], context: { ...context, activeExecutionId: undefined, activeTaskHadUserInput: false } };
   }
   if (type === "compacted") {
@@ -388,7 +489,7 @@ function recordsToLifecycleEvents(record, context) {
 }
 
 async function listRolloutFiles(sessionsDir) {
-  const result = [];
+  const candidates = new Map();
   async function walk(directory) {
     const entries = await fsp.readdir(directory, { withFileTypes: true }).catch((error) => {
       if (error?.code === "ENOENT") return [];
@@ -397,11 +498,21 @@ async function listRolloutFiles(sessionsDir) {
     for (const entry of entries) {
       const candidate = path.join(directory, entry.name);
       if (entry.isDirectory()) await walk(candidate);
-      else if (entry.isFile() && /^rollout-.*\.jsonl$/i.test(entry.name)) result.push(candidate);
+      else if (entry.isFile() && ROLLOUT_FILE_PATTERN.test(entry.name)) {
+        const plain = plainRolloutPath(candidate);
+        const current = candidates.get(plain) || {};
+        if (isCompressedRolloutPath(candidate)) current.compressed = candidate;
+        else current.plain = candidate;
+        candidates.set(plain, current);
+      }
     }
   }
   await walk(sessionsDir);
-  return result.sort();
+  // Codex 在压缩/恢复过渡期可能同时存在两种表示；plain 优先，避免重复消费。
+  return [...candidates.values()]
+    .map((entry) => entry.plain || entry.compressed)
+    .filter(Boolean)
+    .sort();
 }
 
 function defaultSessionsDir(homeDir) {
@@ -419,7 +530,15 @@ function createDesktopRolloutReader(options = {}) {
   // 而是首次启用时把边界持久化进 checkpoint（state.backfillBoundaryMs），
   // 此后沿用——旧配置升级也不会回灌启用前的历史。
   const explicitBackfillAfterMs = Number(options.backfillAfterMs) > 0 ? Number(options.backfillAfterMs) : undefined;
-  const state = { version: 1, files: {}, unknownRecords: 0 };
+  const state = {
+    version: 1,
+    files: {},
+    unknownRecords: 0,
+    zstdUnavailable: false,
+    zstdSkipped: 0,
+    compressedErrors: 0,
+    legacyCompressedSkipped: 0,
+  };
 
   function rolloutStartMs(filePath) {
     const match = /rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(path.basename(filePath));
@@ -445,6 +564,7 @@ function createDesktopRolloutReader(options = {}) {
   // 446-7：跳过历史回填文件时仍读取文件头部的 session_meta，保留 thread 归属
   // 与分类——用户恢复旧会话继续对话时，EOF 之后的新增记录才能正确归属。
   async function readSkippedMetadata(filePath) {
+    if (isCompressedRolloutPath(filePath)) return {};
     const batch = await readJsonlBatch(filePath, 0, { maxEvents: 100, maxBytes: 512 * 1024 })
       .catch(() => ({ events: [] }));
     for (const record of batch.events || []) {
@@ -460,27 +580,69 @@ function createDesktopRolloutReader(options = {}) {
 
   async function scanFile(filePath) {
     if (!enabled) return { events: 0, skipped: true };
-    const relative = path.relative(sessionsDir, filePath).replaceAll(path.sep, "/");
+    const relative = rolloutStateKey(sessionsDir, filePath);
+    const compressed = isCompressedRolloutPath(filePath);
+    const stat = await fsp.stat(filePath).catch(() => undefined);
+    if (!stat) return { events: 0, skipped: true };
     const cutoff = backfillCutoffMs();
+    const saved = state.files[relative] || {};
+
     if (cutoff !== undefined && !state.files[relative]) {
       const startedAt = rolloutStartMs(filePath);
       if (startedAt !== undefined && startedAt < cutoff) {
-        const stat = await fsp.stat(filePath).catch(() => undefined);
-        const metadata = await readSkippedMetadata(filePath);
-        state.files[relative] = {
-          bytes: stat?.size || 0,
-          skippedBackfill: true,
-          sourceThreadId: metadata.sourceThreadId,
-          sourceKind: metadata.sourceKind,
-        };
+        if (compressed) {
+          // 不为跳过的历史文件解压全文；恢复会话时 Codex 会 materialize 回 .jsonl，
+          // 届时有 suppression 路径只上报 cutoff 之后的新记录。
+          state.files[relative] = {
+            bytes: stat.size,
+            recordsProcessed: undefined,
+            compressed: true,
+            skippedBackfill: true,
+            zstMtimeMs: stat.mtimeMs,
+            zstSize: stat.size,
+          };
+        } else {
+          const metadata = await readSkippedMetadata(filePath);
+          state.files[relative] = {
+            bytes: stat.size,
+            recordsProcessed: undefined,
+            compressed: false,
+            skippedBackfill: true,
+            sourceThreadId: metadata.sourceThreadId,
+            sourceKind: metadata.sourceKind,
+          };
+        }
         // 446-7：跳过决策必须立即持久化，否则只有被跳过文件时 checkpoint 不落盘，
         // 下一次扫描无法恢复归属元数据。
         await atomicWriteJson(checkpointPath, state);
         return { events: 0, skipped: true, backfilled: false };
       }
     }
-    const cursor = Number(state.files[relative]?.bytes) || 0;
-    const saved = state.files[relative] || {};
+
+    if (compressed && saved.compressed === true &&
+        saved.zstMtimeMs === stat.mtimeMs && saved.zstSize === stat.size) {
+      return { events: 0, skipped: true, unchanged: true };
+    }
+
+    // 旧 checkpoint 只有字节偏移、没有记录数；压缩后无法安全换算，先保守跳过。
+    // 若之后 materialize 回 .jsonl，旧字节偏移仍然有效，可继续续读。
+    if (compressed && Number(saved.bytes) > 0 && !Number.isFinite(saved.recordsProcessed)) {
+      if (saved.skippedLegacyCompressed === true &&
+          saved.zstMtimeMs === stat.mtimeMs && saved.zstSize === stat.size) {
+        return { events: 0, skipped: true, legacyCompressed: true };
+      }
+      state.files[relative] = {
+        ...saved,
+        compressed: true,
+        skippedLegacyCompressed: true,
+        zstMtimeMs: stat.mtimeMs,
+        zstSize: stat.size,
+      };
+      state.legacyCompressedSkipped = (state.legacyCompressedSkipped || 0) + 1;
+      await atomicWriteJson(checkpointPath, state);
+      return { events: 0, skipped: true, legacyCompressed: true };
+    }
+
     const context = {
       sourceThreadId: saved.sourceThreadId,
       sourceKind: saved.sourceKind || "unknown",
@@ -490,8 +652,75 @@ function createDesktopRolloutReader(options = {}) {
       unknownRecords: 0,
       toolNames: new Map(saved.toolNames || []),
     };
-    let offset = cursor;
+    let recordsProcessed = Number.isFinite(saved.recordsProcessed) ? saved.recordsProcessed : 0;
+    let offset = Number(saved.bytes) || 0;
+    let suppressBeforeMs;
     let emitted = 0;
+
+    if (!compressed && saved.compressed === true) {
+      // Codex 恢复压缩会话时会 materialize 回 .jsonl 再追加。
+      if (saved.skippedBackfill === true) {
+        offset = 0;
+        suppressBeforeMs = cutoff;
+        recordsProcessed = 0;
+      } else if (recordsProcessed > 0) {
+        offset = await offsetAfterRecords(filePath, recordsProcessed);
+      }
+    } else if (!compressed && Number(saved.bytes) > 0 && !Number.isFinite(saved.recordsProcessed)) {
+      // 旧 plain checkpoint：把字节偏移换算成记录数，供后续压缩时续读。
+      recordsProcessed = await countRecordsBeforeOffset(filePath, offset).catch(() => 0);
+    }
+
+    if (compressed) {
+      let decompressed;
+      try {
+        decompressed = await readCompressedRolloutRecords(filePath);
+      } catch (error) {
+        if (!zstdSupported()) {
+          state.zstdUnavailable = true;
+          state.zstdSkipped = (state.zstdSkipped || 0) + 1;
+        } else {
+          state.compressedErrors = (state.compressedErrors || 0) + 1;
+        }
+        console.warn(`[codex-rollout] Cannot read compressed rollout ${relative}: ${error.message}`);
+        await atomicWriteJson(checkpointPath, state);
+        return { events: 0, skipped: true, compressed: true, error: error.message };
+      }
+      const total = decompressed.records.length;
+      const start = Math.min(recordsProcessed, total);
+      let nextContext = context;
+      const events = [];
+      for (const record of decompressed.records.slice(start)) {
+        const lifecycle = recordsToLifecycleEvents(record, nextContext);
+        nextContext = lifecycle.context;
+        events.push(...lifecycle.events);
+        const content = extractRolloutContentEvents(record, nextContext);
+        nextContext = content.context;
+        events.push(...content.events);
+      }
+      if (events.length > 0) {
+        await onEvents(events, { filePath, relativePath: relative });
+        emitted += events.length;
+      }
+      state.files[relative] = {
+        bytes: 0,
+        recordsProcessed: total,
+        lastOrdinal: lastOrdinalOf(decompressed.records),
+        compressed: true,
+        zstMtimeMs: stat.mtimeMs,
+        zstSize: stat.size,
+        sourceThreadId: nextContext.sourceThreadId,
+        sourceKind: nextContext.sourceKind,
+        activeExecutionId: nextContext.activeExecutionId,
+        activeTaskHadUserInput: nextContext.activeTaskHadUserInput === true,
+        taskStartedAt: nextContext.taskStartedAt,
+        toolNames: [...nextContext.toolNames.entries()].slice(-500),
+      };
+      state.unknownRecords += nextContext.unknownRecords - context.unknownRecords;
+      await atomicWriteJson(checkpointPath, state);
+      return { events: emitted, offset: 0, compressed: true, recordsProcessed: total };
+    }
+
     while (true) {
       const batch = await readJsonlBatch(filePath, offset, { maxEvents: 100, maxBytes: 512 * 1024 });
       if (batch.events.length === 0) break;
@@ -507,14 +736,22 @@ function createDesktopRolloutReader(options = {}) {
         nextContext = content.context;
         events.push(...content.events);
       }
-      if (events.length > 0) {
-        await onEvents(events, { filePath, relativePath: relative });
-        emitted += events.length;
+      const visible = suppressBeforeMs === undefined
+        ? events
+        : events.filter((event) => !(Number(event.timestampMs) < suppressBeforeMs));
+      if (visible.length > 0) {
+        await onEvents(visible, { filePath, relativePath: relative });
+        emitted += visible.length;
       }
       offset = batch.nextOffset;
+      recordsProcessed += batch.events.length;
       state.files[relative] = {
         bytes: offset,
-        sourceThreadId: nextContext.sourceThreadId,
+        recordsProcessed,
+        ...(lastOrdinalOf(batch.events) !== undefined ? { lastOrdinal: lastOrdinalOf(batch.events) } : {}),
+        compressed: false,
+        skippedBackfill: suppressBeforeMs !== undefined ? false : saved.skippedBackfill === true,
+        sourceThreadId: nextContext.sourceThreadId || saved.sourceThreadId,
         sourceKind: nextContext.sourceKind,
         activeExecutionId: nextContext.activeExecutionId,
         activeTaskHadUserInput: nextContext.activeTaskHadUserInput === true,
@@ -526,16 +763,37 @@ function createDesktopRolloutReader(options = {}) {
       await atomicWriteJson(checkpointPath, state);
       if (batch.tornTailBytes > 0) break;
     }
-    return { events: emitted, offset, unknownRecords: state.unknownRecords };
+    return { events: emitted, offset, compressed: false, recordsProcessed };
   }
 
   async function scan() {
     if (!enabled) return { files: 0, events: 0, skipped: true };
     await load();
     const files = await listRolloutFiles(sessionsDir);
+    const startedAt = Date.now();
+    const budgetMs = Number(options.scanBudgetMs) > 0 ? Number(options.scanBudgetMs) : DEFAULT_SCAN_BUDGET_MS;
     let events = 0;
-    for (const filePath of files) events += (await scanFile(filePath)).events;
-    return { files: files.length, events, unknownRecords: state.unknownRecords };
+    let scanned = 0;
+    let pending = 0;
+    for (const filePath of files) {
+      if (Date.now() - startedAt >= budgetMs) {
+        pending = files.length - scanned;
+        break;
+      }
+      events += (await scanFile(filePath)).events;
+      scanned += 1;
+    }
+    return {
+      files: files.length,
+      scanned,
+      pending,
+      events,
+      unknownRecords: state.unknownRecords,
+      zstdUnavailable: state.zstdUnavailable === true,
+      zstdSkipped: state.zstdSkipped || 0,
+      compressedErrors: state.compressedErrors || 0,
+      legacyCompressedSkipped: state.legacyCompressedSkipped || 0,
+    };
   }
 
   return { enabled, sessionsDir, checkpointPath, load, scan, scanFile, state, listRolloutFiles: () => listRolloutFiles(sessionsDir) };

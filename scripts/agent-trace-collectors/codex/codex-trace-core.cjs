@@ -27,7 +27,7 @@ const {
   stableTraceId,
 } = require("../shared/trace-transport.cjs");
 const { createCodexLifecycleReducer } = require("./lifecycle-reducer.cjs");
-const { classifyCodexSource } = require("./source-classifier.cjs");
+const { classifyCodexSource, isSourceKind } = require("./source-classifier.cjs");
 
 const HOOK_EVENTS = Object.freeze([
   "SessionStart",
@@ -329,6 +329,7 @@ class CodexTraceCore {
 
   ensureSession(sessionId, metadata = {}) {
     let session = this.sessions.get(sessionId);
+    const directSourceKind = isSourceKind(metadata.sourceKind) ? metadata.sourceKind : undefined;
     if (!session) {
       const startedAt = metadata.timestampMs || this.now();
       session = {
@@ -342,7 +343,7 @@ class CodexTraceCore {
         originator: metadata.originator,
         terminalType: metadata.terminalType,
         serviceName: metadata.serviceName,
-        sourceKind: classifyCodexSource(metadata).sourceKind,
+        sourceKind: directSourceKind || classifyCodexSource(metadata).sourceKind,
         input: undefined,
         output: undefined,
         closed: false,
@@ -364,14 +365,18 @@ class CodexTraceCore {
     session.originator = metadata.originator || session.originator;
     session.terminalType = metadata.terminalType || session.terminalType;
     session.serviceName = metadata.serviceName || session.serviceName;
-    const classified = classifyCodexSource({
-      ...metadata,
-      originator: metadata.originator || session.originator,
-      terminalType: metadata.terminalType || session.terminalType,
-      serviceName: metadata.serviceName || session.serviceName,
-    });
-    if (classified.sourceKind !== "unknown" || !session.sourceKind) {
-      session.sourceKind = classified.sourceKind;
+    if (directSourceKind) {
+      session.sourceKind = directSourceKind;
+    } else {
+      const classified = classifyCodexSource({
+        ...metadata,
+        originator: metadata.originator || session.originator,
+        terminalType: metadata.terminalType || session.terminalType,
+        serviceName: metadata.serviceName || session.serviceName,
+      });
+      if (classified.sourceKind !== "unknown" || !session.sourceKind) {
+        session.sourceKind = classified.sourceKind;
+      }
     }
     session.updatedAt = metadata.timestampMs || this.now();
     return session;
@@ -1259,7 +1264,9 @@ class CodexTraceCore {
     const timestampMs = asNumber(event.timestampMs) || this.now();
     const session = this.ensureSession(threadId, {
       timestampMs,
-      originator: "Codex Desktop",
+      // Rollout 文件既可能来自 Desktop，也可能来自 CLI（同一条 ~/.codex/sessions
+      // 记录）；来源以 reader 的 sourceKind 为准，不能硬编码 Desktop。
+      sourceKind: event.sourceKind,
     });
     // rollout 的 turn id 与 OTLP 同源（实测逐位一致）；有直接 id 即直接归属，
     // 不走 resolveOtelTurn 的 pending 降级。命中的 pending 伪任务同时被认领。
@@ -1336,7 +1343,7 @@ class CodexTraceCore {
     const timestampMs = asNumber(event.timestampMs) || this.now();
     const session = this.ensureSession(threadId, {
       timestampMs,
-      originator: "Codex Desktop",
+      sourceKind: event.sourceKind,
     });
     const turn = this.turnFor(session, turnId, Boolean(turnId), { timestampMs });
     if (!turn) return { attributed: false };

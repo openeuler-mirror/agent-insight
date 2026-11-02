@@ -26,6 +26,7 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
 const {
+  COLLECTOR_VERSION,
   atomicWriteFile,
   installHooksDocument,
   installOtelBlock,
@@ -183,12 +184,15 @@ function startRelay(collectorDir, configPath) {
 
 async function installEditorExtensions(collectorDir) {
   const { buildVsix } = require("./build-vsix.cjs");
+  const extensionManifest = JSON.parse(
+    await fsp.readFile(path.join(collectorDir, "vscode-extension", "package.json"), "utf8"),
+  );
   const vsix = await buildVsix({
     sourceDir: path.join(collectorDir, "vscode-extension"),
     outputPath: path.join(
       collectorDir,
       "out",
-      "agent-insight-codex-trace-0.1.0.vsix",
+      `agent-insight-codex-trace-${extensionManifest.version}.vsix`,
     ),
   });
   const editors = [];
@@ -257,6 +261,7 @@ async function install(options) {
 
   const collectorConfig = {
     version: 1,
+    collectorVersion: COLLECTOR_VERSION,
     enabled: true,
     apiKey,
     endpoint: `${baseUrl}/api/ingest/otel/v1/traces`,
@@ -279,6 +284,7 @@ async function install(options) {
   const handlerSource = await fsp.readFile(handlerPath);
   const state = {
     version: 1,
+    collectorVersion: COLLECTOR_VERSION,
     installedAt: new Date().toISOString(),
     hooksPath,
     hooksFileExisted: priorState?.hooksFileExisted ?? hooksExisted,
@@ -299,6 +305,7 @@ async function install(options) {
   if (options.startRelay) startRelay(collectorDir, configPath);
   return {
     collectorDir,
+    collectorVersion: COLLECTOR_VERSION,
     hooksAdded: hooksMutation.added,
     otelConfigured: otelMutation.changed || !otelMutation.conflict,
     otelConflict: otelMutation.conflict ? otelMutation.reason : undefined,
@@ -311,7 +318,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const result = await install(options);
   process.stdout.write([
-    `Agent Insight Codex collector installed at ${result.collectorDir}`,
+    `Agent Insight Codex collector ${result.collectorVersion} installed at ${result.collectorDir}`,
     `Hooks added: ${result.hooksAdded}`,
     result.otelConflict
       ? `OTel configuration conflict: ${result.otelConflict}`
