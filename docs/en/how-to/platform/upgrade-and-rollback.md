@@ -24,6 +24,14 @@ Existing `.env` files are not automatically filled with every new template setti
 
 Replace angle-bracket placeholders before executing. Avoid changing deployment method or database type as part of the same upgrade. See the [repository README](https://gitcode.com/openeuler/agent-insight/blob/master/README.md) for source builds and [Docker image publishing, Chinese](../../../zh/how-to/platform/release-docker-image.md) for image materials.
 
+## Next.js security upgrade
+
+The dependency baseline is `next` / `eslint-config-next` 16.4.3. Commit the updated `package-lock.json`, install from it in a clean build directory, and regenerate standalone output, static assets, and the release package. Do not reuse old `.next` output. Verify that the final artifact loads Next.js 16.4.3 and `sharp` 0.35.5 or later, with matching native binaries for the target platform.
+
+Docker source mode uses dependencies baked into the image. Rebuild the image after changing source dependencies; updating mounted source and restarting is insufficient. The entrypoint checks for missing direct dependencies and mismatches in exact version declarations, including Next.js, and stops with a rebuild instruction. Audit range dependencies separately against the lockfile and final artifact.
+
+Validate tests, production builds, actual package startup, login, legacy ingestion URLs, SSE output and cancellation, RAS WebSocket commands and receipts, and long polling. Use an isolated runtime root and database. Drain evaluation tasks before switching: startup cleanup can mark unfinished tasks as failed. Roll back using the retained previous artifact, noting that it may still contain known vulnerabilities.
+
 ## First startup and acceptance
 
 Start through the original deployment entry point and inspect configuration, database synchronization, and background-task logs. If synchronization warns about data loss, stop and review the schema difference. `prisma db push --accept-data-loss` is not a routine upgrade step.
