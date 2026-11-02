@@ -211,3 +211,5 @@ API Key。预检失败会明确告警，但不会阻断普通链路插件和看�
 
 
 完成部署后继续[首次接入教程](../../tutorial/platform/01-quick-start.md)。升级前先阅读[升级与回滚](./upgrade-and-rollback.md)。
+
+[English](../../../en/how-to/platform/deploy-docker.md)

@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-31",
+  "date": "2026-11-02",
   "authority": "zh",
   "bodyPairs": [
     {
@@ -7,6 +7,12 @@
       "en": "docs/en/how-to/platform/backup-and-restore.md",
       "zhTitle": "备份与恢复",
       "enTitle": "Backup and restore"
+    },
+    {
+      "zh": "docs/zh/how-to/platform/deploy-docker.md",
+      "en": "docs/en/how-to/platform/deploy-docker.md",
+      "zhTitle": "用 Docker 部署服务端",
+      "enTitle": "Deploy the server with Docker"
     },
     {
       "zh": "docs/zh/how-to/platform/upgrade-and-rollback.md",
@@ -19,6 +25,12 @@
       "en": "docs/en/reference/evaluation/benchmark-protocol.md",
       "zhTitle": "独立 Benchmark 评测协议",
       "enTitle": "Independent Benchmark evaluation protocol"
+    },
+    {
+      "zh": "docs/zh/reference/evaluation/datasets-api.md",
+      "en": "docs/en/reference/evaluation/datasets-api.md",
+      "zhTitle": "评测数据集 HTTP 接口",
+      "enTitle": "Evaluation dataset HTTP API"
     },
     {
       "zh": "docs/zh/reference/evaluation/evaluator-output.md",
@@ -39,10 +51,22 @@
       "enTitle": "Experiment HTTP API"
     },
     {
+      "zh": "docs/zh/reference/observability/client-compatibility.md",
+      "en": "docs/en/reference/observability/client-compatibility.md",
+      "zhTitle": "客户端版本与框架兼容性",
+      "enTitle": "Client versions and framework compatibility"
+    },
+    {
       "zh": "docs/zh/reference/observability/trace-ingestion.md",
       "en": "docs/en/reference/observability/trace-ingestion.md",
       "zhTitle": "Trace HTTP 接入",
       "enTitle": "Trace HTTP ingestion"
+    },
+    {
+      "zh": "docs/zh/reference/optimization/skills-api.md",
+      "en": "docs/en/reference/optimization/skills-api.md",
+      "zhTitle": "Skill 管理 HTTP 接口",
+      "enTitle": "Skill management HTTP APIs"
     },
     {
       "zh": "docs/zh/reference/platform/configuration.md",
@@ -63,6 +87,12 @@
       "enTitle": "Model-connection test API"
     },
     {
+      "zh": "docs/zh/reference/reliability/client-control-api.md",
+      "en": "docs/en/reference/reliability/client-control-api.md",
+      "zhTitle": "可靠性客户端与配置控制接口",
+      "enTitle": "Reliability client and configuration control APIs"
+    },
+    {
       "zh": "docs/zh/tutorial/evaluation/01-first-experiment.md",
       "en": "docs/en/tutorial/evaluation/01-first-experiment.md",
       "zhTitle": "跑通第一次评测",
@@ -75,14 +105,12 @@
       "enTitle": "Your first Trace"
     }
   ],
-  "englishBodyCount": 12,
+  "englishBodyCount": 17,
   "excludedFromCount": [
     "navigation.md",
     "README.md"
   ],
   "remaining": [
-    "Docker deployment",
-    "client compatibility",
     "feature operations",
     "architecture and concepts"
   ],
@@ -101,5 +129,83 @@
     "packages/benchmark-protocol/src/evaluation-contracts.ts": "180e895c50361648ba47f64726b13341ecbfce108df4915217f35eeed2722a36",
     "packages/benchmark-protocol/src/evaluator-contracts.ts": "80a39763fc859cee28aaaaa8c62ad4abcf1c3571fcb9953d0aef827ff360893e",
     "services/evaluator/src/service.cjs": "2e80ece59a024f9a49555b5c5ba23f20eff32f6f038da5897c65953474d6c155"
-  }
+  },
+  "supplements": [
+    {
+      "date": "2026-11-02",
+      "reviewedCommit": "ccf6bcf80fe7c4831d20448b329f137ed5285edd",
+      "bodyPairs": [
+        "how-to/platform/deploy-docker.md",
+        "reference/observability/client-compatibility.md"
+      ],
+      "sourceFiles": {
+        "Dockerfile": "35146a295ac789a309ea7cdc8dd4230ac666df2f74d85342288ec32dec2c3a33",
+        "scripts/docker-entrypoint.sh": "3e63d3b8eebcccf4185783540e2455aa9a507f71ad252b1f4bb4e1a912fa3bea",
+        "scripts/update-source.sh": "1ae7251b2f0c539664f6dc1c9061492e3ad3a3edffd6a91d6b4510105cea55a9"
+      }
+    },
+    {
+      "date": "2026-11-02",
+      "topic": "http-api-domains",
+      "reviewedCommit": "ccf6bcf80fe7c4831d20448b329f137ed5285edd",
+      "bodyPairs": [
+        "reference/evaluation/datasets-api.md",
+        "reference/optimization/skills-api.md",
+        "reference/reliability/client-control-api.md"
+      ],
+      "coveredMethods": {
+        "datasets": 13,
+        "skills": 22,
+        "reliability": 21
+      },
+      "scope": "Datasets prefix; Skill asset management subset; reliability client/configuration prefix plus agent-ras config/catalog. Other Skill execution/workbench, fault-injection tasks, RAS event ingress, fleet and observability reliability APIs remain outside detailed coverage.",
+      "sourceFiles": {
+        "src/app/api/agent-datasets/[id]/generation/cancel/route.ts": "a68b4df66981b324b90822f0c188f5071effcad6de85d907bb8be994a29fb897",
+        "src/app/api/agent-datasets/[id]/generation/route.ts": "00f44f48863a13cd469c065d83b4a68dcca1c51c303a390aeeae1f87a497abd5",
+        "src/app/api/agent-datasets/[id]/route.ts": "6ad70992bba8e5eac511d50e5cb9b0248159554ed8d3c8687d4903f97df2e456",
+        "src/app/api/agent-datasets/backflow/route.ts": "61503b084af9fe2f9de0aca12524b0f2134efb073ed45bef92a3cd7899f40de8",
+        "src/app/api/agent-datasets/deletions/[deletionId]/route.ts": "e0baba389b2691a5dbc751e7681f883f87ccf43281081c9ebb57410a29bbc333",
+        "src/app/api/agent-datasets/generation-options/route.ts": "bde2f0f8b60f11c1899c4ce451d1a1b359a2f5bf721c4357b24ac99abf025ab5",
+        "src/app/api/agent-datasets/route.ts": "f335e705c3e775de5dfde9fad5ab17a67df8ed39ca5e0ae976b5ca9114dae239",
+        "src/app/api/agent-datasets/trace-drafts/route.ts": "06ef535df9e7d0ebb739cce0db26134474a9c955397beeeab6f7e434c74e3533",
+        "src/app/api/agent-datasets/trace-generation/route.ts": "71ffcf36ae59c02fbe0697d5b3c8f0e68e86dee3c6eb12ddd9df11085e78c583",
+        "src/app/api/agent-ras/catalog/route.ts": "c8c49f13563eb9263a40cc28f1d8ec178236de1df6d23ce0a7435216b8e661f4",
+        "src/app/api/agent-ras/config/route.ts": "507da2c316ae5686eb491d6f6944cf7deba5209cb046ec434532379a26cd5834",
+        "src/app/api/reliability/client/v1/capabilities/route.ts": "59d4c589837864809bf8f1dadc9a29a2631c89c39c9623e28bb1959ec66da2fe",
+        "src/app/api/reliability/client/v1/commands/[commandId]/status/route.ts": "f8151b51b65fd79a16514e6895d16c65374cef780cfd4a1c95973d41bda4321e",
+        "src/app/api/reliability/client/v1/commands/next/route.ts": "613906a888cab432a0ad41c9d397395846f5a81da4f94a589874fb954694c27f",
+        "src/app/api/reliability/client/v1/config-loads/route.ts": "91d7f55faa1c4e6d0b30999df14388643a9f4a0bfa82052c30c2cf227456c375",
+        "src/app/api/reliability/client/v1/config-snapshots/[configRef]/route.ts": "dd2b5ba3bc29563508265512634c239b9492770b27d8576eb7beefacf1505928",
+        "src/app/api/reliability/client/v1/control-auth/route.ts": "873a5827ee8cdb9b6e6f275200250b0943a589a8e5a7d3e3dca73591d314cf83",
+        "src/app/api/reliability/client/v1/control-presence/route.ts": "ecb0209cf118dc62f18aed2de0a61c8981d50ef9b494fabb211a2da3bfe5179e",
+        "src/app/api/reliability/client/v1/control-receipt/route.ts": "c88e417b994cb81d1657ba8970a3460e1a5169e8a36d9e8f2f3db69e3fa4517d",
+        "src/app/api/reliability/client/v1/heartbeat/route.ts": "9f49ecfe87553717c655285b3850af3cafe41353faaa4e482f2dfd0109062ebd",
+        "src/app/api/reliability/client/v1/register/route.ts": "a2185661e47aa49688a70765003aee767b525114237bc95b48d6be881a3eae9c",
+        "src/app/api/reliability/clients/[clientId]/config/route.ts": "6a3a821c381385fdff03707eece953b3950fa3b4f9e520cb2b840bac3d954ccf",
+        "src/app/api/reliability/clients/[clientId]/config/sync/route.ts": "19c8f91984228855ad449ceb6a0f92073b9e6742c405306235afde64f7ae877d",
+        "src/app/api/reliability/clients/route.ts": "5ef0d2e567de6b0119f92f6acb03d6e98f63220d46cf039eeb81f3c39575d7f5",
+        "src/app/api/reliability/config-schemas/[platform]/route.ts": "a198d72a30ff2ba0259c9922759abe02a075fb91223f3051ba37c160a9ad3ca7",
+        "src/app/api/reliability/fault-modes/route.ts": "46beafabc17cf666afe0f112f02e6e1760534755821491124d3a08a6cace0e04",
+        "src/app/api/reliability/install-tokens/route.ts": "2e396abf332ddec36f390ab8461308ffcac0799ad9046302eb44610db7b27a2a",
+        "src/app/api/skill-management/skills/route.ts": "dc5f3a510c0135a98f18fd66503b7f886985d380242a828de249d19df1079d76",
+        "src/app/api/skills/[id]/activate/route.ts": "6c352635ab95cc9565e29214584cdf43196d7349f43e7de1ec2a09a04810817e",
+        "src/app/api/skills/[id]/runs/route.ts": "e371d357ec0f3be8546b30fc233cce53a1c26e1d67790c48e0f6b6cfe3cf88a6",
+        "src/app/api/skills/[id]/toggle/route.ts": "32e72e78d229e14fea17aae2d1cf0b278d51ec06e484c39a438ffb8757706f30",
+        "src/app/api/skills/[id]/versions/[version]/download/route.ts": "44bf2bd50a1ec80647560c9c3a6427be84ef615ca9d435f25a8c2d88e4cee2a1",
+        "src/app/api/skills/[id]/versions/[version]/files/[...path]/route.ts": "961b10ec4255a2bbe36dde3cfb7429456207de3af26a579113a9e6d6014c1f05",
+        "src/app/api/skills/[id]/versions/[version]/route.ts": "7df3677448ff17bccb414e41e6b56731135b5fce1e9c7d6d8cfe20498f2b4afe",
+        "src/app/api/skills/[id]/versions/route.ts": "b990c2aeac9173b55e66105690a6235476512cacccf07a0d84eb98ac9d1f3f96",
+        "src/app/api/skills/automation/import/route.ts": "bfcd7b0ea6489336e781adefc32c9c4a2e8989ba03399f7d5b6cc4f00de67e16",
+        "src/app/api/skills/automation/push/route.ts": "ffa6b09585080ccd91643b3b9346a3833cb916d027d12e755c9abf3c0dae9bb4",
+        "src/app/api/skills/by-name/[name]/versions/[version]/files/[...path]/route.ts": "c31ef8381d3ba2858eae4eb8987ec5e4f662c6a716d41537bace1162f8c56fe8",
+        "src/app/api/skills/by-name/[name]/versions/route.ts": "e524ea770c3244f73037494953178ada7c20dd6af987b18d4a83e6a394c1261c",
+        "src/app/api/skills/by-name/route.ts": "783a536988cb31610a804b20168e0e30db2fa0fc34cb68105d2a92bda0b3e494",
+        "src/app/api/skills/logs/route.ts": "86da668b0d85ac22dca7c9c08708566055928cb08fcb256e2dc453bcd733c3a3",
+        "src/app/api/skills/publish/route.ts": "34ae2a4658d9cf28311104c5d599d17ee1f154a381e097bd9c8a9c0ebfffdaa5",
+        "src/app/api/skills/route.ts": "139ecfdc9a4bbe20f9dcf2052feb546a7f13047164852c70ae06436717215152",
+        "src/app/api/skills/sync-enterprise/route.ts": "95a62c0b99253551d448baa538a794fd2ada323ebbafd8e67f09950cf519b1a4",
+        "src/app/api/skills/upload/route.ts": "ed488d77c75e4d9d9bcb42d3ac04a601229d7c85926caf9133e2b9511a4e0936"
+      }
+    }
+  ]
 }
