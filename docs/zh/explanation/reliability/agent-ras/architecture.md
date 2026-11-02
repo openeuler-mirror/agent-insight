@@ -333,7 +333,7 @@ RAS 只做环内决策 + 旁路事件，**不**造 Insight Execution 主树。�
 |------|--------|------------|
 | ⓪ Trace（完整 Execution/Session） | Insight 采集器（OpenCode upload；xiaoO `xiaoo-trace-collector`） | **不做**日常 OTLP / `note_*` |
 | ① ras-events | `insight_push` / InsightAnomalyReporter | fail-open；ingest 失败不挡 abort/notice |
-| 能力配置 | Insight `GET /api/ingest/ras-config?platform=` | 客户端合并进 hello；显式 `semantic_content_enabled=false` 才关 L3 |
+| 能力配置 | Insight `GET /api/ingest/ras-config?platform=` | OpenCode 先用本地快照返回 Hook，后台同步成功后更新后续 hello 的快照；请求及正文读取总计最多 3 秒，超时中止并沿用本地配置；显式 `semantic_content_enabled=false` 才关 L3 |
 | ③ FI collect-result | FI Worker + Insight Judge | RAS **不**被 FI Worker 拉起 |
 
 Join：RAS `taskId` 与宿主 native session id 对齐（xiaoO 去 `xiaoo:` 前缀）。评测 overlay 与通道细节见接入方案，本文不重复。

@@ -33,8 +33,8 @@ export function sameCollaborationSource(a: unknown, b: unknown): boolean {
     return JSON.stringify(collaborationSource(a)) === JSON.stringify(collaborationSource(b));
 }
 
-export function buildCollaborationTraceTree(interactions: RawInteraction[]): AgentNode | null {
-    if (!interactions.some(collaborationSource)) return buildAgentCallTree(interactions);
+export function buildCollaborationTraceTree(interactions: RawInteraction[], rootSessionId?: string): AgentNode | null {
+    if (!interactions.some(collaborationSource)) return buildAgentCallTree(interactions, rootSessionId);
     const groups = new Map<string, { source: CollaborationSource; items: RawInteraction[]; indices: number[]; tree?: AgentNode }>();
     interactions.forEach((item, index) => {
         const source = collaborationSource(item);
@@ -43,7 +43,7 @@ export function buildCollaborationTraceTree(interactions: RawInteraction[]): Age
         group.items.push(item); group.indices.push(index); groups.set(source.taskId, group);
     });
     for (const [id, group] of groups) {
-        const tree = buildAgentCallTree(group.items);
+        const tree = buildAgentCallTree(group.items, id);
         if (!tree) continue;
         const scope = (value: string) => `${encodeURIComponent(id)}:${value}`;
         const remap = (node: AgentNode) => {

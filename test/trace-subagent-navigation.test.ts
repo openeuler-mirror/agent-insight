@@ -104,3 +104,41 @@ test('exact execution identity wins over a matching task ID and cannot fall back
     await h.resolve(1, [current]);
     assert.deepEqual(h.selected(), current);
 });
+
+function detailNavigation(query: string, current = 'dify:workflow', framework = 'dify', linkedTraces = 2) {
+    let declaration: ts.VariableDeclaration | undefined;
+    function find(node: ts.Node) {
+        if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'navigateToTaskId') declaration = node;
+        ts.forEachChild(node, find);
+    }
+    find(ast);
+    assert.ok(declaration);
+    const fn = (declaration.initializer as ts.CallExpression).arguments[0];
+    const code = ts.transpileModule(`const navigate = ${fn.getText(ast)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    let url = '';
+    const scope = {
+        taskId: current, execution: { framework }, session: { taskId: current, difyProjection: { linkedTraces } },
+        searchParams: new URLSearchParams(query), URLSearchParams, window: { location: { pathname: '/trace' } },
+        router: { push: (value: string) => { url = value; } },
+    };
+    const navigate = new Function(...Object.keys(scope), `${code}; return navigate;`)(...Object.values(scope));
+    return (target: string) => { navigate(target); return new URL(url, 'http://localhost'); };
+}
+
+test('Dify child navigation preserves the Workflow origin across reload and clears an old execution target', () => {
+    const child = detailNavigation('framework=dify&taskId=dify:workflow&executionId=outer-execution&page=3')('dify:planner');
+    assert.equal(child.searchParams.get('workflowTaskId'), 'dify:workflow');
+    assert.equal(child.searchParams.get('taskId'), 'dify:planner');
+    assert.equal(child.searchParams.get('executionId'), null);
+    assert.equal(child.searchParams.get('page'), '3');
+    const returned = detailNavigation(child.search, 'dify:planner', 'dify', 0)('dify:workflow');
+    assert.equal(returned.searchParams.get('taskId'), 'dify:workflow');
+    assert.equal(returned.searchParams.get('workflowTaskId'), null);
+});
+
+test('Dify origin survives another child jump without being invented for an independent Trace', () => {
+    const next = detailNavigation('framework=dify&workflowTaskId=dify:workflow', 'dify:planner', 'dify', 0)('dify:reviewer');
+    assert.equal(next.searchParams.get('workflowTaskId'), 'dify:workflow');
+    assert.equal(detailNavigation('', 'dify:planner', 'dify', 0)('dify:reviewer').searchParams.get('workflowTaskId'), null);
+    assert.equal(detailNavigation('', 'opencode-task', 'opencode', 2)('opencode-child').searchParams.get('workflowTaskId'), null);
+});

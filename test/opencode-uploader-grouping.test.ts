@@ -616,3 +616,19 @@ test("opencode uploader: force-session scan finds older files for only the reque
     fs.rmSync(spoolDir, { recursive: true, force: true })
   }
 })
+
+test('opencode uploader: keeps tool execution times independently of the assistant completion', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', payload: { type: 'message.updated', event: { properties: { info: {
+      id: 'timed-message', sessionID: 'timed-session', role: 'assistant', time: { created: 1000, completed: 2000 },
+    } } } } },
+    ...[true, false].map(timed => ({ kind: 'event', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: `tool-${timed}`, callID: `call-${timed}`, messageID: 'timed-message', sessionID: 'timed-session', type: 'tool', tool: 'read',
+      state: { status: 'completed', input: {}, ...(timed ? { time: { start: 2000, end: 20000 } } : {}) },
+    } } } } })),
+  ])
+  const calls = uploader.buildMessagesForSession(state, 'timed-session')[0].tool_calls!
+  assert.deepEqual(calls.find((call: any) => call.id === 'call-true')!.timing, { started_at: 2000, completed_at: 20000 })
+  assert.equal(calls.find((call: any) => call.id === 'call-false')!.timing, undefined)
+})

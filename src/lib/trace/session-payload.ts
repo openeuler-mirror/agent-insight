@@ -114,7 +114,7 @@ export function toTraceStructureInteractions(interactions: any[]): any[] {
                 tool: part?.tool,
                 callID: part?.callID,
                 text: previewText(part?.text),
-                state: part?.state ? { status: part.state.status } : undefined,
+                state: part?.state ? { status: part.state.status, time: part.state.time } : undefined,
             }))
             : undefined;
         return {

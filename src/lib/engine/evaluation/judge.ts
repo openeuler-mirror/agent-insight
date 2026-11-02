@@ -28,16 +28,7 @@ import {
     formatFaultPathStepForPrompt,
     type FailureTraceAnchor,
 } from '@/lib/engine/observability/fault-path';
-import {
-    extractSkillsFromClaudeSession,
-    extractSkillsFromOpenClawSession,
-    extractSkillsFromOpencodeSession,
-    extractSkillsWithVersionsFromClaudeSession,
-    extractSkillsWithVersionsFromOpenClawSession,
-    extractSkillsWithVersionsFromOpencodeSession,
-    normalizeInteractions as normalizeInteractionsCore,
-    type InvokedSkill
-} from '@/lib/shared/interaction-utils';
+import { normalizeInteractions as normalizeInteractionsCore } from '@/lib/shared/interaction-utils';
 import { generateJudgePrompt } from '@/prompts/judge-prompt';
 import { generateSkillIssuePrompt } from '@/prompts/item-attribution-prompt';
 import { generateFailureAnalysisPrompt } from '@/prompts/failure-analysis-prompt';
@@ -251,7 +242,7 @@ export async function judgeAnswer(
     }
 
     // Process conditional groups first (grouped by groupId)
-    for (const [groupId, groupActions] of keyActionsByGroup) {
+    for (const groupActions of keyActionsByGroup.values()) {
         // Find all evaluations for this group
         const groupEvaluations = groupActions.map(ka => {
             const ev = evaluations.find((e: any) => e.id === ka.id);
@@ -265,7 +256,7 @@ export async function judgeAnswer(
 
         if (triggeredBranch) {
             // Only count the triggered branch
-            const { ka, ev, match, explanation } = triggeredBranch;
+            const { ka, match, explanation } = triggeredBranch;
             const branchLabel = (ka as any).branchLabel || '';
             
             totalWeightedScore += match * ka.weight;
@@ -281,7 +272,7 @@ export async function judgeAnswer(
         } else {
             // No branch triggered - count the first branch as 0
             const firstBranch = groupEvaluations[0];
-            const { ka, ev, match, explanation } = firstBranch;
+            const { ka, match, explanation } = firstBranch;
             const branchLabel = (ka as any).branchLabel || '';
             
             totalWeightedScore += 0 * ka.weight; 
@@ -705,76 +696,6 @@ export async function analyzeFailures(
 
 
 
-// Helper to extract query rules-based (from accumulated history in last request)
-function extractQueryRuleBased(lastRequestMessages: any[]): string {
-    if (!lastRequestMessages || lastRequestMessages.length === 0) return "";
-    
-    // Rule: "From the content of the first user message found in the history"
-    const userMsg = lastRequestMessages.find((m: any) => m.role === 'user');
-    if (userMsg) {
-            const content = userMsg.content;
-            if (typeof content === 'string') return content;
-            if (Array.isArray(content)) {
-                // Filter out known system injections (e.g. <system-reminder>)
-                const validParts = content.filter((c:any) => 
-                    c.type === 'text' && 
-                    !c.text.trim().startsWith('<system-reminder>')
-                );
-                
-                if (validParts.length > 0) {
-                     return validParts.map((p:any) => p.text).join('\n').trim();
-                }
-
-                // Fallback: if all filtered out, return the last text part (maybe user wrapped it?) 
-                // or just return the original find result if we were desperate, but let's stick to validParts
-                const textPart = content.find((c:any) => c.type === 'text');
-                if (textPart) return textPart.text;
-            }
-    }
-    return "";
-}
-
-// Helper to extract final result rules-based
-function extractFinalResultRuleBased(lastResponseMessage: any): string {
-    if (!lastResponseMessage) return "";
-
-    // Rule: "From the content of the last assistant message (which is the response)"
-    const content = lastResponseMessage.content;
-    if (content && typeof content === 'string') return content;
-    return "";
-}
-
-// Helper to extract skill rules-based
-function extractSkillRuleBased(lastRequestMessages: any[], lastResponseMessage: any): string {
-    let allText = "";
-    
-    // Add history from last request
-    if (lastRequestMessages) {
-        lastRequestMessages.forEach((m: any) => {
-            if (typeof m.content === 'string') allText += m.content + "\n";
-        });
-    }
-    // Add final response
-    if (lastResponseMessage && typeof lastResponseMessage.content === 'string') {
-        allText += lastResponseMessage.content + "\n";
-    }
-
-    // Regex patterns for skill loading
-    // Pattern 1: "Loading skill:? [name]"
-    const loadMatch = allText.match(/(?:Loading skill|Load skill)[:\s]+([a-zA-Z0-9_\-\.]+)/i);
-    if (loadMatch && loadMatch[1]) {
-        return loadMatch[1].trim();
-    }
-    
-    // Pattern 2: "Skill [name] loaded"
-    const loadedMatch = allText.match(/Skill\s+([a-zA-Z0-9_\-\.]+)\s+loaded/i);
-    if (loadedMatch && loadedMatch[1]) {
-         return loadedMatch[1].trim();
-    }
-    
-    return "";
-}
-
 // Helper to check if string is JSON
 function isJsonString(str: string) {
     if (!str || typeof str !== 'string') return false;
@@ -783,7 +704,7 @@ function isJsonString(str: string) {
         if (o && typeof o === "object") {
             return true;
         }
-    } catch (e) { }
+    } catch { }
     return false;
 }
 
@@ -890,12 +811,11 @@ export async function analyzeSession(input: any[], user?: string | null): Promis
                      }
                 }
                 if (assembled) contentText = assembled;
-             } catch(e) {}
+             } catch {}
         }
 
         // --- NEW LOGIC: Accumulate preceding assistant messages ---
         const contentCandidates: string[] = [];
-        let stopBacktracking = false; // Flag to stop outer loop if needed (though we only process last interaction logic currently)
 
         // 1. Check preceding assistant messages in requestMessages
         if (interaction.requestMessages && interaction.requestMessages.length > 0) {
@@ -918,7 +838,6 @@ export async function analyzeSession(input: any[], user?: string | null): Promis
                                // HEURISTIC: Stop if Header found
                                // This prevents grabbing previous "noise" messages if the answer starts with a structural header here.
                                if (trimmed.startsWith('#') || trimmed.startsWith('##') || trimmed.startsWith('###')) {
-                                   stopBacktracking = true;
                                    break;
                                }
                            }
@@ -957,7 +876,6 @@ export async function analyzeSession(input: any[], user?: string | null): Promis
                       //
                       // The heuristic is mainly to STOP going further BACK.
                       // Since we are at the end of the chain for this interaction, there's nowhere further back in *this* interaction.
-                      // So we don't need to set stopBacktracking here for *this* interaction loop context.
                   }
              }
         }
@@ -1006,7 +924,7 @@ export async function analyzeSession(input: any[], user?: string | null): Promis
                                  const args = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
                                  const skillName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill;
                                  if (skillName) foundSkills.add(skillName);
-                             } catch(e) {}
+                             } catch {}
                          } else {
                              foundSkills.add(toolName);
                          }

@@ -87,6 +87,66 @@ test('tool time does not borrow interaction time, OpenCode part enriches matchin
     assert.equal(calls.length, 1); assert.equal(calls[0].startedAt, 1234);
     assert.equal(extractCalls([{ role: 'subagent', subagent_session_id: 'B', tool_calls: interactions[0].tool_calls }], 'A').length, 0);
 });
+
+test('OpenCode native graph resolves parallel children from task output metadata', () => {
+    const interactions = [{ role: 'assistant', tool_calls: [
+        { id: 'old-task', function: { name: 'task', arguments: '{"subagent_type":"explore"}' }, state: 'completed', output: 'result\n\n<task_metadata>\nsession_id: ses_child_A\n</task_metadata>' },
+        { id: 'new-task', function: { name: 'task', arguments: '{"subagent_type":"explore"}' }, state: 'completed', output: 'task_id: ses_child_B (for resuming this task)\n\n<task_result>done</task_result>' },
+    ] }];
+    assert.deepEqual(extractCalls(interactions, 'root', 'opencode').map(c => c.targets), [['ses_child_A'], ['ses_child_B']]);
+    assert.deepEqual(extractCalls(interactions, 'root', 'generic').map(c => c.targets), [[], []]);
+});
+
+test('OpenCode text targets preserve ambiguity, failures and original part positions', () => {
+    const interactions = [{ role: 'assistant', parts: [
+        { type: 'text', text: 'dispatch' },
+        { type: 'tool', tool: 'task', callID: 'part-task', state: { status: 'error', input: { session_id: 'ses_A' }, output: '<task_metadata>\nsession_id: ses_B\n</task_metadata>' } },
+    ] }];
+    const [call] = extractCalls(interactions, 'root', 'opencode');
+    assert.deepEqual(new Set(call.targets), new Set(['ses_A', 'ses_B']));
+    assert.equal(call.failed, true);
+    assert.equal(call.callIndex, 1);
+    assert.equal(call.recordSource, 'parts');
+});
+
+test('OpenCode task results and ordinary tool output cannot invent child relationships', () => {
+    const output = 'task_id: ses_real (for resuming)\n<task_result>\nsession_id: ses_quoted\n<task_metadata>\nsession_id: ses_example\n</task_metadata>\n</task_result>';
+    const interactions = [{ role: 'assistant', tool_calls: [
+        { id: 'task', function: { name: 'task', arguments: '{}' }, output },
+        { id: 'read', function: { name: 'read', arguments: '{}' }, output },
+        { id: 'prose', function: { name: 'task', arguments: '{}' }, output: 'The previous session_id: ses_unrelated was mentioned.' },
+    ] }];
+    assert.deepEqual(extractCalls(interactions, 'root', 'opencode').map(c => c.targets), [['ses_real'], [], []]);
+});
+
+test('OpenCode task identifiers must occupy the native header or trailing metadata block', () => {
+    const outputs = [
+        'Example output:\n```text\ntask_id: ses_quoted (for resuming)\n```',
+        'Example output:\n<task_metadata>\nsession_id: ses_quoted\n</task_metadata>\nThis was an example.',
+        'Result mentions:\n```text\n<task_metadata>\nsession_id: ses_quoted\n</task_metadata>\n```\n\n<task_metadata>\nsession_id: ses_real\n</task_metadata>',
+        '\n task_id: ses_current (for resuming)\n<task_result>\ntask_id: ses_quoted\n</task_result>',
+        'task_id: ses_quoted (for resuming)\nExample from the result.\n\n<task_metadata>\nsession_id: ses_real\n</task_metadata>',
+    ];
+    const interactions = [{ role: 'assistant', tool_calls: outputs.map((output, index) => ({
+        id: `boundary-${index}`, function: { name: 'task', arguments: '{}' }, output,
+    })) }];
+    assert.deepEqual(extractCalls(interactions, 'root', 'opencode').map(c => c.targets), [[], [], ['ses_real'], ['ses_current'], ['ses_quoted', 'ses_real']]);
+});
+
+test('OpenCode native task envelopes and structured part metadata retain exact child IDs', () => {
+    const output = '<task id="ses_envelope" state="completed">\n<task_result>task_id: ses_quoted</task_result>\n</task>';
+    const interactions = [{ role: 'assistant', tool_calls: [
+        { id: 'xml', function: { name: 'task', arguments: '{}' }, output },
+        { id: 'quoted-xml', function: { name: 'task', arguments: '{}' }, output: `An example:\n${output}` },
+    ], parts: [
+        { type: 'tool', tool: 'task', callID: 'metadata', state: { status: 'completed', input: {}, metadata: { sessionId: 'ses_metadata', parentSessionId: 'ses_parent' }, output: 'plain result' } },
+        { type: 'tool', tool: 'task', callID: 'conflict', state: { status: 'error', input: {}, metadata: { sessionId: 'ses_metadata' }, output } },
+    ] }];
+    const calls = extractCalls(interactions, 'ses_parent', 'opencode');
+    assert.deepEqual(calls.map(c => c.targets), [['ses_envelope'], [], ['ses_metadata'], ['ses_envelope', 'ses_metadata']]);
+    assert.equal(calls[3].failed, true);
+    assert.deepEqual(extractCalls(interactions, 'ses_parent', 'generic').map(c => c.targets), [[], [], [], []]);
+});
 test('same call explicitly named by two reports does not prove event identity', () => {
     const result = resolve([event('1', 'B'), event('2', 'B')], [{ ...call('1'), targets: ['native-B'] }], [binding, { ...binding, sessionId: 'B', traceSessionId: 'native-B' }]);
     assert.ok([...result.values()].every(a => a.status === 'ambiguous'));
