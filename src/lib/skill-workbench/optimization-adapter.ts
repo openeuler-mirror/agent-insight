@@ -137,7 +137,7 @@ export async function getWorkbenchOptimization(user: string, sessionId: string) 
   if (!session?.optSessionId) return null;
   const opt = await prismaRaw.skillOptSession.findFirst({
     where: { id: session.optSessionId, user },
-    include: { messages: { orderBy: { createdAt: 'asc' } }, iterations: { orderBy: { draftNumber: 'asc' } } },
+    include: { plan: { include: { items: { orderBy: { rank: 'asc' } } } }, messages: { orderBy: { createdAt: 'asc' } }, iterations: { orderBy: { draftNumber: 'asc' } } },
   });
   return opt ? { ...opt, files: parseObject(opt.files), baselineFiles: parseObject(session.filesJson) } : null;
 }
@@ -145,7 +145,7 @@ export async function getWorkbenchOptimization(user: string, sessionId: string) 
 export async function syncWorkbenchOptimization(input: {
   user: string;
   sessionId: string;
-  sourceKind: 'user' | 'evaluation' | 'experiment';
+  sourceKind: 'user' | 'evaluation' | 'experiment' | 'diagnosis';
   sourceRefs?: unknown[];
   sourceExperimentId?: string;
   recordId?: string;
@@ -165,13 +165,14 @@ export async function syncWorkbenchOptimization(input: {
   });
   if (!opt) return { kind: 'not_found' as const };
   const updatesWorkingSnapshot = session.source !== 'management';
-  const baseline = updatesWorkingSnapshot ? null : await resolveRetestableExperimentBaseline({
+  const baseline = updatesWorkingSnapshot || input.sourceKind === 'diagnosis' ? null : await resolveRetestableExperimentBaseline({
     user: input.user,
     skillName: session.skillName,
     skillVersion: session.workVersion,
     sourceExperimentId: input.sourceExperimentId,
   });
-  const sourceExperimentId = baseline?.experiment.id;
+  const diagnosisSource = input.sourceRefs?.find((ref): ref is { type: string; experimentId: string } => !!ref && typeof ref === 'object' && (ref as { type?: string }).type === 'diagnosis' && typeof (ref as { experimentId?: unknown }).experimentId === 'string');
+  const sourceExperimentId = input.sourceKind === 'diagnosis' ? diagnosisSource?.experimentId : baseline?.experiment.id;
   const sourceRefs = [
     ...(input.sourceRefs || []),
     ...(baseline ? [{
@@ -246,9 +247,9 @@ export async function syncWorkbenchOptimization(input: {
       initialStatus: recordInput.status,
     });
   if (!record) return { kind: 'not_found' as const };
-  if (qualityPassed) {
+  if (qualityPassed && (input.sourceKind !== 'diagnosis' || sourceExperimentId)) {
     const evidence = await linkCandidateVerification({ user: input.user, recordId: record.id,
-      skillName: session.skillName, baseVersion: session.workVersion, files: candidateFiles, sourceExperimentId: input.sourceExperimentId });
+      skillName: session.skillName, baseVersion: session.workVersion, files: candidateFiles, sourceExperimentId });
     if (evidence) {
       record.status = evidence.status;
       record.errorMessage = evidence.errorMessage;
@@ -306,7 +307,7 @@ export async function beginWorkbenchOptimizationRun(input: {
   user: string;
   optSessionId: string;
   runId: string;
-  sourceKind: 'user' | 'evaluation';
+  sourceKind: 'user' | 'evaluation' | 'diagnosis';
   sourceRefs: unknown[];
 }) {
   const workbench = await prismaRaw.skillWorkbenchSession.findFirst({
@@ -385,7 +386,7 @@ export async function finishWorkbenchOptimizationRun(input: {
   user: string;
   workbenchSessionId: string;
   taskId: string;
-  sourceKind: 'user' | 'evaluation';
+  sourceKind: 'user' | 'evaluation' | 'diagnosis';
   sourceRefs: unknown[];
   recordId?: string;
   error?: string | null;

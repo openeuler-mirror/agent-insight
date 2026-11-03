@@ -1025,6 +1025,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                     {/* Chat scroll */}
                     <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '20px 24px 16px', minHeight: 0 }}>
                         <AgentDebugCard
+                            hasInvokedSkill={getInvokedSkillNames(execution).length > 0}
                             executionId={taskId}
                             user={user || ''}
                             locale={locale}

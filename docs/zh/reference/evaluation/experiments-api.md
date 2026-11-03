@@ -75,3 +75,18 @@ Benchmark 数据集分支使用其绑定、Case 选择和执行配置，成功�
 实现依据：[实验路由](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/route.ts)、[启动](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/run/route.ts)、[详情与控制](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/route.ts)。
 
 [English](../../../en/reference/evaluation/experiments-api.md)
+
+## 诊断运行与优化输入
+
+新接口使用已登录用户的 API Key 校验实验、报告和 Skill 归属。前端提交 ID，服务端读取原始证据。
+
+| 请求 | 行为 |
+| --- | --- |
+| GET /api/experiments/:id/cases/:caseId/diagnoses | 最近十条诊断记录 |
+| POST 同一路径 | resultIds + preview=true 预览输入。确认时提交 requestKey 和 expectedInputHash，返回 runId。输入变化返回 409，无有效被测轨迹返回 422 |
+| GET /api/diagnosis-runs/:runId | 状态、输入摘要、进展、最终发现及不可导入原因 |
+| POST /api/diagnosis-runs/from-trace | 按 executionId 与 generatedAt 冻结现有最终报告，校验执行内容未变化 |
+| GET /api/skills/by-name/:name/diagnosis-inputs?version=N | 核验有权限的 Skill 基线，返回文件和内容哈希 |
+| POST /api/skills/by-name/:name/diagnosis-inputs | 提交 runId、findingIds、baseVersion、expectedContentHash、skillRelevanceConfirmed、constraints；来源版本缺失时还需 baselineVerified。返回工作台 sessionId |
+
+同一用户的相同导入选择与约束可复用草案。Trace、报告和评测快照独立于原诊断缓存。单次快照上限 16 MiB；超限时返回错误，不截掉证据后继续执行。

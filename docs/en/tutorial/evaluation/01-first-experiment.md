@@ -62,3 +62,13 @@ When Benchmark evaluation fails, inspect the Case's failure stage and error befo
 - [Evaluators, Chinese](../../../zh/how-to/evaluation/evaluators.md).
 
 [中文权威版本](../../../zh/tutorial/evaluation/01-first-experiment.md)
+
+### Diagnose a Case and review a Skill change
+
+In the Case detail, select completed evaluator results, choose **Use for diagnosis**, inspect the task, scores, evidence and measured execution, then confirm. Adjusting a score or rerunning an evaluator requires a new confirmation. The diagnosis retains its original inputs and links back to the Case.
+
+Select final findings that can be addressed in an invoked Skill. Inspect the Skill version and baseline files. An unknown version requires explicit verification. A completed Trace-only report can also be frozen from its findings view. It carries no historical experiment scores. No recorded Skill invocation means there is no direct optimization target.
+
+Create the plan, review the proposed edits in the workbench, then confirm to generate a candidate. Inspect the diff and run the candidate against the source experiment configuration before publishing. An unavailable source, changed dataset or missing baseline prevents a comparable retest.
+
+Trace-only reports can produce a reviewable candidate, but cannot pass this source-experiment publishing gate. Human-corrected baseline scores require review instead of automatic machine-score comparison. A change to source evidence during a retest invalidates that retest.

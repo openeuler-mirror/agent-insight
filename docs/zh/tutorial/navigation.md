@@ -20,6 +20,7 @@ title: "入门教程"
 ## 评测
 
 - [跑通第一次评测](./evaluation/01-first-experiment.md)
+- [从评测证据生成诊断与 Skill 优化计划](../how-to/diagnosis/agent-debug/diagnosis.md)
 
 ## 优化
 

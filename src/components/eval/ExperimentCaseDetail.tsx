@@ -40,6 +40,7 @@ import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { useAuth } from '@/lib/auth/auth-context';
+import { CaseDiagnosisInput } from '@/components/diagnosis/CaseDiagnosisInput';
 import { apiFetch } from '@/lib/client/api';
 import { categorySummary, effectiveScore, groupByCategory } from '@/lib/engine/experiment/detail-agg';
 import { deriveVerdict, displaySummary, isEvidenceRedundant, VERDICT_LABELS, type EvalVerdict } from '@/lib/evaluators/eval-output';
@@ -699,6 +700,8 @@ export function ExperimentCaseDetail({
                 message={isBenchmark ? benchmarkProgress?.failureMessage : caseRow.traceError || '未收到详细失败原因'}
               />
             )}
+
+            <CaseDiagnosisInput key={caseId} experimentId={id} caseId={caseId} results={detail.results.filter(result => result.caseId === caseId)} />
 
             {/* 任务输入 / 参考契约 / 实际输出 三框 */}
             <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>

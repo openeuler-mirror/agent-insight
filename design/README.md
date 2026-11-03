@@ -20,6 +20,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 评测结果 → 智能诊断 → Skill 优化 | [需求分析](diagnosis/evaluation-to-skill-optimization/phase1-requirements-analysis.md) · [需求设计](diagnosis/evaluation-to-skill-optimization/phase2-requirements-design.md) · [开发计划](diagnosis/evaluation-to-skill-optimization/phase3-development-plan.md) | 评测证据快照进入诊断，诊断发现转为 Skill 优化计划并复测 | Feature | 2026-11-02 | 已实现；临时库流程与迁移演练通过，真实模型/Worker 联调待验收 | — |
 | Skill 优化校验效率 | [verification-efficiency](optimization/verification-efficiency/phase1-requirements-analysis.md) | 有效用例筛选、可比基线复用、静态评估去重与诚实进度 | Fix / Perf | 2026-10-28 | 已实现，已验证 UI | — |
 | Skill 优化验收闭环 | [verification-closure](optimization/verification-closure/phase1-requirements-analysis.md) | 目标验收、证据复用、定向范围、上下文减量与重试诊断 | Fix / Perf | 2026-10-29 | 已实现并验证 | — |
 | 实验评估器超时与重试配置 | [evaluator-execution-settings](evaluation/evaluator-execution-settings/phase1-requirements-analysis.md) | 实验级 LLM 超时与重试统一配置、评估器行内单独配置及逐行恢复，并以最小界面改动增加搜索、来源筛选和分页 | Feature | 2026-10-26 | 🟡 已扩展全部 31 个预置 LLM 与 Skills 自定义项；176 项专项及类型检查通过，隔离浏览器实验 6 项完成；全量 40 项基线失败未新增 | 待补 |

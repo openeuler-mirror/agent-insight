@@ -75,3 +75,9 @@ Common statuses include `400` for invalid parameters or missing identity, `404` 
 Sources: [experiment routes](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/route.ts), [start](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/run/route.ts), and [details/control](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/route.ts).
 
 [中文权威版本](../../../zh/reference/evaluation/experiments-api.md)
+
+### Diagnosis runs and optimization inputs
+
+Use an authenticated API key. POST selected resultIds to `/api/experiments/:id/cases/:caseId/diagnoses` with preview=true. Confirm with requestKey and expectedInputHash to receive a runId. Changed evidence returns 409 and insufficient execution evidence returns 422. GET the same collection for recent runs, or GET `/api/diagnosis-runs/:runId` for the immutable input summary, progress and report. The snapshot limit is 16 MiB.
+
+POST executionId and generatedAt to `/api/diagnosis-runs/from-trace` to freeze an existing final Trace report. GET `/api/skills/by-name/:name/diagnosis-inputs?version=N` for the baseline. POST to the same path with runId, findingIds, baseVersion, expectedContentHash, constraints and skillRelevanceConfirmed. Include baselineVerified when historical evidence lacks a version or content hash. The returned sessionId opens the draft plan in the workbench.

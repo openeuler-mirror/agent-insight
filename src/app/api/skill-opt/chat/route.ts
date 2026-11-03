@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { resolveUser } from '@/lib/auth/auth';
+import { skillSnapshot } from '@/lib/diagnosis/service';
 import { hasOptimizationInput } from '@/lib/skill-workbench/optimization-request';
 import { withOptimizationCancellation } from '@/lib/skill-workbench/optimization-execution-control';
 import { NextRequest } from 'next/server';
@@ -119,6 +121,22 @@ export async function POST(req: NextRequest) {
         }))
     : [];
 
+  const storedPlan = await prismaRaw.skillOptPlan.findUnique({ where: { sessionId: threadId }, include: { session: true } });
+  let diagnosisRefs: Array<{ type: string; id: string; baseContentHash: string; experimentId: string }> = [];
+  if (storedPlan) {
+    const meta = JSON.parse(storedPlan.operatorMeta || '{}');
+    if (meta.source === 'diagnosis') {
+      const identity = await resolveUser(req);
+      if (!identity.username || identity.username !== user || storedPlan.session.user !== identity.username || storedPlan.session.skillName !== skillName || storedPlan.baseVersion !== baseVersion) return Response.json({ error: 'Unauthorized diagnosis optimization' }, { status: 403 });
+      diagnosisRefs = meta.sourceRefs || [];
+      if (storedPlan.status === 'draft' && planId !== storedPlan.id) return Response.json({ error: '请先确认诊断优化计划' }, { status: 409 });
+      try {
+        const snapshot = await skillSnapshot(identity.username, skillName, baseVersion);
+        if (snapshot.contentHash !== diagnosisRefs[0]?.baseContentHash) return Response.json({ error: 'Skill 基线已变化，请重新核验诊断输入' }, { status: 409 });
+      } catch { return Response.json({ error: '诊断优化基线不可用' }, { status: 409 }); }
+    }
+  }
+
   const feedback = typeof userFeedback === 'string' ? userFeedback : '';
 
   // ── plan 模式：planId 有效时加载归并 plan 的可执行条目（core/reference 且未弃用），
@@ -164,7 +182,7 @@ export async function POST(req: NextRequest) {
           };
         }),
       };
-      planDisplay.sourceCount = sourceIssueIds.size;
+      planDisplay.sourceCount = diagnosisRefs.length ? plan.items.length : sourceIssueIds.size;
       planItems = (plan.items || [])
         .filter((it: any) => (it.route === 'core' || it.route === 'reference') && it.status === 'pending')
         .map((it: any) => ({
@@ -218,8 +236,9 @@ export async function POST(req: NextRequest) {
     ? composePlanUserMessageText(planItems, feedback)
     : composeUserMessageText(issuesNormalized, feedback);
   const normalizedRunId = typeof runId === 'string' && runId.trim() ? runId.trim() : `${threadId}:${Date.now()}`;
-  const optimizationSourceKind = issuesNormalized.length || planDisplay ? 'evaluation' as const : 'user' as const;
+  const optimizationSourceKind = diagnosisRefs.length ? 'diagnosis' as const : issuesNormalized.length || planDisplay ? 'evaluation' as const : 'user' as const;
   const optimizationSourceRefs = [
+    ...diagnosisRefs,
     { type: 'optimization-run', id: normalizedRunId },
     ...issuesNormalized.map((issue) => ({ type: 'issue', id: issue.id })),
     ...(planDisplay ? [{ type: 'plan', id: planDisplay.id }] : []),
