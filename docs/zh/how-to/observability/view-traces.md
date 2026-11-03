@@ -184,6 +184,8 @@ node --import tsx scripts/repair_trace_latency.ts --apply
 
 从已关联的 Dify Workflow 点击内部 Agent 的 **Trace** 后，详情顶部提供 **返回 Workflow**。跳转链接保留来源 Workflow，刷新或重新打开该链接后仍可返回；返回时清除来源标记，回到列表或另选一条 Trace 也会清理该标记。独立打开不带来源的 Agent Trace 时不猜测 Workflow；此入口表示浏览来源，不改写原始父子关系。
 
+节点详情中的开始、结束时间按浏览器本地时区显示为 `YYYY-MM-DD HH:mm:ss.SSS`，包含日期和毫秒，便于区分跨天会话中的调用。
+
 详情中的 **Span ID** 标识当前模型或流程节点，可复制用于核对原始上报与日志。工具有真实调用标识时显示 **Tool Call ID**，用于匹配模型发起的工具调用及其结果；缺少真实 Tool Call ID 时显示其 Span ID，不拿 Span ID 冒充工具调用标识。跨 Trace 展示时复制的是原始 Span ID，不包含用于界面消重的 Trace ID 前缀。
 
 普通 **TOOL** 在有明确证据时缩进到发起它的 **LLM** 下：支持模型原始消息中的工具块（如 OpenCode `parts`、Claude `content_blocks`）、模型 Span 输出中的工具调用 ID，以及同一 Trace 中指向模型的父 Span。只调整当前 Agent 内的展示树，事件顺序、详情定位标识、原始记录、调用数和 Token 不变。Skill、TASK、子 Agent 及已有派发锚点保持原有位置。调用 ID 有歧义、名称或关联证据冲突、缺少原始响应、仅有按时间归并的工具记录时，不新增缩进；不会按最近一次 LLM 猜测。筛选 TOOL 或搜索工具名称时保留对应 LLM 祖先，可展开查看工具详情；收起该 LLM 会隐藏其工具子行。

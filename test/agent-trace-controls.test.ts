@@ -569,3 +569,11 @@ test('reset clears all selected Span types and other filter restrictions', () =>
     assert.equal(variable<boolean>('hasActiveFilters', state), false);
     assert.equal(variable<boolean>('hasActiveFilters', { ...state, treeKindFilter: ['user', 'llm'] }), true);
 });
+
+test('Span detail timestamps include the date so adjacent days remain distinguishable', () => {
+    const format = functionValue<(value?: number) => string | null>('formatClockMs', {});
+    assert.equal(format(new Date(2026, 10, 2, 23, 59, 59, 999).getTime()), '2026-11-02 23:59:59.999');
+    assert.equal(format(new Date(2026, 10, 3, 0, 0, 0, 1).getTime()), '2026-11-03 00:00:00.001');
+    assert.equal(format(), null);
+    assert.equal(format(Number.NaN), null);
+});

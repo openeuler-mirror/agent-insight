@@ -2793,12 +2793,13 @@ function isErrorToolStatus(status?: string): boolean {
     return /error|fail|cancel|denied|interrupted/i.test(status ?? '');
 }
 
-/** 毫秒级时钟。span 详情用,便于与后端日志、Infra 曲线对时。 */
+/** 完整本地日期时间，避免跨天会话中的时钟歧义。 */
 function formatClockMs(ts?: number): string | null {
     if (ts == null) return null;
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return null;
-    return `${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return `${date} ${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
 function eventDetailIdentifier(event: AgentEvent): { label: string; value: string } | null {
