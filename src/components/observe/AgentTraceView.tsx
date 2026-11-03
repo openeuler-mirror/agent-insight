@@ -19,6 +19,7 @@
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
+import { TraceSpanViewport, type TraceSpanViewportHandle } from './TraceSpanViewport';
 import { AgentRelationCard } from './AgentRelationCard';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
@@ -739,6 +740,21 @@ export default function AgentTraceView({
     const [minTokenK, setMinTokenK] = useState(0);
     const [showFilters, setShowFilters] = useState(false);
     const searchInputRef = React.useRef<HTMLInputElement>(null);
+    const spanViewportRef = React.useRef<TraceSpanViewportHandle>(null);
+    const spanFocusKeyRef = React.useRef<string | null>(null);
+    const spanJumpTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelPendingSpanJump = useCallback(() => {
+        if (spanJumpTimerRef.current !== null) clearTimeout(spanJumpTimerRef.current);
+        spanJumpTimerRef.current = null;
+    }, []);
+    useEffect(() => {
+        spanFocusKeyRef.current = null;
+        return cancelPendingSpanJump;
+    }, [stableTraceIdentity, cancelPendingSpanJump]);
+    const captureSpanContext = useCallback(() => {
+        cancelPendingSpanJump();
+        spanViewportRef.current?.captureAnchor(spanFocusKeyRef.current);
+    }, [cancelPendingSpanJump]);
 
     const defaultExpandedKeys = useMemo(() => tree ? buildDefaultExpandedKeys(tree) : new Set<string>(), [tree]);
 
@@ -994,16 +1010,21 @@ export default function AgentTraceView({
         setExpandedKeys(prev => {
             const next = new Set(prev);
             searchMatches.forEach(m => m.parentKeys.forEach(pk => next.add(pk)));
-            return next;
+            return sameStringSet(prev, next) ? prev : next;
         });
     }, [searchMatches]);
 
     useEffect(() => {
         if (!activeMatchKey) return;
-        setTimeout(() => {
+        spanFocusKeyRef.current = activeMatchKey;
+        spanViewportRef.current?.pauseFollowing();
+        cancelPendingSpanJump();
+        spanJumpTimerRef.current = setTimeout(() => {
+            spanJumpTimerRef.current = null;
             document.querySelector(`[data-span-key="${activeMatchKey}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 80);
-    }, [activeMatchKey]);
+        return cancelPendingSpanJump;
+    }, [activeMatchKey, cancelPendingSpanJump]);
 
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
@@ -1029,16 +1050,20 @@ export default function AgentTraceView({
     }, [allSpans]);
 
     const onJumpToKey = (key: string) => {
+        spanFocusKeyRef.current = key;
+        spanViewportRef.current?.pauseFollowing();
+        cancelPendingSpanJump();
         const span = allSpans.find(s => s.key === key);
         if (span) {
             setExpandedKeys(prev => {
                 const next = new Set(prev);
                 span.parentKeys.forEach(pk => next.add(pk));
-                return next;
+                return sameStringSet(prev, next) ? prev : next;
             });
         }
         setSelectedKey(key);
-        setTimeout(() => {
+        spanJumpTimerRef.current = setTimeout(() => {
+            spanJumpTimerRef.current = null;
             document.querySelector(`[data-span-key="${key}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 80);
     };
@@ -1068,6 +1093,10 @@ export default function AgentTraceView({
         findEventAnomalies,
     };
 
+    const scrollNavigationKey = useMemo(() => ({
+        searchQuery, activeMatchKey, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly,
+    }), [searchQuery, activeMatchKey, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly]);
+
     const hasActiveFilters = treeKindFilter.length > 0 || minDurationMs > 0 || minTokenK > 0 || slowOnly;
 
     if (!tree || !selectedAgentNode) {
@@ -1081,7 +1110,7 @@ export default function AgentTraceView({
     return (
         <SmartViewerConfigProvider jsonCollapsed={framework?.trim().toLowerCase() === 'langfuse-langgraph' ? false : 2}>
             <TraceCtx.Provider value={ctxValue}>
-            <div className="flex flex-col gap-2.5">
+            <div className="flex h-full min-h-0 flex-col gap-2.5">
             {fullInteractionLoadError && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
                     <span>{fullInteractionLoadError}</span>
@@ -1092,7 +1121,7 @@ export default function AgentTraceView({
             )}
             {/* Stats bar */}
             {totalStats && (
-                <div className="flex flex-wrap items-center gap-3 px-3.5 py-2 rounded-md border border-border bg-background-secondary text-xs">
+                <div className="flex shrink-0 flex-wrap items-center gap-3 px-3.5 py-2 rounded-md border border-border bg-background-secondary text-xs">
                     <StatChip label="AGENTS" value={totalStats.agents} />
                     <Sep />
                     <StatChip label="TASK SPAWNS" value={totalStats.tasks} accentClass={KIND_META.task.text} isActive={eventTypeFilter === 'task'} onClick={() => handleStatChipClick('task')} hint={tt('traceTree.filterType') + ' Task'} />
@@ -1114,12 +1143,12 @@ export default function AgentTraceView({
                 </div>
             )}
 
-            <div className="grid gap-3 min-h-[520px] h-[calc(100vh-200px)]" style={{ gridTemplateColumns: 'minmax(400px, 62%) 1fr' }}>
+            <div className="grid min-h-0 flex-1 gap-3" style={{ gridTemplateColumns: 'minmax(400px, 62%) 1fr' }}>
                 {/* ─── Left: Unified Span Tree ─── */}
                 <div className="rounded-lg border border-card-border bg-card flex flex-col h-full min-h-0 overflow-hidden">
                     {/* Toolbar: expand/collapse + search + filters */}
                     <div className={cn(
-                        'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
+                        'flex shrink-0 flex-wrap items-center gap-2 px-2.5 py-1.5',
                         !(showFilters || hasActiveFilters) && 'border-b border-border',
                     )}>
                         <TermPopover
@@ -1147,10 +1176,10 @@ export default function AgentTraceView({
                                 ref={searchInputRef}
                                 type="text"
                                 value={searchQuery}
-                                onChange={e => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
+                                onChange={e => { if (searchQuery.trim() && !e.target.value.trim()) captureSpanContext(); setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
                                 onKeyDown={e => {
                                     if (e.key === 'Enter' && !e.nativeEvent.isComposing) setSearchMatchIdx(i => e.shiftKey ? i - 1 : i + 1);
-                                    if (e.key === 'Escape') { setSearchQuery(''); setSearchMatchIdx(0); }
+                                    if (e.key === 'Escape') { if (searchQuery.trim()) captureSpanContext(); setSearchQuery(''); setSearchMatchIdx(0); }
                                 }}
                                 placeholder={tt('traceTree.searchPlaceholder')}
                                 className="flex-1 border-0 bg-transparent outline-none text-xs text-foreground min-w-0"
@@ -1167,7 +1196,7 @@ export default function AgentTraceView({
                                 </>
                             )}
                             {searchQuery && (
-                                <button onClick={() => { setSearchQuery(''); setSearchMatchIdx(0); }} aria-label="Clear" className="px-0.5 bg-transparent border-0 text-foreground-muted hover:text-foreground cursor-pointer text-xs leading-none shrink-0">
+                                <button onClick={() => { captureSpanContext(); setSearchQuery(''); setSearchMatchIdx(0); }} aria-label="Clear" className="px-0.5 bg-transparent border-0 text-foreground-muted hover:text-foreground cursor-pointer text-xs leading-none shrink-0">
                                     <XIcon className="size-3" />
                                 </button>
                             )}
@@ -1177,7 +1206,7 @@ export default function AgentTraceView({
                         <Button
                             variant={slowOnly ? 'default' : 'outline'}
                             size="sm"
-                            onClick={() => setSlowOnly(b => !b)}
+                            onClick={() => { captureSpanContext(); setSlowOnly(b => !b); }}
                             className={cn(
                                 'h-7 text-xs px-2 gap-1',
                                 slowOnly && 'bg-warning text-warning-foreground hover:bg-warning/90 border-warning',
@@ -1210,7 +1239,7 @@ export default function AgentTraceView({
 
                     {/* Extended filter row */}
                     {(showFilters || hasActiveFilters) && (
-                        <div className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-border bg-background-secondary">
+                        <div className="flex shrink-0 flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-border bg-background-secondary">
                             <FilterPill multiple label={tt('traceTree.filterType')} value={treeKindFilter} options={[
                                 { value: 'all', label: tt('traceTree.filterAll') },
                                 { value: 'user', label: 'User' },
@@ -1219,7 +1248,7 @@ export default function AgentTraceView({
                                 { value: 'task', label: 'Task', accentClass: KIND_META.task.text },
                                 ...((totalStats?.chains || 0) > 0 ? [{ value: 'chain', label: 'Chain', accentClass: KIND_META.chain.text }] : []),
                                 { value: 'skill', label: 'Skill', accentClass: KIND_META.skill.text },
-                            ]} onChange={setTreeKindFilter} />
+                            ]} onChange={value => { captureSpanContext(); setTreeKindFilter(value); }} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterDuration')} value={String(slowOnly ? SLOW_MS : minDurationMs)} disabled={slowOnly} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
@@ -1228,16 +1257,16 @@ export default function AgentTraceView({
                                 { value: '10000', label: '>10s' },
                                 { value: '30000', label: '>30s' },
                                 { value: String(SLOW_MS), label: '>60s' },
-                            ]} onChange={v => setMinDurationMs(Number(v))} />
+                            ]} onChange={v => { if (Number(v) !== minDurationMs) captureSpanContext(); setMinDurationMs(Number(v)); }} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterToken')} value={String(minTokenK)} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
                                 { value: '10', label: '>10k' },
                                 { value: '50', label: '>50k' },
                                 { value: '100', label: '>100k' },
-                            ]} onChange={v => setMinTokenK(Number(v))} />
+                            ]} onChange={v => { if (Number(v) !== minTokenK) captureSpanContext(); setMinTokenK(Number(v)); }} />
                             {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={() => { setTreeKindFilter([]); setMinDurationMs(0); setMinTokenK(0); setSlowOnly(false); }} className="h-6 ml-auto text-xs text-foreground-muted">
+                                <Button variant="ghost" size="sm" onClick={() => { captureSpanContext(); setTreeKindFilter([]); setMinDurationMs(0); setMinTokenK(0); setSlowOnly(false); }} className="h-6 ml-auto text-xs text-foreground-muted">
                                     <XIcon className="size-3" />{tt('traceTree.resetFilter')}
                                 </Button>
                             )}
@@ -1245,7 +1274,7 @@ export default function AgentTraceView({
                     )}
 
                     {/* Column headers */}
-                    <div className="flex items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
+                    <div className="flex shrink-0 items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
                         <span className="flex-1">{tt('traceTree.spanColumn')}</span>
                         <span className="w-20 text-left">{tt('traceTree.spanShare')}</span>
                         <span className="w-12 text-right">{tt('traceTree.spanDuration')}</span>
@@ -1253,21 +1282,26 @@ export default function AgentTraceView({
                         <span className="w-2" />
                     </div>
 
-                    <div role="tree" className="overflow-y-auto overflow-x-auto flex-1 py-1">
+                    <TraceSpanViewport
+                        key={stableTraceIdentity ?? rootSessionId ?? tree.id}
+                        ref={spanViewportRef}
+                        navigationKey={scrollNavigationKey}
+                        onUserNavigation={cancelPendingSpanJump}
+                    >
                         <UnifiedSpanTree
                             node={tree}
                             nodeMap={nodeMap}
                             expandedKeys={expandedKeys}
                             onToggleKey={toggleKey}
                             selectedKey={selectedKey}
-                            onSelect={key => { setSelectedKey(key); }}
+                            onSelect={key => { spanFocusKeyRef.current = key; cancelPendingSpanJump(); spanViewportRef.current?.pauseFollowing(); setSelectedKey(key); }}
                             totalStart={totalStart}
                             totalDuration={totalDuration}
                             depth={0}
                             isLast={true}
                             prefixBits={[]}
                         />
-                    </div>
+                    </TraceSpanViewport>
                 </div>
 
                 {/* ─── Right: Detail Panel ─── */}

@@ -90,7 +90,7 @@ Return to **Observability → Traces (运行观测 → 链路追踪)** and locat
 
 ![Trace list](../../../images/example_trace.png)
 
-Confirm a new Trace appears, basic status/duration/Token information is available, and its detail page can expand the Trace tree and Spans. Tools and child Agents should appear when the execution used them. To review the conversation, open the Span list filters and select both **User** and **LLM**; click **All** to restore every type. Start by proving that data arrives and the main steps are readable; complete field coverage is a later check.
+Confirm a new Trace appears, basic status/duration/Token information is available, and its detail page can expand the Trace tree and Spans. Tools and child Agents should appear when the execution used them. To review the conversation, open the Span list filters and select both **User** and **LLM**; click **All** to restore every type. For long sessions, **Jump to bottom** starts following refreshed content; scroll upward to pause and read history. Start by proving that data arrives and the main steps are readable; complete field coverage is a later check.
 
 If nothing appears after about 30 seconds, check the collector log (`~/.agent-insight/logs/opencode_uploader.log` for OpenCode), client-to-server connectivity, selected Workspace, and whether the client Key belongs to the viewing account. Continue with the [FAQ, Chinese](../../../zh/how-to/platform/faq.md) if needed.
 

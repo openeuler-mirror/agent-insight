@@ -88,7 +88,7 @@ function durationPill(slowOnly: boolean, minDurationMs: number, onChange = (_: n
         && n.attributes.properties.some(p => ts.isJsxAttribute(p) && p.name.getText(ast) === 'label'
             && p.initializer?.getText(ast).includes('traceTree.filterDuration')));
     return evaluate(node.getText(ast), {
-        React, FilterPill: 'div', tt: (key: string) => key,
+        React, FilterPill: 'div', captureSpanContext: () => {}, tt: (key: string) => key,
         slowOnly, minDurationMs, SLOW_MS: 60_000, setMinDurationMs: onChange,
     });
 }
@@ -489,7 +489,7 @@ test('Span type buttons accumulate selections, toggle off and restore all types'
     let selected: string[] = [];
     const buttons = () => {
         const element = evaluate<React.ReactElement<MultiPillProps>>(pill.getText(ast), {
-            React, FilterPill, treeKindFilter: selected, setTreeKindFilter: (next: string[]) => { selected = next; },
+            React, FilterPill, captureSpanContext: () => {}, treeKindFilter: selected, setTreeKindFilter: (next: string[]) => { selected = next; },
             tt: (key: string) => key, totalStats: { chains: 1 },
             KIND_META: Object.fromEntries(['llm', 'tool', 'task', 'chain', 'skill'].map(kind => [kind, { text: '' }])),
         });
@@ -560,6 +560,7 @@ test('reset clears all selected Span types and other filter restrictions', () =>
     const expression = attribute.initializer as ts.JsxExpression;
     const state = { treeKindFilter: ['user', 'llm'], minDurationMs: 5_000, minTokenK: 10, slowOnly: true };
     evaluate<() => void>(expression.expression!.getText(ast), {
+        captureSpanContext: () => {},
         setTreeKindFilter: (value: string[]) => { state.treeKindFilter = value; },
         setMinDurationMs: (value: number) => { state.minDurationMs = value; },
         setMinTokenK: (value: number) => { state.minTokenK = value; },
@@ -568,6 +569,101 @@ test('reset clears all selected Span types and other filter restrictions', () =>
     assert.deepEqual(state, { treeKindFilter: [], minDurationMs: 0, minTokenK: 0, slowOnly: false });
     assert.equal(variable<boolean>('hasActiveFilters', state), false);
     assert.equal(variable<boolean>('hasActiveFilters', { ...state, treeKindFilter: ['user', 'llm'] }), true);
+});
+
+
+test('explicit Span navigation pauses following even when reselecting the same key', () => {
+    let pauses = 0;
+    let selected = 'event:root:0';
+    const jump = variable<(key: string) => void>('onJumpToKey', {
+        cancelPendingSpanJump: () => {}, spanJumpTimerRef: { current: null },
+        spanFocusKeyRef: { current: null }, allSpans: [], spanViewportRef: { current: { pauseFollowing: () => { pauses++; } } },
+        setSelectedKey: (key: string) => { selected = key; }, setTimeout: () => 0,
+    });
+    jump(selected);
+    assert.equal(pauses, 1);
+    assert.equal(selected, 'event:root:0');
+});
+
+test('Span row selection pauses following before opening details', () => {
+    const node = findNode(n => ts.isJsxSelfClosingElement(n) && n.tagName.getText(ast) === 'UnifiedSpanTree') as ts.JsxSelfClosingElement;
+    const attr = node.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(ast) === 'onSelect') as ts.JsxAttribute;
+    const expression = attr.initializer as ts.JsxExpression;
+    const calls: string[] = [];
+    evaluate<(key: string) => void>(expression.expression!.getText(ast), {
+        cancelPendingSpanJump: () => {},
+        spanFocusKeyRef: { current: null },
+        spanViewportRef: { current: { pauseFollowing: () => { calls.push('pause'); } } },
+        setSelectedKey: (key: string) => { calls.push(key); },
+    })('event:root:0');
+    assert.deepEqual(calls, ['pause', 'event:root:0']);
+});
+
+
+test('TopN navigation to an already expanded Span preserves the expansion reference', () => {
+    const current = new Set(['agent:root']);
+    let expanded = current;
+    const jump = variable<(key: string) => void>('onJumpToKey', {
+        cancelPendingSpanJump: () => {}, spanJumpTimerRef: { current: null },
+        spanFocusKeyRef: { current: null }, allSpans: [{ key: 'event:root:0', parentKeys: ['agent:root'] }],
+        spanViewportRef: { current: { pauseFollowing: () => {} } },
+        sameStringSet: functionValue('sameStringSet', {}),
+        setExpandedKeys: (update: (value: Set<string>) => Set<string>) => { expanded = update(expanded); },
+        setSelectedKey: () => {}, setTimeout: () => 0,
+    });
+    jump('event:root:0');
+    assert.equal(expanded, current);
+});
+
+test('search refresh without newly expanded ancestors preserves the expansion reference', () => {
+    const call = findNode(n => ts.isCallExpression(n) && n.expression.getText(ast) === 'setExpandedKeys'
+        && n.arguments[0]?.getText(ast).includes('searchMatches.forEach')) as ts.CallExpression;
+    const update = evaluate<(value: Set<string>) => Set<string>>(call.arguments[0].getText(ast), {
+        searchMatches: [{ parentKeys: ['agent:root'] }], sameStringSet: functionValue('sameStringSet', {}),
+    });
+    const current = new Set(['agent:root']);
+    assert.equal(update(current), current);
+    const collapsed = new Set<string>();
+    assert.deepEqual([...update(collapsed)], ['agent:root']);
+    assert.equal(collapsed.size, 0);
+});
+
+test('jumping to bottom cancels an older delayed Span navigation', () => {
+    const timers = new Map<number, () => void>();
+    const spanJumpTimerRef = { current: null as number | null };
+    const cancel = variable<() => void>('cancelPendingSpanJump', {
+        useCallback: (callback: () => void) => callback, spanJumpTimerRef,
+        clearTimeout: (id: number) => timers.delete(id),
+    });
+    const jump = variable<(key: string) => void>('onJumpToKey', {
+        spanFocusKeyRef: { current: null }, allSpans: [], spanViewportRef: { current: { pauseFollowing: () => {} } },
+        cancelPendingSpanJump: cancel, spanJumpTimerRef, setSelectedKey: () => {},
+        setTimeout: (callback: () => void) => { timers.set(1, callback); return 1; },
+    });
+    jump('old-span');
+    assert.equal(timers.size, 1);
+    const node = findNode(n => ts.isJsxOpeningElement(n) && n.tagName.getText(ast) === 'TraceSpanViewport') as ts.JsxOpeningElement;
+    const attr = node.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(ast) === 'onUserNavigation') as ts.JsxAttribute;
+    const expression = attr.initializer as ts.JsxExpression;
+    evaluate<() => void>(expression.expression!.getText(ast), { cancelPendingSpanJump: cancel })();
+    assert.equal(timers.size, 0);
+    assert.equal(spanJumpTimerRef.current, null);
+});
+
+
+test('clearing the search captures the current Span before restoring the full tree', () => {
+    const input = findNode(n => ts.isJsxSelfClosingElement(n) && n.tagName.getText(ast) === 'input'
+        && n.attributes.properties.some(p => ts.isJsxAttribute(p) && p.name.getText(ast) === 'value'
+            && p.initializer?.getText(ast) === '{searchQuery}')) as ts.JsxSelfClosingElement;
+    const attr = input.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(ast) === 'onChange') as ts.JsxAttribute;
+    const expression = attr.initializer as ts.JsxExpression;
+    const calls: unknown[] = [];
+    const change = evaluate<(event: { target: { value: string } }) => void>(expression.expression!.getText(ast), {
+        searchQuery: '第150轮', captureSpanContext: () => { calls.push('anchor'); },
+        setSearchQuery: (value: string) => { calls.push(value); }, setSearchMatchIdx: () => {},
+    });
+    change({ target: { value: '' } });
+    assert.deepEqual(calls, ['anchor', '']);
 });
 
 test('Span detail timestamps include the date so adjacent days remain distinguishable', () => {
