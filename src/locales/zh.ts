@@ -264,6 +264,10 @@ export const zh = {
     deleteError: '删除出错',
   },
   traceTree: {
+    spanList: 'Span 列表',
+    jumpToBottom: '跳到底部',
+    followingLatest: '跟随中',
+    newContent: '有新内容',
     expandAll: '展开',
     collapseAll: '收起',
     expandAllHint: '展开子 Agent 及其下层节点。',
