@@ -323,10 +323,10 @@ function buildAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
     return roots;
 }
 
-type TraceTreeFilters = { treeKindFilter: string; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
+type TraceTreeFilters = { treeKindFilter: string[]; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
 
 function traceAgentMatchesFilters(node: AgentNode, filters: TraceTreeFilters): boolean {
-    if (filters.treeKindFilter !== 'all' || !filters.searchQuery || !filters.matchedKeys.has(agentKey(node.id))) return false;
+    if (filters.treeKindFilter.length > 0 || !filters.searchQuery || !filters.matchedKeys.has(agentKey(node.id))) return false;
     const duration = getAgentActiveDurationMs(node);
     if (filters.minDurationMs > 0 && (duration == null || duration <= filters.minDurationMs)) return false;
     if (filters.ctxSlowOnly && !(duration != null && duration > SLOW_MS)) return false;
@@ -340,7 +340,7 @@ function traceEventMatchesFilters(
     const child = event.spawnedChildId ? nodes.get(event.spawnedChildId) : undefined;
     const duration = event.kind === 'task' ? getAgentActiveDurationMs(child)
         : event.startedAt != null && event.completedAt != null ? event.completedAt - event.startedAt : undefined;
-    if (filters.treeKindFilter !== 'all' && event.kind !== filters.treeKindFilter) return false;
+    if (filters.treeKindFilter.length > 0 && !filters.treeKindFilter.includes(event.kind)) return false;
     if (filters.minDurationMs > 0 && (duration == null || duration <= filters.minDurationMs)) return false;
     if (filters.minTokenK > 0 && (event.usage?.total || 0) < filters.minTokenK * 1000) return false;
     if (filters.ctxSlowOnly && !(duration != null && duration > SLOW_MS)) return false;
@@ -539,7 +539,7 @@ interface TraceCtxValue {
     searchQuery: string;
     matchedKeys: Set<string>;
     activeMatchKey: string | null;
-    treeKindFilter: string;
+    treeKindFilter: string[];
     minDurationMs: number;
     minTokenK: number;
     slowOnly: boolean;
@@ -556,7 +556,7 @@ interface TraceCtxValue {
 
 const defaultCtx: TraceCtxValue = {
     searchQuery: '', matchedKeys: new Set(), activeMatchKey: null,
-    treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false,
+    treeKindFilter: [], minDurationMs: 0, minTokenK: 0, slowOnly: false,
     onJumpToKey: () => {},
     topNDuration: [], topNTokens: [], slowNodesList: [], rasNodeList: [],
     onSubagentNavigate: undefined,
@@ -734,7 +734,7 @@ export default function AgentTraceView({
     // ── Search + extended filter state ──────────────────────────────────────
     const [searchQuery, setSearchQuery] = useState('');
     const [searchMatchIdx, setSearchMatchIdx] = useState(0);
-    const [treeKindFilter, setTreeKindFilter] = useState('all');
+    const [treeKindFilter, setTreeKindFilter] = useState<string[]>([]);
     const [minDurationMs, setMinDurationMs] = useState(0);
     const [minTokenK, setMinTokenK] = useState(0);
     const [showFilters, setShowFilters] = useState(false);
@@ -1068,7 +1068,7 @@ export default function AgentTraceView({
         findEventAnomalies,
     };
 
-    const hasActiveFilters = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0 || slowOnly;
+    const hasActiveFilters = treeKindFilter.length > 0 || minDurationMs > 0 || minTokenK > 0 || slowOnly;
 
     if (!tree || !selectedAgentNode) {
         return (
@@ -1211,14 +1211,14 @@ export default function AgentTraceView({
                     {/* Extended filter row */}
                     {(showFilters || hasActiveFilters) && (
                         <div className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-border bg-background-secondary">
-                            <FilterPill label={tt('traceTree.filterType')} value={treeKindFilter} options={[
+                            <FilterPill multiple label={tt('traceTree.filterType')} value={treeKindFilter} options={[
                                 { value: 'all', label: tt('traceTree.filterAll') },
+                                { value: 'user', label: 'User' },
                                 { value: 'llm', label: 'LLM', accentClass: KIND_META.llm.text },
                                 { value: 'tool', label: 'Tool', accentClass: KIND_META.tool.text },
                                 { value: 'task', label: 'Task', accentClass: KIND_META.task.text },
                                 ...((totalStats?.chains || 0) > 0 ? [{ value: 'chain', label: 'Chain', accentClass: KIND_META.chain.text }] : []),
                                 { value: 'skill', label: 'Skill', accentClass: KIND_META.skill.text },
-                                { value: 'user', label: 'User' },
                             ]} onChange={setTreeKindFilter} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterDuration')} value={String(slowOnly ? SLOW_MS : minDurationMs)} disabled={slowOnly} options={[
@@ -1237,7 +1237,7 @@ export default function AgentTraceView({
                                 { value: '100', label: '>100k' },
                             ]} onChange={v => setMinTokenK(Number(v))} />
                             {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={() => { setTreeKindFilter('all'); setMinDurationMs(0); setMinTokenK(0); setSlowOnly(false); }} className="h-6 ml-auto text-xs text-foreground-muted">
+                                <Button variant="ghost" size="sm" onClick={() => { setTreeKindFilter([]); setMinDurationMs(0); setMinTokenK(0); setSlowOnly(false); }} className="h-6 ml-auto text-xs text-foreground-muted">
                                     <XIcon className="size-3" />{tt('traceTree.resetFilter')}
                                 </Button>
                             )}
@@ -1331,25 +1331,34 @@ export default function AgentTraceView({
 }
 
 // ─── FilterPill ──────────────────────────────────────────────────────────────
-function FilterPill({ label, value, options, onChange, disabled = false }: {
+function FilterPill(props: {
     label: string;
-    value: string;
     options: { value: string; label: string; accentClass?: string }[];
-    onChange: (v: string) => void;
     disabled?: boolean;
-}) {
+} & ({ multiple: true; value: string[]; onChange: (value: string[]) => void }
+    | { multiple?: false; value: string; onChange: (value: string) => void })) {
+    const { label, options, disabled = false } = props;
     return (
         <div className="flex items-center gap-1.5">
             <span className="text-xs text-foreground-muted font-medium shrink-0">{label}:</span>
             <div className="flex border border-border rounded-md overflow-hidden">
                 {options.map((o, idx) => {
-                    const isActive = o.value === value;
+                    const isActive = props.multiple
+                        ? o.value === 'all' ? props.value.length === 0 : props.value.includes(o.value)
+                        : o.value === props.value;
                     return (
                         <button
                             key={o.value}
                             disabled={disabled}
                             aria-pressed={isActive}
-                            onClick={() => onChange(o.value)}
+                            onClick={() => {
+                                if (props.multiple) {
+                                    props.onChange(o.value === 'all' ? []
+                                        : isActive ? props.value.filter(value => value !== o.value) : [...props.value, o.value]);
+                                } else {
+                                    props.onChange(o.value);
+                                }
+                            }}
                             className={cn(
                                 'px-2 py-0.5 text-xs whitespace-nowrap transition-colors',
                                 idx < options.length - 1 && 'border-r border-border',

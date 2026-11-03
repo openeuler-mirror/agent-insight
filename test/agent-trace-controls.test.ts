@@ -128,7 +128,7 @@ test('manual duration filtering offers >60s without enabling slow-only', () => {
 function eventVisible(durationMs: number | undefined, slowOnly: boolean, minDurationMs: number) {
     const matches = functionValue<any>('traceEventMatchesFilters', { eventKey: () => 'event', SLOW_MS: 60_000 });
     return matches({ startedAt: 0, completedAt: durationMs, usage: { total: 0 }, kind: 'tool' }, 0, 'root', new Map(), {
-        treeKindFilter: 'all', minDurationMs, minTokenK: 0, ctxSlowOnly: slowOnly, searchQuery: '', matchedKeys: new Set(),
+        treeKindFilter: [], minDurationMs, minTokenK: 0, ctxSlowOnly: slowOnly, searchQuery: '', matchedKeys: new Set(),
     });
 }
 
@@ -243,7 +243,7 @@ test('nested Workflow containers survive Tool filtering when their linked Agent 
     const child = { id: 'child', events: [{ kind: 'tool', name: 'lookup', startedAt: 1, completedAt: 2 }], children: [] };
     const nodes = new Map([['child', child]]);
     const entry = { event: { kind: 'chain' }, eventIndex: 0, children: [{ event: { kind: 'task', treeHidden: true, spawnedChildId: 'child' }, eventIndex: 1, children: [] }] };
-    const predicate = (event: any, index: number, owner: string) => matches(event, index, owner, nodes, { treeKindFilter: 'tool', minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: '', matchedKeys: new Set() });
+    const predicate = (event: any, index: number, owner: string) => matches(event, index, owner, nodes, { treeKindFilter: ['tool'], minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: '', matchedKeys: new Set() });
     assert.equal(contains(entry, 'root', nodes, predicate), true);
     child.events = [];
     assert.equal(contains(entry, 'root', nodes, predicate), false);
@@ -256,9 +256,9 @@ test('searching only a linked Agent name retains its Workflow ancestor without b
     const agent = { id: 'child', events: [], children: [], stats: { totalTokens: 2000, durationMs: 3000 } };
     const nodes = new Map([['child', agent]]);
     const entry = { event: { kind: 'chain' }, eventIndex: 0, children: [{ event: { kind: 'task', spawnedChildId: 'child' }, eventIndex: 1, children: [] }] };
-    const filters = { treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: 'child name', matchedKeys: new Set(['a:child']) };
+    const filters = { treeKindFilter: [], minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: 'child name', matchedKeys: new Set(['a:child']) };
     assert.equal(contains(entry, 'root', nodes, () => false, (node: any) => matchAgent(node, filters)), true);
-    assert.equal(contains(entry, 'root', nodes, () => false, (node: any) => matchAgent(node, { ...filters, treeKindFilter: 'tool' })), false);
+    assert.equal(contains(entry, 'root', nodes, () => false, (node: any) => matchAgent(node, { ...filters, treeKindFilter: ['tool'] })), false);
 });
 
 const displayEvents = (events: any[]) => functionValue<any>('buildAgentEventTree', {})(events);
@@ -383,7 +383,7 @@ test('Tool filtering and tool-name search retain the new model ancestor without 
     const entries = displayEvents(messageEvents());
     const matches = functionValue<any>('traceEventMatchesFilters', { eventKey: (owner: string, index: number) => `${owner}:${index}`, SLOW_MS: 60_000 });
     const contains = functionValue<any>('agentEventTreeMatches', { buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}) });
-    const filters = { treeKindFilter: 'tool', minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: 'read', matchedKeys: new Set(['root:1']) };
+    const filters = { treeKindFilter: ['tool'], minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: 'read', matchedKeys: new Set(['root:1']) };
     assert.equal(contains(entries[0], 'root', new Map(), (event: any, index: number, owner: string) => matches(event, index, owner, new Map(), filters)), true);
     assert.equal(entries[0].children[0].eventIndex, 1);
 });
@@ -449,7 +449,7 @@ test('LLM details identify the original Span ID rather than a tool call, includi
 
 test('recursive Agent and TASK duration filters use active time while preserving legacy fallback', () => {
     type NodeFixture = { id: string; stats: { durationMs: number; activeDurationMs?: number; totalTokens: number } };
-    type FilterFixture = { treeKindFilter: string; minDurationMs: number; minTokenK: number;
+    type FilterFixture = { treeKindFilter: string[]; minDurationMs: number; minTokenK: number;
         ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
     const matchAgent = functionValue<(node: NodeFixture, filters: FilterFixture) => boolean>('traceAgentMatchesFilters', {
         agentKey: (id: string) => `a:${id}`, aggregateSubtreeStats: (n: NodeFixture) => n.stats, SLOW_MS: 60_000,
@@ -461,7 +461,7 @@ test('recursive Agent and TASK duration filters use active time while preserving
     const nodes = new Map([['child', child]]);
     const event = { kind: 'task', spawnedChildId: 'child' };
     for (const ctxSlowOnly of [false, true]) {
-        const filters = { treeKindFilter: 'all', minDurationMs: ctxSlowOnly ? 0 : 60_000,
+        const filters = { treeKindFilter: [], minDurationMs: ctxSlowOnly ? 0 : 60_000,
             minTokenK: 0, ctxSlowOnly, searchQuery: 'child', matchedKeys: new Set(['a:child', 'task:0']) };
         assert.equal(matchAgent(child, filters), false, 'user idle must not make an Agent match a slow filter');
         assert.equal(matchEvent(event, 0, 'root', nodes, filters), false, 'TASK uses its child active time');
@@ -471,8 +471,101 @@ test('recursive Agent and TASK duration filters use active time while preserving
         child.stats.activeDurationMs = 50_000;
     }
     const legacy = { ...child, stats: { durationMs: 61_000, totalTokens: 0 } };
-    const filters = { treeKindFilter: 'all', minDurationMs: 60_000, minTokenK: 0,
+    const filters = { treeKindFilter: [], minDurationMs: 60_000, minTokenK: 0,
         ctxSlowOnly: true, searchQuery: 'child', matchedKeys: new Set(['a:child', 'task:0']) };
     assert.equal(matchAgent(legacy, filters), true);
     assert.equal(matchEvent(event, 0, 'root', new Map([['child', legacy]]), filters), true);
+});
+
+
+test('Span type buttons accumulate selections, toggle off and restore all types', () => {
+    type MultiPillProps = { multiple: true; label: string; value: string[]; options: { value: string; label: string }[]; onChange: (value: string[]) => void };
+    type ButtonProps = { children: string; 'aria-pressed': boolean; onClick: () => void };
+    type PillElement = React.ReactElement<{ children: [React.ReactNode, React.ReactElement<{ children: React.ReactNode }>] }>;
+    const FilterPill = functionValue<(props: MultiPillProps) => PillElement>('FilterPill', { React, cn: (...values: unknown[]) => values.filter(Boolean).join(' ') });
+    const pill = findNode(n => ts.isJsxSelfClosingElement(n) && n.tagName.getText(ast) === 'FilterPill'
+        && n.attributes.properties.some(p => ts.isJsxAttribute(p) && p.name.getText(ast) === 'label'
+            && p.initializer?.getText(ast).includes('traceTree.filterType')));
+    let selected: string[] = [];
+    const buttons = () => {
+        const element = evaluate<React.ReactElement<MultiPillProps>>(pill.getText(ast), {
+            React, FilterPill, treeKindFilter: selected, setTreeKindFilter: (next: string[]) => { selected = next; },
+            tt: (key: string) => key, totalStats: { chains: 1 },
+            KIND_META: Object.fromEntries(['llm', 'tool', 'task', 'chain', 'skill'].map(kind => [kind, { text: '' }])),
+        });
+        const rendered = FilterPill(element.props);
+        return React.Children.toArray(rendered.props.children[1].props.children) as React.ReactElement<ButtonProps>[];
+    };
+    const button = (label: string) => buttons().find(b => b.props.children === label)!;
+    assert.equal(button('traceTree.filterAll').props['aria-pressed'], true);
+    button('User').props.onClick();
+    button('LLM').props.onClick();
+    assert.deepEqual(selected, ['user', 'llm']);
+    assert.equal(button('User').props['aria-pressed'], true);
+    assert.equal(button('LLM').props['aria-pressed'], true);
+    assert.equal(button('Tool').props['aria-pressed'], false);
+    assert.equal(button('traceTree.filterAll').props['aria-pressed'], false);
+    button('User').props.onClick();
+    assert.deepEqual(selected, ['llm']);
+    button('LLM').props.onClick();
+    assert.deepEqual(selected, []);
+    assert.equal(button('traceTree.filterAll').props['aria-pressed'], true);
+    button('Tool').props.onClick();
+    button('Skill').props.onClick();
+    button('traceTree.filterAll').props.onClick();
+    assert.deepEqual(selected, []);
+});
+
+test('User plus LLM filtering preserves dialogue order and excludes unrelated event types', () => {
+    const matches = functionValue<(...args: unknown[]) => boolean>('traceEventMatchesFilters', { eventKey: (owner: string, index: number) => `${owner}:${index}`, SLOW_MS: 60_000 });
+    const events = ['user', 'llm', 'tool', 'skill', 'task', 'chain', 'user', 'llm'].map(kind => ({ kind }));
+    const filters = { treeKindFilter: ['user', 'llm'], minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: '', matchedKeys: new Set() };
+    assert.deepEqual(events.filter((event, index) => matches(event, index, 'root', new Map(), filters)), [events[0], events[1], events[6], events[7]]);
+    assert.deepEqual(events.filter((event, index) => matches(event, index, 'root', new Map(), { ...filters, treeKindFilter: [] })), events);
+    assert.deepEqual(events.filter((event, index) => matches(event, index, 'root', new Map(), { ...filters, treeKindFilter: ['missing'] })), []);
+});
+
+test('multiple Span types still combine with search, duration, tokens and slow-only', () => {
+    const matches = functionValue<(...args: unknown[]) => boolean>('traceEventMatchesFilters', { eventKey: (owner: string, index: number) => `${owner}:${index}`, SLOW_MS: 60_000 });
+    const event = { kind: 'llm', startedAt: 0, completedAt: 60_001, usage: { total: 12_000 } };
+    const filters = { treeKindFilter: ['user', 'llm'], minDurationMs: 5_000, minTokenK: 10, ctxSlowOnly: true, searchQuery: 'answer', matchedKeys: new Set(['root:0']) };
+    const visible = (changes: object) => matches({ ...event, ...changes }, 0, 'root', new Map(), filters);
+    assert.equal(visible({}), true);
+    assert.equal(visible({ kind: 'tool' }), false);
+    assert.equal(visible({ completedAt: 60_000 }), false);
+    assert.equal(visible({ completedAt: 4_999 }), false);
+    assert.equal(visible({ usage: { total: 9_999 } }), false);
+    assert.equal(matches(event, 1, 'root', new Map(), filters), false);
+});
+
+test('multi-type filtering retains structural ancestors for matching nested dialogue', () => {
+    const build = functionValue<(...args: unknown[]) => unknown>('buildAgentEventTree', {});
+    const contains = functionValue<(...args: unknown[]) => boolean>('agentEventTreeMatches', { buildAgentEventTree: build });
+    const matches = functionValue<(...args: unknown[]) => boolean>('traceEventMatchesFilters', { eventKey: () => '', SLOW_MS: 60_000 });
+    const child = { id: 'child', events: [{ kind: 'user' }, { kind: 'llm' }, { kind: 'tool' }], children: [] };
+    const nodes = new Map([['child', child]]);
+    const entry = { event: { kind: 'chain' }, eventIndex: 0, children: [{ event: { kind: 'task', spawnedChildId: 'child' }, eventIndex: 1, children: [] }] };
+    const filters = { treeKindFilter: ['user', 'llm'], minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: '', matchedKeys: new Set() };
+    const predicate = (event: { kind: string }, index: number, owner: string) => matches(event, index, owner, nodes, filters);
+    assert.equal(predicate(entry.event, 0, 'root'), false);
+    assert.equal(contains(entry, 'root', nodes, predicate), true);
+    child.events = [{ kind: 'tool' }];
+    assert.equal(contains(entry, 'root', nodes, predicate), false);
+});
+
+test('reset clears all selected Span types and other filter restrictions', () => {
+    const reset = findNode(n => ts.isJsxElement(n) && n.openingElement.tagName.getText(ast) === 'Button'
+        && n.children.some(child => ts.isJsxExpression(child) && child.expression?.getText(ast) === "tt('traceTree.resetFilter')")) as ts.JsxElement;
+    const attribute = reset.openingElement.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(ast) === 'onClick') as ts.JsxAttribute;
+    const expression = attribute.initializer as ts.JsxExpression;
+    const state = { treeKindFilter: ['user', 'llm'], minDurationMs: 5_000, minTokenK: 10, slowOnly: true };
+    evaluate<() => void>(expression.expression!.getText(ast), {
+        setTreeKindFilter: (value: string[]) => { state.treeKindFilter = value; },
+        setMinDurationMs: (value: number) => { state.minDurationMs = value; },
+        setMinTokenK: (value: number) => { state.minTokenK = value; },
+        setSlowOnly: (value: boolean) => { state.slowOnly = value; },
+    })();
+    assert.deepEqual(state, { treeKindFilter: [], minDurationMs: 0, minTokenK: 0, slowOnly: false });
+    assert.equal(variable<boolean>('hasActiveFilters', state), false);
+    assert.equal(variable<boolean>('hasActiveFilters', { ...state, treeKindFilter: ['user', 'llm'] }), true);
 });
