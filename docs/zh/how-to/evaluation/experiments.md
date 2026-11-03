@@ -422,6 +422,8 @@ Trace 评测详情把输入、输出和评分依据放在同一页，适合核�
 
 普通实验执行失败时，Case 详情顶部直接展示失败原因；Benchmark 详情按当前执行和评测状态展示失败原因，即使已经生成提交物或关联 Trace 也会显示。失败信息同时保留在执行进度弹窗中；重试或重评开始后不再展示上一轮的失败提示。
 
+平台评估器缺少模型时，执行进度弹窗和评估器失败卡片会显示 **未配置平台评测模型**，并提供 **去模型注册** 入口（新标签页打开）。在[模型注册](../platform/settings/model-registry.md)中添加模型、测试连接并设为默认后，返回 Case 详情对失败项点击 **重评**；Skill 实验也可使用 **重新评测**。已有输出和 Trace 可复用，无需重新执行 Agent。该指引仅用于缺少平台评测模型；纯代码评估器无需配置模型，连接超时、鉴权失败和返回格式错误仍显示各自原因。
+
 <p align="center">
   <img src="../../../images/agent/evaluation/eval_experiment_case_detail.png" alt="Trace 评测详情，展示任务输入、参考答案、实际输出、结果评测总分、评分点证据、人工修正和评论" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
