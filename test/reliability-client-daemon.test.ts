@@ -18,7 +18,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 
@@ -275,46 +275,52 @@ test('collector args carry no shell string', () => {
   assert.ok(args.includes('--timeout-seconds'))
 })
 
-test('OpenCode slash-command input uses the native command path without adding wrapper quotes', () => {
-  const input = '/aet-design https://example.com/PRD.md\n第二行  保留连续空格和 "原生引号"'
-  const invocation = client.buildExperimentCaseInvocation('/usr/local/bin/opencode', {
-    platform: 'opencode',
-    agent: 'aet-design',
-    model: 'provider/model',
-    input,
-    correlation: { caseRunId: 'case-1' },
-  })
+function opencodeInvocationFixture(t: TestContext, major: 1 | 2) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-invocation-test-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const executable = path.join(root, 'opencode')
+  const flags = 'run --format json --agent --model --title --command --auto'
+    + (major === 2 ? ' --standalone --session' : '')
+  fs.writeFileSync(executable, `#!${process.execPath}\nconsole.log(process.argv.includes('--version') ? '${major}.0.0' : ${JSON.stringify(flags)});\n`, { mode: 0o700 })
+  return executable
+}
 
-  assert.equal(invocation.stdin, null)
-  assert.deepEqual(invocation.args.filter((arg) => arg !== '--auto'), [
-    'run',
-    '--format',
-    'json',
-    '--agent',
-    'aet-design',
-    '--title',
-    'case-1',
-    '--model',
-    'provider/model',
-    '--command',
-    'aet-design',
-    'https://example.com/PRD.md\n第二行  保留连续空格和 "原生引号"',
-  ])
-  assert.ok(!invocation.args.includes(input))
+test('OpenCode v1 slash commands preserve native arguments; v2 preserves the complete input', (t) => {
+  const input = '/aet-design https://example.com/PRD.md\n第二行  保留连续空格和 "原生引号"'
+  for (const major of [1, 2] as const) {
+    const invocation = client.buildExperimentCaseInvocation(opencodeInvocationFixture(t, major), {
+      platform: 'opencode', agent: 'aet-design', model: 'provider/model', input,
+      correlation: { caseRunId: 'case-1' },
+    })
+    assert.ok(!invocation.args.includes(input))
+    if (major === 2) {
+      assert.equal(invocation.stdin, input)
+      assert.ok(!invocation.args.includes('--command'))
+      assert.ok(invocation.args.includes('--standalone'))
+      const sessionIndex = invocation.args.indexOf('--session')
+      assert.ok(sessionIndex >= 0)
+      assert.match(invocation.args[sessionIndex + 1], /^ses_[a-f0-9]+$/)
+    } else {
+      assert.equal(invocation.stdin, null)
+      assert.deepEqual(invocation.args.filter((arg) => arg !== '--auto'), [
+        'run', '--format', 'json', '--agent', 'aet-design', '--title', 'case-1',
+        '--model', 'provider/model', '--command', 'aet-design',
+        'https://example.com/PRD.md\n第二行  保留连续空格和 "原生引号"',
+      ])
+    }
+  }
 })
 
-test('ordinary OpenCode input is still piped verbatim through stdin', () => {
+test('ordinary OpenCode v1/v2 input is piped verbatim through stdin', (t) => {
   const input = '普通输入\n第二行  保留连续空格和 "原生引号"'
-  const invocation = client.buildExperimentCaseInvocation('/usr/local/bin/opencode', {
-    platform: 'opencode',
-    agent: 'build',
-    model: null,
-    input,
-  })
-
-  assert.equal(invocation.stdin, input)
-  assert.ok(!invocation.args.includes('--command'))
-  assert.ok(!invocation.args.includes(input))
+  for (const major of [1, 2] as const) {
+    const invocation = client.buildExperimentCaseInvocation(opencodeInvocationFixture(t, major), {
+      platform: 'opencode', agent: 'build', model: null, input,
+    })
+    assert.equal(invocation.stdin, input)
+    assert.ok(!invocation.args.includes('--command'))
+    assert.ok(!invocation.args.includes(input))
+  }
 })
 
 test('OpenCode slash-command parser only accepts a command at the start of the input', () => {

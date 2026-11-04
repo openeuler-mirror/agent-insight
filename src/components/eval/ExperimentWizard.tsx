@@ -88,7 +88,7 @@ import {
 import {
   skillExecutionCapabilityIssue,
   isSkillExperimentDatasetEligible,
-  isSkillExperimentEvaluatorEligible,
+  filterSkillExperimentEvaluators,
 } from '@/lib/skill-workbench/experiment-policy';
 
 interface AgentTargetOption {
@@ -664,7 +664,7 @@ export function ExperimentWizard({
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const isBenchmarkDataset = selectedDataset?.datasetKind === 'benchmark';
   const executionConcurrency = Number(executionConcurrencyInput);
-  const executionConcurrencyRequired = !skillContext && traceMode === 'generate' && !isReliabilityDataset;
+  const executionConcurrencyRequired = (traceMode === 'generate' || skillPreset === 'skill-ab') && !isReliabilityDataset;
   const executionConcurrencyValid = Number.isSafeInteger(executionConcurrency) && executionConcurrency >= 1;
   const agentTimeoutSeconds = Number(agentTimeoutInput);
   const agentTimeoutValid = isValidExperimentAgentTimeoutSeconds(agentTimeoutSeconds);
@@ -930,7 +930,7 @@ export function ExperimentWizard({
         : {};
       const sourceSnapshot = detail?.configSnapshot && typeof detail.configSnapshot === 'object'
         ? detail.configSnapshot as Record<string, unknown> : {};
-      const restoredConcurrency = detail.executionConcurrency ?? sourceSnapshot.executionConcurrency ?? (sourceSnapshot.runConfig as Record<string, unknown> | undefined)?.executionConcurrency;
+      const restoredConcurrency = detail.executionConcurrency ?? sourceSnapshot.executionConcurrency ?? (sourceSnapshot.runtime as Record<string, unknown> | undefined)?.executionConcurrency ?? (sourceSnapshot.runConfig as Record<string, unknown> | undefined)?.executionConcurrency;
       setExecutionConcurrencyInput(String(restoredConcurrency ?? 1));
       const restoredDatasetId = typeof config.datasetId === 'string' ? config.datasetId : '';
       const restoredTraceSource = skillPreset === 'skill-ab' || config.traceSource === 'generate' ? 'generate' : 'existing';
@@ -1527,8 +1527,7 @@ export function ExperimentWizard({
       return [official, ...cards.filter((card) => !card.id.startsWith('benchmark:'))];
     }
     const catalog = new Map([...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]));
-    return Array.from(catalog.values())
-      .filter((card) => card.status === 'ready' && isSkillExperimentEvaluatorEligible(skillPreset, card.id));
+    return filterSkillExperimentEvaluators(skillPreset, Array.from(catalog.values()));
   }, [benchmarkEvaluatorId, customEvaluators, isBenchmarkDataset, selectedDataset, skillPreset]);
 
   useEffect(() => {
@@ -1680,6 +1679,7 @@ export function ExperimentWizard({
               ...(runtimeState.agentOptions ? { agentOptions: runtimeState.agentOptions } : {}),
             } : null,
             agentTimeoutSeconds,
+            ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
           }),
         });
         const created = await createResponse.json();

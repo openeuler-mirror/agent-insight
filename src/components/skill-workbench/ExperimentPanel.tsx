@@ -17,7 +17,7 @@
 'use client';
 import { DeleteExperimentButton, PendingExperimentCancellations } from '@/components/eval/DeleteExperimentButton';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlaskConical, GitCompareArrows, Loader2, MousePointerClick, Rows3 } from 'lucide-react';
 
 import {
@@ -27,6 +27,7 @@ import {
 import { SameConfigExperimentAction } from '@/components/eval/SameConfigExperimentAction';
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { apiFetch } from '@/lib/client/api';
+import { useExperimentListRefresh } from '@/lib/client/use-experiment-list-refresh';
 import { SkillExperimentResult } from './SkillExperimentResult';
 
 interface ExperimentRow {
@@ -85,8 +86,11 @@ export function ExperimentPanel({
   const [reuseFromExperimentId, setReuseFromExperimentId] = useState('');
   const [busyExperimentIds, setBusyExperimentIds] = useState<Record<string, boolean>>({});
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const loadSequence = useRef(0);
+
+  const load = useCallback(async (silent = false) => {
+    const sequence = ++loadSequence.current;
+    if (!silent) setLoading(true);
     try {
       const contextResponse = await apiFetch(
         `/api/skill-workbench/skills/${encodeURIComponent(skillName)}/experiments?user=${encodeURIComponent(user)}&version=${version}`,
@@ -94,20 +98,28 @@ export function ExperimentPanel({
       );
       const context = await contextResponse.json();
       if (!contextResponse.ok) throw new Error(context.error || '加载 Skill 版本失败');
+      if (sequence !== loadSequence.current) return;
       setVersions(Array.isArray(context.versions) ? context.versions : []);
       setRows(Array.isArray(context.experiments) ? context.experiments : []);
     } catch (error) {
-      onError(error instanceof Error ? error.message : '加载实验失败');
-      setRows([]);
+      if (!silent && sequence === loadSequence.current) {
+        onError(error instanceof Error ? error.message : '加载实验失败');
+        setRows([]);
+      }
     } finally {
-      setLoading(false);
+      if (!silent && sequence === loadSequence.current) setLoading(false);
     }
   }, [onError, skillName, user, version]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      loadSequence.current += 1;
+    };
   }, [load]);
+
+  useExperimentListRefresh(rows, load, !loading && !detailId && !preset);
 
   if (detailId) {
     return <SkillExperimentResult user={user} skillName={skillName} version={version} experimentId={detailId} onBack={() => { setDetailId(null); void load(); }} />;
