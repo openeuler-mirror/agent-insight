@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { deriveExecutionTiming } from '@/lib/engine/observability/execution-timing';
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { sessionTraceRelations } from '@/lib/trace/session-relations';
 import { resolveUser } from '@/lib/auth/auth';
@@ -31,8 +32,10 @@ import {
     type CollaborationTraceMember,
 } from '@/lib/ingest/collaboration/trace-projection';
 import { toTraceStructureInteractions, withTracePayloadVersions } from '@/lib/trace/session-payload';
+import { loadDifyWorkflowProjection } from '@/lib/ingest/otel/dify-workflow-projection';
 
 type ParsedSession = {
+    framework?: string | null;
     session: any;
     interactions: any[];
     langfuseTraceNodes: LangfuseTraceNode[];
@@ -110,12 +113,14 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
         : rawInteractions;
     const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
     const executionSummary = latestExecution ? {
-        latency: latestExecution.latency ?? null,
+        latency: framework === 'opencode'
+            ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? latestExecution.latency ?? null
+            : latestExecution.latency ?? null,
         tokens: latestExecution.tokens ?? null,
         cost: latestExecution.cost ?? null,
         timestamp: latestExecution.timestamp ?? null,
     } : null;
-    const value = { session, interactions, langfuseTraceNodes, executionSummary };
+    const value = { session, interactions, langfuseTraceNodes, executionSummary, framework };
     rememberParsedSession(taskId, signature, value);
     return value;
 }
@@ -177,6 +182,16 @@ export async function GET(request: Request) {
         const { username } = await resolveUser(request);
         if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         const rawInteraction = searchParams.get('source') === 'raw';
+        const difyProjection = !rawInteraction && parsed.framework === 'dify' && username && username === session.user
+            ? await loadDifyWorkflowProjection(username, taskId, langfuseTraceNodes) : null;
+        const displayTraceNodes = difyProjection?.nodes || langfuseTraceNodes;
+        const displayExecution = difyProjection?.linkedTraces && executionSummary ? {
+            ...executionSummary,
+            tokens: displayTraceNodes.filter(node => node.kind === 'llm').reduce((sum, node) => sum + (node.usage?.totalTokens || 0), 0),
+        } : executionSummary;
+        const difyProjectionSummary = difyProjection ? {
+            linkedTraces: difyProjection.linkedTraces, truncated: difyProjection.truncated,
+        } : undefined;
         const relationPlan = !rawInteraction && username && username === session.user
             ? await collaborationTraceProjection.plan(username) : null;
         const reportedInteractions = relationPlan && username
@@ -210,7 +225,8 @@ export async function GET(request: Request) {
                 startTime: session.startTime.getTime(),
                 interactionCount: displayInteractions.length,
                 interactions: toTraceStructureInteractions(displayInteractions),
-                execution: executionSummary,
+                execution: displayExecution,
+                ...(difyProjectionSummary ? { difyProjection: difyProjectionSummary } : {}),
                 parentAgent,
                 traceRelations,
                 ...(collaborationProjection ? {
@@ -222,7 +238,7 @@ export async function GET(request: Request) {
                         truncated: collaborationProjection.truncated,
                     },
                 } : {}),
-                ...(langfuseTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes } : {}),
+                ...(displayTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes: displayTraceNodes } : {}),
             });
         }
 
@@ -273,7 +289,8 @@ export async function GET(request: Request) {
                     truncated: collaborationProjection.truncated,
                 },
             } : {}),
-            ...(langfuseTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes } : {}),
+            ...(displayTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes: displayTraceNodes } : {}),
+            ...(difyProjectionSummary ? { difyProjection: difyProjectionSummary } : {}),
         });
     } catch (e) {
         console.error('Error reading session from DB:', e);

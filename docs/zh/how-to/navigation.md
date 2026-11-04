@@ -26,6 +26,8 @@ title: "操作指南"
 
 ## 观测
 
+- [Dify 原生 OTLP 接入](./observability/develop-trace-collector.md#dify-原生-otlp-接入)
+
 - [新增第三方Agent框架Trace采集开发方案](./observability/develop-trace-collector.md)
 - [Goal Plus 观测接入](./observability/goal-plus.md)
 - [LlamaIndex Trace Collector](./observability/llamaindex-trace-collector.md)
@@ -33,7 +35,7 @@ title: "操作指南"
 - [质量监控](./observability/quality-monitoring.md)
 - [QwenPaw Trace Collector](./observability/qwenpaw-trace-collector.md)
 - [Trae IDE 接入指南](./observability/trae-integration.md)
-- [链路追踪](./observability/view-traces.md)
+- [链路追踪](./observability/view-traces.md)：查看模型与工具的关联、筛选及详情；明确关联的普通工具缩进到对应 LLM 下
 - [WorkBuddy Trace Collector](./observability/workbuddy-trace-collector.md)
 
 ## 评测

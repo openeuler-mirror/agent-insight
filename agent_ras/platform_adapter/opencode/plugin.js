@@ -228,10 +228,13 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
     if (rasDebugEarly) console.error(...args)
   }
 
-  // Optional Insight → local config sync (fail-open). Must run before hello config load.
-  await syncCapabilityConfigFromInsight({ log: rasLogEarly })
-
   const capabilityConfig = loadCapabilityConfig()
+  // First hello uses the local snapshot; later sessions can use the refreshed snapshot.
+  setTimeout(() => {
+    void syncCapabilityConfigFromInsight({ log: rasLogEarly }).then(result => {
+      if (result.applied) Object.assign(capabilityConfig, loadCapabilityConfig())
+    }).catch(error => rasLogEarly("[insight-ras] background config sync failed", error?.message))
+  }, 0).unref?.()
   const hostApi = createOpenCodeHost({
     client,
     directory: directory || process.cwd(),

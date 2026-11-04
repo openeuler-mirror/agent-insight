@@ -995,6 +995,7 @@ function buildMessagesForSession(state, sid) {
         type: "function",
         function: { name: tool, arguments: typeof args === "string" ? args : JSON.stringify(args || {}) },
         state,
+        ...(st.time ? { timing: { started_at: toMsTimestamp(st.time.start), completed_at: toMsTimestamp(st.time.end) } } : {}),
         output: st?.output,
       })
     }

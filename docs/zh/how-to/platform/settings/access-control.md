@@ -15,13 +15,19 @@ changefreq: monthly
 刷新完成前不生成可复制的一键安装命令；因此服务重建、数据库切换或平台地址变化后，无需先
 手工退出登录，但必须重新打开本页并复制一条新命令。
 
+## Dify 原生 OTLP 配置
+
+在安装页顶部点击 **Dify：原生 OTLP 配置**，可跳到独立配置区。Dify 使用已有导出能力，无需安装采集插件或修改 Dify 源码，因此不参与命令行 Agent 的一键安装选择。
+
+身份刷新完成后，分别复制 **Dify API / Worker** 与 **Dify Agent 运行服务** 的配置，加入对应进程环境并重启。前者导出 Workflow / Chatflow 的外层节点，后者导出 Agent 内部模型与工具；只配一组不能覆盖两层。两组配置使用当前平台地址及当前账号 API Key，身份未就绪时不提供复制。容器内须改为 Dify 能访问的平台地址；`localhost` 指向容器自身。Agent 内容采集、Metrics 与 Landlock 环境要求见 [Dify 原生 OTLP 接入](../../observability/develop-trace-collector.md#dify-原生-otlp-接入)。
+
 ## 平台登录模式
 
 平台支持三种互不混用的部署级登录路径：
 
 | 名称 | 配置 | 用户行为 |
 | --- | --- | --- |
-| 本地登录 | `LOGIN_MODE=standalone`（默认） | 用户输入邮箱，登录即注册，可以主动退出 |
+| 本地登录 | `LOGIN_MODE=standalone`（默认） | 输入邮箱后按 Enter 或点击 **Sign In**，登录即注册，可以主动退出 |
 | 历史组织集成 | `ORGANIZATION_MODE=true`、`ORG_*` | 依赖上游网关 Cookie，并可联动组织 Skill 接口 |
 | IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，以 UUID 归属数据，侧边栏优先显示人员账号，可退出当前网页账号 |
 
@@ -97,7 +103,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 客户端安装页面由两个主要区域组成：
 
 1. **安装命令区**
-   选择框架并复制 Linux curl 或 Windows PowerShell 接入命令；保留 LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
+   选择框架并复制 Linux curl 或 Windows PowerShell 接入命令；另提供 Dify 原生 OTLP、LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
 2. **凭证与接入信息区**
    展示当前 API Key、账号信息、平台地址与所选框架的上报路径。
 

@@ -20,7 +20,6 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk'
 import { resolveAgentInsightDataPath, getAgentInsightHome } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'
 import { isModelConnectionReady } from '@/lib/shared/model-connection'
@@ -567,7 +566,7 @@ export async function prepareIsolatedHome(
       // 已存在 (重入或残留) 先删
       try { fs.unlinkSync(linkTarget) } catch { /* ok */ }
       fs.symlinkSync(realPlugin, linkTarget)
-    } catch (e) {
+    } catch {
       // 不支持 symlink (如 win) 或权限问题 -> fallback 复制
       try {
         fs.copyFileSync(realPlugin, linkTarget)

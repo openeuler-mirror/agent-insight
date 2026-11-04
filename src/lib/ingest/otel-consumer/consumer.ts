@@ -250,20 +250,20 @@ function wrapSaveExecutionWithAttributionGuard(
   log: (...args: any[]) => void,
 ): SaveExecution {
   return async (data, options) => {
-    // Qoder uploads carry server-stamped credential provenance. In a
+    // Qoder and Dify uploads carry server-stamped credential provenance. In a
     // single-user installation the valid API key commonly belongs to `admin`,
     // which the generic guard otherwise treats as an internal service owner.
     // Keep this exception framework-scoped so every existing collector retains
     // the original attribution policy.
-    const authenticatedQoderIngest =
-      data.framework === 'qoder' && data.authenticated_ingest === true;
+    const authenticatedFrameworkIngest =
+      ['qoder', 'dify'].includes(data.framework || '') && data.authenticated_ingest === true;
     const result = guardAttribution({
       user: data.user,
       taskId: data.task_id,
       framework: data.framework,
     });
 
-    if (!result.pass && !authenticatedQoderIngest) {
+    if (!result.pass && !authenticatedFrameworkIngest) {
       traceTimingEvent('save-skipped', { traceId: data.task_id, reason: 'attribution' });
       log('[AttributionGuard] dropping unattributed session', {
         taskId: result.taskId,

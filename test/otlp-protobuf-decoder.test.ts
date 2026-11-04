@@ -35,7 +35,7 @@ function makeProtobufTraceBody(overrides?: {
   extraSpans?: number
   extraResourceSpans?: number
 }): Buffer {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const root = require("@opentelemetry/otlp-transformer/build/src/generated/root")
   const traceReqType = root.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
 

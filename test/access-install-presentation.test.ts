@@ -25,7 +25,8 @@ import AccessInstallPage from '@/app/(main)/accessconfig/install/page';
 import { AuthProvider } from '@/lib/auth/auth-context';
 import { LocaleProvider } from '@/lib/client/locale-context';
 import { SidebarProvider } from '@/lib/client/sidebar-context';
-import { FRAMEWORK_OPTIONS } from '@/lib/ingest/setup/install-profile';
+import * as installProfile from '@/lib/ingest/setup/install-profile';
+const { FRAMEWORK_OPTIONS } = installProfile;
 
 function renderInstallPage() {
   const router = {
@@ -68,4 +69,39 @@ test('安装页保留 master 的框架选择、专用接入信息和身份刷新
     assert.ok(card.includes('加载中…'));
     assert.ok(!card.includes('<button'), '身份未就绪时不提供可复制的安装命令');
   }
+});
+
+test('Dify is discoverable as native OTLP configuration without pretending it needs a CLI collector', () => {
+  const html = renderInstallPage();
+  assert.match(html, /Dify 原生 OTLP 接入/);
+  assert.match(html, /href="#dify-otlp"/);
+  assert.match(html, /Dify API \/ Worker/);
+  assert.match(html, /Dify Agent 运行服务/);
+  assert.match(html, /无需安装采集插件/);
+  assert.ok(!FRAMEWORK_OPTIONS.some(option => option.value === 'dify'));
+  const cards = html.match(/<article\b[\s\S]*?<\/article>/g) || [];
+  for (const label of ['Dify API / Worker', 'Dify Agent 运行服务']) {
+    const card = cards.find(item => item.includes(label));
+    assert.ok(card);
+    assert.ok(!card.includes('<button'), 'Unverified identity must not expose a copyable config');
+  }
+});
+
+test('Dify configuration uses the authenticated endpoint and both native pipelines, and escapes header values', () => {
+  const build = (installProfile as any).difyOtlpConfiguration;
+  assert.equal(typeof build, 'function');
+  const config = build('https://insight.example/prefix/api/ingest/otel/v1/traces', "key'with=quoted,characters");
+  assert.match(config.workflow, /ENABLE_OTEL=true/);
+  assert.match(config.workflow, /OTLP_TRACE_ENDPOINT="https:\/\/insight.example\/prefix\/api\/ingest\/otel\/v1\/traces"/);
+  assert.match(config.workflow, /OTEL_EXPORTER_OTLP_PROTOCOL=http/);
+  assert.match(config.workflow, /OTEL_SAMPLING_RATE=1.0/);
+  assert.match(config.workflow, /OTLP_API_KEY=\n/);
+  const headerLine = config.workflow.split('\n').find((line: string) => line.startsWith('OTEL_EXPORTER_OTLP_TRACES_HEADERS='));
+  assert.equal(decodeURIComponent(JSON.parse(headerLine.split('=').slice(1).join('=')).slice('x-witty-api-key='.length)), "key'with=quoted,characters");
+  const agentLine = config.agent.split('\n').find((line: string) => line.startsWith('DIFY_AGENT_TRAJECTORY_OTLP_HEADERS='));
+  assert.deepEqual(JSON.parse(JSON.parse(agentLine.split('=').slice(1).join('='))), { 'x-witty-api-key': "key'with=quoted,characters" });
+  assert.match(config.agent, /DIFY_AGENT_TRAJECTORY_ENABLED=true/);
+  assert.match(config.agent, /DIFY_AGENT_TRAJECTORY_INCLUDE_CONTENT=true/);
+  assert.doesNotMatch(config.agent + config.workflow, /LANGFUSE_|\/api\/public/);
+  assert.deepEqual(build('https://insight.example/traces', ''), { workflow: '', agent: '' });
 });

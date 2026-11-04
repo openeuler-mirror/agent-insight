@@ -314,6 +314,11 @@ test('the in-page return-to-list action replaces detail state instead of adding 
     assert.equal(updates[0].queryString, '?page=3&status=failed');
 });
 
+test('leaving a Dify drilldown clears the Workflow return context before opening another list item', async () => {
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)(null), '?page=3&framework=dify&taskId=dify:child&workflowTaskId=dify:workflow');
+    assert.equal(updates[0].queryString, '?page=3&framework=dify');
+});
+
 test('switching away from an exact execution clears its identity in the same history update', async () => {
     const updates = await navigationHarness(scope => expression(selectCallback, scope)({ task_id: 'trace-456' }), '?taskId=trace-123&executionId=execution-123');
     assert.equal(updates.length, 1);

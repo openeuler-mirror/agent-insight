@@ -19,7 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import { db } from '@/lib/storage/prisma';
-import { EnterpriseSkill, EnterpriseSkillListResponse, EnterpriseDownloadResponse, SyncResult, SkillSyncResult, EnterpriseDeleteResponse, EnterpriseSkillInfoResponse } from '@/lib/engine/skill-generation/legacy/skill-sync-types';
+import { EnterpriseSkill, EnterpriseSkillListResponse, EnterpriseDownloadResponse, SyncResult, SkillSyncResult, EnterpriseSkillInfoResponse } from '@/lib/engine/skill-generation/legacy/skill-sync-types';
 
 async function fetchEnterpriseSkillList(cookie?: string): Promise<EnterpriseSkill[]> {
   const listUrl = process.env.ORG_SKILL_LIST_URL;

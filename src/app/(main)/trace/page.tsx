@@ -578,7 +578,7 @@ function TracePageContent() {
     const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
-    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString });
+    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString, workflowTaskId: parseAsString });
     const [search, setSearch] = useQueryState('q', traceFilterParsers.q);
     const [showFilters, setShowFilters] = useState(false);
     const [clausesRaw, setClausesRaw] = useQueryState('f', traceFilterParsers.f);
@@ -708,7 +708,7 @@ function TracePageContent() {
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
-        void setTraceTarget({ taskId: id, executionId: null }, { history: id ? 'push' : 'replace' });
+        void setTraceTarget({ taskId: id, executionId: null, workflowTaskId: null }, { history: id ? 'push' : 'replace' });
         if (id) reportTraceDetailView(id);
     }, [setTraceTarget, reportTraceDetailView]);
 
@@ -1493,7 +1493,7 @@ function TracePageContent() {
                         <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
                             const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
                             setImportResult(null);
-                            if (targetId) void setTraceTarget({ taskId: targetId, executionId: null }, { history: 'push' });
+                            if (targetId) void setTraceTarget({ taskId: targetId, executionId: null, workflowTaskId: null }, { history: 'push' });
                         }}>
                             {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
                         </Button>
@@ -1533,13 +1533,21 @@ function TraceDetailView({
     const parentExecutionId: string | null = execAny.parent_execution_id || null;
     const subagentType: string | null = execAny.subagent_type || null;
     const subagentName: string | null = execAny.subagent_name || null;
+    const workflowOrigin = searchParams?.get('workflowTaskId');
+    const workflowReturnTaskId = execution.framework === 'dify' && workflowOrigin?.startsWith('dify:') && workflowOrigin !== taskId ? workflowOrigin : null;
 
     const navigateToTaskId = useCallback((newTaskId: string) => {
         if (!newTaskId) return;
         const params = new URLSearchParams(searchParams?.toString() ?? '');
+        if (newTaskId === params.get('workflowTaskId')) params.delete('workflowTaskId');
+        else if (newTaskId !== taskId && execution.framework === 'dify'
+            && session?.taskId === taskId && session.difyProjection?.linkedTraces > 0 && !params.has('workflowTaskId')) {
+            params.set('workflowTaskId', taskId);
+        }
         params.set('taskId', newTaskId);
+        params.delete('executionId');
         router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
-    }, [router, searchParams]);
+    }, [router, searchParams, taskId, execution.framework, session]);
 
     const navigateToParent = useCallback(async () => {
         if (!parentExecutionId) return;
@@ -1705,6 +1713,12 @@ function TraceDetailView({
                     <ArrowLeft className="size-3.5" aria-hidden />
                     {t('tracePage.backToList')}
                 </Button>
+                {workflowReturnTaskId && (
+                    <Button variant="ghost" size="sm" onClick={() => navigateToTaskId(workflowReturnTaskId)} className="text-foreground-muted h-7 px-2">
+                        <ArrowLeft className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '返回 Workflow' : 'Back to Workflow'}
+                    </Button>
+                )}
                 {isSubagentTrace && parentExecutionId && (
                     <Button
                         variant="ghost"
@@ -1866,6 +1880,10 @@ function TraceDetailView({
                         {session.error}
                     </div>
                 ) : (session?.interactions?.length || 0) > 0 || (session?.langfuseTraceNodes?.length || 0) > 0 ? (
+                    <>
+                    {session?.difyProjection?.truncated && <div role="status" className="mb-3 rounded-md border border-card-border bg-card p-3 text-sm text-foreground-secondary">
+                        {locale === 'zh' ? '部分关联轨迹超过展示限制，请打开各自的 Trace 查看完整内容。' : 'Some linked traces exceed display limits. Open their individual traces to view the full content.'}
+                    </div>}
                     <AgentTraceView
                         interactions={session.interactions || []}
                         framework={execution.framework}
@@ -1881,6 +1899,7 @@ function TraceDetailView({
                         rootExecutionId={execution.upload_id || execution.task_id}
                         rasMarkers={rasMarkers}
                     />
+                    </>
                 ) : (
                     <div className="rounded-md border border-card-border bg-card">
                         <EmptyState title={t('tracePage.noTrace')} />

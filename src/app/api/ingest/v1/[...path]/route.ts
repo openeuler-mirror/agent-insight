@@ -59,7 +59,7 @@ export async function POST(
             status: response.status,
             headers: response.headers
         });
-    } catch (err) {
+    } catch {
         return NextResponse.json({ error: 'Proxy fail' }, { status: 502 });
     }
 }
