@@ -632,3 +632,87 @@ test('opencode uploader: keeps tool execution times independently of the assista
   assert.deepEqual(calls.find((call: any) => call.id === 'call-true')!.timing, { started_at: 2000, completed_at: 20000 })
   assert.equal(calls.find((call: any) => call.id === 'call-false')!.timing, undefined)
 })
+
+test('opencode uploader: rebuilds the CLI answer from deltas alone (no message/part snapshots)', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_cli', payload: { type: 'message.part.delta', event: { id: 'cli-d1', properties: {
+      sessionID: 'ses_cli', messageID: 'msg_cli', partID: 'prt_cli', field: 'text', delta: '最终',
+    } } } },
+    { kind: 'event', sessionID: 'ses_cli', payload: { type: 'message.part.delta', event: { id: 'cli-d2', properties: {
+      sessionID: 'ses_cli', messageID: 'msg_cli', partID: 'prt_cli', field: 'text', delta: '回答',
+    } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_cli')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].role, 'assistant')
+  assert.equal(messages[0].content, '最终回答')
+  assert.equal(messages[0].parts[0].type, 'text')
+  assert.equal(messages[0].parts[0].text, '最终回答')
+  assert.equal(messages[0].usage, undefined)
+
+  const derived = uploader.deriveFields(messages)
+  assert.equal(derived.final_result, '最终回答')
+  // 上游没有传 usage：保持 undefined，界面标记「未提供」，不能伪造成 0。
+  assert.equal(derived.tokens, undefined)
+  assert.equal(derived.usageReported, false)
+})
+
+test('opencode uploader: buckets deltas without partID per message and field', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_cli', payload: { type: 'message.part.delta', event: { id: 'no-part-1', properties: {
+      sessionID: 'ses_cli', messageID: 'msg_no_part', field: 'text', delta: 'hello ',
+    } } } },
+    { kind: 'event', sessionID: 'ses_cli', payload: { type: 'message.part.delta', event: { id: 'no-part-2', properties: {
+      sessionID: 'ses_cli', messageID: 'msg_no_part', field: 'text', delta: 'world',
+    } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_cli')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].content, 'hello world')
+})
+
+test('opencode uploader: a later real part snapshot supersedes the partID-less delta bucket', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_snap', payload: { type: 'message.part.delta', event: { id: 'snap-d1', properties: {
+      sessionID: 'ses_snap', messageID: 'msg_snap', field: 'text', delta: 'complete ',
+    } } } },
+    { kind: 'event', sessionID: 'ses_snap', payload: { type: 'message.part.delta', event: { id: 'snap-d2', properties: {
+      sessionID: 'ses_snap', messageID: 'msg_snap', field: 'text', delta: 'answer',
+    } } } },
+    // The CLI eventually flushes the real part; keeping both would duplicate the answer.
+    { kind: 'event', sessionID: 'ses_snap', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: 'prt_snap', messageID: 'msg_snap', sessionID: 'ses_snap', type: 'text', text: 'complete answer',
+    } } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_snap')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].content, 'complete answer')
+  assert.deepEqual(messages[0].parts.map((part: { id: string }) => part.id), ['prt_snap'])
+})
+
+test('opencode uploader: falls back to step-finish tokens when message.updated has no usage', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_usage', payload: { type: 'message.part.delta', event: { id: 'usage-d1', properties: {
+      sessionID: 'ses_usage', messageID: 'msg_usage', partID: 'prt_usage', field: 'text', delta: 'answer',
+    } } } },
+    { kind: 'event', sessionID: 'ses_usage', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: 'prt_step', messageID: 'msg_usage', sessionID: 'ses_usage', type: 'step-finish',
+      reason: 'stop', cost: 0.01, tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 0 } },
+    } } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_usage')
+  assert.equal(messages[0].usage.input, 100)
+  assert.equal(messages[0].usage.cache.read, 10)
+  assert.equal(messages[0].usage.total, 135)
+
+  const derived = uploader.deriveFields(messages)
+  assert.equal(derived.tokens, 135)
+  assert.equal(derived.input_tokens, 100)
+  assert.equal(derived.output_tokens, 20)
+  assert.equal(derived.reasoning_tokens, 5)
+  assert.equal(derived.usageReported, true)
+})

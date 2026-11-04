@@ -318,6 +318,8 @@ export const en = {
     spanShare: 'Timeline',
     spanDuration: 'Duration',
     spanTokens: 'Tokens',
+    tokensNotProvided: 'N/A',
+    tokensNotProvidedHint: 'The upstream runtime did not report token usage for this session (for example, OpenCode CLI exited before publishing usage), so it is not shown as 0.',
     clearFilter: 'Clear filter',
     resetFilter: 'Reset',
     viewAll: 'View all',

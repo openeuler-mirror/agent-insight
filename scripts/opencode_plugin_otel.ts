@@ -553,6 +553,48 @@ export default async function WittySkillInsightOtelPlugin(context: any = {}) {
   return createOpenCodeCollector(context)
 }
 
+/**
+ * CLI (`opencode run`) may exit before the deferred `message.updated` /
+ * `message.part.updated` sync events reach the plugin, while streaming
+ * `message.part.delta` events arrive synchronously. After a session goes idle
+ * the collector asks the in-process OpenCode server for the final messages so
+ * usage and the complete assistant text are not lost.
+ */
+function hasUsageTokens(tokens: any): boolean {
+  if (!tokens || typeof tokens !== "object") return false
+  return [tokens.input, tokens.output, tokens.reasoning, tokens.total, tokens.cache?.read, tokens.cache?.write]
+    .some((value) => Number(value) > 0)
+}
+
+export function extractFinalUsageRecords(messages: any[] | null | undefined): Array<{ info: any; parts: any[] }> {
+  const out: Array<{ info: any; parts: any[] }> = []
+  for (const item of Array.isArray(messages) ? messages : []) {
+    const info = item?.info ?? item
+    if (!info || typeof info !== "object" || info.role !== "assistant" || !info.id) continue
+    if (!hasUsageTokens(info.tokens)) continue
+    const picked: any = { id: info.id, sessionID: info.sessionID, role: "assistant", tokens: info.tokens }
+    if (info.time) picked.time = info.time
+    if (info.cost !== undefined) picked.cost = info.cost
+    for (const key of ["modelID", "providerID", "agent", "mode", "finish", "variant", "parentID"]) {
+      if (info[key] !== undefined) picked[key] = info[key]
+    }
+    if (info.summary === true) picked.summary = true
+    const parts = (Array.isArray(item?.parts) ? item.parts : [])
+      .filter((part: any) => part && typeof part.id === "string" && part.id
+        && typeof part.text === "string" && part.text
+        && (part.type === "text" || part.type === "reasoning"))
+      .map((part: any) => ({
+        id: part.id,
+        messageID: part.messageID || info.id,
+        sessionID: part.sessionID || info.sessionID,
+        type: part.type,
+        text: part.text,
+      }))
+    out.push({ info: picked, parts })
+  }
+  return out
+}
+
 async function createOpenCodeCollector(context: any = {}, lifecycle?: { emit?: (record: any) => void, close?: () => Promise<void> }) {
   const env = loadSkillInsightEnv()
   const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
@@ -680,6 +722,81 @@ async function createOpenCodeCollector(context: any = {}, lifecycle?: { emit?: (
     }
   }
 
+  // OpenCode ≥ 0.15 plugin API exposes an in-process SDK client. `opencode run`
+  // exits right after the final step, before SyncEvent publishes the last
+  // message.updated/message.part.updated, so deltas are the only stream we see.
+  // Pulling the session's final messages here is what recovers usage (and the
+  // complete text) after the CLI session ends.
+  const pluginClient = context?.client
+  const pluginDirectory = typeof context?.directory === "string" ? context.directory : undefined
+  const finalUsageFingerprints = new Map<string, string>()
+
+  const hydrateFinalUsage = async (sessionID: string, timeoutMs = 1500): Promise<number> => {
+    if (!pluginClient || typeof pluginClient?.session?.messages !== "function" || !sessionID) return 0
+    let timer: any
+    try {
+      const request: any = { path: { id: sessionID } }
+      if (pluginDirectory) request.query = { directory: pluginDirectory }
+      const response: any = await Promise.race([
+        pluginClient.session.messages(request),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("usage-hydrate timeout")), timeoutMs)
+          try { timer.unref?.() } catch {}
+        }),
+      ])
+      const messages = response?.data ?? response
+      let emitted = 0
+      for (const record of extractFinalUsageRecords(messages)) {
+        const fingerprint = sha256Hex(JSON.stringify([
+          record.info.tokens,
+          record.parts.map((part: any) => `${part.id}:${part.text.length}`),
+        ]))
+        if (finalUsageFingerprints.get(record.info.id) === fingerprint) continue
+        finalUsageFingerprints.set(record.info.id, fingerprint)
+        writer.enqueue({
+          t: nowIso(),
+          kind: "event",
+          sessionID,
+          trace_id: sessionID,
+          payload: { type: "message.updated", event: { properties: { info: record.info } } },
+        })
+        for (const part of record.parts) {
+          writer.enqueue({
+            t: nowIso(),
+            kind: "event",
+            sessionID,
+            trace_id: sessionID,
+            payload: { type: "message.part.updated", event: { properties: { part } } },
+          })
+        }
+        emitted++
+      }
+      appendLogLine(
+        pluginLogPath,
+        `usage.hydrate sessionID=${sessionID} emitted=${emitted}${emitted ? "" : " (no new usage)"}`,
+      )
+      return emitted
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `usage.hydrate.error sessionID=${sessionID} error=${error instanceof Error ? error.message : String(error)}`,
+      )
+      return 0
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  // Best-effort: the first upload still goes out immediately with the streamed
+  // deltas; if hydration recovers usage we force one more upload for this session.
+  const scheduleFinalUsage = (sessionID: string, reason: string): void => {
+    if (!pluginClient || !sessionID) return
+    void hydrateFinalUsage(sessionID).then((emitted) => {
+      if (!emitted) return
+      void writer.flush().then(() => kickUploader(sessionID, true, `usage:${reason}`)).catch(() => {})
+    }).catch(() => {})
+  }
+
   const markSessionComplete = async (sessionID: string, completedAt: string): Promise<void> => {
     if (!sessionID || !apiKey || !env.AGENT_INSIGHT_HOST) {
       appendLogLine(
@@ -742,6 +859,14 @@ async function createOpenCodeCollector(context: any = {}, lifecycle?: { emit?: (
     const endedAt = nowIso()
     const sessions = Array.from(activeSessionIds)
     appendLogLine(pluginLogPath, `plugin.shutdown.start sessionCount=${sessions.length} endedAt=${endedAt}`)
+    // Last chance to recover final usage before the spool is closed; bounded so
+    // a dead in-process server cannot hang process exit.
+    try {
+      if (pluginClient && sessions.length > 0) {
+        await Promise.all(sessions.map((sessionID) => hydrateFinalUsage(sessionID, 800)))
+        await writer.flush()
+      }
+    } catch {}
     try {
       for (const sessionID of sessions) {
         fs.appendFileSync(outFile, JSON.stringify({
@@ -929,6 +1054,9 @@ async function createOpenCodeCollector(context: any = {}, lifecycle?: { emit?: (
             if (lifecycle) await writer.flush()
             else void writer.flush()
             kickUploader(sid, true, `event:${type}`)
+            // CLI 模式退出前不会等 SyncEvent 的异步发布，这里主动补齐最终
+            // usage；拿到后强制再传一次（首次上传已经保证回答文本不丢）。
+            scheduleFinalUsage(sid, type)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
             // 只在有事件流入时才评估，会话真正空闲下来不会白跑。
