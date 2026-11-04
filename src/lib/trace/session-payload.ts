@@ -122,3 +122,21 @@ export function withTracePayloadVersions(interactions: any[]): any[] {
             .digest('base64url'),
     }));
 }
+
+export function createTracePayloadSnapshot<T extends Record<string, unknown>>(source: T[]) {
+    type Versioned = T & { _payloadVersion: string };
+    const versioned = new Map<number, Versioned>();
+    let all: Versioned[] | undefined;
+    let structure: ReturnType<typeof toTraceStructureInteractions> | undefined;
+    const interaction = (index: number) => {
+        if (!Number.isInteger(index) || index < 0 || index >= source.length) return undefined;
+        if (!versioned.has(index)) versioned.set(index, withTracePayloadVersions([source[index]])[0]);
+        return versioned.get(index);
+    };
+    const interactions = () => all ??= source.map((_, index) => interaction(index)!);
+    return {
+        interaction,
+        interactions,
+        structure: () => structure ??= toTraceStructureInteractions(interactions()),
+    };
+}
