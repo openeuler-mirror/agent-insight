@@ -1409,6 +1409,19 @@ function TracePageContent() {
     );
 }
 
+function TraceRefreshAge({ refreshedAt }: { refreshedAt: number }) {
+    const { t } = useLocale();
+    const [now, setNow] = useState(refreshedAt);
+    useEffect(() => {
+        const timer = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, [refreshedAt]);
+    const seconds = Math.max(0, Math.floor((now - refreshedAt) / 1000));
+    return <span className="text-xs text-foreground-muted whitespace-nowrap tabular-nums min-w-[36px]">
+        {seconds === 0 ? t('tracePage.justNow') : t('tracePage.secondsAgo', { s: String(seconds) })}
+    </span>;
+}
+
 function TraceDetailView({
     execution,
     onExecutionRefresh,
@@ -1461,7 +1474,7 @@ function TraceDetailView({
     const execStatus = getExecStatus(execution);
     const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running' || execStatus === 'timed_out');
     const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
-    const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
+    const [lastRefreshedAt, setLastRefreshedAt] = useState(() => Date.now());
     const [rasMarkers, setRasMarkers] = useState<any[]>([]);
 
     const sessionRef = useRef<any | null>(null);
@@ -1503,7 +1516,7 @@ function TraceDetailView({
                 const wasWaiting = ['pending', 'unavailable'].includes(sessionRef.current?.parentAgent?.state);
                 if (!wasWaiting && ['pending', 'unavailable'].includes(j.parentAgent?.state)) setAutoRefresh(true);
                 setSession(j);
-                setSecondsSinceRefresh(0);
+                setLastRefreshedAt(Date.now());
             })
             .catch(() => { if (requestId === sessionRequestRef.current && !silent && isInitial) setSession({ error: 'Network error' }); })
             .finally(() => { if (requestId === sessionRequestRef.current) setLoading(false); });
@@ -1528,18 +1541,13 @@ function TraceDetailView({
         };
     }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus, waitingForParent]);
 
-    useEffect(() => {
-        const id = setInterval(() => setSecondsSinceRefresh(s => s + 1), 1000);
-        return () => clearInterval(id);
-    }, []);
-
-    const loadInteraction = useCallback(async (index: number) => {
+    const loadInteraction = useCallback(async (index: number, signal?: AbortSignal) => {
         const source = sessionRef.current?.interactions?.[index]?._collaboration;
         const sourceTaskId = source?.taskId ?? taskId;
         const sourceIndex = source?.index ?? index;
         const response = await apiFetch(
             `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&view=interaction&index=${sourceIndex}${source ? "&source=raw" : ""}`,
-            { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} },
+            { signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} },
         );
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
@@ -1700,9 +1708,7 @@ function TraceDetailView({
                             aria-label={t('tracePage.refreshInterval')}
                         />
                     )}
-                    <span className="text-xs text-foreground-muted whitespace-nowrap tabular-nums min-w-[36px]">
-                        {secondsSinceRefresh === 0 ? t('tracePage.justNow') : t('tracePage.secondsAgo', { s: String(secondsSinceRefresh) })}
-                    </span>
+                    <TraceRefreshAge refreshedAt={lastRefreshedAt} />
                     <Button variant="outline" size="icon" onClick={() => fetchSession(true)} aria-label={t('tracePage.refreshNow')} className="size-7">
                         <RefreshCw className="size-3.5" />
                     </Button>

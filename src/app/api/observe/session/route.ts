@@ -1,7 +1,6 @@
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { resolveUser } from '@/lib/auth/auth';
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { createHash } from 'node:crypto';
 import { analyzeSession } from '@/lib/engine/evaluation/judge';
 import { db } from '@/lib/storage/prisma';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
@@ -13,11 +12,13 @@ import {
     composeCollaborationTrace,
     type CollaborationTraceMember,
 } from '@/lib/ingest/collaboration/trace-projection';
-import { toTraceStructureInteractions, withTracePayloadVersions } from '@/lib/trace/session-payload';
+import { createTracePayloadSnapshot } from '@/lib/trace/session-payload';
+import { createSessionBodyCache, memoizeSessionReads } from '@/lib/trace/session-body-cache';
 
 type ParsedSession = {
     session: any;
     interactions: any[];
+    payloadSnapshot: ReturnType<typeof createTracePayloadSnapshot>;
     langfuseTraceNodes: LangfuseTraceNode[];
     executionSummary: {
         latency: number | null;
@@ -27,43 +28,19 @@ type ParsedSession = {
     } | null;
 };
 
-const SESSION_CACHE_TTL_MS = 45_000;
-const SESSION_CACHE_MAX_ENTRIES = 8;
-const parsedSessionCache = new Map<string, {
-    signature: string;
-    expiresAt: number;
-    value: ParsedSession;
-}>();
-
-function sessionSignature(session: any, execution: any): string {
-    const raw = [session?.interactions, session?.langfuseTraceNodes]
-        .map(value => typeof value === 'string' ? value : '')
-        .join('\n');
-    const executionVersion = [
-        execution?.framework,
-        execution?.latency,
-        execution?.tokens,
-        execution?.cost,
-        execution?.timestamp instanceof Date
-            ? execution.timestamp.getTime()
-            : execution?.timestamp,
-    ].map(value => String(value ?? '')).join(':');
-    return `${executionVersion}:${createHash('sha1').update(raw).digest('base64url')}`;
-}
-
-function rememberParsedSession(taskId: string, signature: string, value: ParsedSession): void {
-    parsedSessionCache.delete(taskId);
-    parsedSessionCache.set(taskId, {
-        signature,
-        expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
-        value,
-    });
-    while (parsedSessionCache.size > SESSION_CACHE_MAX_ENTRIES) {
-        const oldest = parsedSessionCache.keys().next().value;
-        if (!oldest) break;
-        parsedSessionCache.delete(oldest);
-    }
-}
+const sessionBodies = createSessionBodyCache((raw: string, nodes: string, framework: string) => {
+    const rawInteractions = raw ? JSON.parse(raw) : [];
+    let langfuseTraceNodes: LangfuseTraceNode[] = [];
+    try {
+        const parsed = nodes ? JSON.parse(nodes) : [];
+        if (Array.isArray(parsed)) langfuseTraceNodes = parsed;
+    } catch {}
+    const sessionInteractions = framework === 'claudecode'
+        ? normalizeClaudeCodeInteractionsForStorage(rawInteractions)
+        : rawInteractions;
+    const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
+    return { interactions, langfuseTraceNodes, payloadSnapshot: createTracePayloadSnapshot(interactions) };
+});
 
 async function loadParsedSession(taskId: string): Promise<ParsedSession | null> {
     const session = await db.findSessionByTaskId(taskId);
@@ -75,35 +52,22 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
         { framework: true, latency: true, tokens: true, cost: true, timestamp: true },
     );
     const latestExecution = executions?.[0] ?? null;
-    const framework = latestExecution?.framework;
-    const signature = sessionSignature(session, latestExecution);
-    const cached = parsedSessionCache.get(taskId);
-    if (cached && cached.signature === signature && cached.expiresAt > Date.now()) {
-        return cached.value;
-    }
-
-    const rawInteractions = session.interactions ? JSON.parse(session.interactions) : [];
-    let langfuseTraceNodes: LangfuseTraceNode[] = [];
-    try {
-        const parsed = session.langfuseTraceNodes ? JSON.parse(session.langfuseTraceNodes) : [];
-        if (Array.isArray(parsed)) langfuseTraceNodes = parsed;
-    } catch {}
-    const sessionInteractions = framework === 'claudecode'
-        ? normalizeClaudeCodeInteractionsForStorage(rawInteractions)
-        : rawInteractions;
-    const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
+    const body = sessionBodies.get(
+        taskId,
+        session.interactions || '',
+        session.langfuseTraceNodes || '',
+        latestExecution?.framework || '',
+    );
     const executionSummary = latestExecution ? {
         latency: latestExecution.latency ?? null,
         tokens: latestExecution.tokens ?? null,
         cost: latestExecution.cost ?? null,
         timestamp: latestExecution.timestamp ?? null,
     } : null;
-    const value = { session, interactions, langfuseTraceNodes, executionSummary };
-    rememberParsedSession(taskId, signature, value);
-    return value;
+    return { session, ...body, executionSummary };
 }
 
-async function loadCollaborationProjection(taskId: string, parsed: ParsedSession) {
+async function loadCollaborationProjection(taskId: string, parsed: ParsedSession, load: typeof loadParsedSession) {
     const user = typeof parsed.session?.user === 'string' ? parsed.session.user : '';
     if (!user) return null;
     const storedQuery = typeof parsed.session?.query === 'string' ? parsed.session.query.trim() : '';
@@ -121,7 +85,7 @@ async function loadCollaborationProjection(taskId: string, parsed: ParsedSession
     if (!refs.members.length) return null;
 
     const loadedMembers = await Promise.all(refs.members.map(async (ref): Promise<CollaborationTraceMember | null> => {
-        const child = await loadParsedSession(ref.taskId);
+        const child = await load(ref.taskId);
         if (!child || child.session?.user !== user) return null;
         return {
             ...ref,
@@ -152,7 +116,8 @@ export async function GET(request: Request) {
     }
 
     try {
-        const parsed = await loadParsedSession(taskId);
+        const load = memoizeSessionReads(loadParsedSession);
+        const parsed = await load(taskId);
         if (!parsed) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
@@ -165,9 +130,11 @@ export async function GET(request: Request) {
         const parentAgent = relationPlan?.unavailable ? { state: 'unavailable' }
             : relationPlan?.parentAgents?.[taskId] ?? null;
         const reportedInteractions = relationPlan && username
-            ? await collaborationTraceProjection.interactions(username, taskId, loadParsedSession, relationPlan) : null;
-        const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
-        const displayInteractions = withTracePayloadVersions(reportedInteractions || collaborationProjection?.interactions || interactions);
+            ? await collaborationTraceProjection.interactions(username, taskId, load, relationPlan) : null;
+        const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed, load);
+        const displayInteractions = reportedInteractions || collaborationProjection?.interactions || interactions;
+        const payloadSnapshot = displayInteractions === interactions
+            ? parsed.payloadSnapshot : createTracePayloadSnapshot(displayInteractions);
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);
@@ -177,7 +144,7 @@ export async function GET(request: Request) {
             return NextResponse.json({
                 taskId: session.taskId,
                 index,
-                interaction: displayInteractions[index],
+                interaction: payloadSnapshot.interaction(index),
             });
         }
 
@@ -189,7 +156,7 @@ export async function GET(request: Request) {
                 user: session.user,
                 startTime: session.startTime.getTime(),
                 interactionCount: displayInteractions.length,
-                interactions: toTraceStructureInteractions(displayInteractions),
+                interactions: payloadSnapshot.structure(),
                 execution: executionSummary,
                 parentAgent,
                 ...(collaborationProjection ? {
@@ -208,7 +175,7 @@ export async function GET(request: Request) {
         if (view === 'interactions') {
             return NextResponse.json({
                 taskId: session.taskId,
-                interactions: displayInteractions,
+                interactions: payloadSnapshot.interactions(),
                 ...(collaborationProjection ? {
                     collaborationProjection: {
                         sourceType: collaborationProjection.sourceType,
@@ -240,7 +207,7 @@ export async function GET(request: Request) {
             query,
             user: session.user,
             startTime: session.startTime.getTime(),
-            interactions: displayInteractions,
+            interactions: payloadSnapshot.interactions(),
             parentAgent,
             ...(collaborationProjection ? {
                 collaborationProjection: {

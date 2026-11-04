@@ -1,8 +1,10 @@
 'use client';
 
-import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
+import { buildCollaborationTraceTree, collaborationSource } from '@/lib/collaboration/display-tree';
+import { createTraceInteractionLoader, sameTraceInteraction } from '@/lib/client/trace-interaction-loader';
 import { selectedParentAgent, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
+import { flattenSpanRows } from '@/lib/client/trace-span-virtualization';
 import { TraceSpanViewport, type TraceSpanViewportHandle } from './TraceSpanViewport';
 import { InferenceAnalysisButton } from './InferenceAnalysisButton';
 import { inferenceAnalysisTarget } from '@/lib/trace/inference-analysis';
@@ -470,7 +472,7 @@ export interface AgentTraceViewProps {
      */
     executionDurationMs?: number;
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
-    loadInteraction?: (index: number) => Promise<RawInteraction>;
+    loadInteraction?: (index: number, signal?: AbortSignal) => Promise<RawInteraction>;
     /** 搜索或 Prompt/Timeline 需要完整上下文时按需读取全部 interactions。 */
     loadAllInteractions?: () => Promise<RawInteraction[]>;
     /**
@@ -490,7 +492,7 @@ export interface AgentTraceViewProps {
     rasMarkers?: RasTraceMarker[];
 }
 
-export default function AgentTraceView({
+function AgentTraceView({
     interactions: sourceInteractions,
     framework,
     langfuseTraceNodes,
@@ -514,6 +516,13 @@ export default function AgentTraceView({
     const previousTraceIdentityRef = React.useRef(stableTraceIdentity);
     const sourceInteractionsRef = React.useRef(sourceInteractions);
     sourceInteractionsRef.current = sourceInteractions;
+    const [interactionLoader] = useState(createTraceInteractionLoader);
+    const activeInteractionLoadRef = React.useRef<number | null>(null);
+    React.useLayoutEffect(() => {
+        interactionLoader.sync(stableTraceIdentity, sourceInteractions);
+        interactionLoader.reconcile();
+    }, [interactionLoader, sourceInteractions, stableTraceIdentity]);
+    useEffect(() => () => interactionLoader.cancel(), [interactionLoader]);
     const treeIdentityInitializedRef = React.useRef(false);
     const previousTreeIdentityRef = React.useRef(stableTraceIdentity);
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
@@ -536,8 +545,7 @@ export default function AgentTraceView({
                 const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
                 const incoming = item as RawInteraction & { _payloadDeferred?: boolean };
                 return incoming._payloadDeferred && loaded && !loaded._payloadDeferred
-                    && sameCollaborationSource(incoming, loaded)
-                    && incoming._payloadVersion && incoming._payloadVersion === loaded._payloadVersion ? loaded : item;
+                    && sameTraceInteraction(incoming, loaded) ? loaded : item;
             });
         });
     }, [sourceInteractions, stableTraceIdentity]);
@@ -545,21 +553,23 @@ export default function AgentTraceView({
     const ensureInteractionLoaded = React.useCallback(async (index: number) => {
         if (langfuseProjection) return;
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
-        if (!current?._payloadDeferred || !loadInteraction) return;
-        const requestedTraceId = previousTraceIdentityRef.current;
-        const requestedSource = sourceInteractionsRef.current;
+        activeInteractionLoadRef.current = index;
         setInteractionLoadError(null);
-        try {
-            const loaded = await loadInteraction(index);
-            if (previousTraceIdentityRef.current !== requestedTraceId || sourceInteractionsRef.current !== requestedSource
-                || !current._payloadVersion || loaded._payloadVersion !== current._payloadVersion) return;
-            // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
+        if (!current?._payloadDeferred || !loadInteraction
+            || !sameTraceInteraction(current, sourceInteractionsRef.current[index])) return;
+        await interactionLoader.load(index, loadInteraction, loaded => {
             sameTraceReloadRef.current = true;
-            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index && sameCollaborationSource(item, current) ? { ...loaded, ...(collaborationSource(current) ? { _collaboration: collaborationSource(current) } : {}) } : item));
-        } catch (error) {
-            setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
-        }
-    }, [interactions, langfuseProjection, loadInteraction]);
+            setInteractions(previous => {
+                if (!sameTraceInteraction(previous[index], current)) return previous;
+                return previous.map((item, itemIndex) => itemIndex === index
+                    ? { ...loaded, ...(collaborationSource(current) ? { _collaboration: collaborationSource(current) } : {}) }
+                    : item);
+            });
+        }, error => {
+            if (activeInteractionLoadRef.current === index) setInteractionLoadError(error.name === 'TimeoutError'
+                ? (locale === 'zh' ? '详情加载超时，请重试。' : error.message) : error.message);
+        });
+    }, [interactionLoader, interactions, langfuseProjection, loadInteraction, locale]);
 
     const ensureAllInteractionsLoaded = React.useCallback(async () => {
         if (langfuseProjection) return langfuseProjection.interactions;
@@ -907,7 +917,7 @@ export default function AgentTraceView({
         cancelPendingSpanJump();
         spanJumpTimerRef.current = setTimeout(() => {
             spanJumpTimerRef.current = null;
-            document.querySelector(`[data-span-key="${activeMatchKey}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            spanViewportRef.current?.scrollToKey(activeMatchKey);
         }, 80);
         return cancelPendingSpanJump;
     }, [activeMatchKey, cancelPendingSpanJump]);
@@ -950,7 +960,7 @@ export default function AgentTraceView({
         setSelectedKey(key);
         spanJumpTimerRef.current = setTimeout(() => {
             spanJumpTimerRef.current = null;
-            document.querySelector(`[data-span-key="${key}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            spanViewportRef.current?.scrollToKey(key);
         }, 80);
     };
 
@@ -972,6 +982,15 @@ export default function AgentTraceView({
     const scrollNavigationKey = useMemo(() => ({
         searchQuery, activeMatchKey, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly,
     }), [searchQuery, activeMatchKey, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly]);
+
+    const visibleSpanRows = useMemo(() => {
+        if (!tree) return [];
+        const filters = { treeKindFilter, minDurationMs, minTokenK, ctxSlowOnly: slowOnly, searchQuery, matchedKeys };
+        return flattenSpanRows(tree, nodeMap, expandedKeys, buildAgentEventTree, (entry, owner) =>
+            agentEventTreeMatches(entry, owner, nodeMap,
+                (event, index, id) => traceEventMatchesFilters(event, index, id, nodeMap, filters),
+                node => traceAgentMatchesFilters(node, filters)));
+    }, [tree, nodeMap, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly, searchQuery, matchedKeys]);
 
     const hasActiveFilters = treeKindFilter.length > 0 || minDurationMs > 0 || minTokenK > 0 || slowOnly;
 
@@ -1168,20 +1187,24 @@ export default function AgentTraceView({
                         ref={spanViewportRef}
                         navigationKey={scrollNavigationKey}
                         onUserNavigation={cancelPendingSpanJump}
+                        onToggleRow={toggleKey}
+                        rows={visibleSpanRows}
                     >
-                        <UnifiedSpanTree
-                            node={tree}
-                            nodeMap={nodeMap}
-                            expandedKeys={expandedKeys}
-                            onToggleKey={toggleKey}
+                        {row => row.kind === 'agent' ? <UnifiedSpanTree
+                            node={row.node} expandedKeys={expandedKeys} onToggleKey={toggleKey}
                             selectedKey={selectedKey}
                             onSelect={key => { spanFocusKeyRef.current = key; cancelPendingSpanJump(); spanViewportRef.current?.pauseFollowing(); setSelectedKey(key); }}
-                            totalStart={totalStart}
-                            totalDuration={totalDuration}
-                            depth={0}
-                            isLast={true}
-                            prefixBits={[]}
-                        />
+                            totalStart={totalStart} totalDuration={totalDuration}
+                            depth={row.depth} isLast={row.isLast} prefixBits={row.prefixBits}
+                            hasChildren={row.hasChildren} position={row.position} size={row.size}
+                        /> : <UnifiedEventRow
+                            event={row.event} evIdx={row.eventIndex} parentNodeId={row.node.id} childNode={row.childNode}
+                            depth={row.depth} isLast={row.isLast} prefixBits={row.prefixBits}
+                            isExpanded={row.isExpanded} hasChildren={row.hasChildren} isSelected={selectedKey === row.key}
+                            onSelect={() => { spanFocusKeyRef.current = row.key; cancelPendingSpanJump(); spanViewportRef.current?.pauseFollowing(); setSelectedKey(row.key); }}
+                            onToggle={row.hasChildren ? () => toggleKey(row.key) : undefined}
+                            totalStart={totalStart} totalDuration={totalDuration} position={row.position} size={row.size}
+                        />}
                     </TraceSpanViewport>
                 </div>
 
@@ -1362,138 +1385,40 @@ function TreeConnector({ depth, isLast, prefixBits }: { depth: number; isLast: b
     );
 }
 
-// ─── UnifiedSpanTree (recursive) ─────────────────────────────────────────────
+// ─── UnifiedSpanTree agent row ─────────────────────────────────────────────
 function UnifiedSpanTree({
-    node, nodeMap, expandedKeys, onToggleKey, selectedKey, onSelect,
-    totalStart, totalDuration, depth, isLast, prefixBits,
+    node, expandedKeys, onToggleKey, selectedKey, onSelect,
+    totalStart, totalDuration, depth, isLast, prefixBits, hasChildren, position, size,
 }: {
-    node: AgentNode;
-    nodeMap: Map<string, AgentNode>;
-    expandedKeys: Set<string>;
-    onToggleKey: (k: string) => void;
-    selectedKey: string | null;
-    onSelect: (k: string) => void;
-    totalStart?: number;
-    totalDuration?: number;
-    depth: number;
-    isLast: boolean;
-    prefixBits: boolean[];
+    node: AgentNode; expandedKeys: Set<string>; onToggleKey: (key: string) => void;
+    selectedKey: string | null; onSelect: (key: string) => void;
+    totalStart?: number; totalDuration?: number; depth: number; isLast: boolean; prefixBits: boolean[];
+    hasChildren: boolean; position: number; size: number;
 }) {
     const aKey = agentKey(node.id);
     const isExpanded = expandedKeys.has(aKey);
     const isSelected = selectedKey === aKey;
     const status = getStatus(node);
     const displayStats = aggregateSubtreeStats(node);
-
-    // Gantt bar for this agent
+    const hasContent = hasChildren;
     const barLeft = (totalStart != null && totalDuration && node.startedAt != null)
         ? Math.max(0, ((node.startedAt - totalStart) / totalDuration) * 100) : 0;
     const barWidth = (totalDuration && node.stats.durationMs != null)
         ? Math.min(100 - barLeft, (node.stats.durationMs / totalDuration) * 100) : (depth === 0 ? 100 : 0);
-
     const ctx = React.useContext(TraceCtx);
-    const { matchedKeys, activeMatchKey, searchQuery, treeKindFilter, minDurationMs, minTokenK, slowOnly: ctxSlowOnly } = ctx;
-
-    const events = node.events;
-    const eventTree = buildAgentEventTree(events);
-    const unanchoredChildren = node.children.filter(child => !events.some(event => event.spawnedChildId === child.id));
-    const hasContent = events.length > 0 || unanchoredChildren.length > 0;
-
+    const { matchedKeys, activeMatchKey, searchQuery } = ctx;
     const isSearchMatch = searchQuery ? matchedKeys.has(aKey) : false;
     const isActiveMatch = activeMatchKey === aKey;
-
-    const renderEventEntry = (
-        entry: AgentEventTreeEntry,
-        eventDepth: number,
-        eventIsLast: boolean,
-        eventPrefixBits: boolean[],
-    ): ReactNode => {
-        const ev = entry.event;
-        const evIdx = entry.eventIndex;
-        const evKey = eventKey(node.id, evIdx);
-        const childNode = ev.spawnedChildId ? nodeMap.get(ev.spawnedChildId) : undefined;
-
-        if (ev.treeHidden) {
-            if (!childNode) return null;
-            return (
-                <UnifiedSpanTree
-                    key={`hidden-${evIdx}`}
-                    node={childNode}
-                    nodeMap={nodeMap}
-                    expandedKeys={expandedKeys}
-                    onToggleKey={onToggleKey}
-                    selectedKey={selectedKey}
-                    onSelect={onSelect}
-                    totalStart={totalStart}
-                    totalDuration={totalDuration}
-                    depth={eventDepth}
-                    isLast={eventIsLast}
-                    prefixBits={eventPrefixBits}
-                />
-            );
-        }
-
-        const hasChildren = entry.children.length > 0 || !!childNode;
-        const isEvExpanded = hasChildren && expandedKeys.has(evKey);
-        const filters = { treeKindFilter, minDurationMs, minTokenK, ctxSlowOnly, searchQuery, matchedKeys };
-        if (!agentEventTreeMatches(entry, node.id, nodeMap,
-            (event, index, owner) => traceEventMatchesFilters(event, index, owner, nodeMap, filters),
-            agent => traceAgentMatchesFilters(agent, filters),
-        )) return null;
-
-        const descendantPrefixBits = [...eventPrefixBits, !eventIsLast];
-        return (
-            <div key={ev.sourceSpanId || evIdx}>
-                <UnifiedEventRow
-                    event={ev}
-                    evIdx={evIdx}
-                    parentNodeId={node.id}
-                    childNode={childNode}
-                    depth={eventDepth}
-                    isLast={eventIsLast && !isEvExpanded}
-                    prefixBits={eventPrefixBits}
-                    isExpanded={isEvExpanded}
-                    hasChildren={hasChildren}
-                    isSelected={selectedKey === evKey}
-                    onSelect={() => onSelect(evKey)}
-                    onToggle={hasChildren ? () => onToggleKey(evKey) : undefined}
-                    totalStart={totalStart}
-                    totalDuration={totalDuration}
-                />
-                {isEvExpanded && entry.children.map((child, childIndex) => renderEventEntry(
-                    child,
-                    eventDepth + 1,
-                    childIndex === entry.children.length - 1 && !childNode,
-                    descendantPrefixBits,
-                ))}
-                {childNode && isEvExpanded && (
-                    <UnifiedSpanTree
-                        node={childNode}
-                        nodeMap={nodeMap}
-                        expandedKeys={expandedKeys}
-                        onToggleKey={onToggleKey}
-                        selectedKey={selectedKey}
-                        onSelect={onSelect}
-                        totalStart={totalStart}
-                        totalDuration={totalDuration}
-                        depth={eventDepth + 1}
-                        isLast
-                        prefixBits={descendantPrefixBits}
-                    />
-                )}
-            </div>
-        );
-    };
-
     return (
-        <div>
-            {/* AGENT row */}
             <div
                 data-span-key={aKey}
                 onClick={() => onSelect(aKey)}
                 tabIndex={0}
                 role="treeitem"
                 aria-selected={isSelected}
+                aria-level={depth + 1}
+                aria-posinset={position}
+                aria-setsize={size}
                 aria-expanded={hasContent ? isExpanded : undefined}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(aKey); } }}
                 className={cn(
@@ -1595,26 +1520,6 @@ function UnifiedSpanTree({
                     {status !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[status])} />}
                 </span>
             </div>
-
-            {/* Events */}
-            {hasContent && isExpanded && (
-                <div>
-                    {eventTree.map((entry, entryIndex) => renderEventEntry(
-                        entry,
-                        depth + 1,
-                        entryIndex === eventTree.length - 1 && unanchoredChildren.length === 0,
-                        depth === 0 ? [] : [...prefixBits, !isLast],
-                    ))}
-                    {unanchoredChildren.map((child, index) => <UnifiedSpanTree
-                        key={child.id} node={child} nodeMap={nodeMap} expandedKeys={expandedKeys}
-                        onToggleKey={onToggleKey} selectedKey={selectedKey} onSelect={onSelect}
-                        totalStart={totalStart} totalDuration={totalDuration} depth={depth + 1}
-                        isLast={index === unanchoredChildren.length - 1}
-                        prefixBits={depth === 0 ? [] : [...prefixBits, !isLast]}
-                    />)}
-                </div>
-            )}
-        </div>
     );
 }
 
@@ -1622,12 +1527,12 @@ function UnifiedSpanTree({
 function UnifiedEventRow({
     event, evIdx, parentNodeId, childNode,
     depth, isLast, prefixBits, isExpanded, hasChildren, isSelected,
-    onSelect, onToggle, totalStart, totalDuration,
+    onSelect, onToggle, totalStart, totalDuration, position, size,
 }: {
     event: AgentEvent; evIdx: number; parentNodeId: string; childNode?: AgentNode;
     depth: number; isLast: boolean; prefixBits: boolean[];
     isExpanded: boolean; hasChildren: boolean; isSelected: boolean;
-    onSelect: () => void; onToggle?: () => void;
+    onSelect: () => void; onToggle?: () => void; position: number; size: number;
     totalStart?: number; totalDuration?: number;
 }) {
     const km = KIND_META[event.kind] ?? KIND_META.tool;
@@ -1686,6 +1591,9 @@ function UnifiedEventRow({
             tabIndex={0}
             role="treeitem"
             aria-selected={isSelected}
+            aria-level={depth + 1}
+            aria-posinset={position}
+            aria-setsize={size}
             aria-expanded={hasChildren ? isExpanded : undefined}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } }}
             className={cn(
@@ -4223,3 +4131,5 @@ function ModalCodeBlock({ value }: { value: unknown }) {
         />
     );
 }
+
+export default React.memo(AgentTraceView);
