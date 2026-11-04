@@ -23,24 +23,27 @@ import {
   getSkillExperimentConcurrencyPolicy,
   isSkillExperimentDatasetEligible,
   isSkillExperimentEvaluatorEligible,
+  filterSkillExperimentEvaluators,
   isSkillTriggerDataset,
 } from '@/lib/skill-workbench/experiment-policy';
 import { visibleWorkbenchCaseIds } from '@/lib/skill-workbench/experiment-service';
+import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import { presetEvaluators, legacyPresetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 
-test('三类实验使用独立且有上限的执行与评估并发策略', () => {
-  assert.deepEqual(getSkillExperimentConcurrencyPolicy('use-case'), {
-    executionConcurrency: 4,
-    abPairConcurrency: 1,
-    evaluationConcurrency: 4,
-    triggerConcurrency: 5,
-  });
-  assert.deepEqual(getSkillExperimentConcurrencyPolicy('skill-ab'), {
-    executionConcurrency: 4,
-    abPairConcurrency: 2,
-    evaluationConcurrency: 4,
-    triggerConcurrency: 5,
-  });
-  assert.equal(getSkillExperimentConcurrencyPolicy('trigger').triggerConcurrency, 5);
+test('三类实验复用普通执行并发校验，默认 1，评估并发不随执行并发变化', () => {
+  for (const preset of ['use-case', 'skill-ab', 'trigger'] as const) {
+    assert.equal(getSkillExperimentConcurrencyPolicy(preset).executionConcurrency, 1);
+    for (const concurrency of [1, 2, 3, 8]) {
+      const policy = getSkillExperimentConcurrencyPolicy(preset, concurrency);
+      assert.equal(policy.executionConcurrency, concurrency);
+      assert.equal(policy.triggerConcurrency, concurrency);
+      assert.equal(policy.evaluationConcurrency, 4);
+    }
+    for (const invalid of [0, -1, 1.5, NaN, Infinity]) {
+      assert.throws(() => getSkillExperimentConcurrencyPolicy(preset, invalid), /执行并发必须为正整数/);
+    }
+  }
 });
 
 const triggerDataset = {
@@ -75,6 +78,39 @@ test('触发分析锁定专用评估器，其他实验排除专用评估器', ()
   assert.equal(isSkillExperimentEvaluatorEligible('use-case', 'skill-trigger-analyzer'), false);
   assert.equal(isSkillExperimentEvaluatorEligible('use-case', 'preset-result-answer'), true);
   assert.equal(isSkillExperimentEvaluatorEligible('skill-ab', 'custom-evaluator'), true);
+});
+
+test('用例与 A/B 实验均显示自定义评估器，不按历史状态过滤或改写存量数据', () => {
+  const cards: EvaluatorCard[] = (['draft', 'ready', 'template'] as const).map(status => ({
+    ...presetEvaluators[0], id: `custom-${status}`, name: `Custom ${status}`, source: 'custom', status,
+  }));
+  const before = structuredClone(cards);
+  for (const preset of ['use-case', 'skill-ab'] as const) {
+    assert.deepEqual(filterSkillExperimentEvaluators(preset, cards), cards);
+  }
+  assert.deepEqual(cards, before);
+  assert.deepEqual(filterSkillExperimentEvaluators('trigger', cards), []);
+});
+
+test('自定义状态调整不影响内置候选、历史停用项和触发分析专用规则', () => {
+  const cards = [...presetEvaluators, ...legacyPresetEvaluators];
+  for (const preset of ['use-case', 'skill-ab', 'trigger'] as const) {
+    const expected = cards.filter(card => card.status === 'ready' && isSkillExperimentEvaluatorEligible(preset, card.id));
+    assert.deepEqual(filterSkillExperimentEvaluators(preset, cards), expected);
+  }
+});
+
+test('自定义 draft 评估器可见后，依赖参考答案的使用条件仍然生效', () => {
+  const card: EvaluatorCard = {
+    ...presetEvaluators[0], id: 'custom-reference', source: 'custom', status: 'draft',
+    llmConfig: { model: '', systemPrompt: '对比 {{output}} 与 {{reference_output}} 并评分。' },
+  };
+  assert.deepEqual(filterSkillExperimentEvaluators('use-case', [card]), [card]);
+  const meta = getEvaluatorMeta(card);
+  const missing = gateEvaluator(card.id, meta, [{ hasReference: false, hasToolCatalog: false }]);
+  assert.equal(missing.usable, false);
+  assert.match(missing.reason || '', /依赖预期输出/);
+  assert.equal(gateEvaluator(card.id, meta, [{ hasReference: true, hasToolCatalog: false }]).usable, true);
 });
 
 test('用例分析默认不勾选评估器', () => {
