@@ -264,6 +264,10 @@ export const en = {
     deleteError: 'Delete error',
   },
   traceTree: {
+    spanList: 'Span list',
+    jumpToBottom: 'Jump to bottom',
+    followingLatest: 'Following updates',
+    newContent: 'New content',
     expandAll: 'Expand',
     collapseAll: 'Collapse',
     expandAllHint: 'Expand child Agents and their descendants.',
