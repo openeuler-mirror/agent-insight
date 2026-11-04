@@ -14,6 +14,8 @@ Skills 管理页是 Skill 资产的统一入口，用于查看当前 Workspace �
 > Skills 管理页承担 Skill 资产展示、入口组织与版本管理职责。
 > 相关操作通常从该页面开始，包括新建 Skill、查看详情、核对激活版本，以及进入分析与优化流程。
 
+HTTP 资产与版本管理见 [Skill 管理接口参考](../../../reference/optimization/skills-api.md)。该页区分按名称与遗留 ID 路由，并逐项说明当前身份处理。
+
 ## 核心能力
 
 - **查看 Skill 列表**：集中展示当前 Workspace 下的 Skill 资产
