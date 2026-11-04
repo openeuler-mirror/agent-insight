@@ -26,11 +26,12 @@ import type {
   NormalizedBenchmarkResult,
 } from '../../../packages/benchmark-protocol/src/evaluator-contracts'
 import type { EvaluationJob } from '../../../packages/benchmark-protocol/src/evaluation-contracts'
-import { isEvidencePath } from '../../../packages/benchmark-protocol/artifact-path.cjs'
+import { isEvidencePath, matchesEvidenceCollection } from '../../../packages/benchmark-protocol/artifact-path.cjs'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { resolveAgentInsightDataPath } from '@/lib/env'
 import { prisma } from '@/lib/storage/prisma'
 
+import { readEvaluationEvidence } from './evidence-artifacts'
 import { getBenchmarkAdapter } from './adapter-registry'
 import { scheduleBenchmarkEvaluationContinuation } from './evaluation-continuation-service'
 
@@ -89,58 +90,7 @@ function frozenEvaluationJob(requestJson: string): EvaluationJob {
   )
 }
 
-async function normalizedEvidenceArtifacts(
-  artifacts: readonly StoredEvaluationArtifact[],
-): Promise<Array<{
-  artifactId: string
-  evaluationId: string
-  name: string
-  kind: string
-  mediaType: string
-  sha256: `sha256:${string}`
-  sizeBytes: number
-  jsonContent?: JsonValue
-}>> {
-  const root = path.resolve(resolveAgentInsightDataPath())
-  return Promise.all(artifacts.map(async (artifact) => {
-    let jsonContent: JsonValue | undefined
-    if (artifact.mediaType.split(';', 1)[0].trim().toLowerCase() === 'application/json') {
-      const absolutePath = path.resolve(root, artifact.storagePath)
-      if (!absolutePath.startsWith(`${root}${path.sep}`)) {
-        throw new BenchmarkProtocolError(
-          'EVALUATION_ARTIFACT_PATH_INVALID',
-          '评测证据存储路径不合法',
-          500,
-        )
-      }
-      try {
-        const bytes = await fs.readFile(absolutePath)
-        if (bytes.byteLength !== artifact.sizeBytes || sha256(bytes) !== artifact.sha256) {
-          throw new Error('digest mismatch')
-        }
-        jsonContent = JSON.parse(bytes.toString('utf8')) as JsonValue
-      } catch {
-        throw new BenchmarkProtocolError(
-          'EVALUATION_EVIDENCE_JSON_INVALID',
-          `评测证据 ${artifact.name} 不是有效的 JSON 文件或摘要不匹配`,
-          422,
-          false,
-          { phase: 'evidence-decoding' },
-        )
-      }
-    }
-    return {
-      artifactId: artifact.id,
-      evaluationId: artifact.evaluationId,
-      name: artifact.name,
-      kind: artifact.kind,
-      mediaType: artifact.mediaType,
-      sha256: artifact.sha256 as `sha256:${string}`,
-      sizeBytes: artifact.sizeBytes,
-      ...(jsonContent === undefined ? {} : { jsonContent }),
-    }
-  }))
-}
+
 
 export async function recordBenchmarkEvaluationProgress(input: {
   evaluationId: string
@@ -464,6 +414,11 @@ export async function completeBenchmarkEvaluation(input: {
   if (referencedArtifacts.length !== input.completion.evidenceArtifactIds.length) {
     throw new BenchmarkProtocolError('EVALUATION_EVIDENCE_MISMATCH', '评测终态引用了无效证据 Artifact', 422)
   }
+  const facts = input.completion.runtimeFacts as Record<string, JsonValue>
+  const collection = facts.evidenceCollection as Record<string, JsonValue> | undefined
+  if (collection !== undefined && !matchesEvidenceCollection(collection, referencedArtifacts, input.completion.status)) {
+    throw new BenchmarkProtocolError('EVALUATION_EVIDENCE_MANIFEST_MISMATCH', '评测产物清单与实际上传附件不一致或采集不完整', 422)
+  }
   const rawResultJson = canonicalJson(input.completion.rawResult)
   if (!evaluation.completionDigest) {
     const claimed = await prisma.benchmarkEvaluation.updateMany({
@@ -507,7 +462,7 @@ export async function completeBenchmarkEvaluation(input: {
       evaluatorKey: evaluation.evaluatorKey,
       evaluationJob,
       completion: input.completion,
-      evidenceArtifacts: await normalizedEvidenceArtifacts(referencedArtifacts),
+      evidenceArtifacts: await readEvaluationEvidence(referencedArtifacts, resolveAgentInsightDataPath(), input.completion.runtimeFacts),
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Adapter 归一化失败'

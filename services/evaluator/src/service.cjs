@@ -22,6 +22,7 @@ const http = require('node:http')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 
+const { describeEvidence, appendPlatformFile } = require('./evidence-collection.cjs')
 const { generatedEvaluatorDescriptors } = require('../../../generated/benchmark-catalog/evaluators.cjs')
 const {
   evaluationTimeoutError,
@@ -586,11 +587,13 @@ class BenchmarkEvaluatorService {
       code: error.code || 'EVALUATOR_INTERNAL_ERROR',
       message: error.message,
     }, null, 2), { mode: 0o600 })
+    const evidenceFiles = [...(error.evidenceFiles || [])]
+    appendPlatformFile(evidenceFiles, evidencePath, 'error.json')
     return {
       completion: {
         status: 'failed',
         rawResult: {},
-        runtimeFacts: this.runtimeFacts({ controllerArch: process.arch }),
+        runtimeFacts: this.runtimeFacts({ controllerArch: process.arch, ...(error.evidenceCollection ? { evidenceCollection: error.evidenceCollection } : {}) }),
         cleanup: { status: 'attempted' },
         error: {
           code: error.code || 'EVALUATOR_INTERNAL_ERROR',
@@ -598,12 +601,7 @@ class BenchmarkEvaluatorService {
           retryable: error.retryable !== false,
         },
       },
-      evidenceFiles: [{
-        name: 'controller-error.json',
-        kind: 'controller-error',
-        mediaType: 'application/json',
-        path: evidencePath,
-      }],
+      evidenceFiles,
     }
   }
 
@@ -614,14 +612,27 @@ class BenchmarkEvaluatorService {
       stage: 'uploading_evidence',
       occurredAt: new Date().toISOString(),
     })
+    const collection = await describeEvidence(result.evidenceFiles, result.completion.runtimeFacts?.evidenceCollection)
+    for (const previous of result.completion.runtimeFacts?.evidenceCollection?.files || []) {
+      const current = collection.files.find(item => item.name === previous.name)
+      if (!current || current.sha256 !== previous.sha256 || current.sizeBytes !== previous.sizeBytes) {
+        throw evaluatorError('EVALUATION_EVIDENCE_CHANGED', '评测产物在上传前发生变化', 500, false)
+      }
+    }
     const uploads = []
     for (const evidence of result.evidenceFiles) {
       await this.control.assertRunning(request.runId)
-      uploads.push(await this.platform.uploadEvidence(request, evidence))
+      const upload = await this.platform.uploadEvidence(request, evidence)
+      const expected = collection.files[uploads.length]
+      if ((upload.sha256 != null && upload.sha256 !== expected.sha256) || (upload.size != null && upload.size !== expected.sizeBytes)) {
+        throw evaluatorError('EVALUATION_EVIDENCE_CHANGED', '评测证据在采集后发生变化', 500, false)
+      }
+      uploads.push(upload)
     }
     const completion = {
       ...result.completion,
       evidenceArtifactIds: uploads.map((item) => item.artifactId),
+      runtimeFacts: { ...result.completion.runtimeFacts, evidenceCollection: { ...collection, files: collection.files.map((item, index) => ({ ...item, artifactId: uploads[index].artifactId })) } },
     }
     await this.journal.writeResult(request.runId, { completion })
     await this.journal.writeState(request.runId, { stage: 'callback_pending' })
@@ -750,7 +761,12 @@ class BenchmarkEvaluatorService {
       })
       assertWithinDeadline()
     } catch (error) {
-      result = await this.fallbackResult(request, timedOut ? evaluationTimeoutError() : error)
+      const failure = timedOut ? evaluationTimeoutError() : error
+      if (failure !== error || result) {
+        failure.evidenceFiles = result?.evidenceFiles || error.evidenceFiles
+        failure.evidenceCollection = result?.completion?.runtimeFacts?.evidenceCollection || error.evidenceCollection
+      }
+      result = await this.fallbackResult(request, failure)
     } finally {
       clearTimeout(timeout)
     }

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { evidenceSource } from '../../../../../packages/benchmark-protocol/artifact-path.cjs';
 import { agentEvaluationTraceId } from '@/lib/evaluators/evaluator-skills';
 import { casePagination, locateCasePage } from '@/lib/engine/experiment/case-navigation';
 import { normalizeAgentOptions, validateDefinition } from '../../../../../packages/agent-runtime/index.cjs';
@@ -239,6 +240,7 @@ export async function GET(
         finishedAt: Date | null;
         lastProgressAt: Date | null;
         normalizedResultJson: string | null;
+        runtimeFactsJson: string | null;
         artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
       }>;
     }>();
@@ -268,6 +270,7 @@ export async function GET(
               finishedAt: true,
               lastProgressAt: true,
               normalizedResultJson: true,
+              runtimeFactsJson: true,
               artifacts: {
                 orderBy: { createdAt: 'asc' },
                 select: { id: true, name: true, kind: true, sha256: true, sizeBytes: true, mediaType: true },
@@ -882,6 +885,7 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/artifacts/${encodeURIComponent(submission.id)}/content`,
               })),
               evidenceArtifacts: (benchmarkRun.evaluations[0]?.artifacts || []).map((artifact) => ({
+                evidenceSource: evidenceSource(benchmarkRun.evaluations[0]?.runtimeFactsJson, artifact.id),
                 artifactId: artifact.id,
                 name: artifact.name,
                 kind: artifact.kind,

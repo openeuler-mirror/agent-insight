@@ -198,8 +198,14 @@ export function presentBenchmarkArtifacts<T extends BenchmarkArtifactLike>(input
     }));
 }
 
+export function isMarkdownBenchmarkArtifact(artifact: Pick<BenchmarkArtifactLike, 'mediaType' | 'name'>): boolean {
+  return artifact.mediaType.split(';', 1)[0].trim().toLowerCase() === 'text/markdown'
+    || /\.(md|markdown)$/i.test(artifact.name);
+}
+
 export function canPreviewBenchmarkArtifact(artifact: Pick<BenchmarkArtifactLike, 'mediaType' | 'name'>): boolean {
   return artifact.mediaType.startsWith('text/')
+    || isMarkdownBenchmarkArtifact(artifact)
     || artifact.mediaType === 'application/json'
     || artifact.mediaType === 'application/pdf'
     || artifact.mediaType.startsWith('image/')

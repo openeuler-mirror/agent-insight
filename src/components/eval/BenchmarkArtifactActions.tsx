@@ -19,12 +19,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { apiFetch } from '@/lib/client/api';
+import { BenchmarkArtifactContent } from './BenchmarkArtifactContent';
 import type { BenchmarkPresentation } from '../../../packages/benchmark-protocol/src/contracts';
 import {
   benchmarkPresentationText,
   benchmarkArtifactTree,
   type BenchmarkArtifactTreeNode,
   canPreviewBenchmarkArtifact,
+  isMarkdownBenchmarkArtifact,
   presentBenchmarkArtifacts,
 } from '@/lib/benchmark/presentation';
 
@@ -36,20 +38,13 @@ export interface BenchmarkArtifactRef {
   sizeBytes: number;
   contentUrl: string;
   sha256?: string;
+  evidenceSource?: string;
 }
 
 function withUser(url: string, user: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}user=${encodeURIComponent(user)}`;
 }
 
-function formattedContent(artifact: BenchmarkArtifactRef, raw: string): string {
-  if (artifact.mediaType !== 'application/json' && !artifact.name.endsWith('.json')) return raw;
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2);
-  } catch {
-    return raw;
-  }
-}
 
 function responseMessage(raw: string, fallback: string): string {
   try {
@@ -83,6 +78,7 @@ export function BenchmarkArtifactActions({
     error: string;
   } | null>(null);
   const [downloading, setDownloading] = useState('');
+  const [markdownView, setMarkdownView] = useState<'preview' | 'raw'>('preview');
 
   const artifacts = useMemo(() => presentBenchmarkArtifacts({
     submissions,
@@ -111,6 +107,7 @@ export function BenchmarkArtifactActions({
   }, [viewer, closeViewer]);
 
   const viewArtifact = useCallback(async (title: string, artifact: BenchmarkArtifactRef) => {
+    setMarkdownView('preview');
     const previewType = artifact.mediaType.startsWith('image/')
       ? 'image' as const
       : artifact.mediaType === 'application/pdf'
@@ -125,7 +122,7 @@ export function BenchmarkArtifactActions({
       }
       if (previewType === 'text') {
         const raw = await response.text();
-        setViewer({ title, artifact, content: formattedContent(artifact, raw), objectUrl: '', previewType, loading: false, error: '' });
+        setViewer({ title, artifact, content: raw, objectUrl: '', previewType, loading: false, error: '' });
       } else {
         const objectUrl = URL.createObjectURL(await response.blob());
         setViewer({ title, artifact, content: '', objectUrl, previewType, loading: false, error: '' });
@@ -191,6 +188,7 @@ export function BenchmarkArtifactActions({
           style={{ marginTop: 2, fontSize: 10.5, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
         >
           {artifact.name} · {benchmarkPresentationText(artifact.sizeBytes, { format: 'bytes' })}
+          {source === 'evidence' && ` · ${({ 'official-file': '官方文件（接入声明）', 'official-return': '官方接口返回记录（接入声明）', 'runtime-output': '运行输出', platform: '平台诊断' } as Record<string, string>)[artifact.evidenceSource || ''] || '来源未声明'}`}
         </div>
       </div>
       {canPreviewBenchmarkArtifact(artifact) && (
@@ -271,6 +269,22 @@ export function BenchmarkArtifactActions({
                 </div>
               </div>
               <span style={{ flex: 1 }} />
+              {viewer.previewType === 'text' && isMarkdownBenchmarkArtifact(viewer.artifact) && (
+                <div role="group" aria-label="Markdown 显示方式" style={{ display: 'flex', gap: 4 }}>
+                  {(['preview', 'raw'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className="ai-btn-s"
+                      aria-pressed={markdownView === mode}
+                      style={markdownView === mode ? { color: 'var(--primary)', background: 'var(--background-secondary)' } : undefined}
+                      onClick={() => setMarkdownView(mode)}
+                    >
+                      {mode === 'preview' ? '预览' : '原文'}
+                    </button>
+                  ))}
+                </div>
+              )}
               <button
                 type="button"
                 className="ai-btn-s"
@@ -292,14 +306,10 @@ export function BenchmarkArtifactActions({
               ) : viewer.previewType === 'pdf' ? (
                 <iframe title={viewer.title} src={viewer.objectUrl} style={{ width: '100%', height: '100%', minHeight: 640, border: 0 }} />
               ) : (
-                <pre style={{
-                  margin: 0, minHeight: '100%', padding: 14, border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)', background: 'var(--background-secondary)',
-                  color: 'var(--foreground)', fontFamily: 'var(--font-mono, monospace)',
-                  fontSize: 11.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
-                }}>
-                  {viewer.content || '文件为空'}
-                </pre>
+                <BenchmarkArtifactContent
+                  content={viewer.content}
+                  markdown={isMarkdownBenchmarkArtifact(viewer.artifact) && markdownView === 'preview'}
+                />
               )}
             </div>
           </aside>

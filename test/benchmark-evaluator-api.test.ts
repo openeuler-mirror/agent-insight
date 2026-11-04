@@ -356,7 +356,7 @@ test('capacity failure completes one case and the same Controller can execute th
   const service = new BenchmarkEvaluatorService({ dataDir: directory, imagePool: pool, registry: new EvaluatorRegistry([evaluator]),
     cleanupContainers: async () => ({ status: 'succeeded' }),
     platformClient: { async downloadArtifact() { return Buffer.from('patch') }, async progress() {},
-      async uploadEvidence() { return { artifactId: 'beart_capacity', sha256: `sha256:${'a'.repeat(64)}`, size: 1 } },
+      async uploadEvidence(_request: unknown, evidence: { path: string }) { const bytes = await fsp.readFile(evidence.path); return { artifactId: 'beart_capacity', sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`, size: bytes.length } },
       async complete(_request: any, result: any) { completions.push(result); return { accepted: true } } },
   }) as any
   for (const runId of ['capacity-failed', 'capacity-next']) {

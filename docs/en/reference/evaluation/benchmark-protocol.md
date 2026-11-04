@@ -54,6 +54,20 @@ The same POST endpoint accepts `{ operation: "cancel", runId, requestDigest }`, 
 
 Service errors use `{ error: { code, message, retryable } }`. Preserve the same request and idempotency identity after uncertain transport failures. A changed task needs a new identity rather than a fabricated old digest.
 
+## Native evaluation evidence
+
+Determine scope from the official documentation for the pinned version first, then verify it against the official scoring entrypoint and actual parameters. Where documentation is missing or incomplete, trace same-version file outputs, return values and diagnostics. If documentation and code disagree, check versions and parameters, record the discrepancy and resolution, and never silently choose a side or fabricate missing files. Resolve material uncertainty affecting scoring or evidence scope with the user before dependent work.
+
+A program's files are not all evaluation evidence: caches, input copies, dependencies and intermediate files must not be exposed solely because they exist in an output directory. Record documentation links/locations, versions/sections, code-based additions and inclusion/exclusion decisions in the existing integration plan. The integration must stage only selected original outputs into the controlled output directory, retaining original names, relative paths and bytes. Common scanning prevents missing uploads; it does not classify business relevance, and `evidenceRoot` does not filter siblings in the output directory. Necessary platform diagnostics remain clearly labeled supplements.
+
+Preserve the names, relative directories and bytes actually produced by the scoring entrypoint. Normalized summaries and platform metadata do not replace original artifacts. File Entrypoints collect undeclared regular files from their output directory, excluding the top-level protocol `result.json`. Optional `evidenceRoot` identifies an official output subdirectory (`.` means the output directory); names inside it must match their original relative paths. Unicode and internal spaces are supported subject to safe path and size checks. Inputs, credentials and caches must stay outside the output directory.
+
+Optional evidence `source` is `official-file`, `official-return`, `runtime-output` (default), or `platform`. Official provenance remains an integration claim requiring dedicated tests, not an attestation inferred from `kind`. `runtimeFacts.evidenceCollection` records scope, completeness, issues, file names, digests, sizes and uploaded Artifact IDs. Completion validates that inventory against referenced artifacts; incomplete successful collections are rejected. Historical callbacks without an inventory remain compatible and do not prove the new acceptance requirements.
+
+Nonzero exits and timeouts retain partial outputs and full stdout/stderr files alongside platform diagnostics. Oversized or unsupported artifacts are reported explicitly without silent truncation. Cancellation follows its existing lifecycle and does not guarantee upload. Download supports Unicode basenames; individual downloads cannot preserve a directory tree. No new archive endpoint is introduced.
+
+All attachments retain byte-integrity checks. Malformed JSON diagnostics remain downloadable with `jsonParseError`; an Adapter relying on their parsed content must reject missing `jsonContent`. Native result Schema validation remains strict. The [Chinese development contract](../../../zh/how-to/evaluation/benchmarks/develop-benchmark.md#原始产物交付与来源) is authoritative.
+
 ## Implementation
 
 - [Dispatch and EvaluationJob types](https://gitcode.com/openeuler/agent-insight/blob/master/packages/benchmark-protocol/src/evaluation-contracts.ts)
@@ -63,3 +77,6 @@ Service errors use `{ error: { code, message, retryable } }`. Preserve the same 
 [中文权威版本](../../../zh/reference/evaluation/benchmark-protocol.md)
 
 Execution Profile identity and environment structure are validated by the shared protocol; each backend validates actual policy support. The existing OCI environment remains supported, and `workspace` uses the task workspace for native local execution. Resource limits are declared only when enforced. Clients report explicit execution bindings; missing required Profiles do not silently fall back. See the [Chinese development contract](../../../zh/how-to/evaluation/benchmarks/develop-benchmark.md).
+
+
+The bundled benchmark-onboarding Skill validates original-output to platform-download mappings within its existing scoring-service and runtime checks. It compares coverage, evaluation/submission identity, original names, provenance and bytes without additional model or scoring invocations. API downloads and browser verification are reported separately. Dedicated integration tests still verify the official call and return-value serialization; hashes and labels alone do not establish authenticity. See the [Skill acceptance contract](../../../../skills/benchmark-onboarding/references/acceptance.md#评测产物核对).

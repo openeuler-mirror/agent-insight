@@ -75,3 +75,8 @@ Common statuses include `400` for invalid parameters or missing identity, `404` 
 Sources: [experiment routes](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/route.ts), [start](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/run/route.ts), and [details/control](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/route.ts).
 
 [中文权威版本](../../../zh/reference/evaluation/experiments-api.md)
+
+
+## Viewing Benchmark evidence
+
+Benchmark Case details expose the original evaluation files for preview and download. Relative folders and Unicode filenames are retained in the platform; individual downloads use the original basename and do not preserve a directory tree. Source labels distinguish integration-declared official files/API returns, runtime output, platform diagnostics and undeclared historical sources. Labels alone do not prove scoring correctness. Text previews show the stored original content; Markdown files (identified by `text/markdown`, `.md` or `.markdown`) default to a formatted preview with a source toggle, without enabling raw HTML. Downloads always return the original bytes; summaries and scores do not replace attachments. Collection failures must remain explicit rather than being hidden behind a successful score.
