@@ -22,6 +22,7 @@ import { renderToString } from 'react-dom/server';
 import { parseAsString, useQueryStates } from 'nuqs';
 import { NuqsTestingAdapter } from 'nuqs/adapters/testing';
 import ts from 'typescript';
+import { resolveTraceTimeRange } from '@/lib/client/trace-time-range';
 
 const source = fs.readFileSync(new URL('../src/app/(main)/trace/page.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('trace.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -55,7 +56,7 @@ const listEffect = effectContaining('paginated=1&databasePagination=1');
 const timerEffect = effectContaining('TRACE_LIST_REFRESH_MS');
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 
-function listHarness(initialFiltersReady = true) {
+function listHarness(initialFiltersReady = true, overrides: Record<string, unknown> = {}) {
     let loading = true;
     let records: unknown[] = [];
     let reloadKey = 0;
@@ -63,12 +64,12 @@ function listHarness(initialFiltersReady = true) {
     let statsRequest = '';
     let tick: (() => void) | undefined;
     let cleanup: (() => void) | undefined;
-    const pending: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void; signal?: AbortSignal }> = [];
+    const pending: Array<{ url: string; resolve: (value: unknown) => void; reject: (error: Error) => void; signal?: AbortSignal }> = [];
     const scope: Record<string, any> = {
         user: 'reader', apiKey: null, filtersReady: initialFiltersReady, agentScopeFilter: 'root', skillFilter: 'all',
         selectedUserTagIds: [], search: '', clauses: [], clausesRaw: '',
         frameworkFilter: 'all', agentFilter: 'all', ownershipFilter: 'user',
-        anomalyFilter: 'all', reliabilityAnomalyFilter: 'all', timeFilter: 'all',
+        anomalyFilter: 'all', reliabilityAnomalyFilter: 'all', timeFilter: 'all', customTimeRange: null,
         sortKey: 'timestamp', sortDir: 'desc', page: 1, pageSize: 20,
         listFilterKey: 'filters', listRequestKey: 'page-1',
         listRequestIdRef: { current: 0 }, listRequestPendingRef: { current: false },
@@ -83,9 +84,10 @@ function listHarness(initialFiltersReady = true) {
         TRACE_LIST_REFRESH_MS: 5_000,
         window: { setInterval: (callback: () => void) => { tick = callback; return 1; }, clearInterval: () => {} },
         document: { visibilityState: 'visible', addEventListener: () => {}, removeEventListener: () => {} },
-        apiFetch: (_url: string, options: RequestInit) => new Promise((resolve, reject) => {
-            pending.push({ resolve, reject, signal: options.signal ?? undefined });
+        apiFetch: (url: string, options: RequestInit) => new Promise((resolve, reject) => {
+            pending.push({ url, resolve, reject, signal: options.signal ?? undefined });
         }),
+        ...overrides,
     };
     function render() {
         cleanup?.();
@@ -158,6 +160,26 @@ test('independent statistics retain page parameters for the OpenGauss compatibil
     assert.equal(url.searchParams.get('listPart'), 'stats');
     assert.equal(url.searchParams.get('page'), '2');
     assert.equal(url.searchParams.get('pageSize'), '20');
+});
+
+test('custom time bounds and advanced clauses are identical in list and statistics queries', async () => {
+    const range = resolveTraceTimeRange('2026-11-04T02:00:00.000Z', '2026-11-04T04:00:00.000Z');
+    const advanced = { column: 'tokens', operator: '>=', value: 100 };
+    const h = listHarness(true, { timeFilter: 'custom', customTimeRange: range, clauses: [advanced] });
+    await h.resolve(0, 'inside-range');
+    const list = new URL(h.pending[0].url, 'http://localhost');
+    const stats = new URL(h.statsRequest(), 'http://localhost');
+    assert.deepEqual(JSON.parse(list.searchParams.get('filters')!), [advanced, ...range.clauses]);
+    assert.equal(list.searchParams.get('filters'), stats.searchParams.get('filters'));
+    h.unmount();
+});
+
+test('invalid custom ranges stop loading and never issue an unbounded request', () => {
+    const h = listHarness(true, { timeFilter: 'custom', customTimeRange: resolveTraceTimeRange('invalid', '') });
+    assert.equal(h.pending.length, 0);
+    assert.equal(h.loading(), false);
+    assert.equal(h.error(), true);
+    assert.deepEqual(h.records(), []);
 });
 
 test('statistics refresh independently, avoid overlapping requests and ignore obsolete results', async () => {
