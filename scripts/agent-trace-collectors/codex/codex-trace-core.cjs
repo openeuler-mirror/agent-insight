@@ -861,6 +861,7 @@ class CodexTraceCore {
         };
         session.agents.set(agentId, agent);
       }
+      agent.threadScoped ||= input.rollout_thread_scoped === true;
       if (eventName === "SubagentStart") {
         // Start 只更新 active agent，不 append——避免与 Stop 的同 spanId 事件重复
         // （服务端 keepLatest 虽能收口，但 spool 直接读会有两条）。
@@ -905,6 +906,7 @@ class CodexTraceCore {
           "codex.turn.id": turn.turnId,
           "codex.agent.id": agent.agentId,
           "codex.agent.name": agent.name,
+          "codex.agent.thread_scoped": agent.threadScoped || undefined,
           "codex.agent.parent_id": agent.parentId,
           "codex.agent.parent_source": input.parent_agent_id
             ? "hook"
@@ -1385,7 +1387,9 @@ class CodexTraceCore {
       if (!parentThreadId || !parentTurnId) return { attributed: false };
       await this.processHook({ hook_event_name: "SubagentStart", session_id: parentThreadId,
         turn_id: parentTurnId, agent_id: event.sourceThreadId, agent_type: agentName || "subagent",
-        timestamp_ms: event.timestampMs });
+        timestamp_ms: event.timestampMs, rollout_thread_scoped: true });
+      const parentTurn = this.turnFor(this.sessions.get(parentThreadId), parentTurnId, false);
+      if (parentTurn) parentTurn.activeAgentId = "root";
       const child = this.sessions.get(event.sourceThreadId);
       child.rolloutParent = { parentThreadId, parentTurnId };
       this.turnFor(child, event.sourceExecutionId, true, { timestampMs: event.timestampMs });

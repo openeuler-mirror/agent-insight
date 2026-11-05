@@ -233,6 +233,22 @@ test('446-19: fork suppression survives checkpoint restart and retains child wor
     assert.ok(!writer.events.some(e => e.attributes?.['codex.execution.status'] === 'interrupted'))
 })
 
+test('446-23: thread-scoped child metadata does not steal parent Hook tools', async () => {
+    const { core, writer } = await collected()
+    await core.processHook({ hook_event_name: 'SubagentStart', session_id: 'thread', turn_id: 'turn', agent_id: 'child', timestamp_ms: B + 4000 })
+    await core.processHook({ hook_event_name: 'PreToolUse', session_id: 'thread', turn_id: 'turn', tool_name: 'parent-tool', tool_use_id: 'parent-call', tool_input: {}, timestamp_ms: B + 4001 })
+    await core.processLifecycleEvent({ eventType: 'subagent_started', sourceThreadId: 'child', sourceExecutionId: 'child-turn', timestampMs: B + 4100,
+        payload: { parentThreadId: 'thread', parentTurnId: 'turn', agentName: 'child' } })
+    await core.processHook({ hook_event_name: 'PostToolUse', session_id: 'thread', turn_id: 'turn', tool_name: 'parent-tool', tool_use_id: 'parent-call', tool_response: 'parent result', timestamp_ms: B + 5000 })
+    await core.processHook({ hook_event_name: 'PostToolUse', session_id: 'child', turn_id: 'child-turn', tool_name: 'child-tool', tool_use_id: 'child-call', tool_response: 'child result', timestamp_ms: B + 5100 })
+    await core.processLifecycleEvent({ eventType: 'execution_completed', sourceThreadId: 'child', sourceExecutionId: 'child-turn', timestampMs: B + 5200, payload: { output: 'finished' } })
+    const interactions = aggregate(writer.events)!.interactions
+    const parent = interactions.find((i: any) => i.tool_calls?.[0]?.function?.name === 'parent-tool')!
+    const child = interactions.find((i: any) => i.tool_calls?.[0]?.function?.name === 'child-tool')!
+    assert.equal(parent.subagent_session_id, undefined)
+    assert.ok(child.subagent_session_id)
+})
+
 test('446-20: a completed turn is not labelled as an interrupted transition', async () => {
     const { core } = await collected([
         ...singleTurn(), msg('task_started', { turn_id: 'next' }, 10000), msg('user_message', { message: 'next goal' }, 10001),

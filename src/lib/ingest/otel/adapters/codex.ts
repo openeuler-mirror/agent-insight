@@ -146,6 +146,13 @@ function codexOwnerFor(
   displayNames?: Map<string, string>,
 ): ReturnType<typeof ownerFor> {
   const owner = ownerFor(event, bySpanId, displayNames);
+  if (owner.sessionId && owner.event && String(attrs(owner.event)['codex.agent.thread_scoped']) === 'true') {
+    const conversation = content(attrs(event)['codex.conversation.id']);
+    const childThread = content(attrs(owner.event)['codex.agent.id']);
+    if (conversation && childThread && conversation !== childThread) {
+      return subagentParentOwner(owner.event, bySpanId, displayNames);
+    }
+  }
   if (!owner.sessionId || semanticKind(event) !== 'llm') return owner;
   const child = owner.event;
   const childStartedAt = child?.startTimeMs || 0;
