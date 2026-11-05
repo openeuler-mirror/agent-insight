@@ -188,3 +188,39 @@ def test_pre_abort_receipt_flush_respects_remaining_deadline(monkeypatch, timeou
     finally:
         release.set()
         call("flush", "opencode:ses_deadline", json.dumps({"timeout_ms": 2000}))
+
+
+@pytest.mark.parametrize("phase, ok", [("terminating", True), ("failed", False)])
+def test_abort_signal_phase_survives_runtime_and_http_delivery(monkeypatch, phase, ok):
+    """Preserve the stage used by frontend labels instead of inferring it from ok."""
+    captured = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def capture_request(req, timeout):
+        captured.extend(json.loads(req.data.decode("utf-8"))["events"])
+        return Response()
+
+    monkeypatch.setattr(insight_push.request, "urlopen", capture_request)
+    monkeypatch.setattr(insight_push, "_LOADED", True)
+    monkeypatch.setattr(insight_push, "_LOADED_KEY", "wi_test")
+    monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
+    insight_push.reset_pending_pushes_for_tests()
+    call("hello", "opencode:ses_phase", json.dumps({"platform": "opencode", "config": {}}))
+    result = json.loads(call("action_result", "opencode:ses_phase", json.dumps({
+        "action": "abort_stream", "phase": phase, "ok": ok, "channel": "session.abort",
+    })))
+    flushed = json.loads(call("flush", "opencode:ses_phase", json.dumps({"timeout_ms": 2000})))
+    assert result["phase"] == phase
+    assert flushed["acked"] == 1
+    assert len(captured) == 1
+    assert captured[0]["payload"]["phase"] == phase
+    assert captured[0]["payload"]["ok"] is ok
+    assert captured[0]["summary"] == f"abort_stream {phase} via session.abort"

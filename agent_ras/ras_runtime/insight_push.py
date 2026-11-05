@@ -389,7 +389,8 @@ async def push_action_result(
     action = str(result.get("action") or "")
     ok = bool(result.get("ok"))
     channel = str(result.get("channel") or "")
-    summary = f"{action or 'action'} {'succeeded' if ok else 'failed'}"
+    outcome = "terminating" if result.get("phase") == "terminating" else ("succeeded" if ok else "failed")
+    summary = f"{action or 'action'} {outcome}"
     if channel:
         summary += f" via {channel}"
     return await push_event(
