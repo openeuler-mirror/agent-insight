@@ -654,10 +654,7 @@ export function ExperimentWizard({
     : skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集';
   const wizardDatasetOptions = eligibleWizardDatasets.map((dataset) => ({
     value: dataset.id,
-    label: `${dataset.name} · ${DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（${dataset.cases?.length ?? dataset.caseCount ?? 0}）${
-      skillPreset !== 'trigger' && dataset.targetSkill && dataset.targetSkill !== skillContext?.skillName
-        ? ` · 来源 Skill：${dataset.targetSkill}` : ''
-    }`,
+    label: `${dataset.name} · ${DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（${dataset.cases?.length ?? dataset.caseCount ?? 0}）`,
   }));
   const selectedDatasetLabel = wizardDatasetOptions.find((option) => option.value === selectedDatasetId)?.label
     || datasetPlaceholder;
@@ -1965,7 +1962,13 @@ export function ExperimentWizard({
           </button>
           <div>
             <h1 style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>新建实验</h1>
-            {skillContext && <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--foreground-muted)' }}>复用平台标准四步实验向导，当前 Skill 上下文已自动带入。</p>}
+            {skillContext && (
+              <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--foreground-muted)' }}>
+                {skillPreset === 'trigger'
+                  ? '复用平台标准四步实验向导，当前 Skill 上下文已自动带入。'
+                  : <>当前 Skill：{skillContext.skillName}{skillPreset === 'use-case' && ` · v${skillContext.skillVersion}`}</>}
+              </p>
+            )}
           </div>
           <span style={{ flex: 1 }} />
           {skillPreset && <span style={{ ...CHIP, color: 'var(--primary)', background: 'var(--primary-subtle)' }}>{SKILL_PRESET_LABELS[skillPreset]}</span>}
@@ -2085,7 +2088,7 @@ export function ExperimentWizard({
                       ? 'Benchmark 数据集由系统导入且只读；实验将生成新 Trace，并使用接入包提供的评测契约。'
                     : skillPreset === 'trigger'
                       ? '仅展示当前 Skill 的触发分析数据集；该数据集可用于同一 Skill 的不同版本回归'
-                      : '可选择全部非触发分析数据集；绑定其他 Skill 的数据集会标注来源，但不阻止复用'}
+                      : '可选择非触发分析数据集。'}
                 </div>
               </div>
 
@@ -2322,6 +2325,12 @@ export function ExperimentWizard({
                 >选择 Trace</button>
                 <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('generate')}>生成 Trace</button>
               </div>
+
+              {!skillContext && !isBenchmarkDataset && !isReliabilityDataset && (
+                <p className="mb-3 text-xs text-foreground-muted">
+                  Agent 会根据任务和运行环境选择可用的 Skill。要评测指定版本，请从 Skill 工作台新建用例实验。
+                </p>
+              )}
 
               {skillPreset === 'skill-ab' && (
                 <div style={{ padding: '9px 11px', marginBottom: 12, borderRadius: 8, background: 'var(--primary-subtle)', color: 'var(--foreground-secondary)', fontSize: 11.5 }}>
@@ -2731,7 +2740,9 @@ export function ExperimentWizard({
             <div style={{ ...PANEL_B, paddingBottom: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>选择 Trace 来源</div>
               <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginBottom: 12 }}>
-                从该 Agent 已执行的 Trace 中选择评测样本，自动监听和筛选逻辑保持不变。
+                {skillPreset === 'use-case'
+                  ? '从该 Agent 已执行的 Trace 中选择评测样本，直接评估已有执行记录。'
+                  : '从该 Agent 已执行的 Trace 中选择评测样本，自动监听和筛选逻辑保持不变。'}
               </div>
               <div style={{ display: 'inline-flex', gap: 4, padding: 4, border: '1px solid var(--border)', borderRadius: 10, marginBottom: 12 }}>
                 <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('existing')}>选择 Trace</button>
