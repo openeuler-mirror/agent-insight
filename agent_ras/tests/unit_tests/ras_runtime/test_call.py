@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 import pytest
 
@@ -26,7 +27,9 @@ from ras_runtime import insight_push
 
 
 @pytest.fixture(autouse=True)
-def _clean_embed():
+def _clean_embed(monkeypatch):
+    monkeypatch.setenv("RAS_EMBED_USE_IPC", "0")
+    monkeypatch.setenv("RAS_EMBED_IPC_FORCE_LOCAL", "1")
     reset_runtime_for_tests()
     yield
     reset_runtime_for_tests()
@@ -142,3 +145,46 @@ def test_action_result_can_be_flushed_before_short_lived_host_exits(monkeypatch)
     assert flushed["acked"] == 1
     assert flushed["pending"] == 0
     assert flushed["timed_out"] is False
+
+
+@pytest.mark.parametrize("timeout_ms", [0, 2000])
+def test_pre_abort_receipt_flush_respects_remaining_deadline(monkeypatch, timeout_ms):
+    """A stalled delivery must not extend the pre-abort wait or cancel the push."""
+    arrived = threading.Event()
+    release = threading.Event()
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def stalled_urlopen(req, timeout):
+        arrived.set()
+        assert release.wait(5)
+        return Response()
+
+    monkeypatch.setattr(insight_push.request, "urlopen", stalled_urlopen)
+    monkeypatch.setattr(insight_push, "_LOADED", True)
+    monkeypatch.setattr(insight_push, "_LOADED_KEY", "wi_test")
+    monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
+    insight_push.reset_pending_pushes_for_tests()
+    try:
+        call("hello", "opencode:ses_deadline", json.dumps({"platform": "opencode", "config": {}}))
+        call("action_result", "opencode:ses_deadline", json.dumps({"action": "abort_stream", "ok": True}))
+        assert arrived.wait(1)
+        started = time.monotonic()
+        flushed = json.loads(call("flush", "opencode:ses_deadline", json.dumps({"timeout_ms": timeout_ms})))
+        elapsed = time.monotonic() - started
+        if timeout_ms:
+            assert 1.8 <= elapsed < 2.7
+        else:
+            assert elapsed < 0.5
+        assert flushed["pending"] == 1
+        assert flushed["timed_out"] is True
+    finally:
+        release.set()
+        call("flush", "opencode:ses_deadline", json.dumps({"timeout_ms": 2000}))

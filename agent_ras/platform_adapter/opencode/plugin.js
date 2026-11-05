@@ -258,10 +258,29 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
       )
       const sessionHost = hostApi.forSession(sessionId)
       await applyActions(sessionHost, actions, {
+        beforeAbort: async () => {
+          const started = Date.now()
+          const deadline = started + 2000
+          const recorded = await ras.reportActionResult(sessionId, {
+            action: "abort_stream",
+            ok: true,
+            channel: "session.abort",
+            trace_anchor: anomaly?.trace_anchor,
+          })
+          // Flush after creating the receipt so the snapshot includes this send.
+          const delivery = await ras.flush(sessionId, Math.max(0, deadline - Date.now()))
+          if (!recorded || !delivery?.acked || delivery.failed || delivery.pending || delivery.timed_out) {
+            console.error(`[insight-ras] pre-abort receipt unconfirmed after ${Date.now() - started}ms; continuing abort_stream`)
+          } else {
+            rasLog(`[insight-ras] pre-abort receipt acknowledged after ${Date.now() - started}ms; executing abort_stream`)
+          }
+        },
         onResult: async (result) => {
           const line = `[insight-ras] action_result ${result?.action} ok=${result?.ok} channel=${result?.channel || ""}`
           if (result?.ok) rasLog(line)
           else console.error(line, result?.error || "")
+          // Success was reported before abort; actual failures still need a corrective result.
+          if (result?.action === "abort_stream" && result?.ok) return
           try {
             await ras.reportActionResult(sessionId, {
               ...result,

@@ -44,7 +44,7 @@ export const WIRE_TO_HOST = {
  *
  * @param {RasHost} host
  * @param {Array<{type?: string, message?: string}>} actions
- * @param {{ onResult?: (result: {action: string, ok: boolean, channel?: string, error?: string, message?: string, delivery_anchor?: object}) => (void|Promise<void>) }} [options]
+ * @param {{ beforeAbort?: () => (void|Promise<void>), onResult?: (result: {action: string, ok: boolean, channel?: string, error?: string, message?: string, delivery_anchor?: object}) => (void|Promise<void>) }} [options]
  * @returns {Promise<Array<{action: string, ok: boolean, channel?: string, error?: string, message?: string, delivery_anchor?: object}>>}
  */
 export async function applyActions(host, actions, options = {}) {
@@ -73,6 +73,14 @@ export async function applyActions(host, actions, options = {}) {
       console.error("[insight-ras] host missing method", method)
     } else {
       try {
+        if (type === "abort_stream" && options.beforeAbort) {
+          try {
+            await options.beforeAbort()
+          } catch (err) {
+            // Receipt delivery must not prevent the actual safety action.
+            console.error("[insight-ras] pre-abort receipt failed", err?.message || String(err))
+          }
+        }
         const arg = type === "abort_stream" ? undefined : message
         const raw =
           type === "abort_stream"
