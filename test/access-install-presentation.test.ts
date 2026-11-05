@@ -29,6 +29,7 @@ import { FRAMEWORK_OPTIONS } from '@/lib/ingest/setup/install-profile';
 
 function renderInstallPage() {
   const router = {
+    bfcacheId: 'install-page-test',
     back() {}, forward() {}, refresh() {}, push() {}, replace() {}, prefetch() {},
   };
   return renderToStaticMarkup(
