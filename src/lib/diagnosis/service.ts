@@ -114,10 +114,6 @@ export async function submitDiagnosis(user: string, snapshot: DiagnosisSnapshot,
     return existing;
   }
   if (input.retryOfRunId && !await prisma.diagnosisRun.findFirst({ where: { id: input.retryOfRunId, user, experimentId: snapshot.experiment.id, caseId: snapshot.case.id } })) throw new DiagnosisError('重试来源不存在', 404);
-  if (!input.force) {
-    const cached = await prisma.diagnosisRun.findFirst({ where: { user, inputHash, generatorVersion: GENERATOR, status: { in: ['running', 'done'] }, OR: [{ status: 'done' }, { leaseUntil: { gt: new Date() } }] }, orderBy: { createdAt: 'desc' } });
-    if (cached) return cached;
-  }
   const run = await prisma.diagnosisRun.upsert({
     where: { user_requestKey: { user, requestKey: input.requestKey } }, update: {},
     create: { user, requestKey: input.requestKey, experimentId: snapshot.experiment.id, caseId: snapshot.case.id, executionId: snapshot.execution.id, attemptId: snapshot.attempt?.id, inputHash, inputSnapshotJson: JSON.stringify(snapshot), generatorVersion: GENERATOR, retryOfRunId: input.retryOfRunId },
@@ -167,8 +163,9 @@ export async function importDiagnosis(user: string, name: string, input: { runId
   const snapshot = JSON.parse(run.inputSnapshotJson) as DiagnosisSnapshot;
   const invoked = snapshot.skills.find(item => item.name === name);
   if (!invoked) throw new DiagnosisError('本次执行未记录调用此 Skill，不能直接优化');
-  if (invoked.version !== null && invoked.version !== input.baseVersion) throw new DiagnosisError('必须使用执行时 Skill 版本', 409);
-  if ((invoked.version === null || !invoked.contentHash) && !input.baselineVerified) throw new DiagnosisError('执行时版本或文件快照缺失，请先核验基线');
+  if (invoked.version == null) throw new DiagnosisError('执行版本未记录，无法确定优化基线', 409);
+  if (invoked.version !== input.baseVersion) throw new DiagnosisError('必须使用执行时 Skill 版本', 409);
+  if (!invoked.contentHash) throw new DiagnosisError('执行快照缺少内容校验信息，无法可靠核验基线', 409);
   const base = await skillSnapshot(user, name, input.baseVersion);
   if (base.contentHash !== input.expectedContentHash || (invoked.contentHash && base.contentHash !== invoked.contentHash)) throw new DiagnosisError('Skill 基线已变化，请重新核验', 409);
   const findings = selectedFindings(JSON.parse(run.reportJson), input.findingIds);

@@ -78,15 +78,21 @@ Benchmark 数据集分支使用其绑定、Case 选择和执行配置，成功�
 
 ## 诊断运行与优化输入
 
+单组实验创建时，数据集绑定中的 `contentHash` 由服务端读取数据集 Case 后计算，覆盖原始输入、预期输出、values（含评估器上下文目录）和 evaluationFocus，不信任客户端提交的指纹。匹配过程可规整空白，保存输入与参考答案时保留原文。诊断复测对带指纹的记录严格校验原文与指纹；旧记录只兼容原文或历史导入的 `trim().replace(/\s+/g, ' ')` 结果，不重写基线答案。诊断冻结后的输入、答案、执行与评分变化仍阻止复测，错误会指出具体字段。
+
 新接口使用已登录用户的 API Key 校验实验、报告和 Skill 归属。前端提交 ID，服务端读取原始证据。
 
 | 请求 | 行为 |
 | --- | --- |
 | GET /api/experiments/:id/cases/:caseId/diagnoses | 最近十条诊断记录 |
-| POST 同一路径 | resultIds + preview=true 预览输入。确认时提交 requestKey 和 expectedInputHash，返回 runId。输入变化返回 409，无有效被测轨迹返回 422 |
+| POST 同一路径 | resultIds + preview=true 预览输入。确认时提交 requestKey 和 expectedInputHash，返回 runId。新的 requestKey 创建新任务，不按输入内容复用历史；相同 requestKey 和输入的重试返回同一任务。force 参数兼容旧客户端，新任务不再需要该参数。输入变化返回 409，无有效被测轨迹返回 422 |
 | GET /api/diagnosis-runs/:runId | 状态、输入摘要、进展、最终发现及不可导入原因 |
 | POST /api/diagnosis-runs/from-trace | 按 executionId 与 generatedAt 冻结现有最终报告，校验执行内容未变化 |
 | GET /api/skills/by-name/:name/diagnosis-inputs?version=N | 核验有权限的 Skill 基线，返回文件和内容哈希 |
-| POST /api/skills/by-name/:name/diagnosis-inputs | 提交 runId、findingIds、baseVersion、expectedContentHash、skillRelevanceConfirmed、constraints；来源版本缺失时还需 baselineVerified。返回工作台 sessionId |
+| POST /api/skills/by-name/:name/diagnosis-inputs | 提交 runId、findingIds、baseVersion、expectedContentHash、skillRelevanceConfirmed、constraints；baseVersion 必须等于执行时版本，expectedContentHash 必须匹配执行快照及对应历史版本。执行版本或快照哈希缺失返回 409，baselineVerified 不能绕过校验。返回工作台 sessionId |
 
 同一用户的相同导入选择与约束可复用草案。Trace、报告和评测快照独立于原诊断缓存。单次快照上限 16 MiB；超限时返回错误，不截掉证据后继续执行。
+
+前端使用返回的 runId 打开 `/fault?runId=…`，通过 GET `/api/diagnosis-runs/:runId` 读取该运行的证据、进度和报告，与仅 Trace 诊断的报告读取相互独立。旧 `/diagnosis-runs/:runId` 页面链接重定向到统一界面。
+
+诊断最终报告严格解析完整 JSON，并校验必要字段与发现引用。`phase1Grid` 和 `issues` 的模块允许 `memory`、`reflection`、`planning`、`action`、`system` 及 `others`，与 Skill 报告协议一致；其他问题的证据与引用保留，不增加第六个认知模块。解析、读取或结构校验失败通过诊断运行的 `status=failed` 和 `errorMessage` 返回，不保存为成功空报告；结构合法的 `findings: []` 不等于证明执行正常。历史记录修复需要另行核对与确认。

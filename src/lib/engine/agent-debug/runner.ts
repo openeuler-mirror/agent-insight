@@ -24,7 +24,8 @@ import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildDebugTurns, hashInteractions } from './trace-adapter';
-import { numberField, parseJsonObject, stringField } from './json';
+import { numberField, stringField } from './json';
+import { readFinalDiagnosisReport } from './final-report';
 import type {
   AgentDebugIssue,
   AgentDebugCandidateWindow,
@@ -158,9 +159,6 @@ export async function runAgentDebugDiagnosis(args: {
   }
 
   const parsed = readAgentDebugFinalReport(workspaceDir);
-  if (!parsed) {
-    throw new Error(`AgentDebug diagnosis skill did not create a valid report file: ${AGENT_DEBUG_FINAL_REPORT_REL_PATH}`);
-  }
 
   const stepRecords = normalizeStepRecords(parsed.stepRecords, turns);
   const phase1Grid = normalizePhase1Grid(parsed.phase1Grid);
@@ -198,13 +196,8 @@ export async function runAgentDebugDiagnosis(args: {
   };
 }
 
-function readAgentDebugFinalReport(workspaceDir: string): Record<string, unknown> | null {
-  try {
-    const content = fs.readFileSync(path.join(workspaceDir, AGENT_DEBUG_FINAL_REPORT_REL_PATH), 'utf8');
-    return parseJsonObject(content);
-  } catch {
-    return null;
-  }
+function readAgentDebugFinalReport(workspaceDir: string) {
+  return readFinalDiagnosisReport(path.join(workspaceDir, AGENT_DEBUG_FINAL_REPORT_REL_PATH));
 }
 
 function normalTriage(): AgentDebugTriage {
