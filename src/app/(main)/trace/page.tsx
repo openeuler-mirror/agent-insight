@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import styles from './trace-list.module.css';
 import { useRouter, useSearchParams } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import {
@@ -561,6 +562,7 @@ function TracePageContent() {
     const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
     const [search, setSearch] = useQueryState('q', parseAsString.withDefault(''));
     const [showFilters, setShowFilters] = useState(false);
+    const [compactFiltersOpen, setCompactFiltersOpen] = useState(false);
     const [clausesRaw, setClausesRaw] = useQueryState('f', parseAsString.withDefault(''));
     const clauses = useMemo<FilterClause[]>(() => {
         if (!clausesRaw) return [];
@@ -949,6 +951,12 @@ function TracePageContent() {
         || anomalyFilter !== 'all' || reliabilityAnomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
+    const compactFilterCount = [
+        ownershipFilter !== 'all', agentFilter !== 'all', skillFilter !== 'all', selectedUserTagIds.length > 0,
+        anomalyFilter !== 'all', reliabilityAnomalyFilter !== 'all', timeFilter !== 'all', frameworkFilter !== 'all',
+        agentScopeFilter !== 'root',
+    ].filter(Boolean).length;
+
     const resetFilters = () => {
         setOwnershipFilter('all');
         setAgentFilter('all');
@@ -1014,7 +1022,7 @@ function TracePageContent() {
                 ) : undefined}
                 showDefaultActions={false}
             />
-            <PageContainer>
+            <PageContainer className={selectedExecution ? undefined : styles.page}>
                 {selectedExecution ? (
                     <TraceDetailView
                         key={selectedExecution.task_id || selectedExecution.upload_id}
@@ -1027,7 +1035,7 @@ function TracePageContent() {
                     />
                 ) : (
                     <>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                        <div className={cn('grid grid-cols-2 md:grid-cols-4 gap-3 mb-4', styles.stats)}>
                             <StatCard
                                 label={<Term id="trace" label={t('tracePage.statTotal')} />}
                                 value={stats.total.toLocaleString()}
@@ -1045,18 +1053,32 @@ function TracePageContent() {
                         </div>
 
                         {user && (
-                            <div className="mb-3">
-                                <TraceFilterBar
-                                    clauses={clauses}
-                                    onChange={setClauses}
-                                    search={search}
-                                    onSearchChange={handleSearchChange}
-                                    user={user}
-                                />
+                            <div className={cn('mb-3', styles.searchRow)}>
+                                <div className={styles.searchInput}>
+                                    <TraceFilterBar
+                                        clauses={clauses}
+                                        onChange={setClauses}
+                                        search={search}
+                                        onSearchChange={handleSearchChange}
+                                        user={user}
+                                    />
+                                </div>
+                                <Button
+                                    variant={compactFiltersOpen ? 'secondary' : 'outline'}
+                                    className={cn('h-9 shrink-0 gap-1.5 text-xs', styles.compactToggle)}
+                                    aria-expanded={compactFiltersOpen}
+                                    aria-controls="trace-list-filters"
+                                    onClick={() => setCompactFiltersOpen(previous => !previous)}
+                                >
+                                    <SlidersHorizontal className="size-3.5" aria-hidden />
+                                    {locale === 'zh' ? '更多筛选' : 'More filters'}
+                                    {compactFilterCount > 0 && <span className="rounded-full bg-primary-subtle px-1.5 text-primary">{compactFilterCount}</span>}
+                                    <ChevronDown className={cn('size-3.5 transition-transform', compactFiltersOpen && 'rotate-180')} aria-hidden />
+                                </Button>
                             </div>
                         )}
 
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <div id="trace-list-filters" className={cn('mb-2 flex flex-wrap items-center gap-2', styles.filters, compactFiltersOpen && styles.filtersOpen)}>
                             <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setShowFilters(v => !v)}>
                                 <SlidersHorizontal className="size-3.5" />
                                 {showFilters ? (locale === 'zh' ? '隐藏过滤' : 'Hide filters') : (locale === 'zh' ? '过滤' : 'Show filters')}
@@ -1131,9 +1153,9 @@ function TracePageContent() {
                             )}
                         </div>
 
-                        <div className="flex-1 min-h-0 flex gap-3">
+                        <div className={cn('flex-1 min-h-0 flex gap-3', styles.results, compactFiltersOpen && styles.filtersExpanded)}>
                             {showFilters && (
-                                <aside className="w-60 shrink-0 overflow-auto rounded-md border border-card-border bg-card">
+                                <aside className={cn('w-60 shrink-0 overflow-auto rounded-md border border-card-border bg-card', styles.sidebar)}>
                                     <div className="px-3 py-2 border-b border-card-border">
                                         <span className="text-sm font-semibold">{locale === 'zh' ? '过滤器' : 'Filters'}</span>
                                     </div>
@@ -1148,6 +1170,7 @@ function TracePageContent() {
 
                         <div className={cn(
                             'sticky top-0 z-20 flex min-h-9 flex-wrap items-center justify-between gap-3 mb-2 rounded-md',
+                            styles.toolbar,
                             selectedTraces.length > 0 && 'border border-primary-border bg-primary-subtle px-3 py-1.5',
                         )}>
                             {selectedTraces.length > 0 ? (
@@ -1337,7 +1360,7 @@ function TracePageContent() {
                         {total > 0 && (
                             <PageFooter className="border-0 mt-3 pt-0 shrink-0">
                                 <Pagination
-                                    className="w-full"
+                                    className={cn('w-full', styles.pagination)}
                                     page={page}
                                     pageSize={pageSize}
                                     total={total}
@@ -1851,7 +1874,7 @@ function MetricPill({ label, value }: { label: React.ReactNode; value: string })
 
 function StatCard({ label, value, accent }: { label: React.ReactNode; value: string; accent?: 'error' }) {
     return (
-        <div className="rounded-md border border-card-border bg-card p-3">
+        <div className={cn('rounded-md border border-card-border bg-card p-3', styles.stat)}>
             <div className="text-xs text-foreground-muted">{label}</div>
             <div className={cn('mt-1 text-xl font-semibold tabular-nums', accent === 'error' ? 'text-error' : 'text-foreground')}>{value}</div>
         </div>
