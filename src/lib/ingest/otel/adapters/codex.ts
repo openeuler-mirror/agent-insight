@@ -641,6 +641,37 @@ function preferRolloutUsage(events: OtelTraceEvent[]): OtelTraceEvent[] {
  * 两条根同时存在会在 UI 里生成重复的 USER 节点。保留 OTel/agent 根（它带
  * 输出与子 span 归属），把生命周期快照的输入历史/状态合并进来，其余根丢弃。
  */
+export function shouldReplaceCodexSnapshot(existing: OtelTraceEvent, candidate: OtelTraceEvent): boolean {
+  const terminal = (event: OtelTraceEvent) => ['completed', 'failed', 'interrupted']
+    .includes(String(attrs(event)['codex.execution.status'] || ''));
+  if (terminal(existing) !== terminal(candidate)) return terminal(candidate);
+  return eventEndMs(candidate) >= eventEndMs(existing);
+}
+
+function mergeRolloutResponses(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  const usage = events.filter(event => semanticKind(event) === 'llm' && attrs(event)['codex.usage.source'] === 'rollout');
+  const replacements = new Map<OtelTraceEvent, OtelTraceEvent>();
+  const removed = new Set<OtelTraceEvent>();
+  for (const body of events) {
+    if (semanticKind(body) !== 'llm' || attrs(body)['codex.content.source'] !== 'rollout' || !eventOutput(body)) continue;
+    // A model response owns its completion interval, not every later message in
+    // the turn. Ambiguous/foreign-owner text remains an independent fallback.
+    const matches = usage.filter(event => event.sessionId === body.sessionId &&
+      event.parentSpanId === body.parentSpanId &&
+      attrs(event)['codex.conversation.id'] === attrs(body)['codex.conversation.id'] &&
+      attrs(event)['codex.turn.id'] === attrs(body)['codex.turn.id'] &&
+      (body.startTimeMs || 0) >= (event.startTimeMs || 0) &&
+      eventEndMs(body) <= eventEndMs(event));
+    if (matches.length !== 1) continue;
+    const target = matches[0];
+    const previous = replacements.get(target) || target;
+    const output = [...new Set([eventOutput(previous), eventOutput(body)].filter(Boolean))].join('\n');
+    replacements.set(target, { ...previous, output, attributes: { ...attrs(previous), 'output.value': output } } as OtelTraceEvent);
+    removed.add(body);
+  }
+  return events.flatMap(event => removed.has(event) ? [] : [replacements.get(event) || event]);
+}
+
 function mergeExecutionRootSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[] {
   const groups = new Map<string, OtelTraceEvent[]>();
   for (const event of events) {
@@ -674,18 +705,26 @@ function mergeExecutionRootSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[]
         'codex.source.thread_id',
         'codex.source.execution_id',
       ]) {
-        if (attributes[key] === undefined && attrs(snapshot)[key] !== undefined) {
+        if (attrs(snapshot)[key] !== undefined) {
           attributes[key] = attrs(snapshot)[key];
         }
       }
     }
     const startedAt = Math.min(...group.map((event) => event.startTimeMs || Infinity));
     const endedAt = Math.max(...group.map((event) => eventEndMs(event)));
+    const authoritative = lifecycle.at(-1);
+    const input = authoritative && eventInput(authoritative) || eventInput(primary) || group.map(eventInput).find(Boolean);
+    const output = authoritative && eventOutput(authoritative) || eventOutput(primary) || group.map(eventOutput).find(Boolean);
+    if (input) attributes['input.value'] = input;
+    if (output) attributes['output.value'] = output;
+    if (authoritative && attrs(authoritative)['codex.source.kind'] !== 'unknown') {
+      attributes['codex.source.kind'] = attrs(authoritative)['codex.source.kind'];
+    }
     const merged = {
       ...primary,
-      ...(eventInput(primary) ? {} : { input: group.map(eventInput).find(Boolean) }),
-      ...(eventOutput(primary) ? {} : { output: group.map(eventOutput).find(Boolean) }),
+      input, output,
       startTimeMs: Number.isFinite(startedAt) ? startedAt : primary.startTimeMs,
+      latencyMs: Math.max(0, endedAt - startedAt),
       attributes,
     } as OtelTraceEvent;
     (merged as AnyObj).endTimeMs = endedAt;
@@ -709,10 +748,10 @@ export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTrac
       continue;
     }
     const existing = latest.get(event.spanId);
-    if (!existing || eventEndMs(event) >= eventEndMs(existing)) latest.set(event.spanId, event);
+    if (!existing || shouldReplaceCodexSnapshot(existing, event)) latest.set(event.spanId, event);
   }
   const snapshots = mergeExecutionRootSnapshots(
-    preferRolloutUsage(mergeDirectCallIdTools([...latest.values(), ...withoutSpan])),
+    mergeRolloutResponses(preferRolloutUsage(mergeDirectCallIdTools([...latest.values(), ...withoutSpan]))),
   );
   const hookTools = snapshots.filter((event) =>
     hasToolSource(event, 'hook') &&
@@ -1041,6 +1080,7 @@ export function aggregateCodexTraceEvents(
       const outcome = String(attrs(event)['tool.outcome'] || '').toLowerCase();
       interactions.push({
         ...ownerFields(parentOwner),
+        trace_synthetic: true,
         content: '',
         timestamp: toIso(event.startTimeMs),
         timeInfo: {
@@ -1094,6 +1134,7 @@ export function aggregateCodexTraceEvents(
       interactions.push({
         ...interactionBase(event, owner),
         content: eventOutput(event) || '',
+        trace_synthetic: true,
         tool_calls: [{
           id: event.spanId,
           type: 'function',
@@ -1142,6 +1183,7 @@ export function aggregateCodexTraceEvents(
       interactions.push({
         ...interactionBase(event, owner),
         content: '',
+        trace_synthetic: true,
         tool_calls: [toolCall(event)],
         ...(kind === 'mcp' ? {
           mcp: {

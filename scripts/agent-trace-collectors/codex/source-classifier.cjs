@@ -41,14 +41,14 @@ function classifyCodexSource(input = {}) {
   if (/^(?:agent[-_ ]insight|agent_insight)(?:$|[-_ ])/i.test(clientName)) {
     return { sourceKind: "app_server", confidence: "direct", evidence };
   }
+  if (/codex[-_\s]*desktop/i.test(originator)) {
+    return { sourceKind: "desktop", confidence: "direct", evidence };
+  }
   // Desktop 会话的 OTel 日志不带 originator/clientName，但 resource 的
   // service.name=codex-app-server 在真实数据中稳定（21878/21879 实证）；CLI 路径
   // 的 service.name=codex_cli_rs 不得误归类。
   if (/^codex[-_ ]app[-_ ]server$/i.test(serviceName)) {
     return { sourceKind: "app_server", confidence: "direct", evidence };
-  }
-  if (/codex\s*desktop/i.test(originator)) {
-    return { sourceKind: "desktop", confidence: "direct", evidence };
   }
   if (/(?:vscode|cursor|windsurf|ide)/i.test(`${originator} ${terminalType}`)) {
     return { sourceKind: "ide", confidence: "direct", evidence };

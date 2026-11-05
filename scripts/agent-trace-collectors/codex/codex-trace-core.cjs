@@ -238,7 +238,7 @@ function extractOtlpLogRecords(payload) {
           attributes,
           resource,
           scope,
-          timestampMs: unixNanoToMs(logRecord.timeUnixNano || logRecord.observedTimeUnixNano) ||
+          timestampMs: unixNanoToMs(logRecord.timeUnixNano) || unixNanoToMs(logRecord.observedTimeUnixNano) ||
             Date.now(),
           severity: logRecord.severityText,
         });
@@ -429,11 +429,19 @@ class CodexTraceCore {
   promptTurn(session, rawTurnId, prompt, timestampMs, source) {
     const direct = this.turnFor(session, rawTurnId, false);
     if (direct) {
-      direct.input = prompt || direct.input;
+      direct.input ||= prompt;
+      if (source === "hook") direct.lastHookPrompt = { content: prompt, timestampMs };
       direct.updatedAt = timestampMs;
       direct.promptSources ||= new Set();
       if (source) direct.promptSources.add(source);
       return direct;
+    }
+
+    if (source === "otel") {
+      const accepted = [...session.turns.values()].filter((turn) => !turn.closed &&
+        turn.lastHookPrompt?.content === prompt &&
+        Math.abs(timestampMs - turn.lastHookPrompt.timestampMs) <= 10_000);
+      if (accepted.length === 1) return this.linkTurnAlias(session, rawTurnId, accepted[0]);
     }
 
     // Hook and OTel report the same user prompt with different ids. Merge only
@@ -1242,21 +1250,8 @@ class CodexTraceCore {
     return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
   }
 
-  /** rollout 正文/工具结果写入 OTLP 同源 session（Bug 56）。
-   *
-   * rollout_content 事件来自 desktop rollout reader 的正文提取（llm_text /
-   * tool_output / agent_message）。sessionId 必须与 OTLP 路径一致
-   * （`{threadId}:turn:{turnId}`，由 executionId() 派生），否则 spool 按
-   * sessionId 分目录后两路事件无法聚合：
-   * - llm_text / agent_message：以 `stableSpanId(session,turn,'llm','msg-N')`
-   *   独立 llm 事件写入（不与 OTLP usage llm span 抢 spanId；usage span 保持
-   *   元数据快照，正文 span 提供内容，adapter 聚合时都成为 assistant 交互）。
-   * - tool_output：以 `stableSpanId(sessionId,'tool',callId)` 与 OTLP
-   *   tool_result 事件同 spanId 追加完成快照（同 Bug 52 skill 快照模式），
-   *   服务端 keepLatestCodexSpanSnapshots 按 spanId 保留 endTime 最新一份，
-   *   两路合一后 UI 工具节点显示 output。
-   * - 事件去重：eventId 含内容摘要与时间戳，relay 重启重放 checkpoint 未推进
-   *   的批次时由 stableEventId 幂等。 */
+  // Keep content durable before usage arrives. The adapter pairs only a unique
+  // response interval with matching execution and owner; unmatched text survives.
   async processRolloutContent(event) {
     const threadId = asString(event.sourceThreadId);
     const turnId = asString(event.sourceExecutionId);
@@ -1300,8 +1295,6 @@ class CodexTraceCore {
       return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
     }
 
-    // llm_text / agent_message → 独立 llm 正文事件（Bug 56 契约：正文必须直接落
-    // llm 节点，供 OTLP usage span 按 spanId 合并；正文不得删除或延迟到轮次结束）。
     const textValue = asString(payload.text);
     if (!textValue) return { attributed: false };
     turn.llmSequence += 1;
@@ -1325,16 +1318,9 @@ class CodexTraceCore {
       },
     });
     return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
-  }  /** 把 0.164 的 token_usage_record 写成一次 LLM 调用（Bug 446-9）。
-   *
-   * 0.164 起 rollout 不再发 OTel `codex.sse_event`，改由顶层
-   * `token_usage_record` 逐次记录模型响应用量。真实样本里一个 turn 有 33 条
-   * usage 但只有 5 条 assistant 正文，说明 **一条 usage 记录 = 一次模型响应**
-   * （与旧路径 `sse_event(response.completed)` 一一对应），因此一个 usage 落一个
-   * llm span。顺序上与 usage 相邻的正文消息作为该调的 output 一并写入同一 span，
-   * 不额外造节点，也不把多条 usage 挤进同一个 span（那会丢 token）。
-   * usage 与正文的 response_id 互不等值（真实样本仅共享会话级十六进制前缀），
-   * 只能按到达顺序配对；每条 usage 恰好消费最近一条尚未绑定的正文。 */
+  }
+
+  // One usage record owns one stable response span; text never replaces usage.
   async processRolloutUsage(event) {
     const threadId = asString(event.sourceThreadId);
     const turnId = asString(event.sourceExecutionId);
@@ -1364,11 +1350,6 @@ class CodexTraceCore {
     };
     const responseId = asString(payload.responseId)
       || `${turn.turnId}:${asNumber(event.timestampMs) || timestampMs}`;
-    // 446-9：一条 usage = 一次模型响应，一个独立 llm span。
-    // 实测（0.164 真实 rollout，单 turn 33 条 usage）：32 条紧跟在工具调用之后、
-    // 仅 1 条紧跟 assistant 正文，说明 usage 不能安全绑到正文 span 上——强行绑定
-    // 会让多条 usage 撞同一 spanId 互相覆盖（丢 token）。正文另由 rollout_content
-    // 落自己的节点（Bug 56 契约），两者都算 LLM 节点、都不带对方的字段。
     const spanId = stableSpanId(session.sessionId, turn.turnId, "llm", `usage:${responseId}`);
     const startTimeMs = turn.lastLlmAt ?? turn.startedAt;
     turn.lastLlmAt = timestampMs;
@@ -1395,6 +1376,27 @@ class CodexTraceCore {
   }
 
   async processLifecycleEvent(event) {
+    if (event?.eventType === "subagent_started") {
+      const { parentThreadId, parentTurnId, agentName } = event.payload || {};
+      if (!parentThreadId || !parentTurnId) return { attributed: false };
+      await this.processHook({ hook_event_name: "SubagentStart", session_id: parentThreadId,
+        turn_id: parentTurnId, agent_id: event.sourceThreadId, agent_type: agentName || "subagent",
+        timestamp_ms: event.timestampMs });
+      const child = this.sessions.get(event.sourceThreadId);
+      child.rolloutParent = { parentThreadId, parentTurnId };
+      this.turnFor(child, event.sourceExecutionId, true, { timestampMs: event.timestampMs });
+      return { attributed: true };
+    }
+    const childSession = this.sessions.get(event?.sourceThreadId);
+    if (childSession?.rolloutParent && ["execution_completed", "execution_interrupted"].includes(event.eventType)) {
+      const { parentThreadId, parentTurnId } = childSession.rolloutParent;
+      const turn = this.turnFor(childSession, event.sourceExecutionId, false);
+      if (turn) { turn.closed = true; turn.updatedAt = event.timestampMs; }
+      await this.processHook({ hook_event_name: "SubagentStop", session_id: parentThreadId,
+        turn_id: parentTurnId, agent_id: event.sourceThreadId, timestamp_ms: event.timestampMs,
+        last_assistant_message: event.payload?.output });
+      return { attributed: true };
+    }
     if (event?.eventType === "rollout_content") return this.processRolloutContent(event);
     if (event?.eventType === "rollout_usage") return this.processRolloutUsage(event);
     const result = this.lifecycleReducer.apply(event);
@@ -1404,7 +1406,13 @@ class CodexTraceCore {
       timestampMs: event.timestampMs,
       originator: event.payload?.originator,
       terminalType: event.payload?.terminalType,
+      sourceKind: event.sourceKind,
     });
+    if (event.eventType === "execution_started") {
+      this.turnFor(session, event.sourceExecutionId, true, {
+        timestampMs: event.timestampMs, input: event.payload?.input,
+      });
+    }
     for (const snapshot of result.snapshots || []) {
       const payload = snapshot.payload || {};
       if (snapshot.eventType === "execution_snapshot") {
@@ -1413,6 +1421,12 @@ class CodexTraceCore {
         // 分组才能把同轮的生命周期、正文与指标合并为一次执行；已存在的 turn 先经
         // turnFor 解析别名，避免别名重定向后再次分叉。
         const canonicalTurn = this.turnFor(session, snapshot.sourceExecutionId, false);
+        if (canonicalTurn) {
+          canonicalTurn.input ||= payload.query;
+          canonicalTurn.output = payload.output || canonicalTurn.output;
+          canonicalTurn.updatedAt = payload.updatedAt || snapshot.timestampMs;
+          if (["completed", "interrupted", "failed"].includes(payload.status)) canonicalTurn.closed = true;
+        }
         const lifecycleExecutionId = canonicalTurn
           ? canonicalTurn.executionId
           : executionId(threadId, snapshot.sourceExecutionId);
@@ -1597,6 +1611,7 @@ class CodexTraceCore {
         sourceKind: session.sourceKind,
         closed: session.closed,
         delegatedParent: session.delegatedParent,
+        rolloutParent: session.rolloutParent,
         turnAliases: [...session.turnAliases.entries()],
         agents: [...session.agents.values()],
         turns: [...session.turns.values()].map((turn) => ({
@@ -1613,6 +1628,7 @@ class CodexTraceCore {
           parentScope: turn.parentScope,
           unresolvedImplicit: turn.unresolvedImplicit,
           promptSources: [...(turn.promptSources || [])],
+          lastHookPrompt: turn.lastHookPrompt,
         })),
       })),
       lifecycle: this.lifecycleReducer.snapshot(),
@@ -1635,6 +1651,7 @@ class CodexTraceCore {
       session.updatedAt = Number(item.updatedAt) || session.updatedAt;
       session.closed = Boolean(item.closed);
       session.delegatedParent = item.delegatedParent;
+      session.rolloutParent = item.rolloutParent;
       for (const [rawTurnId, canonicalTurnId] of item.turnAliases || []) {
         if (rawTurnId && canonicalTurnId) session.turnAliases.set(rawTurnId, canonicalTurnId);
       }
@@ -1655,6 +1672,7 @@ class CodexTraceCore {
         turn.parentScope = rawTurn.parentScope || session.delegatedParent;
         turn.unresolvedImplicit = Boolean(rawTurn.unresolvedImplicit);
         turn.promptSources = new Set(rawTurn.promptSources || []);
+        turn.lastHookPrompt = rawTurn.lastHookPrompt;
         // v1/v2 snapshots have no aliases; canonical ids remain valid aliases.
         session.turnAliases.set(turn.turnId, turn.turnId);
       }

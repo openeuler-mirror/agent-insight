@@ -219,6 +219,9 @@ async function createRelay(options = {}) {
       for (const event of events) await core.processLifecycleEvent(event);
       await writer.flush();
       await persistState();
+      if (events.some((event) => ["execution_completed", "execution_interrupted"].includes(event.eventType))) {
+        flushSoon();
+      }
     },
   });
 

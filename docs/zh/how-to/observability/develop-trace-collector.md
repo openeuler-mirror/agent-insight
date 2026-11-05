@@ -583,6 +583,23 @@ Codex 的 CLI、IDE、Desktop rollout 和 App Server proxy 必须先归一化为
 `test/codex-desktop-rollout.test.ts`、`test/codex-rollout-zstd.test.ts` 和
 `test/l1-replay-codex-rollout.test.ts`。
 
+### Desktop 终态与响应合并
+
+采集器 0.2.1 先持久化 rollout 的完成/中断事件，再主动触发上传，不再等待默认五分钟批次。
+正常情况下延迟由 rollout 扫描周期（默认十秒）和服务端入库处理组成；网络失败继续走 durable
+spool 重试。自检通过只说明链路可达，不等于某个执行已经结束。
+
+文件身份取首个 session_meta；子 Agent fork 文件嵌入的父历史（包括 synthetic abort）
+不再改变父执行状态或耗时。遇子线程自身设置/任务归属边界后恢复采集，真实子任务继续进入
+现有 Subagent/Trace 链路。普通下一轮、中断后继续与失败后继续分别展示。
+
+Rollout 计量与正文只在同执行、同归属、唯一响应时间窗内合并；一条真实回复不会再变成
+一个有 Token 的空壳加一个 0ms 正文。工具响应没有明文、或关联证据不唯一时保留降级信息，
+不伪造模型正文。Desktop 明确来源优先于底层共享 App Server 服务名。
+
+回归：`test/codex-desktop-completion.test.ts` 覆盖终态主动上传、乱序、重启、fork 历史、
+首输入/追加别名和正文计量配对；数据库回归从公开 schema 建空临时库，不读取或复制用户数据库。
+
 ## OpenCode 1.x / 2.x 采集兼容
 
 `/api/ingest/setup/opencode` 默认下发 1.x 的函数插件；传入 `apiVersion=2` 时下发只有一个

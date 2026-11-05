@@ -57,7 +57,16 @@ function eventLabel(event: TraceThreadEventView, locale: string): string {
   if (transitionKind === 'steered_to_new_execution') {
     return locale === 'zh' ? '引导后转入新任务' : 'Steered to a new task';
   }
-  return locale === 'zh' ? '前一任务中断后继续' : 'Continued after the previous task was interrupted';
+  if (transitionKind === 'interrupt_followed_by_execution') {
+    return locale === 'zh' ? '前一任务中断后继续' : 'Continued after the previous task was interrupted';
+  }
+  if (transitionKind === 'completed_followed_by_execution') {
+    return locale === 'zh' ? '前一任务完成后继续' : 'Continued after the previous task completed';
+  }
+  if (transitionKind === 'failed_followed_by_execution') {
+    return locale === 'zh' ? '前一任务失败后继续' : 'Continued after the previous task failed';
+  }
+  return locale === 'zh' ? '继续后一任务' : 'Continued to the next task';
 }
 
 function EventIcon({ kind }: { kind: string }) {

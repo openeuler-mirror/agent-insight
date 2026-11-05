@@ -309,7 +309,7 @@ function extractRolloutContentEvents(record, context) {
     sourceExecutionId: context.activeExecutionId,
   };
   const events = [];
-  if (!context.sourceThreadId) return { events, context };
+  if (!context.sourceThreadId || context.inheritedHistory) return { events, context };
   if (type === "response_item" || type === "responseItem") {
     const itemType = text(payload.type);
     if (itemType === "message" && text(payload.role) === "assistant") {
@@ -376,6 +376,11 @@ function recordsToLifecycleEvents(record, context) {
     const meta = sessionMeta(record) || payload;
     const sourceThreadId = text(meta.id || meta.session_id || meta.sessionId || context.sourceThreadId);
     if (!sourceThreadId) return { events: [], context: { ...context, unknownRecords: context.unknownRecords + 1 } };
+    // Fork rollouts embed the parent's history, including a synthetic abort.
+    // Only the first metadata record owns this physical file.
+    if (context.fileThreadId && sourceThreadId !== context.fileThreadId) {
+      return { events: [], context: { ...context, inheritedHistory: true } };
+    }
     const classification = classifyRolloutMetadata(meta);
     return {
       events: [{
@@ -383,14 +388,32 @@ function recordsToLifecycleEvents(record, context) {
           payload: { originator: meta.originator, source: meta.source, threadSource: meta.thread_source, protocolVersion: meta.cli_version || meta.version },
         }),
       }],
-      context: { ...context, sourceThreadId, sourceKind: classification.sourceKind, metadata: redactValue(meta) },
+      context: { ...context, fileThreadId: sourceThreadId, sourceThreadId,
+        forkParentThreadId: text(meta.source?.subagent?.thread_spawn?.parent_thread_id),
+        forkAgentName: text(meta.source?.subagent?.thread_spawn?.agent_path),
+        sourceKind: classification.sourceKind, metadata: redactValue(meta) },
     };
+  }
+  if (context.inheritedHistory) {
+    const ownSettings = type === "thread_settings_applied" && text(payload.thread_id) === context.fileThreadId;
+    const ownChildTurn = type === "task_started" && context.forkParentThreadId
+      && payload.turn_attribution?.parent_turn_id && taskIdOf(payload) !== text(payload.root_turn_id);
+    if (!ownSettings && !ownChildTurn) return { events: [], context };
+    context = { ...context, inheritedHistory: false, activeExecutionId: undefined,
+      activeTaskHadUserInput: false, toolNames: new Map() };
+    if (ownSettings) return { events: [], context };
   }
   if (!context.sourceThreadId) return { events: [], context: { ...context, unknownRecords: context.unknownRecords + 1 } };
   if (type === "task_started") {
     const id = taskIdOf(payload);
     if (!id) return { events: [], context: { ...context, unknownRecords: context.unknownRecords + 1 } };
-    return { events: [], context: { ...context, activeExecutionId: id, activeTaskHadUserInput: false, taskStartedAt: timestampMs } };
+    const parentTurnId = text(payload.turn_attribution?.parent_turn_id);
+    const events = context.forkParentThreadId && parentTurnId
+      ? [sourceEvent({ ...base, sourceExecutionId: id }, "subagent_started", record, {
+        sourceExecutionId: id,
+        payload: { parentThreadId: context.forkParentThreadId, parentTurnId, agentName: context.forkAgentName },
+      })] : [];
+    return { events, context: { ...context, activeExecutionId: id, activeTaskHadUserInput: false, taskStartedAt: timestampMs } };
   }
   if (type === "user_message" || type === "userMessage") {
     const id = taskIdOf(payload) || context.activeExecutionId;
@@ -461,7 +484,7 @@ function recordsToLifecycleEvents(record, context) {
   }
   if (type === "task_complete" || type === "taskComplete" || type === "turn_complete" || type === "turnComplete") {
     const id = taskIdOf(payload) || context.activeExecutionId;
-    if (!id || !context.activeTaskHadUserInput) return { events: [], context: { ...context, activeExecutionId: undefined } };
+    if (!id || (!context.activeTaskHadUserInput && !context.forkParentThreadId)) return { events: [], context: { ...context, activeExecutionId: undefined } };
     const status = /fail|error/i.test(String(payload.status || payload.outcome || "")) ? "failed" : "completed";
     return { events: [sourceEvent({ ...base, sourceExecutionId: id }, "execution_completed", record, {
       sourceExecutionId: id,
@@ -573,7 +596,9 @@ function createDesktopRolloutReader(options = {}) {
       const meta = sessionMeta(record) || payloadOf(record);
       const sourceThreadId = text(meta.id || meta.session_id || meta.sessionId);
       if (!sourceThreadId) break;
-      return { sourceThreadId, sourceKind: classifyRolloutMetadata(meta).sourceKind };
+      return { sourceThreadId, sourceKind: classifyRolloutMetadata(meta).sourceKind,
+        forkParentThreadId: text(meta.source?.subagent?.thread_spawn?.parent_thread_id),
+        forkAgentName: text(meta.source?.subagent?.thread_spawn?.agent_path) };
     }
     return {};
   }
@@ -643,9 +668,14 @@ function createDesktopRolloutReader(options = {}) {
       return { events: 0, skipped: true, legacyCompressed: true };
     }
 
+    const identity = !saved.fileThreadId && !compressed ? await readSkippedMetadata(filePath) : {};
     const context = {
-      sourceThreadId: saved.sourceThreadId,
-      sourceKind: saved.sourceKind || "unknown",
+      fileThreadId: saved.fileThreadId || identity.sourceThreadId,
+      inheritedHistory: saved.inheritedHistory === true,
+      forkParentThreadId: saved.forkParentThreadId || identity.forkParentThreadId,
+      forkAgentName: saved.forkAgentName || identity.forkAgentName,
+      sourceThreadId: identity.sourceThreadId || saved.sourceThreadId,
+      sourceKind: identity.sourceKind || saved.sourceKind || "unknown",
       activeExecutionId: saved.activeExecutionId,
       activeTaskHadUserInput: saved.activeTaskHadUserInput === true,
       taskStartedAt: saved.taskStartedAt,
@@ -710,6 +740,10 @@ function createDesktopRolloutReader(options = {}) {
         zstMtimeMs: stat.mtimeMs,
         zstSize: stat.size,
         sourceThreadId: nextContext.sourceThreadId,
+        fileThreadId: nextContext.fileThreadId,
+        inheritedHistory: nextContext.inheritedHistory === true,
+        forkParentThreadId: nextContext.forkParentThreadId,
+        forkAgentName: nextContext.forkAgentName,
         sourceKind: nextContext.sourceKind,
         activeExecutionId: nextContext.activeExecutionId,
         activeTaskHadUserInput: nextContext.activeTaskHadUserInput === true,
@@ -752,6 +786,10 @@ function createDesktopRolloutReader(options = {}) {
         compressed: false,
         skippedBackfill: suppressBeforeMs !== undefined ? false : saved.skippedBackfill === true,
         sourceThreadId: nextContext.sourceThreadId || saved.sourceThreadId,
+        fileThreadId: nextContext.fileThreadId,
+        inheritedHistory: nextContext.inheritedHistory === true,
+        forkParentThreadId: nextContext.forkParentThreadId,
+        forkAgentName: nextContext.forkAgentName,
         sourceKind: nextContext.sourceKind,
         activeExecutionId: nextContext.activeExecutionId,
         activeTaskHadUserInput: nextContext.activeTaskHadUserInput === true,

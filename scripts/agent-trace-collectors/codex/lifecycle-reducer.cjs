@@ -155,7 +155,7 @@ function createCodexLifecycleReducer() {
       nextSourceExecutionId: next.sourceExecutionId,
       previousExecutionKey: previous.key,
       nextExecutionKey: next.key,
-      kind: event.payload?.transitionKind || "interrupt_followed_by_execution",
+      kind: event.payload?.transitionKind || `${previous.status === "interrupted" ? "interrupt" : previous.status}_followed_by_execution`,
       confidence: event.provenance?.confidence || "pending",
       timestampMs: event.timestampMs,
     });
