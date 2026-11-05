@@ -48,6 +48,7 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { fileURLToPath } from "node:url";
 import { extractCoreOutput } from "./core-output";
+import { selectCompletedRootReply } from "./completed-reply";
 import { MirroredDeltaGuard } from "./stream-event-dedupe";
 import {
   classifyAgentExitFailure, createAgentRunError, extractStructuredAgentError,
@@ -638,10 +639,11 @@ export class AgentInsight {
     );
   }
 
-  async listMessages(sessionId: string) {
+  async listMessages(sessionId: string, options: { signal?: AbortSignal } = {}) {
     assertNonEmptyString(sessionId, "sessionId");
     return unwrapData<any[]>(
       await this.client.session.messages({
+        signal: options.signal,
         path: { id: sessionId },
         query: this.directoryForSession(sessionId)
           ? { directory: this.directoryForSession(sessionId) }
@@ -859,7 +861,6 @@ export class AgentInsight {
 
     const { streamTimeoutMs = 5 * 60 * 1000, idleTimeoutMs = 0, signal } = options;
     const FALLBACK_EMIT_DELAY_MS = 1500;
-    const HEARTBEAT_ONLY_CLOSE_GRACE_MS = 3000;
 
     // ----- 状态 -----
     let stream: AsyncGenerator<EventEnvelope, unknown, unknown> | null = null;
@@ -872,7 +873,21 @@ export class AgentInsight {
     let finished = false;
     const startedAt = new Date().toISOString();
     const failureController = new AbortController();
-    const executionSignal = signal ? AbortSignal.any([signal, failureController.signal]) : failureController.signal;
+    // Persisted completion closes transports without changing the caller cancellation signal.
+    const completionController = new AbortController();
+    const executionSignal = AbortSignal.any([failureController.signal, completionController.signal, ...(signal ? [signal] : [])]);
+    let confirmedResponse: any;
+    let promptSent = false;
+    let rootUserMessageId: string | null = null;
+    let rootAssistantMessageId: string | null = null;
+    let rootIdle = false;
+    let terminalMessageId: string | null = null;
+    let completedHttpMessageId: string | null = null;
+    let rootEventGeneration = 0;
+    let completionProbe: Promise<void> | null = null;
+    let completionRetry: NodeJS.Timeout | null = null;
+    let completionAttempts = 0;
+    let completionGeneration = -1;
     let executionFailure: AgentRunError | null = null;
     const failExecution = (code: string, message: string) => {
       if (executionFailure) return;
@@ -890,9 +905,7 @@ export class AgentInsight {
           ? `opencode 会话报告运行错误: ${sanitizeAgentDiagnostic(diagnostic)}` : classified.message);
     };
     let promptResponseText = "";
-    let hasNonHeartbeatEvent = false;
     let fallbackEmitTimer: NodeJS.Timeout | null = null;
-    let heartbeatOnlyCloseTimer: NodeJS.Timeout | null = null;
     let fallbackChunkTimer: NodeJS.Timeout | null = null;
 
     // 文本累积器：messageId → fullText
@@ -910,6 +923,62 @@ export class AgentInsight {
       string,
       { sessionID: string; messageID?: string; partID: string; callID?: string; name: string }
     >();
+
+    const confirmCompletion = () => {
+      if (finished || executionSignal.aborted || completionProbe || !rootUserMessageId || !rootAssistantMessageId) return;
+      if (!rootIdle && terminalMessageId !== rootAssistantMessageId && completedHttpMessageId !== rootAssistantMessageId) return;
+      if (completionGeneration !== rootEventGeneration) {
+        completionGeneration = rootEventGeneration; completionAttempts = 0;
+        if (completionRetry) { clearTimeout(completionRetry); completionRetry = null; }
+      }
+      if (completionRetry || completionAttempts >= 20) return;
+      const generation = rootEventGeneration, userId = rootUserMessageId, assistantId = rootAssistantMessageId, idle = rootIdle;
+      completionAttempts += 1;
+      completionProbe = (async () => {
+        const messages = await this.listMessages(sessionId, { signal: executionSignal });
+        if (executionSignal.aborted || generation !== rootEventGeneration || userId !== rootUserMessageId || assistantId !== rootAssistantMessageId) return;
+        const last = messages.at(-1);
+        if (last?.info?.id === assistantId && (last.info.sessionID ?? last.info.sessionId) === sessionId && last.info.parentID === userId) captureModelError(last);
+        if (executionFailure || signal?.aborted) return;
+        const reply = selectCompletedRootReply(messages, { sessionId, userMessageId: userId, assistantMessageId: assistantId, idle });
+        if (!reply) return;
+        const round = messages.slice(messages.findLastIndex(row => row?.info?.role === 'user') + 1);
+        const tools = round.flatMap(row => (row.parts || []).filter((part: any) => part?.type === 'tool').map((part: any) => ({ part, messageId: row.info.id })));
+        const persistedTools = new Map<string, any>(tools.map(({ part }) => [part.id, part]));
+        for (const [id, status] of toolStatusSeen) {
+          if (status !== 'pending' && status !== 'running') continue;
+          const meta = toolMetaByPartID.get(id), persisted = persistedTools.get(id);
+          if (meta?.sessionID !== sessionId || !persisted || !['completed', 'error'].includes(persisted.state?.status)) return;
+        }
+        for (const { part, messageId } of tools) {
+          if (toolStatusSeen.get(part.id) === part.state.status) continue;
+          if (!toolStatusSeen.has(part.id)) toolCallCount += 1;
+          toolStatusSeen.set(part.id, part.state.status);
+          onTool?.({ phase: part.state.status === 'error' ? 'error' : 'end', sessionID: sessionId,
+            messageID: messageId, partID: part.id, callID: part.callID || part.callId, name: part.tool || part.name || 'unknown',
+            status: part.state.status, input: part.state.input, output: part.state.output, error: part.state.error, metadata: part.state.metadata });
+        }
+        const fullText = extractTextFromParts(reply.parts), previous = textAcc.get(assistantId) || '';
+        confirmedResponse = reply;
+        assistantMsgId = assistantId;
+        userMsgId = userId;
+        textAcc.set(assistantId, fullText);
+        if (fullText !== previous) {
+          textDeltaCount += 1;
+          onText?.({ sessionID: sessionId, messageID: assistantId, partID: 'completed-snapshot', delta: fullText.startsWith(previous) ? fullText.slice(previous.length) : fullText, fullText });
+        }
+        finished = true;
+        completionController.abort();
+        this.log('info', 'chat.reply.completed', { sessionId, assistantMsgId, idle });
+      })().catch(error => {
+        if (!executionSignal.aborted) this.log('warn', 'chat.completion.snapshot.failed', { sessionId, error: sanitizeAgentDiagnostic(String(error)) });
+      }).finally(() => {
+        completionProbe = null;
+        if (executionSignal.aborted || finished) return;
+        if (generation !== rootEventGeneration) { confirmCompletion(); return; }
+        if (completionAttempts < 20) completionRetry = setTimeout(() => { completionRetry = null; confirmCompletion(); }, Math.min(1000, 100 * 2 ** Math.min(completionAttempts - 1, 4)));
+      });
+    };
 
     // 统计
     let eventCount = 0;
@@ -1058,9 +1127,6 @@ export class AgentInsight {
           resetIdleTimer();
           const eventType = evt.type || "unknown";
           eventTypeCounter[eventType] = (eventTypeCounter[eventType] || 0) + 1;
-          if (eventType !== "server.connected" && eventType !== "server.heartbeat") {
-            hasNonHeartbeatEvent = true;
-          }
 
           // session.created 链路追踪：先于 session 过滤！
           if (evt.type === "session.created") {
@@ -1090,6 +1156,7 @@ export class AgentInsight {
             evtSession !== sessionId &&
             allowedSessionIDs.has(evtSession);
 
+          if (!isSubagent && eventType !== 'server.connected' && eventType !== 'server.heartbeat') rootEventGeneration += 1;
           // ===== 分发 =====
           switch (evt.type) {
             // ----------- 消息 part 增量 -----------
@@ -1450,6 +1517,7 @@ export class AgentInsight {
 
               // 用户消息
               if (info.role === "user") {
+                if (!isSubagent && promptSent) { rootUserMessageId ||= info.id; rootIdle = false; terminalMessageId = null; }
                 userMsgId = info.id || userMsgId;
                 const text = extractTextFromParts(info.parts || []);
                 onUserMessage?.({
@@ -1464,6 +1532,7 @@ export class AgentInsight {
 
               // 助手消息
               if (info.role === "assistant") {
+                if (!isSubagent && rootAssistantMessageId !== info.id) { rootAssistantMessageId = info.id; rootIdle = false; terminalMessageId = null; }
                 // 多轮 agent loop 里每一轮 LLM 调用都是一条独立的 assistant message。
                 // 不能锁死第一条 ID 然后跳过后续——之前那么做导致 tool_call → tool_result
                 // 之后的 reasoning/text 全部被吞掉，前端看到工具结果就再无下文。
@@ -1522,14 +1591,11 @@ export class AgentInsight {
                     status: "completed",
                     info,
                   });
-                  // finish 是 LLM 给出的本轮收尾理由：
-                  //   - "tool-calls"：本轮调了工具，opencode 会拿工具结果再发起下一轮 LLM 调用，
-                  //                  所以本条 message 完成 ≠ 整段对话结束，不能把 finished 拉起来。
-                  //   - "stop"/"length"/"content-filter"/...：终止性 finish，本次 prompt 真的没下文了。
-                  // 之前不分类一律 finished=true，导致多轮工具循环里第二轮事件全都收不到。
+                  // A completed message can still be a tool round; confirm the final root reply from storage.
                   const finishReason = (info.finish ?? info.finishReason) as string | undefined;
-                  if (finishReason && finishReason !== "tool-calls") {
-                    finished = true;
+                  if (!isSubagent && finishReason === 'stop') terminalMessageId = info.id;
+                  else if (!isSubagent && finishReason && finishReason !== 'tool-calls') {
+                    failExecution('MODEL_ERROR', `opencode 模型未完整结束: ${finishReason}`);
                   }
                 } else {
                   onAssistantMessage?.({
@@ -1607,12 +1673,14 @@ export class AgentInsight {
                   sessionID: sid,
                   raw: evt,
                 };
+                rootIdle = true;
                 onSession?.(idleEvent);
                 onSessionIdle?.(idleEvent);
               }
               break;
             }
             case "session.status":
+              if (!isSubagent && evt.properties?.status?.type === 'busy') { rootIdle = false; terminalMessageId = null; }
               const statusEvent: SessionLifecycleEvent = {
                 phase: "status",
                 sessionID: evtSession || sessionId,
@@ -1765,6 +1833,7 @@ export class AgentInsight {
               break;
           }
 
+          confirmCompletion();
           if (finished) {
             const fn = (stream as any)?.return;
             if (typeof fn === "function") void fn.call(stream, undefined);
@@ -1773,7 +1842,7 @@ export class AgentInsight {
         }
       } catch (err) {
         rejectReady(err);
-        if (!isAbortError(err)) failExecution("MODEL_ERROR", (err as Error)?.message || String(err));
+        if (!executionSignal.aborted) failExecution("MODEL_ERROR", (err as Error)?.message || String(err));
       } finally {
         if (idleTimer) clearTimeout(idleTimer);
         if (onAbort) executionSignal.removeEventListener("abort", onAbort);
@@ -1799,6 +1868,7 @@ export class AgentInsight {
       // 没传 signal 时，sendPrompt 会一直挂到 opencode server 把"完整对话 + 善后 LLM 调用
       // (SessionSummary.summarize)"全部跑完才返回；caller 端 watchdog 触发的 abort 没法
       // 让它提前回收，导致 chat() 卡住、上层流不关、前端转圈。
+      promptSent = true;
       response = await this.sendPrompt(sessionId, payload, {
         signal: executionSignal,
       });
@@ -1806,7 +1876,7 @@ export class AgentInsight {
       const fn = (stream as any)?.return;
       if (typeof fn === "function") void fn.call(stream, undefined);
 
-      if (executionFailure || isAbortError(err) || (signal && signal.aborted)) {
+      if (executionSignal.aborted) {
         this.log("warn", "chat.sendPrompt.aborted", { sessionId });
         finished = true;
       } else {
@@ -1818,10 +1888,26 @@ export class AgentInsight {
       }
     }
 
+    response ??= confirmedResponse;
     assistantMsgId =
       response?.info?.id || response?.message?.id || assistantMsgId;
     captureModelError(response);
+    const responseFinish = response?.info?.finish ?? response?.info?.finishReason;
+    if (responseFinish && responseFinish !== 'stop') failExecution('MODEL_ERROR', `opencode 同步响应未完整结束: ${responseFinish}`);
     promptResponseText = executionFailure ? "" : extractTextFromPromptResponse(response);
+    const responseInfo = response?.info;
+    if (!executionFailure && responseFinish === 'stop' && responseInfo?.time?.completed > 0
+      && (responseInfo.sessionID ?? responseInfo.sessionId) === sessionId
+      && responseInfo.parentID && responseInfo.id
+      && (!rootUserMessageId || responseInfo.parentID === rootUserMessageId)
+      && (!rootAssistantMessageId || responseInfo.id === rootAssistantMessageId)) {
+      rootUserMessageId ||= responseInfo.parentID;
+      rootAssistantMessageId ||= responseInfo.id;
+      completedHttpMessageId = responseInfo.id;
+      completionGeneration = -1;
+      if (completionRetry) { clearTimeout(completionRetry); completionRetry = null; }
+      confirmCompletion();
+    }
 
     // 兜底：若短时间内未收到 text delta，再用 prompt 同步返回的文本补一刀。
     // 通过延迟避免与首批 SSE 增量事件竞态导致“一次性整段输出”。
@@ -1837,47 +1923,24 @@ export class AgentInsight {
       }, FALLBACK_EMIT_DELAY_MS);
     }
 
-    // 仅 heartbeat 的兜底结束：给予 grace 时间，避免在事件尚未到达时误判并提前关闭流。
-    if (
-      promptResponseText &&
-      !finished &&
-      toolCallCount === 0 &&
-      !hasNonHeartbeatEvent
-    ) {
-      heartbeatOnlyCloseTimer = setTimeout(() => {
-        if (finished || hasNonHeartbeatEvent || toolCallCount > 0) return;
-        if (eventCount === 0) return;
-        if (
-          !Object.keys(eventTypeCounter).every(
-            (t) => t === "server.connected" || t === "server.heartbeat",
-          )
-        ) {
-          return;
-        }
-        finished = true;
-        const fn = (stream as any)?.return;
-        if (typeof fn === "function") void fn.call(stream, undefined);
-        this.log("warn", "chat.stream.heartbeat_only_fallback", {
-          sessionId,
-          assistantMsgId,
-          eventCount,
-        });
-      }, HEARTBEAT_ONLY_CLOSE_GRACE_MS);
-    }
-
     // -------------------- 等待事件循环结束 --------------------
 
+    const executionAborted = new Promise<void>(resolve => {
+      if (executionSignal.aborted) resolve();
+      else executionSignal.addEventListener("abort", () => resolve(), { once: true });
+    });
     try {
-      await Promise.race([subPromise, new Promise<void>(resolve => {
-        if (executionSignal.aborted) resolve();
-        else executionSignal.addEventListener("abort", () => resolve(), { once: true });
-      })]);
+      await Promise.race([subPromise, executionAborted]);
+      while (!executionSignal.aborted && !confirmedResponse && (completionProbe || completionRetry)) {
+        await Promise.race([completionProbe || new Promise<void>(resolve => setTimeout(resolve, 50)), executionAborted]);
+      }
     } finally {
       clearTimeout(safetyTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (fallbackEmitTimer) clearTimeout(fallbackEmitTimer);
-      if (heartbeatOnlyCloseTimer) clearTimeout(heartbeatOnlyCloseTimer);
+      if (completionRetry) clearTimeout(completionRetry);
       clearFallbackChunkTimer();
+      completionController.abort();
       onDone?.();
     }
 
@@ -1903,6 +1966,10 @@ export class AgentInsight {
       throw createAgentRunError('MODEL_NO_RESPONSE', 'opencode 会话已结束，但未观察到任何模型输出或工具调用', {
         traceId: sessionId, startedAt, finishedAt: new Date().toISOString(),
       });
+    }
+
+    if (!payload.noReply && !confirmedResponse) {
+      throw createAgentRunError('MODEL_ERROR', 'opencode 传输已结束，但未确认本轮完整终态', { traceId: sessionId, startedAt, finishedAt: new Date().toISOString() });
     }
 
     this.log("info", "chat.done", {

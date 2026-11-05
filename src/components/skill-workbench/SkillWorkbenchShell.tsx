@@ -37,6 +37,7 @@ import {
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import type { SkillWorkbenchActiveView } from '@/lib/skill-workbench/domain';
+import { generatedSessionSyncPolicy } from '@/lib/skill-workbench/generated-session-sync';
 import { publishWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
 import { cn } from '@/lib/utils';
 import { TruncateText } from '@/components/text/TruncateText';
@@ -162,6 +163,8 @@ export function SkillWorkbenchShell() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const selectedAssetRef = useRef<SelectedSkillAsset | null>(null);
   const activeSessionRef = useRef<SessionDetail | null>(null);
+  const sessionSelectionEpochRef = useRef(0);
+  const sessionListRequestRef = useRef(0);
   const startingOptimizationRef = useRef(false);
   const optimizationQuickActionRef = useRef(false);
   const [error, setError] = useState('');
@@ -247,7 +250,7 @@ export function SkillWorkbenchShell() {
     return () => observer.disconnect();
   }, []);
 
-  const loadSession = useCallback(async (id: string, username: string) => {
+  const loadSession = useCallback(async (id: string, username: string, selectionEpoch = sessionSelectionEpochRef.current, isCurrent: () => boolean = () => true) => {
     const response = await apiFetch(
       `/api/skill-workbench/sessions/${encodeURIComponent(id)}?user=${encodeURIComponent(username)}`,
       { cache: 'no-store' },
@@ -255,8 +258,10 @@ export function SkillWorkbenchShell() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '加载会话失败');
     const session = data.session as SessionDetail;
-    activeSessionRef.current = session;
-    setActive(session);
+    if (selectionEpoch === sessionSelectionEpochRef.current && isCurrent()) {
+      activeSessionRef.current = session;
+      setActive(session);
+    }
     return session;
   }, []);
 
@@ -284,7 +289,7 @@ export function SkillWorkbenchShell() {
     }
   }, []);
 
-  const selectFormalAsset = useCallback(async (skillName: string, version: number, username: string) => {
+  const selectFormalAsset = useCallback(async (skillName: string, version: number, username: string, selectionEpoch = sessionSelectionEpochRef.current, isCurrent: () => boolean = () => true) => {
     setAssetLoading(true);
     try {
       const response = await apiFetch(
@@ -302,15 +307,17 @@ export function SkillWorkbenchShell() {
         source: 'management',
         sessionId: null,
       };
-      selectedAssetRef.current = next;
-      setSelectedAsset(next);
+      if (selectionEpoch === sessionSelectionEpochRef.current && isCurrent()) {
+        selectedAssetRef.current = next;
+        setSelectedAsset(next);
+      }
       return next;
     } finally {
       setAssetLoading(false);
     }
   }, []);
 
-  const selectDraftAsset = useCallback((session: SessionDetail) => {
+  const selectDraftAsset = useCallback((session: SessionDetail, preserveView = false) => {
     if (!session.skillName || session.workVersion === null || session.source === 'management') return;
     const next: SelectedSkillAsset = {
       kind: 'draft',
@@ -323,7 +330,7 @@ export function SkillWorkbenchShell() {
     };
     selectedAssetRef.current = next;
     setSelectedAsset(next);
-    setCurrentView('detail');
+    if (!preserveView) setCurrentView('detail');
     return next;
   }, []);
 
@@ -337,6 +344,9 @@ export function SkillWorkbenchShell() {
 
   const loadSessions = useCallback(async () => {
     if (!user) return;
+    const selectionEpoch = sessionSelectionEpochRef.current;
+    const requestId = ++sessionListRequestRef.current;
+    const isCurrent = () => selectionEpoch === sessionSelectionEpochRef.current && requestId === sessionListRequestRef.current;
     setLoading(true);
     setError('');
     try {
@@ -345,6 +355,7 @@ export function SkillWorkbenchShell() {
         { cache: 'no-store' },
       );
       const data = await response.json();
+      if (!isCurrent()) return;
       if (!response.ok) throw new Error(data.error || '加载历史会话失败');
       const next = (data.sessions || []) as SessionListItem[];
       setSessions(next);
@@ -352,13 +363,15 @@ export function SkillWorkbenchShell() {
       if (targetSessionId) {
         const session = activeSessionRef.current?.id === targetSessionId
           ? activeSessionRef.current
-          : await loadSession(targetSessionId, user);
+          : await loadSession(targetSessionId, user, selectionEpoch, isCurrent);
+        if (!isCurrent()) return;
         if (session.skillName && session.workVersion !== null) {
-          if (session.source === 'management') await selectFormalAsset(session.skillName, session.workVersion, user);
+          if (session.source === 'management') await selectFormalAsset(session.skillName, session.workVersion, user, selectionEpoch, isCurrent);
           else selectDraftAsset(session);
         } else {
           clearAssetSelection();
         }
+        if (!isCurrent()) return;
         setCurrentView(session.activeView || 'detail');
         if (!requestedSessionId) updateSessionUrl(session.id, 'replace');
       } else {
@@ -368,6 +381,7 @@ export function SkillWorkbenchShell() {
         if (requestedSessionId) updateSessionUrl(null, 'replace');
       }
     } catch (loadError) {
+      if (!isCurrent()) return;
       if (requestedSessionId) {
         activeSessionRef.current = null;
         setActive(null);
@@ -375,7 +389,7 @@ export function SkillWorkbenchShell() {
       }
       setError(loadError instanceof Error ? loadError.message : '加载历史会话失败');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [clearAssetSelection, loadSession, requestedSessionId, selectDraftAsset, selectFormalAsset, updateSessionUrl, user]);
 
@@ -395,6 +409,8 @@ export function SkillWorkbenchShell() {
 
   const createSession = async () => {
     if (!user || creating) return null;
+    const selectionEpoch = ++sessionSelectionEpochRef.current;
+    setLoading(false);
     setCreating(true);
     setError('');
     try {
@@ -405,7 +421,8 @@ export function SkillWorkbenchShell() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '创建会话失败');
-      const next = await loadSession(data.session.id, user);
+      const next = await loadSession(data.session.id, user, selectionEpoch);
+      if (selectionEpoch !== sessionSelectionEpochRef.current) return null;
       setSessions((current) => [next, ...current.filter((session) => session.id !== next.id)]);
       return next;
     } catch (createError) {
@@ -461,6 +478,8 @@ export function SkillWorkbenchShell() {
     setCurrentView(view);
     if (!user || !active || active.activeView === view) return;
     const previous = active;
+    const selectionEpoch = sessionSelectionEpochRef.current;
+    const isCurrent = () => selectionEpoch === sessionSelectionEpochRef.current && activeSessionRef.current?.id === previous.id;
     setActive({ ...active, activeView: view });
     try {
       const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(active.id)}`, {
@@ -470,8 +489,9 @@ export function SkillWorkbenchShell() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '保存页签失败');
-      setActive(data.session as SessionDetail);
+      if (isCurrent()) setActive(data.session as SessionDetail);
     } catch (switchError) {
+      if (!isCurrent()) return;
       setActive(previous);
       setError(switchError instanceof Error ? switchError.message : '保存页签失败');
     }
@@ -770,10 +790,13 @@ export function SkillWorkbenchShell() {
 
   const acceptGeneratedSession = useCallback((value: unknown) => {
     const next = value as SessionDetail;
+    if (activeSessionRef.current?.id !== next.id) return;
     setActive(next);
     setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
     setError((current) => isStaticQualityError(current) ? '' : current);
-    selectDraftAsset(next);
+    const sync = generatedSessionSyncPolicy(selectedAssetRef.current, next);
+    if (!sync.follow) return;
+    selectDraftAsset(next, sync.preserveView);
     if (user && next.skillName && next.workVersion !== null) {
       void loadEvaluation({
         kind: 'draft', id: null, skillName: next.skillName, version: next.workVersion,
@@ -960,8 +983,11 @@ export function SkillWorkbenchShell() {
 
   const openHistorySession = async (sessionId: string) => {
     if (!user) return;
+    const selectionEpoch = ++sessionSelectionEpochRef.current;
+    setLoading(false);
     try {
-      const session = await loadSession(sessionId, user);
+      const session = await loadSession(sessionId, user, selectionEpoch);
+      if (selectionEpoch !== sessionSelectionEpochRef.current) return;
       updateSessionUrl(session.id);
       if (session.skillName && session.workVersion !== null) await showSessionAsset(session);
       else clearAssetSelection();
