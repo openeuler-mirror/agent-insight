@@ -477,7 +477,11 @@ class CodexTraceCore {
     );
     const active = candidates.filter((turn) => !turn.closed);
     if (active.length === 1) return active[0];
-    if (active.length > 1) return undefined;
+    if (active.length > 1) {
+      return createPending ? this.turnFor(session, rawTurnId, true, {
+        timestampMs, unresolvedImplicit: true,
+      }) : undefined;
+    }
 
     // A native OTel end record can arrive shortly after Hook Stop. Use this
     // narrow recovery only when there is exactly one recent user execution.

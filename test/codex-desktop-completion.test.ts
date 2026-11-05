@@ -41,6 +41,22 @@ test('446-21: string zero timeUnixNano falls back to observed event time, never 
     assert.equal(record.timestampMs, B)
 })
 
+test('446-22: ambiguous restored turns retain uncorrelated tool data instead of crashing relay replay', async () => {
+    const writer = new Writer()
+    const core = new CodexTraceCore({ writer, now: () => B })
+    const session = core.ensureSession('ambiguous', { timestampMs: B })
+    core.turnFor(session, 'one', true, { timestampMs: B, input: 'one' })
+    core.turnFor(session, 'two', true, { timestampMs: B, input: 'two' })
+    await core.processOtel({ resourceLogs: [{ scopeLogs: [{ logRecords: [{
+        timeUnixNano: String(BigInt(B + 100) * 1000000n),
+        attributes: Object.entries({ 'event.name': 'codex.tool_result', 'conversation.id': 'ambiguous', 'tool.name': 'exec', call_id: 'tool' })
+            .map(([key, value]) => ({ key, value: { stringValue: value } })),
+    }] }] }] })
+    assert.equal(writer.events.length, 1)
+    assert.ok(writer.events[0].sessionId.startsWith('pending:'))
+    assert.equal(aggregate(writer.events, writer.events[0].sessionId), null)
+})
+
 class Writer {
     events: any[] = []
     async append(event: any) { this.events.push(structuredClone(event)); return event }
