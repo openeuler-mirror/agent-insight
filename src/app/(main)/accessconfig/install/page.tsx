@@ -36,7 +36,8 @@ import { getSelectedReportingChannels } from '@/lib/ingest/framework-reporting-c
 import {
     FRAMEWORK_OPTIONS,
     resolveInstallProfile,
-    difyOtlpConfiguration,
+    isDifyOtlpEndpoint,
+    withDifyEndpoint,
 } from '@/lib/ingest/setup/install-profile';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
@@ -65,6 +66,7 @@ export default function AccessInstallPage() {
     const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
     const [mctsRepoDir, setMctsRepoDir] = useState('');
+    const [difyEndpoint, setDifyEndpoint] = useState('');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
     const installProfile = resolveInstallProfile(
@@ -92,13 +94,14 @@ export default function AccessInstallPage() {
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
             const url = `${baseUrl}${setupUrl}${suffix}`;
-            setLinuxCmd(frameworks.includes('mcts-xgovernor')
+            const command = frameworks.includes('mcts-xgovernor')
                 ? mctsInstallCommand(url, mctsRepoDir)
-                : `curl -sSf "${url}" | bash`);
+                : `curl -sSf "${url}" | bash`;
+            setLinuxCmd(frameworks.includes('dify') ? withDifyEndpoint(command, difyEndpoint) : command);
             setWindowsCmd(`Invoke-Expression (Invoke-RestMethod -Uri "${baseUrl}${setupUrl}${suffix}" -Headers @{'x-platform'='windows'})`);
         }, 0);
         return () => window.clearTimeout(timer);
-    }, [apiKey, authReady, frameworks, mctsRepoDir]);
+    }, [apiKey, authReady, frameworks, mctsRepoDir, difyEndpoint]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -152,10 +155,7 @@ export default function AccessInstallPage() {
         `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
     ].join('\n');
     const llamaIndexSetupCode = 'import agent_insight_llamaindex; agent_insight_llamaindex.setup()';
-    const difyEnv = difyOtlpConfiguration(
-        host ? `${host}${getApiUrl('/api/ingest/otel/v1/traces')}` : '',
-        keyReady ? apiKey! : '',
-    );
+
 
     return (
         <>
@@ -197,9 +197,7 @@ export default function AccessInstallPage() {
                                 </li>
                                 <li style={introItem}>
                                     <span style={introDot} />
-                                    <a href="#dify-otlp" className="text-primary underline underline-offset-2">
-                                        {isZh ? 'Dify：原生 OTLP 配置，无需安装采集插件' : 'Dify: native OTLP configuration, no collector plugin'}
-                                    </a>
+                                    <span>{isZh ? 'Dify：在下方勾选 Dify，使用同一条命令配置原生 OTLP。' : 'Dify: select Dify below and use the same command to configure native OTLP.'}</span>
                                 </li>
                             </ul>
                         </div>
@@ -212,14 +210,14 @@ export default function AccessInstallPage() {
                             <div style={sectionHeading}>
                                 <Terminal size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
                                 <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                                    {isZh ? '命令行 Agent 安装' : 'Command-line Agents'}
+                                    {isZh ? 'Agent 接入' : 'Agent integrations'}
                                 </span>
                                 <span style={countPill}>{frameworks.length}</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
                                     {isZh
-                                        ? '先勾选框架,再在目标 Agent 主机执行对应系统的命令 —— 同时完成本机纳管'
-                                        : 'Pick frameworks, then run the matching command on the target Agent host — also registers this host'}
+                                        ? '先勾选框架，再在目标 Agent 主机执行对应命令'
+                                        : 'Pick frameworks, then run the matching command on the target Agent host'}
                                 </span>
                             </div>
 
@@ -229,6 +227,20 @@ export default function AccessInstallPage() {
                                 onToggle={toggleFramework}
                                 locale={locale}
                             />
+
+                            {frameworks.includes('dify') && (
+                                <article style={commandCard}>
+                                    <label htmlFor="dify-endpoint" style={configLabel}>{isZh ? 'Dify 容器可达的上报地址（可选）' : 'Trace endpoint reachable from Dify containers (optional)'}</label>
+                                    <Input id="dify-endpoint" type="url" value={difyEndpoint}
+                                        aria-invalid={difyEndpoint.length > 0 && !isDifyOtlpEndpoint(difyEndpoint)}
+                                        onChange={event => setDifyEndpoint(event.target.value)}
+                                        placeholder={host ? `${host}${getApiUrl('/api/ingest/otel/v1/traces')}` : 'https://insight.example/api/ingest/otel/v1/traces'}
+                                        style={configInput} />
+                                    <p style={langfuseNote}>{isZh
+                                        ? '在 Dify 的 docker 目录或源码根目录运行命令；自动备份配置并重新加载 API、Worker 和已存在的 Agent 服务。留空沿用当前平台地址；Docker Desktop 会自动处理本机 localhost。'
+                                        : 'Run in the Dify docker directory or source root. Setup backs up configuration and reloads API, Worker and an existing Agent service. Leave blank to use this platform address; Docker Desktop localhost is handled automatically.'}</p>
+                                </article>
+                            )}
 
                             {frameworks.includes('mcts-xgovernor') && (
                                 <MctsRepoField
@@ -240,19 +252,23 @@ export default function AccessInstallPage() {
 
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
-                                label="Linux"
-                                hint={frameworks.includes('mcts-xgovernor')
+                                label={frameworks.includes('dify') ? 'Linux / macOS / WSL' : 'Linux'}
+                                hint={frameworks.includes('dify')
+                                    ? (isZh ? '在 Dify 部署目录执行（Linux、macOS 或 WSL）' : 'Run in the Dify deployment directory (Linux, macOS or WSL)')
+                                    : frameworks.includes('mcts-xgovernor')
                                     ? (isZh ? '在 MCTS 执行机执行，自动完成配置、安装和客户端启动。Windows 请使用 WSL。' : 'Run on the MCTS host to configure, install and start the client. Use WSL on Windows.')
                                     : (isZh ? '使用 Agent 所在 Linux 环境的 bash / zsh 终端' : 'Use a bash / zsh shell on the Linux Agent host')}
                                 cmd={linuxCmd}
-                                unavailableMessage={frameworks.includes('mcts-xgovernor') && !isMctsRepoPath(mctsRepoDir)
-                                    ? (isZh ? '请填写 MCTS 仓库的绝对路径' : 'Enter the absolute MCTS repository path') : undefined}
+                                unavailableMessage={frameworks.includes('dify') && difyEndpoint && !isDifyOtlpEndpoint(difyEndpoint)
+                                    ? (isZh ? '请填写有效的 HTTP(S) 上报地址' : 'Enter a valid HTTP(S) trace endpoint')
+                                    : frameworks.includes('mcts-xgovernor') && !isMctsRepoPath(mctsRepoDir)
+                                        ? (isZh ? '请填写 MCTS 仓库的绝对路径' : 'Enter the absolute MCTS repository path') : undefined}
                                 copied={copied === 'linux'}
                                 onCopy={() => handleCopy(linuxCmd, 'linux')}
                                 locale={locale}
                             />
 
-                            {!frameworks.includes('mcts-xgovernor') && <CommandCard
+                            {!frameworks.includes('mcts-xgovernor') && !frameworks.includes('dify') && <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Windows (PowerShell)"
                                 hint={isZh ? '在 Windows PowerShell 中运行' : 'Run in Windows PowerShell'}
@@ -262,37 +278,7 @@ export default function AccessInstallPage() {
                                 locale={locale}
                             />}
 
-                            <section id="dify-otlp" aria-label={isZh ? 'Dify 原生 OTLP 接入' : 'Dify native OTLP integration'}>
-                                <div style={{ ...sectionHeading, marginTop: 8 }}>
-                                    <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
-                                    <h2 className="text-sm font-semibold text-foreground">{isZh ? 'Dify 原生 OTLP 接入' : 'Dify native OTLP integration'}</h2>
-                                    <span style={countPill}>OTLP</span>
-                                </div>
-                                <p className="mb-3 text-sm text-foreground-secondary">
-                                    {isZh ? '无需安装采集插件或修改 Dify 源码。将以下配置分别加入 Dify 进程环境，并重启对应服务。' : 'No collector plugin or Dify source changes required. Add each configuration to the corresponding Dify process environment and restart that service.'}
-                                </p>
-                                <CommandCard
-                                    icon={<Cloud size={14} strokeWidth={2.2} />}
-                                    label="Dify API / Worker"
-                                    hint={isZh ? 'Workflow / Chatflow 的外层节点轨迹；API 和 Worker 均需配置' : 'Outer Workflow / Chatflow node traces; configure both API and Worker'}
-                                    cmd={difyEnv.workflow}
-                                    copied={copied === 'dify-workflow'}
-                                    onCopy={() => handleCopy(difyEnv.workflow, 'dify-workflow')}
-                                    locale={locale}
-                                />
-                                <CommandCard
-                                    icon={<Cloud size={14} strokeWidth={2.2} />}
-                                    label={isZh ? 'Dify Agent 运行服务' : 'Dify Agent run service'}
-                                    hint={isZh ? 'Agent 内部模型与工具轨迹；需单独启用 trajectory 管线' : 'Internal model and tool traces; enable the separate trajectory pipeline'}
-                                    cmd={difyEnv.agent}
-                                    copied={copied === 'dify-agent'}
-                                    onCopy={() => handleCopy(difyEnv.agent, 'dify-agent')}
-                                    locale={locale}
-                                />
-                                <p className="mb-3 text-xs leading-relaxed text-foreground-muted">
-                                    {isZh ? '平台地址须可从 Dify 容器或主机访问；容器内的 localhost 指向容器自身。INCLUDE_CONTENT 会采集模型消息和工具内容，确认需要后启用。此入口仅接收 Traces；Metrics 应配置到独立 Collector。Agent v2 运行环境还须支持 Landlock。' : 'Use a platform address reachable from the Dify host or containers; localhost inside a container refers to that container. INCLUDE_CONTENT captures model messages and tool content; enable it when needed. This endpoint accepts traces only; send metrics to a separate Collector. Agent v2 also requires Landlock support.'}
-                                </p>
-                            </section>
+
 
                             <div style={{ ...sectionHeading, marginTop: 8 }}>
                                 <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
