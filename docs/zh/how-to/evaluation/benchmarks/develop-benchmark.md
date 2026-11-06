@@ -815,8 +815,6 @@ Presentation 只控制公共前端的名称、顺序和有限格式，不能改�
 
 `source` 为 `submission` 或 `evidence`。规则只设置 `label/order`；前端匹配顺序是精确名称、类型、原始名称兜底。API 始终返回完整 `submissions[]` 和 `evidenceArtifacts[]`。
 
-公共预览器根据文件名和 MIME 类型识别文本、Markdown、JSON、Diff、图片、PDF、HTML、CSV 和 JSONL。CSV 以表格展示，JSON 和 JSONL 直接显示原始文本。HTML 在隔离框架内显示，支持内嵌脚本生成正文和交互，外部脚本和资源加载受限。需要在平台内展示的交互报告，应把数据和渲染脚本内嵌到 HTML 文件中。结构化预览保留原文入口，其他媒体类型可下载。不要把 HTML、JavaScript 或 React 代码放入 Presentation。
-
 ## 11. 错误与安全
 
 错误要区分：
