@@ -18,13 +18,14 @@ test('local pipeline: signed HTTP -> queue -> real child UT/suite -> honest BLOC
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'e2e-pipeline-'));
  const project=path.join(dir,'fixture-project');fs.mkdirSync(path.join(project,'test/e2e/shared'),{recursive:true});
  for(const file of ['run.mjs','shared/runtime.mjs','shared/container-cleanup.mjs','shared/ut-environment.mjs','shared/lane.mjs','shared/suite.mjs','shared/catalog.mjs','shared/core.mjs','shared/selection.mjs','shared/config.mjs','config.json'])fs.copyFileSync(new URL('../'+file,import.meta.url),path.join(project,'test/e2e',file));
+ fs.mkdirSync(path.join(project,'test/e2e/control'),{recursive:true});fs.writeFileSync(path.join(project,'test/e2e/control/build-preflight.mjs'),"export async function compileProduction(config,options){if(options?.project!==process.cwd()||!options.runId||options.env.E2E_SUITE_RUN_ID!==options.runId)throw Error('Direct suite identity was not forwarded');return {status:'PASS',buildId:'fixture'}}");
  fs.writeFileSync(path.join(project,'package.json'),JSON.stringify({scripts:{test:'node --test fixture.test.mjs'}}));
  fs.writeFileSync(path.join(project,'fixture.test.mjs'),"import test from 'node:test';import assert from 'node:assert/strict';test('pipeline fixture only',()=>{assert.equal(2+2,4);assert.equal(process.env.E2E_ISOLATED_CONTAINER,'0');assert.equal(process.env.npm_config_cache,'/tmp/e2e-fixture-cache');assert.equal(process.env.AGENT_INSIGHT_RAS_PYTHON,'/opt/e2e-python/bin/python3');});\n");
  fs.writeFileSync(path.join(project,'.gitignore'),'exclude/\n');
  const env={PATH:process.env.PATH,HOME:dir,GIT_CONFIG_NOSYSTEM:'1',E2E_ISOLATED_CONTAINER:'0',npm_config_cache:'/tmp/e2e-fixture-cache',AGENT_INSIGHT_RAS_PYTHON:'/opt/e2e-python/bin/python3'};
  const git=args=>{const r=spawnSync('git',args,{cwd:project,env,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
  git(['init','-q']);git(['add','.']);git(['-c','user.name=Pipeline Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','test fixture']);const sha=git(['rev-parse','HEAD']);
- const configFile=path.join(project,'test/e2e/config.json'),raw=JSON.parse(fs.readFileSync(configFile));raw.profiles.pr.mode='mock';raw.profiles.pr.model={baseUrl:'https://gateway.example/v1',modelName:'fixture-model',options:{}};fs.writeFileSync(configFile,JSON.stringify(raw));git(['add','.']);git(['-c','user.name=Pipeline Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','configure fixture']);const configuredSha=git(['rev-parse','HEAD']);const executionConfig=loadExecutionConfig({file:configFile});
+ const configFile=path.join(project,'test/e2e/config.json'),raw=JSON.parse(fs.readFileSync(configFile));raw.defaults.caseModes={};raw.profiles.pr.mode='mock';raw.profiles.pr.model={baseUrl:'https://gateway.example/v1',modelName:'fixture-model',options:{}};fs.writeFileSync(configFile,JSON.stringify(raw));git(['add','.']);git(['-c','user.name=Pipeline Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','configure fixture']);const configuredSha=git(['rev-parse','HEAD']);const executionConfig=loadExecutionConfig({file:configFile});
  const pr={number:1,state:'open',head:{sha:configuredSha,repo:{full_name:'gyctl/agent-insight'}},base:{sha:configuredSha,repo:{full_name:'gyctl/agent-insight'}}};
  const comments=[];const apiServer=http.createServer(async(req,res)=>{
   let raw='';for await(const b of req)raw+=b;res.setHeader('content-type','application/json');
@@ -46,7 +47,7 @@ test('local pipeline: signed HTTP -> queue -> real child UT/suite -> honest BLOC
   const report=JSON.parse(fs.readFileSync(path.join(project,'exclude/core-e2e','pr-'+job.id,'report.json')));
   assert.equal(report.npmTest.status,'PASS');assert.equal(report.npmTest.observedSummary.tests,1);
   assert.equal(report.scenarios.filter(s=>s.status==='BLOCKED').length,5);
-  assert.equal(report.configuration.hash,configSnapshot(executionConfig).hash);assert.equal(report.configuration.settings.model.modelName,'fixture-model');assert.equal(report.scenarios.find(s=>s.id==='006').status,'NOT_RUN');
+  assert.equal(report.configuration.hash,configSnapshot(executionConfig).hash);assert.equal(report.configuration.settings.model.modelName,'fixture-model');assert.equal(report.scenarios.find(s=>s.id==='006').status,'BLOCKED');
   return validateReport(report,{job,testedSha:configuredSha,exitCode:run.code});
  }});
  assert.equal(outcome.state,'COMPLETED');assert.equal(outcome.result.status,'BLOCKED');queue.finish(job.id,outcome.state,outcome.result);

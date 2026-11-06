@@ -19,7 +19,7 @@ export function assertStaticAssessment(overview) {
 }
 
 export function generationPrompt(name, attachmentName) {
-  return `把附件 ${attachmentName} 中已经验证的只读 Python 日志统计实现封装成名为 ${name} 的最小 Skill。\n在单独的 ${name}/ 目录中只生成两个文件：SKILL.md 和 scripts/count_root_ssh.py。脚本必须从附件原样复制，不改任何代码，不重新实现算法。\nSKILL.md 使用 name/description YAML frontmatter，简短说明：当用户要求分析离线 messages 的 root SSH 认证失败时使用；运行 python3 <Skill目录>/scripts/count_root_ssh.py <用户指定日志路径>；读取脚本 JSON 的 root_ssh_failures、top_source、top_source_failures，输出中文总结，并原样引用 evidence 中至少一条日志。非零退出码时转告错误并停止，不猜测数值。零次匹配是合法统计结果，报告 0 即可；文件是否选对由调用者负责，不扫描其他文件。\n当前输出是中文总结和日志证据，不增加机器汇总行。禁止增加 gzip、目录扫描、联网、第三方库、CLI 参数、其他文件或其他功能，不读取本机系统日志。\n不要把参考附件放进最终文件列表。需求已确认，请直接生成，不再澄清；不需要联网搜索。`;
+  return `把附件 ${attachmentName} 中已经验证的只读 Python 日志统计实现封装成名为 ${name} 的最小 Skill。\n在本轮已经隔离的工作区根目录直接只生成两个文件：SKILL.md 和 scripts/count_root_ssh.py。不要再创建 ${name}/ 或其他嵌套 Skill 目录。脚本必须从附件原样复制，不改任何代码，不重新实现算法。\nSKILL.md 使用 name/description YAML frontmatter，简短说明：当用户要求分析离线 messages 的 root SSH 认证失败时使用；运行 python3 <Skill目录>/scripts/count_root_ssh.py <用户指定日志路径>；读取脚本 JSON 的 root_ssh_failures、top_source、top_source_failures，输出中文总结，并原样引用 evidence 中至少一条日志。非零退出码时转告错误并停止，不猜测数值。零次匹配是合法统计结果，报告 0 即可；文件是否选对由调用者负责，不扫描其他文件。\n当前输出是中文总结和日志证据，不增加机器汇总行。禁止增加 gzip、目录扫描、联网、第三方库、CLI 参数、其他文件或其他功能，不读取本机系统日志。\n不要把参考附件放进最终文件列表。需求已确认，请直接生成，不再澄清；不需要联网搜索。`;
 }
 
 export const optimizationPrompt = `优化这个两文件 Skill 的输出约定，保留 root 认证失败的统计逻辑和原始日志证据。允许必要调整 SKILL.md 和现有 scripts/count_root_ssh.py，不增加其他文件、功能或依赖。\n保留当前中文总结和原始 evidence，在末尾新增一行 E2E-SUMMARY，紧跟 JSON 对象。对象只取脚本实际输出的 root_ssh_failures、top_source、top_source_failures 三个字段；不要把 evidence 放进摘要 JSON。\n不硬编码路径、IP 或统计值，不增加功能或依赖。直接在当前 Skill 指令末尾追加清楚的输出规则即可。`;

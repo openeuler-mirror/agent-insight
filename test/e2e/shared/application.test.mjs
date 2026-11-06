@@ -35,3 +35,35 @@ test('003–005 platform agents receive the configured thinking/output budget an
   finally{if(ctx.agentWorkspaceRoot)fs.rmSync(ctx.agentWorkspaceRoot,{recursive:true,force:true});}
  }
 });
+
+test('production builds once per isolated suite and rejects stale or incomplete artifacts',async t=>{
+ const application=await import('./application.mjs');assert.equal(typeof application.prepareProductionBuild,'function');
+ const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path');const root=fs.mkdtempSync(path.join(os.tmpdir(),'e2e-production-build-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const ctx={project:root,root:path.join(root,'case'),runId:'suite-001'},env={E2E_ISOLATED_CONTAINER:'1',E2E_SUITE_RUN_ID:'suite'};const calls=[];
+ const run=async(bin,args,options)=>{calls.push({bin,args,env:options.env});fs.mkdirSync(path.join(root,'.next/standalone/.next'),{recursive:true});fs.writeFileSync(path.join(root,'.next/BUILD_ID'),'build-one');fs.writeFileSync(path.join(root,'.next/standalone/server.js'),'');fs.writeFileSync(path.join(root,'.next/standalone/.next/required-server-files.json'),'{}');fs.mkdirSync(path.join(root,'.next/static'),{recursive:true});fs.mkdirSync(path.join(root,'public'),{recursive:true});return {code:0};};
+ const first=await application.prepareProductionBuild(ctx,env,{run});assert.equal(first.reused,false);assert.equal(calls.length,1);assert.ok(calls[0].args.includes('--webpack'));assert.equal(calls[0].env.NODE_ENV,'production');
+ const second=await application.prepareProductionBuild({...ctx,runId:'suite-002'},env,{run});assert.equal(second.reused,true);assert.equal(second.buildId,first.buildId);assert.equal(calls.length,1);
+ await assert.rejects(application.prepareProductionBuild(ctx,{...env,E2E_SUITE_RUN_ID:'different'},{run}),/fresh|different|stale/i);
+ fs.unlinkSync(path.join(root,'.next/BUILD_ID'));await assert.rejects(application.prepareProductionBuild(ctx,env,{run}),/artifact|build/i);
+ await assert.rejects(application.prepareProductionBuild(ctx,{...env,E2E_ISOLATED_CONTAINER:'0'},{run}),/isolated/i);
+});
+
+test('a failed production build cannot be reused as a successful build',async t=>{
+ const application=await import('./application.mjs');assert.equal(typeof application.prepareProductionBuild,'function');
+ const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path');const root=fs.mkdtempSync(path.join(os.tmpdir(),'e2e-production-fail-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const ctx={project:root,root,runId:'failed-build'},env={E2E_ISOLATED_CONTAINER:'1'};
+ await assert.rejects(application.prepareProductionBuild(ctx,env,{run:async()=>({code:1})}),/build/i);
+ assert.equal(fs.existsSync(path.join(root,'exclude/core-e2e/production-build.json')),false);
+});
+
+test('production control server and Next routes share a free explicit dispatch port',async()=>{
+ const application=await import('./application.mjs');assert.equal(typeof application.prepareProductionControlEnv,'function');
+ const occupied=net.createServer();await new Promise(resolve=>occupied.listen(0,'127.0.0.1',resolve));
+ try{const env={AGENT_INSIGHT_RAS_DISPATCH_PORT:String(occupied.address().port)},platformPort=await choosePort();const selected=await application.prepareProductionControlEnv(env,platformPort);assert.equal(env.AGENT_INSIGHT_RAS_DISPATCH_PORT,String(selected));assert.notEqual(selected,platformPort);assert.notEqual(selected,occupied.address().port);const probe=net.createServer();await new Promise((resolve,reject)=>{probe.once('error',reject);probe.listen(selected,'127.0.0.1',resolve)});await new Promise(resolve=>probe.close(resolve));}
+ finally{await new Promise(resolve=>occupied.close(resolve));}
+});
+
+test('a failed build blocks subsequent cases instead of rebuilding repeatedly',async t=>{
+ const {prepareProductionBuild}=await import('./application.mjs'),fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path');const root=fs.mkdtempSync(path.join(os.tmpdir(),'e2e-production-once-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));let calls=0;const ctx={project:root,root,runId:'suite-001'},env={E2E_ISOLATED_CONTAINER:'1',E2E_SUITE_RUN_ID:'suite'},run=async()=>{calls++;return {code:1}};
+ await assert.rejects(prepareProductionBuild(ctx,env,{run}),/build/i);await assert.rejects(prepareProductionBuild({...ctx,runId:'suite-002'},env,{run}),/build/i);assert.equal(calls,1);
+});

@@ -117,14 +117,19 @@ export function assertSkillVerification(data, interactionHash, scope) {
     assert.deepEqual([...ids].sort(),flow.steps.map(step=>step.id).sort(),'Verification does not match the formal Skill flow');
     for(const action of report.keyActionResults.filter(action=>action.coverage==='not_applicable')){
       const step=flow.steps.find(step=>step.id===action.actionId);
-      const branch=flow.branches?.find(branch=>branch.falseStepId===step.id&&/退出码.*\b0\b|exit.*\b0\b/i.test(branch.condition)&&/JSON/i.test(branch.condition));
+      const branch=flow.branches?.find(branch=>{
+        const normalized=branch.condition.replace(/[`*]/g,'').replace(/零|zero\b/gi,'0');
+        const nonzero=/(?:退出码\s*(?:是否)?(?:非|不为|不等于|!==?|≠)\s*0\b|非0.*退出码|exit(?:\s+code)?\s*(?:!==?|is\s+not)\s*0\b)/i.test(normalized);
+        if(nonzero)return branch.trueStepId===step.id&&branch.falseStepId!==step.id&&ids.includes(branch.falseStepId);
+        return branch.falseStepId===step.id&&branch.trueStepId!==step.id&&ids.includes(branch.trueStepId)&&/(?:退出码(?:是否)?(?:为|是|等于)?\s*0\b|exit(?:\s+code)?\s*(?:==?|is)?\s*0\b)/i.test(normalized)&&/JSON/i.test(normalized);
+      });
       const groups=(flow.conditionalGroups||[]).filter(group=>group.branches?.some(b=>b.stepIds?.includes(step.id)));
       let condition=branch?.condition;
       if(groups.length){
         assert.equal(groups.length,1,'Unselected error action belongs to ambiguous conditional groups');
         const members=groups[0].branches;
         const invalid=members.filter(b=>b.stepIds?.includes(step.id));
-        const valid=members.find(b=>!b.stepIds?.includes(step.id)&&/(?:退出码(?:为|是|等于)?\s*0\b|exit(?:\s+code)?\s*(?:==?|is)?\s*0\b)/i.test(b.label)&&/JSON.*有效|有效.*JSON/i.test(b.label)&&!/无效/.test(b.label));
+        const valid=members.find(b=>b.stepIds?.length&&!b.stepIds.includes(step.id)&&b.stepIds.every(id=>ids.includes(id))&&/(?:退出码(?:为|是|等于)?\s*0\b|exit(?:\s+code)?\s*(?:==?|is)?\s*0\b)/i.test(b.label)&&!/无效/.test(b.label));
         assert.ok(invalid.length===1&&/退出码.*(?:非|不为|不等于|!=)\s*0|JSON.*无效/i.test(invalid[0].label)&&valid,'Unselected action is not the grouped invalid-input branch');
         condition=`${groups[0].condition}: ${invalid[0].label}`;
       }

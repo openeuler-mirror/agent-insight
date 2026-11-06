@@ -3,6 +3,25 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const activeCommands = new Set();
+export async function fetchStatusResponse(url, init = {}, {onTransportFailure = () => {}} = {}) {
+  const parsed = new URL(url), method = String(init.method || 'GET').toUpperCase();
+  const statusRead = method === 'GET' && /^\/api\/skill-workbench\/sessions\/[^/]+$/.test(parsed.pathname);
+  const deadline = Date.now() + 45000;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const headers = new Headers(init.headers);
+      if (attempt) headers.set('connection', 'close');
+      return await fetch(url, { ...init, headers, signal: init.signal || AbortSignal.timeout(Math.max(1, deadline - Date.now())) });
+    } catch (error) {
+      const code = String(error?.cause?.code || error?.code || error?.name || 'UNKNOWN').replace(/[^A-Za-z0-9_]/g, '').slice(0, 80);
+      const retrying = attempt === 0 && statusRead && ['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE'].includes(code) && deadline - Date.now() > 1000;
+      onTransportFailure({ at: new Date().toISOString(), method, path: parsed.pathname, code, attempt: attempt + 1, retrying });
+      if (!retrying) throw new Error(`${method} ${parsed.pathname} transport failed (${code})`, { cause: error });
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+}
+
 export async function stopCommands({graceMs=1500}={}) {
   if(!Number.isSafeInteger(graceMs)||graceMs<0||graceMs>90000)throw Error('Invalid cleanup grace');
   const children = [...activeCommands];

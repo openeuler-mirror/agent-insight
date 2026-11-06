@@ -1,4 +1,4 @@
-import {loadControlConfig} from '../shared/config.mjs';
+import {loadControlConfig,suiteMode} from '../shared/config.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -9,8 +9,8 @@ import {appendDelivery} from './delivery-audit.mjs';
 
 process.umask(0o077);
 const {values}=parseArgs({options:{config:{type:'string'},profile:{type:'string'},mode:{type:'string'},repository:{type:'string',default:'gyctl/agent-insight'},'state-dir':{type:'string'},'secret-file':{type:'string'},port:{type:'string',default:'8787'},host:{type:'string',default:'127.0.0.1'}}});
-const executionConfig=loadControlConfig({file:values.config,mode:values.mode,profile:values.profile});values.mode ||=executionConfig.mode;
-if(!['real','mock','probe'].includes(values.mode))throw Error('Invalid mode');
+const executionConfig=loadControlConfig({file:values.config,mode:values.mode,profile:values.profile});values.mode ||=suiteMode(executionConfig);
+if(!['real','mock','mixed','probe'].includes(values.mode))throw Error('Invalid mode');
 if(!values['state-dir']||!values['secret-file'])throw Error('--state-dir and --secret-file required');
 const port=Number(values.port);if(!Number.isInteger(port)||port<1||port>65535)throw Error('Invalid port');
 const secret=fs.readFileSync(values['secret-file'],'utf8').trim();if(secret.length<32)throw Error('Webhook secret must be at least 32 characters');

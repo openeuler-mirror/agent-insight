@@ -50,5 +50,5 @@ test('trusted core-five profile is immutable in queue identity and cannot be req
  assert.equal(five.profile,'core-five');assert.notEqual(five.id,full.id);assert.throws(()=>makeJob(e,pr(),{profile:'just-pass'}),/profile/);
 });
 test('same PR version with different approved configuration is a distinct task; event payload cannot select config',async()=>{
- const {loadExecutionConfig}=await import('../shared/config.mjs');const e=normalizeEvent(event(),'gyctl/agent-insight');const first=makeJob(e,pr(),{executionConfig:loadExecutionConfig()}),next=makeJob(e,pr(),{executionConfig:loadExecutionConfig({overrides:{resources:{cpus:3}}})});assert.notEqual(first.id,next.id);assert.equal(first.configHash.length,64);assert.deepEqual(first.caseIds,['001','002','003','004','005']);assert.equal(first.runUt,true);
+ const {loadExecutionConfig}=await import('../shared/config.mjs');const e=normalizeEvent(event(),'gyctl/agent-insight');const first=makeJob(e,pr(),{executionConfig:loadExecutionConfig()}),next=makeJob(e,pr(),{executionConfig:loadExecutionConfig({overrides:{resources:{cpus:3}}})});assert.notEqual(first.id,next.id);assert.equal(first.configHash.length,64);assert.deepEqual(first.caseIds,['001','002','003','004','006']);assert.equal(first.runUt,true);assert.equal(first.mode,'mixed');
 });

@@ -22,6 +22,12 @@ test('generation consumes uploaded attachment through a real terminal tool befor
  const input={tools,messages:[{role:'system',content:'最终生成的 skill 必须用 write 工具写到当前工作目录根'},{role:'user',content:'封装成名为 e2e-messages-generated-mock-003 的最小 Skill。附件 count_root_ssh.py'}]};
  const r=coreMockReply(input);assert.equal(r.tool_calls[0].function.name,'shell');assert.match(JSON.parse(r.tool_calls[0].function.arguments).command,/uploads/);
 });
+test('generation writes the two files at the actual session root without a nested Skill directory',()=>{
+ const write={type:'function',function:{name:'write',parameters:{type:'object',properties:{filePath:{type:'string'},content:{type:'string'}}}}};
+ const messages=[{role:'system',content:'最终生成的 skill 必须用 write 工具写到当前工作目录根'},{role:'user',content:'封装成名为 e2e-messages-generated-mock-003 的最小 Skill。'},{role:'tool',content:JSON.stringify({e2e_attachment:'uploads/reference.py',content:'print(42)'})}];
+ const first=coreMockReply({tools:[...tools,write],messages});assert.equal(JSON.parse(first.tool_calls[0].function.arguments).filePath,'SKILL.md');
+ const second=coreMockReply({tools:[...tools,write],messages:[...messages,first,{role:'tool',content:'Write succeeded'}]});const args=JSON.parse(second.tool_calls[0].function.arguments);assert.equal(args.filePath,'scripts/count_root_ssh.py');assert.equal(args.content,'print(42)');
+});
 test('optimization reads existing Skill before editing and preserves the actual prefix',()=>{
  const input={tools,messages:[{role:'system',content:'你是 **Skill 优化助手**。'},{role:'user',content:'只追加四字段 E2E-SUMMARY total_lines'}]};
  const r=coreMockReply(input);assert.match(JSON.parse(r.tool_calls[0].function.arguments).command,/SKILL\.md/);

@@ -44,8 +44,8 @@ function generationReply(input,users,messages){
  const name=users.match(/(?:名为|名称为)\s*(e2e-[a-z0-9-]+)/)?.[1];if(!name)throw Error('Controlled generation name missing');
  const source=objectFromTools(messages,'e2e_attachment');
  if(!source)return terminal(input,"python3 -c "+quote("import pathlib,json; files=list(pathlib.Path('uploads').rglob('*.py')); assert len(files)==1, 'Expected exactly one uploaded Python reference'; print(json.dumps({'e2e_attachment':str(files[0]),'content':files[0].read_text()}))"));
- if(!wroteFile(messages,'SKILL.md'))return writeFile(input,name+'/SKILL.md',`---\nname: ${name}\ndescription: Read-only analysis of root SSH failures in a user-supplied offline messages log.\n---\n\n# Root SSH 日志统计\n\n只读取用户指定离线日志，不扫描其他文件，不联网，不修改输入。\n\n## Step 1\n运行 python3 <本 Skill 目录>/scripts/count_root_ssh.py <用户日志绝对路径>。非零退出时报告错误并停止，不猜测结果；零次匹配是合法结果，报告 0。\n\n## Step 2\n根据有效 JSON 用中文报告 root_ssh_failures、top_source、top_source_failures，并原样引用 evidence 中的日志证据。只输出中文总结及日志证据。\n`);
- if(!wroteFile(messages,'count_root_ssh.py'))return writeFile(input,name+'/scripts/count_root_ssh.py',source.content);
+ if(!wroteFile(messages,'SKILL.md'))return writeFile(input,'SKILL.md',`---\nname: ${name}\ndescription: Read-only analysis of root SSH failures in a user-supplied offline messages log.\n---\n\n# Root SSH 日志统计\n\n只读取用户指定离线日志，不扫描其他文件，不联网，不修改输入。\n\n## Step 1\n运行 python3 <本 Skill 目录>/scripts/count_root_ssh.py <用户日志绝对路径>。非零退出时报告错误并停止，不猜测结果；零次匹配是合法结果，报告 0。\n\n## Step 2\n根据有效 JSON 用中文报告 root_ssh_failures、top_source、top_source_failures，并原样引用 evidence 中的日志证据。只输出中文总结及日志证据。\n`);
+ if(!wroteFile(messages,'count_root_ssh.py'))return writeFile(input,'scripts/count_root_ssh.py',source.content);
  return answer('已根据实际上传附件生成两文件 Skill，脚本保持不变。');
 }
 function optimizationReply(input,all,messages){

@@ -5,9 +5,9 @@ import * as archive from './skill-archive.mjs';
 import { scenarioResult } from './core.mjs';
 
 test('003 cannot pass with upload/generation alone or without a published-version run', () => {
-  const stages = ['application', 'login', 'model', 'ordinary-client', 'upload', 'generation', 'static', 'baseline-publish', 'baseline', 'optimization', 'candidate', 'publish', 'published-run', 'cleanup'];
+  const stages = ['application', 'login', 'model', 'ordinary-client', 'upload', 'generation', 'static', 'baseline-publish', 'dataset-ui', 'baseline', 'trace-ui', 'diagnosis', 'optimization', 'candidate', 'publish', 'published-run', 'persistence', 'cleanup'];
   assert.equal(scenarioResult(stages.map(id => ({ id, status: 'PASS' })), '003').status, 'PASS');
-  assert.equal(scenarioResult(stages.filter(id => id !== 'published-run').map(id => ({ id, status: 'PASS' })), '003').status, 'PARTIAL');
+  for(const missing of ['dataset-ui','trace-ui','diagnosis','persistence','published-run']) assert.equal(scenarioResult(stages.filter(id => id !== missing).map(id => ({ id, status: 'PASS' })), '003').status, 'PARTIAL');
 });
 
 test('archived candidate proof rejects a changed candidate, another dataset or missing coverage', () => {

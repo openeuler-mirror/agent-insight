@@ -32,6 +32,43 @@ export function prepareApplicationModelRuntime(ctx,env,port){
  ctx.agentWorkspaceRoot=prepareExternalWorkspace(ctx.project,ctx.runId);env.GENERAL_AGENT_WORKSPACE_ROOT=ctx.agentWorkspaceRoot;env.PORT=String(port);env.OPENCODE_DISABLE_MODELS_FETCH='true';env.OPENCODE_CONFIG_CONTENT=JSON.stringify(deepSeekSmokeConfig(ctx));
 }
 
+export async function prepareProductionBuild(ctx,env,{run=command}={}) {
+  assert.equal(env.E2E_ISOLATED_CONTAINER,'1','Production comparison requires an isolated container');
+  const marker=path.join(ctx.project,'exclude/core-e2e/production-build.json');
+  const failedMarker=path.join(ctx.project,'exclude/core-e2e/production-build-failed.json');
+  assert.ok(!fs.existsSync(failedMarker),'Production build already failed; use a fresh isolated checkout');
+  const suiteRunId=env.E2E_SUITE_RUN_ID||ctx.runId;
+  const buildFile=path.join(ctx.project,'.next/BUILD_ID');
+  const standalone=path.join(ctx.project,'.next/standalone');
+  const artifacts=()=>[buildFile,path.join(standalone,'server.js'),path.join(standalone,'.next/required-server-files.json'),path.join(ctx.project,'.next/static')].every(file=>fs.existsSync(file));
+  if(fs.existsSync(marker)) {
+    const saved=JSON.parse(fs.readFileSync(marker,'utf8'));
+    assert.equal(saved.suiteRunId,suiteRunId,'A different suite requires a fresh isolated checkout');
+    assert.ok(artifacts()&&fs.readFileSync(buildFile,'utf8').trim()===saved.buildId,'Production build artifacts are incomplete or stale');
+    return {...saved,reused:true};
+  }
+  const startedAt=new Date().toISOString();
+  try {
+    const built=await run('npm',['run','build','--','--webpack'],{cwd:ctx.project,env:{...env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1'},log:path.join(ctx.root,'private/production-build.log'),timeout:1200000});
+    assert.equal(built.code,0,'Production build failed; see private/production-build.log');
+    assert.ok(artifacts(),'Production build artifacts missing');
+  } catch(error) {
+    fs.mkdirSync(path.dirname(failedMarker),{recursive:true,mode:0o700});fs.writeFileSync(failedMarker,JSON.stringify({suiteRunId,startedAt,failedAt:new Date().toISOString()}),{mode:0o600,flag:'wx'});throw error;
+  }
+  fs.cpSync(path.join(ctx.project,'.next/static'),path.join(standalone,'.next/static'),{recursive:true});
+  if(fs.existsSync(path.join(ctx.project,'public')))fs.cpSync(path.join(ctx.project,'public'),path.join(standalone,'public'),{recursive:true});
+  const result={suiteRunId,buildId:fs.readFileSync(buildFile,'utf8').trim(),startedAt,endedAt:new Date().toISOString()};
+  fs.mkdirSync(path.dirname(marker),{recursive:true,mode:0o700});fs.writeFileSync(marker,JSON.stringify(result),{mode:0o600,flag:'wx'});
+  return {...result,reused:false};
+}
+
+export async function prepareProductionControlEnv(env,platformPort) {
+  let port;
+  do { port=await choosePort(); } while(port===platformPort);
+  env.AGENT_INSIGHT_RAS_DISPATCH_PORT=String(port);
+  return port;
+}
+
 export async function startApplication(ctx) {
   const port = Number(new URL(ctx.baseUrl).port);
   assert.ok(Number.isInteger(port) && port > 0, 'An explicit test port is required');
@@ -54,13 +91,30 @@ export async function startApplication(ctx) {
     const rasDependencies=await command(ctx.fiPython,['-m','pip','install',path.join(ctx.project,'agent_ras'),'--disable-pip-version-check'],{cwd:ctx.project,env,timeout:180000,log:path.join(ctx.root,'private/server-ras-install.log')});assert.equal(rasDependencies.code,0,'Server RAS catalog dependencies unavailable');
     env.PORT=String(port);env.OPENCODE_DISABLE_MODELS_FETCH='true';
   }
-  const fd = fs.openSync(path.join(ctx.root, 'private', 'startup.log'), 'a', 0o600);
-  ctx.appProcess = spawn('bash', ['scripts/develop_start.sh'], { cwd: ctx.project, env:boundedAppEnv(ctx.root,env,ctx.executionConfig?.resources), detached: true, stdio: ['ignore', fd, fd] });fs.closeSync(fd);
+  const production=ctx.executionConfig?.application?.mode==='production';
+  const appEnv=boundedAppEnv(ctx.root,env,ctx.executionConfig?.resources);
+  let build;
+  if(production) {
+    assert.equal(process.env.E2E_ISOLATED_CONTAINER,'1','Production comparison requires an isolated container');
+    appEnv.NODE_ENV='production';appEnv.PORT=String(port);appEnv.HOSTNAME='0.0.0.0';appEnv.AGENT_INSIGHT_PACKAGE_ROOT=ctx.project;
+    for(const [bin,args] of [['node',['-e',"const u=require('./scripts/utils.js');u.ensureEnvFile();u.ensureDataDirectory()"]],['node',['scripts/prepare-ras-sqlite-schema.js']],['sh',['scripts/db_push.sh','--skip-generate']],['node',['node_modules/prisma/build/index.js','generate']]]) {
+      const prepared=await command(bin,args,{cwd:ctx.project,env:appEnv,log:path.join(ctx.root,'private/startup.log'),timeout:120000});assert.equal(prepared.code,0,'Production database preparation failed; see private/startup.log');
+    }
+    build=await prepareProductionBuild(ctx,appEnv);
+    ctx.dispatchPort=await prepareProductionControlEnv(appEnv,port);
+    ctx.applicationCwd=path.join(ctx.project,'.next/standalone');
+  }
+  const fd = fs.openSync(production?path.join(ctx.project,'server.log'):path.join(ctx.root, 'private', 'startup.log'), production?'w':'a', 0o600);
+  ctx.appProcess = spawn(production?'node':'bash', [production?'scripts/control-server.js':'scripts/develop_start.sh'], { cwd: ctx.project, env:appEnv, detached: true, stdio: ['ignore', fd, fd] });fs.closeSync(fd);
   const startup = new Promise((resolve, reject) => { ctx.appProcess.once('error', reject);ctx.appProcess.once('close', code => code === 0 ? resolve() : reject(new Error(`Application startup failed (${code}); see private/startup.log`))); });
-  await Promise.race([startup, new Promise((_, reject) => { const t = setTimeout(() => reject(new Error('Application startup deadline exceeded')), 180000);t.unref(); })]);
-  await poll(async () => { try { const r = await fetch(ctx.baseUrl + '/login', { signal: AbortSignal.timeout(30000) });return r.status; } catch { return null; } }, code => code === 200, 120000);
+  if(!production)await Promise.race([startup, new Promise((_, reject) => { const t = setTimeout(() => reject(new Error('Application startup deadline exceeded')), 180000);t.unref(); })]);
+  const readiness=poll(async () => { try { const r = await fetch(ctx.baseUrl + '/login', { signal: AbortSignal.timeout(30000) });return r.status; } catch { return null; } }, code => code === 200, 120000);
+  if(production)await Promise.race([startup.then(()=>{throw Error('Production server exited before readiness');}),readiness]);else await readiness;
+  if(production) {
+    const synced=await command('node',['scripts/sync_admin_api_key.js',String(port),ctx.baseUrl],{cwd:ctx.project,env:appEnv,log:path.join(ctx.root,'private/startup.log'),timeout:30000});assert.equal(synced.code,0,'Production admin key initialization failed');
+  }
   ctx.appHome = appHome;
-  return { fiPython:ctx.fiPython, applicationRoot: appHome, agentWorkspaceRoot:ctx.agentWorkspaceRoot, modelRuntimeProfile:['003','004','005'].includes(ctx.selectedCase)?deepSeekSmokeConfig(ctx):undefined, database: path.join(appHome, 'data/witty_insight.db'), loginMode: 'standalone', startup: 'scripts/develop_start.sh', port };
+  return { fiPython:ctx.fiPython, applicationRoot: appHome, agentWorkspaceRoot:ctx.agentWorkspaceRoot, modelRuntimeProfile:['003','004','005'].includes(ctx.selectedCase)?deepSeekSmokeConfig(ctx):undefined, database: path.join(appHome, 'data/witty_insight.db'), loginMode: 'standalone', startup: production?'scripts/control-server.js':'scripts/develop_start.sh', applicationMode:production?'production':'dev', ...(build?{build,dispatchPort:ctx.dispatchPort}:{}), port };
 }
 
 function descendants(root) {
@@ -76,7 +130,7 @@ export async function stopProcesses(ctx) {
     const socket = spawnSync('lsof', [`-tiTCP:${ctx.port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number);
     for (const pid of socket) {
       const cwd = spawnSync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8' }).stdout;
-      assert.ok(cwd.split('\n').includes('n' + ctx.project), 'Refusing to stop application whose working directory is not this isolated checkout');
+      assert.ok(cwd.split('\n').includes('n' + (ctx.applicationCwd||ctx.project)), 'Refusing to stop application whose working directory is not this isolated checkout');
       roots.push(pid);
     }
     roots.push(ctx.appProcess.pid);
@@ -95,5 +149,6 @@ export async function stopProcesses(ctx) {
   }
   assert.deepEqual(remaining, [], 'Owned processes still alive after cleanup');
   if (ctx.appProcess) assert.ok(await portIsFree(ctx.port), 'Application port was not released');
+  if (ctx.dispatchPort) assert.ok(await portIsFree(ctx.dispatchPort), 'Application dispatch port was not released');
   return { stoppedProcessCount: owned.size, remaining, applicationStopped: !!ctx.appProcess, globalServicesModified: false };
 }

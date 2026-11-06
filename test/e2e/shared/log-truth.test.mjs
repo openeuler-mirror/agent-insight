@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
-import {deriveRootSshTruth,findReferenceInconsistencies} from './builtin-truth.mjs';
-const log=fs.readFileSync(new URL('../../../../public/example/messages',import.meta.url),'utf8');
+import {deriveRootSshTruth,findReferenceInconsistencies} from './log-truth.mjs';
+const log=fs.readFileSync(new URL('../../../public/example/messages',import.meta.url),'utf8');
 test('root truth is computed only from root authentication failure records, not Kerberos or other users',()=>{
  const truth=deriveRootSshTruth(log);assert.equal(truth.totalLines,2000);assert.equal(truth.rootFailures,351);assert.equal(truth.sources['150.183.249.110'],80);assert.equal(truth.sources['163.27.187.39']||0,0);assert.equal(truth.sources['218.188.2.4']||0,0);assert.equal(truth.sources['195.129.24.210'],15);assert.equal(truth.sourceCount,28);
 });

@@ -4,9 +4,8 @@ export const requiredStages = ['application', 'login', 'model', 'ordinary-client
 export function requiredStagesFor(caseId = '001') {
   if (caseId === '001') return requiredStages;
   if (caseId === '002') return ['application', 'fixture', 'native-task', 'ingest', 'trace-ui', 'agent-ui', 'cleanup'];
-  if (caseId === '003') return ['application', 'login', 'model', 'ordinary-client', 'upload', 'generation', 'static', 'baseline-publish', 'baseline', 'optimization', 'candidate', 'publish', 'published-run', 'cleanup'];
+  if (caseId === '003') return ['application', 'login', 'model', 'ordinary-client', 'upload', 'generation', 'static', 'baseline-publish', 'dataset-ui', 'baseline', 'trace-ui', 'diagnosis', 'optimization', 'candidate', 'publish', 'published-run', 'persistence', 'cleanup'];
   if (caseId === '004') return ['application', 'login', 'model', 'ordinary-client', 'trace-fixture', 'baseline-run', 'skill-binding', 'trace-ui', 'baseline-evaluation', 'diagnosis', 'skill-verification', 'optimization', 'candidate-run', 'candidate-evaluation', 'persistence', 'cleanup'];
-  if (caseId === '005') return ['application','login','model','ordinary-client','dataset-fixture','dataset-ui','baseline','trace-ui','diagnosis','optimization','candidate','persistence','cleanup'];
   if (caseId === '006') return ['application','login','model','ras-client','ras-config','fault-fixture','injection','ras-evidence','reliability-evaluation','fault-trace-ui','recovery','persistence','cleanup'];
   throw new Error(`Scenario ${caseId} is not implemented`);
 }

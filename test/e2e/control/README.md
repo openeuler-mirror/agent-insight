@@ -9,7 +9,7 @@ node --test test/e2e/control/*.test.mjs
 node test/e2e/run.mjs --all --mode mock --ut
 ```
 
-集成测试真实启动本机 HTTP 接收端、SQLite 队列、子进程、微型 UT 和模拟的 PR HTTP 服务，验证签名到结果回写的完整协议。它不创建真实 PR，不向真实仓库发送评论。协议集成测试的微型项目不含业务驱动，六例为 BLOCKED；业务测试包现已提供六例的本地模型协议夹具，实际完成度以运行报告为准。
+集成测试真实启动本机 HTTP 接收端、SQLite 队列、子进程、微型 UT 和模拟的 PR HTTP 服务，验证签名到结果回写的完整协议。它不创建真实 PR，不向真实仓库发送评论。协议集成测试的微型项目不含业务驱动，默认四个场景为BLOCKED（005合并、006未选中）；业务测试包提供活动场景的本地模型协议夹具，实际完成度以运行报告为准。
 
 ## 接收端
 
@@ -42,7 +42,7 @@ node test/e2e/control/worker.mjs \
 
 一次处理一个任务，串行运行。执行器通过公开 HTTPS Git URL 读取准确的源/目标 SHA，构建临时合并提交；不能合并则记录执行阻塞。PR 代码只在容器运行，不在宿主机运行。容器以普通用户执行，无仓库凭证、真实模型密钥或 Docker socket；工作容器只能访问本轮私有网络的模型转发器。转发器单独持有 DeepSeek 密钥，只接受限额内的模型请求。源码、控制脚本、依赖卷和本链路上一轮数据只读挂载；工作区使用独立 8 GiB ext4 临时磁盘，当前应用状态用 1 GiB tmpfs，Prisma 生成目录单独可写。控制端需 Linux root 与 loop mount 工具；至少留 12 GiB 空间才启动，导出失败保留受限磁盘，最多保留两份后阻塞新任务。应用 Node 堆在隔离容器内限制为 2560 MiB，仍通过标准开发启动脚本启动；容器限制为 2 CPU、7 GiB 内存、512 PID，使用 Docker init 回收子进程，全局串行执行以控制共享服务器负载。启动前要求宿主 MemAvailable 至少 8 GiB，否则报告阻塞，不挤占现有服务。控制端单独持有 API 凭证。Docker 关闭重复日志存储，控制端运行日志限制 64 MiB，截断后仍排空输出。
 
-镜像尚未构建或执行条件不满足时，保留 BLOCKED/ERROR，不回退到宿主机执行。手动 PR 与每日入口默认真实六例；常驻 PR 接收器使用 `--mode real --profile core-five`，本轮只执行 001–005 与 UT，006 明确未执行。Mock 代码和显式入口保留。受限容器使用镜像预装的浏览器、Python wheel、ripgrep 与原生客户端依赖。FI 所需的 OpenCode plugin 1.18.4/1.14.39 使用构建时准备的离线 npm 缓存；RAS catalog 使用镜像内 Pydantic v2 虚拟环境。测试时不开放依赖下载网络。
+镜像尚未构建或执行条件不满足时，保留 BLOCKED/ERROR，不回退到宿主机执行。以下为旧常驻部署记录，当前本地入口使用可信config.json中的逐例模式与范围；常驻 PR 接收器使用 `--mode real --profile core-five`，本轮只执行 001–005 与 UT，006 明确未执行。Mock 代码和显式入口保留。受限容器使用镜像预装的浏览器、Python wheel、ripgrep 与原生客户端依赖。FI 所需的 OpenCode plugin 1.18.4/1.14.39 使用构建时准备的离线 npm 缓存；RAS catalog 使用镜像内 Pydantic v2 虚拟环境。测试时不开放依赖下载网络。
 
 当前 worker 使用互斥锁避免多个进程同时处理；异常退出后先确认锁文件中的 PID 已停止，再移除本服务自己的 `worker.lock` 后启动。遗留 RUNNING 任务记 INTERRUPTED，不自动伪造完成或重复运行。过期的运行中任务会保留原证据并禁止回写；当前不会立即强杀旧任务，最多消耗其剩余超时预算。
 
@@ -92,7 +92,7 @@ node test/e2e/control/run-isolated.mjs \
   --run-id server-pr-unique-id --lane pr
 ```
 
-完整运行默认执行六例和 UT。`--lane daily` 使用另一固定账号；`--case 001 --skip-ut` 仅用于环境预检，报告不能算完整通过。手动源码快照报告不冒充真实 PR 检查。
+当前默认执行001/002/003/004/006和UT；005已合并退役。`--lane daily` 使用另一固定账号；`--case 001 --skip-ut` 仅用于环境预检，报告不能算完整通过。手动源码快照报告不冒充真实 PR 检查。
 
 - PR：`test_e2e_pr@example.com`；每日：`test_e2e_daily@example.com`。每条链路有独立 SQLite 与 Trace 文件，产品正常用户数据不参与测试。
 - 控制目录 `lane-data/<lane>/current.json` 指向上一轮状态；每次任务在临时副本执行。报告和身份校验后导出状态，并核对旧 Trace 内容未改变，才更新指针。每轮 `jobs/<runId>/private-state/` 快照保留，可回溯恢复。排除客户端/Python 运行时和 `.opencode-runtime` 下可离线重装的 node_modules，保留原生会话与业务数据。模型配置在新一轮重新选择有效的本轮配置。
@@ -164,3 +164,15 @@ Mock 仍保留独立原生采集和页面验证；配置化 Mock 也会复制、
 ## 临时 Mock PR 验证
 
 使用独立维护者配置启用 mock 和六例，接收器与 worker 必须使用相同配置哈希，使用独立状态和固定 mock 测试账号。保留正式 real 配置，临时切换后恢复原入口；不更改每日服务。真实 PR 的 head/base SHA、Webhook 投递、队列任务和远端评论必须一致。测试镜像与依赖缓存预先存在时，计时不包含镜像构建；排队、checkout/准备、UT、六例以及回写各自统计。
+
+## 逐例模式调度（待显式更新常驻部署）
+
+可信config.json现在支持caseModes。默认001为Real，002/合并003/004/006为Mock；005主路径并入003。服务启动mode为mixed时，由配置推导并校验，Webhook载荷不能决定模式。旧core-five参数仍指向001–004，与当前五例默认范围不一致，必须移除；旧外部五例配置更新时须同时调整cases或移除该历史参数。
+
+worker和run-isolated先进行全局生产编译，再按首个场景顺序执行模式分组：当前先Real 001，再Mock 002/003/004/006；Mock使用network none，Real使用独立网络/模型代理容器；同通道固定账号状态顺序继承，外层执行锁覆盖两组，UT只在首组执行。编译容器无外网和模型凭据，只构建一次；两组独立复制同一只读产物，并核验源码内容指纹及BUILD_ID。编译失败停止，UT/E2E全部未执行。报告保存groups、逐例mode、唯一UT结果及聚合证据清单；缺组、模式或来源不符、历史保存失败都不能通过。配置中的总运行期限在组间共享。
+
+直接运行control/run-isolated.mjs验证新配置不会替换常驻服务。常驻接收器和worker必须使用同一份可信配置及哈希，队列中旧配置任务拒绝执行；部署和PR复验需另行执行。
+
+005资源清理后，新的可信配置禁止cases包含005，显式单例也会提示改用003。旧队列/旧常驻配置仍需在正式部署时同步迁移cases；本轮没有更新常驻服务。报告保留六行历史身份，005只标明已合并，不虚构执行结果。
+
+生产编译详情位于report.productionBuild（状态、退出码、起止时间、耗时、源码指纹、BUILD_ID、日志）。日志保存在job/build/private-build/production-build.log。PR评论完全由代码生成，通过AtomGit API发送，不使用模型。更新常驻服务前须同步可信harness/config并移除冲突的旧mode/profile参数；本轮隔离验证不自动更新服务。

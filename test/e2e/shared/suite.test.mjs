@@ -4,17 +4,17 @@ import { executeSuite, parseUtResult, renderSummary } from './suite.mjs';
 import { requiredStagesFor } from './core.mjs';
 
 const pass = id => ({ id, status: 'PASS', stages: requiredStagesFor(id).map(id => ({ id, status: 'PASS' })) });
-test('suite attempts all six real cases and continues after independent failure', async () => {
+test('suite attempts all active real cases and continues after independent failure', async () => {
   const called = [];
   const report = await executeSuite({ mode: 'real', runCase: async id => { called.push(id); if(id === '002') throw Error('failed'); return pass(id); } });
-  assert.deepEqual(called, ['001','002','003','004','005','006']);
+  assert.deepEqual(called, ['001','002','003','004','006']);
   assert.equal(report.scenarios[1].status, 'FAIL');
   assert.equal(report.scenarios[5].status, 'PASS');
   assert.equal(report.status, 'FAIL');
 });
 test('unimplemented mock is blocked without calling the real runner', async () => {
   const report = await executeSuite({ mode: 'mock', runCase: () => { throw Error('must not run'); } });
-  assert.equal(report.scenarios.filter(s => s.status === 'BLOCKED').length, 6);
+  assert.equal(report.scenarios.filter(s => s.status === 'BLOCKED').length, 5);
   assert.equal(report.status, 'BLOCKED');
 });
 test('a claimed PASS without required stages cannot pass', async () => {
@@ -60,12 +60,22 @@ test('standalone report labels manual server snapshots instead of claiming a PR 
  assert.match(view.html,/服务器源码快照验证（非 Webhook PR 检查）/);assert.match(view.html,/server-run/);assert.match(view.markdown,/服务器源码快照验证/);
 });
 
-test('mock suite executes all six registered adapters without using real model runner', async () => {
+test('mock suite executes all active adapters without using real model runner', async () => {
  const called=[];
  const report=await executeSuite({mode:'mock',runCase:()=>{throw Error('real fallback forbidden');},runMockCase:async id=>{called.push(id);return pass(id);}});
- assert.deepEqual(called,['001','002','003','004','005','006']);assert.equal(report.status,'PASS');
+ assert.deepEqual(called,['001','002','003','004','006']);assert.equal(report.status,'PASS');
 });
 test('suite records separate UT and E2E timestamps for PR timing',async()=>{
  const r=await executeSuite({mode:'mock',selected:['002'],runMockCase:async id=>pass(id),runUt:async()=>({status:'PASS',fullSuiteComplete:true})});
  assert.ok(r.npmTest.startedAt&&r.npmTest.endedAt);assert.ok(r.e2eStartedAt&&r.e2eEndedAt);assert.ok(r.npmTest.durationMs>=0);assert.ok(r.e2eDurationMs>=0);
+});
+
+test('mixed suite dispatches each effective mode without real fallback and exposes modes',async()=>{
+ const calls=[];const report=await executeSuite({mode:'mixed',selected:['001','004'],caseModes:{'001':'mock','004':'real'},runMockCase:async id=>{calls.push('mock:'+id);return pass(id)},runCase:async id=>{calls.push('real:'+id);return pass(id)}});assert.deepEqual(calls,['mock:001','real:004']);assert.equal(report.status,'PASS');assert.equal(report.scenarios[0].mode,'mock');assert.equal(report.scenarios[3].mode,'real');assert.match(renderSummary(report).html,/mock/);assert.match(renderSummary(report).html,/real/);
+ await assert.rejects(executeSuite({mode:'mixed',selected:['001'],caseModes:{},runCase:async id=>pass(id)}),/mode/i);
+});
+
+test('suite compile failure retains report and skips UT and cases',async()=>{
+ let executed=0;const report=await executeSuite({mode:'mock',selected:['001'],runBuild:async()=>({status:'FAIL',exitCode:1}),runUt:async()=>{executed++},runMockCase:async()=>{executed++}});
+ assert.equal(executed,0);assert.equal(report.status,'FAIL');assert.equal(report.npmTest.status,'NOT_RUN');assert.equal(report.scenarios[0].status,'NOT_RUN');assert.match(renderSummary(report).markdown,/生产编译：失败/);
 });

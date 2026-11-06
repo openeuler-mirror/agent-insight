@@ -1,4 +1,4 @@
-import {loadExecutionConfig,executionSnapshot,readModelKey,stateRootFor,runDirectory} from './shared/config.mjs';
+import {loadExecutionConfig,executionSnapshot,readModelKey,stateRootFor,runDirectory,caseMode} from './shared/config.mjs';
 import {sourceHashes} from './shared/source-hashes.mjs';
 import { laneConfig, newTraceRows, acquireLane } from './shared/lane.mjs';
 import { DatabaseSync } from 'node:sqlite';
@@ -13,7 +13,6 @@ import { scenario001 } from './cases/001-setup/scenario.mjs';
 import { scenario002 } from './cases/002-opencode-observation/scenario.mjs';
 import { scenario003 } from './cases/003-skill-lifecycle/scenario.mjs';
 import { scenario004 } from './cases/004-trace-evaluation/scenario.mjs';
-import { scenario005 } from './cases/005-dataset-evaluation/scenario.mjs';
 import { scenario006 } from './cases/006-fault-recovery/scenario.mjs';
 import { assertRunRoot, redact, renderReport, scenarioResult, requiredStagesFor, stageFailureStatus } from './shared/core.mjs';
 import { writePrivate } from './shared/runtime.mjs';
@@ -27,9 +26,9 @@ process.umask(0o077);
 
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const { values } = parseArgs({ options: { config:{type:'string'},lane:{type:'string'},case: { type: 'string', default: '001' }, mode: {type:'string'}, 'key-file': { type: 'string' }, 'run-id': { type: 'string' } } });
-if (!['001', '002', '003', '004', '005', '006'].includes(values.case)) throw new Error('Unknown CORE-E2E scenario');
+caseDirectory(values.case);
 const profile=values.lane||process.env.E2E_LANE||'pr';
-const config=loadExecutionConfig({file:values.config,profile,overrides:values.mode?{mode:values.mode}:{}});values.mode=config.mode;
+const config=loadExecutionConfig({file:values.config,profile,overrides:values.mode?{mode:values.mode}:{}});values.mode=caseMode(config,values.case);
 process.env.E2E_EXECUTION_CONFIG=JSON.stringify(config);process.env.E2E_LANE=profile;
 const runId = values['run-id'] || new Date().toISOString().replace(/[-:.]/g, '').toLowerCase();
 if (!/^[a-z0-9-]+$/.test(runId)) throw new Error('Invalid run ID');
@@ -55,7 +54,7 @@ report.nodeVersion = process.version;
 report.fixtureHashes = Object.fromEntries(fs.readdirSync(path.join(project, 'test/e2e/cases'), { recursive: true }).filter(file => file.includes('fixtures'+path.sep) && fs.statSync(path.join(project, 'test/e2e/cases', file)).isFile()).sort().map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(project, 'test/e2e/cases', file))).digest('hex')]));
 report.productSourceHashes = sourceHashes(project, ['src/lib/skill-generator-opencode-bridge.ts', 'src/lib/skill-opt-bridge.ts', 'src/lib/engine/skill-generation/opencode-agent-cli/opencode-client.ts', 'src/lib/engine/skill-generation/opencode-agent-cli/completed-reply.ts', 'src/components/skill-workbench/SkillWorkbenchShell.tsx', 'src/lib/skill-workbench/generated-session-sync.ts', 'src/app/api/observe/executions/[executionId]/agent-debug/route.ts', 'src/app/api/observe/executions/[executionId]/agent-debug/skills-analysis/route.ts', 'scripts/skill-experiment-workspace.cjs', 'src/lib/engine/evaluation/opencode-trajectory-evaluator.ts', 'src/lib/system-agent-names.ts']);
 if(values.case==='006'){
- const files=['scripts/install-ras.js','scripts/install-ras-client.js','scripts/reliability-client.cjs','src/components/eval/ExperimentWizard.tsx','src/lib/engine/experiment/ras-reliability-evaluator.ts','src/lib/reliability/client-config-service.ts','src/server/builtin-example/ensure-reliability-dataset.ts','agent_fault_injection/platform_adapters/opencode/adapter.py','agent_fault_injection/platform_adapters/opencode/catalog.py','agent_fault_injection/fault_inject/skills/thinking-dead-loop/SKILL.md','agent_ras/platform_adapter/opencode/plugin.js','agent_ras/platform_adapter/opencode/host_control.js','agent_ras/config/agent_ras_config.default.yaml'];
+ const files=['scripts/install-ras.js','scripts/install-ras-client.js','scripts/reliability-client.cjs','src/components/eval/ExperimentWizard.tsx','src/lib/engine/experiment/ras-reliability-evaluator.ts','src/lib/reliability/client-config-service.ts','src/server/builtin-example/ensure-reliability-dataset.ts','agent_fault_injection/platform_adapters/opencode/adapter.py','agent_fault_injection/pipeline/runner.py','agent_fault_injection/platform_adapters/opencode/catalog.py','agent_fault_injection/fault_inject/skills/thinking-dead-loop/SKILL.md','agent_ras/platform_adapter/opencode/plugin.js','agent_ras/platform_adapter/opencode/host_control.js','agent_ras/config/agent_ras_config.default.yaml'];
  for(const file of files)report.productSourceHashes[file]=createHash('sha256').update(fs.readFileSync(path.join(project,file))).digest('hex');
 }
 const current = report.scenarios[Number(values.case) - 1];
@@ -113,7 +112,7 @@ try {
     }
     return startApplication(ctx);
   });
-  await ({ '001': scenario001, '002': scenario002, '003': scenario003, '004': scenario004, '005': scenario005, '006': scenario006 }[values.case])(ctx);
+  await ({ '001': scenario001, '002': scenario002, '003': scenario003, '004': scenario004, '006': scenario006 }[values.case])(ctx);
   if(ctx.modelMock)await stage('model-protocol','本轮全部模型请求由本地协议夹具处理，无未知请求或真实模型回退',async()=>{if(ctx.modelMock.evidence.errors.length)throw Error('Model mock protocol errors: '+ctx.modelMock.evidence.errors.join('; '));return {requests:ctx.modelMock.evidence.requests,externalModelRequests:0,errors:[]};});
 } catch (error) {
   report.error = redact(error.message, secrets);

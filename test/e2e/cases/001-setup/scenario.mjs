@@ -4,6 +4,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { writePrivate } from '../../shared/runtime.mjs';
+import { probeModelConnection } from '../../shared/model-probe.mjs';
 
 export async function scenario001(ctx) {
   const { baseUrl, runId, root, key, stage, secrets } = ctx;
@@ -11,6 +12,7 @@ export async function scenario001(ctx) {
   const context = await browser.newContext({ locale: 'zh-CN', permissions: ['clipboard-read', 'clipboard-write'] });
   await context.tracing.start({ screenshots: false, snapshots: true, sources: false });
   const page = await context.newPage();
+  const responseFor = (...args) => { const pending = page.waitForResponse(...args);pending.catch(() => {});return pending; };
   page.setDefaultTimeout(30000);
   page.setDefaultNavigationTimeout(90000);
   const username = ctx.testUsername || `test_e2e_${runId}_001@example.com`;
@@ -25,7 +27,7 @@ export async function scenario001(ctx) {
     await stage('login', '测试邮箱经页面登录，刷新后保持相同身份', async () => {
       await page.goto(baseUrl + '/login');
       await page.locator('input[type=email]').fill(username);
-      const loginResponse = page.waitForResponse(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
+      const loginResponse = responseFor(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
       await page.locator('button[type=submit]').click();
       const response = await loginResponse;
       assert.equal(response.status(), 200);
@@ -35,7 +37,7 @@ export async function scenario001(ctx) {
       writePrivate(path.join(root, 'private', 'account.json'), account);
       await page.waitForURL(url => url.pathname !== '/login');
       await page.waitForFunction(expected => localStorage.getItem('user_id') === expected, username);
-      const restored = page.waitForResponse(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
+      const restored = responseFor(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
       await page.reload();
       assert.equal((await restored).status(), 200);
       await page.getByText(username, { exact: true }).waitFor();
@@ -52,15 +54,18 @@ export async function scenario001(ctx) {
       await page.getByPlaceholder('https://api.deepseek.com', { exact: true }).fill(ctx.modelBaseUrl || contextConfig(ctx).model.baseUrl);
       await page.getByPlaceholder('deepseek-v4-flash / gpt-4o / ...', { exact: true }).fill(contextConfig(ctx).model.modelName);
       await page.getByPlaceholder('sk-...', { exact: true }).fill(key);
-      const connected = page.waitForResponse(r => r.url().endsWith('/api/eval/settings/test') && r.request().method() === 'POST');
-      const saved = page.waitForResponse(r => r.url().endsWith('/api/eval/settings') && r.request().method() === 'POST');
-      await page.getByRole('button', { name: /测试连接并保存|Test & Save/, exact: true }).click();
-      const probe = await (await connected).json();
-      assert.equal(probe.success, true, `Product model probe failed: ${probe.code}`);
-      assert.equal((await saved).status(), 200);
+      const connection = await probeModelConnection(async () => {
+        const connected = responseFor(r => r.url().endsWith('/api/eval/settings/test') && r.request().method() === 'POST');
+        const saved = responseFor(r => r.url().endsWith('/api/eval/settings') && r.request().method() === 'POST');
+        await page.getByRole('button', { name: /测试连接并保存|Test & Save/, exact: true }).click();
+        const response = await connected;
+        return { probe: await response.json(), status: response.status(), saved };
+      }, {onAttempt: attempts => writePrivate(path.join(root, 'private/model-probe-attempts.json'), attempts)});
+      const probe = connection.probe;
+      assert.equal((await connection.saved).status(), 200);
       await page.getByRole('article').getByText(modelName, { exact: true }).waitFor();
       const activate=page.getByRole('article').filter({has:page.getByText(modelName,{exact:true})}).getByRole('button',{name:/设为默认|Set default/,exact:true});
-      if(await activate.count()){const activated=page.waitForResponse(r=>r.url().endsWith('/api/eval/settings')&&r.request().method()==='POST');await activate.click();assert.equal((await activated).status(),200);}
+      if(await activate.count()){const activated=responseFor(r=>r.url().endsWith('/api/eval/settings')&&r.request().method()==='POST');await activate.click();assert.equal((await activated).status(),200);}
       await page.reload();
       await page.getByRole('article').getByText(modelName, { exact: true }).waitFor();
       const settings = await api(`/api/eval/settings?user=${encodeURIComponent(username)}`);

@@ -13,3 +13,27 @@ test('unknown or absent reliability dimension never passes',()=>{assert.equal(ty
 test('006 rejects delayed abort beyond the 60 second containment budget',()=>{const x=evidence();x.nativeEvents[1].timestamp=62001;x.events[1].ts=62000;assert.throws(()=>mod.assertRasEvidence(x,expected));});
 test('006 uses original anomaly timestamp instead of asynchronous server ingest time',()=>{const x=evidence();x.events[0].ts=1400;x.events[0].payloadJson=JSON.stringify({timestamp:1000});assert.equal(mod.assertRasEvidence(x,expected).detectedAt,1000);});
 test('006 accepts interrupted partial output from native Trace only with exact anomaly anchors',()=>{const x=evidence();const text=x.nativeEvents.shift().part.text;x.events[0].payloadJson=JSON.stringify({timestamp:1000,trace_anchor:{message_id:'m1',part_id:'p1'}});x.nativeSession={taskId:expected.taskId,user:expected.user,interactions:[{role:'assistant',messageID:'m1',parts:[{id:'p1',type:'text',text}]}]};assert.equal(mod.assertRasEvidence(x,expected).nativeFaultChars,text.length);for(const change of [y=>y.nativeSession.user='other',y=>y.nativeSession.taskId='other',y=>y.nativeSession.interactions[0].messageID='other',y=>y.nativeSession.interactions[0].parts[0].id='other']){const y=structuredClone(x);change(y);assert.throws(()=>mod.assertRasEvidence(y,expected));}});
+
+test('FI completion and interrupted generation are separate and require same-session native evidence',()=>{
+ assert.equal(typeof mod.assertFiNativeInterruption,'function');
+ const manifest={exit_code:0,termination_reason:'fault_intercepted',agent_execution_status:'interrupted'};
+ const native=evidence().nativeEvents;const proof=mod.assertFiNativeInterruption(manifest,native,expected.taskId);assert.equal(proof.exitCode,0);assert.equal(proof.agentExecutionStatus,'interrupted');
+ for(const changed of [{...manifest,agent_execution_status:'finished'},{...manifest,termination_reason:'process_exited'},{...manifest,termination_reason:'timeout'}])assert.throws(()=>mod.assertFiNativeInterruption(changed,native,expected.taskId));
+ assert.throws(()=>mod.assertFiNativeInterruption(manifest,native,'ses-other'));
+ assert.throws(()=>mod.assertFiNativeInterruption(manifest,native.filter(e=>e.type!=='error'),expected.taskId));
+});
+
+function terminatingEvidence(){
+ const x=evidence(),text=x.nativeEvents.shift().part.text,anchor={message_id:'m1',part_id:'p1',channel:'llm_output'};
+ x.events[0].ts=1101;x.events[0].payloadJson=JSON.stringify({trace_anchor:anchor});x.events[1].payloadJson=JSON.stringify({action:'abort_stream',ok:true,phase:'terminating',channel:'session.abort',trace_anchor:anchor});
+ x.nativeSession={taskId:expected.taskId,user:expected.user,interactions:[{role:'assistant',messageID:'m1',parts:[{id:'p1',type:'text',text}]}]};return x;
+}
+test('pre-abort terminating receipt may be ingested before its matching queued anomaly',()=>{
+ const proof=mod.assertRasEvidence(terminatingEvidence(),expected);assert.equal(proof.orderingBasis,'terminating_receipt_and_native_anchor');assert.ok(proof.receiptAt<proof.detectedAt);
+});
+test('terminating receipt cannot prove success without exact anchor, native stop or when a failure was reported',()=>{
+ for(const change of [x=>{const p=JSON.parse(x.events[1].payloadJson);p.trace_anchor.part_id='other';x.events[1].payloadJson=JSON.stringify(p)},x=>delete x.nativeSession,x=>x.nativeEvents.pop(),x=>x.nativeEvents[0].timestamp=1000,x=>x.events.push({...x.events[1],id:'failure',payloadJson:JSON.stringify({...JSON.parse(x.events[1].payloadJson),ok:false,phase:'failed'})})]){const x=terminatingEvidence();change(x);assert.throws(()=>mod.assertRasEvidence(x,expected));}
+});
+test('original client detection timestamp remains authoritative for terminating receipts',()=>{
+ const x=terminatingEvidence();x.events[0].payloadJson=JSON.stringify({...JSON.parse(x.events[0].payloadJson),timestamp:2000});assert.throws(()=>mod.assertRasEvidence(x,expected));
+});

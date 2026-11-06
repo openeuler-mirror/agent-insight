@@ -2,7 +2,7 @@ import {contextConfig} from './model-config.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { writePrivate } from './runtime.mjs';
+import { writePrivate, fetchStatusResponse } from './runtime.mjs';
 import {probeModelConnection} from './model-probe.mjs';
 
 export async function loginAndModel(ctx, page) {
@@ -12,7 +12,7 @@ export async function loginAndModel(ctx, page) {
   const username = ctx.testUsername || `test_e2e_${runId}_${ctx.caseId || "003"}@example.com`;
   let account;
   const api = async (route, init = {}) => {
-    const response = await fetch(baseUrl + route, { signal: AbortSignal.timeout(45000), ...init, headers: { 'content-type': 'application/json', 'x-witty-api-key': account.apiKey, ...init.headers } });
+    const response = await fetchStatusResponse(baseUrl + route, { ...init, headers: { 'content-type': 'application/json', 'x-witty-api-key': account.apiKey, ...init.headers } }, {onTransportFailure:event=>console.warn('[e2e-api-transport]',JSON.stringify(event))});
     const data = await response.json();
     assert.ok(response.ok, `${route.split('?')[0]} returned ${response.status}`);
     return data;
@@ -50,7 +50,7 @@ export async function loginAndModel(ctx, page) {
       const connection=await probeModelConnection(async()=>{
         const connected=responseFor(r=>r.url().endsWith('/api/eval/settings/test')&&r.request().method()==='POST');const saved=responseFor(r=>r.url().endsWith('/api/eval/settings')&&r.request().method()==='POST');
         await page.getByRole('button',{name:/测试连接并保存|Test & Save/,exact:true}).click();const response=await connected;const probe=await response.json();writePrivate(path.join(root,'private/model-probe.json'),probe);return {probe,status:response.status(),saved};
-      },{maxAttempts:ctx.caseId==='005'?3:1,onAttempt:attempts=>writePrivate(path.join(root,'private/model-probe-attempts.json'),attempts)});const probe=connection.probe;assert.equal((await connection.saved).status(),200);
+      },{onAttempt:attempts=>writePrivate(path.join(root,'private/model-probe-attempts.json'),attempts)});const probe=connection.probe;assert.equal((await connection.saved).status(),200);
       await page.getByRole('article').getByText(modelName, { exact: true }).waitFor();
       const activate=page.getByRole('article').filter({has:page.getByText(modelName,{exact:true})}).getByRole('button',{name:/设为默认|Set default/,exact:true});
       if(await activate.count()){const activated=page.waitForResponse(r=>r.url().endsWith('/api/eval/settings')&&r.request().method()==='POST');await activate.click();assert.equal((await activated).status(),200);}

@@ -39,7 +39,7 @@ def main():
     if not result["evidence"]:
         print("No root authentication failure matched; verify that the supplied file contains root SSH authentication-failure logs.", file=sys.stderr)
         return 4
-    print(json.dumps(result, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=True))
     return 0
 
 

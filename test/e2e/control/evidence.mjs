@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const maxTotalBytes=32*1024*1024;
-const diagnosticJson=new Set(['fault-run.json','experiment.json','ras-evidence.json','ras-load-poll.json','ras-events-poll.json','fault-native-session.json','recovery-trace.json','baseline-trace.json','ingested-session.json','last-observed-session.json','diagnosis.json','verification.json','skills-verification.json','skill-reference-flow.json','baseline-experiment.json','candidate-experiment.json','optimization-session.json','candidate.json','dependency-audit.json']);
+const diagnosticJson=new Set(['fi-native-termination.json','fault-run.json','experiment.json','ras-evidence.json','ras-load-poll.json','ras-events-poll.json','fault-native-session.json','recovery-trace.json','baseline-trace.json','ingested-session.json','last-observed-session.json','diagnosis.json','diagnosis-accepted.json','verification.json','skills-verification.json','skill-reference-flow.json','baseline-experiment.json','candidate-experiment.json','optimization-session.json','candidate.json','dependency-audit.json']);
 const allowed=name=>diagnosticJson.has(name)||/\.(png|zip|log)$/.test(name)||/^(report\.json|report\.html|summary\.md|coverage\.md)$/.test(name);
 export function collectEvidence(root,runId,{maxFileBytes=8*1024*1024}={}) {
  const result={files:[],omitted:[]};let total=0;

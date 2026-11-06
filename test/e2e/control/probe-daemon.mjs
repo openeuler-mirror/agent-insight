@@ -13,7 +13,7 @@ try{
  const worker=fileURLToPath(new URL('./worker.mjs',import.meta.url)),project=path.resolve(path.dirname(worker),'../../..');
  console.log('Persistent PR daemon ready');
  while(!stopping){
-  const result=await probeCycle({queue,state,allowedModes:values['probe-only']?['probe']:['probe','real','mock'],publish:(job,report)=>publishResult(api,job,report),runWorker:async()=>{
+  const result=await probeCycle({queue,state,allowedModes:values['probe-only']?['probe']:['probe','real','mock','mixed'],publish:(job,report)=>publishResult(api,job,report),runWorker:async()=>{
    const execution=await command(process.execPath,[worker,'--state-dir',state,...(values.config?['--config',values.config]:[]),...(values['probe-only']?['--probe-only']:['--image',values.image,...(values['key-file']?['--key-file',values['key-file']]:[]),'--lane-state-dir',values['lane-state-dir']||path.join(state,'lane-data')]),'--publish'],{cwd:project,env:process.env,log:path.join(state,'worker-process.log'),timeout:values['probe-only']?240000:config.timeouts.runMs+200000,maxLogBytes:1048576});
    console.log('Probe worker exit:',execution.code);
   }});

@@ -4,8 +4,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 import { poll, writePrivate } from '../../shared/runtime.mjs';
-import { assertSnapshot, assertSkillAnswer } from '../../shared/skill-evidence.mjs';
+import { assertSnapshot, assertSkillAnswer, assertSameTraceSnapshot } from '../../shared/skill-evidence.mjs';
+import {createDatasetThroughUi} from '../../shared/dataset-ui.mjs';
+import {diagnoseTrace} from '../../shared/diagnosis-ui.mjs';
+import {deriveRootSshTruth} from '../../shared/log-truth.mjs';
+import {datasetBusinessHash} from '../../shared/dataset-contract.mjs';
 import { assertOptimizedSnapshot, optimizationPrompt } from './skill-contract.mjs';
 import { readArchivedVerification, readFrozenSkillSnapshot } from '../../shared/skill-archive.mjs';
 
@@ -20,8 +25,16 @@ export async function completeSkillLifecycle(ctx) {
   const logHash = hash(logFile);assert.equal(logHash, '6d50cefa82380651f910df35fda0995a237a3c788b7b2e3d2d37e51fb9debca9');
   const input = `${marker}：使用 ${generatedName} 分析 ${logFile}。\n请统计 root 账户认证失败的次数，找出次数最多的来源及其次数，并给出日志证据。\n只分析提供的离线日志，不连接远程主机，不读取当前机器的 /var/log，不修改文件。`;
   const datasetName = `e2e-behavior-${runId}-003`;
-  const createdDataset = await api('/api/agent-datasets', { method: 'POST', body: JSON.stringify({ user: username, name: datasetName, targetSkill: generatedName, targetAgent: 'build', datasetKind: 'ideal_output', cases: [{ input, expectedOutput: 'root 认证失败 351 次，次数最多来源 150.183.249.110，共 80 次；包含来自指定文件的实际日志证据。' }] }) });
-  const dataset = createdDataset.dataset;assert.equal(dataset.cases.length, 1);
+  const truth=deriveRootSshTruth(fs.readFileSync(logFile,'utf8'));
+  const recipe={input,reference:`root 认证失败 ${truth.rootFailures} 次，次数最多来源 ${truth.topSources[0][0]}，共 ${truth.topSources[0][1]} 次；包含来自指定文件的实际日志证据。`};
+  let dataset,datasetHash,diagnosis;const datasetWrites=[];
+  const observeDatasetWrites=request=>{const p=new URL(request.url()).pathname;if(p.startsWith('/api/agent-datasets')&&!['GET','HEAD'].includes(request.method()))datasetWrites.push({path:p,method:request.method()});};
+  page.on('request',observeDatasetWrites);
+  await stage('dataset-ui','页面导入并保存一题私有数据集，参考答案由原日志独立计算，刷新后题目与归属正确',async()=>{
+    const created=await createDatasetThroughUi({page,baseUrl:ctx.baseUrl,root,api,username,datasetName,recipe,shot,readOwner:id=>{const db=new DatabaseSync(path.join(root,'app/data/witty_insight.db'),{readOnly:true});try{return db.prepare('SELECT user FROM AgentEvalDataset WHERE id=?').get(id)?.user;}finally{db.close();}}});
+    dataset=created.dataset;datasetHash=created.proof.datasetHash;assert.deepEqual(datasetWrites,[{path:'/api/agent-datasets',method:'POST'}]);
+    return {datasetId:dataset.id,caseId:dataset.cases[0].id,caseCount:1,businessHash:datasetHash,referenceSource:'Independent JavaScript parser of the original log',createdVia:'UI local JSON import and save',privateOwnerVerified:true};
+  });
   writePrivate(path.join(root, 'private/behavior-dataset.json'), dataset);
   const experimentUrl = id => `/api/experiments/${id}?user=${encodeURIComponent(username)}`;
   const waitExperiment = async (id, label, summary, archived = null) => {
@@ -50,9 +63,12 @@ export async function completeSkillLifecycle(ctx) {
     assert.equal(hash(logFile), logHash, 'Readonly input was modified');
     writePrivate(path.join(root, `private/${label}-trace.json`), trace);
     await page.getByText(label === 'candidate' ? (record.status === 'retest_failed' ? /行为验证未通过/ : /行为验证通过/) : /任务完成度/).first().waitFor();await shot(`skill-${label}`);
-    return { experimentId: id, taskId: item.taskId, score, evaluatorId: result.evaluatorId, summary: result.summary, facts: assertSkillAnswer(item.actualOutput, summary), detail };
+    const rows=await poll(()=>api(`/api/observe/data?user=${encodeURIComponent(username)}&taskId=${encodeURIComponent(item.taskId)}&includeEvaluations=0&skipAutoEvalReady=1`),rows=>rows.length===1&&rows[0].trace_status==='success',120000);
+    assert.equal(rows[0].framework,'opencode');
+    return { experimentId: id, taskId: item.taskId, executionId:rows[0].upload_id,interactionCount:trace.interactions.length,score, evaluatorId: result.evaluatorId, summary: result.summary, facts: assertSkillAnswer(item.actualOutput, summary), detail };
   };
   const createExperiment = async (version, label) => {
+    await page.goto(`${ctx.baseUrl}/skills?sessionId=${generated.id}`);
     await selectFormalSkill(page,generatedName,version);
     await page.getByRole('button', { name: 'Skill 实验', exact: true }).last().click();
     const create = page.getByRole('button', { name: /用例分析.*新建用例实验/ });
@@ -65,7 +81,7 @@ export async function completeSkillLifecycle(ctx) {
     await page.getByRole('button', { name: '评测数据集', exact: true }).click();await page.getByRole('menuitemradio', { name: new RegExp(`^${datasetName}`) }).click();
     await page.getByRole('button', { name: '下一步：Trace 来源 →', exact: true }).click();
     await page.getByRole('button', { name: '生成 Trace', exact: true }).click();
-    await page.getByRole('button', { name: /^运行模型：/ }).click();await page.locator(`[role="option"][title="${executionModel()}"]`).click();
+    const runModel=page.getByRole('button', { name: /^运行模型：/ });await runModel.waitFor({timeout:120000});await runModel.click();await page.locator(`[role="option"][title="${executionModel()}"]`).click();
     await page.locator('label').filter({ hasText: marker }).getByRole('checkbox').check();
     await page.getByRole('button', { name: '下一步：预期答案 →', exact: true }).click();
     await page.getByRole('button', { name: '下一步：评估器与执行 →', exact: true }).click();
@@ -81,8 +97,13 @@ export async function completeSkillLifecycle(ctx) {
   await stage('baseline', '页面正式用例实验生成本轮 Trace，实际加载基线并得到三项事实、日志证据及完成度 ≥80', async () => {
     baseline = await createExperiment(baselineVersion, 'baseline');return { ...baseline, detail: undefined, datasetId: dataset.id, caseId: dataset.cases[0].id, version: baselineVersion };
   });
+  await stage('trace-ui','从 Trace 列表打开本轮数据集实验新链路，展示实际执行节点',async()=>{
+    await page.goto(ctx.baseUrl+'/trace');const search=page.getByRole('textbox',{name:'搜索或过滤 trace',exact:true});await search.fill(baseline.taskId);await search.press('Escape');await page.getByRole('button',{name:`Trace ID ${baseline.taskId}`,exact:true}).click();await page.waitForURL(url=>url.searchParams.get('taskId')===baseline.taskId);await page.getByRole('treeitem').first().waitFor();await shot('baseline-trace');return {taskId:baseline.taskId,executionId:baseline.executionId};
+  });
+  await stage('diagnosis','诊断本轮实验 Trace，核对接收快照、执行归属和界面证据跳转',async()=>{diagnosis=await diagnoseTrace(ctx,page,baseline,shot);return diagnosis;});
   await stage('optimization', '同一生成会话基线发起真实定向优化，保存最终候选、diff 和静态门禁', async () => {
     const feedback = optimizationPrompt;
+    await page.goto(`${ctx.baseUrl}/skills?sessionId=${generated.id}`);
     await selectFormalSkill(page,generatedName,baselineVersion);
     await page.getByPlaceholder('描述 Skill 的目标、输入和期望输出…', { exact: true }).fill(feedback);
     const request = requestFor(r => r.url().endsWith('/api/skill-opt/chat') && r.method() === 'POST');
@@ -94,7 +115,7 @@ export async function completeSkillLifecycle(ctx) {
       const latest = value.optimizations[0];const task = value.tasks.filter(t => t.type === 'optimization').at(-1);
       if (task?.status === 'failed' || latest?.status === 'optimization_failed') throw new Error('Optimization failed; see private/optimization-session.json');
       return latest && task?.status === 'done' && !['optimizing'].includes(latest.status);
-    }, 480000, 2000);
+    }, Math.min(900000, ctx.executionConfig.timeouts.caseMs), 2000);
     record = complete.optimizations[0];const scriptReplay=assertOptimizedSnapshot(record.candidateFiles,generatedName,logFile);writePrivate(path.join(root,'private/candidate-script-replay.json'),scriptReplay);assert.notDeepEqual(record.candidateFiles, generated.files);assert.ok(record.diff.length > 0);assert.ok(record.staticEvaluationId);writePrivate(path.join(root, 'private/candidate.json'), record);
     await shot('skill-optimization');return { recordId: record.id, baseVersion: record.baseVersion, status: record.status, candidateContentHash: record.candidateContentHash, staticEvaluationId: record.staticEvaluationId, diffFiles: record.diff.map(d => d.path || d.file),scriptReplay };
   });
@@ -131,5 +152,11 @@ export async function completeSkillLifecycle(ctx) {
     await page.getByText(result.experimentId, { exact: true }).click();await page.getByText(/任务完成度/).first().waitFor();
     const restored = await api(experimentUrl(result.experimentId));assert.equal(restored.cases[0].taskId, result.taskId);assertSkillAnswer(restored.cases[0].actualOutput, true);
     await shot('skill-published-refreshed');return { ...result, detail: undefined, version: publishedVersion, baselineHashes, reopenedAfterReload: true };
+  });
+  await stage('persistence','新建数据集题目和参考答案、基线 Trace、原日志保持不变，诊断和发布结果可重读',async()=>{
+    const restored=await api(`/api/agent-datasets/${dataset.id}?user=${encodeURIComponent(username)}`);assert.equal(datasetBusinessHash(restored),datasetHash);assert.deepEqual(datasetWrites,[{path:'/api/agent-datasets',method:'POST'}]);
+    const originalTrace=JSON.parse(fs.readFileSync(path.join(root,'private/baseline-trace.json'),'utf8'));const restoredTrace=await api(`/api/observe/session?taskId=${encodeURIComponent(baseline.taskId)}`);assertSameTraceSnapshot(originalTrace.interactions,restoredTrace.interactions);assert.equal(hash(logFile),logHash);
+    const diagnostic=await api(`/api/observe/executions/${baseline.taskId}/agent-debug`);assert.equal(diagnostic.row.id,diagnosis.reportId);assert.equal(diagnostic.row.status,'done');page.off('request',observeDatasetWrites);
+    return {datasetId:dataset.id,datasetHash,baselineTaskId:baseline.taskId,reportId:diagnosis.reportId,publishedVersion,originalLogUnchanged:true};
   });
 }

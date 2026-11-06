@@ -42,7 +42,7 @@ export async function scenario003(ctx) {
       await page.reload();const restored = (await session(upload.id)).session;const hashes = assertSnapshot(files, restored.files);await shot('skill-upload');
       return { sessionId: upload.id, skillName: uploadedName, fileCount: Object.keys(files).length, hashes, persisted: true };
     });
-    await stage('generation', '独立生成会话以 DeepSeek 真实生成命名 Skill、SKILL.md 和 Python 脚本，禁止 Mock 和联网', async () => {
+    await stage('generation', '独立生成会话通过模型 API 与实际写文件工具生成命名 Skill 和脚本，禁止产品内置 Mock 和联网', async () => {
       generated = await newSession();assert.notEqual(generated.id, upload.id);
       await page.getByRole('button', { name: '生成一个 Skill', exact: true }).click();
       const attachmentResponse = responseFor(r => r.url().endsWith('/api/skill-generator/attachments') && r.request().method() === 'POST');

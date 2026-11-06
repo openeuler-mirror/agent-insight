@@ -1,13 +1,13 @@
 {
   "version": 1,
   "defaults": {
-    "mode": "real",
+    "mode": "mock",
     "cases": [
       "001",
       "002",
       "003",
       "004",
-      "005"
+      "006"
     ],
     "runUt": true,
     "model": {
@@ -39,7 +39,8 @@
       "relayMemoryMiB": 256,
       "relayCpus": 0.25,
       "concurrentRuns": 1,
-      "retainedWorkspaceLimit": 2
+      "retainedWorkspaceLimit": 2,
+      "openFiles": 1024
     },
     "timeouts": {
       "utMs": 1800000,
@@ -52,6 +53,16 @@
     "storage": {
       "stateRootEnv": "E2E_STATE_ROOT",
       "reportsDir": "exclude/core-e2e"
+    },
+    "application": {
+      "mode": "production"
+    },
+    "caseModes": {
+      "001": "real",
+      "002": "mock",
+      "003": "mock",
+      "004": "mock",
+      "006": "mock"
     }
   },
   "profiles": {

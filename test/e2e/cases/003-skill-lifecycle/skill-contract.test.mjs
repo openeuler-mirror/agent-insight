@@ -49,3 +49,6 @@ test('structured evidence must identify the actual input file, line number and e
  assert.throws(()=>contract.assertOptimizedSnapshot({...files,'scripts/count_root_ssh.py':script.replace('"file":filename','"file":"invented.log"')},'example',path.resolve('public/example/messages')));
  assert.throws(()=>contract.assertOptimizedSnapshot({...files,'scripts/count_root_ssh.py':contract.referenceScript.replace('"root_ssh_failures": sum(counts.values()),','"root_ssh_failures": 351,')},'example',path.resolve('public/example/messages')),e=>e.actual===351&&e.expected===702);
 });
+test('generation follows the generator root-layout contract without asking for a second Skill directory',()=>{
+ const prompt=contract.generationPrompt('example','count.py');assert.match(prompt,/工作区根目录/);assert.match(prompt,/只生成两个文件/);assert.doesNotMatch(prompt,/在单独的 example\/ 目录/);
+});

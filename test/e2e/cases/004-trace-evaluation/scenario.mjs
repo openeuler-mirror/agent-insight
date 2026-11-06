@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { chromium } from 'playwright';
 import { loginAndModel } from '../../shared/browser-setup.mjs';
 import { command, poll, runtimeEnv, writePrivate } from '../../shared/runtime.mjs';
-import { assertSnapshot, assertSkillAnswer } from '../../shared/skill-evidence.mjs';
+import { assertSnapshot, assertSkillAnswer, toolJsonObjects, semanticTraceHash, assertSameTraceSnapshot, assertDiagnosticBinding } from '../../shared/skill-evidence.mjs';
 import { traceBaselineFiles } from './trace-only-contract.mjs';
 import { verifyOptimizationReopen, reopenTraceExperiment } from './trace-only-reopen.mjs';
 import { businessTraceAudit, assertFactComparison, assertNativeSkillBinding, assertSkillVerification, assertTraceOnlyRequest, assertTraceOnlyResult, assertFourFieldSummary, assertLoadedSkill, decodeTraceInput, assertDatasetFreeVerification, interactionProof } from './trace-only-evidence.mjs';
@@ -28,6 +28,7 @@ export async function scenario004(ctx) {
     const url = new URL(request.url());
     if (/^\/api\/(agent-datasets|datasets)(\/|$)/.test(url.pathname)) datasetRequests.push({ path: url.pathname, view: url.searchParams.get('view'), method: request.method() });
   });
+  const traceSnapshots={};
   let files, skill, version, env, workspace, skillDir, logFile, prompt, baseline, candidate, firstExperiment, secondExperiment, diagnosis, workSession, record, datasetSnapshot;
   const name = `e2e-messages-trace-${runId}`, marker = `E2E-${runId}-004`;
   const database = path.join(root, 'app/data/witty_insight.db');
@@ -62,15 +63,16 @@ export async function scenario004(ctx) {
       const binding=assertNativeSkillBinding(rows[0],tools,{name,version});
       const loaded = assertLoadedSkill(tools, path.join(skillDir, 'SKILL.md'), snapshot['SKILL.md']);
       assert.ok(tools.some(t => {const args = String(t.function?.arguments || t.arguments || '');return args.includes(logFile) && args.includes('analyze_logs.py');}), 'Actual analysis script invocation missing');
-      const scriptResult=tools.filter(t=>String(t.function?.arguments||'').includes('analyze_logs.py')&&String(t.function?.arguments||'').includes(logFile)).flatMap(t=>String(t.output||'').split('\n').flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}})).find(value=>value?.root_ssh_failures===351&&value?.total_lines===2000&&value?.top_source==='150.183.249.110'&&value?.top_source_failures===80);
+      const scriptResult=tools.filter(t=>String(t.function?.arguments||'').includes('analyze_logs.py')&&String(t.function?.arguments||'').includes(logFile)).flatMap(t=>toolJsonObjects(t.output)).find(value=>value?.root_ssh_failures===351&&value?.total_lines===2000&&value?.top_source==='150.183.249.110'&&value?.top_source_failures===80);
       assert.ok(scriptResult?.evidence?.length,'Actual script JSON evidence missing');for(const line of scriptResult.evidence)assert.ok(fs.readFileSync(logFile,'utf8').includes(line),'Script cited fabricated log evidence');
       assertFactComparison(output,scriptResult);
       assert.equal(sha(fs.readFileSync(logFile)), '6d50cefa82380651f910df35fda0995a237a3c788b7b2e3d2d37e51fb9debca9');
       for (const [file, content] of Object.entries(snapshot)) assert.equal(fs.readFileSync(path.join(skillDir, file), 'utf8'), content, 'Native Agent modified installed Skill');
       writePrivate(path.join(root, `private/${label}-trace.json`), session);
       assert.equal(decodeTraceInput(rows[0].query), prompt, 'Collected Trace task differs from original task');
+      traceSnapshots[label]=session.interactions;
       const persisted=read(db=>db.prepare('SELECT interactions FROM Session WHERE taskId=?').get(taskId));const traceProof=interactionProof(session.interactions,JSON.parse(persisted.interactions));
-      return { taskId, executionId: rows[0].upload_id, input: rows[0].query, output, hashes, loaded, binding, scriptResult, snapshotPublished: !summary, interactionHash: traceProof.apiHash, diagnosticInteractionHash: traceProof.storedHash, interactionCount: session.interactions.length };
+      return { taskId, executionId: rows[0].upload_id, input: rows[0].query, output, hashes, loaded, binding, scriptResult, snapshotPublished: !summary, interactionHash: semanticTraceHash(session.interactions), diagnosticInteractionHash: traceProof.storedHash, interactionCount: session.interactions.length };
     };
     const evaluate = async (trace, label) => {
       const before = businessIds();
@@ -115,9 +117,9 @@ export async function scenario004(ctx) {
     await stage('diagnosis','从原 Trace 进入真实智能诊断，报告及锚点对应原链路',async()=>{
       await page.goto(baseUrl+`/trace?taskId=${baseline.taskId}`);
       const link=page.locator(`a[href="/fault?taskId=${baseline.taskId}"]`);await link.first().click();await page.waitForURL(url=>url.pathname==='/fault' && url.searchParams.get('taskId')===baseline.taskId);
-      const accepted=responseFor(r=>new URL(r.url()).pathname===`/api/observe/executions/${baseline.taskId}/agent-debug` && r.request().method()==='POST');await page.getByRole('button',{name:'启动智能诊断',exact:true}).click();assert.ok((await accepted).ok());
+      const accepted=responseFor(r=>new URL(r.url()).pathname===`/api/observe/executions/${baseline.taskId}/agent-debug` && r.request().method()==='POST');await page.getByRole('button',{name:'启动智能诊断',exact:true}).click();const acceptedResponse=await accepted;assert.ok(acceptedResponse.ok());const acceptedSnapshot=await acceptedResponse.json();writePrivate(path.join(root,'private/diagnosis-accepted.json'),acceptedSnapshot);
       diagnosis=await poll(async()=>{const data=await api(`/api/observe/executions/${baseline.taskId}/agent-debug`);writePrivate(path.join(root,'private/diagnosis.json'),data);return data;},value=>{if(value.row?.status==='failed')throw new Error(`Diagnosis failed: ${value.row.errorMessage}`);return value.row?.status==='done' && value.report;},480000,2000);
-      const report=diagnosis.report;assert.equal(report.executionId,baseline.executionId);assert.equal(report.status,'done');assert.equal(report.interactionHash,baseline.diagnosticInteractionHash);assert.ok(report.stats.llmCallCount>0,'Diagnosis must actually call model');assert.ok(report.stats.stepCount>0);assert.ok(!report.skippedReason);
+      const report=diagnosis.report;assert.equal(report.executionId,baseline.executionId);assert.equal(report.status,'done');baseline.diagnosticInteractionHash=assertDiagnosticBinding(acceptedSnapshot,diagnosis,baseline.executionId);assertSameTraceSnapshot(traceSnapshots.baseline,JSON.parse(read(db=>db.prepare('SELECT interactions FROM Session WHERE taskId=?').get(baseline.taskId)).interactions));assert.ok(report.stats.llmCallCount>0,'Diagnosis must actually call model');assert.ok(report.stats.stepCount>0);assert.ok(!report.skippedReason);
       const anchorsResult=await command(process.execPath,['--import','tsx','-e',`const fs=require('node:fs');const {buildFaultPathSteps}=require('./src/lib/engine/observability/fault-path.ts');const trace=JSON.parse(fs.readFileSync(process.argv[1]));console.log(JSON.stringify(buildFaultPathSteps(trace.interactions,'zh').map(s=>({id:s.id,index:s.stepIndex,interaction:s.interactionIndex}))));`,path.join(root,'private/baseline-trace.json')],{cwd:project,timeout:30000});assert.equal(anchorsResult.code,0,'Cannot resolve original Trace anchors');const anchors=JSON.parse(anchorsResult.output.trim());
       const references=[];const walk=value=>{if(!value || typeof value!=='object')return;if(value.anchorId){assert.ok(anchors.some(a=>a.id===value.anchorId),'Diagnosis references a nonexistent Trace anchor');references.push(value.anchorId);}for(const item of Object.values(value))walk(item);};walk(report);
       for(const step of report.stepRecords||[]){assert.ok(Number.isInteger(step.sourceInteractionIndex) && step.sourceInteractionIndex>=0 && step.sourceInteractionIndex<baseline.interactionCount);}
@@ -141,7 +143,7 @@ export async function scenario004(ctx) {
       await page.getByPlaceholder('填写本轮定向诉求；留空则优化当前问题…',{exact:true}).fill(feedback);
       const request=requestFor(r=>new URL(r.url()).pathname==='/api/skill-opt/chat' && r.method()==='POST');await page.locator('[aria-label="Skill 快捷操作"]').getByRole('button',{name:'Skill 优化',exact:true}).click();const sent=(await request).postDataJSON();assert.equal(sent.mock,false);assert.equal(sent.skillName,name);assert.equal(sent.baseVersion,version);writePrivate(path.join(root,'private/optimization-request.json'),sent);
       const sessions=await api(`/api/skill-workbench/sessions?user=${encodeURIComponent(username)}`);const items=sessions.sessions||sessions;workSession=items.find(s=>s.skillName===name);assert.ok(workSession);
-      const complete=await poll(async()=>{const data=await api(sessionApi(workSession.id));writePrivate(path.join(root,'private/optimization-session.json'),data);return data.session;},value=>{const latest=value.optimizations[0],task=value.tasks.filter(t=>t.type==='optimization').at(-1);if(task?.status==='failed'||latest?.status==='optimization_failed')throw new Error('Optimization failed; see private/optimization-session.json');return latest && task?.status==='done' && latest.status!=='optimizing';},480000,2000);
+      const complete=await poll(async()=>{const data=await api(sessionApi(workSession.id));writePrivate(path.join(root,'private/optimization-session.json'),data);return data.session;},value=>{const latest=value.optimizations[0],task=value.tasks.filter(t=>t.type==='optimization').at(-1);if(task?.status==='failed'||latest?.status==='optimization_failed')throw new Error('Optimization failed; see private/optimization-session.json');return latest && task?.status==='done' && latest.status!=='optimizing';},Math.min(900000,ctx.executionConfig.timeouts.caseMs),2000);
       record=complete.optimizations[0];assert.ok(record.diff.length);assert.deepEqual(Object.keys(record.candidateFiles).sort(),Object.keys(files).sort());for(const file of Object.keys(files).filter(f=>f!=='SKILL.md'))assert.equal(record.candidateFiles[file],files[file],`Unexpected change: ${file}`);assert.notEqual(record.candidateFiles['SKILL.md'],files['SKILL.md']);assert.ok(record.candidateFiles['SKILL.md'].startsWith(files['SKILL.md']),'Candidate changed existing Skill instructions rather than appending');assert.ok(record.candidateFiles['SKILL.md'].includes('E2E-SUMMARY'));assert.ok(record.staticEvaluationId);
       assert.equal(record.blockingIssues.length,0,'Candidate static quality gate failed');
       const blocks=read(db=>db.prepare('SELECT blocks FROM SkillOptMessage WHERE sessionId=? ORDER BY createdAt').all(complete.optSessionId)).flatMap(row=>JSON.parse(row.blocks));
@@ -155,7 +157,7 @@ export async function scenario004(ctx) {
     await stage('persistence','刷新重开实验与优化结果，旧版/旧 Trace 不变，数据集内容和引用无新增',async()=>{
       for(const item of [firstExperiment,secondExperiment]){await reopenTraceExperiment(page,baseUrl,item);const detail=await api(`/api/experiments/${item.experimentId}?user=${encodeURIComponent(username)}`);assertTraceOnlyResult(detail,item===firstExperiment?baseline:candidate);}
       const preserved={};for(const file of Object.keys(files))preserved[file]=(await api(`/api/skills/${skill.id}/versions/${version}/files/${file}?user=${encodeURIComponent(username)}`)).content;assertSnapshot(files,preserved);
-      const original=await api(`/api/observe/session?taskId=${baseline.taskId}`);assert.equal(sha(JSON.stringify(original.interactions)),baseline.interactionHash);assert.deepEqual(datasets(),datasetSnapshot);assert.deepEqual(businessIds(),[baseline.taskId,candidate.taskId].sort());
+      const original=await api(`/api/observe/session?taskId=${baseline.taskId}`);assert.equal(semanticTraceHash(original.interactions),baseline.interactionHash);assert.deepEqual(datasets(),datasetSnapshot);assert.deepEqual(businessIds(),[baseline.taskId,candidate.taskId].sort());
       for(const request of datasetRequests)assert.ok(request.path==='/api/agent-datasets' && request.method==='GET' && request.view==='summary',`Unexpected dataset access ${request.method} ${request.path} (${request.view})`);
       const ui=await verifyOptimizationReopen(page,baseUrl,workSession.id,name,record.candidateContentHash);const restored=(await api(sessionApi(workSession.id))).session.optimizations.find(o=>o.id===record.id);assert.ok(restored);assertSnapshot(record.candidateFiles,restored.candidateFiles);await shot('persisted');writePrivate(path.join(root,'private/dependency-audit.json'),{datasetRequests,unchangedDatasetIds:datasetSnapshot.map(d=>d.id),...traceAudit()});return {oldVersionPreserved:true,oldTracePreserved:true,experimentsReopened:true,candidatePreserved:true,optimizationUi:ui,datasetContentUnchanged:true,newDatasets:0,datasetRequests,...traceAudit()};
     });

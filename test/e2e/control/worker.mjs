@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { runSandbox } from './isolated-run.mjs';
+import { runConfiguredSandbox } from './grouped-run.mjs';
 import { Queue } from './queue.mjs';
 import { prepareCheckout } from './checkout.mjs';
 import { AtomGit } from './atomgit.mjs';
@@ -41,7 +41,7 @@ try{
       for(const rel of ['',...fs.readdirSync(checkout,{recursive:true})]){const file=path.join(checkout,rel);const stat=fs.lstatSync(file);if(!stat.isSymbolicLink())fs.chmodSync(file,stat.isDirectory()?0o755:stat.mode|0o444);}
       const harness=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
       controlTiming.sandboxStartedAt=new Date().toISOString();
-      const result=await runSandbox({image:values.image,checkout,harness,job,work,testedSha,keyFile:values['key-file'],executionConfig:job.configHash?executionConfig:undefined,stateDirectory:values['lane-state-dir']||path.join(state,'lane-data'),lane:'pr'});
+      const result=await runConfiguredSandbox({image:values.image,checkout,harness,job,work,testedSha,keyFile:values['key-file'],executionConfig:job.configHash?executionConfig:undefined,stateDirectory:values['lane-state-dir']||path.join(state,'lane-data'),lane:'pr'});
       controlTiming.sandboxEndedAt=new Date().toISOString();
       result.headSha=job.headSha;result.baseSha=job.baseSha;result.executionOrigin='isolated-pr-merge';return result;
     }});

@@ -4,8 +4,8 @@ import http from 'node:http';
 import { AtomGit } from './atomgit.mjs';
 import { publishResult } from './publish.mjs';
 
-const job={repository:'gyctl/agent-insight',pr:1,id:'f'.repeat(32),headSha:'a'.repeat(40),baseSha:'b'.repeat(40)};
-const report={runId:'local-test',mode:'mock',testedSha:'c'.repeat(40),status:'BLOCKED',npmTest:{status:'NOT_RUN'},scenarios:Array.from({length:6},(_,i)=>({id:String(i+1).padStart(3,'0'),title:'case',status:'BLOCKED',reason:'not executed'}))};
+const job={caseIds:['001','002','003','004','005','006'],repository:'gyctl/agent-insight',pr:1,id:'f'.repeat(32),headSha:'a'.repeat(40),baseSha:'b'.repeat(40)};
+const report={selected:job.caseIds,runId:'local-test',mode:'mock',testedSha:'c'.repeat(40),status:'BLOCKED',productionBuild:{status:'FAIL',reason:'fixture compiler error',durationMs:1200},npmTest:{status:'NOT_RUN'},scenarios:Array.from({length:6},(_,i)=>({id:String(i+1).padStart(3,'0'),title:'case',status:'BLOCKED',reason:'not executed'}))};
 test('real HTTP API client publishes exact-SHA report once and refuses stale PR',async t=>{
  let current=job.headSha;const comments=[];const token='local-api-fixture';
  const server=http.createServer(async(req,res)=>{
@@ -20,7 +20,7 @@ test('real HTTP API client publishes exact-SHA report once and refuses stale PR'
  const api=new AtomGit({token,baseUrl:'http://127.0.0.1:'+server.address().port,localTest:true});
  assert.equal((await publishResult(api,job,report)).status,'PUBLISHED');assert.equal(comments.length,1);
  assert.ok(comments[0].body.includes('BLOCKED')||comments[0].body.includes('阻塞'));
- assert.ok(comments[0].body.includes(job.headSha));
+ assert.ok(comments[0].body.includes(job.headSha));assert.ok(comments[0].body.includes('生产编译：失败'));assert.ok(comments[0].body.includes('fixture compiler error'));
  assert.equal((await publishResult(api,job,report)).status,'ALREADY_PUBLISHED');assert.equal(comments.length,1);
  current='d'.repeat(40);assert.equal((await publishResult(api,job,report)).status,'STALE');assert.equal(comments.length,1);
 });
