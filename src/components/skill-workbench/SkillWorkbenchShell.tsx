@@ -808,6 +808,7 @@ export function SkillWorkbenchShell() {
   const acceptOptimizationSession = useCallback((value: unknown) => {
     const next = value as SessionDetail;
     const previous = activeSessionRef.current;
+    if (!previous || previous.id !== next.id) return;
     const asset = selectedAssetRef.current;
     const versionAdvanced = Boolean(
       previous
