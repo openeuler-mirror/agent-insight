@@ -27,7 +27,6 @@ export function DiagnosisRunPanel({ runId, children }: {
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [requestError, setRequestError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [ids, setIds] = useState<string[]>([]);
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -83,8 +82,14 @@ export function DiagnosisRunPanel({ runId, children }: {
         requestError={!!requestError} report={run.report} progress={run.progress} zh={zh} onNodeRefClick={onNodeRefClick} />
       {run.report && <ReportView report={run.report} zh={zh} traceExplicitErrors={[]} onNodeRefClick={onNodeRefClick}
         onRerun={run.snapshot.source !== 'trace-report' && !busy ? () => void retryDiagnosis() : undefined} />}
-      {run.report && <section className="space-y-3"><h2 className="font-medium">{zh ? '选择诊断发现用于 Skill 优化' : 'Select diagnosis findings for Skill optimization'}</h2>{run.report.skippedReason && <p>{run.report.skippedReason}</p>}{!run.report.findings?.length && <p className="text-sm text-foreground-secondary">{zh ? '未形成可转入优化的诊断发现。' : 'No findings available for optimization.'}</p>}{run.report.findings?.map(f => <article key={f.id} className="rounded-lg border border-border bg-card p-4 text-sm"><label className="flex items-start gap-2"><input type="checkbox" disabled={!!run.eligibility[f.id] || !run.snapshot.skills.length || busy} checked={ids.includes(f.id)} onChange={e => setIds(e.target.checked ? [...ids, f.id] : ids.filter(id => id !== f.id))} /><strong>{f.summary}</strong></label><p className="mt-2 whitespace-pre-wrap">{f.evidence}</p><p className="mt-2 text-foreground-secondary">{f.correctionGuidance}</p><p className="mt-2 text-xs">{f.issueRefs.map(ref => { const issue = run.report?.issues.find(i => i.id === ref.issueId); return `${ref.role}: ${issue?.module || 'unknown'} / Trace #${issue?.traceStepIndex ?? '—'}`; }).join(' · ')}</p>{run.eligibility[f.id] && <p className="mt-2 text-warning">{run.eligibility[f.id]}</p>}</article>)}</section>}
-      {run.status === 'done' && <DiagnosisOptimizationCard runId={runId} skills={run.snapshot.skills} findingIds={ids} zh={zh} />}
+      {run.status === 'done' && <DiagnosisOptimizationCard
+        runId={runId}
+        skills={run.snapshot.skills}
+        findings={run.report?.findings || []}
+        eligibility={run.eligibility}
+        emptyReason={run.report?.skippedReason || null}
+        zh={zh}
+      />}
     </>}
   </div>;
   return run ? children(run.snapshot, run.createdAt, content) : content(() => {});

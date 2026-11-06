@@ -56,3 +56,19 @@ test('diagnosis input refreshes automatically without repeating Case evidence', 
   assert.doesNotMatch(source, /刷新诊断输入|查看任务、输出与评测证据/);
   assert.doesNotMatch(source, /<dt className="text-foreground-muted">(?:Trace|Attempt|Skill)<\/dt>/);
 });
+
+test('diagnosis optimization uses the selected findings without a redundant confirmation checkbox', () => {
+  const source = readFileSync('src/components/diagnosis/DiagnosisOptimizationCard.tsx', 'utf8');
+  const panel = readFileSync('src/components/diagnosis/DiagnosisRunPanel.tsx', 'utf8');
+
+  assert.doesNotMatch(source, /我已确认所选问题|I confirm these findings/);
+  assert.doesNotMatch(source, /const \[confirmed, setConfirmed\]/);
+  assert.match(source, /skillRelevanceConfirmed: true/);
+  assert.doesNotMatch(panel, /<h2 className="font-medium">\{zh \? '选择诊断发现用于 Skill 优化'/);
+  assert.match(source, /function FindingMultiSelect/);
+  assert.match(source, /选择要带入优化计划的发现/);
+  assert.match(source, /PopoverContent/);
+  assert.ok(source.indexOf("'目标 Skill'") < source.indexOf('<FindingMultiSelect'));
+  const selector = source.slice(source.indexOf('function FindingMultiSelect'), source.indexOf('function OptimizationForm'));
+  assert.doesNotMatch(selector, /correctionGuidance|finding\.evidence|issueRefs|Trace #/);
+});
