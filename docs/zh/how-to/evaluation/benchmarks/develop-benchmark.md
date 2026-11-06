@@ -727,7 +727,7 @@ Controller 在 `runtimeFacts.evidenceCollection` 保存 `schemaVersion: evidence
 
 脚本/容器进程非零退出或超时后，仍收集已经产生的文件，保存 stdout/stderr 原始日志，并附平台错误诊断；错误文字中的短摘要不替代日志。平台日志使用独立名称，冲突时调整平台日志名称，不改变原生产物名称。取消后仍遵从原取消流程，不承诺已取消任务一定完成证据上传。单文件超过 64 MiB 时报告交付缺口，受控运行目录保留原件，不截断冒充完整附件。
 
-平台按 Artifact ID 存储，下载提供 Unicode 原名；单文件下载保留末级名称，页面目录树保留相对目录。分别下载同名文件不能保留目录结构；需要完整目录时由评测输出提供原生归档，当前未新增批量归档接口。附件预览显示原文，摘要、分数和结论单独展示；来源标签区分接入声明、运行输出和平台诊断。
+平台按 Artifact ID 存储，下载提供 Unicode 原名；单文件下载保留末级名称，页面目录树保留相对目录。分别下载同名文件不能保留目录结构；需要完整目录时由评测输出提供原生归档，当前未新增批量归档接口。附件使用公共预览器，摘要、分数和结论单独展示。来源标签区分接入声明、运行输出和平台诊断。
 
 所有附件进入 Adapter 前均核对字节完整性。JSON 仅作便利解析：无法解析的诊断附件继续保留原字节，并提供 `jsonParseError`；依赖该附件判分的 Adapter 必须拒绝缺失的 `jsonContent`。`completion.rawResult` 的结果 Schema 校验和实例必需报告校验继续严格执行，不能因保留诊断而放松评分正确性。
 
@@ -815,7 +815,7 @@ Presentation 只控制公共前端的名称、顺序和有限格式，不能改�
 
 `source` 为 `submission` 或 `evidence`。规则只设置 `label/order`；前端匹配顺序是精确名称、类型、原始名称兜底。API 始终返回完整 `submissions[]` 和 `evidenceArtifacts[]`。
 
-文本、JSON、Diff、图片和 PDF 使用公共预览器，其他媒体类型保留下载入口。不要把 HTML、JavaScript 或 React 代码放入 Presentation。
+公共预览器根据文件名和 MIME 类型识别文本、Markdown、JSON、Diff、图片、PDF、HTML、CSV 和 JSONL。CSV 以表格展示，JSON 和 JSONL 直接显示原始文本。HTML 在隔离框架内显示，支持内嵌脚本生成正文和交互，外部脚本和资源加载受限。需要在平台内展示的交互报告，应把数据和渲染脚本内嵌到 HTML 文件中。结构化预览保留原文入口，其他媒体类型可下载。不要把 HTML、JavaScript 或 React 代码放入 Presentation。
 
 ## 11. 错误与安全
 

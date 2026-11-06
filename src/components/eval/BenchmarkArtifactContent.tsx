@@ -16,17 +16,19 @@
 
 'use client';
 
+import { csvParseRows } from 'd3-dsv';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-export function BenchmarkArtifactContent({ content, markdown }: { content: string; markdown: boolean }) {
-  if (markdown && content) {
-    return (
-      <div className="ai-artifact-markdown">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{content}</ReactMarkdown>
-      </div>
-    );
-  }
+import type { BenchmarkArtifactRenderer } from '@/lib/benchmark/presentation';
+
+const previewRowLimit = 100;
+const csvColumnLimit = 50;
+const structuredPreviewSizeLimit = 1024 * 1024;
+const htmlPreviewPolicy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'";
+const cellClass = 'border border-[var(--border)] px-3 py-1.5 text-left align-top whitespace-pre-wrap';
+
+function RawContent({ content }: { content: string }) {
   return (
     <pre style={{
       margin: 0, minHeight: '100%', padding: 14, border: '1px solid var(--border)',
@@ -37,4 +39,84 @@ export function BenchmarkArtifactContent({ content, markdown }: { content: strin
       {content || '文件为空'}
     </pre>
   );
+}
+
+function CsvPreview({ content }: { content: string }) {
+  let truncatedColumns = false;
+  const rows = csvParseRows(content.replace(/^\uFEFF/, ''), (row, index) => {
+    if (index > previewRowLimit) return null;
+    truncatedColumns ||= row.length > csvColumnLimit;
+    return row.slice(0, csvColumnLimit);
+  });
+  const [head, ...records] = rows;
+  if (!head) return <RawContent content="" />;
+  const visibleRecords = records.slice(0, previewRowLimit - 1);
+  const columnCount = Math.max(head.length, ...visibleRecords.map(row => row.length));
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-xs">
+        <thead className="bg-[var(--background-secondary)]">
+          <tr>
+            {Array.from({ length: columnCount }, (_, index) => (
+              <th key={index} scope="col" className={cellClass}>{head[index] ?? ''}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {visibleRecords.map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              {Array.from({ length: columnCount }, (_, index) => (
+                <td key={index} className={cellClass}>{row[index] ?? ''}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {(rows.length > previewRowLimit || truncatedColumns) && (
+        <p className="mt-2 text-xs text-[var(--foreground-muted)]">表格预览最多显示前 {previewRowLimit} 行、{csvColumnLimit} 列。</p>
+      )}
+    </div>
+  );
+}
+
+export function BenchmarkArtifactContent({ content, filename, renderer }: {
+  content: string;
+  filename?: string;
+  renderer: BenchmarkArtifactRenderer;
+}) {
+  if (!content) return <RawContent content="" />;
+  if (renderer === 'image') {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={content} alt={filename} style={{ display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto' }} />;
+  }
+  if (renderer === 'pdf') {
+    return <iframe title={filename} src={content} style={{ width: '100%', height: '100%', minHeight: 640, border: 0 }} />;
+  }
+  if (renderer === 'markdown') {
+    return (
+      <div className="ai-artifact-markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{content}</ReactMarkdown>
+      </div>
+    );
+  }
+  if (renderer !== 'text' && content.length > structuredPreviewSizeLimit) {
+    return <p className="text-xs text-[var(--foreground-muted)]">文件较大，可切换到原文或下载查看。</p>;
+  }
+  if (renderer === 'html') {
+    return (
+      <>
+        <p className="mb-2 text-xs text-[var(--foreground-muted)]">HTML 报告在隔离窗口内显示，外部资源无法加载。</p>
+        <iframe
+          title={filename}
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
+          srcDoc={`<!doctype html><meta http-equiv="Content-Security-Policy" content="${htmlPreviewPolicy}">${content}`}
+          style={{ width: '100%', height: '100%', minHeight: 640, border: 0, background: 'white' }}
+        />
+      </>
+    );
+  }
+  if (renderer === 'csv') return <CsvPreview content={content} />;
+  return <RawContent content={content} />;
 }

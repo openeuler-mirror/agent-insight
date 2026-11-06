@@ -50,6 +50,8 @@ description: "平台与独立 Evaluator 的派发、幂等、取消及结果归�
 
 JSON 诊断解析失败不改变附件原件或单独导致判分失败；评分依赖的结构化结果及必需报告仍由 Schema 和 Adapter 严格校验。详见[开发规范](../../how-to/evaluation/benchmarks/develop-benchmark.md#原始产物交付与来源)。
 
+公共预览器根据文件名和 MIME 类型选择展示方式。CSV 以表格展示，JSON 和 JSONL 直接显示原始文本。HTML 在隔离框架内显示，支持内嵌脚本生成正文和交互，外部脚本和资源加载受限。
+
 ## 取消与错误
 
 同一 `POST /api/v1/evaluations` 接收 `{ operation: "cancel", runId, requestDigest }`，使用原任务摘要。返回 `202` 和取消状态；已有任务摘要不符为 `409`，缺摘要为 `422 CANCEL_INVALID`。未知但格式合法的运行 ID 可以先记录取消，阻止晚到的派发；取消受理不代表对应进程和容器已经退出。

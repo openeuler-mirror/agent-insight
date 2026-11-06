@@ -198,20 +198,49 @@ export function presentBenchmarkArtifacts<T extends BenchmarkArtifactLike>(input
     }));
 }
 
-export function isMarkdownBenchmarkArtifact(artifact: Pick<BenchmarkArtifactLike, 'mediaType' | 'name'>): boolean {
-  return artifact.mediaType.split(';', 1)[0].trim().toLowerCase() === 'text/markdown'
-    || /\.(md|markdown)$/i.test(artifact.name);
+export type BenchmarkArtifactRenderer = 'text' | 'markdown' | 'html' | 'csv' | 'image' | 'pdf';
+
+type BenchmarkArtifactFormat = BenchmarkArtifactRenderer | 'json' | 'jsonl' | 'diff' | 'unknown';
+type BenchmarkArtifactFile = Pick<BenchmarkArtifactLike, 'mediaType' | 'name'>;
+
+type BenchmarkArtifactPreview = {
+  format: BenchmarkArtifactFormat;
+  renderer: BenchmarkArtifactRenderer | null;
+  load: 'text' | 'blob' | 'none';
+};
+
+const artifactTextFormats = [
+  { format: 'markdown', renderer: 'markdown', mediaTypes: ['text/markdown'], extension: /\.(md|markdown)$/i },
+  { format: 'html', renderer: 'html', mediaTypes: ['text/html'], extension: /\.html?$/i },
+  { format: 'csv', renderer: 'csv', mediaTypes: ['text/csv', 'application/csv'], extension: /\.csv$/i },
+  { format: 'jsonl', renderer: 'text', mediaTypes: ['application/x-ndjson', 'application/ndjson', 'application/jsonl', 'application/jsonlines'], extension: /\.(jsonl|ndjson)$/i },
+  { format: 'json', renderer: 'text', mediaTypes: ['application/json'], extension: /\.json$/i },
+  { format: 'diff', renderer: 'text', mediaTypes: ['text/x-diff', 'text/x-patch'], extension: /\.(diff|patch)$/i },
+] satisfies readonly {
+  format: BenchmarkArtifactFormat;
+  renderer: BenchmarkArtifactRenderer;
+  mediaTypes: string[];
+  extension: RegExp;
+}[];
+
+export function resolveBenchmarkArtifactPreview(artifact: BenchmarkArtifactFile): BenchmarkArtifactPreview {
+  const mediaType = artifact.mediaType.split(';', 1)[0].trim().toLowerCase();
+  if (mediaType.startsWith('image/')) return { format: 'image', renderer: 'image', load: 'blob' };
+  if (mediaType === 'application/pdf') return { format: 'pdf', renderer: 'pdf', load: 'blob' };
+
+  const matched = artifactTextFormats.find(rule => rule.mediaTypes.includes(mediaType))
+    ?? artifactTextFormats.find(rule => rule.extension.test(artifact.name));
+  if (matched) return { format: matched.format, renderer: matched.renderer, load: 'text' };
+  if (mediaType.startsWith('text/')) return { format: 'text', renderer: 'text', load: 'text' };
+  return { format: 'unknown', renderer: null, load: 'none' };
 }
 
-export function canPreviewBenchmarkArtifact(artifact: Pick<BenchmarkArtifactLike, 'mediaType' | 'name'>): boolean {
-  return artifact.mediaType.startsWith('text/')
-    || isMarkdownBenchmarkArtifact(artifact)
-    || artifact.mediaType === 'application/json'
-    || artifact.mediaType === 'application/pdf'
-    || artifact.mediaType.startsWith('image/')
-    || artifact.name.endsWith('.json')
-    || artifact.name.endsWith('.diff')
-    || artifact.name.endsWith('.patch');
+export function isMarkdownBenchmarkArtifact(artifact: BenchmarkArtifactFile): boolean {
+  return resolveBenchmarkArtifactPreview(artifact).format === 'markdown';
+}
+
+export function canPreviewBenchmarkArtifact(artifact: BenchmarkArtifactFile): boolean {
+  return resolveBenchmarkArtifactPreview(artifact).renderer !== null;
 }
 
 export type BenchmarkArtifactTreeNode<T extends BenchmarkArtifactLike = BenchmarkArtifactLike> =
