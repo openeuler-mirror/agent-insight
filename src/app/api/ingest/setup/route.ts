@@ -15,6 +15,7 @@
  */
 
 import { SETUP_BASH_HOME, SETUP_POWERSHELL_HOME } from '@/lib/ingest/setup/home';
+import { DIFY_BASH_SETUP_FUNCTION, DIFY_WINDOWS_SETUP, difySetupScript } from '@/lib/ingest/setup/dify';
 import { NextResponse } from 'next/server';
 
 import { readFile } from 'node:fs/promises';
@@ -166,6 +167,7 @@ function generateBashScript(
         'if [ -n "${AGENT_INSIGHT_FRAMEWORKS:-}" ]; then NONINTERACTIVE=true; NONINTERACTIVE_FRAMEWORKS="$AGENT_INSIGHT_FRAMEWORKS"; fi',
         'if [ "${AGENT_INSIGHT_NO_KEY:-}" = "1" ] || [ "${AGENT_INSIGHT_NO_KEY:-}" = "true" ]; then FORCE_NO_KEY=true; fi',
         '',
+        DIFY_BASH_SETUP_FUNCTION,
         getAgentInsightRasBashInstaller(),
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
@@ -263,7 +265,8 @@ function generateBashScript(
         '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },',
         '    { name: \'QwenPaw\', value: \'qwenpaw\' },',
         '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },',
-        '    { name: \'WorkBuddy\', value: \'workbuddy\' }',
+        '    { name: \'WorkBuddy\', value: \'workbuddy\' },',
+        '    { name: \'Dify\', value: \'dify\' }',
         '];',
         '',
         'async function select() {',
@@ -334,6 +337,8 @@ function generateBashScript(
         'fi',
         '',
         '# Set installation flags based on selection',
+        'INSTALL_DIFY=false',
+        'if [[ ",$SELECTED_FRAMEWORKS," == *",dify,"* ]]; then INSTALL_DIFY=true; fi',
         'INSTALL_OPENCODE=false',
         'INSTALL_CLAUDE=false',
         'INSTALL_OPENCLAW=false',
@@ -411,7 +416,7 @@ function generateBashScript(
         'fi',
         '',
         '# Exit if nothing selected',
-        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then',
+        'if [ "$INSTALL_DIFY" = "false" ] && [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then',
         '    echo "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    echo "   继续执行配置步骤..."',
         '    echo ""',
@@ -836,6 +841,7 @@ function generateBashScript(
         'rm "${AGENT_INSIGHT_CONFIG_FILE}.bak"',
         'echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
         '',
+        'if [ "$INSTALL_DIFY" = "true" ]; then agent_insight_setup_dify "$FINAL_HOST" "$FINAL_KEY" || exit 1; fi',
         '# 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)',
         'if { [ "$INSTALL_OPENCODE" = "true" ] && [ -z "$OPENCODE_PLUGIN_QUERY" ]; } || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then',
         '    echo "🛡️  Installing Agent RAS runtime..."',
@@ -1479,7 +1485,8 @@ function generatePowerShellScript(
         '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },',
         '    { name: \'QwenPaw\', value: \'qwenpaw\' },',
         '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },',
-        '    { name: \'WorkBuddy\', value: \'workbuddy\' }',
+        '    { name: \'WorkBuddy\', value: \'workbuddy\' },',
+        '    { name: \'Dify\', value: \'dify\' }',
         '];',
         '',
         'async function select() {',
@@ -1553,6 +1560,7 @@ function generatePowerShellScript(
         '}',
         '',
         '# Set installation flags based on selection',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)dify(,|$)") { ' + DIFY_WINDOWS_SETUP + ' }',
         '$INSTALL_OPENCODE = $false',
         '$INSTALL_CLAUDE = $false',
         '$INSTALL_OPENCLAW = $false',
@@ -2661,6 +2669,11 @@ export async function GET(request: Request) {
         : noninteractive ? [{ ...FRAMEWORK_OPTIONS[0] }] : [];
     const installProfile = resolveInstallProfile(requestedPreselected);
     const preselected = installProfile.effectiveFrameworks;
+    if (preselected.some(item => item.value === 'dify') && (preselected.length === 1 || detectPlatform(request) === 'windows')) {
+        return new NextResponse(difySetupScript(baseUrl, apiKey, detectPlatform(request)), {
+            headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+    }
     const llamaIndexVenv = (requestUrl.searchParams.get('llamaindexVenv') || '')
         .replace(/[\0\r\n]/g, '')
         .trim()
