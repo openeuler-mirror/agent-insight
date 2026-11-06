@@ -1517,7 +1517,7 @@ export class AgentInsight {
 
               // 用户消息
               if (info.role === "user") {
-                if (!isSubagent && promptSent) { rootUserMessageId ||= info.id; rootIdle = false; terminalMessageId = null; }
+                if (!isSubagent && promptSent && info.id !== rootUserMessageId) { rootUserMessageId ||= info.id; rootIdle = false; terminalMessageId = null; }
                 userMsgId = info.id || userMsgId;
                 const text = extractTextFromParts(info.parts || []);
                 onUserMessage?.({

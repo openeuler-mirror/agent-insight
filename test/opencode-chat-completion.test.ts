@@ -239,3 +239,17 @@ test('SSE EOF waits for the authoritative HTTP completion snapshot instead of ab
   const result = await f.client.chat(session, payload, {}, { streamTimeoutMs: 2000 });
   assert.equal(readCompleted, true);assert.equal(result.text, 'complete authoritative reply');
 });
+
+test('late metadata for the same user does not erase completed root state while HTTP is pending', async () => {
+  const metadata = message('user', user, { summary: { diffs: [] } });
+  const f = fixture([...fullEvents('stop'), metadata], snapshot({ finish: 'stop' }));
+  const result = await f.client.chat(session, payload, {}, { streamTimeoutMs: 1500 });
+  assert.equal(result.text, 'complete authoritative reply');
+  assert.ok(f.reads() > 0);
+});
+
+test('late metadata for the same user cannot make a partial snapshot complete', async () => {
+  const metadata = message('user', user, { summary: { diffs: [] } });
+  const f = fixture([...fullEvents('stop'), metadata], snapshot({ time: {} }));
+  await assert.rejects(f.client.chat(session, payload, {}, { streamTimeoutMs: 300 }), { code: 'AGENT_TIMEOUT' });
+});
