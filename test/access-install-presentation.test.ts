@@ -30,6 +30,7 @@ const { FRAMEWORK_OPTIONS } = installProfile;
 
 function renderInstallPage() {
   const router = {
+    bfcacheId: 'test-install-page',
     back() {}, forward() {}, refresh() {}, push() {}, replace() {}, prefetch() {},
   };
   return renderToStaticMarkup(

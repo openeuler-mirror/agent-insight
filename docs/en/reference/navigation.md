@@ -13,13 +13,23 @@ Check input, output, configuration, identity, and asynchronous behavior.
 
 ## Observability
 
+- [Client versions and framework compatibility](./observability/client-compatibility.md)
 - [Trace HTTP ingestion](./observability/trace-ingestion.md)
 
 ## Evaluation
 
+- [Dataset HTTP API](./evaluation/datasets-api.md)
 - [Experiment HTTP API](./evaluation/experiments-api.md)
 - [Execution-environment preparation](./evaluation/execution-environment.md)
 - [Evaluator output and runtime contract](./evaluation/evaluator-output.md)
 - [Independent Benchmark protocol](./evaluation/benchmark-protocol.md)
+
+## Optimization
+
+- [Skill management HTTP API](./optimization/skills-api.md)
+
+## Reliability
+
+- [Reliability client and control API](./reliability/client-control-api.md)
 
 [All English pages and coverage](../navigation.md)
