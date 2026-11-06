@@ -117,7 +117,7 @@ export function coreMockReply(input,context={}){
  if(all.includes('failures')&&all.includes('中间故障')&&!input.tools?.length)return answer({failures:[],skill_issues:[]});
  if(all.includes('你是 Agent RAS 可靠性评测 Judge'))return answer({summary:'Mock 可靠性评分流程；实际回执和中断另由原生断言核验。',faultOccurred:{verdict:'met',reason:'受控重复流已生成。',suggestion:''},dimensions:['fault_detected','mitigation_triggered','fault_mitigated'].map(dimension=>({dimension,verdict:'met',reason:'Mock 协议固定判定。',suggestion:''}))});
  if(all.includes('你是思考循环检测器')&&all.includes('primary_fault'))return answer({abnormal:true,primary_fault:'semantic_deadlock',confidence:1,rationale:'Mock 受控重复流，用于真实检测与中断流程。'});
- if(context.caseId==='006'&&input.tools?.length){
+ if(context.caseId==='005'&&input.tools?.length){
   if(!messages.some(m=>m.role==='tool'&&textOf(m.content).includes('<skill_content name="thinking-dead-loop"'))){const tool=input.tools.find(t=>t.function?.name==='skill');const props=tool?.function.parameters?.properties||{};return call(input,'skill',{[props.id?'id':'name']:'thinking-dead-loop'});}
   const skill=fs.readFileSync(new URL('../../../agent_fault_injection/fault_inject/skills/thinking-dead-loop/SKILL.md',import.meta.url),'utf8');
   const section=skill.split('## 场景2：')[1]?.split('## 场景3：')[0];const sample=section?.match(/```(?:text)?\n([\s\S]*?)```/)?.[1]?.trim();if(!sample)throw Error('Actual FI semantic-loop sample missing');return answer((sample+'\n').repeat(8));
@@ -138,7 +138,7 @@ export function coreMockReply(input,context={}){
 }
 export async function startCoreModelMock(ctx){
  const folder=path.join(ctx.root,'private/model-mock');fs.mkdirSync(folder,{recursive:true,mode:0o700});let count=0;
- const mock=await startModelMock({}, {streamPlan:message=>ctx.selectedCase==='006'&&message.content?.length>4000&&message.content.includes('磁盘')?{chunkChars:80,delayMs:100}:null,reply:input=>{
+ const mock=await startModelMock({}, {streamPlan:message=>ctx.selectedCase==='005'&&message.content?.length>4000&&message.content.includes('磁盘')?{chunkChars:80,delayMs:100}:null,reply:input=>{
   const id=String(++count).padStart(4,'0');fs.writeFileSync(path.join(folder,id+'-request.log'),JSON.stringify(input,null,2),{mode:0o600});
   const result=coreMockReply(input,{project:ctx.project,root:ctx.root,caseId:ctx.selectedCase});fs.writeFileSync(path.join(folder,id+'-reply.log'),JSON.stringify(result,null,2),{mode:0o600});return result;
  }});return mock;

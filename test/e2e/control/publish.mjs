@@ -1,3 +1,4 @@
+import {cases} from '../shared/catalog.mjs';
 import {assertSelection} from '../shared/selection.mjs';
 import { renderSummary } from '../shared/suite.mjs';
 import {assertProbeReport,renderProbe} from './probe.mjs';
@@ -6,7 +7,7 @@ export async function publishResult(api,job,report,{reportUrl}={}){
   if(report.dirtyWorkingTree)throw Error('Refusing to publish dirty working-tree result as a PR check');
   const probe=job.mode==='probe'||report.kind==='pipeline-probe';
   if(probe)assertProbeReport(report,job);else assertSelection(report,job.profile,undefined,job.caseIds);
-  if(report.scenarios?.length!==6||new Set(report.scenarios.map(s=>s.id)).size!==6)throw Error('Expected six scenario results');
+  if(report.scenarios?.length!==cases.length||cases.some(c=>report.scenarios.filter(s=>s.id===c.id).length!==1))throw Error('Expected five unique scenario results');
   const current=await api.readPull(job.repository,job.pr);
   if(!['open','opened'].includes(current.state)||current.head?.sha!==job.headSha||current.base?.sha!==job.baseSha)return {status:'STALE'};
   const marker=`<!-- agent-insight-e2e:${job.id} -->`;

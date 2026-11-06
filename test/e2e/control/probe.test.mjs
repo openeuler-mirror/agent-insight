@@ -16,7 +16,7 @@ test('probe executes a fixed child without credentials and explicitly leaves bus
  assert.equal(report.status,'PASS');assert.equal(report.kind,'pipeline-probe');assert.equal(report.process.exitCode,0);
  assert.equal(report.process.proof.jobId,job.id);assert.equal(report.businessTestsExecuted,false);
  assert.equal(report.npmTest.status,'NOT_RUN');assert.ok(report.scenarios.every(s=>s.status==='NOT_RUN'));
- const view=probe.renderProbe(report,job);assert.match(view.markdown,/固定子进程探针通过/);assert.match(view.markdown,/执行节点：/);assert.match(view.markdown,/六个业务用例.*未执行/);assert.match(view.markdown,/delivery.json/);assert.doesNotMatch(view.markdown,/评论通过 API 回写并读回核对/);
+ const view=probe.renderProbe(report,job);assert.match(view.markdown,/固定子进程探针通过/);assert.match(view.markdown,/执行节点：/);assert.match(view.markdown,/五个业务用例.*未执行/);assert.match(view.markdown,/delivery.json/);assert.doesNotMatch(view.markdown,/评论通过 API 回写并读回核对/);
 });
 test('probe mode has its own queue identity and cannot be mistaken for real or mock execution',()=>{
  const event={repository:job.repository,pr:1,headSha:job.headSha};

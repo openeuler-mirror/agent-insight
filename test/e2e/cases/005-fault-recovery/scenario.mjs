@@ -11,8 +11,8 @@ import {currentFaultRun} from './fault-run.mjs';
 import {assertRasRequest,assertRasEvidence,assertRasEvaluation,assertFiNativeInterruption} from './ras-evidence.mjs';
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const jsonLines=value=>value.split('\n').flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});
-export async function scenario006(ctx){
- const {root,project,baseUrl,runId,stage}=ctx;ctx.caseId='006';
+export async function scenario005(ctx){
+ const {root,project,baseUrl,runId,stage}=ctx;ctx.caseId='005';
  const browser=await chromium.launch({channel:process.env.E2E_BROWSER_CHANNEL||'chrome',headless:true});const context=await browser.newContext({locale:'zh-CN',viewport:{width:1600,height:1100}});await context.tracing.start({screenshots:false,snapshots:true,sources:false});const page=await context.newPage();page.setDefaultTimeout(45000);page.setDefaultNavigationTimeout(90000);
  const shot=name=>page.screenshot({path:path.join(root,`ras-${name}.png`),fullPage:true,mask:[page.locator('input,textarea,code,pre')]});const responseFor=fn=>{const p=page.waitForResponse(fn);p.catch(()=>{});return p;};
  const database=path.join(root,'app/data/witty_insight.db');const read=fn=>{const db=new DatabaseSync(database,{readOnly:true});try{return fn(db);}finally{db.close();}};

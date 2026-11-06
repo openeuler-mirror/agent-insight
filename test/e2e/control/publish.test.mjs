@@ -4,8 +4,8 @@ import http from 'node:http';
 import { AtomGit } from './atomgit.mjs';
 import { publishResult } from './publish.mjs';
 
-const job={caseIds:['001','002','003','004','005','006'],repository:'gyctl/agent-insight',pr:1,id:'f'.repeat(32),headSha:'a'.repeat(40),baseSha:'b'.repeat(40)};
-const report={selected:job.caseIds,runId:'local-test',mode:'mock',testedSha:'c'.repeat(40),status:'BLOCKED',productionBuild:{status:'FAIL',reason:'fixture compiler error',durationMs:1200},npmTest:{status:'NOT_RUN'},scenarios:Array.from({length:6},(_,i)=>({id:String(i+1).padStart(3,'0'),title:'case',status:'BLOCKED',reason:'not executed'}))};
+const job={caseIds:['001','002','003','004','005'],repository:'gyctl/agent-insight',pr:1,id:'f'.repeat(32),headSha:'a'.repeat(40),baseSha:'b'.repeat(40)};
+const report={selected:job.caseIds,runId:'local-test',mode:'mock',testedSha:'c'.repeat(40),status:'BLOCKED',productionBuild:{status:'FAIL',reason:'fixture compiler error',durationMs:1200},npmTest:{status:'NOT_RUN'},scenarios:Array.from({length:5},(_,i)=>({id:String(i+1).padStart(3,'0'),title:'case',status:'BLOCKED',reason:'not executed'}))};
 test('real HTTP API client publishes exact-SHA report once and refuses stale PR',async t=>{
  let current=job.headSha;const comments=[];const token='local-api-fixture';
  const server=http.createServer(async(req,res)=>{
@@ -27,7 +27,7 @@ test('real HTTP API client publishes exact-SHA report once and refuses stale PR'
 test('publisher rejects missing cases and dirty local results before any network mutation',async()=>{
  const api={readPull:()=>{throw Error('no network');}};
  await assert.rejects(()=>publishResult(api,job,{...report,dirtyWorkingTree:true}),/dirty/);
- await assert.rejects(()=>publishResult(api,job,{...report,scenarios:[]}),/six/);
+ await assert.rejects(()=>publishResult(api,job,{...report,scenarios:[]}),/five/);
 });
 test('API waits for a slow successful write so callers can verify it without a duplicate mutation',{timeout:10000},async t=>{
  const server=http.createServer((req,res)=>setTimeout(()=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({id:23}));},5200));

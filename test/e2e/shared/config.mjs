@@ -12,8 +12,8 @@ function merge(base,override={}){const result={...structuredClone(base),...struc
 const bounded=(value,min,max,integer=true)=>{if(typeof value!=='number'||!Number.isFinite(value)||value<min||value>max||integer&&!Number.isSafeInteger(value))throw Error('Configuration value outside supported range');};
 export function validateExecutionConfig(input){
  keys(input,[...fields,'profile','account']);const c=structuredClone(input);c.application??={mode:'dev'};keys(c.application,['mode']);if(!['dev','production'].includes(c.application.mode))throw Error('Invalid application mode');if(!['pr','daily'].includes(c.profile)||!['real','mock'].includes(c.mode)||typeof c.runUt!=='boolean')throw Error('Invalid execution profile or mode');
- if(c.caseModes===undefined)c.caseModes={};keys(c.caseModes,['001','002','003','004','005','006']);if(Object.values(c.caseModes).some(mode=>!['real','mock'].includes(mode)))throw Error('Invalid case mode');
- if(!Array.isArray(c.cases)||!c.cases.length||new Set(c.cases).size!==c.cases.length||c.cases.some(id=>!/^00[1-6]$/.test(id)))throw Error('Invalid case selection');if(c.cases.includes('005'))throw Error('Scenario 005 is retired and merged into 003');c.cases.sort();
+ if(c.caseModes===undefined)c.caseModes={};keys(c.caseModes,['001','002','003','004','005']);if(Object.values(c.caseModes).some(mode=>!['real','mock'].includes(mode)))throw Error('Invalid case mode');
+ if(!Array.isArray(c.cases)||!c.cases.length||new Set(c.cases).size!==c.cases.length||c.cases.some(id=>!/^00[1-5]$/.test(id)))throw Error('Invalid case selection');c.cases.sort();
  keys(c.account,['username']);if(typeof c.account.username!=='string'||!/^test[\w.+-]*@[\w.-]+\.[A-Za-z]{2,}$/.test(c.account.username))throw Error('A dedicated test account email is required');
  keys(c.model,modelFields);c.model.baseUrl=modelBaseUrl(c.model.baseUrl);if(typeof c.model.modelName!=='string'||! /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(c.model.modelName))throw Error('Invalid modelName');validateKeyReference(c.model.key);
  if(!object(c.model.options)||JSON.stringify(c.model.options).length>4096||/"(?:__proto__|constructor|apiKey|password|token|authorization|secret)"\s*:/i.test(JSON.stringify(c.model.options)))throw Error('Invalid model options');
@@ -57,6 +57,6 @@ export function loadControlConfig({mode,profile,...options}={}){
 export function stateRootFor(config,env=process.env){return env.E2E_STATE_ROOT||env[config.storage.stateRootEnv];}
 export function runDirectory(project,config,id){return path.join(project,config.storage.reportsDir,id);}
 
-export function caseMode(config,id){if(!/^00[1-6]$/.test(id))throw Error('Unknown case');return config.caseModes?.[id]||config.mode;}
+export function caseMode(config,id){if(!/^00[1-5]$/.test(id))throw Error('Unknown case');return config.caseModes?.[id]||config.mode;}
 export function suiteMode(config,selected=config.cases){const modes=new Set(selected.map(id=>caseMode(config,id)));if(!modes.size)throw Error('No selected cases');return modes.size===1?[...modes][0]:'mixed';}
 export function executionGroups(config,selected=config.cases){return ['mock','real'].map(mode=>({mode,cases:selected.filter(id=>caseMode(config,id)===mode)})).filter(group=>group.cases.length).sort((a,b)=>selected.indexOf(a.cases[0])-selected.indexOf(b.cases[0]));}

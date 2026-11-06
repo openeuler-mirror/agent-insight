@@ -20,7 +20,7 @@ export function collectEvidence(root,runId,{maxFileBytes=8*1024*1024}={}) {
    const data=fs.readFileSync(file);total+=data.length;result.files.push({path:relative,data:data.toString('base64')});
   }
  };
- for(const entry of fs.readdirSync(root,{withFileTypes:true}))if(entry.isDirectory()&&(entry.name===runId||/^00[1-6]$/.test(entry.name.slice(runId.length+1))&&entry.name.startsWith(runId+'-')))walk(path.join(root,entry.name));
+ for(const entry of fs.readdirSync(root,{withFileTypes:true}))if(entry.isDirectory()&&(entry.name===runId||/^00[1-5]$/.test(entry.name.slice(runId.length+1))&&entry.name.startsWith(runId+'-')))walk(path.join(root,entry.name));
  return result;
 }
 export function saveEvidence(destination,evidence){

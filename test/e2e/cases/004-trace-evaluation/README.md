@@ -22,7 +22,7 @@ fixtures/trace_root_ssh.py；trace-only-contract.mjs 生成最小 Skill。 专�
 node test/e2e/run.mjs --case 004 --mode real --key-file /absolute/path/to/deepseek-key.txt
 ```
 
-使用新 runId；读取报告中首个失败阶段、版本与受限日志。公共前置来自 shared，不依赖先运行其他场景。Mock 仅替换模型 API，其他流程照常执行；006 真实入口暂停。历史通过不能抵扣本轮失败。
+使用新 runId；读取报告中首个失败阶段、版本与受限日志。公共前置来自 shared，不依赖先运行其他场景。Mock 仅替换模型 API，其他流程照常执行；历史通过不能抵扣本轮失败。
 
 诊断快照使用启动POST返回的row.id、executionId、interactionsHash，与完成后的row和report逐项核对，不再拿诊断前API展示快照的原始JSON哈希作比较。另对基线Trace做语义内容比较，只忽略API的_payloadVersion和tool_calls缺失/空数组的表示差异；实际消息、非空工具、参数、输出或交互数量变化仍失败。接收响应保存在受限diagnosis-accepted.json。
 

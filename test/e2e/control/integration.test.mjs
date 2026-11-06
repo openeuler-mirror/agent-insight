@@ -47,7 +47,7 @@ test('local pipeline: signed HTTP -> queue -> real child UT/suite -> honest BLOC
   const report=JSON.parse(fs.readFileSync(path.join(project,'exclude/core-e2e','pr-'+job.id,'report.json')));
   assert.equal(report.npmTest.status,'PASS');assert.equal(report.npmTest.observedSummary.tests,1);
   assert.equal(report.scenarios.filter(s=>s.status==='BLOCKED').length,5);
-  assert.equal(report.configuration.hash,configSnapshot(executionConfig).hash);assert.equal(report.configuration.settings.model.modelName,'fixture-model');assert.equal(report.scenarios.find(s=>s.id==='006').status,'BLOCKED');
+  assert.equal(report.configuration.hash,configSnapshot(executionConfig).hash);assert.equal(report.configuration.settings.model.modelName,'fixture-model');assert.equal(report.scenarios.find(s=>s.id==='005').status,'BLOCKED');
   return validateReport(report,{job,testedSha:configuredSha,exitCode:run.code});
  }});
  assert.equal(outcome.state,'COMPLETED');assert.equal(outcome.result.status,'BLOCKED');queue.finish(job.id,outcome.state,outcome.result);

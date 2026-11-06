@@ -5,7 +5,7 @@ import {cases} from '../shared/catalog.mjs';import {scenarioResult} from '../sha
 
 export function mergeGroupReports(reports,{config,job,testedSha}) {
  const selected=config.cases,seen=new Set();
- const scenarios=cases.map(c=>({id:c.id,title:c.title,status:'NOT_RUN',reason:c.mergedInto?'已并入 '+c.mergedInto+'，本轮不重复执行':'按本轮范围配置未执行',stages:[]}));
+ const scenarios=cases.map(c=>({id:c.id,title:c.title,status:'NOT_RUN',reason:'按本轮范围配置未执行',stages:[]}));
  for(const report of reports){
   if(report.testedSha!==testedSha)throw Error('Group source SHA mismatch');
   for(const id of report.selected||[]){

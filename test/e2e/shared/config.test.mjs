@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';import fs f
 import {loadExecutionConfig,validateConfig,configSnapshot,readModelKey} from './config.mjs';
 const raw=()=>JSON.parse(fs.readFileSync(new URL('../config.json',import.meta.url)));
 test('defaults keep distinct stable accounts, real five cases and UT; profile overrides remain isolated',()=>{
- const pr=loadExecutionConfig({profile:'pr'}),daily=loadExecutionConfig({profile:'daily'});assert.equal(pr.account.username,'test_e2e_pr@example.com');assert.equal(daily.account.username,'test_e2e_daily@example.com');assert.equal(pr.mode,'mock');assert.equal(pr.runUt,true);assert.deepEqual(pr.cases,['001','002','003','004','006']);
+ const pr=loadExecutionConfig({profile:'pr'}),daily=loadExecutionConfig({profile:'daily'});assert.equal(pr.account.username,'test_e2e_pr@example.com');assert.equal(daily.account.username,'test_e2e_daily@example.com');assert.equal(pr.mode,'mock');assert.equal(pr.runUt,true);assert.deepEqual(pr.cases,['001','002','003','004','005']);
  const value=raw();value.profiles.pr.mode='mock';value.profiles.pr.model={baseUrl:'https://gateway.example/v1/',modelName:'vendor/custom-model',key:{env:'E2E_CUSTOM_KEY'},options:{}};
  const config=validateConfig(value,'pr');assert.equal(config.model.baseUrl,'https://gateway.example/v1');assert.equal(config.model.modelName,'vendor/custom-model');assert.deepEqual(config.model.options,{});assert.equal(validateConfig(value,'daily').model.modelName,'deepseek-flash');assert.equal(configSnapshot(config).settings.model.key.env,'E2E_CUSTOM_KEY');
 });
@@ -35,7 +35,7 @@ test('open-file limits are bounded resource configuration and legacy profiles re
 
 test('case modes resolve per case, form isolated groups, and fingerprint overrides',async()=>{
  const m=await import('./config.mjs');assert.equal(typeof m.caseMode,'function');assert.equal(typeof m.suiteMode,'function');assert.equal(typeof m.executionGroups,'function');
- const value=raw();value.defaults.mode='mock';value.defaults.cases=['001','002','003','004'];value.defaults.caseModes={'004':'real','006':'mock'};const c=validateConfig(value,'pr');assert.equal(m.caseMode(c,'003'),'mock');assert.equal(m.caseMode(c,'004'),'real');assert.equal(m.suiteMode(c),'mixed');assert.deepEqual(m.executionGroups(c),[{mode:'mock',cases:['001','002','003']},{mode:'real',cases:['004']}]);
+ const value=raw();value.defaults.mode='mock';value.defaults.cases=['001','002','003','004'];value.defaults.caseModes={'004':'real','005':'mock'};const c=validateConfig(value,'pr');assert.equal(m.caseMode(c,'003'),'mock');assert.equal(m.caseMode(c,'004'),'real');assert.equal(m.suiteMode(c),'mixed');assert.deepEqual(m.executionGroups(c),[{mode:'mock',cases:['001','002','003']},{mode:'real',cases:['004']}]);
  const forced=validateConfig(value,'pr',{mode:'mock'});assert.equal(m.suiteMode(forced),'mock');assert.notEqual(configSnapshot(forced).hash,configSnapshot(c).hash);
  value.profiles.daily.caseModes={'003':'real'};assert.equal(m.caseMode(validateConfig(value,'daily'),'003'),'real');assert.equal(m.caseMode(validateConfig(value,'pr'),'003'),'mock');
  for(const modes of [{'007':'mock'},{'004':'mixed'},{'004':'REAL'}]){value.defaults.caseModes=modes;assert.throws(()=>validateConfig(value,'pr'));}

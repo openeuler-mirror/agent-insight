@@ -29,13 +29,7 @@ if (selectedCase === '004') {
     'PR Mock、CI 触发及每日调度尚未接入本入口。',
   ];
 }
-if(selectedCase==='005')report.coverageNotes=[
- report.testPlanVersion==='constructed-dataset-v1'?'页面导入 JSON 并新建私有一题数据集，代码从原日志独立计算参考答案；基线使用正式上传的两文件统计 Skill。原内置数据集及 v0 保持不变。':'历史尝试使用内置十题中的固定 root SSH 一题，参考来源口径存在错误，未完成验收。',
- '验证客户端生成新 Trace、主诊断与证据、定向优化、同题最终候选复验及刷新；不代表全部日志类型、全部 Skill/诊断分支均通过。',
- '若优化临时验证实验已归档，使用只读记录、完整性哈希及真实新 Trace 验收；模型业务评分与四字段精确断言分别检查。',
- 'PR Mock、CI 和每日调度尚未接入本入口；006 未执行。',
-];
-if(selectedCase==='006')report.coverageNotes=['只覆盖 thinking-dead-loop 的语义重复一题；真实 RAS 检测、原生中断及同客户端新会话恢复分别验收。','配置下发验收本地文件及实际行为；RAS 已加载页面状态未接入回报时单列缺项，不计通过。','报告由代码生成；业务故障执行、RAS 语义判断和可靠性评分会调用 DeepSeek。','PR Mock、CI 和每日调度尚未接入本入口。'];
+if(selectedCase==='005')report.coverageNotes=['只覆盖 thinking-dead-loop 的语义重复一题；真实 RAS 检测、原生中断及同客户端新会话恢复分别验收。','配置下发验收本地文件及实际行为；RAS 已加载页面状态未接入回报时单列缺项，不计通过。','报告由代码生成；业务故障执行、RAS 语义判断和可靠性评分会调用 DeepSeek。','PR Mock、CI 和每日调度尚未接入本入口。'];
 report.reproduction = `node test/e2e/run-case.mjs --case ${selectedCase} --key-file /absolute/path/to/deepseek-key.txt`;
 const defectFile = path.join(root, 'defect.json');
 if (fs.existsSync(defectFile)) report.findings = [JSON.parse(fs.readFileSync(defectFile))];

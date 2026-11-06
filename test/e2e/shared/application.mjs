@@ -28,7 +28,7 @@ export function prepareExternalWorkspace(project,runId){
 }
 
 export function prepareApplicationModelRuntime(ctx,env,port){
- if(!['003','004','005'].includes(ctx.selectedCase))return;
+ if(!['003','004'].includes(ctx.selectedCase))return;
  ctx.agentWorkspaceRoot=prepareExternalWorkspace(ctx.project,ctx.runId);env.GENERAL_AGENT_WORKSPACE_ROOT=ctx.agentWorkspaceRoot;env.PORT=String(port);env.OPENCODE_DISABLE_MODELS_FETCH='true';env.OPENCODE_CONFIG_CONTENT=JSON.stringify(deepSeekSmokeConfig(ctx));
 }
 
@@ -81,7 +81,7 @@ export async function startApplication(ctx) {
   const env = { ...process.env, HOME: hostHome, AGENT_INSIGHT_HOME: appHome, AGENT_INSIGHT_PORT: String(port), DATABASE_URL: `file:${path.join(appHome, 'data/witty_insight.db')}`, LOGIN_MODE: 'standalone', NODE_OPTIONS: '--max-old-space-size=4096' };
   prepareApplicationModelRuntime(ctx,env,port);
   for (const name of ['AGENT_INSIGHT_DATA_DIR', 'DB_HOST', 'ORGANIZATION_MODE', 'DEFAULT_MODEL_1_API_KEY', 'DEFAULT_MODEL_2_API_KEY']) delete env[name];
-  if(ctx.selectedCase==='006'){
+  if(ctx.selectedCase==='005'){
     ctx.agentWorkspaceRoot=prepareExternalWorkspace(ctx.project,ctx.runId);
     fs.mkdirSync(path.join(appHome,'client'),{recursive:true,mode:0o700});
     const bin=path.join(ctx.root,'server-bin');fs.mkdirSync(bin,{recursive:true});fs.symlinkSync(process.env.E2E_PYTHON||'/opt/homebrew/bin/python3',path.join(bin,'python3'));
@@ -114,7 +114,7 @@ export async function startApplication(ctx) {
     const synced=await command('node',['scripts/sync_admin_api_key.js',String(port),ctx.baseUrl],{cwd:ctx.project,env:appEnv,log:path.join(ctx.root,'private/startup.log'),timeout:30000});assert.equal(synced.code,0,'Production admin key initialization failed');
   }
   ctx.appHome = appHome;
-  return { fiPython:ctx.fiPython, applicationRoot: appHome, agentWorkspaceRoot:ctx.agentWorkspaceRoot, modelRuntimeProfile:['003','004','005'].includes(ctx.selectedCase)?deepSeekSmokeConfig(ctx):undefined, database: path.join(appHome, 'data/witty_insight.db'), loginMode: 'standalone', startup: production?'scripts/control-server.js':'scripts/develop_start.sh', applicationMode:production?'production':'dev', ...(build?{build,dispatchPort:ctx.dispatchPort}:{}), port };
+  return { fiPython:ctx.fiPython, applicationRoot: appHome, agentWorkspaceRoot:ctx.agentWorkspaceRoot, modelRuntimeProfile:['003','004'].includes(ctx.selectedCase)?deepSeekSmokeConfig(ctx):undefined, database: path.join(appHome, 'data/witty_insight.db'), loginMode: 'standalone', startup: production?'scripts/control-server.js':'scripts/develop_start.sh', applicationMode:production?'production':'dev', ...(build?{build,dispatchPort:ctx.dispatchPort}:{}), port };
 }
 
 function descendants(root) {

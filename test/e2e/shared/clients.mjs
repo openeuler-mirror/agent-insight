@@ -29,7 +29,7 @@ export async function prepareClients(ctx) {
       env.AGENT_INSIGHT_CLIENT_SOURCE = 'local';
       env.PIP_CACHE_DIR = path.join(project, 'exclude/core-e2e/cache/pip');
       env.OPENCODE_DISABLE_MODELS_FETCH = 'true';
-      if(ctx.selectedCase==='006')env.AGENT_INSIGHT_FI_CWD=ctx.agentWorkspaceRoot;
+      if(ctx.selectedCase==='005')env.AGENT_INSIGHT_FI_CWD=ctx.agentWorkspaceRoot;
       if(kind==='ras'){
         const configured=await command('npm',['config','get','registry'],{cwd:project,timeout:15000});assert.equal(configured.code,0);
         const registry=new URL(process.env.E2E_NPM_REGISTRY||configured.output.trim());assert.equal(registry.protocol,'https:');assert.ok(!registry.username&&!registry.password,'Registry credentials must not enter runtime metadata');
@@ -97,7 +97,7 @@ export async function prepareClients(ctx) {
       secrets.push(registered.deviceCredential);
       const configFile = path.join(env.AGENT_INSIGHT_HOME, 'client/config.json');
       const config = JSON.parse(fs.readFileSync(configFile));
-      writePrivate(configFile, { ...config, ...(ctx.selectedCase==='006'?{fiCwd:ctx.agentWorkspaceRoot,workspaceBase:ctx.agentWorkspaceRoot}:{}), insightBaseUrl: baseUrl, user: account.username, clientId: registered.clientId, deviceCredential: registered.deviceCredential, websocketUrl: registered.control?.websocketUrl || '', pollUrl: registered.control?.pollUrl || '', maxParallelFi: 1 });
+      writePrivate(configFile, { ...config, ...(ctx.selectedCase==='005'?{fiCwd:ctx.agentWorkspaceRoot,workspaceBase:ctx.agentWorkspaceRoot}:{}), insightBaseUrl: baseUrl, user: account.username, clientId: registered.clientId, deviceCredential: registered.deviceCredential, websocketUrl: registered.control?.websocketUrl || '', pollUrl: registered.control?.pollUrl || '', maxParallelFi: 1 });
       const fd = fs.openSync(path.join(root, 'private', `${kind}-client.log`), 'a', 0o600);
       const child = spawn(process.execPath, [path.join(env.AGENT_INSIGHT_HOME, 'client/runtime/reliability-client.cjs')], { env, cwd: clientRoot, detached: true, stdio: ['ignore', fd, fd] });fs.closeSync(fd);
       ctx.children.push(child);
@@ -107,7 +107,7 @@ export async function prepareClients(ctx) {
       assert.equal(online.faultInjection?.ready, true);
       const marker = `CLIENT-READY-${ctx.runId}-${kind}`;
       const args = ['run', ...(kind === 'ordinary' ? ['--standalone', '--auto'] : []), '--model', model, '--agent', 'build', '--format', 'json', '--title', `E2E preparation ${kind}`, `请只回复 ${marker}`];
-      const native = await command('opencode', args, { env: { ...env, RAS_DEBUG: kind === 'ras' ? '1' : '0' }, cwd: ctx.selectedCase==='006'?ctx.agentWorkspaceRoot:clientRoot, log: path.join(root, 'private', `${kind}-native.log`), timeout: 180000 });
+      const native = await command('opencode', args, { env: { ...env, RAS_DEBUG: kind === 'ras' ? '1' : '0' }, cwd: ctx.selectedCase==='005'?ctx.agentWorkspaceRoot:clientRoot, log: path.join(root, 'private', `${kind}-native.log`), timeout: 180000 });
       assert.equal(native.code, 0, `OpenCode ${version} could not finish the real model probe`);
       const events = native.output.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
       const answered = events.find(e => e.type === 'text' && e.part?.text?.includes(marker));
@@ -128,11 +128,11 @@ export async function prepareClients(ctx) {
 }
 
 export async function prepareFixtures(ctx) {
-  await ctx.stage('fixtures', '后续五例的测试账号、日志文件与 005 原始内置资源就绪，不执行业务场景', async () => {
+  await ctx.stage('fixtures', '后续四例的测试账号与日志文件、003 的内置参考资源就绪，不执行业务场景', async () => {
     const data = fs.readFileSync(path.join(ctx.project, 'public/example/messages'));
     assert.equal(sha(data), '6d50cefa82380651f910df35fda0995a237a3c788b7b2e3d2d37e51fb9debca9');
     const resources = [];
-    for (let i = 2; i <= 6; i++) {
+    for (let i = 2; i <= 5; i++) {
       const username = ctx.testUsername || `test_e2e_${ctx.runId}_00${i}@example.com`;
       const r = await fetch(ctx.baseUrl + '/api/auth/apikey', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username }) });assert.ok(r.ok);
       const account = await r.json();ctx.secrets.push(account.apiKey);
@@ -140,7 +140,7 @@ export async function prepareFixtures(ctx) {
       const root = path.join(ctx.root, `fixture-00${i}`);fs.mkdirSync(path.join(root, 'fixtures'), { recursive: true });
       fs.writeFileSync(path.join(root, 'fixtures/messages'), data);
       let builtin = null;
-      if (i === 5) {
+      if (i === 3) {
         const response = await fetch(ctx.baseUrl + `/api/agent-datasets?user=${encodeURIComponent(username)}`, { headers: { 'x-witty-api-key': account.apiKey } });assert.ok(response.ok);
         const datasets = await response.json();const selected = datasets.find(d => d.name === 'messages 日志分析（内置示例）');assert.ok(selected, 'Builtin dataset missing');
         const cases = typeof selected.casesJson === 'string' ? JSON.parse(selected.casesJson) : selected.cases;

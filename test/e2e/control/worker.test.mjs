@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dockerArgs, validateReport, runQueuedJob, extractContainerReport } from './worker-core.mjs';
 
-const job={caseIds:['001','002','003','004','005','006'],id:'f'.repeat(32),repository:'gyctl/agent-insight',pr:1,headSha:'a'.repeat(40),baseSha:'b'.repeat(40),mode:'mock'};
+const job={caseIds:['001','002','003','004','005'],id:'f'.repeat(32),repository:'gyctl/agent-insight',pr:1,headSha:'a'.repeat(40),baseSha:'b'.repeat(40),mode:'mock'};
 test('container reports survive tmpfs teardown through a bounded final JSON record',()=>{
  assert.deepEqual(extractContainerReport('UT output\nE2E_REPORT_JSON:{"status":"BLOCKED"}\n'),{status:'BLOCKED'});
  assert.throws(()=>extractContainerReport('no report'),/missing/);
@@ -16,9 +16,9 @@ test('PR executor has no network, host credentials, Docker socket or privileged 
  assert.throws(()=>dockerArgs({image:'node:latest',checkout:'/tmp/a',output:'/tmp/b',job}),/digest/);
 });
 test('worker never promotes missing, stale, interrupted or partial reports to success',()=>{
- const result={selected:job.caseIds,mode:'mock',testedSha:job.headSha,runId:'pr-'+job.id,status:'PASS',npmTest:{status:'PASS',fullSuiteComplete:true,interrupted:false,observedSummary:{tests:1,pass:1,fail:0,skipped:0,cancelled:0,todo:0}},scenarios:Array.from({length:6},(_,i)=>({id:String(i+1).padStart(3,'0'),status:'PASS'})),endedAt:new Date().toISOString()};
+ const result={selected:job.caseIds,mode:'mock',testedSha:job.headSha,runId:'pr-'+job.id,status:'PASS',npmTest:{status:'PASS',fullSuiteComplete:true,interrupted:false,observedSummary:{tests:1,pass:1,fail:0,skipped:0,cancelled:0,todo:0}},scenarios:Array.from({length:5},(_,i)=>({id:String(i+1).padStart(3,'0'),status:'PASS'})),endedAt:new Date().toISOString()};
  assert.throws(()=>validateReport(result,{job,testedSha:job.baseSha,exitCode:0}),/SHA/);
- assert.throws(()=>validateReport({...result,scenarios:[]},{job,testedSha:job.headSha,exitCode:0}),/six/);
+ assert.throws(()=>validateReport({...result,scenarios:[]},{job,testedSha:job.headSha,exitCode:0}),/five/);
  assert.throws(()=>validateReport(result,{job,testedSha:job.headSha,exitCode:1}),/exit/);
  assert.throws(()=>validateReport({...result,npmTest:{...result.npmTest,fullSuiteComplete:false}},{job,testedSha:job.headSha,exitCode:0}),/UT/);
  assert.throws(()=>validateReport(result,{job,testedSha:job.headSha,exitCode:0}),/stages/);
@@ -31,9 +31,9 @@ test('stale or closed PR is not executed and failed execution never publishes PA
  const failure=await runQueuedJob(job,{readPull:async()=>current,execute:async()=>{throw Error('crashed');},isCurrent:()=>true});
  assert.equal(failure.state,'ERROR');assert.equal(failure.result.status,'BLOCKED');
 });
-test('initial PR API outage still produces a six-case blocked report',async()=>{
+test('initial PR API outage still produces a five-case blocked report',async()=>{
  const outcome=await runQueuedJob(job,{readPull:async()=>{throw Error('timeout');},isCurrent:()=>true,execute:async()=>assert.fail('must not execute')});
- assert.equal(outcome.state,'ERROR');assert.equal(outcome.result.status,'BLOCKED');assert.equal(outcome.result.scenarios.length,6);
+ assert.equal(outcome.state,'ERROR');assert.equal(outcome.result.status,'BLOCKED');assert.equal(outcome.result.scenarios.length,5);
 });
 test('real PR container only receives relay token and a dedicated persistent lane',()=>{
  const real={...job,mode:'real'};assert.throws(()=>dockerArgs({image:'sha256:'+'c'.repeat(64),checkout:'/tmp/source',job:real}),/relay/);
@@ -48,12 +48,12 @@ test('bounded disk workspace replaces RAM-backed checkout without changing read-
  assert.ok(!args.some(a=>a.startsWith('/work:rw')));
  assert.ok(args.some(a=>a.includes('dst=/work/node_modules,readonly')));
 });
-test('active profile requires full UT and merged 003 stages; 005 and 006 stay unexecuted',async()=>{
+test('active profile requires full UT and merged 003 stages; fault recovery stays unexecuted',async()=>{
  const {requiredStagesFor}=await import('../shared/core.mjs');const selected=['001','002','003','004'];const five={...job,caseIds:selected,profile:'core-five'};
- const report={mode:'mock',testedSha:job.headSha,runId:'pr-'+job.id,status:'PASS',selected,endedAt:new Date().toISOString(),npmTest:{status:'PASS',fullSuiteComplete:true,interrupted:false,observedSummary:{tests:1,pass:1,fail:0,skipped:0,cancelled:0,todo:0}},scenarios:[...selected.map(id=>({id,status:'PASS',stages:requiredStagesFor(id).map(id=>({id,status:'PASS'}))})),{id:'005',status:'NOT_RUN',stages:[]},{id:'006',status:'NOT_RUN',stages:[]}]};
+ const report={mode:'mock',testedSha:job.headSha,runId:'pr-'+job.id,status:'PASS',selected,endedAt:new Date().toISOString(),npmTest:{status:'PASS',fullSuiteComplete:true,interrupted:false,observedSummary:{tests:1,pass:1,fail:0,skipped:0,cancelled:0,todo:0}},scenarios:[...selected.map(id=>({id,status:'PASS',stages:requiredStagesFor(id).map(id=>({id,status:'PASS'}))})),{id:'005',status:'NOT_RUN',stages:[]}]};
  assert.equal(validateReport(report,{job:five,testedSha:job.headSha,exitCode:0}).status,'PASS');
  assert.throws(()=>validateReport({...report,selected:['001']},{job:five,testedSha:job.headSha,exitCode:0}),/selection/);
- assert.throws(()=>validateReport({...report,scenarios:report.scenarios.map(s=>s.id==='006'?{...s,status:'PASS'}:s)},{job:five,testedSha:job.headSha,exitCode:0}),/excluded/);
+ assert.throws(()=>validateReport({...report,scenarios:report.scenarios.map(s=>s.id==='005'?{...s,status:'PASS'}:s)},{job:five,testedSha:job.headSha,exitCode:0}),/excluded/);
  const args=dockerArgs({image:'sha256:'+'c'.repeat(64),checkout:'/tmp/source',job:five});assert.ok(args.includes('E2E_PROFILE=core-five'));
 });
 test('completed real execution is preserved when freshness API temporarily fails',async()=>{
@@ -62,7 +62,7 @@ test('completed real execution is preserved when freshness API temporarily fails
 test('trusted config controls container budgets and rejects report/config mismatches',async()=>{
  const {loadExecutionConfig,configSnapshot}=await import('../shared/config.mjs');const config=loadExecutionConfig({overrides:{mode:'mock',resources:{cpus:3,memoryMiB:8192},runUt:false}}),snapshot=configSnapshot(config),configured={...job,mode:config.mode,caseIds:config.cases,runUt:false,configHash:snapshot.hash};
  const args=dockerArgs({image:'sha256:'+'c'.repeat(64),checkout:'/tmp/source',job:{...configured,mode:'mock'},executionConfig:{...config,mode:'mock'}});assert.ok(args.includes('--memory=8192m'));assert.ok(args.includes('--cpus=3'));assert.ok(args.includes('E2E_SKIP_UT=1'));assert.ok(args.some(v=>v.startsWith('E2E_EXECUTION_CONFIG=')));
- const report={mode:config.mode,runId:'pr-'+job.id,testedSha:job.headSha,endedAt:new Date().toISOString(),status:'FAIL',selected:config.cases,configuration:snapshot,scenarios:['001','002','003','004','005','006'].map(id=>({id,status:config.cases.includes(id)?'FAIL':'NOT_RUN',stages:[]}))};
+ const report={mode:config.mode,runId:'pr-'+job.id,testedSha:job.headSha,endedAt:new Date().toISOString(),status:'FAIL',selected:config.cases,configuration:snapshot,scenarios:['001','002','003','004','005'].map(id=>({id,status:config.cases.includes(id)?'FAIL':'NOT_RUN',stages:[]}))};
  assert.doesNotThrow(()=>validateReport(report,{job:configured,testedSha:job.headSha,exitCode:1}));assert.throws(()=>validateReport({...report,configuration:{...snapshot,hash:'0'.repeat(64)}},{job:configured,testedSha:job.headSha,exitCode:1}),/config/i);
 });
 test('configuration mismatch is reported distinctly before any business execution',async()=>{
@@ -70,7 +70,7 @@ test('configuration mismatch is reported distinctly before any business executio
 });
 test('mixed report cannot mislabel a real scenario as mock under the same configuration hash',async()=>{
  const {loadExecutionConfig,configSnapshot}=await import('../shared/config.mjs'),config=loadExecutionConfig(),snapshot=configSnapshot(config);
- const configured={...job,mode:'mixed',caseIds:config.cases,configHash:snapshot.hash};const report={runId:'pr-'+job.id,mode:'mixed',testedSha:job.headSha,endedAt:new Date().toISOString(),status:'FAIL',selected:config.cases,configuration:snapshot,scenarios:['001','002','003','004','005','006'].map(id=>({id,status:config.cases.includes(id)?'FAIL':'NOT_RUN',mode:config.cases.includes(id)?'mock':undefined,stages:[]}))};
+ const configured={...job,mode:'mixed',caseIds:config.cases,configHash:snapshot.hash};const report={runId:'pr-'+job.id,mode:'mixed',testedSha:job.headSha,endedAt:new Date().toISOString(),status:'FAIL',selected:config.cases,configuration:snapshot,scenarios:['001','002','003','004','005'].map(id=>({id,status:config.cases.includes(id)?'FAIL':'NOT_RUN',mode:config.cases.includes(id)?'mock':undefined,stages:[]}))};
  assert.throws(()=>validateReport(report,{job:configured,testedSha:job.headSha,exitCode:1}),/mode/i);report.scenarios[0].mode='real';assert.doesNotThrow(()=>validateReport(report,{job:configured,testedSha:job.headSha,exitCode:1}));
 });
 

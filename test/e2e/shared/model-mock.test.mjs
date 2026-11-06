@@ -57,8 +57,8 @@ test('flow extraction includes both core actions after YAML frontmatter',()=>{
  const r=JSON.parse(coreMockReply({messages:[{role:'user',content:text}]}).content);assert.equal(r.steps.length,2);
 });
 test('FI mock loads injected native Skill then emits a bounded repeated stream fixture',()=>{
- const input={tools,messages:[{role:'user',content:'执行 thinking-dead-loop 场景2'}]};let r=coreMockReply(input,{caseId:'006'});assert.equal(r.tool_calls[0].function.name,'skill');
- r=coreMockReply({...input,messages:[...input.messages,{role:'tool',content:'<skill_content name="thinking-dead-loop">实际注入技能</skill_content>'}]},{caseId:'006'});assert.ok(r.content.length>=4000);assert.ok((r.content.match(/磁盘/g)||[]).length>10);
+ const input={tools,messages:[{role:'user',content:'执行 thinking-dead-loop 场景2'}]};let r=coreMockReply(input,{caseId:'005'});assert.equal(r.tool_calls[0].function.name,'skill');
+ r=coreMockReply({...input,messages:[...input.messages,{role:'tool',content:'<skill_content name="thinking-dead-loop">实际注入技能</skill_content>'}]},{caseId:'005'});assert.ok(r.content.length>=4000);assert.ok((r.content.match(/磁盘/g)||[]).length>10);
 });
 test('native dataset task resolves tilde against the actual client home from execution context',()=>{
  const r=coreMockReply({tools,messages:[{role:'system',content:'用户输入中的 ~/ 指客户端真实用户目录 /work/isolated/host，读取时转换为该绝对路径。'},{role:'user',content:'使用 e2e-dataset-mock-005 分析 ~/.agent-insight/example/messages。'},{role:'tool',content:'<skill_content name="e2e-dataset-mock-005">scripts/analyze_logs.py\nBase directory for this skill: /work/isolated/skill\n</skill_content>'}]});

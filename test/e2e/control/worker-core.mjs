@@ -26,7 +26,7 @@ export function dockerArgs({image,checkout,harness,job,name='agent-insight-pr-'+
   if(real){mounts.push(`type=bind,src=${path.resolve(tokenFile)},dst=/run/e2e-relay.key,readonly`);}
   if(job.profile)selectedCases(job.profile);
   if(caseId&&job.profile)throw Error('Case and profile cannot be combined');
-  if(caseId&&!/^00[1-6]$/.test(caseId))throw Error('Invalid case ID');
+  if(caseId&&!/^00[1-5]$/.test(caseId))throw Error('Invalid case ID');
   if(mounts.some(m=>m.split(',').length!==4))throw Error('Commas are not supported in mount paths');
   return ['run','--init','--log-driver=none','--name',name,'--label','agent-insight.e2e='+job.id,'--network',real?network:'none','--read-only','--cap-drop=ALL','--security-opt','no-new-privileges','--memory='+r.memoryMiB+'m','--memory-swap='+r.memoryMiB+'m','--cpus='+r.cpus,'--ulimit',`nofile=${r.openFiles}:${r.openFiles}`,'--pids-limit='+r.pids,'--user=1000:1000',
     ...(workspace?[]:['--tmpfs','/work:rw,exec,uid=1000,gid=1000,size=4g']),'--tmpfs',`/tmp:rw,exec,uid=1000,gid=1000,size=${r.tmpMiB}m`,'--tmpfs','/output:rw,uid=1000,gid=1000,size=32m','--tmpfs',`/state:rw,uid=1000,gid=1000,size=${r.stateMiB}m`,
@@ -35,7 +35,7 @@ export function dockerArgs({image,checkout,harness,job,name='agent-insight-pr-'+
 export function validateReport(report,{job,testedSha,exitCode,caseId}){
   if(report.testedSha!==testedSha)throw Error('Report SHA mismatch');
   if(report.mode!==(job.mode||'real')||report.runId!==(job.runId||'pr-'+job.id)||!report.endedAt)throw Error('Report identity or completion mismatch');
-  if(report.scenarios?.length!==6||cases.some(c=>report.scenarios.filter(s=>s.id===c.id).length!==1))throw Error('Expected six unique scenario results');
+  if(report.scenarios?.length!==cases.length||cases.some(c=>report.scenarios.filter(s=>s.id===c.id).length!==1))throw Error('Expected five unique scenario results');
   const selected=assertSelection(report,job.profile,caseId,job.caseIds);
   if(job.configHash&&(report.configuration?.hash!==job.configHash||configSnapshot(report.configuration.settings).hash!==job.configHash))throw Error('Report configuration mismatch');
   if(job.configHash&&report.mode==='mixed'&&(suiteMode(report.configuration.settings)!=='mixed'||report.scenarios.some(row=>selected.includes(row.id)&&row.mode!==caseMode(report.configuration.settings,row.id))))throw Error('Report case mode mismatch');

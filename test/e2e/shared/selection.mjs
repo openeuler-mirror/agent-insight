@@ -1,7 +1,7 @@
 import {cases} from './catalog.mjs';
 export function selectedCases(profile){
  if(profile!==undefined&&profile!=='core-five')throw Error('Unknown execution profile');
- return cases.filter(c=>!c.mergedInto&&(profile!=='core-five'||c.id!=='006')).map(c=>c.id);
+ return cases.filter(c=>profile!=='core-five'||c.id!=='005').map(c=>c.id);
 }
 export function assertSelection(report,profile,caseId,configured){
  if(caseId&&!cases.some(c=>c.id===caseId))throw Error('Unknown case');

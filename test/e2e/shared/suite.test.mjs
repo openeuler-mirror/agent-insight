@@ -7,9 +7,9 @@ const pass = id => ({ id, status: 'PASS', stages: requiredStagesFor(id).map(id =
 test('suite attempts all active real cases and continues after independent failure', async () => {
   const called = [];
   const report = await executeSuite({ mode: 'real', runCase: async id => { called.push(id); if(id === '002') throw Error('failed'); return pass(id); } });
-  assert.deepEqual(called, ['001','002','003','004','006']);
+  assert.deepEqual(called, ['001','002','003','004','005']);
   assert.equal(report.scenarios[1].status, 'FAIL');
-  assert.equal(report.scenarios[5].status, 'PASS');
+  assert.equal(report.scenarios[4].status, 'PASS');
   assert.equal(report.status, 'FAIL');
 });
 test('unimplemented mock is blocked without calling the real runner', async () => {
@@ -63,7 +63,7 @@ test('standalone report labels manual server snapshots instead of claiming a PR 
 test('mock suite executes all active adapters without using real model runner', async () => {
  const called=[];
  const report=await executeSuite({mode:'mock',runCase:()=>{throw Error('real fallback forbidden');},runMockCase:async id=>{called.push(id);return pass(id);}});
- assert.deepEqual(called,['001','002','003','004','006']);assert.equal(report.status,'PASS');
+ assert.deepEqual(called,['001','002','003','004','005']);assert.equal(report.status,'PASS');
 });
 test('suite records separate UT and E2E timestamps for PR timing',async()=>{
  const r=await executeSuite({mode:'mock',selected:['002'],runMockCase:async id=>pass(id),runUt:async()=>({status:'PASS',fullSuiteComplete:true})});

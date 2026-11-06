@@ -25,13 +25,12 @@ export function parseUtResult(log, execution) {
     reason: fileTimeouts.length ? '测试文件进程超时中断，汇总计数仅为观测下限，不能声称全套测试执行完整' : interrupted ? '测试进程中断，不能给出完整通过结论' : !consistent ? '缺少有效的全套尾部汇总' : counts.fail ? '失败尚未逐项归因；不能将环境依赖失败直接认定为产品缺陷' : counts.pass === 0 ? '没有实际通过的用例，不能将全部跳过记为通过' : '' };
 }
 
-export async function executeSuite({ mode, caseModes = {}, selected = cases.filter(c=>!c.mergedInto).map(c=>c.id), runCase, runMockCase, runUt, runBuild, isCancelled=()=>false, onUpdate = async()=>{} }) {
+export async function executeSuite({ mode, caseModes = {}, selected = cases.map(c=>c.id), runCase, runMockCase, runUt, runBuild, isCancelled=()=>false, onUpdate = async()=>{} }) {
   if (!['real','mock','mixed'].includes(mode)) throw Error('Mode must be real, mock or mixed');
   if(selected.some(id=>!['real','mock'].includes(caseModes[id]||(mode==='mixed'?undefined:mode))))throw Error('Missing or invalid case mode');
-  if(selected.includes('005'))throw Error('Scenario 005 is retired and merged into 003');
   if (!selected.length || selected.some(id=>!cases.some(c=>c.id===id))) throw Error('Unknown scenario');
   const report = { mode, startedAt: new Date().toISOString(), selected,
-    scenarios: cases.map(c=>({id:c.id,title:c.title,status:'NOT_RUN',...(selected.includes(c.id)?{mode:caseModes[c.id]||mode}:{reason:c.mergedInto?'已并入 '+c.mergedInto+'，本轮不重复执行':'按本轮范围配置未执行'}),stages:[]})), npmTest:{status:'NOT_RUN'}, status:'RUNNING' };
+    scenarios: cases.map(c=>({id:c.id,title:c.title,status:'NOT_RUN',...(selected.includes(c.id)?{mode:caseModes[c.id]||mode}:{reason:'按本轮范围配置未执行'}),stages:[]})), npmTest:{status:'NOT_RUN'}, status:'RUNNING' };
   if(runBuild){
     report.productionBuild={status:'RUNNING'};await onUpdate(report);
     try{report.productionBuild=await runBuild();}catch{report.productionBuild={status:'FAIL',reason:'生产编译失败，查看受限编译日志'};}

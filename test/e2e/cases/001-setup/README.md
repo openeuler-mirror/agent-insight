@@ -18,4 +18,4 @@
 node test/e2e/run.mjs --case 001 --mode real --key-file /absolute/path/to/deepseek-key.txt
 ```
 
-使用新 runId；读取报告中首个失败阶段、版本与受限日志。公共前置来自 shared，不依赖先运行其他场景。Mock 适配尚未完成时明确阻塞；006 真实入口暂停。历史通过不能抵扣本轮失败。
+使用新 runId；读取报告中首个失败阶段、版本与受限日志。公共前置来自 shared，不依赖先运行其他场景。Mock 仅替换模型接口；历史通过不能抵扣本轮失败。

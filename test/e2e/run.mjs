@@ -16,7 +16,7 @@ import { redact } from './shared/core.mjs';
 
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const {values}=parseArgs({options:{'check-config':{type:'boolean'},config:{type:'string'},'skip-ut':{type:'boolean'},all:{type:'boolean'},profile:{type:'string'},case:{type:'string'},mode:{type:'string'},ut:{type:'boolean'},prepare:{type:'boolean'},list:{type:'boolean'},help:{type:'boolean'},lane:{type:'string'},'state-dir':{type:'string'},'key-file':{type:'string'},'run-id':{type:'string'},'ut-timeout-ms':{type:'string'}}});
-if(values.help){console.log('node test/e2e/run.mjs [--config file] [--profile pr|daily|core-five|--all|--case 002] [--mode mock|real] [--ut|--skip-ut] [--key-file /path/to/key] [--run-id id]\n--prepare 安装测试依赖及 Chromium；--list 查看场景。默认001 Real、002/003/004/006 Mock；005已合并。生产编译失败即停止UT/E2E。显式--mode覆盖逐例模式，--all会包含006。未完成项不能算通过。');process.exit(0);}
+if(values.help){console.log('node test/e2e/run.mjs [--config file] [--profile pr|daily|core-five|--all|--case 002] [--mode mock|real] [--ut|--skip-ut] [--key-file /path/to/key] [--run-id id]\n--prepare 安装测试依赖及 Chromium；--list 查看场景。默认001 Real、002/003/004/005 Mock。生产编译失败即停止UT/E2E。显式--mode覆盖逐例模式，--all执行001–005。未完成项不能算通过。');process.exit(0);}
 if(values.list){console.log(cases.map(c=>c.id+' '+c.title).join('\n'));process.exit(0);}
 if(values.prepare){
   const install=await command('npm',['ci','--prefix','test/e2e','--no-audit','--no-fund'],{cwd:project,timeout:300000});
@@ -31,7 +31,7 @@ const overrides={...(values.mode?{mode:values.mode}:{}),...(values.ut?{runUt:tru
 if(values['key-file'])overrides.model={key:{file:path.resolve(values['key-file'])}};
 if(values['ut-timeout-ms'])overrides.timeouts={utMs:Number(values['ut-timeout-ms'])};
 const config=loadExecutionConfig({file:values.config,profile:executionProfile,overrides});values.mode=config.mode;
-const selected=values.case?[values.case]:values.all?cases.filter(c=>!c.mergedInto).map(c=>c.id):values.profile==='core-five'?selectedCases('core-five'):config.cases;
+const selected=values.case?[values.case]:values.all?cases.map(c=>c.id):values.profile==='core-five'?selectedCases('core-five'):config.cases;
 config.cases=selected;
 const effectiveMode=suiteMode(config);
 if(values.profile&&!['pr','daily','core-five'].includes(values.profile))throw Error('Unknown profile');
