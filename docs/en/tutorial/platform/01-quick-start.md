@@ -35,6 +35,8 @@ Open the dashboard and sign in using the configured deployment mode:
 - `LOGIN_MODE=idaas_oauth`: choose unified identity login and authenticate through IDaaS. Its unique UUID becomes the local account and data owner. The sidebar prefers an account alias when provided, otherwise the UUID. Signing out and back in returns to unified authorization.
 - Legacy `ORGANIZATION_MODE=true`: keep using the existing organization gateway and Cookie flow; this is different from IDaaS OAuth.
 
+If refreshing encounters a network error or a temporary server failure, stored credentials are retained, but authentication is not considered successful. Refresh after connectivity returns to verify your identity again. An explicit authentication rejection (401/403) requires signing in again.
+
 ![Agent Insight home](../../../images/home.png)
 
 With `scripts/develop_start.sh`, IDaaS mode checks status for readiness without creating an `admin` Key. Existing client Keys remain intact; obtain a missing Key from installation guidance after first login.

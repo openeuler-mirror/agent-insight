@@ -79,6 +79,9 @@ changefreq: monthly
    - `LOGIN_MODE=idaas_oauth`：点击“统一身份登录”，在 IDaaS 完成认证；平台使用 IDaaS 返回的唯一 UUID 作为本地账号和数据归属；人员接口返回账号别名时，侧边栏优先显示该别名，否则显示 UUID；用户可从侧边栏退出当前网页账号，再次登录仍进入统一身份授权。
    - 历史 `ORGANIZATION_MODE=true`：继续使用原组织网关和 Cookie 登录，不等同于 IDaaS OAuth 登录。
 
+   刷新时如遇网络中断或服务端临时故障，平台会保留登录凭据，但不会把未完成的认证算作成功。
+   网络恢复后刷新可重新验证身份；服务器明确拒绝认证（401／403）时需要重新登录。
+
    使用 `scripts/develop_start.sh` 启动时，IDaaS OAuth 模式只检查状态接口确认服务就绪，不会创建 `admin` Key；已有客户端 Key 保持不变，没有 Key 时在首次登录后从安装指导获取。
 
    OpenCode 上报使用的 API Key 必须属于当前登录账号，否则普通链路与可靠性链路都会因
