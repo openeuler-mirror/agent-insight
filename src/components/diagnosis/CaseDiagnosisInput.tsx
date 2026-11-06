@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, CheckCircle2, ChevronDown, Sparkles, Workflow } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Sparkles, Workflow } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
 import { safeUUID } from '@/lib/safe-uuid';
@@ -20,6 +20,7 @@ export interface DiagnosisResultOption {
   verdict: EvalVerdict | null;
   score: number | null;
   summary: string | null;
+  revision?: string;
 }
 
 export function defaultDiagnosisResultIds(results: DiagnosisResultOption[]): string[] {
@@ -73,14 +74,21 @@ export function CaseDiagnosisInput({
   const submitting = useRef(false);
   const [runs, setRuns] = useState<Array<{ id: string; status: string; createdAt: string }>>([]);
   const url = `/api/experiments/${encodeURIComponent(experimentId)}/cases/${encodeURIComponent(caseId)}/diagnoses`;
-  const [refresh, setRefresh] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const selectionKey = JSON.stringify({ url, ids: selectedResultIds, traceAvailable, refresh, results: results.filter(result => selectedResultIds.includes(result.id)) });
-  const activePreview = preview?.selectionKey === selectionKey ? preview : null;
-  const visibleError = error?.selectionKey === selectionKey ? error.message : '';
+  const [retry, setRetry] = useState(0);
   const selectedResults = selectedResultIds
     .map((id) => results.find((result) => result.id === id))
     .filter((result): result is DiagnosisResultOption => Boolean(result));
+  const selectionKey = JSON.stringify({
+    url,
+    traceAvailable,
+    retry,
+    results: selectedResults
+      .map(result => ({ id: result.id, revision: result.revision ?? JSON.stringify(result) }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  });
+  const activePreview = preview?.selectionKey === selectionKey ? preview : null;
+  const visibleError = error?.selectionKey === selectionKey ? error.message : '';
+  const preparing = traceAvailable && selectedResults.length > 0 && !activePreview && !visibleError;
   const completedCount = results.filter((result) => result.status === 'done').length;
 
   useEffect(() => {
@@ -97,30 +105,31 @@ export function CaseDiagnosisInput({
 
   useEffect(() => {
     let active = true;
-    const { ids, traceAvailable: available } = JSON.parse(selectionKey) as { ids: string[]; traceAvailable: boolean };
+    const controller = new AbortController();
+    const selected = JSON.parse(selectionKey) as { results: Array<{ id: string }> };
+    const ids = selected.results.map(result => result.id);
     async function loadPreview() {
-      setPreview(null);
-      setError(null);
-      if (!available || !ids.length) { setLoading(false); return; }
-      setLoading(true);
       try {
         const response = await apiFetch(url, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ resultIds: ids, preview: true }),
+          signal: controller.signal,
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
         if (active) setPreview({ ...data, selectionKey, requestKey: safeUUID() });
       } catch (caught) {
+        if (controller.signal.aborted) return;
         if (active) setError({ selectionKey, message: caught instanceof Error ? caught.message : (zh ? '读取失败' : 'Loading failed') });
-      } finally { if (active) setLoading(false); }
+      }
     }
-    void loadPreview();
-    return () => { active = false; };
-  }, [selectionKey, url, zh]);
+    if (!traceAvailable || !ids.length) return () => { active = false; controller.abort(); };
+    const timer = window.setTimeout(() => void loadPreview(), 250);
+    return () => { active = false; controller.abort(); window.clearTimeout(timer); };
+  }, [selectionKey, traceAvailable, url, zh]);
 
   async function submit() {
-    if (submitting.current || !activePreview || loading) return;
+    if (submitting.current || !activePreview) return;
     submitting.current = true;
     setBusy(true);
     onBusyChange?.(true);
@@ -142,10 +151,6 @@ export function CaseDiagnosisInput({
       onBusyChange?.(false);
     }
   }
-
-  const actionLabel = loading
-    ? (zh ? '正在读取诊断输入…' : 'Loading diagnosis input…')
-    : (zh ? '刷新诊断输入' : 'Refresh diagnosis input');
 
   return (
     <section className="mt-4 overflow-hidden rounded-lg border border-border bg-card">
@@ -174,113 +179,42 @@ export function CaseDiagnosisInput({
                 : (zh ? '评测完成后，可以选择结果发起诊断。' : 'Diagnosis becomes available after evaluation completes.')}
             </p>
           )}
-          <div className={`mt-2 flex items-center gap-2 text-xs ${traceAvailable ? 'text-foreground-secondary' : 'text-error'}`}>
-            <Workflow className="size-3.5" aria-hidden="true" />
-            <span>{traceAvailable
-              ? (zh ? '本次执行 Trace 将自动关联' : 'The evaluated execution Trace will be linked automatically')
-              : (zh ? '缺少被测执行 Trace，暂时无法发起诊断' : 'The evaluated execution Trace is missing')}</span>
+          <div className={`mt-2 flex items-center gap-2 text-xs ${traceAvailable ? 'text-foreground-secondary' : 'text-error'}`} aria-live="polite">
+            {activePreview ? <CheckCircle2 className="size-3.5 text-success" aria-hidden="true" /> : <Workflow className="size-3.5" aria-hidden="true" />}
+            <span>{!traceAvailable
+              ? (zh ? '缺少被测执行 Trace，暂时无法发起诊断' : 'The evaluated execution Trace is missing')
+              : selectedResults.length === 0
+                ? (zh ? '选择评测结果后将自动准备诊断输入' : 'Select evaluation results to prepare diagnosis input automatically')
+                : preparing
+                  ? (zh ? '正在根据所选评测准备诊断输入…' : 'Preparing diagnosis input from the selected results…')
+                  : activePreview
+                    ? (zh ? '诊断输入已根据当前选择自动更新' : 'Diagnosis input is ready for the current selection')
+                    : (zh ? '诊断输入暂未就绪' : 'Diagnosis input is not ready')}</span>
           </div>
         </div>
         <Button
           size="sm"
           className="w-full shrink-0 lg:w-auto"
-          disabled={busy || loading || selectedResults.length === 0 || !traceAvailable}
-          onClick={() => setRefresh(value => value + 1)}
+          disabled={busy || preparing || !activePreview}
+          onClick={() => void submit()}
         >
-          {actionLabel}
-          {!busy && <ArrowRight className="size-4" aria-hidden="true" />}
+          {busy
+            ? (zh ? '正在创建诊断…' : 'Starting diagnosis…')
+            : preparing
+              ? (zh ? '正在准备…' : 'Preparing…')
+              : (zh ? '开始诊断' : 'Start diagnosis')}
+          {!busy && !preparing && <ArrowRight className="size-4" aria-hidden="true" />}
         </Button>
       </div>
 
       {visibleError && (
-        <p role="alert" className="border-t border-error-border bg-error-subtle px-4 py-3 text-xs text-error">
-          {visibleError}
-        </p>
-      )}
-
-        <div className="border-t border-border bg-background-secondary p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h4 className="text-sm font-medium">{zh ? '诊断输入' : 'Diagnosis input'}</h4>
-              <p className="mt-1 text-xs text-foreground-secondary">
-                {zh ? '开始后将创建新的诊断任务；查看已有结果请从历史诊断中选择。' : 'Starting diagnosis creates a new run. Choose a history entry to view an existing result.'}
-              </p>
-            </div>
-            <span className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${activePreview && !loading ? 'bg-success-subtle text-success' : 'bg-background text-foreground-muted'}`} role="status">
-              {activePreview && !loading && <CheckCircle2 className="size-3.5" aria-hidden="true" />}
-              {activePreview && !loading ? (zh ? '输入已就绪' : 'Input ready') : loading ? (zh ? '正在读取输入…' : 'Loading input…') : (zh ? '输入未就绪' : 'Input not ready')}
-            </span>
-          </div>
-
-          <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
-            <div className="rounded-md border border-border bg-card p-3">
-              <dt className="text-foreground-muted">Trace</dt>
-              <dd className="mt-1 break-all font-medium text-foreground">{activePreview?.snapshot.execution.id || '—'}</dd>
-            </div>
-            <div className="rounded-md border border-border bg-card p-3">
-              <dt className="text-foreground-muted">Attempt</dt>
-              <dd className="mt-1 font-medium text-foreground">{activePreview?.snapshot.attempt?.attemptNo ?? '—'}</dd>
-            </div>
-            <div className="rounded-md border border-border bg-card p-3">
-              <dt className="text-foreground-muted">Skill</dt>
-              <dd className="mt-1 break-words font-medium text-foreground">
-                {activePreview?.snapshot.skills.map((skill) => `${skill.name}${skill.version === null ? '' : ` v${skill.version}`}`).join('、')
-                  || (activePreview ? (zh ? '未记录调用 Skill' : 'No recorded Skill invocation') : '—')}
-              </dd>
-            </div>
-          </dl>
-
-          {activePreview && <details className="mt-3 rounded-md border border-border bg-card px-3 py-2 text-xs">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-medium text-foreground">
-              <span>{zh ? '查看任务、输出与评测证据' : 'View task, output, and evaluation evidence'}</span>
-              <ChevronDown className="size-4 text-foreground-muted" aria-hidden="true" />
-            </summary>
-            <div className="mt-3 grid items-stretch gap-3 lg:grid-cols-3">
-              <section className="min-w-0 rounded-md border border-border bg-background p-3">
-                <h5 className="font-medium text-foreground">{zh ? '任务输入' : 'Task input'}</h5>
-                <p className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-foreground-secondary">
-                  {activePreview.snapshot.case.input || '—'}
-                </p>
-              </section>
-              <section className="min-w-0 rounded-md border border-border bg-background p-3">
-                <h5 className="font-medium text-foreground">{zh ? '预期输出' : 'Expected output'}</h5>
-                <p className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-foreground-secondary">
-                  {activePreview.snapshot.case.referenceOutput || (zh ? '未标注预期输出' : 'No expected output')}
-                </p>
-              </section>
-              <section className="min-w-0 rounded-md border border-border bg-background p-3">
-                <h5 className="font-medium text-foreground">{zh ? '实际输出' : 'Actual output'}</h5>
-                <p className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-foreground-secondary">
-                  {activePreview.snapshot.case.actualOutput || '—'}
-                </p>
-              </section>
-            </div>
-            <div className="mt-3 border-t border-border pt-3">
-              <h5 className="font-medium">{zh ? '所选评测依据' : 'Selected evaluation evidence'}</h5>
-              <div className="mt-2 space-y-2">
-                {activePreview.snapshot.results.map((result) => {
-                  const option = results.find((item) => item.id === result.id);
-                  return (
-                    <div key={result.id} className="flex flex-col gap-1 rounded-md bg-background-secondary px-3 py-2 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="min-w-0">
-                        <p className="font-medium text-foreground">{option?.name || result.evaluatorId}</p>
-                        <p className="mt-0.5 break-words text-foreground-secondary">{result.summary || (zh ? '无评测摘要' : 'No evaluation summary')}</p>
-                      </div>
-                      <span className="shrink-0 tabular-nums font-medium text-foreground">{result.humanScore ?? result.score ?? '—'}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </details>}
-
-          <div className="mt-4 flex justify-end">
-            <Button size="sm" disabled={busy || loading || !activePreview} onClick={() => void submit()}>
-              {busy ? (zh ? '正在创建诊断…' : 'Starting diagnosis…') : (zh ? '开始诊断' : 'Start diagnosis')}
-              {!busy && <ArrowRight className="size-4" aria-hidden="true" />}
-            </Button>
-          </div>
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 border-t border-error-border bg-error-subtle px-4 py-3 text-xs text-error">
+          <span>{visibleError}</span>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => setRetry(value => value + 1)}>
+            {zh ? '重试' : 'Retry'}
+          </Button>
         </div>
+      )}
 
       {runs.length > 0 && (
         <details className="border-t border-border px-4 py-3 text-xs">

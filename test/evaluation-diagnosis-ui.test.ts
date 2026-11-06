@@ -46,3 +46,13 @@ test('case detail keeps input, evaluations, diagnosis, and comments in one conti
   assert.ok(evaluations < diagnosis);
   assert.ok(diagnosis < comments);
 });
+
+test('diagnosis input refreshes automatically without repeating Case evidence', () => {
+  const source = readFileSync('src/components/diagnosis/CaseDiagnosisInput.tsx', 'utf8');
+
+  assert.match(source, /setTimeout\(\(\) => void loadPreview\(\), 250\)/);
+  assert.match(source, /正在根据所选评测准备诊断输入/);
+  assert.match(source, /诊断输入已根据当前选择自动更新/);
+  assert.doesNotMatch(source, /刷新诊断输入|查看任务、输出与评测证据/);
+  assert.doesNotMatch(source, /<dt className="text-foreground-muted">(?:Trace|Attempt|Skill)<\/dt>/);
+});

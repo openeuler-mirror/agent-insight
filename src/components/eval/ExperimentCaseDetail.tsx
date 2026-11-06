@@ -604,6 +604,12 @@ export function ExperimentCaseDetail({
       verdict: result.verdict ?? deriveVerdict(effectiveScore(result)) ?? null,
       score: effectiveScore(result),
       summary: displaySummary(result.summary, result.evidence) || null,
+      revision: JSON.stringify({
+        status: result.status, verdict: result.verdict, score: result.score,
+        summary: result.summary, points: result.points, evidence: result.evidence,
+        humanScore: result.humanScore, humanReason: result.humanReason,
+        humanBy: result.humanBy, humanAt: result.humanAt,
+      }),
     })),
     [caseResults, lookup],
   );
