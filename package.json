@@ -75,7 +75,7 @@
     "!scripts/llamaindex_extension/pyproject.toml",
     "!scripts/llamaindex_extension/tests/**",
     "README.zh.md",
-    "README_en.md"
+    "README.md"
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
