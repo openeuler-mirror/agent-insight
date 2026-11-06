@@ -297,6 +297,8 @@ export const en = {
     rasActionResults: 'Action results',
     rasActionSucceeded: 'Succeeded',
     rasActionFailed: 'Failed',
+    rasTerminating: 'Terminating',
+    rasExitFailed: 'Termination failed',
     filters: 'Filters',
     filterType: 'Type',
     filterDuration: 'Duration',
