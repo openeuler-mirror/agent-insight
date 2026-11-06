@@ -25,7 +25,7 @@ test('Benchmark empty state displays host readiness reasons and refreshes while 
   assert.match(wizard, /unavailableBenchmarkTargets\.map/);
   assert.match(wizard, /<strong>\{target\.host\} · \{target\.platform\}<\/strong>/);
   assert.match(wizard, /target\.benchmarkUnavailableReasons\?\.\[selectedDataset\?\.benchmark\?\.adapterKey/);
-  assert.match(wizard, /step === 2 && isBenchmarkDataset && traceMode === 'generate'/);
+  assert.match(wizard, /step === 2 && traceMode === 'generate'/);
 });
 
 test('Benchmark Trace generation follows public Manifest columns and search paths', () => {
