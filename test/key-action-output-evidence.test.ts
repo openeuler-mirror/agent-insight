@@ -39,3 +39,12 @@ test('output evidence cannot fabricate a missing answer and marks bounded excerp
  const i=input();i.actualInteractions=[{role:'user',content:'not an answer'}];assert.equal(build(i).actual_final_response,null);
  i.actualInteractions=[{role:'assistant',content:'a'.repeat(20000)+'END'}];const result=build(i).actual_final_response;assert.equal(result.truncated,true);assert.equal(result.original_characters,20003);assert.ok(result.content.length<=12050);assert.ok(result.content.endsWith('END'));
 });
+test('key-action judgment retains real tool execution when the extracted summary mislabels it as manual analysis',()=>{
+ const i=input();i.actualExtractedSteps=[{step_index:0,name:'manual statistics',description:'read and aggregate log lines'}];
+ i.actualInteractions=[{role:'assistant',content:'',tool_calls:[{id:'script',name:'shell',arguments:JSON.stringify({command:'python3 /skills/logs/scripts/analyze_logs.py /logs/messages; echo EXIT=$?',apiKey:'fixture-tool-secret'}),state:'completed',output:'{"root_ssh_failures":351}\nEXIT=0'}]},{role:'assistant',content:'The script returned 351.'}];
+ const p=build(i);assert.equal(p.actual_tool_evidence.steps.length,1);const step=p.actual_tool_evidence.steps[0];assert.equal(step.kind,'tool');assert.match(step.argsSummary,/python3.*analyze_logs.py/);assert.match(step.outputSummary,/EXIT=0/);assert.equal(step.status,'ok');assert.ok(!JSON.stringify(p.actual_tool_evidence).includes('fixture-tool-secret'));assert.equal(p.actual_tool_evidence.truncated,false);
+});
+test('raw tool evidence preserves errors, bounds event count and never manufactures a tool from a final-answer claim',()=>{
+ const i=input();i.actualInteractions=[{role:'assistant',content:'I executed the script.'}];assert.deepEqual(build(i).actual_tool_evidence.steps,[]);
+ i.actualInteractions=[{role:'assistant',content:'',tool_calls:Array.from({length:40},(_,n)=>({id:'tool-'+n,name:'shell',input:{command:'python3 script.py'},state:'error',output:'failed',error:'command failed'}))}];const p=build(i).actual_tool_evidence;assert.equal(p.steps.length,32);assert.equal(p.total_tool_steps,40);assert.equal(p.truncated,true);assert.equal(p.steps[0].status,'error');
+});
