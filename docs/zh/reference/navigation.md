@@ -24,12 +24,19 @@ title: "参考文档"
 
 ## 评测
 
+- [数据集 HTTP 接口](./evaluation/datasets-api.md)
 - [实验 HTTP 接口](./evaluation/experiments-api.md)
 - [执行环境准备](./evaluation/execution-environment.md)
 - [评估器运行与输出契约](./evaluation/evaluator-output.md)
 - [独立 Benchmark 评测协议](./evaluation/benchmark-protocol.md)
 
+## 持续优化
+
+- [Skill 管理 HTTP 接口](./optimization/skills-api.md)
+
 ## 可靠性
+
+- [可靠性客户端与控制接口](./reliability/client-control-api.md)
 
 - [内置故障覆盖矩阵](./reliability/agent-fault-injection/fault-catalog.md)
 

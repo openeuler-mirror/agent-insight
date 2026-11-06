@@ -3,7 +3,7 @@ title: "English documentation"
 description: "Core tutorials, operations, API contracts, and translation coverage."
 ---
 
-Chinese is the authoritative source. This batch provides 12 English body pages covering first use, operations, and core HTTP/evaluation contracts. English navigation/status pages do not count as translated bodies. Pages linked with a Chinese label remain untranslated.
+Chinese is the authoritative source. There are 17 English body pages covering first use, Docker deployment, client compatibility, operations, and HTTP/evaluation contracts. English navigation/status pages do not count as translated bodies. Pages linked with a Chinese label remain untranslated.
 
 ## Start here
 
@@ -18,19 +18,24 @@ Chinese is the authoritative source. This batch provides 12 English body pages c
 | Chinese source | English translation |
 | --- | --- |
 | [备份与恢复](../zh/how-to/platform/backup-and-restore.md) | [Backup and restore](./how-to/platform/backup-and-restore.md) |
+| [用 Docker 部署服务端](../zh/how-to/platform/deploy-docker.md) | [Deploy the server with Docker](./how-to/platform/deploy-docker.md) |
 | [升级与回滚](../zh/how-to/platform/upgrade-and-rollback.md) | [Upgrade and rollback](./how-to/platform/upgrade-and-rollback.md) |
 | [独立 Benchmark 评测协议](../zh/reference/evaluation/benchmark-protocol.md) | [Independent Benchmark evaluation protocol](./reference/evaluation/benchmark-protocol.md) |
+| [评测数据集 HTTP 接口](../zh/reference/evaluation/datasets-api.md) | [Evaluation dataset HTTP API](./reference/evaluation/datasets-api.md) |
 | [评估器运行与输出契约](../zh/reference/evaluation/evaluator-output.md) | [Evaluator output and runtime contract](./reference/evaluation/evaluator-output.md) |
 | [实验执行环境准备接口](../zh/reference/evaluation/execution-environment.md) | [Execution-environment preparation API](./reference/evaluation/execution-environment.md) |
 | [实验 HTTP 接口](../zh/reference/evaluation/experiments-api.md) | [Experiment HTTP API](./reference/evaluation/experiments-api.md) |
+| [客户端版本与框架兼容性](../zh/reference/observability/client-compatibility.md) | [Client versions and framework compatibility](./reference/observability/client-compatibility.md) |
 | [Trace HTTP 接入](../zh/reference/observability/trace-ingestion.md) | [Trace HTTP ingestion](./reference/observability/trace-ingestion.md) |
+| [Skill 管理 HTTP 接口](../zh/reference/optimization/skills-api.md) | [Skill management HTTP APIs](./reference/optimization/skills-api.md) |
 | [运行配置参考](../zh/reference/platform/configuration.md) | [Runtime configuration](./reference/platform/configuration.md) |
 | [HTTP 接口与用户身份](../zh/reference/platform/http-api.md) | [HTTP APIs and user identity](./reference/platform/http-api.md) |
 | [模型连接测试接口](../zh/reference/platform/model-connection-test.md) | [Model-connection test API](./reference/platform/model-connection-test.md) |
+| [可靠性客户端与配置控制接口](../zh/reference/reliability/client-control-api.md) | [Reliability client and configuration control APIs](./reference/reliability/client-control-api.md) |
 | [跑通第一次评测](../zh/tutorial/evaluation/01-first-experiment.md) | [Run your first evaluation](./tutorial/evaluation/01-first-experiment.md) |
 | [5 分钟上手](../zh/tutorial/platform/01-quick-start.md) | [Your first Trace](./tutorial/platform/01-quick-start.md) |
 
-Docker deployment, client compatibility, most feature operations, architecture explanations, and internal engine documentation remain in Chinese. Follow their marked links; this batch does not claim full bilingual coverage. Additional long documents and historical-source gaps remain in the [migration review](https://gitcode.com/openeuler/agent-insight/blob/master/design/platform/docs-migration/migration-review.md).
+Most feature operations, architecture explanations, and internal engine documentation remain in Chinese. Follow their marked links; this batch does not claim full bilingual coverage. Additional long documents and historical-source gaps remain in the [migration review](https://gitcode.com/openeuler/agent-insight/blob/master/design/platform/docs-migration/migration-review.md).
 
 ## Existing compatibility notes
 

@@ -13,7 +13,7 @@ You will finish with a registered Agent, a usable model configuration, and a rea
 - A usable model API Key, such as OpenAI, DeepSeek, or another supported provider.
 - An Agent environment to connect, with runtimes prepared according to that framework's installation guide.
 
-If the dashboard is not deployed, follow [Docker deployment, Chinese](../../../zh/how-to/platform/deploy-docker.md) first. If a service already exists, use the administrator's address.
+If the dashboard is not deployed, follow [Docker deployment](../../how-to/platform/deploy-docker.md) first. If a service already exists, use the administrator's address.
 
 ## Recommended path
 
@@ -25,7 +25,7 @@ If the dashboard is not deployed, follow [Docker deployment, Chinese](../../../z
 
 For a custom code integration, first check [Trace HTTP ingestion](../../reference/observability/trace-ingestion.md) and the framework guide for protocol and identity requirements.
 
-Agent RAS on Linux, WSL, or macOS needs Python 3.10+, pip, and shared libpython. OpenCode 1.x installation enables RAS by default; `AGENT_INSIGHT_RAS=0` skips it. Native Windows does not enable in-process RAS; use WSL for OpenCode and the installation command. See [framework compatibility, Chinese](../../../zh/reference/observability/client-compatibility.md) for version-specific behavior.
+Agent RAS on Linux, WSL, or macOS needs Python 3.10+, pip, and shared libpython. OpenCode 1.x installation enables RAS by default; `AGENT_INSIGHT_RAS=0` skips it. Native Windows does not enable in-process RAS; use WSL for OpenCode and the installation command. See [framework compatibility](../../reference/observability/client-compatibility.md) for version-specific behavior.
 
 ## Step 1: Sign in and confirm the Workspace
 
@@ -78,7 +78,7 @@ Open **Settings → Client installation (配置 → 客户端安装)**:
 
 ![Example OpenCode installation output](../../../images/install_client.png)
 
-The installation command writes the platform address and Key. Shared collector updates, framework differences, and OpenCode 1.x/2.x migration are covered in [client compatibility, Chinese](../../../zh/reference/observability/client-compatibility.md). Use that reference and the framework guide when capabilities are missing or Trace ingestion times out.
+The installation command writes the platform address and Key. Shared collector updates, framework differences, and OpenCode 1.x/2.x migration are covered in [client compatibility](../../reference/observability/client-compatibility.md). Use that reference and the framework guide when capabilities are missing or Trace ingestion times out.
 
 ## Step 5: Verify a Trace
 
@@ -91,6 +91,8 @@ Return to **Observability → Traces (运行观测 → 链路追踪)** and locat
 ![Trace list](../../../images/example_trace.png)
 
 Confirm a new Trace appears, basic status/duration/Token information is available, and its detail page can expand the Trace tree and Spans. Tools and child Agents should appear when the execution used them. Start by proving that data arrives and the main steps are readable; complete field coverage is a later check.
+
+To locate a specific window, choose **Time → Custom time range**, enter a start and/or end date and time in the displayed browser time zone, and select **Apply**. Bounds include the selected second and apply to both the list and statistics. Cancel discards edits; choosing a preset clears the custom bounds. See the [Trace filtering guide (Chinese)](../../../zh/how-to/observability/view-traces.md#2-筛选区).
 
 If nothing appears after about 30 seconds, check the collector log (`~/.agent-insight/logs/opencode_uploader.log` for OpenCode), client-to-server connectivity, selected Workspace, and whether the client Key belongs to the viewing account. Continue with the [FAQ, Chinese](../../../zh/how-to/platform/faq.md) if needed.
 
