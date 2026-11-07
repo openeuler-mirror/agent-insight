@@ -22,6 +22,7 @@ import { Check, ChevronRight, Circle, CircleAlert, ExternalLink, LoaderCircle, M
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { caseExecutionTraceHref, type CaseExecutionProgress as Progress } from '@/lib/engine/experiment/execution-progress';
 import { progressDuration } from '@/lib/benchmark/execution-progress';
+import { EvaluationErrorNotice } from './EvaluationErrorNotice';
 
 const STAGES = ['等待调度', 'Agent 执行', '等待 Trace 入库', '执行评测', '结果就绪'];
 
@@ -56,7 +57,9 @@ export function CaseExecutionProgress({ progress, title, refreshingFailed, retry
         <p>{label}</p>
         <p className="text-xs text-foreground-muted">最近状态更新：{new Date(progress.updatedAt).toLocaleString()}</p>
         {refreshingFailed && <p role="alert" style={{ color: 'var(--warning)' }}>状态刷新失败，保留上次结果并继续刷新。</p>}
-        {progress.error && !retrying && <p role="alert" className="break-words" style={{ color: 'var(--error)' }}>{progress.error}</p>}
+        {progress.error && !retrying && (progress.stage >= 3
+          ? <EvaluationErrorNotice message={progress.error} />
+          : <p role="alert" className="break-words" style={{ color: 'var(--error)' }}>{progress.error}</p>)}
       </div>
       <ol className="divide-y divide-border">
         {STAGES.map((stageName, index) => {
@@ -75,7 +78,7 @@ export function CaseExecutionProgress({ progress, title, refreshingFailed, retry
                 : <p className="mt-1 text-xs text-foreground-muted">{retrying ? '等待新执行确认' : progress.traceId ? '主 Agent 链路上传中' : '等待本次主 Agent 链路关联'}</p>)}
               {index === 3 && progress.stage >= 3 && <details className="mt-2 text-xs text-foreground-secondary">
                 <summary className="cursor-pointer">已完成 {progress.evaluators.filter(e => ['done', 'skipped'].includes(e.status)).length}/{progress.evaluators.length} 项</summary>
-                <ul className="mt-2 space-y-2">{progress.evaluators.map(e => <li key={e.id} className="break-words">{evaluatorName(e.id)} · {({ done: '已完成', failed: '失败', running: '评测中', pending: '待评测', cancelled: '已取消', skipped: '已跳过' } as Record<string, string>)[e.status] || e.status}{e.error && <p style={{ color: 'var(--error)' }}>{e.error}</p>}</li>)}</ul>
+                <ul className="mt-2 space-y-2">{progress.evaluators.map(e => <li key={e.id} className="break-words">{evaluatorName(e.id)} · {({ done: '已完成', failed: '失败', running: '评测中', pending: '待评测', cancelled: '已取消', skipped: '已跳过' } as Record<string, string>)[e.status] || e.status}{e.error && <EvaluationErrorNotice message={e.error} compact />}</li>)}</ul>
               </details>}
             </div>
           </li>;

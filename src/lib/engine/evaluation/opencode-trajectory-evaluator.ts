@@ -35,6 +35,7 @@
  * 输入：单个 (case × actualTrace) 对（离线模式 = trace 已存在于 Session.interactions）。
  * 输出：dimensionScores + trajectoryScore + deviationSteps + rootCauseStep + reasonText。
  */
+import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import type {
     AgentInsight,
     SendPromptPayload,
@@ -728,7 +729,7 @@ export async function evaluateTrajectoryViaOpencode(
   return withBackgroundOpencodeSlot(async () => {
    if (hasEvaluatorExecutionPolicy()) {
      const config = await getActiveConfig(user);
-     if (!config) throw new TrajectoryEvalConfigError('未配置评测模型');
+     if (!config) throw new TrajectoryEvalConfigError(MISSING_EVALUATION_MODEL_MESSAGE);
      return runConfiguredEvaluationStage(() => evaluateTrajectoryDirectAndRecord(input, config, user));
    }
    const [{ AgentInsight }, { runWithEphemeralOpencodeServer }] = await Promise.all([
@@ -742,7 +743,7 @@ export async function evaluateTrajectoryViaOpencode(
      const directConfig = await getActiveConfig(user);
      if (!directConfig) {
        throw new TrajectoryEvalConfigError(
-         '未配置评测模型，请先在「模型配置」中激活一个模型。',
+         MISSING_EVALUATION_MODEL_MESSAGE,
        );
      }
      try {
@@ -760,7 +761,7 @@ export async function evaluateTrajectoryViaOpencode(
     const config = await getActiveConfig(user);
     if (!config) {
         throw new TrajectoryEvalConfigError(
-            '未配置评测模型，请先在「模型配置」中激活一个模型。',
+            MISSING_EVALUATION_MODEL_MESSAGE,
         );
     }
 
