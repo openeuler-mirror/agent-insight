@@ -55,6 +55,7 @@ test('长轮询在普通或 Skill Case 未完成时继续领取环境准备和�
         if (frame.action === 'RUN_EXPERIMENT_CASE') await execution.promise;
       },
       sendCommandStatus: async () => {}, logErr: () => {},
+      pollWaitSeconds: client.pollWaitSeconds, AbortSignal,
     });
     vm.runInContext(`${pollSource}\nthis.pollOnce = pollOnce;`, context);
     let completed = false;
@@ -115,7 +116,14 @@ let query=''; process.stdin.on('data', data => query += data); process.stdin.on(
   const priorPath = process.env.PATH;
   process.env.PATH = `${root}:${priorPath || ''}`;
   const statuses = new Map<string, Array<{ status: string; extra: { error?: { code: string }; result?: { traceId: string } } }>>();
-  const cfg = { clientId: 'fixture-client', workspaceBase: root };
+  const cfg = { clientId: 'fixture-client', insightBaseUrl: 'http://fixture.invalid', workspaceBase: root };
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    assert.ok(String(url).endsWith('/status'), 'Only authoritative command receipts reach the fixture');
+    const body = JSON.parse(String(options?.body));
+    assert.equal(body.status, 'RECEIVED');
+    return new Response('{"ok":true}');
+  };
   const start = (query: string, version: number) => client.handleCommand(cfg, {
     commandId: `cmd_concurrent_${query}`, action: 'RUN_EXPERIMENT_CASE',
     payload: { platform: 'opencode', agent: 'build', model: 'fixture/model', input: query, timeoutSeconds: 15,
@@ -147,6 +155,7 @@ let query=''; process.stdin.on('data', data => query += data); process.stdin.on(
   } finally {
     for (const query of ['first', 'second']) fs.writeFileSync(path.join(root, query+'.release'), '');
     await Promise.allSettled([first, second]);
+    globalThis.fetch = previousFetch;
     if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath;
   }
 });

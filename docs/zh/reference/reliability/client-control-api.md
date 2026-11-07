@@ -107,7 +107,7 @@ description: "安装令牌、设备身份、能力上报、配置快照和控制
 
 帧的引用和值为示例，需使用实际投递内容。命令白名单为 `APPLY_CLIENT_CONFIG/PREPARE_EXPERIMENT_CASE/RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/CANCEL_EXPERIMENT_RUN/REFRESH_CAPABILITIES/PREPARE_EXECUTION_ENVIRONMENT`。`RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/PREPARE_EXECUTION_ENVIRONMENT` 的 payload 顶层字段禁 `command/shell/args/cwd/executable/script`；其余白名单 action 禁 `url/config/path/downloadUrl/file`，执行环境准备还校验 context 结构与摘要。此接口不是任意命令执行入口。
 
-`POST /api/reliability/client/v1/commands/:commandId/status` 使用设备凭证，JSON 为 `status` 加可选 `occurredAt/result/error`；允许 `RECEIVED/RUNNING/SUCCEEDED/FAILED`，成功 `200 { ok: true }`。错误状态 `400`，命令不存在或非本设备 `404`，未终结命令已过期 `410`。命令终态不被后续回执改写；配置 delivery 仍需按上一节看写入与加载状态。
+`POST /api/reliability/client/v1/commands/:commandId/status` 使用设备凭证，JSON 为 `status` 加可选 `occurredAt/result/error`；允许 `RECEIVED/RUNNING/SUCCEEDED/FAILED`，成功 `200 { ok: true }`。错误状态 `400`，命令不存在或非本设备 `404`，未终结命令已过期 `410`，对已结束或不再接受开始确认的命令发送 `RECEIVED` 返回 `409 COMMAND_NOT_ACCEPTED`。命令终态不被后续回执改写；配置 delivery 仍需按上一节看写入与加载状态。
 
 WebSocket `/api/reliability/client/v1/control` 由 `scripts/control-server.js` 处理升级，不是普通 Route Handler。服务端发送同一 `COMMAND` 帧，客户端发送 `COMMAND_STATUS` 帧（额外带 `type/commandId`，其余字段与 HTTP 回执一致）。同一 clientId 新连接替换旧连接。以下三个 HTTP 入口仅供控制服务桥接：
 
@@ -117,7 +117,11 @@ WebSocket `/api/reliability/client/v1/control` 由 `scripts/control-server.js` �
 | `/control-presence` | 必填 `clientId`，`connected: true/false` | `{ ok: true }`；建立连接刷新 lastSeenAt，断开由心跳窗口自然判离线 |
 | `/control-receipt` | 必填 `clientId/commandId`，`status` 和可选 `occurredAt/result/error` | `{ ok: true }`，与设备 HTTP 回执走同一处理函数 |
 
-WebSocket 写入成功只表示写入 socket，送达需客户端 `RECEIVED`。ACK 窗口默认 5 秒（`AGENT_INSIGHT_RAS_ACK_TIMEOUT_SEC`，最小 1 秒）；通用命令 TTL 默认 30 秒（`AGENT_INSIGHT_RAS_COMMAND_TTL_SEC`，最小 5 秒），具体执行任务可覆盖 TTL。超时会形成 `DELIVERY_FAILED/EXPIRED`；不能因网络中断就无限重复同步或假定进程已退出。
+客户端默认使用 `waitSeconds=5`，可在客户端运行环境设置 `AGENT_INSIGHT_RAS_POLL_WAIT_SEC` 为 1～30 的整数；无效值回退到 5 秒。等待时间应小于访问链路的空闲连接超时，单次请求另有等待时间加 10 秒的截止。轮询请求被明确取消时停止领取；并发请求通过原子状态更新竞争，同一命令只返回给一个请求。
+
+当前客户端无论通过 WebSocket 还是轮询收到命令，都先通过 HTTPS 发送 `RECEIVED`，只有收到 `200 { ok: true }` 才执行本地动作；拒绝、超时或响应丢失时不执行。已有客户端必须更新并重启，单独更新平台镜像不会替换设备上已安装的脚本。WebSocket 仍可承载指令和后续进度、结果回执。
+
+WebSocket 写入成功只表示写入 socket，送达需客户端 `RECEIVED`。ACK 窗口默认 5 秒（`AGENT_INSIGHT_RAS_ACK_TIMEOUT_SEC`，最小 1 秒）；通用命令 TTL 默认 30 秒（`AGENT_INSIGHT_RAS_COMMAND_TTL_SEC`，最小 5 秒），具体执行任务可覆盖 TTL。执行任务等待命令状态时会检查该命令的 ACK 截止，未确认的 `SENT` 会转为 `DELIVERY_FAILED/ACK_TIMEOUT`，无需查询客户端列表触发。已确认或运行中的指令不受此 ACK 清理影响；收到 ACK 后响应丢失时，客户端不执行，已记录的 `RECEIVED` 按任务原有 TTL 和超时机制收敛，不以丢失 ACK 为由重发可能已运行的工作。不能因网络中断就无限重复同步或假定进程已退出。
 
 ## 用户级 RAS 能力配置
 

@@ -1343,7 +1343,7 @@ test('long-poll cadence stays under the server command TTL', () => {
 
   // 最坏一轮 = 服务端 long-poll 等待 + 失败重试间隔，须小于 TTL。
   const retryMs = Number(/POLL_RETRY_MS = ([\d_]+)/.exec(src)?.[1]?.replace(/_/g, '') || 0)
-  const waitSec = Number(/waitSeconds=(\d+)/.exec(src)?.[1] || 0)
+  const waitSec = require_('../scripts/reliability-client.cjs').pollWaitSeconds({})
   const ttlSec = 30
   assert.ok(retryMs > 0 && waitSec > 0, '应能解析出轮询参数')
   assert.ok(

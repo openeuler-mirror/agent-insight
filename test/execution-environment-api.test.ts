@@ -158,7 +158,9 @@ test('late progress and ACK cannot overwrite a concurrent ready result or move t
       await snapshotRead
       await applyCommandStatus({ clientId: input.clientId, commandId: task.taskId, status: finalStatus, result: { state: finalStatus === 'SUCCEEDED' ? 'ready' : 'preparing', issues: [] } })
       release()
-      await late
+      if (lateStatus === 'RECEIVED') {
+        await assert.rejects(late, (error: Error & { code?: string }) => error.code === 'COMMAND_NOT_ACCEPTED')
+      } else await late
       const row = await store.reliabilityCommand.findUniqueOrThrow({ where: { commandId: task.taskId } })
       assert.equal(row.status, finalStatus)
       assert.equal(JSON.parse(row.resultJson!).state, finalStatus === 'SUCCEEDED' ? 'ready' : 'preparing')

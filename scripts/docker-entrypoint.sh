@@ -144,6 +144,8 @@ AGENT_INSIGHT_HOME="$RESOLVED_AGENT_INSIGHT_HOME"
 AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 export PORT
 export HOSTNAME
+: "${AGENT_INSIGHT_RAS_DISPATCH_PORT:=$((PORT + 1))}"
+export AGENT_INSIGHT_RAS_DISPATCH_PORT
 export AGENT_INSIGHT_HOME
 export AGENT_INSIGHT_STORAGE_DIR
 if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
@@ -223,7 +225,7 @@ if [ -n "$AGENT_INSIGHT_SOURCE_DIR" ]; then
   cp -a .next/static/. "$SOURCE_STANDALONE/.next/static/"
   cp -a public/. "$SOURCE_STANDALONE/public/"
 
-  exec node "$SOURCE_SERVER"
+  exec node scripts/control-server.js "$SOURCE_STANDALONE"
 fi
 
-exec node .next/standalone/server.js
+exec node scripts/control-server.js
