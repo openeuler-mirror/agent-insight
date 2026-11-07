@@ -9,6 +9,8 @@ changefreq: "monthly"
 
 正文与导航已迁至 [入门教程](./navigation.md)。保留本入口，供仓库目录浏览和旧链接继续使用。
 
+完成评测后，可继续[将评测结果送入诊断并生成 Skill 优化计划](../how-to/diagnosis/agent-debug/diagnosis.md#将诊断发现用于-skill-优化)。
+
 平台评测提示缺少模型时，可从提示中的 **去模型注册** 入口添加模型、测试连接并设为默认，再返回重评已有输出。详见[跑通第一次评测](./evaluation/01-first-experiment.md)。
 
 Skill 用例分析和 A/B 实验可选择已保存的自定义评估器，无需从草稿转为就绪；说明见[评估器指南](../how-to/evaluation/evaluators.md)。

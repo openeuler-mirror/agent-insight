@@ -254,7 +254,7 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
       executionId: key,
       taskId: null,
       input: String(item.input || ''),
-      datasetInput: String(item.input || '').trim() || null,
+      datasetInput: String(item.input || '') || null,
       actualOutput: '',
       referenceOutput: match.updates[key] || null,
       evaluatorContext: match.contextUpdates[key] || null,

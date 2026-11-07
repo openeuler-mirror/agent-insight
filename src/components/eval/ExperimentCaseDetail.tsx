@@ -41,6 +41,11 @@ import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { useAuth } from '@/lib/auth/auth-context';
+import {
+  CaseDiagnosisInput,
+  defaultDiagnosisResultIds,
+  type DiagnosisResultOption,
+} from '@/components/diagnosis/CaseDiagnosisInput';
 import { apiFetch } from '@/lib/client/api';
 import { categorySummary, effectiveScore, groupByCategory } from '@/lib/engine/experiment/detail-agg';
 import { deriveVerdict, displaySummary, isEvidenceRedundant, VERDICT_LABELS, type EvalVerdict } from '@/lib/evaluators/eval-output';
@@ -86,6 +91,7 @@ interface ExperimentDetail {
   cases: Array<{
     id: string;
     taskId: string | null;
+    executionId?: string | null;
     input: string;
     actualOutput: string;
     referenceOutput: string | null;
@@ -478,6 +484,8 @@ export function ExperimentCaseDetail({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryingId, setRetryingId] = useState('');
+  const [diagnosisSelection, setDiagnosisSelection] = useState<{ caseId: string; ids: string[] } | null>(null);
+  const [diagnosisBusy, setDiagnosisBusy] = useState(false);
   // 两级折叠：卡片默认折叠只露卡头（结论 chip + 一句话结论 + 得分）；展开后是完整判断
   // 依据 + 人工修正 + 评论，**评分点明细再单独折一层**——它是最长最细的部分，展开卡片
   // 就糊一屏表格的话，等于没做"先看结论"。
@@ -588,6 +596,43 @@ export function ExperimentCaseDetail({
     () => groupByCategory(caseResults, lookup.categoryOf),
     [caseResults, lookup],
   );
+  const diagnosisResults = useMemo<DiagnosisResultOption[]>(
+    () => caseResults.map((result) => ({
+      id: result.id,
+      evaluatorId: result.evaluatorId,
+      name: lookup.nameOf(result.evaluatorId),
+      status: result.status,
+      verdict: result.verdict ?? deriveVerdict(effectiveScore(result)) ?? null,
+      score: effectiveScore(result),
+      summary: displaySummary(result.summary, result.evidence) || null,
+      revision: JSON.stringify({
+        status: result.status, verdict: result.verdict, score: result.score,
+        summary: result.summary, points: result.points, evidence: result.evidence,
+        humanScore: result.humanScore, humanReason: result.humanReason,
+        humanBy: result.humanBy, humanAt: result.humanAt,
+      }),
+    })),
+    [caseResults, lookup],
+  );
+  const selectableDiagnosisIds = useMemo(
+    () => new Set(diagnosisResults.filter((result) => result.status === 'done').map((result) => result.id)),
+    [diagnosisResults],
+  );
+  const selectedDiagnosisIds = diagnosisSelection?.caseId === caseId
+    ? diagnosisSelection.ids.filter((resultId) => selectableDiagnosisIds.has(resultId))
+    : defaultDiagnosisResultIds(diagnosisResults);
+
+  const toggleDiagnosisResult = useCallback((resultId: string, checked: boolean) => {
+    const current = diagnosisSelection?.caseId === caseId
+      ? diagnosisSelection.ids.filter((id) => selectableDiagnosisIds.has(id))
+      : defaultDiagnosisResultIds(diagnosisResults);
+    setDiagnosisSelection({
+      caseId,
+      ids: checked
+        ? [...new Set([...current, resultId])]
+        : current.filter((id) => id !== resultId),
+    });
+  }, [caseId, diagnosisResults, diagnosisSelection, selectableDiagnosisIds]);
 
   const inputSummary = (caseRow?.input || '').replace(/\s+/g, ' ').trim();
   const isBenchmark = detail?.scope === 'benchmark' && Boolean(caseRow?.benchmark);
@@ -701,8 +746,9 @@ export function ExperimentCaseDetail({
               />
             )}
 
-            {/* 任务输入 / 参考契约 / 实际输出 三框 */}
-            <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
+            <div
+              className="mb-4 grid min-w-0 max-w-full items-stretch gap-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.4fr)]"
+            >
               {([
                 { label: '任务输入', value: caseRow.input, missing: '' },
                 isBenchmark
@@ -759,6 +805,7 @@ export function ExperimentCaseDetail({
                     padding: '11px 16px', borderBottom: '1px solid var(--border)',
                   }}>
                     <span style={{ fontSize: 12.5, fontWeight: 600 }}>{CATEGORY_LABEL[cat]}</span>
+                    <span className="hidden text-[10.5px] text-foreground-muted sm:inline">勾选已完成项作为诊断依据</span>
                     <span style={{ flex: 1 }} />
                     <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent)' }}>
                       {typeof summary.avg === 'number' ? summary.avg : '—'}
@@ -773,6 +820,7 @@ export function ExperimentCaseDetail({
                       const tags = lookup.tagsOf(r.evaluatorId);
                       const failed = r.status === 'failed';
                       const pendingLike = r.status === 'pending' || r.status === 'running';
+                      const diagnosisSelected = selectedDiagnosisIds.includes(r.id);
                       const points = parsePoints(r.points);
                       const isSpecializedPreset = SPECIALIZED_PRESET_IDS.has(r.evaluatorId);
                       const open = expandedCards.has(r.id);
@@ -805,8 +853,22 @@ export function ExperimentCaseDetail({
                           },
                         );
                         return (
-                          <div key={r.id} style={{ border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden', opacity: failed ? 0.85 : 1 }}>
+                          <div key={r.id} style={{
+                            border: `1px solid ${diagnosisSelected ? 'var(--primary)' : 'var(--border)'}`,
+                            boxShadow: diagnosisSelected ? 'inset 3px 0 0 var(--primary)' : undefined,
+                            borderRadius: 9, overflow: 'hidden', opacity: failed ? 0.85 : 1,
+                          }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '11px 13px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                              {r.status === 'done' && (
+                                <input
+                                  type="checkbox"
+                                  aria-label={`将${caseRow.benchmark?.presentation?.evaluator?.displayName || 'Benchmark 评测'}加入智能诊断`}
+                                  disabled={diagnosisBusy}
+                                  checked={diagnosisSelected}
+                                  onChange={(event) => toggleDiagnosisResult(r.id, event.target.checked)}
+                                  className="size-4 shrink-0 accent-primary"
+                                />
+                              )}
                               <b style={{ fontSize: 12.5 }}>
                                 {caseRow.benchmark?.presentation?.evaluator?.displayName
                                   || `${caseRow.benchmark?.displayName || 'Benchmark'} Evaluator`}
@@ -869,7 +931,9 @@ export function ExperimentCaseDetail({
                       // 卡体永远可展开：不止评分点/证据，还有人工修正与评论
                       return (
                         <div key={r.id} style={{
-                          border: '1px solid var(--border)', borderRadius: 9,
+                          border: `1px solid ${diagnosisSelected ? 'var(--primary)' : 'var(--border)'}`,
+                          boxShadow: diagnosisSelected ? 'inset 3px 0 0 var(--primary)' : undefined,
+                          borderRadius: 9,
                           minWidth: 0, maxWidth: '100%', overflow: 'hidden',
                           padding: '11px 13px', opacity: failed ? 0.85 : 1,
                         }}>
@@ -881,6 +945,21 @@ export function ExperimentCaseDetail({
                               cursor: 'pointer', userSelect: 'none',
                             }}
                           >
+                            {r.status === 'done' && (
+                              <label
+                                onClick={(event) => event.stopPropagation()}
+                                className="flex shrink-0 items-center"
+                              >
+                                <input
+                                  type="checkbox"
+                                  aria-label={`将${lookup.nameOf(r.evaluatorId)}加入智能诊断`}
+                                  disabled={diagnosisBusy}
+                                  checked={diagnosisSelected}
+                                  onChange={(event) => toggleDiagnosisResult(r.id, event.target.checked)}
+                                  className="size-4 accent-primary"
+                                />
+                              </label>
+                            )}
                             <span style={{
                               fontSize: 12, color: 'var(--foreground-muted)', lineHeight: 1,
                               display: 'inline-block', transition: 'transform .15s',
@@ -1071,6 +1150,16 @@ export function ExperimentCaseDetail({
                 {emptyCaseEvaluationMessage(detail.status, caseRow)}
               </div>
             )}
+
+            <CaseDiagnosisInput
+              key={caseId}
+              experimentId={id}
+              caseId={caseId}
+              results={diagnosisResults}
+              selectedResultIds={selectedDiagnosisIds}
+              traceAvailable={Boolean(caseRow.executionId || caseRow.taskId)}
+              onBusyChange={setDiagnosisBusy}
+            />
 
             {/* 本条 case 的整体评论（对单个评估器的意见留在各自卡片里） */}
             {user && (

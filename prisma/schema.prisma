@@ -519,6 +519,7 @@ model SkillOptPlanItem {
   proposedEdit     String? // 建议修改（diff 或指令式描述）
   conflictNote     String? // status='conflict' 时的矛盾说明，给用户仲裁
   sourceIssueIds   String       @default("[]") // JSON string[]：归并自哪些 SkillIssue.id
+  sourceRefsJson   String       @default("[]")
   sourcesBreakdown String       @default("{}") // JSON：{"static":n,"dynamic":m,"trigger":k}
   prevalence       Int          @default(1) // Σ 源 issues 的 prevalenceCount
   createdAt        DateTime     @default(now())
@@ -841,6 +842,30 @@ model FaultDiagnosisMessage {
   role      String
   content   String
   createdAt DateTime              @default(now())
+}
+
+model DiagnosisRun {
+  id                String   @id @default(cuid())
+  user              String
+  experimentId      String?
+  caseId            String?
+  executionId       String
+  attemptId         String?
+  requestKey        String
+  inputHash         String
+  inputSnapshotJson String
+  generatorVersion  String
+  status            String   @default("pending")
+  reportJson        String?
+  errorMessage      String?
+  retryOfRunId      String?
+  leaseUntil        DateTime?
+  createdAt         DateTime @default(now())
+  completedAt       DateTime?
+
+  @@unique([user, requestKey])
+  @@index([user, inputHash, generatorVersion, status])
+  @@index([user, experimentId, caseId, createdAt])
 }
 
 model AgentDebugReport {

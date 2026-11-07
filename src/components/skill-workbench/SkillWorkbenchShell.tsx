@@ -145,6 +145,7 @@ export function SkillWorkbenchShell() {
   const [pickerPurpose, setPickerPurpose] = useState<SkillPickerPurpose>('browse');
   const [selectingSkill, setSelectingSkill] = useState(false);
   const [abandoningId, setAbandoningId] = useState<string | null>(null);
+  const [retestingId, setRetestingId] = useState<string | null>(null);
   const [publishingCandidateId, setPublishingCandidateId] = useState<string | null>(null);
   const [publishCandidate, setPublishCandidate] = useState<OptimizationRecordView | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -574,6 +575,24 @@ export function SkillWorkbenchShell() {
     const timer = window.setTimeout(() => void loadOptimizationRecords(asset, user), 0);
     return () => window.clearTimeout(timer);
   }, [loadOptimizationRecords, optimizationScopeKey, user]);
+
+  const retestDiagnosis = async (record: OptimizationRecordView) => {
+    if (!user || retestingId) return;
+    setRetestingId(record.id);
+    setError('');
+    try {
+      const response = await apiFetch(`/api/skill-workbench/skills/${encodeURIComponent(record.skillName)}/optimizations/${encodeURIComponent(record.id)}/retest`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '来源实验复测失败');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '复测失败');
+    } finally {
+      setRetestingId(null);
+      if (selectedAsset) await loadOptimizationRecords(selectedAsset, user);
+    }
+  };
 
   const abandonOptimization = async (record: OptimizationRecordView) => {
     if (!user || abandoningId) return;
@@ -1407,6 +1426,8 @@ export function SkillWorkbenchShell() {
         ) : currentView === 'optimization' && optimizationRecords.length ? (
           <OptimizationRecordsPanel
             records={optimizationRecords}
+            onRetest={retestDiagnosis}
+            retestingId={retestingId}
             selectedRecordId={selectedOptimizationRecordId}
             abandoningId={abandoningId}
             publishingId={publishingCandidateId}

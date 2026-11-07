@@ -19,6 +19,7 @@ const DATASET_CASE_BINDING_KEY = '__agentInsightDatasetCase';
 export interface ExperimentDatasetCaseBinding {
   datasetId: string;
   caseId: string;
+  contentHash?: string;
 }
 
 export function normalizeExperimentDatasetCaseBinding(value: unknown): ExperimentDatasetCaseBinding | null {
@@ -26,7 +27,7 @@ export function normalizeExperimentDatasetCaseBinding(value: unknown): Experimen
   const raw = value as Record<string, unknown>;
   const datasetId = String(raw.datasetId || '').trim();
   const caseId = String(raw.caseId || '').trim();
-  return datasetId && caseId ? { datasetId, caseId } : null;
+  return datasetId && caseId ? { datasetId, caseId, ...(typeof raw.contentHash === 'string' && raw.contentHash ? { contentHash: raw.contentHash } : {}) } : null;
 }
 
 export function readExperimentDatasetCaseBinding(

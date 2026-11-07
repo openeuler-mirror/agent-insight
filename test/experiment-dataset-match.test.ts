@@ -26,6 +26,13 @@ import { matchAgentDatasetCase } from '../src/lib/engine/evaluation/dataset-case
 import type { AgentDatasetRecord } from '../src/server/agent_datasets_storage';
 
 describe('实验 ③ 步与数据集互通', () => {
+  it('匹配时归一化空白，回填时保留输入和答案原文', () => {
+    const input = '  第一行\n  第二行  ';
+    const expectedOutput = '```python\nif ready:\n    run()\n```\n';
+    const result = matchDatasetCases([{ key: 'multiline', input: '第一行 第二行' }], [{ input, expectedOutput }]);
+    assert.equal(result.updates.multiline, expectedOutput);
+    assert.equal(result.datasetInputUpdates?.multiline, input);
+  });
   const cases = [
     { key: 'c1', input: '查询订单物流', referenceOutput: null },
     { key: 'c2', input: '  处理重复扣款  ', referenceOutput: '' },

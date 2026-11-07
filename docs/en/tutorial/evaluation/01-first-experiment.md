@@ -64,3 +64,19 @@ When Benchmark evaluation fails, inspect the Case's failure stage and error befo
 - [Evaluators, Chinese](../../../zh/how-to/evaluation/evaluators.md).
 
 [中文权威版本](../../../zh/tutorial/evaluation/01-first-experiment.md)
+
+### Diagnose a Case and review a Skill change
+
+The Case detail shows the task, expected output, actual output, and evaluation results together on one page. Select diagnosis evidence directly on completed evaluation cards. Partially met and unmet results are selected by default, while pending, running, or failed evaluations cannot be selected. The diagnosis action bar appears after all evaluation sections and immediately before the Case comments; it summarizes the selection and links the measured execution Trace automatically.
+
+The diagnosis action automatically prepares input whenever the selected evaluation results change. **Start diagnosis** remains disabled while the input is being prepared. Task content, outputs, and evaluation evidence stay in the Case sections above instead of being repeated in the action area; a failed preparation can be retried from its error message. Starting again creates a new diagnosis even for identical inputs. Choose an entry in **Diagnosis history** to view a previous result. Changing the selection, adjusting a score, or rerunning an evaluator automatically prepares a fresh input. Each diagnosis retains its original inputs and links back to the Case.
+
+Select final findings that can be addressed in an invoked Skill. Inspect the Skill version and baseline files. An unknown version requires explicit verification. A completed Trace-only report can also be frozen from its findings view. It carries no historical experiment scores. No recorded Skill invocation means there is no direct optimization target.
+
+Create the plan, review the proposed edits in the workbench, then confirm to generate a candidate. Inspect the diff and run the candidate against the source experiment configuration before publishing. An unavailable source, changed dataset or missing baseline prevents a comparable retest.
+
+Trace-only reports can produce a reviewable candidate, but cannot pass this source-experiment publishing gate. Human-corrected baseline scores require review instead of automatic machine-score comparison. A change to source evidence during a retest invalidates that retest.
+
+After confirming the evaluation evidence, diagnosis opens in `/fault?runId=…`, alongside the execution trace, frozen inputs, module progress and final report. History links reopen the same run; legacy `/diagnosis-runs/:runId` links redirect here. The optimization card shows the target Skill and read-only execution version first, followed by a compact multi-select dropdown whose options contain only the key finding. Inspect the execution snapshot, then create the plan directly without a second confirmation checkbox. The Skill execution version is read-only; no default or alternative version is selected. Missing execution versions or content hashes prevent plan creation.
+
+“No key findings” does not prove the execution is problem-free. Report read, parsing, and validation failures show a failure reason and allow a retry. Historical report repairs are reviewed separately.

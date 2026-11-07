@@ -82,6 +82,8 @@ export function OptimizationRecordsPanel({
   selectedRecordId,
   abandoningId,
   publishingId,
+  onRetest,
+  retestingId,
   onAbandon,
   onPublish,
   onOpenSourceSession,
@@ -92,6 +94,8 @@ export function OptimizationRecordsPanel({
   selectedRecordId: string | null;
   abandoningId: string | null;
   publishingId: string | null;
+  onRetest?: (record: OptimizationRecordView) => void;
+  retestingId?: string | null;
   onAbandon: (record: OptimizationRecordView) => void;
   onPublish: (record: OptimizationRecordView) => void;
   onOpenSourceSession: (record: OptimizationRecordView) => void;
@@ -101,7 +105,7 @@ export function OptimizationRecordsPanel({
   const selected = records.find((record) => record.id === selectedRecordId) || records[0];
   if (!selected) return null;
   const selectedStatus = STATUS_COPY[selected.status] || { label: selected.status, tone: 'text-foreground-muted bg-background-secondary' };
-  const publishable = ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(selected.status);
+  const publishable = selected.sourceKind === 'diagnosis' ? selected.status === 'retest_passed' : ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(selected.status);
   const verification = selected.sourceRefs?.find((ref) => ref.type === 'verification-result');
   const executionFailed = selected.status === 'optimization_failed' && !selected.staticEvaluationId;
   return (
@@ -137,6 +141,7 @@ export function OptimizationRecordsPanel({
                 <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold text-foreground">优化报告 · {getOptimizationTransitionLabel(selected)}</h3><span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', selectedStatus.tone)}>{selectedStatus.label}</span></div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                    {onRetest && selected.sourceKind === 'diagnosis' && ABANDONABLE.has(selected.status) && <button type="button" disabled={!selected.sourceExperimentId || !!retestingId} onClick={() => onRetest(selected)} className="rounded border border-border px-3 py-1 text-xs disabled:opacity-50">{retestingId === selected.id ? '复测中…' : selected.sourceExperimentId ? '按原实验配置复测' : '无来源实验可复测'}</button>}
                     {publishable && (
                       <button
                         type="button"
@@ -201,6 +206,8 @@ export function OptimizationRecordsPanel({
                 </div>
               </section>
             )}
+            {selected.sourceRefs?.filter(ref => ref.type === 'diagnosis' && typeof ref.id === 'string').map(ref =>
+              <a key={String(ref.id)} className="mt-2 block text-xs text-primary" href={`${process.env.NEXT_PUBLIC_URL_PREFIX || ''}/diagnosis-runs/${encodeURIComponent(String(ref.id))}`}>查看来源诊断与评测证据</a>)}
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-foreground-muted"><span>依据：{selected.sourceKind}</span><button type="button" onClick={() => onOpenSourceSession(selected)} className="text-primary hover:underline disabled:text-foreground-muted" disabled={!selected.sourceSession}>来源会话：{selected.sourceSession?.title || selected.sessionId}</button><span>快照：{selected.candidateContentHash || '计算中'}</span>{selected.publishedVersion !== null && <span>正式版本：v{selected.publishedVersion}</span>}</div>
             {selected.errorMessage && <p className="mt-2 text-xs text-error">{displayOptimizationError(selected.errorMessage)}</p>}
           </article>

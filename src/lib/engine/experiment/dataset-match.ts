@@ -98,6 +98,7 @@ export function matchDatasetCases(
 ): DatasetMatchResult {
   // 参考答案和能力目录独立取同输入下各自首个有效定义，避免一类数据遮蔽另一类。
   const referenceByInput = new Map<string, string>();
+  const originalInputByKey = new Map<string, string>();
   const contextByInput = new Map<string, {
     availableTools: unknown;
     availableSkills: unknown;
@@ -106,8 +107,9 @@ export function matchDatasetCases(
   for (const dc of datasetCases) {
     const key = norm(dc.input);
     if (!key) continue;
-    const expected = norm(dc.expectedOutput);
-    if (expected && !referenceByInput.has(key)) referenceByInput.set(key, expected);
+    if (!originalInputByKey.has(key)) originalInputByKey.set(key, dc.input);
+    const expected = dc.expectedOutput ?? '';
+    if (norm(expected) && !referenceByInput.has(key)) referenceByInput.set(key, expected);
     if (
       dc.values
       && Object.prototype.hasOwnProperty.call(dc.values, 'available_tools')
@@ -143,7 +145,7 @@ export function matchDatasetCases(
     let supplied = false;
     if (matchedDatasetInput) {
       supplied = true;
-      result.datasetInputUpdates![c.key] = matchedDatasetInput.input;
+      result.datasetInputUpdates![c.key] = originalInputByKey.get(matchedDatasetInput.input)!;
       result.datasetInputMatched = (result.datasetInputMatched ?? 0) + 1;
     }
     if (expected) {
