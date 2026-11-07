@@ -1,6 +1,8 @@
 ---
 title: "Experiment HTTP API"
 description: "Create, start, query, rename, cancel, and delete ordinary experiments."
+keywords: ["Agent Insight", "experiment API", "evaluation tasks", "asynchronous execution"]
+changefreq: "monthly"
 ---
 
 This reference covers common ordinary-experiment calls and asynchronous behavior. Benchmark, Skill, and LLM comparison experiments use different branches, so requests and responses are not interchangeable. See the [experiment guide, Chinese](../../../zh/how-to/evaluation/experiments.md) and [HTTP identity conventions](../platform/http-api.md).

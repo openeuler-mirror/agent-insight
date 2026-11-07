@@ -1,6 +1,8 @@
 ---
 title: "Execution-environment preparation API"
 description: "Preparation tasks, idempotent context, and readiness checks."
+keywords: ["Agent Insight", "execution environments", "environment preparation", "idempotency"]
+changefreq: "monthly"
 ---
 
 See [HTTP identity conventions](../platform/http-api.md) for platform user resolution. Preparing an environment does not create or start an experiment.

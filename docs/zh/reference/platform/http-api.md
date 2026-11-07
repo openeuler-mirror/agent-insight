@@ -1,6 +1,8 @@
 ---
 title: "HTTP 接口与用户身份"
 description: "平台接口分类、用户解析、响应格式及调用边界。"
+keywords: ["Agent Insight", "HTTP 接口", "用户身份", "平台集成"]
+changefreq: "monthly"
 ---
 
 本页是现有 HTTP 接口的阅读入口。不同入口使用不同的身份和响应约定；文档按当前实现说明，不承诺所有路由采用统一鉴权、统一错误对象或版本化稳定性。

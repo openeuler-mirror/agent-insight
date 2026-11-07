@@ -1,3 +1,10 @@
+---
+title: "Agent Insight 中文文档"
+description: "提供 Agent Insight 中文文档入口，按教程、操作指南、参考与解释组织平台各业务领域的资料。"
+keywords: ["Agent Insight", "中文文档", "入门教程", "操作指南"]
+changefreq: "monthly"
+---
+
 # Agent Insight 中文文档
 
 中文为权威源。文档按用途分类，再按观测、评测、诊断、优化、可靠性和平台公共组织；源码模块位置以当前代码为准。

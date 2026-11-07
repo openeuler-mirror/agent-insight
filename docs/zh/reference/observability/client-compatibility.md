@@ -1,6 +1,8 @@
 ---
 title: "客户端版本与框架兼容性"
 description: "共享采集模块更新、框架安装差异与已验证范围。"
+keywords: ["Agent Insight", "客户端兼容性", "采集器升级", "框架接入"]
+changefreq: "monthly"
 ---
 
 Pi Agent、Codex 和 Goal Plus 共用采集传输模块。重新安装时，已校验的官方旧版会先备份到
