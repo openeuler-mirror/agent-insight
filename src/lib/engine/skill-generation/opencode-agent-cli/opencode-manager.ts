@@ -592,17 +592,21 @@ export async function prepareIsolatedHome(
 
 async function prepareIsolatedXdgConfigHome(user: string): Promise<{
   xdgRoot: string
+  xdgDataRoot: string
+  xdgStateRoot: string
   configHash: string
 }> {
   const slug = userToSlug(user)
   const root = resolveAgentInsightDataPath('.opencode-runtime', slug)
+  const xdgDataRoot = path.join(root, 'data')
+  const xdgStateRoot = path.join(root, 'state')
   const cfgDir = path.join(root, 'opencode')
   fs.mkdirSync(cfgDir, { recursive: true })
   const cfgPath = path.join(cfgDir, 'opencode.json')
   const { config, configHash } = await buildIsolatedOpencodeConfig(user)
   // 每次启动重写一遍，让用户在 UI 改 apiKey 后下次 spawn 立即生效。
   fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2))
-  return { xdgRoot: root, configHash }
+  return { xdgRoot: root, xdgDataRoot, xdgStateRoot, configHash }
 }
 
 /**
@@ -932,7 +936,7 @@ async function startServerForUser(
   const { verbose = false, homeOverride, telemetryEnabled = true } = opts
   const port = await getOpenPort()
   const binary = resolveOpencodeBinary()
-  const { xdgRoot, configHash: baseConfigHash } = await prepareIsolatedXdgConfigHome(user)
+  const { xdgRoot, xdgDataRoot, xdgStateRoot, configHash: baseConfigHash } = await prepareIsolatedXdgConfigHome(user)
   const pluginUploadEnv = await buildPluginUploadEnvOverride(user)
   // 把 plugin upload 用的 apiKey 也算进 hash —— user 在 UI 改 apiKey 后老实例
   // 会继续用旧 key 上报数据,被 /api/ingest/upload 401 reject,数据丢失。新 hash
@@ -963,6 +967,10 @@ async function startServerForUser(
         OPENCODE_PORT: String(port),
         // 屏蔽用户全局 ~/.config/opencode/ 下的配置/插件。详见 prepareIsolatedXdgConfigHome 注释。
         XDG_CONFIG_HOME: xdgRoot,
+        // 避免全局 OpenCode V2 与项目 V1 共用 ~/.local/share/opencode/opencode.db，
+        // 否则并发迁移会让 V1 的 /session API 返回 500，诊断误报 server readiness timeout。
+        XDG_DATA_HOME: xdgDataRoot,
+        XDG_STATE_HOME: xdgStateRoot,
         // 隔离模式下覆盖 HOME, opencode 扫 ~/.claude/skills + ~/.agents/skills 时看到空
         // (详见 prepareIsolatedHome 注释)。
         ...(homeOverride ? { HOME: homeOverride } : {}),
