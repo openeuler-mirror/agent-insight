@@ -22,6 +22,8 @@ description: "准备任务、幂等上下文与执行环境就绪判定。"
 
 准备请求的 `requestId` 统一使用 `safeUUID()`，兼容通过局域网 HTTP 访问时浏览器未提供 `crypto.randomUUID()` 的情况；网络不确定时复用原请求 ID，明确结束后重试生成新 ID。
 
+向导第 1 步和所有“生成 Trace”的第 2 步每 10 秒、以及窗口重新聚焦时刷新执行目标，包括普通和 Skill 实验。临时能力探测恢复后，页面可自动更新可用目标；环境检查及准备期间仍暂停刷新，继续保留原目标复核。
+
 OpenCode 向导预检与执行前校验共用按运行时主版本分流的入口：v1 保留 `debug config`、认证来源和 `models` 目录检查；v2 调用 `api --standalone model.list`（未选模型时为 `model.default`），以原生目录中的 `providerID/id` 和 `enabled` 判断可用性，不解析 v2 `debug config` 的配置来源数组，也不套用 v1 认证文件格式。CLI 输出只进入权限为 `0600` 的临时文件并在检查后清理，不将配置或底层异常透传到页面。目录读取失败为 `MODEL_CONFIGURATION_UNREADABLE`，所选模型不可用为 `MODEL_UNAVAILABLE`，缺少可用默认模型为 `MODEL_CONFIGURATION_MISSING`；不发起模型推理请求。执行前通过可取消子进程检查，保留 v2 错误分类并返回解析后的模型标识；预检增量能力上报与常规探测一致，为已就绪的 v1/v2 声明 `skillSnapshotVersion: 4`。Skill 用例生成与 A/B 使用共享能力策略校验 `supportsSkillSnapshot`，触发分析额外校验 `supportsTriggerRouting`；前端筛选、提交和服务端校验保持一致。缺失能力返回对应错误并提示检查常驻客户端与能力探测结果，不依据缺失字段直接推断 OpenCode 版本过旧。
 
 任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
@@ -34,3 +36,12 @@ OpenCode 向导预检与执行前校验共用按运行时主版本分流的入�
 实现依据：[当前实现](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/engine/experiment/environment-preparation.ts)。
 
 [English](../../../en/reference/evaluation/execution-environment.md)
+
+
+### OpenCode 生成与优化执行的终态
+
+Skill 生成与优化由执行引擎统一确认完成。引擎将当前请求的 root user 消息固定为本轮锚点；相同消息 ID 的摘要、diff 等元数据更新不代表新一轮输入，即使晚于 idle 到达也保留完成状态；不同用户消息仍使原轮的完成候选失效。引擎随后读回同一会话中对应的最终 assistant 消息；确认完成时间、完整正文或明确 stop 的已完成工具结果，以及本轮全部工具终态后，才关闭事件流和提示词请求。同步 HTTP 的完成结果只用于触发快照核验，不会被晚到 busy 覆盖，也不能替代快照的终态校验。没有 finish 字段时，还必须有本轮 root idle 及可信完成快照，含工具的中间轮不适用此兜底。旧轮、单独心跳、部分文本或已有文件均不能作为完成证据。快照读取期间的新消息/工具进展会使本次验证失效，短暂未落盘按有限退避重查。事件流漏掉工具完成通知时，按同一消息与工具 ID 的持久化终态补齐结果；快照仍在运行或无法匹配的工具继续阻止完成。
+
+普通响应的成功出口必须有权威终态确认。事件流 EOF 或仅剩心跳不能自行证明完成；EOF 会等待已有的受限快照核验，不提前取消查询。显式 noReply 仅免除助手回复要求，错误与取消仍优先。
+
+关闭已完成请求的传输不会改变调用者的取消信号。用户取消、模型错误及 15 分钟整体执行截止仍会拒绝结果；length、content-filter 或工具中间轮的同步响应不记成功。生成与优化桥接层不再以完成后 200/500ms 或静默 30 秒自行取消执行；缓存会话失效的生成回退仍使用同一执行截止。

@@ -301,7 +301,7 @@ export function SkillExperimentResult({
       if (sequence === loadSequence.current) setRefreshFailed(true);
       if (!silent && sequence === loadSequence.current) setError(loadError instanceof Error ? loadError.message : '加载实验失败');
     } finally {
-      if (!silent && sequence === loadSequence.current) setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }, [dataset, experimentId, skillName, user, version]);
 

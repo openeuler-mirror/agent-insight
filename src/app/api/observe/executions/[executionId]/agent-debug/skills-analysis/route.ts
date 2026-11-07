@@ -135,13 +135,6 @@ export async function POST(
   const runningAnalysis = { ...runningAgentDebugSkillsAnalysis({ interactionHash }), runId };
   const progress = createDiagnosisProgress({ user, executionId: execution.id, runId });
   progress.emit({ key: 'accepted', kind: 'task', module: 'skills', state: 'started', title: 'Skills 核验已开始', summary: '独立核验任务已创建。' });
-  const runningRow = await upsertAgentDebugSkillsAnalysis({
-    executionId: execution.id,
-    user,
-    interactionsHash: interactionHash,
-    skillsAnalysis: runningAnalysis,
-  });
-
   setActiveAgentDebugBackgroundJob({
     progress,
     kind: 'skills-analysis',
@@ -149,6 +142,18 @@ export async function POST(
     interactionsHash: interactionHash,
     startedAt: Date.now(),
   });
+  let runningRow: Awaited<ReturnType<typeof upsertAgentDebugSkillsAnalysis>>;
+  try {
+    runningRow = await upsertAgentDebugSkillsAnalysis({
+      executionId: execution.id,
+      user,
+      interactionsHash: interactionHash,
+      skillsAnalysis: runningAnalysis,
+    });
+  } catch (error) {
+    clearActiveAgentDebugBackgroundJob('skills-analysis', execution.id, interactionHash);
+    throw error;
+  }
 
   void runAgentDebugSkillsAnalysis({
       execution,

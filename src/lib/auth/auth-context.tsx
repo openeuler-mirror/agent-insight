@@ -121,6 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
         if (!response.ok) {
           const responseCode = typeof data?.code === 'string' ? data.code : '';
           if (loginMode === 'idaas_oauth' && IDAAS_REGION_ERROR_CODES.has(responseCode)) {
@@ -129,6 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             clearStoredAuth();
             return;
           }
+          if (response.status === 401 || response.status === 403) clearStoredAuth();
           throw new Error(data?.error || `Authentication refresh failed: ${response.status}`);
         }
 
@@ -148,7 +150,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setApiKey(nextApiKey);
       } catch (err) {
         if (cancelled) return;
-        clearStoredAuth();
         console.error('Authentication refresh failed:', err);
       } finally {
         if (!cancelled) setAuthReady(true);

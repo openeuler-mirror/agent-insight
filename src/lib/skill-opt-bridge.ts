@@ -157,18 +157,7 @@ async function streamSkillOptOpencodeImpl(
     skillName, baseVersion, checkedIssues, userFeedback, planItems,
   }) + await optimizationContinuity(user, threadId);
 
-  // ── 4. SSE handlers + watchdog（直接抄 skill-generator 的）──────────────────────
-  // watchdog：第一个业务事件来了才计时；空闲一段时间自动 abort 让 chat() 立即收尾。
-  // skill-opt 比 skill-generator 长——agent 要 read 多个文件 → 思考 → edit 多处，
-  // LLM 在两次 tool 间可能停顿 10-20s 不冒泡。skill-generator 12s 在这场景下经常误切。
-  const IDLE_BAILOUT_MS = 30_000;
-  let chatAbortController = new AbortController();
-  let idleWatchdog: NodeJS.Timeout | null = null;
-  const armIdleWatchdog = () => {
-    if (idleWatchdog) clearTimeout(idleWatchdog);
-    idleWatchdog = setTimeout(() => chatAbortController.abort(), IDLE_BAILOUT_MS);
-  };
-
+  // ── 4. SSE handlers ───────────────────────────────────────────────────────
   let agentText = '';
   const textFullByMessageId = new Map<string, string>();
   let openThinkingId: string | null = null;
@@ -194,7 +183,6 @@ async function streamSkillOptOpencodeImpl(
 
   const handlers: ChatHandlers = {
     onText: (e) => {
-      armIdleWatchdog();
       closeThinkingIfOpen();
       const key = e.messageID || e.partID || 'default';
       const lastFull = textFullByMessageId.get(key) ?? '';
@@ -210,7 +198,6 @@ async function streamSkillOptOpencodeImpl(
       send('text', realDelta);
     },
     onReasoning: (e) => {
-      armIdleWatchdog();
       if (!e.delta) return;
       if (!openThinkingId) {
         openThinkingId = `think_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -228,7 +215,6 @@ async function streamSkillOptOpencodeImpl(
       send('thinking', { id: openThinkingId, delta: realDelta });
     },
     onTool: (e) => {
-      armIdleWatchdog();
       const id = e.callID || e.partID;
       if (!id) return;
       // 关键：opencode 的 tool 事件有 start/delta/end/error 四个 phase。input 是流式累加的
@@ -274,7 +260,6 @@ async function streamSkillOptOpencodeImpl(
       }
     },
     onFileEdited: () => {
-      armIdleWatchdog();
       try {
         vfsAccum = scanWorkspaceFiles(workspaceDir);
         send('vfs_patch', { files: vfsAccum });
@@ -282,36 +267,7 @@ async function streamSkillOptOpencodeImpl(
         /* 扫描出错忽略，done 前还会再扫一次 */
       }
     },
-    // skill-generator 抄来的"完成即 abort"路径是它的外部兜底（防 deepseek 偶发不填
-    // info.time.completed 让 chat() 永远不结束）。但 onAssistantMessage(completed) 是
-    // **单条**助手消息结束的信号——每轮 LLM 调用都触发，包括"调完工具准备进下一轮"那条
-    // （finish: "tool-calls"）。skill-generator 没暴雷是因为它的 skill-generator 结构上就是
-    // 单轮（一口气 write 所有文件），整次响应只有一条 completed。
-    //
-    // skill-opt 是真多轮（read → 思考 → edit → 思考 → 收尾），所以这里复刻 opencode-client
-    // 内部对 finishReason 的判断（见 opencode-client.ts:1422-1430）：只在终止性 finish
-    // 时才 abort，"tool-calls"（本轮要继续）放行。
-    onAssistantMessage: (e) => {
-      if (e.status === 'error') {
-        const controller = chatAbortController;
-        setTimeout(() => controller.abort(), 500);
-        return;
-      }
-      if (e.status !== 'completed') return;
-      const finish = (e.info as any)?.finish ?? (e.info as any)?.finishReason;
-      // 没拿到 finish（少见——provider 没填）按"可能要继续"处理，不 abort，让 watchdog 兜底
-      if (typeof finish !== 'string') return;
-      if (finish === 'tool-calls') return;  // 本轮调了工具，下一轮还要 LLM
-      // stop / length / content-filter 等终止性原因
-      setTimeout(() => chatAbortController.abort(), 500);
-    },
     onSession: (e) => {
-      // session.idle 才是真正的"任务彻底空闲"信号——所有助手消息都完成、没有更多 LLM 调用了。
-      // 这条对 skill-opt 也是安全的终止依据。延迟 500ms 让最后一批 file_edited / tool_result 落地。
-      if (e.phase === 'idle') {
-        const controller = chatAbortController;
-        setTimeout(() => controller.abort(), 500);
-      }
       if (e.phase === 'error') {
         const errMsg = formatSessionError((e as any).error);
         console.error('[skill-opt-bridge] session.error:', errMsg);
@@ -352,9 +308,9 @@ async function streamSkillOptOpencodeImpl(
       sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
       system: systemPrompt,
       chatOptions: {
-        idleTimeoutMs: 30_000,
+        idleTimeoutMs: 0,
         streamTimeoutMs: 15 * 60 * 1000,
-        signal: chatAbortController.signal,
+        signal,
       },
       systemAgentName: SKILL_OPT_AGENT_NAME,
       interactionPolicy: 'auto-allow',
@@ -367,7 +323,6 @@ async function streamSkillOptOpencodeImpl(
   try {
     result = await executeAgent();
   } catch (err) {
-    if (idleWatchdog) clearTimeout(idleWatchdog);
     if (err instanceof Error && err.message.includes('停止 OpenCode 执行未确认')) throw err;
     signal?.throwIfAborted();
     const msg = err instanceof Error ? err.message : String(err);
@@ -376,20 +331,14 @@ async function streamSkillOptOpencodeImpl(
       && agentText.length === 0
       && announcedTools.size === 0;
     if (connectionFailedBeforeWork) {
-      if (connectionFailedBeforeWork) {
-        send('warning', { kind: 'model_connection_retry', message: '模型服务连接中断，正在自动重试（1/1）…' });
-        if (idleWatchdog) clearTimeout(idleWatchdog);
-        idleWatchdog = null;
-        chatAbortController = new AbortController();
-        await new Promise((resolve) => setTimeout(resolve, 750));
-      }
+      send('warning', { kind: 'model_connection_retry', message: '模型服务连接中断，正在自动重试（1/1）…' });
+      await new Promise((resolve) => setTimeout(resolve, 750));
       result = await executeAgent();
     } else {
       throw err;
     }
   }
 
-  if (idleWatchdog) clearTimeout(idleWatchdog);
   signal?.throwIfAborted();
   closeThinkingIfOpen();
 

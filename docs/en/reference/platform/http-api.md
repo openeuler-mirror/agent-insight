@@ -55,6 +55,8 @@ Platform errors commonly contain `{ "error": "message" }`; some add `code`, `det
 
 ## Implementation
 
+Client configuration reads initialize one record per client and platform. Concurrent first reads reuse the winning record without resetting its revision or overrides. Other database failures still propagate. See [client configuration, Chinese](../../../zh/how-to/platform/settings/access-control.md).
+
 - [User resolution](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/auth/auth.ts)
 - [Experiment listing and creation](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/route.ts)
 - [Client installation, Chinese](../../../zh/how-to/platform/settings/access-control.md)

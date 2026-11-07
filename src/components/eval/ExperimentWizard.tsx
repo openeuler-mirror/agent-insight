@@ -788,7 +788,7 @@ export function ExperimentWizard({
   }, [refreshAgents]);
 
   useEffect(() => {
-    if (!user || environmentBusy || (step !== 1 && !(step === 2 && isBenchmarkDataset && traceMode === 'generate'))) return;
+    if (!user || environmentBusy || (step !== 1 && !(step === 2 && traceMode === 'generate'))) return;
     const timer = window.setInterval(() => {
       refreshAgents().catch(() => undefined);
     }, 10_000);
@@ -800,7 +800,7 @@ export function ExperimentWizard({
       window.clearInterval(timer);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [refreshAgents, step, user, isBenchmarkDataset, traceMode, environmentBusy]);
+  }, [refreshAgents, step, user, traceMode, environmentBusy]);
 
   useEffect(() => {
     if (!user) return;
