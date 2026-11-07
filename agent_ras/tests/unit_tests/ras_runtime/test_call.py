@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 import pytest
 
@@ -26,7 +27,9 @@ from ras_runtime import insight_push
 
 
 @pytest.fixture(autouse=True)
-def _clean_embed():
+def _clean_embed(monkeypatch):
+    monkeypatch.setenv("RAS_EMBED_USE_IPC", "0")
+    monkeypatch.setenv("RAS_EMBED_IPC_FORCE_LOCAL", "1")
     reset_runtime_for_tests()
     yield
     reset_runtime_for_tests()
@@ -142,3 +145,82 @@ def test_action_result_can_be_flushed_before_short_lived_host_exits(monkeypatch)
     assert flushed["acked"] == 1
     assert flushed["pending"] == 0
     assert flushed["timed_out"] is False
+
+
+@pytest.mark.parametrize("timeout_ms", [0, 2000])
+def test_pre_abort_receipt_flush_respects_remaining_deadline(monkeypatch, timeout_ms):
+    """A stalled delivery must not extend the pre-abort wait or cancel the push."""
+    arrived = threading.Event()
+    release = threading.Event()
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def stalled_urlopen(req, timeout):
+        arrived.set()
+        assert release.wait(5)
+        return Response()
+
+    monkeypatch.setattr(insight_push.request, "urlopen", stalled_urlopen)
+    monkeypatch.setattr(insight_push, "_LOADED", True)
+    monkeypatch.setattr(insight_push, "_LOADED_KEY", "wi_test")
+    monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
+    insight_push.reset_pending_pushes_for_tests()
+    try:
+        call("hello", "opencode:ses_deadline", json.dumps({"platform": "opencode", "config": {}}))
+        call("action_result", "opencode:ses_deadline", json.dumps({"action": "abort_stream", "ok": True}))
+        assert arrived.wait(1)
+        started = time.monotonic()
+        flushed = json.loads(call("flush", "opencode:ses_deadline", json.dumps({"timeout_ms": timeout_ms})))
+        elapsed = time.monotonic() - started
+        if timeout_ms:
+            assert 1.8 <= elapsed < 2.7
+        else:
+            assert elapsed < 0.5
+        assert flushed["pending"] == 1
+        assert flushed["timed_out"] is True
+    finally:
+        release.set()
+        call("flush", "opencode:ses_deadline", json.dumps({"timeout_ms": 2000}))
+
+
+@pytest.mark.parametrize("phase, ok", [("terminating", True), ("failed", False)])
+def test_abort_signal_phase_survives_runtime_and_http_delivery(monkeypatch, phase, ok):
+    """Preserve the stage used by frontend labels instead of inferring it from ok."""
+    captured = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def capture_request(req, timeout):
+        captured.extend(json.loads(req.data.decode("utf-8"))["events"])
+        return Response()
+
+    monkeypatch.setattr(insight_push.request, "urlopen", capture_request)
+    monkeypatch.setattr(insight_push, "_LOADED", True)
+    monkeypatch.setattr(insight_push, "_LOADED_KEY", "wi_test")
+    monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
+    insight_push.reset_pending_pushes_for_tests()
+    call("hello", "opencode:ses_phase", json.dumps({"platform": "opencode", "config": {}}))
+    result = json.loads(call("action_result", "opencode:ses_phase", json.dumps({
+        "action": "abort_stream", "phase": phase, "ok": ok, "channel": "session.abort",
+    })))
+    flushed = json.loads(call("flush", "opencode:ses_phase", json.dumps({"timeout_ms": 2000})))
+    assert result["phase"] == phase
+    assert flushed["acked"] == 1
+    assert len(captured) == 1
+    assert captured[0]["payload"]["phase"] == phase
+    assert captured[0]["payload"]["ok"] is ok
+    assert captured[0]["summary"] == f"abort_stream {phase} via session.abort"

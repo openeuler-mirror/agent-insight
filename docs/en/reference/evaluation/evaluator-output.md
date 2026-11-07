@@ -9,6 +9,8 @@ This contract applies to one result from a built-in or custom platform evaluator
 
 ## Output fields
 
+Key-action coverage combines extracted steps, the original final response and redacted tool-call evidence to avoid treating a summary omission as a missing execution. Tool evidence includes at most 32 events with each summary field limited to 500 characters; truncation does not prove absence. Failed calls do not count as successful execution, and a claim in the final answer cannot replace an actual call record. Original event indexes remain separate from extracted step indexes.
+
 The definition is in `src/lib/evaluators/eval-output.ts`. All five top-level fields are optional and may be combined:
 
 ```ts

@@ -12,6 +12,9 @@ changefreq: "monthly"
 | 入口 | 用途 | 契约 |
 | --- | --- | --- |
 | 平台业务 API | 实验查询、创建和控制 | [实验 HTTP 接口](../evaluation/experiments-api.md) |
+| 数据集 API | 定义、样本、历史 Trace 自动生成与删除进度 | [数据集 HTTP 接口](../evaluation/datasets-api.md) |
+| Skill 管理 API | 资产、版本、文件与发布导入 | [Skill 管理 HTTP 接口](../optimization/skills-api.md) |
+| 可靠性客户端 API | 注册、设备凭证、配置与控制回执 | [可靠性客户端与控制接口](../reliability/client-control-api.md) |
 | Trace 接入 API | 接收采集器或 OTel 导出器数据 | [Trace HTTP 接入](../observability/trace-ingestion.md) |
 | 平台内置评估器 | 将单次评估结果交给平台 | [评估器输出](../evaluation/evaluator-output.md) |
 | 独立 Benchmark Evaluator | 平台派发官方 Benchmark 评判任务 | [Benchmark 评测协议](../evaluation/benchmark-protocol.md) |
@@ -25,7 +28,7 @@ URL 使用部署地址作为前缀；若部署在子路径下，还需包含实�
 
 1. 路由传入非空 `explicitUser` 时直接使用该值；部分路由从请求体或查询参数 `user` 传入。
 2. 否则查找请求头 `x-witty-api-key`，使用匹配用户。
-3. 请求头没有该字段时，再读取查询参数 `apiKey`。
+3. 请求头未提供非空 Key 时，再读取查询参数 `apiKey`。
 4. 未匹配到用户则返回空身份，由路由自行处理。无效的请求头 Key 不会继续尝试查询参数 Key。
 
 因此，显式 `user` 是兼容性的用户选择方式，不能当作已验证凭证或安全隔离证明。集成调用应携带目标账号的 `x-witty-api-key`，并避免同时传入覆盖身份的 `user`；Key 从当前账号的客户端安装指导获取。浏览器登录、IDaaS 和各采集器的身份流程应查对应操作指南，不能从上述函数推断所有路由行为。

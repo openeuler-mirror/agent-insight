@@ -305,12 +305,19 @@ sequenceDiagram
   end
   FAC-->>RC: JSON
   RC->>AA: onActions(actions)
+  opt OpenCode abort_stream
+    AA->>RC: beforeAbort action_result phase=terminating
+    RC->>FAC: action_result then flush, remaining budget <= 2s
+    FAC-->>AA: delivery acknowledged or failed/timed out
+  end
   AA->>HC: requestAbortStream / notice / steer
-  PJ->>RC: reportActionResult
+  PJ->>RC: reportActionResult (other actions or abort failure)
   RC->>FAC: action_result → insight_push fail-open
 ```
 
 L3 语义判定（协议 inproc：OpenCode / xiaoO）：Detector 经 `HostCallbackAgentAdapter` park 请求 → observe 响应带 `skill_requests` → 宿主履行后 `skill_result` 回 SessionHub → 再产出 wire actions。OpenCode 的 host runner 是 `skill_judge.js` + ras-judge；xiaoO 走 Python `RasClient.skill_result`。
+
+OpenCode 在实际执行 `abort_stream` 前发送 `phase=terminating` 的 `action_result`，先创建信号再有界 flush，最长等待 2 秒；失败或超时也执行中断。前端显示“终止退出”，不当作执行或恢复成功。`ok=true` 仅为本地信号创建结果；实际中断失败另报 `phase=failed`、`ok=false`，前端显示“退出失败”并保留之前的信号。成功时不重复上报。其他宿主及通知、纠偏仍按执行后的结果上报；自然完成不额外等待迟到的检测。
 
 ### 4.6 Python 宿主 inproc（无 FFI）
 
@@ -385,8 +392,13 @@ sequenceDiagram
   RC->>Hub: call_observe
   Hub-->>RC: wire_actions
   RC->>AA: onActions
+  opt OpenCode abort_stream
+    AA->>RC: action_result phase=terminating before abort
+    RC->>Hub: enqueue receipt then flush <= 2s
+    Hub-->>AA: ack or fail-open
+  end
   AA->>HC: abort_notice_steer
-  P->>RC: action_result
+  P->>RC: other action_result or abort failure
   RC->>Hub: action_result_push
 ```
 

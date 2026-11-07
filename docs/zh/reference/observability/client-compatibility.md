@@ -46,3 +46,5 @@ QwenPaw plugins 目录。安装后必须重启 QwenPaw；新建对话时会在�
 [QwenPaw Trace Collector 接入指南](../../how-to/observability/qwenpaw-trace-collector.md)。
 
 这些是安装行为和已有验证范围，不代表任意版本、操作系统或真实模型均通过验证。安装入口见[客户端安装](../../how-to/platform/settings/access-control.md)。
+
+[English](../../../en/reference/observability/client-compatibility.md)

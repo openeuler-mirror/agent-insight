@@ -85,6 +85,7 @@ export function createRasClient(options = {}) {
       const out = await call("action_result", sessionId, {
         action: result?.action,
         ok: Boolean(result?.ok),
+        phase: result?.phase,
         channel: result?.channel,
         error: result?.error,
         message: result?.message,
