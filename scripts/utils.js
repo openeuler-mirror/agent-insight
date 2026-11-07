@@ -102,7 +102,7 @@ function findPidOnPort(port) {
         try {
           const pid = execSync(`lsof -t -i:${port} -sTCP:LISTEN`, { encoding: 'utf8' })
           if (pid.trim()) return pid.trim()
-        } catch (e) {}
+        } catch {}
       }
 
       if (fs.existsSync('/bin/ss') || fs.existsSync('/usr/bin/ss')) {
@@ -110,7 +110,7 @@ function findPidOnPort(port) {
           const output = execSync(`ss -lptn "sport = :${port}"`, { encoding: 'utf8' })
           const match = output.match(/pid=(\d+)/)
           if (match) return match[1]
-        } catch (e) {}
+        } catch {}
       }
 
       if (fs.existsSync('/bin/netstat') || fs.existsSync('/usr/bin/netstat')) {
@@ -118,15 +118,15 @@ function findPidOnPort(port) {
           const output = execSync(`netstat -nlp 2>/dev/null | grep ":${port} "`, { encoding: 'utf8' })
           const match = output.match(/(\d+)\//)
           if (match) return match[1]
-        } catch (e) {}
+        } catch {}
       }
 
       try {
         const output = execSync(`fuser ${port}/tcp 2>/dev/null`, { encoding: 'utf8' })
         if (output.trim()) return output.trim()
-      } catch (e) {}
+      } catch {}
     }
-  } catch (e) {}
+  } catch {}
 
   return null
 }

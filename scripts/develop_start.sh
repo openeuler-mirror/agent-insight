@@ -20,6 +20,12 @@
 # Navigate to the project root directory
 cd "$(dirname "$0")/.."
 
+PORT="${AGENT_INSIGHT_PORT:-3000}"
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  echo "Error: AGENT_INSIGHT_PORT must be an integer between 1 and 65535." >&2
+  exit 1
+fi
+
 PROCESS_DATABASE_URL_IS_SET="${DATABASE_URL+x}"
 PROCESS_DATABASE_URL="${DATABASE_URL:-}"
 
@@ -132,7 +138,6 @@ find_pid_on_port() {
   echo "$pid"
 }
 
-PORT=3000
 echo "Checking port $PORT..."
 
 # Check for OpenGauss configuration in ~/.agent-insight/.env
@@ -327,7 +332,7 @@ set -a
 load_agent_insight_env
 set +a
 
-NODE_OPTIONS="--max-old-space-size=4096" nohup npm run dev > server.log 2>&1 &
+NODE_OPTIONS="--max-old-space-size=4096" nohup npm run dev -- --port "$PORT" > server.log 2>&1 &
 NEW_PID=$!
 
 echo "Server process started."

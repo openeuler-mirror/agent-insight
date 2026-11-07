@@ -1,6 +1,8 @@
 ---
 title: "English documentation"
 description: "Core tutorials, operations, API contracts, and translation coverage."
+keywords: ["Agent Insight", "documentation", "tutorials", "translation coverage"]
+changefreq: "monthly"
 ---
 
 Chinese is the authoritative source. There are 17 English body pages covering first use, Docker deployment, client compatibility, operations, and HTTP/evaluation contracts. English navigation/status pages do not count as translated bodies. Pages linked with a Chinese label remain untranslated.

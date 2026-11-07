@@ -1,6 +1,8 @@
 ---
 title: "HTTP APIs and user identity"
 description: "API families, user resolution, responses, and integration boundaries."
+keywords: ["Agent Insight", "HTTP APIs", "user identity", "platform integration"]
+changefreq: "monthly"
 ---
 
 This page is the entry point for existing HTTP interfaces. Identity handling and response shapes vary by endpoint. The documentation describes the current implementation; it does not promise uniform authentication, a universal error envelope, or versioned stability for every route.
@@ -54,6 +56,8 @@ curl --fail-with-body \
 Platform errors commonly contain `{ "error": "message" }`; some add `code`, `detail`, or `hint`. Benchmark services use structured errors. Handle both HTTP status and body instead of forcing all errors into one shape. Cancelling an HTTP request also does not prove that a remote process has stopped.
 
 ## Implementation
+
+Client configuration reads initialize one record per client and platform. Concurrent first reads reuse the winning record without resetting its revision or overrides. Other database failures still propagate. See [client configuration, Chinese](../../../zh/how-to/platform/settings/access-control.md).
 
 - [User resolution](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/auth/auth.ts)
 - [Experiment listing and creation](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/route.ts)

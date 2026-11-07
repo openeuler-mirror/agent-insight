@@ -23,7 +23,7 @@ changefreq: monthly
 列表页承担“发现样本”和“缩小范围”两类工作，适合先从大量执行记录中筛出值得进入详情的 Trace。
 
 <p align="center">
-  <img src="../../../images/agent/observability/trace_list.png" alt="链路追踪列表页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/agent/observability/trace_list.png" alt="链路列表展示运行状态、耗时与 Token 用量" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 上图展示了链路追踪列表页的典型结构：顶部是聚合指标，指标下方是筛选区，中间是执行记录表格，右侧操作列用于继续进入评测、分析或详情页。
@@ -203,7 +203,7 @@ MCTS、Goal Plus 和原生子 Agent 的概览统一展示父子关系卡片。�
 父级或子级正文尚未到达时显示等待状态；详情会开启自动刷新，即使 Trace 已结束也会等待关系就绪，用户可以手动关闭自动刷新。关系冲突时显示提示且不提供跳转；查询失败显示暂不可用，已有正文仍可查看。跳转加载失败时可以重试或返回列表，浏览器前进、后退继续保留原来的筛选条件。
 
 <p align="center">
-  <img src="../../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/agent/observability/trace_overview.png" alt="链路详情展示调用树、时间线与选中节点的消息" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。

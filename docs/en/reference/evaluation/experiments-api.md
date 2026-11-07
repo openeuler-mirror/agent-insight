@@ -1,6 +1,8 @@
 ---
 title: "Experiment HTTP API"
 description: "Create, start, query, rename, cancel, and delete ordinary experiments."
+keywords: ["Agent Insight", "experiment API", "evaluation tasks", "asynchronous execution"]
+changefreq: "monthly"
 ---
 
 This reference covers common ordinary-experiment calls and asynchronous behavior. Benchmark, Skill, and LLM comparison experiments use different branches, so requests and responses are not interchangeable. See the [experiment guide, Chinese](../../../zh/how-to/evaluation/experiments.md) and [HTTP identity conventions](../platform/http-api.md).
@@ -14,6 +16,8 @@ This reference covers common ordinary-experiment calls and asynchronous behavior
 | `GET /api/experiments/cancellations` | Up to 100 current-user `pending` cancellation records as `{ cancellations }`, not the complete cancellation history |
 
 Send the current account Key instead of relying on the overriding `user` selector. An ordinary list with no identity can have a broader scope, so its success is not proof of credential validation. Writes and detail branches apply their own ownership handling.
+
+Execution progress in experiment details is read through a consistent transaction snapshot using only required fields. A transaction is limited to 30 seconds, with a shared 35-second wait budget across at most two attempts. Only `P1008/P2028/P2034` trigger one retry, logged with its code and elapsed time. Persistent failures still return errors; retries do not rerun Agents or evaluators or rewrite experiment records. When a background refresh succeeds, the UI exits the full-page loading state and displays the result.
 
 ## Create an ordinary single-group experiment
 

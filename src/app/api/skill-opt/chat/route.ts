@@ -31,6 +31,7 @@ import {
   finishWorkbenchOptimizationRun,
   updateWorkbenchOptimizationProgress,
 } from '@/lib/skill-workbench/optimization-adapter';
+import { OptimizationFinalizationError } from '@/lib/skill-workbench/optimization-finalization';
 
 export const dynamic = 'force-dynamic';
 
@@ -324,6 +325,7 @@ export async function POST(req: NextRequest) {
     preStreamError = err?.message || String(err);
   }
   if (sessionExists && !agentMessage) {
+    let initializationError = preStreamError || '无法创建优化消息快照';
     if (workbenchRun) {
       await finishWorkbenchOptimizationRun({
         user,
@@ -332,10 +334,13 @@ export async function POST(req: NextRequest) {
         sourceKind: optimizationSourceKind,
         sourceRefs: optimizationSourceRefs,
         recordId: workbenchRun.recordId,
-        error: preStreamError || '无法创建优化消息快照',
-      }).catch(() => undefined);
+        error: initializationError,
+      }).catch((error) => {
+        console.error('[skill-opt route] failed to settle initialization error:', error);
+        if (error instanceof OptimizationFinalizationError) initializationError = `${initializationError}；${error.message}`;
+      });
     }
-    return new Response(JSON.stringify({ error: preStreamError || '无法创建优化消息快照' }), {
+    return new Response(JSON.stringify({ error: initializationError }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

@@ -1,3 +1,10 @@
+---
+title: "Agent Fault Injection — 架构"
+description: "说明故障注入模块、平台编排与本机 Worker 的分工，以及注入事实和业务 Trace 的采集关联。"
+keywords: ["Agent Insight", "故障注入", "系统架构", "运行观测"]
+changefreq: "monthly"
+---
+
 # Agent Fault Injection — 架构
 
 ## 目标

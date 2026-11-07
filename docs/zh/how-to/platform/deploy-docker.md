@@ -1,6 +1,8 @@
 ---
 title: "用 Docker 部署服务端"
 description: "在线镜像、离线导入、源码挂载与持久化运行目录。"
+keywords: ["Agent Insight", "Docker", "服务部署", "容器配置"]
+changefreq: "monthly"
 ---
 
 如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。

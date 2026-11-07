@@ -87,7 +87,7 @@ test('capabilities require discovered Agents and support v1/v2 Skill isolation',
         probe: { ready: true, platforms: { opencode: { agents, models: [] } } },
       }).platforms.find((item: { id: string }) => item.id === 'opencode').runExperimentCase;
       assert.equal(capabilities(['build']).ready, true);
-      assert.equal(capabilities(['build']).skillSnapshotVersion, 4);
+      assert.equal(capabilities(['build']).skillSnapshotVersion, 5);
       assert.equal(capabilities([]).ready, false);
       assert.match(capabilities([]).unavailableReason, /Agent/);
     } finally {
