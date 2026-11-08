@@ -38,7 +38,7 @@ function loadConfiguration() {
                 }
             });
         }
-    } catch (e) {}
+    } catch {}
     
     return {
         apiKey: config['AGENT_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.AGENT_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,
@@ -122,7 +122,7 @@ async function main() {
                         const skills = JSON.parse(data);
                         const existing = skills.find(s => s.name === extractedName);
                         resolve(existing);
-                    } catch(e) { resolve(null); }
+                    } catch { resolve(null); }
                 } else {
                     resolve(null);
                 }
