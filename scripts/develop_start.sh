@@ -145,6 +145,7 @@ load_agent_insight_env
 
 if [[ "${DATABASE_URL:-}" == file:* ]]; then
   echo "SQLite database target: ${DATABASE_URL#file:}"
+  node scripts/migrations/check-diagnosis-schema.cjs || exit 1
 else
   echo "Using custom database configuration."
 fi

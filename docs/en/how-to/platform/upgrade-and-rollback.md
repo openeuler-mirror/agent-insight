@@ -59,3 +59,9 @@ When the schema changed, default to the old version's matching pre-upgrade backu
 Compatibility across arbitrary versions is not guaranteed. Retain logs, versions, and configuration differences for troubleshooting, and remove secrets or sensitive business data before sharing them.
 
 [中文权威版本](../../../zh/how-to/platform/upgrade-and-rollback.md)
+
+### SQLite upgrade for evaluation diagnosis
+
+Rehearse on an isolated copy of the deployed database. Quiesce writers and background jobs. Back up external Skill files and report assets alongside the database. Run `python3 scripts/migrations/diagnosis-inputs.py --database /path/to/witty_insight.db` for preflight, then add `--apply --backup /backup/diagnosis-before.db` with a new backup path. The script uses SQLite's backup API, validates integrity and foreign keys, and compares every pre-existing column and row before committing. Save the JSON verification report.
+
+Repeat on the copy with another backup destination and restore the initial backup into a separate directory for verification. Startup requires migration on existing databases. After new writes have been accepted, preserve the latest database and assets before recovery; rolling back to an old backup alone discards those writes.

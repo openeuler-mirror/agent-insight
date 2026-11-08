@@ -51,9 +51,12 @@ export async function PATCH(
 
   const item = await (prismaRaw as any).skillOptPlanItem.findUnique({
     where: { id },
-    include: { plan: { select: { status: true } } },
+    include: { plan: { select: { status: true, sessionId: true, session: { select: { user: true } } } } },
   });
   if (!item) return NextResponse.json({ error: 'item not found' }, { status: 404 });
+  const owner = item.plan.session.user;
+  const identity = item.plan.sessionId.startsWith('diagnosis-') ? (await resolveUser(req)).username : user;
+  if (identity !== owner) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (item.status === 'applied' || item.plan?.status === 'applied') {
     return NextResponse.json({ error: 'plan already applied, item immutable' }, { status: 409 });
   }

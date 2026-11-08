@@ -16,6 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prismaRaw } from '@/lib/storage/prisma';
+import { canAccessDiagnosisSession } from '@/lib/diagnosis/http';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
 
@@ -26,11 +27,12 @@ export const dynamic = 'force-dynamic';
  * 单会话详情：含全部 messages（按 createdAt 升序）和 iterations（按 draftNumber 升序）。
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id } = await params;
+    if (!await canAccessDiagnosisSession(req, id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const session = await (prismaRaw as any).skillOptSession.findUnique({
       where: { id },
       include: {
@@ -57,6 +59,7 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
+    if (!await canAccessDiagnosisSession(req, id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const body = await req.json();
     const { title, files } = body;
 
@@ -83,11 +86,12 @@ export async function PATCH(
  * 级联删除（schema onDelete: Cascade 同步带走 messages + iterations）。
  */
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id } = await params;
+    if (!await canAccessDiagnosisSession(req, id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
     // 删除后拿不到归属人，先读一次；只在统计开启时才多这一次查询。
     const owner = isUsageEnabled()
