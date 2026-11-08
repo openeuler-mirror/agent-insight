@@ -1,6 +1,8 @@
 ---
 title: "实验 HTTP 接口"
 description: "普通实验的创建、启动、查询、重命名及取消删除约定。"
+keywords: ["Agent Insight", "实验接口", "评测任务", "异步执行"]
+changefreq: "monthly"
 ---
 
 本页覆盖普通实验的常用调用及异步语义。Benchmark、Skill、LLM 对比实验走同一平台的不同分支，不能假定请求和响应完全相同；界面操作见[实验指南](../../how-to/evaluation/experiments.md)。用户解析见 [HTTP 接口与用户身份](../platform/http-api.md)。
@@ -14,6 +16,8 @@ description: "普通实验的创建、启动、查询、重命名及取消删除
 | `GET /api/experiments/cancellations` | 返回当前用户最多 100 条 `pending` 取消记录：`{ cancellations }`，不是全部历史取消列表 |
 
 调用时携带当前账号 Key，避免仅用可覆盖身份的 `user` 参数。缺少身份的普通列表可能扩大查询范围，不能据此确认 Key 有效；写操作和详情归属检查按各自分支处理。
+
+实验详情中的执行进度通过只读事务获取一致性快照。单次事务最长 30 秒，两次尝试共享 35 秒等待预算；仅 `P1008/P2028/P2034` 最多重新读取一次，重读会记录错误码及耗时。读取仅选择必要字段，持续失败仍返回错误，不重跑 Agent 或评估任务，也不改写实验记录。
 
 ## 创建普通单组实验
 

@@ -30,6 +30,7 @@ import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { useExperimentListRefresh } from '@/lib/client/use-experiment-list-refresh';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 
 interface ExperimentRow {
@@ -48,7 +49,6 @@ interface ExperimentRow {
 }
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
-const LIST_REFRESH_MS = 5_000;
 
 function responseError(value: unknown, fallback: string): string {
   if (!value || typeof value !== 'object') return fallback;
@@ -163,23 +163,7 @@ export default function ExperimentsPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  // 非终态实验完成后服务端状态会变化；串行静默轮询，避免旧响应覆盖新分页快照。
-  useEffect(() => {
-    if (!rows.some((row) => row.status === 'running' || row.status === 'draft')) return;
-    let cancelled = false;
-    let timer = 0;
-    const schedule = () => {
-      timer = window.setTimeout(async () => {
-        await load(true);
-        if (!cancelled) schedule();
-      }, LIST_REFRESH_MS);
-    };
-    schedule();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [rows, load]);
+  useExperimentListRefresh(rows, load);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   // 页码/每页条数变化后若越界（如切大页码后减小 pageSize），回夹到末页

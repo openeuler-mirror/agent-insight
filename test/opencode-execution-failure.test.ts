@@ -36,10 +36,11 @@ import { summarizeWorkbenchItemProgress, workbenchCompletionStatus } from '@/lib
 
 const sessionId = 'session-failed';
 const payload = { text: '分析日志', model: { providerID: 'test', modelID: 'model' } };
+const completedResponse = (parts: any[]) => ({ info: { id: 'msg', role: 'assistant', sessionID: sessionId, parentID: 'current-user', time: { completed: 1 }, finish: 'stop' }, parts });
 function mockClient(events: any[], response: unknown, pendingPrompt = false) {
   const client = new AgentInsight({ baseURL: 'http://localhost:4096', logLevel: 'error' });
   Object.defineProperty(client, 'client', { configurable: true, value: {
-    session: { children: async () => ({ data: [] }) },
+    session: { children: async () => ({ data: [] }), messages: async () => ({ data: [{ info: { id: 'current-user', role: 'user', sessionID: sessionId }, parts: [] }, response] }) },
     event: { subscribe: async () => ({ stream: (async function* () { yield* events; })() }) },
   } });
   client.sendPrompt = async (_id, _payload, options) => {
@@ -88,7 +89,7 @@ test('OpenCode 结构化存储错误保留 ENOSPC 和 EDQUOT 分类', async () =
 });
 
 test('正常文本包含 Connection error 不按字符串误判；空会话单独失败', async () => {
-  const client = mockClient([], { info: { id: 'msg' }, parts: [{ type: 'text', text: '日志中的 Connection error 是网络问题。' }] });
+  const client = mockClient([], completedResponse([{ type: 'text', text: '日志中的 Connection error 是网络问题。' }]));
   assert.match((await client.chat(sessionId, payload)).text, /Connection error/);
   await assert.rejects(mockClient([], {}).chat(sessionId, payload), { code: 'MODEL_NO_RESPONSE' });
   assert.equal((await mockClient([], {}).chat(sessionId, { ...payload, noReply: true })).text, '');
@@ -145,6 +146,6 @@ test('结构化诊断中的密钥字段会脱敏，响应中的工具活动不�
     assert.doesNotMatch(error.message, /sensitive-provider-value/);
     return true;
   });
-  const toolClient = mockClient([], { parts: [{ type: 'tool', tool: 'read', state: { status: 'completed' } }] });
+  const toolClient = mockClient([], completedResponse([{ id: 'read-tool', type: 'tool', tool: 'read', state: { status: 'completed', output: 'file contents' } }]));
   assert.equal((await toolClient.chat(sessionId, payload)).text, '');
 });

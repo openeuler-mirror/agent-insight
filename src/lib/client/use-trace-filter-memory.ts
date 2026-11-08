@@ -17,11 +17,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { parseAsString, useQueryStates, type inferParserType } from 'nuqs';
 
 export const traceFilterParsers = {
     time: parseAsString.withDefault('all'),
+    timeFrom: parseAsString.withDefault(''),
+    timeTo: parseAsString.withDefault(''),
     status: parseAsString.withDefault('all'),
     anomaly: parseAsString.withDefault('all'),
     framework: parseAsString.withDefault('all'),
@@ -64,6 +66,7 @@ function readSnapshot(user: string): FilterSnapshot | null {
 }
 
 export function useTraceFilterMemory(user: string | null) {
+    const pathname = usePathname();
     const query = useSearchParams().toString();
     const [filters, setFilters] = useQueryStates(traceFilterParsers);
     const snapshot = JSON.stringify(filters);
@@ -71,6 +74,7 @@ export function useTraceFilterMemory(user: string | null) {
     const [readyUser, setReadyUser] = useState<string | null>(null);
 
     useEffect(() => {
+        if (pathname !== '/trace') return;
         if (!user) {
             visit.current = null;
             // eslint-disable-next-line react-hooks/set-state-in-effect -- Login changes must invalidate the storage hydration gate.
@@ -81,12 +85,21 @@ export function useTraceFilterMemory(user: string | null) {
             // Deep links define their own context; only a bare /trace restores the last visit.
             const saved = query ? null : readSnapshot(user);
             visit.current = { user, restoring: saved ? JSON.stringify(saved) : null, cleared: null };
-            if (saved && snapshot !== visit.current.restoring) {
-                void setFilters(saved, { history: 'replace' });
-                return;
+        }
+        if (visit.current.restoring) {
+            const params = new URLSearchParams(query);
+            const committed = { ...defaults };
+            for (const key of Object.keys(traceFilterParsers) as (keyof FilterSnapshot)[]) {
+                const value = params.get(key);
+                if (value !== null) committed[key] = value;
+            }
+            if (snapshot !== visit.current.restoring || JSON.stringify(committed) !== visit.current.restoring) {
+                const saved = JSON.parse(visit.current.restoring) as FilterSnapshot;
+                // Route entry resets nuqs's URL queue; defer restoration and wait for its committed URL.
+                const timer = window.setTimeout(() => { void setFilters(saved, { history: 'replace' }); }, 0);
+                return () => window.clearTimeout(timer);
             }
         }
-        if (visit.current.restoring && snapshot !== visit.current.restoring) return;
         visit.current.restoring = null;
         setReadyUser(user);
         if (visit.current.cleared === snapshot) return;
@@ -96,7 +109,7 @@ export function useTraceFilterMemory(user: string | null) {
         } catch {
             // Disabled or full browser storage must not prevent Trace browsing.
         }
-    }, [query, setFilters, snapshot, user]);
+    }, [pathname, query, setFilters, snapshot, user]);
 
     const clearFilterMemory = () => {
         if (user) {

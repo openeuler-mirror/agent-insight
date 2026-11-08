@@ -1,6 +1,8 @@
 ---
 title: "Runtime configuration"
 description: "Runtime root, ports, database, models, and evaluation configuration entry points."
+keywords: ["Agent Insight", "runtime configuration", "environment variables", "databases"]
+changefreq: "monthly"
 ---
 
 This reference covers common platform settings. Clients and the Evaluator are separate processes; the platform `.env` is not automatically applied to them. The installed version's `.env.example` is the complete configuration template. Do not assume historical variables are still supported.

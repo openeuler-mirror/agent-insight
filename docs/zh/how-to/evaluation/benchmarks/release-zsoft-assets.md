@@ -1,3 +1,10 @@
+---
+title: "ZSoft 评测资产发布指南"
+description: "指导维护者构建、冻结并发布 ZSoft 用户态与内核题评测资产，明确发布与判题验收的边界。"
+keywords: ["Agent Insight", "ZSoft", "评测资产", "镜像发布"]
+changefreq: "monthly"
+---
+
 # ZSoft 评测资产发布指南
 
 本指南供接入包维护者构建、冻结和发布 ZSoft 评测资产。普通部署直接消费接入包固定版本，步骤见 [ZSoft 部署指南](./deploy-zsoft.md)。平台数据导入、Agent Runtime 接入和资产发布是不同流程，发布操作不代表完成真实判题验收。

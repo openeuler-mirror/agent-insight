@@ -16,7 +16,7 @@
 
 'use client'
 
-import { Check, X as XIcon, AlertTriangle as AlertIcon } from 'lucide-react'
+import { Check, Clock, X as XIcon, AlertTriangle as AlertIcon } from 'lucide-react'
 import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 import { interleaveRasActions } from '@/lib/ingest/ras/delivery-link'
@@ -164,12 +164,18 @@ function MarkerSourceSection({
                         key={`result-${step.result.action}-${step.result.ts}-${index}`}
                         className="flex flex-wrap items-center gap-1.5 text-xs text-foreground-secondary pl-1"
                       >
-                        {step.result.ok
-                          ? <Check className="size-3.5 text-success" aria-hidden />
-                          : <XIcon className="size-3.5 text-error" aria-hidden />}
+                        {step.result.phase === 'terminating'
+                          ? <Clock className="size-3.5 text-foreground-muted" aria-hidden />
+                          : step.result.phase === 'failed' || !step.result.ok
+                          ? <XIcon className="size-3.5 text-error" aria-hidden />
+                          : <Check className="size-3.5 text-success" aria-hidden />}
                         <span title={step.result.action}>{rasActionLabel(step.result.action, locale)}</span>
                         <span>
-                          {step.result.ok
+                          {step.result.phase === 'terminating'
+                            ? tt('traceTree.rasTerminating')
+                            : step.result.phase === 'failed' || (step.result.action === 'abort_stream' && !step.result.ok)
+                            ? tt('traceTree.rasExitFailed')
+                            : step.result.ok
                             ? tt('traceTree.rasActionSucceeded')
                             : tt('traceTree.rasActionFailed')}
                         </span>

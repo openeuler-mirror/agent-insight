@@ -172,6 +172,7 @@ export async function createWorkbenchExperiment(input: {
   executionTarget?: SkillExecutionTarget | null;
   modelConfigId?: string | null;
   agentTimeoutSeconds?: number;
+  executionConcurrency?: number;
 }) {
   if (input.sessionId) {
     const session = await prismaRaw.skillWorkbenchSession.findFirst({
@@ -231,7 +232,8 @@ export async function createWorkbenchExperiment(input: {
     return { kind: 'invalid_evaluators' as const };
   }
   const evaluatorConfigsJson = await prepareExperimentEvaluatorConfigs(input.user, evaluatorIds, input.evaluatorConfigs, input.evaluatorExecutionConfig);
-  const executionTarget = await validateSkillExecutionTarget(input.user, input.executionTarget, input.preset === 'trigger');
+  const concurrencyPolicy = getSkillExperimentConcurrencyPolicy(input.preset, input.executionConcurrency);
+  const executionTarget = await validateSkillExecutionTarget(input.user, input.executionTarget, input.preset === 'trigger', concurrencyPolicy.executionConcurrency);
   if (input.preset === 'trigger' && !executionTarget.model) return { kind: 'invalid_trigger_model' as const };
   const triggerSkills = input.preset === 'trigger'
     ? await freezeTriggerSkills(input.user, {
@@ -242,7 +244,6 @@ export async function createWorkbenchExperiment(input: {
   const activeModel = executionTarget ? null : input.modelConfigId
     ? await getActiveConfig(input.user).then((config) => config?.id === input.modelConfigId ? config : null)
     : await getActiveConfig(input.user);
-  const concurrencyPolicy = getSkillExperimentConcurrencyPolicy(input.preset);
   const isTriggerExperiment = input.preset === 'trigger';
   const agentTimeoutSeconds = input.agentTimeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
   if (!isValidExperimentAgentTimeoutSeconds(agentTimeoutSeconds)) {
@@ -355,6 +356,7 @@ export async function createWorkbenchExperiment(input: {
       agentName: input.agentName?.trim() || input.skillName,
       repeatRounds: 1,
       runtime,
+      executionConcurrency: runtime.executionConcurrency,
       grayscaleTaskId: task.id,
     };
     const updated = await tx.experiment.update({
@@ -457,6 +459,7 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
     evaluatorIds: parseJson<string[]>(source.evaluatorIdsJson, []),
     traceSource: snapshot.traceSource === 'existing' ? 'existing' : 'generate',
     executionTarget,
+    executionConcurrency: Number(snapshot.executionConcurrency ?? runtime.executionConcurrency) || 1,
     ...(Number.isInteger(timeoutSeconds) ? { agentTimeoutSeconds: timeoutSeconds } : {}),
   });
   if (result.kind !== 'created') throw new Error('原 Skill 实验配置已失效，请通过复用同配置重新确认');

@@ -1,6 +1,8 @@
 ---
 title: "升级与回滚"
 description: "按部署方式升级平台，并配套管理程序版本与数据备份。"
+keywords: ["Agent Insight", "版本升级", "部署回滚", "数据兼容"]
+changefreq: "monthly"
 ---
 
 升级需要同时管理程序版本、数据库结构和运行目录。Agent Insight 的安装与启动流程可能执行数据库结构同步；仅换回旧程序不能保证兼容升级后的数据。平台目前没有统一的 `upgrade` / `rollback` CLI 命令。

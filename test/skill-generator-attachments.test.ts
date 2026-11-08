@@ -25,7 +25,6 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'attachments-test-'));
 process.env.GENERAL_AGENT_WORKSPACE_ROOT = tmpRoot;
 
 const TEST_USER = 'tester';
-const TEST_THREAD = 'thread_abc';
 
 // tsx 在 cjs 输出模式下不允许顶层 await，所以直接 import 模块——env 已在 import 之前设了。
 import {

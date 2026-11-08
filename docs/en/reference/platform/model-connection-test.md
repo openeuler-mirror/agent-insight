@@ -1,6 +1,8 @@
 ---
 title: "Model-connection test API"
 description: "Test inputs, deadline, responses, and error categories."
+keywords: ["Agent Insight", "model connectivity", "timeouts", "error handling"]
+changefreq: "monthly"
 ---
 
 See [HTTP identity and scope](./http-api.md). `POST /api/eval/settings/test` sends one real, small request to the configured model provider. This test does not evaluate a Trace or change an experiment's timeout.

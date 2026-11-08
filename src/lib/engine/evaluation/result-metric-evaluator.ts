@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { getActiveConfig } from '@/lib/storage/server-config';
@@ -116,7 +117,7 @@ async function invokeStructured<S extends z.ZodTypeAny>(
   schema: S,
 ): Promise<z.output<S>> {
   const llm = await createClient(user);
-  if (!llm) throw new Error('未配置可用的评测模型');
+  if (!llm) throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
   const messages: Array<{ role: 'system' | 'user'; content: string }> = typeof prompt === 'string'
     ? [{ role: 'user', content: prompt }]
     : [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }];

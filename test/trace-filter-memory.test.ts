@@ -25,9 +25,10 @@ const compiled = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
-function harness(storage = new Map<string, string>(), initialQuery = '', initialUser: string | null = 'reader', unavailable = false) {
+function harness(storage = new Map<string, string>(), initialQuery = '', initialUser: string | null = 'reader', unavailable = false, delayUrl = false) {
     let user = initialUser;
     let query = initialQuery;
+    let pathname = '/trace';
     let state: Record<string, string | null> | undefined;
     let defaults: Record<string, string | null>;
     let dirty = false;
@@ -35,6 +36,9 @@ function harness(storage = new Map<string, string>(), initialQuery = '', initial
     const slots: any[] = [];
     let effects: Array<() => void> = [];
     const writes: Array<{ history: string }> = [];
+    let heldQuery: string | null = null;
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
     const react = {
         useRef: (value: unknown) => {
             const index = cursor++;
@@ -55,21 +59,23 @@ function harness(storage = new Map<string, string>(), initialQuery = '', initial
         },
     };
     const setFilters = (next: Record<string, string | null>, options: { history: string }) => {
+        const previous = JSON.stringify(state);
         state = { ...state, ...next };
         const params = new URLSearchParams(query);
         for (const [key, value] of Object.entries(next)) {
             if (value === null || value === defaults[key]) params.delete(key);
             else params.set(key, value);
         }
-        query = params.toString();
+        if (delayUrl) heldQuery = params.toString();
+        else query = params.toString();
         writes.push(options);
-        dirty = true;
+        dirty ||= previous !== JSON.stringify(state);
         return Promise.resolve(params);
     };
     const exports: any = {};
     const require = (name: string) => {
         if (name === 'react') return react;
-        if (name === 'next/navigation') return { useSearchParams: () => new URLSearchParams(query) };
+        if (name === 'next/navigation') return { useSearchParams: () => new URLSearchParams(query), usePathname: () => pathname };
         if (name === 'nuqs') return {
             parseAsString,
             useQueryStates: (parsers: Record<string, { defaultValue?: string }>) => {
@@ -85,7 +91,11 @@ function harness(storage = new Map<string, string>(), initialQuery = '', initial
         setItem: (key: string, value: string) => { if (unavailable) throw new Error('disabled'); storage.set(key, value); },
         removeItem: (key: string) => { if (unavailable) throw new Error('disabled'); storage.delete(key); },
     };
-    new Function('require', 'exports', 'window', compiled)(require, exports, { sessionStorage });
+    new Function('require', 'exports', 'window', compiled)(require, exports, {
+        sessionStorage,
+        setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
+        clearTimeout: (id: number) => timers.delete(id),
+    });
     let result: { filtersReady: boolean; clearFilterMemory: () => void };
     const readiness: boolean[] = [];
     function render() {
@@ -98,6 +108,9 @@ function harness(storage = new Map<string, string>(), initialQuery = '', initial
             result = exports.useTraceFilterMemory(user);
             readiness.push(result.filtersReady);
             effects.forEach(effect => effect());
+            const scheduled = [...timers.values()];
+            timers.clear();
+            scheduled.forEach(callback => callback());
         } while (dirty);
     }
     render();
@@ -109,6 +122,8 @@ function harness(storage = new Map<string, string>(), initialQuery = '', initial
         choose: (next: Record<string, string | null>) => { setFilters(next, { history: 'replace' }); render(); },
         reset: () => { result.clearFilterMemory(); render(); },
         login: (next: string) => { user = next; render(); },
+        leave: () => { pathname = '/agents'; query = ''; state = { ...defaults }; render(); },
+        commitUrl: () => { if (heldQuery !== null) query = heldQuery; heldQuery = null; render(); },
     };
 }
 
@@ -141,6 +156,42 @@ test('explicit URL context wins completely over remembered filters', () => {
         assert.equal(linked.writes.length, 0, 'opening a link must not replace its query');
         assert.equal(linked.query().toString(), query);
     }
+});
+
+test('custom time bounds survive a revisit and reset clears both bounds', () => {
+    const page = harness();
+    const range = { time: 'custom', timeFrom: '2026-11-04T02:00:01.000Z', timeTo: '2026-11-05T03:00:02.000Z' };
+    page.choose(range);
+    const returned = harness(page.storage);
+    for (const [key, value] of Object.entries(range)) assert.equal(returned.filters()[key], value);
+    returned.reset();
+    assert.equal(returned.filters().time, 'all');
+    assert.equal(returned.filters().timeFrom, '');
+    assert.equal(returned.filters().timeTo, '');
+    assert.equal(returned.query().has('timeFrom'), false);
+    assert.equal(returned.query().has('timeTo'), false);
+});
+
+test('route departure cannot overwrite the last Trace filters with destination defaults', () => {
+    const page = harness();
+    page.choose({ time: 'custom', timeFrom: '2026-11-04T02:00:00.000Z', timeTo: '2026-11-04T04:00:00.000Z', status: 'success' });
+    const saved = [...page.storage.values()][0];
+    page.leave();
+    assert.equal([...page.storage.values()][0], saved);
+    const returned = harness(page.storage);
+    assert.equal(returned.filters().time, 'custom');
+    assert.equal(returned.filters().timeFrom, '2026-11-04T02:00:00.000Z');
+    assert.equal(returned.filters().status, 'success');
+});
+
+test('restoration waits for the URL commit before releasing list loading', () => {
+    const page = harness();
+    page.choose({ time: 'custom', timeFrom: '2026-11-04T02:00:00.000Z' });
+    const returned = harness(page.storage, '', 'reader', false, true);
+    assert.equal(returned.ready(), false, 'optimistic filter state is not a committed restoration');
+    returned.commitUrl();
+    assert.equal(returned.ready(), true);
+    assert.equal(returned.query().get('time'), 'custom');
 });
 
 test('reset removes memory and old selections do not reappear on return', () => {

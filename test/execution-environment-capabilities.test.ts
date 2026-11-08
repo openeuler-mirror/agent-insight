@@ -220,7 +220,7 @@ fs.writeFileSync(1, process.argv.includes('--version') ? fs.readFileSync(${JSON.
   const model = { providerID: 'deepseek', id: 'deepseek-flash', modelID: 'upstream-model', enabled: true }
   fs.writeFileSync(outputFile, JSON.stringify({ data: [model] }))
   assert.deepEqual(await services.checkAgent(selected), [])
-  assert.deepEqual(services.capabilityUpdate().capabilities.platforms[0].runExperimentCase, { version: 2, returnsTraceId: true, skillSnapshotVersion: 4 })
+  assert.deepEqual(services.capabilityUpdate().capabilities.platforms[0].runExperimentCase, { version: 2, returnsTraceId: true, skillSnapshotVersion: 5 })
   for (const data of [[], [{ ...model, enabled: false }], [{ ...model, providerID: 'other' }]]) {
     fs.writeFileSync(outputFile, JSON.stringify({ data }))
     assert.equal((await services.checkAgent(selected))[0].code, 'MODEL_UNAVAILABLE')
@@ -243,7 +243,7 @@ fs.writeFileSync(1, process.argv.includes('--version') ? fs.readFileSync(${JSON.
   const v1 = createServices({ cfg: {}, env: { HOME: root, XDG_DATA_HOME: root },
     client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true, major: 1 }) } })
   assert.deepEqual(await v1.checkAgent(context), [])
-  assert.equal(v1.capabilityUpdate().capabilities.platforms[0].runExperimentCase.skillSnapshotVersion, 4)
+  assert.equal(v1.capabilityUpdate().capabilities.platforms[0].runExperimentCase.skillSnapshotVersion, 5)
   assert.deepEqual(JSON.parse(fs.readFileSync(callsFile, 'utf8').trim().split('\n').at(-1)!), ['models'])
 })
 

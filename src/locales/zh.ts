@@ -297,6 +297,8 @@ export const zh = {
     rasActionResults: '执行结果',
     rasActionSucceeded: '执行成功',
     rasActionFailed: '执行失败',
+    rasTerminating: '终止退出',
+    rasExitFailed: '退出失败',
     filters: '筛选',
     filterType: '类型',
     filterDuration: '耗时',

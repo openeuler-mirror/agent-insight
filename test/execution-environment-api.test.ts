@@ -204,11 +204,11 @@ test('same-config skips existing Trace evaluation but checks Skill A/B even with
   assert.deepEqual(await createReuseEnvironmentPreparation(user, request, store, dispatch), { state: 'skipped' })
   for (const preset of ['skill-ab', 'trigger']) {
     await store.experiment.update({ where: { id: source.id }, data: { scope: 'skill-workbench', preset,
-      configSnapshotJson: JSON.stringify({ ...snapshot, traceSource: 'existing', grayscaleTaskId: 'frozen-task', caseIds: ['case-1'], runtime: { timeoutMs: 240000 } }) } })
+      configSnapshotJson: JSON.stringify({ ...snapshot, executionConcurrency: 3, traceSource: 'existing', grayscaleTaskId: 'frozen-task', caseIds: ['case-1'], runtime: { timeoutMs: 240000, executionConcurrency: 3 } }) } })
     const selection = await resolveReuseEnvironment(user, source.id, store)
     assert.equal(selection?.mode, preset)
     assert.equal(selection?.timeoutSeconds, 240)
-    assert.equal(selection?.concurrency, 1)
+    assert.equal(selection?.concurrency, 3)
     assert.deepEqual(selection?.caseIds, ['case-1'])
   }
 })

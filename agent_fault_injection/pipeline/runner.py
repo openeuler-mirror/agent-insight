@@ -84,6 +84,7 @@ class ExperimentRunner:
                 in {
                     TerminationReason.SESSION_ERROR,
                     TerminationReason.PLATFORM_ERROR,
+                    TerminationReason.FAULT_INTERCEPTED,
                 }
                 else "finished"
             )

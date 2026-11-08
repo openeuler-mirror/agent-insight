@@ -84,6 +84,60 @@ describe("host_actions", () => {
     const results = await applyActions({}, [{ type: "nope" }])
     assert.equal(results[0].ok, false)
   })
+  it("waits for the pre-abort receipt before invoking the host abort", async () => {
+    const calls = []
+    let acknowledge
+    const receipt = new Promise((resolve) => { acknowledge = resolve })
+    const executing = applyActions({
+      async requestAbortStream() {
+        calls.push("abort")
+        return { ok: true }
+      },
+    }, [{ type: "abort_stream" }], {
+      async beforeAbort() {
+        calls.push("send")
+        await receipt
+        calls.push("ack")
+      },
+      onResult(result) { calls.push(`result:${result.ok}`) },
+    })
+    await Promise.resolve()
+    assert.deepEqual(calls, ["send"])
+    acknowledge()
+    await executing
+    assert.deepEqual(calls, ["send", "ack", "abort", "result:true"])
+  })
+  it("still aborts when receipt delivery fails or its wait expires", async () => {
+    for (const failure of [false, new Error("receipt deadline exceeded")]) {
+      const calls = []
+      const results = await applyActions({
+        async requestAbortStream() {
+          calls.push("abort")
+          return { ok: true }
+        },
+      }, [{ type: "abort_stream" }], {
+        async beforeAbort() {
+          calls.push("send")
+          if (failure instanceof Error) throw failure
+          return failure
+        },
+      })
+      assert.deepEqual(calls, ["send", "abort"])
+      assert.equal(results[0].ok, true)
+    }
+  })
+  it("does not hide an actual abort failure after a successful pre-abort receipt", async () => {
+    const reported = []
+    await applyActions({
+      async requestAbortStream() { throw new Error("abort rejected") },
+    }, [{ type: "abort_stream" }], {
+      async beforeAbort() {},
+      onResult(result) { reported.push(result) },
+    })
+    assert.equal(reported.length, 1)
+    assert.equal(reported[0].ok, false)
+    assert.equal(reported[0].error, "abort rejected")
+  })
   it("forwards delivery_anchor from host result", async () => {
     const results = []
     await applyActions(

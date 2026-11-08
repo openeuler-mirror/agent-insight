@@ -838,9 +838,9 @@ function EvaluatorCardView({
 
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span className={`ai-badge ${card.status === 'ready' ? 'ai-badge-g' : card.status === 'draft' ? 'ai-badge-gr' : 'ai-badge-b'}`}>
+          {card.source !== 'custom' && <span className={`ai-badge ${card.status === 'ready' ? 'ai-badge-g' : card.status === 'draft' ? 'ai-badge-gr' : 'ai-badge-b'}`}>
             {card.status === 'ready' ? '已就绪' : card.status === 'draft' ? '草稿' : '预置'}
-          </span>
+          </span>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {activeTab === 'custom' && onDeleteCustom ? (
@@ -918,9 +918,9 @@ function EvaluatorListRow({
         {card.evaluatorType}
       </span>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className={`ai-badge ${card.status === 'ready' ? 'ai-badge-g' : card.status === 'draft' ? 'ai-badge-gr' : 'ai-badge-b'}`}>
+        {card.source !== 'custom' && <span className={`ai-badge ${card.status === 'ready' ? 'ai-badge-g' : card.status === 'draft' ? 'ai-badge-gr' : 'ai-badge-b'}`}>
           {card.id.startsWith('benchmark:') ? '已接入' : card.status === 'ready' ? '已就绪' : card.status === 'draft' ? '草稿' : '预置'}
-        </span>
+        </span>}
         {card.source === 'custom' && onDeleteCustom ? (
           <button
             type="button"

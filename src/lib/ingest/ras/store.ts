@@ -170,17 +170,25 @@ type RasEventForSummary = {
   ts: Date | string
 }
 
-function parseActionResultOk(payloadJson: string): boolean | null {
+/** Keep the pre-abort signal separate from completed action outcomes. */
+function parseActionResult(payloadJson: string): { ok: boolean | null; terminating: boolean } {
   try {
     const payload = JSON.parse(payloadJson)
-    if (typeof payload?.ok === "boolean") return payload.ok
-    return null
+    return {
+      ok: payload?.phase === "failed" ? false : typeof payload?.ok === "boolean" ? payload.ok : null,
+      terminating: payload?.action === "abort_stream" && payload?.phase === "terminating",
+    }
   } catch {
-    return null
+    return { ok: null, terminating: false }
   }
 }
 
-function emptyRasTaskSummary(): RasTaskSummary & { actionResultSeen: boolean; actionResultFailed: boolean } {
+function emptyRasTaskSummary(): RasTaskSummary & {
+  actionResultSeen: boolean
+  actionResultFailed: boolean
+  terminationStarted: boolean
+  abortResultSeen: boolean
+} {
   return {
     count: 0,
     kinds: [],
@@ -194,6 +202,8 @@ function emptyRasTaskSummary(): RasTaskSummary & { actionResultSeen: boolean; ac
     abortedStream: false,
     actionResultSeen: false,
     actionResultFailed: false,
+    terminationStarted: false,
+    abortResultSeen: false,
   }
 }
 
@@ -221,9 +231,14 @@ export function buildRasTaskSummaries(rows: RasEventForSummary[]): Record<string
       cur.recoveryStarted = true
     }
     if (row.type === "action_result") {
-      cur.actionResultSeen = true
-      const ok = parseActionResultOk(row.payloadJson)
-      if (ok === false) cur.actionResultFailed = true
+      const result = parseActionResult(row.payloadJson)
+      if (result.terminating) {
+        cur.terminationStarted = true
+      } else {
+        cur.actionResultSeen = true
+        if (result.ok === false) cur.actionResultFailed = true
+        if (String(row.actionTypes || "").split(",").includes("abort_stream")) cur.abortResultSeen = true
+      }
     }
     const ts = row.ts instanceof Date ? row.ts.toISOString() : String(row.ts)
     if (!cur.latestTs || ts > cur.latestTs) cur.latestTs = ts
@@ -235,8 +250,8 @@ export function buildRasTaskSummaries(rows: RasEventForSummary[]): Record<string
     const abortedStream = cur.actionTypes.includes("abort_stream")
     let recoveryOutcome: RecoveryOutcome = "none"
     if (cur.recoveryStarted) {
-      if (!cur.actionResultSeen) recoveryOutcome = "unknown"
-      else if (cur.actionResultFailed) recoveryOutcome = "failed"
+      if (cur.actionResultFailed) recoveryOutcome = "failed"
+      else if (!cur.actionResultSeen || (cur.terminationStarted && !cur.abortResultSeen)) recoveryOutcome = "unknown"
       else recoveryOutcome = "success"
     }
     out[taskId] = {

@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import ts from 'typescript';
+const text=fs.readFileSync(new URL('../src/components/skill-workbench/SkillWorkbenchShell.tsx',import.meta.url),'utf8'),ast=ts.createSourceFile('shell.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let callback:ts.Node|undefined;
+function visit(node:ts.Node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='acceptOptimizationSession')callback=(node.initializer as ts.CallExpression).arguments[0];ts.forEachChild(node,visit)}visit(ast);assert.ok(callback);
+const code=ts.transpileModule('const callback='+callback.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+function harness(id:string|null){const activeSessionRef={current:id?{id,skillName:null,workVersion:null}:null},selectedAssetRef={current:null};let active=activeSessionRef.current;
+ const run=new Function('activeSessionRef','selectedAssetRef','setActive','setSessions','setError','isStaticQualityError','user',code+'\nreturn callback;')(activeSessionRef,selectedAssetRef,(value:any)=>active=value,()=>{},(fn:any)=>fn(''),()=>false,'');return {run,active:()=>active};}
+for(const current of ['new-empty-session',null])test(`stale optimization sync cannot replace ${current||'cleared selection'}`,()=>{const h=harness(current);h.run({id:'old-session',skillName:'old',workVersion:1});assert.equal(h.active()?.id||null,current)});
+test('same session optimization progress still synchronizes',()=>{const h=harness('same');h.run({id:'same',skillName:'current',workVersion:0,stage:'ready'});assert.equal((h.active() as any).stage,'ready');assert.equal((h.active() as any).skillName,'current')});
