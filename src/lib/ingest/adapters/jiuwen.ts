@@ -38,9 +38,6 @@ export const jiuwenAdapter: FrameworkAdapter = {
     onboard: "env",
     platform: "jiuwenswarm",
   },
-  // Jiuwen skill extraction is session-scoped. Subagent execution derivation
-  // was not enabled by the previous data-service allowlist, so keep that
-  // behavior explicit instead of advertising an unused capability.
   capabilities: { skills: true, skillScope: "session" },
   sessionMergeStrategy: "snapshot-replace",
   // jiuwen invokes a skill via its dedicated `skill_tool` (skill_name arg); detection keys

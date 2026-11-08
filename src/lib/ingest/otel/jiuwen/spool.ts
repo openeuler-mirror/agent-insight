@@ -37,6 +37,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { getExistingInsightDir } from '@/lib/agent-insight-paths';
 import type { JiuwenSpan } from './aggregate';
+import { isSemanticJiuwenSpan, jiuwenSpanSession } from './contract';
 import { acquireSpoolUse, noteSpoolReceived } from '@/lib/runtime-cleanup/spool-state';
 
 export function getJiuwenSpoolDir(): string {
@@ -62,16 +63,15 @@ export function traceKeyFor(s: JiuwenSpan): string {
 }
 
 export function spanSession(s: JiuwenSpan): string | undefined {
-  const sid = s.attrs['agentteam.session.id'];
-  return sid ? String(sid) : undefined;
+  return jiuwenSpanSession(s);
 }
 
 /** 多 trace run（team / fan-out）的标记 span：其 span 需按 session 跨 trace 缝合。 */
 export function isMultiTraceSpan(s: JiuwenSpan): boolean {
   return (
     s.name.startsWith('team.') ||
-    s.name.startsWith('tool.task') ||
-    (s.name.startsWith('agent.') && s.name.includes('.task_iteration.'))
+    (!isSemanticJiuwenSpan(s) && (s.name.startsWith('tool.task') ||
+    (s.name.startsWith('agent.') && s.name.includes('.task_iteration.'))))
   );
 }
 
