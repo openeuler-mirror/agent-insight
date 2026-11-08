@@ -43,6 +43,7 @@ import {
 } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
+import { datasetCaseContentHash } from '@/lib/engine/experiment/dataset-case-snapshot';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
@@ -463,12 +464,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'watch mode requires agentName' }, { status: 400 });
     }
 
+    const datasetHashes = new Map<CaseInput, string>();
     for (const item of cases) {
       const datasetId = String(item.datasetId || agentEvalDatasetId || '');
       if (!datasetId) continue;
-      if (await guardTraceDataset(req, datasetId, username, true)) {
-        const dataset = await findAgentDataset(username, datasetId);
-        const source = dataset?.cases.find(c => c.id === item.datasetCaseId);
+      const guarded = await guardTraceDataset(req, datasetId, username, true);
+      const dataset = await findAgentDataset(username, datasetId);
+      const source = dataset?.cases.find(c => c.id === item.datasetCaseId);
+      if (item.datasetCaseId && !source) throw new GenerationError('INVALID_CONFIG', '来源数据集 Case 不存在或不可访问', 422);
+      if (source) {
+        item.datasetId = datasetId;
+        datasetHashes.set(item, datasetCaseContentHash(source));
+      }
+      if (guarded) {
         if (!source) throw new GenerationError('INVALID_CONFIG', '请选择有效的数据项', 422);
         item.input = source.input;
         item.datasetInput = source.input;
@@ -499,7 +507,7 @@ export async function POST(req: Request) {
         const datasetCaseId = String(item.datasetCaseId || '').trim();
         const caseValues = withExperimentDatasetCaseBinding(
           visibleValues,
-          datasetId && datasetCaseId ? { datasetId, caseId: datasetCaseId } : null,
+          datasetId && datasetCaseId ? { datasetId, caseId: datasetCaseId, contentHash: datasetHashes.get(item) } : null,
         );
         const caseValuesJson = Object.keys(caseValues).length ? JSON.stringify(caseValues) : null;
         const { faultInjectionType: _ignoredFault, ...rest } = item;

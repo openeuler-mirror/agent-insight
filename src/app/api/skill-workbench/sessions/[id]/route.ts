@@ -31,7 +31,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
+    const { username } = await resolveUser(request, id.startsWith('diagnosis-') ? undefined : request.nextUrl.searchParams.get('user'));
     if (!username) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
@@ -53,7 +53,7 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json().catch(() => ({}));
-    const { username } = await resolveUser(request, body.user);
+    const { username } = await resolveUser(request, id.startsWith('diagnosis-') ? undefined : body.user);
     if (!username) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }

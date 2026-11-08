@@ -16,6 +16,8 @@
 
 import type { DiagnosisProgressSnapshot } from './progress-types';
 
+export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.6';
+
 export type AgentDebugModule = 'memory' | 'reflection' | 'planning' | 'action' | 'system' | 'others' | 'unknown';
 export type AgentDebugSeverity = 'high' | 'medium' | 'low';
 export type AgentDebugStatus = 'pending' | 'running' | 'done' | 'failed';

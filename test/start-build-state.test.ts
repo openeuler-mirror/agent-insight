@@ -188,6 +188,7 @@ test('start documents force rebuild; db push wrapper rejects arbitrary destructi
 test('db push forwards skip-generate on normal and allowed retry paths, preserving the default', t => {
   const f = fixture(t)
   f.write('scripts/db_push.sh', fs.readFileSync('scripts/db_push.sh', 'utf8'))
+  f.write('scripts/migrations/check-diagnosis-schema.cjs', '')
   f.write('scripts/trace-datasets/remove-legacy-summary.cjs', '')
   const bin = path.join(f.root, 'bin')
   f.write('bin/npx', `#!/bin/sh
@@ -224,7 +225,7 @@ test('start.sh integration: first worker generation, reuse, source change, force
   for (const file of ['start.sh', 'start-build-state.cjs', 'verify-standalone.cjs', 'db_push.sh', 'build-trace-dataset-worker.cjs']) {
     f.write(`scripts/${file}`, fs.readFileSync(`scripts/${file}`, 'utf8'))
   }
-  for (const file of ['prepare-ras-sqlite-schema.js', 'stop-orphan-trace-consumer.cjs', 'benchmark/generate-catalog.cjs', 'trace-datasets/remove-legacy-summary.cjs']) f.write(`scripts/${file}`, '')
+  for (const file of ['migrations/check-diagnosis-schema.cjs', 'prepare-ras-sqlite-schema.js', 'stop-orphan-trace-consumer.cjs', 'benchmark/generate-catalog.cjs', 'trace-datasets/remove-legacy-summary.cjs']) f.write(`scripts/${file}`, '')
   f.write('home/.env', '')
   f.write('public/logo.svg', 'logo')
   f.write('prisma/schema.prisma', 'schema')
