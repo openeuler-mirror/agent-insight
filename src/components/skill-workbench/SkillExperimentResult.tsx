@@ -15,6 +15,7 @@
  */
 
 'use client';
+import { EvaluationErrorNotice } from '@/components/eval/EvaluationErrorNotice';
 import { DeleteExperimentButton } from '@/components/eval/DeleteExperimentButton';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -196,13 +197,13 @@ function ExpandableCellText({ value, muted = false }: { value: string; muted?: b
 }
 
 function RunOutput({ run, output }: { run?: import('@/lib/skill-workbench/ab-comparison').AbRunState; output: string }) {
-  const evaluationErrors = run?.evaluations?.filter(item => item.status === 'failed').map(item => item.errorMessage).filter(Boolean) || [];
+  const evaluationErrors = run?.evaluations?.filter(item => item.status === 'failed').map(item => item.errorMessage).filter((message): message is string => Boolean(message)) || [];
   const unscored = run?.evaluations?.filter(item => item.unscored || (item.status === 'done' && item.score == null)) || [];
   return <>
     {run?.failureType
       ? <p className="whitespace-pre-wrap break-words text-error">{run.failureCode === 'TRACE_INGEST_TIMEOUT' ? 'Trace 入库失败' : '执行失败'}{run.failureCode ? `（${run.failureCode}）` : ''}：{run.failureDetail || output || '未生成有效输出'}<br />未进入评测</p>
       : <ExpandableCellText value={output} muted />}
-    {!run?.failureType && evaluationErrors.length > 0 && <p className="mt-1 whitespace-pre-wrap break-words text-error">评测失败：{evaluationErrors.join('；')}</p>}
+    {!run?.failureType && evaluationErrors.length > 0 && <div className="mt-1 space-y-2">{evaluationErrors.map((message, index) => <EvaluationErrorNotice key={index} message={message} />)}</div>}
     {!run?.failureType && unscored.length > 0 && <p className="mt-1 whitespace-pre-wrap break-words text-foreground-muted">未计分：{unscored.map(item => item.summary || '评估器未返回分数').join('；')}</p>}
   </>;
 }
@@ -301,7 +302,7 @@ export function SkillExperimentResult({
       if (sequence === loadSequence.current) setRefreshFailed(true);
       if (!silent && sequence === loadSequence.current) setError(loadError instanceof Error ? loadError.message : '加载实验失败');
     } finally {
-      if (!silent && sequence === loadSequence.current) setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }, [dataset, experimentId, skillName, user, version]);
 

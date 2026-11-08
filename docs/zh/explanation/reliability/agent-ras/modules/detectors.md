@@ -1,3 +1,10 @@
+---
+title: "Detectors 模块"
+description: "说明检测器如何将统一信号转换为异常，以及工具循环和思考循环检测的配置与扩展方式。"
+keywords: ["Agent Insight", "Agent RAS", "异常检测", "工具循环"]
+changefreq: "monthly"
+---
+
 # Detectors 模块
 
 > AET 模块详情口径：新人读完应能独立修改本模块。模板：`aet-analyzing-project` / `module-detail-template.md`。

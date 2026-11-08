@@ -14,6 +14,8 @@ changefreq: monthly
 
 ---
 
+客户端注册、凭证、配置同步与回执字段见[可靠性客户端与控制接口](../../../reference/reliability/client-control-api.md)。
+
 ## 1. 一句话
 
 RAS **不是**独立守护进程。安装命令把 Python 运行时与平台挂载写到本机目录；之后检测/恢复在 **Agent 宿主进程内（inproc）** 跑，异常事件旁路 POST 到 Insight `/api/ingest/ras-events`。

@@ -35,6 +35,7 @@ export type ClientTraceGenerationTarget = {
   lastSeenAt: string;
   parameterDefinitions?: RuntimeDefinition[];
   supportsSkillSnapshot?: boolean;
+  supportsSkillConcurrency?: boolean;
   supportsTriggerRouting?: boolean;
   supportsMultiTurn?: boolean;
   supportsEnvironmentPreparation?: boolean;
@@ -106,6 +107,7 @@ export async function listClientTraceGenerationAvailability(
           models,
           lastSeenAt: client.lastSeenAt.toISOString(),
           parameterDefinitions: definitionsForTarget(platform.parameterDefinitions || [], platform.id, agent),
+          supportsSkillConcurrency: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 5,
           supportsSkillSnapshot: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 1,
           supportsTriggerRouting: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 4,
           supportsMultiTurn: platform.id === 'opencode' && platform.runExperimentCase?.multiTurn === true

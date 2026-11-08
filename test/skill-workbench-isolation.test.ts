@@ -49,7 +49,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentService, /agentTimeoutSeconds = input\.agentTimeoutSeconds \?\? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS/);
   assert.match(experimentService, /timeoutMs:\s*agentTimeoutSeconds \* 1_000/);
   assert.match(experimentService, /retryLimit:\s*isTriggerExperiment \? 1 : 2/);
-  assert.match(experimentService, /getSkillExperimentConcurrencyPolicy\(input\.preset\)/);
+  assert.match(experimentService, /getSkillExperimentConcurrencyPolicy\(input\.preset, input\.executionConcurrency\)/);
   assert.match(experimentService, /evaluationConcurrency:\s*runtime\.evaluationConcurrency/);
   assert.match(experimentService, /triggerConcurrency:\s*runtime\.triggerConcurrency/);
   assert.match(experimentService, /executionSides:\s*input\.preset === 'skill-ab' \? \['a', 'b'\] : \['b'\]/);
@@ -63,7 +63,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(grayscaleRoute, /startEvalExperimentCases/);
   assert.match(grayscaleRoute, /evaluateRunsAsExperimentBatch/);
   assert.match(grayscaleRoute, /abPairConcurrency/);
-  assert.match(grayscaleRoute, /Promise\.all\(pair\.map\(executeItem\)\)/);
+  assert.match(grayscaleRoute, /runWithConcurrency\(batch, executionConcurrency, executeItem, taskSignal\)/);
   assert.match(grayscaleRoute, /timeoutSeconds: Math\.round\(\(config\.timeoutMs \|\| DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS \* 1000\) \/ 1000\)/);
   assert.match(grayscaleRoute, /run\.failureType = 'agent_error'/);
   assert.match(readFileSync('src/app/api/experiments/[id]/route.ts', 'utf8'), /typeof caseValues\?\.skill_triggered === 'boolean'/);

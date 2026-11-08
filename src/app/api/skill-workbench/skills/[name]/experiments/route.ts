@@ -15,6 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
 
 import { resolveUser } from '@/lib/auth/auth';
 import { EvaluatorRunConfigValidationError } from '@/lib/evaluators/evaluator-run-config';
@@ -69,6 +70,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     if (!isValidExperimentAgentTimeoutSeconds(agentTimeoutSeconds)) {
       return NextResponse.json({ error: 'Agent 单次执行上限必须是 30～3600 之间的整数秒数' }, { status: 400 });
     }
+    let executionConcurrency: number;
+    try { executionConcurrency = parseExecutionConcurrency(body.executionConcurrency); }
+    catch { return NextResponse.json({ error: '执行并发必须为正整数' }, { status: 400 }); }
     const result = await createWorkbenchExperiment({
       user: username,
       sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
@@ -99,6 +103,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
       modelConfigId: typeof body.modelConfigId === 'string' ? body.modelConfigId : undefined,
       executionTarget: body.executionTarget,
       agentTimeoutSeconds,
+      executionConcurrency,
     });
     if (result.kind === 'invalid_context') return NextResponse.json({ error: '实验关联的工作会话已失效' }, { status: 409 });
     if (result.kind === 'not_found') return NextResponse.json({ error: 'Skill 或版本不存在' }, { status: 404 });

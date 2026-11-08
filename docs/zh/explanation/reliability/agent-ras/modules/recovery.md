@@ -1,3 +1,10 @@
+---
+title: "Recovery 模块"
+description: "说明恢复模块如何将异常映射为恢复计划，并通过宿主控制接口执行中断、引导和终止动作。"
+keywords: ["Agent Insight", "Agent RAS", "恢复策略", "宿主控制"]
+changefreq: "monthly"
+---
+
 # Recovery 模块
 
 > AET 模块详情口径：新人读完应能独立修改本模块。模板：`aet-analyzing-project` / `module-detail-template.md`。

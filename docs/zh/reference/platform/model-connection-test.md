@@ -1,6 +1,8 @@
 ---
 title: "模型连接测试接口"
 description: "测试请求、超时、响应与错误分类。"
+keywords: ["Agent Insight", "模型连接", "超时控制", "错误分类"]
+changefreq: "monthly"
 ---
 
 用户身份及调用范围见 [HTTP 接口与用户身份](./http-api.md)。

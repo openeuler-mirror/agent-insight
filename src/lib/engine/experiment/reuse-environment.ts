@@ -83,5 +83,5 @@ export async function resolveReuseEnvironment(user: string, sourceExperimentId: 
     model: String(target.model || ''), agentOptions: readSavedOptions(target.agentOptions), caseIds: [...new Set(caseIds)],
     mode: skillExecution && source.preset === 'skill-ab' ? 'skill-ab' : skillExecution && source.preset === 'trigger' ? 'trigger' : 'generate',
     timeoutSeconds: skillExecution ? Number(runtime.timeoutMs) / 1000 || 600 : Number(target.timeoutSeconds) || 600,
-    concurrency: skillExecution ? 1 : Number(snapshot.executionConcurrency) || 1 }
+    concurrency: Number(snapshot.executionConcurrency ?? (skillExecution ? runtime.executionConcurrency : undefined)) || 1 }
 }

@@ -300,6 +300,34 @@ test('failed optimization cleans failed temporary experiments; active experiment
   assert.equal(await evidence.findCandidateVerification({ user, recordId: run.recordId!, skillName: 'fixture', baseVersion: 0, files }), null);
 });
 
+test('result save failure marks the task failed with the original reason instead of leaving it running', async () => {
+  const { user, session, run } = await optimizationFixture('management');
+  const timeout = Object.assign(new Error('Operations timed out after 15000 ms: skillOptimizationRecord.update'), { code: 'P1008' });
+  let failures = 0;
+  const delegate = prisma.skillOptimizationRecord as unknown as {
+    update: (...args: unknown[]) => Promise<unknown>;
+  };
+  const originalUpdate = delegate.update;
+  delegate.update = async () => {
+    failures += 1;
+    throw timeout;
+  };
+  try {
+    const result = await adapter.finishWorkbenchOptimizationRun({ user, workbenchSessionId: session.id, taskId: run.taskId,
+      recordId: run.recordId, sourceKind: 'user', sourceRefs: [] });
+    assert.equal(failures, 1);
+    assert.equal(result.kind, 'failed');
+    assert.match((result as { reason?: string }).reason || '', /Operations timed out/);
+    const task = await prisma.skillWorkbenchTask.findUniqueOrThrow({ where: { id: run.taskId } });
+    assert.equal(task.status, 'failed');
+    assert.equal(JSON.parse(task.progressJson).stage, '保存失败');
+    assert.match(task.errorMessage || '', /Operations timed out/);
+    assert.equal((await prisma.skillOptimizationRecord.findUniqueOrThrow({ where: { id: run.recordId! } })).status, 'optimization_failed');
+  } finally {
+    delegate.update = originalUpdate;
+  }
+});
+
 test('confirmed cancellation cleans temporary results without converting the optimization status', async () => {
   const { user, run } = await optimizationFixture('management');
   await sourceFixture(user);

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { HumanMessage } from '@langchain/core/messages';
 import { ChatOpenAI } from '@langchain/openai';
 import { getActiveConfig } from '@/lib/storage/server-config';
@@ -46,7 +47,7 @@ export async function extractRootCausesFromExpected(
 ): Promise<RootCauseItem[]> {
   if (!String(expectedOutput || '').trim()) return [];
   const model = await makeDirectModel(user);
-  if (!model) throw new Error('未配置评测模型，无法提取关键观点');
+  if (!model) throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
   const response = await model.invoke([
     new HumanMessage(generateRootCauseExtractionPrompt(caseInput || 'Task completion', expectedOutput)),
   ]);

@@ -26,8 +26,27 @@ export type CaseExecutionSnapshot = {
   results: ExperimentEvalResult[]
 }
 
+export async function readExecutionProgressSnapshot<T>(read: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  const deadline = Date.now() + 35000
+  let lastError: unknown
+  for (let attempt = 0; ; attempt++) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw lastError || new Error('Execution progress read deadline exceeded')
+    const maxWait = Math.min(5000, Math.floor(remaining / 4))
+    try {
+      return await prisma.$transaction(read, { maxWait, timeout: Math.min(30000, remaining - maxWait) })
+    } catch (error) {
+      lastError = error
+      const code = (error as { code?: string }).code
+      if (attempt || !['P1008', 'P2028', 'P2034'].includes(code || '') || deadline - Date.now() <= 1000) throw error
+      console.warn('[execution-progress] retrying read snapshot', { code, attempt: 2, elapsedMs: 35000 - (deadline - Date.now()) })
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+  }
+}
+
 export async function loadCaseExecutionProgress(experimentId: string, user: string, caseIds: string[], evaluatorIds: string[], generatesTrace = false): Promise<Map<string, CaseExecutionSnapshot>> {
-  return prisma.$transaction((tx: Prisma.TransactionClient) => loadCaseExecutionProgressInTransaction(tx, experimentId, user, caseIds, evaluatorIds, generatesTrace))
+  return readExecutionProgressSnapshot(tx => loadCaseExecutionProgressInTransaction(tx, experimentId, user, caseIds, evaluatorIds, generatesTrace))
 }
 
 export async function loadCaseExecutionProgressInTransaction(tx: Prisma.TransactionClient, experimentId: string, user: string, caseIds: string[], evaluatorIds: string[], generatesTrace = false): Promise<Map<string, CaseExecutionSnapshot>> {

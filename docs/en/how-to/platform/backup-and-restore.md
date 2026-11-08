@@ -1,6 +1,8 @@
 ---
 title: "Backup and restore"
 description: "Cold backups, restoration into a separate directory, and validation boundaries."
+keywords: ["Agent Insight", "backup and restore", "SQLite", "runtime data"]
+changefreq: "monthly"
 ---
 
 This guide covers stopped-service backups for self-hosted Agent Insight. The default SQLite deployment can be backed up with its runtime directory. External databases, configuration directories, storage, and independent clients need their own backups. There is no unified `backup` / `restore` CLI command.

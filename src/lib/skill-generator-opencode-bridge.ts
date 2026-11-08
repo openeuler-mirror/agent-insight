@@ -342,17 +342,7 @@ async function streamSkillGeneratorOpencodeImpl(
     : null
   );
 
-  // 历史上 bridge 维护过一个 IDLE_BAILOUT_MS（90s/180s）业务事件 watchdog，意图检测
-  // "opencode 服务还活着但 agent 卡死"——但 deepseek-reasoner 长思考期（写大文件前
-  // 的 silent reasoning，实测可超 3min）从外界看就是这个表象，**误判率 100%**：
-  // 每次都把还在正常 stream 的 chat 切掉，agentText 被截到几十字符。
-  //
-  // 移除该 watchdog，依赖两层兜底：
-  //   1) opencode-client 内部 idleTimeoutMs (30s)：heartbeat 来就 reset，
-  //      server 真挂 heartbeat 停 30s 后触发——精确捕捉 server 死亡
-  //   2) chatOptions.streamTimeoutMs (15min)：死亡上限
-  // 如果将来要更精细控制，应该按 step.start/step.finish 而不是按"任意业务事件"。
-  const chatAbortController = new AbortController();
+  const chatOptions = { idleTimeoutMs: 0, streamTimeoutMs: 15 * 60 * 1000 };
 
   let agentText = '';
   const textFullByMessageId = new Map<string, string>();
@@ -490,11 +480,6 @@ async function streamSkillGeneratorOpencodeImpl(
       }
     },
     onAssistantMessage: (e) => {
-      // 在助手消息真正终止时收尾。注意区分"本条 message 完成"和"整段对话完成"：
-      // 多轮 agent loop（call tool → tool_result → next LLM）里，每一轮都会发一条
-      // status=completed 的 assistant message，但 finish=tool-calls 表示马上还有下一轮，
-      // 这时 abort 会把后续 reasoning/text 都掐掉（用户症状：调完工具就再无下文）。
-      // 仅在 error 或 finish 是终止性 reason（stop/length/content-filter/...）时才 abort。
       if (e.status === 'error') {
         // LLM provider 鉴权失败、超额、网络挂掉这些错误以前会被默默吞掉——
         // assistant message 有 error 但没 parts，bridge 发 'done' 收尾，前端就是空气泡。
@@ -512,20 +497,7 @@ async function streamSkillGeneratorOpencodeImpl(
             '下一次请求会自动检测 config 变化重启该 user 的实例）。';
         }
         send('error', display);
-        setTimeout(() => chatAbortController.abort(), 500);
         return;
-      }
-      if (e.status === 'completed') {
-        const finish = (e.info?.finish ?? e.info?.finishReason) as string | undefined;
-        if (finish && finish !== 'tool-calls') {
-          setTimeout(() => chatAbortController.abort(), 500);
-        }
-      }
-    },
-    onSession: (e) => {
-      // session.idle 是 "agent 完全空闲" 信号，作为提前终止依据。
-      if (e.phase === 'idle') {
-        setTimeout(() => chatAbortController.abort(), 200);
       }
     },
     onQuestion: async (e) => {
@@ -605,22 +577,13 @@ async function streamSkillGeneratorOpencodeImpl(
         workspaceTag: threadId,
         sessionTitle: `skill-generator · ${threadId.slice(0, 12)}`,
         system: skillGeneratorSystemPrompt,
-        // chat 流空闲超过 30s 自动结束。skill-generator 场景下 agent 写完文件 + 说完话就该收尾，
-        // opencode 偶发的"残留 keepalive 事件"会让默认 60s idle 一直触发不到，前端干等 240s+。
-        chatOptions: {
-          idleTimeoutMs: 30_000,
-          // R1 这种 thinking 模型 + 多轮 LLM 调用（agent 加载多个 skill 后写文件）容易超 5min；
-          // 实际 close 由 opencode-client 内部 idleTimer (30s, heartbeat reset) +
-          // onAssistantMessage(completed) + onSession(idle) 控制，streamTimeout 是死亡兜底。
-          streamTimeoutMs: 15 * 60 * 1000,
-          signal: chatAbortController.signal,
-        },
         // 内部 agent 标签：让 plugin 上报的 trace 在 /api/ingest/upload 那边能正确归属。
         // skill 标签由 SYSTEM_AGENTS 中该 Agent 的 traceSkill 字段提供，这里不传 skill 字段
         // （传了会触发 runner 的 DB skill 加载，与文件式 system prompt 冲突）。
         systemAgentName: SKILL_GENERATOR_AGENT_NAME,
         interactionPolicy: 'auto-allow',
         ...(modelOverride ? { model: modelOverride } : {}),
+        chatOptions,
         handlers,
       }),
       slotMeta,
@@ -641,7 +604,8 @@ async function streamSkillGeneratorOpencodeImpl(
           system: skillGeneratorSystemPrompt,
           interactionPolicy: 'auto-allow',
           ...(modelOverride ? { model: modelOverride } : {}),
-          handlers,
+          chatOptions,
+        handlers,
         }),
         slotMeta,
       );
@@ -683,12 +647,8 @@ async function streamSkillGeneratorOpencodeImpl(
         system: skillGeneratorSystemPrompt,
         systemAgentName: SKILL_GENERATOR_AGENT_NAME,
         interactionPolicy: 'auto-allow',
-        chatOptions: {
-          idleTimeoutMs: 30_000,
-          streamTimeoutMs: 15 * 60 * 1000,
-          signal: chatAbortController.signal,
-        },
         ...(modelOverride ? { model: modelOverride } : {}),
+        chatOptions,
         handlers,
       }),
       slotMeta,

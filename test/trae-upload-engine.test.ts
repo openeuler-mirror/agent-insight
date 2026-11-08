@@ -222,7 +222,7 @@ test("AC22: 会话新增事件后重新上传并更新 checkpoint", async (t) =>
 // AC5/AC14/AC15/AC16: 上传载荷的 model/tokens/latency/模型切换字段
 // ============================================================================
 test("AC5/AC14/AC15/AC16: 上传载荷包含 model/tokens/latency 与模型切换记录", async (t) => {
-  const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
+  const { tmpHome, spoolDir, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
   cleanup(t, tmpHome, spoolDir, origHome)
@@ -261,7 +261,7 @@ test("AC5/AC14/AC15/AC16: 上传载荷包含 model/tokens/latency 与模型切�
 // model 只能来自 agentInsight.trae.modelName 配置兜底（与 stop.sh 真实输出对齐）
 // ============================================================================
 test("AC5/AC14: llm.call 无 model 时回退到配置 modelName（真实链路形态）", async (t) => {
-  const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
+  const { tmpHome, spoolDir, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
   cleanup(t, tmpHome, spoolDir, origHome)
@@ -283,7 +283,7 @@ test("AC5/AC14: llm.call 无 model 时回退到配置 modelName（真实链路�
 })
 
 test("AC5/AC14: llm.call 无 model 且未配置时 model 为空（对齐真实 DB 记录）", async (t) => {
-  const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
+  const { tmpHome, spoolDir, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
   cleanup(t, tmpHome, spoolDir, origHome)
@@ -353,7 +353,7 @@ test("AC23: 重试全部失败时不写 checkpoint，数据保留待下次上传
 // 工具必须进入 interactions（此前只挂在有 end 的轮次，中断轮工具丢失）
 // ============================================================================
 test("中断会话: 无 response 时工具仍进入上传载荷（合成 interrupted turn）", async (t) => {
-  const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
+  const { tmpHome, spoolDir, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
   cleanup(t, tmpHome, spoolDir, origHome)
@@ -385,7 +385,7 @@ test("中断会话: 无 response 时工具仍进入上传载荷（合成 interru
 })
 
 test("中断会话: 多轮场景（第一轮完成 + 第二轮中断）两轮工具都上传", async (t) => {
-  const { tmpHome, spoolDir, checkpointFile, origHome } = setup()
+  const { tmpHome, spoolDir, origHome } = setup()
   const calls: FetchCall[] = []
   ;(globalThis as any).fetch = makeFetchStub(calls, () => ({ ok: true, status: 200 }))
   cleanup(t, tmpHome, spoolDir, origHome)

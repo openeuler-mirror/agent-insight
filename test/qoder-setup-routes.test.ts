@@ -316,7 +316,7 @@ test("install guide appends Qoder to the existing framework choices", () => {
   assert.deepEqual(options, [
     "opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen",
     "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex",
-    "deepseek-harness", "qwenpaw", "mcts-xgovernor", "workbuddy",
+    "deepseek-harness", "qwenpaw", "mcts-xgovernor", "workbuddy", "dify",
   ])
 })
 
@@ -327,7 +327,7 @@ test("curl setup appends Qoder without changing existing framework entries", asy
     assert.deepEqual(frameworkValues(script), [
       "opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen",
       "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
-      "deepseek-harness", "qwenpaw", "mcts-xgovernor", "workbuddy",
+      "deepseek-harness", "qwenpaw", "mcts-xgovernor", "workbuddy", "dify",
     ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
@@ -357,7 +357,7 @@ test("local npm auto setup appends Qoder without changing existing framework ent
     assert.deepEqual(frameworkValues(script), [
       "opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen",
       "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
-      "deepseek-harness", "qwenpaw", "mcts-xgovernor", "workbuddy",
+      "deepseek-harness", "qwenpaw", "mcts-xgovernor", "workbuddy", "dify",
     ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)

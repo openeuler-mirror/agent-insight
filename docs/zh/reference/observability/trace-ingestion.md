@@ -1,6 +1,8 @@
 ---
 title: "Trace HTTP 接入"
 description: "OTLP 与兼容 JSON 上传的输入、身份处理和接收语义。"
+keywords: ["Agent Insight", "OTLP", "链路采集", "身份验证"]
+changefreq: "monthly"
 ---
 
 优先使用对应框架的客户端安装流程。本页用于导出器集成和问题定位；OTLP 与兼容上传的 JSON 不能相互替代。

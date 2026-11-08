@@ -26,6 +26,8 @@ import { GET as listExperiments, POST as createExperiment } from '@/app/api/expe
 import { DELETE as deleteExperiment, GET as getExperiment } from '@/app/api/experiments/[id]/route';
 import { prisma } from '@/lib/storage/prisma';
 import { createWorkbenchExperiment } from '@/lib/skill-workbench/experiment-service';
+import { POST as createSkillExperiment } from '@/app/api/skill-workbench/skills/[name]/experiments/route';
+import { NextRequest } from 'next/server';
 
 const TEST_USER = `exp-smoke-${Date.now()}`;
 
@@ -494,14 +496,22 @@ test('Skill A/B 和触发分析同配置实验创建独立任务并沿用冻结�
         actions: ['RUN_EXPERIMENT_CASE'],
         platforms: [{
           id: 'opencode', agents: ['build'], models: ['test/model'],
-          runExperimentCase: { version: 1, returnsTraceId: true, skillSnapshotVersion: 4 },
+          runExperimentCase: { version: 1, returnsTraceId: true, skillSnapshotVersion: 5 },
         }],
       }),
     },
   });
+  for (const executionConcurrency of [0, -1, 1.5, '2']) {
+    const response = await createSkillExperiment(new NextRequest('http://localhost/api/skill-workbench/skills/test/experiments', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user: TEST_USER, version: 1, preset: 'skill-ab', compareVersion: 2, datasetId, executionConcurrency }),
+    }), { params: Promise.resolve({ name: skillName }) });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /执行并发/);
+  }
   const source = await createWorkbenchExperiment({
     user: TEST_USER, skillName, version: 1, preset: 'skill-ab', compareVersion: 2,
-    datasetId, caseIds: ['case-a', 'case-b'], agentName: 'build',
+    datasetId, caseIds: ['case-a', 'case-b'], agentName: 'build', executionConcurrency: 3,
     evaluatorIds: ['preset-agent-task-completion'],
     executionTarget: { workerId, host: 'test-host', platform: 'opencode', agent: 'build', model: 'test/model' },
   });
@@ -528,6 +538,10 @@ test('Skill A/B 和触发分析同配置实验创建独立任务并沿用冻结�
   const config = JSON.parse(newTask.configJson);
   assert.equal(config.evalExperimentId, clone.id);
   assert.equal(config.runCount, 1);
+  assert.equal(config.executionConcurrency, 3);
+  assert.equal(source.configSnapshot.executionConcurrency, 3);
+  const detail = await getExperiment(new Request(`http://localhost/api/experiments/${clone.id}?user=${TEST_USER}`), { params: Promise.resolve({ id: clone.id }) });
+  assert.equal((await detail.json()).executionConcurrency, 3);
   assert.match(config.skillSnapshots.a.files['SKILL.md'], /Original/);
   const newExperiment = await prisma.experiment.findUniqueOrThrow({ where: { id: clone.id } });
   assert.match(newExperiment.name, new RegExp(`^${skillName} · A/B 测试 · v1 · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`));

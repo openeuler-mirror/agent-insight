@@ -28,6 +28,7 @@
  *
  * 输出固定 5 字段，直接对接 derive-skill-opt-points → SkillIssue 表。
  */
+import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { jsonrepair } from 'jsonrepair';
 import {
   AgentInsight,
@@ -301,7 +302,7 @@ async function runSuggestionViaOpencode(args: {
 }): Promise<string> {
   const model = await loadServerModelForUser(args.user);
   if (!model) {
-    throw new Error('未配置评测模型，请先在「模型配置」中激活一个模型。');
+    throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
   }
 
   return runWithEphemeralOpencodeServer(

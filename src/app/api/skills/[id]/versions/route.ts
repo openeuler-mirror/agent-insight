@@ -148,7 +148,7 @@ export async function GET(
             const latencies = last7d.map(e => e.latency).filter((x): x is number => typeof x === 'number');
             latencies.sort((a, b) => a - b);
             const p95 = latencies.length > 0
-                ? Math.round(latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))])
+                ? Math.round(latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * 0.95) - 1)])
                 : null;
 
             const agentSet = new Set<string>();

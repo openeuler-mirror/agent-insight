@@ -89,7 +89,7 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
       else {
         recordPlatform(context, { version: runtime.version, runExperimentCase: {
           version: 2, returnsTraceId: runtime.canResolveTraceId, ready: runtime.ready === true && runtime.canResolveTraceId === true,
-          ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 4 } : {}),
+          ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 5 } : {}),
           ...(context.platform === 'opencode' && runtime.major === 2 && runtime.canResolveTraceId === true
             ? { multiTurn: true, sessionContinuation: true, conversationVersion: 1 } : {}),
         } })

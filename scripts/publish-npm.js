@@ -28,7 +28,7 @@ function runCommand(command, description, ignoreFailure = false) {
     execSync(command, { stdio: 'inherit' })
     console.log('✓ Success')
     return true
-  } catch (error) {
+  } catch {
     if (ignoreFailure) {
       console.log('⚠️  Warning: Command failed, but continuing...')
       return false
@@ -47,7 +47,7 @@ function preflightAuth() {
     const who = execSync(`npm whoami --registry ${PUBLISH_REGISTRY}`, { encoding: 'utf8' }).trim()
     console.log(`\n✓ Authenticated to npm as: ${who}`)
     return who
-  } catch (e) {
+  } catch {
     console.error('\n❌ Not authenticated to the npm registry (' + PUBLISH_REGISTRY + ').')
     console.error('   Publishing needs an npm Automation token (it bypasses 2FA). To set one up:\n')
     console.error('   1. Make sure an owner added you as a maintainer:')

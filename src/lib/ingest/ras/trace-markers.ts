@@ -25,6 +25,8 @@ export interface RasRecoveryAction {
 export interface RasActionResult {
   action: string
   ok: boolean
+  /** Explicit termination stage takes precedence over the legacy ok flag. */
+  phase?: "terminating" | "failed"
   channel?: string
   error?: string
   message?: string
@@ -121,10 +123,14 @@ export function buildRasTraceMarkers(
     .map(row => {
       const payload = parsePayload(row)
       const delivery = deliveryAnchor(payload)
+      const phase: RasActionResult["phase"] = payload.phase === "terminating" || payload.phase === "failed"
+        ? payload.phase
+        : undefined
       return {
         key: anchorKey(traceAnchor(payload)),
         action: asString(payload.action) || row.actionTypes || "action",
         ok: Boolean(payload.ok),
+        phase,
         channel: asString(payload.channel),
         error: asString(payload.error),
         message: asString(payload.message),
@@ -137,6 +143,7 @@ export function buildRasTraceMarkers(
         ts: new Date(row.ts).getTime(),
       }
     })
+    .sort((a, b) => a.ts - b.ts)
 
   const drafts = rows
     .filter(row => row.type === "anomaly")
@@ -167,6 +174,7 @@ export function buildRasTraceMarkers(
     .sort((a, b) => a.marker.ts - b.marker.ts)
 
   return drafts.map((draft, index) => {
+    const hasPreviousAnchor = drafts.slice(0, index).some(candidate => candidate.key === draft.key)
     const nextSameAnchor = drafts
       .slice(index + 1)
       .find(candidate => candidate.key && candidate.key === draft.key)
@@ -175,12 +183,14 @@ export function buildRasTraceMarkers(
       ? resultRows
           .filter(result => (
             result.key === draft.key
-            && result.ts >= draft.marker.ts
+            // Concurrent uploads can persist the termination signal before its anomaly.
+            && (result.ts >= draft.marker.ts || (result.phase && !hasPreviousAnchor))
             && result.ts < upperBound
           ))
           .map(result => ({
             action: result.action,
             ok: result.ok,
+            phase: result.phase,
             channel: result.channel,
             error: result.error,
             message: result.message,
