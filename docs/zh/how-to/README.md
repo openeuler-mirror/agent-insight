@@ -22,3 +22,5 @@ Skill 用例分析、A/B 和触发分析可设置“执行并发”（默认 1�
 Skill 实验记录列表与普通实验共用自动刷新：有运行中记录时每 5 秒更新状态，全部结束后停止；进入创建向导或结果详情时暂停列表刷新。刷新失败时保留最近记录并自动重试。
 
 [链路追踪时间筛选](./observability/view-traces.md#2-筛选区)支持快捷范围及精确到秒的自定义起止时间。
+
+[JiuwenSwarm 接入升级](../reference/observability/client-compatibility.md#jiuwenswarm)说明扩展更新、容器地址配置及完整 Trace 验收要求。

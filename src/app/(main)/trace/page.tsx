@@ -1734,7 +1734,7 @@ function TraceDetailView({
 
     return (
         <div className="flex flex-col h-full min-h-0">
-            <div className="rounded-md border border-border bg-card p-3 mb-3 flex flex-wrap items-center gap-2">
+            <div className="rounded-md border border-border bg-card p-3 mb-3 flex min-w-0 shrink-0 flex-wrap items-center gap-2">
                 <Button variant="ghost" size="sm" onClick={onBack} className="text-foreground-muted h-7 px-2">
                     <ArrowLeft className="size-3.5" aria-hidden />
                     {t('tracePage.backToList')}
@@ -1757,11 +1757,11 @@ function TraceDetailView({
                         {locale === 'zh' ? '父执行' : 'Parent'}
                     </Button>
                 )}
-                <Separator orientation="vertical" className="h-5" />
+                <Separator orientation="vertical" className="data-[orientation=vertical]:h-5" />
                 {isSubagentTrace && (
                     <span
                         title={subagentName || ''}
-                        className="text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary border border-primary/30 shrink-0"
+                        className="text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary border border-primary/30 max-w-full shrink-0 truncate"
                     >
                         SUB-AGENT{subagentType ? ` · ${subagentType}` : ''}
                     </span>
@@ -1793,7 +1793,7 @@ function TraceDetailView({
                 />
 
                 {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) || (typeof cost === 'number' && cost > 0) ? (
-                    <Separator orientation="vertical" className="h-5" />
+                    <Separator orientation="vertical" className="data-[orientation=vertical]:h-5" />
                 ) : null}
                 {typeof tokens === 'number' && tokens > 0 && (
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
@@ -1842,7 +1842,7 @@ function TraceDetailView({
                         <RefreshCw className="size-3.5" />
                     </Button>
 
-                    <Separator orientation="vertical" className="h-5" />
+                    <Separator orientation="vertical" className="data-[orientation=vertical]:h-5" />
                     <Button
                         variant="outline"
                         size="sm"

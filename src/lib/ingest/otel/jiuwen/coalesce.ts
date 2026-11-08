@@ -32,6 +32,8 @@
  * 本体已在盘上，且完成信号批次总是立即冲洗，不影响状态正确性。
  */
 
+import { isEndedJiuwenRoot } from './contract';
+
 export type CoalesceFlushFn = (repKey: string, user?: string) => Promise<void>;
 
 interface GroupState {
@@ -120,10 +122,10 @@ export class JiuwenBatchCoalescer {
 /** 该批次里、属于 bucket key 的 span 中是否有已收尾的 team.* root（完成信号）。
  *  与 aggregate.ts 的 endedTeamRootSpan 同判据：span 名以 team. 开头且 endNs>0。 */
 export function batchHasEndedTeamRoot(
-  spans: Array<{ traceId?: string; name: string; endNs: number }>,
+  spans: Array<{ traceId?: string; name: string; endNs: number; parentSpanId?: string; attrs?: Record<string, unknown> }>,
   bucketKey: string,
 ): boolean {
   return spans.some(
-    (s) => (s.traceId || '') === bucketKey && s.name.startsWith('team.') && s.endNs > 0,
+    (s) => (s.traceId || '') === bucketKey && isEndedJiuwenRoot(s),
   );
 }

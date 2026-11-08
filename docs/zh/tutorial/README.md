@@ -22,3 +22,5 @@ Skill 用例分析、A/B 和触发分析可设置“执行并发”（默认 1�
 Skill 实验记录列表与普通实验共用自动刷新：有运行中记录时每 5 秒更新状态，全部结束后停止；进入创建向导或结果详情时暂停列表刷新。刷新失败时保留最近记录并自动重试。
 
 在链路追踪列表中，可通过“时间 → 自定义时间范围”定位指定时段；参见[首条 Trace 教程](./platform/01-quick-start.md#步骤五验证生成的-trace)。
+
+JiuwenSwarm 升级后，请更新观测扩展并重启 AgentServer，再检查输入、回答、模型调用、工具结果及 Token 是否完整；见[新旧契约兼容说明](../reference/observability/client-compatibility.md#jiuwenswarm)。
