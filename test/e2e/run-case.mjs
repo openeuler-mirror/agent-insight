@@ -15,7 +15,6 @@ import { scenario003 } from './cases/003-skill-lifecycle/scenario.mjs';
 import { scenario004 } from './cases/004-trace-evaluation/scenario.mjs';
 import { scenario005 } from './cases/005-fault-recovery/scenario.mjs';
 import { assertRunRoot, redact, renderReport, scenarioResult, requiredStagesFor, stageFailureStatus } from './shared/core.mjs';
-import { writePrivate } from './shared/runtime.mjs';
 import { prepareClients, prepareFixtures } from './shared/clients.mjs';
 import { choosePort, startApplication, stopProcesses } from './shared/application.mjs';
 import { command, stopCommands } from './shared/runtime.mjs';
