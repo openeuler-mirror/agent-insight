@@ -9,6 +9,8 @@ changefreq: "monthly"
 
 See [How-to guides](./navigation.md). The [coverage index](../navigation.md) identifies translated bodies and remaining Chinese-only guides.
 
+After a diagnosed optimization passes retesting and is published, deploy it to the source client from the optimization record. The client creates a version-labelled backup before replacing the Skill. See [deploying a published version (Chinese)](../../zh/how-to/optimization/skills/optimize.md#6-下发已发布版本).
+
 Dataset options show the name, type, and case count. When generating a Trace in an ordinary Agent experiment, the Agent chooses from the Skills available in its runtime environment. In Skill use-case experiments, the wizard header shows the selected Skill and version. In A/B experiments, the header shows the Skill and each group shows its version or the no-Skill baseline. See the guides for [ordinary experiments](../../zh/how-to/evaluation/experiments.md), [use-case analysis](../../zh/how-to/evaluation/skills/use-case-analysis.md), and [A/B testing](../../zh/how-to/evaluation/skills/ab-test.md) in Chinese.
 
 Missing platform evaluation models are reported with a model registry link in progress dialogs and evaluator error cards. Add a model, test its connection and set it as default, then return to retry scoring; existing output and Trace can be reused without rerunning the Agent. Authentication, timeout and response-format errors retain their specific messages. See [experiments (Chinese)](../../zh/how-to/evaluation/experiments.md#查看单条-case-详情) and [model registration (Chinese)](../../zh/how-to/platform/settings/model-registry.md).

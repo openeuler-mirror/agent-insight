@@ -31,6 +31,7 @@ const clientFiles = [
   'scripts/xgovernor.cjs',
   'scripts/ordinary-experiment-state.cjs',
   'scripts/skill-experiment-workspace.cjs',
+  'scripts/skill-deployment-runtime.cjs',
   'scripts/opencode-connection-config.cjs',
   'scripts/agent-run-diagnostics.cjs',
   'scripts/opencode-experiment-events.cjs',

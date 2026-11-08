@@ -72,6 +72,18 @@ curl --fail-with-body --get \
 
 Unless specified otherwise, legacy write/file/download errors include `400` invalid parameters, `403` access denied, `404` missing Skill/version/file, and `500` processing failure. `POST /versions` starts at `1` if there is no previous version; normally upload or publishing has already created version `0`. Read the actual returned number rather than allocating it client-side.
 
+## Published-version deployment
+
+Deployment routes use the Skill `name` and accept only a published optimization record or an existing formal version. The server binds the destination through a source Trace; callers cannot supply an absolute client path.
+
+| Method and path | Request and response |
+| --- | --- |
+| `POST /api/skills/by-name/:name/deployments/preview` | JSON `{ user?, sourceExecutionId?, source }`, where `source` is `{type:"optimization", optimizationRecordId}` or `{type:"published_version", skillVersion}`. An optimization can infer its diagnosis Trace; historical formal versions require an explicit source Trace. Returns the client, display target, current/target versions, and direction. |
+| `POST /api/skills/by-name/:name/deployments` | Repeats the source after preview with `confirmed:true` and a user-scoped unique `idempotencyKey`. Reusing the key for different inputs returns `409`. |
+| `GET /api/skills/by-name/:name/deployments/:deploymentId?user=...` | Returns the deployment and ordered events. Terminal states are `SUCCEEDED`, `FAILED`, and `FAILED_RESTORED`. |
+
+Deploying a historical version does not modify `Skill.activeVersion`; it backs up the client’s current version and installs the selected formal version as a downgrade. The device-authenticated artifact route is `GET /api/reliability/client/v1/skill-artifacts/:artifactRef`. References are bound to a client and expire after ten minutes. Artifacts are text-file maps limited to 1,000 files and 4 MiB and must contain root `SKILL.md`.
+
 ## Upload and publishing
 
 ### Upload a folder

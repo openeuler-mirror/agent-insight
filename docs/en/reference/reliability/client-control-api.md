@@ -86,6 +86,12 @@ Observe results through the configuration GET's `delivery`. Saving or receiving 
 
 ## Commands and WebSocket bridges
 
+### Skill deployment capability and artifacts
+
+A platform capability can advertise `skillDeployment: { protocolVersion: 1, ready, modes, backup, reload? }`. OpenCode, Pi, and xiaoO use `execution_origin`; JiuwenSwarm uses `framework_global` and currently reports `restart_required` reload behavior. Jiuwen deployment is advertised only when its data workspace exists or `JIUWENSWARM_DATA_DIR` is explicitly configured on the device.
+
+`PRECHECK_SKILL_DEPLOYMENT` resolves a controlled target and reports its current `skillVersion/contentHash` without writing. `DEPLOY_SKILL_ARTIFACT` downloads a client-bound artifact, compares the preflight snapshot, stages and verifies files, creates a versioned backup, atomically replaces the target, writes local version state, and verifies again. Payloads recursively reject arbitrary paths, URLs, file bodies, shell fields, arguments, and cwd. An execution origin carries only an opaque `origin_<hash>` resolved by that device’s local registry.
+
 `GET /api/reliability/client/v1/commands/next?waitSeconds=25` uses device authentication. Long polling defaults to 25 seconds, caps at 30 seconds, and checks every 500 ms. The current expression treats `0` as the default 25 seconds too. An available command returns a `200 COMMAND` frame; no command or the request ending returns `204`:
 
 ```json
@@ -105,7 +111,7 @@ Observe results through the configuration GET's `delivery`. Saving or receiving 
 }
 ```
 
-These references and values are examples; use the actual delivered frame. The action whitelist is `APPLY_CLIENT_CONFIG/PREPARE_EXPERIMENT_CASE/RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/CANCEL_EXPERIMENT_RUN/REFRESH_CAPABILITIES/PREPARE_EXECUTION_ENVIRONMENT`. Top-level payload fields for `RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/PREPARE_EXECUTION_ENVIRONMENT` forbid `command/shell/args/cwd/executable/script`; other whitelisted actions forbid `url/config/path/downloadUrl/file`. Execution-environment preparation additionally validates the context structure and digest. This is not an arbitrary command execution endpoint.
+These references and values are examples; use the actual delivered frame. The action whitelist is `APPLY_CLIENT_CONFIG/PREPARE_EXPERIMENT_CASE/RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/CANCEL_EXPERIMENT_RUN/REFRESH_CAPABILITIES/PREPARE_EXECUTION_ENVIRONMENT/PRECHECK_SKILL_DEPLOYMENT/DEPLOY_SKILL_ARTIFACT`. Run actions forbid `command/shell/args/cwd/executable/script`; configuration actions forbid `url/config/path/downloadUrl/file`. Skill deployment checks both sets recursively. Execution-environment preparation additionally validates the context structure and digest. This is not an arbitrary command execution endpoint.
 
 `POST /api/reliability/client/v1/commands/:commandId/status` uses device credentials. JSON contains `status` and optional `occurredAt/result/error`. Allowed statuses are `RECEIVED/RUNNING/SUCCEEDED/FAILED`; success returns `200 { ok: true }`. Invalid status returns `400`, missing or another device's command `404`, and an expired nonterminal command `410`. Terminal commands are not rewritten by later receipts; configuration deliveries still need the write/load checks above.
 

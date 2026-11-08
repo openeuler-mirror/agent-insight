@@ -204,10 +204,26 @@ function preferExplicitPrimarySkillVersion(
 async function persistExecutionSkills(
     executionId: string,
     skills: InvokedSkill[],
-    opts: { user?: string | null; primaryName?: string | null } = {},
+    opts: {
+        user?: string | null;
+        primaryName?: string | null;
+        origins?: Array<{
+            skillName?: string;
+            skillVersion?: number | null;
+            clientId?: string;
+            platform?: string;
+            targetMode?: string;
+            originRef?: string | null;
+            displayPath?: string | null;
+            observedContentHash?: string | null;
+        }>;
+    } = {},
 ): Promise<void> {
     if (!EXECUTION_SKILL_ENABLED || !executionId) return;
     try {
+        const previous = await prismaRaw.executionSkill.findMany({
+            where: { executionId }, include: { origin: true },
+        }).catch(() => []);
         await prismaRaw.executionSkill.deleteMany({ where: { executionId } });
         if (!skills.length) return;
         const seen = new Set<string>();
@@ -226,6 +242,34 @@ async function persistExecutionSkills(
             });
         }
         if (data.length) await prismaRaw.executionSkill.createMany({ data });
+        const created = await prismaRaw.executionSkill.findMany({ where: { executionId } });
+        for (const row of created) {
+            const incoming = opts.origins?.find(origin => origin.skillName === row.skillName
+                && (origin.skillVersion == null || row.skillVersion == null || origin.skillVersion === row.skillVersion));
+            const prior = previous.find(item => item.skillName === row.skillName
+                && (item.skillVersion == null || row.skillVersion == null || item.skillVersion === row.skillVersion))?.origin;
+            const origin = incoming || prior;
+            if (!origin?.clientId || !origin?.platform || !origin?.targetMode) continue;
+            const platform = String(origin.platform).trim().toLowerCase();
+            const targetMode = String(origin.targetMode);
+            const originRef = typeof origin.originRef === 'string' ? origin.originRef.trim() : '';
+            if (!['opencode', 'pi-agent', 'xiaoo', 'jiuwenswarm'].includes(platform)) continue;
+            if (targetMode !== 'execution_origin' && targetMode !== 'framework_global') continue;
+            if (targetMode === 'execution_origin' && !/^origin_[a-f0-9]{24}$/.test(originRef)) continue;
+            if (targetMode === 'framework_global' && platform !== 'jiuwenswarm') continue;
+            await prismaRaw.executionSkillOrigin.create({
+                data: {
+                    executionSkillId: row.id,
+                    clientId: origin.clientId,
+                    platform,
+                    targetMode,
+                    originRef: originRef || null,
+                    displayPath: typeof origin.displayPath === 'string' ? origin.displayPath.slice(0, 2048) : null,
+                    observedSkillVersion: incoming?.skillVersion ?? row.skillVersion,
+                    observedContentHash: origin.observedContentHash || null,
+                },
+            });
+        }
     } catch (e) {
         console.warn(`[Data-Service] persistExecutionSkills failed for ${executionId}:`, e);
     }
@@ -349,6 +393,16 @@ export interface ExecutionRecord {
     skills?: string[];
     invokedSkills?: InvokedSkill[];
     invoked_skills?: InvokedSkill[];
+    skill_origins?: Array<{
+        skillName: string;
+        skillVersion?: number | null;
+        clientId?: string | null;
+        platform: string;
+        targetMode: 'execution_origin' | 'framework_global';
+        originRef?: string | null;
+        displayPath?: string | null;
+        observedContentHash?: string | null;
+    }>;
     agents?: string[];
     langfuseTraceNodes?: LangfuseTraceNode[];
 
@@ -3050,7 +3104,16 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                 targetRecord.skill_version ?? null,
             );
             const snapped = await snapshotSkillVersions(pinnedRootSkills, targetRecord.user);
-            await persistExecutionSkills(recordId, snapped, { user: targetRecord.user, primaryName: targetRecord.skill ?? null });
+            await persistExecutionSkills(recordId, snapped, {
+                user: targetRecord.user,
+                primaryName: targetRecord.skill ?? null,
+                origins: Array.isArray(targetRecord.skill_origins)
+                    ? targetRecord.skill_origins.map(origin => ({
+                        ...origin,
+                        clientId: origin.clientId || targetRecord.clientId || undefined,
+                    }))
+                    : undefined,
+            });
             await prismaRaw.execution.update({
                 where: { id: recordId },
                 data: {

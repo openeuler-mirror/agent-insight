@@ -1426,6 +1426,7 @@ export function SkillWorkbenchShell() {
         ) : currentView === 'optimization' && optimizationRecords.length ? (
           <OptimizationRecordsPanel
             records={optimizationRecords}
+            user={user || ''}
             onRetest={retestDiagnosis}
             retestingId={retestingId}
             selectedRecordId={selectedOptimizationRecordId}

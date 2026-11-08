@@ -9,6 +9,8 @@ changefreq: "monthly"
 
 See [Tutorials](./navigation.md). The [coverage index](../navigation.md) identifies translated bodies and remaining Chinese-only guides.
 
+After retesting and publishing an optimized Skill, continue with [deployment to the source client (Chinese)](../../zh/how-to/optimization/skills/optimize.md#6-下发已发布版本). Existing client content is backed up with its version before installation.
+
 When a platform evaluator has no model configured, **Go to model registry** opens registration in a new tab. Add a model, test the connection, set it as default, then return and retry scoring with the existing output and Trace. Code-only evaluators do not require a platform model. See the [first evaluation tutorial (Chinese)](../../zh/tutorial/evaluation/01-first-experiment.md).
 
 Saved custom evaluators can be selected in Skill use-case and A/B experiments without a draft-to-ready transition. Required-input checks still apply. See the [evaluator guide (Chinese)](../../zh/how-to/evaluation/evaluators.md).

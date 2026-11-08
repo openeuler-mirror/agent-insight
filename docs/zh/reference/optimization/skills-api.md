@@ -72,6 +72,20 @@ curl --fail-with-body --get \
 
 除表内特别说明，遗留写入、文件与下载入口常见 `400` 参数错误、`403` 访问拒绝、`404` Skill/版本/文件缺失、`500` 处理错误。`POST /versions` 的版本计算无历史版本时从 `1` 开始；通常已有上传/发布的版本 `0`。调用方应按实际返回值读取，不能自行分配版本号。
 
+## 正式版本下发
+
+下发接口使用 Skill `name`，要求解析出所属用户；只接受已经发布的优化记录或已存在的正式版本。服务端通过来源 Trace 绑定客户端和框架，不接受调用方传绝对路径。
+
+| 方法与路径 | 请求与响应 |
+| --- | --- |
+| `POST /api/skills/by-name/:name/deployments/preview` | JSON `{ user?, sourceExecutionId?, source }`。`source` 为 `{type:"optimization", optimizationRecordId}` 或 `{type:"published_version", skillVersion}`。优化记录可从诊断来源推导 Trace；历史正式版本必须显式给出来源 Trace。返回客户端、目标显示路径、当前/目标版本与 `install/upgrade/downgrade/reinstall`。 |
+| `POST /api/skills/by-name/:name/deployments` | 在 preview 后提交同一来源，并带 `confirmed:true` 与用户范围内唯一的 `idempotencyKey`。返回部署记录；重复的相同请求返回既有记录，复用键指向不同请求返回 `409`。 |
+| `GET /api/skills/by-name/:name/deployments/:deploymentId?user=...` | 返回部署记录及顺序事件。终态为 `SUCCEEDED`、`FAILED` 或 `FAILED_RESTORED`。 |
+
+`published_version` 下发历史版本不会修改 `Skill.activeVersion`。客户端当前 `skillVersion` 大于目标版本时方向为 `downgrade`，仍会按当前版本创建新备份。常见阻断包括来源 Trace 不属于用户、客户端离线或版本过旧、来源路径缺失、多 JiuwenSwarm 客户端歧义、预检后本地内容变化及同版本内容哈希冲突。
+
+制品领取是客户端设备鉴权接口 `GET /api/reliability/client/v1/skill-artifacts/:artifactRef`，返回受限的 manifest 和文本文件映射；引用绑定 clientId 且十分钟过期，不出现在控制命令中。单个制品最多 1000 个文件、4 MiB，必须包含根 `SKILL.md`。
+
 ## 上传与发布
 
 ### 文件夹上传
