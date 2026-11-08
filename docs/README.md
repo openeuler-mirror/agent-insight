@@ -1,7 +1,7 @@
 # Agent Insight 文档 / Documentation
 
 - [中文文档](https://gitcode.com/openeuler/agent-insight/blob/master/docs/zh/README.md)：现有正式文档，按教程、操作指南、参考、解释四类组织。
-- [English documentation](./en/navigation.md)：17 篇英文正文及逐页翻译覆盖状态。
+- [English documentation](./en/navigation.md)：18 篇英文正文及逐页翻译覆盖状态。
 - [内部需求与设计](https://gitcode.com/openeuler/agent-insight/blob/master/design/README.md)：开发设计稿、计划、原型和历史资料。
 - [迁移审查清单](https://gitcode.com/openeuler/agent-insight/blob/master/design/platform/docs-migration/migration-review.md)：内容缺口、已确认清理和保留更新的处理结果。
 

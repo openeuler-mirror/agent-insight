@@ -222,6 +222,8 @@ After deployment, continue with [your first Trace](../../tutorial/platform/01-qu
 
 ## UBI9/OpenShift image
 
+Follow [Deploy the server on OpenShift](./deploy-openshift.md) for project permissions, image preparation, PVC/SCC, HTTPS Routes, Developer Sandbox builds, business acceptance and troubleshooting.
+
 For UBI9, full DNF, and downstream patch builds, use the separate source-based `Dockerfile.openshift` image. It uses the same pinned UBI9 Node.js 22 base for dependency installation, build, and runtime. Override `UBI_NODE_IMAGE` with an approved enterprise mirror or digest that supplies Node.js 22, npm, and full `dnf`; `microdnf` alone is insufficient. The generic Dockerfiles retain their existing base images and default users.
 
 This candidate runs the prebuilt application and does not support mounted-source mode through `AGENT_INSIGHT_SOURCE_DIR`. Rebuild the image when application source changes. Startup regenerates the package-local Prisma client under the runtime UID to avoid overwriting root-owned files.

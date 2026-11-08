@@ -211,6 +211,8 @@ API Key。预检失败会明确告警，但不会阻断普通链路插件和看�
 
 ## UBI9/OpenShift 镜像
 
+完整步骤见[在 OpenShift 上部署服务端](./deploy-openshift.md)，包括项目权限、镜像准备、PVC/SCC、HTTPS Route、Developer Sandbox 构建、业务验收与排障。
+
 需要 UBI9、完整 DNF 及客户派生补丁构建能力时，使用从源码制作的独立 `Dockerfile.openshift` 镜像，构建及补丁验收步骤见[镜像发布](./release-docker-image.md#构建-ubi9openshift-交付候选)。它与通用 Docker Hub 镜像是不同的交付入口。
 
 UBI9 候选按预构建方式运行，不支持 `AGENT_INSIGHT_SOURCE_DIR` 运行时源码挂载；代码升级请重新构建镜像。
