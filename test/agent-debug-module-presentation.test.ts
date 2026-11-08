@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { DiagnosisModuleCards, DiagnosisTaskSummary, SkillsAnalysisSection } from '../src/components/observe/AgentDebugCard';
+import { DiagnosisModuleCards, DiagnosisTaskSummary, SkillsAnalysisSection, ReportView } from '../src/components/observe/AgentDebugCard';
 import { getModuleActivity, getModulePresentation, getNewModuleSequences, preserveDiagnosisProgress } from '../src/components/observe/agent-debug-presentation';
 import { DiagnosisModuleStatus } from '../src/components/observe/DiagnosisModuleStatus';
 import type { DiagnosisProgressSnapshot } from '../src/lib/engine/agent-debug/progress-types';
@@ -255,4 +255,13 @@ test('completed Skills report is visible ahead of its collapsed process history'
   assert.match(markup, /1 个 Skill 步骤 · 0 条建议/);
   assert.ok(markup.indexOf('核验报告总结') < markup.indexOf('核验过程（共 2 段）'));
   assert.doesNotMatch(markup, /<details[^>]*open/);
+});
+
+
+test('shared final report supports both evaluation reruns and read-only frozen Trace reports', () => {
+  const props = { report: report(), zh: true, traceExplicitErrors: [] };
+  const frozen = renderToStaticMarkup(createElement(ReportView, props));
+  assert.doesNotMatch(frozen, /重新诊断/);
+  const evaluation = renderToStaticMarkup(createElement(ReportView, { ...props, onRerun: () => {} }));
+  assert.match(evaluation, /重新诊断/);
 });

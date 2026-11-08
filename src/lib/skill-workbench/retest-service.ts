@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { retestDiagnosisCase } from '@/lib/diagnosis/retest';
 import { linkCandidateVerification } from './verification-evidence';
 import { verifyFromSourceExperiment } from '@/lib/engine/skill-opt/experiment-verification';
 import type { SkillExecutionSnapshot } from './execution-target';
@@ -74,6 +75,14 @@ export async function retestOptimizationCandidate(input: {
   if (!['pending_retest', 'retest_failed', 'retest_cancelled', 'retest_passed'].includes(record.status)) {
     throw new RetestError(`候选当前状态 ${record.status} 不能复测`);
   }
+  if (record.sourceKind === 'diagnosis') {
+    const source = record.sourceExperimentId && await prismaRaw.experiment.findFirst({ where: { id: record.sourceExperimentId, user: input.user, deletedAt: null } });
+    if (!source) throw new RetestError('该诊断缺少可复测的来源实验');
+    if (source.scope !== 'skill-workbench') {
+      try { return await retestDiagnosisCase(record, source, candidateFiles); }
+      catch (error) { throw new RetestError(error instanceof Error ? error.message : '诊断候选复测失败'); }
+    }
+  }
   const evidenceInput = { ...input, baseVersion: record.baseVersion, files: candidateFiles, sourceExperimentId: record.sourceExperimentId };
   const reused = await linkCandidateVerification(evidenceInput);
   if (reused?.result.fullCoverage && !reused.result.incomplete) {
@@ -85,7 +94,7 @@ export async function retestOptimizationCandidate(input: {
     skillVersion: record.baseVersion,
     sourceExperimentId: record.sourceExperimentId,
   });
-  if (!baseline) {
+  if (!baseline || (record.sourceKind === 'diagnosis' && baseline.experiment.id !== record.sourceExperimentId)) {
     throw new RetestError(record.sourceExperimentId
       ? '来源实验尚未形成可比较的有效评分'
       : '该候选没有可用来源实验，无法保证同配置复测');

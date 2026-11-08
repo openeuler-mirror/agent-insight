@@ -42,6 +42,8 @@ interface OptimizationPlanItemView {
   title: string;
   targetFile?: string;
   conflictNote?: string;
+  rationale?: string;
+  proposedEdit?: string;
 }
 
 interface OptimizationPlanView {
@@ -227,6 +229,7 @@ export function OptimizationConversation({
   const stopRequestedRef = useRef(false);
   const planningControllerRef = useRef<AbortController | null>(null);
   const runTaskIdRef = useRef<string | null>(null);
+  const [diagnosisPlan, setDiagnosisPlan] = useState<OptimizationPlanView | null>(null);
   const [planning, setPlanning] = useState(false);
   const [localStep, setLocalStep] = useState(backgroundRunning ? 1 : 0);
   const busy = planning || running || backgroundRunning;
@@ -265,6 +268,8 @@ export function OptimizationConversation({
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '加载优化会话失败');
       if (requestId !== snapshotRequestRef.current || ownsStreamRef.current) return;
+      const imported = data.optimization.plan;
+      setDiagnosisPlan(imported && JSON.parse(imported.operatorMeta || '{}').source === 'diagnosis' ? imported : null);
       setMessages(hydrateOptimizationMessages(
         data.optimization.messages || [],
         backgroundRunningRef.current ? undefined : 'complete',
@@ -429,9 +434,10 @@ export function OptimizationConversation({
     if (taskId) void cancelTask(taskId);
   };
 
-  const runRequest = useCallback(async (requestText: string, options?: { mergeIssues?: boolean }) => {
+  const runRequest = useCallback(async (requestText: string, options?: { mergeIssues?: boolean; diagnosisConfirmed?: boolean }) => {
     if (busy || ownsStreamRef.current) return;
-    if (!hasOptimizationInput(requestText, issues) && !options?.mergeIssues) {
+    if (diagnosisPlan?.status === 'draft' && !options?.diagnosisConfirmed) { onError('请先审核并确认诊断优化计划。'); return; }
+    if (!hasOptimizationInput(requestText, issues) && !options?.mergeIssues && !options?.diagnosisConfirmed) {
       onError('当前没有待优化问题，可补充优化诉求后重试。');
       return;
     }
@@ -456,7 +462,7 @@ export function OptimizationConversation({
     const controller = new AbortController();
     try {
       planningControllerRef.current = controller;
-      const plan = options?.mergeIssues ? await prepareMergePlan(controller.signal) : null;
+      const plan = options?.diagnosisConfirmed ? diagnosisPlan : options?.mergeIssues ? await prepareMergePlan(controller.signal) : null;
       controller.signal.throwIfAborted();
       if (!hasOptimizationInput(requestText, issues, plan?.items)) throw new Error('请补充优化诉求或选择有效的评估问题');
       planningControllerRef.current = null;
@@ -481,6 +487,7 @@ export function OptimizationConversation({
         const failure = await response.json().catch(() => ({}));
         throw new Error(failure.error || '优化 Agent 启动失败');
       }
+      if (options?.diagnosisConfirmed) setDiagnosisPlan(current => current ? { ...current, status: 'confirmed' } : null);
       publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'optimization', kind: 'run-started' });
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -637,7 +644,7 @@ export function OptimizationConversation({
       });
       publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'optimization', kind: 'run-settled' });
     }
-  }, [baseVersion, baselineFiles, busy, cancelTask, issues, onError, onSynced, optSessionId, patchAgent, prepareMergePlan, skillName, user, workbenchSessionId]);
+  }, [baseVersion, baselineFiles, busy, cancelTask, diagnosisPlan, issues, onError, onSynced, optSessionId, patchAgent, prepareMergePlan, skillName, user, workbenchSessionId]);
 
   useEffect(() => {
     if (!autoStart) {
@@ -687,6 +694,11 @@ export function OptimizationConversation({
             onError={onError}
           />
         )}
+        {diagnosisPlan && <section className="space-y-3 rounded-lg border border-border bg-card p-4 text-xs">
+          <h3 className="font-medium">诊断优化计划 · {diagnosisPlan.status}</h3>
+          {diagnosisPlan.items.map(item => <div key={item.id}><strong>{item.title}</strong><p className="mt-1 whitespace-pre-wrap text-foreground-secondary">{item.rationale}</p><p className="mt-1">{item.proposedEdit}</p></div>)}
+          {diagnosisPlan.status === 'draft' && <button type="button" className="rounded bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50" disabled={busy || loading} onClick={() => void runRequest('按已审核的诊断计划生成候选，保留原有能力。', { diagnosisConfirmed: true })}>确认计划并生成候选</button>}
+        </section>}
         {messages.length === 0 && !autoStart && <div className="rounded-lg bg-background-secondary p-3 text-xs leading-5 text-foreground-secondary"><b className="text-foreground">可以提交优化诉求。</b><br />{issues.length ? `未填写诉求时，将使用当前有效的评估问题。` : useMergePlan ? '点击“Skill 优化”或发送，将整理当前版本的评估与实验问题并执行；也可以填写具体诉求。' : '填写具体诉求后，点击“Skill 优化”或发送即可开始。'}</div>}
         {messages.map((message, index) => {
           const meta = optimizationMeta(message);
@@ -827,7 +839,7 @@ function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPub
       <button type="button" onClick={() => onViewRecords(record)} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-[10px] text-foreground-secondary"><FileSearch className="size-3" />{executionFailed && !hasCandidate ? '查看失败详情' : '查看优化报告'}</button>
       {record.retestExperimentId && <a href={`/experiments/${encodeURIComponent(record.retestExperimentId)}`} className="inline-flex h-7 items-center text-[10px] text-primary hover:underline">查看行为验证实验</a>}
       {record.sourceRefs?.some((ref) => ref.type === 'verification-cleanup') && <span className="self-center text-[10px] text-foreground-muted">临时实验已清理，验证结果已保留</span>}
-      {qualityPassed && <button type="button" disabled={publishing} onClick={() => onPublish(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50">{publishing ? <Loader2 className="size-3 animate-spin" /> : <Upload className="size-3" />}发布为 {getOptimizationTargetVersion(record)}</button>}
+      {qualityPassed && (record.sourceKind !== 'diagnosis' || record.status === 'retest_passed') && <button type="button" disabled={publishing} onClick={() => onPublish(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50">{publishing ? <Loader2 className="size-3 animate-spin" /> : <Upload className="size-3" />}发布为 {getOptimizationTargetVersion(record)}</button>}
       {record.status === 'optimization_failed' && <button type="button" disabled={busy} onClick={() => onRepair(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50"><Wrench className="size-3" />{executionFailed ? '重新优化' : '修复阻断问题'}</button>}
     </div>
     {record.errorMessage && !(executionFailed && !hasCandidate) && <p className="mt-2 break-words text-[11px] text-error [overflow-wrap:anywhere]">{displayOptimizationError(record.errorMessage)}</p>}

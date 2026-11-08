@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createIsolatedDatabase } from './helpers/isolated-database';
+import { datasetCaseContentHash } from '@/lib/engine/experiment/dataset-case-snapshot';
 
 const isolated = createIsolatedDatabase();
 const user = 'experiment-versions@example.test', key = 'wi_fixture_experiment_versions';
@@ -77,10 +78,11 @@ test('create freezes selected historical definitions and preserves all case valu
   assert.equal(item.referenceOutput, 'ALPHA');
   assert.equal(item.executionId, 'trace-one');
   assert.equal(item.faultInjectionType, 'timeout');
+  assert.notEqual(values.__agentInsightDatasetCase.contentHash, datasetCaseContentHash(datasetV2.content.cases[0]));
   assert.equal(values.custom_field, 'keep old');
   assert.equal(values.turns.length, 2);
   assert.equal(values.turns[1].expectation.contains, 'ALPHA');
-  assert.deepEqual(values.__agentInsightDatasetCase, { datasetId, caseId: 'one' });
+  assert.deepEqual(values.__agentInsightDatasetCase, { datasetId, caseId: 'one', contentHash: datasetCaseContentHash(datasetV1.content.cases[0]) });
 });
 
 test('generated cases take inputs and turn rules from the historical dataset instead of client-supplied definitions', async () => {
@@ -157,7 +159,7 @@ test('same answer creates no override record, and dataset-import provenance is s
     assert.equal(response.status, 200);
     const saved = await prisma.experiment.findUnique({ where: { id: (await response.json()).id }, include: { cases: true } });
     const values = JSON.parse(saved.cases[0].caseValuesJson);
-    assert.deepEqual(values.__agentInsightDatasetCase, { datasetId, caseId: 'one' });
+    assert.deepEqual(values.__agentInsightDatasetCase, { datasetId, caseId: 'one', contentHash: datasetCaseContentHash(datasetV1.content.cases[0]) });
     if (referenceOverride.source === 'manual') assert.equal(values.__agentInsightReferenceOverride, undefined);
     else {
       assert.equal(saved.cases[0].referenceOutput, 'Imported answer');

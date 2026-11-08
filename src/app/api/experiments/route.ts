@@ -18,7 +18,7 @@ import { withFrozenCustomEvaluators } from '@/lib/evaluators/evaluator-skill-ser
 import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
 import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
-import { findAgentDataset } from '@/server/agent_datasets_storage';
+import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
 import { assertTraceGenerationTarget } from '@/lib/engine/experiment/trace-generation';
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
 // 评测「实验」API —— 列表 + 创建（单组 type='single' + LLM 对比 type='llm'）。
@@ -43,6 +43,7 @@ import {
 } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
+import { datasetCaseContentHash } from '@/lib/engine/experiment/dataset-case-snapshot';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
@@ -510,12 +511,22 @@ export async function POST(req: Request) {
       cases = await applyExperimentReferenceOverrides(username, cases, versions.assetVersions.dataset);
     } else if (cases.some(item => item.referenceOverride !== undefined)) throw new EvaluationAssetError('本次实验答案覆盖必须关联所选数据集版本');
 
+    const datasetHashes = new Map<CaseInput, string>();
     for (const item of cases) {
       const datasetId = String(item.datasetId || agentEvalDatasetId || '');
       if (!datasetId) continue;
-      if (await guardTraceDataset(req, datasetId, username, true) && !requestedVersions?.dataset) {
-        const dataset = await findAgentDataset(username, datasetId);
-        const source = dataset?.cases.find(c => c.id === item.datasetCaseId);
+      const guarded = await guardTraceDataset(req, datasetId, username, true);
+      const frozenCases = versions.assetVersions?.dataset?.definition.cases;
+      const dataset = requestedVersions?.dataset
+        ? { cases: Array.isArray(frozenCases) ? frozenCases as DatasetCase[] : [] }
+        : await findAgentDataset(username, datasetId);
+      const source = dataset?.cases.find(c => c.id === item.datasetCaseId);
+      if (item.datasetCaseId && !source) throw new GenerationError('INVALID_CONFIG', '来源数据集 Case 不存在或不可访问', 422);
+      if (source) {
+        item.datasetId = datasetId;
+        datasetHashes.set(item, datasetCaseContentHash(source));
+      }
+      if (guarded && !requestedVersions?.dataset) {
         if (!source) throw new GenerationError('INVALID_CONFIG', '请选择有效的数据项', 422);
         item.input = source.input;
         item.datasetInput = source.input;
@@ -547,7 +558,7 @@ export async function POST(req: Request) {
         const datasetCaseId = String(item.datasetCaseId || '').trim();
         const caseValues = withExperimentDatasetCaseBinding(
           visibleValues,
-          datasetId && datasetCaseId ? { datasetId, caseId: datasetCaseId } : null,
+          datasetId && datasetCaseId ? { datasetId, caseId: datasetCaseId, contentHash: datasetHashes.get(item) } : null,
         );
         const caseValuesJson = Object.keys(caseValues).length ? JSON.stringify(caseValues) : null;
         const { faultInjectionType: _ignoredFault, ...rest } = item;

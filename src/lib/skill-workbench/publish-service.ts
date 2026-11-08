@@ -232,6 +232,9 @@ export async function publishOptimizationCandidate(input: {
   ) === contentHash) {
     throw new WorkbenchPublishError('候选与最新正式版本内容相同', 409);
   }
+  if (record.sourceKind === 'diagnosis' && record.status !== 'retest_passed') {
+    throw new WorkbenchPublishError('诊断生成的候选需通过来源实验复测才能发布', 409);
+  }
   if (!record.staticEvaluationId) throw new WorkbenchPublishError('候选缺少静态质量评估', 409);
   const quality = await prismaRaw.skillSnapshotEvaluation.findFirst({
     where: {
@@ -270,7 +273,7 @@ export async function publishOptimizationCandidate(input: {
 
   const published = await prismaRaw.$transaction(async (tx) => {
     const claimed = await tx.skillOptimizationRecord.updateMany({
-      where: { id: record.id, status: { in: publishableStatuses }, publishedVersion: null },
+      where: { id: record.id, status: { in: record.sourceKind === 'diagnosis' ? ['retest_passed'] : publishableStatuses }, publishedVersion: null },
       data: { status: 'published', publishedVersion: version, publishedAt: new Date(), completedAt: new Date() },
     });
     if (claimed.count === 0) throw new WorkbenchPublishError('候选已被其他发布操作处理', 409);
