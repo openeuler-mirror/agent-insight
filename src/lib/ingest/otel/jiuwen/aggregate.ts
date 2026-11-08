@@ -520,7 +520,7 @@ function record(p: {
   inTok: number; outTok: number; totTok: number; tools: number; llm: number;
   first: number | null; last: number | null; final: string; interactions: any[]; user?: string; subagentCount: number;
 }): ExecutionRecord {
-  const latency = p.first ? (((p.last ?? 0) - p.first) / 1_000_000_000) : 0;
+  const latency = p.first != null && p.last != null ? Math.max(0, p.last - p.first) / 1_000_000 : 0;
   const rec: ExecutionRecord = {
     task_id: p.taskId,
     query: p.query,

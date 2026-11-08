@@ -253,6 +253,8 @@ WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，不提供 Hook/插件扩展
 
 ## OpenCode 有效执行时延
 
+持久化 `Execution.latency` 的单位为毫秒。Jiuwen OTLP 聚合将纳秒跨度除以 `1_000_000`；旧秒值使用 `jiuwen-latency.ts` 对照原始交互时间识别，Trace Bundle 导入与历史修复共用该规则。校正只换单位，保留原始总跨度及等待时间，不改为 OpenCode 的轮次有效耗时口径；缺少可靠时间证据的值保持不变。操作步骤见[Jiuwen 历史耗时单位校正](../../how-to/observability/view-traces.md#jiuwen-历史耗时单位校正)。
+
 `execution-timing.ts` 从用户轮次边界和模型、工具执行区间计算 `activeDurationMs`，合并重叠区间，排除轮次间用户空闲；`elapsedDurationMs` 表示原始时间跨度。`opencode-derived-metrics.ts` 将有效耗时写入 `Execution.latency`，主/子 Trace 使用各自 Session ID 选择边界。调用树保留原始起止时间和 `durationMs` 供真实时间轴使用，前端耗时、慢节点筛选和耗时比例使用有效耗时。
 
 轻量结构与 uploader 保留工具起止时间，防止按需加载前后计时不一致。详情读取时会重算历史 OpenCode 的耗时；列表及聚合仍读取已保存的 `Execution.latency`。`repair_trace_latency.ts` 默认只预览，`--apply` 分页重算 SQLite 历史记录，仅更新耗时；事务内核对原始 Session 和记录版本，避免覆盖并发上报。`npm pack` 将该命令编译为 `scripts/repair_trace_latency.cjs`，预编译镜像中可用普通 Node 运行，无需 TypeScript 源码或 tsx。

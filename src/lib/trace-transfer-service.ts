@@ -16,6 +16,7 @@
 
 import { db } from '@/lib/storage/prisma';
 import { recomputeExecutionSkills } from '@/lib/storage/data-service';
+import { jiuwenLegacyLatencyCorrection } from '@/lib/engine/observability/jiuwen-latency';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     TRACE_BUNDLE_FORMAT,
@@ -190,7 +191,10 @@ async function identityTaken(identity: string): Promise<boolean> {
     return !!execution || !!session || taskExecutions.length > 0;
 }
 
-function executionCreateData(execution: PortableTraceExecution, user: string): Record<string, unknown> {
+function executionCreateData(execution: PortableTraceExecution, user: string, session: PortableTraceSession | null): Record<string, unknown> {
+    const correction = execution.framework === 'jiuwenswarm'
+        ? jiuwenLegacyLatencyCorrection(execution.latency, session?.interactions)
+        : undefined;
     return {
         id: execution.id,
         taskId: execution.taskId,
@@ -198,7 +202,7 @@ function executionCreateData(execution: PortableTraceExecution, user: string): R
         framework: execution.framework,
         tokens: execution.tokens,
         cost: execution.cost,
-        latency: execution.latency,
+        latency: correction?.latencyMs ?? execution.latency,
         toolCallCount: execution.toolCallCount,
         llmCallCount: execution.llmCallCount,
         inputTokens: execution.inputTokens,
@@ -279,7 +283,7 @@ export async function importTraceBundle(value: unknown, user: string): Promise<I
             const execution = node.execution;
             await db.upsertExecution({
                 where: { id: execution.id },
-                create: executionCreateData(execution, user),
+                create: executionCreateData(execution, user, node.session),
                 update: {},
             });
             createdExecutionIds.push(execution.id);
