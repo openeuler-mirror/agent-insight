@@ -1,6 +1,8 @@
 ---
 title: "Independent Benchmark evaluation protocol"
 description: "Dispatch, idempotency, cancellation, and result normalization between the platform and Evaluator."
+keywords: ["Agent Insight", "Benchmark", "evaluation protocol", "job dispatch"]
+changefreq: "monthly"
 ---
 
 The independent Evaluator runs official Benchmark judging. This is a separate layer from the platform's built-in LLM Judge [output contract](./evaluator-output.md). See the [service deployment guide, Chinese](../../../zh/how-to/evaluation/benchmarks/deploy-services.md). This reference supports integration development; ordinary users should use the platform workflow instead of manually dispatching formal jobs.

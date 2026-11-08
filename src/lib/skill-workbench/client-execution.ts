@@ -18,7 +18,6 @@ import { prisma } from '@/lib/storage/prisma';
 import type { SkillExecutionFence } from '@/lib/grayscale/run-progress';
 import { generateExperimentTraces, TraceGenerationError } from '@/lib/engine/experiment/trace-generation';
 import { validateSkillExecutionTarget, type SkillExecutionTarget, type SkillExecutionSnapshot } from './execution-target';
-import { withSkillClientSlot } from './client-execution-slot';
 import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import { assertExperimentActive } from '@/lib/engine/experiment/cancellation-context';
 
@@ -33,6 +32,7 @@ interface ClientCaseInput {
   query: string;
   referenceOutput?: string | null;
   timeoutMs: number;
+  executionConcurrency?: number;
   signal: AbortSignal;
   onCaseCreated: (caseId: string) => Promise<void>;
   skillRun?: SkillExecutionFence;
@@ -40,12 +40,12 @@ interface ClientCaseInput {
 }
 
 export async function executeSkillCaseOnClient(input: ClientCaseInput) {
-  return withSkillClientSlot(input.executionTarget.workerId, input.signal, () => executeClientCase(input));
+  return executeClientCase(input);
 }
 
 async function executeClientCase(input: ClientCaseInput) {
   input.signal.throwIfAborted();
-  await validateSkillExecutionTarget(input.user, input.executionTarget);
+  await validateSkillExecutionTarget(input.user, input.executionTarget, false, input.executionConcurrency);
   await assertExperimentActive(input.experimentId, `dataset:${input.datasetCaseId}`);
   input.signal.throwIfAborted();
   const row = input.experimentCaseId

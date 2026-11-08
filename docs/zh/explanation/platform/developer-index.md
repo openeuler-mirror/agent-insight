@@ -75,5 +75,8 @@ changefreq: monthly
 - [平台 HTTP 接口与身份](../../reference/platform/http-api.md)
 - [Trace 接入](../../reference/observability/trace-ingestion.md)
 - [实验接口](../../reference/evaluation/experiments-api.md)
+- [数据集接口](../../reference/evaluation/datasets-api.md)
+- [Skill 管理接口](../../reference/optimization/skills-api.md)
+- [可靠性客户端与控制接口](../../reference/reliability/client-control-api.md)
 - [评估器输出](../../reference/evaluation/evaluator-output.md)
 - [独立 Benchmark 协议](../../reference/evaluation/benchmark-protocol.md)

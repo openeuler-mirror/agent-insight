@@ -71,6 +71,9 @@ changefreq: monthly
 - **内部工作委派给 agent** —— 生成/优化/评测经由 `runGeneralAgent` 在 deepagents/LangGraph 上运行，隔离在桥接层之后。
 
 ## Build / test / run
+
+核心页面 E2E 的六场景驱动位于独立测试包，运行、隔离、真实模型与报告边界见 [核心 E2E 自动化](../../../../test/e2e/README.md)。UT 与 E2E 分别统计；PR 和每日链路均默认真实 DeepSeek，保留显式 Mock 入口。两条链路使用不同固定测试账号和独立数据目录，结果以本轮完整报告为准，[历史验收记录](../../../../test/e2e/validation-history.md)不能代替当前通过。006 必须核对检测、成功处置回执和恢复，不能只凭注入完成算通过。驱动器选择独立空闲端口并保留失败证据；手动开发可用 `AGENT_INSIGHT_PORT=3100 bash scripts/develop_start.sh` 指定端口，默认仍为 3000。
+
 - **Install**：`npm install`（会运行 `scripts/postinstall.js`）。
 - **Agent RAS install**：`node scripts/install-ras.js`（对外命令
   `npx agent-insight install-ras`）。发布包携带 `agent_ras/` 的功能源码和全部平台适配器，
@@ -206,3 +209,9 @@ changefreq: monthly
 增量SQL见`prisma/trace-dataset-generation.sql`；正常部署仍由既有安全db-push流程同步schema。新列可空，旧记录不回填Trace状态。回退前应排空运行、删除和待清理任务，保留新增列和回执；不要用旧代码把未发布占位当普通空数据集。
 
 扩展 Trace 多轮提取应在生成时复用已有 Execution/Session 的角色、消息顺序、关联标识、工具事件和终态做结构检查；不得新增采集字段或持久证据存储。当前不验证上下文语义独立性，不将多轮/历史消息/缺少原始请求作为排除条件，不调用模型或通过关键词猜测独立性。新增结构原因同步 EXCLUSION_REASONS 和用户指南，覆盖逐轮配对、无原始 spool、部分保留/全排除、跨用户隔离与临时明细生命周期。
+
+
+六场景代码已按 `test/e2e/cases/` 归档，新增全量/单例入口、UT 独立统计及本地 Webhook 控制服务，参见 [PR 联调指南](../../../../test/e2e/control/README.md)。PR 与每日冒烟默认使用真实 DeepSeek，Mock 入口保留（目前仅 002 实现）；手动全量入口仍包含六例；当前常驻 PR 范围为 001—005 与 UT，006 按用户要求未执行，不能计为通过。两条链路分别使用固定测试账号和独立数据目录，报告列出本轮 Trace，历史快照保留。119 已完成 PR/每日两通道真实隔离运行，001、002 通过，其余失败及定向补验见历史验收记录；SQLite 超时、Skill 会话竞态与 FI 回执仍待处理。119 常驻 Webhook 与自动队列已启用，origin PR !199 的新建和重启后提交更新均已自动执行固定探针并读回评论；上述 !199 为固定探针历史；当前常驻 PR 已切换为 real/core-five + UT，并通过 origin 专用基线的 PR !200 验证自动触发。五例的实际结果另行记录，006 未执行，新六例每日调度及强制合入门禁尚未接入，不能将控制流程通过视为业务全通过。
+
+
+E2E 的账号、场景、real/mock、UT、模型 baseUrl/modelName/key 引用、资源及超时统一由 `test/e2e/config.json` 的 pr/daily profile 配置。密钥值保留在环境变量或仓库外文件；测试报告保存脱敏配置快照及哈希。配置化入口与现有服务器部署分开验收：本轮只在本地验证，119 当前服务尚未更新。操作和配置示例见 [E2E 指南](../../../../test/e2e/README.md#统一配置)。

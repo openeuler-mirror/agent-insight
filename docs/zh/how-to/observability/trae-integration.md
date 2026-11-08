@@ -63,7 +63,7 @@ Select the frameworks to install (use space to select, enter to confirm):
 
 终端输出界面：
 
-![安装终端输出](../../../images/agent/observability/trae-install-terminal.png)
+![终端显示 Trae 采集插件与 Hook 安装过程](../../../images/agent/observability/trae-install-terminal.png)
 
 ### 方式二：npx 一键部署（装平台 + 采集器）
 
@@ -103,7 +103,7 @@ npx agent-insight install
 > 如果未在 IDE 设置中配置 Host 和 API Key，插件会尝试从 `~/.agent-insight/.env` 文件读取
 > `AGENT_INSIGHT_HOST` 和 `AGENT_INSIGHT_API_KEY` 环境变量。
 
-![插件配置界面](../../../images/agent/observability/trae-plugin-config.png)
+![Trae 插件设置中填写 API Key 与服务端地址](../../../images/agent/observability/trae-plugin-config.png)
 
 ### 4. 验证接入
 
@@ -196,7 +196,7 @@ rm -rf ~/.agent-insight/otel_data/trae ~/.agent-insight/trae_uploader_checkpoint
 > **Note**
 > 若在 Extensions 面板卸载后旧数据仍残留（钩子未触发），可手动执行上述清理命令。
 
-![卸载清理说明](../../../images/agent/observability/trae-uninstall.png)
+![Trae 扩展管理页中的采集插件卸载入口](../../../images/agent/observability/trae-uninstall.png)
 
 ## 更新插件
 

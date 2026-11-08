@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
 import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from './trigger-evaluator';
+import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 
 export type SkillExperimentPresetPolicy = 'trigger' | 'use-case' | 'skill-ab';
 
@@ -26,13 +28,15 @@ export interface SkillExperimentConcurrencyPolicy {
 }
 
 export function getSkillExperimentConcurrencyPolicy(
-  preset: SkillExperimentPresetPolicy,
+  _preset: SkillExperimentPresetPolicy,
+  concurrency?: number,
 ): SkillExperimentConcurrencyPolicy {
+  const executionConcurrency = parseExecutionConcurrency(concurrency);
   return {
-    executionConcurrency: preset === 'trigger' ? 5 : 4,
-    abPairConcurrency: preset === 'skill-ab' ? 2 : 1,
+    executionConcurrency,
+    abPairConcurrency: Math.max(1, Math.floor(executionConcurrency / 2)),
     evaluationConcurrency: 4,
-    triggerConcurrency: 5,
+    triggerConcurrency: executionConcurrency,
   };
 }
 
@@ -67,6 +71,11 @@ export function isSkillExperimentEvaluatorEligible(preset: SkillExperimentPreset
   return preset === 'trigger'
     ? evaluatorId === SKILL_TRIGGER_ANALYZER_EVALUATOR_ID
     : evaluatorId !== SKILL_TRIGGER_ANALYZER_EVALUATOR_ID;
+}
+
+export function filterSkillExperimentEvaluators(preset: SkillExperimentPresetPolicy, cards: EvaluatorCard[]) {
+  return cards.filter(card => (card.source === 'custom' || card.status === 'ready')
+    && isSkillExperimentEvaluatorEligible(preset, card.id));
 }
 
 export function skillExecutionCapabilityIssue(target: {

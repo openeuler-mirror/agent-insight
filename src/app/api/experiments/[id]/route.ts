@@ -717,7 +717,9 @@ export async function GET(
       configSnapshot: experiment.scope === 'benchmark' ? null : configSnapshot,
       executionConcurrency: configSnapshot?.submissionSource === 'imported' ? null : experiment.scope === 'benchmark'
         ? Number((configSnapshot?.runConfig as Record<string, unknown> | undefined)?.executionConcurrency) || 1
-        : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
+        : experiment.scope === 'skill-workbench' && (configSnapshot?.traceSource === 'generate' || experiment.preset === 'skill-ab')
+          ? Number(configSnapshot?.executionConcurrency ?? (configSnapshot?.runtime as Record<string, unknown> | undefined)?.executionConcurrency) || 1
+          : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
           ? Number(configSnapshot.executionConcurrency) || 1 : null,
       executionAgentOptions,
       executionParameterDefinition,

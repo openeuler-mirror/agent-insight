@@ -876,7 +876,7 @@ function buildCapabilities(cfg, opts) {
         ready: Boolean(runtime.ready && normalizeModelIds(info?.agents).length),
         unavailableReason: !runtime.ready ? runtime.reason || '运行时尚未就绪'
           : !normalizeModelIds(info?.agents).length ? sanitizeAgentDiagnostic(info?.note) || `${id} Agent 列表为空，请检查探测结果` : undefined,
-        ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}),
+        ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 5 } : {}),
       },
       actions: [...WHITELIST],
     }
@@ -893,7 +893,7 @@ function buildCapabilities(cfg, opts) {
           runExperimentCase: { version: 2, returnsTraceId: id !== 'opencode' && runtime.canResolveTraceId,
             ready: id !== 'opencode' && runtime.ready,
             ...(id === 'opencode' ? { unavailableReason: runtime.reason || '尚未取得权威 Agent 列表，请检查客户端探测结果' } : {}),
-            ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}) },
+            ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 5 } : {}) },
           actions: [...WHITELIST],
         })
       }
@@ -1188,7 +1188,7 @@ function experimentCancellationFile(commandId) {
 
 function tryAcquireExecutionSlot(kind, id) {
   if (fiBusy > 0 || reliabilitySlotHeld) return false
-  if (id && ['benchmark', 'ordinary'].includes(kind)) {
+  if (id && ['benchmark', 'ordinary', 'skill'].includes(kind)) {
     if (parallelExecutionSlots.has(id)) return false
     parallelExecutionSlots.add(id)
   } else {
@@ -1199,7 +1199,7 @@ function tryAcquireExecutionSlot(kind, id) {
 }
 
 function releaseExecutionSlot(kind, id) {
-  if (id && ['benchmark', 'ordinary'].includes(kind)) parallelExecutionSlots.delete(id)
+  if (id && ['benchmark', 'ordinary', 'skill'].includes(kind)) parallelExecutionSlots.delete(id)
   else reliabilitySlotHeld = false
 }
 
@@ -2842,7 +2842,7 @@ async function pollOnce(cfg) {
   const handling = handleCommand(cfg, frame, (commandId, status, extra) =>
     sendCommandStatus(cfg, commandId, status, extra),
   )
-  if (frame.action === 'RUN_EXPERIMENT_CASE' && !frame.payload?.skillExecution) {
+  if (frame.action === 'RUN_EXPERIMENT_CASE') {
     void handling.catch((error) => logErr('command failed', error.message))
   } else await handling
 }

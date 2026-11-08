@@ -671,7 +671,7 @@ export async function generateExperimentTraces(
   for (let round = 0; round <= AUTO_RETRY_DELAYS_MS.length && pending.length; round += 1) {
     if (round > 0) await sleep(AUTO_RETRY_DELAYS_MS[round - 1]);
     const nextRound: PendingCase[] = [];
-    const outcomes = await mapConcurrent(pending, req.skillExecution ? 1 : parseExecutionConcurrency(req.executionConcurrency), async (item) => {
+    const outcomes = await mapConcurrent(pending, parseExecutionConcurrency(req.executionConcurrency), async (item) => {
       req.signal?.throwIfAborted();
       const execute = (signal?: AbortSignal) => runAttempt({
         req: { ...req, signal: req.signal && signal ? AbortSignal.any([req.signal, signal]) : signal || req.signal },

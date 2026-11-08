@@ -136,7 +136,7 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 这一步直接复用内置的 **messages 日志分析（内置示例）** 数据集。
 
 1. 在 Skill 工作台顶部选择你上一步发布的 `linux-messages-auth-triage`，或内置的 `linux-messages-auth-triage-demo` 及目标版本。
-2. 打开 **Skill 实验**，点击 **新建用例实验**。
+2. 打开 **Skill 实验**，点击 **新建用例实验**，在向导页头确认被测 Skill 和版本。
 3. 在统一四步向导中选择 Agent、**messages 日志分析（内置示例）**数据集、运行主机/模型、Case 和评估器，然后开始实验。
 4. 在用例分析结果页查看任务结果分、轨迹质量、冻结配置和每条 Case 的执行结果，
    量化 `linux-messages-auth-triage` 在整个数据集上的表现，定位仍然失败或低分的用例。

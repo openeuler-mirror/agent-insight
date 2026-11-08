@@ -1,3 +1,10 @@
+---
+title: "Monitor 模块"
+description: "说明 Monitor 如何编排信号检测、语义复核和恢复，并处理流抑制及失败放行。"
+keywords: ["Agent Insight", "Agent RAS", "检测编排", "流抑制"]
+changefreq: "monthly"
+---
+
 # Monitor 模块
 
 > AET 模块详情口径：新人读完应能独立修改本模块。模板来源：`aet-analyzing-project` / `module-detail-template.md`。与现行 `monitor.py` / Rail / StreamObserver 源码对齐（含：无人工 HITL，L3 为自动 Reviewer）。

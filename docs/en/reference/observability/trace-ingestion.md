@@ -1,6 +1,8 @@
 ---
 title: "Trace HTTP ingestion"
 description: "Inputs, identity handling, and receipt semantics for OTLP and legacy JSON uploads."
+keywords: ["Agent Insight", "OTLP", "trace ingestion", "authentication"]
+changefreq: "monthly"
 ---
 
 Use the framework's client installation flow where possible. This reference supports exporter integration and troubleshooting. OTLP bodies and legacy upload JSON are different formats.

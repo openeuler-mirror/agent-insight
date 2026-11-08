@@ -23,7 +23,7 @@ changefreq: monthly
 列表页承担“发现样本”和“缩小范围”两类工作，适合先从大量执行记录中筛出值得进入详情的 Trace。
 
 <p align="center">
-  <img src="../../../images/agent/observability/trace_list.png" alt="链路追踪列表页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/agent/observability/trace_list.png" alt="链路列表展示运行状态、耗时与 Token 用量" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 上图展示了链路追踪列表页的典型结构：顶部是聚合指标，指标下方是筛选区，中间是执行记录表格，右侧操作列用于继续进入评测、分析或详情页。
@@ -52,7 +52,11 @@ RAS 的内部判定 Agent（ras-judge）归属系统。归属筛选选择用户�
 - **Skill**：按 Skill 触发情况收敛样本。LlamaIndex、Qoder 等支持多 Agent 的框架按当前 Agent 自己调用的 Skill 匹配；仅子 Agent 调用的 Skill 不会让父 Agent 命中该筛选
 - **用户标签**：版本标签和业务标签均可多选筛选；多个标签采用 AND 语义，只保留同时包含全部所选标签的 Trace
 - **状态**：优先筛出已完成、失败、异常或边界样本
-- **时间等附加条件**：用于框定问题发生窗口
+- **时间范围**：保留全部时间、近 7 天、24 小时、1 小时和 30 分钟快捷选项，也可选择“自定义时间范围”精确回溯问题窗口
+
+选择“时间 → 自定义时间范围”，选择或输入开始、结束日期时间（精确到秒），点击“应用”后生效。输入按弹层标明的浏览器本地时区解释；筛选依据 Trace 起始时间，包含起止边界。可以只填一端，至少填写一端；开始晚于结束或日期时间无效时无法应用。点击“取消”或关闭弹层会放弃未应用的编辑。切回快捷选项会清除自定义范围。
+
+自定义起止时间会随页面链接和当前标签页的筛选记忆保留，列表及顶部统计使用同一范围，并与其他筛选条件取交集。调整范围后返回第一页，“重置筛选”会一起清除起止时间。
 
 在同一浏览器标签页内，切换到其他页面再返回链路追踪时，会按当前账号恢复上次的筛选条件，包括状态、框架、Agent、归属、范围、用户标签、时间、搜索及高级筛选。带查询参数的链接优先使用链接中的条件；页码和详情中的 Trace 不会被记住。点击“重置筛选”会清除筛选记忆，关闭标签页后记忆也会清除。浏览器禁用存储时仍可正常筛选，但无法记住选择。
 
@@ -201,7 +205,7 @@ MCTS、Goal Plus 和原生子 Agent 的概览统一展示父子关系卡片。�
 父级或子级正文尚未到达时显示等待状态；详情会开启自动刷新，即使 Trace 已结束也会等待关系就绪，用户可以手动关闭自动刷新。关系冲突时显示提示且不提供跳转；查询失败显示暂不可用，已有正文仍可查看。跳转加载失败时可以重试或返回列表，浏览器前进、后退继续保留原来的筛选条件。
 
 <p align="center">
-  <img src="../../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/agent/observability/trace_overview.png" alt="链路详情展示调用树、时间线与选中节点的消息" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。

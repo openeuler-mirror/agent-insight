@@ -35,11 +35,11 @@ export interface SkillExecutionSnapshot {
   files: Record<string, string>;
 }
 
-export async function validateSkillExecutionTarget(user: string, value: unknown, requireTriggerRouting = false): Promise<SkillExecutionTarget> {
-  return selectSkillExecutionTarget(value, await listClientTraceGenerationTargets(user), requireTriggerRouting);
+export async function validateSkillExecutionTarget(user: string, value: unknown, requireTriggerRouting = false, concurrency = 1): Promise<SkillExecutionTarget> {
+  return selectSkillExecutionTarget(value, await listClientTraceGenerationTargets(user), requireTriggerRouting, concurrency);
 }
 
-export function selectSkillExecutionTarget(value: unknown, targets: ClientTraceGenerationTarget[], requireTriggerRouting = false): SkillExecutionTarget {
+export function selectSkillExecutionTarget(value: unknown, targets: ClientTraceGenerationTarget[], requireTriggerRouting = false, concurrency = 1): SkillExecutionTarget {
   const input = value as Partial<SkillExecutionTarget> | null;
   if (!input?.workerId || !input.platform || !input.agent) {
     throw new TraceGenerationError('execution_target_required', '请选择 Skill 实验的运行主机、平台和 Agent；旧实验请重新创建', 400);
@@ -50,6 +50,9 @@ export function selectSkillExecutionTarget(value: unknown, targets: ClientTraceG
   if (!target) throw new TraceGenerationError('execution_target_unavailable', '所选执行目标已离线或不可用');
   const issue = skillExecutionCapabilityIssue(target, requireTriggerRouting);
   if (issue) throw new TraceGenerationError(issue.code, issue.message, 409);
+  if (concurrency > 1 && !target.supportsSkillConcurrency) {
+    throw new TraceGenerationError('skill_concurrency_unsupported', 'Skill 执行并发大于 1 需要更新执行客户端，请更新后重试或将执行并发设为 1', 409);
+  }
   const model = typeof input.model === 'string' ? input.model.trim() || null : null;
   if (model && !target.models.some((item) => item.id === model)) {
     throw new TraceGenerationError('MODEL_UNAVAILABLE', `所选客户端未提供模型 ${model}，不会回退默认模型`, 400);

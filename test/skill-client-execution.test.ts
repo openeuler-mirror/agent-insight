@@ -88,6 +88,12 @@ test('触发分析必须确认客户端、模型调用及真实 Skill 调用，�
   assert.throws(() => classifyTriggerExecution({}, skill.name), /未记录 Skill 调用信息/);
 });
 
+test('旧客户端只允许串行，新客户端支持用户配置的 Skill 并发', () => {
+  assert.doesNotThrow(() => selectSkillExecutionTarget(selection, [target], false, 1));
+  assert.throws(() => selectSkillExecutionTarget(selection, [target], false, 2), { code: 'skill_concurrency_unsupported' });
+  assert.equal(selectSkillExecutionTarget(selection, [{ ...target, supportsSkillConcurrency: true }], false, 3).workerId, target.workerId);
+});
+
 test('Skill 两侧快照和无 Skill 对照组使用独立目录；文件路径不能越界', () => {
   const make = (snapshot: typeof skill | null) => workspace.prepareSkillExperimentWorkspace('unused', {
     platform: 'opencode', agent: 'build', model: selection.model, skillExecution: { version: 1, skill: snapshot },

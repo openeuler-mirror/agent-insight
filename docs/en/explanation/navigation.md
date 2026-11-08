@@ -1,6 +1,8 @@
 ---
 title: "Explanation translation status"
-description: "English coverage for explanation."
+description: "Describes English explanation coverage and links to available architecture and conceptual documentation."
+keywords: ["Agent Insight", "architecture", "core concepts", "translation coverage"]
+changefreq: "monthly"
 ---
 
 Architecture and conceptual body translations are still pending. The navigation entry does not count as a translated explanation.

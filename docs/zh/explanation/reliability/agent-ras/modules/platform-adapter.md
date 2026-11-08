@@ -1,3 +1,10 @@
+---
+title: "Platform adapter 模块"
+description: "说明平台适配器如何接入宿主生命周期、采集信号并投递控制动作，复用共享 RAS 客户端。"
+keywords: ["Agent Insight", "Agent RAS", "平台适配", "宿主控制"]
+changefreq: "monthly"
+---
+
 # Platform adapter 模块
 
 > AET 模块详情口径：新人读完应能独立修改本模块。模板：`aet-analyzing-project` / `module-detail-template.md`。

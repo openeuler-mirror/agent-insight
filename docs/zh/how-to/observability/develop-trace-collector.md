@@ -43,7 +43,7 @@ changefreq: monthly
 
 ## Dify 原生 OTLP 接入
 
-可在「客户端安装」页顶部的 Dify 入口复制两组当前账号配置；身份刷新完成后才提供复制。
+在「客户端安装」页勾选 **Dify** 后，使用同一条 curl 命令配置现有 Docker Compose 部署。脚本备份并维护 `.env` 中的受管配置块，检查 Compose 渲染结果，只重新加载 API、Worker 与已存在的 Agent 服务，再核对容器实际环境及接收端连接。Docker Desktop 本机地址自动适配；Linux Docker 可填写容器可达的上报地址。详细步骤与支持边界见 [Dify 统一接入](../platform/settings/access-control.md#dify-统一接入)。特殊部署可参考下文的两组进程环境变量；安装页仅保留统一 curl 入口。
 
 自建 Dify 可使用已有 OpenTelemetry 导出能力，无需修改 Dify 源码或安装 Agent Insight 采集插件。以下配置已在 Dify 1.18.0 的原生 Workflow（Start → LLM → End）与 DeepSeek 实际调用中验证；它与应用内配置的 Langfuse 观测服务是不同入口。
 

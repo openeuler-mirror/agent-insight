@@ -20,6 +20,8 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 核心 E2E 自动化与采集覆盖 | [core-e2e-regression](</Users/guoyichen/work/2026/Agent-insight/方案设计/自动化用例/Agent Insight 核心六场景 E2E 自动化测试设计.md>) | 5 个核心场景：准备、OpenCode 观测、Skill 与数据集生命周期、无数据集 Trace 闭环、故障恢复；逐例 Real/Mock、生产编译门禁与复现规范 | Test / Design | 2026-11-03 | 已实现；001～005连续编号，故障恢复原006改005；编号调整前整轮生产编译、UT和五个活动场景隔离通过，常驻服务待升级 | — |
+| PR Webhook 自动回归 | [实施计划](platform/core-e2e-regression/phase3-pr-webhook-plan.md) | origin 个人仓库、本地先行、隔离执行与逐项报告 | Test / CI | 2026-11-04 | 接收/队列/隔离运行/PR评论已联调；当前逐例配置与编译前置版本待升级常驻部署 | — |
 | Skill 优化校验效率 | [verification-efficiency](optimization/verification-efficiency/phase1-requirements-analysis.md) | 有效用例筛选、可比基线复用、静态评估去重与诚实进度 | Fix / Perf | 2026-10-28 | 已实现，已验证 UI | — |
 | Skill 优化验收闭环 | [verification-closure](optimization/verification-closure/phase1-requirements-analysis.md) | 目标验收、证据复用、定向范围、上下文减量与重试诊断 | Fix / Perf | 2026-10-29 | 已实现并验证 | — |
 | 实验评估器超时与重试配置 | [evaluator-execution-settings](evaluation/evaluator-execution-settings/phase1-requirements-analysis.md) | 实验级 LLM 超时与重试统一配置、评估器行内单独配置及逐行恢复，并以最小界面改动增加搜索、来源筛选和分页 | Feature | 2026-10-26 | 🟡 已扩展全部 31 个预置 LLM 与 Skills 自定义项；176 项专项及类型检查通过，隔离浏览器实验 6 项完成；全量 40 项基线失败未新增 | 待补 |

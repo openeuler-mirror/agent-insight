@@ -36,6 +36,7 @@ import { BenchmarkArtifactActions, type BenchmarkArtifactRef } from '@/component
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { benchmarkExecutionProgress, type BenchmarkProgressDetails } from '@/lib/benchmark/execution-progress';
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
+import { EvaluationErrorNotice } from '@/components/eval/EvaluationErrorNotice';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
@@ -825,7 +826,7 @@ export function ExperimentCaseDetail({
                             </div>
                             <div style={{ padding: '11px 13px' }}>
                               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 10 }}>
-                                {failed ? r.errorMessage || 'Benchmark Evaluator 未产出结果' : r.summary || '等待 Benchmark 评测结果'}
+                                {failed ? <EvaluationErrorNotice message={r.errorMessage || 'Benchmark Evaluator 未产出结果'} /> : r.summary || '等待 Benchmark 评测结果'}
                               </div>
                               {points.length > 0 && (
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
@@ -944,7 +945,7 @@ export function ExperimentCaseDetail({
                           )}
                           {failed && (
                             <div style={{ marginTop: 6, fontSize: 12, color: 'var(--foreground-secondary)' }}>
-                              {r.errorMessage || '评估未产出结果——不记 0 分、不入类目均分。'}
+                              <EvaluationErrorNotice message={r.errorMessage || '评估未产出结果——不记 0 分、不入类目均分。'} />
                             </div>
                           )}
 

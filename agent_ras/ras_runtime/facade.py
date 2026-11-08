@@ -163,7 +163,7 @@ def _dispatch(op: str, session_id: str, payload_json: str | None) -> dict[str, A
 
     if op == "flush":
         try:
-            timeout_ms = int(payload.get("timeout_ms") or 2500)
+            timeout_ms = int(payload.get("timeout_ms", 2500))
         except (TypeError, ValueError):
             timeout_ms = 2500
         return run_coro(

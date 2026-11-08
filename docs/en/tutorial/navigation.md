@@ -1,6 +1,8 @@
 ---
 title: "Tutorials"
-description: "English coverage for tutorial."
+description: "Provides step-by-step tutorials for connecting an Agent, inspecting a Trace, and running an initial evaluation."
+keywords: ["Agent Insight", "getting started", "Agent integration", "evaluation"]
+changefreq: "monthly"
 ---
 
 Follow a complete first-use workflow.
@@ -18,4 +20,4 @@ Supplemental Chatflow tests preserved two-turn history, answers and tokens, but 
 
 Ordinary TOOL rows now nest under their initiating LLM only when original response tool blocks, projected model-output call IDs, or an exact parent span in the same trace provide an unambiguous link. OpenCode parts and Claude content blocks can provide this evidence. Time-based adapter grouping alone is insufficient. Skill, TASK, child Agents and dispatch anchors keep their existing positions. The display projection preserves event indexes, source records, counts and token totals; Tool filters and tool-name search retain the LLM ancestor. See the [Trace viewing guide (Chinese)](../../zh/how-to/observability/view-traces.md#详情页总览).
 
-The client installation page now has a dedicated Dify native OTLP section linked from its introduction. It provides separate API/Worker and Agent run-service configurations after identity verification, without installing a collector. Dify Agent drilldowns retain their source Workflow in the URL and show Back to Workflow after refresh; leaving the detail clears this navigation context. Detail copy buttons distinguish the original Span ID from a real Tool Call ID. See the [installation guide (Chinese)](../../zh/how-to/platform/settings/access-control.md#dify-原生-otlp-配置).
+Select Dify in the shared framework picker and run the same curl command on the Dify Compose host (Linux/macOS/WSL). The Python 3 installer backs up and updates the deployment .env, validates rendered configuration, reloads only API/Worker and an existing Agent service, checks effective container environments and sends empty authenticated OTLP connectivity probes. Docker Desktop localhost is adapted automatically; Linux containers need a reachable endpoint. Dify-only setup installs no Node collector or resident client. The installation page uses the shared curl entry only; unsupported deployments follow the configuration reference. Connectivity acceptance still requires a real task to verify business traces. See the [unified installation guide (Chinese)](../../zh/how-to/platform/settings/access-control.md#dify-统一接入). Dify Agent drilldowns retain their source Workflow in the URL and show Back to Workflow after refresh; leaving the detail clears this navigation context. Detail copy buttons distinguish the original Span ID from a real Tool Call ID. See the [installation guide (Chinese)](../../zh/how-to/platform/settings/access-control.md#dify-统一接入).

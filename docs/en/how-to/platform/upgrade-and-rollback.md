@@ -1,6 +1,8 @@
 ---
 title: "Upgrade and rollback"
 description: "Upgrade by deployment method while keeping application and data versions together."
+keywords: ["Agent Insight", "version upgrades", "deployment rollback", "data compatibility"]
+changefreq: "monthly"
 ---
 
 An upgrade changes application version, database schema, and runtime state together. Agent Insight installation and startup can synchronize the database schema. Replacing the binary with an older version does not guarantee compatibility with upgraded data. There is no unified `upgrade` / `rollback` CLI command.
