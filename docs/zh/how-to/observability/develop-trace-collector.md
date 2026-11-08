@@ -347,7 +347,7 @@ function newFrameworkTraceEvent(overrides: Partial<OtelTraceEvent>): OtelTraceEv
 
 **适用场景**：框架内置OpenTelemetry支持，可以直接配置OTLP exporter指向平台。
 
-**参考实现**：`scripts/jiuwenswarm_extension/`
+**参考实现**：`scripts/jiuwen_extension/`
 
 **核心步骤**：
 
@@ -355,6 +355,12 @@ function newFrameworkTraceEvent(overrides: Partial<OtelTraceEvent>): OtelTraceEv
 2. **配置OTEL环境变量**：设置 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`、`OTEL_EXPORTER_OTLP_HEADERS` 等
 3. **初始化观测**：调用框架内置的 `init_observability` 或类似API
 4. **拦截配置**：确保exporter协议为HTTP，添加鉴权header
+
+JiuwenSwarm 新版 SDK 还需要获取单 Agent 观测 demand，才能让宿主创建 root span。
+当前扩展通过能力检测调用 `openjiuwen.harness.observability.acquire_observability`；
+旧 SDK 不提供该接口时沿用初始化方式。服务端兼容新旧 Span 契约，读取新版结构化消息、
+工具调用及用量，且不把 reasoning/event Span 再计作一次推理。工具归属只使用明确父链或
+调用 ID，缺少证据时独立保留。升级操作和验证范围见[客户端兼容性](../../reference/observability/client-compatibility.md#jiuwenswarm)。
 
 **配置优先级示例**：
 
@@ -456,7 +462,7 @@ return NextResponse.json({
 |------|---------|--------|------|
 | Hermes | `adapters/hermes.ts` | `scripts/hermes_agent_insight_plugin.py` | Hook模式，支持subagent |
 | Langfuse LangGraph | `adapters/langfuse-langgraph.ts` | Langfuse SDK自带 | 标准OTLP，支持skill追踪 |
-| JiuwenSwarm | `otel/jiuwenswarm/` | `scripts/jiuwenswarm_extension/` | Telemetry扩展模式 |
+| JiuwenSwarm | `otel/jiuwen/` | `scripts/jiuwen_extension/` | Telemetry扩展模式 |
 | Qwen Code | `adapters/qwencode.ts` | `scripts/qwencode-collector/` + Qwen Code 原生 OTLP | 原生 Telemetry 模式，支持 Agent/Subagent/LLM/Tool/Skill/MCP/Plan，按账号隔离 spool |
 | Qoder CN 产品家族 | `adapters/qoder.ts` | `scripts/qoder_trace_collector.mjs`、Desktop VSIX、JetBrains Plugin、Work setup | 共享 Hook/OTLP 核心，按产品与账号隔离 spool，支持 Quest/Experts/Subagent/Skill/MCP/连接器 |
 | Generic | `adapters/generic.ts` | 标准OTLP SDK | 兜底适配，支持OpenInference标准 |

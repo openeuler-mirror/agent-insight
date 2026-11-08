@@ -20,3 +20,5 @@ Skill use-case, A/B and trigger experiments share the execution concurrency sett
 Skill and ordinary experiment lists share automatic refresh: active records refresh every five seconds until all visible experiments finish. The Skill list pauses while creating an experiment or viewing results. Refresh failures retain the last confirmed records and retry automatically.
 
 Trace filtering supports **Time → Custom time range** with optional start/end bounds to the second, interpreted in the displayed browser time zone. Select **Apply** to update the list and statistics together. At least one bound is required; invalid or reversed bounds cannot be applied. **Cancel** discards edits. Presets clear custom bounds. Links and same-tab filter memory preserve the range; reset clears it. See the [Trace guide (Chinese)](../../zh/how-to/observability/view-traces.md#2-筛选区).
+
+[JiuwenSwarm integration upgrades](../reference/observability/client-compatibility.md#jiuwenswarm) cover extension updates, container endpoints, and complete Trace acceptance.

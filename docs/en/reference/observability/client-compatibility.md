@@ -62,6 +62,18 @@ Select QwenPaw in the installation guide and execute the one-line command for yo
 
 Restart QwenPaw after installation. A new conversation creates a Trace; further questions in the same conversation append USER and LLM/Tool calls. A separate Trace is created only for a new conversation. The detail page displays child Agents as an `AGENT -> TASK -> AGENT` tree. See the [QwenPaw Trace Collector guide, Chinese](../../../zh/how-to/observability/qwenpaw-trace-collector.md).
 
+## JiuwenSwarm
+
+Select JiuwenSwarm in the installation guide, rerun the current server's installation command to update the observability extension, and restart AgentServer. For containers, install it in a container-visible directory and append that directory to existing `EXTENSION_DIRS`. The endpoint must be reachable from the container; Docker Desktop can use `http://host.docker.internal:3000/api/ingest/otel/v1/traces`. Configure the current account's API Key.
+
+Newer SDKs separate exporter initialization from single-agent tracing activation. The extension enables both when the new API is available and retains the older initialization path otherwise. Validate user input, final response, individual model calls, tool arguments and results, usage, and completion status; a connected log alone is insufficient.
+
+Ingestion accepts both legacy `llm.call` / `tool.*` spans and structured GenAI spans. A task-iteration span in a single-agent run is not treated as a team marker. Tools use explicit call IDs, parent spans, or execution-subject relationships with spawn-result session IDs. Distinct subjects/sessions preserve agents with identical display names, and reasoning/context events do not duplicate inference counts or usage. See [Telemetry integration, Chinese](../../../zh/how-to/observability/develop-trace-collector.md#32-模式二telemetry扩展模式).
+
+JiuwenSwarm uses the platform's shared child Trace mechanism. Child Agents within one OTLP trace are persisted as independent Executions and Sessions, using their explicit child session IDs as task IDs and retaining direct-parent and root execution links. Child Trace buttons and overview cards open standalone child Trace details, with navigation back to the parent. Source start timestamps and distinct same-name child identities are preserved. Overview shows parent/child cards first, and narrow layouts stack the tree and detail panel.
+
+The `0.0.13y` ARM64 core image, containing workswarm `0.2.5b1` and openJiuwen `0.1.20`, was verified as a personal-edition standalone AgentServer against a local platform with real model calls. Scenarios covered conversation, file reads, tool failure, and asynchronous child-Agent delegation. Messages, call counts, usage, hierarchy, and source start/end timestamps were checked against original spans. Legacy contracts have regression coverage; this does not claim real-image validation of older releases, AMD64, or a complete OpenShift deployment.
+
 ## Scope
 
 This page describes installation behavior and existing validation evidence. It does not claim every version, operating system, or real model has been validated. Start installation from [client installation, Chinese](../../../zh/how-to/platform/settings/access-control.md).
