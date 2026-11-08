@@ -151,7 +151,7 @@ async function run(options) {
       console.log('psycopg2 not found. Installing psycopg2-binary...')
       try {
         execSync(`${pipCmd} install psycopg2-binary`, { stdio: 'inherit' })
-      } catch (pipError) {
+      } catch {
         console.log('Warning: Could not install psycopg2-binary. OpenGauss init may fail.')
       }
     }
