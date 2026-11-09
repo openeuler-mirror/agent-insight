@@ -15,7 +15,6 @@
  */
 
 import { withTraceTiming, timeTraceStage, traceTimingEvent, beginTraceStage } from '@/lib/logger/trace-timing';
-import type { Prisma } from '@prisma/client';
 import { aggregateExecutionList, selectExecutionListIds } from '@/lib/storage/execution-list-sql';
 import { selectComputedRecordPage, type ComputedRecordPageOptions } from '@/lib/storage/computed-record-page';
 import fs from 'fs';
@@ -54,7 +53,7 @@ import { chooseExecutionLabel } from '@/lib/engine/evaluation/label-utils';
 import { parseLabelSkillVersionBinding } from '@/lib/engine/evaluation/label-skill-binding';
 import { extractKeyActionsFromFlow, mergeKeyActionsFromMultipleSkills, type ExtractedKeyAction, type ParsedFlowResult } from '@/lib/engine/observability/flow-parser';
 import { mergeSessionInteractionsMonotonic } from '@/lib/engine/observability/session-interactions-merge';
-import { buildAgentCallTree, getAgentActiveDurationMs, inferSubagentType, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, getAgentActiveDurationMs, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
@@ -2870,7 +2869,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                     const validExpectedSkills = expectedSkillsList.filter(e => e.skill?.trim());
                     
                     const skillNames = validExpectedSkills.map(e => e.skill.trim());
-                    let skillsMap = new Map<string, any>();
+                    const skillsMap = new Map<string, any>();
                     
                     if (skillNames.length > 0) {
                         try {

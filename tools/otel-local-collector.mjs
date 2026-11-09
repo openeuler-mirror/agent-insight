@@ -80,7 +80,7 @@ const server = http.createServer(async (req, res) => {
     res.statusCode = 200
     res.setHeader("content-type", "text/plain")
     res.end("ok")
-  } catch (e) {
+  } catch {
     res.statusCode = 500
     res.end()
   }

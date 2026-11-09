@@ -608,7 +608,7 @@ function TracePageContent() {
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', traceFilterParsers.framework);
     const [sourceFilter, setSourceFilter] = useQueryState('source', traceFilterParsers.source);
     const [agentFilter, setAgentFilter] = useQueryState('agent', traceFilterParsers.agent);
-    const [skillFilter, setSkillFilter] = useQueryState('skill', traceFilterParsers.skill);
+    const [skillFilter] = useQueryState('skill', traceFilterParsers.skill);
     const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', traceFilterParsers.tagIds);
     const [legacyBusinessTagFilter, setLegacyBusinessTagFilter] = useQueryState('bizTag', traceFilterParsers.bizTag);
     const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', traceFilterParsers.ownership);

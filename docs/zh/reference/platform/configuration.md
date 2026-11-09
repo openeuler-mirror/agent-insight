@@ -26,7 +26,7 @@ changefreq: "monthly"
 | `DB_PORT` | OpenGauss 端口 | 建议显式设置：平台默认 `5432`，初始化脚本默认 `26000`，需与实例一致 |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | OpenGauss 库名、用户、密码；模板说明默认库名 `postgres`、用户 `omm`，密码无默认值 | 仅在实际部署配置保存凭据；不能通过复制 SQLite 文件完成该数据库备份 |
 | `AGENT_INSIGHT_CONFIG_DIR` | Benchmark 配置目录；空值使用安装目录的 `config/benchmark/` | 指定时使用绝对路径；不是平台运行根，也不替代运行根 `.env` |
-| `NEXT_PUBLIC_URL_PREFIX` | 前端 URL 前缀 | 按部署要求设置；改动后需重新构建前端，仅重启服务不够 |
+| `NEXT_PUBLIC_URL_PREFIX` | 前端 URL 前缀 | 修改后须重新构建。源码启动使用构建产物中的前缀探测页面是否就绪。 |
 
 旧 `AGENT_INSIGHT_DATA_DIR` 已移除，应改名为 `AGENT_INSIGHT_HOME` 并保留原根路径。旧通用 `PORT` 已移除，按进程改用平台或 Evaluator 专用端口变量。
 
