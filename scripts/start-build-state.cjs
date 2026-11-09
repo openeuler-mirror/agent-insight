@@ -26,7 +26,7 @@ const SOURCE_DIRS = ['src', 'public', 'prisma', 'scripts', 'generated', 'benchma
 const IGNORED = new Set(['.git', '.cache', '__pycache__', '.pytest_cache'])
 const sha = value => createHash('sha256').update(value).digest('hex')
 
-function digestTree(root, entries, cacheFile, ignoredPath) {
+function digestTree(root, entries, cacheFile, ignoredPaths = []) {
   const cached = cacheFile ? readJson(cacheFile) : null
   const previous = cached?.version === VERSION ? cached.files : {}
   const updated = {}
@@ -34,7 +34,7 @@ function digestTree(root, entries, cacheFile, ignoredPath) {
   const buffer = Buffer.allocUnsafe(256 * 1024)
   function visit(relative, ancestors = new Set()) {
     const target = path.resolve(root, relative)
-    if (target === ignoredPath) return
+    if (ignoredPaths.includes(target)) return
     hash.update(JSON.stringify(relative))
     let stat
     try { stat = fs.lstatSync(target, { bigint: true }) } catch (error) {
@@ -132,7 +132,10 @@ function artifactState(root) {
     root,
     ['.next/BUILD_ID', '.next/standalone', '.next/static'],
     path.join(root, '.next/cache/agent-insight/artifact-hashes.json'),
-    path.resolve(standalone, '.next/server/route-cache'),
+    [
+      path.resolve(standalone, '.next/cache'),
+      path.resolve(standalone, '.next/server/route-cache'),
+    ],
   )
 }
 

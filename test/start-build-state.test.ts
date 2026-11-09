@@ -38,6 +38,7 @@ function fixture(t: test.TestContext) {
       'server.js': 'server', '.next/BUILD_ID': 'build-1',
       '.next/required-server-files.json': '{}', '.next/server/app-paths-manifest.json': '{}',
       '.next/server/pages-manifest.json': '{}', '.next/static/chunk.js': 'asset',
+      '.next/prerender-manifest.json': '{}', '.next/server/app/index.html': 'prerendered',
       'public/logo.svg': 'logo', 'node_modules/next/index.js': 'runtime',
     })) write(`.next/standalone/${file}`, content)
     write('.next/static/chunk.js', 'asset')
@@ -142,16 +143,29 @@ test('public build environment changes rebuild; runtime port and logs do not', t
   assert.equal(f.check().reusable, true)
 })
 
-test('Next runtime page cache does not invalidate a verified standalone build', t => {
+test('Next runtime caches do not invalidate a verified standalone build', t => {
   const f = fixture(t)
   f.record()
-  f.write('.next/standalone/.next/server/route-cache/APP_PAGE/cached/fault.html', 'cached response')
-  assert.equal(f.check().reusable, true)
+  for (const file of [
+    'server/route-cache/APP_PAGE/cached/fault.html',
+    'cache/fetch-cache/cached-request',
+    'cache/images/cached-image/entry.webp',
+  ]) {
+    f.write(`.next/standalone/.next/${file}`, 'runtime cache entry')
+    assert.equal(f.check().reusable, true, file)
+  }
   f.write('.next/standalone/.next/static/route-cache/chunk.js', 'new build artifact')
   assert.equal(f.check().reusable, false)
 })
 
-for (const file of ['.next/BUILD_ID', '.next/standalone/server.js', '.next/standalone/.next/static/chunk.js', '.next/standalone/node_modules/next/index.js']) {
+for (const file of [
+  '.next/BUILD_ID',
+  '.next/standalone/server.js',
+  '.next/standalone/.next/prerender-manifest.json',
+  '.next/standalone/.next/server/app/index.html',
+  '.next/standalone/.next/static/chunk.js',
+  '.next/standalone/node_modules/next/index.js',
+]) {
   test(`missing or damaged ${file} causes rebuild`, t => {
     const f = fixture(t)
     f.record()
