@@ -212,7 +212,6 @@ test('ZSoft agent tasks use the executor-configured native tasks-dir and keep ju
   const nativeTask = zsoftL1Adapter.buildAgentTask(input)
   assert.deepEqual(nativeTask.workspace, { provider: 'zsoft-tasks', taskId: raw.public.taskId })
   assert.equal(JSON.stringify(nativeTask).includes('agentBundle'), false)
-  const publicPayload = { ...raw.public, agentBundle: { digest: `sha256:${'d'.repeat(64)}` } }
   assert.ok(nativeTask.task.instruction.includes('submission/poc'))
   assert.equal(JSON.stringify(nativeTask).includes(raw.private.sourceTaskDigest), false)
   const kernel = zsoftL1Adapter.buildAgentTask({ ...input, publicPayload: { ...raw.public, tags: ['kernel'], submissionKind: 'c' } })
