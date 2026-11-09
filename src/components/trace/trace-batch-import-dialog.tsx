@@ -373,7 +373,7 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
     return (
         <>
             <Dialog open={open} onOpenChange={next => { if (!next) requestClose(); }}>
-                <DialogContent className="relative sm:max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+                <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2.5">
                             {zh ? '批量导入 Trace' : 'Batch import traces'}
