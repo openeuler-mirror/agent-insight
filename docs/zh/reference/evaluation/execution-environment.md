@@ -26,6 +26,8 @@ changefreq: "monthly"
 
 向导第 1 步和所有“生成 Trace”的第 2 步每 10 秒、以及窗口重新聚焦时刷新执行目标，包括普通和 Skill 实验。临时能力探测恢复后，页面可自动更新可用目标；环境检查及准备期间仍暂停刷新，继续保留原目标复核。
 
+JiuwenSwarm 客户端通过 Gateway WebSocket `/ws` 的 `models.list` 获取已配置模型名称；目录读取成功后报告 `jiuwenswarm/main_agent` 的普通 `RUN_EXPERIMENT_CASE` 能力及模型候选。地址默认 `ws://127.0.0.1:19000/ws`，可由客户端环境变量 `AGENT_INSIGHT_JIUWEN_WS_URL` 覆盖。每条 Case 创建独立会话并发送原始输入；选择具体模型时，执行前重新核对目录并通过 `chat.send.model_name` 下发。命令回执携带会话 ID；服务端从 Jiuwen OTLP spool 的会话索引解析唯一 Trace ID，等待对应 Execution 入库后绑定 Case。会话无唯一 Trace、采集器未上传或超时均不会按输入猜测绑定。此能力不包含 Skill 快照、Benchmark 或故障注入。
+
 OpenCode 向导预检与执行前校验共用按运行时主版本分流的入口：v1 保留 `debug config`、认证来源和 `models` 目录检查；v2 调用 `api --standalone model.list`（未选模型时为 `model.default`），以原生目录中的 `providerID/id` 和 `enabled` 判断可用性，不解析 v2 `debug config` 的配置来源数组，也不套用 v1 认证文件格式。CLI 输出只进入权限为 `0600` 的临时文件并在检查后清理，不将配置或底层异常透传到页面。目录读取失败为 `MODEL_CONFIGURATION_UNREADABLE`，所选模型不可用为 `MODEL_UNAVAILABLE`，缺少可用默认模型为 `MODEL_CONFIGURATION_MISSING`；不发起模型推理请求。执行前通过可取消子进程检查，保留 v2 错误分类并返回解析后的模型标识；预检增量能力上报与常规探测一致，为已就绪的 v1/v2 声明 `skillSnapshotVersion: 4`。Skill 用例生成与 A/B 使用共享能力策略校验 `supportsSkillSnapshot`，触发分析额外校验 `supportsTriggerRouting`；前端筛选、提交和服务端校验保持一致。缺失能力返回对应错误并提示检查常驻客户端与能力探测结果，不依据缺失字段直接推断 OpenCode 版本过旧。
 
 任务复用 `ReliabilityCommand`，白名单动作是 `PREPARE_EXECUTION_ENVIRONMENT`，不新增 Prisma 表。指令成功完成与环境就绪分开：`SUCCEEDED` 的结果可能为 `needs_action`；只有 `ready` 可以通过。准备动作期限为 45 分钟，ACK 仍遵循现有送达期限，其他动作默认期限不变。请求和回执不携带模型密钥、任意脚本路径或 Shell 命令；`agentOptions` 仅作为执行上下文，不用于环境安装命令。
@@ -39,6 +41,8 @@ OpenCode 向导预检与执行前校验共用按运行时主版本分流的入�
 
 [English](../../../en/reference/evaluation/execution-environment.md)
 
+
+JiuwenSwarm 环境检查与能力上报共用 Gateway 模型目录探测结果。`agent-runtime/jiuwenswarm/v1` 在目录可读取时为就绪；普通实验预检不查找同名主机 CLI，拒绝非 `main_agent` 或目录中不存在的模型。目录检查不验证模型凭据或推理服务。
 
 ### OpenCode 生成与优化执行的终态
 

@@ -313,6 +313,7 @@ function xiaooCollectorInstalled() {
 }
 
 function probeExperimentRuntime(platform, executable = which(runtimeAdapters[platform]?.executableName || platform)) {
+  if (platform === 'jiuwenswarm') return require('./jiuwen-experiment-runtime.cjs').probe()
   return runtimeAdapters[platform]?.probe(executable) || {
     canResolveTraceId: false,
     ready: false,
@@ -956,6 +957,17 @@ function buildCapabilities(cfg, opts) {
         reload: 'restart_required',
       },
     })
+  }
+  const jiuwenRuntime = runtimeFor('jiuwenswarm')
+  if (jiuwenRuntime.ready) {
+    const existing = platforms.find(platform => platform.id === 'jiuwenswarm')
+    const capability = {
+      agents: ['main_agent'], models: jiuwenRuntime.models || [],
+      runExperimentCase: { version: 2, returnsTraceId: true, ready: true },
+      actions: [...WHITELIST],
+    }
+    if (existing) Object.assign(existing, capability)
+    else platforms.push({ id: 'jiuwenswarm', ...capability })
   }
   const mcts = mctsRuntime()
   const mctsConfigured = Boolean(String(cfg.mctsRepoDir || '').trim())
@@ -1766,6 +1778,10 @@ const runtimeAdapters = {
 
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   payload.signal?.throwIfAborted()
+  if (payload.platform === 'jiuwenswarm') {
+    if (payload.skillExecution) throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'JiuwenSwarm 暂不支持 Skill 版本隔离实验')
+    return require('./jiuwen-experiment-runtime.cjs').run(payload)
+  }
   const executable = which(runtimeAdapters[String(payload.platform)]?.executableName || String(payload.platform))
   let isolated = payload.skillExecution && executable ? prepareSkillExperimentWorkspace(executable, payload, undefined, cfg.clientId) : null
   if (!payload.skillExecution && !payload.cwd) {

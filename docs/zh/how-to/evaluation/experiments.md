@@ -50,7 +50,7 @@ changefreq: monthly
 在实验设计中配置：
 
 - **实验名称**：本次验证的业务名称。
-- **待执行 Agent**：候选项来自已有历史 Trace 的 Agent 与在线客户端可执行 Agent 的并集。
+- **待执行 Agent**：候选项来自已有历史 Trace 的 Agent 与在线客户端可执行 Agent 的并集；JiuwenSwarm 有在线可执行目标时，仅列出当前可执行的 JiuwenSwarm Agent，历史别名和采集回退名称仍可在链路追踪中查看。
 - **评测数据集**：可选；生成 Trace 时必须选择。
 - **实验类型**：全局入口支持 **无变量 · 单组** 和 **LLM 对比**。
 
@@ -89,7 +89,11 @@ changefreq: monthly
 
 #### 生成新 Trace
 
+JiuwenSwarm 的运行主机是 Agent Insight 常驻客户端所在主机，容器只需提供可访问的 Gateway 和 OTLP 采集。即使在 JiuwenSwarm 容器内执行了接入安装命令，也不能替代所选客户端的更新。环境预检按 Gateway 连通性判断，不要求主机安装名为 `jiuwenswarm` 的 CLI；若仍提示安装，请更新并重启所选主机的常驻客户端，然后重新点击“下一步”。
+
 **生成 Trace** 使用数据集 Case 重新运行 Agent，再对新产生的 Trace 执行评估。
+
+JiuwenSwarm 使用当前 `0.0.13y` 镜像时，先启动 Gateway、AgentServer 和现有 OTLP 采集链路，再更新并重启能访问该 Gateway 的 Agent Insight 常驻客户端。在向导中选择 `main_agent`、运行主机和 Gateway 已配置的模型（或“平台默认”），即可把数据集 Case 作为新会话任务下发。客户端经 Gateway 的 `/ws` 读取 `models.list` 模型目录；选择具体模型时，通过 `chat.send.model_name` 指定模型，收到 `chat.final` 后，平台按会话索引等待 OTLP Trace 入库并绑定 Case。Gateway 不在默认 `ws://127.0.0.1:19000/ws` 时，在客户端服务环境中设置 `AGENT_INSIGHT_JIUWEN_WS_URL` 并重启客户端。当前仅支持普通单组生成 Trace 实验中的 `main_agent`；Skill 版本隔离、Benchmark 和故障注入仍不可选。若模型下拉框仅显示“平台默认”，检查客户端是否已更新、Gateway `models.list` 是否返回已配置模型，并等待能力刷新；目录检查不验证模型凭据或推理服务。若可看到历史 JiuwenSwarm Trace 却没有可执行目标，检查 Gateway 连通性、客户端在线状态及其能力刷新；若任务完成但 Case 未绑定，检查 OTLP 上传和 Jiuwen 会话索引。
 
 普通 Agent 实验中，Agent 会根据任务和运行环境选择可用的 Skill。要评测指定的 Skill 版本，请从 Skill 工作台新建[用例实验](./skills/use-case-analysis.md)，并选择生成 Trace。
 

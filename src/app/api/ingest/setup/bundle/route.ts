@@ -47,6 +47,7 @@ const BUNDLES: Record<string, string[]> = {
   client: [
     'scripts/install-ras-client.js',
     'scripts/reliability-client.cjs',
+    'scripts/jiuwen-experiment-runtime.cjs',
     'scripts/xgovernor.cjs',
     'scripts/ordinary-experiment-state.cjs',
     'scripts/skill-experiment-workspace.cjs',
