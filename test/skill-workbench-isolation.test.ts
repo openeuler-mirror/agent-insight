@@ -169,7 +169,7 @@ test('会话固定 Skill 并恢复工作版本，顶部资产控制右栏全部�
   const picker = readFileSync('src/components/skill-workbench/SkillManagementPicker.tsx', 'utf8');
   const publishService = readFileSync('src/lib/skill-workbench/publish-service.ts', 'utf8');
   assert.match(shell, /pickerPurpose === 'bind'[\s\S]*\/context/);
-  assert.match(shell, /openHistorySession[\s\S]*showSessionAsset\(session\)/);
+  assert.match(shell, /openHistorySession[\s\S]*showSessionAsset\(session, true\)/);
   assert.match(shell, /const viewingSessionAsset = Boolean/);
   assert.match(shell, /右栏使用.*不会改变当前会话/);
   assert.match(shell, /disabled=\{!selectedAsset\}/);

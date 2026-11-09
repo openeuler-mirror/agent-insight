@@ -12,6 +12,7 @@ changefreq: "monthly"
 ## 平台公共
 
 - [用 Docker 部署服务端](./platform/deploy-docker.md)
+- [在 OpenShift 上部署服务端](./platform/deploy-openshift.md)（含 Developer Sandbox 集群内构建）
 - [升级与回滚](./platform/upgrade-and-rollback.md)
 - [备份与恢复](./platform/backup-and-restore.md)
 - [Conventions & Extension](./platform/conventions-and-extension.md)
