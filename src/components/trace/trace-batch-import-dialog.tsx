@@ -35,7 +35,6 @@ import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
     Dialog,
     DialogContent,
@@ -68,14 +67,16 @@ interface BatchItem {
     status: ItemStatus;
     recoverable: boolean;
     errorKind?: ErrorKind;
-    errorMessage?: string;
+    reasonShort?: string;
+    reasonDetail?: string;
     result?: TraceImportOutcome;
 }
 
 interface ImportFailure {
     kind: ErrorKind;
     recoverable: boolean;
-    message: string;
+    short: string;
+    detail: string;
 }
 
 function formatBytes(bytes: number): string {
@@ -86,14 +87,19 @@ function formatBytes(bytes: number): string {
 function classifyFailure(error: unknown): ImportFailure {
     if (error && typeof error === 'object' && 'batchKind' in error) {
         const f = error as unknown as ImportFailure & { batchKind: boolean };
-        return { kind: f.kind, recoverable: f.recoverable, message: f.message };
+        return { kind: f.kind, recoverable: f.recoverable, short: f.short, detail: f.detail };
     }
     // fetch 层网络异常（TypeError:Failed to fetch 等）视为可恢复
-    return { kind: 'network', recoverable: true, message: 'Network error' };
+    return {
+        kind: 'network',
+        recoverable: true,
+        short: '服务暂时不可用',
+        detail: '服务暂时不可用，本次文件导入失败。稍后可重试。',
+    };
 }
 
-function makeFailure(kind: ErrorKind, recoverable: boolean, message: string): ImportFailure & { batchKind: true } {
-    return { kind, recoverable, message, batchKind: true };
+function makeFailure(kind: ErrorKind, recoverable: boolean, short: string, detail: string): ImportFailure & { batchKind: true } {
+    return { kind, recoverable, short, detail, batchKind: true };
 }
 
 export interface TraceBatchImportDialogProps {
@@ -124,18 +130,24 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
     const inputRef = React.useRef<HTMLInputElement>(null);
     const idSeqRef = React.useRef(0);
 
-    const zhFail = (kind: ErrorKind) => (
-        kind === 'network' ? '服务暂时不可用，本次文件导入失败。稍后可重试。'
-            : kind === 'schema' ? '导入校验失败。请检查导出文件是否完整。'
-                : kind === 'size' ? '文件超过单文件 50 MB 限制。'
-                    : '文件无法解析为 JSON，请检查文件内容。'
-    );
-    const enFail = (kind: ErrorKind) => (
-        kind === 'network' ? 'The service is temporarily unavailable. You can retry later.'
-            : kind === 'schema' ? 'Import validation failed. Check whether the exported file is complete.'
-                : kind === 'size' ? 'The file exceeds the 50 MB single-file limit.'
-                    : 'The file could not be parsed as JSON.'
-    );
+    const zhFail = (kind: ErrorKind, serverMessage: string): { short: string; detail: string } => {
+        if (kind === 'network') return { short: '服务暂时不可用', detail: '服务暂时不可用，本次文件导入失败。稍后可重试。' };
+        if (kind === 'size') return { short: '文件超过单文件 50 MB 限制', detail: '文件超过单文件 50 MB 限制。' };
+        if (kind === 'parse') return { short: '无法解析为 JSON', detail: '文件无法解析为 JSON，请检查文件内容。' };
+        if (serverMessage.includes('rootExecutionId')) {
+            return { short: '缺少根 Trace ID', detail: '缺少必填字段 rootExecutionId。请检查导出文件是否完整。' };
+        }
+        return { short: '文件校验未通过', detail: serverMessage || '文件校验未通过，请检查导出文件是否符合格式要求。' };
+    };
+    const enFail = (kind: ErrorKind, serverMessage: string): { short: string; detail: string } => {
+        if (kind === 'network') return { short: 'Service unavailable', detail: 'The service is temporarily unavailable. You can retry later.' };
+        if (kind === 'size') return { short: 'Exceeds the 50 MB limit', detail: 'The file exceeds the 50 MB single-file limit.' };
+        if (kind === 'parse') return { short: 'Invalid JSON', detail: 'The file could not be parsed as JSON.' };
+        if (serverMessage.includes('rootExecutionId')) {
+            return { short: 'Missing root trace ID', detail: 'Required field rootExecutionId is missing. Check whether the exported file is complete.' };
+        }
+        return { short: 'Validation failed', detail: serverMessage || 'Import validation failed.' };
+    };
 
     const updateItems = React.useCallback((fn: (list: BatchItem[]) => BatchItem[]) => {
         const next = fn(itemsRef.current);
@@ -161,13 +173,15 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
 
     const importOne = React.useCallback(async (item: BatchItem): Promise<TraceImportOutcome> => {
         if (item.file.size > TRACE_BUNDLE_MAX_BYTES) {
-            throw makeFailure('size', false, zh ? zhFail('size') : enFail('size'));
+            const f = zh ? zhFail('size', '') : enFail('size', '');
+            throw makeFailure('size', false, f.short, f.detail);
         }
         let bundle: unknown;
         try {
             bundle = JSON.parse(await item.file.text());
         } catch {
-            throw makeFailure('parse', false, zh ? zhFail('parse') : enFail('parse'));
+            const f = zh ? zhFail('parse', '') : enFail('parse', '');
+            throw makeFailure('parse', false, f.short, f.detail);
         }
         let response: Response;
         try {
@@ -177,16 +191,21 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
                 body: JSON.stringify({ user, fileName: item.file.name, bundle }),
             });
         } catch {
-            throw makeFailure('network', true, zh ? zhFail('network') : enFail('network'));
+            const f = zh ? zhFail('network', '') : enFail('network', '');
+            throw makeFailure('network', true, f.short, f.detail);
         }
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
             const status = response.status;
-            if (status === 413) throw makeFailure('size', false, zh ? zhFail('size') : enFail('size'));
+            const serverMessage = (payload as { error?: string })?.error || '';
+            if (status === 413) {
+                const f = zh ? zhFail('size', '') : enFail('size', '');
+                throw makeFailure('size', false, f.short, f.detail);
+            }
             const kind: ErrorKind = status >= 500 || status === 429 ? 'network' : 'schema';
             const recoverable = kind === 'network';
-            const fallback = zh ? '导入 Trace 失败' : 'Failed to import trace';
-            throw makeFailure(kind, recoverable, (payload as { error?: string })?.error || fallback);
+            const f = zh ? zhFail(kind, serverMessage) : enFail(kind, serverMessage);
+            throw makeFailure(kind, recoverable, f.short, f.detail);
         }
         return payload as TraceImportOutcome;
     }, [zh, user]);
@@ -215,7 +234,8 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
                         status: 'failed' as ItemStatus,
                         recoverable: failure.recoverable,
                         errorKind: failure.kind,
-                        errorMessage: failure.message,
+                        reasonShort: failure.short,
+                        reasonDetail: failure.detail,
                     }
                     : i));
             }
@@ -252,7 +272,7 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
 
     const retryItems = React.useCallback((ids: string[]) => {
         updateItems(cur => cur.map(i => ids.includes(i.id)
-            ? { ...i, status: 'waiting' as ItemStatus, errorMessage: undefined, errorKind: undefined }
+            ? { ...i, status: 'waiting' as ItemStatus, reasonShort: undefined, reasonDetail: undefined }
             : i));
         void runQueue();
     }, [runQueue, updateItems]);
@@ -353,7 +373,7 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
     return (
         <>
             <Dialog open={open} onOpenChange={next => { if (!next) requestClose(); }}>
-                <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+                <DialogContent className="relative sm:max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2.5">
                             {zh ? '批量导入 Trace' : 'Batch import traces'}
@@ -523,7 +543,7 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
                                                         </p>
                                                     )}
                                                     {item.status === 'failed' && (
-                                                        <p className="mt-1 text-xs text-red-600">{item.errorMessage}</p>
+                                                        <p className="mt-1 text-xs text-red-600">{item.reasonShort}</p>
                                                     )}
                                                 </td>
                                                 <td className="py-2.5 text-right">
@@ -564,7 +584,8 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
                                                 <tr className="border-b border-border/60">
                                                     <td colSpan={3} className="pb-3">
                                                         <div className="rounded-md border border-border bg-background-secondary p-3 text-xs text-foreground-muted">
-                                                            <p>{item.errorMessage}</p>
+                                                            <p className="font-medium text-foreground">{item.file.name}</p>
+                                                            <p className="mt-1.5">{item.reasonDetail}</p>
                                                             {item.recoverable && (
                                                                 <Button
                                                                     variant="outline"
@@ -618,20 +639,22 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
                             </>
                         )}
                     </DialogFooter>
+                    {confirmCancelOpen && (
+                        <div className="absolute inset-0 z-50 flex items-center justify-center rounded-lg bg-background/80" role="dialog" aria-modal="true" aria-label={zh ? '确认取消导入' : 'Confirm cancel'}>
+                            <div className="w-[340px] rounded-lg border border-border bg-background p-5 shadow-lg">
+                                <h3 className="text-base font-semibold">{zh ? '确认取消导入？' : 'Cancel this import?'}</h3>
+                                <p className="mt-2 text-sm text-foreground-muted">
+                                    {zh ? '未导入的停止导入，正在导入的等待导入完成，是否确认取消？' : 'Files not yet imported will stop; files currently importing will finish. Confirm cancel?'}
+                                </p>
+                                <div className="mt-4 flex justify-end gap-2">
+                                    <Button variant="outline" onClick={() => setConfirmCancelOpen(false)}>{zh ? '暂不取消' : 'Not now'}</Button>
+                                    <Button onClick={handleCancelConfirm}>{zh ? '确认取消' : 'Confirm cancel'}</Button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </DialogContent>
             </Dialog>
-
-            <ConfirmDialog
-                open={confirmCancelOpen}
-                onOpenChange={setConfirmCancelOpen}
-                title={zh ? '确认取消导入？' : 'Cancel this import?'}
-                description={zh
-                    ? '未导入的停止导入，正在导入的等待导入完成，是否确认取消？'
-                    : 'Files not yet imported will stop; files currently importing will finish. Confirm cancel?'}
-                confirmText={zh ? '确认取消' : 'Confirm cancel'}
-                cancelText={zh ? '暂不取消' : 'Not now'}
-                onConfirm={handleCancelConfirm}
-            />
         </>
     );
 }
