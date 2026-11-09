@@ -27,7 +27,7 @@
  */
 import { OpenAI } from 'openai';
 import { getActiveConfig } from '@/lib/storage/server-config';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import type { DatasetCase } from '@/server/agent_datasets_storage';
 import { makeYearAssertion, makeNumericAssertion, type ScriptAssertion } from './self-verify-structural';
@@ -54,12 +54,11 @@ function parseLoose(t: string): Record<string, unknown> {
 }
 
 function newClient(config: { apiKey?: string; baseUrl?: string; headers?: Record<string, string> }) {
-  const { customFetch } = getProxyConfig();
   return new OpenAI({
     apiKey: config.apiKey || 'no-api-key-required',
     baseURL: config.baseUrl || 'https://api.deepseek.com',
     defaultHeaders: config.headers,
-    fetch: customFetch,
+    fetch: getModelFetch(),
   });
 }
 

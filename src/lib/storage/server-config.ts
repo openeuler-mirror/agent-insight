@@ -19,6 +19,7 @@ import { db } from '@/lib/storage/prisma';
 import { loadDefaultModelConfigs } from '@/lib/shared/default-model-config';
 import {
     normalizeCustomHeaders,
+    resolveModelConnection,
     supportsCustomHeaders,
 } from '@/lib/shared/model-connection';
 import { randomUUID } from 'node:crypto';
@@ -162,7 +163,10 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
         console.error('Failed to load user settings:', e);
     }
 
-    const mergedConfigs = [...defaultConfigs, ...userConfigs];
+    const mergedConfigs = [...defaultConfigs, ...userConfigs].map(config => ({
+        ...config,
+        ...resolveModelConnection(config),
+    }));
 
     if (!activeConfigId || !mergedConfigs.find(c => c.id === activeConfigId)) {
         activeConfigId = defaultConfigs.length > 0 ? defaultConfigs[0].id : null;

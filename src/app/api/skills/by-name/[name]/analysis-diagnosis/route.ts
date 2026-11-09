@@ -17,7 +17,7 @@
 import { NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
 
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import {
   buildDiagnosisPrompt,
   buildFallbackDiagnosis,
@@ -70,11 +70,10 @@ export async function POST(
     }
 
     try {
-      const { customFetch } = getProxyConfig();
       const client = new OpenAI({
         apiKey: activeConfig.apiKey || 'no-api-key-required',
         baseURL: activeConfig.baseUrl || 'https://api.deepseek.com',
-        fetch: customFetch as typeof fetch | undefined,
+        fetch: getModelFetch(),
       });
       const model = activeConfig.model || 'deepseek-chat';
       const prompt = buildDiagnosisPrompt(safeSnapshot);

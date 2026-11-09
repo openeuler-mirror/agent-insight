@@ -70,13 +70,15 @@ changefreq: monthly
 | --- | --- |
 | **名称** | 便于团队识别与区分用途的业务名称。 |
 | **Provider** | 模型供应商，例如 OpenAI、Anthropic、DeepSeek 或兼容接口服务。 |
-| **Model** | 实际调用的模型标识，例如 `gpt-4o`、`deepseek-chat`。 |
+| **Model** | 实际调用的模型标识，例如 `gpt-6-luna`、`grok-4.7`、`deepseek-v4-flash`。Azure OpenAI 填部署名称。 |
 | **Base URL / Endpoint** | 模型服务地址，用于发送推理请求。 |
 | **API Key** | 鉴权凭证，用于访问供应商接口。Local AI 与 Custom（OpenAI Compatible）可留空。 |
 | **自定义请求头** | Local AI 与 Custom（OpenAI Compatible）的可选 HTTP Header，可用于 `Authorization`、`X-API-Key`、租户标识等网关鉴权。请求头值按密钥脱敏。 |
 | **连接测试超时** | 在高级设置中按模型配置，默认 60 秒，范围 10～300 秒；用于保存前测试和手动健康检查，不影响评测任务超时。 |
 | **默认状态** | 表示该配置是否作为当前 Workspace 的默认模型。 |
 | **健康状态** | 表示连接检测是否通过，用于判断当前配置是否具备执行条件。 |
+
+注册 xAI 时选择 **xAI Grok**，Base URL 使用 `https://api.x.ai/v1`。已有配置若填了已退役的 `grok-3` 等旧模型，请编辑模型名为 `grok-4.7` 后重新测试。Azure OpenAI 使用 `https://<resource>.openai.azure.com/openai/v1`。
 
 ## 默认模型机制
 

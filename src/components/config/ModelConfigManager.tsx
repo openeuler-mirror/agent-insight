@@ -43,6 +43,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
     LLM_PROVIDERS,
     CATEGORY_ORDER,
+    getProvider,
     getProviderLogoUrl,
     resolveCatalogProvider,
     type LlmProvider,
@@ -66,19 +67,6 @@ export interface EvalConfigItem {
     headers?: Record<string, string>;
     testTimeoutMs?: number;
 }
-
-interface ProviderPreset {
-    baseUrl: string;
-    model: string;
-}
-
-const PROVIDER_PRESETS: Record<EvalConfigItem['provider'], ProviderPreset> = {
-    'deepseek-official': { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
-    siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3' },
-    openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
-    anthropic: { baseUrl: 'https://api.anthropic.com/v1', model: 'claude-3-5-sonnet-20240620' },
-    custom: { baseUrl: '', model: '' },
-};
 
 type ProviderCategory = 'saas' | 'cn' | 'local' | 'other';
 
@@ -1208,12 +1196,12 @@ function EditForm({
     locale: string;
 }) {
     const onProviderChange = (p: EvalConfigItem['provider']) => {
-        const preset = PROVIDER_PRESETS[p];
+        const preset = getProvider(p);
         setConfig({
             ...config,
             provider: p,
-            baseUrl: preset.baseUrl || config.baseUrl,
-            model: preset.model || config.model,
+            baseUrl: preset?.baseUrl || config.baseUrl,
+            model: preset?.defaultModel || config.model,
             headers: p === 'custom' ? config.headers : undefined,
         });
     };

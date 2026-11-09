@@ -18,7 +18,7 @@ import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configu
 import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { getActiveConfig } from '@/lib/storage/server-config';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { evaluateResultAccuracy } from './result-accuracy-evaluator';
 import {
   evaluateInstructionAdherence,
@@ -97,13 +97,12 @@ export function extractRelevantSystemInstructions(interactions: unknown[]): stri
 async function createClient(user?: string | null): Promise<{ client: OpenAI; model: string } | null> {
   const config = await getActiveConfig(user);
   if (!config) return null;
-  const { customFetch } = getProxyConfig();
   return {
     client: new OpenAI({
       apiKey: config.apiKey || 'no-api-key-required',
       baseURL: String(config.baseUrl || 'https://api.deepseek.com').replace(/\/chat\/completions\/?$/, ''),
       defaultHeaders: config.headers,
-      fetch: customFetch,
+      fetch: getModelFetch(),
       timeout: remainingEvaluationTimeMs() ?? Number(process.env.RESULT_QUALITY_TIMEOUT_MS || process.env.JUDGMENT_TIMEOUT_MS || 300000),
       ...(remainingEvaluationTimeMs() === undefined ? {} : { maxRetries: 0 }),
     }),

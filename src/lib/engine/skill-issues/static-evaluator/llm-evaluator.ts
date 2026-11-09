@@ -35,7 +35,7 @@ import { createHash } from 'crypto';
 import { jsonrepair } from 'jsonrepair';
 
 import { getActiveConfig } from '@/lib/storage/server-config';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import type { Severity } from '../prevalence';
 import { PROMPT_SKILL_META, PROMPT_ROBUSTNESS, PROMPT_SECURITY } from './prompts';
 
@@ -388,12 +388,11 @@ export async function runLlmStaticEvaluation(args: {
     };
   }
 
-  const { customFetch } = getProxyConfig();
   const client = new OpenAI({
     apiKey: config.apiKey || 'no-api-key-required',
     baseURL: config.baseUrl || 'https://api.deepseek.com',
     defaultHeaders: config.headers,
-    fetch: customFetch as any,
+    fetch: getModelFetch(),
   });
   const model = config.model || 'deepseek-chat';
 

@@ -16,6 +16,7 @@
 
 import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatOpenAI } from "@langchain/openai";
+import { getModelFetch, isClaudeFixedSamplingModel } from "@/lib/server/model-fetch";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger("skill-generation:model");
@@ -79,9 +80,9 @@ export function createModel(opts: ModelOptions) {
     return new ChatOpenAI({
       modelName: modelId,
       apiKey: opts.apiKey,
-      configuration: baseURL || opts.headers
-        ? { ...(baseURL ? { baseURL } : {}), ...(opts.headers ? { defaultHeaders: opts.headers } : {}) }
-        : undefined,
+      configuration: { baseURL, defaultHeaders: opts.headers, fetch: getModelFetch() },
+      useResponsesApi: /^gpt-6(?:[.-]|$)/i.test(modelId)
+        && /^https:\/\/api\.openai\.com(?:\/|$)/i.test(baseURL ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com"),
       temperature,
       streaming: true,
     });
@@ -91,6 +92,6 @@ export function createModel(opts: ModelOptions) {
   return new ChatAnthropic({
     model: modelId,
     anthropicApiKey: opts.apiKey,
-    temperature,
+    temperature: isClaudeFixedSamplingModel(modelId) ? undefined : temperature,
   });
 }

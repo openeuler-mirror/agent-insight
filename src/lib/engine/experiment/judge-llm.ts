@@ -27,6 +27,7 @@
 
 import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { experimentSignal } from './cancellation-context';
 import type { ToolCallEvent } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
 import { hasEvaluatorExecutionPolicy, withConfiguredEvaluationTimeout } from './evaluator-execution-policy';
@@ -154,6 +155,7 @@ const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
     configuration: {
       baseURL: config.baseUrl || 'https://api.deepseek.com',
       defaultHeaders: config.headers,
+      fetch: getModelFetch(),
     },
     ...buildDirectJudgeSamplingOptions(modelId, req.samplingProfile),
     timeout: timeoutMs,

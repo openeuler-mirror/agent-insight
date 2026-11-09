@@ -76,9 +76,9 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         label: 'OpenAI',
         category: 'frontier',
         baseUrl: 'https://api.openai.com/v1',
-        defaultModel: 'gpt-4o-mini',
-        suggestedModels: ['gpt-5', 'gpt-5-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'o3', 'o3-mini', 'o4-mini'],
-        docsUrl: 'https://platform.openai.com/docs/models',
+        defaultModel: 'gpt-6-luna',
+        suggestedModels: ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.4-mini'],
+        docsUrl: 'https://developers.openai.com/api/docs/models',
         oaiCompat: true,
         initials: 'OA',
         logoSlug: 'openai',
@@ -88,26 +88,28 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         label: 'Anthropic',
         category: 'frontier',
         baseUrl: 'https://api.anthropic.com/v1',
-        defaultModel: 'claude-sonnet-4-6',
+        defaultModel: 'claude-sonnet-5-5',
         suggestedModels: [
-            'claude-opus-4-7',
+            'claude-sonnet-5-5',
+            'claude-opus-5-5',
+            'claude-haiku-5-5',
+            'claude-opus-4-8',
             'claude-sonnet-4-6',
             'claude-haiku-4-5',
-            'claude-3-5-sonnet-latest',
         ],
-        docsUrl: 'https://docs.anthropic.com/en/docs/models-overview',
+        docsUrl: 'https://platform.claude.com/docs/en/models/overview',
         oaiCompat: true,
         initials: 'AN',
         logoSlug: 'anthropic',
-        note: '使用 Anthropic OpenAI 兼容端点（/v1/messages 自动转换）。',
+        note: '使用 Anthropic 的 OpenAI 兼容端点。',
     },
     {
         id: 'gemini',
         label: 'Google Gemini',
         category: 'frontier',
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-        defaultModel: 'gemini-2.5-flash',
-        suggestedModels: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'],
+        defaultModel: 'gemini-3.8-flash',
+        suggestedModels: ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-2.5-flash'],
         docsUrl: 'https://ai.google.dev/gemini-api/docs/openai',
         oaiCompat: true,
         initials: 'GM',
@@ -118,23 +120,23 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         id: 'azure-openai',
         label: 'Azure OpenAI',
         category: 'frontier',
-        baseUrl: 'https://YOUR-RESOURCE.openai.azure.com/openai',
+        baseUrl: 'https://YOUR-RESOURCE.openai.azure.com/openai/v1',
         defaultModel: 'gpt-4o',
         suggestedModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-mini'],
         docsUrl: 'https://learn.microsoft.com/azure/ai-services/openai/reference',
         oaiCompat: true,
         initials: 'AZ',
         logoSlug: 'azure',
-        note: 'Base URL 形如 https://<resource>.openai.azure.com/openai/deployments/<deployment>',
+        note: 'Base URL 使用 https://<resource>.openai.azure.com/openai/v1，Model 填 Azure 部署名称。',
     },
     {
         id: 'xai',
         label: 'xAI Grok',
         category: 'frontier',
         baseUrl: 'https://api.x.ai/v1',
-        defaultModel: 'grok-3',
-        suggestedModels: ['grok-4', 'grok-3', 'grok-3-mini', 'grok-2-1212', 'grok-2-vision-1212'],
-        docsUrl: 'https://docs.x.ai/api',
+        defaultModel: 'grok-4.7',
+        suggestedModels: ['grok-4.7'],
+        docsUrl: 'https://docs.x.ai/developers/models',
         oaiCompat: true,
         initials: 'GR',
         logoSlug: 'grok',
@@ -156,8 +158,8 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         label: 'Cohere',
         category: 'frontier',
         baseUrl: 'https://api.cohere.ai/compatibility/v1',
-        defaultModel: 'command-r-plus',
-        suggestedModels: ['command-r-plus', 'command-r', 'command-r7b'],
+        defaultModel: 'command-a-plus-05-2026',
+        suggestedModels: ['command-a-plus-05-2026', 'command-a-03-2025', 'command-r-plus-08-2024'],
         docsUrl: 'https://docs.cohere.com/docs/compatibility-api',
         oaiCompat: true,
         initials: 'CO',
@@ -355,9 +357,9 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         label: 'Zhipu GLM / 智谱',
         category: 'china',
         baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-        defaultModel: 'glm-4.5',
-        suggestedModels: ['glm-4.5', 'glm-4-plus', 'glm-4-air', 'glm-4-long', 'glm-4-flash'],
-        docsUrl: 'https://bigmodel.cn/dev/api',
+        defaultModel: 'glm-5.2',
+        suggestedModels: ['glm-5.2', 'glm-4.5', 'glm-4-flash'],
+        docsUrl: 'https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2',
         oaiCompat: true,
         initials: 'ZP',
         logoSlug: 'zhipu',
@@ -460,10 +462,10 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         id: 'minimax',
         label: 'MiniMax',
         category: 'china',
-        baseUrl: 'https://api.minimax.chat/v1',
-        defaultModel: 'abab6.5s-chat',
-        suggestedModels: ['abab6.5s-chat', 'abab6.5-chat', 'minimax-text-01'],
-        docsUrl: 'https://platform.minimaxi.com/document/algorithm-concept',
+        baseUrl: 'https://api.minimax.io/v1',
+        defaultModel: 'MiniMax-M3.1-Flash',
+        suggestedModels: ['MiniMax-M3.1-Flash', 'MiniMax-M3'],
+        docsUrl: 'https://platform.minimax.io/docs/api-reference/text-openai-api',
         oaiCompat: true,
         initials: 'MM',
         logoSlug: 'minimax',
@@ -473,8 +475,8 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         label: 'Stepfun / 阶跃星辰',
         category: 'china',
         baseUrl: 'https://api.stepfun.com/v1',
-        defaultModel: 'step-1-8k',
-        suggestedModels: ['step-1-8k', 'step-1-32k', 'step-2-16k'],
+        defaultModel: 'step-3.7-flash',
+        suggestedModels: ['step-3.7-flash', 'step-3.5-flash'],
         docsUrl: 'https://platform.stepfun.com/docs',
         oaiCompat: true,
         initials: 'ST',
@@ -581,7 +583,7 @@ export const PROVIDER_INDEX: Record<string, LlmProvider> = LLM_PROVIDERS.reduce(
 );
 
 export function getProvider(id: string | undefined | null): LlmProvider | undefined {
-    if (!id) return undefined;
+    if (!id || !Object.hasOwn(PROVIDER_INDEX, id)) return undefined;
     return PROVIDER_INDEX[id];
 }
 
@@ -594,15 +596,15 @@ export function resolveCatalogProvider(
     storedProvider: string,
     baseUrl?: string,
 ): LlmProvider | undefined {
-    const direct = PROVIDER_INDEX[storedProvider];
-    if (direct) return direct;
-    if (!baseUrl) return undefined;
+    const direct = getProvider(storedProvider);
+    if (direct && direct.id !== 'custom') return direct;
+    if (!baseUrl) return direct;
     const normalized = baseUrl.replace(/\/+$/, '').toLowerCase();
     return LLM_PROVIDERS.find(p => {
         if (!p.baseUrl) return false;
         const pu = p.baseUrl.replace(/\/+$/, '').toLowerCase();
-        return normalized === pu || normalized.startsWith(pu);
-    });
+        return normalized === pu || normalized.startsWith(pu + '/');
+    }) ?? direct;
 }
 
 export interface CategoryMeta {

@@ -22,6 +22,8 @@ import { resolveModelTestTimeoutMs, formatModelTestResult } from '../src/lib/sha
 import { POST } from '../src/app/api/eval/settings/test/route';
 import { db } from '../src/lib/storage/prisma';
 import { saveUserSettings, getUserSettings } from '../src/lib/storage/server-config';
+import { getModelFetch } from '../src/lib/server/model-fetch';
+import { resolveCatalogProvider } from '../src/lib/llm-providers';
 
 const config = { provider: 'custom', baseUrl: 'https://model.test/v1', model: 'test-model' };
 const completion = { choices: [{ message: { role: 'assistant', content: 'ok' } }] };
@@ -60,7 +62,7 @@ test('成功请求发送最小推理内容且不自动重试', async () => {
     fetch: async (_url, init) => {
       calls++;
       const body = JSON.parse(init?.body as string);
-      assert.equal(body.max_tokens, 5);
+      assert.equal(body.max_tokens, 128);
       assert.equal(body.model, 'test-model');
       return Response.json(completion);
     },
@@ -86,6 +88,74 @@ test('超时会取消底层传输，且只请求一次', async () => {
   await assert.rejects(probe, { name: 'TimeoutError' });
   assert.equal(aborted, true);
   assert.equal(calls, 1);
+});
+
+test('新旧 xAI 配置均走 Grok 的 Chat Completions 端点', async () => {
+  const legacyConfig = { provider: 'custom', baseUrl: ' https://api.x.ai/v1/chat/completions/ ', model: 'grok-4.7' };
+  assert.equal(resolveCatalogProvider('custom', legacyConfig.baseUrl.trim())?.id, 'xai');
+  for (const connection of [{ provider: 'xai' }, legacyConfig, { ...legacyConfig, baseUrl: 'https://api.x.ai/v1/responses' }]) {
+    await probeModelConnection({ ...connection, apiKey: 'fake-key' }, {
+      timeoutMs: 1000,
+      signal: new AbortController().signal,
+      fetch: async (url, init) => {
+        assert.equal(String(url), 'https://api.x.ai/v1/chat/completions');
+        assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer fake-key');
+        const body = JSON.parse(init?.body as string);
+        assert.equal(body.model, 'grok-4.7');
+        assert.equal(body.max_tokens, 128);
+        return Response.json(completion);
+      },
+    });
+  }
+});
+
+test('未指定自定义端点时不会发送请求', async () => {
+  await assert.rejects(probeModelConnection({ provider: 'custom', model: 'test-model' }, {
+    timeoutMs: 1000,
+    signal: new AbortController().signal,
+    fetch: async () => { assert.fail('Must not send a request'); },
+  }), error => classifyModelTestError(error).code === 'invalid_request');
+});
+
+test('OpenAI 推理模型探测使用 max_completion_tokens', async () => {
+  await probeModelConnection({ provider: 'openai', model: 'gpt-6-astra' }, {
+    timeoutMs: 1000,
+    signal: new AbortController().signal,
+    fetch: async (url, init) => {
+      assert.equal(String(url), 'https://api.openai.com/v1/chat/completions');
+      const body = JSON.parse(init?.body as string);
+      assert.equal(body.model, 'gpt-6-astra');
+      assert.equal(body.max_completion_tokens, 128);
+      assert.equal('max_tokens' in body, false);
+      return Response.json(completion);
+    },
+  });
+});
+
+test('共享传输按官方端点转换参数，自定义端点保留原始请求', async () => {
+  const sampling = { temperature: 0, top_p: 1, seed: 42 };
+  const format = { response_format: { type: 'json_object' } };
+  const cases = [
+    ['https://api.openai.com/v1/chat/completions',
+      { model: 'gpt-6-astra', max_tokens: 1000, ...sampling },
+      { model: 'gpt-6-astra', max_completion_tokens: 1000 }],
+    ['https://api.openai.com/v1/responses',
+      { model: 'gpt-6-luna', ...sampling },
+      { model: 'gpt-6-luna' }],
+    ['https://api.anthropic.com/v1/chat/completions',
+      { model: 'claude-sonnet-5-5', ...sampling, ...format },
+      { model: 'claude-sonnet-5-5', seed: 42 }],
+    ['https://model.test/v1/chat/completions',
+      { model: 'gpt-6-astra', ...sampling },
+      { model: 'gpt-6-astra', ...sampling }],
+  ] as const;
+  for (const [url, request, expected] of cases) {
+    const fetcher = getModelFetch(async (_url, init) => {
+      assert.deepEqual(JSON.parse(init?.body as string), expected);
+      return Response.json(completion);
+    });
+    await fetcher(url, { method: 'POST', body: JSON.stringify(request) });
+  }
 });
 
 test('响应头已经返回但响应体未结束时仍受总截止时间约束', async () => {

@@ -31,7 +31,7 @@
 
 import { OpenAI } from 'openai';
 import { jsonrepair } from 'jsonrepair';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import type { ModelConfig } from '@/lib/storage/server-config';
 import type { Severity } from '@/lib/engine/skill-issues/prevalence';
 
@@ -431,12 +431,11 @@ export async function runMergeOperator(args: RunMergeOperatorArgs): Promise<Merg
   const batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE;
   const concurrency = args.concurrency ?? DEFAULT_CONCURRENCY;
 
-  const { customFetch } = getProxyConfig();
   const client = new OpenAI({
     apiKey: args.config.apiKey || 'no-api-key-required',
     baseURL: args.config.baseUrl || 'https://api.deepseek.com',
     defaultHeaders: args.config.headers,
-    fetch: customFetch as unknown as typeof fetch,
+    fetch: getModelFetch(),
     timeout: LLM_TIMEOUT_MS,
     maxRetries: 2,
   });

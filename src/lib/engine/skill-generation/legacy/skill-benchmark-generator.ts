@@ -29,7 +29,7 @@ import { configSupportsDatasetType } from '@/lib/engine/evaluation/config-datase
 import { getConfigSubjectLabel, normalizeConfigQuery, normalizeConfigSkillName, normalizeOptionalSkillVersion } from '@/lib/engine/evaluation/config-target';
 import { readConfig, type ConfigItem } from '@/lib/storage/data-service';
 import { db } from '@/lib/storage/prisma';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { deriveRoutingSignature } from '@/lib/ingest/routing-signature';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { resolveRuntimeAssetPath } from '@/lib/env';
@@ -165,13 +165,12 @@ async function createConfiguredClient(user: string): Promise<{ client: OpenAI; m
     throw new Error('No active evaluation model configured for this user');
   }
 
-  const { customFetch } = getProxyConfig();
   return {
     client: new OpenAI({
       apiKey: settings.apiKey || 'no-api-key-required',
       baseURL: settings.baseUrl || 'https://api.deepseek.com',
       defaultHeaders: settings.headers,
-      fetch: customFetch,
+      fetch: getModelFetch(),
     }),
     model: settings.model || 'deepseek-chat',
   };

@@ -14,12 +14,33 @@
  * limitations under the License.
  */
 
+import { getProvider } from '@/lib/llm-providers';
+
 export interface ModelConnectionConfig {
   provider?: string;
   apiKey?: string;
   baseUrl?: string;
   model?: string;
   headers?: Record<string, string>;
+}
+
+export function normalizeModelBaseUrl(baseUrl?: string): string | undefined {
+  const base = baseUrl?.trim().replace(/\/+$/, '')
+    .replace(/\/chat\/completions$/i, '')
+    .replace(/^(https:\/\/(?:api\.openai\.com|(?:[a-z-]+\.)?api\.x\.ai)\/v1)\/responses$/i, '$1');
+  if (base && /^https:\/\/(?:api\.(?:openai\.com|anthropic\.com|x\.ai)|[a-z-]+\.api\.x\.ai)$/i.test(base)) {
+    return base + '/v1';
+  }
+  if (base && /^https:\/\/[^/]+\.openai\.azure\.com\/openai$/i.test(base)) return base + '/v1';
+  return base || undefined;
+}
+
+export function resolveModelConnection(config: ModelConnectionConfig) {
+  const provider = getProvider(config.provider === 'deepseek' ? 'deepseek-official' : config.provider);
+  return {
+    baseUrl: normalizeModelBaseUrl(config.baseUrl) || provider?.baseUrl || undefined,
+    model: config.model?.trim() || provider?.defaultModel || undefined,
+  };
 }
 
 const FORBIDDEN_CUSTOM_HEADERS = new Set([
@@ -87,9 +108,10 @@ export function getOpenAICompatibleClientConfig(config: ModelConnectionConfig): 
   baseURL?: string;
   defaultHeaders?: Record<string, string>;
 } {
+  const { baseUrl } = resolveModelConnection(config);
   return {
     apiKey: config.apiKey?.trim() || 'no-api-key-required',
-    ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
+    ...(baseUrl ? { baseURL: baseUrl } : {}),
     ...(config.headers && Object.keys(config.headers).length > 0
       ? { defaultHeaders: config.headers }
       : {}),

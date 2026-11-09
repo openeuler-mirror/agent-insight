@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import {
     getUserSettings,
     isMaskedApiKey,
@@ -41,12 +40,6 @@ export async function POST(request: Request) {
         const requestedHeaders = body.headers as Record<string, string> | undefined;
 
         const baseUrl = body.baseUrl || body.evalBaseUrl;
-        let normalizedBaseUrl = baseUrl;
-        if (normalizedBaseUrl) {
-            // Normalize: strip /chat/completions if user pasted full endpoint
-            // Keep /v1 suffix as it's required by many OpenAI-compatible APIs
-            normalizedBaseUrl = normalizedBaseUrl.replace(/\/chat\/completions\/?$/, '');
-        }
 
         // The client only holds masked keys for already-saved configs. When it
         // tests one without re-typing the key, resolve the real key server-side
@@ -75,19 +68,13 @@ export async function POST(request: Request) {
             throw new ModelTestValidationError('Invalid custom headers');
         }
 
-        const { customFetch } = getProxyConfig();
         await probeModelConnection({
             provider,
             apiKey: resolvedKey,
-            baseUrl: normalizedBaseUrl ||
-                (provider === 'deepseek-official' || provider === 'deepseek' ? "https://api.deepseek.com" :
-                 provider === 'siliconflow' ? "https://api.siliconflow.cn/v1" :
-                 undefined),
-            model: model ||
-                (provider === 'deepseek-official' || provider === 'deepseek' ? 'deepseek-v4-flash' :
-                 provider === 'siliconflow' ? 'deepseek-ai/DeepSeek-V3' : 'gpt-3.5-turbo'),
+            baseUrl,
+            model,
             headers: resolvedHeaders,
-        }, { timeoutMs, signal: request.signal, fetch: customFetch });
+        }, { timeoutMs, signal: request.signal });
 
         if (body.usageActive && body.user) {
             recordUsageEvent({ user: body.user, featureKey: 'model-registry', eventKey: 'model.test' });

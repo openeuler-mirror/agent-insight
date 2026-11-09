@@ -15,8 +15,9 @@
  */
 
 import { OpenAI } from 'openai';
-import { getOpenAICompatibleClientConfig, type ModelConnectionConfig } from '@/lib/shared/model-connection';
+import { getOpenAICompatibleClientConfig, resolveModelConnection, type ModelConnectionConfig } from '@/lib/shared/model-connection';
 import { ModelTestValidationError, type ModelTestErrorCode } from '@/lib/shared/model-connection-test';
+import { getModelFetch } from './model-fetch';
 
 export async function probeModelConnection(
   config: ModelConnectionConfig,
@@ -42,16 +43,20 @@ export async function probeModelConnection(
   try {
     await Promise.race([deadline, (async () => {
       if (controller.signal.aborted) throw controller.signal.reason;
+      const connection = resolveModelConnection(config);
+      if (config.provider === 'custom' && (!connection.baseUrl || !connection.model)) {
+        throw new ModelTestValidationError('Custom models require a Base URL and model name');
+      }
       const client = new OpenAI({
         ...getOpenAICompatibleClientConfig(config),
-        fetch: options.fetch,
+        fetch: getModelFetch(options.fetch),
         timeout: options.timeoutMs,
         maxRetries: 0,
       });
       const completion = await client.chat.completions.create({
-        model: config.model!,
-        messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 5,
+        model: connection.model || 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: 'Reply with OK.' }],
+        max_tokens: 128,
       }, { signal: controller.signal }).catch((error: unknown) => {
         if (error instanceof SyntaxError) throw new Error('Invalid model response', { cause: 'invalid_response' });
         throw error;
