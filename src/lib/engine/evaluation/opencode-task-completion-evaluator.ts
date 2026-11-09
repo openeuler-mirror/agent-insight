@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import type {
     AgentInsight,
     SendPromptPayload,
@@ -402,7 +403,7 @@ export async function evaluateTaskCompletionViaOpencode(
    if (hasEvaluatorExecutionPolicy()) {
      const { rootCauses, source } = await resolvedRootCauses;
      const config = await getActiveConfig(user);
-     if (!config) throw new Error('未配置评测模型');
+     if (!config) throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
      return runConfiguredEvaluationStage(() => evaluateTaskCompletionDirectAndRecord(input, config, rootCauses, source, user));
    }
    const [{ AgentInsight }, { runWithEphemeralOpencodeServer }] = await Promise.all([

@@ -19,7 +19,7 @@ import assert from "node:assert/strict"
 import * as os from "os"
 import * as fs from "fs"
 import * as path from "path"
-import { SpoolReader, SessionState } from "../scripts/trae-collector/src/uploader/spool"
+import { SpoolReader } from "../scripts/trae-collector/src/uploader/spool"
 import {
   traeAgentSessionStart,
   traeAgentPrompt,

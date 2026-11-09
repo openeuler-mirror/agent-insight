@@ -1,6 +1,8 @@
 ---
 title: "Trace HTTP ingestion"
 description: "Inputs, identity handling, and receipt semantics for OTLP and legacy JSON uploads."
+keywords: ["Agent Insight", "OTLP", "trace ingestion", "authentication"]
+changefreq: "monthly"
 ---
 
 Use the framework's client installation flow where possible. This reference supports exporter integration and troubleshooting. OTLP bodies and legacy upload JSON are different formats.
@@ -54,6 +56,12 @@ Identity behavior differs from OTLP:
 - Older clients can retain body `user` attribution, or use an explicitly configured `AGENT_INSIGHT_DEFAULT_INGEST_USER` shared account. Without any identity source, the response is `400`. An explicitly invalid Key does not silently fall back to the shared account.
 
 Successful responses include `success: true`, `upload_id`, `auto_evaluation`, and `background_analysis`. In-progress OpenCode snapshots also include `in_progress: true`. `auto_evaluation: false` does not mean upload failure. Initial record persistence failure returns `500`; the client must not advance its uploaded checkpoint. `background_analysis: true` does not prove that background analysis has finished.
+
+## Jiuwen duration units
+
+Jiuwen OTLP aggregation converts nanosecond boundaries to milliseconds before storing `Execution.latency`. Trace lists and detail headers format this value as milliseconds. Legacy Jiuwen Trace Bundles are converted from seconds only when interaction timestamps corroborate the unit; values already in milliseconds or lacking timing evidence remain unchanged. Spans of one millisecond or less remain unchanged because timestamp rounding makes the unit ambiguous. The supplied bundle and original Session are preserved.
+
+Back up the SQLite database before history correction. Run `node --import tsx scripts/repair_trace_latency.ts --framework jiuwenswarm --report /path/to/preview.jsonl` to preview, then use `--apply` with a different report path. The `0600` JSONL journal durably records original and corrected values as `planned` before each update and `applied` after commit, followed by a final `summary`. Partial failures retain the journal; compare the current database value with the last plan when checking commit status. Repeated runs do not multiply corrected values again. Without `--framework`, the command retains its OpenCode behavior. See the [Chinese procedure](../../../zh/how-to/observability/view-traces.md#jiuwen-历史耗时单位校正).
 
 ## Implementation
 

@@ -1,3 +1,10 @@
+---
+title: "SWE-bench 部署指南"
+description: "说明 SWE-bench 数据集、执行工作区及评测镜像的配置方法与部署验收要求。"
+keywords: ["Agent Insight", "SWE-bench", "基准评测", "部署验收"]
+changefreq: "monthly"
+---
+
 # SWE-bench 部署指南
 
 本指南与 [ZSoft 部署指南](./deploy-zsoft.md) 同级，说明 SWE-bench 的数据、执行工作区、镜像配置和验收。平台、执行客户端和 Evaluator 的安装、互访地址及共享镜像池见 [Benchmark 通用服务部署指南](./deploy-services.md)。

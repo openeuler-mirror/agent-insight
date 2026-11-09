@@ -87,7 +87,7 @@ function loadConfiguration() {
             });
         }
     }
-    catch (e) { }
+    catch { }
     return {
         apiKey: config['AGENT_INSIGHT_API_KEY'] || process.env.AGENT_INSIGHT_API_KEY,
         host: config['AGENT_INSIGHT_HOST'] || process.env.AGENT_INSIGHT_HOST || '127.0.0.1:3000'
@@ -195,7 +195,7 @@ async function syncSkills(targetAgent) {
                     localManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
                 }
             }
-            catch (e) { }
+            catch { }
             for (const skill of remoteSkills) {
                 const localVer = localManifest[skill.name]?.version || -1;
                 if (skill.version > localVer) {

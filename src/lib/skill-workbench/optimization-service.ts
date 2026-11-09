@@ -23,7 +23,7 @@ import {
   type SkillOptimizationStatus,
 } from './domain';
 
-export const OPTIMIZATION_SOURCE_KINDS = ['user', 'evaluation', 'experiment'] as const;
+export const OPTIMIZATION_SOURCE_KINDS = ['user', 'evaluation', 'experiment', 'diagnosis'] as const;
 export type OptimizationSourceKind = (typeof OPTIMIZATION_SOURCE_KINDS)[number];
 
 export class OptimizationConflictError extends Error {}
@@ -105,6 +105,9 @@ export async function beginSkillOptimizationRecord(input: {
       candidateVersionLabel: `v${input.baseVersion + 1} 候选`,
       sourceKind: input.sourceKind,
       sourceRefsJson: JSON.stringify(input.sourceRefs || []),
+      sourceExperimentId: input.sourceKind === 'diagnosis'
+        ? (input.sourceRefs as Array<{ type?: string; experimentId?: string }> | undefined)?.find(ref => ref.type === 'diagnosis')?.experimentId || null
+        : null,
       status: 'optimizing',
     },
   });

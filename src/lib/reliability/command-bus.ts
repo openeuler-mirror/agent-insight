@@ -236,10 +236,12 @@ async function applyCommandStatusRow(
       data: { status: 'EXPIRED', errorCode: 'COMMAND_EXPIRED', completedAt: new Date() },
     })
     if (expired.count) return { expired: true, action: command.action as CommandAction, payload: safeParse(command.payloadJson) }
+    if (input.status === 'RECEIVED') throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令已结束，不接受开始执行确认', 409)
     return { action: command.action as CommandAction, payload: safeParse(command.payloadJson) }
   }
   // 幂等：已到终态的指令不再被回执改写。
   if (TERMINAL.includes(command.status as CommandStatus)) {
+    if (input.status === 'RECEIVED') throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令已结束，不接受开始执行确认', 409)
     return {
       action: command.action as CommandAction,
       payload: safeParse(command.payloadJson),
@@ -282,10 +284,13 @@ async function applyCommandStatusRow(
 
   const allowed = input.status === 'RECEIVED' ? ['CREATED', 'SENT', 'RECEIVED']
     : ['CREATED', 'SENT', 'RECEIVED', 'RUNNING']
-  await tx.reliabilityCommand.updateMany({
+  const updated = await tx.reliabilityCommand.updateMany({
     where: { commandId: input.commandId, status: { in: allowed } },
     data,
   })
+  if (input.status === 'RECEIVED' && !updated.count) {
+    throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令状态已变化，不接受开始执行确认', 409)
+  }
   return {
     action: command.action as CommandAction,
     payload: safeParse(command.payloadJson),
@@ -302,7 +307,8 @@ function safeParse(json: string | null | undefined): Record<string, unknown> {
 }
 
 /** 长轮询取下一条待投递指令（IF-N07）。 */
-export async function claimNextCommand(clientId: string): Promise<CommandFrame | null> {
+export async function claimNextCommand(clientId: string, options: { signal?: AbortSignal } = {}): Promise<CommandFrame | null> {
+  if (options.signal?.aborted) return null
   const command = await prisma.reliabilityCommand.findFirst({
     where: {
       clientId,
@@ -311,8 +317,12 @@ export async function claimNextCommand(clientId: string): Promise<CommandFrame |
     },
     orderBy: { createdAt: 'asc' },
   })
-  if (!command) return null
-  await markSent(command.commandId, 'poll')
+  if (!command || options.signal?.aborted) return null
+  const claimed = await prisma.reliabilityCommand.updateMany({
+    where: { commandId: command.commandId, clientId, status: 'CREATED', expiresAt: { gt: new Date() } },
+    data: { status: 'SENT', sentAt: new Date(), channel: 'poll' },
+  })
+  if (!claimed.count || options.signal?.aborted) return null
   return {
     type: 'COMMAND',
     commandId: command.commandId,
@@ -324,5 +334,12 @@ export async function claimNextCommand(clientId: string): Promise<CommandFrame |
 }
 
 export async function getCommand(commandId: string) {
+  const command = await prisma.reliabilityCommand.findUnique({ where: { commandId } })
+  const cutoff = new Date(Date.now() - ackTimeoutMs())
+  if (command?.status !== 'SENT' || !command.sentAt || command.sentAt >= cutoff) return command
+  await prisma.reliabilityCommand.updateMany({
+    where: { commandId, status: 'SENT', sentAt: { lt: cutoff }, receivedAt: null },
+    data: { status: 'DELIVERY_FAILED', errorCode: 'ACK_TIMEOUT', errorMessage: '指令已发送但未在 ACK 窗口内收到 RECEIVED', completedAt: new Date() },
+  })
   return prisma.reliabilityCommand.findUnique({ where: { commandId } })
 }

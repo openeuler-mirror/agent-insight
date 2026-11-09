@@ -220,7 +220,9 @@ test('opening the current Trace from a nested Agent resets to the root and still
     const defaults = new Set(['root']);
     const navigate = variable<(id: string) => void>('navigateToAgentTrace', {
         useCallback: (callback: unknown) => callback,
-        rootSessionId: 'parent-task', tree: { id: 'virtual' }, nodeMap: new Map([['root', { id: 'root', sessionId: 'parent-task' }]]), defaultExpandedKeys: defaults,
+        rootSessionId: 'parent-task', tree: { id: 'virtual' }, nodeMap: new Map([
+            ['root', { id: 'root', sessionId: 'parent-task' }], ['child', { id: 'child', sessionId: 'child-task' }],
+        ]), defaultExpandedKeys: defaults,
         setSelectedKey: (key: string) => { selected = key; },
         setExpandedKeys: (keys: Set<string>) => { expanded = keys; },
         setActiveDetailTab: (value: string) => { tab = value; },
@@ -234,6 +236,20 @@ test('opening the current Trace from a nested Agent resets to the root and still
     assert.deepEqual(opened, ['parent-task']);
     navigate('child-task');
     assert.deepEqual(opened, ['parent-task', 'child-task']);
+});
+
+test('Jiuwen child Trace links use shared standalone navigation for both children', () => {
+    const opened: string[] = [];
+    const navigate = variable<(id: string) => void>('navigateToAgentTrace', {
+        useCallback: (callback: unknown) => callback,
+        rootSessionId: 'parent-task', tree: { id: 'root' },
+        nodeMap: new Map(['child-1', 'child-2'].map(id => [id, { id, sessionId: id, agentName: 'worker' }])),
+        defaultExpandedKeys: new Set(), setSelectedKey: () => {}, setExpandedKeys: () => {}, setActiveDetailTab: () => {},
+        agentKey: (id: string) => `a:${id}`, onSubagentNavigate: (id: string) => { opened.push(id); },
+    });
+    navigate('child-1');
+    navigate('child-2');
+    assert.deepEqual(opened, ['child-1', 'child-2']);
 });
 
 test('nested Workflow containers survive Tool filtering when their linked Agent contains a matching tool', () => {

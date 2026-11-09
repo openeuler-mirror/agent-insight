@@ -49,7 +49,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentService, /agentTimeoutSeconds = input\.agentTimeoutSeconds \?\? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS/);
   assert.match(experimentService, /timeoutMs:\s*agentTimeoutSeconds \* 1_000/);
   assert.match(experimentService, /retryLimit:\s*isTriggerExperiment \? 1 : 2/);
-  assert.match(experimentService, /getSkillExperimentConcurrencyPolicy\(input\.preset\)/);
+  assert.match(experimentService, /getSkillExperimentConcurrencyPolicy\(input\.preset, input\.executionConcurrency\)/);
   assert.match(experimentService, /evaluationConcurrency:\s*runtime\.evaluationConcurrency/);
   assert.match(experimentService, /triggerConcurrency:\s*runtime\.triggerConcurrency/);
   assert.match(experimentService, /executionSides:\s*input\.preset === 'skill-ab' \? \['a', 'b'\] : \['b'\]/);
@@ -63,7 +63,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(grayscaleRoute, /startEvalExperimentCases/);
   assert.match(grayscaleRoute, /evaluateRunsAsExperimentBatch/);
   assert.match(grayscaleRoute, /abPairConcurrency/);
-  assert.match(grayscaleRoute, /Promise\.all\(pair\.map\(executeItem\)\)/);
+  assert.match(grayscaleRoute, /runWithConcurrency\(batch, executionConcurrency, executeItem, taskSignal\)/);
   assert.match(grayscaleRoute, /timeoutSeconds: Math\.round\(\(config\.timeoutMs \|\| DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS \* 1000\) \/ 1000\)/);
   assert.match(grayscaleRoute, /run\.failureType = 'agent_error'/);
   assert.match(readFileSync('src/app/api/experiments/[id]/route.ts', 'utf8'), /typeof caseValues\?\.skill_triggered === 'boolean'/);
@@ -169,7 +169,7 @@ test('会话固定 Skill 并恢复工作版本，顶部资产控制右栏全部�
   const picker = readFileSync('src/components/skill-workbench/SkillManagementPicker.tsx', 'utf8');
   const publishService = readFileSync('src/lib/skill-workbench/publish-service.ts', 'utf8');
   assert.match(shell, /pickerPurpose === 'bind'[\s\S]*\/context/);
-  assert.match(shell, /openHistorySession[\s\S]*showSessionAsset\(session\)/);
+  assert.match(shell, /openHistorySession[\s\S]*showSessionAsset\(session, true\)/);
   assert.match(shell, /const viewingSessionAsset = Boolean/);
   assert.match(shell, /右栏使用.*不会改变当前会话/);
   assert.match(shell, /disabled=\{!selectedAsset\}/);
@@ -515,6 +515,9 @@ test('Skill 优化点击即提交当前诉求，保留空请求拦截、归并�
   assert.match(records, /行为验证未通过/);
   assert.match(records, /静态通过，待完整复测/);
   assert.match(records, /发布为 \{getOptimizationTargetVersion\(selected\)\}/);
-  assert.doesNotMatch(shell, /\/retest|optimizationRecordId=/);
+  assert.match(shell, /\/retest/);
+  assert.match(shell, /onRetest=\{retestDiagnosis\}/);
+  assert.match(records, /selected.sourceKind === 'diagnosis'[\s\S]*onRetest/);
+  assert.doesNotMatch(shell, /optimizationRecordId=/);
   assert.match(shell, /role="dialog"[\s\S]*确认发布/);
 });

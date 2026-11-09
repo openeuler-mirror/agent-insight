@@ -1,6 +1,8 @@
 ---
 title: "独立 Benchmark 评测协议"
 description: "平台与独立 Evaluator 的派发、幂等、取消及结果归一化边界。"
+keywords: ["Agent Insight", "Benchmark", "评测协议", "任务调度"]
+changefreq: "monthly"
 ---
 
 独立 Evaluator 服务运行官方 Benchmark 评判。它与平台内置 LLM Judge 的[输出契约](./evaluator-output.md)是不同层次；部署步骤见 [Benchmark 服务安装](../../how-to/evaluation/benchmarks/deploy-services.md)。本页供接入开发者查字段，不建议普通用户手工派发正式任务。

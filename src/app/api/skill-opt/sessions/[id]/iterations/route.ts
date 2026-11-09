@@ -16,6 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prismaRaw } from '@/lib/storage/prisma';
+import { canAccessDiagnosisSession } from '@/lib/diagnosis/http';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,6 +43,7 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
+    if (!await canAccessDiagnosisSession(req, id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const body = await req.json();
     const { summary, files, resolvedIssueIds, appliedPlanItemIds } = body;
 

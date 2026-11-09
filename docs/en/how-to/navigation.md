@@ -1,11 +1,14 @@
 ---
 title: "How-to guides"
-description: "English coverage for how-to."
+description: "Organizes available English procedures for platform maintenance and Agent integration, with links to Chinese guides."
+keywords: ["Agent Insight", "how-to guides", "platform maintenance", "Agent integration"]
+changefreq: "monthly"
 ---
 
 Operational procedures currently available in English:
 
 - [Deploy the server with Docker](./platform/deploy-docker.md)
+- [Deploy the server on OpenShift](./platform/deploy-openshift.md), including Developer Sandbox builds
 - [Upgrade and rollback](./platform/upgrade-and-rollback.md)
 - [Backup and restore](./platform/backup-and-restore.md)
 

@@ -1,3 +1,10 @@
+---
+title: "ZSoft 部署指南"
+description: "说明 ZSoft 数据集、原生任务目录和评测资产的部署配置与验收要求。"
+keywords: ["Agent Insight", "ZSoft", "基准评测", "评测资产"]
+changefreq: "monthly"
+---
+
 # ZSoft 部署指南
 
 本指南与 [SWE-bench 部署指南](./deploy-swe-bench.md) 同级，说明 ZSoft 的数据、执行任务目录、评测资产和验收。平台、执行客户端与 Evaluator 的公共安装见 [Benchmark 通用服务部署指南](./deploy-services.md)。资产构建与发布由维护者按 [ZSoft 评测资产发布指南](./release-zsoft-assets.md) 完成。

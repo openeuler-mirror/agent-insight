@@ -34,6 +34,7 @@ changefreq: monthly
 - [qoder-cn-acceptance-validation.md](https://gitcode.com/openeuler/agent-insight/blob/master/design/observability/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](https://gitcode.com/openeuler/agent-insight/blob/master/design/observability/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [release-docker-image.md](../../how-to/platform/release-docker-image.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。
+- [deploy-openshift.md](../../how-to/platform/deploy-openshift.md)：UBI9/OpenShift 部署、Developer Sandbox 构建、运行与业务验收。
 - 仓根 [`agent_ras/`](https://gitcode.com/openeuler/agent-insight/tree/master/agent_ras)：环内可靠性同进程真源（OpenCode L3 inproc）；统一安装入口见 [`scripts/install-ras.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-ras.js)。
 - 仓根 [`agent_fault_injection/`](https://gitcode.com/openeuler/agent-insight/tree/master/agent_fault_injection)：故障注入引擎（注入+采集）；文档 [`docs/zh/explanation/reliability/agent-fault-injection/`](../reliability/agent-fault-injection/navigation.md)；UI `/agent-ras/fault-injection/tasks`（目录 `/faults`），BFF `/api/fault-injection`。
 - Agent RAS 文档统一入口：[`docs/zh/explanation/reliability/agent-ras/`](../reliability/agent-ras/navigation.md)（[designs](https://gitcode.com/openeuler/agent-insight/tree/master/design/reliability/agent-ras) / [guides](../../how-to/reliability/agent-ras/)）。
@@ -55,6 +56,7 @@ changefreq: monthly
 | 验收 Qoder CN Trace 采集器 | [qoder-cn-acceptance-validation.md](https://gitcode.com/openeuler/agent-insight/blob/master/design/observability/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md) |
 | 验证 Qoder CN 跨机器上报 | [qoder-cn-cross-machine-validation.md](https://gitcode.com/openeuler/agent-insight/blob/master/design/observability/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md) |
 | 发布 Docker Hub 镜像 / 导出离线镜像包 | [release-docker-image.md](../../how-to/platform/release-docker-image.md) |
+| 部署 OpenShift / 使用 Developer Sandbox 构建 | [deploy-openshift.md](../../how-to/platform/deploy-openshift.md) |
 
 ## Glossary
 - **Skill**：一个带版本、自包含的 Agent 能力（即一个包含 `SKILL.md` 的文件夹）。在这里是一等实体——可被生成、评测、A/B 测试和优化。对应数据库模型 `Skill` + `SkillVersion`。

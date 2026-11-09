@@ -1,5 +1,8 @@
 ---
 title: "入门教程"
+description: "汇集首次接入、运行示例和首次评测的分步教程，帮助用户完成平台入门。"
+keywords: ["Agent Insight", "入门教程", "智能体接入", "首次评测"]
+changefreq: "monthly"
 ---
 
 按步骤完成一次完整任务。
@@ -21,6 +24,8 @@ title: "入门教程"
 
 - [跑通第一次评测](./evaluation/01-first-experiment.md)
 - 接入新的 Benchmark：按[自动接入 Skill 发起说明](../how-to/evaluation/benchmarks/onboard-custom-benchmark.md#21-使用自动接入-skill)提供 Agent Insight 项目地址和 Benchmark 来源；Skill 会核对包内协议快照与目标版本，再查询实际能力；验收依次验证接口、真实分段与完整端到端。
+- [从评测证据生成诊断与 Skill 优化计划](../how-to/diagnosis/agent-debug/diagnosis.md)
+
 
 ## 优化
 

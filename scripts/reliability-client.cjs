@@ -165,7 +165,7 @@ function controlUrls(cfg) {
 
 // ---------------------------------------------------------------- http
 
-async function api(cfg, method, apiPath, body, extraHeaders = {}) {
+async function api(cfg, method, apiPath, body, extraHeaders = {}, options = {}) {
   const res = await fetch(`${cfg.insightBaseUrl}${apiPath}`, {
     method,
     headers: {
@@ -175,6 +175,7 @@ async function api(cfg, method, apiPath, body, extraHeaders = {}) {
       ...extraHeaders,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: options.signal,
   })
   if (res.status === 204) return null
   const text = await res.text()
@@ -876,7 +877,7 @@ function buildCapabilities(cfg, opts) {
         ready: Boolean(runtime.ready && normalizeModelIds(info?.agents).length),
         unavailableReason: !runtime.ready ? runtime.reason || '运行时尚未就绪'
           : !normalizeModelIds(info?.agents).length ? sanitizeAgentDiagnostic(info?.note) || `${id} Agent 列表为空，请检查探测结果` : undefined,
-        ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}),
+        ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 5 } : {}),
       },
       actions: [...WHITELIST],
     }
@@ -893,7 +894,7 @@ function buildCapabilities(cfg, opts) {
           runExperimentCase: { version: 2, returnsTraceId: id !== 'opencode' && runtime.canResolveTraceId,
             ready: id !== 'opencode' && runtime.ready,
             ...(id === 'opencode' ? { unavailableReason: runtime.reason || '尚未取得权威 Agent 列表，请检查客户端探测结果' } : {}),
-            ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 4 } : {}) },
+            ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 5 } : {}) },
           actions: [...WHITELIST],
         })
       }
@@ -1187,7 +1188,7 @@ function experimentCancellationFile(commandId) {
 
 function tryAcquireExecutionSlot(kind, id) {
   if (fiBusy > 0 || reliabilitySlotHeld) return false
-  if (id && ['benchmark', 'ordinary'].includes(kind)) {
+  if (id && ['benchmark', 'ordinary', 'skill'].includes(kind)) {
     if (parallelExecutionSlots.has(id)) return false
     parallelExecutionSlots.add(id)
   } else {
@@ -1198,7 +1199,7 @@ function tryAcquireExecutionSlot(kind, id) {
 }
 
 function releaseExecutionSlot(kind, id) {
-  if (id && ['benchmark', 'ordinary'].includes(kind)) parallelExecutionSlots.delete(id)
+  if (id && ['benchmark', 'ordinary', 'skill'].includes(kind)) parallelExecutionSlots.delete(id)
   else reliabilitySlotHeld = false
 }
 
@@ -2559,8 +2560,8 @@ async function flushSpool(cfg) {
         entry.body,
       )
     } catch (err) {
-      // 410/404 表示指令已过期或不存在，丢弃即可，不必无限重试。
-      if (err.status !== 404 && err.status !== 410) remaining.push(entry)
+      // Rejected or expired receipts cannot become valid by replaying them.
+      if (![404, 409, 410].includes(err.status)) remaining.push(entry)
     }
   }
   writeSpool(remaining)
@@ -2690,9 +2691,12 @@ async function sendCommandStatus(cfg, commandId, status, extra = {}, { spool = t
     ...extra,
   }
   try {
-    await api(cfg, 'POST', `/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`, body)
+    const response = await api(cfg, 'POST', `/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`, body, {}, {
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (status === 'RECEIVED' && response?.ok !== true) throw new Error('command receipt acceptance was not confirmed')
   } catch (err) {
-    if (spool && err.status !== 404 && err.status !== 410) spoolReceipt({ commandId, body })
+    if (spool && ![404, 409, 410].includes(err.status)) spoolReceipt({ commandId, body })
     throw err
   }
 }
@@ -2712,7 +2716,7 @@ async function handleCommand(cfg, frame, sendVia) {
 
   const sendStatus = async (status, extra) => {
     try {
-      if (frame.action === 'PREPARE_EXECUTION_ENVIRONMENT' && ['SUCCEEDED', 'FAILED'].includes(status)) await sendCommandStatus(cfg, frame.commandId, status, extra, { spool: false })
+      if (status === 'RECEIVED' || frame.action === 'PREPARE_EXECUTION_ENVIRONMENT' && ['SUCCEEDED', 'FAILED'].includes(status)) await sendCommandStatus(cfg, frame.commandId, status, extra, { spool: false })
       else await sendVia(frame.commandId, status, extra)
       return true
     } catch (err) {
@@ -2723,7 +2727,11 @@ async function handleCommand(cfg, frame, sendVia) {
 
   // 先 ACK：服务端据此把指令从 SENT 推进到 RECEIVED。
   try {
-    await sendStatus('RECEIVED', {})
+    // WSS writes cannot confirm receipt acceptance; obtain it before starting work.
+    if (!await sendStatus('RECEIVED', {})) {
+      handledCommands.delete(frame.commandId)
+      return
+    }
     await executeAction(cfg, frame, sendStatus)
   } finally { executingCommands.delete(frame.commandId) }
 }
@@ -2821,6 +2829,7 @@ async function controlLoop(cfg) {
  * 因此这里的节奏只由 TTL 决定，与重连快慢无关。
  */
 async function pollLoop(cfg) {
+  let lastFailure = ''
   for (;;) {
     if (wssConnected) {
       // WSS 已接管，不必重复取指令，短睡后再看。
@@ -2829,20 +2838,32 @@ async function pollLoop(cfg) {
     }
     try {
       await pollOnce(cfg)
-    } catch {
+      lastFailure = ''
+    } catch (error) {
+      const code = String(error?.code || error?.cause?.code || error?.name || 'UNKNOWN').replace(/[^A-Za-z0-9_]/g, '').slice(0, 80)
+      if (code !== lastFailure) logErr(`command polling failed (${code}); retrying`)
+      lastFailure = code
       // 服务端不可达时别空转打满 CPU，稍等再试。
       await new Promise((r) => setTimeout(r, POLL_RETRY_MS))
     }
   }
 }
 
+function pollWaitSeconds(env = process.env) {
+  const value = Number(env.AGENT_INSIGHT_RAS_POLL_WAIT_SEC)
+  return Number.isInteger(value) && value >= 1 && value <= 30 ? value : 5
+}
+
 async function pollOnce(cfg) {
-  const frame = await api(cfg, 'GET', '/api/reliability/client/v1/commands/next?waitSeconds=25')
+  const waitSeconds = pollWaitSeconds()
+  const frame = await api(cfg, 'GET', `/api/reliability/client/v1/commands/next?waitSeconds=${waitSeconds}`, undefined, {}, {
+    signal: AbortSignal.timeout((waitSeconds + 10) * 1000),
+  })
   if (!frame) return
   const handling = handleCommand(cfg, frame, (commandId, status, extra) =>
     sendCommandStatus(cfg, commandId, status, extra),
   )
-  if (frame.action === 'RUN_EXPERIMENT_CASE' && !frame.payload?.skillExecution) {
+  if (frame.action === 'RUN_EXPERIMENT_CASE') {
     void handling.catch((error) => logErr('command failed', error.message))
   } else await handling
 }
@@ -2930,6 +2951,8 @@ process.on('SIGTERM', () => void shutdown())
 process.on('SIGINT', () => void shutdown())
 
 module.exports = {
+  pollOnce,
+  pollWaitSeconds,
   clearEnvironmentProbeCache,
   loadConfig,
   executeAction,

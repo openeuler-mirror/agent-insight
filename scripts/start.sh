@@ -257,6 +257,7 @@ echo "Checking port $PLATFORM_PORT..."
 if [[ "${DATABASE_URL:-}" == file:* ]]; then
   echo "SQLite database target: ${DATABASE_URL#file:}"
   check_sqlite_database_target
+  node scripts/migrations/check-diagnosis-schema.cjs || exit 1
 else
   echo "Using custom database configuration."
 fi

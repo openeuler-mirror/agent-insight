@@ -72,6 +72,8 @@ Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；随 Pi 内置的只�
 
 OpenCode v2 采集器关闭时会停止接收新事件，等待正在进行的写入，并继续排空此前已接收的事件队列，再结束 JSONL 输出流。等待底层写回调期间入队的尾部事件也会写入。
 
+OpenCode 的 Trace 任务输入取自 `chat.message` 钩子捕获的用户原始文本。对于 `/aet-pr` 等会展开为长路由提示的斜杠命令，列表和下游评测展示用户实际输入，而不是展开后的提示；旧版缺少该钩子数据时才回退到消息文本 part。
+
 OpenCode 采集器保留原始工具参数。平台在采集入库、Trace 展示和根 Agent 的 Skill 步骤核验中同时识别 v1 的 `name` 与 v2 的 `id` 参数；`id` 仅在 `skill` / `load_skill` 调用中作为名称回退，不读取普通工具的 ID、tool call ID 或输出文本来推断 Skill。Trace 的结构预览也保留该参数，保证懒加载前后结果一致。
 
 入库关联按 Agent 作用域提取，子 Agent 的 Skill 不向父节点继承。历史记录的详情和步骤核验直接从交互读取，不要求先回填 Execution 的 Skill 字段，也不会自动改写既有核验结果。
@@ -250,6 +252,8 @@ WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，不提供 Hook/插件扩展
 详见 [WorkBuddy Trace Collector 接入指南](../../how-to/observability/workbuddy-trace-collector.md)。
 
 ## OpenCode 有效执行时延
+
+持久化 `Execution.latency` 的单位为毫秒。Jiuwen OTLP 聚合将纳秒跨度除以 `1_000_000`；旧秒值使用 `jiuwen-latency.ts` 对照原始交互时间识别，Trace Bundle 导入与历史修复共用该规则。校正只换单位，保留原始总跨度及等待时间，不改为 OpenCode 的轮次有效耗时口径；缺少可靠时间证据的值保持不变。操作步骤见[Jiuwen 历史耗时单位校正](../../how-to/observability/view-traces.md#jiuwen-历史耗时单位校正)。
 
 `execution-timing.ts` 从用户轮次边界和模型、工具执行区间计算 `activeDurationMs`，合并重叠区间，排除轮次间用户空闲；`elapsedDurationMs` 表示原始时间跨度。`opencode-derived-metrics.ts` 将有效耗时写入 `Execution.latency`，主/子 Trace 使用各自 Session ID 选择边界。调用树保留原始起止时间和 `durationMs` 供真实时间轴使用，前端耗时、慢节点筛选和耗时比例使用有效耗时。
 
