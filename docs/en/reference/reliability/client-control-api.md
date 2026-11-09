@@ -31,6 +31,16 @@ Lists and tokens return `401` when no user is resolved. The online window defaul
 
 ## Device registration, heartbeat, and capabilities
 
+The Linux installer prefers systemd. When systemd or the user manager is unavailable on a new installation,
+it deploys the runtime, registers the device, and starts a detached background process with
+`supervisor: background`. This mode leaves the terminal available but does not provide automatic restart.
+An existing system service that cannot be managed still blocks credential rotation to avoid leaving a stale
+client running. Use `node <AGENT_INSIGHT_HOME>/client/runtime/client-process.cjs start|stop|status`
+to manage the background client; logs are in `<AGENT_INSIGHT_HOME>/client/client.log`.
+`--no-start` completes registration without starting the client. For a managed container deployment,
+stop the background instance and run `reliability-client.cjs` as the container's foreground process,
+persisting the runtime root. Registration alone does not establish Agent experiment-execution support.
+
 Device paths below use the prefix `/api/reliability/client/v1`.
 
 | Method and path | JSON input | Successful response |
