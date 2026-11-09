@@ -8,7 +8,7 @@ import { command, poll, runtimeEnv, writePrivate } from './runtime.mjs';
 
 const sha = data => createHash('sha256').update(data).digest('hex');
 export async function prepareClients(ctx) {
-  const { project, root, api, account, baseUrl, page, key, secrets, stage } = ctx;
+  const {project, root, api, account, baseUrl, page, secrets, stage} = ctx;
   ctx.children ||= [];
   for (const [kind, version, executable] of [
     ['ordinary', '2.1.4', path.join(project, 'exclude/core-e2e/runtime/v2/node_modules/.bin/opencode')],

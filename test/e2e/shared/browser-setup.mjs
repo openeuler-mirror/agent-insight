@@ -1,5 +1,4 @@
 import {contextConfig} from './model-config.mjs';
-import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { writePrivate, fetchStatusResponse } from './runtime.mjs';
