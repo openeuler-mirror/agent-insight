@@ -46,6 +46,7 @@ const BUNDLES: Record<string, string[]> = {
   // 缺了会静默跳过运行时写入（页面显示已写入，RAS 却读不到新值）。
   client: [
     'scripts/install-ras-client.js',
+    'scripts/client-process.cjs',
     'scripts/reliability-client.cjs',
     'scripts/xgovernor.cjs',
     'scripts/ordinary-experiment-state.cjs',

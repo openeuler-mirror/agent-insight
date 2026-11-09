@@ -18,7 +18,7 @@
 /**
  * Agent Insight 常驻客户端服务。
  *
- * 由 systemd / launchd 托管，独立于 OpenCode 等 Agent 平台启停。
+ * 由 systemd / launchd 托管或作为独立后台进程运行，独立于 Agent 平台启停。
  * 职责：
  *   - 主动建立出站 WSS 控制连接（断线退避重连；失败降级 HTTPS 长轮询）
  *   - 能力发现（IP / OS / 平台 / 模型 / 组件版本）并上报
@@ -2680,6 +2680,7 @@ async function main() {
   initialCapabilityRefresh.then(() => fiLoop(cfg))
   controlLoop(cfg)
   pollLoop(cfg)
+  if (process.send) process.send({ type: 'agent-insight-client-ready' })
 }
 
 async function sendCommandStatus(cfg, commandId, status, extra = {}, { spool = true } = {}) {

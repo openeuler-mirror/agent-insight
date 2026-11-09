@@ -1202,7 +1202,7 @@ test('systemd fills missing user bus variables only for the current UID and pres
   ]) assert.deepEqual(systemdEnvironment('user', { env, uid: 1001, statSync: inspect }), env)
 })
 
-test('missing systemd user manager remains a pre-registration failure with actionable guidance', () => {
+test('systemd preflight reports an unavailable user manager so installation can choose background mode', () => {
   const result = installer.preflightSystemd?.(
     { scope: 'user', uid: 1001, unitPath: '/fixture/user.service', legacySystemUnit: false },
     () => ({ status: 1, stderr: 'Failed to connect to bus: No medium found' }),
