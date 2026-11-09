@@ -1281,6 +1281,7 @@ function generateBashScript(
         'echo "🖥️  Registering resident client..."',
         'if ! install_agent_insight_client "$FINAL_HOST" "$FINAL_KEY"; then',
         '    if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ]; then echo "❌ MCTS 环境已配置，但客户端注册或启动失败，请处理上方错误后重新执行本命令"; exit 1; fi',
+        '    if [ -f "$AGENT_INSIGHT_HOME/client/jiuwen-enterprise.json" ] || [ -n "${AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG:-}" ]; then echo "❌ 企业实验客户端安装失败，请修复上方错误后重试；不会回退个人版"; exit 1; fi',
         '    echo "⚠️  常驻客户端未注册。Trace 采集不受影响，但「客户端配置」页看不到本机。"',
         '    if [ -f "$AGENT_INSIGHT_HOME/client/config.json" ]; then',
         '        echo "    注意：本机此前已绑定其他账号，该绑定仍然有效 —— 此时 Trace 归新账号、"',

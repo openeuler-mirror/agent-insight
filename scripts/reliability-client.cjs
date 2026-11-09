@@ -963,12 +963,14 @@ function buildCapabilities(cfg, opts) {
     })
   }
   const jiuwenRuntime = runtimeFor('jiuwenswarm')
-  if (jiuwenRuntime.ready) {
+  if (jiuwenRuntime.ready || jiuwenRuntime.enterprise) {
     const existing = platforms.find(platform => platform.id === 'jiuwenswarm')
     const capability = {
-      agents: ['main_agent'], models: jiuwenRuntime.models || [],
-      runExperimentCase: { version: 2, returnsTraceId: true, ready: true },
-      actions: [...WHITELIST],
+      ...(jiuwenRuntime.enterprise ? { version: 'enterprise-ws-v1', agentCatalog: jiuwenRuntime.agentCatalog || [], runBenchmarkCase: { version: 1, returnsTraceId: false } } : {}),
+      agents: jiuwenRuntime.enterprise ? jiuwenRuntime.agents || [] : ['main_agent'], models: jiuwenRuntime.models || [],
+      runExperimentCase: { version: 2, returnsTraceId: true, ready: jiuwenRuntime.ready,
+        ...(!jiuwenRuntime.ready ? { unavailableReason: jiuwenRuntime.reason } : {}) },
+      actions: jiuwenRuntime.enterprise ? ['RUN_EXPERIMENT_CASE'] : [...WHITELIST],
     }
     if (existing) Object.assign(existing, capability)
     else platforms.push({ id: 'jiuwenswarm', ...capability })
@@ -2541,7 +2543,8 @@ async function refreshCapabilityReports(cfg, { force = false } = {}) {
   if (!force && fingerprint === lastCapabilityFingerprint) return false
   if (capabilityRefreshInFlight) return capabilityRefreshInFlight
   capabilityRefreshInFlight = (async () => {
-    const [fi] = await Promise.all([probeFaultInjectionIsolated(cfg), refreshPiModelCatalog()])
+    const [fi] = await Promise.all([probeFaultInjectionIsolated(cfg), refreshPiModelCatalog(),
+      require('./jiuwen-enterprise-ws.cjs').enterpriseWs.refresh().catch(error => logErr('enterprise discovery failed', error.message))])
     cacheSuccessfulProbe(fi)
     const capabilities = buildCapabilities(cfg)
     syncBenchmarkExecutorCapabilities(benchmarkExecutor, capabilities)
@@ -3096,6 +3099,7 @@ module.exports = {
   inspectXiaooRunEvent,
   createPiEventInspector,
   probeExperimentRuntime,
+  refreshJiuwenRuntime: () => require('./jiuwen-enterprise-ws.cjs').enterpriseWs.refresh(),
   refreshPiModelCatalog,
   PI_MODEL_PROBE_TIMEOUT_MS,
   sanitizeAgentDiagnostic,

@@ -57,3 +57,19 @@ Implementation: [preparation logic](https://gitcode.com/openeuler/agent-insight/
 The engine anchors completion to the current root user message. Metadata updates to that same message ID, including summary or diff updates arriving after idle, preserve completion state; a different user message still invalidates the old completion candidate. Completion still requires a persisted final assistant reply and finished tools. Partial output cannot pass, and cancellation and model errors retain priority.
 
 [中文权威版本](../../../zh/reference/evaluation/execution-environment.md)
+
+### JiuwenSwarm Enterprise: local credentials and Agent selection
+
+Before running the installation command, create `$AGENT_INSIGHT_HOME/client/jiuwen-enterprise.json` on the client host (default `~/.agent-insight/client/jiuwen-enterprise.json`):
+
+```json
+{"baseUrl":"https://jiuwen.example.com","username":"experiment-user","password":"replace-with-your-password"}
+```
+
+Use an editor, `umask 077`, and file mode `600` on Unix; keep the file in a persistent user volume. Do not place passwords in URLs or command arguments. Optional `AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG` selects another local file; both installer and resident service must see it. HTTPS is required except for loopback testing. The file belongs in the actual AgentServer client environment, not the Agent Insight server.
+
+Configure enterprise Agents/models and grant the account access, then run the current Agent Insight account's curl installation command with JiuwenSwarm selected. Installation logs in and discovers authorized Agents and their own model catalogs. Restart AgentServer to load a newly installed Trace extension, and confirm that the resident client is online. In an ordinary experiment choose the Agent, client, model, dataset and evaluator, complete the environment check, then inspect the Case Trace and score. Agent labels include instance/group; stable identities distinguish duplicate names. No manual bot/user/group IDs or Gateway URL are needed, and browser selection does not control dispatch.
+
+The client logs in through `/idp/v1/auth/token`, reads `/api/v1/user-console/agent-contexts`, and authenticates to the manager's `/ws` proxy with the instance cookie. Dispatch retains #588 WebSocket `session.create` / `chat.send`; no HTTP/SSE task adapter is used. Tokens stay in client memory, refresh before expiry, and are reacquired after restart. Permissions and models are checked again before each execution. Authentication, permission, network and empty-model errors stop execution without choosing another Agent. Native session IDs correlate uploaded Traces. Credentials are never uploaded to Agent Insight.
+
+Ordinary experiments only: this does not add Skill snapshot isolation, Benchmark, FI, or interactive SSO/MFA support. Install private CAs as trusted certificates; TLS verification is never disabled. A background process works without systemd; container restart still requires the deployment lifecycle to start the client again.

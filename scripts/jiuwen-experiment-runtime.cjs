@@ -18,6 +18,7 @@
 
 const { randomBytes } = require('node:crypto')
 const { spawnSync } = require('node:child_process')
+const { enterpriseWs, authorizedSocket } = require('./jiuwen-enterprise-ws.cjs')
 
 function endpoint() {
   const url = new URL(process.env.AGENT_INSIGHT_JIUWEN_WS_URL || 'ws://127.0.0.1:19000/ws')
@@ -28,6 +29,7 @@ function endpoint() {
 }
 
 function probe() {
+  if (enterpriseWs.configured()) return enterpriseWs.probe()
   let url
   try { url = endpoint() } catch (error) { return { ready: false, reason: error.message } }
   const script = 'const w=new WebSocket(process.argv[1]);const t=setTimeout(()=>process.exit(1),3500);w.onopen=()=>w.send(JSON.stringify({type:"req",id:"catalog",method:"models.list",params:{}}));w.onmessage=e=>{let x=JSON.parse(String(e.data));if(x.id!=="catalog")return;if(!x.ok)process.exit(2);clearTimeout(t);const names=(x.payload?.models||[]).map(m=>m.model_name).filter(Boolean);process.stdout.write(JSON.stringify({models:names.filter(n=>names.indexOf(n)===names.lastIndexOf(n)),activeModel:x.payload?.active_model||""}),()=>process.exit(0))};w.onerror=()=>process.exit(1)'
@@ -35,14 +37,17 @@ function probe() {
   if (result.status !== 0) return { ready: false, canResolveTraceId: false, reason: `JiuwenSwarm Gateway 或模型目录不可用：${url.origin}`, models: [] }
   try {
     const catalog = JSON.parse(result.stdout)
+    if (!catalog.models.length) return { ready: false, canResolveTraceId: false, reason: 'JiuwenSwarm 没有可用模型，请配置模型或企业账号', models: [] }
     return { ready: true, canResolveTraceId: true, models: [...new Set(catalog.models)], activeModel: catalog.activeModel }
   } catch { return { ready: false, canResolveTraceId: false, reason: 'JiuwenSwarm 模型目录响应无效', models: [] } }
 }
 
 async function run(input) {
-  if (input.agent !== 'main_agent') throw Object.assign(new Error('当前 JiuwenSwarm 仅支持 main_agent'), { code: 'AGENT_RUNTIME_UNAVAILABLE' })
-  const url = endpoint()
-  const ws = new WebSocket(url)
+  const enterprise = enterpriseWs.configured()
+  const destination = enterprise ? await enterpriseWs.resolve(input.agent) : null
+  input.signal?.throwIfAborted()
+  if (!enterprise && input.agent !== 'main_agent') throw Object.assign(new Error('当前 JiuwenSwarm 仅支持 main_agent'), { code: 'AGENT_RUNTIME_UNAVAILABLE' })
+  const ws = destination ? authorizedSocket(destination) : new WebSocket(endpoint())
   const token = `agent-insight-${randomBytes(16).toString('hex')}`
   let sessionId = ''
   let settled = false
@@ -59,14 +64,14 @@ async function run(input) {
     const timer = setTimeout(() => finish(resolve, reject, Object.assign(new Error('JiuwenSwarm 执行超时'), { code: 'AGENT_TIMEOUT' })), Math.max(1, Number(input.timeoutSeconds) || 600) * 1000)
     cleanup = () => { clearTimeout(timer); input.signal?.removeEventListener('abort', abort) }
     const abort = () => {
-      if (sessionId && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'req', id: `${token}-interrupt`, method: 'chat.interrupt', params: { session_id: sessionId } }))
+      if (sessionId && ws.readyState === 1) ws.send(JSON.stringify({ type: 'req', id: `${token}-interrupt`, method: 'chat.interrupt', params: { session_id: sessionId } }))
       finish(resolve, reject, Object.assign(new Error('JiuwenSwarm 实验已取消'), { code: 'EXECUTION_CANCELLED' }))
     }
     const send = (id, method, params) => ws.send(JSON.stringify({ type: 'req', id, method, params }))
     input.signal?.addEventListener('abort', abort, { once: true })
     if (input.signal?.aborted) { abort(); cleanup(); return }
     ws.addEventListener('open', () => {
-      if (input.model) send(`${token}-models`, 'models.list', {})
+      if (input.model || enterprise) send(`${token}-models`, 'models.list', {})
       else send(`${token}-create`, 'session.create', { create_token: token, mode: 'agent', persist_session: false, title: input.correlation?.caseRunId || 'Agent Insight experiment' })
     })
     ws.addEventListener('message', (event) => {
@@ -75,7 +80,7 @@ async function run(input) {
       try { data = JSON.parse(String(event.data)) } catch { return }
       if (data.type === 'res' && data.id === `${token}-models`) {
         const names = data.payload?.models?.map(item => item.model_name).filter(Boolean) || []
-        if (!data.ok || !names.includes(input.model) || names.filter(name => name === input.model).length !== 1) {
+        if (!data.ok || !names.length || (input.model && (!names.includes(input.model) || names.filter(name => name === input.model).length !== 1))) {
           finish(resolve, reject, Object.assign(new Error('所选 JiuwenSwarm 模型已不可用，请刷新模型列表'), { code: 'MODEL_UNAVAILABLE' }))
           return
         }

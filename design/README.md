@@ -114,3 +114,5 @@
 2. 默认在子目录内放 `phase1-requirements-analysis.md` / `phase2-requirements-design.md` / `phase3-development-plan.md`。
 3. issue 或维护者明确要求单文档时，改用 `issue-<number>-<slug>.md`，不再创建三阶段目录。
 4. **回到本清单追加一行**,填齐上表各列。
+
+| JiuwenSwarm 企业版 WebSocket 实验 | [设计](evaluation/jiuwen-enterprise-websocket/phase2-design.md) / [计划](evaluation/jiuwen-enterprise-websocket/phase3-plan.md) | 本地登录、授权 Agent 发现与选择，沿用 #588 WS 下发 | Feature | 2026-11-10 | 开发中 | — |

@@ -30,6 +30,7 @@ const clientFiles = [
   'scripts/client-process.cjs',
   'scripts/reliability-client.cjs',
   'scripts/jiuwen-experiment-runtime.cjs',
+  'scripts/jiuwen-enterprise-ws.cjs',
   'scripts/xgovernor.cjs',
   'scripts/ordinary-experiment-state.cjs',
   'scripts/skill-experiment-workspace.cjs',

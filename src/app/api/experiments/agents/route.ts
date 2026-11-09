@@ -209,6 +209,8 @@ export async function GET(req: Request) {
       .slice(0, 50)
       .map((item) => ({
         name: item.name,
+        ...(item.targets.some(target => target.supportsGenericTrace && target.agentLabel !== item.name)
+          ? { label: item.targets.find(target => target.supportsGenericTrace)?.agentLabel } : {}),
         traces: item.traces,
         frameworks: Array.from(item.frameworks).sort(),
         executable: item.targets.some(target => target.supportsGenericTrace || target.supportsFaultInjection || target.supportsBenchmark || target.preparableBenchmarkKeys.length > 0),

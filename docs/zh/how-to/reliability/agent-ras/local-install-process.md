@@ -446,3 +446,5 @@ test -f ~/.config/opencode/plugins/agent-insight-ras.js && echo opencode_plugin_
 | [`scripts/install-ras.js`](https://gitcode.com/openeuler/agent-insight/blob/master/scripts/install-ras.js) | 本机 RAS 安装器 |
 | [`agent_ras/platform_adapter/opencode/INSTALL.md`](https://gitcode.com/openeuler/agent-insight/blob/master/agent_ras/platform_adapter/opencode/INSTALL.md) | OpenCode 适配安装摘要 |
 | [01-getting-started.md](../../../tutorial/reliability/agent-ras/01-getting-started.md) | 按平台最短路径与配置项 |
+
+企业版 JiuwenSwarm 支持本地账号文件、授权 Agent 发现与选择，仍通过 WebSocket 下发。配置与完整流程见[企业版安装与实验](../../evaluation/experiments.md#jiuwenswarm-企业版本地凭据与-agent-选择)。

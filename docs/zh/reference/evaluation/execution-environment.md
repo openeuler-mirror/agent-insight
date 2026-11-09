@@ -26,9 +26,9 @@ changefreq: "monthly"
 
 向导第 1 步和所有“生成 Trace”的第 2 步每 10 秒、以及窗口重新聚焦时刷新执行目标，包括普通和 Skill 实验。临时能力探测恢复后，页面可自动更新可用目标；环境检查及准备期间仍暂停刷新，继续保留原目标复核。
 
-JiuwenSwarm 客户端通过 Gateway WebSocket `/ws` 的 `models.list` 获取已配置模型名称；目录读取成功后报告 `jiuwenswarm/main_agent` 的普通 `RUN_EXPERIMENT_CASE` 能力及模型候选。地址默认 `ws://127.0.0.1:19000/ws`，可由客户端环境变量 `AGENT_INSIGHT_JIUWEN_WS_URL` 覆盖。每条 Case 创建独立会话并发送原始输入；选择具体模型时，执行前重新核对目录并通过 `chat.send.model_name` 下发。命令回执携带会话 ID；服务端从 Jiuwen OTLP spool 的会话索引解析唯一 Trace ID，等待对应 Execution 入库后绑定 Case。会话无唯一 Trace、采集器未上传或超时均不会按输入猜测绑定。此能力不包含 Skill 快照、Benchmark 或故障注入。
+JiuwenSwarm 个人版客户端通过 Gateway WebSocket `/ws` 的 `models.list` 获取已配置模型名称；目录读取成功后报告 `jiuwenswarm/main_agent` 的普通 `RUN_EXPERIMENT_CASE` 能力及模型候选。地址默认 `ws://127.0.0.1:19000/ws`，可由客户端环境变量 `AGENT_INSIGHT_JIUWEN_WS_URL` 覆盖。每条 Case 创建独立会话并发送原始输入；选择具体模型时，执行前重新核对目录并通过 `chat.send.model_name` 下发。命令回执携带会话 ID；服务端从 Jiuwen OTLP spool 的会话索引解析唯一 Trace ID，等待对应 Execution 入库后绑定 Case。会话无唯一 Trace、采集器未上传或超时均不会按输入猜测绑定。此能力不包含 Skill 快照、Benchmark 或故障注入。
 
-JiuwenSwarm 环境检查与能力上报共用 Gateway 模型目录探测结果。`agent-runtime/jiuwenswarm/v1` 在目录可读取时为就绪；普通实验预检不查找同名主机 CLI，拒绝非 `main_agent` 或目录中不存在的模型。目录检查不验证模型凭据或推理服务。
+JiuwenSwarm 环境检查与能力上报共用 Gateway 模型目录探测结果。`agent-runtime/jiuwenswarm/v1` 在目录可读取时为就绪；个人版普通实验预检不查找同名主机 CLI，拒绝非 `main_agent` 或目录中不存在的模型。目录检查不验证模型凭据或推理服务。
 
 模型候选发现按客户端 OpenCode 版本分流。1.x 合并 JSON 模型定义与 CLI 模型目录，认证文件随 `XDG_DATA_HOME` 解析。2.x 使用 `api --standalone model.list` 上报已启用的 `providerID/id`，并通过 `model.default` 标记默认项。原生 API 负责解析 JSON 配置和 `/connect` 凭据。
 
@@ -52,3 +52,5 @@ Skill 生成与优化由执行引擎统一确认完成。引擎将当前请求�
 普通响应的成功出口必须有权威终态确认。事件流 EOF 或仅剩心跳不能自行证明完成；EOF 会等待已有的受限快照核验，不提前取消查询。显式 noReply 仅免除助手回复要求，错误与取消仍优先。
 
 关闭已完成请求的传输不会改变调用者的取消信号。用户取消、模型错误及 15 分钟整体执行截止仍会拒绝结果；length、content-filter 或工具中间轮的同步响应不记成功。生成与优化桥接层不再以完成后 200/500ms 或静默 30 秒自行取消执行；缓存会话失效的生成回退仍使用同一执行截止。
+
+企业版 JiuwenSwarm 支持本地账号文件、授权 Agent 发现与选择，仍通过 WebSocket 下发。配置与完整流程见[企业版安装与实验](../../how-to/evaluation/experiments.md#jiuwenswarm-企业版本地凭据与-agent-选择)。
