@@ -49,7 +49,8 @@ test('standalone preflight rejects missing pages and client reference manifests'
 test('startup readiness rejects HTTP 500 instead of accepting an open port', () => {
   const script = fs.readFileSync('scripts/start.sh', 'utf8')
   assert.ok(script.includes('node scripts/verify-standalone.cjs "$STANDALONE_DIR"'))
+  assert.match(script, /^HEALTH_URL="http:\/\/127\.0\.0\.1:\$PLATFORM_PORT\$BASE_PATH"$/m)
   const readiness = script.slice(script.indexOf('READY=0'))
-  for (const route of ['dataset', 'fault']) assert.ok(readiness.includes(`http://127.0.0.1:$PLATFORM_PORT/${route}`))
+  for (const route of ['dataset', 'fault']) assert.ok(readiness.includes(`$HEALTH_URL/${route}`))
   assert.match(readiness, /curl --noproxy '\*' -fsS/)
 })
