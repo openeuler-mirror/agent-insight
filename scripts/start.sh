@@ -448,6 +448,8 @@ if [ "$BUILD_STATUS" -eq 1 ]; then
   cp -a public/. "$STANDALONE_DIR/public/" || exit 1
 fi
 node scripts/verify-standalone.cjs "$STANDALONE_DIR" || exit 1
+BASE_PATH=$(node -p 'require(require("node:path").resolve(process.argv[1])).config?.basePath || ""' \
+  "$STANDALONE_DIR/.next/required-server-files.json") || exit 1
 if [ "$BUILD_STATUS" -eq 1 ]; then
   node scripts/start-build-state.cjs record || exit 1
 fi
@@ -492,19 +494,20 @@ fi
 rm -f "${LOG_FILE}.pid"
 
 echo "Waiting for port $PLATFORM_PORT to accept connections..."
+HEALTH_URL="http://127.0.0.1:$PLATFORM_PORT$BASE_PATH"
 READY=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
   sleep 1
-  if curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PLATFORM_PORT/" >/dev/null 2>&1 \
-    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PLATFORM_PORT/dataset" >/dev/null 2>&1 \
-    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PLATFORM_PORT/fault" >/dev/null 2>&1; then
+  if curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "$HEALTH_URL/" >/dev/null 2>&1 \
+    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "$HEALTH_URL/dataset" >/dev/null 2>&1 \
+    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "$HEALTH_URL/fault" >/dev/null 2>&1; then
     READY=1
     break
   fi
 done
 
 if [ "$READY" -ne 1 ]; then
-  echo "CRITICAL ERROR: Server process spawned (PID ${NEW_PID:-unknown}) but http://127.0.0.1:$PLATFORM_PORT 无响应。"
+  echo "CRITICAL ERROR: Server process spawned (PID ${NEW_PID:-unknown}) but $HEALTH_URL 无响应。"
   echo "Check server.log for details."
   tail -n 40 "$LOG_FILE" 2>/dev/null || true
   exit 1
@@ -515,7 +518,7 @@ echo "Server started successfully."
 echo "PID: ${NEW_PID:-$(find_pid_on_port $PLATFORM_PORT | tr '\n' ' ')}"
 echo "Standalone: $STANDALONE_DIR/server.js"
 echo "Log file: server.log"
-echo "URL: http://localhost:$PLATFORM_PORT"
+echo "URL: http://localhost:$PLATFORM_PORT$BASE_PATH"
 stage_begin "Goal Plus watcher"
 ensure_goal_plus_watcher
 stage_done

@@ -26,7 +26,7 @@ For npm CLI startup, port precedence is `--port`, process `AGENT_INSIGHT_PORT`, 
 | `DB_PORT` | OpenGauss port | Set explicitly: platform default is `5432`, initialization-script default is `26000`; match the actual instance |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Template defaults database to `postgres`, user to `omm`, no password default | Store credentials only in actual deployment settings; SQLite copying is not an external-database backup |
 | `AGENT_INSIGHT_CONFIG_DIR` | Benchmark configuration directory; empty uses installation `config/benchmark/` | Use an absolute override. This is not the runtime root and does not replace its `.env` |
-| `NEXT_PUBLIC_URL_PREFIX` | Frontend URL prefix | Changing it requires rebuilding, not only restarting |
+| `NEXT_PUBLIC_URL_PREFIX` | Frontend URL prefix | Rebuild after changing it. Source startup uses the prefix recorded in the build to check page readiness. |
 
 Removed `AGENT_INSIGHT_DATA_DIR` must become `AGENT_INSIGHT_HOME` while retaining the original root path. Removed generic `PORT` must become the platform or Evaluator-specific variable.
 

@@ -26,7 +26,7 @@ const SOURCE_DIRS = ['src', 'public', 'prisma', 'scripts', 'generated', 'benchma
 const IGNORED = new Set(['.git', '.cache', '__pycache__', '.pytest_cache'])
 const sha = value => createHash('sha256').update(value).digest('hex')
 
-function digestTree(root, entries, cacheFile) {
+function digestTree(root, entries, cacheFile, ignoredPath) {
   const cached = cacheFile ? readJson(cacheFile) : null
   const previous = cached?.version === VERSION ? cached.files : {}
   const updated = {}
@@ -34,6 +34,7 @@ function digestTree(root, entries, cacheFile) {
   const buffer = Buffer.allocUnsafe(256 * 1024)
   function visit(relative, ancestors = new Set()) {
     const target = path.resolve(root, relative)
+    if (target === ignoredPath) return
     hash.update(JSON.stringify(relative))
     let stat
     try { stat = fs.lstatSync(target, { bigint: true }) } catch (error) {
@@ -127,7 +128,12 @@ function artifactState(root) {
   const buildId = fs.readFileSync(path.join(root, '.next/BUILD_ID'), 'utf8').trim()
   if (!buildId || buildId !== fs.readFileSync(path.join(standalone, '.next/BUILD_ID'), 'utf8').trim()) throw new Error('Build ID mismatch')
   if (!fs.statSync(path.join(standalone, '.next/static')).isDirectory()) throw new Error('Missing standalone static files')
-  return digestTree(root, ['.next/BUILD_ID', '.next/standalone', '.next/static'])
+  return digestTree(
+    root,
+    ['.next/BUILD_ID', '.next/standalone', '.next/static'],
+    path.join(root, '.next/cache/agent-insight/artifact-hashes.json'),
+    path.resolve(standalone, '.next/server/route-cache'),
+  )
 }
 
 function checkBuild(root, force = false, env = process.env) {

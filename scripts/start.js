@@ -194,7 +194,7 @@ async function run(options) {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, DATABASE_URL: dbUrl }
     })
-    await runCommand('npx prisma db push', {
+    await runCommand('npx prisma db push --skip-generate', {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, DATABASE_URL: dbUrl }
     })
@@ -285,47 +285,38 @@ async function run(options) {
     AGENT_INSIGHT_RAS_DISPATCH_PORT: dispatchPort.toString()
   }
 
-  let command, args
+  let args
 
   if (isStandalone) {
     const controlServer = path.join(PACKAGE_ROOT, 'scripts', 'control-server.js')
     if (fs.existsSync(controlServer)) {
       console.log('Mode: production (standalone + control channel)')
-      command = 'node'
       args = [controlServer]
     } else {
       console.log('Mode: production (standalone)')
-      command = 'node'
       args = [standaloneServer]
     }
-  } else if (isProduction) {
-    console.log('Mode: production')
-    command = 'npm'
-    args = ['run', 'start']
   } else {
-    console.log('Mode: development')
-    command = 'npm'
-    args = ['run', 'dev']
+    console.log(isProduction ? 'Mode: production' : 'Mode: development')
+    if (!isProduction) {
+      const { generate } = await import('./benchmark/generate-catalog.cjs')
+      console.log(`[benchmark catalog] generated: ${generate().join(', ')}`)
+    }
+    args = [require.resolve('next/dist/bin/next'), isProduction ? 'start' : 'dev', '--port', String(port)]
   }
 
   try {
     const logFd = fs.openSync(logPath, 'a')
-
-    if (isWindows) {
-      spawnedProc = spawn(command, args, {
+    try {
+      spawnedProc = spawn(process.execPath, args, {
         stdio: ['ignore', logFd, logFd],
         env,
         detached: true,
         cwd: PACKAGE_ROOT,
         windowsHide: true
       })
-    } else {
-      spawnedProc = spawn(command, args, {
-        stdio: ['ignore', logFd, logFd],
-        env,
-        detached: true,
-        cwd: PACKAGE_ROOT
-      })
+    } finally {
+      fs.closeSync(logFd)
     }
 
     spawnedProc.on('error', (error) => {

@@ -118,6 +118,20 @@ test('dependency checksum cache detects edits even when mtime and size are resto
   assert.equal(f.check().reusable, true)
 })
 
+test('warm startup reuses unchanged artifact checksums and detects edits with restored mtime', t => {
+  const f = fixture(t)
+  f.record()
+  const file = path.join(f.root, '.next/standalone/node_modules/next/index.js')
+  const open = t.mock.method(fs, 'openSync')
+  assert.equal(f.check().reusable, true)
+  assert.equal(open.mock.calls.some(call => call.arguments[0] === file), false)
+
+  const stat = fs.statSync(file)
+  f.write('.next/standalone/node_modules/next/index.js', 'changed')
+  fs.utimesSync(file, stat.atime, stat.mtime)
+  assert.equal(f.check().reusable, false)
+})
+
 test('public build environment changes rebuild; runtime port and logs do not', t => {
   const f = fixture(t)
   f.record()
@@ -126,6 +140,15 @@ test('public build environment changes rebuild; runtime port and logs do not', t
   f.write('server.log', 'new log')
   f.write('.next/cache/webpack/cache.pack', 'new cache')
   assert.equal(f.check().reusable, true)
+})
+
+test('Next runtime page cache does not invalidate a verified standalone build', t => {
+  const f = fixture(t)
+  f.record()
+  f.write('.next/standalone/.next/server/route-cache/APP_PAGE/cached/fault.html', 'cached response')
+  assert.equal(f.check().reusable, true)
+  f.write('.next/standalone/.next/static/route-cache/chunk.js', 'new build artifact')
+  assert.equal(f.check().reusable, false)
 })
 
 for (const file of ['.next/BUILD_ID', '.next/standalone/server.js', '.next/standalone/.next/static/chunk.js', '.next/standalone/node_modules/next/index.js']) {
@@ -244,9 +267,16 @@ fs.appendFileSync(process.env.CALLS, 'build\\n');
 if (process.env.FAIL_BUILD) process.exit(1);
 require('./scripts/build-trace-dataset-worker.cjs').buildTraceDatasetWorker();
 write('.next/BUILD_ID', 'build-1');
-write('.next/standalone/server.js', "require('node:http').createServer((req,res)=>res.end(String(process.pid))).listen(Number(process.env.PORT), '0.0.0.0')");
+write('.next/standalone/server.js', \`
+const routes = ['/insight/', '/insight/dataset', '/insight/fault'];
+require('node:http').createServer((req, res) => {
+  res.statusCode = routes.includes(req.url) ? 200 : 404;
+  res.end(String(process.pid));
+}).listen(Number(process.env.PORT), '0.0.0.0');
+\`);
 write('.next/standalone/.next/BUILD_ID', 'build-1');
-for (const file of ['required-server-files.json', 'server/app-paths-manifest.json', 'server/pages-manifest.json']) write('.next/standalone/.next/' + file, '{}');
+write('.next/standalone/.next/required-server-files.json', '{"config":{"basePath":"/insight"}}');
+for (const file of ['server/app-paths-manifest.json', 'server/pages-manifest.json']) write('.next/standalone/.next/' + file, '{}');
 write('.next/static/chunk.js', 'asset');
 `)
   f.write('fixture-prisma.cjs', `
@@ -275,6 +305,7 @@ if (process.argv[3] === 'generate') {
   assert.equal(fs.existsSync(path.join(f.root, 'generated/trace-datasets/worker.cjs')), false)
   const first = run()
   assert.equal(first.status, 0, first.stdout + first.stderr)
+  assert.match(first.stdout, /URL: http:\/\/localhost:\d+\/insight/)
   assert.equal(fs.readFileSync(path.join(f.root, 'generated/trace-datasets/worker.cjs'), 'utf8'), 'worker runtime')
   const second = run()
   assert.equal(second.status, 0, second.stdout + second.stderr)
