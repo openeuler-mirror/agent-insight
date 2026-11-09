@@ -19,21 +19,20 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 
-for (const mode of ['dev', 'start']) {
-  test(`CLI fallback launches Next ${mode} on the requested port`, t => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-cli-'))
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
-    const write = (file: string, content: string) => {
-      const target = path.join(root, file)
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.writeFileSync(target, content)
-    }
-    for (const file of ['bin/cli.js', 'scripts/start.js', 'scripts/agent-insight-home.cjs']) {
-      write(file, fs.readFileSync(file, 'utf8'))
-    }
-    write('scripts/utils.js', `
+function createCliFixture(t: TestContext, mode: 'dev' | 'start') {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-cli-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const write = (file: string, content: string) => {
+    const target = path.join(root, file)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, content)
+  }
+  for (const file of ['bin/cli.js', 'scripts/start.js', 'scripts/agent-insight-home.cjs']) {
+    write(file, fs.readFileSync(file, 'utf8'))
+  }
+  write('scripts/utils.js', `
 const fs = require('node:fs')
 module.exports = {
   findPidOnPort: () => fs.existsSync('ready') ? 1 : null,
@@ -45,26 +44,46 @@ module.exports = {
   getDataRoot: () => process.cwd(),
 }
 `)
-    write('scripts/sync_admin_api_key.js', 'exports.syncAdminApiKey = async () => ({})')
-    write('scripts/sync-prisma-client.js', 'exports.syncGeneratedPrismaClient = () => {}')
-    write('scripts/lib/fi-python-runtime.js', 'exports.readCurrentRuntime = exports.resolveBootstrapPython = () => null')
-    write('scripts/benchmark/generate-catalog.cjs', 'exports.generate = () => ["fixture"]')
+  write('scripts/sync_admin_api_key.js', 'exports.syncAdminApiKey = async () => ({})')
+  write('scripts/sync-prisma-client.js', 'exports.syncGeneratedPrismaClient = () => {}')
+  write('scripts/lib/fi-python-runtime.js', 'exports.readCurrentRuntime = exports.resolveBootstrapPython = () => null')
+  write('scripts/benchmark/generate-catalog.cjs', 'exports.generate = () => ["fixture"]')
+  if (mode === 'start') write('.next/BUILD_ID', 'fixture')
+
+  const env = { ...process.env }
+  delete env.AGENT_INSIGHT_DATA_DIR
+  delete env.NODE_PATH
+  const run = () => spawnSync(process.execPath, ['bin/cli.js', 'start', '--port', '34817'], {
+    cwd: root, env, encoding: 'utf8', timeout: 10_000,
+  })
+  return { root, write, run }
+}
+
+for (const mode of ['dev', 'start'] as const) {
+  test(`CLI fallback launches Next ${mode} on the requested port`, t => {
+    const { root, write, run } = createCliFixture(t, mode)
     write('node_modules/next/dist/bin/next', `
 require('node:fs').writeFileSync('args', JSON.stringify(process.argv.slice(2)))
 require('node:fs').writeFileSync('ready', '')
 `)
-    if (mode === 'start') write('.next/BUILD_ID', 'fixture')
-
-    const env = { ...process.env }
-    delete env.AGENT_INSIGHT_DATA_DIR
-    const result = spawnSync(process.execPath, ['bin/cli.js', 'start', '--port', '34817'], {
-      cwd: root, env, encoding: 'utf8', timeout: 10_000,
-    })
+    const result = run()
     assert.equal(result.status, 0, result.error?.message || result.stderr)
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'args'), 'utf8')), [mode, '--port', '34817'])
     assert.equal(result.stdout.includes('[benchmark catalog] generated: fixture'), mode === 'dev')
     assert.deepEqual(fs.readFileSync(path.join(root, 'commands'), 'utf8').trim().split('\n'), [
       'npx prisma generate', 'node scripts/prepare-ras-sqlite-schema.js', 'npx prisma db push --skip-generate',
     ])
+  })
+
+  test(`CLI fallback reports ${mode} preparation failures`, t => {
+    const { write, run } = createCliFixture(t, mode)
+    const message = mode === 'dev' ? 'catalog fixture failure' : "Cannot find module 'next/dist/bin/next'"
+    if (mode === 'dev') {
+      write('scripts/benchmark/generate-catalog.cjs', `exports.generate = () => { throw new Error(${JSON.stringify(message)}) }`)
+    }
+    const result = run()
+    assert.equal(result.status, 1, result.error?.message || result.stderr)
+    assert.ok(result.stderr.includes(`Failed to spawn process: ${message}`), result.stderr)
+    assert.doesNotMatch(result.stderr, /^\s+at /m)
   })
 }

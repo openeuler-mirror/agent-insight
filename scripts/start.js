@@ -285,27 +285,27 @@ async function run(options) {
     AGENT_INSIGHT_RAS_DISPATCH_PORT: dispatchPort.toString()
   }
 
-  let args
-
-  if (isStandalone) {
-    const controlServer = path.join(PACKAGE_ROOT, 'scripts', 'control-server.js')
-    if (fs.existsSync(controlServer)) {
-      console.log('Mode: production (standalone + control channel)')
-      args = [controlServer]
-    } else {
-      console.log('Mode: production (standalone)')
-      args = [standaloneServer]
-    }
-  } else {
-    console.log(isProduction ? 'Mode: production' : 'Mode: development')
-    if (!isProduction) {
-      const { generate } = await import('./benchmark/generate-catalog.cjs')
-      console.log(`[benchmark catalog] generated: ${generate().join(', ')}`)
-    }
-    args = [require.resolve('next/dist/bin/next'), isProduction ? 'start' : 'dev', '--port', String(port)]
-  }
-
   try {
+    let args
+
+    if (isStandalone) {
+      const controlServer = path.join(PACKAGE_ROOT, 'scripts', 'control-server.js')
+      if (fs.existsSync(controlServer)) {
+        console.log('Mode: production (standalone + control channel)')
+        args = [controlServer]
+      } else {
+        console.log('Mode: production (standalone)')
+        args = [standaloneServer]
+      }
+    } else {
+      console.log(isProduction ? 'Mode: production' : 'Mode: development')
+      if (!isProduction) {
+        const { generate } = await import('./benchmark/generate-catalog.cjs')
+        console.log(`[benchmark catalog] generated: ${generate().join(', ')}`)
+      }
+      args = [require.resolve('next/dist/bin/next'), isProduction ? 'start' : 'dev', '--port', String(port)]
+    }
+
     const logFd = fs.openSync(logPath, 'a')
     try {
       spawnedProc = spawn(process.execPath, args, {
