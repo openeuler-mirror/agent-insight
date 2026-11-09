@@ -28,7 +28,6 @@ import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-in
 import { listTraceTags } from '@/lib/trace-tags';
 import { parseObserveTraceTagFilters } from '@/lib/trace-tag-filters';
 import { deriveAnomalyStatus, normalizeAnomalyFilter } from '@/lib/reliability/anomaly-status';
-import fs from 'fs';
 import path from 'path';
 import { getAgentInsightHome } from '@/lib/env';
 import {
