@@ -11,6 +11,7 @@ Check input, output, configuration, identity, and asynchronous behavior.
 
 - [HTTP APIs and user identity](./platform/http-api.md)
 - [Runtime configuration](./platform/configuration.md)
+- [Agent runtime reference](./platform/agent-runtime.md)
 - [Model-connection test API](./platform/model-connection-test.md)
 
 ## Observability

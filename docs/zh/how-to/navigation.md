@@ -25,6 +25,7 @@ changefreq: "monthly"
 - [客户端安装](./platform/settings/access-control.md)
 - [Agent 运行时](./platform/settings/agent-runtimes.md)
 - [模型注册](./platform/settings/model-registry.md)
+- [Agent 运行时](./platform/settings/agent-runtime.md)
 - [用量统计](./platform/settings/usage-analytics.md)
 - [联网搜索](./platform/settings/web-search.md)
 - [概览面板](./platform/workspace-overview.md)

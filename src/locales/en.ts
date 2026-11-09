@@ -120,6 +120,7 @@ export const en = {
     modelConfig: 'Model Config',
     modelRegistry: 'Model Registry',
     agentRuntimes: 'Agent Runtimes',
+    agentRuntime: 'Agent Runtime',
     webSearch: 'Web Search',
     versionManagement: 'Version Management',
     modelKeys: 'API Key Management',

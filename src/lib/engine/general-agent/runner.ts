@@ -41,6 +41,7 @@ import {
 import { deploySkillToWorkspace } from './skill-workspace-deployer';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
+import { getAgentRuntimePreference } from '@/lib/storage/server-config';
 import { deriveOpencodeExecutionFields } from '@/lib/engine/observability/opencode-derived-metrics';
 
 let dispatcherInited = false;
@@ -294,6 +295,16 @@ export async function runGeneralAgent(
   // 文件读取工具/加引号/Node 读时拿到字面量 `~` 会 "No such file" 直接结束(详见 expand-home.ts)。
   const query = expandHomePathsInText(String(input.query || '').trim());
   if (!query) throw new Error('query is required');
+
+  // 平台内置功能统一从这里进入执行层。运行时默认值只影响新任务；当前只有 OpenCode
+  // 适配器已交付，其他选择必须明确报错，不能静默换回 OpenCode 执行。
+  const preferredRuntime = await getAgentRuntimePreference(user).catch(() => null);
+  if (preferredRuntime && preferredRuntime !== 'opencode') {
+    throw createAgentRunError(
+      'AGENT_RUNTIME_UNAVAILABLE',
+      `当前账号选择的 Agent 运行时为 ${preferredRuntime}，但平台尚未交付其执行适配器。请在「配置 → Agent 运行时」中改选 OpenCode。`,
+    );
+  }
 
   // ephemeral 模式: 起独立 opencode 进程,跑完自动杀。后台批量任务用这条路保证拿最新 skill。
   // 不能复用 cachedClients (会污染下次 shared 模式), 直接 new AgentInsight 用临时 baseURL。
