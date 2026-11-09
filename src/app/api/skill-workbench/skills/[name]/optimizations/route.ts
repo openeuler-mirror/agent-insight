@@ -71,7 +71,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
       || !stringRecord(body.candidateFiles)
       || Object.keys(body.candidateFiles).length === 0
       || typeof body.summary !== 'string'
-      || !OPTIMIZATION_SOURCE_KINDS.includes(sourceKind)
+      || sourceKind === 'diagnosis' || !OPTIMIZATION_SOURCE_KINDS.includes(sourceKind)
       || (body.diff !== undefined && !Array.isArray(body.diff))
       || (body.sourceRefs !== undefined && !Array.isArray(body.sourceRefs))
     ) {

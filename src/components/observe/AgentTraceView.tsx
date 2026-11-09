@@ -1081,7 +1081,7 @@ export default function AgentTraceView({
     return (
         <SmartViewerConfigProvider jsonCollapsed={framework?.trim().toLowerCase() === 'langfuse-langgraph' ? false : 2}>
             <TraceCtx.Provider value={ctxValue}>
-            <div className="flex flex-col gap-2.5">
+            <div className="@container/agent-trace flex min-w-0 flex-col gap-2.5">
             {fullInteractionLoadError && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
                     <span>{fullInteractionLoadError}</span>
@@ -1114,9 +1114,9 @@ export default function AgentTraceView({
                 </div>
             )}
 
-            <div className="grid gap-3 min-h-[520px] h-[calc(100vh-200px)]" style={{ gridTemplateColumns: 'minmax(400px, 62%) 1fr' }}>
+            <div className="grid min-w-0 grid-cols-1 gap-3 @min-[900px]/agent-trace:min-h-[520px] @min-[900px]/agent-trace:h-[calc(100vh-200px)] @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
                 {/* ─── Left: Unified Span Tree ─── */}
-                <div className="rounded-lg border border-card-border bg-card flex flex-col h-full min-h-0 overflow-hidden">
+                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
                     {/* Toolbar: expand/collapse + search + filters */}
                     <div className={cn(
                         'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
@@ -1248,7 +1248,7 @@ export default function AgentTraceView({
                     <div className="flex items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
                         <span className="flex-1">{tt('traceTree.spanColumn')}</span>
                         <span className="w-20 text-left">{tt('traceTree.spanShare')}</span>
-                        <span className="w-12 text-right">{tt('traceTree.spanDuration')}</span>
+                        <span className="w-24 text-right shrink-0">{tt('traceTree.spanDuration')}</span>
                         <span className="w-11 text-right">{tt('traceTree.spanTokens')}</span>
                         <span className="w-2" />
                     </div>
@@ -1271,7 +1271,7 @@ export default function AgentTraceView({
                 </div>
 
                 {/* ─── Right: Detail Panel ─── */}
-                <div className="rounded-lg border border-card-border bg-card flex flex-col h-full min-h-0 overflow-hidden">
+                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(70vh,700px)] min-h-[360px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
                     {selectedEvent && selectedEventPayloadDeferred && !interactionLoadError ? (
                         <div className="p-4 space-y-3">
                             <div className="h-5 w-1/3 rounded bg-background-tertiary animate-pulse" />
@@ -1664,7 +1664,7 @@ function UnifiedSpanTree({
                 )}
                 {/* Metrics */}
                 <span className={cn(
-                    'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
+                    'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
                     status === 'slow' ? 'text-warning' : 'text-foreground-muted',
                 )}>
                     {formatDuration(getAgentActiveDurationMs(node))}
@@ -1835,7 +1835,7 @@ function UnifiedEventRow({
 
             {/* Metrics */}
             <span className={cn(
-                'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
+                'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
                 isSlow ? 'text-warning' : 'text-foreground-muted',
             )}>
                 {formatDuration(spanDurationMs)}
@@ -3721,6 +3721,39 @@ function OverviewTab({ node, onSelectChild, parentAgent, childAgents, relationsU
     const stats = aggregateSubtreeStats(node);
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {node.sessionId !== 'COLLABORATION' && <ParentAgentCard parent={parentAgent ?? null} onNavigate={overviewCtx.onSubagentNavigate} locale={locale} />}
+
+            <section aria-label={node.sessionId === 'COLLABORATION' ? 'Trace members' : 'Child Agents'}>
+                <h4 className="mb-2 text-xs font-semibold text-foreground-muted">
+                    {node.sessionId === 'COLLABORATION' ? (locale === 'zh' ? '集合成员' : 'Trace members') : (locale === 'zh' ? '子 Agent' : 'Child Agents')} ({childAgents.length})
+                </h4>
+                <div className="flex flex-col gap-1.5">
+                    {childAgents.map((child, index) => child.state === 'resolved' ? <AgentRelationCard
+                        key={child.taskId || child.nodeId}
+                        agentName={child.agentName}
+                        subagentType={child.subagentType}
+                        stats={child.stats}
+                        reported={child.reported}
+                        locale={locale}
+                        durationBasisMs={getAgentActiveDurationMs(node)}
+                        onNavigate={child.taskId && overviewCtx.onSubagentNavigate
+                            ? () => overviewCtx.onSubagentNavigate?.(child.taskId) : undefined}
+                        onSelect={child.nodeId ? () => onSelectChild(child.nodeId!) : undefined}
+                        label={child.taskId && overviewCtx.onSubagentNavigate
+                            ? locale === 'zh' ? '打开子 Agent 的 Trace' : 'Open child Agent Trace'
+                            : locale === 'zh' ? '选择子 Agent' : 'Select child Agent'}
+                    /> : <div key={index} role="status" className="rounded-md border border-border bg-background-secondary p-2 text-sm text-foreground-muted">
+                        {child.state === 'pending' ? (locale === 'zh' ? '等待子 Trace' : 'Waiting for child Trace')
+                            : child.state === 'ambiguous' ? (locale === 'zh' ? '子 Agent 关系存在冲突' : 'Conflicting child Agent relationships')
+                            : (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')}
+                    </div>)}
+                    {!childAgents.length && <p className="text-sm text-foreground-muted">
+                        {relationsUnavailable ? (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')
+                            : (locale === 'zh' ? '无子 Trace' : 'No child Trace')}
+                    </p>}
+                </div>
+            </section>
+
             <div>
                 <SectionTitle>调用统计</SectionTitle>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
@@ -3758,39 +3791,6 @@ function OverviewTab({ node, onSelectChild, parentAgent, childAgents, relationsU
                     })}
                 </div>
             </div>
-
-            {node.sessionId !== 'COLLABORATION' && <ParentAgentCard parent={parentAgent ?? null} onNavigate={overviewCtx.onSubagentNavigate} locale={locale} />}
-
-            <section aria-label={node.sessionId === 'COLLABORATION' ? 'Trace members' : 'Child Agents'}>
-                <h4 className="mb-2 text-xs font-semibold text-foreground-muted">
-                    {node.sessionId === 'COLLABORATION' ? (locale === 'zh' ? '集合成员' : 'Trace members') : (locale === 'zh' ? '子 Agent' : 'Child Agents')} ({childAgents.length})
-                </h4>
-                <div className="flex flex-col gap-1.5">
-                    {childAgents.map((child, index) => child.state === 'resolved' ? <AgentRelationCard
-                        key={child.taskId || child.nodeId}
-                        agentName={child.agentName}
-                        subagentType={child.subagentType}
-                        stats={child.stats}
-                        reported={child.reported}
-                        locale={locale}
-                        durationBasisMs={getAgentActiveDurationMs(node)}
-                        onNavigate={child.taskId && overviewCtx.onSubagentNavigate
-                            ? () => overviewCtx.onSubagentNavigate?.(child.taskId) : undefined}
-                        onSelect={child.nodeId ? () => onSelectChild(child.nodeId!) : undefined}
-                        label={child.taskId && overviewCtx.onSubagentNavigate
-                            ? locale === 'zh' ? '打开子 Agent 的 Trace' : 'Open child Agent Trace'
-                            : locale === 'zh' ? '选择子 Agent' : 'Select child Agent'}
-                    /> : <div key={index} role="status" className="rounded-md border border-border bg-background-secondary p-2 text-sm text-foreground-muted">
-                        {child.state === 'pending' ? (locale === 'zh' ? '等待子 Trace' : 'Waiting for child Trace')
-                            : child.state === 'ambiguous' ? (locale === 'zh' ? '子 Agent 关系存在冲突' : 'Conflicting child Agent relationships')
-                            : (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')}
-                    </div>)}
-                    {!childAgents.length && <p className="text-sm text-foreground-muted">
-                        {relationsUnavailable ? (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')
-                            : (locale === 'zh' ? '无子 Trace' : 'No child Trace')}
-                    </p>}
-                </div>
-            </section>
 
             {/* TopN quick navigation panel — shown only for root agent or when tree context has data */}
             <TopNPanel />

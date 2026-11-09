@@ -25,6 +25,7 @@
  * - 测试可 setJudgeLlmCallerForTest 注入
  */
 
+import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { experimentSignal } from './cancellation-context';
 import type { ToolCallEvent } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
@@ -142,7 +143,7 @@ const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
 
   const config = await getActiveConfig(username);
   if (!config || !isModelConnectionReady(config)) {
-    throw new Error('未配置可用的评测模型，请到「模型注册」页完善连接信息');
+    throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
   }
 
   const modelId = (config.model || 'deepseek-v4-flash').trim() || 'deepseek-v4-flash';
@@ -199,7 +200,7 @@ export const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
     runWithEphemeralOpencodeServer({ user: username, verbose: false, isolateHome: true, signal: runtimeSignal, requireCleanup: configured }, async (serverUrl: string) => {
       const config = await getActiveConfig(username);
       if (!config || !isModelConnectionReady(config)) {
-        throw new Error('未配置可用的评测模型，请到「模型注册」页完善连接信息');
+        throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
       }
       const activeModel = await loadServerModelForUser(username);
       const providerID =

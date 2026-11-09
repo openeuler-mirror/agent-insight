@@ -15,11 +15,17 @@ changefreq: monthly
 刷新完成前不生成可复制的一键安装命令；因此服务重建、数据库切换或平台地址变化后，无需先
 手工退出登录，但必须重新打开本页并复制一条新命令。
 
-## Dify 原生 OTLP 配置
+## Dify 统一接入
 
-在安装页顶部点击 **Dify：原生 OTLP 配置**，可跳到独立配置区。Dify 使用已有导出能力，无需安装采集插件或修改 Dify 源码，因此不参与命令行 Agent 的一键安装选择。
+在上方框架选择器勾选 **Dify**，复制同一张 Linux / macOS / WSL 命令卡中的 curl 命令。在 Dify 源码根目录或 Compose 的 `docker` 目录执行；也可通过 `AGENT_INSIGHT_DIFY_DIR` 指定已有部署目录。无需安装采集插件或修改 Dify 源码。
 
-身份刷新完成后，分别复制 **Dify API / Worker** 与 **Dify Agent 运行服务** 的配置，加入对应进程环境并重启。前者导出 Workflow / Chatflow 的外层节点，后者导出 Agent 内部模型与工具；只配一组不能覆盖两层。两组配置使用当前平台地址及当前账号 API Key，身份未就绪时不提供复制。容器内须改为 Dify 能访问的平台地址；`localhost` 指向容器自身。Agent 内容采集、Metrics 与 Landlock 环境要求见 [Dify 原生 OTLP 接入](../../observability/develop-trace-collector.md#dify-原生-otlp-接入)。
+自动配置适用于通过部署目录普通 `.env` 文件提供环境变量的 Dify Docker Compose 部署，需要 Docker Compose v2 与 Python 3。脚本保留已有配置，在 `.env` 中维护独立配置块，首次变更前生成权限为 600 的备份。随后检查 Compose 渲染出的环境变量，只重新加载 API、Worker 和已存在的原生 Agent 运行服务，核对运行中容器的环境变量，并从这些容器向接收端发送不包含业务 Span 的空 OTLP 请求以检查连接与鉴权。配置未注入时恢复原环境文件；重建或连接检查失败时明确报错并保留备份，不报告接入成功。重复执行相同配置不追加重复配置块或备份。
+
+**Dify 容器可达的上报地址** 留空时沿用当前平台地址；Docker Desktop 自动将本机 `localhost` 转为 `host.docker.internal`。Linux Docker 应填写容器可达的完整 Trace URL，也可设置 `AGENT_INSIGHT_DIFY_ENDPOINT`。自定义地址不能包含账号、密码或 API Key 参数。身份未刷新完成时不提供可复制命令。
+
+只有 Workflow 的部署会明确提示缺少原生 Agent 运行服务；部署 Agent 服务后重新执行同一命令。配置生效和空请求通过只证明连接及鉴权，仍需在 Dify 执行真实任务，到链路追踪中确认业务数据。
+
+源码直接启动、Kubernetes、自定义环境文件或不能自动识别的 Compose 部署，请按 [Dify 接入文档](../../observability/develop-trace-collector.md#dify-原生-otlp-接入)配置 API/Worker 与 Agent 运行服务的进程环境。Docker 环境须重新创建相关容器使环境变量生效，单纯 `docker restart` 不会更新它们。两组分别覆盖外层 Workflow 与 Agent 内部模型/工具轨迹。内容采集、Metrics 与 Landlock 环境要求见 [Dify 原生 OTLP 接入](../../observability/develop-trace-collector.md#dify-原生-otlp-接入)。
 
 ## 平台登录模式
 
@@ -103,7 +109,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 客户端安装页面由两个主要区域组成：
 
 1. **安装命令区**
-   选择框架并复制 Linux curl 或 Windows PowerShell 接入命令；另提供 Dify 原生 OTLP、LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
+   选择框架并复制 Linux curl 或 Windows PowerShell 接入命令；Dify 使用相同 curl 入口；另提供 LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
 2. **凭证与接入信息区**
    展示当前 API Key、账号信息、平台地址与所选框架的上报路径。
 
@@ -167,6 +173,9 @@ WSL 或切换 Linux 用户后，终端可能缺少 `XDG_RUNTIME_DIR`、`DBUS_SES
 > 未安装 Python 或故障注入组件的主机同样可以正常上线，只是「故障注入能力」显示为不可用，不影响配置下发与观测。
 
 ### 客户端配置与故障检测推理服务
+
+首次打开客户端的平台配置时，服务端按“客户端 × 平台”初始化唯一记录。并发读取复用已创建的记录，
+不会重置已有修订号或覆盖配置；数据库超时等其他错误仍正常报出。
 
 在「客户端配置」页选择客户端与平台后，可填写 **故障检测推理服务 URL**。
 该字段非必填，默认留空；填写时必须使用有效的 `http://` 或 `https://` 完整地址。

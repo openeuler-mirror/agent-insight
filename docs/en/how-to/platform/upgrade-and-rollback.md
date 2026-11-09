@@ -1,6 +1,8 @@
 ---
 title: "Upgrade and rollback"
 description: "Upgrade by deployment method while keeping application and data versions together."
+keywords: ["Agent Insight", "version upgrades", "deployment rollback", "data compatibility"]
+changefreq: "monthly"
 ---
 
 An upgrade changes application version, database schema, and runtime state together. Agent Insight installation and startup can synchronize the database schema. Replacing the binary with an older version does not guarantee compatibility with upgraded data. There is no unified `upgrade` / `rollback` CLI command.
@@ -24,6 +26,14 @@ Existing `.env` files are not automatically filled with every new template setti
 
 Replace angle-bracket placeholders before executing. Avoid changing deployment method or database type as part of the same upgrade. See the [repository README](https://gitcode.com/openeuler/agent-insight/blob/master/README.md) for source builds and [Docker image publishing, Chinese](../../../zh/how-to/platform/release-docker-image.md) for image materials.
 
+## Next.js security upgrade
+
+The dependency baseline is `next` / `eslint-config-next` 16.4.3. Commit the updated `package-lock.json`, install from it in a clean build directory, and regenerate standalone output, static assets, and the release package. Do not reuse old `.next` output. Verify that the final artifact loads Next.js 16.4.3 and `sharp` 0.35.5 or later, with matching native binaries for the target platform.
+
+Docker source mode uses dependencies baked into the image. Rebuild the image after changing source dependencies; updating mounted source and restarting is insufficient. The entrypoint checks for missing direct dependencies and mismatches in exact version declarations, including Next.js, and stops with a rebuild instruction. Audit range dependencies separately against the lockfile and final artifact.
+
+Validate tests, production builds, actual package startup, login, legacy ingestion URLs, SSE output and cancellation, RAS WebSocket commands and receipts, and long polling. Use an isolated runtime root and database. Drain evaluation tasks before switching: startup cleanup can mark unfinished tasks as failed. Roll back using the retained previous artifact, noting that it may still contain known vulnerabilities.
+
 ## First startup and acceptance
 
 Start through the original deployment entry point and inspect configuration, database synchronization, and background-task logs. If synchronization warns about data loss, stop and review the schema difference. `prisma db push --accept-data-loss` is not a routine upgrade step.
@@ -37,6 +47,8 @@ Before restoring external writes, verify:
 
 A successful installation, reachable port, or health response alone does not prove data or workflow compatibility.
 
+After upgrading to a release with OpenCode data isolation, restart the platform and run both AgentDebug and Skill optimization once. The platform initializes a private OpenCode database and creates new sessions for new runs. The user's CLI continues to use its existing database.
+
 ## Rollback
 
 1. Stop the new version and related writers. Preserve upgraded data separately, noting which Traces and experiments were created after the upgrade.
@@ -49,3 +61,9 @@ When the schema changed, default to the old version's matching pre-upgrade backu
 Compatibility across arbitrary versions is not guaranteed. Retain logs, versions, and configuration differences for troubleshooting, and remove secrets or sensitive business data before sharing them.
 
 [中文权威版本](../../../zh/how-to/platform/upgrade-and-rollback.md)
+
+### SQLite upgrade for evaluation diagnosis
+
+Rehearse on an isolated copy of the deployed database. Quiesce writers and background jobs. Back up external Skill files and report assets alongside the database. Run `python3 scripts/migrations/diagnosis-inputs.py --database /path/to/witty_insight.db` for preflight, then add `--apply --backup /backup/diagnosis-before.db` with a new backup path. The script uses SQLite's backup API, validates integrity and foreign keys, and compares every pre-existing column and row before committing. Save the JSON verification report.
+
+Repeat on the copy with another backup destination and restore the initial backup into a separate directory for verification. Startup requires migration on existing databases. After new writes have been accepted, preserve the latest database and assets before recovery; rolling back to an old backup alone discards those writes.

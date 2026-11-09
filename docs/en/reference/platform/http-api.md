@@ -1,6 +1,8 @@
 ---
 title: "HTTP APIs and user identity"
 description: "API families, user resolution, responses, and integration boundaries."
+keywords: ["Agent Insight", "HTTP APIs", "user identity", "platform integration"]
+changefreq: "monthly"
 ---
 
 This page is the entry point for existing HTTP interfaces. Identity handling and response shapes vary by endpoint. The documentation describes the current implementation; it does not promise uniform authentication, a universal error envelope, or versioned stability for every route.
@@ -10,6 +12,9 @@ This page is the entry point for existing HTTP interfaces. Identity handling and
 | Interface | Purpose | Reference |
 | --- | --- | --- |
 | Platform APIs | Query, create, and control experiments | [Experiment HTTP API](../evaluation/experiments-api.md) |
+| Dataset APIs | Definitions, cases, historical Trace generation, and deletion progress | [Dataset HTTP API](../evaluation/datasets-api.md) |
+| Skill management | Assets, versions, files, publishing, and imports | [Skill management HTTP API](../optimization/skills-api.md) |
+| Reliability clients | Registration, device credentials, configuration, and control receipts | [Reliability client and control API](../reliability/client-control-api.md) |
 | Trace ingestion | Receive collector or OTel exporter data | [Trace HTTP ingestion](../observability/trace-ingestion.md) |
 | Built-in evaluators | Return one evaluation result to the platform | [Evaluator output](../evaluation/evaluator-output.md) |
 | Independent Benchmark Evaluator | Execute official Benchmark judging jobs dispatched by the platform | [Benchmark evaluation protocol](../evaluation/benchmark-protocol.md) |
@@ -23,7 +28,7 @@ Routes using `resolveUser(request, explicitUser)` resolve identity in this order
 
 1. A nonempty `explicitUser` supplied by the route is used directly. Some routes obtain it from a `user` body field or query parameter.
 2. Otherwise, `x-witty-api-key` is looked up against platform users.
-3. Only when that header is absent, the `apiKey` query parameter is considered.
+3. Only when that header has no nonempty value, the `apiKey` query parameter is considered.
 4. An unresolved user produces an empty identity, which each route handles separately. An invalid header Key does not fall through to the query Key.
 
 An explicit `user` is a compatibility selector, not a verified credential or proof of access isolation. Integrations should send the target account's `x-witty-api-key` and avoid simultaneously supplying an overriding `user`. Obtain the Key from that account's client installation instructions. Browser login, IDaaS, and individual collectors have their own flows; this function does not describe every route.
@@ -51,6 +56,8 @@ curl --fail-with-body \
 Platform errors commonly contain `{ "error": "message" }`; some add `code`, `detail`, or `hint`. Benchmark services use structured errors. Handle both HTTP status and body instead of forcing all errors into one shape. Cancelling an HTTP request also does not prove that a remote process has stopped.
 
 ## Implementation
+
+Client configuration reads initialize one record per client and platform. Concurrent first reads reuse the winning record without resetting its revision or overrides. Other database failures still propagate. See [client configuration, Chinese](../../../zh/how-to/platform/settings/access-control.md).
 
 - [User resolution](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/auth/auth.ts)
 - [Experiment listing and creation](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/route.ts)

@@ -1,5 +1,8 @@
 ---
 title: "操作指南"
+description: "按部署、观测、评测、诊断和优化任务组织操作步骤，帮助用户查找所需指南。"
+keywords: ["Agent Insight", "操作指南", "平台部署", "运行观测", "评测优化"]
+changefreq: "monthly"
 ---
 
 针对安装、配置、使用与扩展目标查找操作步骤。
@@ -9,6 +12,7 @@ title: "操作指南"
 ## 平台公共
 
 - [用 Docker 部署服务端](./platform/deploy-docker.md)
+- [在 OpenShift 上部署服务端](./platform/deploy-openshift.md)（含 Developer Sandbox 集群内构建）
 - [升级与回滚](./platform/upgrade-and-rollback.md)
 - [备份与恢复](./platform/backup-and-restore.md)
 - [Conventions & Extension](./platform/conventions-and-extension.md)
@@ -58,13 +62,13 @@ title: "操作指南"
 
 ## 诊断
 
-- [智能诊断](./diagnosis/agent-debug/diagnosis.md)
+- [智能诊断](./diagnosis/agent-debug/diagnosis.md)（含评测输入冻结、诊断发现与 Skill 基线核验）
 
 ## 优化
 
 - [Skill 生成](./optimization/skills/generate.md)
 - [Skills 管理](./optimization/skills/manage.md)
-- [Skill 优化](./optimization/skills/optimize.md)（含执行期间查看前文与恢复输出跟随）
+- [Skill 优化](./optimization/skills/optimize.md)（含诊断优化计划、同配置复测与发布门禁）
 - [Skill 生成、评估与优化使用指南](./optimization/skills/skill-workflow.md)
 
 ## 可靠性

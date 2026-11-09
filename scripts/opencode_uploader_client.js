@@ -965,17 +965,11 @@ function buildMessagesForSession(state, sid) {
 
     let content = ""
     if (role === "user") {
-      // The real user query lives in this message's own text part(s), and
-      // message.part.updated reliably carries messageID, so reading from parts
-      // is version-proof. The legacy sources are unreliable on newer opencode:
-      //   - userTextByMsg is keyed off the chat.message hook's input.messageID,
-      //     an OPTIONAL field newer opencode often omits → key is null → the
-      //     user text is never recorded.
-      //   - info.system (last-ditch fallback) is now null on user messages —
-      //     and was the system prompt, not the query, anyway.
-      // With both broken the query uploaded empty. Keep them only as fallbacks.
-      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
-      if (!content) content = userTextByMsg.get(mid) || ""
+      // chat.message runs before slash-command expansion, while the later text
+      // part may contain the expanded routing prompt instead of what the user
+      // typed. Its message id comes from output.message.id on current OpenCode.
+      content = userTextByMsg.get(mid) || ""
+      if (!content) content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
       if (!content && typeof info?.system === "string") content = info.system
     } else {
       content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)

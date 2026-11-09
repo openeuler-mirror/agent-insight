@@ -103,12 +103,25 @@ export async function POST(
     });
   }
 
-  const runningRow = await upsertRunningAgentDebugReport({
+  // Reserve before the database write becomes visible to concurrent status queries.
+  setActiveAgentDebugBackgroundJob({
+    kind: 'agent-debug',
     executionId: execution.id,
-    user,
     interactionsHash,
-    generator: AGENT_DEBUG_GENERATOR,
+    startedAt: Date.now(),
   });
+  let runningRow: Awaited<ReturnType<typeof upsertRunningAgentDebugReport>>;
+  try {
+    runningRow = await upsertRunningAgentDebugReport({
+      executionId: execution.id,
+      user,
+      interactionsHash,
+      generator: AGENT_DEBUG_GENERATOR,
+    });
+  } catch (error) {
+    clearActiveAgentDebugBackgroundJob('agent-debug', execution.id, interactionsHash);
+    throw error;
+  }
 
   const progress = createDiagnosisProgress({ user, executionId: execution.id, runId: runningRow.id });
   progress.emit({ key: 'accepted', kind: 'task', state: 'started', title: '诊断请求已接收', summary: '等待诊断执行资源；获得资源后开始处理。' });

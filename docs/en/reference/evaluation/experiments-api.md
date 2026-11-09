@@ -1,6 +1,8 @@
 ---
 title: "Experiment HTTP API"
 description: "Create, start, query, rename, cancel, and delete ordinary experiments."
+keywords: ["Agent Insight", "experiment API", "evaluation tasks", "asynchronous execution"]
+changefreq: "monthly"
 ---
 
 This reference covers common ordinary-experiment calls and asynchronous behavior. Benchmark, Skill, and LLM comparison experiments use different branches, so requests and responses are not interchangeable. See the [experiment guide, Chinese](../../../zh/how-to/evaluation/experiments.md) and [HTTP identity conventions](../platform/http-api.md).
@@ -14,6 +16,8 @@ This reference covers common ordinary-experiment calls and asynchronous behavior
 | `GET /api/experiments/cancellations` | Up to 100 current-user `pending` cancellation records as `{ cancellations }`, not the complete cancellation history |
 
 Send the current account Key instead of relying on the overriding `user` selector. An ordinary list with no identity can have a broader scope, so its success is not proof of credential validation. Writes and detail branches apply their own ownership handling.
+
+Execution progress in experiment details is read through a consistent transaction snapshot using only required fields. A transaction is limited to 30 seconds, with a shared 35-second wait budget across at most two attempts. Only `P1008/P2028/P2034` trigger one retry, logged with its code and elapsed time. Persistent failures still return errors; retries do not rerun Agents or evaluators or rewrite experiment records. When a background refresh succeeds, the UI exits the full-page loading state and displays the result.
 
 ## Create an ordinary single-group experiment
 
@@ -75,3 +79,15 @@ Common statuses include `400` for invalid parameters or missing identity, `404` 
 Sources: [experiment routes](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/route.ts), [start](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/run/route.ts), and [details/control](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/route.ts).
 
 [中文权威版本](../../../zh/reference/evaluation/experiments-api.md)
+
+### Diagnosis runs and optimization inputs
+
+Single-group experiment creation computes a dataset Case contentHash on the server from the original input, expected output, values (including evaluator catalogs), and evaluationFocus. Matching may normalize whitespace, but stored inputs and reference answers retain their original text. Diagnosis retests check exact text and fingerprints for new records. Legacy records accept only the original text or its historical trim-and-collapse-whitespace transformation, without rewriting baseline answers. Changes to frozen diagnosis inputs, answers, executions, or scores remain blocking and produce specific errors.
+
+Use an authenticated API key. POST selected resultIds to `/api/experiments/:id/cases/:caseId/diagnoses` with preview=true. Confirm with requestKey and expectedInputHash to receive a runId. A new requestKey creates a new run even for identical evidence; retries with the same requestKey and input return the same run. The force field remains accepted for compatibility but is no longer required to start a new run. Changed evidence returns 409 and insufficient execution evidence returns 422. GET the same collection for recent runs, or GET `/api/diagnosis-runs/:runId` for the immutable input summary, progress and report. The snapshot limit is 16 MiB.
+
+POST executionId and generatedAt to `/api/diagnosis-runs/from-trace` to freeze an existing final Trace report. GET `/api/skills/by-name/:name/diagnosis-inputs?version=N` for the baseline. POST to the same path with runId, findingIds, baseVersion, expectedContentHash, constraints and skillRelevanceConfirmed. baseVersion must equal the recorded execution version, and expectedContentHash must match both the execution snapshot and historical version. Missing execution versions or hashes return 409; baselineVerified cannot bypass validation. The returned sessionId opens the draft plan in the workbench.
+
+The UI opens a returned runId at `/fault?runId=…`. This view reads the selected run through GET `/api/diagnosis-runs/:runId`, independently of Trace-only reports. Legacy `/diagnosis-runs/:runId` page links redirect to this view.
+
+Final diagnosis files are parsed as complete JSON and validated for required fields and finding references. Module values in phase1Grid and issues accept memory, reflection, planning, action, system, and others, matching the Skill report contract. Other-module issues retain their evidence and references without adding a sixth cognitive module. Read, parse, or validation failures produce a failed run with errorMessage, rather than a successful empty report. A valid empty findings array does not establish that the execution is problem-free. Historical repairs require separate review and confirmation.

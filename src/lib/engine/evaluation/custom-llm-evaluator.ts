@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError, type CustomEvaluatorRuntime } from './custom-evaluator-runtime';
 /**
  * 自建 LLM 评估器运行时。
@@ -371,7 +372,7 @@ export async function runCustomLlmEvaluator(
             rawResponse: '',
             model: bundle.config.model || '',
             durationMs: Date.now() - startedAt,
-            error: '未配置可用的评测模型，请到「模型注册」页完善连接信息',
+            error: MISSING_EVALUATION_MODEL_MESSAGE,
         };
     }
 

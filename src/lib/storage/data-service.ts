@@ -84,6 +84,7 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'pi-agent',
     'deepseek-harness',
     'trae',
+    'jiuwenswarm',
 ]);
 
 export interface InvokedSkill {
@@ -3563,7 +3564,8 @@ export function projectAgentNodeExecution(node: AgentNode, interactions: any[]):
 
     return {
         query,
-        finalResult: textTurns.length > 1 ? textTurns[textTurns.length - 1] : null,
+        finalResult: textTurns.length > 1 ? textTurns[textTurns.length - 1]
+            : meteredLlmEvents.map(event => interactionContentText(event.interaction?.content).trim()).filter(Boolean).at(-1) ?? null,
         model,
         tokens: node.stats.totalTokens,
         inputTokens: node.stats.inputTokens,
@@ -3764,6 +3766,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
                     user: parentUser ?? null,
                     query: queryText,
                     interactions: JSON.stringify(childInteractions),
+                    ...(node.startedAt != null ? { startTime: timestamp } : {}),
                     ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
                 },
                 {
@@ -3771,6 +3774,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
                     user: parentUser ?? null,
                     query: queryText,
                     interactions: JSON.stringify(childInteractions),
+                    ...(node.startedAt != null ? { startTime: timestamp } : {}),
                     ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
                 },
             );

@@ -26,9 +26,9 @@ import {
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
-    if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const { id } = await context.params;
+    const { username } = await resolveUser(request, id.startsWith('diagnosis-') ? null : request.nextUrl.searchParams.get('user'));
+    if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const optimization = await getWorkbenchOptimization(username, id);
     if (!optimization) return NextResponse.json({ error: '优化会话不存在' }, { status: 404 });
     return NextResponse.json({ optimization });
@@ -41,9 +41,10 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const body = await request.json().catch(() => ({}));
-    const { username } = await resolveUser(request, body.user);
-    if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const { id } = await context.params;
+    const { username } = await resolveUser(request, id.startsWith('diagnosis-') ? null : body.user);
+    if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
+    if (id.startsWith('diagnosis-') && body.action === 'sync') return NextResponse.json({ error: '诊断候选由服务端保存' }, { status: 409 });
     if (body.action === 'cancel') {
       if (typeof body.taskId !== 'string' || !body.taskId.trim()) {
         return NextResponse.json({ error: '缺少优化任务 ID' }, { status: 400 });

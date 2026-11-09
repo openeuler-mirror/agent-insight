@@ -97,7 +97,7 @@ function step4Logic(existingJson: string, target: string, extName: string) {
     const parsed = JSON.parse(output)
     const ours = parsed.find((e: ExtEntry) => e.identifier.id === EXT_ID)
     return { valid: true, count: parsed.length, hasOurs: !!ours, hasMid: ours?.location?.$mid === 1 }
-  } catch (e: any) {
+  } catch {
     return { valid: false, count: -1, hasOurs: false, hasMid: false }
   }
 }

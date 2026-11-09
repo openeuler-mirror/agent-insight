@@ -1,6 +1,8 @@
 ---
 title: "Execution-environment preparation API"
 description: "Preparation tasks, idempotent context, and readiness checks."
+keywords: ["Agent Insight", "execution environments", "environment preparation", "idempotency"]
+changefreq: "monthly"
 ---
 
 See [HTTP identity conventions](../platform/http-api.md) for platform user resolution. Preparing an environment does not create or start an experiment.
@@ -26,7 +28,11 @@ For reuse, the server checks ownership and restores Benchmark bindings and Case 
 
 Generate `requestId` through the existing `safeUUID()` path, including browsers without `crypto.randomUUID()` over LAN HTTP. Reuse the ID when transport outcome is uncertain; after a definitively finished task, a new attempt uses a new ID. A successful wizard check refreshes and revalidates the original host and Agent before moving to the next step. It does not reload or navigate the page. Host polling pauses during the gate, stale responses cannot override newer ones, and page reload resets in-memory wizard steps; checking the same configuration can restore its task.
 
+The design step and every generate-Trace step refresh execution targets every 10 seconds and on window focus, including ordinary and Skill experiments. Recovered capabilities can appear without reloading the wizard. Refresh remains paused during environment checks and preparation, and the original target is revalidated before advancing.
+
 ## OpenCode and capabilities
+
+Model discovery follows the client's OpenCode version. V1 combines JSON model definitions with the CLI catalog and resolves its authentication file under `XDG_DATA_HOME`. V2 reports enabled `providerID/id` entries from `api --standalone model.list` and marks the default returned by `model.default`. The native API resolves JSON configuration and `/connect` credentials.
 
 OpenCode checks share version-aware logic. v1 retains `debug config`, authentication-source, and `models` checks. v2 uses `api --standalone model.list`, or `model.default` when no model was selected, and checks native `providerID/id` and `enabled`. It does not reuse v1 authentication-file parsing or infer availability from v2 config-source arrays. These checks do not perform model inference.
 
@@ -41,5 +47,9 @@ Checks and recovery avoid a full capability scan. The executor merges verified p
 HTTP confirmation handles terminal environment state. Unconfirmed results recover from the environment task record instead of replaying stale `ready` via a generic receipt queue. Recovery checks the original context read-only; expired or missing context requires another check. Conditional receipt updates prevent late ACK/progress from overwriting terminal state, and readiness queries recheck dataset identity and host health.
 
 Implementation: [preparation logic](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/engine/experiment/environment-preparation.ts).
+
+### OpenCode generation and optimization completion
+
+The engine anchors completion to the current root user message. Metadata updates to that same message ID, including summary or diff updates arriving after idle, preserve completion state; a different user message still invalidates the old completion candidate. Completion still requires a persisted final assistant reply and finished tools. Partial output cannot pass, and cancellation and model errors retain priority.
 
 [中文权威版本](../../../zh/reference/evaluation/execution-environment.md)

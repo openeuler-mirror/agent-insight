@@ -164,7 +164,8 @@ export function bucketTrends(input: BucketTrendsInput): { granularity: TrendGran
     const nonEmpty = buckets.filter((b) => b.n_traces > 0);
     if (nonEmpty.length >= 2) {
         const comps = nonEmpty.map((b) => b.composite).sort((a, b) => a - b);
-        const medComp = comps[Math.floor(comps.length / 2)];
+        const mid = Math.floor(comps.length / 2);
+        const medComp = comps.length % 2 ? comps[mid] : (comps[mid - 1] + comps[mid]) / 2;
         const meanErr = nonEmpty.reduce((s, b) => s + b.errorCount, 0) / nonEmpty.length;
         for (const b of buckets) {
             if (b.n_traces === 0) continue;

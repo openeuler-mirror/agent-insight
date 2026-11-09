@@ -57,10 +57,12 @@ export function getTraceLifecycle(completedAt: unknown, record: Record<string, u
       && failures.some(failure => failure?.failure_type === 'goal_plus_pi_session_failed');
     const processFailed = ['actrail', 'mcts-xgovernor'].includes(String(record.framework)) && Array.isArray(failures)
       && failures.some(failure => failure?.failure_type === 'agent-process-exit');
+    const jiuwenFailed = record.framework === 'jiuwenswarm' && Array.isArray(failures)
+      && failures.some(failure => failure?.failure_type === 'jiuwen-run-error');
     return {
-      traceStatus: (opencodeFailed || goalPlusFailed || processFailed ? 'failed' : 'success') as TraceLifecycleStatus,
+      traceStatus: (opencodeFailed || goalPlusFailed || processFailed || jiuwenFailed ? 'failed' : 'success') as TraceLifecycleStatus,
       traceCompletedAt: new Date(completedMs).toISOString(),
-      traceStatusReason: opencodeFailed ? 'opencode-session-error' : goalPlusFailed ? 'goal-plus-session-failed' : processFailed ? 'agent-process-exit' : 'session-ended',
+      traceStatusReason: opencodeFailed ? 'opencode-session-error' : goalPlusFailed ? 'goal-plus-session-failed' : processFailed ? 'agent-process-exit' : jiuwenFailed ? 'jiuwen-run-error' : 'session-ended',
       traceLastReceivedAt,
     };
   }

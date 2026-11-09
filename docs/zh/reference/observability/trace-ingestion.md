@@ -1,6 +1,8 @@
 ---
 title: "Trace HTTP 接入"
 description: "OTLP 与兼容 JSON 上传的输入、身份处理和接收语义。"
+keywords: ["Agent Insight", "OTLP", "链路采集", "身份验证"]
+changefreq: "monthly"
 ---
 
 优先使用对应框架的客户端安装流程。本页用于导出器集成和问题定位；OTLP 与兼容上传的 JSON 不能相互替代。
@@ -54,6 +56,10 @@ description: "OTLP 与兼容 JSON 上传的输入、身份处理和接收语义�
 - 未提供有效验证身份时，部分旧客户端可以用请求体 `user`，或服务端显式配置的 `AGENT_INSIGHT_DEFAULT_INGEST_USER` 选择归属；这些是兼容/共享账号路径。完全没有身份来源时返回 `400`，显式无效 Key 不会静默回退到共享账号。
 
 成功响应包含 `success: true`、`upload_id`、`auto_evaluation`、`background_analysis`，进行中的 OpenCode 快照另带 `in_progress: true`。`auto_evaluation: false` 不等于本次上传失败。初次记录保存失败返回 `500`，客户端不应写“已上传”检查点；后台分析是否完成应另外核对，不能由 `background_analysis: true` 推断。
+
+## Jiuwen 耗时单位
+
+Jiuwen OTLP 聚合将纳秒起止时间转换为毫秒后写入 `Execution.latency`，详情和列表均按毫秒格式化。Trace Bundle 导入兼容旧 Jiuwen 秒值：仅在原始交互时间提供足够单位证据时乘 1000，已是毫秒或证据不足的值保持不变，不改写原始 Bundle 或 Session。历史数据的备份、预览和校正步骤见[查看 Trace](../../how-to/observability/view-traces.md#jiuwen-历史耗时单位校正)。
 
 ## 实现依据
 

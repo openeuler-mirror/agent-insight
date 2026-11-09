@@ -23,7 +23,7 @@ changefreq: monthly
 列表页承担“发现样本”和“缩小范围”两类工作，适合先从大量执行记录中筛出值得进入详情的 Trace。
 
 <p align="center">
-  <img src="../../../images/agent/observability/trace_list.png" alt="链路追踪列表页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/agent/observability/trace_list.png" alt="链路列表展示运行状态、耗时与 Token 用量" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 上图展示了链路追踪列表页的典型结构：顶部是聚合指标，指标下方是筛选区，中间是执行记录表格，右侧操作列用于继续进入评测、分析或详情页。
@@ -52,7 +52,11 @@ RAS 的内部判定 Agent（ras-judge）归属系统。归属筛选选择用户�
 - **Skill**：按 Skill 触发情况收敛样本。LlamaIndex、Qoder 等支持多 Agent 的框架按当前 Agent 自己调用的 Skill 匹配；仅子 Agent 调用的 Skill 不会让父 Agent 命中该筛选
 - **用户标签**：版本标签和业务标签均可多选筛选；多个标签采用 AND 语义，只保留同时包含全部所选标签的 Trace
 - **状态**：优先筛出已完成、失败、异常或边界样本
-- **时间等附加条件**：用于框定问题发生窗口
+- **时间范围**：保留全部时间、近 7 天、24 小时、1 小时和 30 分钟快捷选项，也可选择“自定义时间范围”精确回溯问题窗口
+
+选择“时间 → 自定义时间范围”，选择或输入开始、结束日期时间（精确到秒），点击“应用”后生效。输入按弹层标明的浏览器本地时区解释；筛选依据 Trace 起始时间，包含起止边界。可以只填一端，至少填写一端；开始晚于结束或日期时间无效时无法应用。点击“取消”或关闭弹层会放弃未应用的编辑。切回快捷选项会清除自定义范围。
+
+自定义起止时间会随页面链接和当前标签页的筛选记忆保留，列表及顶部统计使用同一范围，并与其他筛选条件取交集。调整范围后返回第一页，“重置筛选”会一起清除起止时间。
 
 在同一浏览器标签页内，切换到其他页面再返回链路追踪时，会按当前账号恢复上次的筛选条件，包括状态、框架、Agent、归属、范围、用户标签、时间、搜索及高级筛选。带查询参数的链接优先使用链接中的条件；页码和详情中的 Trace 不会被记住。点击“重置筛选”会清除筛选记忆，关闭标签页后记忆也会清除。浏览器禁用存储时仍可正常筛选，但无法记住选择。
 
@@ -167,6 +171,8 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 ### OpenCode 总时延与时间轴
 
+调用树的 Agent、事件耗时列保持单行，小时级耗时不会在数值内部换行。
+
 OpenCode 的 Trace 总时延按各轮任务的有效执行时间累计：从该轮用户输入到最后一项已记录的工作结束。模型、工具、子 Agent、失败重试及轮内等待均计入，轮次之间等待用户继续输入的空闲不计入。并发区间只计一次。例如执行 20 秒、等待用户一小时、再执行 30 秒，总时延为 **50 秒**。
 
 详情时间轴保留真实时间间隔，节点显示的有效耗时可能小于横条的时间跨度。执行中只计算已上报的时间；缺少轮次边界时保留可确认的执行跨度，不按固定空闲阈值删除时间。
@@ -192,14 +198,18 @@ node --import tsx scripts/repair_trace_latency.ts --apply
 
 从列表点击进入详情，或在导入成功后点击“打开 Trace”，均可用浏览器后退返回原列表，保留原来的筛选条件和页码；浏览器前进可重新打开详情。详情顶部的“返回列表”始终打开当前筛选下的列表，通过分享链接直接进入详情时也可使用。
 
+详情顶栏中的返回入口、Agent 标识、状态、统计与操作按钮会随可用宽度换行，保持在顶栏内；较长的子 Agent 类型标识会截断显示，避免挤出其他控件。
+
 MCTS、Goal Plus 和原生子 Agent 的概览统一展示父子关系卡片。点击“父 Agent”的 **Trace** 返回直接父 Trace，点击“子 Agent”的卡片打开直接子 Trace；中间层同时具有两个方向的入口，可逐层往返。直接打开成员链接、在集合内选择成员，以及从 Trace 抽屉查看，都使用相同的关系逻辑。耗时和 Token 有数据时显示，缺失时显示 `—`；关系卡片不改变调用树和统计。
 
 真实根 Trace 显示“无父 Trace”，叶子显示“无子 Trace”。并列展示的虚拟“协作 Trace”展示“集合成员”，不作为真实父级。没有明确调用位置的关系保留“上报关联”提示。没有独立 Session 的原生 Agent 卡片仍在当前树内选择，不显示独立 Trace 入口。
 
+JiuwenSwarm 复用平台统一的子 Agent Trace 机制。同一条 OTLP Trace 内的子 Agent 按明确的子会话 ID 派生为独立 Execution 和 Session，保存直接父级与根执行关联。点击树内的 **Trace** 按钮或概览卡片打开子 Agent 的独立 Trace 详情，再通过“父 Agent”返回父级；同名子 Agent 按各自的子会话 ID 区分。概览优先展示父子关系卡片；窄窗口中调用树与详情上下排列，避免详情栏被挤压。
+
 父级或子级正文尚未到达时显示等待状态；详情会开启自动刷新，即使 Trace 已结束也会等待关系就绪，用户可以手动关闭自动刷新。关系冲突时显示提示且不提供跳转；查询失败显示暂不可用，已有正文仍可查看。跳转加载失败时可以重试或返回列表，浏览器前进、后退继续保留原来的筛选条件。
 
 <p align="center">
-  <img src="../../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/agent/observability/trace_overview.png" alt="链路详情展示调用树、时间线与选中节点的消息" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。
@@ -576,6 +586,19 @@ fromSessionId/toSessionId 优先复用框架原有会话编号。平台仅在当
 
 
 协作图有两个入口：Trace 详情的“调用关系图”展示该 Trace 可自动解析的原生调用；Trace 列表的“协作图”进入协作列表，选择上报的 `collaborationId` 后查看完整上报关系。成员 Trace 就绪后，链路列表只展示一个合并入口（复用首个无调用父级的成员 taskId），详情包含全部成员：定位唯一时挂到对应调用步骤，否则按关系的 observedAt（缺失时为接收时间）并列展示。循环和回传联系保留在协作图中，不生成循环的 Trace 树。普通协作成员缺失、身份歧义、无权读取、正文为空、已有原生子记录、Langfuse 专用树或超过容量时，保留相关原 Trace 列表入口，避免隐藏无法展示的数据；Goal Plus 已声明 worker 的等待规则见前文。返回列表时会重新加载数据，无需手动刷新页面。 MCTS 与 Goal Plus 的合并容量按单个协作组判断，账号历史会话或协作组总数超过 200 不会拆开原有主子 Trace。某组超限或解析失败时，仅该组及共享 Trace 的关联组暂时保留独立入口，其他组正常展示；Goal Plus 正常等待正文的 worker 仍按前文规则处理。
+
+## Jiuwen 历史耗时单位校正
+
+Jiuwen 新采集记录的 `Execution.latency` 使用毫秒。旧版本曾写入秒值，导致顶部、列表和聚合耗时缩小 1000 倍；例如 `61187.865` 秒应为 `61187865` 毫秒，顶部显示约 `17h`。
+
+先完整备份实际使用的 SQLite 数据库，再预览、执行单位校正。`--report` 指定的文件必须不存在，JSONL 报告以 `0600` 权限保存；每条更新前同步落盘 `planned` 原值与新值，提交后记录 `applied`，完成时写入 `summary`。中途失败时保留已写入的日志，需结合数据库当前值判断最后一个计划是否已提交：
+
+```bash
+node --import tsx scripts/repair_trace_latency.ts --framework jiuwenswarm --report /path/to/jiuwen-preview.jsonl
+node --import tsx scripts/repair_trace_latency.ts --framework jiuwenswarm --apply --report /path/to/jiuwen-applied.jsonl
+```
+
+仅当原值乘 1000 后与原始事件首尾跨度吻合，且原值按毫秒不吻合时才校正；误差上限为 2% 或 2 毫秒，容纳根 Span 外层包装时间。时间戳取整导致不超过 1 毫秒的跨度无法可靠判断，保留原值。校正保持原有跨度口径，只修改 `Execution.latency`，不改 Session、交互、Token、时间戳或父子关系，不按空白时间删除等待。缺失时间证据、不吻合或已是毫秒的记录保持原值；再次运行不会重复放大。旧 Jiuwen Trace Bundle 导入使用相同检查，并保留传入 Bundle 的原始内容。未指定 `--framework` 时仍只重算 OpenCode。
 
 ## 阅读失败调用与完整输入输出
 

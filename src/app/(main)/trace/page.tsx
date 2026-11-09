@@ -49,6 +49,7 @@ import AgentTraceView from '@/components/observe/AgentTraceView';
 import { CodexThreadTimeline, type TraceThreadView } from '@/components/observe/CodexThreadTimeline';
 import TraceFilterBar from '@/components/observe/TraceFilterBar';
 import TraceFilterSidebar from '@/components/observe/TraceFilterSidebar';
+import TraceTimeFilter from '@/components/observe/TraceTimeFilter';
 import { TraceBackflowDialog } from '@/components/observe/TraceBackflowDialog';
 import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -56,6 +57,7 @@ import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
 import { loadTraceFacetValues } from '@/lib/client/trace-facets';
 import { traceFilterParsers, useTraceFilterMemory } from '@/lib/client/use-trace-filter-memory';
+import { resolveTraceTimeRange } from '@/lib/client/trace-time-range';
 import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
 
@@ -594,7 +596,13 @@ function TracePageContent() {
     }, []);
 
     // URL-persisted filter / sort / paging state (design/patterns.md §1 + §11).
-    const [timeFilter, setTimeFilter] = useQueryState('time', traceFilterParsers.time);
+    const [{ time: timeFilter, timeFrom, timeTo }, setTimeRange] = useQueryStates({
+        time: traceFilterParsers.time,
+        timeFrom: traceFilterParsers.timeFrom,
+        timeTo: traceFilterParsers.timeTo,
+    });
+    const customTimeRange = useMemo(() => timeFilter === 'custom' ? resolveTraceTimeRange(timeFrom, timeTo) : null,
+        [timeFilter, timeFrom, timeTo]);
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', traceFilterParsers.status);
     const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', traceFilterParsers.framework);
@@ -770,6 +778,8 @@ function TracePageContent() {
         ownershipFilter,
         anomalyFilter,
         timeFilter,
+        timeFrom,
+        timeTo,
         sortKey,
         sortDir,
         pageSize,
@@ -788,6 +798,8 @@ function TracePageContent() {
         ownershipFilter,
         anomalyFilter,
         timeFilter,
+        timeFrom,
+        timeTo,
         sortKey,
         sortDir,
         pageSize,
@@ -847,6 +859,16 @@ function TracePageContent() {
             return;
         }
         if (!user) return;
+        if (customTimeRange?.error) {
+            // Invalid deep links must clear stale results without issuing an unbounded query.
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            setStatsRequest(null);
+            setData([]);
+            setHasMore(false);
+            setLoading(false);
+            setListError(true);
+            return;
+        }
         const controller = new AbortController();
         listRequestPendingRef.current = true;
         const silentRefresh = previousListRequestKeyRef.current === listRequestKey;
@@ -864,7 +886,8 @@ function TracePageContent() {
                 : '';
         const skillParam = skillFilter !== 'all' ? `&skill=${encodeURIComponent(skillFilter)}` : '';
         const searchParam = search ? `&query=${encodeURIComponent(search)}` : '';
-        const filtersParam = clauses.length ? `&filters=${encodeURIComponent(JSON.stringify(clauses))}` : '';
+        const queryClauses = [...clauses, ...(customTimeRange?.clauses ?? [])];
+        const filtersParam = queryClauses.length ? `&filters=${encodeURIComponent(JSON.stringify(queryClauses))}` : '';
         const tagIdsParam = selectedUserTagIds.length > 0
             ? `&tagIds=${encodeURIComponent(selectedUserTagIds.join(','))}`
             : '';
@@ -919,6 +942,7 @@ function TracePageContent() {
         anomalyFilter,
         reliabilityAnomalyFilter,
         timeFilter,
+        customTimeRange,
         sortKey,
         sortDir,
         page,
@@ -1220,12 +1244,14 @@ function TracePageContent() {
                                 options={reliabilityAnomalyOptions}
                                 active={reliabilityAnomalyFilter !== 'all'}
                             />
-                            <Select
+                            <TraceTimeFilter
                                 label={t('tracePage.filterTime')}
                                 value={timeFilter}
-                                onChange={setTimeFilter}
+                                from={timeFrom}
+                                to={timeTo}
+                                locale={locale}
+                                onChange={next => { void setTimeRange(next); }}
                                 options={timeOptions}
-                                active={timeFilter !== 'all'}
                             />
                             <Select
                                 label={t('tracePage.filterFramework')}
@@ -1764,7 +1790,7 @@ function TraceDetailView({
 
     return (
         <div className="flex flex-col h-full min-h-0">
-            <div className="mb-3 flex shrink-0 flex-wrap items-start gap-2 rounded-md border border-border bg-card p-3 sm:items-center">
+            <div className="mb-3 flex min-w-0 shrink-0 flex-wrap items-start gap-2 rounded-md border border-border bg-card p-3 sm:items-center">
                 <Button variant="ghost" size="sm" onClick={onBack} className="text-foreground-muted h-7 px-2">
                     <ArrowLeft className="size-3.5" aria-hidden />
                     {t('tracePage.backToList')}
@@ -1787,11 +1813,11 @@ function TraceDetailView({
                         {locale === 'zh' ? '父执行' : 'Parent'}
                     </Button>
                 )}
-                <Separator orientation="vertical" className="hidden h-5 sm:block" />
+                <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
                 {isSubagentTrace && (
                     <span
                         title={subagentName || ''}
-                        className="text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary border border-primary/30 shrink-0"
+                        className="text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary border border-primary/30 max-w-full shrink-0 truncate"
                     >
                         SUB-AGENT{subagentType ? ` · ${subagentType}` : ''}
                     </span>
@@ -1825,7 +1851,7 @@ function TraceDetailView({
                 />
 
                 {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) || (typeof cost === 'number' && cost > 0) ? (
-                    <Separator orientation="vertical" className="hidden h-5 sm:block" />
+                    <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
                 ) : null}
                 {typeof tokens === 'number' && tokens > 0 && (
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
@@ -1874,7 +1900,7 @@ function TraceDetailView({
                         <RefreshCw className="size-3.5" />
                     </Button>
 
-                    <Separator orientation="vertical" className="hidden h-5 sm:block" />
+                    <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
                     <Button
                         variant="outline"
                         size="sm"

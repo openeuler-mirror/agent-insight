@@ -99,11 +99,28 @@ prepare_source_workdir() {
     const source = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
     const image = JSON.parse(fs.readFileSync("/app/node_modules/agent-insight/package.json", "utf8"))
     console.log(`Source mode: agent-insight ${source.version} from source (image dependencies: ${image.version})`)
-    const required = Object.keys({ ...source.dependencies, ...source.devDependencies })
-    const missing = required.filter((name) => !fs.existsSync(`/app/node_modules/${name}`))
-    if (missing.length > 0) {
-      console.warn(`Warning: ${missing.length} package(s) required by the source are missing from the image: ${missing.join(", ")}`)
-      console.warn("Dependencies are baked into the image — rebuild the image after changing package.json.")
+    const { createRequire } = require("module")
+    const resolve = createRequire(process.argv[1])
+    const required = { ...source.dependencies, ...source.devDependencies }
+    const errors = []
+    for (const [name, expected] of Object.entries(required)) {
+      let actual
+      try {
+        actual = JSON.parse(fs.readFileSync(resolve.resolve(`${name}/package.json`), "utf8")).version
+      } catch {
+        // Some packages hide package.json through exports; inspect the shared image directory.
+        const manifest = `/app/node_modules/${name}/package.json`
+        if (fs.existsSync(manifest)) actual = JSON.parse(fs.readFileSync(manifest, "utf8")).version
+      }
+      if (!actual) errors.push(`${name}: missing`)
+      else if (/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(expected) && actual !== expected) {
+        errors.push(`${name}: expected ${expected}, installed ${actual}`)
+      }
+    }
+    if (errors.length > 0) {
+      console.error(`Image dependencies do not match source requirements:\n${errors.join("\n")}`)
+      console.error("Dependencies are baked into the image — rebuild the image after changing package.json.")
+      process.exit(1)
     }
   ' "$SOURCE_WORKDIR/package.json"
 }
@@ -127,6 +144,8 @@ AGENT_INSIGHT_HOME="$RESOLVED_AGENT_INSIGHT_HOME"
 AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 export PORT
 export HOSTNAME
+: "${AGENT_INSIGHT_RAS_DISPATCH_PORT:=$((PORT + 1))}"
+export AGENT_INSIGHT_RAS_DISPATCH_PORT
 export AGENT_INSIGHT_HOME
 export AGENT_INSIGHT_STORAGE_DIR
 if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
@@ -206,7 +225,7 @@ if [ -n "$AGENT_INSIGHT_SOURCE_DIR" ]; then
   cp -a .next/static/. "$SOURCE_STANDALONE/.next/static/"
   cp -a public/. "$SOURCE_STANDALONE/public/"
 
-  exec node "$SOURCE_SERVER"
+  exec node scripts/control-server.js "$SOURCE_STANDALONE"
 fi
 
-exec node .next/standalone/server.js
+exec node scripts/control-server.js
