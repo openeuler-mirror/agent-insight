@@ -80,6 +80,8 @@ changefreq: monthly
 
 注册 xAI 时选择 **xAI Grok**，Base URL 使用 `https://api.x.ai/v1`。已有配置若填了已退役的 `grok-3` 等旧模型，请编辑模型名为 `grok-4.7` 后重新测试。Azure OpenAI 使用 `https://<resource>.openai.azure.com/openai/v1`。
 
+已知供应商的 Model 或 Base URL 留空时，服务端在调用时使用目录默认值。OpenAI 的 Base URL 留空时，优先使用服务端的 `OPENAI_BASE_URL`。切换默认模型时，留空的字段保持为空。
+
 ## 默认模型机制
 
 默认模型承担平台级兜底职责，通常用于：

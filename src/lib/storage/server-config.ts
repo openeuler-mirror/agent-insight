@@ -129,6 +129,15 @@ export async function getActiveConfig(user?: string | null): Promise<ModelConfig
 }
 
 export async function getUserSettings(user?: string | null): Promise<UserSettings> {
+    const settings = await getStoredUserSettings(user);
+    return {
+        ...settings,
+        configs: settings.configs.map(config => ({ ...config, ...resolveModelConnection(config) })),
+    };
+}
+
+// Keep unset model fields intact when settings can be saved back.
+export async function getStoredUserSettings(user?: string | null): Promise<UserSettings> {
     if (!user) {
         return { activeConfigId: null, configs: [], autoEvaluationEnabled: true };
     }
@@ -163,10 +172,7 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
         console.error('Failed to load user settings:', e);
     }
 
-    const mergedConfigs = [...defaultConfigs, ...userConfigs].map(config => ({
-        ...config,
-        ...resolveModelConnection(config),
-    }));
+    const mergedConfigs = [...defaultConfigs, ...userConfigs];
 
     if (!activeConfigId || !mergedConfigs.find(c => c.id === activeConfigId)) {
         activeConfigId = defaultConfigs.length > 0 ? defaultConfigs[0].id : null;
@@ -190,7 +196,7 @@ async function persistUserSettings(user: string, settings: UserSettings): Promis
     // The client only ever receives masked keys (see maskUserSettings), so an
     // unchanged config round-trips back here with a masked apiKey. Restore the
     // stored original for those, so saving never clobbers a real key with a mask.
-    const existing = await getUserSettings(user);
+    const existing = await getStoredUserSettings(user);
     const existingKeyById = new Map(existing.configs.map(c => [c.id, c.apiKey]));
     const existingHeadersById = new Map(existing.configs.map(c => [c.id, c.headers ?? {}]));
     const restoredConfigs = settings.configs.map(c => {

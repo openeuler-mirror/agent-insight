@@ -37,8 +37,9 @@ export function normalizeModelBaseUrl(baseUrl?: string): string | undefined {
 
 export function resolveModelConnection(config: ModelConnectionConfig) {
   const provider = getProvider(config.provider === 'deepseek' ? 'deepseek-official' : config.provider);
+  const envBaseUrl = provider?.id === 'openai' ? normalizeModelBaseUrl(process.env.OPENAI_BASE_URL) : undefined;
   return {
-    baseUrl: normalizeModelBaseUrl(config.baseUrl) || provider?.baseUrl || undefined,
+    baseUrl: normalizeModelBaseUrl(config.baseUrl) || envBaseUrl || provider?.baseUrl || undefined,
     model: config.model?.trim() || provider?.defaultModel || undefined,
   };
 }

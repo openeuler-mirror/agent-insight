@@ -19,9 +19,10 @@ import assert from 'node:assert/strict';
 import { OpenAI } from 'openai';
 import { probeModelConnection, classifyModelTestError } from '../src/lib/server/model-connection-test';
 import { resolveModelTestTimeoutMs, formatModelTestResult } from '../src/lib/shared/model-connection-test';
+import { GET as getSettings } from '../src/app/api/eval/settings/route';
 import { POST } from '../src/app/api/eval/settings/test/route';
 import { db } from '../src/lib/storage/prisma';
-import { saveUserSettings, getUserSettings } from '../src/lib/storage/server-config';
+import { getActiveConfig, saveUserSettings, getUserSettings } from '../src/lib/storage/server-config';
 import { getModelFetch } from '../src/lib/server/model-fetch';
 import { resolveCatalogProvider } from '../src/lib/llm-providers';
 
@@ -53,6 +54,23 @@ test('模型超时随设置保存并回读，非法值不会落库', async t => 
   assert.equal((await getUserSettings('test-only')).configs.find(c => c.id === 'timeout-test')?.testTimeoutMs, 90000);
   await assert.rejects(saveUserSettings('test-only', { ...settings, configs: [{ ...settings.configs[0], testTimeoutMs: 300001 }] }));
   assert.equal(write.mock.callCount(), 1);
+});
+
+test('切换默认模型不会把目录默认值写入设置', async t => {
+  const config = { id: 'implicit', name: 'Test', provider: 'xai', apiKey: 'test-only' };
+  let settingsJson = JSON.stringify({ activeConfigId: null, configs: [config] });
+  t.mock.method(db, 'findUserSettings', async () => ({ settingsJson }));
+  t.mock.method(db, 'upsertUserSettings', async (_user: string, json: string) => { settingsJson = json; });
+
+  const response = await getSettings(new Request('http://localhost/api/eval/settings?user=test-only'));
+  await saveUserSettings('test-only', { ...await response.json(), activeConfigId: config.id });
+  const [saved] = JSON.parse(settingsJson).configs;
+  assert.equal(saved.baseUrl, undefined);
+  assert.equal(saved.model, undefined);
+
+  const active = await getActiveConfig('test-only');
+  assert.equal(active?.baseUrl, 'https://api.x.ai/v1');
+  assert.equal(active?.model, 'grok-4.7');
 });
 
 test('成功请求发送最小推理内容且不自动重试', async () => {
@@ -118,7 +136,7 @@ test('未指定自定义端点时不会发送请求', async () => {
 });
 
 test('OpenAI 推理模型探测使用 max_completion_tokens', async () => {
-  await probeModelConnection({ provider: 'openai', model: 'gpt-6-astra' }, {
+  await probeModelConnection({ provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-astra' }, {
     timeoutMs: 1000,
     signal: new AbortController().signal,
     fetch: async (url, init) => {
@@ -145,6 +163,11 @@ test('共享传输按官方端点转换参数，自定义端点保留原始请�
     ['https://api.anthropic.com/v1/chat/completions',
       { model: 'claude-sonnet-5-5', ...sampling, ...format },
       { model: 'claude-sonnet-5-5', seed: 42 }],
+    ...['claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-20240620', 'claude-3-7-sonnet-20250219'].map(model => [
+      'https://api.anthropic.com/v1/chat/completions',
+      { model, ...sampling, ...format },
+      { model, temperature: 0, seed: 42 },
+    ] as const),
     ['https://model.test/v1/chat/completions',
       { model: 'gpt-6-astra', ...sampling },
       { model: 'gpt-6-astra', ...sampling }],

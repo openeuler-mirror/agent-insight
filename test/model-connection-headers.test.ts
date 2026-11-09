@@ -88,6 +88,22 @@ test('OpenAI Compatible 客户端参数透传 headers 且允许空 API Key', () 
   );
 });
 
+test('OpenAI 地址依次采用显式配置、环境变量、目录默认值', t => {
+  const previous = process.env.OPENAI_BASE_URL;
+  t.after(() => {
+    if (previous === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = previous;
+  });
+
+  process.env.OPENAI_BASE_URL = 'https://gateway.test/v1';
+  const config = { provider: 'openai' };
+  assert.equal(getOpenAICompatibleClientConfig(config).baseURL, 'https://gateway.test/v1');
+  assert.equal(getOpenAICompatibleClientConfig({ ...config, baseUrl: 'https://explicit.test/v1' }).baseURL, 'https://explicit.test/v1');
+  assert.equal(getOpenAICompatibleClientConfig({ provider: 'xai' }).baseURL, 'https://api.x.ai/v1');
+  delete process.env.OPENAI_BASE_URL;
+  assert.equal(getOpenAICompatibleClientConfig(config).baseURL, 'https://api.openai.com/v1');
+});
+
 test('模型设置返回浏览器前会掩码所有 Header 值', () => {
   const masked = maskUserSettings({
     activeConfigId: 'custom-1',

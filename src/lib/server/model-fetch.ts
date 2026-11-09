@@ -21,7 +21,7 @@ function isModernOpenAIModel(model: string): boolean {
 }
 
 export function isClaudeFixedSamplingModel(model: string): boolean {
-  return /^claude-(?:mythos-|\w+-[5-9](?:-|$)|\w+-4-(?:[7-9]|\d{2,})(?:-|$))/i.test(model);
+  return /^claude-(?:mythos-|[a-z]+-(?:[5-9]|4-(?:[7-9]|\d{2,}))(?:-|$))/i.test(model);
 }
 
 export function getModelFetch(fetcher = getProxyConfig().customFetch ?? globalThis.fetch): typeof fetch {
