@@ -15,18 +15,20 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { resolveAgentInsightDataPath, getAgentInsightHome } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'
 import { isModelConnectionReady } from '@/lib/shared/model-connection'
 import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
 import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
 import { runtimePackageRoot } from '@/lib/runtime/package-root'
-import { isLogEnabled } from '@/lib/logger/server'
+import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -127,16 +129,27 @@ async function getOpenPort(): Promise<number> {
   })
 }
 
-/** 健康检查。用裸 http 而不是 SDK,因为这时候 client 还没创建。 */
-function healthcheck(url: string): Promise<{ status: number }> {
+function sqliteStartupError(output: string): string | undefined {
+  return output.match(/\b(?:(?:table|index|trigger) [\w.]{1,128} already exists|(?:duplicate column name|no such (?:table|column)): [\w.]{1,128}|database is locked)\b/i)?.[0]
+    ?? output.match(/\bSQLITE_[A-Z_]{1,40}\b/)?.[0]
+}
+
+function healthcheck(url: string, signal: AbortSignal): Promise<{ status: number; detail?: string }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
       url,
-      { method: 'GET', headers: { connection: 'close' } },
+      { method: 'GET', headers: { connection: 'close' }, signal },
       (res) => {
-        // 必须消费 body,否则连接不会关闭
-        res.resume()
-        res.on('end', () => resolve({ status: res.statusCode || 0 }))
+        const status = res.statusCode || 0
+        let body = ''
+        if (status >= 500) {
+          res.setEncoding('utf8')
+          res.on('data', (chunk: string) => { body += chunk.slice(0, Math.max(0, 8192 - body.length)) })
+        } else {
+          res.resume()
+        }
+        res.on('error', reject)
+        res.on('end', () => resolve({ status, detail: sqliteStartupError(body) }))
       },
     )
     req.setTimeout(2000, () => req.destroy(new Error('healthcheck timeout')))
@@ -148,20 +161,30 @@ function healthcheck(url: string): Promise<{ status: number }> {
 /** 轮询健康检查端点直到 server ready。 */
 async function waitForServer(
   port: number,
-  maxAttempts = 300,
+  startupSignal: AbortSignal,
 ): Promise<void> {
   const url = `http://127.0.0.1:${port}/api/health`
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const res = await healthcheck(url)
-      if (res.status < 500) return
-    } catch {
-      // 连接被拒(server 还没起来),继续轮询
+  const signal = AbortSignal.any([startupSignal, AbortSignal.timeout(30_000)])
+  let lastFailure: string | undefined
+  try {
+    while (!signal.aborted) {
+      try {
+        const res = await healthcheck(url, signal)
+        if (res.status > 0 && res.status < 500) return
+        lastFailure = `HTTP ${res.status}${res.detail ? ` (${res.detail})` : ''}`
+      } catch (error) {
+        if (!signal.aborted) {
+          lastFailure ??= (error as NodeJS.ErrnoException).code || (error as Error).message
+        }
+      }
+      await delay(100, undefined, { signal })
     }
-    await new Promise((r) => setTimeout(r, 100))
+  } catch (error) {
+    if (!signal.aborted) throw error
   }
+  startupSignal.throwIfAborted()
   throw new Error(
-    `opencode server did not become ready within ${(maxAttempts * 100) / 1000}s`,
+    `opencode server did not become ready within 30s${lastFailure ? `: /api/health ${lastFailure}` : ''}`,
   )
 }
 
@@ -539,11 +562,23 @@ async function buildIsolatedOpencodeConfig(user: string): Promise<{
  */
 export async function prepareIsolatedHome(
   user: string,
-  opts?: { key?: string },
+  opts?: { key?: string; isolateSkills?: boolean },
 ): Promise<{ isolatedHome: string; cleanup: () => Promise<void> }> {
   const slug = userToSlug(user)
   const key = opts?.key || `eph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const root = resolveAgentInsightDataPath('.opencode-runtime', slug, `isolated-home-${key}`)
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 })
+  try { await markTemporaryHome(root) } catch (error) {
+    console.warn('[isolated-home] ownership marker unavailable; automatic cleanup will skip this directory:', error)
+  }
+  const cleanup = async () => {
+    try {
+      fs.rmSync(root, { recursive: true, force: true })
+    } catch (e) {
+      console.warn(`[isolated-home] cleanup failed for ${root}: ${(e as Error)?.message}`)
+    }
+  }
+  if (opts?.isolateSkills === false) return { isolatedHome: root, cleanup }
 
   // 创建 4 个空目录, 确保 opencode 扫到的 user skill 列表是空
   // (即使空目录 opencode 扫也 OK, 没有 SKILL.md 就算 0 个 skill)
@@ -551,9 +586,6 @@ export async function prepareIsolatedHome(
   fs.mkdirSync(path.join(root, '.opencode', 'skills'), { recursive: true })
   fs.mkdirSync(path.join(root, '.claude', 'skills'), { recursive: true })
   fs.mkdirSync(path.join(root, '.agents', 'skills'), { recursive: true })
-  try { await markTemporaryHome(root) } catch (error) {
-    console.warn('[isolated-home] ownership marker unavailable; automatic cleanup will skip this directory:', error)
-  }
 
   // Symlink user 真实的 trace 上报 plugin (~/.opencode/plugins/Witty-Skill-Insight.ts)
   // 到隔离 HOME 下的 .opencode/plugins/, 保留 trace 上报链路。
@@ -578,16 +610,7 @@ export async function prepareIsolatedHome(
     console.log(`[isolated-home] real plugin not at ${realPlugin}, evaluator session 不会被 trace 上报 (符合预期)`)
   }
 
-  return {
-    isolatedHome: root,
-    cleanup: async () => {
-      try {
-        fs.rmSync(root, { recursive: true, force: true })
-      } catch (e) {
-        console.warn(`[isolated-home] cleanup failed for ${root}: ${(e as Error)?.message}`)
-      }
-    },
-  }
+  return { isolatedHome: root, cleanup }
 }
 
 async function prepareIsolatedXdgConfigHome(user: string): Promise<{
@@ -617,7 +640,7 @@ function killOpencodeProcessTree(
   proc: ChildProcess,
   signal: NodeJS.Signals,
 ): void {
-  if (proc.exitCode !== null || typeof proc.pid !== 'number') return
+  if (typeof proc.pid !== 'number') return
   try {
     process.kill(-proc.pid, signal)
   } catch (err) {
@@ -820,7 +843,7 @@ async function terminateOpencodeProcess(
 ): Promise<void> {
   const pgid = proc.pid
   if (typeof pgid !== 'number') return
-  if (proc.exitCode !== null && !processGroupExists(pgid)) { unregisterOpencodePgid(pgid); return }
+  if (!processGroupExists(pgid)) { unregisterOpencodePgid(pgid); return }
 
   killOpencodeProcessTree(proc, 'SIGTERM')
 
@@ -925,14 +948,17 @@ async function startServerForUser(
      * 不传 = 用 process.env.HOME (默认行为, ensureOpencodeServer 复用路径用)。
      */
     homeOverride?: string
+    temporaryRoot?: string
     /** false: load opencode without Agent Insight plugin capture for internal evaluator transports. */
     telemetryEnabled?: boolean
   },
 ): Promise<SingleServer> {
-  const { verbose = false, homeOverride, telemetryEnabled = true } = opts
+  const { verbose = false, homeOverride, temporaryRoot, telemetryEnabled = true } = opts
   const port = await getOpenPort()
   const binary = resolveOpencodeBinary()
   const { xdgRoot, configHash: baseConfigHash } = await prepareIsolatedXdgConfigHome(user)
+  const runtimeRoot = temporaryRoot ?? path.join(xdgRoot, `v1-${createHash('sha256').update(user).digest('hex')}`)
+  fs.mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 })
   const pluginUploadEnv = await buildPluginUploadEnvOverride(user)
   // 把 plugin upload 用的 apiKey 也算进 hash —— user 在 UI 改 apiKey 后老实例
   // 会继续用旧 key 上报数据,被 /api/ingest/upload 401 reject,数据丢失。新 hash
@@ -963,6 +989,9 @@ async function startServerForUser(
         OPENCODE_PORT: String(port),
         // 屏蔽用户全局 ~/.config/opencode/ 下的配置/插件。详见 prepareIsolatedXdgConfigHome 注释。
         XDG_CONFIG_HOME: xdgRoot,
+        XDG_DATA_HOME: path.join(runtimeRoot, 'data'),
+        XDG_STATE_HOME: path.join(runtimeRoot, 'state'),
+        XDG_CACHE_HOME: path.join(runtimeRoot, 'cache'),
         // 隔离模式下覆盖 HOME, opencode 扫 ~/.claude/skills + ~/.agents/skills 时看到空
         // (详见 prepareIsolatedHome 注释)。
         ...(homeOverride ? { HOME: homeOverride } : {}),
@@ -977,7 +1006,13 @@ async function startServerForUser(
   state.liveProcs.add(proc)
   if (typeof proc.pid === 'number') registerOpencodePgid(proc.pid, user)
 
-  // 转发日志(可选)。生产环境可以写到文件。
+  const startup = new AbortController()
+  let startupStderr = ''
+  const captureStartupStderr = (chunk: Buffer) => {
+    startupStderr = (startupStderr + chunk.toString()).slice(-8192)
+  }
+  proc.stderr?.on('data', captureStartupStderr)
+
   if (verbose || isLogEnabled('debug')) {
     proc.stdout?.on('data', (b: Buffer) =>
       console.debug(`[opencode:${user}] ${b.toString()}`),
@@ -997,6 +1032,7 @@ async function startServerForUser(
 
   // 关键:server 进程崩了或主动退出后,清空 map 中对应条目，下次请求会自动 respawn。
   proc.on('exit', (code, signal) => {
+    startup.abort(new Error(`opencode server exited during startup (code=${code}, signal=${signal})`))
     state.liveProcs.delete(proc)
     // wrapper 退出后, 若整组确实也没了就清注册表; 若 .opencode 仍残留(组还在)则保留记录留给下次 sweep。
     if (typeof proc.pid === 'number' && !processGroupExists(proc.pid)) unregisterOpencodePgid(proc.pid)
@@ -1010,21 +1046,32 @@ async function startServerForUser(
   })
 
   proc.on('error', (err) => {
-    console.error(`[opencode:${user}] failed to spawn server:`, err.message)
+    if (typeof proc.pid !== 'number') state.liveProcs.delete(proc)
+    startup.abort(new Error(`opencode failed to spawn server: ${sanitizeLogValue(err.message)}`))
   })
 
-  if (homeOverride && typeof proc.pid === 'number') {
-    try { await markTemporaryHome(homeOverride, proc.pid) } catch (error) {
+  if (temporaryRoot && typeof proc.pid === 'number') {
+    try { await markTemporaryHome(temporaryRoot, proc.pid) } catch (error) {
       console.warn('[isolated-home] child ownership unavailable; automatic cleanup will skip this directory:', error)
     }
   }
 
-  // 等 server ready,失败时杀掉进程
   try {
-    await waitForServer(port)
-  } catch (err) {
-    proc.kill('SIGTERM')
-    throw err
+    await waitForServer(port, startup.signal)
+    startup.signal.throwIfAborted()
+  } catch (error) {
+    await terminateOpencodeProcess(proc, 'failed startup cleanup')
+    const detail = sqliteStartupError(startupStderr)
+    const message = (error as Error).message
+    const failure = new Error(detail && !message.includes(detail) ? `${message}: ${detail}` : message, { cause: error })
+    console.error(`[opencode:${user}] ${failure.message}`)
+    if (typeof proc.pid === 'number' && processGroupExists(proc.pid)) {
+      throw Object.assign(failure, { code: 'EVALUATION_CLEANUP_UNCONFIRMED' })
+    }
+    throw failure
+  } finally {
+    proc.stderr?.off('data', captureStartupStderr)
+    proc.stderr?.resume()
   }
 
   return {
@@ -1249,17 +1296,18 @@ export async function runWithEphemeralOpencodeServer<T>(
   const parentSignal = experimentSignal()
   const cancellation = opts.signal && parentSignal ? AbortSignal.any([opts.signal, parentSignal]) : opts.signal || parentSignal
   cancellation?.throwIfAborted()
-  // 准备隔离 HOME (如启用), 拿 cleanup 在 finally 里调
-  let homeCleanup: (() => Promise<void>) | null = null
-  let homeOverride: string | undefined = undefined
-  if (opts.isolateHome) {
-    const { isolatedHome, cleanup } = await prepareIsolatedHome(userKey)
-    homeOverride = isolatedHome
-    homeCleanup = cleanup
-  }
+  const { isolatedHome: temporaryRoot, cleanup } = await prepareIsolatedHome(userKey, {
+    isolateSkills: !!opts.isolateHome,
+  })
+  const homeOverride = opts.isolateHome ? temporaryRoot : undefined
   // 注意: 直接调内部 startServerForUser 不走 cache, 也不写 state.servers。
   // 多个 ephemeral 调用并发时各自起独立进程,互不复用,自然隔离。
-  const inst = await startServerForUser(userKey, { verbose, homeOverride, telemetryEnabled })
+  const inst = await startServerForUser(userKey, { verbose, homeOverride, temporaryRoot, telemetryEnabled })
+    .catch(async error => {
+      if (error?.code === 'EVALUATION_CLEANUP_UNCONFIRMED') markExperimentCleanupUnconfirmed()
+      else await cleanup()
+      throw error
+    })
   const cancel = () => { void terminateOpencodeProcess(inst.process, 'experiment cancellation').catch(() => {}) }
   cancellation?.addEventListener('abort', cancel, { once: true })
   if (cancellation?.aborted) cancel()
@@ -1285,9 +1333,7 @@ export async function runWithEphemeralOpencodeServer<T>(
       markExperimentCleanupUnconfirmed()
     }
     // 隔离 HOME 临时目录在 server 死透之后清, 避免 server 还在引用文件被 unlink
-    if (homeCleanup) {
-      await homeCleanup()
-    }
+    if (!cleanupUnconfirmed) await cleanup()
     if (opts.requireCleanup && cleanupUnconfirmed) {
       throw Object.assign(new Error('OpenCode 执行未能确认停止，已停止重试'), { code: 'EVALUATION_CLEANUP_UNCONFIRMED' })
     }
