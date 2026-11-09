@@ -17,6 +17,7 @@
 import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatOpenAI } from "@langchain/openai";
 import { getModelFetch, isClaudeFixedSamplingModel } from "@/lib/server/model-fetch";
+import { normalizeModelBaseUrl } from "@/lib/shared/model-connection";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger("skill-generation:model");
@@ -92,6 +93,9 @@ export function createModel(opts: ModelOptions) {
   return new ChatAnthropic({
     model: modelId,
     anthropicApiKey: opts.apiKey,
+    // The native SDK appends /v1/messages to its base URL.
+    anthropicApiUrl: normalizeModelBaseUrl(opts.baseUrl)?.replace(/\/v1$/i, ""),
+    clientOptions: { fetch: getModelFetch() },
     temperature: isClaudeFixedSamplingModel(modelId) ? undefined : temperature,
   });
 }

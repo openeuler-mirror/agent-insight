@@ -163,7 +163,7 @@ test('analysis diagnosis requests structured Claude output and keeps JSON mode f
       activeConfigId: 'test-model',
       configs: [{
         id: 'test-model', name: 'Test model', provider: 'custom', apiKey: 'test-only', model,
-        baseUrl: user === 'claude-test' ? 'https://api.anthropic.com' : 'https://model.test/v1',
+        baseUrl: user === 'claude-test' ? 'https://api.anthropic.com/v1/messages/' : 'https://model.test/v1',
       }],
     }),
   }));

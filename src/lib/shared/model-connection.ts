@@ -27,6 +27,7 @@ export interface ModelConnectionConfig {
 export function normalizeModelBaseUrl(baseUrl?: string): string | undefined {
   const base = baseUrl?.trim().replace(/\/+$/, '')
     .replace(/\/chat\/completions$/i, '')
+    .replace(/(\/v1)\/messages$/i, '$1')
     .replace(/^(https:\/\/(?:api\.openai\.com|(?:[a-z-]+\.)?api\.x\.ai)\/v1)\/responses$/i, '$1');
   if (base && /^https:\/\/(?:api\.(?:openai\.com|anthropic\.com|x\.ai)|[a-z-]+\.api\.x\.ai)$/i.test(base)) {
     return base + '/v1';

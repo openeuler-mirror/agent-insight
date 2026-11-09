@@ -80,6 +80,8 @@ changefreq: monthly
 
 注册 xAI 时选择 **xAI Grok**，Base URL 使用 `https://api.x.ai/v1`。已有配置若填了已退役的 `grok-3` 等旧模型，请编辑模型名为 `grok-4.7` 后重新测试。注册 Azure OpenAI 时，Base URL 使用 `https://<resource>.openai.azure.com/openai/v1`，并在 **部署名称** 中填写实际部署名。
 
+Azure OpenAI 的评测请求保留采样设置。部署明确拒绝这些参数时，系统改用服务端默认采样并重试一次。Anthropic 的 Base URL 可填写 `https://api.anthropic.com/v1` 或完整的 `https://api.anthropic.com/v1/messages`。
+
 供应商目录提供默认 Model 或 Base URL 时，服务端在调用时补全对应的留空字段。目录没有默认模型时，必须填写 Model 才能通过连接测试。OpenAI 的 Base URL 留空时，优先使用服务端的 `OPENAI_BASE_URL`。切换默认模型时，留空的字段保持为空。
 
 ## 默认模型机制

@@ -17,6 +17,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenAI } from 'openai';
+import { MockAgent, ProxyAgent } from 'undici';
 import { probeModelConnection, classifyModelTestError } from '../src/lib/server/model-connection-test';
 import { resolveModelTestTimeoutMs, formatModelTestResult } from '../src/lib/shared/model-connection-test';
 import { GET as getSettings } from '../src/app/api/eval/settings/route';
@@ -25,6 +26,8 @@ import { db } from '../src/lib/storage/prisma';
 import { getActiveConfig, saveUserSettings, getUserSettings } from '../src/lib/storage/server-config';
 import { getModelFetch } from '../src/lib/server/model-fetch';
 import { getProvider, resolveCatalogProvider } from '../src/lib/llm-providers';
+import { createModel } from '../src/lib/engine/skill-generation/shared/model';
+import { resetProxyConfigCache } from '../src/lib/ingest/proxy-config';
 
 const config = { provider: 'custom', baseUrl: 'https://model.test/v1', model: 'test-model' };
 const completion = { choices: [{ message: { role: 'assistant', content: 'ok' } }] };
@@ -167,7 +170,10 @@ test('Azure OpenAI 要求填写部署名并将它发给对应资源', async t =>
   const connection = { provider: 'azure-openai', baseUrl: 'https://example.openai.azure.com/openai' };
   const fetch = t.mock.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     assert.equal(String(url), 'https://example.openai.azure.com/openai/v1/chat/completions');
-    assert.equal(JSON.parse(init?.body as string).model, 'evaluation-deployment');
+    const body = JSON.parse(init?.body as string);
+    assert.equal(body.model, 'evaluation-deployment');
+    assert.equal(body.max_completion_tokens, 128);
+    assert.equal('max_tokens' in body, false);
     return Response.json(completion);
   });
   const options = { timeoutMs: 1000, signal: new AbortController().signal, fetch };
@@ -177,6 +183,64 @@ test('Azure OpenAI 要求填写部署名并将它发给对应资源', async t =>
 
   await probeModelConnection({ ...connection, model: ' evaluation-deployment ' }, options);
   assert.equal(fetch.mock.callCount(), 1);
+});
+
+test('Azure v1 按部署返回的参数错误降级采样，保留成功请求的采样设置', async () => {
+  const url = 'https://example.openai.azure.com/openai/v1/chat/completions';
+  const base = { model: 'evaluation-deployment', response_format: { type: 'json_object' } };
+  const sampling = { temperature: 0, top_p: 1, seed: 42 };
+  const init = { method: 'POST', body: JSON.stringify({ ...base, ...sampling, max_tokens: 512 }) };
+  const expected = { ...base, max_completion_tokens: 512 };
+  for (const error of [
+    undefined,
+    { param: 'temperature', code: 'unsupported_value' },
+    { param: 'top_p', code: null, message: "Unsupported parameter: 'top_p' is not supported with this model." },
+    { param: 'response_format', code: 'unsupported_parameter' },
+  ]) {
+    const bodies: unknown[] = [];
+    const fetch = getModelFetch(async (_url, request) => {
+      bodies.push(JSON.parse(request?.body as string));
+      return error && bodies.length === 1 ? Response.json({ error }, { status: 400 }) : Response.json(completion);
+    });
+    const response = await fetch(url, init);
+    const shouldRetry = error?.param === 'temperature' || error?.param === 'top_p';
+    assert.deepEqual(bodies, shouldRetry ? [{ ...expected, ...sampling }, expected] : [{ ...expected, ...sampling }]);
+    assert.equal(response.status, error && !shouldRetry ? 400 : 200);
+    assert.deepEqual(await response.json(), error && !shouldRetry ? { error } : completion);
+  }
+});
+
+test('技能生成的 Anthropic 客户端使用代理和原生 Messages 路径', async t => {
+  const originalEnv = process.env;
+  process.env = { ...originalEnv, https_proxy: 'http://proxy.test:3128', no_proxy: 'proxy.test' };
+  resetProxyConfigCache();
+  const mockAgent = new MockAgent();
+  mockAgent.disableNetConnect();
+  t.after(async () => {
+    process.env = originalEnv;
+    resetProxyConfigCache();
+    await mockAgent.close();
+  });
+
+  const modelId = 'claude-sonnet-5-5';
+  const reply = {
+    id: 'msg-test', type: 'message', role: 'assistant', model: modelId,
+    content: [{ type: 'text', text: 'OK' }], stop_reason: 'end_turn', stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  };
+  mockAgent.get(/.*/).intercept({ path: /.*/, method: 'POST' })
+    .reply(200, reply, { headers: { 'content-type': 'application/json' } }).persist();
+  const dispatch = t.mock.method(ProxyAgent.prototype, 'dispatch', mockAgent.dispatch.bind(mockAgent));
+  t.mock.method(globalThis, 'fetch', async () => Response.json(reply));
+
+  for (const baseUrl of ['https://api.anthropic.com/v1', ' https://gateway.test/team/v1/messages/ ']) {
+    const model = createModel({ provider: 'anthropic', modelId, apiKey: 'test-only', baseUrl });
+    assert.equal((await model.invoke('Reply with OK.')).content, 'OK');
+  }
+  assert.deepEqual(dispatch.mock.calls.map(({ arguments: [request] }) => `${request.origin}${request.path}`), [
+    'https://api.anthropic.com/v1/messages',
+    'https://gateway.test/team/v1/messages',
+  ]);
 });
 
 test('共享传输按官方端点转换参数，自定义端点保留原始请求', async () => {
