@@ -43,7 +43,7 @@ interface Config {
 }
 
 function loadConfiguration(): Config {
-    let config: Record<string, string> = {};
+    const config: Record<string, string> = {};
     try {
         const envPath = path.join(os.homedir(), '.agent-insight', '.env');
         const legacyEnvPath = path.join(os.homedir(), '.witty', '.env');
@@ -59,7 +59,7 @@ function loadConfiguration(): Config {
                 }
             });
         }
-    } catch (e) {}
+    } catch {}
     
     return {
         apiKey: config['AGENT_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.AGENT_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,
@@ -190,7 +190,7 @@ async function syncSkills(targetAgent?: string) {
                 if (fs.existsSync(manifestPath)) {
                     localManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
                 }
-            } catch (e) {}
+            } catch {}
 
             for (const skill of remoteSkills) {
                 const localVer = localManifest[skill.name]?.version || -1;
