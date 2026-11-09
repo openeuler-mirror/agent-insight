@@ -52,13 +52,20 @@ export interface OptimizationRecordView {
   createdAt: string;
   updatedAt?: string;
   publishedVersion: number | null;
+  skillId?: string | null;
+  activeVersion?: number | null;
+  verificationStatus?: string | null;
+  verificationMode?: string | null;
+  verifiedAt?: string | null;
+  verifiedBy?: string | null;
+  verificationNote?: string | null;
   errorMessage: string | null;
   sourceSession?: { id: string; title: string } | null;
 }
 
 const STATUS_COPY: Record<string, { label: string; tone: string }> = {
   optimizing: { label: '优化中', tone: 'text-primary bg-primary-subtle' },
-  pending_retest: { label: '静态通过，待完整复测', tone: 'text-warning bg-warning-subtle' },
+  pending_retest: { label: '前置质量通过，可发布', tone: 'text-success bg-success-subtle' },
   retesting: { label: '行为验证中', tone: 'text-primary bg-primary-subtle' },
   retest_passed: { label: '行为验证通过', tone: 'text-success bg-success-subtle' },
   retest_failed: { label: '行为验证未通过', tone: 'text-error bg-error-subtle' },
@@ -70,6 +77,22 @@ const STATUS_COPY: Record<string, { label: string; tone: string }> = {
 };
 
 const ABANDONABLE = new Set(['pending_retest', 'retest_passed', 'retest_failed', 'retest_cancelled']);
+
+function statusCopy(record: OptimizationRecordView) {
+  if (record.status === 'published' && record.activeVersion === record.publishedVersion) {
+    return { label: '已验证并激活', tone: 'text-success bg-success-subtle' };
+  }
+  if (record.status === 'published' && record.verificationStatus === 'pending') {
+    return { label: '已发布，待外部验证', tone: 'text-warning bg-warning-subtle' };
+  }
+  if (record.status === 'published' && record.verificationStatus === 'passed') {
+    return { label: '外部验证通过', tone: 'text-success bg-success-subtle' };
+  }
+  if (record.status === 'published' && record.verificationStatus === 'failed') {
+    return { label: '外部验证未通过', tone: 'text-error bg-error-subtle' };
+  }
+  return STATUS_COPY[record.status] || { label: record.status, tone: 'text-foreground-muted bg-background-secondary' };
+}
 
 function displayOptimizationError(message: string) {
   if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|network error/i.test(message)) {
@@ -114,8 +137,8 @@ export function OptimizationRecordsPanel({
   }>({ phase: 'idle' });
   useEffect(() => setDeployment({ phase: 'idle' }), [selected?.id]);
   if (!selected) return null;
-  const selectedStatus = STATUS_COPY[selected.status] || { label: selected.status, tone: 'text-foreground-muted bg-background-secondary' };
-  const publishable = selected.sourceKind === 'diagnosis' ? selected.status === 'retest_passed' : ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(selected.status);
+  const selectedStatus = statusCopy(selected);
+  const publishable = ['pending_retest', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(selected.status);
   const verification = selected.sourceRefs?.find((ref) => ref.type === 'verification-result');
   const executionFailed = selected.status === 'optimization_failed' && !selected.staticEvaluationId;
   let deploymentResult: Record<string, any> = {};
@@ -194,7 +217,7 @@ export function OptimizationRecordsPanel({
             <p className="px-2 py-2 text-[10px] font-medium text-foreground-muted">全部记录 · {records.length}</p>
             <div className="space-y-1">
               {records.map((record) => {
-            const status = STATUS_COPY[record.status] || { label: record.status, tone: 'text-foreground-muted bg-background-secondary' };
+            const status = statusCopy(record);
             return (
               <button type="button" key={record.id} onClick={() => onSelectRecordId(record.id)} className={cn('w-full rounded-md border p-3 text-left', selected.id === record.id ? 'border-primary bg-card' : 'border-transparent hover:bg-card')}>
                 <div className="flex items-center gap-2"><b className="text-xs text-foreground">{getOptimizationTransitionLabel(record)}</b><span className={cn('ml-auto rounded px-1.5 py-0.5 text-[9px]', status.tone)}>{status.label}</span></div>
@@ -223,10 +246,10 @@ export function OptimizationRecordsPanel({
                         className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
                       >
                         {publishingId === selected.id ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
-                        发布为 {getOptimizationTargetVersion(selected)}
+                        发布待验证 {getOptimizationTargetVersion(selected)}
                       </button>
                     )}
-                    {selected.status === 'published' && selected.publishedVersion !== null && (
+                    {selected.status === 'published' && selected.publishedVersion !== null && ['passed', 'not_required'].includes(selected.verificationStatus || '') && (
                       <button
                         type="button"
                         disabled={deployment.phase === 'previewing' || deployment.phase === 'deploying'}

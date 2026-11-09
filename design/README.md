@@ -20,6 +20,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| Skill 待验证版本发布 | [需求分析](optimization/external-skill-validation/phase1-requirements-analysis.md) · [需求设计](optimization/external-skill-validation/phase2-requirements-design.md) · [开发计划](optimization/external-skill-validation/phase3-development-plan.md) | 优化候选通过前置质量门禁后，可在会话卡片发布为不立即激活的正式版本，下载到外部环境验证并登记结果，通过后再激活 | Feature | 2026-11-09 | 🟡 核心实现与 79 项相关自动化测试完成；待浏览器验收 | — |
 | 优化后 Skill 下发 | [需求分析](optimization/skill-deployment/phase1-requirements-analysis.md) · [需求设计](optimization/skill-deployment/phase2-requirements-design.md) · [开发计划](optimization/skill-deployment/phase3-development-plan.md) | 将复测并发布的正式 Skill 版本下发到来源 Trace 的用户端，按框架解析项目或全局目标，提供版本账本、持久备份、历史版本重下发、原子替换与验证恢复 | Feature | 2026-11-08 | 🟡 核心实现与专项自动化测试完成；待浏览器及四框架真实客户端验收 | 待补 |
 | 评测结果 → 智能诊断 → Skill 优化 | [需求分析](diagnosis/evaluation-to-skill-optimization/phase1-requirements-analysis.md) · [需求设计](diagnosis/evaluation-to-skill-optimization/phase2-requirements-design.md) · [开发计划](diagnosis/evaluation-to-skill-optimization/phase3-development-plan.md) | 评测证据快照进入诊断，诊断发现转为 Skill 优化计划并复测 | Feature | 2026-11-02 | 已实现；临时库流程与迁移演练通过，真实模型/Worker 联调待验收 | — |
 | 核心 E2E 自动化与采集覆盖 | [实施计划](platform/core-e2e-regression/phase3-implementation-plan.md) | 5 个核心场景：准备、OpenCode 观测、Skill 与数据集生命周期、无数据集 Trace 闭环、故障恢复；逐例 Real/Mock、生产编译门禁与复现规范 | Test / Design | 2026-11-03 | 已实现；001～005连续编号，故障恢复原006改005；编号调整前整轮生产编译、UT和五个活动场景隔离通过，常驻服务待升级 | — |

@@ -47,17 +47,22 @@ model Skill {
 }
 
 model SkillVersion {
-  id                String   @id @default(cuid())
-  skillId           String
-  version           Int
-  semanticVersion   String? // 语义化版本号，用于企业同步
-  enterpriseSkillId Int? // 企业skill的id，用于删除同步
-  content           String
-  assetPath         String?
-  files             String?
-  changeLog         String?
-  createdAt         DateTime @default(now())
-  Skill             Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  id                 String   @id @default(cuid())
+  skillId            String
+  version            Int
+  semanticVersion    String? // 语义化版本号，用于企业同步
+  enterpriseSkillId  Int? // 企业skill的id，用于删除同步
+  content            String
+  assetPath          String?
+  files              String?
+  changeLog          String?
+  verificationStatus String   @default("not_required")
+  verificationMode   String?
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  verificationNote   String?
+  createdAt          DateTime @default(now())
+  Skill              Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
 
   @@unique([skillId, version])
 }

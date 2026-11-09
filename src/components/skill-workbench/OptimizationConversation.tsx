@@ -17,7 +17,7 @@
 'use client';
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bot, Check, CheckCircle2, Circle, CircleX, Download, FileSearch, Loader2, Power, Send, ShieldCheck, Upload, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
 import { hasOptimizationInput } from '@/lib/skill-workbench/optimization-request';
@@ -192,6 +192,9 @@ export function OptimizationConversation({
   quickActions,
   onViewRecords,
   onPublish,
+  onDownloadPublished,
+  onRecordVerification,
+  onActivatePublished,
   onRepair,
   onAutoStartConsumed,
   onSynced,
@@ -215,6 +218,9 @@ export function OptimizationConversation({
   quickActions?: ReactNode | ((feedback: string, busy: boolean) => ReactNode);
   onViewRecords: (record: OptimizationRecordView) => void;
   onPublish: (record: OptimizationRecordView) => void;
+  onDownloadPublished: (record: OptimizationRecordView) => void;
+  onRecordVerification: (record: OptimizationRecordView, result: 'passed' | 'failed') => void;
+  onActivatePublished: (record: OptimizationRecordView) => void;
   onRepair: (record: OptimizationRecordView) => void;
   onAutoStartConsumed: () => void;
   onSynced: (session: unknown) => void;
@@ -748,6 +754,9 @@ export function OptimizationConversation({
               publishing={publishing}
               onViewRecords={onViewRecords}
               onPublish={onPublish}
+              onDownloadPublished={onDownloadPublished}
+              onRecordVerification={onRecordVerification}
+              onActivatePublished={onActivatePublished}
               onRepair={onRepair}
             />)}
             {message.streaming && !showLiveProgress && <Loader2 className="mt-2 size-3.5 animate-spin text-primary" />}
@@ -757,7 +766,7 @@ export function OptimizationConversation({
         {records.filter((record) => !attachedRecordIds.has(record.id)).map((record) => {
           return <div key={record.id} className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border bg-card p-3">
             <div className="mb-2 flex items-center gap-1.5 text-[11px] text-foreground-muted"><Bot className="size-3.5" />未关联的历史优化记录 · {getOptimizationTransitionLabel(record)}</div>
-            <OptimizationResultCard record={record} busy={busy} publishing={publishing} onViewRecords={onViewRecords} onPublish={onPublish} onRepair={onRepair} />
+            <OptimizationResultCard record={record} busy={busy} publishing={publishing} onViewRecords={onViewRecords} onPublish={onPublish} onDownloadPublished={onDownloadPublished} onRecordVerification={onRecordVerification} onActivatePublished={onActivatePublished} onRepair={onRepair} />
           </div>;
         })}
       </div>
@@ -799,33 +808,46 @@ function OptimizationProgressCard({ task, record, localStep, planning, showError
   </div>;
 }
 
-function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPublish, onRepair }: {
+function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPublish, onDownloadPublished, onRecordVerification, onActivatePublished, onRepair }: {
   record: OptimizationRecordView;
   busy: boolean;
   publishing: boolean;
   onViewRecords: (record: OptimizationRecordView) => void;
   onPublish: (record: OptimizationRecordView) => void;
+  onDownloadPublished: (record: OptimizationRecordView) => void;
+  onRecordVerification: (record: OptimizationRecordView, result: 'passed' | 'failed') => void;
+  onActivatePublished: (record: OptimizationRecordView) => void;
   onRepair: (record: OptimizationRecordView) => void;
 }) {
   const qualityPassed = ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(record.status);
+  const publishable = ['pending_retest', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(record.status);
   const executionFailed = record.status === 'optimization_failed' && !record.blockingIssues?.length && Boolean(record.errorMessage);
   const hasCandidate = Boolean(record.staticEvaluationId && Object.keys(record.candidateFiles || {}).length);
   const cancelled = record.status === 'optimization_cancelled';
+  const published = record.status === 'published' && record.publishedVersion !== null;
+  const verificationPending = published && record.verificationStatus === 'pending';
+  const verificationPassed = published && record.verificationStatus === 'passed';
+  const verificationFailed = published && record.verificationStatus === 'failed';
+  const activated = published && record.activeVersion === record.publishedVersion;
   const status = cancelled ? '优化已停止' : record.status === 'optimizing' ? '优化中'
-    : qualityPassed ? ({ pending_retest: '静态通过，待完整复测', retesting: '行为验证中', retest_passed: '行为验证通过', retest_failed: '行为验证未通过', retest_cancelled: '行为验证已停止' } as Record<string, string>)[record.status]
+    : qualityPassed ? ({ pending_retest: '前置质量通过，可发布', retesting: '平台行为验证中', retest_passed: '平台行为验证通过', retest_failed: '平台行为验证未通过', retest_cancelled: '平台行为验证已停止' } as Record<string, string>)[record.status]
       : executionFailed ? '优化执行失败'
         : record.status === 'optimization_failed' ? '质量校验未通过'
-        : record.status === 'published' ? '已发布'
-          : record.status === 'abandoned' ? '已放弃' : '需处理';
+        : activated ? '已验证并激活'
+          : verificationPassed ? '外部验证通过'
+            : verificationFailed ? '外部验证未通过'
+              : verificationPending ? '已发布，待外部验证'
+                : record.status === 'published' ? '已发布'
+                  : record.status === 'abandoned' ? '已放弃' : '需处理';
   return <div className="mt-3 min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-background p-3">
     <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-foreground">
-      {cancelled ? <Circle className="size-4 shrink-0 text-foreground-muted" /> : record.status.endsWith('_failed') ? <X className="size-4 shrink-0 text-error" /> : record.status === 'optimizing' ? <Loader2 className="size-4 shrink-0 animate-spin text-primary" /> : record.status === 'retest_passed' || record.status === 'published' ? <CheckCircle2 className="size-4 shrink-0 text-success" /> : <Circle className="size-4 shrink-0 text-warning" />}
+      {cancelled ? <Circle className="size-4 shrink-0 text-foreground-muted" /> : verificationFailed || record.status.endsWith('_failed') ? <X className="size-4 shrink-0 text-error" /> : record.status === 'optimizing' ? <Loader2 className="size-4 shrink-0 animate-spin text-primary" /> : activated || verificationPassed || record.status === 'retest_passed' ? <CheckCircle2 className="size-4 shrink-0 text-success" /> : <Circle className="size-4 shrink-0 text-warning" />}
       <span className="min-w-0 truncate">{cancelled ? '本轮优化已停止' : executionFailed && !hasCandidate ? '本轮优化失败' : getOptimizationTransitionLabel(record)}</span>
       <span className="ml-auto shrink-0 rounded bg-background-secondary px-1.5 py-0.5 text-[10px] text-foreground-muted">{status}</span>
     </div>
     <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-[11px] leading-4 text-foreground-secondary [overflow-wrap:anywhere]">{executionFailed && !hasCandidate ? `尚未生成 ${getOptimizationTargetVersion(record)} 候选。${displayOptimizationError(record.errorMessage)}` : record.summary}</p>
     <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-foreground-secondary">
-      {hasCandidate && <span className="rounded bg-background-secondary px-1.5 py-1">候选版本 {getOptimizationTargetVersion(record)}</span>}
+      {hasCandidate && <span className="rounded bg-background-secondary px-1.5 py-1">{published ? '正式版本' : '候选版本'} {getOptimizationTargetVersion(record)}</span>}
       {hasCandidate && <span className="rounded bg-background-secondary px-1.5 py-1">修改 {record.diff?.length || 0} 项</span>}
       {cancelled ? <span className="rounded bg-background-secondary px-1.5 py-1 text-foreground-muted">未保存可发布候选</span> : !hasCandidate && executionFailed
         ? <span className="rounded bg-error-subtle px-1.5 py-1 text-error">未生成候选</span>
@@ -833,15 +855,23 @@ function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPub
         ? <span className="rounded bg-error-subtle px-1.5 py-1 text-error">{executionFailed ? '优化执行失败' : '质量校验未通过'}</span>
         : record.status === 'optimizing'
           ? null
-          : <span className="rounded bg-success-subtle px-1.5 py-1 text-success">静态质量已通过</span>}
+          : <span className="rounded bg-success-subtle px-1.5 py-1 text-success">前置质量已通过</span>}
+      {verificationPending && <span className="rounded bg-warning-subtle px-1.5 py-1 text-warning">当前激活版本仍为 v{record.activeVersion ?? record.baseVersion}</span>}
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
       <button type="button" onClick={() => onViewRecords(record)} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-[10px] text-foreground-secondary"><FileSearch className="size-3" />{executionFailed && !hasCandidate ? '查看失败详情' : '查看优化报告'}</button>
       {record.retestExperimentId && <a href={`/experiments/${encodeURIComponent(record.retestExperimentId)}`} className="inline-flex h-7 items-center text-[10px] text-primary hover:underline">查看行为验证实验</a>}
       {record.sourceRefs?.some((ref) => ref.type === 'verification-cleanup') && <span className="self-center text-[10px] text-foreground-muted">临时实验已清理，验证结果已保留</span>}
-      {qualityPassed && (record.sourceKind !== 'diagnosis' || record.status === 'retest_passed') && <button type="button" disabled={publishing} onClick={() => onPublish(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50">{publishing ? <Loader2 className="size-3 animate-spin" /> : <Upload className="size-3" />}发布为 {getOptimizationTargetVersion(record)}</button>}
+      {publishable && <button type="button" disabled={publishing} onClick={() => onPublish(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50">{publishing ? <Loader2 className="size-3 animate-spin" /> : <Upload className="size-3" />}发布待验证 {getOptimizationTargetVersion(record)}</button>}
+      {published && record.skillId && <button type="button" onClick={() => onDownloadPublished(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground"><Download className="size-3" />下载 {getOptimizationTargetVersion(record)} ZIP</button>}
+      {(verificationPending || verificationFailed) && <button type="button" disabled={publishing} onClick={() => onRecordVerification(record, 'passed')} className="inline-flex h-7 items-center gap-1 rounded border border-success-border px-2 text-[10px] text-success disabled:opacity-50"><ShieldCheck className="size-3" />{verificationFailed ? '改为验证通过' : '验证通过'}</button>}
+      {verificationPending && <button type="button" disabled={publishing} onClick={() => onRecordVerification(record, 'failed')} className="inline-flex h-7 items-center gap-1 rounded border border-error-border px-2 text-[10px] text-error disabled:opacity-50"><CircleX className="size-3" />验证失败</button>}
+      {verificationPassed && !activated && <button type="button" disabled={publishing} onClick={() => onActivatePublished(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50"><Power className="size-3" />激活 {getOptimizationTargetVersion(record)}</button>}
+      {verificationFailed && <button type="button" disabled={busy} onClick={() => onRepair(record)} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-[10px] text-foreground-secondary disabled:opacity-50"><Wrench className="size-3" />继续优化</button>}
       {record.status === 'optimization_failed' && <button type="button" disabled={busy} onClick={() => onRepair(record)} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-primary-foreground disabled:opacity-50"><Wrench className="size-3" />{executionFailed ? '重新优化' : '修复阻断问题'}</button>}
     </div>
+    {verificationPassed && record.verifiedAt && <p className="mt-2 text-[10px] text-success">外部验证由 {record.verifiedBy || '当前用户'} 于 {new Date(record.verifiedAt).toLocaleString()} 登记通过。</p>}
+    {verificationFailed && <p className="mt-2 text-[10px] text-error">该版本已登记为外部验证失败，不会成为激活版本。</p>}
     {record.errorMessage && !(executionFailed && !hasCandidate) && <p className="mt-2 break-words text-[11px] text-error [overflow-wrap:anywhere]">{displayOptimizationError(record.errorMessage)}</p>}
     {record.status === 'optimization_failed' && Boolean(record.blockingIssues?.length) && <ul className="mt-2 space-y-1 text-[10px] leading-4 text-error">{record.blockingIssues!.map((issue) => <li key={issue.id} className="break-words [overflow-wrap:anywhere]">• {issue.summary}</li>)}</ul>}
   </div>;

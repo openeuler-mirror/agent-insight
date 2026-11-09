@@ -125,6 +125,15 @@ async function resolveVersion(user: string, skillName: string, source: Deploymen
     where: { skillId_version: { skillId: skill.id, version } },
   })
   if (!row) throw new ReliabilityError('SKILL_VERSION_NOT_FOUND', `正式版本 v${version} 不存在`, 404)
+  if (!['passed', 'not_required'].includes(row.verificationStatus)) {
+    throw new ReliabilityError(
+      'SKILL_VERSION_NOT_VERIFIED',
+      row.verificationStatus === 'failed'
+        ? `正式版本 v${version} 外部验证未通过，不能下发`
+        : `正式版本 v${version} 尚未完成外部验证，不能下发`,
+      409,
+    )
+  }
   const files = resolveSkillVersionFiles(skill.id, row.version, row.files, row.content)
   return {
     skillId: skill.id,

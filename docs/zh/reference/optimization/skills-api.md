@@ -3,7 +3,7 @@ title: "Skill 管理 HTTP 接口"
 description: "Skill 资产检索、版本与文件、上传发布及自动化同步的现有接口。"
 ---
 
-本页覆盖 Skill 资产管理的 22 个现有 HTTP 方法。操作流程见 [Skills 管理](../../how-to/optimization/skills/manage.md)。生成与优化会话、优化点、静态评估、Benchmark 生成、流程解析和工作台实验不在本页展开，分别见 [Skill 工作台](../../explanation/optimization/skills/workbench-overview.md)与 [Skill 评估与实验](../../explanation/evaluation/skills/overview.md)；本页不代表所有 Skill 路由的完整契约。
+本页覆盖 Skill 资产管理的 25 个现有 HTTP 方法。操作流程见 [Skills 管理](../../how-to/optimization/skills/manage.md)。生成与优化会话、优化点、静态评估、Benchmark 生成、流程解析和工作台实验不在本页展开，分别见 [Skill 工作台](../../explanation/optimization/skills/workbench-overview.md)与 [Skill 评估与实验](../../explanation/evaluation/skills/overview.md)；本页不代表所有 Skill 路由的完整契约。
 
 ## 标识与身份
 
@@ -66,7 +66,7 @@ curl --fail-with-body --get \
 | `GET /api/skills/:id/versions` | 返回版本数组，包括 `version/semanticVersion/changeLog/createdAt/usage/trend/executions`。运行摘要最多取近 14 天 800 条记录，每版本最多附 30 条；无 Skill `404`，异常 `500`。该路由不检查用户身份 |
 | `GET /api/skills/:id/versions/:version` | 返回版本数据库记录；版本不能解析为整数 `400`，未找到 `404`，异常 `500`。不检查用户身份 |
 | `POST /api/skills/:id/versions` | JSON 必填非空 `content`，可选 `changeLog/user`；经 `canAccessSkill` 后创建下一本地版本，返回新版本记录 `200`。继承上版 `assetPath/files`，不复制附件，不自动激活；后台启动流程解析和静态评估 |
-| `DELETE /api/skills/:id/versions/:version` | 经 `resolveUser`、`canAccessSkill`；不能删除最后一版（`400`），应删除整个 Skill。成功 `{ success, message, previousActiveVersion }`；删除激活版时，改用剩余版本列表第一项。不是完整文件系统清理承诺 |
+| `DELETE /api/skills/:id/versions/:version` | 经 `resolveUser`、`canAccessSkill`；不能删除最后一版（`400`），应删除整个 Skill。成功 `{ success, message, previousActiveVersion }`；删除激活版时，改用剩余版本中的首个已验证或无需验证版本，没有可用替代版本时返回 `409`。不是完整文件系统清理承诺 |
 | `GET /api/skills/:id/versions/:version/files/:path` | 经 `canAccessSkill`。路径非空，不含 `..`，不以 `/` 开头，并做解析路径前缀检查；`SKILL.md` 从数据库返回。文本文件超过 `512 KiB` 时返回空 `content`、`truncated: true`；二进制只返回元数据。与按名称入口的“返回前 512 KiB”不同 |
 | `GET /api/skills/:id/versions/:version/download` | 经 `canAccessSkill`，返回 `application/zip` 流，文件名 `名称-v版本.zip`；磁盘附件加数据库中的根 `SKILL.md`。即使附件目录不存在，也可能得到仅含主文件的包。收到响应头不代表 ZIP 流已完整传输 |
 
@@ -74,7 +74,7 @@ curl --fail-with-body --get \
 
 ## 正式版本下发
 
-下发接口使用 Skill `name`，要求解析出所属用户；只接受已经发布的优化记录或已存在的正式版本。服务端通过来源 Trace 绑定客户端和框架，不接受调用方传绝对路径。
+下发接口使用 Skill `name`，要求解析出所属用户；只接受已经发布且验证状态为 `passed` 或 `not_required` 的正式版本。`pending` 和 `failed` 版本返回 `409 SKILL_VERSION_NOT_VERIFIED`。服务端通过来源 Trace 绑定客户端和框架，不接受调用方传绝对路径。
 
 | 方法与路径 | 请求与响应 |
 | --- | --- |
@@ -110,11 +110,19 @@ curl --fail-with-body \
 
 成功 `200`：`{ success, skill, version, isNewSkill }`。首次版本 `0`，已有 Skill 递增并自动激活；保存选中 Skill 目录的文件，不保存目录外散文件。后台启动流程解析。本路由按 `sessionId` 查会话，未在此处校验会话属主；不能据此承诺会话隔离。未知请求结果时先查资产与版本，避免重试创建额外版本。
 
+### 发布优化候选供外部验证
+
+`POST /api/skill-workbench/skills/:name/optimizations/:recordId/publish` 使用 JSON `{ user?, confirmed:true, verificationMode:"external", activate:false }`。要求候选的静态质量快照有效、内容哈希一致且没有高风险阻断问题；平台内行为复测状态不作为该发布动作的强制门禁。成功返回 `{ skill, version, sessionId, session }`，其中新版本写入 `verificationStatus:"pending"`、`verificationMode:"external"`，但不修改 `Skill.activeVersion`。相同优化记录重复提交返回已有版本，不创建重复版本。
+
+前置质量未通过、基线版本已变化、候选内容与评估快照不一致、版本或资产目录冲突时返回 `409/422`；缺身份 `401`，非属主 Skill `403`。发布成功后可用遗留 ZIP 下载入口 `GET /api/skills/:id/versions/:version/download` 取得该不可变版本包。
+
 ## 激活、同步标记与删除
 
 | 方法与路径 | JSON 或查询与结果 |
 | --- | --- |
-| `POST /api/skills/:id/activate` | 必填 `version`，可选 `user`；经 `canAccessSkill`，版本存在后更新 `activeVersion`，返回更新后的 Skill `200`。缺版本 `400`，Skill/版本不存在 `404`，拒绝 `403`，异常 `500` |
+| `POST /api/skills/by-name/:name/versions/:version/verification` | JSON 必填 `result:"passed"或"failed"`，可选 `user/note`；`note` 最多 2000 字符。只允许属主为 `verificationMode:"external"` 的版本登记，返回 `{ skill, version }`。非法输入 `400`，缺身份 `401`，Skill/版本不存在 `404`，版本不是外部验证模式 `409` |
+| `POST /api/skills/by-name/:name/versions/:version/activate` | JSON 可选 `user`；只允许属主激活 `verificationStatus:"passed"` 或兼容状态 `not_required` 的版本，返回 `{ skill, version }`。待验证或验证失败返回 `409`，非法版本 `400`，缺身份 `401`，不存在 `404` |
+| `POST /api/skills/:id/activate` | 必填 `version`，可选 `user`；要求解析出用户并经 `canAccessSkill`，随后执行与按名称激活相同的验证状态门禁，返回更新后的 Skill `200`。缺/非法版本 `400`，缺身份 `401`，待验证或验证失败 `409`，Skill/版本不存在 `404`，拒绝 `403`，异常 `500` |
 | `POST /api/skills/:id/toggle` | 必填布尔 `isUploaded`，可选 `user`；经 `canAccessSkill`，返回 `{ success, skill }`。此标记不等于远端 Agent 已安装成功；`400/403/404/500` 按对应错误 |
 | `DELETE /api/skills?id=...` | 必填查询 `id`，可选 `user`；返回 `{ success: true }`。仅当解析身份和 Skill 属主均非空且不同时拒绝 `403`；缺 ID `400`，未找到 `404`，异常 `500`。删除本地资产目录和数据库记录 |
 
@@ -125,7 +133,7 @@ curl --fail-with-body \
 | 方法与路径 | 约定 |
 | --- | --- |
 | `POST /api/skills/automation/import` | JSON 必填 `path`，可选 `user`；路径指**服务端**文件系统上的目录，不是请求方目录。读取根 `SKILL.md` 并复制目录；首次创建 `0`，同名 Skill 每次递增并激活。返回 `{ success, skill: { id, name }, version, status: "created"或"updated" }`。缺路径/主文件 `400`，路径不存在 `404`，异常 `500`；后台解析流程，不保证重复请求去重 |
-| `POST /api/skills/automation/push` | JSON 必填 `name/user`，可选数字 `version`；不传版本时取最大版本号。返回 `{ success, activeVersion, isUploaded, message }`，只激活并设置 `isUploaded: true`，不在此请求里确认远端分发。缺名称/用户或没有版本 `400`，Skill/指定版本不存在 `404`，异常 `500`。该路由直接采用体内 `user` |
+| `POST /api/skills/automation/push` | JSON 必填 `name/user`，可选数字 `version`；不传版本时取最大版本号。返回 `{ success, activeVersion, isUploaded, message }`，只激活并设置 `isUploaded: true`，不在此请求里确认远端分发。外部验证版本未通过时返回 `409`；缺名称/用户或没有版本 `400`，Skill/指定版本不存在 `404`，异常 `500`。该路由直接采用体内 `user` |
 | `POST /api/skills/sync-enterprise` | 仅 `ORGANIZATION_MODE=true` 可用（否则 `400`）；读取解析用户并转发请求 Cookie，**等待**同步服务结果，成功 HTTP `200` 不代表每项成功，须看 `success/failedCount/results[].success/error`。同进程已有同步返回 `409`，路由异常 `500` |
 | `GET /api/skills/sync-enterprise` | 无用户检查，返回进程内 `{ isSyncing, lastResult, startTime }`。状态不是按用户隔离的持久任务；重启/多实例不能据此恢复完整进度 |
 

@@ -3,7 +3,7 @@ title: "Skill management HTTP APIs"
 description: "Existing asset discovery, version and file, upload, publishing, and synchronization interfaces."
 ---
 
-This page covers 22 existing HTTP methods for Skill asset management. For UI operations, see [Skills management, Chinese](../../../zh/how-to/optimization/skills/manage.md). Generation and optimization sessions, optimization points, static evaluation, Benchmark generation, flow parsing, and workbench experiments are outside this page's detailed scope. See the [Skill workbench, Chinese](../../../zh/explanation/optimization/skills/workbench-overview.md) and [Skill evaluation and experiments, Chinese](../../../zh/explanation/evaluation/skills/overview.md). This is not a complete contract for every Skill route.
+This page covers 25 existing HTTP methods for Skill asset management. For UI operations, see [Skills management, Chinese](../../../zh/how-to/optimization/skills/manage.md). Generation and optimization sessions, optimization points, static evaluation, Benchmark generation, flow parsing, and workbench experiments are outside this page's detailed scope. See the [Skill workbench, Chinese](../../../zh/explanation/optimization/skills/workbench-overview.md) and [Skill evaluation and experiments, Chinese](../../../zh/explanation/evaluation/skills/overview.md). This is not a complete contract for every Skill route.
 
 ## Identifiers and identity
 
@@ -66,7 +66,7 @@ curl --fail-with-body --get \
 | `GET /api/skills/:id/versions` | Returns version objects with `version/semanticVersion/changeLog/createdAt/usage/trend/executions`. Summaries load at most 800 execution records from the last 14 days, attaching at most 30 per version. Missing Skill `404`, processing error `500`. This route does not check user identity |
 | `GET /api/skills/:id/versions/:version` | Returns the version database record. Version not parseable as an integer `400`, not found `404`, processing error `500`. No user identity check |
 | `POST /api/skills/:id/versions` | JSON requires nonempty `content`; optional `changeLog/user`. After `canAccessSkill`, creates the next local version and returns its record with `200`. Inherits the previous `assetPath/files`, does not copy attachments or activate the version, and starts flow parsing and static evaluation in the background |
-| `DELETE /api/skills/:id/versions/:version` | Uses `resolveUser` and `canAccessSkill`. The last version cannot be deleted (`400`); delete the Skill instead. Returns `{ success, message, previousActiveVersion }`. Deleting the active version selects the first remaining version. This does not promise complete filesystem cleanup |
+| `DELETE /api/skills/:id/versions/:version` | Uses `resolveUser` and `canAccessSkill`. The last version cannot be deleted (`400`); delete the Skill instead. Returns `{ success, message, previousActiveVersion }`. Deleting the active version selects the first remaining verified or verification-exempt version; `409` is returned when no eligible replacement exists. This does not promise complete filesystem cleanup |
 | `GET /api/skills/:id/versions/:version/files/:path` | Uses `canAccessSkill`. Path must be nonempty, contain no `..`, and not start with `/`; the resolved path prefix is checked. `SKILL.md` comes from the database. Text files larger than `512 KiB` return empty `content` with `truncated: true`; binary files return metadata only. This differs from the name-based route, which returns the first 512 KiB |
 | `GET /api/skills/:id/versions/:version/download` | Uses `canAccessSkill`. Streams `application/zip` with filename `name-vVERSION.zip`, combining disk attachments and database root `SKILL.md`. A missing attachment directory can still produce a main-file-only package. Receiving headers does not prove the ZIP stream finished |
 
@@ -74,7 +74,7 @@ Unless specified otherwise, legacy write/file/download errors include `400` inva
 
 ## Published-version deployment
 
-Deployment routes use the Skill `name` and accept only a published optimization record or an existing formal version. The server binds the destination through a source Trace; callers cannot supply an absolute client path.
+Deployment routes use the Skill `name` and accept only a published formal version whose verification state is `passed` or `not_required`. Versions in `pending` or `failed` state return `409 SKILL_VERSION_NOT_VERIFIED`. The server binds the destination through a source Trace; callers cannot supply an absolute client path.
 
 | Method and path | Request and response |
 | --- | --- |
@@ -108,11 +108,19 @@ Success is `200` with `{ success: true, skill, version }`, where `version` is th
 
 Success is `200`: `{ success, skill, version, isNewSkill }`. A new Skill starts at `0`; existing ones increment and activate the version. Only files within the selected Skill directory are saved, excluding loose files outside it. Flow parsing starts in the background. This route loads the session by `sessionId` without checking its owner here; it does not establish session isolation. After an unknown request result, inspect assets and versions before retrying to avoid additional versions.
 
+### Publish an optimization candidate for external verification
+
+`POST /api/skill-workbench/skills/:name/optimizations/:recordId/publish` takes JSON `{ user?, confirmed:true, verificationMode:"external", activate:false }`. It requires a valid static-quality snapshot, a matching candidate content hash, and no high-risk blocking issue. In-platform behavioral retest status is not a mandatory gate for this operation. Success returns `{ skill, version, sessionId, session }`; the version is created with `verificationStatus:"pending"` and `verificationMode:"external"`, while `Skill.activeVersion` remains unchanged. Retrying the same optimization record returns its existing version.
+
+Use `GET /api/skills/:id/versions/:version/download` to download the immutable ZIP for validation in the user's environment. Invalid quality or snapshot state, a changed baseline, and version or asset conflicts return `409/422`; missing identity returns `401`, and a non-owned Skill returns `403`.
+
 ## Activation, synchronization flag, and deletion
 
 | Method and path | JSON or query and result |
 | --- | --- |
-| `POST /api/skills/:id/activate` | Required `version`, optional `user`; uses `canAccessSkill`, verifies the version exists, updates `activeVersion`, and returns the updated Skill with `200`. Missing version `400`, missing Skill/version `404`, denied `403`, error `500` |
+| `POST /api/skills/by-name/:name/versions/:version/verification` | JSON requires `result:"passed"` or `"failed"`; optional `user/note`, with `note` limited to 2,000 characters. Only the owner may update a version whose `verificationMode` is `external`. Returns `{ skill, version }`. Invalid input `400`, missing identity `401`, missing Skill/version `404`, wrong verification mode `409` |
+| `POST /api/skills/by-name/:name/versions/:version/activate` | Optional JSON `user`. Only the owner may activate a version whose `verificationStatus` is `passed`, or the compatibility state `not_required`. Pending or failed versions return `409`; invalid version `400`, missing identity `401`, missing asset `404` |
+| `POST /api/skills/:id/activate` | Required `version`, optional `user`; requires a resolved user and `canAccessSkill`, then applies the same verification-state gate as the name-based route. Returns the updated Skill with `200`. Missing/invalid version `400`, missing identity `401`, denied `403`, missing Skill/version `404`, pending/failed verification `409`, error `500` |
 | `POST /api/skills/:id/toggle` | Required boolean `isUploaded`, optional `user`; uses `canAccessSkill`, returns `{ success, skill }`. This flag does not mean installation on a remote Agent succeeded. Corresponding errors are `400/403/404/500` |
 | `DELETE /api/skills?id=...` | Required query `id`, optional `user`; returns `{ success: true }`. Denies with `403` only when both resolved identity and owner are nonempty and differ. Missing ID `400`, absent Skill `404`, error `500`. Removes the local asset directory and database record |
 
@@ -123,7 +131,7 @@ In enterprise mode, deleting a Skill or version first attempts deletion of its e
 | Method and path | Contract |
 | --- | --- |
 | `POST /api/skills/automation/import` | JSON requires `path`, optional `user`. This is a directory on the **server filesystem**, not the caller's machine. Reads root `SKILL.md` and copies the directory. First import creates `0`; each repeated same-name import increments and activates a version. Returns `{ success, skill: { id, name }, version, status: "created" or "updated" }`. Missing path/main file `400`, absent path `404`, error `500`. Starts flow parsing in the background; repeated requests are not deduplicated |
-| `POST /api/skills/automation/push` | JSON requires `name/user`, optional numeric `version`; omission selects the highest version. Returns `{ success, activeVersion, isUploaded, message }`. It activates and sets `isUploaded: true`; it does not confirm remote distribution in this request. Missing name/user or no available version `400`, missing Skill/version `404`, error `500`. Uses body `user` directly |
+| `POST /api/skills/automation/push` | JSON requires `name/user`, optional numeric `version`; omission selects the highest version. Returns `{ success, activeVersion, isUploaded, message }`. It activates and sets `isUploaded: true`; it does not confirm remote distribution in this request. An external-verification version that has not passed returns `409`; missing name/user or no available version `400`, missing Skill/version `404`, error `500`. Uses body `user` directly |
 | `POST /api/skills/sync-enterprise` | Requires `ORGANIZATION_MODE=true` (`400` otherwise). Resolves the user and forwards the request Cookie, then **awaits** synchronization. HTTP `200` does not prove every item succeeded: inspect `success/failedCount/results[].success/error`. Another synchronization in the same process returns `409`; route exception `500` |
 | `GET /api/skills/sync-enterprise` | No user check; returns process-local `{ isSyncing, lastResult, startTime }`. This is not a persistent per-user task; it cannot recover complete progress across restarts or instances |
 
