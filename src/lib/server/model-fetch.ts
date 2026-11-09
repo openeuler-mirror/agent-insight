@@ -21,7 +21,8 @@ function isModernOpenAIModel(model: string): boolean {
 }
 
 export function isClaudeFixedSamplingModel(model: string): boolean {
-  return /^claude-(?:mythos-|[a-z]+-(?:[5-9]|4-(?:[7-9]|\d{2,}))(?:-|$))/i.test(model);
+  // Claude 4.0 snapshot IDs put an eight-digit date after the major version.
+  return /^claude-(?:mythos-|[a-z]+-(?:[5-9]|4-(?!\d{8}(?:-|$))(?:[7-9]|\d{2,}))(?:-|$))/i.test(model);
 }
 
 export function getModelFetch(fetcher = getProxyConfig().customFetch ?? globalThis.fetch): typeof fetch {

@@ -43,9 +43,9 @@ export async function probeModelConnection(
   try {
     await Promise.race([deadline, (async () => {
       if (controller.signal.aborted) throw controller.signal.reason;
-      const connection = resolveModelConnection(config);
-      if (config.provider === 'custom' && (!connection.baseUrl || !connection.model)) {
-        throw new ModelTestValidationError('Custom models require a Base URL and model name');
+      const { baseUrl, model } = resolveModelConnection(config);
+      if (!model || (config.provider === 'custom' && !baseUrl)) {
+        throw new ModelTestValidationError('A model name is required. Custom models also require a Base URL.');
       }
       const client = new OpenAI({
         ...getOpenAICompatibleClientConfig(config),
@@ -54,7 +54,7 @@ export async function probeModelConnection(
         maxRetries: 0,
       });
       const completion = await client.chat.completions.create({
-        model: connection.model || 'gpt-3.5-turbo',
+        model,
         messages: [{ role: 'user', content: 'Reply with OK.' }],
         max_tokens: 128,
       }, { signal: controller.signal }).catch((error: unknown) => {

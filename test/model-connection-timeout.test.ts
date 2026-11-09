@@ -127,12 +127,21 @@ test('新旧 xAI 配置均走 Grok 的 Chat Completions 端点', async () => {
   }
 });
 
-test('未指定自定义端点时不会发送请求', async () => {
-  await assert.rejects(probeModelConnection({ provider: 'custom', model: 'test-model' }, {
-    timeoutMs: 1000,
-    signal: new AbortController().signal,
-    fetch: async () => { assert.fail('Must not send a request'); },
-  }), error => classifyModelTestError(error).code === 'invalid_request');
+test('缺少可用模型名或自定义端点时不会发送请求', async t => {
+  const fetch = t.mock.fn(async () => Response.json(completion));
+  for (const connection of [
+    { provider: 'custom', model: 'test-model' },
+    { provider: 'custom', baseUrl: config.baseUrl },
+    { provider: 'legacy-gateway', baseUrl: config.baseUrl },
+    { provider: 'legacy-gateway', baseUrl: config.baseUrl, model: '  ' },
+  ]) {
+    await assert.rejects(probeModelConnection(connection, {
+      timeoutMs: 1000,
+      signal: new AbortController().signal,
+      fetch,
+    }), error => classifyModelTestError(error).code === 'invalid_request');
+  }
+  assert.equal(fetch.mock.callCount(), 0);
 });
 
 test('OpenAI 推理模型探测使用 max_completion_tokens', async () => {
@@ -160,14 +169,25 @@ test('共享传输按官方端点转换参数，自定义端点保留原始请�
     ['https://api.openai.com/v1/responses',
       { model: 'gpt-6-luna', ...sampling },
       { model: 'gpt-6-luna' }],
-    ['https://api.anthropic.com/v1/chat/completions',
-      { model: 'claude-sonnet-5-5', ...sampling, ...format },
-      { model: 'claude-sonnet-5-5', seed: 42 }],
-    ...['claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-20240620', 'claude-3-7-sonnet-20250219'].map(model => [
+    ...['claude-sonnet-5-5', 'claude-opus-4-7'].map(model => [
+      'https://api.anthropic.com/v1/chat/completions',
+      { model, ...sampling, ...format },
+      { model, seed: 42 },
+    ] as const),
+    ...[
+      'claude-3-5-sonnet-20241022',
+      'claude-3-5-sonnet-20240620',
+      'claude-3-7-sonnet-20250219',
+      'claude-sonnet-4-20250514',
+      'claude-opus-4-20250514',
+    ].map(model => [
       'https://api.anthropic.com/v1/chat/completions',
       { model, ...sampling, ...format },
       { model, temperature: 0, seed: 42 },
     ] as const),
+    ['https://api.anthropic.com/v1/chat/completions',
+      { model: 'claude-sonnet-4-20250514', top_p: 0.8 },
+      { model: 'claude-sonnet-4-20250514', top_p: 0.8 }],
     ['https://model.test/v1/chat/completions',
       { model: 'gpt-6-astra', ...sampling },
       { model: 'gpt-6-astra', ...sampling }],

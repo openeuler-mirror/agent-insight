@@ -80,7 +80,7 @@ changefreq: monthly
 
 注册 xAI 时选择 **xAI Grok**，Base URL 使用 `https://api.x.ai/v1`。已有配置若填了已退役的 `grok-3` 等旧模型，请编辑模型名为 `grok-4.7` 后重新测试。Azure OpenAI 使用 `https://<resource>.openai.azure.com/openai/v1`。
 
-已知供应商的 Model 或 Base URL 留空时，服务端在调用时使用目录默认值。OpenAI 的 Base URL 留空时，优先使用服务端的 `OPENAI_BASE_URL`。切换默认模型时，留空的字段保持为空。
+供应商目录提供默认 Model 或 Base URL 时，服务端在调用时补全对应的留空字段。目录没有默认模型时，必须填写 Model 才能通过连接测试。OpenAI 的 Base URL 留空时，优先使用服务端的 `OPENAI_BASE_URL`。切换默认模型时，留空的字段保持为空。
 
 ## 默认模型机制
 
@@ -101,7 +101,7 @@ changefreq: monthly
 2. 在模型供应商选择面检索目标供应商。
 3. 选择目标供应商卡片，进入配置流程。
 4. 填写模型名称、模型标识与 Base URL。内置供应商填写 API Key；Local AI 或 Custom（OpenAI Compatible）也可以改用自定义请求头，或连接无需鉴权的本地服务。
-5. 按需展开 **高级设置** 调整连接测试超时，然后点击 **测试连接并保存**。测试通过后才会保存；每次点击只发送一次模型请求，不自动重试。
+5. 按需展开 **高级设置** 调整连接测试超时，然后点击 **测试连接并保存**。参数校验通过后，连接测试发送一次模型请求。测试通过后才会保存。
 6. 返回已注册模型管理面，检查模型卡片与状态标签。
 7. 执行健康检查，确认连接可用。
 
