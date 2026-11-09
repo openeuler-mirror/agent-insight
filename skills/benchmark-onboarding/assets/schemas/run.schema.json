@@ -13,7 +13,6 @@
     "stage",
     "baselines",
     "attempts",
-    "checkpoints",
     "jobs"
   ],
   "properties": {
@@ -65,10 +64,8 @@
     },
     "budget": {
       "type": "object",
-      "required": [
-        "maxAttempts",
-        "maxSeconds"
-      ],
+      "description": "仅保存显式配置的任务上限；缺省字段表示无该项总限制，空对象表示两项均未设置。",
+      "additionalProperties": false,
       "properties": {
         "maxAttempts": {
           "type": "integer",
@@ -99,9 +96,6 @@
       "type": "array"
     },
     "attempts": {
-      "type": "array"
-    },
-    "checkpoints": {
       "type": "array"
     },
     "jobs": {

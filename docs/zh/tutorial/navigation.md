@@ -23,9 +23,8 @@ changefreq: "monthly"
 ## 评测
 
 - [跑通第一次评测](./evaluation/01-first-experiment.md)
-- 接入新的 Benchmark：按[自动接入 Skill 发起说明](../how-to/evaluation/benchmarks/onboard-custom-benchmark.md#21-使用自动接入-skill)提供 Agent Insight 项目地址和 Benchmark 来源；Skill 会核对包内协议快照与目标版本，再查询实际能力；验收依次验证接口、真实分段与完整端到端。
+- 接入新的 Benchmark：按[自动接入 Skill 发起说明](../how-to/evaluation/benchmarks/onboard-custom-benchmark.md#21-使用自动接入-skill)提供 Agent Insight 项目地址和 Benchmark 来源；Skill 先查询实际客户端能力并请用户选择 Agent／模型，再沿代码导航读取目标项目当前实现；验收覆盖本地检查、固定提交评分对照及跨类型真实端到端。
 - [从评测证据生成诊断与 Skill 优化计划](../how-to/diagnosis/agent-debug/diagnosis.md)
-
 
 ## 优化
 

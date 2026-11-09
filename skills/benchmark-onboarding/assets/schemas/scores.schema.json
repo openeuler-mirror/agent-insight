@@ -6,8 +6,7 @@
   "required": [
     "schemaVersion",
     "benchmarkKey",
-    "cases",
-    "aggregate"
+    "cases"
   ],
   "properties": {
     "schemaVersion": {
@@ -41,12 +40,9 @@
             "minLength": 1
           },
           "kind": {
-            "enum": [
-              "correct",
-              "incorrect",
-              "invalid",
-              "boundary"
-            ]
+            "type": "string",
+            "minLength": 1,
+            "description": "Agent 依据官方评分行为定义的样本用途标签，不强制类别或数量。"
           },
           "submissionDigest": {
             "type": "string",

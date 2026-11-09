@@ -8,14 +8,25 @@ const C = require('./common.cjs')
 
 function validateEvent(event) {
   if (typeof event.requestId !== 'string' || !event.requestId.trim()) C.fail('平台任务需要稳定的 requestId')
-  if (!['unknown', 'running', 'completed', 'cancelled', 'failed'].includes(event.state)) C.fail('任务状态必须为 unknown/running/completed/cancelled/failed')
-  if (event.state !== 'unknown' && (typeof event.platformId !== 'string' || !event.platformId.trim())) C.fail('已知平台任务状态必须携带平台任务 ID')
+  if (!['unknown', 'running', 'completed', 'cancelled', 'failed'].includes(event.state)) C.fail('任务状态必须先按目标项目语义映射为 unknown/running/completed/cancelled/failed；原始状态保存在 rawState 和查询证据中')
+  if (event.rawState !== undefined && (typeof event.rawState !== 'string' || !event.rawState.trim())) C.fail('原始平台状态必须为非空字符串')
+  if (event.notCreated !== undefined && event.notCreated !== true) C.fail('notCreated 只能明确声明为 true')
+  if (event.notCreated) {
+    const cleanup = event.requestId.endsWith(':cleanup')
+    if (event.platformId || event.state !== (cleanup ? 'completed' : 'failed') || !event.evidence) C.fail('未创建任务只能登记有拒绝证据的失败及无需清理，不能提供平台 ID')
+    const evidence = C.readJson(typeof event.evidence === 'string' ? event.evidence : event.evidence.path)
+    const requestId = cleanup ? event.requestId.slice(0, -8) : event.requestId
+    if (evidence.requestId !== requestId || evidence.taskCreated !== false || typeof evidence.contract !== 'string' || !evidence.contract.trim() || !evidence.response || typeof evidence.response !== 'object') C.fail('拒绝证据需要匹配 requestId、taskCreated: false、未创建任务的接口合同依据 contract 和原始 response')
+  }
+  if (!event.notCreated && event.state !== 'unknown' && (typeof event.platformId !== 'string' || !event.platformId.trim())) C.fail('已知平台任务状态必须携带平台任务 ID')
   if (['completed', 'cancelled', 'failed'].includes(event.state) && !event.evidence) C.fail('终态任务需要平台查询结果证据')
 }
 
 function applyEvent(run, event) {
   validateEvent(event)
   const existing = run.jobs.find(job => job.requestId === event.requestId)
+  if (event.notCreated && existing?.platformId) C.fail('已有平台任务 ID，不能改记为未创建任务')
+  if (existing?.notCreated && !event.notCreated) C.fail('已确认拒绝的请求不能改记为已创建任务；新提交需新的请求标识')
   if (existing?.platformId && event.platformId && existing.platformId !== event.platformId) C.fail('同一请求不能替换平台任务 ID')
   const next = { ...event, platformId: event.platformId || existing?.platformId || null }
   if (existing) Object.assign(existing, next, { history: [...existing.history, next] })
@@ -59,10 +70,11 @@ function record(args = process.argv.slice(2), journal = process.env.BENCHMARK_ON
   const options = {}
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i].replace(/^--/, '')
-    if (!args[i].startsWith('--') || !['request-id', 'platform-id', 'state', 'evidence'].includes(key) || !args[i + 1] || Object.hasOwn(options, key)) C.fail('record-job 需要不重复的 --name value 选项')
+    if (!args[i].startsWith('--') || !['request-id', 'platform-id', 'state', 'raw-state', 'evidence', 'not-created'].includes(key) || !args[i + 1] || Object.hasOwn(options, key)) C.fail('record-job 需要不重复的 --name value 选项')
     options[key] = args[i + 1]
   }
-  const event = { requestId: options['request-id'], platformId: options['platform-id'] || null, state: options.state, at: new Date().toISOString(), ...(options.evidence ? { evidence: options.evidence } : {}) }
+  if (options['not-created'] !== undefined && options['not-created'] !== 'true') C.fail('--not-created 只接受 true')
+  const event = { requestId: options['request-id'], platformId: options['platform-id'] || null, state: options.state, ...(options['not-created'] ? { notCreated: true } : {}), ...(options['raw-state'] ? { rawState: options['raw-state'] } : {}), at: new Date().toISOString(), ...(options.evidence ? { evidence: options.evidence } : {}) }
   validateEvent(event)
   C.outsideSkill(journal)
   fs.mkdirSync(journal, { recursive: true, mode: 0o700 })

@@ -99,9 +99,14 @@ function codeSnapshot(repo, key, inputs, context) {
     trackedChanges: hash(git(repo, ['diff', 'HEAD', '--binary'])),
     packageDigest: fs.existsSync(packageDir) ? treeHash(packageDir) : null,
     inputs: inputSnapshot(inputs, context),
-    skillDigest: treeHash(skillRoot),
+    verifierDigest: hash(canonical(['scripts', 'assets/schemas'].map(name => [name, treeHash(path.join(skillRoot, name))]))),
   }
 }
+function snapshotDigest(snapshot) {
+  if (!snapshot || typeof snapshot.verifierDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(snapshot.verifierDigest)) fail('实现快照缺少有效 verifierDigest；不支持旧快照，请按当前输入重新验收')
+  return hash(canonical({ packageDigest: snapshot.packageDigest, inputs: snapshot.inputs, verifierDigest: snapshot.verifierDigest }))
+}
+function sameSnapshot(a, b) { return snapshotDigest(a) === snapshotDigest(b) }
 function validate(value, schema, at = '$') {
   if (schema.const !== undefined && canonical(value) !== canonical(schema.const)) fail(`${at}: const 不匹配`)
   if (schema.enum && !schema.enum.some(item => canonical(value) === canonical(item))) fail(`${at}: 不在允许范围`)
@@ -142,4 +147,4 @@ async function withLock(repo, callback) {
   try { return await callback() } finally { fs.closeSync(fd); fs.unlinkSync(lock) }
 }
 
-module.exports = { skillRoot, hash, canonical, fail, readJson, inside, real, outsideSkill, atomicJson, fileHash, treeFiles, treeHash, git, repositoryAddress, publicReference, project, expand, inputSnapshot, staleFiles, codeSnapshot, validate, validateDocument, withLock }
+module.exports = { skillRoot, hash, canonical, fail, readJson, inside, real, outsideSkill, atomicJson, fileHash, treeFiles, treeHash, git, repositoryAddress, publicReference, project, expand, inputSnapshot, staleFiles, codeSnapshot, snapshotDigest, sameSnapshot, validate, validateDocument, withLock }

@@ -10,7 +10,7 @@ changefreq: monthly
 
 接入文档维护架构、契约和验证流程；当前可用组件及执行机状态按[能力发现与兼容性判断](../../../how-to/evaluation/benchmarks/develop-benchmark.md#3-能力发现与兼容性判断)查询。文中的具体 Benchmark 和运行配置是示例，不作为完整支持清单。
 
-自动开发入口为 [benchmark-onboarding Skill](../../../../../skills/benchmark-onboarding/SKILL.md)：用户提供 Agent Insight 项目地址与 Benchmark 来源，宿主 Agent 分析并实现接入，包内脚本执行验收与生成报告。包内协议快照记录稳定架构与契约、来源和版本，运行前对照目标项目；动态能力继续查询代码和部署。它使用现有平台运行角色，阶段记录保存在包外；不引入独立编排服务。默认验收按本地检查、固定提交评分对照、一例完整用户链路组织；L1/L2/L3 是覆盖层次，执行段与首例完整链路共用一次真实运行；详细要求见[接入规范第 12.6 节](../../../how-to/evaluation/benchmarks/develop-benchmark.md#126-分层验证顺序与测试矩阵)。发起方式见[自动接入说明](../../../how-to/evaluation/benchmarks/onboard-custom-benchmark.md#21-使用自动接入-skill)。
+自动开发入口为 [benchmark-onboarding Skill](../../../../../skills/benchmark-onboarding/SKILL.md)：用户提供 Agent Insight 项目地址与 Benchmark 来源，宿主 Agent 分析并实现接入，包内脚本执行验收与生成报告。包内参考提供架构与代码阅读路线，具体合同按需读取目标项目当前类型、校验器、实现及测试；不要求匹配 Skill 历史版本，动态能力查询实际部署。它使用现有平台运行角色，阶段记录保存在包外；不引入独立编排服务。默认验收按本地检查、固定提交评分对照、跨类型完整用户链路组织；L1/L2/L3 是覆盖层次，至少 3 个、通常 3–5 个不同类型的真实 Case，执行段证据复用同次完整链路；详细要求见[接入规范第 12.6 节](../../../how-to/evaluation/benchmarks/develop-benchmark.md#126-分层验证顺序与测试矩阵)。发起方式见[自动接入说明](../../../how-to/evaluation/benchmarks/onboard-custom-benchmark.md#21-使用自动接入-skill)。
 
 自动接入使用包外事实索引记录源码依据、适用版本、用户决策和下一步；满足最小分析条件后进入实现，续接优先复用未失效的静态结论，动态部署与任务状态重新查询。驱动可使用 trackedJob 包装提交、查询和清理，完整验收会核对每个 Case 的任务及 :cleanup 登记；未知任务或清理阻止重提，不引入后台调度服务。
 

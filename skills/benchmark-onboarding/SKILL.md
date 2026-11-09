@@ -5,80 +5,69 @@ description: >
   编写 Benchmark 接入实现，并调用包内脚本完成官方评分对照、验收记录、有限重试和中文交付报告。
   用于新增 Benchmark 接入或续接已有接入任务；仅查询 Benchmark 网址、运行已有实验或生成 Skill 测试集时不使用。
 metadata:
-  version: "0.3.2"
+  version: "0.3.37"
 ---
 
 # Benchmark 自动接入
 
-## 概述
+用户提供 Agent Insight 项目地址、工作目录（如有）与 Benchmark 来源。宿主 Agent 完成分析和实现，包内程序保存基线、执行检查并汇总报告。运行产物放包外；目标项目当前源码与现行协议是权威，包内参考只提供架构和阅读导航。
 
-输入是 Agent Insight 项目地址和 Benchmark 来源。宿主编码 Agent 负责分析、实现和调用检查；包内程序负责保存记录、固定基线、比较结果和汇总验收。
-所有命令使用 Node.js 20+ 与 Git；运行产物放在 Skill 包外。包内携带有来源和版本的稳定接入协议快照，目标仓库仍是协议唯一权威；动态能力通过查询目标代码和部署获取。
+## 关键规则
 
-## 核心指令
+- 开始阶段从“客户端实际可用”与“Benchmark 可支持”的 Agent 交集中展示候选并请用户选择，再确定执行方案；模型沿用所选客户端 Agent 的可用范围，真实验收前单独选择，不能将验收模型固化为接入代码或部署配置的模型限制；Benchmark 支持包括有依据的自定义 Agent 插件或函数适配，须标明需适配。不因实现方便只推荐一个，也不默认使用当前开发 Agent。已有明确选择经核对可用则沿用。
+- 优先复用官方 CLI、SDK、Harness 和已有组件，最小化改动。遵循官方语义并结合目标约束，按需添加沙箱、xGovernor 或 Docker；不为沿用某个后端自行缩小数据范围或改变评分方式。
+- 普通实现细节自行处理；模型选择、关键方案、公共能力扩展、权限及用户指定成本约束无法确定时，说明事实、选项和建议再交流。已有授权持续有效；待答只阻塞依赖工作。
+- 评测证据优先按对应版本的官方文档确定范围，再由官方评分程序核实或补充；差异须说明依据。保留原名、目录与内容，摘要不得替代原件；仅有返回值（含布尔值/标量）时只忠实序列化实际返回并注明来源，不增补字段拼成“官方报告”；官方没有报告就明确说明。平台协议映射与诊断分开，不把缓存、输入副本或中间文件自动当作证据。
+- 保持公开输入与隐藏材料边界。验收结论必须对应真实证据，缺条件或清理未知不能通过；基础设施失败不能当作业务零分。
+- Agent 根据官方语义决定样本覆盖、状态映射、证据范围及适用执行方式，在已有方案中记录依据；脚本检查身份、评分一致性与证据完整性，不用固定类别或目录形式替代判断。
+- 默认不设任务总次数或总时长预算；单次命令、查询等待和可恢复错误重试仍有界。
 
-### 全程适用：必要决策与用户沟通
+## 按阶段推进
 
-自动接入允许在开发和验收过程中与用户讨论。先查询目标项目、官方资料和已有决策；能据此确定的常规实现自行推进，关键事项仍无法判断时及时交流，不猜测后继续。
+### 1. 定位与确认前提
 
-- 需要讨论的典型情况：官方版本或数据范围有歧义、评分语义存在冲突、多个方案对成本/隔离/维护有实质差异、目标协议缺能力需公共扩展，以及部署权限、执行资源或预算不足。是否需要确认取决于本次不确定性和影响，不把这些类别变成每次必问的清单。
-- 提问说明已查到的事实、仍缺什么、为什么影响下一步，给出可行选项、取舍和推荐方案；有关联的问题合并询问。先准备权限范围内可完成的分析和可审阅结果，再请求必要决策，不只抛出“怎么办”。
-- 用户已经确认的选择和授权持续有效；条件未变不重复询问。可逆、低影响且不改变验收语义的实现细节可说明假设后推进。关键决策待答时暂停依赖它的步骤，继续独立工作；未回复不视为同意，不自行扩大范围或降低验收标准。
-- 在包外对应阶段记录中保存问题、选项、用户结论、适用范围及受影响步骤。决定改变已冻结的输入/计划时说明原因并重新冻结；续接时读取这些决策，避免重复讨论。缺少必要决策或条件时如实报告待处理，不标记为已验收。
+读取 [来源与能力查询](references/discovery.md)，定位工作副本与平台、核对协作约束后，立即查询当前账号的客户端能力，并定向读取 Benchmark 执行入口及扩展合同，取两者支持范围的交集后展示候选、询问选择，不推迟到执行器实现或真实验收。随后按当前问题读取目标源码、校验器与测试，按 [CLI 用法](references/usage.md) 初始化记录。待答期间继续独立的数据和评分分析；续接先恢复事实索引和任务状态，复用仍有效的用户选择。
 
-### 1. 定位项目与创建记录
+部署或真实验收前，必须阅读目标项目的 `docs/zh/how-to/evaluation/benchmarks/deploy-services.md` 对应章节；路径以目标仓库为准，移动时沿其 README/导航查找。安装、更新或启动前，按 [discovery.md](references/discovery.md) 的“部署前提”章节核对相关脚本的参数、配置来源和实际运行位置。已读且未变化的内容复用，动态安装和通信状态在使用前核对；缺口只阻塞依赖它的步骤。
 
-先读 [接入协议快照](references/benchmark-protocol.md) 了解架构、接口和数据边界，再按 [discovery.md](references/discovery.md) 核对项目地址、工作副本、协作约束与目标协议。获取代码、切分支、发布等操作遵循已有授权，不默认当前目录就是目标项目。
-将 `SKILL_ROOT`、`PROJECT_ADDRESS`、`TARGET_REPO`、`BENCHMARK_SOURCE` 设置为本次实际值；它们是普通 shell 变量，不覆盖宿主系统配置。
+### 2. 形成方案并实施
 
-```bash
-node "$SKILL_ROOT/scripts/onboard.cjs" init --project "$PROJECT_ADDRESS" --repo "$TARGET_REPO" --source "$BENCHMARK_SOURCE"
-```
+追踪官方任务、反馈、提交、评分及实际输出形式，确认数据范围、公开/私有边界、所选执行对象及最小适配方案。用 [确认单](assets/templates/integration-plan.md.tmpl) 保存方案，按项目协作约束完成设计确认；[事实索引](assets/templates/facts-index.md.tmpl) 只记录当前进度、未决问题及恢复入口。
 
-保存输出的 `directory` 为 `RUN_DIR`。用户指定继续某次任务时先运行 `resume --run "$RUN_DIR"`；核对记录、预算和在途任务后再继续，不因重启而重置预算或重复提交。
+按目标开发规范第 2.4 节推进实现和专项验证；调用 verify 前完成独立官方基线冻结，记录与调用条件见 [验收合同](references/acceptance.md)。
 
-运行 `node "$SKILL_ROOT/scripts/protocol-check.cjs" "$TARGET_REPO"`，按 [usage.md](references/usage.md) 保存结果，并填写包外的 [协议核对记录](assets/templates/protocol-review.json)。差异必须对照目标版本说明和处置后才能套用模板；`match` 只表示快照所列文件一致，仍须查询实际能力和部署。普通运行不更新包内快照来消除差异。
+业务配置沿目标项目统一 config 接入；接入包、测试和指南遵循目标协议。按[协议导航](references/benchmark-protocol.md)读取启动自动导入及参数生效、配置复用与重试要求，将其纳入实现和验收。动态能力、部署路径和参数从项目查询，不把示例当成完整支持列表。
 
-### 2. 分析与冻结
+### 3. 按三组验收
 
-追踪官方执行、反馈、提交和评分代码，给出执行/评测可拆分性、隔离要求及能力查询依据。使用 [接入确认单模板](assets/templates/integration-plan.md.tmpl) 记录分析，并按 [usage.md](references/usage.md) 保存 analysis、capabilities、design 三份阶段产物。
-依据 [acceptance.md](references/acceptance.md) 填写 [验收计划模板](assets/templates/acceptance-plan.json)：冻结包内协议版本、目标协议源码及差异处置记录，以及 Benchmark 版本、样本、正确/错误/非法/边界提交、预算及判分容差。调用官方评分程序保存基线，成功后再生成接入实现。
+先确定本次必须证明的数据与隐藏边界、官方评分一致性和真实用户链路结论。已有有效覆盖直接引用，同一次验证可支撑多个结论；额外验证须说明尚未覆盖的问题。在制定验证计划时读取 [真实验证指引](references/live-validation.md)，填写 [验证矩阵](assets/templates/validation-matrix.md.tmpl)；适配已有验收结果时再查 [验收合同](references/acceptance.md) 与 [命令及驱动用法](references/usage.md)。
 
-按 [分层真实验证指引](references/live-validation.md) 查询每阶段的实际 API/CLI 和身份合同，填写包外[验证矩阵](assets/templates/validation-matrix.md.tmpl)，确定 L1 接口契约、L2 执行/评分真实分段、L3 完整端到端的依赖、断言、等待、证据及清理；将计划纳入冻结输入。不要把接口接受响应或独立分段成功当作端到端通过。
+优先使用已有测试、CLI 和正常部署入口；Agent 可分步操作并保存证据，不以编写完整验收驱动为前提。确需结果转换时，在运行目录编写薄适配，不默认向目标项目新增公共驱动、测试专用 API 或框架。项目只保留接入所需代码及有价值的回归测试。
 
-```bash
-node "$SKILL_ROOT/scripts/onboard.cjs" freeze --run "$RUN_DIR" --plan "$PLAN_FILE"
-```
+1. **本地检查**：复用测试与夹具，覆盖实际改动及必要接口合同。
+2. **固定提交评分对照**：由真实评分服务结果直接对照独立官方基线，不另设函数级评分入口，不调用 Agent。
+3. **跨类型完整用户链路**：按[协议导航](references/benchmark-protocol.md#7-验收与维护)中的选样与覆盖要求冻结 Case，依[真实验证指引](references/live-validation.md)逐例执行、核对并保存证据。
 
-### 3. 实现与验收
+接入声明了百分比指标时，按[百分比展示验收](references/live-validation.md#百分比展示验收必检)核对实际展示值，将断言及证据纳入已有检查。
 
-在已匹配的目标仓库生成 `benchmarks/<key>/`、测试及指南。按协议核对结论调整 [Adapter 骨架](assets/templates/adapter.ts.tmpl) 的导入、方法签名与数据映射，实现全部业务 Hook；模板不会提供伪造的通过结果。复用目标 Catalog、协议测试及官方 Harness；检查桥接不兼容时单独记录包维护变更，公共缺口按仓库设计流程处理。
-在已授权范围内自动实现和修复；影响方案或验收的关键不确定事项按上述沟通规则与用户确认。每轮检查读取真实输出，不能修改官方基线或放宽阈值来消除失败。
+必要前置通过即推进首例真实链路，不等待无关的验收工具或报告齐备；首例计入正式结果。开发先跑受影响专项，交付前完成仓库要求的默认回归；不构成运行前置的回归可在真实链路后执行，已有同批有效结果不重复跑。实际用户路径、数据安装、执行支持与小样本范围分别声明；只验证后续接口不能宣称前置步骤或页面已通过。
 
-生成本次专用测试驱动，先执行 L1、再执行所需 L2，保留各层独立结果；`runtime` 命令在核对依赖结果与版本后，从创建/启动入口执行 L3。驱动实现有界轮询、跨阶段身份/摘要核对和异常清理，实际执行器与 Evaluator 自行回调。`verify` 负责调用与汇总，不自动发现接口或推导业务依赖；前置失败时由驱动停止后续。证据与边界场景按上述指引保存后再计算最终结论。
+### 4. 诊断、恢复与交付
 
-数据集按 [真实验证指引中的数据集安装验收](references/live-validation.md) 生成 `source` 检查：读取实际文件内容和持久化记录、核对转换后一致性，并验证重复导入与失败恢复。按目标存储实现查询，不固定数据库表或文件路径；缺证据不得通过，L2/L3 执行前核对本次安装检查结果。
+失败先查任务与清理状态、定位原因，再按影响修复和重测，复用仍有效的证据；具体判断统一见真实验证指引。提交结果未知先查询，确定性失败不原样重跑。等待随实际状态推进，每次响应先映射状态，终态立即转入核对和清理。优先使用宿主可跟踪的长任务句柄，不手工 `&` 后把 shell 完成通知当作子任务完成，也不固定长时间 sleep；运行记录不会自动唤醒宿主。
 
-```bash
-node "$SKILL_ROOT/scripts/onboard.cjs" verify --run "$RUN_DIR"
-```
+按 CLI 用法执行 verify/report，只有最新报告为 accepted 且证据覆盖本次声明范围时才能交付通过结论。必要结论和回归均已有有效证据、无未解决阻断项时结束验收，不为补齐形式上的层级或再次确认成功追加运行。报告接入代码位置、分层结果、真实记录和未完成项；标明未验证的页面或环境。本地专项测试和包内自测不替代真实验收。
 
-### 4. 交付或续接
+## 参考文件职责
 
-根据检查失败分类修复，受剩余尝试与总耗时预算约束。源码或配置变化后重新验收；基线变化须说明原因并重新冻结。平台提交前记录稳定请求标识，返回后记录任务 ID：宿主用 `job`，验收子进程用 [record-job.cjs](scripts/record-job.cjs)，详见 [usage.md](references/usage.md)。中断后先查平台任务状态，不能直接重发。
+| 何时读取 | 文件与职责 |
+|---|---|
+| 开始定位、能力或方案不明时 | [discovery.md](references/discovery.md)：查询方法、决策和分析完成条件 |
+| 对照目标契约、实现相应模块时 | [benchmark-protocol.md](references/benchmark-protocol.md)：架构与阅读路线；[代码导航](references/benchmark-protocol.sources.json)提供路径、职责与关键符号 |
+| 制定验收计划、真实验证或修复时 | [live-validation.md](references/live-validation.md)：三组顺序、覆盖、等待与重测 |
+| 填写计划、实现结果转换时 | [acceptance.md](references/acceptance.md)：输入、结果、证据和状态合同 |
+| 执行具体命令、接入驱动或恢复时 | [usage.md](references/usage.md)：CLI 和函数调用；维护/迁移部分按需阅读 |
+| 记录方案、当前工作与验证覆盖时 | [templates](assets/templates/)：对应三类记录及实现骨架；[schemas](assets/schemas/)：结构定义 |
+| 修改或发布 Skill 包时 | [test.sh](scripts/test.sh)：包内自测入口 |
 
-```bash
-node "$SKILL_ROOT/scripts/onboard.cjs" report --run "$RUN_DIR"
-```
-
-只有报告为 `accepted` 才能声明本次冻结范围验收通过。Fixture、缺少真实链路、未查询的在途任务、证据缺失和旧版本结果均不能代替验收。输出接入代码位置、中文报告、真实验证范围与剩余问题；Skill 本身不提供后台唤醒，也不省略 Benchmark 所需 Docker 或沙箱。
-
-## 参考文件说明
-
-- [benchmark-protocol.md](references/benchmark-protocol.md)：有版本和来源的稳定接入协议；[来源清单](references/benchmark-protocol.sources.json)记录固定 commit 和文件摘要。
-- [discovery.md](references/discovery.md)：项目定位、官方源码分析与能力查询。
-- [acceptance.md](references/acceptance.md)：计划、评分和检查输出约定，真实证据要求。
-- [live-validation.md](references/live-validation.md)：接口契约、分段真实集成、端到端操作与驱动程序要求；[验证矩阵模板](assets/templates/validation-matrix.md.tmpl)用于冻结本次计划。
-- [usage.md](references/usage.md)：完整 CLI、预算、续接与包独立验证。
-- [assets/templates/](assets/templates/)：接入确认单、Adapter、验收计划和报告模板；[assets/schemas/](assets/schemas/)：包内 JSON 格式。
-- [scripts/test.sh](scripts/test.sh)：在独立目录运行包内测试；不是 Benchmark 真实链路认证。
+按当前步骤读取相关章节，不要求开工前通读全部参考文档。确认单、事实索引和验证矩阵相互引用，各自保存一份事实；方案通过计划的 analysisInputs 引用即可，不另做阶段登记。

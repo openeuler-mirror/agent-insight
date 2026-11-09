@@ -1,109 +1,168 @@
 {
-  "schemaVersion": "benchmark-protocol-snapshot/v1",
-  "snapshotVersion": "2026-10-29.3",
-  "source": {
-    "repository": "https://gitcode.com/openeuler/agent-insight.git",
-    "revision": "6d7913b6039173ffdbea60e1289a7449af2dd833",
-    "basis": "local-git-commit-with-guidance-overlay",
-    "remoteRevisionVerified": false
-  },
-  "protocols": {
-    "environment": "execution-environment/v1",
-    "agentTask": "agent-task/v1",
-    "evaluation": "benchmark-evaluation/v1",
-    "evaluatorInput": "evaluator-entrypoint/v1",
-    "evaluatorOutput": "evaluator-output/v1"
-  },
+  "purpose": "目标项目代码导航；路径和符号仅作查找线索，合同以当前源码、校验器及测试为准。按本次问题选读，不要求遍历全表。",
   "files": [
     {
       "path": "docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md",
-      "role": "guidance",
-      "sha256": "sha256:80813dfe7ce3b1db84e39c6232f31083aa0562a45764bb4bf9e8cb5aa034f941",
-      "basis": "working-tree-overlay",
-      "baseSha256": "sha256:ad2f21374c048d91982971ac2c39eb31aa7abeb491c9fbe21b1d72ca202e5876",
-      "overlayPath": "references/protocol-guidance.patch"
+      "role": "guidance"
     },
     {
       "path": "packages/benchmark-protocol/src/contracts.ts",
       "role": "case-task-manifest-contracts",
-      "sha256": "sha256:32569e1b7ff5404f5801633638182412eab06cc189430d2cacc1fcd5654238ff",
-      "basis": "local-git-commit"
+      "symbols": [
+        "BenchmarkManifest",
+        "AgentTaskEnvelope",
+        "BenchmarkDatasetLoader",
+        "validateTaskEnvelope"
+      ]
     },
     {
       "path": "packages/benchmark-protocol/src/evaluation-contracts.ts",
       "role": "submission-evaluation-contracts",
-      "sha256": "sha256:180e895c50361648ba47f64726b13341ecbfce108df4915217f35eeed2722a36",
-      "basis": "local-git-commit"
+      "symbols": [
+        "EvaluationJob",
+        "ValidateSubmissionInput"
+      ]
     },
     {
       "path": "packages/benchmark-protocol/src/evaluator-contracts.ts",
       "role": "evaluation-result-contracts",
-      "sha256": "sha256:80a39763fc859cee28aaaaa8c62ad4abcf1c3571fcb9953d0aef827ff360893e",
-      "basis": "local-git-commit"
+      "symbols": [
+        "NormalizedBenchmarkResult",
+        "BenchmarkEvaluator"
+      ]
     },
     {
       "path": "packages/benchmark-protocol/src/json-schema.ts",
-      "role": "visibility-validation",
-      "sha256": "sha256:a4413a1579866c5d144e587c0d8d0b1e18e1de2b09968f8724d26d11f4a5f7a1",
-      "basis": "local-git-commit"
+      "role": "visibility-validation"
     },
     {
       "path": "packages/benchmark-protocol/environment.d.cts",
-      "role": "environment-contract",
-      "sha256": "sha256:0eb8f03feab32a35bbb17ebf0b93a9f5d96d487f648d3bf4f25b70af417217d5",
-      "basis": "local-git-commit"
+      "role": "environment-contract"
     },
     {
       "path": "src/lib/benchmark/adapter-base.ts",
       "role": "adapter-lifecycle-validation",
-      "sha256": "sha256:9d8c500f2a990c36bb7f338fc0fe4cab6a1d7863d3d1d032afbb5d77f13caab1",
-      "basis": "local-git-commit"
+      "symbols": [
+        "AbstractBenchmarkAdapter",
+        "splitCase",
+        "createAgentTask",
+        "createEvaluationRequest",
+        "createNormalizedResult"
+      ]
     },
     {
       "path": "scripts/benchmark/generate-catalog.cjs",
       "role": "catalog-validation",
-      "sha256": "sha256:d002c7cc148102333320cadda19346614c554e058b2a0ed1a0dff79279073fa3",
-      "basis": "local-git-commit"
+      "symbols": [
+        "loadPackageForOnboarding"
+      ]
     },
     {
       "path": "services/evaluator/src/evaluator-registry.cjs",
-      "role": "entrypoint-input-output-contracts",
-      "sha256": "sha256:3b9fbcf2cf75d593b6fc8136854c0adfe344b8aa1126ee7d30fde571d4dfa65c",
-      "basis": "local-git-commit"
-    }
-  ],
-  "bundledFiles": [
-    {
-      "path": "references/benchmark-protocol.md",
-      "sha256": "sha256:2698787b09e9f92e7569a11328d6f78ef4f5e080ed6a73bb49d6ce4eeefbd45c"
+      "role": "entrypoint-input-output-contracts"
     },
     {
-      "path": "assets/templates/adapter.ts.tmpl",
-      "sha256": "sha256:d934be1ec4a0557d930459a93af17dbc46f539847076460ae33d21388506534b"
+      "path": "packages/project-config/index.cjs",
+      "role": "configuration-loading-validation",
+      "symbols": [
+        "loadProjectConfig"
+      ]
     },
     {
-      "path": "assets/templates/integration-plan.md.tmpl",
-      "sha256": "sha256:f8ffd3769d98b73ecf4d22c4cb9bcc8c18affefedfd8aebd54970c0918d0b359"
+      "path": "packages/project-config/index.d.cts",
+      "role": "configuration-types"
     },
     {
-      "path": "assets/templates/protocol-review.json",
-      "sha256": "sha256:63b2e3debfb9b49a994609e679759faa41c6e8fc3f51a6dace58ca4c13514cc5"
+      "path": "docs/zh/how-to/evaluation/benchmarks/deploy-services.md",
+      "role": "configuration-deployment-guidance"
     },
     {
-      "path": "assets/templates/acceptance-plan.json",
-      "sha256": "sha256:eb91630ce3798e373ead9a49dc7e58fc37eb86a1e064286f9b722e23238735be"
+      "path": "docs/zh/reference/platform/api-and-contracts.md",
+      "role": "runtime-parameter-guidance"
     },
     {
-      "path": "references/protocol-guidance.patch",
-      "sha256": "sha256:8f504f69c71d21bfb5ef8af017c919f2d15d24491a95a2f6ed2d90f08496ce59"
+      "path": "packages/benchmark-protocol/execution.cjs",
+      "role": "execution-profile-validation"
     },
     {
-      "path": "references/live-validation.md",
-      "sha256": "sha256:c01c1c50c0cb461caf8ecc0fa1a7d6b7fa06dbfc049a7cc53ea0a254e561c640"
+      "path": "packages/benchmark-protocol/execution.d.cts",
+      "role": "execution-profile-types"
     },
     {
-      "path": "assets/templates/validation-matrix.md.tmpl",
-      "sha256": "sha256:db9b52d75bcce751b08cee7b7bffd5b5bb8a31adff5524feae5e98309bdf7f07"
+      "path": "packages/benchmark-protocol/schemas/agent-task.schema.json",
+      "role": "agent-task-schema"
+    },
+    {
+      "path": "packages/project-config/execution.cjs",
+      "role": "execution-backend-configuration-dispatch"
+    },
+    {
+      "path": "packages/project-config/execution/local.cjs",
+      "role": "native-profile-configuration"
+    },
+    {
+      "path": "packages/project-config/execution/xgovernor.cjs",
+      "role": "xgovernor-profile-configuration-compatibility"
+    },
+    {
+      "path": "services/executor/src/execution-config.cjs",
+      "role": "execution-backend-probe-dispatch"
+    },
+    {
+      "path": "services/executor/src/local-profile.cjs",
+      "role": "native-runtime-trace-probe"
+    },
+    {
+      "path": "services/executor/src/xgovernor/profile.cjs",
+      "role": "xgovernor-dependency-probe"
+    },
+    {
+      "path": "services/executor/src/execution-backend.cjs",
+      "role": "native-backend-policy-validation"
+    },
+    {
+      "path": "services/executor/src/xgovernor/backend.cjs",
+      "role": "xgovernor-backend-policy-validation"
+    },
+    {
+      "path": "services/executor/src/index.cjs",
+      "role": "execution-backend-registration"
+    },
+    {
+      "path": "scripts/reliability-client.cjs",
+      "role": "execution-capability-reporting"
+    },
+    {
+      "path": "src/lib/benchmark/execution-targets.ts",
+      "role": "execution-profile-binding-matching"
+    },
+    {
+      "path": "packages/benchmark-protocol/artifact-path.cjs",
+      "role": "evidence-names-provenance-inventory-validation"
+    },
+    {
+      "path": "services/evaluator/src/evidence-collection.cjs",
+      "role": "evidence-directory-collection-and-digests"
+    },
+    {
+      "path": "services/evaluator/src/service.cjs",
+      "role": "evidence-upload-and-failure-delivery"
+    },
+    {
+      "path": "src/lib/benchmark/evidence-artifacts.ts",
+      "role": "evidence-byte-integrity-and-json-parsing"
+    },
+    {
+      "path": "src/lib/benchmark/evaluation-callback-service.ts",
+      "role": "evidence-completion-validation"
+    },
+    {
+      "path": "src/components/eval/BenchmarkArtifactActions.tsx",
+      "role": "original-artifact-preview-and-source-display"
+    },
+    {
+      "path": "src/app/api/benchmark/v1/evaluations/[evaluationId]/artifacts/[artifactId]/content/route.ts",
+      "role": "evidence-unicode-download"
     }
   ]
 }

@@ -42,6 +42,8 @@ A completion contains `status` (`completed/submission_invalid/failed`), `rawResu
 
 `primaryMetric.aggregation` is `boolean-rate` or `mean`. Preserve the distinction between native pass rates, Boolean success, and a displayed `0`–`100` score. A display score alone does not establish an official result. Container exit, evidence upload, and resource cleanup also require separate confirmation.
 
+The `percentage` format expects a value already expressed as a percentage. For example, `42.5` displays as `42.5%`. When the official metric is a ratio from `0` to `1`, multiply the display input by `100` and preserve the original metric value.
+
 ## Cancellation and errors
 
 The same POST endpoint accepts `{ operation: "cancel", runId, requestDigest }`, using the original digest. It returns `202` with cancellation state. An existing job's mismatched digest returns `409`; a missing digest returns `422 CANCEL_INVALID`. An unknown but valid run ID can be cancelled before dispatch arrives, preventing late execution. Cancellation acceptance does not confirm process or container exit.
@@ -66,11 +68,13 @@ Preserve the names, relative directories and bytes actually produced by the scor
 
 Optional evidence `source` is `official-file`, `official-return`, `runtime-output` (default), or `platform`. Official provenance remains an integration claim requiring dedicated tests, not an attestation inferred from `kind`. `runtimeFacts.evidenceCollection` records scope, completeness, issues, file names, digests, sizes and uploaded Artifact IDs. Completion validates that inventory against referenced artifacts; incomplete successful collections are rejected. Historical callbacks without an inventory remain compatible and do not prove the new acceptance requirements.
 
-The shared previewer selects a view from the filename and MIME type. CSV opens as a table, while JSON and JSONL open as plain text. HTML opens in a sandboxed frame where inline scripts can render report content and controls. The frame restricts external scripts and resource loading.
-
 Nonzero exits and timeouts retain partial outputs and full stdout/stderr files alongside platform diagnostics. Oversized or unsupported artifacts are reported explicitly without silent truncation. Cancellation follows its existing lifecycle and does not guarantee upload. Download supports Unicode basenames; individual downloads cannot preserve a directory tree. No new archive endpoint is introduced.
 
 All attachments retain byte-integrity checks. Malformed JSON diagnostics remain downloadable with `jsonParseError`; an Adapter relying on their parsed content must reject missing `jsonContent`. Native result Schema validation remains strict. The [Chinese development contract](../../../zh/how-to/evaluation/benchmarks/develop-benchmark.md#原始产物交付与来源) is authoritative.
+
+## Onboarding and acceptance requirements
+
+The authoritative onboarding guide defines [default dataset import at startup](../../../zh/how-to/evaluation/benchmarks/develop-benchmark.md#startup-dataset-import) and [effective parameters, configuration reuse, and retries](../../../zh/how-to/evaluation/benchmarks/develop-benchmark.md#configuration-reuse-and-retry), including required behavior and acceptance evidence.
 
 ## Implementation
 

@@ -42,6 +42,8 @@ changefreq: "monthly"
 
 `primaryMetric.aggregation` 为 `boolean-rate` 或 `mean`；原始通过率、布尔成功和 `0～100` 展示分数应分别保留含义，不能只凭展示分数推断官方成绩。容器退出、证据上传和资源清理状态也需分别核对。
 
+`percentage` 格式按百分数展示输入值，例如 `42.5` 显示为 `42.5%`。官方原始指标为 `0～1` 的比例时，先将展示输入乘以 `100`，并保留官方原值。
+
 ## 原始评测证据
 
 证据范围优先按对应版本官方文档确定，再由同版本评分程序核实或补充；文档与程序不一致须核对版本/参数并说明处置，不能静默取舍或编造文件。缓存、输入副本和中间文件不自动成为证据；接入层先组织只含选定产物的受控输出目录，公共扫描仅防漏传，不负责业务分类。
@@ -51,8 +53,6 @@ changefreq: "monthly"
 `runtimeFacts.evidenceCollection` 记录采集范围、问题及文件与 Artifact ID、名称、摘要和大小的对应关系；回调端校验与实际附件一致。携带不完整采集清单的成功回调被拒绝。兼容无清单的历史回调，不将其等同新规则验证通过。进程失败/超时仍保存已产生文件和完整日志；超限、路径不支持等问题明确记录。
 
 JSON 诊断解析失败不改变附件原件或单独导致判分失败；评分依赖的结构化结果及必需报告仍由 Schema 和 Adapter 严格校验。详见[开发规范](../../how-to/evaluation/benchmarks/develop-benchmark.md#原始产物交付与来源)。
-
-公共预览器根据文件名和 MIME 类型选择展示方式。CSV 以表格展示，JSON 和 JSONL 直接显示原始文本。HTML 在隔离框架内显示，支持内嵌脚本生成正文和交互，外部脚本和资源加载受限。
 
 ## 取消与错误
 
@@ -67,6 +67,10 @@ JSON 诊断解析失败不改变附件原件或单独导致判分失败；评分
 | `REQUEST_DIGEST_MISMATCH` | `422`，对象摘要、请求头或幂等键不匹配 |
 
 服务错误对象为 `{ error: { code, message, retryable } }`。网络不确定时保留同一请求和幂等身份；调整任务内容后应生成新任务，不伪造旧摘要。
+
+## 接入与验收要求
+
+新增接入的默认启动导入规则及验证见[启动自动导入](../../how-to/evaluation/benchmarks/develop-benchmark.md#startup-dataset-import)。参数实际生效、同配置实验、配置复用与重试的行为和证据要求见[配置复用与重试验收](../../how-to/evaluation/benchmarks/develop-benchmark.md#configuration-reuse-and-retry)。
 
 ## 实现依据
 

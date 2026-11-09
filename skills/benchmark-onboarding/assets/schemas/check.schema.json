@@ -32,7 +32,185 @@
       "uniqueItems": true
     },
     "facts": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "artifactChecks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "caseId",
+              "evaluationId",
+              "submissionDigest",
+              "outputMode",
+              "sourceEvidence",
+              "platformEvidence",
+              "mappingEvidence",
+              "outputs",
+              "attachments"
+            ],
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evaluationId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sampleId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourceEvidence": {
+                "type": "string",
+                "minLength": 1
+              },
+              "platformEvidence": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mappingEvidence": {
+                "type": "string",
+                "minLength": 1
+              },
+              "absenceReason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "submissionDigest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "outputMode": {
+                "enum": [
+                  "files",
+                  "return",
+                  "none"
+                ]
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "source",
+                    "file"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "source": {
+                      "enum": [
+                        "official-file",
+                        "official-return"
+                      ]
+                    },
+                    "file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "artifactId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$"
+                    },
+                    "sizeBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "source",
+                    "file"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "source": {
+                      "enum": [
+                        "official-file",
+                        "official-return",
+                        "runtime-output",
+                        "platform"
+                      ]
+                    },
+                    "file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "artifactId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$"
+                    },
+                    "sizeBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "artifactPresentation": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "pass",
+                "not_checked"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "records": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "evidenceDigests": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      }
     }
   }
 }
