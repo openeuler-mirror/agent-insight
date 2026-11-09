@@ -32,6 +32,8 @@ The design step and every generate-Trace step refresh execution targets every 10
 
 ## OpenCode and capabilities
 
+Model discovery follows the client's OpenCode version. V1 combines JSON model definitions with the CLI catalog and resolves its authentication file under `XDG_DATA_HOME`. V2 reports enabled `providerID/id` entries from `api --standalone model.list` and marks the default returned by `model.default`. The native API resolves JSON configuration and `/connect` credentials.
+
 OpenCode checks share version-aware logic. v1 retains `debug config`, authentication-source, and `models` checks. v2 uses `api --standalone model.list`, or `model.default` when no model was selected, and checks native `providerID/id` and `enabled`. It does not reuse v1 authentication-file parsing or infer availability from v2 config-source arrays. These checks do not perform model inference.
 
 Errors distinguish `MODEL_CONFIGURATION_UNREADABLE`, `MODEL_UNAVAILABLE`, and `MODEL_CONFIGURATION_MISSING`. CLI output stays in temporary mode-`0600` files and is not returned as raw configuration or provider errors. Ready v1/v2 profiles report `skillSnapshotVersion: 4`. Skill generation and A/B require `supportsSkillSnapshot`; trigger analysis additionally requires `supportsTriggerRouting`. Missing fields prompt checking the resident client and reported capabilities, rather than assuming the OpenCode binary alone is too old.

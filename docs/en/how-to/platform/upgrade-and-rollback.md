@@ -47,6 +47,8 @@ Before restoring external writes, verify:
 
 A successful installation, reachable port, or health response alone does not prove data or workflow compatibility.
 
+After upgrading to a release with OpenCode data isolation, restart the platform and run both AgentDebug and Skill optimization once. The platform initializes a private OpenCode database and creates new sessions for new runs. The user's CLI continues to use its existing database.
+
 ## Rollback
 
 1. Stop the new version and related writers. Preserve upgraded data separately, noting which Traces and experiments were created after the upgrade.
