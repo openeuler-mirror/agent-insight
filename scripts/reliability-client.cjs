@@ -734,8 +734,7 @@ function runFiInventory(python, cwd, pythonArgs, probeEnv) {
  */
 function probeFaultInjection(cfg) {
   const python = resolvePython(cfg)
-  const cwd = resolveFiCwd(cfg, python)
-  if (!cwd) {
+  if (!resolveFiCwd(cfg, python)) {
     return {
       ready: false,
       note: python
@@ -744,6 +743,9 @@ function probeFaultInjection(cfg) {
       platforms: {},
     }
   }
+  const nativeHome = process.env.AGENT_INSIGHT_USER_HOME || os.homedir()
+  let cwd = path.resolve(cfg.workspaceBase || nativeHome)
+  while (!fs.existsSync(cwd) && path.dirname(cwd) !== cwd) cwd = path.dirname(cwd)
   const pythonArgs = [
     '-I',
     '-m',
@@ -814,6 +816,7 @@ function probeFaultInjectionIsolated(cfg) {
       fiCwd: cfg.fiCwd,
       fiPython: cfg.fiPython,
       maxParallelFi: cfg.maxParallelFi,
+      workspaceBase: cfg.workspaceBase,
     }))
   })
 }
