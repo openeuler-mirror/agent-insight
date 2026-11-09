@@ -49,8 +49,6 @@ async function fixture(t: TestContext, count: number) {
   let waitingCount = 0
   let rejectPreparation = false
   let terminalCode = ''
-  let experimentId: string | undefined
-  let datasetId: string | undefined
   const server = createServer(async (req, res) => {
     res.setHeader('content-type', 'application/json')
     if (req.url === '/health') {
@@ -100,10 +98,10 @@ async function fixture(t: TestContext, count: number) {
   scheduler.setBenchmarkEvaluationDispatchFetchForTest()
   scheduler.setEvaluatorTargetResolverForTest()
   const dataset = await prisma.agentEvalDataset.create({ data: { id: randomUUID(), user: 'retry-user', name: 'retry', datasetKind: 'benchmark' } })
-  datasetId = dataset.id
+  const datasetId: string | undefined = dataset.id
   const benchmark = await prisma.benchmarkDataset.create({ data: { agentEvalDatasetId: dataset.id, user: 'retry-user', name: 'retry', adapterKey: 'zsoft-l1', contentHash: 'fixture' } })
   const experiment = await prisma.experiment.create({ data: { user: 'retry-user', name: 'retry', scope: 'benchmark', status: 'done' } })
-  experimentId = experiment.id
+  const experimentId: string | undefined = experiment.id
   await prisma.benchmarkExperimentBinding.create({ data: { experimentId: experiment.id, datasetId: benchmark.id, datasetContentHash: 'fixture', adapterKey: 'zsoft-l1', selectionJson: '{}', runConfigJson: '{}', expectedCaseCount: count, callbackOrigin: 'http://platform.test', schedulerStatus: 'done' } })
   const cases: Array<{ experimentId: string; resultId: string; user: string; runId: string }> = []
   for (let ordinal = 0; ordinal < count; ordinal++) {

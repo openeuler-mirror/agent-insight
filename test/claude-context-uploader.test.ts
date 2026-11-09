@@ -843,7 +843,6 @@ test("uploader: transcript 尾部正在写的半条 JSON 不推进 checkpoint", 
 
 test("uploader: --enqueue 子进程不等待网络,detached worker 每轮上传且第二轮只发增量", async (t) => {
   const dir = tmpdir("worker-e2e")
-  let server: ReturnType<typeof http.createServer> | undefined
   t.after(async () => {
     if (server?.listening) await new Promise<void>((resolve) => server!.close(() => resolve()))
     fs.rmSync(dir, { recursive: true, force: true })
@@ -872,7 +871,7 @@ test("uploader: --enqueue 子进程不等待网络,detached worker 每轮上传�
   const requests: any[] = []
   let releaseFirstResponse: (() => void) | undefined
   const firstResponseGate = new Promise<void>((resolve) => { releaseFirstResponse = resolve })
-  server = http.createServer((req, res) => {
+  const server: ReturnType<typeof http.createServer> = http.createServer((req, res) => {
     let body = ""
     req.setEncoding("utf8")
     req.on("data", (chunk) => { body += chunk })
