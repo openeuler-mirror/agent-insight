@@ -16,6 +16,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { POST } from '@/app/api/skills/by-name/[name]/analysis-diagnosis/route';
+import { resetProxyConfigCache } from '@/lib/ingest/proxy-config';
+import { db } from '@/lib/storage/prisma';
 
 import {
   buildFallbackDiagnosis,
@@ -140,4 +143,50 @@ test('buildFallbackDiagnosis points to recall when it is the weakest completed d
 test('parseDiagnosisResponse tolerates fenced json', () => {
   const parsed = parseDiagnosisResponse('```json\n{"problem":"a","suggestion":"b"}\n```');
   assert.deepEqual(parsed, { problem: 'a', suggestion: 'b' });
+});
+
+test('analysis diagnosis requests structured Claude output and keeps JSON mode for gateways', async t => {
+  const originalEnv = process.env;
+  process.env = { ...originalEnv };
+  for (const key of ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'NODE_TLS_REJECT_UNAUTHORIZED']) {
+    delete process.env[key];
+  }
+  resetProxyConfigCache();
+  t.after(() => {
+    process.env = originalEnv;
+    resetProxyConfigCache();
+  });
+
+  const model = 'claude-sonnet-5-5';
+  t.mock.method(db, 'findUserSettings', async (user: string) => ({
+    settingsJson: JSON.stringify({
+      activeConfigId: 'test-model',
+      configs: [{
+        id: 'test-model', name: 'Test model', provider: 'custom', apiKey: 'test-only', model,
+        baseUrl: user === 'claude-test' ? 'https://api.anthropic.com' : 'https://model.test/v1',
+      }],
+    }),
+  }));
+  const diagnosis = { problem: 'A problem', suggestion: 'A fix' };
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({
+    choices: [{ message: { role: 'assistant', content: JSON.stringify(diagnosis) } }],
+  }));
+
+  for (const user of ['claude-test', 'gateway-test']) {
+    const response = await POST(new Request('http://localhost/analysis-diagnosis', {
+      method: 'POST', body: JSON.stringify({ user, snapshot: makeSnapshot() }),
+    }), { params: Promise.resolve({ name: 'demo-skill' }) });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).diagnosis, { ...diagnosis, mode: 'llm', modelLabel: 'Test model' });
+  }
+
+  assert.deepEqual(fetch.mock.calls.map(call => String(call.arguments[0])), [
+    'https://api.anthropic.com/v1/chat/completions', 'https://model.test/v1/chat/completions',
+  ]);
+  const [claude, gateway] = fetch.mock.calls.map(call => JSON.parse(call.arguments[1]?.body as string).response_format);
+  assert.equal(claude.type, 'json_schema');
+  assert.equal(claude.json_schema.strict, true);
+  assert.deepEqual(claude.json_schema.schema.required, ['problem', 'suggestion']);
+  assert.equal(claude.json_schema.schema.additionalProperties, false);
+  assert.deepEqual(gateway, { type: 'json_object' });
 });

@@ -1195,6 +1195,7 @@ function EditForm({
     pickedProvider?: LlmProvider | null;
     locale: string;
 }) {
+    const isAzureOpenAI = pickedProvider?.id === 'azure-openai';
     const onProviderChange = (p: EvalConfigItem['provider']) => {
         const preset = getProvider(p);
         setConfig({
@@ -1273,10 +1274,12 @@ function EditForm({
                     />
                 </Field>
 
-                <Field label={locale === 'zh' ? '模型名' : 'Model Name'}>
+                <Field label={isAzureOpenAI
+                    ? (locale === 'zh' ? '部署名称' : 'Deployment Name')
+                    : (locale === 'zh' ? '模型名' : 'Model Name')}>
                     <input
                         style={inputStyle}
-                        placeholder="deepseek-v4-flash / gpt-4o / ..."
+                        placeholder={isAzureOpenAI ? 'my-model-deployment' : 'deepseek-v4-flash / gpt-4o / ...'}
                         value={config.model || ''}
                         disabled={isDefault}
                         onChange={e => setConfig({ ...config, model: e.target.value })}

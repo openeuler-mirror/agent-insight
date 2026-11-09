@@ -33,9 +33,10 @@
 import { OpenAI } from 'openai';
 import { createHash } from 'crypto';
 import { jsonrepair } from 'jsonrepair';
+import { z } from 'zod';
 
 import { getActiveConfig } from '@/lib/storage/server-config';
-import { getModelFetch } from '@/lib/server/model-fetch';
+import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
 import type { Severity } from '../prevalence';
 import { PROMPT_SKILL_META, PROMPT_ROBUSTNESS, PROMPT_SECURITY } from './prompts';
 
@@ -60,6 +61,21 @@ export interface LlmEvalOutcome {
 
 const TIMEOUT_MS = Number(process.env.STATIC_EVAL_LLM_TIMEOUT_MS || 120_000);
 const MAX_OUTPUT_TOKENS = 2048;
+
+const staticEvaluationSchema = z.object({
+  overall_comment: z.string(),
+  detailed_evaluation: z.array(z.object({
+    dimension: z.string(),
+    score: z.number().int(),
+    justification: z.string(),
+    issues: z.array(z.object({
+      summary: z.string(),
+      severity: z.enum(['high', 'medium', 'low']),
+      evidence: z.string(),
+      suggestedFix: z.string(),
+    })),
+  })),
+});
 
 /**
  * 评分采样温度。实测：不设 temperature 时走 provider 默认（DeepSeek ≈1.0），
@@ -134,7 +150,7 @@ async function callLlm(
       {
         model,
         messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' as const },
+        response_format: getJsonResponseFormat(client.baseURL, 'static_evaluation', staticEvaluationSchema),
         max_tokens: MAX_OUTPUT_TOKENS,
         temperature: TEMPERATURE,
       },

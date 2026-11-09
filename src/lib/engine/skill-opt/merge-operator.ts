@@ -31,7 +31,8 @@
 
 import { OpenAI } from 'openai';
 import { jsonrepair } from 'jsonrepair';
-import { getModelFetch } from '@/lib/server/model-fetch';
+import { z } from 'zod';
+import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
 import type { ModelConfig } from '@/lib/storage/server-config';
 import type { Severity } from '@/lib/engine/skill-issues/prevalence';
 
@@ -294,6 +295,22 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
+const nullableText = z.union([z.string(), z.null()]);
+const mergeOutputSchema = z.object({
+  items: z.array(z.object({
+    title: z.string(),
+    rationale: z.string(),
+    severity: z.enum(['high', 'medium', 'low']),
+    route: z.enum(['core', 'reference', 'backlog']),
+    conflict: z.boolean(),
+    conflictNote: nullableText,
+    targetFile: nullableText,
+    anchorText: nullableText,
+    proposedEdit: z.string(),
+    sourceIssueIds: z.array(z.string()),
+  })),
+});
+
 const OUTPUT_SCHEMA_SPEC = [
   '输出 JSON（只输出 JSON，不要任何额外文字）：',
   '{',
@@ -398,7 +415,7 @@ async function callOperatorLlm(client: OpenAI, model: string, prompt: string): P
       {
         model,
         messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' as const },
+        response_format: getJsonResponseFormat(client.baseURL, 'merged_issues', mergeOutputSchema),
         max_tokens: MAX_OUTPUT_TOKENS,
       },
       { signal: controller.signal },

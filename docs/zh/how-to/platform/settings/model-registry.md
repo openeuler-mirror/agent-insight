@@ -78,7 +78,7 @@ changefreq: monthly
 | **默认状态** | 表示该配置是否作为当前 Workspace 的默认模型。 |
 | **健康状态** | 表示连接检测是否通过，用于判断当前配置是否具备执行条件。 |
 
-注册 xAI 时选择 **xAI Grok**，Base URL 使用 `https://api.x.ai/v1`。已有配置若填了已退役的 `grok-3` 等旧模型，请编辑模型名为 `grok-4.7` 后重新测试。Azure OpenAI 使用 `https://<resource>.openai.azure.com/openai/v1`。
+注册 xAI 时选择 **xAI Grok**，Base URL 使用 `https://api.x.ai/v1`。已有配置若填了已退役的 `grok-3` 等旧模型，请编辑模型名为 `grok-4.7` 后重新测试。注册 Azure OpenAI 时，Base URL 使用 `https://<resource>.openai.azure.com/openai/v1`，并在 **部署名称** 中填写实际部署名。
 
 供应商目录提供默认 Model 或 Base URL 时，服务端在调用时补全对应的留空字段。目录没有默认模型时，必须填写 Model 才能通过连接测试。OpenAI 的 Base URL 留空时，优先使用服务端的 `OPENAI_BASE_URL`。切换默认模型时，留空的字段保持为空。
 

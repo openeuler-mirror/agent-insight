@@ -26,13 +26,27 @@
  * 故意**不 import opencode SDK**（只 openai + config + 结构模块），便于离线单测/验证。
  */
 import { OpenAI } from 'openai';
+import { z } from 'zod';
 import { getActiveConfig } from '@/lib/storage/server-config';
-import { getModelFetch } from '@/lib/server/model-fetch';
+import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import type { DatasetCase } from '@/server/agent_datasets_storage';
 import { makeYearAssertion, makeNumericAssertion, type ScriptAssertion } from './self-verify-structural';
 
 export interface FactSpec { description?: string; kind?: string; expectedValue?: string | number; jsonPath?: string }
+
+const extractedFactsSchema = z.object({
+  facts: z.array(z.object({
+    description: z.string(),
+    kind: z.enum(['year', 'count', 'identifier', 'other']),
+    expectedValue: z.string(),
+  })),
+});
+
+const reviewedFactsSchema = z.object({
+  keep: z.array(z.number().int()),
+  paths: z.array(z.object({ index: z.number().int(), path: z.string() })),
+});
 
 const PROMPT = `你在为一个 skill 的【脚本质量门】挑选**要用确定性断言看护**的数据点。下面是该 skill 评测数据集里
 多个用例的**标准答案**。请挑出应被看护的数据点——只挑**同时满足**：
@@ -68,9 +82,10 @@ export async function extractGuardableFacts(cases: DatasetCase[], user: string):
   if (!config || !isModelConnectionReady(config)) return [];
   const expected = cases.map((c, i) => `【用例${i + 1}】${(c.expectedOutput || '').slice(0, 700)}`).join('\n').slice(0, 7000);
   try {
-    const r = await newClient(config).chat.completions.create({
+    const client = newClient(config);
+    const r = await client.chat.completions.create({
       model: config.model || 'deepseek-chat', temperature: 0,
-      response_format: { type: 'json_object' },
+      response_format: getJsonResponseFormat(client.baseURL, 'extracted_facts', extractedFactsSchema),
       messages: [{ role: 'user', content: PROMPT.replace('%EXPECTED%', expected) }],
     });
     const j = parseLoose(r.choices?.[0]?.message?.content || '') as { facts?: FactSpec[] };
@@ -95,9 +110,7 @@ const REVIEW_PROMPT = `你在审核「skill 脚本质量门」的候选断言，
 %SAMPLE%
 
 另外（可选，提升精度）：对每条**保留**的事实，若它的值在【脚本实际输出样本】里对应一个清晰的 JSON 字段，
-给它的点路径（如 file_info.first_event_time）——门会优先精确查该字段；取不到/不确定**就别给**（会自动回退扫描）。
-
-只输出 JSON：{"keep":[要保留的编号, ...], "paths":{"<编号>":"<点路径>"}}`;
+给它的点路径（如 file_info.first_event_time）——门会优先精确查该字段；取不到/不确定**就别给**（会自动回退扫描）。`;
 
 const REVIEW_K = Number(process.env.SKILL_OPT_REVIEW_K) || 3; // reviewer 跑几遍取交集（治非确定性）
 
@@ -122,15 +135,29 @@ async function reviewFacts(facts: FactSpec[], scriptSample: string, cases: Datas
   const pathVotes: Record<string, string> = {};
   for (let round = 0; round < REVIEW_K; round++) {
     try {
-      const r = await newClient(config).chat.completions.create({
+      const client = newClient(config);
+      const responseFormat = getJsonResponseFormat(client.baseURL, 'reviewed_facts', reviewedFactsSchema);
+      // Claude's strict schema requires known object keys, so send paths as indexed entries.
+      const outputExample = responseFormat.type === 'json_schema'
+        ? '{"keep":[要保留的编号, ...], "paths":[{"index":编号, "path":"<点路径>"}]}'
+        : '{"keep":[要保留的编号, ...], "paths":{"<编号>":"<点路径>"}}';
+      const r = await client.chat.completions.create({
         model: config.model || 'deepseek-chat', temperature: 0,
-        response_format: { type: 'json_object' },
-        messages: [{ role: 'user', content: prompt }],
+        response_format: responseFormat,
+        messages: [{ role: 'user', content: `${prompt}\n\n只输出 JSON：${outputExample}` }],
       });
-      const j = parseLoose(r.choices?.[0]?.message?.content || '') as { keep?: number[]; paths?: Record<string, string> };
+      const j = parseLoose(r.choices?.[0]?.message?.content || '') as {
+        keep?: number[];
+        paths?: Record<string, string> | z.infer<typeof reviewedFactsSchema>['paths'];
+      };
       if (!Array.isArray(j.keep)) continue;
       votes.push(new Set(j.keep.map(Number)));
-      for (const [k, v] of Object.entries(j.paths ?? {})) if (v && !pathVotes[k]) pathVotes[k] = v;
+      const paths = Array.isArray(j.paths)
+        ? j.paths.map(entry => [String(entry?.index), entry?.path] as const)
+        : Object.entries(j.paths ?? {});
+      for (const [k, v] of paths) {
+        if (typeof v === 'string' && v && !pathVotes[k]) pathVotes[k] = v;
+      }
     } catch (e) {
       console.warn('[self-verify] reviewer round failed (skip):', (e as Error)?.message);
     }

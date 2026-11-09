@@ -17,6 +17,7 @@
 import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { getModelFetch } from '@/lib/server/model-fetch';
+import { normalizeModelBaseUrl } from '@/lib/shared/model-connection';
 import { getActiveConfig } from '@/lib/storage/server-config';
 
 const DEFAULT_CONFIDENCE_THRESHOLD = 0.75;
@@ -91,17 +92,13 @@ function getTimeoutMs(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 300000;
 }
 
-function normalizeBaseUrl(baseUrl: string): string {
-  return String(baseUrl || '').replace(/\/chat\/completions\/?$/, '');
-}
-
 async function getLlmClient(user?: string | null) {
   const config = await getActiveConfig(user);
   if (!config) return { client: null, model: null };
   return {
     client: new OpenAI({
       apiKey: config.apiKey || 'no-api-key-required',
-      baseURL: normalizeBaseUrl(config.baseUrl || 'https://api.deepseek.com'),
+      baseURL: normalizeModelBaseUrl(config.baseUrl) ?? 'https://api.deepseek.com',
       defaultHeaders: config.headers,
       fetch: getModelFetch(),
       timeout: getTimeoutMs(),

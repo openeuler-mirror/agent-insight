@@ -16,8 +16,9 @@
 
 import { NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
+import { z } from 'zod';
 
-import { getModelFetch } from '@/lib/server/model-fetch';
+import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
 import {
   buildDiagnosisPrompt,
   buildFallbackDiagnosis,
@@ -27,6 +28,8 @@ import {
 import { getActiveConfig } from '@/lib/storage/server-config';
 
 export const dynamic = 'force-dynamic';
+
+const diagnosisSchema = z.object({ problem: z.string(), suggestion: z.string() });
 
 function isSnapshot(value: unknown): value is SkillDiagnosisSnapshot {
   if (!value || typeof value !== 'object') return false;
@@ -83,7 +86,7 @@ export async function POST(
           { role: 'system', content: prompt.system },
           { role: 'user', content: prompt.user },
         ],
-        response_format: { type: 'json_object' },
+        response_format: getJsonResponseFormat(client.baseURL, 'skill_diagnosis', diagnosisSchema),
       });
       const content = completion.choices?.[0]?.message?.content || '';
       const parsed = parseDiagnosisResponse(content);

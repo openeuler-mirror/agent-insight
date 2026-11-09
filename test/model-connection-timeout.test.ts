@@ -24,7 +24,7 @@ import { POST } from '../src/app/api/eval/settings/test/route';
 import { db } from '../src/lib/storage/prisma';
 import { getActiveConfig, saveUserSettings, getUserSettings } from '../src/lib/storage/server-config';
 import { getModelFetch } from '../src/lib/server/model-fetch';
-import { resolveCatalogProvider } from '../src/lib/llm-providers';
+import { getProvider, resolveCatalogProvider } from '../src/lib/llm-providers';
 
 const config = { provider: 'custom', baseUrl: 'https://model.test/v1', model: 'test-model' };
 const completion = { choices: [{ message: { role: 'assistant', content: 'ok' } }] };
@@ -159,9 +159,39 @@ test('OpenAI 推理模型探测使用 max_completion_tokens', async () => {
   });
 });
 
+test('Azure OpenAI 要求填写部署名并将它发给对应资源', async t => {
+  const preset = getProvider('azure-openai');
+  assert.equal(preset?.defaultModel, '');
+  assert.deepEqual(preset?.suggestedModels, []);
+
+  const connection = { provider: 'azure-openai', baseUrl: 'https://example.openai.azure.com/openai' };
+  const fetch = t.mock.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(String(url), 'https://example.openai.azure.com/openai/v1/chat/completions');
+    assert.equal(JSON.parse(init?.body as string).model, 'evaluation-deployment');
+    return Response.json(completion);
+  });
+  const options = { timeoutMs: 1000, signal: new AbortController().signal, fetch };
+  await assert.rejects(probeModelConnection(connection, options),
+    error => classifyModelTestError(error).code === 'invalid_request');
+  assert.equal(fetch.mock.callCount(), 0);
+
+  await probeModelConnection({ ...connection, model: ' evaluation-deployment ' }, options);
+  assert.equal(fetch.mock.callCount(), 1);
+});
+
 test('共享传输按官方端点转换参数，自定义端点保留原始请求', async () => {
   const sampling = { temperature: 0, top_p: 1, seed: 42 };
-  const format = { response_format: { type: 'json_object' } };
+  const format = { response_format: {
+    type: 'json_schema',
+    json_schema: {
+      name: 'evaluation',
+      strict: true,
+      schema: {
+        type: 'object', properties: { passed: { type: 'boolean' } }, required: ['passed'], additionalProperties: false,
+      },
+    },
+  } };
+  const gatewayFormat = { response_format: { type: 'json_object' } };
   const cases = [
     ['https://api.openai.com/v1/chat/completions',
       { model: 'gpt-6-astra', max_tokens: 1000, ...sampling },
@@ -172,7 +202,7 @@ test('共享传输按官方端点转换参数，自定义端点保留原始请�
     ...['claude-sonnet-5-5', 'claude-opus-4-7'].map(model => [
       'https://api.anthropic.com/v1/chat/completions',
       { model, ...sampling, ...format },
-      { model, seed: 42 },
+      { model, seed: 42, ...format },
     ] as const),
     ...[
       'claude-3-5-sonnet-20241022',
@@ -183,14 +213,14 @@ test('共享传输按官方端点转换参数，自定义端点保留原始请�
     ].map(model => [
       'https://api.anthropic.com/v1/chat/completions',
       { model, ...sampling, ...format },
-      { model, temperature: 0, seed: 42 },
+      { model, temperature: 0, seed: 42, ...format },
     ] as const),
     ['https://api.anthropic.com/v1/chat/completions',
       { model: 'claude-sonnet-4-20250514', top_p: 0.8 },
       { model: 'claude-sonnet-4-20250514', top_p: 0.8 }],
     ['https://model.test/v1/chat/completions',
-      { model: 'gpt-6-astra', ...sampling },
-      { model: 'gpt-6-astra', ...sampling }],
+      { model: 'gpt-6-astra', ...sampling, ...gatewayFormat },
+      { model: 'gpt-6-astra', ...sampling, ...gatewayFormat }],
   ] as const;
   for (const [url, request, expected] of cases) {
     const fetcher = getModelFetch(async (_url, init) => {

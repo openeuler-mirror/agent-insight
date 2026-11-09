@@ -19,6 +19,7 @@ import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { getModelFetch } from '@/lib/server/model-fetch';
+import { normalizeModelBaseUrl } from '@/lib/shared/model-connection';
 import { evaluateResultAccuracy } from './result-accuracy-evaluator';
 import {
   evaluateInstructionAdherence,
@@ -100,7 +101,7 @@ async function createClient(user?: string | null): Promise<{ client: OpenAI; mod
   return {
     client: new OpenAI({
       apiKey: config.apiKey || 'no-api-key-required',
-      baseURL: String(config.baseUrl || 'https://api.deepseek.com').replace(/\/chat\/completions\/?$/, ''),
+      baseURL: normalizeModelBaseUrl(config.baseUrl) ?? 'https://api.deepseek.com',
       defaultHeaders: config.headers,
       fetch: getModelFetch(),
       timeout: remainingEvaluationTimeMs() ?? Number(process.env.RESULT_QUALITY_TIMEOUT_MS || process.env.JUDGMENT_TIMEOUT_MS || 300000),
@@ -126,7 +127,7 @@ async function invokeStructured<S extends z.ZodTypeAny>(
     top_p: 1,
     seed: 42,
     messages,
-  }, { signal: experimentSignal(), timeout: remainingEvaluationTimeMs() }));
+  }, { signal: experimentSignal(), timeout: remainingEvaluationTimeMs() ?? llm.client.timeout }));
   const content = response.choices?.[0]?.message?.content?.trim();
   if (!content) {
     if (remainingEvaluationTimeMs() !== undefined) throw new JudgeOutputParseError('评测模型返回空内容', '');
