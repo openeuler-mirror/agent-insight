@@ -40,6 +40,8 @@ docker buildx build \
 
 ## 前置条件
 
+以下前置条件适用于通用 npm 镜像；UBI9/OpenShift 源码镜像使用下节单独流程。
+
 - npm 上已经发布了目标版本，例如 `agent-insight@0.5.0`。
 - 本机 Docker Desktop 或 Docker Engine 已启动。
 - 已登录 Docker Hub，并且当前账号有 `karaggagent/agent-insight` 的推送权限。
@@ -56,6 +58,42 @@ docker buildx ls
 docker buildx create --name agent-insight-builder --use
 docker buildx inspect --bootstrap
 ```
+
+## 构建 UBI9/OpenShift 交付候选
+
+`Dockerfile.openshift` 从当前源码及锁文件构建，构建和运行阶段使用同一 UBI9 Node.js 22 基础镜像。默认基础镜像固定到多架构 manifest digest；可通过 `UBI_NODE_IMAGE` 指向企业仓库的 UBI9 镜像或固定 digest。覆盖镜像必须提供 Node.js 22、npm 和完整 `dnf`，仅提供 `microdnf` 不满足此构建契约。系统包更新使用基础镜像配置的软件源，不从其他发行版复制原生依赖。
+
+```bash
+docker build --platform linux/amd64 \
+  -f Dockerfile.openshift \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+  -t agent-insight:openshift-ubi9-test .
+
+node scripts/verify-openshift-image.cjs agent-insight:openshift-ubi9-test
+```
+
+构建阶段执行 `npm ci`、生产编译及 `npm pack`；候选包含 Node.js 后端、Prisma、OpenCode 和现有运行依赖。首次支持范围为 SQLite 单副本；此镜像不提供 OpenGauss 运行时依赖。最终镜像保留 UID 0，目的是允许客户派生构建继承 root 身份执行完整 DNF 更新；实际部署必须由 OpenShift SCC 分配非 root UID，不能为此放宽 SCC 或增加特权。通用 `Dockerfile` 和 `Dockerfile.local` 的默认用户不变。
+
+此候选使用构建时固化的源码，不支持通用镜像的 `AGENT_INSIGHT_SOURCE_DIR` 运行时源码挂载模式。代码升级需重新构建镜像；启动时仅重新生成包内 Prisma client，避免非 root UID 覆盖 root 属主文件时失败。
+
+应用的 `python3` 使用 UBI AppStream 的 Python 3.11，以满足故障注入等模块的最低要求；DNF 继续使用系统自带的 Python。默认运行镜像禁用基础镜像附带的 CodeReady Builder 仓库，保留 UBI BaseOS/AppStream 更新源。企业镜像应配置其认可的软件源，并能提供 Python 3.11。
+
+故障目录依赖的 PyYAML、RAS 依赖的 Pydantic 及其传递依赖由 `scripts/requirements-container.txt` 固定版本和 CPython 3.11 Linux wheel 的 SHA-256，构建时通过 pip 校验后安装。可用 `--build-arg PIP_INDEX_URL=<获准的Python包源>` 切换包源，校验和保持不变。容器验证同时检查 YAML 解析、故障目录、RAS 能力目录和思考循环检测器配置字段。DNF 更新的范围仍为 RPM，Python/npm 依赖需按各自的锁定来源重建和扫描。
+
+客户派生补丁 Dockerfile 不需要 `USER`，例如：
+
+```dockerfile
+FROM <企业仓库中的本组件镜像及固定digest>
+RUN dnf -y update && dnf clean all
+```
+
+在客户认可的软件源和构建环境中构建补丁镜像，分别记录原镜像和补丁镜像的 RPM 名称、版本、架构及来源。选择已有修复包的实际受影响组件核验更新结果；命令退出 0 或显示没有可更新包，均不能单独证明某项 CVE 已修复。两份镜像都应执行上述容器验证并重新扫描；npm 依赖和随程序携带的二进制漏洞需要分别处理。
+
+npm 漏洞修复应更新源码中的依赖声明及锁文件，再用 `npm ci` 重建、扫描镜像。上层依赖限制了修复版本时，应同步升级兼容的上层版本；不要仅在已运行的容器里临时安装依赖并将其视为可复现的交付镜像。
+
+验证脚本创建并清理自己的临时容器和 Docker 卷，在两个任意非 root UID、GID 0、删除全部 capabilities 和禁止权限提升的条件下验证 HTTP、HOME/XDG 写入、Prisma 原生引擎、OpenCode 服务启动、控制网关 WebSocket 握手、RAS 配置清单及重启持久化。脚本还以非法参数或无凭据请求校验模型连接、Trace 数据、基础设施探测与用量管理的关键 API，不调用真实模型。镜像通过共享入口启动 `scripts/control-server.js`，指令分发端口默认为应用端口加一且只绑定本机。它不连接模型，不替代业务评测、真实 SCC、PVC、Route、SSE/公网 WSS 或企业漏洞准入验收。发布前记录源码提交、构建文件校验和、基础镜像 digest、候选镜像 ID/仓库 digest、RPM 清单与验证结果。
+
+`Dockerfile.openshift.dockerignore` 排除本地环境文件、私有配置、数据库和已有构建产物。不要在镜像或构建参数中加入客户密钥。若覆盖运行根目录，同时调整 `HOME` 和全部 `XDG_*_HOME` 到该目录下；数据卷权限由存储类型及 SCC/组权限配置共同决定，镜像层权限不会自动修复不匹配的已挂载卷。
 
 ## 发布多架构镜像
 

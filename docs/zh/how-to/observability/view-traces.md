@@ -171,6 +171,8 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 ### OpenCode 总时延与时间轴
 
+调用树的 Agent、事件耗时列保持单行，小时级耗时不会在数值内部换行。
+
 OpenCode 的 Trace 总时延按各轮任务的有效执行时间累计：从该轮用户输入到最后一项已记录的工作结束。模型、工具、子 Agent、失败重试及轮内等待均计入，轮次之间等待用户继续输入的空闲不计入。并发区间只计一次。例如执行 20 秒、等待用户一小时、再执行 30 秒，总时延为 **50 秒**。
 
 详情时间轴保留真实时间间隔，节点显示的有效耗时可能小于横条的时间跨度。执行中只计算已上报的时间；缺少轮次边界时保留可确认的执行跨度，不按固定空闲阈值删除时间。
@@ -584,6 +586,19 @@ fromSessionId/toSessionId 优先复用框架原有会话编号。平台仅在当
 
 
 协作图有两个入口：Trace 详情的“调用关系图”展示该 Trace 可自动解析的原生调用；Trace 列表的“协作图”进入协作列表，选择上报的 `collaborationId` 后查看完整上报关系。成员 Trace 就绪后，链路列表只展示一个合并入口（复用首个无调用父级的成员 taskId），详情包含全部成员：定位唯一时挂到对应调用步骤，否则按关系的 observedAt（缺失时为接收时间）并列展示。循环和回传联系保留在协作图中，不生成循环的 Trace 树。普通协作成员缺失、身份歧义、无权读取、正文为空、已有原生子记录、Langfuse 专用树或超过容量时，保留相关原 Trace 列表入口，避免隐藏无法展示的数据；Goal Plus 已声明 worker 的等待规则见前文。返回列表时会重新加载数据，无需手动刷新页面。 MCTS 与 Goal Plus 的合并容量按单个协作组判断，账号历史会话或协作组总数超过 200 不会拆开原有主子 Trace。某组超限或解析失败时，仅该组及共享 Trace 的关联组暂时保留独立入口，其他组正常展示；Goal Plus 正常等待正文的 worker 仍按前文规则处理。
+
+## Jiuwen 历史耗时单位校正
+
+Jiuwen 新采集记录的 `Execution.latency` 使用毫秒。旧版本曾写入秒值，导致顶部、列表和聚合耗时缩小 1000 倍；例如 `61187.865` 秒应为 `61187865` 毫秒，顶部显示约 `17h`。
+
+先完整备份实际使用的 SQLite 数据库，再预览、执行单位校正。`--report` 指定的文件必须不存在，JSONL 报告以 `0600` 权限保存；每条更新前同步落盘 `planned` 原值与新值，提交后记录 `applied`，完成时写入 `summary`。中途失败时保留已写入的日志，需结合数据库当前值判断最后一个计划是否已提交：
+
+```bash
+node --import tsx scripts/repair_trace_latency.ts --framework jiuwenswarm --report /path/to/jiuwen-preview.jsonl
+node --import tsx scripts/repair_trace_latency.ts --framework jiuwenswarm --apply --report /path/to/jiuwen-applied.jsonl
+```
+
+仅当原值乘 1000 后与原始事件首尾跨度吻合，且原值按毫秒不吻合时才校正；误差上限为 2% 或 2 毫秒，容纳根 Span 外层包装时间。时间戳取整导致不超过 1 毫秒的跨度无法可靠判断，保留原值。校正保持原有跨度口径，只修改 `Execution.latency`，不改 Session、交互、Token、时间戳或父子关系，不按空白时间删除等待。缺失时间证据、不吻合或已是毫秒的记录保持原值；再次运行不会重复放大。旧 Jiuwen Trace Bundle 导入使用相同检查，并保留传入 Bundle 的原始内容。未指定 `--framework` 时仍只重算 OpenCode。
 
 ## 阅读失败调用与完整输入输出
 

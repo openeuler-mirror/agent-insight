@@ -16,13 +16,13 @@
  */
 
 /**
- * 统一安装入口：注册常驻客户端服务并交由 systemd / launchd 守护。
+ * 统一安装入口：注册客户端，优先由 systemd / launchd 托管，Linux 无 manager 时后台运行。
  *
  * 用法：
  *   node scripts/install-ras-client.js --host <url> --token <installToken> [--start]
  *   node scripts/install-ras-client.js --status | --uninstall
  *
- * 本期只支持 Linux (systemd user unit) 与 macOS (launchd LaunchAgent)。
+ * Linux 优先使用 systemd，不可用时以独立后台进程运行；macOS 使用 launchd。
  * Windows Service 注册通常需要管理员权限并依赖外部工具，与「不依赖外部下载源」冲突，
  * 因此不在本期范围 —— 在 Windows 上给出明确提示而不是静默降级。
  */
@@ -32,6 +32,7 @@ const path = require('path')
 const { spawnSync } = require('child_process')
 const { ensureManagedFiRuntime } = require('./lib/fi-python-runtime')
 const { getAgentInsightHome } = require('./agent-insight-home.cjs')
+const { backgroundStatus, startBackgroundClient, stopBackgroundClient } = require('./client-process.cjs')
 
 const CLIENT_HOME = path.join(getAgentInsightHome(), 'client')
 const CONFIG_PATH = path.join(CLIENT_HOME, 'config.json')
@@ -48,7 +49,7 @@ const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.cjs')
 const USER_CONFIG_DIR = path.join(getAgentInsightHome(), 'config')
 
 /** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
-const RUNTIME_FILES = ['reliability-client.cjs', 'jiuwen-experiment-runtime.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'skill-deployment-runtime.cjs', 'opencode-connection-config.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'opencode-experiment-events-v2.mjs', 'opencode-runtime.cjs', 'ws-client.cjs', 'agent-insight-home.cjs', 'xgovernor.cjs']
+const RUNTIME_FILES = ['client-process.cjs', 'reliability-client.cjs', 'jiuwen-experiment-runtime.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'skill-deployment-runtime.cjs', 'opencode-connection-config.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'opencode-experiment-events-v2.mjs', 'opencode-runtime.cjs', 'ws-client.cjs', 'agent-insight-home.cjs', 'xgovernor.cjs']
 
 function installRuntime() {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true })
@@ -249,7 +250,7 @@ function normalizeInsightBaseUrl(value) {
   }
 }
 
-async function register({ host, token, name, previousClientId }) {
+async function register({ host, token, name, previousClientId, supervisor }) {
   const base = String(host || '').replace(/\/+$/, '')
   const res = await fetch(`${base}/api/reliability/client/v1/register`, {
     method: 'POST',
@@ -263,7 +264,7 @@ async function register({ host, token, name, previousClientId }) {
         os: process.platform,
         arch: process.arch,
         agentVersion: '1.0.0',
-        supervisor: process.platform === 'darwin' ? 'launchd' : 'systemd',
+        supervisor,
         // 服务端据此认出「同一台机器」，避免每次安装都新建一条记录。
         machineId: resolveMachineId(),
       },
@@ -661,6 +662,11 @@ function status() {
   const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
   log(`clientId: ${cfg.clientId}`)
   log(`host:     ${cfg.insightBaseUrl}`)
+  if (cfg.supervisor === 'background') {
+    const state = backgroundStatus()
+    log(`background: ${state.running ? `running (pid=${state.pid})` : 'stopped'}`)
+    return
+  }
   if (process.platform === 'linux') {
     const target = resolveSystemdTarget()
     const r = systemctl(target.scope, 'is-active', `${SERVICE_NAME}.service`)
@@ -672,7 +678,12 @@ function status() {
   }
 }
 
-function uninstall() {
+async function uninstall() {
+  if (fs.existsSync(path.join(CLIENT_HOME, 'background.json')) || readClientSupervisor() === 'background') {
+    await stopBackgroundClient()
+    log('✓ 已停止后台客户端，配置与运行时保留')
+    return
+  }
   if (process.platform === 'linux') {
     const target = resolveSystemdTarget()
     systemctl(target.scope, 'stop', `${SERVICE_NAME}.service`)
@@ -689,6 +700,22 @@ function uninstall() {
     log('✓ 已卸载 launchd 服务')
   }
   log(`  配置保留在 ${CLIENT_HOME}，如需彻底清理请手动删除`)
+}
+
+function readClientSupervisor() {
+  try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')).supervisor } catch { return null }
+}
+
+async function installBackground(start) {
+  if (start) log(`✓ 后台进程已启动 (pid=${await startBackgroundClient()})`)
+  else { await stopBackgroundClient(); log('后台模式已配置，按 --no-start 保持停止') }
+  const quote = value => `'${value.replace(/'/g, "'\\''")}'`
+  const command = `AGENT_INSIGHT_HOME=${quote(getAgentInsightHome())} ${quote(process.execPath)} ${quote(path.join(RUNTIME_DIR, 'client-process.cjs'))}`
+  log(`  启动: ${command} start`)
+  log(`  停止: ${command} stop`)
+  log(`  状态: ${command} status`)
+  log(`  日志: ${path.join(CLIENT_HOME, 'client.log')}`)
+  log('  后台模式不提供自动重启；容器重建后需重新启动，正式部署可由 OpenShift 托管前台进程。')
 }
 
 // ------------------------------------------------------------- main
@@ -720,20 +747,17 @@ async function main() {
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
     fail(`不支持的平台: ${process.platform}`)
   }
-  if (process.platform === 'linux' && spawnSync('systemctl', ['--version']).status !== 0) {
-    fail('未找到 systemctl', `该系统没有 systemd，可手动运行: node ${CLIENT_SCRIPT}`)
-  }
-
+  let supervisor = process.platform === 'darwin' ? 'launchd' : 'systemd'
   let systemdTarget = null
   if (process.platform === 'linux') {
     systemdTarget = resolveSystemdTarget()
     const preflight = preflightSystemd(systemdTarget)
     if (!preflight.ok) {
-      fail(
-        'systemd 服务管理器不可用，尚未刷新设备凭证',
-        preflight.detail ||
-          `请确认 ${systemdCommand(systemdTarget.scope, 'show-environment')} 可正常执行后重试。`,
-      )
+      if (systemdTarget.legacySystemUnit) {
+        fail('无法接管历史 systemd 服务，尚未刷新设备凭证', preflight.detail)
+      }
+      supervisor = 'background'
+      log('systemd 服务管理器不可用，改用独立后台进程，不阻塞安装注册。')
     }
   }
 
@@ -777,6 +801,7 @@ async function main() {
       name: args.name,
       // clientId 只在签发它的完整服务基址内有意义；来源缺失或跨路径时都不能带旧 ID。
       previousClientId: sameService ? existing.clientId : null,
+      supervisor,
     })
   } else if (!existing.clientId) {
     fail('缺少 --token 且本机尚未注册', '请在「客户端安装」页生成安装命令。')
@@ -784,14 +809,21 @@ async function main() {
     log('已存在注册信息，跳过注册')
   }
 
-  if (process.platform === 'linux') installSystemd(args.start, systemdTarget)
-  else installLaunchd(args.start)
-
+  patchClientConfig({ supervisor })
   const { saveSetupContext } = require(path.join(RUNTIME_DIR, 'executor/xgovernor/setup.cjs'))
   await saveSetupContext({ frameworks: args.frameworks })
 
+  if (supervisor === 'background') await installBackground(args.start)
+  else {
+    await stopBackgroundClient()
+    if (process.platform === 'linux') installSystemd(args.start, systemdTarget)
+    else installLaunchd(args.start)
+  }
+
   log('')
-  log('安装完成。客户端独立于 Agent 平台运行，崩溃后由系统进程管理器自动拉起。')
+  log(supervisor === 'background'
+    ? '安装完成。客户端使用独立后台进程，当前终端可继续执行命令。'
+    : '安装完成。客户端独立于 Agent 平台运行，崩溃后由系统进程管理器自动拉起。')
   log(
     fiOk
       ? '故障注入已就绪：本机同时出现在「客户端配置」与「实验 / 故障注入」页面。'

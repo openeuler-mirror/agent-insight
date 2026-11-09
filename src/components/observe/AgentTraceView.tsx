@@ -1248,7 +1248,7 @@ export default function AgentTraceView({
                     <div className="flex items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
                         <span className="flex-1">{tt('traceTree.spanColumn')}</span>
                         <span className="w-20 text-left">{tt('traceTree.spanShare')}</span>
-                        <span className="w-12 text-right">{tt('traceTree.spanDuration')}</span>
+                        <span className="w-24 text-right shrink-0">{tt('traceTree.spanDuration')}</span>
                         <span className="w-11 text-right">{tt('traceTree.spanTokens')}</span>
                         <span className="w-2" />
                     </div>
@@ -1664,7 +1664,7 @@ function UnifiedSpanTree({
                 )}
                 {/* Metrics */}
                 <span className={cn(
-                    'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
+                    'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
                     status === 'slow' ? 'text-warning' : 'text-foreground-muted',
                 )}>
                     {formatDuration(getAgentActiveDurationMs(node))}
@@ -1835,7 +1835,7 @@ function UnifiedEventRow({
 
             {/* Metrics */}
             <span className={cn(
-                'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
+                'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
                 isSlow ? 'text-warning' : 'text-foreground-muted',
             )}>
                 {formatDuration(spanDurationMs)}

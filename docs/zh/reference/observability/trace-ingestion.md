@@ -57,6 +57,10 @@ changefreq: "monthly"
 
 成功响应包含 `success: true`、`upload_id`、`auto_evaluation`、`background_analysis`，进行中的 OpenCode 快照另带 `in_progress: true`。`auto_evaluation: false` 不等于本次上传失败。初次记录保存失败返回 `500`，客户端不应写“已上传”检查点；后台分析是否完成应另外核对，不能由 `background_analysis: true` 推断。
 
+## Jiuwen 耗时单位
+
+Jiuwen OTLP 聚合将纳秒起止时间转换为毫秒后写入 `Execution.latency`，详情和列表均按毫秒格式化。Trace Bundle 导入兼容旧 Jiuwen 秒值：仅在原始交互时间提供足够单位证据时乘 1000，已是毫秒或证据不足的值保持不变，不改写原始 Bundle 或 Session。历史数据的备份、预览和校正步骤见[查看 Trace](../../how-to/observability/view-traces.md#jiuwen-历史耗时单位校正)。
+
 ## 实现依据
 
 - [OTLP Trace 路由](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/ingest/otel/v1/traces/route.ts)与[解码器](https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/otel/decode.ts)

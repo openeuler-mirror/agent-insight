@@ -17,7 +17,7 @@ changefreq: "monthly"
 ## 按角色开始
 
 - 初次使用：[快速开始](./tutorial/platform/01-quick-start.md) → [第一次评测](./tutorial/evaluation/01-first-experiment.md)。
-- 部署与运维：[Docker 部署](./how-to/platform/deploy-docker.md) · [Benchmark 服务部署](./how-to/evaluation/benchmarks/deploy-services.md)。
+- 部署与运维：[Docker 部署](./how-to/platform/deploy-docker.md) · [OpenShift 部署](./how-to/platform/deploy-openshift.md) · [Benchmark 服务部署](./how-to/evaluation/benchmarks/deploy-services.md)。
 - 开发与集成：[开发者导航](./explanation/platform/developer-index.md) · [HTTP 接口](./reference/platform/http-api.md) · [内部契约](./reference/platform/api-and-contracts.md)。
 - 可靠性：[Agent RAS](./explanation/reliability/agent-ras/navigation.md) · [故障注入](./explanation/reliability/agent-fault-injection/navigation.md)。
 

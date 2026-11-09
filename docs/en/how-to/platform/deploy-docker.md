@@ -1,6 +1,7 @@
 ---
 title: "Deploy the server with Docker"
 description: "Published images, offline imports, mounted source, and persistent runtime storage."
+
 ---
 
 If you do not have a dashboard deployment yet, you can pull a published Docker image. `karaggagent/agent-insight` provides multi-architecture images: `x86_64` servers select `linux/amd64`, and `aarch64` servers select `linux/arm64` automatically.
@@ -169,7 +170,7 @@ Back up the database before a ZIP update, and verify that the new branch's depen
 ### Source-mode behavior
 
 - Without `AGENT_INSIGHT_SOURCE_DIR`, the container runs the prebuilt `agent-insight` npm package in the image, as before.
-- With the variable set, startup copies source into `/app/source`, excluding `node_modules`, `.next`, `.git`, `data/`, and `exclude/`. It then runs `prisma db push`, `prisma generate`, and `npm run build`, before starting `node .next/standalone/server.js` as in the default mode. A read-only host source mount is sufficient: build outputs do not write into it, and its ownership need not match the container's `node` user.
+- With the variable set, startup copies source into `/app/source`, excluding `node_modules`, `.next`, `.git`, `data/`, and `exclude/`. It then runs `prisma db push`, `prisma generate`, and `npm run build`, before starting the standalone service through the control gateway, as in the default mode. A read-only host source mount is sufficient: build outputs do not write into it, and its ownership need not match the container's `node` user.
 - Builds use dependencies preinstalled in the image, including build-time dependencies such as `tailwindcss` and `typescript`. The source directory does not need `npm install`. **Rebuild the image when source changes add dependencies or change exact pinned versions in `package.json`.** Startup checks for missing dependencies and exact-version mismatches, lists the problems, and exits rather than only warning. Version-range declarations do not provide a complete compatibility check.
 - The first cold build takes several minutes. The port is not listening during the build, and `health: starting` is expected. Restarts reuse `.next/cache`; retaining that cache after container recreation requires a volume at `/app/source`, as shown above.
 - The service is unavailable during the build. If downtime is unacceptable, start and verify a new container on another port before switching the service port or traffic.
@@ -218,3 +219,47 @@ Features such as `opencode-live` trigger analysis and trajectory evaluation laun
 After deployment, continue with [your first Trace](../../tutorial/platform/01-quick-start.md). Before an upgrade, read [upgrade and rollback](./upgrade-and-rollback.md).
 
 [中文权威版本](../../../zh/how-to/platform/deploy-docker.md)
+
+## UBI9/OpenShift image
+
+Follow [Deploy the server on OpenShift](./deploy-openshift.md) for project permissions, image preparation, PVC/SCC, HTTPS Routes, Developer Sandbox builds, business acceptance and troubleshooting.
+
+For UBI9, full DNF, and downstream patch builds, use the separate source-based `Dockerfile.openshift` image. It uses the same pinned UBI9 Node.js 22 base for dependency installation, build, and runtime. Override `UBI_NODE_IMAGE` with an approved enterprise mirror or digest that supplies Node.js 22, npm, and full `dnf`; `microdnf` alone is insufficient. The generic Dockerfiles retain their existing base images and default users.
+
+This candidate runs the prebuilt application and does not support mounted-source mode through `AGENT_INSIGHT_SOURCE_DIR`. Rebuild the image when application source changes. Startup regenerates the package-local Prisma client under the runtime UID to avoid overwriting root-owned files.
+
+The updated shared Docker entrypoint starts `scripts/control-server.js` for both HTTP and WebSocket control traffic. Its dispatch listener defaults to the application port plus one and binds only to container loopback; no additional published port is required. Update and restart installed clients as well: replacing a server image does not update client scripts. Verify public WSS and long-poll fallback, including disconnected deliveries and missing ACKs, in addition to HTTP health checks.
+
+Application `python3` uses Python 3.11 from UBI AppStream; DNF keeps its system Python. The default runtime disables the inherited CodeReady Builder repository and retains UBI BaseOS/AppStream for package updates. Enterprise bases must provide Python 3.11 through approved repositories.
+
+The fault catalog requires PyYAML, and the RAS catalog requires Pydantic. `scripts/requirements-container.txt` pins both and their transitive dependencies with CPython 3.11 Linux wheel SHA-256 hashes. Use `--build-arg PIP_INDEX_URL=<approved-Python-index>` to change the package index while retaining hash verification. The image check exercises YAML, fault and RAS catalogs, and the thinking-loop configuration fields. DNF updates RPMs; Python/npm dependencies require their own reproducible rebuild and scan.
+
+Use [`deploy/openshift.yaml`](../../../../deploy/openshift.yaml) after replacing the example image with an accessible delivered image or digest and confirming node architecture, PVC size, and the default StorageClass:
+
+```bash
+oc apply -n <project> -f deploy/openshift.yaml
+oc rollout status -n <project> deployment/agent-insight
+oc get -n <project> route/agent-insight
+```
+
+```bash
+docker build --platform linux/amd64 -f Dockerfile.openshift \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+  -t agent-insight:openshift-ubi9-test .
+node scripts/verify-openshift-image.cjs agent-insight:openshift-ubi9-test
+```
+
+The delivered image defaults to UID 0 so a downstream Dockerfile can inherit root for package updates without a `USER` instruction:
+
+```dockerfile
+FROM <approved-component-image-and-digest>
+RUN dnf -y update && dnf clean all
+```
+
+Runtime OpenShift pods must use the non-root UID assigned by their SCC. Do not set a fixed `runAsUser`, relax the SCC, or request privileges. Use `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, dropped capabilities, and the runtime-default seccomp profile. Start with one replica and a `Recreate` update strategy. Mount a PVC at `/data/agent-insight` and verify its group permissions, SQLite locking, and persistence. Supply model credentials through Secrets or external configuration. If changing the runtime root, also update HOME and every XDG home directory. Prisma initialization writes to designated image directories; a read-only root filesystem is not currently claimed. OpenGauss dependencies are not included.
+
+Configure workload startup/readiness/liveness probes separately from Docker HEALTHCHECK. Expose port 3000 through a Service/Route and validate HTTPS, SSE, WebSocket, and gateway timeouts. The verification script checks restricted local container startup under two non-root UIDs, writable HOME/XDG paths, Prisma, OpenCode, the control gateway WebSocket handshake, RAS configuration, and restart persistence. It does not call models or replace live SCC/PVC/Route, public WSS/SSE, and business acceptance.
+
+Record source revision, build-file checksum, base and delivered image digests, RPM versions and repository provenance, and scan both original and patch images. A successful DNF command without updating an affected package does not prove a CVE is fixed. npm and bundled-binary vulnerabilities require separate handling. Follow [upgrade and rollback](./upgrade-and-rollback.md) for data-safe updates; changing the image alone does not revert database changes.
+
+For npm security fixes, update dependency declarations and the lockfile, rebuild with `npm ci`, and scan the resulting image. Update compatible parent dependencies when their version constraints exclude the fixed transitive package. Installing packages only inside a running container does not produce a reproducible delivery image.

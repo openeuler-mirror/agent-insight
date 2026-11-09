@@ -195,6 +195,8 @@ test('client whitelist matches the server-side action set', () => {
     [
       'APPLY_CLIENT_CONFIG',
       'CANCEL_EXPERIMENT_RUN',
+      'DEPLOY_SKILL_ARTIFACT',
+      'PRECHECK_SKILL_DEPLOYMENT',
       'PREPARE_EXECUTION_ENVIRONMENT',
       'PREPARE_EXPERIMENT_CASE',
       'REFRESH_CAPABILITIES',
@@ -1202,7 +1204,7 @@ test('systemd fills missing user bus variables only for the current UID and pres
   ]) assert.deepEqual(systemdEnvironment('user', { env, uid: 1001, statSync: inspect }), env)
 })
 
-test('missing systemd user manager remains a pre-registration failure with actionable guidance', () => {
+test('systemd preflight reports an unavailable user manager so installation can choose background mode', () => {
   const result = installer.preflightSystemd?.(
     { scope: 'user', uid: 1001, unitPath: '/fixture/user.service', legacySystemUnit: false },
     () => ({ status: 1, stderr: 'Failed to connect to bus: No medium found' }),
@@ -1343,7 +1345,7 @@ test('long-poll cadence stays under the server command TTL', () => {
 
   // 最坏一轮 = 服务端 long-poll 等待 + 失败重试间隔，须小于 TTL。
   const retryMs = Number(/POLL_RETRY_MS = ([\d_]+)/.exec(src)?.[1]?.replace(/_/g, '') || 0)
-  const waitSec = Number(/waitSeconds=(\d+)/.exec(src)?.[1] || 0)
+  const waitSec = require_('../scripts/reliability-client.cjs').pollWaitSeconds({})
   const ttlSec = 30
   assert.ok(retryMs > 0 && waitSec > 0, '应能解析出轮询参数')
   assert.ok(

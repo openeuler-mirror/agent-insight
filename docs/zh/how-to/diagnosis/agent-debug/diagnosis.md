@@ -246,6 +246,8 @@ Skills 步骤核验区用于判断当前 Trace 是否覆盖对应 Skill 的关�
 
 源码部署通过 `scripts/start.sh` 启动时，会自动从项目根目录的 `node_modules/.bin/opencode` 查找程序。自行启动 `.next/standalone/server.js` 时，应将 `AGENT_INSIGHT_PACKAGE_ROOT` 设置为安装依赖的项目根目录，或用 `OPENCODE_BIN` 指定 opencode 的绝对路径。设置后需重启后端，再重新运行诊断；仅刷新页面不会生效。
 
+智能诊断和 Skill 优化共用平台启动的 OpenCode。升级修复后，重启平台，内置 OpenCode 会在 Agent Insight 数据目录下初始化独立数据库。原有用户 CLI 数据库和会话仍由用户 CLI 管理。若旧版本日志出现 `table project already exists`，先升级平台并重新运行诊断或优化。启动失败时，后端日志会记录进程退出信息或最后一次健康检查失败信息。
+
 ## 常见误区
 
 - 跳过原始 Trace，只阅读诊断文字

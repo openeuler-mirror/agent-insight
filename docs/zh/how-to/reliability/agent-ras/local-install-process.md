@@ -70,12 +70,30 @@ flowchart TB
 checkout 也不会覆盖服务端版本；只有开发调试显式设置 `AGENT_INSIGHT_CLIENT_SOURCE=local`
 时才使用 `./scripts/install-ras-client.js`。
 
-Linux 常驻客户端会在轮换设备凭证前确定 systemd 层级并预检 manager：root 安装或已经存在
+Linux 常驻客户端会在轮换设备凭证前确定 systemd 层级并预检 manager：可用时，root 安装或已经存在
 `/etc/systemd/system/agent-insight-client.service` 时沿用系统级服务，普通用户新装使用
 `~/.config/systemd/user/agent-insight-client.service`。这样历史系统级进程会在新凭证落盘后由同一
 安装流程重启，不会继续携带已撤销的旧凭证；普通用户无权更新历史系统级 unit 时，安装器会在
-注册前退出并提示使用 root。macOS 路径不变，使用当前用户的
+注册前退出并提示使用 root。新装环境没有 systemd 或用户会话总线不可用时，自动完成运行时部署、
+设备注册并启动独立后台进程，不占用当前终端；安装记录与心跳中的 `supervisor` 为 `background`。
+重复安装会先停止同一运行根内的旧后台客户端，再使用新设备凭证启动，避免重复进程。
+后台进程启动确认失败会返回错误并提示日志位置，不会将注册成功等同于启动成功。
+macOS 路径不变，使用当前用户的
 `~/Library/LaunchAgents/ai.agent-insight.client.plist`。
+
+后台模式的启动、停止和状态查询（自定义运行根时沿用相同的 `AGENT_INSIGHT_HOME`）：
+
+```bash
+node "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/client-process.cjs" start
+node "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/client-process.cjs" stop
+node "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/client-process.cjs" status
+```
+
+日志位于 `<AGENT_INSIGHT_HOME>/client/client.log`；`--no-start` 仍完成安装注册但保持停止。
+后台模式不提供崩溃自动重启，也不能跨容器重建保活。正式 OpenShift 部署可由 Deployment
+直接托管 `node <AGENT_INSIGHT_HOME>/client/runtime/reliability-client.cjs` 前台进程，持久化运行根；
+安装脚本已启动后台客户端时，先停止它，再切换到容器主进程，避免同时运行两份。
+注册客户端不等于所选 Agent 已具备实验执行适配，仍需核对上报的执行能力。
 
 ---
 
@@ -85,6 +103,7 @@ Linux 常驻客户端会在轮换设备凭证前确定 systemd 层级并预检 m
 |----|------|----------|
 | OS | Linux / macOS；**原生 Windows 不支持** inproc（请用 WSL） | 安装器返回 `unsupported`，看板仍可用 |
 | Node.js | ≥ 20（setup 脚本与安装器） | setup / 安装器失败 |
+| 进程托管 | Linux 优先 systemd；不可用时自动使用独立后台进程 | 无 systemd 不阻塞新装；无法接管历史系统级服务仍在注册前报错 |
 | tar + curl | 解压服务端 bundle；`npm` 仅旧服务端兜底需要 | RAS 段失败，telemetry 可继续 |
 | Python | **3.10+**，带 **pip**，带 **共享 libpython**（Linux 常需 `python3-dev`） | `probePython` 失败 |
 | 写权限 | `~/.agent-insight/`、`$XDG_CONFIG_HOME/opencode`、`$XDG_CONFIG_HOME/xiaoo` | 安装中断 |
@@ -282,6 +301,7 @@ flowchart TD
 ~/.agent-insight/
 ├── .env                          # 可选；HOST / API_KEY 回退源
 ├── client/config.json            # 正式常驻客户端身份与设备凭证
+├── client/background.json        # 后台模式的 PID 与实例标识
 ├── client.json                   # 未安装正式客户端时的兼容 clientId
 └── ras/
     ├── install.json              # 安装标记
@@ -301,7 +321,7 @@ flowchart TD
 ~/.config/xiaoo/
 └── config.toml                   # [hooker].plugins 含 RAS
 
-# Linux 常驻客户端（二选一）
+# Linux 常驻客户端（systemd 可用时二选一）
 /etc/systemd/system/agent-insight-client.service              # root / 历史系统级安装
 ~/.config/systemd/user/agent-insight-client.service           # 普通用户新装
 

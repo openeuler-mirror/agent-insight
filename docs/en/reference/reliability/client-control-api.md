@@ -31,6 +31,16 @@ Lists and tokens return `401` when no user is resolved. The online window defaul
 
 ## Device registration, heartbeat, and capabilities
 
+The Linux installer prefers systemd. When systemd or the user manager is unavailable on a new installation,
+it deploys the runtime, registers the device, and starts a detached background process with
+`supervisor: background`. This mode leaves the terminal available but does not provide automatic restart.
+An existing system service that cannot be managed still blocks credential rotation to avoid leaving a stale
+client running. Use `node <AGENT_INSIGHT_HOME>/client/runtime/client-process.cjs start|stop|status`
+to manage the background client; logs are in `<AGENT_INSIGHT_HOME>/client/client.log`.
+`--no-start` completes registration without starting the client. For a managed container deployment,
+stop the background instance and run `reliability-client.cjs` as the container's foreground process,
+persisting the runtime root. Registration alone does not establish Agent experiment-execution support.
+
 Device paths below use the prefix `/api/reliability/client/v1`.
 
 | Method and path | JSON input | Successful response |
@@ -113,7 +123,7 @@ A platform capability can advertise `skillDeployment: { protocolVersion: 1, read
 
 These references and values are examples; use the actual delivered frame. The action whitelist is `APPLY_CLIENT_CONFIG/PREPARE_EXPERIMENT_CASE/RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/CANCEL_EXPERIMENT_RUN/REFRESH_CAPABILITIES/PREPARE_EXECUTION_ENVIRONMENT/PRECHECK_SKILL_DEPLOYMENT/DEPLOY_SKILL_ARTIFACT`. Run actions forbid `command/shell/args/cwd/executable/script`; configuration actions forbid `url/config/path/downloadUrl/file`. Skill deployment checks both sets recursively. Execution-environment preparation additionally validates the context structure and digest. This is not an arbitrary command execution endpoint.
 
-`POST /api/reliability/client/v1/commands/:commandId/status` uses device credentials. JSON contains `status` and optional `occurredAt/result/error`. Allowed statuses are `RECEIVED/RUNNING/SUCCEEDED/FAILED`; success returns `200 { ok: true }`. Invalid status returns `400`, missing or another device's command `404`, and an expired nonterminal command `410`. Terminal commands are not rewritten by later receipts; configuration deliveries still need the write/load checks above.
+`POST /api/reliability/client/v1/commands/:commandId/status` uses device credentials. JSON contains `status` and optional `occurredAt/result/error`. Allowed statuses are `RECEIVED/RUNNING/SUCCEEDED/FAILED`; success returns `200 { ok: true }`. Invalid status returns `400`, missing or another device's command `404`, an expired nonterminal command `410`, and a `RECEIVED` receipt for a terminal or no-longer-acceptable command `409 COMMAND_NOT_ACCEPTED`. Terminal commands are not rewritten by later receipts; configuration deliveries still need the write/load checks above.
 
 The WebSocket upgrade at `/api/reliability/client/v1/control` is handled by `scripts/control-server.js`, not a normal Route Handler. The server sends the same `COMMAND` frame; the client sends `COMMAND_STATUS`, adding `type/commandId` to the HTTP receipt fields. A new connection replaces the previous one for the same clientId. These HTTP endpoints are internal control-service bridges only:
 
@@ -123,7 +133,11 @@ The WebSocket upgrade at `/api/reliability/client/v1/control` is handled by `scr
 | `/control-presence` | Required `clientId`, `connected: true/false` | `{ ok: true }`. Connection establishment refreshes lastSeenAt; disconnect leaves offline detection to the heartbeat window |
 | `/control-receipt` | Required `clientId/commandId`, `status`, optional `occurredAt/result/error` | `{ ok: true }`, sharing the device HTTP receipt handler |
 
-Writing to a WebSocket proves only that data was written to the socket; client `RECEIVED` confirms receipt. The ACK window defaults to 5 seconds (`AGENT_INSIGHT_RAS_ACK_TIMEOUT_SEC`, minimum 1 second). Generic command TTL defaults to 30 seconds (`AGENT_INSIGHT_RAS_COMMAND_TTL_SEC`, minimum 5 seconds), with per-task TTL overrides possible. Timeouts produce `DELIVERY_FAILED/EXPIRED`; a network failure is not grounds for endless duplicate synchronization or proof that a process exited.
+The client requests `waitSeconds=5` by default. Set `AGENT_INSIGHT_RAS_POLL_WAIT_SEC` in the client process environment to an integer from 1 to 30; invalid values fall back to 5 seconds. Keep it below the access path idle timeout. Each request also has a deadline of the wait plus 10 seconds. Explicitly aborted requests stop claiming work, and atomic state updates give each command to only one competing poll.
+
+For commands delivered over either WebSocket or polling, the current client first posts `RECEIVED` over HTTPS and starts local work only after `200 { ok: true }`. A rejected, timed-out, or lost response prevents execution. Existing clients must be updated and restarted; replacing the platform image does not update installed device scripts. WebSocket can still carry commands and subsequent progress/result receipts.
+
+Writing to a WebSocket proves only that data was written to the socket; client `RECEIVED` confirms receipt. The ACK window defaults to 5 seconds (`AGENT_INSIGHT_RAS_ACK_TIMEOUT_SEC`, minimum 1 second). Generic command TTL defaults to 30 seconds (`AGENT_INSIGHT_RAS_COMMAND_TTL_SEC`, minimum 5 seconds), with per-task TTL overrides possible. Execution command reads check that command’s ACK deadline and settle unacknowledged `SENT` commands as `DELIVERY_FAILED/ACK_TIMEOUT`, without requiring a client-list read. Acknowledged or running work is not affected by ACK cleanup. If the server persisted `RECEIVED` but its response was lost, the client does not execute; the recorded receipt follows the task’s existing TTL and timeout handling rather than blindly reissuing potentially running work. A network failure is not grounds for endless duplicate synchronization or proof that a process exited.
 
 ## User-level RAS capability configuration
 

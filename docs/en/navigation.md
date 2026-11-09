@@ -5,7 +5,7 @@ keywords: ["Agent Insight", "documentation", "tutorials", "translation coverage"
 changefreq: "monthly"
 ---
 
-Chinese is the authoritative source. There are 17 English body pages covering first use, Docker deployment, client compatibility, operations, and HTTP/evaluation contracts. English navigation/status pages do not count as translated bodies. Pages linked with a Chinese label remain untranslated.
+Chinese is the authoritative source. There are 18 English body pages covering first use, Docker/OpenShift deployment, client compatibility, operations, and HTTP/evaluation contracts. English navigation/status pages do not count as translated bodies. Pages linked with a Chinese label remain untranslated.
 
 ## Start here
 
@@ -21,6 +21,7 @@ Chinese is the authoritative source. There are 17 English body pages covering fi
 | --- | --- |
 | [备份与恢复](../zh/how-to/platform/backup-and-restore.md) | [Backup and restore](./how-to/platform/backup-and-restore.md) |
 | [用 Docker 部署服务端](../zh/how-to/platform/deploy-docker.md) | [Deploy the server with Docker](./how-to/platform/deploy-docker.md) |
+| [在 OpenShift 上部署服务端](../zh/how-to/platform/deploy-openshift.md) | [Deploy the server on OpenShift](./how-to/platform/deploy-openshift.md) |
 | [升级与回滚](../zh/how-to/platform/upgrade-and-rollback.md) | [Upgrade and rollback](./how-to/platform/upgrade-and-rollback.md) |
 | [独立 Benchmark 评测协议](../zh/reference/evaluation/benchmark-protocol.md) | [Independent Benchmark evaluation protocol](./reference/evaluation/benchmark-protocol.md) |
 | [评测数据集 HTTP 接口](../zh/reference/evaluation/datasets-api.md) | [Evaluation dataset HTTP API](./reference/evaluation/datasets-api.md) |

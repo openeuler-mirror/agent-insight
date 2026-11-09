@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import MagicMock, call, patch
 
@@ -370,7 +373,6 @@ class OpenCodeCatalogParseTests(TestCase):
             },
             auth_providers={"deepseek"},
             environ={},
-            providers_list_output="",
         )
         ids = [item["id"] for item in result["models"]]
         self.assertEqual(result["default"], "huawei-blue/GLM-5.2")
@@ -390,7 +392,6 @@ class OpenCodeCatalogParseTests(TestCase):
             config={"provider": {}},
             auth_providers={"deepseek"},
             environ={},
-            providers_list_output="",
         )
         ids = [item["id"] for item in result["models"]]
         self.assertEqual(
@@ -398,6 +399,74 @@ class OpenCodeCatalogParseTests(TestCase):
             {"deepseek/deepseek-chat", "deepseek/deepseek-reasoner"},
         )
         self.assertNotIn("huawei-blue/GLM-5.2", ids)
+
+    def test_v1_reads_connect_auth_and_json_from_xdg_directories(self) -> None:
+        from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            auth_file = root / "data" / "opencode" / "auth.json"
+            auth_file.parent.mkdir(parents=True)
+            auth_file.write_text(json.dumps({"deepseek": {"type": "api", "key": "fixture"}}))
+            config = root / "config" / "opencode" / "opencode.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({"provider": {
+                "custom": {"options": {"apiKey": "fixture"}, "models": {"model": {}}},
+                "deepseek": {"models": {"custom-alias": {}}},
+            }}))
+            with patch.dict(os.environ, {
+                "XDG_DATA_HOME": str(root / "data"), "XDG_CONFIG_HOME": str(root / "config"),
+                "OPENCODE_AUTH_CONTENT": "",
+            }), patch.object(catalog, "_run_opencode_cli", side_effect=[
+                ("1.14.39", None), ("deepseek/deepseek-chat\n", None),
+            ]):
+                result = OpenCodeAdapter().list_models()
+        self.assertEqual({row["id"] for row in result["models"]}, {
+            "deepseek/deepseek-chat", "deepseek/custom-alias", "custom/model",
+        })
+
+    def test_v2_lists_native_models_even_with_stale_v1_auth(self) -> None:
+        connected = {"providerID": "connected", "id": "alias", "modelID": "upstream", "enabled": True}
+        configured = {"providerID": "custom", "id": "model", "name": "Configured model", "enabled": True}
+        disabled = {"providerID": "old", "id": "model", "enabled": False}
+        with patch.object(catalog, "auth_provider_ids", return_value={"old"}) as legacy_auth, patch.object(
+            catalog, "_run_opencode_cli", side_effect=[
+                ("opencode v2.2.0", None),
+                (json.dumps({"data": [configured, disabled, connected]}), None),
+                (json.dumps({"data": connected}), None),
+            ],
+        ) as cli:
+            result = list_opencode_models(executable="/bin/opencode")
+        legacy_auth.assert_not_called()
+        self.assertEqual([c.args[0] for c in cli.call_args_list], [
+            ["--version"], ["api", "--standalone", "model.list"], ["api", "--standalone", "model.default"],
+        ])
+        self.assertEqual([row["id"] for row in result["models"]], ["connected/alias", "custom/model"])
+        self.assertEqual(result["models"][0]["modelID"], "alias")
+        self.assertEqual(result["models"][1]["name"], "Configured model")
+        self.assertEqual(result["default"], "connected/alias")
+        self.assertTrue(result["models"][0]["default"])
+
+    def test_v2_model_list_failure_does_not_use_v1_config_or_leak_output(self) -> None:
+        for failed in [(None, "private-fixture-token"), ('{"data":[{}]}', None)]:
+            with self.subTest(failed=failed), patch.object(catalog, "_run_opencode_cli", side_effect=[
+                ("2.2.6", None), failed,
+            ]) as cli:
+                result = list_opencode_models(config={"model": "v1/model"})
+                self.assertEqual(cli.call_count, 2)
+                self.assertEqual(result["models"], [])
+                self.assertIn("无法读取", result["note"])
+                self.assertNotIn("private-fixture-token", result["note"])
+
+    def test_v2_keeps_enabled_models_when_default_is_unreadable_or_outside_list(self) -> None:
+        listed = {"providerID": "connected", "id": "model", "enabled": True}
+        for default in [(None, "private-fixture-token"), (json.dumps({"data": {**listed, "id": "missing"}}), None)]:
+            with self.subTest(default=default), patch.object(catalog, "_run_opencode_cli", side_effect=[
+                ("2.2.0", None), (json.dumps({"data": [listed]}), None), default,
+            ]):
+                result = list_opencode_models()
+                self.assertEqual([row["id"] for row in result["models"]], ["connected/model"])
+                self.assertIsNone(result["default"])
 
     def test_models_from_config_providers_require_usable(self) -> None:
         config = {

@@ -27,7 +27,9 @@ const repositoryRoot = path.resolve(__dirname, '..')
 const clientFiles = [
   'scripts/agent-insight-home.cjs',
   'scripts/install-ras-client.js',
+  'scripts/client-process.cjs',
   'scripts/reliability-client.cjs',
+  'scripts/jiuwen-experiment-runtime.cjs',
   'scripts/xgovernor.cjs',
   'scripts/ordinary-experiment-state.cjs',
   'scripts/skill-experiment-workspace.cjs',
