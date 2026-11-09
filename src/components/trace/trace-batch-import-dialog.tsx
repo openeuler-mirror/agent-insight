@@ -32,6 +32,7 @@ import {
 
 import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
+import { useAuth } from '@/lib/auth/auth-context';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -104,6 +105,7 @@ export interface TraceBatchImportDialogProps {
 
 export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: TraceBatchImportDialogProps) {
     const { locale } = useLocale();
+    const { user } = useAuth();
     const zh = locale === 'zh';
     const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
@@ -172,7 +174,7 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
             response = await apiFetch('/api/observe/traces/import', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ fileName: item.file.name, bundle }),
+                body: JSON.stringify({ user, fileName: item.file.name, bundle }),
             });
         } catch {
             throw makeFailure('network', true, zh ? zhFail('network') : enFail('network'));
@@ -187,7 +189,7 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
             throw makeFailure(kind, recoverable, (payload as { error?: string })?.error || fallback);
         }
         return payload as TraceImportOutcome;
-    }, [zh]);
+    }, [zh, user]);
 
     const runQueue = React.useCallback(async () => {
         setPhase('running');
