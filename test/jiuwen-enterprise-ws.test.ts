@@ -117,3 +117,77 @@ test('enterprise runtime routes selected Agent using authenticated #588 WebSocke
     await f.close();
   }
 });
+
+test('changing enterprise account during login discards the old identity and its pending token result', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jiuwen-ee-account-race-'));
+  const file = path.join(dir, 'credentials.json');
+  let release!: () => void, started!: () => void;
+  const gate = new Promise<void>(r => { release = r; });
+  const loginStarted = new Promise<void>(r => { started = r; });
+  const auths: string[] = [];
+  const server = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/idp/v1/auth/token') {
+      const user = new URLSearchParams(raw).get('username');
+      if (user === 'old-admin') { started(); await gate; }
+      res.end(JSON.stringify({ access_token: user + '-token', refresh_token: user + '-refresh', expires_in: 3600 }));
+    } else { auths.push(String(req.headers.authorization)); res.end(JSON.stringify({ code: 200, data: { contexts: [] } })); }
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
+  const write = (username: string) => fs.writeFileSync(file, JSON.stringify({ baseUrl, username, password: 'test-password' }), { mode: 0o600 });
+  try {
+    const client = require('../scripts/jiuwen-enterprise-ws.cjs').createEnterpriseWs({ configFile: file });
+    write('old-admin'); const first = client.refresh().then(() => null, (e: any) => e);
+    await loginStarted;
+    write('new-limited-user'); const second = client.refresh(); release();
+    await second; const oldError = await first;
+    assert.equal(oldError?.code, 'JIUWEN_CONFIG_CHANGED');
+    await client.refresh();
+    assert.deepEqual(auths, ['Bearer new-limited-user-token', 'Bearer new-limited-user-token']);
+    assert.equal(client.probe().reason.includes('没有授权'), true);
+  } finally { release(); await new Promise<void>(r => server.close(() => r())); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('authenticated socket receives exactly one server close notification promptly', async () => {
+  const server = http.createServer(); const wss = new WebSocketServer({ server });
+  wss.on('connection', (ws: any) => ws.on('message', () => ws.close(1000, 'finished')));
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const url = `ws://127.0.0.1:${(server.address() as any).port}/ws`;
+  const socket = require('../scripts/jiuwen-enterprise-ws.cjs').authorizedSocket({ url, headers: {} });
+  try {
+    let closed = 0;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('server close was not propagated')), 500);
+      socket.addEventListener('open', () => socket.send('please-close'));
+      socket.addEventListener('close', () => { closed++; clearTimeout(timer); resolve(); });
+    });
+    assert.equal(closed, 1); assert.equal(socket.readyState, 3);
+  } finally { socket.close(); for (const ws of wss.clients) ws.terminate(); await new Promise<void>(r => server.close(() => r())); }
+});
+
+test('late failure from old enterprise identity cannot clear the new account capability', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jiuwen-ee-late-error-')); const file = path.join(dir, 'credentials.json');
+  let release!: () => void, started!: () => void;
+  const gate = new Promise<void>(r => { release = r; }); const loginStarted = new Promise<void>(r => { started = r; });
+  const server = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/idp/v1/auth/token') {
+      const user = new URLSearchParams(raw).get('username');
+      if (user === 'old-admin') { started(); await gate; res.statusCode = 500; res.end('{}'); return; }
+      res.end(JSON.stringify({ access_token: user + '-token', refresh_token: user + '-refresh', expires_in: 3600 }));
+    } else res.end(JSON.stringify({ code: 200, data: { contexts: [] } }));
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
+  const write = (username: string) => fs.writeFileSync(file, JSON.stringify({ baseUrl, username, password: 'test-password' }), { mode: 0o600 });
+  try {
+    const client = require('../scripts/jiuwen-enterprise-ws.cjs').createEnterpriseWs({ configFile: file });
+    write('old-admin'); const first = client.refresh().then(() => null, (e: any) => e); await loginStarted;
+    write('new-limited-user'); const current = await client.refresh(); release();
+    assert.equal((await first)?.code, 'JIUWEN_CONFIG_CHANGED');
+    assert.deepEqual(client.probe(), current);
+  } finally { release(); await new Promise<void>(r => server.close(() => r())); fs.rmSync(dir, { recursive: true, force: true }); }
+});

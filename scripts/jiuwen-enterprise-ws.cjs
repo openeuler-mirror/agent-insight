@@ -11,7 +11,7 @@ const safeString = value => typeof value === 'string' && value.length > 0 && val
 
 function createEnterpriseWs(options = {}) {
   const configFile = () => options.configFile || process.env.AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG || path.join(getAgentInsightHome(), 'client', 'jiuwen-enterprise.json')
-  let identity, fingerprint, tokens, authInFlight, capability, discoveredAt = 0, enabled = false
+  let state, fingerprint, capability, discoveredAt = 0, enabled = false
   const configured = () => { enabled ||= Boolean(options.configFile || process.env.AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG || fs.existsSync(configFile())); return enabled }
   const readConfig = () => {
     try {
@@ -19,23 +19,26 @@ function createEnterpriseWs(options = {}) {
       if (!stat.isFile() || stat.size > 64 * 1024 || (process.platform !== 'win32' && (stat.mode & 0o077))) throw new Error()
       const raw = fs.readFileSync(configFile(), 'utf8')
       const next = createHash('sha256').update(raw).digest('hex')
-      if (next === fingerprint) return identity
-      tokens = null; capability = undefined; discoveredAt = 0
+      if (next === fingerprint) return state
+      capability = undefined; discoveredAt = 0
       const config = JSON.parse(raw), url = new URL(config.baseUrl)
       if (!safeString(config.username) || typeof config.password !== 'string' || !config.password || config.password.length > 8192
         || url.username || url.password || url.search || url.hash || url.pathname !== '/'
         || !(url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) throw new Error()
-      identity = { baseUrl: url.origin, username: config.username, password: config.password }
+      state = { identity: { baseUrl: url.origin, username: config.username, password: config.password }, tokens: null, authInFlight: null }
       fingerprint = next
-      return identity
+      return state
     } catch {
-      identity = null; tokens = null; fingerprint = null
+      state = null; fingerprint = null
       throw failure('JIUWEN_CONFIG_INVALID', '企业账号文件无效；请配置 baseUrl、username、password，使用 HTTPS，Unix 文件权限设为 600')
     }
   }
-  const request = async (endpoint, init = {}) => {
+  const assertCurrent = snapshot => {
+    if (readConfig() !== snapshot) throw failure('JIUWEN_CONFIG_CHANGED', '企业账号配置已变化，本次旧身份请求已停止，请重新操作')
+  }
+  const request = async (snapshot, endpoint, init = {}) => {
     let response
-    try { response = await fetch(identity.baseUrl + endpoint, { ...init, redirect: 'error', signal: init.signal || AbortSignal.timeout(15_000) }) }
+    try { response = await fetch(snapshot.identity.baseUrl + endpoint, { ...init, redirect: 'error', signal: init.signal || AbortSignal.timeout(15_000) }) }
     catch { throw failure('JIUWEN_CONNECTION_FAILED', '企业入口连接失败，请检查地址、网络及可信 CA') }
     return response
   }
@@ -55,38 +58,42 @@ function createEnterpriseWs(options = {}) {
     if (body.ok === false || (typeof body.code === 'number' && ![0, 200].includes(body.code))) throw failure('JIUWEN_REQUEST_FAILED', '企业接口拒绝请求，请检查账号权限')
     return body
   }
-  const authenticate = async (force = false) => {
-    if (!force && tokens && tokens.expiresAt > Date.now() + 15_000) return
-    if (authInFlight) return authInFlight
-    authInFlight = (async () => {
+  const authenticate = async (snapshot, force = false) => {
+    if (!force && snapshot.tokens && snapshot.tokens.expiresAt > Date.now() + 15_000) return
+    if (snapshot.authInFlight) return snapshot.authInFlight
+    snapshot.authInFlight = (async () => {
       let body
-      if (tokens?.refresh_token) {
-        const response = await request('/idp/v1/auth/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refresh_token: tokens.refresh_token }) })
-        if (response.status === 401 || response.status === 403) { await response.body?.cancel(); tokens = null }
+      if (snapshot.tokens?.refresh_token) {
+        const response = await request(snapshot, '/idp/v1/auth/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refresh_token: snapshot.tokens.refresh_token }) })
+        if (response.status === 401 || response.status === 403) { await response.body?.cancel(); snapshot.tokens = null }
         else body = await json(response)
       }
-      if (!body) body = await json(await request('/idp/v1/auth/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ username: identity.username, password: identity.password }).toString() }))
+      if (!body) body = await json(await request(snapshot, '/idp/v1/auth/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ username: snapshot.identity.username, password: snapshot.identity.password }).toString() }))
       if (![body.access_token, body.refresh_token].every(v => typeof v === 'string' && v.length > 0 && v.length <= 16384 && !/[\x00-\x20\x7f]/.test(v))) throw failure('JIUWEN_AUTH_REQUIRED', '企业登录响应缺少有效凭证')
-      tokens = { access_token: body.access_token, refresh_token: body.refresh_token, expiresAt: Date.now() + Math.max(1, Number(body.expires_in) || 1800) * 1000 }
-    })().finally(() => { authInFlight = null })
-    return authInFlight
+      assertCurrent(snapshot)
+      snapshot.tokens = { access_token: body.access_token, refresh_token: body.refresh_token, expiresAt: Date.now() + Math.max(1, Number(body.expires_in) || 1800) * 1000 }
+    })().finally(() => { snapshot.authInFlight = null })
+    return snapshot.authInFlight
   }
-  const contexts = async () => {
-    readConfig(); await authenticate()
-    const init = () => ({ headers: { authorization: `Bearer ${tokens.access_token}` } })
-    let response = await request('/api/v1/user-console/agent-contexts', init())
-    if (response.status === 401) { await response.body?.cancel(); await authenticate(true); response = await request('/api/v1/user-console/agent-contexts', init()) }
+  const contexts = async (snapshot) => {
+    assertCurrent(snapshot); await authenticate(snapshot)
+    assertCurrent(snapshot)
+    const init = () => ({ headers: { authorization: `Bearer ${snapshot.tokens.access_token}` } })
+    let response = await request(snapshot, '/api/v1/user-console/agent-contexts', init())
+    if (response.status === 401) { await response.body?.cancel(); await authenticate(snapshot, true); assertCurrent(snapshot); response = await request(snapshot, '/api/v1/user-console/agent-contexts', init()) }
     const body = await json(response)
     if (!Array.isArray(body.data?.contexts) || body.data.contexts.length > 500) throw failure('JIUWEN_RESPONSE_INVALID', '企业接口未返回有效授权 Agent 列表')
+    assertCurrent(snapshot)
     const rows = body.data.contexts
     if (rows.some(c => !c || !['user_id', 'group_id', 'bot_id', 'jiuwenclaw_id'].every(k => safeString(c[k])))) throw failure('JIUWEN_RESPONSE_INVALID', '企业 Agent 授权上下文无效')
-    return rows
+    return { rows, snapshot }
   }
-  const key = c => 'jiuwen-ee-' + createHash('sha256').update(JSON.stringify([identity.baseUrl, c.user_id, c.jiuwenclaw_id, c.group_id, c.bot_id])).digest('hex').slice(0, 32)
-  const target = c => {
-    const url = new URL('/ws', identity.baseUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  const key = (c, snapshot) => 'jiuwen-ee-' + createHash('sha256').update(JSON.stringify([snapshot.identity.baseUrl, c.user_id, c.jiuwenclaw_id, c.group_id, c.bot_id])).digest('hex').slice(0, 32)
+  const target = (c, snapshot) => {
+    assertCurrent(snapshot)
+    const url = new URL('/ws', snapshot.identity.baseUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     for (const field of ['user_id', 'group_id', 'bot_id']) url.searchParams.set(field, c[field])
-    return { url: url.href, headers: { authorization: `Bearer ${tokens.access_token}`, cookie: `openjiuwen_access_token=${encodeURIComponent(tokens.access_token)}; jiuwenclaw_id=${encodeURIComponent(c.jiuwenclaw_id)}` } }
+    return { url: url.href, headers: { authorization: `Bearer ${snapshot.tokens.access_token}`, cookie: `openjiuwen_access_token=${encodeURIComponent(snapshot.tokens.access_token)}; jiuwenclaw_id=${encodeURIComponent(c.jiuwenclaw_id)}` } }
   }
   const catalog = async destination => {
     const conn = await connectWebSocket(destination.url, { headers: destination.headers, handshakeTimeoutMs: 8000 })
@@ -108,18 +115,21 @@ function createEnterpriseWs(options = {}) {
   const clear = e => { capability = unavailable(e.message); discoveredAt = Date.now() }
   const refresh = async () => {
     if (!configured()) { capability = undefined; return null }
+    let snapshot
     try {
-      const rows = await contexts()
+      snapshot = readConfig()
+      const { rows } = await contexts(snapshot)
       const entries = []
       // Bound concurrent connections even when the account has many authorized Agents.
       for (let start = 0; start < rows.length; start += 4) {
         entries.push(...await Promise.all(rows.slice(start, start + 4).map(async c => {
-          const entry = { id: key(c), label: `${c.agent_name || 'Agent'} · ${c.jiuwenclaw_name || c.jiuwenclaw_id} · ${c.group_name || c.group_id}`, models: [], ready: false }
-          try { const found = await catalog(target(c)); entry.models = found.models; entry.ready = found.models.length > 0; if (!entry.ready) entry.unavailableReason = '目标 Agent 没有可用模型' }
+          const entry = { id: key(c, snapshot), label: `${c.agent_name || 'Agent'} · ${c.jiuwenclaw_name || c.jiuwenclaw_id} · ${c.group_name || c.group_id}`, models: [], ready: false }
+          try { const found = await catalog(target(c, snapshot)); entry.models = found.models; entry.ready = found.models.length > 0; if (!entry.ready) entry.unavailableReason = '目标 Agent 没有可用模型' }
           catch { entry.unavailableReason = '目标 Agent WebSocket 或模型目录不可用' }
           return entry
         })))
       }
+      assertCurrent(snapshot)
       const agentCatalog = [...new Map(entries.map(e => [e.id, e])).values()]
       const counts = new Map()
       for (const item of agentCatalog) counts.set(item.label, (counts.get(item.label) || 0) + 1)
@@ -128,7 +138,7 @@ function createEnterpriseWs(options = {}) {
         reason: !agentCatalog.length ? '账号没有授权 Agent，请在 JiuwenSwarm 管理面授予使用权限' : agentCatalog.every(e => !e.ready) ? '所有授权 Agent 的模型或 WebSocket 均未就绪' : undefined }
       discoveredAt = Date.now()
       return capability
-    } catch (e) { clear(e); throw e }
+    } catch (e) { if (snapshot) assertCurrent(snapshot); clear(e); throw e }
   }
   const probe = () => {
     if (!configured()) return null
@@ -136,12 +146,14 @@ function createEnterpriseWs(options = {}) {
     return capability && Date.now() - discoveredAt < 90_000 ? capability : unavailable('企业授权发现尚未完成或已过期，请检查账号配置并刷新客户端能力')
   }
   const resolve = async id => {
+    let snapshot
     try {
-      const rows = await contexts()
-      const c = rows.find(c => key(c) === id)
+      snapshot = readConfig()
+      const { rows } = await contexts(snapshot)
+      const c = rows.find(c => key(c, snapshot) === id)
       if (!c) { capability = unavailable('目标 Agent 已不在当前账号授权范围，请刷新后重新选择'); discoveredAt = Date.now(); throw failure('JIUWEN_CONTEXT_UNAVAILABLE', '目标 Agent 不在当前账号授权范围，请刷新并重新选择，不会回退其他 Agent') }
-      return target(c)
-    } catch (e) { clear(e); throw e }
+      return target(c, snapshot)
+    } catch (e) { if (snapshot) assertCurrent(snapshot); clear(e); throw e }
   }
   return { configured, refresh, probe, resolve }
 }
