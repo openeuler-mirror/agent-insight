@@ -74,6 +74,12 @@ const OBSERVE_ITEM: SidebarNavItem = {
             matchPrefixes: ['/trace', '/details'],
         },
         {
+            key: 'task-insight',
+            href: '/task-insight',
+            labelKey: 'nav.taskInsight',
+            icon: 'metrics',
+        },
+        {
             key: 'version-analysis',
             href: '/version-analysis',
             labelKey: 'nav.versionAnalysis',
