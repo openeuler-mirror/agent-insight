@@ -118,6 +118,7 @@ export const en = {
     optapi: 'Self-Optimize API',
     modelConfig: 'Model Config',
     modelRegistry: 'Model Registry',
+    agentRuntimes: 'Agent Runtimes',
     webSearch: 'Web Search',
     versionManagement: 'Version Management',
     modelKeys: 'API Key Management',

@@ -23,6 +23,7 @@ changefreq: "monthly"
 - [Q&A](./platform/qa.md)
 - [Docker 镜像发布](./platform/release-docker-image.md)
 - [客户端安装](./platform/settings/access-control.md)
+- [Agent 运行时](./platform/settings/agent-runtimes.md)
 - [模型注册](./platform/settings/model-registry.md)
 - [用量统计](./platform/settings/usage-analytics.md)
 - [联网搜索](./platform/settings/web-search.md)
