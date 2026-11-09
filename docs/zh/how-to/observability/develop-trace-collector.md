@@ -561,6 +561,10 @@ Codex 的 CLI、IDE、Desktop rollout 和 App Server proxy 必须先归一化为
 
 - 同一 App Server `turn/steer` 复用原 `sourceExecutionId`，追加 `input_kind=steer` 和 phase；首个
   input 永远作为 `Execution.query`。
+- 原生 OTel 内部 turn id 与 Hook/rollout turn id 可以不同。初始与已接受的追加输入均经过
+  同一脱敏规则后，在同线程、10 秒内且候选唯一时建立跨通道 alias；同通道不同 ID、过期或
+  歧义候选不合并。保留首个已发射的 execution identity，后到的 lifecycle 快照、正文、用量
+  和终态经 alias 归入同一执行；不能只在 Adapter 中隐藏重复 USER。
 - Desktop UI 如果证据是 `turn_aborted` 后新的 `task_started + user_message`，必须产生两个
   Execution；前一个状态为 `interrupted`，线程事件使用 `interrupt_followed_by_execution`，不得假标为
   同 turn steer。

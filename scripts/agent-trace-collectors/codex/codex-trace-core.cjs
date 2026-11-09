@@ -25,6 +25,7 @@ const {
   stableEventId,
   stableSpanId,
   stableTraceId,
+  redactValue,
 } = require("../shared/trace-transport.cjs");
 const { createCodexLifecycleReducer } = require("./lifecycle-reducer.cjs");
 const { classifyCodexSource, isSourceKind } = require("./source-classifier.cjs");
@@ -427,45 +428,50 @@ class CodexTraceCore {
   }
 
   promptTurn(session, rawTurnId, prompt, timestampMs, source) {
+    prompt = asString(redactValue(prompt));
+    const remember = (turn) => {
+      turn.input ||= prompt;
+      if (source === "hook" || source === "lifecycle") {
+        turn.lastAcceptedPrompt = { content: prompt, timestampMs };
+      }
+      turn.updatedAt = Math.max(turn.updatedAt, timestampMs);
+      turn.promptSources ||= new Set();
+      if (source) turn.promptSources.add(source);
+      return this.linkTurnAlias(session, rawTurnId, turn);
+    };
     const direct = this.turnFor(session, rawTurnId, false);
-    if (direct) {
-      direct.input ||= prompt;
-      if (source === "hook") direct.lastHookPrompt = { content: prompt, timestampMs };
-      direct.updatedAt = timestampMs;
-      direct.promptSources ||= new Set();
-      if (source) direct.promptSources.add(source);
-      return direct;
-    }
+    if (direct) return remember(direct);
 
-    if (source === "otel") {
-      const accepted = [...session.turns.values()].filter((turn) => !turn.closed &&
-        turn.lastHookPrompt?.content === prompt &&
-        Math.abs(timestampMs - turn.lastHookPrompt.timestampMs) <= 10_000);
-      if (accepted.length === 1) return this.linkTurnAlias(session, rawTurnId, accepted[0]);
+    if (source === "otel" && prompt) {
+      const accepted = [...session.turns.values()].filter((turn) => {
+        const input = turn.lastAcceptedPrompt || turn.lastHookPrompt;
+        return !turn.closed && asString(redactValue(input?.content)) === prompt &&
+          Math.abs(timestampMs - input.timestampMs) <= 10_000;
+      });
+      if (accepted.length === 1) return remember(accepted[0]);
     }
 
     // Hook and OTel report the same user prompt with different ids. Merge only
     // when the content, time window, and transport source all agree; repeated
     // identical user prompts from one transport remain distinct executions.
+    const family = (value) => value === "otel" ? "otel" : "boundary";
     const candidate = [...session.turns.values()].filter((turn) =>
-      turn.input === prompt &&
+      prompt && asString(redactValue(turn.input)) === prompt &&
       !turn.unresolvedImplicit &&
       Math.abs(timestampMs - turn.startedAt) <= 10_000 &&
-      !(turn.promptSources || new Set()).has(source),
+      ![...(turn.promptSources || [])].some((value) => family(value) === family(source)),
     );
     if (candidate.length === 1) {
       const turn = candidate[0];
-      turn.updatedAt = timestampMs;
-      turn.promptSources ||= new Set();
-      if (source) turn.promptSources.add(source);
-      return this.linkTurnAlias(session, rawTurnId, turn);
+      turn.startedAt = Math.min(turn.startedAt, timestampMs);
+      return remember(turn);
     }
 
-    return this.turnFor(session, rawTurnId, true, {
+    return remember(this.turnFor(session, rawTurnId, true, {
       timestampMs,
       input: prompt,
       promptSource: source,
-    });
+    }));
   }
 
   resolveOtelTurn(session, rawTurnId, timestampMs, { createPending = false } = {}) {
@@ -1416,10 +1422,10 @@ class CodexTraceCore {
       terminalType: event.payload?.terminalType,
       sourceKind: event.sourceKind,
     });
-    if (event.eventType === "execution_started") {
-      this.turnFor(session, event.sourceExecutionId, true, {
-        timestampMs: event.timestampMs, input: event.payload?.input,
-      });
+    if (event.eventType === "execution_started" || event.eventType === "user_input_accepted") {
+      this.promptTurn(session, event.sourceExecutionId,
+        event.eventType === "execution_started" ? event.payload?.input : event.payload?.content,
+        event.timestampMs, "lifecycle");
     }
     for (const snapshot of result.snapshots || []) {
       const payload = snapshot.payload || {};
@@ -1637,6 +1643,7 @@ class CodexTraceCore {
           unresolvedImplicit: turn.unresolvedImplicit,
           promptSources: [...(turn.promptSources || [])],
           lastHookPrompt: turn.lastHookPrompt,
+          lastAcceptedPrompt: turn.lastAcceptedPrompt,
         })),
       })),
       lifecycle: this.lifecycleReducer.snapshot(),
@@ -1681,6 +1688,7 @@ class CodexTraceCore {
         turn.unresolvedImplicit = Boolean(rawTurn.unresolvedImplicit);
         turn.promptSources = new Set(rawTurn.promptSources || []);
         turn.lastHookPrompt = rawTurn.lastHookPrompt;
+        turn.lastAcceptedPrompt = rawTurn.lastAcceptedPrompt;
         // v1/v2 snapshots have no aliases; canonical ids remain valid aliases.
         session.turnAliases.set(turn.turnId, turn.turnId);
       }
