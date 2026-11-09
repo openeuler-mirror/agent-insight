@@ -185,29 +185,87 @@ test('Azure OpenAI 要求填写部署名并将它发给对应资源', async t =>
   assert.equal(fetch.mock.callCount(), 1);
 });
 
-test('Azure v1 按部署返回的参数错误降级采样，保留成功请求的采样设置', async () => {
+test('Azure v1 按部署返回的错误调整 token 上限或采样', async () => {
   const url = 'https://example.openai.azure.com/openai/v1/chat/completions';
   const base = { model: 'evaluation-deployment', response_format: { type: 'json_object' } };
   const sampling = { temperature: 0, top_p: 1, seed: 42 };
   const init = { method: 'POST', body: JSON.stringify({ ...base, ...sampling, max_tokens: 512 }) };
   const expected = { ...base, max_completion_tokens: 512 };
-  for (const error of [
-    undefined,
-    { param: 'temperature', code: 'unsupported_value' },
-    { param: 'top_p', code: null, message: "Unsupported parameter: 'top_p' is not supported with this model." },
-    { param: 'response_format', code: 'unsupported_parameter' },
-  ]) {
+  for (const [error, retryBody] of [
+    [undefined, undefined],
+    [{ param: 'temperature', code: 'unsupported_value' }, expected],
+    [{ param: 'top_p', code: null, message: "Unsupported parameter: 'top_p' is not supported with this model." }, expected],
+    [{ param: null, code: null, message: 'Unrecognized request argument supplied: max_completion_tokens' },
+      { ...base, ...sampling, max_tokens: 512 }],
+    [{ param: 'response_format', code: 'unsupported_parameter' }, undefined],
+  ] as const) {
     const bodies: unknown[] = [];
     const fetch = getModelFetch(async (_url, request) => {
       bodies.push(JSON.parse(request?.body as string));
       return error && bodies.length === 1 ? Response.json({ error }, { status: 400 }) : Response.json(completion);
     });
     const response = await fetch(url, init);
-    const shouldRetry = error?.param === 'temperature' || error?.param === 'top_p';
-    assert.deepEqual(bodies, shouldRetry ? [{ ...expected, ...sampling }, expected] : [{ ...expected, ...sampling }]);
-    assert.equal(response.status, error && !shouldRetry ? 400 : 200);
-    assert.deepEqual(await response.json(), error && !shouldRetry ? { error } : completion);
+    assert.deepEqual(bodies, retryBody ? [{ ...expected, ...sampling }, retryBody] : [{ ...expected, ...sampling }]);
+    assert.equal(response.status, error && !retryBody ? 400 : 200);
+    assert.deepEqual(await response.json(), error && !retryBody ? { error } : completion);
   }
+});
+
+test('Azure 旧版连接测试保留部署路径和 API 版本，按部署兼容 token 上限', async () => {
+  for (const [model, apiVersion, reasoning] of [
+    ['gpt-5-legacy-alias', '2024-06-01', false],
+    ['evaluation-deployment', '2025-04-01-preview', true],
+  ] as const) {
+    const deployment = `https://example.openai.azure.com/openai/deployments/${model}`;
+    const endpoint = `${deployment}/chat/completions?api-version=${apiVersion}`;
+    const tokenLimits: unknown[][] = [];
+    await probeModelConnection({
+      provider: 'custom', model, baseUrl: reasoning ? endpoint : `${deployment}?api-version=${apiVersion}`,
+      headers: { 'api-key': 'test-only' },
+    }, {
+      timeoutMs: 1000, signal: new AbortController().signal,
+      fetch: async (url, init) => {
+        assert.equal(String(url), endpoint);
+        assert.equal(new Headers(init?.headers).get('api-key'), 'test-only');
+        const body = JSON.parse(init?.body as string);
+        assert.equal(body.model, model);
+        tokenLimits.push([body.max_tokens, body.max_completion_tokens]);
+        if (reasoning && 'max_tokens' in body) {
+          return Response.json({ error: { param: 'max_tokens', code: 'unsupported_parameter' } }, { status: 400 });
+        }
+        return Response.json(completion);
+      },
+    });
+    assert.deepEqual(tokenLimits, reasoning ? [[128, undefined], [undefined, 128]] : [[128, undefined]]);
+  }
+});
+
+test('Azure 旧版评测可分别处理采样和 token 上限拒绝，保留结构化输出', async () => {
+  const url = 'https://example.openai.azure.com/openai/deployments/eval/chat/completions?api-version=2025-04-01-preview';
+  const base = { model: 'eval', response_format: { type: 'json_object' } };
+  const sampling = { temperature: 0, top_p: 1, seed: 42 };
+  const bodies: unknown[] = [];
+  const fetch = getModelFetch(async (target, init) => {
+    assert.equal(String(target), url);
+    const body = JSON.parse(init?.body as string);
+    bodies.push(body);
+    if ('temperature' in body) {
+      return Response.json({ error: { param: 'temperature', code: 'unsupported_value' } }, { status: 400 });
+    }
+    if ('max_tokens' in body) {
+      return Response.json({ error: {
+        message: "Unsupported parameter: 'max_tokens' is not supported with this model.",
+      } }, { status: 400 });
+    }
+    return Response.json(completion);
+  });
+  const response = await fetch(url, { method: 'POST', body: JSON.stringify({ ...base, ...sampling, max_tokens: 512 }) });
+  assert.deepEqual(await response.json(), completion);
+  assert.deepEqual(bodies, [
+    { ...base, ...sampling, max_tokens: 512 },
+    { ...base, max_tokens: 512 },
+    { ...base, max_completion_tokens: 512 },
+  ]);
 });
 
 test('技能生成的 Anthropic 客户端使用代理和原生 Messages 路径', async t => {
