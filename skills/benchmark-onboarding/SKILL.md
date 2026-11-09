@@ -38,6 +38,8 @@ metadata:
 
 业务配置沿目标项目统一 config 接入；接入包、测试和指南遵循目标协议。按[协议导航](references/benchmark-protocol.md)读取启动自动导入及参数生效、配置复用与重试要求，将其纳入实现和验收。动态能力、部署路径和参数从项目查询，不把示例当成完整支持列表。
 
+默认启动验收使用项目默认配置和资产路径，不创建 `*.local.yaml` 来复用本机资产。用户明确指定非默认部署时，单独记录覆盖项和验证范围。
+
 ### 3. 按三组验收
 
 先确定本次必须证明的数据与隐藏边界、官方评分一致性和真实用户链路结论。已有有效覆盖直接引用，同一次验证可支撑多个结论；额外验证须说明尚未覆盖的问题。在制定验证计划时读取 [真实验证指引](references/live-validation.md)，填写 [验证矩阵](assets/templates/validation-matrix.md.tmpl)；适配已有验收结果时再查 [验收合同](references/acceptance.md) 与 [命令及驱动用法](references/usage.md)。
