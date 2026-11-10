@@ -50,6 +50,7 @@ async function runProxyConfigHook(fixture: ReturnType<typeof proxyHookFixture>, 
   const script = `
     const imported = await import(${JSON.stringify(pluginUrl)})
     const initialize = imported.default?.default ?? imported.default
+    const fetchBeforeConfig = globalThis.fetch
     const hooks = await initialize({ directory: ${JSON.stringify(fixture.directory)} })
     const originalFetch = async () => new Response('original')
     const cfg = { provider: { gateway: { npm: '@ai-sdk/openai-compatible', options: {
@@ -64,6 +65,10 @@ async function runProxyConfigHook(fixture: ReturnType<typeof proxyHookFixture>, 
       process.exit(0)
     }
     await hooks.config(cfg)
+    if (globalThis.fetch !== fetchBeforeConfig) throw new Error('Unmanaged model traffic must retain the original global fetch')
+    const output = { headers: { existing: 'kept' } }
+    await hooks['chat.headers']({ sessionID: 'unmanaged-session', agent: 'build', message: { id: 'user' }, model: { id: 'probe', providerID: 'gateway' } }, output)
+    if (JSON.stringify(output.headers) !== JSON.stringify({ existing: 'kept' })) throw new Error('Unmanaged model headers must remain unchanged')
     process.stdout.write(JSON.stringify({
       baseURL: cfg.provider.gateway.options.baseURL,
       apiKey: cfg.provider.gateway.options.apiKey,

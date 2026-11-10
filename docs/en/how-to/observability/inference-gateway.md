@@ -5,7 +5,11 @@ description: "Opt OpenCode and Qoder CN CLI into local forwarding and inference 
 
 # Explicit inference gateway setup
 
-The Unix collector installer stages optional components without changing model URLs. On the Agent machine, install from the client installation page, close the Agent, enter its project directory and run:
+The Unix collector installer stages optional components without changing model URLs.
+
+Gateway components are optional. Download or preparation failures warn and allow collector installation to continue; downloads have connection and total time limits. Existing collection remains usable. Rerun setup when the platform connection is available before explicitly enabling forwarding.
+
+On the Agent machine, install from the client installation page, close the Agent, enter its project directory and run:
 
 ```sh
 sh ~/.agent-insight/model-proxy.sh opencode

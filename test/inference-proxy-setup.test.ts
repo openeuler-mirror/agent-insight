@@ -132,7 +132,7 @@ test('real Bash downloads optional runtime without rewriting models or launchers
 test('failed component download neither calls install nor replaces an existing runtime or Agent config', async t => {
     const f = await fixture(t, { failComponent: 'inference_config.mjs' });
     const prior = path.join(f.dir, 'prior-runtime'); fs.mkdirSync(prior); fs.writeFileSync(path.join(prior, 'keep'), 'old-runtime'); fs.symlinkSync(prior, path.join(f.insight, 'inference-runtime'));
-    const result = await f.execute(); assert.notEqual(result.code, 0); assert.match(result.stderr + result.stdout, /failed|失败/i);
+    const result = await f.execute(); assert.equal(result.code, 0); assert.match(result.stderr + result.stdout, /failed|失败/i);
     assert.equal(fs.realpathSync(path.join(f.insight, 'inference-runtime')), prior);
     assert.equal(fs.readFileSync(f.openCodeFile, 'utf8'), f.originals.opencode); assert.equal(fs.readFileSync(f.qoderFile, 'utf8'), f.originals.qoder);
     assert.equal(fs.existsSync(path.join(f.insight, 'inference-proxy/installation.json')), false);
@@ -150,10 +150,10 @@ test('reinstall updates the optional runtime but keeps the vendor Qoder launcher
     assert.equal(launcher, '#!/bin/sh\nexit 0\n');
 });
 
-test('CLI installation errors fail the Bash block clearly and unrelated framework selections skip it', async t => {
+test('CLI preparation errors warn without failing collection and unrelated framework selections skip it', async t => {
     const f = await fixture(t, { proxySource: 'process.stderr.write("fixture install rejected\\n"); process.exitCode = 23;\n' });
     f.env.INSTALL_QODER = 'false';
-    const result = await f.execute(); assert.notEqual(result.code, 0); assert.match(result.stderr, /fixture install rejected/); assert.match(result.stderr + result.stdout, /failed|失败/i);
+    const result = await f.execute(); assert.equal(result.code, 0); assert.match(result.stderr, /fixture install rejected/); assert.match(result.stderr + result.stdout, /failed|失败/i);
     f.env.INSTALL_OPENCODE = 'false'; f.requested.length = 0;
     assert.equal((await f.execute()).code, 0); assert.deepEqual(f.requested, []);
 });
@@ -164,10 +164,10 @@ test('installer passes only selected Agents to the CLI', async t => {
     assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /"prepare",.*"opencode"/); assert.doesNotMatch(result.stdout, /opencode,qoder/);
 });
 
-test('missing original working directory fails before the installer CLI can run', async t => {
+test('missing original working directory skips optional preparation before the CLI can run', async t => {
     const f = await fixture(t, { proxySource: 'process.stdout.write("CLI_WAS_CALLED\\n");\n' });
     f.env.SETUP_WORKING_DIR = path.join(f.dir, 'missing-project');
-    const result = await f.execute(); assert.notEqual(result.code, 0); assert.doesNotMatch(result.stdout, /CLI_WAS_CALLED/);
+    const result = await f.execute(); assert.equal(result.code, 0); assert.match(result.stderr, /Warning:.*optional inference proxy/i); assert.doesNotMatch(result.stdout, /CLI_WAS_CALLED/);
     assert.equal(fs.readFileSync(f.openCodeFile, 'utf8'), f.originals.opencode);
 });
 
@@ -209,7 +209,7 @@ test('Shell entry falls back to a compatible PATH runtime and synchronizes newly
 
 test('failed Shell component download leaves the published runtime and model configuration intact', async t => {
     const f = await fixture(t, { failComponent: 'model-proxy.sh' });
-    const result = await f.execute(); assert.notEqual(result.code, 0);
+    const result = await f.execute(); assert.equal(result.code, 0); assert.match(result.stderr, /Warning:.*optional inference proxy/i);
     assert.equal(fs.existsSync(path.join(f.insight, 'inference-runtime')), false);
     assert.equal(fs.existsSync(path.join(f.insight, 'model-proxy.sh')), false);
     assert.equal(fs.readFileSync(f.openCodeFile, 'utf8'), f.originals.opencode);
@@ -220,5 +220,23 @@ for (const entry of ['/api/setup/auto', '/api/ingest/setup/auto', '/prefix/api/i
         const response = await getAutoSetup(new Request(`http://localhost${entry}?apiKey=test&host=localhost&frameworks=opencode`, { headers: { host: 'localhost', 'x-platform': 'unix' } }));
         const script = await response.text();
         assert.match(script, new RegExp('AGENT_INSIGHT_BASE_URL="http://localhost' + (entry.startsWith('/prefix') ? '/prefix' : '') + '"'));
+    });
+}
+
+for (const failure of ['download', 'prepare'] as const) {
+    test(`optional gateway ${failure} failure preserves collectors and allows later selected installers to continue`, async t => {
+        const f = await fixture(t, failure === 'download'
+            ? { failComponent: 'inference_config.mjs' }
+            : { proxySource: 'process.stderr.write("fixture prepare rejected\\n"); process.exitCode = 23;\n' });
+        const collector = path.join(f.insight, 'opencode_uploader_client.js');
+        fs.writeFileSync(collector, 'previously installed collector');
+        const result = await run('/bin/bash', ['-c', 'set -e\n' + await getBlock() + '\nprintf "LATER_COLLECTOR_INSTALLED\\n"\n'], f.env, f.dir);
+        assert.equal(result.code, 0, result.stderr + result.stdout);
+        assert.match(result.stdout, /LATER_COLLECTOR_INSTALLED/);
+        assert.match(result.stderr, /Warning:.*optional inference proxy/i);
+        assert.equal(fs.readFileSync(collector, 'utf8'), 'previously installed collector');
+        assert.equal(fs.readFileSync(f.openCodeFile, 'utf8'), f.originals.opencode);
+        assert.equal(fs.readFileSync(f.qoderFile, 'utf8'), f.originals.qoder);
+        assert.equal(fs.existsSync(path.join(f.insight, 'inference-proxy/runtime.json')), false);
     });
 }

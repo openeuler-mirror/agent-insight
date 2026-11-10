@@ -30,7 +30,7 @@ if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_QODER" = "true" ]; then
         INFERENCE_PROXY_PUBLISHED=false
         trap 'if [ "$INFERENCE_PROXY_PUBLISHED" != "true" ]; then rm -rf -- "$INFERENCE_PROXY_STAGE"; fi' EXIT
         for component in inference_gateway.mjs inference_config.mjs inference_proxy.mjs model-proxy.sh; do
-            if ! curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/setup?component=$component" -o "$INFERENCE_PROXY_STAGE/$component"; then
+            if ! curl -fsSL --connect-timeout 5 --max-time 20 "$AGENT_INSIGHT_BASE_URL/api/setup?component=$component" -o "$INFERENCE_PROXY_STAGE/$component"; then
                 echo "Inference proxy component download failed: $component" >&2
                 exit 1
             fi
@@ -75,14 +75,13 @@ INFERENCE_PROXY_PUBLISH_EOF
         INFERENCE_PROXY_PUBLISHED=true
         if [ -n "$SETUP_WORKING_DIR" ]; then cd "$SETUP_WORKING_DIR" || exit 1; fi
         if ! AGENT_INSIGHT_API_KEY="$FINAL_KEY" node "$AGENT_INSIGHT_HOME/inference-runtime/inference_proxy.mjs" prepare "$AGENT_INSIGHT_HOME" "$INFERENCE_PROXY_AGENTS"; then
-            echo "Inference proxy installation failed; inspect the error above before retrying." >&2
+            echo "Inference proxy preparation failed; inspect the error above before retrying." >&2
             exit 1
         fi
         echo "模型转发工具已准备，未新增接管任何模型地址。"
         echo "启用或同步模型转发（先进入 Agent 项目目录）："
         printf 'sh "%s/model-proxy.sh" %s\\n' "$AGENT_INSIGHT_HOME" "$INFERENCE_PROXY_AGENTS"
     ); then
-        echo "Agent Insight setup failed while installing the inference proxy." >&2
-        exit 1
+        echo "Warning: optional inference proxy is unavailable; collector installation will continue. Re-run setup before explicitly enabling model forwarding." >&2
     fi
 fi`;
