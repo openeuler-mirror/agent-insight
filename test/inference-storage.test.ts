@@ -15,27 +15,16 @@
  */
 
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
 import crypto from 'node:crypto';
+import { createIsolatedDatabase } from './helpers/isolated-database';
 
 test('inference IDs survive authenticated upload, SQLite storage and deferred Trace/LLM detail projection', async t => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'inference-storage-'));
-    const before = { ...process.env };
-    delete process.env.DB_HOST;
-    delete process.env.AGENT_INSIGHT_DATA_DIR;
-    Object.assign(process.env, { AGENT_INSIGHT_HOME: home, DATABASE_URL: `file:${path.join(home, 'test.db')}` });
-    fs.writeFileSync(path.join(home, 'test.db'), '');
-    execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { stdio: 'pipe' });
+    const database = createIsolatedDatabase();
     const { prismaRaw } = await import('@/lib/storage/prisma');
     t.after(async () => {
         await prismaRaw.$disconnect();
-        for (const key of Object.keys(process.env)) if (!(key in before)) delete process.env[key];
-        Object.assign(process.env, before);
-        fs.rmSync(home, { recursive: true, force: true });
+        database.dispose();
     });
     const { POST } = await import('@/app/api/ingest/upload/route');
     const { GET } = await import('@/app/api/observe/session/route');
