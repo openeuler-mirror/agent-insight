@@ -46,6 +46,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageContent, PageFooter } from '@/components/shell/PageContainer';
 import AgentTraceView from '@/components/observe/AgentTraceView';
+import { CodexThreadTimeline, type TraceThreadView } from '@/components/observe/CodexThreadTimeline';
 import TraceFilterBar from '@/components/observe/TraceFilterBar';
 import TraceFilterSidebar from '@/components/observe/TraceFilterSidebar';
 import TraceTimeFilter from '@/components/observe/TraceTimeFilter';
@@ -120,6 +121,14 @@ interface TraceImportResult {
 interface Execution {
     timestamp: string;
     framework?: string;
+    traceThreadId?: string;
+    trace_thread_id?: string;
+    sourceExecutionId?: string;
+    source_execution_id?: string;
+    sourceKind?: string;
+    source_kind?: string;
+    executionStatus?: string;
+    execution_status?: string;
     agent?: string;
     agentName?: string;
     query?: string;
@@ -249,10 +258,30 @@ function getInvokedSkillNames(execution: Execution): string[] {
     return Array.from(names);
 }
 
-function getExecStatus(e: Execution): 'running' | 'success' | 'failed' | 'timed_out' {
+type ExecutionStatus = 'running' | 'success' | 'failed' | 'interrupted' | 'timed_out';
+
+function getExecStatus(e: Execution): ExecutionStatus {
+    const executionStatus = String(e.executionStatus ?? e.execution_status ?? '').trim().toLowerCase();
+    if (executionStatus === 'interrupted') return 'interrupted';
+    if (executionStatus === 'failed') return 'failed';
+    if (executionStatus === 'completed') return 'success';
+    if (executionStatus === 'in_progress') return 'running';
     const status = String(e.trace_status ?? e.traceStatus ?? '').trim().toLowerCase();
+    if (status === 'interrupted') return 'interrupted';
     if (status === 'running' || status === 'success' || status === 'failed' || status === 'timed_out') return status;
     return e.trace_completed_at || e.traceCompletedAt ? 'success' : 'running';
+}
+
+function getExecutionSource(e: Execution): string {
+    return String(e.sourceKind ?? e.source_kind ?? '').trim().toLowerCase();
+}
+
+function getExecutionSourceLabel(sourceKind: string): string {
+    if (sourceKind === 'cli') return 'CLI';
+    if (sourceKind === 'desktop') return 'Desktop';
+    if (sourceKind === 'ide') return 'IDE';
+    if (sourceKind === 'app_server') return 'App Server';
+    return sourceKind || 'Unknown';
 }
 
 function ReliabilityAnomalyChip({
@@ -538,6 +567,7 @@ function TracePageContent() {
     const [batchBackflowOpen, setBatchBackflowOpen] = useState(false);
     const [availableTags, setAvailableTags] = useState<TraceUserTag[]>([]);
     const [frameworks, setFrameworks] = useState<string[]>([]);
+    const [sourceKinds, setSourceKinds] = useState<string[]>([]);
     const [agentNames, setAgentNames] = useState<string[]>([]);
     const importInputRef = useRef<HTMLInputElement>(null);
     const [importing, setImporting] = useState(false);
@@ -576,6 +606,7 @@ function TracePageContent() {
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', traceFilterParsers.status);
     const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', traceFilterParsers.framework);
+    const [sourceFilter, setSourceFilter] = useQueryState('source', traceFilterParsers.source);
     const [agentFilter, setAgentFilter] = useQueryState('agent', traceFilterParsers.agent);
     const [skillFilter] = useQueryState('skill', traceFilterParsers.skill);
     const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', traceFilterParsers.tagIds);
@@ -624,22 +655,28 @@ function TracePageContent() {
     useEffect(() => {
         if (!user) {
             setFrameworks([]);
+            setSourceKinds([]);
             setAgentNames([]);
             return;
         }
         Promise.all([
             loadTraceFacetValues(user, 'framework').catch(() => []),
+            loadTraceFacetValues(user, 'sourceKind').catch(() => []),
             apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&summary=agents&databasePagination=1`)
                 .then(r => r.ok ? r.json() : { agents: [] }),
-        ]).then(([frameworkRows, agentRows]) => {
+        ]).then(([frameworkRows, sourceRows, agentRows]) => {
             setFrameworks(Array.isArray(frameworkRows)
                 ? (frameworkRows as FacetValueRow[]).map(item => String(item?.value || '')).filter(Boolean)
+                : []);
+            setSourceKinds(Array.isArray(sourceRows)
+                ? (sourceRows as FacetValueRow[]).map(item => String(item?.value || '')).filter(Boolean)
                 : []);
             setAgentNames(Array.isArray(agentRows?.agents)
                 ? agentRows.agents.map((item: unknown) => String(item || '')).filter(Boolean)
                 : []);
         }).catch(() => {
             setFrameworks([]);
+            setSourceKinds([]);
             setAgentNames([]);
         });
     }, [user]);
@@ -736,6 +773,7 @@ function TracePageContent() {
         search,
         clausesRaw,
         frameworkFilter,
+        sourceFilter,
         agentFilter,
         ownershipFilter,
         anomalyFilter,
@@ -755,6 +793,7 @@ function TracePageContent() {
         search,
         clausesRaw,
         frameworkFilter,
+        sourceFilter,
         agentFilter,
         ownershipFilter,
         anomalyFilter,
@@ -853,9 +892,10 @@ function TracePageContent() {
             ? `&tagIds=${encodeURIComponent(selectedUserTagIds.join(','))}`
             : '';
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
+        const sourceParam = sourceFilter !== 'all' ? `&sourceKind=${encodeURIComponent(sourceFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        const listUrl = `/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`;
+        const listUrl = `/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${sourceParam}${agentParam}${ownershipParam}`;
         apiFetch(listUrl + '&listPart=records', { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(response => {
                 if (!response.ok) throw new Error('Trace list request failed');
@@ -896,6 +936,7 @@ function TracePageContent() {
         search,
         clausesRaw,
         frameworkFilter,
+        sourceFilter,
         agentFilter,
         ownershipFilter,
         anomalyFilter,
@@ -1049,6 +1090,7 @@ function TracePageContent() {
 
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || selectedUserTagIds.length > 0
         || anomalyFilter !== 'all' || reliabilityAnomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
+        || sourceFilter !== 'all'
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
     const resetFilters = () => {
@@ -1066,6 +1108,7 @@ function TracePageContent() {
         { value: 'running', label: t('tracePage.statusRunning') },
         { value: 'success', label: t('tracePage.statusSuccess') },
         { value: 'failed', label: t('tracePage.statusFailed') },
+        { value: 'interrupted', label: locale === 'zh' ? '已中断' : 'Interrupted' },
         { value: 'timed_out', label: t('tracePage.statusTimedOut') },
     ];
     const reliabilityAnomalyOptions: SelectOption[] = [
@@ -1084,6 +1127,10 @@ function TracePageContent() {
     const frameworkOptions: SelectOption[] = [
         { value: 'all', label: t('common.all') },
         ...frameworks.map(f => ({ value: f, label: f })),
+    ];
+    const sourceOptions: SelectOption[] = [
+        { value: 'all', label: t('common.all') },
+        ...sourceKinds.map(source => ({ value: source, label: getExecutionSourceLabel(source) })),
     ];
     // Agent 下拉包含根和子 Agent；“范围”决定查询哪一种独立执行。
     const agentOptions: SelectOption[] = [
@@ -1212,6 +1259,13 @@ function TracePageContent() {
                                 onChange={setFrameworkFilter}
                                 options={frameworkOptions}
                                 active={frameworkFilter !== 'all'}
+                            />
+                            <Select
+                                label={locale === 'zh' ? '产品来源' : 'Product source'}
+                                value={sourceFilter}
+                                onChange={setSourceFilter}
+                                options={sourceOptions}
+                                active={sourceFilter !== 'all'}
                             />
                             <UserTagFilter
                                 tags={availableTags}
@@ -1621,11 +1675,12 @@ function TraceDetailView({
         const requestId = ++sessionRequestRef.current;
         const isInitial = !sessionRef.current;
         if (!silent && isInitial) setLoading(true);
+        if (!user) return;
         apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskId)}&fields=light&includeTags=1&includeEvaluations=0&skipAutoEvalReady=1`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(response => response.ok ? response.json() : null)
             .then(records => { if (requestId === sessionRequestRef.current && Array.isArray(records) && records[0]) onExecutionRefresh(records[0]); })
             .catch(() => {});
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => {
                 if (requestId !== sessionRequestRef.current) return;
@@ -1636,7 +1691,7 @@ function TraceDetailView({
             })
             .catch(() => { if (requestId === sessionRequestRef.current && !silent && isInitial) setSession({ error: 'Network error' }); })
             .finally(() => { if (requestId === sessionRequestRef.current) setLoading(false); });
-    }, [taskId, apiKey, onExecutionRefresh]);
+    }, [taskId, user, apiKey, onExecutionRefresh]);
 
     useEffect(() => () => { sessionRequestRef.current += 1; }, [taskId]);
 
@@ -1667,20 +1722,20 @@ function TraceDetailView({
         const sourceTaskId = source?.taskId ?? taskId;
         const sourceIndex = source?.index ?? index;
         const response = await apiFetch(
-            `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&view=interaction&index=${sourceIndex}${source ? "&source=raw" : ""}`,
+            `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&user=${encodeURIComponent(user || '')}&view=interaction&index=${sourceIndex}${source ? "&source=raw" : ""}`,
             { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} },
         );
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
         return body?.interaction;
-    }, [taskId, apiKey]);
+    }, [taskId, user, apiKey]);
 
     const loadFullInteractions = useCallback(async () => {
-        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interactions`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
+        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user || '')}&view=interactions`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
         return Array.isArray(body?.interactions) ? body.interactions : [];
-    }, [taskId, apiKey]);
+    }, [taskId, user, apiKey]);
 
     const { framework } = execution;
     // The list row may be a partial snapshot captured while a streaming trace is
@@ -1696,6 +1751,7 @@ function TraceDetailView({
     const cost = typeof latestExecution?.cost === 'number'
         ? latestExecution.cost
         : execution.cost;
+    const executionSource = getExecutionSource(execution);
     const canAutoRefresh = waitingForRelations || execStatus === 'running' || execStatus === 'timed_out';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
@@ -1734,7 +1790,7 @@ function TraceDetailView({
 
     return (
         <div className="flex flex-col h-full min-h-0">
-            <div className="rounded-md border border-border bg-card p-3 mb-3 flex min-w-0 shrink-0 flex-wrap items-center gap-2">
+            <div className="mb-3 flex min-w-0 shrink-0 flex-wrap items-start gap-2 rounded-md border border-border bg-card p-3 sm:items-center">
                 <Button variant="ghost" size="sm" onClick={onBack} className="text-foreground-muted h-7 px-2">
                     <ArrowLeft className="size-3.5" aria-hidden />
                     {t('tracePage.backToList')}
@@ -1757,7 +1813,7 @@ function TraceDetailView({
                         {locale === 'zh' ? '父执行' : 'Parent'}
                     </Button>
                 )}
-                <Separator orientation="vertical" className="data-[orientation=vertical]:h-5" />
+                <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
                 {isSubagentTrace && (
                     <span
                         title={subagentName || ''}
@@ -1769,11 +1825,12 @@ function TraceDetailView({
                 <IdChip value={taskId} head={8} tail={6} />
                 <StatusBadge
                     title={execStatus === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined}
-                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : execStatus === 'timed_out' ? 'warning' : 'success'}
+                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : execStatus === 'interrupted' ? 'cancelled' : execStatus === 'timed_out' ? 'warning' : 'success'}
                     label={
                         execStatus === 'running' ? t('tracePage.statusRunning')
                         : execStatus === 'timed_out' ? t('tracePage.statusTimedOut')
                         : execStatus === 'failed' ? t('tracePage.statusFailed')
+                        : execStatus === 'interrupted' ? (locale === 'zh' ? '已中断' : 'Interrupted')
                         : t('tracePage.statusNormal')
                     }
                 />
@@ -1782,6 +1839,7 @@ function TraceDetailView({
                     locale={locale === 'zh' ? 'zh' : 'en'}
                 />
                 {framework && <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(framework)}</Tag>}
+                {executionSource && <Tag variant="framework" icon={Layers}>{getExecutionSourceLabel(executionSource)}</Tag>}
 
                 {/* 用户标签：在详情页原地打标，不必退回列表 */}
                 <TraceTagCell
@@ -1793,7 +1851,7 @@ function TraceDetailView({
                 />
 
                 {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) || (typeof cost === 'number' && cost > 0) ? (
-                    <Separator orientation="vertical" className="data-[orientation=vertical]:h-5" />
+                    <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
                 ) : null}
                 {typeof tokens === 'number' && tokens > 0 && (
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
@@ -1805,7 +1863,7 @@ function TraceDetailView({
                     <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />
                 )}
 
-                <div className="ml-auto flex flex-wrap items-center gap-2">
+                <div className="flex w-full min-w-0 flex-wrap items-center gap-2 border-t border-border pt-2 sm:ml-auto sm:w-auto sm:border-t-0 sm:pt-0">
                     <TooltipProvider delayDuration={250}>
                         <Tooltip>
                             <TooltipTrigger asChild>
@@ -1842,7 +1900,7 @@ function TraceDetailView({
                         <RefreshCw className="size-3.5" />
                     </Button>
 
-                    <Separator orientation="vertical" className="data-[orientation=vertical]:h-5" />
+                    <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
                     <Button
                         variant="outline"
                         size="sm"
@@ -1891,6 +1949,12 @@ function TraceDetailView({
             {execStatus === 'failed' && execution.failures && execution.failures.length > 0 && (
                 <FailureCard failures={execution.failures} />
             )}
+
+            <CodexThreadTimeline
+                thread={session?.thread as TraceThreadView | undefined}
+                locale={locale}
+                onNavigate={navigateToTaskId}
+            />
 
             <h2 className="text-sm font-semibold text-foreground mb-2">{t('tracePage.executionTrace')}</h2>
             <div className="min-h-[200px] flex-1 min-h-0">
@@ -2122,11 +2186,13 @@ function Row({
     const skillCount = getInvokedSkillNames(e).length;
     const agentCount = new Set((e.agents ?? []).filter(Boolean)).size;
     const isMultiAgent = agentCount > 1;
-    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : status === 'timed_out' ? 'warning' : 'success';
+    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : status === 'interrupted' ? 'cancelled' : status === 'timed_out' ? 'warning' : 'success';
     const statusLabel = status === 'running' ? t('tracePage.statusRunning')
         : status === 'timed_out' ? t('tracePage.statusTimedOut')
         : status === 'failed' ? t('tracePage.statusFailed')
+        : status === 'interrupted' ? (locale === 'zh' ? '已中断' : 'Interrupted')
         : t('tracePage.statusSuccess');
+    const sourceKind = getExecutionSource(e);
 
     return (
         <tr
@@ -2166,6 +2232,11 @@ function Row({
                     <TruncateText className="text-foreground text-sm">
                         {getAgentDisplayName(e.agent || (e.agents && e.agents.length > 0 ? e.agents[0] : null) || e.framework || '-')}
                     </TruncateText>
+                    {sourceKind && (
+                        <span className="mt-0.5 block text-[11px] text-foreground-muted">
+                            {getExecutionSourceLabel(sourceKind)}
+                        </span>
+                    )}
                 </Td>
             )}
             {columnVisibility.ip && (

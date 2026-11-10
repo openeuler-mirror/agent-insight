@@ -25,7 +25,10 @@ const {
   stableEventId,
   stableSpanId,
   stableTraceId,
+  redactValue,
 } = require("../shared/trace-transport.cjs");
+const { createCodexLifecycleReducer } = require("./lifecycle-reducer.cjs");
+const { classifyCodexSource, isSourceKind } = require("./source-classifier.cjs");
 
 const HOOK_EVENTS = Object.freeze([
   "SessionStart",
@@ -56,6 +59,13 @@ const MATCHER_EVENTS = new Set([
 const IDE_ORIGINATORS = /(?:vscode|cursor|windsurf|ide)/i;
 const SKILL_PROMPT_PATTERN = /(?:^|\s)(?:\/skill:|\$)([a-z0-9][a-z0-9._-]*)\b/i;
 const SKILL_PATH_PATTERN = /(?:^|[\s"'`])((?:[A-Za-z]:)?[\\/]?(?:[^\\/"'`\s]+[\\/])*skills[\\/]([^\\/"'`\s]+)[\\/]SKILL\.md)(?=$|[\s"'`])/i;
+
+/** 技能的真正执行以这些工具运行形态出现；读取 SKILL.md 的普通工具不在此列。 */
+const SKILL_RUNNER_TOOLS = new Set(["skill", "skill_view", "load_skill", "load-skill", "run_skill", "run-skill", "skill.run", "skill_run"]);
+
+function isSkillRunnerTool(toolName) {
+  return SKILL_RUNNER_TOOLS.has(String(toolName || "").toLowerCase());
+}
 const DEFAULT_STATE_RETENTION_MS = 6 * 60 * 60 * 1000;
 
 function asString(value) {
@@ -229,7 +239,7 @@ function extractOtlpLogRecords(payload) {
           attributes,
           resource,
           scope,
-          timestampMs: unixNanoToMs(logRecord.timeUnixNano || logRecord.observedTimeUnixNano) ||
+          timestampMs: unixNanoToMs(logRecord.timeUnixNano) || unixNanoToMs(logRecord.observedTimeUnixNano) ||
             Date.now(),
           severity: logRecord.severityText,
         });
@@ -315,10 +325,12 @@ class CodexTraceCore {
     this.callScopes = new Map();
     this.implicitPromptScopes = new Map();
     this.stateRetentionMs = options.stateRetentionMs ?? DEFAULT_STATE_RETENTION_MS;
+    this.lifecycleReducer = createCodexLifecycleReducer();
   }
 
   ensureSession(sessionId, metadata = {}) {
     let session = this.sessions.get(sessionId);
+    const directSourceKind = isSourceKind(metadata.sourceKind) ? metadata.sourceKind : undefined;
     if (!session) {
       const startedAt = metadata.timestampMs || this.now();
       session = {
@@ -331,6 +343,8 @@ class CodexTraceCore {
         model: metadata.model,
         originator: metadata.originator,
         terminalType: metadata.terminalType,
+        serviceName: metadata.serviceName,
+        sourceKind: directSourceKind || classifyCodexSource(metadata).sourceKind,
         input: undefined,
         output: undefined,
         closed: false,
@@ -351,6 +365,20 @@ class CodexTraceCore {
     session.model = metadata.model || session.model;
     session.originator = metadata.originator || session.originator;
     session.terminalType = metadata.terminalType || session.terminalType;
+    session.serviceName = metadata.serviceName || session.serviceName;
+    if (directSourceKind) {
+      session.sourceKind = directSourceKind;
+    } else {
+      const classified = classifyCodexSource({
+        ...metadata,
+        originator: metadata.originator || session.originator,
+        terminalType: metadata.terminalType || session.terminalType,
+        serviceName: metadata.serviceName || session.serviceName,
+      });
+      if (classified.sourceKind !== "unknown" || !session.sourceKind) {
+        session.sourceKind = classified.sourceKind;
+      }
+    }
     session.updatedAt = metadata.timestampMs || this.now();
     return session;
   }
@@ -400,37 +428,50 @@ class CodexTraceCore {
   }
 
   promptTurn(session, rawTurnId, prompt, timestampMs, source) {
+    prompt = asString(redactValue(prompt));
+    const remember = (turn) => {
+      turn.input ||= prompt;
+      if (source === "hook" || source === "lifecycle") {
+        turn.lastAcceptedPrompt = { content: prompt, timestampMs };
+      }
+      turn.updatedAt = Math.max(turn.updatedAt, timestampMs);
+      turn.promptSources ||= new Set();
+      if (source) turn.promptSources.add(source);
+      return this.linkTurnAlias(session, rawTurnId, turn);
+    };
     const direct = this.turnFor(session, rawTurnId, false);
-    if (direct) {
-      direct.input = prompt || direct.input;
-      direct.updatedAt = timestampMs;
-      direct.promptSources ||= new Set();
-      if (source) direct.promptSources.add(source);
-      return direct;
+    if (direct) return remember(direct);
+
+    if (source === "otel" && prompt) {
+      const accepted = [...session.turns.values()].filter((turn) => {
+        const input = turn.lastAcceptedPrompt || turn.lastHookPrompt;
+        return !turn.closed && asString(redactValue(input?.content)) === prompt &&
+          Math.abs(timestampMs - input.timestampMs) <= 10_000;
+      });
+      if (accepted.length === 1) return remember(accepted[0]);
     }
 
     // Hook and OTel report the same user prompt with different ids. Merge only
     // when the content, time window, and transport source all agree; repeated
     // identical user prompts from one transport remain distinct executions.
+    const family = (value) => value === "otel" ? "otel" : "boundary";
     const candidate = [...session.turns.values()].filter((turn) =>
-      turn.input === prompt &&
+      prompt && asString(redactValue(turn.input)) === prompt &&
       !turn.unresolvedImplicit &&
       Math.abs(timestampMs - turn.startedAt) <= 10_000 &&
-      !(turn.promptSources || new Set()).has(source),
+      ![...(turn.promptSources || [])].some((value) => family(value) === family(source)),
     );
     if (candidate.length === 1) {
       const turn = candidate[0];
-      turn.updatedAt = timestampMs;
-      turn.promptSources ||= new Set();
-      if (source) turn.promptSources.add(source);
-      return this.linkTurnAlias(session, rawTurnId, turn);
+      turn.startedAt = Math.min(turn.startedAt, timestampMs);
+      return remember(turn);
     }
 
-    return this.turnFor(session, rawTurnId, true, {
+    return remember(this.turnFor(session, rawTurnId, true, {
       timestampMs,
       input: prompt,
       promptSource: source,
-    });
+    }));
   }
 
   resolveOtelTurn(session, rawTurnId, timestampMs, { createPending = false } = {}) {
@@ -442,7 +483,11 @@ class CodexTraceCore {
     );
     const active = candidates.filter((turn) => !turn.closed);
     if (active.length === 1) return active[0];
-    if (active.length > 1) return undefined;
+    if (active.length > 1) {
+      return createPending ? this.turnFor(session, rawTurnId, true, {
+        timestampMs, unresolvedImplicit: true,
+      }) : undefined;
+    }
 
     // A native OTel end record can arrive shortly after Hook Stop. Use this
     // narrow recovery only when there is exactly one recent user execution.
@@ -486,6 +531,7 @@ class CodexTraceCore {
         "codex.execution.id": scope.executionId,
         "codex.conversation.id": session.sessionId,
         "codex.turn.id": turn.turnId,
+        "codex.source.kind": session.sourceKind || "unknown",
         ...(pendingAssociation ? { "codex.association.pending": "true" } : {}),
         ...overrides.attributes,
       },
@@ -637,6 +683,41 @@ class CodexTraceCore {
     return stored;
   }
 
+  /** 技能完成：把宿主工具带回的输出补写到同一个 skill span（Bug 52）。
+   *
+   * emitSkill 在（Pre）ToolUse 时写入，此时技能结果尚未产生；技能结果随宿主工具
+   * 的 PostToolUse tool_response 返回。这里以同一 spanId 追加一份带 output 的完成
+   * 快照，endTimeMs 更新为宿主工具完成时刻。服务端 keepLatestCodexSpanSnapshots
+   * 按 spanId 只保留 endTime 最新的一份，因此完成快照会覆盖 start 快照，UI 的
+   * skill 节点能显示输出。宿主工具无输出时不追加，避免空快照。 */
+  async completeActiveSkill(session, turn, output, timestampMs, isError) {
+    const spanId = turn.activeSkillSpanId;
+    if (!spanId) return;
+    const stored = [...session.skills.values()].find((s) => s.spanId === spanId);
+    if (!stored) return;
+    if (output == null) return;
+    await this.append(session, turn, {
+      eventId: stableEventId("codex", session.sessionId, turn.turnId, "skill", stored.name),
+      spanId,
+      parentSpanId: turn.parentScope?.rootSpanId || turn.rootSpanId,
+      kind: "skill",
+      name: `skill.${stored.name}`,
+      startTimeMs: stored.startedAt,
+      endTimeMs: timestampMs,
+      input: turn.input,
+      output,
+      status: isError ? "error" : "ok",
+      skill: {
+        name: stored.name,
+        version: stored.version,
+        triggerMode: stored.triggerMode,
+      },
+      attributes: {
+        "codex.turn.id": turn.turnId,
+      },
+    });
+  }
+
   toolParent(session, turn) {
     if (!turn) return session.rootSpanId;
     if (turn.activeSkillSpanId) return turn.activeSkillSpanId;
@@ -743,13 +824,24 @@ class CodexTraceCore {
           detected.version = await skillVersion(detected.filePath);
           await this.emitSkill(session, turn, detected, timestampMs);
           tool.parentSpanId = turn.activeSkillSpanId;
+          turn.skillCarrierCallId = callId;
         }
       } else {
         tool.output = input.tool_response ?? input.tool_result ?? input.result ?? input.output;
         tool.isError = Boolean(input.is_error || input.error);
         tool.error = asString(input.error?.message || input.error);
         tool.exitCode = asNumber(input.exit_code ?? input.tool_response?.exit_code);
-        await this.emitTool(session, turn, tool, timestampMs);
+        // 技能宿主工具完成：结果并入 skill 完成快照，不再单独发 tool.skill 事件，
+        // 避免同一技能在 UI 里被同时渲染成 SKILL 节点和 tool 节点（重复显示 Bug 52
+        // 的配套整理）。其余普通工具照常发 tool 事件。
+        const isSkillCarrierCompletion = turn.activeSkillSpanId
+          && callId === turn.skillCarrierCallId
+          && isSkillRunnerTool(name);
+        if (isSkillCarrierCompletion) {
+          await this.completeActiveSkill(session, turn, tool.output, timestampMs, tool.isError);
+        } else {
+          await this.emitTool(session, turn, tool, timestampMs);
+        }
       }
     } else if (eventName === "SubagentStart" || eventName === "SubagentStop") {
       const agentId = asString(input.agent_id || input.subagent_id) ||
@@ -775,6 +867,7 @@ class CodexTraceCore {
         };
         session.agents.set(agentId, agent);
       }
+      agent.threadScoped ||= input.rollout_thread_scoped === true;
       if (eventName === "SubagentStart") {
         // Start 只更新 active agent，不 append——避免与 Stop 的同 spanId 事件重复
         // （服务端 keepLatest 虽能收口，但 spool 直接读会有两条）。
@@ -819,6 +912,7 @@ class CodexTraceCore {
           "codex.turn.id": turn.turnId,
           "codex.agent.id": agent.agentId,
           "codex.agent.name": agent.name,
+          "codex.agent.thread_scoped": agent.threadScoped || undefined,
           "codex.agent.parent_id": agent.parentId,
           "codex.agent.parent_source": input.parent_agent_id
             ? "hook"
@@ -897,6 +991,7 @@ class CodexTraceCore {
         model: asString(firstDefined(attrs, ["model", "gen_ai.request.model"])),
         originator: asString(firstDefined(attrs, ["originator", "codex.originator"])),
         terminalType: asString(firstDefined(attrs, ["terminal.type", "terminal_type"])),
+        serviceName: asString(firstDefined(attrs, ["service.name", "service_name"])),
       });
       const turnId = asString(firstDefined(attrs, ["turn.id", "turn_id", "codex.turn.id"]));
       let turn = this.resolveOtelTurn(session, turnId, record.timestampMs);
@@ -916,7 +1011,10 @@ class CodexTraceCore {
           (promptLength === undefined ? undefined : `[REDACTED prompt length=${promptLength}]`);
         // The literal placeholder accompanies native lifecycle telemetry when
         // Hook already owns the real prompt. It is not a second user turn.
-        if (prompt?.trim() !== "[REDACTED]") {
+        // Bug 63：带长度的占位符（[REDACTED prompt length=N]，含 N=0 的内部
+        // 建议生成会话）同样不是用户输入——真实用户 turn 的正文走 hook/rollout
+        // 路径，OTLP 无正文 prompt 一律不建根任务。
+        if (prompt?.trim() !== "[REDACTED]" && !/^\[REDACTED prompt length=\d+\]$/.test(prompt?.trim() || "")) {
           const promptTurn = this.promptTurn(session, turnId, prompt, record.timestampMs, "otel");
           session.input ||= prompt;
           this.bindImplicitPrompt(session, promptTurn, prompt, record.timestampMs);
@@ -1164,6 +1262,268 @@ class CodexTraceCore {
     return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
   }
 
+  // Keep content durable before usage arrives. The adapter pairs only a unique
+  // response interval with matching execution and owner; unmatched text survives.
+  async processRolloutContent(event) {
+    const threadId = asString(event.sourceThreadId);
+    const turnId = asString(event.sourceExecutionId);
+    if (!threadId) return { attributed: false };
+    const timestampMs = asNumber(event.timestampMs) || this.now();
+    const session = this.ensureSession(threadId, {
+      timestampMs,
+      // Rollout 文件既可能来自 Desktop，也可能来自 CLI（同一条 ~/.codex/sessions
+      // 记录）；来源以 reader 的 sourceKind 为准，不能硬编码 Desktop。
+      sourceKind: event.sourceKind,
+    });
+    // rollout 的 turn id 与 OTLP 同源（实测逐位一致）；有直接 id 即直接归属，
+    // 不走 resolveOtelTurn 的 pending 降级。命中的 pending 伪任务同时被认领。
+    const turn = this.turnFor(session, turnId, true, { timestampMs });
+    if (!turn) return { attributed: false };
+    if (turn.unresolvedImplicit && !turn.parentScope) turn.unresolvedImplicit = false;
+    turn.updatedAt = timestampMs;
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    const contentKind = asString(event.contentKind) || "llm_text";
+
+    if (contentKind === "tool_output") {
+      const callId = asString(payload.callId);
+      if (!callId) return { attributed: false };
+      let tool = session.tools.get(callId);
+      if (!tool) {
+        tool = {
+          callId,
+          name: asString(payload.toolName) || "unknown",
+          spanId: stableSpanId(session.sessionId, "tool", callId),
+          parentSpanId: this.toolParent(session, turn),
+          startedAt: timestampMs,
+          source: "rollout",
+        };
+        session.tools.set(callId, tool);
+      }
+      if (payload.toolName) tool.name = asString(payload.toolName) || tool.name;
+      tool.output = asString(payload.output) ?? tool.output;
+      tool.success = tool.success ?? true;
+      tool.source = tool.source?.includes("rollout") ? tool.source : `${tool.source || "rollout"}+rollout`;
+      await this.emitTool(session, turn, tool, timestampMs);
+      return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
+    }
+
+    const textValue = asString(payload.text);
+    if (!textValue) return { attributed: false };
+    turn.llmSequence += 1;
+    const messageId = asString(payload.itemId) || `msg-${turn.llmSequence}`;
+    const spanId = stableSpanId(session.sessionId, turn.turnId, "llm", messageId);
+    const parentSpanId = this.toolParent(session, turn);
+    await this.append(session, turn, {
+      eventId: stableEventId("codex", session.sessionId, turn.turnId, "llm-content", messageId),
+      spanId,
+      parentSpanId,
+      kind: "llm",
+      name: `llm.${session.model || "codex"}`,
+      startTimeMs: timestampMs,
+      endTimeMs: timestampMs,
+      model: session.model,
+      output: textValue,
+      attributes: {
+        "codex.turn.id": turn.turnId,
+        "codex.source.kind": session.sourceKind || "desktop",
+        "codex.content.source": "rollout",
+      },
+    });
+    return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
+  }
+
+  // One usage record owns one stable response span; text never replaces usage.
+  async processRolloutUsage(event) {
+    const threadId = asString(event.sourceThreadId);
+    const turnId = asString(event.sourceExecutionId);
+    if (!threadId) return { attributed: false };
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    const timestampMs = asNumber(event.timestampMs) || this.now();
+    const session = this.ensureSession(threadId, {
+      timestampMs,
+      sourceKind: event.sourceKind,
+    });
+    const turn = this.turnFor(session, turnId, Boolean(turnId), { timestampMs });
+    if (!turn) return { attributed: false };
+    turn.updatedAt = timestampMs;
+    // 双通道去重：OTel sse_event 已为本 turn 计过用量时，rollout usage 只做
+    // 结构确认，不再累加 token（两通道记的是同一批响应）。反过来若先到
+    // rollout 再收到 OTel，OTel 路径不检查该标记——积压回放时 rollout 通常
+    // 后到，实测顺序稳定；两种来源下"每 turn 只计一次"仍成立。
+    if (turn.otelUsageSeen) {
+      return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId, deduplicated: true };
+    }
+    const usage = {
+      input: asNumber(payload.inputTokens) || 0,
+      output: asNumber(payload.outputTokens) || 0,
+      reasoning: asNumber(payload.reasoningTokens) || 0,
+      total: asNumber(payload.totalTokens)
+        || (asNumber(payload.inputTokens) || 0) + (asNumber(payload.outputTokens) || 0),
+    };
+    const responseId = asString(payload.responseId)
+      || `${turn.turnId}:${asNumber(event.timestampMs) || timestampMs}`;
+    const spanId = stableSpanId(session.sessionId, turn.turnId, "llm", `usage:${responseId}`);
+    const startTimeMs = turn.lastLlmAt ?? turn.startedAt;
+    turn.lastLlmAt = timestampMs;
+    turn.llmSequence += 1;
+    await this.append(session, turn, {
+      eventId: stableEventId("codex", session.sessionId, turn.turnId, "llm-usage", responseId),
+      spanId,
+      parentSpanId: this.toolParent(session, turn),
+      kind: "llm",
+      name: `llm.${session.model || "codex"}`,
+      startTimeMs,
+      endTimeMs: timestampMs,
+      model: session.model,
+      usage,
+      attributes: {
+        "codex.turn.id": turn.turnId,
+        "codex.source.kind": session.sourceKind || "desktop",
+        "codex.usage.source": "rollout",
+        "codex.usage.cache_read": asNumber(payload.cacheReadTokens) || 0,
+        "codex.usage.cache_write": asNumber(payload.cacheWriteTokens) || 0,
+      },
+    });
+    return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
+  }
+
+  async processLifecycleEvent(event) {
+    if (event?.eventType === "subagent_started") {
+      const { parentThreadId, parentTurnId, agentName } = event.payload || {};
+      if (!parentThreadId || !parentTurnId) return { attributed: false };
+      await this.processHook({ hook_event_name: "SubagentStart", session_id: parentThreadId,
+        turn_id: parentTurnId, agent_id: event.sourceThreadId, agent_type: agentName || "subagent",
+        timestamp_ms: event.timestampMs, rollout_thread_scoped: true });
+      const parentTurn = this.turnFor(this.sessions.get(parentThreadId), parentTurnId, false);
+      if (parentTurn) parentTurn.activeAgentId = "root";
+      const child = this.sessions.get(event.sourceThreadId);
+      child.rolloutParent = { parentThreadId, parentTurnId };
+      this.turnFor(child, event.sourceExecutionId, true, { timestampMs: event.timestampMs });
+      return { attributed: true };
+    }
+    const childSession = this.sessions.get(event?.sourceThreadId);
+    if (childSession?.rolloutParent && ["execution_completed", "execution_interrupted"].includes(event.eventType)) {
+      const { parentThreadId, parentTurnId } = childSession.rolloutParent;
+      const turn = this.turnFor(childSession, event.sourceExecutionId, false);
+      if (turn) { turn.closed = true; turn.updatedAt = event.timestampMs; }
+      await this.processHook({ hook_event_name: "SubagentStop", session_id: parentThreadId,
+        turn_id: parentTurnId, agent_id: event.sourceThreadId, timestamp_ms: event.timestampMs,
+        last_assistant_message: event.payload?.output });
+      return { attributed: true };
+    }
+    if (event?.eventType === "rollout_content") return this.processRolloutContent(event);
+    if (event?.eventType === "rollout_usage") return this.processRolloutUsage(event);
+    const result = this.lifecycleReducer.apply(event);
+    if (result.duplicate || result.pending) return result;
+    const threadId = event.sourceThreadId;
+    const session = this.ensureSession(threadId, {
+      timestampMs: event.timestampMs,
+      originator: event.payload?.originator,
+      terminalType: event.payload?.terminalType,
+      sourceKind: event.sourceKind,
+    });
+    if (event.eventType === "execution_started" || event.eventType === "user_input_accepted") {
+      this.promptTurn(session, event.sourceExecutionId,
+        event.eventType === "execution_started" ? event.payload?.input : event.payload?.content,
+        event.timestampMs, "lifecycle");
+    }
+    for (const snapshot of result.snapshots || []) {
+      const payload = snapshot.payload || {};
+      if (snapshot.eventType === "execution_snapshot") {
+        // 446-1：必须与 turn 级事件（OTLP/rollout 正文路径）共用同一 executionId
+        // 派生（executionId() → `${threadId}:turn:${turnId}`），服务端按 sessionId
+        // 分组才能把同轮的生命周期、正文与指标合并为一次执行；已存在的 turn 先经
+        // turnFor 解析别名，避免别名重定向后再次分叉。
+        const canonicalTurn = this.turnFor(session, snapshot.sourceExecutionId, false);
+        if (canonicalTurn) {
+          canonicalTurn.input ||= payload.query;
+          canonicalTurn.output = payload.output || canonicalTurn.output;
+          canonicalTurn.updatedAt = payload.updatedAt || snapshot.timestampMs;
+          if (["completed", "interrupted", "failed"].includes(payload.status)) canonicalTurn.closed = true;
+        }
+        const lifecycleExecutionId = canonicalTurn
+          ? canonicalTurn.executionId
+          : executionId(threadId, snapshot.sourceExecutionId);
+        await this.writer.append(eventBase(session, {
+          sessionId: lifecycleExecutionId,
+          traceId: stableTraceId("codex", lifecycleExecutionId),
+          spanId: stableSpanId("codex-lifecycle", lifecycleExecutionId),
+          parentSpanId: undefined,
+          kind: "agent",
+          name: "agent.codex",
+          input: payload.query,
+          output: payload.output,
+          status: payload.status === "failed" ? "error" : payload.status,
+          startTimeMs: payload.startedAt || snapshot.timestampMs,
+          endTimeMs: payload.updatedAt || snapshot.timestampMs,
+          attributes: {
+            "agent.insight.lifecycle": "execution",
+            "codex.lifecycle.event_type": "execution_snapshot",
+            "codex.execution.id": lifecycleExecutionId,
+            "codex.conversation.id": threadId,
+            "codex.turn.id": snapshot.sourceExecutionId,
+            "codex.source.kind": snapshot.sourceKind,
+            "codex.source.thread_id": threadId,
+            "codex.source.execution_id": snapshot.sourceExecutionId,
+            "codex.execution.status": payload.status,
+            "codex.input.history": JSON.stringify(payload.inputs || []),
+            "codex.input.phases": JSON.stringify(payload.phases || []),
+          },
+        }));
+      } else if (snapshot.eventType === "compaction_snapshot") {
+        await this.writer.append(eventBase(session, {
+          sessionId: threadId,
+          traceId: stableTraceId("codex", threadId),
+          spanId: stableSpanId("codex-lifecycle", "compaction", snapshot.sourceItemId),
+          kind: "span",
+          name: "context.compaction",
+          input: undefined,
+          output: undefined,
+          startTimeMs: payload.startedAt || snapshot.timestampMs,
+          endTimeMs: payload.completedAt || snapshot.timestampMs,
+          attributes: {
+            "agent.insight.lifecycle": "compaction",
+            "codex.lifecycle.event_type": "compaction_snapshot",
+            "codex.conversation.id": threadId,
+            "codex.source.kind": snapshot.sourceKind,
+            "codex.source.thread_id": threadId,
+            "codex.compaction.item_id": snapshot.sourceItemId,
+            "codex.compaction.status": payload.status,
+            "codex.compaction.duration_ms": payload.durationMs,
+            "codex.compaction.payload": JSON.stringify(payload),
+          },
+        }));
+      } else if (snapshot.eventType === "thread_event_snapshot") {
+        await this.writer.append(eventBase(session, {
+          sessionId: threadId,
+          traceId: stableTraceId("codex", threadId),
+          spanId: stableSpanId("codex-lifecycle", "thread-event", snapshot.sourceItemId),
+          parentSpanId: undefined,
+          kind: "span",
+          name: "thread.execution_transition",
+          input: undefined,
+          output: undefined,
+          startTimeMs: snapshot.timestampMs,
+          endTimeMs: snapshot.timestampMs,
+          attributes: {
+            "agent.insight.lifecycle": "thread_event",
+            "codex.lifecycle.event_type": "thread_event_snapshot",
+            "codex.conversation.id": threadId,
+            "codex.source.kind": snapshot.sourceKind,
+            "codex.source.thread_id": threadId,
+            "codex.thread.event_id": snapshot.sourceItemId,
+            "codex.thread.event_kind": payload.kind,
+            "codex.thread.previous_execution_id": payload.previousSourceExecutionId,
+            "codex.thread.next_execution_id": payload.nextSourceExecutionId,
+            "codex.thread.transition_kind": payload.transitionKind,
+            "codex.thread.confidence": payload.confidence,
+          },
+        }));
+      }
+    }
+    return result;
+  }
+
   updateLease(clientId, action) {
     if (!clientId) return;
     if (action === "release") this.leases.delete(clientId);
@@ -1182,6 +1542,7 @@ class CodexTraceCore {
           turnId: turn.turnId,
           originator: session.originator,
           terminalType: session.terminalType,
+          sourceKind: session.sourceKind,
           cwd: session.cwd,
         });
       }
@@ -1261,8 +1622,10 @@ class CodexTraceCore {
         model: session.model,
         originator: session.originator,
         terminalType: session.terminalType,
+        sourceKind: session.sourceKind,
         closed: session.closed,
         delegatedParent: session.delegatedParent,
+        rolloutParent: session.rolloutParent,
         turnAliases: [...session.turnAliases.entries()],
         agents: [...session.agents.values()],
         turns: [...session.turns.values()].map((turn) => ({
@@ -1279,8 +1642,11 @@ class CodexTraceCore {
           parentScope: turn.parentScope,
           unresolvedImplicit: turn.unresolvedImplicit,
           promptSources: [...(turn.promptSources || [])],
+          lastHookPrompt: turn.lastHookPrompt,
+          lastAcceptedPrompt: turn.lastAcceptedPrompt,
         })),
       })),
+      lifecycle: this.lifecycleReducer.snapshot(),
     };
   }
 
@@ -1291,13 +1657,16 @@ class CodexTraceCore {
     this.implicitPromptScopes = new Map(
       Array.isArray(snapshot.implicitPromptScopes) ? snapshot.implicitPromptScopes : [],
     );
+    this.lifecycleReducer.restore(snapshot.lifecycle);
     for (const item of snapshot.sessions) {
       if (!item?.sessionId) continue;
       const session = this.ensureSession(item.sessionId, item);
+      session.sourceKind = item.sourceKind || session.sourceKind || "unknown";
       session.startedAt = Number(item.startedAt) || session.startedAt;
       session.updatedAt = Number(item.updatedAt) || session.updatedAt;
       session.closed = Boolean(item.closed);
       session.delegatedParent = item.delegatedParent;
+      session.rolloutParent = item.rolloutParent;
       for (const [rawTurnId, canonicalTurnId] of item.turnAliases || []) {
         if (rawTurnId && canonicalTurnId) session.turnAliases.set(rawTurnId, canonicalTurnId);
       }
@@ -1318,6 +1687,8 @@ class CodexTraceCore {
         turn.parentScope = rawTurn.parentScope || session.delegatedParent;
         turn.unresolvedImplicit = Boolean(rawTurn.unresolvedImplicit);
         turn.promptSources = new Set(rawTurn.promptSources || []);
+        turn.lastHookPrompt = rawTurn.lastHookPrompt;
+        turn.lastAcceptedPrompt = rawTurn.lastAcceptedPrompt;
         // v1/v2 snapshots have no aliases; canonical ids remain valid aliases.
         session.turnAliases.set(turn.turnId, turn.turnId);
       }

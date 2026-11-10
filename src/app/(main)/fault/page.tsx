@@ -658,7 +658,7 @@ function FaultDetailView({ execution, locale, user, onBack, diagnosisContent }: 
                 setFinalResult(fr);
             })
             .catch(() => {});
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`)
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}`)
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
             .then((d: SessionData) => setSession(d))
             .catch(err => setSession({ error: err instanceof Error ? err.message : String(err), interactions: [] }))
@@ -670,7 +670,7 @@ function FaultDetailView({ execution, locale, user, onBack, diagnosisContent }: 
                 if (d.messages?.length) setMessages(d.messages.map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content })));
             })
             .catch(() => {});
-    }, [taskId]);
+    }, [taskId, user]);
 
     useEffect(() => {
         chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight });

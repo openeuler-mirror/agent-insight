@@ -2,7 +2,7 @@
   "name": "agent-insight-codex-trace",
   "displayName": "Agent Insight Codex Trace",
   "description": "Correlates Codex IDE file and terminal activity with Agent Insight traces.",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "publisher": "openeuler",
   "license": "Apache-2.0",
   "engines": {

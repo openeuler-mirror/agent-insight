@@ -245,6 +245,7 @@ export async function GET(request: Request) {
         .filter(Boolean)
         .slice(0, 200);
     const framework = searchParams.get('framework') || undefined;
+    const sourceKind = searchParams.get('sourceKind') || undefined;
     const skill = searchParams.get('skill') || undefined;
     const agentName = searchParams.get('agentName') || undefined;
     const ownershipParam = searchParams.get('ownership') || '';
@@ -324,6 +325,10 @@ export async function GET(request: Request) {
             upload_id: single.id,
             task_id: single.taskId,
             framework: single.framework,
+            trace_thread_id: single.traceThreadId,
+            source_execution_id: single.sourceExecutionId,
+            source_kind: single.sourceKind,
+            execution_status: single.executionStatus,
             agentName: single.agentName,
             timestamp: single.timestamp,
             // 单条查询带上 final_result:供 fault 详情在列表走 fields=light(不带 final_result)后按需回填。
@@ -369,6 +374,7 @@ export async function GET(request: Request) {
         taskIds: taskIds.length > 0 ? taskIds : undefined,
         agentName,
         framework,
+        sourceKind,
         skill,
         skillVersion,
         includeSubagents,
@@ -597,7 +603,7 @@ export async function GET(request: Request) {
             if (anomalyParam === 'all') return true;
             return String(record.anomalyStatus ?? record.anomaly_status ?? 'unknown') === anomalyParam;
         });
-        const statusOrder: Record<string, number> = { running: 0, timed_out: 1, failed: 2, success: 3 };
+        const statusOrder: Record<string, number> = { running: 0, interrupted: 1, timed_out: 1, failed: 2, success: 3 };
         statusFiltered.sort((a, b) => {
             let cmp = 0;
             if (sortParam === 'status') {

@@ -2716,9 +2716,9 @@ export async function GET(request: Request) {
             installProfile.goalPlusHosts,
             installProfile.autoAddedFrameworks.map(framework => framework.value),
         );
-        return new NextResponse(script, {
+        return new NextResponse('\uFEFF' + script, {
             headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Type': 'application/x-powershell; charset=utf-8',
                 'Cache-Control': 'no-store',
             },
         });
