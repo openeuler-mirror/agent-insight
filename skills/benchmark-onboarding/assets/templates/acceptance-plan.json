@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "benchmark-onboarding-plan/v1",
+  "benchmarkKey": "replace-me",
+  "scope": {
+    "label": "至少 3 个、通常 3–5 个跨类型真实 Case；分类与选样依据见验证矩阵",
+    "mode": "fixture",
+    "caseIds": [
+      "replace-case-id-type-a",
+      "replace-case-id-type-b",
+      "replace-case-id-type-c"
+    ]
+  },
+  "source": {
+    "url": "https://example.org/benchmark",
+    "codeRevision": "replace-with-pinned-revision",
+    "dataRevision": "replace-with-data-revision",
+    "split": "replace-with-split",
+    "license": "replace-with-verified-license",
+    "caseCount": 3
+  },
+  "baselineInputs": [
+    "{repo}/path-to-source-lock.json",
+    "{repo}/path-to-frozen-submissions.json",
+    "{repo}/path-to-official-score-wrapper.cjs"
+  ],
+  "implementationInputs": [
+    "{run}/path-to-existing-result-adapter.cjs",
+    "{repo}/path-to-deployment-lock.json",
+    "{repo}/scripts/benchmark/generate-catalog.cjs",
+    "{repo}/packages/benchmark-protocol/src/contracts.ts",
+    "{repo}/packages/benchmark-protocol/src/evaluation-contracts.ts",
+    "{repo}/packages/benchmark-protocol/src/evaluator-contracts.ts"
+  ],
+  "baseline": {
+    "argv": [],
+    "cwd": "{repo}",
+    "timeoutSeconds": 120
+  },
+  "tolerances": {},
+  "checks": [
+    {
+      "id": "source",
+      "category": "source",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "check"
+    },
+    {
+      "id": "visibility",
+      "category": "visibility",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "check"
+    },
+    {
+      "id": "interface-contracts",
+      "category": "regression",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "exit-code",
+      "stage": "interfaces",
+      "dependsOn": [
+        "workflow",
+        "catalog",
+        "source",
+        "visibility"
+      ]
+    },
+    {
+      "id": "evaluation-service",
+      "category": "regression",
+      "stage": "evaluation",
+      "required": true,
+      "dependsOn": [
+        "interface-contracts"
+      ],
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "check"
+    },
+    {
+      "id": "runtime",
+      "category": "runtime",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 120,
+      "resultMode": "check",
+      "dependsOn": [
+        "evaluation-service"
+      ]
+    },
+    {
+      "id": "regression",
+      "category": "regression",
+      "stage": "delivery",
+      "required": true,
+      "argv": [],
+      "cwd": "{repo}",
+      "timeoutSeconds": 600,
+      "resultMode": "exit-code",
+      "dependsOn": [
+        "runtime"
+      ]
+    }
+  ],
+  "analysisInputs": [
+    "{run}/integration-plan.md"
+  ]
+}

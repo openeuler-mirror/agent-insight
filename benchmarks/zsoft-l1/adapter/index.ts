@@ -47,7 +47,7 @@ function officialChecks(value: JsonValue | undefined): JsonValue {
 function officialSummary(input: NormalizeBenchmarkResultInput, raw: ZsoftResult): string | undefined {
   const artifacts = input.evidenceArtifacts
   const legacy = artifacts.filter(item => item.name === 'report.json' && item.kind === 'official-report' && item.mediaType === 'application/json')
-  if (artifacts.length === 1 && legacy.length === 1 && legacy[0].evaluationId === input.evaluationId && legacy[0].jsonContent !== undefined && canonicalJson(legacy[0].jsonContent) === canonicalJson(input.completion.rawResult)) return undefined
+  if (artifacts.filter(item => item.source !== 'platform').length === 1 && artifacts.every(item => item.evaluationId === input.evaluationId) && legacy.length === 1 && legacy[0].evaluationId === input.evaluationId && legacy[0].jsonContent !== undefined && canonicalJson(legacy[0].jsonContent) === canonicalJson(input.completion.rawResult)) return undefined
   const reports = artifacts.filter(item => item.name === 'evaluation.json' && item.kind === 'official-report' && item.mediaType === 'application/json')
   const records = artifacts.filter(item => item.name === 'record.json' && item.kind === 'official-record' && item.mediaType === 'application/json')
   const report = jsonObject(reports[0]?.jsonContent)

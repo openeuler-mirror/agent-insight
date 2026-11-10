@@ -130,7 +130,7 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
   function executionBinding(context) {
     const execution = project().execution
     const binding = bindingFor(execution.bindings, context.dataset.adapterKey, context.platform)
-    return binding ? { key: binding.profile, backendKey: 'xgovernor', local: execution.profiles[binding.profile] } : null
+    return binding ? { key: binding.profile, backendKey: execution.profiles[binding.profile]?.backend || 'xgovernor', local: execution.profiles[binding.profile] } : null
   }
   async function checkSandbox(context, binding) {
     const local = binding.local

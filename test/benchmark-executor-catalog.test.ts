@@ -15,17 +15,21 @@
  */
 
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test, { type TestContext } from 'node:test'
 
-const { generate } = require('../scripts/benchmark/generate-catalog.cjs')
+const { generate, loadPackage, loadPackageForOnboarding } = require('../scripts/benchmark/generate-catalog.cjs')
 const { createBenchmarkExecutor } = require('../services/executor/src/index.cjs')
 
 function fixture(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'executor-catalog-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const generator = path.join(root, 'scripts/benchmark/generate-catalog.cjs')
+  fs.mkdirSync(path.dirname(generator), { recursive: true })
+  fs.writeFileSync(generator, `module.exports = require(${JSON.stringify(require.resolve('../scripts/benchmark/generate-catalog.cjs'))})\n`)
   const packageDir = path.join(root, 'benchmarks', 'fixture')
   for (const directory of ['adapter', 'evaluator', 'schemas', 'executor']) {
     fs.mkdirSync(path.join(packageDir, directory), { recursive: true })
@@ -122,10 +126,40 @@ test('packages without a policy produce an empty registry', t => {
   assert.deepEqual(catalog.generatedExecutorPackageFiles, [])
 })
 
+test('onboarding rejects a missing environment entrypoint while legacy catalog builds remain compatible', t => {
+  const f = fixture(t)
+  assert.equal(loadPackage(f.packageDir).environmentPreparationPath, null)
+  assert.deepEqual(generate(f.root), ['fixture'])
+  assert.throws(() => loadPackageForOnboarding(f.packageDir), /新接入验收必须声明 executor\.environmentPreparation/)
+
+  const checked = spawnSync(process.execPath, [path.resolve(__dirname, '../skills/benchmark-onboarding/scripts/catalog-check.cjs'), f.root, 'fixture'], { encoding: 'utf8' })
+  assert.equal(checked.status, 1, checked.stderr)
+  assert.match(JSON.parse(checked.stdout).reason, /新接入验收必须声明 executor\.environmentPreparation/)
+})
+
+test('submission-only onboarding does not require an execution environment entrypoint', t => {
+  const f = fixture(t)
+  f.write('benchmark.yaml', f.manifest
+    .replace('  gitSourcePolicy: ./executor/policy.cjs\n', '  supported: false\n')
+    .replace('  requiredCapabilities: [git-workspace/v1, file/v1]', '  requiredCapabilities: []'))
+  const loaded = loadPackageForOnboarding(f.packageDir)
+  assert.equal(loaded.manifest.supportsAgentExecution, false)
+  assert.equal(loaded.environmentPreparationPath, null)
+  assert.deepEqual(generate(f.root), ['fixture'])
+
+  const checked = spawnSync(process.execPath, [path.resolve(__dirname, '../skills/benchmark-onboarding/scripts/catalog-check.cjs'), f.root, 'fixture'], { encoding: 'utf8' })
+  assert.equal(checked.status, 0, checked.stderr)
+  assert.equal(JSON.parse(checked.stdout).status, 'pass')
+})
+
 test('environment modules are distributed and fingerprinted without a Git source policy', t => {
   const f = fixture(t)
   f.write('executor/environment.cjs', 'module.exports = { checkEnvironment() {}, prepareEnvironment() {} }\n')
   f.write('benchmark.yaml', f.manifest.replace('  gitSourcePolicy: ./executor/policy.cjs\n', '  environmentPreparation:\n    protocol: execution-environment/v1\n    implementation: ./executor/environment.cjs\n'))
+  assert.equal(loadPackageForOnboarding(f.packageDir).environmentPreparationPath, path.join(f.packageDir, 'executor/environment.cjs'))
+  const checked = spawnSync(process.execPath, [path.resolve(__dirname, '../skills/benchmark-onboarding/scripts/catalog-check.cjs'), f.root, 'fixture'], { encoding: 'utf8' })
+  assert.equal(checked.status, 0, checked.stderr)
+  assert.equal(JSON.parse(checked.stdout).status, 'pass')
   generate(f.root)
   const generated = path.join(f.root, 'generated/benchmark-catalog')
   const catalog = require(path.join(generated, 'executors.cjs'))
@@ -136,6 +170,22 @@ test('environment modules are distributed and fingerprinted without a Git source
   f.write('executor/environment.cjs', 'module.exports = { checkEnvironment() { return "updated" }, prepareEnvironment() {} }\n')
   generate(f.root)
   assert.notEqual(fs.readFileSync(path.join(generated, 'catalog-lock.json'), 'utf8'), digest)
+})
+
+test('onboarding retains environment protocol, path and execution-mode validation', t => {
+  const f = fixture(t)
+  f.write('executor/environment.cjs', 'module.exports = { checkEnvironment() {}, prepareEnvironment() {} }\n')
+  const manifest = f.manifest.replace('  gitSourcePolicy: ./executor/policy.cjs\n', '  environmentPreparation:\n    protocol: execution-environment/v1\n    implementation: ./executor/environment.cjs\n')
+  for (const [source, expected] of [
+    [manifest.replace('execution-environment/v1', 'execution-environment/v2'), /环境准备协议不支持/],
+    [manifest.replace('./executor/environment.cjs', './executor/missing.cjs'), /不存在/],
+    [manifest.replace('./executor/environment.cjs', '../outside.cjs'), /包内/],
+    [manifest.replace('./executor/environment.cjs', './adapter/index.ts'), /CommonJS/],
+    [manifest.replace('executor:\n', 'executor:\n  supported: false\n'), /启用的执行端/],
+  ] as const) {
+    f.write('benchmark.yaml', source)
+    assert.throws(() => loadPackageForOnboarding(f.packageDir), expected)
+  }
 })
 
 test('catalog rejects invalid policy paths, formats and incompatible capabilities', t => {

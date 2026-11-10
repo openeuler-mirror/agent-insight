@@ -1027,10 +1027,13 @@ function createBenchmarkExecutor(options) {
   const policyEnforcer = options.policyEnforcer || new LocalPolicyEnforcer()
   const cleanupManager = options.cleanupManager || new WorkspaceCleanupManager()
   const executionConfig = options.executionConfig || executionCapabilities().config
-  const executionBackends = options.executionBackends || new ExecutionBackendRegistry([
-    ['local', new LocalExecutionBackend({ workspaceProviders, agentRuntimes, collectors, policyEnforcer, cleanupManager })],
-    ['xgovernor', new (require('./xgovernor/backend.cjs').XGovernorExecutionBackend)({ config: executionConfig, ...(!options.executionConfig ? { configProvider: () => executionCapabilities().config } : {}), baseDir, insightBaseUrl: options.insightBaseUrl, processRunner: runProcess, atomicWriteJson, GitPatchCollector })],
-  ])
+  const executionBackends = options.executionBackends || (() => {
+    const backendEntries = [['local', new LocalExecutionBackend({ workspaceProviders, agentRuntimes, collectors, policyEnforcer, cleanupManager, executionConfig, ...(!options.executionConfig ? { configProvider: () => executionCapabilities().config } : {}) })]]
+    if (Object.values(executionConfig.profiles).some(profile => (profile.backend || 'xgovernor') === 'xgovernor')) {
+      backendEntries.push(['xgovernor', new (require('./xgovernor/backend.cjs').XGovernorExecutionBackend)({ config: executionConfig, ...(!options.executionConfig ? { configProvider: () => executionCapabilities().config } : {}), baseDir, insightBaseUrl: options.insightBaseUrl, processRunner: runProcess, atomicWriteJson, GitPatchCollector })])
+    }
+    return new ExecutionBackendRegistry(backendEntries)
+  })()
   const runner = options.runner || new BenchmarkExecutionRunner({
     executionBackends, insightBaseUrl: options.insightBaseUrl,
     store,

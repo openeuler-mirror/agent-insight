@@ -652,3 +652,17 @@ Gateway 错误日志只包含 request ID、endpoint class、status、error code 
 - upstream 服务端原生 traffic mirror/OTel，以移除本机 inline Gateway 风险。
 
 若后续要求精确 `node_id ↔ runtime_id`、每次 backprop、memory provenance 或 UCT 全量回放，必须重新评审约束：这些信息当前不存在于可观察边界，不能通过继续增强外部推断可靠获得。
+
+## 23. 安装与运行边界
+
+安装与运行共用 `services/executor/src/mcts-config.cjs` 的路径、Python 和连接查询逻辑，并分发到客户端与采集器安装包。连接配置在独立子进程读取，只提取所需地址，不打印原始配置或凭据；连接预检不创建付费任务，也不证明模型和 E2B 全链路可用。上传模块随当前采集器版本安装，不能覆盖其他采集器依赖的共享模块。
+
+采集凭据来源与 Case spool 分开。标准安装从安装根目录读取公共配置，自定义布局遵循 `AGENT_INSIGHT_HOME`；显式进程凭据优先，显式清空公共凭据不得回退旧 JSON。配置读取失败应明确报错，不泄露 Key 或服务端响应正文。
+
+安装写入前和 MCTS 启动前执行 `preflightTrace`，通过空 OTLP 事件验证平台鉴权；该请求不产生任务 Trace，鉴权成功也不代替执行依赖就绪。运行中的凭据不热更新，历史上传失败数据通过独立恢复处理。
+
+每次运行读取真实上游地址并启动严格模式代理；专用 Python 包装在 MCTS 加载自身配置后恢复代理地址，再执行原解释器，保持虚拟环境依赖与采集路径。包装目录按次隔离并在退出时清理，不改用户的 MCTS 配置。Benchmark 提交物、执行能力和重试边界见[执行器实例实现](../../evaluation/benchmark/executor.md#11-zsoft-与-mcts-实例实现)。
+
+### 失败诊断与传播
+
+MCTS 的本地采集器从失败 HTTP 响应、`turn_failed`/带错误的终态与失败工具结果提取固定诊断码，写入本次 `runtime-ledger.json`。输出截断的失败工具事件不受普通观察队列背压丢弃；未恢复的诊断可将表面成功的 turn 标为错误。同轮后续成功写入不保留已恢复的截断状态，空补救轮次不会擦除先前证据。执行器仅在 `MCTS_RUN_FAILED` / `AGENT_NO_OUTPUT` 时读取本次有界 ledger，并结合进程错误，将 `MCTS_LLM_INSUFFICIENT_BALANCE` / `MCTS_LLM_OUTPUT_TRUNCATED` 的固定中文说明透传至现有失败回调；同时保留根 Trace、原异常 cause 和诊断码，不覆盖取消、超时或提交物校验错误。无需新增路由或修改外部 MCTS/xGovernor；上游完全未暴露的余额错误不能靠文件 404 推断。部署需同步更新客户端运行时、采集器自包含安装包与 standalone 文件追踪清单。

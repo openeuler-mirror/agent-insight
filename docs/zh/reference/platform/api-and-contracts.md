@@ -273,6 +273,8 @@ HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../obse
 
 客户端上报 `configuration: { version: 2, defaults }`，没有默认配置时使用 `{}`。交付方式、绑定和业务 Schema 保留在客户端 YAML，不再作为前端编辑或平台提交约束。客户端从这些私有配置计算契约摘要，平台将摘要作为不透明标识检查兼容性。旧快照中的 delivery/structure/schema 元数据可读取，但不约束 v2 参数内容；旧版逐字段协议仅作兼容，使用通用配置需升级客户端。
 
+Runtime 源码定义位于 `services/executor/runtimes/`，安装后实际读取 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/`。新客户端约每 30 秒重新读取并上报定义，改 YAML 后等待上报并刷新页面，或重启客户端加速生效。客户端在每个 platform 的 `parameterDefinitions` 上报描述和 `definitionDigest`，不包含执行绑定。共享模块为 `packages/agent-runtime/index.cjs`（协议、校验）、`parameter-json.cjs`（递归 JSON）与 `loader.cjs`（YAML、覆盖、交付）。任务使用 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }`；平台和执行端按选定 platform/agent 验证，契约不一致返回 `AGENT_DEFINITION_CHANGED`。
+
 以 MCTS 为例，客户端配置如下。默认值保留 CLI 原名，平台初始展示七个平铺字段，用户仍可在本次草稿中添加嵌套对象。
 
 ```yaml
@@ -444,7 +446,7 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 `POST /api/experiments` 的普通生成 Trace 和 Benchmark 数据集请求支持正整数 `executionConcurrency`，缺省 1；显式 Benchmark 请求放在 `benchmark.runConfig.executionConcurrency`，兼容旧 `maxParallelAgentCases` 字段。普通值写入 `configSnapshotJson`，Benchmark 写入冻结的 `runConfigJson`。Skill、FI 与已有 Trace 不使用这个设置。运行时使用冻结值，执行并发大于 1 要求客户端上报 `components.concurrent-execution/v1.ready=true`。
 
-`GET /api/experiments/:id` 返回适用实验的 `executionConcurrency`；Case 的 Benchmark 元数据增加 `evaluationWaitCode`，用于区分配额、镜像准备和镜像空间等待。评测服务 `/health` 返回 `maxConcurrency`、`activeCount`。同一个 `runId + requestDigest` 始终幂等，容量满返回可重试 `SERVICE_BUSY`，镜像未就绪返回 `IMAGE_POOL_PREPARING`；镜像仓库临时拉取失败返回可重试的 `IMAGE_POOL_PULL_FAILED`，平台保留待评测任务并重试下发。
+`GET /api/experiments/:id` 返回适用实验的 `executionConcurrency`；Case 的 Benchmark 元数据增加 `evaluationWaitCode`，用于区分配额、镜像准备和镜像空间等待。评测服务 `/health` 返回 `maxConcurrency`、`activeCount`。同一个 `runId + requestDigest` 始终幂等，容量满返回可重试 `SERVICE_BUSY`，需要镜像但镜像未就绪时返回 `IMAGE_POOL_PREPARING`；镜像需求为空时跳过镜像窗口及准备队列，仍执行资产、并发、幂等及任务状态校验。镜像需求返回非数组时为 `IMAGE_POOL_METADATA_INVALID`（HTTP 422、不可重试）。服务停止/任务取消返回 HTTP 409，保留对应控制原因（如 `SERVICE_STOPPED`、`EVALUATION_CANCELLED`）及 `retryable: false`，不能作为可重试镜像等待；镜像仓库临时拉取失败返回可重试的 `IMAGE_POOL_PULL_FAILED`，平台保留待评测任务并重试下发。
 
 镜像预取继续使用已有 `POST /api/v1/evaluations`：`operation=prepare-images` 支持 `revision + windows[]` 全量快照；每个窗口含 `benchmarkKey/evaluatorKey/experimentId/caseIds/cases`，总 Case 数不超过服务并发加 1。预取开关由 Evaluator 的 `/health` 报告给平台；准备消息保留摘要校验和单实验窗口兼容，无需额外令牌。
 

@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Benchmark onboarding plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmarkKey",
+    "scope",
+    "source",
+    "baselineInputs",
+    "implementationInputs",
+    "baseline",
+    "tolerances",
+    "checks",
+    "analysisInputs"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "benchmark-onboarding-plan/v1"
+    },
+    "benchmarkKey": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "mode",
+        "caseIds"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "enum": [
+            "live",
+            "fixture"
+          ]
+        },
+        "caseIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "codeRevision",
+        "dataRevision",
+        "split",
+        "license",
+        "caseCount"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "codeRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "split": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caseCount": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "baselineInputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "implementationInputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "baseline": {
+      "type": "object",
+      "required": [
+        "argv",
+        "cwd",
+        "timeoutSeconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 256
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "maxLogBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "仅限制命令 stdout/stderr 保存量；超过后标记截断，不终止任务。正式评测证据须独立完整保存。"
+        },
+        "terminationGraceSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "description": "取消或超时后 SIGTERM 到 SIGKILL 的宽限秒数，默认 5。"
+        }
+      }
+    },
+    "tolerances": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "category",
+          "required",
+          "argv",
+          "cwd",
+          "timeoutSeconds",
+          "resultMode"
+        ],
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 256
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
+          "category": {
+            "enum": [
+              "source",
+              "visibility",
+              "runtime",
+              "regression"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "resultMode": {
+            "enum": [
+              "check",
+              "exit-code"
+            ]
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true
+          },
+          "stage": {
+            "enum": [
+              "interfaces",
+              "evaluation",
+              "delivery"
+            ]
+          },
+          "maxLogBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "仅限制命令 stdout/stderr 保存量；超过后标记截断，不终止任务。正式评测证据须独立完整保存。"
+          },
+          "terminationGraceSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300,
+            "description": "取消或超时后 SIGTERM 到 SIGKILL 的宽限秒数，默认 5。"
+          }
+        }
+      }
+    },
+    "analysisInputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "引用已有接入方案，内容由 Agent 审阅，不要求专门的阶段登记。"
+    },
+    "catalog": {
+      "type": "object",
+      "required": [
+        "argv",
+        "cwd",
+        "timeoutSeconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 256
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "maxLogBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "仅限制命令 stdout/stderr 保存量；超过后标记截断，不终止任务。正式评测证据须独立完整保存。"
+        },
+        "terminationGraceSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "description": "取消或超时后 SIGTERM 到 SIGKILL 的宽限秒数，默认 5。"
+        }
+      },
+      "description": "可选目标版本校验桥接，写 {status:\"pass\",key,digest} 到 {output}，须调用等价的严格接入校验。"
+    }
+  }
+}
