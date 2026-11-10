@@ -1,0 +1,168 @@
+{
+  "purpose": "目标项目代码导航；路径和符号仅作查找线索，合同以当前源码、校验器及测试为准。按本次问题选读，不要求遍历全表。",
+  "files": [
+    {
+      "path": "docs/zh/how-to/evaluation/benchmarks/develop-benchmark.md",
+      "role": "guidance"
+    },
+    {
+      "path": "packages/benchmark-protocol/src/contracts.ts",
+      "role": "case-task-manifest-contracts",
+      "symbols": [
+        "BenchmarkManifest",
+        "AgentTaskEnvelope",
+        "BenchmarkDatasetLoader",
+        "validateTaskEnvelope"
+      ]
+    },
+    {
+      "path": "packages/benchmark-protocol/src/evaluation-contracts.ts",
+      "role": "submission-evaluation-contracts",
+      "symbols": [
+        "EvaluationJob",
+        "ValidateSubmissionInput"
+      ]
+    },
+    {
+      "path": "packages/benchmark-protocol/src/evaluator-contracts.ts",
+      "role": "evaluation-result-contracts",
+      "symbols": [
+        "NormalizedBenchmarkResult",
+        "BenchmarkEvaluator"
+      ]
+    },
+    {
+      "path": "packages/benchmark-protocol/src/json-schema.ts",
+      "role": "visibility-validation"
+    },
+    {
+      "path": "packages/benchmark-protocol/environment.d.cts",
+      "role": "environment-contract"
+    },
+    {
+      "path": "src/lib/benchmark/adapter-base.ts",
+      "role": "adapter-lifecycle-validation",
+      "symbols": [
+        "AbstractBenchmarkAdapter",
+        "splitCase",
+        "createAgentTask",
+        "createEvaluationRequest",
+        "createNormalizedResult"
+      ]
+    },
+    {
+      "path": "scripts/benchmark/generate-catalog.cjs",
+      "role": "catalog-validation",
+      "symbols": [
+        "loadPackageForOnboarding"
+      ]
+    },
+    {
+      "path": "services/evaluator/src/evaluator-registry.cjs",
+      "role": "entrypoint-input-output-contracts"
+    },
+    {
+      "path": "packages/project-config/index.cjs",
+      "role": "configuration-loading-validation",
+      "symbols": [
+        "loadProjectConfig"
+      ]
+    },
+    {
+      "path": "packages/project-config/index.d.cts",
+      "role": "configuration-types"
+    },
+    {
+      "path": "docs/zh/how-to/evaluation/benchmarks/deploy-services.md",
+      "role": "configuration-deployment-guidance"
+    },
+    {
+      "path": "docs/zh/reference/platform/api-and-contracts.md",
+      "role": "runtime-parameter-guidance"
+    },
+    {
+      "path": "packages/benchmark-protocol/execution.cjs",
+      "role": "execution-profile-validation"
+    },
+    {
+      "path": "packages/benchmark-protocol/execution.d.cts",
+      "role": "execution-profile-types"
+    },
+    {
+      "path": "packages/benchmark-protocol/schemas/agent-task.schema.json",
+      "role": "agent-task-schema"
+    },
+    {
+      "path": "packages/project-config/execution.cjs",
+      "role": "execution-backend-configuration-dispatch"
+    },
+    {
+      "path": "packages/project-config/execution/local.cjs",
+      "role": "native-profile-configuration"
+    },
+    {
+      "path": "packages/project-config/execution/xgovernor.cjs",
+      "role": "xgovernor-profile-configuration-compatibility"
+    },
+    {
+      "path": "services/executor/src/execution-config.cjs",
+      "role": "execution-backend-probe-dispatch"
+    },
+    {
+      "path": "services/executor/src/local-profile.cjs",
+      "role": "native-runtime-trace-probe"
+    },
+    {
+      "path": "services/executor/src/xgovernor/profile.cjs",
+      "role": "xgovernor-dependency-probe"
+    },
+    {
+      "path": "services/executor/src/execution-backend.cjs",
+      "role": "native-backend-policy-validation"
+    },
+    {
+      "path": "services/executor/src/xgovernor/backend.cjs",
+      "role": "xgovernor-backend-policy-validation"
+    },
+    {
+      "path": "services/executor/src/index.cjs",
+      "role": "execution-backend-registration"
+    },
+    {
+      "path": "scripts/reliability-client.cjs",
+      "role": "execution-capability-reporting"
+    },
+    {
+      "path": "src/lib/benchmark/execution-targets.ts",
+      "role": "execution-profile-binding-matching"
+    },
+    {
+      "path": "packages/benchmark-protocol/artifact-path.cjs",
+      "role": "evidence-names-provenance-inventory-validation"
+    },
+    {
+      "path": "services/evaluator/src/evidence-collection.cjs",
+      "role": "evidence-directory-collection-and-digests"
+    },
+    {
+      "path": "services/evaluator/src/service.cjs",
+      "role": "evidence-upload-and-failure-delivery"
+    },
+    {
+      "path": "src/lib/benchmark/evidence-artifacts.ts",
+      "role": "evidence-byte-integrity-and-json-parsing"
+    },
+    {
+      "path": "src/lib/benchmark/evaluation-callback-service.ts",
+      "role": "evidence-completion-validation"
+    },
+    {
+      "path": "src/components/eval/BenchmarkArtifactActions.tsx",
+      "role": "original-artifact-preview-and-source-display"
+    },
+    {
+      "path": "src/app/api/benchmark/v1/evaluations/[evaluationId]/artifacts/[artifactId]/content/route.ts",
+      "role": "evidence-unicode-download"
+    }
+  ]
+}

@@ -15,7 +15,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 import { bucketStarts, normalizeWindow, planOf } from '@/lib/fleet/agg';
 import { aggregateFleetReliability, type ReliabilityEventRow, type ReliabilityExecutionRow } from '@/lib/fleet/reliability';
 import { prisma } from '@/lib/storage/prisma';
@@ -27,13 +27,14 @@ const TASK_ID_CHUNK = 400;
 export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
-        const { username } = await resolveUser(req, url.searchParams.get('user'));
+        const { username, user } = await resolveTraceReadScope(req);
+        if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
         const window = normalizeWindow(url.searchParams.get('window'));
         const plan = planOf(window);
         const now = new Date();
         const starts = bucketStarts(now, plan);
         const from = new Date(starts[0]);
-        const userFilter = username ? { user: username } : {};
+        const userFilter = user ? { user } : {};
 
         const rows = (await prisma.execution.findMany({
             where: { ...userFilter, isSubagent: false, timestamp: { gte: from } },
@@ -49,7 +50,7 @@ export async function GET(req: Request) {
             const events = await prisma.rasAnomalyEvent.findMany({
                 where: {
                     taskId: { in: chunk },
-                    ...(username ? { OR: [{ user: username }, { user: null }] } : {}),
+                    ...(user ? { OR: [{ user }, { user: null }] } : {}),
                 },
                 orderBy: { ts: 'asc' },
                 select: {

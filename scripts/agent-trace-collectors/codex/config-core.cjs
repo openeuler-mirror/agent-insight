@@ -25,6 +25,7 @@ const { HOOK_EVENTS, MATCHER_EVENTS } = require("./codex-trace-core.cjs");
 
 const OTEL_BEGIN = "# BEGIN AGENT INSIGHT CODEX OTEL";
 const OTEL_END = "# END AGENT INSIGHT CODEX OTEL";
+const COLLECTOR_VERSION = "0.2.1";
 
 async function atomicWriteFile(filePath, source, mode = 0o600) {
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -266,6 +267,7 @@ function uninstallOtelBlock(source, previousBlock) {
 }
 
 module.exports = {
+  COLLECTOR_VERSION,
   OTEL_BEGIN,
   OTEL_END,
   atomicWriteFile,

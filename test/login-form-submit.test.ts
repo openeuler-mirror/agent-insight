@@ -44,6 +44,7 @@ function formHarness(username: string, response = Response.json({ username: 'per
     React,
     username,
     error,
+    locale: 'zh',
     colors: {},
     t: (key: string) => key,
     setUsername: (value: string) => { currentUsername = value; },
@@ -86,6 +87,15 @@ test('邮箱表单提交阻止页面刷新，去除首尾空白并完成登录',
   assert.equal(harness.requests[0].options.method, 'POST');
   assert.deepEqual(JSON.parse(String(harness.requests[0].options.body)), { username: 'person@example.com' });
   assert.deepEqual(harness.logins, [['person@example.com', 'test-key']]);
+});
+
+test('默认 admin 账号可以通过同一登录表单提交', async () => {
+  const harness = formHarness('admin', Response.json({ username: 'admin', apiKey: 'admin-test-key' }));
+  const input = descendants(harness.form).find(element => element.type === 'input');
+  assert.equal(input?.props.type, 'text');
+  await harness.submit();
+  assert.deepEqual(JSON.parse(String(harness.requests[0].options.body)), { username: 'admin' });
+  assert.deepEqual(harness.logins, [['admin', 'admin-test-key']]);
 });
 
 test('登录按钮作为表单提交入口，保留应用已有校验路径', () => {

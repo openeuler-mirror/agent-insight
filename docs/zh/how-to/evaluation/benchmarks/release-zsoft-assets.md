@@ -147,6 +147,6 @@ python3 scripts/benchmark/pack-zsoft-assets.py \
 npm run benchmark:catalog
 ```
 
-平台与 Controller 部署同一份匹配 Catalog 的代码。完整资产版本、题目内容摘要及镜像 ID 的契约见 [Benchmark 接入开发规范](./develop-benchmark.md#zsoft-公有镜像与冻结资产)。
+平台与 Controller 部署同一份匹配 Catalog 的代码。资产校验实现见[ZSoft Evaluator 开发设计](../../../../../design/evaluation/benchmark/evaluator.md#10-zsoft-实例开发与对照验证)。
 
 按 [ZSoft 部署验收](./deploy-zsoft.md#5-部署验收) 在实际评测环境验证 userspace 和内核题，保留正确/错误提交、编译失败、超时、取消和资源清理记录。镜像发布、匿名拉取及摘要核对成功只代表资产可分发，不代表 Judge、QEMU 或 MCTS 全链路已验收。

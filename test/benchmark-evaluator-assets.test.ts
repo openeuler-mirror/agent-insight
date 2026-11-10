@@ -34,7 +34,7 @@ const descriptor = {
 }
 
 async function fixture(t: TestContext, settings: { custom?: boolean, pullFails?: boolean, corrupt?: boolean, shared?: boolean } = {}) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'evaluator-assets-'))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'evaluator-assets-')))
   t.after(() => fs.rm(directory, { recursive: true, force: true }))
   const calls: string[][] = []
   const base = settings.custom ? path.join(directory, 'custom') : path.join(directory, 'benchmark-assets/fixture')

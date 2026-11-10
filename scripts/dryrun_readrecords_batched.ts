@@ -30,7 +30,6 @@
  * execution_match 命中——任一随批大小变化都会让 diff 失败。
  */
 import fs from 'node:fs';
-import path from 'node:path';
 import { resolveAgentInsightDataPath } from '../src/lib/env';
 
 // 防御:DATABASE_URL 未注入时回落到统一运行时 SQLite。

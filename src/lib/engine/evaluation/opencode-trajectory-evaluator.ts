@@ -49,6 +49,7 @@ import {
     normalizeProviderID,
 } from '@/lib/engine/general-agent/server-model-config';
 import { ChatOpenAI } from '@langchain/openai';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { hasEvaluatorExecutionPolicy, runConfiguredEvaluationStage } from '../experiment/evaluator-execution-policy';
 import { remainingEvaluationTimeMs, trackEvaluationRequest } from '../experiment/evaluation-attempt';
 import { experimentSignal } from '../experiment/cancellation-context';
@@ -544,6 +545,7 @@ function makeDirectModel(config: ModelConfig) {
         configuration: {
             baseURL: config.baseUrl || 'https://api.deepseek.com',
             defaultHeaders: config.headers,
+            fetch: getModelFetch(),
         },
         temperature: 0,
         topP: 1,

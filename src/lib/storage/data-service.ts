@@ -15,11 +15,11 @@
  */
 
 import { withTraceTiming, timeTraceStage, traceTimingEvent, beginTraceStage } from '@/lib/logger/trace-timing';
-import type { Prisma } from '@prisma/client';
 import { aggregateExecutionList, selectExecutionListIds } from '@/lib/storage/execution-list-sql';
 import { selectComputedRecordPage, type ComputedRecordPageOptions } from '@/lib/storage/computed-record-page';
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import { resolveAgentInsightDataPath } from '@/lib/env';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
 import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
@@ -53,7 +53,7 @@ import { chooseExecutionLabel } from '@/lib/engine/evaluation/label-utils';
 import { parseLabelSkillVersionBinding } from '@/lib/engine/evaluation/label-skill-binding';
 import { extractKeyActionsFromFlow, mergeKeyActionsFromMultipleSkills, type ExtractedKeyAction, type ParsedFlowResult } from '@/lib/engine/observability/flow-parser';
 import { mergeSessionInteractionsMonotonic } from '@/lib/engine/observability/session-interactions-merge';
-import { buildAgentCallTree, getAgentActiveDurationMs, inferSubagentType, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, getAgentActiveDurationMs, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
@@ -65,6 +65,7 @@ import { goalPlusProjectedWorkerExecutionWhere } from '@/lib/ingest/collaboratio
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
+    findExecutionIdsByUserTags,
     getTraceTagsByExecutionIds,
     type TraceTagDto,
 } from '@/lib/trace-tags';
@@ -337,6 +338,13 @@ export interface ExecutionRecord {
     task_id?: string;
     query?: string;
     framework?: string;
+    sourceThreadId?: string;
+    sourceExecutionId?: string;
+    sourceKind?: string;
+    executionStatus?: string;
+    traceThreadId?: string;
+    traceThread?: TraceThreadRecord;
+    threadOnly?: boolean;
     tokens?: number;
     cost?: number;
     latency?: number;
@@ -402,6 +410,27 @@ export interface ExecutionRecord {
     routing_evaluation?: RoutingEvaluationSnapshot;
     outcome_evaluation?: OutcomeEvaluationSnapshot;
     [key: string]: any;
+}
+
+export interface TraceThreadEventRecord {
+    eventKey: string;
+    kind: 'execution_transition' | 'context_compaction' | 'input_steer' | 'interrupt' | string;
+    status?: string;
+    sourceTurnId?: string;
+    relatedSourceTurnId?: string;
+    phaseId?: string;
+    startedAt: string | Date;
+    completedAt?: string | Date | null;
+    payload?: Record<string, unknown>;
+}
+
+export interface TraceThreadRecord {
+    sourceThreadId: string;
+    sourceKind?: string;
+    startedAt?: string | Date | null;
+    updatedAt?: string | Date | null;
+    metadata?: Record<string, unknown>;
+    events?: TraceThreadEventRecord[];
 }
 
 function toTraceLifecycleMs(value: unknown): number | null {
@@ -1238,6 +1267,7 @@ interface ReadRecordFilters {
     taskIds?: string[];
     agentName?: string;
     framework?: string;
+    sourceKind?: string;
     skill?: string;
     skillVersion?: number;
     showAllUsers?: boolean;
@@ -1256,6 +1286,7 @@ interface ReadRecordFilters {
     clauses?: FilterClause[];
     /** business 标签筛选，值为 Tag.id，支持多个 OR 命中 */
     businessTagIds?: string[];
+    userTagIds?: string[];
     /** Trace 列表顶部时间筛选换算后的起始时间。 */
     timestampFrom?: Date;
     /** Trace 列表 Agent 归属筛选；按现有 RegisteredAgent + 内置系统 Agent 规则下推。 */
@@ -1430,7 +1461,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
  * 某个分类列的观测值 + 出现次数,给过滤器值下拉(facet)用 —— 对标 langfuse SUGGESTIONS 的「值 + 件数」。
  * 仅允许白名单内的真实标量列 groupBy(防任意列注入);root 作用域、按 user 隔离,与其它 facet 口径一致。
  */
-const FACETABLE_COLUMNS = new Set(['framework', 'agentName', 'model', 'subagentType']);
+const FACETABLE_COLUMNS = new Set(['framework', 'sourceKind', 'agentName', 'model', 'subagentType', 'user']);
 export async function listObservedFieldValues(
     column: string,
     user?: string,
@@ -1507,7 +1538,8 @@ export async function listObservedTraceIds(
 // 注意:必须只含真实列名——例如 expectedSkillVersion 不是 Execution 列(今天即恒 undefined→null),不能放入。
 // 导出供测试断言"不含 finalResult"。
 export const LIGHT_EXECUTION_SELECT: Record<string, boolean> = {
-    id: true, taskId: true, query: true, framework: true, tokens: true, cost: true, latency: true,
+    id: true, taskId: true, query: true, framework: true, traceThreadId: true,
+    sourceExecutionId: true, sourceKind: true, executionStatus: true, tokens: true, cost: true, latency: true,
     toolCallCount: true, llmCallCount: true, inputTokens: true, outputTokens: true, toolCallErrorCount: true,
     cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true, reasoningTokens: true,
     timestamp: true, lastIngestedAt: true, model: true, clientId: true, hostIp: true, hostName: true, observedIp: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
@@ -1610,6 +1642,7 @@ async function hydrateAndNormalizeBatch(
         light: boolean;
         attachEvaluations: boolean;
         includeTags: boolean;
+        allUsers?: boolean;
         getConfigsForEvaluationUser: (evaluationUser?: string | null) => Promise<ConfigItem[]>;
     },
 ): Promise<ExecutionRecord[]> {
@@ -1621,7 +1654,7 @@ async function hydrateAndNormalizeBatch(
     // 这是列表页"频繁大量重复解析 → 卡死"的根因;去掉后 hydrate 与数据量解耦,light/heavy 仅差 finalResult。
     const execIds = batch.map((r: any) => r.id);
     const tagsByExec = includeTags
-        ? await getTraceTagsByExecutionIds(execIds, user).catch((e: unknown) => {
+        ? await getTraceTagsByExecutionIds(execIds, user, { allUsers: ctx.allUsers }).catch((e: unknown) => {
             console.warn('[readRecords] trace tag batch fetch failed:', e);
             return new Map<string, TraceTagDto[]>();
         })
@@ -1784,6 +1817,15 @@ async function hydrateAndNormalizeBatch(
             task_id: r.taskId || undefined,
             query: r.query || undefined,
             framework: r.framework || undefined,
+            traceThreadId: r.traceThreadId || undefined,
+            sourceThreadId: r.traceThread?.sourceThreadId || undefined,
+            sourceExecutionId: r.sourceExecutionId || undefined,
+            sourceKind: r.sourceKind || undefined,
+            executionStatus: r.executionStatus || undefined,
+            trace_thread_id: r.traceThreadId || undefined,
+            source_execution_id: r.sourceExecutionId || undefined,
+            source_kind: r.sourceKind || undefined,
+            execution_status: r.executionStatus || undefined,
             agent: r.agentName || undefined,
             agentName: r.agentName || undefined,
             // 归属兜底：已知系统/内置 Agent 名（评估器等）一律判 system，与 framework 无关。
@@ -1957,6 +1999,7 @@ async function readRecordsInternal(
         }
     }
     if (filters?.framework) where.framework = filters.framework;
+    if (filters?.sourceKind) where.sourceKind = filters.sourceKind;
 
     if (skillFilterActive) {
         // 反查 ExecutionSkill 得到真正用到这些 skill(+可选版本)的 executionId 集合,再交给 Execution 主查询。
@@ -2002,10 +2045,13 @@ async function readRecordsInternal(
 
     await appendExecutionOwnershipWhere(where, filters?.ownership);
 
-    const businessTagIds = Array.from(new Set((filters?.businessTagIds ?? []).map(v => String(v || '').trim()).filter(Boolean)));
-    if (businessTagIds.length > 0) {
-        const taggedExecutionIds = await findExecutionIdsByBusinessTags(user, businessTagIds).catch((e: unknown) => {
-            console.warn('[readRecords] business tag filter failed:', e);
+    for (const [tagIds, findTaggedIds] of [
+        [filters?.userTagIds ?? [], findExecutionIdsByUserTags],
+        [filters?.businessTagIds ?? [], findExecutionIdsByBusinessTags],
+    ] as const) {
+        if (tagIds.length === 0) continue;
+        const taggedExecutionIds = await findTaggedIds(user, tagIds, { allUsers: filters?.showAllUsers }).catch((e: unknown) => {
+            console.warn('[readRecords] trace tag filter failed:', e);
             return [] as string[];
         });
         if (taggedExecutionIds) {
@@ -2086,7 +2132,9 @@ async function readRecordsInternal(
             process.env.DB_HOST ? { timestamp: 'desc' } : orderBy,
             LIGHT_EXECUTION_SELECT,
         );
-        const dedup = selectKeepIdsByTaskId(records);
+        const dedup = filters?.showAllUsers
+            ? { keepIds: new Set<string>(records.map((record: DedupRow) => record.id)), byTaskId: new Map<string, DedupRow[]>() }
+            : selectKeepIdsByTaskId(records);
         keepIds = dedup.keepIds;
         byTaskId = dedup.byTaskId;
         const filtered = records.filter((r: any) => (!r.taskId || keepIds.has(r.id)) && !filters?.excludedTaskIds?.includes(r.taskId));
@@ -2134,6 +2182,7 @@ async function readRecordsInternal(
             light,
             attachEvaluations,
             includeTags: options?.includeTags === true,
+            allUsers: filters?.showAllUsers,
             getConfigsForEvaluationUser,
         });
         out.push(...normalizedBatch);
@@ -2366,6 +2415,142 @@ async function normalizeLegacyCodexSessionHistory(
     });
 }
 
+const TRACE_THREAD_STORAGE_ENABLED = !process.env.DB_HOST;
+
+function traceThreadDate(value: string | Date | null | undefined): Date | undefined {
+    if (!value) return undefined;
+    const parsed = value instanceof Date ? value : new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed : undefined;
+}
+
+function traceThreadPayload(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return value as Record<string, unknown>;
+}
+
+export function scopeTraceThreadEventKey(
+    user: string,
+    framework: string,
+    sourceThreadId: string,
+    eventKey: string,
+): string {
+    const scope = createHash('sha256')
+        .update(`${user}\u0000${framework}\u0000${sourceThreadId}`)
+        .digest('hex')
+        .slice(0, 24);
+    return `trace-thread:${scope}:${eventKey}`;
+}
+
+async function persistTraceThreadRecord(
+    data: ExecutionRecord,
+    recordId?: string,
+): Promise<string | undefined> {
+    const input = data.traceThread;
+    if (!TRACE_THREAD_STORAGE_ENABLED || !input?.sourceThreadId || !data.framework || !data.user) {
+        return data.traceThreadId;
+    }
+
+    const startedAt = traceThreadDate(input.startedAt);
+    const updatedAt = traceThreadDate(input.updatedAt) || startedAt;
+    const thread = await prismaRaw.traceThread.upsert({
+        where: {
+            user_framework_sourceThreadId: {
+                user: data.user,
+                framework: data.framework,
+                sourceThreadId: input.sourceThreadId,
+            },
+        },
+        create: {
+            framework: data.framework,
+            sourceThreadId: input.sourceThreadId,
+            sourceKind: input.sourceKind || data.sourceKind,
+            user: data.user,
+            startedAt,
+            updatedAt,
+            metadataJson: input.metadata ? JSON.stringify(input.metadata) : null,
+        },
+        update: {
+            sourceKind: input.sourceKind || data.sourceKind,
+            ...(startedAt ? { startedAt } : {}),
+            ...(updatedAt ? { updatedAt } : {}),
+            ...(input.metadata ? { metadataJson: JSON.stringify(input.metadata) } : {}),
+        },
+    });
+
+    for (const event of input.events || []) {
+        const eventStartedAt = traceThreadDate(event.startedAt);
+        if (!event.eventKey || !event.kind || !eventStartedAt) continue;
+        const scopedEventKey = scopeTraceThreadEventKey(
+            data.user,
+            data.framework,
+            input.sourceThreadId,
+            event.eventKey,
+        );
+        const eventCompletedAt = traceThreadDate(event.completedAt);
+        const primaryExecutionId = !data.threadOnly && recordId && event.sourceTurnId === data.sourceExecutionId
+            ? recordId
+            : undefined;
+        const payload = {
+            ...traceThreadPayload(event.payload),
+            ...(event.relatedSourceTurnId ? { relatedSourceExecutionId: event.relatedSourceTurnId } : {}),
+        };
+        const values = {
+            traceThreadId: thread.id,
+            executionId: primaryExecutionId,
+            relatedExecutionId: undefined,
+            kind: event.kind,
+            status: event.status,
+            sourceTurnId: event.sourceTurnId,
+            phaseId: event.phaseId,
+            startedAt: eventStartedAt,
+            completedAt: eventCompletedAt,
+            payloadJson: Object.keys(payload).length > 0 ? JSON.stringify(payload) : null,
+        };
+        await prismaRaw.traceThreadEvent.upsert({
+            where: { eventKey: scopedEventKey },
+            create: { eventKey: scopedEventKey, ...values },
+            update: values,
+        });
+    }
+    return thread.id;
+}
+
+async function reconcileTraceThreadExecutions(traceThreadId: string | undefined): Promise<void> {
+    if (!TRACE_THREAD_STORAGE_ENABLED || !traceThreadId) return;
+    const executions = await prismaRaw.execution.findMany({
+        where: { traceThreadId, sourceExecutionId: { not: null } },
+        select: { id: true, sourceExecutionId: true },
+    });
+    const bySourceId = new Map(executions
+        .filter((item) => item.sourceExecutionId)
+        .map((item) => [item.sourceExecutionId as string, item.id]));
+    if (bySourceId.size === 0) return;
+
+    const events = await prismaRaw.traceThreadEvent.findMany({
+        where: { traceThreadId },
+        select: {
+            id: true,
+            sourceTurnId: true,
+            executionId: true,
+            relatedExecutionId: true,
+            payloadJson: true,
+        },
+    });
+    for (const event of events) {
+        let payload: Record<string, unknown> = {};
+        try { payload = traceThreadPayload(event.payloadJson ? JSON.parse(event.payloadJson) : {}); } catch {}
+        const primarySourceId = event.sourceTurnId || String(payload.previousSourceExecutionId || '');
+        const relatedSourceId = String(payload.relatedSourceExecutionId || payload.nextSourceExecutionId || '');
+        const executionId = primarySourceId ? bySourceId.get(primarySourceId) : undefined;
+        const relatedExecutionId = relatedSourceId ? bySourceId.get(relatedSourceId) : undefined;
+        if (executionId === event.executionId && relatedExecutionId === event.relatedExecutionId) continue;
+        await prismaRaw.traceThreadEvent.update({
+            where: { id: event.id },
+            data: { executionId, relatedExecutionId },
+        });
+    }
+}
+
 export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
     return withTraceTiming({ scope: 'save', traceId: data.task_id, uploadId: data.upload_id, framework: data.framework },
         () => saveExecutionRecordInternal(data, options));
@@ -2399,6 +2584,15 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         } catch {}
     }
 
+    const persistedTraceThreadId = await persistTraceThreadRecord(data, recordId);
+    if (data.threadOnly) {
+        await reconcileTraceThreadExecutions(persistedTraceThreadId);
+        return {
+            success: true,
+            record: { ...data, traceThreadId: persistedTraceThreadId, interactions: [] },
+        };
+    }
+
     let existingRecord: ExecutionRecord | null = null;
     const dbRecord = await timeTraceStage('execution-read', () => db.findExecutionById(recordId));
 
@@ -2412,6 +2606,10 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             task_id: dbRecord.taskId || undefined,
             query: dbRecord.query || undefined,
             framework: dbRecord.framework || undefined,
+            traceThreadId: dbRecord.traceThreadId || undefined,
+            sourceExecutionId: dbRecord.sourceExecutionId || undefined,
+            sourceKind: dbRecord.sourceKind || undefined,
+            executionStatus: dbRecord.executionStatus || undefined,
             tokens: dbRecord.tokens ?? undefined,
             cost: dbRecord.cost ?? undefined,
             latency: dbRecord.latency ?? undefined,
@@ -2680,7 +2878,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                     const validExpectedSkills = expectedSkillsList.filter(e => e.skill?.trim());
                     
                     const skillNames = validExpectedSkills.map(e => e.skill.trim());
-                    let skillsMap = new Map<string, any>();
+                    const skillsMap = new Map<string, any>();
                     
                     if (skillNames.length > 0) {
                         try {
@@ -2854,6 +3052,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         skill: targetRecord.skill,
         skillVersion: targetRecord.skill_version ?? null
     });
+    targetRecord.traceThreadId = persistedTraceThreadId || targetRecord.traceThreadId;
 
     const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(targetRecord.framework);
     const storedAgentName = targetRecord.agentName || frameworkPrimaryAgentName;
@@ -2931,6 +3130,10 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             taskId: targetRecord.task_id,
             query: targetRecord.query,
             framework: targetRecord.framework,
+            traceThreadId: targetRecord.traceThreadId,
+            sourceExecutionId: targetRecord.sourceExecutionId,
+            sourceKind: targetRecord.sourceKind,
+            executionStatus: targetRecord.executionStatus,
             tokens: targetRecord.tokens,
             cost: targetRecord.cost,
             latency: targetRecord.latency,
@@ -2974,6 +3177,10 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             taskId: targetRecord.task_id,
             query: targetRecord.query,
             framework: targetRecord.framework,
+            traceThreadId: targetRecord.traceThreadId,
+            sourceExecutionId: targetRecord.sourceExecutionId,
+            sourceKind: targetRecord.sourceKind,
+            executionStatus: targetRecord.executionStatus,
             tokens: targetRecord.tokens,
             cost: targetRecord.cost,
             latency: targetRecord.latency,
@@ -3016,6 +3223,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
     }));
     traceTimingEvent('execution-written', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
     const finishPostExecution = beginTraceStage('post-execution');
+    await reconcileTraceThreadExecutions(targetRecord.traceThreadId);
 
     if (data.upload_id && data.task_id && data.upload_id !== recordId) {
         try {

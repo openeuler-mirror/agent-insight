@@ -41,6 +41,7 @@ function read(relativePath: string): string {
 
 function parsePowerShell(source: string): void {
   const command = [
+    "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
     "$source = [Console]::In.ReadToEnd()",
     "$tokens = $null",
     "$errors = $null",
@@ -52,6 +53,33 @@ function parsePowerShell(source: string): void {
     input: source,
   })
   assert.equal(result.status, 0, result.stderr || result.stdout)
+}
+
+function parsePowerShell51DownloadedFile(source: string): void {
+  if (process.platform !== "win32") return
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-codex-ps51-"))
+  const scriptPath = path.join(tempDir, "setup.ps1")
+  try {
+    // Invoke-WebRequest writes the response bytes as-is; preserve the response BOM when present.
+    fs.writeFileSync(scriptPath, Buffer.from(source, "utf8"))
+    const command = [
+      "$tokens = $null",
+      "$errors = $null",
+      "[System.Management.Automation.Language.Parser]::ParseFile($env:AGENT_INSIGHT_PARSE_TARGET, [ref]$tokens, [ref]$errors) | Out-Null",
+      "if ($errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }",
+    ].join("; ")
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        AGENT_INSIGHT_PARSE_TARGET: scriptPath,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
 }
 
 async function centralScript(platform: "unix" | "windows", frameworks?: string): Promise<string> {
@@ -69,6 +97,23 @@ async function centralScript(platform: "unix" | "windows", frameworks?: string):
   ))
   assert.equal(response.status, 200)
   return response.text()
+}
+
+async function centralDownloadedScript(platform: "unix" | "windows", frameworks?: string): Promise<string> {
+  const params = new URLSearchParams({ key: "test-key", nokey: "1" })
+  if (frameworks !== undefined) params.set("frameworks", frameworks)
+  const response = await getCentralSetup(new Request(
+    `https://insight.example/api/ingest/setup?${params}`,
+    {
+      headers: {
+        host: "insight.example",
+        "x-forwarded-proto": "https",
+        "x-platform": platform,
+      },
+    },
+  ))
+  assert.equal(response.status, 200)
+  return Buffer.from(await response.arrayBuffer()).toString("utf8")
 }
 
 async function autoScript(platform: "unix" | "windows", frameworks?: string): Promise<string> {
@@ -89,6 +134,26 @@ async function autoScript(platform: "unix" | "windows", frameworks?: string): Pr
   ))
   assert.equal(response.status, 200)
   return response.text()
+}
+
+async function autoDownloadedScript(platform: "unix" | "windows", frameworks?: string): Promise<string> {
+  const params = new URLSearchParams({
+    apiKey: "test-key",
+    host: "insight.example",
+  })
+  if (frameworks !== undefined) params.set("frameworks", frameworks)
+  const response = await getAutoSetup(new Request(
+    `https://insight.example/api/setup/auto?${params}`,
+    {
+      headers: {
+        host: "insight.example",
+        "x-forwarded-proto": "https",
+        "x-platform": platform,
+      },
+    },
+  ))
+  assert.equal(response.status, 200)
+  return Buffer.from(await response.arrayBuffer()).toString("utf8")
 }
 
 function genericEvent(completion: string, latencyMs: number): OtelTraceEvent {
@@ -179,6 +244,18 @@ test("generated Codex Bash and PowerShell setup scripts pass native syntax parse
     assert.match(script, /& \$codexInstaller/)
     assert.doesNotMatch(script, /\[scriptblock\]::Create/)
   }
+})
+
+test("central and auto Codex PowerShell setup parse in Windows PowerShell 5.1 after download", async () => {
+  parsePowerShell51DownloadedFile(await centralDownloadedScript("windows", "codex"))
+  parsePowerShell51DownloadedFile(await autoDownloadedScript("windows", "codex"))
+})
+
+test("standalone builds use the standalone server entrypoint", () => {
+  const packageJson = JSON.parse(read("package.json")) as { scripts?: { start?: string } }
+  // 446-4：npm start 走启动器（同步 .next/static 与 public 后拉起 standalone
+  // server），不再裸跑 server.js——干净 build→start 的静态资源会 404。
+  assert.equal(packageJson.scripts?.start, "node scripts/start-standalone.cjs")
 })
 
 test("CLI exposes framework preselection and detects the installed local package", async () => {

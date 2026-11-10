@@ -198,7 +198,7 @@ export class UploadEngine implements vscode.Disposable {
         this.tiktokenEncoder = tiktoken.encodingForModel('gpt-4o')
       }
       return this.tiktokenEncoder.encode(text).length
-    } catch (e) {
+    } catch {
       return this.estimateTokens(text)
     }
   }

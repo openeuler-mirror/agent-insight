@@ -60,8 +60,9 @@ test('benchmark package catalog is reproducible and keeps business adapters and 
   )
   assert.deepEqual(listBenchmarkAdapters().map((item) => item.adapterKey), ['swe-bench', 'zsoft-l1'])
   const evaluatorCatalog = require('../generated/benchmark-catalog/evaluators.cjs').generatedEvaluatorDescriptors
-  assert.equal(evaluatorCatalog[0].runtime, 'oci-container')
-  assert.match(evaluatorCatalog[0].image, /^agent-insight-benchmark-runtime-swe-bench:artifact-[0-9a-f]{64}$/)
+  const sweBenchEvaluator = evaluatorCatalog.find((item: { key: string }) => item.key === 'swe-bench')
+  assert.equal(sweBenchEvaluator.runtime, 'oci-container')
+  assert.match(sweBenchEvaluator.image, /^agent-insight-benchmark-runtime-swe-bench:artifact-[0-9a-f]{64}$/)
   assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'src/lib/benchmark/adapter-registry.ts'), 'utf8'), /sweBenchAdapter/)
   const executorSource = fs.readFileSync(path.join(repositoryRoot, 'services/executor/src/index.cjs'), 'utf8')
   assert.doesNotMatch(executorSource, /\b(?:sweBenchAdapter|SweBenchEvaluator)\b/)
@@ -70,7 +71,7 @@ test('benchmark package catalog is reproducible and keeps business adapters and 
 })
 
 test('a new benchmark is discovered by adding only its package directory', async () => {
-  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'benchmark-catalog-extension-'))
+  const root = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'benchmark-catalog-extension-')))
   const packageDir = path.join(root, 'benchmarks', 'fixture')
   await fsp.mkdir(path.join(packageDir, 'adapter'), { recursive: true })
   await fsp.mkdir(path.join(packageDir, 'evaluator'), { recursive: true })
@@ -355,6 +356,7 @@ fs.writeFileSync(outputPath, JSON.stringify({
     async reportProgress() {},
   })
   assert.deepEqual(result.completion.rawResult, { passed: true })
-  assert.deepEqual(result.evidenceFiles, [])
+  assert.deepEqual(result.evidenceFiles.map((file: { name: string }) => file.name), ['controller/stdout.log', 'controller/stderr.log'])
+  assert.equal(result.completion.runtimeFacts.evidenceCollection.complete, true)
   await fsp.rm(root, { recursive: true, force: true })
 })

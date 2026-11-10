@@ -265,19 +265,6 @@ export async function POST(
  * 多选数据集后不能再假设 case 一定属于 datasetIds[0]——评测需按 case 真正归属的数据集取预期输出，
  * 否则跨数据集勾选的 case 会取不到 referenceOutput。
  */
-async function findCaseDatasetId(user: string, datasetIds: string[] | undefined, caseId: string): Promise<string | undefined> {
-    const ids = (datasetIds || []).filter(Boolean);
-    if (ids.length === 0) return undefined;
-    const rows = await (prisma as unknown as { agentEvalDataset: { findMany: (a: unknown) => Promise<Array<{ id: string; casesJson: string }>> } }).agentEvalDataset.findMany({
-        where: { id: { in: ids }, user },
-    });
-    for (const d of rows) {
-        const cases = JSON.parse(d.casesJson || '[]') as Array<{ id: string }>;
-        if (cases.some(c => c.id === caseId)) return d.id;
-    }
-    return undefined;
-}
-
 /** 反查某 case 在其数据集里的预期输出（评测走实验时作为 ExperimentCase.referenceOutput）。 */
 async function findCaseExpectedOutput(user: string, datasetIds: string[] | undefined, caseId: string): Promise<string | null> {
     const ids = (datasetIds || []).filter(Boolean);

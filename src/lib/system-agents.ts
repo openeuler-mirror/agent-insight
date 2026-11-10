@@ -201,7 +201,7 @@ export async function ensureSystemAgent(
             id: { not: existing.id },
           },
         });
-      } catch (_e) {
+      } catch {
         // ignore delete errors
       }
 

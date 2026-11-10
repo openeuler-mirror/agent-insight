@@ -17,7 +17,7 @@
 import type { ReliabilityClient } from '@prisma/client'
 
 import type { BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
-import { DEFAULT_BINDINGS, bindingFor, type ExecutionProfile } from '../../../packages/benchmark-protocol/execution.cjs'
+import { DEFAULT_BINDINGS, type ExecutionProfile } from '../../../packages/benchmark-protocol/execution.cjs'
 import { resolveAgentOptions, type RuntimeDefinition } from '../../../packages/agent-runtime/index.cjs'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import {
@@ -76,11 +76,16 @@ export function inspectBenchmarkExecutionTargets(
     )
   }).flatMap((platform) => {
     const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
-    const profileCapability = capabilities.executionProfiles?.find(item => item.benchmarks.includes(manifest.adapterKey) && item.profile.targets.some(target => target.platform === platform.id))
+    const candidates = capabilities.executionProfiles?.filter(item => item.benchmarks.includes(manifest.adapterKey) && item.profile.targets.some(target => target.platform === platform.id)) || []
+    const profileCapability = candidates.length === 1 ? candidates[0] : undefined
+    const bindings = capabilities.executionBindings ?? DEFAULT_BINDINGS
+    const matchingBindings = bindings.filter(item => item.benchmarks.includes(manifest.adapterKey) && item.platforms.includes(platform.id))
+    const ambiguous = candidates.length > 1 || matchingBindings.length > 1
+    const expectedProfile = matchingBindings.length === 1 ? matchingBindings[0].profile : undefined
     const readiness = profileCapability?.targetReadiness?.[platform.id] || profileCapability
     const agents = [...new Set(profileCapability?.profile.targets.find(target => target.platform === platform.id)?.agents || platform.agents || [])]
     if (!agents.length) return []
-    const requiresProfile = Boolean(profileCapability || bindingFor(DEFAULT_BINDINGS, manifest.adapterKey, platform.id))
+    const requiresProfile = Boolean(candidates.length || matchingBindings.length)
     const requiredCapabilities = [
       ...manifest.requiredCapabilities,
       ...(requiresProfile ? ['execution-backend/v1'] : [benchmarkAgentRuntimeCapability(platform.id)]),
@@ -92,11 +97,13 @@ export function inspectBenchmarkExecutionTargets(
       capability => !componentReady(capabilities.components?.[capability]),
     )
     const unavailableReasons = [
+      ambiguous ? '多个执行 Profile 匹配同一目标，请明确执行配置绑定' : '',
+      expectedProfile && profileCapability && profileCapability.profile.key !== expectedProfile ? '执行 Profile 与客户端绑定不一致' : '',
       status !== 'online' ? `客户端状态不可用：${status}` : '',
       serviceHealth !== 'healthy' ? '客户端服务未就绪' : '',
       !actions.has('RUN_BENCHMARK_CASE') ? '客户端版本不支持 Benchmark 控制指令' : '',
       readiness && !readiness.ready ? readiness.note || '执行环境未就绪' : '',
-      requiresProfile && !profileCapability ? '该 Benchmark 需要升级客户端并配置沙箱执行环境' : '',
+      requiresProfile && !profileCapability ? '该 Benchmark 缺少所绑定的执行 Profile，请检查客户端配置与能力上报' : '',
       ...missingCapabilities.map(capability => `缺少 ${capability}`),
     ].filter(Boolean)
 

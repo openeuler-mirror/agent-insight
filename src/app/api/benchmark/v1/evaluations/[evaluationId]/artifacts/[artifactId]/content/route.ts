@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { evidenceContentDisposition } from '../../../../../../../../../../packages/benchmark-protocol/artifact-path.cjs'
 import { resolveUser } from '@/lib/auth/auth'
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error'
 import { readBenchmarkEvaluationArtifact } from '@/lib/benchmark/experiment-result-service'
@@ -38,7 +39,7 @@ export async function GET(
       headers: {
         'content-type': artifact.mediaType,
         'content-length': String(artifact.bytes.byteLength),
-        'content-disposition': `attachment; filename="${artifact.name.split('/').pop()}"`,
+        'content-disposition': evidenceContentDisposition(artifact.name),
         etag: `"${artifact.sha256}"`,
         'cache-control': 'private, no-store',
       },

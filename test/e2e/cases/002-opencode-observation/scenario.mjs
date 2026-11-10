@@ -9,7 +9,7 @@ import { assertTraceEvidence } from './trace-evidence.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 export async function scenario002(ctx) {
-  const { project, root, runId, baseUrl, key, stage, secrets } = ctx;
+  const {project, root, runId, baseUrl, stage, secrets} = ctx;
   let account, env, workspace, native, record, session, evidence, browser, context, page;
   const marker = `E2E-${runId}-002`;
   const username = ctx.testUsername || `test_e2e_${runId}_002@example.com`;

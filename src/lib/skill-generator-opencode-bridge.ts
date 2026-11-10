@@ -531,7 +531,7 @@ async function streamSkillGeneratorOpencodeImpl(
           answer: reply == null ? undefined : (Array.isArray(reply) ? reply.join('\n') : String(reply)),
         });
         return reply ?? null;
-      } catch (err) {
+      } catch {
         // 超时 / 取消 → 通知前端，agent 那边 reject
         send('question_answered', {
           id,
