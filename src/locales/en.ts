@@ -218,6 +218,8 @@ export const en = {
     pageUnknownTotal: 'Page {{page}} · Total pending',
     columnTraceId: 'Trace ID',
     columnUser: 'User',
+    filterUser: 'User',
+    filterUserAll: 'All users',
     columnAgent: 'Agent',
     columnIp: 'IP',
     columnStatus: 'Status',

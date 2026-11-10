@@ -218,6 +218,8 @@ export const zh = {
     pageUnknownTotal: '第 {{page}} 页 · 总数统计中',
     columnTraceId: 'Trace ID',
     columnUser: '用户',
+    filterUser: '用户',
+    filterUserAll: '全部用户',
     columnAgent: 'Agent',
     columnIp: 'IP',
     columnStatus: '执行状态',

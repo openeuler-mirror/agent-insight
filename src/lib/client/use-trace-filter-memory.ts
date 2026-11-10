@@ -30,6 +30,7 @@ export const traceFilterParsers = {
     // sourceKind 筛选（cli/ide/desktop/app_server，Codex Desktop PR #446）——加入共享
     // parsers 使其与其他筛选一样参与筛选记忆的恢复与重置。
     source: parseAsString.withDefault('all'),
+    traceUser: parseAsString.withDefault(''),
     agent: parseAsString.withDefault('all'),
     skill: parseAsString.withDefault('all'),
     tagIds: parseAsString.withDefault(''),

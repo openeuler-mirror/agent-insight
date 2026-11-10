@@ -575,6 +575,7 @@ function TracePageContent() {
     const [frameworks, setFrameworks] = useState<string[]>([]);
     const [sourceKinds, setSourceKinds] = useState<string[]>([]);
     const [agentNames, setAgentNames] = useState<string[]>([]);
+    const [traceUsers, setTraceUsers] = useState<string[]>([]);
     const importInputRef = useRef<HTMLInputElement>(null);
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState<TraceImportResult | null>(null);
@@ -613,6 +614,7 @@ function TracePageContent() {
     const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', traceFilterParsers.framework);
     const [sourceFilter, setSourceFilter] = useQueryState('source', traceFilterParsers.source);
+    const [traceUserFilter, setTraceUserFilter] = useQueryState('traceUser', traceFilterParsers.traceUser);
     const [agentFilter, setAgentFilter] = useQueryState('agent', traceFilterParsers.agent);
     const [skillFilter] = useQueryState('skill', traceFilterParsers.skill);
     const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', traceFilterParsers.tagIds);
@@ -697,6 +699,17 @@ function TracePageContent() {
             ? { ...prev, userTags: tags }
             : prev);
     }, []);
+
+    useEffect(() => {
+        if (!canViewAllTraces || !user) return;
+        let cancelled = false;
+        loadTraceFacetValues(user, 'user')
+            .then(rows => {
+                if (!cancelled) setTraceUsers(rows.map(row => row.value).filter(Boolean).sort((a, b) => a.localeCompare(b)));
+            })
+            .catch(() => { if (!cancelled) setTraceUsers([]); });
+        return () => { cancelled = true; };
+    }, [canViewAllTraces, user]);
 
     const handleTraceTagCreated = useCallback((tag: TraceUserTag) => {
         setAvailableTags(prev => mergeTraceTags(prev, tag));
@@ -785,6 +798,7 @@ function TracePageContent() {
         clausesRaw,
         frameworkFilter,
         sourceFilter,
+        traceUserFilter,
         agentFilter,
         ownershipFilter,
         anomalyFilter,
@@ -805,6 +819,7 @@ function TracePageContent() {
         clausesRaw,
         frameworkFilter,
         sourceFilter,
+        traceUserFilter,
         agentFilter,
         ownershipFilter,
         anomalyFilter,
@@ -904,9 +919,10 @@ function TracePageContent() {
             : '';
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const sourceParam = sourceFilter !== 'all' ? `&sourceKind=${encodeURIComponent(sourceFilter)}` : '';
+        const traceUserParam = traceUserFilter ? `&traceUser=${encodeURIComponent(traceUserFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        const listUrl = `/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${sourceParam}${agentParam}${ownershipParam}`;
+        const listUrl = `/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${sourceParam}${traceUserParam}${agentParam}${ownershipParam}`;
         apiFetch(listUrl + '&listPart=records', { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(response => {
                 if (!response.ok) throw new Error('Trace list request failed');
@@ -949,6 +965,7 @@ function TracePageContent() {
         clausesRaw,
         frameworkFilter,
         sourceFilter,
+        traceUserFilter,
         agentFilter,
         ownershipFilter,
         anomalyFilter,
@@ -1103,7 +1120,7 @@ function TracePageContent() {
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || selectedUserTagIds.length > 0
         || anomalyFilter !== 'all' || reliabilityAnomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
         || sourceFilter !== 'all'
-        || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
+        || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0 || (canViewAllTraces && traceUserFilter !== '');
 
     const resetFilters = () => {
         clearFilterMemory();
@@ -1143,6 +1160,10 @@ function TracePageContent() {
     const sourceOptions: SelectOption[] = [
         { value: 'all', label: t('common.all') },
         ...sourceKinds.map(source => ({ value: source, label: getExecutionSourceLabel(source) })),
+    ];
+    const traceUserOptions: SelectOption[] = [
+        { value: '', label: t('tracePage.filterUserAll') },
+        ...traceUsers.map(username => ({ value: username, label: username })),
     ];
     // Agent 下拉包含根和子 Agent；“范围”决定查询哪一种独立执行。
     const agentOptions: SelectOption[] = [
@@ -1284,6 +1305,15 @@ function TracePageContent() {
                                 selectedIds={selectedUserTagIds}
                                 onChange={updateUserTagFilters}
                             />
+                            {canViewAllTraces && (
+                                <Select
+                                    label={t('tracePage.filterUser')}
+                                    value={traceUserFilter}
+                                    onChange={setTraceUserFilter}
+                                    options={traceUserOptions}
+                                    active={traceUserFilter !== ''}
+                                />
+                            )}
                             <Select
                                 label={t('tracePage.filterAgent')}
                                 value={agentFilter}

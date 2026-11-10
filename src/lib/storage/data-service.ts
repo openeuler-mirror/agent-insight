@@ -1461,7 +1461,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
  * 某个分类列的观测值 + 出现次数,给过滤器值下拉(facet)用 —— 对标 langfuse SUGGESTIONS 的「值 + 件数」。
  * 仅允许白名单内的真实标量列 groupBy(防任意列注入);root 作用域、按 user 隔离,与其它 facet 口径一致。
  */
-const FACETABLE_COLUMNS = new Set(['framework', 'sourceKind', 'agentName', 'model', 'subagentType']);
+const FACETABLE_COLUMNS = new Set(['framework', 'sourceKind', 'agentName', 'model', 'subagentType', 'user']);
 export async function listObservedFieldValues(
     column: string,
     user?: string,

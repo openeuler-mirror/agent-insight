@@ -68,7 +68,7 @@ function listHarness(initialFiltersReady = true, overrides: Record<string, unkno
     const scope: Record<string, any> = {
         user: 'reader', apiKey: null, filtersReady: initialFiltersReady, agentScopeFilter: 'root', skillFilter: 'all',
         selectedUserTagIds: [], search: '', clauses: [], clausesRaw: '',
-        frameworkFilter: 'all', sourceFilter: 'all', agentFilter: 'all', ownershipFilter: 'user',
+        frameworkFilter: 'all', sourceFilter: 'all', agentFilter: 'all', ownershipFilter: 'user', traceUserFilter: '',
         anomalyFilter: 'all', reliabilityAnomalyFilter: 'all', timeFilter: 'all', customTimeRange: null,
         sortKey: 'timestamp', sortDir: 'desc', page: 1, pageSize: 20,
         listFilterKey: 'filters', listRequestKey: 'page-1',
@@ -174,6 +174,16 @@ test('Codex source, custom time bounds and advanced clauses coexist in list and 
     assert.equal(list.searchParams.get('filters'), stats.searchParams.get('filters'));
     assert.equal(list.searchParams.get('sourceKind'), 'desktop');
     assert.equal(stats.searchParams.get('sourceKind'), 'desktop');
+    h.unmount();
+});
+
+test('selected Trace owner is preserved identically in list and statistics requests', async () => {
+    const h = listHarness(true, { traceUserFilter: 'bob@example.com' });
+    await h.resolve(0, 'bob-trace');
+    const list = new URL(h.pending[0].url, 'http://localhost');
+    const stats = new URL(h.statsRequest(), 'http://localhost');
+    assert.equal(list.searchParams.get('traceUser'), 'bob@example.com');
+    assert.equal(stats.searchParams.get('traceUser'), 'bob@example.com');
     h.unmount();
 });
 

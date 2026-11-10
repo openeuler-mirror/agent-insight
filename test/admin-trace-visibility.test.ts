@@ -85,6 +85,32 @@ test('administrator Trace reads and dashboard aggregates share the global scope'
         assert.equal(denied.status, 403);
     });
 
+    await context.test('admin user filters constrain records and statistics without granting ordinary cross-user reads', async () => {
+        const url = listUrl + '&traceUser=bob';
+        for (const part of ['', '&listPart=records']) {
+            const page = await json(data, url + part, 'admin');
+            assert.deepEqual(page.records.map((row: { user: string }) => row.user), ['bob']);
+            assert.equal(page.canViewAllTraces, true);
+        }
+        assert.equal((await json(data, url + '&listPart=stats', 'admin')).stats.total, 1);
+        assert.equal((await json(data, url + '&framework=alice', 'admin')).records.length, 0);
+        const own = await json(data, url, 'alice');
+        assert.deepEqual(own.records.map((row: { user: string }) => row.user), ['alice']);
+        assert.equal(own.stats.total, 1);
+        const missing = await json(data, listUrl + '&traceUser=missing-user', 'admin');
+        assert.deepEqual(missing.records, []);
+        assert.equal(missing.stats.total, 0);
+        assert.equal((await json(data, listUrl + '&traceUser=', 'admin')).records.length, 4);
+    });
+
+    await context.test('user filter options contain all Trace owners for admin and only self for ordinary users', async () => {
+        const url = '/api/observe/data?user=admin&traceUser=bob&facet=values&column=user';
+        const all = await json(data, url, 'admin');
+        assert.deepEqual(new Set(all.map((row: { value: string }) => row.value)), new Set(['admin', 'alice', 'bob']));
+        const own = await json(data, url, 'alice');
+        assert.deepEqual(own, [{ value: 'alice', count: 1 }]);
+    });
+
     await context.test('admin can open another owner session while ordinary users cannot', async () => {
         const url = '/api/observe/session?taskId=trace-bob';
         assert.equal((await session.GET(request(url, 'admin'))).status, 200);
