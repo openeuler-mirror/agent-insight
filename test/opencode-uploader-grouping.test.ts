@@ -705,9 +705,9 @@ test('opencode uploader: falls back to step-finish tokens when message.updated h
     } } } } },
   ])
   const messages = uploader.buildMessagesForSession(state, 'ses_usage')
-  assert.equal(messages[0].usage.input, 100)
-  assert.equal(messages[0].usage.cache.read, 10)
-  assert.equal(messages[0].usage.total, 135)
+  assert.equal(messages[0]!.usage!.input, 100)
+  assert.equal(messages[0]!.usage!.cache.read, 10)
+  assert.equal(messages[0]!.usage!.total, 135)
 
   const derived = uploader.deriveFields(messages)
   assert.equal(derived.tokens, 135)
