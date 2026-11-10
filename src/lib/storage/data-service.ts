@@ -65,6 +65,7 @@ import { goalPlusProjectedWorkerExecutionWhere } from '@/lib/ingest/collaboratio
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
+    findExecutionIdsByUserTags,
     getTraceTagsByExecutionIds,
     type TraceTagDto,
 } from '@/lib/trace-tags';
@@ -1285,6 +1286,7 @@ interface ReadRecordFilters {
     clauses?: FilterClause[];
     /** business 标签筛选，值为 Tag.id，支持多个 OR 命中 */
     businessTagIds?: string[];
+    userTagIds?: string[];
     /** Trace 列表顶部时间筛选换算后的起始时间。 */
     timestampFrom?: Date;
     /** Trace 列表 Agent 归属筛选；按现有 RegisteredAgent + 内置系统 Agent 规则下推。 */
@@ -1459,7 +1461,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
  * 某个分类列的观测值 + 出现次数,给过滤器值下拉(facet)用 —— 对标 langfuse SUGGESTIONS 的「值 + 件数」。
  * 仅允许白名单内的真实标量列 groupBy(防任意列注入);root 作用域、按 user 隔离,与其它 facet 口径一致。
  */
-const FACETABLE_COLUMNS = new Set(['framework', 'sourceKind', 'agentName', 'model', 'subagentType']);
+const FACETABLE_COLUMNS = new Set(['framework', 'sourceKind', 'agentName', 'model', 'subagentType', 'user']);
 export async function listObservedFieldValues(
     column: string,
     user?: string,
@@ -1640,6 +1642,7 @@ async function hydrateAndNormalizeBatch(
         light: boolean;
         attachEvaluations: boolean;
         includeTags: boolean;
+        allUsers?: boolean;
         getConfigsForEvaluationUser: (evaluationUser?: string | null) => Promise<ConfigItem[]>;
     },
 ): Promise<ExecutionRecord[]> {
@@ -1651,7 +1654,7 @@ async function hydrateAndNormalizeBatch(
     // 这是列表页"频繁大量重复解析 → 卡死"的根因;去掉后 hydrate 与数据量解耦,light/heavy 仅差 finalResult。
     const execIds = batch.map((r: any) => r.id);
     const tagsByExec = includeTags
-        ? await getTraceTagsByExecutionIds(execIds, user).catch((e: unknown) => {
+        ? await getTraceTagsByExecutionIds(execIds, user, { allUsers: ctx.allUsers }).catch((e: unknown) => {
             console.warn('[readRecords] trace tag batch fetch failed:', e);
             return new Map<string, TraceTagDto[]>();
         })
@@ -2042,10 +2045,13 @@ async function readRecordsInternal(
 
     await appendExecutionOwnershipWhere(where, filters?.ownership);
 
-    const businessTagIds = Array.from(new Set((filters?.businessTagIds ?? []).map(v => String(v || '').trim()).filter(Boolean)));
-    if (businessTagIds.length > 0) {
-        const taggedExecutionIds = await findExecutionIdsByBusinessTags(user, businessTagIds).catch((e: unknown) => {
-            console.warn('[readRecords] business tag filter failed:', e);
+    for (const [tagIds, findTaggedIds] of [
+        [filters?.userTagIds ?? [], findExecutionIdsByUserTags],
+        [filters?.businessTagIds ?? [], findExecutionIdsByBusinessTags],
+    ] as const) {
+        if (tagIds.length === 0) continue;
+        const taggedExecutionIds = await findTaggedIds(user, tagIds, { allUsers: filters?.showAllUsers }).catch((e: unknown) => {
+            console.warn('[readRecords] trace tag filter failed:', e);
             return [] as string[];
         });
         if (taggedExecutionIds) {
@@ -2126,7 +2132,9 @@ async function readRecordsInternal(
             process.env.DB_HOST ? { timestamp: 'desc' } : orderBy,
             LIGHT_EXECUTION_SELECT,
         );
-        const dedup = selectKeepIdsByTaskId(records);
+        const dedup = filters?.showAllUsers
+            ? { keepIds: new Set<string>(records.map((record: DedupRow) => record.id)), byTaskId: new Map<string, DedupRow[]>() }
+            : selectKeepIdsByTaskId(records);
         keepIds = dedup.keepIds;
         byTaskId = dedup.byTaskId;
         const filtered = records.filter((r: any) => (!r.taskId || keepIds.has(r.id)) && !filters?.excludedTaskIds?.includes(r.taskId));
@@ -2174,6 +2182,7 @@ async function readRecordsInternal(
             light,
             attachEvaluations,
             includeTags: options?.includeTags === true,
+            allUsers: filters?.showAllUsers,
             getConfigsForEvaluationUser,
         });
         out.push(...normalizedBatch);

@@ -21,6 +21,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
 import { isActive } from '@/lib/evaluation-task-manager';
@@ -233,7 +234,11 @@ export async function GET(request: Request) {
   try {
     const lifecycleNow = Date.now();
     const { searchParams } = new URL(request.url);
-    const user = searchParams.get('user') || undefined;
+    const { username: viewer, user: scopedUser, canViewAllTraces } = await resolveTraceReadScope(request);
+    if (!viewer) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+    const traceUser = canViewAllTraces ? searchParams.get('traceUser') || undefined : undefined;
+    const user = traceUser || scopedUser;
+    const showAllUsers = canViewAllTraces && !traceUser;
     const query = searchParams.get('query') || undefined;
     const taskId = searchParams.get('taskId') || undefined;
     const executionId = searchParams.get('executionId') || undefined;
@@ -307,12 +312,12 @@ export async function GET(request: Request) {
     }
     // facet=tags&kind=business|version：返回用户标签 + 使用次数，给用户标签筛选/打标控件使用。
     if (facet === 'tags') {
-        return NextResponse.json(await listTraceTags(user || '', searchParams.get('kind')));
+        return NextResponse.json(await listTraceTags(viewer, searchParams.get('kind'), { allUsers: canViewAllTraces }));
     }
     // facet=values&column=<col>：某分类列的观测值 + 件数,给过滤器值下拉(对标 langfuse SUGGESTIONS)。
     if (facet === 'values') {
         const column = searchParams.get('column') || '';
-        return NextResponse.json(await listObservedFieldValues(column, user));
+        return NextResponse.json(await listObservedFieldValues(column, column === 'user' ? scopedUser : user));
     }
 
     // 直查单条 Execution（用于"返回父执行 / 派生子 Agent 跳转"等仅需 task_id + 元数据的场景）。
@@ -321,6 +326,7 @@ export async function GET(request: Request) {
     if (executionId) {
         const single = await db.findExecutionById(executionId);
         if (!single) return NextResponse.json([]);
+        if (!canViewAllTraces && single.user !== user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         return NextResponse.json([{
             upload_id: single.id,
             task_id: single.taskId,
@@ -330,6 +336,7 @@ export async function GET(request: Request) {
             source_kind: single.sourceKind,
             execution_status: single.executionStatus,
             agentName: single.agentName,
+            user: single.user,
             timestamp: single.timestamp,
             // 单条查询带上 final_result:供 fault 详情在列表走 fields=light(不带 final_result)后按需回填。
             // 单条记录,无 OOM 风险。
@@ -368,6 +375,7 @@ export async function GET(request: Request) {
     const hiddenCollaborationChildren = authenticatedUser && authenticatedUser === user && !taskId && !taskIds.length && !parentExecutionId && !includeSubagents && !onlySubagents
         ? (await collaborationTraceProjection.plan(authenticatedUser)).hiddenChildren : [];
     const recordFilters = {
+        showAllUsers,
         excludedTaskIds: hiddenCollaborationChildren,
         query,
         taskId,
@@ -642,11 +650,12 @@ export async function GET(request: Request) {
     if (paginated) {
         if (listPart === 'stats') return NextResponse.json({ stats: responseStats });
         if (listPart === 'records') return NextResponse.json({
-            records: responseRecords, page, pageSize,
+            records: responseRecords, page, pageSize, canViewAllTraces,
             hasMore: pageResult?.hasMore ?? page * pageSize < responseTotal,
         });
         return NextResponse.json({
             records: responseRecords,
+            canViewAllTraces,
             total: responseTotal,
             page,
             pageSize,

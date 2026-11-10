@@ -59,7 +59,11 @@ test('inference IDs survive authenticated upload, SQLite storage and deferred Tr
     const stored = await prismaRaw.session.findUniqueOrThrow({ where: { taskId: root } });
     const storedRows = JSON.parse(stored.interactions!);
     assert.deepEqual(storedRows.find((row: any) => row.messageID === 'answer').inference_call_ids, ids.slice(0, 2));
-    const response = await GET(new Request(`http://localhost/api/observe/session?taskId=${root}&source=raw&view=structure`));
+    const detailUrl = `http://localhost/api/observe/session?taskId=${root}&source=raw&view=structure`;
+    assert.equal((await GET(new Request(detailUrl))).status, 401);
+    await prismaRaw.user.create({ data: { username: 'inference-storage-outsider', apiKey: 'test-inference-outsider' } });
+    assert.equal((await GET(new Request(detailUrl, { headers: { 'x-witty-api-key': 'test-inference-outsider' } }))).status, 403);
+    const response = await GET(new Request(detailUrl, { headers: { 'x-witty-api-key': key } }));
     assert.equal(response.status, 200);
     const detail = await response.json();
     assert.ok(detail.interactions.some((row: any) => row._payloadDeferred));

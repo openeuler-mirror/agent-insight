@@ -46,7 +46,7 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
       failures: [{ failure_type: 'goal_plus_pi_session_failed', description: 'aborted', context: '', recovery: '' }],
       interactions: [{ role: 'assistant', content: 'partial output' }], skip_evaluation: true });
     for (const query of ['fields=light&skipAutoEvalReady=1', 'skipAutoEvalReady=0', 'fields=light&skipAutoEvalReady=1&paginated=1&databasePagination=1&status=failed']) {
-      const response = await GET(new Request(`http://localhost/api/observe/data?taskId=${taskId}&${query}`));
+      const response = await GET(new Request(`http://localhost/api/observe/data?user=timeout-tester&taskId=${taskId}&${query}`));
       assert.equal(response.status, 200);
       const payload = await response.json();
       const record = (Array.isArray(payload) ? payload : payload.records)[0];
@@ -95,7 +95,7 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
   assert.equal((await prismaRaw.execution.findFirst({ where: { taskId: 'timeout-actrail' } }))?.lastIngestedAt?.toISOString(), receivedAt.toISOString());
   const fresh = new Date();
   await saveExecutionRecord({ task_id: 'timeout-actrail', framework: 'actrail', user: 'timeout-tester', interactions: [{ role: 'user', content: 'new telemetry arrived' }], skip_evaluation: true }, { receivedAt: fresh });
-  const response = await GET(new Request('http://localhost/api/observe/data?taskId=timeout-actrail&fields=light&skipAutoEvalReady=1'));
+  const response = await GET(new Request('http://localhost/api/observe/data?user=timeout-tester&taskId=timeout-actrail&fields=light&skipAutoEvalReady=1'));
   assert.equal((await response.json())[0].trace_status, 'running');
   await saveExecutionRecord({ task_id: 'timeout-actrail', framework: 'actrail', user: 'timeout-tester', skip_evaluation: true }, { receivedAt });
   assert.equal((await prismaRaw.execution.findFirst({ where: { taskId: 'timeout-actrail' } }))?.lastIngestedAt?.toISOString(), fresh.toISOString(), 'older background work cannot move the receipt clock backwards');

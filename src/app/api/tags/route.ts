@@ -15,6 +15,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 import { createTraceTag, listTraceTags, TraceTagError } from '@/lib/trace-tags';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
@@ -31,9 +32,10 @@ function toErrorResponse(error: unknown) {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const user = searchParams.get('user') || '';
+    const { username, canViewAllTraces } = await resolveTraceReadScope(request);
+    if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
     const kind = searchParams.get('kind');
-    return NextResponse.json(await listTraceTags(user, kind));
+    return NextResponse.json(await listTraceTags(username, kind, { allUsers: canViewAllTraces }));
   } catch (error) {
     return toErrorResponse(error);
   }

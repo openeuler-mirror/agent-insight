@@ -23,7 +23,7 @@
 //  - 环比 = 与「上一个等长窗口」比较。
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 import {
     normalizeWindow, planOf, bucketStarts, bucketLabel, pct,
     isSuccess, rowTokens, rowCost, rowCacheSaved, concurrencyPerBucket, assignBuckets, type FleetRow,
@@ -69,9 +69,9 @@ function aggregate(rows: FleetRow[], missing: Set<string>) {
 export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
-        // 作用域：按当前登录用户过滤（客户端传 ?user=）。解析不出用户则回退全量。
-        const { username } = await resolveUser(req, url.searchParams.get('user'));
-        const userFilter = username ? { user: username } : {};
+        const { username, user } = await resolveTraceReadScope(req);
+        if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        const userFilter = user ? { user } : {};
 
         const window = normalizeWindow(url.searchParams.get('window'));
         const plan = planOf(window);
