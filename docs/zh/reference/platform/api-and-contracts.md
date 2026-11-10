@@ -337,6 +337,7 @@ configuration:
 - **Agent debug** — `AgentDebugReportPayload`、`AgentDebugIssue`、`AgentDebugRootCause`、`AgentDebugTriage`、`AgentDebugSkillsAnalysis`、`AgentDebugSkillsAnalysisRow`、`DebugTurn`、`DebugToolCall`（`engine/agent-debug/types.ts`）。
   - 现有 `/api/observe/executions/:executionId/agent-debug` GET / POST（含缓存命中、运行中 409）增量提供 `progress: { runId, events, lastProgressAt, unavailable, truncated } | null`。events 包含单调 `seq`、接收时间 `at`、`kind`（task/tool/evidence/analysis/stage）、可选 `module`、`state`、`title`、`summary` 和可选真实 Trace `refs`。状态 completed 仅表示对应阶段结束，不能代替最终报告。
   - Skills 对应接口在 `skillsAnalysis` 内提供可选 `runId` / `progress`；失败时保留 runId 以读取已保存的段落。新字段均可选，旧缓存没有进展时返回 null / 缺省；不新增 Prisma 字段、API 路由或逐 token 流。服务端按缓存行用户读取进展，不接受客户端指定进展文件路径。
+  - Skills 步骤核验缺少关联目标或找不到当前账号的 Skill 资产时，`row.status` 和 `skillsAnalysis.status` 为 `skipped`，`errorMessage` 为 `null`，`skillsAnalysis.skipReason` 分别为 `no-skill-targets` 或 `missing-skill`。这两类旧失败缓存读取时也会转换为 `skipped`。主诊断保持独立的状态和结果。
 
 - **Trace** — `AgentNode`、`AgentEvent`、`ToolCall`、`RawInteraction`、`AgentNodeStats`（`engine/observability/agent-trace.ts`）。
   `ToolCall.state` 与 `output/result` 独立；可选 `exit_code`、`error` 经调用树保留为

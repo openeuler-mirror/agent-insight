@@ -266,7 +266,8 @@ export interface AgentDebugPhase1Cell extends AgentDebugTraceLocation {
   anchorId?: string;
 }
 
-export type AgentDebugSkillsAnalysisStatus = 'pending' | 'running' | 'done' | 'failed';
+export type AgentDebugSkillsAnalysisStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+export type AgentDebugSkillsSkipReason = 'no-skill-targets' | 'missing-skill';
 
 export interface AgentDebugSkillsKeyActionResult {
   actionId: string;
@@ -289,6 +290,7 @@ export interface AgentDebugSkillsAnalysis {
   runId?: string;
   progress?: DiagnosisProgressSnapshot | null;
   status: AgentDebugSkillsAnalysisStatus;
+  skipReason?: AgentDebugSkillsSkipReason;
   source: 'agent-debug';
   generatedAt?: string;
   updatedAt?: string;

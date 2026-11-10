@@ -75,7 +75,7 @@ export async function GET(
     : null;
 
   return NextResponse.json({
-    row: summarizeSkillsAnalysisRow(row),
+    row: summarizeSkillsAnalysisRow(row, skillsAnalysis),
     skillsAnalysis: withProgress(skillsAnalysis, row),
     stale: Boolean(row && row.interactionsHash !== interactionHash),
   });
@@ -191,13 +191,16 @@ export async function POST(
   }, { status: 202 });
 }
 
-function summarizeSkillsAnalysisRow(row: Awaited<ReturnType<typeof findAgentDebugSkillsAnalysis>>) {
+function summarizeSkillsAnalysisRow(
+  row: Awaited<ReturnType<typeof findAgentDebugSkillsAnalysis>>,
+  analysis?: AgentDebugSkillsAnalysis | null,
+) {
   if (!row) return null;
   return {
     id: row.id,
     executionId: row.executionId,
-    status: row.status,
-    errorMessage: row.errorMessage,
+    status: analysis?.status ?? row.status,
+    errorMessage: analysis?.status === 'skipped' ? null : row.errorMessage,
     interactionsHash: row.interactionsHash,
     keyActionCount: row.keyActionCount,
     ranAt: row.ranAt,
