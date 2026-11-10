@@ -16,7 +16,7 @@
 
 import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server';
 import { OpenAI } from "openai";
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { db } from '@/lib/storage/prisma';
@@ -67,14 +67,13 @@ async function getLlmClient(user?: string | null) {
   const apiKey = config.apiKey || 'no-api-key-required';
 
   const baseURL = config.baseUrl || "https://api.deepseek.com";
-  const { customFetch } = getProxyConfig();
   
   return {
     client: new OpenAI({
       apiKey, 
       baseURL,
       defaultHeaders: config.headers,
-      fetch: customFetch,
+      fetch: getModelFetch(),
     }),
     model: config.model || "deepseek-chat"
   };

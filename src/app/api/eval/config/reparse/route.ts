@@ -15,7 +15,7 @@
  */
 
 import { db } from '@/lib/storage/prisma';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import {
     generateAnswerExtractionPrompt,
@@ -130,12 +130,11 @@ async function processConfigAsync(
             return;
         }
 
-        const { customFetch } = getProxyConfig();
         const openaiClient = new OpenAI({
             apiKey: settings.apiKey || 'no-api-key-required',
             baseURL: settings.baseUrl || 'https://api.deepseek.com',
             defaultHeaders: settings.headers,
-            fetch: customFetch,
+            fetch: getModelFetch(),
         });
         const modelName = settings.model || 'deepseek-chat';
         const taskContext = getConfigSubjectLabel({ query, skill, skillVersion });

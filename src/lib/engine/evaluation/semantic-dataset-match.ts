@@ -16,7 +16,8 @@
 
 import { OpenAI } from "openai";
 import { z } from "zod";
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
+import { normalizeModelBaseUrl } from '@/lib/shared/model-connection';
 import { configSupportsDatasetType, getDatasetTypePriority, hasOutcomeExpectations } from '@/lib/engine/evaluation/config-dataset';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import type { ConfigItem } from '@/lib/storage/data-service';
@@ -115,23 +116,18 @@ async function getLlmClient(user?: string | null) {
   }
 
   const apiKey = config.apiKey || 'no-api-key-required';
-  const baseURL = normalizeBaseUrl(config.baseUrl || 'https://api.deepseek.com');
-  const { customFetch } = getProxyConfig();
+  const baseURL = normalizeModelBaseUrl(config.baseUrl) ?? 'https://api.deepseek.com';
 
   return {
     client: new OpenAI({
       apiKey,
       baseURL,
       defaultHeaders: config.headers,
-      fetch: customFetch,
+      fetch: getModelFetch(),
       timeout: getSemanticMatchTimeoutMs(),
     }),
     model: config.model || 'deepseek-chat',
   };
-}
-
-function normalizeBaseUrl(baseUrl: string): string {
-  return String(baseUrl || '').replace(/\/chat\/completions\/?$/, '');
 }
 
 function formatLlmError(error: unknown): string {
