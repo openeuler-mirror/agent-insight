@@ -86,22 +86,23 @@ async function fixture(t: TestContext, count: number) {
   t.after(async () => {
     await stopBenchmarkBackgroundWorkForTest()
     rejectPreparation = false
-    if (experimentId) await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'done' } })
+    if (created.experimentId) await prisma.experiment.update({ where: { id: created.experimentId }, data: { status: 'done' } })
     await refreshBenchmarkImagePreparation()
-    if (experimentId) await prisma.experiment.delete({ where: { id: experimentId } })
-    if (datasetId) await prisma.agentEvalDataset.delete({ where: { id: datasetId } })
+    if (created.experimentId) await prisma.experiment.delete({ where: { id: created.experimentId } })
+    if (created.datasetId) await prisma.agentEvalDataset.delete({ where: { id: created.datasetId } })
     delete process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   })
+  const created: { datasetId?: string; experimentId?: string } = {}
   const address = server.address() as { port: number }
   process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL = `http://127.0.0.1:${address.port}`
   scheduler.setBenchmarkEvaluationDispatchFetchForTest()
   scheduler.setEvaluatorTargetResolverForTest()
   const dataset = await prisma.agentEvalDataset.create({ data: { id: randomUUID(), user: 'retry-user', name: 'retry', datasetKind: 'benchmark' } })
-  const datasetId: string | undefined = dataset.id
+  created.datasetId = dataset.id
   const benchmark = await prisma.benchmarkDataset.create({ data: { agentEvalDatasetId: dataset.id, user: 'retry-user', name: 'retry', adapterKey: 'zsoft-l1', contentHash: 'fixture' } })
   const experiment = await prisma.experiment.create({ data: { user: 'retry-user', name: 'retry', scope: 'benchmark', status: 'done' } })
-  const experimentId: string | undefined = experiment.id
+  created.experimentId = experiment.id
   await prisma.benchmarkExperimentBinding.create({ data: { experimentId: experiment.id, datasetId: benchmark.id, datasetContentHash: 'fixture', adapterKey: 'zsoft-l1', selectionJson: '{}', runConfigJson: '{}', expectedCaseCount: count, callbackOrigin: 'http://platform.test', schedulerStatus: 'done' } })
   const cases: Array<{ experimentId: string; resultId: string; user: string; runId: string }> = []
   for (let ordinal = 0; ordinal < count; ordinal++) {
