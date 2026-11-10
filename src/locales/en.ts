@@ -217,6 +217,7 @@ export const en = {
     retry: 'Retry',
     pageUnknownTotal: 'Page {{page}} · Total pending',
     columnTraceId: 'Trace ID',
+    columnUser: 'User',
     columnAgent: 'Agent',
     columnIp: 'IP',
     columnStatus: 'Status',

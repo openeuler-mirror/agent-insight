@@ -217,6 +217,7 @@ export const zh = {
     retry: '重试',
     pageUnknownTotal: '第 {{page}} 页 · 总数统计中',
     columnTraceId: 'Trace ID',
+    columnUser: '用户',
     columnAgent: 'Agent',
     columnIp: 'IP',
     columnStatus: '执行状态',

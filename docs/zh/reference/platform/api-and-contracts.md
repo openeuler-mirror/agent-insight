@@ -140,6 +140,12 @@ HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../obse
 - **Reuse**: 自动监听只传 Trace 标识给 `addEvalExperimentCase` / `evaluateEvalExperimentCase`，复用手动追加的上下文加载、评测及正常重试，不重新执行原始 Trace。上传接口不再直接触发监听。
 - **Idempotency**: `addEvalExperimentCase(experimentId, input)` 仍返回新建或复用的 Case ID，并保留参考数据回填；可选第三参数 `{ onlyIfNew: true }` 仅在新建时返回 ID，已有或并发唯一约束冲突时返回 null。新建带 taskId 的 Case 使用由 experimentId/taskId 派生的稳定主键，无需数据库迁移。自动扫描不会重评已有 Case 或重置人工评分。
 
+### Trace 全局读取范围
+
+`resolveTraceReadScope` 统一链路查询与仪表盘的读取范围：API Key 解析出的管理员按 `AGENT_INSIGHT_ADMIN_USERS` 白名单判定（未配置时默认 `admin`），查询不加用户过滤；普通账号只查询本人。有效凭据优先于 URL 的 `user` 参数，失效凭据返回 401；旧式无凭据用户参数请求继续兼容，但不授予全局读取权限，缺少身份的请求返回 401。
+
+已有 `GET /api/observe/data` 的分页记录响应增加 `canViewAllTraces`，用于控制管理员用户列；列表、统计、Agent/Skill/字段与标签筛选、单条 Execution、Session 详情、Trace 导出、`/api/fleet/{trends,breakdowns,agent,reliability}` 以及 `/api/dashboard/stats` 共享相同范围。全局查看不改写 Trace 原所属用户。接口无需数据库迁移。
+
 ### OTel spool consumer  {#otel-spool-consumer}
 - **External endpoints**: `POST /api/ingest/otel/v1/logs` accepts OTLP http/json payloads. `POST /api/ingest/otel/v1/traces` accepts OTLP http/json and OTLP http/protobuf payloads, normalizes events, appends JSONL spool rows, and returns `status: "accepted"` after the append succeeds. The response includes `received`, `persisted`, and exact retransmit `deduplicated` counts. If a Goal Plus Pi session exceeds its bounded identity index, the route returns HTTP 413 with `status: "partial"` and `rejected.spool.reason=goal-plus-session-identity-limit`; uploaders must not advance their checkpoint. `POST /api/public/otel/v1/traces` is a Langfuse-compatible alias that reuses the same traces handler. `POST /api/ingest/otel/v1/metrics` accepts vLLM OTLP metrics over JSON or protobuf, normalizes them to the infra metric sample shape, persists them best-effort to `InfraMetricSample`, and returns an immediate diagnosis verdict. Accepted trace data is durable but not necessarily already visible in every observe query or persisted to `Execution`.
 - **Cross-session collaboration**: `POST /api/ingest/collaborations/events` accepts one authenticated immutable relation event and returns created/duplicate plus current endpoint/anchor resolution. `GET /api/observe/collaborations` and `GET /api/observe/collaborations/:collaborationId` return the user-scoped graph read model; `POST /api/observe/collaborations/relink` retries reported endpoint resolution. Goal Plus calls the shared persistence service internally after deterministic relink and never loops through the HTTP ingest route.

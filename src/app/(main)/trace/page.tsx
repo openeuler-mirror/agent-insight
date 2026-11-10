@@ -180,6 +180,7 @@ interface TraceListStats {
 
 interface TracePageResponse {
     records: Execution[];
+    canViewAllTraces?: boolean;
     hasMore: boolean;
     page: number;
     pageSize: number;
@@ -198,13 +199,14 @@ const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
 const TRACE_LIST_REFRESH_MS = 5_000;
 const TRACE_STATS_REFRESH_MS = 30_000;
 
-type TraceColumnKey = 'traceId' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
+type TraceColumnKey = 'traceId' | 'user' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
 type ResizableColKey = TraceColumnKey;
 
-const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'ip', 'status', 'anomaly', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
+const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'user', 'agent', 'ip', 'status', 'anomaly', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
     traceId:    130,
+    user:       180,
     task:       280,
     agent:      170,
     ip:         160,
@@ -218,6 +220,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
 };
 const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
     traceId:    90,
+    user:       100,
     task:       280,
     agent:      100,
     ip:         120,
@@ -231,6 +234,7 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
 };
 const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
     traceId: true,
+    user: true,
     agent: true,
     ip: false,
     status: true,
@@ -551,6 +555,8 @@ export default function TracePage() {
 
 function TracePageContent() {
     const { user, apiKey } = useAuth();
+    const [globalTraceViewer, setGlobalTraceViewer] = useState<string | null>(null);
+    const canViewAllTraces = !!user && globalTraceViewer === user;
     const { t, locale } = useLocale();
     const [data, setData] = useState<Execution[]>([]);
     const [stats, setStats] = useState<TraceListStats | null>(null);
@@ -715,6 +721,7 @@ function TracePageContent() {
 
     const columnLabels = useMemo<Record<TraceColumnKey, string>>(() => ({
         traceId: t('tracePage.columnTraceId'),
+        user: t('tracePage.columnUser'),
         agent: t('tracePage.columnAgent'),
         ip: t('tracePage.columnIp'),
         status: t('tracePage.columnStatus'),
@@ -735,7 +742,11 @@ function TracePageContent() {
         resetColumnWidths,
         isCustomized,
     } = useColumnWidths();
-    const { columnVisibility, setColumnVisible, resetColumnVisibility, isVisibilityCustomized } = useColumnVisibility();
+    const { columnVisibility: savedColumnVisibility, setColumnVisible, resetColumnVisibility, isVisibilityCustomized } = useColumnVisibility();
+    const columnVisibility = useMemo(() => ({
+        ...savedColumnVisibility,
+        user: canViewAllTraces && savedColumnVisibility.user,
+    }), [savedColumnVisibility, canViewAllTraces]);
     const tableMinWidth = useMemo(() => {
         const fixedWidth = (Object.keys(DEFAULT_COLUMN_WIDTHS) as ResizableColKey[])
             .filter(key => columnVisibility[key])
@@ -904,6 +915,7 @@ function TracePageContent() {
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
                 if (!Array.isArray(response?.records)) throw new Error('Invalid Trace list response');
+                setGlobalTraceViewer(response.canViewAllTraces ? user : null);
                 setListError(false);
                 setData(response.records);
                 setHasMore(response.hasMore === true);
@@ -1364,7 +1376,7 @@ function TracePageContent() {
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent align="end" className="w-44">
                                         <DropdownMenuLabel>{t('tracePage.columnSettings')}</DropdownMenuLabel>
-                                        {TRACE_COLUMN_ORDER.map(key => (
+                                        {TRACE_COLUMN_ORDER.filter(key => key !== 'user' || canViewAllTraces).map(key => (
                                             <DropdownMenuCheckboxItem
                                                 key={key}
                                                 checked={columnVisibility[key]}
@@ -1422,6 +1434,7 @@ function TracePageContent() {
                                         <colgroup>
                                             <col style={{ width: 44 }} />
                                             {columnVisibility.traceId && <col style={{ width: widths.traceId }} />}
+                                            {columnVisibility.user && <col style={{ width: widths.user }} />}
                                             {/* 任务内容放第二列：用户最关心的信息 */}
                                             {columnVisibility.task && (
                                                 <col style={{ width: taskWidthCustomized ? widths.task : undefined }} />
@@ -1449,6 +1462,11 @@ function TracePageContent() {
                                                 {columnVisibility.traceId && (
                                                     <Th colKey="traceId" currentWidth={widths.traceId} onResize={setColumnWidth}>
                                                         <Term id="trace" label={t('tracePage.columnTraceId')} />
+                                                    </Th>
+                                                )}
+                                                {columnVisibility.user && (
+                                                    <Th colKey="user" currentWidth={widths.user} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnUser')}
                                                     </Th>
                                                 )}
                                                 {columnVisibility.task && (
@@ -1490,7 +1508,7 @@ function TracePageContent() {
                                         <tbody>
                                             {pageItems.map((e, i) => (
                                                 <Row
-                                                    key={(e.task_id || e.upload_id || i) + ''}
+                                                    key={getExecutionRowKey(e) || String(i)}
                                                     execution={e}
                                                     columnVisibility={columnVisibility}
                                                     availableTags={availableTags}
@@ -2218,6 +2236,13 @@ function Row({
             {columnVisibility.traceId && (
                 <Td>
                     <IdChip value={id} adaptive />
+                </Td>
+            )}
+            {columnVisibility.user && (
+                <Td>
+                    <TruncateText className="text-foreground-secondary text-sm">
+                        {e.user || '—'}
+                    </TruncateText>
                 </Td>
             )}
             {columnVisibility.task && (

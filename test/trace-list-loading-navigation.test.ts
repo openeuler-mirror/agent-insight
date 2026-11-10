@@ -78,6 +78,7 @@ function listHarness(initialFiltersReady = true, overrides: Record<string, unkno
         setData: (value: unknown[]) => { records = value; },
         setTotal: () => {}, setStats: () => {},
         setHasMore: () => {}, setStatsRequest: (url: string) => { statsRequest = url; },
+        setGlobalTraceViewer: () => {},
         setListError: (value: boolean) => { listError = value; },
         setLoading: (value: boolean) => { loading = value; },
         setReloadKey: (update: (current: number) => number) => { reloadKey = update(reloadKey); },

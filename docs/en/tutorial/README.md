@@ -28,3 +28,5 @@ Skill and ordinary experiment lists share automatic refresh: active records refr
 The [first Trace tutorial](./platform/01-quick-start.md#step-5-verify-a-trace) also covers custom time ranges.
 
 After a JiuwenSwarm upgrade, update its observability extension and restart AgentServer, then check input, response, model calls, tool results, and usage. See [JiuwenSwarm compatibility](../reference/observability/client-compatibility.md#jiuwenswarm).
+
+Administrators (default: `admin` when `AGENT_INSIGHT_ADMIN_USERS` is empty) can read all users’ Traces. Their Trace list includes a **User** column and their dashboard aggregates all users’ Traces. Ordinary users continue to see their own data. An explicit administrator list replaces the default. See the [Trace visibility guide (Chinese)](../../zh/how-to/observability/view-traces.md#列表页总览).

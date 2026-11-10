@@ -25,3 +25,5 @@ Skill 实验记录列表与普通实验共用自动刷新：有运行中记录�
 在链路追踪列表中，可通过“时间 → 自定义时间范围”定位指定时段；参见[首条 Trace 教程](./platform/01-quick-start.md#步骤五验证生成的-trace)。
 
 JiuwenSwarm 升级后，请更新观测扩展并重启 AgentServer，再检查输入、回答、模型调用、工具结果及 Token 是否完整；见[新旧契约兼容说明](../reference/observability/client-compatibility.md#jiuwenswarm)。
+
+管理员（未配置白名单时为 `admin`）可查看所有用户的 Trace，列表新增“用户”列，仪表盘按全量 Trace 聚合；普通用户继续按本人数据展示。详见[Trace 查看范围](../how-to/observability/view-traces.md#列表页总览)。
