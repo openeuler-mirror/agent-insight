@@ -22,7 +22,11 @@ import { getProxyConfig } from '@/lib/ingest/proxy-config';
 const ANTHROPIC_HOST = 'api.anthropic.com';
 const CHAT_PATH = '/chat/completions';
 const AZURE_DEPLOYMENT_PATH = /^\/openai\/deployments\/[^/]+(?:\/chat\/completions)?\/?$/;
-const AZURE_SAMPLING_FIELDS = ['temperature', 'top_p', 'logprobs', 'top_logprobs', 'seed'];
+const AZURE_RESPONSES_SAMPLING_FIELDS = ['temperature', 'top_p'];
+const AZURE_CHAT_SAMPLING_FIELDS = [...AZURE_RESPONSES_SAMPLING_FIELDS, 'logprobs', 'top_logprobs', 'seed'];
+const MAX_AZURE_COMPAT_RETRIES = 2;
+
+type AzureEndpoint = 'v1-chat' | 'legacy-chat' | 'responses';
 
 export function getJsonResponseFormat(
   baseURL: string,
@@ -50,40 +54,55 @@ function replaceTokenLimit(body: Record<string, unknown>, from: 'max_tokens' | '
   delete body[from];
 }
 
-async function fetchAzureChat(
+async function fetchAzure(
   fetcher: typeof fetch,
   input: string | URL,
   init: RequestInit,
   body: Record<string, unknown>,
-  legacy: boolean,
+  endpoint: AzureEndpoint,
 ): Promise<Response> {
-  const tokenField = legacy ? 'max_tokens' : 'max_completion_tokens';
-  if (!legacy && Object.hasOwn(body, 'max_tokens')) replaceTokenLimit(body, 'max_tokens');
+  if (endpoint === 'v1-chat' && Object.hasOwn(body, 'max_tokens')) {
+    replaceTokenLimit(body, 'max_tokens');
+    init = { ...init, body: JSON.stringify(body) };
+  }
 
-  // Each retry removes its trigger field, allowing one token and one sampling adjustment.
-  for (;;) {
-    const response = await fetcher(input, { ...init, body: JSON.stringify(body) });
-    if (response.status !== 400 || init.signal?.aborted) return response;
+  const samplingFields = endpoint === 'responses' ? AZURE_RESPONSES_SAMPLING_FIELDS : AZURE_CHAT_SAMPLING_FIELDS;
+  let retriedTokenLimit = false;
+  let response = await fetcher(input, init);
+  for (let retries = 0; retries < MAX_AZURE_COMPAT_RETRIES && response.status === 400 && !init.signal?.aborted; retries++) {
+    let payload;
+    try {
+      payload = await response.clone().json();
+    } catch {
+      return response;
+    }
+    const error = payload?.error ?? payload;
+    let { param, code } = error ?? {};
+    if ((code == null || param == null) && typeof error?.message === 'string') {
+      const [, reason, , field] = /^(Unsupported parameter|Unsupported value|Unrecognized request argument supplied):\s+(['"]?)([a-z_]+)\2(?=[.,:]?(?:\s|$))/.exec(error.message) ?? [];
+      if (field && (param == null || param === field)) {
+        param ??= field;
+        code ??= reason === 'Unsupported value' ? 'unsupported_value' : 'unsupported_parameter';
+      }
+    }
+    if ((code !== 'unsupported_parameter' && code !== 'unsupported_value') || typeof param !== 'string'
+      || !Object.hasOwn(body, param) || init.signal?.aborted) return response;
 
-    const payload = await response.clone().json().catch(() => null);
-    const { param, code, message } = payload?.error ?? payload ?? {};
-    const rejection = typeof message === 'string'
-      ? /^(?:Unsupported (?:parameter|value):|Unrecognized request argument supplied:)(?: '?([a-z_]+)\b)?/.exec(message)
-      : null;
-    const field = param ?? rejection?.[1];
-    const unsupported = code === 'unsupported_parameter' || code === 'unsupported_value'
-      || (code == null && rejection !== null);
-    if (!unsupported || typeof field !== 'string' || !Object.hasOwn(body, field) || init.signal?.aborted) return response;
-
-    if (field === tokenField) {
-      replaceTokenLimit(body, tokenField);
-    } else if (AZURE_SAMPLING_FIELDS.includes(field)) {
-      for (const samplingField of AZURE_SAMPLING_FIELDS) delete body[samplingField];
+    if (samplingFields.includes(param)) {
+      for (const field of samplingFields) delete body[field];
+    } else if (endpoint !== 'responses' && !retriedTokenLimit && code === 'unsupported_parameter'
+      && (param === 'max_tokens' || param === 'max_completion_tokens')) {
+      replaceTokenLimit(body, param);
+      retriedTokenLimit = true;
     } else {
       return response;
     }
-    await response.body?.cancel();
+
+    console.warn('[ModelFetch] Retrying Azure request with compatible parameters', { endpoint, parameter: param, retry: retries + 1 });
+    void response.body?.cancel().catch(() => {});
+    response = await fetcher(input, { ...init, body: JSON.stringify(body) });
   }
+  return response;
 }
 
 export function getModelFetch(fetcher = getProxyConfig().customFetch ?? globalThis.fetch): typeof fetch {
@@ -106,18 +125,22 @@ export function getModelFetch(fetcher = getProxyConfig().customFetch ?? globalTh
     }
     const { pathname } = url;
     const chat = pathname.endsWith(CHAT_PATH);
-    const azureV1Chat = azure && pathname === '/openai/v1/chat/completions';
-    const openai = hostname === 'api.openai.com' || azure;
+    if (azure) {
+      const path = pathname.replace(/\/$/, '');
+      let endpoint: AzureEndpoint;
+      if (path === '/openai/v1/chat/completions') endpoint = 'v1-chat';
+      else if (path === '/openai/v1/responses') endpoint = 'responses';
+      else if (azureDeployment && path.endsWith(CHAT_PATH)) endpoint = 'legacy-chat';
+      else return fetcher(input, init);
+      return fetchAzure(fetcher, input, init, JSON.parse(init.body), endpoint);
+    }
+    const openai = hostname === 'api.openai.com';
     const anthropic = hostname === ANTHROPIC_HOST;
     if (!(openai && (chat || pathname.endsWith('/responses'))) && !(anthropic && chat)) {
       return fetcher(input, init);
     }
 
     const body = JSON.parse(init.body);
-    const azureLegacyChat = azureDeployment && chat;
-    if (azureV1Chat || azureLegacyChat) {
-      return fetchAzureChat(fetcher, input, init, body, azureLegacyChat);
-    }
     if (openai) {
       if (!isModernOpenAIModel(body.model ?? '')) return fetcher(input, init);
       if (chat && 'max_tokens' in body) replaceTokenLimit(body, 'max_tokens');

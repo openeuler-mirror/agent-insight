@@ -185,6 +185,15 @@ test('Azure OpenAI 要求填写部署名并将它发给对应资源', async t =>
   assert.equal(fetch.mock.callCount(), 1);
 });
 
+test('Azure 配置从已保存的资源 URL 恢复预设，切换供应商后按当前配置识别', () => {
+  const resource = 'https://example.openai.azure.com';
+  for (const baseUrl of [`${resource}/openai/v1`, `${resource}/openai/deployments/eval?api-version=2024-10-21`]) {
+    assert.equal(resolveCatalogProvider('custom', baseUrl)?.id, 'azure-openai');
+    assert.equal(resolveCatalogProvider('openai', baseUrl)?.id, 'openai');
+  }
+  assert.equal(resolveCatalogProvider('custom', `${resource}.gateway.test/openai/v1`)?.id, 'custom');
+});
+
 test('Azure v1 按部署返回的错误调整 token 上限或采样', async () => {
   const url = 'https://example.openai.azure.com/openai/v1/chat/completions';
   const base = { model: 'evaluation-deployment', response_format: { type: 'json_object' } };
@@ -208,6 +217,26 @@ test('Azure v1 按部署返回的错误调整 token 上限或采样', async () =
     assert.deepEqual(bodies, retryBody ? [{ ...expected, ...sampling }, retryBody] : [{ ...expected, ...sampling }]);
     assert.equal(response.status, error && !retryBody ? 400 : 200);
     assert.deepEqual(await response.json(), error && !retryBody ? { error } : completion);
+  }
+});
+
+test('Azure Responses 按实际拒绝处理采样，保留 Responses token 和结构化输出', async () => {
+  const url = 'https://example.openai.azure.com/openai/v1/responses';
+  const reply = { id: 'resp-test', output: [] };
+  const text = { format: { type: 'json_schema', name: 'evaluation', schema: { type: 'object' } } };
+  for (const model of ['evaluation-deployment', 'gpt-5-legacy-alias']) {
+    const base = { model, input: 'Reply with OK.', max_output_tokens: 512, text };
+    const body = { ...base, temperature: 0, top_p: 1 };
+    const error = Response.json({ error: { param: 'temperature', code: 'unsupported_value' } }, { status: 400 });
+    const bodies: unknown[] = [];
+    const fetch = getModelFetch(async (target, request) => {
+      assert.equal(target, url);
+      bodies.push(JSON.parse(request?.body as string));
+      return bodies.length === 1 ? error : Response.json(reply);
+    });
+    const response = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
+    assert.deepEqual(await response.json(), reply);
+    assert.deepEqual(bodies, [body, base]);
   }
 });
 
@@ -240,32 +269,117 @@ test('Azure 旧版连接测试保留部署路径和 API 版本，按部署兼容
   }
 });
 
-test('Azure 旧版评测可分别处理采样和 token 上限拒绝，保留结构化输出', async () => {
-  const url = 'https://example.openai.azure.com/openai/deployments/eval/chat/completions?api-version=2025-04-01-preview';
+test('Azure 旧版评测重试保留代理、请求头和结构化输出', async t => {
+  const origin = 'https://example.openai.azure.com';
+  const path = '/openai/deployments/eval/chat/completions?api-version=2025-04-01-preview';
   const base = { model: 'eval', response_format: { type: 'json_object' } };
-  const sampling = { temperature: 0, top_p: 1, seed: 42 };
-  const bodies: unknown[] = [];
-  const fetch = getModelFetch(async (target, init) => {
-    assert.equal(String(target), url);
+  const body = { ...base, temperature: 0, top_p: 1, seed: 42, max_tokens: 512 };
+  const headers = { 'api-key': 'test-only', 'x-custom': 'route-test', 'content-type': 'application/json' };
+  const originalEnv = process.env;
+  process.env = { ...originalEnv, https_proxy: 'http://proxy.test:3128', no_proxy: 'proxy.test' };
+  resetProxyConfigCache();
+  const agent = new MockAgent();
+  agent.disableNetConnect();
+  t.after(async () => {
+    process.env = originalEnv;
+    resetProxyConfigCache();
+    await agent.close();
+  });
+
+  const pool = agent.get(origin);
+  const match = { path, method: 'POST', headers };
+  pool.intercept(match)
+    .reply(400, { error: { param: 'temperature', code: 'unsupported_value' } });
+  pool.intercept(match)
+    .reply(400, { error: { message: "Unsupported parameter: 'max_tokens' is not supported with this model." } });
+  pool.intercept(match).reply(200, completion);
+  const dispatch = t.mock.method(ProxyAgent.prototype, 'dispatch', agent.dispatch.bind(agent));
+  t.mock.method(globalThis, 'fetch', async () => assert.fail('Azure requests must use the configured proxy'));
+
+  const response = await getModelFetch()(origin + path, { method: 'POST', headers, body: JSON.stringify(body) });
+  assert.deepEqual(await response.json(), completion);
+  assert.equal(dispatch.mock.callCount(), 3);
+  agent.assertNoPendingInterceptors();
+  const bodies = await Promise.all(dispatch.mock.calls.map(async ({ arguments: [request] }) => {
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of request.body as AsyncIterable<Uint8Array>) chunks.push(chunk);
+    return JSON.parse(Buffer.concat(chunks).toString());
+  }));
+  assert.deepEqual(bodies, [body, { ...base, max_tokens: 512 }, { ...base, max_completion_tokens: 512 }]);
+});
+
+test('Azure 旧版 Chat 在上游不识别 max_completion_tokens 时改用 max_tokens', async t => {
+  const fetch = t.mock.fn<typeof globalThis.fetch>(async (_url, init) => {
     const body = JSON.parse(init?.body as string);
-    bodies.push(body);
-    if ('temperature' in body) {
-      return Response.json({ error: { param: 'temperature', code: 'unsupported_value' } }, { status: 400 });
+    if ('max_completion_tokens' in body) {
+      return Response.json({ error: { message: 'Unrecognized request argument supplied: max_completion_tokens' } }, { status: 400 });
     }
-    if ('max_tokens' in body) {
-      return Response.json({ error: {
-        message: "Unsupported parameter: 'max_tokens' is not supported with this model.",
-      } }, { status: 400 });
-    }
+    assert.deepEqual(body, { model: 'evaluation-deployment', max_tokens: 128 });
     return Response.json(completion);
   });
-  const response = await fetch(url, { method: 'POST', body: JSON.stringify({ ...base, ...sampling, max_tokens: 512 }) });
-  assert.deepEqual(await response.json(), completion);
+  const response = await getModelFetch(fetch)(
+    'https://example.openai.azure.com/openai/deployments/eval/chat/completions?api-version=2024-10-21',
+    { method: 'POST', body: JSON.stringify({ model: 'evaluation-deployment', max_completion_tokens: 128 }) },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(fetch.mock.callCount(), 2);
+});
+
+test('Azure 兼容重试最多两次，保留同一传输参数且仅记录字段名', async t => {
+  const url = 'https://example.openai.azure.com/openai/v1/chat/completions';
+  const headers = new Headers({ 'api-key': 'test-only', 'x-custom': 'private-header' });
+  const signal = new AbortController().signal;
+  const base = { model: 'eval', messages: [{ role: 'user', content: 'private-prompt' }] };
+  const original = Response.json({ error: { param: 'max_tokens', code: 'unsupported_parameter' } }, { status: 400 });
+  const replies = [
+    Response.json({ error: { param: 'max_completion_tokens', code: 'unsupported_parameter' } }, { status: 400 }),
+    Response.json({ error: { param: 'temperature', code: 'unsupported_value', message: 'private-upstream-message' } }, { status: 400 }),
+    original,
+  ];
+  const bodies: unknown[] = [];
+  const warn = t.mock.method(console, 'warn', () => {});
+  const fetch = getModelFetch(async (target, init) => {
+    assert.equal(target, url);
+    assert.equal(init?.headers, headers);
+    assert.equal(init?.signal, signal);
+    bodies.push(JSON.parse(init?.body as string));
+    return replies[bodies.length - 1] ?? assert.fail('Too many compatibility retries');
+  });
+  const response = await fetch(url, { method: 'POST', headers, signal, body: JSON.stringify({ ...base, max_tokens: 512, temperature: 0 }) });
+  assert.equal(response, original);
+  assert.equal(response.bodyUsed, false);
   assert.deepEqual(bodies, [
-    { ...base, ...sampling, max_tokens: 512 },
+    { ...base, max_completion_tokens: 512, temperature: 0 },
+    { ...base, max_tokens: 512, temperature: 0 },
     { ...base, max_tokens: 512 },
-    { ...base, max_completion_tokens: 512 },
   ]);
+  assert.deepEqual(warn.mock.calls.map(call => call.arguments.slice(1)), [
+    [{ endpoint: 'v1-chat', parameter: 'max_completion_tokens', retry: 1 }],
+    [{ endpoint: 'v1-chat', parameter: 'temperature', retry: 2 }],
+  ]);
+  assert.doesNotMatch(JSON.stringify(warn.mock.calls.map(call => call.arguments)), /private-|test-only/);
+});
+
+test('Azure 原样返回无法确认兼容性的 400', async t => {
+  const cases = [
+    ['chat/completions', { param: 'temperature', code: 'invalid_request_error' }],
+    ['chat/completions', { param: 'temperature', message: "Unsupported parameter: 'response_format' is not supported with this model." }],
+    ['chat/completions', { param: 'max_completion_tokens', code: 'unsupported_value' }],
+    ['chat/completions', { param: 'max_completion_tokens', message: "Unsupported value: 'max_completion_tokens' exceeds the model limit." }],
+    ['responses', { param: 'max_output_tokens', code: 'unsupported_parameter' }],
+    ['chat/completions', 'non-JSON error'],
+  ] as const;
+  const body = JSON.stringify({ model: 'eval', max_completion_tokens: 512, max_output_tokens: 512, temperature: 0 });
+  for (const [path, error] of cases) {
+    const payload = typeof error === 'string' ? error : JSON.stringify({ error });
+    const original = new Response(payload, { status: 400, headers: { 'x-request-id': 'test-request' } });
+    const fetch = t.mock.fn(async () => original);
+    const response = await getModelFetch(fetch)(`https://example.openai.azure.com/openai/v1/${path}`, { method: 'POST', body });
+    assert.equal(fetch.mock.callCount(), 1);
+    assert.equal(response, original);
+    assert.equal(response.headers.get('x-request-id'), 'test-request');
+    assert.equal(await response.text(), payload);
+  }
 });
 
 test('技能生成的 Anthropic 客户端使用代理和原生 Messages 路径', async t => {
@@ -343,6 +457,12 @@ test('共享传输按官方端点转换参数，自定义端点保留原始请�
     ['https://model.test/v1/chat/completions',
       { model: 'gpt-6-astra', ...sampling, ...gatewayFormat },
       { model: 'gpt-6-astra', ...sampling, ...gatewayFormat }],
+    ...[
+      'https://model.test/openai/v1/responses',
+      'https://example.openai.azure.com/openai/responses',
+      'https://example.openai.azure.com/team/chat/completions',
+      'https://example.openai.azure.com/openai/deployments/eval/responses?api-version=2025-04-01-preview',
+    ].map(url => [url, { model: 'gpt-5-alias', max_tokens: 512, ...sampling }, { model: 'gpt-5-alias', max_tokens: 512, ...sampling }] as const),
   ] as const;
   for (const [url, request, expected] of cases) {
     const fetcher = getModelFetch(async (_url, init) => {
@@ -368,6 +488,25 @@ test('响应头已经返回但响应体未结束时仍受总截止时间约束',
     }), { headers: { 'Content-Type': 'application/json' } }),
   }), { name: 'TimeoutError' });
   assert.equal(aborted, true);
+});
+
+test('Azure 等待 400 错误体时仍受连接测试的总超时约束', async t => {
+  let aborted = false;
+  const fetch = t.mock.fn<typeof globalThis.fetch>(async (_url, init) => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"error":'));
+      init!.signal!.addEventListener('abort', () => {
+        aborted = true;
+        controller.error(init!.signal!.reason);
+      }, { once: true });
+    },
+  }), { status: 400, headers: { 'content-type': 'application/json' } }));
+
+  await assert.rejects(probeModelConnection({
+    provider: 'custom', baseUrl: 'https://example.openai.azure.com/openai/v1', model: 'evaluation-deployment',
+  }, { timeoutMs: 50, signal: new AbortController().signal, fetch }), { name: 'TimeoutError' });
+  assert.equal(aborted, true);
+  assert.equal(fetch.mock.callCount(), 1);
 });
 
 test('用户取消会终止底层请求，后续测试可独立成功', async () => {

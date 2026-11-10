@@ -80,7 +80,9 @@ changefreq: monthly
 
 注册 xAI 时选择 **xAI Grok**，Base URL 使用 `https://api.x.ai/v1`。已有配置若填了已退役的 `grok-3` 等旧模型，请编辑模型名为 `grok-4.7` 后重新测试。注册 Azure OpenAI 时，Base URL 使用 `https://<resource>.openai.azure.com/openai/v1`，并在 **部署名称** 中填写实际部署名。
 
-已有 Azure 旧版部署可使用完整的 `https://<resource>.openai.azure.com/openai/deployments/<deployment>/chat/completions?api-version=<version>`，并保留原有鉴权设置。Azure 明确拒绝 token 上限字段或采样参数时，系统调整相应字段并重试，每类参数最多调整一次。
+已有 Azure 旧版部署可使用完整的 `https://<resource>.openai.azure.com/openai/deployments/<deployment>/chat/completions?api-version=<version>`，并保留原有鉴权设置。编辑 Azure 配置时，表单根据当前资源地址显示 **部署名称**。
+
+连接测试使用 Chat Completions。Azure Chat 请求在上游明确拒绝 token 字段名或采样参数时，每类兼容调整最多重试一次。共享传输处理 `/openai/v1/responses` 请求时保留 `max_output_tokens` 和 `text.format`，仅在上游明确拒绝采样参数时重试一次。
 
 Anthropic 的 Base URL 可填写 `https://api.anthropic.com/v1` 或完整的 `https://api.anthropic.com/v1/messages`。
 

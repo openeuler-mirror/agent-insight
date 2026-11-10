@@ -599,6 +599,13 @@ export function resolveCatalogProvider(
     const direct = getProvider(storedProvider);
     if (direct && direct.id !== 'custom') return direct;
     if (!baseUrl) return direct;
+    if (storedProvider === 'custom') {
+        try {
+            if (new URL(baseUrl).hostname.endsWith('.openai.azure.com')) return getProvider('azure-openai');
+        } catch {
+            // A Base URL being edited can be incomplete.
+        }
+    }
     const normalized = baseUrl.replace(/\/+$/, '').toLowerCase();
     return LLM_PROVIDERS.find(p => {
         if (!p.baseUrl) return false;

@@ -442,7 +442,10 @@ export function ModelConfigManager() {
             ) : editingConfigId ? (
                 <EditForm
                     config={tempConfig}
-                    setConfig={setTempConfig}
+                    setConfig={config => {
+                        if (config.provider !== tempConfig.provider) setPickedProvider(null);
+                        setTempConfig(config);
+                    }}
                     onCancel={() => { setEditingConfigId(null); setPickedProvider(null); }}
                     onReselect={editingConfigId === 'new' ? reopenPicker : undefined}
                     onSave={saveCurrentConfig}
@@ -1181,7 +1184,7 @@ function ProviderPicker({
 }
 
 function EditForm({
-    config, setConfig, onCancel, onReselect, onSave, isSaving, isTesting, onCancelTest, isDefault, pickedProvider, locale,
+    config, setConfig, onCancel, onReselect, onSave, isSaving, isTesting, onCancelTest, isDefault, pickedProvider: providerFromPicker, locale,
 }: {
     config: EvalConfigItem;
     setConfig: (c: EvalConfigItem) => void;
@@ -1195,7 +1198,8 @@ function EditForm({
     pickedProvider?: LlmProvider | null;
     locale: string;
 }) {
-    const isAzureOpenAI = pickedProvider?.id === 'azure-openai';
+    const isAzureOpenAI = resolveCatalogProvider(config.provider, config.baseUrl)?.id === 'azure-openai';
+    const pickedProvider = providerFromPicker?.id === 'azure-openai' && !isAzureOpenAI ? null : providerFromPicker;
     const onProviderChange = (p: EvalConfigItem['provider']) => {
         const preset = getProvider(p);
         setConfig({
