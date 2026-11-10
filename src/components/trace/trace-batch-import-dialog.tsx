@@ -127,6 +127,17 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
 
     const itemsRef = React.useRef<BatchItem[]>([]);
     const flagsRef = React.useRef({ stopRequested: false, cancelRequested: false });
+    const queueRunningRef = React.useRef(false);
+    const reloadTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const notifyImportSuccess = React.useCallback(() => {
+        // 列表刷新去抖：批量连续成功时合并为一次整页刷新（评审 P3-4）
+        if (reloadTimerRef.current !== null) return;
+        reloadTimerRef.current = setTimeout(() => {
+            reloadTimerRef.current = null;
+            onImportSuccess?.();
+        }, 1500);
+    }, [onImportSuccess]);
     const inputRef = React.useRef<HTMLInputElement>(null);
     const idSeqRef = React.useRef(0);
 
@@ -211,45 +222,51 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
     }, [zh, user]);
 
     const runQueue = React.useCallback(async () => {
-        setPhase('running');
-        setFeedback(null);
-        flagsRef.current = { stopRequested: false, cancelRequested: false };
-        setStopRequested(false);
-        setCancelRequested(false);
-        for (;;) {
-            const next = itemsRef.current.find(i => i.status === 'waiting');
-            if (!next || flagsRef.current.stopRequested || flagsRef.current.cancelRequested) break;
-            updateItems(cur => cur.map(i => i.id === next.id ? { ...i, status: 'importing' as ItemStatus } : i));
-            try {
-                const result = await importOne(next);
-                updateItems(cur => cur.map(i => i.id === next.id
-                    ? { ...i, status: 'success' as ItemStatus, result, recoverable: false, errorMessage: undefined }
-                    : i));
-                onImportSuccess?.();
-            } catch (error) {
-                const failure = classifyFailure(error);
-                updateItems(cur => cur.map(i => i.id === next.id
-                    ? {
-                        ...i,
-                        status: 'failed' as ItemStatus,
-                        recoverable: failure.recoverable,
-                        errorKind: failure.kind,
-                        reasonShort: failure.short,
-                        reasonDetail: failure.detail,
-                    }
-                    : i));
+        if (queueRunningRef.current) return; // 队列已在运行：重试只需标注 waiting，由当前循环接续，绝不并发启动第二个循环
+        queueRunningRef.current = true;
+        try {
+            setPhase('running');
+            setFeedback(null);
+            for (;;) {
+                const next = itemsRef.current.find(i => i.status === 'waiting');
+                if (!next || flagsRef.current.stopRequested || flagsRef.current.cancelRequested) break;
+                updateItems(cur => cur.map(i => i.id === next.id ? { ...i, status: 'importing' as ItemStatus } : i));
+                try {
+                    const result = await importOne(next);
+                    updateItems(cur => cur.map(i => i.id === next.id
+                        ? { ...i, status: 'success' as ItemStatus, result, recoverable: false, errorKind: undefined, reasonShort: undefined, reasonDetail: undefined }
+                        : i));
+                    notifyImportSuccess();
+                } catch (error) {
+                    const failure = classifyFailure(error);
+                    updateItems(cur => cur.map(i => i.id === next.id
+                        ? {
+                            ...i,
+                            status: 'failed' as ItemStatus,
+                            recoverable: failure.recoverable,
+                            errorKind: failure.kind,
+                            reasonShort: failure.short,
+                            reasonDetail: failure.detail,
+                        }
+                        : i));
+                }
             }
+            if (flagsRef.current.stopRequested || flagsRef.current.cancelRequested) {
+                updateItems(cur => cur.map(i => i.status === 'waiting' ? { ...i, status: 'stopped' as ItemStatus } : i));
+            }
+            setPhase('done');
+            setStopRequested(flagsRef.current.stopRequested);
+            setCancelRequested(flagsRef.current.cancelRequested);
+        } finally {
+            queueRunningRef.current = false;
         }
-        if (flagsRef.current.stopRequested || flagsRef.current.cancelRequested) {
-            updateItems(cur => cur.map(i => i.status === 'waiting' ? { ...i, status: 'stopped' as ItemStatus } : i));
-        }
-        setPhase('done');
-        setStopRequested(flagsRef.current.stopRequested);
-        setCancelRequested(flagsRef.current.cancelRequested);
-    }, [importOne, onImportSuccess, updateItems]);
+    }, [importOne, notifyImportSuccess, updateItems]);
 
     const handleStart = React.useCallback(() => {
         if (!itemsRef.current.length) return;
+        flagsRef.current = { stopRequested: false, cancelRequested: false };
+        setStopRequested(false);
+        setCancelRequested(false);
         void runQueue();
     }, [runQueue]);
 
@@ -274,6 +291,10 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
         updateItems(cur => cur.map(i => ids.includes(i.id)
             ? { ...i, status: 'waiting' as ItemStatus, reasonShort: undefined, reasonDetail: undefined }
             : i));
+        if (queueRunningRef.current) return; // 队列运行中：绝不清除停止/取消标记，也绝不并发启动第二个循环
+        flagsRef.current = { stopRequested: false, cancelRequested: false };
+        setStopRequested(false);
+        setCancelRequested(false);
         void runQueue();
     }, [runQueue, updateItems]);
 
@@ -289,7 +310,8 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
         const stopped = items.filter(i => i.status === 'stopped').length;
         const processed = success + failed + stopped;
         const retryable = items.filter(i => i.status === 'failed' && i.recoverable).length;
-        return { success, failed, importing, waiting, stopped, processed, total: items.length, retryable };
+        const pending = waiting + importing + stopped;
+        return { success, failed, importing, waiting, stopped, processed, total: items.length, retryable, pending };
     }, [items]);
 
     const importingIndex = React.useMemo(
@@ -301,7 +323,7 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
         if (phase === 'select') return items;
         if (filter === 'success') return items.filter(i => i.status === 'success');
         if (filter === 'failed') return items.filter(i => i.status === 'failed');
-        if (filter === 'pending') return items.filter(i => i.status !== 'success');
+        if (filter === 'pending') return items.filter(i => i.status === 'waiting' || i.status === 'importing' || i.status === 'stopped');
         return items;
     }, [items, filter, phase]);
 
@@ -310,12 +332,12 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
         : phase === 'running'
             ? (cancelRequested ? (zh ? '取消中' : 'Cancelling…')
                 : stopRequested ? (zh ? '停止中' : 'Stopping…') : (zh ? '进行中' : 'In progress'))
-            : counts.stopped > 0 && counts.success === 0 && counts.failed === 0
+            : counts.stopped > 0
                 ? (zh ? '已停止' : 'Stopped')
                 : counts.failed > 0 ? (zh ? '部分失败' : 'Partially failed') : (zh ? '全部成功' : 'All imported');
 
     const statusBadge = (item: BatchItem) => {
-        const map: Record<ItemStatus, { label: string; cls: React.ReactNode; icon: React.ReactNode }> = {
+        const map: Record<ItemStatus, { label: string; cls: string; icon: React.ReactNode }> = {
             success: {
                 label: zh ? '导入成功' : 'Imported',
                 cls: 'text-green-700 bg-green-50 border-green-200',
@@ -363,11 +385,7 @@ export function TraceBatchImportDialog({ open, onOpenChange, onImportSuccess }: 
         { key: 'all', label: zh ? '全部' : 'All', count: counts.total },
         { key: 'success', label: zh ? '成功' : 'Success', count: counts.success },
         { key: 'failed', label: zh ? '失败' : 'Failed', count: counts.failed },
-        {
-            key: 'pending',
-            label: zh ? '未导入' : 'Not imported',
-            count: counts.total - counts.success - counts.failed,
-        },
+        { key: 'pending', label: zh ? '未导入' : 'Not imported', count: counts.pending },
     ];
 
     return (
