@@ -47,7 +47,7 @@ test('administrator Trace reads and dashboard aggregates share the global scope'
         const id = `trace-${owner ?? 'unowned'}`;
         await prismaRaw.execution.create({ data: {
             id, taskId: id, user: owner, timestamp, lastIngestedAt: timestamp,
-            framework: owner ?? 'unowned', agentName: 'worker', latency: 1,
+            framework: owner ?? 'unowned', sourceKind: owner === 'bob' ? 'desktop' : 'cli', agentName: 'worker', latency: 1,
             tokens: 100, inputTokens: 80, outputTokens: 20, model: 'test-model',
         } });
         await prismaRaw.session.create({ data: {
@@ -94,6 +94,8 @@ test('administrator Trace reads and dashboard aggregates share the global scope'
         }
         assert.equal((await json(data, url + '&listPart=stats', 'admin')).stats.total, 1);
         assert.equal((await json(data, url + '&framework=alice', 'admin')).records.length, 0);
+        assert.equal((await json(data, url + '&sourceKind=desktop', 'admin')).records.length, 1);
+        assert.equal((await json(data, url + '&sourceKind=cli&listPart=stats', 'admin')).stats.total, 0);
         const own = await json(data, url, 'alice');
         assert.deepEqual(own.records.map((row: { user: string }) => row.user), ['alice']);
         assert.equal(own.stats.total, 1);
@@ -114,7 +116,46 @@ test('administrator Trace reads and dashboard aggregates share the global scope'
     await context.test('admin can open another owner session while ordinary users cannot', async () => {
         const url = '/api/observe/session?taskId=trace-bob';
         assert.equal((await session.GET(request(url, 'admin'))).status, 200);
+        assert.equal((await session.GET(request(url + '&user=admin', 'admin'))).status, 200);
+        assert.equal((await session.GET(request(url + '&user=alice', 'bob'))).status, 200);
         assert.equal((await session.GET(request(url, 'alice'))).status, 403);
+        assert.equal((await session.GET(request(url + '&user=bob', 'alice'))).status, 403);
+    });
+
+    await context.test('admin session reads retain owner-scoped Codex thread and execution metadata', async () => {
+        const thread = await prismaRaw.traceThread.create({ data: {
+            framework: 'codex', sourceThreadId: 'bob-thread', sourceKind: 'desktop', user: 'bob',
+            events: { create: {
+                eventKey: 'bob-thread-event', kind: 'execution_started', startedAt: timestamp,
+                executionId: 'trace-bob', sourceTurnId: 'bob-turn',
+            } },
+        } });
+        await prismaRaw.execution.update({ where: { id: 'trace-bob' }, data: {
+            framework: 'codex', traceThreadId: thread.id, sourceExecutionId: 'bob-turn', executionStatus: 'completed',
+        } });
+        try {
+            for (const [viewer, view] of ['admin', 'bob'].flatMap(viewer =>
+                ['full', 'structure', 'interactions', 'interaction&index=0'].map(view => [viewer, view]))) {
+                const result = await json(session, `/api/observe/session?taskId=trace-bob&user=admin&view=${view}`, viewer);
+                assert.equal(result.execution.sourceKind, 'desktop');
+                assert.equal(result.execution.sourceExecutionId, 'bob-turn');
+                assert.equal(result.execution.status, 'completed');
+                assert.equal(result.thread.id, thread.id);
+                assert.equal(result.thread.events[0].executionId, 'trace-bob');
+            }
+            await prismaRaw.traceThread.update({ where: { id: thread.id }, data: { user: 'alice' } });
+            const result = await json(session, '/api/observe/session?taskId=trace-bob', 'admin');
+            assert.equal(result.thread, undefined);
+            await prismaRaw.session.update({ where: { taskId: 'trace-bob' }, data: { user: 'alice' } });
+            await prismaRaw.execution.update({ where: { id: 'trace-bob' }, data: { user: 'alice' } });
+            assert.equal((await session.GET(request('/api/observe/session?taskId=trace-bob', 'bob'))).status, 403);
+            assert.equal((await session.GET(request('/api/observe/session?taskId=trace-bob', 'alice'))).status, 200);
+            assert.equal((await session.GET(request('/api/observe/session?taskId=trace-bob', 'admin'))).status, 200);
+        } finally {
+            await prismaRaw.session.update({ where: { taskId: 'trace-bob' }, data: { user: 'bob' } });
+            await prismaRaw.execution.update({ where: { id: 'trace-bob' }, data: { framework: 'bob', user: 'bob', traceThreadId: null } });
+            await prismaRaw.traceThread.delete({ where: { id: thread.id } });
+        }
     });
 
     await context.test('legacy sessions without an owner remain readable by their execution owner', async () => {
