@@ -14,6 +14,27 @@
 > 而是 `design.md` + `assets/` + 可选的 `index.html`(给人读的渲染版)。它们原先放在已废弃的 `designs/`
 > 目录下,现已并入本目录统一索引。
 
+## 需求 Epic
+
+所有新需求先归入一个主 Epic，再进入需求分析、设计和开发计划。Epic 用于表达需求所属的长期产品能力，具体交付仍由可独立验收和关闭的 issue 跟踪。
+
+| Epic | AtomGit 标题前缀 | 负责的问题 | 典型范围 |
+|-|-|-|-|
+| Observation | `[OBS]` | Agent 实际做了什么、运行过程中发生了什么 | Agent/框架接入，Hook 与 OTLP 采集，Trace 完整性，spool，Trace 查询、展示、分析与运行状态观测 |
+| Evaluation | `[EVAL]` | Agent 或 Skill 做得怎么样，结果是否可信、可比较、可复现 | Dataset，Experiment，Evaluator，Agent/Skill 对照评估，评分校准，版本快照，回归验证与工程证据 |
+| Diagnosis | `[DIAG]` | 失败发生在哪里、为什么发生、证据是什么 | Trace 异常归因，步骤与 Tool/Skill 分析，故障模式识别，诊断报告及诊断结果回流 |
+| Optimization | `[OPT]` | 如何基于证据产生改进，并证明改进没有引入回归 | Skill 生成与优化，候选版本，复测，A/B 对比，发布门禁及持续改进闭环 |
+| Foundation | `[FOUND]` | 平台能否安全、稳定、可恢复、可扩展地支撑上述能力 | 持久化任务，Session 生命周期，存储与数据库，配置，部署，API 契约，测试、CI、发布及扩展机制 |
+| Project Collaboration & Auth | `[AUTH]` | 多用户如何在项目边界内安全协作和访问资源 | 身份认证，Project，成员与角色，Trace/Skill/Dataset/Experiment 授权，API Key，审计和数据隔离 |
+
+归类规则：
+
+1. 每个 issue 只选择一个主 Epic，AtomGit 标题使用对应前缀，例如：`[OBS][P1] OTLP gzip 请求体解码失败`。
+2. 跨 Epic 依赖写在 issue 正文中，不通过叠加多个 Epic 前缀表达。
+3. `Foundation` 负责通用技术底座；只要需求直接涉及用户、项目、角色或资源访问边界，就归入 `Project Collaboration & Auth`。
+4. Reliability 是横跨 Observation、Evaluation、Diagnosis 和 Optimization 的质量属性，不单独设 Epic：运行状态观测归 Observation，可靠性评估归 Evaluation，故障归因归 Diagnosis，恢复与改进归 Optimization；通用任务恢复和运行底座归 Foundation。
+5. 客户专用协议、身份源、报表或流程优先通过 Adapter、Exporter、Webhook 或配置扩展；只有具备社区普适性的抽象能力才进入核心设计。
+
 ## 清单
 
 本次目录迁移的范围、缺口与待审历史资料见[迁移审查清单](platform/docs-migration/migration-review.md)。迁移保留旧条目的状态描述，不将其视为本轮重新验收的结果。
