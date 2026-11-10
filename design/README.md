@@ -20,16 +20,16 @@
 
 | Epic | AtomGit 标题前缀 | 负责的问题 | 典型范围 |
 |-|-|-|-|
-| Observation | `[OBS]` | Agent 实际做了什么、运行过程中发生了什么 | Agent/框架接入，Hook 与 OTLP 采集，Trace 完整性，spool，Trace 查询、展示、分析与运行状态观测 |
-| Evaluation | `[EVAL]` | Agent 或 Skill 做得怎么样，结果是否可信、可比较、可复现 | Dataset，Experiment，Evaluator，Agent/Skill 对照评估，评分校准，版本快照，回归验证与工程证据 |
-| Diagnosis | `[DIAG]` | 失败发生在哪里、为什么发生、证据是什么 | Trace 异常归因，步骤与 Tool/Skill 分析，故障模式识别，诊断报告及诊断结果回流 |
-| Optimization | `[OPT]` | 如何基于证据产生改进，并证明改进没有引入回归 | Skill 生成与优化，候选版本，复测，A/B 对比，发布门禁及持续改进闭环 |
-| Foundation | `[FOUND]` | 平台能否安全、稳定、可恢复、可扩展地支撑上述能力 | 持久化任务，Session 生命周期，存储与数据库，配置，部署，API 契约，测试、CI、发布及扩展机制 |
-| Project Collaboration & Auth | `[AUTH]` | 多用户如何在项目边界内安全协作和访问资源 | 身份认证，Project，成员与角色，Trace/Skill/Dataset/Experiment 授权，API Key，审计和数据隔离 |
+| Observation | `[E0]` | Agent 实际做了什么、运行过程中发生了什么 | Agent/框架接入，Hook 与 OTLP 采集，Trace 完整性，spool，Trace 查询、展示、分析与运行状态观测 |
+| Evaluation | `[E1]` | Agent 或 Skill 做得怎么样，结果是否可信、可比较、可复现 | Dataset，Experiment，Evaluator，Agent/Skill 对照评估，评分校准，版本快照，回归验证与工程证据 |
+| Diagnosis | `[E2]` | 失败发生在哪里、为什么发生、证据是什么 | Trace 异常归因，步骤与 Tool/Skill 分析，故障模式识别，诊断报告及诊断结果回流 |
+| Optimization | `[E3]` | 如何基于证据产生改进，并证明改进没有引入回归 | Skill 生成与优化，候选版本，复测，A/B 对比，发布门禁及持续改进闭环 |
+| Foundation | `[E4]` | 平台能否安全、稳定、可恢复、可扩展地支撑上述能力 | 持久化任务，Session 生命周期，存储与数据库，配置，部署，API 契约，测试、CI、发布及扩展机制 |
+| Project Collaboration & Auth | `[E5]` | 多用户如何在项目边界内安全协作和访问资源 | 身份认证，Project，成员与角色，Trace/Skill/Dataset/Experiment 授权，API Key，审计和数据隔离 |
 
 归类规则：
 
-1. 每个 issue 只选择一个主 Epic，AtomGit 标题使用对应前缀，例如：`[E1][bug][OBS] OTLP gzip 请求体解码失败`。
+1. 每个 issue 只选择一个主 Epic，AtomGit 标题使用对应编号，例如：`[E0][bug] OTLP gzip 请求体解码失败`。
 2. 跨 Epic 依赖写在 issue 正文中，不通过叠加多个 Epic 前缀表达。
 3. `Foundation` 负责通用技术底座；只要需求直接涉及用户、项目、角色或资源访问边界，就归入 `Project Collaboration & Auth`。
 4. Reliability 是横跨 Observation、Evaluation、Diagnosis 和 Optimization 的质量属性，不单独设 Epic：运行状态观测归 Observation，可靠性评估归 Evaluation，故障归因归 Diagnosis，恢复与改进归 Optimization；通用任务恢复和运行底座归 Foundation。
@@ -42,13 +42,10 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 ### 1. 整理 Issue
 
 1. 阅读原始描述，确认问题、使用场景、用户价值和预期结果；信息不足时向提交人追问。
-2. 将标题统一为 `[优先级][类型][Epic] 简明标题`，例如：`[E1][feature][EVAL] 支持自定义评估器超时配置`。
-3. 优先级只使用以下三级：
-   - `E0`：阻塞发布、核心流程不可用、严重数据或安全风险，需要立即处理。
-   - `E1`：当前阶段的重要需求或高影响缺陷，应进入近期计划。
-   - `E2`：一般改进、低频问题或尚未排期的需求，进入 Backlog。
-4. 类型只使用 `feature` 或 `bug`：新增或扩展用户能力归 `feature`；实际行为偏离既定设计、文档或合理预期归 `bug`。
-5. Epic 使用上表中的一个标题前缀；跨 Epic 依赖写在正文，不叠加多个 Epic 前缀。
+2. 将标题统一为 `[Epic 编号][类型] 简明标题`，例如：`[E1][feature] 支持自定义评估器超时配置`。
+3. 类型只使用 `feature` 或 `bug`：新增或扩展用户能力归 `feature`；实际行为偏离既定设计、文档或合理预期归 `bug`。
+4. Epic 使用上表中的一个编号；跨 Epic 依赖写在正文，不叠加多个 Epic 编号。
+5. 在 AtomGit 网页的优先级字段中设置优先级，不把优先级编码到 Issue 标题中。
 6. 重写 Issue 描述，至少包含：背景与用户价值、现状或复现步骤、目标行为、范围与非目标、验收标准、依赖或风险。Bug 还应补充环境、实际结果和复现证据。
 
 ### 2. 设置审查人
@@ -60,7 +57,7 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 ### 3. 审查完成条件
 
-以下条件全部满足后，Issue 才可进入排期或开发：标题格式正确；E0/E1/E2、类型和主 Epic 已确定；描述及验收标准完整；主审查人已设置；关键依赖和争议已有结论。任何字段发生实质变化时，PM 应重新通知审查人。
+以下条件全部满足后，Issue 才可进入排期或开发：标题格式正确；Epic 编号和类型已确定；网页优先级已设置；描述及验收标准完整；主审查人已设置；关键依赖和争议已有结论。任何字段发生实质变化时，PM 应重新通知审查人。
 
 ## 清单
 
