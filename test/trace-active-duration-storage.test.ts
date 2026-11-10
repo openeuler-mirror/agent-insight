@@ -60,14 +60,14 @@ test('Effective latency survives ingestion, list statistics, detail reads and sa
     const page = await readRecordPage('timing-test', undefined, { databasePagination: true, page: 1, pageSize: 10, lightweight: true, attachEvaluations: false });
     assert.equal(page.records[0].latency, 50000);
     assert.equal(page.stats.avgLatencyMs, 50000);
-    const detail = await (await GET(new Request('http://localhost/api/observe/session?taskId=active-test&view=structure&source=raw'))).json();
+    const detail = await (await GET(new Request('http://localhost/api/observe/session?user=timing-test&taskId=active-test&view=structure&source=raw'))).json();
     assert.equal(detail.execution.latency, 50000);
     const before = await client.execution.findUniqueOrThrow({ where: { id: 'active-test' } });
     const sessionBefore = await client.session.findUniqueOrThrow({ where: { taskId: 'active-test' } });
     await client.execution.update({ where: { id: 'active-test' }, data: { latency: 3650000 } });
     assert.equal((await repairTraceLatency(client)).changed, 1);
     assert.equal((await client.execution.findUniqueOrThrow({ where: { id: 'active-test' } })).latency, 3650000);
-    const oldDetail = await (await GET(new Request('http://localhost/api/observe/session?taskId=active-test&view=structure&source=raw'))).json();
+    const oldDetail = await (await GET(new Request('http://localhost/api/observe/session?user=timing-test&taskId=active-test&view=structure&source=raw'))).json();
     assert.equal(oldDetail.execution.latency, 50000, 'historical detail uses recalculated metrics');
     assert.equal((await repairTraceLatency(client, { apply: true })).updated, 1);
     assert.deepEqual(await client.execution.findUniqueOrThrow({ where: { id: 'active-test' } }), before, 'only latency is repaired');

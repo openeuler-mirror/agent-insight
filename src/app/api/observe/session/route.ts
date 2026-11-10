@@ -17,7 +17,7 @@
 import { deriveExecutionTiming } from '@/lib/engine/observability/execution-timing';
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { sessionTraceRelations } from '@/lib/trace/session-relations';
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
 import { analyzeSession } from '@/lib/engine/evaluation/judge';
@@ -36,6 +36,7 @@ import { loadDifyWorkflowProjection } from '@/lib/ingest/otel/dify-workflow-proj
 
 type ParsedSession = {
     framework?: string | null;
+    owner: string | null;
     session: any;
     execution?: {
         status?: string;
@@ -95,6 +96,8 @@ function sessionSignature(
         .join('\n');
     const executionSignature = execution
         ? JSON.stringify([
+            session?.user,
+            execution.user,
             execution.sourceKind,
             execution.sourceExecutionId,
             execution.executionStatus,
@@ -175,11 +178,11 @@ async function loadTraceThread(traceThreadId: string | null | undefined, user: s
 
 async function loadParsedSession(taskId: string, user?: string): Promise<ParsedSession | null> {
     const session = await db.findSessionByTaskId(taskId);
-    if (!session || (user !== undefined && session.user !== user)) return null;
+    if (!session) return null;
 
-    const owner = user ?? session.user ?? '';
-    const executions = await db.findExecutions({ taskId, user: owner }, { timestamp: 'desc' }, {
+    const executions = await db.findExecutions({ taskId, ...(session.user ? { user: session.user } : {}) }, { timestamp: 'desc' }, {
         id: true,
+        user: true,
         framework: true,
         latency: true,
         tokens: true,
@@ -190,12 +193,15 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
         sourceExecutionId: true,
         executionStatus: true,
     });
+    const executionOwners = new Set<string>(executions.map((execution: { user?: string | null }) => execution.user).filter((owner: string | null | undefined): owner is string => !!owner));
+    const owner = session.user || (executionOwners.size === 1 ? [...executionOwners][0] : null);
+    if (user !== undefined && owner !== user) return null;
     const executionRow = executions?.[0];
     const framework = executionRow?.framework;
-    const thread = executionRow
+    const thread = executionRow && owner
         ? await loadTraceThread(executionRow.traceThreadId, owner, executionRow.id)
         : undefined;
-    const signature = sessionSignature(session, framework, executionRow, thread);
+    const signature = sessionSignature(session, framework, { ...executionRow, user: owner }, thread);
     const cached = parsedSessionCache.get(taskId);
     if (cached && cached.signature === signature && cached.expiresAt > Date.now()) {
         return cached.value;
@@ -228,7 +234,7 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
         cost: executionRow.cost ?? null,
         timestamp: executionRow.timestamp ?? null,
     } : null;
-    const value = { session, execution, executionSummary, thread, interactions, langfuseTraceNodes, framework };
+    const value = { session, owner, execution, executionSummary, thread, interactions, langfuseTraceNodes, framework };
     rememberParsedSession(taskId, signature, value);
     return value;
 }
@@ -275,7 +281,6 @@ async function loadCollaborationProjection(taskId: string, parsed: ParsedSession
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const taskId = searchParams.get('taskId');
-    const user = searchParams.get('user');
     const view = searchParams.get('view') || 'full';
 
     if (!taskId) {
@@ -283,15 +288,15 @@ export async function GET(request: Request) {
     }
 
     try {
-        // user 参数可选：显式提供时做归属校验（防止跨用户读取）；未提供时由
-        // resolveUser 的 API key 校验兜底（username 与 session.user 不符即 403）。
-        const parsed = await loadParsedSession(taskId, user || undefined);
+        const scope = await resolveTraceReadScope(request);
+        if (!scope.username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        const parsed = await loadParsedSession(taskId);
         if (!parsed) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
         const { session, execution, thread, interactions, langfuseTraceNodes, executionSummary } = parsed;
-        const { username } = await resolveUser(request);
-        if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        if (!scope.canViewAllTraces && scope.username !== parsed.owner) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        const username = scope.canViewAllTraces ? parsed.owner : scope.username;
         const rawInteraction = searchParams.get('source') === 'raw';
         const difyProjection = !rawInteraction && parsed.framework === 'dify' && username && username === session.user
             ? await loadDifyWorkflowProjection(username, taskId, langfuseTraceNodes) : null;
