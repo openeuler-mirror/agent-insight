@@ -24,3 +24,5 @@ Benchmark 执行 Profile 支持显式 `backend/options`：按后端配置和探�
 [链路追踪时间筛选](./observability/view-traces.md#2-筛选区)支持快捷范围及精确到秒的自定义起止时间。
 
 [JiuwenSwarm 接入升级](../reference/observability/client-compatibility.md#jiuwenswarm)说明扩展更新、容器地址配置及完整 Trace 验收要求。
+
+[模型转发与推理分析接入](./observability/inference-gateway.md)：采集安装后，由用户显式备份并接管模型地址。

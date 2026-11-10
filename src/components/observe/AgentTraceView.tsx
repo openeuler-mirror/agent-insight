@@ -19,6 +19,8 @@
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
+import { InferenceAnalysisButton } from './InferenceAnalysisButton';
+import { inferenceAnalysisTarget } from '@/lib/trace/inference-analysis';
 import { AgentRelationCard } from './AgentRelationCard';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
@@ -536,6 +538,7 @@ interface RasSpanInfo {
 
 interface TraceCtxValue {
     framework?: string;
+    rootSessionId?: string;
     searchQuery: string;
     matchedKeys: Set<string>;
     activeMatchKey: string | null;
@@ -1060,6 +1063,7 @@ export default function AgentTraceView({
 
     const ctxValue: TraceCtxValue = {
         framework: framework?.trim().toLowerCase(),
+        rootSessionId,
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
@@ -1117,6 +1121,11 @@ export default function AgentTraceView({
             <div className="grid min-w-0 grid-cols-1 gap-3 @min-[900px]/agent-trace:min-h-[520px] @min-[900px]/agent-trace:h-[calc(100vh-200px)] @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
                 {/* ─── Left: Unified Span Tree ─── */}
                 <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
+                    {['qoder', 'opencode'].includes(ctxValue.framework || '') && (
+                        <div className="flex justify-end px-2.5 py-1.5 border-b border-border">
+                            <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'trace', rootSessionId, interactions: displayInteractions })} />
+                        </div>
+                    )}
                     {/* Toolbar: expand/collapse + search + filters */}
                     <div className={cn(
                         'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
@@ -2918,7 +2927,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
 
 function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
     const { locale } = useLocale();
-    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const { findEventAnomalies, framework, rootSessionId } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const startClock = formatClockMs(event.startedAt);
@@ -2956,6 +2965,9 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                 <div className="flex items-center gap-2 mb-1.5">
                     <KindBadge kind={event.kind} size="sm" />
                     <span className="flex-1 text-base font-semibold truncate text-foreground">{title}</span>
+                    {event.kind === 'llm' && ['qoder', 'opencode'].includes(framework || '') && (
+                        <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'llm', rootSessionId, interaction: event.interaction })} />
+                    )}
                 </div>
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.6875rem', color: 'var(--foreground-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
                     {dur && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{dur}</span>}
@@ -4219,7 +4231,7 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
     dur: string | null; time: string; onClose: () => void;
     node: AgentNode; interactions: RawInteraction[];
 }) {
-    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const { findEventAnomalies, framework, rootSessionId } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const title = event.name || event.summary?.slice(0, 60) || km.label;
@@ -4230,6 +4242,9 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                 <DialogHeader className="flex-row items-center gap-2 p-4 pr-12 border-b border-border space-y-0">
                     <KindBadge kind={event.kind} size="sm" />
                     <DialogTitle className="flex-1 font-semibold text-sm truncate text-foreground">{title}</DialogTitle>
+                    {event.kind === 'llm' && ['qoder', 'opencode'].includes(framework || '') && (
+                        <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'llm', rootSessionId, interaction: event.interaction })} />
+                    )}
                     <div className="flex gap-3 items-center shrink-0 text-xs text-foreground-muted">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}

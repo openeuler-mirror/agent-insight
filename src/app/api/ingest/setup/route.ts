@@ -22,6 +22,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
 import { db } from '@/lib/storage/prisma';
+import { INFERENCE_PROXY_UNIX_SETUP_BLOCK } from './inference-proxy-setup';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
@@ -43,6 +44,10 @@ const QODER_SETUP_COMPONENTS = new Set([
     'qoder_trace_collector.mjs',
     'qoder_uploader_client.mjs',
     'qoder_work_setup.mjs',
+    'inference_gateway.mjs',
+    'inference_config.mjs',
+    'inference_proxy.mjs',
+    'model-proxy.sh',
 ]);
 
 async function serveQoderSetupComponent(component: string): Promise<NextResponse> {
@@ -57,7 +62,7 @@ async function serveQoderSetupComponent(component: string): Promise<NextResponse
         const source = await readFile(path.join(process.cwd(), 'scripts', component), 'utf8');
         return new NextResponse(source, {
             headers: {
-                'Content-Type': 'text/javascript; charset=utf-8',
+                'Content-Type': component.endsWith('.sh') ? 'text/x-shellscript; charset=utf-8' : 'text/javascript; charset=utf-8',
                 'Cache-Control': 'no-store',
             },
         });
@@ -1114,6 +1119,7 @@ function generateBashScript(
         'fi',
         '',
         '# 6.6 Configure OpenClaw official OTel logs',
+        INFERENCE_PROXY_UNIX_SETUP_BLOCK,
         ...CODEAGENT_UNIX_SETUP_BLOCK.split('\n'),
         '',
         ...ACTRAIL_UNIX_SETUP_BLOCK.split('\n'),

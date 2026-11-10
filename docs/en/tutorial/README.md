@@ -28,3 +28,5 @@ Skill and ordinary experiment lists share automatic refresh: active records refr
 The [first Trace tutorial](./platform/01-quick-start.md#step-5-verify-a-trace) also covers custom time ranges.
 
 After a JiuwenSwarm upgrade, update its observability extension and restart AgentServer, then check input, response, model calls, tool results, and usage. See [JiuwenSwarm compatibility](../reference/observability/client-compatibility.md#jiuwenswarm).
+
+After collector setup, follow [explicit model forwarding](../how-to/observability/inference-gateway.md) to correlate inference analysis.

@@ -25,3 +25,5 @@ Skill 实验记录列表与普通实验共用自动刷新：有运行中记录�
 在链路追踪列表中，可通过“时间 → 自定义时间范围”定位指定时段；参见[首条 Trace 教程](./platform/01-quick-start.md#步骤五验证生成的-trace)。
 
 JiuwenSwarm 升级后，请更新观测扩展并重启 AgentServer，再检查输入、回答、模型调用、工具结果及 Token 是否完整；见[新旧契约兼容说明](../reference/observability/client-compatibility.md#jiuwenswarm)。
+
+关联外部推理分析时，完成采集安装后再按[显式模型转发指南](../how-to/observability/inference-gateway.md)配置。

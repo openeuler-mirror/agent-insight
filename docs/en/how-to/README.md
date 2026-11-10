@@ -65,3 +65,5 @@ Skill and ordinary experiment lists share automatic refresh: active records refr
 Trace filtering supports **Time → Custom time range** with optional start/end bounds to the second, interpreted in the displayed browser time zone. Select **Apply** to update the list and statistics together. At least one bound is required; invalid or reversed bounds cannot be applied. **Cancel** discards edits. Presets clear custom bounds. Links and same-tab filter memory preserve the range; reset clears it. See the [Trace guide (Chinese)](../../zh/how-to/observability/view-traces.md#2-筛选区).
 
 [JiuwenSwarm integration upgrades](../reference/observability/client-compatibility.md#jiuwenswarm) cover extension updates, container endpoints, and complete Trace acceptance.
+
+[Explicit inference gateway setup](./observability/inference-gateway.md) separates collector installation from model endpoint enrollment.
