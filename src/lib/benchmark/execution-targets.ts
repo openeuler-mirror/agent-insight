@@ -70,7 +70,7 @@ export function inspectBenchmarkExecutionTargets(
 
   return capabilities.platforms.filter((platform) => {
     const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
-    return actions.has('RUN_BENCHMARK_CASE') && (
+    return platform.version !== 'enterprise-ws-v1' && actions.has('RUN_BENCHMARK_CASE') && (
       platform.runBenchmarkCase?.returnsTraceId === true
       || platform.runExperimentCase?.returnsTraceId === true
     )

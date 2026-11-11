@@ -20,7 +20,10 @@ import { randomUUID, createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
-import { URL } from "node:url"
+import { URL, fileURLToPath } from "node:url"
+import { createRequire } from "node:module"
+
+const require = createRequire(import.meta.url)
 
 function getPreferredInsightDir() {
   if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
@@ -503,6 +506,7 @@ function readJsonl(file) {
     const text = fs.readFileSync(file, "utf8")
     const lines = text.split("\n")
     let pluginPid = null
+    let pluginCwd = null
     for (const line of lines) {
       if (!line || !line.trim()) continue
       const obj = safeJsonParse(line)
@@ -510,9 +514,11 @@ function readJsonl(file) {
       if (obj.kind === "plugin.start") {
         const pid = Number(obj?.payload?.pid)
         if (Number.isFinite(pid) && pid > 0) pluginPid = pid
+        if (typeof obj?.payload?.cwd === "string" && obj.payload.cwd.trim()) pluginCwd = path.resolve(obj.payload.cwd)
       }
       obj.__sourceFile = file
       if (pluginPid) obj.__pluginPid = pluginPid
+      if (pluginCwd) obj.__pluginCwd = pluginCwd
       records.push(obj)
     }
   } catch {}
@@ -676,6 +682,7 @@ function buildState(records) {
   const cliCompletedSessions = new Set()
   const sessionPids = new Map()
   const sessionFiles = new Map()
+  const sessionWorkspaces = new Map()
   const sessionIdleAt = new Map()
   // 每个 session 落到 spool 的原始记录条数。只增不减，是"这个会话还在干活"的唯一
   // 可靠信号——工具死循环时消息条数/终稿文本/时间戳全都不变，只有它会涨。
@@ -692,6 +699,7 @@ function buildState(records) {
       if (!sessionFiles.has(sid)) sessionFiles.set(sid, new Set())
       sessionFiles.get(sid).add(r.__sourceFile)
     }
+    if (typeof r.__pluginCwd === "string" && r.__pluginCwd) sessionWorkspaces.set(sid, r.__pluginCwd)
     const pid = Number(r?.__pluginPid)
     if (!Number.isFinite(pid) || pid <= 0) return
     if (!sessionPids.has(sid)) sessionPids.set(sid, new Set())
@@ -882,7 +890,80 @@ function buildState(records) {
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionFiles, sessionIdleAt, sessionRecordCounts }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionFiles, sessionWorkspaces, sessionIdleAt, sessionRecordCounts }
+}
+
+function extractInvokedSkillsForOrigin(interactions) {
+  const seen = new Set()
+  const out = []
+  const visit = (message) => {
+    for (const call of message?.tool_calls || message?.toolCalls || []) {
+      const tool = String(call?.function?.name ?? call?.name ?? "").toLowerCase()
+      if (tool !== "skill" && tool !== "load_skill") continue
+      const raw = call?.function?.arguments ?? call?.arguments ?? {}
+      let args = raw
+      try { if (typeof raw === "string") args = JSON.parse(raw) } catch { continue }
+      const value = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill ?? args?.id
+      const name = String(value || "").trim().replace(/^["']+|["']+$/g, "")
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || seen.has(name)) continue
+      seen.add(name)
+      const rawVersion = args?.version
+      const version = rawVersion == null ? null : Number(rawVersion)
+      out.push({ name, version: Number.isInteger(version) ? version : null })
+    }
+  }
+  for (const interaction of interactions || []) {
+    visit(interaction)
+    visit(interaction?.responseMessage)
+    for (const message of interaction?.requestMessages || []) visit(message)
+  }
+  return out
+}
+
+function skillDeploymentRuntime() {
+  const insightRoot = getPreferredInsightDir()
+  const candidates = [
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "skill-deployment-runtime.cjs"),
+    path.join(insightRoot, "client", "runtime", "skill-deployment-runtime.cjs"),
+  ]
+  for (const candidate of candidates) {
+    try { if (fs.existsSync(candidate)) return require(candidate) } catch {}
+  }
+  return null
+}
+
+function registerOpenCodeSkillOrigins(state, rootSid, interactions) {
+  const runtime = skillDeploymentRuntime()
+  const workspace = state.sessionWorkspaces.get(rootSid)
+    || collectSessionSubtree(state, rootSid).map(sid => state.sessionWorkspaces.get(sid)).find(Boolean)
+  if (!runtime || !workspace) return []
+  const frameworkRoot = path.join(path.resolve(workspace), ".opencode")
+  const origins = []
+  for (const skill of extractInvokedSkillsForOrigin(interactions)) {
+    const targetDir = path.join(frameworkRoot, "skills", skill.name)
+    if (!fs.existsSync(path.join(targetDir, "SKILL.md"))) continue
+    try {
+      const files = runtime.collectDirectoryFiles(targetDir)
+      const origin = runtime.registerSkillOrigin(path.join(getPreferredInsightDir(), "client"), {
+        platform: "opencode",
+        skillName: skill.name,
+        frameworkRoot,
+        targetDir,
+        observedSkillVersion: skill.version,
+        observedContentHash: runtime.snapshotHash(files),
+      })
+      origins.push({
+        skillName: skill.name,
+        skillVersion: skill.version,
+        platform: "opencode",
+        targetMode: "execution_origin",
+        originRef: origin.originRef,
+        displayPath: origin.displayPath,
+        observedContentHash: origin.observedContentHash,
+      })
+    } catch {}
+  }
+  return origins
 }
 
 // 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
@@ -1496,6 +1577,7 @@ async function main() {
       }
       const query = interactions.find((m) => m.role === "user" && m.content)?.content || `OpenCode Session ${rootSid}`
       const derived = deriveFields(interactions)
+      const skillOrigins = registerOpenCodeSkillOrigins(state, rootSid, interactions)
 
       // System prompts are now unshifted inside mergeGraph() per session
       // (root + sub-agents), so no extra unshift needed here. Keep `sys` for
@@ -1523,6 +1605,7 @@ async function main() {
         task_id: rootSid,
         query,
         framework: "opencode",
+        ...(skillOrigins.length ? { skill_origins: skillOrigins } : {}),
         ...(clientIdentity?.clientId ? { client_id: clientIdentity.clientId } : {}),
         host: {
           hostname: os.hostname() || clientIdentity?.hostname || undefined,

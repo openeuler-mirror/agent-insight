@@ -50,7 +50,7 @@ changefreq: monthly
 在实验设计中配置：
 
 - **实验名称**：本次验证的业务名称。
-- **待执行 Agent**：候选项来自已有历史 Trace 的 Agent 与在线客户端可执行 Agent 的并集。
+- **待执行 Agent**：候选项来自已有历史 Trace 的 Agent 与在线客户端可执行 Agent 的并集；JiuwenSwarm 有在线可执行目标时，仅列出当前可执行的 JiuwenSwarm Agent，历史别名和采集回退名称仍可在链路追踪中查看。
 - **评测数据集**：可选；生成 Trace 时必须选择。
 - **实验类型**：全局入口支持 **无变量 · 单组** 和 **LLM 对比**。
 
@@ -89,7 +89,11 @@ changefreq: monthly
 
 #### 生成新 Trace
 
+JiuwenSwarm 的运行主机是 Agent Insight 常驻客户端所在主机，容器只需提供可访问的 Gateway 和 OTLP 采集。即使在 JiuwenSwarm 容器内执行了接入安装命令，也不能替代所选客户端的更新。环境预检按 Gateway 连通性判断，不要求主机安装名为 `jiuwenswarm` 的 CLI；若仍提示安装，请更新并重启所选主机的常驻客户端，然后重新点击“下一步”。
+
 **生成 Trace** 使用数据集 Case 重新运行 Agent，再对新产生的 Trace 执行评估。
+
+JiuwenSwarm 使用当前 `0.0.13y` 镜像时，先启动 Gateway、AgentServer 和现有 OTLP 采集链路，再更新并重启能访问该 Gateway 的 Agent Insight 常驻客户端。在向导中选择 `main_agent`、运行主机和 Gateway 已配置的模型（或“平台默认”），即可把数据集 Case 作为新会话任务下发。客户端经 Gateway 的 `/ws` 读取 `models.list` 模型目录；选择具体模型时，通过 `chat.send.model_name` 指定模型，收到 `chat.final` 后，平台按会话索引等待 OTLP Trace 入库并绑定 Case。Gateway 不在默认 `ws://127.0.0.1:19000/ws` 时，在客户端服务环境中设置 `AGENT_INSIGHT_JIUWEN_WS_URL` 并重启客户端。当前仅支持普通单组生成 Trace 实验中的 `main_agent`；Skill 版本隔离、Benchmark 和故障注入仍不可选。若模型下拉框仅显示“平台默认”，检查客户端是否已更新、Gateway `models.list` 是否返回已配置模型，并等待能力刷新；目录检查不验证模型凭据或推理服务。若可看到历史 JiuwenSwarm Trace 却没有可执行目标，检查 Gateway 连通性、客户端在线状态及其能力刷新；若任务完成但 Case 未绑定，检查 OTLP 上传和 Jiuwen 会话索引。
 
 普通 Agent 实验中，Agent 会根据任务和运行环境选择可用的 Skill。要评测指定的 Skill 版本，请从 Skill 工作台新建[用例实验](./skills/use-case-analysis.md)，并选择生成 Trace。
 
@@ -513,3 +517,27 @@ Trace 评测详情把输入、输出和评分依据放在同一页，适合核�
 Case 详情在同一页面依次展示任务输入、预期输出、实际输出和评测结果。已完成的评测卡片可以直接勾选为诊断依据，其中「部分达成」和「未达成」项默认选中；待执行、执行中或评估失败的结果不能选择。所有评测区之后、本条 Case 评论之前的智能诊断操作栏汇总所选评测项，并自动关联被测执行的 Trace。
 
 智能诊断操作栏会在所选评测变化后自动准备冻结输入，无需手动刷新。准备期间「开始诊断」不可用；完成后可直接启动新任务。任务输入、参考答案、实际输出和评测依据沿用本页上方内容，不在操作栏重复展示。读取失败时可在错误提示中重试。每次启动都会创建新的诊断任务，即使输入与之前相同；查看已有结果请从「历史诊断」选择，不会自动复用历史报告。重复点击或网络重试属于同一次提交时，只创建一个任务。修改选择、重评或改分后会自动重新准备输入，历史报告仍使用原快照。评估器自身的运行轨迹不能代替被测 Agent 的 Trace；缺少被测执行时，应先补齐执行数据。启动后进入智能诊断界面（`/fault?runId=…`），同时展示被测 Trace、评测输入证据、诊断任务概况、模块过程和最终报告。底部操作栏的「历史诊断」可以返回同一 Case 的既有运行；旧 `/diagnosis-runs/:runId` 链接也会跳转到该界面。诊断完成后，「生成 Skill 优化计划」卡片先显示 Skill 与只读执行版本，其下的诊断发现下拉框支持多选，并且只显示关键发现；收起后仅显示数量和摘要。展开执行快照后可直接生成优化计划，无需再次勾选确认。执行版本固定，不提供版本选择；版本或内容校验信息缺失时禁止生成。
+
+### JiuwenSwarm 企业版：本地凭据与 Agent 选择
+
+在运行常驻客户端的用户环境中，先创建 `$AGENT_INSIGHT_HOME/client/jiuwen-enterprise.json`；未指定 `AGENT_INSIGHT_HOME` 时为 `~/.agent-insight/client/jiuwen-enterprise.json`。这个文件不是服务端配置，不能放到 Agent Insight 服务容器代替客户端配置。示例：
+
+```json
+{
+  "baseUrl": "https://jiuwen.example.com",
+  "username": "experiment-user",
+  "password": "replace-with-your-password"
+}
+```
+
+Unix 上先 `umask 077`，创建目录后用编辑器填写，最后 `chmod 600 <账号文件>`。不要把密码放进 curl URL 或 Shell 参数。自定义路径可设置 `AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG`，并保证安装进程与常驻服务均能读取该路径；默认路径通常无需额外变量。入口需要 HTTPS（仅本机回环允许 HTTP）。文件应持久化在用户卷中，且仅运行客户端的用户可读。
+
+1. 在 JiuwenSwarm 管理面创建可用 Agent、配置模型，并授予该账号使用权限。这些也是不接入 Agent Insight 时的企业版前提。
+2. 按上面的格式写好账号文件，复制 Agent Insight 当前账号“客户端安装”页的 curl 命令，选择 JiuwenSwarm，执行安装。客户端自动登录并获取授权 Agent 和各自的模型；安装输出授权数量，不输出密码或令牌。原有 `AGENT_INSIGHT_JIUWEN_WS_URL` 不用于企业账号模式，无需填写 user_id/group_id/bot_id。
+3. 新装 Trace 扩展后按安装提示重启 AgentServer；已有进程不会自动加载新扩展。确认客户端在线且使用当前 Agent Insight 的 Trace API Key。安装必须在实际 AgentServer 用户环境完成。
+4. 在“实验”中选择数据集和普通实验，选择目标 Agent（名称、实例和组织）、在线客户端以及模型，按向导检查环境后执行。界面传递稳定身份，重名 Agent 不会相互替代，也不跟随用户面最近选中的 Agent。
+5. 在 Case 查看实际 Trace、模型/工具调用和评测结果。Trace 通过新建的原生会话 ID 关联，不按输入文本猜测。
+
+客户端通过管理入口的 `/idp/v1/auth/token` 登录、`/api/v1/user-console/agent-contexts` 获取授权列表，使用带身份及实例 Cookie 的 `/ws` 连接，仍沿用 WebSocket `session.create` / `chat.send` 执行；不使用 HTTP/SSE 下发。访问/刷新令牌只留客户端内存，临期自动刷新，进程重启重新登录。每次执行前重新核验授权与模型，撤权、错误密码、空模型、网络或 CA 错误会明确报错，不切换其他 Agent。能力目录定期刷新，界面短暂显示旧目标也不能绕过执行前校验。
+
+当前覆盖普通实验，不包含企业版 Skill 快照隔离、Benchmark、故障注入或 SSO/MFA 交互登录。自签 CA 需按运行环境安装为可信证书；不会自动关闭 TLS 校验。无 systemd 时使用独立后台进程，容器重建后需要部署入口重新启动客户端，不能把后台进程当成容器生命周期托管。

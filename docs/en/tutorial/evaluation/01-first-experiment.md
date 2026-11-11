@@ -34,6 +34,8 @@ Choose **Select Trace (选择 Trace)**. Narrow the list by search, time, or user
 
 Avoid watch mode for the first run. Watch mode continuously evaluates later Traces and is better introduced after a controlled example works.
 
+To generate a new JiuwenSwarm Trace, prepare a dataset with a task input and keep the Gateway, AgentServer, OTLP collector, and Agent Insight client online. Select `main_agent` and the dataset, choose **Generate Trace**, then select the client host, a model configured in the Gateway (or **Platform default**), and a Case. The client sends the task to a fresh JiuwenSwarm session. See the [experiment guide, Chinese](../../../zh/how-to/evaluation/experiments.md#生成新-trace) for setup and troubleshooting.
+
 ## Step 3: Provide reference output when needed
 
 If the evaluator does not require reference output, continue. Otherwise supply the expected answer. With an existing matching dataset, use **Import matches from dataset (从数据集导入匹配)**.

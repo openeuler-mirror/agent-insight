@@ -73,6 +73,7 @@ function loadCollectorConfig(options = {}) {
     options.configPath ||
     path.join(homeDir, ".agent-insight", "collectors", "pi-agent", "config.json");
   const file = readJsonIfExists(configPath);
+  const client = readJsonIfExists(path.join(homeDir, ".agent-insight", "client", "config.json"));
   const apiKey = String(file.apiKey || "").trim();
   const endpoint = env.AGENT_INSIGHT_OTLP_ENDPOINT || file.endpoint || DEFAULT_ENDPOINT;
   const collaborationSessionsEndpoint = env.AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT
@@ -92,9 +93,39 @@ function loadCollectorConfig(options = {}) {
     goalPlusObserverConfigPath: file.goalPlusObserverConfigPath,
     configPath,
     homeDir,
+    clientId: typeof client.clientId === "string" ? client.clientId.trim() : "",
     uploadIntervalMs: Number(file.uploadIntervalMs) || 5 * 60 * 1000,
     shutdownTimeoutMs: Math.min(2500, Math.max(100, Number(file.shutdownTimeoutMs) || 2200)),
   };
+}
+
+function registerSkillDeploymentOrigin(config, skill) {
+  if (!skill?.name || !skill?.filePath) return null;
+  const targetDir = path.resolve(skill.baseDir || path.dirname(skill.filePath));
+  if (!fs.existsSync(path.join(targetDir, "SKILL.md"))) return null;
+  const runtimePath = path.join(
+    config.homeDir,
+    ".agent-insight",
+    "client",
+    "runtime",
+    "skill-deployment-runtime.cjs",
+  );
+  if (!fs.existsSync(runtimePath)) return null;
+  try {
+    const runtime = require(runtimePath);
+    return runtime.registerSkillOrigin(
+      path.join(config.homeDir, ".agent-insight", "client"),
+      {
+        platform: "pi-agent",
+        skillName: skill.name,
+        frameworkRoot: path.dirname(targetDir),
+        targetDir,
+        displayPath: targetDir,
+      },
+    );
+  } catch {
+    return null;
+  }
 }
 
 function resolveGoalPlusRuntimeRoot(cwd, env = process.env) {
@@ -405,6 +436,7 @@ class PiTraceCollector {
     const span = {
       name: skill.name,
       filePath: skill.filePath,
+      origin: registerSkillDeploymentOrigin(this.config, skill),
       triggerMode,
       startedAt,
       spanId: stableSpanId(
@@ -439,7 +471,11 @@ class PiTraceCollector {
         name: span.name,
         version: "unknown",
         triggerMode: span.triggerMode,
+        originRef: span.origin?.originRef,
+        displayPath: span.origin?.displayPath,
+        targetMode: span.origin ? "execution_origin" : undefined,
       },
+      attributes: this.config.clientId ? { "agent.insight.client_id": this.config.clientId } : undefined,
     });
     this.writer.flush()
       .then(() => this.uploader.flushOnce())
@@ -743,7 +779,11 @@ class PiTraceCollector {
           name: skill.name,
           version: details.version,
           triggerMode: skill.triggerMode,
+          originRef: skill.origin?.originRef,
+          displayPath: skill.origin?.displayPath,
+          targetMode: skill.origin ? "execution_origin" : undefined,
         },
+        attributes: this.config.clientId ? { "agent.insight.client_id": this.config.clientId } : undefined,
       });
     }
     this.append({

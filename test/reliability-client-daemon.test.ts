@@ -195,6 +195,8 @@ test('client whitelist matches the server-side action set', () => {
     [
       'APPLY_CLIENT_CONFIG',
       'CANCEL_EXPERIMENT_RUN',
+      'DEPLOY_SKILL_ARTIFACT',
+      'PRECHECK_SKILL_DEPLOYMENT',
       'PREPARE_EXECUTION_ENVIRONMENT',
       'PREPARE_EXPERIMENT_CASE',
       'REFRESH_CAPABILITIES',
@@ -490,7 +492,7 @@ test('manual and automatic capability refresh bypass the cached probe', () => {
     'utf8',
   )
   assert.match(source, /REFRESH_CAPABILITIES[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
-  assert.match(source, /Promise\.all\(\[probeFaultInjectionIsolated\(cfg\), refreshPiModelCatalog\(\)\]\)[\s\S]*?cacheSuccessfulProbe\(fi\)[\s\S]*?syncBenchmarkExecutorCapabilities\(benchmarkExecutor, capabilities\)[\s\S]*?reportCapabilities\(cfg, capabilities\)/)
+  assert.match(source, /Promise\.all\(\[probeFaultInjectionIsolated\(cfg\), refreshPiModelCatalog\(\)[\s\S]*?\]\)[\s\S]*?cacheSuccessfulProbe\(fi\)[\s\S]*?syncBenchmarkExecutorCapabilities\(benchmarkExecutor, capabilities\)[\s\S]*?reportCapabilities\(cfg, capabilities\)/)
   assert.match(source, /const refreshCapabilities[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
   assert.match(source, /setTimeout\([\s\S]*?setInterval\(refreshCapabilities, CAPABILITY_DISCOVERY_SCAN_MS\)[\s\S]*?CAPABILITY_DISCOVERY_SCAN_MS \/ 2/)
 })

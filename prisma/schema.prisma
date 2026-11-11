@@ -47,17 +47,22 @@ model Skill {
 }
 
 model SkillVersion {
-  id                String   @id @default(cuid())
-  skillId           String
-  version           Int
-  semanticVersion   String? // 语义化版本号，用于企业同步
-  enterpriseSkillId Int? // 企业skill的id，用于删除同步
-  content           String
-  assetPath         String?
-  files             String?
-  changeLog         String?
-  createdAt         DateTime @default(now())
-  Skill             Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  id                 String   @id @default(cuid())
+  skillId            String
+  version            Int
+  semanticVersion    String? // 语义化版本号，用于企业同步
+  enterpriseSkillId  Int? // 企业skill的id，用于删除同步
+  content            String
+  assetPath          String?
+  files              String?
+  changeLog          String?
+  verificationStatus String   @default("not_required")
+  verificationMode   String?
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  verificationNote   String?
+  createdAt          DateTime @default(now())
+  Skill              Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
 
   @@unique([skillId, version])
 }
@@ -71,7 +76,7 @@ model User {
 }
 
 model Execution {
-  id                       String   @id @default(cuid()) // upload_id
+  id                       String    @id @default(cuid()) // upload_id
   taskId                   String?
   query                    String?
   framework                String?
@@ -97,7 +102,7 @@ model Execution {
   // 单次调用取 max、不累计，到不了 32 位上限，保持 Int。
   maxSingleCallTokens      Int?
   reasoningTokens          BigInt?
-  timestamp                DateTime @default(now())
+  timestamp                DateTime  @default(now())
   lastIngestedAt           DateTime?
   model                    String?
   // 真实推理源 URL（scheme://host:port），用作 session↔infra 关联键。
@@ -114,8 +119,8 @@ model Execution {
   skill                    String?
   skills                   String? // JSON array of strings (skill names)
   invokedSkills            String? // JSON array of {name: string, version: number | null}
-  isSkillCorrect           Boolean? @default(false)
-  isAnswerCorrect          Boolean? @default(false)
+  isSkillCorrect           Boolean?  @default(false)
+  isAnswerCorrect          Boolean?  @default(false)
   answerScore              Float?
   skillScore               Float?
   judgmentReason           String?
@@ -250,18 +255,39 @@ model TraceEvaluation {
 //   - 快照存名:不硬 FK 到 Skill/SkillVersion(它们 onDelete: Cascade)，避免删 skill 抹掉历史 trace 绑定。
 //   - 写入侧每次 save 先按 executionId 清空再重建，保证幂等(不依赖 NULL 版本的唯一约束语义)。
 model ExecutionSkill {
-  id           String    @id @default(cuid())
+  id           String                @id @default(cuid())
   executionId  String
-  execution    Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  execution    Execution             @relation(fields: [executionId], references: [id], onDelete: Cascade)
   skillName    String
   skillVersion Int? // 写入时定格的版本；null = 未解析出
-  isPrimary    Boolean   @default(false) // 是否为该 Execution 的"主/被评测 skill"(对齐 Execution.skill)
+  isPrimary    Boolean               @default(false) // 是否为该 Execution 的"主/被评测 skill"(对齐 Execution.skill)
   user         String? // 跟随 trace，便于直接按 user 维度查
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime              @default(now())
+  origin       ExecutionSkillOrigin?
 
   @@index([skillName, skillVersion]) // 按 skill@version 反查所有 trace（核心诉求）
   @@index([skillName]) // 按 skill 任意版本反查
   @@index([executionId])
+}
+
+/// Trace 时客户端实际解析到的 Skill 来源。服务端只把 originRef 当作不透明定位符，
+/// 真正路径由同一 clientId 的本机注册表解析，避免控制指令携带任意文件路径。
+model ExecutionSkillOrigin {
+  id                   String         @id @default(cuid())
+  executionSkillId     String         @unique
+  executionSkill       ExecutionSkill @relation(fields: [executionSkillId], references: [id], onDelete: Cascade)
+  clientId             String
+  platform             String
+  targetMode           String // execution_origin | framework_global
+  originRef            String?
+  displayPath          String?
+  observedSkillVersion Int?
+  observedContentHash  String?
+  locatorVersion       Int            @default(1)
+  observedAt           DateTime       @default(now())
+
+  @@index([clientId, platform])
+  @@index([originRef])
 }
 
 // 用户可维护的 Trace 标签定义。kind = version | business。
@@ -752,7 +778,7 @@ model AgentEvalDataset {
 
   generationSource String?
   generationStatus String?
-  generationJob TraceDatasetGenerationJob?
+  generationJob    TraceDatasetGenerationJob?
 
   benchmarkDataset BenchmarkDataset?
 
@@ -892,7 +918,7 @@ model FaultDiagnosisMessage {
 }
 
 model DiagnosisRun {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   user              String
   experimentId      String?
   caseId            String?
@@ -902,12 +928,12 @@ model DiagnosisRun {
   inputHash         String
   inputSnapshotJson String
   generatorVersion  String
-  status            String   @default("pending")
+  status            String    @default("pending")
   reportJson        String?
   errorMessage      String?
   retryOfRunId      String?
   leaseUntil        DateTime?
-  createdAt         DateTime @default(now())
+  createdAt         DateTime  @default(now())
   completedAt       DateTime?
 
   @@unique([user, requestKey])
@@ -1394,35 +1420,35 @@ model BenchmarkExperimentBinding {
 }
 
 model BenchmarkCaseRun {
-  id                 String                @id
-  experimentId       String
-  experiment         Experiment            @relation(fields: [experimentId], references: [id], onDelete: Cascade)
-  experimentCaseId   String
-  experimentCase     ExperimentCase        @relation(fields: [experimentCaseId], references: [id], onDelete: Cascade)
-  datasetCaseId      String?
-  datasetCase        BenchmarkDatasetCase? @relation(fields: [datasetCaseId], references: [id], onDelete: SetNull)
-  ordinal            Int
-  status             String                @default("pending")
-  adapterKey         String
-  clientId           String?
-  submissionSource   String                @default("agent")
+  id                     String                @id
+  experimentId           String
+  experiment             Experiment            @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  experimentCaseId       String
+  experimentCase         ExperimentCase        @relation(fields: [experimentCaseId], references: [id], onDelete: Cascade)
+  datasetCaseId          String?
+  datasetCase            BenchmarkDatasetCase? @relation(fields: [datasetCaseId], references: [id], onDelete: SetNull)
+  ordinal                Int
+  status                 String                @default("pending")
+  adapterKey             String
+  clientId               String?
+  submissionSource       String                @default("agent")
   submissionContractJson String?
-  publicPayloadJson  String?
-  privatePayloadJson String?
-  taskEnvelopeJson   String?
-  taskDigest         String?
-  progressJson       String?
-  runFactsJson       String?
-  cleanupJson        String?
-  completionDigest   String?
-  failureCode        String?
-  failureMessage     String?
-  retryOfRunId       String?
-  lastProgressAt     DateTime?
-  startedAt          DateTime?
-  finishedAt         DateTime?
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
+  publicPayloadJson      String?
+  privatePayloadJson     String?
+  taskEnvelopeJson       String?
+  taskDigest             String?
+  progressJson           String?
+  runFactsJson           String?
+  cleanupJson            String?
+  completionDigest       String?
+  failureCode            String?
+  failureMessage         String?
+  retryOfRunId           String?
+  lastProgressAt         DateTime?
+  startedAt              DateTime?
+  finishedAt             DateTime?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
 
   dispatch    BenchmarkDispatchOutbox?
   artifacts   BenchmarkArtifact[]
@@ -1451,22 +1477,22 @@ model BenchmarkArtifact {
 }
 
 model BenchmarkDispatchOutbox {
-  id                 String           @id @default(cuid())
-  runId              String           @unique
-  run                BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  kind               String           @default("agent_execution")
-  commandId          String?          @unique
-  requestJson        String
-  requestDigest      String
-  status             String           @default("pending")
-  attemptCount       Int              @default(0)
-  nextAttemptAt      DateTime         @default(now())
-  leasedUntil        DateTime?
-  responseJson       String?
-  errorCode          String?
-  errorMessage       String?
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
+  id            String           @id @default(cuid())
+  runId         String           @unique
+  run           BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  kind          String           @default("agent_execution")
+  commandId     String?          @unique
+  requestJson   String
+  requestDigest String
+  status        String           @default("pending")
+  attemptCount  Int              @default(0)
+  nextAttemptAt DateTime         @default(now())
+  leasedUntil   DateTime?
+  responseJson  String?
+  errorCode     String?
+  errorMessage  String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   @@index([status, nextAttemptAt])
   @@index([leasedUntil])
@@ -1728,14 +1754,70 @@ model ReliabilityClient {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  credentials ReliabilityClientCredential[]
-  commands    ReliabilityCommand[]
-  configs     ReliabilityClientConfig[]
-  deliveries  ReliabilityConfigDelivery[]
+  credentials      ReliabilityClientCredential[]
+  commands         ReliabilityCommand[]
+  configs          ReliabilityClientConfig[]
+  deliveries       ReliabilityConfigDelivery[]
+  skillDeployments SkillDeployment[]
 
   @@unique([user, machineId])
   @@index([user, lastSeenAt])
   @@index([user, status])
+}
+
+/// 一次正式 Skill 版本到指定用户端的部署尝试。客户端安装版本与 Skill.activeVersion 独立。
+model SkillDeployment {
+  id                   String                 @id @default(cuid())
+  deploymentId         String                 @unique
+  user                 String
+  skillName            String
+  targetSkillVersion   Int
+  semanticVersion      String?
+  artifactHash         String
+  artifactRef          String                 @unique
+  artifactExpiresAt    DateTime
+  artifactClaimedAt    DateTime?
+  optimizationRecordId String?
+  sourceExecutionId    String
+  clientId             String
+  client               ReliabilityClient      @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+  platform             String
+  targetMode           String
+  originRef            String?
+  previousSkillVersion Int?
+  previousContentHash  String?
+  backupRef            String?
+  direction            String
+  status               String                 @default("CREATED")
+  commandId            String?
+  errorCode            String?
+  errorMessage         String?
+  resultJson           String?
+  idempotencyKey       String
+  createdAt            DateTime               @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  updatedAt            DateTime               @updatedAt
+  events               SkillDeploymentEvent[]
+
+  @@unique([user, idempotencyKey])
+  @@index([clientId, status])
+  @@index([user, skillName, createdAt])
+  @@index([skillName, targetSkillVersion])
+  @@index([commandId])
+}
+
+/// Skill 下发阶段事件；detailJson 只保存受限状态，不保存 Skill 正文或凭证。
+model SkillDeploymentEvent {
+  id           String          @id @default(cuid())
+  deploymentId String
+  deployment   SkillDeployment @relation(fields: [deploymentId], references: [deploymentId], onDelete: Cascade)
+  phase        String
+  status       String
+  detailJson   String          @default("{}")
+  createdAt    DateTime        @default(now())
+
+  @@index([deploymentId, createdAt])
 }
 
 /// 设备凭证：只存哈希，可撤销，按客户端隔离。
@@ -2167,48 +2249,50 @@ model CollaborationSessionBinding {
 }
 
 model TraceDatasetGenerationJob {
-  id String @id
-  datasetId String @unique
-  dataset AgentEvalDataset @relation(fields: [datasetId], references: [id])
-  owner String
-  configJson String
-  status String @default("queued")
-  stage String @default("queued")
-  stageIndex Int @default(0)
-  generatedCount Int @default(0)
-  errorCode String?
-  errorMessage String?
-  leaseEpoch Int @default(0)
-  leaseOwner String?
-  leaseUntil DateTime?
-  cancelRequested Boolean @default(false)
-  requestId String
-  requestHash String
-  captureState String @default("pending")
+  id                  String           @id
+  datasetId           String           @unique
+  dataset             AgentEvalDataset @relation(fields: [datasetId], references: [id])
+  owner               String
+  configJson          String
+  status              String           @default("queued")
+  stage               String           @default("queued")
+  stageIndex          Int              @default(0)
+  generatedCount      Int              @default(0)
+  errorCode           String?
+  errorMessage        String?
+  leaseEpoch          Int              @default(0)
+  leaseOwner          String?
+  leaseUntil          DateTime?
+  cancelRequested     Boolean          @default(false)
+  requestId           String
+  requestHash         String
+  captureState        String           @default("pending")
   captureManifestHash String?
-  attemptCount Int @default(0)
-  nextEligibleAt DateTime?
-  cleanupPending Boolean @default(false)
-  deletionId String? @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  attemptCount        Int              @default(0)
+  nextEligibleAt      DateTime?
+  cleanupPending      Boolean          @default(false)
+  deletionId          String?          @unique
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
   @@unique([owner, requestId])
   @@index([owner, status, createdAt])
   @@index([status, leaseUntil])
 }
 
 model TraceDatasetOperationReceipt {
-  id String @id
-  ownerKey String
-  kind String
-  operationKey String
-  requestHash String?
-  datasetId String?
-  jobId String?
-  deletionId String?
-  outcome String
-  expiresAt DateTime?
+  id               String    @id
+  ownerKey         String
+  kind             String
+  operationKey     String
+  requestHash      String?
+  datasetId        String?
+  jobId            String?
+  deletionId       String?
+  outcome          String
+  expiresAt        DateTime?
   clockHighWaterMs BigInt?
+
   @@unique([ownerKey, kind, operationKey])
   @@index([expiresAt])
 }

@@ -513,8 +513,8 @@ test('Skill 优化点击即提交当前诉求，保留空请求拦截、归并�
   assert.match(adapter, /beginSkillOptimizationRecord/);
   assert.match(records, /行为验证通过/);
   assert.match(records, /行为验证未通过/);
-  assert.match(records, /静态通过，待完整复测/);
-  assert.match(records, /发布为 \{getOptimizationTargetVersion\(selected\)\}/);
+  assert.match(records, /前置质量通过，可发布/);
+  assert.match(records, /发布待验证 \{getOptimizationTargetVersion\(selected\)\}/);
   assert.match(shell, /\/retest/);
   assert.match(shell, /onRetest=\{retestDiagnosis\}/);
   assert.match(records, /selected.sourceKind === 'diagnosis'[\s\S]*onRetest/);

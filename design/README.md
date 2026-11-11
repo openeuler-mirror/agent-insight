@@ -80,6 +80,9 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 |-|-|-|-|-|-|-|
 | 执行 Profile 后端解耦 | [设计](evaluation/execution-profile-decoupling/phase2-requirements-design.md) | 分离公共配置、后端探测与实际执行，兼容 xGovernor 与原生本地执行 | Refactor | 2026-10-31 | 已实现；新增 8 项解耦回归通过，全仓无新增失败；未在浏览器或真实 Docker/模型环境验证 | — |
 | Benchmark 自动接入 Skill | [需求分析](evaluation/benchmark-onboarding-automation/phase1-requirements-analysis.md) · [需求设计](evaluation/benchmark-onboarding-automation/phase2-requirements-design.md) · [开发计划](evaluation/benchmark-onboarding-automation/phase3-development-plan.md) | 以 Agent Insight 项目地址与 Benchmark 来源为入口，单 Skill 完成能力查询、接入开发及有界修复；验收脚本和模板随包分发，以三类试验验证评分一致性与真实链路 | Feature / Evaluation | 2026-10-28 | 🟡 Skill 包、版本化协议快照、核对/验收 CLI、模板及自测已实现；三类 Benchmark 与跨宿主真实验收待执行 | — |
+
+| Skill 待验证版本发布 | [需求分析](optimization/external-skill-validation/phase1-requirements-analysis.md) · [需求设计](optimization/external-skill-validation/phase2-requirements-design.md) · [开发计划](optimization/external-skill-validation/phase3-development-plan.md) | 优化候选通过前置质量门禁后，可在会话卡片发布为不立即激活的正式版本，下载到外部环境验证并登记结果，通过后再激活 | Feature | 2026-11-09 | 🟡 核心实现与 79 项相关自动化测试完成；待浏览器验收 | — |
+| 优化后 Skill 下发 | [需求分析](optimization/skill-deployment/phase1-requirements-analysis.md) · [需求设计](optimization/skill-deployment/phase2-requirements-design.md) · [开发计划](optimization/skill-deployment/phase3-development-plan.md) | 将复测并发布的正式 Skill 版本下发到来源 Trace 的用户端，按框架解析项目或全局目标，提供版本账本、持久备份、历史版本重下发、原子替换与验证恢复 | Feature | 2026-11-08 | 🟡 核心实现与专项自动化测试完成；待浏览器及四框架真实客户端验收 | 待补 |
 | 评测结果 → 智能诊断 → Skill 优化 | [需求分析](diagnosis/evaluation-to-skill-optimization/phase1-requirements-analysis.md) · [需求设计](diagnosis/evaluation-to-skill-optimization/phase2-requirements-design.md) · [开发计划](diagnosis/evaluation-to-skill-optimization/phase3-development-plan.md) | 评测证据快照进入诊断，诊断发现转为 Skill 优化计划并复测 | Feature | 2026-11-02 | 已实现；临时库流程与迁移演练通过，真实模型/Worker 联调待验收 | — |
 | 核心 E2E 自动化与采集覆盖 | [实施计划](platform/core-e2e-regression/phase3-implementation-plan.md) | 5 个核心场景：准备、OpenCode 观测、Skill 与数据集生命周期、无数据集 Trace 闭环、故障恢复；逐例 Real/Mock、生产编译门禁与复现规范 | Test / Design | 2026-11-03 | 已实现；001～005连续编号，故障恢复原006改005；编号调整前整轮生产编译、UT和五个活动场景隔离通过，常驻服务待升级 | — |
 | PR Webhook 自动回归 | [实施计划](platform/core-e2e-regression/phase3-pr-webhook-plan.md) | origin 个人仓库、本地先行、隔离执行与逐项报告 | Test / CI | 2026-11-04 | 接收/队列/隔离运行/PR评论已联调；当前逐例配置与编译前置版本待升级常驻部署 | — |
@@ -176,3 +179,5 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 2. 默认在子目录内放 `phase1-requirements-analysis.md` / `phase2-requirements-design.md` / `phase3-development-plan.md`。
 3. issue 或维护者明确要求单文档时，改用 `issue-<number>-<slug>.md`，不再创建三阶段目录。
 4. **回到本清单追加一行**,填齐上表各列。
+
+| JiuwenSwarm 企业版 WebSocket 实验 | [设计](evaluation/jiuwen-enterprise-websocket/phase2-design.md) / [计划](evaluation/jiuwen-enterprise-websocket/phase3-plan.md) | 本地登录、授权 Agent 发现与选择，沿用 #588 WS 下发 | Feature | 2026-11-10 | 开发中 | — |
