@@ -77,7 +77,7 @@ docker buildx build --platform linux/amd64 \
 
 流水线在社区 Kubernetes Job 中使用带日期版本标签的 SWR 构建环境镜像，创建独立源码快照，核对项目及 E2E 锁文件与镜像一致，复制预装依赖后，在编译、UT 和每例 Job 内分别按本次检出的 `prisma/schema.prisma` 生成 Prisma Client，再验证 Chromium 无头启动。生成过程使用隔离目录及数据库 URL，只生成代码，不执行迁移或连接业务数据库；源码指纹继续绑定本轮 schema。初始化会检查进程清理工具，当前已发布镜像缺少 `procps` 时自动补装。当前社区资源池拒绝 `image@sha256` 格式，因此使用 `node24-pw1.62.1-amd64-20261111` 标签，已发布标签须保持指向不变。此 Actions 入口要求该环境镜像保持公开并允许匿名拉取，不引用 `SWR_PULL_USERNAME` 或 `SWR_PULL_PASSWORD`；同仓及跨仓 Fork PR 均不需要镜像拉取密钥，保持普通 `pull_request` 触发。环境镜像仅预装工具链、公开依赖、依赖清单及 Prisma 结构文件，不能加入真实凭据或业务数据；PR 应用源码在 Job 中另行检出。总览显示 8 个独立 Job：生产编译 → UT → 001～005 → 汇总与门禁。生产编译只执行一次，压缩制品包含 `.next`、生成代码和清单；各测试 Job 下载后核对运行 ID、提交 SHA、源码指纹、配置哈希、压缩包哈希和 BUILD_ID，再复用编译结果。每例使用独立源码目录、账号状态与数据库，不继承其他用例数据库。编译失败时跳过 UT 和用例；UT 失败时五例仍继续，单例失败也不取消其他例。汇总始终尝试运行，缺失制品、异常退出、失败 Job、UT 不完整或必需阶段缺失均不能通过。更多 Job 会增加镜像准备、制品传输和排队开销，实际耗时以本轮运行记录为准。
 
-测试仓使用共享 Runner 标签 `[self-hosted, default, x86, cpu=4]`。Job 使用镜像预装的 npm 依赖、Playwright Chromium、Python 依赖和 PowerShell，补装 `procps` 时需要能访问 Debian 软件源。每轮使用新建的工作目录和 SQLite 状态，测试结束后由 Job 回收。每个测试 Job 独立复制预热 npm 缓存，并固定使用缓存对应的 npmjs registry 与离线模式，不能依赖前序 UT 写入的缓存。用例内部使用由完整运行 ID 派生的短编号，避免页面名称长度限制；公开报告仍保留完整 Actions 运行 ID。
+正式仓 `openeuler/agent-insight` 使用 Runner 标签 `[self-hosted, openeuler, x86, cpu=8]`，其他仓库保留测试池 `[self-hosted, default, x86, cpu=4]`；workflow 按运行所在仓库选择，均使用 amd64 环境镜像。Job 使用镜像预装的 npm 依赖、Playwright Chromium、Python 依赖和 PowerShell，补装 `procps` 时需要能访问 Debian 软件源。每轮使用新建的工作目录和 SQLite 状态，测试结束后由 Job 回收。每个测试 Job 独立复制预热 npm 缓存，并固定使用缓存对应的 npmjs registry 与离线模式，不能依赖前序 UT 写入的缓存。用例内部使用由完整运行 ID 派生的短编号，避免页面名称长度限制；公开报告仍保留完整 Actions 运行 ID。
 
 各阶段每 30 秒输出 `CI_PHASE_PROGRESS`，仅包含当前阶段、用例编号及最新步骤状态。容器或 Runner 被平台提前终止时，可据此定位最后执行阶段；只有这些进度输出不能认定测试通过，仍需完整报告及门禁结果。
 
