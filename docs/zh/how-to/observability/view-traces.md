@@ -224,6 +224,8 @@ JiuwenSwarm 复用平台统一的子 Agent Trace 机制。同一条 OTLP Trace �
 
 当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
 
+包含数百次模型调用的 Trace 会分批渲染调用树：展开 Agent 后先显示前一批调用行，底部「继续加载更多调用」可逐批追加；使用搜索、类型/耗时/Token 筛选或跳转到深层节点时会自动放开批次限制，保证命中的行已经渲染。详情面板中的大文本也先显示有上限的内联预览，并标注总字符数；点击「查看全部」仍可读取完整内容，复制也始终针对全文。
+
 当前 Goal Plus 采集器使用 main/worker 绑定和关系事件。默认 **仅主 Agent** 列表在收到明确的 worker 声明及绑定后就将它作为子 Agent 隐藏，即使主 Trace 或 worker 正文还未到齐；此时可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围查看已有记录。主端与某个 worker 的正文就绪、身份唯一后，该 worker 即可进入主 Trace，无须等待其他 worker 或主任务结束。列表隐藏与详情合并是两件事，等待中的 worker 不会生成虚假正文。reported 合并优先，同一 worker 不会与历史语义投影重复显示。
 
 对于历史 Goal Plus 语义数据，当语义关系已经把一个唯一主 Trace 与当前 Search run 的 worker Trace 确定关联后，**仅主 Agent** 列表隐藏已投影的 worker，已关联 worker 可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围中单独检索；打开主 Trace 时，这些独立 Session 会在现有链路树中展示为 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**。Pi passive importer 存在多个历史主会话时，以 Goal 当前 active native Session 对应的 canonical Trace 为准；Pi 将同一原生 Session 的任务保存为 `<sessionId>__taskN` 时，明确由 `/goal-plus` 启动且只对应一个 Goal 的主任务也会显示同一子树。candidate ID 和 run ID 可用于核对成员，同一 Session 的续跑不会重复建节点。这是查询时生成的只读跨 Session 投影：主 Trace、worker Trace 及其原始采集内容仍分别保存，平台不会改写原生父子关系，也不会把编排关系伪装成已确认的具体启动调用位置。点击子 Agent 的 **Trace** 可继续打开该 worker 的独立详情。历史 run、主 Trace 不唯一、worker 正文尚未到达、超过投影上限、普通 Pi 任务或端点关联存在歧义时，平台保留独立 Session 入口，不做猜测性合并。
