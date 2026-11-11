@@ -18,6 +18,7 @@ import { SETUP_BASH_HOME, SETUP_POWERSHELL_HOME } from '@/lib/ingest/setup/home'
 import { NextResponse } from 'next/server';
 
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
+import { INFERENCE_PROXY_UNIX_SETUP_BLOCK } from '../inference-proxy-setup';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
@@ -1076,6 +1077,8 @@ CLAUDE_OTEL_EOF
     rm -f "$AGENT_INSIGHT_HOME/claude_watcher_client.ts" "$AGENT_INSIGHT_HOME/start_claude_watcher.sh" "$AGENT_INSIGHT_HOME/stop_claude_watcher.sh" "$AGENT_INSIGHT_HOME/claude_watcher.pid"
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
 fi
+
+${INFERENCE_PROXY_UNIX_SETUP_BLOCK.replaceAll("$FINAL_KEY", "$AGENT_INSIGHT_API_KEY")}
 
 ${CODEAGENT_UNIX_SETUP_BLOCK}
 

@@ -573,6 +573,7 @@ function connectorToolIdentity(mcpTool) {
  *   diagnosticRecords?: Array<any>,
  *   localTokenUsage?: Array<any>,
  *   expertAgents?: Array<any>,
+ *   inferenceCalls?: Array<any>,
  *   product?: string,
  *   accountHash?: string,
  *   estimateVisibleTokens?: boolean,
@@ -586,6 +587,7 @@ export function buildQoderOtlpPayload({
   diagnosticRecords = [],
   localTokenUsage = [],
   expertAgents = [],
+  inferenceCalls = [],
   product,
   accountHash,
   estimateVisibleTokens = false,
@@ -1202,6 +1204,34 @@ export function buildQoderOtlpPayload({
       ["qoder.subagent.name", "qoder.subagent.type", "qoder.subagent.parent_session_id", "qoder.expert.name", "qoder.expert.role"].includes(key)))
   }
 
+  const inferenceIdentityVerified = !["desktop", "jetbrains"].includes(productName)
+  const calls = inferenceCalls.filter(call => inferenceIdentityVerified && call?.agent === "qoder" && call.session_id === sessionId
+    && /^[a-f0-9-]{36}$/.test(call.call_id || "")
+    && (!currentTurnStartMs || Date.parse(call.started_at) >= currentTurnStartMs)
+    && Date.parse(call.started_at) <= endMs)
+  const responseSpans = new Map()
+  for (const span of spans) {
+    const id = span.attributes.find(attr => attr.key === "qoder.llm.message_id")?.value.stringValue
+    if (id) responseSpans.set(id, [...(responseSpans.get(id) || []), span])
+  }
+  const responseCounts = new Map()
+  for (const call of inferenceCalls) if (call.session_id === sessionId && call.response_id) {
+    responseCounts.set(call.response_id, (responseCounts.get(call.response_id) || 0) + 1)
+  }
+  const unassigned = []
+  for (const call of calls) {
+    const matching = call.response_id && responseSpans.get(call.response_id)
+    const uniqueResponse = responseCounts.get(call.response_id) === 1
+    if (matching?.length === 1 && uniqueResponse) {
+      matching[0].attributes.push(...attributes({ "agent_insight.inference.call_ids": [call.call_id] }))
+    } else {
+      unassigned.push({ call_id: call.call_id, status_code: call.status_code, state: call.state,
+        started_at: call.started_at, completed_at: call.completed_at,
+        reason: call.response_id ? "ambiguous_or_missing_response" : "missing_response_id" })
+    }
+  }
+  if (unassigned.length) spans[0].attributes.push(...attributes({ "agent_insight.inference.unassigned_calls": unassigned }))
+
   const payloadCapturedAt = firstString(capturedAt, stop?.capturedAt, new Date(endMs).toISOString())
   return {
     snapshotId,
@@ -1628,12 +1658,14 @@ export async function collectQoderHook(event, options = {}) {
     transcriptRecords.push(...readQoderSubagentTranscripts(transcriptPath, sessionId, hookEvents, transcriptRecords))
     transcriptRecords = normalizeQoderTranscriptRecords(transcriptRecords, sessionId, localTokenUsage)
     const expertAgents = readQoderExpertAgents(qoderHome, transcriptPath, sessionId, transcriptRecords)
+    const inferenceDir = path.join(insightDir, "inference-gateway", apiKeyHash, "qoder", stableHex([sessionId], 64))
     const payload = buildQoderOtlpPayload({
       hookEvents,
       transcriptRecords,
       diagnosticRecords,
       localTokenUsage,
       expertAgents,
+      inferenceCalls: readJsonFiles(inferenceDir),
       product,
       accountHash: apiKeyHash,
       estimateVisibleTokens: ["1", "true", "yes", "on"].includes(String(config.AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS || "").trim().toLowerCase()),

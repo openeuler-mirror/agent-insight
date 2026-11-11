@@ -8,3 +8,5 @@ changefreq: "monthly"
 # 参考文档
 
 正文与导航已迁至 [参考文档](./navigation.md)。保留本入口，供仓库目录浏览和旧链接继续使用。
+
+[统一推理请求关联契约](./observability/inference-correlation.md)：`X-Request-Id`、重试和 Trace/LLM 归属。
