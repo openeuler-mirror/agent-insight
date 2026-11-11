@@ -16,7 +16,10 @@ Detection covers only the deployment environment reachable by the **platform ser
 | OpenCode | `OPENCODE_BIN` | `<package-root>/node_modules/.bin/opencode` |
 | Pi | `AGENT_INSIGHT_PI_EXECUTABLE`, `PI_EXECUTABLE` | None |
 
-The probe is always `<executable> --version`, with `shell: false` and a 3-second timeout. Detection does not call models, install packages, or upgrade dependencies. Results are cached in-process for 30 seconds.
+The probe is always `<executable> --version` with fixed arguments and a 3-second timeout. Detection does not call models, install packages, or upgrade dependencies. Results are cached in-process for 30 seconds.
+
+- On Windows, `PATH` lookup expands `PATHEXT` (including npm `.cmd` shims). `.cmd` / `.bat` files cannot be spawned directly, so they are run through `cmd.exe /d /s /c`; the command line remains a fixed literal and never interpolates caller input.
+- On other platforms the executable is started directly with `shell: false`.
 
 ## Status
 
@@ -55,6 +58,8 @@ The selection is stored in `UserSettings.settingsJson.agentRuntimeId`; no databa
 The default affects new tasks and new sessions only. Historical Executions, Sessions, and in-flight tasks keep their original binding.
 
 ## HTTP API
+
+Both endpoints resolve the request identity first: when the request carries a resolvable credential identity (`x-witty-api-key` or `apiKey`), `user` must match it, otherwise the request returns `403`; deployments without credential identities keep using the `user` parameter.
 
 ### `GET /api/agent-runtime`
 

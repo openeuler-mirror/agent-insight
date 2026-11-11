@@ -18,7 +18,10 @@ changefreq: "monthly"
 | OpenCode | `OPENCODE_BIN` | `<package-root>/node_modules/.bin/opencode` |
 | Pi | `AGENT_INSIGHT_PI_EXECUTABLE`、`PI_EXECUTABLE` | — |
 
-探测命令固定为 `<executable> --version`，不经过 shell，默认 3 秒超时。检测不调用模型、不安装或升级依赖。结果在进程内缓存 30 秒。
+探测命令固定为 `<executable> --version`，参数不可配置，默认 3 秒超时。检测不调用模型、不安装或升级依赖。结果在进程内缓存 30 秒。
+
+- Windows 上 `PATH` 查找会按 `PATHEXT` 补全扩展名（含 npm 生成的 `.cmd` 垫片）。`.cmd` / `.bat` 无法直接 spawn，因此经 `cmd.exe /d /s /c` 引导执行；命令行仍是固定字面量，不拼接调用方输入。
+- 其他平台直接以 `shell: false` 启动可执行文件。
 
 ## 状态
 
@@ -57,6 +60,8 @@ changefreq: "monthly"
 默认值只影响新任务和新会话；历史 Execution、Session 和进行中任务保持原绑定。
 
 ## HTTP 接口
+
+两个接口都会先解析请求身份：请求携带可解析的凭据身份（`x-witty-api-key` 或 `apiKey`）时，`user` 必须与之一致，否则返回 `403`；未携带凭据身份的部署继续沿用 `user` 参数。
 
 ### `GET /api/agent-runtime`
 

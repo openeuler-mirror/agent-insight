@@ -53,12 +53,31 @@ function isExecutableFile(candidate: string): boolean {
     }
 }
 
-function findOnPath(names: string[], env: NodeJS.ProcessEnv): AgentRuntimeExecutable | null {
+function executableExtensions(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+    if (platform !== 'win32') return [''];
+    return (env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').map(item => item.trim()).filter(Boolean);
+}
+
+/**
+ * Windows 上补全 `PATHEXT`（覆盖 npm 生成的 `.cmd` 垫片）；其他平台原样返回。
+ * 补全结果排在裸路径之前：npm 的 `.bin/opencode` 无扩展名文件是 POSIX 脚本，
+ * 在 Windows 上无法执行，优先命中可执行的 `.cmd` 垫片。
+ */
+function withExtensions(candidate: string, extensions: string[]): string[] {
+    if (extensions.length === 1 && extensions[0] === '') return [candidate];
+    const lowered = candidate.toLowerCase();
+    if (extensions.some(extension => lowered.endsWith(extension.toLowerCase()))) return [candidate];
+    return [...extensions.map(extension => `${candidate}${extension}`), candidate];
+}
+
+export function findOnPath(
+    names: string[],
+    env: NodeJS.ProcessEnv,
+    platform: NodeJS.Platform = process.platform,
+): AgentRuntimeExecutable | null {
     const pathValue = env.PATH || env.Path || '';
     if (!pathValue) return null;
-    const extensions = process.platform === 'win32'
-        ? (env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
-        : [''];
+    const extensions = executableExtensions(env, platform);
     for (const directory of pathValue.split(path.delimiter)) {
         if (!directory) continue;
         for (const name of names) {
@@ -71,15 +90,22 @@ function findOnPath(names: string[], env: NodeJS.ProcessEnv): AgentRuntimeExecut
     return null;
 }
 
-function resolveExecutable(definition: AgentRuntimeDefinition, env: NodeJS.ProcessEnv): AgentRuntimeExecutable | null {
+function resolveExecutable(
+    definition: AgentRuntimeDefinition,
+    env: NodeJS.ProcessEnv,
+    platform: NodeJS.Platform = process.platform,
+): AgentRuntimeExecutable | null {
     for (const key of definition.executableEnvironmentKeys) {
         const configured = String(env[key] || '').trim();
         if (configured && isExecutableFile(configured)) return { path: configured, source: 'environment' };
     }
+    const extensions = executableExtensions(env, platform);
     for (const candidate of definition.extraCandidates) {
-        if (isExecutableFile(candidate.path)) return { path: candidate.path, source: candidate.source };
+        for (const resolved of withExtensions(candidate.path, extensions)) {
+            if (isExecutableFile(resolved)) return { path: resolved, source: candidate.source };
+        }
     }
-    return findOnPath(definition.binaryNames, env);
+    return findOnPath(definition.binaryNames, env, platform);
 }
 
 function capabilitiesOf(...enabled: AgentRuntimeCapability[]): AgentRuntimeCapabilityMap {

@@ -15,10 +15,15 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
+    buildVersionProbeCommand,
     detectAgentRuntimes,
+    findOnPath,
     invalidateAgentRuntimeDetection,
     type AgentRuntimeExecutable,
 } from '@/lib/agent-runtime';
@@ -28,6 +33,10 @@ const NOW = () => Date.parse('2026-11-09T00:00:00.000Z');
 
 function executable(id: 'pi' | 'opencode', path = `/opt/${id}/bin/${id}`): AgentRuntimeExecutable {
     return { path, source: 'environment' };
+}
+
+function probeEnv(values: Record<string, string> = {}): NodeJS.ProcessEnv {
+    return { NODE_ENV: 'test', ...values };
 }
 
 test.beforeEach(() => invalidateAgentRuntimeDetection());
@@ -138,6 +147,50 @@ test('detection results are cached until forceRefresh is requested', async () =>
 
     await detectAgentRuntimes({ forceRefresh: true, now: NOW, resolveExecutable: id => executable(id), probeVersion: probe });
     assert.ok(probes > afterFirst);
+});
+
+test('windows cmd/bat shims are probed through cmd.exe instead of a direct spawn', () => {
+    assert.deepEqual(
+        buildVersionProbeCommand({ path: '/opt/opencode/bin/opencode', source: 'path' }, 'linux', probeEnv()),
+        { command: '/opt/opencode/bin/opencode', args: ['--version'] },
+    );
+    assert.deepEqual(
+        buildVersionProbeCommand({ path: 'C:\\tools\\opencode.exe', source: 'path' }, 'win32', probeEnv()),
+        { command: 'C:\\tools\\opencode.exe', args: ['--version'] },
+    );
+
+    const cmd = buildVersionProbeCommand(
+        { path: 'C:\\Users\\me\\AppData\\Roaming\\npm\\opencode.CMD', source: 'path' },
+        'win32',
+        probeEnv({ ComSpec: 'C:\\Windows\\System32\\cmd.exe' }),
+    );
+    assert.equal(cmd.command, 'C:\\Windows\\System32\\cmd.exe');
+    assert.deepEqual(cmd.args, ['/d', '/s', '/c', '""C:\\Users\\me\\AppData\\Roaming\\npm\\opencode.CMD" --version"']);
+
+    const bat = buildVersionProbeCommand(
+        { path: 'C:\\tools\\opencode.bat', source: 'bundled' },
+        'win32',
+        probeEnv(),
+    );
+    assert.equal(bat.command, 'cmd.exe');
+    assert.deepEqual(bat.args, ['/d', '/s', '/c', '""C:\\tools\\opencode.bat" --version"']);
+});
+
+test('windows PATH lookup resolves npm .cmd shims via PATHEXT', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-runtime-path-'));
+    try {
+        const shim = path.join(directory, 'opencode.CMD');
+        fs.writeFileSync(shim, '@echo off\r\n');
+        fs.chmodSync(shim, 0o755);
+
+        assert.deepEqual(
+            findOnPath(['opencode'], probeEnv({ PATH: directory, PATHEXT: '.EXE;.CMD;.BAT' }), 'win32'),
+            { path: shim, source: 'path' },
+        );
+        assert.equal(findOnPath(['opencode'], probeEnv({ PATH: directory, PATHEXT: '.EXE;.CMD' }), 'linux'), null);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 });
 
 test('runtime version parsing and comparison ignore prefixes and prerelease suffixes', () => {

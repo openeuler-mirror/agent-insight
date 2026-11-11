@@ -39,12 +39,32 @@ async function snapshot(user: string | null, forceRefresh: boolean) {
     };
 }
 
+/**
+ * 显式 `user` 只在请求没有凭据身份时沿用（兼容不使用 API Key 的部署）；
+ * 一旦请求带了可解析的身份，就不允许用它读写他人的个人偏好。
+ */
+async function resolveActor(
+    request: Request,
+    explicitUser: string | null | undefined,
+): Promise<{ username: string | null; mismatched: boolean }> {
+    const { username: identity } = await resolveUser(request);
+    const requested = explicitUser ? String(explicitUser) : null;
+    if (identity) {
+        if (requested && requested !== identity) return { username: null, mismatched: true };
+        return { username: identity, mismatched: false };
+    }
+    return { username: requested, mismatched: false };
+}
+
 export async function GET(request: Request) {
     try {
         const url = new URL(request.url);
-        const { username } = await resolveUser(request, url.searchParams.get('user'));
+        const actor = await resolveActor(request, url.searchParams.get('user'));
+        if (actor.mismatched) {
+            return NextResponse.json({ error: 'user 参数与请求身份不一致' }, { status: 403 });
+        }
         const forceRefresh = url.searchParams.get('refresh') === '1';
-        return NextResponse.json(await snapshot(username, forceRefresh));
+        return NextResponse.json(await snapshot(actor.username, forceRefresh));
     } catch (error) {
         console.error('[agent-runtime GET]', error);
         return NextResponse.json({ error: '检测 Agent 运行时失败' }, { status: 500 });
@@ -54,7 +74,11 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
     try {
         const body = await request.json().catch(() => ({}));
-        const { username } = await resolveUser(request, body.user);
+        const actor = await resolveActor(request, body.user);
+        if (actor.mismatched) {
+            return NextResponse.json({ error: 'user 参数与请求身份不一致' }, { status: 403 });
+        }
+        const username = actor.username;
         if (!username) {
             return NextResponse.json({ error: 'User is required' }, { status: 400 });
         }

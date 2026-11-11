@@ -66,6 +66,17 @@ const SOURCE_LABELS: Record<string, { zh: string; en: string }> = {
     path: { zh: 'PATH', en: 'PATH' },
 };
 
+/** 服务端枚举可能先于前端扩展；未知 key 回退显示原始值，避免整页渲染崩溃。 */
+function labelOf<K extends string>(
+    labels: Partial<Record<K, { zh: string; en: string }>>,
+    key: K,
+    isZh: boolean,
+): string {
+    const entry = labels[key];
+    if (!entry) return key;
+    return isZh ? entry.zh : entry.en;
+}
+
 function statusTone(status: AgentRuntimeStatus) {
     if (status === 'available') {
         return { bg: 'var(--success-subtle)', fg: 'var(--success)' };
@@ -77,7 +88,7 @@ function statusTone(status: AgentRuntimeStatus) {
 }
 
 export function AgentRuntimeConfig() {
-    const { user } = useAuth();
+    const { user, authReady } = useAuth();
     const { locale } = useLocale();
     const isZh = locale === 'zh';
 
@@ -89,8 +100,17 @@ export function AgentRuntimeConfig() {
     const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info'; msg: string } | null>(null);
 
     const refresh = useCallback(async (force = false) => {
-        if (!user) return;
         try {
+            if (!user) {
+                setData(null);
+                setStatus({
+                    type: 'error',
+                    msg: isZh
+                        ? '未获取到登录用户，无法读取个人运行时默认值。请登录后重试。'
+                        : 'No signed-in user, so the personal runtime default cannot be read. Sign in and retry.',
+                });
+                return;
+            }
             const res = await apiFetch(
                 `/api/agent-runtime?user=${encodeURIComponent(user)}${force ? '&refresh=1' : ''}`,
             );
@@ -111,7 +131,7 @@ export function AgentRuntimeConfig() {
     }, [user, isZh]);
 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 首次进入拉取运行时检测结果
-    useEffect(() => { void refresh(false); }, [refresh]);
+    useEffect(() => { if (authReady) void refresh(false); }, [authReady, refresh]);
 
     const runtimes = useMemo(() => data?.runtimes ?? [], [data]);
     const selectable = useMemo(() => runtimes.filter(item => item.selectable), [runtimes]);
@@ -291,7 +311,7 @@ function RuntimeCard({
     onSelect: () => void;
 }) {
     const tone = statusTone(runtime.status);
-    const statusLabel = STATUS_LABELS[runtime.status];
+    const statusLabel = labelOf(STATUS_LABELS, runtime.status, isZh);
     const capabilities = Object.entries(runtime.capabilities) as Array<[AgentRuntimeCapability, boolean]>;
 
     return (
@@ -307,7 +327,7 @@ function RuntimeCard({
                 <span style={optionTitle}>{runtime.label}</span>
                 <span style={{ ...badge, background: tone.bg, color: tone.fg }}>
                     {runtime.status === 'available' && <Check size={11} strokeWidth={2.5} />}
-                    {isZh ? statusLabel.zh : statusLabel.en}
+                    {statusLabel}
                 </span>
                 {runtime.version && <span style={versionText}>v{runtime.version}</span>}
             </label>
@@ -335,7 +355,7 @@ function RuntimeCard({
 
             <div style={capabilityRow}>
                 {capabilities.map(([key, enabled]) => {
-                    const label = CAPABILITY_LABELS[key];
+                    const label = labelOf(CAPABILITY_LABELS, key, isZh);
                     return (
                         <span
                             key={key}
@@ -346,7 +366,7 @@ function RuntimeCard({
                                 background: enabled ? 'var(--success-subtle)' : 'transparent',
                             }}
                         >
-                            {enabled ? '✓' : '—'} {isZh ? label.zh : label.en}
+                            {enabled ? '✓' : '—'} {label}
                         </span>
                     );
                 })}

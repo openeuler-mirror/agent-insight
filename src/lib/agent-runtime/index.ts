@@ -18,12 +18,14 @@ export * from './types';
 export {
     AGENT_RUNTIME_DEFINITIONS,
     detectRuntimeExecutable,
+    findOnPath,
     getAgentRuntimeDefinition,
     OPENCODE_RUNTIME,
     PI_RUNTIME,
     type AgentRuntimeDefinition,
 } from './catalog';
 export {
+    buildVersionProbeCommand,
     detectAgentRuntimes,
     invalidateAgentRuntimeDetection,
     type DetectAgentRuntimesOptions,

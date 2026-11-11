@@ -35,6 +35,24 @@ import {
 const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
 const DETECTION_TTL_MS = 30_000;
 const MAX_PROBE_OUTPUT_BYTES = 64 * 1024;
+const WINDOWS_SCRIPT_WRAPPER = /\.(cmd|bat)$/i;
+
+/**
+ * Windows 上 npm 生成的 `opencode.cmd` / `.bat` 垫片不能被 `shell: false` 直接 spawn
+ * （会以 EINVAL/ENOENT 失败），需要经 `cmd.exe /d /s /c` 引导。
+ * 参数仍是固定字面量，不拼接调用方输入，因此没有注入面。
+ */
+export function buildVersionProbeCommand(
+    executable: AgentRuntimeExecutable,
+    platform: NodeJS.Platform = process.platform,
+    env: NodeJS.ProcessEnv = process.env,
+): { command: string; args: string[] } {
+    if (platform === 'win32' && WINDOWS_SCRIPT_WRAPPER.test(executable.path)) {
+        const command = String(env.ComSpec || env.COMSPEC || 'cmd.exe');
+        return { command, args: ['/d', '/s', '/c', `""${executable.path}" --version"`] };
+    }
+    return { command: executable.path, args: ['--version'] };
+}
 
 export type RuntimeVersionProbe = (executable: AgentRuntimeExecutable, timeoutMs: number) => Promise<string | null>;
 
@@ -56,7 +74,7 @@ let cache: DetectionCacheEntry | null = null;
 let inFlight: Promise<AgentRuntimeDetection> | null = null;
 
 /**
- * 运行 `--version` 探测版本。只用确定参数、不经过 shell、不触发模型调用；
+ * 运行 `--version` 探测版本。只用确定参数、不拼接可变 shell 字符串、不触发模型调用；
  * 超时或进程异常都归为探测失败（返回 null），由调用方给出明确诊断。
  */
 function probeVersionWithProcess(executable: AgentRuntimeExecutable, timeoutMs: number): Promise<string | null> {
@@ -83,7 +101,8 @@ function probeVersionWithProcess(executable: AgentRuntimeExecutable, timeoutMs: 
         }, timeoutMs);
 
         try {
-            child = spawn(executable.path, ['--version'], {
+            const { command, args } = buildVersionProbeCommand(executable);
+            child = spawn(command, args, {
                 shell: false,
                 windowsHide: true,
                 stdio: ['ignore', 'pipe', 'pipe'],
