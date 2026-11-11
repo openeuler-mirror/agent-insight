@@ -118,6 +118,7 @@ export const zh = {
     optapi: '自优化 API',
     modelConfig: '模型配置',
     modelRegistry: '模型注册',
+    agentRuntimes: 'Agent 运行时',
     webSearch: '联网搜索',
     versionManagement: '版本管理',
     modelKeys: 'API Key 管理',

@@ -100,6 +100,7 @@
 | WorkBuddy (Windows 桌面版) Trace 采集器 | [workbuddy-trace-collector](observability/workbuddy-trace-collector/) | 无 Hook/插件扩展点的闭源 Electron 客户端，通过文件监听采集本地 trace（含 generation.toolOutput 内嵌的逐轮精确 token）+SQLite 只读关联会话元数据，经共享 spool/Adapter 接入平台；客户端安装通过 Windows Task Scheduler 登录触发+崩溃自愈实现免手动启动，补齐平台此前只覆盖 Linux/macOS 的常驻客户端自启动能力 | Feature | 2026-09-06 | 🟡 实现中（采集器/Adapter/独立安装器/一键安装入口/用户指南/测试均已落地，并完成多轮真机反馈修复：Agent 命名、工具就近归属、完成状态、子 Agent 命名、路径保留、latency 毫秒、免装 Node+自愈启动器、跳过标题生成器；待 CI 跑通完整套件） | —（待补） |
 
 | Runtime 启动参数 YAML 配置 | [runtime-parameters](platform/runtime-parameters/) | 通用嵌套编辑、独立草稿、完整快照与原样下发；默认值仅初始化，执行参数由客户端消费 | Refactor | 2026-10-16 | ✅ 通用草稿与原样下发已实现，105 项专项回归通过；全量测试及类型检查仍有既有基线问题；用户选择暂不进行浏览器验证 | 待补 |
+| Agent 运行时切换 | [agent-runtime-switching](platform/agent-runtime-switching/) | 检测服务部署环境中的内置 Agent 运行时，展示版本、来源、兼容性、能力与不可用原因，并保存个人默认值；执行层与 Pi 适配器分期接入 | Feature | 2026-11-09 | 🟡 阶段一已实现（探测/诊断/偏好保存/页面/单测）；统一执行服务、OpenCode 适配器抽取与内置 Pi 待实现 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
 
 ## 字段口径
 

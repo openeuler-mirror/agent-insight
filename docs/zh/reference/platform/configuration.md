@@ -36,6 +36,17 @@ changefreq: "monthly"
 
 客户端的服务地址、API Key 和安装配置见[客户端安装](../../how-to/platform/settings/access-control.md)。每台客户端有自己的运行环境；不要把多台机器的运行根映射为同一个共享目录。需要多个平台实例时，每个实例使用独立运行根、数据库和端口。
 
+## 内置 Agent 运行时
+
+平台内置功能会探测服务部署环境中的 Agent 运行时。可执行文件查找顺序为：显式环境变量 → 安装根下的 bundled 路径 → `PATH`；显式配置的路径不存在时不会回落到其他来源。
+
+| 变量 | 作用与默认值 | 设置位置与注意事项 |
+| --- | --- | --- |
+| `OPENCODE_BIN` | OpenCode 可执行文件路径；留空依次查找安装根 `node_modules/.bin/opencode` 与 `PATH` | 平台配置或启动环境；容器部署通常由镜像指向随包安装的可执行文件 |
+| `AGENT_RUNTIME_PI_BIN` | Pi 可执行文件路径；留空依次查找安装根 `node_modules/.bin/pi` 与 `PATH` | 当前版本仅探测 Pi，尚未提供执行适配器 |
+
+探测只读取服务进程可访问的文件系统，不调用模型、不安装或升级依赖。页面入口与能力边界见[Agent 运行时](../../how-to/platform/settings/agent-runtimes.md)。
+
 ## 评测服务与业务配置
 
 | 配置 | 范围 | 生效方式 |
