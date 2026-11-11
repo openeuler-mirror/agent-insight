@@ -27,6 +27,12 @@ changefreq: monthly
 
 对应文档： [链路追踪](../../how-to/observability/view-traces.md)
 
+### Token 与任务分析
+
+Token 与任务分析把 root Trace 汇总为成本与调度视图：按任务类型、用户和单条任务拆 Token 与估算成本，综合耗时、Token、工具/LLM 调用次数识别长时任务，并标出可放到夜间低峰执行的长任务。它只读既有 Execution 字段，不改变 Trace 采集与执行链路。
+
+对应文档： [Token 与任务分析](../../how-to/observability/token-task-insight.md)
+
 ### Agent 概览
 
 Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent，并处理登记、归属与接入信息。
@@ -59,6 +65,7 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 ## 下一步
 
 - 查看单次执行细节： [链路追踪](../../how-to/observability/view-traces.md)
+- 分析 Token 成本与长时任务： [Token 与任务分析](../../how-to/observability/token-task-insight.md)
 - 查看异常样本归因： [诊断分析](../../how-to/diagnosis/agent-debug/diagnosis.md)
 - 将线上问题沉淀为回归验证： [评估与实验](../evaluation/overview.md)
 

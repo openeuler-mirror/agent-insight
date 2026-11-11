@@ -89,6 +89,7 @@ export const en = {
     skillsOptimize: 'Optimize',
     agents: 'Agent Overview',
     trace: 'Trace Analysis',
+    taskInsight: 'Token & Task Insight',
     versionAnalysis: 'Version Analysis',
     goalPlus: 'Goal Plus Observability',
     eval: 'Evaluation',

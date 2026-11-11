@@ -89,6 +89,7 @@ export const zh = {
     skillsOptimize: '优化',
     agents: 'Agent 概览',
     trace: '链路追踪',
+    taskInsight: 'Token 与任务分析',
     versionAnalysis: '版本分析',
     goalPlus: 'Goal Plus 观测',
     eval: '评测任务',
