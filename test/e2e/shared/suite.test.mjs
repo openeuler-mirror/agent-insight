@@ -36,6 +36,17 @@ test('UT report keeps failed case names and source locations without raw stack t
  assert.deepEqual(result.failures,[{file:'test/example.test.ts:10:1',title:'rejects invalid input'}]);
  assert.ok(!JSON.stringify(result).includes('private raw stack'));
 });
+test('UT reports identify skipped cases and their reasons without hiding failures',()=>{
+ const title='real SQLite + Worker: publish, idempotency, isolation, failure, deletion and replay';
+ const reason='SQLite concurrency UT temporarily deferred during database refactor';
+ for(const skipped of [`﹣ ${title} (0.1ms) # ${reason}`,`ok 1 - ${title} # SKIP ${reason}`]){
+  const log=`${skipped}\nℹ tests 3\nℹ pass 1\nℹ fail 1\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\n`;
+  const result=parseUtResult(log,{code:1});
+  assert.equal(result.status,'FAIL');assert.deepEqual(result.skippedTests,[{title,reason}]);
+  const view=renderSummary({mode:'mixed',status:'FAIL',scenarios:[],npmTest:result});
+  for(const rendered of [view.markdown,view.html]){assert.ok(rendered.includes(title));assert.ok(rendered.includes(reason));}
+ }
+});
 test('suite preserves UT failures and produces a concise escaped summary', async () => {
   const r = await executeSuite({mode:'real',selected:['002'],runCase:async id=>pass(id), runUt:async()=>({status:'FAIL',fullSuiteComplete:true,observedSummary:{tests:1,pass:0,fail:1,skipped:0,cancelled:0},interrupted:false})});
   assert.equal(r.status,'FAIL');r.scenarios[1].reason='<script>bad</script>';

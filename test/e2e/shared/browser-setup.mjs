@@ -18,7 +18,7 @@ export async function loginAndModel(ctx, page) {
   };
     await stage('login', '测试邮箱经页面登录，刷新后保持相同身份', async () => {
       await page.goto(baseUrl + '/login');
-      await page.locator('input[type=email]').fill(username);
+      await page.getByLabel(/邮箱地址|Email Address/i).fill(username);
       const loginResponse = responseFor(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
       await page.locator('button[type=submit]').click();
       const response = await loginResponse;

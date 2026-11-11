@@ -12,7 +12,7 @@ import {diagnoseTrace} from '../../shared/diagnosis-ui.mjs';
 import {deriveRootSshTruth} from '../../shared/log-truth.mjs';
 import {datasetBusinessHash} from '../../shared/dataset-contract.mjs';
 import { assertOptimizedSnapshot, optimizationPrompt } from './skill-contract.mjs';
-import { readArchivedVerification, readFrozenSkillSnapshot } from '../../shared/skill-archive.mjs';
+import { readArchivedVerification, readFrozenSkillSnapshot, candidateVerificationDiagnostics } from '../../shared/skill-archive.mjs';
 
 export async function completeSkillLifecycle(ctx) {
   const { project, root, runId, api, page, stage, shot, generated, generatedName, baselineVersion } = ctx;
@@ -129,7 +129,7 @@ export async function completeSkillLifecycle(ctx) {
       assert.notEqual(candidate.taskId, baseline.taskId);
       return { ...candidate, detail: undefined, recordId: record.id, candidateContentHash: record.candidateContentHash, verificationSource: 'read-only archived experiment, immutable proof hashes and actual Trace', platformVerification: { status: record.status, relativeScorePassed: archivedRef.passed, baseScore: archivedRef.sourceScore, candidateScore: archivedRef.candidateScore, message: record.errorMessage } };
     }
-    assert.ok(record.retestExperimentId, 'No complete final-candidate verification evidence; cannot pass or invent a retest UI entry');
+    if (!record.retestExperimentId) throw new Error('No complete final-candidate verification evidence; cannot pass or invent a retest UI entry; proof checks: ' + JSON.stringify(candidateVerificationDiagnostics(path.join(root, 'app/data/witty_insight.db'), username, record, dataset)));
     candidate = await waitExperiment(record.retestExperimentId, 'candidate', true);assert.notEqual(candidate.taskId, baseline.taskId);return { ...candidate, detail: undefined, recordId: record.id, candidateContentHash: record.candidateContentHash };
   });
   await stage('publish', '页面发布候选，基线保留且正式新版文件逐文件等于最终候选', async () => {

@@ -1,4 +1,14 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawnSync} from 'node:child_process';import {boundedAppEnv} from './app-environment.mjs';
+import {createRequire} from 'node:module';
+test('isolated Next build workers follow the CPU budget instead of host CPU visibility',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'e2e-build-cpus-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const nextConfig=createRequire(import.meta.url).resolve('next/dist/server/config-shared');
+ for(const [cpus,workers] of [[2,2],[.5,1]]){
+  const env=boundedAppEnv(root,{...process.env,E2E_ISOLATED_CONTAINER:'1',CIRCLE_NODE_TOTAL:'128'},{appHeapMiB:2560,cpus});
+  const result=spawnSync('node',['-p',`require(${JSON.stringify(nextConfig)}).defaultConfig.experimental.cpus`],{env,encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);assert.equal(Number(result.stdout),workers);
+ }
+});
 test('isolated application Node heap stays bounded even when startup sets NODE_OPTIONS',t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'e2e-app-bound-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const original={...process.env,E2E_ISOLATED_CONTAINER:'0'};assert.equal(boundedAppEnv(root,original),original);

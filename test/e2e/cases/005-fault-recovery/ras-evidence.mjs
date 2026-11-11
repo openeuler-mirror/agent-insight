@@ -1,7 +1,17 @@
 import {executionModel} from '../../shared/model-config.mjs';
 import assert from 'node:assert/strict';
+import {poll} from '../../shared/runtime.mjs';
 export const RAS_EVALUATOR='preset-ras-reliability-detection-recovery';
 const time=value=>typeof value==='number'?value:Date.parse(value);
+function evidenceCounts(events){
+ const actionResults=events.filter(e=>e.type==='action_result');
+ return {anomalies:events.filter(e=>e.type==='anomaly').length,anomalyKinds:[...new Set(events.filter(e=>e.type==='anomaly').map(e=>e.anomalyKind))],thinkingDetections:events.filter(e=>e.type==='anomaly'&&['llm_thinking_loop','llm_thinking_dead_loop'].includes(e.anomalyKind)).length,actionResults:actionResults.length,successfulAborts:actionResults.filter(e=>{try{const p=JSON.parse(e.payloadJson);return p.action==='abort_stream'&&p.ok===true&&String(p.channel).includes('session.abort');}catch{return false;}}).length};
+}
+export async function waitForRasEvidence(readEvents,{timeoutMs=60000,intervalMs=1000}={}){
+ let latest=[];
+ try{return await poll(async()=>latest=await readEvents(),rows=>{const counts=evidenceCounts(rows);return counts.thinkingDetections>0&&counts.successfulAborts>0;},timeoutMs,intervalMs);}
+ catch(error){throw new Error('Incomplete RAS evidence: '+JSON.stringify(evidenceCounts(latest)),{cause:error});}
+}
 export function assertRasRequest(payload,expected){
  assert.equal(payload.datasetId,expected.datasetId);assert.deepEqual(payload.datasetCaseIds,[expected.caseId]);assert.equal(payload.traceSource,'generate');assert.equal(payload.configSnapshot?.fiOrchestrate,true);assert.equal(payload.agentTimeoutSeconds,300);
  assert.deepEqual(payload.evaluatorIds,[RAS_EVALUATOR]);for(const [k,v] of Object.entries({workerId:expected.clientId,platform:'opencode',agent:'build',model:executionModel()}))assert.equal(payload.executionTarget?.[k],v);return {caseId:expected.caseId,clientId:expected.clientId};

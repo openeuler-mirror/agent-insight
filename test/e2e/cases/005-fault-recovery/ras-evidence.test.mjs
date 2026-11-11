@@ -3,6 +3,19 @@ import {requiredStagesFor,scenarioResult} from '../../shared/core.mjs';
 const mod=await import('./ras-evidence.mjs').catch(()=>({}));
 const expected={user:'test-user',clientId:'client-1',datasetId:'dataset-1',caseId:'case-1',taskId:'ses-main'};
 function evidence(){return {run:{user:expected.user,workerId:expected.clientId,sessionTaskId:expected.taskId,fault:'thinking-dead-loop',submode:'2',faultActivated:true,status:'completed',stopRequested:false},events:[{id:'a',user:expected.user,taskId:expected.taskId,type:'anomaly',anomalyKind:'llm_thinking_loop',ts:1000,payloadJson:'{}'},{id:'b',user:expected.user,taskId:expected.taskId,type:'action_result',ts:1100,payloadJson:JSON.stringify({action:'abort_stream',ok:true,channel:'session.abort'})}],nativeEvents:[{type:'text',sessionID:expected.taskId,part:{text:'明白，我先看看当前磁盘状况和之前的工作上下文，再开始测试。'.repeat(80)}},{type:'error',sessionID:expected.taskId,timestamp:1200,error:{name:'MessageAbortedError',data:{message:'Aborted'}}}],protectedStop:false};}
+test('005 waits for both independently ingested detection and successful native abort receipt',async()=>{
+ assert.equal(typeof mod.waitForRasEvidence,'function');
+ for(const first of [0,1]){
+  const rows=evidence().events;let reads=0;
+  const result=await mod.waitForRasEvidence(()=>++reads===1?[rows[first]]:rows,{timeoutMs:1000,intervalMs:1});
+  assert.equal(reads,2);assert.deepEqual(result,rows);
+ }
+});
+test('005 times out on incomplete evidence without exposing event payloads',async()=>{
+ assert.equal(typeof mod.waitForRasEvidence,'function');
+ const rows=[{...evidence().events[1],payloadJson:JSON.stringify({action:'abort_stream',ok:true,channel:'session.abort',privateValue:'never-report-this'})}];
+ await assert.rejects(mod.waitForRasEvidence(()=>rows,{timeoutMs:20,intervalMs:1}),error=>/Incomplete RAS evidence/.test(error.message)&&!error.message.includes('never-report-this'));
+});
 test('005 cannot pass with only installation or missing recovery evidence',()=>{const required=requiredStagesFor('005');assert.ok(required.includes('recovery'));assert.ok(required.includes('ras-evidence'));assert.equal(scenarioResult(required.map(id=>({id,status:'PASS'})),'005').status,'PASS');assert.equal(scenarioResult(required.filter(id=>id!=='recovery').map(id=>({id,status:'PASS'})),'005').status,'PARTIAL');});
 test('real fault, matching detection, successful native abort and session form a proof',()=>{assert.equal(typeof mod.assertRasEvidence,'function');assert.equal(mod.assertRasEvidence(evidence(),expected).taskId,expected.taskId);});
 test('planned or failed action and natural completion cannot prove recovery',()=>{assert.equal(typeof mod.assertRasEvidence,'function');for(const change of [x=>x.events.pop(),x=>x.events[1].payloadJson=JSON.stringify({action:'abort_stream',ok:false}),x=>x.nativeEvents.pop(),x=>x.protectedStop=true,x=>x.run.stopRequested=true,x=>x.run.faultActivated=false,x=>x.nativeEvents[0].part.text='任务成功']){const x=evidence();change(x);assert.throws(()=>mod.assertRasEvidence(x,expected));}});

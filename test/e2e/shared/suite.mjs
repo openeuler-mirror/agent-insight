@@ -3,12 +3,14 @@ import { scenarioResult, redact } from './core.mjs';
 
 export function parseUtResult(log, execution) {
   const counts = {};
-  const failures = [];const fileTimeouts=[];
+  const failures = [];const fileTimeouts=[];const skippedTests=[];
   let failedFile;
   for (const line of log.replace(/\x1b\[[0-9;]*m/g,'').split('\n')) {
     const deadline=line.match(/^E2E_UT_FILE_TIMEOUT (\{.*\}) test file timeout$/);if(deadline){try{const value=JSON.parse(deadline[1]);if(typeof value.file==='string'&&Number.isSafeInteger(value.timeoutMs))fileTimeouts.push(value);}catch{}}
     const match = line.match(/^(?:#|ℹ) (tests|pass|fail|cancelled|skipped|todo) (\d+)\s*$/);
     if (match) counts[match[1]] = Number(match[2]);
+    const skipped=line.match(/^\s*﹣ (.+?)(?: \([\d.]+ms\))? # (?:SKIP(?: )?)?(.*)$/)||line.match(/^\s*ok \d+ - (.+?) # SKIP(?: (.*))?$/);
+    if(skipped&&skippedTests.length<200)skippedTests.push({title:redact(skipped[1]),reason:redact(skipped[2]||'')});
     const location=line.match(/^test at (test\/[^\r\n]+)$/);if(location)failedFile=location[1];
     const failed=line.match(/^\s*✖ (.+?)(?: \([\d.]+ms\))?$/);
     if(failedFile&&failed&&failures.length<200){failures.push({file:failedFile,title:redact(failed[1])});failedFile=undefined;}
@@ -21,7 +23,7 @@ export function parseUtResult(log, execution) {
   const fullSuiteComplete = runnerCompleted && !fileTimeouts.length;
   return { status: fileTimeouts.length ? 'FAIL' : !fullSuiteComplete || (counts.pass === 0 && counts.fail === 0 && counts.cancelled === 0) ? 'BLOCKED' : execution.code === 0 && counts.fail === 0 && counts.cancelled === 0 ? 'PASS' : 'FAIL',
     exitCode: execution.code, interrupted, runnerCompleted, fullSuiteComplete, countsAreLowerBound: !fullSuiteComplete,
-    observedSummary: hasSummary ? counts : null, failures, fileTimeouts,
+    observedSummary: hasSummary ? counts : null, failures, fileTimeouts, skippedTests,
     reason: fileTimeouts.length ? '测试文件进程超时中断，汇总计数仅为观测下限，不能声称全套测试执行完整' : interrupted ? '测试进程中断，不能给出完整通过结论' : !consistent ? '缺少有效的全套尾部汇总' : counts.fail ? '失败尚未逐项归因；不能将环境依赖失败直接认定为产品缺陷' : counts.pass === 0 ? '没有实际通过的用例，不能将全部跳过记为通过' : '' };
 }
 
@@ -79,7 +81,7 @@ export function renderSummary(report) {
   const utText=`UT：${label[ut?.status]||'未执行'}；`+(c?`总数${ut.countsAreLowerBound?'（观测下限）':''} ${c.tests}，通过 ${c.pass}，失败 ${c.fail}，跳过 ${c.skipped}，取消 ${c.cancelled}，TODO ${c.todo??0}；`:'计数未知；')+`运行器结束：${(ut?.runnerCompleted??ut?.fullSuiteComplete)?'是':'否'}；执行完整：${ut?.fullSuiteComplete?'是':'否'}；中断：${ut?.interrupted?'是':'否'}；文件进程超时 ${ut?.fileTimeouts?.length||0} 项。`;
   const clean = x=>redact(String(x)).replace(/\|/g,'／').replace(/[\r\n]+/g,' ');
   const dirty=report.dirtyWorkingTree?'（本地未提交改动，不能视为该提交的 PR 检查）':'';
-  const origin=({'server-isolated-source-snapshot':'服务器源码快照验证（非 Webhook PR 检查）','isolated-pr-merge':'PR 合并提交隔离验证','local-working-tree':'本地工作树验证'})[report.executionOrigin]||'未标记来源';
+  const origin=({'atomgit-job':'AtomGit Actions Job','server-isolated-source-snapshot':'服务器源码快照验证（非 Webhook PR 检查）','isolated-pr-merge':'PR 合并提交隔离验证','local-working-tree':'本地工作树验证'})[report.executionOrigin]||'未标记来源';
   const configText=report.configuration?`配置：${report.configuration.settings.profile}；SHA256 ${report.configuration.hash}；模型 ${report.configuration.settings.model.modelName}；Base URL ${report.configuration.settings.model.baseUrl}`:'';
   const provenance=`来源：${origin}；运行：${report.runId||'—'}`;
   const timing=`E2E 耗时：${duration(report.e2eDurationMs)}；UT 耗时：${duration(ut?.durationMs)}`;
@@ -90,8 +92,9 @@ export function renderSummary(report) {
   const markdown=[`模式：${report.mode}；结果：${label[report.status]||report.status}`,provenance,identity,scope,configText,timing,`运行：${report.runId||'—'}；提交：${report.testedSha||'—'}${dirty}`,'',buildText,utText,ut?.reason||'',resourceNote,'','| 场景 | 模式 | 结果 | 原因 | 耗时 |','|---|---|---|---|---|',...rows.map(r=>'| '+r.map(clean).join(' | ')+' |'),'','未执行、阻塞和不完整不计为通过。'+(report.mode!=='real'?'Mock场景不验证真实模型的回答质量和服务可用性。':'')].join('\n');
   const html=`<!doctype html><html lang="zh"><meta charset="utf-8"><title>E2E 报告</title><style>body{font:16px system-ui;max-width:1000px;margin:32px auto;padding:16px}table{border-collapse:collapse;width:100%}td,th{padding:10px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap}</style><h1>生产编译、UT 与 E2E</h1><p>${esc(buildText)}</p><p>${esc(scope)}</p><p>模式：${esc(report.mode)}；结果：${esc(label[report.status]||report.status)}；提交：${esc(report.testedSha)}</p><p>${esc(utText)}</p><p>${esc(timing)}</p><table><tr><th>场景</th><th>模式</th><th>结果</th><th>原因</th><th>耗时</th></tr>${rows.map(r=>'<tr>'+r.map(v=>`<td>${esc(redact(v))}</td>`).join('')+'</tr>').join('')}</table><p>报告由代码生成；未执行、阻塞和不完整不计通过。${report.mode!=='real'?'Mock场景不证明真实模型依赖可用。':''}</p></html>`;
   const failureDetails=ut?.failures?.length?`<details><summary>UT 失败用例（${ut.failures.length} 项，归因待核实）</summary><ul>${ut.failures.map(f=>`<li>${esc(f.title)} — ${esc(f.file)}</li>`).join('')}</ul></details>`:'';
+  const skippedDetails=ut?.skippedTests?.length?`<details><summary>UT 跳过用例（${ut.skippedTests.length} 项）</summary><ul>${ut.skippedTests.map(test=>`<li>${esc(test.title)}${test.reason?' — '+esc(test.reason):''}</li>`).join('')}</ul></details>`:'';
   const traces=report.scenarios.flatMap(s=>(s.traces||[]).map(t=>({caseId:s.id,...t})));
   const stageDetails=report.scenarios.filter(s=>s.stages?.length).map(s=>`<details><summary>${esc(s.id)} 阶段结果</summary><ul>${s.stages.map(t=>`<li>${esc(t.id)}：${esc(label[t.status]||t.status)}${['FAIL','BLOCKED'].includes(t.status)?' — '+esc(redact(String(t.actual||''))):''}</li>`).join('')}</ul></details>`).join('');
   const traceDetails=traces.length?`<details><summary>本轮 Trace 清单（${traces.length}）</summary><ul>${traces.map(t=>`<li>${esc(t.caseId)} — ${esc(t.taskId)}</li>`).join('')}</ul></details>`:'';
-  return {markdown,html:html.replace('</html>',`<p>${esc(provenance)}</p><p>${esc(configText)}</p><p>${esc(identity)}</p><p>${esc(dirty)}</p><p>${esc(ut?.reason||'')}</p><p>${esc(resourceNote)}</p>${failureDetails}${stageDetails}${traceDetails}</html>`)};
+  return {markdown:markdown+(skippedDetails?'\n\n'+skippedDetails:''),html:html.replace('</html>',`<p>${esc(provenance)}</p><p>${esc(configText)}</p><p>${esc(identity)}</p><p>${esc(dirty)}</p><p>${esc(ut?.reason||'')}</p><p>${esc(resourceNote)}</p>${failureDetails}${skippedDetails}${stageDetails}${traceDetails}</html>`)};
 }

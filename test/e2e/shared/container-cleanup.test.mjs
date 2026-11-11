@@ -5,3 +5,14 @@ test('container orphan cleanup preserves controller and suite while collecting d
 test('ordinary local execution never sweeps global processes',async()=>{
  const before=process.env.E2E_ISOLATED_CONTAINER;delete process.env.E2E_ISOLATED_CONTAINER;try{assert.deepEqual(await cleanupContainerOrphans(),{stopped:0});}finally{if(before!==undefined)process.env.E2E_ISOLATED_CONTAINER=before;}
 });
+test('AtomGit Job leaves the platform worker processes alone', async () => {
+ const isolated=process.env.E2E_ISOLATED_CONTAINER;
+ const job=process.env.E2E_ATOMGIT_JOB;
+ process.env.E2E_ISOLATED_CONTAINER='1';
+ process.env.E2E_ATOMGIT_JOB='1';
+ try{assert.deepEqual(await cleanupContainerOrphans(),{stopped:0});}
+ finally{
+  if(isolated===undefined)delete process.env.E2E_ISOLATED_CONTAINER;else process.env.E2E_ISOLATED_CONTAINER=isolated;
+  if(job===undefined)delete process.env.E2E_ATOMGIT_JOB;else process.env.E2E_ATOMGIT_JOB=job;
+ }
+});

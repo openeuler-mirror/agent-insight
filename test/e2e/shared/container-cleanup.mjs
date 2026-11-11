@@ -5,7 +5,7 @@ export function orphanTargets(rows,preserved){
  return [...targets];
 }
 export async function cleanupContainerOrphans(){
- if(process.env.E2E_ISOLATED_CONTAINER!=='1')return {stopped:0};
+ if(process.env.E2E_ISOLATED_CONTAINER!=='1'||process.env.E2E_ATOMGIT_JOB==='1')return {stopped:0};
  if(fs.readFileSync('/proc/1/comm','utf8').trim()!=='docker-init')throw Error('Refusing orphan cleanup outside initialized test container');
  const inspect=()=>{const ps=spawnSync('ps',['-eo','pid=,ppid='],{encoding:'utf8'});if(ps.status!==0)throw Error('Cannot inspect owned container processes');return ps.stdout.trim().split('\n').map(line=>{const [pid,parent]=line.trim().split(/\s+/).map(Number);return {pid,parent};});};
  const targets=orphanTargets(inspect(),[1,process.pid,process.ppid]);
