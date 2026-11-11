@@ -17,12 +17,13 @@
 // 变量维度策略测试：LLM 实现 + framework/skill stub + getDimension 映射。
 // 覆盖：extractValue 取正确字段 / controlledFields 返回维度正确集 /
 // framework/skill stub queryCandidateTraces 抛 NotImplemented / getDimension 映射。
-// DB 测试（queryCandidateTraces）落在仓库 data/witty_insight.db（同 experiment-engine.test.ts）。
-import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
+// DB 测试（queryCandidateTraces）落在临时隔离数据库（同 experiment-engine.test.ts）。
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { prisma } from '@/lib/storage/prisma';
 import {
@@ -31,6 +32,8 @@ import {
   SKILL_DIMENSION,
   getDimension,
 } from '@/lib/engine/experiment/variable-dimension';
+
+test.after(async () => { await prisma.$disconnect(); database.dispose(); });
 
 // ─── extractValue ───────────────────────────────────────────────────────────
 

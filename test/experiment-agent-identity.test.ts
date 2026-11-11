@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { GET as listExperimentAgents } from '@/app/api/experiments/agents/route';
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
@@ -27,6 +28,8 @@ import { prisma } from '@/lib/storage/prisma';
 const RUN_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const TEST_USER = `experiment-xiaoo-${RUN_ID}`;
 const CLIENT_ID = `xiaoo-client-${RUN_ID}`;
+
+test.after(async () => { await prisma.$disconnect(); database.dispose(); });
 
 test('xiaoo display identity keeps the native CLI agent id on executable targets', async (t) => {
   assert.equal(canonicalExperimentAgentName('xiaoo', 'defaultagent'), 'xiaoo');
