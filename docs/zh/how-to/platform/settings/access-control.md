@@ -85,7 +85,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 运维人员可按外部账号查询对应 UUID：`SELECT username FROM "User" WHERE "externalAccount" = ?`。真实账号值只存在部署数据库中，不进入代码仓。
 
-网页登录没有固定的空闲或绝对过期时间。浏览器会在当前 origin 的 `localStorage` 中保存 UUID 和 API Key，重新打开页面时使用两者恢复登录；API Key 有效且数据库用户仍存在时无需重新走 IDaaS。清理站点数据、改用其他协议/域名/IP/端口、API Key 或用户被删除、数据库被重置，或者部署切换登录模式时，需要重新登录。OAuth state 的 5 分钟有效期和 callback 登录票据的 60 秒有效期只约束单次授权跳转，不是网页会话时长；重新走 OAuth 时是否再次输入账号密码，由公司 IDaaS 的 SSO 会话策略决定。
+网页登录没有固定的空闲或绝对过期时间。浏览器会在当前 origin 的 `localStorage` 中保存 UUID 和 API Key，重新打开页面时使用两者恢复登录；API Key 有效且数据库用户仍存在时无需重新走 IDaaS。连续导航或刷新打断恢复请求、或者遇到临时网络/服务故障时，平台会保留本地凭据并短暂重试，不会当作退出登录；只有服务端明确返回身份无效或地区限制时才清除本地凭据。清理站点数据、改用其他协议/域名/IP/端口、API Key 或用户被删除、数据库被重置，或者部署切换登录模式时，需要重新登录。OAuth state 的 5 分钟有效期和 callback 登录票据的 60 秒有效期只约束单次授权跳转，不是网页会话时长；重新走 OAuth 时是否再次输入账号密码，由公司 IDaaS 的 SSO 会话策略决定。
 
 地区 IAM token 在服务进程内缓存 10 小时，人员记录缓存 2 小时；这不是网页登录时长。`IDAAS_REGION_ACCESS_TLS_VERIFY=false` 只关闭地区 IAM/人员请求的证书校验，不影响其他 HTTPS 请求。
 
