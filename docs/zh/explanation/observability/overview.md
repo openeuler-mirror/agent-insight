@@ -269,7 +269,7 @@ App Server proxy 同样默认不启动。需要代理一个显式 client 时，�
 Agent Insight proxy 的 JSON-RPC 连接才会记录成功的
 `turn/start`、`turn/steer`、`turn/interrupt` 和 `contextCompaction`，不会宣称能够观察已运行的
 Desktop 私有连接。详情与开发边界见
-[Codex App Server 与 Desktop Trace 升级设计](../../design/codex-app-server-desktop-trace-upgrade/design.md)。
+[Codex App Server 与 Desktop Trace 升级设计](../../../../design/observability/codex-app-server-desktop-trace-upgrade/design.md)。
 
 Codex 通过公开 Hook 与原生 OTel Logs 双通道采集，使用 loopback relay 合并为同一条 Trace；安装器接受 `>=0.145.0` 的可解析 Codex CLI 版本。可在安装指导中勾选 **Codex**，完成后启动 Codex、运行 `/hooks` 并信任 Agent Insight handlers。采集器不会读取 `transcript_path`，写入 spool 与上报前会递归脱敏 API Key、token、secret、password 等密钥赋值以及本地 Windows、UNC、`/Users/...`、`/home/...` 路径；Token 用量字段保留数值。VS Code、Cursor 与 Windsurf 可安装同一 VSIX，以公开 API 采集 FileEdit 和 Terminal 事件。
 
