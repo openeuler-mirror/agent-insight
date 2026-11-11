@@ -1,13 +1,13 @@
 # ClickHouse 存储支持需求
 
-平台默认用 SQLite（Prisma，`prisma/schema.prisma` 共 93 张表）承载全部业务数据；另有一个 OpenGauss 适配层，仅在 `DB_HOST` 非空时启用，`DatabaseAdapter` 只覆盖 41 个方法，其余功能显式降级。issue #374 指出 SQLite 只适合演示、希望支持 ClickHouse 这类高性能数据库以支撑高并发。
+平台默认用 SQLite（Prisma，`prisma/schema.prisma` 共 96 张表）承载全部业务数据；另有一个 OpenGauss 适配层，仅在 `DB_HOST` 非空时启用，`DatabaseAdapter` 只覆盖 41 个方法，其余功能显式降级。issue #374 指出 SQLite 只适合演示、希望支持 ClickHouse 这类高性能数据库以支撑高并发。
 
 本需求要回答两件事：**ClickHouse 在 agent-insight 里应承担哪一层存储**，以及**以什么范围落地，既能缓解并发瓶颈、又不破坏单机默认路径和现有 OpenGauss 部署**。本轮只产出设计，不改 Prisma schema、不新增 API 路由、不改运行时代码；按 AGENTS.md 先对齐设计，再进入开发。
 
 ## 现状与约束事实
 
 - ClickHouse 是列式 OLAP 数据库，不提供唯一约束、外键和跨表事务；`UPDATE`/`DELETE` 是异步 mutation，单行高频更新不是它的设计目标。Prisma 5.22 没有 ClickHouse connector。
-- 业务代码约 970 处直接调用 `prisma` / `prismaRaw`，共 281 个 API 路由、97 处 `$transaction`；现有适配层只覆盖 41 个方法，说明「用适配层平替全部表」不可行。
+- 业务代码约 1000 处直接调用 `prisma` / `prismaRaw`，共 289 个 API 路由、98 处 `$transaction`；现有适配层只覆盖 41 个方法，说明「用适配层平替全部表」不可行。
 - OpenGauss 模式下列表分页退化为「全量取回再内存切片」（`src/lib/storage/data-service.ts` 的 `readRecords`），高并发下并没有真正下推；这是本次设计要避免重演的教训。
 - 适配层未实现的方法目前返回 `null` 或打印告警（`src/lib/storage/prisma.ts`），调用方会把「后端不支持」误读成「没有数据」。新后端必须改成显式失败。
 - 后端选择目前散落在 9 个文件的 22 处 `process.env.DB_HOST` 判断里，语义是「外部库 / 少功能」，而不是「当前后端具备某能力」。新增第三种后端后必须收敛为能力开关。
@@ -23,7 +23,7 @@
 
 ## 非目标
 
-- 不把 ClickHouse 作为 93 张表的通用 OLTP 主库，也不追求 Prisma schema 的逐表映射。
+- 不把 ClickHouse 作为 96 张表的通用 OLTP 主库，也不追求 Prisma schema 的逐表映射。
 - 不改变默认部署形态，不让 ClickHouse 成为安装前置依赖。
 - 不替换 OpenGauss 适配层，不改写 Skill 资产、评测、实验、可靠性控制面等事务型业务。
 - 不做跨库实时事务、双写强一致或多租户隔离改造。

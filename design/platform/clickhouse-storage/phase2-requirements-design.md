@@ -2,7 +2,7 @@
 
 ## 结论
 
-ClickHouse 不能平替 SQLite 作为通用主库：它是列式 OLAP 存储，没有唯一约束、外键和跨表事务，单行更新要走异步 mutation；平台 93 张表、约 970 处 Prisma 调用、97 处 `$transaction`，全量适配的成本和语义风险都不可控，而且 Prisma 没有 ClickHouse connector。
+ClickHouse 不能平替 SQLite 作为通用主库：它是列式 OLAP 存储，没有唯一约束、外键和跨表事务，单行更新要走异步 mutation；平台 96 张表、约 1000 处 Prisma 调用、98 处 `$transaction`，全量适配的成本和语义风险都不可控，而且 Prisma 没有 ClickHouse connector。
 
 因此采用**分层存储**：ClickHouse 只承载高频、追加为主的 Trace 数据面（Execution、ExecutionSkill、Session），元数据与控制面（Skill、评测、实验、Benchmark、可靠性、协作等）继续使用 SQLite，OpenGauss 部署方式保持不变。Trace 写入与观测查询是当前并发瓶颈所在，分层后能直接解决；其余写入频率低，无需引入列存。
 
@@ -14,7 +14,7 @@ ClickHouse 不能平替 SQLite 作为通用主库：它是列式 OLAP 存储，�
 
 | 方案 | 内容 | 代价 | 结论 |
 |-|-|-|-|
-| A 全量适配 | 为 93 张表实现 ClickHouse 版本，承接全部读写 | 语义不可等价（事务、唯一约束、单行更新）；约 970 处调用需逐一验证；回归成本极高 | 不采用 |
+| A 全量适配 | 为 96 张表实现 ClickHouse 版本，承接全部读写 | 语义不可等价（事务、唯一约束、单行更新）；约 1000 处调用需逐一验证；回归成本极高 | 不采用 |
 | B 分层数据面 | Trace 三张表进 ClickHouse，其余留 SQLite/OpenGauss | 需要跨库 hydrate 与能力降级；多实例时元数据仍需共享库 | **采用** |
 | C 只读镜像 | SQLite 为主，定时/触发同步到 ClickHouse 供分析 | 写入并发瓶颈未解决，只增加一份数据与同步延迟 | 不采用（可作为未来分析扩展） |
 
