@@ -420,6 +420,8 @@ type SubtreeStats = {
     cacheWriteTokens: number;
     reasoningTokens: number;
     totalTokens: number;
+    /** 至少一次 LLM 调用带回了非零 usage；全 0 且未上报时界面显示「未提供」。 */
+    usageReported: boolean;
 };
 
 const subtreeStatsCache = new WeakMap<AgentNode, SubtreeStats>();
