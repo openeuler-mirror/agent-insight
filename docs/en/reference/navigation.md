@@ -9,6 +9,8 @@ Check input, output, configuration, identity, and asynchronous behavior.
 
 ## Platform
 
+- [Storage core and legacy export](./platform/storage-core.md)
+
 - [HTTP APIs and user identity](./platform/http-api.md)
 - [Runtime configuration](./platform/configuration.md)
 - [Model-connection test API](./platform/model-connection-test.md)
