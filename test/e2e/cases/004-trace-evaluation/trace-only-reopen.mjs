@@ -12,7 +12,7 @@ export async function verifyOptimizationReopen(page, baseUrl, sessionId, skillNa
   await page.getByRole('button', { name: '优化记录', exact: true }).last().click();
   const article = page.getByRole('article').filter({ has: page.getByRole('heading', { name: /^优化报告/ }) });
   await article.getByText(`快照：${contentHash}`, { exact: true }).waitFor();
-  await article.getByText('静态通过，待完整复测', { exact: true }).waitFor();
+  await article.getByText('前置质量通过，可发布', { exact: true }).waitFor();
   await article.getByRole('button', { name: /^SKILL\.md/ }).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('sessionId'), sessionId);
   return { sessionId, skillName, candidateContentHash: contentHash, view: '优化记录', uiLoaded: true };

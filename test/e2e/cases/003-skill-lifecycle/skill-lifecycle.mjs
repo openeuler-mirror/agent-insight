@@ -18,6 +18,16 @@ export async function completeSkillLifecycle(ctx) {
   const { project, root, runId, api, page, stage, shot, generated, generatedName, baselineVersion } = ctx;
   const responseFor = (...args) => { const promise = page.waitForResponse(...args);promise.catch(() => {});return promise; };
   const requestFor = (...args) => { const promise = page.waitForRequest(...args);promise.catch(() => {});return promise; };
+  const confirmAction = async (button, message) => {
+    const confirmation = page.waitForEvent('dialog');confirmation.catch(() => {});
+    const clicked = button.click();clicked.catch(() => {});
+    const dialog = await confirmation;
+    try {
+      assert.equal(dialog.type(), 'confirm');assert.equal(dialog.message(), message);
+      await dialog.accept();
+    } catch (error) { await dialog.dismiss();throw error; }
+    await clicked;
+  };
   const username = ctx.account.username;
   const marker = `E2E-${runId}-003`;
   const logFile = path.join(root, 'ordinary/workspace/fixtures/messages');fs.mkdirSync(path.dirname(logFile), { recursive: true });fs.copyFileSync(path.join(project, 'public/example/messages'), logFile);
@@ -132,10 +142,48 @@ export async function completeSkillLifecycle(ctx) {
     if (!record.retestExperimentId) throw new Error('No complete final-candidate verification evidence; cannot pass or invent a retest UI entry; proof checks: ' + JSON.stringify(candidateVerificationDiagnostics(path.join(root, 'app/data/witty_insight.db'), username, record, dataset)));
     candidate = await waitExperiment(record.retestExperimentId, 'candidate', true);assert.notEqual(candidate.taskId, baseline.taskId);return { ...candidate, detail: undefined, recordId: record.id, candidateContentHash: record.candidateContentHash };
   });
-  await stage('publish', '页面发布候选，基线保留且正式新版文件逐文件等于最终候选', async () => {
+  await stage('publish', '页面发布待验证版本，核对已实测候选与正式文件一致，再登记验证通过并显式激活，旧版保留', async () => {
     const result = responseFor(r => r.url().endsWith(`/optimizations/${record.id}/publish`) && r.request().method() === 'POST');
-    await page.getByRole('button', { name: /^发布为 v\d+$/ }).click();await page.getByRole('dialog', { name: '发布优化候选', exact: true }).getByRole('button', { name: '确认发布', exact: true }).click();
-    const response = await result;const data = await response.json();assert.ok(response.ok(), data.error);publishedVersion = data.version.version;assert.ok(publishedVersion > baselineVersion);assertSnapshot(record.candidateFiles, data.session.files);writePrivate(path.join(root, 'private/candidate-publish.json'), data);await shot('skill-published');return { version: publishedVersion, baselineVersion, candidateHashes: assertSnapshot(record.candidateFiles, data.session.files) };
+    await page.getByRole('button', { name: /^发布待验证 v\d+$/ }).click();
+    await page.getByRole('dialog', { name: '发布待验证版本', exact: true }).getByRole('button', { name: '确认发布待验证版本', exact: true }).click();
+    const response = await result;const data = await response.json();assert.ok(response.ok(), data.error);
+    assert.deepEqual(response.request().postDataJSON(), { user: username, confirmed: true, verificationMode: 'external', activate: false });
+    publishedVersion = data.version.version;assert.ok(publishedVersion > baselineVersion);
+    assert.equal(data.skill.activeVersion, baselineVersion);assert.equal(data.version.verificationStatus, 'pending');assert.equal(data.version.verificationMode, 'external');
+    const pendingRecord = data.session.optimizations.find(item => item.id === record.id);
+    assert.equal(pendingRecord.verificationStatus, 'pending');assert.equal(pendingRecord.activeVersion, baselineVersion);
+    const candidateHashes = assertSnapshot(record.candidateFiles, data.session.files);
+    assert.deepEqual(JSON.parse(data.version.files).sort(), Object.keys(record.candidateFiles).sort());
+    const formalFiles = {};
+    for (const file of Object.keys(record.candidateFiles)) formalFiles[file] = (await api(`/api/skills/${data.skill.id}/versions/${publishedVersion}/files/${file}?user=${encodeURIComponent(username)}`)).content;
+    const formalHashes = assertSnapshot(record.candidateFiles, formalFiles);
+    writePrivate(path.join(root, 'private/candidate-publish.json'), data);
+    await page.getByText('已发布，待外部验证', { exact: true }).waitFor();
+    await page.getByText(`当前激活版本仍为 v${baselineVersion}`, { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: `激活 v${publishedVersion}`, exact: true }).count(), 0);
+    await shot('skill-published-pending');
+
+    assert.ok(candidate.score >= 80);assert.notEqual(candidate.taskId, baseline.taskId);
+    const verificationEvidence = { experimentId: candidate.experimentId, taskId: candidate.taskId, score: candidate.score, candidateContentHash: record.candidateContentHash, candidateHashes, formalHashes, source: 'Already verified native OpenCode execution of the exact candidate snapshot; every published file matches that snapshot' };
+    writePrivate(path.join(root, 'private/published-verification-evidence.json'), verificationEvidence);
+    const verified = responseFor(r => r.url().endsWith(`/versions/${publishedVersion}/verification`) && r.request().method() === 'POST');
+    await confirmAction(page.getByRole('button', { name: '验证通过', exact: true }), `确认将 ${generatedName} v${publishedVersion} 登记为外部验证通过？`);
+    const verificationResponse = await verified;const verification = await verificationResponse.json();assert.ok(verificationResponse.ok(), verification.error);
+    assert.deepEqual(verificationResponse.request().postDataJSON(), { user: username, result: 'passed' });
+    assert.equal(verification.version.version, publishedVersion);assert.equal(verification.version.verificationStatus, 'passed');assert.equal(verification.version.verifiedBy, username);assert.ok(verification.version.verifiedAt);assert.equal(verification.skill.activeVersion, baselineVersion);
+    const verifiedSkill = await api(`/api/skills/by-name?name=${encodeURIComponent(generatedName)}&user=${encodeURIComponent(username)}`);assert.equal(verifiedSkill.activeVersion, baselineVersion);
+    writePrivate(path.join(root, 'private/published-verification.json'), verification);
+    await page.getByText('外部验证通过', { exact: true }).waitFor();
+    const activated = responseFor(r => r.url().endsWith(`/versions/${publishedVersion}/activate`) && r.request().method() === 'POST');
+    await confirmAction(page.getByRole('button', { name: `激活 v${publishedVersion}`, exact: true }), `确认激活 ${generatedName} v${publishedVersion}？之后默认执行将使用该版本。`);
+    const activationResponse = await activated;const activation = await activationResponse.json();assert.ok(activationResponse.ok(), activation.error);
+    assert.equal(activation.skill.activeVersion, publishedVersion);assert.equal(activation.version.verificationStatus, 'passed');
+    writePrivate(path.join(root, 'private/published-activation.json'), activation);
+    const persisted = await api(`/api/skill-workbench/sessions/${generated.id}?user=${encodeURIComponent(username)}`);
+    const publishedRecord = persisted.session.optimizations.find(item => item.id === record.id);
+    assert.equal(publishedRecord.status, 'published');assert.equal(publishedRecord.publishedVersion, publishedVersion);assert.equal(publishedRecord.verificationStatus, 'passed');assert.equal(publishedRecord.activeVersion, publishedVersion);assertSnapshot(record.candidateFiles, persisted.session.files);
+    await page.getByText('已验证并激活', { exact: true }).waitFor();await shot('skill-published');
+    return { version: publishedVersion, baselineVersion, initiallyPending: true, activeVersionPreservedUntilExplicitActivation: true, candidateHashes, formalHashes, verificationEvidence, verificationStatus: publishedRecord.verificationStatus, activeVersion: publishedRecord.activeVersion };
   });
   await stage('published-run', '发布版重跑同一 Case、刷新重开结果，旧版全部文件和结果保持', async () => {
     const result = await createExperiment(publishedVersion, 'published');assert.notEqual(result.taskId, candidate.taskId);assert.notEqual(result.taskId, baseline.taskId);
