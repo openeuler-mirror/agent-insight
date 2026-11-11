@@ -38,10 +38,12 @@ function strings(value) { if (!Array.isArray(value) || !value.length || value.so
 function validateProfile(value) {
   fields(value, ['key', 'backendKey', 'sandbox', 'sourceRevision', 'artifactDigest', 'implementationDigest', 'network', 'resources', 'timeouts', 'targets', 'models', 'definitionDigest'])
   if (!KEY.test(value.key) || !KEY.test(value.backendKey) || !KEY.test(value.sandbox)
-    || !/^(?:[a-f0-9]{40}|unknown|unconfigured)$/.test(value.sourceRevision) || !/^sha256:[a-f0-9]{64}$/.test(value.implementationDigest) || value.network !== 'deny'
+    || !/^(?:[a-f0-9]{40}|unknown|unconfigured)$/.test(value.sourceRevision) || !/^sha256:[a-f0-9]{64}$/.test(value.implementationDigest) || !['deny', 'allow', 'client-default'].includes(value.network)
     || (value.artifactDigest !== undefined && !/^sha256:[a-f0-9]{64}$/.test(value.artifactDigest))) fail('执行环境标识或隔离策略不合法')
-  fields(value.resources, ['cpu', 'memoryMiB', 'pids'])
-  positive(value.resources.cpu, 1024); positive(value.resources.memoryMiB, 1048576); positive(value.resources.pids, 1048576)
+  if (value.resources !== undefined) {
+    fields(value.resources, ['cpu', 'memoryMiB', 'pids'])
+    positive(value.resources.cpu, 1024); positive(value.resources.memoryMiB, 1048576); positive(value.resources.pids, 1048576)
+  }
   fields(value.timeouts, ['prepareSeconds', 'cleanupSeconds'])
   positive(value.timeouts.prepareSeconds, 86400); positive(value.timeouts.cleanupSeconds, 3600)
   if (!Array.isArray(value.targets) || !value.targets.length) fail('执行环境缺少 Runtime')
@@ -56,21 +58,13 @@ function validateProfile(value) {
   return structuredClone(value)
 }
 
-function describeProfile(key, config) {
-  const description = {
-    key, backendKey: 'xgovernor', sandbox: 'docker', sourceRevision: config.managedRevision || (config.artifactDigest ? 'unknown' : config.sourceRevision || 'unconfigured'), network: 'deny',
-    ...(config.artifactDigest ? { artifactDigest: config.artifactDigest } : {}),
-    implementationDigest: digest({ server: config.serverExecutable, runtimes: config.runtimes, models: config.models, docker: config.dockerExecutable, socket: config.dockerSocket, trace: config.traceApiKeyEnv, ...(config.artifactDigest ? { artifacts: config.artifactDigest } : {}) }),
-    resources: config.resources, timeouts: config.timeouts,
-    targets: Object.entries(config.runtimes).map(([platform, runtime]) => ({ platform, agents: runtime.agents })),
-    models: Object.keys(config.models).sort(),
-  }
-  return validateProfile({ ...description, definitionDigest: digest(description) })
-}
-
 function validateExecution(value) {
   fields(value, ['profile', 'environment'])
   validateProfile(value.profile)
+  if (value.environment?.kind === 'workspace') {
+    fields(value.environment, ['kind'])
+    return structuredClone(value)
+  }
   fields(value.environment, ['kind', 'image', 'arch', 'workspaceRoot'])
   const env = value.environment
   if (env.kind !== 'oci-image' || !['amd64', 'arm64'].includes(env.arch)
@@ -80,62 +74,15 @@ function validateExecution(value) {
 }
 
 function bindingFor(bindings, benchmark, platform) {
-  return bindings.find(item => item.benchmarks.includes(benchmark) && item.platforms.includes(platform))
+  const matches = bindings.filter(item => item.benchmarks.includes(benchmark) && item.platforms.includes(platform))
+  if (matches.length > 1) throw Object.assign(new Error('执行 Profile 绑定不明确'), { code: 'EXECUTION_PROFILE_AMBIGUOUS' })
+  return matches[0]
 }
 
-function normalizeExecutionConfig(value = {}) {
-  fields(value, ['profiles', 'bindings'])
-  if (value.profiles !== undefined && !object(value.profiles)) fail('执行环境 profiles 必须是对象')
-  const bindings = value.bindings ?? DEFAULT_BINDINGS
-  if (!Array.isArray(bindings)) fail('执行环境 bindings 必须为数组')
-  for (const binding of bindings) {
-    fields(binding, ['benchmarks', 'platforms', 'profile'])
-    strings(binding.benchmarks); strings(binding.platforms)
-    if (!KEY.test(binding.profile)) fail('执行环境 Profile key 不合法')
-  }
-  const rawProfiles = { 'xgovernor-local-docker': {}, ...value.profiles }
-  const profiles = {}
-  for (const [key, raw] of Object.entries(rawProfiles)) {
-    if (!KEY.test(key)) fail('执行环境 Profile key 不合法')
-    fields(raw, ['sourceRevision', 'serverExecutable', 'dockerExecutable', 'dockerSocket', 'resources', 'timeouts', 'runtimes', 'models', 'traceApiKeyEnv'])
-    const config = {
-      sourceRevision: null, serverExecutable: null, dockerExecutable: 'docker', dockerSocket: '/var/run/docker.sock',
-      resources: { cpu: 2, memoryMiB: 4096, pids: 512 }, timeouts: { prepareSeconds: 1800, cleanupSeconds: 120 },
-      models: {}, traceApiKeyEnv: 'AGENT_INSIGHT_API_KEY', ...raw,
-    }
-    config.resources = { cpu: 2, memoryMiB: 4096, pids: 512, ...raw.resources }
-    config.timeouts = { prepareSeconds: 1800, cleanupSeconds: 120, ...raw.timeouts }
-    const runtimes = raw.runtimes ?? {
-      'pi-agent': { kind: 'pi', namespace: 'runtime_pi', agents: ['pi-agent'] },
-      xiaoo: { kind: 'xiaoo', namespace: 'xiaoo', agents: ['defaultagent'] },
-    }
-    if (!object(runtimes) || !object(config.models)) fail('Runtime 和 models 必须为对象')
-    config.runtimes = {}
-    for (const [platform, runtime] of Object.entries(runtimes)) {
-      fields(runtime, ['kind', 'namespace', 'agents', 'workerExecutable', 'workerEnvironment', 'executable', 'extensionDirectory', 'defaultModel', 'traceExporter', 'settings'])
-      if (!KEY.test(platform) || !KEY.test(runtime.kind) || !/^[a-z][a-z0-9_]*$/.test(runtime.namespace)) fail('Runtime 注册不合法')
-      strings(runtime.agents)
-      if (runtime.workerEnvironment && !/^XGOVERNOR_[A-Z_]+_WORKER$/.test(runtime.workerEnvironment)) fail('workerEnvironment 必须为 xGovernor Worker 环境变量名')
-      if (runtime.settings !== undefined && !object(runtime.settings)) fail('Runtime settings 必须是对象')
-      for (const field of ['workerExecutable', 'executable', 'extensionDirectory', 'traceExporter']) {
-        if (runtime[field] != null && (typeof runtime[field] !== 'string' || !runtime[field].startsWith('/') || /[\r\n]/.test(runtime[field]))) fail(`${field} 必须是绝对路径`)
-      }
-      config.runtimes[platform] = { ...runtime }
-    }
-    for (const [modelId, model] of Object.entries(config.models)) {
-      fields(model, ['provider', 'model', 'api', 'apiBase', 'apiKeyEnv'])
-      if (!/^[^\s/]+\/.+$/.test(modelId) || !model.provider || !model.model || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(model.apiKeyEnv)) fail('模型配置需提供 provider、model 和 apiKeyEnv')
-      if (model.apiBase) { const url = new URL(model.apiBase); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail('模型 endpoint 不合法') }
-    }
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(config.traceApiKeyEnv)
-      || typeof config.dockerExecutable !== 'string' || !config.dockerExecutable || /[\r\n]/.test(config.dockerExecutable)
-      || typeof config.dockerSocket !== 'string' || !config.dockerSocket.startsWith('/')
-      || (config.serverExecutable != null && !/^\/[^\r\n]+$/.test(config.serverExecutable))) fail('执行驱动本机配置不合法')
-    describeProfile(key, config)
-    profiles[key] = config
-  }
-  if (bindings.some(item => !Object.hasOwn(profiles, item.profile))) fail('bindings 引用了不存在的 Profile')
-  return { profiles, bindings: structuredClone(bindings) }
+function createProfile(description) {
+  return validateProfile({ ...description, definitionDigest: digest(description) })
 }
-
-module.exports = { bindingFor, canonical, digest, describeProfile, normalizeExecutionConfig, validateProfile, validateExecution, DEFAULT_BINDINGS }
+// Compatibility exports for callers using the original flat xGovernor configuration.
+function describeProfile(key, config) { return require('../project-config/execution.cjs').describeProfile(key, config) }
+function normalizeExecutionConfig(value) { return require('../project-config/execution.cjs').normalizeExecutionConfig(value) }
+module.exports = { bindingFor, canonical, digest, createProfile, describeProfile, normalizeExecutionConfig, validateProfile, validateExecution, DEFAULT_BINDINGS }

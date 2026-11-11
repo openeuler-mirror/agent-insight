@@ -553,6 +553,62 @@ AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和
 - `src/lib/ingest/otel/adapters/qoder.ts`：服务端 Qoder OTLP 聚合。
 - `test/qoder-trace-collector.test.ts` / `test/qoder-desktop-extension.test.ts` / `test/qoder-performance.test.ts`：确定性、账号/产品隔离、重试、Skill/MCP/连接器、最新版 snapshot、多层 Subagent、安装卸载、四端启动预算和首 Token 开销验证。
 
+## 十、Codex Desktop 与 App Server 生命周期契约
+
+Codex 的 CLI、IDE、Desktop rollout 和 App Server proxy 必须先归一化为同一套 lifecycle event，再
+进入 `lifecycle-reducer.cjs`。产品来源由 `source-classifier.cjs` 解析，不能用 `source=exec` 或
+`source=vscode` 单独推断产品形态；来源不确定时保留 `unknown`。
+
+- 同一 App Server `turn/steer` 复用原 `sourceExecutionId`，追加 `input_kind=steer` 和 phase；首个
+  input 永远作为 `Execution.query`。
+- 原生 OTel 内部 turn id 与 Hook/rollout turn id 可以不同。初始与已接受的追加输入均经过
+  同一脱敏规则后，在同线程、10 秒内且候选唯一时建立跨通道 alias；同通道不同 ID、过期或
+  歧义候选不合并。保留首个已发射的 execution identity，后到的 lifecycle 快照、正文、用量
+  和终态经 alias 归入同一执行；不能只在 Adapter 中隐藏重复 USER。
+- Desktop UI 如果证据是 `turn_aborted` 后新的 `task_started + user_message`，必须产生两个
+  Execution；前一个状态为 `interrupted`，线程事件使用 `interrupt_followed_by_execution`，不得假标为
+  同 turn steer。
+- `compacted` 与兼容 `context_compacted` 合并为一个 ThreadEvent。高保真 window/item id 优先；无
+  ID 的 legacy completed 信号只有在同线程、5 秒内存在高保真 compaction 时才复用其 key，否则保留
+  独立但可追溯的兼容事件。
+- rollout `timestamp` 同时支持数值和 ISO-8601 字符串；解析失败才回退采集时刻，避免重放改变事件
+  顺序和幂等键。
+- compaction 使用 `threadOnly` batch，不能创建假 Execution，也不能增加用户 Tool/LLM/Token 或
+  latency；`TraceThreadEvent` 保存 transition、interrupt、steer 和 compaction 的时间线。
+- 0.164+ 的冷 rollout 可能被压缩为 `rollout-*.jsonl.zst`，恢复会话时再 materialize 回
+  `.jsonl` 追加。reader 必须同时扫描 plain/zst，plain 优先；checkpoint 使用去掉 `.zst` 的稳定
+  文件键和 `recordsProcessed`/`mtimeMs` 游标，保证压缩、恢复、追加都不重复上报。Node < 22.15
+  不支持 zstd 时由 self-check 明确报告，不得静默丢会话。
+- 0.164+ 的 `task_complete` 字段为 `last_agent_message`（并接受 `turn_complete` 别名）；
+  0.166 新增 `dynamic_tools_updated` 等顶层类型，reader 必须跳过未知类型而不是报错。
+- rollout content/usage 必须保留 reader 解析出的 `sourceKind`，不能硬编码 Desktop；0.166 OTel
+  `exec` 的包装输出需解转义后再与 Hook `Bash` 合并，同一 execution 的 Hook 生命周期根与 OTel
+  根也需合并，避免重复工具/USER 节点。
+
+实现入口：`scripts/agent-trace-collectors/codex/rollout-reader.cjs`、
+`scripts/agent-trace-collectors/codex/lifecycle-reducer.cjs`、
+`scripts/agent-trace-collectors/codex/app-server-proxy.cjs`、
+`src/lib/ingest/otel/adapters/codex.ts`、`src/lib/storage/data-service.ts` 和
+`src/components/observe/CodexThreadTimeline.tsx`。回归入口为
+`test/codex-desktop-rollout.test.ts`、`test/codex-rollout-zstd.test.ts` 和
+`test/l1-replay-codex-rollout.test.ts`。
+
+### Desktop 终态与响应合并
+
+采集器 0.2.1 先持久化 rollout 的完成/中断事件，再主动触发上传，不再等待默认五分钟批次。
+正常情况下延迟由 rollout 扫描周期（默认十秒）和服务端入库处理组成；网络失败继续走 durable
+spool 重试。自检通过只说明链路可达，不等于某个执行已经结束。
+
+文件身份取首个 session_meta；子 Agent fork 文件嵌入的父历史（包括 synthetic abort）
+不再改变父执行状态或耗时。遇子线程自身设置/任务归属边界后恢复采集，真实子任务继续进入
+现有 Subagent/Trace 链路。普通下一轮、中断后继续与失败后继续分别展示。
+
+Rollout 计量与正文只在同执行、同归属、唯一响应时间窗内合并；一条真实回复不会再变成
+一个有 Token 的空壳加一个 0ms 正文。工具响应没有明文、或关联证据不唯一时保留降级信息，
+不伪造模型正文。Desktop 明确来源优先于底层共享 App Server 服务名。
+
+回归：`test/codex-desktop-completion.test.ts` 覆盖终态主动上传、乱序、重启、fork 历史、
+首输入/追加别名和正文计量配对；数据库回归从公开 schema 建空临时库，不读取或复制用户数据库。
 
 ## OpenCode 1.x / 2.x 采集兼容
 

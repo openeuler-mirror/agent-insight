@@ -18,6 +18,7 @@ import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configu
 import { HumanMessage } from '@langchain/core/messages';
 import { ChatOpenAI } from '@langchain/openai';
 import { getActiveConfig } from '@/lib/storage/server-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { generateRootCauseExtractionPrompt } from '@/prompts/config-extraction-prompt';
 import { parseLooseJson } from './task-completion-json';
 import { normalizeRootCauseItems, type RootCauseItem } from '@/lib/dataset-case-root-causes';
@@ -31,6 +32,7 @@ async function makeDirectModel(user?: string | null) {
     configuration: {
       baseURL: config.baseUrl || 'https://api.deepseek.com',
       defaultHeaders: config.headers,
+      fetch: getModelFetch(),
     },
     temperature: 0,
     topP: 1,

@@ -26,7 +26,7 @@ changefreq: "monthly"
 | `DB_PORT` | OpenGauss 端口 | 建议显式设置：平台默认 `5432`，初始化脚本默认 `26000`，需与实例一致 |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | OpenGauss 库名、用户、密码；模板说明默认库名 `postgres`、用户 `omm`，密码无默认值 | 仅在实际部署配置保存凭据；不能通过复制 SQLite 文件完成该数据库备份 |
 | `AGENT_INSIGHT_CONFIG_DIR` | Benchmark 配置目录；空值使用安装目录的 `config/benchmark/` | 指定时使用绝对路径；不是平台运行根，也不替代运行根 `.env` |
-| `NEXT_PUBLIC_URL_PREFIX` | 前端 URL 前缀 | 按部署要求设置；改动后需重新构建前端，仅重启服务不够 |
+| `NEXT_PUBLIC_URL_PREFIX` | 前端 URL 前缀 | 修改后须重新构建。源码启动使用构建产物中的前缀探测页面是否就绪。 |
 
 旧 `AGENT_INSIGHT_DATA_DIR` 已移除，应改名为 `AGENT_INSIGHT_HOME` 并保留原根路径。旧通用 `PORT` 已移除，按进程改用平台或 Evaluator 专用端口变量。
 
@@ -35,6 +35,17 @@ changefreq: "monthly"
 默认模型使用 `DEFAULT_MODEL_<N>_<FIELD>` 连续编号，从 `1` 开始；某组缺少 `NAME`、`PROVIDER` 或 `API_KEY` 时，不再读取后续组。建议同时明确填写 `BASE_URL` 和 `MODEL`，不要假定各调用路径会按提供商自动选择相同默认地址。由环境定义的模型在界面中只读，界面新增模型仍按[模型注册](../../how-to/platform/settings/model-registry.md)处理。
 
 客户端的服务地址、API Key 和安装配置见[客户端安装](../../how-to/platform/settings/access-control.md)。每台客户端有自己的运行环境；不要把多台机器的运行根映射为同一个共享目录。需要多个平台实例时，每个实例使用独立运行根、数据库和端口。
+
+## 内置 Agent 运行时
+
+平台内置功能会探测服务部署环境中的 Agent 运行时。可执行文件查找顺序为：显式环境变量 → 安装根下的 bundled 路径 → `PATH`；显式配置的路径不存在时不会回落到其他来源。
+
+| 变量 | 作用与默认值 | 设置位置与注意事项 |
+| --- | --- | --- |
+| `OPENCODE_BIN` | OpenCode 可执行文件路径；留空依次查找安装根 `node_modules/.bin/opencode` 与 `PATH` | 平台配置或启动环境；容器部署通常由镜像指向随包安装的可执行文件 |
+| `AGENT_RUNTIME_PI_BIN` | Pi 可执行文件路径；留空依次查找安装根 `node_modules/.bin/pi` 与 `PATH` | 当前版本仅探测 Pi，尚未提供执行适配器 |
+
+探测只读取服务进程可访问的文件系统，不调用模型、不安装或升级依赖。页面入口与能力边界见[Agent 运行时](../../how-to/platform/settings/agent-runtimes.md)。
 
 ## 评测服务与业务配置
 

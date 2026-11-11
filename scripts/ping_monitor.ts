@@ -126,7 +126,7 @@ function main(): void {
   log(`Ping Monitor 启动 — 共 ${config.targets.length} 个目标`);
   config.targets.forEach(t => log(`  ${t.label ?? t.host} (${t.host}) 间隔 ${t.intervalMs}ms`));
 
-  let consecutiveFailures = new Map<string, number>();
+  const consecutiveFailures = new Map<string, number>();
 
   for (const target of config.targets) {
     const label = target.label ?? target.host;

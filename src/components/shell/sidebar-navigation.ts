@@ -74,6 +74,12 @@ const OBSERVE_ITEM: SidebarNavItem = {
             matchPrefixes: ['/trace', '/details'],
         },
         {
+            key: 'task-insight',
+            href: '/task-insight',
+            labelKey: 'nav.taskInsight',
+            icon: 'metrics',
+        },
+        {
             key: 'version-analysis',
             href: '/version-analysis',
             labelKey: 'nav.versionAnalysis',
@@ -128,6 +134,7 @@ const CONTINUOUS_OPTIMIZATION_ITEM: SidebarNavItem = {
 const CONFIG_CHILDREN: SidebarNavItem[] = [
     { key: 'skill-management', href: '/config/skills', labelKey: 'nav.skillManagement', icon: 'skill' },
     { key: 'model-registry', href: '/modelconfig/registry', labelKey: 'nav.modelRegistry', icon: 'model' },
+    { key: 'agent-runtimes', href: '/config/runtimes', labelKey: 'nav.agentRuntimes', icon: 'config' },
     { key: 'web-search', href: '/modelconfig/web-search', labelKey: 'nav.webSearch', icon: 'web' },
     { key: 'access-install', href: '/accessconfig/install', labelKey: 'nav.accessInstall', icon: 'install' },
     { key: 'access-client', href: '/accessconfig/client', labelKey: 'nav.accessClient', icon: 'install' },

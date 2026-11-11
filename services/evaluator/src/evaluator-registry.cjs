@@ -23,6 +23,7 @@ const { spawn } = require('node:child_process')
 const { runtimeDescriptor, remoteImage } = require('./runtime-image.cjs')
 const { EvaluatorAssets } = require('./evaluator-assets.cjs')
 const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
+const { collectEvidence, describeEvidence, appendPlatformFile } = require('./evidence-collection.cjs')
 const { isEvidencePath } = require('../../../packages/benchmark-protocol/artifact-path.cjs')
 
 class EvaluatorProtocolError extends Error {
@@ -95,10 +96,10 @@ class AbstractBenchmarkEvaluator {
     ) {
       throw new EvaluatorProtocolError('EVALUATION_OUTPUT_INVALID', 'Evaluator 输出不合法', 500)
     }
-    const root = path.resolve(workDir)
+    const root = fs.realpathSync(workDir)
     const names = new Set()
     for (const evidence of output.evidenceFiles) {
-      const resolved = path.resolve(evidence.path)
+      const resolved = fs.realpathSync(evidence.path)
       if (
         !isEvidencePath(evidence.name)
         || names.has(evidence.name)
@@ -198,8 +199,18 @@ function runEntrypoint(descriptor, args, options = {}) {
     const killGraceMs = Number.isFinite(options.killGraceMs)
       ? Math.max(0, options.killGraceMs)
       : 5_000
-    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
-    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    const capture = (stream, chunk) => {
+      try {
+        if (options.logDirectory) fs.appendFileSync(path.join(options.logDirectory, `${stream}.log`), chunk)
+        if (stream === 'stdout') stdout = options.logDirectory ? (stdout + String(chunk)).slice(-65536) : stdout + String(chunk)
+        else stderr = options.logDirectory ? (stderr + String(chunk)).slice(-65536) : stderr + String(chunk)
+      } catch (error) {
+        signalProcessTree(child, 'SIGKILL')
+        finish(() => reject(error))
+      }
+    }
+    child.stdout.on('data', (chunk) => capture('stdout', chunk))
+    child.stderr.on('data', (chunk) => capture('stderr', chunk))
     const abort = () => {
       if (aborted || settled) return
       aborted = true
@@ -544,33 +555,59 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
         occurredAt: new Date().toISOString(),
       })
     }
-    await this.processRunner(this.descriptor, [
-      'evaluate', '--request', requestPath, '--output', outputPath,
-    ], {
-      cwd: contractDir,
-      signal: input.signal,
-      env: { ...runtimeEnvironment(this.descriptor, input.job.limits), ...this.assetEnvironment() },
-      resources: input.job.limits,
-      evaluationId: input.job.evaluationId,
-    })
-    let rawOutput
-    try { rawOutput = JSON.parse(await fsp.readFile(outputPath, 'utf8')) }
-    catch { throw new EvaluatorProtocolError('EVALUATION_OUTPUT_MISSING', 'Evaluator 未生成 result.json', 500, true) }
-    if (rawOutput.protocolVersion !== 'evaluator-output/v1') {
-      throw new EvaluatorProtocolError('EVALUATION_OUTPUT_INVALID', 'Evaluator 输出协议不兼容', 500)
+    const logDirectory = path.join(contractDir, 'controller-logs')
+    await fsp.mkdir(logDirectory, { recursive: true, mode: 0o700 })
+    for (const stream of ['stdout', 'stderr']) await fsp.writeFile(path.join(logDirectory, `${stream}.log`), '', { mode: 0o600 })
+    let rawOutput, collected
+    const capture = async () => {
+      collected = await collectEvidence(outputDir, rawOutput?.evidenceFiles || [], rawOutput?.evidenceRoot)
+      for (const stream of ['stdout', 'stderr']) {
+        const file = path.join(logDirectory, `${stream}.log`)
+        if ((await fsp.stat(file)).size <= 64 * 1024 * 1024) appendPlatformFile(collected.files, file, `${stream}.log`)
+        else collected.issues.push({ path: `controller-logs/${stream}.log`, message: '进程日志超过 64 MiB，保留在运行目录，未截断上传' })
+      }
+      return describeEvidence(collected.files, collected)
     }
-    if (rawOutput.completion?.status !== 'failed') {
-      const issue = schemaIssue(rawOutput.completion?.rawResult, this.descriptor.rawResultSchema)
-      if (issue) throw new EvaluatorProtocolError('RAW_RESULT_SCHEMA_INVALID', `Evaluator 原生结果不合法：${issue}`, 500)
+    try {
+      await this.processRunner(this.descriptor, [
+        'evaluate', '--request', requestPath, '--output', outputPath,
+      ], {
+        cwd: contractDir, logDirectory,
+        signal: input.signal,
+        env: { ...runtimeEnvironment(this.descriptor, input.job.limits), ...this.assetEnvironment() },
+        resources: input.job.limits,
+        evaluationId: input.job.evaluationId,
+      })
+      try { rawOutput = JSON.parse(await fsp.readFile(outputPath, 'utf8')) }
+      catch { throw new EvaluatorProtocolError('EVALUATION_OUTPUT_MISSING', 'Evaluator 未生成有效 result.json', 500, true) }
+      if (rawOutput.protocolVersion !== 'evaluator-output/v1') {
+        throw new EvaluatorProtocolError('EVALUATION_OUTPUT_INVALID', 'Evaluator 输出协议不兼容', 500)
+      }
+      if (rawOutput.completion?.status !== 'failed') {
+        const issue = schemaIssue(rawOutput.completion?.rawResult, this.descriptor.rawResultSchema)
+        if (issue) throw new EvaluatorProtocolError('RAW_RESULT_SCHEMA_INVALID', `Evaluator 原生结果不合法：${issue}`, 500)
+      }
+      const evidenceCollection = await capture()
+      if (!evidenceCollection.complete) throw new EvaluatorProtocolError('EVALUATION_EVIDENCE_INCOMPLETE', '评测产物采集不完整，参见采集记录', 500)
+      const result = {
+        completion: { ...rawOutput.completion, runtimeFacts: { ...rawOutput.completion?.runtimeFacts, evidenceCollection } },
+        evidenceFiles: collected.files,
+      }
+      // Controller logs live outside the Runtime's output directory.
+      this.assertEvaluationOutput({ ...result, evidenceFiles: collected.files.filter(file => file.source !== 'platform') }, outputDir)
+      return result
+    } catch (error) {
+      if (!rawOutput) {
+        try { rawOutput = JSON.parse(await fsp.readFile(outputPath, 'utf8')) } catch {}
+      }
+      try {
+        error.evidenceCollection = await capture()
+        error.evidenceFiles = collected.files
+      } catch (collectionError) {
+        error.evidenceCollection = { schemaVersion: 'evidence-collection/v1', scope: 'output-directory', complete: false, issues: [{ path: '.', message: collectionError.message }], files: [] }
+      }
+      throw error
     }
-    const result = {
-      completion: rawOutput.completion,
-      evidenceFiles: (rawOutput.evidenceFiles || []).map((evidence) => ({
-        ...evidence,
-        path: path.resolve(outputDir, evidence.path),
-      })),
-    }
-    return this.assertEvaluationOutput(result, outputDir)
   }
 }
 

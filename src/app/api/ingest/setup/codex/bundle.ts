@@ -21,6 +21,10 @@ import path from 'node:path';
 
 const BUNDLE_FILES = [
   ['codex/codex-trace-core.cjs', ['codex', 'codex-trace-core.cjs']],
+  ['codex/app-server-proxy.cjs', ['codex', 'app-server-proxy.cjs']],
+  ['codex/lifecycle-reducer.cjs', ['codex', 'lifecycle-reducer.cjs']],
+  ['codex/source-classifier.cjs', ['codex', 'source-classifier.cjs']],
+  ['codex/rollout-reader.cjs', ['codex', 'rollout-reader.cjs']],
   ['codex/config-core.cjs', ['codex', 'config-core.cjs']],
   ['codex/hook-handler.cjs', ['codex', 'hook-handler.cjs']],
   ['codex/relay.cjs', ['codex', 'relay.cjs']],

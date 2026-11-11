@@ -54,6 +54,7 @@ test('client HTTP capability reports preserve actual xGovernor revision, digest 
     const profile = describeProfile('xgovernor-local-docker', { ...local, managedRevision: revision.repeat(40), artifactDigest: `sha256:${revision.repeat(64)}` })
     await reportCapabilities(cfg, {
       platforms: [], actions: ['RUN_BENCHMARK_CASE'], components: { 'execution-backend/v1': { ready: true } },
+      executionBindings: [{ benchmarks: ['swe-bench'], platforms: ['pi-agent'], profile: profile.key }],
       executionProfiles: [{ profile, ready, benchmarks: ['swe-bench'], ...(ready ? {} : { note: '模型凭据未就绪' }) }], faultInjection: { ready: false },
     })
     const stored = await prismaRaw.reliabilityClient.findUniqueOrThrow({ where: { clientId: registered.clientId } })
@@ -61,5 +62,6 @@ test('client HTTP capability reports preserve actual xGovernor revision, digest 
     assert.deepEqual(capability?.profile, profile)
     assert.equal(capability?.ready, ready)
     assert.equal(capability?.note, ready ? undefined : '模型凭据未就绪')
+    assert.equal(parseCapabilities(stored.capabilitiesJson).executionBindings?.[0].profile, profile.key)
   }
 })

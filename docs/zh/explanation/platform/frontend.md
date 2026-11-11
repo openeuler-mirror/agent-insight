@@ -19,6 +19,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/quickstart` | `QuickstartPage` (`(main)/quickstart/page.tsx`) | 五阶段推荐使用路径与现有模块入口 |
 | `/(main)/agents` | `AgentsPage` (`(main)/agents/page.tsx`) | 已注册/已观测的 agents |
 | `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；SQLite 列表在数据库执行普通与计算字段的过滤、排序、分页及统计，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集 |
+| `/(main)/task-insight` | `TaskInsightPage` (`(main)/task-insight/page.tsx`) | Token 与任务分析：按任务类型/用户拆 Token 与成本，识别长时任务并给出夜间调度建议 |
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
 | `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；列表读取不含 cases 的摘要视图，编辑和详情再按需加载完整记录；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值；本地导入的隐藏文件控件常驻页面，菜单关闭不会中断文件选择 |
 | `/(main)/eval`, `/(main)/eval/run/[runId]`, `/(main)/eval/trajectory/*` | `EvalPage`, `RunDetailPage`, `TrajectoryDetailPage`/`TrajectoryTracePage` | 评测运行与轨迹视图 |
@@ -48,6 +49,7 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [file-
 运行观测 (groupObserve)
 ├─ Agent 概览                  → /agents
 ├─ 链路追踪                     → /trace
+├─ Token 与任务分析             → /task-insight
 ├─ 版本分析                     → /version-analysis
 └─ 推理基础设施                 → /infra
 评估与实验 (evalCenter)

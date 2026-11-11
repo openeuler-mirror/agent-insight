@@ -43,7 +43,7 @@ function loadConfiguration() {
                 }
             });
         }
-    } catch (e) {}
+    } catch {}
     
     return {
         apiKey: config['AGENT_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.AGENT_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,

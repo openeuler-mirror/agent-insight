@@ -19,6 +19,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { isolateTestDatabase } from './helpers/isolated-test-db';
+isolateTestDatabase('infra-poll-due');
 import { pollDue } from '@/lib/infra/poller';
 import { ensureSource, latestSamples } from '@/lib/infra/store';
 import { prismaRaw } from '@/lib/storage/prisma';

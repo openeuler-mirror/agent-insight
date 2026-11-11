@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { apiFetch } from '@/lib/client/api';
+import { BenchmarkArtifactContent } from './BenchmarkArtifactContent';
 import type { BenchmarkPresentation } from '../../../packages/benchmark-protocol/src/contracts';
 import {
   benchmarkPresentationText,
@@ -26,6 +27,7 @@ import {
   type BenchmarkArtifactTreeNode,
   canPreviewBenchmarkArtifact,
   presentBenchmarkArtifacts,
+  resolveBenchmarkArtifactPreview,
 } from '@/lib/benchmark/presentation';
 
 export interface BenchmarkArtifactRef {
@@ -36,20 +38,17 @@ export interface BenchmarkArtifactRef {
   sizeBytes: number;
   contentUrl: string;
   sha256?: string;
+  evidenceSource?: string;
 }
 
 function withUser(url: string, user: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}user=${encodeURIComponent(user)}`;
 }
 
-function formattedContent(artifact: BenchmarkArtifactRef, raw: string): string {
-  if (artifact.mediaType !== 'application/json' && !artifact.name.endsWith('.json')) return raw;
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2);
-  } catch {
-    return raw;
-  }
+function artifactFilename(name: string): string {
+  return name.split('/').pop() || name;
 }
+
 
 function responseMessage(raw: string, fallback: string): string {
   try {
@@ -74,15 +73,16 @@ export function BenchmarkArtifactActions({
   presentation?: Pick<BenchmarkPresentation, 'artifacts'> | null;
 }) {
   const [viewer, setViewer] = useState<{
-    title: string;
     artifact: BenchmarkArtifactRef;
     content: string;
     objectUrl: string;
-    previewType: 'text' | 'image' | 'pdf';
+    preview: ReturnType<typeof resolveBenchmarkArtifactPreview>;
     loading: boolean;
     error: string;
   } | null>(null);
   const [downloading, setDownloading] = useState('');
+  const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview');
+  const viewerFilename = viewer ? artifactFilename(viewer.artifact.name) : '';
 
   const artifacts = useMemo(() => presentBenchmarkArtifacts({
     submissions,
@@ -110,33 +110,30 @@ export function BenchmarkArtifactActions({
     return () => window.removeEventListener('keydown', onKey);
   }, [viewer, closeViewer]);
 
-  const viewArtifact = useCallback(async (title: string, artifact: BenchmarkArtifactRef) => {
-    const previewType = artifact.mediaType.startsWith('image/')
-      ? 'image' as const
-      : artifact.mediaType === 'application/pdf'
-        ? 'pdf' as const
-        : 'text' as const;
-    setViewer({ title, artifact, content: '', objectUrl: '', previewType, loading: true, error: '' });
+  const viewArtifact = useCallback(async (artifact: BenchmarkArtifactRef) => {
+    const preview = resolveBenchmarkArtifactPreview(artifact);
+    if (!preview.renderer) return;
+    setViewMode('preview');
+    setViewer({ artifact, content: '', objectUrl: '', preview, loading: true, error: '' });
     try {
       const response = await apiFetch(withUser(artifact.contentUrl, user));
       if (!response.ok) {
         const raw = await response.text();
         throw new Error(responseMessage(raw, '读取 Artifact 失败'));
       }
-      if (previewType === 'text') {
+      if (preview.load === 'text') {
         const raw = await response.text();
-        setViewer({ title, artifact, content: formattedContent(artifact, raw), objectUrl: '', previewType, loading: false, error: '' });
+        setViewer({ artifact, content: raw, objectUrl: '', preview, loading: false, error: '' });
       } else {
         const objectUrl = URL.createObjectURL(await response.blob());
-        setViewer({ title, artifact, content: '', objectUrl, previewType, loading: false, error: '' });
+        setViewer({ artifact, content: '', objectUrl, preview, loading: false, error: '' });
       }
     } catch (error) {
       setViewer({
-        title,
         artifact,
         content: '',
         objectUrl: '',
-        previewType,
+        preview,
         loading: false,
         error: error instanceof Error ? error.message : '读取 Artifact 失败',
       });
@@ -155,18 +152,17 @@ export function BenchmarkArtifactActions({
       const objectUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
-      anchor.download = artifact.name.split('/').pop() || artifact.name;
+      anchor.download = artifactFilename(artifact.name);
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
     } catch (error) {
       setViewer({
-        title: `下载 ${artifact.name}`,
         artifact,
         content: '',
         objectUrl: '',
-        previewType: 'text',
+        preview: resolveBenchmarkArtifactPreview(artifact),
         loading: false,
         error: error instanceof Error ? error.message : '下载 Artifact 失败',
       });
@@ -190,11 +186,13 @@ export function BenchmarkArtifactActions({
           title={`${artifact.name} · ${artifact.mediaType}${artifact.sha256 ? ` · ${artifact.sha256}` : ''}`}
           style={{ marginTop: 2, fontSize: 10.5, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
         >
-          {artifact.name} · {benchmarkPresentationText(artifact.sizeBytes, { format: 'bytes' })}
+          {source === 'submission' && `${artifact.name} · `}
+          {benchmarkPresentationText(artifact.sizeBytes, { format: 'bytes' })}
+          {source === 'evidence' && ` · ${({ 'official-file': '官方文件（接入声明）', 'official-return': '官方接口返回记录（接入声明）', 'runtime-output': '运行输出', platform: '平台诊断' } as Record<string, string>)[artifact.evidenceSource || ''] || '来源未声明'}`}
         </div>
       </div>
       {canPreviewBenchmarkArtifact(artifact) && (
-        <button type="button" className="ai-btn-s" onClick={() => void viewArtifact(label, artifact)}>
+        <button type="button" className="ai-btn-s" onClick={() => void viewArtifact(artifact)}>
           查看
         </button>
       )}
@@ -263,43 +261,54 @@ export function BenchmarkArtifactActions({
               borderLeft: '1px solid var(--card-border)', boxShadow: 'var(--shadow)',
             }}
           >
-            <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ minWidth: 0 }}>
-                <div id="benchmark-artifact-title" style={{ fontSize: 13, fontWeight: 650 }}>{viewer.title}</div>
+            <header className="flex flex-wrap items-center gap-3" style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+              <div className="min-w-0 flex-[1_1_12rem]">
+                <div id="benchmark-artifact-title" className="truncate" title={viewerFilename} style={{ fontSize: 13, fontWeight: 650 }}>
+                  {viewerFilename}
+                </div>
                 <div style={{ marginTop: 2, fontSize: 10.5, color: 'var(--foreground-muted)' }}>
-                  {viewer.artifact.name} · {viewer.artifact.sizeBytes} bytes
+                  {viewer.artifact.sizeBytes} bytes
                 </div>
               </div>
-              <span style={{ flex: 1 }} />
-              <button
-                type="button"
-                className="ai-btn-s"
-                disabled={Boolean(downloading)}
-                onClick={() => void downloadArtifact(viewer.artifact)}
-              >
-                下载
-              </button>
-              <button type="button" className="ai-btn-s" aria-label="关闭" onClick={closeViewer}>×</button>
+              <div className="ml-auto flex max-w-full shrink-0 flex-wrap justify-end gap-2 whitespace-nowrap">
+                {!viewer.error && viewer.preview.load === 'text' && viewer.preview.renderer !== 'text' && (
+                  <div role="group" aria-label="文件显示方式" className="flex gap-1">
+                    {(['preview', 'raw'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className="ai-btn-s"
+                        aria-pressed={viewMode === mode}
+                        style={viewMode === mode ? { color: 'var(--primary)', background: 'var(--background-secondary)' } : undefined}
+                        onClick={() => setViewMode(mode)}
+                      >
+                        {mode === 'preview' ? '预览' : '原文'}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="ai-btn-s"
+                  disabled={Boolean(downloading)}
+                  onClick={() => void downloadArtifact(viewer.artifact)}
+                >
+                  下载
+                </button>
+                <button type="button" className="ai-btn-s" aria-label="关闭" onClick={closeViewer}>×</button>
+              </div>
             </header>
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 18 }}>
               {viewer.loading ? (
                 <div style={{ color: 'var(--foreground-muted)', fontSize: 12 }}>读取中…</div>
               ) : viewer.error ? (
                 <div style={{ color: 'var(--error)', fontSize: 12 }}>{viewer.error}</div>
-              ) : viewer.previewType === 'image' ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={viewer.objectUrl} alt={viewer.title} style={{ display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto' }} />
-              ) : viewer.previewType === 'pdf' ? (
-                <iframe title={viewer.title} src={viewer.objectUrl} style={{ width: '100%', height: '100%', minHeight: 640, border: 0 }} />
               ) : (
-                <pre style={{
-                  margin: 0, minHeight: '100%', padding: 14, border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)', background: 'var(--background-secondary)',
-                  color: 'var(--foreground)', fontFamily: 'var(--font-mono, monospace)',
-                  fontSize: 11.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
-                }}>
-                  {viewer.content || '文件为空'}
-                </pre>
+                <BenchmarkArtifactContent
+                  content={viewer.objectUrl || viewer.content}
+                  filename={viewerFilename}
+                  renderer={viewMode === 'raw' ? 'text' : viewer.preview.renderer ?? 'text'}
+                />
               )}
             </div>
           </aside>

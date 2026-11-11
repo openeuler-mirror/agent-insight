@@ -49,6 +49,7 @@ export type ClientPlatformCapability = {
 
 export type ClientCapabilities = {
   executionProfiles?: ExecutionProfileCapability[]
+  executionBindings?: Array<{ benchmarks: string[]; platforms: string[]; profile: string }>
   platforms: ClientPlatformCapability[]
   actions?: string[]
   components?: Record<string, unknown>
@@ -355,6 +356,11 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
   const fi = value.faultInjection
   return {
     platforms,
+    ...(Array.isArray(value.executionBindings) ? { executionBindings: value.executionBindings.map(item => {
+      if (!item || !Array.isArray(item.benchmarks) || !Array.isArray(item.platforms) || typeof item.profile !== 'string'
+        || !/^[a-z][a-z0-9-]{0,63}$/.test(item.profile) || ![...item.benchmarks, ...item.platforms].every(v => typeof v === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(v))) throw new Error('执行 Profile 绑定不合法')
+      return { benchmarks: item.benchmarks, platforms: item.platforms, profile: item.profile }
+    }) } : {}),
     executionProfiles: Array.isArray(value.executionProfiles) ? value.executionProfiles.map(item => ({
       profile: validateProfile(item.profile), benchmarks: Array.isArray(item.benchmarks) ? item.benchmarks.map(String) : [], ready: item.ready === true,
       ...(item.note ? { note: String(item.note) } : {}),
@@ -395,6 +401,7 @@ export function mergeCapabilities(current: ClientCapabilities, patch: ClientCapa
   }
   return normalizeCapabilities({
     ...current, platforms: [...platforms.values()], executionProfiles: [...profiles.values()],
+    ...(patch.executionBindings !== undefined ? { executionBindings: patch.executionBindings } : {}),
     actions: [...new Set([...(current.actions || []), ...(patch.actions || [])])],
     components: { ...current.components, ...patch.components },
     faultInjection: patch.faultInjection || current.faultInjection,

@@ -35,6 +35,13 @@ import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
+import {
+    resolveEventRenderCount,
+    truncateForPreview,
+    TRACE_DISCLOSURE_PREVIEW_CHARS,
+    TRACE_EVENT_RENDER_BATCH,
+    TRACE_INLINE_PREVIEW_CHARS,
+} from '@/lib/client/trace-render-budget';
 import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
 import { getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
@@ -323,6 +330,17 @@ function buildAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
     return roots;
 }
 
+// 同一个 events 数组在一次展示期间不变；树结构在渲染、展开统计和搜索里会被
+// 反复构建，缓存放在包装层按数组身份复用结果，纯函数本身保持可独立抽取测试。
+const eventTreeCache = new WeakMap<AgentEvent[], AgentEventTreeEntry[]>();
+function getAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
+    const cached = eventTreeCache.get(events);
+    if (cached) return cached;
+    const roots = buildAgentEventTree(events);
+    eventTreeCache.set(events, roots);
+    return roots;
+}
+
 type TraceTreeFilters = { treeKindFilter: string; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
 
 function traceAgentMatchesFilters(node: AgentNode, filters: TraceTreeFilters): boolean {
@@ -380,15 +398,32 @@ function buildDefaultExpandedKeys(root: AgentNode): Set<string> {
             }
             entry.children.forEach(visitEvent);
         };
-        buildAgentEventTree(node.events).forEach(visitEvent);
+        getAgentEventTree(node.events).forEach(visitEvent);
         node.children.forEach(c => visit(c, depth + 1));
     };
     visit(root, 0);
     return keys;
 }
 
-function aggregateSubtreeStats(node: AgentNode) {
-    const stats = {
+type SubtreeStats = {
+    interactions: number;
+    llmCalls: number;
+    toolCalls: number;
+    skillCalls: number;
+    taskCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    reasoningTokens: number;
+    totalTokens: number;
+};
+
+const subtreeStatsCache = new WeakMap<AgentNode, SubtreeStats>();
+function aggregateSubtreeStats(node: AgentNode): SubtreeStats {
+    const cached = subtreeStatsCache.get(node);
+    if (cached) return cached;
+    const stats: SubtreeStats = {
         interactions: node.stats.interactions,
         llmCalls: node.stats.llmCalls,
         toolCalls: node.stats.toolCalls,
@@ -415,6 +450,7 @@ function aggregateSubtreeStats(node: AgentNode) {
         stats.reasoningTokens += c.reasoningTokens;
         stats.totalTokens += c.totalTokens;
     }
+    subtreeStatsCache.set(node, stats);
     return stats;
 }
 
@@ -876,7 +912,7 @@ export default function AgentTraceView({
                     }
                     entry.children.forEach(visitEvent);
                 };
-                buildAgentEventTree(n.events).forEach(visitEvent);
+                getAgentEventTree(n.events).forEach(visitEvent);
             });
         }
         return keys;
@@ -972,7 +1008,7 @@ export default function AgentTraceView({
                     visit(childNode, childParents);
                 }
             };
-            buildAgentEventTree(node.events).forEach(entry => visitEvent(entry, myParents));
+            getAgentEventTree(node.events).forEach(entry => visitEvent(entry, myParents));
             node.children.filter(child => !handledChildIds.has(child.id)).forEach(child => visit(child, myParents));
         };
         visit(tree, []);
@@ -1255,6 +1291,7 @@ export default function AgentTraceView({
 
                     <div role="tree" className="overflow-y-auto overflow-x-auto flex-1 py-1">
                         <UnifiedSpanTree
+                            key={stableTraceIdentity ?? 'trace'}
                             node={tree}
                             nodeMap={nodeMap}
                             expandedKeys={expandedKeys}
@@ -1475,9 +1512,35 @@ function UnifiedSpanTree({
     const { matchedKeys, activeMatchKey, searchQuery, treeKindFilter, minDurationMs, minTokenK, slowOnly: ctxSlowOnly } = ctx;
 
     const events = node.events;
-    const eventTree = buildAgentEventTree(events);
+    const eventTree = getAgentEventTree(events);
     const unanchoredChildren = node.children.filter(child => !events.some(event => event.spawnedChildId === child.id));
     const hasContent = events.length > 0 || unanchoredChildren.length > 0;
+
+    // 一次渲染的顶层事件行数。超大 Trace 首屏先给出前几批调用，其余按需追加；
+    // 搜索、筛选和跳转到深层节点时自动放开，避免命中的行不在 DOM 里。
+    const [eventRenderLimit, setEventRenderLimit] = React.useState(TRACE_EVENT_RENDER_BATCH);
+    const filtersActive = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0
+        || ctxSlowOnly || Boolean(searchQuery.trim());
+    const eventRootIndexes = React.useMemo(
+        () => eventTree.map(entry => entry.eventIndex),
+        [eventTree],
+    );
+    const selectedEventIndex = React.useMemo(() => {
+        if (!selectedKey?.startsWith('e:')) return null;
+        const body = selectedKey.slice(2);
+        const splitAt = body.lastIndexOf(':');
+        if (splitAt < 0 || body.slice(0, splitAt) !== node.id) return null;
+        const index = Number.parseInt(body.slice(splitAt + 1), 10);
+        return Number.isFinite(index) ? index : null;
+    }, [selectedKey, node.id]);
+    const renderedEventCount = resolveEventRenderCount(eventRootIndexes, eventRenderLimit, {
+        revealAll: filtersActive,
+        revealThrough: selectedEventIndex,
+    });
+    const renderedEventEntries = renderedEventCount >= eventTree.length
+        ? eventTree
+        : eventTree.slice(0, renderedEventCount);
+    const hiddenEventCount = eventTree.length - renderedEventCount;
 
     const isSearchMatch = searchQuery ? matchedKeys.has(aKey) : false;
     const isActiveMatch = activeMatchKey === aKey;
@@ -1680,12 +1743,26 @@ function UnifiedSpanTree({
             {/* Events */}
             {hasContent && isExpanded && (
                 <div>
-                    {eventTree.map((entry, entryIndex) => renderEventEntry(
+                    {renderedEventEntries.map((entry, entryIndex) => renderEventEntry(
                         entry,
                         depth + 1,
-                        entryIndex === eventTree.length - 1 && unanchoredChildren.length === 0,
+                        entryIndex === renderedEventEntries.length - 1 && hiddenEventCount === 0 && unanchoredChildren.length === 0,
                         depth === 0 ? [] : [...prefixBits, !isLast],
                     ))}
+                    {hiddenEventCount > 0 && (
+                        <div className="flex items-center py-1 pl-2">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs text-foreground-muted"
+                                onClick={() => setEventRenderLimit(count => count + TRACE_EVENT_RENDER_BATCH)}
+                            >
+                                {locale === 'zh'
+                                    ? `继续加载更多调用（已显示 ${renderedEventCount}/${eventTree.length}）`
+                                    : `Show more calls (${renderedEventCount}/${eventTree.length})`}
+                            </Button>
+                        </div>
+                    )}
                     {unanchoredChildren.map((child, index) => <UnifiedSpanTree
                         key={child.id} node={child} nodeMap={nodeMap} expandedKeys={expandedKeys}
                         onToggleKey={onToggleKey} selectedKey={selectedKey} onSelect={onSelect}
@@ -1858,6 +1935,8 @@ function CompactSection({ label, raw, modalTitle, emptyText, accentColor }: { la
     const [copied, setCopied] = useState(false);
     if (raw == null) return null;
     const trimmed = raw.trim();
+    // 大文本只在弹窗里完整渲染；内联预览有上限，避免每次选中节点都解析/布局全文。
+    const preview = truncateForPreview(trimmed, TRACE_INLINE_PREVIEW_CHARS);
     const onCopy = async () => {
         try {
             await copyText(trimmed);
@@ -1893,23 +1972,30 @@ function CompactSection({ label, raw, modalTitle, emptyText, accentColor }: { la
                     // 预览区走 SmartViewer:JSON → 可交互树(嵌套 JSON 字符串自动展开)、
                     // Markdown → 渲染、其余纯文本(真实换行,不再满屏 \n 字面)。
                     // 展开节点等交互留给 SmartViewer,弹窗入口在头部"查看全部"。
-                    <div style={{
-                        background: 'var(--background-secondary)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 6,
-                        maxHeight: 180,
-                        overflow: 'auto',
-                        position: 'relative',
-                    }}>
-                        <SmartViewer
-                            text={trimmed}
-                            toolbar={false}
-                            maxHeight="none"
-                            theme="light"
-                            unescape={false}
-                            className="sv-inline sv-compact"
-                        />
-                    </div>
+                    <>
+                        <div style={{
+                            background: 'var(--background-secondary)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 6,
+                            maxHeight: 180,
+                            overflow: 'auto',
+                            position: 'relative',
+                        }}>
+                            <SmartViewer
+                                text={preview.text}
+                                toolbar={false}
+                                maxHeight="none"
+                                theme="light"
+                                unescape={false}
+                                className="sv-inline sv-compact"
+                            />
+                        </div>
+                        {preview.truncated && (
+                            <div style={{ marginTop: '0.25rem', fontSize: '0.5625rem', color: 'var(--foreground-muted)' }}>
+                                {`预览已截断 · 共 ${preview.totalChars.toLocaleString()} 字符，点击「查看全部」读取完整内容`}
+                            </div>
+                        )}
+                    </>
                 ) : (
                     <div style={{ fontSize: '0.75rem', color: 'var(--foreground-muted)', fontStyle: 'italic' }}>{emptyText || '(空)'}</div>
                 )}
@@ -2278,6 +2364,8 @@ function DisclosureBar({ icon, label, sub, meta, text, tone = 'normal', defaultO
     const trimmed = text.trim();
     if (!trimmed) return null;
     const isLong = trimmed.length > PREVIEW_CHARS;
+    // 展开后也只内联渲染一段；更长的原文留在「查看全部」弹窗里按需读取。
+    const inline = truncateForPreview(trimmed, TRACE_DISCLOSURE_PREVIEW_CHARS);
 
     return (
         <div className="border-b border-border last:border-b-0">
@@ -2297,8 +2385,13 @@ function DisclosureBar({ icon, label, sub, meta, text, tone = 'normal', defaultO
                     {/* L5 "Block content" — indented further under its block header; bg
                      *  is transparent so it inherits the expanded message's tint. */}
                     <div className={cn('max-h-[260px] overflow-auto py-2 pl-10 pr-3 text-xs leading-6 whitespace-pre-wrap break-words', tone === 'muted' ? 'text-foreground-secondary' : 'text-foreground')}>
-                        {trimmed}
+                        {inline.text}
                     </div>
+                    {inline.truncated && (
+                        <div className="px-3 pb-1.5 pl-10 text-[10px] text-foreground-muted">
+                            {`预览已截断 · 共 ${inline.totalChars.toLocaleString()} 字符`}
+                        </div>
+                    )}
                     {isLong && (
                         <div className="border-t border-border px-3 py-1.5 text-right">
                             <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
@@ -2427,6 +2520,7 @@ function SnapshotMessageRow({
         || (hasToolCalls ? `${toolCalls.length} 个工具调用: ${toolCalls.slice(0, 3).map(c => c.name).join(', ')}` : '');
     const firstLine = previewSource.split(/\n/).find(l => l.trim()) || '';
     const isLong = trimmed.length > PREVIEW_CHARS;
+    const inlineContent = truncateForPreview(trimmed, TRACE_DISCLOSURE_PREVIEW_CHARS);
     // Assistant turns render content as a "Response" disclosure bar matching the
     // "Thought" bar; system/user messages keep their plain inline content.
     const isAssistant = message.role === 'assistant';
@@ -2494,10 +2588,11 @@ function SnapshotMessageRow({
                             ) : (
                                 <>
                                     <div className="border-t border-border first:border-t-0 max-h-[280px] overflow-auto px-3 py-2 text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
-                                        {trimmed}
+                                        {inlineContent.text}
                                     </div>
                                     {isLong && (
-                                        <div className="border-t border-border px-3 py-1.5 text-right">
+                                        <div className="border-t border-border px-3 py-1.5 text-right text-[10px] text-foreground-muted">
+                                            {inlineContent.truncated && <span className="mr-2">{`已截断 · 共 ${inlineContent.totalChars.toLocaleString()} 字符`}</span>}
                                             <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
                                                 查看全部
                                             </Button>
@@ -2942,12 +3037,19 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
         : event.kind === 'ras' ? (event.summary || event.interaction?.content || '')
         : '';
 
-    const argsStr = event.args !== undefined
-        ? (typeof event.args === 'string' ? event.args : JSON.stringify(event.args, null, 2))
-        : null;
-    const outputStr = (event.output !== undefined && event.output !== null)
-        ? (typeof event.output === 'string' ? event.output : JSON.stringify(event.output, null, 2))
-        : null;
+    // 大对象序列化只随事件变化重算，不随面板内的复制/展开等局部状态重复执行。
+    const argsStr = React.useMemo(
+        () => (event.args !== undefined
+            ? (typeof event.args === 'string' ? event.args : JSON.stringify(event.args, null, 2))
+            : null),
+        [event.args],
+    );
+    const outputStr = React.useMemo(
+        () => ((event.output !== undefined && event.output !== null)
+            ? (typeof event.output === 'string' ? event.output : JSON.stringify(event.output, null, 2))
+            : null),
+        [event.output],
+    );
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

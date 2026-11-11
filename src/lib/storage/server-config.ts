@@ -19,6 +19,7 @@ import { db } from '@/lib/storage/prisma';
 import { loadDefaultModelConfigs } from '@/lib/shared/default-model-config';
 import {
     normalizeCustomHeaders,
+    resolveModelConnection,
     supportsCustomHeaders,
 } from '@/lib/shared/model-connection';
 import { randomUUID } from 'node:crypto';
@@ -39,6 +40,11 @@ export interface ModelConfig {
     testTimeoutMs?: number;
 }
 
+/** 个人默认 Agent 运行时；接入执行层后只影响新任务和新会话。 */
+export interface AgentRuntimePreference {
+    defaultRuntimeId: string | null;
+}
+
 export interface UserSettings {
     activeConfigId: string | null;
     configs: ModelConfig[];
@@ -48,6 +54,7 @@ export interface UserSettings {
     /** 联网搜索 API key（明文存 JSON blob，跟模型 apiKey 同等敏感度处理） */
     searchApiKey?: string;
     runtimeParameterTemplates?: RuntimeParameterTemplate[];
+    agentRuntime?: AgentRuntimePreference;
 }
 
 const settingsWrites = new Map<string, Promise<void>>();
@@ -128,6 +135,15 @@ export async function getActiveConfig(user?: string | null): Promise<ModelConfig
 }
 
 export async function getUserSettings(user?: string | null): Promise<UserSettings> {
+    const settings = await getStoredUserSettings(user);
+    return {
+        ...settings,
+        configs: settings.configs.map(config => ({ ...config, ...resolveModelConnection(config) })),
+    };
+}
+
+// Keep unset model fields intact when settings can be saved back.
+export async function getStoredUserSettings(user?: string | null): Promise<UserSettings> {
     if (!user) {
         return { activeConfigId: null, configs: [], autoEvaluationEnabled: true };
     }
@@ -140,6 +156,7 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
     let searchProvider: 'tavily' | 'none' | undefined;
     let searchApiKey: string | undefined;
     let runtimeParameterTemplates: RuntimeParameterTemplate[] = [];
+    let agentRuntime: AgentRuntimePreference | undefined;
 
     try {
         const record = await db.findUserSettings(user);
@@ -157,6 +174,13 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
                 searchApiKey = settings.searchApiKey;
             }
             runtimeParameterTemplates = readRuntimeParameterTemplates(settings.runtimeParameterTemplates);
+            const storedRuntime = settings.agentRuntime;
+            if (storedRuntime && typeof storedRuntime === 'object') {
+                const defaultRuntimeId = storedRuntime.defaultRuntimeId;
+                if (typeof defaultRuntimeId === 'string' || defaultRuntimeId === null) {
+                    agentRuntime = { defaultRuntimeId };
+                }
+            }
         }
     } catch (e) {
         console.error('Failed to load user settings:', e);
@@ -175,6 +199,7 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
         searchProvider,
         searchApiKey,
         ...(runtimeParameterTemplates.length ? { runtimeParameterTemplates } : {}),
+        ...(agentRuntime ? { agentRuntime } : {}),
     };
 }
 
@@ -186,7 +211,7 @@ async function persistUserSettings(user: string, settings: UserSettings): Promis
     // The client only ever receives masked keys (see maskUserSettings), so an
     // unchanged config round-trips back here with a masked apiKey. Restore the
     // stored original for those, so saving never clobbers a real key with a mask.
-    const existing = await getUserSettings(user);
+    const existing = await getStoredUserSettings(user);
     const existingKeyById = new Map(existing.configs.map(c => [c.id, c.apiKey]));
     const existingHeadersById = new Map(existing.configs.map(c => [c.id, c.headers ?? {}]));
     const restoredConfigs = settings.configs.map(c => {
@@ -217,9 +242,22 @@ async function persistUserSettings(user: string, settings: UserSettings): Promis
         searchProvider: settings.searchProvider ?? 'none',
         searchApiKey: restoredSearchApiKey,
         runtimeParameterTemplates: existing.runtimeParameterTemplates ?? [],
+        ...(existing.agentRuntime ? { agentRuntime: existing.agentRuntime } : {}),
     });
 
     await db.upsertUserSettings(user, settingsJson);
+}
+
+/**
+ * 只更新运行时偏好，避免「模型注册/联网搜索」页提交整份 settings 时
+ * 因请求体里没有该字段而把偏好清掉。
+ */
+export async function saveAgentRuntimePreference(user: string, preference: AgentRuntimePreference): Promise<void> {
+    return writeUserSettings(user, async () => {
+        const record = await db.findUserSettings(user);
+        const stored = record?.settingsJson ? JSON.parse(record.settingsJson) : { activeConfigId: null, configs: [] };
+        await db.upsertUserSettings(user, JSON.stringify({ ...stored, agentRuntime: preference }));
+    });
 }
 
 export async function getRuntimeParameterTemplates(user: string | null): Promise<RuntimeParameterTemplate[]> {

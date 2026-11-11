@@ -20,7 +20,7 @@ import fs from 'fs';
 import { OpenAI } from "openai";
 import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import {
     attachFailureAnchors,
@@ -75,14 +75,13 @@ async function getLlmClient(user?: string | null) {
 
     const apiKey = config.apiKey || 'no-api-key-required';
     const baseURL = config.baseUrl || "https://api.deepseek.com";
-    const { customFetch } = getProxyConfig();
     
     return {
         client: new OpenAI({
             apiKey, 
             baseURL,
             defaultHeaders: config.headers,
-            fetch: customFetch,
+            fetch: getModelFetch(),
         }),
         model: config.model || "deepseek-chat"
     };

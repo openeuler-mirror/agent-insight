@@ -126,7 +126,7 @@ changefreq: monthly
 | eval | `eval/{config/*,evaluation,rejudge,settings,trajectory/*}` | 数据集配置、评测运行、轨迹评测 |
 | experiments / benchmark | `experiments`、`experiments/[id]/run`、`benchmark/v1/execution-targets`、`benchmark/v1/artifacts`、`benchmark/v1/artifacts/[artifactId]/content`、`benchmark/v1/runs/[runId]/{progress,complete}`、`benchmark/v1/evaluations/[evaluationId]/{progress,artifacts,complete}`、`benchmark/v1/experiments/[experimentId]`、`benchmark/v1/evaluations/[evaluationId]/artifacts/[artifactId]/content` | 普通与 Benchmark 统一实验生命周期；Benchmark 内部分支冻结 Run，经常驻客户端控制通道下发 Agent 任务，再下发不可变 EvaluationJob、接收并归一化原生结果，并按用户返回固定分母聚合与受控 Artifact 内容 |
 | debug | `debug/{batch-tasks/*,grayscale-tasks/*,execute/*,history/*}` | 批量与灰度（A/B）执行编排 |
-| observe | `observe/{data,session,task-stats,infra/*,executions/[executionId]/*,version-analysis/*}` | Observability data, infra observation, execution analysis, Trace tag binding, and version-analysis aggregation |
+| observe | `observe/{data,session,task-stats,task-insight,infra/*,executions/[executionId]/*,version-analysis/*}` | Observability data, infra observation, execution analysis, Trace tag binding, version-analysis aggregation, and root-trace token/task insight |
 | tags | `tags`、`tags/[id]` | Trace 用户标签定义 CRUD（版本标签 / 业务标签） |
 | fault | `fault/diagnosis/{session,stream}` | 故障诊断对话（agent-debug） |
 | misc | `agents`、`agent-datasets/*`、`auth/*`、`dashboard/stats`、`guide`、`user-evaluators`、`background-tasks`、`evaluation/*` | 注册表、数据集、认证、仪表盘、引导 |

@@ -27,6 +27,12 @@ changefreq: monthly
 
 对应文档： [链路追踪](../../how-to/observability/view-traces.md)
 
+### Token 与任务分析
+
+Token 与任务分析把 root Trace 汇总为成本与调度视图：按任务类型、用户和单条任务拆 Token 与估算成本，综合耗时、Token、工具/LLM 调用次数识别长时任务，并标出可放到夜间低峰执行的长任务。它只读既有 Execution 字段，不改变 Trace 采集与执行链路。
+
+对应文档： [Token 与任务分析](../../how-to/observability/token-task-insight.md)
+
 ### Agent 概览
 
 Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent，并处理登记、归属与接入信息。
@@ -59,6 +65,7 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 ## 下一步
 
 - 查看单次执行细节： [链路追踪](../../how-to/observability/view-traces.md)
+- 分析 Token 成本与长时任务： [Token 与任务分析](../../how-to/observability/token-task-insight.md)
 - 查看异常样本归因： [诊断分析](../../how-to/diagnosis/agent-debug/diagnosis.md)
 - 将线上问题沉淀为回归验证： [评估与实验](../evaluation/overview.md)
 
@@ -236,6 +243,33 @@ node scripts/qoder_work_setup.mjs uninstall --purge
 所有形态默认截断正文到 2000 字符，并对 API Key、token、authorization、cookie、password 等字段脱敏。工具耗时通常取 Pre/Post Hook；异步 Hook 时间戳重合时自动回退到 transcript 的真实调用与返回时间，避免短 MCP 调用误显示为 `0ms`。采集器按 `diagnostics/Hook 精确值 > Desktop/JetBrains 本地 SQLite 精确值 >（显式开启时）Desktop/JetBrains 可见 transcript 估算 > 不可用` 选择 Token 来源。CLI 与 Work 依赖安装器配置的 `QODERCN_EXPOSE_TOKEN_USAGE=1` 保留 diagnostics 精确值；Desktop 自动只读查询 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db`，JetBrains 自动只读查询 `~/.qoder/shared_client/cache/db/local.db`。SQLite 读取仅访问 `chat_message` 的会话、请求、模型和 `token_info` 字段，不修改 Qoder 数据。SQLite Schema 与 Token 暴露开关都属于 Qoder 客户端内部接口；版本不兼容、数据库忙、变量未被客户端进程继承或当前 Node 不支持内置 SQLite 时会安全回退为 Token 不可用。
 
 ## Codex CLI 与 IDE Extension 接入
+
+### Codex Desktop 与 App Server（实验性）
+
+桌面版本默认不读取 `~/.codex/sessions`，也不会监听 Codex Desktop 已建立的私有连接。需要采集
+桌面任务时，必须在安装后显式启用只读 rollout reader：
+
+```bash
+node ~/.agent-insight/collectors/codex/install.cjs --home "$HOME" --enable-desktop-rollout
+```
+
+Windows PowerShell 使用同一 Node 命令，将 `"$HOME"` 换成 `$env:USERPROFILE`。启用后 relay
+只增量读取新的 rollout 文件，保留断尾 offset；不会自动回填启用前的历史，也不会修改、移动或上传
+原始 rollout。卸载只停止 Agent Insight reader，保留 Codex 原文件和已写入的 Trace。
+
+桌面生命周期按以下口径展示：同一 App Server `turn/steer` 是一个 Execution 的新 phase；桌面
+UI 若实际发出 `interrupt + new task`，前一个 Execution 标记为 `interrupted`，后一个单独计数，
+两者通过 thread transition 关联。`compaction` 只出现在 thread 时间线，不创建任务，也不污染前后
+Execution 的 Token、LLM 或 Tool 统计。来源属性区分 `desktop`、`app_server`、`cli` 与 `ide`；
+证据不足时保留 `unknown`，不根据相邻时间猜测。
+
+App Server proxy 同样默认不启动。需要代理一个显式 client 时，以
+`node ~/.agent-insight/collectors/codex/app-server-proxy.cjs` 代替 `codex app-server` 启动命令；
+该进程原样双向转发 JSONL，并把成功的 lifecycle 事件发送给同机 loopback relay。只有经过
+Agent Insight proxy 的 JSON-RPC 连接才会记录成功的
+`turn/start`、`turn/steer`、`turn/interrupt` 和 `contextCompaction`，不会宣称能够观察已运行的
+Desktop 私有连接。详情与开发边界见
+[Codex App Server 与 Desktop Trace 升级设计](../../design/codex-app-server-desktop-trace-upgrade/design.md)。
 
 Codex 通过公开 Hook 与原生 OTel Logs 双通道采集，使用 loopback relay 合并为同一条 Trace；安装器接受 `>=0.145.0` 的可解析 Codex CLI 版本。可在安装指导中勾选 **Codex**，完成后启动 Codex、运行 `/hooks` 并信任 Agent Insight handlers。采集器不会读取 `transcript_path`，写入 spool 与上报前会递归脱敏 API Key、token、secret、password 等密钥赋值以及本地 Windows、UNC、`/Users/...`、`/home/...` 路径；Token 用量字段保留数值。VS Code、Cursor 与 Windsurf 可安装同一 VSIX，以公开 API 采集 FileEdit 和 Terminal 事件。
 

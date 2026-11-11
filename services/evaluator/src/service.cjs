@@ -22,6 +22,7 @@ const http = require('node:http')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 
+const { describeEvidence, appendPlatformFile } = require('./evidence-collection.cjs')
 const { generatedEvaluatorDescriptors } = require('../../../generated/benchmark-catalog/evaluators.cjs')
 const {
   evaluationTimeoutError,
@@ -31,7 +32,7 @@ const {
 } = require('./evaluator-registry.cjs')
 const { EvaluationJobJournal, atomicWriteJson } = require('./job-journal.cjs')
 const { BenchmarkImagePool, imagePoolConfig } = require('./image-pool.cjs')
-const { ServiceControl } = require('./service-control.cjs')
+const { ServiceControl, ServiceControlError } = require('./service-control.cjs')
 const { EvaluatorAssetError } = require('./evaluator-assets.cjs')
 const { AgentInsightPlatformClient, PlatformClientError, sha256 } = require('./platform-client.cjs')
 
@@ -75,6 +76,12 @@ function evaluationDispatchDigest(request) {
 
 function evaluatorError(code, message, status = 422, retryable = false) {
   return new EvaluatorProtocolError(code, message, status, retryable)
+}
+
+async function describeRequiredImages(evaluator, payload, arch) {
+  const specs = await evaluator.describeImages(payload, arch)
+  if (!Array.isArray(specs)) throw evaluatorError('IMAGE_POOL_METADATA_INVALID', '评分器镜像需求必须为数组；无需镜像时返回空数组')
+  return specs
 }
 
 function validateOriginUrl(value, code) {
@@ -163,7 +170,7 @@ function json(res, status, value) {
 function errorResponse(res, error) {
   const imagePoolError = error instanceof Error && /^IMAGE_POOL_[A-Z_]+$/.test(error.code)
     && error.status === 503 && typeof error.retryable === 'boolean'
-  const known = error instanceof EvaluatorProtocolError || error instanceof PlatformClientError || error instanceof EvaluatorAssetError || imagePoolError
+  const known = error instanceof EvaluatorProtocolError || error instanceof PlatformClientError || error instanceof EvaluatorAssetError || error instanceof ServiceControlError || imagePoolError
   if (!known) console.error('[benchmark/evaluator]', error)
   json(res, imagePoolError && !error.retryable ? 422 : known ? error.status : 500, {
     error: {
@@ -314,7 +321,7 @@ class BenchmarkEvaluatorService {
         const cases = []
         for (let index = 0; index < window.cases.length; index++) {
           try {
-            specs.push(...await evaluator.describeImages(window.cases[index], this.imagePool.arch))
+            specs.push(...await describeRequiredImages(evaluator, window.cases[index], this.imagePool.arch))
             caseIds.push(window.caseIds[index])
             cases.push(window.cases[index])
           } catch (error) {
@@ -346,7 +353,7 @@ class BenchmarkEvaluatorService {
     const evaluator = this.registry.get(request.evaluatorKey, request.benchmarkKey)
     await this.imagePool.initialize()
     const specs = []
-    for (const item of request.cases) specs.push(...await evaluator.describeImages(item, this.imagePool.arch))
+    for (const item of request.cases) specs.push(...await describeRequiredImages(evaluator, item, this.imagePool.arch))
     return this.withAdmission(async () => {
       const key = JSON.stringify([request.benchmarkKey, request.experimentId])
       const reserved = Object.entries(this.imagePool.state?.windows || {}).filter(([other, window]) => other !== key && window.expiresAt > Date.now())
@@ -361,7 +368,8 @@ class BenchmarkEvaluatorService {
     if (!this.imagePool || !evaluator.describeImages) return
     await this.imagePool.initialize?.()
     // Validate permanent metadata errors before window selection, or an excluded Case waits forever.
-    await evaluator.describeImages(request.evaluationJob.payload, this.imagePool.arch)
+    const specs = await describeRequiredImages(evaluator, request.evaluationJob.payload, this.imagePool.arch)
+    if (!specs.length) return
     if (this.imagePool.state?.windowRevision !== undefined) {
       const selected = Object.values(this.imagePool.state.windows).some((window) => window.expiresAt > Date.now() && window.caseIds?.includes(request.evaluationJob.executionRunId))
       if (!selected) throw evaluatorError('IMAGE_POOL_PREPARING', '等待进入镜像准备窗口', 409, true)
@@ -403,7 +411,7 @@ class BenchmarkEvaluatorService {
   async acquireJobImages(request, evaluator, signal) {
     if (!this.imagePool || !evaluator.describeImages) return undefined
     await this.imagePool.initialize()
-    let specs = await evaluator.describeImages(request.evaluationJob.payload, this.imagePool.arch)
+    let specs = await describeRequiredImages(evaluator, request.evaluationJob.payload, this.imagePool.arch)
     if (!specs.length) return undefined
     const frozenPath = path.join(this.journal.jobDir(request.runId), 'pool-images.json')
     const frozen = await this.journal.readJson(frozenPath)
@@ -579,11 +587,13 @@ class BenchmarkEvaluatorService {
       code: error.code || 'EVALUATOR_INTERNAL_ERROR',
       message: error.message,
     }, null, 2), { mode: 0o600 })
+    const evidenceFiles = [...(error.evidenceFiles || [])]
+    appendPlatformFile(evidenceFiles, evidencePath, 'error.json')
     return {
       completion: {
         status: 'failed',
         rawResult: {},
-        runtimeFacts: this.runtimeFacts({ controllerArch: process.arch }),
+        runtimeFacts: this.runtimeFacts({ controllerArch: process.arch, ...(error.evidenceCollection ? { evidenceCollection: error.evidenceCollection } : {}) }),
         cleanup: { status: 'attempted' },
         error: {
           code: error.code || 'EVALUATOR_INTERNAL_ERROR',
@@ -591,12 +601,7 @@ class BenchmarkEvaluatorService {
           retryable: error.retryable !== false,
         },
       },
-      evidenceFiles: [{
-        name: 'controller-error.json',
-        kind: 'controller-error',
-        mediaType: 'application/json',
-        path: evidencePath,
-      }],
+      evidenceFiles,
     }
   }
 
@@ -607,14 +612,27 @@ class BenchmarkEvaluatorService {
       stage: 'uploading_evidence',
       occurredAt: new Date().toISOString(),
     })
+    const collection = await describeEvidence(result.evidenceFiles, result.completion.runtimeFacts?.evidenceCollection)
+    for (const previous of result.completion.runtimeFacts?.evidenceCollection?.files || []) {
+      const current = collection.files.find(item => item.name === previous.name)
+      if (!current || current.sha256 !== previous.sha256 || current.sizeBytes !== previous.sizeBytes) {
+        throw evaluatorError('EVALUATION_EVIDENCE_CHANGED', '评测产物在上传前发生变化', 500, false)
+      }
+    }
     const uploads = []
     for (const evidence of result.evidenceFiles) {
       await this.control.assertRunning(request.runId)
-      uploads.push(await this.platform.uploadEvidence(request, evidence))
+      const upload = await this.platform.uploadEvidence(request, evidence)
+      const expected = collection.files[uploads.length]
+      if ((upload.sha256 != null && upload.sha256 !== expected.sha256) || (upload.size != null && upload.size !== expected.sizeBytes)) {
+        throw evaluatorError('EVALUATION_EVIDENCE_CHANGED', '评测证据在采集后发生变化', 500, false)
+      }
+      uploads.push(upload)
     }
     const completion = {
       ...result.completion,
       evidenceArtifactIds: uploads.map((item) => item.artifactId),
+      runtimeFacts: { ...result.completion.runtimeFacts, evidenceCollection: { ...collection, files: collection.files.map((item, index) => ({ ...item, artifactId: uploads[index].artifactId })) } },
     }
     await this.journal.writeResult(request.runId, { completion })
     await this.journal.writeState(request.runId, { stage: 'callback_pending' })
@@ -743,7 +761,12 @@ class BenchmarkEvaluatorService {
       })
       assertWithinDeadline()
     } catch (error) {
-      result = await this.fallbackResult(request, timedOut ? evaluationTimeoutError() : error)
+      const failure = timedOut ? evaluationTimeoutError() : error
+      if (failure !== error || result) {
+        failure.evidenceFiles = result?.evidenceFiles || error.evidenceFiles
+        failure.evidenceCollection = result?.completion?.runtimeFacts?.evidenceCollection || error.evidenceCollection
+      }
+      result = await this.fallbackResult(request, failure)
     } finally {
       clearTimeout(timeout)
     }

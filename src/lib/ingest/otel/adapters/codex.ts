@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-import type { ExecutionRecord, InvokedSkill } from '@/lib/storage/data-service';
+import type {
+  ExecutionRecord,
+  InvokedSkill,
+  TraceThreadEventRecord,
+  TraceThreadRecord,
+} from '@/lib/storage/data-service';
 import type { OtelTraceEvent } from '../types';
 import type { OtelTraceAdapter } from './types';
 
@@ -42,7 +47,25 @@ function eventInput(event: OtelTraceEvent): string | undefined {
   const value = content(attrs(event)['input.value'] ?? (event as AnyObj).input);
   // Codex emits this placeholder for lifecycle events when a prompt is not
   // exported. It is not a user task boundary and must not create a root.
-  return value?.trim() === '[REDACTED]' ? undefined : value;
+  // Bug 63：带长度的占位符（[REDACTED prompt length=N]，含内部建议生成会话
+  // 的 length=0）同样不构成用户输入。
+  if (value?.trim() === '[REDACTED]' || /^\[REDACTED prompt length=\d+\]$/.test(value?.trim() || '')) {
+    return undefined;
+  }
+  return value;
+}
+
+function inputHistory(event: OtelTraceEvent): AnyObj[] {
+  const raw = attrs(event)['codex.input.history'];
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is AnyObj => Boolean(item && typeof item === 'object'))
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function eventOutput(event: OtelTraceEvent): string | undefined {
@@ -123,6 +146,13 @@ function codexOwnerFor(
   displayNames?: Map<string, string>,
 ): ReturnType<typeof ownerFor> {
   const owner = ownerFor(event, bySpanId, displayNames);
+  if (owner.sessionId && owner.event && String(attrs(owner.event)['codex.agent.thread_scoped']) === 'true') {
+    const conversation = content(attrs(event)['codex.conversation.id']);
+    const childThread = content(attrs(owner.event)['codex.agent.id']);
+    if (conversation && childThread && conversation !== childThread) {
+      return subagentParentOwner(owner.event, bySpanId, displayNames);
+    }
+  }
   if (!owner.sessionId || semanticKind(event) !== 'llm') return owner;
   const child = owner.event;
   const childStartedAt = child?.startTimeMs || 0;
@@ -256,6 +286,10 @@ function interactionBase(event: OtelTraceEvent, owner: ReturnType<typeof ownerFo
     turn_id: attrs(event)['codex.turn.id'],
     ttft_ms: attrs(event)['codex.ttft_ms'],
     cloud: cloudMetadata(event),
+    source_kind: attrs(event)['codex.source.kind'],
+    source_thread_id: attrs(event)['codex.source.thread_id'],
+    source_execution_id: attrs(event)['codex.source.execution_id'],
+    execution_status: attrs(event)['codex.execution.status'],
   };
 }
 
@@ -359,6 +393,25 @@ function toolFamily(event: OtelTraceEvent): string {
 
 function normalizedToolOutput(event: OtelTraceEvent): string {
   return (eventOutput(event) || '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Codex 0.166 的 OTel `exec` 工具会把嵌套工具结果再包一层 JSON：
+ * `Script completed ... Output: {"output":"<escaped inner result>"}`。
+ * Hook 侧拿到的是内层原始输出；直接做字符串包含会因转义差异漏合并。
+ */
+function comparableToolOutput(event: OtelTraceEvent): string {
+  const raw = normalizedToolOutput(event);
+  if (!raw) return '';
+  const match = /"output"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw);
+  if (match) {
+    try {
+      return (JSON.parse(`"${match[1]}"`) as string).replace(/\s+/g, ' ').trim();
+    } catch {
+      // Fall through to the raw wrapper when the payload is not valid JSON.
+    }
+  }
+  return raw;
 }
 
 function shellOutputPayload(event: OtelTraceEvent): string {
@@ -481,8 +534,8 @@ function isHookOtelToolPair(left: OtelTraceEvent, right: OtelTraceEvent): boolea
 
   if (!toolIntervalsOverlap(left, right)) return false;
 
-  const leftOutput = normalizedToolOutput(left);
-  const rightOutput = normalizedToolOutput(right);
+  const leftOutput = comparableToolOutput(left);
+  const rightOutput = comparableToolOutput(right);
   if (leftOutput && rightOutput &&
     (leftOutput.includes(rightOutput) || rightOutput.includes(leftOutput))) return true;
 
@@ -546,6 +599,153 @@ function mergeDirectCallIdTools(events: OtelTraceEvent[]): OtelTraceEvent[] {
   });
 }
 
+/**
+ * Codex Desktop 0.164 同时发 OTel `codex.sse_event` 与 rollout
+ * `token_usage_record`，两条通道描述同一批模型响应。实测（2026-10-28 真实
+ * 单 turn）：rollout 33 条 usage 覆盖全部响应、总额等于原始真值 3856883；
+ * OTel 只有 20/33 条带 usage、总额 2821159。两者相加会把 token 虚增到
+ * 6678042（1.73 倍）。
+ *
+ * rollout usage 是完整权威计量源，因此同一 turn 出现 rollout usage 时，
+ * 把该 turn 内 OTel 事件的 usage 字段清零——节点与正文保留（正文来自 OTel），
+ * 只是不再重复计量。
+ */
+function preferRolloutUsage(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  // 判定键用 codex.execution.id：OTel 的 codex.turn.id 可能是内部 turn id
+  // （如 8afbed...），而 rollout 用的是框架 turn id，两者不等，按 turn id 匹配
+  // 会漏掉正好是要去重的那批 LLM 事件。execution id 是两条通道共同的归属键
+  // （实测 20/20 命中）。
+  const rolloutExecutions = new Set<string>();
+  for (const event of events) {
+    if (attrs(event)['codex.usage.source'] !== 'rollout') continue;
+    const execution = content(attrs(event)['codex.execution.id']);
+    if (execution) rolloutExecutions.add(execution);
+  }
+  if (rolloutExecutions.size === 0) return events;
+  return events.flatMap((event) => {
+    // 只有「带 usage 又来自非 rollout 通道」的 LLM 快照才是重复计量候选。
+    // 工具、agent、span 与无 usage 的事件一律原样保留——早期实现按
+    // 无 body 判定丢弃，把同 turn 的 1239 个 tool 与 63 个 agent 一起删掉，
+    // 导致该 turn 没有 agent 根事件而不落库。
+    if (!event.usage) return [event];
+    if (semanticKind(event) !== 'llm') return [event];
+    if (attrs(event)['codex.usage.source'] === 'rollout') return [event];
+    const execution = content(attrs(event)['codex.execution.id']);
+    if (!execution || !rolloutExecutions.has(execution)) return [event];
+    // 去掉重复计量；若该 LLM 快照本身没有正文，它只是同一响应的空壳，
+    // 保留会虚增 LLM 节点数并在 UI 显示「未采集到模型输出」，直接丢弃。
+    const hasBody = Boolean(eventOutput(event) || eventInput(event));
+    if (hasBody) {
+      const { usage: _drop, ...rest } = event as AnyObj;
+      return [rest as OtelTraceEvent];
+    }
+    return [];
+  });
+}
+
+/**
+ * Hook 生命周期快照与 OTel `agent.codex` 根描述同一个 execution，但 spanId 不同。
+ * 两条根同时存在会在 UI 里生成重复的 USER 节点。保留 OTel/agent 根（它带
+ * 输出与子 span 归属），把生命周期快照的输入历史/状态合并进来，其余根丢弃。
+ */
+export function shouldReplaceCodexSnapshot(existing: OtelTraceEvent, candidate: OtelTraceEvent): boolean {
+  const terminal = (event: OtelTraceEvent) => ['completed', 'failed', 'interrupted']
+    .includes(String(attrs(event)['codex.execution.status'] || ''));
+  if (terminal(existing) !== terminal(candidate)) return terminal(candidate);
+  return eventEndMs(candidate) >= eventEndMs(existing);
+}
+
+function mergeRolloutResponses(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  const usage = events.filter(event => semanticKind(event) === 'llm' && attrs(event)['codex.usage.source'] === 'rollout');
+  const replacements = new Map<OtelTraceEvent, OtelTraceEvent>();
+  const removed = new Set<OtelTraceEvent>();
+  for (const body of events) {
+    if (semanticKind(body) !== 'llm' || attrs(body)['codex.content.source'] !== 'rollout' || !eventOutput(body)) continue;
+    // A model response owns its completion interval, not every later message in
+    // the turn. Ambiguous/foreign-owner text remains an independent fallback.
+    const matches = usage.filter(event => event.sessionId === body.sessionId &&
+      event.parentSpanId === body.parentSpanId &&
+      attrs(event)['codex.conversation.id'] === attrs(body)['codex.conversation.id'] &&
+      attrs(event)['codex.turn.id'] === attrs(body)['codex.turn.id'] &&
+      (body.startTimeMs || 0) >= (event.startTimeMs || 0) &&
+      eventEndMs(body) <= eventEndMs(event));
+    if (matches.length !== 1) continue;
+    const target = matches[0];
+    const previous = replacements.get(target) || target;
+    const output = [...new Set([eventOutput(previous), eventOutput(body)].filter(Boolean))].join('\n');
+    replacements.set(target, { ...previous, output, attributes: { ...attrs(previous), 'output.value': output } } as OtelTraceEvent);
+    removed.add(body);
+  }
+  return events.flatMap(event => removed.has(event) ? [] : [replacements.get(event) || event]);
+}
+
+function mergeExecutionRootSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  const groups = new Map<string, OtelTraceEvent[]>();
+  for (const event of events) {
+    if (semanticKind(event) !== 'agent' || event.parentSpanId) continue;
+    const execution = content(attrs(event)['codex.execution.id']) || event.sessionId || '';
+    if (!execution) continue;
+    const isLifecycle = attrs(event)['agent.insight.lifecycle'] === 'execution';
+    const isRoot = attrs(event)['codex.agent.id'] === 'root';
+    if (!isLifecycle && !isRoot) continue;
+    const group = groups.get(execution) || [];
+    group.push(event);
+    groups.set(execution, group);
+  }
+
+  const replacements = new Map<OtelTraceEvent, OtelTraceEvent>();
+  const removed = new Set<OtelTraceEvent>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const primary = group.find((event) =>
+      attrs(event)['codex.agent.id'] === 'root' && attrs(event)['agent.insight.lifecycle'] !== 'execution')
+      || group.find((event) => attrs(event)['agent.insight.lifecycle'] !== 'execution')
+      || group[0];
+    if (!primary) continue;
+    const lifecycle = group.filter((event) => attrs(event)['agent.insight.lifecycle'] === 'execution');
+    const attributes = { ...attrs(primary) };
+    for (const snapshot of lifecycle) {
+      for (const key of [
+        'codex.input.history',
+        'codex.input.phases',
+        'codex.execution.status',
+        'codex.source.thread_id',
+        'codex.source.execution_id',
+      ]) {
+        if (attrs(snapshot)[key] !== undefined) {
+          attributes[key] = attrs(snapshot)[key];
+        }
+      }
+    }
+    const startedAt = Math.min(...group.map((event) => event.startTimeMs || Infinity));
+    const endedAt = Math.max(...group.map((event) => eventEndMs(event)));
+    const authoritative = lifecycle.at(-1);
+    const input = authoritative && eventInput(authoritative) || eventInput(primary) || group.map(eventInput).find(Boolean);
+    const output = authoritative && eventOutput(authoritative) || eventOutput(primary) || group.map(eventOutput).find(Boolean);
+    if (input) attributes['input.value'] = input;
+    if (output) attributes['output.value'] = output;
+    if (authoritative && attrs(authoritative)['codex.source.kind'] !== 'unknown') {
+      attributes['codex.source.kind'] = attrs(authoritative)['codex.source.kind'];
+    }
+    const merged = {
+      ...primary,
+      input, output,
+      startTimeMs: Number.isFinite(startedAt) ? startedAt : primary.startTimeMs,
+      latencyMs: Math.max(0, endedAt - startedAt),
+      attributes,
+    } as OtelTraceEvent;
+    (merged as AnyObj).endTimeMs = endedAt;
+    replacements.set(primary, merged);
+    for (const event of group) if (event !== primary) removed.add(event);
+  }
+
+  return events.flatMap((event) => {
+    const merged = replacements.get(event);
+    if (merged) return [merged];
+    return removed.has(event) ? [] : [event];
+  });
+}
+
 export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[] {
   const latest = new Map<string, OtelTraceEvent>();
   const withoutSpan: OtelTraceEvent[] = [];
@@ -555,9 +755,11 @@ export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTrac
       continue;
     }
     const existing = latest.get(event.spanId);
-    if (!existing || eventEndMs(event) >= eventEndMs(existing)) latest.set(event.spanId, event);
+    if (!existing || shouldReplaceCodexSnapshot(existing, event)) latest.set(event.spanId, event);
   }
-  const snapshots = mergeDirectCallIdTools([...latest.values(), ...withoutSpan]);
+  const snapshots = mergeExecutionRootSnapshots(
+    mergeRolloutResponses(preferRolloutUsage(mergeDirectCallIdTools([...latest.values(), ...withoutSpan]))),
+  );
   const hookTools = snapshots.filter((event) =>
     hasToolSource(event, 'hook') &&
     ['tool', 'mcp'].includes(semanticKind(event)));
@@ -663,6 +865,132 @@ function reparentPreChildLlms(events: OtelTraceEvent[]): OtelTraceEvent[] {
   });
 }
 
+function parsedObject(value: unknown): AnyObj {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as AnyObj;
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as AnyObj : {};
+  } catch {
+    return {};
+  }
+}
+
+function buildTraceThread(events: OtelTraceEvent[]): TraceThreadRecord | undefined {
+  const sourceThreadId = events
+    .map((event) => content(attrs(event)['codex.source.thread_id'] || attrs(event)['codex.conversation.id']))
+    .find(Boolean);
+  if (!sourceThreadId) return undefined;
+  // Bug 64：同一会话混合两路事件（旧 OTLP 事件带 unknown、rollout 事件带
+  // desktop/app_server）时，优先取第一个非 unknown 的值，否则列表永远显示
+  // 陈旧的 unknown。
+  const sourceKind = events.map((event) => content(attrs(event)['codex.source.kind']))
+    .find((value) => value && value !== 'unknown') ||
+    events.map((event) => content(attrs(event)['codex.source.kind'])).find(Boolean);
+  const records = new Map<string, TraceThreadEventRecord>();
+
+  for (const event of events) {
+    const eventAttrs = attrs(event);
+    const lifecycle = content(eventAttrs['agent.insight.lifecycle']);
+    const sourceExecutionId = content(eventAttrs['codex.source.execution_id'] || eventAttrs['codex.turn.id']);
+    if (lifecycle === 'thread_event') {
+      const previousSourceExecutionId = content(eventAttrs['codex.thread.previous_execution_id']);
+      const nextSourceExecutionId = content(eventAttrs['codex.thread.next_execution_id']);
+      const eventKey = content(eventAttrs['codex.thread.event_id']) || event.spanId ||
+        `codex:${sourceThreadId}:transition:${previousSourceExecutionId}:${nextSourceExecutionId}`;
+      records.set(eventKey, {
+        eventKey,
+        kind: content(eventAttrs['codex.thread.event_kind']) || 'execution_transition',
+        status: 'completed',
+        sourceTurnId: previousSourceExecutionId,
+        relatedSourceTurnId: nextSourceExecutionId,
+        startedAt: new Date(event.startTimeMs || Date.parse(event.receivedAt) || Date.now()),
+        completedAt: new Date(eventEndMs(event)),
+        payload: {
+          previousSourceExecutionId,
+          nextSourceExecutionId,
+          transitionKind: content(eventAttrs['codex.thread.transition_kind']) || 'interrupt_followed_by_execution',
+          confidence: content(eventAttrs['codex.thread.confidence']) || 'pending',
+          sourceKind,
+        },
+      });
+    }
+
+    if (lifecycle === 'compaction') {
+      const itemId = content(eventAttrs['codex.compaction.item_id']) || event.spanId || String(event.startTimeMs || 'unknown');
+      const eventKey = `codex:${sourceThreadId}:compaction:${itemId}`;
+      const rawPayload = parsedObject(eventAttrs['codex.compaction.payload']);
+      const maintenanceUsage = parsedObject(rawPayload.maintenanceUsage || rawPayload.maintenance_usage);
+      records.set(eventKey, {
+        eventKey,
+        kind: 'context_compaction',
+        status: content(eventAttrs['codex.compaction.status']) || 'completed',
+        startedAt: new Date(event.startTimeMs || Date.parse(event.receivedAt) || Date.now()),
+        completedAt: new Date(eventEndMs(event)),
+        payload: {
+          sourceKind,
+          itemId,
+          durationMs: Number(eventAttrs['codex.compaction.duration_ms']) || Math.max(0, eventEndMs(event) - (event.startTimeMs || 0)),
+          windowId: content(rawPayload.window_id || rawPayload.windowId),
+          previousWindowId: content(rawPayload.previous_window_id || rawPayload.previousWindowId),
+          firstWindowId: content(rawPayload.first_window_id || rawPayload.firstWindowId),
+          windowNumber: Number(rawPayload.window_number ?? rawPayload.windowNumber) || undefined,
+          ...(Object.keys(maintenanceUsage).length > 0 ? { maintenanceUsage } : {}),
+        },
+      });
+    }
+
+    if (lifecycle === 'execution' && sourceExecutionId) {
+      for (const input of inputHistory(event)) {
+        if (content(input.input_kind) !== 'steer') continue;
+        const phaseId = content(input.phase_id);
+        const clientMessageId = content(input.client_message_id);
+        const inputIndex = Number(input.input_index);
+        const eventKey = `codex:${sourceThreadId}:steer:${sourceExecutionId}:${clientMessageId || phaseId || inputIndex}`;
+        records.set(eventKey, {
+          eventKey,
+          kind: 'input_steer',
+          status: 'completed',
+          sourceTurnId: sourceExecutionId,
+          phaseId,
+          startedAt: input.timestamp ? new Date(String(input.timestamp)) : new Date(event.startTimeMs || Date.now()),
+          completedAt: input.timestamp ? new Date(String(input.timestamp)) : new Date(event.startTimeMs || Date.now()),
+          payload: {
+            sourceKind,
+            inputIndex: Number.isFinite(inputIndex) ? inputIndex : undefined,
+            clientMessageId,
+            confidence: 'direct',
+          },
+        });
+      }
+      if (content(eventAttrs['codex.execution.status']) === 'interrupted') {
+        const eventKey = `codex:${sourceThreadId}:interrupt:${sourceExecutionId}`;
+        records.set(eventKey, {
+          eventKey,
+          kind: 'interrupt',
+          status: 'completed',
+          sourceTurnId: sourceExecutionId,
+          startedAt: new Date(eventEndMs(event)),
+          completedAt: new Date(eventEndMs(event)),
+          payload: { sourceKind, reason: 'interrupted', confidence: 'direct' },
+        });
+      }
+    }
+  }
+
+  const startedAt = Math.min(...events.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now()));
+  const updatedAt = Math.max(...events.map(eventEndMs));
+  return {
+    sourceThreadId,
+    sourceKind,
+    startedAt: new Date(startedAt),
+    updatedAt: new Date(updatedAt),
+    metadata: { sourceKind },
+    events: [...records.values()].sort((left, right) =>
+      new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime()),
+  };
+}
+
 export function aggregateCodexTraceEvents(
   sessionId: string,
   events: OtelTraceEvent[],
@@ -691,28 +1019,62 @@ export function aggregateCodexTraceEvents(
   const rootLlmEvents: OtelTraceEvent[] = [];
   const rootLlmInteractions: AnyObj[] = [];
   const pendingSubagentOutcomes: Array<{ event: OtelTraceEvent; interaction: AnyObj }> = [];
+  const skillInteractions: Array<{ event: OtelTraceEvent; interaction?: AnyObj }> = [];
   let toolErrors = 0;
 
   for (const event of ordered) {
     const kind = semanticKind(event);
     const owner = codexOwnerFor(event, bySpanId, displayNames);
+    if (attrs(event)['agent.insight.lifecycle'] === 'compaction') {
+      interactions.push({
+        role: 'system',
+        type: 'context_compaction',
+        content: '',
+        timestamp: toIso(event.startTimeMs),
+        timeInfo: {
+          created: toIso(event.startTimeMs),
+          completed: toIso(eventEndMs(event)),
+        },
+        traceId: event.traceId,
+        spanId: event.spanId,
+        parentSpanId: event.parentSpanId,
+        source_kind: attrs(event)['codex.source.kind'],
+        compaction_status: attrs(event)['codex.compaction.status'],
+        compaction_item_id: attrs(event)['codex.compaction.item_id'],
+        compaction_duration_ms: attrs(event)['codex.compaction.duration_ms'],
+      });
+      continue;
+    }
     if (kind === 'agent') {
       rootEvents.push(event);
-      const input = eventInput(event);
-      if (input) {
+      const history = inputHistory(event);
+      const inputs = history.length > 0 ? history : (eventInput(event) ? [{
+        content: eventInput(event),
+        input_kind: 'initial',
+        input_index: 0,
+        phase_id: 'phase-0',
+      }] : []);
+      for (const input of inputs) {
+        const contentValue = content(input.content ?? input.input ?? input.prompt);
+        if (!contentValue) continue;
         interactions.push({
           role: 'user',
           agent: 'codex',
-          content: input,
-          timestamp: toIso(event.startTimeMs),
+          content: contentValue,
+          timestamp: input.timestamp || toIso(event.startTimeMs),
           timeInfo: {
-            created: toIso(event.startTimeMs),
-            completed: toIso(event.startTimeMs),
+            created: input.timestamp || toIso(event.startTimeMs),
+            completed: input.timestamp || toIso(event.startTimeMs),
           },
           traceId: event.traceId,
-          spanId: `${event.spanId}:input`,
+          spanId: `${event.spanId}:input:${input.input_index ?? 0}`,
           parentSpanId: event.spanId,
           turn_id: attrs(event)['codex.turn.id'],
+          input_kind: input.input_kind,
+          input_index: input.input_index,
+          phase_id: input.phase_id,
+          client_message_id: input.client_message_id,
+          source: input.source || attrs(event)['codex.source.kind'],
         });
       }
       continue;
@@ -725,6 +1087,7 @@ export function aggregateCodexTraceEvents(
       const outcome = String(attrs(event)['tool.outcome'] || '').toLowerCase();
       interactions.push({
         ...ownerFields(parentOwner),
+        trace_synthetic: true,
         content: '',
         timestamp: toIso(event.startTimeMs),
         timeInfo: {
@@ -778,6 +1141,7 @@ export function aggregateCodexTraceEvents(
       interactions.push({
         ...interactionBase(event, owner),
         content: eventOutput(event) || '',
+        trace_synthetic: true,
         tool_calls: [{
           id: event.spanId,
           type: 'function',
@@ -798,6 +1162,7 @@ export function aggregateCodexTraceEvents(
           },
         }],
       });
+      skillInteractions.push({ event, interaction: interactions[interactions.length - 1] });
       continue;
     }
 
@@ -825,6 +1190,7 @@ export function aggregateCodexTraceEvents(
       interactions.push({
         ...interactionBase(event, owner),
         content: '',
+        trace_synthetic: true,
         tool_calls: [toolCall(event)],
         ...(kind === 'mcp' ? {
           mcp: {
@@ -835,6 +1201,18 @@ export function aggregateCodexTraceEvents(
       });
     }
   }
+
+  const first = ordered[0];
+  const traceThread = buildTraceThread(ordered);
+  const sourceKind = traceThread?.sourceKind || ordered
+    .map((event) => content(attrs(event)['codex.source.kind']))
+    .find((value) => value && value !== 'unknown') || ordered
+    .map((event) => content(attrs(event)['codex.source.kind']))
+    .find(Boolean);
+  const sourceThreadId = traceThread?.sourceThreadId;
+  const sourceExecutionId = ordered
+    .map((event) => content(attrs(event)['codex.source.execution_id'] || attrs(event)['codex.turn.id']))
+    .find(Boolean);
 
   for (const { event, interaction } of pendingSubagentOutcomes) {
     const childInteractions = interactions.filter((candidate) =>
@@ -882,13 +1260,88 @@ export function aggregateCodexTraceEvents(
 
   const delegated = ordered.some((event) =>
     attrs(event)['codex.delegated.session'] === 'true');
+  // Codex 内部会话（任务标题生成、建议生成、worker 系统提示词等）以根 agent
+  // input 出现但没有任何真实工作。只凭根 input/输出会把这些内部会话当成用户
+  // 任务；必须保留"有真实工作（LLM/Tool/Skill/子 Agent）或生命周期执行信号"
+  // 的可见执行。没有工作、也没有生命周期、且根 input 是 Codex 内部系统提示词
+  // 的会话不生成可见执行记录。
+  const INTERNAL_ROOT_INPUT = /(?:You are a helpful assistant|You are in a fork of an existing Codex thread|You are an expert at upholding safety|hyperpersonalized suggestions|Generate a concise UI title)/i;
+  const hasWork = llmEvents.length > 0 || toolEvents.length > 0 ||
+    invokedSkills.length > 0 || subagentEvents.length > 0;
+  const hasLifecycleExecution = rootEvents.some((event) =>
+    attrs(event)['agent.insight.lifecycle'] === 'execution');
   const hasMeaningfulRootSignal = rootEvents.some((event) =>
     Boolean(eventInput(event) || eventOutput(event)));
-  if (!hasMeaningfulRootSignal && llmEvents.length === 0 && toolEvents.length === 0 &&
-    invokedSkills.length === 0 && subagentEvents.length === 0) {
-    return null;
+  const internalOnlyRoot = rootEvents.some((event) => {
+    const input = eventInput(event);
+    return typeof input === 'string' && INTERNAL_ROOT_INPUT.test(input);
+  });
+  // Bug 61：根 input 是 Codex 内部系统提示词（建议生成/标题生成/worker 提示词）
+  // 的会话即使有真实工作（建议生成会消耗大量 token）也不是用户任务，
+  // 一律按 thread-only 持久化，不进入任务列表。
+  if (internalOnlyRoot) {
+    if (!traceThread?.events?.length) return null;
+    return {
+      task_id: `codex:${sourceThreadId}:thread-events`,
+      framework: 'codex',
+      label: 'codex-thread',
+      user: first.user || 'anonymous',
+      timestamp: traceThread.startedAt || new Date(),
+      sourceThreadId,
+      sourceKind,
+      traceThread,
+      threadOnly: true,
+      interactions: [],
+    };
   }
-  const first = ordered[0];
+  if (!hasWork && !hasLifecycleExecution && (!hasMeaningfulRootSignal || internalOnlyRoot)) {
+    if (!traceThread?.events?.length) return null;
+    return {
+      task_id: `codex:${sourceThreadId}:thread-events`,
+      framework: 'codex',
+      label: 'codex-thread',
+      user: first.user || 'anonymous',
+      timestamp: traceThread.startedAt || new Date(),
+      sourceThreadId,
+      sourceKind,
+      traceThread,
+      threadOnly: true,
+      interactions: [],
+    };
+  }
+  // Bug 60：桌面会话里技能以工具形态运行（OTLP/rollout tool_result 携带结果），
+  // 而 skill span 自身没有完成快照——宿主工具的 PostToolUse hook 在 app-server
+  // 路径不触发。把同轮 skill-runner 工具的输出传播给配对的 SKILL 交互，
+  // SKILL 节点才显示技能产出（对新旧数据同时生效，无需重采）。
+  const SKILL_RUNNER_TOOLS = new Set([
+    'skill', 'skill_view', 'load_skill', 'load-skill',
+    'run_skill', 'run-skill', 'skill.run', 'skill_run',
+  ]);
+  for (const ref of skillInteractions) {
+    const interaction = ref.interaction;
+    if (!interaction) continue;
+    if (content(interaction.content) || content((interaction.tool_calls as AnyObj[] | undefined)?.[0]?.output)) continue;
+    const turnId = content(attrs(ref.event)['codex.turn.id']);
+    const skillStartedAt = ref.event.startTimeMs || 0;
+    const runner = interactions.find((item) => {
+      if (item === interaction) return false;
+      const call = ((item.tool_calls as AnyObj[] | undefined) || [])[0] as AnyObj | undefined;
+      if (!call) return false;
+      if (!SKILL_RUNNER_TOOLS.has(String((call?.function as AnyObj | undefined)?.name || '').toLowerCase())) return false;
+      if (!content(call.output)) return false;
+      if (turnId && content(item.turn_id) && content(item.turn_id) !== turnId) return false;
+      return (item.timestamp ? Date.parse(String(item.timestamp)) : 0) >= skillStartedAt;
+    });
+    if (runner) {
+      const output = content(((runner.tool_calls as AnyObj[] | undefined) || [])[0]?.output) || '';
+      interaction.content = output;
+      if (interaction.tool_calls) {
+        (interaction.tool_calls as AnyObj[])[0].output = output;
+        (interaction.tool_calls as AnyObj[])[0].result = output;
+      }
+    }
+  }
+
   // Execution 已按 turn 边界拆分；从根 agent 的开始到该 execution 内最后一个
   // child event 的结束，才能覆盖真实的 LLM、Tool、Skill 与子 Agent 链路。
   // 不能只取根生命周期 snapshot 的结束时间，否则根节点可能短于实际执行数分钟。
@@ -902,6 +1355,27 @@ export function aggregateCodexTraceEvents(
     llmEvents.map(eventInput).find(Boolean) ||
     subagentEvents.map(eventInput).find(Boolean) ||
     (toolEvents.length > 0 ? `Codex tool: ${toolName(toolEvents[0])}` : 'Codex execution');
+  // Bug 62：没有任何用户输入信号（根/LLM/子 Agent 均无 input）的执行是桌面
+  // 自动延续 turn（task_started 后无 user_message）——不是用户发起的任务。
+  // 按线程事件持久化，不用臆造的 "Codex tool: exec" 查询污染任务列表。
+  const hasUserInputSignal = rootEvents.some((event) => Boolean(eventInput(event))) ||
+    llmEvents.some((event) => Boolean(eventInput(event))) ||
+    subagentEvents.some((event) => Boolean(eventInput(event)));
+  if (!hasUserInputSignal) {
+    if (!traceThread?.events?.length) return null;
+    return {
+      task_id: `codex:${sourceThreadId}:thread-events`,
+      framework: 'codex',
+      label: 'codex-thread',
+      user: first.user || 'anonymous',
+      timestamp: traceThread.startedAt || new Date(),
+      sourceThreadId,
+      sourceKind,
+      traceThread,
+      threadOnly: true,
+      interactions: [],
+    };
+  }
   const finalRootEvent = [...rootEvents].reverse().find((event) => Boolean(eventOutput(event)));
   const finalLlmEvent = [...rootLlmEvents].reverse().find((event) => Boolean(eventOutput(event)));
   const finalResult = finalRootEvent
@@ -953,11 +1427,20 @@ export function aggregateCodexTraceEvents(
   const model = llmEvents.map(eventModel).find(Boolean) ||
     rootEvents.map(eventModel).find(Boolean) ||
     'unknown';
+  const lifecycleStatus = ordered.map((event) => content(attrs(event)['codex.execution.status'])).find(Boolean);
+  // 无生命周期信号时兜底推断（Bug 55）：桌面 OTLP-only 会话没有 Stop/rollout
+  // 生命周期，executionStatus 为 NULL 让列表无法区分完成/执行中。证据规则：
+  // 有 LLM usage/正文（模型已产出）→ completed；只有根输入无任何模型工作 →
+  // running（等待模型或仅被窗口关闭打断时不虚报 completed）。
+  const executionStatus = lifecycleStatus || (llmEvents.length > 0 ? 'completed' : undefined);
 
   return {
     task_id: sessionId,
     query,
     framework: 'codex',
+    sourceThreadId,
+    sourceExecutionId,
+    traceThread,
     model,
     tokens,
     latency: Math.max(0, endedAt - startedAt),
@@ -978,6 +1461,8 @@ export function aggregateCodexTraceEvents(
     skills: invokedSkills.map((skill) => skill.name),
     agent: 'codex',
     agentName: 'codex',
+    sourceKind,
+    executionStatus,
     agents: Array.from(new Set([
       'codex',
       ...ordered

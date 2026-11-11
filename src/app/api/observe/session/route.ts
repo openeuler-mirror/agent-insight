@@ -17,11 +17,11 @@
 import { deriveExecutionTiming } from '@/lib/engine/observability/execution-timing';
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { sessionTraceRelations } from '@/lib/trace/session-relations';
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
 import { analyzeSession } from '@/lib/engine/evaluation/judge';
-import { db } from '@/lib/storage/prisma';
+import { db, prismaRaw } from '@/lib/storage/prisma';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { NextResponse } from 'next/server';
@@ -36,15 +36,45 @@ import { loadDifyWorkflowProjection } from '@/lib/ingest/otel/dify-workflow-proj
 
 type ParsedSession = {
     framework?: string | null;
+    owner: string | null;
     session: any;
-    interactions: any[];
-    langfuseTraceNodes: LangfuseTraceNode[];
-    executionSummary: {
+    execution?: {
+        status?: string;
+        sourceKind?: string;
+        sourceExecutionId?: string;
+        latency: number | null;
+        tokens: number | null;
+        cost: number | null;
+        timestamp: Date | null;
+    };
+    executionSummary?: {
         latency: number | null;
         tokens: number | null;
         cost: number | null;
         timestamp: Date | null;
     } | null;
+    thread?: TraceThreadDto;
+    interactions: any[];
+    langfuseTraceNodes: LangfuseTraceNode[];
+};
+
+type TraceThreadDto = {
+    id: string;
+    sourceKind?: string;
+    previousExecutionId?: string;
+    nextExecutionId?: string;
+    events: Array<{
+        id: string;
+        kind: string;
+        status?: string;
+        sourceTurnId?: string;
+        phaseId?: string;
+        startedAt: string;
+        completedAt?: string;
+        executionId?: string;
+        relatedExecutionId?: string;
+        payload?: Record<string, unknown>;
+    }>;
 };
 
 const SESSION_CACHE_TTL_MS = 45_000;
@@ -55,20 +85,30 @@ const parsedSessionCache = new Map<string, {
     value: ParsedSession;
 }>();
 
-function sessionSignature(session: any, execution: any): string {
+function sessionSignature(
+    session: any,
+    framework: unknown,
+    execution?: Record<string, unknown>,
+    thread?: TraceThreadDto,
+): string {
     const raw = [session?.interactions, session?.langfuseTraceNodes]
         .map(value => typeof value === 'string' ? value : '')
         .join('\n');
-    const executionVersion = [
-        execution?.framework,
-        execution?.latency,
-        execution?.tokens,
-        execution?.cost,
-        execution?.timestamp instanceof Date
-            ? execution.timestamp.getTime()
-            : execution?.timestamp,
-    ].map(value => String(value ?? '')).join(':');
-    return `${executionVersion}:${createHash('sha1').update(raw).digest('base64url')}`;
+    const executionSignature = execution
+        ? JSON.stringify([
+            session?.user,
+            execution.user,
+            execution.sourceKind,
+            execution.sourceExecutionId,
+            execution.executionStatus,
+            execution.latency,
+            execution.tokens,
+            execution.cost,
+            execution.timestamp instanceof Date ? execution.timestamp.getTime() : execution.timestamp,
+        ])
+        : '';
+    const threadSignature = thread ? JSON.stringify(thread) : '';
+    return `${String(framework || '')}:${executionSignature}:${createHash('sha1').update(`${raw}\n${threadSignature}`).digest('base64url')}`;
 }
 
 function rememberParsedSession(taskId: string, signature: string, value: ParsedSession): void {
@@ -85,18 +125,83 @@ function rememberParsedSession(taskId: string, signature: string, value: ParsedS
     }
 }
 
-async function loadParsedSession(taskId: string): Promise<ParsedSession | null> {
+function parsePayload(raw: string | null | undefined): Record<string, unknown> | undefined {
+    if (!raw) return undefined;
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+async function loadTraceThread(traceThreadId: string | null | undefined, user: string, currentExecutionId: string): Promise<TraceThreadDto | undefined> {
+    if (!traceThreadId || process.env.DB_HOST) return undefined;
+    const thread = await prismaRaw.traceThread.findFirst({
+        where: { id: traceThreadId, user },
+        include: {
+            events: { orderBy: { startedAt: 'asc' } },
+            executions: {
+                orderBy: { timestamp: 'asc' },
+                select: { id: true, taskId: true, sourceExecutionId: true },
+            },
+        },
+    });
+    if (!thread) return undefined;
+    const taskIdByExecutionId = new Map(thread.executions.map((item) => [item.id, item.taskId || item.id]));
+    const currentIndex = thread.executions.findIndex((item) => item.id === currentExecutionId);
+    const previous = currentIndex > 0 ? thread.executions[currentIndex - 1] : undefined;
+    const next = currentIndex >= 0 && currentIndex < thread.executions.length - 1
+        ? thread.executions[currentIndex + 1]
+        : undefined;
+    return {
+        id: thread.id,
+        sourceKind: thread.sourceKind || undefined,
+        previousExecutionId: previous ? previous.taskId || previous.id : undefined,
+        nextExecutionId: next ? next.taskId || next.id : undefined,
+        events: thread.events.map((event) => ({
+            id: event.id,
+            kind: event.kind,
+            status: event.status || undefined,
+            sourceTurnId: event.sourceTurnId || undefined,
+            phaseId: event.phaseId || undefined,
+            startedAt: event.startedAt.toISOString(),
+            completedAt: event.completedAt?.toISOString(),
+            executionId: event.executionId ? taskIdByExecutionId.get(event.executionId) : undefined,
+            relatedExecutionId: event.relatedExecutionId ? taskIdByExecutionId.get(event.relatedExecutionId) : undefined,
+            payload: parsePayload(event.payloadJson),
+        })),
+    };
+}
+
+async function loadParsedSession(taskId: string, user?: string): Promise<ParsedSession | null> {
     const session = await db.findSessionByTaskId(taskId);
     if (!session) return null;
 
-    const executions = await db.findExecutions(
-        { taskId },
-        { timestamp: 'desc' },
-        { framework: true, latency: true, tokens: true, cost: true, timestamp: true },
-    );
-    const latestExecution = executions?.[0] ?? null;
-    const framework = latestExecution?.framework;
-    const signature = sessionSignature(session, latestExecution);
+    const executions = await db.findExecutions({ taskId, ...(session.user ? { user: session.user } : {}) }, { timestamp: 'desc' }, {
+        id: true,
+        user: true,
+        framework: true,
+        latency: true,
+        tokens: true,
+        cost: true,
+        timestamp: true,
+        traceThreadId: true,
+        sourceKind: true,
+        sourceExecutionId: true,
+        executionStatus: true,
+    });
+    const executionOwners = new Set<string>(executions.map((execution: { user?: string | null }) => execution.user).filter((owner: string | null | undefined): owner is string => !!owner));
+    const owner = session.user || (executionOwners.size === 1 ? [...executionOwners][0] : null);
+    if (user !== undefined && owner !== user) return null;
+    const executionRow = executions?.[0];
+    const framework = executionRow?.framework;
+    const thread = executionRow && owner
+        ? await loadTraceThread(executionRow.traceThreadId, owner, executionRow.id)
+        : undefined;
+    const signature = sessionSignature(session, framework, { ...executionRow, user: owner }, thread);
     const cached = parsedSessionCache.get(taskId);
     if (cached && cached.signature === signature && cached.expiresAt > Date.now()) {
         return cached.value;
@@ -112,15 +217,24 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
         ? normalizeClaudeCodeInteractionsForStorage(rawInteractions)
         : rawInteractions;
     const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
-    const executionSummary = latestExecution ? {
+    const execution = executionRow ? {
+        status: executionRow.executionStatus || undefined,
+        sourceKind: executionRow.sourceKind || undefined,
+        sourceExecutionId: executionRow.sourceExecutionId || undefined,
+        latency: executionRow.latency ?? null,
+        tokens: executionRow.tokens ?? null,
+        cost: executionRow.cost ?? null,
+        timestamp: executionRow.timestamp ?? null,
+    } : undefined;
+    const executionSummary = executionRow ? {
         latency: framework === 'opencode'
-            ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? latestExecution.latency ?? null
-            : latestExecution.latency ?? null,
-        tokens: latestExecution.tokens ?? null,
-        cost: latestExecution.cost ?? null,
-        timestamp: latestExecution.timestamp ?? null,
+            ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? executionRow.latency ?? null
+            : executionRow.latency ?? null,
+        tokens: executionRow.tokens ?? null,
+        cost: executionRow.cost ?? null,
+        timestamp: executionRow.timestamp ?? null,
     } : null;
-    const value = { session, interactions, langfuseTraceNodes, executionSummary, framework };
+    const value = { session, owner, execution, executionSummary, thread, interactions, langfuseTraceNodes, framework };
     rememberParsedSession(taskId, signature, value);
     return value;
 }
@@ -143,7 +257,7 @@ async function loadCollaborationProjection(taskId: string, parsed: ParsedSession
     if (!refs.members.length) return null;
 
     const loadedMembers = await Promise.all(refs.members.map(async (ref): Promise<CollaborationTraceMember | null> => {
-        const child = await loadParsedSession(ref.taskId);
+        const child = await loadParsedSession(ref.taskId, user);
         if (!child || child.session?.user !== user) return null;
         return {
             ...ref,
@@ -174,13 +288,15 @@ export async function GET(request: Request) {
     }
 
     try {
+        const scope = await resolveTraceReadScope(request);
+        if (!scope.username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
         const parsed = await loadParsedSession(taskId);
         if (!parsed) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
-        const { session, interactions, langfuseTraceNodes, executionSummary } = parsed;
-        const { username } = await resolveUser(request);
-        if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        const { session, execution, thread, interactions, langfuseTraceNodes, executionSummary } = parsed;
+        if (!scope.canViewAllTraces && scope.username !== parsed.owner) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        const username = scope.canViewAllTraces ? parsed.owner : scope.username;
         const rawInteraction = searchParams.get('source') === 'raw';
         const difyProjection = !rawInteraction && parsed.framework === 'dify' && username && username === session.user
             ? await loadDifyWorkflowProjection(username, taskId, langfuseTraceNodes) : null;
@@ -195,7 +311,7 @@ export async function GET(request: Request) {
         const relationPlan = !rawInteraction && username && username === session.user
             ? await collaborationTraceProjection.plan(username) : null;
         const reportedInteractions = relationPlan && username
-            ? await collaborationTraceProjection.interactions(username, taskId, loadParsedSession, relationPlan) : null;
+            ? await collaborationTraceProjection.interactions(username, taskId, (id: string) => loadParsedSession(id, username || undefined), relationPlan) : null;
         const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
         const displayInteractions = withTracePayloadVersions(reportedInteractions || collaborationProjection?.interactions || interactions);
 
@@ -208,6 +324,8 @@ export async function GET(request: Request) {
                 taskId: session.taskId,
                 index,
                 interaction: displayInteractions[index],
+                ...(execution ? { execution } : {}),
+                ...(thread ? { thread } : {}),
             });
         }
 
@@ -225,8 +343,11 @@ export async function GET(request: Request) {
                 startTime: session.startTime.getTime(),
                 interactionCount: displayInteractions.length,
                 interactions: toTraceStructureInteractions(displayInteractions),
-                execution: displayExecution,
+                execution: displayExecution
+                    ? { ...displayExecution, ...(execution || {}), tokens: displayExecution.tokens }
+                    : execution,
                 ...(difyProjectionSummary ? { difyProjection: difyProjectionSummary } : {}),
+                ...(thread ? { thread } : {}),
                 parentAgent,
                 traceRelations,
                 ...(collaborationProjection ? {
@@ -255,6 +376,8 @@ export async function GET(request: Request) {
                         truncated: collaborationProjection.truncated,
                     },
                 } : {}),
+                ...(execution ? { execution } : {}),
+                ...(thread ? { thread } : {}),
             });
         }
 
@@ -291,6 +414,8 @@ export async function GET(request: Request) {
             } : {}),
             ...(displayTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes: displayTraceNodes } : {}),
             ...(difyProjectionSummary ? { difyProjection: difyProjectionSummary } : {}),
+            ...(execution ? { execution } : {}),
+            ...(thread ? { thread } : {}),
         });
     } catch (e) {
         console.error('Error reading session from DB:', e);

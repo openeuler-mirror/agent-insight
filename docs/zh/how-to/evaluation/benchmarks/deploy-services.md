@@ -96,7 +96,7 @@ AGENT_INSIGHT_PORT=3000
 
 旧变量 `PORT` 不再支持。
 
-Benchmark 业务配置按进程分开：平台读取项目 `config/benchmark/platform.yaml`，评测读取 `config/benchmark/evaluator.yaml`，执行客户端读取 `config/benchmark/executor.yaml`。各自的 `*.local.yaml` 深度覆盖项目默认文件，未指定字段使用程序默认值；数组整体替换，`null` 恢复默认。配置文件不设 `version` 字段，未知字段和错误类型会明确报错。相对路径按所在配置文件目录解析；Evaluator Python 使用容器内命令名或绝对路径。
+Benchmark 业务配置按进程分开：平台读取项目 `config/benchmark/platform.yaml`，评测读取 `config/benchmark/evaluator.yaml`，执行客户端读取 `config/benchmark/executor.yaml`。各自的 `*.local.yaml` 覆盖项目默认文件，未指定字段保留已合并的值或程序默认值；合并规则以字段为准，普通数组整体替换。`null` 仅在字段允许时有效，后续含义由对应消费者决定，不能一概当作“恢复默认”。配置文件不设 `version` 字段，未知字段和错误类型会明确报错。相对路径按所在配置文件目录解析；Evaluator Python 使用容器内命令名或绝对路径。新增 Benchmark 配置须遵循[配置接入合同](./develop-benchmark.md#34-配置接入与发现)。
 
 本机覆盖文件不提交 Git。默认从安装根下的 `config/benchmark/` 加载，不依赖当前工作目录；`AGENT_INSIGHT_CONFIG_DIR` 可指定直接包含这三个 YAML 文件的其他目录，不会再自动追加子目录。业务环境变量不参与覆盖，残留变量会提示迁移。端口、数据库连接、密钥、运行目录及服务通信地址仍保留环境配置，通信地址现有的热更新机制保持不变。
 
@@ -118,6 +118,32 @@ bash scripts/start.sh --port 3100
 | 参数 | 含义 |
 |---|---|
 | `--port` | 本次启动使用的 Agent Insight 端口 |
+
+### 执行 Profile 的后端配置
+
+在 `executor.local.yaml` 显式声明后端与专属选项。以下示例绑定一个使用原生工作区的自定义 Benchmark；它不表示任意 Benchmark 均可使用此环境：
+
+```yaml
+execution:
+  profiles:
+    native:
+      backend: local
+      options:
+        targets:
+          - platform: pi-agent
+            agents: [pi-agent]
+        models: []
+  bindings:
+    - benchmarks: [example-task]
+      platforms: [pi-agent]
+      profile: native
+```
+
+Agent/模型从客户端支持 Trace 的候选中确认；`models: []` 表示不额外限制原生模型目录。该接入的 Adapter 应生成 `execution.environment: {kind: workspace}`，网络为 `client-default`，不声明沙箱或资源隔离。若官方需要容器、断网或持续状态，选择并验证能满足要求的后端，不直接套用此示例。
+
+`backend: xgovernor` 的 `options` 接受原先的 Server、Docker、Runtime、模型等专属字段。未指定 backend 的旧 flat Profile 继续按 xGovernor 解析；原 SWE-bench 默认绑定及旧冻结摘要保持兼容。显式新格式只创建声明的 Profile，不隐式添加 xGovernor；bindings 须完整配置，数组覆盖旧值。同一 Benchmark/平台不能同时绑定多个 Profile，未知后端和未知字段会报错。
+
+本地能力探测不要求安装 xGovernor；xGovernor Profile 仍执行其 Linux、Docker/cgroup 和 Trace 检查。执行前重新核对冻结配置；所选后端不支持的环境或策略明确拒绝，不自动降级。界面按实际 Profile 显示网络及适用资源，未在页面验证时不能据后端测试宣称交互已通过。
 
 ## 4. 安装 Benchmark 数据集
 
@@ -211,7 +237,7 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 
 ### 5.3 可选：跨 Benchmark 共享镜像池
 
-镜像池和提前准备默认开启，同一 Docker daemon 上的不同 Benchmark 和用户共享镜像池。策略在评测机项目 `config/benchmark/evaluator.local.yaml` 设置，例如关闭预取：
+镜像池和提前准备默认开启，同一 Docker daemon 上的不同 Benchmark 和用户共享镜像池。是否进入镜像窗口由评分器实际返回的镜像需求决定：需求为空的评分任务跳过镜像准备，不占用 Case 镜像窗口或创建镜像准备条目，窗口刷新不影响其正常评分；任务校验、评测资产检查、并发和幂等仍生效。需要镜像的任务继续使用窗口、拉取与空间检查；评分器必须返回数组，无镜像时返回空数组，非法返回值报 `IMAGE_POOL_METADATA_INVALID`（HTTP 422，不可重试）。这不表示 Evaluator 服务自身无需容器，也无需为无镜像评分器关闭全局镜像池。策略在评测机项目 `config/benchmark/evaluator.local.yaml` 设置，例如关闭预取：
 
 ```yaml
 imagePool:
@@ -284,6 +310,14 @@ node scripts/configure-evaluator-target.js \
 | `--allow-insecure-http true|false` | 是否允许非本机 HTTP 地址，默认 `true` |
 
 配置会自动保存并在后续请求中生效，无需重启 Agent Insight。
+
+### 6.3 Evaluator 回调 Agent Insight 的地址
+
+除平台调用 Evaluator 外，Evaluator 还需要回传进度、证据和判定结果。平台在启动实验时，按该请求的 Host（或反向代理提供的 `x-forwarded-host`）冻结回调地址，所以这个地址必须能被 Evaluator 访问。
+
+本机把 Controller 装进 Docker 时，容器内的 `127.0.0.1` 指向容器自身，不能回连宿主上的 `3000` 端口。此时应通过反向代理或显式指定 `x-forwarded-host`，让平台记录的对外地址在容器内可解析，例如 `http://host.docker.internal:3000`。`scripts/evaluator.sh start` 已为 Controller 注入 `host.docker.internal` 主机映射。
+
+回调地址不可达的典型表现是评测任务长时间停留在下发阶段，最终以 `EVALUATION_TIMEOUT` 结束，而 Controller 侧没有对应请求记录。
 
 ## 7. 安装 Agent 执行客户端
 
@@ -376,7 +410,7 @@ execution:
 | 模型配置或凭据解析失败 | 按 Case 中的具体原因检查原生 Agent 配置、凭据库及运行账号 |
 | 已有 Patch，但评测失败 | 按 [SWE-bench 排查与更新](./deploy-swe-bench.md#6-排查与更新) 检查 Evaluator |
 
-手动版本更新、回退及安装实现见 [受管理安装与版本](./develop-benchmark.md#受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](./develop-benchmark.md#原生执行高级配置)。
+手动版本更新、回退及安装实现见 [受管理安装与版本](../../../../../design/evaluation/benchmark-xgovernor-local-docker/phase2-requirements-design.md#411-受管理安装与版本)；完整 Profile 配置见 [原生执行高级配置](../../../../../design/evaluation/benchmark-xgovernor-local-docker/phase2-requirements-design.md#原生执行高级配置)。
 
 ## 8. 整体验收
 
@@ -425,6 +459,8 @@ bash scripts/evaluator.sh start \
 如果更新包含 Agent Runtime 或 Collector，在每台执行机重新运行页面生成的客户端安装命令。
 
 回滚时，Agent Insight、Evaluator 和 Agent 执行客户端应回到相互兼容的版本。
+
+停止服务或取消任务的持久化标记不会因重启自动清除。评分接口遇到这些状态返回 HTTP 409，保留 `SERVICE_STOPPED` / `EVALUATION_CANCELLED` 等实际控制原因，`retryable: false`，不应按内部 500 或镜像等待无限重发旧请求。恢复服务后，新任务可正常提交，已取消的旧评测仍须通过平台正式重评/重试入口处理；支持复用既有提交时无需重跑 Agent，不手动删除取消记录绕过状态检查。
 
 ## 10. 安装完成标准
 

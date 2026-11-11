@@ -43,6 +43,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
     LLM_PROVIDERS,
     CATEGORY_ORDER,
+    getProvider,
     getProviderLogoUrl,
     resolveCatalogProvider,
     type LlmProvider,
@@ -66,19 +67,6 @@ export interface EvalConfigItem {
     headers?: Record<string, string>;
     testTimeoutMs?: number;
 }
-
-interface ProviderPreset {
-    baseUrl: string;
-    model: string;
-}
-
-const PROVIDER_PRESETS: Record<EvalConfigItem['provider'], ProviderPreset> = {
-    'deepseek-official': { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
-    siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3' },
-    openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
-    anthropic: { baseUrl: 'https://api.anthropic.com/v1', model: 'claude-3-5-sonnet-20240620' },
-    custom: { baseUrl: '', model: '' },
-};
 
 type ProviderCategory = 'saas' | 'cn' | 'local' | 'other';
 
@@ -454,7 +442,10 @@ export function ModelConfigManager() {
             ) : editingConfigId ? (
                 <EditForm
                     config={tempConfig}
-                    setConfig={setTempConfig}
+                    setConfig={config => {
+                        if (config.provider !== tempConfig.provider) setPickedProvider(null);
+                        setTempConfig(config);
+                    }}
                     onCancel={() => { setEditingConfigId(null); setPickedProvider(null); }}
                     onReselect={editingConfigId === 'new' ? reopenPicker : undefined}
                     onSave={saveCurrentConfig}
@@ -1193,7 +1184,7 @@ function ProviderPicker({
 }
 
 function EditForm({
-    config, setConfig, onCancel, onReselect, onSave, isSaving, isTesting, onCancelTest, isDefault, pickedProvider, locale,
+    config, setConfig, onCancel, onReselect, onSave, isSaving, isTesting, onCancelTest, isDefault, pickedProvider: providerFromPicker, locale,
 }: {
     config: EvalConfigItem;
     setConfig: (c: EvalConfigItem) => void;
@@ -1207,13 +1198,15 @@ function EditForm({
     pickedProvider?: LlmProvider | null;
     locale: string;
 }) {
+    const isAzureOpenAI = resolveCatalogProvider(config.provider, config.baseUrl)?.id === 'azure-openai';
+    const pickedProvider = providerFromPicker?.id === 'azure-openai' && !isAzureOpenAI ? null : providerFromPicker;
     const onProviderChange = (p: EvalConfigItem['provider']) => {
-        const preset = PROVIDER_PRESETS[p];
+        const preset = getProvider(p);
         setConfig({
             ...config,
             provider: p,
-            baseUrl: preset.baseUrl || config.baseUrl,
-            model: preset.model || config.model,
+            baseUrl: preset?.baseUrl || config.baseUrl,
+            model: preset?.defaultModel || config.model,
             headers: p === 'custom' ? config.headers : undefined,
         });
     };
@@ -1285,10 +1278,12 @@ function EditForm({
                     />
                 </Field>
 
-                <Field label={locale === 'zh' ? '模型名' : 'Model Name'}>
+                <Field label={isAzureOpenAI
+                    ? (locale === 'zh' ? '部署名称' : 'Deployment Name')
+                    : (locale === 'zh' ? '模型名' : 'Model Name')}>
                     <input
                         style={inputStyle}
-                        placeholder="deepseek-v4-flash / gpt-4o / ..."
+                        placeholder={isAzureOpenAI ? 'my-model-deployment' : 'deepseek-v4-flash / gpt-4o / ...'}
                         value={config.model || ''}
                         disabled={isDefault}
                         onChange={e => setConfig({ ...config, model: e.target.value })}

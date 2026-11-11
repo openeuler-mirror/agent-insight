@@ -16,8 +16,9 @@
 
 import { NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
+import { z } from 'zod';
 
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
 import {
   buildDiagnosisPrompt,
   buildFallbackDiagnosis,
@@ -27,6 +28,8 @@ import {
 import { getActiveConfig } from '@/lib/storage/server-config';
 
 export const dynamic = 'force-dynamic';
+
+const diagnosisSchema = z.object({ problem: z.string(), suggestion: z.string() });
 
 function isSnapshot(value: unknown): value is SkillDiagnosisSnapshot {
   if (!value || typeof value !== 'object') return false;
@@ -70,11 +73,10 @@ export async function POST(
     }
 
     try {
-      const { customFetch } = getProxyConfig();
       const client = new OpenAI({
         apiKey: activeConfig.apiKey || 'no-api-key-required',
         baseURL: activeConfig.baseUrl || 'https://api.deepseek.com',
-        fetch: customFetch as typeof fetch | undefined,
+        fetch: getModelFetch(),
       });
       const model = activeConfig.model || 'deepseek-chat';
       const prompt = buildDiagnosisPrompt(safeSnapshot);
@@ -84,7 +86,7 @@ export async function POST(
           { role: 'system', content: prompt.system },
           { role: 'user', content: prompt.user },
         ],
-        response_format: { type: 'json_object' },
+        response_format: getJsonResponseFormat(client.baseURL, 'skill_diagnosis', diagnosisSchema),
       });
       const content = completion.choices?.[0]?.message?.content || '';
       const parsed = parseDiagnosisResponse(content);

@@ -92,7 +92,7 @@ test("registry adapters keep direct references to existing functions", () => {
   assert.equal(getAdapter("qwencode").extractSkills, extractSkillsWithVersionsFromToolInteractions)
   assert.equal(getAdapter("qwencode").capabilities?.subagentTree, true)
   assert.equal(getAdapter("qwencode").sessionMergeStrategy, "snapshot-replace")
-assert.equal(getAdapter("codeagent").capabilities?.skillScope, "agent-tree")
+  assert.equal(getAdapter("codeagent").capabilities?.skillScope, "agent-tree")
   assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
   assert.equal(getAdapter("openclaw").capabilities?.subagentTree, true)
   assert.equal(getAdapter("openclaw").capabilities?.skillScope, "session")
