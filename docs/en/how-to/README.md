@@ -49,6 +49,8 @@ Default Benchmark acceptance now uses local checks, frozen-submission scoring co
 
 Benchmark execution Profiles accept explicit `backend/options`. Native local probing does not require xGovernor or Docker; legacy xGovernor settings and frozen identities remain compatible. See the [Chinese deployment guide](../../zh/how-to/evaluation/benchmarks/deploy-services.md#执行-profile-的后端配置).
 
+After a diagnosed optimization passes retesting and is published, deploy it to the source client from the optimization record. The client creates a version-labelled backup before replacing the Skill. See [deploying a published version (Chinese)](../../zh/how-to/optimization/skills/optimize.md#6-下发已发布版本).
+
 [Deploy on OpenShift](./platform/deploy-openshift.md) covers UBI9 images, PVC/SCC, HTTPS Routes, Developer Sandbox builds and acceptance.
 
 Dataset options show the name, type, and case count. When generating a Trace in an ordinary Agent experiment, the Agent chooses from the Skills available in its runtime environment. In Skill use-case experiments, the wizard header shows the selected Skill and version. In A/B experiments, the header shows the Skill and each group shows its version or the no-Skill baseline. See the guides for [ordinary experiments](../../zh/how-to/evaluation/experiments.md), [use-case analysis](../../zh/how-to/evaluation/skills/use-case-analysis.md), and [A/B testing](../../zh/how-to/evaluation/skills/ab-test.md) in Chinese.

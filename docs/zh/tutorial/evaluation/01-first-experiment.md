@@ -62,6 +62,8 @@ changefreq: monthly
 
 首次运行不建议使用监听模式。监听模式适合持续评测后续产生的新 Trace。
 
+要用 JiuwenSwarm 生成新的 Trace，请先准备一个含任务输入的数据集，并确保 Gateway、AgentServer、OTLP 采集链路及 Agent Insight 客户端在线。第一步选择 `main_agent` 和数据集，第二步选择 **生成 Trace**、该客户端的运行主机及 Gateway 已配置的模型（也可选 **平台默认**），再勾选 Case。任务会发送到新的 JiuwenSwarm 会话；具体配置与故障排查见[实验操作指南](../../how-to/evaluation/experiments.md#生成新-trace)。
+
 ## 步骤三：处理预期输出
 
 - 评估器不需要预期输出时，可以直接进入下一步；

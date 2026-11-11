@@ -87,15 +87,23 @@ export async function DELETE(
           }
         }
 
-        await db.deleteSkillVersion(id, version);
-
+        let newActiveVersion: number | null = null;
         if (skill.activeVersion === version) {
             const remainingVersions = (skill.versions || []).filter((v: any) => v.version !== version);
-            if (remainingVersions.length > 0) {
-                const newActiveVersion = remainingVersions[0].version;
-                await db.updateSkill(id, { activeVersion: newActiveVersion });
-                console.log(`[Delete Version] Updated activeVersion from ${version} to ${newActiveVersion}`);
+            const verifiedVersions = remainingVersions.filter((candidate: any) => (
+                candidate.verificationMode !== 'external' || candidate.verificationStatus === 'passed'
+            ));
+            if (verifiedVersions.length === 0) {
+                return NextResponse.json({ error: 'No verified version is available to become active' }, { status: 409 });
             }
+            newActiveVersion = verifiedVersions[0].version;
+        }
+
+        await db.deleteSkillVersion(id, version);
+
+        if (newActiveVersion !== null) {
+            await db.updateSkill(id, { activeVersion: newActiveVersion });
+            console.log(`[Delete Version] Updated activeVersion from ${version} to ${newActiveVersion}`);
         }
 
         recordUsageEvent({ user: username, featureKey: 'skill', eventKey: 'skill.delete' });

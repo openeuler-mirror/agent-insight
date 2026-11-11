@@ -50,12 +50,12 @@ test('a poll aborted while reading a candidate does not claim it', async (t) => 
   const { client, frame } = await fixture()
   const controller = new AbortController()
   const find = prisma.reliabilityCommand.findFirst.bind(prisma.reliabilityCommand)
-  prisma.reliabilityCommand.findFirst = async (...args: Parameters<typeof find>) => {
-    const row = await find(...args)
+  Reflect.set(prisma.reliabilityCommand, 'findFirst', async (args?: unknown) => {
+    const row = await find(args as never)
     controller.abort()
     return row
-  }
-  t.after(() => { prisma.reliabilityCommand.findFirst = find })
+  })
+  t.after(() => { Reflect.set(prisma.reliabilityCommand, 'findFirst', find) })
   assert.equal(await claimNextCommand(client.clientId, { signal: controller.signal }), null)
   assert.equal((await getCommand(frame.commandId))?.status, 'CREATED')
 })
@@ -65,13 +65,13 @@ test('concurrent polls have exactly one command-claim winner', async (t) => {
   const find = prisma.reliabilityCommand.findFirst.bind(prisma.reliabilityCommand)
   let arrived = 0, release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  prisma.reliabilityCommand.findFirst = async (...args: Parameters<typeof find>) => {
-    const row = await find(...args)
+  Reflect.set(prisma.reliabilityCommand, 'findFirst', async (args?: unknown) => {
+    const row = await find(args as never)
     if (++arrived === 2) release()
     await gate
     return row
-  }
-  t.after(() => { prisma.reliabilityCommand.findFirst = find })
+  })
+  t.after(() => { Reflect.set(prisma.reliabilityCommand, 'findFirst', find) })
   const claimed = await Promise.all([claimNextCommand(client.clientId), claimNextCommand(client.clientId)])
   assert.deepEqual(claimed.filter(Boolean).map(item => item!.commandId), [frame.commandId])
 })
@@ -131,11 +131,12 @@ test('ACK timeout compare-and-set cannot overwrite a concurrently accepted recei
   const { frame } = await fixture()
   await prisma.reliabilityCommand.update({ where: { commandId: frame.commandId }, data: { status: 'SENT', sentAt: new Date(Date.now() - 60_000) } })
   const update = prisma.reliabilityCommand.updateMany.bind(prisma.reliabilityCommand)
-  prisma.reliabilityCommand.updateMany = async (...args: Parameters<typeof update>) => {
-    if (args[0]?.data.errorCode === 'ACK_TIMEOUT') await update({ where: { commandId: frame.commandId }, data: { status: 'RECEIVED', receivedAt: new Date() } })
-    return update(...args)
-  }
-  t.after(() => { prisma.reliabilityCommand.updateMany = update })
+  Reflect.set(prisma.reliabilityCommand, 'updateMany', async (args: unknown) => {
+    const input = args as { data: { errorCode?: string } }
+    if (input.data.errorCode === 'ACK_TIMEOUT') await update({ where: { commandId: frame.commandId }, data: { status: 'RECEIVED', receivedAt: new Date() } })
+    return update(args as never)
+  })
+  t.after(() => { Reflect.set(prisma.reliabilityCommand, 'updateMany', update) })
   assert.equal((await getCommand(frame.commandId))?.status, 'RECEIVED')
 })
 
@@ -144,11 +145,12 @@ test('a concurrent expiry winner never produces a successful late RECEIVED ackno
   const { client, frame } = await fixture()
   await prisma.reliabilityCommand.update({ where: { commandId: frame.commandId }, data: { expiresAt: new Date(Date.now() - 1) } })
   const update = prisma.reliabilityCommand.updateMany.bind(prisma.reliabilityCommand)
-  prisma.reliabilityCommand.updateMany = async (...args: Parameters<typeof update>) => {
-    if (args[0]?.data.status === 'EXPIRED') await update({ where: { commandId: frame.commandId }, data: { status: 'EXPIRED' } })
-    return update(...args)
-  }
-  t.after(() => { prisma.reliabilityCommand.updateMany = update })
+  Reflect.set(prisma.reliabilityCommand, 'updateMany', async (args: unknown) => {
+    const input = args as { data: { status?: string } }
+    if (input.data.status === 'EXPIRED') await update({ where: { commandId: frame.commandId }, data: { status: 'EXPIRED' } })
+    return update(args as never)
+  })
+  t.after(() => { Reflect.set(prisma.reliabilityCommand, 'updateMany', update) })
   await assert.rejects(applyCommandStatus({ clientId: client.clientId, commandId: frame.commandId, status: 'RECEIVED' }), (error: Error & { code?: string }) => error.code === 'COMMAND_NOT_ACCEPTED')
   assert.equal((await getCommand(frame.commandId))?.status, 'EXPIRED')
   await applyCommandStatus({ clientId: client.clientId, commandId: frame.commandId, status: 'SUCCEEDED' })

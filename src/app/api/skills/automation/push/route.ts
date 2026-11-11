@@ -52,6 +52,9 @@ export async function POST(request: NextRequest) {
         if (!versionRecord) {
             return NextResponse.json({ error: `Version ${targetVersion} not found for skill '${name}'` }, { status: 404 });
         }
+        if (versionRecord.verificationMode === 'external' && versionRecord.verificationStatus !== 'passed') {
+            return NextResponse.json({ error: `Version ${targetVersion} has not passed external verification` }, { status: 409 });
+        }
 
         const updated = await db.updateSkill(skill.id, {
             activeVersion: targetVersion,

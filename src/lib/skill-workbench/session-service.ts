@@ -22,6 +22,7 @@ import { prismaRaw } from '@/lib/storage/prisma';
 import type { SkillWorkbenchActiveView } from './domain';
 import { resolveRetestableExperimentBaseline } from './experiment-baseline';
 import { parseOptimizationBlockingIssues } from './optimization-service';
+import { loadOptimizationPublishedVersionStates } from './version-verification-service';
 
 function parseJson<T>(value: string, fallback: T): T {
   try {
@@ -100,8 +101,16 @@ export async function getSkillWorkbenchSession(user: string, id: string) {
     evaluation.id,
     parseOptimizationBlockingIssues(evaluation.id, evaluation.issuesJson),
   ]));
+  const publishedVersionStates = await loadOptimizationPublishedVersionStates(user, session.optimizations);
   const optimizations = await Promise.all(session.optimizations.map(async (record) => ({
     ...record,
+    skillId: publishedVersionStates.get(record.id)?.skillId || null,
+    activeVersion: publishedVersionStates.get(record.id)?.activeVersion ?? null,
+    verificationStatus: publishedVersionStates.get(record.id)?.verificationStatus || null,
+    verificationMode: publishedVersionStates.get(record.id)?.verificationMode || null,
+    verifiedAt: publishedVersionStates.get(record.id)?.verifiedAt || null,
+    verifiedBy: publishedVersionStates.get(record.id)?.verifiedBy || null,
+    verificationNote: publishedVersionStates.get(record.id)?.verificationNote || null,
     sourceSession: { id: session.id, title: session.title },
     candidateFiles: parseJson<Record<string, string>>(record.candidateFilesJson, {}),
     diff: parseJson<unknown[]>(record.diffJson, []),

@@ -264,6 +264,7 @@ export function aggregatePiAgentTraceEvents(
   );
   const interactions: AnyObj[] = [];
   const invokedSkills: InvokedSkill[] = [];
+  const skillOrigins: NonNullable<ExecutionRecord['skill_origins']> = [];
   const skillNames = new Set<string>();
   const llmEvents: OtelTraceEvent[] = [];
   const toolEvents: OtelTraceEvent[] = [];
@@ -368,6 +369,19 @@ export function aggregatePiAgentTraceEvents(
       if (name && !skillNames.has(name)) {
         skillNames.add(name);
         invokedSkills.push({ name, version: numericSkillVersion(version) });
+      }
+      const originRef = content(attrs(event)['skill.origin_ref']);
+      const clientId = content(attrs(event)['agent.insight.client_id']);
+      if (name && originRef && clientId && !skillOrigins.some((origin) => origin.skillName === name)) {
+        skillOrigins.push({
+          skillName: name,
+          skillVersion: numericSkillVersion(version),
+          clientId,
+          platform: 'pi-agent',
+          targetMode: 'execution_origin',
+          originRef,
+          displayPath: content(attrs(event)['skill.display_path']) || null,
+        });
       }
       interactions.push({
         ...interactionBase(event, owner),
@@ -518,9 +532,11 @@ export function aggregatePiAgentTraceEvents(
     complete_session_snapshot: true,
     label: 'pi-agent',
     user: first.user || 'anonymous',
+    clientId: ordered.map((event) => content(attrs(event)['agent.insight.client_id'])).find(Boolean) || null,
     interactions,
     invokedSkills,
     invoked_skills: invokedSkills,
+    skill_origins: skillOrigins,
     skills: invokedSkills.map((skill) => skill.name),
     agent: 'pi-agent',
     agentName: 'pi-agent',

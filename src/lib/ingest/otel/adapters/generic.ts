@@ -170,6 +170,26 @@ export function aggregateGenericOtelTraceEvents(sessionId: string, events: OtelT
   const firstEvent = ordered[0];
   const modelEvent = ordered.find((event) => eventModel(event));
   const traceLifecycle = explicitTraceLifecycle(ordered);
+  const skillEvents = ordered.filter((event) => typeof event.attributes?.['skill.name'] === 'string');
+  const invokedSkills = skillEvents
+    .map((event) => ({ name: String(event.attributes['skill.name']).trim(), version: null }))
+    .filter((skill, index, list) => skill.name && list.findIndex((item) => item.name === skill.name) === index);
+  const skillOrigins = skillEvents.flatMap((event) => {
+    const skillName = String(event.attributes['skill.name'] || '').trim();
+    const originRef = String(event.attributes['skill.origin_ref'] || '').trim();
+    const clientId = String(event.attributes['agent.insight.client_id'] || '').trim();
+    if (!skillName || !originRef || !clientId) return [];
+    return [{
+      skillName,
+      skillVersion: null,
+      clientId,
+      platform: 'xiaoo',
+      targetMode: 'execution_origin' as const,
+      originRef,
+      displayPath: String(event.attributes['skill.display_path'] || '').trim() || null,
+    }];
+  }).filter((origin, index, list) => list.findIndex((item) => item.skillName === origin.skillName) === index);
+  const clientId = ordered.map((event) => String(event.attributes?.['agent.insight.client_id'] || '').trim()).find(Boolean);
 
   return {
     task_id: sessionId,
@@ -184,6 +204,11 @@ export function aggregateGenericOtelTraceEvents(sessionId: string, events: OtelT
     trace_completed_at: traceLifecycle?.completedAt,
     label: firstEvent.serviceName || 'unknown-service',
     user: firstEvent.user || 'anonymous',
+    clientId: clientId || null,
+    invokedSkills,
+    invoked_skills: invokedSkills,
+    skills: invokedSkills.map((skill) => skill.name),
+    skill_origins: skillOrigins,
     interactions,
     agent: firstEvent.serviceName,
     agentName: firstEvent.serviceName,

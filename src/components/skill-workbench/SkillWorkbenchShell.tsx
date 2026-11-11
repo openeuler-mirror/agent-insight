@@ -686,7 +686,7 @@ export function SkillWorkbenchShell() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user, confirmed: true }),
+          body: JSON.stringify({ user, confirmed: true, verificationMode: 'external', activate: false }),
         },
       );
       const data = await response.json();
@@ -720,6 +720,71 @@ export function SkillWorkbenchShell() {
       setPublishCandidate(null);
     } catch (publishError) {
       setError(publishError instanceof Error ? publishError.message : '发布优化候选失败');
+    } finally {
+      setPublishingCandidateId(null);
+    }
+  };
+
+  const downloadPublishedOptimization = (record: OptimizationRecordView) => {
+    if (!user || !record.skillId || record.publishedVersion === null) {
+      setError('正式版本信息尚未同步，请刷新后重试');
+      return;
+    }
+    const prefix = process.env.NEXT_PUBLIC_URL_PREFIX || '';
+    window.open(`${prefix}/api/skills/${encodeURIComponent(record.skillId)}/versions/${record.publishedVersion}/download?user=${encodeURIComponent(user)}`, '_blank');
+  };
+
+  const recordPublishedVerification = async (record: OptimizationRecordView, result: 'passed' | 'failed') => {
+    if (!user || record.publishedVersion === null || publishingCandidateId) return;
+    const action = result === 'passed' ? '通过' : '失败';
+    if (!window.confirm(`确认将 ${record.skillName} v${record.publishedVersion} 登记为外部验证${action}？`)) return;
+    setPublishingCandidateId(record.id);
+    setError('');
+    try {
+      const response = await apiFetch(
+        `/api/skills/by-name/${encodeURIComponent(record.skillName)}/versions/${record.publishedVersion}/verification`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user, result }),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '登记外部验证结果失败');
+      await Promise.all([
+        loadSession(record.sessionId, user),
+        selectedAsset ? loadOptimizationRecords(selectedAsset, user) : Promise.resolve(),
+      ]);
+    } catch (verificationError) {
+      setError(verificationError instanceof Error ? verificationError.message : '登记外部验证结果失败');
+    } finally {
+      setPublishingCandidateId(null);
+    }
+  };
+
+  const activatePublishedOptimization = async (record: OptimizationRecordView) => {
+    if (!user || record.publishedVersion === null || publishingCandidateId) return;
+    if (!window.confirm(`确认激活 ${record.skillName} v${record.publishedVersion}？之后默认执行将使用该版本。`)) return;
+    setPublishingCandidateId(record.id);
+    setError('');
+    try {
+      const response = await apiFetch(
+        `/api/skills/by-name/${encodeURIComponent(record.skillName)}/versions/${record.publishedVersion}/activate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user }),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '激活 Skill 版本失败');
+      await Promise.all([
+        loadSession(record.sessionId, user),
+        loadAssetCatalog(user),
+        selectedAsset ? loadOptimizationRecords(selectedAsset, user) : Promise.resolve(),
+      ]);
+    } catch (activationError) {
+      setError(activationError instanceof Error ? activationError.message : '激活 Skill 版本失败');
     } finally {
       setPublishingCandidateId(null);
     }
@@ -1272,6 +1337,9 @@ export function SkillWorkbenchShell() {
                   quickActions={workflowActions}
                   onViewRecords={(record) => void openOptimizationRecord(record)}
                   onPublish={(record) => void publishOptimization(record)}
+                  onDownloadPublished={(record) => downloadPublishedOptimization(record)}
+                  onRecordVerification={(record, result) => void recordPublishedVerification(record, result)}
+                  onActivatePublished={(record) => void activatePublishedOptimization(record)}
                   onRepair={(record) => void startOptimization({ autoRun: true, record })}
                   onAutoStartConsumed={() => {
                     setAutoStartOptimization(false);
@@ -1493,6 +1561,7 @@ export function SkillWorkbenchShell() {
         ) : currentView === 'optimization' && optimizationRecords.length ? (
           <OptimizationRecordsPanel
             records={optimizationRecords}
+            user={user || ''}
             onRetest={retestDiagnosis}
             retestingId={retestingId}
             selectedRecordId={selectedOptimizationRecordId}
@@ -1530,12 +1599,13 @@ export function SkillWorkbenchShell() {
         />
       )}
       {publishCandidate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="发布优化候选">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="发布待验证版本">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl">
-            <h2 className="text-base font-semibold text-foreground">发布新版本</h2>
-            <p className="mt-2 text-xs leading-5 text-foreground-secondary">确认将 {publishCandidate.candidateVersionLabel} 发布为正式版本。发布后会立即成为当前激活版本，原版本仍保留在版本历史中。</p>
-            <div className="mt-4 grid grid-cols-2 gap-2 rounded-md bg-background-secondary p-3 text-xs"><span className="text-foreground-muted">当前版本</span><b className="text-right text-foreground">v{publishCandidate.baseVersion}</b><span className="text-foreground-muted">发布版本</span><b className="text-right text-primary">v{publishCandidate.baseVersion + 1}</b><span className="text-foreground-muted">修改文件</span><b className="text-right text-foreground">{publishCandidate.diff?.length || 0} 个</b></div>
-            <div className="mt-5 flex justify-end gap-2"><button type="button" disabled={publishingCandidateId !== null} onClick={() => setPublishCandidate(null)} className="h-8 rounded-md border border-border px-3 text-xs text-foreground-secondary">取消</button><button type="button" disabled={publishingCandidateId !== null} onClick={() => void confirmPublishOptimization()} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50">{publishingCandidateId ? <Loader2 className="size-3.5 animate-spin" /> : null}确认发布</button></div>
+            <h2 className="text-base font-semibold text-foreground">发布为待验证版本</h2>
+            <p className="mt-2 text-xs leading-5 text-foreground-secondary">确认将 {publishCandidate.candidateVersionLabel} 写入正式版本历史。该版本尚未完成外部行为验证，发布后不会替换当前激活版本 v{publishCandidate.activeVersion ?? publishCandidate.baseVersion}。</p>
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-md bg-background-secondary p-3 text-xs"><span className="text-foreground-muted">当前激活版本</span><b className="text-right text-foreground">v{publishCandidate.activeVersion ?? publishCandidate.baseVersion}</b><span className="text-foreground-muted">发布版本</span><b className="text-right text-primary">v{publishCandidate.baseVersion + 1}</b><span className="text-foreground-muted">发布后状态</span><b className="text-right text-warning">待外部验证</b><span className="text-foreground-muted">修改文件</span><b className="text-right text-foreground">{publishCandidate.diff?.length || 0} 个</b></div>
+            <p className="mt-3 rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-[11px] leading-4 text-warning">发布不代表行为验证通过。发布后请下载 ZIP 到实际环境验证，再在会话卡片登记结果。</p>
+            <div className="mt-5 flex justify-end gap-2"><button type="button" disabled={publishingCandidateId !== null} onClick={() => setPublishCandidate(null)} className="h-8 rounded-md border border-border px-3 text-xs text-foreground-secondary">取消</button><button type="button" disabled={publishingCandidateId !== null} onClick={() => void confirmPublishOptimization()} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50">{publishingCandidateId ? <Loader2 className="size-3.5 animate-spin" /> : null}确认发布待验证版本</button></div>
           </div>
         </div>
       )}

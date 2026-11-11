@@ -11,6 +11,8 @@ changefreq: "monthly"
 
 评测与优化闭环：[评测输入](./evaluation/experiments.md) → [智能诊断](./diagnosis/agent-debug/diagnosis.md) → [诊断优化计划与复测](./optimization/skills/optimize.md#根据智能诊断优化)。升级前先执行[数据库迁移与备份检查](./platform/upgrade-and-rollback.md)。
 
+诊断候选复测并发布后，可从优化记录将正式版本下发到来源客户端；路径约束、版本备份和历史版本降级见 [下发已发布版本](./optimization/skills/optimize.md#6-下发已发布版本)。
+
 平台评估器缺模型时提供 **去模型注册** 入口，配置并设为默认后可复用已有输出和 Trace 重评。操作见[实验](./evaluation/experiments.md#查看单条-case-详情)与[模型注册](./platform/settings/model-registry.md)。
 
 自定义评估器不再按 `ready` / `draft` 筛选或展示状态，保存后可用于 Skill 用例与 A/B 实验；前置条件和内置规则不变，见[评估器指南](./evaluation/evaluators.md)。

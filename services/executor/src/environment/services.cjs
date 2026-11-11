@@ -81,13 +81,31 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
       return issues
     }
     const name = context.platform === 'pi-agent' ? 'pi' : context.platform
-    if (!which(name)) return [issue('AGENT_NOT_INSTALLED', `请在执行机安装所选 Agent（${name}），然后再次点击“下一步”。`)]
+    if (context.platform !== 'jiuwenswarm' && !which(name)) return [issue('AGENT_NOT_INSTALLED', `请在执行机安装所选 Agent（${name}），然后再次点击“下一步”。`)]
     let runtime
     if (!options.sandbox) {
+      if (context.platform === 'jiuwenswarm') {
+        try { await client.refreshJiuwenRuntime?.() }
+        catch (cause) { return [issue(cause.code || 'JIUWEN_DISCOVERY_FAILED', cause.message)] }
+      }
       runtime = client.probeExperimentRuntime(context.platform)
-      if (!runtime.ready) issues.push(issue('AGENT_TRACE_NOT_READY', '所选 Agent 的执行或链路回传组件未就绪，请重新执行该 Agent 的链路跟踪安装命令。'))
+      let enterpriseCatalog
+      if (context.platform === 'jiuwenswarm') {
+        if (runtime.enterprise) {
+          const entry = runtime.agentCatalog?.find(a => a.id === context.agent)
+          if (!entry) return [issue('JIUWEN_CONTEXT_UNAVAILABLE', runtime.reason || '目标 Agent 不在当前账号的授权范围内，请刷新后重新选择。')]
+          enterpriseCatalog = { version: 'enterprise-ws-v1', agents: runtime.agents, agentCatalog: runtime.agentCatalog, models: [] }
+          runtime = { ...runtime, ready: entry.ready, models: entry.models, reason: entry.unavailableReason }
+        } else if (context.agent !== 'main_agent') return [issue('AGENT_UNSUPPORTED', '当前 JiuwenSwarm 个人版仅支持 main_agent。')]
+      }
+      if (!runtime.ready) issues.push(issue('AGENT_TRACE_NOT_READY', context.platform === 'jiuwenswarm'
+        ? runtime.reason || 'JiuwenSwarm Gateway 不可达，请检查客户端服务环境中的 AGENT_INSIGHT_JIUWEN_WS_URL 和容器端口映射。'
+        : '所选 Agent 的执行或链路回传组件未就绪，请重新执行该 Agent 的链路跟踪安装命令。'))
       else {
-        recordPlatform(context, { runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 5 } : {}) } })
+        if (context.platform === 'jiuwenswarm' && context.model && !runtime.models?.includes(context.model)) {
+          issues.push(issue('MODEL_UNAVAILABLE', '所选 JiuwenSwarm 模型已不可用，请刷新模型列表。'))
+        }
+        recordPlatform(context, { ...enterpriseCatalog, runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 5 } : {}) } })
         capabilities.components[`agent-runtime/${context.platform}/v1`] = { ready: true }
       }
     }

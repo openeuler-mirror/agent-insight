@@ -53,9 +53,29 @@ test('action whitelist rejects unknown actions', () => {
   assert.equal(isWhitelistedAction('APPLY_CLIENT_CONFIG'), true)
   assert.equal(isWhitelistedAction('RUN_EXPERIMENT_CASE'), true)
   assert.equal(isWhitelistedAction('RUN_BENCHMARK_CASE'), true)
+  assert.equal(isWhitelistedAction('PRECHECK_SKILL_DEPLOYMENT'), true)
+  assert.equal(isWhitelistedAction('DEPLOY_SKILL_ARTIFACT'), true)
   assert.equal(isWhitelistedAction('RUN_SHELL'), false)
   assert.equal(isWhitelistedAction(''), false)
   assert.equal(isWhitelistedAction(null), false)
+})
+
+test('skill deployment actions accept only opaque references and reject nested paths', () => {
+  assert.doesNotThrow(() => assertPayloadSafe('PRECHECK_SKILL_DEPLOYMENT', {
+    platform: 'opencode', skillName: 'demo-skill',
+    target: { mode: 'execution_origin', originRef: 'origin_1234567890abcdef12345678' },
+  }))
+  assert.doesNotThrow(() => assertPayloadSafe('DEPLOY_SKILL_ARTIFACT', {
+    deploymentId: 'deploy_test_1', artifactRef: 'skillart_test_1', platform: 'opencode',
+    skillName: 'demo-skill', skillVersion: 2, contentHash: '1234567890abcdef',
+    expectedCurrent: { skillVersion: 1, contentHash: 'abcdef1234567890' },
+    target: { mode: 'execution_origin', originRef: 'origin_1234567890abcdef12345678' },
+  }))
+  assert.throws(() => assertPayloadSafe('DEPLOY_SKILL_ARTIFACT', {
+    deploymentId: 'deploy_test_1', artifactRef: 'skillart_test_1', platform: 'opencode',
+    skillName: 'demo-skill', skillVersion: 2, contentHash: '1234567890abcdef',
+    target: { mode: 'execution_origin', originRef: 'origin_1234567890abcdef12345678', path: '/tmp/evil' },
+  }), (error: any) => error.code === 'COMMAND_PAYLOAD_FORBIDDEN')
 })
 
 test('config actions reject url/path/config payload keys', () => {

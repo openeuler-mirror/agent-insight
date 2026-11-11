@@ -116,6 +116,7 @@ interface AgentTargetOption {
 
 interface AgentOption {
   name: string;
+  label?: string;
   traces: number;
   frameworks: string[];
   executable: boolean;
@@ -2009,7 +2010,7 @@ export function ExperimentWizard({
                     <option value="">请选择 Agent…</option>
                     {agents.map((agent) => (
                       <option key={agent.name} value={agent.name}>
-                        {agent.name} · {agent.frameworks.join(' / ') || '未知框架'}
+                        {agent.label || agent.name} · {agent.frameworks.join(' / ') || '未知框架'}
                         {agent.traces ? ` · ${agent.traces} 条 Trace` : ''}
                         {agent.targets.length ? ` · 可执行 ${agent.targets.length} 台` : ''}
                       </option>

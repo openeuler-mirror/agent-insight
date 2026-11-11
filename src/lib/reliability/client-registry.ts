@@ -32,6 +32,14 @@ export type ClientPlatformCapability = {
   version?: string
   models?: string[]
   agents?: string[]
+  agentCatalog?: Array<{ id: string; label: string; models: string[]; ready: boolean; unavailableReason?: string }>
+  skillDeployment?: {
+    protocolVersion: 1
+    ready: boolean
+    modes: Array<'execution_origin' | 'framework_global'>
+    backup?: 'retained'
+    reload?: 'restart_required'
+  }
   runExperimentCase?: {
     version: number
     returnsTraceId: boolean
@@ -325,6 +333,24 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
             agents: Array.isArray(rec.agents)
               ? rec.agents.map((agent) => String(agent).trim()).filter(Boolean)
               : [],
+            ...(Array.isArray(rec.agentCatalog) ? { agentCatalog: rec.agentCatalog
+              .filter(a => a && typeof a.id === 'string' && rec.agents?.includes(a.id))
+              .map(a => ({ id: a.id, label: String(a.label || a.id).slice(0, 512),
+                models: Array.isArray(a.models) ? a.models.filter(m => typeof m === 'string').slice(0, 200) : [],
+                ready: a.ready === true,
+                ...(typeof a.unavailableReason === 'string' ? { unavailableReason: a.unavailableReason.slice(0, 1000) } : {}),
+              })) } : {}),
+            ...(rec.skillDeployment && rec.skillDeployment.protocolVersion === 1 ? {
+              skillDeployment: {
+                protocolVersion: 1,
+                ready: rec.skillDeployment.ready === true,
+                modes: Array.isArray(rec.skillDeployment.modes)
+                  ? [...new Set(rec.skillDeployment.modes.filter(mode => mode === 'execution_origin' || mode === 'framework_global'))]
+                  : [],
+                ...(rec.skillDeployment.backup === 'retained' ? { backup: 'retained' as const } : {}),
+                ...(rec.skillDeployment.reload === 'restart_required' ? { reload: 'restart_required' as const } : {}),
+              },
+            } : {}),
             runExperimentCase: rec.runExperimentCase
               && typeof rec.runExperimentCase === 'object'
               ? {

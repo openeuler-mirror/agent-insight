@@ -86,3 +86,31 @@ test('xiaoo display identity keeps the native CLI agent id on executable targets
   assert.equal(xiaoo.targets[0].agent, 'defaultagent');
   assert.equal(xiaoo.targets[0].supportsGenericTrace, true);
 });
+
+test('an online JiuwenSwarm target hides trace-only collector names from the new experiment selector', async (t) => {
+  const user = `experiment-jiuwen-${RUN_ID}`;
+  const clientId = `jiuwen-client-${RUN_ID}`;
+  await prisma.execution.createMany({ data: ['main_agent', 'jiuwenswarm', 'main_agent_react'].map((agentName, index) => ({
+    taskId: `jiuwen-candidate-${RUN_ID}-${index}`, framework: 'jiuwenswarm', agentName, user,
+  })) });
+  await prisma.reliabilityClient.create({ data: {
+    clientId, user, name: 'jiuwen host', hostname: 'jiuwen-host', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(),
+    capabilitiesJson: JSON.stringify({
+      actions: ['RUN_EXPERIMENT_CASE'],
+      platforms: [{ id: 'jiuwenswarm', agents: ['main_agent'], models: [], actions: ['RUN_EXPERIMENT_CASE'],
+        runExperimentCase: { version: 2, returnsTraceId: true, ready: true } }],
+      components: { 'agent-runtime/jiuwenswarm/v1': { ready: true } },
+    }),
+  } });
+  t.after(async () => {
+    await prisma.reliabilityClient.deleteMany({ where: { clientId } });
+    await prisma.execution.deleteMany({ where: { user } });
+  });
+
+  const response = await listExperimentAgents(new Request(`http://localhost/api/experiments/agents?user=${encodeURIComponent(user)}`));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.agents.filter((agent: { frameworks: string[] }) => agent.frameworks.includes('jiuwenswarm'))
+    .map((agent: { name: string }) => agent.name), ['main_agent']);
+  assert.equal(body.agents.find((agent: { name: string }) => agent.name === 'main_agent').traces, 1);
+});
