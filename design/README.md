@@ -14,6 +14,64 @@
 > 而是 `design.md` + `assets/` + 可选的 `index.html`(给人读的渲染版)。它们原先放在已废弃的 `designs/`
 > 目录下,现已并入本目录统一索引。
 
+## 需求 Epic
+
+所有新需求先归入一个主 Epic，再进入需求分析、设计和开发计划。Epic 用于表达需求所属的长期产品能力，具体交付仍由可独立验收和关闭的 issue 跟踪。
+
+| Epic | AtomGit 标题前缀 | 负责的问题 | 典型范围 |
+|-|-|-|-|
+| Observation | `[E0]` | Agent 实际做了什么、运行过程中发生了什么 | Agent/框架接入，Hook 与 OTLP 采集，Trace 完整性，spool，Trace 查询、展示、分析与运行状态观测 |
+| Evaluation | `[E1]` | Agent 或 Skill 做得怎么样，结果是否可信、可比较、可复现 | Dataset，Experiment，Evaluator，Agent/Skill 对照评估，评分校准，版本快照，回归验证与工程证据 |
+| Diagnosis | `[E2]` | 失败发生在哪里、为什么发生、证据是什么 | Trace 异常归因，步骤与 Tool/Skill 分析，故障模式识别，诊断报告及诊断结果回流 |
+| Optimization | `[E3]` | 如何基于证据产生改进，并证明改进没有引入回归 | Skill 生成与优化，候选版本，复测，A/B 对比，发布门禁及持续改进闭环 |
+| Foundation | `[E4]` | 平台能否安全、稳定、可恢复、可扩展地支撑上述能力 | 持久化任务，Session 生命周期，存储与数据库，配置，部署，API 契约，测试、CI、发布及扩展机制 |
+| Project Collaboration & Auth | `[E5]` | 多用户如何在项目边界内安全协作和访问资源 | 身份认证，Project，成员与角色，Trace/Skill/Dataset/Experiment 授权，API Key，审计和数据隔离 |
+
+### Epic 默认审查人
+
+| Epic | 默认审查人 |
+|-|-|
+| E0 Observation | `leon`、`gyc` |
+| E1 Evaluation | `sparkzfl`、`mintu` |
+| E2 Diagnosis | `miaoyanming`、`rongxi` |
+| E3 Optimization | `leon` |
+| E4 Foundation | `leon`、`sparkzfl` |
+| E5 Project Collaboration & Auth | `sparkzfl`、`gyc` |
+
+同一 Epic 配置多人时，名单中的第一位为主审查人，其余为备选或协同审查人。PM 在 AtomGit Issue 页面设置审查人；主审查人不可用或需求跨领域时，再选择后续人员。
+
+归类规则：
+
+1. 每个 issue 只选择一个主 Epic，AtomGit 标题使用对应编号，例如：`[E0][bug] OTLP gzip 请求体解码失败`。
+2. 跨 Epic 依赖写在 issue 正文中，不通过叠加多个 Epic 前缀表达。
+3. `Foundation` 负责通用技术底座；只要需求直接涉及用户、项目、角色或资源访问边界，就归入 `Project Collaboration & Auth`。
+4. Reliability 是横跨 Observation、Evaluation、Diagnosis 和 Optimization 的质量属性，不单独设 Epic：运行状态观测归 Observation，可靠性评估归 Evaluation，故障归因归 Diagnosis，恢复与改进归 Optimization；通用任务恢复和运行底座归 Foundation。
+5. 客户专用协议、身份源、报表或流程优先通过 Adapter、Exporter、Webhook 或配置扩展；只有具备社区普适性的抽象能力才进入核心设计。
+
+## PM Issue 审查流程
+
+PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不完整时先补齐，不直接进入开发。
+
+### 1. 整理 Issue
+
+1. 阅读原始描述，确认问题、使用场景、用户价值和预期结果；信息不足时向提交人追问。
+2. 将标题统一为 `[Epic 编号][类型] 简明标题`，例如：`[E1][feature] 支持自定义评估器超时配置`。
+3. 类型只使用 `feature` 或 `bug`：新增或扩展用户能力归 `feature`；实际行为偏离既定设计、文档或合理预期归 `bug`。
+4. Epic 使用上表中的一个编号；跨 Epic 依赖写在正文，不叠加多个 Epic 编号。
+5. 在 AtomGit 网页的优先级字段中设置优先级，不把优先级编码到 Issue 标题中。
+6. 重写 Issue 描述，至少包含：背景与用户价值、现状或复现步骤、目标行为、范围与非目标、验收标准、依赖或风险。Bug 还应补充环境、实际结果和复现证据。
+
+### 2. 设置审查人
+
+1. 按主 Epic 选择最熟悉该领域、且能够判断需求边界和验收标准的维护者作为审查人。
+2. 涉及跨模块、公共契约、数据模型、安全或兼容性时，增加相关领域维护者共同审查，但保留一名主审查人负责收敛结论。
+3. PM 不把 Issue 默认分配给实现者代替审查；审查人负责确认“是否应该做、范围是否清楚、如何验收”，开发负责人在审查通过后确定。
+4. 审查人缺失或长期无响应时，PM 先更换同领域审查人，再升级给项目 Maintainer，不让 Issue 无负责人停滞。
+
+### 3. 审查完成条件
+
+以下条件全部满足后，Issue 才可进入排期或开发：标题格式正确；Epic 编号和类型已确定；网页优先级已设置；描述及验收标准完整；主审查人已设置；关键依赖和争议已有结论。任何字段发生实质变化时，PM 应重新通知审查人。
+
 ## 清单
 
 本次目录迁移的范围、缺口与待审历史资料见[迁移审查清单](platform/docs-migration/migration-review.md)。迁移保留旧条目的状态描述，不将其视为本轮重新验收的结果。
