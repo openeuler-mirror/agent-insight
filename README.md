@@ -103,7 +103,7 @@ npx agent-insight stop --port 3000
 **Installation from source**
 
 ```bash
-git clone https://gitcode.com/openJiuwen/agent-insight.git
+git clone https://gitcode.com/openeuler/agent-insight.git
 cd agent-insight
 npm install
 
