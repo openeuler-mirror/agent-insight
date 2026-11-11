@@ -27,6 +27,19 @@
 | Foundation | `[E4]` | 平台能否安全、稳定、可恢复、可扩展地支撑上述能力 | 持久化任务，Session 生命周期，存储与数据库，配置，部署，API 契约，测试、CI、发布及扩展机制 |
 | Project Collaboration & Auth | `[E5]` | 多用户如何在项目边界内安全协作和访问资源 | 身份认证，Project，成员与角色，Trace/Skill/Dataset/Experiment 授权，API Key，审计和数据隔离 |
 
+### Epic 默认审查人
+
+| Epic | 默认审查人 |
+|-|-|
+| E0 Observation | `leon`、`gyc` |
+| E1 Evaluation | `sparkzfl`、`mintu` |
+| E2 Diagnosis | `miaoyanming`、`rongxi` |
+| E3 Optimization | `leon` |
+| E4 Foundation | `leon`、`sparkzfl` |
+| E5 Project Collaboration & Auth | `sparkzfl`、`gyc` |
+
+同一 Epic 配置多人时，名单中的第一位为主审查人，其余为备选或协同审查人。PM 在 AtomGit Issue 页面设置审查人；主审查人不可用或需求跨领域时，再选择后续人员。
+
 归类规则：
 
 1. 每个 issue 只选择一个主 Epic，AtomGit 标题使用对应编号，例如：`[E0][bug] OTLP gzip 请求体解码失败`。
