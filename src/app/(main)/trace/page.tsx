@@ -55,6 +55,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
+import { TraceBatchImportDialog } from '@/components/trace/trace-batch-import-dialog';
 import { loadTraceFacetValues } from '@/lib/client/trace-facets';
 import { traceFilterParsers, useTraceFilterMemory } from '@/lib/client/use-trace-filter-memory';
 import { resolveTraceTimeRange } from '@/lib/client/trace-time-range';
@@ -69,7 +70,6 @@ import { Select, type SelectOption } from '@/components/ui/select';
 import { Pagination } from '@/components/ui/pagination';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
     DropdownMenu,
     DropdownMenuCheckboxItem,
@@ -106,16 +106,6 @@ interface TraceUserTag {
     color: string;
     createdAt?: string;
     usageCount?: number;
-}
-
-interface TraceImportResult {
-    fileName: string | null;
-    originalRootExecutionId: string;
-    rootExecutionId: string;
-    rootTaskId: string | null;
-    executionCount: number;
-    subagentCount: number;
-    remappedIds: Array<{ original: string; imported: string }>;
 }
 
 interface Execution {
@@ -575,10 +565,9 @@ function TracePageContent() {
     const [frameworks, setFrameworks] = useState<string[]>([]);
     const [sourceKinds, setSourceKinds] = useState<string[]>([]);
     const [agentNames, setAgentNames] = useState<string[]>([]);
+    const [batchImportOpen, setBatchImportOpen] = useState(false);
+    const [batchImportSession, setBatchImportSession] = useState(0);
     const [traceUsers, setTraceUsers] = useState<string[]>([]);
-    const importInputRef = useRef<HTMLInputElement>(null);
-    const [importing, setImporting] = useState(false);
-    const [importResult, setImportResult] = useState<TraceImportResult | null>(null);
     const [reloadKey, setReloadKey] = useState(0);
     const listRequestPendingRef = useRef(false);
 
@@ -1026,38 +1015,6 @@ function TracePageContent() {
     }, [statsRequest, apiKey, statsRetry]);
 
 
-    const handleImportFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        event.target.value = '';
-        if (!file || !user) return;
-        if (file.size > 50 * 1024 * 1024) {
-            toast.error(locale === 'zh' ? 'Trace 文件不能超过 50 MB' : 'Trace file must be 50 MB or smaller');
-            return;
-        }
-        setImporting(true);
-        try {
-            let bundle: unknown;
-            try {
-                bundle = JSON.parse(await file.text());
-            } catch {
-                throw new Error(locale === 'zh' ? '文件不是有效的 JSON' : 'The file is not valid JSON');
-            }
-            const response = await apiFetch('/api/observe/traces/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user, fileName: file.name, bundle }),
-            });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(payload?.error || (locale === 'zh' ? '导入 Trace 失败' : 'Failed to import trace'));
-            setImportResult(payload as TraceImportResult);
-            setReloadKey(value => value + 1);
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : (locale === 'zh' ? '导入 Trace 失败' : 'Failed to import trace'));
-        } finally {
-            setImporting(false);
-        }
-    }, [locale, user]);
-
     const handleSort = (key: SortKey) => {
         if (key === sortKey) {
             setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
@@ -1177,10 +1134,9 @@ function TracePageContent() {
                 actions={!taskIdParam && !executionIdParam ? (
                     <>
                         <Button variant="outline" size="sm" asChild><Link href="/observe/collaborations">协作图</Link></Button>
-                        <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
-                        <Button variant="outline" size="sm" disabled={!user || importing} onClick={() => importInputRef.current?.click()}>
+                        <Button variant="outline" size="sm" disabled={!user} onClick={() => { setBatchImportSession(v => v + 1); setBatchImportOpen(true); }}>
                             <Download className="size-3.5" aria-hidden />
-                            {importing ? (locale === 'zh' ? '导入中…' : 'Importing…') : (locale === 'zh' ? '导入 Trace' : 'Import Trace')}
+                            {locale === 'zh' ? '导入 Trace' : 'Import Trace'}
                         </Button>
                     </>
                 ) : undefined}
@@ -1594,40 +1550,12 @@ function TracePageContent() {
                     </>
                 )}
             </PageContainer>
-            <Dialog open={!!importResult} onOpenChange={open => !open && setImportResult(null)}>
-                <DialogContent className="sm:max-w-lg">
-                    <DialogHeader>
-                        <DialogTitle>{locale === 'zh' ? 'Trace 导入成功' : 'Trace imported'}</DialogTitle>
-                        <DialogDescription>{locale === 'zh' ? '完整链路已写入当前用户空间。' : 'The complete trace tree was added to your workspace.'}</DialogDescription>
-                    </DialogHeader>
-                    {importResult && (
-                        <div className="rounded-md border border-border bg-background-secondary p-3 text-sm">
-                            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2">
-                                <dt className="text-foreground-muted">{locale === 'zh' ? '文件' : 'File'}</dt>
-                                <dd className="min-w-0 truncate font-mono text-xs">{importResult.fileName || '—'}</dd>
-                                <dt className="text-foreground-muted">{locale === 'zh' ? '原 Trace ID' : 'Original trace ID'}</dt>
-                                <dd className="min-w-0 break-all font-mono text-xs">{importResult.originalRootExecutionId}</dd>
-                                <dt className="text-foreground-muted">{locale === 'zh' ? '新 Trace ID' : 'New trace ID'}</dt>
-                                <dd className="min-w-0 break-all font-mono text-xs">{importResult.rootExecutionId}</dd>
-                                <dt className="text-foreground-muted">{locale === 'zh' ? '节点' : 'Nodes'}</dt>
-                                <dd>{importResult.executionCount} ({locale === 'zh' ? '子 Agent' : 'subagents'}: {importResult.subagentCount})</dd>
-                                <dt className="text-foreground-muted">{locale === 'zh' ? 'ID 重映射' : 'ID remaps'}</dt>
-                                <dd>{importResult.remappedIds.length}</dd>
-                            </dl>
-                        </div>
-                    )}
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setImportResult(null)}>{locale === 'zh' ? '关闭' : 'Close'}</Button>
-                        <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
-                            const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
-                            setImportResult(null);
-                            if (targetId) void setTraceTarget({ taskId: targetId, executionId: null, workflowTaskId: null }, { history: 'push' });
-                        }}>
-                            {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <TraceBatchImportDialog
+                key={batchImportSession}
+                open={batchImportOpen}
+                onOpenChange={setBatchImportOpen}
+                onImportSuccess={() => setReloadKey(value => value + 1)}
+            />
         </>
     );
 }
