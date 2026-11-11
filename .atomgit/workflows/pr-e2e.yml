@@ -26,7 +26,7 @@ env:
 jobs:
   build:
     name: 生产编译
-    runs-on: [self-hosted, "${{ atomgit.repository == 'openeuler/agent-insight' && 'openeuler' || 'default' }}", x86, "${{ atomgit.repository == 'openeuler/agent-insight' && 'cpu=8' || 'cpu=4' }}"]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
     timeout-minutes: 35
@@ -92,7 +92,7 @@ jobs:
   ut:
     name: UT
     needs: [build]
-    runs-on: [self-hosted, "${{ atomgit.repository == 'openeuler/agent-insight' && 'openeuler' || 'default' }}", x86, "${{ atomgit.repository == 'openeuler/agent-insight' && 'cpu=8' || 'cpu=4' }}"]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
     timeout-minutes: 45
@@ -151,7 +151,7 @@ jobs:
     name: 001 准备与配置
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
-    runs-on: [self-hosted, "${{ atomgit.repository == 'openeuler/agent-insight' && 'openeuler' || 'default' }}", x86, "${{ atomgit.repository == 'openeuler/agent-insight' && 'cpu=8' || 'cpu=4' }}"]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
     timeout-minutes: 55
@@ -211,7 +211,7 @@ jobs:
     name: 002 上报与观测
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
-    runs-on: [self-hosted, "${{ atomgit.repository == 'openeuler/agent-insight' && 'openeuler' || 'default' }}", x86, "${{ atomgit.repository == 'openeuler/agent-insight' && 'cpu=8' || 'cpu=4' }}"]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
     timeout-minutes: 55
@@ -271,7 +271,7 @@ jobs:
     name: 003 Skill 与数据集
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
-    runs-on: [self-hosted, "${{ atomgit.repository == 'openeuler/agent-insight' && 'openeuler' || 'default' }}", x86, "${{ atomgit.repository == 'openeuler/agent-insight' && 'cpu=8' || 'cpu=4' }}"]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
     timeout-minutes: 55
@@ -331,7 +331,7 @@ jobs:
     name: 004 Trace 评测
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
-    runs-on: [self-hosted, "${{ atomgit.repository == 'openeuler/agent-insight' && 'openeuler' || 'default' }}", x86, "${{ atomgit.repository == 'openeuler/agent-insight' && 'cpu=8' || 'cpu=4' }}"]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
     timeout-minutes: 55
@@ -391,7 +391,7 @@ jobs:
     name: 005 故障检测恢复
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
-    runs-on: [self-hosted, "${{ atomgit.repository == 'openeuler/agent-insight' && 'openeuler' || 'default' }}", x86, "${{ atomgit.repository == 'openeuler/agent-insight' && 'cpu=8' || 'cpu=4' }}"]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
     timeout-minutes: 55
@@ -451,7 +451,7 @@ jobs:
     name: 汇总与门禁
     needs: [build, ut, case_001, case_002, case_003, case_004, case_005]
     if: ${{ always() }}
-    runs-on: [self-hosted, "${{ atomgit.repository == 'openeuler/agent-insight' && 'openeuler' || 'default' }}", x86, "${{ atomgit.repository == 'openeuler/agent-insight' && 'cpu=8' || 'cpu=4' }}"]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
     timeout-minutes: 15
