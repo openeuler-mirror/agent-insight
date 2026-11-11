@@ -307,7 +307,17 @@ export function parseReportPayload(row: AgentDebugReportRow | null): AgentDebugR
 export function parseSkillsAnalysisPayload(row: AgentDebugSkillsAnalysisRow | null): AgentDebugSkillsAnalysis | null {
   if (!row?.analysisJson) return null;
   try {
-    return JSON.parse(row.analysisJson) as AgentDebugSkillsAnalysis;
+    const analysis = JSON.parse(row.analysisJson) as AgentDebugSkillsAnalysis;
+    if (analysis?.status !== 'failed' || !analysis.errorMessage) return analysis;
+
+    // These messages identify prerequisite failures saved before skip reasons were recorded.
+    const message = analysis.errorMessage;
+    const skipReason = message === '当前 trace 未关联可分析的 Skill' ? 'no-skill-targets'
+      : /^Skills Hub 中未管理该 Skill：.+，无法读取关键动作定义。$/s.test(message) ? 'missing-skill'
+        : null;
+    return skipReason
+      ? { ...analysis, status: 'skipped', skipReason, errorMessage: null, runId: undefined, progress: null }
+      : analysis;
   } catch {
     return null;
   }

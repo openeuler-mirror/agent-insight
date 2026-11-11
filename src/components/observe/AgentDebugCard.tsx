@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import {
   AlertTriangle,
   BrainCircuit,
@@ -1341,6 +1342,34 @@ export function SkillsAnalysisSection({ executionId, user, zh, analysis, submitt
     if (!data.error || isSkillsAnalysisRunningResponse(data)) {
       setError('');
     }
+  }
+
+  if (localAnalysis?.status === 'skipped') {
+    const missingSkill = localAnalysis.skipReason === 'missing-skill';
+    const reason = missingSkill
+      ? (zh ? '该 Skill 未在 Skill 管理中心注册，或当前账号不可见。' : 'This Skill is unregistered or not visible to your account in Skill Management.')
+      : (zh ? '当前 Trace 未关联可核验的 Skill。' : 'This trace has no linked Skill to review.');
+    return (
+      <div className="rounded-lg border border-card-border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-foreground">{zh ? 'Skills 步骤核验' : 'Skills step review'}</span>
+          <StatusBadge status="cancelled" label={zh ? '已跳过' : 'Skipped'} />
+        </div>
+        <p className="mt-1 text-sm text-foreground-secondary">
+          {reason}{zh ? '不影响智能诊断结果。' : ' This does not affect the diagnosis.'}
+        </p>
+        {missingSkill && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="link" size="sm" asChild>
+              <Link href="/config/skills">{zh ? '前往 Skill 管理中心' : 'Open Skill Management'}</Link>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => generateSkillsAnalysis(true)} disabled={!canGenerate}>
+              {zh ? '重新核验' : 'Review again'}
+            </Button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
