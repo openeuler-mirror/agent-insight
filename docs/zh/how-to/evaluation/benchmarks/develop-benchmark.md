@@ -366,7 +366,7 @@ async function prepareEnvironment(context, services, reportProgress) { /* ... */
 
 Catalog 校验协议和包内 `.cjs` 入口，并将执行端文件纳入接入包内容摘要与分发清单；客户端加载时校验两个方法是否存在。环境准备入口不依赖 `gitSourcePolicy`。发布安装包必须带上 `generatedEnvironmentPreparationDescriptors` 和对应 executor 文件，不能只在源码仓库中可用。新接入不需要在公共平台或前端增加 Benchmark 专属分支。
 
-此环节准备执行主机的共享运行环境；Case 工作区、Case 容器等仍由执行后端按任务生命周期管理。它也不同于第 7.1 节的平台数据集来源准备，以及 Evaluator 的评测 Runtime 准备。客户端安装只完成客户端及链路跟踪接入，保存配置上下文，不提前编译本次实验可能用不到的执行后端。
+此环节准备执行主机的共享运行环境；Case 工作区、Case 容器等仍由执行后端按任务生命周期管理。它也不同于第 7.1 节的平台数据集来源准备，以及 Evaluator 的评测 Runtime 准备。客户端安装只完成客户端及链路追踪接入，保存配置上下文，不提前编译本次实验可能用不到的执行后端。
 
 通用实现见 [`services/executor/src/environment/`](https://gitcode.com/openeuler/agent-insight/tree/master/services/executor/src/environment)，完整设计见[实验执行环境准备](https://gitcode.com/openeuler/agent-insight/blob/master/design/evaluation/experiment-environment-preparation/phase2-requirements-design.md)。
 
