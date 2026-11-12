@@ -86,3 +86,17 @@ class ClickHouseValidationTests(unittest.TestCase):
         with patch.object(client,'_request',return_value=reply):
             with self.assertRaises(api.IncompletePayload):
                 client.read_payload('w','2026-11-11','t','s',content_hash(manifest),'input')
+
+    def test_analytics_has_bounded_explicit_scope_and_latest_state(self):
+        _,client=self.client()
+        with patch.object(client,'_request',return_value=b'{"span_count":"3","input_tokens_known_sum":"7","output_tokens_known_sum":"9","input_tokens_missing_count":"0","output_tokens_missing_count":"1"}\n') as request:
+            result=client.summarize_spans(['w','w2'],'2026-11-11','2026-11-12',trace_ids={'w':['t\'x'],'w2':['t2']})
+        self.assertEqual(result['span_count'],3)
+        self.assertEqual(result['input_tokens'],7)
+        self.assertIsNone(result['output_tokens'])
+        sql=request.call_args.args[0]
+        self.assertIn(' FINAL',sql)
+        self.assertNotIn("t'x",sql)
+        self.assertIn('workspace_0',request.call_args.kwargs['parameters'])
+        for scope in ([],['w']*1001):
+            with self.assertRaises(ValueError): client.summarize_spans(scope,'2026-11-11','2026-11-12')

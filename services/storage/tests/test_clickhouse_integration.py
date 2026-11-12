@@ -67,3 +67,19 @@ class ClickHouseIntegrationTests(unittest.TestCase):
     def test_revision_range_is_enforced_on_actual_engine(self):
         with self.assertRaises(ClickHouseError):
             self.store._insert('obs_span_current',[self.span(uuid.uuid4().hex,'s',2**63)])
+
+    def test_analytics_preserves_unknown_mixed_and_real_zero_token_coverage(self):
+        trace=uuid.uuid4().hex
+        self.store.write_spans([self.span(trace,'unknown')])
+        totals=self.store.summarize_spans(['w'],'2026-11-11','2026-11-11',trace_ids={'w':[trace]})
+        self.assertIsNone(totals['input_tokens'])
+        self.assertEqual(totals['input_tokens_missing_count'],1)
+        self.store.write_spans([self.span(trace,'zero',input_tokens=0)])
+        totals=self.store.summarize_spans(['w'],'2026-11-11','2026-11-11',trace_ids={'w':[trace]})
+        self.assertIsNone(totals['input_tokens'])
+        self.assertEqual(totals['input_tokens_known_sum'],0)
+        self.assertEqual(totals['input_tokens_missing_count'],1)
+        self.store.write_spans([self.span(trace,'unknown',2,input_tokens=0)])
+        totals=self.store.summarize_spans(['w'],'2026-11-11','2026-11-11',trace_ids={'w':[trace]})
+        self.assertEqual(totals['input_tokens'],0)
+        self.assertEqual(totals['input_tokens_missing_count'],0)

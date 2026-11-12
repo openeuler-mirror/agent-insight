@@ -209,3 +209,52 @@ class ClickHouseStore:
             if len(whole)!=expected['uncompressed_bytes'] or hashlib.sha256(whole).hexdigest()!=expected['content_hash']:
                 raise IncompletePayload('payload section root mismatch')
         return {'chunks':rows,'chunk_count':total,'next_chunk':int(rows[-1]['chunk_no']) if int(rows[-1]['chunk_no'])+1<total else None,'complete':after_chunk==-1 and len(rows)==total}
+
+    def summarize_spans(self, workspace_ids, bucket_from, bucket_to, *, trace_ids=None, excluded_trace_ids=None):
+        if not isinstance(workspace_ids,(tuple,list)) or not 1<=len(workspace_ids)<=1000 or len(set(workspace_ids))!=len(workspace_ids):
+            raise ValueError('analytics requires 1..1000 explicit distinct workspaces')
+        start=datetime.date.fromisoformat(bucket_from)
+        end=datetime.date.fromisoformat(bucket_to)
+        if start>end:
+            raise ValueError('invalid bucket range')
+        if trace_ids is not None and (not isinstance(trace_ids,dict) or set(trace_ids)!=set(workspace_ids)):
+            raise ValueError('Trace selection must match workspace selection')
+        if excluded_trace_ids is not None and (not isinstance(excluded_trace_ids,dict) or not set(excluded_trace_ids)<=set(workspace_ids)):
+            raise ValueError('invalid deletion barrier scope')
+        parameters={'bucket_from':bucket_from,'bucket_to':bucket_to}
+        predicates=[]
+        for i,workspace_id in enumerate(workspace_ids):
+            key=f'workspace_{i}'
+            parameters[key]=identifier(workspace_id)
+            predicate=f'workspace_id = {{{key}:String}}'
+            if trace_ids is not None:
+                roots=trace_ids[workspace_id]
+                if not isinstance(roots,(tuple,list)) or not 1<=len(roots)<=1000:
+                    raise ValueError('Trace selection must contain 1..1000 roots per workspace')
+                selections=[]
+                for j,trace_id in enumerate(roots):
+                    trace_key=f'trace_{i}_{j}'
+                    parameters[trace_key]=identifier(trace_id)
+                    selections.append('{'+trace_key+':String}')
+                predicate+=' AND trace_id IN ('+','.join(selections)+')'
+            excluded=(excluded_trace_ids or {}).get(workspace_id,[])
+            if not isinstance(excluded,(tuple,list)) or len(excluded)>1000:
+                raise ValueError('deletion barrier must contain at most 1000 roots per workspace')
+            if excluded:
+                exclusions=[]
+                for j,trace_id in enumerate(excluded):
+                    excluded_key=f'excluded_{i}_{j}'
+                    parameters[excluded_key]=identifier(trace_id)
+                    exclusions.append('{'+excluded_key+':String}')
+                predicate+=' AND trace_id NOT IN ('+','.join(exclusions)+')'
+            predicates.append('('+predicate+')')
+        if len(parameters)>4096:
+            raise ValueError('analytics scope exceeds bounded query parameter count')
+        sql='SELECT count() AS span_count, coalesce(sum(input_tokens),0) AS input_tokens_known_sum, coalesce(sum(output_tokens),0) AS output_tokens_known_sum, countIf(isNull(input_tokens)) AS input_tokens_missing_count, countIf(isNull(output_tokens)) AS output_tokens_missing_count FROM obs_span_current FINAL WHERE is_deleted = 0 AND trace_bucket >= {bucket_from:Date} AND trace_bucket <= {bucket_to:Date} AND ('+' OR '.join(predicates)+') FORMAT JSONEachRow'
+        rows=[json.loads(line) for line in self._request(sql,parameters=parameters).splitlines() if line]
+        if len(rows)!=1:
+            raise ClickHouseError('invalid bounded analytics response')
+        result={key:int(rows[0][key]) for key in ('span_count','input_tokens_known_sum','output_tokens_known_sum','input_tokens_missing_count','output_tokens_missing_count')}
+        for direction in ('input','output'):
+            result[direction+'_tokens']=None if result[direction+'_tokens_missing_count'] else result[direction+'_tokens_known_sum']
+        return result
