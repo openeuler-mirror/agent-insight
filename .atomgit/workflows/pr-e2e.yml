@@ -139,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "${E2E_CI_SOURCE:?}"
-          node --test test/e2e/shared/actions-process-cleanup.test.mjs test/e2e/control/actions-phase.test.mjs
+          node --test --test-concurrency=1 test/e2e/shared/actions-process-cleanup.test.mjs test/e2e/control/actions-phase.test.mjs
 
       - name: Upload public phase reports
         if: ${{ always() }}
