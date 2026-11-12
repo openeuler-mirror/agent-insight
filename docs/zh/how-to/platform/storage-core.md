@@ -5,6 +5,8 @@ description: "显式初始化、私有服务配置、密码登录、OTLP 接收�
 
 # 启用隔离的 Storage Core Trace 链路
 
+**产品兼容状态（2026-11-12）**：本页记录内部存储技术样例。当前core模式尚未保留全部原有功能/界面，不是原产品切库的使用方式或验收结果。目标要求保留现有全部能力，仅替换数据支持；恢复原界面及逐领域数据接管仍待完成。下文配置仅用于隔离技术验证。
+
 当前新增模式只接管 Trace 采集、列表、Span 和正文。它使用独立 IAM 密码账号、事务库及 ClickHouse。未设置模式开关时保留原路径；启用后配置缺失、认证失败或后端故障会明确报错，不回落旧库。完整契约见[参考](../../reference/platform/storage-core.md)，开发/验收状态见[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)。
 
 ## 1. 准备独立目标

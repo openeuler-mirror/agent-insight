@@ -5,6 +5,8 @@ description: "Explicit initialization, private service configuration, password l
 
 # Enable an isolated Storage Core Trace workflow
 
+**Product compatibility status (2026-11-12):** This page describes an internal storage prototype. Core mode does not yet preserve all existing features and screens and is not a completed product migration. The required outcome retains existing functionality and replaces its data support. Restoring the existing UI and migrating every domain remain outstanding; the configuration below is for isolated technical validation.
+
 The opt-in core mode handles Trace ingestion, lists, Span structure and payloads. It uses separate IAM password accounts, transactional storage and ClickHouse. Leaving the flag unset preserves the existing path. Once enabled, missing configuration, authorization failures and backend errors fail explicitly. See the [reference](../../reference/platform/storage-core.md) and the authoritative [Chinese procedure](../../../zh/how-to/platform/storage-core.md) for the complete one-time provisioning script.
 
 ## Initialize and provision explicit targets

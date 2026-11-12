@@ -5,6 +5,8 @@ description: "SQLite, PostgreSQL and openGauss control storage, authorized Click
 
 # Storage core, IAM and safe migrations
 
+**Product compatibility status (2026-11-12):** This page describes an internal storage prototype. Core mode does not yet preserve all existing features and screens and is not a completed product migration. The required outcome retains existing functionality and replaces its data support. Restoring the existing UI and migrating every domain remain outstanding; the configuration below is for isolated technical validation.
+
 `services/storage/` is a Python 3.11+ foundation. SQLite, IAM and ClickHouse use the standard library; relational servers use an explicit DB-API connection factory. Next explicitly opts into core Trace ingestion, listing, Span/payload reads and separate password login. Other domains are not fully switched. Leaving the flag unset preserves the legacy path; offline commands do not switch a running application. See the [isolated setup guide](../../how-to/platform/storage-core.md).
 
 See the [table relationship guide](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序) for all48 table purposes, primary/unique/query keys and eight overview/relationship diagrams. It distinguishes database foreign keys from logical references across databases. The diagrams and full dictionary are maintained in Chinese.

@@ -2,6 +2,12 @@
 
 日期：2026-11-12。当前已完成001核心基础、IAM/002/统一授权/三事务库合同、003 default项目预留，以及004可靠采集/Trace显式Web桥接实现；本轮HTTP万Span与重启/导入验收已通过，浏览器已完成万Span、分页、正文及成员隔离验收，整体重构未完成。总体目标见phase1/phase2，IAM批次范围见[phase5](phase5-iam-adapters-plan.md)，default追加范围见[开发计划](phase3-development-plan.md)。
 
+## 产品验收纠偏（2026-11-12）
+
+用户明确要求保留原有全部功能，仅变化其背后的数据支持。当前core模式的单Trace导航、全页替换、独立登录后落点和未接管操作501不符合此要求。**产品验收未通过；先前“可打开验收”仅证明技术样例可运行，不能代表原产品完成切换。** 下文历史实测数字与截图继续保留，完成状态按此纠偏解释。
+
+已核对当前源码有52个`src/app/(main)`页面文件及290个API `route.ts`文件（含本批新增auth路由）；这是物理入口数量，不是已验证功能数量或完整迁移清单。尚未完成原界面恢复、全部API/后台调用逐项映射、所有既有功能回归及产品切换。实施顺序与首轮分组见[兼容清单](phase3-development-plan.md#修正后的实施顺序与兼容清单)。
+
 ## 基线与交付
 
 - 工作分支`codex/storage-core-refactor`基于已同步的`upstream/master`：`298d1d5b10ab3ab67a955b41a1665b0cd4d26b54`，旧库基线96个Prisma模型。
@@ -14,9 +20,9 @@
 - `migrations.py`与CLI实现已知连续前缀、checksum、显式迁移计划及原子升级。SQLite备份后锁源重核；服务端先取迁移表锁再建立快照，绑定备份源身份/历史/全部托管表内容证据。DDL不得自行提交事务。
 - `legacy.py`提供只读原始清点/导出/验证，保留活跃WAL、类型、物理列、重复行和摘要；`trace_import.py`新增限定Session/Execution允许字段的显式映射/dry-run/接收链路apply，不等于96模型语义迁移或生产切换。
 
-## 004 Trace垂直链路实现与验证（本轮已验收）
+## 004 Trace垂直链路技术验证（历史专项证据）
 
-日期：2026-11-12。实现已接通，**HTTP采集到万Span浏览器链路已验收**。范围与接线见[phase6](phase6-trace-vertical-slice.md)，隔离启动见[操作指南](../../../docs/zh/how-to/platform/storage-core.md)。下列只记录已取得结果，不替代之后的最终集成证据。
+日期：2026-11-12。实现已接通，**HTTP采集到万Span技术样例已验证，原产品兼容性未验收**。范围与接线见[phase6](phase6-trace-vertical-slice.md)，隔离启动见[操作指南](../../../docs/zh/how-to/platform/storage-core.md)。下列只记录已取得结果，不替代之后的最终集成证据。
 
 - 追加两张OLTP表`ingest_batches`、`obs_entity_heads`，001–003字节不变；完整字段/索引/不可变与版本规则见字典，机器目录为`ingest-catalog.json`。
 - `observations.py`实现4MiB/4096完成Span/64MiB展开限制，原始包私有fsync后原子接收、主体/空间receipt幂等、全局强序Outbox租约/fence、冻结计划、源版本冲突隔离、差量摘要及固定版本重试。默认来源otlp，跨service同Trace及父子关系保留，root显示不被child覆盖。

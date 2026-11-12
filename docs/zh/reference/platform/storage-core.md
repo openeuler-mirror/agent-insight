@@ -5,6 +5,8 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 # 新存储核心、IAM 与安全迁移
 
+**产品兼容状态（2026-11-12）**：本页记录内部存储技术样例。当前core模式尚未保留全部原有功能/界面，不是原产品切库的使用方式或验收结果。目标要求保留现有全部能力，仅替换数据支持；恢复原界面及逐领域数据接管仍待完成。下文配置仅用于隔离技术验证。
+
 `services/storage/` 是 Python 3.11+ 独立存储基础库。SQLite/IAM/ClickHouse 使用标准库；PG 与 openGauss 通过显式 DB-API 连接工厂接入。Next在显式core模式接管Trace采集、列表、Span和正文，并使用独立密码登录；其他领域尚未整体接管。未设置开关保留旧路径，离线命令不会切换运行库。启用和启动步骤见[隔离运行指南](../../how-to/platform/storage-core.md)。
 
 表的职责、主键/索引速查与八张总览/关联图见[核心表关系导读](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序)，包括IAM、版本资产、任务结果、Trace正文及数据集/评测。
