@@ -23,8 +23,11 @@ const safe = (value, secrets = []) => redact(String(value ?? ''), secrets).slice
   .replace(/[&<>@]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '@': '&#64;' })[c])
   .replace(/[\\`*_[\]{}|]/g, '\\$&').replace(/[\r\n]+/g, ' ');
 const duration = (start, end) => Number.isFinite(start) && start > 0 && Number.isFinite(end) && end >= start ? ((end - start) / 1000).toFixed(1) + ' 秒' : '—';
-const order = run => [run.run_number, run.attempt || 1];
-const newer = (a, b) => order(a)[0] > order(b)[0] || order(a)[0] === order(b)[0] && order(a)[1] > order(b)[1];
+const order = run => [run.run_number, run.attempt || 1, run.runStartedAt ?? run.start_time ?? 0];
+const newer = (a, b) => order(a).some((value, i) => value > order(b)[i] && order(a).slice(0, i).every((v, j) => v === order(b)[j]));
+function assertCurrentExecution(value, run) {
+  if (!Number.isFinite(Date.parse(value)) || Date.parse(value) < run.start_time - 1000) throw Object.assign(Error('Evidence belongs to another execution'), { code: 'PR_REPORT_EXECUTION' });
+}
 
 export function decodeReportArchive(bytes) {
   if (!Buffer.isBuffer(bytes) || bytes.length > 8 * 1024 * 1024) throw Error('Invalid report archive size');
@@ -52,7 +55,7 @@ function boundRun(run, pr) {
     && /^[a-f0-9]{32}$/.test(run.workflow_id || '') && Number.isSafeInteger(run.run_number) && run.run_number > 0;
 }
 
-async function loadReport(api, repository, run) {
+async function loadReport(api, repository, run, jobs) {
   let checkpoint = '制品列表';
   try {
   const prefix = api.repoPath(repository);
@@ -61,6 +64,8 @@ async function loadReport(api, repository, run) {
   const matches = artifacts.filter(a => a.name === 'pr-e2e');
   if (matches.length !== 1) throw Error('Final pr-e2e report missing or ambiguous');
   const artifact = matches[0];
+  checkpoint = '制品所属执行';
+  assertCurrentExecution(artifact.created_at, run);
   checkpoint = '制品元数据';
   assert.equal(artifact.workflow_run_id, run.workflow_run_id);assert.equal(artifact.workflow_id, run.workflow_id);
   assert.ok(Number.isSafeInteger(artifact.size_bytes) && artifact.size_bytes > 0 && artifact.size_bytes <= 8 * 1024 * 1024);
@@ -75,6 +80,7 @@ async function loadReport(api, repository, run) {
   assert.equal(report.phase, 'collect');assert.equal(report.resultScope, 'workflow');assert.equal(report.executionOrigin, 'atomgit-job');
   assert.equal(report.runId, 'atomgit-' + run.workflow_run_id);assert.ok(sha(report.testedSha));
   assert.notEqual(report.dirtyWorkingTree, true);assert.ok(report.endedAt);
+  assertCurrentExecution(report.startedAt, run);
   assert.deepEqual(report.scenarios?.map(c => c.id).sort(), cases.map(c => c.id));
   if (run.attempt > 1 && report.platformRunAttempt !== run.attempt) throw Object.assign(Error('Missing current attempt provenance'), { code: 'PR_REPORT_ATTEMPT' });
   if (report.platformRunAttempt !== undefined) assert.equal(report.platformRunAttempt, run.attempt);
@@ -96,6 +102,12 @@ async function loadReport(api, repository, run) {
     assert.ok(counts.tests > 0 && counts.pass > 0 && counts.fail === 0 && counts.cancelled === 0 && counts.tests === counts.pass + counts.skipped + counts.todo);
   }
   if (report.productionBuild?.status === 'PASS') { assert.equal(report.productionBuild.exitCode, 0);assert.ok(typeof report.productionBuild.buildId === 'string' && report.productionBuild.buildId.trim()); }
+  checkpoint = '阶段所属执行';
+  const phaseRows = [['build', report.productionBuild], ['ut', report.npmTest], ...report.scenarios.map(c => ['case_' + c.id, c])];
+  for (const [id, row] of phaseRows) {
+    if (row?.status === 'PASS' || row?.startedAt !== undefined) assertCurrentExecution(row?.startedAt, run);
+    if (row?.status === 'PASS') assert.notEqual(jobs.find(job => job.identifier === id)?.status, 'IGNORED');
+  }
   checkpoint = '测试提交归属';
   const commit = await api.request('GET', prefix + '/commits/' + report.testedSha);
   assert.equal(commit.sha, report.testedSha);
@@ -112,8 +124,8 @@ export function renderPrResult({ repository, pr, run, jobs, report, baseSha, tes
   const completeJobs = stages.every(([id]) => byId.get(id)?.status === 'COMPLETED');
   const status = run.status === 'CANCELED' ? 'CANCELED' : run.status === 'FAILED' || jobs.some(j => j.status === 'FAILED') || report?.status === 'FAIL' ? 'FAIL'
     : run.status === 'COMPLETED' && completeJobs && report?.status === 'PASS' && !reportProblem ? 'PASS' : 'BLOCKED';
-  const metadata = { repository, pr: pr.number, runId: run.workflow_run_id, workflowId: run.workflow_id, run_number: run.run_number, attempt: run.attempt || 1, headSha: run.head_sha, platformStatus: run.status, reportVerified: !!report && !reportProblem, catalogHash };
-  const lines = [`<!-- ${marker} ${JSON.stringify(metadata)} -->`, `## PR 验证结果：${labels[status]}`, '', `源提交：\`${run.head_sha}\``, `测试提交：${report ? '`' + report.testedSha + '`' : '未取得可信报告'}`, ...(testScope ? [`测试范围：${testScope === 'source' ? '源提交（非预合并），不代表与当前 master 集成后的结果。' : '预合并提交'}`] : []), ...(baseSha ? [`本次测试基线：\`${baseSha}\``] : []), `运行：#${run.run_number} · 第 ${metadata.attempt} 次 · ${duration(run.start_time, run.end_time)}`, '', '| 阶段 | 结果 | 模式 | 耗时 |', '|---|---|---|---|'];
+  const metadata = { repository, pr: pr.number, runId: run.workflow_run_id, workflowId: run.workflow_id, run_number: run.run_number, attempt: run.attempt || 1, runStartedAt: run.start_time, headSha: run.head_sha, platformStatus: run.status, reportVerified: !!report && !reportProblem, catalogHash };
+  const lines = [`<!-- ${marker} ${JSON.stringify(metadata)} -->`, `## PR 验证结果：${labels[status]}`, '', `源提交：\`${run.head_sha}\``, `测试提交：${report ? '`' + report.testedSha + '`' : '未取得可信报告'}`, ...(testScope ? [`测试范围：${testScope === 'source' ? '源提交（非预合并），不代表与当前 master 集成后的结果。' : '预合并提交'}`] : []), ...(baseSha ? [`本次测试基线：\`${baseSha}\``] : []), `运行：#${run.run_number} · 平台轮次 ${metadata.attempt} · ${duration(run.start_time, run.end_time)}`, `本次执行开始：\`${new Date(run.start_time).toISOString()}\``, '', '| 阶段 | 结果 | 模式 | 耗时 |', '|---|---|---|---|'];
   for (const [id, title] of stages) {
     const job = byId.get(id), row = id === 'build' ? report?.productionBuild : id === 'ut' ? report?.npmTest : id === 'collect' ? report : report?.scenarios?.find(c => 'case_' + c.id === id);
     let state = row?.status ? labels[row.status] || '未知' : '未取得报告';
@@ -165,7 +177,7 @@ export async function scanPrResults({ api, repository, prNumber, runId, publish 
       const selected = relevant[0];
       if (!selected || !terminal.has(selected.status) || runId && runId !== selected.workflow_run_id) { results.push({ pr: pull.number, status: 'WAITING_OR_STALE' });continue; }
       const run = await api.request('GET', prefix + '/actions/runs/' + selected.workflow_run_id, undefined, { apiVersion: 8 });
-      if (!boundRun(run, pull) || !terminal.has(run.status) || !Number.isSafeInteger(run.attempt) || run.attempt < 1) { results.push({ pr: pull.number, status: 'WAITING_OR_STALE' });continue; }
+      if (!boundRun(run, pull) || !terminal.has(run.status) || !Number.isSafeInteger(run.attempt) || run.attempt < 1 || !Number.isSafeInteger(run.start_time) || run.start_time < 1) { results.push({ pr: pull.number, status: 'WAITING_OR_STALE' });continue; }
       const response = await api.request('GET', prefix + '/actions/runs/' + run.workflow_run_id + '/jobs', undefined, { apiVersion: 8 });
       if (!Array.isArray(response?.jobs) || new Set(response.jobs.map(j => j.identifier)).size !== response.jobs.length) throw Error('Invalid platform job list');
       const route = prefix + '/pulls/' + pull.number + '/comments';
@@ -179,14 +191,14 @@ export async function scanPrResults({ api, repository, prNumber, runId, publish 
           const previous = existingMetadata(existing[0]);
           if (previous.repository !== repository || previous.pr !== pull.number || previous.workflowId !== run.workflow_id) throw Error('Existing result belongs to another workflow');
           if (previous.headSha === pull.head.sha && newer(previous, run)) { results.push({ pr: pull.number, status: 'STALE' });continue; }
-          if (previous.headSha === run.head_sha && previous.runId === run.workflow_run_id && previous.attempt === run.attempt && previous.platformStatus === run.status && previous.reportVerified === true && previous.catalogHash === catalogHash) {
+          if (previous.headSha === run.head_sha && previous.runId === run.workflow_run_id && previous.attempt === run.attempt && previous.runStartedAt === run.start_time && previous.platformStatus === run.status && previous.reportVerified === true && previous.catalogHash === catalogHash) {
             results.push({ pr: pull.number, status: 'UNCHANGED', commentId: existing[0].id });continue;
           }
         }
       }
       let report, baseSha, testScope, reportProblem;
-      try { ({ report, baseSha, testScope } = await loadReport(api, repository, run)); }
-      catch (error) { reportProblem = error.code === 'PR_REPORT_ATTEMPT' ? '最终汇总报告不可验证：缺少本次重跑轮次标识，不能把旧报告视为当前重跑结果。' : `最终汇总报告缺失或不可验证（${error.reportCheckpoint || '报告验证'}），不能确认完整门禁通过。`; }
+      try { ({ report, baseSha, testScope } = await loadReport(api, repository, run, response.jobs)); }
+      catch (error) { reportProblem = error.code === 'PR_REPORT_EXECUTION' ? '最终报告或阶段结果不属于本次执行，不能复用历史制品；请检查本次制品上传步骤。' : error.code === 'PR_REPORT_ATTEMPT' ? '最终汇总报告不可验证：缺少本次重跑轮次标识，不能把旧报告视为当前重跑结果。' : `最终汇总报告缺失或不可验证（${error.reportCheckpoint || '报告验证'}），不能确认完整门禁通过。`; }
       const rendered = renderPrResult({ repository, pr: pull, run, jobs: response.jobs, report, baseSha, testScope, reportProblem, secrets: [api.token].filter(Boolean) });
       if (!publish || dryRun) { results.push({ pr: pull.number, status: 'PREVIEW', body: rendered.body });continue; }
       if (existing.length) {
@@ -201,7 +213,7 @@ export async function scanPrResults({ api, repository, prNumber, runId, publish 
       const latestRuns = await list(api, prefix + '/actions/runs?event=MR&pull_request_id=' + pull.number, 'workflow_runs', 8);
       const latest = latestRuns.filter(r => boundRun(r, current)).sort((a, b) => b.run_number - a.run_number)[0];
       const latestRun = await api.request('GET', prefix + '/actions/runs/' + run.workflow_run_id, undefined, { apiVersion: 8 });
-      if (latest?.workflow_run_id !== run.workflow_run_id || latestRun.attempt !== run.attempt || latestRun.status !== run.status) { results.push({ pr: pull.number, status: 'STALE' });continue; }
+      if (latest?.workflow_run_id !== run.workflow_run_id || latestRun.attempt !== run.attempt || latestRun.start_time !== run.start_time || latestRun.status !== run.status) { results.push({ pr: pull.number, status: 'STALE' });continue; }
       if (existing.length) await api.request('PATCH', prefix + '/pulls/comments/' + existing[0].id, { body: rendered.body });
       else await api.request('POST', route, { body: rendered.body });
       const saved = (await list(api, route)).find(c => owned(c, user) && c.body === rendered.body);

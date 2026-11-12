@@ -22,7 +22,9 @@ function fixture() {
   const pull = { number: 7, state: 'open', head: { sha: head }, base: { ref: 'master', sha: base } };
   const run = { workflow_run_id: runId, workflow_id: workflow, file_path: '.atomgit/workflows/pr-e2e.yml', event: 'MR', pull_request_id: '7', head_sha: head, status: 'COMPLETED', run_number: 3, attempt: 1, start_time: 1000, end_time: 2000 };
   const jobs = ['build', 'ut', 'case_001', 'case_002', 'case_003', 'case_004', 'case_005', 'collect'].map(identifier => ({ identifier, status: 'COMPLETED', start_time: 1000, end_time: 2000 }));
-  const comments = [], writes = [];let archive;
+  report.startedAt = new Date(1100).toISOString();
+  for (const row of [report.productionBuild, report.npmTest, ...report.scenarios]) row.startedAt = report.startedAt;
+  const comments = [], writes = [];let archive, artifactCreatedAt;
   const api = { token: 'synthetic-sensitive-token', repoPath: r => '/repos/' + r, readPull: async () => structuredClone(pull),
     downloadArtifact: async () => archive,
     request: async (method, route, body) => {
@@ -33,13 +35,13 @@ function fixture() {
       if (route.includes('/pulls/7/comments')) return structuredClone(comments);
       if (route.includes('/commits/')) return { sha: merge, parents: [{ sha: base }, { sha: head }] };
       if (route.endsWith('/jobs')) return { total_count: jobs.length, jobs: structuredClone(jobs) };
-      if (route.endsWith('/artifacts')) return { artifacts: [{ id: '123', name: 'pr-e2e', size_bytes: archive.length, digest: 'sha256:' + createHash('sha256').update(archive).digest('hex'), workflow_id: workflow, workflow_run_id: runId }] };
+      if (route.endsWith('/artifacts')) return { artifacts: [{ id: '123', name: 'pr-e2e', created_at: artifactCreatedAt, size_bytes: archive.length, digest: 'sha256:' + createHash('sha256').update(archive).digest('hex'), workflow_id: workflow, workflow_run_id: runId }] };
       if (route.includes('/actions/runs?')) return { total_count: 1, workflow_runs: [structuredClone(run)] };
       if (route.endsWith('/actions/runs/' + runId)) return structuredClone(run);
       throw new Error('Unexpected fixture API route: ' + route);
     },
   };
-  const refresh = () => { report.platformRunAttempt = run.attempt;archive = zip([['report.json', JSON.stringify(report)]]); };
+  const refresh = () => { report.platformRunAttempt = run.attempt;artifactCreatedAt = new Date(run.start_time + 500).toISOString();archive = zip([['report.json', JSON.stringify(report)]]); };
   refresh();return { api, pull, run, jobs, report, comments, writes, refresh };
 }
 const scan = (f, overrides = {}) => scanPrResults({ api: f.api, repository: repo, publish: true, now: 2000, ...overrides });
@@ -49,6 +51,26 @@ test('publishes one verified result, reads back, deduplicates and updates a reru
   for (const c of cases) assert.ok(f.comments[0].body.includes(c.title));
   await scan(f);assert.equal(f.writes.length, 1);
   f.run.attempt = 2;f.refresh();await scan(f);assert.equal(f.writes.length, 2);assert.equal(f.writes[1].method, 'PATCH');assert.equal(f.comments.length, 1);
+});
+test('a rerun with an unchanged attempt rejects the old artifact, then updates the same comment with fresh evidence', async () => {
+  const f = fixture();await scan(f);f.run.start_time += 10_000;f.run.end_time += 10_000;
+  assert.equal((await scan(f))[0].status, 'UPDATED');assert.match(f.comments[0].body, /不属于本次执行|不可验证/);assert.doesNotMatch(f.comments[0].body, /通过 4/);
+  f.report.startedAt = new Date(f.run.start_time + 100).toISOString();
+  for (const row of [f.report.productionBuild, f.report.npmTest, ...f.report.scenarios]) row.startedAt = f.report.startedAt;
+  f.refresh();assert.equal((await scan(f))[0].status, 'UPDATED');assert.match(f.comments[0].body, /通过 4/);assert.equal(f.comments.length, 1);
+  assert.equal((await scan(f))[0].status, 'UNCHANGED');
+});
+test('newly uploaded reports cannot reuse passing phases from a previous execution', async () => {
+  const f = fixture();f.run.start_time += 10_000;f.run.end_time += 10_000;f.report.startedAt = new Date(f.run.start_time + 100).toISOString();f.refresh();
+  await scan(f);assert.match(f.comments[0].body, /不属于本次执行|不可验证/);assert.doesNotMatch(f.comments[0].body, /通过 4/);
+});
+test('an execution restarting during report verification cannot receive an older comment update', async () => {
+  const f = fixture(), request = f.api.request;let reads = 0;
+  f.api.request = (method, route, body, options) => {
+    if (route.endsWith('/actions/runs/' + runId) && ++reads === 2) f.run.start_time += 10_000;
+    return request(method, route, body, options);
+  };
+  assert.equal((await scan(f))[0].status, 'STALE');assert.equal(f.writes.length, 0);
 });
 test('a failed case does not turn a passing UT into a failed UT', async () => {
   const f = fixture();f.run.status = 'FAILED';f.jobs.find(j => j.identifier === 'case_005').status = 'FAILED';f.jobs.at(-1).status = 'FAILED';f.report.status = 'BLOCKED';f.report.scenarios[4].status = 'FAIL';f.report.scenarios[4].firstProblem = 'ras-evidence';f.refresh();
