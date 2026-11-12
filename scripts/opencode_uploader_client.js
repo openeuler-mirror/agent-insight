@@ -740,6 +740,8 @@ function buildState(records) {
           ...(payload.status_code ? { status_code: payload.status_code } : {}),
           ...(payload.error_type ? { error_type: payload.error_type } : {}),
           ...(payload.call_id ? { call_id: payload.call_id } : {}),
+          ...(payload.upstream_request_id ? { upstream_request_id: payload.upstream_request_id,
+            upstream_request_id_source: payload.upstream_request_id_source || 'model-response-header' } : {}),
         })
       }
       inferenceByMessage.set(key, current)
@@ -1178,6 +1180,14 @@ function buildMessagesForSession(state, sid) {
       m.inference_attempts = [...inference.attempts.values()]
       const callIds = [...new Set(m.inference_attempts.map(attempt => attempt.call_id).filter(Boolean))]
       if (callIds.length) m.inference_call_ids = callIds
+      const upstreamIds = [...new Map(m.inference_attempts
+        .filter(attempt => attempt.call_id && attempt.upstream_request_id)
+        .map(attempt => [`${attempt.call_id}\u0000${attempt.upstream_request_id}`, {
+          call_id: attempt.call_id,
+          request_id: attempt.upstream_request_id,
+          source: attempt.upstream_request_id_source || 'model-response-header',
+        }])).values()]
+      if (upstreamIds.length) m.inference_upstream_request_ids = upstreamIds
       if (!m.error_summary && !m.content && !m.toolCalls?.length) {
         const errors = callIds.map(id => state.inferenceErrors?.get(JSON.stringify([sid, id]))).filter(Boolean)
         if (errors.length === 1) { m.status = 'error'; m.error_summary = errors[0] }
@@ -1234,7 +1244,9 @@ function applyInferenceGatewayRecords(state, insightDir, apiKey) {
         current.attempts.set(attemptKey, { ...current.attempts.get(attemptKey), request_id: expected,
           ...(lateMessageId ? { transport_request_id: call.request_id } : {}),
           attempt_id: call.attempt_id, call_id: call.call_id, started_at: call.started_at,
-          status_code: call.status_code, error_type: call.error_type, state: call.state })
+          status_code: call.status_code, error_type: call.error_type, state: call.state,
+          ...(call.upstream_request_id ? { upstream_request_id: call.upstream_request_id,
+            upstream_request_id_source: 'model-response-header' } : {}) })
         state.inferenceByMessage.set(key, current)
       } else {
         const unassigned = state.inferenceUnassigned.get(sid) || []
