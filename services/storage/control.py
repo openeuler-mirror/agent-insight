@@ -22,71 +22,12 @@ class Conflict(StorageError):
 SCHEMA_PATH = Path(__file__).parent / 'schema' / 'sqlite' / '001_core.sql'
 
 
-class SQLiteControlStore:
-    def __init__(self, path, *, clock=None):
-        self.path = Path(path).absolute()
-        self.clock = clock or (lambda: time.time_ns() // 1_000_000)
-
-    def _validate_schema(self, con):
-        try:
-            rows = con.execute('SELECT version, name, checksum FROM schema_meta').fetchall()
-        except sqlite3.DatabaseError as exc:
-            raise StorageError('target is not an initialized core storage database') from exc
-        expected = hashlib.sha256(SCHEMA_PATH.read_bytes()).hexdigest()
-        if [tuple(row) for row in rows] != [(1, 'core', expected)]:
-            raise StorageError('unsupported schema version or migration checksum mismatch')
-
-    def initialize(self):
-        sql = SCHEMA_PATH.read_text()
-        digest = hashlib.sha256(sql.encode()).hexdigest()
-        try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as con:
-                self._validate_schema(con)
-            return
-        os.close(fd)
-        with closing(sqlite3.connect(self.path)) as con:
-            con.execute('PRAGMA foreign_keys=ON')
-            con.execute('PRAGMA journal_mode=WAL')
-            con.execute('PRAGMA synchronous=FULL')
-            try:
-                con.executescript('BEGIN IMMEDIATE;\n' + sql)
-                con.execute('INSERT INTO schema_meta VALUES (?,?,?,?)', (1, 'core', digest, self.clock()))
-                con.commit()
-            except Exception:
-                con.rollback()
-                raise
-
-    @contextmanager
-    def transaction(self):
-        if not self.path.is_file():
-            raise StorageError('initialize an explicit new target before writing')
-        con = sqlite3.connect(self.path.as_uri() + '?mode=rw', uri=True, timeout=10, isolation_level=None)
-        con.row_factory = sqlite3.Row
-        try:
-            con.execute('PRAGMA foreign_keys=ON')
-            self._validate_schema(con)
-            con.execute('BEGIN IMMEDIATE')
-            yield con
-            con.commit()
-        except sqlite3.IntegrityError as exc:
-            con.rollback()
-            raise Conflict('storage constraint violation') from exc
-        except Exception:
-            con.rollback()
-            raise
-        finally:
-            con.close()
-
+class ControlOperations:
     def _manifest(self, value):
-        if not self.path.is_file():
-            raise StorageError('initialize an explicit new target before writing artifacts')
-        with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as con:
-            self._validate_schema(con)
+        self._assert_initialized()
         body = canonical_json(value).encode('utf-8')
         digest = hashlib.sha256(body).hexdigest()
-        directory = self.path.parent / (self.path.name + '.artifacts')
+        directory = self.artifact_directory
         directory.mkdir(mode=0o700, exist_ok=True)
         parent_fd = os.open(directory.parent, os.O_RDONLY)
         try:
@@ -119,7 +60,7 @@ class SQLiteControlStore:
 
     def _verify_artifact(self, digest, artifact_ref):
         target = Path(artifact_ref)
-        directory = self.path.parent / (self.path.name + '.artifacts')
+        directory = self.artifact_directory
         if target.is_symlink() or target.parent != directory or target.name != digest or not target.is_file():
             raise Conflict('result must reference a durable artifact in this store')
         hasher = hashlib.sha256()
@@ -275,3 +216,136 @@ class SQLiteControlStore:
             if result.rowcount:
                 con.execute("UPDATE work_attempts SET status='cancelled',finished_at_ms=? WHERE workspace_id=? AND work_item_id=? AND status='running'",(now,workspace_id,work_item_id))
             return result.rowcount == 1
+
+
+class SQLiteControlStore(ControlOperations):
+    def __init__(self, path, *, clock=None):
+        self.path = Path(path).absolute()
+        self.clock = clock or (lambda: time.time_ns() // 1_000_000)
+
+    @property
+    def artifact_directory(self):
+        return self.path.parent / (self.path.name + '.artifacts')
+
+    def _validate_schema(self, con):
+        from .migrations import validate_history, MigrationError
+        try:
+            return validate_history(con, 'sqlite')
+        except (sqlite3.DatabaseError, MigrationError) as exc:
+            raise StorageError('unsupported schema version, uninitialized target or migration checksum mismatch') from exc
+
+    def _assert_initialized(self):
+        if not self.path.is_file():
+            raise StorageError('initialize an explicit new target before writing artifacts')
+        with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as con:
+            self._validate_schema(con)
+
+    def initialize(self):
+        from .migrations import apply, MigrationError
+        try:
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            self._assert_initialized()
+            return
+        os.close(fd)
+        with closing(sqlite3.connect(self.path, isolation_level=None)) as con:
+            con.execute('PRAGMA foreign_keys=ON')
+            con.execute('PRAGMA journal_mode=WAL')
+            con.execute('PRAGMA synchronous=FULL')
+            try:
+                con.execute('BEGIN IMMEDIATE')
+                apply(con, 'sqlite', clock=self.clock)
+                con.commit()
+            except Exception as exc:
+                con.rollback()
+                raise StorageError('new target schema initialization failed') from exc
+
+    def migration_plan(self):
+        from .migrations import plan, MigrationError
+        if not self.path.is_file():
+            raise StorageError('initialize an explicit new target before planning migrations')
+        try:
+            with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as con:
+                return plan(con, 'sqlite')
+        except (sqlite3.DatabaseError, MigrationError) as exc:
+            raise StorageError('cannot plan migration for unsupported schema history') from exc
+
+    def migrate(self, *, backup_path):
+        from .legacy import inventory_database, LegacyValidationError
+        from .migrations import apply
+        before = self.migration_plan()
+        backup = Path(backup_path).absolute()
+        if backup.parent != self.path.parent or backup == self.path:
+            raise StorageError('backup must be a new sibling file of the explicit source')
+        fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        try:
+            with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as source:
+                with closing(sqlite3.connect(backup)) as target:
+                    deadline = time.monotonic() + 30
+                    def check_backup_progress(status, remaining, total):
+                        if time.monotonic() > deadline:
+                            raise StorageError('backup did not finish within the safe time budget')
+                    source.backup(target, pages=256, progress=check_backup_progress, sleep=0.01)
+            with backup.open('rb') as stream:
+                os.fsync(stream.fileno())
+            directory_fd = os.open(backup.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            fingerprint = inventory_database(backup)['source_content_sha256']
+            with self.transaction() as con:
+                current = self._validate_schema(con)[1]
+                if current != before['current_version'] or inventory_database(self.path)['source_content_sha256'] != fingerprint:
+                    raise StorageError('source changed while taking backup; retry with a fresh backup file')
+                apply(con, 'sqlite', clock=self.clock, applied=current)
+                self._validate_schema(con)
+            digest = hashlib.sha256()
+            with backup.open('rb') as stream:
+                for block in iter(lambda: stream.read(65536), b''):
+                    digest.update(block)
+            return self.migration_plan() | {'backup_path': str(backup), 'backup_sha256': digest.hexdigest(), 'backup_content_sha256': fingerprint}
+        except StorageError:
+            raise
+        except Exception as exc:
+            raise StorageError('backup or schema migration failed; source transaction rolled back') from exc
+
+    @contextmanager
+    def read_transaction(self):
+        if not self.path.is_file():
+            raise StorageError('initialize an explicit new target before reading')
+        con = sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True, timeout=10, isolation_level=None)
+        con.row_factory = sqlite3.Row
+        try:
+            con.execute('PRAGMA query_only=ON')
+            con.execute('BEGIN')
+            self._validate_schema(con)
+            yield con
+        except sqlite3.DatabaseError as exc:
+            raise StorageError('read-only storage operation failed') from exc
+        finally:
+            con.rollback()
+            con.close()
+
+    @contextmanager
+    def transaction(self):
+        if not self.path.is_file():
+            raise StorageError('initialize an explicit new target before writing')
+        con = sqlite3.connect(self.path.as_uri() + '?mode=rw', uri=True, timeout=10, isolation_level=None)
+        con.row_factory = sqlite3.Row
+        try:
+            con.execute('PRAGMA foreign_keys=ON')
+            con.execute('PRAGMA synchronous=FULL')
+            con.execute('BEGIN IMMEDIATE')
+            self._validate_schema(con)
+            yield con
+            con.commit()
+        except sqlite3.IntegrityError as exc:
+            con.rollback()
+            raise Conflict('storage constraint violation') from exc
+        except Exception:
+            con.rollback()
+            raise
+        finally:
+            con.close()
