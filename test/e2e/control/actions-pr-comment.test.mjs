@@ -140,16 +140,21 @@ test('API errors retain bounded server diagnostics and redact the active token',
   t.after(() => new Promise(resolve => server.close(resolve)));
   const api = new AtomGit({ token: 'synthetic-token', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/v5', localTest: true });
   await assert.rejects(api.request('POST', '/repos/example/platform/pulls/7/comments', { body: 'test' }), error => {
-    assert.match(error.message, /METHOD_DENIED.*method rejected \[REDACTED\]/);assert.doesNotMatch(error.message, /synthetic-token/);return true;
+    assert.equal(error.httpStatus, 405);assert.match(error.message, /METHOD_DENIED.*method rejected \[REDACTED\]/);assert.doesNotMatch(error.message, /synthetic-token/);return true;
   });
 });
 
-test('merged PR comment policy is reported without a rejected write and still permits preview', async () => {
+test('merged PR policy rejection is reported and a stale policy snapshot cannot block a permitted write', async () => {
   const f = fixture();f.pull.state = 'merged';f.pull.mergeable_state = { merge_request_switch: { add_notes_after_merged: false } };
+  let serverAllowsComments = false;const request = f.api.request;
+  f.api.request = async (method, route, body, options) => {
+    if (method !== 'GET' && !serverAllowsComments) throw Object.assign(Error('The current merge request is not allowed to be reviewed after being merged, change the settings to enable this operation'), { httpStatus: 405 });
+    return request(method, route, body, options);
+  };
   const blocked = await scan(f);assert.equal(blocked[0].status, 'SKIPPED_MERGED_COMMENTS_DISABLED');assert.equal(f.writes.length, 0);
   const preview = await scanPrResults({ api: f.api, repository: repo, prNumber: 7, publish: true, dryRun: true });
   assert.equal(preview[0].status, 'PREVIEW');assert.equal(f.writes.length, 0);
-  f.pull.mergeable_state.merge_request_switch.add_notes_after_merged = true;
+  serverAllowsComments = true;
   assert.equal((await scan(f))[0].status, 'PUBLISHED');
 });
 

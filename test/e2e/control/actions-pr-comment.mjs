@@ -16,7 +16,6 @@ const stages = [['build', '生产编译'], ['ut', '完整 UT'], ...cases.map(c =
 const terminal = new Set(['COMPLETED', 'FAILED', 'CANCELED', 'IGNORED']);
 const labels = { PASS: '通过', FAIL: '失败', BLOCKED: '阻塞', NOT_RUN: '未执行', PARTIAL: '不完整', CANCELED: '已取消', COMPLETED: '通过', FAILED: '失败', IGNORED: '未执行', RUNNING: '执行中' };
 const canReport = pr => ['open', 'opened', 'merged'].includes(pr.state) || pr.state === 'closed' && !!pr.merged_at;
-const mergedCommentsDisabled = pr => (pr.state === 'merged' || pr.state === 'closed' && !!pr.merged_at) && pr.mergeable_state?.merge_request_switch?.add_notes_after_merged === false;
 const catalogHash = createHash('sha256').update(JSON.stringify(cases.map(({ id, title }) => ({ id, title })))).digest('hex');
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const safe = (value, secrets = []) => redact(String(value ?? ''), secrets).slice(0, 500)
@@ -160,7 +159,6 @@ export async function scanPrResults({ api, repository, prNumber, runId, publish 
     try {
       const pull = await api.readPull(repository, listed.number);
       if (!Number.isSafeInteger(pull.number) || !canReport(pull) || pull.base?.ref !== 'master' || !sha(pull.head?.sha)) { results.push({ pr: pull.number, status: 'SKIPPED' });continue; }
-      if (publish && !dryRun && mergedCommentsDisabled(pull)) { results.push({ pr: pull.number, status: 'SKIPPED_MERGED_COMMENTS_DISABLED', reason: '仓库未启用合并后继续做代码检视和评论，无法补发已合并 PR 的结果。' });continue; }
       const runs = await list(api, prefix + '/actions/runs?event=MR&pull_request_id=' + pull.number, 'workflow_runs', 8);
       const relevant = runs.filter(r => boundRun(r, pull));
       relevant.sort((a, b) => b.run_number - a.run_number || (b.attempt || 1) - (a.attempt || 1));
@@ -199,7 +197,6 @@ export async function scanPrResults({ api, repository, prNumber, runId, publish 
       }
       const current = await api.readPull(repository, pull.number);
       if (!canReport(current) || current.head?.sha !== pull.head.sha || current.base?.ref !== 'master') { results.push({ pr: pull.number, status: 'STALE' });continue; }
-      if (mergedCommentsDisabled(current)) { results.push({ pr: pull.number, status: 'SKIPPED_MERGED_COMMENTS_DISABLED' });continue; }
       // Recheck the attempt and newest run after artifact download, before mutating the PR.
       const latestRuns = await list(api, prefix + '/actions/runs?event=MR&pull_request_id=' + pull.number, 'workflow_runs', 8);
       const latest = latestRuns.filter(r => boundRun(r, current)).sort((a, b) => b.run_number - a.run_number)[0];
@@ -210,7 +207,10 @@ export async function scanPrResults({ api, repository, prNumber, runId, publish 
       const saved = (await list(api, route)).find(c => owned(c, user) && c.body === rendered.body);
       if (!saved?.id) throw Error('Published comment read-back mismatch');
       results.push({ pr: pull.number, status: existing.length ? 'UPDATED' : 'PUBLISHED', commentId: saved.id, url: `https://atomgit.com/${repository}/merge_requests/${pull.number}` });
-    } catch (error) { results.push({ pr: listed.number, status: 'ERROR', reason: safe(error.message, [api.token].filter(Boolean)) }); }
+    } catch (error) {
+      const policyDenied = error.httpStatus === 405 && /not allowed to be reviewed after being merged/.test(error.message);
+      results.push({ pr: listed.number, status: policyDenied ? 'SKIPPED_MERGED_COMMENTS_DISABLED' : 'ERROR', reason: policyDenied ? '仓库未启用合并后继续做代码检视和评论，无法补发已合并 PR 的结果。' : safe(error.message, [api.token].filter(Boolean)) });
+    }
   }
   return results;
 }

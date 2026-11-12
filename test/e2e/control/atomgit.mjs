@@ -33,7 +33,7 @@ export class AtomGit {
             diagnostic = [value.error_code ?? value.code, value.error_code_name ?? value.error, value.error_message ?? value.message].filter(v => typeof v === 'string' || typeof v === 'number').join(': ').replaceAll(this.token, '[REDACTED]').replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 300);
           } catch {}
         }
-        throw Error(`AtomGit ${method} ${downloadUrl ? 'artifact CDN' : `/api/v${apiVersion}${route.split('?')[0]}`} failed (HTTP ${status || 'unknown'})${diagnostic ? ': ' + diagnostic : ''}`);
+        throw Object.assign(Error(`AtomGit ${method} ${downloadUrl ? 'artifact CDN' : `/api/v${apiVersion}${route.split('?')[0]}`} failed (HTTP ${status || 'unknown'})${diagnostic ? ': ' + diagnostic : ''}`), { httpStatus: status });
       }
       const locations = [...fs.readFileSync(headers, 'utf8').matchAll(/^location:\s*(.+)\r?$/gim)];
       return { status, bytes: result.output.subarray(0, split), location: locations.at(-1)?.[1].trim() };
