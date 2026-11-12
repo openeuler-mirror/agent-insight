@@ -134,6 +134,13 @@ jobs:
             --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
             --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA"
 
+      - name: Verify scoped process cleanup regressions
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node --test test/e2e/shared/actions-process-cleanup.test.mjs test/e2e/control/actions-phase.test.mjs
+
       - name: Upload public phase reports
         if: ${{ always() }}
         uses: upload-artifact

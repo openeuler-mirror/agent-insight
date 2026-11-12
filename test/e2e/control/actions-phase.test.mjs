@@ -235,3 +235,103 @@ test('a cancelled real CLI removes its temporary model key after stopping the ch
   const closed = once(child, 'close');child.kill('SIGTERM');
   assert.deepEqual(await closed, [143, null]);assert.equal(fs.existsSync(key), false);
 });
+
+test('Actions build marks only workload children and records completed scoped cleanup before publishing', async t => {
+  const options = fixture(t), marker = 'a'.repeat(64);options.env.E2E_ATOMGIT_JOB = '1';let cleaned = 0, started = 0;
+  const original = process.env.E2E_ACTIONS_PROCESS_SCOPE;
+  const result = await phase.runActionsPhase({ ...options, phase: 'build' }, {
+    createProcessScope: async () => ({ env: { E2E_ACTIONS_PROCESS_SCOPE: marker }, cleanup: async () => { cleaned++;return { status: 'PASS', stopped: 2, remaining: 0 }; } }),
+    compile: async (config, { env }) => {
+      started++;assert.equal(env.E2E_ACTIONS_PROCESS_SCOPE, marker);assert.equal(process.env.E2E_ACTIONS_PROCESS_SCOPE, original);assert.equal(options.env.E2E_ACTIONS_PROCESS_SCOPE, undefined);
+      fakeBuild(options.project);return { status: 'PASS', exitCode: 0, buildId: 'fixture-build' };
+    },
+  });
+  assert.equal(result.status, 'PASS', JSON.stringify(result));assert.equal(started, 1);assert.equal(cleaned, 1);
+  assert.deepEqual(result.processCleanup, { status: 'PASS', stopped: 2, remaining: 0 });
+  for (const file of ['result.json','report.json','summary.md','context.json']) assert.ok(!fs.readFileSync(path.join(options.root,'public',file),'utf8').includes(marker));
+  const report = JSON.parse(fs.readFileSync(path.join(options.root,'public/report.json')));assert.deepEqual(report.processCleanup, result.processCleanup);
+  assert.match(fs.readFileSync(path.join(options.root,'public/summary.md'),'utf8'), /Job.*清理.*PASS/);
+});
+
+test('Actions fallback runs after success, nonzero exit, hard termination and a thrown child error', async t => {
+  for (const kind of ['success','nonzero','killed','throw']) {
+    const options = await build(t);options.env.E2E_ATOMGIT_JOB = '1';let cleaned = 0;
+    const result = await phase.runActionsPhase({ ...options, phase: 'case', caseId: '002' }, {
+      createProcessScope: async () => ({ env: { E2E_ACTIONS_PROCESS_SCOPE: 'b'.repeat(64) }, cleanup: async () => { cleaned++;return { status: 'PASS', stopped: 1, remaining: 0 }; } }),
+      run: async (bin, args, { env }) => {
+        assert.equal(env.E2E_ACTIONS_PROCESS_SCOPE, 'b'.repeat(64));
+        if (kind === 'throw') throw Error('Fixture child spawn failed');
+        writeCaseReport(options,args,env);
+        return kind === 'killed' ? { code: null, signal: 'SIGKILL', expired: true } : { code: kind === 'nonzero' ? 7 : 0 };
+      },
+    });
+    assert.equal(cleaned, 1, kind);assert.equal(result.processCleanup.status, 'PASS');
+    assert.equal(result.status, kind === 'success' ? 'PASS' : kind === 'throw' ? 'BLOCKED' : 'FAIL');
+  }
+});
+
+test('a failed Actions cleanup blocks an otherwise passing phase without leaking its marker', async t => {
+  const options = await build(t), marker = 'c'.repeat(64);options.env.E2E_ATOMGIT_JOB = '1';
+  const result = await phase.runActionsPhase({ ...options, phase: 'case', caseId: '002' }, {
+    createProcessScope: async () => ({ env: { E2E_ACTIONS_PROCESS_SCOPE: marker }, cleanup: async () => { throw Error('Owned process remains: '+marker); } }),
+    run: async (bin, args, { env }) => { writeCaseReport(options,args,env);return { code: 0 }; },
+  });
+  assert.equal(result.status,'BLOCKED');assert.equal(result.exitCode,1);assert.equal(result.payload.status,'BLOCKED');assert.equal(result.processCleanup.status,'BLOCKED');
+  assert.match(result.payload.reason,/cleanup|清理/i);
+  for (const file of ['result.json','report.json','summary.md','report.html']) {
+    const text=fs.readFileSync(path.join(options.root,'public',file),'utf8');assert.ok(!text.includes(marker));assert.match(text,/BLOCKED/);
+  }
+});
+
+test('Actions cleanup capability failure stops work before compile and collectors never create a process scope', async t => {
+  const options = fixture(t);options.env.E2E_ATOMGIT_JOB='1';let created=0;
+  const overrides={createProcessScope:async()=>{created++;throw Error('pidfd unavailable');},compile:()=>assert.fail('Capability failure must stop compile')};
+  const failed=await phase.runActionsPhase({...options,phase:'build'},overrides);
+  assert.equal(failed.status,'BLOCKED');assert.equal(created,1);assert.match(failed.payload.reason,/pidfd unavailable/);
+  await phase.runActionsPhase({...options,phase:'collect'},overrides);assert.equal(created,1);
+});
+
+test('Actions collector rejects missing or unsuccessful process cleanup even when workload results pass', async t => {
+  const options=await build(t),context=JSON.parse(fs.readFileSync(path.join(options.root,'public/context.json'))),built=JSON.parse(fs.readFileSync(path.join(options.root,'public/result.json')));
+  const cleanup={status:'PASS',stopped:0,remaining:0};
+  const wrap=(phase,payload,id)=>({...built,phase,...(id?{caseId:id}:{}),payload,status:'PASS',exitCode:0,processCleanup:cleanup});
+  const results={build:wrap('build',built.payload),ut:wrap('ut',passUt())};
+  for(const id of ['001','002','003','004','005'])results[id]=wrap('case',{id,runId:childRunId(options.runId,id),title:id,mode:context.configuration.settings.caseModes[id],status:'PASS',stages:requiredStagesFor(id).map(id=>({id,status:'PASS'}))},id);
+  options.env.E2E_ATOMGIT_JOB='1';installInputs(options,results);
+  assert.equal((await phase.runActionsPhase({...options,phase:'collect'})).status,'PASS');
+  const combined=JSON.parse(fs.readFileSync(path.join(options.root,'public/report.json')));
+  assert.deepEqual(Object.keys(combined.processCleanups).sort(),['001','002','003','004','005','build','ut']);assert.deepEqual(combined.processCleanups['003'],cleanup);
+  assert.match(fs.readFileSync(path.join(options.root,'public/summary.md'),'utf8'),/Job.*进程清理.*汇总/);
+  for(const cleanup of [undefined,{status:'BLOCKED'},{status:'PASS',stopped:0,remaining:1},{status:'PASS',stopped:-1,remaining:0}]){
+    const changed=structuredClone(results);changed['003'].processCleanup=cleanup;installInputs(options,changed);
+    assert.notEqual((await phase.runActionsPhase({...options,phase:'collect'})).status,'PASS');
+  }
+});
+
+test('Actions CLI reaps escaped workload processes after hard failure or cancellation and preserves its Worker sibling', {skip:process.platform!=='linux'}, async t => {
+  for(const mode of ['hard','cancel']){
+    const options=fixture(t),script=path.join(options.project,'test/e2e/run-case.mjs');fs.mkdirSync(path.dirname(script),{recursive:true});
+    const daemon="process.on('SIGTERM',()=>{});setInterval(()=>{},1000)";
+    fs.writeFileSync(script,`import fs from 'node:fs';import {spawn} from 'node:child_process';const daemon=spawn(process.execPath,['-e',${JSON.stringify(daemon)}],{detached:true,stdio:'ignore'});process.on('SIGTERM',()=>{});fs.writeFileSync(process.argv[process.argv.indexOf('--key-file')+1]+'.ready',JSON.stringify({root:process.pid,daemon:daemon.pid}));${mode==='hard'?"process.kill(process.pid,'SIGKILL');":"setInterval(()=>{},1000);"}\n`);
+    for(const args of [['add','.'],['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','escaped process fixture']])assert.equal(spawnSync('git',args,{cwd:options.project}).status,0);
+    options.testedSha=spawnSync('git',['rev-parse','HEAD'],{cwd:options.project,encoding:'utf8'}).stdout.trim();
+    assert.equal((await phase.runActionsPhase({...options,phase:'build'},{compile:async()=>{fakeBuild(options.project);return {status:'PASS',exitCode:0,buildId:'fixture-build'};}})).status,'PASS');
+    const worker=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});console.log('ready');setInterval(()=>{},1000)"],{cwd:options.project,env:options.env,detached:true,stdio:['ignore','pipe','ignore']});
+    t.after(()=>{try{process.kill(-worker.pid,'SIGKILL');}catch{}});await once(worker.stdout,'data');
+    const child=spawn(process.execPath,[new URL('./actions-phase.mjs',import.meta.url).pathname,'--phase','case','--case','001','--project',options.project,'--root',options.root,'--run-id',options.runId,'--tested-sha',options.testedSha],{env:{...options.env,E2E_ATOMGIT_JOB:'1'},detached:true,stdio:'ignore'});
+    const closed=once(child,'close');let owned;
+    t.after(()=>{for(const pid of [child.pid,owned?.root,owned?.daemon])if(pid)try{process.kill(-pid,'SIGKILL');}catch{}});
+    const key=path.join(options.root,'private/model.key'),deadline=Date.now()+20000;
+    while(!fs.existsSync(key+'.ready')&&Date.now()<deadline&&child.exitCode===null)await new Promise(resolve=>setTimeout(resolve,20));
+    assert.ok(fs.existsSync(key+'.ready'),'CLI starts the escaped workload');owned=JSON.parse(fs.readFileSync(key+'.ready'));
+    if(mode==='cancel')child.kill('SIGTERM');
+    const stop=setTimeout(()=>child.kill('SIGKILL'),20000);
+    try{assert.deepEqual(await closed,[mode==='cancel'?143:1,null]);}finally{clearTimeout(stop);}
+    let state='';try{const stat=fs.readFileSync(`/proc/${owned.daemon}/stat`,'utf8');state=stat.slice(stat.lastIndexOf(')')+2).split(' ')[0];}catch(error){if(!['ENOENT','ESRCH'].includes(error.code))throw error;}
+    assert.ok(!state||state==='Z','Escaped marked daemon remains alive');
+    assert.doesNotThrow(()=>process.kill(worker.pid,0),'Unmarked Worker must survive');assert.equal(fs.existsSync(key),false);
+    if(mode==='hard'){
+      const report=JSON.parse(fs.readFileSync(path.join(options.root,'public/report.json')));assert.equal(report.status,'BLOCKED');assert.equal(report.processCleanup.status,'PASS');assert.ok(report.processCleanup.stopped>=1);
+    }
+  }
+});

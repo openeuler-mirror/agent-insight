@@ -15,10 +15,12 @@ import { scenarioResult, redact } from '../shared/core.mjs';
 import { renderSummary, parseUtResult } from '../shared/suite.mjs';
 import { boundedUtEnv } from '../shared/ut-environment.mjs';
 import { command, stopCommands } from '../shared/runtime.mjs';
+import { createActionsProcessScope } from '../shared/actions-process-cleanup.mjs';
 
 const caseIds = cases.map(c => c.id);
 const caseRunId = (runId, caseId) => `ag-${createHash('sha256').update(runId).digest('hex').slice(0, 16)}-${caseId}`;
 const activeKeyFiles = new Set();
+const activeProcessScopes = new Set();
 const inheritedNames = ['PATH','LANG','LC_ALL','TMPDIR','SYSTEMROOT','E2E_ISOLATED_CONTAINER','E2E_ATOMGIT_JOB','npm_config_cache','npm_config_offline','npm_config_registry','AGENT_INSIGHT_RAS_PYTHON','E2E_PYTHON','E2E_BROWSER_CHANNEL','E2E_NPM_REGISTRY','PLAYWRIGHT_BROWSERS_PATH','E2E_NPM_OFFLINE','E2E_PREPARED_PLUGIN_DIR','E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT','PIP_NO_INDEX','PIP_FIND_LINKS'];
 const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -51,6 +53,7 @@ function baseEnvironment(options, context, name) {
   const home = path.join(options.root, 'private', name);
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   Object.assign(env, { HOME: path.join(home, 'home'), AGENT_INSIGHT_HOME: path.join(home, 'insight'), E2E_SUITE_RUN_ID: options.runId });
+  Object.assign(env, options.processScopeEnv);
   fs.mkdirSync(env.HOME, { recursive: true, mode: 0o700 });
   env.DATABASE_URL = 'file:' + path.join(env.AGENT_INSIGHT_HOME, 'data/witty_insight.db');
   env.AGENT_INSIGHT_TEST_DATABASE_URL = env.DATABASE_URL;
@@ -107,7 +110,7 @@ function persist(options, context, result, report) {
   report.endedAt ||= new Date().toISOString();
   report.status = result.status;report.phase = options.phase;report.resultScope = options.phase === 'collect' ? 'workflow' : 'phase';
   if (['build','ut'].includes(options.phase)) delete report.selected;
-  const secrets = [options.env.E2E_MODEL_API_KEY].filter(Boolean);
+  const secrets = [options.env.E2E_MODEL_API_KEY, ...Object.values(options.processScopeEnv || {})].filter(Boolean);
   const safeReport = JSON.parse(redact(JSON.stringify(report), secrets)), safeResult = JSON.parse(redact(JSON.stringify(result), secrets));
   const title = ({ build: '生产编译', ut: 'UT', case: 'E2E ' + options.caseId, collect: '汇总与门禁' })[options.phase];
   const scope = options.phase === 'collect' ? '本 Job 汇总生产编译、完整 UT 和五个 E2E Job，给出整体验证结论。' : `本 Job 仅表示${title}结果；整体验证结论见“汇总与门禁” Job。`;
@@ -116,8 +119,14 @@ function persist(options, context, result, report) {
   const diagnostics = [...new Set([safeReport.error, ...(safeReport.aggregationErrors || [])].filter(Boolean))];
   const diagnosticMarkdown = diagnostics.length ? '\n\n### 阻塞原因\n\n' + diagnostics.map(value => '- ' + escape(value).replace(/[\\`*_[\]|]/g, '\\$&').replace(/[\r\n]+/g, ' ')).join('\n') : '';
   const diagnosticHtml = diagnostics.length ? '<section><h2>阻塞原因</h2><ul>' + diagnostics.map(value => `<li>${escape(value)}</li>`).join('') + '</ul></section>' : '';
-  const summary = `## ${title}：${result.status}\n\n${scope}\n\n` + renderSummary(markdownReport).markdown + diagnosticMarkdown + failureDetails(markdownReport.npmTest) + '\n';
-  const html = view.html.replace('<h1>生产编译、UT 与 E2E</h1>', `<h1>Actions ${options.phase === 'collect' ? '汇总' : '阶段'}：${escape(title)}</h1><p>${escape(scope)}</p>`).replace('</html>', diagnosticHtml + '</html>');
+  const cleanup = safeReport.processCleanup;
+  const cleanupSummary = cleanup ? `\n\nJob 进程清理：${cleanup.status}${cleanup.status === 'PASS' ? `；回收 ${cleanup.stopped} 个；剩余 ${cleanup.remaining} 个` : ''}\n` : '';
+  const cleanupHtml = cleanup ? `<section><h2>Job 进程清理</h2><p>${escape(cleanup.status)}${cleanup.status === 'PASS' ? `；回收 ${cleanup.stopped} 个；剩余 ${cleanup.remaining} 个` : ''}</p></section>` : '';
+  const cleanups = Object.entries(safeReport.processCleanups || {});
+  const cleanupTable = cleanups.length ? '\n\n### Job 进程清理汇总\n\n| Job | 状态 | 回收数 | 剩余数 |\n|---|---|---|---|\n' + cleanups.map(([id, row]) => `| ${id} | ${row.status} | ${row.stopped ?? '—'} | ${row.remaining ?? '—'} |`).join('\n') + '\n' : '';
+  const cleanupTableHtml = cleanups.length ? '<section><h2>Job 进程清理汇总</h2><table><tr><th>Job</th><th>状态</th><th>回收数</th><th>剩余数</th></tr>' + cleanups.map(([id, row]) => `<tr><td>${escape(id)}</td><td>${escape(row.status)}</td><td>${row.stopped ?? '—'}</td><td>${row.remaining ?? '—'}</td></tr>`).join('') + '</table></section>' : '';
+  const summary = `## ${title}：${result.status}\n\n${scope}\n\n` + renderSummary(markdownReport).markdown + diagnosticMarkdown + failureDetails(markdownReport.npmTest) + cleanupSummary + cleanupTable + '\n';
+  const html = view.html.replace('<h1>生产编译、UT 与 E2E</h1>', `<h1>Actions ${options.phase === 'collect' ? '汇总' : '阶段'}：${escape(title)}</h1><p>${escape(scope)}</p>`).replace('</html>', diagnosticHtml + cleanupHtml + cleanupTableHtml + '</html>');
   const directory = path.join(options.root, 'public');
   if (context) write(path.join(directory, 'context.json'), context);
   write(path.join(directory, 'result.json'), safeResult);write(path.join(directory, 'report.json'), safeReport);write(path.join(directory, 'report.html'), html);write(path.join(directory, 'summary.md'), summary);
@@ -190,30 +199,40 @@ async function casePhase(options, context, dependencies) {
     return { context, result: envelope(options, context, payload, status, execution.code), report };
   } finally { if (keyFile) { fs.rmSync(keyFile, { force: true });activeKeyFiles.delete(keyFile); } }
 }
-function matchingResult(options, context, id) {
+function matchingResult(options, context, id, cleanups) {
   const result = read(path.join(options.root, 'inputs', id, 'result.json'));
   assert.equal(result.version, 1);assert.equal(result.phase, caseIds.includes(id) ? 'case' : id);assert.equal(result.runId, options.runId);assert.equal(result.testedSha, options.testedSha);
   assert.equal(result.sourceFingerprint, context.sourceFingerprint);assert.equal(result.configHash, context.configuration.hash);assert.equal(result.buildId, context.buildId || null);
   assert.ok(Number.isFinite(Date.parse(result.endedAt)), 'Phase result is incomplete');if (caseIds.includes(id)) assert.equal(result.caseId, id);
+  if (cleanups && result.processCleanup) cleanups[id] = {
+    status: result.processCleanup.status === 'PASS' ? 'PASS' : 'BLOCKED',
+    stopped: Number.isSafeInteger(result.processCleanup.stopped) && result.processCleanup.stopped >= 0 ? result.processCleanup.stopped : null,
+    remaining: Number.isSafeInteger(result.processCleanup.remaining) && result.processCleanup.remaining >= 0 ? result.processCleanup.remaining : null,
+  };
+  if (options.env.E2E_ATOMGIT_JOB === '1') {
+    assert.equal(result.processCleanup?.status, 'PASS', 'Job process cleanup did not complete');
+    assert.equal(result.processCleanup.remaining, 0, 'Job process cleanup left owned processes');
+    assert.ok(Number.isSafeInteger(result.processCleanup.stopped) && result.processCleanup.stopped >= 0, 'Invalid Job process cleanup result');
+  }
   if (result.status === 'PASS') assert.equal(result.exitCode, 0, 'Successful phase has nonzero process exit');
   return result;
 }
 function collectPhase(options) {
   const context = validateContext(read(path.join(options.root, 'inputs/build/context.json')), options);
-  const report = emptyReport(options, context), problems = [];
+  const report = emptyReport(options, context), problems = [];report.processCleanups = {};
   let outcomes;
   try { outcomes = JSON.parse(options.env.E2E_JOB_RESULTS_JSON);assert.deepEqual(Object.keys(outcomes).sort(), ['build','ut',...caseIds].sort()); }
   catch { problems.push('Platform job outcomes are missing or malformed'); }
   for (const id of ['build','ut',...caseIds]) if (outcomes?.[id] !== 'success') problems.push(`${id}: platform outcome ${String(outcomes?.[id] || 'missing')}`);
   let build;
-  try { build = matchingResult(options, context, 'build');report.productionBuild = build.payload;assert.equal(build.status, build.payload.status); }
+  try { build = matchingResult(options, context, 'build', report.processCleanups);report.productionBuild = build.payload;assert.equal(build.status, build.payload.status); }
   catch (error) { problems.push('build: ' + message(error));report.productionBuild = { status: 'BLOCKED', reason: problems.at(-1) }; }
   if (build?.status === 'PASS') {
-    try { const ut = matchingResult(options, context, 'ut');assert.equal(ut.status, ut.payload.status);report.npmTest = ut.payload; }
+    try { const ut = matchingResult(options, context, 'ut', report.processCleanups);assert.equal(ut.status, ut.payload.status);report.npmTest = ut.payload; }
     catch (error) { problems.push('ut: ' + message(error));report.npmTest = { status: 'BLOCKED', fullSuiteComplete: false, reason: problems.at(-1) }; }
     for (const id of caseIds) {
       try {
-        const result = matchingResult(options, context, id), row = result.payload;
+        const result = matchingResult(options, context, id, report.processCleanups), row = result.payload;
         assert.equal(row.id, id);assert.equal(row.runId, caseRunId(options.runId, id), 'Actions child run ID mismatch');assert.equal(row.mode, caseMode(context.configuration.settings, id));assert.equal(result.status, row.status);
         if (row.status === 'PASS') assert.equal(scenarioResult(row.stages, id).status, 'PASS', 'Required stages are incomplete');
         report.scenarios[caseIds.indexOf(id)] = row;
@@ -240,8 +259,8 @@ export async function runActionsPhase(input, overrides = {}) {
   assert.ok(['build','ut','case','collect'].includes(options.phase));assert.match(options.runId, /^[a-z0-9-]{1,80}$/);assert.match(options.testedSha, /^[a-f0-9]{40}$/);
   const relativeRoot = path.relative(options.project, options.root);assert.ok(relativeRoot === '..' || relativeRoot.startsWith('..' + path.sep), 'Actions job root must be outside source');
   fs.mkdirSync(path.join(options.root, 'private'), { recursive: true, mode: 0o700 });fs.mkdirSync(path.join(options.root, 'public'), { recursive: true, mode: 0o755 });
-  const dependencies = { compile: compileProduction, run: command, ...overrides };
-  let outcome, context;
+  const dependencies = { compile: compileProduction, run: command, createProcessScope: createActionsProcessScope, ...overrides };
+  let outcome, context, processScope;
   const progress = () => {
     const event = { phase: options.phase, caseId: options.caseId, status: 'RUNNING' };
     if (options.phase === 'case') {
@@ -251,6 +270,11 @@ export async function runActionsPhase(input, overrides = {}) {
   };
   progress();const timer = setInterval(progress, 30000);timer.unref();
   try {
+    if (options.env.E2E_ATOMGIT_JOB === '1' && options.phase !== 'collect') {
+      processScope = await dependencies.createProcessScope();
+      options.processScopeEnv = processScope.env;
+      activeProcessScopes.add(processScope);
+    }
     if (options.phase === 'build') outcome = await buildPhase(options, dependencies);
     else if (options.phase === 'collect') outcome = collectPhase(options);
     else {
@@ -268,11 +292,36 @@ export async function runActionsPhase(input, overrides = {}) {
     if (options.phase === 'ut') report.npmTest = { ...payload, fullSuiteComplete: false };
     if (options.phase === 'case') Object.assign(report.scenarios.find(s => s.id === options.caseId) || {}, payload);
     outcome = { context, result: envelope(options, context, payload, 'BLOCKED'), report };
+  } finally {
+    if (processScope) {
+      let cleanup;
+      try {
+        cleanup = await processScope.cleanup();
+        assert.equal(cleanup.status, 'PASS');assert.equal(cleanup.remaining, 0);assert.ok(Number.isSafeInteger(cleanup.stopped) && cleanup.stopped >= 0);
+        cleanup = { status: 'PASS', stopped: cleanup.stopped, remaining: 0 };
+      } catch (error) {
+        cleanup = { status: 'BLOCKED', reason: 'Job process cleanup failed: ' + message(error) };
+        const reason = [outcome.result.payload.reason, cleanup.reason].filter(Boolean).join('; ');
+        Object.assign(outcome.result, { status: 'BLOCKED', exitCode: 1 });
+        Object.assign(outcome.result.payload, { status: 'BLOCKED', reason });
+        outcome.report.error = reason;
+      } finally { activeProcessScopes.delete(processScope); }
+      outcome.result.processCleanup = cleanup;outcome.report.processCleanup = cleanup;
+    }
+    clearInterval(timer);
   }
-  clearInterval(timer);return persist(options, outcome.context, outcome.result, outcome.report);
+  return persist(options, outcome.context, outcome.result, outcome.report);
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const stop = async () => { try { await stopCommands(); } finally { for (const file of activeKeyFiles) fs.rmSync(file, { force: true });process.exit(143); } };
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) return;stopping = true;
+    try { await stopCommands(); }
+    finally {
+      await Promise.allSettled([...activeProcessScopes].map(scope => scope.cleanup()));
+      for (const file of activeKeyFiles) fs.rmSync(file, { force: true });process.exit(143);
+    }
+  };
   process.on('SIGTERM', stop);process.on('SIGINT', stop);
   try {
     const { values } = parseArgs({ options: { phase: { type: 'string' }, project: { type: 'string' }, root: { type: 'string' }, 'run-id': { type: 'string' }, 'tested-sha': { type: 'string' }, case: { type: 'string' } } });
