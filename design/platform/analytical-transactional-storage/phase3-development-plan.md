@@ -176,3 +176,15 @@ evaluation-service/          # 单独服务/仓库，自己的事务与事实 na
 已确认：ClickHouse 分析库；PG/openGauss/SQLite 可选事务库；不复用旧表；千级为 1,000 在线采集端混合读写。
 
 推荐并写入目标设计：不可变资产版本与输入快照、Span 与正文独立保存、任务控制和评分事实分离、可靠日志、分档部署及受控迁移切换。具体数据库发行版、日志产品/硬件、留存与 SLO 候选值在 PoC 前冻结。确认设计后再编写可直接执行的逐任务代码计划，不在本设计轮提交运行时代码。
+
+## 追加批次：default项目兼容预留（2026-11-12）
+
+已获用户授权按default收口，沿用独立分支与显式隔离数据库，不接入项目UI。
+
+1. `schema/{sqlite,postgresql,opengauss}/003_projects.sql`、`project-catalog.json`、`tests/test_projects.py`：先写默认目录、历史workspace回填、FK/不可变和跨后端合同，再生成两表增量；保持001/002字节不变。
+2. `control.py`、`relational.py`、迁移/关系库测试：新workspace与default映射同事务；旧001/002核心不隐式升级；source_evidence随已应用版本纳入项目目录。验证002→003备份/回滚、业务及IAM行保留，再跑PG/openGauss。
+3. `projects.py`、`iam.py`、`authorized.py`、IAM/授权测试：保留稳定default标识与不可变上下文；拒绝未知项目、停用项目、缺失归属；Scope/指纹携带project_id；验证同default不扩大权限、旧调用仍兼容。
+4. 更新字段字典/关系总览、实施状态和中英参考。执行`python3 -W error::ResourceWarning -m unittest discover -s services/storage/tests -v`，分别记录真库和明确跳过项；目标环境可用时运行官方原生SHA驱动合同。执行现有应用`npm run test`并保留失败边界。仅文档完成不能替代代码验证。
+5. 本地提交并保留运行库与旧备份；不自动创建真实项目Owner、不为用户更换上传目标。完整项目成员/邀请留待后续增量设计。
+
+本批执行结果：默认专项141通过/99外部引擎项明确跳过；另有迁移/关系库57项、PG最终43项和原生openGauss最终43项全部通过，覆盖存在重叠，不加总为独立用例数。应用全量本轮停滞中止，未作为通过。详见[实施状态](implementation-status.md#003-default项目预留)。

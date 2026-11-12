@@ -1,22 +1,24 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-12。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，当前 **31 张事务表 + 13 张 ClickHouse 表，共44张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-12。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，当前 **33 张事务表 + 13 张 ClickHouse 表，共46张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这44张表对应**31张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这46张表对应**33张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共31表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共33表]
     BASE[空间与迁移版本 2表]
+    PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
     ASSET[资产与版本 6表]
     RUN[运行、任务、结果控制 6表]
     SUPPORT[投递、路由、制品、维护 7表]
     IAM -->|决定访问空间与资源| BASE
+    BASE -->|当前归属default| PROJECT
     BASE -->|隔离| ASSET
     ASSET -->|冻结版本输入| RUN
     RUN -->|同事务登记待投递事件| SUPPORT
@@ -49,6 +51,13 @@ flowchart TB
 |---|---|---|---|
 | `schema_meta` | 已应用迁移版本、DDL校验和与应用时间；不是业务数据。 | `(version)` | 无额外UK/IDX；按PK查找 |
 | `workspaces` | 数据隔离空间及启停状态；用户组和个人可各拥有空间。 | `(W)` | 无额外UK/IDX；按PK查找 |
+
+#### 项目目录与归属（2张，003）
+
+| 表 | 一行存什么 | PK | UK / 显式IDX及用途 |
+|---|---|---|---|
+| `projects` | 项目目录与状态；当前固定启用default，不承担成员授权。 | `(project_id)` | 无额外UK/IDX；按PK查找 |
+| `project_workspaces` | 每个workspace唯一属于哪个项目；003将旧workspace原样归入default。 | `(W)` | IDX`(project_id,W)`：按项目查workspace归属 |
 
 #### 账号、用户组与授权（10张）
 
@@ -118,6 +127,18 @@ flowchart TB
 | `eval_metric_facts` | 某结果的某指标/维度值，含类型、单位、方法及证据引用。 | `(W,result_bucket,result_id,metric_definition_release_id,metric_key,dimension_key)` | `result_bucket` | `retry_version` |
 | `eval_result_selection_current` | 事务库结果选择的分析侧最新投影；使用selection_revision。 | `(W,run_bucket,run_id,case_key,evaluator_slot)` | `run_bucket` | `selection_revision` |
 | `eval_publication_members` | 一次分析发布批次冻结采用哪些结果/裁决及排除原因。 | `(W,publication_bucket,publication_id,ordinal)` | `publication_bucket` | `retry_version` |
+
+### default项目与workspace：归属不授予权限
+
+```mermaid
+flowchart TB
+  MAP[project_workspaces] -->|project_id| P[projects：当前default]
+  MAP -->|workspace_id| W[workspaces]
+  BIND[iam_workspace_bindings] -->|workspace_id| W
+  ACL[iam_resource_access] -->|workspace_id| BIND
+```
+
+003只增加项目目录和workspace归属，不合并workspace、不改业务/Trace ID、不新增Owner/组员或ACL。当前所有workspace归属default，但用户仍按原workspace/资源权限读取，不能因为项目相同就看见其他组或其他人的数据。未来项目可以包含多个workspace，当前请求仅接受default；未指定时兼容为default，显式未知项目拒绝。
 
 ### 关联图一：账号凭据与组内资源权限
 
@@ -236,7 +257,7 @@ flowchart TB
   PUB["eval_publication_<br/>members"] -.->|冻结的run/case/slot/result| RESULT
 ```
 
-图中“指标定义注册与版本协议”是未来控制面能力，当前44表内尚无独立指标定义注册表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
+图中“指标定义注册与版本协议”是未来控制面能力，当前46表内尚无独立指标定义注册表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
 
 跨CH表读取还要知道目标的bucket；仅有`result_id`、`snapshot_id`或`release_id`通常不足以做精确分区读取。清单/发布事件需要携带路由，并校验workspace、内容hash、精确版本和可见性。此批表结构不提供跨库FK或全域ID到bucket的自动解析器，相关领域接管时须落实，不能靠全库扫描补上协议。
 
@@ -269,7 +290,7 @@ flowchart TB
 - BIGINT：带符号 64 位。时间 `_ms` 为 UTC Unix 毫秒；revision/fence/etag 统一限定 1..2^63-1，不能用墙钟拼接进程序号；CH 使用 UInt64 但 CHECK 相同范围。SQLite BIGINT 物理映射 INTEGER。
 - manifest-json/v1：ASCII 键、按键排序、UTF-8、不允许浮点；超过 JS 安全整数范围的整数及定点金额用十进制字符串。语义内容 hash 为规范字节 SHA-256；schema_meta.checksum 则是执行 SQL 文件原始字节的 SHA-256。
 - JSON 字段用 TEXT 保留，port 验证结构和大小；不依赖三库不同 JSON 语法。hash 由 port 验证小写十六进制，SQL 校验长度。
-- 所有租户外键含 workspace_id，无跨 CH 外键。SQL 默认 NO ACTION；发布版本不通过级联清理删除。nullable FK 仅表示显式无引用，不表示跨租户或全局共享。
+- 业务实体间的租户外键含workspace_id；IAM主体/组和项目目录等全局对象使用对应全局键。无跨CH外键。SQL 默认 NO ACTION；发布版本不通过级联清理删除。nullable FK 仅表示显式无引用，不表示跨租户或全局共享。
 - 不可变表 UPDATE/DELETE 被触发器拒绝。普通应用也不能绕过发布服务直接改依赖；依赖图无环、角色/类型相容、版本可见性由服务层验证。
 - schema_meta 仅迁移器写；SQL 不预插固定 checksum。新目标初始化拒绝包含旧业务表的数据库；重开新库需精确校验版本和 checksum，不隐式升级。
 
@@ -1152,7 +1173,7 @@ CHECK：`length(manifest_json) > 0`。
 
 ## IAM / 用户组增量核心表（002_iam）
 
-日期：2026-11-12。本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，当前核心物理表合计 **31 张事务表 + 13 张 CH 表 = 44 张**；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
+日期：2026-11-12。本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，截至002时核心物理表为 **31 张事务表 + 13 张 CH 表 = 44 张**；003项目预留后当前为33张事务表+13张CH表=46张；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
 
 IAM 主体是全局稳定 principal，组成员在 group 中授权，workspace 通过不可变 binding 属于一个 group 或一个 personal principal；资源 ACL 使用 workspace/kind/id 三元身份。不是给原 user 字符串增加一个 group 字段。
 
@@ -1414,3 +1435,60 @@ INDEX `idx_iam_resource_grants_principal`：`grantee_principal_id,workspace_id,r
 - `python3 -m unittest discover -s services/storage/tests -p test_iam_schema.py -v`：SQLite 真实引擎与 001 校验和回归。
 - `STORAGE_TEST_PG_CONTAINER=<专用 PG 容器> python3 -m unittest discover -s services/storage/tests -p test_iam_schema.py -v`：可选真实 PG 合同测试，使用隔离 Schema 与 ROLLBACK；不修改默认生产库。
 - openGauss SQL 单独维护；没有目标发行版本实机结果就不标记认证。并发 Owner 操作、撤销缓存失效和真实 PG 运行时测试由对应验证层报告，静态目录与 SQLite 测试不代替它们。
+
+## 003 default项目字段与一致性
+
+项目是未来产品协作边界，workspace保留为既有数据隔离/路由键。本批目录只预留default，不等同于项目管理/邀请/Owner功能。完整项目范围见[总体设计§4.3](phase2-requirements-design.md#43-项目预留当前统一归属-default)。
+
+### projects
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `project_id` | TEXT | 否 | 应用显式提供 |
+| `name` | TEXT | 否 | 应用显式提供 |
+| `status` | TEXT | 否 | active |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`(project_id)`。
+
+CHECK：`length(project_id) BETWEEN 1 AND 512`。
+
+CHECK：`project_id = trim(project_id)`。
+
+CHECK：`length(trim(name)) > 0`。
+
+CHECK：`length(name) <= 512`。
+
+CHECK：`status IN ('active','disabled')`。
+
+CHECK：`created_at_ms >= 0`。
+
+CHECK：`updated_at_ms >= 0`。
+
+### project_workspaces
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 应用显式提供 |
+| `project_id` | TEXT | 否 | 应用显式提供 |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`(workspace_id)`。
+
+FK：`(workspace_id)` → `workspaces(workspace_id)`，ON DELETE NO ACTION。
+
+FK：`(project_id)` → `projects(project_id)`，ON DELETE NO ACTION。
+
+CHECK：`length(project_id) BETWEEN 1 AND 512`。
+
+CHECK：`project_id = trim(project_id)`。
+
+CHECK：`created_at_ms >= 0`。
+
+索引：`idx_project_workspaces_project(project_id,workspace_id)`。
+
+- default项目种子为`('default','default','active',0,0)`；状态可停用，ID不可变，default不可删除。新增项目ID须规范且不含控制字符；SQLite时间字段还校验整数类型。
+- project_workspaces禁止UPDATE/DELETE；workspace_id完整继承001父表约束，不新增trim/长度/控制字符约束，旧ID逐字保留。当前解析/采集端口仍沿用原identifier契约，历史异常ID的业务接管需独立审计，不在归属迁移中静默标准化。
+- 003以原workspace创建时间回填映射，新workspace与映射同事务提交。存在同default归属不扩大IAM读取范围；绑定缺失或项目停用时拒绝访问。
+- IAM及授权门面的当前实现要求已应用003，旧001/002核心端口保持兼容且不会初始化时隐式升级。SQL文件见`services/storage/schema/{sqlite,postgresql,opengauss}/003_projects.sql`，机器目录为`services/storage/schema/project-catalog.json`。

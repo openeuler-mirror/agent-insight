@@ -7,15 +7,23 @@ description: "SQLite, PostgreSQL and openGauss control storage, authorized Click
 
 `services/storage/` is a Python 3.11+ foundation. SQLite, IAM and ClickHouse use the standard library; relational servers use an explicit DB-API connection factory. The existing Next.js/Prisma application has not switched to these ports.
 
-See the [table relationship guide](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序) for all44 table purposes, primary/unique/query keys and seven overview/relationship diagrams. It distinguishes database foreign keys from logical references across databases. The diagrams and full dictionary are maintained in Chinese.
+See the [table relationship guide](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序) for all46 table purposes, primary/unique/query keys and eight overview/relationship diagrams. It distinguishes database foreign keys from logical references across databases. The diagrams and full dictionary are maintained in Chinese.
 
 ## Implemented contracts
 
-`001_core.sql` remains byte-for-byte unchanged:21 transactional and13 ClickHouse tables. `002_iam.sql` adds10 IAM tables, for **31 transactional +13 ClickHouse =44**. The complete field/type/constraint/index dictionary is in `design/platform/analytical-transactional-storage/core-table-dictionary.md`.
+`001_core.sql` remains byte-for-byte unchanged:21 transactional and13 ClickHouse tables. `002_iam.sql` adds10 IAM tables, and003 adds2 project-directory/binding tables, for **33 transactional +13 ClickHouse =46**. The complete field/type/constraint/index dictionary is in `design/platform/analytical-transactional-storage/core-table-dictionary.md`.
 
 All three transactional backends share immutable releases/dependencies, draft/alias CAS, frozen RunPlan inputs, task leases/fences/cancellation, artifact verification and atomic result receipt/Outbox writes. ClickHouse supports trusted canonical Span batches, latest-state filtering, single-Span and paginated structure reads, exact-revision payload bundles with chunk/manifest hashes, and bounded analytics. Requests are capped at4MiB; payload bundles at64MiB.
 
 The adapter expects complete canonical revisions. Same-key/revision content conflicts must be rejected by the future materializer. Multi-request writes can partially succeed and need idempotent replay before advancing checkpoints. Durable ingest, automatic Outbox delivery, fixed snapshots, complete evaluation workflows, and production cutover are future work.
+
+### Default project reservation
+
+003 adds `projects` and `project_workspaces`. Existing workspace IDs, business rows, IAM bindings and CH keys remain unchanged; each workspace maps to `default`. New workspace creation and the default mapping commit together. A shared default project grants no additional access across users or workspaces.
+
+`AuthorizedStorage(iam, facts)` defaults to `default`; an explicit `project_id='default'` is accepted. Empty/blank/other selectors fail closed. `project_context(credential, workspace_id)` returns an immutable context after workspace authorization. Scopes, list/analytics envelopes and cache fingerprints include the project; individual CH rows keep their existing workspace keys.
+
+New targets apply001+002+003. Existing001/002 control storage remains usable without implicit upgrades, but the current IAM/project context requires explicit003 migration. Project UI, invitations and project-owner administration are future work. Existing deployed clients and application storage have not switched.
 
 ### IAM and authorization
 
@@ -43,15 +51,15 @@ Every target is explicit; no command defaults to an existing application databas
 
 ```bash
 python3 -m services.storage schema --backend sqlite
-python3 -m services.storage schema --backend postgresql --version 2
-python3 -m services.storage schema --backend opengauss --version 2
+python3 -m services.storage schema --backend postgresql --version 3
+python3 -m services.storage schema --backend opengauss --version 3
 python3 -m services.storage schema --backend clickhouse
 python3 -m services.storage init-sqlite --database /absolute/path/to/new-core.db
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/core.db
 python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db --backup /absolute/path/to/new-backup.db
 ```
 
-`schema` only prints DDL. New targets apply001+002; existing known001 targets are validated without implicit upgrades. IAM refuses001 until explicitly migrated. Unknown versions, history gaps and checksum drift fail closed. Existing Prisma databases are not altered in place.
+`schema` only prints DDL. New targets apply001+002+003; existing known001/002 targets are validated without implicit upgrades. Current IAM/project contexts require explicit003 migration. Unknown versions, history gaps and checksum drift fail closed. Existing Prisma databases are not altered in place.
 
 SQLite migration creates a new private sibling backup, verifies integrity/FKs/hash, then acquires the writer lock and compares source/backup content again. An intervening write causes refusal; the backup remains. Pending DDL and markers commit or roll back together. Backups are never overwritten and old data is not removed. New SQLite targets use WAL/FULL and must not be shared across hosts over NFS.
 

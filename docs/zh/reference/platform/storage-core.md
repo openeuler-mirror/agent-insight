@@ -7,15 +7,23 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 `services/storage/` 是 Python 3.11+ 独立存储基础库。SQLite/IAM/ClickHouse 使用标准库；PG 与 openGauss 通过显式 DB-API 连接工厂接入。现有 Next.js/Prisma 应用尚未接管这些入口，执行离线命令不会切换运行库。
 
-表的职责、主键/索引速查与七张总览/关联图见[核心表关系导读](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序)，包括IAM、版本资产、任务结果、Trace正文及数据集/评测。
+表的职责、主键/索引速查与八张总览/关联图见[核心表关系导读](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序)，包括IAM、版本资产、任务结果、Trace正文及数据集/评测。
 
 ## 已实现范围
 
 - `001_core.sql`：21 张事务表、13 张 ClickHouse 表；原始字节与 checksum 保持不变。
-- `002_iam.sql`：10 张 IAM 表，合计 **31 张事务表 + 13 张 CH 表 = 44 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
+- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，合计 **33 张事务表 + 13 张 CH 表 = 46 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
 - 三种事务后端共享资产 release/依赖封存、别名/草稿 CAS、冻结 RunPlan、任务领取/续租/fence/取消、制品校验，以及结果回执和 Outbox 同事务提交。
 - ClickHouse 支持可信 canonical Span 批量写、最新态筛选、单 Span/分页结构读取、精确 bundle revision 的多 section 正文、正文块与清单 hash 校验，以及受限范围的最新态聚合。请求上限 4MiB，正文 bundle 上限 64MiB。
 - 一致性旧 SQLite 清点、原始导出和校验；尚无逐模型转换/目标 apply、在线增量追平或生产切换。
+
+### 当前项目：default
+
+003新增`projects`和`project_workspaces`，把已有workspace保持原ID/权限映射到default项目。新workspace同事务加入default；业务数据通过workspace间接归属项目，CH事实和排序键无需逐条改写。项目目录不产生Owner/成员授权，不合并不同用户或组的数据。
+
+`AuthorizedStorage(iam, facts)`默认使用default，也可显式传`project_id='default'`；空字符串、空白和其他项目ID拒绝。`service.project_context(credential, workspace_id)`返回经workspace授权校验的不可变上下文。`AccessScope`以及列表/聚合响应包含project_id，缓存指纹也包含项目；单条CH事实仍保持原workspace键。
+
+新初始化应用001+002+003。旧001/002核心初始化只校验，不自动升级；启用当前IAM/项目上下文须先显式迁移003。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
 
 ### IAM 与统一授权
 
@@ -46,15 +54,15 @@ PG 可安装 `services/storage/requirements-relational.txt` 固定测试驱动�
 
 ```bash
 python3 -m services.storage schema --backend sqlite
-python3 -m services.storage schema --backend postgresql --version 2
-python3 -m services.storage schema --backend opengauss --version 2
+python3 -m services.storage schema --backend postgresql --version 3
+python3 -m services.storage schema --backend opengauss --version 3
 python3 -m services.storage schema --backend clickhouse
 python3 -m services.storage init-sqlite --database /absolute/path/to/new-core.db
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/core.db
 python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db --backup /absolute/path/to/new-backup.db
 ```
 
-`schema` 只输出 SQL。新目标初始化应用 001+002；已有已知 001 只校验，不隐式升级。IAM 在 001 上拒绝启用，需先显式迁移。未知版本、历史缺口或 checksum 漂移拒绝操作。已有 Prisma 库不会被原地改表。
+`schema` 只输出 SQL。新目标初始化应用 001+002+003；已有已知 001/002 只校验，不隐式升级。当前IAM/项目上下文在003之前拒绝启用，需先显式迁移。未知版本、历史缺口或 checksum 漂移拒绝操作。已有 Prisma 库不会被原地改表。
 
 SQLite 迁移先生成同目录的新私有备份并检查完整性/FK/hash，再持写锁重核源与备份内容，防止备份后的并发写入被遗漏；变化时拒绝并保留备份。待执行迁移及版本登记同事务成功或回滚，不覆盖旧备份、不删除原数据。新目标启用 WAL/FULL，不能将 SQLite 文件放在 NFS 跨主机共享写入。
 

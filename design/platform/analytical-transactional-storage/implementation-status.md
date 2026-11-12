@@ -1,12 +1,12 @@
 # 存储核心、IAM 与三库适配实施状态
 
-日期：2026-11-12。当前已完成001核心基础和本批IAM/002/统一授权/三事务库合同；整体重构及现有Web接管仍在实施中。总体目标见phase1/phase2，本批执行范围见[phase5](phase5-iam-adapters-plan.md)。
+日期：2026-11-12。当前已完成001核心基础、IAM/002/统一授权/三事务库合同与003 default项目预留；整体重构及现有Web接管仍在实施中。总体目标见phase1/phase2，本批执行范围见[phase5](phase5-iam-adapters-plan.md)。
 
 ## 基线与交付
 
 - 工作分支`codex/storage-core-refactor`基于已同步的`upstream/master`：`298d1d5b10ab3ab67a955b41a1665b0cd4d26b54`，旧库基线96个Prisma模型。
-- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`与机器字段目录。
-- 当前物理核心为 **31张事务表+13张CH表=44张**：001原34张，002新增10张IAM表。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
+- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`、`003_projects.sql`与机器字段目录。
+- 当前物理核心为 **33张事务表+13张CH表=46张**：001原34张，002新增10张IAM表，003新增项目目录与workspace归属2张表。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
 - `services/storage/control.py`、`relational.py`共享资产/发布/草稿/别名、RunPlan、任务lease/fence/取消、结果回执与Outbox原子性。PG/openGauss写锁粒度为正确性基线，尚未完成千级混合容量优化。
 - `iam.py`实现稳定主体、密码派生、会话/API凭据、用户组/成员CAS/最后Owner保护、空间归属、资源归属与显式共享/撤销。组管理员全组读取，普通成员本人/共享，viewer只读；无隐式平台管理员。
 - `authorized.py`统一校验元数据/列表/Span/正文/聚合/有界制品下载。CH读取和下载前后重新校验权限；慢I/O与密码派生不占写事务。私有评测gold不通过普通制品端口开放。
@@ -14,7 +14,28 @@
 - `migrations.py`与CLI实现已知连续前缀、checksum、显式迁移计划及原子升级。SQLite备份后锁源重核；服务端先取迁移表锁再建立快照，绑定备份源身份/历史/全部托管表内容证据。DDL不得自行提交事务。
 - `legacy.py`继续提供只读原始清点/导出/验证，保留活跃WAL、类型、物理列、重复行和摘要；不执行96模型的语义转换或旧库目标导入。
 
-## 最终验证
+## 003 default项目预留
+
+- 新增`projects`与`project_workspaces`；新目标初始化应用001+002+003。001/002原始字节保持不变，旧目标需显式备份/核验证据后迁移。
+- 003为全部既有workspace补default归属，原ID（包括既有非规范ID）逐字保留，不重写业务/CH行，不生成IAM账号、成员、Owner或ACL。新workspace及default映射同事务提交。
+- `projects.py`提供稳定default标识、不可变ProjectContext和有界解析。未指定项目兼容default；显式空字符串、空白、其他项目拒绝，未绑定/停用项目失败关闭。
+- AccessScope、workspace grant、列表/聚合元信息和scope指纹带project_id；同default不扩大现有workspace/资源权限。项目禁用后仍能撤销本人会话/Key，认证与项目授权分别检查。
+- 当前仅新存储库预留default，现有Next.js/Prisma、已部署客户端和业务运行库未切换。项目UI、Owner/邀请/多项目成员及切换上报流程属于后续增量，不因目录存在就视为已实现。
+
+### 本批验证记录
+
+- 默认专项命令（未配置外部数据库变量）：**执行240个测试条目，141通过、99明确跳过、0失败**，15.547秒。跳过的是外部引擎合同，不能写成240项全通过。
+- 迁移/关系库/CLI专测：**57通过、0跳过**，186.335秒，含真实PG/openGauss各14条控制合同。结果记录在子任务工具输出，未独立保存原始日志；不将工具摘要当作恢复演练证明。
+- PG最终复验：**43通过、0跳过**，25.953秒，包含真实PG项目授权/CH闭环29、PG DDL约束4、SQLite/目录检查10；采用最后的注销修复代码。日志为`/var/folders/8s/r6t1yc991fq4xdx422ccr29h0000gn/T/storage-projects-pg-kovx7agl/pg-scope-ddl.log`。
+- 原生openGauss官方Linux ARM64/Python3.11 SHA256：**43通过、0跳过**，804.600秒；IAM16、授权10、真实CH闭环3、控制/迁移14。此次执行受资源竞争影响，不作为吞吐基准。
+- native额外003 Schema事务探针验证5类旧workspace ID逐字保留（首尾空白、空ID、600字符、C0、C1），无隐式IAM授权，另有9项预期约束拒绝；探针全部回滚。
+- 所有46表主键/排序键及显式UK/IDX清单与目录/DDL核对，8张Mermaid图解析和实际渲染通过。修改文件链接、代码围栏、空白和Python编译检查通过。
+- 应用`npm run test`本轮约1056秒后因长期无新输出停止，日志空闲约862秒；**未完成**，不统计完整通过/失败数。此前44项失败仅属于下方历史基线。本轮未修改现有应用源码/Prisma/依赖/脚本。
+- 预先启动的旧版全套专项和原生42项在最后注销边界修复后作废/中止，最终结果不使用它们；只采用本节明确标注的最终代码验证。
+
+证据：默认专项`/var/folders/8s/r6t1yc991fq4xdx422ccr29h0000gn/T/storage-projects-units-z64ank1t/python-units.log`；原生最终日志/源码指纹为已有OG证据目录中的`native-project-final43.log`、`native-project-final43-evidence.json`、`native-project-tested-files-final43.json`；当前代码与已测代码指纹一致。应用不完整日志与停止记录为`/var/folders/8s/r6t1yc991fq4xdx422ccr29h0000gn/T/storage-projects-npm-_tju0g4e/npm-test.log`、`interruption.json`。应用未在浏览器中验证，本批仅对文档图示做无头渲染检查。
+
+## IAM/002批次验证（历史基线）
 
 | 层次 | 实际结果 | 证明范围 |
 |---|---|---|
@@ -56,4 +77,4 @@
 - Web身份/请求门面接入、规模化ACL/删除投影、保留期/pin/索引重建。
 - 控制写锁细化、1000在线采集端混合读写压测、故障/HA及目标部署发行版恢复验收。
 
-原首批70项结果已由当前192项专项取代；原全量失败证据与总体设计仍保留，不将本批测试外推为完整重构/生产切换完成。
+原首批70项结果及IAM/002批次192项专项作为历史证据保留；default项目增量另行记录。原全量失败证据与总体设计仍保留，不将本批测试外推为完整重构/生产切换完成。

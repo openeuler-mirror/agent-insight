@@ -164,6 +164,29 @@ flowchart TB
 
 增量迁移已实现002 IAM版本，不就地改001checksum。先准备账号与组、workspace绑定和历史映射，再切换授权入口；没有明确归组的旧数据保持隔离并进入待确认清单。必须验证多组用户、组admin看到其他成员全部组数据、普通成员隔离、组间隔离、单Span/正文/统计/下载同权限、退出组和停用/改密撤销、同名不同人不串数据，以及PG/openGauss/SQLite合同一致。已实施表数为44张，最新测试、适配版本与尚未接管领域见[实施状态](implementation-status.md)及[本批计划](phase5-iam-adapters-plan.md)。
 
+### 4.3 项目预留：当前统一归属 default
+
+2026-11-12 用户确认：支持未来一个用户加入多个项目、Owner读取全项目、成员读取本人数据；当前先预留项目概念，所有现有数据归入`default`，暂不建设完整项目管理。本批实现范围是新存储基础库的兼容目录/请求上下文；现有Next.js/Prisma入口仍按既有接管计划迁移。
+
+**项目与workspace分开。** 项目是未来产品协作边界，workspace继续作为现有数据隔离和查询路由键。新增`projects`（项目目录）与`project_workspaces`（workspace到项目的唯一归属），以追加`003_projects.sql`实现。当前仅支持`project_id=default`；一个项目可含多个workspace，一个workspace只归一个项目。项目和IAM组不互相当作别名，组/个人既有权限继续按workspace与资源校验。
+
+| 新增表 | 字段与约束 | 当前行为 |
+|---|---|---|
+| projects | project_id TEXT PK；name TEXT；status active/disabled；created_at_ms/updated_at_ms BIGINT非负 | 固定种子default，禁止删除或修改其ID；状态停用时拒绝该项目访问 |
+| project_workspaces | workspace_id TEXT PK/FK workspaces；project_id TEXT FK projects；created_at_ms BIGINT非负；索引(project_id,workspace_id) | 每workspace唯一归属；绑定不可UPDATE/DELETE，后续转移走显式迁移协议 |
+
+**兼容和权限规则：**
+
+1. 003创建default目录并给每个既有workspace补一条归属记录，保持原workspace/业务ID、原生Trace映射、用户/组绑定、资源ACL、版本hash和CH排序身份不变。业务数据通过workspace间接归属项目，不逐条改写CH事实。
+2. 新建workspace时，在同一事务中注册default归属。001/002旧核心库保持可读且不隐式升级；新的IAM/项目上下文功能要求显式升级003。迁移继续先备份/核验证据，失败原子回滚，不操作默认业务库。
+3. 未传项目时兼容解析为default；显式default也接受。空字符串/空白/未知项目拒绝，不能把错误project_id静默落入default。当前不开放任意项目创建与切换。
+4. AccessScope显式携带project_id，scope/cache指纹包含项目。项目目录仅约束路由，不授予读取权：处于同一个default项目不代表普通用户可以读取其他workspace或其他人的资源；不自动产生default项目Owner或平台管理员。
+5. ProjectContext解析器同时核对default项目有效、workspace有效且归属存在。对外授权门面绑定default上下文；配置其他project_id时失败关闭，不把只传workspace当作绕过项目边界的路径。
+6. 采集API凭据仍绑定现有principal/workspace，项目由唯一归属映射推导。网页查看上下文、客户端上传目的地和Trace归属将来分别管理；本批不改变任何已部署客户端配置。
+7. 后续项目成员/邀请/Owner及严格本人数据策略属于独立增量。成员身份必须由认证上下文建立，不能信任payload用户名；项目切换只影响新Trace，运行中和待重传Trace保留原目的地。默认目录不提前实现这些产品能力。
+
+新增两表后核心物理数量为**33张事务表+13张CH表=46张**。001/002原始字节保持不变，旧库原始导出/转换的目标默认项目显式为default。项目归属当前不可转移，后续多项目迁移须重新验证源/目标权限及跨库路由一致性。
+
 ## 5. ClickHouse 表目录与核心键
 
 所有排序键非空；不存在可变 status/model/tag 进入替换身份键的设计。以下引擎写作逻辑 `MergeTree`/`ReplacingMergeTree`；生产部署由拓扑映射为 Replicated 家族，不能把非复制示例当 HA 配置。

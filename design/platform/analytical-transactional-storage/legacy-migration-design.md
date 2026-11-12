@@ -156,3 +156,5 @@ PG/openGauss 必须使用显式 DSN 或连接工厂、隔离 schema 和私有制
 工具**不会自动执行pg_dump/gs_dump，也不能验证外部备份字节确实承载该源快照或仅凭restore_verified证明恢复成功**。正式部署仍须由运维停写、制作真实备份并完成恢复演练；测试里的外部备份fixture只验证证据门禁，不作生产恢复证明。
 
 关系库适配器的业务写事务暂以schema_meta基础行锁跨进程串行协调（READ COMMITTED）；迁移另用上述表级屏障。只读请求使用REPEATABLE READ READ ONLY，SQLite使用WAL快照，均不取业务写锁；慢CH HTTP与密码派生在写事务外。此批保证领取/取消/续租/终态正确性，不是千级写吞吐实现。PG15.19及openGauss7.0.0 PG兼容模式已分别执行真实合同；openGauss原生SHA256使用官方Linux ARM64 Python驱动，不外推其他发行版或客户端认证组合。
+
+003项目目录增量延续相同备份/锁源/回滚协议：旧workspace逐字保持并映射到default，不因新目录格式约束改变原ID；不回写原业务表或CH事实。当前总计33张事务表、13张CH表。旧Prisma原始导出仍保留原格式，之后目标转换显式使用default；不能把项目映射等同于已有96模型语义迁移完成。
