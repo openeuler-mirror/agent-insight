@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .contracts import identifier
 from .iam import Forbidden, RESOURCE_KINDS
+from .projects import default_project_id, resolve_project
 
 
 RESOURCE_TABLES = {
@@ -16,10 +17,17 @@ RESOURCE_TABLES = {
 
 
 class AuthorizedStorage:
-    def __init__(self, iam, facts):
+    def __init__(self, iam, facts, *, project_id=None):
+        self.project_id=default_project_id(project_id)
         self.iam=iam
         self.control=iam.control
         self.facts=facts
+
+    def project_context(self, credential, workspace_id):
+        with self.control.read_transaction() as con:
+            scope=self.iam._scope(con,credential)
+            self.iam._workspace(scope,workspace_id,'read')
+            return resolve_project(con,workspace_id,self.project_id)
 
     def create_trace(self, credential, workspace_id, trace_id, bucket, *, source_namespace, native_trace_id):
         datetime.date.fromisoformat(bucket)
@@ -110,7 +118,7 @@ class AuthorizedStorage:
         current,current_excluded=self._summary_scope(credential,workspace_ids,bucket_from,bucket_to,trace_ids)
         if current.fingerprint!=scope.fingerprint or current_excluded!=excluded:
             raise Forbidden('authorization or deletion scope changed during analytics; retry')
-        return dict(result,scope_fingerprint=scope.fingerprint)
+        return dict(result,project_id=scope.project_id,scope_fingerprint=scope.fingerprint)
 
     def read_resource(self, credential, workspace_id, resource_kind, resource_id):
         if resource_kind not in RESOURCE_KINDS:
@@ -145,7 +153,7 @@ class AuthorizedStorage:
                 access+=" AND t.namespace IN ('public','trace','result','report','attachment')"
             parameters.append(limit)
             rows=con.execute(f'SELECT t.* FROM {table} t JOIN iam_resource_access a ON a.workspace_id=t.workspace_id AND a.resource_id=t.{key} WHERE a.workspace_id=? AND a.resource_kind=? AND t.{key}>?'+access+f' ORDER BY t.{key} LIMIT ?',tuple(parameters)).fetchall()
-            return {'items':[dict(row) for row in rows],'scope_fingerprint':scope.fingerprint}
+            return {'items':[dict(row) for row in rows],'project_id':scope.project_id,'scope_fingerprint':scope.fingerprint}
 
     def read_artifact(self, credential, workspace_id, artifact_id):
         with self.control.read_transaction() as con:

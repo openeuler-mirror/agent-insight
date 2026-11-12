@@ -40,6 +40,35 @@ class AuthorizedTests(unittest.TestCase):
     def make_store(self):
         return SQLiteControlStore(Path(self.temp.name)/'db',clock=lambda:100000)
 
+    def test_missing_project_defaults_and_explicit_project_is_preserved(self):
+        self.assertEqual(self.service.project_id,'default')
+        explicit=self.api.AuthorizedStorage(self.iam,self.ch,project_id='default')
+        context=explicit.project_context(self.tokens['alice'],'w')
+        self.assertEqual((context.project_id,context.workspace_id),('default','w'))
+        with self.assertRaises(Forbidden): explicit.project_context(self.tokens['alice'],'foreign')
+        for project in ('', ' ', 'other', 0):
+            with self.subTest(project=project),self.assertRaises(ValueError):
+                self.api.AuthorizedStorage(self.iam,self.ch,project_id=project)
+        self.assertEqual(self.ch.calls,[])
+
+    def test_default_context_resolution_is_immutable_and_does_not_authorize_by_itself(self):
+        from dataclasses import FrozenInstanceError
+        from services.storage.projects import resolve_project, ProjectUnavailable
+        context=self.service.project_context(self.tokens['alice'],'w')
+        with self.assertRaises(FrozenInstanceError): context.project_id='other'
+        with self.store.read_transaction() as con:
+            self.assertEqual(resolve_project(con,'w').project_id,'default')
+            with self.assertRaises(ProjectUnavailable): resolve_project(con,'missing')
+        with self.assertRaises(Forbidden): self.service.read_span(self.tokens['alice'],'w','2026-11-12','b','s')
+        self.assertEqual(self.ch.calls,[])
+
+    def test_disabled_project_blocks_all_fact_access(self):
+        with self.store.transaction() as con:
+            con.execute("UPDATE projects SET status='disabled' WHERE project_id='default'")
+        with self.assertRaises(Forbidden): self.service.read_span(self.tokens['admin'],'w','2026-11-12','t','s')
+        with self.assertRaises(Forbidden): self.service.summarize_spans(self.tokens['admin'],['w'],'2026-11-12','2026-11-12')
+        self.assertEqual(self.ch.calls,[])
+
     def test_all_trace_paths_check_same_permission_before_access(self):
         for method,args in [('read_span',('w','2026-11-12','b','s')),('read_spans',('w','2026-11-12','b')),('read_payload',('w','2026-11-12','b','s','a'*64,'output'))]:
             with self.subTest(method=method),self.assertRaises(Forbidden):

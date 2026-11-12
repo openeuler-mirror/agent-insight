@@ -39,6 +39,40 @@ class IAMTests(unittest.TestCase):
     def make_store(self):
         return SQLiteControlStore(Path(self.temp.name)/'core.db', clock=lambda: self.now)
 
+    def test_default_project_is_explicit_without_expanding_workspace_permissions(self):
+        scope=self.iam.scope(self.tokens['admin'])
+        self.assertEqual(scope.project_id,'default')
+        self.assertEqual({g.project_id for g in scope.grants},{'default'})
+        self.assertEqual(set(scope.allowed_workspace_ids),{'w','w2'})
+        with self.assertRaises(self.api.Forbidden): self.iam.authorize(self.tokens['admin'],'foreign','read','trace','x')
+
+    def test_other_or_missing_project_mapping_never_falls_back_to_default(self):
+        with self.store.transaction() as con:
+            con.execute("INSERT INTO projects VALUES('other','Other','active',0,0)")
+            for name in ('other-project','unmapped'):
+                con.execute("INSERT INTO workspaces VALUES(?,?,'active',0,0)",(name,name))
+            con.execute("INSERT INTO project_workspaces VALUES('other-project','other',0)")
+        for workspace in ('other-project','unmapped'):
+            self.iam.bind_workspace(workspace,principal_id='admin')
+            self.iam.record_resource_for_provisioning(workspace,'trace','t','admin')
+            self.assertNotIn(workspace,self.iam.scope(self.tokens['admin']).allowed_workspace_ids)
+            with self.assertRaises(self.api.Forbidden): self.iam.authorize(self.tokens['admin'],workspace,'read','trace','t')
+
+    def test_project_disable_does_not_prevent_credential_self_revocation(self):
+        with self.store.transaction() as con:
+            con.execute("UPDATE projects SET status='disabled' WHERE project_id='default'")
+        self.iam.revoke_credential(self.tokens['alice'])
+        with self.store.transaction() as con:
+            con.execute("UPDATE projects SET status='active' WHERE project_id='default'")
+        with self.assertRaises(self.api.Unauthorized): self.iam.scope(self.tokens['alice'])
+
+    def test_disabling_default_project_revokes_access_without_touching_resource_rows(self):
+        with self.store.transaction() as con:
+            con.execute("UPDATE projects SET status='disabled' WHERE project_id='default'")
+        with self.assertRaises(self.api.Forbidden): self.iam.authorize(self.tokens['alice'],'w','read','trace','alice-trace')
+        with self.store.read_transaction() as con:
+            self.assertEqual(con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE resource_id='alice-trace'").fetchone()[0],'alice')
+
     def test_password_login_normalization_and_no_plaintext(self):
         token=self.iam.login(' ALICE ',PASSWORD)
         self.assertEqual(self.iam.scope(token).principal_id,'alice')

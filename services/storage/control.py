@@ -74,7 +74,14 @@ class ControlOperations:
         identifier(workspace_id); identifier(name)
         now = self.clock()
         with self.transaction() as con:
+            applied = con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0]
+            if applied >= 3:
+                project = con.execute('SELECT status FROM projects WHERE project_id=?', ('default',)).fetchone()
+                if project is None or project['status'] != 'active':
+                    raise StorageError('default project must be active before creating a workspace')
             con.execute('INSERT INTO workspaces(workspace_id,name,created_at_ms,updated_at_ms) VALUES(?,?,?,?)', (workspace_id, name, now, now))
+            if applied >= 3:
+                con.execute('INSERT INTO project_workspaces(workspace_id,project_id,created_at_ms) VALUES(?,?,?)', (workspace_id, 'default', now))
 
     def create_identity(self, workspace_id, asset_id, kind, name):
         for value in (workspace_id, asset_id, kind, name): identifier(value)

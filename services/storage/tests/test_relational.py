@@ -128,7 +128,7 @@ class _RelationalControlContracts:
         self.store.create_workspace('changed','Changed')
         with self.assertRaises(StorageError): self.store.migrate(backup_manifest=manifest)
         manifest['source_evidence']=self.store.source_evidence()
-        self.assertEqual(self.store.migrate(backup_manifest=manifest)['current_version'],2)
+        self.assertEqual(self.store.migrate(backup_manifest=manifest)['current_version'],3)
         missing=copy.deepcopy(manifest); missing.pop('operator')
         with self.assertRaises(StorageError): self.store.migrate(backup_manifest=missing)
 
@@ -175,7 +175,7 @@ class _RelationalControlContracts:
             writing.result(timeout=5)
             with self.assertRaises(StorageError): migrating.result(timeout=5)
 
-    def _baseline_001_store(self):
+    def _baseline_001_store(self, version=1):
         import hashlib
         from services.storage import relational
         schema='storage_old_'+uuid.uuid4().hex
@@ -189,6 +189,10 @@ class _RelationalControlContracts:
                 cursor.execute('SET search_path TO "'+schema+'"')
                 cursor.execute(migration.read_text())
                 cursor.execute('INSERT INTO schema_meta VALUES(%s,%s,%s,%s)',(1,'core',hashlib.sha256(migration.read_bytes()).hexdigest(),self.now))
+                if version >= 2:
+                    iam_migration=migration.parent/'002_iam.sql'
+                    cursor.execute(iam_migration.read_text())
+                    cursor.execute('INSERT INTO schema_meta VALUES(%s,%s,%s,%s)',(2,'iam',hashlib.sha256(iam_migration.read_bytes()).hexdigest(),self.now))
             raw.commit()
         finally: raw.close()
         def cleanup():
@@ -200,7 +204,7 @@ class _RelationalControlContracts:
         self.addCleanup(cleanup)
         return store
 
-    def test_real_001_to_002_preserves_workspace_release_and_run(self):
+    def test_real_001_to_latest_preserves_workspace_release_and_run(self):
         store=self._baseline_001_store()
         store.create_workspace('preserved','Preserved')
         store.create_identity('preserved','agent','agent','Agent')
@@ -213,13 +217,14 @@ class _RelationalControlContracts:
             original_run=tuple(con.execute('SELECT * FROM runs').fetchone())
         manifest=self._external_manifest(store)
         result=store.migrate(backup_manifest=manifest)
-        self.assertEqual(result['current_version'],2)
+        self.assertEqual(result['current_version'],3)
         with store.read_transaction() as con:
             self.assertEqual(tuple(con.execute('SELECT * FROM schema_meta WHERE version=1').fetchone()),original_marker)
             self.assertEqual(tuple(con.execute('SELECT * FROM workspaces').fetchone()),original_workspace)
             self.assertEqual(tuple(con.execute('SELECT * FROM asset_releases').fetchone()),original_release)
             self.assertEqual(tuple(con.execute('SELECT * FROM runs').fetchone()),original_run)
             self.assertEqual(con.execute('SELECT COUNT(*) FROM iam_principals').fetchone()[0],0)
+            self.assertEqual(con.execute("SELECT project_id FROM project_workspaces WHERE workspace_id='preserved'").fetchone()[0],'default')
 
     def test_real_bad_002_cannot_commit_partial_tables_or_version(self):
         import shutil
@@ -242,6 +247,91 @@ class _RelationalControlContracts:
         with store.read_transaction() as con:
             self.assertEqual(con.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0],1)
             self.assertEqual(con.execute('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?',(store.schema,'iam_principals')).fetchone()[0],0)
+
+    def test_real_002_to_003_preserves_credentials_acl_and_previous_markers(self):
+        from services.storage.iam import IAMStore
+        store=self._baseline_001_store(version=2)
+        store.create_workspace('preserved','Preserved')
+        store.create_identity('preserved','agent','agent','Agent')
+        store.publish_release('preserved','agent','release','v1',{'prompt':'keep'})
+        store.create_run('preserved','run',{'agent':'release'},{'seed':8},expected_case_count=1)
+        import hashlib,json
+        password_hash=hashlib.pbkdf2_hmac('sha256',b'project migration passphrase 2026',bytes(32),600000).hex()
+        parameters=json.dumps({'iterations':600000,'salt':'00'*32})
+        token='session_'+'A'*43
+        with store.transaction() as con:
+            con.execute("INSERT INTO iam_principals VALUES(?,?,?,'active',2,?,?)",('owner','owner','Owner',self.now,self.now))
+            con.execute('INSERT INTO iam_password_credentials VALUES(?,?,?,?,1,?)',('owner',password_hash,'pbkdf2-sha256',parameters,self.now))
+            con.execute("INSERT INTO iam_workspace_bindings VALUES(?,'personal',NULL,?,1,?,?)",('preserved','owner',self.now,self.now))
+            con.execute("INSERT INTO iam_resource_access VALUES(?,'trace',?,?,'private',1,?,?)",('preserved','trace','owner',self.now,self.now))
+            con.execute('INSERT INTO iam_sessions VALUES(?,?,?,?,?,?,NULL)',('old-session','owner',hashlib.sha256(token.encode()).hexdigest(),2,self.now,self.now+3600000))
+        tables=('schema_meta','workspaces','asset_releases','runs','iam_principals','iam_password_credentials','iam_workspace_bindings','iam_resource_access','iam_sessions')
+        with store.read_transaction() as con:
+            before={name:[tuple(row) for row in con.execute('SELECT * FROM '+name)] for name in tables}
+        store.initialize()
+        self.assertEqual(store.migration_plan()['current_version'],2)
+        self.assertEqual(len(store.source_evidence()['history']),2)
+        manifest=self._external_manifest(store)
+        self.assertEqual(store.migrate(backup_manifest=manifest)['current_version'],3)
+        with store.read_transaction() as con:
+            for name,rows in before.items():
+                actual=[tuple(row) for row in con.execute('SELECT * FROM '+name)]
+                self.assertEqual(actual[:2] if name=='schema_meta' else actual,rows,name)
+            self.assertEqual(con.execute("SELECT project_id FROM project_workspaces WHERE workspace_id='preserved'").fetchone()[0],'default')
+        self.assertTrue({'projects','project_workspaces'}.issubset({t['name'] for t in store.source_evidence()['tables']}))
+        iam=IAMStore(store)
+        iam.authorize(token,'preserved','read','trace','trace')
+        iam.authorize(iam.login('owner','project migration passphrase 2026'),'preserved','read','trace','trace')
+
+    def test_real_003_failure_rolls_back_default_project_and_backfill(self):
+        import shutil
+        from unittest.mock import patch
+        from services.storage import migrations
+        from services.storage.control import StorageError
+        store=self._baseline_001_store(version=2);store.create_workspace('preserved','Preserved')
+        manifest=self._external_manifest(store)
+        root=Path(self.temp.name)/'bad-project-schema';directory=root/self.backend;directory.mkdir(parents=True)
+        original=Path(migrations.__file__).parent/'schema'/self.backend
+        for filename in ('001_core.sql','002_iam.sql'): shutil.copyfile(original/filename,directory/filename)
+        (directory/'003_projects.sql').write_text((original/'003_projects.sql').read_text()+'\nINSERT INTO missing_project_target VALUES(1);')
+        with patch.object(migrations,'SCHEMA_ROOT',root):
+            with self.assertRaises(StorageError): store.migrate(backup_manifest=manifest)
+            self.assertEqual(store.migration_plan()['current_version'],2)
+        with store.read_transaction() as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name IN (?,?)',(store.schema,'projects','project_workspaces')).fetchone()[0],0)
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0],1)
+
+    def test_real_default_project_mapping_is_atomic_and_must_be_active(self):
+        from services.storage.control import StorageError
+        with self.store.read_transaction() as con:
+            self.assertEqual(con.execute("SELECT project_id FROM project_workspaces WHERE workspace_id='w'").fetchone()[0],'default')
+        with self.store.transaction() as con: con.execute("UPDATE projects SET status='disabled' WHERE project_id='default'")
+        with self.assertRaises(StorageError): self.store.create_workspace('blocked','Blocked')
+        with self.store.read_transaction() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM workspaces WHERE workspace_id='blocked'").fetchone()[0],0)
+
+    def test_real_runtime_missing_003_refuses_reopen_without_changes(self):
+        import shutil
+        from unittest.mock import patch
+        from services.storage import migrations
+        from services.storage.control import StorageError
+        before=self.store.source_evidence()
+        old=Path(self.temp.name)/'old-runtime'/self.backend;old.mkdir(parents=True)
+        original=Path(migrations.__file__).parent/'schema'/self.backend
+        for filename in ('001_core.sql','002_iam.sql'): shutil.copyfile(original/filename,old/filename)
+        with patch.object(migrations,'SCHEMA_ROOT',old.parent):
+            with self.assertRaises(StorageError): self.store.initialize()
+        self.assertEqual(self.store.source_evidence(),before)
+
+    def test_real_project_backfill_preserves_legacy_workspace_identifier(self):
+        from services.storage.control import StorageError
+        store=self._baseline_001_store(version=2)
+        store.create_workspace(' padded ','Preserve original identifier')
+        manifest=self._external_manifest(store)
+        self.assertEqual(store.migrate(backup_manifest=manifest)['current_version'],3)
+        with store.read_transaction() as con:
+            self.assertEqual(con.execute('SELECT workspace_id FROM workspaces').fetchone()[0],' padded ')
+            self.assertEqual(tuple(con.execute("SELECT workspace_id,project_id FROM project_workspaces WHERE workspace_id=' padded '").fetchone()),(' padded ','default'))
 
     def test_real_cancel_and_draft_cas_and_rollback(self):
         from services.storage.control import Conflict

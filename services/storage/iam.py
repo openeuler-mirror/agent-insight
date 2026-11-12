@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from .contracts import canonical_json, content_hash, identifier, revision
 from .control import Conflict, StorageError
+from .projects import DEFAULT_PROJECT_ID, ProjectUnavailable, require_default_project
 
 
 class Unauthorized(StorageError):
@@ -39,6 +40,7 @@ class WorkspaceGrant:
     policy_revision: int
     membership_etag: int
     binding_revision: int
+    project_id: str = DEFAULT_PROJECT_ID
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ class AccessScope:
     grants: tuple
     capabilities: frozenset
     fingerprint: str
+    project_id: str = DEFAULT_PROJECT_ID
 
 
 def _login_name(value):
@@ -81,8 +84,8 @@ class IAMStore:
         self.control = control
         self.clock = control.clock
         with control.read_transaction() as con:
-            if con.execute('SELECT 1 FROM schema_meta WHERE version=2').fetchone() is None:
-                raise StorageError('apply the explicit 002 IAM migration before enabling IAM')
+            if con.execute('SELECT 1 FROM schema_meta WHERE version=3').fetchone() is None:
+                raise StorageError('apply the explicit 003 project migration before enabling IAM')
 
     def create_principal(self, principal_id, login_name, display_name):
         principal_id = identifier(principal_id)
@@ -222,7 +225,7 @@ class IAMStore:
                 raise Unauthorized('credentials changed during authentication')
             return self._issue_session(con,row['principal_id'],ttl_ms)
 
-    def _scope(self, con, credential):
+    def _authenticate(self, con, credential):
         if not isinstance(credential,str) or not re.fullmatch(r'(session|api)_[A-Za-z0-9_-]{43}',credential):
             raise Unauthorized('invalid credentials')
         token_hash=hashlib.sha256(credential.encode()).hexdigest()
@@ -233,10 +236,19 @@ class IAMStore:
         row=con.execute(f'SELECT c.*,p.status AS principal_status,p.auth_version AS current_auth_version FROM {table} c JOIN iam_principals p ON p.principal_id=c.principal_id WHERE c.{token_column}=?',(token_hash,)).fetchone()
         if not row or row['principal_status']!='active' or row['auth_version']!=row['current_auth_version'] or row['revoked_at_ms'] is not None or not row['issued_at_ms']<=now<row['expires_at_ms']:
             raise Unauthorized('invalid or expired credentials')
+        return row,is_api
+
+    def _scope(self, con, credential):
+        row,is_api=self._authenticate(con,credential)
         principal_id=row['principal_id']
+        try:
+            require_default_project(con)
+        except ProjectUnavailable as exc:
+            raise Forbidden(str(exc)) from None
         capabilities=_capabilities(json.loads(row['capabilities_json'])) if is_api else CAPABILITIES
         rows=con.execute("""SELECT b.*,g.policy_revision,m.role,m.etag AS membership_etag FROM iam_workspace_bindings b
             JOIN workspaces w ON w.workspace_id=b.workspace_id AND w.state='active'
+            JOIN project_workspaces pw ON pw.workspace_id=w.workspace_id AND pw.project_id='default'
             LEFT JOIN iam_groups g ON g.group_id=b.owner_group_id AND g.status='active'
             LEFT JOIN iam_group_memberships m ON m.group_id=g.group_id AND m.principal_id=? AND m.status='active'
             WHERE (b.owner_type='personal' AND b.owner_principal_id=?) OR (b.owner_type='group' AND m.principal_id IS NOT NULL)
@@ -247,7 +259,7 @@ class IAMStore:
                 continue
             grants.append(WorkspaceGrant(binding['workspace_id'],binding['role'] if binding['owner_type']=='group' else 'personal',
                                          binding['owner_group_id'],binding['policy_revision'] or 0,binding['membership_etag'] or 0,binding['binding_revision']))
-        fingerprint=content_hash({'principal_id':principal_id,'auth_version':row['current_auth_version'],
+        fingerprint=content_hash({'project_id':DEFAULT_PROJECT_ID,'principal_id':principal_id,'auth_version':row['current_auth_version'],
                                   'credential_id':row['credential_id'] if is_api else row['session_id'],
                                   'capabilities':sorted(capabilities),'grants':[list(g.__dict__.values()) for g in grants]})
         return AccessScope(principal_id,tuple(g.workspace_id for g in grants),tuple(grants),capabilities,fingerprint)
@@ -339,7 +351,7 @@ class IAMStore:
 
     def revoke_credential(self, credential):
         with self.control.transaction() as con:
-            self._scope(con,credential)
+            self._authenticate(con,credential)
             is_api=credential.startswith('api_')
             table='iam_api_credentials' if is_api else 'iam_sessions'
             column='token_hash' if is_api else 'session_token_hash'

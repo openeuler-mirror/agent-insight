@@ -17,7 +17,7 @@ class CliTests(unittest.TestCase):
             db=Path(tmp)/'new.db'
             init=self.run_cli('init-sqlite','--database',db)
             self.assertEqual(init.returncode,0,init.stderr)
-            self.assertEqual(json.loads(init.stdout)['schema_version'],2)
+            self.assertEqual(json.loads(init.stdout)['schema_version'],3)
             missing=self.run_cli('init-sqlite')
             self.assertNotEqual(missing.returncode,0)
             old=Path(tmp)/'old.db'

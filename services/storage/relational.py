@@ -206,6 +206,8 @@ class PostgreSQLControlStore(ControlOperations):
         catalogs = [json.loads((root / 'core-catalog.json').read_text())]
         if applied >= 2:
             catalogs.append(json.loads((root / 'iam-catalog.json').read_text()))
+        if applied >= 3:
+            catalogs.append(json.loads((root / 'project-catalog.json').read_text()))
         tables = []
         for name in sorted(table['name'] for catalog in catalogs for table in catalog['tables']):
             if not re.fullmatch(r'[a-z][a-z0-9_]*', name):
