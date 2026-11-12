@@ -4,11 +4,14 @@
 
 ## 目录
 
-- `cases/001-setup`：准备、登录、模型、客户端。
-- `cases/002-opencode-observation`：OpenCode 原生上报和页面观测。
-- `cases/003-skill-lifecycle`：上传、生成、页面建数据集、实验生成 Trace、评测、诊断、优化、发布待验证版本、登记验证通过、显式激活与发布版复跑。
-- `cases/004-trace-evaluation`：已有 Trace、无数据集评测、诊断、优化。
-- `cases/005-fault-recovery`：故障注入、检测、中断回执、恢复；真实执行并如实保留失败。
+| 编号 | 用例名称 | 核心验证 | 目录 |
+| --- | --- | --- | --- |
+| 001 | 账号登录/模型配置/客户端接入 | 页面登录与刷新、模型测试和保存、客户端归属及能力 | `cases/001-setup` |
+| 002 | OpenCode 执行与 Trace 采集展示 | 原生任务执行、真实工具内容上报、Trace/Agent 页面核验 | `cases/002-opencode-observation` |
+| 003 | Skill 生成/数据集评测/优化发布 | 上传和生成 Skill、页面建数据集、实验评测和诊断、候选验证与发布版复跑 | `cases/003-skill-lifecycle` |
+| 004 | 已有 Trace 评测/诊断/Skill 优化 | 复用已有 Trace，不新增数据集，验证评测、诊断、优化及候选复跑 | `cases/004-trace-evaluation` |
+| 005 | 故障注入/检测拦截/恢复验证 | 故障注入、检测、成功原生中断回执及同客户端恢复 | `cases/005-fault-recovery` |
+
 - `shared/`：用例复用层，例如隔离应用启动、登录、客户端、模型连接/Mock、数据集操作、公共断言和报告汇总。单例及整轮执行都使用它，避免每个 case 重复维护相同流程。
 - `control/`：自动执行控制层，例如 Webhook 验签、持久化队列、源码检出/合并、容器与生产编译、Real/Mock 分组、证据导出和 PR 评论回写。由 `serve.mjs` 接收事件、`worker.mjs` 执行任务；本机隔离整轮入口为 `run-isolated.mjs`。
 
@@ -91,7 +94,25 @@ docker buildx build --platform linux/amd64 \
 
 Actions 当前按数据库重构安排临时设置 `E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT=1`，只跳过 `trace-datasets-integration.test.ts` 中的 `real SQLite + Worker: publish, idempotency, isolation, failure, deletion and replay`；同文件的其余两项及其他 UT 继续执行。跳过计入 UT 汇总，并在 JSON、HTML 和 Markdown 报告列明用例及原因。普通本地 `npm test` 不设置该变量，仍执行此项；数据库运行时代码未作修改。恢复此项时移除 workflow 中的临时变量。
 
-PR 自动检查从 PR 的“检查”标签进入，点击左侧流水线记录打开对应 Actions 运行；列表关联当前提交，旧提交的历史运行从 Actions 列表查找。手动运行也从 Actions 列表查看。运行详情的总览图显示 8 个 Job，点击失败节点或左侧同名 Job 可查看具体步骤和日志（查看日志需要登录）。每个 Job 完成后写入自己的 Summary，最终“汇总与门禁 summary”列出编译、UT、五例结果及 UT 失败用例；已登录用户可在“构建产物”下方查看，未登录时该区域不展示。“构建产物”中的 `pr-e2e` 是最终公开报告，包含 `summary.md`、`report.html`、`report.json`、配置快照和阶段结果；`e2e-result-*` 用于各阶段排错，`e2e-build` 用于跨 Job 复用编译结果。当前不自动回写 PR 评论。
+PR 自动检查从 PR 的“检查”标签进入，点击左侧流水线记录打开对应 Actions 运行；列表关联当前提交，旧提交的历史运行从 Actions 列表查找。手动运行也从 Actions 列表查看。运行详情的总览图显示 8 个 Job，点击失败节点或左侧同名 Job 可查看具体步骤和日志（查看日志需要登录）。每个 Job 完成后写入自己的 Summary，最终“汇总与门禁 summary”列出编译、UT、五例结果及 UT 失败用例；已登录用户可在“构建产物”下方查看，未登录时该区域不展示。“构建产物”中的 `pr-e2e` 是最终公开报告，包含 `summary.md`、`report.html`、`report.json`、配置快照和阶段结果；`e2e-result-*` 用于各阶段排错，`e2e-build` 用于跨 Job 复用编译结果。
+
+### PR 结果自动评论
+
+回写仅关联由 PR 事件触发的门禁运行；普通手动测试运行没有 PR 归属，不会自动贴到某个 PR。源提交回退测试与预合并测试会在评论中区分，历史运行只说明当时的测试提交与基线。
+
+[pr-result-comment.yml](../../.atomgit/workflows/pr-result-comment.yml) 是独立的可信回写流程，不增加业务测试 Job。将该 workflow 和回写脚本合入 `master` 后，每 5 分钟触发一次扫描，读取最近 24 小时的已结束 `PR Build UT E2E` PR 运行，覆盖仍打开和已合并的 PR，跳过关闭但未合并的 PR，在同一条机器人评论中更新提交 SHA、编译、UT 通过/失败/跳过数量、五例名称与 Mock/Real 模式、失败项和运行链接。Runner 排队会增加延迟；评论不是流水线结束的即时通知。
+
+回写流程仅从 `master` 的触发提交检出可信代码，使用平台内置 `ATOMGIT_TOKEN` 的仓库/流水线读取和 PR 写入权限；不配置个人 Token，不检出或执行 PR 代码，也不运行报告中的脚本。原 8 Job 的 `pull_request` 仍只读。写入前核对仓库、PR、运行及当前提交，过期结果不覆盖新提交的评论；同一结果重复扫描不会重复发评论。失败、取消和报告缺失均明确展示，不能将未执行或不完整报告标为通过。回写失败会使独立评论流程失败，原测试门禁仍保留实际测试结论。平台报告通过 `platformRunAttempt` 记录 `ATOMGIT_RUN_ATTEMPT`，回写时核对运行轮次；旧报告缺少该字段时仅兼容首轮，重跑第 2 轮及以后缺少轮次证据会标为不可验证，不能借用首轮制品给出通过结论。
+
+需要预览或补发时，从 Actions → **PR Result Comment** → **Run workflow** 选择 `master`：
+
+| 输入 | 用途 |
+| --- | --- |
+| `pr_number` | 可选 PR 序号，可指定仍打开或已合并的 PR；留空扫描最近 24 小时的 PR 运行 |
+| `run_id` | 可选运行 ID，必须同时填写 `pr_number`；仅回写与该 PR 当前提交匹配的运行，支持已合并 PR 的历史补发 |
+| `dry_run` | 设为 `true` 仅预览，不创建或更新评论；默认 `false` |
+
+本地执行 `node test/e2e/control/actions-pr-comment.mjs --repository owner/repo` 默认只预览；显式 `--publish` 才允许写入。可使用 `PR_COMMENT_PR_NUMBER`、`PR_COMMENT_RUN_ID`、`PR_COMMENT_DRY_RUN` 传入上述筛选，`PR_COMMENT_DRY_RUN=true` 始终禁止写入。它们是回写流程参数，与模型配置和已有本地/Webhook/daily 执行入口无关。
 
 已有 PR 重新触发时，若源分支已包含本版 workflow，可从“检查”打开运行详情，使用右上角“重新运行所有 Jobs”。[平台重跑说明](https://docs.gitcode.com/docs/help/home/org_project/pipeline/running-pipelines/rerun-failed-jobs/)规定重跑沿用原提交和原 workflow，不读取最新配置；本套多 Job 存在编译制品依赖，仅重跑失败 Job 的制品继承尚未实测，优先整轮重跑。旧 PR 尚未包含本次 CI 改动时，先将最新 `master` 同步到其源分支，再推送以触发 `pull_request.update`；普通 `pull_request` 读取源分支中的 workflow。手动 Run workflow 用于分支验证，当前未配置 `/retest` 评论触发。
 

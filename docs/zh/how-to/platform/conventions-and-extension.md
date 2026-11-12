@@ -76,6 +76,10 @@ changefreq: monthly
 
 [GitCode Actions PR 门禁](../../../../test/e2e/README.md#gitcode-actions-pr-门禁)使用社区 Runner，对目标 `master` 的 PR 新建、更新和重开执行生产编译、完整 UT 和五例全 Mock E2E。Runner 标签与公开构建镜像以 workflow 为准；各编译、UT 和用例 Job 按当前 schema 生成 Prisma Client，依赖锁文件变化时重建环境镜像；PR 自动检查不需要模型密钥，手动选择 Real 时使用仓库模型配置。总览拆分为生产编译、UT、001～005、汇总与门禁共 8 个 Job；只编译一次，各用例独立数据库，UT 或单例失败后继续收集其他结果。所有必需结果完整通过才成功，失败仍尝试归档汇总报告。数据库重构期间，Actions 仅临时跳过一个已确认存在 SQLite 并发超时的 Worker 集成 UT，跳过名称和原因在报告中显式列出；其余 UT 和五例 E2E 继续执行。本地默认不跳过。PR 的 Checks 页面可进入自动运行详情，手动运行从 Actions 列表查看。运行成功不等于已配置强制合入规则。
 
+五例在流水线、运行报告和 PR 评论中统一命名为：001 账号登录/模型配置/客户端接入；002 OpenCode 执行与 Trace 采集展示；003 Skill 生成/数据集评测/优化发布；004 已有 Trace 评测/诊断/Skill 优化；005 故障注入/检测拦截/恢复验证。003 使用数据集贯穿生成与发布，004 复用已有 Trace 且不新增数据集；编号和独立执行入口不变。
+
+[PR 结果自动评论](../../../../test/e2e/README.md#pr-结果自动评论)由独立的 `PR Result Comment` workflow 执行。合入 `master` 后每 5 分钟扫描最近 24 小时的已结束 PR 门禁，覆盖仍打开和已合并 PR，跳过关闭但未合并 PR，并更新同一条机器人评论；Runner 排队可能延迟回写。它只运行 `master` 可信代码，使用平台内置 Token 读取运行及报告、写入 PR 评论，fork 测试不获得写权限。失败、取消、跳过及报告不完整如实列明，旧提交结果不覆盖新提交。报告需匹配平台运行轮次，旧报告无轮次字段仅兼容首轮；后续重跑缺少轮次证据时不可验证。需要预览或补发时，在 Actions 手动运行该 workflow，选择 `master` 并填写可选 `pr_number` / `run_id`，`dry_run=true` 只预览。评论回写失败单独排查，不改变原测试门禁结论。
+
 - **Install**：`npm install`（会运行 `scripts/postinstall.js`）。
 - **Agent RAS install**：`node scripts/install-ras.js`（对外命令
   `npx agent-insight install-ras`）。发布包携带 `agent_ras/` 的功能源码和全部平台适配器，

@@ -1,4 +1,4 @@
-# 002 OpenCode 上报与观测
+# 002 OpenCode 执行与 Trace 采集展示
 
 ## 实际例子
 

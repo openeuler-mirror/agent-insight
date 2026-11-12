@@ -155,7 +155,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_001:
-    name: 001 准备与配置
+    name: 001 账号登录/模型配置/客户端接入
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
@@ -188,7 +188,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 001
+      - name: 执行 001 账号登录/模型配置/客户端接入
         id: phase
         shell: bash
         env:
@@ -215,7 +215,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_002:
-    name: 002 上报与观测
+    name: 002 OpenCode 执行与 Trace 采集展示
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
@@ -248,7 +248,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 002
+      - name: 执行 002 OpenCode 执行与 Trace 采集展示
         id: phase
         shell: bash
         env:
@@ -275,7 +275,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_003:
-    name: 003 Skill 与数据集
+    name: 003 Skill 生成/数据集评测/优化发布
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
@@ -308,7 +308,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 003
+      - name: 执行 003 Skill 生成/数据集评测/优化发布
         id: phase
         shell: bash
         env:
@@ -335,7 +335,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_004:
-    name: 004 Trace 评测
+    name: 004 已有 Trace 评测/诊断/Skill 优化
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
@@ -368,7 +368,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 004
+      - name: 执行 004 已有 Trace 评测/诊断/Skill 优化
         id: phase
         shell: bash
         env:
@@ -395,7 +395,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_005:
-    name: 005 故障检测恢复
+    name: 005 故障注入/检测拦截/恢复验证
     needs: [build, ut]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
@@ -428,7 +428,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 005
+      - name: 执行 005 故障注入/检测拦截/恢复验证
         id: phase
         shell: bash
         env:

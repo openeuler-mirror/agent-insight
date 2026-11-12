@@ -108,6 +108,11 @@ function failureDetails(ut) {
 }
 function persist(options, context, result, report) {
   report.endedAt ||= new Date().toISOString();
+  if (options.env.ATOMGIT_RUN_ATTEMPT !== undefined) {
+    assert.match(options.env.ATOMGIT_RUN_ATTEMPT, /^[1-9]\d*$/);
+    report.platformRunAttempt = Number(options.env.ATOMGIT_RUN_ATTEMPT);
+    assert.ok(Number.isSafeInteger(report.platformRunAttempt));
+  }
   report.status = result.status;report.phase = options.phase;report.resultScope = options.phase === 'collect' ? 'workflow' : 'phase';
   if (['build','ut'].includes(options.phase)) delete report.selected;
   const secrets = [options.env.E2E_MODEL_API_KEY, ...Object.values(options.processScopeEnv || {})].filter(Boolean);

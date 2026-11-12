@@ -70,6 +70,13 @@ test('build exports one credential-free checked artifact and manual case mode ou
   assert.match(fs.readFileSync(path.join(options.root, 'public/report.html'), 'utf8'), /Actions 阶段：生产编译/);
 });
 
+test('phase reports retain the platform attempt for safe rerun publication', async t => {
+  const options = fixture(t);options.env.ATOMGIT_RUN_ATTEMPT = '2';
+  await phase.runActionsPhase({ ...options, phase: 'build' }, { compile: async () => { fakeBuild(options.project);return { status: 'PASS', exitCode: 0, buildId: 'fixture-build' }; } });
+  const report = JSON.parse(fs.readFileSync(path.join(options.root, 'public/report.json')));
+  assert.equal(report.platformRunAttempt, 2);
+});
+
 test('case imports a matching build, runs only its case with file credentials, and preserves a nonzero exit', async t => {
   const options = await build(t);let keyPath;
   const result = await phase.runActionsPhase({ ...options, phase: 'case', caseId: '001' }, { run: async (bin, args, { env, cwd }) => {
