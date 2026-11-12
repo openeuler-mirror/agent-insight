@@ -74,6 +74,12 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 
 ## 6. 项目内部约定
 
+### SQLite 结构升级
+
+- **兼容性的加表、加字段由启动流程自动同步。** 新字段应允许为空或提供适用于旧记录的默认值。通过现有 [`scripts/db_push.sh`](scripts/db_push.sh) 执行 `prisma db push`。Docker Compose 部署应保留原数据卷，使用新镜像执行 `docker compose up -d` 即可补齐结构。不得为这类变更新增强制手工迁移，或在同步前因缺少待新增的表或字段而中止启动。
+- **保留现有的数据丢失拦截。** 需要数据回填、转换或可能丢失数据的变更，先在设计中明确备份、迁移和回滚方案，按第 4 节对齐。不得通过默认开启 `--accept-data-loss` 或重置数据库来使升级通过。
+- **用旧库副本验证升级。** 修改 schema 或启动同步流程时，用含代表性历史记录的上一版本 SQLite 副本走实际部署入口，验证结构补齐、原有记录保留，以及再次启动可重复执行。涉及 Docker 时，用 Compose 验证。详见[升级与回滚指南](docs/zh/how-to/platform/upgrade-and-rollback.md)。
+
 ### 设计系统：用共享令牌，别再造局部色板
 
 前端视觉规范见 [`docs/zh/reference/platform/design-system.md`](docs/zh/reference/platform/design-system.md)，机器可读令牌见 [`docs/zh/reference/platform/design-tokens.json`](docs/zh/reference/platform/design-tokens.json)。**唯一真源是** [`src/app/globals.css`](src/app/globals.css) 的 `:root` / `[data-theme='dark']`（中性灰阶 + 单一 indigo 主色 + 3 个语义状态色）。
