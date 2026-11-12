@@ -102,8 +102,21 @@ test('manual options reject bad values, require a PR for an explicit run and hon
 });
 test('writer workflow is scheduled and master-only, without PR code or model secrets', () => {
   const workflowText = fs.readFileSync(new URL('../../../.atomgit/workflows/pr-result-comment.yml', import.meta.url), 'utf8');
-  assert.match(workflowText, /\*\/5 \* \* \* \*/);assert.match(workflowText, /refs\/heads\/master/);assert.match(workflowText, /action: read/);assert.match(workflowText, /pr: write/);
+  assert.match(workflowText, /\*\/5 \* \* \* \*/);assert.match(workflowText, /refs\/heads\/master/);assert.match(workflowText, /action: read/);assert.match(workflowText, /pr: write/);assert.match(workflowText, /project: read/);
   assert.doesNotMatch(workflowText, /pull_request:|pull_request_target:|secrets\.|allow-unsafe-pr-checkout|npm (?:ci|install)/);
+});
+
+test('API permission failures identify the path without exposing query credentials or response data', async t => {
+  const { default: http } = await import('node:http');
+  const { AtomGit } = await import('./atomgit.mjs');
+  const server = http.createServer((_req, res) => { res.writeHead(403);res.end('synthetic-sensitive-response'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const api = new AtomGit({ token: 'synthetic-token', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/v5', localTest: true });
+  await assert.rejects(api.request('GET', '/repos/example/platform?access_token=synthetic-query'), error => {
+    assert.match(error.message, /GET \/api\/v5\/repos\/example\/platform failed \(HTTP 403\)/);
+    assert.doesNotMatch(error.message, /synthetic|access_token/);return true;
+  });
 });
 
 test('real HTTP scanner uses v8 metadata, strips credentials at the artifact redirect and updates one comment', async t => {

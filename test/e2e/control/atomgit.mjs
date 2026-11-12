@@ -25,7 +25,7 @@ export class AtomGit {
         child.stderr.resume();child.once('error', reject);child.once('close', code => resolve({ code, output: Buffer.concat(chunks) }));
       });
       const split = result.output.lastIndexOf(10), status = Number(result.output.subarray(split + 1).toString());
-      if (result.code !== 0 || status < 200 || status >= (binary ? 400 : 300)) throw Error(`AtomGit ${method} failed (HTTP ${status || 'unknown'})`);
+      if (result.code !== 0 || status < 200 || status >= (binary ? 400 : 300)) throw Error(`AtomGit ${method} ${downloadUrl ? 'artifact CDN' : `/api/v${apiVersion}${route.split('?')[0]}`} failed (HTTP ${status || 'unknown'})`);
       const locations = [...fs.readFileSync(headers, 'utf8').matchAll(/^location:\s*(.+)\r?$/gim)];
       return { status, bytes: result.output.subarray(0, split), location: locations.at(-1)?.[1].trim() };
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }

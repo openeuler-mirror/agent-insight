@@ -23,7 +23,7 @@ permissions:
   repository: read
   action: read
   pr: write
-  project: none
+  project: read
   issue: none
   note: none
 
