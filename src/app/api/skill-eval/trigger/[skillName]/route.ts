@@ -78,6 +78,8 @@ export async function GET(
  *
  * 编辑器保存调这个——**只能在最新 ready 版本上原地改**。body: { user, versionId?, description?, items }
  * - drafting/failed 占位行不是保存目标：没有任何 ready 版本时新建一个 manual ready 版本。
+ *   AI 起草失败会留下 failed 占位顶在 latest 位，旧「等于 latest」判断会让前端
+ *   正在编辑的 ready 版本恒 409，手工编辑永远存不进去。
  * - 传 versionId：必须等于最新 ready 的 id，否则 409；无 ready 时忽略它直接新建。
  * - 不传 versionId：作用于最新 ready（兼容旧前端）。
  *
