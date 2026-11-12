@@ -7,6 +7,8 @@ changefreq: "monthly"
 
 Operational procedures currently available in English:
 
+- [Enable an isolated Storage Core Trace workflow](./platform/storage-core.md)
+
 - [Deploy the server with Docker](./platform/deploy-docker.md)
 - [Deploy the server on OpenShift](./platform/deploy-openshift.md), including Developer Sandbox builds
 - [Upgrade and rollback](./platform/upgrade-and-rollback.md)

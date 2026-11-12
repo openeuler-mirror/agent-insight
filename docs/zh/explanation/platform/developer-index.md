@@ -16,6 +16,7 @@ changefreq: monthly
 - [architecture.md](./architecture.md)：系统形态、技术栈、分层、模块依赖图、入口面。
 - [modules.md](./modules.md)：每个模块的职责；哪些是核心模块、哪些是外围模块。
 - [file-map.md](../../reference/platform/file-map.md)：文件 → 模块 → 符号的查找表，用于定位代码。
+- [Storage Core参考](../../reference/platform/storage-core.md)与[隔离运行指南](../../how-to/platform/storage-core.md)：事务/分析存储契约、显式初始化及Trace桥接配置。
 - [api-and-contracts.md](../../reference/platform/api-and-contracts.md)：导出的函数签名及其调用关系、数据模型/类型、扩展点。
 - [data-control-flow.md](./data-control-flow.md)：核心流程（接入、评测、生成、优化、诊断）的入口与执行轨迹。
 - [frontend.md](./frontend.md)：前端框架、路由、组件关系。

@@ -11,6 +11,8 @@ changefreq: "monthly"
 
 ## 平台公共
 
+- [启用隔离的 Storage Core Trace 链路](./platform/storage-core.md)
+
 - [用 Docker 部署服务端](./platform/deploy-docker.md)
 - [在 OpenShift 上部署服务端](./platform/deploy-openshift.md)（含 Developer Sandbox 集群内构建）
 - [升级与回滚](./platform/upgrade-and-rollback.md)

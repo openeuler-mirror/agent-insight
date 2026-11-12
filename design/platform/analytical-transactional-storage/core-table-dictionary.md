@@ -1,27 +1,29 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-12。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，当前 **33 张事务表 + 13 张 ClickHouse 表，共46张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-12。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，当前 **35 张事务表 + 13 张 ClickHouse 表，共48张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这46张表对应**33张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这48张表对应**35张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共33表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共35表]
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
     ASSET[资产与版本 6表]
     RUN[运行、任务、结果控制 6表]
     SUPPORT[投递、路由、制品、维护 7表]
+    INGEST[可靠采集与实体版本 2表]
     IAM -->|决定访问空间与资源| BASE
     BASE -->|当前归属default| PROJECT
     BASE -->|隔离| ASSET
     ASSET -->|冻结版本输入| RUN
     RUN -->|同事务登记待投递事件| SUPPORT
+    INGEST -->|同事务接收、路由、ACL及Outbox| SUPPORT
   end
   subgraph CH[ClickHouse，共13表]
     TRACE[Trace / Span / 正文 / 事件与关系 6表]
@@ -30,7 +32,7 @@ flowchart TB
     TRACE -.->|版本化输入| DATA
     DATA -.->|评测输入| EVAL
   end
-  SUPPORT -.->|路由、清单及计划中的可靠物化| CH
+  SUPPORT -.->|路由与Trace可靠物化；其他领域待接管| CH
   ASSET -.->|数据集与评估器版本| DATA
   RUN -.->|run / result / selection 标识| EVAL
 ```
@@ -107,6 +109,13 @@ flowchart TB
 | `artifact_metadata` | 制品位置、namespace、hash、大小、类型及发布状态；不是文件正文。 | `(W,artifact_id)` | UK`(W,namespace,object_ref)`<br>IDX`(W,state,created_at_ms)`：按状态列出制品 |
 | `deletion_requests` | 按资源/代次登记的删除请求、屏障版本和进度。 | `(W,deletion_id)` | UK`(W,resource_kind,resource_id,incarnation)`<br>IDX`(W,state,created_at_ms)`：扫描删除任务 |
 | `migration_checkpoints` | 旧表迁移进度、源指纹、最后处理键及目标水位。 | `(W,migration_id,source_table)` | 无额外UK/IDX；按PK查找 |
+
+#### 可靠采集与实体版本（2张，004）
+
+| 表 | 一行存什么 | PK | UK / 显式IDX及用途 |
+|---|---|---|---|
+| `ingest_batches` | 一个主体在空间中已持久接收的OTLP包、冻结计划及索引状态。 | `(W,batch_id)` | UK`(W,principal_id,receipt_key)`；IDX`(W,principal_id,accepted_at_ms)`查本人回执；IDX`(state,accepted_at_ms)`查进度 |
+| `obs_entity_heads` | Trace/Span当前内部版本、源版本和私有内容制品引用；不存正文。 | `(W,trace_id,entity_kind,entity_id)` | 无额外UK/IDX；按PK查实体，PK前缀可查同Trace的Span heads |
 
 ### ClickHouse：事实、排序键、分区与版本
 
@@ -203,7 +212,7 @@ flowchart TB
   SELECT -.->|selection_revision：分析投影| CURRENT["eval_result_selection_<br/>current"]
 ```
 
-`run`是整批执行，`work_item`是一个case/phase/evaluator槽的任务，`attempt`是实际重试。回执不等于最终选中的结果，也不等于已进入CH或已发布。复合外键禁止把另一个run/case/槽的结果选进来；fence/租约校验进一步拒绝过期worker回调。`outbox_events`与回执事务一起写，事件投递与CH物化为后续链路，图中的虚线不代表已经自动同步。
+`run`是整批执行，`work_item`是一个case/phase/evaluator槽的任务，`attempt`是实际重试。回执不等于最终选中的结果，也不等于已进入CH或已发布。复合外键禁止把另一个run/case/槽的结果选进来；fence/租约校验进一步拒绝过期worker回调。`outbox_events`与回执事务一起写，评测事件投递与CH物化仍为后续链路；004仅接管观测OTLP事件，不因复用Outbox就宣称评测已自动同步。
 
 ### 关联图四：Trace、Span、正文与固定快照
 
@@ -211,6 +220,14 @@ flowchart TB
 flowchart TB
   subgraph CONTROL[事务控制面]
     LOC[trace_locators]
+    BATCH[ingest_batches]
+    HEAD[obs_entity_heads]
+    OUTBOX[outbox_events]
+    PRINCIPAL[iam_principals]
+    BATCH -->|principal_id| PRINCIPAL
+    HEAD -->|workspace_id + trace_id| LOC
+    BATCH -.->|同事务可靠接收事件| OUTBOX
+    BATCH -.->|冻结plan_ref与内部版本| HEAD
     SNAP[snapshot_manifests]
     SNAP -->|workspace_id + trace_id，可空| LOC
   end
@@ -226,6 +243,7 @@ flowchart TB
     CHUNK -.->|bundle键| MANIFEST
     NODE -.->|固定正文版本| MANIFEST
   end
+  OUTBOX -.->|004可靠物化：正文先行，摘要最后| SPAN
   LOC -.->|Trace键| TRACE
   SNAP -.->|snapshot_id，清单带路由| NODE
 ```
@@ -257,7 +275,7 @@ flowchart TB
   PUB["eval_publication_<br/>members"] -.->|冻结的run/case/slot/result| RESULT
 ```
 
-图中“指标定义注册与版本协议”是未来控制面能力，当前46表内尚无独立指标定义注册表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
+图中“指标定义注册与版本协议”是未来控制面能力，当前48表内尚无独立指标定义注册表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
 
 跨CH表读取还要知道目标的bucket；仅有`result_id`、`snapshot_id`或`release_id`通常不足以做精确分区读取。清单/发布事件需要携带路由，并校验workspace、内容hash、精确版本和可见性。此批表结构不提供跨库FK或全域ID到bucket的自动解析器，相关领域接管时须落实，不能靠全库扫描补上协议。
 
@@ -278,11 +296,13 @@ flowchart TB
 
 ## 范围与未实现项
 
-- 本轮事务表：`schema_meta`, `workspaces`, `asset_identities`, `asset_releases`, `asset_drafts`, `asset_release_dependencies`, `asset_release_seals`, `asset_aliases`, `runs`, `run_inputs`, `work_items`, `work_attempts`, `result_receipts`, `result_selections`, `outbox_events`, `inbox_receipts`, `trace_locators`, `snapshot_manifests`, `artifact_metadata`, `deletion_requests`, `migration_checkpoints`。
-- 本轮 CH 表：`obs_payload_manifests`, `obs_trace_current`, `obs_span_current`, `obs_payload_chunks`, `obs_events`, `obs_entity_relations`, `snapshot_nodes`, `dataset_sample_revisions`, `dataset_release_members`, `eval_result_facts`, `eval_metric_facts`, `eval_result_selection_current`, `eval_publication_members`。
-- 仍待后续批次：Web身份入口与账号恢复、资产异步发布、插件与指标注册、run groups、人工裁决/评论、标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
+- 001首批事务表：`schema_meta`, `workspaces`, `asset_identities`, `asset_releases`, `asset_drafts`, `asset_release_dependencies`, `asset_release_seals`, `asset_aliases`, `runs`, `run_inputs`, `work_items`, `work_attempts`, `result_receipts`, `result_selections`, `outbox_events`, `inbox_receipts`, `trace_locators`, `snapshot_manifests`, `artifact_metadata`, `deletion_requests`, `migration_checkpoints`。
+- 002追加事务表：`iam_principals`, `iam_password_credentials`, `iam_api_credentials`, `iam_external_identities`, `iam_sessions`, `iam_groups`, `iam_group_memberships`, `iam_workspace_bindings`, `iam_resource_access`, `iam_resource_grants`。
+- 003追加事务表：`projects`, `project_workspaces`；004追加事务表：`ingest_batches`, `obs_entity_heads`。上述共35张事务表。
+- 当前CH表：`obs_payload_manifests`, `obs_trace_current`, `obs_span_current`, `obs_payload_chunks`, `obs_events`, `obs_entity_relations`, `snapshot_nodes`, `dataset_sample_revisions`, `dataset_release_members`, `eval_result_facts`, `eval_metric_facts`, `eval_result_selection_current`, `eval_publication_members`。
+- 仍待后续批次：账号恢复与外部身份业务入口、资产异步发布、插件与指标注册、run groups、人工裁决/评论、标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
 
-账号密码、用户组和组管理员的IAM基础库与统一授权门面已实现，现有Web尚未接管；权限矩阵及历史归组规则见 [总体设计 §4.2](phase2-requirements-design.md#42-账号密码登录用户组与组管理员新增明确需求)。当前workspace外键保护引用归属，不能替代Web请求鉴权。
+账号密码、用户组和组管理员的IAM基础库与统一授权门面已实现；显式core Web模式已接入密码登录与Trace路径，其他领域未全部接管；权限矩阵及历史归组规则见 [总体设计 §4.2](phase2-requirements-design.md#42-账号密码登录用户组与组管理员新增明确需求)。当前workspace外键保护引用归属，不能替代Web请求鉴权。
 
 ## 公共类型与约束
 
@@ -1156,7 +1176,10 @@ CHECK：`length(manifest_json) > 0`。
 
 ## SQL 与机器目录
 
-- [事务机器目录](../../../services/storage/schema/core-catalog.json)
+- [001事务机器目录](../../../services/storage/schema/core-catalog.json)
+- [002 IAM目录](../../../services/storage/schema/iam-catalog.json)
+- [003项目目录](../../../services/storage/schema/project-catalog.json)
+- [004采集目录](../../../services/storage/schema/ingest-catalog.json)
 - [CH 机器目录](../../../services/storage/schema/clickhouse-catalog.json)
 - [SQLite DDL](../../../services/storage/schema/sqlite/001_core.sql)
 - [PostgreSQL DDL](../../../services/storage/schema/postgresql/001_core.sql)
@@ -1173,7 +1196,7 @@ CHECK：`length(manifest_json) > 0`。
 
 ## IAM / 用户组增量核心表（002_iam）
 
-日期：2026-11-12。本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，截至002时核心物理表为 **31 张事务表 + 13 张 CH 表 = 44 张**；003项目预留后当前为33张事务表+13张CH表=46张；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
+日期：2026-11-12。本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，截至002时核心物理表为 **31 张事务表 + 13 张 CH 表 = 44 张**；003项目预留后为33张事务表+13张CH表=46张；004可靠采集后当前为35张事务表+13张CH表=48张；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
 
 IAM 主体是全局稳定 principal，组成员在 group 中授权，workspace 通过不可变 binding 属于一个 group 或一个 personal principal；资源 ACL 使用 workspace/kind/id 三元身份。不是给原 user 字符串增加一个 group 字段。
 
@@ -1492,3 +1515,62 @@ CHECK：`created_at_ms >= 0`。
 - project_workspaces禁止UPDATE/DELETE；workspace_id完整继承001父表约束，不新增trim/长度/控制字符约束，旧ID逐字保留。当前解析/采集端口仍沿用原identifier契约，历史异常ID的业务接管需独立审计，不在归属迁移中静默标准化。
 - 003以原workspace创建时间回填映射，新workspace与映射同事务提交。存在同default归属不扩大IAM读取范围；绑定缺失或项目停用时拒绝访问。
 - IAM及授权门面的当前实现要求已应用003，旧001/002核心端口保持兼容且不会初始化时隐式升级。SQL文件见`services/storage/schema/{sqlite,postgresql,opengauss}/003_projects.sql`，机器目录为`services/storage/schema/project-catalog.json`。
+
+
+## 004 可靠采集与实体版本字段
+
+004为追加迁移，不改001–003字节。三事务后端字段、PK/UK/FK和逻辑约束一致；SQLite的BIGINT逻辑字段落INTEGER并逐列校验`typeof(...)=integer`（nullable字段允许NULL），PG/openGauss使用BIGINT。完整机器定义见[ingest catalog](../../../services/storage/schema/ingest-catalog.json)，SQL见`services/storage/schema/{sqlite,postgresql,opengauss}/004_observations.sql`。
+
+### ingest_batches
+
+| 字段 | 逻辑类型 | 可空 | 默认 | 含义 |
+|---|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 | 授权空间，FK到workspaces |
+| `batch_id` | TEXT | 否 | 显式提供 | 服务生成UUID；非空 |
+| `principal_id` | TEXT | 否 | 显式提供 | 接收时已验证主体，FK到iam_principals |
+| `receipt_key` | TEXT | 否 | 显式提供 | 1..512字符；未提供时用包hash |
+| `packet_hash` | TEXT | 否 | 显式提供 | 稳定JSON包SHA256，小写64位十六进制 |
+| `packet_ref` | TEXT | 否 | 显式提供 | 非空私有fsync制品引用 |
+| `state` | TEXT | 否 | `accepted` | accepted / prepared / indexed / failed |
+| `plan_ref` | TEXT | 是 | NULL | 冻结物化计划的私有引用；非NULL则非空 |
+| `trace_ids_json` | TEXT | 否 | 显式提供 | 非空JSON文本；应用验证为稳定内部Trace ID数组 |
+| `accepted_at_ms` | BIGINT | 否 | 显式提供 | 非负可靠接收时间 |
+| `indexed_at_ms` | BIGINT | 是 | NULL | 不小于accepted_at_ms，包含时钟回退保护 |
+| `error_code` | TEXT | 是 | NULL | 有限服务错误码，不存异常正文或凭据 |
+
+PK：`(workspace_id,batch_id)`。UK：`(workspace_id,principal_id,receipt_key)`。FK：`workspace_id → workspaces(workspace_id)`；`principal_id → iam_principals(principal_id)`，均ON DELETE NO ACTION。
+
+显式索引：`idx_ingest_batches_actor(workspace_id,principal_id,accepted_at_ms)`；`idx_ingest_batches_state(state,accepted_at_ms)`。实际投递队列继续使用001的`outbox_events`索引，不靠扫描本表调度。
+
+SQL CHECK包含上述长度/哈希/状态/时间检查；`prepared`必须有plan_ref；`indexed`必须同时有plan_ref及indexed_at_ms。JSON数组语义、调用者授权和制品内容完整性由应用验证，不把TEXT字段误称数据库JSON Schema约束。
+
+UPDATE触发器冻结workspace/batch/principal/receipt、包hash/ref、Trace集合及接收时间；plan_ref一经非NULL不能替换或清空。prepared不能回到accepted；indexed/failed为终态，其state、indexed_at_ms、error_code不可改写。DELETE拒绝，未来保留期清理需独立协议。
+
+### obs_entity_heads
+
+| 字段 | 逻辑类型 | 可空 | 默认 | 含义 |
+|---|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 | 与Trace相同空间 |
+| `trace_id` | TEXT | 否 | 显式提供 | 稳定内部Trace ID |
+| `entity_kind` | TEXT | 否 | 显式提供 | `trace` / `span` |
+| `entity_id` | TEXT | 否 | 显式提供 | 非空；trace种类必须等于trace_id |
+| `revision` | BIGINT | 否 | 显式提供 | 内部分配版本，1..2^63-1 |
+| `source_revision` | BIGINT | 否 | 显式提供 | Span来源版本，1..2^63-1；Trace汇总保留为1 |
+| `content_hash` | TEXT | 否 | 显式提供 | 规范源快照/汇总内容SHA256，小写64位十六进制 |
+| `artifact_ref` | TEXT | 否 | 显式提供 | 非空私有内容制品引用 |
+| `created_at_ms` | BIGINT | 否 | 显式提供 | 非负创建时间 |
+| `updated_at_ms` | BIGINT | 否 | 显式提供 | 不小于创建时间，且更新时不得回退 |
+
+PK：`(workspace_id,trace_id,entity_kind,entity_id)`。复合FK：`(workspace_id,trace_id) → trace_locators(workspace_id,trace_id)`，ON DELETE NO ACTION。无额外UK或显式二级索引。
+
+SQL CHECK验证种类、非空ID/引用、hash格式、版本有符号范围及时间。触发器冻结身份/created_at_ms，每次UPDATE内部revision必须恰加1，source_revision不回退；Span更新的source_revision必须严格增加。Trace汇总的内部revision独立增加，source_revision保持1。DELETE拒绝，防止遗忘已分配的版本而重用。
+
+### 接收、版本与跨库一致性
+
+1. `ObservationIngest.accept`先认证当前IAM写能力及default项目，并验证整个完成Span包：4MiB、4096 Span；共享resource属性展开后的结构/正文总预算64MiB。结构行attributes_json有界，完整资源/Span属性、原始Span、输入/输出在正文section。未完成Span不在本批输入协议内。
+2. 原始包使用`{encoding:'otlp-json/v1',json:稳定JSON文本}`制品；head/计划用`observation-json/v1`文本封装，避免manifest规范对浮点/大整数的限制。引用文件名hash校验制品封装；head.content_hash校验源/汇总快照内容，两者不要求相同。文件私有且fsync后，才在一个事务内登记locator、私有ACL、batch与Outbox；确认accepted只证明可靠接收，未证明CH已indexed。
+3. 默认source_namespace=`otlp`；service.name仅用于显示。同一workspace/来源/native trace ID的跨service Span属于一个内部Trace，parentSpanId保留。显式resource属性`agent_insight.source_namespace`可隔离来源。当前UUID5映射使用incarnation=1，已退役映射拒绝复活；未来复用原生ID必须走显式新代次协议。
+4. Bucket首次接收固定，必须落在CH Date可表示范围。Span源版本来自`agent_insight.revision`，默认1；旧版本忽略，同版本同内容幂等，同版本不同内容永久失败并隔离。内部版本由heads原子分配，不从时间戳或进程计数器推导。
+5. Outbox事件`observability.otlp.accepted.v1`只存batch引用，不存凭据。全局最早未完成事件强序领取；活动租约或退避中的早期事件阻止后续越过。attempts为fence，owner/租约决定完成权；准备事务提交heads及唯一plan_ref后才访问CH，慢准备在仍持写锁时续租。重试使用相同计划、行版本及正文hash。
+6. Worker每128 Span批量写正文，HTTP单请求≤4MiB。所有chunks写成功后发布manifests，再写Span，最后写Trace摘要；每批续租并重核路由。摘要按新旧Span差量更新计数/Token，不叠加累计快照；任一缺失Token使总值NULL，同时保存已知和与缺失数。修订边界时间时从当前heads重核范围。全部sink成功且fence仍有效才同事务标indexed/sent；部分写入靠相同版本重放收敛。
+7. 成员/账号撤销会拒绝新接收和读取，已接收数据仍按冻结归属由可信worker物化；Trace进入删除状态则阻止后续批次物化。此为单队列/控制写锁正确性基线，不等于分片Durable Event Log、HA或1000采集端吞吐验收。
