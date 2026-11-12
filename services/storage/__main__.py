@@ -12,6 +12,7 @@ def main(argv=None):
     commands=parser.add_subparsers(dest='command',required=True)
     schema=commands.add_parser('schema',help='print reviewed DDL; does not connect to a database')
     schema.add_argument('--backend',required=True,choices=['sqlite','postgresql','opengauss','clickhouse'])
+    schema.add_argument('--version',type=int,default=1)
     initialize=commands.add_parser('init-sqlite',help='initialize an explicit NEW core SQLite database')
     initialize.add_argument('--database',required=True)
     inspect=commands.add_parser('inspect-legacy',help='read-only consistent legacy inventory (may scan large tables)')
@@ -21,14 +22,55 @@ def main(argv=None):
     export.add_argument('--output',required=True)
     verify=commands.add_parser('verify-export',help='verify export bytes, schema and typed-row hashes')
     verify.add_argument('--directory',required=True)
+    migration_plan=commands.add_parser('migration-plan',help='read-only known-prefix migration plan for explicit target')
+    migration_plan.add_argument('--backend',required=True,choices=['sqlite','postgresql','opengauss'])
+    migration_plan.add_argument('--database')
+    migration_plan.add_argument('--dsn-file')
+    migration_plan.add_argument('--schema')
+    migration_plan.add_argument('--artifacts')
+    migrate=commands.add_parser('migrate-sqlite',help='explicit atomic schema upgrade, new private sibling backup required')
+    migrate.add_argument('--database',required=True)
+    migrate.add_argument('--backup',required=True)
+    for command in ('init-relational','migrate-relational','source-evidence'):
+        relational=commands.add_parser(command,help='explicit isolated-schema relational operation')
+        relational.add_argument('--backend',required=True,choices=['postgresql','opengauss'])
+        relational.add_argument('--dsn-file',required=True)
+        relational.add_argument('--schema',required=True)
+        relational.add_argument('--artifacts',required=True)
+        if command=='migrate-relational': relational.add_argument('--backup-manifest',required=True)
     args=parser.parse_args(argv)
     try:
         if args.command=='schema':
-            print((Path(__file__).parent/'schema'/args.backend/'001_core.sql').read_text(),end='')
+            if args.version < 1: raise ValueError('migration version must be positive')
+            files=list((Path(__file__).parent/'schema'/args.backend).glob(f'{args.version:03d}_*.sql'))
+            if len(files)!=1: raise ValueError('unknown migration version')
+            print(files[0].read_text(),end='')
             return 0
         if args.command=='init-sqlite':
             SQLiteControlStore(args.database).initialize()
-            result={'status':'initialized','schema_version':1,'database':str(Path(args.database).absolute())}
+            result={'status':'initialized','schema_version':SQLiteControlStore(args.database).migration_plan()['current_version'],'database':str(Path(args.database).absolute())}
+        elif args.command=='migrate-sqlite':
+            result=SQLiteControlStore(args.database).migrate(backup_path=args.backup)
+        elif args.command in {'init-relational','migrate-relational','migration-plan','source-evidence'}:
+            if args.backend=='sqlite':
+                if not args.database: raise ValueError('SQLite requires an explicit database')
+                store=SQLiteControlStore(args.database)
+            else:
+                if not args.dsn_file or not args.schema or not args.artifacts:
+                    raise ValueError('relational operations require DSN file, schema and artifact directory')
+                from .relational import PostgreSQLControlStore, OpenGaussControlStore
+                dsn_file=Path(args.dsn_file)
+                if not dsn_file.is_file() or dsn_file.is_symlink() or dsn_file.stat().st_mode & 0o077:
+                    raise ValueError('DSN file must be private and not a symlink')
+                cls=PostgreSQLControlStore if args.backend=='postgresql' else OpenGaussControlStore
+                store=cls.from_dsn(dsn_file.read_text().strip(),schema=args.schema,artifact_directory=args.artifacts)
+            if args.command=='init-relational':
+                store.initialize();result={'status':'initialized'} | store.migration_plan()
+            elif args.command=='source-evidence':
+                result=store.source_evidence()
+            elif args.command=='migrate-relational':
+                result=store.migrate(backup_manifest=json.loads(Path(args.backup_manifest).read_text()))
+            else: result=store.migration_plan()
         elif args.command=='inspect-legacy':
             result=inventory_database(args.database)
         elif args.command=='export-legacy':
