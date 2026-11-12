@@ -68,6 +68,18 @@ test('Dify native Workflow filters infrastructure, preserves roles and real root
   assert.deepEqual(displayed.requestMessages!.map(m => m.role), ['system', 'user']);
 });
 
+test('Dify 1.14 retains its WorkflowAppRunner root and completes only after End evidence', () => {
+  const legacyRoot = { ...root, name: 'core.app.apps.workflow.app_runner.WorkflowAppRunner.run' };
+  const events = normalized([start, llm, end, legacyRoot]);
+  const record = aggregateOtelTraceEvents(sessionId, events)!;
+  assert.ok(events.some(event => event.spanId === 'root'));
+  assert.equal(new Date(record.trace_completed_at!).getTime(), 4000);
+  assert.equal(record.tokens, 73);
+  assert.equal(aggregateOtelTraceEvents(sessionId, normalized([start, llm, legacyRoot]))!.trace_completed_at, undefined);
+  const failure = { ...legacyRoot, status: { code: 2, message: 'workflow failed' } };
+  assert.ok(aggregateOtelTraceEvents(sessionId, normalized([start, failure]))!.trace_completed_at);
+});
+
 test('Dify late Start batches and shared instances keep a stable per-trace identity', () => {
   const early = normalized([llm]);
   const late = normalized([start, end, root]);

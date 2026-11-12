@@ -293,7 +293,7 @@ LLM、Tool、MCP 和 Skill 仍使用本页既有 canonical 属性；读取 `SKIL
 
 ## Dify 原生 Workflow 属性映射
 
-Dify 1.18.0 原生 OTLP（非应用内 Langfuse SDK）由 `service.name=langgenius/dify` 或 `gen_ai.framework=dify` 识别；显式声明其他 `agent.insight.framework` 的 Span 保留其原归属，混合请求按 Span 分流。
+Dify 原生 Workflow OTLP（非应用内 Langfuse SDK）由 `service.name=langgenius/dify` 或 `gen_ai.framework=dify` 识别；显式声明其他 `agent.insight.framework` 的 Span 保留其原归属，混合请求按 Span 分流。根节点兼容 1.14.0 与 1.18.0 的两种名称；这不代表旧版提供新版 Agent trajectory 管线。
 
 | 原生字段 | Agent Insight 语义 |
 | --- | --- |
@@ -304,7 +304,7 @@ Dify 1.18.0 原生 OTLP（非应用内 Langfuse SDK）由 `service.name=langgeni
 | `gen_ai.request.model`、`gen_ai.usage.input_tokens/output_tokens/total_tokens` | 模型和 LLM 节点用量；控制流不累加 Token |
 | `status.code/message`、`events` | 节点状态、错误描述与原始事件；缓存在规范事件中 |
 | Start `output.value` 中 `sys.*` | 原生运行与会话标识，保留于节点输出，当前不跨 Trace 合并 |
-| `services.workflow_run_agg.WorkflowRunAgg.run` | Workflow 执行范围；根 Span 结束并有 End 节点或显式错误才标记完成 |
+| `core.app.apps.workflow.app_runner.WorkflowAppRunner.run`（1.14.0）或 `services.workflow_run_agg.WorkflowRunAgg.run`（1.18.0） | Workflow 执行范围；根 Span 结束并有 End 节点或显式错误才标记完成 |
 
 接收归属使用服务端验证过的 API Key 用户，客户端的 `gen_ai.user.id` 不覆盖该归属。无内容时不生成模型正文；未收到根结束证据时不从最后一个子 Span 推断完成。配置、范围与待验证场景见 [Dify 原生 OTLP 接入](../../how-to/observability/develop-trace-collector.md#dify-原生-otlp-接入)。
 
