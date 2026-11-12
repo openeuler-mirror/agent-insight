@@ -182,6 +182,8 @@ Choose the CLA and contribution guide for the community receiving your PR: **sig
 2. Before contributing code, sign that community's CLA and read its contribution guide and this repository's [AGENTS.md](AGENTS.md).
 3. Fork the target community's repository, create a working branch, make the change, update the relevant documentation, and run `npm run test`. Submit a PR to the same community's repository describing the purpose and validation results.
 
+For focused checks, use `node scripts/test-suites.mjs --module evaluation --concurrency 2` in the same isolated environment required by the full suite. Modules are `observability`, `evaluation`, `skills` (including diagnosis and optimization), `reliability`, and `platform`. Repeat `--module` to combine modules, or add `--list` to print files. Run `--check` and update `test/suites.json` when adding, renaming, or removing tests; the full suite rejects missing, duplicate, or stale entries. Module checks include unit, contract, integration, and performance coverage and do not replace `npm run test` or the full PR gate. Real Benchmark E2E remains opt-in with `RUN_BENCHMARK_REAL_E2E=true`; disabled runs perform no Docker/OpenCode probes, and enabled probes have a 10-second limit. See the [Chinese development guide](docs/zh/how-to/platform/conventions-and-extension.md) for prerequisites.
+
 ## Open-source License
 
 Agent Insight is licensed under [Apache-2.0](LICENSE). The original MIT copyright and permission notice is retained in [LICENSE-MIT-Historical](LICENSE-MIT-Historical) for historical code.

@@ -21,6 +21,7 @@ const database = createIsolatedDatabase();
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { Prisma } from '@prisma/client';
 
 const {
   assertTraceGenerationTarget,
@@ -461,9 +462,27 @@ test('Skill 执行成功后独立等待入库，超时保留 Trace ID 且不再�
   await prisma.reliabilityClient.create({ data: { clientId, user, name: 'ingest-test', lastSeenAt: new Date() } });
   const experiment = await prisma.experiment.create({ data: { user, name: 'ingest timeout', status: 'running', scope: 'skill-workbench', preset: 'use-case', cases: { create: { input: 'run once' } } }, include: { cases: true } });
   t.after(async () => { await prisma.experiment.delete({ where: { id: experiment.id } }); await prisma.reliabilityClient.delete({ where: { clientId } }); });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let ingestStartedAt = 0, ingestReads = 0, settled = false;
+  const sessionDelegate = prisma.session;
+  const findSession = sessionDelegate.findFirst;
+  sessionDelegate.findFirst = (async (args?: Prisma.SessionFindFirstArgs) => {
+    const isIngestRead = args?.where?.user === user && args?.where?.taskId === 'ses_ingest_timeout_fixture';
+    if (isIngestRead && !ingestStartedAt) ingestStartedAt = Date.now();
+    const result = await findSession.call(sessionDelegate, args);
+    if (isIngestRead) ingestReads++;
+    return result;
+  }) as typeof findSession;
+  t.after(() => { sessionDelegate.findFirst = findSession; });
   const controller = new AbortController();
   const work = generateExperimentTraces({ user, experimentId: experiment.id, workerId: clientId, platform: 'opencode', agent: 'build', timeoutSeconds: 600,
     signal: controller.signal, skillExecution: { version: 1, skill: null }, cases: [{ caseId: experiment.cases[0].id, input: 'run once' }] });
+  work.then(() => { settled = true; }, () => { settled = true; });
+  const waitForReads = async (count: number) => {
+    const deadline = performance.now() + 10_000;
+    while (ingestReads < count && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(ingestReads >= count, `expected ${count} real ingestion reads`);
+  };
   try {
     let command;
     for (let i = 0; i < 100 && !command; i++) {
@@ -482,6 +501,14 @@ test('Skill 执行成功后独立等待入库，超时保留 Trace ID 且不再�
     assert.equal(attempt?.status, 'waiting_trace');
     const detail = await (await getExperiment(new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`), { params: Promise.resolve({ id: experiment.id }) })).json();
     assert.equal(detail.traceProgress.waitingTrace, 1);
+    await waitForReads(1);
+    t.mock.timers.setTime(ingestStartedAt + 59_999);
+    const previousReads = ingestReads;
+    await waitForReads(previousReads + 1);
+    assert.equal(settled, false);
+    assert.equal((await prisma.experimentTraceAttempt.findFirst({ where: { experimentId: experiment.id } }))?.status, 'waiting_trace');
+    assert.equal(await prisma.reliabilityCommand.count({ where: { user, action: 'RUN_EXPERIMENT_CASE' } }), 1);
+    t.mock.timers.setTime(ingestStartedAt + 60_000);
     const result = await work;
     assert.deepEqual(result.failedCaseIds, [experiment.cases[0].id]);
     assert.equal(await prisma.reliabilityCommand.count({ where: { user, action: 'RUN_EXPERIMENT_CASE' } }), 1);

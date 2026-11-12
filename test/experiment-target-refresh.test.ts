@@ -23,6 +23,7 @@ test('已有 Trace、后续步骤和环境准备锁定时不重新刷新目标',
  for(const value of [{traceMode:'existing'},{step:3},{environmentBusy:true},{user:''}])assert.equal(harness(value).ticks.length,0);
 });
 test('第 1 步保留现有刷新，环境准备时仍暂停',()=>{
+ assert.match(source,/当前 Agent 已不在最新候选中，请重新选择/);
  assert.equal(harness({step:1,traceMode:'existing'}).ticks.length,1);assert.equal(harness({step:1,environmentBusy:true}).ticks.length,0);
 });
 
