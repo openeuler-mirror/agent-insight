@@ -1,3 +1,5 @@
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCompatibleTags } from '@/lib/storage-core/compat';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -32,6 +34,7 @@ function toErrorResponse(error: unknown) {
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function PUT(request: Request, context: RouteContext) {
+  if (isStorageCoreEnabled()) return handleCompatibleTags(request, (await context.params).id);
   try {
     const { id } = await context.params;
     const body = await request.json();
@@ -49,6 +52,7 @@ export async function PUT(request: Request, context: RouteContext) {
 }
 
 export async function DELETE(request: Request, context: RouteContext) {
+  if (isStorageCoreEnabled()) return handleCompatibleTags(request, (await context.params).id);
   try {
     const { id } = await context.params;
     const { searchParams } = new URL(request.url);

@@ -15,6 +15,8 @@
  */
 
 import { NextResponse } from 'next/server';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCompatibleTransfer } from '@/lib/storage-core/compat';
 import { resolveTraceReadScope } from '@/lib/auth/admin';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { exportTraceBundle } from '@/lib/trace-transfer-service';
@@ -25,6 +27,7 @@ function safeFileSegment(value: string): string {
     return value.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'trace';
 }
 export async function GET(request: Request) {
+    if (isStorageCoreEnabled()) return handleCompatibleTransfer(request, 'export');
     const url = new URL(request.url);
     const executionId = (url.searchParams.get('executionId') || '').trim();
     const { username, canViewAllTraces } = await resolveTraceReadScope(request);

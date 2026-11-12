@@ -1,3 +1,5 @@
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCompatibleTags } from '@/lib/storage-core/compat';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -30,6 +32,7 @@ function toErrorResponse(error: unknown) {
 }
 
 export async function GET(request: Request) {
+  if (isStorageCoreEnabled()) return handleCompatibleTags(request);
   try {
     const { searchParams } = new URL(request.url);
     const { username, canViewAllTraces } = await resolveTraceReadScope(request);
@@ -42,6 +45,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if (isStorageCoreEnabled()) return handleCompatibleTags(request);
   try {
     const body = await request.json();
     const user = String(body.user || '').trim();

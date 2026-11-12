@@ -56,8 +56,8 @@ async function bytes(body: ReadableStream<Uint8Array> | null, limit: number, sta
   for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
   return result;
 }
-async function upstream(path: string, options: { token?: string; method?: string; body?: string; headers?: Record<string, string> }, fetcher: typeof fetch): Promise<{ data: Record<string, unknown>; status: number }> {
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 15_000);
+async function upstream(path: string, options: { token?: string; method?: string; body?: string; headers?: Record<string, string>; responseLimit?: number; timeoutMs?: number }, fetcher: typeof fetch): Promise<{ data: Record<string, unknown>; status: number }> {
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
   try {
     const response = await fetcher(coreServiceOrigin() + path, {
       method: options.method || 'GET', redirect: 'error', cache: 'no-store', signal: controller.signal,
@@ -68,7 +68,7 @@ async function upstream(path: string, options: { token?: string; method?: string
       const status = [400, 401, 403, 404, 409, 413, 415, 422, 429, 501, 503].includes(response.status) ? response.status : 502;
       throw new CoreError(status, status === 401 ? 'Authentication required' : status === 403 ? 'Forbidden' : 'Storage core request failed');
     }
-    const raw = await bytes(response.body, JSON_LIMIT, 502);
+    const raw = await bytes(response.body, options.responseLimit || JSON_LIMIT, 502);
     let data: unknown;
     try { data = JSON.parse(Buffer.from(raw).toString('utf8')); } catch { throw new CoreError(502, 'Invalid storage core response'); }
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new CoreError(502, 'Invalid storage core response');
@@ -179,3 +179,5 @@ export async function handleCoreIngest(request: Request, fetcher: typeof fetch =
     return protobuf ? new Response(null, { status: 200, headers: { ...outHeaders, 'content-type': 'application/x-protobuf' } }) : json({}, 200, outHeaders);
   } catch (error) { return failure(error); }
 }
+
+export { upstream as requestCore, bytes as readCoreBytes };

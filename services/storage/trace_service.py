@@ -260,9 +260,9 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
         def setup(self):
             super().setup();self.connection.settimeout(15)
         def log_message(self,*args):pass
-        def reply(self,status,value):
+        def reply(self,status,value,*,max_bytes=4*1024*1024):
             raw=json.dumps(value,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf-8')
-            if len(raw)>4*1024*1024:
+            if len(raw)>max_bytes:
                 status=413;raw=b'{"error":"Response exceeds bounded page size"}'
             self.send_response(status)
             for name,value in [('Content-Type','application/json; charset=utf-8'),('Content-Length',str(len(raw))),('Cache-Control','no-store'),('Connection','close'),('X-Content-Type-Options','nosniff')]:self.send_header(name,value)
@@ -271,13 +271,13 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             values=self.headers.get_all('Authorization') or []
             if len(values)!=1 or not re.fullmatch(r'Bearer (session|api)_[A-Za-z0-9_-]{43}',values[0]):raise Unauthorized('Bearer credential required')
             return values[0][7:]
-        def body(self):
+        def body(self,max_bytes=4*1024*1024):
             if self.headers.get('Content-Type','').split(';')[0].strip().lower()!='application/json':
                 return None,415
             lengths=self.headers.get_all('Content-Length') or []
             if self.headers.get('Transfer-Encoding') or len(lengths)!=1 or not lengths[0].isdigit():raise ValueError('explicit content length required')
             size=int(lengths[0])
-            if size>4*1024*1024:return None,413
+            if size>max_bytes:return None,413
             raw=self.rfile.read(size)
             if len(raw)!=size:raise ValueError('incomplete request')
             value=json.loads(raw.decode('utf-8'),parse_constant=lambda _:(_ for _ in ()).throw(ValueError('nonfinite JSON')))
@@ -292,9 +292,115 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             except (CursorExpired,Conflict):self.reply(409,{'error':'State conflict; refresh or inspect batch status'})
             except (ValueError,KeyError,TypeError,UnicodeError,RecursionError):self.reply(400,{'error':'Invalid bounded request'})
             except ClickHouseError:self.reply(503,{'error':'Analytical storage unavailable'})
-            except Exception:self.reply(503,{'error':'Storage service unavailable'})
+            except Exception as exc:
+                status=getattr(exc,'status',503)
+                self.reply(status if status in (400,403,404,409,413,503) else 503,{'error':'Storage compatibility request failed' if status!=503 else 'Storage service unavailable'})
         do_GET=run_request
         do_POST=run_request
+        do_PUT=run_request
+        do_PATCH=run_request
+        do_DELETE=run_request
+        def dispatch_compat(self,token,pieces,params):
+            from .trace_metadata import TraceMetadata
+            from .compatibility import LegacyTraceReads
+            from .compatibility_list import LegacyTraceList
+            compat_path=pieces[2:]
+            deleting_root=self.command=='DELETE' and (compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
+            workspace=runtime.workspace(token,params.get('workspace_id'),'read' if self.command=='GET' else 'delete' if deleting_root else 'write')
+            metadata=TraceMetadata(runtime.control)
+            listing=LegacyTraceList(runtime.queries,metadata)
+            reads=LegacyTraceReads(runtime.queries,runtime.authorized)
+            path=pieces[2:]
+            def respond(value,status=200,limit=4*1024*1024):self.reply(status,{'value':value},max_bytes=limit)
+            def body():
+                value,error=self.body()
+                if error:self.reply(error,{'error':'JSON body required or body too large'});return None
+                return value
+            if path[:3]==['observe','traces','import'] and len(path)==3 and self.command=='POST':
+                import time
+                from .trace_transfer import LegacyTraceTransfer, TraceTransferPending
+                value,error=self.body(max_bytes=50*1024*1024)
+                if error:self.reply(error,{'error':'JSON bundle required or body too large'});return
+                transfer=LegacyTraceTransfer(runtime.control,runtime.queries,runtime.authorized,metadata,runtime.ingest)
+                result=transfer.import_bundle(token,workspace,value.get('bundle'),receipt_key=self.headers.get('Idempotency-Key'))
+                deadline=time.monotonic()+290
+                for batch in result.batch_refs:
+                    while True:
+                        receipt=runtime.ingest.batch_status(token,workspace,batch['batch_id'])
+                        if receipt['state']=='indexed':break
+                        if receipt['state']=='failed' or time.monotonic()>=deadline:raise TraceTransferPending(result.batch_refs)
+                        runtime.stop.wait(.1)
+                        if runtime.stop.is_set():raise TraceTransferPending(result.batch_refs)
+                transfer.mark_completed(token,workspace,result)
+                respond(dict(success=True,fileName=value.get('fileName') if isinstance(value.get('fileName'),str) else None,**result));return
+            if path==['observe','traces','export'] and self.command=='GET':
+                from .trace_transfer import LegacyTraceTransfer
+                if not params.get('executionId'):raise ValueError('executionId required')
+                transfer=LegacyTraceTransfer(runtime.control,runtime.queries,runtime.authorized,metadata,runtime.ingest)
+                respond(transfer.export(token,workspace,params['executionId']),limit=128*1024*1024);return
+            if path==['observe','data']:
+                if self.command=='GET':respond(listing.read(token,workspace,params));return
+                value=body()
+                if value is None:return
+                ref=value.get('upload_id') or value.get('task_id')
+                kind='execution' if value.get('upload_id') else 'task'
+                if not ref:raise ValueError('explicit Trace identity is required')
+                if self.command=='DELETE':
+                    with runtime.control.read_transaction() as con:
+                        alias=con.execute('SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind=? AND alias_id=?',(workspace,kind,ref)).fetchone()
+                    deleted=metadata.delete(token,workspace,alias[0] if alias else ref)
+                    respond({'success':True,'count':int(deleted)});return
+                if self.command=='PATCH':
+                    route=metadata.resolve(token,workspace,ref,kind)
+                    changes={key:value[key] for key in ('query','label','final_result','user_feedback') if key in value}
+                    if 'query' in changes and (not isinstance(changes['query'],str) or not changes['query'].strip()):raise ValueError('query must be nonempty')
+                    # Result editing also schedules evaluation in the existing workflow; that handoff must precede publishing an edit.
+                    if 'final_result' in changes:raise Conflict('result editing requires the evaluation handoff to be configured')
+                    metadata.patch(token,workspace,route['trace_id'],changes)
+                    records=listing.read(token,workspace,{'executionId':route['execution_id']})
+                    record=records[0] if records else dict(task_id=route['task_id'],upload_id=route['execution_id'],**changes)
+                    respond({'success':True,'record':record,'message':'用户反馈已更新' if 'user_feedback' in changes else 'Label 已更新' if 'label' in changes else 'Query 已更新'});return
+            if path==['observe','session'] and self.command=='GET':
+                ref=params.get('taskId')
+                if not ref:raise ValueError('taskId required')
+                route=metadata.resolve(token,workspace,ref)
+                view=params.get('view','full');index=params.get('index')
+                if index is not None:
+                    if not re.fullmatch(r'[0-9]{1,8}',index):raise ValueError('invalid interaction index')
+                    index=int(index)
+                result=reads.session(token,workspace,route['trace_id'],view=view,index=index)
+                annotations=metadata.properties(token,workspace,route['trace_id'])
+                for key in ('label','query'):
+                    if key in annotations.get('override_fields',[]):result[key]=annotations.get(key)
+                result['taskId']=route['task_id']
+                if isinstance(result.get('execution'),dict):result['execution'].update(id=route['execution_id'],taskId=route['task_id'])
+                respond(result,limit=128*1024*1024);return
+            if path==['tags']:
+                if self.command=='GET':respond(metadata.list_tags(token,workspace,params.get('kind')));return
+                if self.command=='POST':
+                    value=body()
+                    if value is not None:respond(metadata.create_tag(token,workspace,value),201)
+                    return
+            if len(path)==2 and path[0]=='tags':
+                if self.command=='DELETE':metadata.delete_tag(token,workspace,path[1]);respond({'success':True});return
+                if self.command in ('PUT','PATCH'):
+                    value=body()
+                    if value is not None:respond(metadata.update_tag(token,workspace,path[1],value))
+                    return
+            if len(path)==3 and path[0]=='executions' and path[2]=='tags':
+                route=metadata.resolve(token,workspace,path[1],'execution');trace=route['trace_id']
+                if self.command=='GET':respond({'tags':metadata.get_trace_tags(token,workspace,trace)});return
+                if self.command=='DELETE':
+                    if not params.get('tagId'):raise ValueError('tagId required')
+                    respond({'tags':metadata.remove_trace_tag(token,workspace,trace,params['tagId'])});return
+                if self.command in ('PUT','POST'):
+                    value=body()
+                    if value is not None:
+                        method=metadata.replace_trace_tags if self.command=='PUT' else metadata.add_trace_tags
+                        respond({'tags':method(token,workspace,trace,value.get('tagIds',[]))})
+                    return
+            self.reply(404,{'error':'Unknown compatibility route'})
+
         def dispatch(self):
             parsed=urllib.parse.urlsplit(self.path)
             if len(self.path)>16384 or parsed.scheme or parsed.netloc:raise ValueError('invalid path')
@@ -315,6 +421,8 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return
                 self.reply(200,runtime.login(body.get('username'),body.get('password')));return
             token=self.token()
+            if pieces[:2]==['v1','compat']:
+                self.dispatch_compat(token,pieces,params);return
             if self.command=='GET' and pieces==['v1','auth','me']:
                 self.reply(200,runtime.profile(token));return
             if self.command=='POST' and pieces==['v1','auth','logout']:

@@ -1,24 +1,55 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-12。当前已完成001核心基础、IAM/002/统一授权/三事务库合同、003 default项目预留，以及004可靠采集/Trace显式Web桥接实现；本轮HTTP万Span与重启/导入验收已通过，浏览器已完成万Span、分页、正文及成员隔离验收，整体重构未完成。总体目标见phase1/phase2，IAM批次范围见[phase5](phase5-iam-adapters-plan.md)，default追加范围见[开发计划](phase3-development-plan.md)。
+日期：2026-11-12。已完成001基础、002 IAM、003 default预留、004可靠采集及005原Trace接口元数据兼容；原前端已恢复，隔离环境通过原界面的导入/详情/正文/打标/导出链路。全产品数据迁移和功能回归尚未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
-用户明确要求保留原有全部功能，仅变化其背后的数据支持。当前core模式的单Trace导航、全页替换、独立登录后落点和未接管操作501不符合此要求。**产品验收未通过；先前“可打开验收”仅证明技术样例可运行，不能代表原产品完成切换。** 下文历史实测数字与截图继续保留，完成状态按此纠偏解释。
+用户明确要求保留原有全部功能，仅变化其背后的数据支持。此前core技术样例的单Trace导航、全页替换、独立登录后落点和未接管操作501不符合此要求；本批已撤回前端替换，恢复原页面与登录。**产品验收未通过；先前“可打开验收”仅证明技术样例可运行，不能代表原产品完成切换。** 下文历史实测数字与截图继续保留，完成状态按此纠偏解释。
 
-已核对当前源码有52个`src/app/(main)`页面文件及290个API `route.ts`文件（含本批新增auth路由）；这是物理入口数量，不是已验证功能数量或完整迁移清单。尚未完成原界面恢复、全部API/后台调用逐项映射、所有既有功能回归及产品切换。实施顺序与首轮分组见[兼容清单](phase3-development-plan.md#修正后的实施顺序与兼容清单)。
+已核对当前源码有52个`src/app/(main)`页面文件及290个API `route.ts`文件（含本批新增auth路由）；这是物理入口数量，不是已验证功能数量或完整迁移清单。原界面已恢复；全部API/后台调用逐项映射、所有既有功能回归及产品切换仍未完成。实施顺序与首轮分组见[兼容清单](phase3-development-plan.md#修正后的实施顺序与兼容清单)。
 
 ## 基线与交付
 
 - 工作分支`codex/storage-core-refactor`基于已同步的`upstream/master`：`298d1d5b10ab3ab67a955b41a1665b0cd4d26b54`，旧库基线96个Prisma模型。
-- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`、`003_projects.sql`、`004_observations.sql`与机器字段目录。
-- 当前物理核心为 **35张事务表+13张CH表=48张**：001原34张，002新增10张IAM表，003新增项目目录与workspace归属2张，004新增可靠采集与实体版本2张。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
+- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`、`003_projects.sql`、`004_observations.sql`、`005_trace_metadata.sql`与机器字段目录。
+- 当前物理核心为 **39张事务表+13张CH表=52张**：001原34张，002新增10张IAM表，003新增项目目录与workspace归属2张，004新增可靠采集与实体版本2张，005新增旧ID/标注/标签4张。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
 - `services/storage/control.py`、`relational.py`共享资产/发布/草稿/别名、RunPlan、任务lease/fence/取消、结果回执与Outbox原子性。PG/openGauss写锁粒度为正确性基线，尚未完成千级混合容量优化。
 - `iam.py`实现稳定主体、密码派生、会话/API凭据、用户组/成员CAS/最后Owner保护、空间归属、资源归属与显式共享/撤销。组管理员全组读取，普通成员本人/共享，viewer只读；无隐式平台管理员。
 - `authorized.py`统一校验元数据/列表/Span/正文/聚合/有界制品下载。CH读取和下载前后重新校验权限；慢I/O与密码派生不占写事务。私有评测gold不通过普通制品端口开放。
 - `clickhouse.py`保持最新态后筛选、结构分页/单点、多section正文bundle、分块/hash和有界请求；新增范围绑定聚合、删除屏障及Token未知覆盖度。未知总数返回null，并提供已知和/缺失数量，不冒充完整零值。
 - `migrations.py`与CLI实现已知连续前缀、checksum、显式迁移计划及原子升级。SQLite备份后锁源重核；服务端先取迁移表锁再建立快照，绑定备份源身份/历史/全部托管表内容证据。DDL不得自行提交事务。
 - `legacy.py`提供只读原始清点/导出/验证，保留活跃WAL、类型、物理列、重复行和摘要；`trace_import.py`新增限定Session/Execution允许字段的显式映射/dry-run/接收链路apply，不等于96模型语义迁移或生产切换。
+
+## 005 原界面兼容验证（当前批次）
+
+原登录、导航、Trace页面、客户端身份/API封装与`789e8d047b6c9b80b2054c8eac666342cbdfe368`一致；`src/app/(main)`、`src/app/login`、`src/components`、`src/lib/auth`和`src/lib/client`全部目录对该基线的git diff为空。移除本分支曾增加的替代UI。模式开关改为仅服务端；保留旧public变量作为服务端弃用别名。
+
+- 新增`trace_legacy_ids`、`trace_annotations`、`trace_tags`、`trace_tag_links`，001–004不改。独立验收库升级4→5前创建新备份；34张既有非schema_meta表的行数与内容指纹保持一致。又在原7条路由别名回填前备份；原业务库未执行迁移。
+- 旧Key先经原认证核验，再通过0600显式映射绑定当前IAM主体/空间；伪造user/workspace不能扩大范围。无映射、撤权、core故障不回落旧Trace库。删除要求独立delete能力；成员只能删除本人资源，read/write API key不能删。
+- 旧列表/统计/筛选、单Trace session structure/interaction/interactions/full、标签CRUD/关联及bundle v1 import/export已接线。nullable否定筛选、平均耗时分母及工具错误百分比保持原合同。未知token不伪造为零。
+- 普通结构逐页读取200 Span，最多100000条/16MiB，结构阶段不读正文；点击后按精确revision读取单点。opaque `_payloadVersion`绑定Trace/Span身份与结构版本，防止并发插入造成索引位移后错填正文。原Langfuse节点路径因前端直接消费nodes保留完整正文，不计入普通懒加载证明。
+- 导入50MiB/500 execution，全树预检，旧ID与嵌套引用碰撞重映射，原始扩展/调用ID及空/null Session保真。显式receipt按同内容恢复；原UI无receipt时只恢复同主体/空间/内容的未完成operation，完成后再导入可建副本。全部batch indexed并校验mark_completed后才返回成功。完整响应上限128MiB。
+
+### 本批取得的证据
+
+隔离服务继续使用`http://localhost:58388`，原界面验收页为`/trace?taskId=compat-ui-demo-task`。原登录方式不变；该样本属隔离admin。控制库、CH及Prisma旧业务样本库均在专用目录，未指向默认业务数据。证据集中在`exclude/storage-core-acceptance/20261112-e25e83fe/compat-unchanged-ui/`。
+
+| 验证 | 最新结果与准确边界 |
+|---|---|
+| 存储默认测试 | 477次执行：303通过、174项因未提供可选实际引擎配置而跳过，19.416秒；非477项全部实机通过 |
+| Web专项 | 33/33通过，0.754秒；含原目录/五入口基线、旧接口桥接、认证映射、DELETE空体与大导入/导出头 |
+| TypeScript / lint | 完整`tsc --noEmit`通过；新兼容桥接三个文件ESLint通过。受改动路由全量lint仍有原有3个any错误/1个未用参数警告，相关旧行与HEAD相同，未作为本批通过项 |
+| SQLite/PG/openGauss元数据 | 各18/18通过；openGauss7官方Linux ARM64驱动/原生SHA认证17.817秒，PG14.444秒。最新完整源码指纹见`/tmp/agent-insight-storage-forward-final-evidence.json` |
+| 已有真实CH读取 | 8 Span和10000 Span两条通过，2.192秒；万Span结构0正文、末条按版本lazy读取 |
+| 原浏览器真实闭环 | 通过原导入对话框上传v1文件，原列表及详情显示；点击Span显示完整input/output；原打标创建并关联1标签；原导出按钮下载。导出全部executions/session与输入相等，任意opaque扩展保留，控制库证实owner=admin、全部indexed、operation completed |
+| 原采集Key HTTP | 原Key→OTLP ack仍空JSON；新native ID别名、query投影及正文读回通过；伪造user、他人Trace及其他workspace均不能越权；`http-evidence.json` |
+| 应用全量 | 隔离HOME/SQLite运行`npm run test`，600.03秒后因evaluator-scoring-http停滞终止自有进程组，未取得完整汇总；截至终止已报告5项失败（其中首次注册环境缺PyYAML）。**全量未通过**，日志`verification/npm-full.log`与result.json保留 |
+
+所有输入均人工fixture，无真实LLM调用、客户数据迁移、千级并发或HA结论。旧004数据未自动补投影；相同源revision重放会幂等跳过，不能伪增source版本回填查询字段。
+
+### 仍未完成
+
+评测回流/结果编辑的自动重评交接、诊断与故障事件、Infra关联、协作关系、实验/评测结果联动、各非OTLP采集写端，以及所有其他领域的语义迁移和资产多版本业务接管仍需逐项实施。当前final_result编辑明确冲突，不能当作原自动评测已触发；旧复合条件删除也尚未接回。列表当前枚举授权数据，上限100000；索引下推、队列/写锁并发优化、所有超大Trace全量导出性能仍需专测。**原界面恢复及Trace专项通过不代表原有全部功能已完成新库接管。**
 
 ## 004 Trace垂直链路技术验证（历史专项证据）
 

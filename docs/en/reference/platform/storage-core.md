@@ -5,15 +5,15 @@ description: "SQLite, PostgreSQL and openGauss control storage, authorized Click
 
 # Storage core, IAM and safe migrations
 
-**Product compatibility status (2026-11-12):** This page describes an internal storage prototype. Core mode does not yet preserve all existing features and screens and is not a completed product migration. The required outcome retains existing functionality and replaces its data support. Restoring the existing UI and migrating every domain remain outstanding; the configuration below is for isolated technical validation.
+**Product compatibility status (2026-11-12):** The original frontend is restored, with server compatibility for existing Trace contracts. Complete domain migration and regressions remain unfinished. This is isolated validation, not a production cutover.
 
-`services/storage/` is a Python 3.11+ foundation. SQLite, IAM and ClickHouse use the standard library; relational servers use an explicit DB-API connection factory. Next explicitly opts into core Trace ingestion, listing, Span/payload reads and separate password login. Other domains are not fully switched. Leaving the flag unset preserves the legacy path; offline commands do not switch a running application. See the [isolated setup guide](../../how-to/platform/storage-core.md).
+`services/storage/` is a Python 3.11+ foundation. SQLite, IAM and ClickHouse use the standard library; relational servers use an explicit DB-API connection factory. Next explicitly opts into core Trace ingestion, listing, Span/payload reads while retaining original login and screens. Other domains are not fully switched. Leaving the flag unset preserves the legacy path; offline commands do not switch a running application. See the [isolated setup guide](../../how-to/platform/storage-core.md).
 
-See the [table relationship guide](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序) for all48 table purposes, primary/unique/query keys and eight overview/relationship diagrams. It distinguishes database foreign keys from logical references across databases. The diagrams and full dictionary are maintained in Chinese.
+See the [table relationship guide](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序) for all52 table purposes, primary/unique/query keys and eight overview/relationship diagrams. It distinguishes database foreign keys from logical references across databases. The diagrams and full dictionary are maintained in Chinese.
 
 ## Implemented contracts
 
-`001_core.sql` remains byte-for-byte unchanged:21 transactional and13 ClickHouse tables. `002_iam.sql` adds10 IAM tables, 003 adds2 project-directory/binding tables and004 adds2 ingestion/entity-version tables, for **35 transactional +13 ClickHouse =48**. The complete field/type/constraint/index dictionary is in `design/platform/analytical-transactional-storage/core-table-dictionary.md`.
+`001_core.sql` remains byte-for-byte unchanged:21 transactional and13 ClickHouse tables. `002_iam.sql` adds10 IAM tables, 003 adds2 project-directory/binding tables 004 adds2 ingestion/entity-version tables and005 adds4 Trace identity/annotation/tag tables, for **39 transactional +13 ClickHouse =52**. The complete field/type/constraint/index dictionary is in `design/platform/analytical-transactional-storage/core-table-dictionary.md`.
 
 All three transactional backends share immutable releases/dependencies, draft/alias CAS, frozen RunPlan inputs, task leases/fences/cancellation, artifact verification and atomic result receipt/Outbox writes. ClickHouse supports trusted canonical Span batches, latest-state filtering, single-Span and paginated structure reads, exact-revision payload bundles with chunk/manifest hashes, and bounded analytics. Requests are capped at4MiB; payload bundles at64MiB.
 
@@ -25,15 +25,15 @@ The004 observation materializer rejects changed content at the same source revis
 
 `AuthorizedStorage(iam, facts)` defaults to `default`; an explicit `project_id='default'` is accepted. Empty/blank/other selectors fail closed. `project_context(credential, workspace_id)` returns an immutable context after workspace authorization. Scopes, list/analytics envelopes and cache fingerprints include the project; individual CH rows keep their existing workspace keys.
 
-New targets apply001–004. Existing001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003; the Trace HTTP service requires current004 after an explicit migration. Project UI, invitations and project-owner administration are future work. The Trace Web path switches only through the explicit mode flag; existing production data is not migrated by this setting.
+New targets apply001–005. Existing001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003; the Trace HTTP service requires current005 after an explicit migration. Project UI, invitations and project-owner administration are future work. The Trace Web path switches only through the explicit mode flag; existing production data is not migrated by this setting.
 
 ### IAM and authorization
 
 `IAMStore` provisioning methods (including account/password/group/workspace setup and names containing `for_provisioning`) are trusted administrative ports, not unauthenticated Web endpoints. Principals use stable IDs. Login names undergo NFKC/trim/casefold and then require1..128 ASCII login characters. Passwords require15..1024 characters and use PBKDF2-HMAC-SHA256 with600000 iterations and independent32-byte salts, following the [OWASP password-storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html).
 
-Sessions and API credentials contain random secrets, stored only as hashes. Sessions last at most24h; API credentials at most365 days and bind one workspace and explicit capabilities. Password changes/account disablement invalidate auth versions. Leaving a group permanently revokes its existing API credentials; rejoining does not revive them. Core now has password login, a separate HttpOnly/SameSite=Strict cookie, same-origin checks for login/logout and a single-instance login rate limit. Account recovery, external identity binding and distributed rate limits remain future work. Legacy username registration/keys do not authenticate core.
+Sessions and API credentials contain random secrets, stored only as hashes. Sessions last at most24h; API credentials at most365 days and bind one workspace and explicit capabilities. Password changes/account disablement invalidate auth versions. Leaving a group permanently revokes its existing API credentials; rejoining does not revive them. IAM password/API protocols remain available internally; the product keeps its existing login page. Legacy keys are verified through existing authentication before explicit private mapping to current IAM credentials. Matching usernames cannot create identity bindings. Complete identity migration, recovery and distributed rate limits remain future work.
 
-`AuthorizedStorage` validates a credential and derives the scope server-side. Client workspace selection cannot grant access; empty scopes deny. Group owners/admins can read all business resources in their group's workspaces. Members read their own or explicitly shared resources; viewers cannot write. Shared read access does not grant edit rights. Credential secrets and private evaluation gold stay outside ordinary business reads.
+`AuthorizedStorage` validates a credential and derives the scope server-side. Client workspace selection cannot grant access; empty scopes deny. Group owners/admins can read all business resources in their group's workspaces. Members read their own or explicitly shared resources. Deleting owned resources requires the independent delete capability; viewers cannot write. Shared read access does not grant edit rights. Credential secrets and private evaluation gold stay outside ordinary business reads.
 
 Trace/asset/run/snapshot/artifact roots have explicit ownership and sharing records. Spans and payloads inherit Trace authorization. New Trace routes and ownership records commit atomically. Future domain writers must establish ownership in the same business transaction. Metadata lists, single IDs, payloads, bounded downloads and analytics use the same policy. Unapproved artifact namespaces, including private gold, are excluded.
 
@@ -53,15 +53,15 @@ Every target is explicit; no command defaults to an existing application databas
 
 ```bash
 python3 -m services.storage schema --backend sqlite
-python3 -m services.storage schema --backend postgresql --version 4
-python3 -m services.storage schema --backend opengauss --version 4
+python3 -m services.storage schema --backend postgresql --version 5
+python3 -m services.storage schema --backend opengauss --version 5
 python3 -m services.storage schema --backend clickhouse
 python3 -m services.storage init-sqlite --database /absolute/path/to/new-core.db
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/core.db
 python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db --backup /absolute/path/to/new-backup.db
 ```
 
-`schema` only prints DDL. New targets apply001–004; existing known001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003 and the Trace HTTP service requires current004, both through explicit migration. Unknown versions, history gaps and checksum drift fail closed. Existing Prisma databases are not altered in place.
+`schema` only prints DDL. New targets apply001–005; existing known001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003 and the Trace HTTP service requires current005, both through explicit migration. Unknown versions, history gaps and checksum drift fail closed. Existing Prisma databases are not altered in place.
 
 SQLite migration creates a new private sibling backup, verifies integrity/FKs/hash, then acquires the writer lock and compares source/backup content again. An intervening write causes refusal; the backup remains. Pending DDL and markers commit or roll back together. Backups are never overwritten and old data is not removed. New SQLite targets use WAL/FULL and must not be shared across hosts over NFS.
 
@@ -87,7 +87,16 @@ Trusted CH kernel reads still allow1000 structure rows or32 chunks; HTTP/UI impo
 
 `python3 -m services.storage.trace_service --config /private/trace-service.json` requires a private regular mode0600 JSON file. Control fields are sqlite(database), or postgresql/opengauss(dsn/schema/artifacts). ClickHouse fields are endpoint/database/user/password, plus cursor_secret_hex, default_workspace, port and worker_enabled. Initialize/migrate control and CH explicitly beforehand: startup does not create tables or upgrade schemas. The service binds127.0.0.1 with32 concurrent request slots and503 overload rejection.
 
-Set `NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE=core` and server-side `AGENT_INSIGHT_STORAGE_CORE_URL=http://127.0.0.1:4319`; rebuild/restart after changing the public flag. Keep DATABASE_URL on a separate legacy shell database, never core.db. Core sessions use separate cookies and never expose tokens to browser JS. Unset mode retains legacy selection; enabled-mode errors do not fall back to the old store. See the [setup guide](../../how-to/platform/storage-core.md) for complete provisioning and private configuration.
+Set server-only `AGENT_INSIGHT_TRACE_STORAGE=core`, `AGENT_INSIGHT_STORAGE_CORE_URL` and `AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`; restart Next after changes. The old public flag is a deprecated server alias only. Keep DATABASE_URL on an isolated legacy business database, never core.db. Original frontend login/key behavior is unchanged. The0600 mapping binds a verified legacy key hash/name to a current IAM principal, workspace and read/write/delete delegated credential. Errors do not fall back to legacy Trace reads; unported domains still retain existing paths.
+
+### Existing contracts and005
+
+Four control tables hold immutable legacy IDs, versioned annotation overrides (including explicit nulls), owned tags and Trace/tag links. All use current authorization/deletion barriers. Migrations001–004 remain unchanged. Native OTLP aliases commit with new Trace acceptance; existing routes need explicit backfill.
+
+Compatibility retains existing observe/data, observe/session, tags, execution tags and Trace bundle endpoints. List records/statistics/filter contracts currently enumerate authorized roots, capped at100000; indexed filtering and thousand-collector capacity remain unverified. Ordinary structure loads all lightweight Spans in pages of200, capped at100000/16MiB without payloads. Selection loads one fixed interaction index at its exact payload revision. Full sessions and exports cap at128MiB; native Langfuse views require full nodes/bodies as a distinct compatibility exception.
+
+Bundle v1 imports cap at50MiB/500 executions, preflight the tree, remap IDs/references and return success only after indexing all batches. A receipt can resume the same input. Metadata edits do not rewrite source payloads. Result editing still requires the evaluation handoff and currently reports conflict. Evaluation backflow, infra, diagnosis and non-OTLP writers remain outstanding; restoring screens does not establish full feature migration.
+
 
 This is an ordered single-queue/write-lock correctness baseline, not thousand-collector throughput, sharded durable logging or HA certification.
 

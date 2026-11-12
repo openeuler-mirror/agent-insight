@@ -1,13 +1,13 @@
 ---
 title: "Enable an isolated Storage Core Trace workflow"
-description: "Explicit initialization, private service configuration, password login, OTLP ingestion and paginated reads."
+description: "Explicit initialization, private identity mappings, original screens and isolated Trace validation."
 ---
 
 # Enable an isolated Storage Core Trace workflow
 
-**Product compatibility status (2026-11-12):** This page describes an internal storage prototype. Core mode does not yet preserve all existing features and screens and is not a completed product migration. The required outcome retains existing functionality and replaces its data support. Restoring the existing UI and migrating every domain remain outstanding; the configuration below is for isolated technical validation.
+**Product compatibility status (2026-11-12):** Login, navigation and frontend sources retain the pre-refactor version. Server compatibility now adapts existing Trace contracts to core storage. Evaluation backflow, diagnosis and other domains remain incomplete; this is isolated validation, not a production cutover.
 
-The opt-in core mode handles Trace ingestion, lists, Span structure and payloads. It uses separate IAM password accounts, transactional storage and ClickHouse. Leaving the flag unset preserves the existing path. Once enabled, missing configuration, authorization failures and backend errors fail explicitly. See the [reference](../../reference/platform/storage-core.md) and the authoritative [Chinese procedure](../../../zh/how-to/platform/storage-core.md) for the complete one-time provisioning script.
+The mode flag is server-only. Existing credentials must be verified and explicitly mapped to current IAM principals/workspaces. Missing mappings, revoked access and core failures fail closed without legacy Trace fallback. Other domains still have legacy paths. See the [reference](../../reference/platform/storage-core.md) and implementation status for coverage.
 
 ## Initialize and provision explicit targets
 
@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-New targets apply001–004, currently schema_version4. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
+New targets apply001–005, currently schema_version5. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -60,14 +60,15 @@ Next needs its own isolated runtime home and Prisma shell database. **Do not poi
 AGENT_INSIGHT_HOME=/absolute/path/to/isolated-web \
 DATABASE_URL=file:/absolute/path/to/isolated-web/data/legacy-shell.db \
 AGENT_INSIGHT_PORT=4320 \
-NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE=core \
+AGENT_INSIGHT_TRACE_STORAGE=core \
 AGENT_INSIGHT_STORAGE_CORE_URL=http://127.0.0.1:4319 \
+AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=/absolute/path/to/isolated-core/identity-mapping.json \
 bash scripts/develop_start.sh
 ```
 
-Check port availability and the checkout's `.next` ownership first. The same variables may be stored in this isolated runtime home's `.env`. The public mode flag requires rebuilding/restarting the frontend when changed. The server-side bridge origin must be explicit loopback HTTP(S), without a path, query or URL credentials. Next and the Python service must share a reachable loopback network namespace.
+Check port availability and checkout ownership first. Restart Next after server configuration changes. The old public flag remains a deprecated server-side alias; frontend code does not branch on storage mode. The bridge accepts an explicit loopback origin only. Next and the storage process must share a reachable network namespace.
 
-Open `/login` and use the provisioned IAM username/password. Core uses a separate HttpOnly, SameSite=Strict session cookie, scoped by backend origin; HTTPS adds Secure and login/logout validate same-origin requests. Session secrets stay out of browser JS. Existing username registration, legacy keys and localStorage identities do not authenticate core. Unsetting the mode flag and rebuilding selects the old path without copying data between stores.
+Keep the original `/login` and existing keys. Set `AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE` to an absolute private regular0600 JSON file containing `version:1`, the exact `core_origin`, and `bindings`. Each binding has `legacy_api_key_sha256`, `legacy_username`, `principal_id`, `workspace_id` and a private delegated `credential`. Verify the legacy account/key before provisioning; do not infer membership from matching names or payload.user. Issue the delegated API credential with read/write/delete capabilities through the trusted setup session. The write-only collector key cannot serve UI reads. The Chinese guide contains a placeholder mapping example. Never commit this credential file.
 
 ## Ingest and inspect bounded pages
 
@@ -75,8 +76,10 @@ Collectors use workspace-bound `api_` credentials, not browser sessions. Send to
 
 The Web entry accepts OTLP JSON/protobuf and gzip; decoded JSON is limited to4MiB/4096 completed Spans and64MiB of normalized expanded content. The loopback service receives JSON only. Default `source_namespace` is `otlp`: service.name affects display, so cross-service Spans with the same native Trace ID remain together. Explicit resource `agent_insight.source_namespace` separates integrations. Span `agent_insight.revision` defaults to1; changed content at the same source revision fails rather than overwriting history.
 
-Successful OTLP responses remain an empty JSON object or protobuf body. `X-Storage-Batch-Id` and `X-Storage-State` identify the durable receipt. Accepted means the private packet was fsynced and the control transaction committed. Poll `/v1/batches/<id>?workspace_id=default`, or the corresponding Next `observe/session?action=batch` endpoint; write-only collectors can inspect their own receipts. Only indexed means all sinks completed.
+Successful OTLP responses remain an empty JSON object or protobuf body. `X-Storage-Batch-Id` and `X-Storage-State` identify the durable receipt. Accepted means the private packet was fsynced and the control transaction committed. Poll `/v1/batches/<id>?workspace_id=default`; write-only collectors can inspect their own receipts. Only indexed means all sinks completed.
 
-`/trace` lists50 Traces per page, loads at most200 Span rows per structure page, and reads at most4 payload chunks per page, up to256KiB each. Payload reads use the selected Span's exact payload_revision. Missing sections report available=false. The UI does not fetch all10,000 Spans or an entire Trace JSON before showing one Span.
+The original `/trace` retains existing DTOs, filters, tags and detail controls. The compatibility layer reads all lightweight structure in pages of200, capped at100000 Spans/16MiB. It does not read ordinary OTLP payloads during structure loading. Selecting a Span loads its fixed interaction index and exact payload revision, using at most4 chunks per section page. Do not describe this as clicking before reading any structure.
+
+Trace bundles retain v1 format and execution trees. Imports accept at most50MiB/500 executions, validate the entire tree first, remap colliding IDs and nested references, and return success only after all batches are indexed. Reuse an Idempotency-Key only to resume the same import. Export/full-session responses are capped at128MiB. Existing Langfuse views consume full nodes directly, so that compatibility path restores full bodies and is excluded from ordinary OTLP lazy-loading claims.
 
 The global earliest-event queue is a correctness baseline: an early retry blocks later events. Payload writes batch at most128 Spans and4MiB per HTTP request, persisting chunks before manifests, then Span rows and Trace summaries. Retry reuses frozen versions. Thousand-collector mixed load, sharded logs, HA and browser acceptance require their own evidence; consult the current implementation status. Stop only the services started for this environment and preserve the databases, artifacts and private configuration.

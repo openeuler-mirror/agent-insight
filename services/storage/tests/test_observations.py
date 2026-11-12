@@ -57,6 +57,23 @@ class ObservationTests(unittest.TestCase):
     def rows(self,table):
         with self.control.read_transaction() as con: return [dict(row) for row in con.execute('SELECT * FROM '+table)]
 
+    def test_explicit_tool_role_with_usage_does_not_invent_llm_or_tool_name(self):
+        for key in ('legacy.role','role'):
+            with self.subTest(key=key):
+                body=packet(span=('2' if key=='role' else '1')*16)
+                span=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+                span['attributes'].extend([{'key':key,'value':{'stringValue':'tool'}},
+                    {'key':'gen_ai.usage.output_tokens','value':{'intValue':'3'}}])
+                span['status']['code']=2
+                self.service.accept(self.tokens['alice'],'w',body)
+                self.assertTrue(self.service.work_once('worker'))
+                row=self.facts.spans[-1]
+                self.assertEqual(row['kind'],'tool');self.assertEqual(row['tool_name'],'')
+                self.assertEqual(row['output_tokens'],3)
+        self.assertEqual(self.facts.summaries[-1]['tool_call_count'],2)
+        self.assertEqual(self.facts.summaries[-1]['llm_call_count'],0)
+        self.assertEqual(json.loads(self.facts.summaries[-1]['attributes_json'])['tool_error_count'],2)
+
     def test_accept_is_durable_before_ack_and_worker_indexes_after_restart(self):
         accepted=self.service.accept(self.tokens['alice'],'w',packet())
         self.assertEqual(accepted['state'],'accepted'); self.assertFalse(accepted['duplicate'])
@@ -387,6 +404,237 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(self.rows('ingest_batches')[0]['state'],'prepared')
         self.assertEqual(self.rows('outbox_events')[0]['state'],'pending')
 
+    def test_bounded_projection_preserves_source_hash_and_full_payload(self):
+        body=packet();attrs=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes']
+        attrs.extend([
+            {'key':'legacy.role','value':{'stringValue':'assistant'}},
+            {'key':'legacy.session_query','value':{'stringValue':'Original question'}},
+            {'key':'legacy.session_label','value':{'stringValue':'Original label'}},
+            {'key':'gen_ai.response.model','value':{'stringValue':'model-v1'}},
+            {'key':'observed_ip','value':{'stringValue':'127.0.0.2'}},
+            {'key':'source_kind','value':{'stringValue':'session'}},
+            {'key':'call_ids','value':{'arrayValue':{'values':[{'stringValue':'call-one'}]}}},
+            {'key':'skills','value':{'arrayValue':{'values':[{'stringValue':'testing'}]}}},
+        ])
+        accepted=self.service.accept(self.tokens['alice'],'w',body,receipt_key='first');self.service.work_once('worker')
+        row=self.facts.spans[-1];projection=json.loads(row['attributes_json']);summary=json.loads(self.facts.summaries[-1]['attributes_json'])
+        self.assertEqual(projection['legacy.role'],'assistant');self.assertEqual(projection['content_preview'],'world')
+        self.assertEqual(projection['call_ids'],['call-one'])
+        self.assertEqual(summary['query'],'Original question');self.assertEqual(summary['label'],'Original label')
+        self.assertEqual(summary['model'],'model-v1');self.assertEqual(summary['observed_ip'],'127.0.0.2')
+        self.assertEqual(summary['skills'],['testing']);self.assertEqual(summary['source_kind'],'session')
+        head=next(h for h in self.rows('obs_entity_heads') if h['entity_kind']=='span')
+        snapshot=self.service._load(head['artifact_ref'])
+        self.assertEqual(snapshot['row']['attributes_json'],'{}')
+        self.assertEqual(len(json.loads(snapshot['sections']['attributes'])['span']['skills']),1)
+        frozen=copy.deepcopy(self.rows('obs_entity_heads'))
+        repeated=self.service.accept(self.tokens['alice'],'w',body,receipt_key='second');self.service.work_once('worker')
+        self.assertEqual(self.service.batch_status(self.tokens['alice'],'w',repeated['batch_id'])['state'],'indexed')
+        self.assertEqual(self.rows('obs_entity_heads'),frozen);self.assertEqual(len(self.facts.spans),1)
+
+    def test_long_content_is_preview_only_and_never_a_truncated_full_field(self):
+        body=packet();attrs=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes']
+        attrs[1]['value']['stringValue']='问题'*3000;attrs[2]['value']['stringValue']='answer'*3000
+        attrs.append({'key':'legacy.session_query','value':{'stringValue':'question'*3000}})
+        self.service.accept(self.tokens['alice'],'w',body);self.service.work_once('worker')
+        row=self.facts.spans[-1];meta=json.loads(row['attributes_json']);summary=json.loads(self.facts.summaries[-1]['attributes_json'])
+        self.assertLessEqual(len(row['attributes_json'].encode()),2048)
+        self.assertLessEqual(len(self.facts.summaries[-1]['attributes_json'].encode()),2048)
+        self.assertLessEqual(len(meta['content_preview']),240)
+        self.assertNotIn('legacy.session_query',meta);self.assertNotIn('query',summary);self.assertNotIn('final_result',summary)
+        self.assertIn('query_preview',summary);self.assertIn('final_result_preview',summary)
+        sections=self.facts.bundles[-1][-1]
+        self.assertEqual(sections['input'],'问题'*3000);self.assertEqual(sections['output'],'answer'*3000)
+
+    def test_root_projection_wins_over_child_and_root_revision_can_correct_it(self):
+        root=packet();attrs=root['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes']
+        attrs.append({'key':'gen_ai.response.model','value':{'stringValue':'root-model'}})
+        self.service.accept(self.tokens['alice'],'w',root);self.service.work_once('worker')
+        child=packet(span='2'*16);span=child['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        span['parentSpanId']='1'*16;span['attributes'][1]['value']['stringValue']='child input'
+        span['attributes'].append({'key':'gen_ai.response.model','value':{'stringValue':'child-model'}})
+        self.service.accept(self.tokens['alice'],'w',child);self.service.work_once('worker')
+        summary=json.loads(self.facts.summaries[-1]['attributes_json'])
+        self.assertEqual(summary['query'],'hello');self.assertEqual(summary['model'],'root-model')
+        root['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'][0]['value']['intValue']='2'
+        root['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'][1]['value']['stringValue']='corrected root'
+        self.service.accept(self.tokens['alice'],'w',root);self.service.work_once('worker')
+        self.assertEqual(json.loads(self.facts.summaries[-1]['attributes_json'])['query'],'corrected root')
+
+    def test_json_message_projection_uses_real_user_and_assistant_text(self):
+        body=packet();attrs=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes']
+        attrs[1]['value']['stringValue']=json.dumps([{'role':'system','content':'instruction'},{'role':'user','content':[{'type':'text','text':'你好'}]}])
+        attrs[2]['value']['stringValue']=json.dumps([{'role':'assistant','content':'回复'}])
+        self.service.accept(self.tokens['alice'],'w',body);self.service.work_once('worker')
+        summary=json.loads(self.facts.summaries[-1]['attributes_json'])
+        self.assertEqual(summary['query'],'你好');self.assertEqual(summary['final_result'],'回复')
+        self.assertEqual(json.loads(self.facts.spans[-1]['attributes_json'])['content_preview'],'回复')
+
+    def test_tool_error_count_delta_and_old_heads_remain_unknown(self):
+        body=packet();span=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        span['attributes'].append({'key':'gen_ai.tool.name','value':{'stringValue':'search'}});span['status']['code']=2
+        self.service.accept(self.tokens['alice'],'w',body);self.service.work_once('worker')
+        self.assertEqual(json.loads(self.facts.summaries[-1]['attributes_json'])['tool_error_count'],1)
+        span['attributes'][0]['value']['intValue']='2';span['status']['code']=1
+        self.service.accept(self.tokens['alice'],'w',body);self.service.work_once('worker')
+        self.assertEqual(json.loads(self.facts.summaries[-1]['attributes_json'])['tool_error_count'],0)
+        head=next(h for h in self.rows('obs_entity_heads') if h['entity_kind']=='trace')
+        state=self.service._load(head['artifact_ref']);state.pop('tool_error_count')
+        _,ref=self.service._persist(state)
+        with self.control.transaction() as con:con.execute("UPDATE obs_entity_heads SET revision=revision+1,artifact_ref=? WHERE entity_kind='trace'",(ref,))
+        self.service.accept(self.tokens['alice'],'w',packet(span='2'*16));self.service.work_once('worker')
+        summary=json.loads(self.facts.summaries[-1]['attributes_json'])
+        self.assertIsNone(summary['tool_error_count']);self.assertFalse(summary['tool_error_count_known'])
+
+    def test_import_over_four_mib_stores_raw_legacy_interaction_once(self):
+        raw={'role':'assistant','content':'大正文🙂'*(350000),'requestMessages':[{'role':'user','content':'question'}],
+             'call_ids':['call-original'],'tool_calls':[{'id':'tool-call','function':{'name':'search','arguments':'{}'},'output':'found'}]}
+        body=packet();span=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        span['agent_insight_legacy_interaction']=raw
+        span['agent_insight_legacy_trace']={'execution':{'query':'original query','label':'Import','model':'original-model'},'session':{'taskId':'old-task'}}
+        span['attributes'][2]['value']['stringValue']=raw['content']
+        self.assertGreater(len(json.dumps(raw,ensure_ascii=False).encode()),4*1024*1024)
+        self.assertGreater(len(json.dumps(body,ensure_ascii=False).encode()),4*1024*1024)
+        with self.assertRaises(ValueError):self.service.accept(self.tokens['alice'],'w',body)
+        from services.storage.observations import normalize_import
+        normalized=normalize_import(body,'w');sections=normalized[0]['sections']
+        self.assertEqual(json.loads(sections['legacy_interaction']),raw)
+        self.assertNotIn('agent_insight_legacy_interaction',json.loads(sections['otlp_span']))
+        self.assertNotIn('input',sections);self.assertNotIn('output',sections)
+        self.assertLess(sum(len(v.encode()) for v in sections.values()),len(sections['legacy_interaction'].encode())+4096)
+        ack=self.service.accept_import(self.tokens['alice'],'w',body,receipt_key='import-one');self.service.work_once('worker')
+        self.assertEqual(self.service.batch_status(self.tokens['alice'],'w',ack['batch_id'])['state'],'indexed')
+        self.assertEqual(json.loads(self.facts.bundles[-1][-1]['legacy_interaction']),raw)
+        self.assertLessEqual(len(self.facts.spans[-1]['attributes_json'].encode()),2048)
+        self.assertEqual(json.loads(self.facts.summaries[-1]['attributes_json'])['query'],'original query')
+        self.service.accept_import(self.tokens['alice'],'w',body,receipt_key='import-two');self.service.work_once('worker')
+        self.assertEqual(len(self.facts.spans),1)
+
+    def test_attribute_legacy_body_uses_separate_section_and_plain_source_hash_is_frozen(self):
+        from services.storage.observations import _normalize,_json
+        import hashlib
+        self.assertEqual(hashlib.sha256(_json(_normalize(packet(),'w')).encode()).hexdigest(),'84d5b1010934083a1771f5e9888b427eef335b9f37e8dcca641d2ca9d613092e')
+        body=packet();span=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        raw={'role':'user','content':'question','extra':{'preserved':True}}
+        span['attributes'].append({'key':'agent_insight.raw_interaction','value':{'stringValue':json.dumps(raw)}})
+        normalized=_normalize(body,'w')[0]
+        self.assertEqual(json.loads(normalized['sections']['legacy_interaction']),raw)
+        self.assertNotIn('agent_insight.raw_interaction',json.loads(normalized['sections']['attributes'])['span'])
+        self.assertEqual(json.loads(normalized['sections']['attributes'])['span']['gen_ai.input'],'hello')
+
+    def test_stale_source_revision_cannot_change_projected_metadata(self):
+        body=packet(revision=2);body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'][1]['value']['stringValue']='current query'
+        self.service.accept(self.tokens['alice'],'w',body);self.service.work_once('worker')
+        before=self.facts.summaries[-1]
+        self.service.accept(self.tokens['alice'],'w',packet(revision=1),receipt_key='older');self.service.work_once('worker')
+        self.assertEqual(self.facts.summaries[-1],before)
+        self.assertEqual(json.loads(before['attributes_json'])['query'],'current query')
+
+    def test_import_capsule_preserves_extensions_and_nullable_legacy_session(self):
+        raw={'role':'user','content':'original question','future_extension':{'anything':[1,2,3]}}
+        capsule={'format':'agent-insight.trace-item','version':1,'kind':'interaction','index':0,'value':raw}
+        body=packet();span=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        span['agent_insight_legacy_interaction']=capsule
+        span['agent_insight_legacy_trace']={'format':'agent-insight.trace-bundle-node','version':1,'execution':{'query':'Original'},'session':None}
+        self.service.accept_import(self.tokens['alice'],'w',body);self.service.work_once('worker')
+        self.assertEqual(self.rows('ingest_batches')[0]['state'],'indexed')
+        self.assertEqual(json.loads(self.facts.bundles[-1][-1]['legacy_interaction']),capsule)
+        metadata=json.loads(self.facts.spans[-1]['attributes_json'])
+        self.assertEqual(metadata['role'],'user');self.assertEqual(metadata['content_preview'],'original question')
+        self.assertEqual(json.loads(self.facts.summaries[-1]['attributes_json'])['query'],'Original')
+
+    def test_raw_dedup_removes_only_actual_duplicate_attributes_at_each_scope(self):
+        from services.storage.observations import normalize_import
+        body=packet();resource=body['resourceSpans'][0]
+        resource['resource']['attributes'].append({'key':'gen_ai.output','value':{'stringValue':'independent resource output'}})
+        resource['scopeSpans'][0]['spans'][0]['agent_insight_legacy_interaction']={'role':'assistant','content':'world'}
+        sections=normalize_import(body,'w')[0]['sections'];attrs=json.loads(sections['attributes'])
+        self.assertEqual(attrs['resource']['gen_ai.output'],'independent resource output')
+        self.assertNotIn('gen_ai.output',attrs['span'])
+
+    def test_new_otlp_trace_registers_native_public_aliases_atomically(self):
+        from services.storage.trace_metadata import TraceMetadata
+        metadata=TraceMetadata(self.control)
+        ack=self.service.accept(self.tokens['alice'],'w',packet())
+        expected={'trace_id':ack['trace_ids'][0],'task_id':'a'*32,'execution_id':'a'*32}
+        self.assertEqual(metadata.resolve(self.tokens['alice'],'w','a'*32),expected)
+        self.assertEqual(metadata.resolve(self.tokens['alice'],'w','a'*32,'execution'),expected)
+        self.assertEqual(metadata.resolve(self.tokens['alice'],'w',ack['trace_ids'][0]),expected)
+        self.service.accept(self.tokens['alice'],'w',packet(),receipt_key='second')
+        self.assertEqual(len(self.rows('trace_legacy_ids')),2)
+        with self.assertRaises(Forbidden):self.service.accept(self.tokens['bob'],'w',packet(span='2'*16))
+        self.assertEqual(len(self.rows('trace_legacy_ids')),2)
+
+    def test_native_alias_collision_rolls_back_entire_packet_without_stealing(self):
+        from services.storage.authorized import AuthorizedStorage
+        from services.storage.trace_metadata import TraceMetadata
+        AuthorizedStorage(self.iam,self.facts).create_trace(self.tokens['bob'],'w','other','2026-11-12',source_namespace='custom',native_trace_id='b'*32)
+        TraceMetadata(self.control).register_aliases_for_provisioning('w','other',execution_id='a'*32)
+        before={table:self.rows(table) for table in ['trace_locators','iam_resource_access','trace_legacy_ids','ingest_batches','outbox_events']}
+        with self.assertRaises(Conflict):self.service.accept(self.tokens['alice'],'w',packet())
+        for table,rows in before.items():self.assertEqual(self.rows(table),rows)
+
+    def test_custom_namespace_never_guesses_public_legacy_ids(self):
+        body=packet();body['resourceSpans'][0]['resource']['attributes'].append({'key':'agent_insight.source_namespace','value':{'stringValue':'custom.integration'}})
+        self.service.accept(self.tokens['alice'],'w',body)
+        self.assertEqual(self.rows('trace_legacy_ids'),[])
+
+    def test_prefix_four_without_alias_table_still_accepts_and_indexes(self):
+        from unittest.mock import patch
+        from services.storage.migrations import load_migrations
+        known=load_migrations('sqlite')
+        store=SQLiteControlStore(Path(self.tmp.name)/'prefix-four.db',clock=lambda:self.now)
+        with patch('services.storage.migrations.load_migrations',return_value=known[:4]):store.initialize()
+        iam=IAMStore(store);iam.create_principal('old','old','Old');store.create_workspace('w','W');iam.bind_workspace('w',principal_id='old')
+        token=iam.issue_session_for_provisioning('old');facts=Facts();service=self.cls(store,facts)
+        ack=service.accept(token,'w',packet());self.assertTrue(service.work_once('worker'))
+        self.assertEqual(service.batch_status(token,'w',ack['batch_id'])['state'],'indexed')
+        with store.read_transaction() as con:
+            self.assertIsNone(con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trace_legacy_ids'").fetchone())
+            self.assertEqual(con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0],4)
+
+    def test_trace_level_import_metadata_is_authoritative_over_later_span_inputs(self):
+        first=packet();span=first['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        span['parentSpanId']='f'*16
+        span['agent_insight_legacy_trace']={'execution':{'query':'original Trace query','model':'original Trace model'},'session':None}
+        self.service.accept_import(self.tokens['alice'],'w',first);self.service.work_once('worker')
+        second=packet(span='2'*16)
+        second['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({'key':'gen_ai.response.model','value':{'stringValue':'later-model'}})
+        self.service.accept(self.tokens['alice'],'w',second);self.service.work_once('worker')
+        summary=json.loads(self.facts.summaries[-1]['attributes_json'])
+        self.assertEqual(summary['query'],'original Trace query');self.assertEqual(summary['model'],'original Trace model')
+
+    def test_transfer_structure_keys_preserve_zero_payload_carrier_index(self):
+        body=packet();span=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        span['agent_insight_legacy_interaction']={'format':'agent-insight.trace-item','version':1,'kind':'carrier','index':-1,'value':None}
+        span['agent_insight_legacy_trace']={'execution':{'query':'empty session'},'session':None}
+        span['attributes'].extend([{'key':'legacy.transfer_kind','value':{'stringValue':'carrier'}},
+            {'key':'legacy.transfer_index','value':{'intValue':'-1'}},
+            {'key':'legacy.transfer_has_session','value':{'boolValue':False}},
+            {'key':'legacy.original_parent_span_id','value':{'stringValue':'original-parent'}}])
+        self.service.accept_import(self.tokens['alice'],'w',body);self.service.work_once('worker')
+        self.assertEqual(self.rows('ingest_batches')[0]['state'],'indexed')
+        metadata=json.loads(self.facts.spans[-1]['attributes_json'])
+        self.assertEqual(metadata['legacy.transfer_kind'],'carrier');self.assertEqual(metadata['legacy.transfer_index'],-1)
+        self.assertEqual(metadata['legacy.original_parent_span_id'],'original-parent')
+        self.assertFalse(metadata['legacy.transfer_has_session']);self.assertEqual(metadata['legacy.interaction_section'],'legacy_interaction')
+        self.assertIsNone(json.loads(self.facts.bundles[-1][-1]['legacy_interaction'])['value'])
+
+    def test_subagent_name_and_type_are_projected_from_trace_metadata_and_attributes(self):
+        first=packet();first['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['agent_insight_legacy_trace']={
+            'execution':{'subagentName':'Worker','subagentType':'validator','isSubagent':True},'session':None}
+        self.service.accept_import(self.tokens['alice'],'w',first);self.service.work_once('worker')
+        summary=json.loads(self.facts.summaries[-1]['attributes_json'])
+        self.assertEqual(summary['subagent_name'],'Worker');self.assertEqual(summary['subagent_type'],'validator')
+        self.assertTrue(summary['is_subagent'])
+        second=packet(trace='b'*32)
+        second['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].extend([
+            {'key':'legacy.subagent_name','value':{'stringValue':'Activity'}},
+            {'key':'legacy.subagent_type','value':{'stringValue':'testing'}}])
+        self.service.accept(self.tokens['alice'],'w',second);self.service.work_once('worker')
+        summary=json.loads(self.facts.summaries[-1]['attributes_json'])
+        self.assertEqual(summary['subagent_name'],'Activity');self.assertEqual(summary['subagent_type'],'testing')
+
     def test_catalog_and_schema_columns_match(self):
         root=Path(__file__).parents[1]/'schema'
         catalog=json.loads((root/'ingest-catalog.json').read_text())
@@ -548,6 +796,27 @@ class ClickHouseObservationTests(unittest.TestCase):
                 self.assertEqual(''.join(c['body'] for c in read['chunks']),'中文🙂')
                 count=facts._request("SELECT count() AS n FROM obs_payload_manifests FINAL WHERE trace_id='bulk' FORMAT JSONEachRow")
                 self.assertEqual(int(json.loads(count)['n']),129)
+                raw={'role':'assistant','content':'保真🙂'*450000,'future_extension':{'keep':True}}
+                self.assertGreater(len(json.dumps(raw,ensure_ascii=False).encode()),4*1024*1024)
+                imported=packet(trace='d'*32)
+                imported['resourceSpans'][0]['resource']['attributes'].append({'key':'agent_insight.source_namespace','value':{'stringValue':'legacy.bundle.real-test'}})
+                original_span=imported['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+                original_span['agent_insight_legacy_interaction']={'format':'agent-insight.trace-item','version':1,'kind':'interaction','index':0,'value':raw}
+                original_span['attributes'][2]['value']['stringValue']=raw['content']
+                with self.assertRaises(ValueError):service.accept(credential,'w',imported)
+                imported_ack=service.accept_import(credential,'w',imported);self.assertTrue(service.work_once('importer'))
+                imported_trace=imported_ack['trace_ids'][0]
+                imported_row=facts.read_span('w',bucket,imported_trace,'1'*16)
+                self.assertIsNotNone(imported_row)
+                after=-1;parts=[]
+                while True:
+                    page=facts.read_payload('w',bucket,imported_trace,'1'*16,imported_row['payload_revision'],'legacy_interaction',after_chunk=after,limit=4)
+                    parts.extend(c['body'] for c in page['chunks'])
+                    if page['next_chunk'] is None:break
+                    after=page['next_chunk']
+                restored=json.loads(''.join(parts))
+                self.assertEqual(restored['value'],raw)
+                self.assertEqual(service.batch_status(credential,'w',imported_ack['batch_id'])['state'],'indexed')
             finally:
                 facts._request('DROP DATABASE '+facts.database,database='default')
 

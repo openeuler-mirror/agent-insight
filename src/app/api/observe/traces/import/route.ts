@@ -15,6 +15,8 @@
  */
 
 import { NextResponse } from 'next/server';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCompatibleTransfer } from '@/lib/storage-core/compat';
 import { resolveUser } from '@/lib/auth/auth';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { importTraceBundle } from '@/lib/trace-transfer-service';
@@ -23,6 +25,7 @@ import { TRACE_BUNDLE_MAX_BYTES, TraceBundleValidationError } from '@/lib/trace-
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
+    if (isStorageCoreEnabled()) return handleCompatibleTransfer(request, 'import');
     const contentLength = Number(request.headers.get('content-length') || 0);
     if (Number.isFinite(contentLength) && contentLength > TRACE_BUNDLE_MAX_BYTES) {
         return NextResponse.json({ error: 'Trace bundle exceeds the 50 MB limit' }, { status: 413 });

@@ -1,16 +1,16 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-12。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，当前 **35 张事务表 + 13 张 ClickHouse 表，共48张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-12。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，当前 **39 张事务表 + 13 张 ClickHouse 表，共52张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这48张表对应**35张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这52张表对应**39张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共35表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共39表]
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
@@ -18,6 +18,8 @@ flowchart TB
     RUN[运行、任务、结果控制 6表]
     SUPPORT[投递、路由、制品、维护 7表]
     INGEST[可靠采集与实体版本 2表]
+    META[Trace旧ID、标注与标签 4表]
+    META -->|同库外键与授权| SUPPORT
     IAM -->|决定访问空间与资源| BASE
     BASE -->|当前归属default| PROJECT
     BASE -->|隔离| ASSET
@@ -275,7 +277,7 @@ flowchart TB
   PUB["eval_publication_<br/>members"] -.->|冻结的run/case/slot/result| RESULT
 ```
 
-图中“指标定义注册与版本协议”是未来控制面能力，当前48表内尚无独立指标定义注册表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
+图中“指标定义注册与版本协议”是未来控制面能力，当前52表内尚无独立指标定义注册表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
 
 跨CH表读取还要知道目标的bucket；仅有`result_id`、`snapshot_id`或`release_id`通常不足以做精确分区读取。清单/发布事件需要携带路由，并校验workspace、内容hash、精确版本和可见性。此批表结构不提供跨库FK或全域ID到bucket的自动解析器，相关领域接管时须落实，不能靠全库扫描补上协议。
 
@@ -298,9 +300,9 @@ flowchart TB
 
 - 001首批事务表：`schema_meta`, `workspaces`, `asset_identities`, `asset_releases`, `asset_drafts`, `asset_release_dependencies`, `asset_release_seals`, `asset_aliases`, `runs`, `run_inputs`, `work_items`, `work_attempts`, `result_receipts`, `result_selections`, `outbox_events`, `inbox_receipts`, `trace_locators`, `snapshot_manifests`, `artifact_metadata`, `deletion_requests`, `migration_checkpoints`。
 - 002追加事务表：`iam_principals`, `iam_password_credentials`, `iam_api_credentials`, `iam_external_identities`, `iam_sessions`, `iam_groups`, `iam_group_memberships`, `iam_workspace_bindings`, `iam_resource_access`, `iam_resource_grants`。
-- 003追加事务表：`projects`, `project_workspaces`；004追加事务表：`ingest_batches`, `obs_entity_heads`。上述共35张事务表。
+- 003追加事务表：`projects`, `project_workspaces`；004追加事务表：`ingest_batches`, `obs_entity_heads`。005追加事务表：`trace_legacy_ids`, `trace_annotations`, `trace_tags`, `trace_tag_links`。上述共39张事务表。
 - 当前CH表：`obs_payload_manifests`, `obs_trace_current`, `obs_span_current`, `obs_payload_chunks`, `obs_events`, `obs_entity_relations`, `snapshot_nodes`, `dataset_sample_revisions`, `dataset_release_members`, `eval_result_facts`, `eval_metric_facts`, `eval_result_selection_current`, `eval_publication_members`。
-- 仍待后续批次：账号恢复与外部身份业务入口、资产异步发布、插件与指标注册、run groups、人工裁决/评论、标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
+- 仍待后续批次：账号恢复与外部身份业务入口、资产异步发布、插件与指标注册、run groups、人工裁决/评论、其他领域标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
 
 账号密码、用户组和组管理员的IAM基础库与统一授权门面已实现；显式core Web模式已接入密码登录与Trace路径，其他领域未全部接管；权限矩阵及历史归组规则见 [总体设计 §4.2](phase2-requirements-design.md#42-账号密码登录用户组与组管理员新增明确需求)。当前workspace外键保护引用归属，不能替代Web请求鉴权。
 
@@ -1196,7 +1198,7 @@ CHECK：`length(manifest_json) > 0`。
 
 ## IAM / 用户组增量核心表（002_iam）
 
-日期：2026-11-12。本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，截至002时核心物理表为 **31 张事务表 + 13 张 CH 表 = 44 张**；003项目预留后为33张事务表+13张CH表=46张；004可靠采集后当前为35张事务表+13张CH表=48张；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
+日期：2026-11-12。本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，截至002时核心物理表为 **31 张事务表 + 13 张 CH 表 = 44 张**；003项目预留后为33张事务表+13张CH表=46张；截至004可靠采集时为35张事务表+13张CH表=48张；005后为39张事务表+13张CH表=52张；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
 
 IAM 主体是全局稳定 principal，组成员在 group 中授权，workspace 通过不可变 binding 属于一个 group 或一个 personal principal；资源 ACL 使用 workspace/kind/id 三元身份。不是给原 user 字符串增加一个 group 字段。
 
@@ -1574,3 +1576,114 @@ SQL CHECK验证种类、非空ID/引用、hash格式、版本有符号范围及�
 5. Outbox事件`observability.otlp.accepted.v1`只存batch引用，不存凭据。全局最早未完成事件强序领取；活动租约或退避中的早期事件阻止后续越过。attempts为fence，owner/租约决定完成权；准备事务提交heads及唯一plan_ref后才访问CH，慢准备在仍持写锁时续租。重试使用相同计划、行版本及正文hash。
 6. Worker每128 Span批量写正文，HTTP单请求≤4MiB。所有chunks写成功后发布manifests，再写Span，最后写Trace摘要；每批续租并重核路由。摘要按新旧Span差量更新计数/Token，不叠加累计快照；任一缺失Token使总值NULL，同时保存已知和与缺失数。修订边界时间时从当前heads重核范围。全部sink成功且fence仍有效才同事务标indexed/sent；部分写入靠相同版本重放收敛。
 7. 成员/账号撤销会拒绝新接收和读取，已接收数据仍按冻结归属由可信worker物化；Trace进入删除状态则阻止后续批次物化。此为单队列/控制写锁正确性基线，不等于分片Durable Event Log、HA或1000采集端吞吐验收。
+
+## 005 原接口 Trace 元数据
+
+005只追加下列4表，001–004字节不变。三种事务后端逻辑类型/约束一致；SQLite的BIGINT使用INTEGER并校验整数存储类型。正文、Span及分析事实继续在CH，跨库不声明外键。机器契约为`metadata-catalog.json`，精确SQL以各后端`005_trace_metadata.sql`为准。
+
+### trace_legacy_ids
+
+稳定保存旧task/execution ID到内部Trace的映射。UPDATE、DELETE触发器拒绝，保留已退役ID避免误复活。
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 |
+| `alias_kind` | TEXT | 否 | 显式提供 |
+| `alias_id` | TEXT | 否 | 显式提供 |
+| `trace_id` | TEXT | 否 | 显式提供 |
+| `created_at_ms` | BIGINT | 否 | 显式提供 |
+
+PK：`(workspace_id,alias_kind,alias_id)`。
+
+CHECK：`alias_kind IN ('task','execution')`；`length(alias_id)>0`；`created_at_ms>=0`。
+
+FK：`(workspace_id,trace_id) → trace_locators(workspace_id,trace_id)`，ON DELETE NO ACTION。
+
+IDX：`idx_trace_legacy_ids_trace(workspace_id,trace_id,alias_kind,created_at_ms,alias_id)`。
+
+
+### trace_annotations
+
+保存用户修改的label/query/final_result和反馈，不改采集原文。extra_json.override_fields区分未覆盖与显式NULL；revision用于CAS。
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 |
+| `trace_id` | TEXT | 否 | 显式提供 |
+| `label` | TEXT | 是 | NULL |
+| `query_override` | TEXT | 是 | NULL |
+| `final_result_override` | TEXT | 是 | NULL |
+| `feedback_json` | TEXT | 是 | NULL |
+| `extra_json` | TEXT | 否 | `{}` |
+| `revision` | BIGINT | 否 | `1` |
+| `created_at_ms` | BIGINT | 否 | 显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 显式提供 |
+
+PK：`(workspace_id,trace_id)`。
+
+CHECK：`length(extra_json)>0`；`feedback_json IS NULL OR length(feedback_json)>0`；`revision BETWEEN 1 AND 9223372036854775807`；`created_at_ms>=0`；`updated_at_ms>=created_at_ms`。
+
+FK：`(workspace_id,trace_id) → trace_locators(workspace_id,trace_id)`，ON DELETE NO ACTION。
+
+无额外显式二级索引。
+
+### trace_tags
+
+用户拥有的版本/业务标签，颜色由应用验证为小写#RRGGBB；组管理员可管理授权组内资源。
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 |
+| `tag_id` | TEXT | 否 | 显式提供 |
+| `owner_principal_id` | TEXT | 否 | 显式提供 |
+| `kind` | TEXT | 否 | 显式提供 |
+| `name` | TEXT | 否 | 显式提供 |
+| `description` | TEXT | 是 | NULL |
+| `color` | TEXT | 否 | `#6366f1` |
+| `revision` | BIGINT | 否 | `1` |
+| `created_at_ms` | BIGINT | 否 | 显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 显式提供 |
+
+PK：`(workspace_id,tag_id)`。 UK：`(workspace_id,owner_principal_id,kind,name)`。
+
+CHECK：`length(tag_id)>0`；`kind IN ('version','business')`；`length(name) BETWEEN 1 AND 80`；`name=trim(name)`；`description IS NULL OR length(description)<=300`；`length(color)=7`；`substr(color,1,1)='#'`；`revision BETWEEN 1 AND 9223372036854775807`；`created_at_ms>=0`；`updated_at_ms>=created_at_ms`。
+
+FK：`(workspace_id) → workspaces(workspace_id)`，ON DELETE NO ACTION。
+
+FK：`(owner_principal_id) → iam_principals(principal_id)`，ON DELETE NO ACTION。
+
+IDX：`idx_trace_tags_kind(workspace_id,kind,created_at_ms)`。
+
+
+### trace_tag_links
+
+Trace与标签多对多关联，重复添加不改原created_by/created_at；标签使用数只统计当前可读的active Trace。
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 |
+| `trace_id` | TEXT | 否 | 显式提供 |
+| `tag_id` | TEXT | 否 | 显式提供 |
+| `created_by` | TEXT | 否 | 显式提供 |
+| `created_at_ms` | BIGINT | 否 | 显式提供 |
+
+PK：`(workspace_id,trace_id,tag_id)`。
+
+CHECK：`created_at_ms>=0`。
+
+FK：`(workspace_id,trace_id) → trace_locators(workspace_id,trace_id)`，ON DELETE NO ACTION。
+
+FK：`(workspace_id,tag_id) → trace_tags(workspace_id,tag_id)`，ON DELETE NO ACTION。
+
+FK：`(created_by) → iam_principals(principal_id)`，ON DELETE NO ACTION。
+
+IDX：`idx_trace_tag_links_tag(workspace_id,tag_id,trace_id)`。
+
+
+### 版本、身份与跨库一致性
+
+- 旧别名由可信导入/配置显式登记；原生OTLP新Trace在accept事务内登记native Trace ID为task/execution别名，限schema>=5及namespace=otlp。碰撞则locator、ACL、别名、batch及Outbox整包回滚。已有004路由不自动猜旧ID；需单独清点回填。第一条别名保持公开ID，内部ID仍能解析既有书签。
+- label/query/feedback在事务库提交后立即由兼容读覆盖CH摘要；不以异步CH覆盖解释用户编辑。final_result还关联原自动评测，尚未完成该交接时明确冲突，不虚报评测已触发。
+- 删除先将locator改为deleting、增加route_epoch并登记deletion_requests；列表、统计、详情、正文均受当前授权和删除屏障约束。物理CH清理后续按维护协议完成，不能先删映射。
+- 根资源/标签删除要求独立delete能力（write-only凭据不能删除）；成员只可删除自己的资源。标签写入与Trace/标签归属在同一控制事务检查；标签链接不跨workspace。初次标注revision=1，expected_revision=0只允许新建；重复同值更新不增加版本。
+- 原前端、登录及导航不改变。服务端通过验证过的旧Key与0600显式映射获取当前IAM范围；payload.user和查询user不能授予身份。未映射、撤权或core故障必须失败，禁止悄悄读取旧Trace库。

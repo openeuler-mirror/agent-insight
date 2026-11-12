@@ -14,6 +14,7 @@ from .projects import resolve_project
 
 EVENT_TYPE = 'observability.otlp.accepted.v1'
 MAX_PACKET_BYTES = 4 * 1024 * 1024
+MAX_IMPORT_PACKET_BYTES = 128 * 1024 * 1024
 MAX_SPANS = 4096
 MAX_NORMALIZED_BYTES = 64 * 1024 * 1024
 MAX_SAFE_INTEGER = 2**53-1
@@ -86,6 +87,65 @@ def _payload_revision(sections):
     return content_hash({'schema_version':1,'sections':metadata})
 
 
+RAW_INTERACTION_KEYS = ('agent_insight.raw_interaction','agent_insight.interaction','legacy.interaction')
+RAW_CONTENT_KEYS = ('gen_ai.input','gen_ai.input.messages','llm.input_messages','input.value',
+                    'gen_ai.output','gen_ai.output.messages','llm.output_messages','output.value')
+
+
+def _legacy_value(value):
+    if (isinstance(value,dict) and value.get('format')=='agent-insight.trace-item' and value.get('version')==1
+            and value.get('kind') in ('interaction','langfuse_node','carrier') and isinstance(value.get('value'),dict)):
+        return value['value']
+    return value
+
+
+def _same_legacy_content(value,expected):
+    if expected is None:return False
+    def parsed(item):
+        if isinstance(item,str):
+            try:return json.loads(item)
+            except ValueError:pass
+        return item
+    return _json(parsed(value))==_json(parsed(expected))
+
+
+def _legacy_sections(span,resource_attrs,attrs):
+    candidates=[span['agent_insight_legacy_interaction']] if 'agent_insight_legacy_interaction' in span else []
+    candidates.extend(attrs[key] for key in RAW_INTERACTION_KEYS if key in attrs)
+    trace=span.get('agent_insight_legacy_trace')
+    if not candidates and trace is None:return None
+    extras={};raw=None;raw_text=None
+    for value in candidates:
+        if isinstance(value,str):
+            parsed=json.loads(value,parse_constant=lambda _:(_ for _ in ()).throw(ValueError('nonfinite legacy interaction')))
+            text=value
+        else:parsed=value;text=_json(value)
+        if not isinstance(parsed,dict):raise ValueError('legacy interaction must be a JSON object')
+        if raw is not None and _json(raw)!=_json(parsed):raise ValueError('conflicting legacy interaction copies')
+        if raw is None:raw=parsed;raw_text=text
+    if raw_text is not None:
+        if len(raw_text.encode('utf-8'))>64*1024*1024:raise ValueError('legacy interaction exceeds64MiB')
+        extras['legacy_interaction']=raw_text
+    if trace is not None:
+        if not isinstance(trace,dict):raise ValueError('legacy Trace metadata must be an object')
+        extras['legacy_trace']=_json(trace)
+    removed=set(RAW_INTERACTION_KEYS);resource_removed=set(RAW_INTERACTION_KEYS)
+    if raw is not None:
+        original=_legacy_value(raw)
+        for key in RAW_CONTENT_KEYS:
+            expected=original.get('requestMessages',original.get('input')) if key in RAW_CONTENT_KEYS[:4] else original.get('content',original.get('output'))
+            if _same_legacy_content(attrs.get(key),expected):removed.add(key)
+            if _same_legacy_content(resource_attrs.get(key),expected):resource_removed.add(key)
+    resource={k:v for k,v in resource_attrs.items() if k not in resource_removed}
+    clean={k:v for k,v in attrs.items() if k not in removed}
+    if raw_text is not None:
+        clean['legacy.interaction_section']='legacy_interaction'
+        clean['legacy.interaction_sha256']=hashlib.sha256(raw_text.encode('utf-8')).hexdigest()
+    slim={k:v for k,v in span.items() if k not in ('agent_insight_legacy_interaction','agent_insight_legacy_trace')}
+    slim['attributes']=[item for item in span.get('attributes',[]) if item.get('key') not in removed]
+    return resource,clean,slim,extras,raw is not None
+
+
 def _normalize(body, workspace_id):
     if not isinstance(body,dict) or not isinstance(body.get('resourceSpans'),list): raise ValueError('resourceSpans required')
     result=[];seen=set();normalized_bytes=0
@@ -127,16 +187,22 @@ def _normalize(body, workspace_id):
                 if kind not in (0,1,2,3,4,5,'SPAN_KIND_UNSPECIFIED','SPAN_KIND_INTERNAL','SPAN_KIND_SERVER','SPAN_KIND_CLIENT','SPAN_KIND_PRODUCER','SPAN_KIND_CONSUMER'): raise ValueError('invalid span kind')
                 model=_text(attrs.get('gen_ai.response.model',attrs.get('gen_ai.request.model',attrs.get('llm.model_name',''))))
                 tool=_text(attrs.get('gen_ai.tool.name',attrs.get('tool.name','')))
-                normalized_kind='tool' if tool else ('llm' if model or any(k.startswith('gen_ai.') for k in attrs) else str(kind))
+                normalized_kind='tool' if tool or attrs.get('legacy.role')=='tool' or attrs.get('role')=='tool' else ('llm' if model or any(k.startswith('gen_ai.') for k in attrs) else str(kind))
                 def token(*keys):
                     for key in keys:
                         if key in attrs: return _integer(attrs[key],0,MAX_SAFE_INTEGER)
                     return None
-                sections={'attributes':_json({'resource':resource_attrs,'span':attrs}), 'otlp_span':_json(span)}
-                for name,keys in [('input',('gen_ai.input','gen_ai.input.messages','llm.input_messages','input.value')),('output',('gen_ai.output','gen_ai.output.messages','llm.output_messages','output.value'))]:
-                    for key in keys:
-                        if key in attrs:
-                            sections[name]=attrs[key] if isinstance(attrs[key],str) else _json(attrs[key]);break
+                legacy=_legacy_sections(span,resource_attrs,attrs)
+                if legacy is None:
+                    sections={'attributes':_json({'resource':resource_attrs,'span':attrs}), 'otlp_span':_json(span)}
+                else:
+                    clean_resource,clean_attrs,slim,extra_sections,raw_mode=legacy
+                    sections={'attributes':_json({'resource':clean_resource,'span':clean_attrs}),'otlp_span':_json(slim),**extra_sections}
+                if legacy is None or not legacy[-1]:
+                    for name,keys in [('input',('gen_ai.input','gen_ai.input.messages','llm.input_messages','input.value')),('output',('gen_ai.output','gen_ai.output.messages','llm.output_messages','output.value'))]:
+                        for key in keys:
+                            if key in attrs:
+                                sections[name]=attrs[key] if isinstance(attrs[key],str) else _json(attrs[key]);break
                 row={'workspace_id':workspace_id,'trace_bucket':bucket,'trace_id':trace_id,'span_id':native_span,
                      'parent_span_id':_hex(span.get('parentSpanId'),16,optional=True),'source_namespace':source,'native_span_id':native_span,
                      'kind':normalized_kind,'name':_text(span.get('name',''),2048),'started_at_ms':start_ms,'ended_at_ms':end_ms,
@@ -151,6 +217,164 @@ def _normalize(body, workspace_id):
                 if len(result)>MAX_SPANS: raise ValueError('packet exceeds 4096 spans')
     if not result: raise ValueError('packet has no spans')
     return result
+
+
+def normalize_import(body,workspace_id):
+    identifier(workspace_id)
+    if len(_json(body).encode('utf-8'))>MAX_IMPORT_PACKET_BYTES:raise ValueError('import packet exceeds128MiB')
+    return _normalize(body,workspace_id)
+
+
+MAX_COMPACT_METADATA_BYTES = 2048
+PROJECTION_FIELDS = ('query','label','model','observed_ip','source_kind','final_result','is_subagent',
+    'parent_execution_id','root_execution_id','source_execution_id','agent_session_id','subagent_name','subagent_type','ownership',
+    'skills','invoked_skills','agents','query_preview','final_result_preview')
+
+
+def _compact_add(target,key,value,*,value_limit=512,budget=MAX_COMPACT_METADATA_BYTES):
+    if value is None:return False
+    try:
+        if len(canonical_json(value).encode('utf-8'))>value_limit:return False
+        if len(canonical_json(dict(target,**{key:value})).encode('utf-8'))>budget:return False
+    except ValueError:return False
+    target[key]=value
+    return True
+
+
+def _message_text(value):
+    if isinstance(value,str):return value
+    if isinstance(value,list):
+        parts=[]
+        for block in value:
+            if isinstance(block,str):parts.append(block)
+            elif isinstance(block,dict) and block.get('type') in ('text','input_text','output_text') and isinstance(block.get('text'),str):parts.append(block['text'])
+        return '\n'.join(parts) if parts else None
+    return None
+
+
+def _section_text(text,role):
+    if not isinstance(text,str):return None,None
+    if text.lstrip().startswith(('[','{','"')):
+        try:value=json.loads(text)
+        except ValueError:return text,None
+        if isinstance(value,str):return value,None
+        messages=value.get('messages') if isinstance(value,dict) and 'messages' in value else value
+        if isinstance(messages,dict):messages=[messages]
+        if isinstance(messages,list):
+            selected=[m for m in messages if isinstance(m,dict) and m.get('role')==role]
+            if selected:
+                return _message_text(selected[-1].get('content')),role
+        return None,None
+    return text,None
+
+
+def _source_projection(source):
+    sections=source['sections'];full=json.loads(sections['attributes'])
+    attrs={**full.get('resource',{}),**full.get('span',{})}
+    raw=json.loads(sections['legacy_interaction']) if 'legacy_interaction' in sections else {}
+    for key in RAW_INTERACTION_KEYS:
+        candidate=attrs.get(key)
+        if isinstance(candidate,str):
+            try:candidate=json.loads(candidate)
+            except ValueError:continue
+        if isinstance(candidate,dict):raw=candidate;break
+    raw=_legacy_value(raw)
+    attrs={**raw,**attrs}
+    if 'legacy_trace' in sections:
+        trace=json.loads(sections['legacy_trace']);execution=trace.get('execution',{});session=trace.get('session')
+        if session is None:session={}
+        if not isinstance(execution,dict) or not isinstance(session,dict):raise ValueError('invalid legacy Trace metadata')
+        for original,destination in [('query','legacy.session_query'),('label','legacy.session_label'),('finalResult','legacy.final_result'),('model','model'),
+            ('observedIp','observed_ip'),('sourceKind','source_kind'),('skills','skills'),('invokedSkills','invoked_skills'),('observedAgents','agents'),
+            ('isSubagent','is_subagent'),('parentExecutionId','parent_execution_id'),('rootExecutionId','root_execution_id'),
+            ('sourceExecutionId','source_execution_id'),('agentSessionId','agent_session_id'),('agentOwnership','ownership'),
+            ('subagentName','subagent_name'),('subagentType','subagent_type')]:
+            if original in execution and execution[original] is not None:attrs[destination]=execution[original]
+        for original,destination in [('query','legacy.session_query'),('label','legacy.session_label')]:
+            if original in session and session[original] is not None:attrs[destination]=session[original]
+    compact={}
+    if 'legacy_interaction' in sections:_compact_add(compact,'legacy.interaction_section','legacy_interaction')
+    if type(attrs.get('legacy.transfer_has_session')) is bool:_compact_add(compact,'legacy.transfer_has_session',attrs['legacy.transfer_has_session'])
+    for key in ('legacy.transfer_kind','legacy.original_parent_span_id'):
+        if isinstance(attrs.get(key),str):_compact_add(compact,key,attrs[key],value_limit=256)
+    if type(attrs.get('legacy.transfer_index')) is int:_compact_add(compact,'legacy.transfer_index',attrs['legacy.transfer_index'])
+    for key in ('legacy.role','role','agent.name','agent','trace_kind','trace_name','trace_status'):
+        if isinstance(attrs.get(key),str):_compact_add(compact,key,attrs[key],value_limit=256)
+    input_text,_=_section_text(sections.get('input'),'user')
+    output_text,output_role=_section_text(sections.get('output'),'assistant')
+    if input_text is None and raw.get('requestMessages') is not None:input_text,_=_section_text(_json(raw['requestMessages']),'user')
+    if input_text is None:input_text=_message_text(raw.get('input'))
+    if output_text is None:output_text=_message_text(raw.get('content',raw.get('output')))
+    preview=output_text if output_text is not None else input_text
+    if preview is not None:_compact_add(compact,'content_preview',preview[:240],value_limit=1024)
+    for key in ('legacy.session_query','legacy.session_label','legacy.original_span_id','legacy.original_trace_id',
+                'legacy.source_task_id','legacy.source_record_id','call_id','call_ids','request_id','response_id',
+                'attempt_id','attempt_ids','gen_ai.request.id','gen_ai.response.id','gen_ai.request_id','gen_ai.response_id',
+                'inference.call_id','inference.call_ids','inference.request_id','inference.response_id',
+                'agent_insight.call_id','agent_insight.call_ids','openinference.span.kind',
+                'subagentSessionId','subagentName','subagentType','agent_session_id','agent.session_id'):
+        value=attrs.get(key)
+        if isinstance(value,(str,list)):_compact_add(compact,key,value)
+    fields={}
+    aliases={
+        'query':('legacy.session_query','legacy.query','query'),
+        'label':('legacy.session_label','legacy.label','label'),
+        'final_result':('legacy.final_result','final_result'),
+        'observed_ip':('legacy.observed_ip','agent_insight.observed_ip','observed_ip','observedIp'),
+        'source_kind':('legacy.source_kind','source_kind','sourceKind'),
+        'ownership':('legacy.agent_ownership','agent_ownership','agentOwnership','ownership'),
+        'is_subagent':('legacy.is_subagent','is_subagent','isSubagent'),
+        'parent_execution_id':('legacy.parent_execution_id','parent_execution_id','parentExecutionId'),
+        'root_execution_id':('legacy.root_execution_id','root_execution_id','rootExecutionId'),
+        'source_execution_id':('legacy.source_execution_id','source_execution_id','sourceExecutionId'),
+        'agent_session_id':('legacy.agent_session_id','agent_session_id','agentSessionId'),
+        'subagent_name':('legacy.subagent_name','subagent_name','subagentName'),
+        'subagent_type':('legacy.subagent_type','subagent_type','subagentType'),
+        'skills':('legacy.skills','skills'),'invoked_skills':('legacy.invoked_skills','invoked_skills','invokedSkills'),
+        'agents':('legacy.agents','agents','observed_agents','observedAgents'),
+    }
+    for field,names in aliases.items():
+        for name in names:
+            if name in attrs:
+                value=attrs[name]
+                if field in ('skills','invoked_skills','agents') and isinstance(value,str) and len(value.encode())<=4096:
+                    try:value=json.loads(value)
+                    except ValueError:break
+                if field=='is_subagent':valid=type(value) is bool
+                elif field in ('skills','agents'):valid=isinstance(value,list) and len(value)<=32 and all(isinstance(v,str) for v in value)
+                elif field=='invoked_skills':valid=isinstance(value,list) and len(value)<=32 and all(isinstance(v,dict) and set(v)<={'name','version'} and isinstance(v.get('name'),str) and (v.get('version') is None or type(v.get('version')) is int) for v in value)
+                else:valid=isinstance(value,str)
+                if valid:fields[field]=value
+                break
+    if source['row']['model']:fields['model']=source['row']['model']
+    elif isinstance(attrs.get('model'),str):fields['model']=attrs['model']
+    role=attrs.get('legacy.role',attrs.get('role'))
+    if 'query' not in fields and input_text is not None:fields['query']=input_text
+    if 'query' not in fields and role=='user' and output_text is not None:fields['query']=output_text
+    if 'final_result' not in fields and output_text is not None and role!='user':fields['final_result']=output_text
+    bounded={}
+    for field in PROJECTION_FIELDS:
+        if field not in fields:continue
+        value=fields[field]
+        if not _compact_add(bounded,field,value) and field in ('query','final_result') and isinstance(value,str):
+            _compact_add(bounded,field+'_preview',value[:240],value_limit=1024)
+    return compact,bounded
+
+
+def _merge_projection(state,source,fields):
+    projection=state.get('legacy_projection',{});providers=state.get('legacy_projection_sources',{})
+    span=source['row']['span_id'];priority=3 if 'legacy_trace' in source['sections'] else (1 if source['row']['parent_span_id'] else 2)
+    for key in list(projection):
+        if providers.get(key,{}).get('span_id')==span and key not in fields:
+            projection.pop(key,None);providers.pop(key,None)
+    for key,value in fields.items():
+        previous=providers.get(key,{})
+        if key not in projection or previous.get('span_id')==span or priority>previous.get('priority',0):
+            projection[key]=value;providers[key]={'span_id':span,'priority':priority}
+    bounded={};retained={}
+    for key in sorted(projection,key=lambda k:(-providers.get(k,{}).get('priority',0),PROJECTION_FIELDS.index(k))):
+        if _compact_add(bounded,key,projection[key],value_limit=1024):retained[key]=providers[key]
+    state['legacy_projection']=bounded;state['legacy_projection_sources']=retained
 
 
 class ObservationIngest:
@@ -171,16 +395,22 @@ class ObservationIngest:
         return self.control.persist_artifact({'encoding':'observation-json/v1','json':_json(value)})
 
     def accept(self,credential,workspace_id,body,receipt_key=None):
+        return self._accept(credential,workspace_id,body,receipt_key,MAX_PACKET_BYTES)
+
+    def accept_import(self,credential,workspace_id,body,receipt_key=None):
+        return self._accept(credential,workspace_id,body,receipt_key,MAX_IMPORT_PACKET_BYTES)
+
+    def _accept(self,credential,workspace_id,body,receipt_key,max_packet_bytes):
         identifier(workspace_id)
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,credential);self.iam._workspace(scope,workspace_id,'write');resolve_project(con,workspace_id)
         if isinstance(body,(str,bytes,bytearray)):
-            if len(body if not isinstance(body,str) else body.encode('utf-8'))>MAX_PACKET_BYTES: raise ValueError('packet exceeds 4MiB')
+            if len(body if not isinstance(body,str) else body.encode('utf-8'))>max_packet_bytes: raise ValueError('packet exceeds bounded ingress size')
             try: body=json.loads(body,parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite JSON')))
             except (UnicodeError,RecursionError) as exc: raise ValueError('invalid OTLP JSON') from exc
         try:
             raw=_json(body);data=raw.encode('utf-8')
-            if len(data)>MAX_PACKET_BYTES: raise ValueError('packet exceeds 4MiB')
+            if len(data)>max_packet_bytes: raise ValueError('packet exceeds bounded ingress size')
             spans=_normalize(body,workspace_id)
         except (TypeError,OverflowError,UnicodeError,RecursionError) as exc: raise ValueError('invalid bounded OTLP JSON') from exc
         packet_hash=hashlib.sha256(data).hexdigest()
@@ -193,6 +423,7 @@ class ObservationIngest:
             if old:
                 if old['packet_hash']!=packet_hash: raise Conflict('receipt key has different content')
                 return {'batch_id':old['batch_id'],'state':old['state'],'trace_ids':json.loads(old['trace_ids_json']),'duplicate':True}
+            schema_version=con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0]
             for trace_id in trace_ids:
                 span=next(s for s in spans if s['row']['trace_id']==trace_id);row=span['row']
                 locator=con.execute('SELECT * FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace_id,trace_id)).fetchone()
@@ -203,6 +434,14 @@ class ObservationIngest:
                     con.execute('INSERT INTO trace_locators(workspace_id,trace_id,source_namespace,native_trace_id,trace_bucket,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)',
                         (workspace_id,trace_id,row['source_namespace'],span['native_trace_id'],row['trace_bucket'],now,now))
                     self.iam._record_resource(con,workspace_id,'trace',trace_id,scope.principal_id,'private',invalidate_policy=False)
+                    if schema_version>=5 and row['source_namespace']=='otlp':
+                        native=span['native_trace_id']
+                        collision=con.execute('SELECT trace_id FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace_id,native)).fetchone()
+                        if collision and collision[0]!=trace_id:raise Conflict('native Trace ID collides with an existing internal identity')
+                        for alias_kind in ('task','execution'):
+                            existing=con.execute('SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind=? AND alias_id=?',(workspace_id,alias_kind,native)).fetchone()
+                            if existing and existing[0]!=trace_id:raise Conflict('native Trace ID collides with a registered legacy identity')
+                            if not existing:con.execute('INSERT INTO trace_legacy_ids VALUES(?,?,?,?,?)',(workspace_id,alias_kind,native,trace_id,now))
             batch_id=str(uuid.uuid4());event_id=str(uuid.uuid4())
             con.execute('INSERT INTO ingest_batches(workspace_id,batch_id,principal_id,receipt_key,packet_hash,packet_ref,trace_ids_json,accepted_at_ms) VALUES(?,?,?,?,?,?,?,?)',
                 (workspace_id,batch_id,scope.principal_id,receipt_key,packet_hash,packet_ref,canonical_json(trace_ids),now))
@@ -270,6 +509,8 @@ class ObservationIngest:
         summary['running_count']+=direction*(row['execution_status']=='running')
         summary['llm_call_count']+=direction*(row['kind']=='llm')
         summary['tool_call_count']+=direction*(row['kind']=='tool')
+        if summary.get('tool_error_count') is not None:
+            summary['tool_error_count']+=direction*(row['kind']=='tool' and row['execution_status']=='failed')
         for token in ('input','output'):
             value=row[token+'_tokens']
             summary[token+'_missing_count']+=direction*(value is None)
@@ -304,8 +545,14 @@ class ObservationIngest:
                 if trace not in traces:
                     trace_head=con.execute("SELECT * FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='trace' AND entity_id=?",(ws,trace,trace)).fetchone()
                     state=self._load(trace_head['artifact_ref']) if trace_head else dict.fromkeys(('span_count','error_count','running_count','llm_call_count','tool_call_count','input_known_sum','output_known_sum','input_missing_count','output_missing_count'),0)
+                    if trace_head:
+                        state.setdefault('tool_error_count',None);state.setdefault('legacy_projection_complete',False)
+                    else:
+                        state['tool_error_count']=0;state['legacy_projection_complete']=True
                     traces[trace]=[trace_head,state,source,locator]
                 state=traces[trace][1]
+                compact,fields=_source_projection(source)
+                _merge_projection(state,source,fields)
                 is_root=not row['parent_span_id']
                 if not state.get('agent_name') or (is_root and not state.get('display_is_root')):
                     state['agent_name']=source['agent_name'];state['framework']=source['framework'];state['display_is_root']=is_root
@@ -321,7 +568,7 @@ class ObservationIngest:
                 version=revision(head['revision']+1 if head else 1)
                 self._put_head(con,ws,trace,'span',span,version,source_version,source,head,now)
                 plan['payloads'].append({'workspace_id':ws,'trace_bucket':row['trace_bucket'],'trace_id':trace,'span_id':span,'sections':source['sections'],'payload_revision':row['payload_revision']})
-                plan['spans'].append(dict(row,revision=version))
+                plan['spans'].append(dict(row,attributes_json=canonical_json(compact),revision=version))
             for trace,(head,state,source,locator) in traces.items():
                 if state.pop('_recompute_bounds',False):
                     starts=[];ends=[]
@@ -330,6 +577,11 @@ class ObservationIngest:
                     state['started_at_ms']=min(starts);state['ended_at_ms']=max(ends)
                 version=revision(head['revision']+1 if head else 1)
                 owner=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?",(ws,trace)).fetchone()[0]
+                metadata={'owner_principal_id':owner,'source':'otlp','error_count':state['error_count'],'running_count':state['running_count'],
+                    'input_missing_count':state['input_missing_count'],'output_missing_count':state['output_missing_count'],
+                    'tool_error_count':state['tool_error_count'],'tool_error_count_known':state['tool_error_count'] is not None,
+                    'legacy_projection_complete':state['legacy_projection_complete']}
+                for key,value in state.get('legacy_projection',{}).items():_compact_add(metadata,key,value,value_limit=1024)
                 summary={'workspace_id':ws,'trace_bucket':locator['trace_bucket'],'trace_id':trace,'source_namespace':source['row']['source_namespace'],
                     'native_trace_id':source['native_trace_id'],'agent_name':state['agent_name'],'framework':state['framework'],
                     'started_at_ms':state['started_at_ms'],'ended_at_ms':state['ended_at_ms'],'last_activity_at_ms':state['ended_at_ms'],
@@ -337,8 +589,7 @@ class ObservationIngest:
                     'span_count':state['span_count'],'llm_call_count':state['llm_call_count'],'tool_call_count':state['tool_call_count'],
                     'input_tokens':None if state['input_missing_count'] else state['input_known_sum'],
                     'output_tokens':None if state['output_missing_count'] else state['output_known_sum'],
-                    'attributes_json':canonical_json({'owner_principal_id':owner,'source':'otlp','error_count':state['error_count'],'running_count':state['running_count'],
-                        'input_missing_count':state['input_missing_count'],'output_missing_count':state['output_missing_count']}),
+                    'attributes_json':canonical_json(metadata),
                     'schema_version':1,'revision':version,'is_deleted':0}
                 self._put_head(con,ws,trace,'trace',trace,version,1,state,head,now)
                 plan['summaries'].append(summary)

@@ -101,3 +101,26 @@ HTTP/UI Trace列表默认50/最大200条，Span结构默认/最大200条，正�
 最终Python默认345条中209通过/136可选跳过，最终Web focused30/30与完整类型检查通过。首轮应用全量5334条为5258通过/52失败/24跳过；其中本次关联的2项VM适配问题已修复并回归，最终显式隔离的全量复跑未取得汇总，已保留日志并停止自有测试进程。浏览器已完成密码登录/退出、管理员与成员隔离、万Span分页/目标搜索/单点正文、7块正文前后翻页及桌面/窄屏验收。详细证据、耗时和边界见[实施状态](implementation-status.md#本轮http迁移样本与应用验证追加)，不得将fixture验收写成真实LLM、客户库切换或千级并发证明。
 
 验收入口、私有账号文件位置、最终截图、最新专项/全量边界见[最终复核](implementation-status.md#最终复核与可打开界面)。本轮保持服务运行，未推送远端。
+
+## 原界面兼容实施批次（2026-11-12，按用户授权执行）
+
+本批产品前端五入口与789e8d04逐字节一致，移除仅为前次错误精简界面增加的自有组件；不新增按钮、页面、文案、登录方式或导航。原接口方法、参数、DTO及原交互保持，技术适配位于服务端。
+
+服务端通过私有0600身份映射文件将已由原鉴权模块验证的旧API Key摘要/用户名，映射到同一授权主体的单空间IAM凭据；映射绑定core origin并核对当前principal/workspace，查询user不得授予权限。不自动给同名未映射用户授权，不将委托凭据下发前端。
+
+兼容读端保留旧records/stats/facet与session structure/interaction/interactions合同；结构按200 Span数据库页构造，正文仅在原界面主动打开单点/完整视图时读取，_payloadVersion作为绑定Trace/Span身份、结构版本和精确payload_revision的opaque校验值，防止并发插入改变索引后错误回填正文（不能仅使用正文hash）。原界面交互索引不等于数据库Span ID，必须在服务端解析和二次授权。
+
+为保留既有资源ID、用户标签和手动标注，新增005迁移（001–004保持原始字节）：
+
+| 表 | 字段与约束 | 语义 |
+|---|---|---|
+| trace_legacy_ids | workspace_id、alias_kind(task/execution)、alias_id、trace_id、created_at_ms；PK(workspace,kind,alias)，FK Trace locator，非空ID/非负时间；不可改写/删除既有映射 | 保留旧taskId/upload_id，目标仍按workspace/trace路由和鉴权；多别名允许指向同一Trace，碰撞拒绝 |
+| trace_annotations | workspace_id、trace_id；label/query_override/final_result_override/feedback_json可空；extra_json非空默认{}；revision正整数、created/updated非负；复合PK/FK Trace | 人工编辑的事务权威，不改写采集原始包；写入CAS，源物化不覆盖人工标注 |
+| trace_tags | workspace_id、tag_id、owner_principal_id、kind(version/business)、name、description可空、color、revision、created/updated；复合PK，unique(workspace,owner,kind,name)，FK主体/空间 | 标签元数据与权限；旧标签ID需显式迁移，使用次数按可读且未删除的Trace求值 |
+| trace_tag_links | workspace_id、trace_id、tag_id、created_by、created_at_ms；复合PK(workspace,trace,tag)，FK Trace/tag/主体，tag反查索引 | 标签关联操作同事务、去重且不得越权；源写入不删除关联 |
+
+005只新增上述四表和索引/映射不可变保护，当前物理总数将从48增至52（三个事务后端只选其一）。服务必须显式备份和升级；本批仅迁独立验收库，保留升级前数据指纹。关系库备份证据目录随005增补，不能遗漏新增表。
+
+写端使用Trace当前IAM授权，所有者/组Owner/Admin才可编辑或删除；只读共享不授予写权限。逻辑删除先持久化locator屏障与deletion_requests，保留身份/审计映射，异步物理清理另行报告。标签与标注不依赖旧Execution/Session存在。
+
+本批修复不等于全平台数据迁移完成。Trace-bundle v1的50MiB导入、完整导出、原始框架字段、评测/诊断/数据集/Infra等联动必须分别接回并取得证据；不得返回空成功或忽略原过滤条件伪装兼容。未取得对应结果的项目保持未完成。

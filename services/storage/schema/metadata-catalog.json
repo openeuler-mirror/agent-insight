@@ -1,0 +1,389 @@
+{
+  "version": 5,
+  "name": "trace_metadata",
+  "tables": [
+    {
+      "name": "trace_legacy_ids",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "alias_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "alias_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "alias_kind",
+        "alias_id"
+      ],
+      "checks": [
+        "alias_kind IN ('task','execution')",
+        "length(alias_id)>0",
+        "created_at_ms>=0"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_trace_legacy_ids_trace",
+          "columns": [
+            "workspace_id",
+            "trace_id",
+            "alias_kind",
+            "created_at_ms",
+            "alias_id"
+          ]
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "trace_annotations",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "label",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "query_override",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "final_result_override",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "feedback_json",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "extra_json",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "{}"
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": 1
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id"
+      ],
+      "checks": [
+        "length(extra_json)>0",
+        "feedback_json IS NULL OR length(feedback_json)>0",
+        "revision BETWEEN 1 AND 9223372036854775807",
+        "created_at_ms>=0",
+        "updated_at_ms>=created_at_ms"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        }
+      ],
+      "indexes": [],
+      "unique": []
+    },
+    {
+      "name": "trace_tags",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "tag_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "color",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "#6366f1"
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": 1
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "tag_id"
+      ],
+      "checks": [
+        "length(tag_id)>0",
+        "kind IN ('version','business')",
+        "length(name) BETWEEN 1 AND 80",
+        "name=trim(name)",
+        "description IS NULL OR length(description)<=300",
+        "length(color)=7",
+        "substr(color,1,1)='#'",
+        "revision BETWEEN 1 AND 9223372036854775807",
+        "created_at_ms>=0",
+        "updated_at_ms>=created_at_ms"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        },
+        {
+          "columns": [
+            "owner_principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_trace_tags_kind",
+          "columns": [
+            "workspace_id",
+            "kind",
+            "created_at_ms"
+          ]
+        }
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "owner_principal_id",
+          "kind",
+          "name"
+        ]
+      ]
+    },
+    {
+      "name": "trace_tag_links",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "tag_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id",
+        "tag_id"
+      ],
+      "checks": [
+        "created_at_ms>=0"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "tag_id"
+          ],
+          "table": "trace_tags",
+          "target": [
+            "workspace_id",
+            "tag_id"
+          ]
+        },
+        {
+          "columns": [
+            "created_by"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_trace_tag_links_tag",
+          "columns": [
+            "workspace_id",
+            "tag_id",
+            "trace_id"
+          ]
+        }
+      ],
+      "unique": []
+    }
+  ],
+  "invariants": [
+    "Alias identity mappings are immutable and retained",
+    "Annotations are manual overrides not modifications to original packets",
+    "Annotation and tag writes use CAS and current Trace authorization",
+    "Tags are workspace/principal scoped; readable active Trace links determine usage",
+    "Deletion persists locator barrier and deletion_requests without physical removal"
+  ],
+  "identity_policy": {
+    "new_otlp_traces": "In the durable acceptance transaction register native_trace_id as both task and execution alias when schema>=5",
+    "canonical_alias": "First registered alias per workspace/trace/kind; internal Trace ID fallback remains readable",
+    "existing_trace": "No implicit alias backfill or replacement",
+    "custom_namespace": "Explicit trusted migration registration only",
+    "known_prefix4": "Accept without accessing the absent alias table",
+    "collision": "Reject the entire packet transaction; do not reassign an alias"
+  }
+}

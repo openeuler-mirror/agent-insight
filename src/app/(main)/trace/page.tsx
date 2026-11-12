@@ -46,8 +46,6 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageContent, PageFooter } from '@/components/shell/PageContainer';
 import AgentTraceView from '@/components/observe/AgentTraceView';
-import StorageCoreTracePage from '@/components/observe/StorageCoreTracePage';
-import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 import { CodexThreadTimeline, type TraceThreadView } from '@/components/observe/CodexThreadTimeline';
 import TraceFilterBar from '@/components/observe/TraceFilterBar';
 import TraceFilterSidebar from '@/components/observe/TraceFilterSidebar';
@@ -540,7 +538,7 @@ export default function TracePage() {
                 </div>
             }
         >
-            {isStorageCoreEnabled() ? <StorageCoreTracePage /> : <TracePageContent />}
+            <TracePageContent />
         </Suspense>
     );
 }

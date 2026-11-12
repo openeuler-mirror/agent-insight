@@ -24,7 +24,7 @@ CAPABILITIES = frozenset({'read', 'write', 'execute', 'publish', 'delete', 'memb
 ROLE_CAPABILITIES = {
     'owner': CAPABILITIES,
     'admin': CAPABILITIES,
-    'member': frozenset({'read', 'write', 'execute'}),
+    'member': frozenset({'read', 'write', 'execute', 'delete'}),
     'viewer': frozenset({'read'}),
     'personal': CAPABILITIES - {'members'},
 }

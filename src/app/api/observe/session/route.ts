@@ -1,5 +1,5 @@
 import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
-import { handleCoreSession } from '@/lib/storage-core/server';
+import { handleCompatibleSession } from '@/lib/storage-core/compat';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -281,7 +281,7 @@ async function loadCollaborationProjection(taskId: string, parsed: ParsedSession
 }
 
 export async function GET(request: Request) {
-  if (isStorageCoreEnabled()) return handleCoreSession(request);
+  if (isStorageCoreEnabled()) return handleCompatibleSession(request);
     const { searchParams } = new URL(request.url);
     const taskId = searchParams.get('taskId');
     const view = searchParams.get('view') || 'full';

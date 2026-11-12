@@ -1,3 +1,5 @@
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCompatibleTraceTags } from '@/lib/storage-core/compat';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -37,6 +39,7 @@ function toErrorResponse(error: unknown) {
 type RouteContext = { params: Promise<{ executionId: string }> };
 
 export async function GET(request: Request, context: RouteContext) {
+  if (isStorageCoreEnabled()) return handleCompatibleTraceTags(request, (await context.params).executionId);
   try {
     const { executionId } = await context.params;
     const { searchParams } = new URL(request.url);
@@ -47,6 +50,7 @@ export async function GET(request: Request, context: RouteContext) {
 }
 
 export async function PUT(request: Request, context: RouteContext) {
+  if (isStorageCoreEnabled()) return handleCompatibleTraceTags(request, (await context.params).executionId);
   try {
     const { executionId } = await context.params;
     const body = await request.json();
@@ -62,6 +66,7 @@ export async function PUT(request: Request, context: RouteContext) {
 }
 
 export async function POST(request: Request, context: RouteContext) {
+  if (isStorageCoreEnabled()) return handleCompatibleTraceTags(request, (await context.params).executionId);
   try {
     const { executionId } = await context.params;
     const body = await request.json();
@@ -77,6 +82,7 @@ export async function POST(request: Request, context: RouteContext) {
 }
 
 export async function DELETE(request: Request, context: RouteContext) {
+  if (isStorageCoreEnabled()) return handleCompatibleTraceTags(request, (await context.params).executionId);
   try {
     const { executionId } = await context.params;
     const { searchParams } = new URL(request.url);

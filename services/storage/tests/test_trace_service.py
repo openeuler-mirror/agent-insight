@@ -170,6 +170,43 @@ class TraceHTTPTests(unittest.TestCase):
         self.assertEqual(self.request('/v1/traces?workspace_id=other',self.token)[0],403)
         self.assertEqual(self.request('/v1/traces?workspace_id=w&limit=10000',self.token)[0],400)
         self.assertEqual(self.request('/v1/traces?workspace_id=w&workspace_id=other',self.token)[0],400)
-        self.assertEqual(self.request('/v1/health')[1]['schema_version'],4)
+        from services.storage.migrations import load_migrations
+        self.assertEqual(self.request('/v1/health')[1]['schema_version'],len(load_migrations('sqlite')))
         self.assertEqual(self.request('/v1/unknown',self.token)[0],404)
         self.assertEqual(self.request('/v1/auth/login',body={'username':'alice','password':'incorrect'},headers={'content-type':'text/plain'})[0],415)
+
+
+class CompatibilityHTTPTests(TraceHTTPTests):
+    def test_existing_page_receives_records_stats_and_facets(self):
+        status,data,_=self.request('/v1/compat/observe/data?workspace_id=w&paginated=1&databasePagination=1&listPart=records',self.token)
+        self.assertEqual(status,200);self.assertEqual(data['value']['records'],[])
+        self.assertFalse(data['value']['hasMore']);self.assertFalse(data['value']['canViewAllTraces'])
+        status,data,_=self.request('/v1/compat/observe/data?workspace_id=w&paginated=1&databasePagination=1&listPart=stats',self.token)
+        self.assertEqual(status,200);self.assertEqual(data['value']['stats']['total'],0)
+        self.assertEqual(self.request('/v1/compat/observe/data?workspace_id=w&facet=values&column=framework',self.token)[1]['value'],[])
+
+    def test_tags_are_persisted_through_the_existing_methods(self):
+        status,tag,_=self.request('/v1/compat/tags?workspace_id=w',self.token,body={'user':'spoofed','name':'release-a','kind':'version','color':'#123456'})
+        self.assertEqual(status,201);tag=tag['value'];self.assertEqual(tag['name'],'release-a')
+        self.assertEqual(self.request('/v1/compat/tags?workspace_id=w',self.token)[1]['value'][0]['id'],tag['id'])
+        status,result,_=self.request('/v1/compat/tags/'+tag['id']+'?workspace_id=w',self.token,body={'name':'release-b'},method='PUT')
+        self.assertEqual(status,200);self.assertEqual(result['value']['name'],'release-b')
+        self.assertEqual(self.request('/v1/compat/tags/'+tag['id']+'?workspace_id=w',self.token,method='DELETE')[0],200)
+
+    def test_original_import_returns_only_after_indexing_and_export_keeps_bundle(self):
+        from services.storage.tests.test_trace_transfer import MemoryFacts,bundle
+        from services.storage.trace_service import TraceQueries
+        from services.storage.observations import ObservationIngest
+        self.runtime.facts=MemoryFacts()
+        self.runtime.authorized=AuthorizedStorage(self.runtime.iam,self.runtime.facts)
+        self.runtime.queries=TraceQueries(self.control,self.runtime.facts,cursor_secret=b'isolated-transfer-http-cursor')
+        self.runtime.ingest=ObservationIngest(self.control,self.runtime.facts)
+        self.runtime.start_worker();self.addCleanup(self.runtime.close)
+        source=bundle()
+        status,result,_=self.request('/v1/compat/observe/traces/import?workspace_id=w',self.token,body={'bundle':source,'fileName':'original.json','user':'forged'})
+        self.assertEqual(status,200);result=result['value']
+        self.assertTrue(result['success']);self.assertEqual(result['fileName'],'original.json')
+        self.assertNotIn('batch_refs',result);self.assertEqual(result['rootExecutionId'],'root')
+        self.assertEqual(len(self.runtime.facts.spans),1)
+        status,exported,_=self.request('/v1/compat/observe/traces/export?workspace_id=w&executionId=root',self.token)
+        self.assertEqual(status,200);self.assertEqual(exported['value']['executions'],source['executions'])

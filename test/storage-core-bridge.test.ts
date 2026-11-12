@@ -69,14 +69,7 @@ test('core ingest bounds actual request bytes, decoded gzip, and serialized inte
 
 test('mode-off routes keep legacy entrypoints and core mode branches before identity resolution',async()=>{
  const {isStorageCoreEnabled}=await import('../src/lib/storage-core/mode');assert.equal(isStorageCoreEnabled({}),false);assert.equal(isStorageCoreEnabled({NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE:'core'}),true);
- for(const file of ['observe/data','observe/session','ingest/otel/v1/traces']) {const text=fs.readFileSync(new URL('../src/app/api/'+file+'/route.ts',import.meta.url),'utf8');assert.match(text,/isStorageCoreEnabled\(\)/);assert.match(text,/handleCore/);}
-});
-
-test('core auth provider and login form use verified cookie identity without localStorage',async()=>{
- const hook=new URL('../src/lib/auth/use-core-auth.ts',import.meta.url);assert.ok(fs.existsSync(hook),'core cookie auth hook must exist');
- const text=fs.readFileSync(hook,'utf8');assert.doesNotMatch(text,/localStorage/);assert.match(text,/\/api\/storage-core\/auth/);
- const auth=fs.readFileSync(new URL('../src/lib/auth/auth-context.tsx',import.meta.url),'utf8');assert.match(auth,/export (?:interface|type) AuthContextType/);assert.match(auth,/useCoreAuthHook/);assert.match(auth,/LegacyAuthProvider/);
- const login=fs.readFileSync(new URL('../src/lib/auth/core-login-form.tsx',import.meta.url),'utf8');assert.match(login,/type="password"/);assert.match(login,/\/api\/storage-core\/auth/);assert.doesNotMatch(login,/localStorage|\/api\/auth\/apikey/);
+ for(const file of ['observe/data','observe/session','ingest/otel/v1/traces']) {const text=fs.readFileSync(new URL('../src/app/api/'+file+'/route.ts',import.meta.url),'utf8');assert.match(text,/isStorageCoreEnabled\(\)/);assert.match(text,/handleCompatible/);}
 });
 
 test('auth responses whitelist profile fields and never expose nested credential fields',async()=>{
@@ -112,37 +105,4 @@ test('real loopback HTTP bridge follows neither redirects nor raw error bodies',
  const {createServer}=await import('node:http');const m=await api();let hits=0;
  const server=createServer((req,res)=>{hits++;assert.equal(req.headers.authorization,'Bearer '+token);res.writeHead(302,{location:'/leak'});res.end();});await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();assert.ok(address && typeof address!=='string');const previous=process.env.AGENT_INSIGHT_STORAGE_CORE_URL;
  try {process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:'+address.port;const r=await m.handleCoreList(request('/api/observe/data',{headers:{authorization:'Bearer '+token}}));assert.equal(r.status,502);assert.equal(hits,1);} finally {process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous;await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
-});
-
-async function coreHookHarness(respond: (url:string, init?:RequestInit)=>Promise<Response>, pathname = '/login', search = '') {
- const ts=(await import('typescript')).default;
- const text=fs.readFileSync(new URL('../src/lib/auth/use-core-auth.ts',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export function useCoreAuthHook','function useCoreAuthHook');
- const compiled=ts.transpileModule(text,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText;
- const slots:unknown[]=[];let cursor=0;const effects:Array<()=>unknown>=[];const routes:string[]=[];
- const scope={useState:(initial:unknown)=>{const index=cursor++;if(!(index in slots))slots[index]=initial;return[slots[index],(value:unknown)=>{slots[index]=typeof value==='function'?(value as (old:unknown)=>unknown)(slots[index]):value;}];},
- useRef:(initial:unknown)=>{const index=cursor++;if(!(index in slots))slots[index]={current:initial};return slots[index];},useCallback:(fn:unknown)=>fn,useEffect:(effect:()=>unknown)=>{effects.push(effect);},usePathname:()=>pathname,useRouter:()=>({replace:(url:string)=>routes.push(url)}),apiFetch:respond,window:{location:{search,origin:'http://localhost:3000'}}};
- const hook=new Function(...Object.keys(scope),compiled+'\nreturn useCoreAuthHook;')(...Object.values(scope));
- return {render:()=>{cursor=0;effects.length=0;return hook() as import('../src/lib/auth/auth-context').AuthContextType;},effects,routes};
-}
-
-test('core login verifies cookie profile instead of trusting legacy login arguments',async()=>{
- const h=await coreHookHarness(async(url)=>{assert.equal(url,'/api/storage-core/auth');return Response.json(profile);});let value=h.render();await value.login('spoof-admin','legacy-key');value=h.render();assert.equal(value.user,'alice');assert.equal(value.apiKey,null);assert.equal(value.workspaceId,'w');assert.deepEqual(h.routes,['/trace']);assert.throws(()=>value.setWorkspaceId?.('foreign-workspace'));
-});
-
-test('failed core logout preserves authenticated UI and successful revocation clears it',async()=>{
- let fail=true;const h=await coreHookHarness(async(_url,init)=>init?.method==='DELETE'?(fail?Response.json({error:'unavailable'},{status:503}):Response.json({ok:true})):Response.json(profile));let value=h.render();await value.login('alice');value=h.render();await assert.rejects(async()=>value.logout());assert.equal(h.render().user,'alice');fail=false;await value.logout();assert.equal(h.render().user,null);assert.equal(h.routes.at(-1),'/login');
-});
-
-test('core restore distinguishes rejected session from unavailable auth service and supports retry',async()=>{
- let status=503;const h=await coreHookHarness(async()=>status===200?Response.json(profile):Response.json({error:'unavailable'},{status}), '/trace');let value=h.render();h.effects[0]();await new Promise<void>(resolve=>setImmediate(resolve));value=h.render();h.effects[1]();assert.equal(value.user,null);assert.equal(value.authReady,true);assert.ok(value.authError);assert.deepEqual(h.routes,[]);
- status=200;await value.retryAuth?.();value=h.render();assert.equal(value.authError,null);assert.equal(value.user,'alice');
- const denied=await coreHookHarness(async()=>Response.json({error:'expired'},{status:401}), '/trace');denied.render();denied.effects[0]();await new Promise<void>(resolve=>setImmediate(resolve));const rejected=denied.render();denied.effects[1]();assert.match(denied.routes[0],/^\/login\?returnTo=/);assert.equal(rejected.authError,null);assert.equal(rejected.authReady,true);assert.equal(rejected.user,null);
-});
-
-
-test('core returnTo rejects backslash and control-character external redirects after canonicalization',async()=>{
- for(const target of ['/\\external.example','/\t/external.example','/%5cexternal.example','//external.example','/login','/a/../login']) {
-  const h=await coreHookHarness(async()=>Response.json(profile),'/login','?'+new URLSearchParams({returnTo:target}));await h.render().login('alice');assert.equal(h.routes[0],'/trace',JSON.stringify(target));
- }
- const h=await coreHookHarness(async()=>Response.json(profile),'/login','?'+new URLSearchParams({returnTo:'/trace?taskId=abc#span'}));await h.render().login('alice');assert.equal(h.routes[0],'/trace?taskId=abc#span');
 });

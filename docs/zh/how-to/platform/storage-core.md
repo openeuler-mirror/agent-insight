@@ -1,13 +1,13 @@
 ---
 title: "启用隔离的 Storage Core Trace 链路"
-description: "显式初始化、私有服务配置、密码登录、OTLP 接收及分页 Trace 验证。"
+description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace 验证。"
 ---
 
 # 启用隔离的 Storage Core Trace 链路
 
-**产品兼容状态（2026-11-12）**：本页记录内部存储技术样例。当前core模式尚未保留全部原有功能/界面，不是原产品切库的使用方式或验收结果。目标要求保留现有全部能力，仅替换数据支持；恢复原界面及逐领域数据接管仍待完成。下文配置仅用于隔离技术验证。
+**产品兼容状态（2026-11-12）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。完整业务重构仍未完成，评测回流、诊断与其他领域不能据此视为已迁移。仅在隔离目标验证，不用于生产切换。
 
-当前新增模式只接管 Trace 采集、列表、Span 和正文。它使用独立 IAM 密码账号、事务库及 ClickHouse。未设置模式开关时保留原路径；启用后配置缺失、认证失败或后端故障会明确报错，不回落旧库。完整契约见[参考](../../reference/platform/storage-core.md)，开发/验收状态见[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)。
+模式开关只影响服务端。Trace接口使用当前IAM权限，配置缺失、身份未映射或后端故障明确失败，不回落旧Trace库。其他领域仍有既有数据路径，当前不是全产品切库。完整契约见[参考](../../reference/platform/storage-core.md)，实际覆盖见[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)。
 
 ## 1. 准备独立目标
 
@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-新库应用001–004，当前schema_version=4。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
+新库应用001–005，当前schema_version=5。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -44,7 +44,7 @@ from services.storage.iam import IAMStore
 from services.storage.clickhouse import ClickHouseStore
 
 root = Path('/absolute/path/to/isolated-core')
-control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至004
+control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至005
 facts = ClickHouseStore('http://127.0.0.1:8123',
     database='agent_insight_core_isolated', user='default',
     password=getpass.getpass('ClickHouse password (empty if configured): '))
@@ -92,14 +92,31 @@ python3 -m services.storage.trace_service --config /absolute/path/to/isolated-co
 AGENT_INSIGHT_HOME=/absolute/path/to/isolated-web \
 DATABASE_URL=file:/absolute/path/to/isolated-web/data/legacy-shell.db \
 AGENT_INSIGHT_PORT=4320 \
-NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE=core \
+AGENT_INSIGHT_TRACE_STORAGE=core \
 AGENT_INSIGHT_STORAGE_CORE_URL=http://127.0.0.1:4319 \
+AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=/absolute/path/to/isolated-core/identity-mapping.json \
 bash scripts/develop_start.sh
 ```
 
-部署时也可在该独立运行根的`.env`配置同名变量。`NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE`参与前端构建，变更后重新构建/重启；bridge URL为仅服务端使用的显式loopback origin，不含路径、查询或URL凭据。不同主机/容器必须让Next和loopback服务具备同一可达网络命名空间；不能把远端域名填入当前仅回环桥接契约。
+以上均为服务端变量，变更后重启Next；旧`NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE`仅作为服务端兼容别名，不再控制前端。loopback origin不能包含路径、查询或凭据。Next和存储进程需共享可达网络命名空间。
 
-浏览器打开`http://127.0.0.1:4320/login`，使用上一步IAM账号密码。core会话由Next设置独立HttpOnly、SameSite=Strict Cookie，名称按后端origin区分；HTTPS加Secure，登录/退出校验同源Origin。浏览器JS不保存会话token。旧用户名自动注册、旧Key和旧localStorage不能登录新IAM；清除模式开关并重建后恢复旧模式选择，不会自动搬迁两边数据。
+浏览器继续使用原`/login`及现有Key。配置端必须先核验既有身份，再建立明确的旧Key→IAM主体/空间绑定；不按payload.user、同名账号或邮箱域自动推断。`AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`指定绝对路径的0600普通JSON文件，格式如下（全部为占位值）：
+
+```json
+{
+  "version": 1,
+  "core_origin": "http://127.0.0.1:4319",
+  "bindings": [{
+    "legacy_api_key_sha256": "REPLACE_WITH_SHA256_OF_VERIFIED_LEGACY_KEY",
+    "legacy_username": "existing-user",
+    "principal_id": "operator",
+    "workspace_id": "default",
+    "credential": "REPLACE_WITH_PRIVATE_WORKSPACE_READ_WRITE_DELETE_API_CREDENTIAL"
+  }]
+}
+```
+
+该credential由可信配置端通过`issue_api_credential(session,'default',['read','write','delete'])`签发，不能使用前述write-only采集Key代替页面读取凭据。映射文件含明文代理凭据，只能保存在私有运行目录；服务端先验证旧Key，再校验代理凭据当前principal、workspace及权限，不能仅凭Key摘要跳过认证。此兼容配置是隔离验证手段，未来统一身份迁移仍须显式映射、轮换与撤权。
 
 ## 4. 上报并区分接收与索引
 
@@ -107,11 +124,13 @@ bash scripts/develop_start.sh
 
 入口支持OTLP JSON/protobuf及gzip，解码后的JSON最大4MiB、4096个**完成Span**，归一化展开总预算64MiB。后端loopback端口只收JSON。默认来源为`otlp`，不同service.name的同一原生Trace仍聚合；service.name仅显示。需要明确来源隔离时使用resource属性`agent_insight.source_namespace`。同源修订用Span属性`agent_insight.revision`，默认为1；同版本不同内容进入失败，不能改包内容重用receipt key。
 
-OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Storage-State`报告回执。accepted只代表私有原始制品fsync及控制事务提交。用同一采集凭据查询`GET /v1/batches/<batch_id>?workspace_id=default`，或Next的`/api/observe/session?action=batch&batch_id=…&workspace_id=default`；write-only凭据只能查看本人回执。只有indexed代表所有sink完成；failed需检查回执错误，不按成功重传不同内容。
+OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Storage-State`报告回执。accepted只代表私有原始制品fsync及控制事务提交。用同一采集凭据查询`GET /v1/batches/<batch_id>?workspace_id=default`，；write-only凭据只能查看本人回执。只有indexed代表所有sink完成；failed需检查回执错误，不按成功重传不同内容。
 
 ## 5. 按页检查 Trace
 
-进入`/trace`，列表默认50条；Span结构默认/最多200条；正文每页默认/最多4块，每块最多256KiB。选择一个Span后才按该行payload_revision读取input/output；不会先加载整个Trace JSON或全部万级Span。不存在的section返回available=false，不当作损坏。列表筛选和游标绑定当前权限；成员撤销、组/项目停用后旧请求不得继续获得数据。
+进入原`/trace`，列表、筛选、打标及详情继续使用旧DTO。兼容层逐页读取CH结构（每次最多200 Span），为原执行链路返回完整轻量结构，最多100000 Span/16MiB；这会读取全部结构，不能声称结构也仅按点击读取。普通OTLP结构不读正文，点击后才按固定interaction索引及payload_revision装载单Span正文，正文section每页最多4块。
+
+原Trace bundle导入/导出保持v1格式及执行树/旧ID，导入最多50MiB/500个execution。全树先校验，冲突ID及嵌套引用一并重映射；成功仅在全部batch indexed后返回。`Idempotency-Key`可用于同一次导入恢复，不能复用给不同内容。导出及完整会话响应上限128MiB。原Langfuse页面直接消费完整nodes，因此兼容读取需要其完整正文；该特例不能计入普通OTLP的懒加载证明。未覆盖的业务能力及失败边界见实施状态。
 
 当前单队列以全局最早事件强序处理；早期重试会阻挡后续事件。每128 Span批量写正文，先chunks、后manifests，再Span及Trace摘要，重复写依赖相同版本收敛。这是可靠性基线，尚未完成1000在线采集端混合读写压测、分片日志或HA认证。当前浏览器验收状态以[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)为准。
 

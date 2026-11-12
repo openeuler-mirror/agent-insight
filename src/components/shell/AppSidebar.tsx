@@ -19,13 +19,12 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useTheme } from '@/lib/client/theme-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { useSidebar } from '@/lib/client/sidebar-context';
 import { useUsageAccess } from '@/lib/usage-analytics/use-usage-access';
-import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 import {
     getSidebarNavigation,
     isSidebarItemActive,
@@ -72,56 +71,20 @@ const NAV_ICONS: Record<SidebarIconKey, ReactNode> = {
     usage: ICON_USAGE,
 };
 
-const CORE_NAVIGATION: SidebarNavItem[] = [{ key: 'trace', href: '/trace', labelKey: 'nav.trace', icon: 'trace' }];
-
 export function AppSidebar() {
-    return isStorageCoreEnabled() ? <SidebarContent navigation={CORE_NAVIGATION} coreMode /> : <LegacySidebar />;
-}
-
-function LegacySidebar() {
-    const usageAccess = useUsageAccess();
-    const showUsage = usageAccess.enabled && usageAccess.isAdmin;
-    const navigation = useMemo(() => getSidebarNavigation(showUsage), [showUsage]);
-    return <SidebarContent navigation={navigation} />;
-}
-
-function SidebarContent({ navigation, coreMode = false }: { navigation: SidebarNavItem[]; coreMode?: boolean }) {
     const pathname = usePathname() || '/';
     const { user, displayName, logout } = useAuth();
     const userLabel = displayName || user;
     const { isDark, toggleTheme } = useTheme();
     const { t, locale, setLocale } = useLocale();
-    const { isCollapsed, setCollapsed, toggleSidebar } = useSidebar();
-    const observedNarrowViewport = useRef<boolean | null>(null);
-    const closeNavigation = useRef<HTMLButtonElement>(null);
+    const { isCollapsed } = useSidebar();
     const [showUserMenu, setShowUserMenu] = useState(false);
-    const [logoutError, setLogoutError] = useState('');
-    const [loggingOut, setLoggingOut] = useState(false);
+    const usageAccess = useUsageAccess();
+    const showUsage = usageAccess.enabled && usageAccess.isAdmin;
+    const navigation = useMemo(() => getSidebarNavigation(showUsage), [showUsage]);
     const [expandedTrees, setExpandedTrees] = useState<Set<string>>(
         new Set(['observe', 'evaluation', 'continuous-optimization', 'config']),
     );
-
-    useEffect(() => {
-        if (!coreMode) return;
-        const media = window.matchMedia('(max-width: 1023px)');
-        let active = true;
-        const update = () => {
-            if (!active) return;
-            if (media.matches && observedNarrowViewport.current !== true) setCollapsed(true);
-            observedNarrowViewport.current = media.matches;
-        };
-        queueMicrotask(update);
-        media.addEventListener('change', update);
-        return () => { active = false; media.removeEventListener('change', update); };
-    }, [coreMode, setCollapsed]);
-
-    useEffect(() => {
-        if (!coreMode || isCollapsed || !window.matchMedia('(max-width: 1023px)').matches) return;
-        closeNavigation.current?.focus();
-        const onEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') toggleSidebar(); };
-        window.addEventListener('keydown', onEscape);
-        return () => window.removeEventListener('keydown', onEscape);
-    }, [coreMode, isCollapsed, toggleSidebar]);
 
     const toggleTree = (key: string) =>
         setExpandedTrees(s => {
@@ -131,18 +94,8 @@ function SidebarContent({ navigation, coreMode = false }: { navigation: SidebarN
             return next;
         });
 
-    const signOut = async () => {
-        setLogoutError(''); setLoggingOut(true);
-        try { await logout(); setShowUserMenu(false); }
-        catch { setLogoutError('退出登录失败，请重试。'); }
-        finally { setLoggingOut(false); }
-    };
-
     return (
-        <>
-        {coreMode && !isCollapsed && <button type="button" aria-label="收起导航遮罩" className="fixed inset-0 z-20 cursor-pointer bg-foreground/20 lg:hidden" onClick={toggleSidebar} />}
         <aside
-            className={coreMode ? 'max-lg:!fixed max-lg:left-0 max-lg:top-0 max-lg:z-30' : undefined}
             style={{
                 width: isCollapsed ? 0 : 220,
                 flexShrink: 0,
@@ -172,7 +125,6 @@ function SidebarContent({ navigation, coreMode = false }: { navigation: SidebarN
                 }}
             >
                 <Image
-                    className={coreMode ? 'max-lg:h-auto max-lg:w-[150px]' : undefined}
                     src={isDark ? '/brand/logo-horizontal-dark.svg' : '/brand/logo-horizontal-light.svg'}
                     alt="Agent Insight"
                     width={180}
@@ -181,7 +133,6 @@ function SidebarContent({ navigation, coreMode = false }: { navigation: SidebarN
                     unoptimized
                     style={{ flexShrink: 0, display: 'block' }}
                 />
-                {coreMode && <button ref={closeNavigation} type="button" aria-label="关闭导航" onClick={toggleSidebar} className="absolute right-2 top-4 flex size-6 items-center justify-center rounded-md text-lg text-foreground-secondary hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:hidden"><span aria-hidden>×</span></button>}
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px' }}>
@@ -233,9 +184,6 @@ function SidebarContent({ navigation, coreMode = false }: { navigation: SidebarN
                 {user && (
                     <div style={{ position: 'relative' }}>
                         <button
-                            type="button"
-                            aria-label={`账号菜单 ${userLabel}`}
-                            aria-expanded={showUserMenu}
                             onClick={() => setShowUserMenu(v => !v)}
                             style={{
                                 width: '100%', padding: 0,
@@ -277,8 +225,7 @@ function SidebarContent({ navigation, coreMode = false }: { navigation: SidebarN
                                 }}
                             >
                                 <button
-                                    onClick={() => { void signOut(); }}
-                                    disabled={loggingOut}
+                                    onClick={() => { setShowUserMenu(false); logout(); }}
                                     style={{
                                         width: '100%', padding: '7px 11px',
                                         background: 'transparent', border: 'none',
@@ -287,16 +234,14 @@ function SidebarContent({ navigation, coreMode = false }: { navigation: SidebarN
                                         borderTop: '1px solid var(--border)',
                                     }}
                                 >
-                                    {loggingOut ? (locale === 'zh' ? '正在退出…' : 'Signing out…') : (locale === 'zh' ? '退出登录' : 'Sign out')}
+                                    {locale === 'zh' ? '退出登录' : 'Sign out'}
                                 </button>
-                                {logoutError && <p role="alert" className="px-3 pb-2 text-xs text-error">{logoutError}</p>}
                             </div>
                         )}
                     </div>
                 )}
             </div>
         </aside>
-        </>
     );
 }
 
