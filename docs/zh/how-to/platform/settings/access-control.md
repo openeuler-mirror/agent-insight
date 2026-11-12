@@ -302,6 +302,8 @@ OpenCode uploader 优先复用 `~/.agent-insight/client/config.json` 中的 `cli
 
 Agent Insight 会按 Langfuse traceId 生成执行记录；Langfuse `session_id` 只是跨 trace 的会话归组字段，不参与生成 Agent Insight 执行 ID。Langfuse 兼容上报会校验 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：public key 必须是 Agent Insight 用户名，secret key 必须是该用户的 Agent Insight API Key。
 
+应用必须先创建并挂载 Langfuse `CallbackHandler`；只有已经埋点的应用才能通过环境变量切换接收端。安装页同时提供 `LANGFUSE_OTEL_COMPRESSION=none`：Langfuse Python SDK 5 默认使用 gzip，而当前接收端要求未压缩 OTLP。使用 SDK 5 时请保留该配置；仅设置地址和凭据会导致压缩批次被拒绝。
+
 ### 流程四：接入 Pi Agent
 
 Pi Agent 采集器以 `@earendil-works/pi-coding-agent` 0.82.1 为最低基线，并接受后续
