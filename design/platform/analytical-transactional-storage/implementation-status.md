@@ -1,58 +1,59 @@
-# 首批核心实现与验证边界
+# 存储核心、IAM 与三库适配实施状态
 
-日期：2026-11-12（首批工作始于 2026-11-11）。以下为已执行结果；总体架构目标仍见 phase1/phase2，不能以本批结果宣称完整重构或生产切换完成。
+日期：2026-11-12。当前已完成001核心基础和本批IAM/002/统一授权/三事务库合同；整体重构及现有Web接管仍在实施中。总体目标见phase1/phase2，本批执行范围见[phase5](phase5-iam-adapters-plan.md)。
 
-## 基线与分支
+## 基线与交付
 
-- 已 fetch `upstream/master`，以 `298d1d5b10ab3ab67a955b41a1665b0cd4d26b54` 建独立分支 `codex/storage-core-refactor`。
-- 工作区 `/Users/guoyichen/.codex/worktrees/storage-core-refactor/agent-insight_2026`；旧工作区设计和其他工作不变。
-- 最新本地同步基线为96个 Prisma model；[旧库设计](legacy-migration-design.md)逐个分类。
+- 工作分支`codex/storage-core-refactor`基于已同步的`upstream/master`：`298d1d5b10ab3ab67a955b41a1665b0cd4d26b54`，旧库基线96个Prisma模型。
+- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`与机器字段目录。
+- 当前物理核心为 **31张事务表+13张CH表=44张**：001原34张，002新增10张IAM表。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
+- `services/storage/control.py`、`relational.py`共享资产/发布/草稿/别名、RunPlan、任务lease/fence/取消、结果回执与Outbox原子性。PG/openGauss写锁粒度为正确性基线，尚未完成千级混合容量优化。
+- `iam.py`实现稳定主体、密码派生、会话/API凭据、用户组/成员CAS/最后Owner保护、空间归属、资源归属与显式共享/撤销。组管理员全组读取，普通成员本人/共享，viewer只读；无隐式平台管理员。
+- `authorized.py`统一校验元数据/列表/Span/正文/聚合/有界制品下载。CH读取和下载前后重新校验权限；慢I/O与密码派生不占写事务。私有评测gold不通过普通制品端口开放。
+- `clickhouse.py`保持最新态后筛选、结构分页/单点、多section正文bundle、分块/hash和有界请求；新增范围绑定聚合、删除屏障及Token未知覆盖度。未知总数返回null，并提供已知和/缺失数量，不冒充完整零值。
+- `migrations.py`与CLI实现已知连续前缀、checksum、显式迁移计划及原子升级。SQLite备份后锁源重核；服务端先取迁移表锁再建立快照，绑定备份源身份/历史/全部托管表内容证据。DDL不得自行提交事务。
+- `legacy.py`继续提供只读原始清点/导出/验证，保留活跃WAL、类型、物理列、重复行和摘要；不执行96模型的语义转换或旧库目标导入。
 
-## 已交付
+## 最终验证
 
-1. [字段字典](core-table-dictionary.md)：21张事务表、13张CH表，共34张核心物理表。含4张新增基础表，不是把此前59张逻辑目录全部实现。
-2. `services/storage/schema/`：SQLite、PostgreSQL、openGauss、ClickHouse四套核心DDL及机器字段目录，完整字段/类型/NULL/default/PK/FK/unique/check/index/不可变规则。
-3. `services/storage/control.py`：独立SQLite控制仓库。初始化拒绝旧Prisma库，schema checksum校验，WAL/FULL、租户/资产约束、版本依赖封存、草稿和alias CAS、冻结RunPlan、任务领取/续租/fence/取消、实际制品hash验证，以及结果回执与Outbox同事务提交。
-4. `services/storage/clickhouse.py`：标准库HTTP事实访问。受控canonical Span批量写、最新态后筛选、结构分页/单Span读取、多section正文共享bundle revision、正文块与最终manifest、逐块和整段完整性验证、4MiB编码请求上限。
-5. `services/storage/legacy.py`：只读一致性清点/导出/验证，包含活跃WAL、physical columns与类型、重复行、确定性hash和私有输出；阻断损坏/FK问题/不完整或被修改的导出。
-6. `python3 -m services.storage`：schema输出、显式新SQLite目标初始化、inspect/export/verify入口；stdout无原始行、schema SQL或默认值字面值。中英公开参考已同步。
+| 层次 | 实际结果 | 证明范围 |
+|---|---|---|
+| 存储Python全套 | **192通过、0失败、0跳过，49.397秒**；ResourceWarning作为错误 | 同时启用SQLite、PG、openGauss兼容测试连接和CH，包括DDL、迁移、IAM、三后端授权和跨库业务链路 |
+| PostgreSQL | 15.19，ARM64 `postgres:15-alpine`隔离容器；固定psycopg2-binary2.9.10 | 真实控制/只读快照/并发领取/Outbox、001→002保留、故障回滚及备份屏障；多Owner并发在RC/RR下均保护最后有效Owner |
+| openGauss原生认证 | **31通过、0失败、0跳过，27.177秒** | 7.0.0 build2397a86f、PG兼容模式；Linux ARM64/Python3.11.13、官方psycopg2/libpq2.9，原生SHA256认证；IAM12+授权7+CH闭环3+业务/迁移9 |
+| ClickHouse | 25.8.12.129 official build，macOS ARM64隔离实例 | 13表、最新态、正文完整性、每后端万Span分页/单点/跨空间统计、撤权和删除屏障；未知/混合/真实零Token覆盖度 |
+| 独立审查 | 已修复发现的授权/迁移竞态，并执行回归 | 下载期间撤权、分析删除屏障、时钟回退撤销、迁移等待写入者后的旧快照、顶层COMMIT与失败迁移回滚 |
+| 既有应用`npm run test` | **5241通过、44失败、24跳过，共5309；760.676秒** | 全量未通过；未将该结果写成完整应用验收成功 |
 
-## 已执行验证
+192项细分：授权门面7、PG/OG授权合同38、CLI2、CH单元10/真库6、通用合同4、SQLite控制11、IAM12、IAMDDL15、旧库导出22、迁移17、关系库22、核心DDL17、三后端CH闭环9。原生31项为在另一驱动/运行环境执行的同一组合同，不加算成223个独立测试。
 
-| 层次 | 结果 | 证明范围 |
-| --- | --- | --- |
-| Python核心全套 | **70通过、0失败、0跳过**，启用显式PG/CH测试目标，ResourceWarning作为错误 | 合同、真实SQLite、只读迁移、CLI、PG DDL合同和CH链路 |
-| PostgreSQL | 15.19，Linux ARM64 `postgres:15-alpine` 临时容器 | 核心DDL、封存/冻结/复合归属等约束；不证明业务PG运行适配已实现 |
-| ClickHouse | 25.8.12.129 official build，macOS ARM64隔离单实例 | 13表建表、旧失败→新成功筛选、租户隔离、bundle/正文读取、revision范围和10,000 Span分页/单点查询 |
-| 代码与文档 | compileall、git diff --check、新文件尾空格、链接/代码围栏与34表目录覆盖检查通过 | 静态完整性；不代替功能和容量测试 |
-| 既有应用 `npm run test` | 正确初始化隔离DB后的完整运行：**5,242通过、43失败、24跳过，共5,309** | 全量未通过，不能声称全量回归成功 |
+本批应用全量使用新建隔离`AGENT_INSIGHT_HOME`及Prisma测试库。与上次70项存储基础交付时的全量结果（5242/43/24）相比，本轮增加一项Dify安装fixture子进程超时（status=null）；其余失败名称相同，涉及既有UI/FI/RAS/构建平台等。本轮未修改`src/`、`test/`、`prisma/`、`package.json`、lockfile或RAS/FI模块；未做clean-master对照，不宣称新增失败为0。未启动Next dev，**未在浏览器中验证**。
 
-Python专项细分：contracts 4、control 11、CH验证9、CH真库5、CLI2、legacy22、schema17（包含PG真库1），合计70。真实数据库的测试目标是本任务创建的隔离实例，不是客户或默认运行库。
+### 本次证据
 
-应用全量首次尝试因新测试库未创建而产生无效环境失败，未用作最终结果。重新创建/初始化隔离库后完整运行184秒，得到上表最终结果；无超时。失败涉及既有UI结构断言、注册示例、FI/RAS契约、脚本/VSIX构建产物和Windows构建约束等；未逐项归因或修复。`git diff --exit-code HEAD -- src test prisma package.json package-lock.json agent_ras agent_fault_injection` 为0，即这些既有应用源文件和入口未改；这不是一次额外的clean-master对照压测，不报告“新增失败为0”的推断。
+- Python最终日志：`/var/folders/8s/r6t1yc991fq4xdx422ccr29h0000gn/T/storage-iam-final-63stwx41/python-suite.log`。
+- 原生openGauss日志、已测源码指纹及环境记录：`/var/folders/8s/r6t1yc991fq4xdx422ccr29h0000gn/T/agent-insight-opengauss-env-rgbg5yn9/`中的`native-matrix-final.log`、`native-tested-files-final.json`、`environment-evidence.json`。最终已测代码指纹与仓库一致。
+- 应用全量日志：`/var/folders/8s/r6t1yc991fq4xdx422ccr29h0000gn/T/storage-iam-npm-804gb9xj/npm-test.log`。
+- openGauss官方服务端归档SHA256：`e3a71a23a84871293f2c43d27044e01a169699ba65b19c1766c802b4d10a50c5`，已与官方校验文件核对。官方Python归档测量摘要`92c027718f2a5917e9eea6c2d26dba6e2ee53e0394a8c1ebf0ae6e6e9250aae7`仅为本次下载指纹，未获得单独发布的checksum，不声称完成发布摘要核验。
+- CH固定官方发布资产SHA256：`541b149c0b73c44524cf3aff38541697736de266b36b6233811451a7922ee588`。
 
-本批未启动Next dev server，未进行浏览器验证、真实模型/官方Benchmark Harness运行、千级混合压测、Linux ClickHouse/HA/openGauss认证。
+这些路径是本机临时证据，凭据另存在私有文件，未提交。原生openGauss与macOS普通psycopg2-binary的SHA256握手不兼容；主机兼容MD5 fixture仅辅助跑合同，不能作为生产配置建议。
 
-## 可重复命令
+## 数据保留与适用边界
 
-```bash
-python3 -W error::ResourceWarning -m unittest discover -s services/storage/tests -v
-STORAGE_TEST_PG_CONTAINER=your-isolated-pg-container python3 -m unittest discover -s services/storage/tests -p test_schema.py -v
-STORAGE_TEST_CLICKHOUSE_URL=http://127.0.0.1:your-test-port python3 -m unittest discover -s services/storage/tests -p test_clickhouse_integration.py -v
-```
+1. 本批没有连接或迁移默认业务库，没有将旧数据自动归组，也没有覆盖旧备份。所有真实读写验证均使用本任务新建的隔离实例/数据库/schema。
+2. 已有001初始化不隐式升级，基础控制操作仍可使用已知前缀；IAM要求显式迁移002。SQLite迁移保留私有一致性备份，事务失败回滚；PG/openGauss真实测试确认001行、release/run和原marker保留。
+3. 服务端外部dump的恢复核验由运维完成，工具只验证文件hash、源证据及操作声明。测试中的备份fixture不等于真实生产dump恢复验收。
+4. 新建IAM基础库不等于现有Web已经支持账号密码登录。Web入口、Cookie/CSRF、限流、账号恢复与既有外部身份迁移仍待接入。
+5. 普通成员聚合为显式授权Trace集合，每空间最多1000根；删除屏障每空间最多1000根，查询总绑定参数最多4096。超出拒绝，后续须实现可扩展ACL/删除字典；制品下载暂限16MiB。
+6. 组/空间转移、历史归属和旧用户映射仍需显式迁移清单，未映射空间保持隔离。现有业务写入口接管时必须同事务建立资源归属。
 
-不指定真库变量时对应项目明确跳过，不能复述为70项全部真库通过。CH测试会在显式目标创建并删除随机测试数据库，PG测试使用事务临时Schema回滚；仅指向隔离测试实例。
+## 下一批
 
-本机CH验证二进制来自固定发布资产 `ClickHouse/ClickHouse v25.8.12.129-lts / clickhouse-macos-aarch64`，SHA-256 `541b149c0b73c44524cf3aff38541697736de266b36b6233811451a7922ee588`，下载后与发布元数据摘要核对。未将移动master构建或分段内容不一致的下载用于验证。复现生产版本还需在目标Linux拓扑独立认证。
+- 接入Durable Event Log、Outbox可靠投递、entity materializer与重放/冲突隔离，形成采集到CH可查询的可靠链路。
+- 固定Trace快照、Dataset/Evaluator/Skill/Agent/Benchmark多版本发布与运行闭环，之后逐领域接管现有API。
+- 旧模型逐字段转换、目标apply、增量/DELETE追平、影子读、停写切换及回退；当前原始导出不是迁移完成。
+- Web身份/请求门面接入、规模化ACL/删除投影、保留期/pin/索引重建。
+- 控制写锁细化、1000在线采集端混合读写压测、故障/HA及目标部署发行版恢复验收。
 
-## 后续工作与尚未完成项
-
-- 账号密码、用户分组与组管理员全组数据读取：已补IAM表和权限/迁移规则设计，尚未实现认证和请求授权层；不计入34张物理表及70项测试。
-
-- PG/openGauss业务运行适配、安装/迁移Runner与实际发行版能力认证。
-- 完整Durable Event Log/实体所有者、重复修订冲突隔离、Outbox自动投递和可靠checkpoint。
-- 固定Trace快照、Dataset异步发布、Evaluator/Benchmark协议、评分事实选择和其余领域业务接管。
-- 旧库逐字段语义转换与目标apply、增量变更/DELETE追平、影子读、停写切换和反向增量回退。当前导出不是已完成迁移。
-- 权限/删除屏障/pin/保留期、索引/汇总重建，以及千级在线混合负载、故障和备份恢复验收。
-
-`write_spans`目前要求上游已提供可信完整canonical版本；同一逻辑key+revision不同内容的冲突还需物化器隔离。CH多请求写入可能部分成功，调用方必须用稳定版本重放并在全部成功前不推进checkpoint。当前默认应用存储没有接管，不应该把这批DDL或CLI直接应用到现有业务数据库。
+原首批70项结果已由当前192项专项取代；原全量失败证据与总体设计仍保留，不将本批测试外推为完整重构/生产切换完成。

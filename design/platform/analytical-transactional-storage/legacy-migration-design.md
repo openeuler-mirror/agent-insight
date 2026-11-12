@@ -144,3 +144,15 @@
 ## 6. 交付证据与后续工作
 
 本阶段测试：真实 SQLite 的读事务、已提交 WAL、字段/BLOB 类型、特殊标识符、坏 FK、未知表、目标目录碰撞、错误中断和权限。未实施目标导入、CDC、生产切换、PG/openGauss 的存量导出或真实客户库操作；这些仍是完整迁移的后续门禁。
+
+## 7. 新核心 schema 的显式升级
+
+`001_core.sql` 已交付后保持字节与摘要不变，IAM 使用追加 `002_iam.sql`。新目标初始化应用全部已知连续迁移；已存在的 001 目标保持可读可执行旧业务，不在 initialize 中静默升级。历史存在空洞、未来版本、文件不连续或已应用摘要漂移时拒绝写入。
+
+SQLite 的 `migrate(backup_path=...)` 先以 SQLite backup API 创建不覆盖的 mode600 同目录备份，包含已提交 WAL；备份有时间预算和完整性/FK/逻辑指纹核查。随后 BEGIN IMMEDIATE 锁住源写入，再比较备份与源的逻辑根指纹，无漂移才在一个事务内应用所有待执行迁移。SQL 不能自行 COMMIT/ATTACH 等逃逸事务；任一步失败回滚全部待执行 DDL 和 schema_meta 记录，备份保留供核查。
+
+PG/openGauss 必须使用显式 DSN 或连接工厂、隔离 schema 和私有制品目录。迁移计划只读；`source_evidence()`在一致性快照中生成数据库名/服务器地址端口、schema、完整迁移历史，以及全部托管表列元数据/行数/类型化内容根摘要。服务端 apply 要求私有备份文件及字节SHA-256、匹配的源证据、writers_stopped、operator、created_at_ms和restore_verified声明。迁移在首个MVCC快照之前取得schema_meta表级排他屏障，等待在途写事务提交后重核源证据；不同源、过期内容或介入写入均拒绝。DDL与版本登记同事务，顶层COMMIT/ROLLBACK/会话控制语句被拒绝，函数体内的BEGIN不受误判。
+
+工具**不会自动执行pg_dump/gs_dump，也不能验证外部备份字节确实承载该源快照或仅凭restore_verified证明恢复成功**。正式部署仍须由运维停写、制作真实备份并完成恢复演练；测试里的外部备份fixture只验证证据门禁，不作生产恢复证明。
+
+关系库适配器的业务写事务暂以schema_meta基础行锁跨进程串行协调（READ COMMITTED）；迁移另用上述表级屏障。只读请求使用REPEATABLE READ READ ONLY，SQLite使用WAL快照，均不取业务写锁；慢CH HTTP与密码派生在写事务外。此批保证领取/取消/续租/终态正确性，不是千级写吞吐实现。PG15.19及openGauss7.0.0 PG兼容模式已分别执行真实合同；openGauss原生SHA256使用官方Linux ARM64 Python驱动，不外推其他发行版或客户端认证组合。

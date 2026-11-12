@@ -107,7 +107,7 @@ flowchart TB
 
 ### 4.1 三事务后端的统一能力
 
-业务接口使用 `TransactionManager`、`AssetRepository`、`WorkRepository`、`OutboxRepository` 等领域 port，不向 API/插件返回 ORM client。Python 目标可使用 SQLAlchemy Core 做 PG/SQLite 基础实现，openGauss 通过经认证驱动/方言单独实现；具体库版本由 PoC 冻结，不推定官方 ORM 支持。现有 TS 过渡适配实现同样的 wire DTO 和合同测试。
+业务接口使用 `TransactionManager`、`AssetRepository`、`WorkRepository`、`OutboxRepository` 等领域 port，不向 API/插件返回 ORM client。本批Python基础实现使用标准库SQLite与显式DB-API连接工厂共享领域操作，PG/openGauss分别认证驱动与DDL；ORM/SQLAlchemy仍可作为后续实现选择，不推定官方ORM支持。现有 TS 过渡适配实现同样的 wire DTO 和合同测试。
 
 | 能力 | PostgreSQL | openGauss | SQLite |
 | --- | --- | --- | --- |
@@ -121,7 +121,7 @@ flowchart TB
 
 ### 4.2 账号密码登录、用户组与组管理员（新增明确需求）
 
-2026-11-12 补充：此前 workspace_id 与 IAM 逻辑目录只是身份/隔离预留，不代表已经支持账号密码、用户组或组管理员。当前34张物理核心表尚无完整身份表或请求授权层。本节将该能力明确列入后续控制面，不修改已经发布的001核心DDL或其checksum。
+2026-11-12 补充：此前 workspace_id 与 IAM 逻辑目录只是身份/隔离预留，不代表已经支持账号密码、用户组或组管理员。本批以002新增10张IAM表及统一授权基础库，核心物理表增至44张；现有Web尚未接管。不修改001核心DDL或其checksum。
 
 **身份、凭据、成员关系和数据归属分开。** principal 是稳定用户身份，登录名可变；密码、API Key和外部身份是不同的认证方式。group 是成员和角色边界，workspace 是数据隔离/查询分区。一个用户可加入多个组，一个组可绑定一个或多个 workspace；workspace 同时只属于一个组或一个明确的个人空间。初始产品可用“每组一个 workspace”，不能把 principal_id、group_id、workspace_id 混为同一个ID。
 
@@ -136,7 +136,7 @@ flowchart TB
 | `iam_group_memberships` | PK(group_id,principal_id)；role、status、etag；外键指向group和principal | 多对多成员关系；role初值owner/admin/member/viewer，变更使用CAS |
 | `iam_workspace_bindings` | workspace_id PK/FK；owner_type、owner_group_id/owner_principal_id XOR；binding_revision | 明确数据空间归属，支持以后组下多个workspace；转移必须显式审计 |
 
-这些是待实现的IAM领域表，细化时与原`iam_principals/iam_memberships/iam_credentials`逻辑目录归并，不把新名称与旧占位表重复建两套。除workspace绑定外，principal/group是控制面身份，不因所有业务表有workspace_id而强行套复合tenant主键。密码哈希库、会话协议和账号恢复渠道在该功能实现时固定并单独安全验证，本节不宣称已有认证代码。
+以上八张身份领域表加上`iam_resource_access`（资源归属/可见性）和`iam_resource_grants`（显式共享）两张表，共十张002表；与原`iam_principals/iam_memberships/iam_credentials`逻辑目录归并，不把新名称与旧占位表重复建两套。除workspace绑定外，principal/group是控制面身份，不因所有业务表有workspace_id而强行套复合tenant主键。密码派生已固定为标准库PBKDF2-HMAC-SHA256/600000次及随机盐；随机会话/API令牌只存摘要，原生合同已验证。Web会话协议、账号恢复及限流仍待Web接入批次实现。
 
 **权限矩阵：**
 
@@ -158,11 +158,11 @@ flowchart TB
 3. 组管理员的跨workspace统计仍限定该组workspace集合，并显示范围与数据水位；不得复用未带授权范围的全局缓存。查询/游标/缓存键包含workspace集合、policy_revision及查询条件。
 4. 每个新请求使用当前成员/账号状态，角色撤销与转组发布缓存失效事件；长导出/评测任务在领取、结果下载或权限敏感阶段重新确认scope。投影延迟不能延长已撤销的访问权。
 5. 人员登录会话与采集API凭据分开，采集凭据固定组/workspace和能力。用户退出组时，相应组凭据/会话访问同步撤销或受控移交；服务任务不依赖操作人会话永久存活。
-6. 当前SQLiteControlStore和CH适配器是内部基础端口，未实施请求认证；其workspace参数不是对外可直接信任的授权结果。在新增Web入口前必须接入上述服务端授权层。
+6. SQLite/PG/openGaussControlStore和CH适配器仍是内部可信端口，workspace参数不能作为外部授权结果；新增AuthorizedStorage门面实施上述规则，新增Web入口必须接入门面。只读快照不占写锁，CH读取前后校验当前权限。
 
 **迁移与验收：** 旧User.id/username/externalAccount/apiKey映射稳定principal与独立credential；旧库没有可还原密码时使用显式邀请/重置，不生成通用默认密码，也不把API Key当登录密码。组/角色/历史数据归属通过管理员提供的映射确定，禁止按同名/邮箱域自动获得组管理员。旧username仅作来源信息与兼容映射，不作为跨库权限主键。
 
-未来迁移使用002 IAM版本/兼容扩展，不就地改001checksum。先准备账号与组、workspace绑定和历史映射，再切换授权入口；没有明确归组的旧数据保持隔离并进入待确认清单。必须验证多组用户、组admin看到其他成员全部组数据、普通成员隔离、组间隔离、单Span/正文/统计/下载同权限、退出组和停用/改密撤销、同名不同人不串数据，以及PG/openGauss/SQLite合同一致。暂不把这批设计补充计入已实现34张表或现有70项测试覆盖。
+增量迁移已实现002 IAM版本，不就地改001checksum。先准备账号与组、workspace绑定和历史映射，再切换授权入口；没有明确归组的旧数据保持隔离并进入待确认清单。必须验证多组用户、组admin看到其他成员全部组数据、普通成员隔离、组间隔离、单Span/正文/统计/下载同权限、退出组和停用/改密撤销、同名不同人不串数据，以及PG/openGauss/SQLite合同一致。已实施表数为44张，最新测试、适配版本与尚未接管领域见[实施状态](implementation-status.md)及[本批计划](phase5-iam-adapters-plan.md)。
 
 ## 5. ClickHouse 表目录与核心键
 

@@ -9,7 +9,7 @@ Check input, output, configuration, identity, and asynchronous behavior.
 
 ## Platform
 
-- [Storage core and legacy export](./platform/storage-core.md)
+- [Storage core, IAM and safe migrations](./platform/storage-core.md)
 
 - [HTTP APIs and user identity](./platform/http-api.md)
 - [Runtime configuration](./platform/configuration.md)

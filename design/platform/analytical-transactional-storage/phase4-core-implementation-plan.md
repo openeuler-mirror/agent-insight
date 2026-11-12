@@ -45,6 +45,6 @@
 
 ## 后续批次
 
-补齐PG/openGauss运行适配、durable ingest/Outbox publisher和entity materializer、固定Trace快照、Dataset发布、Evaluator/Benchmark链路、其余领域、逐模型转换器、影子读/回退和混合压测。每项以真实功能与恢复证据验收，不能把目录骨架当完成。
+IAM/002与PG/openGauss运行适配已在[下一批](phase5-iam-adapters-plan.md)补齐；后续继续durable ingest/Outbox publisher和entity materializer、固定Trace快照、Dataset发布、Evaluator/Benchmark链路、其余领域、逐模型转换器、影子读/回退和混合压测。每项以真实功能与恢复证据验收，不能把目录骨架当完成。
 
 当前交付、验证和未覆盖项见 [实施状态](implementation-status.md)；不得仅据本任务清单推断已实现。

@@ -78,7 +78,7 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
-| 分析与事务存储完整重构 | [analytical-transactional-storage](platform/analytical-transactional-storage/phase1-requirements-analysis.md) | ClickHouse 事实分析、三事务后端、核心表定义、不可变版本及迁移一致性 | Refactor / Architecture | 2026-11-11 | 🟡 核心设计细化与基础实现中 | 待补 |
+| 分析与事务存储完整重构 | [总体需求](platform/analytical-transactional-storage/phase1-requirements-analysis.md) / [IAM与三库计划](platform/analytical-transactional-storage/phase5-iam-adapters-plan.md) | ClickHouse 事实分析、IAM、三事务后端、不可变版本及迁移一致性 | Refactor / Architecture | 2026-11-11 | 🟡 IAM/002与三库基础合同已落地，整体实现中 | 待补 |
 | 执行 Profile 后端解耦 | [设计](evaluation/execution-profile-decoupling/phase2-requirements-design.md) | 分离公共配置、后端探测与实际执行，兼容 xGovernor 与原生本地执行 | Refactor | 2026-10-31 | 已实现；新增 8 项解耦回归通过，全仓无新增失败；未在浏览器或真实 Docker/模型环境验证 | — |
 | Benchmark 自动接入 Skill | [需求分析](evaluation/benchmark-onboarding-automation/phase1-requirements-analysis.md) · [需求设计](evaluation/benchmark-onboarding-automation/phase2-requirements-design.md) · [开发计划](evaluation/benchmark-onboarding-automation/phase3-development-plan.md) | 以 Agent Insight 项目地址与 Benchmark 来源为入口，单 Skill 完成能力查询、接入开发及有界修复；验收脚本和模板随包分发，以三类试验验证评分一致性与真实链路 | Feature / Evaluation | 2026-10-28 | 🟡 Skill 包、版本化协议快照、核对/验收 CLI、模板及自测已实现；三类 Benchmark 与跨宿主真实验收待执行 | — |
 

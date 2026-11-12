@@ -11,7 +11,7 @@ changefreq: "monthly"
 
 ## 平台公共
 
-- [新存储核心与旧库导出](./platform/storage-core.md)
+- [新存储核心、IAM 与安全迁移](./platform/storage-core.md)
 
 - [HTTP 接口与用户身份](./platform/http-api.md)
 - [模型连接测试](./platform/model-connection-test.md)

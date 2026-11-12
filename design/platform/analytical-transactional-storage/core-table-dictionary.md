@@ -1,16 +1,16 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-11。本轮细化 **21 张事务表 + 13 张 ClickHouse 表，共 34 张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-12。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，当前 **31 张事务表 + 13 张 ClickHouse 表，共44张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
-本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite 已进行真实引擎约束测试，PostgreSQL 15 的隔离事务 Schema 合同测试已通过；这不等于业务 PG 适配器全部实现。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss DDL 是单独维护的候选版本，未通过指定发行版验证前不能称为已认证。
+本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 范围与未实现项
 
 - 本轮事务表：`schema_meta`, `workspaces`, `asset_identities`, `asset_releases`, `asset_drafts`, `asset_release_dependencies`, `asset_release_seals`, `asset_aliases`, `runs`, `run_inputs`, `work_items`, `work_attempts`, `result_receipts`, `result_selections`, `outbox_events`, `inbox_receipts`, `trace_locators`, `snapshot_manifests`, `artifact_metadata`, `deletion_requests`, `migration_checkpoints`。
 - 本轮 CH 表：`obs_payload_manifests`, `obs_trace_current`, `obs_span_current`, `obs_payload_chunks`, `obs_events`, `obs_entity_relations`, `snapshot_nodes`, `dataset_sample_revisions`, `dataset_release_members`, `eval_result_facts`, `eval_metric_facts`, `eval_result_selection_current`, `eval_publication_members`。
-- 仍待后续批次：IAM 完整身份/凭据/成员、资产异步发布、插件与指标注册、run groups、人工裁决/评论、标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
+- 仍待后续批次：Web身份入口与账号恢复、资产异步发布、插件与指标注册、run groups、人工裁决/评论、标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
 
-账号密码、用户分组和组管理员属于待实现IAM控制面；明确的目标表、权限矩阵及历史归组规则见 [总体设计 §4.2](phase2-requirements-design.md#42-账号密码登录用户组与组管理员新增明确需求)。当前workspace外键保护引用归属，不能替代Web请求鉴权。
+账号密码、用户组和组管理员的IAM基础库与统一授权门面已实现，现有Web尚未接管；权限矩阵及历史归组规则见 [总体设计 §4.2](phase2-requirements-design.md#42-账号密码登录用户组与组管理员新增明确需求)。当前workspace外键保护引用归属，不能替代Web请求鉴权。
 
 ## 公共类型与约束
 
@@ -898,3 +898,268 @@ CHECK：`length(manifest_json) > 0`。
 - `python3 -m unittest discover -s services/storage/tests -p test_schema.py -v`：SQLite 真实引擎测试；未配置 PostgreSQL 容器时对应项明确 skip。
 - `STORAGE_TEST_PG_CONTAINER=<专用 postgres:15-alpine 容器名> python3 -m unittest discover -s services/storage/tests -p test_schema.py -v`：通过容器内 psql 在随机临时 Schema 的事务内应用完整 PG DDL、验证关键约束，最后 ROLLBACK，不修改公共 Schema 或现有运行库。
 - PG 实测仅证明该版本 DDL 和测试覆盖的约束；openGauss 不能由此推断通过。
+
+## IAM / 用户组增量核心表（002_iam）
+
+日期：2026-11-12。本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，当前核心物理表合计 **31 张事务表 + 13 张 CH 表 = 44 张**；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
+
+IAM 主体是全局稳定 principal，组成员在 group 中授权，workspace 通过不可变 binding 属于一个 group 或一个 personal principal；资源 ACL 使用 workspace/kind/id 三元身份。不是给原 user 字符串增加一个 group 字段。
+
+### IAM 公共字段与规则
+
+- `_ms` 是 UTC Unix 毫秒，均非负；版本、etag、policy_revision、binding_revision 为 1..2^63-1 的整数。SQLite 附加 typeof(...)=integer 检查，不能靠动态类型把文本存进版本列。
+- password_hash、token_hash、session_token_hash 均为小写 64 位十六进制；SQL 校验格式，不存原始 API Token/Session Token。密码本轮使用 PBKDF2-SHA256 的 32 字节 hex；scheme 与 parameters_json 固定实际算法参数，参数由密码服务校验，不在 SQL 存明文密码。
+- normalized_login_name 由身份服务规范化后写入，数据库唯一约束保证规范值不重复；Unicode casefold/规范化不能依赖不同数据库的 lower() 一致。外部身份唯一性为 provider+issuer+subject，subject 不擅自转小写。
+- API 凭据固定 workspace 和 auth_version；Session 固定 principal auth_version。有效认证还须读取当前主体状态/版本、有效期与撤销状态；表中保存旧版本用于撤销追溯不等于旧凭据仍可使用。capabilities_json 是上限，不能越过当前组成员和资源权限。
+- expires_at_ms 必填且不早于 issued_at_ms；revoked_at_ms 可空，非空时不早于签发。所有 JSON 的 Schema、大小及允许能力由服务层校验，跨后端用 TEXT，不假称 SQL 已校验 JSON 全部语义。
+- 所有 FK 默认 NO ACTION，物理删除不会级联抹掉凭据或授权历史；通常禁用/撤销。IAM 身份或授权信息不写入 ClickHouse 作为权限判断权威。
+
+### iam_principals
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `principal_id` | TEXT | 否 | 应用显式提供 |
+| `normalized_login_name` | TEXT | 否 | 应用显式提供 |
+| `display_name` | TEXT | 否 | 应用显式提供 |
+| `status` | TEXT | 否 | active |
+| `auth_version` | BIGINT | 否 | 1 |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`principal_id`。
+UNIQUE：`normalized_login_name`。
+CHECK：`status IN ('active','disabled')`。
+CHECK：`length(normalized_login_name) > 0`。
+CHECK：`normalized_login_name = trim(normalized_login_name)`。
+CHECK：`auth_version > 0 AND auth_version <= 9223372036854775807`。
+CHECK：`created_at_ms >= 0`。
+CHECK：`updated_at_ms >= 0`。
+
+### iam_password_credentials
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `principal_id` | TEXT | 否 | 应用显式提供 |
+| `password_hash` | TEXT | 否 | 应用显式提供 |
+| `scheme` | TEXT | 否 | 应用显式提供 |
+| `parameters_json` | TEXT | 否 | 应用显式提供 |
+| `credential_version` | BIGINT | 否 | 1 |
+| `changed_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`principal_id`。
+FK：`principal_id` → `iam_principals(principal_id)`。
+CHECK：`length(scheme) > 0`。
+CHECK：`length(parameters_json) > 0`。
+CHECK：`credential_version > 0 AND credential_version <= 9223372036854775807`。
+CHECK：`changed_at_ms >= 0`。
+HASH CHECK：`password_hash` 必须是小写 64 位 hex。SQLite 使用 length + NOT GLOB 非 hex 字符；PG/openGauss 使用正则 `^[0-9a-f]{64}$`。
+
+### iam_api_credentials
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `credential_id` | TEXT | 否 | 应用显式提供 |
+| `principal_id` | TEXT | 否 | 应用显式提供 |
+| `workspace_id` | TEXT | 否 | 应用显式提供 |
+| `token_hash` | TEXT | 否 | 应用显式提供 |
+| `capabilities_json` | TEXT | 否 | 应用显式提供 |
+| `auth_version` | BIGINT | 否 | 应用显式提供 |
+| `issued_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `expires_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `revoked_at_ms` | BIGINT | 是 | 应用显式提供 |
+
+PK：`credential_id`。
+UNIQUE：`token_hash`。
+FK：`principal_id` → `iam_principals(principal_id)`。
+FK：`workspace_id` → `workspaces(workspace_id)`。
+CHECK：`expires_at_ms >= issued_at_ms`。
+CHECK：`revoked_at_ms IS NULL OR revoked_at_ms >= issued_at_ms`。
+CHECK：`auth_version > 0 AND auth_version <= 9223372036854775807`。
+CHECK：`issued_at_ms >= 0`。
+CHECK：`expires_at_ms >= 0`。
+CHECK：`revoked_at_ms >= 0`。
+HASH CHECK：`token_hash` 必须是小写 64 位 hex。SQLite 使用 length + NOT GLOB 非 hex 字符；PG/openGauss 使用正则 `^[0-9a-f]{64}$`。
+INDEX `idx_iam_api_credentials_principal_scope`：`principal_id,workspace_id,revoked_at_ms`。
+INDEX `idx_iam_api_credentials_expiry`：`expires_at_ms`。
+
+### iam_external_identities
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `external_identity_id` | TEXT | 否 | 应用显式提供 |
+| `principal_id` | TEXT | 否 | 应用显式提供 |
+| `provider` | TEXT | 否 | 应用显式提供 |
+| `issuer` | TEXT | 否 | 应用显式提供 |
+| `subject` | TEXT | 否 | 应用显式提供 |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`external_identity_id`。
+UNIQUE：`provider, issuer, subject`。
+FK：`principal_id` → `iam_principals(principal_id)`。
+CHECK：`length(provider) > 0`。
+CHECK：`length(issuer) > 0`。
+CHECK：`length(subject) > 0`。
+CHECK：`created_at_ms >= 0`。
+INDEX `idx_iam_external_identities_principal`：`principal_id`。
+
+### iam_sessions
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `session_id` | TEXT | 否 | 应用显式提供 |
+| `principal_id` | TEXT | 否 | 应用显式提供 |
+| `session_token_hash` | TEXT | 否 | 应用显式提供 |
+| `auth_version` | BIGINT | 否 | 应用显式提供 |
+| `issued_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `expires_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `revoked_at_ms` | BIGINT | 是 | 应用显式提供 |
+
+PK：`session_id`。
+UNIQUE：`session_token_hash`。
+FK：`principal_id` → `iam_principals(principal_id)`。
+CHECK：`expires_at_ms >= issued_at_ms`。
+CHECK：`revoked_at_ms IS NULL OR revoked_at_ms >= issued_at_ms`。
+CHECK：`auth_version > 0 AND auth_version <= 9223372036854775807`。
+CHECK：`issued_at_ms >= 0`。
+CHECK：`expires_at_ms >= 0`。
+CHECK：`revoked_at_ms >= 0`。
+HASH CHECK：`session_token_hash` 必须是小写 64 位 hex。SQLite 使用 length + NOT GLOB 非 hex 字符；PG/openGauss 使用正则 `^[0-9a-f]{64}$`。
+INDEX `idx_iam_sessions_principal`：`principal_id,revoked_at_ms`。
+INDEX `idx_iam_sessions_expiry`：`expires_at_ms`。
+
+### iam_groups
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `group_id` | TEXT | 否 | 应用显式提供 |
+| `group_key` | TEXT | 否 | 应用显式提供 |
+| `name` | TEXT | 否 | 应用显式提供 |
+| `status` | TEXT | 否 | active |
+| `created_by` | TEXT | 否 | 应用显式提供 |
+| `policy_revision` | BIGINT | 否 | 1 |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`group_id`。
+UNIQUE：`group_key`。
+FK：`created_by` → `iam_principals(principal_id)`。
+CHECK：`status IN ('active','disabled')`。
+CHECK：`length(group_key) > 0`。
+CHECK：`policy_revision > 0 AND policy_revision <= 9223372036854775807`。
+CHECK：`created_at_ms >= 0`。
+CHECK：`updated_at_ms >= 0`。
+INDEX `idx_iam_groups_created_by`：`created_by`。
+
+### iam_group_memberships
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `group_id` | TEXT | 否 | 应用显式提供 |
+| `principal_id` | TEXT | 否 | 应用显式提供 |
+| `role` | TEXT | 否 | 应用显式提供 |
+| `status` | TEXT | 否 | active |
+| `etag` | BIGINT | 否 | 1 |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`group_id, principal_id`。
+FK：`group_id` → `iam_groups(group_id)`。
+FK：`principal_id` → `iam_principals(principal_id)`。
+CHECK：`role IN ('owner','admin','member','viewer')`。
+CHECK：`status IN ('active','disabled')`。
+CHECK：`etag > 0 AND etag <= 9223372036854775807`。
+CHECK：`created_at_ms >= 0`。
+CHECK：`updated_at_ms >= 0`。
+INDEX `idx_iam_group_memberships_principal`：`principal_id,status,group_id`。
+INDEX `idx_iam_group_memberships_owners`：`group_id,role,status`。
+
+### iam_workspace_bindings
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 应用显式提供 |
+| `owner_type` | TEXT | 否 | 应用显式提供 |
+| `owner_group_id` | TEXT | 是 | 应用显式提供 |
+| `owner_principal_id` | TEXT | 是 | 应用显式提供 |
+| `binding_revision` | BIGINT | 否 | 1 |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`workspace_id`。
+FK：`workspace_id` → `workspaces(workspace_id)`。
+FK：`owner_group_id` → `iam_groups(group_id)`。
+FK：`owner_principal_id` → `iam_principals(principal_id)`。
+CHECK：`(owner_type = 'group' AND owner_group_id IS NOT NULL AND owner_principal_id IS NULL) OR (owner_type = 'personal' AND owner_principal_id IS NOT NULL AND owner_group_id IS NULL)`。
+CHECK：`binding_revision > 0 AND binding_revision <= 9223372036854775807`。
+CHECK：`created_at_ms >= 0`。
+CHECK：`updated_at_ms >= 0`。
+INDEX `idx_iam_workspace_bindings_group`：`owner_group_id`。
+INDEX `idx_iam_workspace_bindings_principal`：`owner_principal_id`。
+
+### iam_resource_access
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 应用显式提供 |
+| `resource_kind` | TEXT | 否 | 应用显式提供 |
+| `resource_id` | TEXT | 否 | 应用显式提供 |
+| `owner_principal_id` | TEXT | 否 | 应用显式提供 |
+| `visibility` | TEXT | 否 | private |
+| `etag` | BIGINT | 否 | 1 |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`workspace_id, resource_kind, resource_id`。
+FK：`workspace_id` → `iam_workspace_bindings(workspace_id)`。
+FK：`owner_principal_id` → `iam_principals(principal_id)`。
+CHECK：`resource_kind IN ('trace','asset','run','snapshot','artifact')`。
+CHECK：`visibility IN ('private','group')`。
+CHECK：`length(resource_id) > 0`。
+CHECK：`etag > 0 AND etag <= 9223372036854775807`。
+CHECK：`created_at_ms >= 0`。
+CHECK：`updated_at_ms >= 0`。
+INDEX `idx_iam_resource_access_owner`：`owner_principal_id,workspace_id,resource_kind`。
+INDEX `idx_iam_resource_access_visibility`：`workspace_id,visibility,resource_kind`。
+
+### iam_resource_grants
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 应用显式提供 |
+| `resource_kind` | TEXT | 否 | 应用显式提供 |
+| `resource_id` | TEXT | 否 | 应用显式提供 |
+| `grantee_principal_id` | TEXT | 否 | 应用显式提供 |
+| `created_at_ms` | BIGINT | 否 | 应用显式提供 |
+
+PK：`workspace_id, resource_kind, resource_id, grantee_principal_id`。
+FK：`workspace_id,resource_kind,resource_id` → `iam_resource_access(workspace_id,resource_kind,resource_id)`。
+FK：`grantee_principal_id` → `iam_principals(principal_id)`。
+CHECK：`created_at_ms >= 0`。
+INDEX `idx_iam_resource_grants_principal`：`grantee_principal_id,workspace_id,resource_kind`。
+
+### IAM 最后 Owner 与并发规则
+
+1. 有效 Owner = principal.status=active 且 membership.status=active 且 role=owner。活动组中的最后一个有效 Owner 不能被降级、禁用、删成员，也不能通过禁用/删除 principal 间接移除。
+2. 初始 INSERT 活动组时允许暂时没有 Owner，便于同一短事务内 bootstrap 组和首位成员；服务不得在 bootstrap 未完成时发布可用组。已禁用组可以移除成员，但重新激活必须至少有一个有效 Owner。
+3. Membership 的 group_id/principal_id 不可原地更换；换组或换人是删除/新增，并执行相同的 Owner 与权限校验。
+4. Membership INSERT/UPDATE/DELETE 及 principal 状态变化由数据库触发器自动增加相关 group.policy_revision。普通代码不再次盲目递增同一政策版本；etag 用于单成员 CAS，policy_revision 用于整个组权限版本失效。
+5. PG/openGauss 触发器先 UPDATE 组行增加 policy_revision，形成组级写锁，再检查有效 Owner；principal 涉及多个组时按 group_id 排序更新，减少死锁。并发 READ COMMITTED 操作依次检查最新状态；REPEATABLE READ 下冲突更新应触发序列化失败而不是基于旧快照双双删除 Owner。适配器需要有限重试，不能把失败当完成。SQLite 通过短写事务串行化。
+6. 组状态、主体状态、成员角色、成员状态和 token/session 版本都要在认证/授权路径重新验证；不能把曾经获取的 AuthContext 当永久有效授权。资源授权须读取当前 ACL/etag，修改 grant 或 visibility 后不能仅依赖旧的组 policy_revision 缓存放行。
+
+### IAM Workspace 与资源一致性
+
+- iam_workspace_bindings 的 group/personal 所有权必须满足 XOR；owner_type、owner_group_id、owner_principal_id、workspace_id 不可 UPDATE，也不允许 DELETE 后重建绕过。本批不支持所有权转移；未来需要显式迁移协议。binding_revision 用于 CAS 和缓存失效，不允许跳过源/目标权限验证。
+- iam_resource_access 的 workspace 必须已绑定；种类限制为 trace/asset/run/snapshot/artifact。resource_id 是业务引用，不对 CH Trace 创建跨库外键；受控业务操作先在 OLTP 写入或检查 ACL，再通过 Outbox/物化链路处理事实。
+- iam_resource_grants 复合 FK 必须命中同一 workspace/kind/id 的已注册资源，grantee 必须是存在的 principal；SQL FK 不等于调用者有权授予权限。是否允许组外分享、Owner/Admin 对 private 资源的管理规则、能力边界由授权服务统一执行，不因知道资源 ID 自动获得访问权。
+- API 凭据的 workspace FK 仅证明 workspace 存在；发行和使用还必须检查对应 binding 及当前有效主体/组权限。禁用成员后不会因历史 token 或 grant 自动保留访问。
+- 用户组不直接写 CH 的 WHERE user 字符串；查询服务从当前授权上下文计算 workspace 和资源过滤范围，正文、快照、Artifact 必须经过相同校验。
+
+### IAM SQL 与验证入口
+
+- [IAM 机器目录](../../../services/storage/schema/iam-catalog.json)
+- [SQLite 002](../../../services/storage/schema/sqlite/002_iam.sql)
+- [PostgreSQL 002](../../../services/storage/schema/postgresql/002_iam.sql)
+- [openGauss 002](../../../services/storage/schema/opengauss/002_iam.sql)
+- `python3 -m unittest discover -s services/storage/tests -p test_iam_schema.py -v`：SQLite 真实引擎与 001 校验和回归。
+- `STORAGE_TEST_PG_CONTAINER=<专用 PG 容器> python3 -m unittest discover -s services/storage/tests -p test_iam_schema.py -v`：可选真实 PG 合同测试，使用隔离 Schema 与 ROLLBACK；不修改默认生产库。
+- openGauss SQL 单独维护；没有目标发行版本实机结果就不标记认证。并发 Owner 操作、撤销缓存失效和真实 PG 运行时测试由对应验证层报告，静态目录与 SQLite 测试不代替它们。
