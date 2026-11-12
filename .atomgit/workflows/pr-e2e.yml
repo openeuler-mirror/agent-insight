@@ -69,6 +69,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-build
           if-no-files-found: error
           compression-level: 0
@@ -80,6 +81,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-build
           if-no-files-found: error
           path: |
@@ -145,6 +147,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-ut
           if-no-files-found: error
           path: |
@@ -205,6 +208,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-001
           if-no-files-found: error
           path: |
@@ -265,6 +269,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-002
           if-no-files-found: error
           path: |
@@ -325,6 +330,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-003
           if-no-files-found: error
           path: |
@@ -385,6 +391,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-004
           if-no-files-found: error
           path: |
@@ -445,6 +452,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-005
           if-no-files-found: error
           path: |
@@ -552,6 +560,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: pr-e2e
           if-no-files-found: error
           path: |

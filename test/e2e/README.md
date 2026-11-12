@@ -116,7 +116,7 @@ PR 自动检查从 PR 的“检查”标签进入，点击左侧流水线记录�
 
 本地执行 `node test/e2e/control/actions-pr-comment.mjs --repository owner/repo` 默认只预览；显式 `--publish` 才允许写入。可使用 `PR_COMMENT_PR_NUMBER`、`PR_COMMENT_RUN_ID`、`PR_COMMENT_DRY_RUN` 传入上述筛选，`PR_COMMENT_DRY_RUN=true` 始终禁止写入。它们是回写流程参数，与模型配置和已有本地/Webhook/daily 执行入口无关。
 
-已有 PR 重新触发时，若源分支已包含本版 workflow，可从“检查”打开运行详情，使用右上角“重新运行所有 Jobs”。[平台重跑说明](https://docs.gitcode.com/docs/help/home/org_project/pipeline/running-pipelines/rerun-failed-jobs/)规定重跑沿用原提交和原 workflow，不读取最新配置；本套多 Job 存在编译制品依赖，仅重跑失败 Job 的制品继承尚未实测，优先整轮重跑。旧 PR 尚未包含本次 CI 改动时，先将最新 `master` 同步到其源分支，再推送以触发 `pull_request.update`；普通 `pull_request` 读取源分支中的 workflow。手动 Run workflow 用于分支验证，当前未配置 `/retest` 评论触发。
+已有 PR 重新触发时，若源分支已包含本版 workflow，可从“检查”打开运行详情，使用右上角“重新运行所有 Jobs”。[平台重跑说明](https://docs.gitcode.com/docs/help/home/org_project/pipeline/running-pipelines/rerun-failed-jobs/)规定重跑沿用原提交和原 workflow，不读取最新配置；本套多 Job 存在编译制品依赖，仅重跑失败 Job 的制品继承尚未实测，优先整轮重跑。旧 PR 尚未包含本次 CI 改动时，先将最新 `master` 同步到其源分支，再推送以触发 `pull_request.update`；普通 `pull_request` 读取源分支中的 workflow。手动 Run workflow 用于分支验证，当前未配置 `/retest` 评论触发。 所有上传步骤显式设置 `overwrite: true`，避免原地重跑因同名制品已存在而失败；同一运行 ID 下的制品展示本次执行结果。平台可能不递增 `attempt`，结果评论同时核对实际开始时间，旧制品不会作为当前重跑证据。
 
 失败时仍尝试上传 `report.json`、`report.html`、`summary.md` 并写入 Job Summary。`private-*`、原始浏览器记录、数据库和工作区磁盘不上传；环境准备阶段尚未生成报告时，查看失败步骤日志。平台强制超时/取消时不保证归档步骤能运行，任务仍不得视为通过。Actions Job 成功不等于已配置强制合入规则，需维护者在仓库规则中将该检查设为必需项。
 
