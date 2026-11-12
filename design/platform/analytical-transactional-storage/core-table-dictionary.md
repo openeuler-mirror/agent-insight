@@ -4,6 +4,257 @@
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
+## 表关系总览与阅读顺序
+
+这44张表对应**31张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+
+```mermaid
+flowchart TB
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共31表]
+    BASE[空间与迁移版本 2表]
+    IAM[账号、组与授权 10表]
+    ASSET[资产与版本 6表]
+    RUN[运行、任务、结果控制 6表]
+    SUPPORT[投递、路由、制品、维护 7表]
+    IAM -->|决定访问空间与资源| BASE
+    BASE -->|隔离| ASSET
+    ASSET -->|冻结版本输入| RUN
+    RUN -->|同事务登记待投递事件| SUPPORT
+  end
+  subgraph CH[ClickHouse，共13表]
+    TRACE[Trace / Span / 正文 / 事件与关系 6表]
+    DATA[固定快照 / 数据集 3表]
+    EVAL[评测结果 / 指标 / 发布 4表]
+    TRACE -.->|版本化输入| DATA
+    DATA -.->|评测输入| EVAL
+  end
+  SUPPORT -.->|路由、清单及计划中的可靠物化| CH
+  ASSET -.->|数据集与评估器版本| DATA
+  RUN -.->|run / result / selection 标识| EVAL
+```
+
+**三个关键区别：**
+
+- 事务库的PK保证一行身份唯一，UK是额外唯一性约束，IDX用于特定查询；PK/UK本身也有索引，不写额外IDX不等于完全没有索引。
+- ClickHouse下面列的是`ORDER BY`排序/替换身份键，由它形成稀疏主索引。它不提供事务库那样的唯一约束；同键旧版本可同时存在，读取最新态需`FINAL`或等价去重策略。13表都用`ReplacingMergeTree(version)`，按日期字段的`toYYYYMM(...)`月分区。
+- 后续关系图中，**实线是已存在的数据库FK，方向为子表→被引用表；虚线是应用层逻辑关联**。跨库无外键；一个相同ID不会自动触发关联检查、级联删除或跨库JOIN。
+
+### 事务库：每张表存什么、主键与索引
+
+以下`W`均为完整字段`workspace_id`，不是省略租户隔离。业务表大多以`(W,实体ID)`为主键；账号、组、会话/凭据等IAM全局对象使用各自全局ID。`work_items`等表几组看似重复的复合UK是外键引用目标，让数据库能直接校验run/case/slot同源；它们也会增加写入维护成本。`UK`列出全部额外唯一约束；`IDX`列出当前DDL的全部显式二级索引及查询用途。列顺序与实际DDL一致，“查询用途”不代表已经跑过容量验收。
+
+#### 空间与迁移版本（2张）
+
+| 表 | 一行存什么 | PK | UK / 显式IDX及用途 |
+|---|---|---|---|
+| `schema_meta` | 已应用迁移版本、DDL校验和与应用时间；不是业务数据。 | `(version)` | 无额外UK/IDX；按PK查找 |
+| `workspaces` | 数据隔离空间及启停状态；用户组和个人可各拥有空间。 | `(W)` | 无额外UK/IDX；按PK查找 |
+
+#### 账号、用户组与授权（10张）
+
+| 表 | 一行存什么 | PK | UK / 显式IDX及用途 |
+|---|---|---|---|
+| `iam_principals` | 稳定账号主体、登录名、启停状态及认证版本；不存明文密码。 | `(principal_id)` | UK`(normalized_login_name)` |
+| `iam_password_credentials` | 每账号一份加盐密码派生值、算法参数及改密版本。 | `(principal_id)` | 无额外UK/IDX；按PK查找 |
+| `iam_api_credentials` | 采集/自动化Key摘要，固定账号、workspace、能力和有效期。 | `(credential_id)` | UK`(token_hash)`<br>IDX`(principal_id,W,revoked_at_ms)`：按用户/空间查询Key状态<br>IDX`(expires_at_ms)`：扫描过期Key |
+| `iam_external_identities` | 外部登录provider/issuer/subject到账号的绑定。 | `(external_identity_id)` | UK`(provider,issuer,subject)`<br>IDX`(principal_id)`：查用户外部绑定 |
+| `iam_sessions` | 登录会话摘要、主体认证版本、有效期与撤销时间。 | `(session_id)` | UK`(session_token_hash)`<br>IDX`(principal_id,revoked_at_ms)`：查用户会话状态<br>IDX`(expires_at_ms)`：扫描过期会话 |
+| `iam_groups` | 用户组名称、状态、创建人和权限策略版本。 | `(group_id)` | UK`(group_key)`<br>IDX`(created_by)`：按创建人查组 |
+| `iam_group_memberships` | 一个用户在一个组的角色、状态和CAS版本。 | `(group_id,principal_id)` | IDX`(principal_id,status,group_id)`：查用户所属有效组<br>IDX`(group_id,role,status)`：检查组Owner |
+| `iam_workspace_bindings` | workspace属于哪个组或个人；两类所有权互斥。 | `(W)` | IDX`(owner_group_id)`：查组下空间<br>IDX`(owner_principal_id)`：查个人空间 |
+| `iam_resource_access` | Trace/资产/运行/快照/制品的创建人及共享可见性。 | `(W,resource_kind,resource_id)` | IDX`(owner_principal_id,W,resource_kind)`：查本人资源<br>IDX`(W,visibility,resource_kind)`：查空间共享资源 |
+| `iam_resource_grants` | 某资源明确共享给哪些用户；不授予编辑权。 | `(W,resource_kind,resource_id,grantee_principal_id)` | IDX`(grantee_principal_id,W,resource_kind)`：查分享给某用户的资源 |
+
+#### 可版本化资产（6张）
+
+| 表 | 一行存什么 | PK | UK / 显式IDX及用途 |
+|---|---|---|---|
+| `asset_identities` | Agent/Skill/Evaluator/Dataset/Benchmark的稳定身份、类型和名称。 | `(W,asset_id)` | UK`(W,kind,name)`<br>IDX`(W,kind,created_at_ms)`：按空间/资产类型列出新建资产 |
+| `asset_releases` | 某资产一个不可变发布版本的内容hash与manifest引用。 | `(W,release_id)` | UK`(W,asset_id,version_label)`<br>UK`(W,asset_id,release_id)`<br>IDX`(W,asset_id,created_at_ms)`：按资产列出版本 |
+| `asset_drafts` | 资产某分支的可编辑草稿，含基准release和编辑版本。 | `(W,draft_id)` | UK`(W,asset_id,branch_name)` |
+| `asset_release_dependencies` | 某release依赖哪些精确release及依赖角色。 | `(W,release_id,role,dependency_release_id)` | IDX`(W,dependency_release_id)`：反查哪些版本依赖当前版本 |
+| `asset_release_seals` | release已封存的凭证，冻结依赖数量和资产归属。 | `(W,release_id)` | UK`(W,asset_id,release_id)` |
+| `asset_aliases` | 某资产latest/stable等别名当前指向哪个封存版本。 | `(W,asset_id,alias)` | 无额外UK/IDX；按PK查找 |
+
+#### 运行、任务与结果控制（6张）
+
+| 表 | 一行存什么 | PK | UK / 显式IDX及用途 |
+|---|---|---|---|
+| `runs` | 一次实验/评测运行的冻结计划、样本分母与运行状态。 | `(W,run_id)` | IDX`(W,status,created_at_ms)`：按状态查运行 |
+| `run_inputs` | run每个输入槽采用哪个精确release及配置hash。 | `(W,run_id,slot)` | 无额外UK/IDX；按PK查找 |
+| `work_items` | 待执行任务；冻结run/case/phase/evaluator_slot，保存调度状态。 | `(W,work_item_id)` | UK`(W,run_id,case_key,phase,evaluator_slot)`<br>UK`(W,run_id,work_item_id)`<br>UK`(W,run_id,work_item_id,case_key)`<br>UK`(W,run_id,work_item_id,case_key,evaluator_slot)`<br>IDX`(W,status,next_attempt_at_ms,priority)`：查可领取任务候选<br>IDX`(W,run_id,status)`：查运行内任务进度 |
+| `work_attempts` | 任务每次尝试的worker、租约、fence、起止和错误。 | `(W,attempt_id)` | UK`(W,work_item_id,attempt_no)`<br>UK`(W,work_item_id,fence)`<br>UK`(W,work_item_id,attempt_id)`<br>IDX`(W,status,lease_until_ms)`：扫描到期租约<br>IDX`(W,work_item_id,attempt_no)`：查任务尝试历史 |
+| `result_receipts` | 回调接收凭证：归属attempt/case/slot、幂等键、result_id与制品hash。 | `(W,receipt_id)` | UK`(W,attempt_id,receipt_key)`<br>UK`(W,result_id)`<br>UK`(W,run_id,result_id)`<br>UK`(W,run_id,case_key,evaluator_slot,result_id)`<br>IDX`(W,state,created_at_ms)`：查待索引回执 |
+| `result_selections` | 每run/case/evaluator_slot当前选用哪个已接收结果。 | `(W,run_id,case_key,evaluator_slot)` | 无额外UK/IDX；按PK查找 |
+
+#### 投递、路由、制品与维护（7张）
+
+| 表 | 一行存什么 | PK | UK / 显式IDX及用途 |
+|---|---|---|---|
+| `outbox_events` | 与事务状态同提交的待投递事件、重试和租约。 | `(W,event_id)` | UK`(W,aggregate_id,aggregate_revision,event_type)`<br>IDX`(state,next_attempt_at_ms,created_at_ms)`：扫描待重试事件<br>IDX`(W,aggregate_id,aggregate_revision)`：按实体修订重放 |
+| `inbox_receipts` | 消费者已处理的source/event及hash，用于幂等判定。 | `(W,source_id,event_id)` | 无额外UK/IDX；按PK查找 |
+| `trace_locators` | 内部Trace ID、原生ID/来源/代次、日期路由及删除状态。 | `(W,trace_id)` | UK`(W,source_namespace,native_trace_id,incarnation)`<br>IDX`(W,trace_bucket,state)`：按空间/日期/状态查路由 |
+| `snapshot_manifests` | 固定Trace输入快照的清单引用、hash、节点数和水位。 | `(W,snapshot_id)` | IDX`(W,state,created_at_ms)`：按状态列出快照 |
+| `artifact_metadata` | 制品位置、namespace、hash、大小、类型及发布状态；不是文件正文。 | `(W,artifact_id)` | UK`(W,namespace,object_ref)`<br>IDX`(W,state,created_at_ms)`：按状态列出制品 |
+| `deletion_requests` | 按资源/代次登记的删除请求、屏障版本和进度。 | `(W,deletion_id)` | UK`(W,resource_kind,resource_id,incarnation)`<br>IDX`(W,state,created_at_ms)`：扫描删除任务 |
+| `migration_checkpoints` | 旧表迁移进度、源指纹、最后处理键及目标水位。 | `(W,migration_id,source_table)` | 无额外UK/IDX；按PK查找 |
+
+### ClickHouse：事实、排序键、分区与版本
+
+下表`ORDER BY`为完整有序键。日期bucket不仅用于分区，也属于替换身份；实体的bucket应固定，不能因晚到更新而换bucket。当前DDL未另建显式跳数索引、Projection或物化视图，不把字段名出现在表中当作已有专项索引。
+
+| 表 | 一行存什么 | ORDER BY | 月分区字段 | 替换版本 |
+|---|---|---|---|---|
+| `obs_trace_current` | 一个Trace的最新摘要：状态、时间、Span数、Token及维度。 | `(W,trace_bucket,trace_id)` | `trace_bucket` | `revision` |
+| `obs_span_current` | 一个Span的最新结构/指标：父子关系、模型/工具、耗时、Token、正文revision。 | `(W,trace_bucket,trace_id,span_id)` | `trace_bucket` | `revision` |
+| `obs_payload_chunks` | 该正文版本的某section第N块UTF-8正文及hash。 | `(W,trace_bucket,trace_id,span_id,payload_revision,section,chunk_no)` | `trace_bucket` | `retry_version` |
+| `obs_payload_manifests` | 某Span某正文版本的section/块数/字节数/hash完整性清单。 | `(W,trace_bucket,trace_id,span_id,payload_revision)` | `trace_bucket` | `retry_version` |
+| `obs_events` | Trace内的单个观测事件、来源序号与内容引用。 | `(W,trace_bucket,trace_id,event_id)` | `trace_bucket` | `retry_version` |
+| `obs_entity_relations` | 协作、父子以外的实体关联事实及其修订。 | `(W,trace_bucket,relation_id)` | `trace_bucket` | `revision` |
+| `snapshot_nodes` | 固定快照的单个节点，锁定Span和正文版本，避免受最新态改写影响。 | `(W,snapshot_bucket,snapshot_id,node_id)` | `snapshot_bucket` | `retry_version` |
+| `dataset_sample_revisions` | 样本的不可变修订：case、公共/私有内容引用、字段Schema和来源快照。 | `(W,sample_bucket,dataset_id,sample_revision_id)` | `sample_bucket` | `retry_version` |
+| `dataset_release_members` | 某数据集release按ordinal固定包含哪些样本修订。 | `(W,release_bucket,dataset_release_id,ordinal)` | `release_bucket` | `retry_version` |
+| `eval_result_facts` | 一个评测结果的结论、摘要、证据、使用的Evaluator版本及输入快照。 | `(W,result_bucket,result_id)` | `result_bucket` | `retry_version` |
+| `eval_metric_facts` | 某结果的某指标/维度值，含类型、单位、方法及证据引用。 | `(W,result_bucket,result_id,metric_definition_release_id,metric_key,dimension_key)` | `result_bucket` | `retry_version` |
+| `eval_result_selection_current` | 事务库结果选择的分析侧最新投影；使用selection_revision。 | `(W,run_bucket,run_id,case_key,evaluator_slot)` | `run_bucket` | `selection_revision` |
+| `eval_publication_members` | 一次分析发布批次冻结采用哪些结果/裁决及排除原因。 | `(W,publication_bucket,publication_id,ordinal)` | `publication_bucket` | `retry_version` |
+
+### 关联图一：账号凭据与组内资源权限
+
+账号认证关系与组内授权分开看，避免将“已登录”误当成“能访问所有空间”。
+
+```mermaid
+flowchart LR
+  PW["iam_password_<br/>credentials"] -->|principal_id| P[iam_principals]
+  SESSION[iam_sessions] -->|principal_id| P
+  API[iam_api_credentials] -->|principal_id| P
+  EXT["iam_external_<br/>identities"] -->|principal_id| P
+  API -->|workspace_id| W[workspaces]
+```
+
+```mermaid
+flowchart TB
+  MEMBER["iam_group_<br/>memberships"] -->|principal_id| P[iam_principals]
+  MEMBER -->|group_id| G[iam_groups]
+  G -->|created_by| P
+  BIND["iam_workspace_<br/>bindings"] -->|组空间：owner_group_id| G
+  BIND -->|个人空间：owner_principal_id| P
+  BIND -->|workspace_id| W[workspaces]
+  ACL[iam_resource_access] -->|workspace_id| BIND
+  ACL -->|owner_principal_id| P
+  SHARE[iam_resource_grants] -->|同空间/kind/resource| ACL
+  SHARE -->|grantee_principal_id| P
+  ACL -.->|resource_kind + resource_id| RESOURCE["Trace / Asset / Run<br/>Snapshot / Artifact"]
+```
+
+一个用户可在多个组，一个组可有多个workspace；workspace只能是组/个人所有权之一。组管理员读当前组全部资源，不通过“组员用户名列表”筛选历史Trace。成员退出后数据仍留原组；普通成员按资源归属/明确共享读取。ACL到业务资源是多态逻辑引用，数据库FK并不检查目标资源存在；业务写入与归属注册须由服务同事务处理。
+
+### 关联图二：资产身份、草稿、发布、依赖与别名
+
+```mermaid
+flowchart TB
+  D[asset_drafts] -->|asset_id，同空间| I[asset_identities]
+  D -->|base_release_id，同空间同资产| R[asset_releases]
+  R -->|asset_id，同空间| I
+  DEP["asset_release_<br/>dependencies"] -->|release_id，同空间| R
+  DEP -->|dependency_release_id| R
+  S["asset_release_<br/>seals"] -->|release_id，同空间同资产| R
+  A[asset_aliases] -->|asset_id，同空间| I
+  A -->|release_id，同空间同资产| S
+```
+
+Agent、Skill、Evaluator、Dataset、Benchmark共用这6表，通过`asset_identities.kind`区分。身份不变、每次发布新增release；草稿可CAS编辑；依赖先写完再封存；`latest`等别名只能指向**同空间、同资产的封存版本**。例如Evaluator v1/v2不是两张表，而是一个资产身份下的两个release；Benchmark扩展的版本内容放manifest及精确依赖，后续业务协议仍需接入。
+
+### 关联图三：运行、任务尝试、回执与结果选择
+
+```mermaid
+flowchart TB
+  INPUT[run_inputs] -->|run_id，同空间| RUN[runs]
+  INPUT -->|release_id，同空间| SEAL["asset_release_<br/>seals"]
+  RUN -->|dataset_release_id，可空| SEAL
+  WORK[work_items] -->|run_id，同空间| RUN
+  ATTEMPT[work_attempts] -->|work_item_id，同空间| WORK
+  RECEIPT[result_receipts] -->|work_item_id + attempt_id| ATTEMPT
+  RECEIPT -->|复合FK：run / item<br/>case / slot同源| WORK
+  SELECT[result_selections] -->|run_id，同空间| RUN
+  SELECT -->|复合FK：run / case<br/>slot / result| RECEIPT
+  RECEIPT -.->|result_id：分析事实| FACT[eval_result_facts]
+  SELECT -.->|selection_revision：分析投影| CURRENT["eval_result_selection_<br/>current"]
+```
+
+`run`是整批执行，`work_item`是一个case/phase/evaluator槽的任务，`attempt`是实际重试。回执不等于最终选中的结果，也不等于已进入CH或已发布。复合外键禁止把另一个run/case/槽的结果选进来；fence/租约校验进一步拒绝过期worker回调。`outbox_events`与回执事务一起写，事件投递与CH物化为后续链路，图中的虚线不代表已经自动同步。
+
+### 关联图四：Trace、Span、正文与固定快照
+
+```mermaid
+flowchart TB
+  subgraph CONTROL[事务控制面]
+    LOC[trace_locators]
+    SNAP[snapshot_manifests]
+    SNAP -->|workspace_id + trace_id，可空| LOC
+  end
+  subgraph FACTS[ClickHouse：本区域所有连线均为逻辑关联]
+    TRACE[obs_trace_current]
+    SPAN[obs_span_current]
+    MANIFEST["obs_payload_<br/>manifests"]
+    CHUNK[obs_payload_chunks]
+    NODE[snapshot_nodes]
+    SPAN -.->|Trace键| TRACE
+    SPAN -.->|parent_span_id| SPAN
+    SPAN -.->|Span键 + payload_revision| MANIFEST
+    CHUNK -.->|bundle键| MANIFEST
+    NODE -.->|固定正文版本| MANIFEST
+  end
+  LOC -.->|Trace键| TRACE
+  SNAP -.->|snapshot_id，清单带路由| NODE
+```
+
+- 图中Trace键=`(workspace_id,trace_bucket,trace_id)`；Span键在其后增加`span_id`；bundle键继续增加`payload_revision`。块在bundle键后增加`section,chunk_no`。
+- Trace摘要一行；每个Span的最新结构单独一行。单Span详情先查授权和事务路由，再精确读取`W + trace_bucket + trace_id + span_id`，不必取整个Trace JSON。
+- 大正文从结构中拆出。Span用`payload_revision`指向bundle；清单和块有相同的`W + trace_bucket + trace_id + span_id + payload_revision`，块再带section/chunk_no。按需取某Span的input/output某页，不拼接不同revision。
+- 正文`payload_revision`是内容hash；Span的`revision`是递增状态版本；正文重试的`retry_version`用于物理去重，三者含义不同。
+- `obs_events`按Trace键关联事件；`parent_span_id`是同Trace内逻辑边，`obs_entity_relations`可表达其他实体关系，不能假定它的所有source/target都一定是Span。它们没有数据库FK；缺失父节点、乱序到达、跨实体类型必须由物化/读取协议处理。
+- `snapshot_nodes`固定输入所需的节点内容和正文版本，不依赖`current`表永远保留旧版本。快照构建/发布业务仍待后续接管。
+
+### 关联图五：多版本数据集、评测事实与发布口径
+
+```mermaid
+flowchart TB
+  RELEASE[asset_releases：Dataset / Evaluator / Benchmark]
+  RUN[runs / run_inputs]
+  MEMBERS["dataset_release_<br/>members"] -.->|dataset_release_id| RELEASE
+  MEMBERS -.->|sample_bucket + sample_revision_id<br/>dataset_id取release所属资产| SAMPLE["dataset_sample_<br/>revisions"]
+  SAMPLE -.->|source_snapshot_id，可空| SNAP[snapshot_manifests / snapshot_nodes]
+  RUN -->|经run_inputs外键冻结封存release| SEAL["asset_release_<br/>seals"]
+  SEAL -->|复合外键| RELEASE
+  RESULT[eval_result_facts] -.->|run_id| RUN
+  RESULT -.->|evaluator_release_id| RELEASE
+  RESULT -.->|input_snapshot_id| SNAP
+  METRIC[eval_metric_facts] -.->|W + result_bucket<br/>+ result_id| RESULT
+  METRIC -.->|metric_definition_release_id| DEF[指标定义注册与版本协议：后续实现]
+  CHOICE["eval_result_selection_<br/>current"] -.->|选中的result_id| RESULT
+  PUB["eval_publication_<br/>members"] -.->|冻结的run/case/slot/result| RESULT
+```
+
+图中“指标定义注册与版本协议”是未来控制面能力，当前44表内尚无独立指标定义注册表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
+
+跨CH表读取还要知道目标的bucket；仅有`result_id`、`snapshot_id`或`release_id`通常不足以做精确分区读取。清单/发布事件需要携带路由，并校验workspace、内容hash、精确版本和可见性。此批表结构不提供跨库FK或全域ID到bucket的自动解析器，相关领域接管时须落实，不能靠全库扫描补上协议。
+
+### 索引如何服务实际查询
+
+| 操作 | 使用的键/索引 | 实际作用与当前边界 |
+|---|---|---|
+| 登录 | `iam_principals`的login唯一键；凭据/会话摘要唯一键 | 精确定位主体或令牌，状态/版本/到期仍需验证 |
+| 查某组全部workspace | `iam_workspace_bindings(owner_group_id)` | 在事务库计算授权范围；CH不会自行推导组成员权限 |
+| 查某资产历史版本 | `asset_releases(W,asset_id,created_at_ms)` | 不扫描其他资产；版本标签UK防止同资产标签重复 |
+| 找可领取任务 | `work_items(W,status,next_attempt_at_ms,priority)` | 缩小候选；当前SQL完整排序还包含created_at_ms/work_item_id，不声称此索引覆盖全部排序 |
+| 找过期租约 | `work_attempts(W,status,lease_until_ms)` | 找到期候选；fence/终态仍在事务中校验 |
+| Outbox重试 | `outbox_events(state,next_attempt_at_ms,created_at_ms)` | 找待投递候选；索引不是消息已可靠交付的证据 |
+| 取单个Span或正文块 | CH排序键前缀`W + bucket + trace + span` | 结合日期分区和稀疏索引缩小读取范围；不是事务库逐行B-tree查找 |
+| 按时间/模型/状态分析 | CH月分区、`FINAL`后过滤和列式扫描 | 当前model/status/started_at没有额外专项索引；过滤可能仍扫描选定workspace和日期内较多数据，需真实负载再设计Projection/汇总 |
+
+所有事务FK完整列名、ON DELETE规则、CHECK和各字段类型继续见下方逐表字典；图示省略了大部分业务表到`workspaces`的重复FK，不能据此省略workspace条件。
+
 ## 范围与未实现项
 
 - 本轮事务表：`schema_meta`, `workspaces`, `asset_identities`, `asset_releases`, `asset_drafts`, `asset_release_dependencies`, `asset_release_seals`, `asset_aliases`, `runs`, `run_inputs`, `work_items`, `work_attempts`, `result_receipts`, `result_selections`, `outbox_events`, `inbox_receipts`, `trace_locators`, `snapshot_manifests`, `artifact_metadata`, `deletion_requests`, `migration_checkpoints`。

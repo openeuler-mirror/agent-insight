@@ -7,6 +7,8 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 `services/storage/` 是 Python 3.11+ 独立存储基础库。SQLite/IAM/ClickHouse 使用标准库；PG 与 openGauss 通过显式 DB-API 连接工厂接入。现有 Next.js/Prisma 应用尚未接管这些入口，执行离线命令不会切换运行库。
 
+表的职责、主键/索引速查与七张总览/关联图见[核心表关系导读](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序)，包括IAM、版本资产、任务结果、Trace正文及数据集/评测。
+
 ## 已实现范围
 
 - `001_core.sql`：21 张事务表、13 张 ClickHouse 表；原始字节与 checksum 保持不变。
