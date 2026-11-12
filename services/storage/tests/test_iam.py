@@ -73,6 +73,16 @@ class IAMTests(unittest.TestCase):
         with self.store.read_transaction() as con:
             self.assertEqual(con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE resource_id='alice-trace'").fetchone()[0],'alice')
 
+    def test_private_ingest_resource_creation_preserves_policy_cursor_fingerprint(self):
+        before=self.iam.scope(self.tokens['alice']).fingerprint
+        with self.store.transaction() as con:
+            self.iam._record_resource(con,'w','trace','fresh-private','alice','private',invalidate_policy=False)
+        self.assertEqual(before,self.iam.scope(self.tokens['alice']).fingerprint)
+        self.iam.authorize(self.tokens['alice'],'w','read','trace','fresh-private')
+        with self.assertRaises(self.api.Forbidden): self.iam.authorize(self.tokens['bob'],'w','read','trace','fresh-private')
+        with self.store.transaction() as con:
+            with self.assertRaises(ValueError): self.iam._record_resource(con,'w','trace','unsafe-group','alice','group',invalidate_policy=False)
+
     def test_password_login_normalization_and_no_plaintext(self):
         token=self.iam.login(' ALICE ',PASSWORD)
         self.assertEqual(self.iam.scope(token).principal_id,'alice')

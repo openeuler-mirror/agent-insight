@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import uuid
+from services.storage.migrations import load_migrations
 
 
 class RelationalUnitTests(unittest.TestCase):
@@ -128,7 +129,7 @@ class _RelationalControlContracts:
         self.store.create_workspace('changed','Changed')
         with self.assertRaises(StorageError): self.store.migrate(backup_manifest=manifest)
         manifest['source_evidence']=self.store.source_evidence()
-        self.assertEqual(self.store.migrate(backup_manifest=manifest)['current_version'],3)
+        self.assertEqual(self.store.migrate(backup_manifest=manifest)['current_version'],len(load_migrations(self.backend)))
         missing=copy.deepcopy(manifest); missing.pop('operator')
         with self.assertRaises(StorageError): self.store.migrate(backup_manifest=missing)
 
@@ -217,7 +218,7 @@ class _RelationalControlContracts:
             original_run=tuple(con.execute('SELECT * FROM runs').fetchone())
         manifest=self._external_manifest(store)
         result=store.migrate(backup_manifest=manifest)
-        self.assertEqual(result['current_version'],3)
+        self.assertEqual(result['current_version'],len(load_migrations(self.backend)))
         with store.read_transaction() as con:
             self.assertEqual(tuple(con.execute('SELECT * FROM schema_meta WHERE version=1').fetchone()),original_marker)
             self.assertEqual(tuple(con.execute('SELECT * FROM workspaces').fetchone()),original_workspace)
@@ -272,7 +273,7 @@ class _RelationalControlContracts:
         self.assertEqual(store.migration_plan()['current_version'],2)
         self.assertEqual(len(store.source_evidence()['history']),2)
         manifest=self._external_manifest(store)
-        self.assertEqual(store.migrate(backup_manifest=manifest)['current_version'],3)
+        self.assertEqual(store.migrate(backup_manifest=manifest)['current_version'],len(load_migrations(self.backend)))
         with store.read_transaction() as con:
             for name,rows in before.items():
                 actual=[tuple(row) for row in con.execute('SELECT * FROM '+name)]
@@ -328,7 +329,7 @@ class _RelationalControlContracts:
         store=self._baseline_001_store(version=2)
         store.create_workspace(' padded ','Preserve original identifier')
         manifest=self._external_manifest(store)
-        self.assertEqual(store.migrate(backup_manifest=manifest)['current_version'],3)
+        self.assertEqual(store.migrate(backup_manifest=manifest)['current_version'],len(load_migrations(self.backend)))
         with store.read_transaction() as con:
             self.assertEqual(con.execute('SELECT workspace_id FROM workspaces').fetchone()[0],' padded ')
             self.assertEqual(tuple(con.execute("SELECT workspace_id,project_id FROM project_workspaces WHERE workspace_id=' padded '").fetchone()),(' padded ','default'))

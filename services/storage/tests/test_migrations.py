@@ -250,7 +250,7 @@ class ProjectMigrationTests(unittest.TestCase):
                 store.initialize()
                 self.assertEqual(store.migration_plan()['current_version'],version)
                 result=store.migrate(backup_path=self.directory/f'before-{version}.db')
-                self.assertEqual(result['current_version'],3)
+                self.assertEqual(result['current_version'],len(self.api.load_migrations('sqlite')))
                 with store.read_transaction() as con:
                     for name,rows in before.items():
                         actual=[tuple(r) for r in con.execute('SELECT * FROM '+name)]
@@ -287,7 +287,7 @@ class ProjectMigrationTests(unittest.TestCase):
     def test_legacy_workspace_identifier_backfills_without_rewriting(self):
         store=self.old_store(2);store.create_workspace(' padded ','Legacy padded ID')
         result=store.migrate(backup_path=self.directory/'preserved-id.db')
-        self.assertEqual(result['current_version'],3)
+        self.assertEqual(result['current_version'],len(self.api.load_migrations('sqlite')))
         with store.read_transaction() as con:
             self.assertEqual(con.execute("SELECT workspace_id FROM workspaces WHERE name='Legacy padded ID'").fetchone()[0],' padded ')
             self.assertEqual(tuple(con.execute("SELECT workspace_id,project_id FROM project_workspaces WHERE workspace_id=' padded '").fetchone()),(' padded ','default'))
@@ -295,7 +295,7 @@ class ProjectMigrationTests(unittest.TestCase):
     def test_runtime_without_003_refuses_latest_database_without_modifying_it(self):
         from services.storage.legacy import inventory_database
         store=SQLiteControlStore(self.directory/'latest.db');store.initialize()
-        self.assertEqual(store.migration_plan()['current_version'],3)
+        self.assertEqual(store.migration_plan()['current_version'],len(self.api.load_migrations('sqlite')))
         fingerprint=inventory_database(store.path)['source_content_sha256']
         old=self.directory/'runtime-old'/'sqlite';old.mkdir(parents=True)
         for filename in ('001_core.sql','002_iam.sql'): shutil.copyfile(self.root/'sqlite'/filename,old/filename)

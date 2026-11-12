@@ -63,6 +63,18 @@ class ClickHouseValidationTests(unittest.TestCase):
         self.assertEqual({row['section'] for row in chunks},{'input','output'})
         self.assertEqual(insert.call_args_list[-1].args[0],'obs_payload_manifests')
 
+    def test_absent_payload_section_is_explicitly_unreported(self):
+        _,client=self.client()
+        import json
+        from services.storage.contracts import canonical_json,content_hash
+        manifest={'schema_version':1,'sections':{}}
+        with patch.object(client,'_request',return_value=json.dumps({'manifest_json':canonical_json(manifest)}).encode()) as request:
+            result=client.read_payload('w','2026-11-11','t','s',content_hash(manifest),'input')
+        self.assertEqual(result['available'],False)
+        self.assertEqual(result['chunks'],[])
+        self.assertIsNone(result['next_chunk'])
+        self.assertEqual(request.call_count,1)
+
     def test_oversize_single_fact_is_rejected_before_network(self):
         _,client=self.client()
         base={'workspace_id':'w','trace_bucket':'2026-11-11','trace_id':'t','span_id':'s','revision':1,'attributes_json':'x'*(4*1024*1024)}

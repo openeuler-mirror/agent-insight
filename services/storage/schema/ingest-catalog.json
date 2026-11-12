@@ -1,0 +1,293 @@
+{
+  "version": 4,
+  "name": "observations",
+  "tables": [
+    {
+      "name": "ingest_batches",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "batch_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "receipt_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "packet_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "packet_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "accepted"
+        },
+        {
+          "name": "plan_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "trace_ids_json",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "accepted_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "indexed_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "error_code",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "batch_id"
+      ],
+      "checks": [
+        "length(batch_id)>0",
+        "length(receipt_key) BETWEEN 1 AND 512",
+        "length(packet_hash)=64",
+        "length(packet_ref)>0",
+        "state IN ('accepted','prepared','indexed','failed')",
+        "plan_ref IS NULL OR length(plan_ref)>0",
+        "length(trace_ids_json)>0",
+        "accepted_at_ms>=0",
+        "indexed_at_ms IS NULL OR indexed_at_ms>=accepted_at_ms",
+        "state<>'prepared' OR plan_ref IS NOT NULL",
+        "state<>'indexed' OR (plan_ref IS NOT NULL AND indexed_at_ms IS NOT NULL)"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "principal_id",
+          "receipt_key"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        },
+        {
+          "columns": [
+            "principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_ingest_batches_actor",
+          "columns": [
+            "workspace_id",
+            "principal_id",
+            "accepted_at_ms"
+          ]
+        },
+        {
+          "name": "idx_ingest_batches_state",
+          "columns": [
+            "state",
+            "accepted_at_ms"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "obs_entity_heads",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "entity_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "entity_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "artifact_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id",
+        "entity_kind",
+        "entity_id"
+      ],
+      "checks": [
+        "entity_kind IN ('trace','span')",
+        "length(entity_id)>0",
+        "revision BETWEEN 1 AND 9223372036854775807",
+        "source_revision BETWEEN 1 AND 9223372036854775807",
+        "length(content_hash)=64",
+        "length(artifact_ref)>0",
+        "created_at_ms>=0",
+        "updated_at_ms>=created_at_ms",
+        "entity_kind<>'trace' OR entity_id=trace_id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        }
+      ],
+      "indexes": []
+    }
+  ],
+  "invariants": [
+    "Receipt idempotency is actor and workspace scoped",
+    "Artifacts are private durable content-addressed references, no credentials",
+    "Plans allocate entity revisions once before sink writes and survive retry",
+    "Source revision equality with changed content is quarantined",
+    "Trace internal IDs never reused; deleted locators cannot reactivate",
+    "Global earliest unsent outbox lease serializes preparation",
+    "Accepted actor, packet, receipt identity and trace set are immutable",
+    "Plan reference freezes once allocated; indexed and failed states are terminal",
+    "Entity identity and creation time immutable; revisions advance exactly one and span source revisions strictly increase",
+    "Batch and entity version ledgers cannot be deleted"
+  ],
+  "runtime_contract": {
+    "packet_bytes_max": 4194304,
+    "spans_per_packet_max": 4096,
+    "normalized_bytes_max": 67108864,
+    "default_source_namespace": "otlp",
+    "completed_spans_only": true,
+    "payload_batch_spans_max": 128,
+    "clickhouse_request_bytes_max": 4194304,
+    "outbox_event_type": "observability.otlp.accepted.v1",
+    "queue_order": "global earliest unsent; active lease or retry delay blocks later events",
+    "internal_revision_max": "9223372036854775807",
+    "artifact_encodings": [
+      "otlp-json/v1",
+      "observation-json/v1"
+    ],
+    "trace_source_revision": 1
+  },
+  "backend_checks": {
+    "sha256_columns": {
+      "ingest_batches": [
+        "packet_hash"
+      ],
+      "obs_entity_heads": [
+        "content_hash"
+      ]
+    },
+    "sha256_format": "lowercase hexadecimal, length64",
+    "sqlite_integer_columns": {
+      "ingest_batches": [
+        "accepted_at_ms",
+        "indexed_at_ms"
+      ],
+      "obs_entity_heads": [
+        "revision",
+        "source_revision",
+        "created_at_ms",
+        "updated_at_ms"
+      ]
+    }
+  }
+}

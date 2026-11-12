@@ -98,7 +98,7 @@ class ClickHouseStore:
             revision(row['revision'])
         self._insert('obs_span_current',rows)
 
-    def read_spans(self, workspace_id, bucket, trace_id, *, status=None, parent_span_id=None, after_span_id='', limit=200):
+    def read_spans(self, workspace_id, bucket, trace_id, *, status=None, parent_span_id=None, after_span_id='', limit=200, search=None):
         if type(limit) is not int or not 1<=limit<=1000: raise ValueError('page size must be 1..1000')
         parameters=self._scope(workspace_id,bucket,trace_id)
         parameters.update({'limit':limit,'after_span_id':after_span_id})
@@ -107,6 +107,9 @@ class ClickHouseStore:
             predicates.append('execution_status = {status:String}');parameters['status']=status
         if parent_span_id is not None:
             predicates.append('parent_span_id = {parent_span_id:String}');parameters['parent_span_id']=parent_span_id
+        if search is not None:
+            if not isinstance(search,str) or len(search)>256:raise ValueError('invalid bounded Span search')
+            predicates.append("positionCaseInsensitiveUTF8(concat(span_id,' ',name,' ',model),{search:String})>0");parameters['search']=search
         sql='SELECT * FROM obs_span_current FINAL WHERE '+' AND '.join(predicates)+' ORDER BY span_id LIMIT {limit:UInt32} FORMAT JSONEachRow'
         return [json.loads(line) for line in self._request(sql,parameters=parameters).splitlines() if line]
 
@@ -152,6 +155,49 @@ class ClickHouseStore:
         self._insert('obs_payload_manifests',[dict(scope,payload_revision=bundle_revision,manifest_json=canonical_json(manifest),retry_version=1)])
         return dict(manifest,payload_revision=bundle_revision)
 
+    def write_payload_bundles(self, payloads):
+        if not isinstance(payloads,list) or not 1<=len(payloads)<=128:
+            raise ValueError('payload batch must contain 1..128 Spans')
+        prepared=[]
+        for payload in payloads:
+            if not isinstance(payload,dict): raise ValueError('invalid payload bundle')
+            scope=self._scope(payload['workspace_id'],payload['trace_bucket'],payload['trace_id'],payload['span_id'])
+            sections=payload['sections']
+            if not isinstance(sections,dict) or not sections or len(sections)>32:
+                raise ValueError('payload requires 1..32 named sections')
+            metadata={};total=0
+            for section,text in sections.items():
+                identifier(section)
+                if not section.isascii() or not isinstance(text,str):
+                    raise ValueError('section names are ASCII; payload bodies are Unicode text')
+                data=text.encode('utf-8');total+=len(data)
+                if total>64*1024*1024: raise ValueError('payload exceeds 64MiB; use ArtifactStore streaming')
+                hashes=[hashlib.sha256(chunk).hexdigest() for chunk in self._chunks(data)]
+                metadata[section]={'content_hash':hashlib.sha256(data).hexdigest(),'uncompressed_bytes':len(data),
+                                   'chunk_count':len(hashes),'chunk_hashes':hashes}
+            manifest={'schema_version':1,'sections':metadata}
+            bundle_revision=content_hash(manifest)
+            if payload.get('payload_revision',bundle_revision)!=bundle_revision:
+                raise ValueError('payload does not match its frozen revision')
+            prepared.append((scope,sections,manifest,bundle_revision))
+        rows=[];encoded_size=128
+        for scope,sections,manifest,bundle_revision in prepared:
+            for section,text in sections.items():
+                expected=manifest['sections'][section]
+                for number,chunk in enumerate(self._chunks(text.encode('utf-8'))):
+                    row=dict(scope,payload_revision=bundle_revision,section=section,chunk_no=number,
+                             chunk_count=expected['chunk_count'],uncompressed_bytes=len(chunk),
+                             content_hash=expected['chunk_hashes'][number],body=chunk.decode('utf-8'),retry_version=1)
+                    size=len(json.dumps(row,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf-8'))+1
+                    if rows and (len(rows)>=4096 or encoded_size+size>4*1024*1024):
+                        self._insert('obs_payload_chunks',rows);rows=[];encoded_size=128
+                    rows.append(row);encoded_size+=size
+        if rows: self._insert('obs_payload_chunks',rows)
+        # Publishing after every chunk request succeeds keeps interrupted bundles unreadable.
+        self._insert('obs_payload_manifests',[dict(scope,payload_revision=bundle_revision,
+            manifest_json=canonical_json(manifest),retry_version=1) for scope,_,manifest,bundle_revision in prepared])
+        return [dict(manifest,payload_revision=bundle_revision) for _,_,manifest,bundle_revision in prepared]
+
     @staticmethod
     def _chunks(data):
         if not data:
@@ -179,6 +225,9 @@ class ClickHouseStore:
             if content_hash(manifest)!=payload_revision: raise IncompletePayload('payload manifest root mismatch')
             if type(manifest.get('schema_version')) is not int or manifest['schema_version']!=1:
                 raise IncompletePayload('unsupported payload manifest schema')
+            if not isinstance(manifest.get('sections'),dict):raise IncompletePayload('invalid payload manifest')
+            if section not in manifest['sections']:
+                return {'chunks':[],'chunk_count':0,'next_chunk':None,'complete':True,'available':False}
             expected=manifest['sections'][section]
             if (type(expected['chunk_count']) is not int or expected['chunk_count']<=0
                 or type(expected['uncompressed_bytes']) is not int or expected['uncompressed_bytes']<0

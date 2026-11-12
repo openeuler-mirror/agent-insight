@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from services.storage.migrations import load_migrations
 
 
 class CliTests(unittest.TestCase):
@@ -17,7 +18,7 @@ class CliTests(unittest.TestCase):
             db=Path(tmp)/'new.db'
             init=self.run_cli('init-sqlite','--database',db)
             self.assertEqual(init.returncode,0,init.stderr)
-            self.assertEqual(json.loads(init.stdout)['schema_version'],3)
+            self.assertEqual(json.loads(init.stdout)['schema_version'],len(load_migrations('sqlite')))
             missing=self.run_cli('init-sqlite')
             self.assertNotEqual(missing.returncode,0)
             old=Path(tmp)/'old.db'

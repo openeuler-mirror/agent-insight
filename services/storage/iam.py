@@ -299,13 +299,16 @@ class IAMStore:
         con.execute('UPDATE iam_groups SET policy_revision=policy_revision+1 WHERE group_id=(SELECT owner_group_id FROM iam_workspace_bindings WHERE workspace_id=?)',(workspace_id,))
         con.execute("UPDATE iam_workspace_bindings SET binding_revision=binding_revision+1,updated_at_ms=? WHERE workspace_id=? AND owner_type='personal'",(self.clock(),workspace_id))
 
-    def _record_resource(self, con, workspace_id, resource_kind, resource_id, owner_principal_id, visibility):
+    def _record_resource(self, con, workspace_id, resource_kind, resource_id, owner_principal_id, visibility, *, invalidate_policy=True):
         if resource_kind not in RESOURCE_KINDS or visibility not in {'private','group'}:
             raise ValueError('invalid resource access record')
+        if type(invalidate_policy) is not bool or (not invalidate_policy and visibility!='private'):
+            raise ValueError('only new private resources may preserve the policy revision')
         identifier(resource_id)
         now=self.clock()
         con.execute('INSERT INTO iam_resource_access VALUES(?,?,?,?,?,1,?,?)',(workspace_id,resource_kind,resource_id,owner_principal_id,visibility,now,now))
-        self._touch_policy(con,workspace_id)
+        if invalidate_policy:
+            self._touch_policy(con,workspace_id)
 
     def record_resource_for_provisioning(self, workspace_id, resource_kind, resource_id, owner_principal_id, *, visibility='private'):
         with self.control.transaction() as con:
