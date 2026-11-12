@@ -25,8 +25,32 @@ export async function scenario001(ctx) {
   };
   try {
     await stage('login', '测试邮箱经页面登录，刷新后保持相同身份', async () => {
-      await page.goto(baseUrl + '/login');
-      await page.locator('input[type=email]').fill(username);
+      const failedResources = [];
+      const pageErrors = [];
+      const recordResponse = response => {
+        const url = new URL(response.url());
+        if (url.origin === baseUrl && response.status() >= 400 && failedResources.length < 8) {
+          failedResources.push([url.pathname, response.status()]);
+        }
+      };
+      const recordError = error => { if (pageErrors.length < 4) pageErrors.push(error.message.slice(0, 160)); };
+      page.on('response', recordResponse);
+      page.on('pageerror', recordError);
+      try {
+        await page.goto(baseUrl + '/login');
+        await page.getByLabel(/邮箱地址|Email Address/i).fill(username);
+      } catch (error) {
+        const api = await page.request.get(baseUrl + '/api/eval/config/status?check_login=true', { timeout: 5000 }).catch(() => null);
+        const result = await api?.json().catch(() => ({}));
+        const box = await page.locator('.login-box').textContent({ timeout: 1000 }).catch(() => '');
+        throw new Error('Login diagnostics '+JSON.stringify({
+          path: new URL(page.url()).pathname, loginApiStatus: api?.status(),
+          loginMode: result?.login_mode, loginBox: box?.trim().slice(0, 120), failedResources, pageErrors,
+        }), { cause: error });
+      } finally {
+        page.off('response', recordResponse);
+        page.off('pageerror', recordError);
+      }
       const loginResponse = responseFor(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
       await page.locator('button[type=submit]').click();
       const response = await loginResponse;

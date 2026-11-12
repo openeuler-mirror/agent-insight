@@ -2,7 +2,7 @@
 !package.json
 !package-lock.json
 !prisma/
-!prisma/**
+!prisma/schema.prisma
 !test/
 !test/e2e/
 !test/e2e/package.json

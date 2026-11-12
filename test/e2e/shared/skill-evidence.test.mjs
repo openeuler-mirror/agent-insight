@@ -3,6 +3,37 @@ import { test } from 'node:test';
 import * as evidence from './skill-evidence.mjs';
 import * as archive from './skill-archive.mjs';
 import { scenarioResult } from './core.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+test('candidate diagnostics expose proof mismatches without publishing private rows or files', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-candidate-diag-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const database = path.join(root, 'test.db');const db = new DatabaseSync(database);
+  db.exec('CREATE TABLE Experiment (id TEXT, user TEXT, optimizationRecordId TEXT, sourceExperimentId TEXT, status TEXT, deletedAt TEXT, createdAt TEXT, configSnapshotJson TEXT, evaluatorIdsJson TEXT, evaluatorConfigsJson TEXT); CREATE TABLE ExperimentCase (id TEXT, experimentId TEXT, executionId TEXT, datasetInput TEXT, input TEXT, referenceOutput TEXT, actualOutput TEXT, deletedAt TEXT); CREATE TABLE ExperimentEvalResult (caseId TEXT, evaluatorId TEXT, status TEXT, verdict TEXT, score REAL, pointsJson TEXT, humanScore REAL); CREATE TABLE ExperimentCancellation (experimentId TEXT);');
+  const secret = 'private-log-input-and-model-credential';
+  const record = { id: 'record', status: 'pending_retest', candidateFiles: { 'SKILL.md': secret }, sourceRefs: [] };
+  const dataset = { id: 'dataset', cases: [{ id: 'case', input: secret }] };
+  const source = { snapshot: '{}', evaluators: '[]', configs: '{}' };
+  const snapshot = { verificationOnly: true };
+  snapshot.verification = { version: 1, candidateHash: 'mismatch', datasetId: dataset.id, caseIds: ['case'], inputHash: archive.stableHash(dataset.cases), candidateConfigHash: archive.stableHash(snapshot), sourceHash: archive.stableHash(source), baselineHash: archive.stableHash([]), resultsHash: archive.stableHash([]), result: { ok: true, fullCoverage: true, measured: 1, perCase: [], experimentId: 'candidate' } };
+  const insert = db.prepare('INSERT INTO Experiment VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  insert.run('baseline', 'test', null, null, 'done', null, '1', source.snapshot, source.evaluators, source.configs);
+  insert.run('candidate', 'test', 'record', 'baseline', 'done', 'archived', '2', JSON.stringify(snapshot), '[]', '{}');
+  insert.run('other-user', 'other', 'record', 'baseline', 'failed', null, '3', secret, '[]', '{}');
+  db.close();
+  const result = archive.candidateVerificationDiagnostics(database, 'test', record, dataset);
+  assert.equal(result.experiments.length, 1);
+  assert.equal(result.experiments[0].candidateMatches, false);
+  assert.equal(result.experiments[0].candidateConfigMatches, true);
+  assert.equal(result.experiments[0].sourceMatches, true);
+  assert.equal(result.experiments[0].baselineRowsMatch, true);
+  assert.equal(result.experiments[0].resultRowsMatch, true);
+  assert.equal(result.experiments[0].inputMatches, true);
+  assert.ok(!JSON.stringify(result).includes(secret));
+});
 
 test('003 cannot pass with upload/generation alone or without a published-version run', () => {
   const stages = ['application', 'login', 'model', 'ordinary-client', 'upload', 'generation', 'static', 'baseline-publish', 'dataset-ui', 'baseline', 'trace-ui', 'diagnosis', 'optimization', 'candidate', 'publish', 'published-run', 'persistence', 'cleanup'];

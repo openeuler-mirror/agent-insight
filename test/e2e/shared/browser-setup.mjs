@@ -3,6 +3,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { writePrivate, fetchStatusResponse } from './runtime.mjs';
 import {probeModelConnection} from './model-probe.mjs';
+import {redact} from './core.mjs';
 
 export async function loginAndModel(ctx, page) {
   const { baseUrl, runId, root, key, stage, secrets } = ctx;
@@ -18,7 +19,7 @@ export async function loginAndModel(ctx, page) {
   };
     await stage('login', '测试邮箱经页面登录，刷新后保持相同身份', async () => {
       await page.goto(baseUrl + '/login');
-      await page.locator('input[type=email]').fill(username);
+      await page.getByLabel(/邮箱地址|Email Address/i).fill(username);
       const loginResponse = responseFor(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
       await page.locator('button[type=submit]').click();
       const response = await loginResponse;
@@ -38,7 +39,10 @@ export async function loginAndModel(ctx, page) {
     });
     await stage('model', '页面真实测试并保存 DeepSeek，刷新后配置和默认模型持久化', async () => {
       const modelName = `e2e-model-${runId}`;
+      const loaded=responseFor(r=>{const url=new URL(r.url());return url.pathname==='/api/eval/settings'&&url.searchParams.get('user')===username&&r.request().method()==='GET';});
       await page.goto(baseUrl + '/modelconfig/registry');
+      const initial=await loaded;assert.equal(initial.status(),200);assert.ok(Array.isArray((await initial.json()).configs));
+      const savedSettings=async(response,label)=>{const data=await response.json().catch(()=>null);writePrivate(path.join(root,`private/${label}.json`),data);assert.equal(response.request().postDataJSON()?.user,username,'Model settings must retain the authenticated user');assert.equal(response.status(),200,`${label} returned ${response.status()}: ${redact(String(data?.error||data?.message||'Unexpected settings response'),secrets).slice(0,500)}`);};
       await page.getByRole('button', { name: /新增模型|New Model/, exact: true }).click();
       const deepseek = page.getByRole('button').filter({ has: page.getByText('DeepSeek (Official)', { exact: true }) });
       await deepseek.click();
@@ -49,10 +53,10 @@ export async function loginAndModel(ctx, page) {
       const connection=await probeModelConnection(async()=>{
         const connected=responseFor(r=>r.url().endsWith('/api/eval/settings/test')&&r.request().method()==='POST');const saved=responseFor(r=>r.url().endsWith('/api/eval/settings')&&r.request().method()==='POST');
         await page.getByRole('button',{name:/测试连接并保存|Test & Save/,exact:true}).click();const response=await connected;const probe=await response.json();writePrivate(path.join(root,'private/model-probe.json'),probe);return {probe,status:response.status(),saved};
-      },{onAttempt:attempts=>writePrivate(path.join(root,'private/model-probe-attempts.json'),attempts)});const probe=connection.probe;assert.equal((await connection.saved).status(),200);
+      },{onAttempt:attempts=>writePrivate(path.join(root,'private/model-probe-attempts.json'),attempts)});const probe=connection.probe;await savedSettings(await connection.saved,'model-save');
       await page.getByRole('article').getByText(modelName, { exact: true }).waitFor();
       const activate=page.getByRole('article').filter({has:page.getByText(modelName,{exact:true})}).getByRole('button',{name:/设为默认|Set default/,exact:true});
-      if(await activate.count()){const activated=page.waitForResponse(r=>r.url().endsWith('/api/eval/settings')&&r.request().method()==='POST');await activate.click();assert.equal((await activated).status(),200);}
+      if(await activate.count()){const activated=page.waitForResponse(r=>r.url().endsWith('/api/eval/settings')&&r.request().method()==='POST');await activate.click();await savedSettings(await activated,'model-activate');}
       await page.reload();
       await page.getByRole('article').getByText(modelName, { exact: true }).waitFor();
       const settings = await api(`/api/eval/settings?user=${encodeURIComponent(username)}`);

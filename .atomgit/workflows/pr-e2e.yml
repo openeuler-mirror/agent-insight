@@ -1,0 +1,562 @@
+name: PR Build UT E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [open, update, reopen]
+    branches: [master]
+
+permissions:
+  repository: read
+  pr: read
+
+concurrency:
+  enable: true
+  max: 1
+  exceed-action: QUEUE
+  preemption:
+    enable: false
+
+env:
+  E2E_ACTION_EVENT: ${{ atomgit.event_name }}
+  E2E_CASE_MODES: ${{ vars.E2E_CASE_MODES }}
+  E2E_MODEL_BASE_URL: ${{ vars.E2E_MODEL_BASE_URL }}
+  E2E_MODEL_NAME: ${{ vars.E2E_MODEL_NAME }}
+
+jobs:
+  build:
+    name: 生产编译
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 35
+    outputs:
+      tested_sha: ${{ steps.phase.outputs.tested_sha }}
+      case_001_mode: ${{ steps.phase.outputs.case_001_mode }}
+      case_002_mode: ${{ steps.phase.outputs.case_002_mode }}
+      case_003_mode: ${{ steps.phase.outputs.case_003_mode }}
+      case_004_mode: ${{ steps.phase.outputs.case_004_mode }}
+      case_005_mode: ${{ steps.phase.outputs.case_005_mode }}
+    steps:
+      - name: Checkout pinned source
+        uses: checkout
+        with:
+          ref: ${{ atomgit.event.pull_request.merge_commit_sha || atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Prepare isolated job
+        shell: bash
+        run: |
+          set -euo pipefail
+          node test/e2e/control/actions-job.mjs --phase build \
+            --run-id "atomgit-${ATOMGIT_RUN_ID:?}"
+
+      - name: Verify browser and native tools
+        shell: bash
+        run: node "$E2E_CI_SOURCE/test/e2e/control/actions-job.mjs" --verify-runtime
+
+      - name: Compile production once
+        id: phase
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase build \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA"
+
+      - name: Publish compiled artifact
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: e2e-build
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            ${{ env.E2E_CI_ROOT }}/build-payload/context.json
+            ${{ env.E2E_CI_ROOT }}/build-payload/compiled.tar.gz
+
+      - name: Upload public phase reports
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: e2e-result-build
+          if-no-files-found: error
+          path: |
+            ${{ env.E2E_CI_ROOT }}/public/context.json
+            ${{ env.E2E_CI_ROOT }}/public/result.json
+            ${{ env.E2E_CI_ROOT }}/public/report.json
+            ${{ env.E2E_CI_ROOT }}/public/report.html
+            ${{ env.E2E_CI_ROOT }}/public/summary.md
+
+  ut:
+    name: UT
+    needs: [build]
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 45
+    env:
+      E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
+    steps:
+      - name: Checkout pinned source
+        uses: checkout
+        with:
+          ref: ${{ jobs.build.outputs.tested_sha || atomgit.event.pull_request.merge_commit_sha || atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Prepare isolated job
+        shell: bash
+        run: |
+          set -euo pipefail
+          node test/e2e/control/actions-job.mjs --phase ut \
+            --run-id "atomgit-${ATOMGIT_RUN_ID:?}"
+
+      - name: Verify browser and native tools
+        shell: bash
+        run: node "$E2E_CI_SOURCE/test/e2e/control/actions-job.mjs" --verify-runtime
+
+      - name: Download e2e-build
+        uses: download-artifact
+        with:
+          name: e2e-build
+          path: ${{ env.E2E_CI_ROOT }}/build-payload
+
+      - name: Run UT suite
+        id: phase
+        shell: bash
+        env:
+          E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT: '1'
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase ut \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA"
+
+      - name: Verify scoped process cleanup regressions
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node --test --test-concurrency=1 test/e2e/shared/actions-process-cleanup.test.mjs test/e2e/control/actions-phase.test.mjs
+
+      - name: Upload public phase reports
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: e2e-result-ut
+          if-no-files-found: error
+          path: |
+            ${{ env.E2E_CI_ROOT }}/public/context.json
+            ${{ env.E2E_CI_ROOT }}/public/result.json
+            ${{ env.E2E_CI_ROOT }}/public/report.json
+            ${{ env.E2E_CI_ROOT }}/public/report.html
+            ${{ env.E2E_CI_ROOT }}/public/summary.md
+
+  case_001:
+    name: 001 准备与配置
+    needs: [build, ut]
+    if: ${{ always() && jobs.build.result == 'success' }}
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 55
+    env:
+      E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
+    steps:
+      - name: Checkout pinned source
+        uses: checkout
+        with:
+          ref: ${{ jobs.build.outputs.tested_sha || atomgit.event.pull_request.merge_commit_sha || atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Prepare isolated job
+        shell: bash
+        run: |
+          set -euo pipefail
+          node test/e2e/control/actions-job.mjs --phase case \
+            --run-id "atomgit-${ATOMGIT_RUN_ID:?}"
+
+      - name: Verify browser and native tools
+        shell: bash
+        run: node "$E2E_CI_SOURCE/test/e2e/control/actions-job.mjs" --verify-runtime
+
+      - name: Download e2e-build
+        uses: download-artifact
+        with:
+          name: e2e-build
+          path: ${{ env.E2E_CI_ROOT }}/build-payload
+
+      - name: Run case 001
+        id: phase
+        shell: bash
+        env:
+          E2E_MODEL_API_KEY: ${{ (atomgit.event_name == 'workflow_dispatch' || atomgit.event_name == 'Manual') && jobs.build.outputs.case_001_mode == 'real' && secrets.E2E_MODEL_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase case \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA" \
+            --case 001
+
+      - name: Upload public phase reports
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: e2e-result-001
+          if-no-files-found: error
+          path: |
+            ${{ env.E2E_CI_ROOT }}/public/context.json
+            ${{ env.E2E_CI_ROOT }}/public/result.json
+            ${{ env.E2E_CI_ROOT }}/public/report.json
+            ${{ env.E2E_CI_ROOT }}/public/report.html
+            ${{ env.E2E_CI_ROOT }}/public/summary.md
+
+  case_002:
+    name: 002 上报与观测
+    needs: [build, ut]
+    if: ${{ always() && jobs.build.result == 'success' }}
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 55
+    env:
+      E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
+    steps:
+      - name: Checkout pinned source
+        uses: checkout
+        with:
+          ref: ${{ jobs.build.outputs.tested_sha || atomgit.event.pull_request.merge_commit_sha || atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Prepare isolated job
+        shell: bash
+        run: |
+          set -euo pipefail
+          node test/e2e/control/actions-job.mjs --phase case \
+            --run-id "atomgit-${ATOMGIT_RUN_ID:?}"
+
+      - name: Verify browser and native tools
+        shell: bash
+        run: node "$E2E_CI_SOURCE/test/e2e/control/actions-job.mjs" --verify-runtime
+
+      - name: Download e2e-build
+        uses: download-artifact
+        with:
+          name: e2e-build
+          path: ${{ env.E2E_CI_ROOT }}/build-payload
+
+      - name: Run case 002
+        id: phase
+        shell: bash
+        env:
+          E2E_MODEL_API_KEY: ${{ (atomgit.event_name == 'workflow_dispatch' || atomgit.event_name == 'Manual') && jobs.build.outputs.case_002_mode == 'real' && secrets.E2E_MODEL_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase case \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA" \
+            --case 002
+
+      - name: Upload public phase reports
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: e2e-result-002
+          if-no-files-found: error
+          path: |
+            ${{ env.E2E_CI_ROOT }}/public/context.json
+            ${{ env.E2E_CI_ROOT }}/public/result.json
+            ${{ env.E2E_CI_ROOT }}/public/report.json
+            ${{ env.E2E_CI_ROOT }}/public/report.html
+            ${{ env.E2E_CI_ROOT }}/public/summary.md
+
+  case_003:
+    name: 003 Skill 与数据集
+    needs: [build, ut]
+    if: ${{ always() && jobs.build.result == 'success' }}
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 55
+    env:
+      E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
+    steps:
+      - name: Checkout pinned source
+        uses: checkout
+        with:
+          ref: ${{ jobs.build.outputs.tested_sha || atomgit.event.pull_request.merge_commit_sha || atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Prepare isolated job
+        shell: bash
+        run: |
+          set -euo pipefail
+          node test/e2e/control/actions-job.mjs --phase case \
+            --run-id "atomgit-${ATOMGIT_RUN_ID:?}"
+
+      - name: Verify browser and native tools
+        shell: bash
+        run: node "$E2E_CI_SOURCE/test/e2e/control/actions-job.mjs" --verify-runtime
+
+      - name: Download e2e-build
+        uses: download-artifact
+        with:
+          name: e2e-build
+          path: ${{ env.E2E_CI_ROOT }}/build-payload
+
+      - name: Run case 003
+        id: phase
+        shell: bash
+        env:
+          E2E_MODEL_API_KEY: ${{ (atomgit.event_name == 'workflow_dispatch' || atomgit.event_name == 'Manual') && jobs.build.outputs.case_003_mode == 'real' && secrets.E2E_MODEL_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase case \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA" \
+            --case 003
+
+      - name: Upload public phase reports
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: e2e-result-003
+          if-no-files-found: error
+          path: |
+            ${{ env.E2E_CI_ROOT }}/public/context.json
+            ${{ env.E2E_CI_ROOT }}/public/result.json
+            ${{ env.E2E_CI_ROOT }}/public/report.json
+            ${{ env.E2E_CI_ROOT }}/public/report.html
+            ${{ env.E2E_CI_ROOT }}/public/summary.md
+
+  case_004:
+    name: 004 Trace 评测
+    needs: [build, ut]
+    if: ${{ always() && jobs.build.result == 'success' }}
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 55
+    env:
+      E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
+    steps:
+      - name: Checkout pinned source
+        uses: checkout
+        with:
+          ref: ${{ jobs.build.outputs.tested_sha || atomgit.event.pull_request.merge_commit_sha || atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Prepare isolated job
+        shell: bash
+        run: |
+          set -euo pipefail
+          node test/e2e/control/actions-job.mjs --phase case \
+            --run-id "atomgit-${ATOMGIT_RUN_ID:?}"
+
+      - name: Verify browser and native tools
+        shell: bash
+        run: node "$E2E_CI_SOURCE/test/e2e/control/actions-job.mjs" --verify-runtime
+
+      - name: Download e2e-build
+        uses: download-artifact
+        with:
+          name: e2e-build
+          path: ${{ env.E2E_CI_ROOT }}/build-payload
+
+      - name: Run case 004
+        id: phase
+        shell: bash
+        env:
+          E2E_MODEL_API_KEY: ${{ (atomgit.event_name == 'workflow_dispatch' || atomgit.event_name == 'Manual') && jobs.build.outputs.case_004_mode == 'real' && secrets.E2E_MODEL_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase case \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA" \
+            --case 004
+
+      - name: Upload public phase reports
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: e2e-result-004
+          if-no-files-found: error
+          path: |
+            ${{ env.E2E_CI_ROOT }}/public/context.json
+            ${{ env.E2E_CI_ROOT }}/public/result.json
+            ${{ env.E2E_CI_ROOT }}/public/report.json
+            ${{ env.E2E_CI_ROOT }}/public/report.html
+            ${{ env.E2E_CI_ROOT }}/public/summary.md
+
+  case_005:
+    name: 005 故障检测恢复
+    needs: [build, ut]
+    if: ${{ always() && jobs.build.result == 'success' }}
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 55
+    env:
+      E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
+    steps:
+      - name: Checkout pinned source
+        uses: checkout
+        with:
+          ref: ${{ jobs.build.outputs.tested_sha || atomgit.event.pull_request.merge_commit_sha || atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Prepare isolated job
+        shell: bash
+        run: |
+          set -euo pipefail
+          node test/e2e/control/actions-job.mjs --phase case \
+            --run-id "atomgit-${ATOMGIT_RUN_ID:?}"
+
+      - name: Verify browser and native tools
+        shell: bash
+        run: node "$E2E_CI_SOURCE/test/e2e/control/actions-job.mjs" --verify-runtime
+
+      - name: Download e2e-build
+        uses: download-artifact
+        with:
+          name: e2e-build
+          path: ${{ env.E2E_CI_ROOT }}/build-payload
+
+      - name: Run case 005
+        id: phase
+        shell: bash
+        env:
+          E2E_MODEL_API_KEY: ${{ (atomgit.event_name == 'workflow_dispatch' || atomgit.event_name == 'Manual') && jobs.build.outputs.case_005_mode == 'real' && secrets.E2E_MODEL_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase case \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA" \
+            --case 005
+
+      - name: Upload public phase reports
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: e2e-result-005
+          if-no-files-found: error
+          path: |
+            ${{ env.E2E_CI_ROOT }}/public/context.json
+            ${{ env.E2E_CI_ROOT }}/public/result.json
+            ${{ env.E2E_CI_ROOT }}/public/report.json
+            ${{ env.E2E_CI_ROOT }}/public/report.html
+            ${{ env.E2E_CI_ROOT }}/public/summary.md
+
+  collect:
+    name: 汇总与门禁
+    needs: [build, ut, case_001, case_002, case_003, case_004, case_005]
+    if: ${{ always() }}
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 15
+    env:
+      E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
+    steps:
+      - name: Checkout pinned source
+        uses: checkout
+        with:
+          ref: ${{ jobs.build.outputs.tested_sha || atomgit.event.pull_request.merge_commit_sha || atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Prepare isolated job
+        shell: bash
+        run: |
+          set -euo pipefail
+          node test/e2e/control/actions-job.mjs --phase collect \
+            --run-id "atomgit-${ATOMGIT_RUN_ID:?}"
+
+      - name: Download e2e-result-build
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: download-artifact
+        with:
+          name: e2e-result-build
+          path: ${{ env.E2E_CI_ROOT }}/inputs/build
+
+      - name: Download e2e-result-ut
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: download-artifact
+        with:
+          name: e2e-result-ut
+          path: ${{ env.E2E_CI_ROOT }}/inputs/ut
+
+      - name: Download e2e-result-001
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: download-artifact
+        with:
+          name: e2e-result-001
+          path: ${{ env.E2E_CI_ROOT }}/inputs/001
+
+      - name: Download e2e-result-002
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: download-artifact
+        with:
+          name: e2e-result-002
+          path: ${{ env.E2E_CI_ROOT }}/inputs/002
+
+      - name: Download e2e-result-003
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: download-artifact
+        with:
+          name: e2e-result-003
+          path: ${{ env.E2E_CI_ROOT }}/inputs/003
+
+      - name: Download e2e-result-004
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: download-artifact
+        with:
+          name: e2e-result-004
+          path: ${{ env.E2E_CI_ROOT }}/inputs/004
+
+      - name: Download e2e-result-005
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: download-artifact
+        with:
+          name: e2e-result-005
+          path: ${{ env.E2E_CI_ROOT }}/inputs/005
+
+      - name: Collect all results and enforce gate
+        id: phase
+        shell: bash
+        if: ${{ always() }}
+        env:
+          E2E_JOB_RESULTS_JSON: >-
+            {"build":"${{ jobs.build.result }}","ut":"${{ jobs.ut.result }}","001":"${{ jobs.case_001.result }}","002":"${{ jobs.case_002.result }}","003":"${{ jobs.case_003.result }}","004":"${{ jobs.case_004.result }}","005":"${{ jobs.case_005.result }}"}
+        run: |
+          set -euo pipefail
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase collect \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA"
+
+      - name: Upload public phase reports
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: pr-e2e
+          if-no-files-found: error
+          path: |
+            ${{ env.E2E_CI_ROOT }}/public/context.json
+            ${{ env.E2E_CI_ROOT }}/public/result.json
+            ${{ env.E2E_CI_ROOT }}/public/report.json
+            ${{ env.E2E_CI_ROOT }}/public/report.html
+            ${{ env.E2E_CI_ROOT }}/public/summary.md

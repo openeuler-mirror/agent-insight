@@ -80,7 +80,7 @@ export async function scenario002(ctx) {
     browser = await chromium.launch({ channel: process.env.E2E_BROWSER_CHANNEL || 'chrome', headless: true });context = await browser.newContext({ locale: 'zh-CN' });
     await context.tracing.start({ screenshots: false, snapshots: true, sources: false });page = await context.newPage();page.setDefaultTimeout(30000);page.setDefaultNavigationTimeout(90000);
     await stage('trace-ui', '同一账号通过 Trace 列表检索、详情展开和刷新看到本轮输入、工具及正确结果', async () => {
-      await page.goto(baseUrl + '/login');await page.locator('input[type=email]').fill(username);
+      await page.goto(baseUrl + '/login');await page.getByLabel(/邮箱地址|Email Address/i).fill(username);
       const logged = page.waitForResponse(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');await page.locator('button[type=submit]').click();assert.equal((await logged).status(), 200);
       await page.waitForURL(url => url.pathname !== '/login');await page.getByText(username, { exact: true }).waitFor();
       const search = page.getByRole('textbox', { name: '搜索或过滤 trace', exact: true });await search.fill(marker);

@@ -7,7 +7,7 @@ export async function compileProduction(config,{project=process.cwd(),runId=proc
  let result;
  try {
   for(const [bin,args] of [['node',['-e',"const u=require('./scripts/utils.js');u.ensureEnvFile();u.ensureDataDirectory()"]],['node',['scripts/prepare-ras-sqlite-schema.js']],['sh',['scripts/db_push.sh','--skip-generate']],['node',['node_modules/prisma/build/index.js','generate']]]) {
-   const execution=await run(bin,args,{cwd:project,env,log,timeout:120000});if(execution.code!==0)throw Error('Production build preparation failed');
+   const execution=await run(bin,args,{cwd:project,env,log,timeout:120000});if(execution.code!==0)throw Error('Production build preparation failed: '+[bin,...args.slice(0,1)].join(' '));
   }
   const built=await prepareProductionBuild({project,root,runId},env,{run});
   result={status:'PASS',exitCode:0,buildId:built.buildId};

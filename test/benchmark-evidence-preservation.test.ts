@@ -17,6 +17,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
+import { watch } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -104,15 +105,18 @@ test('nonzero process exit retains partial official output and complete stderr b
 
 test('timeout retains files and logs written before termination', async t => {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 500)
+  const readyRoot = await directory(t)
+  const ready = path.join(readyRoot, 'ready')
+  const watcher = watch(readyRoot, (_event, filename) => { if (String(filename) === 'ready') controller.abort() })
+  const timeout = setTimeout(() => controller.abort(), 10000)
   try {
-    const error = await evaluatorRun(t, `fs.writeFileSync(path.join(path.dirname(output),'before-timeout.log'),'progress'); process.stderr.write('timeout diagnostic'); setInterval(()=>{},1000);`, controller.signal).then(() => assert.fail('expected timeout'), (failure: any) => failure)
+    const error = await evaluatorRun(t, `fs.writeFileSync(path.join(path.dirname(output),'before-timeout.log'),'progress'); fs.writeSync(2,'timeout diagnostic'); fs.writeFileSync(${JSON.stringify(ready)},'ready'); setInterval(()=>{},1000);`, controller.signal).then(() => assert.fail('expected timeout'), (failure: any) => failure)
     {
       assert.equal(error.code, 'EVALUATION_TIMEOUT')
       assert.ok(error.evidenceFiles.some((file: any) => file.name === 'before-timeout.log'))
       assert.equal(await fs.readFile(error.evidenceFiles.find((file: any) => file.name === 'controller/stderr.log').path, 'utf8'), 'timeout diagnostic')
     }
-  } finally { clearTimeout(timeout) }
+  } finally { watcher.close(); clearTimeout(timeout) }
 })
 
 test('malformed JSON diagnostics remain readable while structured scoring data and byte integrity stay strict', async t => {

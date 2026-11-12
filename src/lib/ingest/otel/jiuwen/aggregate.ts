@@ -428,7 +428,7 @@ function transformSemantic(spans: JiuwenSpan[], taskId: string, query: string, u
     };
     const turn = owner && turns.get(key(owner));
     if (turn) turn.tool_calls.push(call);
-    else standalone.push({ span: s, turn: { role: 'assistant', agent: agentOf(s).name, content: '', tool_calls: [call],
+    else standalone.push({ span: s, turn: { role: 'assistant', agent: agentOf(s).name, content: '', tool_calls: [call], trace_synthetic: true,
       timeInfo: { created: toMs(s.startNs), completed: toMs(s.endNs) } } });
   }
   const ordered = [...inference.map(s => ({ span: s, turn: turns.get(key(s))! })), ...standalone];

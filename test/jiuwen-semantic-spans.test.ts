@@ -77,7 +77,9 @@ test('0.0.13y: missing call ids do not attach sibling tools by time', () => {
   const inferenceTurns = rec.interactions.filter((i: any) => i.usage);
   assert.equal(inferenceTurns.flatMap((i: any) => i.tool_calls || []).length, 0);
   assert.equal(rec.interactions.flatMap((i: any) => i.tool_calls || []).length, 1);
-  assert.equal(buildAgentCallTree(rec.interactions)!.stats.llmCalls, 2);
+  const tree = buildAgentCallTree(rec.interactions)!;
+  assert.equal(tree.stats.llmCalls, 2);
+  assert.equal(tree.events.filter(event => event.kind === 'tool').length, 1);
 });
 
 test('0.0.13y: closed root is an explicit completion and bypasses batch throttling', () => {

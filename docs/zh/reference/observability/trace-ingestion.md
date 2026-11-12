@@ -59,7 +59,11 @@ changefreq: "monthly"
 
 ## Jiuwen 耗时单位
 
+Jiuwen 工具 Span 通过显式父 Span 或工具调用 ID 关联推理轮次。无法关联的工具仍独立保留，但不因此新增 LLM 调用计数。
+
 Jiuwen OTLP 聚合将纳秒起止时间转换为毫秒后写入 `Execution.latency`，详情和列表均按毫秒格式化。Trace Bundle 导入兼容旧 Jiuwen 秒值：仅在原始交互时间提供足够单位证据时乘 1000，已是毫秒或证据不足的值保持不变，不改写原始 Bundle 或 Session。历史数据的备份、预览和校正步骤见[查看 Trace](../../how-to/observability/view-traces.md#jiuwen-历史耗时单位校正)。
+
+OpenCode 详情 API 的各个视图均从原始交互重算有效耗时，并在 `execution.latency` 中返回；读取不会修改历史记录。缺少可确认的时间信息时回退到存储值。
 
 ## 实现依据
 

@@ -36,7 +36,7 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
 
     assert.deepEqual(
         navigation.find(item => item.key === 'observe')?.children?.map(item => item.key),
-        ['agents', 'trace', 'version-analysis', 'infra'],
+        ['agents', 'trace', 'task-insight', 'version-analysis', 'infra'],
     );
     assert.deepEqual(
         navigation.find(item => item.key === 'evaluation')?.children?.map(item => item.key),
@@ -64,6 +64,12 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
         ?.children?.find(item => item.key === 'trace');
     assert.ok(traceItem);
     assert.equal(isSidebarItemActive(traceItem, '/details'), true);
+
+    const taskInsightItem = navigation.find(item => item.key === 'observe')?.children?.find(item => item.key === 'task-insight');
+    assert.ok(taskInsightItem);
+    assert.equal(taskInsightItem.href, '/task-insight');
+    assert.equal(isSidebarItemActive(taskInsightItem, '/task-insight'), true);
+    assert.equal(isSidebarItemActive(taskInsightItem, '/trace'), false);
 
     const versionAnalysisItem = navigation
         .find(item => item.key === 'observe')

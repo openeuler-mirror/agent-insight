@@ -68,6 +68,7 @@ export function coreMockReply(input,context={}){
  if(all.includes('Skill 优化助手'))return optimizationReply(input,all,messages);
  if(all.includes('最终生成的 skill 必须用 write 工具'))return generationReply(input,users,messages);
  const marker=users.trim().match(/^["']?(?:请只回复\s*|只回复\s*)([A-Z][A-Za-z0-9-]+)/);if(marker)return answer(marker[1]);
+ if(!input.tools?.length&&users.trim()==='Reply with OK.')return answer('OK');
  if(!input.tools?.length&&/^(?:Hi|Hello|你好|请回复.*|Say.*|test)[.!！。]?$/i.test(users.trim()))return answer('OK');
  if(all.includes('AI Agent Skill 评估专家')||all.includes('## 输出格式')&&all.includes('overall_comment')){
   const dims=all.includes('元数据')||all.includes('目的适配性')?['目的适配性','结构规范性','指令适配性','内容一致性']:all.includes('工程健壮性')?['工程健壮性']:['安全风险性'];

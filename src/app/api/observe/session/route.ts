@@ -217,19 +217,20 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
         ? normalizeClaudeCodeInteractionsForStorage(rawInteractions)
         : rawInteractions;
     const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
+    const latency = framework === 'opencode'
+        ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? executionRow?.latency ?? null
+        : executionRow?.latency ?? null;
     const execution = executionRow ? {
         status: executionRow.executionStatus || undefined,
         sourceKind: executionRow.sourceKind || undefined,
         sourceExecutionId: executionRow.sourceExecutionId || undefined,
-        latency: executionRow.latency ?? null,
+        latency,
         tokens: executionRow.tokens ?? null,
         cost: executionRow.cost ?? null,
         timestamp: executionRow.timestamp ?? null,
     } : undefined;
     const executionSummary = executionRow ? {
-        latency: framework === 'opencode'
-            ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? executionRow.latency ?? null
-            : executionRow.latency ?? null,
+        latency,
         tokens: executionRow.tokens ?? null,
         cost: executionRow.cost ?? null,
         timestamp: executionRow.timestamp ?? null,
