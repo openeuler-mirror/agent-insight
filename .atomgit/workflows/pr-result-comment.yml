@@ -55,8 +55,8 @@ jobs:
           PR_COMMENT_PR_NUMBER: ${{ inputs.pr_number }}
           PR_COMMENT_RUN_ID: ${{ inputs.run_id }}
           PR_COMMENT_DRY_RUN: ${{ inputs.dry_run }}
-          PR_COMMENT_WRITER_ID: 672dd45c4ea6673461aa2102
-          PR_COMMENT_WRITER_LOGIN: atomgit-bot
+          PR_COMMENT_WRITER_ID: 69ec338eb06841500aced516
+          PR_COMMENT_WRITER_LOGIN: action-bot
         run: |
           set -euo pipefail
           test "${ATOMGIT_REF:?}" = refs/heads/master

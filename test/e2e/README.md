@@ -100,9 +100,11 @@ PR 自动检查从 PR 的“检查”标签进入，点击左侧流水线记录�
 
 回写仅关联由 PR 事件触发的门禁运行；普通手动测试运行没有 PR 归属，不会自动贴到某个 PR。源提交回退测试与预合并测试会在评论中区分，历史运行只说明当时的测试提交与基线。
 
-[pr-result-comment.yml](../../.atomgit/workflows/pr-result-comment.yml) 是独立的可信回写流程，不增加业务测试 Job。将该 workflow 和回写脚本合入 `master` 后，每 5 分钟触发一次扫描，读取最近 24 小时的已结束 `PR Build UT E2E` PR 运行，覆盖仍打开和已合并的 PR，跳过关闭但未合并的 PR，在同一条机器人评论中更新提交 SHA、编译、UT 通过/失败/跳过数量、五例名称与 Mock/Real 模式、失败项和运行链接。Runner 排队会增加延迟；评论不是流水线结束的即时通知。
+[pr-result-comment.yml](../../.atomgit/workflows/pr-result-comment.yml) 是独立的可信回写流程，不增加业务测试 Job。将该 workflow 和回写脚本合入 `master` 后，每 5 分钟触发一次扫描，读取最近 24 小时的已结束 `PR Build UT E2E` PR 运行，覆盖仍打开和已合并的 PR，跳过关闭但未合并的 PR，在同一条机器人评论中更新提交 SHA、编译、UT 通过/失败/跳过数量、五例名称与 Mock/Real 模式、失败项和运行链接。Runner 排队会增加延迟；评论不是流水线结束的即时通知。 定时触发会持续运行，不会在首个结果回写后自动停止；每轮无可回写结果时退出，已验证且未变化的结果不会重复评论。停用该 workflow 或移除 `schedule` 可停止后续定时触发。
 
 回写流程仅从 `master` 的触发提交检出可信代码，使用平台内置 `ATOMGIT_TOKEN` 的仓库/流水线读取和 PR 写入权限；不配置个人 Token，不检出或执行 PR 代码，也不运行报告中的脚本。原 8 Job 的 `pull_request` 仍只读。写入前核对仓库、PR、运行及当前提交，过期结果不覆盖新提交的评论；同一结果重复扫描不会重复发评论。失败、取消和报告缺失均明确展示，不能将未执行或不完整报告标为通过。回写失败会使独立评论流程失败，原测试门禁仍保留实际测试结论。平台报告通过 `platformRunAttempt` 记录 `ATOMGIT_RUN_ATTEMPT`，回写时核对运行轮次；旧报告缺少该字段时仅兼容首轮，重跑第 2 轮及以后缺少轮次证据会标为不可验证，不能借用首轮制品给出通过结论。
+
+原生 Token 需要 `project: read` 读取仓库元数据、`repository: read` 读取源码提交、`action: read` 读取运行和制品，以及 `pr: write` / `note: write` 读写 PR 评论。仓库级 Token 不具备全局 `/user` 访问权限，可信 workflow 使用原生写入后读回确认的 `action-bot` ID 和登录名核对作者；本地未固定身份时仍查询当前授权用户。已合并 PR 的补发还要求仓库 Pull Request 设置开启“允许合并请求合并后继续做代码检视和评论”（`add_notes_after_merged`）；未开启时回写记录 `SKIPPED_MERGED_COMMENTS_DISABLED`，仍可预览结果。
 
 需要预览或补发时，从 Actions → **PR Result Comment** → **Run workflow** 选择 `master`：
 

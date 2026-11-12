@@ -132,6 +132,27 @@ test('API permission failures identify the path without exposing query credentia
   });
 });
 
+test('API errors retain bounded server diagnostics and redact the active token', async t => {
+  const { default: http } = await import('node:http');
+  const { AtomGit } = await import('./atomgit.mjs');
+  const server = http.createServer((_req, res) => { res.writeHead(405);res.end(JSON.stringify({ error_code: 405, error_code_name: 'METHOD_DENIED', error_message: 'method rejected synthetic-token' })); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const api = new AtomGit({ token: 'synthetic-token', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/v5', localTest: true });
+  await assert.rejects(api.request('POST', '/repos/example/platform/pulls/7/comments', { body: 'test' }), error => {
+    assert.match(error.message, /METHOD_DENIED.*method rejected \[REDACTED\]/);assert.doesNotMatch(error.message, /synthetic-token/);return true;
+  });
+});
+
+test('merged PR comment policy is reported without a rejected write and still permits preview', async () => {
+  const f = fixture();f.pull.state = 'merged';f.pull.mergeable_state = { merge_request_switch: { add_notes_after_merged: false } };
+  const blocked = await scan(f);assert.equal(blocked[0].status, 'SKIPPED_MERGED_COMMENTS_DISABLED');assert.equal(f.writes.length, 0);
+  const preview = await scanPrResults({ api: f.api, repository: repo, prNumber: 7, publish: true, dryRun: true });
+  assert.equal(preview[0].status, 'PREVIEW');assert.equal(f.writes.length, 0);
+  f.pull.mergeable_state.merge_request_switch.add_notes_after_merged = true;
+  assert.equal((await scan(f))[0].status, 'PUBLISHED');
+});
+
 test('real HTTP scanner uses v8 metadata, strips credentials at the artifact redirect and updates one comment', async t => {
   const { default: http } = await import('node:http');
   const { AtomGit } = await import('./atomgit.mjs');
