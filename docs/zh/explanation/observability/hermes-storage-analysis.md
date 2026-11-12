@@ -17,6 +17,10 @@ changefreq: monthly
 | 整文件读入和 checkpoint 超出文件长度 | `readNewLinesSince` 使用固定缓冲分块读取，发现 cursor 超出文件大小时从 0 开始 | 不再列为尚未实施的基础改造 |
 | API 请求 history 双字段保存 | `pre_api_request()` 仍把 `request_messages` 同时写入 `llm.input_messages` 和 `input.value` | 仍有重复来源；实际空间开销需要按当前裁剪、去重和消费流程重测 |
 
+Hermes 工具 Span 的状态兼容 `hermes.tool.outcome`、`tool.outcome` 和原生 observer 的 `tool.status`。明确的 `error` / `failed` 会计入工具错误数，插件同时保留原生 `error_message`。终端工具仅在正文中包含非零退出码、但上游仍报 `status=ok` 时，不从任意正文推断错误。
+
+当前 Hermes 交互投影仍有用量展示限制：模型仅返回工具调用且没有文本正文时，该次 API Span 的 Token 会进入执行记录总量，但尚未完整进入详情树的逐轮统计。因此树中的 Token 合计可能低于顶部总量；逐轮 API 与工具的完整关联仍需补齐。
+
 增量发送仍允许网络失败后的重试，不等于端到端恰好一次。输入 history 的收敛可能影响调试回放和输入展示，必须明确调用方并回归验证后再实施；本文只更新说明，不调整采集行为。
 
 ## 1. Trace 数据为什么要先落盘

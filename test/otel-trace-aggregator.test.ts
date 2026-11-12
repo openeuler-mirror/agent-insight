@@ -808,6 +808,20 @@ test("OTel traces: Langfuse LangGraph snapshots latest root trace for reused ses
   assert.equal(record.interactions?.some((interaction: any) => String(interaction.content || "").includes("old query")), false)
 })
 
+test("OTel traces: Hermes native tool status preserves explicit errors", () => {
+  for (const status of ['ok', 'error']) {
+    const record = aggregateOtelTraceEvents('hermes-tool-status', [
+      traceEvent({ sessionId: 'hermes-tool-status', spanId: 'root', kind: 'agent', serviceName: 'hermes',
+        attributes: { 'openinference.span.kind': 'AGENT', 'hermes.session.kind': 'session', 'input.value': 'run the tool' } }),
+      traceEvent({ sessionId: 'hermes-tool-status', spanId: 'tool', parentSpanId: 'root', kind: 'tool', serviceName: 'hermes',
+        attributes: { 'openinference.span.kind': 'TOOL', 'tool.name': 'audit_tool', 'tool.status': status, 'output.value': 'tool result' } }),
+    ])!;
+    const tool = record.interactions!.flatMap((row: { tool_calls?: { state?: string }[] }) => row.tool_calls || [])[0];
+    assert.equal(tool.state, status === 'error' ? 'error' : 'success');
+    assert.equal(record.tool_call_error_count, status === 'error' ? 1 : 0);
+  }
+});
+
 test("OTel traces: aggregates Hermes agent spans without double-counting usage", () => {
   const events = [
     traceEvent({
