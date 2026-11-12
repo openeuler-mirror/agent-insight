@@ -177,15 +177,28 @@ class AgentInsightToolMiddleware(_MiddlewareBase):
                 extra=extra,
             )
         final_response = None
+        chunk_response = None
         error: Exception | str | None = None
         terminal_status: str | None = None
         try:
             async for event in next_handler():
                 if type(event).__name__ == "ToolResponse":
                     final_response = event
+                elif (
+                    hasattr(event, "is_last")
+                    and hasattr(event, "state")
+                    and hasattr(event, "content")
+                ):
+                    if chunk_response is None:
+                        from agentscope.tool import ToolResponse as HostToolResponse
+
+                        chunk_response = HostToolResponse()
+                    chunk_response.append_chunk(event)
+                    if event.is_last is True:
+                        final_response = chunk_response
                 yield event
         except GeneratorExit:
-            # Closing an async generator after consuming the final ToolResponse
+            # Closing an async generator after consuming the final tool result
             # is normal QwenPaw control flow, not a tool failure.
             raise
         except asyncio.CancelledError:

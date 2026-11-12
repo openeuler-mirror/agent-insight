@@ -340,17 +340,21 @@ function usageForEvents(events: OtelTraceEvent[]) {
   };
 }
 
+function toolState(event: OtelTraceEvent): 'error' | 'success' {
+  const attrs = event.attributes || {};
+  const outcome = String(attrs['hermes.tool.outcome'] || attrs['tool.outcome'] || attrs['tool.status'] || '').toLowerCase();
+  return outcome === 'error' || outcome === 'failed' ? 'error' : 'success';
+}
+
 function buildToolCall(event: OtelTraceEvent): AnyObj {
   const attrs = event.attributes || {};
   const created = event.startTimeMs || Date.parse(event.receivedAt) || Date.now();
   const completed = eventEndMs(event) || created;
   const output = firstContent(attrs['output.value'], attrs['tool.output'], attrs['tool.result']);
-  const outcome = String(attrs['hermes.tool.outcome'] || attrs['tool.outcome'] || '').toLowerCase();
-  const state = outcome === 'error' || outcome === 'failed' ? 'error' : 'success';
   return {
     id: event.spanId,
     type: 'function',
-    state,
+    state: toolState(event),
     function: {
       name: toolName(event),
       arguments: firstContent(attrs['tool.arguments'], attrs['input.value']) || JSON.stringify(attrs),
@@ -664,6 +668,7 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
     agentName: rootAgentName,
     llm_call_count: llmCallCount,
     tool_call_count: ordered.filter(isToolSpan).length,
+    tool_call_error_count: ordered.filter(event => isToolSpan(event) && toolState(event) === 'error').length,
     input_tokens: totalUsage.input_tokens,
     output_tokens: totalUsage.output_tokens,
     reasoning_tokens: totalUsage.reasoning_tokens || undefined,

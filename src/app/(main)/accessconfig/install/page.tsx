@@ -153,6 +153,7 @@ export default function AccessInstallPage() {
         `LANGFUSE_BASE_URL=${langfuseHost}`,
         `LANGFUSE_PUBLIC_KEY=${langfuseUser}`,
         `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
+        'LANGFUSE_OTEL_COMPRESSION=none',
     ].join('\n');
     const llamaIndexSetupCode = 'import agent_insight_llamaindex; agent_insight_llamaindex.setup()';
 
