@@ -17,6 +17,12 @@ import unittest
 
 from qwenpaw_insight.middleware import AgentInsightToolMiddleware
 
+try:
+    from agentscope.message import TextBlock, ToolResultState
+    from agentscope.tool import ToolChunk
+except ImportError:
+    ToolChunk = None
+
 
 class ToolResponse:
     def __init__(
@@ -82,6 +88,21 @@ async def _run_until_response_then_close(
     await stream.aclose()
 
 
+async def _run_events_then_close(
+    middleware: AgentInsightToolMiddleware,
+    tool_call: object,
+    events: list,
+) -> None:
+    async def handler():
+        for event in events:
+            yield event
+
+    stream = middleware.on_acting(None, {"tool_call": tool_call}, handler)
+    for _event in events:
+        await anext(stream)
+    await stream.aclose()
+
+
 async def _run_error(middleware: AgentInsightToolMiddleware, tool_call: object) -> None:
     async def handler():
         raise RuntimeError("file missing")
@@ -110,6 +131,110 @@ async def _run_cancelled(middleware: AgentInsightToolMiddleware, tool_call: obje
 
 
 class MiddlewareTest(unittest.TestCase):
+    @unittest.skipUnless(ToolChunk is not None, "Requires the QwenPaw AgentScope host SDK")
+    def test_final_error_chunk_preserves_output_when_stream_is_closed(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        asyncio.run(
+            _run_until_response_then_close(
+                middleware,
+                _tool_call("read_file", {"file_path": "missing.txt"}),
+                ToolChunk(
+                    is_last=True,
+                    state=ToolResultState.ERROR,
+                    content=[TextBlock(type="text", text="Error: The file missing.txt does not exist.")],
+                ),
+            ),
+        )
+
+        finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+        self.assertEqual(finish["status"], "error")
+        self.assertEqual(finish["output"], "Error: The file missing.txt does not exist.")
+        self.assertEqual(finish["error"], "tool state: error")
+
+    @unittest.skipUnless(ToolChunk is not None, "Requires the QwenPaw AgentScope host SDK")
+    def test_final_success_chunk_preserves_output_when_stream_is_closed(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        asyncio.run(
+            _run_until_response_then_close(
+                middleware,
+                _tool_call("read_file", {"file_path": "marker.txt"}),
+                ToolChunk(is_last=True, state=ToolResultState.SUCCESS, content=[TextBlock(type="text", text="marker")]),
+            ),
+        )
+
+        finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+        self.assertEqual(finish["status"], "success")
+        self.assertEqual(finish["output"], "marker")
+        self.assertIsNone(finish["error"])
+
+    @unittest.skipUnless(ToolChunk is not None, "Requires the QwenPaw AgentScope host SDK")
+    def test_intermediate_chunk_does_not_complete_a_tool(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        asyncio.run(
+            _run_until_response_then_close(
+                middleware,
+                _tool_call("read_file", {"file_path": "marker.txt"}),
+                ToolChunk(is_last=False, state=ToolResultState.SUCCESS, content=[TextBlock(type="text", text="partial")]),
+            ),
+        )
+
+        finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+        self.assertEqual(finish["status"], "interrupted")
+        self.assertIsNone(finish["output"])
+
+    @unittest.skipUnless(ToolChunk is not None, "Requires the QwenPaw AgentScope host SDK")
+    def test_streamed_chunks_preserve_earlier_text_on_final_chunk_close(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        chunks = [
+            ToolChunk(is_last=False, content=[TextBlock(id="block", type="text", text="first-")]),
+            ToolChunk(is_last=True, state=ToolResultState.SUCCESS, content=[TextBlock(id="block", type="text", text="second")]),
+        ]
+        asyncio.run(_run_events_then_close(middleware, _tool_call("read_file", {}), chunks))
+
+        finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+        self.assertEqual(finish["output"], "first-second")
+        self.assertEqual(finish["status"], "success")
+        self.assertEqual(chunks[0].content[0].text, "first-")
+
+    @unittest.skipUnless(ToolChunk is not None, "Requires the QwenPaw AgentScope host SDK")
+    def test_streamed_failure_state_and_metadata_survive_final_success_chunk(self):
+        collector = _FakeCollector()
+        middleware = AgentInsightToolMiddleware(collector)
+        chunks = [
+            ToolChunk(is_last=False, state=ToolResultState.ERROR, metadata={"exit_code": 17},
+                content=[TextBlock(id="block", type="text", text="failure-")]),
+            ToolChunk(is_last=True, state=ToolResultState.SUCCESS, metadata={"other": "metadata"},
+                content=[TextBlock(id="block", type="text", text="details")]),
+        ]
+        asyncio.run(_run_events_then_close(middleware, _tool_call("execute_shell_command", {}), chunks))
+
+        finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+        self.assertEqual(finish["output"], "failure-details")
+        self.assertEqual(finish["status"], "error")
+        self.assertEqual(finish["exit_code"], 17)
+
+    @unittest.skipUnless(ToolChunk is not None, "Requires the QwenPaw AgentScope host SDK")
+    def test_complete_response_after_chunks_does_not_duplicate_output(self):
+        from agentscope.tool import ToolResponse as HostToolResponse
+
+        for response_type in (ToolResponse, HostToolResponse):
+            with self.subTest(response_type=response_type):
+                collector = _FakeCollector()
+                middleware = AgentInsightToolMiddleware(collector)
+                events = [
+                    ToolChunk(is_last=False, content=[TextBlock(id="block", type="text", text="first-")]),
+                    ToolChunk(is_last=True, state=ToolResultState.SUCCESS, content=[TextBlock(id="block", type="text", text="second")]),
+                    response_type(content=[TextBlock(id="block", type="text", text="first-second")]),
+                ]
+                asyncio.run(_run_events_then_close(middleware, _tool_call("read_file", {}), events))
+
+                finish = [call for call in collector.calls if call[0] == "finish_tool"][0][1]
+                self.assertEqual(finish["output"], "first-second")
+
     def test_closing_after_successful_response_is_not_an_error(self):
         collector = _FakeCollector()
         middleware = AgentInsightToolMiddleware(collector)
