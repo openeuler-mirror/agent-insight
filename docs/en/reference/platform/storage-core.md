@@ -11,6 +11,8 @@ The baseline defines 21 transactional and 13 ClickHouse core tables, including f
 
 The ClickHouse HTTP adapter writes trusted canonical Span versions, reads latest state and individual Spans, and supports chunked multi-section payload bundles. Each bundle has one manifest revision, published after all chunks, with section and chunk hashes. Requests are capped at 4MiB and payload bundles at 64MiB. The adapter is not an ingestion materializer: conflicting content at the same entity revision must be rejected upstream. Partial multi-request writes require idempotent replay; Kafka ownership, snapshot publication, and automatic Outbox delivery remain future work.
 
+Workspace foreign keys protect data-reference ownership; they do not authenticate callers. Password login, groups, and group-admin authorization remain planned. Web adapters must derive and validate access scopes on the server.
+
 ## Commands
 
 Run from the repository root. Every database path is explicit; no command defaults to an existing application database.

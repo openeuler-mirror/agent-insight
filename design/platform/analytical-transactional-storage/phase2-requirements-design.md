@@ -119,6 +119,51 @@ flowchart TB
 
 公共基线采用 etag 条件更新和有限重试：候选查询后 `UPDATE ... WHERE status=queued AND etag=old`，仅成功更新者获得任务。续租/完成同样必须匹配 fence 和 attempt。专属锁语法只影响效率，不改变正确性。
 
+### 4.2 账号密码登录、用户组与组管理员（新增明确需求）
+
+2026-11-12 补充：此前 workspace_id 与 IAM 逻辑目录只是身份/隔离预留，不代表已经支持账号密码、用户组或组管理员。当前34张物理核心表尚无完整身份表或请求授权层。本节将该能力明确列入后续控制面，不修改已经发布的001核心DDL或其checksum。
+
+**身份、凭据、成员关系和数据归属分开。** principal 是稳定用户身份，登录名可变；密码、API Key和外部身份是不同的认证方式。group 是成员和角色边界，workspace 是数据隔离/查询分区。一个用户可加入多个组，一个组可绑定一个或多个 workspace；workspace 同时只属于一个组或一个明确的个人空间。初始产品可用“每组一个 workspace”，不能把 principal_id、group_id、workspace_id 混为同一个ID。
+
+| 目标事务表 | 关键字段与约束 | 用途 |
+| --- | --- | --- |
+| `iam_principals` | principal_id PK；normalized_login_name UNIQUE；display_name、status、auth_version、created/updated | 账号主体，不保存明文密码；停用主体撤销所有认证入口 |
+| `iam_password_credentials` | principal_id PK/FK；password_hash、scheme、parameters、credential_version、changed_at | 加盐的专用密码哈希和升级/重置版本；不使用普通SHA内容hash代替密码哈希 |
+| `iam_api_credentials` | credential_id PK；principal_id FK；token_hash、group/workspace scope、capabilities、expires/revoked_at | 采集/自动化身份与权限，独立轮换；不因UI登录获得所有API Key |
+| `iam_external_identities` | provider+issuer+subject UNIQUE；principal_id FK | 与现有外部登录关联，同一主体可有多种登录方式 |
+| `iam_sessions` | session_token_hash UNIQUE；principal_id FK；issued/expires/revoked_at、auth_version | 可撤销登录会话；退出、改密、停用后的失效规则；active_group只是上下文，不是授权凭据 |
+| `iam_groups` | group_id PK；group_key UNIQUE；name、status、created_by、policy_revision | 用户组/团队定义，不复用实验run_groups |
+| `iam_group_memberships` | PK(group_id,principal_id)；role、status、etag；外键指向group和principal | 多对多成员关系；role初值owner/admin/member/viewer，变更使用CAS |
+| `iam_workspace_bindings` | workspace_id PK/FK；owner_type、owner_group_id/owner_principal_id XOR；binding_revision | 明确数据空间归属，支持以后组下多个workspace；转移必须显式审计 |
+
+这些是待实现的IAM领域表，细化时与原`iam_principals/iam_memberships/iam_credentials`逻辑目录归并，不把新名称与旧占位表重复建两套。除workspace绑定外，principal/group是控制面身份，不因所有业务表有workspace_id而强行套复合tenant主键。密码哈希库、会话协议和账号恢复渠道在该功能实现时固定并单独安全验证，本节不宣称已有认证代码。
+
+**权限矩阵：**
+
+| 身份 | 业务数据读取 | 管理权限 |
+| --- | --- | --- |
+| 组owner/admin | 该组绑定workspace内全部成员产生的数据，包括Trace/Span/正文、资产与版本、数据集、实验、评分、报告、制品和分析 | 按角色管理组成员与组内配置；owner控制所有权转移，不允许删除最后一个有效owner |
+| 普通member | 默认本人创建或明确共享给自己的组内资源；产品可选组内全员可读策略 | 仅授权的创建/执行/编辑操作；能读取不等于可删除、发布或改成员角色 |
+| viewer | 获授权的组内只读数据 | 不允许编辑、执行、发布或成员管理 |
+| 平台管理员 | 单独的全局授权策略，不能由组admin角色推导 | 不使用去掉user过滤条件作为通用鉴权实现 |
+
+“看所有组内数据”按**数据所属组**判断，不能临时查询“该组当前用户名列表”后拼user过滤。新写入在服务端确定当前组/workspace，记录created_by_principal_id用于归因；用户转组/退出后，历史组数据仍留原组，原组管理员仍可查看。个人空间和其他组的数据不因成员重叠而自动公开。若产品不提供个人空间，则账号入组后所有新业务写入均进入所选组空间；历史个人数据归组必须有明确迁移映射。
+
+业务读取权限不等于读取成员密码、API Key明文或私有评测gold。组管理员可看业务结果和证据，但凭据只允许查看状态/撤销/重置，private gold仍遵守评测隔离协议。
+
+**请求与跨库授权规则：**
+
+1. 认证服务解析会话或API凭据，确认账号、凭据和成员关系有效，再由服务端生成有界`AccessScope(principal_id, allowed_workspace_ids, roles, capabilities, policy_revision)`。客户端传group_id/workspace_id只代表选择，不能自授权限。
+2. 所有列表、单ID详情、搜索、聚合、Span正文、快照、导出和Artifact下载都校验同一scope。CH使用服务端绑定的workspace过滤，不能用`undefined`或缺少过滤表示管理员。空授权集合必须拒绝/返回无授权结果，不能退化成全库。
+3. 组管理员的跨workspace统计仍限定该组workspace集合，并显示范围与数据水位；不得复用未带授权范围的全局缓存。查询/游标/缓存键包含workspace集合、policy_revision及查询条件。
+4. 每个新请求使用当前成员/账号状态，角色撤销与转组发布缓存失效事件；长导出/评测任务在领取、结果下载或权限敏感阶段重新确认scope。投影延迟不能延长已撤销的访问权。
+5. 人员登录会话与采集API凭据分开，采集凭据固定组/workspace和能力。用户退出组时，相应组凭据/会话访问同步撤销或受控移交；服务任务不依赖操作人会话永久存活。
+6. 当前SQLiteControlStore和CH适配器是内部基础端口，未实施请求认证；其workspace参数不是对外可直接信任的授权结果。在新增Web入口前必须接入上述服务端授权层。
+
+**迁移与验收：** 旧User.id/username/externalAccount/apiKey映射稳定principal与独立credential；旧库没有可还原密码时使用显式邀请/重置，不生成通用默认密码，也不把API Key当登录密码。组/角色/历史数据归属通过管理员提供的映射确定，禁止按同名/邮箱域自动获得组管理员。旧username仅作来源信息与兼容映射，不作为跨库权限主键。
+
+未来迁移使用002 IAM版本/兼容扩展，不就地改001checksum。先准备账号与组、workspace绑定和历史映射，再切换授权入口；没有明确归组的旧数据保持隔离并进入待确认清单。必须验证多组用户、组admin看到其他成员全部组数据、普通成员隔离、组间隔离、单Span/正文/统计/下载同权限、退出组和停用/改密撤销、同名不同人不串数据，以及PG/openGauss/SQLite合同一致。暂不把这批设计补充计入已实现34张表或现有70项测试覆盖。
+
 ## 5. ClickHouse 表目录与核心键
 
 所有排序键非空；不存在可变 status/model/tag 进入替换身份键的设计。以下引擎写作逻辑 `MergeTree`/`ReplacingMergeTree`；生产部署由拓扑映射为 Replicated 家族，不能把非复制示例当 HA 配置。

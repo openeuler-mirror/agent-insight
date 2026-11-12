@@ -47,6 +47,8 @@ STORAGE_TEST_CLICKHOUSE_URL=http://127.0.0.1:your-test-port python3 -m unittest 
 
 ## 后续工作与尚未完成项
 
+- 账号密码、用户分组与组管理员全组数据读取：已补IAM表和权限/迁移规则设计，尚未实现认证和请求授权层；不计入34张物理表及70项测试。
+
 - PG/openGauss业务运行适配、安装/迁移Runner与实际发行版能力认证。
 - 完整Durable Event Log/实体所有者、重复修订冲突隔离、Outbox自动投递和可靠checkpoint。
 - 固定Trace快照、Dataset异步发布、Evaluator/Benchmark协议、评分事实选择和其余领域业务接管。

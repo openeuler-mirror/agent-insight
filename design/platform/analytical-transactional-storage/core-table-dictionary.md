@@ -10,6 +10,8 @@
 - 本轮 CH 表：`obs_payload_manifests`, `obs_trace_current`, `obs_span_current`, `obs_payload_chunks`, `obs_events`, `obs_entity_relations`, `snapshot_nodes`, `dataset_sample_revisions`, `dataset_release_members`, `eval_result_facts`, `eval_metric_facts`, `eval_result_selection_current`, `eval_publication_members`。
 - 仍待后续批次：IAM 完整身份/凭据/成员、资产异步发布、插件与指标注册、run groups、人工裁决/评论、标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
 
+账号密码、用户分组和组管理员属于待实现IAM控制面；明确的目标表、权限矩阵及历史归组规则见 [总体设计 §4.2](phase2-requirements-design.md#42-账号密码登录用户组与组管理员新增明确需求)。当前workspace外键保护引用归属，不能替代Web请求鉴权。
+
 ## 公共类型与约束
 
 - TEXT：UTF-8，标识符最多 512 字符且无控制字符，port 负责精确验证；SQL 不自动生成 UUID。
