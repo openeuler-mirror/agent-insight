@@ -148,13 +148,13 @@ function existingMetadata(comment) {
   return JSON.parse(match[1]);
 }
 
-export async function scanPrResults({ api, repository, prNumber, runId, publish = false, dryRun = false, now = Date.now() }) {
+export async function scanPrResults({ api, repository, prNumber, runId, publish = false, dryRun = false, writerIdentity, now = Date.now() }) {
   const prefix = api.repoPath(repository), repo = await api.request('GET', prefix);
   assert.equal(repo.full_name, repository);assert.equal(repo.default_branch, 'master');
   const recentRuns = prNumber ? [] : await list(api, prefix + '/actions/runs?event=MR', 'workflow_runs', 8);
   const numbers = prNumber ? [prNumber] : [...new Set(recentRuns.filter(r => r.file_path === workflowPath && (r.end_time || r.start_time) >= now - 86_400_000).map(r => Number(r.pull_request_id)).filter(n => Number.isSafeInteger(n) && n > 0))];
   const pulls = numbers.map(number => ({ number }));
-  const results = [];let user;
+  const results = [];let user = writerIdentity;
   for (const listed of pulls) {
     try {
       const pull = await api.readPull(repository, listed.number);
@@ -220,7 +220,9 @@ export function readOptions(args, env = process.env) {
   if (pr && (!/^[1-9]\d*$/.test(pr) || !Number.isSafeInteger(Number(pr)))) throw Error('Invalid PR number');
   if (runId && (!pr || !/^[a-f0-9]{32}$/.test(runId))) throw Error('Explicit run ID requires a valid PR number');
   if (!['', 'true', 'false'].includes(env.PR_COMMENT_DRY_RUN || '')) throw Error('Invalid dry-run flag');
-  return { repository, prNumber: pr ? Number(pr) : undefined, runId: runId || undefined, publish: values.publish === true, dryRun: values['dry-run'] === true || env.PR_COMMENT_DRY_RUN === 'true' };
+  const writerId = env.PR_COMMENT_WRITER_ID, writerLogin = env.PR_COMMENT_WRITER_LOGIN;
+  if ((writerId || writerLogin) && (!/^[\w-]{1,128}$/.test(writerId || '') || !/^[\w.-]{1,100}$/.test(writerLogin || ''))) throw Error('Invalid trusted writer identity');
+  return { repository, prNumber: pr ? Number(pr) : undefined, runId: runId || undefined, publish: values.publish === true, dryRun: values['dry-run'] === true || env.PR_COMMENT_DRY_RUN === 'true', writerIdentity: writerId ? { id: writerId, login: writerLogin } : undefined };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

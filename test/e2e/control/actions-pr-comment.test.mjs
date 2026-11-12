@@ -99,6 +99,19 @@ test('manual options reject bad values, require a PR for an explicit run and hon
   assert.throws(() => readOptions(['--repository', repo], { PR_COMMENT_PR_NUMBER: '7;bad' }), /PR/);
   assert.throws(() => readOptions(['--repository', repo], { PR_COMMENT_RUN_ID: runId }), /PR/);
   assert.throws(() => readOptions(['--repository', repo], { PR_COMMENT_DRY_RUN: 'yes' }), /dry/i);
+  assert.deepEqual(readOptions(['--repository', repo], { PR_COMMENT_WRITER_ID: bot.id, PR_COMMENT_WRITER_LOGIN: bot.login }).writerIdentity, bot);
+  assert.throws(() => readOptions(['--repository', repo], { PR_COMMENT_WRITER_ID: bot.id }), /writer/i);
+});
+test('trusted writer identity avoids global user access and still checks the exact comment author', async () => {
+  const f = fixture(), request = f.api.request;
+  f.api.request = async (method, route, body, options) => {
+    assert.notEqual(route, '/user');return request(method, route, body, options);
+  };
+  const options = { api: f.api, repository: repo, publish: true, now: 2000, writerIdentity: bot };
+  assert.equal((await scanPrResults(options))[0].status, 'PUBLISHED');
+  assert.equal((await scanPrResults(options))[0].status, 'UNCHANGED');
+  f.run.attempt++;f.refresh();assert.equal((await scanPrResults(options))[0].status, 'UPDATED');
+  assert.equal(f.comments.length, 1);
 });
 test('writer workflow is scheduled and master-only, without PR code or model secrets', () => {
   const workflowText = fs.readFileSync(new URL('../../../.atomgit/workflows/pr-result-comment.yml', import.meta.url), 'utf8');
