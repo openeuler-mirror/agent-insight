@@ -115,7 +115,7 @@ test('trusted writer identity avoids global user access and still checks the exa
 });
 test('writer workflow is scheduled and master-only, without PR code or model secrets', () => {
   const workflowText = fs.readFileSync(new URL('../../../.atomgit/workflows/pr-result-comment.yml', import.meta.url), 'utf8');
-  assert.match(workflowText, /\*\/5 \* \* \* \*/);assert.match(workflowText, /refs\/heads\/master/);assert.match(workflowText, /action: read/);assert.match(workflowText, /pr: write/);assert.match(workflowText, /project: read/);
+  assert.match(workflowText, /\*\/5 \* \* \* \*/);assert.match(workflowText, /refs\/heads\/master/);assert.match(workflowText, /action: read/);assert.match(workflowText, /pr: write/);assert.match(workflowText, /project: read/);assert.match(workflowText, /note: write/);
   assert.doesNotMatch(workflowText, /pull_request:|pull_request_target:|secrets\.|allow-unsafe-pr-checkout|npm (?:ci|install)/);
 });
 
