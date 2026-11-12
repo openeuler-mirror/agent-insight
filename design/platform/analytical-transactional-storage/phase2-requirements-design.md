@@ -162,7 +162,7 @@ flowchart TB
 
 **迁移与验收：** 旧User.id/username/externalAccount/apiKey映射稳定principal与独立credential；旧库没有可还原密码时使用显式邀请/重置，不生成通用默认密码，也不把API Key当登录密码。组/角色/历史数据归属通过管理员提供的映射确定，禁止按同名/邮箱域自动获得组管理员。旧username仅作来源信息与兼容映射，不作为跨库权限主键。
 
-增量迁移已实现002 IAM版本，不就地改001checksum。先准备账号与组、workspace绑定和历史映射，再切换授权入口；没有明确归组的旧数据保持隔离并进入待确认清单。必须验证多组用户、组admin看到其他成员全部组数据、普通成员隔离、组间隔离、单Span/正文/统计/下载同权限、退出组和停用/改密撤销、同名不同人不串数据，以及PG/openGauss/SQLite合同一致。已实施表数为44张，最新测试、适配版本与尚未接管领域见[实施状态](implementation-status.md)及[本批计划](phase5-iam-adapters-plan.md)。
+增量迁移已实现002 IAM版本，不就地改001checksum。先准备账号与组、workspace绑定和历史映射，再切换授权入口；没有明确归组的旧数据保持隔离并进入待确认清单。必须验证多组用户、组admin看到其他成员全部组数据、普通成员隔离、组间隔离、单Span/正文/统计/下载同权限、退出组和停用/改密撤销、同名不同人不串数据，以及PG/openGauss/SQLite合同一致。截至002已实施44张，003项目预留增至46张；最新测试、适配版本与尚未接管领域见[实施状态](implementation-status.md)及[本批计划](phase5-iam-adapters-plan.md)。
 
 ### 4.3 项目预留：当前统一归属 default
 

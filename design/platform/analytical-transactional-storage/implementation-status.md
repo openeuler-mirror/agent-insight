@@ -1,6 +1,6 @@
-# 存储核心、IAM 与三库适配实施状态
+# 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-12。当前已完成001核心基础、IAM/002/统一授权/三事务库合同与003 default项目预留；整体重构及现有Web接管仍在实施中。总体目标见phase1/phase2，本批执行范围见[phase5](phase5-iam-adapters-plan.md)。
+日期：2026-11-12。当前已完成001核心基础、IAM/002/统一授权/三事务库合同与003 default项目预留；整体重构及现有Web接管仍在实施中。总体目标见phase1/phase2，IAM批次范围见[phase5](phase5-iam-adapters-plan.md)，default追加范围见[开发计划](phase3-development-plan.md)。
 
 ## 基线与交付
 
