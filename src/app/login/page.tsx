@@ -16,6 +16,8 @@
 
 'use client';
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { CoreLoginForm } from '@/lib/auth/core-login-form';
 import { getSafeReturnTo, useAuth } from '@/lib/auth/auth-context';
 import { useRouter } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
@@ -24,6 +26,10 @@ import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch, getApiUrl } from '@/lib/client/api';
 
 export default function LoginPage() {
+  return isStorageCoreEnabled() ? <CoreLoginForm /> : <LegacyLoginPage />;
+}
+
+function LegacyLoginPage() {
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
   const [isCompletingIdaas, setIsCompletingIdaas] = useState(false);

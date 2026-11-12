@@ -1,3 +1,5 @@
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCoreList, coreUnsupported } from '@/lib/storage-core/server';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -231,6 +233,7 @@ async function getAutoEvalReadiness(record: Record<string, unknown>) {
 }
 
 export async function GET(request: Request) {
+  if (isStorageCoreEnabled()) return handleCoreList(request);
   try {
     const lifecycleNow = Date.now();
     const { searchParams } = new URL(request.url);
@@ -670,6 +673,7 @@ export async function GET(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  if (isStorageCoreEnabled()) return coreUnsupported();
     try {
         const target = await request.json();
         
@@ -726,6 +730,7 @@ export async function DELETE(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  if (isStorageCoreEnabled()) return coreUnsupported();
     try {
         const body = await request.json();
         const { task_id, upload_id, query: newQuery, user_feedback, label: newLabel, final_result: newFinalResult } = body;

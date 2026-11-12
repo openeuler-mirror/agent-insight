@@ -15,11 +15,15 @@ function handlers(fetcher: (url: string, init?: RequestInit) => Promise<Response
     .filter(d => ['deploymentEndpoint', 'deploymentBody'].includes(d.name.getText(source)))
     .map(d => `const ${d.getText(source)};`).join('\n')
   const states: any[] = []
-  const context = vm.createContext({ exports: {}, process: { env: { NEXT_PUBLIC_URL_PREFIX: '/insight' } }, Headers, Error,
+  const compile = (text: string) => ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
+  const processFixture = { env: { NEXT_PUBLIC_URL_PREFIX: '/insight' } }
+  const modeContext = vm.createContext({ exports: {}, process: processFixture })
+  vm.runInContext(compile(fs.readFileSync('src/lib/storage-core/mode.ts', 'utf8')), modeContext)
+  const context = vm.createContext({ exports: {}, process: processFixture, Headers, Error,
+    require: (id: string) => { assert.equal(id, '@/lib/storage-core/mode'); return modeContext.exports },
     fetch: fetcher, selected: { id: 'optimization-fixture', skillName: 'my skill' }, user: 'fixture-user',
     deployment: { preview: { deployable: true } }, setDeployment: (value: any) => states.push(value),
     setTimeout: (fn: () => void) => { fn(); return 0 }, crypto: { randomUUID: () => 'fixed-request-id' } })
-  const compile = (text: string) => ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   vm.runInContext(compile(fs.readFileSync('src/lib/client/api.ts', 'utf8')), context)
   vm.runInContext(compile(declarations + '\n' + functions), context)
   return { context, states, run: (name: string) => vm.runInContext(`${name}()`, context) as Promise<void> }

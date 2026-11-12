@@ -19,9 +19,17 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, ReactNode, useCallback, useContext, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/client/api';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { useCoreAuthHook } from './use-core-auth';
+import type { CoreProfile } from '@/lib/storage-core/types';
 import type { LoginMode } from '@/lib/auth/login-mode';
 
-interface AuthContextType {
+export interface AuthContextType {
+  authError?: string | null;
+  retryAuth?: () => Promise<void>;
+  profile?: CoreProfile | null;
+  workspaceId?: string | null;
+  setWorkspaceId?: (workspaceId: string) => void;
   user: string | null;
   displayName: string | null;
   apiKey: string | null;
@@ -29,8 +37,8 @@ interface AuthContextType {
   loginMode: LoginMode | 'invalid' | null;
   loginModeReady: boolean;
   organizationLoginRedirectUrl: string;
-  login: (username: string, apiKey?: string, displayName?: string) => void;
-  logout: () => void;
+  login: (username: string, apiKey?: string, displayName?: string) => void | Promise<void>;
+  logout: () => void | Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -53,6 +61,22 @@ export function getSafeReturnTo(): string | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  return isStorageCoreEnabled() ? <CoreAuthProvider>{children}</CoreAuthProvider> : <LegacyAuthProvider>{children}</LegacyAuthProvider>;
+}
+
+function CoreAuthProvider({ children }: { children: ReactNode }) {
+  const value = useCoreAuthHook();
+  return <AuthContext.Provider value={value}>{value.authError ? (
+    <main className="min-h-screen flex items-center justify-center p-6 bg-[var(--background)] text-[var(--foreground)]">
+      <div role="alert" className="max-w-md rounded-lg border border-[var(--border)] p-6">
+        <p>{value.authError}</p>
+        <button className="ai-btn-p mt-4" disabled={!value.authReady} onClick={() => { void value.retryAuth?.(); }}>{value.authReady ? '重试' : '正在重试…'}</button>
+      </div>
+    </main>
+  ) : children}</AuthContext.Provider>;
+}
+
+function LegacyAuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
