@@ -19,10 +19,8 @@ async function fixture(t: TestContext, manager = 'unavailable') {
   const preload = path.join(home, 'linux.cjs')
   fs.writeFileSync(preload, `Object.defineProperty(process, 'platform', {value: 'linux'});
 Object.defineProperty(process, 'getuid', {value: () => 1009720000});
-if (process.env.TEST_LEGACY_SYSTEMD === '1') {
-  const fs = require('node:fs'); const exists = fs.existsSync;
-  fs.existsSync = file => file === '/etc/systemd/system/agent-insight-client.service' || exists(file);
-}`)
+const fs = require('node:fs'); const exists = fs.existsSync;
+fs.existsSync = file => file === '/etc/systemd/system/agent-insight-client.service' ? process.env.TEST_LEGACY_SYSTEMD === '1' : exists(file);`)
   if (manager !== 'missing') fs.writeFileSync(path.join(bin, 'systemctl'), manager === 'available' ? '#!/bin/sh\nexit 0\n' : `#!/bin/sh
 if [ "$1" = "--version" ]; then exit 0; fi
 echo 'Failed to connect to bus: No medium found' >&2
