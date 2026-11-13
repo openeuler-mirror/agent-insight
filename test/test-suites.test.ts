@@ -11,7 +11,7 @@ test('module inventory includes every default UT once and supports listing witho
   const listing = spawnSync(process.execPath, ['scripts/test-suites.mjs', '--module', 'platform', '--list'], { cwd: root, encoding: 'utf8' });
   assert.equal(listing.status, 0, listing.stderr);
   const inventory = JSON.parse(fs.readFileSync(path.join(root, 'test/suites.json'), 'utf8'));
-  assert.deepEqual(listing.stdout.trim().split('\n'), inventory.platform);
+  assert.deepEqual(listing.stdout.split(/\r?\n/).filter(Boolean), inventory.platform);
 });
 
 test('module inventory rejects missing, duplicate and stale paths', async () => {
