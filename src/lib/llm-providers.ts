@@ -101,7 +101,7 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         oaiCompat: true,
         initials: 'AN',
         logoSlug: 'anthropic',
-        note: '使用 Anthropic 的 OpenAI 兼容端点。',
+        note: '按网关支持情况选择 Anthropic Messages 或 OpenAI Compatible 协议。',
     },
     {
         id: 'gemini',
@@ -508,7 +508,7 @@ export const LLM_PROVIDERS: LlmProvider[] = [
         oaiCompat: true,
         initials: 'VL',
         logoSlug: 'vllm',
-        note: 'vLLM 默认以 OpenAI 兼容模式启动，API Key 任意字符串即可。',
+        note: 'vLLM 默认使用 OpenAI 兼容协议；服务未启用鉴权时 API Key 留空即可。',
     },
     {
         id: 'lmstudio',
@@ -563,14 +563,14 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     },
     {
         id: 'custom',
-        label: 'Custom (OpenAI Compatible)',
+        label: 'Custom',
         category: 'selfhost',
         baseUrl: '',
         defaultModel: '',
         suggestedModels: [],
         oaiCompat: true,
         initials: 'CU',
-        note: '任何兼容 OpenAI /v1/chat/completions 协议的端点。',
+        note: '自定义端点，可在高级设置中选择 OpenAI Compatible 或 Anthropic Messages 协议。',
     },
 ];
 

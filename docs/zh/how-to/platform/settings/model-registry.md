@@ -72,8 +72,9 @@ changefreq: monthly
 | **Provider** | 模型供应商，例如 OpenAI、Anthropic、DeepSeek 或兼容接口服务。 |
 | **Model** | 实际调用的模型标识，例如 `gpt-6-luna`、`grok-4.7`、`deepseek-v4-flash`。Azure OpenAI 填部署名称。 |
 | **Base URL / Endpoint** | 模型服务地址，用于发送推理请求。 |
-| **API Key** | 鉴权凭证，用于访问供应商接口。Local AI 与 Custom（OpenAI Compatible）可留空。 |
-| **自定义请求头** | Local AI 与 Custom（OpenAI Compatible）的可选 HTTP Header，可用于 `Authorization`、`X-API-Key`、租户标识等网关鉴权。请求头值按密钥脱敏。 |
+| **API Key** | 鉴权凭证，用于访问供应商接口。所有供应商均可留空；留空时不添加默认鉴权头。 |
+| **自定义请求头** | 所有供应商均可配置的可选 HTTP Header，可用于 `Authorization`、`X-API-Key`、租户标识等网关鉴权。请求头值按密钥脱敏。 |
+| **接口协议** | 高级设置中选择 OpenAI Compatible 或 Anthropic Messages，应与网关实际接口一致。 |
 | **连接测试超时** | 在高级设置中按模型配置，默认 60 秒，范围 10～300 秒；用于保存前测试和手动健康检查，不影响评测任务超时。 |
 | **默认状态** | 表示该配置是否作为当前 Workspace 的默认模型。 |
 | **健康状态** | 表示连接检测是否通过，用于判断当前配置是否具备执行条件。 |
@@ -106,10 +107,18 @@ Anthropic 的 Base URL 可填写 `https://api.anthropic.com/v1` 或完整的 `ht
 1. 进入 **模型注册** 页面。
 2. 在模型供应商选择面检索目标供应商。
 3. 选择目标供应商卡片，进入配置流程。
-4. 填写模型名称、模型标识与 Base URL。内置供应商填写 API Key；Local AI 或 Custom（OpenAI Compatible）也可以改用自定义请求头，或连接无需鉴权的本地服务。
-5. 按需展开 **高级设置** 调整连接测试超时，然后点击 **测试连接并保存**。参数校验通过后，连接测试发送一次模型请求。测试通过后才会保存。
+4. 填写模型名称、模型标识与 Base URL。按服务要求填写 API Key 或自定义请求头，也可以连接无需鉴权的服务。API Key 留空时不会发送占位 Bearer、默认 `x-api-key` 或继承供应商环境密钥；同名自定义请求头优先，名称不区分大小写。
+5. 展开 **高级设置** 确认接口协议，并按需调整连接测试超时，然后点击 **测试连接并保存**。参数校验通过后，连接测试发送一次模型请求。测试通过后才会保存。
 6. 返回已注册模型管理面，检查模型卡片与状态标签。
 7. 执行健康检查，确认连接可用。
+
+### Anthropic 与内网模型网关
+
+选择 **Anthropic** 后可直接配置自定义请求头，无需改选其他供应商。新建 Anthropic 配置预选 **Anthropic Messages**（`/v1/messages`）；其他新配置预选 **OpenAI Compatible**（`/chat/completions`）。若网关提供的是 OpenAI 兼容接口，即使模型是 Claude，也应选择 OpenAI Compatible。Custom 同样可以选择任一协议。
+
+显式选择协议后，连接测试、评测、诊断、生成和优化按同一协议、地址和鉴权配置调用。API Key 为空时，仅发送用户配置的鉴权头；协议必要的 `Content-Type`、`anthropic-version` 等头仍会发送。所有自定义头的值按密钥脱敏，保留掩码继续使用原值，清空 API Key 表示移除该 Key。
+
+未设置协议的旧配置显示“沿用旧配置行为”，不会在升级或仅切换默认模型时自动改写。建议编辑内网 Anthropic 配置，明确选择网关协议并重新测试保存。相同模型名也可注册为多个独立连接，分别使用不同协议、网关或鉴权。
 
 ### 流程二：设置默认模型
 

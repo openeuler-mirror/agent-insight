@@ -32,7 +32,7 @@ Removed `AGENT_INSIGHT_DATA_DIR` must become `AGENT_INSIGHT_HOME` while retainin
 
 ## Models and clients
 
-Default models use consecutive `DEFAULT_MODEL_<N>_<FIELD>` groups starting at `1`. Reading later groups stops when a group lacks `NAME`, `PROVIDER`, or `API_KEY`. Explicitly provide `BASE_URL` and `MODEL` rather than assuming every calling path chooses identical provider defaults. Environment-defined models are read-only in the UI; users can add their own through [model registration, Chinese](../../../zh/how-to/platform/settings/model-registry.md).
+Default models use consecutive `DEFAULT_MODEL_<N>_<FIELD>` groups starting at `1`. Reading later groups stops when a group lacks `NAME` or `PROVIDER`. Explicitly provide `BASE_URL` and `MODEL` rather than assuming every calling path chooses identical provider defaults. `API_KEY` may be empty, generating no default authentication header. Optional `PROTOCOL` is `openai-compatible` or `anthropic`; omission keeps legacy behavior. Optional `HEADERS` is a JSON object of custom headers, overriding same-name standard headers. Environment-defined models are read-only in the UI; users can add their own through [model registration, Chinese](../../../zh/how-to/platform/settings/model-registry.md).
 
 See [client installation, Chinese](../../../zh/how-to/platform/settings/access-control.md) for addresses and Keys. Each client has its own environment. Do not share one runtime directory across machines or instances; use separate roots, databases, and ports.
 

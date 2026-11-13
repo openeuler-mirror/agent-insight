@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
+import { mapServerModelConfig } from '@/lib/engine/general-agent/server-model-config';
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { getUserSettings, type ModelConfig as ServerModelConfig } from '@/lib/storage/server-config';
-import { inferProviderFromBaseUrl } from '@/lib/engine/general-agent/server-model-config';
 import {
   loadFileBasedSkillPrompt,
   fileBasedSkillExists,
   mountFileBasedSkillResources,
 } from '@/lib/engine/general-agent/skills-fs-loader';
-import { normalizeProviderID } from '@/lib/engine/general-agent/server-model-config';
 import {
   ensureSessionWorkspace,
   ensureUserWorkspace,
@@ -728,18 +728,8 @@ async function resolveModelOverride(
     console.warn('[skill-generator-bridge] resolveModelOverride: config not found, falling back to default model');
     return null;
   }
-  if (!cfg.apiKey) {
-    console.warn('[skill-generator-bridge] resolveModelOverride: config found but apiKey missing, falling back to default model');
-    return null;
-  }
-  const explicitProvider = (cfg as { provider?: string }).provider;
-  const providerID = normalizeProviderID(explicitProvider || inferProviderFromBaseUrl(cfg.baseUrl));
-  const result = {
-    providerID,
-    modelID: cfg.model || 'deepseek-chat',
-    apiKey: cfg.apiKey,
-    baseURL: cfg.baseUrl,
-  };
+  const result = mapServerModelConfig(cfg);
+  if (!result) return null;
   console.log('[skill-generator-bridge] resolveModelOverride: resolved to', { providerID: result.providerID, modelID: result.modelID, baseURL: result.baseURL });
   return result;
 }

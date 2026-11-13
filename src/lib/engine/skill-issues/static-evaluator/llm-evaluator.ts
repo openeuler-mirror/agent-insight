@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 /**
  * L2 LLM 评估器：4 维 SKILL.md + 1 维 工程健壮性 + 1 维 安全风险性。
  * 调用用户配置的 LLM（复用 getActiveConfig + OpenAI 客户端）。
@@ -36,7 +38,7 @@ import { jsonrepair } from 'jsonrepair';
 import { z } from 'zod';
 
 import { getActiveConfig } from '@/lib/storage/server-config';
-import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
+import { getJsonResponseFormat } from '@/lib/server/model-fetch';
 import type { Severity } from '../prevalence';
 import { PROMPT_SKILL_META, PROMPT_ROBUSTNESS, PROMPT_SECURITY } from './prompts';
 
@@ -405,10 +407,7 @@ export async function runLlmStaticEvaluation(args: {
   }
 
   const client = new OpenAI({
-    apiKey: config.apiKey || 'no-api-key-required',
-    baseURL: config.baseUrl || 'https://api.deepseek.com',
-    defaultHeaders: config.headers,
-    fetch: getModelFetch(),
+    ...getModelClientConfig({ ...config, baseUrl: config.baseUrl || 'https://api.deepseek.com' }),
   });
   const model = config.model || 'deepseek-chat';
 

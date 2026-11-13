@@ -32,7 +32,7 @@ changefreq: "monthly"
 
 ## 模型与客户端
 
-默认模型使用 `DEFAULT_MODEL_<N>_<FIELD>` 连续编号，从 `1` 开始；某组缺少 `NAME`、`PROVIDER` 或 `API_KEY` 时，不再读取后续组。建议同时明确填写 `BASE_URL` 和 `MODEL`，不要假定各调用路径会按提供商自动选择相同默认地址。由环境定义的模型在界面中只读，界面新增模型仍按[模型注册](../../how-to/platform/settings/model-registry.md)处理。
+默认模型使用 `DEFAULT_MODEL_<N>_<FIELD>` 连续编号，从 `1` 开始；某组缺少 `NAME` 或 `PROVIDER` 时，不再读取后续组。建议同时明确填写 `BASE_URL` 和 `MODEL`，不要假定各调用路径会按提供商自动选择相同默认地址。`API_KEY` 可留空，留空不发送默认鉴权头；可选 `PROTOCOL` 为 `openai-compatible` / `anthropic`，缺省保留历史行为；可选 `HEADERS` 为自定义请求头 JSON，例如 `{"X-Tenant":"example"}`，同名头覆盖标准鉴权。由环境定义的模型在界面中只读，界面新增模型仍按[模型注册](../../how-to/platform/settings/model-registry.md)处理。
 
 客户端的服务地址、API Key 和安装配置见[客户端安装](../../how-to/platform/settings/access-control.md)。每台客户端有自己的运行环境；不要把多台机器的运行根映射为同一个共享目录。需要多个平台实例时，每个实例使用独立运行根、数据库和端口。
 

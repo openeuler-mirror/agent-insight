@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import { db } from '@/lib/storage/prisma';
-import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import {
     generateAnswerExtractionPrompt,
@@ -131,10 +132,7 @@ async function processConfigAsync(
         }
 
         const openaiClient = new OpenAI({
-            apiKey: settings.apiKey || 'no-api-key-required',
-            baseURL: settings.baseUrl || 'https://api.deepseek.com',
-            defaultHeaders: settings.headers,
-            fetch: getModelFetch(),
+            ...getModelClientConfig({ ...settings, baseUrl: settings.baseUrl || 'https://api.deepseek.com' }),
         });
         const modelName = settings.model || 'deepseek-chat';
         const taskContext = getConfigSubjectLabel({ query, skill, skillVersion });

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 /**
  * 优化点归并算子（merge operator）。
  *
@@ -32,7 +34,7 @@
 import { OpenAI } from 'openai';
 import { jsonrepair } from 'jsonrepair';
 import { z } from 'zod';
-import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
+import { getJsonResponseFormat } from '@/lib/server/model-fetch';
 import type { ModelConfig } from '@/lib/storage/server-config';
 import type { Severity } from '@/lib/engine/skill-issues/prevalence';
 
@@ -449,10 +451,7 @@ export async function runMergeOperator(args: RunMergeOperatorArgs): Promise<Merg
   const concurrency = args.concurrency ?? DEFAULT_CONCURRENCY;
 
   const client = new OpenAI({
-    apiKey: args.config.apiKey || 'no-api-key-required',
-    baseURL: args.config.baseUrl || 'https://api.deepseek.com',
-    defaultHeaders: args.config.headers,
-    fetch: getModelFetch(),
+    ...getModelClientConfig({ ...args.config, baseUrl: args.config.baseUrl || 'https://api.deepseek.com' }),
     timeout: LLM_TIMEOUT_MS,
     maxRetries: 2,
   });
