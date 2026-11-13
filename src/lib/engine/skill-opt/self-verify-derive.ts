@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 /**
  * 脚本真值门的【断言推导】——用 LLM **离线分析数据集标准答案**，挑出「哪些数据值得用确定性断言看护」，
  * 产出 ScriptAssertion[]。LLM 只在 derive 时跑一次（缓存）；验证时由引擎确定性执行，**热路径无 LLM**。
@@ -28,7 +30,7 @@
 import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { getActiveConfig } from '@/lib/storage/server-config';
-import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
+import { getJsonResponseFormat } from '@/lib/server/model-fetch';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import type { DatasetCase } from '@/server/agent_datasets_storage';
 import { makeYearAssertion, makeNumericAssertion, type ScriptAssertion } from './self-verify-structural';
@@ -67,12 +69,9 @@ function parseLoose(t: string): Record<string, unknown> {
   return {};
 }
 
-function newClient(config: { apiKey?: string; baseUrl?: string; headers?: Record<string, string> }) {
+function newClient(config: import('@/lib/shared/model-connection').ModelConnectionConfig) {
   return new OpenAI({
-    apiKey: config.apiKey || 'no-api-key-required',
-    baseURL: config.baseUrl || 'https://api.deepseek.com',
-    defaultHeaders: config.headers,
-    fetch: getModelFetch(),
+    ...getModelClientConfig({ ...config, baseUrl: config.baseUrl || 'https://api.deepseek.com' }),
   });
 }
 

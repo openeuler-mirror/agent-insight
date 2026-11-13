@@ -15,6 +15,9 @@
  */
 
 import { getProvider } from '@/lib/llm-providers';
+import { ModelTestValidationError } from './model-connection-test';
+
+export type ModelProtocol = 'openai-compatible' | 'anthropic';
 
 export interface ModelConnectionConfig {
   provider?: string;
@@ -22,6 +25,17 @@ export interface ModelConnectionConfig {
   baseUrl?: string;
   model?: string;
   headers?: Record<string, string>;
+  protocol?: ModelProtocol;
+}
+
+export function validateModelProtocol(protocol: unknown): ModelProtocol | undefined {
+  if (protocol === undefined) return undefined;
+  if (protocol === 'openai-compatible' || protocol === 'anthropic') return protocol;
+  throw new ModelTestValidationError('Invalid model protocol');
+}
+
+export function resolveModelProtocol(config: ModelConnectionConfig): ModelProtocol {
+  return validateModelProtocol(config.protocol) ?? 'openai-compatible';
 }
 
 export function normalizeModelBaseUrl(baseUrl?: string): string | undefined {
@@ -58,17 +72,15 @@ const FORBIDDEN_CUSTOM_HEADERS = new Set([
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 export function supportsCustomHeaders(config: ModelConnectionConfig): boolean {
-  return config.provider === 'custom';
+  return Boolean(config);
 }
 
 export function isModelConnectionReady(
   config: ModelConnectionConfig | null | undefined,
 ): boolean {
   if (!config) return false;
-  if (supportsCustomHeaders(config)) {
-    return Boolean(config.baseUrl?.trim() && config.model?.trim());
-  }
-  return Boolean(config.apiKey?.trim());
+  const { baseUrl, model } = resolveModelConnection(config);
+  return Boolean(baseUrl && model);
 }
 
 export function normalizeCustomHeaders(
@@ -105,17 +117,28 @@ export function normalizeCustomHeaders(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+export function getModelAuthHeaders(config: ModelConnectionConfig, protocol = resolveModelProtocol(config)): Record<string, string> {
+  const headers = new Headers();
+  const key = config.apiKey?.trim();
+  if (key) headers.set(protocol === 'anthropic' ? 'x-api-key' : 'Authorization', protocol === 'anthropic' ? key : `Bearer ${key}`);
+  for (const [name, value] of Object.entries(normalizeCustomHeaders(config.headers) ?? {})) headers.set(name, value);
+  return Object.fromEntries(headers.entries());
+}
+
+export function getModelSdkApiKey(config: ModelConnectionConfig): string {
+  // SDK constructors require a key even when the endpoint uses no authentication.
+  return config.apiKey?.trim() || 'agent-insight-no-auth';
+}
+
 export function getOpenAICompatibleClientConfig(config: ModelConnectionConfig): {
   apiKey: string;
   baseURL?: string;
-  defaultHeaders?: Record<string, string>;
+  defaultHeaders: Record<string, string | null>;
 } {
   const { baseUrl } = resolveModelConnection(config);
   return {
-    apiKey: config.apiKey?.trim() || 'no-api-key-required',
+    apiKey: getModelSdkApiKey(config),
     ...(baseUrl ? { baseURL: baseUrl } : {}),
-    ...(config.headers && Object.keys(config.headers).length > 0
-      ? { defaultHeaders: config.headers }
-      : {}),
+    defaultHeaders: { authorization: null, 'x-api-key': null, 'api-key': null, ...getModelAuthHeaders(config) },
   };
 }

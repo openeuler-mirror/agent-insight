@@ -90,3 +90,11 @@ test('suite compile failure retains report and skips UT and cases',async()=>{
  let executed=0;const report=await executeSuite({mode:'mock',selected:['001'],runBuild:async()=>({status:'FAIL',exitCode:1}),runUt:async()=>{executed++},runMockCase:async()=>{executed++}});
  assert.equal(executed,0);assert.equal(report.status,'FAIL');assert.equal(report.npmTest.status,'NOT_RUN');assert.equal(report.scenarios[0].status,'NOT_RUN');assert.match(renderSummary(report).markdown,/生产编译：失败/);
 });
+
+ test('UT summaries show bounded file timings and distinguish sampled and lifetime memory peaks',()=>{
+ const report={mode:'mock',status:'PASS',scenarios:[],npmTest:{status:'PASS',fileConcurrency:4,metrics:{completedFiles:627,expectedFiles:627,incompleteFiles:0,resources:{cpuQuotaCores:8,memoryLimitBytes:8*1024**3,sampledMemoryPeakBytes:3*1024**3,kernelMemoryPeakBytesBefore:4*1024**3,kernelMemoryPeakBytesAfter:4*1024**3,memoryOomKillEventsDelta:0},slowestFiles:[{file:'test/slow<script>.test.ts',durationMs:12345,cpuMs:2000,maxRssBytes:128*1024**2}],privatePath:'/private/do-not-publish'}}};
+ const view=renderSummary(report);
+ for(const output of [view.markdown,view.html]){assert.match(output,/UT 性能/);assert.match(output,/627/);assert.match(output,/12\.3/);assert.match(output,/8192/);assert.match(output,/3072/);assert.match(output,/4096/);assert.doesNotMatch(output,/<script>|do-not-publish/);}
+ assert.match(renderSummary({...report,npmTest:{...report.npmTest,metrics:{...report.npmTest.metrics,resources:{}}}}).markdown,/不可用/);
+ assert.doesNotMatch(renderSummary({...report,npmTest:{status:'NOT_RUN'}}).markdown,/UT 性能/);
+});

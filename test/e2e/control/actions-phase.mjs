@@ -13,7 +13,8 @@ import { configSnapshot, caseMode, suiteMode, readModelKey, runDirectory } from 
 import { cases } from '../shared/catalog.mjs';
 import { scenarioResult, redact } from '../shared/core.mjs';
 import { renderSummary, parseUtResult } from '../shared/suite.mjs';
-import { boundedUtEnv } from '../shared/ut-environment.mjs';
+import { boundedUtEnv, readUtFileMetrics } from '../shared/ut-environment.mjs';
+import { startUtResourceMonitor } from '../shared/ut-resources.mjs';
 import { command, stopCommands } from '../shared/runtime.mjs';
 import { createActionsProcessScope } from '../shared/actions-process-cleanup.mjs';
 
@@ -108,6 +109,11 @@ function failureDetails(ut) {
 }
 function persist(options, context, result, report) {
   report.endedAt ||= new Date().toISOString();
+  if (options.env.ATOMGIT_RUN_ATTEMPT !== undefined) {
+    assert.match(options.env.ATOMGIT_RUN_ATTEMPT, /^[1-9]\d*$/);
+    report.platformRunAttempt = Number(options.env.ATOMGIT_RUN_ATTEMPT);
+    assert.ok(Number.isSafeInteger(report.platformRunAttempt));
+  }
   report.status = result.status;report.phase = options.phase;report.resultScope = options.phase === 'collect' ? 'workflow' : 'phase';
   if (['build','ut'].includes(options.phase)) delete report.selected;
   const secrets = [options.env.E2E_MODEL_API_KEY, ...Object.values(options.processScopeEnv || {})].filter(Boolean);
@@ -156,7 +162,10 @@ async function buildPhase(options, dependencies) {
   return { context, result: envelope(options, context, manifest, manifest.status), report };
 }
 async function utPhase(options, context, dependencies) {
-  const built = importBuild(options, context), config = context.configuration.settings;
+  const config = context.configuration.settings;
+  const fileConcurrency = options.utConcurrency ?? Math.max(1, Math.floor(config.resources.cpus));
+  assert.ok(Number.isSafeInteger(fileConcurrency) && fileConcurrency >= 1 && fileConcurrency <= 8, 'Invalid UT file concurrency');
+  const built = importBuild(options, context);
   const env = baseEnvironment(options, context, 'ut'), log = path.join(options.root, 'private/npm-test.log');
   fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });fs.mkdirSync(path.join(env.AGENT_INSIGHT_HOME, 'data'), { recursive: true, mode: 0o700 });
   let ut;
@@ -169,8 +178,17 @@ async function utPhase(options, context, dependencies) {
   }
   const startedAt = new Date().toISOString();
   if (!ut) {
-    const execution = await dependencies.run('npm', ['test'], { cwd: options.project, env: boundedUtEnv(options.root, env, config.timeouts.utFileMs, config.resources.cpus), log, timeout: config.timeouts.utMs });
-    ut = { ...parseUtResult(fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : execution.output || '', execution), fileTimeoutMs: config.timeouts.utFileMs };
+    const metricsFile = path.join(options.root, 'private/ut-files.ndjson');
+    const testEnv = boundedUtEnv(options.root, env, config.timeouts.utFileMs, fileConcurrency, { project: options.project, metricsFile });
+    const monitor = startUtResourceMonitor();let execution, resources;
+    try { execution = await dependencies.run('npm', ['test'], { cwd: options.project, env: testEnv, log, timeout: config.timeouts.utMs }); }
+    finally { resources = monitor.finish(); }
+    const files = readUtFileMetrics(metricsFile), { files: rows, ...summary } = files;
+    let expectedFiles = null;
+    try { expectedFiles = Object.values(read(path.join(options.project, 'test/suites.json'))).reduce((sum, entries) => sum + entries.length, 0); } catch {}
+    const metrics = { ...summary, expectedFiles, slowestFiles: rows.slice(0, 20), resources };
+    ut = { ...parseUtResult(fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : execution.output || '', execution), fileTimeoutMs: config.timeouts.utFileMs, fileConcurrency, metrics };
+    write(path.join(options.root, 'public/ut-metrics.json'), { fileConcurrency, ...files, expectedFiles, resources });
   }
   Object.assign(ut, { startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt) });
   const report = emptyReport(options, context);report.productionBuild = built;report.npmTest = ut;if (ut.status !== 'PASS') report.status = ut.status;
@@ -312,21 +330,25 @@ export async function runActionsPhase(input, overrides = {}) {
   }
   return persist(options, outcome.context, outcome.result, outcome.report);
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  let stopping = false;
-  const stop = async () => {
-    if (stopping) return;stopping = true;
+export function installActionsPhaseSignalHandlers() {
+  let stopping;
+  const stop = () => stopping ||= (async () => {
     try { await stopCommands(); }
     finally {
       await Promise.allSettled([...activeProcessScopes].map(scope => scope.cleanup()));
       for (const file of activeKeyFiles) fs.rmSync(file, { force: true });process.exit(143);
     }
-  };
+  })();
   process.on('SIGTERM', stop);process.on('SIGINT', stop);
+  const dispose = () => { process.removeListener('SIGTERM', stop);process.removeListener('SIGINT', stop); };
+  return Object.assign(dispose, { waitIfStopping: () => stopping });
+}
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const dispose = installActionsPhaseSignalHandlers();
   try {
-    const { values } = parseArgs({ options: { phase: { type: 'string' }, project: { type: 'string' }, root: { type: 'string' }, 'run-id': { type: 'string' }, 'tested-sha': { type: 'string' }, case: { type: 'string' } } });
-    const result = await runActionsPhase({ phase: values.phase, project: values.project, root: values.root, runId: values['run-id'], testedSha: values['tested-sha'], caseId: values.case });
+    const { values } = parseArgs({ options: { phase: { type: 'string' }, project: { type: 'string' }, root: { type: 'string' }, 'run-id': { type: 'string' }, 'tested-sha': { type: 'string' }, case: { type: 'string' }, 'ut-concurrency': { type: 'string' } } });
+    const result = await runActionsPhase({ phase: values.phase, project: values.project, root: values.root, runId: values['run-id'], testedSha: values['tested-sha'], caseId: values.case, utConcurrency: values['ut-concurrency'] === undefined ? undefined : Number(values['ut-concurrency']) });
     process.exitCode = result.status === 'PASS' ? 0 : 1;
   } catch (error) { console.error('Actions phase failed:', message(error));process.exitCode = 1; }
-  finally { process.removeListener('SIGTERM', stop);process.removeListener('SIGINT', stop); }
+  finally { dispose(); }
 }

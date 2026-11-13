@@ -20,7 +20,8 @@ import { loadDefaultModelConfigs } from '@/lib/shared/default-model-config';
 import {
     normalizeCustomHeaders,
     resolveModelConnection,
-    supportsCustomHeaders,
+    validateModelProtocol,
+    type ModelProtocol,
 } from '@/lib/shared/model-connection';
 import { randomUUID } from 'node:crypto';
 import {
@@ -37,6 +38,7 @@ export interface ModelConfig {
     baseUrl?: string;
     model?: string;
     headers?: Record<string, string>;
+    protocol?: ModelProtocol;
     testTimeoutMs?: number;
 }
 
@@ -217,9 +219,7 @@ async function persistUserSettings(user: string, settings: UserSettings): Promis
     const restoredConfigs = settings.configs.map(c => {
         const existingHeaders = existingHeadersById.get(c.id) ?? {};
         const restoredHeaders = restoreMaskedHeaders(c.headers, existingHeaders);
-        if (restoredHeaders && !supportsCustomHeaders(c)) {
-            throw new Error('Custom headers are only supported for Custom (OpenAI Compatible) models');
-        }
+        validateModelProtocol(c.protocol);
         return {
             ...c,
             apiKey: isMaskedApiKey(c.apiKey) ? (existingKeyById.get(c.id) ?? '') : c.apiKey,

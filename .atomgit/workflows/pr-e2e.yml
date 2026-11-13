@@ -69,6 +69,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-build
           if-no-files-found: error
           compression-level: 0
@@ -80,6 +81,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-build
           if-no-files-found: error
           path: |
@@ -92,6 +94,7 @@ jobs:
   ut:
     name: UT
     needs: [build]
+    if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
@@ -132,7 +135,7 @@ jobs:
           cd "${E2E_CI_SOURCE:?}"
           node test/e2e/control/actions-phase.mjs --phase ut \
             --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
-            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA"
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA" --ut-concurrency 8
 
       - name: Verify scoped process cleanup regressions
         if: ${{ always() }}
@@ -145,6 +148,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-ut
           if-no-files-found: error
           path: |
@@ -153,10 +157,11 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/ut-metrics.json
 
   case_001:
-    name: 001 准备与配置
-    needs: [build, ut]
+    name: 001 账号登录/模型配置/客户端接入
+    needs: [build]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
@@ -188,7 +193,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 001
+      - name: 执行 001 账号登录/模型配置/客户端接入
         id: phase
         shell: bash
         env:
@@ -205,6 +210,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-001
           if-no-files-found: error
           path: |
@@ -215,8 +221,8 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_002:
-    name: 002 上报与观测
-    needs: [build, ut]
+    name: 002 OpenCode 执行与 Trace 采集展示
+    needs: [build]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
@@ -248,7 +254,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 002
+      - name: 执行 002 OpenCode 执行与 Trace 采集展示
         id: phase
         shell: bash
         env:
@@ -265,6 +271,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-002
           if-no-files-found: error
           path: |
@@ -275,8 +282,8 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_003:
-    name: 003 Skill 与数据集
-    needs: [build, ut]
+    name: 003 Skill 生成/数据集评测/优化发布
+    needs: [build]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
@@ -308,7 +315,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 003
+      - name: 执行 003 Skill 生成/数据集评测/优化发布
         id: phase
         shell: bash
         env:
@@ -325,6 +332,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-003
           if-no-files-found: error
           path: |
@@ -335,8 +343,8 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_004:
-    name: 004 Trace 评测
-    needs: [build, ut]
+    name: 004 已有 Trace 评测/诊断/Skill 优化
+    needs: [build]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
@@ -368,7 +376,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 004
+      - name: 执行 004 已有 Trace 评测/诊断/Skill 优化
         id: phase
         shell: bash
         env:
@@ -385,6 +393,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-004
           if-no-files-found: error
           path: |
@@ -395,8 +404,8 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/summary.md
 
   case_005:
-    name: 005 故障检测恢复
-    needs: [build, ut]
+    name: 005 故障注入/检测拦截/恢复验证
+    needs: [build]
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
@@ -428,7 +437,7 @@ jobs:
           name: e2e-build
           path: ${{ env.E2E_CI_ROOT }}/build-payload
 
-      - name: Run case 005
+      - name: 执行 005 故障注入/检测拦截/恢复验证
         id: phase
         shell: bash
         env:
@@ -445,6 +454,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: e2e-result-005
           if-no-files-found: error
           path: |
@@ -552,6 +562,7 @@ jobs:
         if: ${{ always() }}
         uses: upload-artifact
         with:
+          overwrite: true
           name: pr-e2e
           if-no-files-found: error
           path: |

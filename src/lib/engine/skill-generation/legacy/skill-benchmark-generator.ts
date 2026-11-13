@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import fs from 'fs';
 import path from 'path';
 import { OpenAI } from 'openai';
@@ -29,7 +31,6 @@ import { configSupportsDatasetType } from '@/lib/engine/evaluation/config-datase
 import { getConfigSubjectLabel, normalizeConfigQuery, normalizeConfigSkillName, normalizeOptionalSkillVersion } from '@/lib/engine/evaluation/config-target';
 import { readConfig, type ConfigItem } from '@/lib/storage/data-service';
 import { db } from '@/lib/storage/prisma';
-import { getModelFetch } from '@/lib/server/model-fetch';
 import { deriveRoutingSignature } from '@/lib/ingest/routing-signature';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { resolveRuntimeAssetPath } from '@/lib/env';
@@ -167,10 +168,7 @@ async function createConfiguredClient(user: string): Promise<{ client: OpenAI; m
 
   return {
     client: new OpenAI({
-      apiKey: settings.apiKey || 'no-api-key-required',
-      baseURL: settings.baseUrl || 'https://api.deepseek.com',
-      defaultHeaders: settings.headers,
-      fetch: getModelFetch(),
+      ...getModelClientConfig({ ...settings, baseUrl: settings.baseUrl || 'https://api.deepseek.com' }),
     }),
     model: settings.model || 'deepseek-chat',
   };

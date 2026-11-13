@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import { NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
 import { z } from 'zod';
 
-import { getJsonResponseFormat, getModelFetch } from '@/lib/server/model-fetch';
+import { getJsonResponseFormat } from '@/lib/server/model-fetch';
 import {
   buildDiagnosisPrompt,
   buildFallbackDiagnosis,
@@ -74,9 +76,7 @@ export async function POST(
 
     try {
       const client = new OpenAI({
-        apiKey: activeConfig.apiKey || 'no-api-key-required',
-        baseURL: activeConfig.baseUrl || 'https://api.deepseek.com',
-        fetch: getModelFetch(),
+        ...getModelClientConfig({ ...activeConfig, baseUrl: activeConfig.baseUrl || 'https://api.deepseek.com' }),
       });
       const model = activeConfig.model || 'deepseek-chat';
       const prompt = buildDiagnosisPrompt(safeSnapshot);

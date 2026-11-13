@@ -13,6 +13,8 @@ changefreq: "monthly"
 
 诊断候选复测并发布后，可从优化记录将正式版本下发到来源客户端；路径约束、版本备份和历史版本降级见 [下发已发布版本](./optimization/skills/optimize.md#6-下发已发布版本)。
 
+内网模型可使用自定义请求头或无鉴权连接；Anthropic Messages 与 OpenAI Compatible 协议的选择见[模型注册](./platform/settings/model-registry.md#anthropic-与内网模型网关)。
+
 平台评估器缺模型时提供 **去模型注册** 入口，配置并设为默认后可复用已有输出和 Trace 重评。操作见[实验](./evaluation/experiments.md#查看单条-case-详情)与[模型注册](./platform/settings/model-registry.md)。
 
 自定义评估器不再按 `ready` / `draft` 筛选或展示状态，保存后可用于 Skill 用例与 A/B 实验；前置条件和内置规则不变，见[评估器指南](./evaluation/evaluators.md)。

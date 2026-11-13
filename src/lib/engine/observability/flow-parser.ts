@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server';
 import { OpenAI } from "openai";
-import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { db } from '@/lib/storage/prisma';
@@ -64,16 +65,13 @@ async function getLlmClient(user?: string | null) {
   }
 
   if (!isModelConnectionReady(config)) return { client: null, model: null };
-  const apiKey = config.apiKey || 'no-api-key-required';
+
 
   const baseURL = config.baseUrl || "https://api.deepseek.com";
   
   return {
     client: new OpenAI({
-      apiKey, 
-      baseURL,
-      defaultHeaders: config.headers,
-      fetch: getModelFetch(),
+      ...getModelClientConfig({ ...config, baseUrl: baseURL }),
     }),
     model: config.model || "deepseek-chat"
   };

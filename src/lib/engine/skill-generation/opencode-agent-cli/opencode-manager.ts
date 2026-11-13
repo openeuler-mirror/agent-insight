@@ -24,7 +24,6 @@ import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { resolveAgentInsightDataPath, getAgentInsightHome } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'
-import { isModelConnectionReady } from '@/lib/shared/model-connection'
 import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
 import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
 import { runtimePackageRoot } from '@/lib/runtime/package-root'
@@ -226,21 +225,6 @@ export function resolveOpencodeBinary(): string {
  *   <project>/data/.opencode-runtime/opencode/plugins/ 即可。
  */
 /**
- * 内置 provider id 集合：opencode 自带 SDK，static config 里出现这些 id 时不需要
- * 额外指定 npm 包名/baseURL；其它 provider id（如用户自定义的"custom"/"csi-provider"等）
- * 都按 OpenAI 兼容协议 + @ai-sdk/openai-compatible 注册。
- */
-const KNOWN_BUILTIN_PROVIDERS = new Set([
-  'deepseek',
-  'deepseek-official',
-  'openai',
-  'anthropic',
-  'google',
-  'qwen',
-  'moonshot',
-])
-
-/**
  * 简单的稳定 hash，用于 SingleServer.configHash——比较两次 spawn 的 model 配置是否一致，
  * 不一致就需要重启该 user 的 opencode 实例（用户在 UI 改了 apiKey 之后下一次请求生效）。
  */
@@ -260,79 +244,14 @@ function stableHash(input: string): string {
  * 所以即使每次请求都知道 user 是谁，也得在 spawn opencode 实例的时候就把 apiKey 写好——
  * 这是 per-user instance 这套架构存在的根本原因。
  */
-async function buildProviderEntryFromUserConfig(
-  user: string,
-): Promise<{ providerID: string; entry: Record<string, unknown>; modelID: string; raw: { apiKey?: string; baseURL?: string; headers?: Record<string, string> } } | null> {
+async function buildProviderEntryFromUserConfig(user: string) {
   if (!user || user === ANONYMOUS_USER_KEY) return null
-  let serverModel: { providerID: string; modelID: string; apiKey?: string; baseURL?: string; headers?: Record<string, string> } | null = null
-  let allConfigs: Array<{ id: string; name: string; provider?: string; apiKey: string; baseUrl?: string; model?: string; headers?: Record<string, string> }> = []
-  try {
-    const modA = await import('../../general-agent/server-model-config')
-    serverModel = await modA.loadServerModelForUser(user)
-    // 同时把该 user 的所有注册 configs 拉过来——后面要把同 provider 的所有模型一起注册
-    // 进 opencode，让"换模型评测"在不重启 opencode 的前提下也能 work。
-    const modB = await import('../../../storage/server-config')
-    const settings = await modB.getUserSettings(user)
-    allConfigs = (settings.configs ?? []).filter(isModelConnectionReady)
-  } catch (err) {
-    // 模块加载/DB 查询失败不阻塞，退到全局配置 fallback
-    console.warn(
-      '[opencode] loadServerModelForUser failed, will fall back to global config:',
-      (err as Error)?.message,
-    )
-    return null
-  }
-  if (!serverModel) return null
-
-  // 收集同 providerID 下所有 user-registered model 名 ── 让 opencode 注册多模型，
-  // 后续请求里 SendPromptPayload.model.modelID 可以在它们之间切换不重启。
-  const { inferProviderFromBaseUrl, normalizeProviderID } = await import('../../general-agent/server-model-config')
-  const samePidModels = new Set<string>([serverModel.modelID])
-  for (const cfg of allConfigs) {
-    const explicitProvider = (cfg as { provider?: string }).provider
-    const pid = normalizeProviderID(explicitProvider || inferProviderFromBaseUrl(cfg.baseUrl))
-    if (pid === serverModel.providerID && cfg.model) {
-      samePidModels.add(cfg.model)
-    }
-  }
-
-  const isBuiltin = KNOWN_BUILTIN_PROVIDERS.has(serverModel.providerID)
-  const models: Record<string, Record<string, unknown>> = {}
-  for (const modelID of samePidModels) {
-    models[modelID] = {
-      name: modelID,
-      // 给 deepseek-reasoner 这种长思考模型默认放宽 output——避免 opencode 自带
-      // isOverflow → needsCompaction 把下一轮 prompt 吞掉。
-      ...(modelID.includes('reasoner')
-        ? { limit: { context: 65536, output: 32768 } }
-        : {}),
-    }
-  }
-  const entry: Record<string, unknown> = {
-    options: {
-      ...(serverModel.apiKey ? { apiKey: serverModel.apiKey } : {}),
-      ...(serverModel.baseURL ? { baseURL: serverModel.baseURL } : {}),
-      ...(serverModel.headers ? { headers: serverModel.headers } : {}),
-    },
-    models,
-  }
-  if (!isBuiltin) {
-    // 用户自定义 OpenAI 兼容端点（火山方舟 GLM、自建 vllm 之类）。npm 字段告诉 opencode
-    // 用 @ai-sdk/openai-compatible 走通用 OpenAI 协议。
-    entry.npm = '@ai-sdk/openai-compatible'
-    entry.name = serverModel.providerID
-  }
-  if (samePidModels.size > 1) {
-    console.log(
-      `[opencode:${user}] registering ${samePidModels.size} models under ${serverModel.providerID}: ${[...samePidModels].join(', ')}`,
-    )
-  }
-  return {
-    providerID: serverModel.providerID,
-    entry,
-    modelID: serverModel.modelID,
-    raw: { apiKey: serverModel.apiKey, baseURL: serverModel.baseURL, headers: serverModel.headers },
-  }
+  const { getUserSettings } = await import('../../../storage/server-config')
+  const { buildRegisteredModelProviders } = await import('../../general-agent/server-model-config')
+  const settings = await getUserSettings(user)
+  if (!settings.activeConfigId) return null
+  const config = buildRegisteredModelProviders(settings.configs, settings.activeConfigId)
+  return config.model ? config : null
 }
 
 /**
@@ -467,21 +386,14 @@ async function buildIsolatedOpencodeConfig(user: string): Promise<{
   if (fromUser) {
     const cfg: Record<string, unknown> = {
       $schema: 'https://opencode.ai/config.json',
-      provider: { [fromUser.providerID]: fromUser.entry },
+      ...fromUser,
       plugin: [],
       permission: OPENCODE_CONFIG_PERMISSION,
     }
     if (mcpEntry) cfg.mcp = mcpEntry.mcp
-    const headersSeed = JSON.stringify(
-      Object.entries(fromUser.raw.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)),
-    )
-    // hash 包含鉴权、baseURL、mcp seed、permission——下次 ensure 时检测变更
-    const hash = stableHash(
-      `${fromUser.providerID}|${fromUser.modelID}|${fromUser.raw.apiKey ?? ''}|${fromUser.raw.baseURL ?? ''}|${headersSeed}|${mcpEntry?.hashSeed ?? ''}|${permissionSeed}`,
-    )
-    console.log(
-      `[opencode:${user}] using model connection from DB UserSettings (provider=${fromUser.providerID}, model=${fromUser.modelID}, customHeaders=${Object.keys(fromUser.raw.headers ?? {}).length}, mcp=${mcpEntry ? 'web-search' : 'none'})`,
-    )
+    const hash = stableHash(JSON.stringify(fromUser) + '|' + (mcpEntry?.hashSeed ?? '') + '|' + permissionSeed)
+    console.log(`[opencode:${user}] using ${Object.keys(fromUser.provider).length} registered model connections`)
+
     return { config: cfg, configHash: hash }
   }
 

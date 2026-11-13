@@ -15,6 +15,8 @@ changefreq: "monthly"
 
 优化候选完成复测并发布后，可继续[下发到来源客户端](../how-to/optimization/skills/optimize.md#6-下发已发布版本)；客户端会先按版本备份现有 Skill，再安装目标正式版本。
 
+模型注册支持所有供应商的自定义请求头和可选 API Key；内网 Anthropic 网关可在高级设置选择 Messages 或 OpenAI Compatible 协议。见[模型注册](../how-to/platform/settings/model-registry.md#anthropic-与内网模型网关)。
+
 平台评测提示缺少模型时，可从提示中的 **去模型注册** 入口添加模型、测试连接并设为默认，再返回重评已有输出。详见[跑通第一次评测](./evaluation/01-first-experiment.md)。
 
 Skill 用例分析和 A/B 实验可选择已保存的自定义评估器，无需从草稿转为就绪；说明见[评估器指南](../how-to/evaluation/evaluators.md)。

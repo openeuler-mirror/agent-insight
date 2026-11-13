@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import { OpenAI } from 'openai';
-import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
@@ -338,10 +339,7 @@ async function getLlmClient(user: string): Promise<{ client: OpenAI; model: stri
   if (!config || !isModelConnectionReady(config)) return null;
   return {
     client: new OpenAI({
-      apiKey: config.apiKey,
-      baseURL: config.baseUrl || 'https://api.deepseek.com',
-      defaultHeaders: config.headers,
-      fetch: getModelFetch(),
+      ...getModelClientConfig({ ...config, baseUrl: config.baseUrl || 'https://api.deepseek.com' }),
     }),
     model: config.model || 'deepseek-chat',
   };
