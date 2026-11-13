@@ -188,7 +188,7 @@ docker run -d \
 适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
 
 ```bash
-git clone https://gitcode.com/openJiuwen/agent-insight.git /srv/agent-insight
+git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
 
 docker run -d \
   --name agent-insight \
