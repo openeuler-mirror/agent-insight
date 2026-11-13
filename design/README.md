@@ -163,6 +163,7 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 | Runtime 启动参数 YAML 配置 | [runtime-parameters](platform/runtime-parameters/) | 通用嵌套编辑、独立草稿、完整快照与原样下发；默认值仅初始化，执行参数由客户端消费 | Refactor | 2026-10-16 | ✅ 通用草稿与原样下发已实现，105 项专项回归通过；全量测试及类型检查仍有既有基线问题；用户选择暂不进行浏览器验证 | 待补 |
 | Agent 运行时切换 | [agent-runtime-switching](platform/agent-runtime-switching/) | 检测服务部署环境中的内置 Agent 运行时，展示版本、来源、兼容性、能力与不可用原因，并保存个人默认值；执行层与 Pi 适配器分期接入 | Feature | 2026-11-09 | 🟡 阶段一已实现（探测/诊断/偏好保存/页面/单测）；统一执行服务、OpenCode 适配器抽取与内置 Pi 待实现 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
+| 平台内置 Agent 运行时选择 | [agent-runtime-selection](platform/agent-runtime-selection/) | 检测服务可访问的 Pi/OpenCode，展示版本、来源、兼容性、能力与不可用原因；保存个人默认值并在执行入口强制校验，不静默换引擎 | Feature | 2026-11-09 | 🟡 检测、能力评估、个人默认值、页面与执行入口约束已实现并覆盖专项测试；Pi 执行适配器、内置 Pi 交付与浏览器/真实模型验收见开发计划 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
 
 ## 字段口径
 

@@ -5,7 +5,7 @@ keywords: ["Agent Insight", "documentation", "tutorials", "translation coverage"
 changefreq: "monthly"
 ---
 
-Chinese is the authoritative source. There are 18 English body pages covering first use, Docker/OpenShift deployment, client compatibility, operations, and HTTP/evaluation contracts. English navigation/status pages do not count as translated bodies. Pages linked with a Chinese label remain untranslated.
+Chinese is the authoritative source. There are 19 English body pages covering first use, Docker/OpenShift deployment, client compatibility, operations, and HTTP/evaluation contracts. English navigation/status pages do not count as translated bodies. Pages linked with a Chinese label remain untranslated.
 
 ## Start here
 
@@ -31,6 +31,7 @@ Chinese is the authoritative source. There are 18 English body pages covering fi
 | [客户端版本与框架兼容性](../zh/reference/observability/client-compatibility.md) | [Client versions and framework compatibility](./reference/observability/client-compatibility.md) |
 | [Trace HTTP 接入](../zh/reference/observability/trace-ingestion.md) | [Trace HTTP ingestion](./reference/observability/trace-ingestion.md) |
 | [Skill 管理 HTTP 接口](../zh/reference/optimization/skills-api.md) | [Skill management HTTP APIs](./reference/optimization/skills-api.md) |
+| [Agent 运行时参考](../zh/reference/platform/agent-runtime.md) | [Agent runtime reference](./reference/platform/agent-runtime.md) |
 | [运行配置参考](../zh/reference/platform/configuration.md) | [Runtime configuration](./reference/platform/configuration.md) |
 | [HTTP 接口与用户身份](../zh/reference/platform/http-api.md) | [HTTP APIs and user identity](./reference/platform/http-api.md) |
 | [模型连接测试接口](../zh/reference/platform/model-connection-test.md) | [Model-connection test API](./reference/platform/model-connection-test.md) |
