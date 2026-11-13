@@ -135,3 +135,11 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 当前单队列以全局最早事件强序处理；早期重试会阻挡后续事件。每128 Span批量写正文，先chunks、后manifests，再Span及Trace摘要，重复写依赖相同版本收敛。这是可靠性基线，尚未完成1000在线采集端混合读写压测、分片日志或HA认证。当前浏览器验收状态以[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)为准。
 
 停止时对自己启动的服务使用Ctrl-C/SIGTERM，保留数据库、制品目录和私有配置；不要用全局进程清理命令影响其他worktree。
+
+## 全量测试的隔离前提
+
+存储专项与应用`npm run test`是不同门槛。应用全量须在专用HOME、AGENT_INSIGHT_HOME与SQLite目标运行，清除DB_*及core模式配置；不得指向日常业务库。测试中新增/修复的数据库用例复用`createIsolatedDatabase`，先建临时schema再导入Prisma，结束断开连接并恢复环境；隔离helper也清除继承的关系库配置，并固定空DB_HOST防止dotenv重新选择远端。
+
+完整环境包括可用的Node LTS、Python的PyYAML/pydantic2、PowerShell7，以及Trae采集器编译产物。先用已安装、验证过的运行时，在该次测试进程设置PATH、PYTHON、AGENT_INSIGHT_FI_PYTHON、AGENT_INSIGHT_RAS_PYTHON；不要通过全局改配置或安装未获授权的依赖消除错误。PowerShell解析也使用临时HOME，避免宿主缓存/配置影响。Trae编译可使用仓库已有esbuild执行原compile参数，构建JS不代表完成VSIX打包或IDE验收。
+
+准备旧Prisma路径的全量用例时，只对新建的隔离SQLite文件执行`prisma db push --skip-generate`；不能将此命令用于core.db。HTTP测试在失败路径也必须关闭连接，不能让清理SQL错误阻止server.close。缺依赖、缺schema和固定sleep抖动分别报告，不通过跳过或延长无限等待冒充业务验证通过。完整测试计数与平台跳过范围以实施状态为准。

@@ -70,7 +70,7 @@ async function upstream(path: string, options: { token?: string; method?: string
     }
     const raw = await bytes(response.body, options.responseLimit || JSON_LIMIT, 502);
     let data: unknown;
-    try { data = JSON.parse(Buffer.from(raw).toString('utf8')); } catch { throw new CoreError(502, 'Invalid storage core response'); }
+    try { data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)); } catch { throw new CoreError(502, 'Invalid storage core response'); }
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new CoreError(502, 'Invalid storage core response');
     return { data: data as Record<string, unknown>, status: response.status };
   } finally { clearTimeout(timer); }

@@ -21,7 +21,7 @@ import path from 'node:path';
 import { aggregateJiuwenOtlpFromSpans, type JiuwenSpan } from '@/lib/ingest/otel/jiuwen/aggregate';
 import { batchHasEndedTeamRoot } from '@/lib/ingest/otel/jiuwen/coalesce';
 import { isMultiTraceSpan, spanSession } from '@/lib/ingest/otel/jiuwen/spool';
-import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
 
 // Reduced from the 0.0.13y ARM64 image's real OTLP exports; prompt payloads are sanitized.
@@ -75,9 +75,21 @@ test('0.0.13y: missing call ids do not attach sibling tools by time', () => {
   const rec = aggregateJiuwenOtlpFromSpans(rows)!;
   assert.equal(rec.tool_call_count, 1);
   const inferenceTurns = rec.interactions.filter((i: any) => i.usage);
+  assert.equal(inferenceTurns.length, 2);
+  assert.ok(inferenceTurns.every((i: RawInteraction) => !i.trace_synthetic));
   assert.equal(inferenceTurns.flatMap((i: any) => i.tool_calls || []).length, 0);
   assert.equal(rec.interactions.flatMap((i: any) => i.tool_calls || []).length, 1);
+  const standalone = rec.interactions.find((i: RawInteraction) => i.tool_calls?.length && !i.usage)!;
+  assert.equal(standalone.trace_synthetic, true);
+  const originalCall = aggregateJiuwenOtlpFromSpans(spans('tool'))!.interactions
+    .flatMap((i: RawInteraction) => i.tool_calls || [])[0];
+  const detachedCall = standalone.tool_calls[0];
+  assert.equal(detachedCall.id, 'unmatched-call');
+  for (const key of ['function', 'output', 'state', 'timing']) {
+    assert.deepEqual(detachedCall[key], originalCall[key], `detaching preserves ${key}`);
+  }
   assert.equal(buildAgentCallTree(rec.interactions)!.stats.llmCalls, 2);
+  assert.equal(buildAgentCallTree(rec.interactions)!.stats.toolCalls, 1);
 });
 
 test('0.0.13y: closed root is an explicit completion and bypasses batch throttling', () => {

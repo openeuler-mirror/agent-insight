@@ -27,19 +27,19 @@ import { resolveTraceTimeRange } from '@/lib/client/trace-time-range';
 const source = fs.readFileSync(new URL('../src/app/(main)/trace/page.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('trace.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
-function findNode(predicate: (node: ts.Node) => boolean): ts.Node {
+function findNode(predicate: (node: ts.Node) => boolean, sourceFile = ast): ts.Node {
     let result: ts.Node | undefined;
     function visit(node: ts.Node) {
         if (!result && predicate(node)) result = node;
         ts.forEachChild(node, visit);
     }
-    visit(ast);
+    visit(sourceFile);
     assert.ok(result, 'production callback must exist');
     return result;
 }
 
-function expression(node: ts.Node, scope: Record<string, unknown>): any {
-    const js = ts.transpileModule(`const value = ${node.getText(ast)};`, {
+function expression(node: ts.Node, scope: Record<string, unknown>, sourceFile = ast): any {
+    const js = ts.transpileModule(`const value = ${node.getText(sourceFile)};`, {
         compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText;
     return new Function(...Object.keys(scope), `${js}; return value;`)(...Object.values(scope));
@@ -285,8 +285,10 @@ const taskIdHook = findNode(node => ts.isCallExpression(node)
 const selectDeclaration = findNode(node => ts.isVariableDeclaration(node)
     && node.name.getText(ast) === 'handleSelectExecution') as ts.VariableDeclaration;
 const selectCallback = (selectDeclaration.initializer as ts.CallExpression).arguments[0];
-const importClick = findNode(node => ts.isJsxAttribute(node) && node.name.getText(ast) === 'onClick'
-    && Boolean(node.initializer?.getText(ast).includes('importResult?.rootTaskId'))) as ts.JsxAttribute;
+const importSource = fs.readFileSync(new URL('../src/components/trace/trace-batch-import-dialog.tsx', import.meta.url), 'utf8');
+const importAst = ts.createSourceFile('trace-batch-import-dialog.tsx', importSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const importClick = findNode(node => ts.isJsxAttribute(node) && node.name.getText(importAst) === 'onClick'
+    && Boolean(node.initializer?.getText(importAst).includes('item.result?.rootTaskId')), importAst) as ts.JsxAttribute;
 
 async function navigationHarness(run: (scope: Record<string, unknown>) => void, initialQuery = '?page=3&status=failed') {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -335,11 +337,20 @@ test('opening a list Trace adds history so Back and Forward retain list filters'
     assert.equal(history.at(-1), '/trace?page=3&status=failed&taskId=trace-123');
 });
 
-test('opening an imported Trace adds a detail history entry', async () => {
+test('opening an imported Trace uses its existing separate detail tab and preserves the list URL', () => {
     const callback = (importClick.initializer as ts.JsxExpression).expression!;
-    const updates = await navigationHarness(scope => expression(callback, scope)());
-    assert.equal(updates[0].options.history, 'push');
-    assert.equal(updates[0].queryString, '?page=3&status=failed&taskId=trace-123');
+    for (const [result, target] of [
+        [{ rootTaskId: 'trace 123', rootExecutionId: 'execution-123' }, 'trace%20123'],
+        [{ rootTaskId: null, rootExecutionId: 'execution-123' }, 'execution-123'],
+        [{}, null],
+    ] as const) {
+        const opened: unknown[][] = [];
+        expression(callback, {
+            item: { result }, basePath: '/insight', TRACE_DETAIL_PATH: '/trace',
+            window: { open: (...args: unknown[]) => { opened.push(args); } },
+        }, importAst)();
+        assert.deepEqual(opened, target ? [[`/insight/trace?taskId=${target}`, '_blank', 'noopener']] : []);
+    }
 });
 
 test('the in-page return-to-list action replaces detail state instead of adding another entry', async () => {

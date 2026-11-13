@@ -16,15 +16,31 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { prisma } from '@/lib/storage/prisma';
-import { withEvaluatorExecution, runConfiguredEvaluationStage } from '@/lib/engine/experiment/evaluator-execution-policy';
-import { gatherWebSearchEvidence } from '@/lib/engine/experiment/web-search-evidence';
-import { runHallucinationPreset } from '@/lib/engine/experiment/hallucination-preset-evaluators';
-import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
-import { setWebSearchEvidenceForTest } from '@/lib/engine/experiment/web-search-evidence';
-import { experimentSignal } from '@/lib/engine/experiment/cancellation-context';
+import { createIsolatedDatabase } from './helpers/isolated-database';
 
-process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || process.env.DATABASE_URL;
+let database: ReturnType<typeof createIsolatedDatabase>;
+let prisma: typeof import('@/lib/storage/prisma').prisma;
+let withEvaluatorExecution: typeof import('@/lib/engine/experiment/evaluator-execution-policy').withEvaluatorExecution;
+let runConfiguredEvaluationStage: typeof import('@/lib/engine/experiment/evaluator-execution-policy').runConfiguredEvaluationStage;
+let gatherWebSearchEvidence: typeof import('@/lib/engine/experiment/web-search-evidence').gatherWebSearchEvidence;
+let setWebSearchEvidenceForTest: typeof import('@/lib/engine/experiment/web-search-evidence').setWebSearchEvidenceForTest;
+let runHallucinationPreset: typeof import('@/lib/engine/experiment/hallucination-preset-evaluators').runHallucinationPreset;
+let setJudgeLlmCallerForTest: typeof import('@/lib/engine/experiment/judge-llm').setJudgeLlmCallerForTest;
+let experimentSignal: typeof import('@/lib/engine/experiment/cancellation-context').experimentSignal;
+
+test.before(async () => {
+  database = createIsolatedDatabase();
+  ({ prisma } = await import('@/lib/storage/prisma'));
+  ({ withEvaluatorExecution, runConfiguredEvaluationStage } = await import('@/lib/engine/experiment/evaluator-execution-policy'));
+  ({ gatherWebSearchEvidence, setWebSearchEvidenceForTest } = await import('@/lib/engine/experiment/web-search-evidence'));
+  ({ runHallucinationPreset } = await import('@/lib/engine/experiment/hallucination-preset-evaluators'));
+  ({ setJudgeLlmCallerForTest } = await import('@/lib/engine/experiment/judge-llm'));
+  ({ experimentSignal } = await import('@/lib/engine/experiment/cancellation-context'));
+});
+test.after(async () => {
+  try { await prisma?.$disconnect(); }
+  finally { database?.dispose(); }
+});
 
 test('search failures degrade locally but the evaluation deadline cancels in-flight search', { timeout: 30_000 }, async t => {
   const originalFetch = globalThis.fetch;

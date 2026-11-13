@@ -18,12 +18,25 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { prisma } from '@/lib/storage/prisma';
-import { withEvaluatorExecution } from '@/lib/engine/experiment/evaluator-execution-policy';
-import { evaluateTaskCompletionViaOpencode } from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
-import { evaluateTrajectoryViaOpencode } from '@/lib/engine/evaluation/opencode-trajectory-evaluator';
+import { createIsolatedDatabase } from './helpers/isolated-database';
 
-process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || process.env.DATABASE_URL;
+let database: ReturnType<typeof createIsolatedDatabase>;
+let prisma: typeof import('@/lib/storage/prisma').prisma;
+let withEvaluatorExecution: typeof import('@/lib/engine/experiment/evaluator-execution-policy').withEvaluatorExecution;
+let evaluateTaskCompletionViaOpencode: typeof import('@/lib/engine/evaluation/opencode-task-completion-evaluator').evaluateTaskCompletionViaOpencode;
+let evaluateTrajectoryViaOpencode: typeof import('@/lib/engine/evaluation/opencode-trajectory-evaluator').evaluateTrajectoryViaOpencode;
+
+test.before(async () => {
+  database = createIsolatedDatabase();
+  ({ prisma } = await import('@/lib/storage/prisma'));
+  ({ withEvaluatorExecution } = await import('@/lib/engine/experiment/evaluator-execution-policy'));
+  ({ evaluateTaskCompletionViaOpencode } = await import('@/lib/engine/evaluation/opencode-task-completion-evaluator'));
+  ({ evaluateTrajectoryViaOpencode } = await import('@/lib/engine/evaluation/opencode-trajectory-evaluator'));
+});
+test.after(async () => {
+  try { await prisma?.$disconnect(); }
+  finally { database?.dispose(); }
+});
 
 test('real HTTP task scoring reuses extracted key points across retries and disables SDK retries/fallback', async () => {
   let extracts = 0;
@@ -57,9 +70,6 @@ test('real HTTP task scoring reuses extracted key points across retries and disa
     assert.deepEqual(attempts, [1, 2]);
     assert.deepEqual(stages, ['extract', 'attempt-1', 'score-1', 'attempt-2', 'score-2']);
   } finally {
-    await prisma.userSettings.deleteMany({ where: { user } });
-    await prisma.session.deleteMany({ where: { user } });
-    await prisma.execution.deleteMany({ where: { user } });
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
@@ -82,9 +92,6 @@ test('real HTTP trajectory scoring retries invalid output within one shared scor
     assert.equal(requests, 2);
     assert.equal(result.trajectoryScore, 1);
   } finally {
-    await prisma.userSettings.deleteMany({ where: { user } });
-    await prisma.session.deleteMany({ where: { user } });
-    await prisma.execution.deleteMany({ where: { user } });
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }

@@ -21,6 +21,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { isolateTestDatabase } from './helpers/isolated-test-db';
+isolateTestDatabase('codeagent-otel-ingest');
+
 import { POST as postLogs } from '@/app/api/ingest/otel/v1/logs/route';
 import { POST as postMetrics } from '@/app/api/ingest/otel/v1/metrics/route';
 import { POST as postTraces } from '@/app/api/ingest/otel/v1/traces/route';

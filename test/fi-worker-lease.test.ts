@@ -1,26 +1,19 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import test from 'node:test'
+import { createIsolatedDatabase } from './helpers/isolated-database'
 
 let prisma: typeof import('@/lib/storage/prisma')['prisma']
 let sweep: typeof import('@/lib/fault-injection/worker-protocol')['sweepStaleClaims']
-let root: string
+let database: ReturnType<typeof createIsolatedDatabase> | undefined
 const user = 'fi-lease-' + process.pid
 
 test.before(async () => {
-  root = mkdtempSync(path.join(os.tmpdir(), 'fi-worker-lease-'))
-  process.env.AGENT_INSIGHT_HOME = root
-  process.env.DATABASE_URL = 'file:' + path.join(root, 'test.db')
-  execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { env: process.env, stdio: 'pipe' })
+  database = createIsolatedDatabase()
   ;({ prisma } = await import('@/lib/storage/prisma'))
   ;({ sweepStaleClaims: sweep } = await import('@/lib/fault-injection/worker-protocol'))
 })
 test.after(async () => {
-  await prisma?.$disconnect()
-  if (root) rmSync(root, { recursive: true, force: true })
+  try { await prisma?.$disconnect() } finally { database?.dispose() }
 })
 
 /** Create expired claims without requiring a live client or model provider. */

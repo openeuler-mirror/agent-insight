@@ -24,6 +24,15 @@ import { activateIsolatedHome, assertTemporaryHome, isolatedHomeEnv } from './he
 test('test environment pins all storage paths and drops inherited credentials', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'test-home-guard-'))
   t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const databaseEnvironment = { DB_HOST: process.env.DB_HOST, DB_USER: process.env.DB_USER }
+  process.env.DB_HOST = 'synthetic-remote-db'
+  process.env.DB_USER = 'synthetic-db-user'
+  t.after(() => {
+    for (const [key, value] of Object.entries(databaseEnvironment)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
   const previous = process.env.TEST_PRIVATE_API_KEY
   process.env.TEST_PRIVATE_API_KEY = 'synthetic-inherited-key'
   t.after(() => {
@@ -37,6 +46,8 @@ test('test environment pins all storage paths and drops inherited credentials', 
   assert.equal(env.TEST_PRIVATE_API_KEY, undefined)
   assert.equal(env.AGENT_INSIGHT_API_KEY, 'test-only')
   assert.equal(env.AGENT_INSIGHT_DATA_DIR, undefined)
+  assert.equal(env.DB_HOST, '')
+  assert.equal(env.DB_USER, undefined)
 })
 
 test('installer test guard rejects real directories and symlinks escaping temporary storage', (t) => {

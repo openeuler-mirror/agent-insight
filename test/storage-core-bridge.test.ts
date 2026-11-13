@@ -106,3 +106,10 @@ test('real loopback HTTP bridge follows neither redirects nor raw error bodies',
  const server=createServer((req,res)=>{hits++;assert.equal(req.headers.authorization,'Bearer '+token);res.writeHead(302,{location:'/leak'});res.end();});await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();assert.ok(address && typeof address!=='string');const previous=process.env.AGENT_INSIGHT_STORAGE_CORE_URL;
  try {process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:'+address.port;const r=await m.handleCoreList(request('/api/observe/data',{headers:{authorization:'Bearer '+token}}));assert.equal(r.status,502);assert.equal(hits,1);} finally {process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous;await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
 });
+
+test('upstream JSON rejects invalid UTF-8 without replacing signed evidence text',async()=>{
+ const m=await api();const raw=Buffer.from('{"query":"XXX"}');raw[raw.indexOf('XXX')]=0xff;
+ const response=await m.handleCoreList(request('/api/observe/data',{headers:{authorization:'Bearer '+token}}),async()=>new Response(raw));
+ assert.equal(response.status,502);
+ assert.doesNotMatch(await response.text(),/\uFFFD/);
+});

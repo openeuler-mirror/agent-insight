@@ -538,21 +538,26 @@ test("OTel consumer: aggregate cooldown throttles rapid re-aggregation of active
       warn: () => {},
     })
 
-    await wait(80)
+    const state = getOtelSpoolConsumerForTest()!
+    await waitFor(() => !!state.sessions.get("session-hot")?.lastAggregateEndedAt && !state.dispatching)
     assert.equal(callTimes.length, 1, "第一轮聚合应正常发生")
+    const firstRound = state.sessions.get("session-hot")!
+    assert.ok(firstRound?.lastAggregateEndedAt !== undefined, "第一轮聚合应完成")
+    const cooldownMs = Math.min(state.aggCooldownCapMs, firstRound.lastAggregateCostMs! * state.aggCooldownFactor)
+    const cooldownUntil = firstRound.lastAggregateEndedAt + cooldownMs
 
-    // 冷却窗口(约 40ms×10=400ms)内追加新数据:触发被顺延,不得立即重聚合
+    // 冷却按实际整轮耗时计算，繁忙事件循环下的 wait(40) 可能远超 40ms。
     fs.appendFileSync(file, "{\"sessionId\":\"session-hot\"}\n", "utf8")
-    await wait(120)
-    assert.equal(callTimes.length, 1, "冷却期内不应发生第二轮聚合")
 
     // 冷却结束后顺延的聚合必须发生(最终一致,数据不丢)
-    await wait(500)
+    await waitFor(() => callTimes.length >= 2, cooldownMs + 3000)
     assert.ok(callTimes.length >= 2, "冷却结束后应完成顺延的聚合")
+    assert.ok(callTimes[1] >= cooldownUntil, "冷却期内不应发生第二轮聚合")
     assert.ok(callTimes[1] - callTimes[0] >= 300, `两轮间隔应受冷却约束,实际 ${callTimes[1] - callTimes[0]}ms`)
 
     // 快存保持可见性；evaluated 尚未到点时必须保留磁盘重放依据。
-    await wait(100)
+    await waitFor(() => (state.sessions.get("session-hot")?.lastAggregateEndedAt || 0) >= callTimes[1] && !state.dispatching)
+    assert.ok((state.sessions.get("session-hot")?.lastAggregateEndedAt || 0) >= callTimes[1], "顺延的聚合应完成持久化")
     const checkpoint = loadCheckpoint(dir)
     const relPath = toCheckpointRelPath(dir, file)
     assert.equal(checkpoint.files[relPath]?.bytes || 0, 0)

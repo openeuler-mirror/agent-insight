@@ -16,26 +16,20 @@
 
 /** FI ingress integration: no implicit model calls, independent traces and historical compatibility. */
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import test from 'node:test'
+import { createIsolatedDatabase } from './helpers/isolated-database'
 
 let prisma: typeof import('@/lib/storage/prisma')['prisma']
 let collect: typeof import('@/app/api/fault-injection/runs/[runId]/collect-result/route')['POST']
 let trace: typeof import('@/app/api/fault-injection/runs/[runId]/trace/route')['GET']
 let rejudge: typeof import('@/app/api/fault-injection/runs/[runId]/rejudge/route')['POST']
-let root: string
+let database: ReturnType<typeof createIsolatedDatabase> | undefined
 let sequence = 0
 const user = 'fi-collect-ingress-' + process.pid
 const apiKey = 'fi-collect-ingress-test-key'
 
 test.before(async () => {
-  root = mkdtempSync(path.join(os.tmpdir(), 'fi-collect-ingress-'))
-  process.env.AGENT_INSIGHT_HOME = root
-  process.env.DATABASE_URL = 'file:' + path.join(root, 'test.db')
-  execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { env: process.env, stdio: 'pipe' })
+  database = createIsolatedDatabase()
   ;({ prisma } = await import('@/lib/storage/prisma'))
   ;({ POST: collect } = await import('@/app/api/fault-injection/runs/[runId]/collect-result/route'))
   ;({ GET: trace } = await import('@/app/api/fault-injection/runs/[runId]/trace/route'))
@@ -43,8 +37,7 @@ test.before(async () => {
   await prisma.user.create({ data: { username: user, apiKey } })
 })
 test.after(async () => {
-  await prisma?.$disconnect()
-  if (root) rmSync(root, { recursive: true, force: true })
+  try { await prisma?.$disconnect() } finally { database?.dispose() }
 })
 
 /** Create an actual collecting Run and its experiment Case without a catalog or model. */
