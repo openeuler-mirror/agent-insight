@@ -172,6 +172,21 @@ test('installer re-registers in a temporary HOME and does not send an old client
     fs.writeFileSync(path.join(fakeBin, command), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
   }
 
+  const preload = path.join(tempHome, 'service-scope.cjs')
+  fs.writeFileSync(preload, `if (process.platform === 'linux') Object.defineProperty(process, 'getuid', {value: () => 1009720000});
+const fs = require('node:fs'); const exists = fs.existsSync;
+fs.existsSync = file => file === '/etc/systemd/system/agent-insight-client.service' ? false : exists(file);
+const mkdir = fs.mkdirSync;
+fs.mkdirSync = (directory, ...args) => {
+  if (directory === '/etc/systemd/system') throw Error('Installer fixture escaped its temporary HOME');
+  return mkdir(directory, ...args);
+};
+const write = fs.writeFileSync;
+fs.writeFileSync = (file, ...args) => {
+  if (file === '/etc/systemd/system/agent-insight-client.service') throw Error('Installer fixture escaped its temporary HOME');
+  return write(file, ...args);
+};`)
+
   const requestPaths: string[] = []
   const registerPayloads: Record<string, unknown>[] = []
   const server = http.createServer(async (req, res) => {
@@ -223,6 +238,7 @@ test('installer re-registers in a temporary HOME and does not send an old client
         env: isolatedHomeEnv(tempHome, {
           PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
           AGENT_INSIGHT_MACHINE_ID: 'machine-mock-rebind',
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${JSON.stringify(preload)}`,
         }),
       })
       let stdout = ''
@@ -252,6 +268,7 @@ test('installer re-registers in a temporary HOME and does not send an old client
     assert.equal(registerPayloads[1]?.previousClientId, 'cli_new-base-path')
     const refreshedConfig = JSON.parse(fs.readFileSync(path.join(clientDir, 'config.json'), 'utf8'))
     assert.equal(refreshedConfig.deviceCredential, 'dc_rotated-base-path')
+    if (process.platform === 'linux') assert.ok(fs.existsSync(path.join(tempHome, '.config/systemd/user/agent-insight-client.service')))
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
     fs.rmSync(tempHome, { recursive: true, force: true })

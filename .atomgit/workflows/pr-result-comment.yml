@@ -1,0 +1,65 @@
+name: PR Result Comment
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: '可选 PR 序号；留空扫描最近 24 小时的 PR 运行'
+        required: false
+        type: string
+      run_id:
+        description: '可选运行 ID；指定时必须同时填写 PR 序号'
+        required: false
+        type: string
+      dry_run:
+        description: '仅预览结果，不创建或更新 PR 评论'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  repository: read
+  action: read
+  pr: write
+  project: read
+  issue: none
+  note: write
+
+concurrency:
+  enable: true
+  max: 1
+  exceed-action: QUEUE
+  preemption:
+    enable: false
+
+jobs:
+  publish:
+    name: 回写 PR 验证结果
+    if: ${{ atomgit.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, openeuler, x86, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted master
+        uses: checkout
+        with:
+          ref: ${{ atomgit.sha }}
+          fetch-depth: 1
+
+      - name: Publish completed PR results
+        shell: bash
+        env:
+          PR_COMMENT_PR_NUMBER: ${{ inputs.pr_number }}
+          PR_COMMENT_RUN_ID: ${{ inputs.run_id }}
+          PR_COMMENT_DRY_RUN: ${{ inputs.dry_run }}
+          PR_COMMENT_WRITER_ID: 69ec338eb06841500aced516
+          PR_COMMENT_WRITER_LOGIN: action-bot
+        run: |
+          set -euo pipefail
+          test "${ATOMGIT_REF:?}" = refs/heads/master
+          test "$(git rev-parse HEAD)" = "${ATOMGIT_SHA:?}"
+          node test/e2e/control/actions-pr-comment.mjs \
+            --repository "${ATOMGIT_REPOSITORY:?}" --publish

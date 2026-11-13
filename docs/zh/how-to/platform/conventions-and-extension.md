@@ -74,7 +74,13 @@ changefreq: monthly
 
 核心页面 E2E 的五场景驱动位于独立测试包，运行、隔离、真实模型与报告边界见 [核心 E2E 自动化](../../../../test/e2e/README.md)。 Actions 的 PR 自动运行固定全 Mock；workflow 纳入默认分支以启用手动入口后，手动运行通过仓库变量 `E2E_CASE_MODES`、`E2E_MODEL_BASE_URL`、`E2E_MODEL_NAME` 和仓库密钥 `E2E_MODEL_API_KEY` 配置，不回写本地配置。五例和完整 UT 仍为必需范围，报告须匹配执行前的配置快照。UT 与 E2E 分别统计；当前配置默认 001 Real、002～005 Mock，显式 `--mode` 可覆盖全部所选场景。PR 和每日链路使用不同固定测试账号和独立数据目录，结果以本轮完整报告为准，[历史验收记录](../../../../test/e2e/validation-history.md)不能代替当前通过。005 故障恢复必须核对检测、成功处置回执和恢复，不能只凭注入完成算通过。驱动器选择独立空闲端口并保留失败证据；手动开发可用 `AGENT_INSIGHT_PORT=3100 bash scripts/develop_start.sh` 指定端口，默认仍为 3000。
 
-[GitCode Actions PR 门禁](../../../../test/e2e/README.md#gitcode-actions-pr-门禁)使用社区 Runner，对目标 `master` 的 PR 新建、更新和重开执行生产编译、完整 UT 和五例全 Mock E2E。Runner 标签与公开构建镜像以 workflow 为准；各编译、UT 和用例 Job 按当前 schema 生成 Prisma Client，依赖锁文件变化时重建环境镜像；PR 自动检查不需要模型密钥，手动选择 Real 时使用仓库模型配置。总览拆分为生产编译、UT、001～005、汇总与门禁共 8 个 Job；只编译一次，各用例独立数据库，UT 或单例失败后继续收集其他结果。所有必需结果完整通过才成功，失败仍尝试归档汇总报告。数据库重构期间，Actions 仅临时跳过一个已确认存在 SQLite 并发超时的 Worker 集成 UT，跳过名称和原因在报告中显式列出；其余 UT 和五例 E2E 继续执行。本地默认不跳过。PR 的 Checks 页面可进入自动运行详情，手动运行从 Actions 列表查看。运行成功不等于已配置强制合入规则。
+[GitCode Actions PR 门禁](../../../../test/e2e/README.md#gitcode-actions-pr-门禁)使用社区 Runner，对目标 `master` 的 PR 新建、更新和重开执行生产编译、完整 UT 和五例全 Mock E2E。Runner 标签与公开构建镜像以 workflow 为准；各编译、UT 和用例 Job 按当前 schema 生成 Prisma Client，依赖锁文件变化时重建环境镜像；PR 自动检查不需要模型密钥，手动选择 Real 时使用仓库模型配置。总览拆分为生产编译、UT、001～005、汇总与门禁共 8 个 Job；只编译一次，随后 UT 与五例 E2E 并行，各测试 Job 使用独立源码和数据库，UT 或单例失败后继续收集其他结果。汇总等待全部阶段完成；实际并行度受 Runner 池容量限制，不同 PR 的同一 workflow 仍最多运行一轮。所有必需结果完整通过才成功，失败仍尝试归档汇总报告。数据库重构期间，Actions 仅临时跳过一个已确认存在 SQLite 并发超时的 Worker 集成 UT，跳过名称和原因在报告中显式列出；其余 UT 和五例 E2E 继续执行。本地默认不跳过。PR 的 Checks 页面可进入自动运行详情，手动运行从 Actions 列表查看。运行成功不等于已配置强制合入规则。
+
+UT Job 与最终汇总的 Summary/HTML 增加文件并发、慢文件前 20 项及实际可见的容器 CPU/内存指标；完整脱敏文件明细在 `e2e-result-ut` 制品的 `ut-metrics.json`。内存采样峰值与内核生命周期峰值分开列示，未读取到的指标标记不可用；CPU/RSS 的统计范围见 [E2E 指南](../../../../test/e2e/README.md#gitcode-actions-pr-门禁)。调整文件并发仍运行完整 `npm test`，不改变 SQLite 实现或既有单例跳过安排。
+
+五例在流水线、运行报告和 PR 评论中统一命名为：001 账号登录/模型配置/客户端接入；002 OpenCode 执行与 Trace 采集展示；003 Skill 生成/数据集评测/优化发布；004 已有 Trace 评测/诊断/Skill 优化；005 故障注入/检测拦截/恢复验证。003 使用数据集贯穿生成与发布，004 复用已有 Trace 且不新增数据集；编号和独立执行入口不变。
+
+[PR 结果自动评论](../../../../test/e2e/README.md#pr-结果自动评论)由独立的 `PR Result Comment` workflow 执行。合入 `master` 后每 5 分钟扫描最近 24 小时的已结束 PR 门禁，覆盖仍打开和已合并 PR，跳过关闭但未合并 PR，并更新同一条机器人评论；Runner 排队可能延迟回写。它只运行 `master` 可信代码，使用平台内置 Token 读取运行及报告、写入 PR 评论，fork 测试不获得写权限。失败、取消、跳过及报告不完整如实列明，旧提交结果不覆盖新提交。报告需匹配平台运行轮次，旧报告无轮次字段仅兼容首轮；后续重跑缺少轮次证据时不可验证。需要预览或补发时，在 Actions 手动运行该 workflow，选择 `master` 并填写可选 `pr_number` / `run_id`，`dry_run=true` 只预览。评论回写失败单独排查，不改变原测试门禁结论。
 
 - **Install**：`npm install`（会运行 `scripts/postinstall.js`）。
 - **Agent RAS install**：`node scripts/install-ras.js`（对外命令
@@ -109,6 +115,8 @@ changefreq: monthly
   普通启动仅在没有成功记录、输入变化或产物不完整时重建。直接运行 `npm run build` 不会创建可复用记录。
   启动脚本始终执行数据库同步和首页、数据集、故障页面健康检查，并输出各阶段与总耗时。
 - **Test**：`npm run test` 先检查 Trae 采集器类型，再执行 `node --import tsx --test "test/**/*.test.ts"`；它不替代根项目和 Next 应用的类型检查。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
+- **按模块运行**：在与全量测试相同的隔离环境和依赖条件下，运行 `node scripts/test-suites.mjs --module evaluation --concurrency 2`；可重复 `--module` 选择多个模块，增加 `--list` 仅列文件。模块入口同样先生成 Benchmark 目录并检查 Trae 类型。分类包含纯逻辑、源码契约、数据库/HTTP/Shell 集成及性能回归，模块通过不等于全量通过；`npm run test` 与 PR 门禁仍执行全部默认测试。`benchmark-real-e2e.test.ts` 仍需显式设置 `RUN_BENCHMARK_REAL_E2E=true`，未启用时不探测 Docker 或 OpenCode，每个前置探测最长 10 秒。
+- **按模块定位测试**：`test/suites.json` 为每个默认 `.test.ts` 文件指定唯一主模块。`observability` 覆盖采集、Trace 与监测，`evaluation` 覆盖实验、数据集、评估器与 Benchmark，`skills` 覆盖 Skill 工作台、诊断与优化，`reliability` 覆盖 RAS、故障注入与可靠性客户端，`platform` 覆盖认证、部署与共享运行时。执行 `node scripts/test-suites.mjs --check` 检查全部文件的分类；新增、重命名或删除测试时同步清单，遗漏、重复和失效路径会使默认 UT 中的清单检查失败。
 - **测试前置条件**：Python 环境需安装 `agent_ras/pyproject.toml` 和 `agent_fault_injection/pyproject.toml` 声明的运行依赖；PowerShell 脚本解析与安装测试需要 PATH 中存在 `pwsh`，协作持久化测试还需 `sqlite3` CLI。无管理员权限时可解压官方发行包到用户目录并加入 PATH。Trae 产物检查前执行 `npm run compile --prefix scripts/trae-collector`。RAS 测试可通过 `AGENT_INSIGHT_RAS_PYTHON` 指向已安装依赖的独立 venv；全量测试还应将 `RAS_PYTHON` 设为同一路径，使清理 `AGENT_INSIGHT_*` 变量的隔离安装测试仍能使用该解释器。数据库测试使用独立 SQLite 库和当前 Prisma schema，数据目录使用隔离的 `AGENT_INSIGHT_HOME`，不得指向个人日常数据；测试文件自行用 `prisma db push` 初始化临时库，不依赖仓库 `data/` 或 `~/.agent-insight` 中已有表，因此首次检出后只需完成 `npm install`（含 Prisma Client 生成）即可运行。环境缺失应单列为验证阻塞，不能据此认定产品功能失败。
 - **并发测试**：资源受限环境可运行 `npm run test -- --test-concurrency=2`，仍执行全部测试文件；文件内的并发、取消和防重用例仍保留。定位时序问题时用任务门闩、实际状态或可控时钟，避免以固定 sleep 推断任务已开始/完成；测试等待期限使用单调时钟，避免系统时间调整导致提前超时。API 异步受理测试应在评估器尚未释放时断言响应和持久状态，并在退出前等待后台任务收尾。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。

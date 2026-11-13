@@ -59,8 +59,11 @@ test.after(() => {
 });
 const options = (threadId: string, signal?: AbortSignal, send = (_mode: string, _value: unknown) => {}) => ({ user: 'test', threadId, skillName: 'test', baseVersion: 0, checkedIssues: [], userFeedback: 'add computed summary', signal, send });
 
-test('terminal event followed by SDK cleanup must not become a user cancellation', async () => {
+test('terminal event followed by SDK cleanup must not become a user cancellation', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const terminal of ['assistant', 'idle']) {
+    let ready!: () => void;
+    const started = new Promise<void>(resolve => { ready = resolve; });
     agent = async (run) => {
       run.handlers.onText?.({ messageID: 'answer', delta: 'candidate complete', fullText: 'candidate complete' });
       if (terminal === 'assistant') run.handlers.onAssistantMessage?.({ status: 'completed', info: { finish: 'stop' } });
@@ -70,11 +73,15 @@ test('terminal event followed by SDK cleanup must not become a user cancellation
         const abort = () => { clearTimeout(timer); reject(Object.assign(new Error('opencode 执行已中止'), { code: 'EXECUTION_CANCELLED' })); };
         if (run.chatOptions.signal?.aborted) abort();
         else run.chatOptions.signal?.addEventListener('abort', abort, { once: true });
+        ready();
       });
       return { workspaceDir: directory, sessionId: 'finished', output: 'candidate complete' };
     };
     const events: string[] = [];
-    await assert.doesNotReject(() => bridge.streamSkillOptOpencode(options('terminal-'+terminal, undefined, mode => events.push(mode))));
+    const completed = assert.doesNotReject(bridge.streamSkillOptOpencode(options('terminal-'+terminal, undefined, mode => events.push(mode))));
+    await Promise.race([started, completed.then(() => { throw new Error('optimization ended before SDK cleanup started'); })]);
+    t.mock.timers.tick(700);
+    await completed;
     assert.ok(events.includes('done'));
   }
 });

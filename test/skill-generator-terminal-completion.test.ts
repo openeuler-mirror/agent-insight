@@ -44,15 +44,23 @@ test.before(async () => {
 });
 test.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
 const result=()=>({workspaceDir:directory,sessionId:'completed',output:'complete',stats:{textDeltaCount:1,toolCallCount:1},interactions:[]});
-for(const terminal of ['assistant','idle'])test(`generation ${terminal} completion survives delayed SDK cleanup`,async()=>{
+for(const terminal of ['assistant','idle'])test(`generation ${terminal} completion survives delayed SDK cleanup`,async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ let ready!:()=>void;
+ const started=new Promise<void>(resolve=>{ready=resolve});
  cached=undefined;
  agent=async run=>{
   run.handlers.onText?.({messageID:'answer',delta:'complete',fullText:'complete'});
   if(terminal==='assistant')run.handlers.onAssistantMessage?.({status:'completed',info:{finish:'stop'}});else run.handlers.onSession?.({phase:'idle'});
-  await new Promise<void>((resolve,reject)=>{const timer=setTimeout(resolve,700);run.chatOptions?.signal?.addEventListener('abort',()=>{clearTimeout(timer);reject(new Error('opencode 执行已中止'))},{once:true})});
+  await new Promise<void>((resolve,reject)=>{const timer=setTimeout(resolve,700);run.chatOptions?.signal?.addEventListener('abort',()=>{clearTimeout(timer);reject(new Error('opencode 执行已中止'))},{once:true});ready()});
   return result();
  };
- const events:string[]=[];await assert.doesNotReject(()=>bridge.streamSkillGeneratorOpencode({user:'test',threadId:'gen-'+terminal,message:'generate',send:mode=>events.push(mode)}));assert.ok(events.includes('done'));assert.ok(!events.includes('error'));
+ const events:string[]=[];
+ const pending=bridge.streamSkillGeneratorOpencode({user:'test',threadId:'gen-'+terminal,message:'generate',send:mode=>events.push(mode)});
+ const completed=assert.doesNotReject(pending);
+ await Promise.race([started,completed.then(()=>{throw new Error('generation ended before SDK cleanup started')})]);
+ t.mock.timers.tick(700);await completed;
+ assert.ok(events.includes('done'));assert.ok(!events.includes('error'));
 });
 test('cached-session fallback retains the same deadline and completion policy',async()=>{
  cached='old-session';let calls=0;

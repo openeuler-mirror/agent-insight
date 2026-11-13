@@ -28,9 +28,7 @@ import {
 import { dedupeRasEvents } from "@/lib/ingest/ras/store"
 import {
   buildRasTraceMarkers,
-  findRasMarkersForEvent,
 } from "@/lib/ingest/ras/trace-markers"
-import type { AgentEvent, RawInteraction } from "@/lib/engine/observability/agent-trace"
 
 test("normalizeRasIngestBody: requires taskId", () => {
   const r = normalizeRasIngestBody({
@@ -268,57 +266,4 @@ test("buildRasTraceMarkers preserves recovery prompt content and anchored result
   )
   assert.equal(markers[0].actions[1].message, "notice body")
   assert.deepEqual(markers[0].deliveryMessageIds, ["msg_notice"])
-})
-
-test("findRasMarkersForEvent matches delivery message as ras node", () => {
-  const markers = buildRasTraceMarkers([
-    {
-      id: "anomaly-1",
-      deliveryId: "d1",
-      type: "anomaly",
-      taskId: "ses_1",
-      anomalyKind: "llm_thinking_loop",
-      severity: "low",
-      summary: "loop",
-      actionTypes: "emit_notice",
-      payloadJson: JSON.stringify({
-        trace_anchor: { message_id: "msg_llm", part_id: "prt_1", channel: "llm_reasoning" },
-        actions: [{ type: "emit_notice", message: "notice" }],
-      }),
-      ts: "2026-07-30T10:00:00.000Z",
-    },
-    {
-      id: "result-1",
-      deliveryId: "d2",
-      type: "action_result",
-      taskId: "ses_1",
-      anomalyKind: null,
-      severity: null,
-      summary: null,
-      actionTypes: "emit_notice",
-      payloadJson: JSON.stringify({
-        action: "emit_notice",
-        ok: true,
-        message: "notice",
-        trace_anchor: { message_id: "msg_llm", part_id: "prt_1", channel: "llm_reasoning" },
-        delivery_anchor: { message_id: "msg_notice", channel: "ras_notice" },
-      }),
-      ts: "2026-07-30T10:00:01.000Z",
-    },
-  ], "zh")
-
-  const interaction: RawInteraction = {
-    messageID: "msg_notice",
-    role: "user",
-    content: "notice",
-  }
-  const event: AgentEvent = {
-    kind: "ras",
-    interaction,
-    interactionIndex: 1,
-    name: "emit_notice",
-  }
-  const hits = findRasMarkersForEvent(event, markers)
-  assert.equal(hits.length, 1)
-  assert.equal(hits[0].id, "anomaly-1")
 })

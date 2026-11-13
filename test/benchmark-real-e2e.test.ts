@@ -49,11 +49,11 @@ const controllerImage = process.env.SWE_BENCH_CONTROLLER_IMAGE || 'agent-insight
 const caseExternalId = process.env.SWE_BENCH_E2E_CASE || 'pallets__flask-5014'
 const model = process.env.SWE_BENCH_E2E_MODEL || 'deepseek/deepseek-v4-flash'
 const agentTimeoutSeconds = Number(process.env.SWE_BENCH_E2E_AGENT_TIMEOUT_SECONDS || 900)
-const dockerAvailable = spawnSync('docker', ['info'], { stdio: 'ignore' }).status === 0
-const opencodeAvailable = spawnSync('/usr/local/bin/opencode', ['--version'], { stdio: 'ignore' }).status === 0
-const controllerAvailable = Boolean(externalEvaluatorOrigin) || spawnSync(
-  'docker', ['image', 'inspect', controllerImage], { stdio: 'ignore' },
-).status === 0
+const dockerAvailable = enabled && spawnSync('docker', ['info'], { stdio: 'ignore', timeout: 10_000 }).status === 0
+const opencodeAvailable = enabled && spawnSync('/usr/local/bin/opencode', ['--version'], { stdio: 'ignore', timeout: 10_000 }).status === 0
+const controllerAvailable = enabled && (Boolean(externalEvaluatorOrigin) || spawnSync(
+  'docker', ['image', 'inspect', controllerImage], { stdio: 'ignore', timeout: 10_000 },
+).status === 0)
 const skipReason = !enabled
   ? 'set RUN_BENCHMARK_REAL_E2E=true for the all-real 01-13 test'
   : !fs.existsSync(databasePath)

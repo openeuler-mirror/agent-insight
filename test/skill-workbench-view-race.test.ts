@@ -183,6 +183,20 @@ test('同一次渲染中切回原页签仍会保存最新选择', async () => {
   assert.equal(f.state.active?.activeView, 'optimization');
 });
 
+for (const current of ['new-empty-session', null]) test(`stale optimization sync cannot replace ${current || 'cleared selection'}`, () => {
+  const f = fixture(current ? { ...session(current), skillName: null, workVersion: null } : null);
+  f.acceptOptimizationSession({ ...session('old-session'), skillName: 'old', workVersion: 1 });
+  assert.equal(f.state.active?.id || null, current);
+});
+
+test('same session optimization progress still synchronizes', () => {
+  const f = fixture({ ...session('same'), skillName: null, workVersion: null });
+  f.scope.user = '';
+  f.acceptOptimizationSession({ ...session('same'), skillName: 'current', workVersion: 0, stage: 'ready' } as Session & { stage: string });
+  assert.equal((f.state.active as Session & { stage: string }).stage, 'ready');
+  assert.equal(f.state.active?.skillName, 'current');
+});
+
 test('优化后台同步更新当前草稿内容并保留已选择的实验页签', async () => {
   const f = fixture(session('session', 'generated'));
   f.scope.user = '';

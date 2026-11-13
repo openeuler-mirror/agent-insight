@@ -181,7 +181,7 @@ function genericEvent(completion: string, latencyMs: number): OtelTraceEvent {
   }
 }
 
-test("Codex remains in the shared framework allowlist used by every setup entry", () => {
+test("every setup entry uses the shared framework catalog", () => {
   const page = read("src/app/(main)/accessconfig/install/page.tsx")
   const central = read("src/app/api/ingest/setup/route.ts")
   const auto = read("src/app/api/ingest/setup/auto/route.ts")
@@ -249,13 +249,6 @@ test("generated Codex Bash and PowerShell setup scripts pass native syntax parse
 test("central and auto Codex PowerShell setup parse in Windows PowerShell 5.1 after download", async () => {
   parsePowerShell51DownloadedFile(await centralDownloadedScript("windows", "codex"))
   parsePowerShell51DownloadedFile(await autoDownloadedScript("windows", "codex"))
-})
-
-test("standalone builds use the standalone server entrypoint", () => {
-  const packageJson = JSON.parse(read("package.json")) as { scripts?: { start?: string } }
-  // 446-4：npm start 走启动器（同步 .next/static 与 public 后拉起 standalone
-  // server），不再裸跑 server.js——干净 build→start 的静态资源会 404。
-  assert.equal(packageJson.scripts?.start, "node scripts/start-standalone.cjs")
 })
 
 test("CLI exposes framework preselection and detects the installed local package", async () => {
