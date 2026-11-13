@@ -185,17 +185,31 @@ test('UT executes a real npm-to-Node child with the exact skip and no platform/m
   const options = fixture(t);
   options.env.E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT = '1';
   const bin = path.join(options.root, 'fixture-bin');fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nexec node --test fixture-ut.test.mjs\n', { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nexec node --test test/fixture-ut.test.ts\n', { mode: 0o700 });
   options.env.PATH = bin + path.delimiter + process.env.PATH;
-  fs.writeFileSync(path.join(options.project, 'fixture-ut.test.mjs'), `import test from 'node:test';import assert from 'node:assert/strict';test('UT child receives only expected inputs',()=>{assert.equal(process.env.E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT,'1');assert.equal(process.env.E2E_MODEL_API_KEY,undefined);assert.equal(process.env.ATOMGIT_TOKEN,undefined);assert.ok(process.env.AGENT_INSIGHT_HOME.includes('/private/ut/'));});test('deferred test',{skip:'database refactor'},()=>assert.fail());`);
+  fs.mkdirSync(path.join(options.project, 'test'));
+  fs.writeFileSync(path.join(options.project, 'test/fixture-ut.test.ts'), `const test=require('node:test'),assert=require('node:assert/strict');test('UT child receives only expected inputs',()=>{assert.equal(process.env.E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT,'1');assert.equal(process.env.E2E_MODEL_API_KEY,undefined);assert.equal(process.env.ATOMGIT_TOKEN,undefined);assert.ok(process.env.AGENT_INSIGHT_HOME.includes('/private/ut/'));});test('deferred test',{skip:'database refactor'},()=>assert.fail());`);
   assert.equal(spawnSync('git', ['add', '.'], { cwd: options.project }).status, 0);
   assert.equal(spawnSync('git', ['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','UT fixture'], { cwd: options.project }).status, 0);
   options.testedSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: options.project, encoding: 'utf8' }).stdout.trim();
   assert.equal((await phase.runActionsPhase({ ...options, phase: 'build' }, { compile: async () => { fakeBuild(options.project);return { status: 'PASS', exitCode: 0, buildId: 'fixture-build' }; } })).status, 'PASS');
-  const result = await phase.runActionsPhase({ ...options, phase: 'ut' });
+  const result = await phase.runActionsPhase({ ...options, phase: 'ut', utConcurrency: 4 });
+  assert.equal(result.payload.fileConcurrency, 4);
+  assert.equal(result.payload.metrics.completedFiles, 1);
+  assert.equal(result.payload.metrics.incompleteFiles, 0);
+  assert.equal(result.payload.metrics.resources.version, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(options.root, 'public/ut-metrics.json'))).files[0].file, 'test/fixture-ut.test.ts');
   assert.equal(result.status, 'PASS', JSON.stringify(result));
   assert.deepEqual(result.payload.observedSummary, { tests: 2, pass: 1, fail: 0, cancelled: 0, skipped: 1, todo: 0 });
   assert.deepEqual(result.payload.skippedTests, [{ title: 'deferred test', reason: 'database refactor' }]);
+});
+
+test('UT rejects an invalid concurrency override before starting any test process', async t => {
+  const options = await build(t);
+  let calls = 0;
+  const result = await phase.runActionsPhase({ ...options, phase: 'ut', utConcurrency: 0 }, { run: async () => { calls++;return { code: 0, output: 'ℹ tests 1\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\n' }; } });
+  assert.equal(calls, 0);
+  assert.equal(result.status, 'BLOCKED');assert.match(result.payload.reason, /concurrency/i);
 });
 
 test('invalid contexts and missing results still produce a readable failed public summary', async t => {
@@ -226,7 +240,8 @@ test('unsafe archive links are rejected even when the archive digest matches', a
   assert.equal(result.status, 'BLOCKED');assert.match(result.payload.reason, /Unsafe compiled artifact/);
 });
 
-test('a cancelled real CLI removes its temporary model key after stopping the child', async t => {
+for (const entry of ['CLI','imported driver']) test(`a cancelled ${entry} removes its temporary model key after stopping the child`, async t => {
+  if (entry !== 'CLI') assert.equal(typeof phase.installActionsPhaseSignalHandlers,'function');
   const options = fixture(t), script = path.join(options.project, 'test/e2e/run-case.mjs');
   fs.mkdirSync(path.dirname(script), { recursive: true });
   fs.writeFileSync(script, "import fs from 'node:fs';process.on('SIGTERM',()=>{});fs.writeFileSync(process.argv[process.argv.indexOf('--key-file')+1]+'.ready','ready');setInterval(() => {}, 1000);\n");
@@ -234,7 +249,9 @@ test('a cancelled real CLI removes its temporary model key after stopping the ch
   assert.equal(spawnSync('git', ['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','cancellation fixture'], { cwd: options.project }).status, 0);
   options.testedSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: options.project, encoding: 'utf8' }).stdout.trim();
   assert.equal((await phase.runActionsPhase({ ...options, phase: 'build' }, { compile: async () => { fakeBuild(options.project);return { status: 'PASS', exitCode: 0, buildId: 'fixture-build' }; } })).status, 'PASS');
-  const child = spawn(process.execPath, [new URL('./actions-phase.mjs', import.meta.url).pathname, '--phase','case','--case','001','--project',options.project,'--root',options.root,'--run-id',options.runId,'--tested-sha',options.testedSha], { env: options.env, stdio: 'ignore' });
+  const imported = path.join(options.root,'imported-driver.mjs');
+  if (entry !== 'CLI') fs.writeFileSync(imported, `import {runActionsPhase,installActionsPhaseSignalHandlers} from ${JSON.stringify(new URL('./actions-phase.mjs',import.meta.url).href)};const dispose=installActionsPhaseSignalHandlers();try{await runActionsPhase(${JSON.stringify({...options,env:undefined,phase:'case',caseId:'001'})});}finally{dispose();}`);
+  const child = spawn(process.execPath, entry !== 'CLI' ? [imported] : [new URL('./actions-phase.mjs', import.meta.url).pathname, '--phase','case','--case','001','--project',options.project,'--root',options.root,'--run-id',options.runId,'--tested-sha',options.testedSha], { env: options.env, stdio: 'ignore' });
   t.after(() => child.kill('SIGKILL'));
   const key = path.join(options.root, 'private/model.key'), deadline = Date.now() + 10000;
   while (!fs.existsSync(key + '.ready') && Date.now() < deadline && child.exitCode === null) await new Promise(resolve => setTimeout(resolve, 20));
@@ -341,4 +358,15 @@ test('Actions CLI reaps escaped workload processes after hard failure or cancell
       const report=JSON.parse(fs.readFileSync(path.join(options.root,'public/report.json')));assert.equal(report.status,'BLOCKED');assert.equal(report.processCleanup.status,'PASS');assert.ok(report.processCleanup.stopped>=1);
     }
   }
+});
+
+test('a cancelled multi-round imported driver cannot start its next command', async t => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'ut-multi-cancel-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const ready=path.join(root,'ready'),next=path.join(root,'next'),script=path.join(root,'driver.mjs');
+ const first=`require('fs').writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000)`;
+ const second=`require('fs').writeFileSync(${JSON.stringify(next)},'started')`;
+ fs.writeFileSync(script,`import {installActionsPhaseSignalHandlers} from ${JSON.stringify(new URL('./actions-phase.mjs',import.meta.url).href)};import {command} from ${JSON.stringify(new URL('../shared/runtime.mjs',import.meta.url).href)};const guard=installActionsPhaseSignalHandlers();await command(process.execPath,['-e',${JSON.stringify(first)}]);await guard.waitIfStopping?.();await command(process.execPath,['-e',${JSON.stringify(second)}]);`);
+ const child=spawn(process.execPath,[script],{env:{PATH:process.env.PATH},stdio:'ignore'});t.after(()=>child.kill('SIGKILL'));
+ const deadline=Date.now()+5000;while(!fs.existsSync(ready)&&Date.now()<deadline&&child.exitCode===null)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.ok(fs.existsSync(ready));const closed=once(child,'close');child.kill('SIGTERM');assert.deepEqual(await closed,[143,null]);await new Promise(resolve=>setTimeout(resolve,250));assert.equal(fs.existsSync(next),false);
 });
