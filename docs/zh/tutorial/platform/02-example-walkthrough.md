@@ -26,6 +26,8 @@ Agent，就能把核心能力完整体验一遍：**智能诊断 → Skill 生�
 | **messages 日志分析（内置示例）** 数据集 | 评估与实验 → **评测数据集** | `ideal_output` 类型，10 条用例，覆盖认证攻击 / SSH 爆破 / 登录异常等场景。 |
 | **linux-messages-auth-triage-demo** Skill | **Skills** 列表 | 内置示例 Skill：离线分析用户提供的 messages 日志，识别认证失败、暴力破解、用户枚举和登录异常（含 references / scripts）。名字带 `-demo`，避免和你之后自己生成的 Skill 撞名。 |
 | 三条示例 **Trace** | **链路追踪** | 内置 `messages-log-analyzer` Agent 调用 `linux-messages-auth-triage-demo` Skill 对示例日志做的安全分析（两条成功样例，以及一条因日志路径错误而失败的诊断样例）。进入链路追踪页**默认就能看到**（它们被归到「用户 Agent」视图）。 |
+
+管理员的全用户链路列表优先展示自己账号的三条内置示例；旧管理员账号没有示例时，从现有账号中取一组三条展示，不重复展示其余账号的相同示例。其他账号的真实 Trace 仍可查看。
 | `~/.agent-insight/example/messages` | 你机器的本地目录 | 一份真实的 Linux `messages` 日志（SSH 爆破、认证失败等）。**注意：它不是注册时就有的**，而是你执行**客户端安装命令**后才落到本地——见下方说明。 |
 
 > **Note**

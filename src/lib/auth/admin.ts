@@ -27,3 +27,9 @@ export function isAdminUser(username: string | null | undefined): boolean {
     if (!username) return false;
     return getAdminUsers().includes(username);
 }
+
+export function adminTraceListOwner(requestedUser: string | undefined, authenticatedUser: string | null): string | undefined {
+    return requestedUser && authenticatedUser === requestedUser && isAdminUser(authenticatedUser)
+        ? authenticatedUser
+        : undefined;
+}

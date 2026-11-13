@@ -38,6 +38,8 @@ changefreq: monthly
 
 HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../observability/trace-ingestion.md)、[实验接口](../evaluation/experiments-api.md)、[数据集接口](../evaluation/datasets-api.md)、[Skill 管理接口](../optimization/skills-api.md)、[可靠性客户端与控制接口](../reliability/client-control-api.md)和[独立 Benchmark 协议](../evaluation/benchmark-protocol.md)。本页后续的函数签名是仓内开发接口，不能作为 HTTP 端点调用。
 
+`GET /api/observe/data` 的全用户列表仅在 `user` 与 API Key 认证身份一致且该身份属于 `AGENT_INSIGHT_ADMIN_USERS` 时启用。该列表优先保留管理员自己的 `builtin_msg_` 内置示例 Trace，数量不足三条时从其他账号的现有示例中按用户和 ID 稳定排序补足；其余同类示例在数据库分页和统计前排除。其他账号的真实 Trace，以及按 `taskId` / `executionId` 定向读取均保留原始记录。普通用户列表继续按 `user` 隔离。
+
 ### 实验执行环境准备
 
 契约正文见 [实验执行环境准备接口](../evaluation/execution-environment.md)。

@@ -21,6 +21,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
+import { adminTraceListOwner } from '@/lib/auth/admin';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
 import { isActive } from '@/lib/evaluation-task-manager';
@@ -361,9 +362,33 @@ export async function GET(request: Request) {
     }
 
     const authenticatedUser = (await resolveUser(request)).username;
+    const adminListOwner = !taskId && !taskIds.length && !parentExecutionId
+        ? adminTraceListOwner(user, authenticatedUser)
+        : undefined;
+    const ownBuiltinTraces = adminListOwner
+        ? await prisma.execution.findMany({
+            where: { user: adminListOwner, taskId: { startsWith: 'builtin_msg_' } },
+            orderBy: { id: 'asc' },
+            take: 3,
+            select: { id: true },
+        })
+        : [];
+    const fallbackBuiltinTraces = adminListOwner && ownBuiltinTraces.length < 3
+        ? await prisma.execution.findMany({
+            where: { user: { not: adminListOwner }, taskId: { startsWith: 'builtin_msg_' } },
+            orderBy: [{ user: 'asc' }, { id: 'asc' }],
+            take: 3 - ownBuiltinTraces.length,
+            select: { id: true },
+        })
+        : [];
+    const visibleBuiltinTraceIds = adminListOwner
+        ? [...ownBuiltinTraces, ...fallbackBuiltinTraces].map(trace => trace.id)
+        : undefined;
     const hiddenCollaborationChildren = authenticatedUser && authenticatedUser === user && !taskId && !taskIds.length && !parentExecutionId && !includeSubagents && !onlySubagents
         ? (await collaborationTraceProjection.plan(authenticatedUser)).hiddenChildren : [];
     const recordFilters = {
+        showAllUsers: !!adminListOwner,
+        visibleBuiltinTraceIds,
         excludedTaskIds: hiddenCollaborationChildren,
         query,
         taskId,
