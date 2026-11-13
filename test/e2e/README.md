@@ -88,7 +88,7 @@ docker buildx build --platform linux/amd64 \
 
 隔离容器内的 Next 构建 worker 数及默认 UT 文件并发使用 `resources.cpus`（不足 1 核时按 1 个 worker）。这是测试执行预算，不依赖 Node 识别到的宿主机核数；共享 Runner 的 cgroup v1 环境可能显示宿主机全部 CPU，不能据此扩大并发。此限制不改变逐例 Real/Mock 配置，也不减少编译、UT 或 E2E 范围；非隔离本地入口保留原有并发行为。
 
-Actions UT 可通过阶段命令的 `--ut-concurrency 1..8` 单独指定文件并发，仍执行原始 `npm test` 全量入口。UT 与汇总的 Summary/HTML 列出慢文件前 20 项、进程 CPU/最大 RSS、实际可见 cgroup CPU 配额和内存上限、本轮 500ms 采样峰值、内核生命周期峰值及 OOM kill 增量；读取不到的数据标记不可用，不当作零。完整脱敏文件清单在 `e2e-result-ut` 制品的 `ut-metrics.json`，只公开仓内相对文件名与数字，不上传原始 UT 日志、PID 或系统路径。文件 CPU/RSS 不包含其派生进程；容器采样包含派生进程，祖先 CPU 配额可能共享。当前临时对照在同一 UT Job 按 2→4→2 执行，每轮使用同一源码和构建制品、独立工作区及数据库；任一轮失败或采样文件覆盖不完整均不能将对照计为通过，逐轮证据在 `ut-benchmark/` 和 `ut-benchmark.json`。
+Actions UT 可通过阶段命令的 `--ut-concurrency 1..8` 单独指定文件并发，仍执行原始 `npm test` 全量入口。UT 与汇总的 Summary/HTML 列出慢文件前 20 项、进程 CPU/最大 RSS、实际可见 cgroup CPU 配额和内存上限、本轮 500ms 采样峰值、内核生命周期峰值及 OOM kill 增量；读取不到的数据标记不可用，不当作零。完整脱敏文件清单在 `e2e-result-ut` 制品的 `ut-metrics.json`，只公开仓内相对文件名与数字，不上传原始 UT 日志、PID 或系统路径。文件 CPU/RSS 不包含其派生进程；容器采样包含派生进程，祖先 CPU 配额可能共享。当前 Actions PR 门禁固定使用 4 文件并发；生产构建及原有本地、Webhook 入口仍沿用各自资源配置。常规门禁只执行一轮全量 UT。
 
 005 的异常上报与原生中断回执可能异步到达。证据阶段最多等待 60 秒，须同时读到本轮同一会话的 thinking loop 检测及成功的原生中断回执，才继续核对原生输出、时间顺序和恢复结果。超时仅公开事件分类计数，原始载荷保存在受限目录。
 

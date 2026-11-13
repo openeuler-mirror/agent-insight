@@ -131,51 +131,10 @@ jobs:
           E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT: '1'
         run: |
           set -euo pipefail
-          node --input-type=module <<'JS'
-          import assert from 'node:assert/strict';
-          import fs from 'node:fs';
-          import path from 'node:path';
-          import { pathToFileURL } from 'node:url';
-          const initial={root:process.env.E2E_CI_ROOT,project:process.env.E2E_CI_SOURCE,testedSha:process.env.E2E_CI_TESTED_SHA,runId:process.env.E2E_CI_RUN_ID};
-          const {runActionsPhase,installActionsPhaseSignalHandlers}=await import(pathToFileURL(path.join(initial.project,'test/e2e/control/actions-phase.mjs')));
-          const {prepareActionsJob}=await import(pathToFileURL(path.join(initial.project,'test/e2e/control/actions-job.mjs')));
-          const guard=installActionsPhaseSignalHandlers();
-          const checkout=path.dirname(path.dirname(initial.project));
-          const destination=path.join(initial.root,'public/ut-benchmark');
-          const names=['context.json','result.json','report.json','report.html','summary.md','ut-metrics.json'];
-          const trials=[];let chosen,failed=false;
-          for(const [index,concurrency] of [2,4,2].entries()){
-            await guard.waitIfStopping();
-            const label=['2a','4','2b'][index];
-            const job=index===0?{...initial,env:process.env}:await prepareActionsJob({checkout,phase:'ut',runId:initial.runId,expectedSha:initial.testedSha,envFile:path.join(initial.root,'private',`benchmark-${label}.env`)});
-            await guard.waitIfStopping();
-            if(index)fs.cpSync(path.join(initial.root,'build-payload'),path.join(job.root,'build-payload'),{recursive:true});
-            console.log('UT_BENCHMARK_START',JSON.stringify({label,concurrency}));
-            const result=await runActionsPhase({...initial,...job,phase:'ut',utConcurrency:concurrency,env:{...process.env,...job.env}});
-            await guard.waitIfStopping();
-            const directory=path.join(destination,label);fs.mkdirSync(directory,{recursive:true});
-            for(const name of names)if(fs.existsSync(path.join(job.root,'public',name)))fs.copyFileSync(path.join(job.root,'public',name),path.join(directory,name));
-            const ut=result.payload;
-            trials.push({label,concurrency,status:result.status,processCleanup:result.processCleanup,durationMs:ut.durationMs,fullSuiteComplete:ut.fullSuiteComplete,observedSummary:ut.observedSummary,metrics:ut.metrics});
-            if(!failed)chosen=directory;
-            failed ||= result.status!=='PASS';
-            console.log('UT_BENCHMARK_RESULT',JSON.stringify(trials.at(-1)));
-            fs.writeFileSync(path.join(initial.root,'public/ut-benchmark.json'),JSON.stringify({version:1,testedSha:initial.testedSha,sameRunner:true,trials},null,2)+'\n');
-            if(result.processCleanup?.status!=='PASS'||result.processCleanup.remaining!==0){failed=true;break;}
-            if(index&&result.status==='PASS'){
-              assert.equal(path.dirname(job.root),checkout);assert.match(path.basename(job.root),/^\.atomgit-e2e\./);
-              fs.rmSync(job.root,{recursive:true});
-            }
-          }
-          for(const name of names)if(fs.existsSync(path.join(chosen,name)))fs.copyFileSync(path.join(chosen,name),path.join(initial.root,'public',name));
-          const baseline=trials[0];
-          const comparable=trials.length===3&&trials.every(trial=>trial.fullSuiteComplete&&JSON.stringify(trial.observedSummary)===JSON.stringify(baseline.observedSummary)&&trial.metrics?.completedFiles===trial.metrics?.expectedFiles&&trial.metrics?.incompleteFiles===0&&trial.metrics?.invalidRecords===0&&trial.metrics?.maxActiveFiles===trial.concurrency);
-          const mib=value=>Number.isFinite(value)?(value/1024**2).toFixed(0):'unavailable';
-          const summary='\n\n## UT 2→4→2 并发对照\n\n同一 Runner、同一源码与构建制品；每轮独立数据库和源码。完整且计数一致：'+comparable+'\n\n| 轮次 | 并发 | 结果 | UT 秒 | 完成文件 | CPU 配额 | 内存上限 MiB | 采样峰值 MiB | OOM kill 增量 |\n|---|---|---|---|---|---|---|---|---|\n'+trials.map(t=>`| ${t.label} | ${t.concurrency} | ${t.status} | ${(t.durationMs/1000).toFixed(1)} | ${t.metrics?.completedFiles??'unavailable'} | ${t.metrics?.resources?.cpuQuotaCores??'unavailable'} | ${mib(t.metrics?.resources?.memoryLimitBytes)} | ${mib(t.metrics?.resources?.sampledMemoryPeakBytes)} | ${t.metrics?.resources?.memoryOomKillEventsDelta??'unavailable'} |`).join('\n')+'\n';
-          fs.appendFileSync(path.join(initial.root,'public/summary.md'),summary);
-          if(process.env.ATOMGIT_STEP_SUMMARY)fs.appendFileSync(process.env.ATOMGIT_STEP_SUMMARY,summary);
-          process.exitCode=failed||!comparable?1:0;
-          JS
+          cd "${E2E_CI_SOURCE:?}"
+          node test/e2e/control/actions-phase.mjs --phase ut \
+            --project "$E2E_CI_SOURCE" --root "$E2E_CI_ROOT" \
+            --run-id "$E2E_CI_RUN_ID" --tested-sha "$E2E_CI_TESTED_SHA" --ut-concurrency 4
 
       - name: Verify scoped process cleanup regressions
         if: ${{ always() }}
@@ -198,8 +157,6 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
             ${{ env.E2E_CI_ROOT }}/public/ut-metrics.json
-            ${{ env.E2E_CI_ROOT }}/public/ut-benchmark.json
-            ${{ env.E2E_CI_ROOT }}/public/ut-benchmark
 
   case_001:
     name: 001 账号登录/模型配置/客户端接入
