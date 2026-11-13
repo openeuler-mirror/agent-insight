@@ -53,7 +53,7 @@ export function formatModelTestResult(result: ModelTestResult, locale: string): 
     network: ['无法访问模型服务，请检查服务地址、网络或代理配置。', 'Cannot reach the model service. Check the URL, network or proxy.'],
     invalid_request: ['请求参数无效，请检查模型名、接口地址及连接测试超时（10～300 秒）。', 'Invalid request. Check the model, endpoint and test timeout (10–300 seconds).'],
     server: ['模型服务暂时异常，请稍后重试。', 'The model service is temporarily unavailable. Retry later.'],
-    invalid_response: ['模型服务返回了无效响应，请检查接口是否兼容 Chat Completions。', 'Invalid model response. Check Chat Completions compatibility.'],
+    invalid_response: ['模型服务返回了无效响应，请检查所选接口协议。', 'Invalid model response. Check the selected API protocol.'],
     unknown: ['连接测试失败，请检查模型服务配置后重试。', 'Connection test failed. Check the model service configuration and retry.'],
   };
   const message = messages[result.code ?? 'unknown'][zh ? 0 : 1];

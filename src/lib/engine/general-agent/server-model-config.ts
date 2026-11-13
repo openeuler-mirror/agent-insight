@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-import { getActiveConfig, getUserSettings } from '@/lib/storage/server-config';
+import { createHash } from 'node:crypto';
+import { getActiveConfig, getUserSettings, type ModelConfig } from '@/lib/storage/server-config';
 import type { ModelConfig as OpencodeModelConfig } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { isModelConnectionReady } from '@/lib/shared/model-connection';
+import { getModelAuthHeaders, isModelConnectionReady, normalizeModelBaseUrl, resolveModelConnection } from '@/lib/shared/model-connection';
 
 /**
  * 服务端 ModelConfig（用户在 settings 里维护）→ opencode SDK 需要的 ModelConfig 形态。
@@ -25,7 +26,7 @@ import { isModelConnectionReady } from '@/lib/shared/model-connection';
  *   apiKey   → apiKey
  *   baseUrl  → baseURL
  *   model    → modelID
- *   provider → providerID（仅 default 配置带；用户自建配置没此字段，从 baseUrl 推断）
+ *   provider/protocol → providerID（显式协议按配置独立注册；旧配置保留供应商映射）
  *
  * 如果用户没设置 active config，返回 null，由 caller 决定是否走 env 兜底。
  */
@@ -50,23 +51,62 @@ export async function loadServerModelForUserById(
   return mapServerModelConfig(cfg);
 }
 
-function mapServerModelConfig(
+export function mapServerModelConfig(
   cfg: Awaited<ReturnType<typeof getActiveConfig>>,
 ): OpencodeModelConfig | null {
   if (!cfg || !isModelConnectionReady(cfg)) return null;
 
-  // provider 字段只在 default 配置上存在；强转读一下
-  const explicitProvider = (cfg as { provider?: string }).provider;
-  const providerID = normalizeProviderID(explicitProvider || inferProviderFromBaseUrl(cfg.baseUrl));
-  const modelID = cfg.model || defaultModelForProvider(providerID);
+  const explicitProvider = cfg.provider;
+  const providerID = cfg.protocol
+    ? `insight-${createHash('sha256').update(cfg.id).digest('hex').slice(0, 16)}`
+    : normalizeProviderID(explicitProvider || inferProviderFromBaseUrl(cfg.baseUrl));
+  const connection = resolveModelConnection(cfg);
+  const modelID = connection.model || defaultModelForProvider(providerID);
 
   return {
     providerID,
     modelID,
-    apiKey: cfg.apiKey,
-    baseURL: cfg.baseUrl || defaultBaseUrlForProvider(providerID),
+    apiKey: cfg.apiKey?.trim() ?? '',
+    baseURL: connection.baseUrl || defaultBaseUrlForProvider(providerID),
     headers: cfg.headers,
   };
+}
+
+interface RuntimeProviderEntry {
+  npm?: string;
+  name?: string;
+  options: { apiKey: string; baseURL?: string; headers: Record<string, string | null> };
+  models: Record<string, { name: string; limit?: { context: number; output: number } }>;
+}
+
+export function buildRegisteredModelProviders(configs: ModelConfig[], activeConfigId: string) {
+  const provider: Record<string, RuntimeProviderEntry> = {};
+  const builtin = new Set(['deepseek', 'deepseek-official', 'openai', 'anthropic', 'google', 'qwen', 'moonshot']);
+  let activeModel = '';
+  // Register the active legacy connection last so same-provider legacy models keep its credentials.
+  const ordered = [...configs.filter(c => c.id !== activeConfigId), ...configs.filter(c => c.id === activeConfigId)];
+  for (const config of ordered) {
+    const runtime = mapServerModelConfig(config);
+    if (!runtime) continue;
+    const native = config.protocol ? config.protocol === 'anthropic' : runtime.providerID === 'anthropic';
+    const { baseUrl } = resolveModelConnection(config);
+    let baseURL = normalizeModelBaseUrl(baseUrl ?? runtime.baseURL);
+    if (native && baseURL && !baseURL.endsWith('/v1')) baseURL += '/v1';
+    const entry: RuntimeProviderEntry = {
+      options: { apiKey: config.apiKey?.trim() ?? '', baseURL,
+        headers: { Authorization: null, authorization: null, 'x-api-key': null, 'api-key': null,
+          ...getModelAuthHeaders(config, native ? 'anthropic' : 'openai-compatible') } },
+      models: { ...provider[runtime.providerID]?.models, [runtime.modelID]: { name: runtime.modelID,
+        ...(runtime.modelID.includes('reasoner') ? { limit: { context: 65536, output: 32768 } } : {}) } },
+    };
+    if (config.protocol || !builtin.has(runtime.providerID)) {
+      entry.npm = native ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible';
+      entry.name = config.name;
+    }
+    provider[runtime.providerID] = entry;
+    if (config.id === activeConfigId) activeModel = `${runtime.providerID}/${runtime.modelID}`;
+  }
+  return { provider, model: activeModel, small_model: activeModel };
 }
 
 /**

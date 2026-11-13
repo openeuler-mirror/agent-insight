@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { getActiveConfig } from '@/lib/storage/server-config';
-import { getModelFetch } from '@/lib/server/model-fetch';
 import { normalizeModelBaseUrl } from '@/lib/shared/model-connection';
 import { evaluateResultAccuracy } from './result-accuracy-evaluator';
 import {
@@ -100,10 +101,7 @@ async function createClient(user?: string | null): Promise<{ client: OpenAI; mod
   if (!config) return null;
   return {
     client: new OpenAI({
-      apiKey: config.apiKey || 'no-api-key-required',
-      baseURL: normalizeModelBaseUrl(config.baseUrl) ?? 'https://api.deepseek.com',
-      defaultHeaders: config.headers,
-      fetch: getModelFetch(),
+      ...getModelClientConfig({ ...config, baseUrl: normalizeModelBaseUrl(config.baseUrl) ?? 'https://api.deepseek.com' }),
       timeout: remainingEvaluationTimeMs() ?? Number(process.env.RESULT_QUALITY_TIMEOUT_MS || process.env.JUDGMENT_TIMEOUT_MS || 300000),
       ...(remainingEvaluationTimeMs() === undefined ? {} : { maxRetries: 0 }),
     }),

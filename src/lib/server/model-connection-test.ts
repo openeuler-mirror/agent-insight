@@ -15,9 +15,9 @@
  */
 
 import { OpenAI } from 'openai';
-import { getOpenAICompatibleClientConfig, resolveModelConnection, type ModelConnectionConfig } from '@/lib/shared/model-connection';
+import { resolveModelConnection, type ModelConnectionConfig } from '@/lib/shared/model-connection';
 import { ModelTestValidationError, type ModelTestErrorCode } from '@/lib/shared/model-connection-test';
-import { getModelFetch } from './model-fetch';
+import { getModelClientConfig } from './model-client';
 
 export async function probeModelConnection(
   config: ModelConnectionConfig,
@@ -48,8 +48,7 @@ export async function probeModelConnection(
         throw new ModelTestValidationError('A model name is required. Custom models also require a Base URL.');
       }
       const client = new OpenAI({
-        ...getOpenAICompatibleClientConfig(config),
-        fetch: getModelFetch(options.fetch),
+        ...getModelClientConfig(config, options.fetch),
         timeout: options.timeoutMs,
         maxRetries: 0,
       });
@@ -75,7 +74,8 @@ export function classifyModelTestError(error: unknown): { code: ModelTestErrorCo
   if (error instanceof ModelTestValidationError || error instanceof SyntaxError) {
     return { code: 'invalid_request', status: 400, error: 'Invalid connection test parameters' };
   }
-  const e = error as { name?: string; status?: number; cause?: unknown } | null;
+  const e = error as { name?: string; status?: number; cause?: unknown; type?: string } | null;
+  if (e?.type === 'agent_insight_invalid_response') return { code: 'invalid_response', status: 502, error: 'Invalid model response' };
   if (e?.name === 'TimeoutError' || error instanceof OpenAI.APIConnectionTimeoutError || e?.status === 408 || e?.status === 504) {
     return { code: 'timeout', status: 504, error: 'Connection test timed out' };
   }
@@ -86,7 +86,11 @@ export function classifyModelTestError(error: unknown): { code: ModelTestErrorCo
   if (e?.status === 429) return { code: 'rate_limit', status: 429, error: 'Model service rate limit exceeded' };
   if (e?.status && e.status >= 500) return { code: 'server', status: 502, error: 'Model service unavailable' };
   if (e?.status && e.status >= 400) return { code: 'invalid_request', status: 400, error: 'Model rejected the request; check model and endpoint' };
-  if (e?.cause === 'invalid_response') return { code: 'invalid_response', status: 502, error: 'Invalid model response' };
+  let nested: unknown = error;
+  for (let depth = 0; depth < 8 && nested instanceof Error; depth++) {
+    if (nested.cause === 'invalid_response') return { code: 'invalid_response', status: 502, error: 'Invalid model response' };
+    nested = nested.cause;
+  }
   if (error instanceof OpenAI.APIConnectionError) return { code: 'network', status: 502, error: 'Cannot reach model service' };
   return { code: 'unknown', status: 500, error: 'Connection test failed' };
 }

@@ -21,7 +21,7 @@ import {
 } from '@/lib/storage/server-config';
 import {
     normalizeCustomHeaders,
-    supportsCustomHeaders,
+    validateModelProtocol,
 } from '@/lib/shared/model-connection';
 import { NextResponse } from 'next/server';
 import { DEFAULT_MODEL_TEST_TIMEOUT_MS, ModelTestValidationError, resolveModelTestTimeoutMs } from '@/lib/shared/model-connection-test';
@@ -34,8 +34,9 @@ export async function POST(request: Request) {
     try {
         const body = await request.json();
         timeoutMs = resolveModelTestTimeoutMs(body.testTimeoutMs);
-        const apiKey = body.apiKey || body.evalApiKey;
+        const apiKey = body.apiKey ?? body.evalApiKey;
         const provider = body.provider || body.evalProvider;
+        const protocol = validateModelProtocol(body.protocol);
         const model = body.model || body.evalModel;
         const requestedHeaders = body.headers as Record<string, string> | undefined;
 
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
         // tests one without re-typing the key, resolve the real key server-side
         // from the stored config (identified by user + configId).
         let resolvedKey = apiKey;
-        if ((!resolvedKey || isMaskedApiKey(resolvedKey)) && body.user && body.configId) {
+        if ((resolvedKey === undefined || isMaskedApiKey(resolvedKey)) && body.user && body.configId) {
             const settings = await getUserSettings(body.user);
             const stored = settings.configs.find((c) => c.id === body.configId)?.apiKey;
             if (stored) resolvedKey = stored;
@@ -59,9 +60,6 @@ export async function POST(request: Request) {
             const storedHeaders = settings.configs.find((c) => c.id === body.configId)?.headers ?? {};
             resolvedHeaders = restoreMaskedHeaders(requestedHeaders, storedHeaders);
         }
-        if (resolvedHeaders && !supportsCustomHeaders({ provider })) {
-            throw new ModelTestValidationError('Custom headers require a Custom model');
-        }
         try {
             resolvedHeaders = normalizeCustomHeaders(resolvedHeaders);
         } catch {
@@ -70,6 +68,7 @@ export async function POST(request: Request) {
 
         await probeModelConnection({
             provider,
+            protocol,
             apiKey: resolvedKey,
             baseUrl,
             model,

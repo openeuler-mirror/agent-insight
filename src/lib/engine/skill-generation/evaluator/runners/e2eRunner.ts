@@ -50,6 +50,9 @@ export async function runE2EEval(skillPath: string, spec: SkillSpec, iteration: 
       modelId: modelOptions.modelId || "claude-3-5-sonnet-20241022",
       apiKey: modelOptions.apiKey,
       baseUrl: modelOptions.baseUrl,
+      headers: modelOptions.headers,
+      provider: modelOptions.provider,
+      protocol: modelOptions.protocol,
     });
 
     // Use LLM to grade the output based on expectations

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { normalizeCustomHeaders, validateModelProtocol, type ModelProtocol } from './model-connection';
+
 export interface DefaultModelConfig {
     id: string;
     name: string;
@@ -21,6 +23,8 @@ export interface DefaultModelConfig {
     apiKey: string;
     baseUrl?: string;
     model?: string;
+    protocol?: ModelProtocol;
+    headers?: Record<string, string>;
 }
 
 export function loadDefaultModelConfigs(): DefaultModelConfig[] {
@@ -32,7 +36,7 @@ export function loadDefaultModelConfigs(): DefaultModelConfig[] {
         const provider = process.env[`DEFAULT_MODEL_${index}_PROVIDER`];
         const apiKey = process.env[`DEFAULT_MODEL_${index}_API_KEY`];
         
-        if (!name || !provider || !apiKey) {
+        if (!name || !provider) {
             break;
         }
         
@@ -40,9 +44,12 @@ export function loadDefaultModelConfigs(): DefaultModelConfig[] {
             id: `default_${index}`,
             name,
             provider,
-            apiKey,
+            apiKey: apiKey ?? '',
             baseUrl: process.env[`DEFAULT_MODEL_${index}_BASE_URL`],
-            model: process.env[`DEFAULT_MODEL_${index}_MODEL`]
+            model: process.env[`DEFAULT_MODEL_${index}_MODEL`],
+            protocol: validateModelProtocol(process.env[`DEFAULT_MODEL_${index}_PROTOCOL`]),
+            headers: process.env[`DEFAULT_MODEL_${index}_HEADERS`]
+                ? normalizeCustomHeaders(JSON.parse(process.env[`DEFAULT_MODEL_${index}_HEADERS`]!)) : undefined,
         });
         
         index++;

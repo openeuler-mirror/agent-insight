@@ -17,7 +17,7 @@
 import { createDeepAgent, LocalShellBackend } from "deepagents";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { createModel } from "@/lib/engine/skill-generation/shared/model";
+import { createModel, type ModelOptions } from "@/lib/engine/skill-generation/shared/model";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger("skill-generation:trial");
@@ -34,7 +34,7 @@ export async function runTrial(args: {
   apiKey?: string;
   baseUrl?: string;
   timeoutMs?: number;
-}) {
+} & Pick<ModelOptions, 'headers' | 'provider' | 'protocol'>) {
   logger.log("Starting eval trial", {
     skillPath: args.skillPath,
     sandboxDir: args.sandboxDir,
@@ -54,6 +54,9 @@ export async function runTrial(args: {
     modelId: args.modelId,
     apiKey: args.apiKey,
     baseUrl: args.baseUrl,
+    headers: args.headers,
+    provider: args.provider,
+    protocol: args.protocol,
   });
 
   const trialAgent = createDeepAgent({

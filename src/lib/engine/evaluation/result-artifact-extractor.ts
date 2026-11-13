@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import { OpenAI } from 'openai';
 import { z } from 'zod';
-import { getModelFetch } from '@/lib/server/model-fetch';
 import { normalizeModelBaseUrl } from '@/lib/shared/model-connection';
 import { getActiveConfig } from '@/lib/storage/server-config';
 
@@ -97,10 +98,7 @@ async function getLlmClient(user?: string | null) {
   if (!config) return { client: null, model: null };
   return {
     client: new OpenAI({
-      apiKey: config.apiKey || 'no-api-key-required',
-      baseURL: normalizeModelBaseUrl(config.baseUrl) ?? 'https://api.deepseek.com',
-      defaultHeaders: config.headers,
-      fetch: getModelFetch(),
+      ...getModelClientConfig({ ...config, baseUrl: normalizeModelBaseUrl(config.baseUrl) ?? 'https://api.deepseek.com' }),
       timeout: getTimeoutMs(),
     }),
     model: config.model || 'deepseek-chat',
