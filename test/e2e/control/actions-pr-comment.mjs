@@ -37,7 +37,7 @@ export function decodeReportArchive(bytes) {
   return JSON.parse(result.stdout);
 }
 
-async function list(api, route, key, apiVersion = 5) {
+async function list(api, route, key, apiVersion = 5, onLimit) {
   const all = [];
   for (let page = 1; page <= 20; page++) {
     const value = await api.request('GET', route + (route.includes('?') ? '&' : '?') + `per_page=100&page=${page}`, undefined, { apiVersion });
@@ -46,6 +46,7 @@ async function list(api, route, key, apiVersion = 5) {
     all.push(...rows);
     if (rows.length < 100) return all;
   }
+  if (onLimit) { onLimit(all.length);return all; }
   throw Error('API pagination exceeds bounded scan window');
 }
 
@@ -163,10 +164,11 @@ function existingMetadata(comment) {
 export async function scanPrResults({ api, repository, prNumber, runId, publish = false, dryRun = false, writerIdentity, now = Date.now() }) {
   const prefix = api.repoPath(repository), repo = await api.request('GET', prefix);
   assert.equal(repo.full_name, repository);assert.equal(repo.default_branch, 'master');
-  const recentRuns = prNumber ? [] : await list(api, prefix + '/actions/runs?event=MR', 'workflow_runs', 8);
+  let scannedLimit;
+  const recentRuns = prNumber ? [] : await list(api, prefix + '/actions/runs?event=MR', 'workflow_runs', 8, count => { scannedLimit = count; });
   const numbers = prNumber ? [prNumber] : [...new Set(recentRuns.filter(r => r.file_path === workflowPath && (r.end_time || r.start_time) >= now - 86_400_000).map(r => Number(r.pull_request_id)).filter(n => Number.isSafeInteger(n) && n > 0))];
   const pulls = numbers.map(number => ({ number }));
-  const results = [];let user = writerIdentity;
+  const results = scannedLimit ? [{ status: 'SCAN_INCOMPLETE', scannedRuns: scannedLimit, reason: '全局扫描达到 2000 条上限，已处理所取候选；可能遗漏更早启动的运行，可指定 pr_number 补发。' }] : [];let user = writerIdentity;
   for (const listed of pulls) {
     try {
       const pull = await api.readPull(repository, listed.number);
@@ -244,7 +246,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     const results = await scanPrResults({ ...readOptions(process.argv.slice(2)), api: new AtomGit() });
     console.log(JSON.stringify(results, null, 2));
-    if (process.env.ATOMGIT_STEP_SUMMARY) fs.appendFileSync(process.env.ATOMGIT_STEP_SUMMARY, '## PR 结果回写\n\n' + results.map(r => `- PR !${r.pr}：${r.status}`).join('\n') + '\n');
+    if (process.env.ATOMGIT_STEP_SUMMARY) fs.appendFileSync(process.env.ATOMGIT_STEP_SUMMARY, '## PR 结果回写\n\n' + results.map(r => `- ${r.pr ? 'PR !' + r.pr : '全局扫描'}：${r.status}${r.pr ? '' : '；' + r.reason}`).join('\n') + '\n');
     if (results.some(r => r.status === 'ERROR')) process.exitCode = 1;
   } catch (error) { console.error('PR result reporting failed:', redact(error.message, [process.env.ATOMGIT_TOKEN].filter(Boolean)));process.exitCode = 1; }
 }

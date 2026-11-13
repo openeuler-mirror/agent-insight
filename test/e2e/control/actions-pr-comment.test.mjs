@@ -46,6 +46,42 @@ function fixture() {
 }
 const scan = (f, overrides = {}) => scanPrResults({ api: f.api, repository: repo, publish: true, now: 2000, ...overrides });
 
+test('a capped global scan publishes collected recent candidates and reports incomplete discovery', async () => {
+  const f = fixture(), request = f.api.request;let pages = 0;
+  f.api.request = (method, route, body, options) => {
+    if (route.includes('/actions/runs?event=MR&per_page=')) {
+      pages++;const rows = Array.from({ length: 100 }, () => ({ ...f.run, start_time: -172_800_000, end_time: -172_800_000 }));
+      if (pages === 1) rows[0] = structuredClone(f.run);
+      return Promise.resolve({ workflow_runs: rows });
+    }
+    return request(method, route, body, options);
+  };
+  const result = await scan(f);
+  assert.equal(pages, 20);assert.ok(result.some(r => r.status === 'SCAN_INCOMPLETE' && r.scannedRuns === 2000));
+  assert.ok(result.some(r => r.pr === 7 && r.status === 'PUBLISHED'));assert.equal(f.comments.length, 1);
+});
+test('comment discovery remains exhaustive rather than creating duplicates after a pagination cap', async () => {
+  const f = fixture(), request = f.api.request;
+  f.api.request = (method, route, body, options) => route.includes('/pulls/7/comments?')
+    ? Promise.resolve(Array.from({ length: 100 }, (_, id) => ({ id, user: bot, body: 'unrelated comment' })))
+    : request(method, route, body, options);
+  assert.equal((await scan(f))[0].status, 'ERROR');assert.equal(f.writes.length, 0);
+});
+test('older pages can contain an earlier-started run that completed inside the scan window', async () => {
+  const f = fixture(), request = f.api.request, now = Date.parse('2026-11-13T00:00:00Z');let pages = 0;
+  f.run.start_time = now - 2 * 86_400_000;f.run.end_time = now - 1000;
+  f.report.startedAt = new Date(f.run.start_time + 100).toISOString();
+  for (const row of [f.report.productionBuild, f.report.npmTest, ...f.report.scenarios]) row.startedAt = f.report.startedAt;
+  f.refresh();
+  f.api.request = (method, route, body, options) => {
+    if (route.includes('/actions/runs?event=MR&per_page=')) return Promise.resolve({ workflow_runs: ++pages === 1
+      ? Array.from({ length: 100 }, () => ({ ...f.run, pull_request_id: '8', end_time: now - 2 * 86_400_000 }))
+      : [structuredClone(f.run)] });
+    return request(method, route, body, options);
+  };
+  assert.equal((await scan(f, { now }))[0].status, 'PUBLISHED');assert.equal(pages, 2);
+});
+
 test('publishes one verified result, reads back, deduplicates and updates a rerun in place', async () => {
   const f = fixture();await scan(f);assert.equal(f.writes.length, 1);assert.match(f.comments[0].body, /完整 UT/);assert.match(f.comments[0].body, /通过 4/);assert.match(f.comments[0].body, new RegExp(merge));
   for (const c of cases) assert.ok(f.comments[0].body.includes(c.title));
