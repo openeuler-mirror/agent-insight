@@ -7,7 +7,7 @@
 ## 现状与约束事实
 
 - ClickHouse 是列式 OLAP 数据库，不提供唯一约束、外键和跨表事务；`UPDATE`/`DELETE` 是异步 mutation，单行高频更新不是它的设计目标。Prisma 5.22 没有 ClickHouse connector。
-- 业务代码约 1000 处直接调用 `prisma` / `prismaRaw`，共 289 个 API 路由、98 处 `$transaction`；现有适配层只覆盖 41 个方法，说明「用适配层平替全部表」不可行。
+- 业务代码约 1000 处直接调用 `prisma` / `prismaRaw`，共 290 个 API 路由、98 处 `$transaction`；现有适配层只覆盖 41 个方法，说明「用适配层平替全部表」不可行。
 - OpenGauss 模式下列表分页退化为「全量取回再内存切片」（`src/lib/storage/data-service.ts` 的 `readRecords`），高并发下并没有真正下推；这是本次设计要避免重演的教训。
 - 适配层未实现的方法目前返回 `null` 或打印告警（`src/lib/storage/prisma.ts`），调用方会把「后端不支持」误读成「没有数据」。新后端必须改成显式失败。
 - 后端选择目前散落在 9 个文件的 22 处 `process.env.DB_HOST` 判断里，语义是「外部库 / 少功能」，而不是「当前后端具备某能力」。新增第三种后端后必须收敛为能力开关。
