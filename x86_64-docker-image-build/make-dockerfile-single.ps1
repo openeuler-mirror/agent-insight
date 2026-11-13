@@ -4,17 +4,16 @@ param(
   [string]$NodeMirrorPrefix = 'swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/'
 )
 
-# Generates a single-Dockerfile variant of the repository's Dockerfile.local.
+# Builds Dockerfile.agent-insight.single from the repository Dockerfile.local.
 #
-# Every fact that must match the repository is read from Dockerfile.local at build time,
-# never hard-coded here:
-#   - the Node image (and its tag) comes from the "FROM ... AS builder" line;
-#   - the system package list is the union of the repo's two apt-get install blocks.
-# Only the registry / apt / npm hosts are rewritten to domestic mirrors.
-#
-# The two apt blocks are replaced by one "base" stage that installs the same package set
-# once; builder and runtime both start from it. If any expected pattern is gone, the script
-# throws instead of generating a silently diverging Dockerfile.
+# Only the download hosts are rewritten (node image, deb.debian.org, npm, prisma).
+# On top of that the stages are split so Docker's layer cache survives a code change:
+#   deps     - package files only + npm install; unchanged deps stay cached
+#   builder  - FROM deps + source + npm run build
+#   runtime  - copies node_modules from deps, not from builder
+# The build id (ARG/LABEL/ENV, metadata only) is emitted right before CMD, so a new
+# timestamp no longer invalidates the expensive runtime layers.
+# Every anchor must match Dockerfile.local, otherwise this throws.
 
 $ErrorActionPreference = 'Stop'
 
@@ -32,152 +31,129 @@ function Replace-Once([string]$Text, [string]$Old, [string]$New, [string]$Label)
   return $Text.Replace($Old, $New)
 }
 
-function Get-AptPackages([string]$Block, [string]$Label) {
-  $m = [regex]::Match($Block, 'apt-get install(?<body>[\s\S]*?)rm -rf /var/lib/apt/lists/\*')
-  if (-not $m.Success) {
-    throw "cannot parse package list from the $Label apt block"
-  }
-  $body = $m.Groups['body'].Value -replace '\\', ' ' -replace '&&', ' '
-  $packages = @()
-  foreach ($token in ($body -split '\s+')) {
-    if ($token -match '^[a-z0-9][a-z0-9+.-]*$' -and $token -notin @('apt', 'get', 'update', 'install')) {
-      $packages += $token
-    }
-  }
-  if ($packages.Count -eq 0) {
-    throw "no package found in the $Label apt block"
-  }
-  return $packages
+# --- node image -----------------------------------------------------------
+$fromMatches = [regex]::Matches($text, '(?m)^FROM\s+(?<img>[^\s]+)')
+if ($fromMatches.Count -eq 0) {
+  throw 'pattern not found: FROM'
 }
-
-$builderMatch = [regex]::Match($text, '(?m)^FROM\s+(?<img>\S+)\s+AS\s+builder\s*$')
-if (-not $builderMatch.Success) {
-  throw 'pattern not found: builder FROM. Expected "FROM <image> AS builder".'
+$refs = @()
+foreach ($m in $fromMatches) { $refs += $m.Groups['img'].Value }
+$uniqueRefs = @($refs | Select-Object -Unique)
+if ($uniqueRefs.Count -ne 1) {
+  throw "Dockerfile.local uses more than one base image: $($uniqueRefs -join ', ')"
 }
-$nodeRef = $builderMatch.Groups['img'].Value
-if ($nodeRef.Contains('/')) {
-  $mirrorRef = $nodeRef
-} else {
-  $mirrorRef = $NodeMirrorPrefix + $nodeRef
-}
+$nodeRef = $uniqueRefs[0]
+$mirrorRef = if ($nodeRef.Contains('/')) { $nodeRef } else { $NodeMirrorPrefix + $nodeRef }
 
-$oldAptBuilder = @(
-  'RUN apt-get update \'
-  '    && apt-get install -y --no-install-recommends openssl \'
-  '    && rm -rf /var/lib/apt/lists/*'
-) -join "`n"
-
-$oldAptRuntime = @(
-  'RUN apt-get update \'
-  '    && apt-get install -y --no-install-recommends \'
-  '        ca-certificates \'
-  '        curl \'
-  '        openssl \'
-  '        python3 \'
-  '    && rm -rf /var/lib/apt/lists/*'
-) -join "`n"
-
-$packages = @()
-foreach ($pkg in (Get-AptPackages $oldAptBuilder 'builder')) {
-  if ($packages -notcontains $pkg) { $packages += $pkg }
-}
-foreach ($pkg in (Get-AptPackages $oldAptRuntime 'runtime')) {
-  if ($packages -notcontains $pkg) { $packages += $pkg }
-}
-$packageLine = '    && apt-get install -y --no-install-recommends ' + ($packages -join ' ') + ' \'
-
-$newBase = @(
+# --- apt ------------------------------------------------------------------
+$aptOld = 'RUN apt-get update \'
+$aptNew = @(
   'ARG APT_MIRROR=mirrors.huaweicloud.com'
-  'ARG NPM_REGISTRY=https://repo.huaweicloud.com/repository/npm/'
   ''
-  "FROM $mirrorRef AS base"
-  ''
-  'ARG APT_MIRROR'
-  ''
-  'RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \'
-  '    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \'
-  '    if [ -n "$APT_MIRROR" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \'
+  'RUN if [ -n "$APT_MIRROR" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \'
   '        sed -i \'
   '            -e "s|http://deb.debian.org/debian-security|http://${APT_MIRROR}/debian-security|g" \'
   '            -e "s|http://deb.debian.org/debian|http://${APT_MIRROR}/debian|g" \'
   '            /etc/apt/sources.list.d/debian.sources; \'
   '    fi \'
   '    && apt-get update \'
-  $packageLine
-  '    && rm -rf /var/lib/apt/lists/*'
-  ''
-  'FROM base AS builder'
-  ''
-  'ARG NPM_REGISTRY'
-  ''
-  'ENV npm_config_registry=${NPM_REGISTRY}'
 ) -join "`n"
-
-$text = Replace-Once $text $builderMatch.Value $newBase 'builder FROM'
-
-$runtimeMatches = [regex]::Matches($text, '(?m)^FROM\s+(?<img>\S+)\s*$')
-if ($runtimeMatches.Count -ne 1) {
-  throw "expected exactly 1 single-image FROM line (runtime stage), found $($runtimeMatches.Count)"
+$aptCount = ([regex]::Matches($text, [regex]::Escape($aptOld))).Count
+if ($aptCount -ne 2) {
+  throw "expected 2 apt-get update blocks in Dockerfile.local, found $aptCount"
 }
-if ($runtimeMatches[0].Groups['img'].Value -ne $nodeRef) {
-  throw "runtime FROM image '$($runtimeMatches[0].Groups['img'].Value)' differs from builder image '$nodeRef'"
-}
-$text = [regex]::Replace($text, '(?m)^FROM\s+(?<img>\S+)\s*$', 'FROM base')
+$text = $text.Replace($aptOld, $aptNew)
 
-$oldNpm = 'RUN npm install --no-audit --no-fund'
-$newNpm = @(
-  '# Prisma 5.x downloads engines from binaries.prisma.sh, which is often blocked; use the mirror'
-  'ENV PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma \'
+# --- npm / prisma ---------------------------------------------------------
+$npmOld = 'RUN npm install --no-audit --no-fund'
+$npmNew = @(
+  'ARG NPM_REGISTRY=https://repo.huaweicloud.com/repository/npm/'
+  ''
+  '# Prisma downloads its engines from binaries.prisma.sh, which is often unreachable here'
+  'ENV npm_config_registry=${NPM_REGISTRY} \'
+  '    PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma \'
   '    PRISMA_HIDE_UPDATE_MESSAGE=1'
   ''
-  'RUN --mount=type=cache,target=/root/.npm \'
-  '    npm install --no-audit --no-fund'
+  'RUN npm install --no-audit --no-fund'
 ) -join "`n"
+$text = Replace-Once $text $npmOld $npmNew 'npm install'
 
-$oldBuild = @(
-  'RUN npm run build \'
-  '    && npm pack --pack-destination /tmp'
+# --- stage split ----------------------------------------------------------
+# Everything up to "COPY . ." (package files, scripts, prisma, npm install) becomes
+# the deps stage; the source copy starts the builder stage.
+$text = Replace-Once $text "FROM $nodeRef AS builder" "FROM $mirrorRef AS deps" 'builder FROM'
+$text = Replace-Once $text "COPY . .`n" "FROM deps AS builder`n`nCOPY . .`n" 'COPY . .'
+
+# --- runtime FROM ---------------------------------------------------------
+$runtimeFrom = "FROM $nodeRef"
+$text = Replace-Once $text $runtimeFrom "FROM $mirrorRef" 'runtime FROM'
+
+# --- build id: move the metadata to the end -------------------------------
+# Otherwise a new timestamp invalidates every layer below the LABEL.
+$labelBlock = @(
+  'ARG LOCAL_BUILD_ID=local'
+  ''
+  'LABEL org.opencontainers.image.title="Agent Insight local build" \'
+  '      org.opencontainers.image.version="${LOCAL_BUILD_ID}" \'
+  '      org.opencontainers.image.source="local-worktree"'
 ) -join "`n"
-$newBuild = @(
-  'RUN --mount=type=cache,target=/src/.next/cache \'
-  '    npm run build && npm pack --pack-destination /tmp'
+$text = Replace-Once $text $labelBlock '' 'LOCAL_BUILD_ID label'
+
+$buildEnvOld = "    AGENT_INSIGHT_BUILD_ID=`${LOCAL_BUILD_ID} \`n"
+$text = Replace-Once $text $buildEnvOld '' 'AGENT_INSIGHT_BUILD_ID env'
+
+$cmdLine = 'CMD ["agent-insight-entrypoint"]'
+$cmdNew = @(
+  'ARG LOCAL_BUILD_ID=local'
+  ''
+  'ENV AGENT_INSIGHT_BUILD_ID=${LOCAL_BUILD_ID}'
+  ''
+  'LABEL org.opencontainers.image.title="Agent Insight local build" \'
+  '      org.opencontainers.image.version="${LOCAL_BUILD_ID}" \'
+  '      org.opencontainers.image.source="local-worktree"'
+  ''
+  'CMD ["agent-insight-entrypoint"]'
 ) -join "`n"
+if (-not $text.Contains($cmdLine)) {
+  throw "pattern not found: $cmdLine"
+}
+$text = $text.Replace($cmdLine, $cmdNew)
 
-# The base stage already installs every system package, so both repo apt blocks go away.
-$text = Replace-Once $text $oldAptBuilder '' 'builder apt-get'
-$text = Replace-Once $text $oldAptRuntime '' 'runtime apt-get'
-$text = Replace-Once $text $oldNpm $newNpm 'npm install'
-$text = Replace-Once $text $oldBuild $newBuild 'npm run build'
+# node_modules must come from the deps stage, which only depends on package files.
+$text = Replace-Once $text 'COPY --from=builder /src/node_modules' 'COPY --from=deps /src/node_modules' 'node_modules copy'
 
-$text = $text -replace "\n{3,}", "`n`n"
-
+# --- header ---------------------------------------------------------------
 $header = @(
   '# AUTO-GENERATED from Dockerfile.local by make-dockerfile-single.ps1. DO NOT EDIT.'
-  '# Single Dockerfile: one "base" stage installs the system packages once,'
-  '# builder and runtime stages both start from it.'
+  '# Download hosts point at domestic mirrors; the stage split and the trailing build id'
+  '# exist so a code change does not throw away the dependency layers.'
   "# NODE_IMAGE=$mirrorRef"
-  "# APT_PACKAGES=$($packages -join ' ')"
   ''
   ''
 ) -join "`n"
 $text = $header + $text
 
+# --- assertions -----------------------------------------------------------
 if ($text -match '(?m)^FROM\s+node:') {
-  throw 'hard-coded node image still used as a stage base'
+  throw 'node image still points at Docker Hub'
 }
-$fromBase = ([regex]::Matches($text, [regex]::Escape('FROM base'))).Count
-if ($fromBase -ne 2) {
-  throw "expected 2 'FROM base' stages, found $fromBase"
+$text = $text -replace "\n{3,}", "`n`n"
+if (-not $text.Contains('FROM deps AS builder')) { throw 'missing "FROM deps AS builder" stage' }
+if ($text.Contains('COPY --from=builder /src/node_modules')) { throw 'node_modules still copied from the builder stage' }
+$depsAt = $text.IndexOf('AS deps')
+$builderAt = $text.IndexOf('FROM deps AS builder')
+$npmInstallAt = $text.IndexOf('RUN npm install --no-audit --no-fund')
+$buildAt = $text.IndexOf('npm run build')
+$argAt = $text.IndexOf('ARG LOCAL_BUILD_ID=local')
+$chmodAt = $text.IndexOf('chmod +x /usr/local/bin/agent-insight-entrypoint')
+if ($depsAt -lt 0 -or $builderAt -lt 0 -or $npmInstallAt -lt 0 -or $buildAt -lt 0 -or $argAt -lt 0 -or $chmodAt -lt 0) {
+  throw 'generated Dockerfile is missing an expected anchor'
 }
-$splitAt = $text.IndexOf('FROM base AS builder')
-if ($splitAt -lt 0) {
-  throw 'missing "FROM base AS builder" stage'
+if (-not ($depsAt -lt $npmInstallAt -and $npmInstallAt -lt $builderAt -and $builderAt -lt $buildAt)) {
+  throw 'npm install is not inside the deps stage or the builder stage is out of order'
 }
-if ($text.Substring(0, $splitAt) -notmatch 'apt-get install') {
-  throw 'base stage is missing the system package install'
-}
-if ($text.Substring($splitAt) -match 'apt-get') {
-  throw 'apt-get still present after the base stage'
+if ($argAt -lt $chmodAt) {
+  throw 'LOCAL_BUILD_ID metadata must come after the runtime setup layers'
 }
 
 $outDir = Split-Path -Parent $Out
@@ -186,5 +162,4 @@ if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
 }
 [IO.File]::WriteAllText($Out, $text, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "generated $Out"
-Write-Host "  node image : $mirrorRef"
-Write-Host "  apt packages: $($packages -join ' ')"
+Write-Host "  node image: $mirrorRef"

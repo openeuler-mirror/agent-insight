@@ -4,18 +4,17 @@ chcp 65001 >nul
 
 REM ============================================================
 REM  Agent Insight - offline image build (x86_64 / linux-amd64)
-REM  SINGLE-DOCKERFILE variant: no prebuilt agent-insight-base
-REM  image. The generated Dockerfile has an internal "base"
-REM  stage that installs the system packages once, and both
-REM  builder and runtime start from it. The Node version is
-REM  read from the repository Dockerfile.local on every run, so
-REM  it can never lag behind the code base.
+REM  The generated Dockerfile is the repository Dockerfile.local
+REM  with the download hosts swapped for domestic mirrors, plus a
+REM  deps stage so a code change does not discard the dependency
+REM  layers. Node version and package list still follow the repo.
 REM
 REM  Usage: build-image.bat [repo-path]
 REM
-REM  One docker build with --pull: the internal base stage is
-REM  rebuilt on every run. Each step prints its elapsed seconds and
-REM  the total is written to BUILD-INFO.txt.
+REM  One docker build with --pull on every run: unchanged layers are
+REM  reused by Docker's own layer cache, changed ones are rebuilt.
+REM  Each step prints its elapsed seconds and the total is written
+REM  to BUILD-INFO.txt.
 REM
 REM  Build materials stay in this folder; the repository is read-only.
 REM  This file is kept pure ASCII on purpose: cmd.exe decodes .bat by the
@@ -56,10 +55,16 @@ if not defined STAMP (
   echo [ERROR] cannot get current time
   goto :fail
 )
+for /f "usebackq delims=" %%c in (`git -C "%REPO%" rev-parse --short HEAD`) do set "COMMIT=%%c"
+if not defined COMMIT (
+  echo [ERROR] cannot read git commit
+  goto :fail
+)
 for /f "usebackq delims=" %%t in (`powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()"`) do set "T0=%%t"
 
 set "BUILD_ID=%VER%-amd64-%STAMP%"
 set "TAG=agent-insight:%VER%-amd64"
+set "TAR_FILE=agent-insight-%VER%-amd64.tar"
 set "IMG_DIR=%ROOT%images"
 
 echo ============================================================
@@ -71,7 +76,7 @@ echo  image tag  : %TAG%
 echo  apt mirror : %APT_MIRROR%
 echo  npm mirror : %NPM_REGISTRY%
 echo  node mirror: %NODE_MIRROR_PREFIX%
-echo  base image : none ^(internal stage, rebuilt every run^)
+echo  dockerfile : %DF_NAME% ^(mirrors + deps stage^)
 echo ============================================================
 echo.
 
@@ -101,7 +106,6 @@ if not defined NODE_REF (
   echo [ERROR] cannot read node image from %DF_NAME%
   goto :fail
 )
-for /f "usebackq tokens=2 delims==" %%p in (`findstr /b /c:"# APT_PACKAGES=" "%ROOT%%DF_NAME%"`) do set "APT_PKGS=%%p"
 echo [OK] build files ready, node image: !NODE_REF!
 call :elapsed
 
@@ -150,7 +154,6 @@ echo [4/4] Exporting offline package...
 if not exist "%IMG_DIR%" mkdir "%IMG_DIR%" >nul 2>&1
 del /q "%IMG_DIR%\agent-insight-*.tar" >nul 2>&1
 del /q "%IMG_DIR%\agent-insight-*.tar.gz" >nul 2>&1
-set "TAR_FILE=agent-insight-%VER%-amd64.tar"
 
 echo [..] docker save, takes a few minutes and prints nothing. Please wait.
 REM Ship the raw "docker save" tar, do NOT gzip it again:
@@ -166,7 +169,6 @@ echo [OK] image saved to %IMG_DIR%\%TAR_FILE%
 call :elapsed
 
 for /f "usebackq delims=" %%h in (`powershell -NoProfile -Command "(Get-FileHash '%IMG_DIR%\%TAR_FILE%' -Algorithm SHA256).Hash.ToLower()"`) do set "SHA256=%%h"
-for /f "usebackq delims=" %%c in (`git -C "%REPO%" rev-parse --short HEAD`) do set "COMMIT=%%c"
 for /f "usebackq delims=" %%i in (`docker image inspect %TAG% --format "{{.Id}}"`) do set "IMAGE_ID=%%i"
 for /f "usebackq delims=" %%n in (`docker run --rm --entrypoint node %TAG% -v`) do set "NODE_VER=%%n"
 for /f "usebackq delims=" %%e in (`powershell -NoProfile -Command "[math]::Floor(([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - %T0%)/1000)"`) do set "TOTAL=%%e"
@@ -180,10 +182,9 @@ powershell -NoProfile -Command "[IO.File]::WriteAllText('%ROOT%SHA256SUMS', '%SH
   echo build_id=%BUILD_ID%
   echo image_tag=%TAG%
   echo image_id=%IMAGE_ID%
-  echo base_mode=single-dockerfile-internal-stage
+  echo dockerfile=%DF_NAME%
   echo node_image=%NODE_REF%
   echo node_version=%NODE_VER%
-  echo apt_packages=%APT_PKGS%
   echo build_elapsed_seconds=%TOTAL%
   echo archive=images/%TAR_FILE%
   echo sha256=%SHA256%
