@@ -86,6 +86,15 @@ description: "安装令牌、设备身份、能力上报、配置快照和控制
 
 ## 命令与 WebSocket 桥接
 
+### Skill 下发能力与设备制品
+
+平台能力条目可增加 `skillDeployment: { protocolVersion: 1, ready, modes, backup, reload? }`。注册和能力更新会保留协议 v1 的这些字段，过滤未知字段；不支持的协议版本不宣告下发能力。OpenCode、Pi、xiaoO 使用 `execution_origin`；JiuwenSwarm 使用 `framework_global`，当前 `reload` 为 `restart_required`，且仅在数据 workspace 已存在或设备显式设置 `JIUWENSWARM_DATA_DIR` 时上报可用。设备支持的动作还包括：
+
+- `PRECHECK_SKILL_DEPLOYMENT`：只解析受控目标并回报当前 `skillVersion/contentHash`，不写文件。
+- `DEPLOY_SKILL_ARTIFACT`：使用 `artifactRef` 领取设备绑定制品，比较预检快照，依次暂存、校验、版本化备份、原子替换、写本地账本并复验。
+
+两个 payload 都禁止任意路径、URL、文件内容、Shell、参数和 cwd；`execution_origin` 只携带 `origin_<hash>`，由同一设备的本地注册表解析。设备制品接口为 `GET /api/reliability/client/v1/skill-artifacts/:artifactRef`，要求设备凭证和匹配 clientId，返回 `manifest/files` 且禁止缓存。引用十分钟后过期；同一命令在有效期内可为网络恢复重复领取，安装仍由预期版本/哈希与幂等结果保护。
+
 `GET /api/reliability/client/v1/commands/next?waitSeconds=25` 是设备凭证鉴权的长轮询，默认等待 25 秒，上限 30 秒，内部每 500 ms 检查；当前表达式会把 `0` 也按默认 25 秒处理。有命令返回 `200` 的 `COMMAND` 帧，无命令或请求结束返回 `204`：
 
 ```json
@@ -105,7 +114,7 @@ description: "安装令牌、设备身份、能力上报、配置快照和控制
 }
 ```
 
-帧的引用和值为示例，需使用实际投递内容。命令白名单为 `APPLY_CLIENT_CONFIG/PREPARE_EXPERIMENT_CASE/RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/CANCEL_EXPERIMENT_RUN/REFRESH_CAPABILITIES/PREPARE_EXECUTION_ENVIRONMENT`。`RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/PREPARE_EXECUTION_ENVIRONMENT` 的 payload 顶层字段禁 `command/shell/args/cwd/executable/script`；其余白名单 action 禁 `url/config/path/downloadUrl/file`，执行环境准备还校验 context 结构与摘要。此接口不是任意命令执行入口。
+帧的引用和值为示例，需使用实际投递内容。命令白名单为 `APPLY_CLIENT_CONFIG/PREPARE_EXPERIMENT_CASE/RUN_EXPERIMENT_CASE/RUN_BENCHMARK_CASE/CANCEL_EXPERIMENT_RUN/REFRESH_CAPABILITIES/PREPARE_EXECUTION_ENVIRONMENT/PRECHECK_SKILL_DEPLOYMENT/DEPLOY_SKILL_ARTIFACT`。运行类 action 禁 `command/shell/args/cwd/executable/script`；配置类 action 禁 `url/config/path/downloadUrl/file`。Skill 下发对两组禁用字段做递归检查，执行环境准备另校验 context 结构与摘要。此接口不是任意命令执行入口。
 
 `POST /api/reliability/client/v1/commands/:commandId/status` 使用设备凭证，JSON 为 `status` 加可选 `occurredAt/result/error`；允许 `RECEIVED/RUNNING/SUCCEEDED/FAILED`，成功 `200 { ok: true }`。错误状态 `400`，命令不存在或非本设备 `404`，未终结命令已过期 `410`，对已结束或不再接受开始确认的命令发送 `RECEIVED` 返回 `409 COMMAND_NOT_ACCEPTED`。命令终态不被后续回执改写；配置 delivery 仍需按上一节看写入与加载状态。
 

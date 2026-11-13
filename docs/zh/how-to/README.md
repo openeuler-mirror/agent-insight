@@ -11,6 +11,10 @@ changefreq: "monthly"
 
 评测与优化闭环：[评测输入](./evaluation/experiments.md) → [智能诊断](./diagnosis/agent-debug/diagnosis.md) → [诊断优化计划与复测](./optimization/skills/optimize.md#根据智能诊断优化)。升级前先执行[数据库迁移与备份检查](./platform/upgrade-and-rollback.md)。
 
+诊断候选复测并发布后，可从优化记录将正式版本下发到来源客户端；路径约束、版本备份和历史版本降级见 [下发已发布版本](./optimization/skills/optimize.md#6-下发已发布版本)。
+
+内网模型可使用自定义请求头或无鉴权连接；Anthropic Messages 与 OpenAI Compatible 协议的选择见[模型注册](./platform/settings/model-registry.md#anthropic-与内网模型网关)。
+
 平台评估器缺模型时提供 **去模型注册** 入口，配置并设为默认后可复用已有输出和 Trace 重评。操作见[实验](./evaluation/experiments.md#查看单条-case-详情)与[模型注册](./platform/settings/model-registry.md)。
 
 自定义评估器不再按 `ready` / `draft` 筛选或展示状态，保存后可用于 Skill 用例与 A/B 实验；前置条件和内置规则不变，见[评估器指南](./evaluation/evaluators.md)。
@@ -19,6 +23,12 @@ Skill 用例分析、A/B 和触发分析可设置“执行并发”（默认 1�
 
 Skill 实验记录列表与普通实验共用自动刷新：有运行中记录时每 5 秒更新状态，全部结束后停止；进入创建向导或结果详情时暂停列表刷新。刷新失败时保留最近记录并自动重试。
 
+Benchmark 执行 Profile 支持显式 `backend/options`：按后端配置和探测，旧 xGovernor 配置继续兼容；本地方式不承担 Docker 探测。配置、绑定冲突及使用条件见 [服务部署指南](evaluation/benchmarks/deploy-services.md#执行-profile-的后端配置)。
+
 [链路追踪时间筛选](./observability/view-traces.md#2-筛选区)支持快捷范围及精确到秒的自定义起止时间。
 
 [JiuwenSwarm 接入升级](../reference/observability/client-compatibility.md#jiuwenswarm)说明扩展更新、容器地址配置及完整 Trace 验收要求。
+
+[模型转发与推理分析接入](./observability/inference-gateway.md)：采集安装后，由用户显式备份并接管模型地址。
+
+管理员全局查看、Trace 列表“用户”列、按用户筛选及全量仪表盘的使用说明，见[Trace 查看范围](./observability/view-traces.md#列表页总览)。

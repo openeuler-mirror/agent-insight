@@ -413,8 +413,7 @@ test('xiaoO Worker state capture preserves NDJSON and exports complete native to
 })
 
 test('Runner forwards an early root while Agent is running and retains it through subsequent stages', async () => {
-  let f: Awaited<ReturnType<typeof runnerFixture>>
-  f = await runnerFixture({ async runAgent(_handle: unknown, _input: unknown, context: any) {
+  const f: Awaited<ReturnType<typeof runnerFixture>> = await runnerFixture({ async runAgent(_handle: unknown, _input: unknown, context: any) {
     await context.onTraceId({ traceId: 'live-root' })
     const state = await f.store.state(f.task.runId)
     assert.equal(state.stage, 'agent_running')

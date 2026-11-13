@@ -39,6 +39,8 @@ export type BenchmarkEvaluationArtifactDescriptor = {
   mediaType: string
   sha256: `sha256:${string}`
   sizeBytes: number
+  source?: string
+  jsonParseError?: string
   jsonContent?: JsonValue
 }
 
@@ -111,11 +113,13 @@ export type EvaluationOutput<TRawResult extends JsonValue = JsonValue> = {
   completion: Omit<BenchmarkEvaluationCompletion, 'rawResult' | 'evidenceArtifactIds'> & {
     rawResult: TRawResult
   }
+  evidenceRoot?: string
   evidenceFiles: Array<{
     name: string
     kind: string
     mediaType: string
     path: string
+    source?: 'official-file' | 'official-return' | 'runtime-output' | 'platform'
   }>
 }
 

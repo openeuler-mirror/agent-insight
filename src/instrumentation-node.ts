@@ -202,6 +202,9 @@ export async function setupNodeRuntime(): Promise<void> {
         stdio: 'ignore',
         env: { ...process.env, AGENT_INSIGHT_UPLOADER_FORCE: '1' },
       });
+      child.once('error', (err) => {
+        console.warn('[instrumentation] backlog uploader kick failed:', err.message);
+      });
       child.unref();
     }
   } catch (err) {

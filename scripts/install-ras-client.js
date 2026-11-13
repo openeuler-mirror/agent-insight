@@ -49,7 +49,7 @@ const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.cjs')
 const USER_CONFIG_DIR = path.join(getAgentInsightHome(), 'config')
 
 /** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
-const RUNTIME_FILES = ['client-process.cjs', 'reliability-client.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'opencode-connection-config.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'opencode-experiment-events-v2.mjs', 'opencode-runtime.cjs', 'ws-client.cjs', 'agent-insight-home.cjs', 'xgovernor.cjs']
+const RUNTIME_FILES = ['client-process.cjs', 'reliability-client.cjs', 'jiuwen-experiment-runtime.cjs', 'jiuwen-enterprise-ws.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'skill-deployment-runtime.cjs', 'opencode-connection-config.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'opencode-experiment-events-v2.mjs', 'opencode-runtime.cjs', 'ws-client.cjs', 'agent-insight-home.cjs', 'xgovernor.cjs']
 
 function installRuntime() {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true })
@@ -430,7 +430,7 @@ ExecStart=${nodeBin} ${CLIENT_SCRIPT}
 Environment=AGENT_INSIGHT_SUPERVISOR=systemd
 Environment=${environmentPath}
 Environment=${quoteSystemdValue(`AGENT_INSIGHT_HOME=${getAgentInsightHome()}`)}
-Restart=on-failure
+${process.env.AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG ? `Environment=${quoteSystemdValue(`AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG=${path.resolve(process.env.AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG)}`)}\n` : ''}Restart=on-failure
 RestartSec=5s
 WatchdogSec=30s
 StandardOutput=append:${path.join(CLIENT_HOME, 'client.log')}
@@ -561,6 +561,7 @@ function writeLaunchdPlist() {
   <dict>
     <key>AGENT_INSIGHT_SUPERVISOR</key><string>launchd</string>
     <key>AGENT_INSIGHT_HOME</key><string>${getAgentInsightHome().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</string>
+    ${process.env.AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG ? `<key>AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG</key><string>${path.resolve(process.env.AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</string>` : ''}
     <key>PATH</key><string>${environmentPath}</string>
   </dict>
   <key>RunAtLoad</key><true/>
@@ -764,6 +765,14 @@ async function main() {
   // 先准备所有本地运行时，再刷新设备凭证。否则 pip/venv 耗时期间旧客户端
   // 已被撤销却还没重启，会持续产生无意义的 401。
   installRuntime()
+  const enterprise = require(path.join(RUNTIME_DIR, 'jiuwen-enterprise-ws.cjs')).enterpriseWs
+  if (enterprise.configured()) {
+    try {
+      const cap = await enterprise.refresh()
+      if (!cap.ready) fail(cap.reason, '请在企业管理面配置可用模型并授予账号 Agent 使用权限，再重新安装。')
+      log(`企业账号登录成功：${cap.agents.length} 个授权 Agent，${cap.agentCatalog.filter(a => a.ready).length} 个就绪；可在实验页面选择目标。`)
+    } catch (error) { fail(error.message, '请修正本机 client/jiuwen-enterprise.json 后重新执行安装；不会回退个人版。') }
+  }
   const fiOk = args.withFi ? installFaultInjection() : false
   if (!args.withFi) log('已按 --no-fi 跳过故障注入组件')
 

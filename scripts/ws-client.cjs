@@ -98,6 +98,7 @@ function connectWebSocket(urlStr, { headers = {}, handshakeTimeoutMs = 10_000 } 
       const handlers = { message: [], close: [], ping: [] }
       let buffer = head && head.length ? Buffer.from(head) : Buffer.alloc(0)
       let closed = false
+      let closeNotified = false
       let fragOp = null
       let frags = []
 
@@ -146,7 +147,8 @@ function connectWebSocket(urlStr, { headers = {}, handshakeTimeoutMs = 10_000 } 
       }
 
       function fireClose(err) {
-        if (closed) return
+        if (closeNotified) return
+        closeNotified = true
         closed = true
         fire('close', err)
       }

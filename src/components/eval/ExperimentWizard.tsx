@@ -116,6 +116,7 @@ interface AgentTargetOption {
 
 interface AgentOption {
   name: string;
+  label?: string;
   traces: number;
   frameworks: string[];
   executable: boolean;
@@ -2009,7 +2010,7 @@ export function ExperimentWizard({
                     <option value="">请选择 Agent…</option>
                     {agents.map((agent) => (
                       <option key={agent.name} value={agent.name}>
-                        {agent.name} · {agent.frameworks.join(' / ') || '未知框架'}
+                        {agent.label || agent.name} · {agent.frameworks.join(' / ') || '未知框架'}
                         {agent.traces ? ` · ${agent.traces} 条 Trace` : ''}
                         {agent.targets.length ? ` · 可执行 ${agent.targets.length} 台` : ''}
                       </option>
@@ -3427,7 +3428,7 @@ export function ExperimentWizard({
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
-                  ...(isBenchmarkDataset && selectedTarget?.executionProfile ? [['执行环境', `${selectedTarget.executionProfile.key} · ${selectedTarget.executionProfile.sourceRevision.slice(0, 12)} · 工具断网 · ${selectedTarget.executionProfile.resources.cpu} CPU / ${selectedTarget.executionProfile.resources.memoryMiB} MiB`]] : []),
+                  ...(isBenchmarkDataset && selectedTarget?.executionProfile ? [['执行环境', `${selectedTarget.executionProfile.key} · ${selectedTarget.executionProfile.sourceRevision.slice(0, 12)} · ${selectedTarget.executionProfile.network === 'deny' ? '工具断网' : selectedTarget.executionProfile.network === 'allow' ? '允许联网' : '客户端默认网络'}${selectedTarget.executionProfile.resources ? ` · ${selectedTarget.executionProfile.resources.cpu} CPU / ${selectedTarget.executionProfile.resources.memoryMiB} MiB` : ''}`]] : []),
                   ...(runtimeState.active && runtimeParameterEditorVisible ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',

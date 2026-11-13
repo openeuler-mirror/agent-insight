@@ -14,22 +14,39 @@
  * limitations under the License.
  */
 
-// 实验 API 冒烟：POST 创建 → GET 列表 → GET 详情（落在仓库 data/witty_insight.db）。
-// 显式钉住 DATABASE_URL：loadAgentInsightEnv 不覆盖已存在的 env，避免测试写到 ~/.agent-insight。
-import path from 'node:path';
-process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
+// 实验 API 冒烟：POST 创建 → GET 列表 → GET 详情（落在临时隔离数据库）。
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { GET as listExperiments, POST as createExperiment } from '@/app/api/experiments/route';
 import { DELETE as deleteExperiment, GET as getExperiment } from '@/app/api/experiments/[id]/route';
 import { prisma } from '@/lib/storage/prisma';
 import { createWorkbenchExperiment } from '@/lib/skill-workbench/experiment-service';
+import { datasetCaseContentHash } from '@/lib/engine/experiment/dataset-case-snapshot';
+import { normalizeCase } from '@/server/agent_datasets_storage';
 import { POST as createSkillExperiment } from '@/app/api/skill-workbench/skills/[name]/experiments/route';
 import { NextRequest } from 'next/server';
 
 const TEST_USER = `exp-smoke-${Date.now()}`;
+
+test.before(async () => {
+  await prisma.agentEvalDataset.create({
+    data: {
+      id: 'dataset-1', user: TEST_USER, name: '冒烟数据集',
+      casesJson: JSON.stringify([{ id: 'dataset-case-1', input: 'dataset input', expectedOutput: 'dataset ref' }]),
+    },
+  });
+});
+
+test.after(async () => {
+  await prisma.agentEvalDataset.deleteMany({ where: { user: TEST_USER } });
+  await prisma.$disconnect();
+  database.dispose();
+});
 
 function postReq(body: unknown): Request {
   return new Request('http://localhost/api/experiments', {
@@ -139,6 +156,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   assert.deepEqual(JSON.parse(storedCase?.caseValuesJson || '{}').__agentInsightDatasetCase, {
     datasetId: 'dataset-1',
     caseId: 'dataset-case-1',
+    contentHash: datasetCaseContentHash(normalizeCase({ input: 'dataset input', expectedOutput: 'dataset ref' })),
   });
   assert.deepEqual(detail.results, []);
 });

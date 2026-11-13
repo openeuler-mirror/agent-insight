@@ -22,6 +22,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
 import { db } from '@/lib/storage/prisma';
+import { INFERENCE_PROXY_UNIX_SETUP_BLOCK } from './inference-proxy-setup';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
@@ -43,6 +44,10 @@ const QODER_SETUP_COMPONENTS = new Set([
     'qoder_trace_collector.mjs',
     'qoder_uploader_client.mjs',
     'qoder_work_setup.mjs',
+    'inference_gateway.mjs',
+    'inference_config.mjs',
+    'inference_proxy.mjs',
+    'model-proxy.sh',
 ]);
 
 async function serveQoderSetupComponent(component: string): Promise<NextResponse> {
@@ -57,7 +62,7 @@ async function serveQoderSetupComponent(component: string): Promise<NextResponse
         const source = await readFile(path.join(process.cwd(), 'scripts', component), 'utf8');
         return new NextResponse(source, {
             headers: {
-                'Content-Type': 'text/javascript; charset=utf-8',
+                'Content-Type': component.endsWith('.sh') ? 'text/x-shellscript; charset=utf-8' : 'text/javascript; charset=utf-8',
                 'Cache-Control': 'no-store',
             },
         });
@@ -1114,6 +1119,7 @@ function generateBashScript(
         'fi',
         '',
         '# 6.6 Configure OpenClaw official OTel logs',
+        INFERENCE_PROXY_UNIX_SETUP_BLOCK,
         ...CODEAGENT_UNIX_SETUP_BLOCK.split('\n'),
         '',
         ...ACTRAIL_UNIX_SETUP_BLOCK.split('\n'),
@@ -1281,6 +1287,7 @@ function generateBashScript(
         'echo "🖥️  Registering resident client..."',
         'if ! install_agent_insight_client "$FINAL_HOST" "$FINAL_KEY"; then',
         '    if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ]; then echo "❌ MCTS 环境已配置，但客户端注册或启动失败，请处理上方错误后重新执行本命令"; exit 1; fi',
+        '    if [ -f "$AGENT_INSIGHT_HOME/client/jiuwen-enterprise.json" ] || [ -n "${AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG:-}" ]; then echo "❌ 企业实验客户端安装失败，请修复上方错误后重试；不会回退个人版"; exit 1; fi',
         '    echo "⚠️  常驻客户端未注册。Trace 采集不受影响，但「客户端配置」页看不到本机。"',
         '    if [ -f "$AGENT_INSIGHT_HOME/client/config.json" ]; then',
         '        echo "    注意：本机此前已绑定其他账号，该绑定仍然有效 —— 此时 Trace 归新账号、"',
@@ -2716,9 +2723,9 @@ export async function GET(request: Request) {
             installProfile.goalPlusHosts,
             installProfile.autoAddedFrameworks.map(framework => framework.value),
         );
-        return new NextResponse(script, {
+        return new NextResponse('\uFEFF' + script, {
             headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Type': 'application/x-powershell; charset=utf-8',
                 'Cache-Control': 'no-store',
             },
         });

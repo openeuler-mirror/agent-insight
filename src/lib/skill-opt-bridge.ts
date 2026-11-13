@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
+import { mapServerModelConfig } from '@/lib/engine/general-agent/server-model-config';
+
 import fs from 'node:fs';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { getUserSettings, type ModelConfig as ServerModelConfig } from '@/lib/storage/server-config';
-import { inferProviderFromBaseUrl, normalizeProviderID } from '@/lib/engine/general-agent/server-model-config';
 import { ensureSessionWorkspace, ensureUserWorkspace } from '@/lib/engine/general-agent/workspace';
 import { resolveSkill } from '@/lib/engine/general-agent/skill-resolver';
 import { resolveRuntimeAssetPath } from '@/lib/env';
@@ -536,15 +537,7 @@ async function resolveModelOverride(
   if (!modelId) return null;
   const settings = await getUserSettings(user);
   const cfg: ServerModelConfig | undefined = settings.configs.find((c) => c.id === modelId);
-  if (!cfg || !cfg.apiKey) return null;
-  const explicitProvider = (cfg as { provider?: string }).provider;
-  const providerID = normalizeProviderID(explicitProvider || inferProviderFromBaseUrl(cfg.baseUrl));
-  return {
-    providerID,
-    modelID: cfg.model || 'deepseek-chat',
-    apiKey: cfg.apiKey,
-    baseURL: cfg.baseUrl,
-  };
+  return mapServerModelConfig(cfg ?? null);
 }
 
 function stringifyToolOutput(output: unknown): string {

@@ -43,6 +43,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
     LLM_PROVIDERS,
     CATEGORY_ORDER,
+    getProvider,
     getProviderLogoUrl,
     resolveCatalogProvider,
     type LlmProvider,
@@ -52,6 +53,7 @@ import {
     isModelConnectionReady,
     normalizeCustomHeaders,
     supportsCustomHeaders,
+    type ModelProtocol,
 } from '@/lib/shared/model-connection';
 
 import { DEFAULT_MODEL_TEST_TIMEOUT_MS, resolveModelTestTimeoutMs, formatModelTestResult, type ModelTestResult } from '@/lib/shared/model-connection-test';
@@ -64,21 +66,9 @@ export interface EvalConfigItem {
     baseUrl?: string;
     model?: string;
     headers?: Record<string, string>;
+    protocol?: ModelProtocol;
     testTimeoutMs?: number;
 }
-
-interface ProviderPreset {
-    baseUrl: string;
-    model: string;
-}
-
-const PROVIDER_PRESETS: Record<EvalConfigItem['provider'], ProviderPreset> = {
-    'deepseek-official': { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
-    siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3' },
-    openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
-    anthropic: { baseUrl: 'https://api.anthropic.com/v1', model: 'claude-3-5-sonnet-20240620' },
-    custom: { baseUrl: '', model: '' },
-};
 
 type ProviderCategory = 'saas' | 'cn' | 'local' | 'other';
 
@@ -91,7 +81,7 @@ const PROVIDER_META: Record<EvalConfigItem['provider'], {
     siliconflow:         { label: 'SiliconFlow',         monogram: 'SF', category: 'cn' },
     openai:              { label: 'OpenAI',              monogram: 'OA', category: 'saas' },
     anthropic:           { label: 'Anthropic',           monogram: 'AN', category: 'saas' },
-    custom:              { label: 'Custom (OpenAI Compatible)', monogram: 'CX', category: 'other' },
+    custom:              { label: 'Custom', monogram: 'CX', category: 'other' },
 };
 
 const CAPACITY_LIMIT = 32;
@@ -201,6 +191,7 @@ export function ModelConfigManager() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         provider: c.provider,
+                        protocol: c.protocol,
                         apiKey: c.apiKey,
                         baseUrl: c.baseUrl,
                         model: c.model,
@@ -276,6 +267,7 @@ export function ModelConfigManager() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     provider: configToSave.provider,
+                    protocol: configToSave.protocol,
                     apiKey: configToSave.apiKey,
                     baseUrl: configToSave.baseUrl,
                     model: configToSave.model,
@@ -384,6 +376,7 @@ export function ModelConfigManager() {
             id: 'new',
             name: p.label,
             provider: toBackendProvider(p.id),
+            protocol: p.id === 'anthropic' ? 'anthropic' : 'openai-compatible',
             baseUrl: p.baseUrl,
             model: p.defaultModel,
             apiKey: '',
@@ -454,7 +447,10 @@ export function ModelConfigManager() {
             ) : editingConfigId ? (
                 <EditForm
                     config={tempConfig}
-                    setConfig={setTempConfig}
+                    setConfig={config => {
+                        if (config.provider !== tempConfig.provider) setPickedProvider(null);
+                        setTempConfig(config);
+                    }}
                     onCancel={() => { setEditingConfigId(null); setPickedProvider(null); }}
                     onReselect={editingConfigId === 'new' ? reopenPicker : undefined}
                     onSave={saveCurrentConfig}
@@ -1112,7 +1108,7 @@ function ProviderPicker({
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 3 }}>
                         {locale === 'zh'
-                            ? '挑选预置供应商即可自动填写 Base URL 与默认模型；本地或自定义端点也可使用自定义请求头鉴权。'
+                            ? '挑选预置供应商即可自动填写 Base URL 与默认模型；所有供应商均可配置自定义请求头鉴权。'
                             : 'Pick a provider to prefill its Base URL and model. Local and custom endpoints can also authenticate with custom headers.'}
                     </div>
                 </div>
@@ -1193,7 +1189,7 @@ function ProviderPicker({
 }
 
 function EditForm({
-    config, setConfig, onCancel, onReselect, onSave, isSaving, isTesting, onCancelTest, isDefault, pickedProvider, locale,
+    config, setConfig, onCancel, onReselect, onSave, isSaving, isTesting, onCancelTest, isDefault, pickedProvider: providerFromPicker, locale,
 }: {
     config: EvalConfigItem;
     setConfig: (c: EvalConfigItem) => void;
@@ -1207,14 +1203,17 @@ function EditForm({
     pickedProvider?: LlmProvider | null;
     locale: string;
 }) {
+    const isAzureOpenAI = resolveCatalogProvider(config.provider, config.baseUrl)?.id === 'azure-openai';
+    const pickedProvider = providerFromPicker?.id === 'azure-openai' && !isAzureOpenAI ? null : providerFromPicker;
     const onProviderChange = (p: EvalConfigItem['provider']) => {
-        const preset = PROVIDER_PRESETS[p];
+        const preset = getProvider(p);
         setConfig({
             ...config,
             provider: p,
-            baseUrl: preset.baseUrl || config.baseUrl,
-            model: preset.model || config.model,
-            headers: p === 'custom' ? config.headers : undefined,
+            protocol: p === 'anthropic' ? 'anthropic' : 'openai-compatible',
+            baseUrl: preset?.baseUrl || config.baseUrl,
+            model: preset?.defaultModel || config.model,
+            headers: config.headers,
         });
     };
 
@@ -1271,7 +1270,7 @@ function EditForm({
                         <option value="siliconflow">SiliconFlow</option>
                         <option value="openai">OpenAI</option>
                         <option value="anthropic">Anthropic</option>
-                        <option value="custom">Custom (OpenAI Compatible)</option>
+                        <option value="custom">Custom</option>
                     </select>
                 </Field>
 
@@ -1285,10 +1284,12 @@ function EditForm({
                     />
                 </Field>
 
-                <Field label={locale === 'zh' ? '模型名' : 'Model Name'}>
+                <Field label={isAzureOpenAI
+                    ? (locale === 'zh' ? '部署名称' : 'Deployment Name')
+                    : (locale === 'zh' ? '模型名' : 'Model Name')}>
                     <input
                         style={inputStyle}
-                        placeholder="deepseek-v4-flash / gpt-4o / ..."
+                        placeholder={isAzureOpenAI ? 'my-model-deployment' : 'deepseek-v4-flash / gpt-4o / ...'}
                         value={config.model || ''}
                         disabled={isDefault}
                         onChange={e => setConfig({ ...config, model: e.target.value })}
@@ -1361,6 +1362,17 @@ function EditForm({
             <details style={{ marginTop: 16 }}>
                 <summary style={{ cursor: 'pointer', color: 'var(--foreground-secondary)' }}>{locale === 'zh' ? '高级设置' : 'Advanced settings'}</summary>
                 <div style={{ marginTop: 12 }}>
+                    <Field label={locale === 'zh' ? '接口协议' : 'API protocol'}>
+                        <select style={inputStyle} disabled={isDefault} value={config.protocol ?? ''}
+                            onChange={e => setConfig({ ...config, protocol: e.target.value ? e.target.value as ModelProtocol : undefined })}>
+                            <option value="">{locale === 'zh' ? '沿用旧配置行为' : 'Keep legacy behavior'}</option>
+                            <option value="openai-compatible">OpenAI Compatible</option>
+                            <option value="anthropic">Anthropic Messages</option>
+                        </select>
+                        <p style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 6 }}>
+                            {locale === 'zh' ? '按模型网关实际支持的接口选择。显式选择后，连接测试与业务调用使用相同协议。' : 'Match the protocol supported by your gateway. An explicit selection applies to both connection tests and business requests.'}
+                        </p>
+                    </Field>
                     <Field label={locale === 'zh' ? '连接测试超时（秒）' : 'Connection test timeout (seconds)'}>
                         <input aria-label={locale === 'zh' ? '连接测试超时（秒）' : 'Connection test timeout (seconds)'}
                             type="number" min={10} max={300} step={1} style={inputStyle} disabled={isDefault}

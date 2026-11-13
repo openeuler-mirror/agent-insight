@@ -48,7 +48,7 @@ test('Authenticated Workflow details dynamically include late Agent traces witho
   assert.equal(response.body.execution.tokens, 18);
   assert.equal((await read()).body.langfuseTraceNodes.length, 6);
   assert.equal((await read('alice-key', '&source=raw')).body.langfuseTraceNodes.length, 2);
-  assert.equal((await read('invalid')).body.langfuseTraceNodes.length, 2);
+  assert.equal((await read('invalid')).status, 401);
   assert.equal((await read('bob-key')).status, 403);
   assert.equal(Number((await prismaRaw.execution.findFirstOrThrow({ where: { taskId: 'dify:outer' } })).tokens), 0);
   assert.equal((await prismaRaw.session.findUniqueOrThrow({ where: { taskId: 'dify:outer' } })).langfuseTraceNodes, JSON.stringify(outer));

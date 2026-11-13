@@ -172,6 +172,16 @@ test('custom time bounds survive a revisit and reset clears both bounds', () => 
     assert.equal(returned.query().has('timeTo'), false);
 });
 
+test('selected Trace owner survives a revisit and is removed by reset', () => {
+    const page = harness(new Map(), '', 'admin');
+    page.choose({ traceUser: 'bob@example.com' });
+    const returned = harness(page.storage, '', 'admin');
+    assert.equal(returned.filters().traceUser, 'bob@example.com');
+    returned.reset();
+    assert.equal(returned.filters().traceUser, '');
+    assert.equal(returned.query().has('traceUser'), false);
+});
+
 test('route departure cannot overwrite the last Trace filters with destination defaults', () => {
     const page = harness();
     page.choose({ time: 'custom', timeFrom: '2026-11-04T02:00:00.000Z', timeTo: '2026-11-04T04:00:00.000Z', status: 'success' });

@@ -15,7 +15,7 @@
  */
 
 export const TRACE_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
-export type TraceLifecycleStatus = 'running' | 'success' | 'failed' | 'timed_out';
+export type TraceLifecycleStatus = 'running' | 'success' | 'failed' | 'interrupted' | 'timed_out';
 
 function timestampMs(value: unknown): number | null {
   const ms = value instanceof Date ? value.getTime()
@@ -28,6 +28,24 @@ export function getTraceLifecycle(completedAt: unknown, record: Record<string, u
   const completedMs = timestampMs(completedAt);
   const lastReceivedMs = timestampMs(record.lastIngestedAt) ?? timestampMs(record.timestamp);
   const traceLastReceivedAt = lastReceivedMs === null ? null : new Date(lastReceivedMs).toISOString();
+  // 显式 executionStatus（采集端已确知终态）优先于时间推断；只有采集端会写 interrupted。
+  const explicitStatus = String(record.executionStatus ?? record.execution_status ?? '').trim().toLowerCase();
+  if (explicitStatus === 'interrupted') {
+    return {
+      traceStatus: 'interrupted' as TraceLifecycleStatus,
+      traceCompletedAt: completedMs === null ? null : new Date(completedMs).toISOString(),
+      traceStatusReason: 'execution-interrupted',
+      traceLastReceivedAt,
+    };
+  }
+  if (explicitStatus === 'failed') {
+    return {
+      traceStatus: 'failed' as TraceLifecycleStatus,
+      traceCompletedAt: completedMs === null ? null : new Date(completedMs).toISOString(),
+      traceStatusReason: 'execution-failed',
+      traceLastReceivedAt,
+    };
+  }
   if (completedMs !== null) {
     let failures = record.failures;
     if (typeof failures === 'string') {

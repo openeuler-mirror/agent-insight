@@ -35,7 +35,31 @@ class ExecutionBackendRegistry {
 
 class LocalExecutionBackend {
   constructor(components) { Object.assign(this, components) }
+  validate(task) {
+    if (!task.execution) return
+    const { validateExecution, describeProfile, bindingFor } = require('./execution-protocol.cjs')
+    const spec = validateExecution(task.execution)
+    const config = this.configProvider?.() || this.executionConfig
+    const binding = config && bindingFor(config.bindings, task.benchmark.key, task.agentConfig.platform)
+    const local = config?.profiles[spec.profile.key]
+    if (!binding || binding.profile !== spec.profile.key || local?.backend !== 'local'
+      || describeProfile(spec.profile.key, local).definitionDigest !== spec.profile.definitionDigest) {
+      throw Object.assign(new Error('冻结执行环境与本机配置不一致'), { code: 'EXECUTION_PROFILE_CHANGED' })
+    }
+    const target = spec.profile.targets.find(t => t.platform === task.agentConfig.platform)
+    if (!target?.agents.includes(task.agentConfig.agent) || (task.agentConfig.model && spec.profile.models.length && !spec.profile.models.includes(task.agentConfig.model))) {
+      throw Object.assign(new Error('本地 Profile 不支持所选 Agent 或模型'), { code: 'AGENT_OPTIONS_INVALID' })
+    }
+    if (spec.profile.backendKey !== 'local' || spec.environment.kind !== 'workspace' || spec.profile.sandbox !== 'none'
+      || spec.profile.network !== 'client-default' || task.policy.network !== 'client-default' || spec.profile.resources) {
+      throw Object.assign(new Error('本地执行不能兑现所选环境、网络或资源限制'), { code: 'POLICY_UNSUPPORTED' })
+    }
+    this.workspaceProviders.get(task.workspace.provider)
+    this.agentRuntimes.get(task.agentConfig.platform)
+    for (const artifact of task.submission.requiredArtifacts) this.collectors.get(artifact.collector)
+  }
   async prepare(task, context) {
+    this.validate(task)
     const provider = this.workspaceProviders.get(task.workspace.provider)
     const workspace = await provider.prepare(task.workspace, { ...context, benchmarkKey: task.benchmark.key, benchmarkPayload: task.task.benchmarkPayload })
     const handle = { backendKey: 'local', schemaVersion: 1, runId: context.runId, opaque: { workspace } }

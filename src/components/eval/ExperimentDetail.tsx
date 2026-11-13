@@ -75,7 +75,7 @@ interface ExperimentDetail {
   executionParameterDefinition?: RuntimeDefinition | null;
   reusableConfig?: {
     traceSource?: string | null;
-    executionTarget?: { model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; resources: { cpu: number; memoryMiB: number } } | null } | null;
+    executionTarget?: { model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; network?: string; resources?: { cpu: number; memoryMiB: number } } | null } | null;
   };
   preset?: string | null;
   configSnapshot?: { grayscaleTaskId?: string };
@@ -555,7 +555,7 @@ export function ExperimentDetail({
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
-              {detail.reusableConfig?.executionTarget?.executionProfile && <span><span style={{ color: 'var(--foreground-muted)' }}>执行环境：</span>{detail.reusableConfig.executionTarget.executionProfile.key}{detail.reusableConfig.executionTarget.executionProfile.sourceRevision && ` · ${detail.reusableConfig.executionTarget.executionProfile.sourceRevision.slice(0, 12)}`} · 工具断网 · {detail.reusableConfig.executionTarget.executionProfile.resources.cpu} CPU / {detail.reusableConfig.executionTarget.executionProfile.resources.memoryMiB} MiB</span>}
+              {detail.reusableConfig?.executionTarget?.executionProfile && <span><span style={{ color: 'var(--foreground-muted)' }}>执行环境：</span>{detail.reusableConfig.executionTarget.executionProfile.key}{detail.reusableConfig.executionTarget.executionProfile.sourceRevision && ` · ${detail.reusableConfig.executionTarget.executionProfile.sourceRevision.slice(0, 12)}`} · {detail.reusableConfig.executionTarget.executionProfile.network === 'deny' ? '工具断网' : detail.reusableConfig.executionTarget.executionProfile.network === 'allow' ? '允许联网' : '客户端默认网络'}{detail.reusableConfig.executionTarget.executionProfile.resources && <> · {detail.reusableConfig.executionTarget.executionProfile.resources.cpu} CPU / {detail.reusableConfig.executionTarget.executionProfile.resources.memoryMiB} MiB</>}</span>}
               {Number.isSafeInteger(executionTimeoutSeconds) && executionTimeoutSeconds > 0 && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>Agent 单次执行上限：</span>{executionTimeoutSeconds} 秒</span>
               )}

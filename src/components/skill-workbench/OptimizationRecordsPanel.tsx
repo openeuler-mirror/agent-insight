@@ -16,10 +16,12 @@
 
 'use client';
 
-import { CheckCircle2, CircleX, Clock3, GitCompareArrows, Loader2, RotateCcw, Upload, WandSparkles } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowDownToLine, CheckCircle2, CircleX, Clock3, GitCompareArrows, Loader2, RotateCcw, Upload, WandSparkles } from 'lucide-react';
 
 import { getOptimizationTargetVersion, getOptimizationTransitionLabel } from '@/lib/skill-workbench/optimization-display';
 import { cn } from '@/lib/utils';
+import { apiFetch } from '@/lib/client/api';
 import { OptimizationRecordDiff } from './OptimizationRecordDiff';
 
 export interface OptimizationRecordView {
@@ -51,13 +53,20 @@ export interface OptimizationRecordView {
   createdAt: string;
   updatedAt?: string;
   publishedVersion: number | null;
+  skillId?: string | null;
+  activeVersion?: number | null;
+  verificationStatus?: string | null;
+  verificationMode?: string | null;
+  verifiedAt?: string | null;
+  verifiedBy?: string | null;
+  verificationNote?: string | null;
   errorMessage: string | null;
   sourceSession?: { id: string; title: string } | null;
 }
 
 const STATUS_COPY: Record<string, { label: string; tone: string }> = {
   optimizing: { label: '优化中', tone: 'text-primary bg-primary-subtle' },
-  pending_retest: { label: '静态通过，待完整复测', tone: 'text-warning bg-warning-subtle' },
+  pending_retest: { label: '前置质量通过，可发布', tone: 'text-success bg-success-subtle' },
   retesting: { label: '行为验证中', tone: 'text-primary bg-primary-subtle' },
   retest_passed: { label: '行为验证通过', tone: 'text-success bg-success-subtle' },
   retest_failed: { label: '行为验证未通过', tone: 'text-error bg-error-subtle' },
@@ -70,6 +79,22 @@ const STATUS_COPY: Record<string, { label: string; tone: string }> = {
 
 const ABANDONABLE = new Set(['pending_retest', 'retest_passed', 'retest_failed', 'retest_cancelled']);
 
+function statusCopy(record: OptimizationRecordView) {
+  if (record.status === 'published' && record.activeVersion === record.publishedVersion) {
+    return { label: '已验证并激活', tone: 'text-success bg-success-subtle' };
+  }
+  if (record.status === 'published' && record.verificationStatus === 'pending') {
+    return { label: '已发布，待外部验证', tone: 'text-warning bg-warning-subtle' };
+  }
+  if (record.status === 'published' && record.verificationStatus === 'passed') {
+    return { label: '外部验证通过', tone: 'text-success bg-success-subtle' };
+  }
+  if (record.status === 'published' && record.verificationStatus === 'failed') {
+    return { label: '外部验证未通过', tone: 'text-error bg-error-subtle' };
+  }
+  return STATUS_COPY[record.status] || { label: record.status, tone: 'text-foreground-muted bg-background-secondary' };
+}
+
 function displayOptimizationError(message: string) {
   if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|network error/i.test(message)) {
     return '模型服务连接失败，当前候选未生成，请稍后重新优化。';
@@ -79,6 +104,7 @@ function displayOptimizationError(message: string) {
 
 export function OptimizationRecordsPanel({
   records,
+  user,
   selectedRecordId,
   abandoningId,
   publishingId,
@@ -91,6 +117,7 @@ export function OptimizationRecordsPanel({
   onSelectRecordId,
 }: {
   records: OptimizationRecordView[];
+  user: string;
   selectedRecordId: string | null;
   abandoningId: string | null;
   publishingId: string | null;
@@ -103,11 +130,86 @@ export function OptimizationRecordsPanel({
   onSelectRecordId: (recordId: string) => void;
 }) {
   const selected = records.find((record) => record.id === selectedRecordId) || records[0];
+  const [deployment, setDeployment] = useState<{
+    phase: 'idle' | 'previewing' | 'confirming' | 'deploying' | 'succeeded' | 'failed';
+    preview?: any;
+    record?: any;
+    error?: string;
+  }>({ phase: 'idle' });
+  useEffect(() => setDeployment({ phase: 'idle' }), [selected?.id]);
   if (!selected) return null;
-  const selectedStatus = STATUS_COPY[selected.status] || { label: selected.status, tone: 'text-foreground-muted bg-background-secondary' };
-  const publishable = selected.sourceKind === 'diagnosis' ? selected.status === 'retest_passed' : ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(selected.status);
+  const selectedStatus = statusCopy(selected);
+  const publishable = ['pending_retest', 'retest_passed', 'retest_failed', 'retest_cancelled'].includes(selected.status);
   const verification = selected.sourceRefs?.find((ref) => ref.type === 'verification-result');
   const executionFailed = selected.status === 'optimization_failed' && !selected.staticEvaluationId;
+  let deploymentResult: Record<string, any> = {};
+  try { deploymentResult = JSON.parse(deployment.record?.resultJson || '{}'); } catch {}
+  const deploymentEndpoint = `/api/skills/by-name/${encodeURIComponent(selected.skillName)}/deployments`;
+  const deploymentBody = {
+    user,
+    source: { type: 'optimization', optimizationRecordId: selected.id },
+  };
+
+  async function readError(response: Response) {
+    const body = await response.json().catch(() => ({}));
+    return body?.error?.message || body?.message || `请求失败（HTTP ${response.status}）`;
+  }
+
+  async function previewDeployment() {
+    setDeployment({ phase: 'previewing' });
+    try {
+      const response = await apiFetch(`${deploymentEndpoint}/preview`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(deploymentBody),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      setDeployment({ phase: 'confirming', preview: await response.json() });
+    } catch (cause) {
+      setDeployment({ phase: 'failed', error: cause instanceof Error ? cause.message : '下发预检请求失败' });
+    }
+  }
+
+  async function confirmDeployment() {
+    const preview = deployment.preview;
+    let latestRecord = deployment.record;
+    setDeployment({ phase: 'deploying', preview });
+    try {
+      const response = await apiFetch(deploymentEndpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...deploymentBody,
+          confirmed: true,
+          idempotencyKey: globalThis.crypto?.randomUUID?.() || `${selected.id}-${Date.now()}`,
+        }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const created = await response.json();
+      const deploymentId = created.deployment?.deploymentId;
+      latestRecord = created.deployment;
+      if (!deploymentId) throw new Error('服务端未返回下发记录标识');
+      setDeployment({ phase: 'deploying', preview, record: latestRecord });
+      for (let attempt = 0; attempt < 90; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const statusResponse = await apiFetch(`${deploymentEndpoint}/${encodeURIComponent(deploymentId)}?user=${encodeURIComponent(user)}`, { cache: 'no-store' });
+        if (!statusResponse.ok) continue;
+        const next = await statusResponse.json();
+        latestRecord = next.deployment;
+        const status = String(next.deployment?.status || '');
+        if (status === 'SUCCEEDED') {
+          setDeployment({ phase: 'succeeded', preview, record: latestRecord });
+          return;
+        }
+        if (status === 'FAILED' || status === 'FAILED_RESTORED') {
+          setDeployment({ phase: 'failed', preview, record: latestRecord, error: next.deployment?.errorMessage || '客户端下发失败' });
+          return;
+        }
+        setDeployment({ phase: 'deploying', preview, record: latestRecord });
+      }
+      setDeployment({ phase: 'failed', preview, record: latestRecord, error: '等待客户端确认超时，可稍后刷新查看下发记录。' });
+    } catch (cause) {
+      setDeployment({ phase: 'failed', preview, record: latestRecord, error: cause instanceof Error ? cause.message : '客户端下发请求失败' });
+    }
+  }
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background p-6">
       <div className="w-full">
@@ -121,7 +223,7 @@ export function OptimizationRecordsPanel({
             <p className="px-2 py-2 text-[10px] font-medium text-foreground-muted">全部记录 · {records.length}</p>
             <div className="space-y-1">
               {records.map((record) => {
-            const status = STATUS_COPY[record.status] || { label: record.status, tone: 'text-foreground-muted bg-background-secondary' };
+            const status = statusCopy(record);
             return (
               <button type="button" key={record.id} onClick={() => onSelectRecordId(record.id)} className={cn('w-full rounded-md border p-3 text-left', selected.id === record.id ? 'border-primary bg-card' : 'border-transparent hover:bg-card')}>
                 <div className="flex items-center gap-2"><b className="text-xs text-foreground">{getOptimizationTransitionLabel(record)}</b><span className={cn('ml-auto rounded px-1.5 py-0.5 text-[9px]', status.tone)}>{status.label}</span></div>
@@ -150,7 +252,19 @@ export function OptimizationRecordsPanel({
                         className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
                       >
                         {publishingId === selected.id ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
-                        发布为 {getOptimizationTargetVersion(selected)}
+                        发布待验证 {getOptimizationTargetVersion(selected)}
+                      </button>
+                    )}
+                    {selected.status === 'published' && selected.publishedVersion !== null && ['passed', 'not_required'].includes(selected.verificationStatus || '') && (
+                      <button
+                        type="button"
+                        disabled={deployment.phase === 'previewing' || deployment.phase === 'deploying'}
+                        onClick={() => void previewDeployment()}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                      >
+                        {deployment.phase === 'previewing' || deployment.phase === 'deploying'
+                          ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />}
+                        下发到来源客户端
                       </button>
                     )}
                     {selected.status === 'optimization_failed' && <button type="button" onClick={() => onContinue(selected)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-foreground-secondary hover:bg-background-secondary"><WandSparkles className="size-3.5" />{executionFailed ? '重新优化' : '修复阻断问题'}</button>}
@@ -167,6 +281,32 @@ export function OptimizationRecordsPanel({
                     )}
               </div>
             </div>
+            {deployment.phase !== 'idle' && (
+              <section className="mt-3 rounded-md border border-border bg-background p-3 text-xs">
+                {deployment.phase === 'confirming' && deployment.preview ? (
+                  <>
+                    <b className="text-foreground">确认下发 {selected.skillName} v{deployment.preview.targetVersion?.skillVersion}</b>
+                    <p className="mt-1 break-all text-foreground-secondary">目标：{deployment.preview.target?.displayPath || deployment.preview.target?.mode}</p>
+                    <p className="mt-1 text-foreground-muted">客户端当前版本：{deployment.preview.current?.skillVersion == null ? '未托管/未知' : `v${deployment.preview.current.skillVersion}`}；操作：{deployment.preview.direction}</p>
+                    <p className="mt-1 text-foreground-muted">执行前会按当前版本号备份，安装校验失败时自动恢复。</p>
+                    <div className="mt-3 flex gap-2">
+                      <button type="button" onClick={() => void confirmDeployment()} className="ai-btn-p">确认下发</button>
+                      <button type="button" onClick={() => setDeployment({ phase: 'idle' })} className="ai-btn-s">取消</button>
+                    </div>
+                  </>
+                ) : deployment.phase === 'succeeded' ? (
+                  <p className="text-success">
+                    下发成功，客户端已安装 v{deployment.preview?.targetVersion?.skillVersion}
+                    {deployment.preview?.current?.exists ? '；原版本已按版本号备份' : ''}
+                    {deploymentResult.restartRequired ? '；请重启 JiuwenSwarm 使新版本生效' : ''}。
+                  </p>
+                ) : deployment.phase === 'failed' ? (
+                  <p className="text-error">{deployment.error || '下发失败'}{deployment.record?.status === 'FAILED_RESTORED' ? '（已自动恢复原版本）' : ''}</p>
+                ) : (
+                  <p className="text-foreground-secondary">{deployment.phase === 'previewing' ? '正在检查客户端与目标路径…' : `正在下发：${deployment.record?.status || '等待客户端接收'}…`}</p>
+                )}
+              </section>
+            )}
             <section className="mt-4 w-full overflow-hidden rounded-md border border-border bg-background">
               <div className="border-b border-border bg-background-secondary px-3 py-1.5 text-[10px] font-medium text-foreground-muted">
                 优化摘要

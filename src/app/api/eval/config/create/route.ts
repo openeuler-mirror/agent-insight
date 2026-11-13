@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 
 import { db } from '@/lib/storage/prisma';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import {
     generateAnswerExtractionPrompt,
@@ -244,12 +245,8 @@ async function processConfigAsync(
             return;
         }
 
-        const { customFetch } = getProxyConfig();
         const openaiClient = new OpenAI({
-            apiKey: settings.apiKey || 'no-api-key-required',
-            baseURL: settings.baseUrl || 'https://api.deepseek.com',
-            defaultHeaders: settings.headers,
-            fetch: customFetch,
+            ...getModelClientConfig({ ...settings, baseUrl: settings.baseUrl || 'https://api.deepseek.com' }),
         });
         const modelName = settings.model || 'deepseek-chat';
 

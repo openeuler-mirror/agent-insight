@@ -800,7 +800,7 @@ class _Collector:
                     "tool.output.original_chars": original_chars,
                     "agent.insight.content.truncated": truncated,
                     "tool.status": kwargs.get("status"),
-                    "error.message": kwargs.get("error"),
+                    "error.message": _first(kwargs.get("error_message"), kwargs.get("error")),
                 },
             )
             self._complete(state["session_id"], state["span"])

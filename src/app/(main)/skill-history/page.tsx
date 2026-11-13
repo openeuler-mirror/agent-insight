@@ -206,6 +206,7 @@ function SkillHistoryInner() {
             <TraceDrawer
                 open={drawer !== null}
                 execution={drawer}
+                user={user}
                 onClose={() => setDrawer(null)}
             />
         </>

@@ -20,6 +20,7 @@ import path from 'path';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import { prismaRaw } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { computeSkillSnapshotHash, isBlockingStaticQualityIssue } from './domain';
 import { resolveSkillVersionFiles } from './session-service';
 
@@ -199,20 +200,32 @@ export async function publishOptimizationCandidate(input: {
   skillName: string;
   recordId: string;
   confirmed: boolean;
+  verificationMode: 'external';
+  activate: false;
 }) {
-  const publishableStatuses = ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'];
+  const publishableStatuses = ['pending_retest', 'retest_passed', 'retest_failed', 'retest_cancelled'];
   if (!input.confirmed) throw new WorkbenchPublishError('发布前必须二次确认', 400);
+  if (input.verificationMode !== 'external' || input.activate !== false) {
+    throw new WorkbenchPublishError('优化候选只能先发布为待外部验证版本', 400);
+  }
   const record = await prismaRaw.skillOptimizationRecord.findFirst({
     where: { id: input.recordId, user: input.user, skillName: input.skillName },
   });
   if (!record) throw new WorkbenchPublishError('优化候选不存在', 404);
-  if (!publishableStatuses.includes(record.status)) {
-    throw new WorkbenchPublishError('只有质量规则通过的候选才能发布', 409);
-  }
   const skill = await prismaRaw.skill.findFirst({
     where: { name: input.skillName, user: input.user },
   });
   if (!skill) throw new WorkbenchPublishError('只读 Skill 不能发布优化版本', 403);
+  if (record.status === 'published' && record.publishedVersion != null) {
+    const published = await prismaRaw.skillVersion.findUnique({
+      where: { skillId_version: { skillId: skill.id, version: record.publishedVersion } },
+    });
+    if (!published) throw new WorkbenchPublishError('优化记录指向的正式版本不存在', 409);
+    return { skill, version: published, sessionId: record.sessionId };
+  }
+  if (!publishableStatuses.includes(record.status)) {
+    throw new WorkbenchPublishError('只有发布前质量规则通过的候选才能发布', 409);
+  }
   const latest = await prismaRaw.skillVersion.findFirst({
     where: { skillId: skill.id }, orderBy: { version: 'desc' }, select: { version: true, content: true, files: true },
   });
@@ -231,9 +244,6 @@ export async function publishOptimizationCandidate(input: {
     resolveSkillVersionFiles(skill.id, latest.version, latest.files, latest.content),
   ) === contentHash) {
     throw new WorkbenchPublishError('候选与最新正式版本内容相同', 409);
-  }
-  if (record.sourceKind === 'diagnosis' && record.status !== 'retest_passed') {
-    throw new WorkbenchPublishError('诊断生成的候选需通过来源实验复测才能发布', 409);
   }
   if (!record.staticEvaluationId) throw new WorkbenchPublishError('候选缺少静态质量评估', 409);
   const quality = await prismaRaw.skillSnapshotEvaluation.findFirst({
@@ -273,7 +283,7 @@ export async function publishOptimizationCandidate(input: {
 
   const published = await prismaRaw.$transaction(async (tx) => {
     const claimed = await tx.skillOptimizationRecord.updateMany({
-      where: { id: record.id, status: { in: record.sourceKind === 'diagnosis' ? ['retest_passed'] : publishableStatuses }, publishedVersion: null },
+      where: { id: record.id, status: { in: publishableStatuses }, publishedVersion: null },
       data: { status: 'published', publishedVersion: version, publishedAt: new Date(), completedAt: new Date() },
     });
     if (claimed.count === 0) throw new WorkbenchPublishError('候选已被其他发布操作处理', 409);
@@ -285,9 +295,10 @@ export async function publishOptimizationCandidate(input: {
         assetPath: getSkillVersionAssetPath(skill.id, version),
         files: JSON.stringify(savedFiles),
         changeLog: `Published optimized candidate ${record.id}`,
+        verificationStatus: 'pending',
+        verificationMode: input.verificationMode,
       },
     });
-    await tx.skill.update({ where: { id: skill.id }, data: { activeVersion: version } });
     const processSession = await tx.skillWorkbenchSession.findUnique({
       where: { id: record.sessionId },
       select: { optSessionId: true },
@@ -337,5 +348,6 @@ export async function publishOptimizationCandidate(input: {
   void parseSkillFlow(skillContent, skill.id, version, input.user).catch((error) => {
     console.warn('[skill-workbench candidate publish] flow parse failed:', error);
   });
+  recordUsageEvent({ user: input.user, featureKey: 'skill-opt', eventKey: 'skill.optimize.publish.pending' });
   return { skill, version: published, sessionId: record.sessionId };
 }

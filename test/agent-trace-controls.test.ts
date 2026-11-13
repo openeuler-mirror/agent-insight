@@ -429,7 +429,9 @@ test('duplicate parent spans and missing tool IDs stay flat instead of relying o
 test('the new nesting is expanded by default and collapse/expand still covers the parent model', () => {
     const tree = buildAgentCallTree([{ role: 'assistant', content: '', tool_calls: [responseCall('read-call')], parts: [{ type: 'tool', callID: 'read-call', tool: 'read' }] }])!;
     const defaults = functionValue<any>('buildDefaultExpandedKeys', {
-        buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}),
+        getAgentEventTree: functionValue<any>('getAgentEventTree', {
+            eventTreeCache: new WeakMap(), buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}),
+        }),
         agentKey: (id: string) => `a:${id}`, eventKey: (id: string, index: number) => `e:${id}:${index}`,
     })(tree);
     assert.ok(defaults.has(`a:${tree.id}`));

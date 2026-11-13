@@ -14,18 +14,20 @@
  * limitations under the License.
  */
 
-import path from 'node:path';
-
-process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { prismaRaw } from '@/lib/storage/prisma';
 import { applyCompletedOptimizationPlan } from '@/lib/skill-workbench/optimization-plan-state';
 
 const USER = `optimization-plan-state-${Date.now()}@test.local`;
 const SKILL_NAME = `optimization-plan-state-${Date.now()}`;
+
+test.after(async () => { await prismaRaw.$disconnect(); database.dispose(); });
 
 test('候选应用计划不等于问题已解决；缺少验证证据时保留全部重复来源', async () => {
   const skill = await prismaRaw.skill.create({

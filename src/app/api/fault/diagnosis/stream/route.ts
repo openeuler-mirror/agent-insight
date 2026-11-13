@@ -203,6 +203,9 @@ function summarizeSkillsAnalysisForFollowUp(analysis: AgentDebugSkillsAnalysis |
   if (!analysis) {
     return { available: false };
   }
+  if (analysis.status === 'skipped') {
+    return { available: false, status: analysis.status, skipReason: analysis.skipReason };
+  }
   const keyActionResults = Array.isArray(analysis.keyActionResults) ? analysis.keyActionResults : [];
   const rawSkillSuggestions = Array.isArray(analysis.skillSuggestions)
     ? analysis.skillSuggestions

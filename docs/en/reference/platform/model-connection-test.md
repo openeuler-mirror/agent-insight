@@ -9,11 +9,17 @@ See [HTTP identity and scope](./http-api.md). `POST /api/eval/settings/test` sen
 
 ## Request
 
-The JSON body accepts `provider/apiKey/baseUrl/model/testTimeoutMs` and legacy aliases `evalProvider/evalApiKey/evalBaseUrl/evalModel`. Custom models can include validated `headers`. `user/configId` can recover masked keys and headers from saved settings; this is not a new common authentication mechanism. Restrict invocation according to the deployment.
+The JSON body accepts `provider/protocol/apiKey/baseUrl/model/testTimeoutMs` and legacy aliases `evalProvider/evalApiKey/evalBaseUrl/evalModel`. All providers can include validated `headers`. `user/configId` can recover masked keys and headers from saved settings; this is not a new common authentication mechanism. Restrict invocation according to the deployment.
+
+`protocol` accepts `openai-compatible` or `anthropic` and is stored in existing user-settings JSON. Invalid values return `400`. New Anthropic configurations preselect Messages; other new configurations preselect OpenAI Compatible. Missing protocol fields keep legacy behavior and are not silently rewritten. Explicit protocols apply to tests and business calls. No Prisma migration is needed.
+
+API keys are optional. Empty keys generate no default authentication headers and do not inherit provider environment credentials. Custom headers override standard headers case-insensitively. Masked keys recover stored values; an explicit empty string clears the key.
 
 `ModelConfig.testTimeoutMs` is stored in existing user-settings JSON. It defaults to `60000` ms and must be an integer between `10000` and `300000`. Saving settings and testing both validate it; invalid values return `400`. Evaluation, generation, and optimization timeouts remain separate.
 
-Before saving, the form's value is used; health checks use the stored value. The test executes one `chat.completions` request with `Hi`, `max_tokens: 5`, and `maxRetries: 0`.
+Before saving, the form's value is used; health checks use the stored value. The test executes one Chat Completions or Anthropic Messages request according to the protocol, with `Reply with OK.`, `max_tokens: 128`, and `maxRetries: 0`.
+
+Single-response evaluation and diagnosis calls adapt to native Messages while preserving system instructions, structured output and token usage. Agent generation and tool streams use the native Anthropic client. OpenCode statically registers each explicit connection independently and refreshes when any connection changes. Invalid JSON or protocol responses are classified as `invalid_response`.
 
 ## Response and cancellation
 

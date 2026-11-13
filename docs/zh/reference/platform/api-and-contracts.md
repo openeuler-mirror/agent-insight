@@ -38,7 +38,7 @@ changefreq: monthly
 
 HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../observability/trace-ingestion.md)、[实验接口](../evaluation/experiments-api.md)、[数据集接口](../evaluation/datasets-api.md)、[Skill 管理接口](../optimization/skills-api.md)、[可靠性客户端与控制接口](../reliability/client-control-api.md)和[独立 Benchmark 协议](../evaluation/benchmark-protocol.md)。本页后续的函数签名是仓内开发接口，不能作为 HTTP 端点调用。
 
-`GET /api/observe/data` 的全用户列表仅在 `user` 与 API Key 认证身份一致且该身份属于 `AGENT_INSIGHT_ADMIN_USERS` 时启用。该列表优先保留管理员自己的 `builtin_msg_` 内置示例 Trace，数量不足三条时从其他账号的现有示例中按用户和 ID 稳定排序补足；其余同类示例在数据库分页和统计前排除。其他账号的真实 Trace，以及按 `taskId` / `executionId` 定向读取均保留原始记录。普通用户列表继续按 `user` 隔离。
+`GET /api/observe/data` 的全用户列表由 API Key 对应的管理员身份启用，`user` 查询参数不能授予全局权限。该列表优先保留管理员自己的 `builtin_msg_` 内置示例 Trace，数量不足三条时从其他账号的现有示例中按用户和 ID 稳定排序补足；其余同类示例在数据库分页和统计前排除。管理员用 `traceUser` 指定某个账号或按 `taskId` / `executionId` 定向读取时保留原始记录；普通用户列表继续按本人隔离。其他账号的真实 Trace 不受影响。
 
 ### 实验执行环境准备
 
@@ -141,6 +141,12 @@ HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../obse
 - **Entry**: Node 启动时注册 `experiment-watch.ts:startExperimentWatcher`，约每 5 秒从数据库筛选当前用户、所选主 Agent、`Session.startTime > watchEnabledAt` 且链路状态为 `success` 的 Trace。无显式开始时间时 `Session.startTime` 使用首次入库默认值。
 - **Reuse**: 自动监听只传 Trace 标识给 `addEvalExperimentCase` / `evaluateEvalExperimentCase`，复用手动追加的上下文加载、评测及正常重试，不重新执行原始 Trace。上传接口不再直接触发监听。
 - **Idempotency**: `addEvalExperimentCase(experimentId, input)` 仍返回新建或复用的 Case ID，并保留参考数据回填；可选第三参数 `{ onlyIfNew: true }` 仅在新建时返回 ID，已有或并发唯一约束冲突时返回 null。新建带 taskId 的 Case 使用由 experimentId/taskId 派生的稳定主键，无需数据库迁移。自动扫描不会重评已有 Case 或重置人工评分。
+
+### Trace 全局读取范围
+
+`resolveTraceReadScope` 统一链路查询与仪表盘的读取范围：API Key 解析出的管理员按 `AGENT_INSIGHT_ADMIN_USERS` 白名单判定（未配置时默认 `admin`），查询不加用户过滤；普通账号只查询本人。有效凭据优先于 URL 的 `user` 参数，失效凭据返回 401；旧式无凭据用户参数请求继续兼容，但不授予全局读取权限，缺少身份的请求返回 401。
+
+已有 `GET /api/observe/data` 接受管理员专用的可选 `traceUser=<username>`，精确筛选 Trace 所属用户，空值表示全部；普通用户的该参数被忽略，仍按已解析的本人身份查询。`facet=values&column=user` 返回可见范围内已有根 Trace 的用户选项，并保持管理员的完整选项集，不受当前 `traceUser` 条件收窄。分页记录响应的 `canViewAllTraces` 表示全局读取权限，用于控制管理员用户列和用户筛选，选定单一用户时仍为 true；列表、统计、Agent/Skill/字段与标签筛选、单条 Execution、Session 详情、Trace 导出、`/api/fleet/{trends,breakdowns,agent,reliability}` 以及 `/api/dashboard/stats` 共享相同范围。全局查看不改写 Trace 原所属用户。接口无需数据库迁移。
 
 ### OTel spool consumer  {#otel-spool-consumer}
 - **External endpoints**: `POST /api/ingest/otel/v1/logs` accepts OTLP http/json payloads. `POST /api/ingest/otel/v1/traces` accepts OTLP http/json and OTLP http/protobuf payloads, normalizes events, appends JSONL spool rows, and returns `status: "accepted"` after the append succeeds. The response includes `received`, `persisted`, and exact retransmit `deduplicated` counts. If a Goal Plus Pi session exceeds its bounded identity index, the route returns HTTP 413 with `status: "partial"` and `rejected.spool.reason=goal-plus-session-identity-limit`; uploaders must not advance their checkpoint. `POST /api/public/otel/v1/traces` is a Langfuse-compatible alias that reuses the same traces handler. `POST /api/ingest/otel/v1/metrics` accepts vLLM OTLP metrics over JSON or protobuf, normalizes them to the infra metric sample shape, persists them best-effort to `InfraMetricSample`, and returns an immediate diagnosis verdict. Accepted trace data is durable but not necessarily already visible in every observe query or persisted to `Execution`.
@@ -275,6 +281,8 @@ HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../obse
 
 客户端上报 `configuration: { version: 2, defaults }`，没有默认配置时使用 `{}`。交付方式、绑定和业务 Schema 保留在客户端 YAML，不再作为前端编辑或平台提交约束。客户端从这些私有配置计算契约摘要，平台将摘要作为不透明标识检查兼容性。旧快照中的 delivery/structure/schema 元数据可读取，但不约束 v2 参数内容；旧版逐字段协议仅作兼容，使用通用配置需升级客户端。
 
+Runtime 源码定义位于 `services/executor/runtimes/`，安装后实际读取 `${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/client/runtime/executor/runtimes/`。新客户端约每 30 秒重新读取并上报定义，改 YAML 后等待上报并刷新页面，或重启客户端加速生效。客户端在每个 platform 的 `parameterDefinitions` 上报描述和 `definitionDigest`，不包含执行绑定。共享模块为 `packages/agent-runtime/index.cjs`（协议、校验）、`parameter-json.cjs`（递归 JSON）与 `loader.cjs`（YAML、覆盖、交付）。任务使用 `agentOptions: { version: 2, runtimeKey, definitionDigest, values }`；平台和执行端按选定 platform/agent 验证，契约不一致返回 `AGENT_DEFINITION_CHANGED`。
+
 以 MCTS 为例，客户端配置如下。默认值保留 CLI 原名，平台初始展示七个平铺字段，用户仍可在本次草稿中添加嵌套对象。
 
 ```yaml
@@ -339,6 +347,7 @@ configuration:
 - **Agent debug** — `AgentDebugReportPayload`、`AgentDebugIssue`、`AgentDebugRootCause`、`AgentDebugTriage`、`AgentDebugSkillsAnalysis`、`AgentDebugSkillsAnalysisRow`、`DebugTurn`、`DebugToolCall`（`engine/agent-debug/types.ts`）。
   - 现有 `/api/observe/executions/:executionId/agent-debug` GET / POST（含缓存命中、运行中 409）增量提供 `progress: { runId, events, lastProgressAt, unavailable, truncated } | null`。events 包含单调 `seq`、接收时间 `at`、`kind`（task/tool/evidence/analysis/stage）、可选 `module`、`state`、`title`、`summary` 和可选真实 Trace `refs`。状态 completed 仅表示对应阶段结束，不能代替最终报告。
   - Skills 对应接口在 `skillsAnalysis` 内提供可选 `runId` / `progress`；失败时保留 runId 以读取已保存的段落。新字段均可选，旧缓存没有进展时返回 null / 缺省；不新增 Prisma 字段、API 路由或逐 token 流。服务端按缓存行用户读取进展，不接受客户端指定进展文件路径。
+  - Skills 步骤核验缺少关联目标或找不到当前账号的 Skill 资产时，`row.status` 和 `skillsAnalysis.status` 为 `skipped`，`errorMessage` 为 `null`，`skillsAnalysis.skipReason` 分别为 `no-skill-targets` 或 `missing-skill`。这两类旧失败缓存读取时也会转换为 `skipped`。主诊断保持独立的状态和结果。
 
 - **Trace** — `AgentNode`、`AgentEvent`、`ToolCall`、`RawInteraction`、`AgentNodeStats`（`engine/observability/agent-trace.ts`）。
   `ToolCall.state` 与 `output/result` 独立；可选 `exit_code`、`error` 经调用树保留为
@@ -446,7 +455,7 @@ Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.tes
 
 `POST /api/experiments` 的普通生成 Trace 和 Benchmark 数据集请求支持正整数 `executionConcurrency`，缺省 1；显式 Benchmark 请求放在 `benchmark.runConfig.executionConcurrency`，兼容旧 `maxParallelAgentCases` 字段。普通值写入 `configSnapshotJson`，Benchmark 写入冻结的 `runConfigJson`。Skill、FI 与已有 Trace 不使用这个设置。运行时使用冻结值，执行并发大于 1 要求客户端上报 `components.concurrent-execution/v1.ready=true`。
 
-`GET /api/experiments/:id` 返回适用实验的 `executionConcurrency`；Case 的 Benchmark 元数据增加 `evaluationWaitCode`，用于区分配额、镜像准备和镜像空间等待。评测服务 `/health` 返回 `maxConcurrency`、`activeCount`。同一个 `runId + requestDigest` 始终幂等，容量满返回可重试 `SERVICE_BUSY`，镜像未就绪返回 `IMAGE_POOL_PREPARING`；镜像仓库临时拉取失败返回可重试的 `IMAGE_POOL_PULL_FAILED`，平台保留待评测任务并重试下发。
+`GET /api/experiments/:id` 返回适用实验的 `executionConcurrency`；Case 的 Benchmark 元数据增加 `evaluationWaitCode`，用于区分配额、镜像准备和镜像空间等待。评测服务 `/health` 返回 `maxConcurrency`、`activeCount`。同一个 `runId + requestDigest` 始终幂等，容量满返回可重试 `SERVICE_BUSY`，需要镜像但镜像未就绪时返回 `IMAGE_POOL_PREPARING`；镜像需求为空时跳过镜像窗口及准备队列，仍执行资产、并发、幂等及任务状态校验。镜像需求返回非数组时为 `IMAGE_POOL_METADATA_INVALID`（HTTP 422、不可重试）。服务停止/任务取消返回 HTTP 409，保留对应控制原因（如 `SERVICE_STOPPED`、`EVALUATION_CANCELLED`）及 `retryable: false`，不能作为可重试镜像等待；镜像仓库临时拉取失败返回可重试的 `IMAGE_POOL_PULL_FAILED`，平台保留待评测任务并重试下发。
 
 镜像预取继续使用已有 `POST /api/v1/evaluations`：`operation=prepare-images` 支持 `revision + windows[]` 全量快照；每个窗口含 `benchmarkKey/evaluatorKey/experimentId/caseIds/cases`，总 Case 数不超过服务并发加 1。预取开关由 Evaluator 的 `/health` 报告给平台；准备消息保留摘要校验和单实验窗口兼容，无需额外令牌。
 

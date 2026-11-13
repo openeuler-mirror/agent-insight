@@ -186,6 +186,7 @@ async function resolveDraftModelConfig(
   baseUrl?: string;
   headers?: Record<string, string>;
   provider?: string;
+  protocol?: import('@/lib/shared/model-connection').ModelProtocol;
   source: 'explicit' | 'active' | 'env';
 }> {
   // Step 1: 显式 id
@@ -199,6 +200,7 @@ async function resolveDraftModelConfig(
         baseUrl: cfg.baseUrl,
         headers: cfg.headers,
         provider: cfg.provider,
+        protocol: cfg.protocol,
         source: 'explicit',
       };
     }
@@ -217,6 +219,7 @@ async function resolveDraftModelConfig(
       baseUrl: active.baseUrl,
       headers: active.headers,
       provider: active.provider,
+        protocol: active.protocol,
       source: 'active',
     };
   }
@@ -272,6 +275,7 @@ export async function draftTriggerEvalSet(args: DraftTriggerEvalSetArgs): Promis
     baseUrl: resolved.baseUrl,
     headers: resolved.headers,
     provider: resolved.provider,
+        protocol: resolved.protocol,
   });
   const response = await model.invoke([
     new SystemMessage(SYSTEM_PROMPT),

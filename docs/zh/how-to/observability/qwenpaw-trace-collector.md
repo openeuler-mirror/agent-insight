@@ -13,6 +13,8 @@ changefreq: monthly
 Agent 名称、LLM、Tool、Skill、MCP、Cron 和子 Agent 调用关系，并通过 OTLP 上传到 Agent
 Insight。
 
+已在 QwenPaw 2.0.0 / AgentScope 2.0.4 的真实 Runtime 中验证两轮模型与工具调用、完成状态和文件读取失败。AgentScope 2 的流式 `ToolChunk` 使用宿主 SDK 合并，保留分块正文、媒体、metadata 和失败状态；原有完整 `ToolResponse` 仍兼容，不重复累加。
+
 公开平台名统一为 `QwenPaw`，框架值统一为 `qwenpaw`。采集器内部 Python 模块名是
 `qwenpaw_insight`，这是为了避免和真实 QwenPaw Python 包 `qwenpaw` 发生导入冲突。
 
