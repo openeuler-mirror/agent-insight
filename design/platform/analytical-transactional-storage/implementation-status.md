@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-12。已完成001基础、002 IAM、003 default预留、004可靠采集及005原Trace接口元数据兼容；原前端已恢复，隔离环境通过原界面的导入/详情/正文/打标/导出链路。全产品数据迁移和功能回归尚未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-13。已完成001–005基础及原界面Trace兼容，本轮修复全量测试失败/超时并取得零失败结果，接通完整Trace取证与原评测草稿读取。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
@@ -20,7 +20,40 @@
 - `migrations.py`与CLI实现已知连续前缀、checksum、显式迁移计划及原子升级。SQLite备份后锁源重核；服务端先取迁移表锁再建立快照，绑定备份源身份/历史/全部托管表内容证据。DDL不得自行提交事务。
 - `legacy.py`提供只读原始清点/导出/验证，保留活跃WAL、类型、物理列、重复行和摘要；`trace_import.py`新增限定Session/Execution允许字段的显式映射/dry-run/接收链路apply，不等于96模型语义迁移或生产切换。
 
-## 005 原界面兼容验证（当前批次）
+## 2026-11-13 全量测试恢复与统一取证（当前批次）
+
+### 全量失败与超时已查明并修复
+
+- HTTP评测测试在空SQLite直接导入Prisma，创建失败后finally的清理SQL再次失败，跳过server.close而使进程常驻。现先用现有隔离helper建schema，再导入依赖；结束断开DB/关闭HTTP/恢复fetch与timer。CodeAgent及四组FI/上传测试也统一自行建隔离schema，不依赖外部业务库。
+- 测试helper清除继承DB_*并固定空DB_HOST，防止单独测试因dotenv选择远端库。全量运行使用独立HOME/AGENT_INSIGHT_HOME/SQLite、已有Node24.22.3、已有完整Conda Python和PowerShell7.7，不安装依赖、不改全局配置。缺PyYAML/pydantic2及PowerShell宿主HOME崩溃分别以成对运行验证，不能归为产品数据库缺陷。
+- 测试沙箱漏注入真实getAgentEventTree/cache、导航漏掉基线已有task-insight、导入按钮已移至既有批量导入组件，均只修测试依赖/断言，不改前端。Trae JS编译产物用现有esbuild准备，未据此宣称VSIX或IDE已验收。
+- 两处真实既有后端问题已修：独立工具不再多计LLM；各session视图共用有效耗时，历史stored值不再覆盖派生结果。Windows Turbopack的child_process导入遵循既有约束；未执行真实Windows构建。
+- 全量第二轮剩余冷却测试依赖固定sleep，实际冷却按整轮真实耗时计算。现以条件等待并加强不得提前重跑的断言，延迟模拟及完整consumer模块12/12通过；consumer行为未变。
+
+### 取证与草稿已接通的范围
+
+新增私有`GET /v1/compat/observe/evidence`与Next server helper，原`/api/agent-datasets/trace-drafts`仅增加core分支，前端五目录与`789e8d04`仍零diff。一次控制只读事务捕获当前IAM、owner/别名、locator/incarnation/epoch、annotation与全量heads；关闭事务后核对CH摘要/Span集合及精确revision，再读取并核验正文；最后重新捕获授权/版本边界。修改返回409，撤权拒绝，缺失/损坏/未追上503，超过16MiB/100000 Span等预算413，均不以空轨迹回落旧Prisma。transport使用fatal UTF-8解码，非法字节不再静默替换后携带原hash。
+
+源snapshot hash与正文清单保留精确版本，不包含token/内部绝对路径/captured_at；相同证据换合法token或重新读取hash不变，注解变化hash改变。Python完整源快照保留有限浮点、Unicode扩展及整数；Next继续既有JS JSON/Number语义，不宣称引入无损大整数codec。精确大整数扩展应使用十进制字符串。
+
+| 验证 | 最新结果与准确边界 |
+|---|---|
+| 应用全量 | `npm run test` 5364执行：5342通过、0失败、22跳过、0取消，235.85秒，未超时。原33项失败全部修复或补齐已存在运行环境；第二轮1项调度竞态也修复。最终只补Jiuwen测试的类型注解，定向回归与完整tsc通过 |
+| 存储默认整组 | 498执行：324通过、174未提供可选引擎配置而跳过，0失败，58.031秒；ResourceWarning作为error运行 |
+| 新Evidence专项 | SQLite21/21；PG21/21(26.468秒)、原生OG21/21(27.695秒)，两关系库实际断言只读REPEATABLE READ捕获中外部writer可提交，而当前捕获仍旧值；事实sink为MemoryFacts，不混称CH闭环 |
+| 类型/静态 | 完整tsc通过；新Evidence文件及草稿路由ESLint通过；既有文件的遗留lint错误不宣称已全仓消除；diff检查通过 |
+| 真实CH/HTTP | 新导入fixture：32KB完整输入、66KB最终输出、2个交互、浮点/Unicode扩展读回；snapshot哈希独立重算，相同内容稳定、注解改变hash；伪造user无效、其他owner403、矛盾ID400；旧Prisma Execution/Session对应行均0 |
+| 原浏览器 | 原“加入评测集”→字段映射→数据预览完整走通，保留三个字段及原按钮，证据读回后确认按钮可用；随后取消，**未执行新库评测集保存或模型评测**，console无error/warn |
+
+证据目录`exclude/storage-core-followup/20261113-ptxxwb8o/`：`verification/result.json`、三轮full日志（full-first/full-second与当前verification）、`evidence-http-evidence.json`、`original-draft-preview.png`。关系库日志及源码hash在`/var/folders/.../storage-evidence-relational-axs2f3i1/`。CLI复用了原隔离CH数据目录恢复服务，core仍schema5、52张物理表；没有迁移、覆盖现有业务库，也未新增006。
+
+### 尚未完成的业务链路
+
+此批只完成统一取证和草稿读取。真正的评测集backflow新库保存/多版本、实验运行器与结果/人工修分、结果修改自动重评、诊断会话/消息/SSE、AgentDebug报告/DiagnosisRun、RAS事件等仍待逐项接管。现有旧模式和未迁移领域仍有既有路径，不能把全量旧模式回归与草稿预览通过解释为全部领域已切库。
+
+诊断已形成[phase6§10](phase6-trace-vertical-slice.md)：必须先把诊断Agent自身完整Trace的成功/失败recorder及可信工作区接入core，之后才实施006会话/消息和SSE。禁止通过关闭recordTraceAs或丢记录换取“两张表已迁”的结论。
+
+## 005 原界面兼容验证（前一批次）
 
 原登录、导航、Trace页面、客户端身份/API封装与`789e8d047b6c9b80b2054c8eac666342cbdfe368`一致；`src/app/(main)`、`src/app/login`、`src/components`、`src/lib/auth`和`src/lib/client`全部目录对该基线的git diff为空。移除本分支曾增加的替代UI。模式开关改为仅服务端；保留旧public变量作为服务端弃用别名。
 

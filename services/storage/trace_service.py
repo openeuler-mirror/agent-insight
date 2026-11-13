@@ -316,6 +316,10 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 value,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return None
                 return value
+            if path==['observe','evidence'] and self.command=='GET':
+                from .trace_evidence import TraceEvidence, MAX_EVIDENCE_BYTES
+                evidence=TraceEvidence(runtime.queries,runtime.authorized)
+                respond(evidence.read(token,workspace,task_id=params.get('taskId'),execution_id=params.get('executionId')),limit=MAX_EVIDENCE_BYTES+1024);return
             if path[:3]==['observe','traces','import'] and len(path)==3 and self.command=='POST':
                 import time
                 from .trace_transfer import LegacyTraceTransfer, TraceTransferPending

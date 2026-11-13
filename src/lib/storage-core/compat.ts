@@ -5,7 +5,7 @@ import { coreServiceOrigin, handleCoreIngest, readCoreBytes, requestCore } from 
 
 interface Identity { username: string | null; apiKey: string | null }
 interface Binding { legacy_api_key_sha256: string; legacy_username: string; principal_id: string; workspace_id: string; credential: string }
-interface Options { fetcher?: typeof fetch; resolveIdentity?: (request: Request) => Promise<Identity> }
+export interface CompatibilityOptions { fetcher?: typeof fetch; resolveIdentity?: (request: Request) => Promise<Identity> }
 class CompatibilityError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 const IAM_TOKEN=/^(session|api)_[A-Za-z0-9_-]{43}$/;
 const DATA_FIELDS=['query','taskId','taskIds','executionId','parentExecutionId','framework','sourceKind','skill','skillVersion','agentName','ownership','status','anomaly','sort','dir','time','timeFrom','timeTo','summary','paginated','databasePagination','listPart','fields','lightweight','page','pageSize','includeEvaluations','skipAutoEvalReady','includeSubagents','onlySubagents','collapseGoalPlusWorkers','includeTags','tagIds','bizTag','userTagIds','userTagId','businessTagIds','filters','facet','column','kind','traceUser'];
@@ -14,7 +14,7 @@ function failure(error:unknown) {
  const status=error instanceof Error && 'status' in error && typeof error.status==='number' ? error.status : 502;
  return json({error:status===401?'Authentication required':status===403?'Forbidden':status===503?'Storage compatibility configuration unavailable':'Storage request failed'},status);
 }
-async function mappedIdentity(request:Request,resolver?:Options['resolveIdentity']):Promise<Binding> {
+async function mappedIdentity(request:Request,resolver?:CompatibilityOptions['resolveIdentity']):Promise<Binding> {
  const key=request.headers.get('x-witty-api-key');
  if(!key || key.length>1024)throw new CompatibilityError(401,'API credential required');
  const authenticated=await (resolver || (async (input:Request)=>(await import('@/lib/auth/auth')).resolveUser(input)))(request);
@@ -34,7 +34,7 @@ async function mappedIdentity(request:Request,resolver?:Options['resolveIdentity
  if(!/^api_[A-Za-z0-9_-]{43}$/.test(binding.credential) || !binding.workspace_id || !binding.principal_id)throw new CompatibilityError(503,'Invalid mapping');
  return binding;
 }
-async function context(request:Request,options:Options) {
+async function context(request:Request,options:CompatibilityOptions) {
  const header=request.headers.get('authorization');
  let token:string;let workspace:string|undefined;let principal:string|undefined;
  if(header!==null) {
@@ -49,9 +49,9 @@ async function context(request:Request,options:Options) {
  if(workspace && requested && requested!==workspace)throw new CompatibilityError(403,'Mapped workspace mismatch');
  workspace=workspace || requested || (typeof profile.workspace_id==='string'?profile.workspace_id:undefined);
  if(!workspace || !profile.workspaces.some((row:unknown)=>!!row && typeof row==='object' && 'workspace_id' in row && row.workspace_id===workspace))throw new CompatibilityError(403,'Workspace not granted');
- return {token,workspace};
+ return {token,workspace,username:typeof profile.username==='string'?profile.username:null};
 }
-export async function compatibleRequest(request:Request,target:string,fields:string[],options:Options={}) {
+export async function compatibleRequest(request:Request,target:string,fields:string[],options:CompatibilityOptions={}) {
  try {
   const actor=await context(request,options);const source=new URL(request.url).searchParams;const query=new URLSearchParams({workspace_id:actor.workspace});
   for(const key of fields) {const values=source.getAll(key);if(values.length>1)throw new CompatibilityError(400,'Duplicate query parameter');if(values.length)query.set(key,values[0]);}
@@ -83,14 +83,14 @@ export async function compatibleRequest(request:Request,target:string,fields:str
   return result;
  } catch(error) {return failure(error);}
 }
-export function handleCompatibleObserveData(request:Request,options:Options={}) {
+export function handleCompatibleObserveData(request:Request,options:CompatibilityOptions={}) {
  return compatibleRequest(request,'/v1/compat/observe/data',DATA_FIELDS,options);
 }
-export function handleCompatibleSession(request:Request,options:Options={}) {
+export function handleCompatibleSession(request:Request,options:CompatibilityOptions={}) {
  return compatibleRequest(request,'/v1/compat/observe/session',['taskId','view','index','source'],options);
 }
 
-export async function handleCompatibleIngest(request:Request,options:Options={}) {
+export async function handleCompatibleIngest(request:Request,options:CompatibilityOptions={}) {
  try {
   const actor=await context(request,options);
   if(!actor.token.startsWith('api_'))throw new CompatibilityError(403,'Collector API credential required');
@@ -99,13 +99,15 @@ export async function handleCompatibleIngest(request:Request,options:Options={})
  }catch(error){return failure(error);}
 }
 
-export function handleCompatibleTags(request:Request,tagID?:string,options:Options={}) {
+export function handleCompatibleTags(request:Request,tagID?:string,options:CompatibilityOptions={}) {
  return compatibleRequest(request,'/v1/compat/tags'+(tagID?'/'+encodeURIComponent(tagID):''),['kind'],options);
 }
-export function handleCompatibleTraceTags(request:Request,executionID:string,options:Options={}) {
+export function handleCompatibleTraceTags(request:Request,executionID:string,options:CompatibilityOptions={}) {
  return compatibleRequest(request,'/v1/compat/executions/'+encodeURIComponent(executionID)+'/tags',['tagId'],options);
 }
 
-export function handleCompatibleTransfer(request:Request,direction:'import'|'export',options:Options={}) {
+export function handleCompatibleTransfer(request:Request,direction:'import'|'export',options:CompatibilityOptions={}) {
  return compatibleRequest(request,'/v1/compat/observe/traces/'+direction,['executionId'],options);
 }
+
+export { context as compatibilityContext, failure as compatibilityFailure };
