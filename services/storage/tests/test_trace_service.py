@@ -210,3 +210,88 @@ class CompatibilityHTTPTests(TraceHTTPTests):
         self.assertEqual(len(self.runtime.facts.spans),1)
         status,exported,_=self.request('/v1/compat/observe/traces/export?workspace_id=w&executionId=root',self.token)
         self.assertEqual(status,200);self.assertEqual(exported['value']['executions'],source['executions'])
+
+class DiagnosisCompatibilityHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+    def test_core_conversation_checkpoint_finish_and_original_history_shape(self):
+        from services.storage.trace_metadata import TraceMetadata
+        from services.storage.tests.test_trace_transfer import MemoryFacts
+        from services.storage.tests.test_agent_traces import snapshot
+        from services.storage.trace_service import TraceQueries
+        from services.storage.observations import ObservationIngest
+        self.runtime.facts=MemoryFacts();self.runtime.authorized=AuthorizedStorage(self.runtime.iam,self.runtime.facts)
+        self.runtime.queries=TraceQueries(self.control,self.runtime.facts,cursor_secret=b'isolated-diagnosis-http-cursor')
+        self.runtime.ingest=ObservationIngest(self.control,self.runtime.facts);self.runtime.start_worker();self.addCleanup(self.runtime.close)
+        self.runtime.authorized.create_trace(self.token,'w','diagnosed','2026-11-13',source_namespace='fixture',native_trace_id='fixture')
+        TraceMetadata(self.control).register_aliases_for_provisioning('w','diagnosed',task_id='original-task',execution_id='original-execution')
+        base='/v1/compat/fault/diagnosis/'
+        status,data,_=self.request(base+'session?workspace_id=w&executionId=original-task',self.token)
+        self.assertEqual(status,200);self.assertEqual(data['value'],dict(session=None,messages=[]))
+        status,started,_=self.request(base+'begin?workspace_id=w',self.token,body=dict(executionId='original-task',request_key='request',message='Why?',evidence_hash='a'*64,lease_owner='worker',opencode_session_id=None))
+        self.assertEqual(status,200);started=started['value'];sid=started['session']['id']
+        handle=dict(session_id=sid,request_key='request',lease_owner='worker',turn_fence=started['turn']['fence'])
+        status,saved,_=self.request(base+'checkpoint?workspace_id=w',self.token,body=dict(handle,expected_revision=1,content='完整回答'))
+        self.assertEqual(status,200);rev=saved['value']['turn']['revision']
+        terminal=dict(handle,expected_revision=rev,content='完整回答',state='done',opencode_session_id='provider-session')
+        self.assertEqual(self.request(base+'finish?workspace_id=w',self.token,body=terminal)[0],409)
+        own=snapshot(task='unrelated')
+        _,unrelated,_=self.request('/v1/compat/observe/agent-traces?workspace_id=w',self.token,body=own)
+        self.assertEqual(self.request(base+'finish?workspace_id=w',self.token,body=dict(terminal,trace_receipt=unrelated['value']))[0],409)
+        body=snapshot();body['context']=dict(parent_trace_id='diagnosed',diagnosis_session_id=sid,request_key='request',lease_owner='worker',turn_fence=handle['turn_fence'])
+        status,recorded,_=self.request('/v1/compat/observe/agent-traces?workspace_id=w',self.token,body=body)
+        self.assertEqual(status,200);terminal['trace_receipt']=recorded['value']
+        status,done,_=self.request(base+'finish?workspace_id=w',self.token,body=terminal)
+        self.assertEqual(status,200);self.assertEqual(done['value']['turn']['state'],'done')
+        status,history,_=self.request(base+'session?workspace_id=w&executionId=original-execution',self.token)
+        self.assertEqual(status,200);self.assertEqual([m['content'] for m in history['value']['messages']],['Why?','完整回答'])
+        self.assertEqual(history['value']['session']['opencodeSessionId'],'provider-session')
+        self.assertEqual(self.request(base+'session?workspace_id=w&executionId=original-task')[0],401)
+        status,_,_=self.request(base+'session?workspace_id=w',self.token,body=dict(executionId='original-task',opencodeSessionId='unknown'))
+        self.assertEqual(status,409)
+    def test_report_reservation_publication_and_deleted_head_fence(self):
+        from services.storage.tests.test_trace_transfer import MemoryFacts,bundle
+        from services.storage.trace_service import TraceQueries
+        from services.storage.observations import ObservationIngest
+        self.runtime.facts=MemoryFacts();self.runtime.authorized=AuthorizedStorage(self.runtime.iam,self.runtime.facts)
+        self.runtime.queries=TraceQueries(self.control,self.runtime.facts,cursor_secret=b'isolated-report-http-cursor')
+        self.runtime.ingest=ObservationIngest(self.control,self.runtime.facts);self.runtime.start_worker();self.addCleanup(self.runtime.close)
+        self.assertEqual(self.request('/v1/compat/observe/traces/import?workspace_id=w',self.token,body={'bundle':bundle()})[0],200)
+        status,evidence,_=self.request('/v1/compat/observe/evidence?workspace_id=w&traceRef=task',self.token)
+        self.assertEqual(status,200)
+        base='/v1/compat/observe/reports/agent-debug'
+        self.assertEqual(self.request(base+'?workspace_id=w&executionId=root',self.token)[0],200)
+        reservation=dict(executionId='root',expectedSnapshotHash=evidence['value']['snapshot_hash'],interactionsHash='a'*64,generator='fixture',requestKey='run',leaseToken='L'*43)
+        status,started,_=self.request(base+'?workspace_id=w',self.token,body=reservation)
+        self.assertEqual(status,200);started=started['value'];row=started['row']
+        self.assertEqual(started['leaseToken'],'L'*43)
+        status,replayed,_=self.request(base+'?workspace_id=w',self.token,body=reservation)
+        self.assertEqual(status,200);self.assertEqual(replayed['value']['row']['id'],row['id']);self.assertEqual(replayed['value']['leaseToken'],started['leaseToken'])
+        path=base+'/'+row['id']+'?workspace_id=w'
+        status,_,_=self.request(path,self.token,method='PATCH',body=dict(revision=row['revision'],leaseToken='bad',status='done',payload={'summary':'forged'}))
+        self.assertEqual(status,403)
+        status,done,_=self.request(path,self.token,method='PATCH',body=dict(revision=row['revision'],leaseToken=started['leaseToken'],status='done',payload={'summary':'完整报告'},requestKey='publish'))
+        self.assertEqual(status,200);self.assertEqual(done['value']['payload']['summary'],'完整报告')
+        status,repeated,_=self.request(path,self.token,method='PATCH',body=dict(revision=row['revision'],leaseToken=started['leaseToken'],status='done',payload={'summary':'完整报告'},requestKey='publish'))
+        self.assertEqual(status,200);self.assertEqual(repeated['value']['row']['revision'],done['value']['row']['revision']);self.assertIsNone(repeated['value']['progress'])
+        self.assertEqual(self.request(base+'?workspace_id=w&executionId=task',self.token,method='DELETE')[0],200)
+        self.assertIsNone(self.request(base+'?workspace_id=w&executionId=root',self.token)[1]['value']['row'])
+    def test_agent_snapshot_returns_indexed_receipt_and_preserves_original_provider_id(self):
+        from services.storage.tests.test_trace_transfer import MemoryFacts
+        from services.storage.tests.test_agent_traces import snapshot
+        from services.storage.trace_service import TraceQueries
+        from services.storage.observations import ObservationIngest
+        self.runtime.facts=MemoryFacts();self.runtime.authorized=AuthorizedStorage(self.runtime.iam,self.runtime.facts)
+        self.runtime.queries=TraceQueries(self.control,self.runtime.facts,cursor_secret=b'isolated-agent-http-cursor')
+        self.runtime.ingest=ObservationIngest(self.control,self.runtime.facts);self.runtime.start_worker();self.addCleanup(self.runtime.close)
+        body=snapshot();base='/v1/compat/observe/agent-traces?workspace_id=w'
+        status,recorded,_=self.request(base,self.token,body=body)
+        self.assertEqual(status,200);recorded=recorded['value'];self.assertEqual(recorded['task_id'],'provider-session');self.assertEqual(recorded['state'],'indexed')
+        self.assertTrue(recorded['batch_refs']);self.assertTrue(self.request(base,self.token,body=body)[1]['value']['duplicate'])
+        status,evidence,_=self.request('/v1/compat/observe/evidence?workspace_id=w&traceRef=provider-session',self.token)
+        self.assertEqual(status,200);self.assertEqual(evidence['value']['session']['interactions'][1]['_providerMessage'],body['rawMessages'][1])
+    def test_expanded_agent_snapshot_budget_is_413_instead_of_invalid_input(self):
+        from unittest.mock import patch
+        from services.storage.agent_traces import AgentTraceLimit
+        with patch('services.storage.agent_traces.AgentTraceRecorder.record',side_effect=AgentTraceLimit('expanded snapshot too large')):
+            self.assertEqual(self.request('/v1/compat/observe/agent-traces?workspace_id=w',self.token,body={'record':{},'rawMessages':[]})[0],413)

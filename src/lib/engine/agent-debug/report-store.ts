@@ -19,6 +19,8 @@ import crypto from 'node:crypto';
 import { migrateAgentDebugReport } from './report-migration';
 
 import { prismaRaw } from '@/lib/storage/prisma';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { findCoreReportRow } from '@/lib/storage-core/reports';
 import type {
   AgentDebugReportPayload,
   AgentDebugReportRow,
@@ -27,6 +29,7 @@ import type {
 } from './types';
 
 export async function ensureAgentDebugReportTable() {
+  if (isStorageCoreEnabled()) throw Object.assign(new Error('Core reports require fenced publication'), { status: 503 });
   await prismaRaw.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "AgentDebugReport" (
       "id" TEXT NOT NULL PRIMARY KEY,
@@ -50,6 +53,7 @@ export async function ensureAgentDebugReportTable() {
 }
 
 export async function ensureAgentDebugSkillsAnalysisTable() {
+  if (isStorageCoreEnabled()) throw Object.assign(new Error('Core reports require fenced publication'), { status: 503 });
   await prismaRaw.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "AgentDebugSkillsAnalysis" (
       "id" TEXT NOT NULL PRIMARY KEY,
@@ -69,6 +73,7 @@ export async function ensureAgentDebugSkillsAnalysisTable() {
 }
 
 export async function findAgentDebugReport(executionId: string): Promise<AgentDebugReportRow | null> {
+  if (isStorageCoreEnabled()) return await findCoreReportRow(executionId, 'agent-debug') as unknown as AgentDebugReportRow | null;
   await ensureAgentDebugReportTable();
   const rows = await prismaRaw.$queryRawUnsafe<AgentDebugReportRow[]>(
     `SELECT * FROM "AgentDebugReport" WHERE "executionId" = ? LIMIT 1`,
@@ -135,6 +140,7 @@ export async function markAgentDebugReportDone(args: {
   report: AgentDebugReportPayload;
   interactionsHash?: string;
 }) {
+  if (isStorageCoreEnabled()) throw Object.assign(new Error('Core reports require fenced publication'), { status: 503 });
   const now = new Date().toISOString();
   const report = stripEmbeddedSkillsAnalysis(args.report);
   const values = [
@@ -196,6 +202,7 @@ export async function deleteAgentDebugReport(executionId: string) {
 }
 
 export async function findAgentDebugSkillsAnalysis(executionId: string): Promise<AgentDebugSkillsAnalysisRow | null> {
+  if (isStorageCoreEnabled()) return await findCoreReportRow(executionId, 'skills-analysis') as unknown as AgentDebugSkillsAnalysisRow | null;
   await ensureAgentDebugSkillsAnalysisTable();
   const rows = await prismaRaw.$queryRawUnsafe<AgentDebugSkillsAnalysisRow[]>(
     `SELECT * FROM "AgentDebugSkillsAnalysis" WHERE "executionId" = ? LIMIT 1`,
@@ -264,6 +271,7 @@ export async function updateRunningAgentDebugSkillsAnalysis(args: {
   interactionsHash: string;
   skillsAnalysis: AgentDebugSkillsAnalysis;
 }): Promise<AgentDebugSkillsAnalysisRow | null> {
+  if (isStorageCoreEnabled()) throw Object.assign(new Error('Core reports require fenced publication'), { status: 503 });
   await ensureAgentDebugSkillsAnalysisTable();
   const now = new Date().toISOString();
   const keyActionCount = Array.isArray(args.skillsAnalysis.keyActionResults)

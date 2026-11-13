@@ -14,7 +14,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 ## 已实现范围
 
 - `001_core.sql`：21 张事务表、13 张 ClickHouse 表；原始字节与 checksum 保持不变。
-- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，合计 **39 张事务表 + 13 张 CH 表 = 52 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
+- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，合计 **43 张事务表 + 13 张 CH 表 = 56 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
 - 三种事务后端共享资产 release/依赖封存、别名/草稿 CAS、冻结 RunPlan、任务领取/续租/fence/取消、制品校验，以及结果回执和 Outbox 同事务提交。
 - ClickHouse 支持可信 canonical Span 批量写、最新态筛选、单 Span/分页结构读取、精确 bundle revision 的多 section 正文、正文块与清单 hash 校验，以及受限范围的最新态聚合。请求上限 4MiB，正文 bundle 上限 64MiB。
 - `observations.py`可靠接收完成OTLP Span、冻结准备计划、全局强序Outbox worker及幂等CH物化；`trace_service.py`提供loopback HTTP查询/接收，Next服务端原接口兼容及旧身份显式映射。
@@ -26,7 +26,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 `AuthorizedStorage(iam, facts)`默认使用default，也可显式传`project_id='default'`；空字符串、空白和其他项目ID拒绝。`service.project_context(credential, workspace_id)`返回经workspace授权校验的不可变上下文。`AccessScope`以及列表/聚合响应包含project_id，缓存指纹也包含项目；单条CH事实仍保持原workspace键。
 
-新初始化应用001–005。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，Trace HTTP采集/读取服务要求当前005，均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
+新初始化应用001–007。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，Trace HTTP采集/读取服务要求当前007，均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
 
 ### IAM 与统一授权
 
@@ -65,7 +65,7 @@ python3 -m services.storage migration-plan --backend sqlite --database /absolute
 python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db --backup /absolute/path/to/new-backup.db
 ```
 
-`schema` 只输出 SQL。新目标初始化应用001–005；已有已知001/002/003只校验，不隐式升级。IAM/项目上下文要求003；Trace HTTP服务启动要求已应用当前005，需先显式迁移。未知版本、历史缺口或 checksum 漂移拒绝操作。已有 Prisma 库不会被原地改表。
+`schema` 只输出 SQL。新目标初始化应用001–007；已有已知001/002/003只校验，不隐式升级。IAM/项目上下文要求003；Trace HTTP服务启动要求已应用当前007，需先显式迁移。未知版本、历史缺口或 checksum 漂移拒绝操作。已有 Prisma 库不会被原地改表。
 
 SQLite 迁移先生成同目录的新私有备份并检查完整性/FK/hash，再持写锁重核源与备份内容，防止备份后的并发写入被遗漏；变化时拒绝并保留备份。待执行迁移及版本登记同事务成功或回滚，不覆盖旧备份、不删除原数据。新目标启用 WAL/FULL，不能将 SQLite 文件放在 NFS 跨主机共享写入。
 
@@ -99,7 +99,7 @@ Web使用仅服务端`AGENT_INSIGHT_TRACE_STORAGE=core`、`AGENT_INSIGHT_STORAGE
 
 兼容入口为旧`/api/observe/data`、`/api/observe/session`、`/api/tags`、execution tags及Trace bundle import/export。列表支持旧记录/统计/筛选合同，当前需枚举授权范围，超过100000条明确拒绝；尚未完成索引下推和千级并发容量验证。普通结构读取所有轻量Span、最多100000条/16MiB；后端按200条读取，不在结构请求中加载正文。点击单Span按固定索引和精确payload revision装载。完整会话/导出128MiB上限；原Langfuse节点协议需完整正文，单独作为兼容例外。
 
-Trace bundle v1导入50MiB/500 execution、全树预检、ID/引用重映射，同一receipt可恢复，全部batch indexed才返回原成功DTO。兼容元数据写不回写采集原文；final_result编辑关联评测交接尚未实现，当前明确冲突。评测回流、infra、诊断等跨领域功能以及非OTLP既有写入口仍待接管，不能把页面恢复视为全部功能迁移完成。
+Trace bundle v1导入50MiB/500 execution、全树预检、ID/引用重映射，同一receipt可恢复，全部batch indexed才返回原成功DTO。兼容元数据写不回写采集原文；final_result编辑关联评测交接尚未实现，当前明确冲突。评测回流、infra、DiagnosisRun下游等跨领域功能以及非OTLP既有写入口仍待接管，不能把页面恢复视为全部功能迁移完成。
 
 此为单队列/控制写锁正确性基线，不是分片事件日志、HA或1000采集端吞吐认证。固定快照和完整评测物化仍属后续范围。
 
@@ -131,4 +131,22 @@ python3 -W error::ResourceWarning -m unittest discover -s services/storage/tests
 
 私有`/v1/compat/observe/evidence`与server-only `readTraceEvidence`冻结授权范围、别名/owner、路由代次、注解版本及Span/Trace head向量，核对CH当前集合与精确revision/正文hash，读取后重核。它与普通页面full读不同：prepared head不等于CH已就绪，读取途中变化409、未追上/缺失/损坏503、超过16MiB/100000 Span413；不截断、不回落旧库为空轨迹。非法UTF8在传输边界拒绝。
 
-原trace-drafts core分支使用这份完整证据，保留原DTO、Claude Code规范化、子Agent推断和空输入/输出warning。当前仅构建草稿，尚未把backflow保存、实验执行、诊断SSE/报告迁往新库。证据manifest/hash不含凭据和绝对路径；Next仍使用既有JS Number语义，精确大整数扩展应以字符串上报。诊断自身运行Trace必须一并保留，不能通过停用其recorder简化迁移。
+原trace-drafts core分支使用这份完整证据，保留原DTO、Claude Code规范化、子Agent推断和空输入/输出warning。当前仅构建草稿，backflow保存、实验执行与DiagnosisRun下游仍待迁移；诊断会话/SSE及Trace报告采用下述独立协议。证据manifest/hash不含凭据和绝对路径；Next仍使用既有JS Number语义，精确大整数扩展应以字符串上报。诊断自身运行Trace必须一并保留，不能通过停用其recorder简化迁移。
+
+
+### 诊断 Agent、自身 Trace、聊天与报告
+
+006的`trace_diagnosis_sessions/messages`保存聊天事务；007的`diagnostic_report_runs/heads`保存AgentDebug与SkillsAnalysis的报告运行及当前选择。原故障页、报告页和原SSE事件格式保留；未设置core开关时继续原模式。请求中的`user`与`executionBrief`不授予权限，模型配置取当前已验证账号；兼容映射显式保留旧模型配置用户名，不能借组管理员身份使用成员的模型凭据。
+
+- 原诊断session GET/POST、stream路由保持。task/execution/internal Trace ID在同一权限范围内解析，歧义409；user/assistant每轮原子分配连续seq。消息全文checkpoint提交后才发送text，最终回复与自身Trace均持久化后才发送done。
+- 自身Trace通过`AgentTraceRecorder`接入同一durable batch/outbox/CH管道；成功、模型失败与中断均保留实际provider messages、工具参数/结果、错误和原公开session ID。稳定message/tool身份与源revision使重复完整快照不重复历史/token，修正内容才推进版本；部分投递失败可用同snapshot重试。
+- 私有`POST /v1/compat/observe/agent-traces`等待全部batch indexed，返回不可由布尔值替代的receipt。finish再次核验其actor/workspace/task/parent/session/request及完整批次，防止用其他Trace或其他轮次的receipt完成聊天。accepted/prepared不算done。
+- 同Trace每次仅一轮持lease/fence，失权、删除、旧fence及过期租约拒绝更新并中止Agent。状态响应丢失对同body有限重投，不重新启动模型。消息1MiB、助手8MiB、历史16MiB/10000条、流式待处理64项/16MiB，超限明确失败且不截成完整结果。revision/fence/seq通过HTTP使用十进制字符串。
+- `sessionId:null`新建上游对话；已登记历史ID仅同一实际actor可续聊。组管理员可以查看已授权成员历史，并新建自己的上游；当前不支持跨actor复用同一个OpenCode session，因为其运行数据和凭据按用户隔离。不会通过共享用户运行目录绕开此限制。
+- AgentDebug与SkillsAnalysis沿原分析器/Skill/Agent运行，完整TraceEvidence冻结输入。每次运行持独立head/revision及私有lease，串行持久化进度，force重跑/删除后旧job不能覆盖新结果。报告正文与进度为私有hash制品，读取仍检查当前Trace权限；无正文时不从旧Prisma同名报告兜底。
+
+这不包含旧聊天/报告自动导入、评测`DiagnosisRun`与实验/重测闭环、生产迁移或千级并发容量证明。旧库历史保留，需显式actor/Trace映射后单独迁移。模型服务仍为原Next/OpenCode运行器，没有新增Python评测服务。
+
+原诊断请求通过既有apiFetch补齐同源Key请求头，保留原登录/退出/切换行为和全部页面源码；不引入额外Cookie或登录态。
+
+结构读取保留工具骨架及Task/Skill白名单链接，正文按需读取。单工具（或无carrier的整组工具）紧凑投影上限2KiB，超限结构明确413，完整正文不丢弃；已有旧投影不通过相同source revision重放自动改写。早期Task/Skill缺失的派生链接需显式重建，完整视图仍读原文。

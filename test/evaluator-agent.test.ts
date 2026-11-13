@@ -85,8 +85,9 @@ test('trajectory evaluator stays single-agent and forbids subagents', () => {
   assert.doesNotMatch(source, /name:\s*'completeness-checker'/);
   assert.doesNotMatch(source, /name:\s*'tool-choice-judge'/);
   assert.doesNotMatch(source, /name:\s*'attribution-locator'/);
-  assert.match(source, /new AgentInsight\(\{[\s\S]*?directory:\s*'\/tmp'/);
-  assert.match(source, /createSession\(\{[\s\S]*?directory:\s*'\/tmp'/);
+  assert.match(source, /const directory = trusted\?\.trustedWorkspaceDir \|\| '\/tmp'/);
+  assert.match(source, /new AgentInsight\(\{[\s\S]*?\bdirectory,/);
+  assert.match(source, /createSession\(\{[\s\S]*?\bdirectory,/);
 });
 
 test('OpenCode 评估器创建 Session 时都绑定确定的工作目录', () => {
@@ -98,7 +99,9 @@ test('OpenCode 评估器创建 Session 时都绑定确定的工作目录', () =>
   ];
   for (const relativePath of fixedDirectoryEvaluators) {
     const source = fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
-    const directory = relativePath.endsWith('/judge-llm.ts')
+    const directory = relativePath.endsWith('/opencode-trajectory-evaluator.ts')
+      ? /createSession\(\{[\s\S]*?\bdirectory,/
+      : relativePath.endsWith('/judge-llm.ts')
       ? /createSession\(\{[\s\S]*?directory:\s*req\.directory\s*\|\|\s*'\/tmp'/
       : /createSession\(\{[\s\S]*?directory:\s*'\/tmp'/;
     assert.match(source, directory, relativePath);

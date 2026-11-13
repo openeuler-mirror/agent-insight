@@ -17,6 +17,8 @@
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { db } from '@/lib/storage/prisma';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { resolveCoreReportEvidence } from '@/lib/storage-core/reports';
 
 export interface AgentDebugExecutionRecord {
   id: string;
@@ -37,6 +39,19 @@ interface SessionRecord {
 }
 
 export async function resolveAgentDebugExecution(inputId: string): Promise<{ execution: AgentDebugExecutionRecord; interactions: unknown[] } | null> {
+  if (isStorageCoreEnabled()) {
+    let evidence;
+    try { evidence = await resolveCoreReportEvidence(inputId); }
+    catch (error) {
+      if (error instanceof Error && 'status' in error && error.status === 404) return null;
+      throw error;
+    }
+    const execution = evidence.execution as unknown as AgentDebugExecutionRecord;
+    let interactions = structuredClone(evidence.session.interactions);
+    if (execution.framework === 'claudecode') interactions = normalizeClaudeCodeInteractionsForStorage(interactions);
+    interactions = inferSubagentNamesFromInteractions(interactions as Parameters<typeof inferSubagentNamesFromInteractions>[0]);
+    return { execution, interactions };
+  }
   const byId = await db.findExecutionById(inputId).catch(() => null) as AgentDebugExecutionRecord | null;
   let execution = byId;
   if (!execution) {

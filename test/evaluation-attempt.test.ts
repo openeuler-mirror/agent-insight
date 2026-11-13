@@ -76,3 +76,8 @@ test('cancellation interrupts attempt and retry delay; permanent failures do not
   assert.equal(isRetryableEvaluationFailure({ status: 503 }), true);
   assert.equal(isRetryableEvaluationFailure({ name: 'JudgeOutputParseError' }), true);
 });
+
+test('durable Trace recording failure never retries the model or falls back to another transport',()=>{
+ const storage=Object.assign(new Error('network unavailable'),{coreTraceRecordingFailed:true,status:503,code:'CORE_TRACE_RECORDING_FAILED'});
+ for(const error of [storage,new Error('wrapped',{cause:storage}),Object.assign(new Error('parse',{cause:storage}),{name:'JudgeOutputParseError'})])assert.equal(isRetryableEvaluationFailure(error),false);
+});

@@ -39,6 +39,9 @@ import {
 } from '@/lib/engine/agent-debug/skills-analysis';
 import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCoreReport } from '@/lib/storage-core/report-handlers';
+
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
 
@@ -49,6 +52,7 @@ export async function GET(
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
+  if (isStorageCoreEnabled()) return handleCoreReport(_request, executionId, 'skills-analysis');
   const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) return NextResponse.json({ row: null, skillsAnalysis: null });
 
@@ -86,6 +90,7 @@ export async function POST(
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
+  if (isStorageCoreEnabled()) return handleCoreReport(request, executionId, 'skills-analysis');
   const body = await request.json().catch(() => ({})) as { user?: string; force?: boolean };
   const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) {

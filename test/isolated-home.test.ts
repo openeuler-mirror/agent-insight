@@ -72,3 +72,27 @@ test('in-process test environment restores the original paths', (t) => {
   }
   assert.deepEqual({ home: process.env.HOME, root: process.env.AGENT_INSIGHT_HOME, database: process.env.DATABASE_URL }, previous)
 })
+
+test('isolated schema setup does not leave a detached Prisma checkpoint writer',async()=>{
+  const childProcess=await import('node:child_process')
+  const original=childProcess.default.spawnSync
+  let disabled:string|undefined
+  childProcess.default.spawnSync=((...args:unknown[])=>{
+    const options=args[2] as {env?:NodeJS.ProcessEnv}
+    disabled=options.env?.CHECKPOINT_DISABLE
+    return {pid:0,output:[],stdout:'',stderr:'',status:0,signal:null}
+  }) as unknown as typeof original
+  try {
+    const {createIsolatedDatabase}=await import('./helpers/isolated-database')
+    const database=createIsolatedDatabase()
+    database.dispose()
+    assert.equal(disabled,'1')
+    const previous=process.env.DATABASE_URL
+    const retained=createIsolatedDatabase()
+    try {
+      retained.dispose({preserveFiles:true})
+      assert.equal(process.env.DATABASE_URL,previous)
+      assert.equal(fs.existsSync(retained.home),true)
+    }finally{fs.rmSync(retained.home,{recursive:true,force:true})}
+  }finally{childProcess.default.spawnSync=original}
+})

@@ -82,7 +82,7 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual({c[0] for c in authorized.payload_calls},{f'{251:016x}'})
         self.assertEqual({c[1] for c in authorized.payload_calls},{f'{251:064x}'})
         self.assertEqual({c[2] for c in authorized.payload_calls},{'input','output','attributes'})
-        self.assertTrue(all(c[3]['limit']<=4 for c in authorized.payload_calls));self.assertEqual(len(authorized.calls),2)
+        self.assertTrue(all(c[3]['limit']<=4 for c in authorized.payload_calls));self.assertEqual(len(authorized.calls),4)
 
     def test_structure_full_and_interactions_versions_match_and_tool_is_not_extra_llm(self):
         rows=[span(1),span(2,kind='tool',tool_name='search',parent_span_id=f'{1:016x}',model='')]
@@ -93,6 +93,76 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(tool['tool_calls'][0]['output'],'answer');self.assertEqual(tool['parentSpanId'],f'{1:016x}')
         all_rows=reader.session('token','w','trace',view='interactions')['interactions']
         self.assertEqual(all_rows,full['interactions'])
+
+    def test_existing_agent_tool_carriers_enrich_structure_without_loading_bodies(self):
+        parent=span(1,attributes_json=json.dumps({'legacy.role':'assistant','legacy.interaction_section':'legacy_interaction'}))
+        tool=span(201,kind='tool',tool_name='bash',parent_span_id=parent['span_id'],execution_status='done',model='',
+            attributes_json=json.dumps({'legacy.transfer_kind':'carrier'}),revision='3')
+        # The carrier is in a later page; single-interaction reads must use the same complete structure.
+        rows=[parent]+[span(i) for i in range(2,201)]+[tool]
+        reader,_,authorized=self.reader(rows)
+        original=authorized.read_payload
+        raw={'role':'assistant','content':'answer','tool_calls':[{'id':'actual-call-id','type':'function',
+            'function':{'name':'bash','arguments':'{"command":"cat fixture"}'},'output':'complete tool result','state':'completed'}]}
+        def payload(*args,**kwargs):
+            if args[6]=='legacy_interaction':
+                authorized.payload_calls.append((args[4],args[5],args[6],dict(kwargs)))
+                return {'chunks':[{'chunk_no':0,'body':json.dumps({'format':'agent-insight.trace-item','version':1,'kind':'interaction','value':raw})}],
+                    'chunk_count':1,'next_chunk':None}
+            return original(*args,**kwargs)
+        authorized.read_payload=payload
+        structure=reader.session('token','w','trace')
+        self.assertEqual(authorized.payload_calls,[])
+        self.assertEqual(structure['interactionCount'],200)
+        item=structure['interactions'][0];self.assertIn('tool_calls',item);call=item['tool_calls'][0]
+        self.assertEqual(call['function'],{'name':'bash'});self.assertEqual(call['state'],'success')
+        self.assertNotIn('output',call);self.assertNotIn('arguments',call['function']);self.assertTrue(item['_payloadDeferred'])
+        loaded=reader.session('token','w','trace',view='interaction',index=0)['interaction']
+        self.assertEqual(loaded['_payloadVersion'],item['_payloadVersion']);self.assertEqual(loaded['tool_calls'],raw['tool_calls'])
+        self.assertEqual({c[0] for c in authorized.payload_calls},{parent['span_id']})
+        old=item['_payloadVersion'];authorized.rows[-1]['revision']='4';authorized.rows[-1]['payload_revision']='f'*64
+        changed=reader.session('token','w','trace')['interactions'][0]
+        self.assertNotEqual(changed['_payloadVersion'],old)
+        full=reader.session('token','w','trace',view='full')['interactions'][0]
+        self.assertEqual(full['_payloadVersion'],changed['_payloadVersion']);self.assertEqual(full['tool_calls'],raw['tool_calls'])
+
+    def test_carrier_tool_structure_is_bounded_ordered_and_not_extra_interactions(self):
+        from unittest.mock import patch
+        parent=span(2)
+        rows=[span(1,kind='tool',tool_name='first',parent_span_id=parent['span_id'],execution_status='failed',revision='1',
+            attributes_json=json.dumps({'legacy.transfer_kind':'carrier'})),parent,
+            span(3,kind='tool',tool_name='second',parent_span_id=parent['span_id'],execution_status='running',revision='1',
+                attributes_json=json.dumps({'legacy.transfer_kind':'carrier'})),
+            span(4,kind='tool',tool_name='orphan',parent_span_id='missing',attributes_json=json.dumps({'legacy.transfer_kind':'carrier'}))]
+        reader,_,authorized=self.reader(rows)
+        result=reader.session('token','w','trace');self.assertEqual(result['interactionCount'],1)
+        calls=result['interactions'][0]['tool_calls']
+        self.assertEqual([call['function']['name'] for call in calls],['first','second'])
+        self.assertEqual(calls[0]['state'],'error');self.assertNotIn('state',calls[1])
+        self.assertEqual(authorized.payload_calls,[])
+        with patch.object(self.api(),'MAX_STRUCTURE_BYTES',600),self.assertRaises(self.api().CompatibilityLimitError):
+            reader.session('token','w','trace')
+
+    def test_compact_provider_calls_override_carrier_fallback_and_keep_task_skill_links(self):
+        calls=[{'id':'task-original','function':{'name':'task','arguments':'{"subagent_type":"research","session_id":"child"}'},'output':{'session_id':'child'},'trace_split_parallel_task':True},
+               {'id':'skill-original','function':{'name':'skill','arguments':'{"name":"skill-name","version":2}'}}]
+        parent=span(1,attributes_json=json.dumps({'legacy.tool_calls':calls}))
+        carrier=span(2,kind='tool',tool_name='task',parent_span_id=parent['span_id'],attributes_json=json.dumps({'legacy.transfer_kind':'carrier'}))
+        reader,_,authorized=self.reader([parent,carrier]);result=reader.session('token','w','trace')
+        self.assertEqual(result['interactions'][0]['tool_calls'],calls);self.assertEqual(authorized.payload_calls,[])
+
+    def test_oversized_compact_tool_marker_refuses_structure_but_complete_view_still_works(self):
+        row=span(1,attributes_json=json.dumps({'legacy.tool_structure_oversized':True}))
+        reader,_,_=self.reader([row])
+        with self.assertRaises(self.api().CompatibilityLimitError):reader.session('token','w','trace')
+        self.assertEqual(reader.session('token','w','trace',view='full')['interactions'][0]['content'],'answer')
+
+    def test_carrier_compact_call_preserves_provider_identity_and_task_link(self):
+        call={'id':'provider-call','function':{'name':'task','arguments':'{"subagent_type":"research","session_id":"child"}'},'output':{'session_id':'child'}}
+        carrier=span(2,kind='tool',tool_name='task',parent_span_id=span(1)['span_id'],
+            attributes_json=json.dumps({'legacy.transfer_kind':'carrier','legacy.tool_call':call}))
+        reader,_,authorized=self.reader([span(1),carrier]);result=reader.session('token','w','trace')
+        self.assertEqual(result['interactions'][0]['tool_calls'],[call]);self.assertEqual(authorized.payload_calls,[])
 
     def test_invalid_index_or_view_rejected_without_payload(self):
         reader,_,authorized=self.reader()

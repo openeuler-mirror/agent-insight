@@ -1,16 +1,16 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-12。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，当前 **39 张事务表 + 13 张 ClickHouse 表，共52张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-13。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，当前 **43 张事务表 + 13 张 ClickHouse 表，共56张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这52张表对应**39张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这56张表对应**43张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共39表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共43表]
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
@@ -19,6 +19,8 @@ flowchart TB
     SUPPORT[投递、路由、制品、维护 7表]
     INGEST[可靠采集与实体版本 2表]
     META[Trace旧ID、标注与标签 4表]
+    DIAG[诊断会话、消息、报告及当前指针 4表]
+    DIAG -->|继承Trace ACL与删除屏障| SUPPORT
     META -->|同库外键与授权| SUPPORT
     IAM -->|决定访问空间与资源| BASE
     BASE -->|当前归属default| PROJECT
@@ -300,7 +302,7 @@ flowchart TB
 
 - 001首批事务表：`schema_meta`, `workspaces`, `asset_identities`, `asset_releases`, `asset_drafts`, `asset_release_dependencies`, `asset_release_seals`, `asset_aliases`, `runs`, `run_inputs`, `work_items`, `work_attempts`, `result_receipts`, `result_selections`, `outbox_events`, `inbox_receipts`, `trace_locators`, `snapshot_manifests`, `artifact_metadata`, `deletion_requests`, `migration_checkpoints`。
 - 002追加事务表：`iam_principals`, `iam_password_credentials`, `iam_api_credentials`, `iam_external_identities`, `iam_sessions`, `iam_groups`, `iam_group_memberships`, `iam_workspace_bindings`, `iam_resource_access`, `iam_resource_grants`。
-- 003追加事务表：`projects`, `project_workspaces`；004追加事务表：`ingest_batches`, `obs_entity_heads`。005追加事务表：`trace_legacy_ids`, `trace_annotations`, `trace_tags`, `trace_tag_links`。上述共39张事务表。
+- 003追加事务表：`projects`, `project_workspaces`；004追加事务表：`ingest_batches`, `obs_entity_heads`。005追加事务表：`trace_legacy_ids`, `trace_annotations`, `trace_tags`, `trace_tag_links`。006追加`trace_diagnosis_sessions`、`trace_diagnosis_messages`；007追加`diagnostic_report_runs`、`diagnostic_report_heads`。上述共43张事务表。
 - 当前CH表：`obs_payload_manifests`, `obs_trace_current`, `obs_span_current`, `obs_payload_chunks`, `obs_events`, `obs_entity_relations`, `snapshot_nodes`, `dataset_sample_revisions`, `dataset_release_members`, `eval_result_facts`, `eval_metric_facts`, `eval_result_selection_current`, `eval_publication_members`。
 - 仍待后续批次：账号恢复与外部身份业务入口、资产异步发布、插件与指标注册、run groups、人工裁决/评论、其他领域标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
 
@@ -1687,3 +1689,153 @@ IDX：`idx_trace_tag_links_tag(workspace_id,tag_id,trace_id)`。
 - 删除先将locator改为deleting、增加route_epoch并登记deletion_requests；列表、统计、详情、正文均受当前授权和删除屏障约束。物理CH清理后续按维护协议完成，不能先删映射。
 - 根资源/标签删除要求独立delete能力（write-only凭据不能删除）；成员只可删除自己的资源。标签写入与Trace/标签归属在同一控制事务检查；标签链接不跨workspace。初次标注revision=1，expected_revision=0只允许新建；重复同值更新不增加版本。
 - 原前端、登录及导航不改变。服务端通过验证过的旧Key与0600显式映射获取当前IAM范围；payload.user和查询user不能授予身份。未映射、撤权或core故障必须失败，禁止悄悄读取旧Trace库。
+
+
+## 006–007 诊断会话、消息与报告
+
+006、007仅追加四张事务表，001–005保持原字节。会话/消息按Trace授权；报告每次运行冻结完整证据，payload/progress保存在私有hash制品；诊断Agent自身Trace仍写既有ClickHouse Span/正文表，不创建巨型Trace JSON事务列。以下逻辑类型、CHECK、PK/UK/FK及索引来自`diagnosis-catalog.json`和`report-catalog.json`，SQLite的BIGINT映射INTEGER并检查存储类型，PG/openGauss为BIGINT。
+
+```mermaid
+erDiagram
+  trace_locators ||--o| trace_diagnosis_sessions : "workspace_id + trace_id"
+  trace_diagnosis_sessions ||--o{ trace_diagnosis_messages : "workspace_id + session_id"
+  trace_locators ||--o{ diagnostic_report_runs : "workspace_id + trace_id"
+  diagnostic_report_runs ||--o| diagnostic_report_heads : "workspace_id + trace_id + kind + report_id"
+  iam_principals ||--o{ trace_diagnosis_sessions : created_by
+  iam_principals ||--o{ trace_diagnosis_messages : created_by
+  iam_principals ||--o{ diagnostic_report_runs : actor_principal_id
+```
+
+### trace_diagnosis_sessions
+
+一条Trace一份聊天账本，绑定合法上游会话、CAS revision及当前轮租约/fence。
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 |
+| `session_id` | TEXT | 否 | 显式提供 |
+| `trace_id` | TEXT | 否 | 显式提供 |
+| `created_by` | TEXT | 否 | 显式提供 |
+| `opencode_session_id` | TEXT | 是 | NULL |
+| `revision` | BIGINT | 否 | 1 |
+| `next_sequence` | BIGINT | 否 | 1 |
+| `turn_fence` | BIGINT | 否 | 1 |
+| `active_request_key` | TEXT | 是 | NULL |
+| `lease_owner` | TEXT | 是 | NULL |
+| `lease_expires_at_ms` | BIGINT | 是 | NULL |
+| `created_at_ms` | BIGINT | 否 | 显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 显式提供 |
+
+PK：`(workspace_id,session_id)`。 UK：`(workspace_id,trace_id)`。
+
+CHECK：`length(session_id) BETWEEN 1 AND 512`；`revision BETWEEN 1 AND 9223372036854775807`；`next_sequence BETWEEN 1 AND 9223372036854775807`；`turn_fence BETWEEN 1 AND 9223372036854775807`；`created_at_ms>=0`；`updated_at_ms>=created_at_ms`；`lease_expires_at_ms IS NULL OR lease_expires_at_ms>=0`；`opencode_session_id IS NULL OR length(opencode_session_id) BETWEEN 1 AND 512`；`active_request_key IS NULL OR length(active_request_key) BETWEEN 1 AND 512`；`lease_owner IS NULL OR length(lease_owner) BETWEEN 1 AND 512`；`(active_request_key IS NULL AND lease_owner IS NULL AND lease_expires_at_ms IS NULL) OR (active_request_key IS NOT NULL AND lease_owner IS NOT NULL AND lease_expires_at_ms IS NOT NULL)`。
+
+FK：`(workspace_id,trace_id) → trace_locators(workspace_id,trace_id)`，NO ACTION。
+
+FK：`(created_by) → iam_principals(principal_id)`，NO ACTION。
+
+IDX：`idx_diagnosis_sessions_updated(workspace_id,updated_at_ms,session_id)`。
+
+IDX：`idx_diagnosis_sessions_lease(lease_expires_at_ms,workspace_id,session_id)`。
+
+### trace_diagnosis_messages
+
+每轮原子预分配user/assistant两个序号，保存完整正文与内容hash；终态不可覆盖。
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 |
+| `session_id` | TEXT | 否 | 显式提供 |
+| `message_id` | TEXT | 否 | 显式提供 |
+| `seq` | BIGINT | 否 | 显式提供 |
+| `request_key` | TEXT | 否 | 显式提供 |
+| `request_hash` | TEXT | 否 | 显式提供 |
+| `role` | TEXT | 否 | 显式提供 |
+| `state` | TEXT | 否 | 显式提供 |
+| `content` | TEXT | 否 | '' |
+| `content_hash` | TEXT | 否 | 显式提供 |
+| `evidence_hash` | TEXT | 是 | NULL |
+| `opencode_session_id` | TEXT | 是 | NULL |
+| `created_by` | TEXT | 否 | 显式提供 |
+| `turn_fence` | BIGINT | 否 | 显式提供 |
+| `revision` | BIGINT | 否 | 1 |
+| `error_code` | TEXT | 是 | NULL |
+| `created_at_ms` | BIGINT | 否 | 显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 显式提供 |
+
+PK：`(workspace_id,message_id)`。 UK：`(workspace_id,session_id,seq)`；`(workspace_id,session_id,request_key,role)`。
+
+CHECK：`length(message_id) BETWEEN 1 AND 512`；`length(request_key) BETWEEN 1 AND 512`；`seq BETWEEN 1 AND 9223372036854775807`；`revision BETWEEN 1 AND 9223372036854775807`；`turn_fence BETWEEN 1 AND 9223372036854775807`；`(role='user' AND state='accepted' AND length(content)>0) OR (role='assistant' AND state IN ('streaming','done','failed','interrupted'))`；`created_at_ms>=0`；`updated_at_ms>=created_at_ms`；`opencode_session_id IS NULL OR length(opencode_session_id) BETWEEN 1 AND 512`；`error_code IS NULL OR (length(error_code) BETWEEN 1 AND 128 AND state IN ('failed','interrupted'))`；`request_hash: lowercase64hex`；`content_hash: lowercase64hex`；`evidence_hash: NULL or lowercase64hex`。
+
+FK：`(workspace_id,session_id) → trace_diagnosis_sessions(workspace_id,session_id)`，NO ACTION。
+
+FK：`(created_by) → iam_principals(principal_id)`，NO ACTION。
+
+IDX：`idx_diagnosis_messages_upstream(workspace_id,session_id,opencode_session_id,seq)`。
+
+IDX：`idx_diagnosis_messages_workspace_upstream(workspace_id,opencode_session_id,session_id)`。
+
+### diagnostic_report_runs
+
+每次AgentDebug/SkillsAnalysis报告的不可变取证来源、运行状态、租约、内容制品引用与进度。
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 |
+| `report_id` | TEXT | 否 | 显式提供 |
+| `trace_id` | TEXT | 否 | 显式提供 |
+| `kind` | TEXT | 否 | 显式提供 |
+| `actor_principal_id` | TEXT | 否 | 显式提供 |
+| `request_key` | TEXT | 是 | NULL |
+| `execution_id` | TEXT | 否 | 显式提供 |
+| `interactions_hash` | TEXT | 否 | 显式提供 |
+| `generator` | TEXT | 否 | 显式提供 |
+| `scope_fingerprint` | TEXT | 否 | 显式提供 |
+| `evidence_hash` | TEXT | 否 | 显式提供 |
+| `evidence_ref` | TEXT | 否 | 显式提供 |
+| `lease_secret_hash` | TEXT | 否 | 显式提供 |
+| `status` | TEXT | 否 | running |
+| `payload_hash` | TEXT | 是 | NULL |
+| `payload_ref` | TEXT | 是 | NULL |
+| `progress_hash` | TEXT | 是 | NULL |
+| `progress_ref` | TEXT | 是 | NULL |
+| `error_message` | TEXT | 是 | NULL |
+| `lease_until_ms` | BIGINT | 是 | NULL |
+| `revision` | BIGINT | 否 | 1 |
+| `created_at_ms` | BIGINT | 否 | 显式提供 |
+| `updated_at_ms` | BIGINT | 否 | 显式提供 |
+
+PK：`(workspace_id,report_id)`。 UK：`(workspace_id,trace_id,kind,report_id)`；`(workspace_id,actor_principal_id,kind,request_key)`。
+
+CHECK：`kind IN ('agent-debug','skills-analysis')`；`status IN ('running','done','failed','skipped')`；`length(report_id)>0`；`length(execution_id)>0`；`length(generator) BETWEEN 1 AND 300`；`request_key IS NULL OR length(request_key) BETWEEN 1 AND 512`；`length(interactions_hash)=64`；`length(evidence_hash)=64`；`length(lease_secret_hash)=64`；`length(scope_fingerprint)>0`；`length(evidence_ref)>0`；`(payload_hash IS NULL AND payload_ref IS NULL) OR (payload_hash IS NOT NULL AND payload_ref IS NOT NULL AND length(payload_hash)=64 AND length(payload_ref)>0)`；`(progress_hash IS NULL AND progress_ref IS NULL) OR (progress_hash IS NOT NULL AND progress_ref IS NOT NULL AND length(progress_hash)=64 AND length(progress_ref)>0)`；`status NOT IN ('done','skipped') OR payload_ref IS NOT NULL`；`error_message IS NULL OR length(error_message)<=2000`；`revision BETWEEN 1 AND 9223372036854775807`；`created_at_ms>=0`；`updated_at_ms>=created_at_ms`；`lease_until_ms IS NULL OR lease_until_ms>=created_at_ms`；`status<>'running' OR lease_until_ms IS NOT NULL`。
+
+FK：`(workspace_id,trace_id) → trace_locators(workspace_id,trace_id)`，NO ACTION。
+
+FK：`(actor_principal_id) → iam_principals(principal_id)`，NO ACTION。
+
+IDX：`idx_diagnostic_report_runs_trace(workspace_id,trace_id,kind,created_at_ms)`。
+
+不可变规则：all content hashes are lowercase hexadecimal；frozen run identity and evidence immutable；terminal run immutable；revision increments exactly once；updated_at_ms never decreases；run history cannot be deleted。
+
+### diagnostic_report_heads
+
+每条Trace每种报告当前选择的运行；force重跑或删除只调整指针，旧任务不能发布到新head。
+
+| 字段 | 逻辑类型 | 可空 | 默认 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 显式提供 |
+| `trace_id` | TEXT | 否 | 显式提供 |
+| `kind` | TEXT | 否 | 显式提供 |
+| `report_id` | TEXT | 否 | 显式提供 |
+
+PK：`(workspace_id,trace_id,kind)`。
+
+FK：`(workspace_id,trace_id,kind,report_id) → diagnostic_report_runs(workspace_id,trace_id,kind,report_id)`，NO ACTION。
+
+### 轮次与跨存储提交规则
+
+- 控制库事务预留连续seq、生成稳定消息ID、认领lease/fence；checkpoint累计全文，完全相同正文可用原revision幂等重投，终态不可改写。续租不推进助手正文revision。HTTP revision/fence/seq使用十进制字符串，避免JS大整数损失。
+- Next仍运行原Agent与SSE；text必须排在相应checkpoint提交后，done必须排在完整Agent Trace全部batch indexed和聊天终态事务后。finish由core验证receipt实际batch、actor、task、parent Trace、诊断session和request_key；不能用本人其他批次或任意provider ID冒充。
+- 所有begin/renew/checkpoint/finish复核实时Trace ACL与删除屏障；原user/executionBrief不参与身份和模型配置选择。相同上游只允许其实际actor续聊；组管理员可以查看成员历史，并以null新建自己的上游，暂不共享跨用户OpenCode运行目录或模型凭据。
+- 报告以完整TraceEvidence冻结输入，head+revision+私有leaseToken栅栏发布；强制重跑/删除后旧job更新冲突，进度不影子写旧Prisma。精确重试、预算和故障恢复合同见phase6 §10/§11。
+- 旧Prisma诊断会话/消息/报告未自动导入；默认业务库不升级，不推导旧payload.user归属。显式历史映射/隔离导入、评测DiagnosisRun下游仍按各自领域推进，四表本身不代表全产品重构完成。

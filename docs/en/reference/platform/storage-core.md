@@ -13,7 +13,7 @@ See the [table relationship guide](../../../../design/platform/analytical-transa
 
 ## Implemented contracts
 
-`001_core.sql` remains byte-for-byte unchanged:21 transactional and13 ClickHouse tables. `002_iam.sql` adds10 IAM tables, 003 adds2 project-directory/binding tables 004 adds2 ingestion/entity-version tables and005 adds4 Trace identity/annotation/tag tables, for **39 transactional +13 ClickHouse =52**. The complete field/type/constraint/index dictionary is in `design/platform/analytical-transactional-storage/core-table-dictionary.md`.
+`001_core.sql` remains byte-for-byte unchanged:21 transactional and13 ClickHouse tables. `002_iam.sql` adds10 IAM tables, 003 adds2 project-directory/binding tables 004 adds2 ingestion/entity-version tables and005 adds4 Trace identity/annotation/tag tables, 006 adds2 diagnosis conversation/message tables and007 adds2 report-run/head tables, for **43 transactional +13 ClickHouse =56**. The complete field/type/constraint/index dictionary is in `design/platform/analytical-transactional-storage/core-table-dictionary.md`.
 
 All three transactional backends share immutable releases/dependencies, draft/alias CAS, frozen RunPlan inputs, task leases/fences/cancellation, artifact verification and atomic result receipt/Outbox writes. ClickHouse supports trusted canonical Span batches, latest-state filtering, single-Span and paginated structure reads, exact-revision payload bundles with chunk/manifest hashes, and bounded analytics. Requests are capped at4MiB; payload bundles at64MiB.
 
@@ -25,7 +25,7 @@ The004 observation materializer rejects changed content at the same source revis
 
 `AuthorizedStorage(iam, facts)` defaults to `default`; an explicit `project_id='default'` is accepted. Empty/blank/other selectors fail closed. `project_context(credential, workspace_id)` returns an immutable context after workspace authorization. Scopes, list/analytics envelopes and cache fingerprints include the project; individual CH rows keep their existing workspace keys.
 
-New targets apply001–005. Existing001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003; the Trace HTTP service requires current005 after an explicit migration. Project UI, invitations and project-owner administration are future work. The Trace Web path switches only through the explicit mode flag; existing production data is not migrated by this setting.
+New targets apply001–007. Existing001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003; the Trace HTTP service requires current007 after an explicit migration. Project UI, invitations and project-owner administration are future work. The Trace Web path switches only through the explicit mode flag; existing production data is not migrated by this setting.
 
 ### IAM and authorization
 
@@ -61,7 +61,7 @@ python3 -m services.storage migration-plan --backend sqlite --database /absolute
 python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db --backup /absolute/path/to/new-backup.db
 ```
 
-`schema` only prints DDL. New targets apply001–005; existing known001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003 and the Trace HTTP service requires current005, both through explicit migration. Unknown versions, history gaps and checksum drift fail closed. Existing Prisma databases are not altered in place.
+`schema` only prints DDL. New targets apply001–007; existing known001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003 and the Trace HTTP service requires current007, both through explicit migration. Unknown versions, history gaps and checksum drift fail closed. Existing Prisma databases are not altered in place.
 
 SQLite migration creates a new private sibling backup, verifies integrity/FKs/hash, then acquires the writer lock and compares source/backup content again. An intervening write causes refusal; the backup remains. Pending DDL and markers commit or roll back together. Backups are never overwritten and old data is not removed. New SQLite targets use WAL/FULL and must not be shared across hosts over NFS.
 
@@ -95,7 +95,7 @@ Four control tables hold immutable legacy IDs, versioned annotation overrides (i
 
 Compatibility retains existing observe/data, observe/session, tags, execution tags and Trace bundle endpoints. List records/statistics/filter contracts currently enumerate authorized roots, capped at100000; indexed filtering and thousand-collector capacity remain unverified. Ordinary structure loads all lightweight Spans in pages of200, capped at100000/16MiB without payloads. Selection loads one fixed interaction index at its exact payload revision. Full sessions and exports cap at128MiB; native Langfuse views require full nodes/bodies as a distinct compatibility exception.
 
-Bundle v1 imports cap at50MiB/500 executions, preflight the tree, remap IDs/references and return success only after indexing all batches. A receipt can resume the same input. Metadata edits do not rewrite source payloads. Result editing still requires the evaluation handoff and currently reports conflict. Evaluation backflow, infra, diagnosis and non-OTLP writers remain outstanding; restoring screens does not establish full feature migration.
+Bundle v1 imports cap at50MiB/500 executions, preflight the tree, remap IDs/references and return success only after indexing all batches. A receipt can resume the same input. Metadata edits do not rewrite source payloads. Result editing still requires the evaluation handoff and currently reports conflict. Evaluation backflow, infra, evaluation DiagnosisRun workflows and non-OTLP external writers remain outstanding; restoring screens does not establish full feature migration.
 
 
 This is an ordered single-queue/write-lock correctness baseline, not thousand-collector throughput, sharded durable logging or HA certification.
@@ -128,4 +128,19 @@ Tests create/drop random schemas/databases and must target isolated instances. T
 
 The private `/v1/compat/observe/evidence` endpoint and server-only `readTraceEvidence` capture current scope, aliases/owner, route incarnation, annotation and complete Span/Trace head vectors. They verify CH sets/revisions and payload hashes, then revalidate boundaries. Prepared heads do not imply CH readiness. Concurrent changes return409, lag/missing/corrupt evidence503, and16MiB/100000-Span limits413. Reads never truncate or fall back to empty legacy trajectories; invalid UTF-8 is rejected.
 
-The existing core trace-drafts route keeps its DTO, normalization and warnings. This constructs a draft; backflow persistence, experiment execution and diagnosis SSE/reports are not yet migrated. Manifests exclude credentials/absolute paths. Next retains existing JS Number semantics; exact large integers should be supplied as strings. Diagnosis must retain its own execution Trace recorder when migrated.
+The existing core trace-drafts route keeps its DTO, normalization and warnings. This constructs a draft; backflow persistence, experiment execution and evaluation DiagnosisRun workflows remain pending; diagnosis SSE/Trace reports use the separate protocol below. Manifests exclude credentials/absolute paths. Next retains existing JS Number semantics; exact large integers should be supplied as strings. Diagnosis must retain its own execution Trace recorder when migrated.
+
+
+### Diagnosis conversations, Agent traces and reports
+
+Migrations006/007 append conversations/messages and diagnostic report runs/heads. Original pages, login and SSE events stay unchanged. The existing Next/OpenCode runner continues to execute the Agent. Verified caller identity selects model configuration; request `user`/`executionBrief` cannot select another account or its credentials.
+
+Text is checkpointed before SSE delivery. `done` requires both the terminal chat transaction and all self-Trace batches to be indexed. The core validates the receipt against actual actor/workspace/provider task/parent Trace/conversation/request and batch identities. Repeated provider snapshots preserve stable message/tool identities and revisions; successful, failed and interrupted runs retain full provider messages and tools. Failed delivery retries the same durable plan. Short ambiguous HTTP failures retry identical bodies without running another model.
+
+A conversation has one fenced lease. Revocation, deletion, expiry or stale fences reject updates and abort execution. Limits: user1MiB, assistant8MiB, history16MiB/10000 messages, pending stream64 entries/16MiB. Exact revision/fence/sequence values use decimal strings. `sessionId:null` creates a new upstream conversation. Known upstream IDs can be continued by the original actor; group admins may read authorized history and start their own conversation, but cannot reuse another user's OpenCode session or credentials.
+
+AgentDebug and SkillsAnalysis retain the existing generators, with frozen complete TraceEvidence, durable progress, immutable report artifacts and fenced publication. Force/delete prevents stale jobs from replacing the current report. Reads recheck live Trace authorization and never fall back to an old Prisma report. Legacy history import, evaluation DiagnosisRun/experiment/retest workflows, production cutover and thousand-client capacity certification remain separate work.
+
+The existing API transport now attaches its existing Key to same-origin diagnosis requests. Login/logout/account switching and all page sources remain unchanged; no additional cookies or browser sessions are introduced.
+
+Structure reads retain tool skeletons and the existing Task/Skill linkage allowlist; bodies remain deferred. Compact metadata is limited to2KiB per tool (or per tool array without carriers); oversized structure returns413 while complete source payloads remain available. Replaying the same source revision does not rewrite old projections. Older Task/Skill linkage projections require an explicit rebuild; full reads preserve the original source.

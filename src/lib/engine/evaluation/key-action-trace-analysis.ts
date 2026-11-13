@@ -17,6 +17,7 @@
 import { db } from '@/lib/storage/prisma';
 import {
   analyzeDynamicOnly,
+  extractFrozenTraceSteps,
   extractKeyActionsFromFlow,
   mergeKeyActionsFromMultipleSkills,
   parseSkillFlow,
@@ -24,6 +25,8 @@ import {
   type ParsedFlowResult,
 } from '@/lib/engine/observability/flow-parser';
 import { getRootSkillFromInteractions } from '@/lib/engine/observability/skill-scope';
+import { getTrustedCoreAgentContext } from '@/lib/engine/general-agent/trusted-context';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 import type { TaskCompletionEvalInput } from './opencode-task-completion-evaluator';
 
 export interface SkillTarget {
@@ -196,7 +199,14 @@ export function formatActualExtractedSteps(steps: ExtractedTraceStep[]): string 
 export async function loadActualExtractedTraceSteps(
   resolvedTaskId: string | null | undefined,
   user?: string | null,
+  interactions?: unknown,
 ): Promise<{ status: 'ok'; steps: ExtractedTraceStep[]; text: string } | { status: 'dynamic-analysis-failed' | 'no-extracted-steps' }> {
+  if (getTrustedCoreAgentContext()) {
+    if (!Array.isArray(interactions)) throw new Error('Frozen Trace interactions required');
+    const steps = await extractFrozenTraceSteps(interactions, user);
+    return steps.length ? { status: 'ok', steps, text: formatActualExtractedSteps(steps) } : { status: 'no-extracted-steps' };
+  }
+  if (isStorageCoreEnabled()) throw new Error('Trusted frozen Trace context required');
   if (!resolvedTaskId) return { status: 'no-extracted-steps' };
   const executionMatch = await db.findExecutionMatch(resolvedTaskId);
   const extractedSteps = executionMatch?.extractedSteps
@@ -229,7 +239,7 @@ export async function buildSkillKeyActionComparison(
   const reference = await buildSkillKeyActionReference(execution, user, interactions);
   if (reference.status !== 'ok') return reference;
 
-  const actualTrace = await loadActualExtractedTraceSteps(resolvedTaskId, user);
+  const actualTrace = await loadActualExtractedTraceSteps(resolvedTaskId, user, interactions);
   if (actualTrace.status !== 'ok') return { status: actualTrace.status };
 
   return {

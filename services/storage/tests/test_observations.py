@@ -522,6 +522,68 @@ class ObservationTests(unittest.TestCase):
         self.assertNotIn('agent_insight.raw_interaction',json.loads(normalized['sections']['attributes'])['span'])
         self.assertEqual(json.loads(normalized['sections']['attributes'])['span']['gen_ai.input'],'hello')
 
+    def test_tool_compact_projection_preserves_task_skill_structure_without_payloads_or_source_changes(self):
+        from services.storage.observations import _normalize,_source_projection,_json
+        import hashlib
+        raw={'role':'assistant','tool_calls':[
+            {'id':'task-id','type':'function','function':{'name':'task','arguments':json.dumps({'subagent_type':'research','session_id':'child-session','description':'research facts','prompt':'private prompt'*1000})},
+             'output':{'result':{'session_id':'child-session','body':'private result'*1000}},'trace_split_parallel_task':True,'state':'completed','timing':{'started_at':1000,'completed_at':2000}},
+            {'id':'skill-id','function':{'name':'skill','arguments':json.dumps({'name':'research-skill','version':2,'secret':'private'*1000})}},
+            {'id':'bash-id','function':{'name':'bash','arguments':'private command'*1000},'output':'private body'*1000}]}
+        body=packet();body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['agent_insight_legacy_interaction']=raw
+        source=_normalize(body,'w')[0];before=hashlib.sha256(_json(source).encode()).hexdigest()
+        compact,_=_source_projection(source)
+        self.assertIn('legacy.tool_calls',compact);calls=compact['legacy.tool_calls']
+        self.assertEqual(json.loads(calls[0]['function']['arguments']),{'subagent_type':'research','session_id':'child-session','description':'research facts'})
+        self.assertEqual(calls[0]['output'],{'result':{'session_id':'child-session'}})
+        self.assertTrue(calls[0]['trace_split_parallel_task']);self.assertEqual(calls[0]['id'],'task-id')
+        self.assertEqual(json.loads(calls[1]['function']['arguments']),{'name':'research-skill','version':2})
+        self.assertEqual(calls[2]['function']['arguments'],'{}');self.assertNotIn('output',calls[2])
+        self.assertNotIn('private',json.dumps(compact));self.assertLessEqual(len(_json(compact).encode()),2048)
+        self.assertEqual(hashlib.sha256(_json(source).encode()).hexdigest(),before)
+        self.service.accept_import(self.tokens['alice'],'w',body);self.service.work_once('worker')
+        self.assertEqual(json.loads(self.facts.spans[-1]['attributes_json'])['legacy.tool_calls'],calls)
+        before_count=len(self.facts.spans)
+        self.service.accept_import(self.tokens['alice'],'w',body,receipt_key='tool-projection-replay');self.service.work_once('worker')
+        self.assertEqual(len(self.facts.spans),before_count)
+
+    def test_core_tool_projection_is_per_carrier_instead_of_whole_assistant_array(self):
+        from services.storage.observations import _normalize,_source_projection
+        body=packet();body['resourceSpans'][0]['resource']['attributes'].append({'key':'agent_insight.source_namespace','value':{'stringValue':'agent.record.v1'}})
+        original=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        call={'id':'provider-call','function':{'name':'task','arguments':'{"subagent_type":"research","session_id":"child"}'},'output':{'session_id':'child'}}
+        original['agent_insight_legacy_interaction']={'role':'assistant','tool_calls':[call]*200}
+        parent=_normalize(body,'w')[0];compact,_=_source_projection(parent)
+        self.assertNotIn('legacy.tool_calls',compact);self.assertNotIn('legacy.tool_structure_oversized',compact)
+        original['agent_insight_legacy_interaction']={'format':'agent-insight.trace-item','version':1,'kind':'carrier','value':call}
+        original['attributes'] += [{'key':'legacy.transfer_kind','value':{'stringValue':'carrier'}},{'key':'legacy.role','value':{'stringValue':'tool'}},{'key':'gen_ai.tool.name','value':{'stringValue':'task'}}]
+        compact,_=_source_projection(_normalize(body,'w')[0])
+        self.assertEqual(compact['legacy.tool_call']['id'],'provider-call')
+        self.assertEqual(json.loads(compact['legacy.tool_call']['function']['arguments'])['session_id'],'child')
+
+    def test_oversized_tool_structure_retains_full_source_with_explicit_bounded_marker(self):
+        from services.storage.observations import _normalize,_source_projection,_json
+        raw={'role':'assistant','tool_calls':[{'id':str(i),'function':{'name':'bash','arguments':'{}'}} for i in range(200)]}
+        body=packet();body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['agent_insight_legacy_interaction']=raw
+        source=_normalize(body,'w')[0];compact,_=_source_projection(source)
+        self.assertTrue(compact.get('legacy.tool_structure_oversized'));self.assertNotIn('legacy.tool_calls',compact)
+        self.assertLessEqual(len(_json(compact).encode()),2048)
+        self.assertEqual(json.loads(source['sections']['legacy_interaction']),raw)
+
+    def test_new_tool_projection_does_not_rewrite_existing_source_revision(self):
+        from unittest.mock import patch
+        from services.storage.observations import _source_projection
+        body=packet();body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['agent_insight_legacy_interaction']={'role':'assistant','tool_calls':[{'id':'original','function':{'name':'skill','arguments':'{"name":"research"}'}}]}
+        def old_projection(source):
+            compact,fields=_source_projection(source);compact.pop('legacy.tool_calls',None)
+            return compact,fields
+        self.service.accept_import(self.tokens['alice'],'w',body,receipt_key='before-projection')
+        with patch('services.storage.observations._source_projection',side_effect=old_projection):self.service.work_once('worker')
+        previous=copy.deepcopy(self.facts.spans);heads=copy.deepcopy(self.rows('obs_entity_heads'))
+        self.assertNotIn('legacy.tool_calls',json.loads(previous[0]['attributes_json']))
+        self.service.accept_import(self.tokens['alice'],'w',body,receipt_key='after-projection');self.service.work_once('worker')
+        self.assertEqual(self.facts.spans,previous);self.assertEqual(self.rows('obs_entity_heads'),heads)
+
     def test_stale_source_revision_cannot_change_projected_metadata(self):
         body=packet(revision=2);body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'][1]['value']['stringValue']='current query'
         self.service.accept(self.tokens['alice'],'w',body);self.service.work_once('worker')

@@ -38,6 +38,9 @@ import { resolveAgentDebugExecution } from '@/lib/engine/agent-debug/execution-r
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCoreReport } from '@/lib/storage-core/report-handlers';
+
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
 
@@ -48,6 +51,7 @@ export async function GET(
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
+  if (isStorageCoreEnabled()) return handleCoreReport(_request, executionId, 'agent-debug');
   const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) return NextResponse.json({ report: null, row: null });
   let row = await findAgentDebugReport(resolved.execution.id);
@@ -75,6 +79,7 @@ export async function POST(
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
+  if (isStorageCoreEnabled()) return handleCoreReport(request, executionId, 'agent-debug');
   const body = await request.json().catch(() => ({})) as { user?: string; force?: boolean };
   const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) {
@@ -162,6 +167,7 @@ export async function DELETE(
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
+  if (isStorageCoreEnabled()) return handleCoreReport(_request, executionId, 'agent-debug');
   const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) return NextResponse.json({ ok: true });
   await deleteAgentDebugReport(resolved.execution.id);

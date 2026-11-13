@@ -1,3 +1,4 @@
+import copy
 import datetime
 import hashlib
 import json
@@ -268,6 +269,50 @@ def _section_text(text,role):
     return text,None
 
 
+def _tool_structure_call(call):
+    if not isinstance(call,dict):raise ValueError('invalid original tool call')
+    function=call.get('function') if isinstance(call.get('function'),dict) else None
+    name=(function.get('name') if function is not None else None) or call.get('name') or ''
+    normalized=name.lower() if isinstance(name,str) else ''
+    arguments=function.get('arguments',call.get('arguments')) if function is not None else call.get('arguments')
+    if normalized in ('task','skill','load_skill','skill_view','skill_tool'):
+        parsed=arguments
+        if isinstance(parsed,str):
+            try:parsed=json.loads(parsed)
+            except ValueError:parsed=None
+        if isinstance(parsed,dict):
+            keys=('subagent_type','subagentType','session_id','sessionId','subagent_session_id','subagentSessionId','description') if normalized=='task' else ('name','skill_name','skillName','skill','version')+(('id',) if normalized in ('skill','load_skill') else ())
+            selected={key:parsed[key] for key in keys if key in parsed}
+            arguments=_json(selected) if isinstance(arguments,str) else selected
+        elif isinstance(arguments,str):arguments=arguments if len(arguments.strip())<=240 else arguments.strip()[:240]+'…'
+    elif isinstance(arguments,str) and len(arguments)>240:arguments='{}'
+    result={key:copy.deepcopy(call[key]) for key in ('id','type','name','state','timing','trace_split_parallel_task') if key in call}
+    if function is not None:
+        result['function']={key:copy.deepcopy(function[key]) for key in ('name',) if key in function}
+        if arguments is not None:result['function']['arguments']=arguments
+    elif arguments is not None:result['arguments']=arguments
+    if normalized=='task':
+        def linkage(value,depth=0):
+            if value is None or depth>3:return None
+            if isinstance(value,str):
+                if len(value)<=240:return value
+                try:return linkage(json.loads(value),depth+1)
+                except ValueError:return None
+            if isinstance(value,list):
+                values=[selected for item in value if (selected:=linkage(item,depth+1)) is not None]
+                return values or None
+            if isinstance(value,dict):
+                selected={key:copy.deepcopy(value[key]) for key in ('session_id','sessionId','subagent_session_id','subagentSessionId') if key in value}
+                if selected:return selected
+                for key,item in value.items():
+                    child=linkage(item,depth+1)
+                    if child is not None:return {key:child}
+            return None
+        output=linkage(call.get('output',call.get('result')))
+        if output is not None:result['output']=output
+    return result
+
+
 def _source_projection(source):
     sections=source['sections'];full=json.loads(sections['attributes'])
     attrs={**full.get('resource',{}),**full.get('span',{})}
@@ -300,6 +345,25 @@ def _source_projection(source):
     if type(attrs.get('legacy.transfer_index')) is int:_compact_add(compact,'legacy.transfer_index',attrs['legacy.transfer_index'])
     for key in ('legacy.role','role','agent.name','agent','trace_kind','trace_name','trace_status'):
         if isinstance(attrs.get(key),str):_compact_add(compact,key,attrs[key],value_limit=256)
+    tool_key=None;tool_value=None
+    if attrs.get('legacy.transfer_kind')=='carrier' and source['row']['kind']=='tool':
+        tool_key='legacy.tool_call';tool_value=raw
+    elif source['row']['source_namespace']!='agent.record.v1' and isinstance(raw.get('tool_calls'),list) and raw['tool_calls']:
+        tool_key='legacy.tool_calls';tool_value=raw['tool_calls']
+    if tool_key:
+        # Core messages use one compact call per carrier, avoiding a per-message fan-out limit.
+        try:
+            if tool_key=='legacy.tool_call':projected=_tool_structure_call(tool_value)
+            else:
+                projected=[];projected_bytes=2
+                for call in tool_value:
+                    item=_tool_structure_call(call);projected_bytes+=len(_json(item).encode('utf-8'))+1
+                    if projected_bytes>MAX_COMPACT_METADATA_BYTES:raise ValueError('tool structure exceeds compact budget')
+                    projected.append(item)
+            added=_compact_add(compact,tool_key,projected,value_limit=MAX_COMPACT_METADATA_BYTES)
+        except ValueError:added=False
+        if not added:
+            while not _compact_add(compact,'legacy.tool_structure_oversized',True):compact.popitem()
     input_text,_=_section_text(sections.get('input'),'user')
     output_text,output_role=_section_text(sections.get('output'),'assistant')
     if input_text is None and raw.get('requestMessages') is not None:input_text,_=_section_text(_json(raw['requestMessages']),'user')

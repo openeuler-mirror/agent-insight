@@ -106,10 +106,16 @@ class TraceEvidence:
     def _deadline(self):
         if time.monotonic()>self.deadline:raise EvidenceUnavailable('Evidence read timed out')
 
-    def _capture(self,token,workspace,task,execution):
+    def _capture(self,token,workspace,task,execution,trace_ref=None):
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'read')
             traces=[];requested=[]
+            if trace_ref is not None:
+                matches={row[0] for row in con.execute('SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_id=?',(workspace,trace_ref)).fetchall()}
+                if con.execute('SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace_ref)).fetchone():matches.add(trace_ref)
+                if len(matches)>1:raise Conflict('Ambiguous Trace reference')
+                if not matches:raise TraceNotFound('Trace not found')
+                trace=next(iter(matches));traces.append(trace);requested.append(['trace',trace_ref,trace])
             for kind,ref in [('task',task),('execution',execution)]:
                 if ref is None:continue
                 row=con.execute('SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind=? AND alias_id=?',(workspace,kind,ref)).fetchone()
@@ -144,9 +150,9 @@ class TraceEvidence:
             _size(result,MAX_EVIDENCE_BYTES)
             return result
 
-    def _verify_end(self,token,workspace,task,execution,begin):
+    def _verify_end(self,token,workspace,task,execution,begin,trace_ref=None):
         self._deadline()
-        try:end=self._capture(token,workspace,task,execution)
+        try:end=self._capture(token,workspace,task,execution,trace_ref)
         except (TraceNotFound,EvidenceTooLarge):raise Conflict('Trace identity changed while reading') from None
         if end['scope']!=begin['scope']:raise Forbidden('Authorization changed while reading evidence')
         if end!=begin:raise Conflict('Trace evidence boundary changed; retry')
@@ -253,6 +259,7 @@ class TraceEvidence:
             capsule=value
         providers=state.get('legacy_projection_sources',{})
         for key,values in candidates.items():
+            if capsule is not None:continue
             original='final_result' if key=='finalResult' else key;provider=providers.get(original,providers.get(original+'_preview',{})).get('span_id')
             selected=[v for v in values if v[1]==provider] if provider else []
             if not selected:
@@ -297,17 +304,17 @@ class TraceEvidence:
         _size(result,MAX_EVIDENCE_BYTES)
         return result
 
-    def read(self,credential,workspace_id,*,task_id=None,execution_id=None):
+    def read(self,credential,workspace_id,*,task_id=None,execution_id=None,trace_ref=None):
         identifier(workspace_id)
-        if task_id is None and execution_id is None:raise ValueError('Explicit Trace identity required')
-        for value in (task_id,execution_id):
+        if task_id is None and execution_id is None and trace_ref is None:raise ValueError('Explicit Trace identity required')
+        for value in (task_id,execution_id,trace_ref):
             if value is not None:identifier(value)
         self.deadline=time.monotonic()+MAX_READ_SECONDS
-        begin=self._capture(credential,workspace_id,task_id,execution_id)
+        begin=self._capture(credential,workspace_id,task_id,execution_id,trace_ref)
         try:result=self._read(credential,workspace_id,begin)
         except Exception as exc:
-            self._verify_end(credential,workspace_id,task_id,execution_id,begin)
+            self._verify_end(credential,workspace_id,task_id,execution_id,begin,trace_ref)
             if isinstance(exc,(Unauthorized,Forbidden,Conflict,TraceNotFound,EvidenceUnavailable,EvidenceTooLarge)):raise
             raise EvidenceUnavailable('Trace evidence is unavailable') from None
-        self._verify_end(credential,workspace_id,task_id,execution_id,begin)
+        self._verify_end(credential,workspace_id,task_id,execution_id,begin,trace_ref)
         return result

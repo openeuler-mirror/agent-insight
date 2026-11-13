@@ -15,6 +15,7 @@
  */
 
 import type { DiagnosisProgressWriter } from './progress-types';
+import { getTrustedCoreAgentContext } from '@/lib/engine/general-agent/trusted-context';
 import {
   evaluateTrajectoryViaOpencode,
   type TrajectoryEvalInput,
@@ -122,6 +123,7 @@ export async function runAgentDebugSkillsAnalysis(args: {
       emit('suggestions-ready', 'completed', '改进建议已返回', `已生成 ${skillSuggestions.length} 条建议。`);
     }
   } catch (e) {
+    if (getTrustedCoreAgentContext()?.cancelSignal?.aborted) throw e;
     emit('suggestions-failed', 'failed', '建议生成失败', '关键动作核验结果已保留，建议阶段未获得可用结果。');
     console.warn('[agent-debug-skills] suggestion agent failed (non-fatal):', (e as Error).message);
   }

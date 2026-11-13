@@ -35,6 +35,8 @@
  * 输入：单个 (case × actualTrace) 对（离线模式 = trace 已存在于 Session.interactions）。
  * 输出：dimensionScores + trajectoryScore + deviationSteps + rootCauseStep + reasonText。
  */
+import { getTrustedCoreAgentContext } from '@/lib/engine/general-agent/trusted-context';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import type {
     AgentInsight,
@@ -57,6 +59,7 @@ import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { randomUUID } from 'node:crypto';
 import {
+    isCoreTraceRecordingError,
     recordDirectEvaluatorExecution,
     recordEvaluatorExecution,
     shouldForceOpencodeEvalTransport,
@@ -538,6 +541,26 @@ function normalizeOutput(
     };
 }
 
+function coreContext() {
+    const trusted = getTrustedCoreAgentContext();
+    if (isStorageCoreEnabled() && !trusted) throw new Error('Trusted core evaluation context required');
+    return trusted;
+}
+
+function evaluationSignal() {
+    const signal = coreContext()?.cancelSignal;
+    const experiment = experimentSignal();
+    return signal && experiment ? AbortSignal.any([signal, experiment]) : signal || experiment;
+}
+
+async function trajectoryModelConfig(user?: string | null): Promise<ModelConfig | null> {
+    const trusted = coreContext();
+    if (!trusted) return getActiveConfig(user);
+    const model = trusted.trustedModel;
+    return { id: 'core-frozen', name: 'core-frozen', provider: model.providerID, model: model.modelID,
+        apiKey: model.apiKey || '', baseUrl: model.baseURL, headers: model.headers };
+}
+
 function makeDirectModel(config: ModelConfig) {
     return new ChatOpenAI({
         apiKey: config.apiKey || 'no-api-key',
@@ -565,7 +588,7 @@ async function evaluateTrajectoryDirect(
     const response = await trackEvaluationRequest(() => model.invoke([
         new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
         new HumanMessage(buildDirectUserMessage(input)),
-    ], { signal: experimentSignal() }));
+    ], { signal: evaluationSignal() }));
     const content = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
@@ -611,58 +634,79 @@ async function evaluateTrajectoryDirectAndRecord(
     config: ModelConfig,
     user?: string | null,
 ): Promise<TrajectoryEvalOutput> {
-    const model = makeDirectModel(config);
+    const trusted = coreContext();
+    evaluationSignal()?.throwIfAborted();
     const userMsg = buildUserMessage(input);
     const startedAt = new Date();
-    const response = await trackEvaluationRequest(() => model.invoke([
-        new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
-        new HumanMessage(userMsg),
-    ], { signal: experimentSignal() }));
-    const completedAt = new Date();
-    const assistantText = typeof response.content === 'string'
-        ? response.content
-        : JSON.stringify(response.content);
-    // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
-    const parsed = extractFinalResultFromText(assistantText);
-    if (!parsed) {
-        throw new JudgeOutputParseError('直接 LLM 轨迹评测未产出有效 JSON', assistantText);
-    }
-    let normalized: TrajectoryEvalOutput;
+    let assistantText = '';
+    let usage: ReturnType<typeof extractLangchainUsage> = null;
+    let failure: { code: string; message: string } | undefined;
+    let evaluatorSessionId = trusted ? `${EVALUATOR_AGENT_NAME}-${(input.caseId || 'case').slice(0, 24)}-${randomUUID()}` : '';
     try {
-      normalized = normalizeOutput(
-        asRecord(parsed),
-        Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
-        input.comparisonMode,
-        input.actualExtractedSteps,
-    );
-    } catch (error) {
-      throw new JudgeOutputParseError(error instanceof Error ? error.message : String(error), assistantText);
+        const model = makeDirectModel(config);
+        const response = await trackEvaluationRequest(() => model.invoke([
+            new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
+            new HumanMessage(userMsg),
+        ], { signal: evaluationSignal() }));
+        const completedAt = new Date();
+        usage = extractLangchainUsage(response);
+        assistantText = typeof response.content === 'string'
+            ? response.content
+            : JSON.stringify(response.content);
+        evaluationSignal()?.throwIfAborted();
+        // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
+        const parsed = extractFinalResultFromText(assistantText);
+        if (!parsed) {
+            throw new JudgeOutputParseError('直接 LLM 轨迹评测未产出有效 JSON', assistantText);
+        }
+        let normalized: TrajectoryEvalOutput;
+        try {
+            normalized = normalizeOutput(
+                asRecord(parsed),
+                Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
+                input.comparisonMode,
+                input.actualExtractedSteps,
+            );
+        } catch (error) {
+            throw new JudgeOutputParseError(error instanceof Error ? error.message : String(error), assistantText);
+        }
+        evaluatorSessionId ||= `${EVALUATOR_AGENT_NAME}-${(input.caseId || 'case').slice(0, 24)}-${randomUUID()}`;
+        const def = findSystemAgentDefinition('opencode', EVALUATOR_AGENT_NAME);
+        if (!trusted) await recordDirectEvaluatorExecution({
+            taskId: evaluatorSessionId,
+            agentName: EVALUATOR_AGENT_NAME,
+            user,
+            query: input.caseInput,
+            systemPrompt: DIRECT_EVALUATOR_SYSTEM_PROMPT,
+            userMessage: userMsg,
+            assistantOutput: assistantText,
+            usage: extractLangchainUsage(response),
+            modelID: config.model,
+            skill: def?.traceSkill ?? null,
+            startedAtISO: startedAt.toISOString(),
+            completedAtISO: completedAt.toISOString(),
+        }).catch((err) => {
+            console.warn('[opencode-trajectory-eval] failed to record direct evaluator trace:', (err as Error)?.message || err);
+        });
+        return {
+            ...normalized,
+            rawAnalysis: {
+                ...(normalized.rawAnalysis || {}),
+                evaluatorSessionId,
+            },
+        };
+    } catch (cause) {
+        failure = { code: cause instanceof JudgeOutputParseError ? 'INVALID_OUTPUT' : 'MODEL_ERROR',
+            message: cause instanceof Error ? cause.message : String(cause) };
+        throw cause;
+    } finally {
+        if (trusted) await recordDirectEvaluatorExecution({
+            taskId: evaluatorSessionId, agentName: EVALUATOR_AGENT_NAME, user, query: input.caseInput,
+            systemPrompt: DIRECT_EVALUATOR_SYSTEM_PROMPT, userMessage: userMsg, assistantOutput: assistantText,
+            usage, modelID: config.model, skill: findSystemAgentDefinition('opencode', EVALUATOR_AGENT_NAME)?.traceSkill ?? null,
+            startedAtISO: startedAt.toISOString(), completedAtISO: new Date().toISOString(), failure,
+        });
     }
-    const evaluatorSessionId = `${EVALUATOR_AGENT_NAME}-${(input.caseId || 'case').slice(0, 24)}-${randomUUID()}`;
-    const def = findSystemAgentDefinition('opencode', EVALUATOR_AGENT_NAME);
-    await recordDirectEvaluatorExecution({
-        taskId: evaluatorSessionId,
-        agentName: EVALUATOR_AGENT_NAME,
-        user,
-        query: input.caseInput,
-        systemPrompt: DIRECT_EVALUATOR_SYSTEM_PROMPT,
-        userMessage: userMsg,
-        assistantOutput: assistantText,
-        usage: extractLangchainUsage(response),
-        modelID: config.model,
-        skill: def?.traceSkill ?? null,
-        startedAtISO: startedAt.toISOString(),
-        completedAtISO: completedAt.toISOString(),
-    }).catch((err) => {
-        console.warn('[opencode-trajectory-eval] failed to record direct evaluator trace:', (err as Error)?.message || err);
-    });
-    return {
-        ...normalized,
-        rawAnalysis: {
-            ...(normalized.rawAnalysis || {}),
-            evaluatorSessionId,
-        },
-    };
 }
 
 function parseJsonLoose(s: string): unknown | null {
@@ -729,8 +773,10 @@ export async function evaluateTrajectoryViaOpencode(
     skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TrajectoryEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
+   coreContext();
+   evaluationSignal()?.throwIfAborted();
    if (hasEvaluatorExecutionPolicy()) {
-     const config = await getActiveConfig(user);
+     const config = await trajectoryModelConfig(user);
      if (!config) throw new TrajectoryEvalConfigError(MISSING_EVALUATION_MODEL_MESSAGE);
      return runConfiguredEvaluationStage(() => evaluateTrajectoryDirectAndRecord(input, config, user));
    }
@@ -742,7 +788,7 @@ export async function evaluateTrajectoryViaOpencode(
    // 评测 trace 由 recordDirectEvaluatorExecution 合成落库（含 system rubric），与走 opencode 等价。
    // 设 EVAL_FORCE_OPENCODE_TRANSPORT=1 可一键回到旧 opencode 路径。
    if (!shouldForceOpencodeEvalTransport()) {
-     const directConfig = await getActiveConfig(user);
+     const directConfig = await trajectoryModelConfig(user);
      if (!directConfig) {
        throw new TrajectoryEvalConfigError(
          MISSING_EVALUATION_MODEL_MESSAGE,
@@ -751,7 +797,8 @@ export async function evaluateTrajectoryViaOpencode(
      try {
        return await evaluateTrajectoryDirectAndRecord(input, directConfig, user);
      } catch (directErr) {
-       (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal()?.throwIfAborted();
+       if (isCoreTraceRecordingError(directErr)) throw directErr;
+       evaluationSignal()?.throwIfAborted();
        if (directErr instanceof TrajectoryEvalConfigError) throw directErr;
        console.warn(
          '[opencode-trajectory-eval] direct LLM path failed, falling back to opencode transport:',
@@ -759,8 +806,11 @@ export async function evaluateTrajectoryViaOpencode(
        );
      }
    }
-   return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
-    const config = await getActiveConfig(user);
+   const trusted = coreContext();
+   return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true, signal: evaluationSignal(), ...(trusted ? {captureMode:'core-recorded' as const, frozenModel:trusted.trustedModel} : {}) }, async (serverUrl) => {
+    evaluationSignal()?.throwIfAborted();
+    const directory = trusted?.trustedWorkspaceDir || '/tmp';
+    const config = await trajectoryModelConfig(user);
     if (!config) {
         throw new TrajectoryEvalConfigError(
             MISSING_EVALUATION_MODEL_MESSAGE,
@@ -769,7 +819,7 @@ export async function evaluateTrajectoryViaOpencode(
 
     const userMsg = buildUserMessage(input);
 
-    const activeModel = user ? await loadServerModelForUser(user) : null;
+    const activeModel = trusted?.trustedModel || (user ? await loadServerModelForUser(user) : null);
     const providerID = activeModel?.providerID || resolveProviderID(config);
     const modelID = activeModel?.modelID || config.model || 'deepseek-chat';
 
@@ -793,6 +843,7 @@ export async function evaluateTrajectoryViaOpencode(
             seed: 42,
         },
         system: COORDINATOR_SYSTEM_PROMPT,
+        ...(trusted ? { directory } : {}),
         permission: permissions,
     };
 
@@ -825,13 +876,13 @@ export async function evaluateTrajectoryViaOpencode(
         // serverUrl 由外层 runWithEphemeralOpencodeServer 注入 —— per-task 新进程,跑完自动杀
         insight = new AgentInsight({
             baseURL: serverUrl,
-            directory: '/tmp',
+            directory,
             logLevel: 'warn',
         });
 
         const sessionResp = await insight.createSession({
             title: `${EVALUATOR_AGENT_NAME}-${input.caseId}-${Date.now()}`,
-            directory: '/tmp',
+            directory,
         });
         const sessionId = String(sessionResp?.id || sessionResp?.ID || '');
         if (!sessionId) {
@@ -852,11 +903,14 @@ export async function evaluateTrajectoryViaOpencode(
         const result = await insight.chat(sessionId, payload, handlers, {
             streamTimeoutMs: 10 * 60 * 1000,
             idleTimeoutMs: 3 * 60 * 1000,
+            signal: evaluationSignal(),
         });
 
+        evaluationSignal()?.throwIfAborted();
         fullText = result.text || fullText;
+        if (trusted && runtimeError) throw runtimeError;
 
-        await recordEvaluatorExecution(insight, {
+        if (!trusted) await recordEvaluatorExecution(insight, {
             taskId: sessionId,
             agentName: EVALUATOR_AGENT_NAME,
             user,
@@ -882,12 +936,21 @@ export async function evaluateTrajectoryViaOpencode(
                     evaluatorSessionId,
                 },
             };
+        } else if (trusted) {
+            runtimeError = new JudgeOutputParseError('轨迹评测未产出有效 JSON', fullText);
         }
     } catch (e) {
+        if (isCoreTraceRecordingError(e)) throw e;
         runtimeError = e instanceof Error ? e : new Error(String(e));
+    } finally {
+        if (trusted && evaluatorSessionId && insight) {
+            await recordEvaluatorExecution(insight, { taskId: evaluatorSessionId, agentName: EVALUATOR_AGENT_NAME, user, query: input.caseInput,
+                fallbackOutput: fullText, failure: runtimeError ? { code: 'MODEL_ERROR', message: runtimeError.message } : undefined });
+        }
     }
 
-    if (evaluatorSessionId && insight) {
+    evaluationSignal()?.throwIfAborted();
+    if (!trusted && evaluatorSessionId && insight) {
         try {
             await recordEvaluatorExecution(insight, {
                 taskId: evaluatorSessionId,
@@ -909,7 +972,7 @@ export async function evaluateTrajectoryViaOpencode(
     );
 
     try {
-        const direct = await evaluateTrajectoryDirect(input, config);
+        const direct = trusted ? await evaluateTrajectoryDirectAndRecord(input, config, user) : await evaluateTrajectoryDirect(input, config);
         return {
             ...direct,
             rawAnalysis: {
@@ -919,6 +982,8 @@ export async function evaluateTrajectoryViaOpencode(
             },
         };
     } catch (fallbackError) {
+        if (isCoreTraceRecordingError(fallbackError)) throw fallbackError;
+        evaluationSignal()?.throwIfAborted();
         const primaryDetail = runtimeError?.message || `Agent 输出前 800 字符：${fullText.slice(0, 800)}`;
         const fallbackDetail = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
         throw new Error(
@@ -934,7 +999,7 @@ export async function evaluateTrajectoryViaOpencode(
     label: `trajectory: ${(input.caseInput || '').slice(0, 40)}`,
     // silent: 同 task-completion 注释,内部子步骤不单独显示。
     silent: true,
-    signal: experimentSignal(),
+    signal: evaluationSignal(),
   });
 }
 

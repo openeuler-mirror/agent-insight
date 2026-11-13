@@ -17,6 +17,13 @@
 import { withSessionCancellation } from './session-cancellation';
 import { createAgentRunError, sanitizeAgentDiagnostic, type AgentRunError } from '../../../../scripts/agent-run-diagnostics.cjs';
 import { randomUUID } from 'node:crypto';
+import { getTrustedCoreAgentContext } from './trusted-context';
+export { getTrustedCoreAgentContext, runWithTrustedCoreAgentContext } from './trusted-context';
+export type { TrustedCoreAgentContext } from './trusted-context';
+import { lstatSync, realpathSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
+import type { CoreTraceRecorder } from '@/lib/engine/evaluation/evaluator-execution-recorder';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 import { Agent, setGlobalDispatcher } from 'undici';
 
 import {
@@ -64,11 +71,14 @@ function ensureDispatcher() {
  * 重启 / 因 apiKey 变更被 ensureOpencodeServer 主动重启）也会自动更新缓存。
  */
 const cachedClients = new Map<string, { baseURL: string; client: AgentInsight }>();
+const coreCachedClients = new Map<string, {baseURL:string;client:AgentInsight}>();
 
-async function getClient(user: string): Promise<AgentInsight> {
+async function getClient(user: string, coreRecorded=false,frozenModel?:ModelConfig): Promise<AgentInsight> {
   ensureDispatcher();
-  const baseURL = await ensureOpencodeServer({ user });
-  const cached = cachedClients.get(user);
+  const baseURL = await ensureOpencodeServer({ user, ...(coreRecorded?{captureMode:'core-recorded' as const,frozenModel}:{}) });
+  const clients=coreRecorded?coreCachedClients:cachedClients;
+  const cacheKey=coreRecorded?JSON.stringify([user,baseURL]):user;
+  const cached = clients.get(cacheKey);
   if (cached && cached.baseURL === baseURL) return cached.client;
   const client = new AgentInsight({
     baseURL,
@@ -76,7 +86,7 @@ async function getClient(user: string): Promise<AgentInsight> {
     maxRetries: 2,
     logLevel: (process.env.OPENCODE_LOG_LEVEL as any) || 'warn',
   });
-  cachedClients.set(user, { baseURL, client });
+  clients.set(cacheKey, { baseURL, client });
   return client;
 }
 
@@ -144,7 +154,12 @@ export interface InteractionRecord {
   ts: number;
 }
 
+export async function resolveGeneralAgentModel(user:string):Promise<ModelConfig> {return buildDefaultModel(user);}
+
 export interface RunGeneralAgentInput {
+  trustedWorkspaceDir?: string;
+  trustedModel?: ModelConfig;
+  recordCoreTrace?: CoreTraceRecorder;
   user: string;
   query: string;
   skill?: string;
@@ -280,6 +295,13 @@ export interface RunGeneralAgentResult {
 export async function runGeneralAgent(
   input: RunGeneralAgentInput,
 ): Promise<RunGeneralAgentResult> {
+  const trusted=getTrustedCoreAgentContext();
+  if(trusted){
+    if(input.trustedWorkspaceDir && input.trustedWorkspaceDir!==trusted.trustedWorkspaceDir)throw new Error('Trusted workspace cannot change within an Agent operation');
+    const cancelSignal=input.cancelSignal && trusted.cancelSignal?AbortSignal.any([input.cancelSignal,trusted.cancelSignal]):trusted.cancelSignal||input.cancelSignal;
+    input={...input,...trusted,cancelSignal};
+  }
+  if(input.recordTraceAs && isStorageCoreEnabled() && !input.recordCoreTrace)throw new Error('Trusted core Trace recorder is required');
   const { experimentSignal } = await import('@/lib/engine/experiment/cancellation-context');
   const cancellation = experimentSignal();
   cancellation?.throwIfAborted();
@@ -295,13 +317,15 @@ export async function runGeneralAgent(
   const query = expandHomePathsInText(String(input.query || '').trim());
   if (!query) throw new Error('query is required');
 
+  if(input.recordCoreTrace && !input.trustedModel)input={...input,trustedModel:{...await buildDefaultModel(user),...(input.model||{})}};
+
   // ephemeral 模式: 起独立 opencode 进程,跑完自动杀。后台批量任务用这条路保证拿最新 skill。
   // 不能复用 cachedClients (会污染下次 shared 模式), 直接 new AgentInsight 用临时 baseURL。
   // 默认开 isolateHome: 后台任务都不该看 user HOME 下的 skill (避免污染);
   // 被测的 skill 通过 workspace 的 .opencode/skills/ 由 deploySkillToWorkspace 注入。
   if (input.ephemeralServer) {
     ensureDispatcher();
-    return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true, telemetryEnabled: !input.recordTraceAs }, async (baseURL) => {
+    return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true, telemetryEnabled: !input.recordTraceAs,signal:input.cancelSignal,...(input.recordCoreTrace?{captureMode:'core-recorded' as const,frozenModel:input.trustedModel}:{}) }, async (baseURL) => {
       const ephemeralClient = new AgentInsight({
         baseURL,
         timeout: 180_000,
@@ -314,7 +338,7 @@ export async function runGeneralAgent(
 
   // 默认/shared 模式: Per-user 复用长驻 opencode-server (apiKey 隔离)。
   // 单机 dev 单 user 等同 singleton；多 user 同时跑评估/skill-generator 各起一份。
-  const client = await getClient(user);
+  const client = await getClient(user,!!input.recordCoreTrace,input.trustedModel);
   return runGeneralAgentWithClient(input, user, query, client);
 }
 
@@ -326,10 +350,14 @@ async function runGeneralAgentWithClient(
 ): Promise<RunGeneralAgentResult> {
 
   // ── Workspace 先行确定（skill 部署依赖 workspaceDir，需要在 skill 处理前就 ensure）──
-  ensureUserWorkspace(user);
+  if(!input.trustedWorkspaceDir)ensureUserWorkspace(user);
   const sessionTag =
     input.workspaceTag || input.sessionId || `task-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const workspaceDir = ensureSessionWorkspace(user, sessionTag);
+  let workspaceDir:string;
+  if(input.trustedWorkspaceDir){
+    if(!isAbsolute(input.trustedWorkspaceDir) || lstatSync(input.trustedWorkspaceDir).isSymbolicLink() || !lstatSync(input.trustedWorkspaceDir).isDirectory())throw new Error('Trusted workspace must be a real absolute directory');
+    workspaceDir=realpathSync(input.trustedWorkspaceDir);
+  }else workspaceDir=ensureSessionWorkspace(user,sessionTag);
 
   // 系统提示词基础部分（来自 caller 传入的额外指令，如灰度测评的自动化约束）
   const baseSystemInstruction: string | undefined = input.system?.trim() || undefined;
@@ -397,17 +425,12 @@ async function runGeneralAgentWithClient(
     });
   }
 
-  const baseModel = await buildDefaultModel(user);
-  const model: ModelConfig = {
-    ...baseModel,
-    ...(input.model || {}),
-  } as ModelConfig;
+  const model:ModelConfig=input.trustedModel?structuredClone(input.trustedModel):{...await buildDefaultModel(user),...(input.model||{})} as ModelConfig;
   console.log('[general-agent] final model config:', {
     providerID: model.providerID,
     modelID: model.modelID,
     baseURL: model.baseURL,
     hasApiKey: !!model.apiKey,
-    apiKeyPrefix: model.apiKey ? model.apiKey.slice(0, 8) + '...' : '(none)',
   });
   if (!model.apiKey && !model.headers && !model.baseURL) {
     throw new Error(
@@ -560,11 +583,15 @@ async function runGeneralAgentWithClient(
         try {
           const { recordEvaluatorExecution } = await import('@/lib/engine/evaluation/evaluator-execution-recorder');
           await recordEvaluatorExecution(client, {
-            taskId: sessionId, agentName: input.recordTraceAs, user, query,
+            taskId: sessionId, agentName: input.recordTraceAs, user, query,recordCoreTrace:input.recordCoreTrace,
             skill: effectiveTraceSkill, skillVersion: skillMeta?.version ?? input.skillVersion,
             failure, startedAt: executionStartedAt, completedAt: failure.runFacts?.finishedAt,
           });
         } catch (recordError) {
+          if(input.recordCoreTrace || isStorageCoreEnabled()){
+            const {CoreTraceRecordingError,isCoreTraceRecordingError}=await import('@/lib/engine/evaluation/evaluator-execution-recorder');
+            throw Object.assign(isCoreTraceRecordingError(recordError)?recordError:new CoreTraceRecordingError(recordError),{agentFailure:failure});
+          }
           console.warn('[general-agent] failed to preserve failed Trace:', sanitizeAgentDiagnostic(recordError));
         }
       }
@@ -595,6 +622,7 @@ async function runGeneralAgentWithClient(
       const { recordEvaluatorExecution } = await import('@/lib/engine/evaluation/evaluator-execution-recorder');
       await recordEvaluatorExecution(client, {
         taskId: sessionId,
+        recordCoreTrace: input.recordCoreTrace,
         agentName: input.recordTraceAs,
         user: input.user,
         query: input.query,
@@ -608,6 +636,7 @@ async function runGeneralAgentWithClient(
         completedAt: new Date().toISOString(),
       });
     } catch (err) {
+      if(input.recordCoreTrace || isStorageCoreEnabled())throw err;
       console.warn(`[general-agent] recordTraceAs failed for session ${sessionId}:`, (err as Error)?.message || err);
     }
   }

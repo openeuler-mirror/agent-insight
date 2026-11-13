@@ -16,6 +16,9 @@
 
 import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server';
 import { OpenAI } from "openai";
+import { randomUUID } from "node:crypto";
+import { getTrustedCoreAgentContext } from "@/lib/engine/general-agent/trusted-context";
+import { buildDirectEvaluatorExecutionRecord } from "@/lib/engine/evaluation/evaluator-execution-recorder";
 import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
@@ -57,7 +60,35 @@ function appendLog(stage: string, input: LogInput, output: LogOutput): void {
   }
 }
 
-async function getLlmClient(user?: string | null) {
+type FlowLlmClient = {
+  apiKey: string | null;
+  chat: { completions: { create: (body: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, options?: { signal?: AbortSignal }) => Promise<OpenAI.Chat.Completions.ChatCompletion> } };
+};
+
+async function getLlmClient(user?: string | null): Promise<{client: FlowLlmClient; model: string} | {client: null; model: null}> {
+  const trusted = getTrustedCoreAgentContext();
+  if (trusted) {
+    const client = new OpenAI({apiKey: trusted.trustedModel.apiKey || 'no-api-key-required', baseURL: trusted.trustedModel.baseURL,
+      defaultHeaders: trusted.trustedModel.headers, fetch: getModelFetch()});
+    const recorded: FlowLlmClient = {apiKey: client.apiKey, chat: {completions: {create: async (body, options) => {
+      trusted.cancelSignal?.throwIfAborted();
+      const startedAt = new Date().toISOString();let failed = false;let failure: unknown;
+      let response: OpenAI.Chat.Completions.ChatCompletion | undefined;
+      try {response = await client.chat.completions.create(body, {...options, ...(trusted.cancelSignal ? {signal: trusted.cancelSignal} : {})});}
+      catch (cause) {failed = true;failure = cause;}
+      const record = buildDirectEvaluatorExecutionRecord({taskId: 'trace-step-extractor-' + randomUUID(), agentName: 'trace-step-extractor', user,
+        query: 'Trace business step extraction', userMessage: JSON.stringify(body.messages), assistantOutput: response?.choices?.[0]?.message?.content || '',
+        modelID: trusted.trustedModel.modelID, usage: response?.usage ? {input: response.usage.prompt_tokens, output: response.usage.completion_tokens, total: response.usage.total_tokens} : null,
+        startedAtISO: startedAt, completedAtISO: new Date().toISOString(), ...(failed ? {failure: {code: 'flow_model_failed', message: 'Trace step model request failed'}} : {})});
+      if (!record) throw Object.assign(new Error('Core model Trace unavailable'), {code: 'CORE_TRACE_RECORDING_FAILED'});
+      try {await trusted.recordCoreTrace({record, rawMessages: [{request: body, ...(response ? {response} : {failure: {code: 'flow_model_failed'}})}]});}
+      catch {throw Object.assign(new Error('Core model Trace persistence failed'), {code: 'CORE_TRACE_RECORDING_FAILED'});}
+      if (failed) throw failure;
+      trusted.cancelSignal?.throwIfAborted();
+      return response!;
+    }}}};
+    return {client: recorded, model: trusted.trustedModel.modelID};
+  }
   const config = await getActiveConfig(user);
   if (!config) {
     return { client: null, model: null };
@@ -991,7 +1022,7 @@ export async function analyzeExecutionMatch(
 }
 
 async function extractStepsInBatches(
-  client: OpenAI,
+  client: FlowLlmClient,
   model: string,
   interactions: InteractionMessage[]
 ): Promise<ExtractedStep[]> {
@@ -1004,7 +1035,7 @@ async function extractStepsInBatches(
     batches.push(interactions.slice(i, i + BATCH_SIZE));
   }
 
-  const batchPromises = batches.map(async (batch, batchIndex) => {
+  const extractBatch = async (batch: InteractionMessage[], batchIndex: number) => {
     const startIndex = batchIndex * BATCH_SIZE;
     const batchSummary = summarizeBatch(batch, startIndex);
     const prompt = generateStepExtractPrompt(batchSummary, batchIndex, startIndex);
@@ -1034,12 +1065,30 @@ async function extractStepsInBatches(
       const result: BatchExtractResult = JSON.parse(jsonStr);
       return result.steps || [];
     } catch (e) {
-      console.error(`Batch ${batchIndex} extract error:`, e);
+      const trusted = getTrustedCoreAgentContext();
+      if (trusted?.cancelSignal?.aborted || (e instanceof Error && 'code' in e && e.code === 'CORE_TRACE_RECORDING_FAILED')) throw e;
+      if (!trusted) console.error(`Batch ${batchIndex} extract error:`, e);
       return [];
     }
-  });
+  };
 
-  const results = await Promise.all(batchPromises);
+  const trusted = getTrustedCoreAgentContext();
+  if (trusted) {
+    const results: ExtractedStep[][] = new Array(batches.length);
+    let next = 0;
+    const workers = Array.from({length: Math.min(4, batches.length)}, async () => {
+      while (next < batches.length) {
+        trusted.cancelSignal?.throwIfAborted();
+        const index = next++;
+        results[index] = await extractBatch(batches[index], index);
+      }
+    });
+    const settled = await Promise.allSettled(workers);
+    const failed = settled.find(item => item.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
+    return results.flat();
+  }
+  const results = await Promise.all(batches.map(extractBatch));
   return results.flat();
 }
 
@@ -1195,7 +1244,7 @@ function spanOverlapsExtractedStep(span: AlignmentSkillSpan, step: ExtractedStep
 }
 
 async function matchStepsWithFlow(
-  client: OpenAI,
+  client: FlowLlmClient,
   model: string,
   flow: ParsedFlowResult,
   evaluationSteps: EvaluationStep[],
@@ -1843,6 +1892,14 @@ interface BatchExtractResult {
   steps: ExtractedStep[];
 }
 
+export async function extractFrozenTraceSteps(interactions: unknown[], user?: string | null): Promise<ExtractedStep[]> {
+  if (!getTrustedCoreAgentContext()) throw new Error('Trusted frozen Trace context required');
+  if (!Array.isArray(interactions)) throw new Error('Frozen Trace interactions required');
+  const {client, model} = await getLlmClient(user);
+  if (!client) throw new Error('Frozen model unavailable');
+  return mergeSteps(await extractStepsInBatches(client, model, interactions as InteractionMessage[]));
+}
+
 export async function analyzeDynamicOnly(
   executionId: string,
   user?: string | null
@@ -1933,7 +1990,7 @@ interface DynamicOnlyMatchResult {
 }
 
 async function generateDynamicOnlyMatchResult(
-  client: OpenAI,
+  client: FlowLlmClient,
   model: string,
   steps: ExtractedStep[]
 ): Promise<DynamicOnlyMatchResult> {

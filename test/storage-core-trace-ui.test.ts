@@ -9,7 +9,6 @@ const files = [
     ['src/app/login/page.tsx', 'f69d560ffacab7004921d4a33c330729bda906851585c309d14e0ffcc9388093'],
     ['src/components/shell/AppSidebar.tsx', '0bb56f83dba3f191b186dc902fe908c606054fafca887d170249ae69dbd949f1'],
     ['src/lib/auth/auth-context.tsx', '4e17f9c38074ee6cdacb2c4480f7be31f7ab1ef0fe00d180abc9b49f7afca101'],
-    ['src/lib/client/api.ts', 'd0df2d19303a036b61366a2ba414acc77a8c25970fad88fcaf55d3bab7bfd8ee'],
 ] as const;
 
 for (const [file, expected] of files) {

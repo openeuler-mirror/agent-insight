@@ -1,0 +1,346 @@
+{
+  "version": 6,
+  "name": "trace_diagnosis",
+  "tables": [
+    {
+      "name": "trace_diagnosis_sessions",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "session_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "opencode_session_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "next_sequence",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "turn_fence",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "active_request_key",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "lease_owner",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "lease_expires_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "session_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "trace_id"
+        ]
+      ],
+      "checks": [
+        "length(session_id) BETWEEN 1 AND 512",
+        "revision BETWEEN 1 AND 9223372036854775807",
+        "next_sequence BETWEEN 1 AND 9223372036854775807",
+        "turn_fence BETWEEN 1 AND 9223372036854775807",
+        "created_at_ms>=0",
+        "updated_at_ms>=created_at_ms",
+        "lease_expires_at_ms IS NULL OR lease_expires_at_ms>=0",
+        "opencode_session_id IS NULL OR length(opencode_session_id) BETWEEN 1 AND 512",
+        "active_request_key IS NULL OR length(active_request_key) BETWEEN 1 AND 512",
+        "lease_owner IS NULL OR length(lease_owner) BETWEEN 1 AND 512",
+        "(active_request_key IS NULL AND lease_owner IS NULL AND lease_expires_at_ms IS NULL) OR (active_request_key IS NOT NULL AND lease_owner IS NOT NULL AND lease_expires_at_ms IS NOT NULL)"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        },
+        {
+          "columns": [
+            "created_by"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_diagnosis_sessions_updated",
+          "columns": [
+            "workspace_id",
+            "updated_at_ms",
+            "session_id"
+          ]
+        },
+        {
+          "name": "idx_diagnosis_sessions_lease",
+          "columns": [
+            "lease_expires_at_ms",
+            "workspace_id",
+            "session_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trace_diagnosis_messages",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "session_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "seq",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "''"
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "evidence_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "opencode_session_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "turn_fence",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "error_code",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "message_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "session_id",
+          "seq"
+        ],
+        [
+          "workspace_id",
+          "session_id",
+          "request_key",
+          "role"
+        ]
+      ],
+      "checks": [
+        "length(message_id) BETWEEN 1 AND 512",
+        "length(request_key) BETWEEN 1 AND 512",
+        "seq BETWEEN 1 AND 9223372036854775807",
+        "revision BETWEEN 1 AND 9223372036854775807",
+        "turn_fence BETWEEN 1 AND 9223372036854775807",
+        "(role='user' AND state='accepted' AND length(content)>0) OR (role='assistant' AND state IN ('streaming','done','failed','interrupted'))",
+        "created_at_ms>=0",
+        "updated_at_ms>=created_at_ms",
+        "opencode_session_id IS NULL OR length(opencode_session_id) BETWEEN 1 AND 512",
+        "error_code IS NULL OR (length(error_code) BETWEEN 1 AND 128 AND state IN ('failed','interrupted'))",
+        "request_hash: lowercase64hex",
+        "content_hash: lowercase64hex",
+        "evidence_hash: NULL or lowercase64hex"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "session_id"
+          ],
+          "table": "trace_diagnosis_sessions",
+          "target": [
+            "workspace_id",
+            "session_id"
+          ]
+        },
+        {
+          "columns": [
+            "created_by"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_diagnosis_messages_upstream",
+          "columns": [
+            "workspace_id",
+            "session_id",
+            "opencode_session_id",
+            "seq"
+          ]
+        },
+        {
+          "name": "idx_diagnosis_messages_workspace_upstream",
+          "columns": [
+            "workspace_id",
+            "opencode_session_id",
+            "session_id"
+          ]
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    "Trace read+write ACL and active route/deletion barrier on every mutation",
+    "One active fenced turn per session; stable request pair and monotonic seq",
+    "Terminal assistant immutable; user content immutable; upstream binding once",
+    "No implicit migration or legacy/ClickHouse schema mutation",
+    "Upstream continuation must belong to current actor; admin may read history but uses explicit new conversation across actors",
+    "User upstream binding changes only while its own request/fence remains active"
+  ]
+}

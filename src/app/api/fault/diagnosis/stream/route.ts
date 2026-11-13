@@ -35,6 +35,8 @@ import {
 import { buildDebugTurns, hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
 import { loadFileBasedSkillPrompt, mountFileBasedSkillResources } from '@/lib/engine/general-agent/skills-fs-loader';
 import type { AgentDebugReportPayload, AgentDebugSkillsAnalysis } from '@/lib/engine/agent-debug/types';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCoreDiagnosisStream } from '@/lib/storage-core/diagnosis';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
@@ -251,13 +253,15 @@ function summarizeSkillsAnalysisForFollowUp(analysis: AgentDebugSkillsAnalysis |
   };
 }
 
-async function formatAgentDebugContext(executionId: string, interactions: unknown[]): Promise<string> {
+async function formatAgentDebugContext(executionId: string, interactions: unknown[], strict = false): Promise<string> {
   const currentHash = hashInteractions(interactions);
-  const skillsRow = await findAgentDebugSkillsAnalysis(executionId).catch(() => null);
+  const skillsRead = findAgentDebugSkillsAnalysis(executionId);
+  const skillsRow = await (strict ? skillsRead : skillsRead.catch(() => null));
   const skillsAnalysis = skillsRow?.interactionsHash === currentHash
     ? parseSkillsAnalysisPayload(skillsRow)
     : null;
-  const row = await findAgentDebugReport(executionId).catch(() => null);
+  const reportRead = findAgentDebugReport(executionId);
+  const row = await (strict ? reportRead : reportRead.catch(() => null));
   if (!row) {
     return compactJson({
       agentDebug: { available: false, status: 'missing', message: 'AgentDebug 四维认知诊断尚未运行或没有缓存结果。' },
@@ -302,56 +306,13 @@ function parseInteractionsFromSession(session: StoredTraceSession | null, framew
   return inferSubagentNamesFromInteractions(normalized as Parameters<typeof inferSubagentNamesFromInteractions>[0]);
 }
 
-async function ensureDiagnosisSession(executionId: string, user: string) {
-  const existing = await faultDb.faultDiagnosisSession.findUnique({
-    where: { executionId },
-  });
-  if (existing) return existing;
-  return await faultDb.faultDiagnosisSession.create({
-    data: { executionId, user: user || null },
-  });
-}
-
-export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-  const user = String(body.user || '').trim();
-  const message = String(body.message || body.query || '').trim();
-  if (!user || !message) {
-    return new Response(JSON.stringify({ error: 'user and message are required' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  const executionId = String(body.executionId || '').trim();
-  if (!executionId) {
-    return new Response(JSON.stringify({ error: 'executionId is required' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  const diagnosisSession = await ensureDiagnosisSession(executionId, user);
-  const diagnosisSessionId = diagnosisSession.id;
-  const previousMessagesDesc = await faultDb.faultDiagnosisMessage.findMany({
-    where: { sessionId: diagnosisSessionId },
-    orderBy: { createdAt: 'desc' },
-    take: 24,
-  });
-  const previousMessages = previousMessagesDesc.reverse();
-
-  const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : undefined;
-  const workspaceTag = executionId ? `fault-diagnosis-${executionId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}` : undefined;
-  const workspaceDir = ensureSessionWorkspace(user, workspaceTag || executionId);
-  const traceSession = await db.findSessionByTaskId(executionId).catch(() => null) as StoredTraceSession | null;
-  const executionBriefValue = body.executionBrief && typeof body.executionBrief === 'object'
-    ? body.executionBrief as Record<string, unknown>
-    : undefined;
-  const framework = typeof executionBriefValue?.framework === 'string' ? executionBriefValue.framework : undefined;
-  const interactions = parseInteractionsFromSession(traceSession, framework);
+function prepareDiagnosisPrompt(args: {
+  workspaceDir: string; executionId: string; interactions: unknown[]; brief: unknown;
+  agentDebugContext: string; previousMessages: Array<{role:string;content:string}>; message:string;
+}) {
+  const { workspaceDir, executionId, interactions, brief, agentDebugContext, previousMessages, message } = args;
   const traceBundle = ensureTraceBundle({ workspaceDir, executionId, interactions });
-  const executionBrief = compactJson(body.executionBrief, 14_000);
-  const agentDebugContext = await formatAgentDebugContext(executionId, interactions);
+  const executionBrief = compactJson(brief, 14_000);
   const conversationHistory = formatConversationHistory(previousMessages);
   mountFileBasedSkillResources('agent-debug-diagnosis', workspaceDir);
   const diagnosisInputRelPath = writeFollowUpDiagnosisInput({ workspaceDir, interactions, query: message });
@@ -396,6 +357,58 @@ export async function POST(request: Request) {
     "## 用户问题",
     message,
   ].join('\n');
+  return { query, system: buildFaultDiagnosisSystemPrompt() };
+}
+
+async function ensureDiagnosisSession(executionId: string, user: string) {
+  const existing = await faultDb.faultDiagnosisSession.findUnique({
+    where: { executionId },
+  });
+  if (existing) return existing;
+  return await faultDb.faultDiagnosisSession.create({
+    data: { executionId, user: user || null },
+  });
+}
+
+export async function POST(request: Request) {
+  if (isStorageCoreEnabled()) return handleCoreDiagnosisStream(request,{prepare:prepareDiagnosisPrompt,reportContext:(id,interactions)=>formatAgentDebugContext(id,interactions,true)});
+  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const user = String(body.user || '').trim();
+  const message = String(body.message || body.query || '').trim();
+  if (!user || !message) {
+    return new Response(JSON.stringify({ error: 'user and message are required' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const executionId = String(body.executionId || '').trim();
+  if (!executionId) {
+    return new Response(JSON.stringify({ error: 'executionId is required' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const diagnosisSession = await ensureDiagnosisSession(executionId, user);
+  const diagnosisSessionId = diagnosisSession.id;
+  const previousMessagesDesc = await faultDb.faultDiagnosisMessage.findMany({
+    where: { sessionId: diagnosisSessionId },
+    orderBy: { createdAt: 'desc' },
+    take: 24,
+  });
+  const previousMessages = previousMessagesDesc.reverse();
+
+  const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : undefined;
+  const workspaceTag = executionId ? `fault-diagnosis-${executionId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}` : undefined;
+  const workspaceDir = ensureSessionWorkspace(user, workspaceTag || executionId);
+  const traceSession = await db.findSessionByTaskId(executionId).catch(() => null) as StoredTraceSession | null;
+  const executionBriefValue = body.executionBrief && typeof body.executionBrief === 'object'
+    ? body.executionBrief as Record<string, unknown>
+    : undefined;
+  const framework = typeof executionBriefValue?.framework === 'string' ? executionBriefValue.framework : undefined;
+  const interactions = parseInteractionsFromSession(traceSession, framework);
+  const { query } = prepareDiagnosisPrompt({workspaceDir,executionId,interactions,brief:body.executionBrief,agentDebugContext:await formatAgentDebugContext(executionId,interactions),previousMessages,message});
 
   await faultDb.faultDiagnosisMessage.create({
     data: {

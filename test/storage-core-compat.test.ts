@@ -101,3 +101,9 @@ test('original Trace import/export retain bundle shape, filename and larger boun
  assert.equal(exported.status,200);assert.deepEqual(await exported.json(),bundle);
  assert.equal(exported.headers.get('content-disposition'),'attachment; filename="trace-root_.json"');
 });
+
+test('trusted model configuration identity follows the authenticated legacy mapping',async()=>{
+ bindings();const {compatibilityContext}=await import('../src/lib/storage-core/compat');
+ const actor=await compatibilityContext(request('?user=forged'),{resolveIdentity,fetcher:async()=>Response.json(profile)});
+ assert.equal(actor.username,'old-user');
+});

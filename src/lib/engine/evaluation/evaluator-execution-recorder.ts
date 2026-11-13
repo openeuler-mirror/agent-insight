@@ -14,14 +14,33 @@
  * limitations under the License.
  */
 
-import { saveExecutionRecord, type ExecutionRecord } from '@/lib/storage/data-service';
+import type { ExecutionRecord } from '@/lib/storage/data-service';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { getTrustedCoreAgentContext } from '@/lib/engine/general-agent/trusted-context';
 import { extractStructuredAgentError, sanitizeAgentDiagnostic } from '../../../../scripts/agent-run-diagnostics.cjs';
 
 interface MessageListClientLike {
   listMessages(sessionId: string): Promise<unknown[]>;
 }
 
-interface RecordEvaluatorExecutionInput {
+export class CoreTraceRecordingError extends Error {
+  readonly coreTraceRecordingFailed=true;
+  readonly code='CORE_TRACE_RECORDING_FAILED';
+  readonly status:number;
+  constructor(cause:unknown){
+    super('Core Trace recording failed',{cause});this.name='CoreTraceRecordingError';
+    const status=cause && typeof cause==='object' && 'status'in cause?cause.status:503;
+    this.status=typeof status==='number' && [400,401,403,404,409,413,503].includes(status)?status:503;
+  }
+}
+export function isCoreTraceRecordingError(error:unknown):error is CoreTraceRecordingError {
+  return !!error && typeof error==='object' && 'coreTraceRecordingFailed'in error && error.coreTraceRecordingFailed===true;
+}
+
+export type CoreTraceRecorder = (payload: {record: ExecutionRecord; rawMessages: unknown[]}) => Promise<void>;
+
+export interface RecordEvaluatorExecutionInput {
+  recordCoreTrace?: CoreTraceRecorder;
   taskId: string;
   agentName: string;
   user?: string | null;
@@ -58,6 +77,8 @@ interface OpencodeTimeInfo {
 }
 
 export interface EvaluatorTraceInteraction {
+  _providerMessageId?: string;
+  _providerMessage?: unknown;
   role: string;
   content?: string;
   error?: { code?: string; message: string };
@@ -153,7 +174,7 @@ function isRawOpencodeMessage(value: unknown): value is { info?: Record<string, 
   return Array.isArray(parts) || Array.isArray((info as Record<string, unknown>).parts);
 }
 
-export function normalizeEvaluatorExecutionInteractions(messages: unknown[]): EvaluatorTraceInteraction[] {
+export function normalizeEvaluatorExecutionInteractions(messages: unknown[], options: { preserveProvider?: boolean } = {}): EvaluatorTraceInteraction[] {
   if (!Array.isArray(messages) || messages.length === 0) return [];
 
   const result = messages
@@ -190,6 +211,7 @@ export function normalizeEvaluatorExecutionInteractions(messages: unknown[]): Ev
             },
             state: state.status || state.state,
             output: state.output,
+            ...(options.preserveProvider?{_providerPart:structuredClone(typedPart),error:state.error,timing:{started_at:(state.time as Record<string,unknown>|undefined)?.start,completed_at:(state.time as Record<string,unknown>|undefined)?.end}}:{}),
           } satisfies Record<string, unknown>;
         })
         .filter(Boolean) as Record<string, unknown>[];
@@ -211,6 +233,7 @@ export function normalizeEvaluatorExecutionInteractions(messages: unknown[]): Ev
         : undefined;
 
       return {
+        ...(options.preserveProvider?{_providerMessageId:typeof info.id==='string'?info.id:undefined,_providerMessage:structuredClone(message)}:{}),
         role,
         content: content || undefined,
         ...(info.error ? {
@@ -293,21 +316,40 @@ export function ensureEvaluatorExecutionInteractions(
   return assistantFallback ? [...interactions, assistantFallback] : interactions;
 }
 
+function inheritRecorder<T extends {recordCoreTrace?:CoreTraceRecorder}>(input:T):T {
+  const callback=getTrustedCoreAgentContext()?.recordCoreTrace;
+  return callback?{...input,recordCoreTrace:callback}:input;
+}
+
+async function persistExecution(record:ExecutionRecord,input:{recordCoreTrace?:CoreTraceRecorder},rawMessages:unknown[]) {
+  if(input.recordCoreTrace){
+    try {await input.recordCoreTrace({record,rawMessages});}
+    catch(error){if(isCoreTraceRecordingError(error))throw error;throw new CoreTraceRecordingError(error);}
+    return true;
+  }
+  if(isStorageCoreEnabled())throw new CoreTraceRecordingError(new Error('Trusted core Trace recorder is required'));
+  const {saveExecutionRecord}=await import('@/lib/storage/data-service');
+  return (await saveExecutionRecord(record)).success;
+}
+
 export async function recordEvaluatorExecution(
   client: MessageListClientLike,
   input: RecordEvaluatorExecutionInput,
 ): Promise<number> {
+  input=inheritRecorder(input);
   const taskId = String(input.taskId || '').trim();
   const agentName = String(input.agentName || '').trim();
   if (!taskId || !agentName) return 0;
 
+  let messagesUnavailable=false;
   const rawMessages = await client.listMessages(taskId).catch((error) => {
-    if (!input.failure) throw error;
-    return [];
+    if (!input.failure) throw input.recordCoreTrace?new CoreTraceRecordingError(error):error;
+    messagesUnavailable=true;return [];
   });
   const record = buildOpencodeExecutionRecord(Array.isArray(rawMessages) ? rawMessages : [], input);
   const interactions = record.interactions as EvaluatorTraceInteraction[];
-  await saveExecutionRecord(record);
+  if(messagesUnavailable)record.source_messages_unavailable=true;
+  await persistExecution(record,input,Array.isArray(rawMessages)?rawMessages:[]);
 
   return interactions.length;
 }
@@ -316,6 +358,7 @@ export async function recordAgentJudgeExecution(
   client: MessageListClientLike,
   input: RecordEvaluatorExecutionInput & { systemPrompt: string },
 ): Promise<string | null> {
+  input=inheritRecorder(input);
   const messages = await client.listMessages(input.taskId);
   const interactions = normalizeEvaluatorExecutionInteractions(messages);
   if (!interactions.some(item => item.role === 'assistant' && (item.content || item.tool_calls?.length || item.error))) return null;
@@ -324,13 +367,13 @@ export async function recordAgentJudgeExecution(
     { role: 'system', content: input.systemPrompt, agent: input.agentName, timestamp: input.startedAt },
     ...(record.interactions as EvaluatorTraceInteraction[]),
   ];
-  const saved = await saveExecutionRecord(record);
-  return saved.success ? input.taskId : null;
+  const saved = await persistExecution(record,input,messages);
+  return saved ? input.taskId : null;
 }
 
 export function buildOpencodeExecutionRecord(rawMessages: unknown[], input: RecordEvaluatorExecutionInput): ExecutionRecord {
   const interactions = ensureEvaluatorExecutionInteractions(
-    normalizeEvaluatorExecutionInteractions(rawMessages),
+    normalizeEvaluatorExecutionInteractions(rawMessages,{preserveProvider:!!input.recordCoreTrace}),
     input.failure ? { ...input, fallbackOutput: null } : input,
   );
   const startedAt = input.startedAt || inferTimestampFromInteractions(interactions).toISOString();
@@ -387,6 +430,7 @@ export function buildOpencodeExecutionRecord(rawMessages: unknown[], input: Reco
 // =========================================================================
 
 export interface DirectEvaluatorTraceInput {
+  failure?: {code:string;message:string};
   agentName: string;
   /** 列表展示用的短 query（caseInput），写入 Execution.query。 */
   query?: string | null;
@@ -413,6 +457,7 @@ export interface DirectEvaluatorTraceInput {
 }
 
 export interface RecordDirectEvaluatorExecutionInput extends DirectEvaluatorTraceInput {
+  recordCoreTrace?: CoreTraceRecorder;
   /** Execution 主键（合成 id，例如 `trace-quality-evaluator-<uuid>`）。 */
   taskId: string;
   user?: string | null;
@@ -449,7 +494,7 @@ export function buildDirectEvaluatorInteractions(
   }
 
   const assistant = String(input.assistantOutput || '').trim();
-  if (assistant) {
+  if (assistant || input.failure) {
     const usage = input.usage
       ? {
           input: input.usage.input,
@@ -462,7 +507,8 @@ export function buildDirectEvaluatorInteractions(
       : undefined;
     interactions.push({
       role: 'assistant',
-      content: assistant,
+      content: assistant || undefined,
+      ...(input.failure?{status:'error',error:{code:input.failure.code,message:sanitizeAgentDiagnostic(input.failure.message)},error_summary:sanitizeAgentDiagnostic(input.failure.message)}:{}),
       timestamp: startedAt,
       timeInfo: {
         created: startedAt,
@@ -502,7 +548,7 @@ export function buildDirectEvaluatorExecutionRecord(
     agent: agentName,
     agentName,
     model: input.modelID ?? undefined,
-    final_result: String(input.assistantOutput || '').trim() || undefined,
+    final_result: input.failure?undefined:String(input.assistantOutput || '').trim() || undefined,
     skill: input.skill ?? undefined,
     skill_version: input.skillVersion ?? undefined,
     interactions,
@@ -511,7 +557,7 @@ export function buildDirectEvaluatorExecutionRecord(
     trace_started_at: traceStartedAt,
     skip_evaluation: true,
     skip_internal_judgment: true,
-    failures: [],
+    failures: input.failure?[{failure_type:'direct-model-error',description:sanitizeAgentDiagnostic(input.failure.message),context:input.failure.code,recovery:'重新执行'}]:[],
     skill_issues: [],
     force_query_update: true,
     trace_completed_at: traceCompletedAt,
@@ -525,10 +571,21 @@ export function buildDirectEvaluatorExecutionRecord(
 export async function recordDirectEvaluatorExecution(
   input: RecordDirectEvaluatorExecutionInput,
 ): Promise<number> {
+  input=inheritRecorder(input);
   const record = buildDirectEvaluatorExecutionRecord(input);
   if (!record) return 0;
 
-  await saveExecutionRecord(record);
+  const rawMessages:unknown[]=[];
+  if(input.recordCoreTrace){
+    for(const [index,item] of (record.interactions as EvaluatorTraceInteraction[]).entries()){
+      const raw={format:'agent-insight.direct-message',version:1,source:'direct-llm',id:'direct-message-'+index,role:item.role,
+        content:item.role==='system'?input.systemPrompt:item.role==='user'?input.userMessage??input.query:input.assistantOutput,
+        modelID:input.modelID??undefined,usage:item.role==='assistant'?input.usage:undefined,timeInfo:item.timeInfo,timestamp:item.timestamp,
+        error:item.error};
+      rawMessages.push(raw);item._providerMessageId=raw.id;item._providerMessage=structuredClone(raw);
+    }
+  }
+  await persistExecution(record,input,rawMessages);
 
   return Array.isArray(record.interactions) ? record.interactions.length : 0;
 }

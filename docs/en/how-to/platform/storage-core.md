@@ -5,7 +5,7 @@ description: "Explicit initialization, private identity mappings, original scree
 
 # Enable an isolated Storage Core Trace workflow
 
-**Product compatibility status (2026-11-12):** Login, navigation and frontend sources retain the pre-refactor version. Server compatibility now adapts existing Trace contracts to core storage. Evaluation backflow, diagnosis and other domains remain incomplete; this is isolated validation, not a production cutover.
+**Product compatibility status (2026-11-13):** Login, navigation and frontend sources retain the pre-refactor version. Server compatibility now adapts existing Trace contracts to core storage. Diagnosis chat/self-Traces and Trace reports use the protocol below; evaluation backflow, DiagnosisRun workflows and other domains remain incomplete; this is isolated validation, not a production cutover.
 
 The mode flag is server-only. Existing credentials must be verified and explicitly mapped to current IAM principals/workspaces. Missing mappings, revoked access and core failures fail closed without legacy Trace fallback. Other domains still have legacy paths. See the [reference](../../reference/platform/storage-core.md) and implementation status for coverage.
 
@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-New targets apply001–005, currently schema_version5. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
+New targets apply001–007, currently schema_version7. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -91,3 +91,14 @@ Storage tests and `npm run test` are separate gates. Use dedicated HOME, AGENT_I
 The complete environment needs a supported Node LTS, existing Python with PyYAML/pydantic2, PowerShell7 and the compiled Trae extension. Select verified installed tools through per-process PATH, PYTHON, AGENT_INSIGHT_FI_PYTHON and AGENT_INSIGHT_RAS_PYTHON. PowerShell parsing uses a temporary HOME. Do not change global configuration or install unapproved dependencies. Building the extension JS with existing esbuild is not VSIX packaging or IDE acceptance.
 
 Initialize legacy Prisma fixtures only in a new isolated SQLite file with `prisma db push --skip-generate`, never core.db. HTTP cleanup must close connections even after failures. Report missing prerequisites, missing schema and scheduling races separately; do not hide them with skips or unbounded waits. Consult implementation status for final counts and platform coverage.
+
+
+## Verify diagnosis in isolation
+
+Back up and explicitly upgrade the isolated core target to007. Keep the existing login and private identity mapping; use read/write for follow-up chat, execute for reports and delete for existing deletion operations, subject to Trace ownership and group roles. Do not use a write-only collector key for the UI.
+
+Open an authorized Trace in the original fault page, start a follow-up and reload its history. Check the `fault-diagnosis-agent` self-Trace using the original provider session ID and inspect actual tool results. Restart the isolated core service and verify the persisted messages. Explicit null creates a new upstream session; cross-actor continuation currently returns409, while an authorized group admin can read history and start their own conversation.
+
+Run/reload AgentDebug and SkillsAnalysis through their original endpoints; force/delete must fence old jobs and live revocation/deletion must stop access. State whether validation used a fixture Agent or a real model. Fixture runs verify storage/HTTP/SSE and UI recovery, not real-model diagnosis quality. Legacy conversations/reports are retained without automatic import.
+
+Use the original login flow. Diagnosis uses the same existing Key and retains existing logout/account-switching behavior.

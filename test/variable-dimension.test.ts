@@ -19,6 +19,7 @@
 // framework/skill stub queryCandidateTraces 抛 NotImplemented / getDimension 映射。
 // DB 测试（queryCandidateTraces）落在临时隔离数据库（同 experiment-engine.test.ts）。
 import assert from 'node:assert/strict';
+import { realpathSync } from 'node:fs';
 import test from 'node:test';
 
 import { createIsolatedDatabase } from './helpers/isolated-database';
@@ -154,3 +155,8 @@ test('LLM_DIMENSION.queryCandidateTraces 无匹配返回空数组', async () => 
   );
   assert.equal(candidates.length, 0);
 });
+
+test('variable dimension database queries use only this fixture database',async()=>{
+  const rows=await prisma.$queryRawUnsafe('PRAGMA database_list') as Array<{file:string}>
+  assert.equal(realpathSync(rows.find(row=>row.file.endsWith('test.db'))!.file),realpathSync(`${database.home}/test.db`))
+})

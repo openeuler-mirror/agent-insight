@@ -216,19 +216,19 @@ HTTP/UI Trace列表默认50/最大200条，Span结构默认/最大200条，正�
 本切片专项通过不能替代应用全量测试，更不能宣称 backflow 已保存到新库、实验/诊断/自动重评已接通，或提供千级并发认证。既有旧业务数据、原模式及其他 worktree 服务保持不动。
 
 
-## 10. 诊断会话与消息的 core 持久化切片（2026-11-13，仅设计、未开发）
+## 10. 诊断会话与消息的 core 持久化切片（2026-11-13，已授权实施）
 
 ### 10.1 已核实的实际调用图与范围
 
-本节设计原故障页追问会话与消息的迁移，并将诊断 Agent 自身 Trace 的完整 core 记录列为开放入口的强制前置；全部原功能必须保留。不修改前端、SSE 事件名、浏览器请求、模型配置领域或已有 §9；待主任务确定开发范围后实施。推荐控制库两张事务表，保持 ClickHouse 的 Trace/Span 分析职责；继续写旧 Prisma 会留下权限及双写一致性缺口，把聊天状态当 CH current 快照也不能提供可靠消息顺序与会话互斥，故均不采用。
+本节设计原故障页追问会话与消息的迁移，并将诊断 Agent 自身 Trace 的完整 core 记录列为开放入口的强制前置；全部原功能必须保留。保留全部页面、组件与原登录源码及SSE事件名；apiFetch仅为诊断路径补齐既有Key头，模型配置仍按当前受信账号选择。当前实施按本节与§11进行，最终测试及实际验收边界见实施状态。推荐控制库两张事务表，保持 ClickHouse 的 Trace/Span 分析职责；继续写旧 Prisma 会留下权限及双写一致性缺口，把聊天状态当 CH current 快照也不能提供可靠消息顺序与会话互斥，故均不采用。
 
-| 实际调用方/路径 | 当前行为 | core 接通必须替换的依赖 |
+| 实际调用方/路径 | 迁移前行为 | core 领域合同 |
 |---|---|---|
 | `src/app/(main)/fault/page.tsx`，数据加载约 650–675 行 | 同时请求 observe/data、observe/session、`GET /api/fault/diagnosis/session?executionId=<taskId>`；以返回消息恢复历史、以 `opencodeSessionId` 继续 Agent 会话 | `executionId` 在这个页面实际常是 task 别名，不能当旧 Execution 主键直查；先按已授权 Trace 的 task/execution/internal 别名解析 |
 | 同页 `handleSubmit`，约 735–780 行 | POST stream，body 为 `{user,message,executionId,sessionId,executionBrief}`；消费 text/done/error；`sessionId:null` 表示新对话，载入 localStorage 历史可发送更早的 upstream ID | body.user 不参与授权；保留 null 新建语义与合法历史分支，不能强制复用最后一个 upstream ID，也不能接受任意外部 ID |
 | `src/app/api/fault/diagnosis/session/route.ts` GET/POST | 直接 `prismaRaw.faultDiagnosisSession.findUnique({executionId})`；GET 包含全部消息按 createdAt 升序；POST 先查后建或任意替换 upstream ID | core 分支全部改走受鉴权的会话领域 API；禁止读取失败后回旧库，禁止公开接口任意绑定未知 upstream ID |
 | `src/app/api/fault/diagnosis/stream/route.ts` `ensureDiagnosisSession`/POST | 先查建 session，取最近 24 条消息（desc 后 reverse），从 `db.findSessionByTaskId` 取原轨迹；落 user 后调用 Agent，完成落 assistant 和 upstream ID，失败另落错误文本 | session/message create/find/count/update 全部迁到 core；Trace 证据改取 §9 `readTraceEvidence`，不能用 compact preview 或旧 db Session 兜底 |
-| 同 stream 的 `formatAgentDebugContext` | 查旧 `AgentDebugReport`/`AgentDebugSkillsAnalysis`，比较 interactionsHash 后形成提示词 | 报告未迁移；core 本切片显式标记该上游上下文 unavailable，不读取同名旧报告冒充当前 core Trace 结论 |
+| 同 stream 的 `formatAgentDebugContext` | 查旧 `AgentDebugReport`/`AgentDebugSkillsAnalysis`，比较 interactionsHash 后形成提示词 | 通过§11可信上下文读取core报告，缺失明确unavailable；存储异常失败，不读取同名旧报告冒充当前core结论 |
 | `runGeneralAgent`（`src/lib/engine/general-agent/runner.ts`，成功/失败 recorder 分支） | stream 传 `recordTraceAs:'fault-diagnosis-agent'`；成功及失败均可能由 `recordEvaluatorExecution` 写旧 Execution/Session | 必须先以 core recorder 替换成功/失败两条记录路径，保持 `recordTraceAs` 的原功能语义，完整保存原始 messages、tool 调用/结果、失败状态与证据。actor/workspace 由受信上下文绑定，保留原公开 ID、稳定源 revision 与幂等；不得以不传 `recordTraceAs` 丢弃诊断自身 Trace。该前置未实现、未验证前不得开放 core SSE 或宣称诊断已迁移 |
 | `src/app/api/agents/[id]/route.ts` DELETE | 清理旧 Execution 对应的 FaultDiagnosisMessage/Session | 该旧事务没有 core 权限，不能扩大为隐式删除 core 诊断；core 历史由 Trace 删除屏障立即隐藏，后续合规清理协议另行处理 |
 
@@ -243,9 +243,9 @@ HTTP/UI Trace列表默认50/最大200条，Span结构默认/最大200条，正�
 - 写入同时要求 `read`（读取取证上下文）与 Trace `write`，并保留资源 owner 或组 owner/admin/personal 限制；read-only 的明确共享不能授写。所有 actor/模型配置用户名由已验证身份/私有映射取得；body.user、executionBrief.user、来源 capsule user 不可信。
 - 每轮创建、续租、checkpoint、完成及历史返回均复核权限/删除屏障。撤销或删除发生后不得继续返回正文或接受迟到助手更新；中止本地 Agent 请求，已写消息保留但对失权主体不可见。无权按 401/403；有权但会话版本冲突/已在运行/已删除路由按稳定 409，缺失按 404；预算超限 413，存储异常 503，禁止成功空历史兜底。
 
-### 10.3 拟定 006 两表的完整逻辑字段
+### 10.3 006 两表的完整逻辑字段
 
-以下是待实现合同，尚无 006 DDL/运行时。SQLite `I` 为 INTEGER 且逐列 CHECK `typeof(...)='integer'`，PG/openGauss `I` 为 BIGINT；`T` 为 TEXT。所有 PK/FK 列 NOT NULL，除明确 nullable 的字段外其余亦 NOT NULL。毫秒时间非负，updated 不早于 created；revision、seq、fence 取 `1..9223372036854775807`，加法先检查溢出。新生成 ID 为服务器 UUID；既有 workspace_id/trace_id 不加严格式、不 trim、不改写。涉及 JSON 的结构、UTF-8 字节预算和 SHA-256 在公共领域层校验，三库 DDL 不依赖各自 JSON 方言。
+以下合同已落到三库006及diagnosis-catalog.json，完整当前字段/索引见核心表字典。SQLite `I` 为 INTEGER 且逐列 CHECK `typeof(...)='integer'`，PG/openGauss `I` 为 BIGINT；`T` 为 TEXT。所有 PK/FK 列 NOT NULL，除明确 nullable 的字段外其余亦 NOT NULL。毫秒时间非负，updated 不早于 created；revision、seq、fence 取 `1..9223372036854775807`，加法先检查溢出。新生成 ID 为服务器 UUID；既有 workspace_id/trace_id 不加严格式、不 trim、不改写。涉及 JSON 的结构、UTF-8 字节预算和 SHA-256 在公共领域层校验，三库 DDL 不依赖各自 JSON 方言。
 
 **`trace_diagnosis_sessions`**：
 
@@ -292,11 +292,11 @@ PK `(workspace_id,session_id)`；FK `(workspace_id,trace_id)` → trace_locators
 
 PK `(workspace_id,message_id)`；FK `(workspace_id,session_id)` → sessions、created_by → iam_principals；UNIQUE `(workspace_id,session_id,seq)`、UNIQUE `(workspace_id,session_id,request_key,role)`。索引 `(workspace_id,session_id,seq)` 支持前后翻页及最近 24 条，`(workspace_id,session_id,opencode_session_id,seq)` 支持验证历史 upstream 归属。message/session/seq/request_key/request_hash/role/created_by/created_at 不可变；终态助手 content/hash/upstream/state 不可再次更改。user content/hash 不可变，upstream ID 允许在本轮受信完成事务中从未知绑定到实际值一次；两条消息最终绑定相同 ID。任意请求内容/证据变化而复用同键，必须 409。
 
-不新增 CH 表。若按当前实际 52 表核算，此方案拟增至 54；这是计划数，未开发前仍以已应用 migration/catalog 为准，不能先声称已有 54 表。
+不新增CH表。006使事务表从39增至41，连同13张CH表为54；§11的007再追加2张事务报告表，目前43张事务表+13张CH表=56。已有目标只有显式升级后才具备对应表。
 
 ### 10.4 事务、顺序、并发与崩溃语义
 
-1. **取证/准备**：先验证身份与 Trace 写权限，再取得 §9 完整冻结证据和服务器 executionBrief。客户端 brief 只可作为明确标记的用户补充，不能覆盖事实；报告缺失明确 unavailable。制品工作区按 workspace+core session 的无碰撞 hash 绑定，不以截断/替换后的 executionId 单独作目录。目录隔离和受限权限也适用于共享主体，不能借 body.user/客户端路径串目录。当前 `runGeneralAgent.user` 同时参与模型配置选择与用户工作区定位，组 admin 续聊 owner 创建的同一 upstream 时必须将这两个受信概念分开：需要最小的服务端工作区选择 hook 或同等 bridge，让目录绑定 core session、模型仍取当前已验证 actor 配置；不能为了复用目录偷偷使用原 owner 的模型配置，也不能仅更换 user 导致 upstream cwd 与当前证据目录不一致。该 hook 是完整接通的前置开发项，尚未实现。任何 CH/模型/文件 I/O 不持有控制库写锁。
+1. **取证/准备**：先验证身份与 Trace 写权限，再取得 §9 完整冻结证据和服务器 executionBrief。客户端 brief 只可作为明确标记的用户补充，不能覆盖事实；报告缺失明确 unavailable。制品工作区按 workspace+core session 的无碰撞 hash 绑定，不以截断/替换后的 executionId 单独作目录。目录隔离和受限权限也适用于共享主体，不能借 body.user/客户端路径串目录。当前 `runGeneralAgent.user` 同时参与模型配置选择与用户工作区定位，组 admin 续聊 owner 创建的同一 upstream 时必须将这两个受信概念分开：需要最小的服务端工作区选择 hook 或同等 bridge，让目录绑定 core session、模型仍取当前已验证 actor 配置；不能为了复用目录偷偷使用原 owner 的模型配置，也不能仅更换 user 导致 upstream cwd 与当前证据目录不一致。该hook已由trusted-context/runner实现。因上游运行库和凭据仍按actor隔离，跨actor只能读取历史并显式新建自己的上游；begin会在分配消息前拒绝跨actor复用，不能以共享运行目录或冒用模型凭据绕过。任何 CH/模型/文件 I/O 不持有控制库写锁。
 2. **begin_turn 原子事务**：复核权限/删除屏障，按 canonical Trace 原子 get-or-create 账本；CAS session.revision，认领租约/fence；分配两个 seq，插入 accepted user 与 streaming assistant 占位，冻结 request_hash/evidence_hash。已有同键同 hash 返回原稳定 ID/状态；同键不同 hash 409。返回 duplicate 与本轮是否首条 user 的受信标记，原 usage 统计据此区分启动/续聊，不能继续调用旧 faultDiagnosisMessage.count，也不在私有重试中重复统计。另一活跃轮返回 409 busy，不把并发请求拼进同一 upstream 上下文。PG/OG 锁定该 session 行并 CAS，SQLite 使用短写事务；首次建会话唯一冲突重试在新事务重读，不在已失败的 PG 事务中继续。
 3. **upstream 分支**：原请求 sessionId 缺省/null 则新建 Agent 会话，不因数据库已有最新值强制续聊；非空只允许 sessions 或消息账本已绑定到相同 Trace 的 upstream ID，历史合法分支可复用。公开 POST session 不登记外部未知 ID。并发分支仍经同一 Trace 账本互斥，不覆盖其他轮的 upstream 结果；旧 localStorage 快照属于未迁移的未知 ID 时明确拒绝，必须显式迁入映射后可用。
 4. **消息与 SSE**：保留原最近 24 条历史作为提示词，并继续原 8000 字符 prompt 摘要规则；数据库保存全部原消息，摘要规则不改变存储正文。前端看到的 text 必须先有成功的持久 checkpoint，再发原 text 事件。`ChatHandlers.onText` 当前返回 void，不能仅加 async 冒充背压：需每请求独立有界串行队列，按累计全文+expected_revision 写入，再按原顺序发相应 text，队列超预算中止模型；终态等待队列 drain。e.fullText 可合法修正累计文本，不能强制只追加；幂等相同 revision/content hash 重投不重复推进。reasoning/tool 延续原实时事件；两张聊天表不替代原运行轨迹，原 messages 与 tool 事件、调用参数/结果及可用失败证据必须由前置 core recorder 完整保存，不得因聊天表只有 user/assistant 而省略。仅保存原运行器实际产生的字段，不补造未记录的思维内容。
@@ -304,7 +304,7 @@ PK `(workspace_id,message_id)`；FK `(workspace_id,session_id)` → sessions、c
 6. **失联/重启**：网络取消、失权、超时应撤销本轮模型并将可保存轮次标记 interrupted；失权时不能靠旧 credential 绕过 ACL 写尾部，可信恢复器只可维护既有轮次的终止元数据，不继续生成/泄漏正文。进程崩溃后的过期租约由下一次授权访问/显式维护标记 interrupted并推进 fence；旧 worker 的迟到更新全部拒绝。保留已 committed 正文，不声称已生成但尚未 checkpoint 的模型 token 零丢失，也不自动重跑外部模型冒充 exactly-once。
 7. **幂等边界**：旧前端没有稳定请求键；Next 给单次 POST 生成键并贯穿私有重试，或接受校验过的 Idempotency-Key。同一消息重复 HTTP POST 且没有稳定键仍是两次用户操作，不能用内容 hash 去重吞掉真实重复提问。已完成同键重试可用原终态输出形成原 done；进行中同键不再调用第二个 Agent，可返回 409/in_progress。消息持久化与模型外部执行没有分布式事务。
 
-### 10.5 拟定 core 与 Next helper 合同
+### 10.5 core 与 Next helper 合同
 
 | 拟定层/接口 | 输入及输出 | 约束 |
 |---|---|---|
@@ -316,7 +316,7 @@ PK `(workspace_id,message_id)`；FK `(workspace_id,session_id)` → sessions、c
 | Next `openFaultDiagnosisTurn(request,input)` | 复用 `readTraceEvidence` + begin；返回受限 turn handle、完整验证证据、history 与可信模型身份 | handle 仅服务端，不返回 bearer/私有 scope/绝对制品路径；不能导出原 token 到磁盘 |
 | Next `checkpointFaultDiagnosisTurn/renewFaultDiagnosisTurn/finishFaultDiagnosisTurn` | 由 handle 保留稳定 key/owner/fence/expected revisions，封装原累计消息与 upstream 结果 | 与 SSE 串行队列配合，不自行偷偷重试一次模型调用；成功终态提交前禁止 done |
 
-沿用原公开路由，在 core mode 分支接 helper；原模式继续原实现。拟每条用户消息 UTF-8 上限 1MiB、助手累计 8MiB、历史响应 16MiB/最多 10000 条（超限明确 413，不能只返回最近 N 条伪装完整历史）；提示词的既有 24 条/8000 字符截断是独立可见的 prompt 规则。Evidence 仍受 §9 16MiB，不因消息预算变化放宽。续租/checkpoint HTTP 为短请求，原 SSE 仍采用原运行超时默认 5 分钟、maxDuration 600；客户端 timeoutMs 需服务器范围校验，不能任意无限扩展。具体 profile 与 helper 导出名待开发范围确认后冻结，不代表接口已经上线。
+沿用原公开路由，在 core mode 分支接 helper；原模式继续原实现。拟每条用户消息 UTF-8 上限 1MiB、助手累计 8MiB、历史响应 16MiB/最多 10000 条（超限明确 413，不能只返回最近 N 条伪装完整历史）；提示词的既有 24 条/8000 字符截断是独立可见的 prompt 规则。Evidence 仍受 §9 16MiB，不因消息预算变化放宽。续租/checkpoint HTTP 为短请求，原 SSE 仍采用原运行超时默认 5 分钟、maxDuration 600；客户端 timeoutMs 需服务器范围校验，不能任意无限扩展。对应实现为TraceDiagnosis、diagnosis.ts、diagnosis-stream.ts及原路由core分支；读写/重试/取消与最终验收边界见实施状态。
 
 ### 10.6 三库迁移与旧数据保留
 
@@ -325,7 +325,7 @@ PK `(workspace_id,message_id)`；FK `(workspace_id,session_id)` → sessions、c
 - 旧诊断历史导入属于显式迁移器：只读导出原 Session/Message 和已验证身份/Trace 别名映射，保留旧 session/message IDs、完整 content、原时间、upstream 归属；按固定导出次序分配 seq，不能凭同毫秒 createdAt 编造确证顺序。没有可验证 actor/Trace/上游关系的条目隔离报告，不按旧 payload.user 自行认领。幂等复入校验原 ID 与内容，冲突停迁，不 merge/覆盖目标；保留旧库和导出校验清单。
 - Trace 删除立即通过 locator/deletion_requests 屏障让会话及消息不可读写，历史不物理 cascade；后续物理擦除须进入同一删除队列/保留策略，不能把当前“不可访问”宣称为已完成合规擦除。Agent 删除旧逻辑继续只处理旧数据；本切片没有“删 Agent 自动删新库全部历史”能力。
 
-### 10.7 开发前确认与可证明的完成门槛
+### 10.7 实施顺序与可证明的完成门槛
 
 建议完整接通范围是“原故障页选择 core Trace → 已授权历史读取 → 取 §9 精确证据 → 原 Agent/SSE 运行且成功/失败的自身 Trace 完整持久进入 core → user/assistant checkpoint/upstream 在 core 重启后可恢复 → 原页面续聊/新对话/合法历史分支”，其中 SSE/模型仍由现有 Next 运行器执行。仅建表、只改 GET、关闭自身 Trace 记录或旁写两份库均不足以声明接通。
 
@@ -333,4 +333,59 @@ PK `(workspace_id,message_id)`；FK `(workspace_id,session_id)` → sessions、c
 
 先 RED/GREEN 验证：同 Trace 的 task/execution/internal 别名归一、并发首次创建唯一、跨租户 FK、seq 两条原子分配、同键异输入冲突、两个并发轮只有一个模型启动、同一全文 checkpoint 幂等、终态不可修改；member/owner/admin/viewer/共享/API 能力边界与 payload.user 伪造；SSE text/done 必须排在 durable 提交后、队列超限/存储错不发假成功；失权/删除/过期 lease/新 fence 使旧 worker 失效；重启可读原始完整消息/upstream，null 新建与已知历史分支可用、未知 upstream 不串话；没有任何 core 分支调用 faultDb、旧 db Session、旧报告或旧 Prisma recorder；core recorder 在成功/失败/中断路径均被真实调用，原始 messages、tool 参数/结果和错误证据逐字段读回一致，稳定原 ID/source revision/receipt 重试不重复，不能通过移除 `recordTraceAs` 让测试表面通过。三库真实事务及隔离 HTTP/SSE mock Agent（清楚标 fixture，不冒充真实 LLM）分别取得证据，旧模式定向回归通过后再由主任务决定浏览器与真实模型验收。
 
-诊断自身 Trace 的 core recorder 是本切片的强制前置和完成门槛，不属于可丢弃的后续项。AgentDebug 报告、DiagnosisRun/诊断输入长期冻结、评测/修分、RAS 事件与优化/重测仍是独立待迁领域；这些未切换前明确保持待后续，不用空成功或旧 Prisma 影子写宣称完成。此节只完成设计，暂不编写 DDL、helper、路由或产品代码。
+诊断自身 Trace 的 core recorder 是本切片的强制前置和完成门槛，不属于可丢弃的后续项。AgentDebug 报告、DiagnosisRun/诊断输入长期冻结、评测/修分、RAS 事件与优化/重测仍是独立待迁领域；这些未切换前明确保持待后续，不用空成功或旧 Prisma 影子写宣称完成。本节已按用户后续授权落地DDL、helper与原路由；AgentDebug与SkillsAnalysis报告按§11同步实施，DiagnosisRun等其他领域仍不计为本切片完成。
+
+
+## 11. Trace 报告的 core 存取与冻结输入（2026-11-13，已授权实施）
+
+本批次保持所有产品前端及既有 AgentDebug、SkillsAnalysis DTO。优先接通 Trace 页诊断报告、独立 Skills 核验和诊断追问读取报告；依赖尚未迁移 Experiment/Case 的 DiagnosisRun 不据此声明完成，core 请求不得回退读取旧 Trace。
+
+实施顺序：先为追加迁移 007 的两表写隔离 SQLite 行为与约束失败用例；补齐三库 DDL/catalog；实现 Python 领域模块及 HTTP 适配合同；接可信 Next 上下文、既有报告 API 和执行器；最后跑定向隔离测试、三库合同及真实 HTTP/CH 验收。001–006 不改写；旧数据仅经已授权备份迁移路径升级。新报告不写旧 Prisma。
+
+### 11.1 追加两表
+
+`diagnostic_report_runs` 以 `(workspace_id,report_id)` 为主键，保存 `trace_id`、`kind`（agent-debug/skills-analysis）、`actor_principal_id`、可空 `request_key`、`execution_id`、`interactions_hash`、`generator`、`scope_fingerprint`、`evidence_hash`、`evidence_ref`、`lease_secret_hash`、`status`（running/done/failed/skipped）、可空 `payload_hash/ref`、可空 `progress_hash/ref`、可空 `error_message`、可空 `lease_until_ms`、`revision`、`created_at_ms`、`updated_at_ms`。身份、快照、生成器和创建时间不可变；revision 从 1 单步增加，终态不可重开。引用 Trace、actor 的 FK 不能跨空间；`(workspace_id,actor_principal_id,kind,request_key)` 唯一，重复 key 必须同输入。
+
+`diagnostic_report_heads` 以 `(workspace_id,trace_id,kind)` 为主键，保存当前 `report_id`；四列复合 FK 约束报告确属该空间/Trace/种类。切换 head 保留旧运行与旧证据，新旧后台任务不能相互覆盖。删除公开报告只移除当前两个 head、阻止旧任务重新发布，历史制品进入既有保留/删除策略，不冒称物理擦除。
+
+ID、hash、类型、状态及毫秒非负范围由 CHECK 约束；SQLite 额外严格整数 CHECK，PG/openGauss 使用 BIGINT。运行和 head 分别按空间/Trace/种类/创建时间、actor/request_key 索引；007 三库字段与 catalog 对齐。完整 evidence（16MiB）、报告 payload（8MiB）和 progress（1MiB）存放私有内容寻址 JSON 制品；表里只保留 hash/ref。制品正文可有任意合法 JSON 扩展，但不能把认证 token 写入路径、manifest 或诊断元数据。
+
+### 11.2 授权、冻结与发布
+
+GET 按当前 Trace read 权限取当前 head，制品 I/O 后重新授权并复核 head；POST 需要 execute 和工作空间 write（用于实际执行器自身 Trace 录入，不要求来源 Trace 的 write），调用 §9 TraceEvidence，并在报告写事务中重核 route/incarnation/epoch、完整 head vector、annotation、aliases 和 actor/scope，之后创建 running 运行及 head。Next 提供的 expectedSnapshotHash 必须等于服务端重新取证结果，防止模型使用与持久化版本不同的输入；可信 ALS 固定真实 actor/workspace，body.user 不作为授权。
+
+后台 PATCH 必须携带 report_id、当前 revision、仅服务端持有的 leaseToken，并满足当前 head、未过期租约、原 actor/execute 权限及 frozen scope。每次进度 checkpoint 串行推进 revision 并续租；终态先等待进度写完，再发布完整 payload。旧任务、删除后返回或失去授权的任务一律不能发布；错误不写旧库。租约过期以 failed/stopped 暴露，后续显式重跑创建新运行。DELETE 要求 delete 与来源 Trace 的修改权限。
+
+### 11.3 后端接口与原执行器
+
+私有端点为 `/v1/compat/observe/reports/{kind}`：GET 取 row/payload/progress，POST 创建或返回 cached/busy；PATCH `/{reportId}` 发布进度/终态，DELETE agent-debug 清除当前报告及 Skills head。所有响应去掉制品绝对路径、scope 指纹、lease hash 和认证 token，leaseToken 仅 POST 私有返回给 Next 后台闭包，原前端 DTO 不增加该字段。
+
+Next `withCoreReports(request,action)` 提供受信上下文给 execution-resolver、report-store 读取及追问 formatter；core 缺上下文不能走 Prisma。报告 API 的 core 早分支沿用原 runner、正常的运行/缓存/跳过/失败 DTO。深层通用 Agent 用 `runWithTrustedCoreAgentContext` 固定模型、工作目录和 core recorder，成功失败都保留自身 Trace，不只记录报告文本。
+
+完成门槛包括：同空间不同 actor/私有 Trace 隔离、跨空间拒绝、force 新运行及旧结果 CAS、完整证据/扩展与显式 null、并发注解或 source head 改变拒绝、撤权/删除竞态、进度与重启后报告恢复、报告与 Skills 真执行和失败 Trace 均留在 core。仅建表、Mock 路由或一个报告 fixture 不代表诊断全功能容量验收。
+
+
+### 原诊断请求的鉴权兼容
+
+原apiFetch未对`/api/fault/diagnosis/`附Key，旧接口无鉴权因此没有暴露此遗漏。仅扩展现有同源请求的Key路径匹配，保留原Key优先级、localStorage退出/切换语义及URL前缀；不引入新Cookie/登录态/密码页。页面、组件、登录页和auth-context保持原基线源码，api.ts仅为诊断请求附现有Key。授权仍由原Key验证、私有身份映射与实时IAM范围决定，body.user和executionBrief不参与身份选择。
+
+
+### 11.4 当前代码与分层验证记录
+
+007 三库 DDL/catalog 已冻结；新增运行表与当前指针表，通过复合 FK 阻止跨空间/Trace/报告种类引用，直接 SQL 也不能改冻结输入、写终态或用半空 hash/ref 对绕过 CHECK。报告正文及 progress 在制品 I/O 前先校验来源权限、原 actor、租约与当前 head，I/O 后再次核对，撤权优先于制品损坏；创建也先要求 execute 与工作空间 write，不能由只读或无法录入自身 Trace 的凭据写入孤儿证据。kind、revision、requestKey 冲突及当前 head fencing 不依赖进程内 Map。
+
+原两个 AgentDebug/Skills API 已增加 core 早分支；可信 `withCoreReports` 同时给既有 report-store 读取、execution-resolver 和追问 formatter 使用，core 缺少上下文时不读旧 Prisma Trace。后台完成、失败、进度统一走 core CAS，模型/lease secret 不进入原前端 DTO。完整 Trace Evidence 在开始时绑定，原 AgentDebug 输入与最终报告文件均写读同一受信工作目录，不能只把通用 Agent 调到另一目录。
+
+Skills 核验继续使用原 LLM 业务步骤提取：相同 batch 大小、原提示词和合并逻辑，输入改为冻结 interactions，跳过旧 Session/ExecutionMatch 缓存；提取、计分、建议模型的自身 Trace 通过受信 recorder 进入 core。core 提取最多四个 batch 在途，所有 batch 的结果保持原序，失败录入也必须 await；legacy 分支的调度及业务流程不变。安全的 indexed 自身 Trace 回执随报告制品保存，上限 4096，仍受报告整体 8MiB 预算。
+
+进度事件按既有格式与脱敏规则保留，串行推进 revision；启动实际 Agent 前先完成权限 checkpoint。静默长任务每 15 秒以同队列 checkpoint 续租 15 分钟租约，队列/授权失败会中止共享 AbortSignal，传递到通用 Agent 及直接模型分支；不因默认报告允许长跑就人为缩短原 timeout。模型返回及全部自身 Trace 的 indexed 回执确认后才发布成功，不以 accepted/prepared 当成功。
+
+当前已取得的分层证据：报告领域 SQLite、实际 PostgreSQL、官方原生 openGauss SHA256 驱动各 19 项通过（含预授权不落制品、撤权优先、删除后发布、快照变更、CAS、SQL 约束与模糊提交恢复）；5→7 数据保留证据由 schema agent 保存。Next 可信上下文/报告生命周期 10 项、实际文件路径与冻结 LLM 提取/并发管线 4 项定向通过，与既有报告定向回归合计 37 项通过；这些模型响应属于受控 fixture，不是外部模型质量或生产容量验收。真实 OpenCode provider/文件工具、完整 Next HTTP、原浏览器及最终全量门槛由主任务继续验收并记录，尚不能据此声明本节或全产品迁移最终完成。
+
+#### 11.4.1 响应丢失的精确恢复
+
+Next 为每次 POST 固定私有 requestKey 和随机 leaseToken，同一次 RPC 最多三次重发完全相同的 JSON 字节；认证、权限、版本冲突及输入错误不重试。服务端只持久化 lease 的 SHA-256。重复 begin 需要当前 actor/授权/报告 head、一致的冻结输入和 operation body hash，并用同一 secret 取回该 running 运行的租约；不能依赖重新读取后来已改变的来源 Trace，也不会给其他调用方泄露租约。进程关闭后仍可读取持久化进度，过期运行需显式新请求重跑。
+
+PATCH 同样固定 requestKey、expected revision 和完整字段；operation key/base revision/body hash 随已有进度制品保存，终态发布也保留该私有回执。只有当前 head、原 actor/授权和 lease 均有效，且恰好推进一次 revision、回执内容逐项匹配时，才可重放已经提交的结果；不同字段、旧 head、已被后续操作推进的旧回执均拒绝。并发相同操作在最终写事务中也不会再次推进版本。回执和私有 lease 不进入原报告 DTO。DELETE 不盲重试，以免删掉新建的报告 head。
+
+定向测试模拟 begin、进度及终态提交后响应丢失，确认同一实际 Agent 只启动一次、进度不中断、完成结果可恢复；额外覆盖不同载荷重放、旧回执/新 head 拒绝与同时到达的重复提交。该协议覆盖有限网络重试，不声称 Next 进程崩溃后自动恢复仍在执行的模型任务。

@@ -36,6 +36,16 @@ class TraceEvidenceTests(unittest.TestCase):
         text=json.dumps(value);self.assertNotIn(self.token,text);self.assertNotIn(str(self.control.artifact_directory),text)
         self.assertEqual(value['manifest']['owner_principal_id'],'alice');self.assertEqual(len(value['snapshot_hash']),64)
 
+    def test_untyped_fault_reference_resolves_task_execution_and_internal_but_rejects_ambiguity(self):
+        trace=self.prepared()
+        for ref in ('task','root',trace):
+            self.assertEqual(self.evidence().read(self.token,'w',trace_ref=ref)['execution']['id'],'root')
+        other=bundle([node('another','root',root='another')]);other['rootExecutionId']='another'
+        result=self.transfer.import_bundle(self.token,'w',other);self.drain()
+        other_trace=self.metadata.resolve(self.token,'w',result['rootExecutionId'],'execution')['trace_id']
+        self.metadata.register_aliases_for_provisioning('w',other_trace,task_id='root')
+        with self.assertRaises(Conflict):self.evidence().read(self.token,'w',trace_ref='root')
+
     def test_hash_is_stable_across_credentials_and_read_times_but_annotations_change_it(self):
         self.prepared();first=self.evidence().read(self.token,'w',task_id='task')
         second=self.evidence().read(self.iam.issue_session_for_provisioning('alice'),'w',task_id='task')

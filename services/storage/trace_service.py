@@ -290,7 +290,8 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             except Forbidden:self.reply(403,{'error':'Forbidden'})
             except RateLimited:self.reply(429,{'error':'Too many login attempts'})
             except (CursorExpired,Conflict):self.reply(409,{'error':'State conflict; refresh or inspect batch status'})
-            except (ValueError,KeyError,TypeError,UnicodeError,RecursionError):self.reply(400,{'error':'Invalid bounded request'})
+            except (ValueError,KeyError,TypeError,UnicodeError,RecursionError) as exc:
+                self.reply(413 if getattr(exc,'status',None)==413 else 400,{'error':'Request exceeds budget' if getattr(exc,'status',None)==413 else 'Invalid bounded request'})
             except ClickHouseError:self.reply(503,{'error':'Analytical storage unavailable'})
             except Exception as exc:
                 status=getattr(exc,'status',503)
@@ -305,8 +306,9 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             from .compatibility import LegacyTraceReads
             from .compatibility_list import LegacyTraceList
             compat_path=pieces[2:]
-            deleting_root=self.command=='DELETE' and (compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
-            workspace=runtime.workspace(token,params.get('workspace_id'),'read' if self.command=='GET' else 'delete' if deleting_root else 'write')
+            report_path=compat_path[:2]==['observe','reports']
+            deleting_root=self.command=='DELETE' and (report_path or compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
+            workspace=runtime.workspace(token,params.get('workspace_id'),'read' if self.command=='GET' else 'delete' if deleting_root else 'execute' if report_path else 'write')
             metadata=TraceMetadata(runtime.control)
             listing=LegacyTraceList(runtime.queries,metadata)
             reads=LegacyTraceReads(runtime.queries,runtime.authorized)
@@ -316,10 +318,97 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 value,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return None
                 return value
+            if path[:2]==['fault','diagnosis'] and len(path)==3:
+                from .diagnosis import TraceDiagnosis,UNSET,MAX_HISTORY_BYTES
+                diagnosis=TraceDiagnosis(runtime.control);action=path[2]
+                def diagnosis_reply(result):
+                    for item in [result.get('session'),result.get('turn'),result.get('user_message'),result.get('assistant_message'),*result.get('messages',[])]:
+                        if item:
+                            for key in ('revision','seq','fence','lease_expires_at_ms'):
+                                if type(item.get(key)) is int:item[key]=str(item[key])
+                    respond(result,limit=MAX_HISTORY_BYTES+1024)
+                if action=='session' and self.command=='GET':
+                    diagnosis_reply(diagnosis.get_session(token,workspace,params.get('executionId')));return
+                if self.command!='POST':self.reply(405,{'error':'Method not allowed'});return
+                value,error=self.body(max_bytes=9*1024*1024)
+                if error:self.reply(error,{'error':'Bounded diagnosis body required'});return
+                for key in ('revision','expected_revision','turn_fence'):
+                    number=value.get(key)
+                    if number is None:continue
+                    if isinstance(number,str) and re.fullmatch('[1-9][0-9]{0,18}',number):value[key]=int(number)
+                    elif type(number) is not int or not 0<=number<=9007199254740991:raise ValueError('Exact decimal revision required')
+                if action=='session':
+                    result=diagnosis.ensure_session(token,workspace,value.get('executionId'),opencode_session_id=value.get('opencodeSessionId',UNSET),expected_revision=value.get('revision'))
+                    diagnosis_reply(result);return
+                if action=='begin':
+                    result=diagnosis.begin_turn(token,workspace,value.get('executionId'),request_key=value.get('request_key'),message=value.get('message'),evidence_hash=value.get('evidence_hash'),lease_owner=value.get('lease_owner'),
+                        opencode_session_id=value.get('opencode_session_id',UNSET),model_key=value.get('model_key'),context_hash=value.get('context_hash'),expected_revision=value.get('expected_revision'))
+                    diagnosis_reply(result);return
+                handle=dict(request_key=value.get('request_key'),lease_owner=value.get('lease_owner'),turn_fence=value.get('turn_fence'))
+                if action=='renew':result=diagnosis.renew(token,workspace,value.get('session_id'),**handle)
+                elif action=='checkpoint':result=diagnosis.checkpoint(token,workspace,value.get('session_id'),**handle,expected_revision=value.get('expected_revision'),content=value.get('content'))
+                elif action=='finish':
+                    upstream=value.get('opencode_session_id');proof=value.get('trace_receipt')
+                    with runtime.control.read_transaction() as con:
+                        session=con.execute('SELECT trace_id FROM trace_diagnosis_sessions WHERE workspace_id=? AND session_id=?',(workspace,value.get('session_id'))).fetchone()
+                        known=upstream is not None and con.execute("SELECT 1 FROM trace_diagnosis_messages WHERE workspace_id=? AND session_id=? AND role='assistant' AND state<>'streaming' AND opencode_session_id=?",(workspace,value.get('session_id'),upstream)).fetchone()
+                    if proof is not None or value.get('state')=='done' or (upstream is not None and not known):
+                        if session is None or not isinstance(proof,dict) or not isinstance(upstream,str):raise Conflict('Indexed Agent receipt required')
+                        from .agent_traces import AgentTraceRecorder
+                        AgentTraceRecorder(runtime.control,runtime.ingest).verify_receipt(token,workspace,proof,context=dict(parent_trace_id=session['trace_id'],diagnosis_session_id=value.get('session_id'),request_key=value.get('request_key')),task_id=upstream)
+                    result=diagnosis.finish_turn(token,workspace,value.get('session_id'),**handle,expected_revision=value.get('expected_revision'),content=value.get('content'),opencode_session_id=upstream,state=value.get('state'),error_code=value.get('error_code'))
+                else:self.reply(404,{'error':'Unknown diagnosis action'});return
+                diagnosis_reply(result);return
+            if path[:2]==['observe','reports'] and len(path) in (3,4):
+                from .trace_reports import TraceReports,MAX_REPORT_BYTES,MAX_PROGRESS_BYTES
+                reports=TraceReports(runtime.queries,runtime.authorized);kind=path[2]
+                def report_reply(result):
+                    if result.get('row') and type(result['row'].get('revision')) is int:result['row']['revision']=str(result['row']['revision'])
+                    respond(result,limit=MAX_REPORT_BYTES+MAX_PROGRESS_BYTES+1024*1024)
+                if len(path)==3 and self.command=='GET':report_reply(reports.read(token,workspace,params.get('executionId'),kind));return
+                if len(path)==3 and self.command=='DELETE' and kind=='agent-debug':respond(reports.delete(token,workspace,params.get('executionId')));return
+                value,error=self.body(max_bytes=50*1024*1024)
+                if error:self.reply(error,{'error':'Bounded report body required'});return
+                if len(path)==3 and self.command=='POST':
+                    report_reply(reports.begin(token,workspace,value.get('executionId'),kind,expected_snapshot_hash=value.get('expectedSnapshotHash'),interactions_hash=value.get('interactionsHash'),generator=value.get('generator'),force=value.get('force',False),request_key=value.get('requestKey'),payload=value.get('payload'),lease_token=value.get('leaseToken')));return
+                if len(path)==4 and self.command=='PATCH':
+                    number=value.get('revision')
+                    if isinstance(number,str) and re.fullmatch('[1-9][0-9]{0,18}',number):number=int(number)
+                    elif type(number) is not int or not 1<=number<=9007199254740991:raise ValueError('Exact decimal revision required')
+                    report_reply(reports.update(token,workspace,path[3],number,value.get('leaseToken'),payload=value.get('payload'),progress=value.get('progress'),status=value.get('status'),error_message=value.get('errorMessage'),request_key=value.get('requestKey')));return
+                self.reply(405,{'error':'Method not allowed'});return
             if path==['observe','evidence'] and self.command=='GET':
                 from .trace_evidence import TraceEvidence, MAX_EVIDENCE_BYTES
                 evidence=TraceEvidence(runtime.queries,runtime.authorized)
-                respond(evidence.read(token,workspace,task_id=params.get('taskId'),execution_id=params.get('executionId')),limit=MAX_EVIDENCE_BYTES+1024);return
+                respond(evidence.read(token,workspace,task_id=params.get('taskId'),execution_id=params.get('executionId'),trace_ref=params.get('traceRef')),limit=MAX_EVIDENCE_BYTES+1024);return
+            if path==['observe','agent-traces'] and self.command=='POST':
+                import time
+                from .agent_traces import AgentTraceRecorder,AgentTracePending,MAX_RECORD_BYTES
+                value,error=self.body(max_bytes=MAX_RECORD_BYTES+4096)
+                if error:self.reply(error,{'error':'Bounded Agent snapshot required'});return
+                context=value.get('context',{})
+                if not isinstance(context,dict):raise ValueError('Agent context required')
+                def verify_turn():
+                    if context.get('diagnosis_session_id'):
+                        from .diagnosis import TraceDiagnosis
+                        renewed=TraceDiagnosis(runtime.control).renew(token,workspace,context['diagnosis_session_id'],request_key=context.get('request_key'),lease_owner=context.get('lease_owner'),turn_fence=int(context.get('turn_fence')))
+                        if renewed['trace_id']!=context.get('parent_trace_id'):raise Forbidden('Agent parent does not match diagnosis')
+                    if context.get('report_run_id'):
+                        if context.get('diagnosis_session_id'):raise ValueError('Agent recording has conflicting origins')
+                        from .trace_reports import TraceReports
+                        report=TraceReports(runtime.queries,runtime.authorized).authorize_recording(token,workspace,context['report_run_id'],context.get('report_lease_token'))
+                        if report['parent_trace_id']!=context.get('parent_trace_id'):raise Forbidden('Agent parent does not match report')
+                verify_turn()
+                recorder=AgentTraceRecorder(runtime.control,runtime.ingest);result=recorder.record(token,workspace,value)
+                deadline=time.monotonic()+290
+                for batch in result['batch_refs']:
+                    while True:
+                        receipt=runtime.ingest.batch_status(token,workspace,batch['batch_id'])
+                        if receipt['state']=='indexed':break
+                        if receipt['state']=='failed' or time.monotonic()>=deadline:raise AgentTracePending('Agent snapshot is not indexed; retry identical input')
+                        runtime.stop.wait(.1)
+                        if runtime.stop.is_set():raise AgentTracePending('Agent snapshot is pending')
+                verify_turn();result['state']='indexed';respond(result);return
             if path[:3]==['observe','traces','import'] and len(path)==3 and self.command=='POST':
                 import time
                 from .trace_transfer import LegacyTraceTransfer, TraceTransferPending

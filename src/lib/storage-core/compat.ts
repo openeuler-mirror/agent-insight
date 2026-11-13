@@ -19,6 +19,15 @@ async function mappedIdentity(request:Request,resolver?:CompatibilityOptions['re
  if(!key || key.length>1024)throw new CompatibilityError(401,'API credential required');
  const authenticated=await (resolver || (async (input:Request)=>(await import('@/lib/auth/auth')).resolveUser(input)))(request);
  if(!authenticated.username || authenticated.apiKey!==key)throw new CompatibilityError(401,'Invalid existing credential');
+ const config=await identityMapping();
+ const digest=createHash('sha256').update(key).digest('hex');
+ const matches=config.bindings.filter(row=>row.legacy_username===authenticated.username && row.legacy_api_key_sha256===digest);
+ if(matches.length!==1)throw new CompatibilityError(403,'Identity has not been mapped');
+ const binding=matches[0];
+ if(!/^api_[A-Za-z0-9_-]{43}$/.test(binding.credential) || !binding.workspace_id || !binding.principal_id)throw new CompatibilityError(503,'Invalid mapping');
+ return binding;
+}
+async function identityMapping() {
  const file=process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE;
  if(!file || !path.isAbsolute(file))throw new CompatibilityError(503,'Explicit identity mapping required');
  let config:{version:number;core_origin:string;bindings:Binding[]};
@@ -27,29 +36,24 @@ async function mappedIdentity(request:Request,resolver?:CompatibilityOptions['re
   config=JSON.parse(await readFile(file,'utf8'));
   if(config.version!==1 || config.core_origin!==coreServiceOrigin() || !Array.isArray(config.bindings) || config.bindings.length>1000)throw new Error('Invalid mapping');
  } catch { throw new CompatibilityError(503,'Invalid private mapping'); }
- const digest=createHash('sha256').update(key).digest('hex');
- const matches=config.bindings.filter(row=>row.legacy_username===authenticated.username && row.legacy_api_key_sha256===digest);
- if(matches.length!==1)throw new CompatibilityError(403,'Identity has not been mapped');
- const binding=matches[0];
- if(!/^api_[A-Za-z0-9_-]{43}$/.test(binding.credential) || !binding.workspace_id || !binding.principal_id)throw new CompatibilityError(503,'Invalid mapping');
- return binding;
+ return config;
 }
 async function context(request:Request,options:CompatibilityOptions) {
  const header=request.headers.get('authorization');
- let token:string;let workspace:string|undefined;let principal:string|undefined;
+ let token:string;let workspace:string|undefined;let principal:string|undefined;let modelUsername:string|undefined;
  if(header!==null) {
   const match=/^Bearer (.+)$/.exec(header);
   if(!match || !IAM_TOKEN.test(match[1]))throw new CompatibilityError(401,'Invalid bearer');
   token=match[1];
  } else if(IAM_TOKEN.test(request.headers.get('x-witty-api-key') || ''))token=request.headers.get('x-witty-api-key')!;
- else { const binding=await mappedIdentity(request,options.resolveIdentity);token=binding.credential;workspace=binding.workspace_id;principal=binding.principal_id; }
+ else { const binding=await mappedIdentity(request,options.resolveIdentity);token=binding.credential;workspace=binding.workspace_id;principal=binding.principal_id;modelUsername=binding.legacy_username; }
  const {data:profile}=await requestCore('/v1/auth/me',{token},options.fetcher || fetch);
  if(typeof profile.principal_id!=='string' || !Array.isArray(profile.workspaces) || (principal && profile.principal_id!==principal))throw new CompatibilityError(403,'Mapped principal mismatch');
  const requested=new URL(request.url).searchParams.get('workspace_id');
  if(workspace && requested && requested!==workspace)throw new CompatibilityError(403,'Mapped workspace mismatch');
  workspace=workspace || requested || (typeof profile.workspace_id==='string'?profile.workspace_id:undefined);
  if(!workspace || !profile.workspaces.some((row:unknown)=>!!row && typeof row==='object' && 'workspace_id' in row && row.workspace_id===workspace))throw new CompatibilityError(403,'Workspace not granted');
- return {token,workspace,username:typeof profile.username==='string'?profile.username:null};
+ return {token,workspace,principal:profile.principal_id,username:modelUsername || (typeof profile.username==='string'?profile.username:null)};
 }
 export async function compatibleRequest(request:Request,target:string,fields:string[],options:CompatibilityOptions={}) {
  try {

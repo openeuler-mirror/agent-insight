@@ -5,7 +5,7 @@ description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace
 
 # 启用隔离的 Storage Core Trace 链路
 
-**产品兼容状态（2026-11-12）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。完整业务重构仍未完成，评测回流、诊断与其他领域不能据此视为已迁移。仅在隔离目标验证，不用于生产切换。
+**产品兼容状态（2026-11-13）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。诊断会话、自身Trace及Trace报告按参考中的独立协议接管；评测回流、DiagnosisRun下游及其他领域仍待接管。仅在隔离目标验证，不用于生产切换。
 
 模式开关只影响服务端。Trace接口使用当前IAM权限，配置缺失、身份未映射或后端故障明确失败，不回落旧Trace库。其他领域仍有既有数据路径，当前不是全产品切库。完整契约见[参考](../../reference/platform/storage-core.md)，实际覆盖见[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)。
 
@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-新库应用001–005，当前schema_version=5。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
+新库应用001–007，当前schema_version=7。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -44,7 +44,7 @@ from services.storage.iam import IAMStore
 from services.storage.clickhouse import ClickHouseStore
 
 root = Path('/absolute/path/to/isolated-core')
-control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至005
+control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至007
 facts = ClickHouseStore('http://127.0.0.1:8123',
     database='agent_insight_core_isolated', user='default',
     password=getpass.getpass('ClickHouse password (empty if configured): '))
@@ -116,7 +116,7 @@ bash scripts/develop_start.sh
 }
 ```
 
-该credential由可信配置端通过`issue_api_credential(session,'default',['read','write','delete'])`签发，不能使用前述write-only采集Key代替页面读取凭据。映射文件含明文代理凭据，只能保存在私有运行目录；服务端先验证旧Key，再校验代理凭据当前principal、workspace及权限，不能仅凭Key摘要跳过认证。此兼容配置是隔离验证手段，未来统一身份迁移仍须显式映射、轮换与撤权。
+该credential由可信配置端通过`issue_api_credential(session,'default',['read','write','execute','delete'])`签发，不能使用前述write-only采集Key代替页面读取凭据。映射文件含明文代理凭据，只能保存在私有运行目录；服务端先验证旧Key，再校验代理凭据当前principal、workspace及权限，不能仅凭Key摘要跳过认证。此兼容配置是隔离验证手段，未来统一身份迁移仍须显式映射、轮换与撤权。
 
 ## 4. 上报并区分接收与索引
 
@@ -143,3 +143,17 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 完整环境包括可用的Node LTS、Python的PyYAML/pydantic2、PowerShell7，以及Trae采集器编译产物。先用已安装、验证过的运行时，在该次测试进程设置PATH、PYTHON、AGENT_INSIGHT_FI_PYTHON、AGENT_INSIGHT_RAS_PYTHON；不要通过全局改配置或安装未获授权的依赖消除错误。PowerShell解析也使用临时HOME，避免宿主缓存/配置影响。Trae编译可使用仓库已有esbuild执行原compile参数，构建JS不代表完成VSIX打包或IDE验收。
 
 准备旧Prisma路径的全量用例时，只对新建的隔离SQLite文件执行`prisma db push --skip-generate`；不能将此命令用于core.db。HTTP测试在失败路径也必须关闭连接，不能让清理SQL错误阻止server.close。缺依赖、缺schema和固定sleep抖动分别报告，不通过跳过或延长无限等待冒充业务验证通过。完整测试计数与平台跳过范围以实施状态为准。
+
+
+## 验证诊断链路
+
+先在隔离目标备份并显式升级至007；不要把演示配置指向旧Prisma数据库或默认业务库。已有原登录Key的私有映射凭据需要read/write用于追问、execute用于报告、delete用于原有删除操作，仍受Trace owner/组角色约束。仅write采集Key不能作为页面账号。
+
+1. 用原账号登录，打开一条已授权Trace，再进入原故障诊断页。GET历史即使为空也应有已授权Trace，存储异常不能显示成“没有会话”。
+2. 发起追问，观察原ready/text/tool/reasoning/done事件；在Trace列表查到`fault-diagnosis-agent`自身运行，按原上游session ID打开，核对工具输入/输出与失败状态。
+3. 刷新页面、重启隔离存储服务后确认完整消息仍在。继续对话保持同一上游；显式新对话保留历史。成员无法读取他人私人Trace，组管理员可读组内历史，但跨actor续用已有上游当前返回409，需新建自己的对话。
+4. 通过原AgentDebug/SkillsAnalysis入口运行报告并重新载入。强制重跑或删除期间，旧后台任务不得覆盖当前结果；停用账号或删除Trace后，不再返回正文。
+
+验收必须注明是否调用真实模型。隔离fixture Agent可以验证真实SQLite/PG/openGauss事务、ClickHouse、HTTP/SSE及页面历史恢复，但不代表真实LLM诊断质量；最新实际覆盖见实施状态。旧诊断会话/报告不会自动导入，原数据与备份保留。
+
+按原流程登录即可；诊断请求沿用同一个Key，退出和账号切换行为保持原样。

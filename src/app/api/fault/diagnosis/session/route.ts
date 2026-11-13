@@ -16,10 +16,13 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prismaRaw } from '@/lib/storage/prisma';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCoreDiagnosisSession } from '@/lib/storage-core/diagnosis';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
+    if (isStorageCoreEnabled()) return handleCoreDiagnosisSession(req);
     try {
         const { searchParams } = new URL(req.url);
         const executionId = searchParams.get('executionId');
@@ -63,6 +66,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+    if (isStorageCoreEnabled()) return handleCoreDiagnosisSession(req);
     try {
         const body = await req.json();
         const { executionId, user, opencodeSessionId } = body;

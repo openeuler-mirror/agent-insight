@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-13。已完成001–005基础及原界面Trace兼容，本轮修复全量测试失败/超时并取得零失败结果，接通完整Trace取证与原评测草稿读取。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-13。已完成001–007基础、原界面Trace兼容、诊断自身Trace/会话/SSE与Trace报告接管。全量应用测试已恢复零失败，实际OpenCode及文件工具在隔离环境验证；详细范围与最新证据见文末。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
@@ -11,8 +11,8 @@
 ## 基线与交付
 
 - 工作分支`codex/storage-core-refactor`基于已同步的`upstream/master`：`298d1d5b10ab3ab67a955b41a1665b0cd4d26b54`，旧库基线96个Prisma模型。
-- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`、`003_projects.sql`、`004_observations.sql`、`005_trace_metadata.sql`与机器字段目录。
-- 当前物理核心为 **39张事务表+13张CH表=52张**：001原34张，002新增10张IAM表，003新增项目目录与workspace归属2张，004新增可靠采集与实体版本2张，005新增旧ID/标注/标签4张。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
+- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`、`003_projects.sql`、`004_observations.sql`、`005_trace_metadata.sql`、`006_trace_diagnosis.sql`、`007_diagnostic_reports.sql`与机器字段目录。
+- 当前物理核心为 **43张事务表+13张CH表=56张**：001含21张事务表及13张CH表，002新增10张IAM表，003新增项目目录与workspace归属2张，004新增可靠采集与实体版本2张，005新增旧ID/标注/标签4张，006新增诊断会话/消息2张，007新增报告运行/当前指针2张。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
 - `services/storage/control.py`、`relational.py`共享资产/发布/草稿/别名、RunPlan、任务lease/fence/取消、结果回执与Outbox原子性。PG/openGauss写锁粒度为正确性基线，尚未完成千级混合容量优化。
 - `iam.py`实现稳定主体、密码派生、会话/API凭据、用户组/成员CAS/最后Owner保护、空间归属、资源归属与显式共享/撤销。组管理员全组读取，普通成员本人/共享，viewer只读；无隐式平台管理员。
 - `authorized.py`统一校验元数据/列表/Span/正文/聚合/有界制品下载。CH读取和下载前后重新校验权限；慢I/O与密码派生不占写事务。私有评测gold不通过普通制品端口开放。
@@ -20,7 +20,7 @@
 - `migrations.py`与CLI实现已知连续前缀、checksum、显式迁移计划及原子升级。SQLite备份后锁源重核；服务端先取迁移表锁再建立快照，绑定备份源身份/历史/全部托管表内容证据。DDL不得自行提交事务。
 - `legacy.py`提供只读原始清点/导出/验证，保留活跃WAL、类型、物理列、重复行和摘要；`trace_import.py`新增限定Session/Execution允许字段的显式映射/dry-run/接收链路apply，不等于96模型语义迁移或生产切换。
 
-## 2026-11-13 全量测试恢复与统一取证（当前批次）
+## 2026-11-13 全量测试恢复与统一取证（前一批证据）
 
 ### 全量失败与超时已查明并修复
 
@@ -207,3 +207,35 @@ Unicode全文SHA256为`b19bcab25c703d64d7098782a18f74b7403a60f75bd4d0d234fb96088
 - 控制写锁细化、1000在线采集端混合读写压测、故障/HA及目标部署发行版恢复验收。
 
 原首批70项结果及IAM/002批次192项专项作为历史证据保留；default项目增量另行记录。原全量失败证据与总体设计仍保留，不将本批测试外推为完整重构/生产切换完成。
+
+
+## 2026-11-13 Trace 报告切片
+
+追加冻结 007 两表保存 AgentDebug/Skills 报告运行及当前版本指针，完整输入证据、报告和进度存入私有 hash 制品。原报告 API 的 core 早分支、可信读取上下文与后台 CAS 已接；故障诊断追问从同一空间/来源 Trace 权限下读报告。首轮旧任务不能覆盖新运行，删除后不能复活；发布前后重新授权，正文错误和网络失败不回读旧库。诊断执行器读写同一冻结工作目录；Skills 的原 LLM 业务步骤提取改用冻结 interactions，保留原提示词和输出合并，计分与建议流程继续使用共享冻结模型、取消信号与 core recorder。静默长任务按原超时运行，15 秒 checkpoint 续租并及时响应撤权。
+
+本子任务已跑 SQLite、实际 PostgreSQL、官方原生 openGauss SHA256 报告领域各 19 项，Next 生命周期 10 项、文件 I/O/业务提取 4 项，与既有报告定向回归合计 37 项通过；三库追加迁移保留旧表行指纹。POST/PATCH 在网络模糊提交后有限重试相同私有 operation，服务端严格匹配输入、版本、actor、租约及当前 head；重复提交不会再推进版本或再启动 Agent。workspace write 预检使不能录入自身 Trace 的凭证在模型启动前拒绝。模型管线定向测试使用可控响应，不能冒称真实 OpenCode 或外部模型已验收。原报告 DTO 与产品界面未重新设计，旧模式继续既有链路；完整应用测试、真实 OpenCode 及文件工具、最终 HTTP/浏览器验证见下方本批验收记录。
+
+本切片优先覆盖 Trace 页的诊断报告、Skills 核验与追问引用；涉及尚未迁移 Experiment/Case/Skill 优化写链的 DiagnosisRun 仍是后续范围。不得把报告存取或 §9 草稿构建写成评测回流、多版本评测集或全产品功能已切换完成。
+
+
+## 2026-11-13 诊断自身 Trace → 会话/SSE → 报告隔离验收
+
+本批接通上述诊断切片，未改变原产品页面、组件、导航、登录与交互。对比`789e8d047b6c9b80b2054c8eac666342cbdfe368`，`src/app/(main)`、`src/components`、`src/app/login`、`src/lib/auth`零diff；唯一客户端传输变动是让原`apiFetch`向`/api/fault/diagnosis/`携带既有Key，账号切换、退出及显式Key行为均有回归。
+
+自身运行保留实际provider原文、工具参数/结果、失败/中断及上游session身份；稳定Span和修订使完整快照重投不重复累计。工具carrier的结构投影按真实父Span回挂，首次读取无需正文；新Task/Skill保留原白名单结构字段，详情按单条精确版本读取。源hash/原文不变，同source revision重放不回写已存在facts/heads。早期已索引记录若未包含Task/Skill链接投影，完整正文仍准确保留，结构完整恢复需要后续显式重建派生投影，不自动重写旧数据。单工具或无carrier整组摘要超过2KiB时structure明确413，完整视图仍保留原文；core多工具分散到独立carrier，避免单assistant数组的2KiB瓶颈。
+
+006会话/消息和007报告运行/head只追加表，三套001–005 DDL原始字节均未改。隔离SQLite目标显式备份后由5升级至7，38张原非schema_meta表的行数/内容摘要一致；原marker保留。诊断消息按seq/CAS与lease/fence提交，SSE完成前核验自身Trace的真实indexed receipt；报告冻结完整输入、持续续租、发布前复核授权，force/delete阻止旧任务回写。运行器、模型与工作目录按可信账号冻结，禁止通过客户端user越权或转用成员模型凭据。组内管理员可读已授权历史，跨actor续用同一上游返回409，可新建本人的上游。
+
+| 验证层 | 最终结果及边界 |
+|---|---|
+| 应用全量`npm run test` | 5421条，5399通过、22明确跳过、0失败，161.766秒；Node24.22.3，独立HOME/SQLite，未改测试脚本或依赖 |
+| 存储Python全套 | 578条，402通过、176外部环境条件跳过、0失败，34.351秒；ResourceWarning作为错误；开启已有真实CH只读夹具，含万Span结构零正文读取和单条精确版本 |
+| 类型与退出清理 | `tsc --noEmit`通过；隔离/清理专项31通过。Prisma子进程关闭checkpoint后台写入；后台重试完成后再清库，超时仍恢复环境、断开连接并保留仍可能写入的隔离目录 |
+| 三库事务合同 | SQLite覆盖于全套；真实PG与官方原生openGauss分别验证诊断27项、AgentTrace16项、报告19项，及追加迁移保留旧行；分别记录的领域合同，不冒称每种组合都跑过整套产品 |
+| 真实运行链 | 真实OpenCode进程+本地OpenAI协议Mock+实际文件工具；两轮SSE为3次模型请求、1次工具调用、2次回答，历史4条；原AgentDebug runner为2次模型请求、1次文件写工具，报告done并有自身Trace receipt |
+| HTTP/原界面 | 原故障页读回报告与两轮历史；自身Trace工具计数1，展开得到原调用ID、参数和输出；原Skills入口在无Skill样例下明确skipped。非空Skill步骤提取及调用使用定向测试，未据此声称非空Skills全流程真实模型验收 |
+| 数据与进程隔离 | 新自身Trace在旧Prisma Execution/Session均为0行；本轮未对默认业务库迁移/清理。运行结束确认隔离OpenCode进程退出；仅保留验收用Next、存储与CH服务 |
+
+最终本机证据在`exclude/storage-core-diagnosis/20261113-jk0keh_o/`：`npm-certified.log`、`python-certified.log`、`tsc-verified.log`、`real-final-runtime-results.json`、`public-original-ui-data-final.json`、`acceptance-migration.json`、`preservation-final.json`，以及`final-desktop-diagnosis.png`、`final-desktop-self-trace-tool.png`。原生三库证据分别在其`relational-006`、`relational-007`、`relational-recorder-final`子目录。临时凭据、备份及原文不提交。
+
+验收服务为`http://localhost:58388`，沿用原`admin`登录方式；当前样例明确使用本地Mock模型，不代表外部真实LLM质量。旧聊天/报告尚未自动导入，生产切换、千级混合容量、DiagnosisRun/实验回流及其他尚未接管领域仍是后续任务，不能用本批零失败结果替代这些验收。

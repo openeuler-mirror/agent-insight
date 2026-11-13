@@ -123,6 +123,8 @@ class LegacyTraceReads:
             if row.get('execution_status'):interaction['trace_status']=row['execution_status']
         if row.get('execution_status')=='failed':interaction.update(status='error',trace_status='error')
         if row.get('error_type'):interaction['error']=row['error_type']
+        if isinstance(attrs.get('legacy.tool_calls'),list):interaction['tool_calls']=copy.deepcopy(attrs['legacy.tool_calls'])
+        elif kind=='tool' and isinstance(attrs.get('legacy.tool_call'),dict):interaction['tool_calls']=[copy.deepcopy(attrs['legacy.tool_call'])]
         semantic={key:value for key,value in interaction.items() if key not in {'_interactionIndex','_payloadDeferred','_payloadVersion'}}
         version={'format':1,'workspace_id':row.get('workspace_id'),'bucket':row.get('trace_bucket'),
                  'row_revision':str(row.get('revision')),'payload_revision':row['payload_revision'],'interaction':semantic}
@@ -292,29 +294,46 @@ class LegacyTraceReads:
             'cost':None,'timestamp':_iso(start)}
         base={'taskId':trace_id,'label':summary.get('label'),'query':summary.get('query'),'user':self._owner(summary),
               'startTime':start,'interactionCount':0,'interactions':[],'execution':execution}
-        rows=[];size=_bytes(base);position=-1
+        rows=[];tools={};size=_bytes(base);position=-1;selected=None
         for row in self._spans(token,workspace_id,route):
             attrs=_object(row.get('attributes_json'));attrs={**attrs,**_object(attrs.get('span'))}
+            if attrs.get('legacy.tool_structure_oversized') and view=='structure':
+                raise CompatibilityLimitError('Tool structure exceeds compact budget; use complete Trace view')
             if attrs.get('legacy.transfer_kind')=='carrier':
                 if attrs.get('legacy.transfer_has_session') is False:
                     self._postflight(token,workspace_id,route)
                     raise TraceNotFound('Original Session is unavailable')
+                if row.get('kind')=='tool' and row.get('parent_span_id'):
+                    call=self._metadata(row,-1,summary)['tool_calls'][0]
+                    dependency={'call':call,'span_id':row['span_id'],'revision':str(row.get('revision')),'payload_revision':row['payload_revision']}
+                    size+=_bytes(dependency)+1
+                    if size>MAX_STRUCTURE_BYTES:raise CompatibilityLimitError('Trace tool structure exceeds16MiB compatibility budget')
+                    tools.setdefault(row['parent_span_id'],[]).append(dependency)
                 continue
             position+=1
             metadata=self._metadata(row,position,summary)
             for field,source in [('query','legacy.session_query'),('label','legacy.session_label')]:
                 if base.get(field) is None and attrs.get(source) is not None:base[field]=attrs[source]
-            if view=='interaction':
-                if position!=index:continue
-                interaction=self._full(token,workspace_id,route,row,metadata,{})
-                result={'taskId':trace_id,'index':index,'interaction':interaction,'execution':execution}
-                if _bytes(result)>MAX_FULL_BYTES:raise CompatibilityLimitError('Interaction exceeds128MiB compatibility response budget')
-                self._postflight(token,workspace_id,route)
-                return result
+            if view=='interaction' and position==index:selected=(row,metadata)
             size+=_bytes(metadata)+1
             if size>MAX_STRUCTURE_BYTES:raise CompatibilityLimitError('Trace structure exceeds16MiB compatibility response budget')
-            rows.append(row);base['interactions'].append(metadata)
-        if view=='interaction':raise InvalidInteractionIndex('Interaction index out of range')
+            if view in {'full','interactions'}:rows.append(row)
+            base['interactions'].append(metadata)
+        for metadata in base['interactions']:
+            dependencies=tools.get(metadata['spanId'])
+            if not dependencies or metadata['role']!='assistant' or metadata.get('tool_calls'):continue
+            metadata['tool_calls']=[copy.deepcopy(item['call']) for item in dependencies]
+            # Hidden tool facts may change independently of the message payload.
+            version={'message':metadata['_payloadVersion'],'tools':dependencies}
+            metadata['_payloadVersion']=hashlib.sha256(json.dumps(version,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+        if view=='interaction':
+            if selected is None:raise InvalidInteractionIndex('Interaction index out of range')
+            row,metadata=selected
+            interaction=self._full(token,workspace_id,route,row,metadata,{})
+            result={'taskId':trace_id,'index':index,'interaction':interaction,'execution':execution}
+            if _bytes(result)>MAX_FULL_BYTES:raise CompatibilityLimitError('Interaction exceeds128MiB compatibility response budget')
+            self._postflight(token,workspace_id,route)
+            return result
         base['interactionCount']=len(base['interactions'])
         if view!='structure':
             size=_bytes({**base,'interactions':[]})
