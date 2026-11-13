@@ -184,7 +184,7 @@ export const zh = {
     daysAgo: '{{count}} 天前',
     lastExecuted: '最近执行',
     todayCalls: '今日',
-    agentTrace: '链路跟踪',
+    agentTrace: '链路追踪',
     diagnosis: '智能诊断',
     edit: '编辑',
     parentAgent: '所属主 Agent',
