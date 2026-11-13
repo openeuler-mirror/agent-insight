@@ -52,6 +52,12 @@ import type {
 
 const SKILL_OPT_AGENT_NAME = 'skill-optimizer-chat';
 
+// 交互式优化（含 repair 回合）统一的执行时限：关闭空闲看门狗，只保留 15 分钟整体截止。
+// 桥接层不得自建 AbortController 并把它塞进 chatOptions.signal——执行引擎会把它当成
+// 用户取消（EXECUTION_CANCELLED · opencode 执行已中止），静默/收尾延迟就被误报成失败。
+// 终止只允许来自调用方的 signal（真实取消）或引擎的 AGENT_TIMEOUT（明确超时）。
+const SKILL_OPT_CHAT_TIMEOUTS = { idleTimeoutMs: 0, streamTimeoutMs: 15 * 60 * 1000 };
+
 // 优化器改完后的【自验证】配置。SKILL_OPT_NO_VERIFY=1 整体关。
 // 行为门可复用来源实验或持久化基线，每例仅执行候选，故 MAX_CASES + BUDGET 双重封顶成本。
 const VERIFY_REPAIR_K = Number(process.env.SKILL_OPT_VERIFY_REPAIR_K) || 1;       // 自验证失败后最多 repair 几轮
@@ -309,8 +315,7 @@ async function streamSkillOptOpencodeImpl(
       sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
       system: systemPrompt,
       chatOptions: {
-        idleTimeoutMs: 0,
-        streamTimeoutMs: 15 * 60 * 1000,
+        ...SKILL_OPT_CHAT_TIMEOUTS,
         signal,
       },
       systemAgentName: SKILL_OPT_AGENT_NAME,
@@ -418,6 +423,9 @@ async function streamSkillOptOpencodeImpl(
               workspaceTag: threadId,
               sessionTitle: `skill-opt repair · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
               system: systemPrompt, interactionPolicy: 'auto-allow',
+              // repair 回合必须沿用主回合的时限与取消契约；否则会落回 runner 默认的
+              // 60 秒空闲看门狗，长思考会被当成失败结束。
+              chatOptions: { ...SKILL_OPT_CHAT_TIMEOUTS, signal },
               ...(modelOverride ? { model: modelOverride } : {}),
               handlers,
             }),
