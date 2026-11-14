@@ -211,6 +211,52 @@ class CompatibilityHTTPTests(TraceHTTPTests):
         status,exported,_=self.request('/v1/compat/observe/traces/export?workspace_id=w&executionId=root',self.token)
         self.assertEqual(status,200);self.assertEqual(exported['value']['executions'],source['executions'])
 
+class DatasetCompatibilityHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+
+    def test_dataset_crud_and_read_only_profile_use_live_asset_authorization(self):
+        record={'id':'dataset','user':'forged','name':'评测集','description':'','targetAgent':'','targetSkill':'','tags':[],
+            'fields':[],'cases':[],'datasetKind':'ideal_output','createdAt':'2026-11-13T00:00:00Z','updatedAt':'2026-11-13T00:00:00Z'}
+        path='/v1/compat/datasets?workspace_id=w'
+        status,body,_=self.request(path,self.token,{'action':'save','record':record,'operation_key':'create','operation_kind':'create'})
+        self.assertEqual(status,200,body);saved=body['value'];self.assertEqual(saved['dataset']['user'],'alice')
+        reader=self.iam.issue_api_credential(self.token,'w',['read'])
+        status,body,_=self.request(path,reader,{'action':'list','view':'summary','include_metadata':True})
+        self.assertEqual(status,200,body);self.assertEqual(body['value'][0]['id'],'dataset');self.assertIn('_storageEtag',body['value'][0])
+        status,body,_=self.request(path,reader,{'action':'save','record':record,'operation_key':'deny','operation_kind':'save','expected_revision':saved['revision']})
+        self.assertEqual(status,403)
+
+    def test_generation_rpc_forwards_action_without_requiring_write_for_catalog(self):
+        from unittest.mock import patch
+        reader=self.iam.issue_api_credential(self.token,'w',['read'])
+        with patch('services.storage.dataset_generation.DatasetGeneration.dispatch',return_value={'platforms':[],'agents':[]}) as dispatch:
+            status,body,_=self.request('/v1/compat/datasets/generation?workspace_id=w',reader,{'action':'catalog','from':'2026-11-01','to':'2026-11-13'})
+        self.assertEqual(status,200,body);self.assertEqual(body['value']['platforms'],[])
+        self.assertEqual(dispatch.call_args.args[:3],(reader,'w','catalog'))
+
+    def test_runtime_worker_also_services_dataset_projection_events(self):
+        import threading
+        from unittest.mock import patch
+        reached=threading.Event()
+        def project(*args,**kwargs):
+            reached.set();return False
+        with patch('services.storage.datasets.DatasetStore.project_once',side_effect=project,create=True):
+            try:
+                self.runtime.start_worker()
+                self.assertTrue(reached.wait(1),'Dataset outbox must be serviced by the running materializer')
+            finally:self.runtime.close()
+
+    def test_generation_safe_error_status_and_code_keep_original_contract(self):
+        from unittest.mock import patch
+        from services.storage.dataset_generation import GenerationRequestExpired,GenerationQueueFull,GenerationSourceUnavailable
+        for kind,status,code in [(GenerationRequestExpired,410,'REQUEST_EXPIRED'),(GenerationQueueFull,429,'QUEUE_LIMIT'),(GenerationSourceUnavailable,422,'SOURCE_NOT_AVAILABLE')]:
+            with self.subTest(code=code),patch('services.storage.dataset_generation.DatasetGeneration.dispatch',side_effect=kind('private diagnostic detail')):
+                actual,value,_=self.request('/v1/compat/datasets/generation?workspace_id=w',self.token,{'action':'create'})
+            self.assertEqual(actual,status,value);self.assertEqual(value.get('code'),code)
+            self.assertNotIn('private diagnostic detail',json.dumps(value))
+
+
 class DiagnosisCompatibilityHTTPTests(unittest.TestCase):
     setUp=TraceHTTPTests.setUp
     request=TraceHTTPTests.request

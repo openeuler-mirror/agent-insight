@@ -1,3 +1,4 @@
+import {getDatasetRepositoryContext,findCoreDataset} from '@/lib/storage-core/datasets'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -40,7 +41,7 @@ export async function publicBenchmarkDatasetMeta(
   user: string,
   datasetIds: string[],
 ): Promise<Map<string, PublicBenchmarkDatasetMeta>> {
-  if (!datasetIds.length) return new Map()
+  if (getDatasetRepositoryContext() || !datasetIds.length) return new Map()
   const rows = await prisma.benchmarkDataset.findMany({
     where: { user: { in: benchmarkDatasetOwners(user) }, agentEvalDatasetId: { in: datasetIds } },
     select: { agentEvalDatasetId: true, user: true, adapterKey: true, status: true, sourceJson: true },
@@ -87,6 +88,7 @@ export async function publicBenchmarkDatasetMeta(
 }
 
 export async function isReadOnlyBenchmarkDataset(user: string, datasetId: string): Promise<boolean> {
+  if (getDatasetRepositoryContext()) return (await findCoreDataset(datasetId))?.datasetKind === 'benchmark'
   return Boolean(await prisma.benchmarkDataset.findFirst({
     where: { user: { in: benchmarkDatasetOwners(user) }, agentEvalDatasetId: datasetId },
     select: { id: true },
@@ -97,6 +99,7 @@ export async function decoratePublicBenchmarkDatasets<T extends { id: string }>(
   user: string,
   datasets: T[],
 ): Promise<Array<T & Partial<PublicBenchmarkDatasetMeta>>> {
+  if (getDatasetRepositoryContext()) return datasets.map(dataset => ({...dataset, ...('datasetKind' in dataset && dataset.datasetKind === 'benchmark' ? {readOnly: true as const} : {})}))
   const meta = await publicBenchmarkDatasetMeta(user, datasets.map((item) => item.id))
   return datasets.map((dataset) => ({ ...dataset, ...(meta.get(dataset.id) || {}) }))
 }

@@ -1,16 +1,16 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-13。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，当前 **43 张事务表 + 13 张 ClickHouse 表，共56张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-14。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，当前 **46 张事务表 + 13 张 ClickHouse 表，共59张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这56张表对应**43张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这59张表对应**46张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共43表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共46表]
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
@@ -20,6 +20,10 @@ flowchart TB
     INGEST[可靠采集与实体版本 2表]
     META[Trace旧ID、标注与标签 4表]
     DIAG[诊断会话、消息、报告及当前指针 4表]
+    DATASET[Dataset兼容head、回执及生成任务 3表]
+    DATASET -->|同库身份、草稿与封存版本| ASSET
+    DATASET -->|实时资源授权| IAM
+    DATASET -->|同事务登记版本投影事件| SUPPORT
     DIAG -->|继承Trace ACL与删除屏障| SUPPORT
     META -->|同库外键与授权| SUPPORT
     IAM -->|决定访问空间与资源| BASE
@@ -36,7 +40,7 @@ flowchart TB
     TRACE -.->|版本化输入| DATA
     DATA -.->|评测输入| EVAL
   end
-  SUPPORT -.->|路由与Trace可靠物化；其他领域待接管| CH
+  SUPPORT -.->|Trace可靠物化与Dataset版本投影；其他领域待接管| CH
   ASSET -.->|数据集与评估器版本| DATA
   RUN -.->|run / result / selection 标识| EVAL
 ```
@@ -120,6 +124,14 @@ flowchart TB
 |---|---|---|---|
 | `ingest_batches` | 一个主体在空间中已持久接收的OTLP包、冻结计划及索引状态。 | `(W,batch_id)` | UK`(W,principal_id,receipt_key)`；IDX`(W,principal_id,accepted_at_ms)`查本人回执；IDX`(state,accepted_at_ms)`查进度 |
 | `obs_entity_heads` | Trace/Span当前内部版本、源版本和私有内容制品引用；不存正文。 | `(W,trace_id,entity_kind,entity_id)` | 无额外UK/IDX；按PK查实体，PK前缀可查同Trace的Span heads |
+
+#### Dataset兼容、版本操作与生成（3张，008–009）
+
+| 表 | 一行存什么 | PK | UK / 显式IDX及用途 |
+|---|---|---|---|
+| `dataset_compat_heads` | 原Dataset ID对应资产、当前草稿/封存版本、生命周期与CAS版本。 | `(W,dataset_id)` | UK`(W,asset_id)`、`(W,draft_id)`；IDX`(W,state,updated_at_ms,dataset_id)`：按空间和生命周期列出Dataset |
+| `dataset_operation_receipts` | 实际actor一次操作的请求摘要与精确结果引用。 | `(W,actor_principal_id,operation_kind,operation_key)` | 无额外UK；IDX`(W,dataset_id,created_at_ms)`：按Dataset查回执 |
+| `dataset_generation_jobs` | Trace生成请求的冻结配置/来源、阶段、租约、fence及结果。 | `(W,job_id)` | UK`(W,dataset_id)`、`(W,actor_principal_id,request_id)`、`(W,deletion_id)`；IDX`(W,actor_principal_id,status,created_at_ms)`：按actor和状态查任务 |
 
 ### ClickHouse：事实、排序键、分区与版本
 
@@ -279,7 +291,7 @@ flowchart TB
   PUB["eval_publication_<br/>members"] -.->|冻结的run/case/slot/result| RESULT
 ```
 
-图中“指标定义注册与版本协议”是未来控制面能力，当前52表内尚无独立指标定义注册表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
+图中“指标定义注册与版本协议”是未来控制面能力，历史005阶段的52表内尚无独立指标定义注册表；当前009阶段的59表同样未增加该表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
 
 跨CH表读取还要知道目标的bucket；仅有`result_id`、`snapshot_id`或`release_id`通常不足以做精确分区读取。清单/发布事件需要携带路由，并校验workspace、内容hash、精确版本和可见性。此批表结构不提供跨库FK或全域ID到bucket的自动解析器，相关领域接管时须落实，不能靠全库扫描补上协议。
 
@@ -302,7 +314,8 @@ flowchart TB
 
 - 001首批事务表：`schema_meta`, `workspaces`, `asset_identities`, `asset_releases`, `asset_drafts`, `asset_release_dependencies`, `asset_release_seals`, `asset_aliases`, `runs`, `run_inputs`, `work_items`, `work_attempts`, `result_receipts`, `result_selections`, `outbox_events`, `inbox_receipts`, `trace_locators`, `snapshot_manifests`, `artifact_metadata`, `deletion_requests`, `migration_checkpoints`。
 - 002追加事务表：`iam_principals`, `iam_password_credentials`, `iam_api_credentials`, `iam_external_identities`, `iam_sessions`, `iam_groups`, `iam_group_memberships`, `iam_workspace_bindings`, `iam_resource_access`, `iam_resource_grants`。
-- 003追加事务表：`projects`, `project_workspaces`；004追加事务表：`ingest_batches`, `obs_entity_heads`。005追加事务表：`trace_legacy_ids`, `trace_annotations`, `trace_tags`, `trace_tag_links`。006追加`trace_diagnosis_sessions`、`trace_diagnosis_messages`；007追加`diagnostic_report_runs`、`diagnostic_report_heads`。上述共43张事务表。
+- 003追加事务表：`projects`, `project_workspaces`；004追加事务表：`ingest_batches`, `obs_entity_heads`。005追加事务表：`trace_legacy_ids`, `trace_annotations`, `trace_tags`, `trace_tag_links`。006追加`trace_diagnosis_sessions`、`trace_diagnosis_messages`；007追加`diagnostic_report_runs`、`diagnostic_report_heads`。上述为截至007的历史43张事务表。
+- 008追加`dataset_compat_heads`、`dataset_operation_receipts`；009追加`dataset_generation_jobs`。当前001–009合计46张事务表，连同13张CH表共59张。
 - 当前CH表：`obs_payload_manifests`, `obs_trace_current`, `obs_span_current`, `obs_payload_chunks`, `obs_events`, `obs_entity_relations`, `snapshot_nodes`, `dataset_sample_revisions`, `dataset_release_members`, `eval_result_facts`, `eval_metric_facts`, `eval_result_selection_current`, `eval_publication_members`。
 - 仍待后续批次：账号恢复与外部身份业务入口、资产异步发布、插件与指标注册、run groups、人工裁决/评论、其他领域标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
 
@@ -1184,13 +1197,15 @@ CHECK：`length(manifest_json) > 0`。
 - [002 IAM目录](../../../services/storage/schema/iam-catalog.json)
 - [003项目目录](../../../services/storage/schema/project-catalog.json)
 - [004采集目录](../../../services/storage/schema/ingest-catalog.json)
+- [008 Dataset资产目录](../../../services/storage/schema/dataset-catalog.json)
+- [009 Dataset生成目录](../../../services/storage/schema/dataset-generation-catalog.json)
 - [CH 机器目录](../../../services/storage/schema/clickhouse-catalog.json)
 - [SQLite DDL](../../../services/storage/schema/sqlite/001_core.sql)
 - [PostgreSQL DDL](../../../services/storage/schema/postgresql/001_core.sql)
 - [openGauss DDL](../../../services/storage/schema/opengauss/001_core.sql)
 - [ClickHouse DDL](../../../services/storage/schema/clickhouse/001_core.sql)
 
-表计数不包含由部署层生成的 Distributed/Replicated 代理、索引、触发器和物化视图。首轮是核心存储基础，不表示全平台 59 张逻辑表已细化或全部业务已迁移。
+表计数不包含由部署层生成的 Distributed/Replicated 代理、索引、触发器和物化视图。当前001–009的59张物理核心表与前稿59张逻辑表不是逐项等同清单；首轮基础和后续增量均不表示全部业务已迁移。
 
 ## 约束验证入口
 
@@ -1200,7 +1215,7 @@ CHECK：`length(manifest_json) > 0`。
 
 ## IAM / 用户组增量核心表（002_iam）
 
-日期：2026-11-12。本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，截至002时核心物理表为 **31 张事务表 + 13 张 CH 表 = 44 张**；003项目预留后为33张事务表+13张CH表=46张；截至004可靠采集时为35张事务表+13张CH表=48张；005后为39张事务表+13张CH表=52张；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
+历史计数（日期：2026-11-12）：本节在首批 21 张事务表 + 13 张 CH 表上增加 **10 张 IAM 事务表**，截至002时核心物理表为 **31 张事务表 + 13 张 CH 表 = 44 张**；003项目预留后为33张事务表+13张CH表=46张；截至004可靠采集时为35张事务表+13张CH表=48张；005后为39张事务表+13张CH表=52张；不是把完整产品的后续领域表全部实现。`001_core.sql` 字节和校验和保持不变，本节仅使用追加迁移 `002_iam.sql`。
 
 IAM 主体是全局稳定 principal，组成员在 group 中授权，workspace 通过不可变 binding 属于一个 group 或一个 personal principal；资源 ACL 使用 workspace/kind/id 三元身份。不是给原 user 字符串增加一个 group 字段。
 
@@ -1693,7 +1708,7 @@ IDX：`idx_trace_tag_links_tag(workspace_id,tag_id,trace_id)`。
 
 ## 006–007 诊断会话、消息与报告
 
-006、007仅追加四张事务表，001–005保持原字节。会话/消息按Trace授权；报告每次运行冻结完整证据，payload/progress保存在私有hash制品；诊断Agent自身Trace仍写既有ClickHouse Span/正文表，不创建巨型Trace JSON事务列。以下逻辑类型、CHECK、PK/UK/FK及索引来自`diagnosis-catalog.json`和`report-catalog.json`，SQLite的BIGINT映射INTEGER并检查存储类型，PG/openGauss为BIGINT。
+历史范围：截至007为43张事务表+13张CH表=56张；008/009后的当前计数见文首。006、007仅追加四张事务表，001–005保持原字节。会话/消息按Trace授权；报告每次运行冻结完整证据，payload/progress保存在私有hash制品；诊断Agent自身Trace仍写既有ClickHouse Span/正文表，不创建巨型Trace JSON事务列。以下逻辑类型、CHECK、PK/UK/FK及索引来自`diagnosis-catalog.json`和`report-catalog.json`，SQLite的BIGINT映射INTEGER并检查存储类型，PG/openGauss为BIGINT。
 
 ```mermaid
 erDiagram
@@ -1839,3 +1854,221 @@ FK：`(workspace_id,trace_id,kind,report_id) → diagnostic_report_runs(workspac
 - 所有begin/renew/checkpoint/finish复核实时Trace ACL与删除屏障；原user/executionBrief不参与身份和模型配置选择。相同上游只允许其实际actor续聊；组管理员可以查看成员历史，并以null新建自己的上游，暂不共享跨用户OpenCode运行目录或模型凭据。
 - 报告以完整TraceEvidence冻结输入，head+revision+私有leaseToken栅栏发布；强制重跑/删除后旧job更新冲突，进度不影子写旧Prisma。精确重试、预算和故障恢复合同见phase6 §10/§11。
 - 旧Prisma诊断会话/消息/报告未自动导入；默认业务库不升级，不推导旧payload.user归属。显式历史映射/隔离导入、评测DiagnosisRun下游仍按各自领域推进，四表本身不代表全产品重构完成。
+
+
+## 008–009 Dataset版本资产、操作回执与生成任务
+
+本节按冻结的[008机器目录](../../../services/storage/schema/dataset-catalog.json)、[009机器目录](../../../services/storage/schema/dataset-generation-catalog.json)及三库DDL描述。008新增2表，009新增1表；**当前001–009合计46张事务表+13张CH表=59张**。历史计数：截至007为43+13=56；截至008为45+13=58。当前物理表数与前稿逻辑表数不是逐项等同清单，也不表示旧业务数据已自动迁入。
+
+### 三库字段类型与约束口径
+
+- 下表逐字段列出SQLite、PostgreSQL、openGauss的实际物理类型。TEXT为UTF-8文本；数字列在SQLite为INTEGER，在PG/openGauss为带符号64位BIGINT。日期为UTC Unix毫秒；DDL不自动生成ID或时间。
+- “—”表示没有DDL DEFAULT，写入须提供非NULL字段；nullable列省略时为NULL。008的state/revision/lifecycle_revision/read_only和009的attempt_count是本节仅有的显式默认值。
+- SQLite为全部17个整数列另加typeof检查；nullable整数允许NULL，非NULL时必须为integer。009部分NOT NULL列采用`列 IS NULL OR typeof(列)='integer'`，与NOT NULL联合后仍禁止NULL。
+- 下文CHECK清单逐项来自PG/openGauss共同DDL；SQLite使用GLOB代替008的小写hex正则，并叠加上述类型检查。009的摘要字段主要检查长度及空值配对，不能将领域层SHA-256、标识符格式、阶段映射、授权或租约校验表述为已有SQL CHECK。
+- 三表共9组FK，显式或默认ON DELETE NO ACTION，无级联删除。正文、来源索引、gold保存在私有hash制品中，TEXT ref不是到artifact_metadata的数据库FK。
+
+### 008–009关系图
+
+实线为子表指向被引用表的实际FK；虚线为领域/异步关联。workspace、asset和release的复合列不得省略。IAM owner/共享权限为多态逻辑关联，不由created_by或body.user授予。
+
+```mermaid
+flowchart TB
+  HEAD[dataset_compat_heads]
+  RECEIPT[dataset_operation_receipts]
+  JOB[dataset_generation_jobs]
+  ASSET[asset_identities]
+  DRAFT[asset_drafts]
+  SEAL[asset_release_seals]
+  PRINCIPAL[iam_principals]
+  ACL[iam_resource_access / grants]
+  OUTBOX[outbox_events]
+  OBJECT[私有manifest / public输入 / gold / capture制品]
+  SAMPLE[CH dataset_sample_revisions]
+  MEMBER[CH dataset_release_members]
+  HEAD -->|workspace_id + asset_id| ASSET
+  HEAD -->|workspace_id + draft_id| DRAFT
+  HEAD -->|workspace_id + asset_id + release_id| SEAL
+  HEAD -->|created_by / deleted_by| PRINCIPAL
+  RECEIPT -->|workspace_id + dataset_id| HEAD
+  RECEIPT -->|actor_principal_id| PRINCIPAL
+  JOB -->|workspace_id + dataset_id| HEAD
+  JOB -->|actor_principal_id| PRINCIPAL
+  ACL -.->|resource_kind=asset及同workspace / asset_id| HEAD
+  HEAD -.->|manifest_hash / manifest_ref| OBJECT
+  RECEIPT -.->|response_hash / response_ref| OBJECT
+  JOB -.->|config / members / summary / capture引用| OBJECT
+  HEAD -.->|同事务登记版本投影事件| OUTBOX
+  JOB -.->|完成与Dataset版本 / head / receipt同事务| HEAD
+  OUTBOX -.->|先写样本修订，固定重试版本| SAMPLE
+  OUTBOX -.->|样本完整后写固定release成员| MEMBER
+```
+
+### dataset_compat_heads
+
+| 字段 | SQLite | PostgreSQL | openGauss | 可空 | DDL默认 | 含义与约束 |
+|---|---|---|---|---|---|---|
+| `workspace_id` | TEXT | TEXT | TEXT | 否 | — | 租户边界，复合FK保持同空间。 |
+| `dataset_id` | TEXT | TEXT | TEXT | 否 | — | 原Dataset DTO公开ID；与内部asset_id分开保存。 |
+| `asset_id` | TEXT | TEXT | TEXT | 否 | — | 稳定dataset资产ID；内部名称使用稳定key，允许DTO显示名称重复。 |
+| `draft_id` | TEXT | TEXT | TEXT | 否 | — | 当前草稿；插入触发器额外校验属于同一asset。 |
+| `release_id` | TEXT | TEXT | TEXT | 否 | — | 当前内部封存版本；复合FK保证属于本asset。 |
+| `manifest_hash` | TEXT | TEXT | TEXT | 否 | — | 当前私有成员manifest制品摘要；SQL保证小写64hex。 |
+| `manifest_ref` | TEXT | TEXT | TEXT | 否 | — | 非空私有manifest引用，不作为公开下载地址。 |
+| `state` | TEXT | TEXT | TEXT | 否 | 'active' | active或deleted；tombstone保留原ID和历史版本。 |
+| `revision` | INTEGER | BIGINT | BIGINT | 否 | 1 | head CAS版本；每次更新恰好+1。 |
+| `lifecycle_revision` | INTEGER | BIGINT | BIGINT | 否 | 1 | 删除/恢复屏障；state改变恰好+1，state未变保持原值。 |
+| `read_only` | INTEGER | BIGINT | BIGINT | 否 | 0 | 0/1；DDL禁止1降到0，领域层执行builtin/benchmark写保护。 |
+| `generation_source` | TEXT | TEXT | TEXT | 是 | — | 生成来源标记，可NULL；是否允许普通编辑由领域层判断。 |
+| `generation_status` | TEXT | TEXT | TEXT | 是 | — | 生成展示状态，可NULL；没有SQL枚举CHECK，由生成协议维护。 |
+| `created_by` | TEXT | TEXT | TEXT | 否 | — | 首次创建的真实principal；不可变审计字段，授权仍以实时IAM owner为准。 |
+| `deleted_by` | TEXT | TEXT | TEXT | 是 | — | deleted时必填、active时必须NULL；实际删除principal。 |
+| `deleted_at_ms` | INTEGER | BIGINT | BIGINT | 是 | — | deleted时必填非负毫秒，active时必须NULL。 |
+| `created_at_ms` | INTEGER | BIGINT | BIGINT | 否 | — | 首次创建UTC Unix毫秒；非负、不可变。 |
+| `updated_at_ms` | INTEGER | BIGINT | BIGINT | 否 | — | head更新UTC Unix毫秒；不早于created，更新触发器禁止回退。 |
+
+PK：`(workspace_id,dataset_id)`。
+
+UK：`(workspace_id,draft_id)`；`(workspace_id,asset_id)`。
+
+FK（全部NO ACTION）：
+
+- `(deleted_by) → iam_principals(principal_id)`。
+- `(created_by) → iam_principals(principal_id)`。
+- `(workspace_id,asset_id,release_id) → asset_release_seals(workspace_id,asset_id,release_id)`。
+- `(workspace_id,draft_id) → asset_drafts(workspace_id,draft_id)`。
+- `(workspace_id,asset_id) → asset_identities(workspace_id,asset_id)`。
+
+显式IDX：`idx_dataset_heads_state(workspace_id,state,updated_at_ms,dataset_id)`。PK/UK另形成对应唯一索引。
+
+共同SQL CHECK（SQLite的008 hex检查以GLOB等价表达）：
+
+- `state IN ('active','deleted')`。
+- `revision BETWEEN 1 AND 9223372036854775807`。
+- `lifecycle_revision BETWEEN 1 AND 9223372036854775807`。
+- `read_only IN (0,1)`。
+- `length(manifest_hash)=64 AND manifest_hash !~ '[^0-9a-f]'`。
+- `length(dataset_id)>0 AND length(manifest_ref)>0`。
+- `created_at_ms>=0 AND updated_at_ms>=created_at_ms`。
+- `(state='active' AND deleted_by IS NULL AND deleted_at_ms IS NULL) OR (state='deleted' AND deleted_by IS NOT NULL AND deleted_at_ms IS NOT NULL AND deleted_at_ms>=0)`。
+
+触发器：插入时校验asset.kind为dataset且draft属于同一asset；更新禁止改workspace_id、dataset_id、asset_id、draft_id、created_by、created_at_ms，revision恰好+1，updated_at_ms不回退，read_only不能从1变0。state改变时lifecycle_revision恰好+1，state未变时保持原值。禁止DELETE；软删除/恢复保留历史release与run输入引用。
+
+### dataset_operation_receipts
+
+| 字段 | SQLite | PostgreSQL | openGauss | 可空 | DDL默认 | 含义与约束 |
+|---|---|---|---|---|---|---|
+| `workspace_id` | TEXT | TEXT | TEXT | 否 | — | 租户边界；通过复合FK绑定同空间Dataset。 |
+| `actor_principal_id` | TEXT | TEXT | TEXT | 否 | — | 实际操作主体；不取body.user。 |
+| `operation_kind` | TEXT | TEXT | TEXT | 否 | — | 非空操作种类，与actor及operation_key共同确定幂等身份。 |
+| `operation_key` | TEXT | TEXT | TEXT | 否 | — | 非空稳定操作键；网络重试不重新生成。 |
+| `request_hash` | TEXT | TEXT | TEXT | 否 | — | 原稳定操作请求SHA-256，小写64hex；不同请求复用同键冲突。 |
+| `dataset_id` | TEXT | TEXT | TEXT | 否 | — | 该操作关联的原Dataset ID。 |
+| `response_hash` | TEXT | TEXT | TEXT | 否 | — | 精确结果依赖的私有manifest/制品摘要，小写64hex；配合response_meta_json重建原响应。 |
+| `response_ref` | TEXT | TEXT | TEXT | 否 | — | 非空私有制品引用；不返回真实路径给公开DTO。 |
+| `response_meta_json` | TEXT | TEXT | TEXT | 否 | — | 非空私有响应元数据JSON文本，含当次revision/lifecycle及操作结果；结构和预算由内核验证。 |
+| `created_at_ms` | INTEGER | BIGINT | BIGINT | 否 | — | 回执提交UTC Unix毫秒，非负。 |
+
+PK：`(workspace_id,actor_principal_id,operation_kind,operation_key)`。
+
+UK：无额外唯一约束。
+
+FK（全部NO ACTION）：
+
+- `(actor_principal_id) → iam_principals(principal_id)`。
+- `(workspace_id,dataset_id) → dataset_compat_heads(workspace_id,dataset_id)`。
+
+显式IDX：`idx_dataset_receipts_dataset(workspace_id,dataset_id,created_at_ms)`。PK/UK另形成对应唯一索引。
+
+共同SQL CHECK（SQLite的008 hex检查以GLOB等价表达）：
+
+- `length(request_hash)=64 AND request_hash !~ '[^0-9a-f]'`。
+- `length(response_hash)=64 AND response_hash !~ '[^0-9a-f]'`。
+- `length(operation_kind)>0 AND length(operation_key)>0 AND length(response_ref)>0 AND length(response_meta_json)>0`。
+- `created_at_ms>=0`。
+
+触发器禁止UPDATE和DELETE，操作身份、request_hash、响应引用及元数据提交后不可改写。幂等返回在CAS之前，但不绕过实时授权：含正文的save/restore/no-op回执需要read；删除回执检查delete，不额外要求write。全重复回流可只登记原head/root的回执，不增加业务版本或更新时间。
+
+### dataset_generation_jobs
+
+| 字段 | SQLite | PostgreSQL | openGauss | 可空 | DDL默认 | 含义与约束 |
+|---|---|---|---|---|---|---|
+| `workspace_id` | TEXT | TEXT | TEXT | 否 | — | 租户边界；通过Dataset复合FK约束同空间。 |
+| `job_id` | TEXT | TEXT | TEXT | 否 | — | 稳定任务ID，不可变。 |
+| `dataset_id` | TEXT | TEXT | TEXT | 否 | — | 关联Dataset公开ID；一个Dataset最多一条生成任务账本。 |
+| `actor_principal_id` | TEXT | TEXT | TEXT | 否 | — | 实际发起principal；恢复、读取来源、发布需同actor的实时凭据。 |
+| `request_id` | TEXT | TEXT | TEXT | 否 | — | 生成请求ID；与workspace/actor组成唯一幂等键，UUIDv7格式和期限由领域层验证。 |
+| `request_hash` | TEXT | TEXT | TEXT | 否 | — | 冻结请求摘要；SQL仅校验长度64，SHA-256内容由内核计算/验证。 |
+| `config_hash` | TEXT | TEXT | TEXT | 否 | — | 冻结配置制品摘要；SQL仅校验长度64。 |
+| `config_ref` | TEXT | TEXT | TEXT | 否 | — | 冻结配置私有引用，SQL要求非空，更新不可替换。 |
+| `members_hash` | TEXT | TEXT | TEXT | 否 | — | 冻结来源成员清单摘要；SQL仅校验长度64。 |
+| `members_ref` | TEXT | TEXT | TEXT | 否 | — | 冻结来源成员清单私有引用，SQL要求非空，更新不可替换。 |
+| `status` | TEXT | TEXT | TEXT | 否 | — | queued/running/succeeded/failed/deleted；与lease、结果和删除ID交叉约束。 |
+| `stage` | TEXT | TEXT | TEXT | 否 | — | 原阶段字符串；没有SQL枚举CHECK，领域层校验与stage_index的配对。 |
+| `stage_index` | INTEGER | BIGINT | BIGINT | 否 | — | 0..6；领域阶段read/dedup/stratify/sample/convert/save/complete，queued/failed由任务状态处理。 |
+| `generated_count` | INTEGER | BIGINT | BIGINT | 否 | — | 已提交生成Case数，非负；完成时按实际cases更新。 |
+| `attempt_count` | INTEGER | BIGINT | BIGINT | 否 | 0 | 恢复/接管尝试计数，非负；不是墙钟或fence。 |
+| `epoch` | INTEGER | BIGINT | BIGINT | 否 | — | 持久worker fence；SQL允许0且禁止回退，认领后领域层要求有效正数epoch。 |
+| `revision` | INTEGER | BIGINT | BIGINT | 否 | — | 任务CAS版本，至少1；更新必须恰好+1。 |
+| `dataset_revision` | INTEGER | BIGINT | BIGINT | 否 | — | 当前绑定的Dataset head CAS版本，至少1；原子发布时随head推进。 |
+| `dataset_lifecycle_revision` | INTEGER | BIGINT | BIGINT | 否 | — | 创建任务时锁定的Dataset生命周期，至少1且不可变；恢复Dataset不复活旧worker。 |
+| `lease_owner` | TEXT | TEXT | TEXT | 是 | — | running必填，其余status必须NULL；与lease_until_ms成对。 |
+| `lease_until_ms` | INTEGER | BIGINT | BIGINT | 是 | — | 租约截止UTC Unix毫秒；非NULL时非负，是否过期及当前owner由领域层检查。 |
+| `summary_hash` | TEXT | TEXT | TEXT | 是 | — | 可空summary制品摘要；非NULL时长度64，与summary_ref成对。 |
+| `summary_ref` | TEXT | TEXT | TEXT | 是 | — | 可空私有summary引用；与summary_hash同时空或非空。 |
+| `capture_hash` | TEXT | TEXT | TEXT | 是 | — | 可空已捕获来源索引摘要；非NULL时长度64，与capture_ref成对。 |
+| `capture_ref` | TEXT | TEXT | TEXT | 是 | — | 可空capture索引私有引用；与capture_hash成对，可随受信捕获推进。 |
+| `result_hash` | TEXT | TEXT | TEXT | 是 | — | 成功/失败终态必填长度64的结果摘要，供精确重试；其他状态可NULL。 |
+| `error_code` | TEXT | TEXT | TEXT | 是 | — | 可空失败代码；具体值由领域层校验，SQL无枚举CHECK。 |
+| `error_message` | TEXT | TEXT | TEXT | 是 | — | 可空失败说明；预算/脱敏由领域层执行，SQL无长度CHECK。 |
+| `deletion_id` | TEXT | TEXT | TEXT | 是 | — | deleted必填，其他status必须NULL；非NULL值在workspace内唯一。 |
+| `created_at_ms` | INTEGER | BIGINT | BIGINT | 否 | — | 创建UTC Unix毫秒；非负、不可变。 |
+| `updated_at_ms` | INTEGER | BIGINT | BIGINT | 否 | — | 更新UTC Unix毫秒；SQL要求不早于created，领域写入使用单调时钟高水位。 |
+
+PK：`(workspace_id,job_id)`。
+
+UK：`(workspace_id,dataset_id)`；`(workspace_id,actor_principal_id,request_id)`；`(workspace_id,deletion_id)`。
+deletion_id可NULL，多个NULL不冲突；只有非NULL删除ID在同workspace内唯一。
+
+FK（全部NO ACTION）：
+
+- `(workspace_id,dataset_id) → dataset_compat_heads(workspace_id,dataset_id)`。
+- `(actor_principal_id) → iam_principals(principal_id)`。
+
+显式IDX：`idx_dataset_generation_actor(workspace_id,actor_principal_id,status,created_at_ms)`。PK/UK另形成对应唯一索引。
+
+共同SQL CHECK（SQLite的008 hex检查以GLOB等价表达）：
+
+- `status IN ('queued','running','succeeded','failed','deleted')`。
+- `stage_index BETWEEN 0 AND 6`。
+- `generated_count>=0`。
+- `attempt_count>=0`。
+- `epoch>=0`。
+- `revision>=1`。
+- `dataset_revision>=1`。
+- `dataset_lifecycle_revision>=1`。
+- `created_at_ms>=0`。
+- `updated_at_ms>=created_at_ms`。
+- `length(request_hash)=64 AND length(config_hash)=64 AND length(members_hash)=64`。
+- `(lease_owner IS NULL AND lease_until_ms IS NULL) OR (lease_owner IS NOT NULL AND lease_until_ms IS NOT NULL)`。
+- `(summary_hash IS NULL AND summary_ref IS NULL) OR (summary_hash IS NOT NULL AND summary_ref IS NOT NULL AND length(summary_hash)=64)`。
+- `(capture_hash IS NULL AND capture_ref IS NULL) OR (capture_hash IS NOT NULL AND capture_ref IS NOT NULL AND length(capture_hash)=64)`。
+- `(status='running' AND lease_owner IS NOT NULL AND lease_until_ms IS NOT NULL) OR (status<>'running' AND lease_owner IS NULL AND lease_until_ms IS NULL)`。
+- `(status='deleted')=(deletion_id IS NOT NULL)`。
+- `status NOT IN ('succeeded','failed') OR (result_hash IS NOT NULL AND length(result_hash)=64)`。
+- `lease_until_ms IS NULL OR lease_until_ms>=0`。
+- `length(config_ref)>0 AND length(members_ref)>0`。
+
+更新触发器固定workspace_id、job_id、dataset_id、actor_principal_id、request_id、request_hash、config_hash、config_ref、members_hash、members_ref、created_at_ms及dataset_lifecycle_revision；revision每次恰好+1，epoch不回退。succeeded/failed/deleted不能回queued或running、不能在成功失败间切换；允许保留原status或转deleted。DELETE被禁止。
+
+DDL没有将整条终态行设为不可变，也未检查stage与stage_index映射、epoch是否属于当前worker、租约是否过期或updated_at_ms相对旧行不回退；这些由领域方法执行。完成/失败按result_hash精确重试，发布核对job epoch/lease、Dataset revision/lifecycle及来源实时权限，再与Dataset版本、head和操作回执同事务提交。只持久化任务身份和租约owner，不保存明文bearer/token。
+
+### Dataset版本与跨库存储边界
+
+- Dataset公开ID通过head映射到内部asset；显示名保留原DTO，避免asset_identities的`(workspace_id,kind,name)`唯一约束阻止同名Dataset。普通保存形成私有不可变release/seal/latest；内部freeze不新增公开publish权限要求。
+- Case按public执行输入、private authoring/gold、items预览、reference制品保存，草稿只保留有界成员manifest引用。小数与Unicode JSON键经UTF-8 JSON文本envelope保真；通用artifact下载不开放dataset私有namespace，ref字段不是下载令牌。
+- 回执绑定真实workspace/actor/kind/key及原请求摘要，响应丢失后返回原结果仍校验当前权限和生命周期。派生根因缓存不创建新业务版本；不可变release不跟随当前head变化。
+- 新增/改变Case来源在准备时冻结Trace身份/heads摘要并在提交事务复核实时授权和删除屏障；来源未变的同Case复制保留原provenance，不把用户可编辑Case宣称为原Trace逐字副本。
+- 生成config/members固定，capture保存已冻结来源的私有索引；接管推进epoch，失效worker不能发布。删除/恢复推进Dataset lifecycle；恢复登记新lifecycle的投影任务，不使旧event或旧job fence重新有效。
+- Dataset权威读取是控制库head/sealed release及私有不可变制品。Outbox与版本同事务提交；CH样本/成员异步投影按固定内容重放，全部sink成功且lease仍有效才标indexed。跨库无FK，控制事务提交或CH表存在不等于投影完整。
+- 三库SQL：[SQLite 008](../../../services/storage/schema/sqlite/008_dataset_assets.sql)、[PG 008](../../../services/storage/schema/postgresql/008_dataset_assets.sql)、[openGauss 008](../../../services/storage/schema/opengauss/008_dataset_assets.sql)、[SQLite 009](../../../services/storage/schema/sqlite/009_dataset_generation.sql)、[PG 009](../../../services/storage/schema/postgresql/009_dataset_generation.sql)、[openGauss 009](../../../services/storage/schema/opengauss/009_dataset_generation.sql)。本节只描述冻结schema，不自动迁移旧库，不代替HTTP/UI或容量验收。

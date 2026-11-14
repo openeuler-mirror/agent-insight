@@ -1,0 +1,326 @@
+{
+  "version": 8,
+  "name": "dataset_assets",
+  "tables": [
+    {
+      "name": "dataset_compat_heads",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dataset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "asset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "draft_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "manifest_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "manifest_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'active'"
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "lifecycle_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "read_only",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "generation_source",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "generation_status",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "deleted_by",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "deleted_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "dataset_id"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deleted_by"
+          ],
+          "table": "iam_principals",
+          "references": [
+            "principal_id"
+          ],
+          "on_delete": "NO ACTION"
+        },
+        {
+          "columns": [
+            "created_by"
+          ],
+          "table": "iam_principals",
+          "references": [
+            "principal_id"
+          ],
+          "on_delete": "NO ACTION"
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "asset_id",
+            "release_id"
+          ],
+          "table": "asset_release_seals",
+          "references": [
+            "workspace_id",
+            "asset_id",
+            "release_id"
+          ],
+          "on_delete": "NO ACTION"
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "draft_id"
+          ],
+          "table": "asset_drafts",
+          "references": [
+            "workspace_id",
+            "draft_id"
+          ],
+          "on_delete": "NO ACTION"
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "asset_id"
+          ],
+          "table": "asset_identities",
+          "references": [
+            "workspace_id",
+            "asset_id"
+          ],
+          "on_delete": "NO ACTION"
+        }
+      ],
+      "unique_keys": [
+        [
+          "workspace_id",
+          "draft_id"
+        ],
+        [
+          "workspace_id",
+          "asset_id"
+        ]
+      ],
+      "indexes": [
+        {
+          "name": "idx_dataset_heads_state",
+          "columns": [
+            "workspace_id",
+            "state",
+            "updated_at_ms",
+            "dataset_id"
+          ],
+          "unique": false
+        }
+      ],
+      "checks": [
+        "all BIGINT columns strict integer in SQLite",
+        "revision/lifecycle 1..2^63-1; timestamps nonnegative and monotonic"
+      ]
+    },
+    {
+      "name": "dataset_operation_receipts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dataset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "response_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "response_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "response_meta_json",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "actor_principal_id",
+        "operation_kind",
+        "operation_key"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "actor_principal_id"
+          ],
+          "table": "iam_principals",
+          "references": [
+            "principal_id"
+          ],
+          "on_delete": "NO ACTION"
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "dataset_id"
+          ],
+          "table": "dataset_compat_heads",
+          "references": [
+            "workspace_id",
+            "dataset_id"
+          ],
+          "on_delete": "NO ACTION"
+        }
+      ],
+      "unique_keys": [],
+      "indexes": [
+        {
+          "name": "idx_dataset_receipts_dataset",
+          "columns": [
+            "workspace_id",
+            "dataset_id",
+            "created_at_ms"
+          ],
+          "unique": false
+        }
+      ],
+      "checks": [
+        "all BIGINT columns strict integer in SQLite",
+        "lowercase64hex request/response hash; immutable receipt key and result"
+      ]
+    }
+  ],
+  "invariants": [
+    "Dataset identity mapping retained immutable; revisions increase exactly once; lifecycle only changes with state",
+    "Internal asset kind dataset and draft asset binding checked; current release sealed for same workspace+asset",
+    "Receipts immutable exact request and response artifacts; private JSON text preserves decimals/Unicode keys",
+    "All authorization and readonly/lifecycle checks are kernel responsibilities; prepared publication participates in caller transaction"
+  ]
+}

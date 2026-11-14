@@ -5,16 +5,16 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 # 新存储核心、IAM 与安全迁移
 
-**产品兼容状态（2026-11-12）**：原前端已恢复为重构前版本，Trace旧接口由服务端兼容。完整功能数据接管与回归仍未完成，不能作为生产切库结果；本页配置只用于隔离验证。
+**产品兼容状态（2026-11-14）**：原前端已恢复为重构前版本，Trace旧接口由服务端兼容。完整功能数据接管与回归仍未完成，不能作为生产切库结果；本页配置只用于隔离验证。
 
 `services/storage/` 是 Python 3.11+ 独立存储基础库。SQLite/IAM/ClickHouse 使用标准库；PG 与 openGauss 通过显式 DB-API 连接工厂接入。Next在显式core模式接管Trace采集、列表、Span和正文，保持原登录与界面；其他领域尚未整体接管。未设置开关保留旧路径，离线命令不会切换运行库。启用和启动步骤见[隔离运行指南](../../how-to/platform/storage-core.md)。
 
-表的职责、主键/索引速查与八张总览/关联图见[核心表关系导读](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序)，包括IAM、版本资产、任务结果、Trace正文及数据集/评测。
+表的职责、主键/索引速查与总览/关联图见[核心表关系导读](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序)，包括IAM、版本资产、任务结果、Trace正文及数据集/评测。
 
 ## 已实现范围
 
 - `001_core.sql`：21 张事务表、13 张 ClickHouse 表；原始字节与 checksum 保持不变。
-- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，合计 **43 张事务表 + 13 张 CH 表 = 56 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
+- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，合计 **46 张事务表 + 13 张 CH 表 = 59 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
 - 三种事务后端共享资产 release/依赖封存、别名/草稿 CAS、冻结 RunPlan、任务领取/续租/fence/取消、制品校验，以及结果回执和 Outbox 同事务提交。
 - ClickHouse 支持可信 canonical Span 批量写、最新态筛选、单 Span/分页结构读取、精确 bundle revision 的多 section 正文、正文块与清单 hash 校验，以及受限范围的最新态聚合。请求上限 4MiB，正文 bundle 上限 64MiB。
 - `observations.py`可靠接收完成OTLP Span、冻结准备计划、全局强序Outbox worker及幂等CH物化；`trace_service.py`提供loopback HTTP查询/接收，Next服务端原接口兼容及旧身份显式映射。
@@ -26,7 +26,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 `AuthorizedStorage(iam, facts)`默认使用default，也可显式传`project_id='default'`；空字符串、空白和其他项目ID拒绝。`service.project_context(credential, workspace_id)`返回经workspace授权校验的不可变上下文。`AccessScope`以及列表/聚合响应包含project_id，缓存指纹也包含项目；单条CH事实仍保持原workspace键。
 
-新初始化应用001–007。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，Trace HTTP采集/读取服务要求当前007，均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
+新初始化应用001–009。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，本批完整兼容接口要求当前009（基础Trace服务最低007，Dataset最低008，Trace生成最低009），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
 
 ### IAM 与统一授权
 
@@ -150,3 +150,19 @@ python3 -W error::ResourceWarning -m unittest discover -s services/storage/tests
 原诊断请求通过既有apiFetch补齐同源Key请求头，保留原登录/退出/切换行为和全部页面源码；不引入额外Cookie或登录态。
 
 结构读取保留工具骨架及Task/Skill白名单链接，正文按需读取。单工具（或无carrier的整组工具）紧凑投影上限2KiB，超限结构明确413，完整正文不丢弃；已有旧投影不通过相同source revision重放自动改写。早期Task/Skill缺失的派生链接需显式重建，完整视图仍读原文。
+
+
+### 数据集版本、Trace 回流与批量生成（008/009）
+
+原 `/api/agent-datasets`、单数据集、backflow、generation-options、trace-generation、generation/cancel 和 deletions 接口在 core 模式使用新存储。可见页面与文案保留；定义、行、字段与批量编辑仅增加隐藏的草稿版本状态和 If-Match 请求头。未进入可信请求上下文的实验/评测等 Dataset 消费者明确503，不读取旧表冒充已完成迁移。
+
+008的 `dataset_compat_heads` 保存归属、生命周期、当前release与单调revision；`dataset_operation_receipts` 保存主体/空间/操作绑定的精确重试结果。样例和扩展字段复用不可变资产release及hash制品，Unicode键、小数、false保持原值。执行输入与私有答案/trajectory分开；作者读回需当前gold权限，组管理员不能据此绕过gold限制。根因缓存为私有覆盖层，不推进资产版本。
+
+- 读取响应带ETag；PATCH/DELETE缺基线返回428、陈旧基线409。历史版本ETag不同于head，不能用于覆盖当前版本。组件保存打开草稿时的基线。`GET /api/agent-datasets/:id?view=versions` 返回摘要，`?version=1` 读历史全文，`?view=case&caseId=...` 只读该样例，`?view=items` 读预览。
+- 普通写入每次产生私有不可变版本；相同主体/操作/请求的网络重投返回原回执。Trace回流先冻结并重新校验来源权限与hash，冲突时有限重读去重后追加；纯重复回流不制造新版本。删除为生命周期屏障，旧worker不能复活数据。
+- 兼容列表最多2000项、历史最多1000版；完整列表/历史响应有64MiB总预算，超限明确拒绝。样例预览600字符是显示投影，原始完整内容仍在制品中。普通下载不能访问dataset gold/cache命名空间。
+- Dataset发布与Outbox同事务；后台先写 `dataset_samples` 后写 `dataset_release_members`，使用冻结批次/版本重试。`indexed` 表示投影已确认，不能把事务接收成功视为CH已经可见。
+
+009的 `dataset_generation_jobs` 保存配置/成员/进度制品引用、实际actor、30秒租约、epoch fence、取消删除与结果回执。生产worker沿用原normalizer、采样和content processor；来源Trace头与正文摘要冻结，完整工具大正文不跨到JS。单Span Python验证预算64MiB、事件响应16MiB、JS答案特征64MiB、最终样例32MiB；超限拒绝而非伪造截断成功。目录最多10000条授权Trace。Next每进程最多2个活动生成任务、20个排队项，这是有界正确性实现，不是千级吞吐保证。
+
+重启后只在原actor的当前有效进度请求中恢复，旧租约到期后重新领取并增加epoch；不持久化Bearer，也不由管理员冒充owner恢复。源分页在慢制品读取后再次校验权限/租约/生命周期；完成时同事务发布Dataset版本、任务终态及回执。系统FI目录仍是只读动态视图，不能当作新封存release；后续RunPlan须冻结有效目录。完整Benchmark导入、实验/评测结果与RunPlan消费者、旧Dataset语义导入及生产切换仍待实施。

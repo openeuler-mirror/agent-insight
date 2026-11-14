@@ -1,0 +1,267 @@
+{
+  "version": 9,
+  "tables": [
+    {
+      "name": "dataset_generation_jobs",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "job_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dataset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "config_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "config_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "members_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "members_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "stage",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "stage_index",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "generated_count",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "attempt_count",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "epoch",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dataset_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dataset_lifecycle_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "lease_owner",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "lease_until_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "summary_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "summary_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "capture_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "capture_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "result_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "error_code",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "error_message",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "deletion_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "job_id"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "dataset_id"
+          ],
+          "references": {
+            "table": "dataset_compat_heads",
+            "columns": [
+              "workspace_id",
+              "dataset_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "actor_principal_id"
+          ],
+          "references": {
+            "table": "iam_principals",
+            "columns": [
+              "principal_id"
+            ]
+          }
+        }
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "dataset_id"
+        ],
+        [
+          "workspace_id",
+          "actor_principal_id",
+          "request_id"
+        ],
+        [
+          "workspace_id",
+          "deletion_id"
+        ]
+      ],
+      "indexes": [
+        {
+          "name": "idx_dataset_generation_actor",
+          "columns": [
+            "workspace_id",
+            "actor_principal_id",
+            "status",
+            "created_at_ms"
+          ]
+        }
+      ],
+      "checks": [
+        "status: queued|running|succeeded|failed|deleted",
+        "revision increases exactly one; epoch monotonic",
+        "source identity/config/member manifest immutable",
+        "paired private artifact digests/references",
+        "millisecond clocks nonnegative and monotonic"
+      ],
+      "invariants": [
+        "No bearer credential stored",
+        "Completion and Dataset release/head/operation receipt commit in same transaction",
+        "Expired workers require same-actor live authorization",
+        "Deleted jobs retained as idempotency receipts"
+      ]
+    }
+  ],
+  "token_policy": "No bearer tokens in durable jobs; a live same-actor credential is required to claim, renew, read sources, or publish.",
+  "name": "dataset-generation"
+}

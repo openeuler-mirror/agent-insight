@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreDatasetRoute,getCoreDatasetContext,coreDatasetFailure,setCoreDatasetOperationResult,recordCoreDatasetOperation} from '@/lib/storage-core/datasets';
+
 import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { randomUUID } from 'crypto';
@@ -58,6 +61,9 @@ function inferLegacyFields(candidates: unknown[]): DatasetField[] {
 }
 
 export async function POST(request: Request) {
+  return isStorageCoreEnabled() ? withCoreDatasetRoute(request, backflowPOST) : backflowPOST(request);
+}
+async function backflowPOST(request: Request) {
   try {
     const body = await request.json();
     const user = String(body.user || '').trim();
@@ -86,6 +92,7 @@ export async function POST(request: Request) {
       if (mode === 'existing') {
         current = await findAgentDataset(user, datasetId);
         if (!current) return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
+        if (getCoreDatasetContext() && current.datasetKind === 'benchmark') return NextResponse.json({error:'Benchmark 数据集不可写入回流数据'},{status:403});
         if (isBuiltinReliabilityDataset(current)) {
           return NextResponse.json(
             { error: '内置可靠性评测集由系统维护，不可写入回流数据' },
@@ -160,6 +167,12 @@ export async function POST(request: Request) {
     const deduplicated = deduplicateTraceBackflowCases(current?.cases || [], rows);
     const rowsToInsert = deduplicated.cases;
     let dataset: AgentDatasetRecord;
+    const bindReply = (id: string) => setCoreDatasetOperationResult({
+      success: true, datasetId: id, caseId: rowsToInsert[0]?.id,
+      caseIds: rowsToInsert.map(row => row.id), inserted: rowsToInsert.length,
+      skippedDuplicates: deduplicated.skippedDuplicates,
+      addedFields: mode === 'existing' ? rowsToInsert.length > 0 ? fields.length - (current?.fields.length || 0) : 0 : fields.length,
+    });
     if (mode === 'existing' && current) {
       dataset = {
         ...current,
@@ -168,8 +181,12 @@ export async function POST(request: Request) {
         updatedAt: rowsToInsert.length > 0 ? new Date().toISOString() : current.updatedAt,
       };
       if (rowsToInsert.length > 0) {
+        bindReply(dataset.id);
         const updated = await updateAgentDatasetRecord(dataset);
         if (!updated) return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
+      } else if (getCoreDatasetContext()) {
+        bindReply(dataset.id);
+        await recordCoreDatasetOperation(dataset.id);
       }
     } else {
       const now = new Date().toISOString();
@@ -189,6 +206,7 @@ export async function POST(request: Request) {
         createdAt: now,
         updatedAt: now,
       };
+      bindReply(dataset.id);
       await createAgentDatasetRecord(dataset);
     }
 
@@ -211,6 +229,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (error instanceof GenerationError) return generationErrorResponse(error);
+    if (getCoreDatasetContext()) return coreDatasetFailure(error);
     console.error('agent-datasets backflow POST error:', error);
     return NextResponse.json({ error: 'failed to save trace to dataset' }, { status: 500 });
   }

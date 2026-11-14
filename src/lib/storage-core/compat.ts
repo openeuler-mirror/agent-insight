@@ -38,7 +38,7 @@ async function identityMapping() {
  } catch { throw new CompatibilityError(503,'Invalid private mapping'); }
  return config;
 }
-async function context(request:Request,options:CompatibilityOptions) {
+async function context(request:Request,options:CompatibilityOptions={}) {
  const header=request.headers.get('authorization');
  let token:string;let workspace:string|undefined;let principal:string|undefined;let modelUsername:string|undefined;
  if(header!==null) {
@@ -99,7 +99,7 @@ export async function handleCompatibleIngest(request:Request,options:Compatibili
   const actor=await context(request,options);
   if(!actor.token.startsWith('api_'))throw new CompatibilityError(403,'Collector API credential required');
   const headers=new Headers(request.headers);headers.set('authorization','Bearer '+actor.token);headers.set('x-workspace-id',actor.workspace);headers.delete('x-witty-api-key');
-  return await handleCoreIngest(new Request(request,{headers}),options.fetcher || fetch);
+  return await handleCoreIngest(new Request(request.url,{method:request.method,headers,body:request.body,duplex:'half'} as RequestInit & {duplex:'half'}),options.fetcher || fetch);
  }catch(error){return failure(error);}
 }
 

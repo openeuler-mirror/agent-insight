@@ -14,18 +14,31 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { compatibilityContext } from '@/lib/storage-core/compat';
+
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { PrismaClient } from '@prisma/client';
 export async function traceIdentity(request: Request, required = true) {
+  if (isStorageCoreEnabled()) return (await compatibilityContext(request)).username;
   const key = request.headers.get('x-witty-api-key');
   const username = key ? (await resolveUser(new Request('http://localhost/', { headers: { 'x-witty-api-key': key } }))).username : null;
   if (!username && required) throw new GenerationError('UNAUTHENTICATED', '请重新登录后操作', 401);
   return username;
 }
 export async function guardTraceDataset(request: Request, id: string, user: string, write = false) {
+  if (isStorageCoreEnabled()) {
+    const { getCoreDatasetContext,withCoreDatasets,findCoreDataset } = await import('@/lib/storage-core/datasets');
+    const actor=await compatibilityContext(request);
+    if(actor.username!==user)throw new GenerationError('NOT_FOUND','未找到数据集',404);
+    const dataset=getCoreDatasetContext()?await findCoreDataset(id):await withCoreDatasets(request,()=>findCoreDataset(id));
+    if(dataset?.generationSource!=='trace')return false;
+    if(write&&dataset.generationStatus!=='published')throw new GenerationError('DATASET_NOT_READY','数据集尚未发布，无法编辑或评测',409);
+    return true;
+  }
   const client = db.getClient();
   if (!(client instanceof PrismaClient)) return false;
   const dataset = await client.agentEvalDataset.findUnique({ where: { id }, select: { generationSource: true, generationStatus: true, user: true, generationJob: { select: { status: true, deletionId: true } } } });

@@ -5,15 +5,15 @@ description: "SQLite, PostgreSQL and openGauss control storage, authorized Click
 
 # Storage core, IAM and safe migrations
 
-**Product compatibility status (2026-11-12):** The original frontend is restored, with server compatibility for existing Trace contracts. Complete domain migration and regressions remain unfinished. This is isolated validation, not a production cutover.
+**Product compatibility status (2026-11-14):** The original frontend is restored, with server compatibility for existing Trace contracts. Complete domain migration and regressions remain unfinished. This is isolated validation, not a production cutover.
 
 `services/storage/` is a Python 3.11+ foundation. SQLite, IAM and ClickHouse use the standard library; relational servers use an explicit DB-API connection factory. Next explicitly opts into core Trace ingestion, listing, Span/payload reads while retaining original login and screens. Other domains are not fully switched. Leaving the flag unset preserves the legacy path; offline commands do not switch a running application. See the [isolated setup guide](../../how-to/platform/storage-core.md).
 
-See the [table relationship guide](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序) for all52 table purposes, primary/unique/query keys and eight overview/relationship diagrams. It distinguishes database foreign keys from logical references across databases. The diagrams and full dictionary are maintained in Chinese.
+See the [table relationship guide](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序) for all59 table purposes, primary/unique/query keys and overview/relationship diagrams. It distinguishes database foreign keys from logical references across databases. The diagrams and full dictionary are maintained in Chinese.
 
 ## Implemented contracts
 
-`001_core.sql` remains byte-for-byte unchanged:21 transactional and13 ClickHouse tables. `002_iam.sql` adds10 IAM tables, 003 adds2 project-directory/binding tables 004 adds2 ingestion/entity-version tables and005 adds4 Trace identity/annotation/tag tables, 006 adds2 diagnosis conversation/message tables and007 adds2 report-run/head tables, for **43 transactional +13 ClickHouse =56**. The complete field/type/constraint/index dictionary is in `design/platform/analytical-transactional-storage/core-table-dictionary.md`.
+`001_core.sql` remains byte-for-byte unchanged:21 transactional and13 ClickHouse tables. `002_iam.sql` adds10 IAM tables, 003 adds2 project-directory/binding tables 004 adds2 ingestion/entity-version tables and005 adds4 Trace identity/annotation/tag tables, 006 adds2 diagnosis conversation/message tables and007 adds2 report-run/head tables, 008 adds2 Dataset head/operation tables and009 adds1 generation-job table, for **46 transactional +13 ClickHouse =59**. The complete field/type/constraint/index dictionary is in `design/platform/analytical-transactional-storage/core-table-dictionary.md`.
 
 All three transactional backends share immutable releases/dependencies, draft/alias CAS, frozen RunPlan inputs, task leases/fences/cancellation, artifact verification and atomic result receipt/Outbox writes. ClickHouse supports trusted canonical Span batches, latest-state filtering, single-Span and paginated structure reads, exact-revision payload bundles with chunk/manifest hashes, and bounded analytics. Requests are capped at4MiB; payload bundles at64MiB.
 
@@ -25,7 +25,7 @@ The004 observation materializer rejects changed content at the same source revis
 
 `AuthorizedStorage(iam, facts)` defaults to `default`; an explicit `project_id='default'` is accepted. Empty/blank/other selectors fail closed. `project_context(credential, workspace_id)` returns an immutable context after workspace authorization. Scopes, list/analytics envelopes and cache fingerprints include the project; individual CH rows keep their existing workspace keys.
 
-New targets apply001–007. Existing001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003; the Trace HTTP service requires current007 after an explicit migration. Project UI, invitations and project-owner administration are future work. The Trace Web path switches only through the explicit mode flag; existing production data is not migrated by this setting.
+New targets apply001–009. Existing001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003; this compatibility slice requires009 (basic Trace HTTP requires007, Dataset008 and generation009) after explicit migration. Project UI, invitations and project-owner administration are future work. The Trace Web path switches only through the explicit mode flag; existing production data is not migrated by this setting.
 
 ### IAM and authorization
 
@@ -61,7 +61,7 @@ python3 -m services.storage migration-plan --backend sqlite --database /absolute
 python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db --backup /absolute/path/to/new-backup.db
 ```
 
-`schema` only prints DDL. New targets apply001–007; existing known001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003 and the Trace HTTP service requires current007, both through explicit migration. Unknown versions, history gaps and checksum drift fail closed. Existing Prisma databases are not altered in place.
+`schema` only prints DDL. New targets apply001–009; existing known001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003 and basic Trace HTTP requires007, Dataset008 and generation009, all through explicit migration. Unknown versions, history gaps and checksum drift fail closed. Existing Prisma databases are not altered in place.
 
 SQLite migration creates a new private sibling backup, verifies integrity/FKs/hash, then acquires the writer lock and compares source/backup content again. An intervening write causes refusal; the backup remains. Pending DDL and markers commit or roll back together. Backups are never overwritten and old data is not removed. New SQLite targets use WAL/FULL and must not be shared across hosts over NFS.
 
@@ -144,3 +144,19 @@ AgentDebug and SkillsAnalysis retain the existing generators, with frozen comple
 The existing API transport now attaches its existing Key to same-origin diagnosis requests. Login/logout/account switching and all page sources remain unchanged; no additional cookies or browser sessions are introduced.
 
 Structure reads retain tool skeletons and the existing Task/Skill linkage allowlist; bodies remain deferred. Compact metadata is limited to2KiB per tool (or per tool array without carriers); oversized structure returns413 while complete source payloads remain available. Replaying the same source revision does not rewrite old projections. Older Task/Skill linkage projections require an explicit rebuild; full reads preserve the original source.
+
+
+### Dataset versions, Trace backflow and generation (008/009)
+
+Existing Dataset CRUD, backflow and generation routes now use core storage. Visible JSX and wording are retained; components capture the ETag when an edit draft opens and pass it as If-Match. Consumers not wrapped in a trusted core Dataset context, including remaining experiment/evaluation workflows, fail with503 instead of reading legacy tables.
+
+`dataset_compat_heads` holds current release/revision and lifecycle; actor/workspace/operation-bound `dataset_operation_receipts` preserves exact retry responses. Cases and extension fields use immutable releases and hash artifacts, preserving Unicode keys, finite decimals and false. Execution inputs are separated from private gold/trajectory; current gold permission is required for authoring readback. Private root-cause caches do not advance releases.
+
+- Reads return ETags; missing mutation baselines return428 and stale baselines409. Historical ETags cannot overwrite the current head. `?view=versions` returns summaries, `?version=1` a historical body, `?view=case&caseId=...` one full case, and `?view=items` previews. Draft baselines are never replaced by a global latest-version cache.
+- Writes seal private releases. Exact operation retries preserve the original result. Backflow captures and rechecks source access/hashes, retries bounded append conflicts and deduplicates; duplicate-only requests create no version. Soft deletion fences old workers.
+- Lists allow2000 Datasets, history1000 releases and64MiB aggregate responses.600-character previews do not truncate source artifacts. Generic artifact endpoints do not expose Dataset gold/cache namespaces.
+- Release and Outbox publication are atomic. The worker writes `dataset_samples` before `dataset_release_members` with frozen retry versions. Durable acceptance and confirmed CH indexing are distinct states.
+
+`dataset_generation_jobs` binds the real actor, frozen source/config/progress artifacts,30-second leases, epoch fences and terminal receipts. The worker reuses the original normalizer, production sampler and content processor. It verifies complete Span bodies in Python (64MiB budget) and sends generation-specific events (16MiB) without giant tool bodies to JS. JS answer features are bounded at64MiB and final cases at32MiB; excess is an error. Catalogs allow10000 authorized Traces. Next runs at most2 active jobs and20 queued entries per process; these are correctness bounds, not a throughput claim.
+
+Recovery requires a live request by the original actor and an expired lease, then increases the epoch; bearer credentials are not persisted. Source-page access is rechecked after artifact I/O, and completion atomically publishes the release, job result and receipt. The builtin FI catalog remains a read-only dynamic view; future RunPlans must freeze its effective content. Full Benchmark import, experiment/evaluation/RunPlan consumers, legacy Dataset semantic import and production cutover remain incomplete.

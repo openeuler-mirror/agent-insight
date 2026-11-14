@@ -15,6 +15,7 @@
  */
 
 import { normalizeTraceCases } from '@/lib/trace-datasets/contracts';
+import {getDatasetRepositoryContext,listCoreDatasets,findCoreDataset,saveCoreDataset,deleteCoreDataset,cacheCoreDatasetRootCauses} from '@/lib/storage-core/datasets';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
@@ -93,6 +94,7 @@ export interface DatasetCase {
 }
 
 export interface AgentDatasetRecord {
+  _storageEtag?: string;
   generationSource?: string | null;
   generationStatus?: string | null;
   id: string;
@@ -663,6 +665,7 @@ async function migrateLegacyJsonIfNeeded(prisma: PrismaClient): Promise<void> {
 
 /** 全部评测集（仅 Prisma 路径会做 JSON 文件一次性迁移） */
 export async function readAllAgentDatasets(): Promise<AgentDatasetRecord[]> {
+  if (getDatasetRepositoryContext()) return listCoreDatasets();
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -692,6 +695,7 @@ function canReadAgentDataset(user: string, item: Pick<AgentDatasetRecord, 'user'
 }
 
 export async function readUserAgentDatasets(user: string, includeTrace = true): Promise<AgentDatasetRecord[]> {
+  if (getDatasetRepositoryContext()) return listCoreDatasets('full', undefined, includeTrace);
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -726,6 +730,7 @@ export async function readAgentDatasetSummaries(
   targetSkill?: string,
   includeTrace = true,
 ): Promise<AgentDatasetSummary[]> {
+  if (getDatasetRepositoryContext()) return listCoreDatasets('summary', targetSkill, includeTrace);
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -752,6 +757,7 @@ export async function readAgentDatasetReferences(
   targetSkill?: string,
   includeTrace = true,
 ): Promise<AgentDatasetReference[]> {
+  if (getDatasetRepositoryContext()) return listCoreDatasets('reference', targetSkill, includeTrace);
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -793,6 +799,7 @@ export async function readAgentDatasetReferences(
 }
 
 export async function findAgentDataset(user: string, id: string): Promise<AgentDatasetRecord | null> {
+  if (getDatasetRepositoryContext()) return findCoreDataset(id);
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -806,6 +813,7 @@ export async function findAgentDataset(user: string, id: string): Promise<AgentD
 }
 
 export async function createAgentDatasetRecord(record: AgentDatasetRecord): Promise<void> {
+  if (getDatasetRepositoryContext()) { await saveCoreDataset(record, {create:true}); return; }
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -837,6 +845,7 @@ export async function createAgentDatasetRecord(record: AgentDatasetRecord): Prom
 }
 
 export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Promise<boolean> {
+  if (getDatasetRepositoryContext()) { await saveCoreDataset(updated); return true; }
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -938,6 +947,14 @@ export async function cacheLiveRootCausesForDatasetCase(options: {
   now?: Date;
 }): Promise<DatasetCaseRootCauseCacheWriteStatus> {
   const { user, datasetId, caseId, expectedOutput, rootCauses, now = new Date() } = options;
+  if (getDatasetRepositoryContext()) {
+    const record = await findCoreDataset(datasetId);
+    if (!record) return 'not-found';
+    const prepared = prepareLiveRootCauseCacheWrite(record, caseId, expectedOutput, rootCauses, now);
+    if (!prepared.cases) return prepared.status;
+    const value = prepared.cases.find(item => item.id === caseId);
+    return await cacheCoreDatasetRootCauses(datasetId, caseId, expectedOutput, value?.rootCauses || [], value?.rootCauseMeta) ? 'updated' : 'conflict';
+  }
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -1090,6 +1107,7 @@ export async function findAgentDatasetsByTargetSkill(
   user: string,
   targetSkill: string,
 ): Promise<AgentDatasetRecord[]> {
+  if (getDatasetRepositoryContext()) return listCoreDatasets('full', targetSkill);
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
@@ -1104,6 +1122,7 @@ export async function findAgentDatasetsByTargetSkill(
 }
 
 export async function deleteAgentDataset(user: string, id: string): Promise<boolean> {
+  if (getDatasetRepositoryContext()) return deleteCoreDataset(id);
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);

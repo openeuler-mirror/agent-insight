@@ -8,7 +8,7 @@ const INPUT_LIMIT = 8 * 1024 * 1024;
 const SESSION = /^session_[A-Za-z0-9_-]{43}$/;
 const API = /^api_[A-Za-z0-9_-]{43}$/;
 class CoreError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
 }
 function json(body: unknown, status = 200, headers: HeadersInit = {}): Response {
   return Response.json(body, { status, headers: { 'cache-control': 'no-store', ...headers } });
@@ -64,9 +64,15 @@ async function upstream(path: string, options: { token?: string; method?: string
       headers: { accept: 'application/json', ...(options.token ? { authorization: 'Bearer ' + options.token } : {}), ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers }, body: options.body,
     });
     if (!response.ok) {
-      void response.body?.cancel();
-      const status = [400, 401, 403, 404, 409, 413, 415, 422, 429, 501, 503].includes(response.status) ? response.status : 502;
-      throw new CoreError(status, status === 401 ? 'Authentication required' : status === 403 ? 'Forbidden' : 'Storage core request failed');
+      let code:string|undefined;
+      if(path.startsWith('/v1/compat/datasets/generation?')){
+        try{
+          const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bytes(response.body,4096,502)));
+          if(value&&typeof value==='object'&&['REQUEST_EXPIRED','QUEUE_LIMIT','SOURCE_NOT_AVAILABLE','IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED','INVALID_CONFIG','NOT_FOUND','DATASET_DELETING','DATASET_NOT_READY'].includes(value.code))code=value.code;
+        }catch{}
+      }else void response.body?.cancel();
+      const status = [400, 401, 403, 404, 409, 410, 413, 415, 422, 429, 501, 503].includes(response.status) ? response.status : 502;
+      throw new CoreError(status, status === 401 ? 'Authentication required' : status === 403 ? 'Forbidden' : 'Storage core request failed',code);
     }
     const raw = await bytes(response.body, options.responseLimit || JSON_LIMIT, 502);
     let data: unknown;

@@ -71,6 +71,18 @@ test('an existing collector key is verified and mapped without changing its OTLP
  assert.equal(response.status,200);assert.deepEqual(await response.json(),{});assert.equal(response.headers.get('x-storage-batch-id'),'compat-batch');assert.equal(accepted,true);
 });
 
+test('a framework-wrapped collector request streams its body without requiring native Request private state',async()=>{
+ bindings();const {handleCompatibleIngest}=await import('../src/lib/storage-core/compat');
+ const packet={resourceSpans:[]};const source=new Request('http://localhost/api/ingest/otel/v1/traces',{method:'POST',headers:{'content-type':'application/json','x-witty-api-key':legacyKey},body:JSON.stringify(packet)});
+ const wrapped=new Proxy(source,{get:(target,key)=>Reflect.get(target,key,target)});let accepted=false;
+ const response=await handleCompatibleIngest(wrapped,{resolveIdentity,fetcher:async(url,options)=>{
+  if(new URL(String(url)).pathname==='/v1/auth/me')return Response.json(profile);
+  assert.deepEqual(JSON.parse(String(options?.body)),packet);assert.equal(new Headers(options?.headers).get('x-workspace-id'),'w');accepted=true;
+  return Response.json({batch_id:'wrapped-batch',state:'accepted'});
+ }});
+ assert.equal(response.status,200);assert.equal(response.headers.get('x-storage-batch-id'),'wrapped-batch');assert.equal(accepted,true);
+});
+
 test('existing tag DELETE requests have no JSON body and preserve their status',async()=>{
  bindings();const {handleCompatibleTags,handleCompatibleTraceTags}=await import('../src/lib/storage-core/compat');let calls=0;
  const fetcher:typeof fetch=async(url,options)=>{

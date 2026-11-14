@@ -205,11 +205,17 @@ class TraceRuntime:
     def start_worker(self):
         import threading,uuid
         if self.worker is not None:raise ValueError('worker is already started')
+        datasets=None
+        if self.control.migration_plan()['current_version']>=8:
+            from .datasets import DatasetStore
+            datasets=DatasetStore(self.control)
         worker_id='trace-http-'+uuid.uuid4().hex
         def work():
             while not self.stop.is_set():
                 try:
                     progressed=self.ingest.work_once(worker_id)
+                    if datasets is not None:
+                        progressed=datasets.project_once(self.facts,worker_id) or progressed
                     self.last_worker_error=None
                 except Exception as exc:
                     self.last_worker_error=type(exc).__name__
@@ -289,9 +295,14 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             except Unauthorized:self.reply(401,{'error':'Authentication required'})
             except Forbidden:self.reply(403,{'error':'Forbidden'})
             except RateLimited:self.reply(429,{'error':'Too many login attempts'})
-            except (CursorExpired,Conflict):self.reply(409,{'error':'State conflict; refresh or inspect batch status'})
+            except (CursorExpired,Conflict) as exc:
+                code=getattr(exc,'code',None)
+                if code is None and str(exc) in ('IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED'):code=str(exc)
+                status=410 if code=='REQUEST_EXPIRED' else 429 if code=='QUEUE_LIMIT' else 409
+                self.reply(status,{'error':'State conflict; refresh or inspect batch status',**({'code':code} if code in ('REQUEST_EXPIRED','QUEUE_LIMIT','IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED') else {})})
             except (ValueError,KeyError,TypeError,UnicodeError,RecursionError) as exc:
-                self.reply(413 if getattr(exc,'status',None)==413 else 400,{'error':'Request exceeds budget' if getattr(exc,'status',None)==413 else 'Invalid bounded request'})
+                code=getattr(exc,'code',None);status=413 if getattr(exc,'status',None)==413 else 422 if code=='SOURCE_NOT_AVAILABLE' else 400
+                self.reply(status,{'error':'Request exceeds budget' if status==413 else 'Invalid bounded request',**({'code':code} if code=='SOURCE_NOT_AVAILABLE' else {})})
             except ClickHouseError:self.reply(503,{'error':'Analytical storage unavailable'})
             except Exception as exc:
                 status=getattr(exc,'status',503)
@@ -307,8 +318,9 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             from .compatibility_list import LegacyTraceList
             compat_path=pieces[2:]
             report_path=compat_path[:2]==['observe','reports']
+            dataset_path=compat_path[:1]==['datasets']
             deleting_root=self.command=='DELETE' and (report_path or compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
-            workspace=runtime.workspace(token,params.get('workspace_id'),'read' if self.command=='GET' else 'delete' if deleting_root else 'execute' if report_path else 'write')
+            workspace=runtime.workspace(token,params.get('workspace_id'),'read' if self.command=='GET' or dataset_path else 'delete' if deleting_root else 'execute' if report_path else 'write')
             metadata=TraceMetadata(runtime.control)
             listing=LegacyTraceList(runtime.queries,metadata)
             reads=LegacyTraceReads(runtime.queries,runtime.authorized)
@@ -318,6 +330,29 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 value,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return None
                 return value
+            if path in (['datasets'],['datasets','generation']) and self.command=='POST':
+                from .datasets import DatasetStore
+                value,error=self.body(max_bytes=64*1024*1024)
+                if error:self.reply(error,{'error':'JSON body required or Dataset exceeds budget'});return
+                datasets=DatasetStore(runtime.control);action=value.get('action')
+                if path==['datasets','generation']:
+                    from .dataset_generation import DatasetGeneration
+                    result=DatasetGeneration(runtime.control,datasets,runtime.queries,runtime.authorized).dispatch(token,workspace,action,value)
+                elif action=='list':
+                    result=datasets.list(token,workspace,view=value.get('view','full'),target_skill=value.get('target_skill'),include_trace=value.get('include_trace',True),include_metadata=value.get('include_metadata',False))
+                elif action=='get':result=datasets.get(token,workspace,value.get('dataset_id'),version=value.get('version'),_view=value.get('view','full'),_case_id=value.get('case_id'))
+                elif action=='lookup':result=datasets.lookup_operation(token,workspace,value.get('operation_kind'),value.get('operation_key'),value.get('operation_request'))
+                elif action=='record_operation':
+                    result=datasets.record_operation(token,workspace,value.get('dataset_id'),operation_key=value.get('operation_key'),operation_kind=value.get('operation_kind'),operation_request=value.get('operation_request'),operation_result=value.get('operation_result'),expected_revision=value.get('expected_revision'))
+                elif action=='save':
+                    result=datasets.save(token,workspace,value.get('record'),operation_key=value.get('operation_key'),expected_revision=value.get('expected_revision'),operation_kind=value.get('operation_kind','save'),operation_result=value.get('operation_result'),operation_request=value.get('operation_request'))
+                elif action in ('remove','restore'):
+                    result=getattr(datasets,action)(token,workspace,value.get('dataset_id'),operation_key=value.get('operation_key'),expected_revision=value.get('expected_revision'),operation_request=value.get('operation_request'))
+                elif action=='versions':result=datasets.versions(token,workspace,value.get('dataset_id'),view=value.get('view','full'))
+                elif action=='cache_root_causes':
+                    result=datasets.cache_root_causes(token,workspace,value.get('dataset_id'),value.get('case_id'),value.get('expected_output'),value.get('root_causes'),expected_revision=value.get('expected_revision'),root_cause_meta=value.get('root_cause_meta'))
+                else:raise ValueError('unsupported Dataset operation')
+                respond(result,limit=64*1024*1024);return
             if path[:2]==['fault','diagnosis'] and len(path)==3:
                 from .diagnosis import TraceDiagnosis,UNSET,MAX_HISTORY_BYTES
                 diagnosis=TraceDiagnosis(runtime.control);action=path[2]

@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-13。已完成001–007基础、原界面Trace兼容、诊断自身Trace/会话/SSE与Trace报告接管。全量应用测试已恢复零失败，实际OpenCode及文件工具在隔离环境验证；详细范围与最新证据见文末。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-14。已完成001–009基础、原界面Trace兼容、诊断自身Trace/会话/SSE与Trace报告，以及Dataset版本/回流/批量生成接管。全量应用测试已恢复零失败，实际OpenCode及文件工具在隔离环境验证；详细范围与最新证据见文末。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
@@ -11,8 +11,8 @@
 ## 基线与交付
 
 - 工作分支`codex/storage-core-refactor`基于已同步的`upstream/master`：`298d1d5b10ab3ab67a955b41a1665b0cd4d26b54`，旧库基线96个Prisma模型。
-- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`、`003_projects.sql`、`004_observations.sql`、`005_trace_metadata.sql`、`006_trace_diagnosis.sql`、`007_diagnostic_reports.sql`与机器字段目录。
-- 当前物理核心为 **43张事务表+13张CH表=56张**：001含21张事务表及13张CH表，002新增10张IAM表，003新增项目目录与workspace归属2张，004新增可靠采集与实体版本2张，005新增旧ID/标注/标签4张，006新增诊断会话/消息2张，007新增报告运行/当前指针2张。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
+- `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`、`003_projects.sql`、`004_observations.sql`、`005_trace_metadata.sql`、`006_trace_diagnosis.sql`、`007_diagnostic_reports.sql`、`008_dataset_assets.sql`、`009_dataset_generation.sql`与机器字段目录。
+- 当前物理核心为 **46张事务表+13张CH表=59张**：001含21张事务表及13张CH表，002新增10张IAM表，003新增项目目录与workspace归属2张，004新增可靠采集与实体版本2张，005新增旧ID/标注/标签4张，006新增诊断会话/消息2张，007新增报告运行/当前指针2张，008新增Dataset head/操作回执2张，009新增生成job1张。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
 - `services/storage/control.py`、`relational.py`共享资产/发布/草稿/别名、RunPlan、任务lease/fence/取消、结果回执与Outbox原子性。PG/openGauss写锁粒度为正确性基线，尚未完成千级混合容量优化。
 - `iam.py`实现稳定主体、密码派生、会话/API凭据、用户组/成员CAS/最后Owner保护、空间归属、资源归属与显式共享/撤销。组管理员全组读取，普通成员本人/共享，viewer只读；无隐式平台管理员。
 - `authorized.py`统一校验元数据/列表/Span/正文/聚合/有界制品下载。CH读取和下载前后重新校验权限；慢I/O与密码派生不占写事务。私有评测gold不通过普通制品端口开放。
@@ -239,3 +239,35 @@ Unicode全文SHA256为`b19bcab25c703d64d7098782a18f74b7403a60f75bd4d0d234fb96088
 最终本机证据在`exclude/storage-core-diagnosis/20261113-jk0keh_o/`：`npm-certified.log`、`python-certified.log`、`tsc-verified.log`、`real-final-runtime-results.json`、`public-original-ui-data-final.json`、`acceptance-migration.json`、`preservation-final.json`，以及`final-desktop-diagnosis.png`、`final-desktop-self-trace-tool.png`。原生三库证据分别在其`relational-006`、`relational-007`、`relational-recorder-final`子目录。临时凭据、备份及原文不提交。
 
 验收服务为`http://localhost:58388`，沿用原`admin`登录方式；当前样例明确使用本地Mock模型，不代表外部真实LLM质量。旧聊天/报告尚未自动导入，生产切换、千级混合容量、DiagnosisRun/实验回流及其他尚未接管领域仍是后续任务，不能用本批零失败结果替代这些验收。
+
+
+## 2026-11-14 Dataset 版本、回流与生成切片
+
+本批沿原Dataset入口完成普通CRUD、字段/Case编辑、历史版本摘要/全文、Trace草稿回流及重复追加去重、原Trace批量生成/进度/取消/删除查询。008/009追加3表；复用资产release/私有gold制品及现有CH样本表。请求和worker绑定真实IAM主体，旧用户名参数不授予权限；未接可信上下文的消费者拒绝回退旧库。原组件JSX与基线eeab7c96逐字相同，只增加草稿ETag/If-Match和必要错误状态处理。
+
+- 草稿基线缺失428、陈旧409；精确网络重试恢复原操作响应。历史ETag不冒充head。普通写入与新release/receipt原子提交，重复回流不制造空版本。分页/历史/完整样例读取受独立预算约束。
+- 来源冻结保留真实Agent身份、准确head及完整文本摘要，Python验证工具大正文，JS仅消费采样所需事件；原normalizer/生产采样/content processor保持。完成时同事务提交Dataset版本、任务终态及receipt；CH成员异步物化，accepted与indexed分别检查。
+- 任务30秒租约/epoch，撤权/取消/删除/重新领取后旧worker失效；制品慢I/O后重查来源与租约。重启只由原actor的有效进度请求触发恢复，不持久化Bearer。
+- 实际HTTP暴露并修复两个问题：空DELETE body流应作为无请求体；Node24不能直接复制框架包装Request，改为从URL/方法/头/原body流显式构造。两项均先取得失败回归再修复，真实HTTP复测通过。
+
+### 取得的证据
+
+证据目录：`exclude/storage-core-datasets/20261113-1eyhms1l/`；内核三库补充证据在同级`20261113-ze2t7sek/`。失败尝试和成功结果均保留。
+
+| 验证 | 结果与边界 |
+|---|---|
+| 全量应用 | 最新`npm-delivery-final.log`：5450项，5428通过、22跳过、0失败，180.544秒；隔离HOME/SQLite，非所有可选外部环境实机验证 |
+| 全量Python存储 | `python-resume-final.log`：646项，467通过、179跳过、0失败，51.995秒；跳过为可选真实引擎配置，不能算实机通过 |
+| 类型与独立复核 | 完整tsc与六个存储桥接文件ESLint通过；独立最终复核37/37通过，组件JSX对基线一致；diff-check通过 |
+| Dataset内核 | SQLite+实际CH最终41/41；PG和原生openGauss各37/37基线，另各3/3最终预算增量；不是声称单轮40项全矩阵。关系库测试facts sink为内存，SQLite组含真实CH部分失败重投 |
+| 生成内核 | SQLite完整23/23；PG/原生openGauss各19/19基线及各4/4最终source-members撤权/取消/epoch/来源删除增量。关系库facts为内存，不冒充HTTP+CH全链路 |
+| HTTP与CH | CRUD24次请求，可信owner、Unicode/小数/false、重试、两历史版本、成员隔离/组管理员、原Trace完整回流、去重、删除均通过；真实公开OTLP携带约3MiB工具输出，经原采样生成完整问答，CH release成员1条，工具正文未进入Dataset；最终生成13次请求通过 |
+| 取消/恢复 | 私有入口创建并领取可控中断任务，原公开接口取消/删除回执/重复取消204、旧checkpoint409通过。真实重启Next/helper，三组已有Dataset保留；实际旧租约过期后，原actor进度触发恢复并发布，旧epoch仍409。该证据不声称无人请求自动恢复 |
+| 原浏览器 | admin原登录态进入原`/dataset`：新建、单个添加、样例编辑、新增字段/值、刷新与重启保留通过；编辑期间另一请求推进head，旧草稿显示原保存失败且未覆盖新值，刷新后保存成功。最终页console无错误，截图`ui-dataset-final.png`，冲突截图`ui-stale-draft.png` |
+| 数据保留 | 隔离core7→9先创建新备份，42张旧非schema_meta表内容指纹一致；旧Prisma的Dataset/job/receipt/Execution/Session五表在实际HTTP写入前后行数一致，最终五表完整内容指纹亦一致，见delivery-postflight.json；未迁移默认业务库 |
+
+验收地址为 `http://localhost:58388/dataset/f6fe5758-96cc-4529-bd8d-8aadee44193b`，使用原admin方式登录，隔离服务保留运行。现有历史源库和失败fixture均保留。
+
+### 当前仍未完成
+
+实验/评测/重测/DiagnosisRun的业务消费者、Evaluator/Skill/Agent/Benchmark完整多版本管理和RunPlan/结果联动、非OTLP各采集写端、旧96模型逐字段语义导入/在线增量/停写切换与回退仍须继续。系统FI目录是只读动态视图，未来运行应冻结有效目录；完整Benchmark受控导入不是本批成果。1000在线采集端混合负载、细粒度写锁、HA与生产恢复仍未验收。不能将本批Dataset闭环说成全产品完成切库。

@@ -389,3 +389,36 @@ Next 为每次 POST 固定私有 requestKey 和随机 leaseToken，同一次 RPC
 PATCH 同样固定 requestKey、expected revision 和完整字段；operation key/base revision/body hash 随已有进度制品保存，终态发布也保留该私有回执。只有当前 head、原 actor/授权和 lease 均有效，且恰好推进一次 revision、回执内容逐项匹配时，才可重放已经提交的结果；不同字段、旧 head、已被后续操作推进的旧回执均拒绝。并发相同操作在最终写事务中也不会再次推进版本。回执和私有 lease 不进入原报告 DTO。DELETE 不盲重试，以免删掉新建的报告 head。
 
 定向测试模拟 begin、进度及终态提交后响应丢失，确认同一实际 Agent 只启动一次、进度不中断、完成结果可恢复；额外覆盖不同载荷重放、旧回执/新 head 拒绝与同时到达的重复提交。该协议覆盖有限网络重试，不声称 Next 进程崩溃后自动恢复仍在执行的模型任务。
+
+
+## 12. 已授权增量：Dataset 版本资产、回流与 Trace 批量生成（2026-11-13）
+
+用户确认按资产/数据集→实验/评测/结果顺序继续。本批保持全部原页面和原Dataset/Generation DTO及入口，复用原字段规范化、采样/去重/Trace分析算法；迁移共享数据集存储与Trace生成job/source/publish，禁止只迁普通CRUD而让生成结果写旧表后不可见。原有Prisma模式保持；core模式无隐式旧库兜底，旧数据迁移另外明确执行。
+
+### 12.1 资产与事务
+
+复用001资产identity/draft/release/seal/alias、IAM asset ACL与私有hash制品。内部identity name为稳定key，显示名称保留原DTO，允许不同账号或同账号同名数据集。Dataset原文允许有限小数与Unicode键，采用UTF-8 JSON文本envelope封装到既有manifest-json/v1，禁止修改canonical_json协议。草稿只保存有界summary与成员manifest引用，样本正文/参考答案按独立不可变制品保存；私有gold不经通用artifact下载暴露。每次普通保存形成可供后续运行冻结的内部不可变版本，不把内部seal变成新公开发布权限要求；未来显式公开发布另行鉴权。
+
+008追加dataset兼容head/操作回执两表：head保存原dataset ID→asset ID、当前draft/release、live生命周期及单调版本/删除屏障；receipt按workspace+真实actor+kind+operation key保存请求摘要及精确结果。字段、CHECK/PK/FK/UK/索引补齐到机器目录和字段字典，001–007字节不变。真实owner/组ACL由IAM决定，body.user不得授予权限，builtin/benchmark只读由内核强制。新建归属、草稿/成员、seal/alias、head与receipt同一事务；删除只做tombstone并保留旧版本/run引用，恢复递增屏障使旧worker仍失效。
+
+字段与关系以[核心表字典008–009节](core-table-dictionary.md#008009-dataset版本资产操作回执与生成任务)及[008机器目录](../../../services/storage/schema/dataset-catalog.json)为准；该节列出head/receipt全部28字段、三库类型、PK/UK/FK/CHECK和索引。截至008为45张事务表+13张CH表=58张；009后当前为46+13=59张。
+
+### 12.2 CAS、重试与回流
+
+读取提供HTTP ETag；原组件在打开定义、行编辑、字段编辑或批量导入时捕获该次读取的ETag，保存/删除携带该草稿基线的If-Match，不新增可见UI。不使用全局账号/数据集最新版本缓存替换旧草稿的基线；完整Case与head版本不一致时拒绝编辑。并发或陈旧修改明确409/412，不自动重新覆盖；原错误展示保留。兼容不带版本的内部调用只能宣称请求内CAS，不冒充旧页面防丢更新；后台任务必须显式传版本/fence。回流追加在最新head下重算原taskId去重并原子提交，多条中任何无效输入均不部分写入。网络模糊提交只有限重投同operation，不生成新版本/新case；精确重试返回保存的原响应，而非按最新状态重算。
+
+### 12.3 Trace生成任务
+
+同批迁移原catalog、source capture、任务create/progress/claim/renew/stage/recover/complete/fail/cancel/delete与删除查询。009按最小必要字段追加生成job控制状态（字段以冻结目录为准），operation receipt复用008；任务配置/进度/summary及源成员放私有hash制品，不存超大JSON控制列。可复用现有work lease/fence的地方优先复用，状态转换必须在内核领域方法中原子完成，禁止网络仿Prisma transaction。
+
+生成任务31字段与约束见[dataset_generation_jobs字典](core-table-dictionary.md#dataset_generation_jobs)及[009机器目录](../../../services/storage/schema/dataset-generation-catalog.json)。008/009合计新增3张事务表、59字段；三库DDL、实线FK/虚线制品和CH关联图统一见字典，不另设影子字段定义。
+
+Source capture按真实授权scope冻结来源Trace及准确heads/sections摘要；保留原registered agentId或framework/name/clientId身份键，不能把同名Agent误合并。生成专用事件投影只读取算法实际使用的完整user/assistant文本与工具名称/flags，工具大正文不跨边界进入JS或被截成完整结果。已有source原文与hash保持不变；不能靠增加源revision回填旧派生值。进度checkpoint、心跳续租、取消/删除/撤权及旧fence检查覆盖实际worker生命周期；完成须同事务校验当前job/epoch/lifecycle并发布Dataset版本、job成功与receipt。重启恢复须重新校验实际身份，不持久化明文用户token。复用原normalizer/sampling/content-processor，不另造Mock业务算法。
+
+### 12.4 实施计划与验收
+
+1. 先写失败测试：Dataset权限/同名/Unicode小数/CAS/版本保留/软删恢复/精确retry/回流去重；008追加三库DDL和领域kernel，再跑同合同。
+2. 先写失败测试：生成job状态机、租约/fence/取消/删除/重启/发布原子性及source投影；追加009并实现core repository，复用原worker算法。
+3. Next沿原API加core分支/可信存储上下文，共享dataset repository供后台调用；原请求字段验证、readonly、根因缓存与DTO不丢；补传输层ETag并行为测试。
+4. 用新隔离目标备份/升级，运行真实CH来源→Trace草稿→批量回流→Dataset列表/字段/Case编辑→版本冻结→Trace生成/进度/取消/删除；核对旧库零影子写、原页面源码/可见交互及旧模式回归。
+5. 跑全量npm、Python、类型与必要三库合同，保留日志和截图，更新实施状态/中英文指南/字典与日记；本批结果不外推实验/评测/Benchmark完整迁移及千级容量。

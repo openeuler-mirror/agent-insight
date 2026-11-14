@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCoreDatasetGeneration } from '@/lib/storage-core/dataset-generation';
+
 import { NextResponse } from 'next/server';
 import { traceIdentity, generationErrorResponse } from '@/server/trace-datasets/http';
 import { getTraceDatasetManager } from '@/server/trace-datasets/manager';
@@ -21,6 +24,7 @@ import { generationOptions } from '@/server/trace-datasets/catalog';
 import { validateWindow } from '@/lib/trace-datasets/contracts';
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
+  if (isStorageCoreEnabled()) return handleCoreDatasetGeneration(request, 'catalog');
   try {
     const owner = (await traceIdentity(request))!;
     const manager = await getTraceDatasetManager();

@@ -5,7 +5,7 @@ description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace
 
 # 启用隔离的 Storage Core Trace 链路
 
-**产品兼容状态（2026-11-13）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。诊断会话、自身Trace及Trace报告按参考中的独立协议接管；评测回流、DiagnosisRun下游及其他领域仍待接管。仅在隔离目标验证，不用于生产切换。
+**产品兼容状态（2026-11-14）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。诊断会话、自身Trace及Trace报告按参考中的独立协议接管；Dataset版本/Trace回流/批量生成已按本页流程接管；实验/评测结果、DiagnosisRun下游及其他领域仍待接管。仅在隔离目标验证，不用于生产切换。
 
 模式开关只影响服务端。Trace接口使用当前IAM权限，配置缺失、身份未映射或后端故障明确失败，不回落旧Trace库。其他领域仍有既有数据路径，当前不是全产品切库。完整契约见[参考](../../reference/platform/storage-core.md)，实际覆盖见[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)。
 
@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-新库应用001–007，当前schema_version=7。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
+新库应用001–009，当前schema_version=9。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -44,7 +44,7 @@ from services.storage.iam import IAMStore
 from services.storage.clickhouse import ClickHouseStore
 
 root = Path('/absolute/path/to/isolated-core')
-control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至007
+control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至009
 facts = ClickHouseStore('http://127.0.0.1:8123',
     database='agent_insight_core_isolated', user='default',
     password=getpass.getpass('ClickHouse password (empty if configured): '))
@@ -147,7 +147,7 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 
 ## 验证诊断链路
 
-先在隔离目标备份并显式升级至007；不要把演示配置指向旧Prisma数据库或默认业务库。已有原登录Key的私有映射凭据需要read/write用于追问、execute用于报告、delete用于原有删除操作，仍受Trace owner/组角色约束。仅write采集Key不能作为页面账号。
+先在隔离目标备份并显式升级至009；不要把演示配置指向旧Prisma数据库或默认业务库。已有原登录Key的私有映射凭据需要read/write用于追问、execute用于报告、delete用于原有删除操作，仍受Trace owner/组角色约束。仅write采集Key不能作为页面账号。
 
 1. 用原账号登录，打开一条已授权Trace，再进入原故障诊断页。GET历史即使为空也应有已授权Trace，存储异常不能显示成“没有会话”。
 2. 发起追问，观察原ready/text/tool/reasoning/done事件；在Trace列表查到`fault-diagnosis-agent`自身运行，按原上游session ID打开，核对工具输入/输出与失败状态。
@@ -157,3 +157,12 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 验收必须注明是否调用真实模型。隔离fixture Agent可以验证真实SQLite/PG/openGauss事务、ClickHouse、HTTP/SSE及页面历史恢复，但不代表真实LLM诊断质量；最新实际覆盖见实施状态。旧诊断会话/报告不会自动导入，原数据与备份保留。
 
 按原流程登录即可；诊断请求沿用同一个Key，退出和账号切换行为保持原样。
+
+
+## 验证数据集链路（008/009）
+
+新目标初始化到009；已有隔离core目标先停写，使用新的备份路径和CLI显式迁移至9，同时保留制品目录。迁移工具核对旧表内容，不能以Prisma db push替代，也不能直接指向原业务SQLite。
+
+在原登录和侧栏进入「评测数据集」：新建→单个添加→编辑样例→新增字段，刷新后检查原值。另从Trace回流样例并重复追加，确认去重；使用两个草稿制造陈旧提交，确认409且先前修改保留。页面没有新增版本控件，版本摘要通过参考页所列查询接口读取。
+
+先通过原OTLP入口上报，再在「基于Trace生成」选择有授权数据的Agent和时间窗，检查进度、发布样例、取消及删除回执。重启隔离Next/存储服务后，重新以原actor查看进度；活动旧租约须先到期，随后新epoch恢复。发布完成任务的取消返回冲突，删除仍需独立权限。未改实验/Benchmark消费者不应被视为本页验收的一部分。

@@ -5,7 +5,7 @@ description: "Explicit initialization, private identity mappings, original scree
 
 # Enable an isolated Storage Core Trace workflow
 
-**Product compatibility status (2026-11-13):** Login, navigation and frontend sources retain the pre-refactor version. Server compatibility now adapts existing Trace contracts to core storage. Diagnosis chat/self-Traces and Trace reports use the protocol below; evaluation backflow, DiagnosisRun workflows and other domains remain incomplete; this is isolated validation, not a production cutover.
+**Product compatibility status (2026-11-14):** Login, navigation and visible markup retain the pre-refactor layout. Server compatibility now adapts existing Trace contracts to core storage. Diagnosis chat/self-Traces and Trace reports use the protocol below; Dataset versions/Trace backflow/generation use the steps below; experiment/evaluation results, DiagnosisRun workflows and other domains remain incomplete; this is isolated validation, not a production cutover.
 
 The mode flag is server-only. Existing credentials must be verified and explicitly mapped to current IAM principals/workspaces. Missing mappings, revoked access and core failures fail closed without legacy Trace fallback. Other domains still have legacy paths. See the [reference](../../reference/platform/storage-core.md) and implementation status for coverage.
 
@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-New targets apply001–007, currently schema_version7. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
+New targets apply001–009, currently schema_version9. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -95,10 +95,19 @@ Initialize legacy Prisma fixtures only in a new isolated SQLite file with `prism
 
 ## Verify diagnosis in isolation
 
-Back up and explicitly upgrade the isolated core target to007. Keep the existing login and private identity mapping; use read/write for follow-up chat, execute for reports and delete for existing deletion operations, subject to Trace ownership and group roles. Do not use a write-only collector key for the UI.
+Back up and explicitly upgrade the isolated core target to009. Keep the existing login and private identity mapping; use read/write for follow-up chat, execute for reports and delete for existing deletion operations, subject to Trace ownership and group roles. Do not use a write-only collector key for the UI.
 
 Open an authorized Trace in the original fault page, start a follow-up and reload its history. Check the `fault-diagnosis-agent` self-Trace using the original provider session ID and inspect actual tool results. Restart the isolated core service and verify the persisted messages. Explicit null creates a new upstream session; cross-actor continuation currently returns409, while an authorized group admin can read history and start their own conversation.
 
 Run/reload AgentDebug and SkillsAnalysis through their original endpoints; force/delete must fence old jobs and live revocation/deletion must stop access. State whether validation used a fixture Agent or a real model. Fixture runs verify storage/HTTP/SSE and UI recovery, not real-model diagnosis quality. Legacy conversations/reports are retained without automatic import.
 
 Use the original login flow. Diagnosis uses the same existing Key and retains existing logout/account-switching behavior.
+
+
+## Verify Dataset contracts (008/009)
+
+Initialize new targets through009. For an existing isolated core target, stop writers, retain the artifact directory and upgrade explicitly to9 with a fresh backup path. Do not use Prisma db push or point initialization at the original business database.
+
+Use the original sidebar Dataset page to create a Dataset, add/edit a case and add a field, then refresh. Backflow the same Trace twice to verify deduplication; save two stale edit drafts to verify409 without losing the first change. There are no new visible version controls; use the reference queries for historical summaries.
+
+Ingest real OTLP first, select an authorized Agent/time window in the existing Trace-generation form, and check progress, publication, cancellation and deletion receipts. Restart the isolated Next/helper processes and view progress as the original live actor: recovery waits for an existing lease to expire, then increases the epoch. Cancellation of a published job conflicts; deletion needs its independent capability. Remaining experiment/Benchmark consumers are outside this acceptance slice.

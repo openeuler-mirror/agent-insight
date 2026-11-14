@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+
 import { transaction } from './transaction';
 import { Worker } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
@@ -354,6 +356,7 @@ export class TraceDatasetManager {
 type Startup = { ready: boolean; pending?: Promise<void>; error?: GenerationError; retryAt: number };
 const globalManager = globalThis as typeof globalThis & { traceDatasetManager?: TraceDatasetManager; traceDatasetStartup?: Startup };
 export function startTraceDatasetManager() {
+  if (isStorageCoreEnabled()) return;
   const state = globalManager.traceDatasetStartup ??= { ready: false, retryAt: 0 };
   if (state.ready || state.pending || Date.now() < state.retryAt) return;
   state.error = undefined;
@@ -378,6 +381,7 @@ export function startTraceDatasetManager() {
   }).finally(() => { state.pending = undefined; });
 }
 export async function getTraceDatasetManager() {
+  if (isStorageCoreEnabled()) throw new GenerationError('FEATURE_UNAVAILABLE', 'Core generation requires the authenticated repository', 503);
   startTraceDatasetManager();
   const state = globalManager.traceDatasetStartup!;
   if (state.ready && globalManager.traceDatasetManager) return globalManager.traceDatasetManager;

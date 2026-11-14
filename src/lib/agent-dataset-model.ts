@@ -146,6 +146,7 @@ export function hasMeaningfulDatasetCaseValue(
 }
 
 export interface AgentDataset {
+  _storageEtag?: string;
   generationSource?: string | null;
   generationStatus?: string | null;
   id: string;
