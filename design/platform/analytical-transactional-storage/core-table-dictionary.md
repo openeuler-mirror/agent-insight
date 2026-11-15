@@ -1,16 +1,16 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-14。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，当前 **46 张事务表 + 13 张 ClickHouse 表，共59张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-14。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，当前 **62 张事务表 + 13 张 ClickHouse 表，共75张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这59张表对应**46张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这75张表对应**62张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共46表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共62表]
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
@@ -19,8 +19,15 @@ flowchart TB
     SUPPORT[投递、路由、制品、维护 7表]
     INGEST[可靠采集与实体版本 2表]
     META[Trace旧ID、标注与标签 4表]
-    DIAG[诊断会话、消息、报告及当前指针 4表]
+    DIAG[诊断会话、消息、报告及当前指针和结果诊断绑定 6表]
     DATASET[Dataset兼容head、回执及生成任务 3表]
+    EXP[实验容器、Case、RunPlan关联、结果槽、checkpoint、审阅、回执和私有Judge归属，以及派生Issue解决注解 9表]
+    BENCH[Benchmark私有数据集、实验绑定、外部任务、证据制品及操作回执 5表]
+    BENCH -->|复用计划、lease及结果回执| RUN
+    BENCH -->|公开输入与私有gold分离封存| ASSET
+    EXP -->|复用不可变RunPlan及结果选择| RUN
+    EXP -->|固定资产release| ASSET
+    EXP -->|CH物化及取消投递| SUPPORT
     DATASET -->|同库身份、草稿与封存版本| ASSET
     DATASET -->|实时资源授权| IAM
     DATASET -->|同事务登记版本投影事件| SUPPORT
@@ -2072,3 +2079,656 @@ DDL没有将整条终态行设为不可变，也未检查stage与stage_index映�
 - 生成config/members固定，capture保存已冻结来源的私有索引；接管推进epoch，失效worker不能发布。删除/恢复推进Dataset lifecycle；恢复登记新lifecycle的投影任务，不使旧event或旧job fence重新有效。
 - Dataset权威读取是控制库head/sealed release及私有不可变制品。Outbox与版本同事务提交；CH样本/成员异步投影按固定内容重放，全部sink成功且lease仍有效才标indexed。跨库无FK，控制事务提交或CH表存在不等于投影完整。
 - 三库SQL：[SQLite 008](../../../services/storage/schema/sqlite/008_dataset_assets.sql)、[PG 008](../../../services/storage/schema/postgresql/008_dataset_assets.sql)、[openGauss 008](../../../services/storage/schema/opengauss/008_dataset_assets.sql)、[SQLite 009](../../../services/storage/schema/sqlite/009_dataset_generation.sql)、[PG 009](../../../services/storage/schema/postgresql/009_dataset_generation.sql)、[openGauss 009](../../../services/storage/schema/opengauss/009_dataset_generation.sql)。本节只描述冻结schema，不自动迁移旧库，不代替HTTP/UI或容量验收。
+
+
+## 010–011 实验、评测结果与诊断绑定
+
+010追加8表103字段；011追加2表20字段。没有新增CH物理表；结果事实进入既有 `eval_result_facts`、`eval_metric_facts`，选择与发布复用001协议。001–009前缀保持原字节；010/011仅显式迁移后可用。以下由两份机器目录列出完整字段和约束；三库逐列约束以同版本SQL为准，不能只按列名手工补表。
+
+- `experiment_heads` 是可编辑业务容器，不等于一次执行。每次启动/重试/监听追加通过 `experiment_runs` 关联独立001 `runs`；`plan_hash/plan_manifest_ref` 是不可变输入与配置。
+- `experiment_cases` 保存稳定外部Case身份、生命周期及内容hash/ref；`experiment_result_slots` 保存外部Result ID与当前工作/选择。机器分数、过程和扩展只在不可变结果制品/receipt及CH事实中保存，人工评分和评论另追加审计注解，不能覆写机器结果。
+- `experiment_attempt_checkpoints` 按租约fence与checkpoint revision CAS记录命令、FI和Trace交接；真实执行机来自封存execution_request，不能把服务端租约worker当作客户端。未确认旧进程退出时不得重发Agent。
+- `diagnosis_runs` 绑定选中的机器receipt、人工评审、精确RunPlan与Trace来源；运行/租约/报告仍用001，不建立第二份可变报告真相。`expected_input_hash`包含语义source fingerprint；无关Case、只读reconcile和CH发布确认不使当前诊断误失效。
+- 两张 `*_judge_traces` 在Agent Trace路由创建的同一事务写入，阻止评分/诊断参考答案通过自身Trace旁路泄露。仅原actor可读；即使业务实验元数据被组管理员读取，Trace列表、单点、下载和汇总都继续排除他人的私有Judge正文。
+
+```mermaid
+flowchart LR
+  H[experiment_heads] --> E[experiment_runs]
+  E --> R[001 runs: immutable plan hash/ref]
+  H --> C[experiment_cases: body hash/ref]
+  C --> S[experiment_result_slots]
+  S --> W[001 work_items / work_attempts]
+  W --> P[experiment_attempt_checkpoints]
+  W --> RR[001 result_receipts: machine artifact]
+  RR --> RS[001 result_selections]
+  H --> A[experiment_annotations: review/comment/cancel]
+  H --> OP[experiment_operation_receipts]
+  C --> D[diagnosis_runs: exact source/input hash]
+  D --> R
+  P --> J[experiment_judge_traces]
+  D --> DJ[diagnosis_judge_traces]
+  J --> T[trace_locators / Trace ACL]
+  DJ --> T
+  RR -. Outbox / verified publication .-> CH[CH result / metric facts]
+```
+
+字段类型：`TEXT`在三库均为TEXT；目录中的`BIGINT`在SQLite实现为带逐列 `typeof(...)=integer` 的INTEGER，在PG/openGauss为BIGINT。可空与默认值逐列列出；PK/FK不允许跨workspace。hash固定64字符，ref保存私有内容寻址位置而非公开URL。正文与扩展JSON在领域层做UTF-8/展开预算及hash验证，不依赖数据库JSON方言。所有revision/fence外部以十进制字符串传递；时间为非负毫秒，revision/fence为正整数且加法检查2^63−1溢出。
+
+机器目录：`services/storage/schema/experiment-catalog.json`。DDL：`services/storage/schema/{sqlite,postgresql,opengauss}/010_experiments.sql`。
+
+### experiment_heads
+
+实验业务容器与当前生命周期。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `name` | TEXT | 否 | 无 |
+| `type` | TEXT | 否 | 无 |
+| `scope` | TEXT | 否 | 无 |
+| `skill_name` | TEXT | 否 | 无 |
+| `agent_name` | TEXT | 否 | 无 |
+| `status` | TEXT | 否 | 无 |
+| `watch_mode` | BIGINT | 否 | `0` |
+| `watch_enabled_at_ms` | BIGINT | 是 | 无 |
+| `metadata_hash` | TEXT | 否 | 无 |
+| `metadata_ref` | TEXT | 否 | 无 |
+| `revision` | BIGINT | 否 | `1` |
+| `lifecycle_revision` | BIGINT | 否 | `1` |
+| `state` | TEXT | 否 | 无 |
+| `current_run_id` | TEXT | 是 | 无 |
+| `created_by` | TEXT | 否 | 无 |
+| `deleted_at_ms` | BIGINT | 是 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+| `updated_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","experiment_id"]`。
+
+外键：`[["workspace_id","workspaces",["workspace_id"]],["created_by","iam_principals",["principal_id"]],[["workspace_id","experiment_id","current_run_id"],"experiment_runs",["workspace_id","experiment_id","run_id"]]]`。
+
+索引：`[["workspace_id","state","scope","updated_at_ms","experiment_id"],["workspace_id","watch_mode","agent_name"]]`。
+
+不可变身份列：`["workspace_id","experiment_id","created_by","created_at_ms"]`。
+
+CHECK约束：
+
+- `state IN ('active','deleted')`
+- `status IN ('draft','queued','running','done','partial','failed','cancelled')`
+- `type IN ('single','llm','framework','skill')`
+- `watch_mode IN (0,1)`
+- `(state='active' AND deleted_at_ms IS NULL) OR (state='deleted' AND deleted_at_ms IS NOT NULL)`
+- `length(name)>0`
+- `length(experiment_id)>0`
+- `watch_mode >= 0 AND watch_mode <= 9223372036854775807`
+- `watch_enabled_at_ms >= 0 AND watch_enabled_at_ms <= 9223372036854775807`
+- `length(metadata_hash)=64`
+- `length(metadata_ref)>0`
+- `revision >= 1 AND revision <= 9223372036854775807`
+- `lifecycle_revision >= 1 AND lifecycle_revision <= 9223372036854775807`
+- `deleted_at_ms >= 0 AND deleted_at_ms <= 9223372036854775807`
+- `created_at_ms >= 0 AND created_at_ms <= 9223372036854775807`
+- `updated_at_ms >= 0 AND updated_at_ms <= 9223372036854775807`
+
+可变字段受单调revision/CAS触发器及领域事务保护，不能绕过生命周期/版本屏障。
+
+### experiment_runs
+
+实验与不可变RunPlan的归属。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `run_id` | TEXT | 否 | 无 |
+| `generation` | BIGINT | 否 | 无 |
+| `lifecycle_revision` | BIGINT | 否 | 无 |
+| `created_by` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","run_id"]`。
+
+唯一约束：`[["workspace_id","experiment_id","run_id"],["workspace_id","experiment_id","generation"]]`。
+
+外键：`[[["workspace_id","experiment_id"],"experiment_heads",["workspace_id","experiment_id"]],[["workspace_id","run_id"],"runs",["workspace_id","run_id"]],["created_by","iam_principals",["principal_id"]]]`。
+
+索引：`[["workspace_id","experiment_id","created_at_ms"]]`。
+
+CHECK约束：
+
+- `length(experiment_id)>0`
+- `generation >= 1 AND generation <= 9223372036854775807`
+- `lifecycle_revision >= 1 AND lifecycle_revision <= 9223372036854775807`
+- `created_at_ms >= 0 AND created_at_ms <= 9223372036854775807`
+
+全行只追加；直接UPDATE/DELETE也由触发器拒绝。
+
+### experiment_cases
+
+稳定Case、正文引用与删除屏障。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `case_id` | TEXT | 否 | 无 |
+| `ordinal` | BIGINT | 否 | 无 |
+| `state` | TEXT | 否 | 无 |
+| `revision` | BIGINT | 否 | `1` |
+| `lifecycle_revision` | BIGINT | 否 | `1` |
+| `payload_hash` | TEXT | 否 | 无 |
+| `payload_ref` | TEXT | 否 | 无 |
+| `trace_id` | TEXT | 是 | 无 |
+| `deleted_at_ms` | BIGINT | 是 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+| `updated_at_ms` | BIGINT | 否 | 无 |
+| `binding_hash` | TEXT | 是 | 无 |
+
+主键：`["workspace_id","case_id"]`。
+
+唯一约束：`[["workspace_id","experiment_id","case_id"]]`。
+
+外键：`[[["workspace_id","experiment_id"],"experiment_heads",["workspace_id","experiment_id"]],[["workspace_id","trace_id"],"trace_locators",["workspace_id","trace_id"]]]`。
+
+索引：`[["workspace_id","experiment_id","state","ordinal"]]`。
+
+部分索引：`[{"name":"idx_experiment_case_active_binding","columns":["workspace_id","experiment_id","binding_hash"],"unique":true,"where":"state='active'"}]`。
+
+不可变身份列：`["workspace_id","experiment_id","case_id","created_at_ms"]`。
+
+CHECK约束：
+
+- `state IN ('active','deleted')`
+- `(state='active' AND deleted_at_ms IS NULL) OR (state='deleted' AND deleted_at_ms IS NOT NULL)`
+- `binding_hash IS NULL OR length(binding_hash)=64`
+- `length(experiment_id)>0`
+- `length(case_id)>0`
+- `ordinal >= 0 AND ordinal <= 9223372036854775807`
+- `revision >= 1 AND revision <= 9223372036854775807`
+- `lifecycle_revision >= 1 AND lifecycle_revision <= 9223372036854775807`
+- `length(payload_hash)=64`
+- `length(payload_ref)>0`
+- `deleted_at_ms >= 0 AND deleted_at_ms <= 9223372036854775807`
+- `created_at_ms >= 0 AND created_at_ms <= 9223372036854775807`
+- `updated_at_ms >= 0 AND updated_at_ms <= 9223372036854775807`
+- `length(binding_hash)=64`
+
+可变字段受单调revision/CAS触发器及领域事务保护，不能绕过生命周期/版本屏障。
+
+### experiment_result_slots
+
+稳定评测槽与当前选择。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `case_id` | TEXT | 否 | 无 |
+| `result_id` | TEXT | 否 | 无 |
+| `evaluator_id` | TEXT | 否 | 无 |
+| `run_id` | TEXT | 是 | 无 |
+| `work_item_id` | TEXT | 是 | 无 |
+| `selected_result_id` | TEXT | 是 | 无 |
+| `review_id` | TEXT | 是 | 无 |
+| `status` | TEXT | 否 | 无 |
+| `revision` | BIGINT | 否 | `1` |
+| `evaluation_version` | BIGINT | 否 | `0` |
+| `created_at_ms` | BIGINT | 否 | 无 |
+| `updated_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","result_id"]`。
+
+唯一约束：`[["workspace_id","case_id","evaluator_id"],["workspace_id","experiment_id","result_id"],["workspace_id","experiment_id","case_id","result_id"]]`。
+
+外键：`[[["workspace_id","experiment_id","case_id"],"experiment_cases",["workspace_id","experiment_id","case_id"]],[["workspace_id","experiment_id","run_id"],"experiment_runs",["workspace_id","experiment_id","run_id"]],[["workspace_id","run_id","work_item_id","case_id","evaluator_id"],"work_items",["workspace_id","run_id","work_item_id","case_key","evaluator_slot"]],[["workspace_id","run_id","case_id","evaluator_id","selected_result_id"],"result_receipts",["workspace_id","run_id","case_key","evaluator_slot","result_id"]],[["workspace_id","experiment_id","case_id","result_id","review_id"],"experiment_annotations",["workspace_id","experiment_id","case_id","result_id","annotation_id"]]]`。
+
+索引：`[["workspace_id","experiment_id","status"]]`。
+
+不可变身份列：`["workspace_id","experiment_id","case_id","result_id","evaluator_id","created_at_ms"]`。
+
+CHECK约束：
+
+- `status IN ('pending','running','done','failed','cancelled','skipped')`
+- `(run_id IS NULL AND work_item_id IS NULL AND selected_result_id IS NULL) OR (run_id IS NOT NULL AND work_item_id IS NOT NULL)`
+- `length(experiment_id)>0`
+- `length(case_id)>0`
+- `length(result_id)>0`
+- `length(evaluator_id)>0`
+- `revision >= 1 AND revision <= 9223372036854775807`
+- `evaluation_version >= 0 AND evaluation_version <= 9223372036854775807`
+- `created_at_ms >= 0 AND created_at_ms <= 9223372036854775807`
+- `updated_at_ms >= 0 AND updated_at_ms <= 9223372036854775807`
+
+可变字段受单调revision/CAS触发器及领域事务保护，不能绕过生命周期/版本屏障。
+
+### experiment_attempt_checkpoints
+
+执行/评分attempt的租约和持久交接。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `case_id` | TEXT | 否 | 无 |
+| `run_id` | TEXT | 否 | 无 |
+| `work_item_id` | TEXT | 否 | 无 |
+| `attempt_id` | TEXT | 否 | 无 |
+| `fence` | BIGINT | 否 | 无 |
+| `lease_owner` | TEXT | 否 | 无 |
+| `actor_principal_id` | TEXT | 否 | 无 |
+| `lifecycle_revision` | BIGINT | 否 | 无 |
+| `case_lifecycle_revision` | BIGINT | 否 | 无 |
+| `revision` | BIGINT | 否 | `1` |
+| `payload_hash` | TEXT | 否 | 无 |
+| `payload_ref` | TEXT | 否 | 无 |
+| `stage` | TEXT | 否 | 无 |
+| `command_id` | TEXT | 是 | 无 |
+| `trace_id` | TEXT | 是 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+| `updated_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","attempt_id"]`。
+
+唯一约束：`[["workspace_id","experiment_id","run_id","attempt_id","actor_principal_id"]]`。
+
+外键：`[[["workspace_id","experiment_id","case_id"],"experiment_cases",["workspace_id","experiment_id","case_id"]],[["workspace_id","experiment_id","run_id"],"experiment_runs",["workspace_id","experiment_id","run_id"]],[["workspace_id","work_item_id","attempt_id"],"work_attempts",["workspace_id","work_item_id","attempt_id"]],[["workspace_id","run_id","work_item_id","case_id"],"work_items",["workspace_id","run_id","work_item_id","case_key"]],[["workspace_id","trace_id"],"trace_locators",["workspace_id","trace_id"]],["actor_principal_id","iam_principals",["principal_id"]]]`。
+
+索引：`[["workspace_id","experiment_id","case_id","created_at_ms"],["workspace_id","command_id"]]`。
+
+不可变身份列：`["workspace_id","experiment_id","case_id","run_id","work_item_id","attempt_id","fence","lease_owner","actor_principal_id","lifecycle_revision","case_lifecycle_revision","created_at_ms"]`。
+
+CHECK约束：
+
+- `length(experiment_id)>0`
+- `length(case_id)>0`
+- `fence >= 1 AND fence <= 9223372036854775807`
+- `length(lease_owner)>0`
+- `lifecycle_revision >= 1 AND lifecycle_revision <= 9223372036854775807`
+- `case_lifecycle_revision >= 1 AND case_lifecycle_revision <= 9223372036854775807`
+- `revision >= 1 AND revision <= 9223372036854775807`
+- `length(payload_hash)=64`
+- `length(payload_ref)>0`
+- `length(stage)>0`
+- `created_at_ms >= 0 AND created_at_ms <= 9223372036854775807`
+- `updated_at_ms >= 0 AND updated_at_ms <= 9223372036854775807`
+
+可变字段受单调revision/CAS触发器及领域事务保护，不能绕过生命周期/版本屏障。
+
+### experiment_annotations
+
+人工review、评论与取消审计。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `annotation_id` | TEXT | 否 | 无 |
+| `kind` | TEXT | 否 | 无 |
+| `case_id` | TEXT | 是 | 无 |
+| `result_id` | TEXT | 是 | 无 |
+| `machine_result_id` | TEXT | 是 | 无 |
+| `subject_id` | TEXT | 是 | 无 |
+| `actor_principal_id` | TEXT | 否 | 无 |
+| `payload_hash` | TEXT | 否 | 无 |
+| `payload_ref` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+| `lookup_key` | TEXT | 是 | 无 |
+
+主键：`["workspace_id","annotation_id"]`。
+
+唯一约束：`[["workspace_id","experiment_id","annotation_id"],["workspace_id","experiment_id","case_id","result_id","annotation_id"]]`。
+
+外键：`[[["workspace_id","experiment_id"],"experiment_heads",["workspace_id","experiment_id"]],[["workspace_id","experiment_id","case_id"],"experiment_cases",["workspace_id","experiment_id","case_id"]],[["workspace_id","experiment_id","case_id","result_id"],"experiment_result_slots",["workspace_id","experiment_id","case_id","result_id"]],[["workspace_id","machine_result_id"],"result_receipts",["workspace_id","result_id"]],["actor_principal_id","iam_principals",["principal_id"]]]`。
+
+索引：`[["workspace_id","experiment_id","created_at_ms","annotation_id"],["workspace_id","result_id","created_at_ms"],["workspace_id","kind","lookup_key","created_at_ms","annotation_id"]]`。
+
+CHECK约束：
+
+- `kind IN ('review','comment','comment_remove','cancellation','cancellation_update','derived-evaluation','derived-issue')`
+- `result_id IS NULL OR case_id IS NOT NULL`
+- `kind<>'review' OR (result_id IS NOT NULL AND machine_result_id IS NOT NULL)`
+- `kind<>'comment_remove' OR subject_id IS NOT NULL`
+- `length(experiment_id)>0`
+- `length(case_id)>0`
+- `length(result_id)>0`
+- `length(payload_hash)=64`
+- `length(payload_ref)>0`
+- `created_at_ms >= 0 AND created_at_ms <= 9223372036854775807`
+
+全行只追加；直接UPDATE/DELETE也由触发器拒绝。
+
+### experiment_operation_receipts
+
+精确请求幂等结果。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `actor_principal_id` | TEXT | 否 | 无 |
+| `operation_kind` | TEXT | 否 | 无 |
+| `operation_key` | TEXT | 否 | 无 |
+| `request_hash` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `response_hash` | TEXT | 否 | 无 |
+| `response_ref` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","actor_principal_id","operation_kind","operation_key"]`。
+
+外键：`[["actor_principal_id","iam_principals",["principal_id"]],[["workspace_id","experiment_id"],"experiment_heads",["workspace_id","experiment_id"]]]`。
+
+索引：`[["workspace_id","experiment_id","created_at_ms"]]`。
+
+CHECK约束：
+
+- `length(operation_kind)>0`
+- `length(operation_key)>0`
+- `length(request_hash)=64`
+- `length(experiment_id)>0`
+- `length(response_hash)=64`
+- `length(response_ref)>0`
+- `created_at_ms >= 0 AND created_at_ms <= 9223372036854775807`
+
+全行只追加；直接UPDATE/DELETE也由触发器拒绝。
+
+### experiment_judge_traces
+
+私有评估器自身Trace归属。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `trace_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `run_id` | TEXT | 否 | 无 |
+| `attempt_id` | TEXT | 否 | 无 |
+| `owner_principal_id` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","trace_id"]`。
+
+外键：`[[["workspace_id","trace_id"],"trace_locators",["workspace_id","trace_id"]],[["workspace_id","experiment_id","run_id"],"experiment_runs",["workspace_id","experiment_id","run_id"]],[["workspace_id","experiment_id","run_id","attempt_id","owner_principal_id"],"experiment_attempt_checkpoints",["workspace_id","experiment_id","run_id","attempt_id","actor_principal_id"]],[["workspace_id","attempt_id"],"work_attempts",["workspace_id","attempt_id"]],["owner_principal_id","iam_principals",["principal_id"]]]`。
+
+索引：`[["workspace_id","experiment_id","run_id","attempt_id"]]`。
+
+CHECK约束：
+
+- `length(experiment_id)>0`
+- `created_at_ms >= 0 AND created_at_ms <= 9223372036854775807`
+
+全行只追加；直接UPDATE/DELETE也由触发器拒绝。
+
+机器目录：`services/storage/schema/diagnosis-run-catalog.json`。DDL：`services/storage/schema/{sqlite,postgresql,opengauss}/011_diagnosis_runs.sql`。
+
+### diagnosis_runs
+
+评测/Trace报告诊断的不可变来源绑定。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `diagnosis_id` | TEXT | 否 | 无 |
+| `actor_principal_id` | TEXT | 否 | 无 |
+| `request_key` | TEXT | 否 | 无 |
+| `source_kind` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 是 | 无 |
+| `case_id` | TEXT | 是 | 无 |
+| `trace_id` | TEXT | 否 | 无 |
+| `source_fingerprint` | TEXT | 否 | 无 |
+| `input_hash` | TEXT | 否 | 无 |
+| `generator` | TEXT | 否 | 无 |
+| `snapshot_hash` | TEXT | 否 | 无 |
+| `snapshot_ref` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","diagnosis_id"]`。
+
+唯一约束：`[["workspace_id","actor_principal_id","request_key"],["workspace_id","diagnosis_id","actor_principal_id"]]`。
+
+外键：`[{"columns":["workspace_id","diagnosis_id"],"references":{"table":"runs","columns":["workspace_id","run_id"]}},{"columns":["actor_principal_id"],"references":{"table":"iam_principals","columns":["principal_id"]}},{"columns":["workspace_id","experiment_id"],"references":{"table":"experiment_heads","columns":["workspace_id","experiment_id"]}},{"columns":["workspace_id","case_id"],"references":{"table":"experiment_cases","columns":["workspace_id","case_id"]}},{"columns":["workspace_id","trace_id"],"references":{"table":"trace_locators","columns":["workspace_id","trace_id"]}}]`。
+
+索引：`[{"name":"idx_diagnosis_runs_source","columns":["workspace_id","experiment_id","case_id","created_at_ms"]},{"name":"idx_diagnosis_runs_actor","columns":["workspace_id","actor_principal_id","created_at_ms"]}]`。
+
+CHECK约束：
+
+- `source_kind IN ('experiment','trace-report')`
+- `(source_kind='experiment' AND experiment_id IS NOT NULL AND case_id IS NOT NULL) OR (source_kind='trace-report' AND experiment_id IS NULL AND case_id IS NULL)`
+- `length(request_key) BETWEEN 1 AND 512`
+- `length(generator) BETWEEN 1 AND 300`
+- `length(snapshot_ref)>0`
+- `created_at_ms>=0`
+- `length(source_fingerprint)=64`
+- `length(input_hash)=64`
+- `length(snapshot_hash)=64`
+
+其他不变式：Append only immutable actor-bound identity; mutable state remains in core001。
+
+### diagnosis_judge_traces
+
+私有诊断Agent自身Trace归属。
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `diagnosis_id` | TEXT | 否 | 无 |
+| `attempt_id` | TEXT | 否 | 无 |
+| `trace_id` | TEXT | 否 | 无 |
+| `owner_principal_id` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","trace_id"]`。
+
+外键：`[{"columns":["workspace_id","diagnosis_id","owner_principal_id"],"references":{"table":"diagnosis_runs","columns":["workspace_id","diagnosis_id","actor_principal_id"]}},{"columns":["workspace_id","attempt_id"],"references":{"table":"work_attempts","columns":["workspace_id","attempt_id"]}},{"columns":["workspace_id","trace_id"],"references":{"table":"trace_locators","columns":["workspace_id","trace_id"]}}]`。
+
+索引：`[{"name":"idx_diagnosis_judge_traces_run","columns":["workspace_id","diagnosis_id","attempt_id"]}]`。
+
+CHECK约束：
+
+- `created_at_ms>=0`
+
+其他不变式：Append only immutable actor-bound identity; mutable state remains in core001。
+
+
+### 版本、跨库一致性与保留规则
+
+1. 输入Dataset/Skill/Evaluator在运行前封存，RunPlan按真实release/hash引用；worker只能执行封存输入。模型仅冻结无凭据的连接指纹和选定配置ID，实际凭据在受信actor运行时解析；配置失效明确失败，不自动使用最新配置。私有控制器以真实principal/workspace、目的和精确请求体hash签名，公开请求中的自称attested无效。
+2. 原子性边界是一个事务库领域操作：创建容器/Case/组、冻结计划/输入与工作项、接受结果/选择/Outbox、人工review及其操作回执。HTTP不传任意SQL，不用逐次RPC冒充Prisma事务。对比两侧Case通过显式batch同事务提交。
+3. CH写入可重投，accepted不等于indexed/published。物化失败保留Outbox与原机器制品；发布屏障核对输入、选择和生命周期后才生效。cancel/delete即刻推进OLTP屏障，旧worker即使晚回也不能重新选择结果；不能以CH最终一致性延迟绕过权限/删除。
+4. 取消目标从封存命令/FI身份恢复，确认停止必须读取对应真实客户端/运行的回执；未确认状态对用户仍是pending。跨模式/换客户端重试先按旧目标清理。操作回执在权限实时校验后提供原请求精确重试，不重新冻结最新资产或重新执行Agent。
+5. 010/011迁移本身只追加表，不把旧库自动搬空或让新旧双写。旧Experiment/Case/Trajectory/Evaluation/Diagnosis等语义迁移须显式导出、映射身份与来源、冻结历史定义、核验历史选择和计数，再在独立目标apply；尚无全量迁移证明时不切换生产库。原始备份、导出和旧库只读保留，含缺失来源/版本的旧行须进入差异报告，不能伪造release或最新分数补齐。
+
+
+## Benchmark 核心表（012/013）
+
+012机器目录：`services/storage/schema/benchmark-catalog.json`。013仅将`benchmark_artifacts.size_bytes`下界由1放宽到0，保留原012校验和、全部历史数据、索引和不可变/保留触发器。最终约束以013为准。
+
+### benchmark_dataset_heads
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `dataset_id` | TEXT | 否 | 无 |
+| `public_dataset_id` | TEXT | 否 | 无 |
+| `public_asset_id` | TEXT | 否 | 无 |
+| `public_release_id` | TEXT | 否 | 无 |
+| `private_asset_id` | TEXT | 否 | 无 |
+| `private_release_id` | TEXT | 否 | 无 |
+| `adapter_key` | TEXT | 否 | 无 |
+| `content_hash` | TEXT | 否 | 无 |
+| `state` | TEXT | 否 | 无 |
+| `revision` | BIGINT | 否 | 无 |
+| `lifecycle_revision` | BIGINT | 否 | 无 |
+| `created_by` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+| `updated_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","dataset_id"]`。
+
+唯一约束：`[["workspace_id","public_dataset_id"],["workspace_id","private_asset_id"]]`。
+
+外键：`[{"columns":["workspace_id","public_dataset_id"],"references":{"table":"dataset_compat_heads","columns":["workspace_id","dataset_id"]}},{"columns":["workspace_id","public_asset_id","public_release_id"],"references":{"table":"asset_release_seals","columns":["workspace_id","asset_id","release_id"]}},{"columns":["workspace_id","private_asset_id","private_release_id"],"references":{"table":"asset_release_seals","columns":["workspace_id","asset_id","release_id"]}},{"columns":["created_by"],"references":{"table":"iam_principals","columns":["principal_id"]}}]`。
+
+索引：`[["workspace_id","adapter_key","state","updated_at_ms"]]`。
+
+CHECK约束：`["state IN ('active','deleted')","length(adapter_key)>0","public_asset_id<>private_asset_id","length(content_hash)=64","revision>=1 AND revision<=9223372036854775807","lifecycle_revision>=1 AND lifecycle_revision<=9223372036854775807","created_at_ms>=0 AND created_at_ms<=9223372036854775807","updated_at_ms>=0 AND updated_at_ms<=9223372036854775807","updated_at_ms>=created_at_ms"]`。
+
+### benchmark_experiment_bindings
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `dataset_id` | TEXT | 否 | 无 |
+| `public_release_id` | TEXT | 否 | 无 |
+| `private_release_id` | TEXT | 否 | 无 |
+| `binding_hash` | TEXT | 否 | 无 |
+| `binding_ref` | TEXT | 否 | 无 |
+| `actor_principal_id` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","experiment_id"]`。
+
+唯一约束：`[]`。
+
+外键：`[{"columns":["workspace_id","experiment_id"],"references":{"table":"experiment_heads","columns":["workspace_id","experiment_id"]}},{"columns":["workspace_id","dataset_id"],"references":{"table":"benchmark_dataset_heads","columns":["workspace_id","dataset_id"]}},{"columns":["workspace_id","public_release_id"],"references":{"table":"asset_release_seals","columns":["workspace_id","release_id"]}},{"columns":["workspace_id","private_release_id"],"references":{"table":"asset_release_seals","columns":["workspace_id","release_id"]}},{"columns":["actor_principal_id"],"references":{"table":"iam_principals","columns":["principal_id"]}}]`。
+
+索引：`[["workspace_id","dataset_id","experiment_id"]]`。
+
+CHECK约束：`["length(binding_hash)=64","length(binding_ref)>0","created_at_ms>=0 AND created_at_ms<=9223372036854775807"]`。
+
+### benchmark_jobs
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `job_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `case_id` | TEXT | 否 | 无 |
+| `run_id` | TEXT | 否 | 无 |
+| `work_item_id` | TEXT | 否 | 无 |
+| `kind` | TEXT | 否 | 无 |
+| `parent_job_id` | TEXT | 是 | 无 |
+| `adapter_key` | TEXT | 否 | 无 |
+| `evaluator_key` | TEXT | 是 | 无 |
+| `attempt_no` | BIGINT | 否 | 无 |
+| `retry_of_job_id` | TEXT | 是 | 无 |
+| `origin_credential_id` | TEXT | 否 | 无 |
+| `origin_credential_kind` | TEXT | 否 | 无 |
+| `actor_principal_id` | TEXT | 否 | 无 |
+| `protocol_state` | TEXT | 否 | 无 |
+| `revision` | BIGINT | 否 | 无 |
+| `request_hash` | TEXT | 是 | 无 |
+| `request_ref` | TEXT | 是 | 无 |
+| `progress_hash` | TEXT | 是 | 无 |
+| `progress_ref` | TEXT | 是 | 无 |
+| `completion_hash` | TEXT | 是 | 无 |
+| `completion_ref` | TEXT | 是 | 无 |
+| `callback_epoch` | BIGINT | 否 | 无 |
+| `callback_token_hash` | TEXT | 是 | 无 |
+| `callback_expires_ms` | BIGINT | 是 | 无 |
+| `callback_attempt_id` | TEXT | 是 | 无 |
+| `callback_fence` | BIGINT | 是 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+| `updated_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","job_id"]`。
+
+唯一约束：`[["workspace_id","experiment_id","case_id","job_id"],["workspace_id","parent_job_id","attempt_no"]]`。
+
+外键：`[{"columns":["workspace_id","experiment_id"],"references":{"table":"benchmark_experiment_bindings","columns":["workspace_id","experiment_id"]}},{"columns":["workspace_id","experiment_id","case_id"],"references":{"table":"experiment_cases","columns":["workspace_id","experiment_id","case_id"]}},{"columns":["workspace_id","experiment_id","run_id"],"references":{"table":"experiment_runs","columns":["workspace_id","experiment_id","run_id"]}},{"columns":["workspace_id","run_id","work_item_id","case_id"],"references":{"table":"work_items","columns":["workspace_id","run_id","work_item_id","case_key"]}},{"columns":["workspace_id","work_item_id","callback_attempt_id"],"references":{"table":"work_attempts","columns":["workspace_id","work_item_id","attempt_id"]}},{"columns":["workspace_id","experiment_id","case_id","parent_job_id"],"references":{"table":"benchmark_jobs","columns":["workspace_id","experiment_id","case_id","job_id"]}},{"columns":["workspace_id","experiment_id","case_id","retry_of_job_id"],"references":{"table":"benchmark_jobs","columns":["workspace_id","experiment_id","case_id","job_id"]}},{"columns":["actor_principal_id"],"references":{"table":"iam_principals","columns":["principal_id"]}}]`。
+
+索引：`[["workspace_id","experiment_id","case_id","kind","created_at_ms"],["workspace_id","protocol_state","updated_at_ms"],["workspace_id","origin_credential_id"]]`。
+
+CHECK约束：`["kind IN ('execute','evaluate')","origin_credential_kind IN ('api','session')","protocol_state IN ('pending','preparing','dispatching','dispatch_unknown','running_agent','collecting','uploading','cleaning','submitted','queued','running_evaluator','normalizing','normalization_failed','completed','failed','cancelled','blocked','execution_failed','dispatch_failed','evaluation_failed','submission_invalid')","(kind='execute' AND parent_job_id IS NULL) OR (kind='evaluate' AND parent_job_id IS NOT NULL)","(callback_token_hash IS NULL AND callback_expires_ms IS NULL AND callback_attempt_id IS NULL AND callback_fence IS NULL) OR (callback_token_hash IS NOT NULL AND callback_expires_ms IS NOT NULL AND callback_attempt_id IS NOT NULL AND callback_fence IS NOT NULL)","parent_job_id IS NULL OR parent_job_id<>job_id","retry_of_job_id IS NULL OR retry_of_job_id<>job_id","attempt_no>=1 AND attempt_no<=9223372036854775807","revision>=1 AND revision<=9223372036854775807","length(request_hash)=64","length(request_ref)>0","length(progress_hash)=64","length(progress_ref)>0","length(completion_hash)=64","length(completion_ref)>0","callback_epoch>=0 AND callback_epoch<=9223372036854775807","length(callback_token_hash)=64","callback_expires_ms>=0 AND callback_expires_ms<=9223372036854775807","callback_fence>=1 AND callback_fence<=9223372036854775807","created_at_ms>=0 AND created_at_ms<=9223372036854775807","updated_at_ms>=0 AND updated_at_ms<=9223372036854775807","updated_at_ms>=created_at_ms","(request_hash IS NULL)=(request_ref IS NULL)","(progress_hash IS NULL)=(progress_ref IS NULL)","(completion_hash IS NULL)=(completion_ref IS NULL)"]`。
+
+### benchmark_artifacts
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `job_id` | TEXT | 否 | 无 |
+| `artifact_id` | TEXT | 否 | 无 |
+| `name` | TEXT | 否 | 无 |
+| `kind` | TEXT | 否 | 无 |
+| `media_type` | TEXT | 否 | 无 |
+| `content_hash` | TEXT | 否 | 无 |
+| `size_bytes` | BIGINT | 否 | 无 |
+| `storage_hash` | TEXT | 否 | 无 |
+| `storage_ref` | TEXT | 否 | 无 |
+| `contract_hash` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","artifact_id"]`。
+
+唯一约束：`[["workspace_id","job_id","name"]]`。
+
+外键：`[{"columns":["workspace_id","job_id"],"references":{"table":"benchmark_jobs","columns":["workspace_id","job_id"]}}]`。
+
+索引：`[["workspace_id","job_id","created_at_ms"],["workspace_id","content_hash"]]`。
+
+CHECK约束：`["length(name) BETWEEN 1 AND 512","size_bytes BETWEEN 0 AND 67108864","length(media_type) BETWEEN 1 AND 256","length(content_hash)=64","size_bytes>=0 AND size_bytes<=9223372036854775807","length(storage_hash)=64","length(storage_ref)>0","length(contract_hash)=64","created_at_ms>=0 AND created_at_ms<=9223372036854775807"]`。
+
+013生效后的大小约束为`0 <= size_bytes <= 67108864`，允许原评估器协议的空stdout/stderr证据；其余不可变规则保持。
+
+### benchmark_operation_receipts
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `actor_principal_id` | TEXT | 否 | 无 |
+| `operation_kind` | TEXT | 否 | 无 |
+| `operation_key` | TEXT | 否 | 无 |
+| `request_hash` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 是 | 无 |
+| `dataset_id` | TEXT | 是 | 无 |
+| `job_id` | TEXT | 是 | 无 |
+| `response_hash` | TEXT | 否 | 无 |
+| `response_ref` | TEXT | 否 | 无 |
+| `created_at_ms` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","actor_principal_id","operation_kind","operation_key"]`。
+
+唯一约束：`[]`。
+
+外键：`[{"columns":["workspace_id"],"references":{"table":"workspaces","columns":["workspace_id"]}},{"columns":["actor_principal_id"],"references":{"table":"iam_principals","columns":["principal_id"]}},{"columns":["workspace_id","experiment_id"],"references":{"table":"experiment_heads","columns":["workspace_id","experiment_id"]}},{"columns":["workspace_id","dataset_id"],"references":{"table":"benchmark_dataset_heads","columns":["workspace_id","dataset_id"]}},{"columns":["workspace_id","job_id"],"references":{"table":"benchmark_jobs","columns":["workspace_id","job_id"]}}]`。
+
+索引：`[["workspace_id","experiment_id","created_at_ms"],["workspace_id","job_id","created_at_ms"]]`。
+
+CHECK约束：`["length(operation_kind) BETWEEN 1 AND 128","length(operation_key) BETWEEN 1 AND 512","(CASE WHEN experiment_id IS NOT NULL THEN 1 ELSE 0 END)+(CASE WHEN dataset_id IS NOT NULL THEN 1 ELSE 0 END)+(CASE WHEN job_id IS NOT NULL THEN 1 ELSE 0 END)=1","length(request_hash)=64","length(response_hash)=64","length(response_ref)>0","created_at_ms>=0 AND created_at_ms<=9223372036854775807"]`。
+
+
+## 派生 Issue 解决注解（014）
+
+只追加人工解决状态，保留原机器Issue与receipt，不回写旧动态SkillIssue。静态Issue继续使用原控制域；两域按可重复领域操作衔接，不宣称跨库事务。
+
+### experiment_derived_issue_annotations
+
+| 字段 | 逻辑类型 | 允许NULL | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | 无 |
+| `annotation_id` | TEXT | 否 | 无 |
+| `experiment_id` | TEXT | 否 | 无 |
+| `issue_id` | TEXT | 否 | 无 |
+| `machine_result_id` | TEXT | 否 | 无 |
+| `owner_principal_id` | TEXT | 否 | 无 |
+| `actor_principal_id` | TEXT | 否 | 无 |
+| `resolved_run_id` | TEXT | 否 | 无 |
+| `resolved_at_ms` | BIGINT | 否 | 无 |
+| `operation_kind` | TEXT | 否 | 无 |
+| `operation_key` | TEXT | 否 | 无 |
+| `request_hash` | TEXT | 否 | 无 |
+| `issue_payload_hash` | TEXT | 否 | 无 |
+| `machine_content_hash` | TEXT | 否 | 无 |
+| `selection_revision` | BIGINT | 否 | 无 |
+
+主键：`["workspace_id","annotation_id"]`。
+
+唯一约束：`[["workspace_id","issue_id"],["workspace_id","actor_principal_id","operation_key","issue_id"]]`。
+
+外键：`[[["workspace_id","experiment_id","issue_id"],"experiment_annotations",["workspace_id","experiment_id","annotation_id"]],[["workspace_id","machine_result_id"],"result_receipts",["workspace_id","result_id"]],["owner_principal_id","iam_principals",["principal_id"]],["actor_principal_id","iam_principals",["principal_id"]],[["workspace_id","actor_principal_id","operation_kind","operation_key"],"experiment_operation_receipts",["workspace_id","actor_principal_id","operation_kind","operation_key"]]]`。
+
+索引：`[["workspace_id","issue_id","resolved_at_ms","annotation_id"]]`。
+
+CHECK约束：`["operation_kind='derived_issue_resolve'","length(annotation_id)>0","length(resolved_run_id) BETWEEN 1 AND 512","length(operation_key)>0","resolved_at_ms>=0 AND resolved_at_ms<=9223372036854775807","selection_revision>0 AND selection_revision<=9223372036854775807","length(request_hash)=64","length(issue_payload_hash)=64","length(machine_content_hash)=64"]`。
+
+不可变列：`true`。

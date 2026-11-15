@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
@@ -28,7 +31,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
-) {
+) :Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>GET(normalized,{ params }));
   try {
     const { id } = await params;
     const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
@@ -49,7 +53,8 @@ export async function GET(
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
-) {
+) :Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,{ params }));
   try {
     const { id } = await params;
     const body = await request.json().catch(() => ({}));

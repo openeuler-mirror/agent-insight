@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {readCoreComparisonCandidates} from '@/lib/storage-core/comparison-traces';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -81,6 +83,7 @@ export const LLM_DIMENSION: VariableDimension = {
     { field: 'skillVersion' },
   ],
   async queryCandidateTraces(agent, model): Promise<TraceCandidate[]> {
+    if(isStorageCoreEnabled())return readCoreComparisonCandidates(agent,model);
     const rows = await prisma.execution.findMany({
       where: { agentName: agent, model },
       select: {

@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreExperimentWriteRoute,retryCoreExperimentCaseRoute} from '@/lib/storage-core/experiment-routes';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -106,7 +108,9 @@ async function prepareGeneratedTraceRetry(experimentId: string, caseId: string):
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string; caseId: string }> },
-) {
+):Promise<Response> {
+  if(isStorageCoreEnabled()){const {id,caseId}=await params;return coreExperimentWriteRoute(req,()=>retryCoreExperimentCaseRoute(id,caseId));}
+
   const { id, caseId } = await params;
   const url = new URL(req.url);
   const { username } = await resolveUser(req, url.searchParams.get('user'));

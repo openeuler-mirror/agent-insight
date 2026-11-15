@@ -14,7 +14,9 @@ export interface CoreReportContext {
  actor:Awaited<ReturnType<typeof compatibilityContext>>&{username:string};
  evidence:Map<string,TraceEvidenceValue>;
 }
-const reports=new AsyncLocalStorage<CoreReportContext>();
+const contextKey=Symbol.for('agent-insight.storage-core.report-context');
+const globalContexts=globalThis as unknown as Record<symbol,AsyncLocalStorage<CoreReportContext>>;
+const reports=globalContexts[contextKey] ||= new AsyncLocalStorage<CoreReportContext>();
 function unavailable():never {throw Object.assign(new Error('Core report context unavailable'),{status:503});}
 export function getCoreReportContext(){return reports.getStore();}
 export function requireCoreReportContext(){return reports.getStore()||unavailable();}

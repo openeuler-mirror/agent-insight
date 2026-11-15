@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreEvaluatorContext,withCoreEvaluatorRoute} from '@/lib/storage-core/evaluators';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -21,7 +23,8 @@ import { evaluatorSkillApi, evaluatorSkillUser } from '@/lib/evaluators/evaluato
 import { EvaluatorSkillError, EvaluatorSkillStore } from '@/lib/evaluators/evaluator-skill-store';
 
 export const dynamic = 'force-dynamic';
-export async function GET(request: Request, { params }: { params: Promise<{ evaluatorId: string; name: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ evaluatorId: string; name: string }> }):Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreEvaluatorContext())return withCoreEvaluatorRoute(request,next=>GET(next,{params}));
   return evaluatorSkillApi(async () => {
     const user = await evaluatorSkillUser(request);
     const { evaluatorId, name } = await params;

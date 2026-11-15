@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreExperiments,requireCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {readCoreExperimentTraces} from '@/lib/storage-core/experiment-traces';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -56,7 +59,17 @@ function isOk(row: { toolCallErrorCount: number | null; failures: string | null 
   }
 }
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()){
+    try{return await withCoreExperiments(req,async()=>{
+      const url=new URL(req.url);const filters=parseExperimentTraceFilters(url.searchParams);const query=new URLSearchParams({ownership:'user'});
+      const agent=url.searchParams.get('agent');if(agent)query.set('agentName',agent);
+      if(filters.search)query.set('query',filters.search);if(filters.from)query.set('timeFrom',filters.from.toISOString());if(filters.to)query.set('timeTo',filters.to.toISOString());if(filters.tagIds.length)query.set('tagIds',filters.tagIds.join(','));
+      const model=url.searchParams.get('model');if(model)query.set('filters',JSON.stringify([{column:'model',operator:'=',value:model}]));
+      const rows=await readCoreExperimentTraces(requireCoreExperimentContext(),query);const page=Math.max(1,parseInt(url.searchParams.get('page')||'1',10)||1);const pageSize=Math.min(100,Math.max(1,parseInt(url.searchParams.get('pageSize')||'20',10)||20));
+      return NextResponse.json({total:rows.length,page,pageSize,items:rows.slice((page-1)*pageSize,page*pageSize).map(row=>({id:row.upload_id,taskId:row.task_id,query:row.query??null,finalResult:row.final_result??null,latency:row.latency??null,tokens:row.tokens??null,timestamp:row.timestamp,ok:Number(row.tool_call_error_count||0)===0&&row.has_failures!==true&&row.trace_status!=='failed',model:row.model??null,skillName:Array.isArray(row.skills)?row.skills[0]??null:null,skillVersion:Array.isArray(row.invoked_skills)?row.invoked_skills[0]?.version??null:null}))});
+    });}catch(error){return coreExperimentFailure(error);}
+  }
   try {
     const url = new URL(req.url);
     const { username } = await resolveUser(req, url.searchParams.get('user'));

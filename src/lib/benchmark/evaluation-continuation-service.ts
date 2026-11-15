@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -36,6 +37,7 @@ const TERMINAL_EVALUATION_STATUSES = [
 ]
 
 export async function runBenchmarkEvaluationContinuation(evaluationId: string): Promise<boolean> {
+  if(isStorageCoreEnabled())throw Object.assign(new Error('Typed Benchmark continuation required'),{status:503})
   const now = new Date()
   const staleLease = new Date(now.getTime() - CONTINUATION_LEASE_MS)
   const claimed = await prisma.benchmarkEvaluation.updateMany({
@@ -144,6 +146,7 @@ export async function runBenchmarkEvaluationContinuation(evaluationId: string): 
 }
 
 export function scheduleBenchmarkEvaluationContinuation(evaluationId: string): void {
+  if(isStorageCoreEnabled())throw Object.assign(new Error('Typed Benchmark continuation required'),{status:503})
   const work = new Promise<void>(resolve => {
     const timer = setTimeout(() => {
       continuationTimers.delete(timer)
@@ -161,6 +164,7 @@ export function scheduleBenchmarkEvaluationContinuation(evaluationId: string): v
 }
 
 export async function resumeBenchmarkEvaluationContinuations(limit = 100): Promise<number> {
+  if(isStorageCoreEnabled())return 0
   const staleLease = new Date(Date.now() - CONTINUATION_LEASE_MS)
   const candidates = await prisma.benchmarkEvaluation.findMany({
     where: {

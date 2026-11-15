@@ -1,3 +1,4 @@
+import {freezeExperimentAssets, startCoreExperiment} from '@/lib/storage-core/experiment-assets';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -43,7 +44,12 @@ import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError } from '@/l
  * 单行超时 5 分钟。
  */
 
-import { createHash } from 'node:crypto';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { requireCoreExperimentContext } from '@/lib/storage-core/experiments';
+import { activateExperimentWork, executeCoreResultRow } from '@/lib/storage-core/experiment-worker';
+import type { FrozenExperimentWork } from '@/lib/storage-core/experiment-worker';
+import { withEvaluationAttempt, waitForEvaluationRetry } from './evaluation-attempt';
+import { createHash, randomUUID } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
 import type { Prisma } from '@prisma/client';
 import {
@@ -116,7 +122,7 @@ import { isFluencyPresetId, runFluencyPreset } from './fluency-preset-evaluators
 import { isHallucinationPresetId, runHallucinationPreset } from './hallucination-preset-evaluators';
 import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 import { deriveSettledExperimentStatus } from './detail-agg';
-import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
+import { frozenExperimentRootCauseResolutionContext, loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
 import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
 import { isSimilarityPresetId, runSimilarityPreset } from './similarity-preset-evaluators';
 import { activeCaseOperations, assertExperimentActive, markExperimentCleanupUnconfirmed, withExperimentCancellation } from './cancellation-context';
@@ -155,6 +161,7 @@ interface CaseRuntime {
     shouldTrigger: boolean;
     skillTriggered: boolean;
     reason?: string;
+    facts?: Record<string,unknown>;
   };
 }
 
@@ -228,10 +235,10 @@ async function loadCaseRuntime(caseRow: {
   evaluatorContextJson: string | null;
   faultInjectionType?: string | null;
   caseValuesJson?: string | null;
-}, user: string, targetSkillName?: string | null, loadRootCauseContext = false): Promise<CaseRuntime> {
+}, user: string, targetSkillName?: string | null, loadRootCauseContext = false, frozen?: FrozenExperimentWork): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
-  const execution = caseRow.executionId
+  const execution = frozen ? frozen.frozen_trace_evidence?.execution as Awaited<ReturnType<typeof prisma.execution.findUnique>> : caseRow.executionId
     ? await prisma.execution.findUnique({ where: { id: caseRow.executionId } })
     : caseRow.taskId
     ? await prisma.execution.findFirst({ where: { taskId: caseRow.taskId } })
@@ -241,7 +248,13 @@ async function loadCaseRuntime(caseRow: {
   let toolCallNames: string[] | undefined;
   let rawInteractions: unknown[] = []; // 忠实版轨迹评估器需要原始 interactions
   const taskId = caseRow.taskId || execution?.taskId || null;
-  if (taskId) {
+  if (frozen) {
+    const source = frozen.frozen_trace_evidence ? frozen.frozen_trace_evidence.session?.interactions : [];
+    const interactions = typeof source === 'string' ? JSON.parse(source) : source;
+    if (!Array.isArray(interactions)) throw Object.assign(new Error('Frozen Trace interactions are missing'), {status: 503});
+    rawInteractions = interactions;
+    toolCallNames = extractToolCallNames(interactions);
+  } else if (taskId) {
     try {
       const session = await prisma.session.findUnique({
         where: { taskId },
@@ -278,7 +291,7 @@ async function loadCaseRuntime(caseRow: {
   const faultInjectionType =
     resolveCaseFaultInjectionType(caseRow) || null;
   const caseValues = parseCaseValues(caseRow.caseValuesJson);
-  const rootCauseResolution = loadRootCauseContext
+  const rootCauseResolution = frozen ? frozenExperimentRootCauseResolutionContext(frozen.raw_case) : loadRootCauseContext
     ? await loadExperimentRootCauseResolutionContext({
         user,
         referenceOutput: caseRow.referenceOutput,
@@ -312,6 +325,7 @@ async function loadCaseRuntime(caseRow: {
       invokedSkills: execution.invokedSkills, skills: execution.skills,
     } : null,
     ...rootCauseResolution,
+    ...(frozen ? { frozenRasEvents: frozen.frozen_ras_events, frozenExperimentWork: true } : {}),
   };
 
   let shouldTrigger: boolean | undefined;
@@ -327,10 +341,10 @@ async function loadCaseRuntime(caseRow: {
   const targetSkillInvoked = execution && targetSkillName
     ? Boolean(
         execution.skill === targetSkillName
-        || await prisma.executionSkill.findFirst({
+        || (frozen ? (Array.isArray(frozen.frozen_trace_evidence?.execution_skills) && frozen.frozen_trace_evidence?.execution_skills.some((value: unknown) => typeof value === 'object' && value !== null && 'skillName' in value && value.skillName === targetSkillName)) : await prisma.executionSkill.findFirst({
           where: { executionId: execution.id, skillName: targetSkillName },
           select: { id: true },
-        }),
+        })),
       )
     : false;
 
@@ -369,6 +383,7 @@ async function evaluateOnce(
   runtime: CaseRuntime,
   configs: EvaluatorRunConfigMap,
   frozenSnapshot: Record<string, unknown> = {},
+  frozenCard?: EvaluatorCard,
 ): Promise<EvaluatorOutput> {
   if (isSkillTriggerAnalyzerId(evaluatorId)) {
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
@@ -424,9 +439,9 @@ async function evaluateOnce(
   if (isSimilarityPresetId(evaluatorId)) {
     return runSimilarityPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorRunConfigOf(configs, evaluatorId));
   }
-  const card = evaluatorId.startsWith('custom-')
+  const card = frozenCard ?? (evaluatorId.startsWith('custom-')
     ? await resolveFrozenCustomEvaluator(user, evaluatorId, frozenSnapshot)
-    : await resolveEvaluatorCard(user, evaluatorId);
+    : await resolveEvaluatorCard(user, evaluatorId));
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
   if (card.evaluatorType !== 'LLM' || !card.llmConfig?.systemPrompt) {
     throw new Error(`评估器 ${evaluatorId} 缺少可执行的 LLM 配置`);
@@ -453,11 +468,70 @@ async function evaluateOnce(
   return parseJudgeText(text, card.pointsDef);
 }
 
+export async function evaluateFrozenExperimentWork(work: FrozenExperimentWork, options: {user: string; signal: AbortSignal}): Promise<EvaluatorOutput> {
+  if (['__trace_flow_match__','__trace_flow_attribution__'].includes(work.handle.evaluator_id)) {
+    const {computeFrozenCoreFlowWork} = await import('@/lib/storage-core/flow-analysis');
+    return computeFrozenCoreFlowWork(work,options) as Promise<EvaluatorOutput>;
+  }
+  if (work.handle.evaluator_id === '__direct_trajectory__' || work.handle.evaluator_id.startsWith('__direct_trajectory__:')) {
+    const {computeFrozenDirectTrajectory} = await import('@/lib/eval/direct-trajectory-compute');
+    return withEvaluationAttempt(50 * 60_000 + 30_000, options.signal, () => computeFrozenDirectTrajectory(work, options)) as unknown as Promise<EvaluatorOutput>;
+  }
+  if ((!work.frozen_trace_evidence && (work.raw_case.executionId || work.raw_case.taskId)) || !work.frozen_evaluator?.card) throw Object.assign(new Error('Frozen experiment scoring inputs are unavailable'), {status: 503});
+  const evaluatorId = work.handle.evaluator_id;
+  const card = work.frozen_evaluator.card as EvaluatorCard;
+  if (card.id !== evaluatorId) throw Object.assign(new Error('Frozen evaluator identity mismatch'), {status: 503});
+  if (isRasReliabilityPresetId(evaluatorId) && !Array.isArray(work.frozen_ras_events)) throw Object.assign(new Error('Frozen RAS evidence is unavailable'), {status: 503});
+  const config = work.experiment_config;
+  const runtime = await loadCaseRuntime(work.raw_case as Parameters<typeof loadCaseRuntime>[0], options.user, config.skillName as string, evaluatorId === 'preset-agent-task-completion', work);
+  if(isSkillTriggerAnalyzerId(evaluatorId)){
+    const decision=work.raw_case.triggerDecision as {triggered?:unknown;competingSkill?:unknown;sessionId?:unknown;actualModel?:unknown}|undefined;
+    const request=(work.runplan.config as {execution_request?:{skillExecution?:{version?:unknown;mode?:unknown}}}|undefined)?.execution_request;
+    if(decision!==undefined||request?.skillExecution?.version===2&&request.skillExecution.mode==='trigger'){
+      if(!decision||typeof decision.triggered!=='boolean'||typeof decision.sessionId!=='string'||decision.sessionId!==work.frozen_trace_evidence?.execution?.taskId||typeof decision.actualModel!=='string'||!decision.actualModel||decision.competingSkill!==null&&typeof decision.competingSkill!=='string')throw Object.assign(new Error('Verified frozen Skill routing decision is unavailable'),{status:503});
+      if(!runtime.trigger)throw new Error('触发分析 Case 缺少 should_trigger 标注');
+      runtime.trigger={...runtime.trigger,skillTriggered:decision.triggered,facts:{runsTriggered:decision.triggered?1:0,runsTotal:1,triggerRate:decision.triggered?1:0,competingSkill:decision.competingSkill}};
+    }
+  }
+  const configs = isConfigurableTextEvaluatorId(evaluatorId) ? parseStoredEvaluatorRunConfigs(config.evaluatorConfigsJson as string, [evaluatorId]) : {};
+  const executionConfig = parseStoredEvaluatorExecutionConfig(config.evaluatorConfigsJson as string)?.resolved[evaluatorId];
+  const snapshot = {customEvaluatorSnapshots: {schemaVersion: 1, cards: {[evaluatorId]: card}}};
+  const evaluate = () => evaluateOnce(options.user, evaluatorId, runtime, configs, snapshot, card);
+  const diagnostics: EvaluationAttemptDiagnostic[] = [];
+  let attempts = 0;
+  const began = Date.now();
+  const finish = (output: EvaluatorOutput) => ({...output, attempts, durationMs: Date.now() - began,
+    ...(executionConfig ? {evidence: {...output.evidence, executionConfig: {...executionConfig, attempts, attemptDiagnostics: diagnostics}}} : {})});
+  try {
+    if (executionConfig) return finish(await withEvaluatorExecution(executionConfig, options.signal, () => {
+      const managesStage = isFaithfulPresetId(evaluatorId) || isRasReliabilityPresetId(evaluatorId) || isAgentTrajectoryPresetId(evaluatorId) || Boolean(card.llmConfig?.skills?.length);
+      return managesStage ? evaluate() : runConfiguredEvaluationStage(evaluate);
+    }, {onAttempt: count => {attempts = count;}, onAttemptResult: result => {diagnostics.push(result);}, onCleanupUnconfirmed: markExperimentCleanupUnconfirmed, retryDelaysMs: experimentEngineConfig.retryDelaysMs}));
+    for (let attempt = 0; ; attempt++) {
+      options.signal.throwIfAborted();
+      attempts = attempt + 1;
+      try { return finish(await withEvaluationAttempt(evaluatorId === 'preset-agent-trace-quality' ? EXPERIMENT_TRAJECTORY_TIMEOUTS.resultRowMs : experimentEngineConfig.rowTimeoutMs, options.signal, evaluate)); }
+      catch (error) {
+        if (attempt >= experimentEngineConfig.retryDelaysMs.length || !isRetryableRowFailure(error)) throw error;
+        await waitForEvaluationRetry(experimentEngineConfig.retryDelaysMs[attempt], options.signal);
+      }
+    }
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    throw Object.assign(failure, {coreExperimentFailureResult: {attempts, durationMs: Date.now() - began,
+      evidence: {
+        ...(executionConfig ? {executionConfig: {...executionConfig, attempts, attemptDiagnostics: diagnostics}} : {}),
+        ...(error instanceof CustomEvaluatorExecutionError ? {json: {type: 'custom-evaluator-runtime-v1', customEvaluatorRuntime: error.runtime}} : {}),
+      }}});
+  }
+}
+
 /**
  * 执行一行 ExperimentEvalResult（含重试与单行超时），写回终态。
  * 返回终态 status（'done' | 'failed'）。
  */
 export async function executeResultRow(user: string, resultId: string): Promise<'done' | 'failed'> {
+  if (isStorageCoreEnabled()) return executeCoreResultRow(requireCoreExperimentContext(), resultId);
   const row = await prisma.experimentEvalResult.findUnique({
     where: { id: resultId },
     include: {
@@ -645,6 +719,7 @@ async function withKeyedLock<T>(key: string, operation: () => Promise<T>): Promi
 }
 
 export async function settleExperimentStatus(experimentId: string): Promise<void> {
+  if (isStorageCoreEnabled()) { await requireCoreExperimentContext().rpc('reconcile', {experiment_id: experimentId}); return; }
   const rows = await prisma.experimentEvalResult.findMany({
     where: { experimentId, case: { deletedAt: null } },
     select: { status: true },
@@ -697,6 +772,11 @@ export async function startExperimentRun(
   user: string,
   options: { allowPersistedRunning?: boolean; caseIds?: string[] } = {},
 ): Promise<StartExperimentRunResult | null> {
+  if (isStorageCoreEnabled()) {
+    const context = requireCoreExperimentContext();
+    await startCoreExperiment(context,experimentId,options);
+    return {status: 'running', completion: activateExperimentWork(context, experimentId)};
+  }
   await assertExperimentActive(experimentId);
   const running = getRunningSet();
   if (running.has(experimentId)) return { status: 'running', alreadyRunning: true };
@@ -857,6 +937,12 @@ export async function retryResultRow(
   resultId: string,
   user: string,
 ): Promise<'done' | 'failed' | null> {
+  if (isStorageCoreEnabled()) {
+    const context = requireCoreExperimentContext();
+    const payload = {experiment_id: experimentId, result_id: resultId};
+    await context.rpc('retry', {...payload, operation_key: `${context.operationKey}:retry:${resultId}`, operation_request: payload});
+    return executeCoreResultRow(context, resultId, experimentId);
+  }
   const row = await prisma.experimentEvalResult.findFirst({
     where: { id: resultId, experimentId, case: { experiment: { user } } },
     select: { id: true, caseId: true, evaluatorId: true },
@@ -913,6 +999,29 @@ export async function ensureEvalExperiment(params: {
   skillName?: string | null;
   skillVersion?: number | null;
 }): Promise<string> {
+  if (isStorageCoreEnabled()) {
+    const context = requireCoreExperimentContext();
+    if (params.user !== context.actor.username) throw Object.assign(new Error('Experiment actor mismatch'), {status: 403});
+    const request = {existing_id: params.existingId ?? null, name: params.name, agentName: params.agentName ?? '', evaluatorIds: params.evaluatorIds, scope: params.scope ?? '', skillName: params.skillName ?? '', skillVersion: params.skillVersion ?? null};
+    if (params.existingId) {
+      try {
+        const found = await context.rpc('read', {experiment_id: params.existingId}) as {gold_redacted?: boolean; experiment?: {id: string; user: string; status: string}};
+        if (found.experiment && found.gold_redacted !== true) {
+          if (found.experiment.status === 'cancelled') throw Object.assign(new Error('实验已取消'), {status: 409, code: 'EXPERIMENT_CANCELLED'});
+          return found.experiment.id;
+        }
+      } catch (error) {if (![403, 404].includes((error as {status?: number}).status || 0)) throw error;}
+    }
+    const prior = await context.rpc('ensure_lookup', {name: params.name, scope: request.scope, agent_name: request.agentName, skill_name: request.skillName, skill_version: request.skillVersion}) as {experiment?: {id: string; status: string}} | null;
+    if (prior?.experiment) {
+      if (prior.experiment.status === 'cancelled') throw Object.assign(new Error('实验已取消'), {status: 409, code: 'EXPERIMENT_CANCELLED'});
+      return prior.experiment.id;
+    }
+    const experiment = await freezeExperimentAssets(context, {user: context.actor.username, name: params.name, type: 'single', agentName: request.agentName, evaluatorIdsJson: JSON.stringify(params.evaluatorIds), status: 'draft', scope: request.scope, skillName: request.skillName, skillVersion: request.skillVersion, cases: []});
+    const result = await context.rpc('ensure', {experiment, existing_id: request.existing_id, operation_key: `${context.operationKey}:eval-ensure:${createHash('sha256').update(JSON.stringify(request)).digest('hex')}`, operation_request: request}) as {experiment?: {id: string}};
+    if (!result?.experiment?.id) throw Object.assign(new Error('Experiment identity unavailable'), {status: 503});
+    return result.experiment.id;
+  }
   if (params.existingId) {
     const found = await prisma.experiment.findFirst({
       where: { id: params.existingId, user: params.user },
@@ -963,6 +1072,35 @@ export async function addEvalExperimentCase(
   c: EvalExperimentCaseInput,
   options?: { onlyIfNew: true },
 ): Promise<string | null> {
+  if (isStorageCoreEnabled()) {
+    const context = requireCoreExperimentContext();
+    const snapshot = await context.rpc('read', {experiment_id: experimentId}) as {experiment: {status: string; cases: Array<Record<string, unknown>>}};
+    if (snapshot.experiment.status === 'cancelled') throw Object.assign(new Error('实验已取消'), {status: 409, code: 'EXPERIMENT_CANCELLED'});
+    const existing = c.taskId ? snapshot.experiment.cases.find(row => row.taskId === c.taskId || (options?.onlyIfNew && c.executionId && row.executionId === c.executionId)) : undefined;
+    if (existing && options?.onlyIfNew) return null;
+    const id = existing ? String(existing.id) : c.taskId ? `trace-${createHash('sha256').update(JSON.stringify([experimentId, c.taskId])).digest('hex')}` : randomUUID();
+    const value: Record<string, unknown> = existing ? {id} : {id, executionId: c.executionId ?? null, taskId: c.taskId ?? null, input: c.input, datasetInput: c.datasetInput ?? null, actualOutput: c.actualOutput, referenceOutput: c.referenceOutput ?? null, evaluatorContextJson: c.evaluatorContext ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext)) : null};
+    if (c.datasetInput != null && c.datasetInput.trim()) value.datasetInput = c.datasetInput;
+    if (c.referenceOutput != null && c.referenceOutput.trim()) value.referenceOutput = c.referenceOutput;
+    if (c.evaluatorContext !== undefined) value.evaluatorContextJson = c.evaluatorContext ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext)) : null;
+    if (c.datasetBinding) value.caseValuesJson = JSON.stringify(withExperimentDatasetCaseBinding(parseCaseValues(existing?.caseValuesJson as string | null), c.datasetBinding));
+    const request = {experiment_id: experimentId, case: value, only_if_new: !existing || options?.onlyIfNew === true};
+    const result = await context.rpc('case_upsert', {...request, operation_key: `${context.operationKey}:eval-case:${createHash('sha256').update(JSON.stringify(request)).digest('hex')}`, operation_request: request}) as {case_id?: string; reused?: boolean};
+    if (!result?.case_id) throw Object.assign(new Error('Experiment Case identity unavailable'), {status: 503});
+    if (result.reused && !existing && !options?.onlyIfNew) {
+      const current = await context.rpc('read', {experiment_id: experimentId, case_ids: [result.case_id]}) as {experiment: {cases: Array<Record<string, unknown>>}};
+      const item = current.experiment.cases.find(row => row.id === result.case_id);
+      if (!item) throw Object.assign(new Error('Reused Experiment Case unavailable'), {status: 503});
+      const patch: Record<string, unknown> = {id: result.case_id};
+      for (const key of ['datasetInput', 'referenceOutput', 'evaluatorContextJson']) if (key in value && (key === 'evaluatorContextJson' ? c.evaluatorContext !== undefined : typeof value[key] === 'string' && String(value[key]).trim())) patch[key] = value[key];
+      if (c.datasetBinding) patch.caseValuesJson = JSON.stringify(withExperimentDatasetCaseBinding(parseCaseValues(item.caseValuesJson as string | null), c.datasetBinding));
+      if (Object.keys(patch).length > 1) {
+        const update = {experiment_id: experimentId, case: patch};
+        await context.rpc('case_upsert', {...update, operation_key: `${context.operationKey}:eval-backfill:${createHash('sha256').update(JSON.stringify(update)).digest('hex')}`, operation_request: update});
+      }
+    }
+    return options?.onlyIfNew && result.reused ? null : result.case_id;
+  }
   await assertExperimentActive(experimentId);
   const createOrReuse = async (): Promise<string | null> => {
     if (c.datasetBinding) await assertExperimentActive(experimentId, `dataset:${c.datasetBinding.caseId}`);
@@ -1073,6 +1211,12 @@ export async function startEvalExperimentCases(
   caseIds: string[],
   user: string,
 ): Promise<StartEvalExperimentCasesResult | null> {
+  if (isStorageCoreEnabled()) {
+    const context = requireCoreExperimentContext();
+    if (user !== context.actor.username) throw Object.assign(new Error('Experiment actor mismatch'), {status: 403});
+    await startCoreExperiment(context, experimentId, {caseIds: Array.from(new Set(caseIds.map(String).filter(Boolean)))});
+    return {status: 'running', completion: activateExperimentWork(context, experimentId)};
+  }
   await assertExperimentActive(experimentId);
   return withKeyedLock(`eval-start:${experimentId}`, async () => {
     const experiment = await prisma.experiment.findFirst({
@@ -1121,6 +1265,17 @@ export async function evaluateEvalExperimentCase(
   user: string,
   options: { evaluatorIds?: string[]; settleExperiment?: boolean } = {},
 ): Promise<EvalCaseResultRow[]> {
+  if (isStorageCoreEnabled()) {
+    const context = requireCoreExperimentContext();
+    if (user !== context.actor.username) throw Object.assign(new Error('Experiment actor mismatch'), {status: 403});
+    await startCoreExperiment(context, experimentId, {caseIds: [caseId], ...(options.evaluatorIds ? {evaluatorIds: options.evaluatorIds} : {})});
+    await activateExperimentWork(context, experimentId);
+    const snapshot = await context.rpc('read', {experiment_id: experimentId, case_ids: [caseId]}) as {experiment?: {cases: Array<{id: string; results: EvalCaseResultRow[]}>}};
+    const row = snapshot.experiment?.cases.find(item => item.id === caseId);
+    if (!row) throw Object.assign(new Error('Experiment Case not found'), {status: 404});
+    const selected = options.evaluatorIds ? new Set(options.evaluatorIds) : null;
+    return row.results.filter(result => !selected || selected.has(result.evaluatorId)).map(result => ({evaluatorId: result.evaluatorId, status: result.status, score: result.score ?? null, verdict: result.verdict ?? null, summary: result.summary ?? null, pointsJson: result.pointsJson ?? null, evidenceJson: result.evidenceJson ?? null, errorMessage: result.errorMessage ?? null}));
+  }
   const experiment = await prisma.experiment.findFirst({
     where: { id: experimentId, user },
     select: { evaluatorIdsJson: true },

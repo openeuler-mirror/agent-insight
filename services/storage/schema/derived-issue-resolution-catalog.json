@@ -1,0 +1,207 @@
+{
+  "version": 14,
+  "name": "derived-issue-resolution",
+  "tables": [
+    {
+      "name": "experiment_derived_issue_annotations",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "annotation_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "issue_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "machine_result_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "resolved_run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "resolved_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "issue_payload_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "machine_content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "selection_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "annotation_id"
+      ],
+      "unique": [
+        ["workspace_id", "issue_id"],
+        [
+          "workspace_id",
+          "actor_principal_id",
+          "operation_key",
+          "issue_id"
+        ]
+      ],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "issue_id"
+          ],
+          "experiment_annotations",
+          [
+            "workspace_id",
+            "experiment_id",
+            "annotation_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "machine_result_id"
+          ],
+          "result_receipts",
+          [
+            "workspace_id",
+            "result_id"
+          ]
+        ],
+        [
+          "owner_principal_id",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ],
+        [
+          "actor_principal_id",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "actor_principal_id",
+            "operation_kind",
+            "operation_key"
+          ],
+          "experiment_operation_receipts",
+          [
+            "workspace_id",
+            "actor_principal_id",
+            "operation_kind",
+            "operation_key"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "issue_id",
+          "resolved_at_ms",
+          "annotation_id"
+        ]
+      ],
+      "checks": [
+        "operation_kind='derived_issue_resolve'",
+        "length(annotation_id)>0",
+        "length(resolved_run_id) BETWEEN 1 AND 512",
+        "length(operation_key)>0",
+        "resolved_at_ms>=0 AND resolved_at_ms<=9223372036854775807",
+        "selection_revision>0 AND selection_revision<=9223372036854775807",
+        "length(request_hash)=64",
+        "length(issue_payload_hash)=64",
+        "length(machine_content_hash)=64"
+      ],
+      "immutable": true,
+      "identity": [
+        "workspace_id",
+        "annotation_id",
+        "experiment_id",
+        "issue_id",
+        "machine_result_id",
+        "owner_principal_id",
+        "actor_principal_id",
+        "resolved_run_id",
+        "resolved_at_ms",
+        "operation_kind",
+        "operation_key",
+        "request_hash",
+        "issue_payload_hash",
+        "machine_content_hash",
+        "selection_revision"
+      ],
+      "revision_guard": false
+    }
+  ]
+}

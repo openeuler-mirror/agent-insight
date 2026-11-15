@@ -1,3 +1,4 @@
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -317,7 +318,7 @@ export function ensureEvaluatorExecutionInteractions(
 }
 
 function inheritRecorder<T extends {recordCoreTrace?:CoreTraceRecorder}>(input:T):T {
-  const callback=getTrustedCoreAgentContext()?.recordCoreTrace;
+  const callback=getTrustedCoreAgentContext()?.recordCoreTrace||getCoreExperimentContext()?.recordCoreTrace;
   return callback?{...input,recordCoreTrace:callback}:input;
 }
 

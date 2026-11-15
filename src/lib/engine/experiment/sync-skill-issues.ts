@@ -17,6 +17,8 @@
 import { createHash } from 'crypto';
 
 import { prismaRaw } from '@/lib/storage/prisma';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {requireCoreExperimentContext} from '@/lib/storage-core/experiments';
 
 const GENERATOR = 'experiment-skill-issues@1.0';
 
@@ -137,6 +139,7 @@ export async function syncExperimentSkillIssues(experimentId: string): Promise<{
   written: number;
   cleared: number;
 }> {
+  if(isStorageCoreEnabled()){requireCoreExperimentContext();return {source:null,written:0,cleared:0};}
   const experiment = await prismaRaw.experiment.findUnique({
     where: { id: experimentId },
     select: {
@@ -344,6 +347,7 @@ export async function syncCompletedSkillExperimentIssues(input: {
   skillName: string;
   skillVersion: number;
 }): Promise<{ experiments: number; written: number }> {
+  if(isStorageCoreEnabled()){if(requireCoreExperimentContext().actor.username!==input.user)throw Object.assign(new Error('Issue sync actor differs'),{status:403});return {experiments:0,written:0};}
   const experiments = await prismaRaw.experiment.findMany({
     where: {
       user: input.user,

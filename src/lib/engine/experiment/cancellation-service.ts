@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {requireCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {cancelCoreExperimentExecution,reconcileCoreCancellation} from '@/lib/storage-core/experiment-cancellation';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,6 +31,10 @@ const terminalRun = ['completed', 'evaluated', 'blocked', 'execution_failed', 'e
 const terminalEvaluation = ['completed', 'failed', 'normalization_failed', 'submission_invalid', 'cancelled'];
 
 export async function deleteExperimentExecution(user: string, experimentId: string, caseId?: string) {
+  if(isStorageCoreEnabled()){
+    const context=requireCoreExperimentContext();if(user!==context.actor.username)throw Object.assign(new Error('Cancellation actor differs'),{status:403});
+    return cancelCoreExperimentExecution(context,experimentId,{...(caseId?{caseId}:{deleteExperiment:true})});
+  }
   const experiment = await prisma.experiment.findFirst({ where: { id: experimentId, user } });
   if (!experiment) throw Object.assign(new Error('实验不存在'), { status: 404 });
   const snapshot = JSON.parse(experiment.configSnapshotJson || '{}');
@@ -104,6 +111,7 @@ export async function deleteExperimentExecution(user: string, experimentId: stri
 
 const reconciling = new Map<string, Promise<unknown>>();
 export async function reconcileCancellation(id: string): Promise<any> {
+  if(isStorageCoreEnabled())return reconcileCoreCancellation(requireCoreExperimentContext(),id);
   const existing = reconciling.get(id);
   if (existing) return existing;
   const work = (async () => {
@@ -207,6 +215,7 @@ export async function reconcileCancellation(id: string): Promise<any> {
 
 let timer: ReturnType<typeof setInterval> | undefined;
 export function startExperimentCancellationWatchdog() {
+  if(isStorageCoreEnabled()){void import('@/lib/storage-core/experiment-background').then(({startCoreExperimentBackground})=>startCoreExperimentBackground()).catch(()=>console.warn('[storage-core-background] cancellation startup unavailable'));return;}
   if (timer) return;
   let busy = false;
   const sweep = async () => {

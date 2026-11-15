@@ -46,6 +46,21 @@ class TraceEvidenceTests(unittest.TestCase):
         self.metadata.register_aliases_for_provisioning('w',other_trace,task_id='root')
         with self.assertRaises(Conflict):self.evidence().read(self.token,'w',trace_ref='root')
 
+    def test_explicit_root_client_and_skill_origin_fields_are_preserved_for_deployment(self):
+        from services.storage.tests.test_observations import packet
+        source=packet();span=source['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+        span.setdefault('attributes',[]).extend([{'key':'agent.insight.client_id','value':{'stringValue':'deployment-client'}},{'key':'skill_origins','value':{'stringValue':'[{"skillName":"skill","clientId":"deployment-client","platform":"opencode","targetMode":"execution_origin","originRef":"origin_0123456789abcdef01234567"}]'}}])
+        accepted=self.ingest.accept(self.token,'w',source);self.ingest.work_once('deployment-ingest')
+        value=self.evidence().read(self.token,'w',trace_ref=accepted['trace_ids'][0])
+        self.assertEqual(value['execution']['clientId'],'deployment-client')
+        origins=json.loads(value['execution']['skillOrigins']);self.assertEqual(origins[0]['originRef'],'origin_0123456789abcdef01234567')
+
+    def test_deployment_identity_is_not_inferred_from_a_descendant_span(self):
+        from services.storage.tests.test_observations import packet
+        source=packet();spans=source['resourceSpans'][0]['scopeSpans'][0]['spans'];child=copy.deepcopy(spans[0]);child.update(spanId='2222222222222222',parentSpanId=spans[0]['spanId']);child.setdefault('attributes',[]).append({'key':'agent.insight.client_id','value':{'stringValue':'descendant-client'}});spans.append(child)
+        accepted=self.ingest.accept(self.token,'w',source);self.ingest.work_once('deployment-ingest')
+        value=self.evidence().read(self.token,'w',trace_ref=accepted['trace_ids'][0]);self.assertNotIn('clientId',value['execution'])
+
     def test_hash_is_stable_across_credentials_and_read_times_but_annotations_change_it(self):
         self.prepared();first=self.evidence().read(self.token,'w',task_id='task')
         second=self.evidence().read(self.iam.issue_session_for_provisioning('alice'),'w',task_id='task')

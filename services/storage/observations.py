@@ -2,6 +2,7 @@ import copy
 import datetime
 import hashlib
 import json
+import math
 import re
 import uuid
 from pathlib import Path
@@ -229,7 +230,7 @@ def normalize_import(body,workspace_id):
 MAX_COMPACT_METADATA_BYTES = 2048
 PROJECTION_FIELDS = ('query','label','model','observed_ip','source_kind','final_result','is_subagent',
     'parent_execution_id','root_execution_id','source_execution_id','agent_session_id','subagent_name','subagent_type','ownership',
-    'skills','invoked_skills','agents','query_preview','final_result_preview')
+    'skills','invoked_skills','agents','legacy_execution_metrics','query_preview','final_result_preview')
 
 
 def _compact_add(target,key,value,*,value_limit=512,budget=MAX_COMPACT_METADATA_BYTES):
@@ -337,6 +338,20 @@ def _source_projection(source):
             if original in execution and execution[original] is not None:attrs[destination]=execution[original]
         for original,destination in [('query','legacy.session_query'),('label','legacy.session_label')]:
             if original in session and session[original] is not None:attrs[destination]=session[original]
+        metrics={}
+        for original,destination in [('cost','cost'),('latency','latency'),('toolCallCount','tool_call_count'),('toolCallErrorCount','tool_call_error_count'),('isAnswerCorrect','is_answer_correct')]:
+            if original not in execution:continue
+            value=execution[original]
+            if value is None or (type(value) is bool if original=='isAnswerCorrect' else type(value) in (int,float) and math.isfinite(value)):
+                metrics[destination]=str(value) if type(value) is float else value
+        if isinstance(execution.get('failures'),str):
+            text=execution['failures'].strip()
+            try:
+                value=json.loads(text) if text else None
+                metrics['has_failures']=not (value is None or value is False or value==0 or value=='' or isinstance(value,list) and not value)
+            except ValueError:metrics['has_failures']=True
+        metrics.update(session_captured=True,session_start=session.get('startTime'),session_end=session.get('endTime'))
+        attrs['legacy_execution_metrics']=metrics
     compact={}
     if 'legacy_interaction' in sections:_compact_add(compact,'legacy.interaction_section','legacy_interaction')
     if type(attrs.get('legacy.transfer_has_session')) is bool:_compact_add(compact,'legacy.transfer_has_session',attrs['legacy.transfer_has_session'])
@@ -416,6 +431,7 @@ def _source_projection(source):
     if 'query' not in fields and input_text is not None:fields['query']=input_text
     if 'query' not in fields and role=='user' and output_text is not None:fields['query']=output_text
     if 'final_result' not in fields and output_text is not None and role!='user':fields['final_result']=output_text
+    if isinstance(attrs.get('legacy_execution_metrics'),dict):fields['legacy_execution_metrics']=attrs['legacy_execution_metrics']
     bounded={}
     for field in PROJECTION_FIELDS:
         if field not in fields:continue

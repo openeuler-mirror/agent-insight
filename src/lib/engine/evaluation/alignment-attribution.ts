@@ -18,6 +18,8 @@ import { OpenAI } from 'openai';
 import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
+import {getTrustedCoreAgentContext} from '@/lib/engine/general-agent/trusted-context';
+import {createTrustedFlowModel} from '@/lib/engine/observability/flow-parser';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import { aggregateTrajectoryScore, type TrajectoryDeviationStep } from '@/lib/engine/evaluation/trajectory-evaluator';
@@ -44,6 +46,13 @@ interface PersistAlignmentAttributionInput {
   skillVersion?: number | null;
 }
 
+export interface FrozenAlignmentSources {existingRaw:Record<string,unknown>|null;toolRedundancy:{toolChoice:number;redundancy:number}|null}
+export interface AlignmentAttributionArtifacts {data:Record<string,unknown>;rawAnalysis:Record<string,unknown>;candidateCount:number;taskId:string;executionRecordId:string}
+export async function computeFrozenAlignmentAttribution(input:PersistAlignmentAttributionInput,sources:FrozenAlignmentSources):Promise<AlignmentAttributionArtifacts|null>{
+  if(!getTrustedCoreAgentContext())throw Object.assign(new Error('Trusted frozen attribution runtime required'),{status:503});
+  const result=await persistAlignmentAttribution(input,{frozen:sources});return result?.artifacts??null;
+}
+
 interface AttributionCandidate {
   candidateId: string;
   kind: string;
@@ -68,7 +77,8 @@ interface LlmAttribution {
 
 export async function persistAlignmentAttribution(
   input: PersistAlignmentAttributionInput,
-): Promise<{ rowId?: string; candidateCount: number; writtenIssues: number } | null> {
+  options:{frozen?:FrozenAlignmentSources}={},
+): Promise<{ rowId?: string; candidateCount: number; writtenIssues: number;artifacts?:AlignmentAttributionArtifacts } | null> {
   const user = String(input.user || '').trim();
   if (!user) return null;
 
@@ -106,11 +116,11 @@ export async function persistAlignmentAttribution(
       ? input.match.summary.overallScore
       : null;
 
-  const existing = await prisma.trajectoryEvalResult.findFirst({
+  const existing = options.frozen?null:await prisma.trajectoryEvalResult.findFirst({
     where: { user, taskId },
     orderBy: { createdAt: 'desc' },
   });
-  const existingRaw = parseJsonObject(existing?.rawAnalysisJson);
+  const existingRaw = options.frozen?options.frozen.existingRaw:parseJsonObject(existing?.rawAnalysisJson);
   const selectedEvaluators = mergeStrings(
     arrayOrEmpty<string>(existingRaw?.selectedEvaluators),
     ['alignment-skill-attribution'],
@@ -125,7 +135,7 @@ export async function persistAlignmentAttribution(
   // 与 dataset 模式同一口径；否则（纯轨迹分析模式，没跑评估器）保持 alignment 即轨迹分（旧行为）。
   // 评测走实验后，轨迹质量的 tool_choice/redundancy 单项分落在 ExperimentEvalResult（轨迹质量评分点）；
   // 旧 TrajectoryEvalResult.dimension_scores 取不到时，从实验侧兜底取，保持统一轨迹分口径不变。
-  const llmDims = readLlmToolRedundancy(existingRaw) ?? await readExpToolRedundancy(user, taskId);
+  const llmDims = readLlmToolRedundancy(existingRaw) ?? (options.frozen?options.frozen.toolRedundancy:await readExpToolRedundancy(user, taskId));
   let trajectoryScore: number | null = score;
   let dimensionScoresPayload: Record<string, unknown> = {
     alignment: score,
@@ -185,6 +195,7 @@ export async function persistAlignmentAttribution(
     rawAnalysisJson: JSON.stringify(rawAnalysis),
   };
 
+  if(options.frozen)return {candidateCount:candidates.length,writtenIssues:0,artifacts:{data,rawAnalysis,candidateCount:candidates.length,taskId,executionRecordId}};
   const row = existing
     ? await prisma.trajectoryEvalResult.update({ where: { id: existing.id }, data })
     : await prisma.trajectoryEvalResult.create({
@@ -328,12 +339,17 @@ ${JSON.stringify(candidates.slice(0, 20), null, 2)}`;
         category: stringValue(item.category),
       }));
   } catch (error) {
+    const trusted=getTrustedCoreAgentContext();trusted?.cancelSignal?.throwIfAborted();
+    if(trusted&&((error as {code?:string})?.code==='CORE_TRACE_RECORDING_FAILED'||(error as {coreDeliveryUncertain?:boolean})?.coreDeliveryUncertain))throw error;
     console.warn('[alignment-attribution] LLM attribution failed, using fallback:', error);
     return candidates.map(fallbackAttribution);
   }
 }
 
-async function getLlmClient(user: string): Promise<{ client: OpenAI; model: string } | null> {
+async function getLlmClient(user: string): Promise<{ client: Pick<OpenAI,'chat'> | NonNullable<Awaited<ReturnType<typeof createTrustedFlowModel>>['client']>; model: string } | null> {
+  if(getTrustedCoreAgentContext()){
+    const value=await createTrustedFlowModel(user,{agentName:'alignment-skill-attribution',query:'Trace Skill alignment attribution'});return value.client?{client:value.client,model:value.model}:null;
+  }
   const config = await getActiveConfig(user);
   if (!config || !isModelConnectionReady(config)) return null;
   return {
@@ -414,7 +430,7 @@ function arrayOrEmpty<T>(value: unknown): T[] {
  * 从该行已有 rawAnalysis 里读出轨迹质量评估器写的 tool_choice / redundancy 单项分。
  * 只有两者都是有限数字才返回（说明评估器确实跑过），否则返回 null → 回退到 alignment 即轨迹分。
  */
-function readLlmToolRedundancy(raw: Record<string, unknown> | null | undefined): { toolChoice: number; redundancy: number } | null {
+export function readLlmToolRedundancy(raw: Record<string, unknown> | null | undefined): { toolChoice: number; redundancy: number } | null {
   if (!raw || typeof raw !== 'object') return null;
   const ds = (raw.dimension_scores ?? (raw as Record<string, unknown>).dimensionScores) as Record<string, unknown> | undefined;
   if (!ds || typeof ds !== 'object') return null;

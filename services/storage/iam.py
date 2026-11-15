@@ -232,14 +232,26 @@ class IAMStore:
         is_api=credential.startswith('api_')
         table='iam_api_credentials' if is_api else 'iam_sessions'
         token_column='token_hash' if is_api else 'session_token_hash'
-        now=self.clock()
         row=con.execute(f'SELECT c.*,p.status AS principal_status,p.auth_version AS current_auth_version FROM {table} c JOIN iam_principals p ON p.principal_id=c.principal_id WHERE c.{token_column}=?',(token_hash,)).fetchone()
+        return self._validate_authenticated_row(row),is_api
+
+    def _validate_authenticated_row(self,row):
+        now=self.clock()
         if not row or row['principal_status']!='active' or row['auth_version']!=row['current_auth_version'] or row['revoked_at_ms'] is not None or not row['issued_at_ms']<=now<row['expires_at_ms']:
             raise Unauthorized('invalid or expired credentials')
-        return row,is_api
+        return row
+
+    def _scope_registered_credential(self,con,credential_id,kind):
+        if kind not in {'api','session'}:raise Unauthorized('invalid registered credential kind')
+        identifier(credential_id);is_api=kind=='api';table='iam_api_credentials' if is_api else 'iam_sessions';key='credential_id' if is_api else 'session_id'
+        row=con.execute(f'SELECT c.*,p.status AS principal_status,p.auth_version AS current_auth_version FROM {table} c JOIN iam_principals p ON p.principal_id=c.principal_id WHERE c.{key}=?',(credential_id,)).fetchone()
+        return self._scope_authenticated(con,self._validate_authenticated_row(row),is_api)
 
     def _scope(self, con, credential):
         row,is_api=self._authenticate(con,credential)
+        return self._scope_authenticated(con,row,is_api)
+
+    def _scope_authenticated(self,con,row,is_api):
         principal_id=row['principal_id']
         try:
             require_default_project(con)
@@ -277,13 +289,21 @@ class IAMStore:
         return grant
 
     def _authorize(self, con, credential, workspace_id, capability, resource_kind, resource_id):
+        return self._authorize_scope(con,self._scope(con,credential),workspace_id,capability,resource_kind,resource_id)
+
+    def _authorize_scope(self,con,scope,workspace_id,capability,resource_kind,resource_id):
         if resource_kind not in RESOURCE_KINDS:
             raise ValueError('unknown authorization root')
-        scope=self._scope(con,credential)
         grant=self._workspace(scope,workspace_id,capability)
         resource=con.execute('SELECT * FROM iam_resource_access WHERE workspace_id=? AND resource_kind=? AND resource_id=?',(workspace_id,resource_kind,resource_id)).fetchone()
         if resource is None:
             raise Forbidden('resource is not mapped to an authorization root')
+        if resource_kind=='trace' and con.execute('SELECT 1 FROM schema_meta WHERE version=10').fetchone():
+            protected=con.execute('SELECT owner_principal_id FROM experiment_judge_traces WHERE workspace_id=? AND trace_id=?',(workspace_id,resource_id)).fetchone()
+            if protected and protected['owner_principal_id']!=scope.principal_id:raise Forbidden('Judge Trace requires its private evaluation owner')
+        if resource_kind=='trace' and con.execute('SELECT 1 FROM schema_meta WHERE version=11').fetchone():
+            protected=con.execute('SELECT owner_principal_id FROM diagnosis_judge_traces WHERE workspace_id=? AND trace_id=?',(workspace_id,resource_id)).fetchone()
+            if protected and protected['owner_principal_id']!=scope.principal_id:raise Forbidden('Judge Trace requires its private diagnosis owner')
         own=resource['owner_principal_id']==scope.principal_id
         privileged=grant.role in {'owner','admin','personal'}
         shared=resource['visibility']=='group' or con.execute('SELECT 1 FROM iam_resource_grants WHERE workspace_id=? AND resource_kind=? AND resource_id=? AND grantee_principal_id=?',(workspace_id,resource_kind,resource_id,scope.principal_id)).fetchone() is not None

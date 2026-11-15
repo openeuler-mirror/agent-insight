@@ -1,3 +1,4 @@
+import {benchmarkCoreRpc,usesCoreBenchmark} from './core-store'
 import {getDatasetRepositoryContext,findCoreDataset} from '@/lib/storage-core/datasets'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
@@ -41,8 +42,8 @@ export async function publicBenchmarkDatasetMeta(
   user: string,
   datasetIds: string[],
 ): Promise<Map<string, PublicBenchmarkDatasetMeta>> {
-  if (getDatasetRepositoryContext() || !datasetIds.length) return new Map()
-  const rows = await prisma.benchmarkDataset.findMany({
+  if (!datasetIds.length) return new Map()
+  const rows = usesCoreBenchmark()?(await benchmarkCoreRpc<Array<{agentEvalDatasetId:string;user:string;adapterKey:string;status:string;sourceJson:string;shared?:boolean}>>('dataset_list')).filter(row=>datasetIds.includes(row.agentEvalDatasetId)):await prisma.benchmarkDataset.findMany({
     where: { user: { in: benchmarkDatasetOwners(user) }, agentEvalDatasetId: { in: datasetIds } },
     select: { agentEvalDatasetId: true, user: true, adapterKey: true, status: true, sourceJson: true },
   })
@@ -52,6 +53,7 @@ export async function publicBenchmarkDatasetMeta(
     adapterKey: string
     status: string
     sourceJson: string
+    shared?:boolean
   }) => {
     let profileKey: string | undefined
     try {
@@ -74,7 +76,7 @@ export async function publicBenchmarkDatasetMeta(
     }
     return [row.agentEvalDatasetId, {
       readOnly: true as const,
-      shared: row.user === SYSTEM_BENCHMARK_DATASET_OWNER,
+      shared: row.shared ?? row.user === SYSTEM_BENCHMARK_DATASET_OWNER,
       benchmark: {
         adapterKey: row.adapterKey,
         evaluatorKey,
@@ -99,7 +101,6 @@ export async function decoratePublicBenchmarkDatasets<T extends { id: string }>(
   user: string,
   datasets: T[],
 ): Promise<Array<T & Partial<PublicBenchmarkDatasetMeta>>> {
-  if (getDatasetRepositoryContext()) return datasets.map(dataset => ({...dataset, ...('datasetKind' in dataset && dataset.datasetKind === 'benchmark' ? {readOnly: true as const} : {})}))
   const meta = await publicBenchmarkDatasetMeta(user, datasets.map((item) => item.id))
   return datasets.map((dataset) => ({ ...dataset, ...(meta.get(dataset.id) || {}) }))
 }

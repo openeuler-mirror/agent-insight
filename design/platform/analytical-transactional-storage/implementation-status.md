@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-14。已完成001–009基础、原界面Trace兼容、诊断自身Trace/会话/SSE与Trace报告，以及Dataset版本/回流/批量生成接管。全量应用测试已恢复零失败，实际OpenCode及文件工具在隔离环境验证；详细范围与最新证据见文末。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-15。001–009基础及Trace/Dataset批次已保留；010–014实验、评测结果、RunPlan、DiagnosisRun与本批剩余消费者已接通，最终集成证据见文末。最新测试与未完成项见文末，前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
@@ -12,7 +12,7 @@
 
 - 工作分支`codex/storage-core-refactor`基于已同步的`upstream/master`：`298d1d5b10ab3ab67a955b41a1665b0cd4d26b54`，旧库基线96个Prisma模型。
 - `001_core.sql`四套原始字节均保持不变；新增SQLite/PG/openGauss三套`002_iam.sql`、`003_projects.sql`、`004_observations.sql`、`005_trace_metadata.sql`、`006_trace_diagnosis.sql`、`007_diagnostic_reports.sql`、`008_dataset_assets.sql`、`009_dataset_generation.sql`与机器字段目录。
-- 当前物理核心为 **46张事务表+13张CH表=59张**：001含21张事务表及13张CH表，002新增10张IAM表，003新增项目目录与workspace归属2张，004新增可靠采集与实体版本2张，005新增旧ID/标注/标签4张，006新增诊断会话/消息2张，007新增报告运行/当前指针2张，008新增Dataset head/操作回执2张，009新增生成job1张。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
+- 001–009阶段物理核心为 **46张事务表+13张CH表=59张**：001含21张事务表及13张CH表，002新增10张IAM表，003新增项目目录与workspace归属2张，004新增可靠采集与实体版本2张，005新增旧ID/标注/标签4张，006新增诊断会话/消息2张，007新增报告运行/当前指针2张，008新增Dataset head/操作回执2张，009新增生成job1张。完整字段/类型/约束/索引见[字典](core-table-dictionary.md)。这不是原59张逻辑目录的全部实现。
 - `services/storage/control.py`、`relational.py`共享资产/发布/草稿/别名、RunPlan、任务lease/fence/取消、结果回执与Outbox原子性。PG/openGauss写锁粒度为正确性基线，尚未完成千级混合容量优化。
 - `iam.py`实现稳定主体、密码派生、会话/API凭据、用户组/成员CAS/最后Owner保护、空间归属、资源归属与显式共享/撤销。组管理员全组读取，普通成员本人/共享，viewer只读；无隐式平台管理员。
 - `authorized.py`统一校验元数据/列表/Span/正文/聚合/有界制品下载。CH读取和下载前后重新校验权限；慢I/O与密码派生不占写事务。私有评测gold不通过普通制品端口开放。
@@ -271,3 +271,59 @@ Unicode全文SHA256为`b19bcab25c703d64d7098782a18f74b7403a60f75bd4d0d234fb96088
 ### 当前仍未完成
 
 实验/评测/重测/DiagnosisRun的业务消费者、Evaluator/Skill/Agent/Benchmark完整多版本管理和RunPlan/结果联动、非OTLP各采集写端、旧96模型逐字段语义导入/在线增量/停写切换与回退仍须继续。系统FI目录是只读动态视图，未来运行应冻结有效目录；完整Benchmark受控导入不是本批成果。1000在线采集端混合负载、细粒度写锁、HA与生产恢复仍未验收。不能将本批Dataset闭环说成全产品完成切库。
+
+
+## 2026-11-14～15 实验、评测结果与 RunPlan 接入
+
+010–014当前物理核心为62张事务表（含`schema_meta`，业务/控制表61张）和13张CH表，共75张。010增加8张实验索引，011增加2张诊断绑定，012增加5张Benchmark控制表，013修正空证据制品约束且保留012校验和，014增加1张派生Issue解决注解表。原始001–009不改字节；字段、主键、外键、索引和版本规则见字段字典。表结构存在不等于所有入口完成接管。
+
+已接入普通实验创建/列表/详情/Case/评分/人工评分/评论/重评、比较实验、直接轨迹评测、Evaluator版本资产、后台监听与恢复、Trace/FI生成及取消、结果诊断预览/提交/报告读取。沿用原评分算法和DTO；模型、Dataset、Skill与Evaluator在RunPlan固定。只追加机器receipt与派生Issue解决注解，人工分和解决状态绑定实际机器回执。网络丢响应先查精确操作回执，不凭当前槽状态推断成功，不因此重发Agent。来源内容推进保留旧快照，来源撤权/删除及路由世代改变仍实时阻断私有读取和结果发布。
+
+当前证据根为`exclude/storage-core-experiments/20261114-bemtvk1v/`。使用Node24、独立HOME/Prisma SQLite、独立事务库及CH database，未将默认业务库作为迁移目标。新服务58488/helper58487与先前58388验收服务独立。隔离core显式停写备份后11→12→13→14；备份和迁移报告均保留。
+
+- 实际原HTTP创建并运行实验，Exact Match机器100分、人工0分、原操作精确重放、评论读回、单项重评100分与旧review不漂移均通过。旧Prisma Experiment/Case/Result的本批ID行数均为0。真实CH读回2条机器事实、3条指标、2条选择与3条发布成员，分别保留原运行和重评。
+- 实际原HTTP预览→提交→重复提交→OpenCode/文件工具→诊断报告读回完成；Mock模型请求2次、工具调用1次，报告包含真实运行统计。诊断Agent自身Trace在新库具备绑定。使用固定本地Mock验证执行/存储链路，不代表真实LLM诊断质量。
+- 实际验收暴露并修复详情页执行Skill关联投影缺失，以及HTTP body已消费后后台身份上下文克隆失败；保留红→绿证据。模型连接v2增加headers指纹，v1仅在无headers且原连接hash一致时兼容，旧计划不被重写。
+- 源码AST比对：本批2个TSX文件共12个JSX根与HEAD逐字一致，仅隐藏认证调用适配；原布局、功能入口和显示结构不变。原浏览器已查看Trace、实验列表/详情、Case结果详情及实际诊断报告；本批保留UI状态和HTTP读回证据，未生成新的截图。
+- Python存储中间整组891项，712通过、179因未提供可选引擎配置跳过、0失败，134.947秒；并非891项都实机执行。010/011/013/014另有PG及原生openGauss定向矩阵，详细日志保留。应用全量中间整组5710项，5685通过、22跳过、2失败、1取消；三处均为子进程/Worker超时，且宿主时钟有明显跳变；原三个文件定向复跑28.27秒通过，未改超时或产品逻辑。失败日志保留，继续最终全量复验，不据此宣称全量门禁通过。
+
+- 一般Experiment、来源生命周期、gold隔离、Workbench取消和Benchmark失败事实投影，SQLite相关86项通过；真实PG/官方原生openGauss各100项通过，分别178.690/185.406秒。该矩阵早于随后Benchmark continuation来源标记增量，不能冒称覆盖增量。
+- 服务私有合成凭据轮换4组、旧4组均撤销、新4组经真实HTTP身份验证；原业务/登录Key未改。轮换前已保留隔离库新备份，所有当时Outbox已sent且无运行中work；重启后普通实验100分、Workbench0分及诊断done均读回。成员bob新实验机器0分由组管理员正确读取，旧三张实验表对应行均0。
+- 后台Benchmark恢复使用独立有界池，pending transport不会占普通监听的容量。来源内容升级不变更旧计划，来源凭据撤销仍阻断child scoring。多Case同时人工评分的发布互等已取得红→绿回归；索引进度与整批publication分离，未完成批次继续受限退避。
+
+### 当前仍在收敛的范围
+
+Workbench/Grayscale的创建、幂等、克隆、绑定Task、Case删除已通过真实HTTP；原本地OpenCode执行与固定Mock模型已完成，原Experiment GET读回机器0分与done，旧实验/Case/结果/Execution/轨迹结果/Evaluation六张表本批影子行均为0。冻结Dataset版本不随head更新，账号模型别名不参与授权，跨模块上下文与run范围取消均有回归。客户端验证及本地复测尚未逐个外部客户端真实验收。
+
+Benchmark原创建/启动/实际device命令/提交/真实评测HTTP/规范化/后台恢复已取得隔离证据；Harness响应为受控夹具，不代表真实Agent运行或业务质量。失败来源分类器保留failed/null，不伪造零分或Harness执行；发布等待真实transport终态，未完成时Outbox保持pending，已索引事实不重复写入。补充评测、历史提交受控导入、单项重评、Case重跑和取消/删除已接通typed域；通用`/run`仍保持原202启动契约。外部执行未确认清理时不释放额度；native补充评测同Case/评估器历史的未知清理必须取得对应attempt/fence的typed回执才允许新重试。派生Issue的跨域解决通过可重放操作衔接，不宣称与旧静态Issue/优化计划有跨库事务。旧96模型全量语义导入、线上增量追平、生产切换与回退、1000在线采集端混合压测、队列分片/细粒度写锁及HA仍未验收。不得据此宣称全产品完成切库。
+### 应用全量 v4b 的 Qoder PID 锁发布修复
+
+本次应用全量快照的唯一失败 AC30 并非卸载等待时间不足：watch 先 `openSync(lock,"wx")` 暴露空文件，再写 PID，原测试和卸载按文件存在性观察时可能读到0字节JSON而漏停进程。临时HOME/自建child的真实bootstrap注入在open成功、write之前暂停，确定性复现卸载返回空PID集合且本次child继续存活；测试先红，未通过放宽超时回避。
+
+上传器现先在同目录写完0600临时JSON并关闭，再以exclusive hard link原子发布完整PID；watch与oneshot复用同一acquire helper，保持活owner竞争拒绝、陈旧owner回收和只清理本owner锁的语义。临时文件在成功、竞争和可捕获异常路径均回收。既有卸载协议及等待时间不变。
+
+既有Qoder测试新增完整锁发布/竞争watch/真实卸载与oneshot陈旧锁/替换owner保护；4文件共85项，84通过、1项平台条件跳过、0失败（14.15秒），JS语法检查通过。所有进程和目录均为本次独立夹具，清理只针对本次child/temp root；未触真实Qoder用户目录或运行进程。证据为`qoder-lock-publication-red.log`、`qoder-lock-publication-final.log`，位于本轮实验隔离证据目录。此处只记录该全量失败根因与修复专项，不提前替代Root后续最终应用全量门禁结果。
+
+
+## 2026-11-15 本批最终集成验收
+
+本批完成实验、评测结果、RunPlan及其Workbench/Grayscale、Benchmark、版本分析、优化点/FI、Trace流程分析和诊断优化部署消费者的新存储接线。保留原页面/布局、公开入口及评分算法；静态配置、客户端命令等尚属原控制域的记录仍在其真实存储，不将本批解释为全部96模型及整个平台切库。
+
+| 验证 | 最终结果与边界 |
+|---|---|
+| 应用全量 | `integrated-current-final-v7.log`：5773项，5751通过、22跳过、0失败、0取消；275.74秒。独立HOME/Prisma SQLite、Node24.22.3，未修改依赖或测试scripts |
+| 存储默认整套 | 948项，769通过、179项缺少可选实际引擎配置跳过，0失败；316.213秒。另有下述真实关系库及CH专项，不能把跳过计为实机通过 |
+| 真实PG / 原生openGauss | Benchmark前一冻结阶段各77项主矩阵及6项补充通过；最后详情投影修正后，各10项（5项实际readView/投影/附件来源权限+5项取消身份）通过，33.61/34.87秒。最新版完整83项因与全量并行负载预计超4分钟而主动中止，日志保留；不将较早矩阵泛称为最新版完整83项通过。native清理重试guard另在两库各1项通过，源码边界及hash见各manifest |
+| TypeScript / 静态检查 | 完整`tsc --noEmit --incremental false`零输出通过；34个新增src文件ESLint零错误，仍有未用变量警告。全部受改文件ESLint仍有70个既有/移动代码错误；HEAD对照确认Evaluator effect及version-analysis规则数量未增加，不宣称全仓lint通过。暂存新增文件后默认diff-check报6个EOF空行告警（4份已应用DDL、2个Python文件）；保留冻结字节以保护DDL校验和，仅忽略blank-at-eof的diff-check通过，未忽略行尾空格/其他空白错误 |
+| Benchmark真实HTTP/CH | 原通用run启动、设备poll/提交、Harness HTTP、raw恢复、历史导入、补充失败、单项重评、取消cleanup及Case重跑均有隔离证据。原Case POST返回202、运行中重复409，2次fixture命令和2次Harness评测，新CH结果/selection/publication各2份；11张旧动态表本fixture行数均0。设备/Agent与Harness内容为受控夹具，不是真实客户Agent或正式Benchmark质量成绩 |
+| 原详情阻断修复 | 实际Next暴露缺Benchmark投影导致500；改为授权后的完整typed read_view，保留真实attempt/progress/嵌套时间及制品。修复后原详情、分页和Case定位三路200、真实75分；原提交物/评测证据下载专项通过，私有gold未泄露，不完整投影明确拒绝 |
+| 原界面与历史读回 | 两个TSX文件12个JSX根与HEAD逐字一致。此前浏览器已看原Trace/实验/Case/诊断报告；最终服务重启后，原实验100分、Workbench0分、诊断done再次真实HTTP读回。新增Benchmark浏览器验证因CUA无可用浏览器/窗口未完成，仅有原HTTP验收，不冒称浏览器通过 |
+| 数据保留 | 28个001–009/CH旧DDL与HEAD字节一致；隔离core schema14且integrity正常。4份迁移前/凭据轮换前备份分别schema11/12/13/14，均保留且只读完整性检查通过。默认业务库未作为迁移目标，失败尝试与旧样本未删除 |
+
+补充的Flow实际HTTP验收产生6次Mock模型请求、6条indexed Judge Trace和3份机器receipt，派生Issue进入新域；部署实际原handler及设备poll/artifact/status链路完成，3 PRECHECK+1 DEPLOY为模拟设备回执，不代表用户机器实际安装。各自独立夹具的旧动态表零行只适用于对应fixture；主验收旧库保留已有15条Execution/Session，不作整库零行声明。
+
+主验收有2条Flow结果Outbox仍pending：负面测试在机器receipt后主动删除来源Trace，真实删除屏障阻止后续投影，来源检查为409且继续退避。只读复核已精确对应原删除测试，不是缺失发布成功，也未修改来源或伪造sent。正常Benchmark Case验收自己的Outbox均sent。所有293个代码/测试/schema候选文件在最终全量运行前后SHA一致；设计与指南不在该源码冻结集合中。
+
+当前服务为`http://localhost:58488`，原实验验收页`/evaluation/3ccd2aac-489c-4a05-8c73-ebd9b0b61e71`，Benchmark详情`/evaluation/bexp_76829620a1207944ab1d9e2f29868045`；沿用原admin登录方式。证据仍在本批`exclude/storage-core-experiments/20261114-bemtvk1v/`，最终源码manifest、whole logs、`final-review/`、各实际HTTP报告均保留。
+
+旧库96模型语义导入、线上增量追平/停写切换/回退、尚未接管的静态控制领域及非OTLP写端、infra、final_result关联重评、1000采集端混合压测、细粒度写锁/队列分片和HA仍未完成。以上为本批消费者集成验收，不能直接作为生产切库授权或整个平台迁移完成结论。

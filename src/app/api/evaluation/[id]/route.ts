@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { withCoreExperiments, requireCoreExperimentContext, coreExperimentFailure } from '@/lib/storage-core/experiments';
 import { resolveUser } from '@/lib/auth/auth';
 import { isLlmScoredGenerator } from '@/lib/engine/skill-issues/static-evaluator';
 import { prismaRaw } from '@/lib/storage/prisma';
@@ -29,9 +31,32 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const { username } = await resolveUser(request);
+    const core = isStorageCoreEnabled();
+    const { username } = core ? { username: null } : await resolveUser(request);
 
-    const evaluation = await prismaRaw.evaluation.findUnique({
+    const evaluation = core
+      ? await withCoreExperiments(request, async () => {
+          const actor=requireCoreExperimentContext().actor.username;
+          const staticEvaluation=await prismaRaw.evaluation.findFirst({
+            where:{id,type:'static',executionId:null,OR:[{user:actor},{user:null}],Skill:{OR:[{user:actor},{user:null},{visibility:'public'}]}},
+            include:{Skill:{select:{id:true,name:true,user:true}},issues:{where:{source:'static',OR:[{user:actor},{user:null}]},orderBy:{createdAt:'asc'}}},
+          });
+          if(staticEvaluation)return {...staticEvaluation,Execution:null};
+          const detail = await requireCoreExperimentContext().rpc('derived_detail', { id }) as { evaluation: Record<string, unknown>; issues: unknown[]; skill: unknown; execution: unknown };
+          return { ...detail.evaluation, issues: detail.issues, Skill: detail.skill, Execution: detail.execution };
+        }) as Awaited<ReturnType<typeof loadLegacyEvaluation>>
+      : await loadLegacyEvaluation(id);
+
+    return evaluationResponse(evaluation, username, core);
+  } catch (e: any) {
+    if (isStorageCoreEnabled()) return coreExperimentFailure(e);
+    console.error('[Evaluation Detail] error:', e);
+    return NextResponse.json({ error: e?.message || 'fetch failed' }, { status: 500 });
+  }
+}
+
+async function loadLegacyEvaluation(id: string) {
+  return prismaRaw.evaluation.findUnique({
       where: { id },
       include: {
         Skill: { select: { id: true, name: true, user: true } },
@@ -41,12 +66,14 @@ export async function GET(
         },
       },
     });
+}
 
+function evaluationResponse(evaluation: Awaited<ReturnType<typeof loadLegacyEvaluation>>, username: string | null, core: boolean) {
     if (!evaluation) {
       return NextResponse.json({ error: 'Evaluation not found' }, { status: 404 });
     }
 
-    if (evaluation.user && username && evaluation.user !== username) {
+    if (!core && evaluation.user && username && evaluation.user !== username) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
@@ -101,8 +128,4 @@ export async function GET(
       issues,
       histogram,
     });
-  } catch (e: any) {
-    console.error('[Evaluation Detail] error:', e);
-    return NextResponse.json({ error: e?.message || 'fetch failed' }, { status: 500 });
-  }
 }

@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import test from 'node:test';
+import vm from 'node:vm';
+import ts from 'typescript';
+function load(){let core:any;try{core=readFileSync('src/lib/storage-core/diagnosis-consumer.ts','utf8');}catch{return {api:{} as Record<string,Function>,calls:[] as any[]};}const module={exports:{}};const calls:any[]=[];const context={actor:{token:'private',workspace:'w',principal:'principal',username:'trusted'},operationKey:'key',options:{},request:new Request('http://localhost/api/diagnosis-runs')};const snapshot={schemaVersion:1,experiment:{id:'exp'},case:{id:'case'},execution:{id:'execution'},results:[{id:'result'}],skills:[],interactions:[{content:'frozen'}],traceHash:'h'};const envelope={id:'run',status:'done',snapshot,input_hash:'a'.repeat(64),source_fingerprint:'b'.repeat(64),report:{findings:[],issues:[]},createdAt:'2026-11-14T00:00:00Z',execution_id:'execution'};
+ vm.runInNewContext(ts.transpileModule(core,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,console,structuredClone,fetch,setTimeout,Response,Request,URLSearchParams,Buffer,WeakMap,Map,Set,Date,JSON,process:{env:{}},require:(name:string)=>{
+ if(name==='node:crypto')return {randomUUID:()=> 'generated-key'};
+ if(name.endsWith('/experiments'))return {requireCoreExperimentContext:()=>context};
+ if(name.endsWith('/server'))return {requestCore:async(url:string,opts:any)=>{const body=JSON.parse(opts.body);calls.push({url,body,token:opts.token,headers:opts.headers});return {data:{value:envelope}};}};
+ if(name.endsWith('/controller'))return {controllerHeaders:async()=>({'x-storage-controller-proof':'proof'})};
+ if(name.endsWith('/frozen-model'))return {freezeModelSelection:()=>({id:'model',provider:'openai',model:'m',connection_hash:'c'.repeat(64)})};
+ if(name.endsWith('/server-config'))return {getActiveConfig:async()=>({id:'model'})};
+ if(name.endsWith('/prisma'))return {prismaRaw:{skill:{findMany:async()=>[]},parsedFlow:{findMany:async()=>[]}}};
+ if(name.endsWith('/contracts'))return {DiagnosisError:class extends Error{},optimizationEligibility:()=>null};
+ if(name.endsWith('/subagent-inference'))return {inferSubagentNamesFromInteractions:(rows:any[])=>rows.map(row=>({...row,subagent:true}))};
+ if(name.endsWith('/interaction-content'))return {normalizeClaudeCodeInteractionsForStorage:(rows:any[])=>rows.map(row=>({...row,normalized:true}))};
+ if(name.endsWith('/trace-adapter'))return {buildDebugTurns:(rows:any[])=>rows.filter(row=>row.content)};
+ if(name.endsWith('/types'))return {AGENT_DEBUG_GENERATOR:'agent-debug@1'};
+ if(name.endsWith('version-snapshot'))return {loadSkillVersionSnapshot:()=>({'SKILL.md':'frozen'})};
+ throw Error(name);
+ }});return {api:module.exports as Record<string,Function>,calls,snapshot,envelope};}
+test('core diagnosis preview and submit use authoritative input hash and private server-frozen assets',async()=>{const f=load();assert.equal(typeof f.api.buildCoreDiagnosisSnapshot,'function');const snapshot=await f.api.buildCoreDiagnosisSnapshot('exp','case',['result']);assert.equal(f.api.coreDiagnosisSnapshotHash(snapshot),'a'.repeat(64));const submitted=await f.api.submitCoreDiagnosis(snapshot,{requestKey:'ui-key',expectedInputHash:'a'.repeat(64)});assert.equal(submitted.id,'run');assert.equal(f.calls[0].body.action,'preview');assert.equal(f.calls[1].body.action,'submit');assert.equal(f.calls[1].body.expected_input_hash,'a'.repeat(64));assert.equal(f.calls[0].headers['x-storage-controller-proof'],'proof');assert.ok(!JSON.stringify(f.calls[0].body).includes('private'));});
+test('core diagnosis read and source validation retain immutable source IDs without username authorization',async()=>{const f=load();assert.equal(typeof f.api.readCoreDiagnosis,'function');assert.equal((await f.api.readCoreDiagnosis('run')).id,'run');await f.api.verifyCoreDiagnosisSource('run');assert.equal(f.calls[0].body.diagnosis_id,'run');assert.equal(f.calls[1].body.action,'verify_source');assert.ok(!('user' in f.calls[0].body));});
+test('Trace report handoff previews and atomically submits the current report with its content-derived request key',async()=>{const f=load();assert.equal(typeof f.api.freezeCoreTraceReport,'function');assert.equal((await f.api.freezeCoreTraceReport('execution','generated')).runId,'run');assert.deepEqual(f.calls.map(call=>call.body.action),['preview','submit']);assert.equal(f.calls[1].body.request_key,'a'.repeat(64));assert.equal(f.calls[1].body.expected_input_hash,'a'.repeat(64));assert.equal(f.calls[0].body.generated_at,'generated');});
+test('core diagnosis keeps frozen raw evidence while restoring original Claude and subagent adaptation for the runner',()=>{const f=load();assert.equal(typeof f.api.prepareCoreDiagnosisExecution,'function');const snapshot={...f.snapshot,execution:{id:'x',framework:'claudecode'},interactions:[{content:'raw'}]};const prepared=f.api.prepareCoreDiagnosisExecution(snapshot);assert.equal(snapshot.interactions[0].content,'raw');assert.equal(prepared.interactions[0].normalized,true);assert.equal(prepared.interactions[0].subagent,true);});
+test('diagnosis preview retains the original no-diagnosable-turns precondition',async()=>{const f=load();f.snapshot!.interactions=[{type:'metadata'}] as any;await assert.rejects(f.api.buildCoreDiagnosisSnapshot('exp','case',['result']),/没有可诊断的轨迹/);});

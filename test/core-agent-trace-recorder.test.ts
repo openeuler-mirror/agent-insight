@@ -30,6 +30,7 @@ const raw=[{info:{id:'message-user',role:'user',time:{created:1794441600000}},pa
 function recorder(core=true){let legacy=0;const script=compile('src/lib/engine/evaluation/evaluator-execution-recorder.ts',{
  '@/lib/storage/data-service':{saveExecutionRecord:async()=>{legacy++;return {success:true}}},
  '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>core},
+ '@/lib/storage-core/experiments':{getCoreExperimentContext:()=>undefined},
  '@/lib/engine/general-agent/trusted-context':trustedContext,
  '../../../../scripts/agent-run-diagnostics.cjs':{extractStructuredAgentError:({error}:{error:unknown})=>typeof error==='string'?error:JSON.stringify(error),sanitizeAgentDiagnostic:(error:unknown)=>String(error)},
  });return {module:script,legacy:()=>legacy};}

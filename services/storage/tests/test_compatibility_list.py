@@ -3,6 +3,14 @@ from services.storage.tests.test_trace_service import TraceQueryTests
 
 
 class CompatibilityListTests(TraceQueryTests):
+    def test_internal_trace_identity_is_opt_in_and_preserves_original_public_aliases(self):
+        default=self.compatible().read(self.tokens['alice'],'w',{})
+        internal=self.compatible().read(self.tokens['alice'],'w',{'includeCoreIdentity':'1'})
+        self.assertTrue(default)
+        self.assertTrue(all('core_trace_id' not in row for row in default))
+        self.assertEqual([row['task_id'] for row in internal],[row['task_id'] for row in default])
+        self.assertTrue(all(row['core_trace_id'] for row in internal))
+
     def compatible(self):
         from services.storage.compatibility_list import LegacyTraceList
         return LegacyTraceList(self.queries)

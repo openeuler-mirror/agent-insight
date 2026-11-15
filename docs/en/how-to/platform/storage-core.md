@@ -5,7 +5,7 @@ description: "Explicit initialization, private identity mappings, original scree
 
 # Enable an isolated Storage Core Trace workflow
 
-**Product compatibility status (2026-11-14):** Login, navigation and visible markup retain the pre-refactor layout. Server compatibility now adapts existing Trace contracts to core storage. Diagnosis chat/self-Traces and Trace reports use the protocol below; Dataset versions/Trace backflow/generation use the steps below; experiment/evaluation results, DiagnosisRun workflows and other domains remain incomplete; this is isolated validation, not a production cutover.
+**Product compatibility status (2026-11-14):** Login, navigation and visible markup retain the pre-refactor layout. Server compatibility now adapts existing Trace contracts to core storage. Diagnosis chat/self-Traces and Trace reports use the protocol below; Dataset versions/Trace backflow/generation use the steps below; experiment/evaluation results and DiagnosisRun consumers are integrated incrementally, with remaining Workbench/Benchmark branches documented in implementation status; this is isolated validation, not a production cutover.
 
 The mode flag is server-only. Existing credentials must be verified and explicitly mapped to current IAM principals/workspaces. Missing mappings, revoked access and core failures fail closed without legacy Trace fallback. Other domains still have legacy paths. See the [reference](../../reference/platform/storage-core.md) and implementation status for coverage.
 
@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-New targets apply001–009, currently schema_version9. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
+New targets apply001–014, currently schema_version14. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -29,7 +29,7 @@ python3 -m services.storage migrate-sqlite \
 
 The backup must be a new sibling file. Relational initialization/migration requires private DSN files and external backup evidence; see the reference. Startup does not create schemas or ClickHouse databases.
 
-Provision a new ClickHouse database with `ClickHouseStore.initialize_new_database()`. In the trusted setup process, use `IAMStore.create_principal`, `set_password` and `bind_workspace` after creating the workspace. Passwords require15..1024 characters; prompt interactively rather than placing secrets in command arguments. Issue a workspace-bound write-only API credential through a temporary login session, save it in a private collector file, and revoke that setup session. The Chinese procedure includes the complete Python sequence.
+Provision a new ClickHouse database with `ClickHouseStore.initialize_new_database()`. In the trusted setup process, use `IAMStore.create_principal`, `set_password` and `bind_workspace` after creating the workspace. Passwords require15..1024 characters; prompt interactively rather than placing secrets in command arguments. Issue a workspace-bound write-only API credential through a temporary login session, save it in a private collector file, and revoke that setup session. The Chinese procedure includes the complete Python sequence, including creation of a separate random0600 controller-key file without printing it.
 
 Create a private regular `trace-service.json` file, mode0600 and not a symlink. Its exact SQLite configuration is:
 
@@ -38,6 +38,7 @@ Create a private regular `trace-service.json` file, mode0600 and not a symlink. 
   "control": {"backend": "sqlite", "database": "/absolute/path/to/isolated-core/core.db"},
   "clickhouse": {"endpoint": "http://127.0.0.1:8123", "database": "agent_insight_core_isolated", "user": "default", "password": ""},
   "cursor_secret_hex": "REPLACE_WITH_64_RANDOM_HEX_CHARACTERS",
+  "controller_key_file": "/absolute/path/to/isolated-core/controller-key",
   "default_workspace": "default",
   "port": 4319,
   "worker_enabled": true
@@ -63,12 +64,13 @@ AGENT_INSIGHT_PORT=4320 \
 AGENT_INSIGHT_TRACE_STORAGE=core \
 AGENT_INSIGHT_STORAGE_CORE_URL=http://127.0.0.1:4319 \
 AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=/absolute/path/to/isolated-core/identity-mapping.json \
+AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=/absolute/path/to/isolated-core/controller-key \
 bash scripts/develop_start.sh
 ```
 
 Check port availability and checkout ownership first. Restart Next after server configuration changes. The old public flag remains a deprecated server-side alias; frontend code does not branch on storage mode. The bridge accepts an explicit loopback origin only. Next and the storage process must share a reachable network namespace.
 
-Keep the original `/login` and existing keys. Set `AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE` to an absolute private regular0600 JSON file containing `version:1`, the exact `core_origin`, and `bindings`. Each binding has `legacy_api_key_sha256`, `legacy_username`, `principal_id`, `workspace_id` and a private delegated `credential`. Verify the legacy account/key before provisioning; do not infer membership from matching names or payload.user. Issue the delegated API credential with read/write/delete capabilities through the trusted setup session. The write-only collector key cannot serve UI reads. The Chinese guide contains a placeholder mapping example. Never commit this credential file.
+Keep the original `/login` and existing keys. Set `AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE` to an absolute private regular0600 JSON file containing `version:1`, the exact `core_origin`, and `bindings`. Each binding has `legacy_api_key_sha256`, `legacy_username`, `principal_id`, `workspace_id` and a private delegated `credential`. Verify the legacy account/key before provisioning; do not infer membership from matching names or payload.user. Issue the delegated API credential with read/write/execute/delete capabilities through the trusted setup session. The write-only collector key cannot serve UI reads. The Chinese guide contains a placeholder mapping example. Never commit this credential file.
 
 ## Ingest and inspect bounded pages
 
@@ -111,3 +113,8 @@ Initialize new targets through009. For an existing isolated core target, stop wr
 Use the original sidebar Dataset page to create a Dataset, add/edit a case and add a field, then refresh. Backflow the same Trace twice to verify deduplication; save two stale edit drafts to verify409 without losing the first change. There are no new visible version controls; use the reference queries for historical summaries.
 
 Ingest real OTLP first, select an authorized Agent/time window in the existing Trace-generation form, and check progress, publication, cancellation and deletion receipts. Restart the isolated Next/helper processes and view progress as the original live actor: recovery waits for an existing lease to expire, then increases the epoch. Cancellation of a published job conflicts; deletion needs its independent capability. Remaining experiment/Benchmark consumers are outside this acceptance slice.
+
+
+## Isolated experiment validation (010–014)
+
+Stop target writers, retain a control backup and the complete artifact directory, explicitly migrate to014, then restart. Pending migrations prevent service startup. Preserve historical SQL checksums. Configure the same private controller key file for Next and the helper; do not reuse a login key. Keep the existing UI and test create, run, result detail, human score0, comments and reevaluation. Inspect immutable receipts, separate CH publication, source revocation, stale fences, unresolved cleanup and exact retries, and verify that legacy Experiment/Case/Result tables received no shadow records. Check implementation status for remaining Workbench/Benchmark branches and exact acceptance coverage.

@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreExperimentWriteRoute,appendCoreExperimentCasesRoute} from '@/lib/storage-core/experiment-routes';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -46,7 +48,9 @@ interface CaseInput {
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
-) {
+):Promise<Response> {
+  if(isStorageCoreEnabled()){const {id}=await params;return coreExperimentWriteRoute(req,()=>appendCoreExperimentCasesRoute(id));}
+
   try {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));

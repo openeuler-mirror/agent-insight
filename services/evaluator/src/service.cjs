@@ -15,6 +15,7 @@
  */
 
 'use strict'
+const { callbackCapabilityHeaders } = require('../../../packages/benchmark-protocol/callback-capability.cjs')
 const { loadProjectConfig } = require('../../../packages/project-config/index.cjs')
 
 const fs = require('node:fs/promises')
@@ -100,6 +101,7 @@ function validateOriginUrl(value, code) {
 }
 
 function validateRequest(request, headers) {
+  if (request && typeof request === 'object') callbackCapabilityHeaders(request)
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw evaluatorError('EVALUATION_REQUEST_INVALID', '评测请求格式不合法', 400)
   }

@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -73,6 +74,7 @@ export async function waitForBenchmarkImagePreparation(): Promise<void> {
 }
 
 export function refreshBenchmarkImagePreparation(): Promise<void> {
+  if(isStorageCoreEnabled())return Promise.reject(Object.assign(new Error('Typed Benchmark image preparation required'),{status:503}))
   if (refreshing) { refreshAgain = true; return refreshing }
   refreshing = (async () => {
     do {

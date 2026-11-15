@@ -8,7 +8,9 @@ export interface TrustedCoreAgentContext {
   recordCoreTrace:CoreTraceRecorder;
   cancelSignal?:AbortSignal;
 }
-const contexts=new AsyncLocalStorage<TrustedCoreAgentContext>();
+const contextKey=Symbol.for('agent-insight.storage-core.trusted-agent-context');
+const globalContexts=globalThis as unknown as Record<symbol,AsyncLocalStorage<TrustedCoreAgentContext>>;
+const contexts=globalContexts[contextKey] ||= new AsyncLocalStorage<TrustedCoreAgentContext>();
 export function getTrustedCoreAgentContext():TrustedCoreAgentContext|undefined {
   const context=contexts.getStore();
   return context?{...context,trustedModel:structuredClone(context.trustedModel)}:undefined;

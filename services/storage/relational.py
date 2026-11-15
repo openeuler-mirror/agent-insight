@@ -220,6 +220,14 @@ class PostgreSQLControlStore(ControlOperations):
             catalogs.append(json.loads((root / 'dataset-catalog.json').read_text()))
         if applied >= 9:
             catalogs.append(json.loads((root / 'dataset-generation-catalog.json').read_text()))
+        if applied >= 10:
+            catalogs.append(json.loads((root / 'experiment-catalog.json').read_text()))
+        if applied >= 11:
+            catalogs.append(json.loads((root / 'diagnosis-run-catalog.json').read_text()))
+        if applied >= 12:
+            catalogs.append(json.loads((root / 'benchmark-catalog.json').read_text()))
+        if applied >= 14:
+            catalogs.append(json.loads((root / 'derived-issue-resolution-catalog.json').read_text()))
         tables = []
         for name in sorted(table['name'] for catalog in catalogs for table in catalog['tables']):
             if not re.fullmatch(r'[a-z][a-z0-9_]*', name):

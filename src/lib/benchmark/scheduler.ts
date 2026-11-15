@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -107,6 +108,7 @@ export async function reapStaleBenchmarkRuns(options: {
   limit?: number
   experimentId?: string
 } = {}): Promise<number> {
+  if(isStorageCoreEnabled())return 0
   const now = options.now || new Date()
   const graceMs = Math.max(0, options.graceMs ?? BENCHMARK_RUN_WATCHDOG_GRACE_MS)
   const candidates = await prisma.benchmarkCaseRun.findMany({
@@ -180,7 +182,7 @@ export async function reapStaleBenchmarkRuns(options: {
 export function startBenchmarkRunWatchdog(
   intervalMs = BENCHMARK_RUN_WATCHDOG_INTERVAL_MS,
 ): void {
-  if (benchmarkRunWatchdogTimer || stoppingBackgroundWork) return
+  if (isStorageCoreEnabled() || benchmarkRunWatchdogTimer || stoppingBackgroundWork) return
   const tick = () => {
     if (benchmarkRunWatchdogSweep) return
     benchmarkRunWatchdogSweep = reapStaleBenchmarkRuns()
@@ -267,6 +269,12 @@ async function dispatchThroughClientControl(input: {
   }
 }
 
+export async function dispatchBenchmarkCommandForCore(input:Parameters<BenchmarkCommandDispatcher>[0]):Promise<BenchmarkCommandOutcome>{
+  const client=await prisma.reliabilityClient.findFirst({where:{clientId:input.clientId,user:input.user,unboundAt:null},select:{clientId:true}})
+  if(!client)throw Object.assign(new Error('Benchmark执行客户端已解绑或改变归属'),{status:409})
+  return benchmarkCommandDispatcher(input)
+}
+
 let benchmarkCommandDispatcher: BenchmarkCommandDispatcher = dispatchThroughClientControl
 
 export function setBenchmarkCommandDispatcherForTest(
@@ -327,6 +335,7 @@ async function markDispatchFailed(
 }
 
 export function dispatchBenchmarkRun(runId: string): Promise<void> {
+  if(isStorageCoreEnabled())return Promise.reject(Object.assign(new Error('Typed Benchmark dispatch required'),{status:503}))
   return trackDispatchWork(dispatchBenchmarkRunInternal(runId))
 }
 
@@ -486,6 +495,7 @@ export async function startBenchmarkExperiment(input: {
   runId: string | null
   completion?: Promise<void>
 } | null> {
+  if((await import('./core-store')).usesCoreBenchmark())return (await import('./core-runtime')).startCoreBenchmarkExperiment(input)
   const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
   await assertExperimentActive(input.experimentId);
   const experiment = await prisma.experiment.findFirst({
@@ -554,6 +564,7 @@ export async function startBenchmarkExperiment(input: {
 }
 
 export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<number> {
+  if(isStorageCoreEnabled())return 0
   const now = new Date()
   await prisma.benchmarkDispatchOutbox.updateMany({
     where: { status: 'sending', leasedUntil: { lt: now } },

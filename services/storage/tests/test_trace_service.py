@@ -341,3 +341,174 @@ class DiagnosisCompatibilityHTTPTests(unittest.TestCase):
         from services.storage.agent_traces import AgentTraceLimit
         with patch('services.storage.agent_traces.AgentTraceRecorder.record',side_effect=AgentTraceLimit('expanded snapshot too large')):
             self.assertEqual(self.request('/v1/compat/observe/agent-traces?workspace_id=w',self.token,body={'record':{},'rawMessages':[]})[0],413)
+
+class ExperimentCompatibilityHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+
+    def test_experiment_domain_dispatch_keeps_actor_workspace_and_exact_operation(self):
+        import sys,types
+        from unittest.mock import patch
+        calls=[]
+        class Store:
+            def __init__(self,control,**kwargs):self.control=control
+            def dispatch(self,action,token,workspace,body):
+                calls.append((action,token,workspace,body));return {'experiment':{'id':'one','name':'原实验'},'revision':'1'}
+        payload={'action':'create','experiment':{'name':'原实验','user':'forged'},'operation_key':'once','operation_request':{'name':'原实验'}}
+        with patch.dict(sys.modules,{'services.storage.experiments':types.SimpleNamespace(ExperimentStore=Store)}):
+            status,value,_=self.request('/v1/compat/experiments?workspace_id=w',self.token,body=payload)
+        self.assertEqual(status,200);self.assertEqual(value['value']['experiment']['name'],'原实验')
+        self.assertEqual(calls,[('create',self.token,'w',payload)])
+
+    def test_read_only_experiment_domain_request_is_not_rejected_as_a_write(self):
+        import sys,types
+        from unittest.mock import patch
+        read=self.iam.issue_api_credential(self.token,'w',['read']);calls=[]
+        class Store:
+            def __init__(self,*args,**kwargs):pass
+            def dispatch(self,action,token,workspace,body):calls.append(action);return {'items':[]}
+        with patch.dict(sys.modules,{'services.storage.experiments':types.SimpleNamespace(ExperimentStore=Store)}):
+            status,_,_=self.request('/v1/compat/experiments?workspace_id=w',read,body={'action':'list'})
+            self.assertEqual(status,200)
+            self.assertEqual(self.request('/v1/compat/experiments?workspace_id=other',read,body={'action':'list'})[0],403)
+            self.assertEqual(self.request('/v1/compat/experiments?workspace_id=w',body={'action':'list'})[0],401)
+        self.assertEqual(calls,['list'])
+
+    def test_live_materializer_services_experiment_outbox_even_while_observation_work_progresses(self):
+        import threading
+        from unittest.mock import patch
+        reached=threading.Event();self.addCleanup(self.runtime.close)
+        with patch.object(self.runtime.ingest,'work_once',return_value=True),patch('services.storage.experiments.ExperimentStore.project_once',side_effect=lambda *args:reached.set() or False):
+            self.runtime.start_worker();self.assertTrue(reached.wait(1),'Experiment outbox must receive worker turns')
+
+class EvaluatorCompatibilityHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+
+    def test_evaluator_version_assets_use_the_existing_actor_and_freeze_a_safe_definition(self):
+        path='/v1/compat/evaluators?workspace_id=w'
+        status,read,_=self.request(path,self.token,body={'action':'read'});self.assertEqual(status,200);snapshot=read['value']
+        cards=[{'id':'custom-http','name':'原评估器','source':'custom','apiKey':'private-authoring-secret','extra':{'中文':0.25}}]
+        status,saved,_=self.request(path,self.token,body={'action':'save','evaluators':cards,'expected_etag':snapshot['etag'],'operation_key':'save-http'})
+        self.assertEqual(status,200);self.assertEqual(saved['value']['evaluators'],cards)
+        status,frozen,_=self.request(path,self.token,body={'action':'freeze','evaluator_ids':['custom-http']});self.assertEqual(status,200);value=frozen['value'];self.assertEqual(value['cards']['custom-http']['extra'],{'中文':0.25});self.assertNotIn('private-authoring-secret',json.dumps(value))
+        self.assertEqual(self.request(path,self.token,body={'action':'save','evaluators':cards,'expected_etag':snapshot['etag'],'operation_key':'stale-http'})[0],409)
+
+class ControllerCompatibilityHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+
+    def test_asset_scope_attestation_requires_a_private_proof_bound_to_the_real_actor_and_body(self):
+        import hashlib,hmac,sys,types
+        from unittest.mock import patch
+        key=Path(self.temp.name)/'controller-key';key.write_text('a'*64);key.chmod(0o600);self.runtime.controller_key_file=key
+        calls=[]
+        class Store:
+            def __init__(self,control,**kwargs):self.verifier=kwargs.get('frozen_assets_verifier')
+            def dispatch(self,action,token,workspace,body):calls.append(action);return {'verified':bool(self.verifier and self.verifier(token,workspace,body))}
+        value={'action':'start','experiment_id':'exp','config':{'derived_skill_ids':['skill']}}
+        digest=hashlib.sha256(json.dumps(value).encode()).hexdigest();proof=hmac.new(bytes.fromhex('a'*64),'\0'.join(('experiment-frozen-assets/v1','alice','w',digest)).encode(),hashlib.sha256).hexdigest()
+        path='/v1/compat/experiments?workspace_id=w'
+        with patch.dict(sys.modules,{'services.storage.experiments':types.SimpleNamespace(ExperimentStore=Store)}):
+            self.assertEqual(self.request(path,self.token,body=value)[0],403)
+            status,data,_=self.request(path,self.token,body=value,headers={'x-storage-controller-proof':proof});self.assertEqual(status,200);self.assertEqual(data['value'],{'verified':True})
+            self.assertEqual(self.request(path,self.token,body={**value,'experiment_id':'another'},headers={'x-storage-controller-proof':proof})[0],403)
+        self.assertEqual(calls,['start'])
+
+class DiagnosisRunCompatibilityHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+
+    def test_diagnosis_dispatch_requires_controller_freeze_proof_and_preserves_read_only_reads(self):
+        import hashlib,hmac,sys,types
+        from unittest.mock import patch
+        key=Path(self.temp.name)/'diagnosis-controller-key';key.write_text('a'*64);key.chmod(0o600);self.runtime.controller_key_file=key
+        calls=[]
+        class Store:
+            def __init__(self,control,**kwargs):self.verifier=kwargs.get('frozen_assets_verifier');self.reports=kwargs.get('trace_reports')
+            def dispatch(self,action,token,workspace,body):
+                calls.append((action,token,workspace));return {'verified':bool(self.verifier and self.verifier(token,workspace,body)),'reports':self.reports is not None}
+        value={'action':'preview','experiment_id':'exp','case_id':'case'}
+        digest=hashlib.sha256(json.dumps(value).encode()).hexdigest();proof=hmac.new(bytes.fromhex('a'*64),'\0'.join(('experiment-frozen-assets/v1','alice','w',digest)).encode(),hashlib.sha256).hexdigest()
+        path='/v1/compat/diagnosis-runs?workspace_id=w';read=self.iam.issue_api_credential(self.token,'w',['read'])
+        with patch.dict(sys.modules,{'services.storage.diagnosis_runs':types.SimpleNamespace(DiagnosisRuns=Store)}):
+            self.assertEqual(self.request(path,self.token,body=value)[0],403)
+            status,data,_=self.request(path,self.token,body=value,headers={'x-storage-controller-proof':proof});self.assertEqual(status,200);self.assertTrue(data['value']['verified']);self.assertTrue(data['value']['reports'])
+            self.assertEqual(self.request(path,self.token,body={**value,'case_id':'another'},headers={'x-storage-controller-proof':proof})[0],403)
+            self.assertEqual(self.request(path,read,body={'action':'read','diagnosis_id':'one'})[0],200)
+        self.assertEqual([v[0] for v in calls],['preview','read'])
+
+class ExperimentExecutionControllerHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+    def test_execution_and_cleanup_facts_require_body_bound_private_controller_proof(self):
+        import hashlib,hmac,sys,types
+        from unittest.mock import patch
+        key=Path(self.temp.name)/'execution-controller';key.write_text('a'*64);key.chmod(0o600);self.runtime.controller_key_file=key
+        class Store:
+            def __init__(self,*args,**kwargs):pass
+            def dispatch(self,*args):return {'accepted':True}
+        with patch.dict(sys.modules,{'services.storage.experiments':types.SimpleNamespace(ExperimentStore=Store)}):
+            for value in ({'action':'execute_start'},{'action':'execute_complete','trigger_decision':{'triggered':True}},{'action':'execute_fail','cleanup_confirmed':True},{'action':'checkpoint','checkpoint':{'cleanup_confirmed':True}}):
+                digest=hashlib.sha256(json.dumps(value).encode()).hexdigest();proof=hmac.new(bytes.fromhex('a'*64),'\0'.join(('experiment-execution/v1','alice','w',digest)).encode(),hashlib.sha256).hexdigest();path='/v1/compat/experiments?workspace_id=w'
+                self.assertEqual(self.request(path,self.token,body=value)[0],403)
+                self.assertEqual(self.request(path,self.token,body=value,headers={'x-storage-controller-proof':proof})[0],200)
+                self.assertEqual(self.request(path,self.token,body={**value,'forged':True},headers={'x-storage-controller-proof':proof})[0],403)
+
+class BenchmarkCompatibilityHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+
+    def proof(self,purpose,value):
+        import hashlib,hmac
+        key=Path(self.temp.name)/'benchmark-controller';key.write_text('a'*64);key.chmod(0o600);self.runtime.controller_key_file=key
+        digest=hashlib.sha256(json.dumps(value).encode()).hexdigest()
+        return hmac.new(bytes.fromhex('a'*64),'\0'.join((purpose,'alice','w',digest)).encode(),hashlib.sha256).hexdigest()
+
+    def test_definition_dispatch_is_actor_and_body_bound(self):
+        import sys,types
+        from unittest.mock import patch
+        class Store:
+            def __init__(self,*args,**kwargs):self.verifier=kwargs.get('definitions_verifier')
+            def dispatch(self,action,token,workspace,value):return {'verified':bool(self.verifier and self.verifier(token,workspace,value)),'workspace':workspace}
+        value={'action':'start','experiment_id':'one'};proof=self.proof('experiment-frozen-assets/v1',value)
+        with patch.dict(sys.modules,{'services.storage.benchmark_core':types.SimpleNamespace(BenchmarkStore=Store)}):
+            path='/v1/compat/benchmarks?workspace_id=w'
+            self.assertEqual(self.request(path,self.token,body=value)[0],403)
+            status,data,_=self.request(path,self.token,body=value,headers={'x-storage-controller-proof':proof});self.assertEqual(status,200);self.assertTrue(data['value']['verified'])
+            self.assertEqual(self.request(path,self.token,body={**value,'experiment_id':'two'},headers={'x-storage-controller-proof':proof})[0],403)
+            for action in ('load_work','load_dispatch','resume_work'):
+                self.assertEqual(self.request(path,self.token,body={'action':action})[0],403)
+
+    def test_delete_only_benchmark_cleanup_reaches_its_domain_without_read_authority(self):
+        import sys,types
+        from unittest.mock import patch
+        runtime=self.runtime
+        class Store:
+            def __init__(self,*args,**kwargs):self.verifier=kwargs.get('definitions_verifier')
+            def dispatch(self,action,token,workspace,value):
+                scope=runtime.iam.scope(token);runtime.iam._workspace(scope,workspace,'delete' if action=='cancel_request' else 'read')
+                return {'verified':bool(self.verifier and self.verifier(token,workspace,value))}
+        token=self.iam.issue_api_credential(self.token,'w',['delete']);value={'action':'cancel_request','experiment_id':'one','mode':'remove'};proof=self.proof('experiment-frozen-assets/v1',value)
+        with patch.dict(sys.modules,{'services.storage.benchmark_core':types.SimpleNamespace(BenchmarkStore=Store)}):
+            path='/v1/compat/benchmarks?workspace_id=w'
+            self.assertEqual(self.request(path,token,body=value)[0],403)
+            status,result,_=self.request(path,token,body=value,headers={'x-storage-controller-proof':proof});self.assertEqual(status,200);self.assertTrue(result['value']['verified'])
+            self.assertEqual(self.request(path,token,body={'action':'read','experiment_id':'one'})[0],403)
+            self.assertEqual(self.request('/v1/compat/benchmarks?workspace_id=foreign',token,body=value,headers={'x-storage-controller-proof':proof})[0],403)
+
+    def test_capability_callback_has_no_bearer_fallback_and_binds_actual_device_in_signed_body(self):
+        import sys,types
+        from unittest.mock import patch
+        capability='bcap_'+base64.urlsafe_b64encode(json.dumps({'principal_id':'alice','workspace_id':'w'}).encode()).decode().rstrip('=')+'.'+'b'*64
+        class Store:
+            def __init__(self,*args,**kwargs):self.verifier=kwargs.get('device_verifier')
+            def callback(self,action,token,value,*,verified_device_client_id=None):return {'client':verified_device_client_id,'verified':bool(self.verifier and self.verifier(verified_device_client_id,{}))}
+        value={'action':'complete','job_id':'job','verified_device_client_id':'device'}
+        proof=self.proof('benchmark-device/v1',value);headers={'x-agent-insight-callback-token':capability,'x-benchmark-device-client':'device','x-storage-benchmark-device-proof':proof}
+        with patch.dict(sys.modules,{'services.storage.benchmark_core':types.SimpleNamespace(BenchmarkStore=Store)}):
+            path='/v1/compat/benchmark-callback'
+            self.assertEqual(self.request(path,self.token,body=value)[0],401)
+            status,data,_=self.request(path,body=value,headers=headers);self.assertEqual(status,200);self.assertEqual(data['value'],{'client':'device','verified':True})
+            self.assertEqual(self.request(path,body={**value,'verified_device_client_id':'forged'},headers=headers)[0],403)
+            self.assertEqual(self.request(path,body=value,headers={**headers,'x-benchmark-device-client':'forged'})[0],403)

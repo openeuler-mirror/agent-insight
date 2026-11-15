@@ -25,6 +25,7 @@ import { randomBytes } from 'node:crypto'
 import { mergeTraceFacts, traceIdFromFacts } from '@/lib/trace-reference'
 
 import { prisma } from '@/lib/storage/prisma'
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
 import { ReliabilityError } from '@/lib/reliability/client-registry'
 import { ACTION as ENVIRONMENT_ACTION, validateContext, contextDigest } from '../../../packages/benchmark-protocol/environment.cjs'
 
@@ -136,7 +137,7 @@ export function commandTtlMs(): number {
   return Math.max(5, Number.isFinite(sec) ? sec : 30) * 1000
 }
 
-function newCommandId(): string {
+export function newCommandId(): string {
   return `cmd_${Date.now().toString(36)}_${randomBytes(5).toString('hex')}`
 }
 
@@ -155,6 +156,7 @@ export async function createCommand(input: {
   action: CommandAction
   payload?: Record<string, unknown>
   ttlMs?: number
+  commandId?: string
 }, store = prisma): Promise<CommandFrame> {
   if (!isWhitelistedAction(input.action)) {
     throw new ReliabilityError('COMMAND_ACTION_UNKNOWN', `未知 action: ${input.action}`, 400)
@@ -162,7 +164,15 @@ export async function createCommand(input: {
   const payload = input.payload || {}
   assertPayloadSafe(input.action, payload)
 
-  const commandId = newCommandId()
+  const commandId = input.commandId || newCommandId()
+  if (input.commandId) {
+    if (!/^cmd_[A-Za-z0-9_-]{1,160}$/.test(commandId)) throw new ReliabilityError('COMMAND_ID_INVALID', '指令标识无效', 400)
+    const previous = await store.reliabilityCommand.findUnique({where: {commandId}})
+    if (previous) {
+      if (previous.clientId !== input.clientId || previous.user !== input.user || previous.action !== input.action || previous.payloadJson !== JSON.stringify(payload)) throw new ReliabilityError('COMMAND_ID_CONFLICT', '指令标识已绑定其他输入', 409)
+      return {type: 'COMMAND', commandId, action: input.action, payload, createdAt: previous.createdAt.toISOString(), expiresAt: previous.expiresAt.toISOString()}
+    }
+  }
   const now = new Date()
   const expiresAt = new Date(now.getTime() + (input.ttlMs ?? commandTtlMs()))
   await store.reliabilityCommand.create({
@@ -304,7 +314,8 @@ async function applyCommandStatusRow(
       ? mergeTraceFacts(safeParse(command.resultJson), input.result, (code, message) => new ReliabilityError(code, message, 409))
       : input.result
     const traceId = traceIdFromFacts(result)
-    if (command.action === 'RUN_EXPERIMENT_CASE' && traceId) {
+    const storedCorrelation = safeParse(command.payloadJson).correlation as Record<string, unknown> | undefined
+    if (!isStorageCoreEnabled() && command.action === 'RUN_EXPERIMENT_CASE' && traceId && storedCorrelation?.storageCore !== true) {
       const payload = safeParse(command.payloadJson)
       const correlation = payload.correlation as Record<string, unknown> | undefined
       const attempt = await tx.experimentTraceAttempt.findFirst({ where: {

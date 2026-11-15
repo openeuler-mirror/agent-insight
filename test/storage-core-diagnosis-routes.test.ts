@@ -40,6 +40,7 @@ test('original API transport supplies the existing Key to diagnosis without a ne
  await send('/api/fault/diagnosis/session?executionId=task');assert.equal(new Headers(calls.at(-1)?.headers).get('x-witty-api-key'),'existing-key');
  key='switched-key';await send('/api/fault/diagnosis/stream',{method:'POST',body:'{}'});assert.equal(new Headers(calls.at(-1)?.headers).get('x-witty-api-key'),'switched-key');
  key=null;await send('/api/fault/diagnosis/session');assert.equal(new Headers(calls.at(-1)?.headers).has('x-witty-api-key'),false);
- await send('/api/auth/apikey');assert.equal(new Headers(calls.at(-1)?.headers).has('x-witty-api-key'),false);
+ for(const path of ['/api/user-evaluators','/api/eval/settings','/api/evaluation/result']){key='existing-key';await send(path);assert.equal(new Headers(calls.at(-1)?.headers).get('x-witty-api-key'),'existing-key');}
+ key=null;await send('/api/auth/apikey');assert.equal(new Headers(calls.at(-1)?.headers).has('x-witty-api-key'),false);
  key='current';await send('/api/fault/diagnosis/stream',{headers:{'x-witty-api-key':'explicit'}});assert.equal(new Headers(calls.at(-1)?.headers).get('x-witty-api-key'),'explicit');
 });

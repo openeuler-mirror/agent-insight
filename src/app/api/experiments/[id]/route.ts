@@ -1,3 +1,7 @@
+import {coreExperimentWriteRoute,patchCoreExperimentRoute,deleteCoreExperimentRoute} from '@/lib/storage-core/experiment-routes';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {experimentReadSource,getCoreExperimentContext,withCoreExperimentReadRoute,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {coreExperimentProjection} from '@/lib/storage-core/experiment-view';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -56,7 +60,7 @@ import {
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
 import { loadSkillExecutionProgress } from '@/lib/skill-workbench/execution-progress-service';
-import { loadCaseExecutionProgress } from '@/lib/engine/experiment/execution-progress-service';
+import { loadCaseExecutionProgress, type CaseExecutionSnapshot } from '@/lib/engine/experiment/execution-progress-service';
 
 export const dynamic = 'force-dynamic';
 
@@ -100,8 +104,10 @@ function deriveGeneratedTraceStatus(input: {
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.readView){try{return await withCoreExperimentReadRoute(req,input=>GET(input, {params}));}catch(cause){return coreExperimentFailure(cause);}}
   try {
+    const experimentReads=experimentReadSource(prisma);
     const { id } = await params;
     const url = new URL(req.url);
     const q = url.searchParams;
@@ -110,7 +116,7 @@ export async function GET(
     const locateCaseId = q.get('locateCaseId') || '';
     const wantCaseId = q.get('caseId') || '';
 
-    const experimentMeta = await prisma.experiment.findFirst({
+    const experimentMeta = await experimentReads.experiment.findFirst({
       where: { id, deletedAt: null, ...(username ? { user: username } : {}) },
       select: { id: true, type: true },
     });
@@ -129,7 +135,7 @@ export async function GET(
     }
 
     // 单组实验：走原聚合路径（响应 shape 不变）
-    const experiment = await prisma.experiment.findFirst({
+    const experiment = await experimentReads.experiment.findFirst({
       where: { id, ...(username ? { user: username } : {}) },
       select: {
         id: true, user: true, name: true, type: true, agentName: true, status: true,
@@ -143,6 +149,9 @@ export async function GET(
     if (!experiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
     }
+    const coreContext = getCoreExperimentContext();
+    const coreProjection = coreContext ? coreExperimentProjection(experiment) : undefined;
+    const executionOwner = coreContext?.actor.username || experiment.user;
 
     let evaluatorIds: string[] = [];
     try {
@@ -178,13 +187,13 @@ export async function GET(
 
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
     // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
-    const allResults = await prisma.experimentEvalResult.findMany({
+    const allResults = await experimentReads.experimentEvalResult.findMany({
       where: { experimentId: id, case: { deletedAt: null } },
       select: { caseId: true, evaluatorId: true, status: true, score: true, humanScore: true },
     });
     // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
     // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
-    const allExperimentCases = await prisma.experimentCase.findMany({
+    const allExperimentCases = await experimentReads.experimentCase.findMany({
       where: { experimentId: id, deletedAt: null },
       select: { id: true },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -192,18 +201,23 @@ export async function GET(
     const allExperimentCaseIds = allExperimentCases.map((item: Pick<ExperimentCase, 'id'>) => item.id);
     const caseTotal = allExperimentCaseIds.length;
     const { casePage, locatedCaseId } = locateCasePage(allExperimentCaseIds, casePageRaw, casePageSize, wantCaseId || locateCaseId);
-    const pagedCases = await prisma.experimentCase.findMany({
+    const pagedCases = await experimentReads.experimentCase.findMany({
       where: { experimentId: id, deletedAt: null, ...(wantCaseId ? { id: wantCaseId } : {}) },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
-    const skillExecutionSnapshot = experiment.scope === 'skill-workbench' ? await loadSkillExecutionProgress(id, experiment.user) : null;
+    const skillExecutionSnapshot = experiment.scope === 'skill-workbench' && !coreProjection?.ownerRedacted ? await loadSkillExecutionProgress(id, executionOwner) : null;
     const skillRowProgress = new Map(Object.values(skillExecutionSnapshot?.progress || {}).flatMap(sides => Object.values(sides).flatMap(runs => runs || []))
       .filter(run => run.experimentCaseId).map(run => [run.experimentCaseId!, run]));
-    const caseExecutionProgress = !experiment.scope && experiment.type !== 'llm'
-      ? await loadCaseExecutionProgress(id, experiment.user, pagedCases.map(c => c.id), evaluatorIds, configSnapshot?.traceSource === 'generate')
+    const caseExecutionProgress = coreProjection?.ownerRedacted
+      ? new Map(pagedCases.flatMap(c => {
+          const snapshot = (c as typeof c & { executionSnapshot?: CaseExecutionSnapshot }).executionSnapshot;
+          return snapshot ? [[c.id, {...snapshot, results:c.results}] as const] : [];
+        }))
+      : !experiment.scope && experiment.type !== 'llm'
+      ? await loadCaseExecutionProgress(id, executionOwner, pagedCases.map(c => c.id), evaluatorIds, configSnapshot?.traceSource === 'generate')
       : null;
 
     const benchmarkAttemptByRun = new Map<string, number>();
@@ -245,7 +259,7 @@ export async function GET(
       }>;
     }>();
     if (experiment.scope === 'benchmark' && pagedCases.length) {
-      const runs = await prisma.benchmarkCaseRun.findMany({
+      const runs = await experimentReads.benchmarkCaseRun.findMany({
         where: { experimentId: id, experimentCaseId: { in: pagedCases.map((item) => item.id) } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: {
@@ -294,19 +308,19 @@ export async function GET(
       }
       const traceIds = [...benchmarkRunByCase.values()].map(run => asRecord(parseJsonValue(run.runFactsJson))?.traceId).filter((value): value is string => typeof value === 'string' && Boolean(value));
       if (traceIds.length) {
-        const roots = await prisma.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: { in: traceIds } }, select: { id: true, taskId: true } });
+        const roots = await experimentReads.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: { in: traceIds } }, select: { id: true, taskId: true } });
         for (const root of roots) if (root.taskId) benchmarkExecutionsByTrace.set(root.taskId, [...(benchmarkExecutionsByTrace.get(root.taskId) || []), root]);
         for (const traceId of traceIds.filter(value => /^[0-9a-f]{32}$/.test(value) && !benchmarkExecutionsByTrace.has(value))) {
           const legacy = await findBenchmarkExecution(experiment.user, traceId);
           if (legacy?.taskId) {
-            const matches = await prisma.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: legacy.taskId }, select: { id: true, taskId: true }, take: 2 });
+            const matches = await experimentReads.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: legacy.taskId }, select: { id: true, taskId: true }, take: 2 });
             if (matches.length === 1) benchmarkExecutionsByTrace.set(traceId, matches);
           }
         }
       }
     }
 
-    const generatedCases = await prisma.experimentCase.findMany({
+    const generatedCases = await experimentReads.experimentCase.findMany({
       where: {
         experimentId: id,
         deletedAt: null,
@@ -361,14 +375,14 @@ export async function GET(
         .filter((value): value is string => Boolean(value)),
     ));
     const [fiRunsRaw, generationCommandsRaw] = await Promise.all([
-      fiRunKeys.length ? prisma.faultInjectionRun.findMany({
+      fiRunKeys.length ? experimentReads.faultInjectionRun.findMany({
         where: {
           ...generatedUserWhere,
           OR: [{ id: { in: fiRunKeys } }, { runId: { in: fiRunKeys } }],
         },
         select: { id: true, runId: true, status: true, sessionTaskId: true, error: true, agent: true, platform: true, updatedAt: true },
       }) : [],
-      commandIds.length ? prisma.reliabilityCommand.findMany({
+      commandIds.length ? experimentReads.reliabilityCommand.findMany({
         where: { ...generatedUserWhere, commandId: { in: commandIds } },
         select: { commandId: true, status: true, errorMessage: true, errorCode: true },
       }) : [],
@@ -404,14 +418,14 @@ export async function GET(
     ));
     const [generatedExecutionsRaw, generatedSessionsRaw] = await Promise.all([
       generatedTaskIds.length
-        ? prisma.execution.findMany({
+        ? experimentReads.execution.findMany({
           where: { ...generatedUserWhere, taskId: { in: generatedTaskIds }, isSubagent: false },
           orderBy: { timestamp: 'desc' },
           select: { id: true, taskId: true, query: true, finalResult: true, agentName: true },
         })
         : [],
       generatedTaskIds.length
-        ? prisma.session.findMany({
+        ? experimentReads.session.findMany({
           where: { ...generatedUserWhere, taskId: { in: generatedTaskIds } },
           select: { taskId: true, interactions: true, endTime: true },
         })
@@ -455,7 +469,14 @@ export async function GET(
       const taskId = item.taskId || run?.sessionTaskId || null;
       const execution = taskId ? generatedExecutionByTask.get(taskId) : undefined;
       const session = taskId ? generatedSessionByTask.get(taskId) : undefined;
-      const usable = Boolean(execution && (run
+      const sourceReadiness = coreProjection?.traceReadiness[item.id];
+      const trustedReadiness = sourceReadiness && sourceReadiness.executionId === item.executionId
+        && sourceReadiness.executionId === execution?.id && sourceReadiness.taskId === taskId ? sourceReadiness : undefined;
+      const actualAgent = trustedReadiness && run ? canonicalExperimentAgentName(run.platform, trustedReadiness.executionAgent || '') : '';
+      const usable = trustedReadiness ? trustedReadiness.hasInteractions && (!run || Boolean(
+        trustedReadiness.hasBusinessResponse && trustedReadiness.hasEndTime && actualAgent && actualAgent !== 'ras-judge'
+        && actualAgent === canonicalExperimentAgentName(run.platform, run.agent),
+      )) : Boolean(execution && (run
         ? isFiBusinessTraceUsable({
             platform: run.platform, agent: run.agent, executionAgent: execution.agentName,
             interactions: session?.interactions, endTime: session?.endTime,
@@ -513,7 +534,7 @@ export async function GET(
     let itemProgress: ReturnType<typeof summarizeWorkbenchItemProgress> | null = null;
     let sideProgress: Partial<Record<'a' | 'b', ReturnType<typeof summarizeWorkbenchItemProgress>>> | null = null;
     if (experiment.scope === 'skill-workbench' && configSnapshot) {
-      const cancellations: Array<{ caseKey: string }> = await prisma.experimentCancellation.findMany({ where: { experimentId: id }, select: { caseKey: true } });
+      const cancellations: Array<{ caseKey: string }> = await experimentReads.experimentCancellation.findMany({ where: { experimentId: id }, select: { caseKey: true } });
       const removedDatasetCases = new Set(cancellations.filter((item) => item.caseKey.startsWith('dataset:')).map((item) => item.caseKey.slice(8)));
       if (Array.isArray(configSnapshot.caseIds)) configSnapshot.caseIds = configSnapshot.caseIds.filter((key) => !removedDatasetCases.has(String(key)));
       const supportsItemProgress = ['trigger', 'use-case', 'skill-ab'].includes(experiment.preset || '');
@@ -533,7 +554,7 @@ export async function GET(
         ? configSnapshot.grayscaleTaskId
         : '';
       if (grayscaleTaskId && evaluatorIds.length) {
-        const grayscaleTask = await prisma.grayscaleTask.findFirst({
+        const grayscaleTask = await experimentReads.grayscaleTask.findFirst({
           where: { id: grayscaleTaskId, ...(username ? { user: username } : {}) },
           select: { caseStatesJson: true },
         });
@@ -632,7 +653,7 @@ export async function GET(
     const execFallback = new Map<string, ExecutionFallback>();
     const execFallbackById = new Map<string, ExecutionFallback>();
     if (needExecTaskIds.length || needExecutionIds.length) {
-      const execs = await prisma.execution.findMany({
+      const execs = await experimentReads.execution.findMany({
         where: {
           OR: [
             ...(needExecTaskIds.length ? [{ taskId: { in: needExecTaskIds } }] : []),
@@ -689,7 +710,7 @@ export async function GET(
       })),
     );
     const traceIds = results.map(result => agentEvaluationTraceId(result.evidence)).filter((id): id is string => Boolean(id));
-    const recordedTraces = username && traceIds.length ? await prisma.execution.findMany({
+    const recordedTraces = username && traceIds.length ? await experimentReads.execution.findMany({
       where: { user: username, taskId: { in: traceIds } }, select: { taskId: true },
     }) : [];
     const availableTraces = new Set(recordedTraces.map((trace: { taskId: string | null }) => trace.taskId));
@@ -958,7 +979,9 @@ export async function GET(
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
-) {
+):Promise<Response> {
+  if(isStorageCoreEnabled()){const {id}=await params;return coreExperimentWriteRoute(req,()=>patchCoreExperimentRoute(id));}
+
   try {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
@@ -1009,7 +1032,9 @@ export async function PATCH(
 export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
-) {
+):Promise<Response> {
+  if(isStorageCoreEnabled()){const {id}=await params;return coreExperimentWriteRoute(req,()=>deleteCoreExperimentRoute(req,id));}
+
   try {
     const { id } = await params;
     const url = new URL(req.url);

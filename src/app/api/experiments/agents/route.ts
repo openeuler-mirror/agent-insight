@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreExperimentMutationRoute,getCoreExperimentContext,requireCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {readCoreExperimentTraces} from '@/lib/storage-core/experiment-traces';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,15 +31,16 @@ import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-iden
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(req,GET);
   try {
     const url = new URL(req.url);
     const { username } = await resolveUser(req, url.searchParams.get('user'));
     const userFilter = username ? { user: username } : {};
-    const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
+    const userOwnershipWhere = getCoreExperimentContext()?{}:await buildExecutionOwnershipWhere('user');
 
     const [grouped, faultInjectionTargets, genericTraceAvailability, benchmarkTargets] = await Promise.all([
-      prisma.execution.groupBy({
+      getCoreExperimentContext()?coreAgentGroups():prisma.execution.groupBy({
       by: ['agentName', 'framework'],
       where: {
         ...userFilter,
@@ -242,4 +246,10 @@ export async function GET(req: Request) {
     console.error('[Experiment Agents Error]', error);
     return NextResponse.json({ error: 'Failed to load agents' }, { status: 500 });
   }
+}
+
+async function coreAgentGroups(){
+ const records=await readCoreExperimentTraces(requireCoreExperimentContext(),new URLSearchParams({ownership:'user'}));const groups=new Map<string,{agentName:string;framework:string;_count:{agentName:number}}>();
+ for(const row of records){if(!row.agentName)continue;const key=JSON.stringify([row.agentName,row.framework]);const group=groups.get(key)||{agentName:String(row.agentName),framework:String(row.framework||''),_count:{agentName:0}};group._count.agentName++;groups.set(key,group);}
+ return [...groups.values()].sort((a,b)=>b._count.agentName-a._count.agentName||a.agentName.localeCompare(b.agentName)||a.framework.localeCompare(b.framework)).slice(0,200);
 }

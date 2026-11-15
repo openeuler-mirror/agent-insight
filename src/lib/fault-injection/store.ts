@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-import { randomBytes } from 'crypto'
+import type { Prisma } from '@prisma/client'
+import { createHash, randomBytes } from 'crypto'
 import { prisma } from '@/lib/storage/prisma'
 import { composeFaultPrompt, findSubmode } from '@/lib/fault-injection/compose-prompt'
 import { listFaultsViaPython, type CollectPayload } from '@/lib/fault-injection/engine'
 import { isFiBusinessTraceUsable } from '@/lib/fault-injection/trace-readiness'
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
 
 export function newTaskKey(): string {
   return `task-${randomBytes(4).toString('hex')}`
@@ -41,8 +43,20 @@ export async function createTaskWithRuns(input: {
   timeoutSeconds?: number | null
   targetWorkerId?: string | null
   initialStatus?: 'queued' | 'running'
-}) {
-  const taskKey = newTaskKey()
+}, stable?: {taskKey: string; runIds: string[]}) {
+  if (stable && (!/^task-[a-f0-9]{8,64}$/.test(stable.taskKey) || stable.runIds.length !== input.items.length || new Set(stable.runIds).size !== stable.runIds.length || stable.runIds.some(value => !/^ras-\d{8}T[0-9A-Za-z_-]+$/.test(value)))) throw new Error('FI stable identity is invalid')
+  const stableCatalog = stable ? await listFaultsViaPython(input.platform) : undefined
+  const stableHash = stable ? createHash('sha256').update(JSON.stringify({user: input.user, name: input.name || '', platform: input.platform, agent: input.agent, prompt: input.prompt, workspace: input.workspace, model: input.model || null, timeoutSeconds: input.timeoutSeconds ?? null, targetWorkerId: input.targetWorkerId || null, items: input.items, runIds: stable.runIds})).digest('hex') : undefined
+  const create = async (store: Pick<typeof prisma, 'faultInjectionTask' | 'faultInjectionRun'>) => {
+  if (stable) {
+    const previous = await store.faultInjectionTask.findUnique({where: {taskKey: stable.taskKey}, include: {runs: true}})
+    if (previous) {
+      const saved = JSON.parse(previous.requestJson || '{}')
+      if (previous.user !== input.user || saved.coreRequestHash !== stableHash || previous.runs.length !== stable.runIds.length || previous.runs.some((row: {runId: string}) => !stable.runIds.includes(row.runId))) throw Object.assign(new Error('FI stable identity conflict'), {status: 409})
+      return {task: previous, runs: previous.runs, items: JSON.parse(previous.itemsJson)}
+    }
+  }
+  const taskKey = stable?.taskKey || newTaskKey()
   const items = input.items.map((item, index) => ({
     item_id: `item-${index + 1}`,
     fault: item.fault,
@@ -57,9 +71,10 @@ export async function createTaskWithRuns(input: {
   const initialStatus = input.initialStatus || 'queued'
   const requestJson = JSON.stringify({
     timeoutSeconds: input.timeoutSeconds ?? null,
+    ...(stableHash ? {coreRequestHash: stableHash} : {}),
   })
 
-  const task = await prisma.faultInjectionTask.create({
+  const task = await store.faultInjectionTask.create({
     data: {
       taskKey,
       name: input.name || `注入任务 ${taskKey}`,
@@ -85,7 +100,7 @@ export async function createTaskWithRuns(input: {
     },
   })
 
-  const catalog = (await listFaultsViaPython(input.platform)) as Array<{
+  const catalog = (stableCatalog || await listFaultsViaPython(input.platform)) as Array<{
     id?: string
     name?: string
     skillName?: string
@@ -95,8 +110,8 @@ export async function createTaskWithRuns(input: {
   const byFault = new Map(catalog.map((row) => [String(row.id || row.name || ''), row]))
 
   const runs = []
-  for (const item of items) {
-    const runId = newRunId()
+  for (const [index, item] of items.entries()) {
+    const runId = stable?.runIds[index] || newRunId()
     item.run_id = runId
     const faultMeta = byFault.get(item.fault)
     const skillName =
@@ -107,7 +122,7 @@ export async function createTaskWithRuns(input: {
       basePrompt: input.prompt,
       submode: selected,
     })
-    const run = await prisma.faultInjectionRun.create({
+    const run = await store.faultInjectionRun.create({
       data: {
         runId,
         fiTaskId: task.id,
@@ -131,12 +146,14 @@ export async function createTaskWithRuns(input: {
     runs.push(run)
   }
 
-  const updatedTask = await prisma.faultInjectionTask.update({
+  const updatedTask = await store.faultInjectionTask.update({
     where: { id: task.id },
     data: { itemsJson: JSON.stringify(items) },
   })
 
   return { task: updatedTask, runs, items }
+  }
+  return stable ? prisma.$transaction((tx: Prisma.TransactionClient) => create(tx)) : create(prisma)
 }
 
 function looksLikeFiRunId(value: string): boolean {
@@ -192,7 +209,7 @@ export async function persistFiCollectIngress(input: {
   })
 
   // 实验「生成 Trace」依赖 Case.taskId；collect 对齐后立刻回填（避免评测时空轨迹）。
-  if (sessionTaskId) {
+  if (sessionTaskId && !isStorageCoreEnabled()) {
     const fiKeys = Array.from(new Set([input.runId, updated.id].filter(Boolean)))
     const trace = await loadBusinessSession(sessionTaskId, updated)
     await prisma.experimentCase.updateMany({

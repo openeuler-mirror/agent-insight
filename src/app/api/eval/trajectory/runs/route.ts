@@ -15,7 +15,11 @@
  */
 
 import { NextResponse } from 'next/server';
-import { prismaRaw as prisma } from '@/lib/storage/prisma';
+import { prismaRaw as legacyPrisma } from '@/lib/storage/prisma';
+import {directTrajectorySource} from '@/lib/eval/direct-trajectory-source';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,requireCoreExperimentContext,withCoreExperimentMutationRoute} from '@/lib/storage-core/experiments';
+const prisma=legacyPrisma;
 import { extractTrajectoryTaskMeta } from '@/lib/eval/trajectory-task-meta';
 import { selectLatestDatasetCaseResults } from '@/lib/eval/latest-trajectory-results';
 import { getPrimaryObservedAgentName } from '@/lib/engine/observability/agent-registration';
@@ -75,6 +79,8 @@ function getEvaluatorName(rows: Array<{ rawAnalysisJson?: string | null }>): str
 }
 
 export async function DELETE(request: Request) {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,DELETE);
+    const prisma=await directTrajectorySource(legacyPrisma);
     try {
         const { searchParams } = new URL(request.url);
         let body: Record<string, unknown> = {};
@@ -99,6 +105,8 @@ export async function DELETE(request: Request) {
                 { status: 409 },
             );
         }
+
+        if(isStorageCoreEnabled()){const context=requireCoreExperimentContext();const payload={experiment_id:runId};const removed=await context.rpc('remove',{...payload,operation_key:context.operationKey+':direct-run-remove',operation_request:payload}) as {deleted_evaluations:number;deleted_skill_issues:number};if(!Number.isSafeInteger(removed.deleted_evaluations)||!Number.isSafeInteger(removed.deleted_skill_issues))throw Object.assign(new Error('Direct evaluation deletion receipt is incomplete'),{status:503});return NextResponse.json({deletedResults:rows.length,deletedEvaluations:removed.deleted_evaluations,deletedSkillIssues:removed.deleted_skill_issues});}
 
         const evaluationIds = await prisma.evaluation.findMany({
             where: {
@@ -149,6 +157,8 @@ export async function DELETE(request: Request) {
 }
 
 export async function GET(request: Request) {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,GET);
+    const prisma=await directTrajectorySource(legacyPrisma);
     try {
         const { searchParams } = new URL(request.url);
         const user = (searchParams.get('user') || '').trim();

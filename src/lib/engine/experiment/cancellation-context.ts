@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { requireCoreExperimentContext } from '@/lib/storage-core/experiments';
+import {activeCoreWorkbenchCancellations} from '@/lib/storage-core/workbench-results';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
@@ -36,6 +39,20 @@ export function markExperimentCleanupUnconfirmed(): void {
 }
 
 export async function assertExperimentActive(experimentId: string, caseId?: string): Promise<void> {
+  if (isStorageCoreEnabled()) {
+    const snapshot = await requireCoreExperimentContext().rpc('read', {experiment_id: experimentId}) as {experiment?: {scope?:string;status: string; deletedAt?: string;configSnapshotJson?:string;coreActiveCancellationIds?:string[]; cancellations?:Array<{id?:string;caseKey:string}>;cases?: Array<{id: string; deletedAt?: string;caseValuesJson?:string}>}};
+    const experiment = snapshot.experiment;
+    const removed=new Set(experiment?activeCoreWorkbenchCancellations(experiment).map(row=>row.caseKey):[]);
+    let exists=!caseId||Boolean(experiment?.cases?.some(row=>row.id===caseId&&!row.deletedAt));
+    if(caseId?.startsWith('dataset:')&&['skill-workbench','skill-case-analysis','grayscale-ab'].includes(experiment?.scope||'')){
+      const datasetCaseId=caseId.slice(8);const config=JSON.parse(experiment?.configSnapshotJson||'{}');
+      exists=Array.isArray(config.caseIds)&&config.caseIds.includes(datasetCaseId)||Boolean(experiment?.cases?.some(row=>!row.deletedAt&&JSON.parse(row.caseValuesJson||'{}').__agentInsightDatasetCase?.caseId===datasetCaseId));
+    }
+    if (!experiment || experiment.deletedAt || experiment.status === 'cancelled' || removed.has('') || caseId&&removed.has(caseId) || !exists) {
+      throw Object.assign(new Error('实验或 Case 已取消'), {code: 'EXPERIMENT_CANCELLED', status: 409});
+    }
+    return;
+  }
   const experiment = await prisma.experiment.findUnique({ where: { id: experimentId }, select: { deletedAt: true, status: true } });
   const row = caseId ? await prisma.experimentCase.findUnique({ where: { id: caseId }, select: { deletedAt: true } }) : null;
   const cancelled = await prisma.experimentCancellation.findFirst({
@@ -58,8 +75,9 @@ export async function withExperimentCancellation<T>(experimentId: string, caseId
   };
   await check();
   controller.signal.throwIfAborted();
+  const coreMode = isStorageCoreEnabled();
   const operationId = randomUUID();
-  await prisma.experimentLocalExecution.create({ data: { id: operationId, experimentId, caseKey: caseId || '' } });
+  if (!coreMode) await prisma.experimentLocalExecution.create({ data: { id: operationId, experimentId, caseKey: caseId || '' } });
   if (caseId) active.set(operationKey(experimentId, caseId), activeCaseOperations(caseId, experimentId) + 1);
   const timer = setInterval(() => void check(), 500);
   timer.unref?.();
@@ -73,11 +91,11 @@ export async function withExperimentCancellation<T>(experimentId: string, caseId
     });
   } finally {
     clearInterval(timer);
-    if (!scope.cleanupUnconfirmed) await prisma.experimentLocalExecution.deleteMany({ where: { id: operationId } });
+    if (!coreMode && !scope.cleanupUnconfirmed) await prisma.experimentLocalExecution.deleteMany({ where: { id: operationId } });
     if (caseId) {
       const remaining = activeCaseOperations(caseId, experimentId) - 1;
       if (remaining > 0) active.set(operationKey(experimentId, caseId), remaining); else active.delete(operationKey(experimentId, caseId));
-      if (remaining <= 0 && controller.signal.aborted) {
+      if (!coreMode && remaining <= 0 && controller.signal.aborted) {
         await prisma.experimentEvalResult.updateMany({
           where: { caseId, status: 'running', OR: [{ case: { deletedAt: { not: null } } }, { case: { experiment: { deletedAt: { not: null } } } }] },
           data: { status: 'cancelled', errorMessage: '用户停止并删除' },

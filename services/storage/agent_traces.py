@@ -20,7 +20,7 @@ MAX_PACKET_SPANS=256
 MAX_ENTITIES=100000
 NAMESPACE='agent.record.v1'
 META_SPAN='f'*16
-CONTEXT_FIELDS=('parent_trace_id','diagnosis_session_id','request_key','report_run_id')
+CONTEXT_FIELDS=('parent_trace_id','diagnosis_session_id','request_key','report_run_id','experiment_id','experiment_attempt_id','experiment_fence','experiment_lease_owner','diagnosis_run_id','diagnosis_attempt_id','diagnosis_fence','diagnosis_lease_owner','experiment_recording_kind')
 
 
 class AgentTracePending(StorageError):
@@ -58,6 +58,12 @@ class AgentTraceRecorder:
         context=payload.get('context',{})
         if not isinstance(context,dict):raise ValueError('Agent context must be an object')
         context={key:identifier(context[key]) for key in CONTEXT_FIELDS if key in context}
+        if context.get('experiment_recording_kind') not in (None,'judge','execution') or context.get('experiment_recording_kind') and not context.get('experiment_id'):raise ValueError('Invalid experiment recording kind')
+        if context.get('experiment_id'):
+            if any(key not in context for key in ('experiment_attempt_id','experiment_fence','experiment_lease_owner')) or context.get('diagnosis_run_id') or context.get('diagnosis_session_id') or context.get('report_run_id'):raise ValueError('Complete exclusive experiment recording handle required')
+        diagnosis_fields=('diagnosis_run_id','diagnosis_attempt_id','diagnosis_fence','diagnosis_lease_owner')
+        if any(key in context for key in diagnosis_fields):
+            if any(key not in context for key in diagnosis_fields) or any(context.get(key) for key in ('experiment_id','diagnosis_session_id','report_run_id')):raise ValueError('Complete exclusive diagnosis recording handle required')
         body={'record':record,'rawMessages':copy.deepcopy(payload['rawMessages']),'context':context}
         _bounded(body,MAX_RECORD_BYTES)
         return task,body
@@ -151,7 +157,7 @@ class AgentTraceRecorder:
             model=value.get('modelID') or value.get('model')
             if role=='assistant' and isinstance(model,str):attrs['gen_ai.response.model']=model
             if record.get('skill'):attrs['legacy.skills']=[record['skill']];attrs['legacy.invoked_skills']=[{'name':record['skill'],'version':record.get('skill_version')}]
-            attrs['legacy.agent_ownership']='system';attrs['legacy.source_kind']='diagnosis' if body['context'] else 'internal-agent'
+            attrs['legacy.agent_ownership']='user' if body['context'].get('experiment_recording_kind')=='execution' else 'system';attrs['legacy.source_kind']='experiment' if body['context'].get('experiment_recording_kind')=='execution' else 'diagnosis' if body['context'] else 'internal-agent'
             if body['context'].get('parent_trace_id'):attrs['legacy.source_execution_id']=body['context']['parent_trace_id']
             failed=bool(value.get('error')) or value.get('status') in ('error','failed') or (role=='tool' and value.get('state') in ('error','failed'))
             if failed:
@@ -186,8 +192,11 @@ class AgentTraceRecorder:
                     put(tool_key,copy.deepcopy(call),'tool',name=name,parent=sid,carrier=True,created=timing.get('started_at'),completed=timing.get('completed_at'))
         import datetime
         execution={key:copy.deepcopy(value) for key,value in record.items() if key!='interactions'}
+        public=body['context'].get('experiment_recording_kind')=='execution'
+        subagent=record.get('isSubagent',record.get('is_subagent',False))
+        if subagent is not None and type(subagent) is not bool:raise ValueError('Agent subagent flag must be a boolean')
         execution.update(id=record['task_id'],taskId=record['task_id'],query=record.get('query'),finalResult=record.get('final_result'),agentName=record.get('agentName') or record.get('agent'),
-            framework=record.get('framework','opencode'),timestamp=datetime.datetime.fromtimestamp(session_start/1000,datetime.timezone.utc).isoformat(),agentOwnership='system',sourceKind='diagnosis' if body['context'] else 'internal-agent',
+            framework=record.get('framework','opencode'),timestamp=datetime.datetime.fromtimestamp(session_start/1000,datetime.timezone.utc).isoformat(),isSubagent=subagent is True,agentOwnership='user' if public else 'system',sourceKind='experiment' if public else 'diagnosis' if body['context'] else 'internal-agent',
             agentSessionId=record['task_id'],sourceExecutionId=body['context'].get('parent_trace_id'),recorderContext=body['context'])
         session={'taskId':record['task_id'],'query':record.get('query'),'label':record.get('label'),
             'startTime':datetime.datetime.fromtimestamp(session_start/1000,datetime.timezone.utc).isoformat(),'endTime':datetime.datetime.fromtimestamp(end/1000,datetime.timezone.utc).isoformat()}
@@ -258,6 +267,10 @@ class AgentTraceRecorder:
         while True:
             with self.control.transaction() as con:
                 route,scope,new=self._route(con,credential,workspace_id,task,body);trace=route['trace_id']
+                if body['context'].get('experiment_recording_kind')=='execution':
+                    from .experiments import ExperimentStore
+                    context=body['context']
+                    ExperimentStore(self.control)._recording_scope_tx(con,credential,workspace_id,{'experiment_id':context['experiment_id'],'attempt_id':context['experiment_attempt_id'],'fence':context['experiment_fence'],'lease_owner':context['experiment_lease_owner']},True)
                 _,_,state=self._annotation(con,workspace_id,trace)
                 if not new and not state:raise Conflict('Agent source identity ledger missing')
                 operations=state.setdefault('operations',{});pending=state.get('pending')
@@ -277,6 +290,14 @@ class AgentTraceRecorder:
                         con.execute('INSERT INTO trace_locators(workspace_id,trace_id,source_namespace,native_trace_id,trace_bucket,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)',(workspace_id,trace,NAMESPACE,route['native_trace_id'],route['trace_bucket'],now,now))
                         self.iam._record_resource(con,workspace_id,'trace',trace,scope.principal_id,'private',invalidate_policy=False)
                         for kind in ('task','execution'):con.execute('INSERT INTO trace_legacy_ids VALUES(?,?,?,?,?)',(workspace_id,kind,task,trace,now))
+                    if body['context'].get('experiment_id') and body['context'].get('experiment_recording_kind')!='execution':
+                        from .experiments import ExperimentStore
+                        context=body['context']
+                        ExperimentStore(self.control).register_judge_trace_tx(con,credential,workspace_id,{'experiment_id':context['experiment_id'],'attempt_id':context['experiment_attempt_id'],'fence':context['experiment_fence'],'lease_owner':context['experiment_lease_owner']},trace)
+                    if body['context'].get('diagnosis_run_id'):
+                        from .diagnosis_runs import DiagnosisRuns
+                        context=body['context']
+                        DiagnosisRuns(self.control).register_judge_trace_tx(con,credential,workspace_id,{'diagnosis_id':context['diagnosis_run_id'],'attempt_id':context['diagnosis_attempt_id'],'fence':context['diagnosis_fence'],'lease_owner':context['diagnosis_lease_owner']},trace)
                     operations=state.setdefault('operations',{});operations[digest]={'plan_digest':plan_digest,'batch_refs':[],'submitted':False,'actor_id':scope.principal_id,'context':body['context'],'input_hash':digest,'packet_count':len(packets)}
                     state['pending']=digest;state['task_id']=task;self._write(con,workspace_id,trace,state);pending_hash=digest
             if pending_hash is None:return self._receipt(credential,workspace_id,trace,task,op,duplicate,digest)

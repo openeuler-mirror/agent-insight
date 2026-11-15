@@ -15,6 +15,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { prisma } from '@/lib/storage/prisma';
 import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
@@ -146,7 +149,8 @@ async function findBoundVersion(skillId: string, versionBId: string) {
     });
 }
 
-export async function GET(req: NextRequest) {
+export async function GET(req: NextRequest):Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>GET(normalized));
     const { searchParams } = new URL(req.url);
     const user = searchParams.get('user');
 
@@ -186,7 +190,8 @@ export async function GET(req: NextRequest) {
     }
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: NextRequest):Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>POST(normalized));
     try {
         const body = await req.json();
         const { user, taskName } = body;

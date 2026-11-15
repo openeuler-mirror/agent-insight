@@ -18,6 +18,7 @@
 
 const { createHash } = require('node:crypto')
 const fs = require('node:fs/promises')
+const { callbackCapabilityHeaders } = require('../../../packages/benchmark-protocol/callback-capability.cjs')
 
 class PlatformClientError extends Error {
   constructor(code, message, status = 502, retryable = true) {
@@ -119,6 +120,7 @@ class AgentInsightPlatformClient {
         redirect: 'error',
         headers: {
           'x-agent-insight-evaluation-id': request.runId,
+          ...callbackCapabilityHeaders(request),
         },
         signal: AbortSignal.timeout(30_000),
       },
@@ -140,7 +142,7 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/progress`, {
       method: 'POST',
       redirect: 'error',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...callbackCapabilityHeaders(request) },
       body: JSON.stringify(event),
       signal: AbortSignal.timeout(10_000),
     })
@@ -164,6 +166,7 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/artifacts`, {
       method: 'POST',
       redirect: 'error',
+      headers: callbackCapabilityHeaders(request),
       body: form,
       signal: AbortSignal.timeout(60_000),
     })
@@ -178,7 +181,7 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/complete`, {
       method: 'POST',
       redirect: 'error',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...callbackCapabilityHeaders(request) },
       body: JSON.stringify(completion),
       signal: AbortSignal.timeout(30_000),
     })

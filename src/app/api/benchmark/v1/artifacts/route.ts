@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {coreBenchmarkCallbackContext,coreBenchmarkCallbackArtifact} from '@/lib/benchmark/core-public-callback'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -34,6 +36,7 @@ export async function POST(req: Request) {
       }
       throw error
     }
+    if(isStorageCoreEnabled())return NextResponse.json(await coreBenchmarkCallbackArtifact(req,coreBenchmarkCallbackContext(req,identity.clientId)),{status:201})
     let form: FormData
     try {
       form = await req.formData()

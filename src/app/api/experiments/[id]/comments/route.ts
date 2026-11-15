@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,withCoreExperimentMutationRoute,withCoreExperimentReadRoute,experimentReadSource,coreExperimentFailure} from '@/lib/storage-core/experiments';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -37,7 +39,8 @@ function scopeWhere(experimentId: string, caseId: string, resultId: string): Rec
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.readView){try{return await withCoreExperimentReadRoute(req,input=>GET(input,{params}));}catch(cause){return coreExperimentFailure(cause);}}
   try {
     const { id } = await params;
     const url = new URL(req.url);
@@ -45,7 +48,7 @@ export async function GET(
     const { username } = await resolveUser(req, q.get('user'));
     if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
 
-    const experiment = await prisma.experiment.findFirst({
+    const experiment = await experimentReadSource(prisma).experiment.findFirst({
       where: { id, user: username },
       select: { id: true },
     });
@@ -54,7 +57,7 @@ export async function GET(
     // scope=all：一次取回本实验下全部评论，前端按 caseId/resultId 自行分组
     // （详情页要同时渲染实验级 + 每个结果行的评论，避免 N+1 次请求）。
     const all = q.get('scope') === 'all';
-    const rows = await prisma.experimentEvalComment.findMany({
+    const rows = await experimentReadSource(prisma).experimentEvalComment.findMany({
       where: all ? { experimentId: id } : scopeWhere(id, q.get('caseId') || '', q.get('resultId') || ''),
       orderBy: { createdAt: 'asc' },
       take: 500,
@@ -62,6 +65,7 @@ export async function GET(
 
     return NextResponse.json({ items: rows });
   } catch (error) {
+    if(getCoreExperimentContext())return coreExperimentFailure(error);
     console.error('[Experiment Comments GET Error]', error);
     return NextResponse.json({ error: 'Failed to load comments' }, { status: 500 });
   }
@@ -70,7 +74,8 @@ export async function GET(
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute){try{return await withCoreExperimentMutationRoute(req,input=>POST(input,{params}));}catch(cause){return coreExperimentFailure(cause);}}
   try {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
@@ -80,7 +85,7 @@ export async function POST(
     const text = String(body?.body ?? '').trim().slice(0, BODY_MAX);
     if (!text) return NextResponse.json({ error: 'body is required' }, { status: 400 });
 
-    const experiment = await prisma.experiment.findFirst({
+    const experiment = await experimentReadSource(prisma).experiment.findFirst({
       where: { id, user: username },
       select: { id: true },
     });
@@ -90,24 +95,25 @@ export async function POST(
     const resultId = String(body?.resultId ?? '').trim() || null;
     // 归属校验：不允许把评论挂到别的实验的 case/结果行上
     if (resultId) {
-      const row = await prisma.experimentEvalResult.findFirst({
+      const row = await experimentReadSource(prisma).experimentEvalResult.findFirst({
         where: { id: resultId, experimentId: id },
         select: { id: true },
       });
       if (!row) return NextResponse.json({ error: 'result not found in this experiment' }, { status: 404 });
     } else if (caseId) {
-      const row = await prisma.experimentCase.findFirst({
+      const row = await experimentReadSource(prisma).experimentCase.findFirst({
         where: { id: caseId, experimentId: id },
         select: { id: true },
       });
       if (!row) return NextResponse.json({ error: 'case not found in this experiment' }, { status: 404 });
     }
 
-    const created = await prisma.experimentEvalComment.create({
+    const created = getCoreExperimentContext()?await getCoreExperimentContext()!.rpc('comment',{experiment_id:id,case_id:caseId,result_id:resultId,body:text}):await prisma.experimentEvalComment.create({
       data: { experimentId: id, caseId, resultId, user: username, body: text },
     });
     return NextResponse.json(created);
   } catch (error) {
+    if(getCoreExperimentContext())return coreExperimentFailure(error);
     console.error('[Experiment Comments POST Error]', error);
     return NextResponse.json({ error: 'Failed to add comment' }, { status: 500 });
   }
@@ -116,7 +122,8 @@ export async function POST(
 export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute){try{return await withCoreExperimentMutationRoute(req,input=>DELETE(input,{params}));}catch(cause){return coreExperimentFailure(cause);}}
   try {
     const { id } = await params;
     const url = new URL(req.url);
@@ -127,15 +134,16 @@ export async function DELETE(
     if (!commentId) return NextResponse.json({ error: 'commentId is required' }, { status: 400 });
 
     // 只能删自己在自己实验里留的评论
-    const row = await prisma.experimentEvalComment.findFirst({
+    const row = await experimentReadSource(prisma).experimentEvalComment.findFirst({
       where: { id: commentId, experimentId: id, user: username, experiment: { user: username } },
       select: { id: true },
     });
     if (!row) return NextResponse.json({ error: 'comment not found' }, { status: 404 });
 
-    await prisma.experimentEvalComment.delete({ where: { id: commentId } });
+    if(getCoreExperimentContext())await getCoreExperimentContext()!.rpc('comment_remove',{experiment_id:id,comment_id:commentId});else await prisma.experimentEvalComment.delete({ where: { id: commentId } });
     return NextResponse.json({ success: true });
   } catch (error) {
+    if(getCoreExperimentContext())return coreExperimentFailure(error);
     console.error('[Experiment Comments DELETE Error]', error);
     return NextResponse.json({ error: 'Failed to delete comment' }, { status: 500 });
   }

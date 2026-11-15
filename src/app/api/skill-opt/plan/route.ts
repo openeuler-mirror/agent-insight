@@ -31,6 +31,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import { resolveUser, canAccessSkill } from '@/lib/auth/auth';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
@@ -106,7 +109,8 @@ async function executeMergeOperator(args: {
   }
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: NextRequest):Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext())return withCoreWorkbenchRoute(req,POST);
   let body: any;
   try {
     body = await req.json();
@@ -132,9 +136,10 @@ export async function POST(req: NextRequest) {
     // session 必须存在且 skill/version 对得上（防串会话写 plan）
     const session = await (prismaRaw as any).skillOptSession.findUnique({
       where: { id: sessionId },
-      select: { id: true, skillName: true, baseVersion: true },
+      select: { id: true, skillName: true, baseVersion: true, user:true },
     });
     if (!session) return NextResponse.json({ error: 'session not found' }, { status: 404 });
+    if(isStorageCoreEnabled()&&session.user!==getCoreExperimentContext()!.actor.username)return NextResponse.json({error:'Unauthorized'},{status:403});
     if (session.skillName !== skillName || session.baseVersion !== baseVersion) {
       return NextResponse.json({ error: 'session skill/version mismatch' }, { status: 400 });
     }
@@ -277,15 +282,18 @@ export async function POST(req: NextRequest) {
       if (dup) return NextResponse.json({ plan: serializePlan(dup), reused: true });
     }
     console.error('[skill-opt plan POST] failed:', err?.message || err);
+    if(isStorageCoreEnabled())return coreExperimentFailure(err);
     return NextResponse.json({ error: err?.message || 'merge operator failed' }, { status: 500 });
   }
 }
 
-export async function GET(req: NextRequest) {
+export async function GET(req: NextRequest):Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext())return withCoreWorkbenchRoute(req,GET);
   const url = new URL(req.url);
   const sessionId = String(url.searchParams.get('sessionId') || '').trim();
   if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
   try {
+    if(isStorageCoreEnabled()&&!await prismaRaw.skillOptSession.findFirst({where:{id:sessionId,user:getCoreExperimentContext()!.actor.username}}))return NextResponse.json({error:'Unauthorized'},{status:403});
     const plan = await (prismaRaw as any).skillOptPlan.findUnique({
       where: { sessionId },
       include: { items: { orderBy: { rank: 'asc' } } },

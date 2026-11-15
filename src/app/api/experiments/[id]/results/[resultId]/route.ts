@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,withCoreExperimentMutationRoute,experimentReadSource,writeCoreExperimentReview,coreExperimentFailure} from '@/lib/storage-core/experiments';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -32,7 +34,8 @@ const REASON_MAX = 1000;
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string; resultId: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(req,input=>PATCH(input,{params}));
   try {
     const { id, resultId } = await params;
     const body = await req.json().catch(() => ({}));
@@ -62,7 +65,7 @@ export async function PATCH(
     }
 
     // 权限 + 归属：结果行必须属于本人的这个实验
-    const row = await prisma.experimentEvalResult.findFirst({
+    const row = await experimentReadSource(prisma).experimentEvalResult.findFirst({
       where: { id: resultId, experimentId: id, case: { experiment: { user: username } } },
       select: { id: true, status: true, score: true },
     });
@@ -77,7 +80,7 @@ export async function PATCH(
       );
     }
 
-    const updated = await prisma.experimentEvalResult.update({
+    const updated = getCoreExperimentContext()?await writeCoreExperimentReview(id,resultId,clearing?null:humanScore,reason):await prisma.experimentEvalResult.update({
       where: { id: resultId },
       data: clearing
         ? { humanScore: null, humanReason: null, humanBy: null, humanAt: null }
@@ -90,6 +93,7 @@ export async function PATCH(
 
     return NextResponse.json(updated);
   } catch (error) {
+    if(getCoreExperimentContext())return coreExperimentFailure(error);
     console.error('[Experiment Result PATCH Error]', error);
     return NextResponse.json({ error: 'Failed to update evaluation score' }, { status: 500 });
   }

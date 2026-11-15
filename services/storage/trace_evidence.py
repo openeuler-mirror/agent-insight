@@ -188,7 +188,11 @@ class TraceEvidence:
         sections=source['sections'];full=_parse(sections['attributes']);attrs={**full.get('resource',{}),**full.get('span',{})}
         raw=_legacy_value(_parse(sections['legacy_interaction'])) if 'legacy_interaction' in sections else {}
         attrs={**raw,**attrs};fields={}
-        for dest,names in {'query':('legacy.session_query','legacy.query','query'),'label':('legacy.session_label','legacy.label','label'),'finalResult':('legacy.final_result','final_result')}.items():
+        for name in ('legacy.is_subagent','is_subagent','isSubagent'):
+            if name in attrs:
+                if type(attrs[name]) is not bool:raise EvidenceUnavailable('Invalid source subagent flag')
+                fields['isSubagent']=attrs[name];break
+        for dest,names in {'query':('legacy.session_query','legacy.query','query'),'label':('legacy.session_label','legacy.label','label'),'finalResult':('legacy.final_result','final_result'),'skill':('legacy.skill','skill'),'skillVersion':('legacy.skill_version','skill_version','skillVersion'),'executionSkills':('legacy.execution_skills','execution_skills','executionSkills'),'clientId':('agent.insight.client_id','client.id','legacy.client_id','client_id','clientId'),'skillOrigins':('legacy.skill_origins','skill_origins','skillOrigins','skill.origins')}.items():
             for name in names:
                 if name in attrs:fields[dest]=attrs[name];break
         if 'query' not in fields:
@@ -264,6 +268,7 @@ class TraceEvidence:
             selected=[v for v in values if v[1]==provider] if provider else []
             if not selected:
                 priority=max(v[0] for v in values);selected=[v for v in values if v[0]==priority]
+                if key in {'clientId','skillOrigins'} and priority<2:continue
                 if len({_hash(v[2]) for v in selected})>1:raise EvidenceUnavailable('Full source field is ambiguous')
             fields[key]=selected[0][2]
         if capsule is not None:
@@ -283,7 +288,9 @@ class TraceEvidence:
                 result=frozen.session(token,workspace,trace,view='full');session['interactions']=result['interactions']
         else:
             session=frozen.session(token,workspace,trace,view='full')
-            execution={'framework':summary.get('framework'),'agentName':summary.get('agent_name'),**fields}
+            started=summary.get('started_at_ms')
+            timestamp=datetime.datetime.fromtimestamp(int(started)/1000,datetime.timezone.utc).isoformat().replace('+00:00','Z') if started is not None else None
+            execution={'framework':summary.get('framework'),'agentName':summary.get('agent_name'),'isSubagent':False,'timestamp':timestamp,**fields}
         execution.update(id=begin['aliases']['execution_id'],taskId=begin['aliases']['task_id'],user=begin['owner']['normalized_login_name'])
         session.update(taskId=begin['aliases']['task_id'],user=begin['owner']['normalized_login_name'])
         annotation=begin['annotation'];overrides=_parse(annotation['extra_json']).get('override_fields',[]) if annotation else []

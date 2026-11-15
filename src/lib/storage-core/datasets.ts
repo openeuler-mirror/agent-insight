@@ -20,7 +20,9 @@ interface CoreDatasetContext {
  lastWrite?:CoreDatasetSnapshot;
 }
 class DatasetStorageError extends Error {constructor(readonly status:number,message:string){super(message);}}
-const contexts=new AsyncLocalStorage<CoreDatasetContext>();
+const contextKey=Symbol.for('agent-insight.storage-core.dataset-context');
+const globalContexts=globalThis as unknown as Record<symbol,AsyncLocalStorage<CoreDatasetContext>>;
+const contexts=globalContexts[contextKey] ||= new AsyncLocalStorage<CoreDatasetContext>();
 const BYTE_LIMIT=64*1024*1024;
 export const getCoreDatasetContext=()=>contexts.getStore();
 export function getDatasetRepositoryContext(){
@@ -56,6 +58,11 @@ export async function withCoreDatasets<T>(request:Request,action:()=>Promise<T>,
  const pathname=new URL(request.url).pathname;
  const operationKind=pathname.endsWith('/backflow')?'backflow':request.method==='POST'?'create':request.method==='DELETE'?'delete':'save';
  return contexts.run({actor:{...actor,username:actor.username},request,options,body,operationKey,operationKind,snapshots:new Map(),virtual:new Map()},action);
+}
+export async function runWithCoreDatasetActor<T>(actor:{token:string;workspace:string;principal:string;username:string},request:Request,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{
+ const identityUrl=new URL(request.url);identityUrl.search='';identityUrl.searchParams.set('workspace_id',actor.workspace);
+ const identityRequest=new Request(identityUrl,{method:'GET',headers:request.headers});
+ return withCoreDatasets(identityRequest,async()=>{const context=requireCoreDatasetContext();if(context.actor.principal!==actor.principal||context.actor.workspace!==actor.workspace||context.actor.token!==actor.token)throw new DatasetStorageError(403,'Dataset actor differs');context.actor={...context.actor,username:actor.username};return action();},options);
 }
 export async function coreDatasetRequest<T=unknown>(action:string,arguments_:Record<string,unknown>={}):Promise<T>{
  const context=requireCoreDatasetContext();

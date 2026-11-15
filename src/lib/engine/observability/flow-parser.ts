@@ -19,6 +19,7 @@ import { OpenAI } from "openai";
 import { randomUUID } from "node:crypto";
 import { getTrustedCoreAgentContext } from "@/lib/engine/general-agent/trusted-context";
 import { buildDirectEvaluatorExecutionRecord } from "@/lib/engine/evaluation/evaluator-execution-recorder";
+import {executeCoreFlowModelCall,getCoreFlowModelDeliveryContext} from '@/lib/storage-core/flow-model-delivery';
 import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
@@ -65,19 +66,20 @@ type FlowLlmClient = {
   chat: { completions: { create: (body: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, options?: { signal?: AbortSignal }) => Promise<OpenAI.Chat.Completions.ChatCompletion> } };
 };
 
-async function getLlmClient(user?: string | null): Promise<{client: FlowLlmClient; model: string} | {client: null; model: null}> {
+async function getLlmClient(user?: string | null,purpose={agentName:'trace-step-extractor',query:'Trace business step extraction'}): Promise<{client: FlowLlmClient; model: string} | {client: null; model: null}> {
   const trusted = getTrustedCoreAgentContext();
   if (trusted) {
     const client = new OpenAI({apiKey: trusted.trustedModel.apiKey || 'no-api-key-required', baseURL: trusted.trustedModel.baseURL,
-      defaultHeaders: trusted.trustedModel.headers, fetch: getModelFetch()});
+      defaultHeaders: trusted.trustedModel.headers, fetch: getModelFetch(),...(getCoreFlowModelDeliveryContext()?{maxRetries:0}:{})});
     const recorded: FlowLlmClient = {apiKey: client.apiKey, chat: {completions: {create: async (body, options) => {
+      return executeCoreFlowModelCall(body,async()=>{
       trusted.cancelSignal?.throwIfAborted();
       const startedAt = new Date().toISOString();let failed = false;let failure: unknown;
       let response: OpenAI.Chat.Completions.ChatCompletion | undefined;
       try {response = await client.chat.completions.create(body, {...options, ...(trusted.cancelSignal ? {signal: trusted.cancelSignal} : {})});}
       catch (cause) {failed = true;failure = cause;}
-      const record = buildDirectEvaluatorExecutionRecord({taskId: 'trace-step-extractor-' + randomUUID(), agentName: 'trace-step-extractor', user,
-        query: 'Trace business step extraction', userMessage: JSON.stringify(body.messages), assistantOutput: response?.choices?.[0]?.message?.content || '',
+      const record = buildDirectEvaluatorExecutionRecord({taskId: purpose.agentName+'-' + randomUUID(), agentName: purpose.agentName, user,
+        query: purpose.query, userMessage: JSON.stringify(body.messages), assistantOutput: response?.choices?.[0]?.message?.content || '',
         modelID: trusted.trustedModel.modelID, usage: response?.usage ? {input: response.usage.prompt_tokens, output: response.usage.completion_tokens, total: response.usage.total_tokens} : null,
         startedAtISO: startedAt, completedAtISO: new Date().toISOString(), ...(failed ? {failure: {code: 'flow_model_failed', message: 'Trace step model request failed'}} : {})});
       if (!record) throw Object.assign(new Error('Core model Trace unavailable'), {code: 'CORE_TRACE_RECORDING_FAILED'});
@@ -86,6 +88,7 @@ async function getLlmClient(user?: string | null): Promise<{client: FlowLlmClien
       if (failed) throw failure;
       trusted.cancelSignal?.throwIfAborted();
       return response!;
+      });
     }}}};
     return {client: recorded, model: trusted.trustedModel.modelID};
   }
@@ -108,6 +111,11 @@ async function getLlmClient(user?: string | null): Promise<{client: FlowLlmClien
     }),
     model: config.model || "deepseek-chat"
   };
+}
+
+export function createTrustedFlowModel(user:string,purpose={agentName:'trace-step-extractor',query:'Trace business step extraction'}){
+  if(!getTrustedCoreAgentContext())throw Object.assign(new Error('Trusted frozen flow runtime required'),{status:503});
+  return getLlmClient(user,purpose);
 }
 
 export type ControlFlowType = 'required' | 'conditional' | 'loop' | 'optional' | 'handoff';
@@ -274,7 +282,8 @@ export async function parseSkillFlow(
   skillContent: string,
   skillId: string,
   version: number,
-  user?: string | null
+  user?: string | null,
+  options: {persist?: boolean} = {},
 ): Promise<{ success: boolean; flow?: ParsedFlowResult; mermaidCode?: string; error?: string }> {
   const { client, model } = await getLlmClient(user);
   
@@ -287,7 +296,7 @@ export async function parseSkillFlow(
   }
 
   try {
-    await db.upsertParsedFlow({
+    if (options.persist !== false) await db.upsertParsedFlow({
       skillId,
       version,
       user: user || null,
@@ -395,7 +404,7 @@ export async function parseSkillFlow(
 
     const mermaidCode = generateMermaidCode(flow);
 
-    await db.upsertParsedFlow({
+    if (options.persist !== false) await db.upsertParsedFlow({
       skillId,
       version,
       user: user || null,
@@ -406,6 +415,7 @@ export async function parseSkillFlow(
     return { success: true, flow, mermaidCode };
     
   } catch (error) {
+    if((error as {coreDeliveryUncertain?:boolean})?.coreDeliveryUncertain)throw error;
     const message = error instanceof Error ? error.message : "解析失败";
     console.error("Flow parse error:", error);
     return { success: false, error: message };
@@ -932,8 +942,10 @@ export async function analyzeExecutionMatch(
   skillId: string,
   skillVersion: number,
   user?: string | null,
-  skillName?: string | null
+  skillName?: string | null,
+  options: {frozen?: {session:{interactions:unknown[]};parsedFlow:{flowJson:string;mermaidCode:string|null}}} = {},
 ): Promise<{ success: boolean; result?: ExecutionMatchResult; staticMermaid?: string; dynamicMermaid?: string; flow?: ParsedFlowResult; extractedSteps?: ExtractedStep[]; interactionCount?: number; error?: string }> {
+  if(options.frozen&&!getTrustedCoreAgentContext())throw Object.assign(new Error('Trusted frozen flow runtime required'),{status:503});
   const { client, model } = await getLlmClient(user);
   
   if (!client || !client.apiKey) {
@@ -941,7 +953,7 @@ export async function analyzeExecutionMatch(
   }
 
   try {
-    const parsedFlow = await db.findParsedFlow(skillId, skillVersion, user || null);
+    const parsedFlow = options.frozen?.parsedFlow??await db.findParsedFlow(skillId, skillVersion, user || null);
 
     // 三种 "需要解析" 的情况都走同一个错误码——
     //   1) 没 row（从未尝试过解析）
@@ -953,7 +965,7 @@ export async function analyzeExecutionMatch(
       return { success: false, error: "请先解析 Skill 流程" };
     }
 
-    const session = await db.findSessionByTaskId(executionId);
+    const session = options.frozen?.session??await db.findSessionByTaskId(executionId);
     if (!session || !session.interactions) {
       return { success: false, error: "未找到执行记录或交互数据" };
     }
@@ -962,7 +974,7 @@ export async function analyzeExecutionMatch(
     try {
       interactions = typeof session.interactions === 'string' 
         ? JSON.parse(session.interactions) 
-        : session.interactions;
+        : session.interactions as InteractionMessage[];
     } catch {
       return { success: false, error: "交互数据解析失败" };
     }
@@ -990,7 +1002,7 @@ export async function analyzeExecutionMatch(
     
     const dynamicMermaid = generateDynamicMermaidCode(flow, result.matches, result.skippedExpectedSteps, mergedSteps);
 
-    await db.upsertExecutionMatch({
+    if(!options.frozen)await db.upsertExecutionMatch({
       executionId,
       skillId,
       skillVersion,
@@ -1015,6 +1027,7 @@ export async function analyzeExecutionMatch(
     };
     
   } catch (error) {
+    if(options.frozen)throw error;
     const message = error instanceof Error ? error.message : "分析失败";
     console.error("Execution match error:", error);
     return { success: false, error: message };
@@ -1066,7 +1079,7 @@ async function extractStepsInBatches(
       return result.steps || [];
     } catch (e) {
       const trusted = getTrustedCoreAgentContext();
-      if (trusted?.cancelSignal?.aborted || (e instanceof Error && 'code' in e && e.code === 'CORE_TRACE_RECORDING_FAILED')) throw e;
+      if (trusted?.cancelSignal?.aborted || (e instanceof Error && 'code' in e && e.code === 'CORE_TRACE_RECORDING_FAILED') || (e as {coreDeliveryUncertain?:boolean})?.coreDeliveryUncertain) throw e;
       if (!trusted) console.error(`Batch ${batchIndex} extract error:`, e);
       return [];
     }
@@ -1902,8 +1915,10 @@ export async function extractFrozenTraceSteps(interactions: unknown[], user?: st
 
 export async function analyzeDynamicOnly(
   executionId: string,
-  user?: string | null
-): Promise<{ success: boolean; dynamicMermaid?: string; analysisText?: string; interactionCount?: number; error?: string }> {
+  user?: string | null,
+  options:{frozen?:{session:{interactions:unknown[]}}}={},
+): Promise<{ success: boolean; dynamicMermaid?: string; analysisText?: string; interactionCount?: number; error?: string;match?:DynamicOnlyMatchResult;extractedSteps?:ExtractedStep[] }> {
+  if(options.frozen&&!getTrustedCoreAgentContext())throw Object.assign(new Error('Trusted frozen flow runtime required'),{status:503});
   const { client, model } = await getLlmClient(user);
   
   if (!client || !client.apiKey) {
@@ -1911,7 +1926,7 @@ export async function analyzeDynamicOnly(
   }
 
   try {
-    const session = await db.findSessionByTaskId(executionId);
+    const session = options.frozen?.session??await db.findSessionByTaskId(executionId);
     if (!session || !session.interactions) {
       return { success: false, error: "未找到执行记录或交互数据" };
     }
@@ -1920,14 +1935,14 @@ export async function analyzeDynamicOnly(
     try {
       interactions = typeof session.interactions === 'string' 
         ? JSON.parse(session.interactions) 
-        : session.interactions;
+        : session.interactions as InteractionMessage[];
     } catch {
       return { success: false, error: "交互数据解析失败" };
     }
 
     const interactionCount = Array.isArray(interactions) ? interactions.length : 0;
 
-    await db.upsertExecutionMatch({
+    if(!options.frozen)await db.upsertExecutionMatch({
       executionId,
       skillId: null,
       skillVersion: null,
@@ -1954,7 +1969,7 @@ export async function analyzeDynamicOnly(
     // 保存提取的步骤数据
     const stepsJson = JSON.stringify(mergedSteps);
     
-    await db.upsertExecutionMatch({
+    if(!options.frozen)await db.upsertExecutionMatch({
       executionId,
       skillId: null,
       skillVersion: null,
@@ -1971,10 +1986,12 @@ export async function analyzeDynamicOnly(
     return { 
       success: true, 
       dynamicMermaid,
-      interactionCount
+      interactionCount,
+      ...(options.frozen?{match:matchResult,extractedSteps:mergedSteps}:{}),
     };
     
   } catch (error) {
+    if(options.frozen)throw error;
     const message = error instanceof Error ? error.message : "分析失败";
     console.error("Dynamic analysis error:", error);
     return { success: false, error: message };

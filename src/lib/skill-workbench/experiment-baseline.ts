@@ -15,6 +15,9 @@
  */
 
 import { prismaRaw } from '@/lib/storage/prisma';
+import {workbenchReadSource,requireWorkbenchActor} from '@/lib/storage-core/workbench';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {projectCoreWorkbenchTaskStates,type WorkbenchCoreSnapshot,type WorkbenchProjectedStates} from '@/lib/storage-core/workbench-results';
 
 export interface WorkbenchExperimentSnapshot {
   datasetId?: string;
@@ -70,6 +73,16 @@ async function loadBaselines(user: string, experiments: Array<{
     select: { id: true, caseStatesJson: true },
   }) : [];
   const taskMap = new Map(tasks.map((task) => [task.id, task.caseStatesJson]));
+  if(isStorageCoreEnabled()){
+    const context=requireWorkbenchActor(user);
+    for(const {experiment,snapshot} of parsed){
+      if(!snapshot.grayscaleTaskId)continue;
+      const current=await context.rpc('read',{experiment_id:experiment.id}) as {gold_redacted?:boolean;experiment:WorkbenchCoreSnapshot};
+      if(current.gold_redacted)throw Object.assign(new Error('Baseline belongs to another actor'),{status:403});
+      const states=parseJson<WorkbenchProjectedStates>(taskMap.get(snapshot.grayscaleTaskId)||null,{});
+      taskMap.set(snapshot.grayscaleTaskId,JSON.stringify(projectCoreWorkbenchTaskStates(current.experiment,states)));
+    }
+  }
 
   return parsed.flatMap(({ experiment, snapshot }) => {
     if (!snapshot.datasetId || !snapshot.caseIds?.length || !snapshot.evaluatorIds?.length || !snapshot.grayscaleTaskId) return [];
@@ -102,7 +115,7 @@ export async function getRetestableExperimentBaseline(input: {
   skillName: string;
   skillVersion: number;
 }) {
-  const experiment = await prismaRaw.experiment.findFirst({
+  const experiment = await (await workbenchReadSource(prismaRaw,input.user,input.experimentId)).experiment.findFirst({
     where: {
       id: input.experimentId,
       user: input.user,
@@ -125,7 +138,7 @@ export async function findLatestRetestableExperimentBaseline(input: {
   skillName: string;
   skillVersion: number;
 }) {
-  const experiments = await prismaRaw.experiment.findMany({
+  const experiments = await (await workbenchReadSource(prismaRaw,input.user)).experiment.findMany({
     where: {
       user: input.user,
       scope: 'skill-workbench',

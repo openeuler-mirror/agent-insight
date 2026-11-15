@@ -14,12 +14,19 @@
  * limitations under the License.
  */
 
+import {createHash} from 'node:crypto';
+import {startCoreExperiment} from '@/lib/storage-core/experiment-assets';
+import {activateExperimentWork} from '@/lib/storage-core/experiment-worker';
 import { withFrozenCustomEvaluators, resolveFrozenCustomEvaluator } from '@/lib/evaluators/evaluator-skill-service';
 import { EvaluatorSkillError } from '@/lib/evaluators/evaluator-skill-store';
 import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { NextResponse } from 'next/server';
-import { prismaRaw as prisma } from '@/lib/storage/prisma';
+import { prismaRaw as legacyPrisma } from '@/lib/storage/prisma';
+import {directTrajectorySource} from '@/lib/eval/direct-trajectory-source';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,requireCoreExperimentContext,withCoreExperimentMutationRoute} from '@/lib/storage-core/experiments';
+const prisma=legacyPrisma;
 import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
 import {
     cacheLiveRootCausesForDatasetCase,
@@ -130,6 +137,7 @@ const EVALUATOR_LABELS: Record<string, string> = {
 };
 
 function generateRunId(): string {
+    if(isStorageCoreEnabled())return 'trun_'+createHash('sha256').update(requireCoreExperimentContext().operationKey).digest('hex').slice(0,32);
     return `trun_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -577,6 +585,8 @@ async function findMatchingDatasetCaseForTrace(
 }
 
 export async function POST(request: Request) {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,POST);
+    const prisma=await directTrajectorySource(legacyPrisma);
     try {
         const body = await request.json();
         const user = String(body.user || '').trim();
@@ -911,7 +921,7 @@ export async function POST(request: Request) {
         // 归属修复(往后自动):平台服务端跑出来的执行 trace 默认记在服务账号(admin)名下,这里把
         // 本次评测引用的"被执行 trace"归还给评测发起人。只动服务账号拥有的 trace(不碰别人已拥有的)。
         // fire-and-forget,不阻塞评测响应;失败也不影响主流程。
-        void Promise.all(created.map(c =>
+        if(!isStorageCoreEnabled())void Promise.all(created.map(c =>
             reattributeServiceTraceOwner((c.taskId || c.executionId || '').trim(), user).catch(() => false)
         ));
 
@@ -946,6 +956,8 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,PATCH);
+    const prisma=await directTrajectorySource(legacyPrisma);
     try {
         const body = await request.json();
         const user = String(body.user || '').trim();
@@ -2129,6 +2141,12 @@ async function derivePointsAfterDone(
 
 /** 并发执行（concurrency=RUN_CONCURRENCY），失败的行单独标 failed，不影响其他 */
 async function runEvaluations(user: string, evaluatorRunId: string, resultIds: string[]) {
+    if(isStorageCoreEnabled()){
+        const context=requireCoreExperimentContext();const snapshot=await context.rpc('read',{experiment_id:evaluatorRunId,case_ids:resultIds}) as {experiment:{cases:Array<{id:string;directTrajectory:{rawAnalysisJson:string}}>}};
+        for(const item of snapshot.experiment.cases){const metadata=safeParseRecord(item.directTrajectory.rawAnalysisJson);const evaluators=(metadata.selectedEvaluators as string[]).map(id=>'__direct_trajectory__:'+id);await startCoreExperiment(context,evaluatorRunId,{caseIds:[item.id],evaluatorIds:evaluators});}
+        await activateExperimentWork(context,evaluatorRunId);return;
+    }
+
     const startedAt = Date.now();
     console.log(`[trajectory-eval] run ${evaluatorRunId} started: ${resultIds.length} traces, concurrency=${RUN_CONCURRENCY}`);
 

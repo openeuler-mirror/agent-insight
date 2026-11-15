@@ -17,6 +17,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { randomBytes } from "node:crypto"
 import { pathToFileURL } from "node:url"
 
 const DEFAULT_TIMEOUT_MS = 10_000
@@ -66,25 +67,34 @@ function processIsAlive(pid) {
 
 function acquireProcessLock(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const descriptor = fs.openSync(file, "wx", 0o600)
-      fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`)
-      fs.closeSync(descriptor)
-      return () => {
-        const owner = readJson(file, {})
-        if (Number(owner.pid) === process.pid) {
-          try { fs.unlinkSync(file) } catch {}
+  const temporary = `${file}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`
+  let descriptor
+  try {
+    descriptor = fs.openSync(temporary, "wx", 0o600)
+    fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`)
+    fs.closeSync(descriptor)
+    descriptor = undefined
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        fs.linkSync(temporary, file)
+        return () => {
+          const owner = readJson(file, {})
+          if (Number(owner.pid) === process.pid) {
+            try { fs.unlinkSync(file) } catch {}
+          }
         }
+      } catch (error) {
+        if (error?.code !== "EEXIST") throw error
+        const owner = readJson(file, {})
+        if (processIsAlive(Number(owner.pid))) return null
+        try { fs.unlinkSync(file) } catch {}
       }
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error
-      const owner = readJson(file, {})
-      if (processIsAlive(Number(owner.pid))) return null
-      try { fs.unlinkSync(file) } catch {}
     }
+    return null
+  } finally {
+    if (descriptor !== undefined) try { fs.closeSync(descriptor) } catch {}
+    try { fs.unlinkSync(temporary) } catch {}
   }
-  return null
 }
 
 async function acquireProcessLockWithWait(file, waitMs) {
@@ -229,23 +239,8 @@ async function main() {
   if (!spoolDir) throw new Error("AGENT_INSIGHT_QODER_SPOOL_DIR is not configured")
   fs.mkdirSync(spoolDir, { recursive: true })
   const lockFile = path.join(spoolDir, "uploader.lock")
-  try {
-    const existing = readJson(lockFile, {})
-    const pid = Number(existing.pid)
-    if (Number.isInteger(pid) && pid > 0) {
-      try {
-        process.kill(pid, 0)
-        return
-      } catch {}
-    }
-    try { fs.unlinkSync(lockFile) } catch {}
-    const descriptor = fs.openSync(lockFile, "wx", 0o600)
-    fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`)
-    fs.closeSync(descriptor)
-  } catch (error) {
-    if (error?.code === "EEXIST") return
-    throw error
-  }
+  const releaseWatchLock = acquireProcessLock(lockFile)
+  if (!releaseWatchLock) return
   let stopping = false
   let wakeInterval
   let intervalTimer
@@ -276,7 +271,7 @@ async function main() {
     }
     await uploadPending().catch(() => {})
   } finally {
-    try { fs.unlinkSync(lockFile) } catch {}
+    releaseWatchLock()
   }
 }
 

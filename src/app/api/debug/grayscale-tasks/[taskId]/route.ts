@@ -14,7 +14,18 @@
  * limitations under the License.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHash } from 'node:crypto';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,requireCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {workbenchReadSource,withCoreWorkbenchRoute,readWorkbenchFrozenDataset} from '@/lib/storage-core/workbench';
+import {executeCoreWorkbenchLocalCase} from '@/lib/storage-core/workbench-local-execution';
+import {freezeModelSelection} from '@/lib/storage-core/frozen-model';
+import {getUserSettings} from '@/lib/storage/server-config';
+import {readCoreWorkbenchTaskConfiguration} from '@/lib/storage-core/workbench-handoff';
+import {isCoreDeliveryUncertain} from '@/lib/storage-core/execution-delivery';
+import {cancelCoreExperimentExecution} from '@/lib/storage-core/experiment-cancellation';
+import {freezeExperimentAssets} from '@/lib/storage-core/experiment-assets';
+import {requireCoreDatasetContext} from '@/lib/storage-core/datasets';
 import { ownsSkillExecution } from '@/lib/grayscale/execution-fence';
 import { commitRunProgress } from '@/lib/grayscale/run-progress-store';
 import { type ExecutionIdentity } from '@/lib/grayscale/run-progress';
@@ -520,11 +531,11 @@ function getConfiguredDatasetIds(config: GrayscaleConfig): string[] {
     ].map(item => String(item || '').trim()).filter(Boolean)));
 }
 
-async function loadConfiguredCaseMap(user: string, config: GrayscaleConfig): Promise<Map<string, { datasetId: string; caseEntry: DatasetCase }>> {
+async function loadConfiguredCaseMap(user: string, config: GrayscaleConfig,freshGrayscaleStart=false): Promise<Map<string, { datasetId: string; caseEntry: DatasetCase }>> {
     const datasetIds = getConfiguredDatasetIds(config);
     const caseMap = new Map<string, { datasetId: string; caseEntry: DatasetCase }>();
     for (const datasetId of datasetIds) {
-        const dataset = await findAgentDataset(user, datasetId).catch(() => null);
+        const dataset = isStorageCoreEnabled()&&config.evalExperimentId?await readWorkbenchFrozenDataset(user,config.evalExperimentId,datasetId,{freshGrayscaleStart}):await findAgentDataset(user,datasetId).catch(()=>null);
         if (!dataset) continue;
         for (const caseEntry of dataset.cases) {
             if (!caseMap.has(caseEntry.id)) {
@@ -842,15 +853,16 @@ function pickExecutionTokenUsage(row: ExecutionMetricRow): number | null {
 async function loadTask(taskId: string, user: string) {
     const task = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({ where: { id: taskId, user } });
     if (!task) return null;
-    const configJson = withDefaultConfig(safeParse<GrayscaleConfig>(task.configJson, {}));
+    const configJson = withDefaultConfig(isStorageCoreEnabled()?await readCoreWorkbenchTaskConfiguration(user,task):safeParse<GrayscaleConfig>(task.configJson, {}));
     const normalizedConfig = hydrateGrayscaleTaskBinding(configJson, task);
-    return {
+    const parsed={
         ...task,
         configJson: normalizedConfig,
         caseStatesJson: safeParse<CaseStates>(task.caseStatesJson, {}),
         // 读到的原始 caseStatesJson 串, 用于整份回写时的乐观锁 compare-and-swap。
         rawCaseStatesJson: task.caseStatesJson,
     };
+    return isStorageCoreEnabled()?visibleExperimentTask(parsed):parsed;
 }
 
 /**
@@ -1123,7 +1135,7 @@ async function hydrateExecutionMetrics(states: CaseStates): Promise<boolean> {
     ));
     if (sessionIds.length === 0) return false;
 
-    const rows = await (prisma as unknown as GrayscalePrisma).execution.findMany({
+    const rows = await (await workbenchReadSource(prisma as unknown as GrayscalePrisma)).execution.findMany({
         where: { taskId: { in: sessionIds } },
         select: {
             taskId: true,
@@ -1223,7 +1235,7 @@ async function reconcileFinishedExecutions(args: {
     }
     if (pendingTargets.length === 0) return false;
 
-    const rows = await (prisma as unknown as GrayscalePrisma).execution.findMany({
+    const rows = await (await workbenchReadSource(prisma as unknown as GrayscalePrisma)).execution.findMany({
         where: {
             user: args.user,
             agentName: { in: ['grayscale-baseline-agent', 'grayscale-skill-agent'] },
@@ -1308,7 +1320,7 @@ async function reconcileFinishedEvaluations(taskId: string, user: string, config
     const rowSelectors: Record<string, unknown>[] = [];
     if (evaluatorRunIds.length > 0) rowSelectors.push({ evaluatorRunId: { in: evaluatorRunIds } });
     if (evaluationResultIds.length > 0) rowSelectors.push({ id: { in: evaluationResultIds } });
-    const rows = await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.findMany({
+    const rows = await (await workbenchReadSource(prisma as unknown as GrayscalePrisma)).trajectoryEvalResult.findMany({
         where: rowSelectors.length === 1
             ? { user, ...rowSelectors[0] }
             : { user, OR: rowSelectors },
@@ -1523,7 +1535,7 @@ async function executeSingleAgentRunImpl(args: {
     try {
         const timeoutMs = Math.max(5_000, Number(args.config.timeoutMs) || GRAYSCALE_AGENT_TIMEOUT_MS);
         if (!args.config.executionTarget && args.config.evalExperimentId && !args.config.triggerRouting) {
-            const experiment = await prisma.experiment.findFirst({ where: { id: args.config.evalExperimentId, user: args.user }, select: { scope: true } });
+            const experiment = await (await workbenchReadSource(prisma,args.user,args.config.evalExperimentId)).experiment.findFirst({ where: { id: args.config.evalExperimentId, user: args.user }, select: { scope: true } });
             if (experiment?.scope === 'skill-workbench') throw Object.assign(new Error('旧 Skill 实验未冻结真实客户端执行目标，请重新创建实验；不会回退默认模型'), { code: 'EXECUTION_TARGET_REQUIRED' });
         }
         if (args.config.executionTarget || args.config.requiresClientExecution) {
@@ -1571,6 +1583,9 @@ async function executeSingleAgentRunImpl(args: {
         if (args.config.modelConfigId && !frozenModel) {
             throw new Error(`frozen model config is unavailable: ${args.config.modelConfigId}`);
         }
+        const coreModelSelection=isStorageCoreEnabled()&&args.config.modelConfigId
+            ? freezeModelSelection((await getUserSettings(args.user)).configs.find(model=>model.id===args.config.modelConfigId)||null):undefined;
+        if(isStorageCoreEnabled()&&args.config.modelConfigId&&!coreModelSelection)throw Object.assign(new Error('Frozen local model config is unavailable'),{status:503});
         const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutTimer = setTimeout(() => {
                 didTimeout = true;
@@ -1579,7 +1594,7 @@ async function executeSingleAgentRunImpl(args: {
             }, timeoutMs);
         });
         const grayAgentName = args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent';
-        const agentPromise = runGeneralAgent({
+        const invokeAgent = (signal:AbortSignal) => runGeneralAgent({
             user: args.user,
             query: args.caseMap.get(target.caseId)!.input,
             skill: args.version?.skillName,
@@ -1604,7 +1619,7 @@ async function executeSingleAgentRunImpl(args: {
             timeoutMs,
             chatOptions: {
                 idleTimeoutMs,
-                signal: abortController.signal,
+                signal,
             },
             handlers: {
                 onTool: e => {
@@ -1616,6 +1631,17 @@ async function executeSingleAgentRunImpl(args: {
                 },
             },
         });
+        const agentPromise = isStorageCoreEnabled()&&args.config.evalExperimentId
+            ? executeCoreWorkbenchLocalCase({...requireCoreExperimentContext(),...(coreModelSelection?{frozenStartModelSelection:coreModelSelection}:{})}, {
+                user:args.user,experimentId:args.config.evalExperimentId,experimentCaseId:run.experimentCaseId,
+                datasetId:args.config.linkedDatasetIds?.[0]||args.config.selectedDatasetId||'',datasetCaseId:target.caseId,
+                query:args.caseMap.get(target.caseId)!.input,referenceOutput:args.caseMap.get(target.caseId)?.expectedOutput,
+                signal:abortController.signal,executionRequest:{modelConfigId:args.config.modelConfigId,side:target.side,timeoutSeconds:Math.round(timeoutMs/1000)},
+                skillRun:{taskId:args.taskId,datasetCaseId:target.caseId,side:target.side,runIndex:target.runIndex,executionClaimId:run.executionClaimId},
+                onCaseCreated:async id=>{run.experimentCaseId=id;if(!await persistRunStatePatch({taskId:args.taskId,user:args.user,config:args.config,states:args.states,caseId:target.caseId,side:target.side,nextRun:run}))throw Object.assign(new Error('执行已被替换'),{code:'EXECUTION_SUPERSEDED'});},
+                onAttemptCreated:async({attemptId,attemptNo})=>{run.traceAttemptId=attemptId;run.traceAttemptNo=attemptNo;return persistRunStatePatch({taskId:args.taskId,user:args.user,config:args.config,states:args.states,caseId:target.caseId,side:target.side,nextRun:run});},
+            },invokeAgent)
+            : invokeAgent(abortController.signal);
         pendingAgent = agentPromise;
         void agentPromise.catch(() => {});
         const result = await Promise.race([agentPromise, timeoutPromise]);
@@ -1638,7 +1664,7 @@ async function executeSingleAgentRunImpl(args: {
         markRunCompleted(run);
         // runGeneralAgent 会尽量写入真实 opencode messages。这里再写一份 query/output
         // fallback，防止 ephemeral server 的 listMessages 返回空数组时 trace 详情页空白。
-        await persistGrayscaleFallbackTrace({
+        if(!isStorageCoreEnabled()) await persistGrayscaleFallbackTrace({
             sessionId: result.sessionId,
             user: args.user,
             query: args.caseMap.get(target.caseId)!.input,
@@ -1649,6 +1675,12 @@ async function executeSingleAgentRunImpl(args: {
             skillVersion: args.version?.version,
         });
     } catch (err) {
+        if(isCoreDeliveryUncertain(err)){
+            const completed=(err as {coreLocalExecutionResult?:{sessionId:string;output?:string}}).coreLocalExecutionResult;
+            run.status='running';run.output=completed?.output;run.sessionId=completed?.sessionId;
+            if(completed?.sessionId)run.traceIds=[completed.sessionId];
+            return;
+        }
         const classified = classifyAgentRunError(err);
         run.status = 'fail';
         const agentError = err as Partial<AgentRunError>;
@@ -1760,6 +1792,7 @@ async function reconcileFailedRunsFromExistingEval(user: string, config: Graysca
 }
 
 async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, errorMessage: string) {
+    if(isStorageCoreEnabled())throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
     await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
         where: {
             user,
@@ -1774,6 +1807,7 @@ async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, erro
 }
 
 async function markEvaluatorTasksFailed(user: string, evaluatorRunId: string, taskIds: string[], errorMessage: string) {
+    if(isStorageCoreEnabled())throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
     const scopedTaskIds = Array.from(new Set(taskIds.map(id => id.trim()).filter(Boolean)));
     if (scopedTaskIds.length === 0) {
         await markEvaluatorRunFailed(user, evaluatorRunId, errorMessage);
@@ -1794,6 +1828,7 @@ async function markEvaluatorTasksFailed(user: string, evaluatorRunId: string, ta
 }
 
 async function markEvaluatorRowsFailed(user: string, rowIds: string[], errorMessage: string) {
+    if(isStorageCoreEnabled())throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
     const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
     if (scopedRowIds.length === 0) return;
     await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
@@ -1810,6 +1845,7 @@ async function markEvaluatorRowsFailed(user: string, rowIds: string[], errorMess
 }
 
 async function markEvaluatorRowsFailedForce(user: string, rowIds: string[], errorMessage: string) {
+    if(isStorageCoreEnabled())throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
     const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
     if (scopedRowIds.length === 0) return;
     await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
@@ -1880,7 +1916,7 @@ async function evaluateSingleRunTarget(args: {
         let referenceOutput: string | null = null;
         let datasetInput: string | null = null;
         if (datasetId) {
-            const ds = await findAgentDataset(args.user, datasetId).catch(() => null);
+            const ds = isStorageCoreEnabled()?await readWorkbenchFrozenDataset(args.user,args.config.evalExperimentId,datasetId):await findAgentDataset(args.user,datasetId).catch(()=>null);
             const datasetCase = ds?.cases.find(c => c.id === target.caseId);
             referenceOutput = datasetCase?.expectedOutput ?? null;
             datasetInput = datasetCase?.input ?? null;
@@ -1888,7 +1924,9 @@ async function evaluateSingleRunTarget(args: {
         // trace 已产生：作为 case 加入 backing 实验、同步跑评估器（引擎按 sessionId 解析 input/output/skill 上下文）
         const expCaseId = await addEvalExperimentCase(args.config.evalExperimentId, {
             taskId: target.run.sessionId!, input: '', datasetInput, actualOutput: '', referenceOutput,
+            ...(isStorageCoreEnabled()&&datasetId?{datasetBinding:{datasetId,caseId:target.caseId}}:{}),
         });
+        if(isStorageCoreEnabled()&&expCaseId)target.run.experimentCaseId=expCaseId;
         const rows = await evaluateEvalExperimentCase(args.config.evalExperimentId, expCaseId, args.user, {
             evaluatorIds: effectiveEvaluatorIds,
             settleExperiment: false,
@@ -2024,6 +2062,7 @@ async function evaluateRunsAsExperimentBatch(args: {
                 datasetInput: datasetCase?.input || null,
                 actualOutput: target.run.output || '',
                 referenceOutput: datasetCase?.expectedOutput ?? null,
+                ...(isStorageCoreEnabled()&&args.caseConfigMap.get(target.caseId)?{datasetBinding:{datasetId:args.caseConfigMap.get(target.caseId)!.datasetId,caseId:target.caseId}}:{}),
             });
             target.run.experimentCaseId = experimentCaseId;
             return { target, experimentCaseId };
@@ -2036,7 +2075,7 @@ async function evaluateRunsAsExperimentBatch(args: {
         if (!batch) throw new Error(`实验 ${experimentId} 不存在`);
         await batch.completion;
 
-        const resultRows = await prisma.experimentEvalResult.findMany({
+        const resultRows = await (await workbenchReadSource(prisma)).experimentEvalResult.findMany({
             where: {
                 experimentId,
                 caseId: { in: experimentCases.map(item => item.experimentCaseId) },
@@ -2154,7 +2193,7 @@ async function evaluateRunsWithConcurrency(args: {
     }
     if (targets.length === 0) {
         if (args.config.evalExperimentId && !args.onlyMissingEvaluation) {
-            await prisma.experiment.updateMany({
+            if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
                 where: { id: args.config.evalExperimentId, user: args.user, deletedAt: null },
                 data: { status: 'failed' },
             });
@@ -2163,7 +2202,7 @@ async function evaluateRunsWithConcurrency(args: {
     }
 
     if (args.config.evalExperimentId) {
-        await prisma.experiment.updateMany({
+        if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
             where: { id: args.config.evalExperimentId, user: args.user, deletedAt: null },
             data: { status: 'running' },
         });
@@ -2334,7 +2373,7 @@ async function runWorkbenchTriggerTask(args: {
         };
     }
     if (!args.preparedStates) await persistTaskState(args.taskId, args.user, config, states);
-    await prisma.experiment.updateMany({
+    if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
         where: { id: config.evalExperimentId, user: args.user, deletedAt: null },
         data: { status: 'running' },
     });
@@ -2373,7 +2412,7 @@ async function runWorkbenchTriggerTask(args: {
                 }, { forceNewTrace: true });
                 signal.throwIfAborted();
                 if (!generated.readyCaseIds.includes(experimentCaseId)) {
-                    const attempt = await prisma.experimentTraceAttempt.findFirst({
+                    const attempt = await (await workbenchReadSource(prisma)).experimentTraceAttempt.findFirst({
                         where: { caseId: experimentCaseId }, orderBy: { attemptNo: 'desc' },
                         select: { failureCode: true, errorMessage: true },
                     });
@@ -2382,6 +2421,17 @@ async function runWorkbenchTriggerTask(args: {
                 }
                 const observation = generated.triggerDecisions?.[experimentCaseId];
                 if (!observation) throw new Error('客户端未返回有效 Skill 路由判定');
+                if(isStorageCoreEnabled()){
+                    const current=await requireCoreExperimentContext().rpc('read',{experiment_id:config.evalExperimentId,case_ids:[experimentCaseId]}) as {experiment:{cases:Array<{id:string;results:EvalCaseResultRow[]}>}};
+                    const rows=current.experiment.cases.find(row=>row.id===experimentCaseId)?.results;
+                    if(!rows?.length||rows.some(row=>!['done','failed'].includes(row.status)))throw Object.assign(new Error('触发分析机器结果尚未完成'),{status:503});
+                    if(!await ownsSkillExecution(prisma,{taskId:args.taskId,user:args.user,datasetCaseId:caseId,side:'b',runIndex:1,executionClaimId:run.executionClaimId!}))return;
+                    run.executionFinishedAt=new Date().toISOString();run.sessionId=observation.sessionId;run.skillTriggered=observation.triggered;
+                    run.timeCost=`${((Date.now()-startedAt)/1000).toFixed(1)}s`;run.output=observation.triggered?'Skill 已触发':'Skill 未触发';
+                    applyExpRowsToRun(run,rows,config.evalExperimentId);
+                    await persistRunStatePatch({taskId:args.taskId,user:args.user,config,states,caseId,side:'b',nextRun:run,touchLatestResultAt:true});
+                    return;
+                }
                 const exactEvaluation = evaluateSkillTriggerAnalysis({
                     shouldTrigger,
                     skillTriggered: observation.triggered,
@@ -2444,7 +2494,7 @@ async function runWorkbenchTriggerTask(args: {
             } catch (error) {
                 if (signal.aborted) throw error;
                 const message = error instanceof Error ? error.message : String(error);
-                await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+                if(!isStorageCoreEnabled()) await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
                     await tx.experimentCase.updateMany({ where: { id: experimentCaseId }, data: { id: experimentCaseId } });
                     if (run.executionClaimId && !await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: caseId, side: 'b', runIndex: 1, executionClaimId: run.executionClaimId })) return;
                     await tx.experimentCase.update({
@@ -2465,11 +2515,12 @@ async function runWorkbenchTriggerTask(args: {
         }, { taskType: 'grayscale-trigger', user: args.user, skill: task.skillName,
             label: `trigger-${caseId}`, signal });
     });
-    const failed = await prisma.experimentEvalResult.count({
+    const failed = await (await workbenchReadSource(prisma)).experimentEvalResult.count({
         where: { experimentId: config.evalExperimentId, status: 'failed' },
     });
     const executionFailed = [...experimentCases.keys()].some((caseId) => states[caseId].b.runs?.[0]?.failureType);
-    await prisma.experiment.updateMany({
+    if(isStorageCoreEnabled())await settleExperimentStatus(config.evalExperimentId!);
+    if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
         where: { id: config.evalExperimentId, user: args.user, deletedAt: null },
         data: { status: failed || executionFailed ? 'failed' : 'done' },
     });
@@ -2517,7 +2568,7 @@ async function runGrayscaleTask(args: {
     });
     const configuredDatasetIds = getConfiguredDatasetIds(config);
     if (configuredDatasetIds.length === 0) throw new Error('dataset is required');
-    const caseConfigMap = await loadConfiguredCaseMap(user, config);
+    const caseConfigMap = await loadConfiguredCaseMap(user,config,true);
     if (caseConfigMap.size === 0) throw new Error('dataset not found');
 
     const runCount = Math.max(1, Number(config.runCount || args.caseIds.length || 1));
@@ -2569,7 +2620,21 @@ async function runGrayscaleTask(args: {
             }
         }
     }
-    await persistTaskState(taskId, user, config, states);
+    const persisted=await persistTaskState(taskId,user,config,states,isStorageCoreEnabled()?task.rawCaseStatesJson:undefined);
+    if(!persisted)throw Object.assign(new Error('该执行已更新，请刷新后重试'),{code:'EXECUTION_SUPERSEDED',status:409});
+    if(isStorageCoreEnabled()){
+        const context=requireCoreExperimentContext();const snapshot=await context.rpc('read',{experiment_id:config.evalExperimentId}) as {gold_redacted?:boolean;revision:string;experiment:Record<string,unknown>};
+        if(snapshot.gold_redacted)throw Object.assign(new Error('Task-linked Experiment belongs to another actor'),{status:403});
+        if(snapshot.experiment.scope==='grayscale-ab'){
+            const previous=safeParse<Record<string,unknown>>(String(snapshot.experiment.configSnapshotJson||'{}'),{});
+            const metadata={...previous,datasetId:configuredDatasetIds[0],caseIds,grayscaleTaskId:taskId,executionSides,repeatRounds,coreWorkbenchExecution:config,runtime:{modelConfigId:config.modelConfigId,modelOptions:config.modelOptions,interactionPolicy:config.interactionPolicy,timeoutMs:config.timeoutMs,idleTimeoutMs:config.idleTimeoutMs}};
+            const frozen=await freezeExperimentAssets(context,{...snapshot.experiment,evaluatorIdsJson:JSON.stringify(config.evaluators),configSnapshotJson:JSON.stringify(metadata)});
+            const frozenConfig=JSON.parse(String(frozen.configSnapshotJson));
+            for(const datasetId of configuredDatasetIds){const sealed=requireCoreDatasetContext().snapshots.get(datasetId);if(!sealed)throw Object.assign(new Error('Frozen Dataset release unavailable'),{status:503});frozenConfig.coreAssets.releases['dataset:'+datasetId]=sealed.release_id;}
+            const payload={experiment_id:config.evalExperimentId,expected_revision:snapshot.revision,changes:{evaluatorIdsJson:JSON.stringify(config.evaluators),configSnapshotJson:JSON.stringify(frozenConfig)}};
+            await context.rpc('update',{...payload,operation_key:context.operationKey+':grayscale-freeze',operation_request:payload});
+        }
+    }
 
     const executionConcurrency = Math.max(1, Number(config.executionConcurrency || config.agentMaxConcurrency || 4));
     // 内层每个 work item 进 withBackgroundOpencodeSlot 排队,跟全局 5 个 opencode 后台任务
@@ -2667,6 +2732,28 @@ async function prepareExperimentCasesForExecutionRetry(args: {
     datasetCase: DatasetCase;
     evaluatorIds: string[];
 }) {
+    if(isStorageCoreEnabled()){
+        const context=requireCoreExperimentContext();if(context.actor.username!==args.user)throw Object.assign(new Error('Task actor differs'),{status:403});
+        const task=await prisma.grayscaleTask.findFirst({where:{id:args.taskId,user:args.user},select:{caseStatesJson:true,configJson:true}});
+        if(!task||task.caseStatesJson!==args.expectedCaseStatesJson)throw Object.assign(new Error('该执行已更新，请刷新后重试'),{code:'EXECUTION_SUPERSEDED',status:409});
+        const snapshot=await context.rpc('read',{experiment_id:args.experimentId}) as {gold_redacted?:boolean;experiment:{cases:Array<{id:string;taskId?:string;caseValuesJson?:string}>}};
+        if(snapshot.gold_redacted)throw Object.assign(new Error('Task-linked Experiment belongs to another actor'),{status:403});
+        const ids:string[]=[];
+        for(const [index,run] of args.runs.entries()){
+            const existing=snapshot.experiment.cases.find(row=>run.experimentCaseId?row.id===run.experimentCaseId:run.sessionId&&row.taskId===run.sessionId);
+            if(run.experimentCaseId&&!existing)throw Object.assign(new Error('实验 Case 已不存在'),{status:404});
+            let id=existing?.id;
+            if(!id){id='retry-case-'+createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,args.taskId,args.experimentId,args.caseId,args.sides[index],run.runIndex])).digest('hex').slice(0,40);
+                const payload={experiment_id:args.experimentId,case:{id,input:args.datasetCase.input,datasetInput:args.datasetCase.input||null,actualOutput:'',referenceOutput:args.datasetCase.expectedOutput??null,caseValuesJson:JSON.stringify(withExperimentDatasetCaseBinding(args.datasetCase.values,{datasetId:args.datasetId,caseId:args.caseId}))},only_if_new:true};
+                const receipt=await context.rpc('case_upsert',{...payload,operation_key:context.operationKey+':retry-case:'+id,operation_request:payload}) as {case_id:string};if(receipt.case_id!==id)throw Object.assign(new Error('Retry Case receipt differs'),{status:503});
+            }
+            ids.push(id);const side=args.sides[index];const target=args.states[args.caseId][side].runs!.find(value=>value.runIndex===run.runIndex)!;target.experimentCaseId=id;
+            args.states[args.caseId][side]=rebuildSideAggregate(args.states[args.caseId][side],args.states[args.caseId][side].runCount||1);
+        }
+        const changed=await prisma.grayscaleTask.updateMany({where:{id:args.taskId,user:args.user,caseStatesJson:args.expectedCaseStatesJson,configJson:task.configJson},data:{caseStatesJson:JSON.stringify(args.states)}});
+        if(!changed.count)throw Object.assign(new Error('该执行已更新，请刷新后重试'),{code:'EXECUTION_SUPERSEDED',status:409});
+        return ids;
+    }
     return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const claimed = await tx.grayscaleTask.updateMany({
             where: { id: args.taskId, user: args.user, caseStatesJson: args.expectedCaseStatesJson },
@@ -2802,7 +2889,7 @@ async function runGrayscaleExecutionRetry(args: {
     };
 
     if (!config.evalExperimentId || config.evaluators.length === 0) throw new Error('评测实验配置不完整');
-    const experiment = await prisma.experiment.findFirst({
+    const experiment = await (await workbenchReadSource(prisma)).experiment.findFirst({
         where: {
             id: config.evalExperimentId,
             user: args.user,
@@ -2919,12 +3006,22 @@ async function runGrayscaleExecutionRetry(args: {
         for (const item of retryItems) {
             if (item.run.status !== 'executed' || !item.run.sessionId) {
                 const message = item.run.failureDetail || item.run.output || 'Agent 执行失败';
+                if(isStorageCoreEnabled())continue;
                 await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
                     if (!await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: args.caseId, side: item.side, runIndex: item.runIndex, executionClaimId: item.run.executionClaimId! })) return;
                     await tx.experimentCase.update({ where: { id: item.experimentCaseId }, data: { actualOutput: message } });
                     await tx.experimentEvalResult.updateMany({ where: { caseId: item.experimentCaseId }, data: { status: 'failed', errorMessage: message } });
                 });
                 continue;
+            }
+
+            if(isStorageCoreEnabled()){
+                if(!await ownsSkillExecution(prisma,{taskId:args.taskId,user:args.user,datasetCaseId:args.caseId,side:item.side,runIndex:item.runIndex,executionClaimId:item.run.executionClaimId!}))continue;
+                const snapshot=await requireCoreExperimentContext().rpc('read',{experiment_id:experiment.id,case_ids:[item.experimentCaseId]}) as {experiment:{cases:Array<{id:string;taskId?:string;traceAttempts?:Array<{id:string;status:string}>}>}};
+                const row=snapshot.experiment.cases.find(value=>value.id===item.experimentCaseId);
+                if(!row||row.taskId!==item.run.sessionId||row.traceAttempts?.[0]?.id!==item.run.traceAttemptId||row.traceAttempts?.[0]?.status!=='ready')throw Object.assign(new Error('执行 Trace 绑定回执尚未确认'),{status:503});
+                const currentRun=states[args.caseId]?.[item.side]?.runs?.find(value=>value.runIndex===item.runIndex)||item.run;
+                currentRun.experimentCaseId=item.experimentCaseId;evaluationTargets.push({caseId:args.caseId,side:item.side,run:currentRun});continue;
             }
 
             const execution = await prisma.execution.findFirst({
@@ -2991,7 +3088,7 @@ async function runGrayscaleEvaluationRetry(args: {
     if (config.triggerRouting) throw new Error('触发分析不支持此重评入口');
     if (!config.evalExperimentId || config.evaluators.length === 0) throw new Error('评测实验配置不完整');
 
-    const experiment = await prisma.experiment.findFirst({
+    const experiment = await (await workbenchReadSource(prisma)).experiment.findFirst({
         where: {
             id: config.evalExperimentId,
             user: args.user,
@@ -3011,7 +3108,7 @@ async function runGrayscaleEvaluationRetry(args: {
         if (!run.sessionId || run.failureType) {
             throw new Error(`${target.side.toUpperCase()} 侧缺少可复用 Trace，请重新执行`);
         }
-        const experimentCase = await prisma.experimentCase.findFirst({
+        const experimentCase = await (await workbenchReadSource(prisma)).experimentCase.findFirst({
             where: {
                 experimentId: experiment.id,
                 experiment: { user: args.user },
@@ -3023,7 +3120,7 @@ async function runGrayscaleEvaluationRetry(args: {
             select: { id: true, actualOutput: true },
         });
         if (!experimentCase) throw new Error(`${target.side.toUpperCase()} 侧找不到已绑定的评测 Case`);
-        const failedRows = await prisma.experimentEvalResult.findMany({
+        const failedRows = await (await workbenchReadSource(prisma)).experimentEvalResult.findMany({
             where: { experimentId: experiment.id, caseId: experimentCase.id, status: 'failed' },
             select: { evaluatorId: true },
         });
@@ -3035,7 +3132,7 @@ async function runGrayscaleEvaluationRetry(args: {
         retryItems.push({ ...target, run, evaluatorIds, experimentCase });
     }
 
-    await prisma.experiment.updateMany({
+    if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
         where: { id: experiment.id, user: args.user },
         data: { status: 'running' },
     });
@@ -3198,7 +3295,8 @@ async function evaluateExistingTask(args: { taskId: string; user: string; origin
 export async function GET(
     req: NextRequest,
     { params }: { params: Promise<{ taskId: string }> }
-) {
+):Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>GET(normalized,{params}));
     try {
         const { taskId } = await params;
         const user = req.nextUrl.searchParams.get('user') || '';
@@ -3207,6 +3305,7 @@ export async function GET(
         }
         const task = await loadTask(taskId, user);
         if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+        if(isStorageCoreEnabled())return respondTask(task,activeRuns().get(`${user}:${taskId}`)||null);
 
         const visible = await visibleExperimentTask(task);
         if (!visible) return NextResponse.json({ error: 'Task deleted' }, { status: 404 });
@@ -3297,7 +3396,8 @@ export async function GET(
 export async function POST(
     req: NextRequest,
     { params }: { params: Promise<{ taskId: string }> }
-) {
+):Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>POST(normalized,{params}));
     try {
         const { taskId } = await params;
         const body = await req.json().catch(() => ({}));
@@ -3336,6 +3436,11 @@ export async function POST(
         if (sourceTask) for (const datasetId of getConfiguredDatasetIds(sourceTask.configJson)) await guardTraceDataset(req, datasetId, user, true);
         // === action: abort —— 用户点「终止」按钮 ===
         if (action === 'abort') {
+            if(isStorageCoreEnabled()&&sourceTask?.configJson.evalExperimentId){
+                const cancellation=await cancelCoreExperimentExecution(requireCoreExperimentContext(),sourceTask.configJson.evalExperimentId);
+                const active=activeRuns().get(storeKey);active?.abortController?.abort();
+                return NextResponse.json({ok:true,aborted:cancellation.status==='completed',hadActiveRun:!!active,patchedCount:0,cancellation});
+            }
             // 双场景:
             //   A. activeRuns 里有 → 任务真在跑, abort signal + 清 DB + 删 active
             //   B. activeRuns 里没有 → server 重启等原因丢了 in-memory state, 但
@@ -3391,7 +3496,7 @@ export async function POST(
                         await persistTaskState(taskId, user, taskRow.configJson, states);
                     }
                     if (taskRow.configJson.evalExperimentId) {
-                        await prisma.experiment.updateMany({
+                        if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
                             where: { id: taskRow.configJson.evalExperimentId, user },
                             data: { status: 'cancelled' },
                         });
@@ -3491,7 +3596,7 @@ export async function POST(
                                     nextRun: retryRun,
                                     touchLatestResultAt: true,
                                 }).catch(() => false);
-                                if (retryRun.experimentCaseId) {
+                                if (retryRun.experimentCaseId&&!isStorageCoreEnabled()) {
                                     await prisma.experimentEvalResult.updateMany({
                                         where: { caseId: retryRun.experimentCaseId },
                                         data: { status: 'failed', errorMessage: message },
@@ -3538,7 +3643,7 @@ export async function POST(
             return NextResponse.json({ error: err instanceof Error ? err.message : 'invalid task skill binding' }, { status: 400 });
         }
         if (action === 'start' && task.configJson.evalExperimentId) {
-            await prisma.experiment.updateMany({
+            if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
                 where: { id: task.configJson.evalExperimentId, user, status: 'draft', deletedAt: null },
                 data: { status: 'running' },
             });
@@ -3577,15 +3682,21 @@ export async function POST(
                     for (const caseId of caseIds.length > 0 ? caseIds : Object.keys(states)) {
                         ensureCaseState(states, caseId);
                         for (const side of ['a', 'b'] as Side[]) {
+                            if(isStorageCoreEnabled()){
+                                for(const run of states[caseId][side].runs||[]){
+                                    if(['pending','running','evaluating'].includes(run.status)&&!run.executionClaimId&&!run.traceAttemptId){run.status='fail';run.failureType='agent_error';run.failureCode='CORE_PREPARATION_FAILED';run.failureDetail=err instanceof Error?err.message:'实验准备失败';run.output=run.failureDetail;markRunCompleted(run);}
+                                }
+                                states[caseId][side]=rebuildSideAggregate(states[caseId][side],states[caseId][side].runCount||states[caseId][side].runs?.length||0);
+                            }
                             if (states[caseId][side].status === 'running' || states[caseId][side].status === 'evaluating') {
                                 states[caseId][side].status = 'fail';
                                 states[caseId][side].output = err instanceof Error ? err.message : String(err);
                             }
                         }
                     }
-                    await persistTaskState(taskId, user, task.configJson, states).catch(() => {});
+                    await persistTaskState(taskId,user,task.configJson,states,isStorageCoreEnabled()?task.rawCaseStatesJson:undefined).catch(() => {});
                     if (task.configJson.evalExperimentId) {
-                        await prisma.experiment.updateMany({
+                        if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
                             where: { id: task.configJson.evalExperimentId, user, deletedAt: null },
                             data: { status: 'failed' },
                         }).catch(() => undefined);
@@ -3608,7 +3719,8 @@ export async function POST(
 export async function PATCH(
     req: NextRequest,
     { params }: { params: Promise<{ taskId: string }> }
-) {
+):Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>PATCH(normalized,{params}));
     try {
         const { taskId } = await params;
         const body = await req.json();
@@ -3643,6 +3755,12 @@ export async function PATCH(
                 return NextResponse.json({ error: 'task skill version binding cannot be changed' }, { status: 400 });
             }
             const normalizedNextConfig = normalizeGrayscaleTaskBinding(nextConfig, existing);
+            if(isStorageCoreEnabled()){
+                const original=safeParse<Record<string,unknown>>(existing.configJson,{});
+                if(original.evalExperimentId&&normalizedNextConfig.evalExperimentId!==original.evalExperimentId)return NextResponse.json({error:'已绑定实验不能更换'}, {status:409});
+                if(original.__storageCoreHandoff)(normalizedNextConfig as unknown as Record<string,unknown>).__storageCoreHandoff=original.__storageCoreHandoff;
+                await readCoreWorkbenchTaskConfiguration(user,{id:existing.id,configJson:JSON.stringify(normalizedNextConfig)});
+            }
             for (const datasetId of getConfiguredDatasetIds(normalizedNextConfig)) await guardTraceDataset(req, datasetId, user, true);
             // E: evaluationBatchId 后端独占 —— 前端 PATCH 不带/带空值时,保留库里已有的稳定批次 id,
             // 不让前端用空值覆盖。否则一个 A/B 任务的评测会散裂成多个批次(实测 gyc-v0 散成 20 个)。

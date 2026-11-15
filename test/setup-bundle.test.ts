@@ -52,6 +52,7 @@ const clientFiles = [
   'packages/project-config/yaml.cjs',
   'packages/benchmark-protocol/execution.cjs',
   'packages/benchmark-protocol/environment.cjs',
+  'packages/benchmark-protocol/callback-capability.cjs',
   'scripts/agent-trace-collectors/shared/trace-transport.cjs',
   'config/benchmark/executor.yaml',
   'services/executor/src/index.cjs',

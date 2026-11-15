@@ -22,6 +22,10 @@
  */
 
 import { bumpSeverityByPrevalence, type Severity } from './prevalence';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {requireCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {readCoreDerivedIssues} from '@/lib/storage-core/derived-issues';
+import type {Prisma} from '@prisma/client';
 
 export interface IssueWithPrevalence {
   id: string;
@@ -78,6 +82,8 @@ export interface AggregateResult {
  */
 export async function aggregateSkillIssues(args: AggregateInput): Promise<AggregateResult> {
   const { prisma, skillId, version, user, includeResolved } = args;
+  const core=isStorageCoreEnabled();
+  if(core&&(!user||requireCoreExperimentContext().actor.username!==user))throw Object.assign(new Error('Issue aggregation actor differs'),{status:403});
 
   // 多租户：当前用户的 + null（公共）
   const userFilter = user
@@ -90,8 +96,9 @@ export async function aggregateSkillIssues(args: AggregateInput): Promise<Aggreg
   };
   if (typeof version === 'number') where.version = version;
   if (!includeResolved) where.resolvedAt = null;
+  if(core)where.source={in:['static','feedback']};
 
-  const rows = await prisma.skillIssue.findMany({
+  const rows: Prisma.SkillIssueGetPayload<{include:{Evaluation:{select:{ranAt:true;type:true;runId:true;executionId:true;Execution:{select:{taskId:true}}}}}}>[] = await prisma.skillIssue.findMany({
     where,
     include: {
       Evaluation: {
@@ -109,6 +116,26 @@ export async function aggregateSkillIssues(args: AggregateInput): Promise<Aggreg
       { Evaluation: { ranAt: 'asc' } },
     ],
   });
+  if(core){
+    let issues=await readCoreDerivedIssues({user:user!,skillId,version});
+    if(!includeResolved&&issues.some(issue=>!issue.resolvedAt&&(issue.source==='trigger'||issue.Evaluation.type==='trigger'))){
+      const frontier=await requireCoreExperimentContext().rpc('derived_trigger_frontier',{skill_id:skillId,...(version!==undefined?{version}:{})}) as {versions:Array<{version:number;evaluation_ids:string[]}>};
+      if(!frontier||!Array.isArray(frontier.versions)||frontier.versions.length>2000)throw Object.assign(new Error('Trigger frontier unavailable'),{status:503});
+      const allowed=new Map<number,Set<string>>();
+      for(const row of frontier.versions){
+        if(!Number.isSafeInteger(row.version)||row.version<0||version!==undefined&&row.version!==version||allowed.has(row.version)||!Array.isArray(row.evaluation_ids)||row.evaluation_ids.length>2000||row.evaluation_ids.some(id=>typeof id!=='string'||!id))throw Object.assign(new Error('Trigger frontier identity is invalid'),{status:503});
+        allowed.set(row.version,new Set(row.evaluation_ids));
+      }
+      issues=issues.filter(issue=>!(issue.source==='trigger'||issue.Evaluation.type==='trigger')||!allowed.has(issue.version)||allowed.get(issue.version)!.has(issue.Evaluation.id));
+    }
+    for(const issue of issues){
+      if(!includeResolved&&issue.resolvedAt)continue;
+      const date=(value:unknown)=>{const parsed=new Date(String(value));if(!Number.isFinite(parsed.valueOf()))throw Object.assign(new Error('Derived Issue timestamp unavailable'),{status:503});return parsed;};
+      const source=issue.source==='trigger'||issue.Evaluation.type==='trigger'?'trigger':'dynamic';
+      rows.push({...issue,source,createdAt:date(issue.createdAt),resolvedAt:issue.resolvedAt?date(issue.resolvedAt):null,Evaluation:{...issue.Evaluation,type:source,ranAt:date(issue.Evaluation.ranAt||issue.createdAt),Execution:null}} as unknown as (typeof rows)[number]);
+    }
+    rows.sort((a,b)=>String(a.dedupKey).localeCompare(String(b.dedupKey))||new Date(a.Evaluation?.ranAt||a.createdAt).valueOf()-new Date(b.Evaluation?.ranAt||b.createdAt).valueOf());
+  }
 
   // 顺手统计这次 query 涉及多少条 Evaluation
   const evalIds = new Set<string>();

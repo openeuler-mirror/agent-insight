@@ -1,3 +1,4 @@
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 import type { Experiment, SkillOptimizationRecord } from '@prisma/client';
 import { prismaRaw as db } from '@/lib/storage/prisma';
 import { executeSkillCaseOnClient } from '@/lib/skill-workbench/client-execution';
@@ -8,6 +9,7 @@ import { contentHash, parseStored, type DiagnosisSnapshot } from './contracts';
 import { datasetCaseContentHash, matchesLegacyDatasetText } from '@/lib/engine/experiment/dataset-case-snapshot';
 
 export async function retestDiagnosisCase(record: SkillOptimizationRecord, source: Experiment, files: Record<string, string>) {
+  if (isStorageCoreEnabled()) return (await import('@/lib/storage-core/diagnosis-retest')).retestCoreDiagnosisCase(record, source, files);
   const ref = parseStored<Array<{ type: string; id: string }>>(record.sourceRefsJson, []).find(item => item.type === 'diagnosis');
   const run = ref && await db.diagnosisRun.findFirst({ where: { id: ref.id, user: record.user, experimentId: source.id, status: 'done' } });
   if (!run) throw new Error('诊断来源已失效，无法按原实验配置复测');

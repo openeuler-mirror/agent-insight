@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreExperimentWriteRoute,runCoreExperimentRoute} from '@/lib/storage-core/experiment-routes';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -61,7 +63,9 @@ function callbackServiceBaseUrls(req: Request): {
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
-) {
+):Promise<Response> {
+  if(isStorageCoreEnabled()){const {id}=await params;return coreExperimentWriteRoute(req,()=>runCoreExperimentRoute(id));}
+
   try {
     const { id } = await params;
     const url = new URL(req.url);

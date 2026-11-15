@@ -25,6 +25,7 @@ export type BenchmarkExecutionRequest = {
   task: AgentTaskEnvelope
   callbackBaseUrl: string
   timeoutSeconds: number
+  callbackHeaders?: { 'x-agent-insight-callback-token': string }
 }
 
 export type BenchmarkExecutionAccepted = {

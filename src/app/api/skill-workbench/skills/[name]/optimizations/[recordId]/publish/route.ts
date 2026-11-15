@@ -14,13 +14,17 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
 import { publishOptimizationCandidate, WorkbenchPublishError } from '@/lib/skill-workbench/publish-service';
 import { getSkillWorkbenchSession } from '@/lib/skill-workbench/session-service';
 
-export async function POST(request: NextRequest, context: { params: Promise<{ name: string; recordId: string }> }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ name: string; recordId: string }> }) :Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,context));
   try {
     const body = await request.json();
     const { username } = await resolveUser(request, body.user);

@@ -17,6 +17,7 @@
 import {
   canReuseRootCauseCache,
   type RootCauseItem,
+  type DatasetCaseRootCauseMeta,
 } from '../../dataset-case-root-causes';
 import type { RootCauseResolutionInput } from '../evaluation/root-cause-resolution';
 import {
@@ -76,4 +77,12 @@ export async function loadExperimentRootCauseResolutionContext(options: {
       }
     },
   };
+}
+
+export function frozenExperimentRootCauseResolutionContext(rawCase: Record<string, unknown>): ExperimentRootCauseResolutionContext {
+  const roots = rawCase.rootCauses;
+  const meta = rawCase.rootCauseMeta as DatasetCaseRootCauseMeta | undefined;
+  if (typeof rawCase.referenceOutput !== 'string' || !canReuseRootCauseCache(rawCase.referenceOutput, meta)) return {};
+  if (meta?.status === 'ready' && Array.isArray(roots) && roots.length) return {precomputedRootCauses: roots as RootCauseItem[], precomputedRootCauseSource: 'dataset-cache'};
+  return meta?.status === 'empty' ? {precomputedRootCauseSource: 'none'} : {};
 }

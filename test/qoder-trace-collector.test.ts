@@ -2954,6 +2954,83 @@ test("Qoder Work setup preserves unrelated hooks and isolates install and uninst
   }
 })
 
+test("Qoder oneshot locks reclaim stale holders and preserve a replacement owner's lock", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-oneshot-lock-owner-"))
+  const lock = path.join(root, "upload-run.lock")
+  let replacement: ReturnType<typeof spawn> | undefined
+  try {
+    const stale = spawnSync(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" })
+    assert.equal(stale.status, 0)
+    assert.ok(stale.pid)
+    fs.writeFileSync(lock, JSON.stringify({ pid: stale.pid }))
+    const empty = await uploadPending({ spoolDir: root, endpoint: "http://127.0.0.1:9", fetch: async () => { throw new Error("Empty spool must not send a request") } })
+    assert.equal(empty.uploaded, 0)
+    assert.equal(empty.locked, undefined)
+    assert.equal(fs.existsSync(lock), false)
+    fs.mkdirSync(path.join(root, "pending"))
+    fs.writeFileSync(path.join(root, "pending", "payload.json"), JSON.stringify({ resourceSpans: [] }))
+    replacement = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true })
+    assert.ok(replacement.pid)
+    const result = await uploadPending({ spoolDir: root, endpoint: "http://127.0.0.1:9", fetch: async () => {
+      fs.writeFileSync(lock, JSON.stringify({ pid: replacement!.pid }))
+      return new Response("{}", { status: 200 })
+    } })
+    assert.equal(result.uploaded, 1)
+    assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).pid, replacement.pid)
+    assert.deepEqual(fs.readdirSync(root).filter(name => name.startsWith("upload-run.lock.")), [])
+  } finally {
+    if (replacement && testProcessIsAlive(replacement.pid)) {
+      const exited = new Promise<void>(resolve => replacement!.once("exit", () => resolve()))
+      try { replacement.kill("SIGKILL") } catch {}
+      await exited
+    }
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+})
+
+test("Qoder publishes a complete exclusive uploader PID before uninstall can observe its lock", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-lock-publication-"))
+  const insightDir = path.join(root, ".agent-insight")
+  const children: ReturnType<typeof spawn>[] = []
+  try {
+    const installed = installQoderCollector({ homeDir: root, insightDir, sourceDir: path.join(process.cwd(), "scripts"), host: "http://127.0.0.1:9", apiKey: "fixture-key", product: "desktop", owner: "desktop", startUploader: false })
+    const opened = path.join(root, "opened-before-write")
+    const release = path.join(root, "release-write")
+    const bootstrap = `import fs from 'node:fs';import path from 'node:path';const open=fs.openSync.bind(fs);fs.openSync=function(file,flags,...rest){const descriptor=open(file,flags,...rest);if(path.basename(String(file)).startsWith('uploader.lock')&&flags==='wx'){fs.writeFileSync(${JSON.stringify(opened)},'opened');const deadline=Date.now()+5000;while(!fs.existsSync(${JSON.stringify(release)})&&Date.now()<deadline)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,25);}return descriptor;};`
+    const env = { ...process.env, HOME: root, AGENT_INSIGHT_HOME: insightDir, AGENT_INSIGHT_QODER_SPOOL_DIR: installed.spoolDir, AGENT_INSIGHT_HOST: "http://127.0.0.1:9", AGENT_INSIGHT_API_KEY: "fixture-key" }
+    const uploader = spawn(process.execPath, ["--import", "data:text/javascript," + encodeURIComponent(bootstrap), installed.uploaderPath, "--watch", "--interval-ms=60000"], { env, stdio: "ignore", windowsHide: true })
+    children.push(uploader)
+    assert.ok(uploader.pid)
+    await waitForCondition(() => fs.existsSync(opened), 5000)
+    const lock = path.join(installed.spoolDir, "uploader.lock")
+    if (fs.existsSync(lock)) assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).pid, uploader.pid)
+    fs.writeFileSync(release, "write now")
+    await waitForCondition(() => fs.existsSync(lock), 5000)
+    assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).pid, uploader.pid)
+    if (process.platform !== "win32") assert.equal(fs.statSync(lock).mode & 0o777, 0o600)
+
+    const competitor = spawn(process.execPath, [installed.uploaderPath, "--watch", "--interval-ms=60000"], { env, stdio: "ignore", windowsHide: true })
+    children.push(competitor)
+    await waitForCondition(() => competitor.exitCode !== null || competitor.signalCode !== null, 5000)
+    assert.equal(competitor.exitCode, 0)
+    assert.equal(testProcessIsAlive(uploader.pid), true)
+    assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).pid, uploader.pid)
+    assert.deepEqual(fs.readdirSync(installed.spoolDir).filter(name => name.startsWith("uploader.lock.")), [])
+
+    const removed = uninstallQoderCollector({ homeDir: root, insightDir, product: "desktop", owner: "desktop", purge: true })
+    assert.ok(removed.stoppedUploaderPids.includes(uploader.pid))
+    await waitForCondition(() => !testProcessIsAlive(uploader.pid), 5000)
+    assert.equal(testProcessIsAlive(uploader.pid), false)
+  } finally {
+    for (const child of children) if (testProcessIsAlive(child.pid)) {
+      const exited = new Promise<void>(resolve => child.once("exit", () => resolve()))
+      try { child.kill("SIGKILL") } catch {}
+      await exited
+    }
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+})
+
 test("AC30 uninstall stops CLI, Desktop, JetBrains, and Work uploader processes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-four-product-stop-"))
   const insightDir = path.join(root, ".agent-insight")

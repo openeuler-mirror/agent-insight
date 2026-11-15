@@ -19,7 +19,13 @@ import { findAgentDataset } from '@/server/agent_datasets_storage';
 import { executeSkillCaseOnClient } from '@/lib/skill-workbench/client-execution';
 import type { SkillExecutionTarget, SkillExecutionSnapshot } from '@/lib/skill-workbench/execution-target';
 import { evaluateEvalExperimentCase } from '@/lib/engine/experiment/run-experiment';
-import { verificationRowsHash } from '@/lib/skill-workbench/verification-evidence';
+import { verificationRowsHash,sealCoreVerificationProof } from '@/lib/skill-workbench/verification-evidence';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {workbenchReadSource,requireWorkbenchActor,readWorkbenchFrozenDataset} from '@/lib/storage-core/workbench';
+import {readCoreWorkbenchTaskConfiguration} from '@/lib/storage-core/workbench-handoff';
+import {createHash} from 'node:crypto';
+import {readCoreDerivedIssues} from '@/lib/storage-core/derived-issues';
+import {projectCoreWorkbenchTaskStates,activeCoreWorkbenchCancellations,type WorkbenchCoreSnapshot} from '@/lib/storage-core/workbench-results';
 import { isTriggerCase, verificationHash } from './verification-policy';
 import type { BehavioralResult, CaseVerdict } from './self-verify';
 
@@ -49,6 +55,7 @@ export async function verifyFromSourceExperiment(input: {
   candidateFiles: Record<string, string>; optimizationRecordId?: string; sourceExperimentId?: string; maxCases: number; issueIds?: string[];
   budgetYuan?: number; signal?: AbortSignal; onProgress?: (message: string) => void; verificationPurpose?: 'optimization' | 'retest';
 }): Promise<BehavioralResult | null> {
+  const experimentReads=await workbenchReadSource(prismaRaw,input.user);
   const record = input.optimizationRecordId ? await prismaRaw.skillOptimizationRecord.findFirst({
     where: { id: input.optimizationRecordId, user: input.user, skillName: input.skillName },
     select: { sourceKind: true, sourceExperimentId: true },
@@ -56,12 +63,18 @@ export async function verifyFromSourceExperiment(input: {
   const diagnosisSource = record?.sourceKind === 'diagnosis';
   const sourceExperimentId = diagnosisSource ? record.sourceExperimentId : input.sourceExperimentId;
   if (diagnosisSource && !sourceExperimentId) return incompleteBehavior('诊断缺少来源实验，无法进行同配置验证');
-  const issues = input.issueIds?.length ? await prismaRaw.skillIssue.findMany({
+  const coreSkill=isStorageCoreEnabled()?await prismaRaw.skill.findFirst({where:{name:input.skillName,OR:[{user:input.user},{user:null}]},select:{id:true}}):null;
+  if(isStorageCoreEnabled()&&!coreSkill)return incompleteBehavior('来源 Skill 不可访问');
+  const issues = input.issueIds?.length ? isStorageCoreEnabled()?await (async()=>{
+    const staticIssues=await prismaRaw.skillIssue.findMany({where:{id:{in:input.issueIds},source:'static',user:input.user,version:input.baseVersion,Evaluation:{Skill:{name:input.skillName}}},select:{id:true,Evaluation:{select:{runId:true,executionId:true}}}});
+    const staticIds=new Set(staticIssues.map(issue=>issue.id));const ids=input.issueIds!.filter(id=>!staticIds.has(id));
+    return [...staticIssues,...(ids.length?await readCoreDerivedIssues({user:input.user,skillId:coreSkill!.id,version:input.baseVersion,ids}):[])];
+  })():await experimentReads.skillIssue.findMany({
     where: { id: { in: input.issueIds }, user: input.user, version: input.baseVersion, Evaluation: { Skill: { name: input.skillName } } },
     select: { id: true, Evaluation: { select: { runId: true, executionId: true } } },
   }) : [];
   const preferredIds = issues.flatMap((issue) => issue.Evaluation.runId ? [issue.Evaluation.runId.replace(/^experiment:([^:]+):.*$/, '$1')] : []);
-  const sources = await prismaRaw.experiment.findMany({
+  const sources = await experimentReads.experiment.findMany({
     where: { id: sourceExperimentId || undefined, user: input.user, deletedAt: null, scope: 'skill-workbench', skillName: input.skillName,
       skillVersion: input.baseVersion, preset: { in: ['use-case', 'skill-ab'] }, status: { in: ['done', 'partial'] } },
     orderBy: { updatedAt: 'desc' }, take: 30,
@@ -79,7 +92,7 @@ export async function verifyFromSourceExperiment(input: {
   }
   const task = await prismaRaw.grayscaleTask.findFirst({ where: { id: snapshot.grayscaleTaskId, user: input.user } });
   if (!task) return incompleteBehavior('来源实验的执行证据不存在');
-  const config = parse<{ evalExperimentId?: string; boundSide?: 'a' | 'b'; skillSnapshots?: { a?: SkillExecutionSnapshot; b?: SkillExecutionSnapshot }; executionTarget?: SkillExecutionTarget }>(task.configJson, {});
+  const config = isStorageCoreEnabled()?await readCoreWorkbenchTaskConfiguration(input.user,task) as {evalExperimentId?:string;boundSide?:'a'|'b';skillSnapshots?:{a?:SkillExecutionSnapshot;b?:SkillExecutionSnapshot};executionTarget?:SkillExecutionTarget}:parse<{ evalExperimentId?: string; boundSide?: 'a' | 'b'; skillSnapshots?: { a?: SkillExecutionSnapshot; b?: SkillExecutionSnapshot }; executionTarget?: SkillExecutionTarget }>(task.configJson, {});
   const side = snapshot.boundSide || config.boundSide || 'b';
   const original = config.skillSnapshots?.[side];
   if (config.evalExperimentId !== source.id || !original || original.name !== input.skillName || original.version !== input.baseVersion
@@ -91,13 +104,18 @@ export async function verifyFromSourceExperiment(input: {
   if (!evaluatorIds.length || evaluatorIds.some((id) => id.startsWith('custom-') && !snapshot.customEvaluatorSnapshots?.cards?.[id])) {
     return incompleteBehavior('来源实验缺少冻结的评分规则');
   }
-  const dataset = await findAgentDataset(input.user, snapshot.datasetId);
+  const dataset = isStorageCoreEnabled()?await readWorkbenchFrozenDataset(input.user,source.id,snapshot.datasetId):await findAgentDataset(input.user,snapshot.datasetId);
   if (!dataset || dataset.datasetKind !== 'ideal_output' || dataset.tags.includes('trigger') || dataset.fields.some((field) => field.key === 'should_trigger')) {
     return incompleteBehavior('来源数据集不适用于行为验证');
   }
-  const states = parse<Record<string, Partial<Record<'a' | 'b', { runs?: Array<{ status?: string; experimentCaseId?: string; score?: number }> }>>>>(task.caseStatesJson, {});
+  let states = parse<Record<string, Partial<Record<'a' | 'b', { runs?: Array<{ status?: string; experimentCaseId?: string; score?: number }> }>>>>(task.caseStatesJson, {});
+  let coreSource:WorkbenchCoreSnapshot|undefined;
+  if(isStorageCoreEnabled()){
+    const current=await requireWorkbenchActor(input.user).rpc('read',{experiment_id:source.id}) as {gold_redacted?:boolean;experiment:WorkbenchCoreSnapshot};
+    if(current.gold_redacted)throw Object.assign(new Error('Private source owner required'),{status:403});coreSource=current.experiment;states=projectCoreWorkbenchTaskStates(current.experiment,states);
+  }
   const affected = new Set(issues.flatMap((issue) => issue.Evaluation.executionId ? [issue.Evaluation.executionId] : []));
-  const affectedRows = affected.size ? await prismaRaw.experimentCase.findMany({
+  const affectedRows = affected.size ? await experimentReads.experimentCase.findMany({
     where: { experimentId: source.id, executionId: { in: [...affected] }, deletedAt: null }, select: { id: true },
   }) : [];
   const affectedRowIds = new Set(affectedRows.map((row) => row.id));
@@ -106,11 +124,11 @@ export async function verifyFromSourceExperiment(input: {
     const item = dataset.cases.find((item) => item.id === id);
     return !item || !isTriggerCase(item);
   }).sort((a, b) => priority(a) - priority(b)).slice(0, Math.max(0, Math.floor(input.maxCases)));
-  const cancelledCases = await prismaRaw.experimentCancellation.count({ where: {
+  const cancelledCases = coreSource?activeCoreWorkbenchCancellations(coreSource).filter(row=>row.caseKey===''||selected.some(id=>row.caseKey===`dataset:${id}`)).length:await experimentReads.experimentCancellation.count({ where: {
     experimentId: source.id, OR: [{ caseKey: '' }, { caseKey: { in: selected.map((id) => `dataset:${id}`) } }],
   } });
   if (cancelledCases) return incompleteBehavior('来源用例已取消，不能复用其结果');
-  const sourceIssues = await prismaRaw.skillIssue.findMany({
+  const sourceIssues = isStorageCoreEnabled()?(await readCoreDerivedIssues({user:input.user,skillId:coreSkill!.id,version:input.baseVersion})).filter(issue=>issue.source==='dynamic'&&issue.Evaluation.runId?.startsWith(`experiment:${source.id}:`)):await experimentReads.skillIssue.findMany({
     where: { user: input.user, version: input.baseVersion, source: 'dynamic',
       Evaluation: { Skill: { name: input.skillName }, runId: { startsWith: `experiment:${source.id}:` } } },
     select: { id: true, Evaluation: { select: { executionId: true } } },
@@ -123,7 +141,7 @@ export async function verifyFromSourceExperiment(input: {
     if (!item || isTriggerCase(item) || !runs?.length || runs.some((run) => run.status !== 'pass' || !run.experimentCaseId)) {
       return incompleteBehavior('来源用例或旧版执行未完整完成，不能复用部分结果');
     }
-    const rows = await prismaRaw.experimentCase.findMany({
+    const rows = await experimentReads.experimentCase.findMany({
       where: { id: { in: runs.map((run) => run.experimentCaseId!) }, experimentId: source.id, deletedAt: null },
       include: { results: true },
     });
@@ -152,13 +170,14 @@ export async function verifyFromSourceExperiment(input: {
   }
   if (!prepared.length) return incompleteBehavior('来源实验没有有效行为用例');
   input.signal?.throwIfAborted();
-  const experiment = await prismaRaw.experiment.create({ data: {
+  const experimentData={
     user: input.user, name: `${source.name} · 优化行为校验`, type: 'single', agentName: source.agentName,
     evaluatorIdsJson: source.evaluatorIdsJson, evaluatorConfigsJson: source.evaluatorConfigsJson,
     scope: 'skill-workbench', skillName: input.skillName, skillVersion: input.baseVersion,
     preset: 'retest', status: 'running', sourceExperimentId: source.id, optimizationRecordId: input.optimizationRecordId,
     configSnapshotJson: JSON.stringify({ ...snapshot, caseIds: selected, grayscaleTaskId: undefined, candidateHash: verificationHash(input.candidateFiles), verificationOnly: true, verificationPurpose: input.verificationPurpose || 'optimization' }),
-  } });
+  };
+  const experiment=isStorageCoreEnabled()?await (async()=>{const context=requireWorkbenchActor(input.user);const payload={experiment:{...experimentData,id:'verification-exp-'+createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,context.operationKey,source.id,verificationHash(input.candidateFiles)])).digest('hex').slice(0,40),cases:[]}};const receipt=await context.rpc('create',{...payload,operation_key:context.operationKey+':verification-create',operation_request:payload}) as {experiment:{id:string}};return receipt.experiment;})():await prismaRaw.experiment.create({data:experimentData});
   const perCase: CaseVerdict[] = [];
   let executions = 0;
   const verifiedIssueIds: string[] = [];
@@ -173,6 +192,7 @@ export async function verifyFromSourceExperiment(input: {
         input.signal?.throwIfAborted();
         const run = await executeSkillCaseOnClient({
           user: input.user, experimentId: experiment.id, datasetId: dataset.id, datasetCaseId: item.id,
+          caseIdentity:`verification:${experiment.id}:${item.id}:${round}`,
           executionTarget: snapshot.executionTarget, skill: { name: input.skillName, version: input.baseVersion + 1, files: input.candidateFiles },
           query: item.input, referenceOutput: item.expectedOutput || null,
           timeoutMs: snapshot.runtime?.timeoutMs || 600_000,
@@ -216,13 +236,17 @@ export async function verifyFromSourceExperiment(input: {
       inputHash: verificationHash(requiredCaseIds.map((id) => dataset.cases.find((item) => item.id === id))),
       result: completed,
     };
-    await prismaRaw.experiment.update({ where: { id: experiment.id }, data: {
+    if(isStorageCoreEnabled()){
+      const context=requireWorkbenchActor(input.user);const sealed=await sealCoreVerificationProof(experiment.id,source.id,proof);const payload={experiment_id:experiment.id,changes:{configSnapshotJson:JSON.stringify({...candidateConfig,verification:sealed})}};
+      await context.rpc('update',{...payload,operation_key:context.operationKey+':verification-proof:'+experiment.id,operation_request:payload});await context.rpc('reconcile',{experiment_id:experiment.id});
+    }else await prismaRaw.experiment.update({ where: { id: experiment.id }, data: {
       status: result.incomplete ? 'partial' : 'done',
       configSnapshotJson: JSON.stringify({ ...candidateConfig, verification: proof }),
     } });
     return completed;
   } catch (error) {
-    await prismaRaw.experiment.update({ where: { id: experiment.id }, data: { status: 'failed' } });
+    if(isStorageCoreEnabled())await requireWorkbenchActor(input.user).rpc('reconcile',{experiment_id:experiment.id});
+    else await prismaRaw.experiment.update({ where: { id: experiment.id }, data: { status: 'failed' } });
     input.signal?.throwIfAborted();
     return { ...incompleteBehavior(error instanceof Error ? error.message : String(error)), experimentId: experiment.id };
   }

@@ -1,3 +1,4 @@
+import {frozenModelConfiguration} from '@/lib/storage-core/frozen-model';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -129,6 +130,7 @@ export function maskUserSettings(settings: UserSettings): UserSettings {
 }
 
 export async function getActiveConfig(user?: string | null): Promise<ModelConfig | null> {
+    const frozen=frozenModelConfiguration(user);if(frozen.active)return frozen.config;
     const settings = await getUserSettings(user);
     if (!settings || !settings.activeConfigId) return null;
     return settings.configs.find(c => c.id === settings.activeConfigId) || null;

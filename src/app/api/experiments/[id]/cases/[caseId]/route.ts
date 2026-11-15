@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreExperimentWriteRoute,deleteCoreExperimentRoute} from '@/lib/storage-core/experiment-routes';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -19,7 +21,9 @@ import { resolveUser } from '@/lib/auth/auth';
 import { deleteExperimentExecution } from '@/lib/engine/experiment/cancellation-service';
 import { prisma } from '@/lib/storage/prisma';
 
-export async function DELETE(req: Request, { params }: { params: Promise<{ id: string; caseId: string }> }) {
+export async function DELETE(req: Request, { params }: { params: Promise<{ id: string; caseId: string }> }):Promise<Response> {
+  if(isStorageCoreEnabled()){const {id,caseId}=await params;return coreExperimentWriteRoute(req,()=>deleteCoreExperimentRoute(req,id,caseId));}
+
   try {
     const { username } = await resolveUser(req, new URL(req.url).searchParams.get('user'));
     if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });

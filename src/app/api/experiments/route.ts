@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {experimentReadSource,getCoreExperimentContext,withCoreExperimentReadRoute,coreExperimentFailure,withCoreExperimentMutationRoute,createCoreExperimentRecord,lookupCoreExperimentOperation} from '@/lib/storage-core/experiments';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -106,15 +108,19 @@ async function benchmarkEvaluatorIds(user: string, rawIds: unknown, adapterKey: 
   return Array.from(selected);
 }
 
-export async function GET(req: Request) {
+export async function GET(req: Request): Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.readView){try{return await withCoreExperimentReadRoute(req,input=>GET(input));}catch(cause){return coreExperimentFailure(cause);}}
   try {
+    const experimentReads=experimentReadSource(prisma);
     const url = new URL(req.url);
     const q = url.searchParams;
     const { username } = await resolveUser(req, q.get('user'));
+    const archivedIds=getCoreExperimentContext()&&username?await (await import('@/lib/skill-workbench/verification-evidence')).readArchivedCoreVerificationIds(username):[];
     const skillName = String(q.get('skillName') || '').trim();
     const userFilter = username ? { user: username } : {};
     const listFilter = {
       deletedAt: null,
+      ...(archivedIds.length?{id:{notIn:archivedIds}}:{}),
       ...userFilter,
       ...(skillName ? { skillName } : {}),
       scope: { notIn: ['skill-workbench', 'skill-case-analysis', 'grayscale-ab'] },
@@ -125,8 +131,8 @@ export async function GET(req: Request) {
     const offset = Math.max(Number(q.get('offset')) || 0, 0);
 
     const [total, rawRows] = await Promise.all([
-      prisma.experiment.count({ where: listFilter }),
-      prisma.experiment.findMany({
+      experimentReads.experiment.count({ where: listFilter }),
+      experimentReads.experiment.findMany({
         where: listFilter,
         orderBy: { createdAt: 'desc' },
         skip: offset,
@@ -137,7 +143,7 @@ export async function GET(req: Request) {
     const rows = rawRows as Array<Experiment & { _count: { cases: number } }>;
     const experimentIds = rows.map((row) => row.id);
     const scoreRows = (experimentIds.length
-      ? await prisma.experimentEvalResult.findMany({
+      ? await experimentReads.experimentEvalResult.findMany({
           where: { experimentId: { in: experimentIds }, case: { deletedAt: null } },
           select: {
             experimentId: true,
@@ -156,7 +162,7 @@ export async function GET(req: Request) {
       scoreRowsByExperiment.set(row.experimentId, list);
     }
 
-    const failedFiCases = experimentIds.length ? await prisma.experimentCase.findMany({
+    const failedFiCases = experimentIds.length ? await experimentReads.experimentCase.findMany({
       where: { experimentId: { in: experimentIds }, deletedAt: null,
         fiRunId: { not: null }, executionId: null, traceGenerationError: { not: null } },
       select: { experimentId: true },
@@ -199,14 +205,26 @@ export async function GET(req: Request) {
     return NextResponse.json({ items, total, limit, offset });
   } catch (error) {
     if (error instanceof GenerationError) return generationErrorResponse(error);
+    if(getCoreExperimentContext())return coreExperimentFailure(error);
     console.error('[Experiments GET Error]', error);
     return NextResponse.json({ error: 'Failed to load experiments' }, { status: 500 });
   }
 }
 
 export async function POST(req: Request) {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(req,POST);
   try {
     const body = await req.json();
+    const context=getCoreExperimentContext();
+    if(context){
+      const receipt=await lookupCoreExperimentOperation(context,'create');
+      if(receipt){
+        const experiment=receipt.experiment as {id:string;type?:string;scope?:string};
+        if(!experiment?.id)throw Object.assign(new Error('Creation receipt unavailable'),{status:503});
+        if(experiment.type==='llm')await autoPairGroups(experiment.id);
+        return NextResponse.json(body.createMode==='same-config'?{id:experiment.id,scope:experiment.scope||''}:{id:experiment.id},{status:body.createMode==='same-config'?201:200});
+      }
+    }
     const { username } = await resolveUser(req, body.user);
     if (!username) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
@@ -222,6 +240,7 @@ export async function POST(req: Request) {
         recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
         return NextResponse.json(cloned, { status: 201 });
       } catch (error) {
+        if(getCoreExperimentContext()&&error&&typeof error==='object'&&'status'in error)return coreExperimentFailure(error);
         const message = error instanceof Error ? error.message : '复制实验配置失败';
         return NextResponse.json({ error: message }, { status: message === 'source experiment not found' ? 404 : 409 });
       }
@@ -229,7 +248,7 @@ export async function POST(req: Request) {
 
     const agentEvalDatasetId = String(body.datasetId || '').trim();
     if (agentEvalDatasetId) await guardTraceDataset(req, agentEvalDatasetId, username, true);
-    const publicBenchmarkDataset = agentEvalDatasetId
+    const publicBenchmarkDataset = agentEvalDatasetId && !getCoreExperimentContext()
       ? await prisma.agentEvalDataset.findFirst({
           where: {
             id: agentEvalDatasetId,
@@ -449,6 +468,7 @@ export async function POST(req: Request) {
         await autoPairGroups(id);
         return NextResponse.json({ id });
       } catch (e) {
+        if(getCoreExperimentContext()&&e&&typeof e==='object'&&'status'in e)return coreExperimentFailure(e);
         const msg = e instanceof Error ? e.message : 'comparison creation failed';
         return NextResponse.json({ error: msg }, { status: 400 });
       }
@@ -527,8 +547,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const experiment = await prisma.experiment.create({
-      data: {
+    const experimentData = {
         user: username,
         name,
         type: 'single',
@@ -563,9 +582,8 @@ export async function POST(req: Request) {
             caseValuesJson: c.caseValuesJson,
           })),
         },
-      },
-      select: { id: true },
-    });
+    };
+    const experiment = getCoreExperimentContext()?await createCoreExperimentRecord(experimentData):await prisma.experiment.create({data:experimentData,select:{id:true}});
 
     recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
 

@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {withCoreExperiments,requireCoreExperimentContext} from '@/lib/storage-core/experiments'
+import {coreBenchmarkArtifactResponse} from '@/lib/benchmark/core-public-callback'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,6 +31,7 @@ export async function GET(
 ) {
   try {
     const { evaluationId, artifactId } = await params
+    if(isStorageCoreEnabled())return await withCoreExperiments(req,async()=>coreBenchmarkArtifactResponse(await readBenchmarkEvaluationArtifact({evaluationId,artifactId,user:requireCoreExperimentContext().actor.username})))
     const url = new URL(req.url)
     const { username } = await resolveUser(req, url.searchParams.get('user'))
     if (!username) {

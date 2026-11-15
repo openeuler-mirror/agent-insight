@@ -14,7 +14,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 ## 已实现范围
 
 - `001_core.sql`：21 张事务表、13 张 ClickHouse 表；原始字节与 checksum 保持不变。
-- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，合计 **46 张事务表 + 13 张 CH 表 = 59 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
+- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，010新增8张实验索引、011新增2张诊断来源绑定、012新增5张Benchmark表、013兼容空证据且不新增表、014新增1张Issue解决注解表，合计 **62 张事务表 + 13 张 CH 表 = 75 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
 - 三种事务后端共享资产 release/依赖封存、别名/草稿 CAS、冻结 RunPlan、任务领取/续租/fence/取消、制品校验，以及结果回执和 Outbox 同事务提交。
 - ClickHouse 支持可信 canonical Span 批量写、最新态筛选、单 Span/分页结构读取、精确 bundle revision 的多 section 正文、正文块与清单 hash 校验，以及受限范围的最新态聚合。请求上限 4MiB，正文 bundle 上限 64MiB。
 - `observations.py`可靠接收完成OTLP Span、冻结准备计划、全局强序Outbox worker及幂等CH物化；`trace_service.py`提供loopback HTTP查询/接收，Next服务端原接口兼容及旧身份显式映射。
@@ -26,7 +26,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 `AuthorizedStorage(iam, facts)`默认使用default，也可显式传`project_id='default'`；空字符串、空白和其他项目ID拒绝。`service.project_context(credential, workspace_id)`返回经workspace授权校验的不可变上下文。`AccessScope`以及列表/聚合响应包含project_id，缓存指纹也包含项目；单条CH事实仍保持原workspace键。
 
-新初始化应用001–009。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，本批完整兼容接口要求当前009（基础Trace服务最低007，Dataset最低008，Trace生成最低009），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
+新初始化应用001–014。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前014（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
 
 ### IAM 与统一授权
 
@@ -89,9 +89,9 @@ SQLite 迁移先生成同目录的新私有备份并检查完整性/FK/hash，�
 
 底层可信CH适配器仍支持最多1000结构行、32正文块的有界kernel调用；HTTP/UI限制更小，不能混用两层上限。缺少section返回`available=false`，不回退其他正文版本。列表最多扫描2000授权路由候选，游标绑定scope/过滤条件并签名；不虚报无法确定的全局total。
 
-`trace_service.py`只监听127.0.0.1，32个并行请求槽，过载503。`--config`指定0600普通JSON文件；control选择sqlite(database)或postgresql/opengauss(dsn/schema/artifacts)，clickhouse指定endpoint/database/user/password，另含cursor_secret_hex、default_workspace、port、worker_enabled。先显式初始化/迁移全部控制schema与CH，启动不会建表升级。配置示例和可信账号/Key配置见[操作指南](../../how-to/platform/storage-core.md)。
+`trace_service.py`只监听127.0.0.1，32个并行请求槽，过载503。`--config`指定0600普通JSON文件；control选择sqlite(database)或postgresql/opengauss(dsn/schema/artifacts)，clickhouse指定endpoint/database/user/password，另含cursor_secret_hex、controller_key_file、default_workspace、port、worker_enabled。先显式初始化/迁移全部控制schema与CH，启动不会建表升级。配置示例和可信账号/Key配置见[操作指南](../../how-to/platform/storage-core.md)。
 
-Web使用仅服务端`AGENT_INSIGHT_TRACE_STORAGE=core`、`AGENT_INSIGHT_STORAGE_CORE_URL`及`AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`，配置变更后重启。旧public flag只保留服务端兼容别名。`DATABASE_URL`仍为隔离旧业务库，不能指向core.db；原前端Key保存/登录行为不改。映射文件0600且绑定验证过的旧Key摘要、旧用户名、IAM主体、workspace及read/write/delete代理凭据。错误不回落旧Trace库，未迁移领域仍有既有路径。
+Web使用仅服务端`AGENT_INSIGHT_TRACE_STORAGE=core`、`AGENT_INSIGHT_STORAGE_CORE_URL`及`AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`，配置变更后重启。旧public flag只保留服务端兼容别名。`DATABASE_URL`仍为隔离旧业务库，不能指向core.db；原前端Key保存/登录行为不改。映射文件0600且绑定验证过的旧Key摘要、旧用户名、IAM主体、workspace及read/write/execute/delete代理凭据。错误不回落旧Trace库，未迁移领域仍有既有路径。
 
 ### 原接口兼容与005
 
@@ -99,9 +99,9 @@ Web使用仅服务端`AGENT_INSIGHT_TRACE_STORAGE=core`、`AGENT_INSIGHT_STORAGE
 
 兼容入口为旧`/api/observe/data`、`/api/observe/session`、`/api/tags`、execution tags及Trace bundle import/export。列表支持旧记录/统计/筛选合同，当前需枚举授权范围，超过100000条明确拒绝；尚未完成索引下推和千级并发容量验证。普通结构读取所有轻量Span、最多100000条/16MiB；后端按200条读取，不在结构请求中加载正文。点击单Span按固定索引和精确payload revision装载。完整会话/导出128MiB上限；原Langfuse节点协议需完整正文，单独作为兼容例外。
 
-Trace bundle v1导入50MiB/500 execution、全树预检、ID/引用重映射，同一receipt可恢复，全部batch indexed才返回原成功DTO。兼容元数据写不回写采集原文；final_result编辑关联评测交接尚未实现，当前明确冲突。评测回流、infra、DiagnosisRun下游等跨领域功能以及非OTLP既有写入口仍待接管，不能把页面恢复视为全部功能迁移完成。
+Trace bundle v1导入50MiB/500 execution、全树预检、ID/引用重映射，同一receipt可恢复，全部batch indexed才返回原成功DTO。兼容元数据写不回写采集原文；final_result编辑关联评测交接尚未实现，当前明确冲突。Trace回流、普通实验/评测结果/RunPlan及DiagnosisRun消费者已使用下述新存储协议；infra和非OTLP既有写入口仍有未接入范围，不能把页面恢复视为全部功能迁移完成。
 
-此为单队列/控制写锁正确性基线，不是分片事件日志、HA或1000采集端吞吐认证。固定快照和完整评测物化仍属后续范围。
+此为单队列/控制写锁正确性基线，不是分片事件日志、HA或1000采集端吞吐认证。封存快照与评测投影已接入；超大数据规模和千级并发仍需独立容量验证。
 
 ## 旧库迁移输入
 
@@ -131,7 +131,7 @@ python3 -W error::ResourceWarning -m unittest discover -s services/storage/tests
 
 私有`/v1/compat/observe/evidence`与server-only `readTraceEvidence`冻结授权范围、别名/owner、路由代次、注解版本及Span/Trace head向量，核对CH当前集合与精确revision/正文hash，读取后重核。它与普通页面full读不同：prepared head不等于CH已就绪，读取途中变化409、未追上/缺失/损坏503、超过16MiB/100000 Span413；不截断、不回落旧库为空轨迹。非法UTF8在传输边界拒绝。
 
-原trace-drafts core分支使用这份完整证据，保留原DTO、Claude Code规范化、子Agent推断和空输入/输出warning。当前仅构建草稿，backflow保存、实验执行与DiagnosisRun下游仍待迁移；诊断会话/SSE及Trace报告采用下述独立协议。证据manifest/hash不含凭据和绝对路径；Next仍使用既有JS Number语义，精确大整数扩展应以字符串上报。诊断自身运行Trace必须一并保留，不能通过停用其recorder简化迁移。
+原trace-drafts core分支使用这份完整证据，保留原DTO、Claude Code规范化、子Agent推断和空输入/输出warning。草稿可通过已接入的backflow保存到版本化Dataset；实验执行、DiagnosisRun、重测及结果消费者采用下述typed协议，诊断会话/SSE及Trace报告采用独立协议。证据manifest/hash不含凭据和绝对路径；Next仍使用既有JS Number语义，精确大整数扩展应以字符串上报。诊断自身运行Trace必须一并保留，不能通过停用其recorder简化迁移。
 
 
 ### 诊断 Agent、自身 Trace、聊天与报告
@@ -145,7 +145,9 @@ python3 -W error::ResourceWarning -m unittest discover -s services/storage/tests
 - `sessionId:null`新建上游对话；已登记历史ID仅同一实际actor可续聊。组管理员可以查看已授权成员历史，并新建自己的上游；当前不支持跨actor复用同一个OpenCode session，因为其运行数据和凭据按用户隔离。不会通过共享用户运行目录绕开此限制。
 - AgentDebug与SkillsAnalysis沿原分析器/Skill/Agent运行，完整TraceEvidence冻结输入。每次运行持独立head/revision及私有lease，串行持久化进度，force重跑/删除后旧job不能覆盖新结果。报告正文与进度为私有hash制品，读取仍检查当前Trace权限；无正文时不从旧Prisma同名报告兜底。
 
-这不包含旧聊天/报告自动导入、评测`DiagnosisRun`与实验/重测闭环、生产迁移或千级并发容量证明。旧库历史保留，需显式actor/Trace映射后单独迁移。模型服务仍为原Next/OpenCode运行器，没有新增Python评测服务。
+评测`DiagnosisRun`与实验/重测闭环已接入下述消费者协议。这不包含旧聊天/报告自动导入、生产迁移或千级并发容量证明。旧库历史保留，需显式actor/Trace映射后单独迁移。模型服务仍为原Next/OpenCode运行器，没有新增Python评测服务。
+
+原Skill部署入口通过typed DiagnosisRun和TraceEvidence确定本人来源、client及唯一opaque Skill origin，不读取旧动态Trace影子。预检前后及WSS派发前重验来源；持久化命令入队即成为可轮询的授权边界，入队后派发前复核失败将命令标为投递失败并拒绝制品领取，已在途或已领取命令不承诺跨库原子回收。隔离模拟设备闭环验证了真实存储、命令及回执链路，不代表真实客户端安装验收。
 
 原诊断请求通过既有apiFetch补齐同源Key请求头，保留原登录/退出/切换行为和全部页面源码；不引入额外Cookie或登录态。
 
@@ -165,4 +167,53 @@ python3 -W error::ResourceWarning -m unittest discover -s services/storage/tests
 
 009的 `dataset_generation_jobs` 保存配置/成员/进度制品引用、实际actor、30秒租约、epoch fence、取消删除与结果回执。生产worker沿用原normalizer、采样和content processor；来源Trace头与正文摘要冻结，完整工具大正文不跨到JS。单Span Python验证预算64MiB、事件响应16MiB、JS答案特征64MiB、最终样例32MiB；超限拒绝而非伪造截断成功。目录最多10000条授权Trace。Next每进程最多2个活动生成任务、20个排队项，这是有界正确性实现，不是千级吞吐保证。
 
-重启后只在原actor的当前有效进度请求中恢复，旧租约到期后重新领取并增加epoch；不持久化Bearer，也不由管理员冒充owner恢复。源分页在慢制品读取后再次校验权限/租约/生命周期；完成时同事务发布Dataset版本、任务终态及回执。系统FI目录仍是只读动态视图，不能当作新封存release；后续RunPlan须冻结有效目录。完整Benchmark导入、实验/评测结果与RunPlan消费者、旧Dataset语义导入及生产切换仍待实施。
+重启后只在原actor的当前有效进度请求中恢复，旧租约到期后重新领取并增加epoch；不持久化Bearer，也不由管理员冒充owner恢复。源分页在慢制品读取后再次校验权限/租约/生命周期；完成时同事务发布Dataset版本、任务终态及回执。系统FI目录仍是只读动态视图，不能当作新封存release；RunPlan须冻结有效目录。普通实验/评测结果、RunPlan及受控Benchmark导入已接入下述协议；旧Dataset语义导入及生产切换仍待实施。
+
+
+### 实验、评测结果与 RunPlan 消费者（010–014）
+
+原实验与结果页面沿用原DTO、聚合和评分算法。实验容器、Case、结果槽、checkpoint、人工评分和评论使用typed领域操作；不把远程CRUD拼成Prisma事务。评估器定义、Dataset、Skill与实际模型选择在启动前封存，每次重评保留原RunPlan、机器回执及其来源。人工0分有效且只作用于对应机器回执，不能漂移到重评后的新结果。
+
+控制服务内部入口为`POST /v1/compat/experiments`、`/evaluators`、`/diagnosis-runs`和`/benchmarks`；领域内校验真实actor、workspace、操作能力、lease/fence及来源生命周期。`read_view`只装载目标实验，历史趋势单独走`baseline_view`。`lookup_operation`精确匹配actor、kind、key及原请求hash，在读取最新资源前恢复既有回执；诊断使用`lookup_submission`。网络丢响应不等于失败，不据此重发Agent命令或生成新评分。
+
+`AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE`须指向绝对路径、非符号链接、权限0600的常规文件，内容为64位小写hex随机值；仅服务端持有，不写入页面、数据库或RunPlan。证明绑定purpose、真实principal/workspace及精确HTTP body hash。执行/清理事实、私有资产封存、Workbench验证和Issue解决分别使用受控用途，公开body自称可信无效。模型`model-connection/v2`仅保存配置ID、脱敏URL和连接指纹；指纹包含有效自定义headers但不保存其明文。旧v1指纹仅在当前headers为空且原连接完全一致时兼容，避免配置漂移。
+
+普通业务本地执行Trace可供组管理员按业务ACL读取；Judge与诊断Agent自身Trace为私有记录，管理员不能因此读取参考答案或私有gold。已封存来源内容推进不改变旧输入；来源撤权、删除、incarnation或路由epoch变化会阻止继续读取、领取、完成和CH发布。CH accepted与published分开检查。凭据撤销后的既有未发布事件保留等待处理，目前没有公开重新授权该事件的操作。
+
+评分事实、指标与选择完成后，投影器在同一受租约保护的Outbox事件中保存精确的索引进度。整个RunPlan仍在等待执行终态或其他结果时，事件按1–60秒退避保留pending；恢复时不重复写已确认事实。多Case人工评分分别确认指标与选择，随后共同发布，不能互相等待对方整批发布。早期已sent但缺发布成员的历史事件需显式受控回填，不自动改写旧事件。
+
+Benchmark专用Case重跑以旧执行job和选定机器结果CAS建立新执行身份、RunPlan及递增attempt，复用父计划冻结模型、release和配置；imported提交禁止Agent重跑。pending准备意图可由原actor后台独立恢复，只有未封存外部请求的纯准备可在租约过期后提升fence重领；未知派发不会另起外部attempt。未知清理的Agent/Harness持续占额度，exact cleanup receipt确认后才能释放或重跑。
+
+Benchmark回调使用有限期、任务/attempt/fence/epoch绑定的capability，执行回调还要求真实设备身份及精确body证明。公开cap不能领取内部私有工作，内部`load_*`、规范化和评测计划需要控制器证明。013保留012 checksum并允许空stdout/stderr制品。014派生Issue解决为独立只追加注解，不改变机器证据。Benchmark、Workbench剩余链路与实测范围以实施状态为准，不由表结构存在推定全部功能已接管。
+
+
+### Workbench、A/B 与候选验证消费者
+
+原 Workbench、触发分析、灰度 A/B、实验复测页面和字段保持不变。Experiment/Case、机器结果选择和 RunPlan 使用 core；Skill/模型、WorkbenchTask、GrayscaleTask、OptimizationRecord 与静态质量评估暂保留所属独立控制域，不能把这一边界描述为全部旧表已迁移。所有跨域请求使用已验证的真实 actor/workspace，Task 中保存的实验 ID 也必须属于该 actor。
+
+创建使用签名的 prepared Task intent → typed core 精确创建回执 → Task CAS ready；中断后重放原冻结配置，不重新读取最新资产。后置会话/优化记录关联独立 CAS 恢复。原 Task JSON 的分数仅是当前 Case、实际执行身份与 selected machine receipt 的派生投影，重评和新执行等待期间不复用旧缓存分数。
+
+执行、基线验证与候选复测读取实验封存的 Dataset release，后续编辑评测集不会更换既有实验的输入或标准答案，也不会覆盖编辑态缓存。独立灰度任务显式新一轮启动时先读取当前评测集并封存本轮版本；同配置克隆仍继承来源版本。全局取消只约束当时的 RunPlan，显式新计划不继承旧全局屏障；样例删除的逻辑 tombstone 持续有效。
+
+版本分析的原比较和版本详情 API 使用已验证 actor，从新 Trace/版本标签与当前选中机器结果计算原指标；人工分 0、无分覆盖率、root 筛选和问题下钻口径保持不变。即使管理员可读其他成员，也只纳入自己的版本标签、Trace 和实验结果，查询参数 `user` 不扩大范围。内部通过真实 canonical Trace 身份关联 native/legacy alias，不查询旧 Execution/Tag/评测结果表，内部身份不加入原公开 DTO。来源删除或撤权后不再返回对应 Trace/分数。
+
+客户端与本机 Agent 都先保留真实执行目标/attempt，只有业务 Trace 真正完成并 indexed 后才提交评分。原本机 Agent 运行器保留；取消等待真实进程组清理证明，跨实例/重启后未知的本机目标保持 pending。丢失完成响应只查询或重投精确回执，不重新运行 Agent。
+
+候选行为验证沿用原筛选和判分算法，验证证明另以 `workbench-verification/v1` 绑定 actor/workspace 与 source/candidate/hash 签名。临时验证实验归档只更新优化记录的可见性引用，普通实验列表和 Workbench 都隐藏它，真实事实与合法证据仍可复用；真正删除或来源撤权则使证据失效。静态质量评估旧域、生产数据导入、跨实例本机执行恢复与千级容量仍须各自验证。
+## 实验优化点与 FI 收集
+
+core 模式保留原优化点与优化计划入口。动态/触发问题来自当前选中的机器结果及其不可变派生注解；静态扫描与用户反馈仍在原控制域，页面读取不会补写旧动态结果。普通用例和触发评测沿原归因与去重规则生成问题，纯输入评测没有 Trace 时，详情明确返回空的执行/轨迹引用。
+
+FI 收集回调只确认收集事实。实验的 Trace 就绪与 Case 关联由实际执行 worker 在新观测存储读取真实业务轨迹后完成，不以回调内的 interactions 替代采集数据，也不回填历史旧数据库 Case。
+
+切换后的迁移前指令晚到回执仍正常完成原客户端控制指令，但不再更新旧 ExperimentTraceAttempt；新 core 指令和历史未标记指令均受此保护。legacy 模式保留原回填规则，core 的业务 Trace 绑定只由新存储 attempt 的精确回执完成。
+
+同 Skill 版本的触发问题默认只显示最近一次已完成机器评测的发现；新一轮成功且没有问题时，旧问题退出当前待处理视图。该替代前沿只读计算，不新增解决注解；历史视图中的解决时间仍只表示真实解决记录。静态 Evaluation 详情仅在明确的静态、无 Execution 控制域及原 Skill/owner 可见范围内读取，其他详情严格走 typed 来源，故障或拒绝不会回退旧动态表。
+
+## Trace 流程匹配与归因
+
+原 `analyze-match` GET/POST 与页面 DTO 保留。core 模式从已授权的新 TraceEvidence 冻结业务输入、Skill 正文和版本、ParsedFlow 与模型选择，以内部 `trace-flow-analysis` Experiment/RunPlan 分别保存匹配和可选归因；该容器不出现在普通实验/Workbench 列表或分页总数中。原匹配、抽步骤、归因、质量维度优先级和评分算法继续使用。静态 Skill/ParsedFlow 留在原控制域，动态 ExecutionMatch、TrajectoryEvalResult 和 Evaluation/Issue 不再影子写入旧表。
+
+同请求恢复使用封存资产和实际机器回执。模型请求先记录 intent，确认响应及 indexed 录制后记录 observed；恢复复用 observed，未知 intent 保持 pending、不自动重发或反复创建 attempt。可选归因 pending 时，来源与当前匹配 selection 重新验证成功后仍返回已完成匹配；归因结果仅关联其精确来源 match。Trace 后续增长不改历史输入，GET 的更新提示仍按当前 interaction 数量计算。来源删除、撤权或 Skill 范围失效后拒绝读取/恢复。固定 Mock 的真实链路验收不代表实际模型质量或生产容量。
+
+原通用`POST /api/experiments/:id/run`在core模式通过typed Benchmark启动，保留`202 {status, runId, alreadyRunning?}`；Case重跑仍返回`202 {kind:"benchmark", status, runId}`，不在公开响应返回后台Promise。

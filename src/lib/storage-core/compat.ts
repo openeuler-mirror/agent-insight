@@ -38,6 +38,31 @@ async function identityMapping() {
  } catch { throw new CompatibilityError(503,'Invalid private mapping'); }
  return config;
 }
+export interface CoreBackgroundActor {token:string;workspace:string;principal:string;username:string;principalUsername:string}
+const backgroundActorsKey=Symbol.for('agent-insight.storage-core.verified-background-actors');
+const backgroundGlobals=globalThis as unknown as Record<symbol,WeakSet<object>>;
+const verifiedBackgroundActors=backgroundGlobals[backgroundActorsKey] ||= new WeakSet<object>();
+export function isVerifiedCoreBackgroundActor(value:unknown):value is CoreBackgroundActor{return !!value&&typeof value==='object'&&verifiedBackgroundActors.has(value);}
+export async function configuredCoreBackgroundActors(options:CompatibilityOptions={}):Promise<{actors:CoreBackgroundActor[];failures:number[]}>{
+ if(typeof window!=='undefined')throw new CompatibilityError(503,'Background identity is server only');
+ const config=await identityMapping();const declared=new Map<string,string>();
+ for(const row of config.bindings){
+  if(!row||!/^api_[A-Za-z0-9_-]{43}$/.test(row.credential)||![row.legacy_username,row.principal_id,row.workspace_id].every(value=>typeof value==='string'&&value.trim()&&value.length<=512&&!/[\u0000-\u001f\u007f-\u009f]/.test(value)))throw new CompatibilityError(503,'Invalid background identity mapping');
+  const key=row.principal_id+'\0'+row.workspace_id;const prior=declared.get(key);if(prior&&prior!==row.legacy_username)throw new CompatibilityError(503,'Ambiguous background model owner');declared.set(key,row.legacy_username);
+ }
+ const actors=new Map<string,CoreBackgroundActor>();const failures:number[]=[];
+ for(const row of config.bindings){
+  try{
+   const request=new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:row.workspace_id}),{headers:{authorization:'Bearer '+row.credential}});
+   const actor=await context(request,options);
+   if(actor.principal!==row.principal_id||actor.workspace!==row.workspace_id||!actor.username)throw new CompatibilityError(403,'Background principal differs');
+   const verified=Object.freeze({...actor,username:row.legacy_username,principalUsername:actor.username});verifiedBackgroundActors.add(verified);
+   actors.set(actor.principal+'\0'+actor.workspace,verified);
+  }catch(error){const status=error&&typeof error==='object'&&'status'in error?Number(error.status):503;failures.push([401,403,503].includes(status)?status:503);}
+ }
+ return {actors:[...actors.values()],failures};
+}
+
 async function context(request:Request,options:CompatibilityOptions={}) {
  const header=request.headers.get('authorization');
  let token:string;let workspace:string|undefined;let principal:string|undefined;let modelUsername:string|undefined;

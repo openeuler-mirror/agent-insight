@@ -15,6 +15,7 @@
  */
 
 import { db } from '@/lib/storage/prisma';
+import {frozenSkillReadSource,hasFrozenSkillCatalog,rememberFrozenSkillFlow} from '@/lib/eval/frozen-skill-catalog';
 import {
   analyzeDynamicOnly,
   extractFrozenTraceSteps,
@@ -113,19 +114,19 @@ export async function loadTaskCompletionSkillContext(
 
   const invokedSkills: NonNullable<NonNullable<TaskCompletionEvalInput['skillContext']>['invokedSkills']> = [];
   for (const target of targets) {
-    const skillRecord = await db.findSkill(target.skill, user || null);
+    const skillRecord = await frozenSkillReadSource(db).findSkill(target.skill, user || null);
     if (!skillRecord?.id) {
       invokedSkills.push({ name: target.skill, version: target.version });
       continue;
     }
 
-    const fullSkill = await db.findSkillById(skillRecord.id);
+    const fullSkill = await frozenSkillReadSource(db).findSkillById(skillRecord.id);
     const resolvedVersion = target.version
       ?? fullSkill?.activeVersion
       ?? fullSkill?.versions?.[0]?.version
       ?? null;
     const versionRow = resolvedVersion != null
-      ? await db.findSkillVersion(skillRecord.id, resolvedVersion).catch(() => null)
+      ? await frozenSkillReadSource(db).findSkillVersion(skillRecord.id, resolvedVersion).catch(() => null)
       : null;
     const content = String(versionRow?.content || '').trim();
     invokedSkills.push({
@@ -142,17 +143,17 @@ export async function extractSkillKeyActionsFromTargets(targets: SkillTarget[], 
   const allActions: { name: string; actions: ExtractedKeyAction[] }[] = [];
 
   for (const target of targets) {
-    const skillRecord = await db.findSkill(target.skill, user || null);
+    const skillRecord = await frozenSkillReadSource(db).findSkill(target.skill, user || null);
     if (!skillRecord?.id) continue;
 
-    const fullSkill = await db.findSkillById(skillRecord.id);
+    const fullSkill = await frozenSkillReadSource(db).findSkillById(skillRecord.id);
     const resolvedVersion = target.version
       ?? fullSkill?.activeVersion
       ?? fullSkill?.versions?.[0]?.version
       ?? null;
     if (resolvedVersion == null) continue;
 
-    const parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
+    const parsedFlow = await frozenSkillReadSource(db).findParsedFlow(skillRecord.id, resolvedVersion, user || null);
     if (!parsedFlow?.flowJson) continue;
 
     const flow: ParsedFlowResult = JSON.parse(parsedFlow.flowJson);
@@ -262,13 +263,13 @@ export async function buildSkillKeyActionReference(
   const missingSkills: string[] = [];
   const missingParsedFlowSkills: string[] = [];
   for (const target of skillTargets) {
-    const skillRecord = await db.findSkill(target.skill, user || null);
+    const skillRecord = await frozenSkillReadSource(db).findSkill(target.skill, user || null);
     if (!skillRecord?.id) {
       missingSkills.push(target.skill);
       continue;
     }
 
-    const fullSkill = await db.findSkillById(skillRecord.id);
+    const fullSkill = await frozenSkillReadSource(db).findSkillById(skillRecord.id);
     const resolvedVersion = target.version
       ?? fullSkill?.activeVersion
       ?? fullSkill?.versions?.[0]?.version
@@ -278,9 +279,9 @@ export async function buildSkillKeyActionReference(
       continue;
     }
 
-    let parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
+    let parsedFlow = await frozenSkillReadSource(db).findParsedFlow(skillRecord.id, resolvedVersion, user || null);
     if (!parsedFlow?.flowJson) {
-      const versionRow = await db.findSkillVersion(skillRecord.id, resolvedVersion);
+      const versionRow = await frozenSkillReadSource(db).findSkillVersion(skillRecord.id, resolvedVersion);
       const skillContent = versionRow?.content;
       if (!skillContent || !skillContent.trim()) {
         console.warn(`[key-action-trace-analysis] auto-parse skipped: SkillVersion ${skillRecord.id}/v${resolvedVersion} is empty`);
@@ -289,7 +290,7 @@ export async function buildSkillKeyActionReference(
       }
       console.log(`[key-action-trace-analysis] auto-parsing skill flow for ${target.skill} v${resolvedVersion}...`);
       const t0 = Date.now();
-      const parseResult = await parseSkillFlow(skillContent, skillRecord.id, resolvedVersion, user || null);
+      const parseResult = await parseSkillFlow(skillContent, skillRecord.id, resolvedVersion, user || null, hasFrozenSkillCatalog() ? {persist: false} : undefined);
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       if (!parseResult.success) {
         console.warn(`[key-action-trace-analysis] auto-parse failed for ${target.skill} v${resolvedVersion} (${elapsed}s): ${parseResult.error || 'unknown'}`);
@@ -297,7 +298,8 @@ export async function buildSkillKeyActionReference(
         continue;
       }
       console.log(`[key-action-trace-analysis] auto-parsed skill flow for ${target.skill} v${resolvedVersion} in ${elapsed}s`);
-      parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
+      if (hasFrozenSkillCatalog() && parseResult.flow) rememberFrozenSkillFlow({skillId: skillRecord.id, version: resolvedVersion, user: user || null, flowJson: JSON.stringify(parseResult.flow), mermaidCode: parseResult.mermaidCode || ''});
+      parsedFlow = await frozenSkillReadSource(db).findParsedFlow(skillRecord.id, resolvedVersion, user || null);
       if (!parsedFlow?.flowJson) {
         console.warn(`[key-action-trace-analysis] auto-parse reported success but DB has no flowJson for ${target.skill} v${resolvedVersion}`);
         missingParsedFlowSkills.push(target.skill);

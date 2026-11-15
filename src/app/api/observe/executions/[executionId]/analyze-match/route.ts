@@ -19,6 +19,9 @@ import { analyzeExecutionMatch, getExecutionMatch, analyzeDynamicOnly, parseSkil
 import { getRootSkillFromInteractions } from '@/lib/engine/observability/skill-scope';
 import { persistAlignmentAttribution } from '@/lib/engine/evaluation/alignment-attribution';
 import { db } from '@/lib/storage/prisma';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreExperimentMutationRoute} from '@/lib/storage-core/experiments';
+import {getCoreFlowAnalysis,postCoreFlowAnalysis} from '@/lib/storage-core/flow-analysis';
 
 interface ExecutionRecord {
   id?: string;
@@ -70,6 +73,10 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ executionId: string }> }
 ) {
+  if(isStorageCoreEnabled())return withCoreExperimentMutationRoute(request,async()=>{
+    try{return NextResponse.json(await postCoreFlowAnalysis((await params).executionId));}
+    catch(error){if((error as {coreFlowBusinessError?:boolean}).coreFlowBusinessError===true)return NextResponse.json({error:(error as Error).message},{status:500});throw error;}
+  });
   try {
     const { executionId } = await params;
     const body = await request.json().catch(() => ({}));
@@ -228,6 +235,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ executionId: string }> }
 ) {
+  if(isStorageCoreEnabled())return withCoreExperimentMutationRoute(request,async()=>NextResponse.json(await getCoreFlowAnalysis((await params).executionId)));
   try {
     const { executionId } = await params;
     

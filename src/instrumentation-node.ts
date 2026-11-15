@@ -30,10 +30,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'child_process';
 import { getAgentInsightHome } from '@/lib/env';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 
 export async function setupNodeRuntime(): Promise<void> {
-  const { startExperimentCancellationWatchdog } = await import('@/lib/engine/experiment/cancellation-service');
-  startExperimentCancellationWatchdog();
+  const coreStorage=isStorageCoreEnabled();
+  if(coreStorage){
+    const {startCoreExperimentBackground}=await import('@/lib/storage-core/experiment-background');
+    startCoreExperimentBackground();
+  }else{
+    const { startExperimentCancellationWatchdog } = await import('@/lib/engine/experiment/cancellation-service');
+    startExperimentCancellationWatchdog();
+  }
   // 注册内置系统 Agent（skill-generator-agent 等）。失败不阻塞启动——惰性注册作为兜底。
   try {
     const { ensureAllSystemAgents } = await import('@/lib/system-agents');
@@ -86,6 +93,7 @@ export async function setupNodeRuntime(): Promise<void> {
     );
   }
 
+  if(!coreStorage){
   // 回收"僵尸评测行":进程崩溃/重启后,后台评测 promise 已死,但 DB 里仍是 running/pending →
   // 前端永远显示「评测中」、运行计数不归零(连带 run 无法删除),且内存里已无 controller 故无从终止。
   // 启动时一次性把它们标失败(重启 = 没有任何评测真的在跑),跟 opencode 孤儿回收同理。
@@ -178,6 +186,8 @@ export async function setupNodeRuntime(): Promise<void> {
     console.warn('[instrumentation] benchmark evaluation watchdog setup failed:', (err as Error)?.message);
   }
 
+  }
+
   // 启动时跑一次 uploader：把上一轮 dev server 留下的 spool 积压清掉，避免那些 trace
   // 一直没归宿。常态下 plugin 的 kickUploader 在每次 opencode event 都会触发一次
   // 一次性 uploader 进程，所以这里只补"启动空窗期"。
@@ -231,11 +241,13 @@ export async function setupNodeRuntime(): Promise<void> {
     console.warn('[instrumentation] startInfraPoller failed (non-fatal):', (err as Error)?.message);
   }
 
+  if(!coreStorage){
   try {
     const { startExperimentWatcher } = await import('@/lib/engine/experiment/experiment-watch');
     startExperimentWatcher();
   } catch (err) {
     console.warn('[instrumentation] startExperimentWatcher failed (non-fatal):', (err as Error)?.message);
+  }
   }
 
   setImmediate(() => {

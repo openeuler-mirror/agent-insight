@@ -21,7 +21,10 @@
  *
  * 生成 Trace 契约：创建 Run → 等 Worker/collect 回填 sessionTaskId → 写入 Case.taskId → 再评测。
  */
-import { createTaskWithRuns } from '@/lib/fault-injection/store'
+import { readTraceEvidence } from '@/lib/storage-core/evidence'
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
+import { requireCoreExperimentContext } from '@/lib/storage-core/experiments'
+import { createTaskWithRuns, refreshTaskProgress } from '@/lib/fault-injection/store'
 import {
   listPlatformsFromWorkers,
   listWorkerExecutionTargets,
@@ -75,6 +78,10 @@ export class FiOrchestrateError extends Error {
 
 /** 从实验 case 中提取需要 FI 的条目（只有已绑定有效 Execution 的才跳过）。 */
 export async function collectFiCasesFromExperiment(experimentId: string): Promise<FiOrchestrateCaseSpec[]> {
+  if (isStorageCoreEnabled()) {
+    const snapshot = await requireCoreExperimentContext().rpc('read',{experiment_id: experimentId}) as {experiment: {cases: Array<{id: string; input: string; executionId?: string; faultInjectionType?: string; faultInjectionSubmode?: string}>}}
+    return snapshot.experiment.cases.filter(row => !row.executionId && Boolean(resolveCaseFaultInjectionType(row))).map(row => ({caseId: row.id, input: row.input, fault: resolveCaseFaultInjectionType(row)!, submode: row.faultInjectionSubmode}))
+  }
   const cases = await prisma.experimentCase.findMany({
     where: { experimentId },
     orderBy: { createdAt: 'asc' },
@@ -122,38 +129,12 @@ async function patchCaseFiMeta(caseId: string, meta: {
 export async function orchestrateFaultInjection(
   req: FiOrchestrateRequest,
 ): Promise<FiOrchestrateResult> {
+  if (isStorageCoreEnabled()) return (await import('@/lib/storage-core/experiment-fi-worker')).orchestrateCoreFi(requireCoreExperimentContext(), req)
   if (!req.cases.length) {
     return { skipped: true, reason: 'no_fi_cases', taskIds: [], runIds: [], caseFaults: [] }
   }
 
-  if (req.targetWorkerId) {
-    const targets = await listWorkerExecutionTargets(req.user)
-    const target = targets.find((item) =>
-      item.workerId === req.targetWorkerId
-      && item.platform === req.platform
-      && item.agent === req.agent)
-    if (!target) {
-      throw new FiOrchestrateError(
-        'execution_target_unavailable',
-        '所选运行主机已离线，或不再提供该 Agent 的执行能力',
-      )
-    }
-  } else {
-    const { platforms, ok } = await listPlatformsFromWorkers(req.user)
-    if (!ok) {
-      throw new FiOrchestrateError(
-        'no_online_worker',
-        '无在线 FI Worker；请检查客户端配置与在线状态',
-      )
-    }
-    const platformInfo = platforms.find((p) => p.id === req.platform)
-    if (!platformInfo || platformInfo.readiness !== 'ready') {
-      throw new FiOrchestrateError(
-        `platform_not_ready:${req.platform}`,
-        `平台 ${req.platform} 不可用（需在线客户端上报就绪）`,
-      )
-    }
-  }
+  await assertFiExecutionTarget(req)
 
   const workspace = normalizeFiWorkspaceInput(req.workspace)
   const taskIds: string[] = []
@@ -161,18 +142,7 @@ export async function orchestrateFaultInjection(
   const caseFaults: FiOrchestrateResult['caseFaults'] = []
 
   for (const item of req.cases) {
-    const { task, runs } = await createTaskWithRuns({
-      user: req.user,
-      name: `exp:${req.experimentId}:${item.caseId.slice(0, 8)}`,
-      platform: req.platform,
-      agent: req.agent,
-      prompt: item.input,
-      workspace,
-      model: req.model || null,
-      timeoutSeconds: req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
-      targetWorkerId: req.targetWorkerId || null,
-      items: [{ fault: item.fault, submode: item.submode || null }],
-    })
+    const { task, runs } = await createFiCaseTask(req, item)
     // 必须用业务 runId（ras-…），禁止 Prisma cuid：Worker/collect/API 一律按 runId 关联。
     const runId = runs[0]?.runId
     taskIds.push(task.id)
@@ -215,7 +185,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** 按业务 runId 或历史误写入的 Prisma id 查找 FI Run。 */
-async function findFiRunByKey(runKey: string) {
+export async function findFiRunByKey(runKey: string) {
   return prisma.faultInjectionRun.findFirst({
     where: { OR: [{ runId: runKey }, { id: runKey }] },
     select: {
@@ -240,6 +210,13 @@ export async function bindExperimentCaseToFiSession(input: {
   fiRunKey: string
   sessionTaskId: string
 }): Promise<number> {
+  if (isStorageCoreEnabled()) {
+    const context = requireCoreExperimentContext()
+    const identity = await context.rpc('case_lookup',{fi_run_id: input.fiRunKey}) as {experiment_id: string; case_id: string}
+    const snapshot = await context.rpc('read',{experiment_id: identity.experiment_id, case_ids: [identity.case_id]}) as {experiment: {cases: Array<{taskId?: string; executionId?: string}>}}
+    const row = snapshot.experiment.cases[0]
+    return row?.taskId === input.sessionTaskId && row.executionId ? 1 : 0
+  }
   const sessionTaskId = input.sessionTaskId.trim()
   if (!sessionTaskId) return 0
 
@@ -299,6 +276,17 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
   pendingRunIds: string[]
   failedRunIds: string[]
 }> {
+  if (isStorageCoreEnabled()) {
+    const readyRunIds: string[] = [], pendingRunIds: string[] = [], failedRunIds: string[] = []
+    for (const id of input.runIds) {
+      const run = await findFiRunByKey(id)
+      if (!run || run.user !== requireCoreExperimentContext().actor.username) {failedRunIds.push(id);continue}
+      if (run.sessionTaskId && await bindExperimentCaseToFiSession({fiRunKey: id, sessionTaskId: run.sessionTaskId})) readyRunIds.push(id)
+      else if (['completed','judge_skipped','failed','stopped'].includes(run.status)) failedRunIds.push(id)
+      else pendingRunIds.push(id)
+    }
+    return {bound: readyRunIds.length, readyRunIds, pendingRunIds, failedRunIds}
+  }
   const runIds = Array.from(new Set(input.runIds.filter(Boolean)))
   if (!runIds.length) {
     return { bound: 0, readyRunIds: [], pendingRunIds: [], failedRunIds: [] }
@@ -366,4 +354,63 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
     pendingRunIds,
     failedRunIds: Array.from(failed),
   }
+}
+
+export async function assertFiExecutionTarget(req: FiOrchestrateRequest): Promise<void> {
+  if (req.targetWorkerId) {
+    const targets = await listWorkerExecutionTargets(req.user)
+    const target = targets.find((item) =>
+      item.workerId === req.targetWorkerId
+      && item.platform === req.platform
+      && item.agent === req.agent)
+    if (!target) {
+      throw new FiOrchestrateError(
+        'execution_target_unavailable',
+        '所选运行主机已离线，或不再提供该 Agent 的执行能力',
+      )
+    }
+  } else {
+    const { platforms, ok } = await listPlatformsFromWorkers(req.user)
+    if (!ok) {
+      throw new FiOrchestrateError(
+        'no_online_worker',
+        '无在线 FI Worker；请检查客户端配置与在线状态',
+      )
+    }
+    const platformInfo = platforms.find((p) => p.id === req.platform)
+    if (!platformInfo || platformInfo.readiness !== 'ready') {
+      throw new FiOrchestrateError(
+        `platform_not_ready:${req.platform}`,
+        `平台 ${req.platform} 不可用（需在线客户端上报就绪）`,
+      )
+    }
+  }
+
+}
+
+export async function createFiCaseTask(req: FiOrchestrateRequest, item: FiOrchestrateCaseSpec, stable?: {taskKey: string; runIds: string[]}) {
+  return createTaskWithRuns({user: req.user, name: `exp:${req.experimentId}:${item.caseId.slice(0,8)}`, platform: req.platform, agent: req.agent, prompt: item.input, workspace: normalizeFiWorkspaceInput(req.workspace), model: req.model || null, timeoutSeconds: req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS, targetWorkerId: req.targetWorkerId || null, items: [{fault: item.fault, submode: item.submode || null}]}, stable)
+}
+
+export async function cancelFiExecution(user: string, runId: string): Promise<void> {
+  const run = await prisma.faultInjectionRun.findFirst({where: {runId, user}})
+  if (!run) return
+  await prisma.faultInjectionRun.updateMany({where: {id: run.id, user, status: 'queued'}, data: {status: 'stopped', stopRequested: true, error: 'stopped by user'}})
+  await prisma.faultInjectionRun.updateMany({where: {id: run.id, user, status: {in: ['collecting','judging']}}, data: {stopRequested: true}})
+  const deadline = Date.now() + 30_000
+  do {
+    const current = await prisma.faultInjectionRun.findFirst({where: {id: run.id, user}})
+    if (current && ['completed','judge_skipped','failed','stopped'].includes(current.status)) {await refreshTaskProgress(run.fiTaskId);return}
+    await sleep(250)
+  } while (Date.now() < deadline)
+  throw Object.assign(new Error('FI进程停止尚未确认，已禁止重试'), {code: 'EVALUATION_CLEANUP_UNCONFIRMED', status: 409})
+}
+
+export async function isCoreFiBusinessTraceReady(input: {sessionTaskId: string; platform: string; agent: string}): Promise<boolean> {
+  const context = requireCoreExperimentContext()
+  try {
+    const {evidence} = await readTraceEvidence(context.request,{taskId: input.sessionTaskId},context.options)
+    if (evidence.execution.user !== context.actor.username) return false
+    return isFiBusinessTraceUsable({platform: input.platform, agent: input.agent, executionAgent: typeof evidence.execution.agentName === 'string' ? evidence.execution.agentName : null, interactions: JSON.stringify(evidence.session.interactions), endTime: evidence.session.endTime ? new Date(String(evidence.session.endTime)) : null})
+  } catch (error) {if ([404,422,503].includes((error as {status?: number}).status || 0)) return false;throw error}
 }

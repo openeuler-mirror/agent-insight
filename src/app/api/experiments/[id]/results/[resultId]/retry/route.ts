@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreExperimentWriteRoute,retryCoreExperimentResultRoute} from '@/lib/storage-core/experiment-routes';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,7 +30,9 @@ export const dynamic = 'force-dynamic';
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string; resultId: string }> },
-) {
+):Promise<Response> {
+  if(isStorageCoreEnabled()){const {id,resultId}=await params;return coreExperimentWriteRoute(req,()=>retryCoreExperimentResultRoute(id,resultId));}
+
   try {
     const { id, resultId } = await params;
     const url = new URL(req.url);

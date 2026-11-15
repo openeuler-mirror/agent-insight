@@ -14,6 +14,17 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { requireCoreExperimentContext } from '@/lib/storage-core/experiments';
+import {executeCoreWorkbenchLocalCase} from '@/lib/storage-core/workbench-local-execution';
+import {readCoreWorkbenchTaskConfiguration} from '@/lib/storage-core/workbench-handoff';
+import {isCoreDeliveryUncertain} from '@/lib/storage-core/execution-delivery';
+import {getTrustedCoreAgentContext} from '@/lib/engine/general-agent/trusted-context';
+import {getUserSettings} from '@/lib/storage/server-config';
+import {freezeModelSelection} from '@/lib/storage-core/frozen-model';
+import {createHash} from 'node:crypto';
+import {readWorkbenchFrozenDataset} from '@/lib/storage-core/workbench';
+import type { Experiment } from '@prisma/client';
 import { retestDiagnosisCase } from '@/lib/diagnosis/retest';
 import { linkCandidateVerification } from './verification-evidence';
 import { verifyFromSourceExperiment } from '@/lib/engine/skill-opt/experiment-verification';
@@ -41,7 +52,7 @@ function parseJson<T>(value: string | null, fallback: T): T {
 
 function deployCandidate(user: string, workspaceTag: string, skillName: string, files: Record<string, string>) {
   if (!/^[A-Za-z0-9._-]+$/.test(skillName)) throw new RetestError('Skill 名称不适合部署到复测工作区', 422);
-  const workspace = ensureSessionWorkspace(user, workspaceTag);
+  const workspace = getTrustedCoreAgentContext()?.trustedWorkspaceDir||ensureSessionWorkspace(user, workspaceTag);
   const root = path.join(workspace, '.opencode', 'skills', skillName);
   fs.mkdirSync(root, { recursive: true });
   for (const [rawPath, content] of Object.entries(files)) {
@@ -66,6 +77,7 @@ export async function retestOptimizationCandidate(input: {
   skillName: string;
   recordId: string;
 }) {
+  if (isStorageCoreEnabled()) input = { ...input, user: requireCoreExperimentContext().actor.username };
   const record = await prismaRaw.skillOptimizationRecord.findFirst({
     where: { id: input.recordId, user: input.user, skillName: input.skillName },
   });
@@ -76,11 +88,13 @@ export async function retestOptimizationCandidate(input: {
     throw new RetestError(`候选当前状态 ${record.status} 不能复测`);
   }
   if (record.sourceKind === 'diagnosis') {
-    const source = record.sourceExperimentId && await prismaRaw.experiment.findFirst({ where: { id: record.sourceExperimentId, user: input.user, deletedAt: null } });
+    const source = record.sourceExperimentId && (isStorageCoreEnabled()
+      ? (await requireCoreExperimentContext().rpc('read', { experiment_id: record.sourceExperimentId }) as { experiment: Experiment }).experiment
+      : await prismaRaw.experiment.findFirst({ where: { id: record.sourceExperimentId, user: input.user, deletedAt: null } }));
     if (!source) throw new RetestError('该诊断缺少可复测的来源实验');
-    if (source.scope !== 'skill-workbench') {
+    if (isStorageCoreEnabled() || source.scope !== 'skill-workbench') {
       try { return await retestDiagnosisCase(record, source, candidateFiles); }
-      catch (error) { throw new RetestError(error instanceof Error ? error.message : '诊断候选复测失败'); }
+      catch (error) { if (isStorageCoreEnabled()) throw error; throw new RetestError(error instanceof Error ? error.message : '诊断候选复测失败'); }
     }
   }
   const evidenceInput = { ...input, baseVersion: record.baseVersion, files: candidateFiles, sourceExperimentId: record.sourceExperimentId };
@@ -116,7 +130,7 @@ export async function retestOptimizationCandidate(input: {
     });
   }
   const task = snapshot.grayscaleTaskId ? await prismaRaw.grayscaleTask.findFirst({ where: { id: snapshot.grayscaleTaskId, user: input.user } }) : null;
-  const frozen = parseJson<{ executionTarget?: unknown; boundSide?: 'a' | 'b'; skillSnapshots?: { a?: SkillExecutionSnapshot; b?: SkillExecutionSnapshot } }>(task?.configJson || null, {});
+  const frozen = isStorageCoreEnabled()&&task?await readCoreWorkbenchTaskConfiguration(input.user,task) as {executionTarget?:unknown;boundSide?:'a'|'b';skillSnapshots?:{a?:SkillExecutionSnapshot;b?:SkillExecutionSnapshot}}:parseJson<{ executionTarget?: unknown; boundSide?: 'a' | 'b'; skillSnapshots?: { a?: SkillExecutionSnapshot; b?: SkillExecutionSnapshot } }>(task?.configJson || null, {});
   if (frozen.executionTarget) {
     const original = frozen.skillSnapshots?.[frozen.boundSide || 'b'];
     if (!original) throw new RetestError('来源实验缺少原版 Skill 快照');
@@ -136,7 +150,7 @@ export async function retestOptimizationCandidate(input: {
   }
   const datasetId = snapshot.datasetId as string;
   const caseIds = snapshot.caseIds as string[];
-  const dataset = await findAgentDataset(input.user, datasetId);
+  const dataset = isStorageCoreEnabled()?await readWorkbenchFrozenDataset(input.user,source.id,datasetId):await findAgentDataset(input.user,datasetId);
   if (!dataset) throw new RetestError('来源实验的数据集已不存在');
   const caseMap = new Map(dataset.cases.map((item) => [item.id, item]));
   const orderedCases = caseIds.map((id) => caseMap.get(id)).filter((item): item is NonNullable<typeof item> => Boolean(item));
@@ -148,8 +162,7 @@ export async function retestOptimizationCandidate(input: {
     throw new RetestError(`来源实验冻结的模型配置已不可用：${snapshot.runtime.modelConfigId}`);
   }
 
-  const retest = await prismaRaw.experiment.create({
-    data: {
+  const retestData={
       user: input.user,
       name: `${source.name} · 候选复测`,
       type: 'single',
@@ -166,11 +179,11 @@ export async function retestOptimizationCandidate(input: {
         baseVersion: record.baseVersion,
         candidateHash: record.candidateContentHash,
       }),
-      configSnapshotJson: JSON.stringify({ ...snapshot, candidateHash: record.candidateContentHash }),
+      configSnapshotJson: JSON.stringify({ ...snapshot,...(isStorageCoreEnabled()?{grayscaleTaskId:undefined}:{}), candidateHash: record.candidateContentHash }),
       sourceExperimentId: source.id,
       optimizationRecordId: record.id,
-    },
-  });
+    };
+  const retest=isStorageCoreEnabled()?await (async()=>{const context=requireCoreExperimentContext();const payload={experiment:{...retestData,id:'retest-exp-'+createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,context.operationKey,record.id,record.candidateContentHash])).digest('hex').slice(0,40),cases:[]}};const receipt=await context.rpc('create',{...payload,operation_key:context.operationKey+':local-retest-create',operation_request:payload}) as {experiment:{id:string}};return receipt.experiment;})():await prismaRaw.experiment.create({data:retestData});
   await transitionSkillOptimizationRecord({
     user: input.user, skillName: input.skillName, recordId: record.id, to: 'retesting',
   });
@@ -183,8 +196,10 @@ export async function retestOptimizationCandidate(input: {
     for (const item of orderedCases) {
       for (let round = 0; round < repeatRounds; round += 1) {
         const workspaceTag = `retest-${record.id}-${item.id}-r${round}`;
-        deployCandidate(input.user, workspaceTag, input.skillName, candidateFiles);
-        const run = await withBackgroundOpencodeSlot(() => runGeneralAgent({
+        let coreCaseId:string|undefined;
+        const execute=(signal?:AbortSignal)=>{
+          deployCandidate(input.user,workspaceTag,input.skillName,candidateFiles);
+          return runGeneralAgent({
           user: input.user,
           query: item.input,
           workspaceTag,
@@ -194,14 +209,20 @@ export async function retestOptimizationCandidate(input: {
           modelOptions: snapshot.runtime?.modelOptions,
           interactionPolicy: snapshot.runtime?.interactionPolicy || 'auto-deny',
           timeoutMs: snapshot.runtime?.timeoutMs,
-          chatOptions: snapshot.runtime?.idleTimeoutMs ? { idleTimeoutMs: snapshot.runtime.idleTimeoutMs } : undefined,
+          chatOptions: {idleTimeoutMs:snapshot.runtime?.idleTimeoutMs,signal},
           ephemeralServer: true,
           recordTraceAs: 'skill-workbench-retest',
-        }), {
+        });};
+        const run = await withBackgroundOpencodeSlot(async()=>{
+          if(!isStorageCoreEnabled())return execute();
+          const context=requireCoreExperimentContext();const modelId=snapshot.runtime?.modelConfigId;const model=modelId?(await getUserSettings(input.user)).configs.find(value=>value.id===modelId):undefined;
+          if(modelId&&!model)throw new RetestError('冻结模型配置不可用',503);
+          return executeCoreWorkbenchLocalCase({...context,...(model?{frozenStartModelSelection:freezeModelSelection(model)}:{})},{user:input.user,experimentId:retest.id,datasetId,datasetCaseId:item.id,query:item.input,referenceOutput:item.expectedOutput,signal:new AbortController().signal,skillRun:{recordId:record.id,round},executionRequest:{candidateHash:record.candidateContentHash,skill:{name:input.skillName,files:candidateFiles},modelConfigId:modelId},onCaseCreated:async id=>{coreCaseId=id;}},execute);
+        }, {
           taskType: 'skill-workbench-retest', user: input.user,
           label: `${input.skillName}-${item.id}-r${round}`, skill: input.skillName, skillVersion: null,
         });
-        const caseId = await addEvalExperimentCase(retest.id, {
+        const caseId = coreCaseId||await addEvalExperimentCase(retest.id, {
           taskId: run.sessionId,
           input: item.input,
           datasetInput: item.input,
@@ -216,7 +237,8 @@ export async function retestOptimizationCandidate(input: {
     }
     const candidateScore = average(scores);
     const passed = allPassed && candidateScore != null && candidateScore >= sourceScore;
-    await prismaRaw.experiment.update({ where: { id: retest.id }, data: { status: 'done' } });
+    if(isStorageCoreEnabled())await requireCoreExperimentContext().rpc('reconcile',{experiment_id:retest.id});
+    else await prismaRaw.experiment.update({ where: { id: retest.id }, data: { status: 'done' } });
     const latestRecord = await prismaRaw.skillOptimizationRecord.findUnique({
       where: { id: record.id },
       select: { sourceRefsJson: true },
@@ -240,11 +262,13 @@ export async function retestOptimizationCandidate(input: {
     });
     return { experimentId: retest.id, sourceScore, candidateScore, passed };
   } catch (error) {
+    if(isCoreDeliveryUncertain(error))throw error;
     await transitionSkillOptimizationRecord({
       user: input.user, skillName: input.skillName, recordId: record.id, to: 'retest_failed',
       errorMessage: error instanceof Error ? error.message : String(error),
     }).catch(() => undefined);
-    await prismaRaw.experiment.updateMany({ where: { id: retest.id }, data: { status: 'failed' } }).catch(() => undefined);
+    if(isStorageCoreEnabled())await requireCoreExperimentContext().rpc('reconcile',{experiment_id:retest.id}).catch(()=>undefined);
+    else await prismaRaw.experiment.updateMany({ where: { id: retest.id }, data: { status: 'failed' } }).catch(() => undefined);
     throw error;
   }
 }

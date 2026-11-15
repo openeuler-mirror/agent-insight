@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -56,6 +57,7 @@ export function createExperimentWatcher(options: {
   let scanning = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let nextExperiment = 0;
+  let coreWatcher:ReturnType<typeof import('@/lib/storage-core/experiment-background').createCoreExperimentBackground>|undefined;
 
   async function scanExperiment(
     experiment: WatchExperiment,
@@ -123,6 +125,7 @@ export function createExperimentWatcher(options: {
   }
 
   async function scan() {
+    if(isStorageCoreEnabled()){const {createCoreExperimentBackground}=await import('@/lib/storage-core/experiment-background');coreWatcher??=createCoreExperimentBackground({intervalMs,pageSize,concurrency});return coreWatcher.scan();}
     if (scanning || active.size >= concurrency) return;
     scanning = true;
     try {
@@ -162,12 +165,13 @@ export function createExperimentWatcher(options: {
     timer = undefined;
   }
 
-  return { scan, start, stop, waitForIdle: () => Promise.all([...active]) };
+  return { scan, start, stop, waitForIdle: () => coreWatcher?coreWatcher.waitForIdle():Promise.all([...active]) };
 }
 
 const WATCHER_KEY = Symbol.for('agent-insight.experiment.watcher');
 
 export function startExperimentWatcher() {
+  if(isStorageCoreEnabled()){void import('@/lib/storage-core/experiment-background').then(({startCoreExperimentBackground})=>startCoreExperimentBackground()).catch(()=>console.warn('[storage-core-background] watch startup unavailable'));return;}
   const state = globalThis as unknown as Record<symbol, ReturnType<typeof createExperimentWatcher>>;
   state[WATCHER_KEY] ??= createExperimentWatcher();
   state[WATCHER_KEY].start();

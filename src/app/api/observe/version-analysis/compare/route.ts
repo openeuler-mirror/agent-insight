@@ -17,10 +17,13 @@
 import { NextResponse } from 'next/server';
 import { TraceTagError } from '@/lib/trace-tags';
 import { getVersionCompare } from '@/lib/version-analysis';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreExperiments,requireCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
 
 export const dynamic = 'force-dynamic';
 
 function toErrorResponse(error: unknown) {
+  if(isStorageCoreEnabled())return coreExperimentFailure(error);
   if (error instanceof TraceTagError) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
@@ -29,6 +32,12 @@ function toErrorResponse(error: unknown) {
 }
 
 export async function GET(request: Request) {
+  if(isStorageCoreEnabled()){
+    try{return await withCoreExperiments(request,()=>{const url=new URL(request.url);url.searchParams.set('user',requireCoreExperimentContext().actor.username);return compareRequest(new Request(url,{headers:request.headers}));});}catch(error){return coreExperimentFailure(error);}
+  }
+  return compareRequest(request);
+}
+async function compareRequest(request:Request){
   try {
     const { searchParams } = new URL(request.url);
     return NextResponse.json(await getVersionCompare({

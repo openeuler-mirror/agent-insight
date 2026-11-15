@@ -108,8 +108,15 @@ class AuthorizedStorage:
                 inactive=con.execute("SELECT trace_id FROM trace_locators WHERE workspace_id=? AND trace_bucket>=? AND trace_bucket<=? AND state<>'active' ORDER BY trace_id LIMIT 1001",(workspace_id,bucket_from,bucket_to)).fetchall()
                 if len(inactive)>1000:
                     raise Forbidden('analytics deletion barrier exceeds bounded scope; narrow the date range')
-                if inactive:
-                    excluded[workspace_id]=[row[0] for row in inactive]
+                hidden={row[0] for row in inactive}
+                if con.execute('SELECT 1 FROM schema_meta WHERE version=10').fetchone():
+                    protected=con.execute('SELECT j.trace_id FROM experiment_judge_traces j JOIN trace_locators t ON t.workspace_id=j.workspace_id AND t.trace_id=j.trace_id WHERE j.workspace_id=? AND j.owner_principal_id<>? AND t.trace_bucket>=? AND t.trace_bucket<=? LIMIT 1001',(workspace_id,scope.principal_id,bucket_from,bucket_to)).fetchall()
+                    hidden.update(row[0] for row in protected)
+                if con.execute('SELECT 1 FROM schema_meta WHERE version=11').fetchone():
+                    protected=con.execute('SELECT j.trace_id FROM diagnosis_judge_traces j JOIN trace_locators t ON t.workspace_id=j.workspace_id AND t.trace_id=j.trace_id WHERE j.workspace_id=? AND j.owner_principal_id<>? AND t.trace_bucket>=? AND t.trace_bucket<=? LIMIT 1001',(workspace_id,scope.principal_id,bucket_from,bucket_to)).fetchall()
+                    hidden.update(row[0] for row in protected)
+                if len(hidden)>1000:raise Forbidden('analytics privacy/deletion barrier exceeds bounded scope; narrow the date range')
+                if hidden:excluded[workspace_id]=sorted(hidden)
             return scope,excluded
 
     def summarize_spans(self, credential, workspace_ids, bucket_from, bucket_to, *, trace_ids=None):
@@ -149,6 +156,12 @@ class AuthorizedStorage:
                 parameters.extend([scope.principal_id,scope.principal_id])
             if resource_kind=='trace':
                 access+=" AND t.state='active'"
+                if con.execute('SELECT 1 FROM schema_meta WHERE version=10').fetchone():
+                    access+=' AND NOT EXISTS(SELECT 1 FROM experiment_judge_traces j WHERE j.workspace_id=t.workspace_id AND j.trace_id=t.trace_id AND j.owner_principal_id<>?)'
+                    parameters.append(scope.principal_id)
+                if con.execute('SELECT 1 FROM schema_meta WHERE version=11').fetchone():
+                    access+=' AND NOT EXISTS(SELECT 1 FROM diagnosis_judge_traces j WHERE j.workspace_id=t.workspace_id AND j.trace_id=t.trace_id AND j.owner_principal_id<>?)'
+                    parameters.append(scope.principal_id)
             if resource_kind=='artifact':
                 access+=" AND t.namespace IN ('public','trace','result','report','attachment')"
             parameters.append(limit)

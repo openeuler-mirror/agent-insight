@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
@@ -24,7 +27,8 @@ import {
   syncWorkbenchOptimization,
 } from '@/lib/skill-workbench/optimization-adapter';
 
-export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) :Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>GET(normalized,context));
   try {
     const { id } = await context.params;
     const { username } = await resolveUser(request, id.startsWith('diagnosis-') ? null : request.nextUrl.searchParams.get('user'));
@@ -38,7 +42,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   }
 }
 
-export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) :Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,context));
   try {
     const body = await request.json().catch(() => ({}));
     const { id } = await context.params;

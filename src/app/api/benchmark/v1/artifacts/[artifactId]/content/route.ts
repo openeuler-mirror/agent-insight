@@ -1,3 +1,7 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {withCoreExperiments,requireCoreExperimentContext} from '@/lib/storage-core/experiments'
+import {coreBenchmarkCallbackContext,coreBenchmarkArtifactResponse} from '@/lib/benchmark/core-public-callback'
+import {benchmarkCallbackRpc} from '@/lib/benchmark/core-store'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -29,6 +33,14 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: Request, { params }: { params: Promise<{ artifactId: string }> }) {
   try {
     const { artifactId } = await params
+    if(isStorageCoreEnabled()){
+      if(req.headers.has('x-agent-insight-callback-token')){
+        const jobId=req.headers.get('x-agent-insight-evaluation-id')?.trim();if(!jobId)throw new BenchmarkProtocolError('EVALUATION_ID_MISSING','缺少评测Run标识',400)
+        const artifact=await benchmarkCallbackRpc<{name:string;media_type:string;sha256:string;bytes_base64:string}>(coreBenchmarkCallbackContext(req),'artifact_read',{job_id:jobId,artifact_id:artifactId})
+        return coreBenchmarkArtifactResponse({name:artifact.name,mediaType:artifact.media_type,sha256:artifact.sha256,bytes:Buffer.from(artifact.bytes_base64,'base64')})
+      }
+      return await withCoreExperiments(req,async()=>coreBenchmarkArtifactResponse(await readBenchmarkRunArtifact({artifactId,user:requireCoreExperimentContext().actor.username})))
+    }
     const url = new URL(req.url)
     const { username } = await resolveUser(req, url.searchParams.get('user'))
     if (username) {

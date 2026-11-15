@@ -15,6 +15,8 @@
  */
 
 import { NextResponse } from 'next/server';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreEvaluatorRoute,getCoreEvaluatorContext,coreEvaluatorFailure} from '@/lib/storage-core/evaluators';
 import { readUserCustomEvaluators, writeUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import {
   findUnsupportedCustomEvaluatorVariables,
@@ -67,6 +69,9 @@ function validateCustomEvaluators(raw: unknown[]): string | null {
 }
 
 export async function GET(request: Request) {
+  return isStorageCoreEnabled() ? withCoreEvaluatorRoute(request, evaluatorGET) : evaluatorGET(request);
+}
+async function evaluatorGET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const user = (searchParams.get('user') || '').trim();
@@ -80,12 +85,16 @@ export async function GET(request: Request) {
     }
     return NextResponse.json(evaluators);
   } catch (error) {
+    if (getCoreEvaluatorContext()) return coreEvaluatorFailure(error);
     console.error('user-evaluators GET error:', error);
     return NextResponse.json({ error: 'failed to load evaluators' }, { status: 500 });
   }
 }
 
 export async function PUT(request: Request) {
+  return isStorageCoreEnabled() ? withCoreEvaluatorRoute(request, evaluatorPUT) : evaluatorPUT(request);
+}
+async function evaluatorPUT(request: Request) {
   try {
     const body = await request.json();
     const user = String(body.user || '').trim();
@@ -109,7 +118,7 @@ export async function PUT(request: Request) {
 
     await writeUserCustomEvaluators(user, normalized);
     invalidateCustomEvaluatorCache();
-    await syncCustomEvaluatorRegisteredAgents(user, normalized).catch(error => {
+    if (!getCoreEvaluatorContext()) await syncCustomEvaluatorRegisteredAgents(user, normalized).catch(error => {
       console.warn('[user-evaluators] agent registration failed after saving:', error instanceof Error ? error.message : String(error));
     });
 
@@ -123,6 +132,7 @@ export async function PUT(request: Request) {
     return NextResponse.json({ success: true, evaluators: normalized });
   } catch (error) {
     if (error instanceof EvaluatorSkillError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (getCoreEvaluatorContext()) return coreEvaluatorFailure(error);
     console.error('user-evaluators PUT error:', error);
     return NextResponse.json({ error: 'failed to save evaluators' }, { status: 500 });
   }

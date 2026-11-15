@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {withCoreExperiments,requireCoreExperimentContext} from '@/lib/storage-core/experiments'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -39,6 +41,7 @@ export async function GET(
   try {
     const { experimentId } = await params
     const url = new URL(req.url)
+    if(isStorageCoreEnabled())return await withCoreExperiments(req,async()=>NextResponse.json(await getBenchmarkExperimentResult({experimentId,user:requireCoreExperimentContext().actor.username,page:positiveInteger(url.searchParams.get('page'),1,1_000_000),pageSize:positiveInteger(url.searchParams.get('pageSize'),20,100),status:url.searchParams.get('status')||undefined,verdict:url.searchParams.get('verdict')||undefined})))
     const { username } = await resolveUser(req, url.searchParams.get('user'))
     if (!username) {
       throw new BenchmarkProtocolError('USER_REQUIRED', '缺少用户身份', 401)

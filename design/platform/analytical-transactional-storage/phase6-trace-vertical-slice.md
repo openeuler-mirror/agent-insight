@@ -422,3 +422,236 @@ Source capture按真实授权scope冻结来源Trace及准确heads/sections摘要
 3. Next沿原API加core分支/可信存储上下文，共享dataset repository供后台调用；原请求字段验证、readonly、根因缓存与DTO不丢；补传输层ETag并行为测试。
 4. 用新隔离目标备份/升级，运行真实CH来源→Trace草稿→批量回流→Dataset列表/字段/Case编辑→版本冻结→Trace生成/进度/取消/删除；核对旧库零影子写、原页面源码/可见交互及旧模式回归。
 5. 跑全量npm、Python、类型与必要三库合同，保留日志和截图，更新实施状态/中英文指南/字典与日记；本批结果不外推实验/评测/Benchmark完整迁移及千级容量。
+
+
+## 13. 实验、评测结果与 RunPlan 消费者（2026-11-14）
+
+用户已授权继续实施剩余消费者，保留全部原功能和可见界面，沿用独立环境；本节细化既有phase2运行/结果设计，不改变默认库或引入新的评测运行服务。
+
+### 13.1 数据权威与版本
+
+沿用001的runs/run_inputs/work_items/work_attempts/result_receipts/result_selections/outbox，而非跨HTTP模拟Prisma事务或建立可变machine score副本。原Experiment是可编辑业务容器，一次启动、重测或监听追加分别产生新的immutable RunPlan；旧RunPlan、输入release和结果回执保留。稳定外部Experiment/Case/Result ID经控制索引关联内部run/slot/attempt；case正文、分组、配置、进度和结果包均存私有hash制品，OLTP只保存检索键、状态、revision和引用。扩展字段保真；score等分析事实物化到现有CH eval_result_facts/eval_metric_facts/selection/publication表。
+
+010追加八张最小控制索引：experiment_heads（业务容器/当前配置与生命周期）、experiment_runs（多次RunPlan与外部实验关联）、experiment_cases（稳定Case ID/归属/正文引用）、experiment_result_slots（稳定Result ID/当前work与selection）、experiment_attempt_checkpoints（阶段/command/Trace绑定和CAS制品）、experiment_annotations（review/comment不可变审计）、experiment_operation_receipts（精确重试）、experiment_judge_traces（私有评分自身Trace归属）。011另追加diagnosis_runs/diagnosis_judge_traces两张不可变来源和私有自身Trace索引，复用001状态/租约/报告结果。完整三库DDL/catalog/字段约束已补齐核心表字典010–011节，001–009字节不变。物理表计数以实际迁移目录为准，不提前宣称已实现。
+
+创建RunPlan必须在一个领域事务内固定Dataset release、有效FI目录、Case顺序、Agent/Skill/Evaluator定义、运行参数和版本摘要，并建立run归属/输入/槽；不能在异步worker重新按用户名读取可编辑最新定义。执行端只获public输入；reference_output、根因和评分规则仅评分协议可读。自建Evaluator原页面整体列表读写须绑定真实actor与CAS，冻结定义可复用资产release；内置Evaluator由可信服务器目录提供快照，不能按客户端声称赋予系统身份。
+
+### 13.2 执行、结果与取消
+
+Python ExperimentStore提供明确领域动作：create/list/read/runplan/start/claim/renew/load_work/complete/fail/retry/cancel/reconcile/review/comment/remove及必要Case/Trace绑定操作，禁止任意模型/SQL/where透传。read/list返回有界typed snapshot，Next沿原DTO与纯聚合构造响应。领域方法同事务校验当前IAM、资源归属、生命周期、case revision、RunPlan hash、当前Trace attempt及fence；慢制品/CH访问前后重新校验，token不得持久化。
+
+Next抽离原executeResultRow的评分部分为冻结输入执行接口，继续复用evaluateOnce、全部preset、自建Evaluator、重试/超时/cleanup与取消信号。领取/续租/回调用真实attempt/fence；重试新attempt，重评产生新result，原machine结果保留。取消、Case删除、Trace替换和恢复均使旧写入失效，外部client/Benchmark回调也必须携带当前绑定，不能只用同名ID更新。
+
+机器结果包先持久化，再同事务完成receipt、选择、任务终态和Outbox；CH分批写事实/metric/selection并校验数量/hash，确认indexed后才发布完整结果成员。原0..100机器分与兼容0..1视图转换沿原纯函数；missing/failed/inconclusive不得填零或进入错误分母。humanScore修改或清除是独立版本审阅事件，保留原因/作者/时间，评论也是追加审计；重评可清当前人工覆盖但不删历史。
+
+Judge/worker自身Trace可能包含gold prompt，须独立归属/可读范围，不能继承执行端public共享。组管理员读取业务记录不授予gold或他人模型凭据；user参数仅为兼容展示或已验证配置定位。
+
+### 13.3 消费者与实施顺序
+
+1. 先实现010/ExperimentStore及SQLite/PG/openGauss合同：冻结输入、幂等创建、真实租约/fence、取消/重试、receipt、人工审阅、CH重投/发布屏障；旧前缀不变，三库显式迁移保留数据。
+2. 接原实验创建/列表/详情/Case/结果/评论及原执行入口；Dataset调用使用可信上下文且引用冻结release，不让原后台落回Prisma。原DTO构造优先复用detail-agg及comparison纯函数；原评分算法不另写一套。
+3. 扩展对比、Trace生成/外部执行、取消协调、监听/重扫、同配置复测与Benchmark异步回调；原环境准备与命令回收逻辑保留，明确所有未覆盖入口，不能返回伪成功。
+4. 逐项迁移TrajectoryEvalResult的直接运行/追加/重试，以及Evaluation/SkillIssue详情、DiagnosisRun与实验结果引用。TraceEvaluation在当前源码未发现活跃调用，保留在历史语义迁移清单，不因旧表存在新增业务。
+5. 用独立HOME/Prisma壳库/core/CH验证原界面：Dataset→实验→执行→Case/结果→人工分/评论→重评→取消/重启；核对旧表内容指纹、fence/撤权/跨组、同配置和多版本不漂移。全量npm/Python/类型、三库专项与浏览器结果分别报告，保留失败尝试；不外推生产迁移或千级容量。
+
+
+## 14. Benchmark 外部执行、评测与回调接管
+
+本节延续用户批准的完整后端重构。Benchmark仍保留原Adapter、执行器和外部Evaluator服务，以及现有页面、任务契约、输入拆分、产物验证、评分归一化和展示。012仅追加以下五张控制索引；机器分数、metrics和证据结果继续使用001的不可变result receipt/selection与CH事实，不建立第二份可变score。实施前001–011保持字节不变，当前服务不得隐式升级旧目标。
+
+### 14.1 五表与内容权威
+
+| 表 | 逻辑字段（`T`=TEXT，`I`=严格64位整数，`?`=nullable） | 主键、关联和索引 |
+|---|---|---|
+| `benchmark_dataset_heads` | workspace_id T, dataset_id T, public_dataset_id T, public_asset_id T, public_release_id T, private_asset_id T, private_release_id T, adapter_key T, content_hash T, state T, revision I, lifecycle_revision I, created_by T, created_at_ms I, updated_at_ms I | PK(workspace_id,dataset_id)；public Dataset→008，两个release→001 seal，owner→IAM；空间+adapter+state及public Dataset唯一索引 |
+| `benchmark_experiment_bindings` | workspace_id T, experiment_id T, dataset_id T, public_release_id T, private_release_id T, binding_hash T, binding_ref T, actor_principal_id T, created_at_ms I | PK(workspace_id,experiment_id)，实验→010、dataset→012、release→001；只追加绑定，完整selection/config保存在hash制品；dataset/experiment索引 |
+| `benchmark_jobs` | workspace_id T, job_id T, experiment_id T, case_id T, run_id T, work_item_id T, kind T, parent_job_id T?, adapter_key T, evaluator_key T?, attempt_no I, retry_of_job_id T?, origin_credential_id T, origin_credential_kind T, actor_principal_id T, protocol_state T, revision I, request_hash T?, request_ref T?, progress_hash T?, progress_ref T?, completion_hash T?, completion_ref T?, callback_epoch I, callback_token_hash T?, callback_expires_ms I?, callback_attempt_id T?, callback_fence I?, created_at_ms I, updated_at_ms I | PK(workspace_id,job_id)；实验/Case→010，run/work/attempt→001，parent/retry→同空间同Case相关job；execute/evaluate协议stage与指纹在此，通用任务状态/租约/fence仍001。按空间+实验+Case+kind+创建时间、协议状态+更新时间、父job+attempt_no索引；不得跨空间/实验绑定 |
+| `benchmark_artifacts` | workspace_id T, job_id T, artifact_id T, name T, kind T, media_type T, content_hash T, size_bytes I, storage_hash T, storage_ref T, contract_hash T, created_at_ms I | PK(workspace_id,artifact_id)，UK(workspace_id,job_id,name)，job→012；制品hash/ref只在私有领域读取，不作为公开路径；job/name与content hash索引 |
+| `benchmark_operation_receipts` | workspace_id T, actor_principal_id T, operation_kind T, operation_key T, request_hash T, experiment_id T?, dataset_id T?, job_id T?, response_hash T, response_ref T, created_at_ms I | PK(workspace_id,actor_principal_id,operation_kind,operation_key)；三个subject恰有一个且FK在同空间；精确提交结果只追加、先实时认证/授权再回放，不重新冻结最新资产 |
+
+上述逻辑字段在实施时由012 DDL与机器目录逐列校对，SQLite逐列`typeof(integer)`、PG/openGauss BIGINT。hash限定64小写十六进制；revision/fence为1..2^63−1且更新严格单调，时间非负且updated不早于created，hash/ref成对可空。全身份字段、封存输入/contract、结果receipt与artifact只追加；直接SQL同样受CHECK/FK/trigger限制。可变job仅修改允许的协议stage/进度/终态及受fence保护的callback能力指针；不得借JSON任意改变数据归属。
+
+Public Dataset release只含原公共Case投影；原rawCase/privatePayload作为单独`benchmark`资产release封存。通用Dataset/API不暴露该私有manifest。启动固定两个release、Case顺序、adapter/manifest版本摘要、Agent参数定义/目标profile、所有evaluator定义以及selection；执行器只得到公开payload和允许的提交物合同。外部Evaluator可取得自己job所需的私有输入，不能读取其他job的产物或任意资产。
+
+### 14.2 领域动作与原子边界
+
+私有服务只提供明确动作，不传Prisma模型、SQL或任意where：`dataset_import/read/list`、`create/read/read_view`、`start`、`claim/load_work/renew/checkpoint`、`artifact_put/read`、`execution_complete`、`evaluation_prepare/dispatch_checkpoint/complete/normalize_commit`、`retry_case/retry_evaluation`、`cancel/reconcile`以及`continuation_claim/finish`。原Adapter的validate/split/build/normalize仍在Next可信运行时执行；提交内容和原算法输出通过有界hash制品交接，Python在领域事务中验证来源/IAM/版本/工作项/attempt/fence/合同及结果选择。
+
+- Dataset公共与私有release、head与幂等receipt同事务提交。
+- 实验容器、稳定Case与冻结binding同事务创建；启动时RunPlan、待执行job与结果槽同事务创建。不能先建旧Experiment再分库补写Benchmark记录。
+- 每次实际执行/重评都绑定独立不可变RunPlan和真实输入release。外部job与001工作项绑定，dispatch Outbox先持久后传输；响应丢失按固定job/request digest对账，不再运行Agent。
+- 外部任务被接收后，callback能力与外部attempt保持稳定；重启恢复既有dispatch，而不是仅因Node的短租约消失就生成新外部执行。任务超出封存hard deadline才失效，须核查/取消原进程，再显式新attempt。
+- 接受执行completion后只进入submitted；产物合同与digest核对通过后构建Evaluator job。raw completion先存不可变制品；归一化失败可重试保存同一raw结果，不能重跑Agent或悄悄改raw completion。
+- `normalize_commit`同事务写machine receipt、selection、job终态、CH Outbox及continuation意图；旧结果保留。补充评估器仍调用已有冻结Experiment scorer，只有真实Trace indexed后才能交接。
+- imported submission保留原入口语义：跳过Agent执行，固定原提交物/合同后直接评测；不伪造execution Trace。
+- 取消/删除立即推进实验/Case生命周期屏障。外部进程未确实退出继续显示pending，旧callback即使晚到也不能覆盖新attempt或重新发布结果。Case/结果retry CAS绑定明确上一job/attempt，旧human review历史保留。
+
+### 14.2.1 明确失败的无分数结果与分类器
+
+启动在同一RunPlan下为每个Case预建唯一primary评分工作（`phase=publish`、实际evaluator slot、queued），并绑定稳定result slot；该工作等待执行提交，不能被普通评分器领取。正常`evaluation_prepare`复用这项工作，不另建同Case/slot评分工作。transport执行工作仍使用`__execution__`，不写伪造评分；publication等所有工作确实终态，成员只包含真实评分工作。
+
+平台可确定的失败分四类：execution（有效设备completion明确failed且cleanup成功）、submission（可信冻结Adapter拒绝已封存提交物）、dispatch（首次派发得到可信、明确未启动的拒绝）、preparation（尚无sealed dispatch/outbox即可确定未启动）。`dispatch_unknown`、网络错误、超时和未确认清理不得当作确定失败，更不得产生0分或伪造Harness/模型完成。
+
+每个失败job仅有一条独立、不可变的012 operation receipt：kind=`failure-source`、key=`source:<job_id>`、subject=job，response制品format=`benchmark.failure-source/v1`。制品包含ws/experiment/run/case/job身份、失败stage、request/completion hash、必要的已验证transport/设备证据摘要、failureCode及明确的not_started/cleanup判据；不含callback cap、原API明文或机器分数。当前job终态和制品内容必须一致。receipt hash为`failure_source_hash`；progress可以展示诊断，但不作为可变权威覆盖此receipt。
+
+`classify_failure`是私有controller-proof动作，输入仅job/source hash与幂等键，不接受任意score/normalized body。实际平台分类器领取这项primary工作，建立真实worker=`benchmark-failure-classifier`的attempt/fence/checkpoint；检查当前Case/RunPlan、source ACL/origin、唯一primary slot、work/fence及冻结membership后生成不可变`status=failed, score=null`机器结果。evidence明确标注execution/submission/dispatch/preparation来源及failure source hash，明确评分Harness/评测模型未运行；不增加外部Harness运行次数。已有相同source的选定失败结果精确重放，其他选择/新attempt绝不能被旧分类覆盖。
+
+分类、selection、slot终态、标准CH result Outbox和failure intent收敛同事务提交。标准事件使用`benchmark_failure_job_id`与`benchmark_failure_source_hash`，gate另验该job的Exp/Run/Case、不可变失败源以及receipt真实classifier attempt→primary work/slot；正常external评分继续使用`benchmark_job_id`并严格等于callback attempt。新增明确恢复意向`benchmark.failure.classification.requested.v1`，与dispatch/execution-completed/raw-normalization一样可在owner+proof范围恢复；未知transport只退避/对账，不进入分类。
+
+### 14.2.2 补充评分与可恢复交接
+
+primary normalize提交后，只有存在已冻结非benchmark评估器才保留continuation intent。原actor后台以当前可信token处理`finish_intent(operation=prepare_continuation)`：先从对应execute completion读取Trace身份，在写事务外读取真实TraceEvidence；事务内重验origin credential、当前primary receipt/selection、Case/parent生命周期、源资产和indexed屏障。Trace override只进入独立child RunPlan的Case快照，不修改稳定Case行或primary输入。config/releases/model/评估器定义全部复制父plan，公开body不能提供覆盖；真实Trace body按当前indexed内容一次封存。
+
+child评分使用010原生evaluate工作、真实attempt/fence以及原generic scorer，primary slot/receipt保留在原run。`trusted_parent`仅对`head.scope=benchmark`、存在exact binding、slot=`benchmark`（或经真实parent核验的`benchmark:origin:<job_id>`）且release恰等于binding.private_release_id时，复用公共Dataset映射授权；普通start和任意其他私有release仍要求原asset权限。child创建与continuation receipt、intent终态同事务，精确重投不会创建第二代child。未indexed/权限失效保持有限退避；执行completion明确无Trace时，独立child工作由`benchmark-source-classifier`真实claim/checkpoint/complete failed-null，标注未运行评测模型，不伪造Trace。source_classification记录job/completion hash/primary result。child的`benchmark:origin:<job_id>`输入marker在通用claim/load/renew/complete和投影前以纯SQL验证原credential live scope和run权限；不必等待到模型执行后才拒绝撤权。
+
+运行时Legacy client路由使用Node从可信actor.username生成并封存的`run_config.legacyOwner`；公开同名字段被覆盖。callback若有实际device owner须与该字段一致；缺失旧多Case映射返回503，不猜IAM登录名。IAMA权限始终使用principal/origin credential/source/fence，username只用于既有transport client归属查找。
+
+### 14.2.3 受控历史提交物导入
+
+保留已存在的历史imported语义，提供内部typed helper，不新增页面或公开上传入口。可信Node创建Draft时由内部参数封存`submissionSource=imported`，跳过不存在的Agent client/profile和buildAgentTask预检；普通create不接受公开source覆盖。Draft的公共Dataset、私有gold和evaluator定义仍按原规则冻结。
+
+`import_submissions`只允许原owner、controller proof、未启动Draft及确切imported binding；先查独立012幂等receipt，再校验同键内容。一个领域事务创建完整RunPlan、每Case真实import-worker attempt/checkpoint、合同校验的不可变制品和submitted completion及evaluation intent。真实工作是提交物导入，不声称Agent执行，不派发外部command，不创建callback cap，不生成Trace。任一Case/bytes/hash/合同不合法时事务整体回滚，不留半job；Draft容器仍是可审核的独立操作。每artifact≤64MiB、整个请求≤128MiB、≤10000Case；允许合同合法空文件和安全Unicode相对路径，私有对象引用不对外暴露文件路径。
+
+随后沿已验证的真实Adapter验证、外部Evaluator dispatch、raw/normalize、receipt/selection及CH投影链恢复。原DTO标明imported；普通Agent启动/配置复用拒绝，重评仍需专用新job/RunPlan及清理约束，不能走普通Agent retry。
+
+### 14.2.4 专用重评、重跑与取消协议
+
+手工重评以当前真实owner及read/write/execute授权建立新origin；历史session过期不阻止当前授权用户复用其合法历史提交，旧callback的原origin仍必须有效。`prepare_evaluation_retry`仅controller-proof读取当前primary slot选定机器receipt、最新evaluation及原提交物；`retry_evaluation`按旧job+machine ID CAS，实际旧exec/eval均须确认cleanup，创建独立的单Case/primary评分RunPlan、新job ID与attempt_no/retry_of_job_id，复用同一原execute parent。012 parent关联允许跨run，但新plan记录精确来源。新计划只复制父冻结release/定义/model，不重冻latest；旧receipt/selection/human review全部保留。重评attempt>1按原规则不重跑补充评估器。普通generic plan mutation继续拒绝，不能借重评接口覆盖任意score。
+
+Case重跑同样CAS旧execute job与当前primary机器选择；imported禁止Agent重跑，Case尚有active work/continuation或未知清理时拒绝。确认收尾后复制父冻结plan，仅为该Case创建新execute job、primary work和RunPlan；其他Case可以继续，并发仍由真实claim预算约束。重复相同操作键只回放原receipt，两个并发不同操作只能一个赢得旧来源CAS。
+
+Node专用Case重跑消费者先精确查操作回执，再读取旧job/机器选择并CAS，公开请求不提供config、model或release覆盖。新job在启动事务即持久化`benchmark.execution.prepare.requested.v1`。并发或外部评测预算满时保持pending；独立后台可在额度释放后直接领取新RunPlan，无须依赖旧run的callback补队列。仅无sealed request的纯准备允许租约到期后提升fence重新领取；已sealed/dispatch_unknown任务只恢复相同外部身份，不另起attempt。已取消但尚未取得exact cleanup receipt的Agent或外部Harness继续占相应并发/预算；原生补评使用独立scorer调度与native cleanup证明。
+
+取消/删除仅需当前真实delete权限，不借execute读取gold。`cancel_request`原子封存真实外部目标、原run/client/kind/requestDigest，写010 cancellation注解、012 receipt和durable intent，并推进实验/Case生命周期、cancel_requested和fence，普通callback立即失效。未派发（没有能力/外部请求）、import step或已有不可变cleanup成功可确认无外部残留；dispatch_unknown等均pending。
+
+独立`cleanup_confirm`只处理该已封存目标。Node必须先持久绑定真实取消command ID再派发；设备command需核对user/client/action/payload原kind/runId/requestDigest及真实返回cancelled，不能仅凭SUCCEEDED。Evaluator仅向封存目标发原requestDigest取消并核对真实返回runId/cancelled。controller签精确有限证明，领域追加独立取消target receipt和cancellation_update，不覆盖旧completion、不写分数或产物。删除barrier后仍可用当前取消actor的有效delete授权写同目标清理收据，旧cap不能通过normal complete复活。admin路径仅取最小冻结target及可信legacyOwner，不读取私有Case/gold。未知退出保持pending；retry只认已确认清理。
+
+### 14.3 回调能力与实时IAM
+
+源码基线的execution callback已有device认证，但Evaluator progress/complete/artifact仅按evaluationId定位。core模式必须补足可信回调；公开`requestDigest`是内容摘要，不能充当秘密。为保持原外部服务协议，新增可选`callbackHeaders`，legacy请求可省略；core派发必须带job专用的不可猜callback能力，并由真实Evaluator HTTP client在progress、artifact、complete和提交物下载时回传。
+
+能力以独立用途域绑定workspace/job/真实attempt/fence/epoch/hard expiry及request hash。数据库仅保存能力hash、epoch/expiry/attempt/fence；明文只进入私有dispatch envelope，不进入公开RunPlan、原DTO、错误或日志。为重启恢复，可用现0600控制器密钥分隔用途派生可恢复能力；原API令牌明文不能写入job或Outbox。即使能力正确，回调仍需验证当初真实origin credential是否存在、未撤销、未过期、principal auth_version未变、组成员/空间仍有效，并检查当前实验/Case/RunPlan生命周期和attempt fence。
+
+IAM只做内部窄factor：按已登记credential ID读取同一credential row后，复用原认证与scope构建/资源授权代码；只有已成功验证callback能力的Benchmark领域才能调用。不得增加credential-ID换scope公开入口，不复制一套较宽松的回调权限。只读凭据、删除/停用/退组或过期凭据不能通过后台回调写结果；重入组不会让旧凭据复活。
+
+### 14.4 制品兼容修正与当前验证边界
+
+012 checksum已冻结。013只放宽`benchmark_artifacts.size_bytes`到0..67108864，以继续保存原Evaluator允许的空stdout等0字节证据；提交是否有效仍由冻结Adapter合同/validateSubmission判断。SQLite在同一迁移事务内完整复制行、更换CHECK并重建同名索引与不可变/保留trigger；PG/openGauss只替换目标CHECK。不得直接修改已应用012的checksum，也不删除历史制品。Unicode相对证据路径保留原安全规则：最长512字符、最多16级、各段1..128字符，禁用`.`/`..`、控制字符、双向控制、路径特殊字符和段尾点/空格。
+
+SQLite、真实PostgreSQL与native openGauss的Benchmark专项各覆盖78项领域测试及3项取消身份测试；PG/openGauss按77项主矩阵和4项补充矩阵分批验证，全部使用随机隔离schema；另有Root投影来源门测试。包含012→013历史所有表逐行不变、原artifact update/delete保护、空证据、credential撤销/过期/账户停用/auth_version/成员/空间、source ACL、真实attempt/fence、失败null分类、导入原子回滚、child来源marker及共享publicDataset不直接授予private gold权限。Node实际HTTP以隔离SQLite运行原device轮询/回调与真实Evaluator服务/HTTP client，验证普通提交75分、raw提交后归一化中断恢复且Harness仍仅1次、无client/command的imported提交75分，以及缺Trace时supplemental真实failed/null。最新Node专项15项包含7个真实HTTP场景，另覆盖手工primary重评（同一Agent、两次Harness）、Case重跑（两个独立Agent命令、两次Harness）、delete-only取消（旧能力立即失效、真实设备取消回执后收敛）；预算未知清理与独立准备恢复同时在三库验证。使用fixture提交和Harness，不声称实际Agent/模型或正式benchmark质量。
+
+独立实际ClickHouse数据库分别验证：成功/明确失败混合四表为result=2、metric=5、selection=2、publication=2（失败score为missing而非0）；真实ObservationIngest到CH indexed TraceEvidence→独立supplemental RunPlan→fixture scorer结果两组receipt四表均为2，稳定Case.trace_id保持原值；imported四表均为1。每组均正常排空对应Outbox并读回，不手改历史事件。原公共DTO、聚合、过滤与下载复用原算法，未修改页面JSX。
+
+专用Case/primary结果retry及取消/删除的外部清理对账现有typed实现；原生补评cleanup按实际worker身份核验，无法确认退出时保持pending。dataset admin生命周期、image preparation窗口及尚未接入的其他旧入口仍明确guard；generic start/execute_start/retry不能绕过Benchmark领域。早期未预建primary work或已sent而无publication的隔离历史需要单独受控backfill，不静默重置事件。生产切换、客户环境、千级并发容量和用户原库迁移不在本次fixture验证声明内。
+
+### 14.5 可验证分块与完成门槛
+
+1. 先TDD实现012三库DDL/catalog、Dataset双release、五表约束、精确receipt、live IAM callback验证；保存001–011前缀指纹，并在隔离11→12迁移验证旧表/行/制品不变。
+2. 接原Benchmark数据集导入/准备、create/read/list/same-config与原DTO；正常失败必须可见，不能读空列表或回旧库掩盖未接通。
+3. 接真实client命令与环境prepare、dispatch outbox恢复、progress/提交物/complete；原执行器/adapter路径、产物名/大小/hash/完整性规则不变。
+4. 接外部Evaluator实际HTTP派发与带能力的回调、真实raw结果归一化、失败/重评/continuation和取消。验证请求丢失/重复/乱序、两个并发retry、改source/release、旧callback、撤权/过期/跨job、存储故障均不能错误发布。
+5. 真实隔离SQLite+CH+原执行器/本地Evaluator fixture闭环、PG/openGauss域合同、原UI页面/DTO golden及应用全量测试分别取证；Mock判分不冒充真实模型质量/正式benchmark成绩。旧数据库只读备份保留；生产迁移、客户环境和千级混合容量仍须独立证明。
+
+
+## 15. Workbench / Grayscale 实验消费者与跨库交接
+
+本批保持原Workbench、触发分析、A/B和候选复测入口、DTO及可见界面。Task/Grayscale/Skill配置暂作为独立事务领域保留原控制存储，不把旧Task存在误写成全部事务领域已支持新后端；Experiment/Case/机器结果和RunPlan必须走010及001，禁止再影子写旧Experiment、ExperimentCase、ExperimentEvalResult或TrajectoryEvalResult。Task.caseStatesJson仅为带来源版本/receipt的兼容进度投影，机器分数以当前core selection为准。
+
+### 15.1 授权与读取
+
+所有HTTP入口先取得真实IAM映射作用域，再组合Dataset/Evaluator/Experiment仓储。请求中的user只用于兼容DTO并由已验证actor归一；后台不能用username替代凭据。旧Skill/模型配置owner别名与IAM profile username分离，透过受信上下文传递，不能篡改profile。core错误明确返回，不回退旧业务表。
+
+实验列表、基线、执行进度、验证证据和灰度结果从完整且有覆盖声明的core只读投影复用原聚合。确需Task、客户端命令等独立控制域时显式读取其真实存储，缺失来源不能伪为空数组。A/B旧Task上的分数不直接当作当前机器分；需核对其Case、Trace、当前选择/版本后重建兼容投影。人工分和机器分、0和null、未完成与未计分沿用原合同。
+
+### 15.2 创建与恢复的原子边界
+
+不把跨库HTTP调用包装为Prisma事务。新建时服务器按真实workspace/principal、请求路径和operation key生成稳定Task/Experiment ID，先将prepared handoff intent同Task本域状态持久化，再发送typed core create并取得精确receipt，最后用Task本域CAS将intent改为ready。失败保留prepared状态；只恢复原封存请求，不读取或重冻最新Dataset/Skill/Evaluator，也不删除可能已真正创建或启动的实验。
+
+intent保存原请求hash、稳定ID、已冻结Experiment输入和原Task执行配置，受64MiB实际UTF-8预算约束，不包含API凭据。原Task配置可被旧API编辑，因此不能把JSON自称trusted当作权威：以0600 controller key、独立目的`workbench-handoff/v1`、真实principal/workspace和精确manifest请求体hash签HMAC；恢复必须验证签名、actor及实时IAM。prepared阶段若当前Task执行配置已不同，拒绝自动覆盖。phase标签本身不授予权限，公开HTTP提交的伪造intent/proof无效。配置密钥轮换需先处理仍prepared的intent，不能把旧签名失效描述为已恢复。
+
+重启恢复按签名intent重投相同operation key与原请求hash，不持有或写入原API明文。重复请求和响应丢失返回既有Experiment/Task关联；请求内容变化拒绝409。Workbench会话任务/优化记录的后置关联在自身领域单独CAS及幂等恢复，不能回滚已提交的新core资源。
+
+### 15.3 执行、评分与扩展边界
+
+客户端执行沿用原generateExperimentTraces及可信core work handle，在对外发命令前保存稳定命令/attempt身份；业务Trace必须真实完成且indexed后交给封存评估器。触发分析使用服务器已核对的客户端trigger decision与原evaluateSkillTriggerAnalysis算法，不能以未调用Skill的裸Trace猜测或直接覆盖机器结果。批量追加/重试以typed domain操作完成；旧Task执行claim与新的RunPlan lease/fence分别负责本域，不冒充一个分布式锁。
+
+本地A/B与非诊断候选复测复用原runGeneralAgent、模型/系统提示/工具处理及超时算法，在外部执行前持久化`local:<真实attemptId>`。trusted publicExecution recorder把真实业务Trace写入新观测存储，旧fallback Execution影子写在core模式关闭。进程组退出检查未确认时必须返回`EVALUATION_CLEANUP_UNCONFIRMED`，不能仅凭Promise拒绝或已发SIGTERM确认停止。当前本机registry按workspace/principal/attempt定位实际controller和cleanup completion；跨实例、重启后未知目标保持pending，不猜测已停止。完成回执传输丢失按精确操作键查询/有限重投，不重跑Agent，也不补记Agent失败。单独的静态Evaluation/Skill快照控制域仍保留原存储，未宣称全部事务领域已迁移。
+
+真实core自身Trace、selection、取消和恢复仍需对应实测。仅客户端Mock、MemoryFacts或focused测试不替代实际ClickHouse、模型/客户端及浏览器验收；千级混合并发和超大Trace容量另做负载验证。
+
+### 15.4 派生 Issue 的解决注解（014）
+
+新增事务表 `experiment_derived_issue_annotations`，只追加，不修改010派生Issue或001机器receipt的内容。字段为：`workspace_id TEXT`、`annotation_id TEXT`、`experiment_id TEXT`、`issue_id TEXT`、`machine_result_id TEXT`、`owner_principal_id TEXT`、`actor_principal_id TEXT`、`resolved_run_id TEXT`、`resolved_at_ms BIGINT`、`operation_kind TEXT`（固定`derived_issue_resolve`）、`operation_key TEXT`、`request_hash TEXT`、`issue_payload_hash TEXT`、`machine_content_hash TEXT`、`selection_revision BIGINT`，均非空。SQLite时间/版本为有界整数，PG/openGauss为BIGINT；hash为64位小写十六进制，时间非负、selection版本大于0。
+
+主键`(workspace_id,annotation_id)`；唯一约束`(workspace_id,actor_principal_id,operation_key,issue_id)`及`(workspace_id,issue_id)`（保证并发首个解决生效）；索引`(workspace_id,issue_id,resolved_at_ms,annotation_id)`。外键分别关联010原Issue注解`(workspace_id,experiment_id,issue_id)`、001机器receipt`(workspace_id,machine_result_id)`、IAM owner/actor及010精确操作回执`(workspace_id,actor_principal_id,operation_kind,operation_key)`。三库触发器均禁止UPDATE/DELETE。001–013不改字节，迁移仅创建新表、索引和触发器；已有业务行保持不动，服务先停写、显式upgrade至014再启动。
+
+`derived_issue_resolve`要求真实actor为原实验owner，并取得私有controller对精确请求的证明。一次有界批量在同一事务存储中原子写入操作回执及注解，校验每个Issue真实存在、原machine/hash/来源RunPlan一致、来源Trace仍可访问，首次写入必须仍为当前selection且Case有效；未知ID明确404、来源或selection变化409、他人/管理员代写403。已解决Issue保持第一次解决记录，不用不同run覆盖。精确重放先按actor/key/request hash查回执，再对其每个历史Issue和原来源重新授权；不把后续新generation的结果当成本次回执。返回已解决ID及本次新增数量。
+
+读取仅在derived_list、derived_lookup、derived_detail的兼容DTO上叠加`resolvedAt/resolvedRunId`，原machine payload/hash永久不改。后续撤权、来源删除与历史选择规则沿用010。旧静态SkillIssue仍在原控制域更新；Workbench计划状态和core解决注解各自在所属库提交，跨库失败保留精确操作键供恢复，禁止把HTTP放进Prisma事务或宣称跨库原子性。
+
+
+### 15.5 验证证据、归档与派生投影
+
+普通`GET /api/experiments`及`eval-runs`、`eval-results`使用独立typed `list_view`读取实验头、实际Case标识/数量/创建时间、合法来源taskId/executionId、当前结果状态/更新时间/错误、机器分/人工分（保留0）和FI失败判定字段。`eval-results`按原runId/taskId在服务端先圈定实验，避免加载其他历史。禁止装载或拼接冻结Session、Execution、Trace正文、评论及执行checkpoint；不声明这些来源的完整覆盖，仅开放Experiment/Case/Result三个列表模型，调用未覆盖字段或模型必须失败。合法来源按原列表算法生成同样DTO，仍保留归档过滤、真实owner/IAM、分页total与评分/FI终态规则。
+
+读取每个实验的封存RunPlan仅用于必要来源ACL/生命周期校验，不遍历或返回其Session内容；来源已撤权、删除或epoch变化时，该实验保留允许的头信息、Case数量和结果状态，隐藏机器分/人工分，不加载其Case/结果私有内容。单个不可用来源不得阻断其他实验列表，详情继续按原source guard拒绝。响应前重新校验IAM与来源；读期间来源失效时同样降级metadata，不能把旧私有结果发出。所有行/字节预算显式限制，异常或损坏的存储内容不能伪装为空集合。
+
+选中机器receipt为quarantined时，不加载其packet及人工review，列表结果投影为failed、分数为空；合法来源仅返回固定“机器结果暂不可用”，来源不可访问时错误、taskId/executionId也隐藏。普通详情明确503，不把隔离的机器事实当作成功结果；accepted/indexed正常即时可见的语义不变。
+
+RunPlan来源授权同时覆盖Trace和001 `run_inputs`封存资产向量。每次读取、claim、活动attempt的renew/load/complete、派生Issue/Evaluation读取与解决、诊断来源读取及CH投影，均通过已有seal/asset身份实时检查原Dataset/Evaluator等asset的read授权；存在Dataset兼容头时同时要求active。检查只读取小型关系向量，不把完整RunPlan解析加入renew；新的release、alias或内容版本不使合法历史失效，builtin/旧配置没有run_inputs时不凭空要求资产或最新catalog。Benchmark私有gold slot只允许严格匹配同一binding的private release，并通过其同样封存的public Dataset release/asset授权；不得把其他私有Benchmark资产借用此映射。列表来源失效降级metadata，私有详情/评测/投影拒绝，不能从其他入口绕过Benchmark本域的source guard。
+
+Case结果的内部`coreResult`包含真实selected machine ID、content hash、RunPlan ID/hash和evaluation version；未选中为null，原公开DTO默认不增加该内部字段。原Task JSON只保留执行身份/进度兼容层，列表、基线、进度与Task读取均从当前core Case和selected receipt重建分数。新执行claim尚未取得actual attempt、过期attempt、待重评及未计分不会继续展示旧缓存分数；仍使用原0–100量纲、逐评估器取整及均分/tier规则。
+
+候选行为验证沿用原样例筛选、基线复用、判分及预算算法。临时验证实验通过typed core create/Case/RunPlan完成，验证proof绑定真实source/candidate、样例hash、当前机器RowsHash与candidate hash，并以私有`workbench-verification/v1` controller目的和真实actor/workspace签名；公开编辑config不能伪造优化通过。机器selection变化或来源撤权/删除即失效，人工分与机器分继续分离。
+
+原临时验证实验的清理是派生可见性归档：在所属OptimizationRecord的`verification-cleanup` source refs以CAS保存ID，不删除core事实/历史，也不推进来源撤权屏障。Workbench列表与普通全局实验列表都过滤同一归档集合；签名和机器来源仍合法时可复用证据。用户真正删除实验/来源则走core生命周期协议，归档记录不能复活或绕过删除。后置WorkbenchTask/OptimizationRecord关联把原前置条件封存在handoff，重复创建可补齐关联，已经链接过的旧请求不能覆盖后来选择的新source。
+
+Workbench执行、候选验证及非诊断复测按`coreAssets.releases`精确读取封存Dataset release，不通过latest解析输入或gold；历史版本读取不写入编辑态Dataset context缓存。不存在封存release、来源撤权或回执身份不符时明确失败，不回退旧库或最新版。独立grayscale任务显式启动新轮时可先读取当前版本并封存本轮，Workbench既有实验与同配置克隆保持来源release。
+
+取消历史仍保留原公开DTO。内部`coreActiveCancellationIds`仅标明当前RunPlan的全局取消及持续有效的Case逻辑删除；消费者只用活动集合判断可执行性和派生Task状态，旧服务缺该字段时保守保持全部活动。删除尚未物化的Dataset样例时按真实计划剩余样例判定父实验状态，不把“物理Case为零”当作整轮已取消。
+
+实验详情对非owner仍隐藏Session正文与评测gold。domain仅从已经重验来源ACL的真实封存业务Session计算内部readiness标量（非空interactions、业务回复、结束时间、真实agent），按当前Case的executionId/taskId精确关联，历史其他来源不能替代。ReadView以不可枚举的可信元数据传给原详情聚合，保持原Trace就绪规则及0分；不得伪造Session内容或仅凭机器分/ready状态判成功。非owner的Workbench进度仅从已授权Case/Result快照投影，不读取owner私有Task/runtime，不借用owner身份；owner读取自己的旧控制域配置时使用真实actor的兼容username。legacy详情算法不变，内部标量不加入公开DTO。
+
+一般用例/触发实验沿旧points归因、建议、severity/category/dedup规则，在machine receipt提交前纯转换为`experimentSkillDerived`（version=1，原points、一个Evaluation和有界Issue集合）；禁止在plan/列表读取时补造或同步旧动态表。RunPlan通过既有controller证明封存`experiment_skill_scope`的精确Skill ID/name/version/preset/scope/source，包含于原`derived_skill_ids/versions`向量。内核核对envelope原points与本次machine points一致，重算归因Issue字段和稳定attempt/slot/point ID，不接受任意DTO；与directTrajectoryDerived互斥，不放松direct的真实Trace要求。有封存Trace时executionId必须匹配原根Execution；只有此已证明的新envelope支持纯输入评测的null executionId。输入型派生详情execution/trace_evidence为null，仍校验原machine receipt、selection、owner及资产ACL，不查旧Trace凑来源。
+
+原优化点GET及plan POST建立真实actor上下文，动态/触发Issue只读typed当前selection，静态/反馈仍读原控制域，保留去重、prevalence、解决过滤及DTO。旧同步函数在core仅为无写入兼容入口，不回填Evaluation/SkillIssue。FI collect回调仅提交FI控制域事实；core Case绑定与ready由实际attempt worker独立读取新TraceEvidence后执行精确complete，回调不冒充IAM身份、不读取旧Session/Execution、不回填同fiRunId的历史旧Case。
+
+触发问题沿旧替代语义增加只读`derived_trigger_frontier`：仅真实owner的同Skill/version、已证明trigger scope且全部槽位已终止的实验可参与，依据当前selected machine receipt实际完成时间选择最新实验；同毫秒以稳定实验ID定序。成功但零Issue的新触发结果仍推进空前沿。返回真实Evaluation IDs及完成时间，查询前后重验IAM、来源、实验生命周期/当前计划与selection；不加载旧动态表，不写resolve，不推测模型最新内容。默认未解决聚合仅显示该前沿的触发问题；`includeResolved`历史视图保留原实际解决字段，不把只读替代伪装成014人工解决事件。
+
+可见公开Skill保留原评测能力。只有真实查询到的公开Skill且精确匹配`experiment_skill_scope` ID/name/version/source/preset/scope时，controller可为一个`derived_public_business_skill_id`授予已签名的business-only例外；同ID版本向量只能含该精确版本，其他ID仍限owner/global原域。内核明确禁止direct envelope使用此public-only ID，不能借business标记扩大direct/general授权；静态公开读取仍按原Skill控制域权限。
+
+版本分析两个既有GET建立真实Experiment actor作用域，复用原root/版本标签/问题/时间窗口/均分/p95算法。core只读新Observe/Tag与typed list_view当前selection，人工0分保留；legacy仍走原表。兼容Observe列表默认不改DTO，仅私有includeCoreIdentity请求可返回已授权记录的canonical Trace ID；公开Observe代理不转发该参数，版本DTO也不返回内部身份。真实principal对应的canonical owner筛选标签、Trace和实验结果，避免管理员或legacy兼容username混入他人数据。结果读取后重验Trace可见集合，来源删除/撤权不沿用旧行；无旧Tag/Execution/Session/ExperimentResult影子读取。
+
+
+### 15.6 诊断优化部署的来源读取
+
+原部署预检、确认和状态路由保留DTO及客户端命令协议；core分支建立真实Experiment actor上下文，忽略客户端user声明。正式Skill版本、优化记录、客户端注册与部署命令保持原控制域。优化记录中的Diagnosis引用只从新DiagnosisRun读取来源execution_id，不回查旧DiagnosisRun；显式Trace引用和诊断来源均通过TraceEvidence实时授权与完整性校验。
+
+部署来源必须归当前principal所有，组内读取权限不授予向他人客户端部署的权力。目标clientId、framework与Skill实际origin从新库冻结来源读取；非JiuwenSwarm要求同client/platform的唯一opaque origin_ref，只由客户端本机注册表解析路径，displayPath仅显示。未知/矛盾/缺失origin明确422，不查旧Execution/ExecutionSkill补来源、不猜全局路径。JiuwenSwarm保留原框架全局目标与唯一在线客户端规则。预检前后、持久化enqueue之前及WSS dispatch之前再次读取来源并核对固定manifest/目标。enqueue前失效不建部署命令；enqueue后、WSS派发前发现变化时，将已知queued命令标记DELIVERY_FAILED及部署失败，失败/取消的artifact不能继续领取。持久化enqueue本身已经对设备poll可见，是授权提交边界；不能将跨库检查描述为已经在途或已领取命令的原子回收。
+
+原预检/确认/状态handler在独立HOME/Prisma SQLite与真实core HTTP/CH验证：同key不增命令，3个PRECHECK及1个DEPLOY经真实设备poll/制品接口/状态回执到SUCCEEDED，状态保留5个事件；缺origin422、跨owner403、预检时来源变化409均未创建部署命令。9张旧动态表行数仍为零，隔离库integrity正常。设备传输及安装回执为模拟夹具，没有在用户机器执行真实Skill安装。证据为本批`acceptance/deployment-native-report.json`。
+
+
+### 15.7 原 Trace 流程分析消费者接入
+
+范围为既有`/api/observe/executions/:executionId/analyze-match`的GET/POST、`flow-parser`及`alignment-attribution`，不新建浏览器API或界面。原匹配/分批抽步骤/合并/Skill span/归因候选/评分聚合/fallback算法保留；存储接线不能顺带调整这些业务规则。静态Skill、版本、ParsedFlow留在原配置控制域。旧Execution、Session、ExecutionMatch、TrajectoryEvalResult及动态Evaluation/SkillIssue在core模式不读写。006报告kind只允许agent-debug/skills-analysis，不将流程匹配伪装为这两种报告，也不修改冻结DDL。
+
+内部容器使用明确`scope=trace-flow-analysis`的真实Experiment/Case/RunPlan与受控internal flow evaluator，不注册为用户评估器。每个原POST请求以真实workspace/principal、canonical Trace及operation key生成稳定资源ID，先按精确身份恢复既有容器，再读取最新资产准备新容器；首次create在本域原子保存完整冻结manifest及精确请求回执。这样相同请求中断后不能因模型、Skill或ParsedFlow已更新而改用新版。不同请求生成独立历史，旧单行ExecutionMatch的“最后完成结果”由内部机器selection派生，不用可编辑JSON冒充缓存事实。已有RunPlan lease/fence/checkpoint与receipt delivery恢复机制负责执行和丢回执，不引入跨库事务。
+
+POST先建立真实actor上下文并解析已授权TraceEvidence，不能相信body.user。冻结实际canonical Trace、snapshot hash/route incarnation、真实业务interactions/根Execution；按原rootSkill提取、实际版本及缺失版本fallback规则解析当前actor可读的Skill/版本，冻结内容及hash、ParsedFlow/mermaid及hash、mode、原精确请求和脱敏模型选择。模型密钥只在实际attempt运行时按封存连接指纹解析，不入manifest。Trace/已注册资产由内核沿既有source/asset live ACL与epoch校验准备、claim、load、renew、complete及读取；仍在旧控制域的静态Skill范围由Node在执行、恢复和读取入口实际复核，不能声称Python已经访问该配置库。再分析读取新证据，历史计划仍指向原证据。
+
+`flow-parser`增加显式冻结输入/不持久化出口，原公开函数保留legacy路径，复用原抽取、匹配、合并及Mermaid生成函数。缺失ParsedFlow时在真实work handle内用冻结Skill正文执行原parseSkillFlow(persist:false)，其产出随match receipt封存；原静态ParsedFlow可在receipt确认后以Skill ID/version/content hash核对的本域CAS更新，控制缓存失败不撤销已提交match，不能把旧库Session伪造成输入。所有真实模型调用使用trusted模型及recorder并等待实际indexed回执；普通模型失败可保留原业务fallback，身份/来源/录制失败不可吞掉为成功。
+
+为保留原POST中归因失败不撤销已成功匹配的语义，匹配与可选归因分别使用真实内部work/receipt。匹配先提交含`mode/matchJson/staticMermaid/dynamicMermaid/analysisText/flowJson/extractedSteps/interactionCount/matchedAt/usedSkill*`的原形状投影；compare归因随后以该精确machine ID/hash和同一Trace/Skill快照准备独立计划，不能读取后来覆盖的match。动态模式不运行Skill归因。归因失败在自己的attempt留下真实失败，POST仍可按原合同返回匹配结果与attribution:null；请求撤权或来源失效则拒绝发送私有匹配数据。
+
+`alignment-attribution`拆出原纯候选提取、LLM归因、deviation/score/rawAnalysis及Issue转换；原legacy持久化入口保留。core补充工具选择/冗余度时只读取同actor、同Trace、真实选中轨迹质量receipt，原优先级/0–100转0–1及aggregateTrajectoryScore算法不变，并把该实际receipt来源封存到归因计划；不存在则按原alignment-only算法。归因产物经既有真实Trace要求的directTrajectoryDerived及attested Skill范围写typed Evaluation/Issue，避免使用只允许普通用例/触发的experimentSkillDerived冒充输入型归因。动态表不做影子写。不能把独立ParsedFlow控制写和机器receipt称为原子提交。
+
+GET在IAM与Trace source复核后，通过现有Experiment端点的有界typed内部查询定位该actor/Trace最后完成的实际匹配selection，精确读取其封存DTO；尚无结果按原analyzed:false，进行中字段按实际slot/checkpoint投影，不伪造成功。`currentInteractionCount/hasUpdate`沿原计数规则，从当前已授权业务Trace计算；flowJson取本次实际封存结果而非可变最新ParsedFlow。可选归因只有来源match ID/hash仍相同时才关联，旧归因不得附到新匹配。不能遍历全部Trace正文或旧ExecutionMatch来定位缓存。
+
+此scope是后台分析容器，所有普通实验/评测结果/Run列表、agents/基线和Workbench可见集合及分页total必须排除；精确内部查询与后台恢复保留受控读取。隐藏规则按业务scope而非名称前缀，不能因用户改名复现界面行。旧普通实验、Workbench、静态Skill与ParsedFlow数据不迁移或删除。
+
+模型调用前以真实work checkpoint记录精确请求hash的intent，只有真实响应及其indexed recorder确认后才保存observed响应；已确认失败保存failed并沿原fallback。恢复只继承同work/run的调用账本，observed可复用，未知intent不重发。过期未知intent不再创建无意义attempt，保留pending等待原worker真实late响应；跨实例无法确认时须明确处置或提交显式新分析请求。独立请求不会借用旧调用响应。SDK在该封存调用域禁用自动重试，其他模型调用规则不变。归因计划只能继承当前精确match receipt对应的不可变Trace证据；后续Trace增长不会改变它，但来源权限、incarnation/epoch和公开资产仍实时复核。
+
+已确认matcher业务失败的机器回执携带内部失败证据，原POST返回原500/error DTO；未知交付仍为pending，不猜失败。可选归因pending不撤销已完成匹配，最终必须重新读取当前selection并通过来源/Skill权限检查，方可返回match及空归因。direct轨迹质量的有效工具选择/冗余度优先级保留，不因更晚普通用例结果改变已封存补充来源；Benchmark私有release/origin不复制到无binding的Flow输入。
+
+隔离验收已覆盖原compare/dynamic POST与GET、自动parse/静态缓存、实际归因和精确重放：真实core HTTP/SQLite/ClickHouse与受控Mock OpenAI HTTP产生6次真实模型请求、6条indexed judge Trace、3份Flow机器回执；派生Evaluation/Issue实际写入新域，9张旧动态表均为零，静态ParsedFlow缓存为1。另以真实新库direct与普通质量回执验证原优先级，实测伪user/匿名/跨owner拒绝、Skill撤权及来源删除失效、同key在模型配置改变后不重发。原Next普通实验列表实测不显示内部容器。focused与kernel测试另外覆盖未知intent不重发/不增attempt、late observed恢复、当前match绑定、Trace增长与撤权反例。此验收不是浏览器交互验收、实际模型质量认证或千级容量认证。

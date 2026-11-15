@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -151,6 +152,7 @@ export async function reapStaleBenchmarkEvaluations(options: {
   limit?: number
   experimentId?: string
 } = {}): Promise<number> {
+  if(isStorageCoreEnabled())return 0
   const now = options.now || new Date()
   const graceMs = Math.max(0, options.graceMs ?? EVALUATION_WATCHDOG_GRACE_MS)
   const candidates = await prisma.benchmarkEvaluation.findMany({
@@ -244,7 +246,7 @@ export async function reapStaleBenchmarkEvaluations(options: {
 export function startBenchmarkEvaluationWatchdog(
   intervalMs = EVALUATION_WATCHDOG_INTERVAL_MS,
 ): void {
-  if (evaluationWatchdogTimer) return
+  if (isStorageCoreEnabled() || evaluationWatchdogTimer) return
   const tick = () => {
     if (evaluationWatchdogSweep) return
     evaluationWatchdogSweep = reapStaleBenchmarkEvaluations()
@@ -586,6 +588,7 @@ async function ensureHealthy(
 }
 
 export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise<void> {
+  if(isStorageCoreEnabled())throw Object.assign(new Error('Typed Benchmark evaluation dispatch required'),{status:503})
   const evaluation = await prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId }, include: { caseRun: true } });
   if (!evaluation || evaluation.status === 'cancelled') return;
   const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
@@ -796,6 +799,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
 }
 
 export async function resumeBenchmarkEvaluationDispatchesAtStartup(limit = 20): Promise<number> {
+  if(isStorageCoreEnabled())return 0
   const now = new Date()
   await prisma.benchmarkEvaluation.updateMany({ where: { status: 'queued', dispatch: { status: 'sending', leasedUntil: { lt: now } } }, data: { status: 'dispatch_unknown' } })
   await prisma.benchmarkEvaluationDispatchOutbox.updateMany({

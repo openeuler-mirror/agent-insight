@@ -1,3 +1,10 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {requireCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {projectCoreWorkbenchTaskStates,type WorkbenchCoreSnapshot,type WorkbenchProjectedStates} from '@/lib/storage-core/workbench-results';
+import {freezeModelSelection} from '@/lib/storage-core/frozen-model';
+import {workbenchReadSource,requireWorkbenchActor} from '@/lib/storage-core/workbench';
+import {createCoreWorkbenchHandoff,resumeCoreWorkbenchHandoff} from '@/lib/storage-core/workbench-handoff';
+import {readArchivedCoreVerificationIds} from './verification-evidence';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -93,11 +100,12 @@ export function visibleWorkbenchCaseIds(caseIds: unknown, deletedCases: Set<stri
 }
 
 export async function listWorkbenchExperiments(user: string, skillName: string, skillVersion: number) {
+  const experimentReads=await workbenchReadSource(prismaRaw,user);
   const skill = await resolveSkill(user, skillName);
   if (!skill || !skill.versions.some((version) => version.version === skillVersion)) return null;
-  const [datasets, experiments] = await Promise.all([
+  const [datasets, loadedExperiments] = await Promise.all([
     readAgentDatasetReferences(user),
-    prismaRaw.experiment.findMany({
+    experimentReads.experiment.findMany({
       where: {
         user,
         skillName,
@@ -110,13 +118,22 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
       include: { _count: { select: { cases: { where: { deletedAt: null } } } } },
     }),
   ]);
+  const archived=isStorageCoreEnabled()?new Set(await readArchivedCoreVerificationIds(user)):new Set<string>();
+  const experiments=loadedExperiments.filter(experiment=>!archived.has(experiment.id));
   const taskIds = experiments.map((experiment) => {
     const snapshot = parseJson<{ grayscaleTaskId?: string }>(experiment.configSnapshotJson, {});
     return snapshot.grayscaleTaskId || '';
   }).filter(Boolean);
   const tasks = taskIds.length ? await prismaRaw.grayscaleTask.findMany({ where: { id: { in: taskIds }, user } }) : [];
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
-  const cancellations = await prismaRaw.experimentCancellation.findMany({
+  const currentTaskStates=new Map<string,WorkbenchProjectedStates>();
+  if(isStorageCoreEnabled())for(const experiment of experiments){
+    const configuration=parseJson<{grayscaleTaskId?:string}>(experiment.configSnapshotJson,{});const task=configuration.grayscaleTaskId?taskMap.get(configuration.grayscaleTaskId):null;if(!task)continue;
+    const snapshot=await requireCoreExperimentContext().rpc('read',{experiment_id:experiment.id}) as {gold_redacted?:boolean;experiment:WorkbenchCoreSnapshot};
+    if(snapshot.gold_redacted)throw Object.assign(new Error('Workbench Task Experiment belongs to another actor'),{status:403});
+    currentTaskStates.set(task.id,projectCoreWorkbenchTaskStates(snapshot.experiment,parseJson<WorkbenchProjectedStates>(task.caseStatesJson,{})));
+  }
+  const cancellations = await experimentReads.experimentCancellation.findMany({
     where: { experimentId: { in: experiments.map((item) => item.id) }, caseKey: { startsWith: 'dataset:' } },
     select: { experimentId: true, caseKey: true },
   });
@@ -141,7 +158,7 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
         configSnapshot: snapshot,
         grayscaleTask: task ? {
           id: task.id,
-          caseStates: Object.fromEntries(Object.entries(parseJson<Record<string, unknown>>(task.caseStatesJson, {})).filter(([id]) => !deletedCases.has(id))),
+          caseStates: currentTaskStates.get(task.id)||Object.fromEntries(Object.entries(parseJson<Record<string, unknown>>(task.caseStatesJson, {})).filter(([id]) => !deletedCases.has(id))),
           config: parseJson(task.configJson, {}),
         } : null,
       };
@@ -174,6 +191,7 @@ export async function createWorkbenchExperiment(input: {
   agentTimeoutSeconds?: number;
   executionConcurrency?: number;
 }) {
+  if(isStorageCoreEnabled()){requireWorkbenchActor(input.user);const resumed=await resumeCoreWorkbenchHandoff(input.user);if(resumed){await finishCoreWorkbenchLinks(input.user,resumed);return {kind:'created' as const,...resumed};}}
   if (input.sessionId) {
     const session = await prismaRaw.skillWorkbenchSession.findFirst({
       where: {
@@ -270,6 +288,18 @@ export async function createWorkbenchExperiment(input: {
     retryLimit: isTriggerExperiment ? 1 : 2,
   };
   const customEvaluatorSnapshots = input.frozenCustomEvaluators ?? await freezeCustomEvaluators(input.user, evaluatorIds);
+  if(isStorageCoreEnabled()){
+    if(activeModel&&runtime.model)runtime.model={...runtime.model,baseUrl:freezeModelSelection(activeModel)?.baseUrl as string|null};
+    const name=input.name?.trim().slice(0,120)||defaultSkillExperimentName(input.skillName,input.preset,input.version);
+    const experiment={user:input.user,name,type:input.preset==='skill-ab'?'skill':'single',agentName:input.agentName?.trim()||input.skillName,evaluatorIdsJson:JSON.stringify(evaluatorIds),evaluatorConfigsJson,status:'draft',scope:'skill-workbench',skillName:input.skillName,skillVersion:input.version,preset:input.preset,skillContextJson:JSON.stringify({...(input.sessionId?{sessionId:input.sessionId}:{}),skillName:input.skillName,versionA:versionA?.version??null,versionB:versionB?.version??null}),cases:isTriggerExperiment?triggerExperimentCaseData('',dataset.id,selectedCases).map(({experimentId:_id,...row})=>row):[]};
+    const taskConfig={skillId:skill.id,versionAId:versionA?.id||'__NONE__',versionBId:versionB?.id||'__NONE__',boundSide,linkedDatasetIds:[dataset.id],evaluators:evaluatorIds,runCount:selectedCases.length,repeatRounds:1,autoEval:true,recordTriggerDetails:input.preset==='trigger',triggerRouting:input.preset==='trigger',modelConfigId:runtime.modelConfigId,executionTarget,requiresClientExecution:Boolean(executionTarget),triggerSkills,skillSnapshots:executionTarget?{a:versionA?{name:skill.name,version:versionA.version,files:resolveSkillVersionFiles(skill.id,versionA.version,versionA.files,versionA.content)}:null,b:versionB?{name:skill.name,version:versionB.version,files:resolveSkillVersionFiles(skill.id,versionB.version,versionB.files,versionB.content)}:null}:undefined,modelOptions:runtime.modelOptions,interactionPolicy:runtime.interactionPolicy,timeoutMs:runtime.timeoutMs,idleTimeoutMs:runtime.idleTimeoutMs,executionConcurrency:runtime.executionConcurrency,abPairConcurrency:runtime.abPairConcurrency,evaluationConcurrency:runtime.evaluationConcurrency,triggerConcurrency:runtime.triggerConcurrency,agentMaxConcurrency:runtime.agentMaxConcurrency,...(input.preset==='skill-ab'?{}:{executionSides:['b']})};
+    const snapshot={coreWorkbenchTask:{skillId:skill.id,skillName:input.skillName,skillVersion:boundVersion.version,skillVersionId:boundVersion.id},coreWorkbenchExecution:taskConfig,customEvaluatorSnapshots,schemaVersion:1,preset:input.preset,datasetId:dataset.id,caseIds:selectedCases.map(item=>item.id),evaluatorIds,versionAId:versionA?.id||'__NONE__',versionBId:versionB?.id||'__NONE__',boundSide,baselineSide:versionA?'a':'b',executionSides:input.preset==='skill-ab'?['a','b']:['b'],traceSource:input.traceSource||'generate',traceGenerationTarget:executionTarget||(input.traceSource==='existing'?null:input.traceGenerationTarget??null),executionTarget,agentName:input.agentName?.trim()||input.skillName,repeatRounds:1,runtime,executionConcurrency:runtime.executionConcurrency};
+    const linkRecord=input.optimizationRecordId&&input.sessionId?await prismaRaw.skillOptimizationRecord.findFirst({where:{id:input.optimizationRecordId,sessionId:input.sessionId,user:input.user,skillName:input.skillName,baseVersion:input.version,status:{in:['pending_retest','retest_failed','retest_cancelled']}},select:{id:true,status:true,sourceExperimentId:true,sourceRefsJson:true,candidateContentHash:true,candidateFilesJson:true}}):null;
+    const coreWorkbenchLinks={sessionId:input.sessionId||null,record:linkRecord};
+    const created=await createCoreWorkbenchHandoff(input.user,{experiment,task:{skillId:skill.id,skillName:input.skillName,skillVersion:boundVersion.version,skillVersionId:boundVersion.id},taskConfig,snapshot:{...snapshot,coreWorkbenchLinks}});
+    await finishCoreWorkbenchLinks(input.user,created);
+    return {kind:'created' as const,...created};
+  }
   const created = await prismaRaw.$transaction(async (tx) => {
     const experiment = await tx.experiment.create({
       data: {
@@ -402,7 +432,25 @@ export async function createWorkbenchExperiment(input: {
   return { kind: 'created' as const, ...created };
 }
 
+async function finishCoreWorkbenchLinks(user:string,created:{experiment:{id:string;name:string;skillName:string;skillVersion:number|null;preset:string|null};configSnapshot:Record<string,unknown>}){
+  requireWorkbenchActor(user);
+  const links=created.configSnapshot.coreWorkbenchLinks as {sessionId?:string|null;record?:{id:string;status:string;sourceExperimentId:string|null;sourceRefsJson:string;candidateContentHash:string;candidateFilesJson:string}|null}|undefined;
+  if(!links?.sessionId)return;
+  const session=await prismaRaw.skillWorkbenchSession.findFirst({where:{id:links.sessionId,user,skillName:created.experiment.skillName,workVersion:created.experiment.skillVersion,source:'management'},select:{id:true}});
+  if(!session)throw Object.assign(new Error('Workbench creation context is no longer available'),{status:409});
+  if(links.record){
+    const expected=links.record;const record=await prismaRaw.skillOptimizationRecord.findFirst({where:{id:expected.id,user,sessionId:session.id},select:{sourceExperimentId:true,sourceRefsJson:true}});
+    const refs=parseJson<Array<{type?:string;id?:string}>>(record?.sourceRefsJson||'[]',[]);
+    if(!refs.some(ref=>ref.type==='experiment'&&ref.id===created.experiment.id)){
+      const changed=await prismaRaw.skillOptimizationRecord.updateMany({where:{id:expected.id,user,sessionId:session.id,status:expected.status,sourceExperimentId:expected.sourceExperimentId,sourceRefsJson:expected.sourceRefsJson,candidateContentHash:expected.candidateContentHash,candidateFilesJson:expected.candidateFilesJson},data:{sourceExperimentId:created.experiment.id,sourceRefsJson:JSON.stringify([...parseJson<unknown[]>(expected.sourceRefsJson,[]),{type:'experiment',id:created.experiment.id,name:created.experiment.name,preset:created.experiment.preset}])}});
+      if(!changed.count)throw Object.assign(new Error('Optimization source changed after Workbench creation'),{status:409});
+    }
+  }
+  await createOrReuseSkillWorkbenchTask({user,sessionId:session.id,type:'experiment',skillName:created.experiment.skillName,version:created.experiment.skillVersion,targetRef:created.experiment.id});
+}
+
 export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sourceExperimentId: string) {
+  if(isStorageCoreEnabled())return cloneCoreWorkbenchExperiment(user,sourceExperimentId);
   const source = await prismaRaw.experiment.findFirst({
     where: { id: sourceExperimentId, user, scope: 'skill-workbench', deletedAt: null },
     select: {
@@ -487,7 +535,7 @@ export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sou
     id: result.experiment.id,
     scope: 'skill-workbench',
     grayscaleTaskId: result.grayscaleTask.id,
-    caseIds: result.configSnapshot.caseIds,
+    caseIds: result.configSnapshot.caseIds as string[],
     evaluatorIds: parseJson<string[]>(source.evaluatorIdsJson, []),
   };
 }
@@ -537,4 +585,24 @@ export async function generateWorkbenchTriggerDataset(input: {
   };
   await createAgentDatasetRecord(dataset);
   return dataset;
+}
+
+async function cloneCoreWorkbenchExperiment(user:string,sourceExperimentId:string){
+  const context=requireWorkbenchActor(user);const resumed=await resumeCoreWorkbenchHandoff(user);
+  if(resumed)return {id:resumed.experiment.id,scope:'skill-workbench',grayscaleTaskId:resumed.grayscaleTask.id,caseIds:resumed.configSnapshot.caseIds as string[],evaluatorIds:parseJson<string[]>(resumed.experiment.evaluatorIdsJson,[])};
+  const value=await context.rpc('read',{experiment_id:sourceExperimentId}) as {gold_redacted?:boolean;experiment:Record<string,unknown>};
+  const source=value.experiment;
+  if(value.gold_redacted)throw Object.assign(new Error('Private Workbench source owner required'),{status:403});
+  if(!source||source.scope!=='skill-workbench'||!WORKBENCH_EXPERIMENT_PRESETS.includes(source.preset as WorkbenchExperimentPreset)||source.deletedAt)throw Object.assign(new Error('原 Skill 实验不存在或不支持同配置运行'),{status:404});
+  const snapshot=parseJson<Record<string,unknown>>(source.configSnapshotJson as string|null,{});const taskConfig=snapshot.coreWorkbenchExecution as Record<string,unknown>|undefined;const task=snapshot.coreWorkbenchTask as Record<string,unknown>|undefined;
+  if(!taskConfig||!task||!snapshot.coreAssets||!snapshot.datasetId||!Array.isArray(snapshot.caseIds)||!snapshot.caseIds.length)throw Object.assign(new Error('原 Skill 实验缺少冻结的任务与资产配置'),{status:503});
+  const cancelled=new Set((source.cancellations as Array<{caseKey:string}>||[]).map(row=>row.caseKey));
+  const cases=(source.cases as Array<Record<string,unknown>>||[]).filter(row=>!row.deletedAt&&!cancelled.has(String(row.id)));
+  const excluded=new Set((source.cancellations as Array<{caseKey:string}>||[]).filter(row=>row.caseKey.startsWith('dataset:')).map(row=>row.caseKey.slice(8)));
+  const caseIds=visibleWorkbenchCaseIds(snapshot.caseIds,excluded);if(!caseIds?.length)throw Object.assign(new Error('原 Skill 实验没有可复用的 Case'),{status:409});
+  const name=defaultSkillExperimentName(String(source.skillName),source.preset as WorkbenchExperimentPreset,Number(source.skillVersion));
+  const {id:_id,createdAt:_createdAt,updatedAt:_updatedAt,cases:_cases,groups:_groups,comments:_comments,...metadata}=source;
+  const experiment={...metadata,name,sourceExperimentId:source.id,status:'draft',cases:source.preset==='trigger'?cases.map(({id:_caseId,results:_results,traceAttempts:_attempts,createdAt:_caseCreated,updatedAt:_caseUpdated,...row})=>({...row,taskId:null,executionId:null,actualOutput:'',traceGenerationCommandId:null,traceGenerationError:null})):[]};
+  const result=await createCoreWorkbenchHandoff(user,{experiment,task,taskConfig:{...taskConfig,runCount:caseIds.length},snapshot:{...snapshot,coreWorkbenchLinks:undefined,caseIds},frozen:true});
+  return {id:result.experiment.id,scope:'skill-workbench',grayscaleTaskId:result.grayscaleTask.id,caseIds,evaluatorIds:parseJson<string[]>(result.experiment.evaluatorIdsJson,[])};
 }

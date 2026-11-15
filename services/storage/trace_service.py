@@ -53,6 +53,12 @@ class TraceQueries:
         if grant.role not in {'owner','admin','personal'}:
             access=" AND (a.owner_principal_id=? OR a.visibility='group' OR EXISTS(SELECT 1 FROM iam_resource_grants g WHERE g.workspace_id=a.workspace_id AND g.resource_kind=a.resource_kind AND g.resource_id=a.resource_id AND g.grantee_principal_id=?))"
             params.extend([scope.principal_id,scope.principal_id])
+        if con.execute('SELECT 1 FROM schema_meta WHERE version=10').fetchone():
+            access+=' AND NOT EXISTS(SELECT 1 FROM experiment_judge_traces j WHERE j.workspace_id=t.workspace_id AND j.trace_id=t.trace_id AND j.owner_principal_id<>?)'
+            params.append(scope.principal_id)
+        if con.execute('SELECT 1 FROM schema_meta WHERE version=11').fetchone():
+            access+=' AND NOT EXISTS(SELECT 1 FROM diagnosis_judge_traces j WHERE j.workspace_id=t.workspace_id AND j.trace_id=t.trace_id AND j.owner_principal_id<>?)'
+            params.append(scope.principal_id)
         return access,params
 
     def _candidates(self, credential, workspace_id, after, limit):
@@ -158,7 +164,7 @@ class TraceQueries:
 
 
 class TraceRuntime:
-    def __init__(self, control, facts, *, cursor_secret, default_workspace=None):
+    def __init__(self, control, facts, *, cursor_secret, default_workspace=None, controller_key_file=None):
         import threading
         from .authorized import AuthorizedStorage
         from .observations import ObservationIngest
@@ -166,7 +172,7 @@ class TraceRuntime:
         self.queries=TraceQueries(control,facts,cursor_secret=cursor_secret)
         self.authorized=AuthorizedStorage(self.iam,facts)
         self.ingest=ObservationIngest(control,facts)
-        self.default_workspace=default_workspace
+        self.default_workspace=default_workspace;self.controller_key_file=controller_key_file
         self.stop=threading.Event();self.worker=None;self.last_worker_error=None
         self.login_lock=threading.Lock();self.login_attempts=[]
 
@@ -186,7 +192,9 @@ class TraceRuntime:
         selected=explicit or (self.default_workspace if self.default_workspace in scope.allowed_workspace_ids else None)
         if not selected and len(scope.allowed_workspace_ids)==1:selected=scope.allowed_workspace_ids[0]
         if not selected:raise ValueError('an explicit workspace selection is required')
-        self.iam._workspace(scope,selected,capability)
+        if capability is None:
+            if selected not in scope.allowed_workspace_ids:raise Forbidden('workspace membership is not granted')
+        else:self.iam._workspace(scope,selected,capability)
         return selected
 
     def login(self, username, password):
@@ -205,21 +213,24 @@ class TraceRuntime:
     def start_worker(self):
         import threading,uuid
         if self.worker is not None:raise ValueError('worker is already started')
-        datasets=None
-        if self.control.migration_plan()['current_version']>=8:
+        stages=[self.ingest.work_once]
+        version=self.control.migration_plan()['current_version']
+        if version>=8:
             from .datasets import DatasetStore
             datasets=DatasetStore(self.control)
+            stages.append(lambda worker:datasets.project_once(self.facts,worker))
+        if version>=10:
+            from .experiments import ExperimentStore
+            experiments=ExperimentStore(self.control,facts=self.facts)
+            stages.append(lambda worker:experiments.project_once(self.facts,worker))
         worker_id='trace-http-'+uuid.uuid4().hex
         def work():
             while not self.stop.is_set():
-                try:
-                    progressed=self.ingest.work_once(worker_id)
-                    if datasets is not None:
-                        progressed=datasets.project_once(self.facts,worker_id) or progressed
-                    self.last_worker_error=None
-                except Exception as exc:
-                    self.last_worker_error=type(exc).__name__
-                    progressed=False
+                progressed=False;errors=[]
+                for stage in stages:
+                    try:progressed=stage(worker_id) or progressed
+                    except Exception as exc:errors.append(type(exc).__name__)
+                self.last_worker_error=errors[0] if errors else None
                 if not progressed:self.stop.wait(.25)
         self.worker=threading.Thread(target=work,name='trace-materializer',daemon=True);self.worker.start()
 
@@ -286,6 +297,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             if size>max_bytes:return None,413
             raw=self.rfile.read(size)
             if len(raw)!=size:raise ValueError('incomplete request')
+            self.request_body_hash=hashlib.sha256(raw).hexdigest()
             value=json.loads(raw.decode('utf-8'),parse_constant=lambda _:(_ for _ in ()).throw(ValueError('nonfinite JSON')))
             if not isinstance(value,dict):raise ValueError('JSON object required')
             return value,None
@@ -318,9 +330,9 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             from .compatibility_list import LegacyTraceList
             compat_path=pieces[2:]
             report_path=compat_path[:2]==['observe','reports']
-            dataset_path=compat_path[:1]==['datasets']
+            dataset_path=compat_path[:1] in (['datasets'],['experiments'],['evaluators'],['diagnosis-runs'],['benchmarks'])
             deleting_root=self.command=='DELETE' and (report_path or compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
-            workspace=runtime.workspace(token,params.get('workspace_id'),'read' if self.command=='GET' or dataset_path else 'delete' if deleting_root else 'execute' if report_path else 'write')
+            workspace=runtime.workspace(token,params.get('workspace_id'),None if compat_path in (['benchmarks'],['experiments']) and self.command=='POST' else 'read' if self.command=='GET' or dataset_path else 'delete' if deleting_root else 'execute' if report_path else 'write')
             metadata=TraceMetadata(runtime.control)
             listing=LegacyTraceList(runtime.queries,metadata)
             reads=LegacyTraceReads(runtime.queries,runtime.authorized)
@@ -330,6 +342,50 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 value,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return None
                 return value
+            if path==['benchmarks'] and self.command=='POST':
+                from .benchmark_core import BenchmarkStore
+                from .trace_evidence import TraceEvidence
+                from .controller_protocol import verify_controller_proof
+                value,error=self.body(max_bytes=128*1024*1024)
+                if error:self.reply(error,{'error':'Bounded Benchmark JSON required'});return
+                action=value.get('action');verified=False
+                if action in {'dataset_import','create','start','checkpoint','dispatch_checkpoint','evaluation_prepare','retry_case','retry_evaluation','continuation_finish','load_work','load_dispatch','resume_work','claim_intents','finish_intent','classify_failure','import_submissions','prepare_evaluation_retry','prepare_case_retry','cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm'}:
+                    principal=runtime.iam.scope(token).principal_id
+                    verified=verify_controller_proof(runtime.controller_key_file,'experiment-frozen-assets/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof'))
+                    if not verified:raise Forbidden('Private Benchmark definition attestation required')
+                result=BenchmarkStore(runtime.control,controller_key_file=runtime.controller_key_file,definitions_verifier=(lambda *_:True) if verified else None,evidence=TraceEvidence(runtime.queries,runtime.authorized),facts=runtime.facts).dispatch(action,token,workspace,value)
+                respond(result,limit=128*1024*1024);return
+            if path in (['experiments'],['evaluators'],['diagnosis-runs']) and self.command=='POST':
+                value,error=self.body(max_bytes=24*1024*1024 if path in (['evaluators'],['diagnosis-runs']) else 64*1024*1024)
+                if error:self.reply(error,{'error':'JSON body required or domain request exceeds budget'});return
+                if path==['experiments']:
+                    from .experiments import ExperimentStore
+                    from .trace_evidence import TraceEvidence
+                    action=value.get('action');purpose=None
+                    config=value.get('config',{})
+                    if action=='cancellation_update':purpose='experiment-cancellation/v1'
+                    elif action in {'execute_start','execute_complete','execute_fail'} or action=='checkpoint' and isinstance(value.get('checkpoint'),dict) and value['checkpoint'].get('cleanup_confirmed') is True:purpose='experiment-execution/v1'
+                    elif action=='derived_issue_resolve' or action=='start' and isinstance(config,dict) and (config.get('derived_skill_ids') or 'core_flow_analysis' in config):purpose='experiment-frozen-assets/v1'
+                    if purpose:
+                        from .controller_protocol import verify_controller_proof
+                        principal=runtime.iam.scope(token).principal_id
+                        if not verify_controller_proof(runtime.controller_key_file,purpose,principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private controller attestation required')
+                    result=ExperimentStore(runtime.control,evidence=TraceEvidence(runtime.queries,runtime.authorized),facts=runtime.facts,cancellation_verifier=(lambda *_:True) if purpose=='experiment-cancellation/v1' else None,frozen_assets_verifier=(lambda *_:True) if purpose in {'experiment-frozen-assets/v1','experiment-execution/v1'} else None).dispatch(action,token,workspace,value)
+                elif path==['diagnosis-runs']:
+                    from .diagnosis_runs import DiagnosisRuns
+                    from .trace_evidence import TraceEvidence
+                    from .trace_reports import TraceReports
+                    action=value.get('action');verified=False
+                    if action in {'preview','submit'}:
+                        from .controller_protocol import verify_controller_proof
+                        principal=runtime.iam.scope(token).principal_id
+                        verified=verify_controller_proof(runtime.controller_key_file,'experiment-frozen-assets/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof'))
+                        if not verified:raise Forbidden('Private controller attestation required')
+                    result=DiagnosisRuns(runtime.control,evidence=TraceEvidence(runtime.queries,runtime.authorized),trace_reports=TraceReports(runtime.queries,runtime.authorized),frozen_assets_verifier=(lambda *_:True) if verified else None).dispatch(action,token,workspace,value)
+                else:
+                    from .evaluator_assets import EvaluatorAssets
+                    result=EvaluatorAssets(runtime.control).dispatch(token,workspace,value.get('action'),value)
+                respond(result,limit=8*1024*1024 if path==['evaluators'] else 64*1024*1024);return
             if path in (['datasets'],['datasets','generation']) and self.command=='POST':
                 from .datasets import DatasetStore
                 value,error=self.body(max_bytes=64*1024*1024)
@@ -424,6 +480,14 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 context=value.get('context',{})
                 if not isinstance(context,dict):raise ValueError('Agent context required')
                 def verify_turn():
+                    if context.get('experiment_id'):
+                        if context.get('diagnosis_run_id') or context.get('diagnosis_session_id') or context.get('report_run_id'):raise ValueError('Agent recording has conflicting origins')
+                        from .experiments import ExperimentStore
+                        ExperimentStore(runtime.control).authorize_recording(token,workspace,{'experiment_id':context['experiment_id'],'attempt_id':context.get('experiment_attempt_id'),'fence':context.get('experiment_fence'),'lease_owner':context.get('experiment_lease_owner')},public_execution=context.get('experiment_recording_kind')=='execution')
+                    if context.get('diagnosis_run_id'):
+                        if any(context.get(key) for key in ('experiment_id','diagnosis_session_id','report_run_id')):raise ValueError('Agent recording has conflicting origins')
+                        from .diagnosis_runs import DiagnosisRuns
+                        DiagnosisRuns(runtime.control).authorize_recording(token,workspace,{'diagnosis_id':context['diagnosis_run_id'],'attempt_id':context.get('diagnosis_attempt_id'),'fence':context.get('diagnosis_fence'),'lease_owner':context.get('diagnosis_lease_owner')})
                     if context.get('diagnosis_session_id'):
                         from .diagnosis import TraceDiagnosis
                         renewed=TraceDiagnosis(runtime.control).renew(token,workspace,context['diagnosis_session_id'],request_key=context.get('request_key'),lease_owner=context.get('lease_owner'),turn_fence=int(context.get('turn_fence')))
@@ -548,6 +612,29 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 body,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return
                 self.reply(200,runtime.login(body.get('username'),body.get('password')));return
+            if self.command=='POST' and pieces==['v1','compat','benchmark-callback']:
+                import base64
+                from .benchmark_core import BenchmarkStore
+                from .trace_evidence import TraceEvidence
+                from .controller_protocol import verify_controller_proof
+                capabilities=self.headers.get_all('x-agent-insight-callback-token') or []
+                if len(capabilities)!=1 or not re.fullmatch(r'bcap_[A-Za-z0-9_-]+\.[a-f0-9]{64}',capabilities[0]) or len(capabilities[0])>4096:raise Unauthorized('Benchmark callback capability required')
+                value,error=self.body(max_bytes=128*1024*1024)
+                if error:self.reply(error,{'error':'Bounded Benchmark callback JSON required'});return
+                encoded=capabilities[0][5:].split('.')[0]
+                try:
+                    identity=json.loads(base64.b64decode(encoded+'='*(-len(encoded)%4),altchars=b'-_',validate=True));principal=identity['principal_id'];workspace=identity['workspace_id']
+                except (ValueError,KeyError,TypeError):raise Unauthorized('Invalid Benchmark callback capability') from None
+                action=value.get('action');verified=False;device=None
+                if action in {'load_work','load_next_work','load_normalization_work','evaluation_prepare','normalize_commit','load_child_dispatch','child_dispatch_checkpoint','normalization_fail','submission_reject','claim_next_execution','execution_stage'}:
+                    verified=verify_controller_proof(runtime.controller_key_file,'experiment-frozen-assets/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof'))
+                    if not verified:raise Forbidden('Private Benchmark definition attestation required')
+                supplied=self.headers.get_all('x-benchmark-device-client') or []
+                if supplied or 'verified_device_client_id' in value:
+                    if len(supplied)!=1 or not supplied[0] or supplied[0]!=value.get('verified_device_client_id') or not verify_controller_proof(runtime.controller_key_file,'benchmark-device/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-benchmark-device-proof')):raise Forbidden('Private Benchmark device attestation required')
+                    device=supplied[0]
+                result=BenchmarkStore(runtime.control,controller_key_file=runtime.controller_key_file,definitions_verifier=(lambda *_:True) if verified else None,device_verifier=(lambda client,_:client==device) if device else None,evidence=TraceEvidence(runtime.queries,runtime.authorized),facts=runtime.facts).callback(action,capabilities[0],value,verified_device_client_id=device)
+                self.reply(200,{'value':result},max_bytes=128*1024*1024);return
             token=self.token()
             if pieces[:2]==['v1','compat']:
                 self.dispatch_compat(token,pieces,params);return
@@ -620,7 +707,7 @@ def runtime_from_config(path):
     plan=control.migration_plan()
     if plan['current_version']!=len(load_migrations(backend)) or plan['pending']:raise ValueError('explicit schema upgrade is required before service startup')
     facts=ClickHouseStore(**config['clickhouse'])
-    runtime=TraceRuntime(control,facts,cursor_secret=bytes.fromhex(config['cursor_secret_hex']),default_workspace=config.get('default_workspace'))
+    runtime=TraceRuntime(control,facts,cursor_secret=bytes.fromhex(config['cursor_secret_hex']),default_workspace=config.get('default_workspace'),controller_key_file=config.get('controller_key_file'))
     return runtime,config
 
 

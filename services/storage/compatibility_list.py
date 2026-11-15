@@ -76,6 +76,14 @@ class LegacyTraceList:
                         'anomaly_status':properties.get('anomaly_status',metadata.get('anomaly_status','unknown')),
                         'userTags':tags,'_trace_id':row['trace_id'],
                     }
+                    metrics=metadata.get('legacy_execution_metrics',{})
+                    if not isinstance(metrics,dict):raise ValueError('invalid captured execution metrics')
+                    for key in ('cost','latency','tool_call_count','tool_call_error_count'):
+                        if key in metrics:record[key]=_number(metrics[key]) if key in ('cost','latency') else metrics[key]
+                    record['is_answer_correct']=metrics.get('is_answer_correct')
+                    record['has_failures']=metrics.get('has_failures')
+                    record['trace_started_at']=metrics.get('session_start') if metrics.get('session_captured') else record['timestamp']
+                    if metrics.get('session_captured'):record['trace_completed_at']=metrics.get('session_end')
                     result.append(record)
             if len(result)>100000:raise CompatibilityListLimit('narrow the legacy query scope')
             cursor=page.get('next_cursor')
@@ -205,7 +213,9 @@ class LegacyTraceList:
         calls=sum(int(r.get('tool_call_count') or 0) for r in selected);errors=sum(int(r.get('tool_call_error_count') or 0) for r in selected)
         stats={'total':len(selected),'failedCount':sum(r['trace_status']=='failed' for r in selected),'avgLatencyMs':sum(latencies)/len(selected) if selected else 0,'toolErrorRate':math.floor(errors/calls*1000+0.5)/10 if calls else 0}
         self._recheck(token,workspace,scope,[row['_trace_id'] for row in selected])
-        for row in selected:row.pop('_trace_id',None)
+        for row in selected:
+            trace_id=row.pop('_trace_id',None)
+            if _flag(params.get('includeCoreIdentity')):row['core_trace_id']=trace_id
         if not _flag(params.get('paginated')):return selected
         page=int(params.get('page',1));size=int(params.get('pageSize',20))
         if not 1<=page<=1000000 or not 1<=size<=100:raise ValueError('invalid existing pagination')

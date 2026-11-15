@@ -1,3 +1,6 @@
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { requireCoreExperimentContext } from '@/lib/storage-core/experiments';
+import { buildCoreDiagnosisSnapshot, coreDiagnosisSnapshotHash, submitCoreDiagnosis, readCoreDiagnosis, freezeCoreTraceReport, verifyCoreDiagnosisSource } from '@/lib/storage-core/diagnosis-consumer';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { resolveAgentDebugExecution } from '@/lib/engine/agent-debug/execution-resolver';
 import { parseReportPayload } from '@/lib/engine/agent-debug/report-store';
@@ -47,6 +50,7 @@ function executionFields(row: AgentDebugExecutionRecord & { model?: string | nul
 }
 
 export async function freezeTraceReport(user: string, executionId: string, generatedAt: string) {
+  if (isStorageCoreEnabled()) return freezeCoreTraceReport(executionId, generatedAt);
   const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved || resolved.execution.user !== user) throw new DiagnosisError('执行不可访问', 404);
   const row = await prisma.agentDebugReport.findFirst({ where: { executionId: resolved.execution.id, status: 'done', OR: [{ user }, { user: null }] } });
@@ -70,6 +74,7 @@ export async function freezeTraceReport(user: string, executionId: string, gener
 }
 
 export async function buildSnapshot(user: string, experimentId: string, caseId: string, resultIds: string[]): Promise<DiagnosisSnapshot> {
+  if (isStorageCoreEnabled()) return buildCoreDiagnosisSnapshot(experimentId, caseId, resultIds);
   const experiment = await prisma.experiment.findFirst({ where: { id: experimentId, user, deletedAt: null } });
   const caseRow = await prisma.experimentCase.findFirst({ where: { id: caseId, experimentId, deletedAt: null } });
   if (!experiment || !caseRow) throw new DiagnosisError('评测 Case 不存在', 404);
@@ -106,6 +111,7 @@ export async function buildSnapshot(user: string, experimentId: string, caseId: 
 }
 
 export async function submitDiagnosis(user: string, snapshot: DiagnosisSnapshot, input: { requestKey: string; expectedInputHash: string; force?: boolean; retryOfRunId?: string }) {
+  if (isStorageCoreEnabled()) return submitCoreDiagnosis(snapshot, input);
   const inputHash = contentHash({ snapshot, generator: GENERATOR });
   if (input.expectedInputHash !== inputHash) throw new DiagnosisError('评测或执行已变化，请重新确认输入', 409);
   const existing = await prisma.diagnosisRun.findUnique({ where: { user_requestKey: { user, requestKey: input.requestKey } } });
@@ -144,10 +150,16 @@ async function execute(id: string, user: string, snapshot: DiagnosisSnapshot) {
 }
 
 export function previewSnapshot(snapshot: DiagnosisSnapshot) {
-  return { inputHash: contentHash({ snapshot, generator: GENERATOR }), snapshot: { ...snapshot, interactions: undefined, interactionCount: snapshot.interactions.length } };
+  return { inputHash: coreDiagnosisSnapshotHash(snapshot) || contentHash({ snapshot, generator: GENERATOR }), snapshot: { ...snapshot, interactions: undefined, interactionCount: snapshot.interactions.length } };
 }
 
 export async function getDiagnosis(user: string, id: string) {
+  if (isStorageCoreEnabled()) {
+    const run = await readCoreDiagnosis(id);
+    if (!run.snapshot) throw new DiagnosisError('诊断输入仅原创建者可访问', 403);
+    const report = run.report;
+    return { id: run.id, status: run.status, errorMessage: run.errorMessage, createdAt: run.createdAt, ...previewSnapshot(run.snapshot), inputHash: run.input_hash, report, eligibility: Object.fromEntries((report?.findings || []).map(f => [f.id, optimizationEligibility(report!, f)])), progress: run.progress };
+  }
   await prisma.diagnosisRun.updateMany({ where: { id, user, status: 'running', leaseUntil: { lt: new Date() } }, data: { status: 'failed', errorMessage: '后台任务已中断，请重新诊断。', completedAt: new Date(), leaseUntil: null } });
   await prisma.diagnosisRun.updateMany({ where: { id, user, status: 'pending', createdAt: { lt: new Date(Date.now() - LEASE_MS) } }, data: { status: 'failed', errorMessage: '任务未成功启动，请重新诊断。', completedAt: new Date() } });
   const run = await prisma.diagnosisRun.findFirst({ where: { id, user } });
@@ -158,8 +170,12 @@ export async function getDiagnosis(user: string, id: string) {
 }
 
 export async function importDiagnosis(user: string, name: string, input: { runId: string; findingIds: string[]; baseVersion: number; expectedContentHash: string; baselineVerified?: boolean; constraints: string }) {
-  const run = await prisma.diagnosisRun.findFirst({ where: { id: input.runId, user, status: 'done' } });
+  const core = isStorageCoreEnabled();
+  if (core) user = requireCoreExperimentContext().actor.username;
+  const stored = core ? await readCoreDiagnosis(input.runId) : null;
+  const run = core ? stored?.status === 'done' ? { id: stored.id, reportJson: stored.report ? JSON.stringify(stored.report) : null, inputSnapshotJson: JSON.stringify(stored.snapshot), inputHash: stored.input_hash, experimentId: stored.experiment_id, caseId: stored.case_id } : null : await prisma.diagnosisRun.findFirst({ where: { id: input.runId, user, status: 'done' } });
   if (!run?.reportJson) throw new DiagnosisError('诊断尚未完成或不可访问', 404);
+  if (core) await verifyCoreDiagnosisSource(run.id);
   const snapshot = JSON.parse(run.inputSnapshotJson) as DiagnosisSnapshot;
   const invoked = snapshot.skills.find(item => item.name === name);
   if (!invoked) throw new DiagnosisError('本次执行未记录调用此 Skill，不能直接优化');
@@ -173,7 +189,7 @@ export async function importDiagnosis(user: string, name: string, input: { runId
   const id = `diagnosis-${key}`;
   const refs = [{ type: 'diagnosis', id: run.id, inputHash: run.inputHash, findingIds: findings.map(f => f.id), experimentId: run.experimentId, caseId: run.caseId, baseContentHash: base.contentHash, baselineVerified: Boolean(input.baselineVerified), constraints: input.constraints }];
   const existing = await prisma.skillWorkbenchSession.findFirst({ where: { id, user } });
-  if (existing) return { sessionId: existing.id };
+  if (existing) { if (core) await verifyCoreDiagnosisSource(run.id); return { sessionId: existing.id }; }
   try {
     return await prisma.$transaction(async tx => {
       const opt = await tx.skillOptSession.create({ data: { id, user, skillName: name, baseVersion: input.baseVersion, title: '诊断优化计划', files: JSON.stringify(base.files) } });
@@ -181,11 +197,13 @@ export async function importDiagnosis(user: string, name: string, input: { runId
         sessionId: opt.id, skillId: base.skill.id, baseVersion: input.baseVersion, status: 'draft', operatorMeta: JSON.stringify({ source: 'diagnosis', sourceRefs: refs }),
         items: { create: findings.map((finding, rank) => ({ rank, route: 'core', status: 'pending', title: finding.summary, rationale: `${finding.evidence}\n用户确认与 ${name} 有关。\n${input.constraints}`, severity: finding.severity, proposedEdit: finding.correctionGuidance, sourceIssueIds: '[]', sourceRefsJson: JSON.stringify([{ ...refs[0], findingIds: [finding.id], finding }]), sourcesBreakdown: JSON.stringify({ diagnosis: 1 }) })) },
       } });
+      if (core) await verifyCoreDiagnosisSource(run.id);
       const workbench = await tx.skillWorkbenchSession.create({ data: { id, user, title: `${name} · 诊断优化`, skillName: name, workVersion: input.baseVersion, source: 'management', activeView: 'optimization', stage: 'ready', filesJson: JSON.stringify(base.files), optSessionId: opt.id } });
+      if (core) await verifyCoreDiagnosisSource(run.id);
       return { sessionId: workbench.id };
     });
   } catch (error) {
-    if (await prisma.skillWorkbenchSession.findFirst({ where: { id, user } })) return { sessionId: id };
+    if (await prisma.skillWorkbenchSession.findFirst({ where: { id, user } })) { if (core) await verifyCoreDiagnosisSource(run.id); return { sessionId: id }; }
     throw error;
   }
 }

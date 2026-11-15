@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {getEvaluatorRepositoryContext,readCoreEvaluators,saveCoreEvaluators} from '@/lib/storage-core/evaluators';
 import fs from 'fs';
 import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
@@ -55,6 +56,7 @@ function writeLegacyFileSync(store: Record<string, unknown[]>) {
 
 /** 读取某用户的自建评估器 JSON 数组（不做结构校验） */
 export async function readUserCustomEvaluators(user: string): Promise<unknown[]> {
+  if (getEvaluatorRepositoryContext()) return readCoreEvaluators();
   const row = await prismaRaw.customEvaluatorList.findUnique({ where: { user } });
   let parsed: unknown[] = [];
   if (row?.itemsJson) {
@@ -82,6 +84,7 @@ export async function readUserCustomEvaluators(user: string): Promise<unknown[]>
 
 /** 覆盖写入某用户的自建评估器列表 */
 export async function writeUserCustomEvaluators(user: string, items: unknown[]): Promise<void> {
+  if (getEvaluatorRepositoryContext()) { await saveCoreEvaluators(items); return; }
   const json = JSON.stringify(Array.isArray(items) ? items : []);
   await prismaRaw.customEvaluatorList.upsert({
     where: { user },
