@@ -84,6 +84,28 @@ export function createAnalyticsSource(username:string,items:AnalyticsItem[],even
   };
 }
 export type AnalyticsSource=ReturnType<typeof createAnalyticsSource> & {actor:Actor;validate:()=>Promise<void>;enrich:(traceIds:string[])=>Promise<Record<string,unknown>>};
+export interface CoreAgentMetadata {
+  trace_id:string;boundary:string;executionId:string;taskId:string;user:string;agentId:string|null;
+  agentName:string;framework:string;timestamp:string;interactions?:{role?:string;agent?:string;subagent_name?:string}[];
+}
+export async function readCoreAgentMetadata(source:AnalyticsSource,options:CompatibilityOptions={}):Promise<CoreAgentMetadata[]> {
+  const principalUsername=source.actor.principalUsername;
+  if(!principalUsername)fail('Verified Agent owner identity unavailable');
+  const recent=new Set(source.items.map(item=>item.projection.executions[0]).filter(row=>row.user===principalUsername&&row.taskId&&row.framework).sort((a,b)=>Date.parse(b.timestamp)-Date.parse(a.timestamp)).slice(0,300).map(row=>row.id));
+  const result:CoreAgentMetadata[]=[];
+  for(let offset=0;offset<source.items.length;offset+=200) {
+    const selected=source.items.slice(offset,offset+200);
+    const value=await rpc(source.actor,'agent_metadata',{items:selected.map(item=>({trace_id:item.trace_id,boundary:item.boundary,registrations:recent.has(item.projection.executions[0].id)}))},options);
+    if(!Array.isArray(value.items)||value.items.length!==selected.length)fail('Agent metadata coverage unavailable');
+    for(const [index,raw] of value.items.entries()) {
+      const row=raw as CoreAgentMetadata;const expected=selected[index];const execution=expected.projection.executions[0];
+      if(!row||row.trace_id!==expected.trace_id||row.boundary!==expected.boundary||row.executionId!==execution.id||row.taskId!==execution.taskId||row.user!==execution.user||row.agentId!==null&&typeof row.agentId!=='string'||!Number.isFinite(Date.parse(row.timestamp)))fail('Agent metadata source differs',409);
+      if(recent.has(execution.id)&&(!Array.isArray(row.interactions)||row.interactions.some(item=>!item||Object.entries(item).some(([key,value])=>!['role','agent','subagent_name'].includes(key)||typeof value!=='string'))))fail('Agent registration inputs unavailable');
+      result.push(row);
+    }
+  }
+  await source.validate();return result;
+}
 const stateKey=Symbol.for('agent-insight.storage-core.analytics-worker');
 type Job={actor:Actor;trace:string;boundary:string;options:CompatibilityOptions;sourceRun?:{experiment_id:string;run_id:string}};
 const globals=globalThis as unknown as Record<symbol,{jobs:Map<string,Job>;inflight:Set<string>;failures:Map<string,{status:number;retryAt:number}>;active:boolean;timer?:ReturnType<typeof setInterval>}>;

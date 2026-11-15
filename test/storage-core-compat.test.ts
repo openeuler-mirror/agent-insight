@@ -118,4 +118,5 @@ test('trusted model configuration identity follows the authenticated legacy mapp
  bindings();const {compatibilityContext}=await import('../src/lib/storage-core/compat');
  const actor=await compatibilityContext(request('?user=forged'),{resolveIdentity,fetcher:async()=>Response.json(profile)});
  assert.equal(actor.username,'old-user');
+ assert.equal(actor.principalUsername,profile.username);
 });

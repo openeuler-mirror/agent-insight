@@ -79,3 +79,29 @@ test('evidence transport failures are unavailable and never expose upstream deta
   await assert.rejects(readTraceEvidence(request(),{taskId:'original-task'},{fetcher}),error=>typeof error==='object'&&error!==null&&'status'in error&&error.status===503&&!String(error).includes('secret network path'));
  }
 });
+
+
+test('execution helper explicitly selects the sessionless view without relaxing default evidence',async()=>{
+ const {readTraceEvidence,readTraceExecution}=await import('../src/lib/storage-core/evidence');
+ const execution={...evidence,format:'agent-insight.trace-execution'} as Record<string,unknown>;delete execution.session;
+ const fetcher:typeof fetch=async(url,options)=>{
+  const u=new URL(String(url));assert.equal(new Headers(options?.headers).get('authorization'),'Bearer '+token);
+  if(u.pathname==='/v1/auth/me')return Response.json(profile);
+  assert.equal(u.searchParams.get('view'),'execution');assert.equal(u.searchParams.get('workspace_id'),'w');assert.equal(u.searchParams.get('executionId'),'original-execution');assert.equal(u.searchParams.has('user'),false);
+  return Response.json({value:execution});
+ };
+ const result=await readTraceExecution(request(),{executionId:'original-execution'},{fetcher});assert.equal(result.username,'alice');assert.equal(result.evidence.execution.finalResult,'Complete output');assert.equal('session'in result.evidence,false);
+ await assert.rejects(readTraceEvidence(request(),{executionId:'original-execution'},{fetcher:async url=>new URL(String(url)).pathname==='/v1/auth/me'?Response.json(profile):Response.json({error:'original session missing'},{status:404})}),error=>!!error&&typeof error==='object'&&'status'in error&&error.status===404);
+ await assert.rejects(readTraceEvidence(request(),{executionId:'original-execution'},{fetcher:async url=>new URL(String(url)).pathname==='/v1/auth/me'?Response.json(profile):Response.json({value:{...evidence,session:null}})}));
+});
+
+test('execution-only helper rejects wrong formats, scopes and failures',async()=>{
+ const {readTraceExecution}=await import('../src/lib/storage-core/evidence');
+ const value={...evidence,format:'agent-insight.trace-execution'} as Record<string,unknown>;delete value.session;
+ for(const invalid of [evidence,{...value,manifest:{workspace_id:'other',trace_id:'internal'}},{...value,execution:{...evidence.execution,finalResult:123}}]){
+  await assert.rejects(readTraceExecution(request(),{executionId:'original-execution'},{fetcher:async url=>new URL(String(url)).pathname==='/v1/auth/me'?Response.json(profile):Response.json({value:invalid})}));
+ }
+ for(const status of [401,403,404,409,413,503]){
+  await assert.rejects(readTraceExecution(request(),{executionId:'original-execution'},{fetcher:async url=>new URL(String(url)).pathname==='/v1/auth/me'?Response.json(profile):Response.json({error:'private body'},{status})}),error=>!!error&&typeof error==='object'&&'status'in error&&error.status===status&&!String(error).includes('private body'));
+ }
+});

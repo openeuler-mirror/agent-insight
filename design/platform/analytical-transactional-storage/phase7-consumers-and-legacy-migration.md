@@ -1,6 +1,6 @@
 # 剩余消费者与旧数据迁移：盘点、依赖与实施计划
 
-日期：2026-11-15；代码基线`945af229`。用户已授权按依赖自主实施，保留全部原功能/可见界面，只用隔离环境，不切生产。当前工作副本继续使用`codex/storage-core-refactor`，不重置已有数据、不推送远端。此清单按调用链核对，不能把Prisma命中数量当作尚未迁移数量。
+日期：2026-11-15；首轮盘点基线`945af229`，最新完成情况见第4节及实施状态。用户已授权按依赖自主实施，保留全部原功能/可见界面，只用隔离环境，不切生产。当前工作副本继续使用`codex/storage-core-refactor`，不重置已有数据、不推送远端。此清单按调用链核对，不能把Prisma命中数量当作尚未迁移数量。
 
 ## 1. 已接管与剩余功能清单
 
@@ -10,7 +10,7 @@ Trace CRUD/标签/bundle、Dataset版本/回流/生成、实验/比较/直接轨
 |---|---|---|---|
 | L0 | 96模型、真实物理字段、关系、owner/凭据与未知数据迁移计划 | `services/storage/legacy.py`、`__main__.py`、`prisma/schema.prisma`；原inspect/export仅原始快照，migration-plan仅核心DDL升级 | 新工具只读、无apply；未知/孤儿/owner歧义/缺转换器不得ready，原导出不放松 |
 | L1 | 优化点旧页面resolve回调 | `skills/by-name/[name]/optimization-points/resolve`仍只更新旧SkillIssue；新列表已合并typed派生Issue | 原PATCH/DTO不变；真实actor、Skill范围、当前机器selection；静态/feedback仍原域，新派生只写014注解；重复可恢复，threadId缺省保留null语义 |
-| L2 | Dashboard/Fleet/Task/Quality/Skill/Agent动态统计及模型定价observed models | dashboard/stats、fleet/*、observe/task-insight/task-stats、quality/*、skills/runs/logs/versions、agents、modelconfig/pricing仍读旧Execution/Session/结果 | 先建立有字段覆盖声明的授权摘要读源，复用原聚合；不补零掩盖缺字段，不读取全部正文，不以旧管理员白名单扩大新IAM |
+| L2 | Skill运行/日志等剩余动态消费者 | `skills/[id]/runs`、`skills/logs`仍需完整运行/评测快照；Dashboard/Fleet/Task/Quality、定价observed models、Skill列表/版本、Agent列表已接通 | 复用原快照与聚合算法；保持真实结果语义，不以泛化实验分数替代answerScore，不回写历史版本 |
 | L3 | final_result编辑、独立rejudge/cancel | `trace_service.py`明确409；eval/rejudge及evaluation/cancel仍旧库 | 编辑→冻结证据/配置→持久任务→lease/fence/取消→实际结果与Issue；不可仅去409；新编辑不改旧运行输入 |
 | L3 | Batch与旧Trigger评测 | debug/batch-tasks缺typed context；旧trigger运行仍写SkillTriggerEvalRun/Evaluation/SkillIssue，被新聚合过滤 | 保留任务/评分/运行DTO；Dataset/Skill/Evaluator版本、进度/取消/重启与空Issue替代语义一起闭环 |
 | L4 | upload/proxy/OpenCode complete、OTLP logs、旧spool重放 | logs→各framework spool→consumer→saveExecutionRecord旧Execution/Session；core下consumer仍启动 | 新接收需真实actor/来源证明及durable ack，旧积压不可仅按payload.user推断授权；原解析/合并/去重保留，确认indexed后才推进cursor |
@@ -89,7 +89,8 @@ T3首个可独立落地消费者限定为原`modelconfig/pricing GET`的observed
 | T2原优化点回调 | 已实现/隔离验收 | 原入口、混合static/typed、null/重试/授权、Key传输；不更改014、不宣称跨库原子 |
 | T3模型列表首片 | 已实现/隔离验收 | 只迁pricing GET observed模型；价格PUT及其旧控制域不迁 |
 | T3授权摘要与首批统计 | 已实现/隔离验收 | Dashboard/Fleet/Quality/Task使用当前授权投影，保留原统计算法、DTO及界面；原Trace钻取、筛选、空结果及执行记录已验证 |
-| T3其他动态消费者 | 待实施 | Skill/Agent其余动态消费者按清单继续接入，静态配置仍为原权威；不将首批统计接通视为全部领域完成 |
+| T3 Skill/Agent列表与版本 | 已实现/隔离验收 | 原Skill列表、版本usage/trend/执行输出和Agent列表/自动发现；sessionless、真实Agent ID、原Recorder来源及登录别名兼容已回归，UI不变 |
+| T3其他动态消费者 | 待实施 | Skill runs/logs及其他剩余读写继续按清单接入；Agent删除与静态配置控制域未迁，不将本片视为全部领域完成 |
 | L3–L8其他消费者及历史迁移 | 待实施 | 按本文依赖，不能拿清单/目录或测试绿替代业务接管和历史apply |
 
 最终应用5794项（5772通过/22跳过）、存储969项（790通过/179跳过）均零失败，PG/nativeOG解决注解及迁移保留各13项通过；实际HTTP/CH/IAM和数据指纹证据见[实施状态](implementation-status.md#2026-11-15-剩余消费者盘点语义计划与首批闭环)。当前只读计划时间预算在SQL/循环边界检查，最终deadline复核保证超时不返回完整内容hash；max_bytes限制原始读入字节而非进程RSS。原前端JSX/CSS未改，本轮无浏览器验证。此记录只结算三片已验收工作，不将后续条目标为完成。
@@ -127,3 +128,16 @@ cut描述包括源Trace revision、语义生命周期哈希、捕获时间、证
 
 
 第一版统计钻取保持简单：真实独立执行仍使用自己的Task引用；仅由父Trace临时投影的子执行，其Fleet统计钻取直接打开实际所属Trace，再通过原有Agent树和Span详情查看。不新增虚拟Trace/Session、不引入新的导航令牌或解析协议。
+
+
+### 第一版后续接入批次：复用已有数据库接口
+
+用户已确认以原功能等价、替换数据库调用为主。第一片为原Skill列表与版本页：统计改用现有授权摘要，沿用原7/14天窗口、800条上限、成功率/P95/趋势及DTO；版本页仅为已选执行记录读取原Trace证据中的完整输出。静态Skill/版本/静态评估仍是原权威，不新增表、迁移或第二版投影协议。身份由真实凭据确认，查询user不扩权；core读取失败保持明确错误，不伪装零调用。精确补齐这些GET入口的现有apiFetch凭据传输，不改变UI或未迁写操作。
+
+执行步骤：先写旧动态表毒化、旧算法DTO等价、授权/空结果/错误透传及凭据传输的RED测试，再替换数据源并GREEN；之后审查、隔离真实HTTP与全量门禁。下一片继续Agent动态查询与Skill运行/日志，再接独立重评、取消和Batch/Trigger。跨库任务优先复用已有实验/RunPlan能力，保留原操作契约；不以通用CRUD替代真实状态闭环。所有验证均隔离，保留当前验收数据，不切生产。
+
+
+第一版Skill版本执行摘要补充：已有`GET /v1/compat/observe/evidence`支持显式`view=execution`，返回`agent-insight.trace-execution`，仅包含完整execution及来源manifest/hash，不返回或伪造session。合法导入的`session=null`记录可读取完整输出和真实Agent引用；缺省Evidence视图及`readTraceEvidence`契约仍要求原Session，缺失继续404。新`readTraceExecution`复用相同IAM、身份/字节校验和错误处理，仅供对应执行字段消费。执行视图独立计算snapshot hash，当前统计返回前仍复核原摘要版本；无新路由、表或parser版本。
+
+
+Agent管理GET复用现`analytics`端口增加只读`agent_metadata`动作，每批至多200个已授权Trace/boundary，读取前后复核，返回真实Execution ID/Agent ID和可选注册输入。复用已有经验证的源元数据读取，不改015或parser。静态RegisteredAgent仍原权威；今日调用/最后调用仍按真实agentId计数，不凭名称猜关联。仅本人最近300个实际Execution请求role/agent/subagent_name，按原interaction顺序及原extractObservedAgentRegistrations补注册；Langfuse用原secondary interactions，空/缺Session不造注册。native沿用原Session的resource agent/service覆盖和raw优先语义。源artifact在本地可能包含正文，但不组装完整Session、不从CH拉tool正文，Node只收到上述小字段。Agent DELETE暂不在此片迁移。

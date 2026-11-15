@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-15。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已完成本批隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-15。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
@@ -382,3 +382,25 @@ Benchmark原创建/启动/实际device命令/提交/真实评测HTTP/规范化/�
 证据在`exclude/20261115-ob765mlu/`，包括`v1-final-full.log`、`v1-types-final.log`、`acceptance-v1-final/original-http-report.json`、`main-ui-preservation.json`、`main-ui-readback.json`、浏览器截图及日志；Python、关系库与CH冻结报告在其`kernel-wire-final-*`目录。原界面仍可通过`http://localhost:58488/dashboard`验收，沿用原admin登录方式。
 
 这次完成首批统计消费者接线，不代表全产品迁移完成。Skill/Agent其余动态消费者、RAS专项剩余读/删控制、OTLP logs/metrics和旧spool、其他phase7消费者及96模型完整语义apply仍按清单推进；静态配置/客户端/FI原控制域继续保持真实权威。生产切换及回退未执行。下一步继续补原功能的数据链路和历史迁移，不扩展第二版容量机制。
+
+
+## 2026-11-15 第一版 Skill 与 Agent 剩余动态查询接入
+
+本片只替换原Skill列表、版本页和Agent管理GET的动态数据库调用，保留原UI、DTO、7/14天窗口、800条及每版本30条规则、成功率/P95/趋势和真实agentId统计。静态Skill/版本/static evaluation/RegisteredAgent继续原控制权威。原POST/DELETE逐字保留，没有新增表、迁移或parser协议。
+
+版本页仅为显示记录读取完整输出，使用显式`view=execution`及独立`agent-insight.trace-execution`格式，合法无Session执行可读且不伪造轨迹；默认完整Evidence仍对缺失Session返回404。原生根Agent ID恢复三个明确别名，后代ID不能冒充根。Agent元数据复用既有来源验证，每批200条，仅发送真实身份及role/agent/subagent_name；bundle索引、Langfuse secondary、原生资源优先及agent.record.v1的消息顺序/工具carrier均按各自原协议处理。最近300条补注册只选本人，IAM规范用户名与旧静态Owner别名分别保留，组内/共享读取不成为代注册权限。core失败保持明确错误，不回落旧动态表或伪装0调用。
+
+| 验证 | 最终结果与边界 |
+|---|---|
+| 应用全量 | 5846项，5824通过、22跳过、0失败/取消，269.78秒；独立HOME/SQLite。首次全量5845项零失败后，因新增真实Owner别名回归再次完整运行 |
+| 存储整套 | 最终1012项，833通过、179项可选引擎缺配置跳过、0失败/错误，178.39秒；ResourceWarning作为错误。148个源/schema/test文件运行前后SHA相同；早期全量与审查修复并行导致manifest改变，不作为最终源码验收 |
+| 真实PG / 原生openGauss | 各12/12通过，无跳过；分别35.13/39.79秒。每库12个自建schema回查无残留；包含Agent元数据、无Session execution view及native根/后代身份，事实sink为测试MemoryFacts，不混称CH矩阵 |
+| 真实HTTP/CH | 全新SQLite和独立CH database，原handler、真实Prisma静态域与apiFetch共9次请求通过；动态旧表毒化读取0。覆盖完整Unicode长输出、空输出、无Session、真实Agent ID计数、实际Recorder自动发现、私有Skill/Agent、无Key401及伪user不扩权，无LLM执行 |
+| 原浏览器界面 | 原Agent概览、Skill管理列表及版本历史实际验收。真实隔离Agent已显示，Skill列表2项/7天3次调用；既有示例卡片保留，不将示例数据当作真实统计证据。当前页控制台0错误/0警告；TSX/CSS零diff |
+| 现有隔离环境数据保留 | schema15不变，刷新前core/legacy两库备份完整性正常；65张core表和96张旧表既有业务/凭据保留，13张旧CH逻辑内容相同。8条真实observed注册新增，原注册行保留；两条既有负面Outbox仅正常更新重试元数据。没有操作默认数据库或生产 |
+| 既有链路读回 | 普通实验100分、Workbench0分、诊断done再次真实HTTP读回，4组既有服务身份仍有效，原登录Key不变 |
+| 静态及复核 | 完整tsc零输出通过；新增文件及对应测试ESLint通过，受改旧文件另有HEAD规则基线对照。Skills和Agent各经spec及quality复审，发现的sessionless/native身份、Recorder格式和Owner别名问题均有回归；diff-check通过 |
+
+证据仍在`exclude/20261115-ob765mlu/`：`consumer-v1-final-full.log`、`consumer-v1-python-final-v2-{manifest,report}.json`及日志、`consumer-relational-*`、`acceptance-skill-consumers/original-consumer-http-final-report.json`、`consumer-v1-main-preservation.json`、`consumer-v1-main-readback.json`和`consumer-v1-{agents,skills,versions}.jpg`。原验收环境仍在`http://localhost:58488/config/skills`及`/agents`，沿用原admin。
+
+本片未接管Skill runs/logs、Agent删除、独立rejudge/cancel、Batch/Trigger、其他采集/Infra/RAS/配置域与完整历史导入；它们继续按phase7推进，不据此宣称全部功能迁移完成。万级Span/水位/容量机制继续留第二版，未执行生产切换。

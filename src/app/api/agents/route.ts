@@ -15,6 +15,8 @@
  */
 
 import { NextResponse } from 'next/server';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, readCoreAgentMetadata, analyticsFailure, type CoreAgentMetadata } from '@/lib/storage-core/analytics';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { ensureAllSystemAgents } from '@/lib/system-agents';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
@@ -22,8 +24,8 @@ import { extractObservedAgentRegistrations } from '@/lib/engine/observability/ag
 
 export const dynamic = 'force-dynamic';
 
-async function backfillObservedAgentsFromSessions(user?: string) {
-  const executions = await (prismaRaw as any).execution.findMany({
+async function backfillObservedAgentsFromSessions(user?: string, metadata?: CoreAgentMetadata[]) {
+  const executions = metadata ? metadata.filter(row=>row.user===user&&row.taskId&&row.framework).sort((a,b)=>Date.parse(b.timestamp)-Date.parse(a.timestamp)).slice(0,300) : await (prismaRaw as any).execution.findMany({
     where: {
       taskId: { not: null },
       framework: { not: null },
@@ -45,7 +47,7 @@ async function backfillObservedAgentsFromSessions(user?: string) {
   ));
   if (taskIds.length === 0) return;
 
-  const sessions = await (prismaRaw as any).session.findMany({
+  const sessions = metadata ? metadata.filter(row=>row.interactions?.length).map(row=>({taskId:row.taskId,interactions:JSON.stringify(row.interactions)})) : await (prismaRaw as any).session.findMany({
     where: { taskId: { in: taskIds } },
     select: { taskId: true, interactions: true },
   });
@@ -115,14 +117,16 @@ async function backfillObservedAgentsFromSessions(user?: string) {
  */
 export async function GET(request: Request) {
   try {
+    const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+    const metadata = analytics ? await readCoreAgentMetadata(analytics) : undefined;
     // 每次列表请求都确保系统 Agent 已注册/更新（已发现的同名 Agent 会被 promote 成 system），
     // 同时把历史遗留的 'unregistered' 记录一次性迁移成 'user'。
     await ensureAllSystemAgents();
 
     const { searchParams } = new URL(request.url);
-    const user = (searchParams.get('user') || '').trim() || undefined;
+    const user = analytics?.username ?? ((searchParams.get('user') || '').trim() || undefined);
 
-    await backfillObservedAgentsFromSessions(user);
+    await backfillObservedAgentsFromSessions(user, analytics ? metadata!.filter(row=>row.user===analytics.actor.principalUsername).map(row=>({...row,user:analytics.username})) : undefined);
 
     const where = user
       ? { OR: [{ user }, { user: null }] }
@@ -155,7 +159,7 @@ export async function GET(request: Request) {
     const agentIds = filteredRows.map((r: { id: string }) => r.id);
     let executions: Array<{ agentId: string | null; timestamp: Date | null }> = [];
     if (agentIds.length > 0) {
-      executions = await (prismaRaw as any).execution.findMany({
+      executions = metadata ? metadata.filter(row=>row.agentId&&agentIds.includes(row.agentId)).map(row=>({agentId:row.agentId,timestamp:new Date(row.timestamp)})) : await (prismaRaw as any).execution.findMany({
         where: { agentId: { in: agentIds } },
         select: { agentId: true, timestamp: true },
       });
@@ -191,8 +195,10 @@ export async function GET(request: Request) {
       };
     });
 
+    if (analytics) await analytics.validate();
     return NextResponse.json({ agents });
   } catch (error) {
+    if (isStorageCoreEnabled()) return analyticsFailure(error);
     const msg = error instanceof Error ? error.message : String(error);
     console.error('[agents] GET error:', msg);
     return NextResponse.json({ error: msg }, { status: 500 });

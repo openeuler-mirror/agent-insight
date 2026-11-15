@@ -250,3 +250,8 @@ FI 收集回调只确认收集事实。实验的 Trace 就绪与 Case 关联由�
 保持原接口的不同统计口径，包括 Dashboard 的原始 cost/答案正确率、Fleet 的价格重算/工具失败判定，以及当前 latency 原值与接口解释；本批不顺带修正历史 Fleet 单位差异。明确的 Trace 级 legacy 指标可保留，未声明的原生逐 Span cache/reasoning 不假定为 Trace 总量；冲突来源明确失败。
 
 预算：每 Trace 构建128MiB/100000 Span，持久摘要2MiB；页超限自适应缩小，总枚举100000 Trace。这些上限是读取护栏，不是本版容量验收指标。构建要求稳定的 prepared source 版本；持续高频更新可能使 CAS 重试并暂时 pending。第一版以原有功能等价为目标；万级Span专项、增量统计、水位快照与千级混合负载优化统一放到第二版，不把本批消费者接通当作容量目标已经验收。旧库全量迁移仍只有只读计划，没有 apply；RAS 事件 POST 与 Fleet 读取已接入，RAS 专题页的其余旧控制消费者按剩余清单推进。
+
+
+第一版后续消费者：Skill列表和版本页的调用量、成功率、P95及趋势，以及Agent管理页的调用统计与自动发现，已改用授权新存储。静态Skill/版本/静态评估/RegisteredAgent仍由原控制域保存。版本页仅为显示的执行记录读取完整输出；原有无Session执行仍可展示，不伪造轨迹。
+
+内部取证端口`/v1/compat/observe/evidence?view=execution`返回`agent-insight.trace-execution`，包含原Execution、来源清单及独立内容摘要，不含Session；默认完整Evidence仍要求真实Session。Agent元数据通过现`analytics`端口只读`agent_metadata`动作读取（每批最多200个Trace/boundary），只发送真实身份及注册必需小字段；根身份不从后代Span猜测。旧登录映射的静态Owner与IAM规范用户名分别保留：只对本人来源补注册，不把共享Trace变成本人的Agent。没有新增表或迁移，现015/parser1保持。

@@ -482,8 +482,11 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 self.reply(405,{'error':'Method not allowed'});return
             if path==['observe','evidence'] and self.command=='GET':
                 from .trace_evidence import TraceEvidence, MAX_EVIDENCE_BYTES
+                view=params.get('view')
+                if view not in (None,'execution'):raise ValueError('Unsupported evidence view')
                 evidence=TraceEvidence(runtime.queries,runtime.authorized)
-                respond(evidence.read(token,workspace,task_id=params.get('taskId'),execution_id=params.get('executionId'),trace_ref=params.get('traceRef')),limit=MAX_EVIDENCE_BYTES+1024);return
+                read=evidence.read_execution if view=='execution' else evidence.read
+                respond(read(token,workspace,task_id=params.get('taskId'),execution_id=params.get('executionId'),trace_ref=params.get('traceRef')),limit=MAX_EVIDENCE_BYTES+1024);return
             if path==['observe','agent-traces'] and self.command=='POST':
                 import time
                 from .agent_traces import AgentTraceRecorder,AgentTracePending,MAX_RECORD_BYTES

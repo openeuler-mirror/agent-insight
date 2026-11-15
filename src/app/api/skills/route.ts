@@ -15,6 +15,8 @@
  */
 
 import { resolveUser } from '@/lib/auth/auth';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import { getSkillStorageRoot } from '@/lib/env';
 import fs from 'fs';
@@ -32,7 +34,8 @@ export async function GET(request: NextRequest) {
     const category = searchParams.get('category');
     const userParam = searchParams.get('user');
 
-    const { username: user } = await resolveUser(request, userParam);
+    const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+    const { username: user } = analytics ?? await resolveUser(request, userParam);
 
     const where: any = {};
 
@@ -86,7 +89,7 @@ export async function GET(request: NextRequest) {
 
     if (skillNames.length > 0) {
         try {
-            const execs = await prismaRaw.execution.findMany({
+            const execs = await (analytics ?? prismaRaw.execution).findMany({
                 where: { skill: { in: skillNames }, timestamp: { gte: since7d } },
                 select: { skill: true, agentName: true, isAnswerCorrect: true, failures: true },
             });
@@ -104,6 +107,7 @@ export async function GET(request: NextRequest) {
                 if (!failed) agg.success += 1;
             }
         } catch (e) {
+            if (analytics) throw e;
             console.warn('[Skills List] failed to aggregate executions:', (e as any)?.message);
         }
 
@@ -182,8 +186,10 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    if (analytics) await analytics.validate();
     return NextResponse.json(response);
   } catch (error) {
+    if (isStorageCoreEnabled()) return analyticsFailure(error);
     console.error('Fetch Skills Error:', error);
     return NextResponse.json({ error: 'Failed to fetch skills' }, { status: 500 });
   }

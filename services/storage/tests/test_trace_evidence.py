@@ -26,6 +26,21 @@ class TraceEvidenceTests(unittest.TestCase):
         trace=self.metadata.resolve(self.token,'w',result['rootExecutionId'],'execution')['trace_id']
         return trace
 
+    def test_execution_view_preserves_missing_original_session_without_changing_default(self):
+        from services.storage.compatibility import TraceNotFound
+        from services.storage.trace_evidence import _hash
+        source=bundle();source['executions'][0]['session']=None
+        source['executions'][0]['execution'].update(finalResult='完整输出',agentId='registered-agent')
+        self.prepared(source);reader=self.evidence()
+        with self.assertRaises(TraceNotFound):reader.read(self.token,'w',execution_id='root')
+        value=reader.read_execution(self.token,'w',execution_id='root')
+        self.assertEqual(value['format'],'agent-insight.trace-execution');self.assertNotIn('session',value)
+        self.assertEqual(value['execution']['finalResult'],'完整输出');self.assertEqual(value['execution']['agentId'],'registered-agent')
+        self.assertEqual(value['snapshot_hash'],_hash({key:item for key,item in value.items() if key not in ('snapshot_hash','captured_at')}))
+        self.assertEqual(reader.read_execution(self.token,'w',execution_id='root')['snapshot_hash'],value['snapshot_hash'])
+        with self.assertRaises(Forbidden):reader.read_execution(self.bob,'w',execution_id='root')
+        with self.assertRaises(TraceNotFound):reader.read(self.token,'w',execution_id='root')
+
     def test_full_original_extensions_aliases_owner_and_no_secret_paths_in_manifest(self):
         source=bundle();source['executions'][0]['execution']['query']='完整查询'*2000
         raw=source['executions'][0]['session']['interactions'][0];raw.update(temperature=0.4,request_id='request',_collaboration={'ids':['x']},large=2**62)
@@ -54,6 +69,28 @@ class TraceEvidenceTests(unittest.TestCase):
         value=self.evidence().read(self.token,'w',trace_ref=accepted['trace_ids'][0])
         self.assertEqual(value['execution']['clientId'],'deployment-client')
         origins=json.loads(value['execution']['skillOrigins']);self.assertEqual(origins[0]['originRef'],'origin_0123456789abcdef01234567')
+
+    def test_native_root_agent_id_is_preserved_in_full_and_execution_views(self):
+        from services.storage.tests.test_observations import packet
+        for index,name in enumerate(('agent.id','legacy.agent_id','agentId'),start=1):
+            with self.subTest(attribute=name):
+                source=packet(trace=str(index)*32);spans=source['resourceSpans'][0]['scopeSpans'][0]['spans']
+                spans[0].setdefault('attributes',[]).append({'key':name,'value':{'stringValue':'root-agent-'+str(index)}})
+                child=copy.deepcopy(spans[0]);child.update(spanId='2222222222222222',parentSpanId=spans[0]['spanId'])
+                child['attributes']=[item for item in child['attributes'] if item['key']!=name]
+                child['attributes'].append({'key':name,'value':{'stringValue':'child-agent'}});spans.append(child)
+                trace=self.ingest.accept(self.token,'w',source)['trace_ids'][0];self.drain()
+                for read in (self.evidence().read,self.evidence().read_execution):
+                    self.assertEqual(read(self.token,'w',trace_ref=trace)['execution'].get('agentId'),'root-agent-'+str(index))
+
+    def test_descendant_agent_id_cannot_be_presented_as_root_execution_identity(self):
+        from services.storage.tests.test_observations import packet
+        source=packet();spans=source['resourceSpans'][0]['scopeSpans'][0]['spans']
+        child=copy.deepcopy(spans[0]);child.update(spanId='2222222222222222',parentSpanId=spans[0]['spanId'])
+        child.setdefault('attributes',[]).append({'key':'agent.id','value':{'stringValue':'child-agent'}});spans.append(child)
+        trace=self.ingest.accept(self.token,'w',source)['trace_ids'][0];self.drain()
+        self.assertNotIn('agentId',self.evidence().read(self.token,'w',trace_ref=trace)['execution'])
+        self.assertNotIn('agentId',self.evidence().read_execution(self.token,'w',trace_ref=trace)['execution'])
 
     def test_deployment_identity_is_not_inferred_from_a_descendant_span(self):
         from services.storage.tests.test_observations import packet

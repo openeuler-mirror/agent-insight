@@ -26,3 +26,19 @@ for(const scenario of ['ready','logout','abort','bound','other-503'])test('origi
   assert.equal(waits,scenario==='other-503'?0:scenario==='bound'?15:1);
   assert.equal(response.status,scenario==='ready'?200:503);
 });
+
+
+test('Skill and Agent read consumers transport the current key without changing mutation requests',async()=>{
+  const calls:{url:string;key:string|null}[]=[];
+  const sandboxModule={exports:{}};
+  const source=ts.transpileModule(fs.readFileSync(new URL('../src/lib/client/api.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+  vm.runInNewContext(source,{module:sandboxModule,exports:sandboxModule.exports,Headers,Date,process:{env:{NEXT_PUBLIC_URL_PREFIX:'/insight'}},window:{},localStorage:{getItem:()=> 'current-key'},fetch:async(url:string,options:RequestInit)=>{calls.push({url,key:new Headers(options.headers).get('x-witty-api-key')});return Response.json({});}});
+  const api=(sandboxModule.exports as {apiFetch:(url:string,options?:RequestInit)=>Promise<Response>}).apiFetch;
+  for(const url of ['/api/skills?user=other','/api/skills/skill-id/versions','/api/skills/skill-id/runs?version=1','/api/skills/logs?skill=s','/api/agents?user=other'])await api(url);
+  assert.ok(calls.every(call=>call.key==='current-key'));
+  assert.ok(calls.every(call=>call.url.startsWith('/insight/api/')));
+  await api('/api/skills',{method:'DELETE'});
+  assert.equal(calls.at(-1)?.key,null);
+  await api('/api/skills',{headers:{'x-witty-api-key':'explicit-key'}});
+  assert.equal(calls.at(-1)?.key,'explicit-key');
+});

@@ -15,6 +15,9 @@
  */
 
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+import { readCoreSkillOutputs } from '@/lib/storage-core/skill-consumers';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { db, prismaRaw } from '@/lib/storage/prisma';
@@ -98,9 +101,15 @@ export async function GET(
 ) {
     try {
         const { id } = await params;
-        const skill = await db.findSkillById(id);
+        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+        const access = analytics ? await canAccessSkill(id, analytics.username) : null;
+        const skill = access ? access.skill : await db.findSkillById(id);
         if (!skill) {
             return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
+        }
+
+        if (access && !access.allowed) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
         }
 
         const versions = skill.versions || [];
@@ -112,7 +121,7 @@ export async function GET(
         const since7d = new Date(now - 7 * 24 * 3600 * 1000);
         let execs: any[] = [];
         try {
-            execs = await prismaRaw.execution.findMany({
+            execs = await (analytics ?? prismaRaw.execution).findMany({
                 where: { skill: skill.name, timestamp: { gte: since14d } },
                 select: {
                     id: true, taskId: true, timestamp: true, latency: true,
@@ -125,6 +134,7 @@ export async function GET(
                 take: 800,
             });
         } catch (e) {
+            if (analytics) throw e;
             // Execution 表查询失败不致命，降级返回空集合（例如 OpenGauss 适配器尚未完整支持 prismaRaw.execution）。
             console.warn('[Skill Versions] failed to load executions, falling back to empty:', (e as any)?.message);
         }
@@ -195,8 +205,18 @@ export async function GET(
             };
         });
 
+        if (analytics) {
+            const outputs = await readCoreSkillOutputs(request, versionsList.flatMap((version: {executions: {id: string; taskId: string}[]}) => version.executions));
+            for (const version of versionsList) for (const execution of version.executions) {
+                const output = outputs.get(execution.id)!;
+                execution.agentId = output.agentId;
+                execution.output = output.finalResult;
+            }
+            await analytics.validate();
+        }
         return NextResponse.json(versionsList);
     } catch (e: any) {
+        if (isStorageCoreEnabled()) return analyticsFailure(e);
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
 }

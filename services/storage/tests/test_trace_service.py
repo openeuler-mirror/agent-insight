@@ -211,6 +211,29 @@ class CompatibilityHTTPTests(TraceHTTPTests):
         status,exported,_=self.request('/v1/compat/observe/traces/export?workspace_id=w&executionId=root',self.token)
         self.assertEqual(status,200);self.assertEqual(exported['value']['executions'],source['executions'])
 
+class ExecutionEvidenceHTTPTests(unittest.TestCase):
+    setUp=TraceHTTPTests.setUp
+    request=TraceHTTPTests.request
+
+    def test_explicit_execution_view_reads_sessionless_record_and_default_still_returns_404(self):
+        from services.storage.tests.test_trace_transfer import MemoryFacts,bundle
+        from services.storage.trace_service import TraceQueries
+        from services.storage.observations import ObservationIngest
+        self.runtime.facts=MemoryFacts();self.runtime.authorized=AuthorizedStorage(self.runtime.iam,self.runtime.facts)
+        self.runtime.queries=TraceQueries(self.control,self.runtime.facts,cursor_secret=b'isolated-execution-view-http')
+        self.runtime.ingest=ObservationIngest(self.control,self.runtime.facts);self.runtime.start_worker();self.addCleanup(self.runtime.close)
+        source=bundle();source['executions'][0]['session']=None
+        source['executions'][0]['execution']['finalResult']='original result'
+        self.assertEqual(self.request('/v1/compat/observe/traces/import?workspace_id=w',self.token,body={'bundle':source})[0],200)
+        endpoint='/v1/compat/observe/evidence?workspace_id=w&executionId=root'
+        self.assertEqual(self.request(endpoint,self.token)[0],404)
+        status,result,_=self.request(endpoint+'&view=execution',self.token)
+        self.assertEqual(status,200);self.assertEqual(result['value']['format'],'agent-insight.trace-execution')
+        self.assertNotIn('session',result['value']);self.assertEqual(result['value']['execution']['finalResult'],'original result')
+        self.assertEqual(self.request(endpoint,self.token)[0],404)
+        self.assertEqual(self.request(endpoint+'&view=unsupported',self.token)[0],400)
+
+
 class DatasetCompatibilityHTTPTests(unittest.TestCase):
     setUp=TraceHTTPTests.setUp
     request=TraceHTTPTests.request

@@ -134,3 +134,6 @@ Pricing GET obtains observed models from the caller's IAM-authorized Trace scope
 For analytics consumers, explicitly migrate the isolated control store to 015 and initialize CH002. Existing pages and success payloads remain unchanged. Verify real IAM isolation, native Agent platform filtering, selected zero scores, current unresolved issues/reports and genuine RAS events. Write-only API keys may submit RAS events; reading statistics requires read permission. Initial indexing has a dedicated retry marker. Never treat503 as an empty dataset or claim 1000-collector capacity from endpoint tests.
 
 Version one is limited to preserving existing features, UI, workflows, statistics and data. Large-Trace capacity work and watermarked snapshots are deferred to version two.
+
+
+Validate Skill and Agent dynamic reads through the original `/skills` and `/agents` pages: list statistics, version trends and full execution output, including empty results, zero values and historical executions without Sessions. Keep existing static configuration and registrations; dynamic statistics use authorized core storage. A legacy login mapped to a different canonical IAM username must still discover only its own Agents. Skill runs/logs, Agent deletion and asset/configuration writes are outside this slice, so the legacy control database remains required.

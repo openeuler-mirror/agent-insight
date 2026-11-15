@@ -198,3 +198,6 @@ core模式下，原优化点GET和完成优化后的resolve PATCH携带当前登
 按原页面检查 Dashboard、Fleet 趋势/排行/Agent/可靠性、Quality Agent列表/执行记录/报告以及Task统计。用另一普通账号与伪造user参数验证隔离，组管理员范围由真实IAM决定；检查原生Agent无注册行时的平台筛选、当前0分评测、未解决Issue与当前诊断、真实RAS anomaly/action_result。新RAS采集POST要求write API Key，可以write-only；读统计要求read。
 
 只在专用数据库验证，不指向默认业务库或生产库。第一版按原功能的HTTP、界面与全套测试验收；万级Span专项及增量/水位和千级容量优化留到第二版，不作为本版交付范围。旧库96模型计划仍不apply。
+
+
+Skill与Agent动态查询验收：沿用原`/skills`和`/agents`页面，确认列表统计、版本趋势和完整执行输出，包含空结果、0值和无Session历史执行。原静态配置与注册记录继续保留；仅调用统计来自授权新存储。旧登录名映射到不同IAM规范用户名时，也应只发现本人的Agent。此片不迁移Skill runs/logs、Agent删除或资产配置写操作，不能据此移除旧控制数据库。

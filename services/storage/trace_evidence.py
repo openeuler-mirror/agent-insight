@@ -207,7 +207,7 @@ class TraceEvidence:
             if name in attrs:
                 if type(attrs[name]) is not bool:raise EvidenceUnavailable('Invalid source subagent flag')
                 fields['isSubagent']=attrs[name];break
-        for dest,names in {'query':('legacy.session_query','legacy.query','query'),'label':('legacy.session_label','legacy.label','label'),'finalResult':('legacy.final_result','final_result'),'skill':('legacy.skill','skill'),'skillVersion':('legacy.skill_version','skill_version','skillVersion'),'executionSkills':('legacy.execution_skills','execution_skills','executionSkills'),'clientId':('agent.insight.client_id','client.id','legacy.client_id','client_id','clientId'),'skillOrigins':('legacy.skill_origins','skill_origins','skillOrigins','skill.origins')}.items():
+        for dest,names in {'query':('legacy.session_query','legacy.query','query'),'label':('legacy.session_label','legacy.label','label'),'finalResult':('legacy.final_result','final_result'),'skill':('legacy.skill','skill'),'skillVersion':('legacy.skill_version','skill_version','skillVersion'),'executionSkills':('legacy.execution_skills','execution_skills','executionSkills'),'agentId':('agent.id','legacy.agent_id','agentId'),'clientId':('agent.insight.client_id','client.id','legacy.client_id','client_id','clientId'),'skillOrigins':('legacy.skill_origins','skill_origins','skillOrigins','skill.origins')}.items():
             for name in names:
                 if name in attrs:fields[dest]=attrs[name];break
         if 'query' not in fields:
@@ -313,6 +313,9 @@ class TraceEvidence:
         providers=state.get('legacy_projection_sources',{})
         for key,values in candidates.items():
             if capsule is not None:continue
+            if key=='agentId':
+                values=[value for value in values if value[0]>=2]
+                if not values:continue
             original='final_result' if key=='finalResult' else key;provider=providers.get(original,providers.get(original+'_preview',{})).get('span_id')
             selected=[v for v in values if v[1]==provider] if provider else []
             if not selected:
@@ -376,3 +379,10 @@ class TraceEvidence:
             raise EvidenceUnavailable('Trace evidence is unavailable') from None
         self._verify_end(credential,workspace_id,task_id,execution_id,begin,trace_ref)
         return result
+
+    def read_execution(self,credential,workspace_id,*,task_id=None,execution_id=None,trace_ref=None):
+        reader=TraceEvidence(self.queries,self.authorized,max_bytes=self.max_bytes,allow_missing_session=True,analytics_fields=self.analytics_fields)
+        value=reader.read(credential,workspace_id,task_id=task_id,execution_id=execution_id,trace_ref=trace_ref)
+        value.pop('session');value['format']='agent-insight.trace-execution'
+        value['snapshot_hash']=_hash({key:item for key,item in value.items() if key not in ('snapshot_hash','captured_at')})
+        return value

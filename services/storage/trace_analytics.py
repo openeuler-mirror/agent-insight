@@ -317,6 +317,88 @@ class TraceAnalytics:
         scope=self.iam.scope(token);self._recheck(token,workspace,scope,boundaries)
         return {'scope_fingerprint':scope.fingerprint}
 
+    def agent_metadata(self,token,workspace,items):
+        from .dataset_generation_sources import GenerationSources
+        from .compatibility import LegacyTraceReads
+        from .observations import _legacy_value
+        if not isinstance(items,list) or not 1<=len(items)<=200:raise ValueError('Agent metadata requires 1..200 sources')
+        boundaries={}
+        for item in items:
+            if not isinstance(item,dict) or set(item)!={'trace_id','boundary','registrations'} or type(item['registrations']) is not bool:raise ValueError('Invalid Agent metadata selection')
+            trace=identifier(item['trace_id']);boundary=_digest(item['boundary'])
+            if trace in boundaries:raise ValueError('Duplicate Agent metadata source')
+            boundaries[trace]=boundary
+        scope=self.iam.scope(token);self._recheck(token,workspace,scope,boundaries)
+        reader=GenerationSources(self.queries,self.authorized);result=[];source_bytes=0
+        for item in items:
+            trace=item['trace_id'];begin,summary,rows,heads,_=reader._boundary(token,workspace,trace)
+            execution,session,capsule,identity=reader._metadata(begin,summary,rows,heads)
+            agent_id=execution.get('agentId') if capsule else None
+            if not capsule:
+                values=[]
+                for span in rows:
+                    if span.get('parent_span_id'):continue
+                    fields=TraceEvidence._fields(reader._source(span,heads[span['span_id']]))
+                    if 'agentId' in fields:values.append(fields['agentId'])
+                if len({_json(value) for value in values})>1:raise AnalyticsUnavailable('Root Agent registration identity is ambiguous')
+                if values:agent_id=values[0]
+            if agent_id is not None and not isinstance(agent_id,str):raise AnalyticsUnavailable('Agent registration identity is invalid')
+            row={'trace_id':trace,'boundary':item['boundary'],'executionId':begin['aliases']['execution_id'],'taskId':begin['aliases']['task_id'],
+                 'user':begin['owner']['normalized_login_name'],'agentId':agent_id,'agentName':identity['agentName'],'framework':identity['framework'],
+                 'timestamp':execution.get('timestamp') or datetime.datetime.fromtimestamp(int(summary['started_at_ms'])/1000,datetime.timezone.utc).isoformat()}
+            if item['registrations']:
+                interactions=[]
+                if capsule and capsule['primary']=='langfuse_node':
+                    interactions=session.get('interactions',[]) if session else []
+                    if not isinstance(interactions,list):raise AnalyticsUnavailable('Original Agent registrations are invalid')
+                elif capsule and capsule['primary']=='carrier':pass
+                else:
+                    original=[]
+                    for index,span in enumerate(rows):
+                        source=reader._source(span,heads[span['span_id']]);source_bytes+=len(_json(source).encode('utf-8'))
+                        if source_bytes>128*1024*1024:raise AnalyticsTooLarge('Agent metadata sources exceed byte budget')
+                        text=source['sections'].get('legacy_interaction')
+                        if capsule:
+                            if text is None:raise AnalyticsUnavailable('Original Agent registration source is missing')
+                            raw=json.loads(text)
+                            if begin['route']['source_namespace']=='agent.record.v1':
+                                attrs=json.loads(source['sections']['attributes']);attrs=attrs.get('span',{})
+                                if attrs.get('legacy.transfer_kind')=='carrier':continue
+                                if raw.get('format')!='agent-insight.trace-item' or raw.get('version')!=1 or raw.get('kind')!='interaction' or not isinstance(raw.get('value'),dict):raise AnalyticsUnavailable('Recorded Agent registration source differs')
+                                projected=LegacyTraceReads(self.queries,self.authorized)._metadata(span,len(original),summary)
+                                original.append((len(original),{**projected,**raw['value']}))
+                            else:
+                                if raw.get('format')!='agent-insight.trace-item' or raw.get('version')!=1 or raw.get('kind')!='interaction' or type(raw.get('index')) is not int:raise AnalyticsUnavailable('Original Agent registration source differs')
+                                original.append((raw['index'],raw.get('value')))
+                        else:
+                            projected=LegacyTraceReads(self.queries,self.authorized)._metadata(span,index,summary)
+                            attrs=json.loads(source['sections']['attributes']);resource=attrs.get('resource',{});attrs=attrs.get('span',{})
+                            raw=_legacy_value(json.loads(text)) if text else {}
+                            if not text:
+                                for key in ('agent_insight.raw_interaction','agent_insight.interaction','legacy.interaction'):
+                                    candidate=attrs.get(key)
+                                    if isinstance(candidate,str):
+                                        try:candidate=json.loads(candidate)
+                                        except ValueError:candidate={}
+                                    if isinstance(candidate,dict) and candidate:raw=candidate;break
+                            if not isinstance(raw,dict):raw={'role':'trace'}
+                            projected.update(raw)
+                            if not text:
+                                agent=resource.get('agent.name') or resource.get('service.name')
+                                if agent and 'agent' not in raw:projected['agent']=agent
+                                if span['kind']!='tool' and isinstance(attrs.get('legacy.role'),str) and 'role' not in raw:projected['role']=attrs['legacy.role']
+                            interactions.append(projected)
+                    if capsule:
+                        original.sort(key=lambda pair:pair[0])
+                        if len(original)!=capsule['primary_count'] or [index for index,_ in original]!=list(range(len(original))):raise AnalyticsUnavailable('Original Agent registration set is incomplete')
+                        interactions=[raw for _,raw in original]
+                row['interactions']=[{key:raw[key] for key in ('role','agent','subagent_name') if isinstance(raw.get(key),str)} if isinstance(raw,dict) else {} for raw in interactions]
+            reader._verify_end(token,workspace,None,None,begin,trace)
+            result.append(row)
+            if len(_json(result).encode('utf-8'))>MAX_PAGE_BYTES:raise AnalyticsTooLarge('Agent metadata page exceeds 8MiB')
+        self._recheck(token,workspace,scope,boundaries)
+        return {'items':result,'scope_fingerprint':scope.fingerprint}
+
     def prepare_sources(self,token,workspace,experiment,run):
         from .experiments import ExperimentStore
         identifier(experiment);identifier(run)
@@ -489,6 +571,7 @@ class TraceAnalytics:
         if action=='publish':return self.publish(token,workspace,value.get('trace_id'),value.get('boundary'),value.get('projection'))
         if action=='ras_ingest':return self.ras_ingest(token,workspace,value.get('events'))
         if action=='validate':return self.validate(token,workspace,value.get('items'))
+        if action=='agent_metadata':return self.agent_metadata(token,workspace,value.get('items'))
         if action=='enrich':return self.enrich(token,workspace,value.get('trace_ids'))
         if action=='prepare_sources':return self.prepare_sources(token,workspace,value.get('experiment_id'),value.get('run_id'))
         if action=='validate_enrichment':return self.validate_enrichment(token,workspace,value.get('read_tokens'))

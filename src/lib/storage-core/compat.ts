@@ -56,7 +56,7 @@ export async function configuredCoreBackgroundActors(options:CompatibilityOption
    const request=new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:row.workspace_id}),{headers:{authorization:'Bearer '+row.credential}});
    const actor=await context(request,options);
    if(actor.principal!==row.principal_id||actor.workspace!==row.workspace_id||!actor.username)throw new CompatibilityError(403,'Background principal differs');
-   const verified=Object.freeze({...actor,username:row.legacy_username,principalUsername:actor.username});verifiedBackgroundActors.add(verified);
+   const verified=Object.freeze({...actor,username:row.legacy_username,principalUsername:actor.principalUsername || actor.username});verifiedBackgroundActors.add(verified);
    actors.set(actor.principal+'\0'+actor.workspace,verified);
   }catch(error){const status=error&&typeof error==='object'&&'status'in error?Number(error.status):503;failures.push([401,403,503].includes(status)?status:503);}
  }
@@ -78,7 +78,7 @@ async function context(request:Request,options:CompatibilityOptions={}) {
  if(workspace && requested && requested!==workspace)throw new CompatibilityError(403,'Mapped workspace mismatch');
  workspace=workspace || requested || (typeof profile.workspace_id==='string'?profile.workspace_id:undefined);
  if(!workspace || !profile.workspaces.some((row:unknown)=>!!row && typeof row==='object' && 'workspace_id' in row && row.workspace_id===workspace))throw new CompatibilityError(403,'Workspace not granted');
- return {token,workspace,principal:profile.principal_id,username:modelUsername || (typeof profile.username==='string'?profile.username:null)};
+ return {token,workspace,principal:profile.principal_id,username:modelUsername || (typeof profile.username==='string'?profile.username:null),principalUsername:typeof profile.username==='string'?profile.username:null};
 }
 export async function compatibleRequest(request:Request,target:string,fields:string[],options:CompatibilityOptions={}) {
  try {
