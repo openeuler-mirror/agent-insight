@@ -3,6 +3,7 @@ import copy
 import datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -70,6 +71,15 @@ class _FrozenReads(LegacyTraceReads):
     def _section(self,token,workspace,route,row,name):
         self.owner._deadline();after=-1;parts=[];count=0;total=None
         expected=self.expected[row['span_id']]['sections'].get(name)
+        source=self.expected[row['span_id']].get('verified_source_sections')
+        if source is not None:
+            text=source.get(name)
+            if text is None:
+                if expected is not None:raise EvidenceUnavailable('Verified source section is missing')
+                return None
+            if hashlib.sha256(text.encode('utf-8')).hexdigest()!=expected:raise EvidenceUnavailable('Verified source section checksum differs')
+            self.used.setdefault(row['span_id'],{})[name]=expected
+            return text
         while True:
             page=self.authorized.read_payload(token,workspace,route['trace_bucket'],route['trace_id'],row['span_id'],row['payload_revision'],name,after_chunk=after,limit=4)
             self.owner._deadline();chunks=page.get('chunks')
@@ -84,7 +94,7 @@ class _FrozenReads(LegacyTraceReads):
             for chunk in chunks:
                 if str(chunk.get('chunk_no'))!=str(after+1) or not isinstance(chunk.get('body'),str):raise EvidenceUnavailable('Evidence chunks are not contiguous')
                 body=chunk['body'];self.bytes+=len(body.encode('utf-8'))
-                if self.bytes>MAX_EVIDENCE_BYTES:raise EvidenceTooLarge('Evidence payload exceeds bounded byte budget')
+                if self.bytes>self.owner.byte_budget:raise EvidenceTooLarge('Evidence payload exceeds bounded byte budget')
                 parts.append(body);count+=1;after+=1
             cursor=page.get('next_chunk')
             if cursor is None:
@@ -100,8 +110,13 @@ class TraceEvidence:
     unavailable=EvidenceUnavailable
     too_large=EvidenceTooLarge
 
-    def __init__(self,queries,authorized):
+    def __init__(self,queries,authorized,*,max_bytes=None,allow_missing_session=False,analytics_fields=False):
+        if max_bytes is not None and (type(max_bytes) is not int or not 1<=max_bytes<=128*1024*1024):raise ValueError('Invalid evidence byte budget')
+        self.max_bytes=max_bytes;self.allow_missing_session=allow_missing_session;self.analytics_fields=analytics_fields
         self.queries=queries;self.authorized=authorized;self.control=queries.control;self.iam=authorized.iam;self.deadline=time.monotonic()+MAX_READ_SECONDS
+
+    @property
+    def byte_budget(self):return MAX_EVIDENCE_BYTES if self.max_bytes is None else self.max_bytes
 
     def _deadline(self):
         if time.monotonic()>self.deadline:raise EvidenceUnavailable('Evidence read timed out')
@@ -142,12 +157,12 @@ class TraceEvidence:
                 page=con.execute('SELECT * FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND (entity_kind>? OR (entity_kind=? AND entity_id>?)) ORDER BY entity_kind,entity_id LIMIT 200',(workspace,trace,last_kind,last_kind,last_entity)).fetchall()
                 if not page:break
                 for row in page:
-                    item=dict(row);size+=_size(item,MAX_EVIDENCE_BYTES)
-                    if len(heads)>=MAX_SPANS+1 or size>MAX_EVIDENCE_BYTES:raise EvidenceTooLarge('Trace head vector exceeds budget')
+                    item=dict(row);size+=_size(item,self.byte_budget)
+                    if len(heads)>=MAX_SPANS+1 or size>self.byte_budget:raise EvidenceTooLarge('Trace head vector exceeds budget')
                     heads.append(item);last_kind=item['entity_kind'];last_entity=item['entity_id']
             result={'scope':scope.fingerprint,'route':dict(route),'requested':requested,'aliases':aliases,'owner':dict(owner),
                     'annotation':dict(annotation) if annotation else None,'barriers':barriers,'heads':heads}
-            _size(result,MAX_EVIDENCE_BYTES)
+            _size(result,self.byte_budget)
             return result
 
     def _verify_end(self,token,workspace,task,execution,begin,trace_ref=None):
@@ -160,7 +175,7 @@ class TraceEvidence:
     def _artifact(self,head):
         self._deadline();target=Path(head['artifact_ref']);directory=self.control.artifact_directory
         if target.parent!=directory or directory.is_symlink() or not re.fullmatch('[0-9a-f]{64}',target.name):raise EvidenceUnavailable('Invalid evidence artifact')
-        limit=MAX_EVIDENCE_BYTES*6+4096
+        limit=self.byte_budget*6+4096
         try:
             fd=os.open(target,os.O_RDONLY|os.O_NOFOLLOW)
             with os.fdopen(fd,'rb') as source:
@@ -177,14 +192,14 @@ class TraceEvidence:
             if hasher.hexdigest()!=target.name:raise EvidenceUnavailable('Evidence artifact checksum differs')
             wrapper=_parse(b''.join(parts))
             if not isinstance(wrapper,dict) or wrapper.get('encoding')!='observation-json/v1' or not isinstance(wrapper.get('json'),str):raise EvidenceUnavailable('Unsupported evidence artifact encoding')
-            if len(wrapper['json'].encode('utf-8'))>MAX_EVIDENCE_BYTES:raise EvidenceTooLarge('Evidence artifact expands beyond budget')
+            if len(wrapper['json'].encode('utf-8'))>self.byte_budget:raise EvidenceTooLarge('Evidence artifact expands beyond budget')
             value=_parse(wrapper['json'])
             if _hash(value)!=head['content_hash']:raise EvidenceUnavailable('Evidence source checksum differs')
             return value
         except (OSError,ValueError,TypeError,KeyError,UnicodeError,RecursionError):raise EvidenceUnavailable('Evidence artifact is unavailable') from None
 
     @staticmethod
-    def _fields(source):
+    def _fields(source,*,analytics_fields=False):
         sections=source['sections'];full=_parse(sections['attributes']);attrs={**full.get('resource',{}),**full.get('span',{})}
         raw=_legacy_value(_parse(sections['legacy_interaction'])) if 'legacy_interaction' in sections else {}
         attrs={**raw,**attrs};fields={}
@@ -203,6 +218,39 @@ class TraceEvidence:
             else:
                 value,_=_section_text(sections.get('output'),'assistant')
                 if value is not None:fields['finalResult']=value
+        if analytics_fields:
+            aliases={'model':('legacy.model','model','gen_ai.response.model','gen_ai.request.model','llm.model_name'),
+                'observedAgents':('legacy.agents','agents','observed_agents','observedAgents'),
+                'invokedSkills':('legacy.invoked_skills','invoked_skills','invokedSkills'),
+                'parentExecutionId':('legacy.parent_execution_id','parent_execution_id','parentExecutionId'),
+                'rootExecutionId':('legacy.root_execution_id','root_execution_id','rootExecutionId'),
+                'failures':('legacy.failures','failures'),'skillIssues':('legacy.skill_issues','skill_issues','skillIssues'),
+                'callStats':('legacy.call_stats','call_stats','callStats'),
+                'observedIp':('legacy.observed_ip','agent_insight.observed_ip','observed_ip','observedIp'),
+                'hostIp':('legacy.host_ip','host_ip','hostIp'),'hostName':('legacy.host_name','host_name','hostName')}
+            numeric={'cacheReadInputTokens':'cache_read_input_tokens','cacheCreationInputTokens':'cache_creation_input_tokens',
+                'reasoningTokens':'reasoning_tokens','maxSingleCallTokens':'max_single_call_tokens','toolCallErrorCount':'tool_call_error_count',
+                'cost':'cost','latency':'latency','skillTriggerRate':'skill_trigger_rate'}
+            for key,snake in numeric.items():aliases[key]=('legacy.'+snake,snake,key)
+            for key,names in aliases.items():
+                for name in names:
+                    if name not in attrs:continue
+                    if key in numeric and source['row'].get('parent_span_id') and not name.startswith('legacy.'):continue
+                    value=attrs[name]
+                    if key in numeric:
+                        if value is not None and (type(value) not in (int,float) or not math.isfinite(value)):raise EvidenceUnavailable('Invalid full analytics metric')
+                    elif key in {'observedAgents','invokedSkills'}:
+                        if isinstance(value,str):value=_parse(value)
+                        if value is not None and not isinstance(value,list):raise EvidenceUnavailable('Invalid full analytics collection')
+                    elif key in {'failures','skillIssues','callStats'}:
+                        if value is not None and not isinstance(value,(str,list,dict)):raise EvidenceUnavailable('Invalid full analytics JSON field')
+                    elif value is not None and not isinstance(value,str):raise EvidenceUnavailable('Invalid full analytics text')
+                    fields[key]=value;break
+            if source['row'].get('model'):fields['model']=source['row']['model']
+            for name in ('legacy.is_answer_correct','is_answer_correct','isAnswerCorrect'):
+                if name in attrs:
+                    if attrs[name] is not None and type(attrs[name]) is not bool:raise EvidenceUnavailable('Invalid full analytics correctness')
+                    fields['isAnswerCorrect']=attrs[name];break
         return fields
 
     def _read(self,token,workspace,begin):
@@ -223,8 +271,8 @@ class TraceEvidence:
                 sid=row.get('span_id');head=expected_heads.get(sid)
                 if not isinstance(sid,str) or sid<=after or head is None or not _same(row.get('revision'),head['revision']):raise EvidenceUnavailable('Span set differs from evidence boundary')
                 if row.get('workspace_id')!=workspace or row.get('trace_id')!=trace or row.get('trace_bucket')!=route['trace_bucket'] or row.get('is_deleted') not in (0,'0'):raise EvidenceUnavailable('Span escaped evidence route')
-                row_bytes+=_size(row,MAX_EVIDENCE_BYTES)
-                if row_bytes>MAX_EVIDENCE_BYTES:raise EvidenceTooLarge('Evidence structure exceeds byte budget')
+                row_bytes+=_size(row,self.byte_budget)
+                if row_bytes>self.byte_budget:raise EvidenceTooLarge('Evidence structure exceeds byte budget')
                 rows.append(row);after=sid
             if len(page)<200:break
         if len(rows)!=len(expected_heads):raise EvidenceUnavailable('Evidence Span set is incomplete')
@@ -242,8 +290,8 @@ class TraceEvidence:
             if not _same(summary.get(token_kind+'_tokens'),expected):raise EvidenceUnavailable('Trace metric differs from source state')
         expected={};source_bytes=0;capsule=None;fields={};candidates={}
         for row in rows:
-            self._deadline();source=self._artifact(expected_heads[row['span_id']]);source_bytes+=_size(source,MAX_EVIDENCE_BYTES)
-            if source_bytes>MAX_EVIDENCE_BYTES:raise EvidenceTooLarge('Evidence sources exceed byte budget')
+            self._deadline();source=self._artifact(expected_heads[row['span_id']]);source_bytes+=_size(source,self.byte_budget)
+            if source_bytes>self.byte_budget:raise EvidenceTooLarge('Evidence sources exceed byte budget')
             if not _same(source.get('source_revision'),expected_heads[row['span_id']]['source_revision']):raise EvidenceUnavailable('Source revision differs')
             captured=source['row']
             for key,value in captured.items():
@@ -253,8 +301,9 @@ class TraceEvidence:
             sections=source['sections']
             if not isinstance(sections,dict) or not all(isinstance(k,str) and isinstance(v,str) for k,v in sections.items()) or _payload_revision(sections)!=row['payload_revision']:raise EvidenceUnavailable('Source payload revision differs')
             expected[row['span_id']]={'sections':{k:hashlib.sha256(v.encode('utf-8')).hexdigest() for k,v in sections.items()}}
+            if self.analytics_fields:expected[row['span_id']]['verified_source_sections']=sections
             priority=3 if 'legacy_trace' in sections else (1 if row.get('parent_span_id') else 2)
-            for key,value in self._fields(source).items():candidates.setdefault(key,[]).append((priority,row['span_id'],value))
+            for key,value in self._fields(source,analytics_fields=self.analytics_fields).items():candidates.setdefault(key,[]).append((priority,row['span_id'],value))
         frozen=_FrozenReads(self,token,workspace,route,{**summary,'owner_username':begin['owner']['normalized_login_name']},rows,expected)
         for row in rows:
             if 'legacy_trace' not in expected[row['span_id']]['sections']:continue
@@ -274,9 +323,10 @@ class TraceEvidence:
         if capsule is not None:
             if not isinstance(capsule.get('execution'),dict):raise EvidenceUnavailable('Original execution is missing')
             execution=copy.deepcopy(capsule['execution']);session=copy.deepcopy(capsule.get('session'))
-            if session is None:raise TraceNotFound('Original Session is unavailable')
-            if not isinstance(session,dict):raise EvidenceUnavailable('Original Session is invalid')
-            if capsule.get('primary')=='langfuse_node':
+            if session is None and not self.allow_missing_session:raise TraceNotFound('Original Session is unavailable')
+            if session is not None and not isinstance(session,dict):raise EvidenceUnavailable('Original Session is invalid')
+            if session is None:pass
+            elif capsule.get('primary')=='langfuse_node':
                 nodes=[]
                 for row in rows:
                     item=_parse(frozen._section(token,workspace,route,row,'legacy_interaction'))
@@ -292,12 +342,12 @@ class TraceEvidence:
             timestamp=datetime.datetime.fromtimestamp(int(started)/1000,datetime.timezone.utc).isoformat().replace('+00:00','Z') if started is not None else None
             execution={'framework':summary.get('framework'),'agentName':summary.get('agent_name'),'isSubagent':False,'timestamp':timestamp,**fields}
         execution.update(id=begin['aliases']['execution_id'],taskId=begin['aliases']['task_id'],user=begin['owner']['normalized_login_name'])
-        session.update(taskId=begin['aliases']['task_id'],user=begin['owner']['normalized_login_name'])
+        if session is not None:session.update(taskId=begin['aliases']['task_id'],user=begin['owner']['normalized_login_name'])
         annotation=begin['annotation'];overrides=_parse(annotation['extra_json']).get('override_fields',[]) if annotation else []
         for key,column,target in [('query','query_override','query'),('label','label','label'),('final_result','final_result_override','finalResult')]:
             if key in overrides:
                 execution[target]=annotation[column]
-                if target in ('query','label'):session[target]=annotation[column]
+                if session is not None and target in ('query','label'):session[target]=annotation[column]
         manifest={'project_id':'default','workspace_id':workspace,'trace_id':trace,'source_namespace':route['source_namespace'],
             'native_trace_id':route['native_trace_id'],'trace_bucket':route['trace_bucket'],'incarnation':str(route['incarnation']),'route_epoch':str(route['route_epoch']),
             'aliases':begin['aliases'],'owner_principal_id':begin['owner']['owner_principal_id'],'annotation_revision':str(annotation['revision'] if annotation else 0),
@@ -305,10 +355,11 @@ class TraceEvidence:
                 {'kind':h['entity_kind'],'id':h['entity_id'],'revision':str(h['revision']),'source_revision':str(h['source_revision']),'content_hash':h['content_hash']} for h in heads],
             'sections':{sid:expected[sid]['sections'] for sid in sorted(expected)},'execution_hash':_hash(execution),'session_hash':_hash(session),
             'coverage':'prepared-head-vector; not all accepted packets'}
+        if self.analytics_fields:manifest['evidence_source']='prepared-source-artifacts'
         result={'format':'agent-insight.trace-evidence','version':1,'manifest':manifest,'execution':execution,'session':session}
         result['snapshot_hash']=_hash(result)
         result['captured_at']=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
-        _size(result,MAX_EVIDENCE_BYTES)
+        _size(result,self.byte_budget)
         return result
 
     def read(self,credential,workspace_id,*,task_id=None,execution_id=None,trace_ref=None):

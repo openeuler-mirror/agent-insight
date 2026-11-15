@@ -14,6 +14,10 @@ class ClickHouseError(Exception):
     pass
 
 
+class ClickHouseResponseTooLarge(ClickHouseError):
+    status=413
+
+
 class IncompletePayload(ClickHouseError):
     pass
 
@@ -66,6 +70,75 @@ class ClickHouseStore:
         for statement in sql.split(';'):
             if statement.strip():
                 self._request(statement)
+
+    def initialize_analytics_schema(self):
+        sql=(Path(__file__).parent/'schema'/'clickhouse'/'002_trace_analytics.sql').read_text()
+        for statement in sql.split(';'):
+            if statement.strip():self._request(statement)
+
+    def write_analytics(self,row):
+        self._scope(row['workspace_id'],row['trace_bucket'],row['trace_id'])
+        if set(row)!={'workspace_id','trace_bucket','trace_id','boundary','parser_version','projection_hash','projection_json','retry_version'}:raise ValueError('Unknown analytics fact fields')
+        self._write_analytics_fact('obs_trace_analytics',row)
+
+    def _write_analytics_fact(self,table,row):
+        sql='INSERT INTO '+table+' FORMAT JSONEachRow'
+        wire=len(sql.encode('utf-8'))+1+len(json.dumps(row,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf-8'))
+        if wire>4*1024*1024:raise ClickHouseResponseTooLarge('Encoded analytics fact exceeds 4MiB transport budget')
+        self._request(sql,rows=[row])
+
+    def _analytics_fact_query(self,table,workspace,items,columns,select):
+        parameters={'workspace_id':workspace};clauses=[]
+        for i,row in enumerate(items):
+            parts=[]
+            for key in columns:
+                parameters[f'{key}_{i}']=row[key]
+                parts.append(key+'={'+key+'_'+str(i)+':'+('Date' if key.endswith('_bucket') else 'String')+'}')
+            clauses.append('('+' AND '.join(parts)+')')
+        sql='SELECT '+select+' FROM '+table+' FINAL WHERE workspace_id={workspace_id:String}'+(' AND parser_version=1' if table=='obs_trace_analytics' else '')+' AND ('+' OR '.join(clauses)+') FORMAT JSONEachRow'
+        return [json.loads(line) for line in self._request(sql,parameters=parameters).splitlines() if line]
+
+    def _read_analytics_facts(self,table,workspace,selections,columns,body_column,maximum):
+        if not selections:return []
+        wanted={tuple(row[key] for key in columns):row for row in selections};sized=[];total=0;seen=set()
+        for offset in range(0,len(selections),200):
+            metadata=self._analytics_fact_query(table,workspace,selections[offset:offset+200],columns,','.join(columns)+',length('+body_column+') AS analytics_bytes')
+            for row in metadata:
+                identity=tuple(row.get(key) for key in columns)
+                if identity not in wanted or identity in seen:raise ClickHouseError('Analytics size vector differs from selected facts')
+                try:size=int(row['analytics_bytes'])
+                except (ValueError,TypeError,KeyError):raise ClickHouseError('Invalid analytics size metadata') from None
+                if not 0<=size<=maximum:raise ClickHouseResponseTooLarge('Analytics fact exceeds its individual byte budget')
+                total+=size
+                if total>8*1024*1024:raise ClickHouseResponseTooLarge('Analytics page exceeds 8MiB; request fewer traces')
+                seen.add(identity);sized.append((wanted[identity],size))
+        batches=[];batch=[];size=0
+        for row,length in sized:
+            if batch and (size+length>2*1024*1024 or len(batch)>=200):batches.append(batch);batch=[];size=0
+            batch.append(row);size+=length
+        if batch:batches.append(batch)
+        result=[]
+        for batch in batches:result.extend(self._analytics_fact_query(table,workspace,batch,columns,'*'))
+        return result
+
+    def read_analytics(self,workspace_id,selections):
+        identifier(workspace_id)
+        if not isinstance(selections,list) or len(selections)>200:raise ValueError('Analytics fact selection must contain at most 200 traces')
+        for row in selections:
+            self._scope(workspace_id,row['trace_bucket'],row['trace_id'])
+        return self._read_analytics_facts('obs_trace_analytics',workspace_id,selections,('trace_id','trace_bucket','boundary','projection_hash'),'projection_json',2*1024*1024)
+
+    def write_ras_event(self,row):
+        identifier(row['workspace_id']);identifier(row['owner_principal_id']);identifier(row['task_id']);identifier(row['event_key'])
+        datetime.date.fromisoformat(row['event_bucket'])
+        if set(row)!={'workspace_id','event_bucket','owner_principal_id','task_id','event_key','event_id','content_hash','event_json','retry_version'}:raise ValueError('Unknown RAS fact fields')
+        self._write_analytics_fact('obs_ras_events',row)
+
+    def read_ras_events(self,workspace_id,selections):
+        identifier(workspace_id)
+        if not isinstance(selections,list) or len(selections)>10000:raise ValueError('RAS event selection exceeds 10000')
+        dated=[dict(row,event_bucket=datetime.datetime.fromtimestamp(row['occurred_at_ms']/1000,datetime.timezone.utc).date().isoformat()) for row in selections]
+        return self._read_analytics_facts('obs_ras_events',workspace_id,dated,('event_bucket','owner_principal_id','task_id','event_key','content_hash'),'event_json',262144)
 
     def _scope(self, workspace_id, bucket, trace_id, span_id=None):
         datetime.date.fromisoformat(bucket)

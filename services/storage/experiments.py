@@ -324,6 +324,15 @@ class ExperimentStore:
     def _source_routes(plan,case_id=None):
         return [{key:ev['manifest'][key] for key in ('trace_id','incarnation','route_epoch')} for identity,ev in plan.get('frozen_trace_evidence',{}).items() if case_id is None or identity==case_id]
 
+    def _index_trace_sources(self,con,ws,run,plan,plan_hash):
+        if not con.execute('SELECT 1 FROM schema_meta WHERE version=15').fetchone():return
+        for case,source in plan.get('frozen_trace_evidence',{}).items():
+            manifest=source['manifest'];values=(ws,run,case,manifest['trace_id'],int(manifest['incarnation']),int(manifest['route_epoch']),source['execution']['id'],source['snapshot_hash'],plan_hash)
+            old=con.execute('SELECT * FROM experiment_trace_sources WHERE workspace_id=? AND run_id=? AND case_id=?',(ws,run,case)).fetchone()
+            if old:
+                if tuple(old)[:9]!=values:raise Conflict('Frozen Trace source index differs from RunPlan')
+            else:con.execute('INSERT INTO experiment_trace_sources VALUES(?,?,?,?,?,?,?,?,?,?)',(*values,self.control.clock()))
+
     def _source_assets(self,con,scope,ws,exp,run_id=None,require_origin=False):
         params=[ws,exp];where='i.workspace_id=? AND e.experiment_id=?'
         if run_id is not None:where+=' AND i.run_id=?';params.append(run_id)
@@ -524,6 +533,7 @@ class ExperimentStore:
         dataset=next((release for slot,release in releases.items() if slot=='dataset' or slot.startswith('dataset:')),None)
         con.execute("INSERT INTO runs(workspace_id,run_id,name,plan_hash,plan_manifest_ref,dataset_release_id,expected_case_count,status,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,'draft',?,?)",(ws,run,snapshot['experiment']['name'],digest,ref,dataset,len(cases),now,now))
         con.execute('INSERT INTO experiment_runs VALUES(?,?,?,?,?,?,?)',(ws,exp,run,generation,head['lifecycle_revision'],scope.principal_id,now))
+        self._index_trace_sources(con,ws,run,plan,digest)
         for slot,release in releases.items():con.execute('INSERT INTO run_inputs VALUES(?,?,?,?,?,?)',(ws,run,slot,release,_hash(body.get('config',{})),now))
         for case in cases:
             self._cancel_items(con,ws,exp,case['id'],None if body.get('_execute') else pending[case['id']],now=now)
@@ -743,6 +753,7 @@ class ExperimentStore:
             digest,ref=self._put(plan,MAX_BYTES)
             con.execute("INSERT INTO runs(workspace_id,run_id,name,plan_hash,plan_manifest_ref,dataset_release_id,expected_case_count,status,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,'draft',?,?)",(ws,run,old_run['name'],digest,ref,old_run['dataset_release_id'],len(case_ids),now,now))
             con.execute('INSERT INTO experiment_runs VALUES(?,?,?,?,?,?,?)',(ws,head['experiment_id'],run,generation,head['lifecycle_revision'],scope.principal_id,now))
+            self._index_trace_sources(con,ws,run,plan,digest)
             if manual:
                 receipt_key=run+':'+manual['kind']+':'+manual['credential_id'];packet={'format':'benchmark.supplemental-manual-retry/v1','experiment_id':head['experiment_id'],'run_id':run,'parent_run_id':prior_run,'authorization':manual,'members':plan['work_members']};response_hash,response_ref=self._put(packet)
                 con.execute('INSERT INTO benchmark_operation_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?)',(ws,scope.principal_id,'supplemental-manual-retry',receipt_key,_hash(packet),head['experiment_id'],None,None,response_hash,response_ref,now))

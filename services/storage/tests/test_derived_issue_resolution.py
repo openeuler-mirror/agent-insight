@@ -178,10 +178,11 @@ class DerivedIssueMigrationPreservationTests(unittest.TestCase):
         with patch.object(migrations,'load_migrations',side_effect=lambda which:original(which)[:13]):
             self.prepare();before=snapshot()
         files={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in self.control.artifact_directory.iterdir()}
-        if backend=='sqlite':
-            backup=Path(self.tmp.name)/'before014.db';self.assertEqual(self.control.migrate(backup_path=backup)['current_version'],14);self.assertTrue(backup.is_file())
-        else:
-            with self.control.transaction() as con:migrations.apply(con,backend,clock=self.control.clock,applied=13)
+        with patch.object(migrations,'load_migrations',side_effect=lambda which:original(which)[:14]):
+            if backend=='sqlite':
+                backup=Path(self.tmp.name)/'before014.db';self.assertEqual(self.control.migrate(backup_path=backup)['current_version'],14);self.assertTrue(backup.is_file())
+            else:
+                with self.control.transaction() as con:migrations.apply(con,backend,clock=self.control.clock,applied=13)
         self.assertEqual(snapshot(),before);self.assertEqual([(m.version,m.checksum) for m in original(backend)[:13]],before_prefix)
         self.assertEqual(files,{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in self.control.artifact_directory.iterdir()})
         with self.control.read_transaction() as con:self.assertEqual(con.execute('SELECT COUNT(*) FROM experiment_derived_issue_annotations').fetchone()[0],0)

@@ -11,6 +11,48 @@ class ClickHouseValidationTests(unittest.TestCase):
             self.fail('ClickHouse fact adapter must be implemented')
         return api, api.ClickHouseStore('http://127.0.0.1:8123', database='storage_test')
 
+    def test_large_analytics_pages_use_bounded_subqueries_and_report_413_for_adaptive_paging(self):
+        import json
+        api,client=self.client();error=getattr(api,'ClickHouseResponseTooLarge',None)
+        self.assertIsNotNone(error,'analytics page budgets must be distinguishable from transport failures')
+        selections=[{'trace_id':'t'+str(index),'trace_bucket':'2026-11-12','boundary':'a'*64,'projection_hash':'b'*64} for index in range(200)]
+        sizes=[]
+        def response(sql,*,parameters):
+            ids=[value for key,value in parameters.items() if key.startswith('trace_id_')]
+            if 'AS analytics_bytes' in sql:return b'\n'.join(json.dumps({'trace_id':trace,'trace_bucket':'2026-11-12','boundary':'a'*64,'projection_hash':'b'*64,'analytics_bytes':100*1024}).encode() for trace in ids)
+            sizes.append(len(ids)*100*1024)
+            return b'\n'.join(json.dumps({'workspace_id':'w','trace_id':trace,'projection_json':'x'*(100*1024)}).encode() for trace in ids)
+        with patch.object(client,'_request',side_effect=response):
+            with self.assertRaises(error) as raised:client.read_analytics('w',selections)
+            self.assertEqual(raised.exception.status,413)
+            self.assertEqual(len(client.read_analytics('w',selections[:50])),50)
+        self.assertTrue(sizes);self.assertLessEqual(max(sizes),2*1024*1024)
+
+    def test_large_ras_pages_use_bounded_subqueries_and_report_413(self):
+        import json
+        api,client=self.client();error=getattr(api,'ClickHouseResponseTooLarge',None)
+        self.assertIsNotNone(error)
+        selections=[{'owner_principal_id':'alice','task_id':'task','event_key':'event'+str(index),'content_hash':'a'*64,'occurred_at_ms':1794441600000} for index in range(200)]
+        sizes=[]
+        def response(sql,*,parameters):
+            ids=[value for key,value in parameters.items() if key.startswith('event_key_')]
+            if 'AS analytics_bytes' in sql:return b'\n'.join(json.dumps({'owner_principal_id':'alice','task_id':'task','event_key':identity,'content_hash':'a'*64,'event_bucket':'2026-11-12','analytics_bytes':128*1024}).encode() for identity in ids)
+            sizes.append(len(ids)*128*1024)
+            return b'\n'.join(json.dumps({'workspace_id':'w','event_key':identity,'event_json':'x'*(128*1024)}).encode() for identity in ids)
+        with patch.object(client,'_request',side_effect=response):
+            with self.assertRaises(error) as raised:client.read_ras_events('w',selections)
+            self.assertEqual(len(client.read_ras_events('w',selections[:40])),40)
+        self.assertEqual(raised.exception.status,413);self.assertTrue(sizes);self.assertLessEqual(max(sizes),2*1024*1024)
+
+    def test_escaped_analytics_insert_reports_413_before_transport_budget_is_exceeded(self):
+        import json
+        api,client=self.client();error=getattr(api,'ClickHouseResponseTooLarge',None);self.assertIsNotNone(error)
+        payload=json.dumps({'x':'\\'*((2*1024*1024-8)//2)},separators=(',',':'))
+        row={'workspace_id':'w','trace_bucket':'2026-11-12','trace_id':'t','boundary':'a'*64,'parser_version':1,'projection_hash':'b'*64,'projection_json':payload,'retry_version':1}
+        with patch.object(client,'_request') as request:
+            with self.assertRaises(error) as raised:client.write_analytics(row)
+        self.assertEqual(raised.exception.status,413);request.assert_not_called()
+
     def test_rejects_unsafe_identifiers_and_endpoint(self):
         api, _ = self.client()
         for db in ['a;DROP DATABASE x', '../x', '', 'x y']:

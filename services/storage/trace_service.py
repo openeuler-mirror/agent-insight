@@ -250,7 +250,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
     import threading
     import urllib.parse
     from .control import Conflict
-    from .clickhouse import ClickHouseError
+    from .clickhouse import ClickHouseError,ClickHouseResponseTooLarge
     from .iam import Unauthorized
 
     if host!='127.0.0.1':raise ValueError('Trace service must bind to IPv4 loopback')
@@ -315,6 +315,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             except (ValueError,KeyError,TypeError,UnicodeError,RecursionError) as exc:
                 code=getattr(exc,'code',None);status=413 if getattr(exc,'status',None)==413 else 422 if code=='SOURCE_NOT_AVAILABLE' else 400
                 self.reply(status,{'error':'Request exceeds budget' if status==413 else 'Invalid bounded request',**({'code':code} if code=='SOURCE_NOT_AVAILABLE' else {})})
+            except ClickHouseResponseTooLarge:self.reply(413,{'error':'Analytics page exceeds budget; request fewer traces'})
             except ClickHouseError:self.reply(503,{'error':'Analytical storage unavailable'})
             except Exception as exc:
                 status=getattr(exc,'status',503)
@@ -330,9 +331,9 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             from .compatibility_list import LegacyTraceList
             compat_path=pieces[2:]
             report_path=compat_path[:2]==['observe','reports']
-            dataset_path=compat_path[:1] in (['datasets'],['experiments'],['evaluators'],['diagnosis-runs'],['benchmarks'])
+            dataset_path=compat_path[:1] in (['datasets'],['experiments'],['evaluators'],['diagnosis-runs'],['benchmarks'],['analytics'])
             deleting_root=self.command=='DELETE' and (report_path or compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
-            workspace=runtime.workspace(token,params.get('workspace_id'),None if compat_path in (['benchmarks'],['experiments']) and self.command=='POST' else 'read' if self.command=='GET' or dataset_path else 'delete' if deleting_root else 'execute' if report_path else 'write')
+            workspace=runtime.workspace(token,params.get('workspace_id'),None if compat_path in (['benchmarks'],['experiments'],['analytics']) and self.command=='POST' else 'read' if self.command=='GET' or dataset_path else 'delete' if deleting_root else 'execute' if report_path else 'write')
             metadata=TraceMetadata(runtime.control)
             listing=LegacyTraceList(runtime.queries,metadata)
             reads=LegacyTraceReads(runtime.queries,runtime.authorized)
@@ -342,6 +343,17 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 value,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return None
                 return value
+            if path==['analytics'] and self.command=='POST':
+                from .trace_analytics import TraceAnalytics
+                from .controller_protocol import verify_controller_proof
+                value,error=self.body(max_bytes=4*1024*1024)
+                if error:self.reply(error,{'error':'Bounded analytics JSON required'});return
+                action=value.get('action')
+                if action in {'prepare','publish','ras_ingest','prepare_sources'}:
+                    principal=runtime.iam.scope(token).principal_id
+                    if not verify_controller_proof(runtime.controller_key_file,'trace-analytics/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private analytics controller attestation required')
+                result=TraceAnalytics(runtime.queries,runtime.authorized).dispatch(action,token,workspace,value)
+                respond(result,limit=256*1024*1024 if action=='prepare' else 16*1024*1024);return
             if path==['benchmarks'] and self.command=='POST':
                 from .benchmark_core import BenchmarkStore
                 from .trace_evidence import TraceEvidence

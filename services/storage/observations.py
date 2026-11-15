@@ -230,7 +230,7 @@ def normalize_import(body,workspace_id):
 MAX_COMPACT_METADATA_BYTES = 2048
 PROJECTION_FIELDS = ('query','label','model','observed_ip','source_kind','final_result','is_subagent',
     'parent_execution_id','root_execution_id','source_execution_id','agent_session_id','subagent_name','subagent_type','ownership',
-    'skills','invoked_skills','agents','legacy_execution_metrics','query_preview','final_result_preview')
+    'skills','invoked_skills','agents','legacy_execution_metrics','query_preview','final_result_preview','execution_timestamp')
 
 
 def _compact_add(target,key,value,*,value_limit=512,budget=MAX_COMPACT_METADATA_BYTES):
@@ -334,7 +334,7 @@ def _source_projection(source):
             ('observedIp','observed_ip'),('sourceKind','source_kind'),('skills','skills'),('invokedSkills','invoked_skills'),('observedAgents','agents'),
             ('isSubagent','is_subagent'),('parentExecutionId','parent_execution_id'),('rootExecutionId','root_execution_id'),
             ('sourceExecutionId','source_execution_id'),('agentSessionId','agent_session_id'),('agentOwnership','ownership'),
-            ('subagentName','subagent_name'),('subagentType','subagent_type')]:
+            ('subagentName','subagent_name'),('subagentType','subagent_type'),('timestamp','execution_timestamp')]:
             if original in execution and execution[original] is not None:attrs[destination]=execution[original]
         for original,destination in [('query','legacy.session_query'),('label','legacy.session_label')]:
             if original in session and session[original] is not None:attrs[destination]=session[original]
@@ -409,6 +409,7 @@ def _source_projection(source):
         'agent_session_id':('legacy.agent_session_id','agent_session_id','agentSessionId'),
         'subagent_name':('legacy.subagent_name','subagent_name','subagentName'),
         'subagent_type':('legacy.subagent_type','subagent_type','subagentType'),
+        'execution_timestamp':('legacy.execution_timestamp','execution_timestamp'),
         'skills':('legacy.skills','skills'),'invoked_skills':('legacy.invoked_skills','invoked_skills','invokedSkills'),
         'agents':('legacy.agents','agents','observed_agents','observedAgents'),
     }
