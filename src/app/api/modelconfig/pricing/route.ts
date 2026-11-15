@@ -22,6 +22,9 @@ import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { isAdminUser } from '@/lib/auth/admin';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreObservedModels } from '@/lib/storage-core/observed-models';
+import { compatibilityFailure } from '@/lib/storage-core/compat';
 import {
     BUILTIN_MODEL_PRICING, BUILTIN_CONTEXT_WINDOWS,
     getCustomModels, writeCustomModels, getModelPricing,
@@ -42,23 +45,25 @@ function toRow(key: string, p: { inputTokenPrice: number; outputTokenPrice: numb
 }
 
 export async function GET(req: Request) {
+    const core = isStorageCoreEnabled();
     try {
         const url = new URL(req.url);
-        const { username } = await resolveUser(req, url.searchParams.get('user'));
+        const identity = core ? await readCoreObservedModels(req) : await resolveUser(req, url.searchParams.get('user'));
+        const { username } = identity;
         const isAdmin = isAdminUser(username);
 
         const { pricing: custom, contextWindows: customCw } = getCustomModels();
 
-        // 链路里出现过的模型(全局，单价是全局口径)——标注有价/缺价，供管理员补价。
-        const rows: { model: string | null }[] = await prisma.execution.findMany({
+        const rows: { model: string | null }[] = core ? [] : await prisma.execution.findMany({
             where: { model: { not: null } },
             distinct: ['model'],
             select: { model: true },
         });
         // 过滤占位模型名（trace 没带真实模型名时被记成 unknown 等），这些无法/无需配价。
         const IGNORED_MODELS = new Set(['unknown', 'null', 'undefined', 'none', 'n/a']);
-        const observed = rows
-            .map((r) => (r.model || '').trim())
+        const names = core && 'models' in identity ? identity.models : rows.map((r) => r.model || '');
+        const trimmed = names.map((model) => model.trim());
+        const observed = (core ? [...new Set(trimmed)] : trimmed)
             .filter((m) => m && !IGNORED_MODELS.has(m.toLowerCase()))
             .sort()
             .map((model) => {
@@ -74,6 +79,7 @@ export async function GET(req: Request) {
             observed,
         });
     } catch (error) {
+        if (core) return compatibilityFailure(error);
         console.error('[ModelPricing GET]', error);
         return NextResponse.json({ error: 'Failed to load model pricing' }, { status: 500 });
     }

@@ -114,6 +114,26 @@ Typed JSONL preserves physical columns, duplicate rows and SQLite types. Manifes
 
 Legacy users map to stable principals; no default passwords are generated. Groups/roles/resource ownership require explicit mappings rather than usernames or email domains. Unbound workspaces and unmapped resources remain closed to ordinary members. The Trace-specific `import_legacy_traces` now converts verified Session/Execution allowlisted fields using explicit user→credential/workspace bindings. Dry-run is the default; unsupported fields and quarantine are reported, and partial/uncertain sends replay the same source/export/receipt keys. It does not migrate credentials, infer group membership, complete all96 models, capture online changes or perform production cutover.
 
+
+### Read-only semantic planning (no import)
+
+`migration-plan` checks core DDL upgrades. Use the separate command for legacy data:
+
+```bash
+python3 -m services.storage plan-legacy \
+  --database /absolute/path/to/isolated-legacy.db \
+  --source-id stable-source-name \
+  --bindings-file /private/owner-bindings.json
+```
+
+Only explicit SQLite `--database` input is supported; export-directory and destination inputs are not implemented. The owner mapping file must be a bounded (1MiB), regular non-symlink mode0600 file such as `{"legacy-alice":{"principal_id":"principal-a","workspace_id":"workspace-a"}}`. Credentials are rejected; matching names never merge accounts automatically. Mappings declare target IDs and do not validate their existence or live authorization against a destination.
+
+The versioned catalog covers 96 models and 1250 physical columns, including Prisma aliases. Reports contain structure, counts, disposition and hashes, not row values. Checks cover unknown/missing columns, type/key/FK drift, actual and explicitly cataloged logical references, ownership ambiguity and normalized IAM login collisions. `sourceExecutionId` is a framework-native identity, checked for composite-key ambiguity rather than treated as an Execution foreign key. JSON remains private pending transformation; nested business references are not comprehensively checked.
+
+Defaults are 100000 rows, 64MiB raw row bytes, 8MiB per row, 512 tables, 256 columns per table, 256 issue details, 15 seconds and a SQLite VM-step budget. CLI overrides are `--max-rows/--max-bytes/--max-issues/--max-seconds` (time capped at120s). Raw-byte limits are not RSS limits; checks at SQL/loop boundaries do not preempt every individual hash operation. An expired final analysis is incomplete. An incomplete snapshot does not infer semantic orphans from unscanned parents and has no complete content fingerprint. Data is captured in one read-only transaction including committed WAL.
+
+Every result remains `planning-only`, `blocked` and `full_migration_ready=false`: no target connection, copying or apply. Exit0 means the diagnostic command ran, never migration readiness. Limited Trace candidates are not complete row conversions. Fingerprints use `legacy-plan-typed-row-multiset/v1` and are not interchangeable with export hashes. Source identity stays stable; content/catalog/mapping hashes bind this plan. Existing inspect/export/verify behavior is unchanged, including rejection of FK violations. See the [implementation design](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md) for dependencies.
+
 ## Verification boundaries
 
 ```bash

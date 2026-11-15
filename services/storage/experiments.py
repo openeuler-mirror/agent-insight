@@ -828,6 +828,10 @@ class ExperimentStore:
         reads={'list','read','get','runplan','load_work','check_work','comments'};ephemeral={'claim','renew','reconcile'}
         allowed=reads|ephemeral|{'create','ensure','update','case_upsert','case_upsert_many','case_remove','bind_trace','start','checkpoint','complete','fail','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','retry','cancel','remove','review','comment','comment_remove'}
         if action=='derived_issue_resolve':return self._resolve_derived_issues(token,ws,body)
+        if action=='derived_resolution_scope':
+            with self.control.read_transaction() as con:
+                scope=self.iam._scope(con,token);self.iam._workspace(scope,ws,'read');self.iam._workspace(scope,ws,'write')
+                return {'fingerprint':scope.fingerprint}
         if action=='lookup_operation':
             kind=body.get('operation_kind')
             if kind not in allowed-reads-ephemeral:raise ValueError('Unsupported Experiment receipt kind')
@@ -1777,7 +1781,7 @@ class ExperimentStore:
                 # Resolve a known identifier through the root check so private records cannot bypass live IAM.
                 raw=con.execute('SELECT experiment_id FROM experiment_annotations WHERE workspace_id=? AND annotation_id=? AND kind=?',(ws,body['id'],kind)).fetchone()
                 if raw:self._head(con,token,ws,raw[0])
-                raise ExperimentNotFound('Derived object not found')
+                if raw or body.get('allow_missing') is not True:raise ExperimentNotFound('Derived object not found')
             result=[];size=0;roots=set();source_routes=[];source_assets=set()
             for row in rows:
                 self._head(con,token,ws,row['experiment_id']);roots.add(row['experiment_id'])
@@ -1800,6 +1804,7 @@ class ExperimentStore:
             for exp in roots:self._head(con,token,ws,exp)
             for exp,run in source_assets:self._source_assets(con,current,ws,exp,run)
             for manifest in source_routes:self._source_route(con,current,ws,manifest)
+        if action=='derived_lookup' and body.get('allow_missing') is True:return {'found':bool(result),'value':result[0] if result else None}
         return result[0] if action=='derived_lookup' else result
 
     @staticmethod
@@ -1903,9 +1908,21 @@ class ExperimentStore:
         elif row['kind']=='derived-issue':
             dto.setdefault('createdAt',_iso(row['created_at_ms']))
             if con is not None and con.execute('SELECT 1 FROM schema_meta WHERE version=14').fetchone():
-                annotation=con.execute('SELECT resolved_run_id,resolved_at_ms FROM experiment_derived_issue_annotations WHERE workspace_id=? AND issue_id=? ORDER BY resolved_at_ms DESC,annotation_id DESC LIMIT 1',(row['workspace_id'],row['annotation_id'])).fetchone()
-                dto['resolvedAt']=_iso(annotation['resolved_at_ms']) if annotation else None;dto['resolvedRunId']=annotation['resolved_run_id'] if annotation else None
+                annotation=con.execute('SELECT * FROM experiment_derived_issue_annotations WHERE workspace_id=? AND issue_id=? ORDER BY resolved_at_ms DESC,annotation_id DESC LIMIT 1',(row['workspace_id'],row['annotation_id'])).fetchone()
+                dto['resolvedAt']=_iso(annotation['resolved_at_ms']) if annotation else None;dto['resolvedRunId']=self._resolution_run(con,annotation) if annotation else None
         return dto
+
+    def _resolution_run(self,con,annotation):
+        value=annotation['resolved_run_id']
+        reference='resolution-operation:'+_hash([annotation['workspace_id'],annotation['actor_principal_id'],annotation['operation_key']])
+        if value!=reference:return value
+        receipt=con.execute('SELECT * FROM experiment_operation_receipts WHERE workspace_id=? AND actor_principal_id=? AND operation_kind=? AND operation_key=?',(annotation['workspace_id'],annotation['actor_principal_id'],annotation['operation_kind'],annotation['operation_key'])).fetchone()
+        if receipt is None or receipt['request_hash']!=annotation['request_hash']:raise ExperimentUnavailable('Issue resolution provenance is unavailable')
+        packet=self._load(receipt['response_hash'],receipt['response_ref'],MAX_BYTES);ids=packet.get('resolved_ids')
+        if not isinstance(ids,list) or not ids or annotation['issue_id'] not in ids:raise ExperimentUnavailable('Issue resolution provenance differs')
+        first=con.execute("SELECT experiment_id FROM experiment_annotations WHERE workspace_id=? AND annotation_id=? AND kind='derived-issue'",(annotation['workspace_id'],ids[0])).fetchone()
+        if first is None or first['experiment_id']!=receipt['experiment_id'] or packet.get('resolved_run_id') not in (None,value):raise ExperimentUnavailable('Issue resolution source differs')
+        return packet.get('resolved_run_id')
 
     def _resolution_sources(self,con,token,ws,scope,ids,*,current):
         rows=[];routes=[]
@@ -1929,13 +1946,15 @@ class ExperimentStore:
         return rows,routes
 
     def _resolve_derived_issues(self,token,ws,body):
-        ids=body.get('issue_ids');run=identifier(body.get('resolved_run_id'))
+        if 'resolved_run_id' not in body:raise ValueError('Explicit nullable resolution context required')
+        ids=body.get('issue_ids');run=None if body['resolved_run_id'] is None else identifier(body['resolved_run_id'])
         if not isinstance(ids,list) or not 1<=len(ids)<=MAX_ITEMS or any(not isinstance(value,str) for value in ids) or len(set(ids))!=len(ids):raise ValueError('Bounded unique derived Issue identities required')
         ids=sorted(identifier(value) for value in ids)
         if not callable(self.frozen_assets_verifier) or self.frozen_assets_verifier(token,ws,copy.deepcopy(body)) is not True:raise Forbidden('Trusted Issue resolution verification required')
         with self.control.transaction() as con:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,ws,'write');self.iam._workspace(scope,ws,'read')
             key,digest,old=self._receipt(con,scope,ws,'derived_issue_resolve',body)
+            reference=run if run is not None else 'resolution-operation:'+_hash([ws,scope.principal_id,key])
             rows,routes=self._resolution_sources(con,token,ws,scope,ids,current=old is None);fingerprint=scope.fingerprint
             if old:
                 result=self._load(old['response_hash'],old['response_ref'],MAX_BYTES)
@@ -1945,7 +1964,7 @@ class ExperimentStore:
                 result={'resolved_ids':ids,'newly_resolved':len(fresh),'resolved_run_id':run};response_hash,response_ref=self._put(result,MAX_BYTES)
                 con.execute('INSERT INTO experiment_operation_receipts VALUES(?,?,?,?,?,?,?,?,?)',(ws,scope.principal_id,'derived_issue_resolve',key,digest,rows[0][0]['experiment_id'],response_hash,response_ref,now))
                 for row,machine,selection in fresh:
-                    con.execute('INSERT INTO experiment_derived_issue_annotations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(ws,_id(),row['experiment_id'],row['annotation_id'],row['machine_result_id'],scope.principal_id,scope.principal_id,run,now,'derived_issue_resolve',key,digest,row['payload_hash'],machine['content_hash'],selection['selection_revision']))
+                    con.execute('INSERT INTO experiment_derived_issue_annotations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(ws,_id(),row['experiment_id'],row['annotation_id'],row['machine_result_id'],scope.principal_id,scope.principal_id,reference,now,'derived_issue_resolve',key,digest,row['payload_hash'],machine['content_hash'],selection['selection_revision']))
         with self.control.read_transaction() as con:
             current=self.iam._scope(con,token)
             if current.fingerprint!=fingerprint:raise Forbidden('Issue resolution authorization changed')

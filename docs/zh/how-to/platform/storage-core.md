@@ -177,3 +177,14 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 先停止目标写入，保留事务库备份与完整制品目录，显式迁移至014再启动；服务拒绝带pending migration启动。不要修改历史SQL绕过checksum。013→014只追加表，012→013修正空证据约束时保留全部历史行、索引及不可变触发器。
 
 私有身份映射之外配置`AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE`，由可信配置过程生成随机64位hex并以0600保存；Next与helper使用同一文件，不能复用登录Key。原页面无需新增配置或交互。按创建实验→运行→结果详情→人工0分→评论→重评验证，分别核验OLTP回执、CH published与旧表无影子写入。再验证来源撤权、旧fence晚回、取消清理未确认和精确网络重试。Workbench/Benchmark使用同一原入口，具体可验收分支见实施状态。
+
+
+## 旧数据迁移前的只读计划
+
+先对已保留的一致性隔离副本执行`plan-legacy --database /absolute/path/to/isolated-legacy.db --source-id stable-source`；显式owner映射、预算、状态与隐私契约见[存储参考](../../reference/platform/storage-core.md#只读语义计划不执行导入)。报告可安全诊断但不替代原始备份/导出；活动WAL不能只复制主文件。当前只支持SQLite源，不支持导出目录输入，所有计划仍blocked且不执行导入。现阶段不在生产停写、迁移、修改凭据或切换连接串。
+
+## 优化点回调与价格模型列表
+
+core模式下，原优化点GET和完成优化后的resolve PATCH携带当前登录Key。新派生问题通过typed解决注解处理，旧static/feedback问题仍在原控制域；混合请求预检后分别提交，两域失败可重试但不是跨库原子事务。未提供threadId时，公开关联仍为null，机器评测内容不变。相同显式操作键恢复core回执；普通新请求按新增解决计数，混合响应是core该操作计数加本次旧静态新写计数，不保证整次HTTP数字精确重放。
+
+价格GET的observed模型来自当前IAM授权Trace范围；组管理员只扩展至其授权组，不因旧部署管理员名看到其他空间。内置/自定义价格、货币、排序和界面保留；价格PUT配置控制域规则未在本批迁移。两个页面无需新登录或前端布局变更，退出/切换账号使用现有Key状态。Dashboard/Fleet/Quality等剩余统计和OTLP logs/metrics/spool仍在依赖清单内，不能把模型列表接通视为这些功能已经迁移。

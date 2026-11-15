@@ -117,6 +117,26 @@ python3 -m services.storage verify-export --directory /absolute/path/to/new-expo
 
 历史 User 映射稳定 principal，不能推导明文密码或创建通用默认密码。组、角色及资源归属须有显式迁移映射；不按同名/邮箱域自动归组。未绑定 workspace 和未映射资源对普通成员保持关闭。原始导出不代表96个旧模型已经完成语义迁移。Trace专用`import_legacy_traces`仅转换验证过的Session/Execution允许字段，需明确user→credential/workspace映射；默认dry_run，部分/未知sender结果用同source_id/导出/receipt重放，隔离/不支持字段写报告。它不恢复旧密码/Key、不自动归组，也不执行生产切换。
 
+
+### 只读语义计划（不执行导入）
+
+`migration-plan`只检查新核心DDL升级；旧数据使用独立的`plan-legacy`：
+
+```bash
+python3 -m services.storage plan-legacy \
+  --database /absolute/path/to/isolated-legacy.db \
+  --source-id stable-source-name \
+  --bindings-file /private/owner-bindings.json
+```
+
+当前只支持显式SQLite `--database`，不支持`--directory`或目标库参数。owner映射文件须0600、非symlink、最多1MiB，形如`{"legacy-alice":{"principal_id":"principal-a","workspace_id":"workspace-a"}}`；不接受密码/Key，不凭同名自动合并账号。映射仅声明目标ID，不连接目标库验证其存在或实时授权。
+
+版本化目录覆盖当前96模型、1250个物理列及Prisma表/字段别名。报告只输出结构、计数、处置类别和摘要；检测未知/缺列、类型/主键/唯一/FK漂移、真实与目录已声明的逻辑孤儿、owner缺失/冲突及IAM登录名归一化碰撞。`sourceExecutionId`作为framework原生身份检查复合键歧义，不当作Execution外键。JSON保留为私有待转换，嵌套业务引用检查尚未完整实现。
+
+默认预算为100000行、64MiB原始行字节、单行8MiB、512表、每表256列、256条问题明细、15秒及SQLite VM步数上限；CLI可调整`--max-rows/--max-bytes/--max-issues/--max-seconds`，时间最多120秒。字节限制不等于进程RSS，SQL/循环边界检查不是可中断每个哈希操作的硬实时期限；最终超时仍标不完整。扫描不完整时不从缺失父表缓存推断语义孤儿，完整内容摘要为null。仅一个只读事务捕获数据，保留已提交WAL。
+
+所有结果均为`mode=planning-only`、`status=blocked`、`full_migration_ready=false`，不连接目标、不复制行、不apply。CLI退出0只表示诊断命令成功，不能当作可切库；自动化必须核对状态字段。有限Trace转换候选不代表整行完整迁移。内容摘要使用`legacy-plan-typed-row-multiset/v1`，与原export摘要不可互换；source_id只用于稳定来源身份，内容/目录/映射摘要绑定本轮计划。原inspect/export/verify严格行为保持，FK违例仍阻止原导出。完整迁移清单及依赖见[实施设计](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)。
+
 ## 验证入口与边界
 
 ```bash

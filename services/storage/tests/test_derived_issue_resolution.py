@@ -51,6 +51,56 @@ class DerivedIssueResolutionTests(unittest.TestCase):
             self.assertEqual(con.execute('SELECT COUNT(*) FROM experiment_derived_issue_annotations').fetchone()[0],1)
         with self.assertRaises(Conflict):self.resolve(operation_request={'changed':True})
 
+    def test_manual_resolution_without_a_thread_preserves_public_null_and_immutable_facts(self):
+        self.prepare()
+        with self.control.read_transaction() as con:machine=dict(con.execute('SELECT * FROM result_receipts').fetchone())
+        request={'issue_ids':['issue'],'resolved_run_id':None}
+        first=self.resolve(resolved_run_id=None,operation_request=request)
+        self.assertIsNone(first['resolved_run_id']);self.assertEqual(first['newly_resolved'],1)
+        self.assertEqual(self.resolve(resolved_run_id=None,operation_request=request),first)
+        issue=self.call('derived_lookup',kind='issue',id='issue')
+        self.assertIsNotNone(issue['resolvedAt']);self.assertIsNone(issue['resolvedRunId'])
+        with self.control.read_transaction() as con:
+            self.assertEqual(dict(con.execute('SELECT * FROM result_receipts').fetchone()),machine)
+            row=con.execute('SELECT resolved_run_id FROM experiment_derived_issue_annotations').fetchone()
+            self.assertTrue(row[0].startswith('resolution-operation:'))
+
+    def test_optional_lookup_distinguishes_missing_from_a_known_stale_source(self):
+        self.prepare()
+        self.assertEqual(self.call('derived_lookup',kind='issue',id='absent',allow_missing=True),{'found':False,'value':None})
+        self.assertEqual(self.call('derived_lookup',kind='issue',id='issue',allow_missing=True)['value']['id'],'issue')
+        from services.storage.trace_metadata import TraceMetadata
+        TraceMetadata(self.control).delete(self.token,'w',self.trace_id)
+        with self.assertRaises(Conflict):self.call('derived_lookup',kind='issue',id='issue',allow_missing=True)
+
+    def test_static_resolution_bridge_requires_current_write_capability(self):
+        self.prepare()
+        self.assertIsInstance(self.call('derived_resolution_scope')['fingerprint'],str)
+        read_only=self.iam.issue_api_credential(self.token,'w',['read'])
+        with self.assertRaises(Forbidden):self.service.dispatch('derived_resolution_scope',read_only,'w',{})
+
+    def test_nullable_resolution_projects_all_experiments_from_one_exact_receipt(self):
+        self.prepare()
+        value=fixture.experiment();value['id']='second-exp';value['cases'][0].update(id='second-case',taskId='a'*32)
+        self.call('create',experiment=value,operation_key='second-create')
+        self.call('start',experiment_id='second-exp',config={'derived_skill_ids':['skill'],'derived_skill_versions':{'skill':[1]}},frozen_evaluators={'judge':{'id':'judge'}},operation_key='second-start')
+        handle=self.call('claim',experiment_id='second-exp',worker_id='second-worker')
+        evaluation={'id':'second-evaluation','type':'dynamic','skillId':'skill','version':1,'executionId':'a'*32,'status':'ok'}
+        issue={'id':'second-issue','evaluationId':'second-evaluation','skillId':'skill','version':1,'source':'trajectory','ruleId':'rule'}
+        self.call('complete',**(fixture.ExperimentTests.handle(handle)|{'experiment_id':'second-exp'}),result={'score':40,'evidence':{'json':{'directTrajectoryDerived':{'evaluations':[evaluation],'skillIssues':[issue]}}}},operation_key='second-complete')
+        request={'issue_ids':['issue','second-issue'],'resolved_run_id':None}
+        self.resolve(**request,operation_request=request)
+        for identity in request['issue_ids']:
+            dto=self.call('derived_lookup',kind='issue',id=identity)
+            self.assertIsNone(dto['resolvedRunId']);self.assertIsNotNone(dto['resolvedAt'])
+        original=self.service._load
+        def damaged(digest,ref,*args):
+            packet=original(digest,ref,*args)
+            if packet.get('resolved_ids')==request['issue_ids']:return packet|{'resolved_ids':['different']}
+            return packet
+        from services.storage.experiments import ExperimentUnavailable
+        with patch.object(self.service,'_load',damaged),self.assertRaises(ExperimentUnavailable):self.call('derived_lookup',kind='issue',id='second-issue')
+
     def test_unknown_unattested_and_other_owner_cannot_resolve_or_fake_success(self):
         self.prepare()
         with self.assertRaises(Forbidden):self.service.dispatch('derived_issue_resolve',self.admin,'w',{'issue_ids':['issue'],'resolved_run_id':'run','operation_key':'admin'})

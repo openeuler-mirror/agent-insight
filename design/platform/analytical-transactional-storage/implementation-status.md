@@ -327,3 +327,33 @@ Benchmark原创建/启动/实际device命令/提交/真实评测HTTP/规范化/�
 当前服务为`http://localhost:58488`，原实验验收页`/evaluation/3ccd2aac-489c-4a05-8c73-ebd9b0b61e71`，Benchmark详情`/evaluation/bexp_76829620a1207944ab1d9e2f29868045`；沿用原admin登录方式。证据仍在本批`exclude/storage-core-experiments/20261114-bemtvk1v/`，最终源码manifest、whole logs、`final-review/`、各实际HTTP报告均保留。
 
 旧库96模型语义导入、线上增量追平/停写切换/回退、尚未接管的静态控制领域及非OTLP写端、infra、final_result关联重评、1000采集端混合压测、细粒度写锁/队列分片和HA仍未完成。以上为本批消费者集成验收，不能直接作为生产切库授权或整个平台迁移完成结论。
+
+
+## 2026-11-15 剩余消费者盘点、语义计划与首批闭环
+
+已按当前源码重新盘点并登记[phase7清单与依赖](phase7-consumers-and-legacy-migration.md)。96模型按15域无遗漏分组，机器目录涵盖1250个物理字段、键/关系/owner/敏感处理。现有原始export、限定Trace转换和新的只读plan是不同能力，普通CRUD/启动不能替代历史事实导入。
+
+本批完成：
+
+1. `plan-legacy --database --source-id`只读诊断。检测schema/键/FK与有限逻辑引用、owner/归一化歧义、native身份冲突、循环、秘密处理及预算；不完整扫描不对未读父表误报语义孤儿。仅显式SQLite源，未实现导出目录输入，所有计划仍blocked/full_migration_ready=false，不连接目标、不apply。
+2. 原优化点GET/resolve PATCH与新派生Issue闭环。真实actor、Skill范围、当前机器selection及来源验证，静态/feedback原域，派生只追加014解决注解；混合跨库不称原子。无threadId通过真实操作receipt保留公开null，014字节不变。只读凭据和其他owner/管理员均不能代为解决；长请求键通过稳定hash保持有界。
+3. 原价格GET的observed模型只读当前IAM范围内的真实Trace model facet，价格、占位过滤、排序及DTO保留；PUT原样保留旧配置控制域。补原apiFetch对pricing GET、优化点GET/resolve PATCH的精准Key传输，账号切换/退出/显式Key与prefix不变，没有TSX/CSS改动。
+
+| 验证 | 本批最终结果与边界 |
+|---|---|
+| 应用全量 | 5794项，5772通过、22跳过、0失败/取消；205.54秒，Node24、独立HOME/SQLite，无依赖/scripts变更 |
+| 存储整套 | 969项，790通过、179项可选引擎配置缺失而跳过，0失败；234.244秒，ResourceWarning作为错误；不把跳过计实机通过 |
+| PG/openGauss | 最新resolution12项+迁移保留1项，两库各13/13，无跳过；39.727/41.470秒。各13个自建schema已清理且回查0，host/native源码副本140文件SHA前后及当前源一致。未把SQLite专用旧库plan宣称为PG旧源导入能力 |
+| 静态/复核 | 全仓tsc零输出通过；本轮6个受改/新增TS源文件ESLint零输出通过；设计本地链接检查通过。T1、T2、T3分别spec与独立quality复核，发现的认证传输遗漏和长key/预算边界均有RED→GREEN；新文件暂存后仍检查空白 |
+| 真实原HTTP/CH/IAM | 全新SQLite+独立CH database，原handler通过真实HTTP使用实际apiFetch生成的Key：优化点可见→混合解决2→刷新隐藏→新请求重复0；无thread公开原DTO不增字段，typed关联仍null。read-only/他人/组管理员403，匿名401；Alice/Bob各自模型，组管理员本组两者可见，伪user不提权。13次请求通过，无LLM/Agent执行、无浏览器验收 |
+| 无旧动态影子 | 上述夹具旧Execution/Session/Experiment/Case/Result/轨迹结果/动态Evaluation/动态Issue八组计数均0；两个真实旧static Issue保留且只有被选中者解决。不把静态域存在当成动态回落 |
+| 只读迁移计划实际命令 | 原Prisma实际96表、4条合成静态业务行，显式owner映射；计划完整扫描并准确报告旧User行缺失4处，仍blocked。源db/WAL字节和mtime不变，不输出值，不尝试修复或导入；另有完整96空表与多类异常专项 |
+| 已有验收环境保留 | 刷新前新SQLite备份保留，原服务无活动work；重启没有覆盖UserSettings/模型配置。前后62张core及96张旧表内容指纹均一致；旧原Key→新IAM映射、100分实验、0分Workbench和诊断done读回；原Next pricing GET也200且伪user无效。没有修改默认业务库或生产连接 |
+
+证据目录为`exclude/storage-core-phase7/20261115-8n_yeuoj/`：`npm-final.log`/`npm-final-result.json`、`python-final.log`、`final-source-manifest.json`、`t2-relational-current.json`、`acceptance-v2/original-http-report.json`与`legacy-plan-proof.json`、`main-ui-preservation.json`和readback。首次隔离尝试的loader/断言失败与数据均保留，没有重置原fixture；当前16个源文件与全量开始时SHA一致。原GUI仍在`http://localhost:58488`，可见组件/布局零改动；本轮未在浏览器中验证。
+
+### 后续依赖及未完成项
+
+优先继续统一授权摘要/当前selection与Agent元数据，再接Dashboard/Fleet/Task/Quality/Skill动态统计；不能用假failure/注册信息、缺字段补零或读完整Trace正文取代摘要契约。之后按phase7接final_result/rejudge/cancel、Batch/旧Trigger闭环和可信采集接收/积压重放，再推进RAS、Infra、FI/客户端事务、Goal Plus/协作/Usage及逐域历史导入。
+
+特别修正此前“非OTLP”概括：**OTLP logs、OTLP metrics与legacy spool consumer也仍在旧写域**，不能视为已迁。旧spool不得仅凭payload.user转用IAM身份或在未indexed前推进cursor；尚未进行迁移/清理。Skill/配置/工作台等静态或控制域仍为原权威，迁移要保留其真实事务与秘密边界。生产停写/切换/回退、96模型完整逐字段apply、千级混合压测、HA等未完成，仍不能宣称全产品完成新存储切换。

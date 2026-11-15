@@ -118,3 +118,14 @@ Ingest real OTLP first, select an authorized Agent/time window in the existing T
 ## Isolated experiment validation (010–014)
 
 Stop target writers, retain a control backup and the complete artifact directory, explicitly migrate to014, then restart. Pending migrations prevent service startup. Preserve historical SQL checksums. Configure the same private controller key file for Next and the helper; do not reuse a login key. Keep the existing UI and test create, run, result detail, human score0, comments and reevaluation. Inspect immutable receipts, separate CH publication, source revocation, stale fences, unresolved cleanup and exact retries, and verify that legacy Experiment/Case/Result tables received no shadow records. Check implementation status for remaining Workbench/Benchmark branches and exact acceptance coverage.
+
+
+## Read-only planning before legacy migration
+
+Run `plan-legacy --database /absolute/path/to/isolated-legacy.db --source-id stable-source` against an existing consistent isolated copy. See the [storage reference](../../reference/platform/storage-core.md#read-only-semantic-planning-no-import) for explicit owner mappings, budgets, status and privacy. Reports do not replace raw backups/exports; copying only the main file of an active WAL database is unsafe. Only SQLite sources are supported, export-directory input is not implemented, and every plan remains blocked with no apply. This phase does not stop production writers, migrate credentials or switch connection strings.
+
+## Issue resolution callbacks and observed pricing models
+
+In core mode, existing issue GET and post-optimization resolve PATCH requests carry the current login Key. Derived issues use typed immutable resolution annotations; static/feedback issues remain in their existing control domain. Mixed requests preflight before separate commits, support retries and are not cross-store atomic transactions. Missing threadId retains a public null association without changing machine evidence. Explicit operation replay restores the core receipt; ordinary new requests count new resolutions. Mixed HTTP counts combine the core operation count and this request's static updates, without a whole-response exact replay guarantee.
+
+Pricing GET obtains observed models from the caller's IAM-authorized Trace scope. Group admins do not gain other workspaces through the legacy deployment-admin name. Built-in/custom prices, currency, sorting and UI are retained; pricing PUT configuration control is not migrated here. Existing account switching/logout uses the current Key with no new login or layout. Dashboard/Fleet/Quality and OTLP logs/metrics/spool remain separately tracked dependencies; this model-list slice does not complete them.

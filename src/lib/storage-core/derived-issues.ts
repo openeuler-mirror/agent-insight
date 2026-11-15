@@ -42,12 +42,27 @@ export async function readCoreDerivedIssues(input:{user:string;skillId:string;ve
  return result;
 }
 
-export async function resolveCoreDerivedIssues(input:{user:string;ids:string[];resolvedRunId:string;operationKey?:string}):Promise<{resolved_ids:string[];newly_resolved:number;resolved_run_id:string}>{
+export async function resolutionCoreCandidates(input:{user:string;ids:string[];skillIds:string[]}):Promise<Array<{id:string;skillId:string}>>{
+ const context=requireCoreExperimentContext();if(context.actor.username!==input.user)fail('Derived Issue actor differs',403);
+ if(input.ids.length>2000)fail('Derived Issue identity budget exceeded',413);
+ const skills=new Set(input.skillIds),result:Array<{id:string;skillId:string}>=[];
+ for(const id of [...new Set(input.ids)].sort()){
+  const candidate=await context.rpc('derived_lookup',{kind:'issue',id,allow_missing:true}) as {found?:unknown;value?:unknown};
+  if(candidate?.found===false&&candidate.value===null)continue;
+  if(candidate?.found!==true)fail('Derived Issue lookup coverage is unavailable',503);
+  const row=privateRow(candidate.value);
+  if(row.id!==id||typeof row.skillId!=='string')fail('Derived Issue identity differs',503);
+  if(skills.has(row.skillId))result.push({id,skillId:row.skillId});
+ }
+ return result;
+}
+
+export async function resolveCoreDerivedIssues(input:{user:string;ids:string[];resolvedRunId:string|null;operationKey?:string}):Promise<{resolved_ids:string[];newly_resolved:number;resolved_run_id:string|null}>{
  const context=requireCoreExperimentContext();if(context.actor.username!==input.user)fail('Derived Issue actor differs',403);
  const ids=[...new Set(input.ids)].sort();if(!ids.length)return {resolved_ids:[],newly_resolved:0,resolved_run_id:input.resolvedRunId};if(ids.length>2000)fail('Derived Issue identity budget exceeded',413);
  const request={issue_ids:ids,resolved_run_id:input.resolvedRunId};
  const key=input.operationKey||'issue-resolution:'+createHash('sha256').update(JSON.stringify(request)).digest('hex');
- const value=await context.rpc('derived_issue_resolve',{...request,operation_key:key,operation_request:request}) as {resolved_ids:string[];newly_resolved:number;resolved_run_id:string};
+ const value=await context.rpc('derived_issue_resolve',{...request,operation_key:key,operation_request:request}) as {resolved_ids:string[];newly_resolved:number;resolved_run_id:string|null};
  if(!value||JSON.stringify(value.resolved_ids)!==JSON.stringify(ids)||value.resolved_run_id!==input.resolvedRunId||!Number.isSafeInteger(value.newly_resolved)||value.newly_resolved<0||value.newly_resolved>ids.length)fail('Derived Issue resolution receipt is incomplete',503);
  return value;
 }

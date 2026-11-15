@@ -2732,3 +2732,8 @@ CHECK约束：`["length(operation_kind) BETWEEN 1 AND 128","length(operation_key
 CHECK约束：`["operation_kind='derived_issue_resolve'","length(annotation_id)>0","length(resolved_run_id) BETWEEN 1 AND 512","length(operation_key)>0","resolved_at_ms>=0 AND resolved_at_ms<=9223372036854775807","selection_revision>0 AND selection_revision<=9223372036854775807","length(request_hash)=64","length(issue_payload_hash)=64","length(machine_content_hash)=64"]`。
 
 不可变列：`true`。
+
+
+### 014解决上下文的公开null兼容
+
+014 DDL、物理非空`resolved_run_id`与校验和保留。无threadId的手工解决，以真实操作receipt稳定引用填物理列（`resolution-operation:`与workspace/actor/key的hash）；它不是RunPlan或优化已执行的证明。公开投影只在workspace/actor/kind/key/request_hash、issue成员和首issue所属实验均与已校验receipt匹配时恢复`resolvedRunId:null`。既有非null关联原样；缺失/损坏回执明确失败。跨实验同批不误要求每个Issue的实验都等于receipt首实验。没有新增核心表。

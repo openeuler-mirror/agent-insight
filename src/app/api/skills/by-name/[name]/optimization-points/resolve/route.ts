@@ -28,13 +28,16 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prismaRaw } from '@/lib/storage/prisma';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {handleCoreIssueResolution} from '@/lib/storage-core/issue-resolution-route';
 
 export const dynamic = 'force-dynamic';
 
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ name: string }> },
-): Promise<NextResponse> {
+): Promise<Response> {
+  if(isStorageCoreEnabled())return handleCoreIssueResolution(req,(await ctx.params).name);
   const { name } = await ctx.params;
   const skillName = decodeURIComponent(String(name || '').trim());
   if (!skillName) return NextResponse.json({ error: 'skill name required' }, { status: 400 });
