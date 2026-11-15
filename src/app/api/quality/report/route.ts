@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+import { coreQualitySource } from '@/lib/storage-core/analytics-quality';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+
+
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { buildQualityReport, resolveWindowRange } from '@/lib/engine/quality-monitoring';
@@ -27,7 +32,8 @@ export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
         // 身份由前端 ?user= 携带；不读则 username=null 会越权聚合全量数据。
-        const { username } = await resolveUser(req, url.searchParams.get('user') || undefined);
+        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const { username } = analytics ?? await resolveUser(req, url.searchParams.get('user') || undefined);
 
         const agent = (url.searchParams.get('agent') || '').trim();
         if (!agent) return NextResponse.json({ error: 'agent is required' }, { status: 400 });
@@ -47,17 +53,21 @@ export async function GET(req: Request) {
             return NextResponse.json({ error: 'invalid range: from > to' }, { status: 400 });
         }
 
-        const report = await buildQualityReport({
+        const input = {
             user: username,
             agent,
             window,
             from,
             to,
             filters: skill ? { skill } : undefined,
-        });
+        };
+
+        const report = await buildQualityReport(input, undefined, analytics ? await coreQualitySource(analytics, input) : undefined);
+        if (analytics) await analytics.validate();
 
         return NextResponse.json(report);
     } catch (error) {
+        if (isStorageCoreEnabled()) return analyticsFailure(error);
         console.error('[Quality Report Error]', error);
         return NextResponse.json({ error: 'Failed to build quality report' }, { status: 500 });
     }

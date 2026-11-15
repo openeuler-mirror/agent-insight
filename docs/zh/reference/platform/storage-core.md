@@ -14,7 +14,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 ## 已实现范围
 
 - `001_core.sql`：21 张事务表、13 张 ClickHouse 表；原始字节与 checksum 保持不变。
-- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，010新增8张实验索引、011新增2张诊断来源绑定、012新增5张Benchmark表、013兼容空证据且不新增表、014新增1张Issue解决注解表，合计 **62 张事务表 + 13 张 CH 表 = 75 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
+- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，010新增8张实验索引、011新增2张诊断来源绑定、012新增5张Benchmark表、013兼容空证据且不新增表、014新增1张Issue解决注解表，015新增3张统计控制索引，CH002新增2张统计事实表，合计 **65 张事务表 + 15 张 CH 表 = 80 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
 - 三种事务后端共享资产 release/依赖封存、别名/草稿 CAS、冻结 RunPlan、任务领取/续租/fence/取消、制品校验，以及结果回执和 Outbox 同事务提交。
 - ClickHouse 支持可信 canonical Span 批量写、最新态筛选、单 Span/分页结构读取、精确 bundle revision 的多 section 正文、正文块与清单 hash 校验，以及受限范围的最新态聚合。请求上限 4MiB，正文 bundle 上限 64MiB。
 - `observations.py`可靠接收完成OTLP Span、冻结准备计划、全局强序Outbox worker及幂等CH物化；`trace_service.py`提供loopback HTTP查询/接收，Next服务端原接口兼容及旧身份显式映射。
@@ -26,7 +26,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 `AuthorizedStorage(iam, facts)`默认使用default，也可显式传`project_id='default'`；空字符串、空白和其他项目ID拒绝。`service.project_context(credential, workspace_id)`返回经workspace授权校验的不可变上下文。`AccessScope`以及列表/聚合响应包含project_id，缓存指纹也包含项目；单条CH事实仍保持原workspace键。
 
-新初始化应用001–014。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前014（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
+新初始化应用001–015。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前015（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014、统计消费者最低015），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
 
 ### IAM 与统一授权
 
@@ -237,3 +237,16 @@ FI 收集回调只确认收集事实。实验的 Trace 就绪与 Case 关联由�
 同请求恢复使用封存资产和实际机器回执。模型请求先记录 intent，确认响应及 indexed 录制后记录 observed；恢复复用 observed，未知 intent 保持 pending、不自动重发或反复创建 attempt。可选归因 pending 时，来源与当前匹配 selection 重新验证成功后仍返回已完成匹配；归因结果仅关联其精确来源 match。Trace 后续增长不改历史输入，GET 的更新提示仍按当前 interaction 数量计算。来源删除、撤权或 Skill 范围失效后拒绝读取/恢复。固定 Mock 的真实链路验收不代表实际模型质量或生产容量。
 
 原通用`POST /api/experiments/:id/run`在core模式通过typed Benchmark启动，保留`202 {status, runId, alreadyRunning?}`；Case重跑仍返回`202 {kind:"benchmark", status, runId}`，不在公开响应返回后台Promise。
+
+
+### 统一授权统计接口（015 / CH002）
+
+上层 `readCoreAnalytics` 按已验证 workspace 调用私有 `/v1/compat/analytics`，统一提供窄 Execution/Session 统计投影、真实 RAS 事件与当前结果富化。Dashboard、Fleet、Task Insight/Stats、Quality 三个原接口继续复用原聚合、DTO及前端。Quality 沿用现有账号 Key，通过原 apiFetch 自动携带；查询 user 不再是授权凭据。注册配置限定当前真实账号（Quality 保留公共 NULL 配置），不会因共享 Trace 展开整个 owner 的配置目录。原生 Agent 可由已授权观测事实补充平台，不造注册行。
+
+`prepare` / `publish` / `prepare_sources` / `ras_ingest` 要求 actor 和 `trace-analytics/v1` 私有控制器证明。`read` 支持绑定游标的时间/Agent选择；已有摘要严格匹配真实行和 Session 时间，未就绪源只在权威时间边界可证明不相关时跳过，否则保守 pending。`validate`、`validate_enrichment`、`validate_ras` 在最终返回前重新核对源、当前机器选择/问题解决/诊断头、资产 ACL 和 RAS 当前回执。统计读不读完整 Trace、Span 正文或 RunPlan。后台构建从哈希与版本已核验的 prepared source artifacts 取真实交互，沿用原 callStats、错误分类和 Agent 树算法；默认其他 TraceEvidence 读取仍核对 CH 正文。
+
+首次未就绪返回 503、`code=ANALYTICS_INDEXING`、`Retry-After: 1`。原 apiFetch 只对该标记的 GET 在15秒内重试，退出、切换账号或取消时停止；成功 DTO 与页面布局不变。后台同一源版本任务合并，瞬时失败退避，确定的正文/摘要预算错误不会被每秒重新解析；新源版本重新建立任务。
+
+保持原接口的不同统计口径，包括 Dashboard 的原始 cost/答案正确率、Fleet 的价格重算/工具失败判定，以及当前 latency 原值与接口解释；本批不顺带修正历史 Fleet 单位差异。明确的 Trace 级 legacy 指标可保留，未声明的原生逐 Span cache/reasoning 不假定为 Trace 总量；冲突来源明确失败。
+
+预算：每 Trace 构建128MiB/100000 Span，持久摘要2MiB；页超限自适应缩小，总枚举100000 Trace。这些上限是读取护栏，不是本版容量验收指标。构建要求稳定的 prepared source 版本；持续高频更新可能使 CAS 重试并暂时 pending。第一版以原有功能等价为目标；万级Span专项、增量统计、水位快照与千级混合负载优化统一放到第二版，不把本批消费者接通当作容量目标已经验收。旧库全量迁移仍只有只读计划，没有 apply；RAS 事件 POST 与 Fleet 读取已接入，RAS 专题页的其余旧控制消费者按剩余清单推进。

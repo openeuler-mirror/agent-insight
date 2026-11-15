@@ -37,6 +37,8 @@ export async function setupNodeRuntime(): Promise<void> {
   if(coreStorage){
     const {startCoreExperimentBackground}=await import('@/lib/storage-core/experiment-background');
     startCoreExperimentBackground();
+    const {startCoreAnalyticsBackground}=await import('@/lib/storage-core/analytics');
+    startCoreAnalyticsBackground();
   }else{
     const { startExperimentCancellationWatchdog } = await import('@/lib/engine/experiment/cancellation-service');
     startExperimentCancellationWatchdog();

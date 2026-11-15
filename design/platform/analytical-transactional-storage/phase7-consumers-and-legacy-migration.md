@@ -88,7 +88,42 @@ T3首个可独立落地消费者限定为原`modelconfig/pricing GET`的observed
 | T1只读迁移计划 | 已实现/隔离验收 | 96模型1250列，SQLite源只读；无转换apply，无导出目录输入，始终不可切库 |
 | T2原优化点回调 | 已实现/隔离验收 | 原入口、混合static/typed、null/重试/授权、Key传输；不更改014、不宣称跨库原子 |
 | T3模型列表首片 | 已实现/隔离验收 | 只迁pricing GET observed模型；价格PUT及其旧控制域不迁 |
-| T3其余摘要/统计 | 待实施 | Dashboard/Fleet/Quality/Task/Skill依赖精确字段/selection、Agent配置元数据和摘要覆盖；未填假数据抢先接通 |
+| T3授权摘要与首批统计 | 已实现/隔离验收 | Dashboard/Fleet/Quality/Task使用当前授权投影，保留原统计算法、DTO及界面；原Trace钻取、筛选、空结果及执行记录已验证 |
+| T3其他动态消费者 | 待实施 | Skill/Agent其余动态消费者按清单继续接入，静态配置仍为原权威；不将首批统计接通视为全部领域完成 |
 | L3–L8其他消费者及历史迁移 | 待实施 | 按本文依赖，不能拿清单/目录或测试绿替代业务接管和历史apply |
 
 最终应用5794项（5772通过/22跳过）、存储969项（790通过/179跳过）均零失败，PG/nativeOG解决注解及迁移保留各13项通过；实际HTTP/CH/IAM和数据指纹证据见[实施状态](implementation-status.md#2026-11-15-剩余消费者盘点语义计划与首批闭环)。当前只读计划时间预算在SQL/循环边界检查，最终deadline复核保证超时不返回完整内容hash；max_bytes限制原始读入字节而非进程RSS。原前端JSX/CSS未改，本轮无浏览器验证。此记录只结算三片已验收工作，不将后续条目标为完成。
+
+
+### T3 第二批实施契约：统一授权统计投影
+
+Dashboard、Fleet、Quality、Task 统计保持原路由、DTO、聚合函数及前端。统一数据源先用真实 IAM 筛选可见 Trace（排除私有评测/诊断自身 Trace），禁止信任查询参数 user 或旧管理员白名单。注册 Agent、价格等仍属原配置控制域，配置元数据只能按已验证身份（Quality另保留公共NULL配置）富化，不能成为扩大观测权限的通道。
+
+统计投影由真实源证据后台计算，包含 Execution 标量、真实 failures、原 callStats、ExecutionSkill 关系、结构化错误摘要、Session 时间与派发边；不得以工具错误计数伪造 failures/RAS，不存原 interactions 或完整 Trace。沿用 computeCallStats/buildFaultPathSteps/buildAgentCallTree 的原规则与护栏，保留原始 latency 数值和原接口的单位解释，本批不顺便改变统计口径。零分、零 token 与 null 区分；覆盖不足、超预算、未索引明确失败，不能当作空库。
+
+新增独立 ClickHouse 统计事实表；事务库仅记录当前发布边界/哈希。001–014 以及 ClickHouse 001 历史迁移保持不变，新增迁移在 SQLite/PG/openGauss 等价执行。私有 prepare/publish RPC 同时要求真实 actor 与 trace-analytics/v1 控制器签名；边界包含路由 incarnation/epoch、源 head 版本、别名、owner、annotation。发布前后和读取前后重新检查权限、删除屏障与源版本，过期发布不得成为当前摘要。统计读取不加载 Span 正文或完整 RunPlan；首次未就绪启动有界后台构建并返回 503 和重试标识，后续只读摘要。
+
+Quality 的机器结果只能来自当前 selected_result_id 且未隔离的 receipt；问题来自当前选择的未解决派生项，诊断来自当前 done 报告头。它们实时富化，不冻结成过期 Trace 统计。保留最多 5000 Trace、400 错误 Trace 解析、201/200 协作 Session 截断标识与原排序窗口。Fleet 可靠性使用真实 RAS anomaly/action_result，不能以普通工具异常推测恢复结果。
+
+执行顺序：先用失败测试锁定投影字段/授权/版本与原聚合口径，再实现存储 RPC 和生成器，接 Dashboard/Fleet/Quality/Task 消费者，最后执行隔离 HTTP、ClickHouse、三种事务库、完整测试及 UI 文件一致性检查。全部使用新隔离数据库和证据目录，保留旧数据库；本批不切生产、不自动执行旧库 apply。
+
+
+T3容量与验收边界：严格源版本CAS保持当前摘要正确性。持续追加可能在构建窗口内反复改变head而导致暂时pending；本批没有放宽为未标记的旧版本读，也没有宣称千级混合读写已达标。增量物化与显式统计水位是后续容量任务。原生可选cache/reasoning仅接纳明确的Trace级来源，不能把子Span单次用量当总量；冲突明确失败。
+
+
+### 第二版预留：万级Span与统计水位（第一版不实施）
+
+**范围收口**：第一版仅验收原有功能等价、原界面与操作流程、统计口径以及数据保留。水位cut、016、复杂虚拟导航、万级Span专项和千级混合容量优化均延期；草稿与试验数据隔离保留，不随第一版交付。以下为第二版草案，不能当作第一版运行协议。
+
+真实隔离万Span Trace连续追加40Span/6.51秒时，初版严格全head CAS得到200×1、409×12、503×4；停止后10.87秒恢复。这说明消费者已接通，但实时看板可用性不能按初版验收。保留该失败证据，不以旧缓存冒充当前源。
+
+新增016只追加统计cut描述表，015与CH002保持原字节；摘要格式和既有parser_version=1不变，以generation=2进入boundary命名空间。后台在单次只读事务捕获prepared head向量，从不可变源工件按哈希/版本还原真实快照；不要求构建期间Span停止追加，也不把CH尚未追上的正文冒充已经验证。普通TraceEvidence/评测冻结协议保持原严格行为。
+
+cut描述包括源Trace revision、语义生命周期哈希、捕获时间、证据hash和服务端签名。发布仍要求真实actor/控制器及当前权限，允许Span head前进；不允许路由/owner/alias/用户注解或删除屏障变化。生命周期注解包含所有用户字段和override_fields，排除只用于实时快照的内部agent_record_v1及通用updated_at/revision，避免内部采集更新伪装成用户编辑。
+
+读取选择同生命周期下最高源revision的已接受cut，旧任务完成不能倒退当前选择。源head未变化的cut持续有效；head已前进时最多允许120秒可测滞后，并立即安排合并后的后台刷新。无有效cut、超过滞后预算或缺失事实时明确503/413，不能漏掉相关Trace补空值。API成功DTO不变，通过x-analytics-watermark、x-analytics-lagging-traces、x-analytics-max-lag-ms头声明水位；前端页面、图表、筛选与既有聚合不改。
+
+最终授权/删除/归属/注解立即复核；评测选择、问题解决状态、诊断头和资产ACL仍逐版本复核，RAS当前回执仍独立复核。普通Span追加只推进统计水位，不再使所有读请求409。此方案解决单Trace持续追加时的可用性，千级采集端混合读写仍需独立容量压测，不能由cut机制存在推定达标。
+
+
+第一版统计钻取保持简单：真实独立执行仍使用自己的Task引用；仅由父Trace临时投影的子执行，其Fleet统计钻取直接打开实际所属Trace，再通过原有Agent树和Span详情查看。不新增虚拟Trace/Session、不引入新的导航令牌或解析协议。

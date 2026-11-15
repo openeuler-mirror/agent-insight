@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+import { createHash } from 'node:crypto';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { ingestCoreRas } from '@/lib/storage-core/analytics';
+import { compatibilityFailure } from '@/lib/storage-core/compat';
+
+
 import { NextResponse } from "next/server"
 
 import { resolveUser } from "@/lib/auth/auth"
@@ -32,6 +38,13 @@ export const dynamic = "force-dynamic"
 
 export async function POST(req: Request) {
   try {
+    if (isStorageCoreEnabled()) {
+      const normalized = normalizeRasIngestBody(await req.json());
+      if (!normalized.ok) return NextResponse.json({error: normalized.error}, {status: 400});
+      const events = (normalized.records || [normalized.record]).map(record => ({...record, ts: record.ts.toISOString(), platform: record.framework, id: 'ras_' + createHash('sha256').update(JSON.stringify([record.taskId,record.deliveryId])).digest('hex')}));
+      const result = await ingestCoreRas(req, events);
+      return NextResponse.json({status: 'ok', written: result.accepted, ids: result.ids});
+    }
     const { username, apiKey } = await resolveUser(req)
     if (apiKey && !username) {
       return NextResponse.json({ error: "unauthorized", detail: "invalid API key" }, { status: 401 })
@@ -60,6 +73,7 @@ export async function POST(req: Request) {
       ids: result.ids,
     })
   } catch (err: unknown) {
+    if (isStorageCoreEnabled()) return compatibilityFailure(err);
     const message = err instanceof Error ? err.message : String(err)
     console.error("[RAS ingest] POST error:", message)
     return NextResponse.json({ status: "error", message }, { status: 500 })

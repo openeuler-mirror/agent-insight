@@ -45,7 +45,7 @@ const EXEC_SELECT = {
 } as const;
 
 // 选中行的形状（prisma 客户端在本仓库返回弱类型，显式标注以避免 implicit-any）。
-interface SelectedExecRow {
+export interface SelectedExecRow {
     id: string;
     taskId: string | null; query: string | null; timestamp: Date;
     agentName: string | null; framework: string | null; model: string | null;
@@ -76,7 +76,7 @@ function parseInvokedSkills(json: string | null | undefined): { name: string; ve
 }
 
 /** 解析 TrajectoryEvalResult.dimensionScoresJson → TrajectoryLite。 */
-function toTrajectoryLite(row: { trajectoryScore: number | null; dimensionScoresJson: string | null }): TrajectoryLite | null {
+export function toTrajectoryLite(row: { trajectoryScore: number | null; dimensionScoresJson: string | null }): TrajectoryLite | null {
     if (row.trajectoryScore == null && !row.dimensionScoresJson) return null;
     let dims: TrajectoryLite['dims'] = { toolChoice: 0, redundancy: 0 };
     try {
@@ -136,7 +136,13 @@ export async function collectTraces(input: CollectInput): Promise<CollectResult>
         }
     }
 
-    const traces: TraceLite[] = sliced.map((r) => {
+    const traces = projectQualityRows(sliced, trajByExec);
+
+    return { traces, truncated };
+}
+
+export function projectQualityRows(sliced: SelectedExecRow[], trajByExec: Map<string, TrajectoryLite> = new Map()): TraceLite[] {
+    return sliced.map((r) => {
         const toolCallCount = r.toolCallCount ?? undefined;
         const llmCallCount = r.llmCallCount ?? undefined;
         return {
@@ -164,5 +170,4 @@ export async function collectTraces(input: CollectInput): Promise<CollectResult>
         };
     });
 
-    return { traces, truncated };
 }

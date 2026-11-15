@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-15。001–009基础及Trace/Dataset批次已保留；010–014实验、评测结果、RunPlan、DiagnosisRun与本批剩余消费者已接通，最终集成证据见文末。最新测试与未完成项见文末，前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-15。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已完成本批隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
@@ -357,3 +357,28 @@ Benchmark原创建/启动/实际device命令/提交/真实评测HTTP/规范化/�
 优先继续统一授权摘要/当前selection与Agent元数据，再接Dashboard/Fleet/Task/Quality/Skill动态统计；不能用假failure/注册信息、缺字段补零或读完整Trace正文取代摘要契约。之后按phase7接final_result/rejudge/cancel、Batch/旧Trigger闭环和可信采集接收/积压重放，再推进RAS、Infra、FI/客户端事务、Goal Plus/协作/Usage及逐域历史导入。
 
 特别修正此前“非OTLP”概括：**OTLP logs、OTLP metrics与legacy spool consumer也仍在旧写域**，不能视为已迁。旧spool不得仅凭payload.user转用IAM身份或在未indexed前推进cursor；尚未进行迁移/清理。Skill/配置/工作台等静态或控制域仍为原权威，迁移要保留其真实事务与秘密边界。生产停写/切换/回退、96模型完整逐字段apply、千级混合压测、HA等未完成，仍不能宣称全产品完成新存储切换。
+
+
+## 2026-11-15 第一版统一授权摘要与原统计消费者验收
+
+第一版范围按用户要求收口为原有功能等价与数据支持替换。原组件、布局、操作流程及统计口径保留；万级Span、统计水位cut、016迁移、复杂虚拟导航及千级混合容量优化留到第二版。第二版草稿与失败试验数据隔离保留，未进入当前运行协议或迁移目录。
+
+本批接通Dashboard、Fleet趋势/分布/Agent/可靠性、Task统计、Quality Agent列表/执行记录/报告，以及RAS事件采集事实。业务通过统一授权摘要读源使用当前Trace选择、Owner、版本及当前评测/诊断来源；不回落旧动态表，不以假注册信息或缺字段补零取代原含义。原生Trace级可选用量只接受明确来源。后台生成投影，读取仅做有界分页和当前来源复核，版本冲突最多重试三次；临时子执行直接钻取其真实所属Trace，在原Agent树查看。
+
+新增关系库015三张表及CH002两张表，当前为65张事务表、15张CH表。001–014与CH001既有43份DDL字节不变。迁移和CH新表初始化均显式执行；未将第二版016放入当前schema。
+
+| 验证 | 本批最终结果与边界 |
+|---|---|
+| 应用全量 | 5826项，5804通过、22跳过、0失败；169.35秒，隔离HOME/SQLite，无依赖或scripts变更 |
+| 存储整套 | 999项，820通过、179项可选引擎配置缺失跳过、0失败/错误；188.66秒，ResourceWarning作为错误。恢复后的147个Python文件与该已测V1快照逐字节相同 |
+| PG / 原生openGauss | 各51/51真实引擎检查通过，无跳过；每库37个自建schema清理后回查为0。不是全产品生产迁移验收 |
+| 真实CH | 15张表，11项身份/当前选择检查及8项预算边界检查通过；没有执行万级Span或千级混合容量验收 |
+| 原HTTP与授权 | 新隔离SQLite/CH中原handler与实际apiFetch共18次请求通过，旧动态读取0；包含真实临时子执行统计→所属Trace钻取、无Key/跨用户拒绝与现有评分来源 |
+| 原浏览器界面 | 原Trace页、Dashboard、Quality报告、Agent/Skill筛选、空结果和执行记录实际验证；当前浏览器控制台0错误/0警告。TSX/CSS零diff，没有替换产品界面 |
+| 类型及静态 | 完整tsc零输出通过；10个新增TS文件ESLint零错误/警告；受改旧文件与HEAD对照无新增lint问题，仍有旧问题，不宣称全仓lint干净。diff-check通过 |
+| 数据保留 | 已有隔离环境备份后14→15；旧96张表内容、旧13张CH逻辑内容及既有业务/认证行保留，SQLite integrity_check为ok。4组过期测试服务凭据追加续期，原登录Key未改；两条既有负面Outbox仅正常更新重试元数据，事件及payload保留。默认业务库及生产未操作 |
+| 历史读回 | 原普通实验100分、Workbench0分、诊断done通过真实HTTP再次读回 |
+
+证据在`exclude/20261115-ob765mlu/`，包括`v1-final-full.log`、`v1-types-final.log`、`acceptance-v1-final/original-http-report.json`、`main-ui-preservation.json`、`main-ui-readback.json`、浏览器截图及日志；Python、关系库与CH冻结报告在其`kernel-wire-final-*`目录。原界面仍可通过`http://localhost:58488/dashboard`验收，沿用原admin登录方式。
+
+这次完成首批统计消费者接线，不代表全产品迁移完成。Skill/Agent其余动态消费者、RAS专项剩余读/删控制、OTLP logs/metrics和旧spool、其他phase7消费者及96模型完整语义apply仍按清单推进；静态配置/客户端/FI原控制域继续保持真实权威。生产切换及回退未执行。下一步继续补原功能的数据链路和历史迁移，不扩展第二版容量机制。

@@ -1,16 +1,16 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-14。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，当前 **62 张事务表 + 13 张 ClickHouse 表，共75张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-15。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，015新增统计发布、RAS当前回执及实验Trace来源索引3表，CH002新增统计摘要与RAS事实2表，当前 **65 张事务表 + 15 张 ClickHouse 表，共80张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这75张表对应**62张事务控制表 + 13张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这80张表对应**65张事务控制表 + 15张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共62表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共65表]
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
@@ -23,6 +23,9 @@ flowchart TB
     DATASET[Dataset兼容head、回执及生成任务 3表]
     EXP[实验容器、Case、RunPlan关联、结果槽、checkpoint、审阅、回执和私有Judge归属，以及派生Issue解决注解 9表]
     BENCH[Benchmark私有数据集、实验绑定、外部任务、证据制品及操作回执 5表]
+    ANALYTICS[统计发布、RAS回执、冻结Trace来源 3表]
+    ANALYTICS -->|继承Trace与资产权限| IAM
+    ANALYTICS -->|当前选择与源版本| RUN
     BENCH -->|复用计划、lease及结果回执| RUN
     BENCH -->|公开输入与私有gold分离封存| ASSET
     EXP -->|复用不可变RunPlan及结果选择| RUN
@@ -40,10 +43,12 @@ flowchart TB
     RUN -->|同事务登记待投递事件| SUPPORT
     INGEST -->|同事务接收、路由、ACL及Outbox| SUPPORT
   end
-  subgraph CH[ClickHouse，共13表]
+  subgraph CH[ClickHouse，共15表]
     TRACE[Trace / Span / 正文 / 事件与关系 6表]
     DATA[固定快照 / 数据集 3表]
     EVAL[评测结果 / 指标 / 发布 4表]
+    STATS[统计摘要与RAS事件事实 2表]
+    ANALYTICS -.->|哈希回执控制可见性| STATS
     TRACE -.->|版本化输入| DATA
     DATA -.->|评测输入| EVAL
   end
@@ -55,7 +60,7 @@ flowchart TB
 **三个关键区别：**
 
 - 事务库的PK保证一行身份唯一，UK是额外唯一性约束，IDX用于特定查询；PK/UK本身也有索引，不写额外IDX不等于完全没有索引。
-- ClickHouse下面列的是`ORDER BY`排序/替换身份键，由它形成稀疏主索引。它不提供事务库那样的唯一约束；同键旧版本可同时存在，读取最新态需`FINAL`或等价去重策略。13表都用`ReplacingMergeTree(version)`，按日期字段的`toYYYYMM(...)`月分区。
+- ClickHouse下面列的是`ORDER BY`排序/替换身份键，由它形成稀疏主索引。它不提供事务库那样的唯一约束；同键旧版本可同时存在，读取最新态需`FINAL`或等价去重策略。001的13表都用`ReplacingMergeTree(version)`，按日期字段的`toYYYYMM(...)`月分区。
 - 后续关系图中，**实线是已存在的数据库FK，方向为子表→被引用表；虚线是应用层逻辑关联**。跨库无外键；一个相同ID不会自动触发关联检查、级联删除或跨库JOIN。
 
 ### 事务库：每张表存什么、主键与索引
@@ -2737,3 +2742,105 @@ CHECK约束：`["operation_kind='derived_issue_resolve'","length(annotation_id)>
 ### 014解决上下文的公开null兼容
 
 014 DDL、物理非空`resolved_run_id`与校验和保留。无threadId的手工解决，以真实操作receipt稳定引用填物理列（`resolution-operation:`与workspace/actor/key的hash）；它不是RunPlan或优化已执行的证明。公开投影只在workspace/actor/kind/key/request_hash、issue成员和首issue所属实验均与已校验receipt匹配时恢复`resolvedRunId:null`。既有非null关联原样；缺失/损坏回执明确失败。跨实验同批不误要求每个Issue的实验都等于receipt首实验。没有新增核心表。
+
+
+## 015 / CH002：统一授权统计投影
+
+事务适配统一 SQLite、PostgreSQL、openGauss 的事务、参数和迁移；业务层按 Trace/评测/诊断/统计能力调用。分析事实由 ClickHouse 专用适配负责，不把两类数据库伪装成相同 CRUD。旧配置域的 Prisma 仍保留，不能把已接入消费者表述为全仓消除了数据库差异。
+
+统计摘要是源版本派生物。发布时先写不可变 CH 行，再以当前 IAM、路由/owner/别名/注解/Trace head 边界登记事务回执；只有已接受的精确哈希可读。相同边界不同摘要拒绝，孤立 CH 写入不可见。RAS 保存真实归一化事件；当前回执逐版本更新，历史事实保留，查询 owner 必须与授权 Trace owner 一致。实验来源索引记录冻结路由/快照及计划哈希，旧计划仅由有控制器证明的后台显式回填，统计请求不读完整 RunPlan。
+
+### trace_analytics_publications
+
+主键：`workspace_id, trace_id, boundary, parser_version`。索引：`workspace_id, created_at_ms, trace_id`。
+
+| 字段 | 逻辑类型 | 可空 | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | — |
+| `trace_id` | TEXT | 否 | — |
+| `boundary` | TEXT | 否 | — |
+| `parser_version` | BIGINT | 否 | — |
+| `projection_hash` | TEXT | 否 | — |
+| `snapshot_hash` | TEXT | 否 | — |
+| `created_by` | TEXT | 否 | — |
+| `created_at_ms` | BIGINT | 否 | — |
+
+外键、唯一约束、范围检查及版本触发器以机器目录 `services/storage/schema/analytics-catalog.json` 和三种后端的 `015_trace_analytics.sql` 为准。
+
+### ras_event_receipts
+
+主键：`workspace_id, owner_principal_id, task_id, event_key`。索引：`workspace_id, owner_principal_id, task_id, occurred_at_ms, event_id`。
+
+| 字段 | 逻辑类型 | 可空 | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | — |
+| `owner_principal_id` | TEXT | 否 | — |
+| `task_id` | TEXT | 否 | — |
+| `event_key` | TEXT | 否 | — |
+| `event_id` | TEXT | 否 | — |
+| `content_hash` | TEXT | 否 | — |
+| `revision` | BIGINT | 否 | — |
+| `occurred_at_ms` | BIGINT | 否 | — |
+| `created_at_ms` | BIGINT | 否 | — |
+
+外键、唯一约束、范围检查及版本触发器以机器目录 `services/storage/schema/analytics-catalog.json` 和三种后端的 `015_trace_analytics.sql` 为准。
+
+### experiment_trace_sources
+
+主键：`workspace_id, run_id, case_id`。索引：`workspace_id, trace_id, run_id, case_id`。
+
+| 字段 | 逻辑类型 | 可空 | 默认值 |
+|---|---|---|---|
+| `workspace_id` | TEXT | 否 | — |
+| `run_id` | TEXT | 否 | — |
+| `case_id` | TEXT | 否 | — |
+| `trace_id` | TEXT | 否 | — |
+| `incarnation` | BIGINT | 否 | — |
+| `route_epoch` | BIGINT | 否 | — |
+| `execution_id` | TEXT | 否 | — |
+| `snapshot_hash` | TEXT | 否 | — |
+| `plan_hash` | TEXT | 否 | — |
+| `created_at_ms` | BIGINT | 否 | — |
+
+外键、唯一约束、范围检查及版本触发器以机器目录 `services/storage/schema/analytics-catalog.json` 和三种后端的 `015_trace_analytics.sql` 为准。
+
+### ClickHouse 002：完整建表定义
+
+历史 001 不改写；新增两表需显式调用 `ClickHouseStore.initialize_analytics_schema()`。它不创建/替换旧表，也不负责生产切换。
+
+```sql
+CREATE TABLE obs_trace_analytics (
+  workspace_id String,
+  trace_bucket Date,
+  trace_id String,
+  boundary String,
+  parser_version UInt16,
+  projection_hash String,
+  projection_json String,
+  retry_version UInt64 DEFAULT 1,
+  CONSTRAINT check_1 CHECK length(boundary)=64,
+  CONSTRAINT check_2 CHECK length(projection_hash)=64,
+  CONSTRAINT check_3 CHECK parser_version=1,
+  CONSTRAINT check_4 CHECK length(projection_json)<=2097152,
+  CONSTRAINT check_5 CHECK retry_version>0 AND retry_version<=9223372036854775807
+) ENGINE = ReplacingMergeTree(retry_version)
+PARTITION BY toYYYYMM(trace_bucket)
+ORDER BY (workspace_id,trace_bucket,trace_id,boundary,parser_version,projection_hash);
+
+CREATE TABLE obs_ras_events (
+  workspace_id String,
+  event_bucket Date,
+  owner_principal_id String,
+  task_id String,
+  event_key String,
+  event_id String,
+  content_hash String,
+  event_json String,
+  retry_version UInt64 DEFAULT 1,
+  CONSTRAINT check_1 CHECK length(content_hash)=64,
+  CONSTRAINT check_2 CHECK length(event_json)<=262144,
+  CONSTRAINT check_3 CHECK retry_version>0 AND retry_version<=9223372036854775807
+) ENGINE = ReplacingMergeTree(retry_version)
+PARTITION BY toYYYYMM(event_bucket)
+ORDER BY (workspace_id,event_bucket,owner_principal_id,task_id,event_key,content_hash);
+```

@@ -21,12 +21,23 @@ export async function apiFetch(url: string, options?: RequestInit): Promise<Resp
   const headers = new Headers(options?.headers);
   const pathname=url.split(/[?#]/,1)[0];
   const method=(options?.method||'GET').toUpperCase();
+  let transportedKey: string | null | undefined;
   const consumerAuth=method==='GET'&&(pathname==='/api/modelconfig/pricing'||/^\/api\/skills\/by-name\/[^/]+\/optimization-points$/.test(pathname))||method==='PATCH'&&/^\/api\/skills\/by-name\/[^/]+\/optimization-points\/resolve$/.test(pathname);
-  if (typeof window !== 'undefined' && (consumerAuth || url.startsWith('/api/observe/') || url.startsWith('/api/fault/diagnosis/') || url.startsWith('/api/fleet/') || url.startsWith('/api/dashboard/') || url.startsWith('/api/tags') || url.startsWith('/api/agent-datasets') || url.startsWith('/api/experiments') || url.startsWith('/api/user-evaluators') || url.startsWith('/api/skill-workbench/') || url.startsWith('/api/eval/settings') || url.startsWith('/api/evaluation/') || url.startsWith('/api/diagnosis-runs') || url.includes('/diagnosis-inputs') || (url.startsWith('/api/skill-workbench/skills/') && url.endsWith('/retest')) || url.startsWith('/api/skill-workbench/sessions/diagnosis-') || url.startsWith('/api/skill-opt/sessions/diagnosis-') || url.startsWith('/api/skill-opt/chat') || url.startsWith('/api/skill-opt/plan') || url.startsWith('/api/eval/trajectory') || url.startsWith('/api/debug/grayscale')) && !headers.has('x-witty-api-key')) {
+  if (typeof window !== 'undefined' && (consumerAuth || url.startsWith('/api/observe/') || url.startsWith('/api/fault/diagnosis/') || url.startsWith('/api/fleet/') || url.startsWith('/api/quality/') || url.startsWith('/api/dashboard/') || url.startsWith('/api/tags') || url.startsWith('/api/agent-datasets') || url.startsWith('/api/experiments') || url.startsWith('/api/user-evaluators') || url.startsWith('/api/skill-workbench/') || url.startsWith('/api/eval/settings') || url.startsWith('/api/evaluation/') || url.startsWith('/api/diagnosis-runs') || url.includes('/diagnosis-inputs') || (url.startsWith('/api/skill-workbench/skills/') && url.endsWith('/retest')) || url.startsWith('/api/skill-workbench/sessions/diagnosis-') || url.startsWith('/api/skill-opt/sessions/diagnosis-') || url.startsWith('/api/skill-opt/chat') || url.startsWith('/api/skill-opt/plan') || url.startsWith('/api/eval/trajectory') || url.startsWith('/api/debug/grayscale')) && !headers.has('x-witty-api-key')) {
     const key = localStorage.getItem('api_key');
-    if (key) headers.set('x-witty-api-key', key);
+    if (key) {headers.set('x-witty-api-key', key);transportedKey=key;}
   }
-  return fetch(fullUrl, { ...options, headers });
+  let response = await fetch(fullUrl, { ...options, headers });
+  const started=Date.now();
+  let retries=0;
+  while(method==='GET'&&response.status===503&&response.headers.get('x-storage-retry')==='analytics-indexing'&&Date.now()-started<15_000&&retries++<15) {
+    if(options?.signal?.aborted)break;
+    if(transportedKey!==undefined&&localStorage.getItem('api_key')!==transportedKey)break;
+    await new Promise(resolve=>setTimeout(resolve,1000));
+    if(options?.signal?.aborted||transportedKey!==undefined&&localStorage.getItem('api_key')!==transportedKey)break;
+    response=await fetch(fullUrl,{...options,headers});
+  }
+  return response;
 }
 
 export function getApiUrl(url: string): string {

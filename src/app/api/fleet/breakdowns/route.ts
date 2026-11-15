@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+
+
 // 舰队监控大盘 · 排行 / 分布 / per-object 聚合端点（④性能 ⑤模型 ⑥工具 ⑦Agent ⑧编排）。
 //
 // 只覆盖「当前数据够算」的 T0 面板（口径见 src/lib/fleet/agg.ts）：
@@ -59,9 +63,11 @@ function topN<T>(arr: T[], key: (t: T) => number, n: number): T[] {
 export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
-        const { username, user } = await resolveTraceReadScope(req);
+        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const executionReader = analytics ?? prisma.execution;
+        const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
-        const userFilter = user ? { user } : {};
+        const userFilter = analytics ? {} : user ? { user } : {};
 
         const window = normalizeWindow(url.searchParams.get('window'));
         const plan = planOf(window);
@@ -69,7 +75,7 @@ export async function GET(req: Request) {
         const starts = bucketStarts(now, plan);
         const from = starts[0];
 
-        const rows = (await prisma.execution.findMany({
+        const rows = (await executionReader.findMany({
             where: { ...userFilter, timestamp: { gte: new Date(from) } },
             select: {
                 id: true, taskId: true, timestamp: true, latency: true,
@@ -322,7 +328,7 @@ export async function GET(req: Request) {
         );
 
         // Skill 排行（次数）——用 ExecutionSkill 表
-        const skillRows = await prisma.executionSkill.findMany({
+        const skillRows = analytics ? analytics.skillRows(ids) : await prisma.executionSkill.findMany({
             where: { executionId: { in: ids } },
             select: { skillName: true },
         });
@@ -341,7 +347,7 @@ export async function GET(req: Request) {
         // ── ⑧ 全局协作网络（spawn/派发口径）───────────────────────
         // send_message 点对点消息网络四框架均无源；改用 buildAgentCallTree 还原的
         // parent→child 派发关系跨 trace 聚合：节点=Agent(度=中心度)，边权=派发次数。
-        const collabSessions = await prisma.session.findMany({
+        const collabSessions = analytics ? analytics.collaborations(new Date(from)).slice(0, COLLAB_SESSION_CAP + 1) : await prisma.session.findMany({
             where: {
                 ...userFilter,
                 startTime: { gte: new Date(from) },
@@ -360,13 +366,17 @@ export async function GET(req: Request) {
         const nodeDeg = new Map<string, number>();
         let collabTraces = 0;
         for (const s of collabSessions.slice(0, COLLAB_SESSION_CAP)) {
-            if (!s.interactions) continue;
-            let it: unknown[];
-            try { it = JSON.parse(s.interactions); } catch { continue; }
-            let tree: AgentNode | null = null;
-            try { tree = buildAgentCallTree(it as Parameters<typeof buildAgentCallTree>[0]); } catch { tree = null; }
-            if (!tree) continue;
-            const edges = collectSpawnEdges(tree, []);
+            let edges: [string, string][];
+            if ('edges' in s) edges = s.edges;
+            else {
+                if (!s.interactions) continue;
+                let it: unknown[];
+                try { it = JSON.parse(s.interactions); } catch { continue; }
+                let tree: AgentNode | null = null;
+                try { tree = buildAgentCallTree(it as Parameters<typeof buildAgentCallTree>[0]); } catch { tree = null; }
+                if (!tree) continue;
+                edges = collectSpawnEdges(tree, []);
+            }
             if (edges.length) collabTraces++;
             for (const [a, b] of edges) {
                 edgeW.set(`${a}\t${b}`, (edgeW.get(`${a}\t${b}`) ?? 0) + 1);
@@ -382,6 +392,7 @@ export async function GET(req: Request) {
             truncated: collabTruncated,
         };
 
+        if (analytics) await analytics.validate();
         return NextResponse.json({
             window,
             granularity: plan.gran,
@@ -407,6 +418,7 @@ export async function GET(req: Request) {
             },
         });
     } catch (error) {
+        if (isStorageCoreEnabled()) return analyticsFailure(error);
         console.error('[Fleet Breakdowns Error]', error);
         return NextResponse.json({ error: 'Failed to load fleet breakdowns' }, { status: 500 });
     }

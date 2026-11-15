@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+import { analyticsRecords } from '@/lib/storage-core/analytics-records';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+
+
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { readRecords } from '@/lib/storage/data-service';
@@ -54,7 +59,8 @@ export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
         // 身份由前端 ?user= 携带；不读则 username=null 会越权返回全量执行记录。
-        const { username } = await resolveUser(req, url.searchParams.get('user') || undefined);
+        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const { username } = analytics ?? await resolveUser(req, url.searchParams.get('user') || undefined);
 
         const agent = (url.searchParams.get('agent') || '').trim();
         if (!agent) return NextResponse.json({ error: 'agent is required' }, { status: 400 });
@@ -69,7 +75,7 @@ export async function GET(req: Request) {
         const to = toISO ? new Date(toISO).getTime() : Infinity;
 
         // readRecords：默认只 root（isSubagent=false）、用户作用域；lightweight 避免大字段 OOM。
-        const records = await readRecords(
+        const records = analytics ? analyticsRecords(analytics, {agentName: agent, ...(skill ? {skill} : {})}) : await readRecords(
             username ?? undefined,
             { agentName: agent, ...(skill ? { skill } : {}) },
             { lightweight: true },
@@ -104,8 +110,10 @@ export async function GET(req: Request) {
             };
         });
 
+        if (analytics) await analytics.validate();
         return NextResponse.json({ records: rows, total });
     } catch (error) {
+        if (isStorageCoreEnabled()) return analyticsFailure(error);
         console.error('[Quality Executions Error]', error);
         return NextResponse.json({ error: 'Failed to list executions' }, { status: 500 });
     }

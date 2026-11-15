@@ -9,10 +9,11 @@ import ts from 'typescript';
 function load(file:string,dependencies:Record<string,unknown>){const module={exports:{}};const code=ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;vm.runInNewContext(code,{module,exports:module.exports,require:(name:string)=>{if(!(name in dependencies))throw Error('Unexpected dependency '+name);return dependencies[name];},process,Request,Response,URL,URLSearchParams,Buffer,Map,Set,Date,JSON,Promise,structuredClone,setTimeout,clearTimeout,setInterval,clearInterval,setImmediate,console:{warn:()=>{},error:()=>{},log:()=>{}}});return module.exports as Record<string,Function>;}
 
 function startupFixture(core:boolean){
- const legacy:string[]=[];let starts=0;const noop=async()=>{};
+ const legacy:string[]=[];let starts=0;let analyticsStarts=0;const noop=async()=>{};
  const api=load('src/instrumentation-node.ts',{
   'node:fs':{existsSync:()=>false},'node:path':path,'child_process':{spawn:()=>{throw Error('unexpected subprocess');}},'@/lib/env':{getAgentInsightHome:()=>'/isolated'},
   '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>core},'@/lib/storage-core/experiment-background':{startCoreExperimentBackground:()=>{starts++;}},
+  '@/lib/storage-core/analytics':{startCoreAnalyticsBackground:()=>{analyticsStarts++;}},
   '@/lib/engine/experiment/cancellation-service':{startExperimentCancellationWatchdog:()=>legacy.push('cancel-watchdog')},
   '@/lib/system-agents':{ensureAllSystemAgents:noop},'@/server/builtin-example/ensure-example-file':{ensureExampleMessagesFile:()=>''},
   '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager':{registerExitHandlers:()=>{},sweepOrphanedOpencodeProcesses:()=>{}},
@@ -24,12 +25,12 @@ function startupFixture(core:boolean){
   '@/lib/ingest/otel-consumer/consumer':{startOtelSpoolConsumer:()=>{}},'@/lib/infra/poller':{startInfraPoller:()=>{}},
   '@/lib/engine/experiment/experiment-watch':{startExperimentWatcher:()=>legacy.push('experiment-watch')},'@/server/trace-datasets/manager':{startTraceDatasetManager:()=>{}},
  });
- return {api,legacy,get starts(){return starts;}};
+ return {api,legacy,get starts(){return starts;},get analyticsStarts(){return analyticsStarts;}};
 }
 
-test('core startup preserves old evaluation, grayscale and benchmark data without starting their legacy reapers',async()=>{const fixture=startupFixture(true);await fixture.api.setupNodeRuntime();assert.deepEqual(fixture.legacy,[]);assert.equal(fixture.starts,1);});
+test('core startup preserves old evaluation, grayscale and benchmark data without starting their legacy reapers',async()=>{const fixture=startupFixture(true);await fixture.api.setupNodeRuntime();assert.deepEqual(fixture.legacy,[]);assert.equal(fixture.starts,1);assert.equal(fixture.analyticsStarts,1);});
 
-test('legacy startup retains its original reapers, resumers and watchers',async()=>{const fixture=startupFixture(false);await fixture.api.setupNodeRuntime();assert.equal(fixture.starts,0);for(const name of ['cancel-watchdog','trajectoryEvalResult','skillTriggerEvalRun','grayscale','benchmark-watchdog','benchmark-reap','benchmark-resume','benchmark-eval-watchdog','benchmark-eval-reap','benchmark-eval-resume','benchmark-eval-continue','experiment-watch'])assert.ok(fixture.legacy.includes(name),name);});
+test('legacy startup retains its original reapers, resumers and watchers',async()=>{const fixture=startupFixture(false);await fixture.api.setupNodeRuntime();assert.equal(fixture.starts,0);assert.equal(fixture.analyticsStarts,0);for(const name of ['cancel-watchdog','trajectoryEvalResult','skillTriggerEvalRun','grayscale','benchmark-watchdog','benchmark-reap','benchmark-resume','benchmark-eval-watchdog','benchmark-eval-reap','benchmark-eval-resume','benchmark-eval-continue','experiment-watch'])assert.ok(fixture.legacy.includes(name),name);});
 
 test('restart identity loading authenticates configured credentials and keeps the legacy model owner separate',async()=>{
  const {configuredCoreBackgroundActors}=await import('@/lib/storage-core/compat');

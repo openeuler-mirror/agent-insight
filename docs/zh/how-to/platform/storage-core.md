@@ -5,7 +5,7 @@ description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace
 
 # 启用隔离的 Storage Core Trace 链路
 
-**产品兼容状态（2026-11-14）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。诊断会话、自身Trace及Trace报告按参考中的独立协议接管；Dataset版本/Trace回流/批量生成已按本页流程接管；实验/评测结果与DiagnosisRun逐项接管，当前覆盖及剩余Workbench/Benchmark等消费者以实施状态为准。仅在隔离目标验证，不用于生产切换。
+**产品兼容状态（2026-11-15）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。诊断会话、自身Trace及Trace报告按参考中的独立协议接管；Dataset版本/Trace回流/批量生成已按本页流程接管；实验/评测结果与DiagnosisRun逐项接管，当前覆盖及剩余Workbench/Benchmark等消费者以实施状态为准。仅在隔离目标验证，不用于生产切换。
 
 模式开关只影响服务端。Trace接口使用当前IAM权限，配置缺失、身份未映射或后端故障明确失败，不回落旧Trace库。其他领域仍有既有数据路径，当前不是全产品切库。完整契约见[参考](../../reference/platform/storage-core.md)，实际覆盖见[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)。
 
@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-新库应用001–014，当前schema_version=14。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
+新库应用001–015，当前schema_version=15。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -44,11 +44,12 @@ from services.storage.iam import IAMStore
 from services.storage.clickhouse import ClickHouseStore
 
 root = Path('/absolute/path/to/isolated-core')
-control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至014
+control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至015
 facts = ClickHouseStore('http://127.0.0.1:8123',
     database='agent_insight_core_isolated', user='default',
     password=getpass.getpass('ClickHouse password (empty if configured): '))
 facts.initialize_new_database()
+facts.initialize_analytics_schema()
 iam = IAMStore(control)
 iam.create_principal('operator', 'operator', 'Operator')
 password = getpass.getpass('New IAM password (15..1024 characters): ')
@@ -151,7 +152,7 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 
 ## 验证诊断链路
 
-先在隔离目标备份并显式升级至014；不要把演示配置指向旧Prisma数据库或默认业务库。已有原登录Key的私有映射凭据需要read/write用于追问、execute用于报告、delete用于原有删除操作，仍受Trace owner/组角色约束。仅write采集Key不能作为页面账号。
+先在隔离目标备份并显式升级至015；不要把演示配置指向旧Prisma数据库或默认业务库。已有原登录Key的私有映射凭据需要read/write用于追问、execute用于报告、delete用于原有删除操作，仍受Trace owner/组角色约束。仅write采集Key不能作为页面账号。
 
 1. 用原账号登录，打开一条已授权Trace，再进入原故障诊断页。GET历史即使为空也应有已授权Trace，存储异常不能显示成“没有会话”。
 2. 发起追问，观察原ready/text/tool/reasoning/done事件；在Trace列表查到`fault-diagnosis-agent`自身运行，按原上游session ID打开，核对工具输入/输出与失败状态。
@@ -165,7 +166,7 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 
 ## 验证数据集链路（008/009）
 
-新目标初始化到014；已有隔离core目标先停写，使用新的备份路径和CLI显式迁移至14，同时保留制品目录。迁移工具核对旧表内容，不能以Prisma db push替代，也不能直接指向原业务SQLite。
+新目标初始化到015；已有隔离core目标先停写，使用新的备份路径和CLI显式迁移至15，同时保留制品目录。迁移工具核对旧表内容，不能以Prisma db push替代，也不能直接指向原业务SQLite。
 
 在原登录和侧栏进入「评测数据集」：新建→单个添加→编辑样例→新增字段，刷新后检查原值。另从Trace回流样例并重复追加，确认去重；使用两个草稿制造陈旧提交，确认409且先前修改保留。页面没有新增版本控件，版本摘要通过参考页所列查询接口读取。
 
@@ -174,7 +175,7 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 
 ## 实验链路隔离验证（010–014）
 
-先停止目标写入，保留事务库备份与完整制品目录，显式迁移至014再启动；服务拒绝带pending migration启动。不要修改历史SQL绕过checksum。013→014只追加表，012→013修正空证据约束时保留全部历史行、索引及不可变触发器。
+先停止目标写入，保留事务库备份与完整制品目录，显式迁移至015再启动；服务拒绝带pending migration启动。不要修改历史SQL绕过checksum。013→014只追加表，012→013修正空证据约束时保留全部历史行、索引及不可变触发器。
 
 私有身份映射之外配置`AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE`，由可信配置过程生成随机64位hex并以0600保存；Next与helper使用同一文件，不能复用登录Key。原页面无需新增配置或交互。按创建实验→运行→结果详情→人工0分→评论→重评验证，分别核验OLTP回执、CH published与旧表无影子写入。再验证来源撤权、旧fence晚回、取消清理未确认和精确网络重试。Workbench/Benchmark使用同一原入口，具体可验收分支见实施状态。
 
@@ -187,4 +188,13 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 
 core模式下，原优化点GET和完成优化后的resolve PATCH携带当前登录Key。新派生问题通过typed解决注解处理，旧static/feedback问题仍在原控制域；混合请求预检后分别提交，两域失败可重试但不是跨库原子事务。未提供threadId时，公开关联仍为null，机器评测内容不变。相同显式操作键恢复core回执；普通新请求按新增解决计数，混合响应是core该操作计数加本次旧静态新写计数，不保证整次HTTP数字精确重放。
 
-价格GET的observed模型来自当前IAM授权Trace范围；组管理员只扩展至其授权组，不因旧部署管理员名看到其他空间。内置/自定义价格、货币、排序和界面保留；价格PUT配置控制域规则未在本批迁移。两个页面无需新登录或前端布局变更，退出/切换账号使用现有Key状态。Dashboard/Fleet/Quality等剩余统计和OTLP logs/metrics/spool仍在依赖清单内，不能把模型列表接通视为这些功能已经迁移。
+价格GET的observed模型来自当前IAM授权Trace范围；组管理员只扩展至其授权组，不因旧部署管理员名看到其他空间。内置/自定义价格、货币、排序和界面保留；价格PUT配置控制域规则未在本批迁移。两个页面无需新登录或前端布局变更，退出/切换账号使用现有Key状态。Dashboard/Fleet/Task/Quality统计使用015/CH002统一授权摘要；其就绪、预算及容量限制见参考。OTLP logs/metrics/spool、Skill/Agent剩余动态消费者及旧库全量apply仍在依赖清单内，不能把本批统计接通视为全量切换。
+
+
+## 统计消费者的隔离验收（015 / CH002）
+
+已有 core 目标先停写、备份事务库及制品目录，显式迁移015；CH使用同一隔离数据库显式执行 `initialize_analytics_schema()`，历史001不改写。配置真实账号和私有控制器后，启动原 `bash scripts/develop_start.sh`。后台按已验证账号预热统计；首次打开仍未就绪时，原apiFetch会仅对明确的索引中标记自动重试，超过预算则返回实际错误，不能把503当作空库。
+
+按原页面检查 Dashboard、Fleet 趋势/排行/Agent/可靠性、Quality Agent列表/执行记录/报告以及Task统计。用另一普通账号与伪造user参数验证隔离，组管理员范围由真实IAM决定；检查原生Agent无注册行时的平台筛选、当前0分评测、未解决Issue与当前诊断、真实RAS anomaly/action_result。新RAS采集POST要求write API Key，可以write-only；读统计要求read。
+
+只在专用数据库验证，不指向默认业务库或生产库。第一版按原功能的HTTP、界面与全套测试验收；万级Span专项及增量/水位和千级容量优化留到第二版，不作为本版交付范围。旧库96模型计划仍不apply。

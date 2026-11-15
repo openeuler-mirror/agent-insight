@@ -22,12 +22,12 @@
 import { prisma } from '@/lib/storage/prisma';
 import type { QualityReport, QualityReportInput, WindowKind, ScoringPolicy, DimScore } from './types';
 import { DEFAULT_POLICY, MAX_ERROR_PARSE_TRACES, MAX_PROBLEM_ITEMS } from './config';
-import { collectTraces } from './trace-collector';
+import { collectTraces, type CollectResult } from './trace-collector';
 import { scoreDimensions } from './dimension-scorer';
 import { bucketTrends } from './trend-bucketer';
 import {
     buildProblemSummary, lowScoreProblems, rankProblems, buildSkillDrag, summarizeDiagnoses,
-    type SkillIssueRowLite,
+    type SkillIssueRowLite, type StructuredTraceErrors,
 } from './problem-summary';
 import type { DiagnosisLite } from './types';
 
@@ -143,12 +143,20 @@ async function loadInteractions(taskIds: string[]): Promise<Map<string, unknown[
     return map;
 }
 
+export interface QualityReportSource {
+    collection: CollectResult;
+    structuredErrors: StructuredTraceErrors[];
+    skillIssueRows: SkillIssueRowLite[];
+    diagnosesByTrace: Map<string, DiagnosisLite>;
+}
+
 export async function buildQualityReport(
     input: QualityReportInput,
     policy: ScoringPolicy = DEFAULT_POLICY,
+    source?: QualityReportSource,
 ): Promise<QualityReport> {
     // 1. 圈定 T
-    const { traces, truncated } = await collectTraces({
+    const { traces, truncated } = source?.collection ?? await collectTraces({
         user: input.user, agent: input.agent, from: input.from, to: input.to, filters: input.filters,
     });
     if (!traces.length) return emptyReport(input);
@@ -157,14 +165,14 @@ export async function buildQualityReport(
     const errorish = traces
         .filter((t) => (t.toolCallErrorCount ?? 0) > 0 || (t.failures?.length ?? 0) > 0)
         .slice(0, MAX_ERROR_PARSE_TRACES);
-    const [interactionsByTrace, skillIssueRows, diagnosesByTrace] = await Promise.all([
+    const [interactionsByTrace, skillIssueRows, diagnosesByTrace] = source ? [new Map<string, unknown[]>(), source.skillIssueRows, source.diagnosesByTrace] : await Promise.all([
         loadInteractions(errorish.map((t) => t.taskId).filter((x): x is string => Boolean(x))),
         loadSkillIssueRows(traces.map((t) => t.executionId)),
         loadDiagnoses(traces.map((t) => t.executionId)),
     ]);
 
     // 3. 统一问题汇总（先于错误维）+ 诊断增强 + Skill 拖累榜
-    const summary = buildProblemSummary({ traces, interactionsByTrace, skillIssueRows, diagnosesByTrace });
+    const summary = buildProblemSummary({ traces, interactionsByTrace, skillIssueRows, diagnosesByTrace, ...(source ? {structuredErrors: source.structuredErrors.filter(row => errorish.some(trace => trace.executionId === row.executionId))} : {}) });
     const skillDrag = buildSkillDrag(skillIssueRows, traces);
     const { moduleFingerprint, diagnosisCoverage } = summarizeDiagnoses(traces, diagnosesByTrace);
 

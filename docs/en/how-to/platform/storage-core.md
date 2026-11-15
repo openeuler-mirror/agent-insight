@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-New targets apply001–014, currently schema_version14. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
+New targets apply001–015, currently schema_version14. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -129,3 +129,8 @@ Run `plan-legacy --database /absolute/path/to/isolated-legacy.db --source-id sta
 In core mode, existing issue GET and post-optimization resolve PATCH requests carry the current login Key. Derived issues use typed immutable resolution annotations; static/feedback issues remain in their existing control domain. Mixed requests preflight before separate commits, support retries and are not cross-store atomic transactions. Missing threadId retains a public null association without changing machine evidence. Explicit operation replay restores the core receipt; ordinary new requests count new resolutions. Mixed HTTP counts combine the core operation count and this request's static updates, without a whole-response exact replay guarantee.
 
 Pricing GET obtains observed models from the caller's IAM-authorized Trace scope. Group admins do not gain other workspaces through the legacy deployment-admin name. Built-in/custom prices, currency, sorting and UI are retained; pricing PUT configuration control is not migrated here. Existing account switching/logout uses the current Key with no new login or layout. Dashboard/Fleet/Quality and OTLP logs/metrics/spool remain separately tracked dependencies; this model-list slice does not complete them.
+
+
+For analytics consumers, explicitly migrate the isolated control store to 015 and initialize CH002. Existing pages and success payloads remain unchanged. Verify real IAM isolation, native Agent platform filtering, selected zero scores, current unresolved issues/reports and genuine RAS events. Write-only API keys may submit RAS events; reading statistics requires read permission. Initial indexing has a dedicated retry marker. Never treat503 as an empty dataset or claim 1000-collector capacity from endpoint tests.
+
+Version one is limited to preserving existing features, UI, workflows, statistics and data. Large-Trace capacity work and watermarked snapshots are deferred to version two.
