@@ -2,6 +2,8 @@
 
 日期：2026-11-11；基线 `298d1d5b`。本轮只实现只读盘点和逻辑快照导出，不执行线上目标导入、停服切换或生产数据修复。
 
+当前96模型的物理字段/归属修正、剩余消费者依赖和只读`plan-legacy`实施见[phase7](phase7-consumers-and-legacy-migration.md)。下文历史粗分类不代表逐字段转换器已实现；Config、可编辑Tag/Infra覆盖及Playground物理别名以当前目录为准。
+
 ## 1. 不变量与交付边界
 
 源 SQLite 以 `mode=ro` 打开，不使用 `immutable=1`，因为已提交数据可能仍在 WAL 中。BEGIN 后在同一读取事务内完成 integrity_check、foreign_key_check、schema 和全部行的计数、哈希/导出，形成一致逻辑快照。逻辑快照不是介质备份：生产切换仍须独立演练 SQLite backup API 或停写后安全复制主文件/WAL 的备份恢复。

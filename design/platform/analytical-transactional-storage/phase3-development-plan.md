@@ -228,3 +228,8 @@ evaluation-service/          # 单独服务/仓库，自己的事务与事实 na
 ## 采集到页面垂直链路
 
 已按用户授权进入[phase6实施计划](phase6-trace-vertical-slice.md)，先形成隔离可打开Trace验收环境，再扩其他领域；不对运行库原地切换。
+
+
+## 剩余消费者与旧数据迁移
+
+按用户继续实施授权进入[phase7](phase7-consumers-and-legacy-migration.md)：先核对96模型及入口/积压，再以只读语义计划、已接领域操作闭环和授权摘要消费者为序推进；当前已验收范围见[实施状态](implementation-status.md)。不自动切生产。
