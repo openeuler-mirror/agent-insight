@@ -17,6 +17,14 @@ def main(argv=None):
     initialize.add_argument('--database',required=True)
     inspect=commands.add_parser('inspect-legacy',help='read-only consistent legacy inventory (may scan large tables)')
     inspect.add_argument('--database',required=True)
+    legacy_plan=commands.add_parser('plan-legacy',help='bounded read-only semantic plan; no destination connection or apply')
+    legacy_plan.add_argument('--database',required=True)
+    legacy_plan.add_argument('--source-id',required=True)
+    legacy_plan.add_argument('--bindings-file')
+    legacy_plan.add_argument('--max-rows',type=int,default=100000)
+    legacy_plan.add_argument('--max-bytes',type=int,default=64*1024*1024)
+    legacy_plan.add_argument('--max-issues',type=int,default=256)
+    legacy_plan.add_argument('--max-seconds',type=float,default=15)
     export=commands.add_parser('export-legacy',help='write a private consistent raw export; never modifies source')
     export.add_argument('--database',required=True)
     export.add_argument('--output',required=True)
@@ -73,6 +81,19 @@ def main(argv=None):
             else: result=store.migration_plan()
         elif args.command=='inspect-legacy':
             result=inventory_database(args.database)
+        elif args.command=='plan-legacy':
+            from .legacy_plan import plan_database
+            bindings=None
+            if args.bindings_file:
+                source=Path(args.bindings_file)
+                if not source.is_file() or source.is_symlink() or source.stat().st_mode & 0o077 or source.stat().st_size>1024*1024:
+                    raise LegacyValidationError('Bindings file must be private, bounded and not a symlink')
+                try:
+                    bindings=json.loads(source.read_text())
+                except (ValueError,UnicodeError):
+                    raise LegacyValidationError('Bindings file is not valid JSON') from None
+            result=plan_database(args.database,source_id=args.source_id,bindings=bindings,
+                max_rows=args.max_rows,max_bytes=args.max_bytes,max_issues=args.max_issues,max_seconds=args.max_seconds)
         elif args.command=='export-legacy':
             result=export_database(args.database,args.output)
         else:
